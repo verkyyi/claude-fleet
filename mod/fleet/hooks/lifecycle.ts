@@ -30,6 +30,9 @@
 // in the orchestrator's window, skills/fleet-orchestrate/role.md; orchestrator.ts
 // puts it in every request, so a /clear leaves the session its role.
 //
+// Quick dispatch (issue #2618): in the orchestrator's window the same start reads
+// the `qd_` strings and registers `/qd` (qd.tsx); any other window has no /qd.
+//
 // Tools (issue #2057): a session the launcher gave no fleet tool service (no
 // FLEET_MCP_SERVER=1 — launched before #1828) gets the mod's three fallback tools
 // at the start, from the service's own specs (tools.ts); a served session gets
@@ -41,7 +44,8 @@ import type { EngineInterface, On, Timer, ToolSpec } from 'claude-code'
 import type { FleetModStatus } from '../types'
 import { isOpen, openGate } from './gate'
 import { INBOX_MS, inboxDir, pollInbox } from './inbox'
-import { roleArgv, rolePath, takeRole } from './orchestrator'
+import { isOrchestrator, roleArgv, rolePath, takeRole } from './orchestrator'
+import { qdCommand, stringsArgv, takeStrings } from './qd'
 import type { InboxIo } from './inbox'
 import { TMUX_TIMEOUT_MS, windowOptionsArgv } from './tmux'
 import { SPEC_TIMEOUT_MS, binDir, fallbackSpecs, specArgv } from './tools'
@@ -132,12 +136,41 @@ async function pollWhere($: EngineInterface): Promise<void> {
 // change under a running session. A read that fails adds nothing.
 async function readRole($: EngineInterface): Promise<void> {
   if (pane === undefined) return
+  let windowRole = ''
   try {
     const r = await $.process.run(roleArgv(pane), { timeoutMs: TMUX_TIMEOUT_MS })
-    const windowRole = r.exitCode === 0 ? r.stdout : ''
-    takeRole(windowRole, windowRole.trim() === 'orchestrator' ? await $.fs.read(rolePath($.plugin.root)) : undefined)
+    windowRole = r.exitCode === 0 ? r.stdout : ''
   } catch {
     takeRole('', undefined)
+    return
+  }
+  // A role file that cannot be read drops the section, never the window's role
+  // (exit-guard.ts and /qd ask isOrchestrator with or without it).
+  let text: string | undefined
+  if (windowRole.trim() === 'orchestrator') {
+    try {
+      text = await $.fs.read(rolePath($.plugin.root))
+    } catch {
+      text = undefined
+    }
+  }
+  takeRole(windowRole, text)
+}
+
+// Quick dispatch (qd.tsx): the orchestrator's window only — its strings, then the
+// command. A read or a register that fails costs /qd, never the session.
+async function registerQuickDispatchCommand($: EngineInterface): Promise<void> {
+  if (!isOrchestrator()) return
+  try {
+    const r = await $.process.run(stringsArgv($.plugin.root), { timeoutMs: TMUX_TIMEOUT_MS })
+    if (r.exitCode === 0) takeStrings(r.stdout)
+  } catch {
+    // Every key shows itself; the command still works.
+  }
+  try {
+    await $.command.register(qdCommand())
+  } catch {
+    // An engine without `immediate`, or a refused name: no /qd.
   }
 }
 
@@ -200,6 +233,8 @@ async function onReady($: EngineInterface): Promise<void> {
   })
   // The orchestrator's role, in the context from the first request (#2582).
   await readRole($)
+  // /qd, the orchestrator's quick dispatch (#2618).
+  await registerQuickDispatchCommand($)
   // Where the person is, in the context from the first request (#1716).
   await pollWhere($)
   whereTimer?.cancel()

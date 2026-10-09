@@ -1,7 +1,7 @@
 {
   "name": "fleet",
-  "version": "0.4.3",
-  "description": "claude-fleet's in-session extension: version gate + heartbeat on the window's tmux options (#1335), task-progress band above the prompt (#1339), context / quota / model / effort fed to conf/statusline.sh from inside the session (#1338, #1459), where the person is in the context (#1716), the fleet_status / fleet_spawn / fleet_await fallback for a session launched before the fleet tool service (#2057), the orchestrator's role in its system prompt (#2582), a first /exit or /clear in the orchestrator answered with a hint instead (#2584). EPIC #1334.",
+  "version": "0.4.4",
+  "description": "claude-fleet's in-session extension: version gate + heartbeat on the window's tmux options (#1335), task-progress band above the prompt (#1339), context / quota / model / effort fed to conf/statusline.sh from inside the session (#1338, #1459), where the person is in the context (#1716), the fleet_status / fleet_spawn / fleet_await fallback for a session launched before the fleet tool service (#2057), the orchestrator's role in its system prompt (#2582), a first /exit or /clear in the orchestrator answered with a hint instead (#2584), /qd quick dispatch in the orchestrator (#2618). EPIC #1334.",
   "author": {
     "name": "claude-fleet"
   },
