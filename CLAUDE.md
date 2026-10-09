@@ -720,6 +720,13 @@ Do not install from memory: read the doc and work from it.
   report; the wrapper clears `@agent_status` before each launch. The reconcile writes
   each window's source to `reconcile.sources` and `primary=a/b` to its heartbeat
   (doctor `state` row: 主来源覆盖率). `state-primary-selftest.sh`; BREAK-IT `status-*`.
+  **The reapers judge by it too** (issue #2540, C5): `fleet_reap_state` (one reader,
+  `fleet-reap-live.py --state`) — the agent's last 7501 word (done/idle → done,
+  error → exited, working/blocked kept), else `@claude_state`; no word and no stamp,
+  or a working/blocked word, with no agent process under the pane → exited.
+  `fleet-reap-live.py`, dash-reap's no-repo row, `fleet-cleanup.sh` and
+  `fleet-epic-backstop.sh` read it; a 7501 done/error waives the young-agent gate
+  (`idle` does not — a fresh agent says it before its seed lands).
 - **The hub ships the `fleet` client, and `bin/` + `conf/` stay canonical**
   (issues #1470, #1486). `curl -fsSL <hub>/install | sh` serves
   `bin/fleet-install.sh` (hub URL filled in), which fetches `/install/manifest`

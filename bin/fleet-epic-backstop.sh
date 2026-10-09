@@ -34,6 +34,10 @@
 #   gone      no window here and none on the hub (or the hub is off
 #             and the ledger knows no other machine: a one-machine
 #             fleet answers as it always did)                     → clear
+#   self      the agent's own OSC 7501 word on a window here
+#             (fleet_reap_state, issue #2540) is working or
+#             blocked — a turn is in flight                       → BUSY
+#             (done / exited lifts a stale hook `working`)
 #   state     @worker_lifecycle / @claude_state is working, looping
 #             or waking — a turn is running                       → BUSY
 #   bg        fleet_child_busy (#864) says `bg`: its turn ended but a
@@ -61,7 +65,9 @@
 # Test seams: FLEET_EPIC_BACKSTOP_BUSY_CMD, when set, is run as `<cmd> <sess> <win>`
 # in place of fleet_child_busy (its stdout is the reason);
 # FLEET_EPIC_BACKSTOP_FIND_CMD as `<cmd> <key> <sock>` in place of the local
-# window lookup (stdout `<wid>|<state>`, rc 1 none, rc 2 ambiguous).
+# window lookup (stdout `<wid>|<state>`, rc 1 none, rc 2 ambiguous);
+# FLEET_EPIC_BACKSTOP_STATE_CMD as `<cmd> <sock> <wid>` in place of
+# fleet_reap_state (stdout the state).
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -76,7 +82,7 @@ while [ "$#" -gt 0 ]; do
     --children-json) shift; CJ="${1:-}" ;;
     --parent)        shift; PARENT="${1:-}" ;;
     --parent=*)      PARENT="${1#--parent=}" ;;
-    -h|--help)       sed -n '2,64p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)       sed -n '2,70p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*)              printf 'fleet-epic-backstop: unknown argument %s\n' "$1" >&2; exit 2 ;;
     *)               CHILD="$1" ;;
   esac
@@ -236,6 +242,29 @@ case "$verdict" in
   ship) printf 'clear: %s ship report MERGED\n' "$CHILD"; exit 0 ;;
   gone) printf 'clear: %s no live window\n' "$CHILD"; exit 0 ;;
 esac
+
+# The agent's own word (issue #2540, EPIC #2535 C5), read off a window HERE
+# through the reapers' one reader (fleet_reap_state): working / blocked is a turn
+# in flight → BUSY, even when the ledger's state says otherwise; done / exited
+# (or no agent left under the pane) outranks a stale hook `working` stamp. A
+# looping / waking state is not the agent's word to lift — @loop and the
+# lifecycle say it.
+if [ "$verdict" = live ] && case "$win" in @[0-9]*) true ;; *) false ;; esac; then
+  if [ -n "${FLEET_EPIC_BACKSTOP_STATE_CMD:-}" ]; then
+    rs=$($FLEET_EPIC_BACKSTOP_STATE_CMD "$SOCK" "$win" 2>/dev/null) || rs=''
+  elif [ -n "${FLEET_EPIC_BACKSTOP_BUSY_CMD:-}" ]; then
+    rs=''    # a seamed busy read is a test: never ask a real window
+  elif [ -n "$SOCK" ] || [ -n "${TMUX:-}" ]; then   # outside a fleet: no socket to ask
+    lib
+    rs=$(fleet_reap_state "$win" "$SOCK") || rs=''
+  else
+    rs=''
+  fi
+  case "$rs" in
+    working|blocked) busy "agent: $rs" ;;
+    done|exited) [ "$state" = working ] && state=$rs ;;
+  esac
+fi
 
 # `looping` includes a `done` child whose @loop mark still holds a round —
 # fleet-children.sh reports it as looping (issue #1331).

@@ -583,12 +583,16 @@ fi
 # the agent, close), addressed by its @fleet_id, never killed. No confirm: the
 # worktree confirm guards work on disk, and a no-repo session has none. A busy one
 # (working / needs / any other state) is skip:live — only a finished turn is ours.
-# No state at all is a session that never took a turn (issue #2505): stopped like
+# The state is the reapers' one reading (fleet_reap_state, issue #2540): the
+# agent's own OSC 7501 word first — done/idle/error stop it, working/blocked keep
+# it — and no word, no stamp and no agent process is an agent that never started:
+# exited. No state at all is a session that never took a turn (issue #2505): stopped like
 # an exited one when no agent runs there (fleet_window_has_agent, #2404) or it is
 # a test identity's (@test_identity) — a placement check, never anyone's work.
 if [ "$(tmux display-message -t "$target" -p '#{@norepo}' 2>/dev/null)" = 1 ]; then
   FLEET_SESSION="$(fleet_current_session)"; export FLEET_SESSION
-  nstate=$(tmux display-message -t "$target" -p '#{@claude_state}' 2>/dev/null)
+  nstate=$(fleet_reap_state "$target") \
+    || nstate=$(tmux display-message -t "$target" -p '#{@claude_state}' 2>/dev/null)
   if [ -z "$nstate" ] && { ! fleet_window_has_agent "$target" \
        || [ "$(tmux display-message -t "$target" -p '#{@test_identity}' 2>/dev/null)" = 1 ]; }; then
     nstate=exited

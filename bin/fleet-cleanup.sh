@@ -159,6 +159,10 @@ ftmux() {
   else tmux -L "$(fleet_socket "$FLEET_SESSION")" "$@"; fi
 }
 
+# reap_socket → the socket label fleet_reap_state takes: none in a pane (bare tmux
+# is already this fleet's), the fleet's own for a daemon.
+reap_socket() { [ -n "${TMUX:-}" ] || fleet_socket "$FLEET_SESSION"; }
+
 # --- PR state -----------------------------------------------------------------
 # TSV: state headOid headRef closedAt mergedAt closes (we don't merge).
 # closes = the issues the PR closes on merge, `owner/name#N` comma-joined (issue
@@ -218,6 +222,12 @@ if [ -n "$BRANCH" ]; then
     [ -n "$WIN" ] && WIN_STATE=$(ftmux list-windows -t "$FLEET_SESSION" \
           -F '#{window_id} #{@claude_state}' 2>/dev/null | \
           awk -v w="$WIN" '$1 == w { print $2; exit }')
+  fi
+  # The agent's own word outranks the stamp (issue #2540): fleet_reap_state reads
+  # its OSC 7501 report first, and a window with no word, no stamp and no agent
+  # process is exited. Unreadable → the stamp read above stands.
+  if [ -n "$WIN" ] && _rs=$(fleet_reap_state "$WIN" "$(reap_socket)") && [ -n "$_rs" ]; then
+    WIN_STATE=$_rs
   fi
 fi
 
@@ -515,7 +525,9 @@ auto_cleanup_gate() {
       fi
     fi
     if [ -z "$why" ]; then
-      if ! state=$(ftmux display-message -p -t "$WIN" '#{@claude_state}' 2>/dev/null); then
+      # The agent's own word first (issue #2540), the stamp when it cannot be read.
+      if ! state=$(fleet_reap_state "$WIN" "$(reap_socket)") \
+         && ! state=$(ftmux display-message -p -t "$WIN" '#{@claude_state}' 2>/dev/null); then
         why="cannot read window state"
       elif [ "$state" != "done" ] && [ "$state" != "exited" ]; then   # exited: #1784
         why="window state is '${state:-unset}', not done"
