@@ -104,6 +104,7 @@ for q in 'rule|改一下 CLAUDE.md 里的约定吗？' 'money|这个月预算加
 done
 k=$(d ask-body --question '换个名字？' --suggest 好 --class never:publish --now "$NOW" | sed -n 's/.* kind=\([^ ]*\) .*/\1/p')
 [ "$k" = "never%3Apublish" ] || fail "C: a declared never:publish read $k"
+d ask-body --question '要不要开一台云机器？' --suggest 开 --now "$NOW" | grep -q '截止' && fail "C: a never question still names a deadline it will not keep"
 python3 - "$PY" <<'P' || fail "C: apply defaulted a never row handed to it directly"
 import importlib.util, sys
 s = importlib.util.spec_from_file_location("fd", sys.argv[1]); fd = importlib.util.module_from_spec(s); s.loader.exec_module(fd)

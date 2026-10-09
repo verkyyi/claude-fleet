@@ -211,7 +211,7 @@ def ask_body(question, suggest=None, default=None, due=None, cls=None, head="que
     if suggest:
         lines.append("- " + tr("decision_suggest_fmt", suggest))
     lines.append("- " + tr("decision_default_fmt", default_text(row)))
-    if row_default(row) is not WAIT:
+    if row_default(row) is not WAIT and not never(row):   # nothing goes ahead at the deadline
         lines.append("- " + tr("decision_due_fmt", show_time(parse_time(row["due"]))))
     lines += ["", marker(row)]
     return "\n".join(lines), row
