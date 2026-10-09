@@ -7,6 +7,8 @@
 #   node-supervisor-dead  bin/fleet-node-supervisor.py (install's KeepAlive +
 #                         ThrottleInterval, run's adopt + state.json, status --check),
 #                         bin/fleet-doctor.sh's `node` row
+#   service-killed        bin/fleet-node-supervisor.py's login-level register (#2525):
+#                         a registered service is kill -9'd / dies at start
 #   account-adopt-stuck   bin/fleet-node-supervisor.py `account adopt|release` (#2332):
 #                         one of a login's services will not unload mid-migration
 #   account-adopt-agent-left  bin/fleet-node-supervisor.py `account adopt|release` (#2387):
@@ -61,6 +63,38 @@ drill_node_supervisor_dead() {
   unset FLEET_NODE_STATE FLEET_NODE_LOG FLEET_NODE_RUNTIME FLEET_NODE_DAEMON_DIR FLEET_NODE_USERS FLEET_NODE_TABLE \
     FLEET_NODE_TICK FLEET_NODE_LAUNCHCTL FLEET_NODE_TEST FLEET_NODE_HEARTBEAT_STALE
   WHAT="整机守护 kill -9：空档里 status --check 报 DOWN（体检 node 行报警），KeepAlive 按 ${thr}s 拉起，任务记录还在、子进程被认领不重起"
+}
+
+drill_service_killed() {
+  CAP=30   # the issue's bar: a killed service is back within 30 s
+  local sb sup p1 p2 t0
+  sb="$WORK/svc"; mkdir -p "$sb/LaunchDaemons" "$sb/Users/alice"
+  printf '{"alice": {"uid": %s, "gid": %s, "home": "%s"}}\n' "$(id -u)" "$(id -g)" "$sb/Users/alice" > "$sb/passwd.json"
+  printf '{"children":[],"tasks":[]}\n' > "$sb/table.json"
+  printf '#!/bin/bash\necho "up $(id -u) $USER"\nexec sleep 300\n' > "$sb/watch.sh"; chmod +x "$sb/watch.sh"
+  export FLEET_NODE_STATE="$sb/db" FLEET_NODE_LOG="$sb/log" FLEET_NODE_RUNTIME="$sb/rt" \
+    FLEET_NODE_DAEMON_DIR="$sb/LaunchDaemons" FLEET_NODE_USERS="$sb/Users" FLEET_NODE_TABLE="$sb/table.json" \
+    FLEET_NODE_TICK=0.2 FLEET_NODE_LAUNCHCTL='' FLEET_NODE_TEST=1 FLEET_NODE_PASSWD="$sb/passwd.json"
+  python3 "$BIN/fleet-node-supervisor.py" service add --login alice --name watch -- "$sb/watch.sh" >"$sb/add.out" 2>&1 \
+    || { WHY="service add failed: $(tail -2 "$sb/add.out" | tr '\n' ' ')"; return 1; }
+  python3 -I "$BIN/fleet-node-supervisor.py" run 2>>"$sb/sup.err" &
+  sup=$!; printf '%s\n' "$sup" >> "$WORK/cred-pids"
+  svc_pid() { python3 -c 'import json, sys; print((json.load(open(sys.argv[1]))["children"].get("svc:alice/watch") or {}).get("pid") or "")' "$sb/db/state.json" 2>/dev/null; }
+  until_ok 15 sh -c 'grep -q "^up " "$1" 2>/dev/null' _ "$sb/log/logins/alice/watch.log" \
+    || { WHY="the service never ran (no log): $(tail -2 "$sb/sup.err" | tr '\n' ' ')"; return 1; }
+  p1=$(svc_pid); [ -n "$p1" ] || { WHY="no pid recorded"; return 1; }
+  kill -9 "$p1"; t0=$(now)
+  until_ok 30 sh -c '[ -n "$2" ] && [ "$(python3 -c "import json,sys; print((json.load(open(sys.argv[1]))[\"children\"].get(\"svc:alice/watch\") or {}).get(\"pid\") or \"\")" "$1" 2>/dev/null)" != "$2" ] && [ "$(grep -c "^up " "$3")" -ge 2 ]' _ "$sb/db/state.json" "$p1" "$sb/log/logins/alice/watch.log" \
+    || { WHY="the killed service was not brought back"; kill "$sup" 2>/dev/null; return 1; }
+  SECS=$(since "$t0"); p2=$(svc_pid)
+  python3 "$BIN/fleet-node-supervisor.py" status --json | python3 -c 'import json, sys; r = [x for x in json.load(sys.stdin)["services"] if x["name"] == "watch"][0]; assert r["status"] == "running" and r["restarts"] >= 1, r' 2>"$sb/st.err" \
+    || { WHY="status --json .services did not show it running with a restart: $(tail -1 "$sb/st.err")"; kill "$sup" 2>/dev/null; return 1; }
+  python3 "$BIN/fleet-node-supervisor.py" service rm --login alice --name watch >/dev/null
+  until_ok 10 sh -c '! kill -0 "$1" 2>/dev/null' _ "$p2" || { WHY="rm left the service running"; kill "$sup" 2>/dev/null; return 1; }
+  kill "$sup" 2>/dev/null; wait "$sup" 2>/dev/null
+  unset FLEET_NODE_STATE FLEET_NODE_LOG FLEET_NODE_RUNTIME FLEET_NODE_DAEMON_DIR FLEET_NODE_USERS FLEET_NODE_TABLE \
+    FLEET_NODE_TICK FLEET_NODE_LAUNCHCTL FLEET_NODE_TEST FLEET_NODE_PASSWD
+  WHAT="登记的服务 kill -9：守护按子进程退避在 30 秒内以原登录身份重起，日志续写在 logins/<登录>/，status --json 的 services[] 记重启次数；rm 后停掉"
 }
 
 drill_account_adopt_stuck() {
