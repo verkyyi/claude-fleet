@@ -3,11 +3,12 @@
 // viewer's own registered devices with revoke (an admin's too since
 // claude-fleet#2515; everyone's is All devices, admin/devices.js), each
 // machine's ways in, and the ~/.ssh/config snippet — from /v1/fleet/connect,
-// /v1/fleet/devices, POST /v1/fleet/cert and POST /v1/fleet/devices/revoke.
+// /v1/fleet/devices (its audit folds under the table as the history,
+// claude-fleet#2520), POST /v1/fleet/cert and POST /v1/fleet/devices/revoke.
 import { Shell } from './app-shell.js';
 import { esc, ic } from './lib/shell.js';
 import { looksLikeKey } from './lib/pages.js';
-import { devicesPanel, wireRevoke } from './lib/devices-view.js';
+import { devicesPanel, historyPanel, wireRevoke } from './lib/devices-view.js';
 import { t, fmtDate } from './lib/i18n.js';
 
 const ttl = (sec) => (sec >= 3600 ? t('ui.dur.hours', { n: Math.round(sec / 3600) }) : t('ui.dur.minutes', { n: Math.round(sec / 60) }));
@@ -40,7 +41,7 @@ Shell.mount('devices', async (ctx) => {
 
   ctx.el.innerHTML = `<div class="pagehead"><div><p>${esc(t('ui.dev.lead', { ttl: hours }))}</p></div></div>` +
     `<div class="grid g2">${connectPanel}${certPanel}</div>` +
-    (devs.status === 'fulfilled' ? devicesPanel(devs.value, false) : `<div class="panel"><div class="panel-h"><h3>${esc(t('ui.dev.mine'))}</h3></div>${failed(devs.reason)}</div>`) +
+    (devs.status === 'fulfilled' ? devicesPanel(devs.value, false) + historyPanel(devs.value) : `<div class="panel"><div class="panel-h"><h3>${esc(t('ui.dev.mine'))}</h3></div>${failed(devs.reason)}</div>`) +
     `<div class="grid g2">${routes}${snippet}</div>`;
 
   const btn = ctx.el.querySelector('#cert');

@@ -226,3 +226,39 @@ func TestAdminViews_AdminImportsOwnSettings(t *testing.T) {
 		t.Errorf("admin PUT new content into a user's layer = %d; want 403", code)
 	}
 }
+
+// The Devices page's history fold (claude-fleet#2520) is /v1/fleet/devices'
+// audit: each viewer gets their own devices' rows only, an admin included.
+func TestAdminViews_DeviceHistoryOwn(t *testing.T) {
+	h, admin, user := adminViewsHarness(t)
+	st := h.srv.Store
+	for _, a := range []store.DeviceAudit{
+		{Action: store.DeviceRegister, Fingerprint: "SHA256:admin", PrincipalID: githubPrincipal(ghAdmin.ID)},
+		{Action: store.DeviceRenew, Fingerprint: "SHA256:admin", PrincipalID: githubPrincipal(ghAdmin.ID), Actor: "device"},
+		{Action: store.DeviceRegister, Fingerprint: "SHA256:alice", PrincipalID: githubPrincipal(ghAlice.ID)},
+		{Action: store.DeviceRevoke, Fingerprint: "SHA256:alice", PrincipalID: githubPrincipal(ghAlice.ID), Actor: githubPrincipal(ghAlice.ID)},
+	} {
+		if err := st.AddDeviceAudit(a); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct {
+		who  string
+		c    *http.Cookie
+		fp   string
+		want string
+	}{{"admin", admin, "SHA256:admin", "register,renew"}, {"user", user, "SHA256:alice", "register,revoke"}} {
+		var dr DevicesResponse
+		if code := getJSON(t, h, tc.c, "/v1/fleet/devices", &dr); code != http.StatusOK {
+			t.Fatalf("%s /v1/fleet/devices = %d", tc.who, code)
+		}
+		if got := auditActions(dr.Audit); got != tc.want {
+			t.Errorf("%s history = %q; want %q", tc.who, got, tc.want)
+		}
+		for _, a := range dr.Audit {
+			if a.Fingerprint != tc.fp {
+				t.Errorf("%s history carries another person's device %s", tc.who, a.Fingerprint)
+			}
+		}
+	}
+}
