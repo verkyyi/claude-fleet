@@ -7188,7 +7188,7 @@ fleet_member_win_name() {
 # `.sh`/`.py`/… suffix come off the word they sit on — and no hyphen between a
 # CJK glyph and its neighbour (「入口把home会话放进macmini上」, not
 # 「入口把-home-会话…」). Then fleet_win_name's rules (character set, reserved
-# panel names) and a FLEET_ISSUE_NAME_COLS (24) column clip. Deterministic: a
+# panel names) and a 24-column clip. Deterministic: a
 # pure function of the title, one perl fork, spawn / bind / reopen only. A title
 # that cleans to nothing keeps fleet_win_name's name of the whole title.
 
@@ -7210,8 +7210,7 @@ fleet_title_use() {
 
 # fleet_issue_plain_name <title> → an ordinary (non-member) worker's window name.
 fleet_issue_plain_name() {
-  local t="${1:-}" u n cols="${FLEET_ISSUE_NAME_COLS:-24}" clip_out='' clip_w=0
-  case "$cols" in ''|*[!0-9]*) cols=24 ;; esac
+  local t="${1:-}" u n cols=24 clip_out='' clip_w=0
   u=$(fleet_title_use "$t")
   n=$(fleet_win_name "$u")
   if [ -n "$n" ]; then

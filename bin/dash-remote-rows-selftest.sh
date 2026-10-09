@@ -249,7 +249,7 @@ import importlib.util, sys
 spec = importlib.util.spec_from_file_location("sb", sys.argv[1]); sb = importlib.util.module_from_spec(spec); spec.loader.exec_module(sb)
 rows = [sb.row_fields(l) for l in open(sys.argv[3], encoding="utf-8").read().split("\n") if l.count(sb.US) >= 4]
 r = next(x for x in rows if x[3] == sys.argv[2])
-local = r[:8] + [""]
+local = r[:8] + [""] + r[9:10]   # the same row local: no machine, its #N (issue #2545)
 text = sb.row_text(" ", r[2], r[4], r[3], r[5], 34)
 print(text, "same" if text == sb.row_text(" ", local[2], local[4], local[3], local[5], 34) else "differs",
       sb.row_need(r) == sb.row_need(local), sb.machine_tag(r[8]), repr(sb.machine_tag(local[8])),

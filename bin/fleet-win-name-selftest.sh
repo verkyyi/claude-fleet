@@ -240,8 +240,6 @@ eq "J use: an ASCII-only title still slugs" "add-a-hint" "$(fleet_issue_plain_na
 eq "J use: a short plain title is itself" "每日推送没跑成" "$(fleet_issue_plain_name '每日推送没跑成')"
 got=$(fleet_issue_plain_name '托管机器上旧版 fleet host on 以登录身份重登记：入口换发令牌')
 eq "J use: clipped to 24 columns" "托管机器上旧版fleet-host" "$got"
-eq "J use: FLEET_ISSUE_NAME_COLS moves the clip" "托管机器" \
-   "$(FLEET_ISSUE_NAME_COLS=8 fleet_issue_plain_name '托管机器上旧版 fleet host on')"
 eq "J use: a title that cleans to nothing keeps fleet_win_name's name" "fleet-x-y" \
    "$(fleet_issue_plain_name 'fleet_x: --y')"
 eq "J use: still never a panel name" "" "$(fleet_issue_plain_name 'Plan')"
