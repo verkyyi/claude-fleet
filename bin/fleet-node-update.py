@@ -52,6 +52,12 @@ A tick, in order (each a `result` in <state>/update.json, one log line):
               goes on (`hold released` in the log).
   failed      staging failed (fetch, signature, a missing artifact, release.json
               invalid) — nothing switched; the staged dir is removed.
+              A fetch is resumable (issue #2701): only the artifacts release.json
+              pins for this machine, into <root>/.fetch/<sha256> (seeded from the
+              tools cache and the current / previous release), each resumed from
+              its .part, cut only after 30 s without a byte; progress lines in
+              <state>/fetch.progress (`status` prints the last). A failed fetch
+              that moved is NOT backed off — the next tick goes on from there.
   switched    staged → the doctor's FAIL rows on the OLD version kept as the
               baseline → `.prev` = old, `current` = new, cache + account links,
               the restart request. The NEXT tick (the new code, after
@@ -83,6 +89,8 @@ FLEET_NODE_USERS, plus
   FLEET_NODE_UPDATE_SETTLE   seconds between the switch and the verify (30)
   FLEET_NODE_UPDATE_PLATFORM `<os>-<arch>` of the artifacts (default this machine's)
   FLEET_NODE_UPDATE_KEEP_SECS how long a retired version stays (604800)
+  FLEET_NODE_FETCH_TIMEOUT   seconds one tick's fetch may run (1500; 0 = no limit — the
+                             installer's tick), a resumable fetch goes on next tick
   FLEET_NODE_UPDATE_LIB      the fleet-lib.sh the EPIC gate sources (default <current>/bin)
 """
 from __future__ import print_function
@@ -218,6 +226,10 @@ class P(object):
         self.pubkey = os.path.join(self.state, "release.pub")
         self.machine_env = os.path.join(self.state, "machine.env")
         self.lock = os.path.join(self.state, "locks", "update-self.lock")
+        # a release fetch's artifacts, kept across ticks so a cut one resumes
+        # (`ccquota release fetch --cache`, issue #2701); its progress lines
+        self.fetch_cache = os.path.join(self.root, ".fetch")
+        self.progress = os.path.join(self.state, "fetch.progress")
         self.log = os.path.join(self.sup.log, "update.log")
 
     def rel(self, sha):
@@ -283,6 +295,39 @@ def ccquota_bin(p):
     if os.path.exists(c):
         return c
     return shutil.which("ccquota") or ""
+
+
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def fetch_resumable(cq):
+    """Does this ccquota resume a fetch (--cache/--pinned, issue #2701)? An older
+    one takes the whole release in one go, as before."""
+    rc, out, err = run([cq, "release", "fetch", "-h"], timeout=30)
+    return "-pinned" in (out + "\n" + err) and "-cache" in (out + "\n" + err)
+
+
+def dir_bytes(d):
+    n = 0
+    for e in os.listdir(d) if os.path.isdir(d) else []:
+        try:
+            n += os.path.getsize(os.path.join(d, e))
+        except OSError:
+            pass
+    return n
+
+
+def fetch_line(p, fresh=120):
+    """The last progress line of a fetch still under way (its file written in
+    the last <fresh> seconds), or ""."""
+    try:
+        if now() - os.path.getmtime(p.progress) > fresh:
+            return ""
+        with open(p.progress) as f:
+            lines = [l.strip() for l in f if l.strip()]
+        return lines[-1] if lines else ""
+    except (OSError, IOError):
+        return ""
 
 
 def run(cmd, timeout=600, **kw):
@@ -400,11 +445,28 @@ class Updater(object):
         if not os.path.exists(self.p.pubkey):
             raise StageError("no pinned release key (%s) — `fleet node install` pins it" % self.p.pubkey)
         os.makedirs(self.p.root, exist_ok=True)
-        rc, out, err = run([cq, "release", "fetch", "--hub", hub, "--pubkey", self.p.pubkey, "--artifacts", sha, d],
-                           timeout=1500)
+        cmd = [cq, "release", "fetch", "--hub", hub, "--pubkey", self.p.pubkey, "--artifacts"]
+        resumable = fetch_resumable(cq)
+        if resumable:
+            # only what release.json pins for this machine, resumed from the cache
+            # (seeded with what the machine already has), no whole-fetch deadline
+            os.makedirs(self.p.fetch_cache, exist_ok=True)
+            self.seed_fetch_cache()
+            with open(self.p.progress, "w"):
+                pass
+            cmd += ["--pinned", "--platform", "-".join(platform_id()), "--cache", self.p.fetch_cache,
+                    "--progress", self.p.progress]
+        before = dir_bytes(self.p.fetch_cache)
+        tmo = env_num("FLEET_NODE_FETCH_TIMEOUT", 1500)
+        rc, out, err = run(cmd + [sha, d], timeout=tmo if tmo > 0 else None)
         if rc != 0:
             shutil.rmtree(d, ignore_errors=True)
-            raise StageError("fetch: %s" % (err or out or "rc %d" % rc).splitlines()[-1][:200])
+            e = StageError("fetch: %s" % (err or out or "rc %d" % rc).splitlines()[-1][:200])
+            e.resumable = resumable and dir_bytes(self.p.fetch_cache) > before
+            raise e
+        if resumable:
+            # every artifact now lives (hard-linked) in the release itself
+            shutil.rmtree(self.p.fetch_cache, ignore_errors=True)
         try:
             try:
                 spec = check_release(read_json(os.path.join(d, RELEASE_FILE), None))
@@ -450,6 +512,29 @@ class Updater(object):
         except (OSError, KeyError) as e:
             shutil.rmtree(d, ignore_errors=True)
             raise StageError("stage: %s" % e)
+
+    def seed_fetch_cache(self):
+        """Put what this machine already holds into the fetch cache under its
+        sha256 — the tools cache, the current and previous release's artifacts —
+        so a release that pins the same bytes downloads none of them again."""
+        have = {}
+        for tool in TOOLS:
+            td = os.path.join(self.p.tools, tool)
+            for h in os.listdir(td) if os.path.isdir(td) else []:
+                have.setdefault(h, os.path.join(td, h, tool))
+        for rel in (self.p.current, self.p.prev):
+            man = read_json(os.path.join(rel, ".release", "manifest.json"), {}) or {}
+            for a in man.get("artifacts") or []:
+                if isinstance(a, dict) and SHA256_RE.match(str(a.get("sha256", ""))) and "/" not in str(a.get("name")):
+                    have.setdefault(a["sha256"], os.path.join(rel, ".release", "artifacts", str(a["name"])))
+        for h, src in sorted(have.items()):
+            dst = os.path.join(self.p.fetch_cache, h)
+            if not SHA256_RE.match(h) or os.path.exists(dst) or not os.path.isfile(src):
+                continue
+            try:
+                os.link(src, dst)   # ccquota re-checks the digest before it uses one
+            except OSError:
+                pass
 
     def art(self, d, arts, name):
         if name not in arts:
@@ -680,7 +765,10 @@ class Updater(object):
         try:
             self.stage(target)
         except StageError as e:
-            self.st["failed"] = {target: {"at": now(), "reason": str(e)}}
+            if e.resumable:   # no backoff: the next tick resumes where this one was cut
+                self.st["failed"].pop(target, None)
+            else:
+                self.st["failed"] = {target: {"at": now(), "reason": str(e)}}
             self.record("failed", cur, target, str(e))
             return self.end("failed", "%s: %s" % (target[:12], e), current=cur)
         self.st["failed"].pop(target, None)
@@ -698,6 +786,7 @@ SESSIONS_SH = ('TMPDIR="$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null)"; '
 
 
 class StageError(Exception):
+    resumable = False   # the fetch moved: its bytes are kept, the next tick goes on
     pass
 
 
@@ -968,6 +1057,9 @@ def main(argv):
             st.get("result", "-"), iso(st.get("at")), (link_sha(p.current) or "none")[:12],
             st.get("phase", "idle"), st.get("reason", ""))
         print(line)
+        fl = fetch_line(p)
+        if fl:
+            print("fetch   %s" % fl)
         if "--check" in rest:
             bad = st.get("result") in ("failed", "rolled-back", "skipped") or (
                 st.get("phase") != "idle" and now() - (st.get("at") or 0) > 3600)

@@ -34,6 +34,10 @@
 #   credsep-stale-after-switch  bin/fleet-node-update.py + fleet-credsep.py `machine
 #                         refresh` + the supervisor's cred-proxy-shared `reload` (#2435):
 #                         a switch / rollback left the shared credential proxy on old code
+#   release-fetch-slow    tokenledger/internal/release fetch.go (Fetcher: Cache, Platforms,
+#                         Stall; go test, when a toolchain is here) + bin/fleet-node-update.py
+#                         stage (#2701): a 700 MB release at ~1 MB/s against a whole-fetch
+#                         deadline never landed, each try from zero
 #   managed-login-install-stale  bin/fleet-install-sync.sh's managed branch +
 #                         bin/fleet-node-update.py's `install` doctor row (#2688): a
 #                         managed login's own ~/.claude/fleet sat on its bootstrap copy
@@ -474,6 +478,41 @@ drill_credsep_stale_after_switch() {
     || { WHY="the proxy did not follow the release: $(printf '%s' "$out" | grep -E 'Error|FAIL' | head -3 | tr '\n' ' ')"; return 1; }
   SECS=$(since "$t0")
   WHAT="换版两次再回退一次：每次 credsep 副本的 sha = 发布版，守护的共享代理子进程用新副本重启（pid 换了），回退时副本和代理一起回旧版，不另写 plist"
+}
+
+# ---- release-fetch-slow (#2701): a new managed machine's release fetch at ~1 MB/s.
+# Before: ccquota's 10-minute whole-body deadline cut a 700 MB fetch (every artifact
+# the hub carries, every platform and old version), dest.partial was deleted and
+# the next try began at zero, after an hour's backoff. Now: only release.json's
+# pins for this machine, each artifact resumed from <root>/.fetch, cut only after
+# 30 s without a byte, no backoff when the fetch moved. The updater half is its
+# Python case (L_ResumableFetch); the ccquota half its Go tests, run where a
+# toolchain is.
+drill_release_fetch_slow() {
+  CAP=120; local t0 out rc tests f
+  tests='TestFetchResumesAfterStall TestFetchResumesAcrossRuns TestFetchPinnedOnly TestFetchCachedNotRefetched TestFetchSlowButSteady'
+  f="$ROOT/tokenledger/internal/release/fetch_test.go"
+  for out in $tests; do
+    grep -q "^func $out(" "$f" 2>/dev/null || { WHY="the ccquota half's test $out is not in ${f#$ROOT/}"; return 1; }
+  done
+  t0=$(now)
+  out=$(python3 -W ignore::ResourceWarning "$BIN/fleet-node-update-selftest.py" --drill-fetch 2>&1) \
+    || { WHY="the updater half: $(printf '%s' "$out" | grep -E 'Error|FAIL' | head -3 | tr '\n' ' ')"; return 1; }
+  WHAT='更新器：只取本机钉住的制品、缓存先填已有的、断了不退避下一轮接着取'
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/release 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the ccquota half's Go tests are not there (go test ran none)"; return 1 ;;
+      0:*) WHAT="${WHAT}；ccquota：静默 30 秒才断、同一次和下一次都从断点续传、慢而不停不超时、已缓存不重下（go test 五条）" ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
+        WHAT="${WHAT}；ccquota 的 Go 测试这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们" ;;
+      *) WHY="the ccquota half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  else
+    WHAT="${WHAT}；没有 go：五条测试按名核对在，Go 门（tokenledger.yml）跑它们"
+  fi
+  SECS=$(since "$t0")
 }
 
 drill_node_install_half() {

@@ -262,9 +262,29 @@ else
     upd="$WORK/tree/bin/fleet-node-update.py"
     [ -f "$upd" ] || fail 运行时 "发布版里没有 bin/fleet-node-update.py（stable 早于整机更新器）"
   fi
-  # the installer's tick never waits out an earlier failure's backoff
-  env FLEET_NODE_CCQUOTA="$CCQ" FLEET_NODE_UPDATE_RETRY=0 ${TARGET:+"FLEET_NODE_UPDATE_TARGET=$TARGET"} \
-    "$PY" -I "$upd" tick >"$WORK/tick.out" 2>&1
+  # the installer's tick never waits out an earlier failure's backoff, and its
+  # fetch has no overall deadline — only 30 s without a byte cuts it, and a
+  # rerun resumes from the bytes it has (issue #2701). Its progress (each
+  # artifact's size, done, rate, eta) prints here every few seconds.
+  rm -f "$STATE/fetch.progress"
+  env FLEET_NODE_CCQUOTA="$CCQ" FLEET_NODE_UPDATE_RETRY=0 FLEET_NODE_FETCH_TIMEOUT=0 \
+    ${TARGET:+"FLEET_NODE_UPDATE_TARGET=$TARGET"} \
+    "$PY" -I "$upd" tick >"$WORK/tick.out" 2>&1 &
+  tick_pid=$! seen=0
+  while :; do
+    alive=0; kill -0 "$tick_pid" 2>/dev/null && alive=1
+    n="$(wc -l <"$STATE/fetch.progress" 2>/dev/null | tr -d ' ')"
+    if [ -n "$n" ] && [ "$n" -gt "$seen" ]; then
+      # every new artifact line; of the running one's ticker, only the latest
+      awk -v from="$seen" -v to="$n" 'NR <= from || NR > to {next} {sub(/^ +/, "")}
+        / eta /{t = $0; next} {if (t != "") print "  运行时 · " t; t = ""; print "  运行时 · " $0}
+        END{if (t != "") print "  运行时 · " t}' "$STATE/fetch.progress"
+      seen="$n"
+    fi
+    [ "$alive" = 1 ] || break
+    sleep 1
+  done
+  wait "$tick_pid" 2>/dev/null
   # a switch ends at phase `switched` (the daemon verifies it next); anything else says result + reason
   res="$("$PY" -c 'import json,sys; d=json.load(open(sys.argv[1])); print("%s\t%s" % ("switched" if d.get("phase") == "switched" else d.get("result", ""), d.get("reason", "")))' "$STATE/update.json" 2>/dev/null)"
   case "${res%%	*}" in

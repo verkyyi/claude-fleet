@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"time"
+	"runtime"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/release"
 )
@@ -18,7 +18,7 @@ import (
 // runRelease is `ccquota release` (claude-fleet#2335): a machine's side of the
 // hub's node releases — fetch one, verify one, and the operator's keygen.
 //
-//	ccquota release fetch  --hub URL --pubkey FILE [--artifacts] <sha|stable> <dest>
+//	ccquota release fetch  --hub URL --pubkey FILE [--artifacts [--pinned] [--cache DIR] [--progress FILE]] <sha|stable> <dest>
 //	ccquota release verify --hub URL --pubkey FILE <sha|stable>   (the hub's copy)
 //	ccquota release verify --pubkey FILE --dir <dest>             (an installed one)
 //	ccquota release keygen --out FILE                             (the hub's key)
@@ -26,7 +26,9 @@ import (
 //
 // fetch talks to the hub only — never GitHub — and installs nothing that does
 // not match the signature of the pinned key: exit 1 on any mismatch, dest
-// left absent.
+// left absent. A fetch has no overall deadline (claude-fleet#2701): a response
+// that sends no byte for --stall is cut, an artifact resumes from what --cache
+// holds, and --pinned takes only what release.json pins for --platform.
 func runRelease(args []string) error {
 	if len(args) == 0 {
 		return errors.New("usage: ccquota release fetch|verify|keygen|pubkey …")
@@ -63,7 +65,7 @@ func releaseFetcher(hub, pubkey string) (*release.Fetcher, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &release.Fetcher{Hub: hub, Key: key, Client: &http.Client{Timeout: 10 * time.Minute}}, nil
+	return &release.Fetcher{Hub: hub, Key: key, Client: &http.Client{}}, nil
 }
 
 func runReleaseFetch(args []string) error {
@@ -71,6 +73,11 @@ func runReleaseFetch(args []string) error {
 	hub := fs.String("hub", os.Getenv("FLEET_HUB_URL"), "the hub's URL")
 	pub := fs.String("pubkey", "", "the pinned release key file (`ed25519 <base64>`)")
 	arts := fs.Bool("artifacts", false, "also fetch every binary / installer")
+	pinned := fs.Bool("pinned", false, "with --artifacts: only those release.json pins for --platform")
+	plat := fs.String("platform", runtime.GOOS+"-"+runtime.GOARCH, "the <os>-<arch> --pinned expands for")
+	cache := fs.String("cache", "", "keep (and resume) artifacts here as <sha256>; default <dest>.dl, removed once whole")
+	stall := fs.Duration("stall", release.DefaultStall, "cut a response that sends no byte this long")
+	progress := fs.String("progress", "", "write progress lines to FILE (- = stderr)")
 	_ = fs.Parse(args)
 	if fs.NArg() != 2 {
 		return errors.New("usage: ccquota release fetch --hub URL --pubkey FILE [--artifacts] <sha|stable> <dest>")
@@ -78,6 +85,22 @@ func runReleaseFetch(args []string) error {
 	f, err := releaseFetcher(*hub, *pub)
 	if err != nil {
 		return err
+	}
+	f.Cache, f.Stall = *cache, *stall
+	if *pinned {
+		f.Platforms = []string{*plat}
+	}
+	switch *progress {
+	case "":
+	case "-":
+		f.Progress = os.Stderr
+	default:
+		pf, err := os.OpenFile(*progress, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+		if err != nil {
+			return err
+		}
+		defer pf.Close()
+		f.Progress = pf
 	}
 	m, err := f.Fetch(context.Background(), fs.Arg(0), fs.Arg(1), *arts)
 	if err != nil {
