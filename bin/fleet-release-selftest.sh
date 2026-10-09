@@ -44,12 +44,12 @@ unset CCQUOTA_VIEWER_TOKEN CCQUOTA_HUB_URL FLEET_HUB_URL FLEET_RELEASE_MACHINES 
 
 git init -q --bare -b master "$d/origin.git" && git clone -q "$d/origin.git" "$d/seed" 2>/dev/null || { echo "FAIL  rig"; exit 1; }
 mkdir -p "$d/seed/.github/workflows"; echo 'name: selftests (macOS)' > "$d/seed/.github/workflows/selftests-macos.yml"
-for i in 1 2 3 4 5; do
+for i in 1 2 3 4; do
   echo "$i" > "$d/seed/f"; git -C "$d/seed" add -A && git -C "$d/seed" commit -qm "c$i" || exit 1
   git -C "$d/seed" rev-parse HEAD > "$d/c$i"
 done
 git -C "$d/seed" push -q origin HEAD:master || exit 1
-c1=$(cat "$d/c1") c2=$(cat "$d/c2") c3=$(cat "$d/c3") c4=$(cat "$d/c4") c5=$(cat "$d/c5")
+c1=$(cat "$d/c1") c2=$(cat "$d/c2") c3=$(cat "$d/c3") c4=$(cat "$d/c4")
 git --git-dir="$d/origin.git" update-ref refs/tags/stable "$c1"
 git clone -q "$d/origin.git" "$d/co" 2>/dev/null || exit 1
 stable() { git --git-dir="$d/origin.git" rev-parse refs/tags/stable; }
