@@ -24,11 +24,12 @@
 #                                           it is yellow (unset ⇒ 80, #1571); with
 #                                           it 0 and no _TOKENS, 80 / 50.
 #   100 - @ctx_pct                       → @ctx_left   the context LEFT, % (issue
-#                                           #2431: what the header, `fleet ls` and
+#                                           #2431: what the client's top line, `fleet ls` and
 #                                           the node's inventory show — computed
 #                                           here once, never by a reader)
 #   the reading's time                   → @ctx_ts     epoch seconds of the newest
-#                                           context reading (#2431): the header
+#                                           context reading (#2431): the client's
+#                                           top line (#2717)
 #                                           greys a reading older than 5 minutes
 #                                           and says how old. Re-stamped when a
 #                                           context stamp changed, else at most
@@ -97,7 +98,7 @@
 #       the same fields as the mod's (`ctx_pct=` / `ctx_limit=` are accepted too),
 #       stamped the same way — @ctx_pct @ctx_limit @ctx_band @ctx_left @ctx_ts
 #       @model @effort — with @ctx_src codex. So a Codex window and a Claude window
-#       read the same on the header, in the inventory and on `fleet ls`, and the
+#       read the same on the client's top line, in the inventory and on `fleet ls`, and the
 #       bands and the rounding are still computed in ONE place.
 #
 # Outside tmux there is no bus: nothing is stamped and nothing is printed. The

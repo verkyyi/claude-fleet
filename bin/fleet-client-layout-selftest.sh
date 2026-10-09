@@ -109,6 +109,35 @@ eq("record: a one-repo fleet names no repo", sb.bar_record(rows[:3], "@1")["repo
 eq("record: no PR → empty", sb.bar_record(rows, "@1")["pr"], "")
 eq("record: a title field (14th) wins over the name", sb.bar_record(
    [rows[1][:13] + ["The real title"]], "@1")["title"], "The real title")
+# 剩余 % · model · effort on the right (issue #2717): the node header's four widths
+c = dict(rec, ctx_left=62, ctx_band="ok", ctx_ts=1000, model="Opus 5.5", effort="high")
+w = {cols: tb.fit(c, cols, now=1060)[0] for cols in (150, 100, 60, 44)}
+for cols, want in ((150, "剩余 62% · Opus 5.5 · high"), (100, "剩余 62% · Opus 5.5 · high"),
+                   (60, "62% · O5.5 · H")):
+    has("ctx %d" % cols, w[cols], want)
+    eq("ctx %d: still the width" % cols, tb.cells(w[cols]), cols)
+has("ctx 60: no 剩余", w[60], "剩余", False)
+has("ctx 44: the % alone", w[44], "62%"); has("ctx 44: no model", w[44], "O5.5", False)
+has("ctx: before the machine", w[150], "high  @m5")
+parts = tb.layout(c, 150, now=1060)[0]
+eq("ctx >50: green", [p[1] for p in parts if p[0].startswith("剩余")], [tb.OK])
+eq("ctx 20–50: amber", tb.ctx_parts(dict(c, ctx_left=50), 150, 1060)[0][1], tb.WARN)
+eq("ctx <20: red", tb.ctx_parts(dict(c, ctx_left=19), 150, 1060)[0][1], tb.BAD)
+h = tb.ctx_parts(dict(c, ctx_left=8, ctx_band="handoff"), 150, 1060)
+eq("handoff: red + ⚠ 将交接", h[0], ("剩余 8% ⚠ 将交接", tb.BAD, ""))
+eq("handoff 60: ⚠ alone", tb.ctx_parts(dict(c, ctx_band="handoff"), 60, 1060)[0][0], "62% ⚠")
+old = tb.ctx_parts(c, 150, 1000 + 420)
+eq("5 minutes old: all grey", [p[1] for p in old], [tb.DIM, tb.DIM])
+has("5 minutes old: N 分钟前", old[1][0], " · 7 分钟前")
+eq("gpt short form", tb.short_model("gpt-6-astra"), "g6a")
+t, _ = tb.fit(dict(rec, model="Opus 5.5", effort="high"), 150, now=0)
+has("no ctx_left: no segment", t, "Opus", False)
+eq("no ctx_left: no parts, no error", tb.ctx_parts(rec, 150, 0), [])
+r = sb.bar_record([rows[1][:13] + ["", "", "", "", "", "62|ok|1000|Opus 5.5|high"]], "@1")
+eq("record: field 19 → the five", {k: r.get(k) for k in ("ctx_left", "ctx_band", "ctx_ts", "model", "effort")},
+   {"ctx_left": 62, "ctx_band": "ok", "ctx_ts": 1000, "model": "Opus 5.5", "effort": "high"})
+eq("record: no field 19 → none of them", "ctx_left" in sb.bar_record(rows, "@1"), False)
+eq("record: a malformed field 19 → nothing", sb.ctx_of("x|bad|-1|;rm|HIGH"), {})
 # single_layout: only the client's frame, by width or by setting
 for frame, cols, lay, want in ((True, "60", "auto", True), (True, "160", "auto", False),
                                (True, "110", "auto", True), (True, "111", "auto", False),
@@ -237,7 +266,9 @@ try:
        '-n', 'm4 x', 'cat -v', s=stage)
     (state / 'switch-bar.json').write_text(json.dumps(
         {"i": 3, "n": 8, "state": "working", "kind": "", "key": "#1894", "title": "TitleOfTheSession",
-         "pr": "", "repo": "", "slug": "", "node": "m4", "lost": False, "direct": False, "ask": 0}))
+         "pr": "", "repo": "", "slug": "", "node": "m4", "lost": False, "direct": False, "ask": 0,
+         # issue #2717: the `%` must survive the stage's status-left as drawn
+         "ctx_left": 62, "ctx_band": "ok", "ctx_ts": int(time.time()), "model": "Opus 5.5", "effort": "high"}))
     tm('set-option', '-t', 'fc-stage', '@fleet_bar_gen', '1', s=stage)
     # the client: `home` = a frame, its right pane the stage's nested client
     viewer = 'env -u TMUX %s -S %s attach -t fc-stage' % (shlex.quote(real_tmux), shlex.quote(stage))
@@ -270,6 +301,7 @@ try:
     check(wait(lambda: '@m4' in tm('capture-pane', '-p', '-t', right).split('\n')[0], 8),
           'the stage top line does not say the record: %r' % tm('capture-pane', '-p', '-t', right).split('\n')[0])
     top = tm('capture-pane', '-p', '-t', right).split('\n')[0]
+    check('62% · ' in top, 'the top line draws no 剩余 %% · model (#2717): %r' % top)
     check('‹ 3/8 ›' in top and '#1894' in top and '@m4' in top, 'the top line: %r (stage cw=%s, pane %s)' % (top, tm('list-clients', '-F', '#{client_width}', s=stage), tm('display-message', '-p', '-t', right, '#{pane_width}')))
     print('B: 160 columns — the list beside the session; the top line: %s' % top.strip())
     os.write(master, b'\x1bOR')   # F3, xterm's

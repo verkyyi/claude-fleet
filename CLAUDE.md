@@ -733,9 +733,11 @@ Do not install from memory: read the doc and work from it.
   runs `--from codex pct= limit= model= effort=` (effort off the rollout's
   `turn_context`, else `config.toml`) and stamps nothing itself (`@ctx_src codex`).
   The script also stamps `@ctx_left` (% left) and `@ctx_ts` (the reading's time,
-  re-stamped at most once a minute when nothing changed) — the header's
-  `剩余 62% · Opus 5.5 · high` (`@fleet_ctx_hdr`, grey past 5 minutes), the node
-  inventory's columns 24-28 and `fleet ls` all read those stamps.
+  re-stamped at most once a minute when nothing changed) — the node
+  inventory's columns 24-28 and `fleet ls` read those stamps, and the CLIENT's
+  top line (`bin/fleet-topbar.py`, the sidebar's field 19) is the one place that
+  draws `剩余 62% · Opus 5.5 · high` (grey past 5 minutes) — the node's pane
+  header no longer does (issue #2717).
   Never add a second place that computes a band or rounds a percent. Claude Code
   keeps one blank bottom row for ANY `statusLine`, so the key is removable once
   every Claude window on the login runs mod ≥ 0.2.0: `bin/fleet-statusline.sh

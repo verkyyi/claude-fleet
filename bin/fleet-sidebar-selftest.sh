@@ -558,7 +558,7 @@ try:
                  line.startswith('bind z ') or line.startswith('bind [ ') or line.startswith('bind k '))]
     selected += [line for line in node_conf.splitlines() if
                  line.startswith('set -g pane-border') or line.startswith('set -g default-terminal') or
-                 line.startswith('set -g assume-paste-time ') or line.startswith('set -g @pct_sign ') or
+                 line.startswith('set -g assume-paste-time ') or
                  line == 'set -g mouse on']
     fixture = work / 'sidebar.conf'
     fixture.write_text('\n'.join(selected) + '\n')
