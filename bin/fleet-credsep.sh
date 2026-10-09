@@ -37,6 +37,14 @@
 #                                           node.env yourself), 4 = no password-less
 #                                           sudo (the line to hand an admin printed);
 #                                           --check answers that, writes nothing
+#   sudo fleet-credsep.sh reconcile --login <X> [--prefer home|store] [--dry-run]
+#                                           a plain node.env back in a separated
+#                                           home (a writer from before #2316): fold
+#                                           it into the store (the newer copy wins a
+#                                           key both have), the link back, the agent
+#                                           restarted — issue #2649; the doctor's
+#                                           credsep row names it. Exit 3 = not
+#                                           separated. setenv exits 5 on that home
 #   fleet-credsep.sh plan                   every login on this machine: its state
 #                                           and the exact commands — dry run, the
 #                                           ONE sudo to type, status, the way back
@@ -116,7 +124,7 @@ SELF="$(id -un)"
 if [ "$(id -u)" = 0 ]; then
   LOGIN="${want:-${SUDO_USER:-}}"
   if [ -z "$LOGIN" ] || [ "$LOGIN" = root ]; then
-    case "$cmd" in install|uninstall|apply|setenv)
+    case "$cmd" in install|uninstall|apply|setenv|reconcile)
       echo "fleet-credsep: as root, say whose credentials: run it with sudo from the login, or add --login <login>" >&2
       exit 2 ;;
     esac
@@ -211,8 +219,19 @@ case "$cmd" in
       echo "fleet-credsep: $LOGIN's node.env is in the credential store; writing it needs root once — an admin runs: printf '<KEY>=<value>\n' | sudo bash $BIN/fleet-credsep.sh setenv --login $LOGIN" >&2
       exit 4
     fi
+    if [ -f "$CONF/node.env" ] && [ ! -L "$CONF/node.env" ]; then
+      # a writer from before #2316 left a plain copy here (issue #2649): setenv
+      # would refuse it — say the one fix before anything is probed or spent
+      echo "fleet-credsep: $CONF/node.env is a plain file again (separated: it belongs in the store) — an admin folds it in once: sudo bash $BIN/fleet-credsep-reconcile.sh --login $LOGIN" >&2
+      exit 5
+    fi
     [ "${1:-}" = --check ] && exit 0
     root_py setenv
+    ;;
+  reconcile)
+    separated || { echo "fleet-credsep: $LOGIN is not separated — node.env is its own file, nothing to reconcile" >&2; exit 3; }
+    can_sudo || { echo "fleet-credsep: reconcile needs root once — an admin runs: sudo bash $BIN/fleet-credsep-reconcile.sh --login $LOGIN" >&2; exit 4; }
+    root_py reconcile "$@"
     ;;
   plan) python3 -I "$BIN/fleet-credsep.py" plan --bin "$BIN" ;;
   machine)

@@ -21,6 +21,8 @@
 #   cred-sep-rejoin-plain      bin/fleet-node-join.sh (separated: the token through credsep setenv),
 #                              bin/fleet-credsep.sh / fleet-credsep.py setenv (issue #2316)
 #   cred-sep-compute-unlinks   bin/fleet-node.sh setenv / envval, bin/fleet-host.sh (issue #2316, #2426)
+#   cred-sep-plain-node-env    bin/fleet-credsep-reconcile.sh, fleet-credsep.py reconcile / check,
+#                              fleet-credsep.sh setenv --check (issue #2649)
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT are read by the sourced runner
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -357,6 +359,64 @@ drill_cred_sep_compute_unlinks() {
   out=$(env $SEPENV bash "$BIN/fleet-node.sh" compute status 2>/dev/null | head -n 1)
   case "$out" in 只协调*) ;; *) WHY="compute status does not read node.pub.env: $out"; return 1 ;; esac
   WHAT="隔离登录 compute off：存储那份原地改成 0（属主、权限不变、令牌在），node.env 仍是软链，家目录无令牌；status 读 node.pub.env"
+}
+
+# 2026-10-09 macmini: `fleet host on --shared` from before #2316 had replaced the
+# separated login's node.env link with a plain file (COMPUTE=1 / PERSONAL=0) —
+# the token in the home again, the store's copy older, and the agent reading the
+# switches live from the plain one (#2649). The doctor names the fix, a writer
+# refuses before it probes, reconcile folds the newer home copy into the store
+# and puts the link back; `compute on` afterwards keeps the link.
+drill_cred_sep_plain_node_env() {
+  CAP=30
+  local sb="$WORK/sepplain" t0 out rc me; me=$(id -un)
+  sep_self "$sb" "$(printf 'CCQUOTA_HUB_URL=http://127.0.0.1:1\nCCQUOTA_TOKEN=ccq_OLD_SECRET\nCCQUOTA_FLEET=1\nCCQUOTA_FLEET_COMPUTE=0\nCCQUOTA_FLEET_CREDS=store-only\n')" || return 1
+  [ -L "$C/node.env" ] || { WHY="the rig: install left no link"; return 1; }
+  # the old writer: the link swapped for a newer plain file
+  rm -f "$C/node.env"
+  printf '# claude-fleet node-join (issue #1418)\nCCQUOTA_HUB_URL=http://127.0.0.1:1\nCCQUOTA_TOKEN=ccq_NEW_SECRET\nCCQUOTA_FLEET=1\nCCQUOTA_FLEET_COMPUTE=1\nCCQUOTA_FLEET_PERSONAL=0\n' > "$C/node.env"
+  chmod 600 "$C/node.env"; touch -t 203001010000 "$C/node.env"
+  # 1. the doctor's row says which copy is in use and the one command (the store
+  # shut while it reads, as the role account's 0700 is to the login)
+  # shellcheck disable=SC2086
+  out=$(chmod 000 "$R"; env $SEPENV FLEET_CRED_SEPARATE=1 python3 -I "$BIN/fleet-credsep.py" check --conf-dir "$C" 2>&1; chmod 700 "$R")
+  case "$out" in *"plain file again and newer"*"fleet-credsep-reconcile.sh --login $me"*) ;;
+    *) WHY="the doctor's row does not name the plain node.env and the fix: $out"; return 1 ;; esac
+  # 2. a writer refuses before it changes anything
+  # shellcheck disable=SC2086
+  out=$(env $SEPENV bash "$BIN/fleet-node.sh" compute off 2>&1); rc=$?
+  [ "$rc" != 0 ] && printf '%s' "$out" | grep -q fleet-credsep-reconcile.sh && grep -qx 'CCQUOTA_FLEET_COMPUTE=1' "$C/node.env" \
+    || { WHY="compute off on a plain node.env did not refuse naming reconcile (rc $rc): $(printf '%s' "$out" | tail -2 | tr '\n' ' ')"; return 1; }
+  # 3. reconcile: the newer home copy wins, the store's own key stays, the link is back
+  t0=$(now)
+  # shellcheck disable=SC2086
+  out=$(env $SEPENV bash "$BIN/fleet-credsep-reconcile.sh" --login "$me" 2>&1); rc=$?
+  SECS=$(since "$t0")
+  [ "$rc" = 0 ] || { WHY="reconcile failed (rc $rc): $(printf '%s' "$out" | tail -2 | tr '\n' ' ')"; return 1; }
+  printf '%s' "$out" | grep -q 'ccq_' && { WHY="reconcile printed a token: $out"; return 1; }
+  [ -L "$C/node.env" ] && [ "$(readlink "$C/node.env")" = "$R/node.env" ] || { WHY="node.env is not the store's link: $(ls -l "$C/node.env")"; return 1; }
+  grep -qx 'CCQUOTA_TOKEN=ccq_NEW_SECRET' "$R/node.env" && grep -qx 'CCQUOTA_FLEET_COMPUTE=1' "$R/node.env" \
+    && grep -qx 'CCQUOTA_FLEET_PERSONAL=0' "$R/node.env" && grep -qx 'CCQUOTA_FLEET_CREDS=store-only' "$R/node.env" \
+    && [ "$(grep -c '^CCQUOTA_FLEET_COMPUTE=' "$R/node.env")" = 1 ] \
+    || { WHY="the store's copy is not the merge (home wins, store-only kept): $(sed 's/=.*//' "$R/node.env" | tr '\n' ' ')"; return 1; }
+  grep -qx 'CCQUOTA_FLEET_COMPUTE=1' "$C/node.pub.env" && ! grep -q TOKEN "$C/node.pub.env" \
+    || { WHY="node.pub.env did not follow the store"; return 1; }
+  ls "$R/backup/" 2>/dev/null | grep -q '^node.env.home-' || { WHY="the plain copy was not set aside in the store's backup/"; return 1; }
+  [ -z "$(home_token "$sb")" ] || { WHY="a node token is still in the home: $(home_token "$sb")"; return 1; }
+  # 4. a rerun is a no-op
+  # shellcheck disable=SC2086
+  out=$(env $SEPENV bash "$BIN/fleet-credsep-reconcile.sh" --login "$me" 2>&1); rc=$?
+  [ "$rc" = 0 ] && printf '%s' "$out" | grep -q 'already the store' || { WHY="the rerun was not a no-op (rc $rc): $(printf '%s' "$out" | tail -2 | tr '\n' ' ')"; return 1; }
+  # 5. `fleet host on`'s half afterwards: compute on writes the store, the link stays
+  # shellcheck disable=SC2086
+  out=$(env $SEPENV FLEET_PROBE_CURL=false FLEET_PROBE_OS=Linux FLEET_PROBE_BATTERY_DIR=/nonexistent bash "$BIN/fleet-node.sh" compute on --force --shared 2>&1); rc=$?
+  [ "$rc" = 0 ] && [ -L "$C/node.env" ] && [ -z "$(home_token "$sb")" ] \
+    || { WHY="compute on after reconcile (rc $rc) broke the link: $(printf '%s' "$out" | tail -2 | tr '\n' ' ')"; return 1; }
+  # 6. the doctor no longer names the home
+  # shellcheck disable=SC2086
+  out=$(chmod 000 "$R"; env $SEPENV FLEET_CRED_SEPARATE=1 python3 -I "$BIN/fleet-credsep.py" check --conf-dir "$C" 2>&1; chmod 700 "$R")
+  case "$out" in *"plain file"*|*"login paths"*) WHY="the doctor still names the home after reconcile: $out"; return 1 ;; esac
+  WHAT="隔离登录的 node.env 又成了普通文件：doctor 说清哪份在用和修法；写入方先拒；reconcile 以较新的家目录那份为准合并、保留库里独有键、原件进 backup/、软链复位、重跑无事；之后 compute on 软链仍在"
 }
 
 cred_run_drills "$0"
