@@ -123,6 +123,10 @@ if [ "$intmux" = 1 ]; then
     while kill -0 "$WRAP" 2>/dev/null; do sleep 5 & wait $!; done
   ) </dev/null >/dev/null 2>&1 &
   NOSTOP=$!
+  # Out of the job table: bash 3.2 prints a killed job's "Terminated ( … )"
+  # notice onto the pane when the EXIT trap runs anything after the kill, and
+  # the sleep page then reads that as what the launcher said (issue #2495).
+  disown "$NOSTOP" 2>/dev/null
   trap 'kill "$NOSTOP" 2>/dev/null' EXIT
 fi
 # Whatever the pane runs after this wrapper is gone — the caller's `exec $SHELL`,
