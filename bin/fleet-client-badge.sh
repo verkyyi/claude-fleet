@@ -13,9 +13,13 @@
 #   verkyyi                        (orange) nobody holds the client lease
 #   a bar narrower than 60 columns: the login only, in its colour
 #
-# The login is the connection certificate's principal (`fleet login` — the GitHub
-# login the hub signed it for: `ssh-keygen -L` on ${FLEET_CERT:-~/.ssh/fleet-cert}-cert.pub),
-# else this computer's user (no hub, no certificate).
+# The login is the person's GitHub login (issue #2577): the hub's certificate
+# answer names it and `fleet login` keeps it in ${FLEET_CERT:-~/.ssh/fleet-cert}-who
+# (<key id>\t<login>), read only while its key id is the certificate's
+# (`ssh-keygen -L`). The certificate's principal is a MACHINE login (the node's
+# `verky`, another name on another machine), so with no GitHub login known the
+# badge falls back to it — else this computer's user — marked `?`. Which machine
+# and which login: `fleet status`.
 #
 # conf/tmux-shell.conf: status-left "#(bash __BIN__/fleet-client-badge.sh cw=#{client_width})".
 # The state is fleet-client-where.sh --json (state · hub) — never a second way to
@@ -40,6 +44,34 @@ for a in "$@"; do case "$a" in cw=*) cw=${a#cw=} ;; esac; done
 case "$cw" in ''|*[!0-9]*) cw=999 ;; esac
 
 . "$BIN/fleet-ui-lang.sh"
+
+CRT=${FLEET_CERT:-$HOME/.ssh/fleet-cert}
+# the GitHub login `fleet login` recorded beside the certificate (#2577) — only
+# while its key id is the certificate's own; nothing when none is known
+gh_login() {
+  local kid
+  kid=$(ssh-keygen -L -f "$CRT-cert.pub" 2>/dev/null \
+    | sed -n 's/^[[:space:]]*Key ID: "\(.*\)"[[:space:]]*$/\1/p' | head -n 1)
+  [ -n "$kid" ] && [ -r "$CRT-who" ] || return 0
+  awk -F '\t' -v k="$kid" '$1 == k && $2 != "" { print $2; exit }' "$CRT-who" 2>/dev/null
+}
+# the certificate's principals, one a line — the MACHINE logins it opens
+# (`Principals:` then one indented line each)
+cert_principals() {
+  ssh-keygen -L -f "$CRT-cert.pub" 2>/dev/null \
+    | awk '/^[[:space:]]*Principals:/ { p = 1; next } p && /^[[:space:]]+[^[:space:]]/ && !/:/ { gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print; next } p { exit }'
+}
+
+# `fleet status`'s who line (#2577): the bar names the person, this says where
+# they are — which computer, which login here, which machine logins the
+# certificate opens. Plain text, no tmux format.
+if [ "${1:-}" = --who ]; then
+  gh=$(gh_login)
+  ml=$(cert_principals | paste -sd ',' - | sed 's/,/, /g')
+  fleet_ui_t client_who_fmt "${gh:-?}" "$(hostname -s 2>/dev/null || hostname)" "$(id -un 2>/dev/null)" "${ml:--}"
+  echo
+  exit 0
+fi
 . "$BIN/fleet-palette.sh"
 if fleet_palette_load "$BIN/../conf/fleet-palette.conf"; then
   OK="#[fg=$PAL_BLUE,bold]" WARN="#[fg=$PAL_YELLOW,bold]" DIM="#[fg=$PAL_DIM]"
@@ -70,13 +102,13 @@ f = lambda k: " ".join(str(d.get(k) or "").split())
 print("\x1f".join([f("state") or "unknown", f("hub") or "down"]))
 ' 2>/dev/null)
   [ -n "$row" ] || row=$(printf 'unknown\037down')
-  login=${FLEET_CLIENT_BADGE_LOGIN:-}
+  login=${FLEET_CLIENT_BADGE_LOGIN:-$(gh_login)}
   if [ -z "$login" ]; then
-    # the certificate's first principal — `Principals:` then one indented line each
-    login=$(ssh-keygen -L -f "${FLEET_CERT:-$HOME/.ssh/fleet-cert}-cert.pub" 2>/dev/null \
-      | awk '/^[[:space:]]*Principals:/ { p = 1; next } p { gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print; exit }')
+    # no GitHub login known: the machine login, marked `?`
+    login=$(cert_principals | head -n 1)
+    [ -n "$login" ] || login=$(id -un 2>/dev/null)
+    login="${login:-}?"
   fi
-  [ -n "$login" ] || login=$(id -un 2>/dev/null)
   row="$row"$'\037'"${login:-?}"
   mkdir -p "$CDIR" 2>/dev/null
   { printf '%s\n' "$row" > "$CF.$$" && mv -f "$CF.$$" "$CF"; } 2>/dev/null || rm -f "$CF.$$" 2>/dev/null

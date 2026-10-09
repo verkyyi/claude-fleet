@@ -4,7 +4,9 @@
 # bin/fleet-client-badge.sh through the REAL bin/fleet-client-where.sh (its hub
 # read faked by FLEET_CLIENT_WHERE_CMD):
 #   A. the login     — signed in: the login alone, wherever the client runs; no
-#                      lease: the same, orange; the certificate's principal
+#                      lease: the same, orange; (issue #2577) the GitHub login
+#                      fleet login recorded beside the certificate, else the
+#                      machine login marked `?`; --who: fleet status's who line
 #   B. hub down      — orange 「<login> · 入口连不上」
 #   B2. refused     — (#2112) the hub answered 401: orange 「入口不认这台电脑 · 请重新
 #                     扫码（fleet login）」, a `rescan` range a tap turns into fleet login
@@ -46,8 +48,27 @@ eq "A no lease → the login, orange" "$WARN octocat $TAIL" "$(badge)"
 mkdir -p "$WORK/ssh" && ssh-keygen -q -t ed25519 -N '' -f "$WORK/ssh/ca" && ssh-keygen -q -t ed25519 -N '' -f "$WORK/ssh/fleet-cert" \
   && ssh-keygen -q -s "$WORK/ssh/ca" -I t -n monalisa,other -V +1h "$WORK/ssh/fleet-cert.pub" 2>/dev/null
 printf '%s\n' '{"state":"active","lease":{"id":"L1","via":"local","host":"MacBookPro"}}' > "$WORK/lease.json"
-eq "A the certificate's first principal" "$OK monalisa $TAIL" "$(FLEET_CLIENT_BADGE_LOGIN='' FLEET_CERT="$WORK/ssh/fleet-cert" badge)"
-eq "A no certificate → this computer's user" "$OK $(id -un) $TAIL" "$(FLEET_CLIENT_BADGE_LOGIN='' FLEET_CERT="$WORK/none" badge)"
+# issue #2577: the principal is a MACHINE login — shown only with no GitHub login known, marked ?
+eq "A no GitHub login → the certificate's first principal, marked ?" "$OK monalisa? $TAIL" "$(FLEET_CLIENT_BADGE_LOGIN='' FLEET_CERT="$WORK/ssh/fleet-cert" badge)"
+eq "A no certificate → this computer's user, marked ?" "$OK $(id -un)? $TAIL" "$(FLEET_CLIENT_BADGE_LOGIN='' FLEET_CERT="$WORK/none" badge)"
+# the GitHub login fleet login recorded beside the certificate (<key id>\t<login>)
+printf 't\toctocat-gh\n' > "$WORK/ssh/fleet-cert-who"
+eq "A the GitHub login fleet login recorded → it, no ?" "$OK octocat-gh $TAIL" "$(FLEET_CLIENT_BADGE_LOGIN='' FLEET_CERT="$WORK/ssh/fleet-cert" badge)"
+printf 'someone-else\toctocat-gh\n' > "$WORK/ssh/fleet-cert-who"
+eq "A a record for another key id → not trusted, principal ?" "$OK monalisa? $TAIL" "$(FLEET_CLIENT_BADGE_LOGIN='' FLEET_CERT="$WORK/ssh/fleet-cert" badge)"
+printf 't\toctocat-gh\n' > "$WORK/ssh/fleet-cert-who"
+# fleet status's who line: the person, this computer + its login, the machine logins
+who=$(FLEET_CERT="$WORK/ssh/fleet-cert" bash "$BIN/fleet-client-badge.sh" --who)
+eq "A --who names GitHub, this computer, its login, the machine logins" \
+  "登录人 octocat-gh（GitHub）· 这台电脑 $(hostname -s 2>/dev/null || hostname)，登录 $(id -un) · 证书可进的机器登录：monalisa, other" "$who"
+eq "A --who with nothing known → ?" "1" \
+  "$(FLEET_CERT="$WORK/none" bash "$BIN/fleet-client-badge.sh" --who | grep -c '^登录人 ?（GitHub）.*证书可进的机器登录：-$')"
+case "$(cat "$ROOT/bin/fleet")" in
+  *'fleet-client-badge.sh" --who'*) eq "A fleet status prints the who line" 1 1 ;;
+  *) eq "A fleet status prints the who line" "--who" "missing" ;;
+esac
+# the hub's certificate answer is where the name comes from; fleet login keeps it
+eq "A fleet login writes the who record" '1' "$(grep -c 'WHO_FILE = KEY + "-who"' "$BIN/fleet-login.py")"
 
 # --- B. hub down ---------------------------------------------------------------------
 printf '#!/bin/bash\nexit 1\n' > "$WORK/hubdown"; chmod +x "$WORK/hubdown"

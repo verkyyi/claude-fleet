@@ -149,6 +149,8 @@ fleet_ui_t() {
     en:badge_hubrefused_fmt)    printf '%s · the hub refused this computer · scan again (fleet login)' "${1:-}" ;;
     zh:badge_rescan_note)       printf '入口不认这台电脑的证书，续期也没用 — 请重新扫码：点左下角，或运行 fleet login' ;;
     en:badge_rescan_note)       printf 'The hub refuses this computer'"'"'s certificate and renewing will not help — scan again: tap the bottom left, or run fleet login' ;;
+    zh:client_who_fmt)          printf '登录人 %s（GitHub）· 这台电脑 %s，登录 %s · 证书可进的机器登录：%s' "${1:-}" "${2:-}" "${3:-}" "${4:-}" ;;
+    en:client_who_fmt)          printf 'signed in as %s (GitHub) · this computer %s, login %s · machine logins the certificate opens: %s' "${1:-}" "${2:-}" "${3:-}" "${4:-}" ;;
     zh:badge_updated_fmt)       printf '✓ 已更新到 %s' "${1:-}" ;;
     en:badge_updated_fmt)       printf '✓ updated to %s' "${1:-}" ;;
     zh:badge_reloaded)          printf '✓ 已重新载入新文件' ;;

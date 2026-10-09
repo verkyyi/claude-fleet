@@ -95,6 +95,7 @@ HOME = os.path.expanduser("~")
 SSH_DIR = os.path.join(HOME, ".ssh")
 KEY = os.path.join(SSH_DIR, "fleet-cert")
 CERT = KEY + "-cert.pub"
+WHO_FILE = KEY + "-who"   # <key id>\t<GitHub login>, from the hub's answer (#2577)
 SSH_CONFIG_SNIPPET = os.path.join(SSH_DIR, "fleet-ssh-config")
 SSH_CONFIG = os.path.join(SSH_DIR, "config")
 HUB_FILE = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.join(HOME, ".config"), "claude-fleet", "hub.json")
@@ -462,6 +463,12 @@ def write_cert(res, include):
     On a hub node (a node pass in this answer, or node.env already here) the
     snippet also gets the machine-to-machine Match blocks (claude-fleet#1719)."""
     write_file(CERT, res["certificate"], 0o644)
+    if res.get("name") and res.get("key_id"):
+        # who signed in, by GitHub login (claude-fleet#2577): the key id says
+        # gh:<numeric ID>, the principals are machine logins. The status bar's
+        # badge names the person by this — only while the key id still matches
+        # the certificate's, so a hub that does not send it leaves no stale name.
+        write_file(WHO_FILE, "%s\t%s\n" % (res["key_id"], res["name"]), 0o644)
     snippet = res["ssh_config"]
     machines = cert_machines(res)
     if machines:

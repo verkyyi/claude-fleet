@@ -560,3 +560,31 @@ func TestFleetNodeJoinNeedsAnActiveLogin(t *testing.T) {
 		t.Fatalf("a join code was minted for a refused scan: %+v", codes)
 	}
 }
+
+// claude-fleet#2577: a certificate's answer names its holder by GitHub login —
+// the name their sign-in brought — not by the gh:<ID> key id or a machine
+// login; an operator-adopted row picks the name up at the person's next sign-in.
+func TestCertResponseNamesGitHubLogin(t *testing.T) {
+	h, _ := certHarness(t)
+	r := httptest.NewRequest(http.MethodPost, "/v1/fleet/login/poll", nil)
+	h.srv.onPrincipalSignIn(pAlice, "")
+	cr, err := h.srv.issueCert(r, pAlice, newUserKey(t), "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cr.Name != "" {
+		t.Fatalf("no sign-in name yet, name = %q", cr.Name)
+	}
+	h.srv.onPrincipalSignIn(pAlice, "alice-gh")
+	cr, err = h.srv.issueCert(r, pAlice, newUserKey(t), "renew")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cr.Name != "alice-gh" || cr.Principals[0] != "alice" {
+		t.Fatalf("name %q principals %v, want alice-gh / alice", cr.Name, cr.Principals)
+	}
+	b, _ := json.Marshal(cr)
+	if !bytes.Contains(b, []byte(`"name":"alice-gh"`)) {
+		t.Fatalf("wire form: %s", b)
+	}
+}
