@@ -173,14 +173,14 @@ hint() { T display-message -p -c "$CL" '#{E:@fleet_hint}' | sed 's/#\[[^]]*\]//g
 raw() { T display-message -p -c "$CL" '#{E:@fleet_hint}'; }
 T select-pane -t "$PANE"
 # the bar is login · ⟳ · the keys of where the keyboard is (issue #2365)
-eq "E: the keyboard in the session → its keys" " ⌘P 会话与动作  ⌘N 编排  ⌘↑↓ 切换  ⌘Q 退出 fleet" "$(hint)"
+eq "E: the keyboard in the session → its keys" " ⌘P 会话与动作  ⌘T 派单  ⌘N 编排  ⌘↑↓ 切换  ⌘Q 退出 fleet" "$(hint)"
 case "$(raw)" in *"range=user|key-User927]"*"⌘P"*"range=user|key-User928]"*"⌘N"*) CHECKS=$((CHECKS+1)) ;; *) fail "E: each key is its own key-<key> range" "$(raw)" ;; esac
 T set-option -g @fleet_layout solo
-eq "E: the one-session view → ⌃\\ 会话 shell, ⌃D 放到后台 in ⌘↑↓'s place (issue #2566)" " ⌘P 会话与动作  ⌘N 编排  ⌃\\ 会话 shell  ⌃D 放到后台  ⌘Q 退出 fleet" "$(hint)"
+eq "E: the one-session view → ⌃\\ 会话 shell, ⌃D 放到后台 in ⌘↑↓'s place (issue #2566)" " ⌘P 会话与动作  ⌘T 派单  ⌘N 编排  ⌃\\ 会话 shell  ⌃D 放到后台  ⌘Q 退出 fleet" "$(hint)"
 case "$(raw)" in *"range=user|key-C-d]"*"⌃D"*) CHECKS=$((CHECKS+1)) ;; *) fail "E: ⌃D is its key range" "$(raw)" ;; esac
 T set-option -gu @fleet_layout
 T switch-client -c "$CL" -T prefix
-eq "E: prefix pressed → the prefix keys" " / 会话与动作  c 编排  n p 切换  d 放到后台  Q 退出 fleet" "$(hint)"
+eq "E: prefix pressed → the prefix keys" " / 会话与动作  t 派单  c 编排  n p 切换  d 放到后台  Q 退出 fleet" "$(hint)"
 T switch-client -c "$CL" -T root
 T set-option -g @popup_open "$(date +%s)"; T set-option -g @popup_title popup_quickopen
 eq "E: ⌘P open → the panel's keys" " ↵ 切过去  ⌃R 改名  ⌃X 回收  ⌃A 回答  ⌃E 回收方式  ⌃O PR  > 命令  esc 关" "$(hint)"
@@ -194,7 +194,7 @@ T set-option -pu -t "$PANE" @stage_ask
 # a tap on the list, and the lit row's detail, change nothing (issue #2365)
 T set-option -w -t "$PANE" @fleet_on_list 1
 T set-option -w -t "$PANE" @fleet_hint_name 'issue-1909 · 一个很长很长的名字, 带逗号'
-eq "E: a tap on the list / a lit row → the same keys" " ⌘P 会话与动作  ⌘N 编排  ⌘↑↓ 切换  ⌘Q 退出 fleet" "$(hint)"
+eq "E: a tap on the list / a lit row → the same keys" " ⌘P 会话与动作  ⌘T 派单  ⌘N 编排  ⌘↑↓ 切换  ⌘Q 退出 fleet" "$(hint)"
 T set-option -uw -t "$PANE" @fleet_on_list
 T set-option -uw -t "$PANE" @fleet_hint_name
 T set-option -w -t "$PANE" @fleet_view portal
@@ -203,22 +203,22 @@ T set-option -w -t "$PANE" @fleet_orch 1
 eq "E: …with an orchestrator: ⌘N 编排 and ⇧⇥ (issue #2146)" " ↵ 发出  ⇧↵ 换行  Tab 下一项  ⌘N 编排  ⇧⇥ 交给编排  esc 回去" "$(hint)"
 case "$(raw)" in *"range=user|key-User928]"*"⌘N"*"range=user|key-BTab]"*"⇧⇥"*) CHECKS=$((CHECKS+1)) ;; *) fail "E: the writing area's ⌘N / ⇧⇥ are key ranges (issue #2146)" "$(raw)" ;; esac
 T set-option -uw -t "$PANE" @fleet_view
-eq "E: …and in a session, ⌘N is 编排 (issue #2616)" " ⌘P 会话与动作  ⌘N 编排  ⌘↑↓ 切换  ⌘Q 退出 fleet" "$(hint)"
+eq "E: …and in a session, ⌘N is 编排 (issue #2616)" " ⌘P 会话与动作  ⌘T 派单  ⌘N 编排  ⌘↑↓ 切换  ⌘Q 退出 fleet" "$(hint)"
 T set-option -g @fleet_compose 1
-eq "E: …新任务 while FLEET_COMPOSE=1 brings the writing area back (issue #2616)" " ⌘P 会话与动作  ⌘N 新任务  ⌘↑↓ 切换  ⌘Q 退出 fleet" "$(hint)"
+eq "E: …新任务 while FLEET_COMPOSE=1 brings the writing area back (issue #2616)" " ⌘P 会话与动作  ⌘T 派单  ⌘N 新任务  ⌘↑↓ 切换  ⌘Q 退出 fleet" "$(hint)"
 T set-option -gu @fleet_compose
 T set-option -uw -t "$PANE" @fleet_orch
 sl=$(T display-message -p -c "$CL" '#{E:status-left}' | sed 's/#\[[^]]*\]//g')
-case "$sl" in "B   ⌘P 会话与动作  ⌘N 编排"*) CHECKS=$((CHECKS+1)) ;; *) fail "E: the status line at 150 columns carries the slot, then the hint, after the badge" "$sl" ;; esac
+case "$sl" in "B   ⌘P 会话与动作  ⌘T 派单  ⌘N 编排"*) CHECKS=$((CHECKS+1)) ;; *) fail "E: the status line at 150 columns carries the slot, then the hint, after the badge" "$sl" ;; esac
 T set-option -g @fleet_layout solo
-eq "E: the one-session view's bar is the same three things" "B   ⌘P 会话与动作  ⌘N 编排  ⌃\\ 会话 shell  ⌃D 放到后台  ⌘Q 退出 fleet" \
+eq "E: the one-session view's bar is the same three things" "B   ⌘P 会话与动作  ⌘T 派单  ⌘N 编排  ⌃\\ 会话 shell  ⌃D 放到后台  ⌘Q 退出 fleet" \
   "$(T display-message -p -c "$CL" '#{E:status-left}' | sed 's/#\[[^]]*\]//g')"
 T set-option -gu @fleet_layout
 # The refresh slot (issue #2228): ⟳ lights in a two-cell slot the bar always
 # keeps, so the keys start on the same column lit or not.
 T set-option -w -t "$PANE" @fleet_refreshing 1
 lit=$(T display-message -p -c "$CL" '#{E:status-left}' | sed 's/#\[[^]]*\]//g')
-case "$lit" in "B⟳  ⌘P 会话与动作  ⌘N 编排"*) CHECKS=$((CHECKS+1)) ;; *) fail "E: a waiting list lights ⟳ in the slot" "$lit" ;; esac
+case "$lit" in "B⟳  ⌘P 会话与动作  ⌘T 派单  ⌘N 编排"*) CHECKS=$((CHECKS+1)) ;; *) fail "E: a waiting list lights ⟳ in the slot" "$lit" ;; esac
 col() { python3 -c 'import sys; print(sys.argv[1].index("⌘P"))' "$1"; }
 eq "E: the keys start on the same column, lit or not" "$(col "$sl")" "$(col "$lit")"
 T set-option -uw -t "$PANE" @fleet_refreshing

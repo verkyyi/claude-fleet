@@ -292,13 +292,15 @@ echo "ok: one door — every popup in bin/ and conf/ goes through dash-popup.sh,
 # (⌘P / prefix /): a filtered list over every session needs the screen.
 # Issue #2112 (PR #2148) adds the fourth, rescan: the bar's 「重新扫码」 runs
 # `fleet login`, whose QR code needs the screen (issue #2195).
+# Issue #2753 adds the fifth, dispatch (⌘T / prefix t / ⌘P's first line): a
+# title, a repo and the Codex switch need a small screen of their own.
 kept=$(grep -ho -- '--title["'"'"', ]*popup_[a-z_]*' "$BIN"/*.sh "$BIN"/*.py "$ROOT"/conf/*.conf 2>/dev/null \
   | grep -v '^$' | sed 's/.*\(popup_[a-z_]*\)$/\1/' | sort -u | paste -sd ' ' -)
 kept_hub=$(grep -lE -- '--title["'"'"', ]*popup_' "$BIN"/*.sh "$BIN"/*.py "$ROOT"/conf/*.conf 2>/dev/null \
   | grep -v -- '-selftest\.' | grep -v '/tmux-dashboard\.sh$' \
   | xargs grep -ho -- '--title["'"'"', ]*popup_[a-z_]*' | sed 's/.*\(popup_[a-z_]*\)$/\1/' | sort -u | paste -sd ' ' -)
-[ "$kept_hub" = 'popup_keys popup_quickopen popup_rescan popup_tasks' ] \
-  || fail "kept popups: want keys quickopen rescan tasks (4), got: $kept_hub (all, the hub too: $kept)"
+[ "$kept_hub" = 'popup_dispatch popup_keys popup_quickopen popup_rescan popup_tasks' ] \
+  || fail "kept popups: want dispatch keys quickopen rescan tasks (5), got: $kept_hub (all, the hub too: $kept)"
 # the one-field popups that moved onto the sidebar's line open no popup at all
 for f in fleet-sidebar-menu.sh fleet-restore-pick.sh dash-issue-close.sh dash-issue-new.sh dash-reap.sh \
          dash-migrate.sh open-url.sh dash-repo-add.sh fleet-sidebar-remote.sh; do
