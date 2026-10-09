@@ -87,7 +87,7 @@
 3.0 fleet-base-sync-selftest.sh
 0.8 fleet-bind-selftest.sh
 24.4 fleet-break-it-cred-selftest.sh
-210.0 fleet-break-it-selftest.sh
+148.2 fleet-break-it-selftest.sh
 0.0 fleet-charter-selftest.sh
 8.6 fleet-children-flush-selftest.sh
 7.7 fleet-children-selftest.sh
