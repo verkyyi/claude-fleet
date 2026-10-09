@@ -154,3 +154,54 @@ func TestComputeOffNodeCannotLease(t *testing.T) {
 		t.Fatalf("compute back on: %d %v", code, refusal)
 	}
 }
+
+// claude-fleet#2661: a 只协调 exclusion says which report carried the off —
+// the beat's time and agent build — and, when the login's link keeps changing
+// hands (two agents of one login, each with its own word), how often.
+func TestComputeOffReasonNamesItsSource(t *testing.T) {
+	h, m5, m4, f5, f4 := twoNodes(t)
+	at := time.Date(2026, 10, 9, 15, 11, 2, 0, time.UTC)
+	m5.beatLoad("m5", "verk", machineA, 5, 1, f5)
+	beat(t, m4.conn, control.Proto, control.Heartbeat{Hostname: "m4", OSUser: "verk", MachineID: machineB,
+		Load1: 0.5, NCPU: 10, MemFreeBytes: 8 << 30, MemTotalBytes: 16 << 30, Sessions: 1,
+		Fleets: []control.Fleet{f4}, Compute: computeOff(), ObservedAt: at, AgentVersion: "v-stale"})
+	waitFor(t, 3*time.Second, "m4 reports compute off", func() bool {
+		hb, _, _ := h.srv.nodeStatusOf("ep_m4", time.Now())
+		return !control.ComputeOn(hb.Compute)
+	})
+	waitLoad(t, h, "m5", 5)
+	pl, err := h.srv.PickNode("", writeRepo)
+	want := "m4 excluded: " + excludedComputeOff + " · reported 15:11:02Z by agent v-stale heartbeat"
+	if err != nil || pl.Machine != "m5" || !strings.Contains(pl.Reason, want) {
+		t.Fatalf("placement = %q %q %v; want m5 with %q", pl.Machine, pl.Reason, err, want)
+	}
+	if strings.Contains(pl.Reason, "被顶替") {
+		t.Fatalf("one link, never displaced: %q", pl.Reason)
+	}
+	// A second agent of the same login takes the link: the reason counts it.
+	m4b := connectWriteNodeTok(t, h, h.tokens["m4"])
+	beat(t, m4b.conn, control.Proto, control.Heartbeat{Hostname: "m4", OSUser: "verk", MachineID: machineB,
+		Load1: 0.5, NCPU: 10, MemFreeBytes: 8 << 30, MemTotalBytes: 16 << 30, Sessions: 1,
+		Fleets: []control.Fleet{f4}, Compute: computeOff(), ObservedAt: at, AgentVersion: "v-stale"})
+	waitFor(t, 3*time.Second, "the link changed hands", func() bool {
+		return h.srv.nodes.supersededSince("ep_m4", time.Now()) == 1
+	})
+	pl, err = h.srv.PickNode("", writeRepo)
+	if err != nil || !strings.Contains(pl.Reason, "被顶替 1 次") {
+		t.Fatalf("placement = %q %v; want the displaced link counted", pl.Reason, err)
+	}
+}
+
+// The source names the hello when only the hello said off.
+func TestComputeOffReasonHello(t *testing.T) {
+	if got := reportedBy("hello", time.Date(2026, 10, 9, 15, 0, 1, 0, time.UTC), "1.2.3"); got != "reported 15:00:01Z by agent 1.2.3 hello" {
+		t.Fatalf("reportedBy = %q", got)
+	}
+	if got := reportedBy("heartbeat", time.Time{}, ""); got != "reported heartbeat" {
+		t.Fatalf("reportedBy with nothing known = %q", got)
+	}
+	v := computeVerdict{Off: true, Why: excludedComputeOff}
+	if v.Reason() != excludedComputeOff {
+		t.Fatalf("no source: Reason %q, want Why alone", v.Reason())
+	}
+}

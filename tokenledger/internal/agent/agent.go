@@ -257,6 +257,11 @@ type Agent struct {
 	// sleeping personal machine tells its person (claude-fleet#1721).
 	lastSessions atomic.Int64
 
+	// lastNodeEnv is the newest node.env reading that succeeded: what the
+	// login's own word stays while neither node.env nor node.pub.env can be
+	// read (claude-fleet#2661).
+	lastNodeEnv atomic.Pointer[map[string]string]
+
 	// lastLimitsPoll throttles the Anthropic call independently of the scan
 	// loop, so a fast scan cadence does not hammer the usage endpoint.
 	lastLimitsPoll   time.Time

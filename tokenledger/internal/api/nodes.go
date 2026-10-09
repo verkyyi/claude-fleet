@@ -43,7 +43,14 @@ const helloTimeout = 10 * time.Second
 type nodeConns struct {
 	mu    sync.Mutex
 	conns map[string]*nodeConn
+	// superseded is when each endpoint's link was last displaced by a newer
+	// one, newest last (claude-fleet#2661): two agents of one login take the
+	// link from each other, and each hello brings its own compute word.
+	superseded map[string][]time.Time
 }
+
+// supersedeWindow is how far back placement counts displaced links.
+const supersedeWindow = 10 * time.Minute
 
 type nodeConn struct {
 	// wire is the endpoint's half of its control channel: the websocket, or
@@ -96,6 +103,10 @@ type nodeConn struct {
 	computeOff   bool
 	computeForce bool
 	probe        *control.NodeProbe
+	// helloAt and agentVersion say where the hello's compute word came from
+	// (claude-fleet#2661).
+	helloAt      time.Time
+	agentVersion string
 	// personal is the hello's Personal (claude-fleet#1721).
 	personal bool
 	// machineLink: this endpoint is a machine's own node program, the link
@@ -135,6 +146,17 @@ func (n *nodeConns) put(id string, c *nodeConn) {
 		// die. The newer one is the truth; the old one is closed so its
 		// reader stops and cannot remove the new entry on its way out.
 		old.wire.close(websocket.StatusPolicyViolation, "superseded by a newer connection")
+		if n.superseded == nil {
+			n.superseded = map[string][]time.Time{}
+		}
+		now := time.Now()
+		keep := n.superseded[id][:0]
+		for _, t := range n.superseded[id] {
+			if now.Sub(t) < supersedeWindow {
+				keep = append(keep, t)
+			}
+		}
+		n.superseded[id] = append(keep, now)
 	}
 	n.conns[id] = c
 }
@@ -163,6 +185,20 @@ func (n *nodeConns) get(id string) *nodeConn {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	return n.conns[id]
+}
+
+// supersededSince counts the endpoint's links displaced within
+// supersedeWindow of now.
+func (n *nodeConns) supersededSince(id string, now time.Time) int {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	k := 0
+	for _, t := range n.superseded[id] {
+		if now.Sub(t) < supersedeWindow {
+			k++
+		}
+	}
+	return k
 }
 
 // each calls fn for every open connection, in endpoint order (deterministic
@@ -356,7 +392,8 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 		canTest:    hp.HasCap(control.CapTestIdentity),
 		canCredsep: hp.HasCap(control.CapCredsep),
 		computeOff: !control.ComputeOn(hp.Compute), computeForce: hp.ComputeForce, probe: hp.Probe,
-		personal: hp.Personal, machineLink: hp.HasCap(control.CapMachine)}
+		personal: hp.Personal, machineLink: hp.HasCap(control.CapMachine),
+		helloAt: time.Now().UTC(), agentVersion: hp.AgentVersion}
 	// The refresh relay is an ADMIN role: a node that offers it without
 	// being on the hub's admin list is never handed a refresh token's form.
 	nc.canOAuthRefresh = nc.admin && hp.HasCap(control.CapOAuthRefresh)

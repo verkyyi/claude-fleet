@@ -152,3 +152,48 @@ func TestMachineTenantBeatsComputeAndProbeLikeItsOwnAgent(t *testing.T) {
 		t.Fatalf("tenant after compute on: beat compute %v", hb.Compute)
 	}
 }
+
+// claude-fleet#2661: a credential-separated node.env is a link the agent may
+// not follow. It reads node.pub.env beside it, and with neither readable it
+// keeps the last word it read — never the start-time CCQUOTA_FLEET_COMPUTE=0.
+func TestComputeUnreadableNodeEnv(t *testing.T) {
+	dir := t.TempDir()
+	envf, pubf := filepath.Join(dir, "node.env"), filepath.Join(dir, "node.pub.env")
+	write := func(p, s string) {
+		if err := os.WriteFile(p, []byte(s), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a := &Agent{cfg: Config{FleetComputeOff: true, FleetNodeEnvPath: envf}}
+	write(envf, "CCQUOTA_TOKEN=x\nCCQUOTA_FLEET_COMPUTE=1\n")
+	if a.computeOffNow() {
+		t.Fatal("node.env says on")
+	}
+	// The separation: node.env becomes a link into a dir this login cannot
+	// enter (a dangling link stands in for it), node.pub.env carries the rest.
+	if err := os.Remove(envf); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(dir, "root-only", "node.env"), envf); err != nil {
+		t.Fatal(err)
+	}
+	// A restart's window: neither file — the last word, not the start-time off.
+	if a.computeOffNow() {
+		t.Fatal("unreadable node.env and no node.pub.env: want the last reading (on), got the start-time off")
+	}
+	write(pubf, "CCQUOTA_FLEET_COMPUTE=0\n")
+	if !a.computeOffNow() {
+		t.Fatal("node.pub.env says off")
+	}
+	write(pubf, "CCQUOTA_FLEET_COMPUTE=1\nCCQUOTA_FLEET_PERSONAL=1\n")
+	if a.computeOffNow() || !a.personalNow() {
+		t.Fatal("node.pub.env says on + personal")
+	}
+	// A fresh agent that never read either keeps #1719's start-time reading.
+	if err := os.Remove(pubf); err != nil {
+		t.Fatal(err)
+	}
+	if !(&Agent{cfg: Config{FleetComputeOff: true, FleetNodeEnvPath: envf}}).computeOffNow() {
+		t.Fatal("never read: want the start-time off")
+	}
+}
