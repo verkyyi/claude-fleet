@@ -164,13 +164,13 @@ fhs() {   # in a terminal (fleet-home-session.sh wants one), to the end
 printf '1\n' > "$W/running"
 printf 'REMOTE m5 place done 1234-ab/fid-9\n' > "$W/hline"
 eq "E no client before: its own view, then the client goes again" "$(fhs)" \
-  '[running][][home-session claude --body-file B --no-stage][solo m5 1234-ab/fid-9][quit --quiet --if-unattached]'
+  '[running][][home-session claude --body-file B --new --no-stage][solo m5 1234-ab/fid-9][quit --quiet --if-unattached]'
 printf '0\n' > "$W/running"
 eq "E a client already running: no re-attach pass on it, the view, and it stays" "$(fhs)" \
-  '[running][home-session claude --body-file B --no-stage][solo m5 1234-ab/fid-9]'
+  '[running][home-session claude --body-file B --new --no-stage][solo m5 1234-ab/fid-9]'
 printf 'LOCAL host\t@7 x\n' > "$W/hline"
 eq "E no hub (a LOCAL row): the client, as before" "$(fhs)" \
-  '[running][home-session claude --body-file B --no-stage][]'
+  '[running][home-session claude --body-file B --new --no-stage][]'
 
 # --if-unattached (fleet claude's own quit): a client someone attached meanwhile stays
 T -f /dev/null new-session -d -s fq "sleep 600"

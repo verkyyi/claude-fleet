@@ -534,6 +534,7 @@ FLEET_HOME_FIRST_RETRY             knob: seconds before first_home tries a newco
 FLEET_SOLO_NEW_CMD                 seam: what a solo client's fresh start runs when the session it left is gone (fleet-shell.sh home-session claude; fleet-shell.sh solo_resume, #2265)
 FLEET_SOLO_ATTACH                  seam: 0 = fleet-shell.sh solo starts the view's own server and prints its socket, no attach (#2349)
 FLEET_SOLO_WATCH_EVERY             seam: how often fleet-shell.sh solo's watcher reads the row's state (1 s; the selftest's 0.2, #2349)
+FLEET_SOLO_NOTE                    handoff: one line fleet-home-session.sh hands fleet-shell.sh solo for the view's bar — a RESUME's 「另一台也开着」 (#2564)
 FLEET_SHELL_WARM                   knob: 0 = no warm ssh masters in the shell (fleet-shell.sh warm, on by default, #1631)
 FLEET_SHELL_WARM_MAX               knob: at most this many machines kept warm, busiest first (fleet-shell.sh warm, 4, #1631)
 FLEET_SHELL_WARM_EVERY             knob: seconds between warm-loop ticks (fleet-shell.sh warm, 5, #1631)
