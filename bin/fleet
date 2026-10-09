@@ -85,7 +85,9 @@
 # into a machine's own list. It needs tmux ≥ 3.2 and a terminal; without either
 # `fleet` says how to get it and exits non-zero, and a client that cannot start
 # says why and exits non-zero. A MANAGED machine (/var/db/fleet-node/machine.env,
-# issue #2702) opens no client at all: it says to run `fleet` on your own device.
+# issue #2702) is no one's resident client — nothing opens at an ssh login — but
+# a `fleet` typed there opens the client ON THE MACHINE for this ssh alone (issue
+# #2720): see node_hosted below.
 #
 # Each command is its own script beside this one, `fleet-<command>.py` or
 # `fleet-<command>.sh`, so adding one is adding a file, not editing here. A
@@ -97,30 +99,48 @@ here=$(cd "$(dirname "$0")" && pwd -P)
 _fv="${XDG_DATA_HOME:-$HOME/.local/share}/claude-fleet-vendor/bin"
 if [ -x "$_fv/tmux" ]; then case ":$PATH:" in *":$_fv:"*) ;; *) PATH="$_fv:$PATH"; export PATH ;; esac; fi
 unset _fv
-# managed — this is a managed machine (issue #2702): a fleet machine runs sessions
-# and services, never a person's client — the person runs `fleet` on their own
-# device. The client's commands (`fleet`, `fleet <machine>`, `fleet shell`,
-# `fleet claude|codex`) answer one line and exit 3; the rest work as before. A
-# session's test of the client (FLEET_CLIENT_IDENTITY=test) and FLEET_NODE_CLIENT=1
-# (the operator's hatch — a client already running here) still open it.
+# node_hosted — a managed machine (issue #2702) runs sessions and services, and an
+# ssh login there opens nothing. But a person away from their own device (a
+# phone's Termius, someone else's computer, an ssh-only place) may still TYPE
+# `fleet` there (issue #2720): the client on the machine — the SAME code as on a
+# device, taken from the machine's runtime (`current/`: no mirror copied under
+# ~/.cache, no update path of its own, no LaunchAgent), its cache a temp dir,
+# alive for this ssh only: `fleet quit`, a detach or the ssh going takes every
+# process with it (fleet-shell.sh, FLEET_NODE_HOSTED=1). Its where says
+# via=node-hosted (show / open hand a path or a link). Set for every command
+# here, so `fleet quit` / `fleet status` find it. A session's test of the client
+# (FLEET_CLIENT_IDENTITY=test) and FLEET_NODE_CLIENT=1 (the operator's hatch — a
+# client from before #2702 still running here) keep the device client's road.
+SHELL_BIN=$here
+if [ -e "${FLEET_NODE_STATE:-/var/db/fleet-node}/machine.env" ] \
+   && [ "${FLEET_CLIENT_IDENTITY:-}" != test ] && [ "${FLEET_NODE_CLIENT:-0}" != 1 ]; then
+  FLEET_NODE_HOSTED=1
+  FLEET_SHELL_CACHE=${FLEET_NODE_HOSTED_CACHE:-${TMPDIR:-/tmp}/fleet-node-client-$(id -u)}
+  export FLEET_NODE_HOSTED FLEET_SHELL_CACHE
+  _rt=${FLEET_NODE_RUNTIME:-/Library/Application Support/claude-fleet/current}
+  [ -f "$_rt/bin/fleet-shell.sh" ] && SHELL_BIN=$(cd "$_rt/bin" && pwd)
+  unset _rt
+fi
+# managed — the one line a client opened on a managed machine says first
 managed() {
-  [ -e "${FLEET_NODE_STATE:-/var/db/fleet-node}/machine.env" ] || return 0
-  [ "${FLEET_CLIENT_IDENTITY:-}" = test ] && return 0
-  [ "${FLEET_NODE_CLIENT:-0}" = 1 ] && return 0
-  echo 'fleet · 这是托管机器，请在你自己的设备上运行 fleet（装：curl -fsSL <入口>/install | sh）。' >&2
-  _sc="${FLEET_SHELL_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/claude-fleet/shell}"
+  [ "${FLEET_NODE_HOSTED:-0}" = 1 ] || return 0
+  _me=$(hostname -s 2>/dev/null); _me=${_me%%.*}
+  echo "fleet · 客户端在 ${_me:-这台托管机器} 上运行；平时请在自己设备上用 fleet（装：curl -fsSL <入口>/install | sh）。" >&2
+  # a resident client from before #2702 still here: how to clear it
+  _sc="${XDG_CACHE_HOME:-$HOME/.cache}/claude-fleet/shell"
   if [ -d "$_sc" ]; then
-    echo "fleet · 这台上还留着客户端（${_sc}）：接回去 FLEET_NODE_CLIENT=1 fleet，不用了 sudo bash $here/fleet-node-shell-retire.sh --login $(id -un) 清掉。" >&2
+    echo "fleet · 这台上还留着旧的常驻客户端（${_sc}）：不用了 sudo bash $here/fleet-node-shell-retire.sh --login $(id -un) 清掉。" >&2
   fi
-  exit 3
+  unset _me _sc
 }
 # client — the client, or one line on why it cannot open here and a non-zero exit
 client() {
   managed
   # keep up with the hub (issue #1722): an installed client asks it, at most
   # hourly, for a newer client and the team's defaults; 3 = files switched,
-  # so the new `fleet` opens instead (once — FLEET_CLIENT_UPDATED)
-  if [ -z "${FLEET_CLIENT_UPDATED:-}" ] && [ -x "$here/fleet-client-update.sh" ]; then
+  # so the new `fleet` opens instead (once — FLEET_CLIENT_UPDATED). The client
+  # on a managed machine moves with the machine's runtime instead (#2720)
+  if [ -z "${FLEET_CLIENT_UPDATED:-}" ] && [ "${FLEET_NODE_HOSTED:-0}" != 1 ] && [ -x "$here/fleet-client-update.sh" ]; then
     "$here/fleet-client-update.sh" start
     if [ $? -eq 3 ]; then
       FLEET_CLIENT_UPDATED=1; export FLEET_CLIENT_UPDATED
@@ -144,7 +164,7 @@ client() {
     echo 'fleet · 客户端要在终端里运行（这里是管道或脚本）；调试选路用 fleet connect <机器> --print。' >&2
     exit 2
   fi
-  exec "$here/fleet-shell.sh" "$@"
+  exec "$SHELL_BIN/fleet-shell.sh" "$@"
 }
 # a session's test or drill connects as the test identity (#1931): the flag
 # travels as FLEET_CLIENT_IDENTITY, which fleet-client-lease.py reads
@@ -202,17 +222,26 @@ fi
 # the node's own launchers of the same name (fleet-claude.sh / fleet-codex.sh)
 case $cmd in
   claude|codex)
-    case " $* " in *' --here '*) ;; *) managed ;; esac
+    # the one-session view rides a device's client; on a managed machine (#2720)
+    # `fleet` opens the client there, `--here` a session on this machine
+    case " $* " in *' --here '*) ;; *)
+      if [ "${FLEET_NODE_HOSTED:-0}" = 1 ]; then
+        echo "fleet · 托管机器上没有 fleet $cmd 的单会话视图：敲 fleet 在这台上开客户端，或 fleet $cmd --here 在这台开会话。" >&2
+        exit 3
+      fi ;;
+    esac
     exec "$here/fleet-home-session.sh" "$@" ;;
   shell)
-    managed ;;
+    managed
+    shift
+    exec "$SHELL_BIN/fleet-shell.sh" "$@" ;;
   # 退出 fleet / is it running (issue #2349): the client's own script, its modes
   quit)
     shift
-    exec bash "$here/fleet-shell.sh" quit "$@" ;;
+    exec bash "$SHELL_BIN/fleet-shell.sh" quit "$@" ;;
   status)
     # whether the client runs, then who is signed in and where (issue #2577)
-    bash "$here/fleet-shell.sh" running --say; rc=$?
+    bash "$SHELL_BIN/fleet-shell.sh" running --say; rc=$?
     bash "$here/fleet-client-badge.sh" --who
     exit $rc ;;
   # the sessions from the command line (issue #2365) — `fleet open <url|:port|file>`

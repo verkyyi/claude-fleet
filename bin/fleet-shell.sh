@@ -129,6 +129,15 @@
 # FLEET_SIDEBAR_SOURCE=local + FLEET_HUB_SESSIONS_LOCAL=1, the loop asking
 # `fleet-remote-view.sh sessions` here instead of the hub. With an address the
 # environment is byte for byte what it was.
+# ON A MANAGED MACHINE (issue #2720, FLEET_NODE_HOSTED=1 — bin/fleet sets it): the
+# same client, for one ssh only. It runs from the machine's runtime (bin/fleet
+# picks `current/bin`) with no mirror, its cache a temp dir (FLEET_SHELL_CACHE),
+# no update tick / team sync / node pass / iTerm2 profile of its own; the attach is
+# not exec'd — when it returns (a detach, `fleet quit`, the ssh going: SIGHUP) the
+# client quits unless another terminal is on it, the keeper quits it once no
+# client has been attached for FLEET_NODE_HOSTED_IDLE (30 s), and quit removes the
+# temp cache. It needs the hub (no #1712 «read this machine» fallback): the
+# sessions here are this machine's rows, every other machine's comes off the hub.
 # Exit: 0 (the attach's); 1 no machine / no tmux / could not start; 2 a picker
 # that still says «no hub URL» (an older fleet-connect.py).
 set -uo pipefail
@@ -395,6 +404,10 @@ print(" ".join(out))
   # answers for itself (FLEET_HUB_SESSIONS_LOCAL, appended last so a hub client's
   # environment is byte for byte what it was).
   SRC=hub; have_hub || SRC=local
+  # the client on a managed machine reads the hub like any device's (#2720): no
+  # «read this machine» special case
+  [ "$SRC" = local ] && [ "${FLEET_NODE_HOSTED:-0}" = 1 ] \
+    && fail_start '这台托管机器上的登录没有入口地址：先 fleet login，再敲 fleet。'
   SHELL_ENV="FLEET_SHELL=1
 FLEET_SHELL_SESSION=$SESS
 FLEET_SHELL_STAGE=$STAGE
@@ -411,7 +424,8 @@ FLEET_NODE_ALIASES=$FLEET_NODE_ALIASES"
            FLEET_HUB_SESSIONS_LOOP_SECS FLEET_HUB_NODE_TIMEOUT FLEET_HUB_WRITE_CMD FLEET_REMOTE_BIN FLEET_REMOTE_SSH FLEET_REMOTE_VIA_HUB FLEET_CONF_DIR FLEET_CERT \
            FLEET_SHELL_WARM FLEET_SHELL_WARM_MAX FLEET_SHELL_WARM_EVERY FLEET_SHELL_WARM_CONNECT \
            CCQUOTA_VIEWER_TOKEN FLEET_UI_LANG FLEET_SIDEBAR_WIDTH_MAX FLEET_SIDEBAR_FOLD XDG_CONFIG_HOME XDG_CACHE_HOME FLEET_SHELL_CACHE \
-           FLEET_SKIP_GLOBAL_CONF LANG LC_ALL FLEET_CLIENT_LAYOUT FLEET_SWITCH_STATE XDG_STATE_HOME FLEET_NOTIFY FLEET_NOTIFY_JUMP_SECS; do
+           FLEET_SKIP_GLOBAL_CONF LANG LC_ALL FLEET_CLIENT_LAYOUT FLEET_SWITCH_STATE XDG_STATE_HOME FLEET_NOTIFY FLEET_NOTIFY_JUMP_SECS \
+           FLEET_NODE_HOSTED FLEET_NODE_HOSTED_IDLE; do
     eval "v=\${$n:-}"
     [ -n "$v" ] && SHELL_ENV="$SHELL_ENV
 $n=$v"
@@ -439,6 +453,12 @@ EOF
 # dangling when install-sync prunes <key>). fleet-installs.sh reads which.
 mirror() {
   local f src="$REAL_BIN" vh
+  # on a managed machine (#2720): the runtime's own bin/, nothing copied
+  if [ "${FLEET_NODE_HOSTED:-0}" = 1 ]; then
+    SHADOW=$BIN
+    mkdir -p "$CACHE/tmp" || fail_start "写不了 $CACHE"
+    return 0
+  fi
   SHADOW="$CACHE/bin"
   mkdir -p "$SHADOW" "$CACHE/tmp" || fail_start "写不了 $CACHE"
   case "$REAL_BIN" in
@@ -545,7 +565,10 @@ EOF
 # switch codes conf/tmux-shell.conf catches. Written (only when it changed) at
 # every start and reload, so the install line and each update leave it current;
 # nothing at all off a Mac with iTerm2 (bin/fleet-iterm-profile.py).
-iterm_keys() { python3 "$SHADOW/fleet-iterm-profile.py" write >/dev/null 2>&1 || :; }
+iterm_keys() {
+  [ "${FLEET_NODE_HOSTED:-0}" = 1 ] && return 0   # not this machine's person's terminal (#2720)
+  python3 "$SHADOW/fleet-iterm-profile.py" write >/dev/null 2>&1 || :
+}
 # attach_client — the attach, exec'd as always; in an iTerm2 window, with the
 # profile there, the window wears it while attached and goes back to the profile
 # it came from after the detach — outside the client iTerm2 is as it was.
@@ -556,6 +579,16 @@ attach_client() {
      && [ -f "${FLEET_ITERM_DIR:-$HOME/Library/Application Support/iTerm2/DynamicProfiles}/fleet.json" ] \
      && { : > /dev/tty; } 2>/dev/null; then
     iterm=1
+  fi
+  # on a managed machine (#2720) the client lives for this attach: when it returns
+  # — a detach, `fleet quit`, the ssh going (SIGHUP reaches both) — it quits,
+  # unless another terminal is still on it
+  if [ "${FLEET_NODE_HOSTED:-0}" = 1 ]; then
+    trap 'bash "$SHADOW/fleet-shell.sh" quit "$SESS" --quiet --if-unattached </dev/null >/dev/null 2>&1; exit 129' HUP TERM
+    tmux -L "$SESS" attach-session -t "=$SESS"; rc=$?
+    trap - HUP TERM
+    bash "$SHADOW/fleet-shell.sh" quit "$SESS" --quiet --if-unattached </dev/null >/dev/null 2>&1
+    exit "$rc"
   fi
   # the one-session view (issue #2265) does not exec the attach either: once it
   # returns — ⌃D, prefix d, or the session's own /exit (fleet-sidebar.py
@@ -731,10 +764,11 @@ solo_reap() {
 # no longer that loop kills nothing.
 qkill() {
   local p='' c
+  QK_PID=''   # the pid it signalled, else empty
   { read -r p < "$1"; } 2>/dev/null
   case "$p" in ''|*[!0-9]*) case "$1" in *.lock) ;; *) rm -f "$1" ;; esac; return 0 ;; esac
   c=$(ps -o command= -p "$p" 2>/dev/null) || c=''
-  case "$c" in *$2*) kill -TERM -- "-$p" 2>/dev/null || kill "$p" 2>/dev/null ;; esac
+  case "$c" in *$2*) { kill -TERM -- "-$p" 2>/dev/null || kill "$p" 2>/dev/null; } && QK_PID=$p ;; esac
   case "$1" in *.lock) ;; *) rm -f "$1" ;; esac
 }
 # loops_reap — the client's loops by their pid files; the hub loop also by the
@@ -838,8 +872,18 @@ keeper)
   every=${FLEET_CLIENT_LEASE_EVERY:-15}; tick=${FLEET_CLIENT_INPUT_EVERY:-5}
   [ "$tick" -le "$every" ] 2>/dev/null || tick=$every
   sent=$(latest_client "$s"); sent=${sent%% *}; last=0
+  bare=$(date +%s)
   while tmux -L "$s" has-session -t "=$s" 2>/dev/null; do
     now=$(date +%s)
+    # on a managed machine (#2720) the client is this ssh's alone: no terminal on
+    # it for FLEET_NODE_HOSTED_IDLE (30 s) — an ssh cut without a SIGHUP — quits it
+    if [ "${FLEET_NODE_HOSTED:-0}" = 1 ]; then
+      if [ -n "$(tmux -L "$s" list-clients -F '#{client_name}' 2>/dev/null)" ]; then
+        bare=$now
+      elif [ $((now - bare)) -ge "${FLEET_NODE_HOSTED_IDLE:-30}" ] 2>/dev/null; then
+        exec bash "$BIN/fleet-shell.sh" quit "$s" --quiet
+      fi
+    fi
     if ! standby_on; then
       id=''; { read -r id < "$CL_DIR/client.lease"; } 2>/dev/null
       lc=$(latest_client "$s"); act=${lc%% *}; c=${lc#* }
@@ -910,8 +954,10 @@ keeper)
         fi
         # a newer client, taken in place once you are idle (issue #1781); applied
         # (4) → this keeper is the old one's code: the new one takes over, same pid
-        bash "$BIN/fleet-client-update.sh" tick "$s" >/dev/null 2>&1
-        [ $? -eq 4 ] && exec bash "$BIN/fleet-shell.sh" keeper "$s"
+        if [ "${FLEET_NODE_HOSTED:-0}" != 1 ]; then
+          bash "$BIN/fleet-client-update.sh" tick "$s" >/dev/null 2>&1
+          [ $? -eq 4 ] && exec bash "$BIN/fleet-shell.sh" keeper "$s"
+        fi
       fi
     fi
     sleep "$tick"
@@ -1529,8 +1575,11 @@ EOF
   # the machines the sessions are on, read before the list's cache goes quiet
   qnodes=$(LC_ALL=C awk -F $'\037' '$1 ~ /^wid:/ && $2 != "" { print $2 }' \
              "$CL_DIR/.claude-dash/global/remote_$SESS" 2>/dev/null | sort -u | paste -sd / -)
-  # 1. the keeper first, so nothing renews what is given back here
+  # 1. the keeper first, so nothing renews what is given back here — and gone
+  #    before the loops are: one caught mid-`--ensure` (bash runs its TERM after
+  #    the child) would start a hub loop behind this quit (#2720)
   qkill "$CL_DIR/keeper.pid" 'fleet-shell.sh keeper'
+  n=0; while [ -n "$QK_PID" ] && kill -0 "$QK_PID" 2>/dev/null && [ "$n" -lt 50 ]; do sleep 0.1; n=$((n + 1)); done
   id=''; { read -r id < "$CL_DIR/client.lease"; } 2>/dev/null
   [ -n "$id" ] && lease release --lease "$id"
   rm -f "$CL_DIR/client.lease" "$CL_DIR/client.lease.old" "$CL_DIR/client.standby" "$CL_DIR/client.nohub" "$CL_DIR/client.where.json" "$CL_DIR/client.key" "$CL_DIR/client.list.json" "$CL_DIR/client.why" "$CL_DIR/client.rescan"
@@ -1547,6 +1596,16 @@ EOF
   [ "${qsolo:-0}" -gt 0 ] && qrun=1
   T kill-server 2>/dev/null
   TS kill-server 2>/dev/null
+  # 4. on a managed machine (#2720) nothing stays: a hub loop its pid file missed
+  #    (its guard's argv names the lock in this cache — never a bin/ shared with
+  #    the machine's own processes), then the temp cache
+  if [ "${FLEET_NODE_HOSTED:-0}" = 1 ]; then
+    case "$CACHE" in */fleet-node-client-*)
+      pkill -f "$CL_DIR/.claude-dash/global/hubsess.lock" 2>/dev/null
+      n=0; while pgrep -f "$CL_DIR/.claude-dash/global/hubsess.lock" >/dev/null 2>&1 && [ "$n" -lt 30 ]; do sleep 0.1; n=$((n + 1)); done
+      rm -rf "$CACHE" ;;
+    esac
+  fi
   if [ -z "$qquiet" ]; then
     if [ -z "$qrun" ]; then sh "$BIN/fleet-ui-lang.sh" t quit_none
     elif [ -n "$qnodes" ]; then sh "$BIN/fleet-ui-lang.sh" t quit_done_fmt "$qnodes"
@@ -1735,6 +1794,7 @@ iterm_keys
 # hub is nothing at all (exit 3, no file written).
 team_check() {
   local tt root nr sr=()
+  [ "${FLEET_NODE_HOSTED:-0}" = 1 ] && return 0   # the machine's install keeps its own (#2720)
   tt="$BIN/fleet-agent-team.py"
   [ -f "$tt" ] || return 0
   root=$(python3 -c 'import os, sys; print(os.path.dirname(os.path.dirname(os.path.realpath(sys.argv[1]))))' "$tt") || return 0
@@ -1903,7 +1963,7 @@ client_open
 ( nohup bash "$SHADOW/fleet-shell.sh" actions "$SESS" </dev/null >/dev/null 2>&1 & )
 # 登录即登记 (issue #2212): a logged-in computer with no node token yet takes
 # its node pass by the device key, in the background — no scan, no output
-[ -f "$BIN/fleet-node.sh" ] && ( nohup bash "$BIN/fleet-node.sh" ensure </dev/null >/dev/null 2>&1 & )
+[ -f "$BIN/fleet-node.sh" ] && [ "${FLEET_NODE_HOSTED:-0}" != 1 ] && ( nohup bash "$BIN/fleet-node.sh" ensure </dev/null >/dev/null 2>&1 & )
 first_home
 solo_resume "$solo_key" "$solo_since"
 client_where
