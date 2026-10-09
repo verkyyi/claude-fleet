@@ -1,30 +1,17 @@
 // web/dist/connect.js — Devices & SSH, at /connect (claude-fleet#1989): the
 // one-line install, a certificate issued by hand for a pasted public key, the
-// registered devices (a user's own, an admin's everyone's) with revoke, each
+// viewer's own registered devices with revoke (an admin's too since
+// claude-fleet#2515; everyone's is All devices, admin/devices.js), each
 // machine's ways in, and the ~/.ssh/config snippet — from /v1/fleet/connect,
 // /v1/fleet/devices, POST /v1/fleet/cert and POST /v1/fleet/devices/revoke.
 import { Shell } from './app-shell.js';
-import { esc, ic, relTime } from './lib/shell.js';
-import { activeDevices, looksLikeKey } from './lib/pages.js';
+import { esc, ic } from './lib/shell.js';
+import { looksLikeKey } from './lib/pages.js';
+import { devicesPanel, wireRevoke } from './lib/devices-view.js';
 import { t, fmtDate } from './lib/i18n.js';
 
-const day = (iso) => fmtDate(iso, undefined, false);
 const ttl = (sec) => (sec >= 3600 ? t('ui.dur.hours', { n: Math.round(sec / 3600) }) : t('ui.dur.minutes', { n: Math.round(sec / 60) }));
 const failed = (e) => `<div class="ghostrow err">${ic('alert')} ${esc(e.message)}</div>`;
-
-function devicesPanel(ctx, devs) {
-  const a = ctx.admin;
-  const list = (devs && devs.devices) || [];
-  const cols = a ? 8 : 7;
-  const rows = list.length ? list.map((d) => `<tr><td><div class="status">${ic('term')}<span><b style="font-weight:500">${esc(d.name || t('ui.dev.device'))}</b><br><span class="repo mono">${esc(d.fingerprint)}</span></span></div></td>` +
-    (a ? `<td>${esc(d.principal_id || '—')}</td>` : '') +
-    `<td class="mono">${esc(day(d.registered_at))}</td><td>${esc(relTime(d.last_used_at))}</td><td class="mono">${esc(d.last_machine || '—')}</td><td class="mono r">${Number(d.renewals) || 0}</td>` +
-    `<td>${d.revoked_at ? `<span class="chip bad">${esc(t('ui.dev.revoked'))}</span>` : `<span class="chip ok">${esc(t('ui.dev.activeChip'))}</span>`}</td>` +
-    `<td class="r">${d.revoked_at ? '' : `<button class="btn sm danger" data-revoke="${esc(d.fingerprint)}" data-name="${esc(d.name || d.fingerprint)}">${esc(t('ui.dev.revoke'))}</button>`}</td></tr>`).join('')
-    : `<tr><td colspan="${cols}"><div class="empty">${ic('key')}<b>${esc(t('ui.dev.none'))}</b><span>${t('ui.dev.noneSub', { cmd: '<code>fleet login</code>' })}</span></div></td></tr>`;
-  return `<div class="panel"><div class="panel-h"><h3>${esc(t(a ? 'ui.dev.all' : 'ui.dev.mine'))}</h3><span class="sub">${esc(t('ui.dev.active', { n: activeDevices(list).length }))}</span></div>` +
-    `<div class="tw"><table class="t"><thead><tr><th>${esc(t('ui.col.device'))}</th>${a ? `<th>${esc(t('ui.col.owner'))}</th>` : ''}<th>${esc(t('ui.col.registered'))}</th><th>${esc(t('ui.col.lastUsed'))}</th><th>${esc(t('ui.col.lastMachine'))}</th><th class="r">${esc(t('ui.col.renewals'))}</th><th>${esc(t('ui.col.status'))}</th><th></th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
-}
 
 Shell.mount('devices', async (ctx) => {
   const [conn, devs] = await Promise.allSettled([ctx.api('/v1/fleet/connect'), ctx.api('/v1/fleet/devices')]);
@@ -53,7 +40,7 @@ Shell.mount('devices', async (ctx) => {
 
   ctx.el.innerHTML = `<div class="pagehead"><div><p>${esc(t('ui.dev.lead', { ttl: hours }))}</p></div></div>` +
     `<div class="grid g2">${connectPanel}${certPanel}</div>` +
-    (devs.status === 'fulfilled' ? devicesPanel(ctx, devs.value) : `<div class="panel"><div class="panel-h"><h3>${esc(t('ui.dev.mine'))}</h3></div>${failed(devs.reason)}</div>`) +
+    (devs.status === 'fulfilled' ? devicesPanel(devs.value, false) : `<div class="panel"><div class="panel-h"><h3>${esc(t('ui.dev.mine'))}</h3></div>${failed(devs.reason)}</div>`) +
     `<div class="grid g2">${routes}${snippet}</div>`;
 
   const btn = ctx.el.querySelector('#cert');
@@ -72,13 +59,5 @@ Shell.mount('devices', async (ctx) => {
       out.hidden = false; out.innerHTML = `<p class="err" style="font-size:13px">${esc(e.message)}</p>`;
     } finally { btn.disabled = false; }
   };
-  ctx.el.querySelectorAll('[data-revoke]').forEach((b) => {
-    b.onclick = () => ctx.confirm(t('ui.dev.revokeQ', { name: b.dataset.name }), t('ui.dev.revokeBody', { cmd: '<code>fleet login</code>' }), t('ui.dev.revokeBtn'), async () => {
-      try {
-        await ctx.api('/v1/fleet/devices/revoke', { json: { fingerprint: b.dataset.revoke } });
-        ctx.toast(t('ui.dev.revokedToast', { name: b.dataset.name }));
-        await ctx.refresh();
-      } catch (e) { ctx.toast(t('ui.dev.revokeFail', { e: e.message })); }
-    });
-  });
+  wireRevoke(ctx);
 });
