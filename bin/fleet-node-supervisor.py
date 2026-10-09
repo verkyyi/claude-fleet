@@ -68,9 +68,11 @@ machine's work ONCE, however many logins the machine carries:
                 or a `~/.zshrc` line that sources shell/fleet-login.zsh / cw.zsh /
                 the old bootstrap block — a managed machine is no one's client;
                 bin/fleet-node-shell-retire.sh --login <login> clears it. The
-                machine's ADMIN logins (`admins`: FLEET_NODE_ADMINS in machine.env,
-                or expected.json's `admins`) are skipped by both halves — their
-                own launchd jobs and dotfiles are not the fleet's.
+                machine's ADMIN logins are skipped by both halves — their own
+                launchd jobs and dotfiles are not the fleet's: a member of the
+                macOS `admin` group not taken over (no logins/<login>.env), with
+                `admins add|rm` (FLEET_NODE_ADMINS in machine.env; expected.json's
+                `admins`) as the exceptions.
 
 State survives a restart: `state.json` (0644, so any login's doctor can read it)
 carries every task's last run and every child's pid; a restarted supervisor ADOPTS
@@ -1722,25 +1724,61 @@ def _handwritten(paths, d, n, src):
 ADMINS_KEY = "FLEET_NODE_ADMINS"
 
 
-def admin_logins(paths):
-    """The machine's admin logins (issue #2702): not managed logins — the sweep
-    names none of their launchd jobs or dotfiles. FLEET_NODE_ADMINS (machine.env,
-    or the environment), plus expected.json's `admins` when the hub sends one."""
-    out = set()
+def admin_group():
+    """The macOS `admin` group's people (dscl; no dscl — Linux, CI — none). Root and
+    `_` system accounts are not people. FLEET_NODE_ADMIN_GROUP (space-separated)
+    stands in for it — a test seam."""
+    seam = os.environ.get("FLEET_NODE_ADMIN_GROUP")
+    if seam is not None:
+        names = seam.split()
+    else:
+        try:
+            out = subprocess.run(["dscl", ".", "-read", "/Groups/admin", "GroupMembership"],
+                                 capture_output=True, text=True, timeout=10).stdout
+        except (OSError, subprocess.SubprocessError):
+            out = ""
+        names = out.partition(":")[2].split()
+    return set(n for n in names if n != "root" and not n.startswith("_"))
+
+
+def _admin_overrides(paths):
+    """(add, drop) — FLEET_NODE_ADMINS (machine.env, or the environment) and
+    expected.json's `admins`: a bare name is an admin all the same, `-name` is NOT
+    one even though the admin group has it (a person's login kept managed)."""
+    add, drop = set(), set()
     me = _env_file(os.path.join(paths.state, "machine.env"), 0) or {}
+    words = []
     for v in (env(ADMINS_KEY, ""), me.get(ADMINS_KEY, "")):
-        out.update(x for x in re.split(r"[\s,]+", v) if x)
+        words += [x for x in re.split(r"[\s,]+", v) if x]
     ex = read_json(paths.expected, None)
     if isinstance(ex, dict) and isinstance(ex.get("admins"), list):
-        out.update(x for x in ex["admins"] if isinstance(x, str) and x)
+        words += [x for x in ex["admins"] if isinstance(x, str) and x]
+    for w in words:
+        (drop if w.startswith("-") else add).add(w.lstrip("-"))
+    return add, drop
+
+
+def admin_logins(paths, detail=False):
+    """The machine's admin logins (issue #2702): not managed logins — the sweep names
+    none of their launchd jobs or dotfiles. Decided by itself: a member of the macOS
+    `admin` group that the daemon has NOT taken over (no logins/<login>.env) is one.
+    The overrides (_admin_overrides) only make exceptions. detail=True → (set,
+    how many came from the group)."""
+    add, drop = _admin_overrides(paths)
+    group = set(n for n in admin_group()
+                if not os.path.exists(os.path.join(paths.logins, n + ".env")))
+    out = ((group | add) - drop)
+    if detail:
+        return out, len(group - drop)
     return out
 
 
 def admins_cli(paths, rest):
     sub = rest[0] if rest else "list"
     if sub == "list":
+        add, _ = _admin_overrides(paths)
         for a in sorted(admin_logins(paths)):
-            print(a)
+            print("%s  %s" % (a, "override" if a in add else "admin group"))
         return 0
     if sub not in ("add", "rm") or len(rest) < 2 or not re.match(r"^[A-Za-z0-9._-]+$", rest[1]):
         print("usage: fleet-node-supervisor.py admins [list|add <login>|rm <login>]", file=sys.stderr)
@@ -1755,7 +1793,12 @@ def admins_cli(paths, rest):
     for ln in lines:
         if ln.startswith(ADMINS_KEY + "="):
             cur += [x for x in re.split(r"[\s,]+", ln.partition("=")[2].strip("\"'")) if x]
-    want = [x for x in cur if x != rest[1]] + ([rest[1]] if sub == "add" else [])
+    # add: an admin all the same; rm: not one — `-name` when the admin group has it
+    want = [x for x in cur if x.lstrip("-") != rest[1]]
+    if sub == "add":
+        want.append(rest[1])
+    elif rest[1] in admin_group():
+        want.append("-" + rest[1])
     keep = [ln for ln in lines if not ln.startswith(ADMINS_KEY + "=")]
     if want:
         keep.append("%s=%s" % (ADMINS_KEY, " ".join(sorted(set(want)))))

@@ -304,34 +304,47 @@ class C_Sweep(Sandbox):
         with open(hw, "wb") as f:
             plistlib.dump({"Label": "com.root_admin.ddns",
                            "ProgramArguments": [os.path.join(users, "root_admin", "bin", "ddns")]}, f)
-        r = self.run_sup("sweep", "--dry-run")
+        nogroup = {"FLEET_NODE_ADMIN_GROUP": ""}
+        r = self.run_sup("sweep", "--dry-run", env=nogroup)
         self.assertIn("clientshell (left in place): alice: ~/.cache/claude-fleet/shell — ", r.stdout)
         self.assertIn("clientshell (left in place): bob: ~/.zshrc 2 hook line(s)", r.stdout)
         self.assertIn("fleet-node-shell-retire.sh' --login bob", r.stdout)
         self.assertNotIn("carol", r.stdout)
         self.assertIn("runs as root_admin", r.stdout)
         self.assertIn("root_admin: ~/.cache", r.stdout)
-        os.makedirs(os.path.join(self.d, "db"), exist_ok=True)
-        with open(os.path.join(self.d, "db", "machine.env"), "w") as f:
-            f.write("CCQUOTA_HUB_URL=https://hub.invalid\n")
-        a = self.run_sup("admins", "add", "root_admin")
-        self.assertEqual(a.returncode, 0, a.stderr)
-        self.assertEqual(self.run_sup("admins", "add", "x;y").returncode, 2)
-        with open(os.path.join(self.d, "db", "machine.env")) as f:
-            self.assertEqual(f.read(), "CCQUOTA_HUB_URL=https://hub.invalid\nFLEET_NODE_ADMINS=root_admin\n")
-        self.assertEqual(self.run_sup("admins").stdout, "root_admin\n")
+        # decided by itself: an admin-group member the daemon has not taken over
+        self.env["FLEET_NODE_ADMIN_GROUP"] = "root root_admin _mbsetupuser"
         r = self.run_sup("sweep")
         self.assertNotIn("root_admin", r.stdout)
         self.assertEqual(sorted(c["login"] for c in self.state()["sweep"]["clientshell"]), ["alice", "bob"])
         self.assertEqual(self.state()["sweep"]["handwritten"], [])
         self.assertIn("clientshell alice", self.run_sup("status").stdout)
         self.assertTrue(os.path.isdir(os.path.join(users, "alice", ".cache", "claude-fleet", "shell")))
-        self.assertEqual(self.run_sup("admins", "rm", "root_admin").returncode, 0)
+        self.assertEqual(self.run_sup("admins").stdout, "root_admin  admin group\n")
+        # ... taken over (logins/<login>.env) → a managed login, named again
+        os.makedirs(os.path.join(self.d, "db", "logins"), exist_ok=True)
+        open(os.path.join(self.d, "db", "logins", "root_admin.env"), "w").close()
         self.assertIn("runs as root_admin", self.run_sup("sweep", "--dry-run").stdout)
+        os.remove(os.path.join(self.d, "db", "logins", "root_admin.env"))
+        # the overrides: rm keeps a group member managed (-name), add skips anyone
+        with open(os.path.join(self.d, "db", "machine.env"), "w") as f:
+            f.write("CCQUOTA_HUB_URL=https://hub.invalid\n")
+        self.assertEqual(self.run_sup("admins", "rm", "root_admin").returncode, 0)
+        self.assertEqual(self.run_sup("admins", "add", "alice").returncode, 0)
+        self.assertEqual(self.run_sup("admins", "add", "x;y").returncode, 2)
+        with open(os.path.join(self.d, "db", "machine.env")) as f:
+            self.assertEqual(f.read(), "CCQUOTA_HUB_URL=https://hub.invalid\nFLEET_NODE_ADMINS=-root_admin alice\n")
+        r = self.run_sup("sweep", "--dry-run")
+        self.assertIn("runs as root_admin", r.stdout)
+        self.assertNotIn("alice", r.stdout)
+        self.assertEqual(self.run_sup("admins").stdout, "alice  override\n")
         # the hub's list counts too
+        os.remove(os.path.join(self.d, "db", "machine.env"))
         with open(os.path.join(self.d, "db", "expected.json"), "w") as f:
-            json.dump({"admins": ["root_admin"]}, f)
-        self.assertNotIn("root_admin", self.run_sup("sweep", "--dry-run").stdout)
+            json.dump({"admins": ["bob"]}, f)
+        r = self.run_sup("sweep", "--dry-run")
+        self.assertNotIn("bob", r.stdout)
+        self.assertNotIn("root_admin", r.stdout)
 
 
 class D_RestartKeepsState(Sandbox):

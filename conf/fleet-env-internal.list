@@ -605,6 +605,8 @@ FLEET_NODE_INSTALL_CURL            seam: the curl fleet-node-install.sh talks to
 FLEET_NODE_CLIENT                  hatch: 1 = bin/fleet opens the client on a managed machine anyway (a client already running there; #2702)
 FLEET_RETIRE_GRACE                 pacing: seconds fleet-node-shell-retire.sh waits between TERM and KILL for a client process (default 3, #2702)
 FLEET_RETIRE_QUIT_WAIT             pacing: seconds fleet-node-shell-retire.sh gives the login's own `fleet quit` (default 20, #2702)
+FLEET_NODE_ADMINS                  list (machine.env): exceptions to the admin rule the machine daemon's sweep skips — `name` an admin all the same, `-name` an admin-group member kept managed (fleet-node-supervisor.py admins add|rm, #2702)
+FLEET_NODE_ADMIN_GROUP             seam: space-separated stand-in for the macOS admin group's members (fleet-node-supervisor.py admin_group, #2702)
 FLEET_NODE_INSTALL_OS              seam: overrides `uname -s` in fleet-node-install.sh (#2330)
 FLEET_NODE_INSTALL_ARCH            seam: overrides `uname -m` in fleet-node-install.sh (#2330)
 FLEET_NODE_PYTHON                  seam: the python3 fleet-node-install.sh runs (default /usr/bin/python3, #2330)

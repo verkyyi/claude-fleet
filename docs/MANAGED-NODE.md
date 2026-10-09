@@ -432,5 +432,8 @@ BREAK-IT 行 `service-handwritten`。机器的**管理员登录**不点名（#27
   每个一行 `clientshell <登录> …`（带上面那条命令）；`fleet doctor --machine` 一行 `shell`：都没有 PASS，有就 WARN
   （不算 FAIL，不触发整机回退）。root 当场看每个家目录，别的登录读上一轮清扫的记录。
 - **管理员登录**（例：verkyyi）不是托管登录：不 adopt，它自己的启动项和 dotfiles 不归 fleet 管——清扫的手写启动项和
-  `clientshell` 两半都跳过它。名单：`machine.env` 的 `FLEET_NODE_ADMINS`（`sudo fleet-node-supervisor.py admins
-  add|rm <登录>`，`admins` 列出；`fleet node install` 重跑保留这一行），以及入口将来在 `expected.json` 里发的 `admins`。
+  `clientshell` 两半都跳过它。**自动判定**：macOS `admin` 组的成员（`dscl . -read /Groups/admin GroupMembership`，
+  root 和 `_` 系统账号不算）且没被接管（没有 `logins/<登录>.env`）的登录就是管理员。例外才手写：`machine.env` 的
+  `FLEET_NODE_ADMINS`——`名字` 不在 admin 组也跳过，`-名字` 在 admin 组也照常当托管登录（`sudo fleet-node-supervisor.py
+  admins add|rm <登录>`，`admins` 列出每个是 admin 组还是 override；`fleet node install` 重跑保留这一行），以及入口将来在
+  `expected.json` 里发的 `admins`。`fleet doctor --machine` 的 `shell` 行写明「跳过 N 个管理员登录（admin 组 M）」。

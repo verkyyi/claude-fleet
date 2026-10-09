@@ -738,8 +738,10 @@ class L_ClientShell(Sandbox):
     non-root doctor reads the last sweep's record (other homes are not its to read)."""
     def test_shell_row(self):
         self.install(V1, claude="2.1.1")
+        self.env["FLEET_NODE_ADMIN_GROUP"] = "root verkyyi"
         r = self.cmd("doctor")
-        self.assertRegex(r.stdout, r"PASS\s+shell\s+no login carries the client shell")
+        self.assertRegex(r.stdout, r"PASS\s+shell\s+no login carries the client shell or a login hook · "
+                                   r"跳过 1 个管理员登录（admin 组 1）")
         sp = os.path.join(self.d, "db", "state.json")
         with open(sp) as f:
             st = json.load(f)

@@ -788,13 +788,15 @@ def shell_row(p, st):
     root looks now (fns.client_shell — every home); anyone else reads the last
     sweep's record in state.json (other homes are not theirs to read). WARN, never
     FAIL: a leftover client is not the release's fault."""
+    admins, from_group = fns.admin_logins(p.sup, detail=True)
+    skipped = "跳过 %d 个管理员登录（admin 组 %d）" % (len(admins), from_group)
     if os.geteuid() == 0:
-        found = fns.client_shell(p.sup)
+        found = fns.client_shell(p.sup, admins)
     else:
-        found = ((st.get("sweep") or {}).get("clientshell")) or []
+        found = [c for c in ((st.get("sweep") or {}).get("clientshell")) or [] if c.get("login") not in admins]
     if not found:
-        return ("PASS", "shell", "no login carries the client shell or a login hook (admins skipped)")
-    return ("WARN", "shell", "; ".join(fns.client_shell_says(c, p.sup) for c in found))
+        return ("PASS", "shell", "no login carries the client shell or a login hook · " + skipped)
+    return ("WARN", "shell", "; ".join(fns.client_shell_says(c, p.sup) for c in found) + " · " + skipped)
 
 
 def account_install_sha(login, ident, path):
