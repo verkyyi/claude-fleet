@@ -751,8 +751,8 @@ migrate_one_body() {
     # takes it as a WANT: if something claimed it in the gap it allocates the next
     # free one instead of letting two windows answer to b3.
     [ -n "$hnd" ] && fleet_wid_stamp "$nw" "$SOCK" "$hnd" >/dev/null 2>&1
-    TM set-window-option -t "$nw" @claude_state "${state:-done}" 2>/dev/null
-    TM set-window-option -t "$nw" @claude_state_ts "$(now)" 2>/dev/null
+    # Carried, not said (issue #2537): only until the new agent's first OSC 7501.
+    fleet_state_carry "$SOCK" "$nw" "${state:-done}"
     [ "${AGENT:-claude}" != codex ] || TM set-window-option -t "$nw" @cc_agent codex 2>/dev/null
     fleet_hub_nudge   # issue #1481
   fi

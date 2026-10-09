@@ -109,6 +109,11 @@
 #                                                   fleet_cfg_state / fleet_cfg_broken_load (fleet-lib.sh), fleet-ui-lang.sh
 #   pool-stale-handed-out                           bin/scratch-pool.sh claim / reap (usable: fleet_cfg_state)
 #   pretrust-norepo                                 bin/fleet-trust.sh (node, grant --home), bin/fleet-claude.sh
+#   status-agent-not-up / status-perm-overwritten / status-migrated-looping / status-question-lost
+#                                                   bin/set-claude-state.sh (the primary-source rule),
+#                                                   fleet-status-7501.py pipe, classify-sessions.sh (skip:7501),
+#                                                   fleet_state_carry / fleet_primary_fresh (fleet-lib.sh),
+#                                                   fleet-state-reconcile.py (reconcile.sources)
 # Client half — the real client (bin/fleet → fleet-shell.sh) on isolated -L
 # sockets, an ssh shim for the far end, a python pty as the person's terminal:
 #   client-kill-keys / client-pane-killed / sidebar-ctrl-c / nested-drop
@@ -5000,6 +5005,105 @@ drill_view_node_restart() {
     || { WHY="remote-view-run-selftest: $(printf '%s' "$out" | grep -m1 FAIL)"; return 1; }
   SECS=$(since "$t0")
   WHAT="会话暂时不在：说「机器在重启，稍等」，每 5s 再连同一地址，2 分钟后才说已不在"
+}
+
+# ---- one primary state source (issue #2537, EPIC #2535 C2) ------------------------
+# The agent's own OSC 7501 report (bin/fleet-status-7501.py, its pipe mode here)
+# outranks the hooks (bin/set-claude-state.sh), the hooks outrank the guessers
+# (bin/classify-sessions.sh with a fake `claude` that answers STOPPED). Each drill
+# is the 2026-10-09 misreading it is named after, on an isolated server.
+sp_env() {   # <args…> — the sandbox's hooks and lib, against $BREAK_SOCK
+  env PATH="$WORK/spbin:$WORK/tbin:$PATH" HOME="$WORK/home" BREAK_SOCK="$BREAK_SOCK" TMUX="$BREAK_SOCK,1,0" \
+    FLEET_CONF_DIR="$WORK/spconf" FLEET_SKIP_GLOBAL_CONF=1 CLASSIFY_SETTLE=0 "$@"
+}
+sp_start() {   # <session> — a fresh worker window; sets SPW / SPP
+  mkdir -p "$WORK/spbin" "$WORK/spconf/global"
+  [ -x "$WORK/spbin/claude" ] || { printf '#!/bin/sh\necho call >> "%s/sp-claude-calls"\ncat >/dev/null\necho STOPPED\n' "$WORK" > "$WORK/spbin/claude"; chmod +x "$WORK/spbin/claude"; }
+  nt -f /dev/null new-session -d -s "$1" -n issue-7 -x 100 -y 30 "printf 'working on it\n'; exec sleep 600" || return 1
+  SPW=$(nt display-message -p -t "$1:issue-7" '#{window_id}'); SPP=$(nt display-message -p -t "$SPW" '#{pane_id}')
+  nt set-option -w -t "$SPW" @issue 7 \; set-option -w -t "$SPW" @cc_agent claude
+}
+sp_state() { printf '%s/%s/%s' "$(o "$SPW" @claude_state)" "$(o "$SPW" @claude_needs)" "$(o "$SPW" @claude_state_src)"; }
+sp_say() {   # <state> [kind] [words] — the agent's OSC 7501, read off its output
+  local m=''; [ -n "${3:-}" ] && m=":msg=$(printf '%s' "$3" | base64 | tr -d '\n')"
+  printf '\033]7501;state=%s:app=claude-code%s%s\033\\' "$1" "${2:+:kind=$2}" "$m" \
+    | sp_env TMUX_PANE="$SPP" python3 "$BIN/fleet-status-7501.py" pipe
+}
+sp_hook() {  # <stdin> <args…> — one hook edge on the pane
+  local in="$1"; shift
+  printf '%s' "$in" | sp_env TMUX_PANE="$SPP" sh "$BIN/set-claude-state.sh" "$@" >/dev/null 2>&1
+}
+
+drill_status_agent_not_up() {
+  CAP=5; BREAK_SOCK="$WORK/sock-sn"; local t0 st
+  sp_start sn || { WHY="cannot start the isolated tmux server"; return 1; }
+  # the last agent's word is still on the window (it exited), the new one never speaks
+  nt set-option -w -t "$SPW" @agent_status '{"state":"exited","rc":0}' \; set-option -w -t "$SPW" @agent_status_ts "$(date +%s)" \
+     \; set-option -w -t "$SPW" @claude_state_src 7501 \; set-option -w -t "$SPW" @claude_state ''
+  t0=$(now)
+  sp_hook '{"hook_event_name":"UserPromptSubmit"}' working
+  st=$(sp_state)
+  [ "$st" = working//hook ] || { WHY="with no live 7501 report the prompt's hook did not land: [$st] — the window reads unknown"; return 1; }
+  nt set-option -wu -t "$SPW" @agent_status \; set-option -wu -t "$SPW" @agent_status_ts \; set-option -w -t "$SPW" @claude_state 'done'
+  sp_env bash "$BIN/classify-sessions.sh" --window "$SPW"
+  [ -f "$WORK/sp-claude-calls" ] || { WHY="the screen classifier was skipped although the agent never spoke"; return 1; }
+  sp_env python3 "$BIN/fleet-state-reconcile.py" --registry "$WORK/spreg" --cache-dir "$WORK/spcache" \
+    --log "$WORK/sp-reconcile.log" -- sn >/dev/null 2>&1
+  grep -q "$(printf '%s\t' "$SPW")issue-7.*none" "$WORK/spcache/reconcile.sources" 2>/dev/null \
+    || { WHY="reconcile.sources does not say the window has no 7501: $(cat "$WORK/spcache/reconcile.sources" 2>/dev/null | tr '\n' ' ')"; return 1; }
+  SECS=$(since "$t0"); WHAT="主来源缺席：hooks、分类器照常接管；对账报告写明这个窗口 7501=none"
+}
+
+drill_status_perm_overwritten() {
+  CAP=5; BREAK_SOCK="$WORK/sock-sp"; local t0 st
+  rm -f "$WORK/sp-claude-calls"
+  sp_start sp || { WHY="cannot start the isolated tmux server"; return 1; }
+  t0=$(now)
+  sp_say blocked permission 'Bash: git push origin main'
+  sp_hook '{"hook_event_name":"PreToolUse","tool_name":"Bash"}' busy
+  st=$(sp_state)
+  [ "$st" = needs/perm/7501 ] || { WHY="waiting on permission, the PreToolUse hook left [$st] — it reads 在跑"; return 1; }
+  sp_env bash "$BIN/classify-sessions.sh" --window "$SPW"
+  st=$(sp_state)
+  [ "$st" = needs/perm/7501 ] || { WHY="the screen classifier overwrote the agent's blocked: [$st]"; return 1; }
+  [ ! -f "$WORK/sp-claude-calls" ] || { WHY="the classifier asked the model while the agent's report was fresh"; return 1; }
+  # two minutes of silence: the guessers speak again
+  nt set-option -w -t "$SPW" @agent_status_ts "$(( $(date +%s) - 130 ))"
+  sp_hook '{"hook_event_name":"PostToolUse"}' working
+  st=$(sp_state)
+  [ "$st" = working//hook ] || { WHY="130 s after the last report the hook still could not speak: [$st]"; return 1; }
+  SECS=$(since "$t0"); WHAT="等权限：hook 与分类器都让开（skip:7501），状态 needs/perm 来源 7501；静默两分钟后才接管"
+}
+
+drill_status_migrated_looping() {
+  CAP=5; BREAK_SOCK="$WORK/sock-sm"; local t0 st
+  sp_start sm || { WHY="cannot start the isolated tmux server"; return 1; }
+  nt set-option -wu -t "$SPW" @claude_state_src
+  # the migrate re-stamps what the old window said
+  sp_env bash -c '. "$1/fleet-lib.sh"; fleet_state_carry "" "$2" looping' _ "$BIN" "$SPW"
+  st=$(sp_state)
+  [ "$st" = looping//carried ] || { WHY="the carried state was not stamped as a bootstrap value: [$st]"; return 1; }
+  t0=$(now)
+  sp_say working
+  st=$(sp_state)
+  [ "$st" = working//7501 ] || { WHY="the new agent's first report left [$st] — it reads 循环 while it works"; return 1; }
+  # a carry that arrives late changes nothing
+  sp_env bash -c '. "$1/fleet-lib.sh"; fleet_state_carry "" "$2" looping' _ "$BIN" "$SPW"
+  st=$(sp_state)
+  [ "$st" = working//7501 ] || { WHY="a late carry overwrote the agent's word: [$st]"; return 1; }
+  SECS=$(since "$t0"); WHAT="刚迁移：搬来的 looping 只是启动值，新 agent 第一条 7501 一到就是 working，迟到的搬运不覆盖"
+}
+
+drill_status_question_lost() {
+  CAP=5; BREAK_SOCK="$WORK/sock-sq"; local t0 st words='要合并 #12 吗？'
+  sp_start sq || { WHY="cannot start the isolated tmux server"; return 1; }
+  t0=$(now)
+  sp_say blocked question "$words"
+  sp_hook '{"hook_event_name":"Stop"}' 'done'
+  st=$(sp_state)
+  [ "$st" = needs/ask/7501 ] || { WHY="the Stop right after the question left [$st] — 在问你 flashed to 完成"; return 1; }
+  [ "$(o "$SPW" @claude_needs_detail)" = "$words" ] || { WHY="the question's words are gone: [$(o "$SPW" @claude_needs_detail)]"; return 1; }
+  SECS=$(since "$t0"); WHAT="问问题：needs/ask 和原话在 Stop 之后还在"
 }
 
 # ================================================================ run ===========

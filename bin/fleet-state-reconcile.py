@@ -34,6 +34,18 @@ server (fleet-mcp.py) still runs a tool as its child is work, never demoted,
 whatever an absent record or an empty input line say (`kept working …` in the
 log, `kept=` in the heartbeat).
 
+Which source said it (issue #2537, EPIC #2535 C2): @claude_state has one PRIMARY
+source, the agent's own OSC 7501 report (@agent_status, @agent_status_ts —
+bin/fleet-status-7501.py); the hooks and every guess — this pass included — only
+speak while it is absent (fleet_primary_fresh: silent for FLEET_STATE_PRIMARY_SECS,
+120). A `working` window whose agent spoke within that window is never demoted
+here. Every pass also writes down where each agent window's state came from
+(@claude_state_src: 7501 | hook | classifier | carried | wrapper, '' = unlabelled)
+into cache-dir/reconcile.sources (one row per window) and the heartbeat's
+`src=` / `primary=` (Claude windows whose state the agent said itself, of all
+live Claude windows) — fleet-doctor's `state` row prints it as the primary
+source's coverage. Each log line carries a `source=` column.
+
 Usage: fleet-state-reconcile.py [--dry-run] [--cache-dir DIR] [--idle-secs N]
                                 [--exited-secs N] [--hook-trust-secs N]
                                 [--tmux-idle-secs N] -- <fleet-session>...
@@ -49,6 +61,8 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+
+PRIMARY_SECS_DEFAULT = 120
 
 BIN = Path(__file__).absolute().parent
 AGENT_COMMS = ('claude', 'codex', 'codex-real')
@@ -263,17 +277,54 @@ def window_rows(session):
             continue
         fields = tm(session, 'display-message', '-p', '-t', wid,
                     '#{pane_id}|#{pane_pid}|#{pane_dead}|#{@claude_state}|#{@claude_state_ts}|'
-                    '#{@cc_agent}|#{@worker_lifecycle}|#{@hub}|#{@issue}|#{@raw}|#{window_activity}|#{window_name}').split('|', 11)
-        if len(fields) != 12:
+                    '#{@cc_agent}|#{@worker_lifecycle}|#{@hub}|#{@issue}|#{@raw}|#{window_activity}|'
+                    '#{@claude_state_src}|#{@agent_status_ts}|#{window_name}').split('|', 13)
+        if len(fields) != 14:
             continue
         rows.append(dict(zip(('pane', 'pane_pid', 'dead', 'state', 'state_ts', 'agent',
-                              'lifecycle', 'hub', 'issue', 'raw', 'activity', 'name'), fields), window=wid))
+                              'lifecycle', 'hub', 'issue', 'raw', 'activity', 'src', 'status_ts',
+                              'name'), fields), window=wid))
     return rows
+
+
+def primary_fresh(session, row, now, secs):
+    """The agent's own report is fresh: spoken within `secs`, its last word not
+    the relay's `exited` — the Python half of fleet_primary_fresh (issue #2537)."""
+    if secs < 1 or not row.get('status_ts', '').isdigit():
+        return False
+    if now - int(row['status_ts']) >= secs:
+        return False
+    try:
+        status = tm(session, 'display-message', '-p', '-t', row['window'], '#{@agent_status}')
+    except (subprocess.SubprocessError, OSError):
+        return False
+    return '"state":"exited"' not in status
+
+
+def sources(session, rows, now, secs, stats):
+    """Tally where every agent window's state came from (issue #2537)."""
+    for row in rows:
+        if row['hub'] == '1' or not (row['issue'].isdigit() or row['raw'] == '1'):
+            continue
+        if row['state'] in ('', 'exited'):
+            continue
+        src = row['src'] or '-'
+        stats['src'][src] = stats['src'].get(src, 0) + 1
+        fresh = row.get('status_ts', '').isdigit() and now - int(row['status_ts']) < secs
+        age = (now - int(row['status_ts'])) if row.get('status_ts', '').isdigit() else -1
+        stats['rows'].append('%s\t%s\t%s\t%s\t%s\t%s\t%s' % (
+            session, row['window'], row['name'], row['state'], src,
+            'fresh' if fresh else ('stale' if age >= 0 else 'none'), age))
+        if row['agent'] != 'codex':
+            stats['claude'] += 1
+            if src == '7501':
+                stats['primary'] += 1
 
 
 def demote(session, row, reason, dry, log):
     stamp = str(int(time.time()))
-    line = '%s  %-10s working -> done (%s)' % (time.strftime('%H:%M:%S'), session + ':' + row['window'], reason)
+    line = '%s  %-10s working -> done (%s) source=%s' % (time.strftime('%H:%M:%S'), session + ':' + row['window'],
+                                                          reason, row.get('src') or '-')
     if dry:
         print('would demote ' + line)
         return True
@@ -281,7 +332,8 @@ def demote(session, row, reason, dry, log):
     # between our read and this write is never overwritten by a stale verdict.
     tm(session, 'if-shell', '-F', '-t', row['pane'], '#{==:#{@claude_state},working}',
        'set-option -w -t %s @claude_state done ; set-option -w -t %s @claude_needs "" ; '
-       'set-option -w -t %s @claude_state_ts %s' % (row['window'], row['window'], row['window'], stamp))
+       'set-option -w -t %s @claude_state_ts %s ; set-option -w -t %s @claude_state_src classifier'
+       % (row['window'], row['window'], row['window'], stamp, row['window']))
     if tm(session, 'display-message', '-p', '-t', row['window'], '#{@claude_state}') != 'done':
         return False
     with open(log, 'a') as out:
@@ -330,9 +382,9 @@ def rung_health(session, row, registry_says, tmux_idle, state_ts, now, args, sta
     stats['seen'][key] = stats['seen_before'].get(key, int(now))
     if key in stats['seen_before']:
         return
-    line = '%s  rung_health window=%s hook=working tmux_idle=%ds registry=%s hook_age=%ds session=%s -> %s' % (
+    line = '%s  rung_health window=%s hook=working tmux_idle=%ds registry=%s hook_age=%ds session=%s source=%s -> %s' % (
         time.strftime('%H:%M:%S'), row['window'], tmux_idle, registry_says, now - state_ts, session,
-        'working' if registry_says not in ('idle', 'gone') else 'done')
+        row.get('src') or '-', 'working' if registry_says not in ('idle', 'gone') else 'done')
     stats['rung_health'] += 1
     if args.dry_run:
         print('would log ' + line)
@@ -351,12 +403,18 @@ def trim(log, keep=300):
 
 
 def reconcile(session, args, records, rows, now, stats):
-    for row in window_rows(session):
+    wins = window_rows(session)
+    sources(session, wins, now, args.primary_secs, stats)
+    for row in wins:
         if row['hub'] == '1' or row['lifecycle'] or row['state'] != 'working':
             continue
         if not (row['issue'].isdigit() or row['raw'] == '1'):
             continue
         stats['working'] += 1
+        # The agent said `working` itself, and recently: nothing below outranks it.
+        if primary_fresh(session, row, now, args.primary_secs):
+            stats['primary_kept'] += 1
+            continue
         try:
             state_ts = float(row['state_ts'] or 0)
         except ValueError:
@@ -427,6 +485,8 @@ def main():
     p.add_argument('--exited-secs', type=int, default=120)
     p.add_argument('--hook-trust-secs', type=int, default=int(os.environ.get('FLEET_HOOK_TRUST_SECS') or 15))
     p.add_argument('--tmux-idle-secs', type=int, default=int(os.environ.get('FLEET_RUNG_TMUX_IDLE_SECS') or 10))
+    p.add_argument('--primary-secs', type=int,
+                   default=int(os.environ.get('FLEET_STATE_PRIMARY_SECS') or PRIMARY_SECS_DEFAULT))
     p.add_argument('--log', default=str(BIN.parent / 'logs' / 'reconcile.log'))
     p.add_argument('sessions', nargs='*')
     args = p.parse_args()
@@ -434,7 +494,8 @@ def main():
         return 0
     started = time.time(); now = started
     stats = {'windows': 0, 'working': 0, 'demoted': 0, 'kept': 0, 'skipped': [],
-             'contested': 0, 'rung_health': 0, 'seen': {}, 'seen_before': {}}
+             'contested': 0, 'rung_health': 0, 'seen': {}, 'seen_before': {},
+             'src': {}, 'rows': [], 'claude': 0, 'primary': 0, 'primary_kept': 0}
     seen_path = Path(args.cache_dir) / 'reconcile.rung'
     try:
         stats['seen_before'] = json.loads(seen_path.read_text())
@@ -456,9 +517,16 @@ def main():
         try:
             Path(args.cache_dir).mkdir(parents=True, exist_ok=True)
             hb = Path(args.cache_dir) / 'reconcile.heartbeat'
-            hb.write_text('at=%d\nwindows=%d\nworking=%d\ndemoted=%d\ncontested=%d\nrung_health=%d\ndur=%d\nskipped=%s\nkept=%d\n' % (
+            hb.write_text('at=%d\nwindows=%d\nworking=%d\ndemoted=%d\ncontested=%d\nrung_health=%d\ndur=%d\nskipped=%s\nkept=%d\n'
+                          'src=%s\nprimary=%d/%d\nprimary_kept=%d\n' % (
                 int(time.time()), stats['windows'], stats['working'], stats['demoted'], stats['contested'],
-                stats['rung_health'], int(time.time() - started), ' '.join(stats['skipped']), stats['kept']))
+                stats['rung_health'], int(time.time() - started), ' '.join(stats['skipped']), stats['kept'],
+                ','.join('%s:%d' % kv for kv in sorted(stats['src'].items())), stats['primary'], stats['claude'],
+                stats['primary_kept']))
+            src_tmp = Path(args.cache_dir) / 'reconcile.sources.tmp'
+            src_tmp.write_text('# session\twindow\tname\tstate\tsource\t7501\t7501_age\n'
+                               + ''.join(r + '\n' for r in stats['rows']))
+            os.replace(src_tmp, Path(args.cache_dir) / 'reconcile.sources')
             tmp = seen_path.with_suffix('.tmp')
             tmp.write_text(json.dumps(stats['seen']))
             os.replace(tmp, seen_path)

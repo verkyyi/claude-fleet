@@ -290,8 +290,9 @@ eq "D: …nor field 13" "-" "$(fld "$s" RN 13)"
 # @task_line (WFMT field 28) as field 14, and as the label when the name is only
 # a number; a no-repo session reads `我的会话 · <line>`, an older `norepo-N`
 # too, never its number. An issue window keeps its name without a title.
-# wl <idx> <name> <window_id> <issue> <norepo> <task_line>
-wl() { printf '%s\n' "$S$US$1$US$2$US/w/app-$2${US}done$US$US$3$US$4$US$US$US$US$US$US$US$US$US$US$US$US$US$5$US$US$US$US$US${1}000$US$US$6" >> "$WLIST_FILE"; }
+# wl <idx> <name> <window_id> <issue> <norepo> <task_line> — working: a done
+# unbound row folds into 已结束 (issue #2565)
+wl() { printf '%s\n' "$S$US$1$US$2$US/w/app-$2${US}working$US$US$3$US$4$US$US$US$US$US$US$US$US$US$US$US$US$US$5$US$US$US$US$US${1}000$US$US$6" >> "$WLIST_FILE"; }
 unset CCQUOTA_FLEET
 : > "$WLIST_FILE"
 wl 1 scratch-5 @1 '' '' '试一下新的侧栏'

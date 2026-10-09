@@ -122,6 +122,10 @@ def tr(key, *args):
 # The 置顶 group's heading key (issue #1170): selectable so ←/→ can fold it, but
 # it names no repo — a tap only highlights it, never opens the new-session popup.
 PIN_HEADING = "hdr:pin"
+# The 已结束 group's heading (issue #2565): the same kind of fold stop, folded by
+# default — done / exited sessions with no issue, at the foot of the list.
+ENDED_HEADING = "hdr:ended"
+FOLD_HEADINGS = (PIN_HEADING, ENDED_HEADING)
 # The SHELL (bin/fleet-shell.sh, issue #1484) runs this view on a computer with
 # no fleet: no conf, no gh, no worktree, and its install ships none of the
 # scripts a new task / restore / scratch spawn runs. There every row is on a
@@ -313,7 +317,9 @@ def bar_record(rows, current):
     repos, repo, slug, hit = set(), "", "", None
     for row in rows:
         if row[0] == "hdr":
-            if len(row) > 3 and row[1] and row[1] != PIN_HEADING[4:]:
+            if len(row) > 3 and row[1] and "hdr:" + row[1] in FOLD_HEADINGS:
+                repo, slug = "", ""   # 置顶 / 已结束 name no repo (the 已结束 rows follow one)
+            elif len(row) > 3 and row[1]:
                 repo, slug = row[3].strip().lstrip("▸ ").strip(), row[1]
                 repos.add(slug)
             continue
@@ -1978,8 +1984,9 @@ def target_name(key):
     """The repo a selected heading names, as the input line shows it (issue
     #1032): `owner/name` → `name`, the `no repo` heading → `no repo` (its session
     opens in $HOME). "" for anything that is not a heading with a spawn target —
-    the 置顶 heading (`hdr:pin`, issue #1170) included: it folds, it names no repo."""
-    if not key.startswith("hdr:") or key == PIN_HEADING:
+    the 置顶 heading (`hdr:pin`, issue #1170) and the 已结束 one (`hdr:ended`,
+    issue #2565) included: they fold, they name no repo."""
+    if not key.startswith("hdr:") or key in FOLD_HEADINGS:
         return ""
     repo = key[4:]
     return tr("no_repo") if repo == "none" else repo.rsplit("/", 1)[-1]
@@ -1997,8 +2004,8 @@ def tap(hit, highlighted):
         return None
     if hit == PORTAL_KEY:
         return "jump"   # 「新任务」 (issue #1953): every tap opens the writing area
-    if hit == PIN_HEADING:
-        return "select"  # a fold stop only (issue #1170): no repo to open a session in
+    if hit in FOLD_HEADINGS:
+        return "select"  # a fold stop only (issues #1170, #2565): no repo to open a session in
     if hit.startswith("hdr:"):
         return "new" if hit == highlighted else "select"
     if hit.startswith(EPIC_STALE):
@@ -3349,7 +3356,7 @@ def ui(screen, session, worker, lock):
                 elif hit and hit.startswith(EPIC_STALE):
                     selected = hit   # a batch nobody drives (#1916): its one question
                     ask_now(ask_epic(hit, hit_row))
-                elif hit and hit.startswith("hdr:") and hit != PIN_HEADING:
+                elif hit and hit.startswith("hdr:") and hit not in FOLD_HEADINGS:
                     selected = hit
                     nxt = open_tap(session, "new", hit, env)
                     if nxt == "refused":

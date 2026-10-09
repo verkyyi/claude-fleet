@@ -1,5 +1,5 @@
 #!/bin/sh
-# set-claude-state.sh [--via mod|7501] <state> [bell]
+# set-claude-state.sh [--via mod|7501] [--source 7501|hook|classifier] <state> [bell]
 # Stamps the current tmux window's @claude_state (semantic: working|done|needs).
 # <state> is a hook verb (busy|working|done|needs) or the worker's own `blocked`
 # (issue #704) — a red that the hook edges of the same turn do not erase; see below.
@@ -33,13 +33,27 @@ case "${CLAUDE_CODE_ENTRYPOINT:-cli}" in cli) : ;; *) exit 0 ;; esac
 # warning, bell, parent report, session id — stays the Stop hook's, which still
 # fires for the same turn. Without the flag: byte for byte as before.
 via=''
-if [ "${1:-}" = --via ]; then
-  via=${2:-}; shift; [ $# -gt 0 ] && shift
+src=''
+# `--source 7501|hook|classifier` (issue #2537): the label this write carries in
+# @claude_state_src — the rank the priority rule below compares. Unset: `--via
+# 7501` is 7501, every other caller (a hook, the mod) is hook.
+while :; do
+  case "${1:-}" in
+    --via)    via=${2:-}; shift; [ $# -gt 0 ] && shift ;;
+    --source) src=${2:-}; shift; [ $# -gt 0 ] && shift ;;
+    *) break ;;
+  esac
+done
+if [ -n "$via" ]; then
   # …except `ask`, whose stdin is the call in the payload's shape (issue #1951):
   # the question's words, read once by the `ask` branch, never waited on.
   [ "$via" = mod ] && [ "${1:-}" != ask ] && exec </dev/null
   [ "$via" = 7501 ] && exec </dev/null
 fi
+case "$src" in
+  7501|hook|classifier) : ;;
+  *) if [ "$via" = 7501 ]; then src=7501; else src=hook; fi ;;
+esac
 # `--via 7501` (issue #2536, EPIC #2535 C1): the writer is bin/fleet-status-7501.py,
 # the agent's OWN report (OSC 7501) read off its output. Like the mod it is no
 # hook — no payload, no Stop decision — so it stops right after the state write.
@@ -329,10 +343,45 @@ case "$sem" in
     fi ;;
 esac
 
+# ── ONE primary source (issue #2537, EPIC #2535 C2) ──────────────────────────
+# The agent's own report (OSC 7501, `--via 7501`) outranks the hooks, the hooks
+# outrank the guessers. While the agent has spoken within FLEET_STATE_PRIMARY_SECS
+# (120; 0 = never hold) — @agent_status_ts fresh and its last word not the relay's
+# `exited` — a hook's write does not change the state it said: a PreToolUse
+# `working` on a permission dialog the agent reported as blocked, a Stop `done`
+# that races its `working`. HELD writes nothing to the state trio, but everything
+# keyed on the verb below still runs (a Stop's auto-handoff, the parent re-ask).
+# Two hook writes are never held: the worker's own `blocked` (a declaration, not
+# a reading), and the new prompt that clears one. Inline copy of
+# fleet_primary_fresh (bin/fleet-lib.sh) — KEEP IN SYNC.
+# And a lower writer whose value is what the window already says leaves the
+# higher LABEL on it: a hook's per-tool `working` during the agent's own
+# `working` is no change of source.
+held=''
+keep_src=''
+if [ "$sem" != leave ] && [ "$src" != 7501 ]; then
+  _pv=$(tmux display-message -p -t "$TMUX_PANE" '#{@agent_status_ts}|#{@claude_state}/#{@claude_needs}|#{@claude_state_src}|#{@agent_status}' 2>/dev/null)
+  _pts=${_pv%%|*}; _pr=${_pv#*|}; _pcur=${_pr%%|*}; _pr=${_pr#*|}; _psrc=${_pr%%|*}
+  _pmax=${FLEET_STATE_PRIMARY_SECS:-120}
+  case "$_pmax" in ''|*[!0-9]*) _pmax=120 ;; esac
+  _pfresh=0
+  case "$_pts" in
+    ''|*[!0-9]*) : ;;
+    *) case "$_pv" in *'"state":"exited"'*) : ;;
+         *) [ "$_pmax" -gt 0 ] && [ $(( $(date +%s) - _pts )) -lt "$_pmax" ] && _pfresh=1 ;;
+       esac ;;
+  esac
+  if [ "$_pfresh" = 1 ] && [ "${1:-}" != blocked ] && [ "${_ev:-}" != UserPromptSubmit ]; then
+    held=1
+  elif [ "$_pcur" = "${wstate:-$sem}/$sub" ]; then
+    case "$_psrc/$src" in 7501/*|hook/classifier) keep_src=1 ;; esac
+  fi
+fi
+
 # 'leave' (benign idle_prompt, or a `blocked` pane mid-turn) intentionally writes
 # nothing — it preserves the existing @claude_state and its timestamp so the
 # classifier (or the worker's own declaration) stays authoritative.
-if [ "$sem" != "leave" ]; then
+if [ "$sem" != "leave" ] && [ -z "$held" ]; then
   # What the window said BEFORE this write — only with the cross-machine hub on
   # (issue #1481, below): the nudge is for a CHANGE, and a per-tool `working`
   # re-stamp is not one. Off, no extra fork.
@@ -345,6 +394,8 @@ if [ "$sem" != "leave" ]; then
     tmux set-window-option -u -t "$TMUX_PANE" @sleep_evidence 2>/dev/null
   fi
   tmux set-window-option -t "$TMUX_PANE" @claude_state "${wstate:-$sem}" 2>/dev/null
+  # …and who said it (issue #2537): the label the rule above ranks.
+  [ -n "$keep_src" ] || tmux set-window-option -t "$TMUX_PANE" @claude_state_src "$src" 2>/dev/null
   # the `needs` subtype, ALWAYS written beside the state it qualifies (issue #640):
   # a working/done write clears it, so no reader can ever pair a fresh state with a
   # stale reason.

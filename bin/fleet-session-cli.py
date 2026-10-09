@@ -2,9 +2,10 @@
 """fleet-session-cli.py — the client's sessions from the command line (issue
 #2365): whatever the row menu and ⌘P can do, a command can do.
 
-    fleet ls [--json]                    every session: 名称 · 单号 · 机器 · Agent ·
+    fleet ls [--all] [--json]            every live session: 名称 · 单号 · 机器 · Agent ·
                                          剩余 · 模型 · Effort · 状态 · PR · 回收方式
-                                         (the same rows ⌘P lists)
+                                         (the same rows ⌘P lists); --all adds the
+                                         已结束 ones (done / exited, no issue — #2565)
     fleet ls --services [--json]         every background service and scheduled
                                          task registered on your machines: 机器 ·
                                          登录 · 名称 · 类型 · 状态 · 上次 · 下次 ·
@@ -358,10 +359,14 @@ def cmd_ls(args):
         if rest not in ([], ["--json"]):
             return usage()
         return lib("fleet_services", "fleet-services.py").main(rest)
-    if args not in ([], ["--json"]):
+    if any(a not in ("--json", "--all") for a in args) or len(set(args)) != len(args):
         return usage()
-    rs = attach_bus(rows())
-    if args == ["--json"]:
+    rs = rows()
+    if "--all" not in args:
+        # the list's own 已结束 group (issue #2565): over, so off the default list
+        rs = [r for r in rs if not r.get("ended")]
+    rs = attach_bus(rs)
+    if "--json" in args:
         keep = ("key", "name", "state", "issue", "node", "pr", "reap", "title", "group", "repo", "test")
         derived = (("progress", progress), ("epic_url", epic_link))
         bus = (("agent", "agent"), ("ctx_left", "left"), ("ctx_band", "band"), ("ctx_ts", "ts"),

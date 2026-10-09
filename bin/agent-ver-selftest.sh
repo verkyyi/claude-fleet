@@ -148,8 +148,9 @@ SHIM
 chmod +x "$WORK/bin/tmux"
 export WLIST_FILE="$WORK/wlist"
 SHIMPATH="$WORK/bin:$PATH"
+# (each row on issue <idx>: a done row with no issue folds into 已结束, #2565)
 # The 27 WFMT fields (cfg-stale-selftest's), the last `@agent_cfg[/@agent_ver]`.
-w() { printf '%s\n' "$S$US$1$US$2$US/w/app-$2${US}done$US$US$3$US$US$US$US$4$US$US$US$US$US$US$US$US$US$US$US$US$US$US$US${1}000$US$5" >> "$WLIST_FILE"; }
+w() { printf '%s\n' "$S$US$1$US$2$US/w/app-$2${US}done$US$US$3$US$1$US$US$US$4$US$US$US$US$US$US$US$US$US$US$US$US$US$US$US${1}000$US$5" >> "$WLIST_FILE"; }
 strip() { LC_ALL=C sed -e $'s/\x1b\\[[0-9;]*m//g'; }
 side() { PATH="$SHIMPATH" FLEET_SESSION=$S bash "$ROWS" --sidebar 2>/dev/null | strip; }
 hub()  { PATH="$SHIMPATH" FLEET_SESSION=$S FZF_COLUMNS=160 bash "$ROWS" 2>/dev/null | strip; }
@@ -176,7 +177,7 @@ export CCQUOTA_FLEET=1
 NOW=$(date +%s); FID=11111111-2222-3333-4444-555555555555
 printf '%s\n' "$NOW" > "$G/hub_ok"
 { printf '#ts\037%s\n#me\037m5\n#node\037m4\037online\0372\037%s\n' "$NOW" "$NOW"
-  printf 'wid:%s/issue-7\037m4\037online\037\037acme/app\037done\037claude\037RR\037\037\0370\037\037hub\037\0371759000000\037renew\n' "$FID"
+  printf 'wid:%s/issue-7\037m4\037online\0377\037acme/app\037done\037claude\037RR\037\037\0370\037\037hub\037\0371759000000\037renew\n' "$FID"
 } > "$G/remote_$S"
 eq "D: a remote row takes its machine's verdict — renew" renew "$(f13 "$(side)" RR)"
 rm -f "$G/remote_$S" "$G/hub_ok"; unset CCQUOTA_FLEET

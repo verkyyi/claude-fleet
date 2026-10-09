@@ -100,16 +100,23 @@ if [ "${target#hdr:}" != "$target" ]; then
   # the option; a target the fleet does not host folds nothing either.
   # The 置顶 heading (issue #1170) is the exception: it folds as the token `pin`,
   # in a fleet of any size — the renderer draws it whenever a row is pinned.
+  # So is the 已结束 heading (issue #2565), with the opposite polarity: folded
+  # by default, its token `ended:open` marks it OPEN — `→` writes it, `←` drops it.
   RMANY=0; RGRPMAP=''
-  [ "$hkey" = pin ] || fleet_dash_repo_frame "$SESS"
-  [ "$RMANY" = 1 ] || [ "$hkey" = pin ] || exit 0
+  case "$hkey" in pin|ended) ;; *) fleet_dash_repo_frame "$SESS" ;; esac
+  [ "$RMANY" = 1 ] || [ "$hkey" = pin ] || [ "$hkey" = ended ] || exit 0
   case "$hkey" in
     none|pin) slug=$hkey ;;
+    ended) slug="ended:open" ;;
     *)    slug=$(fleet_slug "$hkey")
           case "$RGRPMAP" in *$'\n'"$slug"$'\t'*) ;; *) exit 0 ;; esac ;;
   esac
   cur=$(tmux show-option -t "=$SESS:" -qv @repo_fold 2>/dev/null) || cur=''
   case " $cur " in *" $slug "*) folded=1 ;; *) folded=0 ;; esac
+  # the token's presence means "open" for `ended`: swap the verb, not the bookkeeping
+  if [ "$hkey" = ended ]; then
+    case "$verb" in collapse) verb="expand" ;; *) verb="collapse" ;; esac
+  fi
   if [ "$verb" = collapse ]; then
     # `←` on an open heading shuts it; on a folded one it is a dead key.
     [ "$folded" = 0 ] || exit 0

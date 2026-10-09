@@ -66,8 +66,9 @@ chmod +x "$WORK/bin/tmux"
 export WLIST_FILE="$WORK/wlist"
 SHIMPATH="$WORK/bin:$PATH"
 # The 27 WFMT fields — the 26 of dash-born-order-selftest, then @agent_cfg.
-# w <idx> <name> <wid> <agent> <fp>
-w() { printf '%s\n' "$S$US$1$US$2$US/w/app-$2${US}done$US$US$3$US$US$US$US$4$US$US$US$US$US$US$US$US$US$US$US$US$US$US$US${1}000$US$5" >> "$WLIST_FILE"; }
+# w <idx> <name> <wid> <agent> <fp> — each on issue <idx>: a done row with no issue
+# is folded into 已结束 (issue #2565), off the painted list
+w() { printf '%s\n' "$S$US$1$US$2$US/w/app-$2${US}done$US$US$3$US$1$US$US$US$4$US$US$US$US$US$US$US$US$US$US$US$US$US$US$US${1}000$US$5" >> "$WLIST_FILE"; }
 strip() { LC_ALL=C sed -e $'s/\x1b\\[[0-9;]*m//g'; }
 side() { PATH="$SHIMPATH" FLEET_SESSION=$S bash "$ROWS" --sidebar 2>/dev/null | strip; }
 hub()  { PATH="$SHIMPATH" FLEET_SESSION=$S FZF_COLUMNS=160 bash "$ROWS" 2>/dev/null | strip; }
@@ -99,9 +100,9 @@ export CCQUOTA_FLEET=1
 NOW=$(date +%s); F=11111111-2222-3333-4444-555555555555
 printf '%s\n' "$NOW" > "$G/hub_ok"
 { printf '#ts\037%s\n#me\037m5\n#node\037m4\037online\0372\037%s\n' "$NOW" "$NOW"
-  printf 'wid:%s/issue-7\037m4\037online\037\037acme/app\037done\037claude\037RS\037\037\0370\037\037hub\037\037%s\037stale\n' "$F" "$((B=1759000000))"
-  printf 'wid:%s/issue-8\037m4\037online\037\037acme/app\037done\037claude\037RO\037\037\0370\037\037hub\037\037%s\037ok\n' "$F" "$B"
-  printf 'wid:%s/issue-9\037m4\037online\037\037acme/app\037done\037claude\037RN\037\037\0370\037\037hub\037\037%s\n' "$F" "$B"
+  printf 'wid:%s/issue-7\037m4\037online\0377\037acme/app\037done\037claude\037RS\037\037\0370\037\037hub\037\037%s\037stale\n' "$F" "$((B=1759000000))"
+  printf 'wid:%s/issue-8\037m4\037online\0378\037acme/app\037done\037claude\037RO\037\037\0370\037\037hub\037\037%s\037ok\n' "$F" "$B"
+  printf 'wid:%s/issue-9\037m4\037online\0379\037acme/app\037done\037claude\037RN\037\037\0370\037\037hub\037\037%s\n' "$F" "$B"
 } > "$G/remote_$S"
 s=$(side)
 eq "A: a remote row takes its machine's verdict — stale" "stale" "$(f13 "$s" RS)"

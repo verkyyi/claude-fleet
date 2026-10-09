@@ -205,6 +205,28 @@ export function hhmm(sec, now = Date.now()) {
 /** activeDevices are the devices not revoked. */
 export const activeDevices = (devs) => (Array.isArray(devs) ? devs : []).filter((d) => !d.revoked_at);
 
+/** DEVICE_EVENTS are the device audit's actions the dictionary names
+ *  ('ui.dev.ev.' + action); any other prints as the hub wrote it. */
+export const DEVICE_EVENTS = ['register', 'renew', 'renew_refused', 'revoke', 'home', 'node_pass', 'node_pass_refused'];
+
+/** deviceHistory is the Devices page's history fold (claude-fleet#2520): the
+ *  devices no longer usable, and every audit row /v1/fleet/devices returned
+ *  (newest first, as the hub orders them), each named by its device's own
+ *  name while the list still has it. */
+export function deviceHistory(body) {
+  const devs = body && Array.isArray(body.devices) ? body.devices : [];
+  const names = new Map(devs.map((d) => [d.fingerprint, d.name]));
+  const audit = body && Array.isArray(body.audit) ? body.audit : [];
+  return {
+    past: devs.filter((d) => d.revoked_at),
+    events: audit.map((a) => ({
+      at: a.at, action: String(a.action || ''), fingerprint: a.fingerprint || '',
+      device: names.get(a.fingerprint) || '', actor: a.actor || '', detail: a.detail || '',
+      bad: /(^revoke$|_refused$)/.test(String(a.action || '')),
+    })),
+  };
+}
+
 /** looksLikeKey is the hand-issue box's check before it asks the hub. */
 export const looksLikeKey = (k) => /^(ssh-(ed25519|rsa)|ecdsa-sha2-nistp(256|384|521)|sk-ssh-ed25519@openssh\.com) [A-Za-z0-9+/=]{16,}/.test(String(k || '').trim());
 

@@ -159,7 +159,7 @@ hasnt "live: a 28-col CJK name must not leak past 26 cols" "$r6" "名字很长"
 # Countdown uses appended metadata; stable targeting remains row field 2.
 now=$(date +%s)
 notice_row() {
-  printf '%s\n' "$SESS${US}1${US}reap-candidate${US}/w/repo-scratch-9${US}$1${US}$now${US}@91${US}${US}${US}/w/repo-scratch-9${US}claude${US}a1${US}${US}${US}${US}${US}${4:-$((now + 300))}${US}$2${US}$3" > "$WLIST_FILE"
+  printf '%s\n' "$SESS${US}1${US}reap-candidate${US}/w/repo-scratch-9${US}$1${US}$now${US}@91${US}9${US}${US}/w/repo-scratch-9${US}claude${US}a1${US}${US}${US}${US}${US}${4:-$((now + 300))}${US}$2${US}$3" > "$WLIST_FILE"
   out=$(FLEET_SESSION="$SESS" FZF_COLUMNS=120 bash "$ROWS")
 }
 notice_row "done" "$now" "$now"
