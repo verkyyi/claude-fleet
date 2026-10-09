@@ -134,7 +134,21 @@ grep -q 'ccquota codex login' "$WORK/spawn.err" || fail "D the refusal says ccqu
 GH_LABELS='[]' CODEX_CMD="$NOLOGIN" run_spawn
 grep -q -- '--agent' "$WORK/newwin" && fail "D a Claude spawn never asks for Codex" "$(cat "$WORK/newwin")"
 [ -s "$WORK/newwin" ] || fail "D a Claude spawn opens without a Codex login" "$(cat "$WORK/spawn.err")"
-ok "D agent:codex opens Codex; no label = fleet default; --agent wins; both / no login refused"
+# --title promised no round-trip (#216): the label comes off the collector's copy.
+run_title() {
+  rm -rf "$WORK/dash/.claude-dash/fleets"; : > "$WORK/newwin"; : > "$WORK/gh.log"
+  mkdir -p "$WORK/dash/.claude-dash/fleets/$(fleet_slug acme/widgets)"
+  printf '77\tbug,agent:codex\n' > "$WORK/dash/.claude-dash/fleets/$(fleet_slug acme/widgets)/labels"
+  PATH="$WORK/fakebin:$PATH" TMPDIR="$WORK/dash" FLEET_CONF_DIR="$WORK/conf" GH_LOG="$WORK/gh.log" \
+  FLEET_REPO="acme/widgets" FLEET_MAIN="$WORK/main" FLEET_BASE_BRANCH="master" \
+  FLEET_PRESPAWN_DEDUP=0 NEWWIN_LOG="$WORK/newwin" FLEET_CODEX_READY_CMD="$READY" \
+    "$SPAWN" 77 --origin hub --title 'Known Title' >"$WORK/spawn.out" 2>"$WORK/spawn.err"
+}
+run_title
+grep -qF -- "fleet-session-wrap.sh' --agent codex" "$WORK/newwin" \
+  || fail "D --title: the cached agent:codex label routes to Codex" "$(cat "$WORK/newwin") $(cat "$WORK/spawn.err")"
+grep -q 'issue view' "$WORK/gh.log" && fail "D --title must make no gh issue view (#216)" "$(cat "$WORK/gh.log")"
+ok "D agent:codex opens Codex; no label = fleet default; --agent wins; both / no login refused; --title reads the cache only"
 
 # ===== E: the filer hands the label to the spawn =============================
 SB="$WORK/sb"; mkdir -p "$SB"

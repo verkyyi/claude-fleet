@@ -328,18 +328,23 @@ REPO="${FLEET_REPO:-$(git -C "$MAIN" remote get-url origin 2>/dev/null | sed -E 
 BASE="${FLEET_BASE_BRANCH:-main}"
 
 # --- Which agent (issue #2562) ------------------------------------------------
-# No --agent: the issue's `agent:codex` / `agent:claude` label picks one (read off
-# the fleet's local copy first, fleet-gh.sh — one gh read only when it is stale);
-# no label ⇒ AGENT stays empty and the launcher takes FLEET_AGENT, byte for byte.
+# No --agent: the issue's `agent:codex` / `agent:claude` label picks one; no label
+# ⇒ AGENT stays empty and the launcher takes FLEET_AGENT, byte for byte. Read off
+# the fleet's local copy first (fleet-gh.sh — one gh read only when it is stale);
+# a --title caller was promised no round-trip (#216), so it reads the collector's
+# copy only (a create-then-spawn filer hands its label over as --agent instead).
 # Both labels ⇒ refused: the issue does not say which. Foreground only — the
 # --async tail and a hub-placed start carry the agent this pass resolved.
-if [ "$TAIL_ONLY" != 1 ] && [ -z "$AGENT" ] && [ "${FLEET_AGENT_LABELS:-1}" != 0 ] && [ -n "$REPO" ]; then
-  _lbl=$(bash "$BIN/fleet-gh.sh" issue view "$num" --repo "$REPO" --json labels 2>/dev/null \
-         | python3 -c 'import json,sys
+if [ "$TAIL_ONLY" != 1 ] && [ -z "$AGENT" ] && [ -n "$REPO" ]; then
+  if [ -n "$WIN_TITLE" ]; then _lbl=$(fleet_cached_labels "$REPO" "$num")
+  else
+    _lbl=$(bash "$BIN/fleet-gh.sh" issue view "$num" --repo "$REPO" --json labels 2>/dev/null \
+           | python3 -c 'import json,sys
 try: d=json.load(sys.stdin)
 except Exception: sys.exit(0)
 for l in d.get("labels") or []:
     print(l.get("name","") if isinstance(l,dict) else l)' 2>/dev/null)
+  fi
   AGENT=$(fleet_labels_agent "$_lbl") \
     || { refuse "#$num carries both agent:codex and agent:claude — remove one, or pass --agent"; exit "$RC_INFRA"; }
   unset _lbl

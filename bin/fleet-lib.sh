@@ -7189,6 +7189,16 @@ EOF_LABELS
   return 0
 }
 
+# fleet_cached_labels <repo> <N> → the issue's label names, one a line, off the
+# collector's copy ($FLEET_C/fleets/<slug>/labels: `N<TAB>a,b`) — no network,
+# nothing when the issue is not in it.
+fleet_cached_labels() {
+  local f
+  f="$FLEET_C/fleets/$(fleet_slug "$(fleet_norm_repo "${1:-}")")/labels"
+  [ -f "$f" ] || return 0
+  awk -F'\t' -v n="${2:-}" '$1==n {print $2; exit}' "$f" 2>/dev/null | tr ',' '\n' | sed '/^$/d'
+}
+
 # fleet_epic_charter_agent <epic-repo> <charter body> <member-repo> <member N> →
 # codex | claude | nothing: the member's own Core / Reserve row
 # (`- [ ] **C3** #N — 标题 (codex)`) wins over the charter's
