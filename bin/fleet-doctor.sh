@@ -217,6 +217,61 @@ case "$_cu_out" in
     pass fleet "${_fl_head:+版本 $(printf '%.7s' "$_fl_head") · }$(printf '%s' "$_fl_root" | sed "s#^$HOME#~#") · $_fl_hub" ;;
 esac
 
+# A resident daemon on code older than the install (issue #2716): a KeepAlive
+# unit keeps the script it started with, so after a version switch (the install
+# link's own mtime — install-sync swaps it by one rename) every one that started
+# BEFORE it still runs the old version. fleet-install-apply.sh restarts them on
+# the switch; this names one it could not (a system LaunchDaemon with no sudo, a
+# kick that failed). A checkout install (no link) or no resident unit: no row.
+#   FLEET_DOCTOR_RESIDENT_CMD  the selftests' seam: prints `<unit> <started epoch>`
+_rs_root="${FLEET_INSTALL_ROOT:-$HOME/.claude/fleet}"
+_rs_old=''
+if [ -L "$_rs_root" ]; then
+  _rs_sw=$(stat -c %Y "$_rs_root" 2>/dev/null || stat -f %m "$_rs_root" 2>/dev/null)
+  _rs_rows=''
+  if [ -n "${FLEET_DOCTOR_RESIDENT_CMD:-}" ]; then
+    _rs_rows=$(sh -c "$FLEET_DOCTOR_RESIDENT_CMD" 2>/dev/null)
+  elif command -v fleet_daemon_label >/dev/null 2>&1 && ! fleet_node_manages 2>/dev/null; then
+    _rs_now=$(date +%s)
+    for _rs_t in "$(dirname "$0")"/../launchd/com.claude-fleet.*.plist.tmpl "$(dirname "$0")"/../systemd/claude-fleet-*.service; do
+      [ -f "$_rs_t" ] || continue
+      _rs_pid=''
+      case "$_rs_t" in
+        *.plist.tmpl)
+          [ "$(uname)" = Darwin ] && grep -q '<key>KeepAlive</key>' "$_rs_t" || continue
+          _rs_u=${_rs_t##*/com.claude-fleet.}; _rs_u=${_rs_u%.plist.tmpl}
+          [ -f "$(fleet_daemon_plist "$_rs_u")" ] || continue
+          _rs_pid=$(launchctl print "$(fleet_daemon_domain)/$(fleet_daemon_label "$_rs_u")" 2>/dev/null \
+                     | awk '$1 == "pid" && $2 == "=" { print $3; exit }') ;;
+        *)
+          [ "$(uname)" = Linux ] && grep -q '^Restart=' "$_rs_t" || continue
+          _rs_u=${_rs_t##*/claude-fleet-}; _rs_u=${_rs_u%.service}
+          _rs_pid=$(systemctl --user show -p MainPID --value "claude-fleet-$_rs_u.service" 2>/dev/null) ;;
+      esac
+      case "$_rs_pid" in ''|0|*[!0-9]*) continue ;; esac
+      # etime [[dd-]hh:]mm:ss → seconds running
+      _rs_et=$(ps -o etime= -p "$_rs_pid" 2>/dev/null | awk '{
+        t = $1; d = 0; k = index(t, "-")
+        if (k) { d = substr(t, 1, k - 1); t = substr(t, k + 1) }
+        n = split(t, a, ":"); s = 0
+        for (i = 1; i <= n; i++) s = s * 60 + a[i]
+        print d * 86400 + s }')
+      case "$_rs_et" in ''|*[!0-9]*) continue ;; esac
+      _rs_rows="$_rs_rows$_rs_u $((_rs_now - _rs_et))
+"
+    done
+  fi
+  case "$_rs_sw" in
+    ''|*[!0-9]*) ;;
+    *) _rs_old=$(printf '%s' "$_rs_rows" | awk -v sw="$_rs_sw" 'NF == 2 && $2 ~ /^[0-9]+$/ && $2 < sw { printf "%s%s", s, $1; s = ", " }') ;;
+  esac
+fi
+if [ -n "$_rs_old" ]; then
+  if [ "$(uname)" = Darwin ]; then _rs_fix="launchctl kickstart -k gui/$(id -u)/com.claude-fleet.<名>"
+  else _rs_fix="systemctl --user restart claude-fleet-<名>.service"; fi
+  warn fleet "常驻服务还在跑切换前的版本：${_rs_old}（安装 $(date -r "$_rs_sw" '+%m-%d %H:%M' 2>/dev/null || date -d "@$_rs_sw" '+%m-%d %H:%M' 2>/dev/null) 切换，它们启动得更早）— \`$_rs_fix\` 重启一次"
+fi
+
 _hub_on=${CCQUOTA_FLEET:-}
 [ -n "$_hub_on" ] || _hub_on=$(_xconf_val "$conf_dir/fleet.conf" CCQUOTA_FLEET)
 [ -n "$_hub_on" ] || _hub_on=$(_xconf_val "$conf_dir/fleet.settings" CCQUOTA_FLEET)
@@ -1262,9 +1317,11 @@ esac
 # --- agent (issue #1525): every login's node agent on this machine vs stable ---
 # Same reading as `fleet-node-upgrade.sh --status`: the bytes on disk AND the
 # version the hub sees running (an agent upgraded on disk but never restarted is
-# behind). A machine with no ccquota agent service prints no line at all.
+# behind). A machine with no ccquota agent service prints no line at all — nor
+# does a computer that hosts no sessions (承载 off, issue #2716): a client has no
+# node agent of the fleet's to follow, and asking would only build one.
 _nu="$(dirname "$0")/fleet-node-upgrade.sh"
-if [ -f "$_nu" ]; then
+if [ -f "$_nu" ] && [ "$_ho_on" = 1 ]; then
   _nuo=$(bash "$_nu" "${FLEET_DOCTOR_AGENT_TARGET:-stable}" --status 2>&1)
   _nus=$(printf '%s\n' "$_nuo" | sed -n 's/^summary: //p' | head -n 1)
   case "$_nus" in
