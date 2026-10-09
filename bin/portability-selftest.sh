@@ -179,7 +179,7 @@ function scan(s, ln,
     }
     if (c == "'" || c == "\"") { q = c; seg = seg c; prev = c; continue }
     # A `#` starts a comment only at a word boundary - never in `${x#y}` or `a#b`.
-    if (c == "#" && (prev == "" || prev == " " || prev == "\t")) break
+    if (c == "#" && (prev == "" || prev == " " || prev == "\t")) { i--; break }
     if (c == "|" || c == ";" || c == "&" || c == "(" || c == ")" || \
         c == "{" || c == "}" || c == "`") {
       if (c == "|" && substr(s, i + 1, 1) == "|") hasor = 1
@@ -188,6 +188,14 @@ function scan(s, ln,
     seg = seg c; prev = c
   }
   nseg++; segs[nseg] = seg
+
+  # `${v:+\}}` (any of :+ + :- - := = :? ?) - an escaped `}` as a parameter
+  # expansion's WORD. Inside double quotes bash 5 drops the backslash and bash 3.2
+  # (macOS) KEEPS it: the sidebar's tmux format grew a literal `\` after every
+  # name (issue #2601). Checked on the line's code half; the `}` split above
+  # cannot see it per segment. Put the `}` in its own variable instead.
+  if (substr(s, 1, i - 1) ~ /\$\{[A-Za-z_][A-Za-z0-9_]*:?[-+=?]\\\}/)
+    report(ln, "brace-esc", "an escaped `}` as a ${v:+WORD} expansion is kept as `\\}` by bash 3.2 inside double quotes (bash 5 drops the backslash) - set the `}` in a variable and expand that (issue #2601)")
 
   for (i = 1; i <= nseg; i++) { cw[i] = cmdword(segs[i]); if (cw[i] != "") cnt[cw[i]]++ }
 
@@ -312,6 +320,11 @@ b=$(printf '%s' "$1" | base64 -w 0)
 d=$(mktemp -p /tmp)
 SH
 
+cat > "$WORK/bad-brace-esc.sh" <<'SH'
+#!/bin/bash
+f="#{?a,,#{window_name}${W:+\}}}"
+SH
+
 # The false-positive traps. Every one of these is a real shape from this repo.
 cat > "$WORK/good.sh" <<'SH'
 #!/bin/sh
@@ -328,6 +341,7 @@ ts() { date -r "$1" '+%H:%M' 2>/dev/null || date -d "@$1" '+%H:%M' 2>/dev/null; 
 m=$(stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || echo '')
 for c in $(pgrep -P "$$" 2>/dev/null); do echo "$c"; done
 strip() { LC_ALL=C sed -e $'s/\x1b\\[[0-9;]*m//g'; }
+_WTEND='}'; f="#{?a,,#{window_name}${_WTEND}}"   # bash 3.2 keeps ${v:+\}}'s backslash
 SH
 
 cat > "$WORK/opted-out.sh" <<'SH'
@@ -359,6 +373,7 @@ ok; want bad-sed-i.sh     sed-i
 ok; want bad-stat.sh      gnu-opt
 ok; want bad-date.sh      gnu-opt
 ok; want bad-misc.sh      gnu-opt
+ok; want bad-brace-esc.sh brace-esc
 
 # bad-misc carries three separate GNU-only options; a lint that stops at the
 # first would let the other two land.
