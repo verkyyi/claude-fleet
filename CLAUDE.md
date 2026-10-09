@@ -633,8 +633,12 @@ Do not install from memory: read the doc and work from it.
   last (`update-restart.json`). The machine
   doctor (`fleet doctor --machine`) after the switch: a FAIL the old version did
   not have rolls EVERYTHING back and skips that sha. `update.json`'s phase makes
-  a killed tick resume or roll back. A managed login's install-sync reads `off ·
-  managed`; `fleet-stable.sh move` refuses an updater tree without a valid
+  a killed tick resume or roll back. A managed login's install-sync follows the
+  MACHINE, not stable (issue #2688): its target is the commit the runtime's
+  `current` names, through its own apply + doctor gate (no `current` yet ⇒
+  `off`; BREAK-IT `managed-login-install-stale`); `fleet doctor --installs`
+  (`bin/fleet-installs.sh`, issue #2692) lists the runtime, every login install
+  and every client shell against stable. `fleet-stable.sh move` refuses an updater tree without a valid
   release.json (`release:`), or one pinning an artifact the hub's
   `/v1/fleet/release/artifacts` lacks (`artifacts:`; the hub never builds such a
   release either — issue #2631, BREAK-IT `release-artifact-missing`). The pinned

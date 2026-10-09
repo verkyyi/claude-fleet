@@ -151,7 +151,11 @@ PUT 的请求体就是上面可写的字段，外加可选的 `if_version`（读
 
 你移一次 stable，每台托管机器上的**所有部件**换到这一版；新版体检不过就整体退回上一版。
 更新器是 `bin/fleet-node-update.py`，守护（C3）的 `update` 任务（每 5 分钟一次，`FLEET_NODE_UPDATE_EVERY`），
-root 运行；它取代托管账号各自的 `fleet-install-sync.sh`（那个账号的 install-sync 记 `off · managed`）。
+root 运行。托管账号的 `fleet-install-sync.sh` 不再自己追 stable，而是**跟机器走**（#2688）：目标是运行时
+`current` 指的那个提交，stable 标签够不着就按提交取，走它自己的切换 + apply + 体检门（普通目录的
+`~/.claude/fleet` 在第一次移动时收成链接形态）；节点代理那半仍归更新器；运行时还没有 `current` 时记 `off`。
+所以更新器切完运行时，下一拍（≤30 分钟）每个托管登录跟到同一版；`fleet doctor --machine` 每个托管账号一行 install。
+`fleet doctor --installs`（#2692）一张表列本机的运行时、每个登录安装、每份客户端壳，各自是否等于 stable。
 非托管机器照旧走 install-sync，一字不差。
 
 ### `release.json`（仓库根，随发布包一起签名）

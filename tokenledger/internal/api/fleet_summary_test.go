@@ -228,3 +228,39 @@ func TestFleetReadDoorsByNodeToken(t *testing.T) {
 		}
 	}
 }
+
+// A machine carries the fleet version its newest heard login reported
+// (claude-fleet#2692): the summary has no `nodes`, so without it every machine
+// read "no fleet version reported". A login with no claude-fleet that beats
+// later does not blank it; a machine where none reported has no key.
+func TestFleetSummaryCarriesMachineFleetVersion(t *testing.T) {
+	h := newFleetHarness(t)
+	a := connectNode(t, h, "m5-alice", "m5", "alice", false)
+	c := connectNode(t, h, "m5-carol", "m5", "carol", false)
+	connectNode(t, h, "m4-bob", "m4", "bob", false)
+	beat(t, a.c, control.Proto, control.Heartbeat{Hostname: "m5", OSUser: "alice", FleetVersion: "aaaaaaa"})
+	waitFor(t, 3*time.Second, "alice's version", func() bool {
+		for _, n := range roster(t, h).Nodes {
+			if n.OSUser == "alice" && n.FleetVersion == "aaaaaaa" {
+				return true
+			}
+		}
+		return false
+	})
+	time.Sleep(20 * time.Millisecond)
+	beat(t, c.c, control.Proto, control.Heartbeat{Hostname: "m5", OSUser: "carol"})
+	code, out, raw := postSummary(t, h, asOperator, nil)
+	if code != 200 {
+		t.Fatalf("operator: HTTP %d %s", code, raw)
+	}
+	got := map[string]string{}
+	for _, m := range out.Machines {
+		got[m.Hostname] = m.FleetVersion
+	}
+	if got["m5"] != "aaaaaaa" || got["m4"] != "" {
+		t.Fatalf("machine fleet versions = %v, want m5 aaaaaaa, m4 none (%s)", got, raw)
+	}
+	if strings.Count(raw, `"fleet_version":`) != 1 {
+		t.Fatalf("only m5 carries the key: %s", raw)
+	}
+}

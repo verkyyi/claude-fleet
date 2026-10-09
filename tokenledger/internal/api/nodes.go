@@ -727,6 +727,11 @@ type MachineView struct {
 	MemTotal        uint64   `json:"mem_total_bytes"`
 	// LastHeartbeat is the newest from any login.
 	LastHeartbeat *time.Time `json:"last_heartbeat"`
+	// FleetVersion is the claude-fleet install (fleet-install-version.sh's
+	// head) the newest heard login that reported one runs (claude-fleet#2692):
+	// /v1/fleet/summary carries machines only, so without it a sidebar read
+	// every machine as "no fleet version reported". Absent when none did.
+	FleetVersion string `json:"fleet_version,omitempty"`
 	// ComputeOff: every login of the machine only coordinates
 	// (claude-fleet#1719) — nothing is placed on it.
 	ComputeOff bool `json:"compute_off,omitempty"`
@@ -828,6 +833,7 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 	peers := s.peerConns() // nil on a single hub (claude-fleet#2124)
 	aliases := s.staticAliases(settings)
 	machines := map[string]*MachineView{}
+	fleetVerAt := map[string]time.Time{} // when each machine's FleetVersion was heard
 	order := []string{}
 	// The register rides the machine link's beat (claude-fleet#2526), a row
 	// a person never sees — its entries are narrowed one by one below.
@@ -935,6 +941,13 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 		if m.LastHeartbeat == nil || (v.LastHeartbeat != nil && v.LastHeartbeat.After(*m.LastHeartbeat)) {
 			m.LastHeartbeat = v.LastHeartbeat
 			m.Load1, m.NCPU, m.MemFree, m.MemTotal = v.Load1, v.NCPU, v.MemFreeBytes, v.MemTotalBytes
+		}
+		// The fleet version: the newest login that reported one — a login
+		// without claude-fleet reports none and must not blank the machine's.
+		if v.FleetVersion != "" && v.LastHeartbeat != nil {
+			if at, ok := fleetVerAt[v.Hostname]; !ok || v.LastHeartbeat.After(at) {
+				m.FleetVersion, fleetVerAt[v.Hostname] = v.FleetVersion, *v.LastHeartbeat
+			}
 		}
 	}
 	// The repos each machine hosts (claude-fleet#1927): one read of the

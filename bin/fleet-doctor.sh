@@ -81,6 +81,14 @@ if [ "${1:-}" = --machine ]; then
   exec python3 "$(dirname "$0")/fleet-node-update.py" doctor
 fi
 
+# `fleet doctor --installs` (issue #2692): every install on this machine — the
+# machine runtime, each login's ~/.claude/fleet, each client shell — one table,
+# each judged against stable. Exit = fleet-installs.sh's (0 all at stable).
+if [ "${1:-}" = --installs ]; then
+  shift
+  exec sh "$(dirname "$0")/fleet-installs.sh" "$@"
+fi
+
 printf '%sclaude-fleet doctor%s\n' "$B" "$Z"
 
 # --- per-fleet conf enumeration (shared by the optional-daemon checks below) ---
