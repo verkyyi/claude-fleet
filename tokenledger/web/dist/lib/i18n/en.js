@@ -286,6 +286,7 @@ export const en = {
   'ui.mach.spare': 'spare · used {used} / cap {cap}',
   'ui.mach.version': 'version',
   'ui.mach.links': '{n} connection(s) · logins: {logins}',
+  'ui.mach.refused': '{login}: token refused · needs relogin (on the machine: sudo fleet-node-supervisor.py account adopt {login} --rejoin)',
   'ui.mach.loginSep': ', ',
   'ui.mach.trusted': 'Trusted',
   'ui.mach.untrusted': 'Untrusted',

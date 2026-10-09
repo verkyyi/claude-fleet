@@ -184,12 +184,18 @@ func (s *Store) DeviceNodeEndpoint(deviceFP string) (string, error) {
 	return id, err
 }
 
-// RotateEndpointToken gives a live endpoint a new enrollment token: the old
-// one stops resolving at once (EndpointByTokenHash reads token_hash).
-// ErrNoSuchEndpoint when the endpoint is unknown or retired.
-func (s *Store) RotateEndpointToken(endpointID, tokenHash string) error {
-	res, err := s.write.Exec(`UPDATE endpoints SET token_hash = ? WHERE endpoint_id = ? AND retired_at IS NULL`,
-		tokenHash, endpointID)
+// RotateEndpointToken gives a live endpoint a new enrollment token. The old
+// one keeps resolving for grace (claude-fleet#2501: a machine's node program
+// may hold it while the login re-registers), then stops; grace 0 stops it at
+// once. ErrNoSuchEndpoint when the endpoint is unknown or retired.
+func (s *Store) RotateEndpointToken(endpointID, tokenHash string, now time.Time, grace time.Duration) error {
+	var until any
+	if grace > 0 {
+		until = fmtTime(now.Add(grace))
+	}
+	res, err := s.write.Exec(`UPDATE endpoints SET prev_token_hash = token_hash, prev_token_until = ?, token_rotated_at = ?,
+		token_hash = ? WHERE endpoint_id = ? AND retired_at IS NULL`,
+		until, fmtTime(now), tokenHash, endpointID)
 	if err != nil {
 		return err
 	}
@@ -197,6 +203,13 @@ func (s *Store) RotateEndpointToken(endpointID, tokenHash string) error {
 		return ErrNoSuchEndpoint
 	}
 	return nil
+}
+
+// EndReissueGrace stops a reissued endpoint's previous token now, grace or no
+// grace; the record of it stays for the refusal that names the reissue.
+func (s *Store) EndReissueGrace(endpointID string) error {
+	_, err := s.write.Exec(`UPDATE endpoints SET prev_token_until = NULL WHERE endpoint_id = ?`, endpointID)
+	return err
 }
 
 // LinkDeviceEndpoint ties a device to a node it already is (claude-fleet#2212):

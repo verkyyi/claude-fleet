@@ -99,6 +99,10 @@
 #                                                   bin/fleet-cred-proxy.py (Router.refresh); go test, when a toolchain is here
 #   machine-agent-wrong-login                       tokenledger/internal/api node_machine.go (loginEndpoint, serveMachine)
 #                                                   + internal/agent node_machine.go / runas.go (go test, when a toolchain is here)
+#   machine-lane-reissued                           tokenledger/internal/api fleet_login_node.go (deviceNode, machineServing)
+#                                                   + store EndpointByTokenHash (prev_token_hash) + node_machine.go
+#                                                   (staleLoginTokenWhy), internal/agent lane_state.go,
+#                                                   bin/fleet-node-supervisor.py (lanes, account adopt --rejoin)
 #   oldcfg-broken-unmarked                          bin/fleet-oldcfg-check.sh --sweep (fleet-oldcfg-replay.py --manifest),
 #                                                   fleet_cfg_state / fleet_cfg_broken_load (fleet-lib.sh), fleet-ui-lang.sh
 #   pool-stale-handed-out                           bin/scratch-pool.sh claim / reap (usable: fleet_cfg_state)
@@ -4591,6 +4595,45 @@ drill_machine_agent_wrong_login() {
     esac
   else
     WHAT='没有 go：十条测试按名核对在，Go 门（tokenledger.yml）跑它们'
+  fi
+  SECS=$(since "$t0")
+}
+
+# ---- machine-lane-reissued (#2501): a login the machine's node program serves
+# re-registers (an old `fleet host on`) and the hub reissues its token — the
+# machine's lane must stay up (no reissue while the link serves it; a grace for
+# the old token), say why when it does not, and be fixable without an admin.
+drill_machine_lane_reissued() {
+  CAP=180; local t0 out rc api agt sup
+  api='TestReissueKeepsTheMachineLane TestLoginNodeEnrollsOnceUntrusted'
+  agt='TestLaneStateRecordsAWrongLogin'
+  sup="$ROOT/bin/fleet-node-supervisor-selftest.py"
+  t0=$(now)
+  for out in $api; do
+    grep -q "^func $out(" "$ROOT"/tokenledger/internal/api/*_test.go 2>/dev/null || { WHY="the hub half's test $out is gone"; return 1; }
+  done
+  grep -q "^func $agt(" "$ROOT/tokenledger/internal/agent/lane_state_test.go" 2>/dev/null \
+    || { WHY="the node half's test $agt is gone"; return 1; }
+  grep -q 'machineServing(id)' "$ROOT/tokenledger/internal/api/fleet_login_node.go" \
+    || { WHY="deviceNode reissues a login its machine's node program serves"; return 1; }
+  grep -q 'prev_token_hash' "$ROOT/tokenledger/internal/store/store.go" \
+    || { WHY="a reissued token has no grace (EndpointByTokenHash)"; return 1; }
+  out=$(cd "$ROOT/bin" && python3 -W ignore::ResourceWarning -m unittest -q \
+        'fleet-node-supervisor-selftest.H_Accounts.test_refused_lane_is_named_and_rejoin_renews_the_token' 2>&1); rc=$?
+  [ "$rc" = 0 ] || { WHY="the supervisor half is red: $(printf '%s' "$out" | grep -E 'Error|FAIL' | head -3 | tr '\n' ' ')"; return 1; }
+  [ -f "$sup" ] || { WHY="${sup#$ROOT/} is gone"; return 1; }
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run "^($(printf '%s %s' "$api" "$agt" | tr ' ' '|'))\$" ./internal/api ./internal/agent 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
+      0:*) WHAT='机器连接服务着的登录重登记：入口不换发（409 machine_managed）；换发了的旧令牌宽限 10 分钟、过后 WRONG_LOGIN 说明重登记与修法；被拒账号写 lane.json、机器心跳带 logins_refused、Machines 卡片红字；守护 status 名出 lane、--check 3；account adopt --rejoin 不要管理员换回新令牌' ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
+        WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；守护一半已在这里跑绿' ;;
+      *) WHY="the reissue path (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  else
+    WHAT='没有 go：守护一半跑绿，三条 Go 测试按名核对在，Go 门（tokenledger.yml）跑它们'
   fi
   SECS=$(since "$t0")
 }

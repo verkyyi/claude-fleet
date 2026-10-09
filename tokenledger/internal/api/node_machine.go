@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"sync"
 	"time"
@@ -139,7 +140,7 @@ func (s *Server) loginEndpoint(mach store.Endpoint, login string, hp control.Hel
 	h := HashToken(hp.LoginToken)
 	ep, err := s.Store.EndpointByTokenHash(h)
 	if err != nil {
-		return nil, "", "unrecognised enrollment token for login " + login
+		return nil, "", s.staleLoginTokenWhy(h, login)
 	}
 	if ep.ID == mach.ID {
 		return nil, "", "the machine's token cannot speak for a login"
@@ -154,6 +155,22 @@ func (s *Server) loginEndpoint(mach store.Endpoint, login string, hp control.Hel
 		ep.OSUser = login
 	}
 	return ep, h, ""
+}
+
+// staleLoginTokenWhy is the refusal for a login token that resolves to no
+// endpoint. One the login was reissued away from (claude-fleet#2501) says so,
+// when, and the fix on this machine — the machine already proved itself, so
+// naming the reissue tells a prober nothing; anything else stays vague.
+func (s *Server) staleLoginTokenWhy(h, login string) string {
+	why := "unrecognised enrollment token for login " + login
+	rt, err := s.Store.ReissuedToken(h)
+	if err != nil {
+		return why
+	}
+	return fmt.Sprintf("%s: this login re-registered with the hub at %s and was issued a new node token, "+
+		"but this machine's node program still holds the old one — on this machine run: "+
+		"sudo fleet-node-supervisor.py account adopt %s --rejoin (or ask an admin: fleet hub accounts relogin)",
+		why, rt.RotatedAt.UTC().Format("2006-01-02 15:04 UTC"), login)
 }
 
 // endpointHost is the machine an endpoint is on: the name it reports, else

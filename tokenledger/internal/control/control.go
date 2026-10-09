@@ -448,9 +448,15 @@ type Welcome struct {
 // looks like right now.
 type Heartbeat struct {
 	Hostname string `json:"hostname"`
-	OSUser   string `json:"os_user,omitempty"`
-	OS       string `json:"os,omitempty"`
-	Arch     string `json:"arch,omitempty"`
+	// LoginsRefused is the machine link's own word (claude-fleet#2501):
+	// login → the hub's WRONG_LOGIN for its last hello, for every login of
+	// the machine whose lane the hub will not take (a token reissued away,
+	// an endpoint retired). Absent when every lane is up, and from a plain
+	// agent or an older machine agent.
+	LoginsRefused map[string]string `json:"logins_refused,omitempty"`
+	OSUser        string            `json:"os_user,omitempty"`
+	OS            string            `json:"os,omitempty"`
+	Arch          string            `json:"arch,omitempty"`
 
 	// Load1 is the one-minute load average; NCPU the logical core count. Both
 	// zero when the platform would not say.

@@ -169,6 +169,14 @@ test('machines: one link for the machine, its logins listed under it (claude-fle
   assert.equal(machineCards({ machines: [{ hostname: 'm5', status: 'online' }] })[0].links, null);
 });
 
+test('machines: a login whose lane the hub refuses is named on its card (claude-fleet#2501)', () => {
+  const why = 'unrecognised enrollment token for login verky: this login re-registered';
+  const [m] = machineCards({ machines: [{ hostname: 'mini2', status: 'online', links: 1, logins_refused: { verky: why } }] });
+  assert.deepEqual(m.refused, { verky: why });
+  // an older hub says nothing
+  assert.deepEqual(machineCards({ machines: [{ hostname: 'm5', status: 'online' }] })[0].refused, {});
+});
+
 test('machines: the admin\'s short name labels the card, the hostname stays the action\'s (claude-fleet#1706)', () => {
   const ms = machineCards({ machines: [
     { hostname: 'macmini', alias: 'm5', status: 'online' },

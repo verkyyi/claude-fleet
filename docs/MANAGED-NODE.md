@@ -121,6 +121,17 @@ PUT 的请求体就是上面可写的字段，外加可选的 `if_version`（读
 那个账号不上线、审计记 `machine_login REFUSED`；发给这条线上没有的账号的消息两端都答
 `WRONG_LOGIN`，不交给任何账号。
 
+**账号重登记不切断机器的线**（#2501，BREAK-IT `machine-lane-reissued`）：令牌在机器守护手里的账号，
+在入口上就只有这一份。这个账号正由机器连接服务时，设备重登记（旧版 `fleet host on` /
+`fleet login` 的 node-pass）**不换发**，答 409 `machine_managed`；别处换发了的，旧令牌再认
+10 分钟（`ReissueTokenGrace`）。过了宽限还拿旧令牌来的 hello，`WRONG_LOGIN` 写明「这个登录在
+… 重登记过」和修法。被拒的账号：节点写 `<state>/agent/<账号>/lane.json`、机器心跳带
+`logins_refused`（Machines 卡片红字「令牌失效 · 需要 relogin」），守护 `status` 一行
+`lane <账号> 令牌失效`、`status --check` 退 3、doctor `node` 行 WARN。修：
+`sudo fleet-node-supervisor.py account adopt <账号> --rejoin`——以这个账号的设备密钥
+（`fleet-login.py node-pass`，降权到它）向入口要新通行证，写进凭据库与 `logins/<账号>.env`，
+节点程序重读后上线；不要管理员的浏览器会话（设备没登记过就先以这个账号 `fleet login` 一次）。
+
 **以账号身份跑**：每个账号是进程里一个租户；它启动的每条命令（`fleet-control.py`、
 开号脚本、中继、git、tailscale）降权到这个账号——uid / gid / 附属组、`HOME` / `USER` /
 `LOGNAME`、工作目录是它的家（`internal/agent/runas.go` `prepCmd`）；root 的机器程序遇到

@@ -107,10 +107,15 @@ func (s *Server) handleLoginNode(w http.ResponseWriter, r *http.Request) {
 	}
 	out, what, err := s.deviceNode(r, fp, host, req.OSUser, now)
 	var tn *trustedNameErr
+	var mm *machineManagedErr
 	switch {
 	case errors.As(err, &tn):
 		s.deviceAudit(store.DeviceNodePassRefused, fp, pid, pid, err.Error(), now)
 		refuseJSON(w, http.StatusConflict, "trusted_name", err.Error())
+		return
+	case errors.As(err, &mm):
+		s.deviceAudit(store.DeviceNodePassRefused, fp, pid, pid, err.Error(), now)
+		refuseJSON(w, http.StatusConflict, "machine_managed", err.Error())
 		return
 	case err != nil:
 		s.deviceAudit(store.DeviceNodePassRefused, fp, pid, pid, err.Error(), now)
@@ -130,6 +135,41 @@ type trustedNameErr struct{ name string }
 
 func (e *trustedNameErr) Error() string {
 	return fmt.Sprintf("a machine named %s is trusted on this hub; a login cannot register under its name — on that machine run: fleet node join", e.name)
+}
+
+// ReissueTokenGrace is how long a reissued node token's predecessor still
+// resolves (claude-fleet#2501): a second holder of the endpoint — the
+// machine's node program, an agent not yet restarted — is not cut off the
+// instant the login re-registers.
+const ReissueTokenGrace = 10 * time.Minute
+
+// machineManagedErr: a reissue for a login its machine's node program serves.
+type machineManagedErr struct{ osUser, host string }
+
+func (e *machineManagedErr) Error() string {
+	who := e.osUser
+	if who == "" {
+		who = "this login"
+	}
+	return fmt.Sprintf("%s on %s is run by the machine's node program, which holds its node token — a new one here would cut it off. "+
+		"Nothing was reissued; to renew it, on that machine run: sudo fleet-node-supervisor.py account adopt %s --rejoin", who, e.host, who)
+}
+
+// machineServing is the machine whose link serves endpoint id's login right
+// now ("" when none does on this replica).
+func (s *Server) machineServing(id string) string {
+	cur := s.nodes.get(id)
+	if cur == nil || cur.wire.machine() == "" {
+		return ""
+	}
+	for _, eid := range []string{cur.wire.machine(), id} {
+		if ep, err := s.Store.EndpointByID(eid); err == nil {
+			if host := s.endpointHost(*ep); host != "" {
+				return host
+			}
+		}
+	}
+	return cur.wire.machine()
 }
 
 // deviceNode is the device's node pass, and what it did ("linked" ·
@@ -160,11 +200,16 @@ func (s *Server) deviceNode(r *http.Request, fp, hostname, osUser string, now ti
 		}
 	}
 	if id, err := s.Store.DeviceNodeEndpoint(fp); err == nil {
+		if mach := s.machineServing(id); mach != "" {
+			// The login runs on its machine's node program, which holds
+			// the token this would replace (claude-fleet#2501).
+			return nil, "", &machineManagedErr{osUser: sanitizeJoinField(osUser), host: mach}
+		}
 		tok, err := MintToken()
 		if err != nil {
 			return nil, "", err
 		}
-		if err := s.Store.RotateEndpointToken(id, HashToken(tok)); err != nil {
+		if err := s.Store.RotateEndpointToken(id, HashToken(tok), now, ReissueTokenGrace); err != nil {
 			return nil, "", err
 		}
 		ep, err := s.Store.EndpointByTokenHash(HashToken(tok))

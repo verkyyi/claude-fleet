@@ -263,6 +263,8 @@ export function machineCards(snap) {
     desired: want[m.hostname] || null,
     // control connections and the logins they carry (claude-fleet#2333); links is null from an older hub
     links: typeof m.links === 'number' ? m.links : null, logins: (logins[m.hostname] || []).slice().sort(),
+    // logins whose lane the hub refuses on the machine's node program (claude-fleet#2501): login → why
+    refused: (m.logins_refused && typeof m.logins_refused === 'object') ? m.logins_refused : {},
   })).sort((a, b) => (rank[a.status] ?? 3) - (rank[b.status] ?? 3) || a.label.localeCompare(b.label));
 }
 
