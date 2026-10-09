@@ -319,6 +319,11 @@ func TestNodeClientReadsOwnersLease(t *testing.T) {
 	if _, o := read(n["alice4"].token); o.Lease == nil || o.Lease.Via != "" {
 		t.Fatalf("bad via kept: %+v", o.Lease)
 	}
+	// The client on a managed machine (#2720) says so.
+	h.srv.clientLeases.acquire(alice, ClientLeaseRequest{Device: "y", Via: "node-hosted", Host: "m5", Caps: []string{"link"}}, now.Add(3*time.Second))
+	if _, o := read(n["alice4"].token); o.Lease == nil || o.Lease.Via != "node-hosted" || o.Lease.Host != "m5" {
+		t.Fatalf("node-hosted via: %+v", o.Lease)
+	}
 	// The operator's own login (owned by nobody) reads the operator's lease.
 	h.srv.clientLeases.acquire("operator", ClientLeaseRequest{Device: "op-mac"}, now)
 	if _, o := read(n["verk4"].token); o.Lease == nil || o.Lease.Device != "op-mac" {

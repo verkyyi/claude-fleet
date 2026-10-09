@@ -58,6 +58,9 @@ itself, never a key or a name someone gave it:
                  device at the far end of an ssh: link (a link to tap); an
                  iTerm2 adds iterm2.
   host           the machine this client runs on.
+  node-hosted    the client on a managed machine (FLEET_NODE_HOSTED=1, issue
+                 #2720): via node-hosted, caps link only — show / open print a
+                 path or a link.
 
 A test identity (issue #1931, EPIC #1906 C12) — a session's test or drill is
 never the person: `--test-identity` / FLEET_CLIENT_IDENTITY=test asks at the
@@ -274,6 +277,11 @@ def where(ask=False):
         dev = dev or platform.node().split(".", 1)[0]
     dev = os.environ.get("FLEET_CLIENT_DEVICE", "").strip() or dev or "未知设备"
     term = terminal(ask)
+    if os.environ.get("FLEET_NODE_HOSTED", "").strip() == "1":
+        # the client on a managed machine (#2720): no browser, no download of its
+        # own — a link or a path printed is what it can do
+        return {"device": dev, "os": osw, "terminal": term, "via": "node-hosted", "host": this_host(),
+                "caps": ["link"]}
     if "iterm" in term.lower():
         caps.append("iterm2")
     return {"device": dev, "os": osw, "terminal": term, "via": via, "host": this_host(), "caps": caps}

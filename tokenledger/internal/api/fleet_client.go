@@ -306,9 +306,10 @@ func (t *clientLeaseTable) fill(l *ClientLease, req ClientLeaseRequest) {
 	}
 }
 
-// clientVias and clientCaps are the words a client may report (C6, #1716).
+// clientVias and clientCaps are the words a client may report (C6, #1716;
+// node-hosted: the client on a managed machine, #2720).
 var (
-	clientVias = map[string]bool{"local": true, "tailnet": true, "lan": true, "public": true}
+	clientVias = map[string]bool{"local": true, "tailnet": true, "lan": true, "public": true, "node-hosted": true}
 	clientCaps = map[string]bool{"open_url": true, "show_file": true, "notify": true, "link": true, "iterm2": true}
 )
 

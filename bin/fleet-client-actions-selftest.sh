@@ -28,7 +28,8 @@
 #                         hub's (via public), 「回到电脑上再看」 + links.pending
 #                         (neither); a page elsewhere → its own URL
 #   G. a file           — fleet-show.sh → show_file; the client fetches it over the
-#                         master (`cat`) into Downloads and opens it
+#                         master (`cat`) into Downloads and opens it; the client on
+#                         a managed machine (via node-hosted, #2720) prints its path
 #   H. the key          — fleet-client-lease.py writes the acquire's action key
 #                         0600 to FLEET_CLIENT_KEY_FILE and never prints it
 # python3 absent → SKIP (exit 0). Exit 0 = pass.
@@ -351,6 +352,13 @@ eq "G fleet-open <file> → sent:client" "sent:client" "$r"
 where '["link"]' tailnet
 reset; signed "{\"kind\":\"show_file\",\"file\":\"$WORK/shot.png\",\"name\":\"shot.png\"}"
 has "G a phone: the file waits for the computer" "$(cat "$CL/links.shown" 2>/dev/null)" "文件 shot.png（在 otherbox 上）：回到电脑上再看"
+where '["link"]' node-hosted
+reset; signed "{\"kind\":\"show_file\",\"file\":\"$WORK/shot.png\",\"name\":\"shot.png\"}"
+has "G the client on a managed machine (#2720): the path, printed" "$(cat "$CL/links.shown" 2>/dev/null)" "文件：otherbox:$WORK/shot.png"
+has "G … logged path" "$(cat "$CL/actions.log")" "show_file	path"
+reset; signed '{"kind":"open_url","rport":8765,"path":"/d/x/","links":{"tailnet":"https://box.tail0.ts.net/d/x/"}}'
+has "G … a page: a link, never an open" "$(cat "$CL/links.shown" 2>/dev/null)" "打开：https://box.tail0.ts.net/d/x/"
+eq "G … nothing opened" "" "$(cat "$WORK/opened" 2>/dev/null)"
 
 # --- H. the key: written 0600 by the acquire, never printed ----------------------------
 rm -f "$WORK/k"

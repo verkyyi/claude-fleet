@@ -50,7 +50,9 @@
              「回到电脑上再看」 and the link kept in links.pending.
   show_file  fetched from that machine (`cat` over the master) — into
              ~/Downloads and opened (show_file); through fleet-show.sh (iterm2,
-             --inline kept); else 「回到电脑上再看」 + links.pending.
+             --inline kept); the client on a managed machine (via node-hosted,
+             #2720): its path printed at the bottom; else 「回到电脑上再看」 +
+             links.pending.
   notify     iterm2: OSC 9 to the terminal (iTerm2 posts it); notify: the
              system's own (osascript / notify-send); else a line at the bottom.
 
@@ -506,6 +508,10 @@ class Client:
             return True, "link:" + src
         if kind == "show_file":
             name = os.path.basename(a.get("name") or a.get("file") or "file")
+            if via == "node-hosted" and "show_file" not in caps and "iterm2" not in caps:
+                # the client on a managed machine (#2720): the path, printed
+                self.bottom_line("文件：%s:%s" % (a.get("machine"), a.get("file")))
+                return True, "path"
             if "show_file" not in caps and "iterm2" not in caps:
                 return self.later("文件 %s（在 %s 上）" % (name, a.get("machine")), "%s:%s" % (a.get("machine"), a.get("file")))
             if "show_file" in caps:

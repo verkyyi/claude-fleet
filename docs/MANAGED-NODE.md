@@ -426,14 +426,23 @@ BREAK-IT 行 `service-handwritten`。只点名接管过的登录（`logins/<登�
 次日 07:00 的 `daily-<日期>` 会话由守护开出；手机收到一条测试短信推送。`~/daily-report/run.sh --now`
 仍可手动补跑一版。
 
-## 14. 托管机器不是谁的客户端（#2702）
+## 14. 托管机器不是谁的常驻客户端（#2702 · #2720）
 
 人在自己的设备上跑 `fleet`（客户端壳）；托管机器只跑会话和后台服务。所以在托管机器上
 （有 `/var/db/fleet-node/machine.env`）：
 
-- **`fleet` 不开客户端**：`fleet`、`fleet <机器>`、`fleet shell`、`fleet claude|codex`（`--here` 除外）只答一行
-  「这是托管机器，请在你自己的设备上运行 fleet」，退出码 3；这台上还留着客户端时再说怎么接回
-  （`FLEET_NODE_CLIENT=1 fleet`）或清掉。其余命令照旧；会话里的测试身份（`FLEET_CLIENT_IDENTITY=test`）照开。
+- **SSH 登录不自动开客户端**；但人**显式**敲 `fleet`（或 `fleet <机器>`）时，进入「节点上的客户端」（#2720）：
+  先一行「客户端在 <机器> 上运行；平时请在自己设备上用 fleet」，然后照常起客户端——给手边只有手机 Termius、
+  别人的电脑、只能 SSH 的场合用。它和设备上的客户端是**同一份代码**：从机器运行时 `current/bin` 跑（不往
+  `~/.cache/claude-fleet/shell` 复制镜像、不装壳的 LaunchAgent、不自己检查更新、不写 iTerm2 配置），版本随机器
+  运行时走；缓存是 `$TMPDIR/fleet-node-client-<uid>` 临时目录。进程只在这次 SSH 期间存在：`fleet quit`、分离
+  （prefix d）、断开 SSH（SIGHUP）都把它全部退掉，连临时缓存一起删；SSH 无声断掉时 keeper 发现
+  `FLEET_NODE_HOSTED_IDLE`（30 秒）没有终端挂着就自己退。身份是这个登录的证书 / `fleet login`；`where` 报告
+  `via=node-hosted`、能力只有「给链接」，`show` / `open` 在底行打印路径 / 链接。会话列表与设备上一致：本机会话
+  是本机行，别机行走入口缓存；没有入口地址就说「先 fleet login」，没有 #1712「读本机」的特例。
+  `fleet claude|codex`（`--here` 除外）答一行、退出码 3（单会话视图跟着设备上的客户端走）。会话里的测试身份
+  （`FLEET_CLIENT_IDENTITY=test`）和 `FLEET_NODE_CLIENT=1`（#2702 之前留下的常驻客户端）照旧走设备客户端的路；
+  还留着 `~/.cache/claude-fleet/shell` 时再提示怎么清掉。
 - **SSH 登录是一个普通 shell**：`shell/fleet-login.zsh` 在这里不出横幅、不开客户端；`fleet-login-new.sh` 开号时
   `~/.zshrc` 只写 `~/.local/bin` 的 PATH 行（没有首登块、没有 cw.zsh），fleet 由它当场以新登录的身份拉起（8b）。
 - **一次性清理**：`sudo fleet-node-shell-retire.sh --login <登录> [--dry-run]`——先 `fleet quit`（把入口租约还回去），
@@ -443,6 +452,7 @@ BREAK-IT 行 `service-handwritten`。只点名接管过的登录（`logins/<登�
 - **清扫点名**：整机守护的清扫把「家目录里还有壳 / `~/.zshrc` 还有钩子」的登录记进 `sweep.clientshell`，`status`
   每个一行 `clientshell <登录> …`（带上面那条命令）；`fleet doctor --machine` 一行 `shell`：都没有 PASS，有就 WARN
   （不算 FAIL，不触发整机回退）。root 当场看每个家目录，别的登录读上一轮清扫的记录。
+  节点上的客户端（#2720）只在 `$TMPDIR` 里、只在一次 SSH 期间存在，不在点名之列。
 - **只看托管清单**：清扫的手写启动项、`clientshell` 和 doctor 的 `shell` 行只看整机守护接管过的登录
   （`/var/db/fleet-node/logins/<登录>.env` 里登记的）。管理员（例：verkyyi）、不用 fleet 的本地用户一律不扫、不点名、
   不判断——机器上有其他管理员或非托管账号是正常状态。`shell` 行写明「托管登录 N 个，其余账号不在清单内不扫」。
