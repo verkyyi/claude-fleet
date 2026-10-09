@@ -2,6 +2,7 @@
 # fleet-stable.sh show | move [<sha>] [--dry-run] [--allow-no-checks] [--force]
 #                 [--dir <checkout>] [--remote <name>] [--branch <trunk>]
 #                 [--repo <owner/name>] [--timeout <s>] [--macos-timeout <s>]
+#                 [--ignore-check <name>]
 #   — the "stable" mark every install follows (issue #1118, EPIC #1117 C1).
 #
 # Merging to master used to be the same event as "this reaches all my machines"
@@ -21,7 +22,10 @@
 #               success / neutral / skipped. Pending = not green. ZERO check runs
 #               is refused too — push CI is path-filtered, so a docs-only commit
 #               has none; `--allow-no-checks` accepts that deliberately. The
-#               `macOS shard *` runs are not counted here: gate 5 owns them;
+#               `macOS shard *` runs are not counted here: gate 5 owns them, and
+#               neither is the one run `--ignore-check <name>` names exactly —
+#               the caller's own job, when the caller is CI (stable-auto.yml): it
+#               runs on the commit it moves to and is never finished yet;
 #            4. an old session of the current stable keeps working on the target
 #               (issue #2075, EPIC #2074 C2): bin/fleet-oldcfg-replay.py replays
 #               stable's hook table, the mod's tool list and the MCP servers
@@ -75,14 +79,14 @@ set -u
 
 BIN_DIR=$(cd "$(dirname "$0")" && pwd)
 dir="$(cd "$BIN_DIR/.." && pwd)"
-remote=origin branch=master repo="" timeout=15 dry=0 allow_nochecks=0 force=0 macos_timeout=3600
+remote=origin branch=master repo="" timeout=15 dry=0 allow_nochecks=0 force=0 macos_timeout=3600 ignore_check=""
 cmd="" target=""
 TAG=stable
 
 die() { printf 'fleet-stable: %s\n' "$*" >&2; exit 2; }
 refuse() { printf 'fleet-stable: REFUSED — %s\n' "$*" >&2; exit 3; }
 
-[ "$#" -gt 0 ] || { sed -n '2,66p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+[ "$#" -gt 0 ] || { sed -n '2,70p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 while [ "$#" -gt 0 ]; do
   case "$1" in
     show|move)         [ -z "$cmd" ] || die "one subcommand only"; cmd="$1" ;;
@@ -95,7 +99,8 @@ while [ "$#" -gt 0 ]; do
     --repo)            shift; repo="${1:-}" ;;
     --timeout)         shift; timeout="${1:-15}" ;;
     --macos-timeout)   shift; macos_timeout="${1:-3600}" ;;
-    -h|--help)         sed -n '2,66p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --ignore-check)    shift; ignore_check="${1:-}" ;;
+    -h|--help)         sed -n '2,70p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*)                die "unknown flag $1" ;;
     *)                 [ "$cmd" = move ] && [ -z "$target" ] || die "unexpected argument $1"
                        target="$1" ;;
@@ -294,7 +299,13 @@ do_move() {
   runs=$(check_runs "$slug" "$new") || die "could not read check runs for $(short "$new") on $slug (gh auth?)"
   # The macOS shards are gate 5's (issue #2286): a push run a later push cancelled
   # is no verdict, and a running one is waited for there, not refused here.
-  runs=$(printf '%s\n' "$runs" | awk 'NF && !($3 == "macOS" && $4 == "shard")')
+  # So is the one run --ignore-check names (the CI job running this move).
+  runs=$(printf '%s\n' "$runs" | awk -v ign="$ignore_check" '
+    NF && !($3 == "macOS" && $4 == "shard") {
+      n = $0; sub(/^[^ ]+ [^ ]+ /, "", n)
+      if (ign != "" && n == ign) next
+      print
+    }')
   bad=$(printf '%s\n' "$runs" | awk 'NF && !($1=="completed" && ($2=="success" || $2=="neutral" || $2=="skipped"))')
   total=$(printf '%s\n' "$runs" | awk 'NF' | wc -l | tr -d ' ')
   if [ -n "$bad" ]; then

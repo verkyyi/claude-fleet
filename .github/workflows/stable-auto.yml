@@ -1,0 +1,102 @@
+# Move `stable` by itself once the BSD half is green — the operator no longer has
+# to run `fleet-stable.sh move` by hand after every merge.
+#
+# A finished, successful run of selftests (macOS) on master is the trigger: its
+# commit (head_sha; a dispatch's `@ <sha>` title names the commit it ran on) is
+# the target. The job first waits for that commit's OTHER check runs to finish
+# (a hub-deploy still waiting out its quiet window, a late shard), then runs the
+# one mover, `bin/fleet-stable.sh move <sha> --ignore-check "move stable"` —
+# every gate as by hand: on trunk, forward only, CI all green, the old-session
+# replay, the macOS run, release.json. Only its own job is passed over (it runs on
+# the commit it moves to and is never finished yet). No --force, ever: a refusal
+# turns the run red and leaves stable where it was; the operator decides.
+#
+# A newer master than the target is fine — stable just moves less far, and the
+# next green macOS run moves it the rest. Moves are serialised (concurrency) and
+# the script's --force-with-lease keeps two from both winning anyway.
+#
+# Off switch: repository variable STABLE_AUTO_MOVE=off. The tag is pushed with
+# the workflow's own GITHUB_TOKEN (contents: write; no tag ruleset on this repo);
+# a tag pushed that way triggers no other workflow, and nothing here needs one —
+# the hub follows `stable` by polling GitHub.
+name: stable auto-move
+
+on:
+  workflow_run:
+    workflows: ['selftests (macOS)']
+    types: [completed]
+    branches: [master]
+
+permissions:
+  contents: write
+  actions: read
+  checks: read
+
+concurrency:
+  group: stable-auto-move
+  cancel-in-progress: false
+
+jobs:
+  move:
+    name: move stable
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      vars.STABLE_AUTO_MOVE != 'off'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+
+      - name: the target commit
+        id: target
+        env:
+          EVENT: ${{ github.event.workflow_run.event }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          TITLE: ${{ github.event.workflow_run.display_title }}
+        run: |
+          sha=$HEAD_SHA
+          if [ "$EVENT" = workflow_dispatch ]; then
+            case "$TITLE" in *' @ '*) sha=${TITLE##* @ } ;; esac
+          fi
+          case "$sha" in *[!0-9a-f]*|'') echo "::error::no commit sha in the triggering run ($EVENT: $TITLE)"; exit 1 ;; esac
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "target: $sha (from a $EVENT run: $TITLE)"
+
+      - name: wait for the target's other checks
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.target.outputs.sha }}
+        run: |
+          # Up to 45 minutes; the macOS shards are the mover's own gate and this
+          # job is ours — neither is waited for.
+          for i in $(seq 1 90); do
+            pending=$(gh api --paginate "repos/$GITHUB_REPOSITORY/commits/$SHA/check-runs?per_page=100" \
+              --jq '.check_runs[] | select(.status != "completed") | .name' |
+              grep -v -e '^macOS shard ' -e '^move stable$' || true)
+            [ -z "$pending" ] && { echo "no other check is still running on $SHA"; exit 0; }
+            [ "$i" = 1 ] && printf 'waiting for:\n%s\n' "$pending"
+            sleep 30
+          done
+          printf 'still running after 45 minutes:\n%s\n' "$pending"
+          # Fall through: the mover refuses on them and says which.
+
+      - name: move stable
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.target.outputs.sha }}
+        run: |
+          set +e
+          sh bin/fleet-stable.sh move "$SHA" --dir . --repo "$GITHUB_REPOSITORY" \
+            --ignore-check "move stable" > out.txt 2>&1
+          rc=$?
+          cat out.txt
+          {
+            echo "### stable auto-move → \`${SHA:0:7}\`"
+            echo '```'
+            cat out.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit $rc
