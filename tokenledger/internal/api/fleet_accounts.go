@@ -54,6 +54,13 @@ func (s *Server) FleetScope(r *http.Request) (func(hostname, osUser string) bool
 	if pid == "" || roleOf(r.Context()) == roleAdmin {
 		return nil, nil
 	}
+	return s.ownScope(pid)
+}
+
+// ownScope is pid's own (machine, login) pairs, whatever their role: the cut
+// FleetScope makes for a user, and every "mine" view makes for an admin too
+// (我的额度, claude-fleet#2517).
+func (s *Server) ownScope(pid string) (func(hostname, osUser string) bool, error) {
 	accts, err := s.Store.FleetAccounts(pid)
 	if err != nil {
 		return nil, err

@@ -241,3 +241,42 @@ export function parseImport(text) {
   const bundle = v.bundle && typeof v.bundle === 'object' ? v.bundle : v;
   return bundle;
 }
+
+// ── 我的额度 (claude-fleet#2517) ─────────────────────────────────────────
+
+/** quotaState is a /v1/me/quota row's status chip: [tone, text]. Used up
+ *  says which window — the weekly one is the wait people ask about. */
+export function quotaState(r) {
+  const full = (p) => p != null && Number(p) >= 100;
+  switch (r && r.state) {
+    case 'ok': return ['ok', t('ui.q.ok')];
+    case 'paused': return ['', t('ui.q.paused')];
+    case 'limited':
+      return ['bad', t(full(r.used_7d_pct) ? 'ui.q.limitedWeek' : full(r.used_5h_pct) ? 'ui.q.limited5h' : 'ui.q.limited')];
+    default: return ['', t('ui.q.unknown')];
+  }
+}
+
+const qLevel = (p) => (p >= 100 ? 'bad' : p >= 70 ? 'warn' : '');
+
+function qCell(p) {
+  if (p == null) return '<td class="mono">—</td>';
+  const n = Math.max(0, Math.min(100, Math.round(Number(p))));
+  return `<td class="mono"><div class="win"><b>${n}%</b><div class="track"><i class="${qLevel(n)}" style="width:${n}%"></i></div></div></td>`;
+}
+
+/** quotaTable draws /v1/me/quota: one row per subscription, or the empty
+ *  state when the hub has given the person none. */
+export function quotaTable(rows) {
+  const list = Array.isArray(rows) ? rows : [];
+  if (!list.length) {
+    return `<div class="empty"><b>${esc(t('ui.q.empty'))}</b><span>${esc(t('ui.q.emptyHint'))}</span></div>`;
+  }
+  const th = ['ui.q.col.sub', 'ui.q.col.h5', 'ui.q.col.h7', 'ui.q.col.reset', 'ui.q.col.state'].map((k) => `<th>${esc(t(k))}</th>`).join('');
+  const body = list.map((r) => {
+    const [tone, text] = quotaState(r);
+    return `<tr class="quota-row"><td><b>${esc(r.subscription || '—')}</b></td>${qCell(r.used_5h_pct)}${qCell(r.used_7d_pct)}` +
+      `<td>${esc(r.resets_at ? fmtDate(r.resets_at) : '—')}</td><td><span class="chip ${tone}">${esc(text)}</span></td></tr>`;
+  }).join('');
+  return `<div class="tw"><table class="t quota"><thead><tr>${th}</tr></thead><tbody>${body}</tbody></table></div>`;
+}

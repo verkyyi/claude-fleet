@@ -560,6 +560,9 @@ func (s *Server) routes() *routeMux {
 	// Who the gate admitted, for the shared page header (claude-fleet#1467).
 	// Unconditional: the header is on every hub's dashboard, fleet module or not.
 	mux.Handle("/v1/me", s.viewerOnly(http.HandlerFunc(s.handleMe)))
+	// 我的额度 (claude-fleet#2517): the API and its page.
+	mux.Handle("/v1/me/quota", s.viewerOnly(http.HandlerFunc(s.handleMeQuota)))
+	mux.Handle("/quota", s.viewerOnly(http.HandlerFunc(s.serveQuotaPage)))
 	mux.Handle("/v1/collectors", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleCollectors))))
 	mux.Handle("/v1/account-usage", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleAccountUsage))))
 	mux.Handle("/v1/limits", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleLimits))))

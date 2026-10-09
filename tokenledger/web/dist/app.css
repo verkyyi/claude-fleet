@@ -320,3 +320,6 @@ pre.out { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/
 }
 @media (max-width: 520px) { .g4 { grid-template-columns: minmax(0,1fr); } .kv { grid-template-columns: minmax(0,1fr); } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
+/* 我的额度 (claude-fleet#2517): a window's percent over its bar, in a table cell. */
+table.quota .win { min-width: 110px; gap: 4px; }
+table.quota .win b { font: 500 12.5px var(--f-mono); }

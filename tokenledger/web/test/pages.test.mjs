@@ -8,7 +8,7 @@ import { readFileSync } from 'node:fs';
 import {
   dayKeys, dayTokens, stack, delta, bars, areaChart, niceMax,
   sessionRows, counts, filterRows, running, attention, stateOf,
-  activeDevices, looksLikeKey, bundleItems, parseImport,
+  activeDevices, looksLikeKey, bundleItems, parseImport, quotaTable, quotaState,
 } from '../dist/lib/pages.js';
 import { useLocale } from '../dist/lib/i18n.js';
 import { en } from '../dist/lib/i18n/en.js';
@@ -148,7 +148,7 @@ test('import takes an export back, and refuses what is not one', () => {
 // widen them. No page names another person or asks for a by-account / by-team
 // cut, and only an admin's request carries a principal.
 test('no page asks the hub for someone else\'s rows', () => {
-  for (const f of ['overview.js', 'sessions-page.js', 'connect.js', 'config.js', 'app-shell.js']) {
+  for (const f of ['overview.js', 'sessions-page.js', 'connect.js', 'config.js', 'quota.js', 'app-shell.js']) {
     const src = readFileSync(new URL('../dist/' + f, import.meta.url), 'utf8');
     assert.doesNotMatch(src, /by=(account|team)/, `${f} asks for a by-account/team cut`);
     assert.doesNotMatch(src, /[?&]user=/, `${f} filters by another user`);
@@ -164,10 +164,42 @@ test('no page asks the hub for someone else\'s rows', () => {
 // no English sentence typed into a template, and no t() key the dictionary
 // lacks (the parity test in i18n.test.mjs then holds zh-CN to it).
 test('the app pages print only dictionary words', () => {
-  for (const f of ['overview.js', 'sessions-page.js', 'connect.js', 'config.js', 'app-shell.js', 'lib/shell.js', 'lib/pages.js']) {
+  for (const f of ['overview.js', 'sessions-page.js', 'connect.js', 'config.js', 'quota.js', 'app-shell.js', 'lib/shell.js', 'lib/pages.js']) {
     const src = readFileSync(new URL('../dist/' + f, import.meta.url), 'utf8').replace(/^\s*(\/\/|\*|\/\*).*$/gm, '');
     const bare = src.match(/>[A-Z][a-z]+[ <.]/g) || [];
     assert.deepEqual(bare.filter((m) => !/>(Claude|Codex|GitHub)/.test(m)), [], `${f} types English into markup`);
     for (const [, key] of src.matchAll(/\bt\('(ui\.[\w.]*\w)'/g)) assert.ok(key in en, `${f}: t('${key}') is not in en.js`);
+  }
+});
+
+// 我的额度 (claude-fleet#2517): no subscription is the empty state that sends
+// the person to an admin; two are two rows, each with its windows, its reset
+// and a status that says which window ran out.
+test('quotaTable: the empty state, and one row per subscription', () => {
+  useLocale('zh-CN');
+  try {
+    for (const none of [[], null, undefined]) {
+      const html = quotaTable(none);
+      assert.match(html, /入口还没给你分配订阅/);
+      assert.match(html, /找管理员/);
+      assert.doesNotMatch(html, /<table/);
+    }
+    const rows = [
+      { subscription: 'icloud', provider: 'claude', used_5h_pct: 62, used_7d_pct: 31, resets_at: '2026-10-10T23:00:00Z', state: 'ok' },
+      { subscription: '24helpful', provider: 'claude', used_5h_pct: 100, used_7d_pct: 96, resets_at: '2026-10-10T23:00:00Z', state: 'limited' },
+    ];
+    const html = quotaTable(rows);
+    assert.equal((html.match(/class="quota-row"/g) || []).length, 2);
+    assert.match(html, /icloud/);
+    assert.match(html, /62%/);
+    assert.match(html, /可用/);
+    assert.match(html, /暂时用尽/);
+    assert.doesNotMatch(html, /入口还没给你分配订阅/);
+    assert.equal(quotaState({ state: 'limited', used_5h_pct: 40, used_7d_pct: 100 })[1], '本周用尽');
+    assert.equal(quotaState({ state: 'paused' })[1], '管理员已暂停');
+    assert.equal(quotaState({ state: 'unknown', used_5h_pct: null })[1], '还没有读数');
+    assert.match(quotaTable([{ subscription: 'x', used_5h_pct: null, used_7d_pct: null, state: 'unknown' }]), /—/);
+  } finally {
+    useLocale('en');
   }
 });

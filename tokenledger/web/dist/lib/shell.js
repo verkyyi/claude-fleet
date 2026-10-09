@@ -57,6 +57,8 @@ export const PAGES = Object.freeze([
   { id: 'overview', label: 'ui.nav.overview', icon: 'home', href: '/' },
   { id: 'sessions', label: 'ui.nav.sessions', icon: 'list', href: '/sessions' },
   { id: 'devices', label: 'ui.nav.devices', icon: 'key', href: '/connect' },
+  // 我的额度 (claude-fleet#2517).
+  { id: 'quota', label: 'ui.nav.quota', icon: 'card', href: '/quota' },
   { id: 'config', label: 'ui.nav.config', icon: 'sliders', href: '/config' },
   // The admin group (claude-fleet#1990).
   { id: 'subscriptions', label: 'ui.nav.subscriptions', icon: 'card', group: 'admin', href: '/subscriptions' },

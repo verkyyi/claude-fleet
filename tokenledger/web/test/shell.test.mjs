@@ -5,20 +5,20 @@ import assert from 'node:assert/strict';
 import { useLocale, fmtCompact, fmtDate, fmtAgo } from '../dist/lib/i18n.js';
 import { navFor, pageAllowed, isAdmin, viewer, fmtTokens, spark, ctxBar, liveLine, esc, titleOf, PAGES } from '../dist/lib/shell.js';
 
-const USER = ['overview', 'sessions', 'devices', 'config'];
+const USER = ['overview', 'sessions', 'devices', 'quota', 'config'];
 const ADMIN = [...USER, 'subscriptions', 'machines', 'people', 'settings', 'audit'];
 
-test('a user sees their four pages and no Admin group', () => {
+test('a user sees their own pages and no Admin group', () => {
   const nav = navFor(USER);
-  assert.deepEqual(nav.map((x) => x.id), ['overview', 'sessions', 'devices', 'config']);
+  assert.deepEqual(nav.map((x) => x.id), ['overview', 'sessions', 'devices', 'quota', 'config']);
   assert.ok(!nav.some((x) => x.heading), 'no Admin heading for a user');
-  assert.deepEqual(nav.map((x) => x.href), ['/', '/sessions', '/connect', '/config']);
+  assert.deepEqual(nav.map((x) => x.href), ['/', '/sessions', '/connect', '/quota', '/config']);
 });
 
 test('an admin also sees the Admin group: the five admin pages (#1990)', () => {
   const nav = navFor(ADMIN);
   const i = nav.findIndex((x) => x.heading === 'Admin');
-  assert.equal(i, 4);
+  assert.equal(i, USER.length);
   const admin = nav.slice(i + 1);
   assert.deepEqual(admin.map((x) => x.id), ['subscriptions', 'machines', 'people', 'settings', 'audit']);
   assert.deepEqual(admin.map((x) => x.href), ['/subscriptions', '/nodes', '/admin/users', '/admin/settings', '/admin/audit']);
