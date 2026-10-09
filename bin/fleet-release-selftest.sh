@@ -21,6 +21,11 @@
 #      log result=failed:machines; stable stays where ② put it.
 #   F. this machine's install-sync rejects the version (rolled-back) → stable is
 #      moved back on its own, exit 5, log result=rolled-back.
+#   G. (issue #2497) the doctor prints a `note: install …` advice line before its
+#      PASS install rows → ⑤ still passes; a FAIL install row after a PASS one →
+#      ⑤ stops. One machine of two arrives → ④ says 1/2 台到位, the other named.
+#   H. (issue #2497) a machine whose ssh version is the target but whose second
+#      login the hub hears behind is NOT there: ④ names `m4/verky2 仍在 <sha>`.
 set -uo pipefail
 
 BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -39,12 +44,12 @@ unset CCQUOTA_VIEWER_TOKEN CCQUOTA_HUB_URL FLEET_HUB_URL FLEET_RELEASE_MACHINES 
 
 git init -q --bare -b master "$d/origin.git" && git clone -q "$d/origin.git" "$d/seed" 2>/dev/null || { echo "FAIL  rig"; exit 1; }
 mkdir -p "$d/seed/.github/workflows"; echo 'name: selftests (macOS)' > "$d/seed/.github/workflows/selftests-macos.yml"
-for i in 1 2 3; do
+for i in 1 2 3 4 5; do
   echo "$i" > "$d/seed/f"; git -C "$d/seed" add -A && git -C "$d/seed" commit -qm "c$i" || exit 1
   git -C "$d/seed" rev-parse HEAD > "$d/c$i"
 done
 git -C "$d/seed" push -q origin HEAD:master || exit 1
-c1=$(cat "$d/c1") c2=$(cat "$d/c2") c3=$(cat "$d/c3")
+c1=$(cat "$d/c1") c2=$(cat "$d/c2") c3=$(cat "$d/c3") c4=$(cat "$d/c4") c5=$(cat "$d/c5")
 git --git-dir="$d/origin.git" update-ref refs/tags/stable "$c1"
 git clone -q "$d/origin.git" "$d/co" 2>/dev/null || exit 1
 stable() { git --git-dir="$d/origin.git" rev-parse refs/tags/stable; }
@@ -92,7 +97,17 @@ else
   echo "\$st" > "$d/localhead"
 fi
 SH
-printf '#!/bin/sh\necho "  PASS  fleet    x"\necho "  PASS  install  live at x — up to date with origin/master"\n' > "$d/doctor"
+# the doctor: an advice line naming install comes first (issue #2497), then the rows
+cat > "$d/doctor" <<SH
+#!/bin/sh
+echo "  PASS  fleet    x"
+echo "  note: install com.claude-fleet.pr-refresh (~15s, FLEET_PR_REFRESH_INTERVAL) for fast PR/CI status"
+echo "  INFO  install  x"
+echo "  PASS  install  live at x — up to date with origin/master"
+echo "  PASS  install  install-sync on — at stable x"
+[ -f "$d/doctorfail" ] && echo "  FAIL  install  live at x — dirty tree"
+exit 0
+SH
 chmod +x "$d/hubver" "$d/verof" "$d/kick" "$d/sync" "$d/doctor"
 echo "$c1" > "$d/localhead"
 
@@ -166,6 +181,48 @@ run --to "$c3"
 { [ "$RC" = 5 ] && has '自动退回' && [ "$(stable)" = "$c2" ]; } \
   && ok "F local rejection rolled stable back by itself" || bad "F rc=$RC stable=$(stable): $OUT"
 case "$(lastlog)" in *result=rolled-back*) ok "F logged rolled-back" ;; *) bad "F log: $(lastlog)" ;; esac
+
+# ── G. the doctor's advice line; ④'s N/M ──
+rm -f "$d/reject"; echo "$c2" > "$d/localhead"
+python3 - "$d/nodes.json" <<'PY2'
+import json, sys
+p = sys.argv[1]; d = json.load(open(p))
+d["machines"].append({"hostname": "m6host", "alias": "m6", "status": "online"})
+json.dump(d, open(p, "w"))
+PY2
+touch "$d/stuck.m6"; echo "$c1" > "$d/ver.m6"
+run --to "$c3" --machines-timeout 2
+{ [ "$RC" = 5 ] && printf '%s\n' "$OUT" | grep '^④' | grep -q '1/2 台到位' && has 'm6（在'; } \
+  && ok "G one of two machines arrived: ④ says 1/2 台到位, names m6" || bad "G ④ count rc=$RC: $(printf '%s\n' "$OUT" | grep '④')"
+rm -f "$d/stuck.m6"
+run --to "$c3"
+{ [ "$RC" = 0 ] && printf '%s\n' "$OUT" | grep '^④' | grep -q '2/2 台到位' && printf '%s\n' "$OUT" | grep '^⑤' | grep -q 'doctor install PASS' \
+  && ! has 'note: install'; } \
+  && ok "G a note: install advice line does not fail ⑤; ④ says 2/2" || bad "G ⑤ with advice line rc=$RC: $OUT"
+case "$(lastlog)" in *result=released*|*result=verified*) ok "G logged released" ;; *) bad "G log: $(lastlog)" ;; esac
+touch "$d/doctorfail"
+run --to "$c3"
+{ [ "$RC" = 5 ] && printf '%s\n' "$OUT" | grep '^⑤' | grep -q 'FAIL  install  live at x — dirty tree'; } \
+  && ok "G a FAIL install row after PASS ones stops ⑤, named" || bad "G FAIL row rc=$RC: $OUT"
+rm -f "$d/doctorfail"
+
+# ── H. every login on a machine, not just the one ssh reaches ──
+macgreen "$c4"
+python3 - "$d/nodes.json" "$c1" <<'PY2'
+import json, sys
+p, old = sys.argv[1], sys.argv[2]; d = json.load(open(p))
+d["nodes"].append({"hostname": "m4host.local", "os_user": "verky2", "status": "online",
+                   "fleet_version": old, "last_heartbeat": "2026-10-07T00:00:00Z"})
+d["nodes"].append({"hostname": "m4host.local", "os_user": "fleet-node", "machine_link": True,
+                   "fleet_version": old, "last_heartbeat": "2026-10-07T00:00:00Z"})
+json.dump(d, open(p, "w"))
+PY2
+run --to "$c4" --machines-timeout 2
+{ [ "$RC" = 5 ] && has "m4/verky2 仍在 ${c1:0:7}" && printf '%s\n' "$OUT" | grep '^④' | grep -q '1/2 台到位' \
+  && [ "$(cat "$d/ver.m4")" = "$c4" ] && ! has 'fleet-node'; } \
+  && ok "H m4 at the target over ssh but its login verky2 behind: not arrived, named" || bad "H rc=$RC: $OUT"
+run --to "$c4" --dry-run
+has "m4/verky2 仍在 ${c1:0:7}" && ok "H --dry-run names the login behind" || bad "H dry-run: $(printf '%s\n' "$OUT" | grep "^④")"
 
 [ "$fails" -eq 0 ] && { echo "PASS fleet-release-selftest"; exit 0; }
 echo "FAIL fleet-release-selftest: $fails"; exit 1

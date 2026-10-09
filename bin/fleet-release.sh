@@ -44,12 +44,16 @@
 #             tick); a managed machine's install-sync is off and the kick is a
 #             no-op there — its updater ticks every 5 minutes and follows the
 #             hub's stable (③), so it lands within about ten. Up to --machines-timeout (default 900 s); the ones that did
-#             not follow are named.
+#             not follow are named. A machine is there only when EVERY login
+#             the hub hears on it (its own install, not a managed login's) also
+#             reports the target (issue #2497) — one behind is named
+#             `<machine>/<login> 仍在 <sha>`. Said as `N/M 台到位`.
 #   ⑤ 本机    this machine's install-sync run now (the live install's own
 #             bin/fleet-install-sync.sh — its EPIC gate, checks and rollback
 #             unchanged; a tick the daemon holds is retried up to --local-timeout,
 #             default 600 s), then its state must say head = the target and the
-#             live doctor's `install` row must PASS (a WARN that only says master
+#             live doctor's `install` rows — those led by PASS/WARN/FAIL, never
+#             a `note: install …` advice line — must PASS (a WARN that only says master
 #             has moved on past the target counts as a pass, and is said).
 #   ⑥ 回退    `--rollback` moves stable BACK to the version before the last
 #             release (logs/release.log), or to --to, with a lease on what it
@@ -374,8 +378,13 @@ nodes_json() {
   [ -n "$HUB" ] && [ -n "$VTOK" ] || return 1
   printf 'Authorization: Bearer %s\n' "$VTOK" | curl -fsS -m 10 -H @- "$HUB/v1/nodes" 2>/dev/null
 }
-# machine rows from /v1/nodes: `<name>\t<status>\t<version>` — name = alias or
-# the hostname's first label; version = the newest-heard login's fleet_version.
+# machine rows from /v1/nodes: `<name>\t<status>\t<version>\t<host>\t<logins>` —
+# name = alias or the hostname's first label; version = the newest-heard login's
+# fleet_version; logins = `<login>=<fleet_version>` (`,`-joined) of every login
+# heard online with its own install (issue #2497: the machine's version is ONE
+# login's — a credential-separated login whose install-sync is node-delegated
+# stays behind unseen). A machine link and a managed login are not counted: a
+# managed machine's logins do not move their ~/.claude/fleet (issue #2334).
 machine_rows() {
   python3 -c '
 import json, sys
@@ -383,7 +392,7 @@ try:
     d = json.load(sys.stdin)
 except Exception:
     sys.exit(1)
-names, out = {}, {}
+names, out, logins = {}, {}, {}
 for m in d.get("machines") or []:
     h = (m.get("hostname") or "").lower()
     if not h:
@@ -402,8 +411,13 @@ for n in d.get("nodes") or []:
     t = n.get("last_heartbeat") or ""
     if t >= out[h][2]:
         out[h][1], out[h][2] = n["fleet_version"], t
+    u = n.get("os_user") or ""
+    if (u and not n.get("machine_link") and n.get("role") != "managed"
+            and (n.get("status") or "online") == "online"):
+        logins.setdefault(h, {})[u] = n["fleet_version"]
 for h, (st, v, _) in sorted(out.items()):
-    print("%s\t%s\t%s\t%s" % (names[h], st, v, h.split(".")[0]))
+    ls = ",".join("%s=%s" % kv for kv in sorted(logins.get(h, {}).items()))
+    print("%s\t%s\t%s\t%s\t%s" % (names[h], st, v, h.split(".")[0], ls))
 '
 }
 # peer_ssh_opts <machine> — PEER=(ssh options) on a hub certificate; rc 1 = refused.
@@ -461,6 +475,18 @@ mver() {   # mver <machine> — its version now ('' unknown): asked over ssh,
   v=$(version_of "$1") && [ -n "$v" ] && { printf '%s\n' "$v"; return; }
   printf '%s\n' "$rows" | awk -F'\t' -v m="$1" '$1 == m || $4 == m {print $3; exit}'
 }
+lag_logins() {   # lag_logins <machine> <target> — `<machine>/<login>=<version>` per
+                 # login the hub hears on it that is not at <target>
+  local l
+  for l in $(printf '%s\n' "$rows" | awk -F'\t' -v m="$1" '$1 == m || $4 == m {gsub(",", " ", $5); print $5; exit}'); do
+    same "${l#*=}" "$2" || printf '%s/%s\n' "$1" "$l"
+  done
+}
+lag_say() {   # lag_say <lag_logins output> — 「m/u 仍在 <sha>」, space-joined
+  local l out=''
+  for l in $1; do out="$out ${l%%=*} 仍在 $(short "${l#*=}")"; done
+  printf '%s' "${out# }"
+}
 if [ -z "$MLIST" ]; then
   if [ -z "$src" ] && [ -z "$machines_arg" ]; then
     if [ -z "$HUB" ]; then step '④ 机器' "不适用 — 没有入口，也没有 --machines：只有本机"
@@ -473,19 +499,25 @@ if [ -z "$MLIST" ]; then
   fi
 elif [ "$dry" -eq 1 ]; then
   line=''
-  for m in $MLIST; do v=$(mver "$m"); line="$line $m=$(short "${v:-?}")"; done
+  for m in $MLIST; do
+    v=$(mver "$m"); line="$line $m=$(short "${v:-?}")"
+    lg=$(lag_logins "$m" "$new"); [ -z "$lg" ] || line="${line}（$(lag_say "$lg")）"
+  done
   step '④ 机器' "会$([ "$kick" -eq 1 ] && printf '叫醒各台的 install-sync，再')等它们都到 $(short "$new")（≤${mach_timeout}s）：${line# }${LOST:+ · 不等：$LOST}"
 else
   if [ "$kick" -eq 1 ]; then
     for m in $MLIST; do kick "$m" || note "${m}：叫不醒它的 install-sync（hub 证书 / ssh）— 等它自己 30 分钟的一拍"; done
   fi
-  t=$(date +%s) pending="$MLIST" R_MACH=''
+  t=$(date +%s) pending="$MLIST" R_MACH='' total=0 arrived=0
+  for m in $MLIST; do total=$((total + 1)); done
   while :; do
     if [ "$src" = hub ]; then nj=$(nodes_json) && rows=$(printf '%s' "$nj" | machine_rows) || :; fi
     left=''
     for m in $pending; do
       v=$(mver "$m")
-      if same "$v" "$new"; then R_MACH="${R_MACH:+$R_MACH,}$m@$(el "$t")s"; note "$m 到位（$(el "$t")s）"
+      # arrived = the machine AND every login the hub hears on it (issue #2497)
+      if same "$v" "$new" && [ -z "$(lag_logins "$m" "$new")" ]; then
+        arrived=$((arrived + 1)); R_MACH="${R_MACH:+$R_MACH,}$m@$(el "$t")s"; note "$m 到位（$(el "$t")s）"
       else left="$left $m"; fi
     done
     pending=$(printf '%s' "$left" | tr ' ' '\n' | awk 'NF')
@@ -495,11 +527,16 @@ else
   done
   if [ -n "$pending" ]; then
     lag=''
-    for m in $pending; do v=$(mver "$m"); R_MACH="${R_MACH:+$R_MACH,}$m:timeout"; lag="$lag ${m}（在 $(short "${v:-?}")）"; done
-    step '④ 机器' "${mach_timeout}s 后还没跟上：${lag# }"
+    for m in $pending; do
+      v=$(mver "$m"); R_MACH="${R_MACH:+$R_MACH,}$m:timeout"
+      if same "$v" "$new"; then
+        lag="$lag $(lag_say "$(lag_logins "$m" "$new")")（这个登录的 install-sync 没跟上；node-delegated 的要管理员登录的 tick）"
+      else lag="$lag ${m}（在 $(short "${v:-?}")）"; fi
+    done
+    step '④ 机器' "${arrived}/${total} 台到位；${mach_timeout}s 后还没跟上：${lag# }"
     stop failed:machines "有机器没跟上 stable $(short "$new")"
   fi
-  step '④ 机器' "$(printf '%s' "$MLIST" | wc -l | tr -d ' ') 台都到 $(short "$new")：$R_MACH${LOST:+ · 不等：$LOST}"
+  step '④ 机器' "${arrived}/${total} 台到位 $(short "$new")：$R_MACH${LOST:+ · 不等：$LOST}"
 fi
 
 # ── ⑤ 本机 ───────────────────────────────────────────────────────────────────
@@ -540,7 +577,14 @@ else
     esac
     stop failed:local "本机 install-sync：${res:-?}"
   fi
-  drow=$(run_cmd "${FLEET_RELEASE_DOCTOR_CMD:-}" "$DOCTOR" 2>/dev/null | awk '$2 == "install" && $1 != "INFO" {print; exit}')
+  # the install rows are the ones led by a doctor level word — never a
+  # `note: install …` advice line or INFO (issue #2497); several rows: the first
+  # that is not PASS speaks, all PASS passes
+  drow=$(run_cmd "${FLEET_RELEASE_DOCTOR_CMD:-}" "$DOCTOR" 2>/dev/null \
+    | awk '($1 == "PASS" || $1 == "WARN" || $1 == "FAIL") && $2 == "install" {
+             if ($1 != "PASS") { print; bad = 1; exit }
+             if (first == "") first = $0 }
+           END { if (!bad && first != "") print first }')
   lvl=$(printf '%s' "$drow" | awk '{print $1}')
   R_LOCAL="$(el "$t")s"
   case "$lvl" in
