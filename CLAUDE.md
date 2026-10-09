@@ -373,6 +373,23 @@ Do not install from memory: read the doc and work from it.
   only the attention count, the node conf's [76] hooks → `logs/attention.ndjson`,
   `fleet-steward-stats.sh`) · `1` the window too. `fleet-steward-selftest.sh`;
   BREAK-IT `steward-exited`, `steward-write-storm`.
+- **A stuck session gives its place back, and comes back as it was** (issue #2671,
+  EPIC #2668 C3). The steward's beat runs `bin/fleet_park.py` (`fleet-park.sh`): a
+  worker blocked `FLEET_PARK_BLOCKED_SECS` (900) or with no progress (state stamp,
+  transcript, branch head) for `FLEET_PARK_STALL_SECS` (2700) — never one with a
+  pending /loop or a background job — is asked over the peer channel to write its
+  handoff, then (written, or `FLEET_PARK_GRACE` 300 s on) its screen is kept, its
+  branch pushed, its window retired + stopped through `fleet-worker-stop.sh`
+  (worktree kept), its issue labelled `blocked` with ONE 「停放：等 …」 comment
+  carrying `<!-- fleet:park wait=<cond> sid=<sid> -->`. Parked = no window +
+  `blocked` + the mark — there is no `@park`; the book is `global/park.json`,
+  `global/park.idx` is what `fleet_parked` (fleet-restore.sh's skip) reads. When its
+  condition (`answer:` · `pr:…:merged` · `issue:…:closed` · `time:` · `reply:`)
+  holds, `dash-issue-session.sh --resume <same sid> --seed-file` reopens it on the
+  same conversation. `@orch_park` → `orchpark=` (the last tag) → `park=N` on the
+  client. `FLEET_STEWARD_PARK=0` (or a steward in `count`) parks nothing — `count`
+  still measures (`fleet-steward-stats.sh stuck`). `fleet-park-selftest.sh`;
+  BREAK-IT `park-lost-progress`, `park-restored-by-restore`.
 - **Navigate by name, not index.** The hub/dashboard is placed at the lowest
   index once, at spawn; numbers still shift when a window closes
   (`renumber-windows on`).

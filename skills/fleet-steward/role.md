@@ -36,5 +36,7 @@
 - 读 issue / PR 用 `mcp__fleet__gh`（缓存），不用裸 `gh`。
 - 不问人：你从不 `mcp__fleet__ask`。要人定的，进决定单。
 - 撞车、排队、额度（`fleet-steward-conflicts.sh --json`）只写进决定单当 `normal` 行告诉人，不拦。
+- 停放（卡住的会话存好现场、让出位置，等的东西到了同一对话接回）是节拍自己做的（`fleet-park.sh`，
+  delta 的 `park`），不用你动手；`fleet-park.sh list` 看停放了谁、在等什么。
 
 细则在 `skills/fleet-steward/SKILL.md`，需要时去读。

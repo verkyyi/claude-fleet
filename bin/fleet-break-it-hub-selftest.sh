@@ -54,6 +54,8 @@
 #   hubsess-daemon-nohup                            bin/fleet-hub-sessions.sh (ensure: no nohup; the lock)
 #   followup-stable-storm                           bin/fleet_followup.py (merge, execute, holding) on the
 #                                                   steward's beat (bin/fleet_steward.py)
+#   park-lost-progress / park-restored-by-restore   bin/fleet_park.py, fleet-restore.sh (fleet_parked) — through
+#                                                   bin/fleet-park-selftest.sh's sandbox (its own isolated tmux socket)
 #
 # Each prints `PASS <id> <secs>s ≤<cap>s <what came back>` like its parent.
 # BREAK_KEEP=1 keeps the work dir; BREAK_ONLY narrows to those ids.
@@ -1005,6 +1007,47 @@ drill_followup_stable_storm() {
   [ "$w" = 4 ] || { WHY="the run was written back on $w of four batches"; return 1; }
   SECS=$(since "$t0")
   WHAT="四个批次各留「move stable」、一个批次还在跑：在跑时一次不挪，放开后只挪一次，四个批次都回写"
+}
+
+# ---- park-* (#2671, EPIC #2668 C3): parking a stuck session. The sandbox is
+# bin/fleet-park-selftest.sh's — its own isolated tmux socket, a real worktree with
+# a bare remote, seams for GitHub / the peer channel / the spawn — run once, read
+# by both drills.
+park_run() {
+  [ -f "$WORK/park.out" ] || bash "$BIN/fleet-park-selftest.sh" > "$WORK/park.out" 2>&1
+}
+park_need() { # park_need <PASS line fragment>…
+  local f
+  for f in "$@"; do
+    grep -q "^PASS  $f" "$WORK/park.out" && continue
+    WHY="no PASS for: $f — $(grep -m 3 '^FAIL' "$WORK/park.out" | tr '\n' '|')"
+    return 1
+  done
+}
+
+# park-lost-progress: the session never answers the handoff request. Past the grace
+# the fleet keeps the screen, pushes the branch, keeps the worktree (uncommitted
+# file included), and the wake comes back on the same conversation.
+drill_park_lost_progress() {
+  CAP=120; local t0; t0=$(now)
+  park_run
+  park_need "C no handoff past the grace" "C its comment points at the kept screen" "C its branch is pushed" \
+            "B the worktree stays" "B the screen is kept" "D reopened on the SAME conversation" \
+            "D its first turn reads the handoff" || return 1
+  SECS=$(since "$t0")
+  WHAT="不回话的会话过了宽限：屏幕存档、分支推上、工作区连未提交的都在；条件满足同一对话接回、首轮读交接"
+}
+
+# park-restored-by-restore: a reboot's restore runs off a map taken while the
+# parked session was still open. It must leave that one closed (and say so), and
+# still take an ordinary lost window beside it; --auto's pull-back sees it retired.
+drill_park_restored_by_restore() {
+  CAP=120; local t0; t0=$(now)
+  park_run
+  park_need "B the window is retired" "B fleet_parked o/r 7" "H restore leaves the parked one closed" \
+            "H restore does nothing else with it" "H an ordinary lost window still takes" || return 1
+  SECS=$(since "$t0")
+  WHAT="拿停放前的地图恢复：停放的不重开（写 parked），旁边普通丢的照走恢复；拉回认 retired 不碰"
 }
 
 cred_run_drills "$0"

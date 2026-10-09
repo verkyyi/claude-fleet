@@ -46,13 +46,14 @@ set -uo pipefail
 # GATE (cap / dedup / claim) still runs + refuses in the foreground; only its slow
 # tail is backgrounded. Opt-in, interactive-only (a headless TARGET_SESS caller
 # that needs the window id back stays synchronous).
-num=""; TARGET_SESS=""; WIN_TITLE=""; ORIGIN=""; AGENT=""; REPO_ARG=""; NODE_ARG=""; ORIGIN_WID=""; ACCOUNT_ARG=""; REAP=""; FORCE_FLAG=0; ASYNC_FLAG=0; PRINT_FLAG=0; _pos=0; _want=""
+num=""; TARGET_SESS=""; WIN_TITLE=""; ORIGIN=""; AGENT=""; REPO_ARG=""; NODE_ARG=""; ORIGIN_WID=""; ACCOUNT_ARG=""; REAP=""; RESUME_SID=""; SEED_FILE=""; FORCE_FLAG=0; ASYNC_FLAG=0; PRINT_FLAG=0; _pos=0; _want=""
 for _a in "$@"; do
   # A value-taking flag (--title <t>) consumes the NEXT arg: _want carries that
   # expectation across one loop turn so the value isn't mistaken for a positional.
   if [ -n "$_want" ]; then
     case "$_want" in title) WIN_TITLE="$_a" ;; origin) ORIGIN="$_a" ;; agent) AGENT="$_a" ;; repo) REPO_ARG="$_a" ;;
-      node) NODE_ARG="$_a" ;; origin-wid) ORIGIN_WID="$_a" ;; account) ACCOUNT_ARG="$_a" ;; reap) REAP="$_a" ;; esac
+      node) NODE_ARG="$_a" ;; origin-wid) ORIGIN_WID="$_a" ;; account) ACCOUNT_ARG="$_a" ;; reap) REAP="$_a" ;;
+      resume) RESUME_SID="$_a" ;; seed-file) SEED_FILE="$_a" ;; esac
     _want=""; continue
   fi
   # A FUSED "--flag value" (issue #1543) is --flag=value: zsh — Claude's Bash tool —
@@ -60,7 +61,7 @@ for _a in "$@"; do
   # us ONE arg, which fell to the unknown-flag branch and let the hub place a pinned
   # spawn on another machine.
   case "$_a" in
-    '--title '*|'--origin '*|'--agent '*|'--repo '*|'--node '*|'--origin-wid '*|'--account '*|'--reap '*)
+    '--title '*|'--origin '*|'--agent '*|'--repo '*|'--node '*|'--origin-wid '*|'--account '*|'--reap '*|'--resume '*|'--seed-file '*)
       _v=${_a#* }; _v=${_v#"${_v%%[! ]*}"}; _a="${_a%% *}=$_v" ;;
   esac
   case "$_a" in
@@ -112,6 +113,17 @@ for _a in "$@"; do
     # the historic rule (PR merged + the fleet's grace). Stamped as @reap_policy.
     --reap) _want=reap ;;
     --reap=*) REAP="${_a#--reap=}" ;;
+    # --resume <sid> + --seed-file <f> (issue #2671, EPIC #2668 C3): a PARKED
+    # session coming back (bin/fleet_park.py's wake). The window opens on the same
+    # conversation (`--resume <sid>`, Claude only, and only while its transcript is
+    # still in the worktree's project dir) and its first turn is the file's text —
+    # read the handoff, go on — instead of /fleet-claim. No transcript ⇒ the plain
+    # /fleet-claim seed (the park comment names the handoff). Always on this
+    # machine: the worktree and the transcript are here.
+    --resume) _want=resume ;;
+    --resume=*) RESUME_SID="${_a#--resume=}" ;;
+    --seed-file) _want=seed-file ;;
+    --seed-file=*) SEED_FILE="${_a#--seed-file=}" ;;
     # An UNKNOWN dash-flag is almost always a typo (e.g. --forc). Do NOT let it
     # fall through to the positional slots — treating "--forc" as the issue number
     # strips to "" and silently spawns the wrong thing. Warn loudly and ignore it.
@@ -121,6 +133,8 @@ for _a in "$@"; do
   esac
 done
 num="${num//[^0-9]/}"; [ -z "$num" ] && exit 0
+RESUME_SID=$(printf '%s' "$RESUME_SID" | LC_ALL=C tr -cd '0-9a-f-')
+[ -n "$RESUME_SID" ] && [ -z "$NODE_ARG" ] && NODE_ARG=local   # its worktree + transcript are here
 case "$AGENT" in
   ''|claude|codex) : ;;
   *) printf 'dash-issue-session: unknown --agent %s (claude|codex) — using the fleet default\n' "$AGENT" >&2
@@ -774,6 +788,14 @@ tf="$(fleet_cache_dir "$(fleet_slug "$REPO")")/task_$slug.txt"
 # the seed would land as literal text and the worker would never claim. fleet_cmd
 # probes which install path this machine has and types the form that resolves.
 printf '%s' "$(fleet_cmd fleet-claim)" > "$tf"
+# A parked session's return (--resume, issue #2671): the same conversation, its
+# own first turn — only when the transcript is still there and the agent is Claude.
+RESUME_ARG=''
+if [ -n "$RESUME_SID" ] && [ "${AGENT:-${FLEET_AGENT:-claude}}" != codex ] \
+   && [ -f "$(fleet_transcript_dir "$wt")/$RESUME_SID.jsonl" ]; then
+  RESUME_ARG=" --resume $RESUME_SID"
+  [ -n "$SEED_FILE" ] && [ -s "$SEED_FILE" ] && cat "$SEED_FILE" > "$tf"
+fi
 if [ -n "$FETCH_PID" ]; then wait "$FETCH_PID" 2>/dev/null
 else git -C "$MAIN" fetch origin "$BASE" --quiet 2>/dev/null; fi
 # The agent starts WHILE the tree is checked out (issue #2237): on a big repo the
@@ -850,7 +872,7 @@ stamp=''; [ -n "$REPO" ] && stamp=$(fleet_win_stamp_cmd @repo "$REPO" @worktree 
 # default changed later does not move a running session.
 [ -n "$ACCOUNT" ] && stamp="$stamp$(fleet_win_stamp_cmd @account_class "$ACCOUNT")"
 pend=''; [ -n "$FILL_MARK" ] && pend="FLEET_WT_PENDING=$(shq "$FILL_MARK") "
-win=$(TM new-window ${detach[@]+"${detach[@]}"} -P -F '#{window_id}' -t "$SESS:" -n "$wname" -c "$wt" "$stamp$pend'$BIN/fleet-session-wrap.sh'${AGENT:+ --agent $AGENT} \"\$(cat '$tf')\"; exec \$SHELL") \
+win=$(TM new-window ${detach[@]+"${detach[@]}"} -P -F '#{window_id}' -t "$SESS:" -n "$wname" -c "$wt" "$stamp$pend'$BIN/fleet-session-wrap.sh'${AGENT:+ --agent $AGENT}$RESUME_ARG \"\$(cat '$tf')\"; exec \$SHELL") \
   || { [ -n "$FILL_PID" ] && { wait "$FILL_PID" 2>/dev/null; rm -f "$FILL_MARK"; }
        _why=''; _down=$(fleet_server_down "$SESS") && _why=" — $_down"  # issue #2477
        fleet_socket_wedged "$SOCK" && _why=" — this fleet's tmux server is gone: its socket $(fleet_socket_path "$SOCK") is held by a dying server that drops every client (tmux says \"server exited unexpectedly\"); fleet-up.sh clears it and brings the fleet back"  # issue #1729

@@ -28,7 +28,9 @@
 #      with the resume seed; `fleet_win_for_key steward` answers it
 #   I  the attention count: `note` logs a client's move once, `attention` counts
 #      a worker window once a day
-#   J  the decide count travels: orchdec=2 → orch_decide 2 → `decide=2` → red
+#   J  the decide count travels: orchdec=2 → orch_decide 2 → `decide=2` → red;
+#      the park count beside it (issue #2671): @orch_park → orchpark= (the last
+#      tag) → orch_park → `park=N`
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/steward-st.XXXXXX")
@@ -267,13 +269,24 @@ if [ -n "$REAL_TMUX" ]; then
   plain=$(jinv)
   jq set-option -w -t "=$js:orchestrator" @orch_decide 2
   out=$(jinv)
+  jq set-option -w -t "=$js:orchestrator" @orch_park 1
+  both=$(jinv)
+  jq set-option -w -u -t "=$js:orchestrator" @orch_decide
+  parkonly=$(jinv)
   jq kill-server 2>/dev/null
   d=$(printf '%s' "$out" | python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); from fleet_hub_common import inventory_row; r = inventory_row(sys.stdin.read().rstrip("\n").split("\t")); print((r[1] if r else {}).get("orch_decide", ""))' "$BIN")
   case "$plain" in *orchdec=*) bad "J: no sheet, yet the inventory carries orchdec: [$plain]" ;; *)
     [ -n "$plain" ] && [ "$out" = "$plain"$'\t'"orchdec=2" ] && [ "$d" = 2 ] \
       && ok "J: @orch_decide 2 → the inventory's orchdec=2 → orch_decide 2; none ⇒ the row byte for byte" \
       || bad "J: inventory [$out] (plain [$plain]) → orch_decide [$d]" ;; esac
+  jrow() { printf '%s' "$1" | python3 -c 'import sys, json; sys.path.insert(0, sys.argv[1]); from fleet_hub_common import inventory_row; r = inventory_row(sys.stdin.read().rstrip("\n").split("\t")); r = r[1] if r else {}; print(r.get("orch_decide", "-"), r.get("orch_park", "-"))' "$BIN"; }
+  [ "$both" = "$plain"$'\t'"orchdec=2"$'\t'"orchpark=1" ] && [ "$(jrow "$both")" = "2 1" ] \
+    && [ "$parkonly" = "$plain"$'\t'"orchpark=1" ] && [ "$(jrow "$parkonly")" = "- 1" ] \
+    && ok "J: @orch_park 1 → orchpark=1 (the last tag, alone or after orchdec=) → orch_park 1" \
+    || bad "J: park road: both [$both] → $(jrow "$both"); park only [$parkonly] → $(jrow "$parkonly")"
 fi
+grep -q '"park=" + r\["park"\]' "$BIN/fleet-hub-sessions.sh" && ok "J: park=N rides orch_<sess> (the sidebar's 停放 N)" \
+  || bad "J: hub-sessions does not carry park"
 grep -q 'decide=" + r\["decide"\]' "$BIN/fleet-hub-sessions.sh" && grep -q 'orch_decide(line) > 0' "$BIN/fleet-sidebar.py" \
   && ok "J: decide=N rides orch_<sess>, and 「新任务」 turns red on it" || bad "J: hub-sessions / sidebar do not carry decide"
 python3 - "$BIN" <<'EOF' && ok "J: orch_decide reads decide=N wherever it sits, 0 without" || bad "J: orch_decide"

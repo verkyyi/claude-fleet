@@ -303,9 +303,15 @@ def inventory_row(parts):
     int); absent unless the steward stamped one. `role=steward` is its steward.
     Column 33 (issue #2672, EPIC #2668 C4): `orchtodo=<n>` — the steward's 待你动手
     rows still open (@orch_todo) → `orch_todo` (an int); it follows orchdec= when
-    both are written, so it is read first."""
+    both are written, so it is read first.
+    Column 34 (issue #2671, EPIC #2668 C3): `orchpark=<n>` — sessions parked
+    (@orch_park) → `orch_park` (an int); the last tag when written, read first."""
     parts = list(parts)
     extra = {}
+    if len(parts) >= 32 and parts[-1].startswith("orchpark="):
+        k = parts.pop()[9:]
+        if re.fullmatch(r"[0-9]{1,4}", k):
+            extra["orch_park"] = int(k)
     if len(parts) >= 32 and parts[-1].startswith("orchtodo="):
         d = parts.pop()[9:]
         if re.fullmatch(r"[0-9]{1,4}", d):

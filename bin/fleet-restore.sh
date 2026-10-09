@@ -561,6 +561,14 @@ restore() {
           continue ;;
         esac
       fi
+      # A PARKED session (issue #2671) gave its place back on purpose and waits for
+      # something; bin/fleet_park.py reopens it, on the same conversation, when it
+      # arrives — a restore (after a reboot, a lost server) never does.
+      if [ -n "${wrepo:-}" ] && [ "$wrepo" != - ] && fleet_parked "$wrepo" "$wissue"; then
+        say "    · $wname: parked (fleet-park.sh list) — not reopened"
+        log "skip $sess/$wname parked $wrepo#$wissue"
+        continue
+      fi
       # reconcile path: the session is already live — don't duplicate. Its
       # @fleet_id answers first (issue #1844): a window the person renamed is
       # still that session, and a name is only the fallback for a map row or a

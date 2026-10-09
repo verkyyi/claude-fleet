@@ -31,6 +31,12 @@ the person's clock (fleet_decision.zone). A due beat:
   5b. gathers what finished batches leave for a person into ONE 「待你动手」 list
      and runs what it may (bin/fleet_followup.py, issue #2672 — its header is
      the spec): @orch_todo carries the open count to the client's list;
+  5c. moves the parks on (bin/fleet_park.py, issue #2671 C3): a stuck session is
+     asked for its handoff, parked once it wrote one (or its grace ran out), and
+     woken on the same conversation when what it waits for arrives — within the
+     same write budget; @orch_park carries the count to the client's 「停放 N」.
+     FLEET_STEWARD_PARK=0 leaves parking off. A pending park is advanced on every
+     minute's call, due or not (its grace is 5 minutes, the beat 10-60);
   6. ONLY when there is something for the model — a new open question, a BLOCKED /
      FAILED report, a batch with no driver — hands the steward window one turn
      (`[steward] …`). A calm beat calls no model (共同约定 · 怎么算成功).
@@ -67,6 +73,7 @@ from pathlib import Path
 
 import fleet_decision as fd
 import fleet_followup as fu
+import fleet_park
 
 BIN = Path(__file__).resolve().parent
 V = 1
@@ -200,15 +207,33 @@ def send(sess, target, text):
     return r.returncode in (0, 3)        # 3 = queued: delivered when it can be
 
 
-def stamp_decide(sess, n, wins):
-    r = _seam("FLEET_STEWARD_STAMP_CMD", [str(n)])
-    if r is not None:
+def stamp_decide(sess, n, wins, opt="@orch_decide"):
+    if opt == "@orch_decide":
+        r = _seam("FLEET_STEWARD_STAMP_CMD", [str(n)])
+        if r is not None:
+            return
+    elif os.environ.get("FLEET_STEWARD_STAMP_CMD"):
         return
     for w in wins:
         if w["role"] == "orchestrator":
             args = ["tmux", "-L", socket(sess), "set-window-option", "-t", w["wid"]]
-            subprocess.run(args + (["@orch_decide", str(n)] if n else ["-u", "@orch_decide"]),
+            subprocess.run(args + ([opt, str(n)] if n else ["-u", opt]),
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+
+
+def park_on():
+    return (os.environ.get("FLEET_STEWARD_PARK") or fd._conf_val("FLEET_STEWARD_PARK") or "1") != "0"
+
+
+def park_step(sess, now_t, judge, budget):
+    """bin/fleet_park.py's tick; None when parking is off or it failed."""
+    if not park_on():
+        return None
+    try:
+        return fleet_park.tick(sess, now_t.timestamp(), judge=judge, budget=budget)
+    except Exception as e:  # a park bug never stops the beat
+        sys.stderr.write("fleet-steward-tick: park: %s\n" % e)
+        return None
 
 
 def backstop(key, pr, parent):
@@ -440,10 +465,16 @@ def wants_model(delta):
                 or any(e["state"] in WAKE_STATES for e in delta["events"]))
 
 
+def park_moved(delta):
+    pk = delta.get("park") or {}
+    return bool(pk.get("requested") or pk.get("parked") or pk.get("woken"))
+
+
 def empty(delta):
     f = delta.get("followups") or {}
     return not (delta["events"] or delta["new_asks"] or delta["closed"] or delta["defaulted"]
-                or delta["orphans"] or delta["deferred"] or f.get("new") or f.get("done") or f.get("refused"))
+                or delta["orphans"] or delta["deferred"] or f.get("new") or f.get("done") or f.get("refused")
+                or park_moved(delta))
 
 
 # ---- the card --------------------------------------------------------------------
@@ -465,6 +496,10 @@ def card_lines(st, delta, now_t, nxt):
     todo_line = fu.card(sys.modules[__name__], st)
     if todo_line:
         lines.append(todo_line)
+    pk = delta.get("park")
+    if pk and (park_moved(delta) or pk.get("n_parked")):
+        lines.append(tr("steward_card_park_fmt", pk.get("n_parked", 0), len(pk.get("parked") or []),
+                        len(pk.get("woken") or []), len(pk.get("requested") or [])))
     if delta["deferred"]:
         lines.append(tr("steward_card_deferred_fmt", delta["deferred"]))
     lines.append(tr("steward_card_next_fmt", fd.show_time(nxt)[-5:]))
@@ -498,13 +533,24 @@ def cmd_beat(a):
         return 2
     now_t = fd.now_local(a.now)
     if not a.force:
-        # the every-minute caller's fast path: not due ⇒ no lock, no fork
+        # the every-minute caller's fast path: not due ⇒ no lock, no fork — but a
+        # park asked for its handoff is moved on every minute (its grace is 5)
         try:
             if now_t.timestamp() < json.loads((gdir() / "steward.state.json").read_text()).get("next_at", 0):
+                if fleet_park.peek().get("pending"):
+                    park_step(sess, now_t, False, env_int("FLEET_STEWARD_WRITES", 20))
                 return 4
         except (OSError, ValueError):
             pass
-        if mode(sess) != "on":
+        m = mode(sess)
+        if m != "on":
+            # `count`: nothing parked, but the stuck segments are measured (the
+            # 卡住占位时长 baseline, EPIC #2668 读数口径), at most every 10 minutes
+            if m == "count" and park_on():
+                try:
+                    fleet_park.observe_only(sess, now_t.timestamp())
+                except Exception as e:  # a metric never stops the beat
+                    sys.stderr.write("fleet-steward-tick: park observe: %s\n" % e)
             return 3
     st = State()
     due = st.d.get("next_at", 0)
@@ -514,6 +560,12 @@ def cmd_beat(a):
     flushed = flush_deferred(st)
     delta, wins = collect(sess, st, now_t)
     delta["flushed"] = flushed
+    pk = park_step(sess, now_t, True, st.budget_left())
+    if pk is not None:
+        st.spend(pk["writes"])
+        st.d["parked"] = pk.pop("list")
+        delta["park"] = pk
+        stamp_decide(sess, pk["n_parked"], wins, "@orch_park")
     path = write_delta(delta)
     changed = not empty(delta)
     nxt = next_beat(now_t, changed)
