@@ -1007,6 +1007,8 @@ stewardpage	j	steward page — the steward page of the day, in your own browser:
     en:clients_revoke_failed)   printf 'Could not disconnect:' ;;
     zh:topbar_also_fmt)         printf '也在 %s 上打开' "${1:-}" ;;
     en:topbar_also_fmt)         printf 'also open on %s' "${1:-}" ;;
+    zh:topbar_no_record)        printf '顶行无记录' ;;
+    en:topbar_no_record)        printf 'no top-line record' ;;
     zh:menu_reap_policy)        printf '改回收方式…' ;;
     en:menu_reap_policy)        printf 'Reap policy…' ;;
     zh:reap_menu_title)         printf '什么时候回收' ;;

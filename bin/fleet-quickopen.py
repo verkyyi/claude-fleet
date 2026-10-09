@@ -112,11 +112,29 @@ STATE_WORDS = {"needs": "needs ask 在问你", "failed": "failed 失败", "worki
 
 
 def state_dir():
+    """The client's switch state dir: FLEET_SWITCH_STATE, else the XDG state dir —
+    or, when that cannot be made or written (a `~/.local/state` another account
+    created, issue #2739: every write into it failed and nothing said so), the
+    cache dir's `claude-fleet/state`. The writer (the list) and the readers (the
+    top line, ⌘P) all ask here, so they agree on the fallback too."""
     env = os.environ.get("FLEET_SWITCH_STATE")
     if env:
         return Path(env)
     base = os.environ.get("XDG_STATE_HOME") or os.path.join(os.path.expanduser("~"), ".local", "state")
-    return Path(base) / "claude-fleet"
+    main = Path(base) / "claude-fleet"
+    if usable_dir(main):
+        return main
+    cache = os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache")
+    return Path(cache) / "claude-fleet" / "state"
+
+
+def usable_dir(path):
+    """`path` is (or could be made) a directory this process can write into."""
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return False
+    return path.is_dir() and os.access(str(path), os.W_OK | os.X_OK)
 
 
 def history_path():
@@ -127,6 +145,11 @@ def rows_path():
     return state_dir() / "switch-rows.tsv"
 
 
+# why the last write_atomic failed ("" after a good one): a caller that must not
+# fail silently (the top line's record, issue #2739) logs it
+WRITE_ERROR = [""]
+
+
 def write_atomic(path, text):
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -134,8 +157,10 @@ def write_atomic(path, text):
         with os.fdopen(fd, "w") as out:
             out.write(text)
         os.replace(tmp, str(path))
+        WRITE_ERROR[0] = ""
         return True
-    except OSError:
+    except OSError as err:
+        WRITE_ERROR[0] = "%s: %s" % (path, err)
         return False
 
 

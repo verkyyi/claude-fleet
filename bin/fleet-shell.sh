@@ -687,6 +687,15 @@ spec = importlib.util.spec_from_file_location("q", sys.argv[1])
 q = importlib.util.module_from_spec(spec); spec.loader.exec_module(q)
 print((q.load().get("mru") or [""])[0])' "${SHADOW:-$BIN}/fleet-quickopen.py" 2>/dev/null
 }
+# solo_seen — the client has shown a session before (issue #2739): a session row
+# (`wid:<fleet>/<key>`) anywhere in the switch history; 「新任务」 alone is not one.
+solo_seen() {
+  python3 -c 'import importlib.util, re, sys
+spec = importlib.util.spec_from_file_location("q", sys.argv[1])
+q = importlib.util.module_from_spec(spec); spec.loader.exec_module(q)
+sys.exit(0 if any(re.fullmatch(r"wid:[^/]+/.+", k) for k in q.load().get("mru") or []) else 1)' \
+    "${SHADOW:-$BIN}/fleet-quickopen.py" 2>/dev/null
+}
 # solo_resume <key> <since> — `fleet` with nothing running comes back to the
 # session it left (issue #2265, EPIC #2259 共同约定 3), in the background: a local
 # row (@<id>, no hub) by the list's own jump; a row on a machine once the list's
@@ -699,11 +708,19 @@ print((q.load().get("mru") or [""])[0])' "${SHADOW:-$BIN}/fleet-quickopen.py" 2>
 # A client `fleet claude|codex` started for its own ask (FLEET_SHELL_NO_FIRST)
 # resumes nothing (issue #2403): its session is the one it asked for — the
 # `else` below would open a SECOND one, a Claude, beside a `fleet codex`.
+#
+# Every other layout (issue #2739, FIRST_SCREEN=1: a start that named no machine)
+# lands the same way — the last session when it is still there, else 「新任务」
+# (`fleet-shell.sh portal`: the orchestrator; FLEET_FIRST_NEW_CMD is the seam).
 solo_resume() {
-  local key="$1" since="$2"
-  [ "${FLEET_CLIENT_LAYOUT:-}" = solo ] || return 0
+  local key="$1" since="$2" solo=''
   [ "${FLEET_SHELL_NO_FIRST:-0}" != 1 ] || return 0
-  [ -e "$CONF_DIR/home-session.first" ] || return 0
+  if [ "${FLEET_CLIENT_LAYOUT:-}" = solo ]; then
+    solo=1
+    [ -e "$CONF_DIR/home-session.first" ] || return 0
+  else
+    [ "${FIRST_SCREEN:-0}" = 1 ] || return 0
+  fi
   (
     cd "$HOME" 2>/dev/null || :; trap '' HUP
     case "$key" in
@@ -723,8 +740,10 @@ solo_resume() {
     [ "$i" -lt "$n" ] || exit 0                    # no read at all: the stage stays as it is
     if [ -n "$key" ] && LC_ALL=C awk -F $'\037' -v k="$key" '$1 == k { f = 1; exit } END { exit !f }' "$rf" 2>/dev/null; then
       ${FLEET_HOME_OPEN_CMD:-bash "$SHADOW/fleet-remote-view.sh" open} "$key"
-    else
+    elif [ -n "$solo" ]; then
       ${FLEET_SOLO_NEW_CMD:-bash "$SHADOW/fleet-shell.sh" home-session claude}
+    else
+      ${FLEET_FIRST_NEW_CMD:-bash "$SHADOW/fleet-shell.sh" portal "$SESS"}
     fi
   ) </dev/null >"$CACHE/solo-resume.log" 2>&1 &
 }
@@ -733,6 +752,26 @@ stage_select() {
   local w
   w=$(TS list-windows -t "=$STAGE" -F '#{window_id} #{@remote}' 2>/dev/null | awk -v n="$1:" 'index($2, n) == 1 { print $1; exit }')
   [ -n "$w" ] && TS select-window -t "$w" 2>/dev/null
+}
+
+# stage_bare_reap — a machine's bare window an older start left on the stage
+# (`@remote <machine>:` with no session, issue #2739: `run --shell <m> -`, a
+# shell on that machine saying it has no live session) goes: the first, when it
+# is the stage's only window, becomes the `wait` note in place (respawned, so the
+# stage never loses its last window and the note's one-window rule holds); every
+# other one is closed.
+stage_bare_reap() {
+  local w
+  for w in $(TS list-windows -t "=$STAGE" -F '#{window_id} #{@remote}' 2>/dev/null \
+             | awk '$2 ~ /^[A-Za-z0-9._-]+:$/ && $2 != "-:" { print $1 }'); do
+    if [ "$(TS list-windows -t "=$STAGE" -F x 2>/dev/null | grep -c x)" -le 1 ]; then
+      TS respawn-window -k -t "$w" "exec bash $(sq "$SHADOW/fleet-shell.sh") wait $(sq "$SESS")" \; \
+        set-window-option -t "$w" @remote "-:" \; rename-window -t "$w" fleet 2>/dev/null
+    else
+      TS kill-window -t "$w" 2>/dev/null
+    fi
+  done
+  return 0
 }
 
 # The one-session views (issue #2716): each `solo` registers itself as
@@ -1911,8 +1950,9 @@ first_home() {
 # 2. already running? Re-attach — onto the named machine's window when there is one.
 if T has-session -t "=$SESS" 2>/dev/null; then
   if [ -n "$(T show-options -wqv -t "=$SESS:" @shell_frame 2>/dev/null)" ]; then
-    # the stage (issue #1759): the named machine's window current there
-    [ -n "$node" ] && stage_select "$node"
+    # the stage (issue #1759): the named machine's window current there — only
+    # when one was named (issue #2739): a plain `fleet` keeps what was in view
+    [ -n "$machine" ] && [ -n "$node" ] && stage_select "$node"
   elif [ -n "$node" ]; then
     # a shell started before the stage: one window per machine on its own server
     w=$(T list-windows -t "=$SESS" -F '#{window_id} #{@remote}' 2>/dev/null | awk -v n="$node:" 'index($2, n) == 1 { print $1; exit }')
@@ -1939,6 +1979,9 @@ loops_reap 2>/dev/null
 # the new list writes its first visit
 solo_key=''; solo_since=$(date +%s)
 [ "${FLEET_CLIENT_LAYOUT:-}" = solo ] && solo_key=$(solo_last)
+# …and every other layout to the last session or 「新任务」 (issue #2739, below)
+seen=''
+if [ "${FLEET_CLIENT_LAYOUT:-}" != solo ] && [ -z "$machine" ] && solo_seen; then seen=1; solo_key=$(solo_last); fi
 # 3. the servers: conf (keys, hooks, bar, environment); the stage with the first
 #    machine's window (issue #1759), then the shell's one window, `home`, whose
 #    right pane looks at the stage
@@ -1952,7 +1995,19 @@ if [ -n "$node" ] && this_machine "$node" && ! bash "$SHADOW/fleet-remote-view.s
   home=$node; node=''
 fi
 if [ -n "$home" ]; then printf '%s\n' "$home" > "$CACHE/home-machine"; else rm -f "$CACHE/home-machine"; fi
-if [ -n "$node" ]; then
+# The machine's own window (`run --shell <m> -`: its fleet session as it stands,
+# or a newcomer's home page there) when it was asked for — `fleet <machine>` —,
+# is THIS computer's fleet (no hub: the client reads this machine), or the client
+# has never shown a session (no history: the newcomer's road, EPIC #2259). A
+# client that has — a session row in its switch history (solo_seen) — no longer
+# opens the hub's pick's own window, which with no live session of theirs
+# there was a bare shell saying so (issue #2739): its first screen is that last
+# session, else 「新任务」 (solo_resume).
+machine_win=''; FIRST_SCREEN=0
+if [ -n "$node" ] && { [ -n "$machine" ] || [ -z "$seen" ] || [ "${FLEET_CLIENT_LAYOUT:-}" = solo ] \
+                       || this_machine "$node"; }; then machine_win=1
+elif [ -n "$seen" ] && [ "${FLEET_CLIENT_LAYOUT:-}" != solo ]; then FIRST_SCREEN=1; fi
+if [ -n "$machine_win" ]; then
   title="$node"
   cmd="exec bash $(sq "$SHADOW/fleet-remote-view.sh") run --shell $(sq "$node") -"
   remote="$node:"
@@ -1969,8 +2024,12 @@ if TS has-session -t "=$STAGE" 2>/dev/null; then
   # a stage the last shell left (its keeper ends it, but not if it was killed):
   # its connections are kept, its conf is read again
   TS source-file "$CACHE/tmux-stage.conf" >/dev/null 2>&1
-  [ -n "$node" ] && { stage_select "$node" || TS new-window -t "=$STAGE:" -n "$title" -c "$HOME" "$cmd" \; \
-    set-window-option @remote "$remote" \; set-window-option automatic-rename off >/dev/null 2>&1; }
+  if [ -n "$machine_win" ]; then
+    stage_select "$node" || TS new-window -t "=$STAGE:" -n "$title" -c "$HOME" "$cmd" \; \
+      set-window-option @remote "$remote" \; set-window-option automatic-rename off >/dev/null 2>&1
+  else
+    stage_bare_reap
+  fi
 else
   stage_up "$cmd" "$remote" "$title" || fail_start 'tmux 开不了会话'
 fi

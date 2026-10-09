@@ -257,7 +257,16 @@ writes off the very rows it paints (`fleet-sidebar.py bar_record`) — so the li
 and the list never disagree — and bumps the stage's `@fleet_bar_gen`, which the
 line's command names: tmux draws it again at once. The title is the issue's
 own title (the list's 14th field, carried from the session's machine — #1921),
-else the row's name.
+else the row's name. A session in view that is no row — the orchestrator behind
+「新任务」, the steward — gets its record off the refresh loop's cache instead
+(`cache_record`, issue #2739); the record lives in `~/.local/state/claude-fleet`,
+or `~/.cache/claude-fleet/state` when that cannot be written, a failed write is a
+line in `logs/topbar.log`, and a line with no record at all says 「顶行无记录」
+rather than pass for a bare shell. Once the client has shown a session (its switch
+history), the first screen of a plain `fleet` is the last one you looked at, else
+「新任务」 — not the hub's pick's own window, which stays for `fleet <machine>`,
+this computer's fleet, and a newcomer's first start (no history: their home page); a bare machine
+window an older start left on the stage is cleared at the next start.
 `bin/fleet-client-layout-selftest.sh` pins the layout, the keys, a real tap on
 the line through the nested client, and the widths.
 

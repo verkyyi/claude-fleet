@@ -19,17 +19,22 @@
 #   B. up          — bare `fleet` (tmux present) starts the shell: ONE window,
 #                    `home` (@shell_frame), its right pane a nested client of the
 #                    STAGE server (`<sess>-stage`, issue #1759) whose first window
-#                    is the hub's pick (m5, `@remote=m5:`); the LIST pane on the
-#                    left of `home`, the far end asked for `attach --shell -`
-#                    through the ssh shim, the environment set on both servers,
-#                    the conf-free mirror in place
+#                    is the `wait` note (`@remote=-:`) — a client with a switch
+#                    history never gets the hub's pick's bare shell (issue #2739:
+#                    no `attach --shell -`, no ssh at all); once the loop's first
+#                    read is in, the first screen is the last one, 「新任务」
+#                    (FLEET_FIRST_NEW_CMD); the LIST pane on the left of
+#                    `home`, the environment set on both servers, the conf-free
+#                    mirror in place
 #   C. data        — the client-mode loop writes remote_<sess> with EVERY row remote
 #                    (local=0, #me empty, a #node line per machine, m5 included),
 #                    hub_ok fresh; the row producer in the shell's environment lists
 #                    the hub's rows and none of the shell's own windows
-#   D. same machine— `open` on an m5 row with the pane's control socket answering:
-#                    `select <wid>` goes over it, the stage window is retargeted
-#                    (`@remote=m5:<wid>`), NO respawn, the list pane's id unchanged
+#   D. same machine— `open` on an m5 row: its own stage window (`attach --shell
+#                    <wid>`), the wait note gives way; `open` on the other m5 row
+#                    with the pane's control socket answering: `select <wid>` goes
+#                    over it, the stage window is retargeted (`@remote=m5:<wid>`),
+#                    NO respawn, the list pane's id unchanged
 #   E. other machine— `open` on an m4 row: a second STAGE window `<name> · @m4` (no ⇄,
 #                    #1621), current there; `jump` leaves the list where it is — the
 #                    shell's server still holds one window, the same two panes; m5's
@@ -238,7 +243,14 @@ has 'A: default mode: #me is this host' "$(head -2 "$WORK/degen/.claude-dash/glo
 # B. up — bare `fleet` with tmux: the shell
 # ================================================================================
 : > "$WORK/connect.argv"
-out=$("$SB/fleet" 2>"$WORK/up.err"); rc=$?
+: > "$WORK/ssh.log"
+printf '#!/bin/sh\necho "portal $*" >> "%s/first.log"\n' "$WORK" > "$WORK/first-new"; chmod +x "$WORK/first-new"
+# a client that has shown a session before, and 「新任务」 last (its switch history,
+# fleet-quickopen.py):
+# no history at all is the newcomer's road — the pick's own window (newcomer-e2e.sh)
+mkdir -p "$HOME/.local/state/claude-fleet"
+printf '{"stack": ["wid:11111111-1111-4111-8111-111111111111/gone-1", "new"], "at": 1, "mru": ["new", "wid:11111111-1111-4111-8111-111111111111/gone-1"]}\n' > "$HOME/.local/state/claude-fleet/switch-history.json"
+out=$(FLEET_FIRST_NEW_CMD="$WORK/first-new" "$SB/fleet" 2>"$WORK/up.err"); rc=$?
 eq 'B: bare fleet → the shell started (exit 0)' 0 "$rc"
 eq 'B: it printed its session' "$SESS" "$out"
 has 'B: connect was asked for --pick' "$(cat "$WORK/connect.argv")" '--pick'
@@ -263,10 +275,11 @@ CHECKS=$((CHECKS + 1)); waitfor 5 tsg has-session -t "=$SESS-stage" || fail 'B: 
 stageclient() { [ "$(tsg display-message -p -t "=$SESS-stage:" '#{session_attached}' 2>/dev/null)" = 1 ]; }
 CHECKS=$((CHECKS + 1)); waitfor 5 stageclient || fail 'B: home'"'"'s right pane is the stage'"'"'s client'
 w1=$(tsg list-windows -t "=$SESS-stage" -F '#{window_id}' | head -1)
-eq 'B: the stage'"'"'s first window is m5 (the pick)' 'm5' "$(tsg display-message -p -t "$w1" '#{window_name}')"
-eq 'B: @remote = m5: (the machine, no worker)' 'm5:' "$(tsg show-options -wqv -t "$w1" @remote)"
-CHECKS=$((CHECKS + 1)); waitfor 10 grep -q "attach --shell '-'" "$WORK/ssh.log" || fail 'B: the far end was asked for attach --shell -' "$(cat "$WORK/ssh.log" 2>/dev/null)"
-has 'B: the ssh went to m5' "$(head -1 "$WORK/ssh.log")" 'm5	'
+eq 'B: the stage holds ONE window' 1 "$(tsg list-windows -t "=$SESS-stage" -F x | grep -c x)"
+eq 'B: … the wait note, not the pick'"'"'s bare shell (#2739)' '-:' "$(tsg show-options -wqv -t "$w1" @remote)"
+eq 'B: … named fleet' 'fleet' "$(tsg display-message -p -t "$w1" '#{window_name}')"
+sleep 1
+hasnt 'B: no attach --shell - at start (#2739)' "$(cat "$WORK/ssh.log")" "attach --shell '-'"
 env_g=$(ts show-environment -g)
 has 'B: server env FLEET_SHELL=1' "$env_g" 'FLEET_SHELL=1'
 has 'B: server env names the stage' "$env_g" "FLEET_SHELL_STAGE=$SESS-stage"
@@ -307,6 +320,7 @@ has 'C: the m4 row with its need' "$cache" 'wid:22222222-2222-4222-8222-22222222
 hasnt 'C: another login is not a row' "$cache" 'someone'
 hasnt 'C: another login is not a row (wid)' "$cache" '33333333'
 CHECKS=$((CHECKS + 1)); waitfor 5 test -s "$G/hub_ok" || fail 'C: hub_ok written'   # same round as the cache, a beat later
+CHECKS=$((CHECKS + 1)); waitfor 10 grep -q "^portal" "$WORK/first.log" || fail 'C: the first screen is 「新任务」 once the read is in (#2739)' "$(cat "$WORK/first.log" 2>/dev/null)"
 CHECKS=$((CHECKS + 1)); [ -e "$FLEET_CONF_DIR/control/hub-workers.tsv" ] && fail 'C: client mode must not write the control locator cache'
 rows=$( cd "$WORK/cache/bin" && TMUX="$(ts display-message -p '#{socket_path}'),0,0" FLEET_SHELL=1 FLEET_SESSION="$SESS" FLEET_SIDEBAR_CURRENT="$wh" \
         FLEET_SIDEBAR_SOURCE=hub CCQUOTA_FLEET=1 TMPDIR="$WORK/cache/tmp" FLEET_HUB_SESSIONS_CLIENT="$SESS" \
@@ -320,19 +334,26 @@ hasnt 'C: no row is tagged lost while the hub answers' "$rows" 'm5!'
 # ================================================================================
 # D. same machine — open an m5 row: select over the control socket, no respawn
 # ================================================================================
-CHECKS=$((CHECKS + 1)); waitfor 5 test -S "$(tsg show-options -wqv -t "$w1" @remote_ctl)" || fail 'D: run stashed a live @remote_ctl on its window' "$(tsg show-options -wqv -t "$w1" @remote_ctl)"
-pane_pid=$(tsg list-panes -t "$w1" -F '#{pane_pid}' | head -1)
-: > "$WORK/ssh.log"
 # what the list's own pane runs `open` with: the shell's server environment
 openrow() {
   TMUX="$(ts display-message -p '#{socket_path}'),0,0" FLEET_SHELL=1 FLEET_SHELL_STAGE="$SESS-stage" FLEET_SESSION="$SESS" CCQUOTA_FLEET=1 \
     TMPDIR="$WORK/cache/tmp" FLEET_CONF_DIR="$FLEET_CONF_DIR" bash "$WORK/cache/bin/fleet-remote-view.sh" open "$1" 2>&1
 }
-out=$(openrow 'wid:11111111-1111-4111-8111-111111111111/issue-7')
+: > "$WORK/ssh.log"
+w1=$(openrow 'wid:11111111-1111-4111-8111-111111111111/issue-7')
+CHECKS=$((CHECKS + 1)); case "$w1" in @*) ;; *) fail 'D: open printed a window id' "$w1" ;; esac
+eq 'D: @remote = m5:<wid>' 'm5:11111111-1111-4111-8111-111111111111/issue-7' "$(tsg show-options -wqv -t "$w1" @remote)"
+CHECKS=$((CHECKS + 1)); waitfor 10 grep -q "attach --shell '11111111-1111-4111-8111-111111111111/issue-7'" "$WORK/ssh.log" || fail 'D: the far end m5 was asked to attach the row' "$(cat "$WORK/ssh.log")"
+CHECKS=$((CHECKS + 1)); waitfor 5 test -S "$(tsg show-options -wqv -t "$w1" @remote_ctl)" || fail 'D: run stashed a live @remote_ctl on its window' "$(tsg show-options -wqv -t "$w1" @remote_ctl)"
+onestage() { [ "$(tsg list-windows -t "=$SESS-stage" -F x | grep -c x)" = 1 ]; }
+CHECKS=$((CHECKS + 1)); waitfor 5 onestage || fail 'D: the wait note gave way to the row' "$(tsg list-windows -t "=$SESS-stage" -F '#{window_id} #{@remote}')"
+pane_pid=$(tsg list-panes -t "$w1" -F '#{pane_pid}' | head -1)
+: > "$WORK/ssh.log"
+out=$(openrow 'wid:11111111-1111-4111-8111-111111111111/scratch-3')
 eq 'D: open printed the SAME (stage) window' "$w1" "$out"
-eq 'D: @remote retargeted to the worker' 'm5:11111111-1111-4111-8111-111111111111/issue-7' "$(tsg show-options -wqv -t "$w1" @remote)"
-eq 'D: the window is renamed after the row' 'issue-7 · @m5' "$(tsg display-message -p -t "$w1" '#{window_name}')"
-has 'D: select went over the connection' "$(cat "$WORK/ssh.log")" "fleet-remote-view.sh select '11111111-1111-4111-8111-111111111111/issue-7'"
+eq 'D: @remote retargeted to the worker' 'm5:11111111-1111-4111-8111-111111111111/scratch-3' "$(tsg show-options -wqv -t "$w1" @remote)"
+eq 'D: the window is renamed after the row' 'notes · @m5' "$(tsg display-message -p -t "$w1" '#{window_name}')"
+has 'D: select went over the connection' "$(cat "$WORK/ssh.log")" "fleet-remote-view.sh select '11111111-1111-4111-8111-111111111111/scratch-3'"
 hasnt 'D: no second attach (no respawn)' "$(cat "$WORK/ssh.log")" 'attach'
 eq 'D: the ssh pane was NOT respawned (same pid)' "$pane_pid" "$(tsg list-panes -t "$w1" -F '#{pane_pid}' | head -1)"
 eq 'D: the list pane is the same pane' "$view" "$(view_of "$wh")"

@@ -1716,6 +1716,10 @@ client_env() {
   unset CCQUOTA_HUB_URL CCQUOTA_VIEWER_TOKEN FLEET_NODE_ALIASES FLEET_SHELL_STAGE
   export FLEET_HUB_URL=https://hub.example FLEET_REMOTE_SSH_CMD="$WORK/shim/ssh"
   export FLEET_HUB_SESSIONS_CMD="cat $WORK/sessions.json" FLEET_HUB_SESSIONS_USER=verk
+  # every start a client with no switch history (issue #2739): one drill's opened
+  # rows would make the next start a returning client's — its first screen the
+  # last session or 「新任务」, not the pick's own window these drills break
+  FLEET_SWITCH_STATE=$(mktemp -d "$WORK/cstate.XXXXXX"); export FLEET_SWITCH_STATE
   mkdir -p "$HOME/.ssh" "$FLEET_CONF_DIR"
 }
 client_setup() {
