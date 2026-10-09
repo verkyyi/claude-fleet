@@ -45,8 +45,8 @@
 #               none. Red REFUSES (reason `macos:`); a run still going is waited
 #               for; NO run (path-filtered, cancelled) dispatches the FULL suite on
 #               exactly the target (`gh workflow run … -f sha=<target>`) and waits
-#               for it, up to --macos-timeout (default 5400s: six full
-#               shards, the sixth queued behind five — issue #2638) — a run
+#               for it, up to --macos-timeout (default 5400s: ten full
+#               shards in two waves of five — issues #2638, #2659) — a run
 #               that does not finish in time refuses. --dry-run never dispatches or waits:
 #               no green run = refused. --force moves past it and logs one line,
 #               like gate 4. A target whose tree has no such workflow has no BSD

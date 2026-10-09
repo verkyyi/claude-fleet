@@ -114,7 +114,9 @@ jobs:
       # people re-run instead of read.
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+        # 10 since issue #2659: the refreshed table sums ~3700s, so 8 wide put
+        # ~460s in a shard against the 400s WARN (480s step bound).
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     # Backstop only. The real bound is on the run STEP below, deliberately: a
     # JOB-level timeout cancels the whole job, so the step that would tell you
     # WHICH test hung never runs. This one just keeps a wedged runner off

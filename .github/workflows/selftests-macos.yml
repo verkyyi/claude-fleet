@@ -27,10 +27,10 @@ name: selftests (macOS)
 # ----
 # GitHub-hosted runners — macOS included — are FREE for public repositories, and
 # this repo is public. The 10x macOS multiplier that shaped the original plan in
-# #696 applies to private repos only, so the full 6-shard matrix runs here, not a
+# #696 applies to private repos only, so the full 10-shard matrix runs here, not a
 # single smoke slice: every test gets BSD coverage every night rather than one
-# sixth of them. Free public repos allow 5 concurrent macOS jobs, so one of the
-# six queues briefly; wall clock is still only a few minutes.
+# tenth of them. Free public repos allow 5 concurrent macOS jobs, so the ten run
+# in two waves of five.
 #
 # ⚠️ If this repo is ever made PRIVATE, this workflow starts billing at 10x —
 # ~150 minutes a night. Cut `shard:` back to a single entry (the runner reads N
@@ -121,13 +121,18 @@ jobs:
       matrix:
         # Two widths, configured apart from the ubuntu matrix (issue #1374): a
         # master push gets at most 2 macOS shards, because a free account runs at
-        # most 5 macOS jobs at once; the nightly / dispatch full suite keeps 6. The
-        # runner reads N from `strategy.job-total`, so each list stays the single
-        # source of its width.
-        shard: ${{ github.event_name == 'push' && fromJSON('[1, 2]') || fromJSON('[1, 2, 3, 4, 5, 6]') }}
+        # most 5 macOS jobs at once; the nightly / dispatch full suite runs 10 (issue
+        # #2659: at 6 the table put ~600 ubuntu-seconds in a shard, 2.3x that on
+        # macOS — three shards hit the 20-minute bound on #2638; at 10 a shard is
+        # ~370 ubuntu-seconds, two waves of five). The runner reads N from
+        # `strategy.job-total`, so each list stays the single source of its width.
+        shard: ${{ github.event_name == 'push' && fromJSON('[1, 2]') || fromJSON('[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]') }}
     # A push whose change falls back to the FULL suite (a harness edit) runs it on 2
-    # shards, not 6: measured ~28 min a shard on #1375, so the push bounds are wider.
-    timeout-minutes: ${{ github.event_name == 'push' && 60 || 30 }}
+    # shards, not 10: measured ~28 min a shard on #1375, so the push bounds are wider.
+    # A full shard measured 1000-1250 s on macOS at 6 wide (issue #2638: 2.3x the
+    # ubuntu table run-selftests.sh predicts from), so the full bounds carry ~2x
+    # headroom even before the widening to 10.
+    timeout-minutes: ${{ github.event_name == 'push' && 60 || 50 }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -204,7 +209,7 @@ jobs:
         # budgets, a macOS runner is a noisier neighbour than an ubuntu one, and
         # this job is nightly — a timeout red costs a whole night's signal, where
         # a few extra idle minutes cost nothing on a free public runner.
-        timeout-minutes: ${{ github.event_name == 'push' && 50 || 20 }}
+        timeout-minutes: ${{ github.event_name == 'push' && 50 || 40 }}
         env:
           # push → only the tests related to what landed since the previous master
           # (issue #2286); nightly / dispatch → full. A first push or a force-push
