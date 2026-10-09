@@ -58,6 +58,7 @@ printf '%s\n' "$surf" | grep -q '要翻案，在编排会话说' && ok "A: today
   || bad "A: no 翻案 line"
 printf '%s\n' "$surf" | grep -q '发布到各台机器' && ok "A: 待你动手 on the same page" || bad "A: no todo"
 grep -q 'name="viewport" content="width=device-width' "$WORK/a.html" && grep -q -- '--ground' "$WORK/a.html" \
+  && [ "$(grep -c '<style>' "$WORK/a.html")" = 1 ] && grep -q '^<style>$' "$WORK/a.html" \
   && grep -q '<details class="fold">' "$WORK/a.html" \
   && ok "A: phone viewport, the epic-page <style>, details folded" || bad "A: frame missing"
 grep -q 'issues/2690#issuecomment' "$WORK/a.html" && ok "A: the source links stay in the fold" || bad "A: no source in the fold"

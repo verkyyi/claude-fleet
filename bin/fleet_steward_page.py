@@ -232,7 +232,8 @@ def decided_today(st, now_t):
 
 def style():
     try:
-        m = re.search(r"<style>.*?</style>", TEMPLATE.read_text(encoding="utf-8"), re.S)
+        # the element, at a line's start — the template's comments say "<style>" too
+        m = re.search(r"^<style>$.*?^</style>$", TEMPLATE.read_text(encoding="utf-8"), re.S | re.M)
         return m.group(0) if m else ""
     except OSError:
         return ""
