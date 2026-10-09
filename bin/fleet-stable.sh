@@ -57,6 +57,19 @@
 #               installs from this release. Missing / invalid REFUSES (reason
 #               `release:`); --force moves anyway and logs, like gates 4 and 5. A
 #               tree without the updater has nothing to declare and passes.
+#            7. every artifact that release.json pins (`fleet-node-update.py
+#               pinned-artifacts`, for the platforms the hub names) is one the
+#               hub's GET /v1/fleet/release/artifacts lists — the files a release
+#               built from the target would carry (issue #2631: release.json
+#               pinned claude 2.1.295, nobody put it in the hub's
+#               CCQUOTA_FLEET_RELEASE_ARTIFACTS, and every managed machine sat in
+#               backoff on the old version). A missing one REFUSES (reason
+#               `artifacts:`, naming it) — unless the hub fetches it itself
+#               (Claude Code from npm; /artifacts?want= names it `fetchable`);
+#               a hub that cannot be read refuses too;
+#               --force moves anyway and logs. No hub address here
+#               (CCQUOTA_HUB_URL / FLEET_HUB_URL / fleet.conf / hub.json), or a
+#               hub with no such list (releases off, an older hub): said, passes.
 #          Then pushes <sha>:refs/tags/stable with --force-with-lease pinned to
 #          the value it read, so two concurrent moves cannot both win — the
 #          loser's push is rejected and nothing is overwritten.
@@ -74,7 +87,8 @@
 #   show  0 tag read (CURRENT/BEHIND/OFFTRUNK) · 1 NONE · 2 UNKNOWN / usage
 #   move  0 moved (or already there, or dry-run passed) · 2 usage / read error
 #         3 refused (not on trunk / backward / CI not green / oldcfg red / macos not
-#           green / release.json missing or invalid) · 4 push failed
+#           green / release.json missing or invalid / a pinned artifact not on
+#           the hub) · 4 push failed
 #           (lease lost to a concurrent move, or no push rights)
 set -u
 
@@ -208,6 +222,64 @@ release_gate() {   # release_gate <old> <new>
   refuse "release: $_why — fix it (docs/MANAGED-NODE.md §7), or --force to move anyway (logged)"
 }
 
+# 7. Every artifact release.json pins is on the hub (issue #2631). The hub
+# address is read the way fleet-release.sh reads it.
+hub_url() {
+  _u="${CCQUOTA_HUB_URL:-${FLEET_HUB_URL:-}}"
+  _cd="${FLEET_CONF_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/claude-fleet}"
+  [ -n "$_u" ] || _u=$(sed -nE 's/^[[:space:]]*(export[[:space:]]+)?FLEET_HUB_URL=//p' "$_cd/fleet.conf" 2>/dev/null | tail -n 1 | tr -d "\"' ")
+  [ -n "$_u" ] || _u=$(python3 -c 'import json,sys
+try: print(json.load(open(sys.argv[1])).get("url") or "")
+except Exception: pass' "${XDG_CONFIG_HOME:-$HOME/.config}/claude-fleet/hub.json" 2>/dev/null)
+  printf '%s' "${_u%/}"
+}
+artifacts_gate() {   # artifacts_gate <old> <new>
+  git -C "$dir" cat-file -e "$2:bin/fleet-node-update.py" 2>/dev/null || return 0
+  _rj=$(git -C "$dir" show "$2:release.json" 2>/dev/null) || return 0
+  _hub=$(hub_url)
+  if [ -z "$_hub" ]; then
+    printf 'artifacts: no hub address here — release.json pins not checked against the hub\n'; return 0
+  fi
+  _tmp=$(mktemp "${TMPDIR:-/tmp}/fleet-stable-art.XXXXXX") || die "mktemp failed"
+  _code=$(curl -sS -m "$timeout" -o "$_tmp" -w '%{http_code}' "$_hub/v1/fleet/release/artifacts" 2>/dev/null); _rc=$?
+  if [ "$_rc" -eq 0 ] && [ "$_code" = 404 ]; then
+    rm -f "$_tmp"
+    printf 'artifacts: %s lists no release artifacts (releases off, or an older hub) — not checked\n' "$_hub"; return 0
+  fi
+  _missing=""
+  if [ "$_rc" -ne 0 ] || { [ "$_code" != 200 ] && [ "$_code" != 000 ]; } \
+     || ! _missing=$(printf '%s\n' "$_rj" | python3 -c '
+import json, subprocess, sys
+hub = json.load(open(sys.argv[2]))
+have = set(hub.get("artifacts") or [])
+plats = hub.get("platforms") or ["darwin-arm64"]
+out = subprocess.run([sys.executable, sys.argv[1], "pinned-artifacts", "-"] + plats,
+                     stdin=sys.stdin, stdout=subprocess.PIPE, check=True, universal_newlines=True).stdout
+print(" ".join(n for n in out.split() if n not in have))' "$BIN_DIR/fleet-node-update.py" "$_tmp" 2>/dev/null); then
+    rm -f "$_tmp"
+    _why="could not read $_hub/v1/fleet/release/artifacts (curl $_rc, HTTP $_code) — no evidence the hub can build $(short "$2")'s release"
+  else
+    # what the hub fetches itself at build time (Claude Code from npm) is not missing
+    if [ -n "$_missing" ] && [ "$(curl -sS -m "$timeout" -o "$_tmp" -w '%{http_code}' \
+         "$_hub/v1/fleet/release/artifacts?want=$(printf '%s' "$_missing" | tr ' ' ',')" 2>/dev/null)" = 200 ]; then
+      _fetch=$(python3 -c 'import json,sys
+print(" ".join(json.load(open(sys.argv[1])).get("fetchable") or []))' "$_tmp" 2>/dev/null)
+      if [ -n "$_fetch" ]; then
+        printf 'artifacts: %s fetches %s itself when it builds the release\n' "$_hub" "$_fetch"
+        _missing=$(for n in $_missing; do case " $_fetch " in (*" $n "*) ;; (*) printf '%s ' "$n" ;; esac; done)
+        _missing=${_missing% }
+      fi
+    fi
+    rm -f "$_tmp"
+    if [ -z "$_missing" ]; then
+      printf 'artifacts: every artifact %s pins is on %s\n' "$(short "$2")" "$_hub"; return 0
+    fi
+    _why="$(short "$2")'s release.json pins $(printf '%s' "$_missing" | sed 's/ /, /g'), which the hub's CCQUOTA_FLEET_RELEASE_ARTIFACTS does not hold — every managed machine would stay on the old version"
+  fi
+  if [ "$force" -eq 1 ]; then force_log "$1" "$2" artifacts "$_why" "the hub's artifacts"; return 0; fi
+  refuse "artifacts: $_why — put it there first (docs/MANAGED-NODE.md §7), or --force to move anyway (logged)"
+}
+
 # 4. An old session of the current stable, run on the target (issue #2075): the
 # replay's findings are printed as they came.
 oldcfg_log() { force_log "$1" "$2" oldcfg "$3" "the replay"; }
@@ -317,6 +389,7 @@ do_move() {
     refuse "$(short "$new") has NO check runs (path-filtered CI?) — no evidence it is green; pick a commit CI ran on, or pass --allow-no-checks"
   fi
   release_gate "$old" "$new"
+  artifacts_gate "$old" "$new"
   [ -z "$old" ] || oldcfg_gate "$old" "$new"
   macos_gate "$old" "$new" "$slug"
 

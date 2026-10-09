@@ -1,9 +1,14 @@
 package api
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha512"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -11,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -30,6 +36,7 @@ type releaseRig struct {
 	dir   string
 	dist  string
 	inst  string
+	npm   *fakeNPM
 	fetch *release.Fetcher
 }
 
@@ -63,6 +70,8 @@ func newReleaseRig(t *testing.T) *releaseRig {
 	must(t, os.WriteFile(filepath.Join(r.inst, "codex-0.50.0-darwin-arm64.tar.gz"), []byte("CODEX"), 0o644))
 	src := &StableSource{Repo: "o/r", APIBase: r.gh.URL, RawBase: r.gh.URL}
 	r.rs = &ReleaseStore{Dir: r.dir, Key: r.key, Repo: "o/r", Source: src, DistDir: r.dist, ArtifactsDir: r.inst}
+	r.npm = newFakeNPM(t)
+	r.rs.NPMRegistries = []string{r.npm.srv.URL} // never the real npm
 	r.hub = releaseHub(t, r.rs)
 	r.fetch = &release.Fetcher{Hub: r.hub.URL, Key: r.pub}
 	return r
@@ -429,6 +438,222 @@ func TestReleasePinnedArtifactsOnTheReleaseVolume(t *testing.T) {
 	for _, n := range names {
 		if _, err := os.Stat(filepath.Join(pinned, n)); err != nil {
 			t.Errorf("prune touched pinned/%s: %v", n, err)
+		}
+	}
+}
+
+// claude-fleet#2631: release.json pins a Claude Code version whose artifact is
+// not in CCQUOTA_FLEET_RELEASE_ARTIFACTS. The build is refused (named, nothing
+// kept), /artifacts says what a build would carry — what fleet-stable.sh move
+// checks first — and once the file lands the next request builds the whole
+// release, no second stable move needed. A tree with no release.json pins
+// nothing (every other test here).
+func TestReleaseBuildRefusesMissingPinned(t *testing.T) {
+	r := newReleaseRig(t)
+	r.g.files[shaA+"/"+release.ReleaseJSON] = `{"schema":1,"components":{` +
+		`"ccquota":{"artifact":"ccquota-{os}-{arch}"},` +
+		`"claude":{"version":"9.9.9","artifact":"claude-{version}-{os}-{arch}"},` +
+		`"codex":{"version":"0.1.0","artifact":"codex-{version}-{os}-{arch}"},` +
+		`"tmux":{"version":"3.7c","artifact":"tmux-{version}-{os}-{arch}"},` +
+		`"supervisor":{"script":"bin/fleet-node-update.py"}}}`
+	must(t, os.WriteFile(filepath.Join(r.inst, "codex-0.1.0-darwin-arm64"), []byte("CODEX"), 0o755))
+	must(t, os.WriteFile(filepath.Join(r.inst, "tmux-3.7c-darwin-arm64"), []byte("TMUX"), 0o755))
+	must(t, r.rs.Source.Refresh(context.Background()))
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	err := r.rs.Ensure(ctx, shaA)
+	if err == nil || !strings.Contains(err.Error(), "claude-9.9.9-darwin-arm64") {
+		t.Fatalf("Ensure = %v, want a refusal naming claude-9.9.9-darwin-arm64", err)
+	}
+	if r.rs.Has(shaA) {
+		t.Fatal("a release missing a pinned artifact was kept")
+	}
+	resp, body := getBody(t, r.hub.URL+release.Path+"stable")
+	if resp.StatusCode != http.StatusBadGateway || !strings.Contains(body, "claude-9.9.9-darwin-arm64") {
+		t.Fatalf("GET stable: %d %s", resp.StatusCode, body)
+	}
+
+	listed := func() []string {
+		resp, body := getBody(t, r.hub.URL+release.Path+"artifacts")
+		if resp.StatusCode != 200 || resp.Header.Get("Cache-Control") != "no-store" {
+			t.Fatalf("GET artifacts: %d %q %s", resp.StatusCode, resp.Header.Get("Cache-Control"), body)
+		}
+		var v struct {
+			Artifacts []string `json:"artifacts"`
+			Platforms []string `json:"platforms"`
+		}
+		must(t, json.Unmarshal([]byte(body), &v))
+		if strings.Join(v.Platforms, ",") != "darwin-arm64" {
+			t.Errorf("platforms %v", v.Platforms)
+		}
+		return v.Artifacts
+	}
+	if got := strings.Join(listed(), " "); strings.Contains(got, "claude-9.9.9") || !strings.Contains(got, "ccquota-darwin-arm64") || strings.Contains(got, "README") {
+		t.Fatalf("artifacts before the upload: %s", got)
+	}
+
+	must(t, os.WriteFile(filepath.Join(r.inst, "claude-9.9.9-darwin-arm64"), []byte("CLAUDE"), 0o755))
+	if got := strings.Join(listed(), " "); !strings.Contains(got, "claude-9.9.9-darwin-arm64") {
+		t.Fatalf("artifacts after the upload: %s", got)
+	}
+	resp, body = getBody(t, r.hub.URL+release.Path+"stable")
+	if resp.StatusCode != 200 {
+		t.Fatalf("GET stable after the upload: %d %s", resp.StatusCode, body)
+	}
+	var m release.Manifest
+	must(t, json.Unmarshal([]byte(body), &m))
+	have := map[string]bool{}
+	for _, a := range m.Artifacts {
+		have[a.Name] = true
+	}
+	for _, n := range []string{"ccquota-darwin-arm64", "claude-9.9.9-darwin-arm64", "codex-0.1.0-darwin-arm64", "tmux-3.7c-darwin-arm64"} {
+		if !have[n] {
+			t.Errorf("the rebuilt release lacks %s: %v", n, m.Artifacts)
+		}
+	}
+}
+
+// fakeNPM: a registry holding the packages a test puts in it (none: 404).
+type fakeNPM struct {
+	srv  *httptest.Server
+	mu   sync.Mutex
+	meta map[string]string // "/@anthropic-ai%2f<pkg>/<ver>" → JSON
+	tgz  map[string][]byte // "/@anthropic-ai/<pkg>/-/<pkg>-<ver>.tgz" → bytes
+	hits map[string]int
+}
+
+func newFakeNPM(t *testing.T) *fakeNPM {
+	t.Helper()
+	f := &fakeNPM{meta: map[string]string{}, tgz: map[string][]byte{}, hits: map[string]int{}}
+	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		p := r.URL.EscapedPath()
+		f.hits[p]++
+		if m, ok := f.meta[p]; ok {
+			_, _ = w.Write([]byte(m))
+			return
+		}
+		if b, ok := f.tgz[p]; ok {
+			_, _ = w.Write(b)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(f.srv.Close)
+	return f
+}
+
+// put publishes <pkg>@<ver> holding package/claude = bin; integrity as npm
+// computes it unless lie.
+func (f *fakeNPM) put(t *testing.T, pkg, ver string, bin []byte, lie bool) {
+	t.Helper()
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	for _, e := range []struct {
+		name string
+		b    []byte
+	}{{"package/package.json", []byte(`{}`)}, {"package/claude", bin}} {
+		must(t, tw.WriteHeader(&tar.Header{Name: e.name, Mode: 0o755, Size: int64(len(e.b)), Typeflag: tar.TypeReg}))
+		_, err := tw.Write(e.b)
+		must(t, err)
+	}
+	must(t, tw.Close())
+	must(t, gz.Close())
+	sum := sha512.Sum512(buf.Bytes())
+	if lie {
+		sum[0] ^= 1
+	}
+	tp := "/@anthropic-ai/" + pkg + "/-/" + pkg + "-" + ver + ".tgz"
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.tgz[tp] = buf.Bytes()
+	f.meta["/@anthropic-ai%2f"+pkg+"/"+ver] = `{"dist":{"integrity":"sha512-` + base64.StdEncoding.EncodeToString(sum[:]) +
+		`","tarball":"` + f.srv.URL + tp + `"}}`
+}
+
+// claude-fleet#2631: the Claude Code release.json pins is the hub's to fetch.
+// A build that lacks it takes Anthropic's npm package for the platform, checks
+// it against the registry's sha512 integrity, and signs it into the release;
+// /artifacts?want= names it fetchable before any build; a tarball that does not
+// match is never kept, and the build is refused as before.
+func TestReleaseFetchesPinnedClaude(t *testing.T) {
+	r := newReleaseRig(t)
+	r.g.files[shaA+"/"+release.ReleaseJSON] = `{"schema":1,"components":{` +
+		`"ccquota":{"artifact":"ccquota-{os}-{arch}"},` +
+		`"claude":{"version":"9.9.9","artifact":"claude-{version}-{os}-{arch}"},` +
+		`"codex":{"version":"0.1.0","artifact":"codex-{version}-{os}-{arch}"},` +
+		`"tmux":{"version":"3.7c","artifact":"tmux-{version}-{os}-{arch}"},` +
+		`"supervisor":{"script":"bin/fleet-node-update.py"}}}`
+	must(t, os.WriteFile(filepath.Join(r.inst, "codex-0.1.0-darwin-arm64"), []byte("CODEX"), 0o755))
+	must(t, os.WriteFile(filepath.Join(r.inst, "tmux-3.7c-darwin-arm64"), []byte("TMUX"), 0o755))
+	must(t, r.rs.Source.Refresh(context.Background()))
+
+	// a tarball that does not match its integrity: refused, nothing left behind
+	r.npm.put(t, "claude-code-darwin-arm64", "9.9.9", []byte("EVIL"), true)
+	resp, body := getBody(t, r.hub.URL+release.Path+"stable")
+	if resp.StatusCode != http.StatusBadGateway || !strings.Contains(body, "claude-9.9.9-darwin-arm64") {
+		t.Fatalf("GET stable with a lying tarball: %d %s", resp.StatusCode, body)
+	}
+	ents, _ := os.ReadDir(r.inst)
+	for _, e := range ents {
+		if strings.HasPrefix(e.Name(), "claude-9") || strings.HasPrefix(e.Name(), ".") {
+			t.Errorf("a refused fetch left %s", e.Name())
+		}
+	}
+
+	r.npm.put(t, "claude-code-darwin-arm64", "9.9.9", []byte("\xcf\xfa\xed\xfe CLAUDE 9.9.9"), false)
+	resp, body = getBody(t, r.hub.URL+release.Path+"artifacts?want=claude-9.9.9-darwin-arm64,claude-8.8.8-darwin-arm64,tmux-3.7c-darwin-arm64,../x")
+	var v struct {
+		Fetchable []string `json:"fetchable"`
+	}
+	must(t, json.Unmarshal([]byte(body), &v))
+	if resp.StatusCode != 200 || strings.Join(v.Fetchable, " ") != "claude-9.9.9-darwin-arm64" {
+		t.Fatalf("artifacts?want: %d fetchable=%v %s", resp.StatusCode, v.Fetchable, body)
+	}
+
+	resp, body = getBody(t, r.hub.URL+release.Path+"stable")
+	if resp.StatusCode != 200 {
+		t.Fatalf("GET stable: %d %s", resp.StatusCode, body)
+	}
+	got, err := os.ReadFile(filepath.Join(r.inst, "claude-9.9.9-darwin-arm64"))
+	if err != nil || string(got) != "\xcf\xfa\xed\xfe CLAUDE 9.9.9" {
+		t.Fatalf("fetched artifact = %q, %v", got, err)
+	}
+	if st, _ := os.Stat(filepath.Join(r.inst, "claude-9.9.9-darwin-arm64")); st.Mode().Perm() != 0o755 {
+		t.Errorf("fetched artifact mode %v", st.Mode())
+	}
+	dest := filepath.Join(t.TempDir(), "rt")
+	m, err := r.fetch.Fetch(context.Background(), "stable", dest, true)
+	if err != nil {
+		t.Fatalf("a machine's fetch of the release: %v", err)
+	}
+	found := false
+	for _, a := range m.Artifacts {
+		found = found || a.Name == "claude-9.9.9-darwin-arm64"
+	}
+	if !found {
+		t.Fatalf("the release does not carry the fetched claude: %v", m.Artifacts)
+	}
+}
+
+func TestClaudeNPM(t *testing.T) {
+	for in, want := range map[string]string{
+		"claude-2.1.295-darwin-arm64":     "claude-code-darwin-arm64@2.1.295",
+		"claude-2.1.295-linux-amd64":      "claude-code-linux-x64@2.1.295",
+		"claude-2.2.0-beta.1-linux-arm64": "claude-code-linux-arm64@2.2.0-beta.1",
+		"codex-0.154.0-darwin-arm64":      "",
+		"claude-2.1.295-windows-amd64":    "",
+	} {
+		pkg, ver, ok := claudeNPM(in)
+		got := ""
+		if ok {
+			got = pkg + "@" + ver
+		}
+		if got != want {
+			t.Errorf("claudeNPM(%s) = %q, want %q", in, got, want)
 		}
 	}
 }

@@ -182,6 +182,15 @@ root 运行；它取代托管账号各自的 `fleet-install-sync.sh`（那个账
 - `os` / `arch` 只是 artifact 名字的展开；校验和永远是**入口签名清单**里的那个，`release.json` 不写校验和。
 - 升一个部件 = 改这里的版本 + 把同名 artifact 放进入口的 `CCQUOTA_FLEET_RELEASE_ARTIFACTS`，再移 stable。
   发布包里缺 artifact → 这一版**不换**（`failed`，1 小时后重试），不会只换一半。
+  两道拦截（#2631）：`fleet-stable.sh move` 先问入口 `GET /v1/fleet/release/artifacts`，目标 `release.json`
+  钉的制品（`fleet-node-update.py pinned-artifacts`，按入口说的平台展开，默认 `darwin-arm64`）缺一个就拒挪
+  （`artifacts:`，点名缺哪个；`--force` 记一行）；入口自己也不打包缺钉住制品的发布版（构建报错、不落盘），
+  制品放进去后下一次请求就建出完整的一版。
+- **Claude Code 不用人传**（#2631）：升 `components.claude.version` 即可。入口建包时缺 `claude-<ver>-<os>-<arch>`
+  就自己取 Anthropic 发到 npm 的 `@anthropic-ai/claude-code-<os>-<arch>@<ver>`（与 downloads.claude.ai 同一份字节；
+  入口所在集群连不上那边的 Google 存储），按 registry 的 `dist.integrity`（sha512）校验，取出 `package/claude`
+  放进制品目录，再和别的制品一起签进清单。registry 依次试 `CCQUOTA_FLEET_RELEASE_NPM`（默认 npm → npmmirror）。
+  门里这种名字算「入口自取」（`/v1/fleet/release/artifacts?want=` 的 `fetchable`）。Codex / tmux 仍要人放。
 - `fleet-stable.sh move` 拒绝一个带 `bin/fleet-node-update.py` 却没有合法 `release.json` 的目标（`release:`，`--force` 记一行）；
   校验只有一处：`fleet-node-update.py check-release`。
 

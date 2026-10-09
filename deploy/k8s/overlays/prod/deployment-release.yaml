@@ -14,7 +14,13 @@
 # Bumping a version in release.json means putting the new file here BEFORE
 # moving stable (docs/MANAGED-NODE.md §7): a release reads this dir once, when
 # its stable is first built, and is never rebuilt — one missing an artifact
-# leaves the managed machines on the old version (`failed`).
+# leaves the managed machines on the old version (`failed`). Since #2631 both
+# ends guard it: `fleet-stable.sh move` refuses (`artifacts:`) while
+# GET /v1/fleet/release/artifacts lacks a pinned name, and the hub refuses to
+# build such a release (unkept — it builds whole once the file lands). Claude
+# Code needs no person: the hub fetches the pinned version from npm
+# (@anthropic-ai/claude-code-<os>-<arch>, sha512-checked; CCQUOTA_FLEET_RELEASE_NPM,
+# default npm then npmmirror) into this dir when a build lacks it.
 apiVersion: apps/v1
 kind: Deployment
 metadata:

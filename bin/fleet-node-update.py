@@ -69,6 +69,9 @@ Usage:
                                             exit = the FAIL count (`fleet doctor --machine`)
   fleet-node-update.py versions             one line: every part's version vs release.json
   fleet-node-update.py check-release <file|->  validate a release.json (fleet-stable.sh move)
+  fleet-node-update.py pinned-artifacts <file|-> [<os>-<arch>…]
+                                            the artifact names it pins, one a line
+                                            (default darwin-arm64; fleet-stable.sh gate 7)
   fleet-node-update.py link-account <login> (internal: run demoted to <login>)
 
 Seams (sandbox tests, docs/BREAK-IT.md `node-update-half`): the supervisor's
@@ -173,9 +176,23 @@ def platform_id():
     return [osn, arch]
 
 
-def artifact_name(tmpl, version=""):
-    osn, arch = platform_id()
+def artifact_name(tmpl, version="", plat=None):
+    osn, arch = plat or platform_id()
     return tmpl.replace("{version}", version).replace("{os}", osn).replace("{arch}", arch)
+
+
+def pinned_artifacts(spec, plats):
+    """Every artifact name release.json pins, expanded for each "<os>-<arch>"
+    in plats — what the hub's CCQUOTA_FLEET_RELEASE_ARTIFACTS (and dist dir)
+    must hold before stable moves (fleet-stable.sh gate 7, issue #2631)."""
+    c = check_release(spec)["components"]
+    out = []
+    for p in plats:
+        plat = p.split("-", 1)
+        out.append(artifact_name(c["ccquota"]["artifact"], "", plat))
+        for t in TOOLS:
+            out.append(artifact_name(c[t]["artifact"], c[t]["version"], plat))
+    return sorted(set(out))
 
 
 def wanted(spec):
@@ -871,6 +888,16 @@ def main(argv):
             print("release.json: %s" % e, file=sys.stderr)
             return 1
         print("release.json ok")
+        return 0
+    if cmd == "pinned-artifacts":
+        src = rest[0] if rest else "-"
+        try:
+            raw = sys.stdin.read() if src == "-" else open(src).read()
+            names = pinned_artifacts(json.loads(raw), rest[1:] or ["darwin-arm64"])
+        except (ValueError, IOError, OSError) as e:
+            print("release.json: %s" % e, file=sys.stderr)
+            return 1
+        print("\n".join(names))
         return 0
     if cmd == "link-account" and rest:
         return link_account(rest[0])

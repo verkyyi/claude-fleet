@@ -75,6 +75,8 @@
 #                                                   /internal/v1/node-write; go test, when a toolchain is here)
 #   oldcfg-deleted-hook                             bin/fleet-stable.sh move (the oldcfg gate), fleet-oldcfg-replay.py
 #   macos-red-to-stable                             bin/fleet-macos-watch.sh (breakage filing), fleet-stable.sh move (macos gate)
+#   release-artifact-missing                        bin/fleet-stable.sh move (the artifacts gate),
+#                                                   fleet-node-update.py pinned-artifacts, the hub's build refusal
 #   two-hubs-double-refresh                         tokenledger/internal/leader (Leader / Lock), credvault Lease's
 #                                                   CrossLock, the three gated loops (go test, when a toolchain is here)
 #   hub-release-downtime                            .github/actions/hub-release/probe.sh (downtime_seconds),
@@ -3687,6 +3689,55 @@ SH
   SECS=$(since "$t0")
   [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable)" = "$c2" ] || { WHY="stable did not move after the run went green"; return 1; }
   WHAT="master 上 macOS 红：开出带指纹的修复单、stable 拒挪（macos:）；同一提交跑绿后照常挪"
+}
+
+# ---- release-artifact-missing (#2631): release.json pins a Claude Code version
+# whose artifact nobody put in the hub's CCQUOTA_FLEET_RELEASE_ARTIFACTS. Before:
+# stable moved, the hub baked the release without it, every managed machine sat
+# in backoff on the old version. Now `fleet-stable.sh move` asks the hub's
+# /v1/fleet/release/artifacts first and refuses with `artifacts:`, naming the
+# file; once it is there the same move goes through. The hub half (a build that
+# lacks a pinned artifact is refused, never baked) is its Go test, held by name.
+# A file:// hub; a real bare repo + tag; fake gh.
+drill_release_artifact_missing() {
+  CAP=30; local t0 d out rc c1 c2 f
+  f="$ROOT/tokenledger/internal/api/fleet_release_test.go"
+  grep -q '^func TestReleaseBuildRefusesMissingPinned(' "$f" 2>/dev/null \
+    || { WHY="the hub half's test TestReleaseBuildRefusesMissingPinned is not in ${f#$ROOT/}"; return 1; }
+  d="$WORK/relart"; mkdir -p "$d/shim" "$d/seed" "$d/conf" "$d/hub/v1/fleet/release"
+  printf '#!/bin/sh\nprintf "completed success ci\\n"\n' > "$d/shim/gh"; chmod +x "$d/shim/gh"
+  ( export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+    export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
+    git init -q --bare -b master "$d/origin.git" && git clone -q "$d/origin.git" "$d/seed" 2>/dev/null || exit 1
+    mkdir -p "$d/seed/bin"; printf '#!/usr/bin/env python3\n' > "$d/seed/bin/fleet-node-update.py"
+    sed 's/"2\.1\.[0-9]*"/"2.1.293"/' "$ROOT/release.json" > "$d/seed/release.json"
+    git -C "$d/seed" add -A && git -C "$d/seed" commit -qm old && git -C "$d/seed" push -q origin HEAD:master || exit 1
+    git -C "$d/seed" rev-parse HEAD > "$d/c1"
+    sed 's/"2\.1\.293"/"9.9.9"/' "$d/seed/release.json" > "$d/rj" && mv "$d/rj" "$d/seed/release.json"
+    git -C "$d/seed" add -A && git -C "$d/seed" commit -qm 'bump claude' && git -C "$d/seed" push -q origin HEAD:master || exit 1
+    git -C "$d/seed" rev-parse HEAD > "$d/c2"
+    git --git-dir="$d/origin.git" update-ref refs/tags/stable "$(cat "$d/c1")" && git clone -q "$d/origin.git" "$d/co" 2>/dev/null
+  ) || { WHY="could not build the rig repo"; return 1; }
+  c1=$(cat "$d/c1"); c2=$(cat "$d/c2")
+  hub_has() { printf '{"artifacts":[' > "$d/hub/v1/fleet/release/artifacts"
+    printf '"%s",' "$@" | sed 's/,$//' >> "$d/hub/v1/fleet/release/artifacts"
+    printf ']}\n' >> "$d/hub/v1/fleet/release/artifacts"; }
+  hub_has ccquota-darwin-arm64 claude-2.1.293-darwin-arm64 codex-0.154.0-darwin-arm64 tmux-3.7c-darwin-arm64
+  t0=$(now)
+  out=$(PATH="$d/shim:$PATH" FLEET_CONF_DIR="$d/conf" XDG_CONFIG_HOME="$d/conf" CCQUOTA_HUB_URL='' FLEET_HUB_URL="file://$d/hub" \
+          sh "$BIN/fleet-stable.sh" move "$c2" --dir "$d/co" --repo o/r 2>&1); rc=$?
+  [ "$rc" = 3 ] || { WHY="move onto the bump exited $rc, want 3 (refused): $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1; }
+  case "$out" in *'REFUSED — artifacts:'*) ;; *) WHY="the refusal is not prefixed artifacts: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1 ;; esac
+  case "$out" in *'claude-9.9.9-darwin-arm64'*) ;; *) WHY="the refusal does not name claude-9.9.9-darwin-arm64: $(printf '%s' "$out" | tr '\n' '|')"; return 1 ;; esac
+  [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable)" = "$c1" ] || { WHY="stable moved onto a release the hub cannot build"; return 1; }
+  # the operator drops the file in → the same move goes through
+  hub_has ccquota-darwin-arm64 claude-9.9.9-darwin-arm64 codex-0.154.0-darwin-arm64 tmux-3.7c-darwin-arm64
+  out=$(PATH="$d/shim:$PATH" FLEET_CONF_DIR="$d/conf" XDG_CONFIG_HOME="$d/conf" CCQUOTA_HUB_URL='' FLEET_HUB_URL="file://$d/hub" \
+          sh "$BIN/fleet-stable.sh" move "$c2" --dir "$d/co" --repo o/r 2>&1) \
+    || { WHY="the move after the artifact landed failed: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1; }
+  SECS=$(since "$t0")
+  [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable)" = "$c2" ] || { WHY="stable did not move once the artifact was there"; return 1; }
+  WHAT="release.json 钉的 claude 入口没有：stable 拒挪（artifacts: 点名缺的制品）；放进去后同一提交照常挪"
 }
 
 # ---- release-unverified (#2483, EPIC #2482 C3): `fleet release` runs the whole
