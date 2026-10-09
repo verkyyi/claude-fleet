@@ -672,3 +672,9 @@ FLEET_RELEASE_KICK_CMD             seam: `<cmd> <machine>` stands in for the ssh
 FLEET_RELEASE_SYNC_CMD             seam: the local install-sync fleet-release.sh step ⑤ runs (selftests, #2483)
 FLEET_RELEASE_SYNC_STATE           path: the install-sync state file step ⑤ reads (default $FLEET_CONF_DIR/global/install-sync.state; selftests, #2483)
 FLEET_RELEASE_DOCTOR_CMD           seam: the doctor step ⑤ reads the install row from (selftests, #2483)
+FLEET_HUB_SESSIONS_FAIL_SECS       knob: internal budget, seconds past which fleet-doctor's `hub-sessions` row turns a stale other-machine cache from WARN into FAIL (600, #2630)
+FLEET_HUB_AUTH_FAIL_SECS           knob: internal budget, seconds a node-side hub read may stay refused (global/hub_auth_fail) before fleet-doctor's `hubauth` row FAILs (1800, #2630)
+FLEET_HUB_SESSIONS_NODE_REFUSED_TTL knob: internal budget, seconds fleet-hub-sessions.sh skips the node token after a hub refused it (an image older than the node-token read door) — 600, #2630
+FLEET_HUB_SESSIONS_NODE_TOKEN      knob: internal seam, 0 = fleet-hub-sessions.sh never reads with node.env's token (default 1, #2630)
+FLEET_HUBSESS_LOCKED               env handoff: fleet-hub-sessions.sh's lock parent (LOCK_PY) tells the --loop it runs that global/hubsess.lock is held (#2630)
+FLEET_HUBSESS_GUARD                env handoff: the lock parent's pid — the --loop stops once it is gone (#2630)

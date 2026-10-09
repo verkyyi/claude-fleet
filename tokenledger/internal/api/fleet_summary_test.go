@@ -181,3 +181,50 @@ func TestFleetSummaryCarriesHostedRepos(t *testing.T) {
 		t.Fatalf("every machine carries repos, [] for none (an older hub sends no key): %s", raw)
 	}
 }
+
+// A node token reads what its login's owner reads with a certificate
+// (claude-fleet#2630): node.env is the one credential every node daemon holds,
+// so the quota watch and the other-machine rows stop reading 401 on a login
+// with no viewer token. A node whose login is no active account, a revoked
+// token and garbage are refused; the sessions door admits the same.
+func TestFleetReadDoorsByNodeToken(t *testing.T) {
+	h := newFleetHarness(t)
+	now := time.Now()
+	p, _ := h.srv.Store.AdoptPrincipal("wx-alice", "alice", "Alice", now)
+	h.srv.Store.AdoptAccount(p, "m5", now)
+	alice := connectNode(t, h, "m5-alice", "m5", "alice", false)
+	bob := connectNode(t, h, "m4-bob", "m4", "bob", false)
+	waitFor(t, 3*time.Second, "two nodes", func() bool { return len(roster(t, h).Nodes) == 2 })
+	asNode := func(tok string) func(http.Header) {
+		return func(hdr http.Header) { hdr.Set("Authorization", "Bearer "+tok) }
+	}
+
+	code, out, raw := postSummary(t, h, asNode(alice.token), nil)
+	if code != 200 {
+		t.Fatalf("alice's node token: HTTP %d %s", code, raw)
+	}
+	ms, as := summaryKeys(out)
+	if len(ms) != 1 || ms[0] != "m5" || len(as) != 1 || as[0] != "acct-m5-alice" {
+		t.Fatalf("alice's node token reads machines %v subscriptions %v, want [m5] [acct-m5-alice]", ms, as)
+	}
+	for _, a := range out.PerAccount {
+		if a.Limits != nil && len(a.Limits.EndpointShares) != 0 {
+			t.Fatalf("a node's reading carries endpoint_shares: %+v", a.Limits.EndpointShares)
+		}
+	}
+	if code, _, raw := postSessions(t, h, asNode(alice.token), nil); code != 200 {
+		t.Fatalf("alice's node token on the sessions door: HTTP %d %s", code, raw)
+	}
+
+	for name, tok := range map[string]string{
+		"login with no account": bob.token,
+		"unknown token":         "not-a-node-token",
+	} {
+		if code, _, raw := postSummary(t, h, asNode(tok), nil); code != http.StatusUnauthorized {
+			t.Errorf("summary, %s: HTTP %d %s, want 401", name, code, raw)
+		}
+		if code, _, raw := postSessions(t, h, asNode(tok), nil); code != http.StatusUnauthorized {
+			t.Errorf("sessions, %s: HTTP %d %s, want 401", name, code, raw)
+		}
+	}
+}

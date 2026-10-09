@@ -56,7 +56,7 @@ func (s *Server) handleFleetSessions(w http.ResponseWriter, r *http.Request) {
 	} else if v := r.URL.Query().Get("wait"); v != "" {
 		args["wait"] = v
 	}
-	id, ok := s.sshRelayHTTPIdentity(r)
+	id, ok := s.fleetReadIdentity(r)
 	if !ok {
 		if req.Cert == "" || req.Sig == "" {
 			w.Header().Set("WWW-Authenticate", `Bearer realm="ccquota"`)

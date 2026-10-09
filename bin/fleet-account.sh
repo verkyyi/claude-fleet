@@ -694,8 +694,8 @@ quota_empty_streak() {
 quota_fetch() {
   command -v "$CCQUOTA" >/dev/null 2>&1 || return 0
   [ -n "${CCQUOTA_HUB_URL:-}" ] || return 0
-  local rows raw ra
-  raw=$("$CCQUOTA" budget --account all --json --timeout 10s 2>/dev/null)
+  local rows raw ra why
+  raw=$(quota_budget_json)
   rows=$(printf '%s' "$raw" | quota_parse)
   mkdir -p "$STATE_DIR"
   if printf '%s' "$rows" | grep -q . || [ -z "$(acct_labels)" ]; then
@@ -703,10 +703,13 @@ quota_fetch() {
     printf '%s' "$rows" | atomic_write "$STATE_QUOTA"
     now | atomic_write "$STATE_QUOTA_READ_AT"
     rm -f "$STATE_QUOTA_WHY"
+    fleet_hub_auth_note quota ok
   else
     # Nothing came back (issue #2465): say why, and keep the last reading while
     # it is young enough to act on — only past FLEET_QUOTA_STALE_OK is it cleared.
-    quota_why_note "$(printf '%s' "$raw" | quota_why)"
+    why=$(printf '%s' "$raw" | quota_why)
+    quota_why_note "$why"
+    case "$why" in refused*) fleet_hub_auth_note quota fail "${why#*$'\t'}" ;; *) fleet_hub_auth_note quota ok ;; esac
     ra=$(quota_read_at)
     if [ "$QUOTA_STALE_OK" -eq 0 ] || [ $(( $(now) - ra )) -gt "$QUOTA_STALE_OK" ]; then
       printf '%s' "$raw" | atomic_write "$STATE_DIR/account.quota.json"
@@ -717,6 +720,15 @@ quota_fetch() {
   quota_empty_streak "$rows"
   model_quota_sync "$raw"
   quota_paused_fetch
+}
+# quota_budget_json — ccquota's `budget --account all --json`, run with this
+# login's node token beside the viewer token (issue #2630): /v1/limits admits only
+# the operator's viewer token, so a node login with just node.env read 401 on every
+# tick; ccquota then reads the owner's subscriptions off the summary door with
+# CCQUOTA_TOKEN. The token is read inside THIS subshell (_fleet_hub_env) — never
+# exported to the caller, so no pane inherits a node credential (issue #1491).
+quota_budget_json() {
+  ( _fleet_hub_env; "$CCQUOTA" budget --account all --json --timeout 10s 2>/dev/null )
 }
 # quota_why — a ccquota payload that brought no rows (stdin) → one line
 # <refused|unreachable|empty><TAB><detail>: refused = the hub answered 401/403
@@ -893,7 +905,7 @@ cmd_quota() {
   local mode="" json=0 a
   for a in "$@"; do case "$a" in --refresh) mode=refresh;; --cached) mode=cached;; --json) json=1;; esac; done
   if [ "$json" = 1 ]; then
-    command -v "$CCQUOTA" >/dev/null 2>&1 && [ -n "${CCQUOTA_HUB_URL:-}" ] && "$CCQUOTA" budget --account all --json --timeout 10s 2>/dev/null
+    command -v "$CCQUOTA" >/dev/null 2>&1 && [ -n "${CCQUOTA_HUB_URL:-}" ] && quota_budget_json
     return 0
   fi
   quota_rows "$mode"

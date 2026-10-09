@@ -128,6 +128,9 @@
 #   hub-refused-cert                                fleet-client-lease.py where, fleet-client-where.sh,
 #                                                   fleet-client-badge.sh
 #   cert-expiry-keeper                              bin/fleet-shell.sh (keeper), fleet-login.py renew --if-under
+#   hubsess-daemon-nohup                            bin/fleet-hub-sessions.sh (ensure: no nohup; the lock)
+#   hub-read-refused-silent                         bin/fleet-account.sh (quota_budget_json), fleet-lib.sh
+#                                                   (fleet_hub_auth_note), fleet-doctor.sh (hubauth)
 #   offline-list-moves                              tmux-dashboard-rows.sh (lost rows stay put), fleet-sidebar.py
 #   static-forward / proxy-orphan                   bin/fleet-remote-view.sh (run), fleet-shell.sh
 #   view-node-restart                               bin/fleet-remote-view.sh (run: exit 3 waits)
@@ -5207,6 +5210,65 @@ drill_status_question_lost() {
   [ "$st" = needs/ask/7501 ] || { WHY="the Stop right after the question left [$st] — 在问你 flashed to 完成"; return 1; }
   [ "$(o "$SPW" @claude_needs_detail)" = "$words" ] || { WHY="the question's words are gone: [$(o "$SPW" @claude_needs_detail)]"; return 1; }
   SECS=$(since "$t0"); WHAT="问问题：needs/ask 和原话在 Stop 之后还在"
+}
+
+# hubsess-daemon-nohup (issue #2630): the collector is a LaunchDaemon now, and
+# macOS's nohup detaches from the console through launchd and EXITS when it
+# cannot — every time under a daemon — so `--ensure` started no loop and the
+# other machines' rows stood still for 5 hours ("loop none"); meanwhile two
+# shells' --ensure raced past one pid file and two loops served one cache. The
+# drill puts such a nohup first on PATH and fires two --ensure and a --loop at
+# once: within 5s exactly ONE loop runs, it holds the lock, --status names it.
+drill_hubsess_daemon_nohup() {
+  CAP=5; local t0 d="$WORK/hsn" n p f
+  mkdir -p "$d/bin" "$d/fake" "$d/tmp" "$d/conf"
+  for f in "$BIN"/*; do ln -sf "$f" "$d/bin/"; done
+  printf '#!/bin/sh\necho "nohup: can'"'"'t detach from console" >&2\nexit 127\n' > "$d/fake/nohup"
+  printf '#!/bin/sh\nexit 1\n' > "$d/fake/tmux"
+  chmod +x "$d/fake/nohup" "$d/fake/tmux"
+  hsn() { env HOME="$d" PATH="$d/fake:$PATH" TMPDIR="$d/tmp" FLEET_CONF_DIR="$d/conf" FLEET_SKIP_GLOBAL_CONF=1 \
+            CCQUOTA_FLEET=1 FLEET_HUB_SESSIONS_CMD='printf "{\"machines\":[],\"sessions\":[],\"nodes\":[]}\n"' \
+            FLEET_HUB_SESSIONS_EVERY=1 FLEET_HUB_SESSIONS_LOOP_SECS=20 bash "$d/bin/fleet-hub-sessions.sh" "$@"; }
+  t0=$(now)
+  hsn --ensure & hsn --ensure & ( hsn --loop >/dev/null 2>&1 & )
+  wait
+  until_ok "$CAP" sh -c 'pgrep -f "^bash $1 --loop" >/dev/null' _ "$d/bin/fleet-hub-sessions.sh" \
+    || { WHY="with a nohup that cannot detach, no loop started — the LaunchDaemon case"; return 1; }
+  SECS=$(since "$t0")
+  sleep 1
+  n=$(pgrep -f "^bash $d/bin/fleet-hub-sessions.sh --loop" | wc -l | tr -d ' ')
+  p=$(pgrep -f "^bash $d/bin/fleet-hub-sessions.sh --loop" | head -1)
+  [ "$n" = 1 ] || { pkill -f "^bash $d/bin/fleet-hub-sessions.sh --loop"; WHY="$n loops serve one cache after two --ensure + a --loop at once"; return 1; }
+  case "$(hsn --status 2>/dev/null)" in "loop $p "*) ;; *) kill "$p" 2>/dev/null; WHY="--status does not name the lock holder $p: [$(hsn --status 2>&1)]"; return 1 ;; esac
+  kill "$p" 2>/dev/null
+  WHAT="nohup 退出、两次 --ensure 加一个 --loop 同时起：${SECS}s 内恰好一个 loop，持锁，--status 看得见"
+}
+
+# hub-read-refused-silent (issue #2630): a node login with no viewer token read
+# "HTTP 401: a viewer token is required" on every quota tick for a day, and
+# nothing said so in its own words — the doctor said 「盲」. Now ccquota runs with
+# the node token (the summary door), a refused read is recorded once per reader
+# in global/hub_auth_fail, and the doctor's hubauth row FAILs with the fix.
+drill_hub_read_refused_silent() {
+  CAP=30; local t0 d="$WORK/hrr" l
+  mkdir -p "$d/fake" "$d/tmp/.claude-dash/global" "$d/conf/fleets/s1" "$d/accounts"
+  printf 'tok-a\n' > "$d/accounts/a"; chmod 600 "$d/accounts/a"
+  printf 'FLEET_REPO="acme/widgets"\n' > "$d/conf/fleets/s1/conf"
+  printf 'CCQUOTA_HUB_URL=http://hub.test:8787\nCCQUOTA_TOKEN=node-tok\n' > "$d/conf/node.env"; chmod 600 "$d/conf/node.env"
+  printf '#!/bin/sh\nprintf "%%s\\n" "${CCQUOTA_TOKEN:-none}" > "%s/token"\nprintf %s\n' "$d" \
+    "'{\"verdict\":\"unknown\",\"reason\":\"hub unreachable: HTTP 401: {\\\\\"error\\\\\":\\\\\"a viewer token is required\\\\\"}\",\"accounts\":null}\\n'" > "$d/fake/ccquota"
+  chmod +x "$d/fake/ccquota"
+  hrr() { env HOME="$d" PATH="$d/fake:$PATH" TMPDIR="$d/tmp" FLEET_CONF_DIR="$d/conf" FLEET_SKIP_GLOBAL_CONF=1 \
+            FLEET_ACCOUNTS_DIR="$d/accounts" CCQUOTA_HUB_URL=http://hub.test:8787 FLEET_HUB_AUTH_FAIL_SECS=0 "$@"; }
+  t0=$(now)
+  hrr bash "$BIN/fleet-account.sh" quota --refresh >/dev/null 2>&1
+  [ "$(cat "$d/token" 2>/dev/null)" = node-tok ] || { WHY="ccquota did not get the node token: [$(cat "$d/token" 2>/dev/null)]"; return 1; }
+  grep -q '^quota	.*HTTP 401' "$d/tmp/.claude-dash/global/hub_auth_fail" 2>/dev/null \
+    || { WHY="the refused read left no hub_auth_fail record"; return 1; }
+  sleep 1
+  l=$(hrr bash "$BIN/fleet-doctor.sh" 2>/dev/null | grep -E '^ *FAIL +hubauth ')
+  case "$l" in *"quota refused"*"node token is here"*) ;; *) WHY="the doctor's hubauth row is not a FAIL naming the fix: [$l]"; return 1 ;; esac
+  SECS=$(since "$t0"); WHAT="401 的额度读：ccquota 拿到节点 token，hub_auth_fail 记一行，doctor hubauth FAIL 并给出修法"
 }
 
 # ================================================================ run ===========

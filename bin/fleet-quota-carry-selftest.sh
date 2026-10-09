@@ -25,6 +25,10 @@
 #   C  a 1-minute silence (no answer) → carried, doctor WARN 失联, no alarm row
 #   D  a cache from before #2465 (no read_at) → its stamp is the reading's age
 #   E  rows again → the why is gone, fresh, green
+#   F  the node token (issue #2630): ccquota runs with node.env's CCQUOTA_TOKEN
+#      in ITS environment (the summary door's credential), never the caller's;
+#      a refusal is on record in global/hub_auth_fail (`quota`) and the doctor's
+#      qwatch line names the fix; rows clear the record
 #
 # Hermetic: a FAKE ccquota on PATH (switchable payload), scratch pool, conf,
 # TMPDIR and HOME. No network, no tmux server. Exit 0 = pass.
@@ -55,6 +59,7 @@ MODE="$WORK/mode"
 cat > "$WORK/fakepath/ccquota" <<'FAKE'
 #!/bin/bash
 [ "${1:-}" = version ] && { printf 'ccquota 9.9.9-testbuild\n'; exit 0; }
+printf '%s\n' "${CCQUOTA_TOKEN:-none}" > "${FAKE_MODE_FILE%/*}/ccquota.token"
 case "$(cat "$FAKE_MODE_FILE" 2>/dev/null)" in
   refused) printf '{"verdict":"unknown","reason":"hub unreachable: HTTP 401: {\\"error\\":\\"unauthorized\\"}","accounts":null}\n' ;;
   down)    exit 1 ;;
@@ -160,6 +165,18 @@ printf 'rows' > "$MODE"; fetch
 [ "$(col "$(status)" 1)" = fresh ] || fail "E: --status fresh again" "$(status)"
 case "$(qwatch)" in *PASS*qwatch*) ;; *) fail "E: doctor green again" "$(qwatch)" ;; esac
 case "$(alerts)" in *"✖  quota · "*) fail "E: no quota alarm once the hub answers" "$(alerts)" ;; esac
+ok
+
+# --- F: the node token, and a refusal on record ------------------------------
+printf 'CCQUOTA_HUB_URL=http://hub.test:8787\nCCQUOTA_TOKEN=node-tok-2630\n' > "$WORK/conf/node.env"; chmod 600 "$WORK/conf/node.env"
+printf 'refused' > "$MODE"; fetch
+[ "$(cat "$WORK/ccquota.token")" = node-tok-2630 ] || fail "F: ccquota must run with node.env's CCQUOTA_TOKEN" "$(cat "$WORK/ccquota.token")"
+case "$(cat "$G/hub_auth_fail" 2>/dev/null)" in quota$'\t'[0-9]*$'\t'[0-9]*$'\t'*"HTTP 401"*) ;; *) fail "F: a refused quota read must be recorded in global/hub_auth_fail" "$(cat "$G/hub_auth_fail" 2>/dev/null)" ;; esac
+fetch; fetch; back 2100; fetch
+l=$(qwatch)
+case "$l" in *FAIL*qwatch*"node token is here"*) ;; *) fail "F: doctor qwatch must name the fix for a refused node token" "$l" ;; esac
+printf 'rows' > "$MODE"; fetch
+[ ! -s "$G/hub_auth_fail" ] || fail "F: rows must clear quota from hub_auth_fail" "$(cat "$G/hub_auth_fail")"
 ok
 
 printf 'selftest PASS: %s checks (carry under 401 · pick · verdict · doctor · alarm · expiry · silence · old cache · recovery)\n' "$CHECKS"

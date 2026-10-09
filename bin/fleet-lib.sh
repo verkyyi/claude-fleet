@@ -5825,6 +5825,64 @@ _fleet_hub_env() {
   return 0
 }
 
+# fleet_hub_auth_note <reader> ok|fail [reason] — the ONE record of a node-side
+# hub READ the hub refused (issue #2630): `$FLEET_C/global/hub_auth_fail`, one
+# line per reader — `<reader><TAB><since><TAB><last><TAB><reason>`. A refusal
+# keeps the since of the reader's line (so a reader can say how LONG it has been
+# refused) and moves its last; `ok` drops the line. Before this every reader
+# swallowed its own 401 — the quota watch read nothing for a day and the doctor
+# said so only as 「盲」. Read by fleet_hub_auth_rows / the doctor's `hubauth` row.
+# Cheap when nothing is wrong: an `ok` with no file (or no line of its) writes
+# nothing — the sessions loop calls it every round.
+fleet_hub_auth_note() {
+  local reader="$1" verdict="$2" reason="${3:-}" f now since='' r s l why tmp out=''
+  [ -n "$reader" ] || return 0
+  f="$FLEET_C/global/hub_auth_fail"
+  if [ "$verdict" = ok ]; then
+    [ -s "$f" ] || return 0
+    grep -q "^${reader}	" "$f" 2>/dev/null || return 0
+  fi
+  reason=$(printf '%s' "$reason" | tr '\t\n' '  ' | cut -c1-200)
+  now=$(date +%s)
+  if [ -s "$f" ]; then
+    while IFS=$'\t' read -r r s l why; do
+      [ -n "$r" ] || continue
+      if [ "$r" = "$reader" ]; then since=$s; continue; fi
+      out="${out}${r}	${s}	${l}	${why}
+"
+    done < "$f"
+  fi
+  if [ "$verdict" != ok ]; then
+    case "$since" in ''|*[!0-9]*) since=$now ;; esac
+    out="${out}${reader}	${since}	${now}	${reason}
+"
+  fi
+  mkdir -p "$FLEET_C/global" 2>/dev/null || return 0
+  if [ -z "$out" ]; then rm -f "$f"; return 0; fi
+  tmp="$f.$$.new"
+  printf '%s' "$out" > "$tmp" 2>/dev/null && mv -f "$tmp" "$f" 2>/dev/null || rm -f "$tmp"
+  return 0
+}
+
+# fleet_hub_auth_fix → ONE phrase on stdout: what to do about a refused hub read
+# on this login (issue #2630) — no node token ⇒ write it; an expired connection
+# certificate ⇒ `fleet login`; else the hub predates the node-token read door.
+fleet_hub_auth_fix() {
+  local cert="${FLEET_CERT:-$HOME/.ssh/fleet-cert}-cert.pub" until
+  if [ -z "${CCQUOTA_TOKEN:-}" ] && [ -z "$(_fleet_node_env_val CCQUOTA_TOKEN 2>/dev/null)" ]; then
+    printf 'no node token on this login (%s) — `bin/fleet-hub-node.sh env --write`, or `fleet login` for a certificate' "$(fleet_node_env_file)"
+    return 0
+  fi
+  if [ -f "$cert" ] && command -v ssh-keygen >/dev/null 2>&1; then
+    until=$(ssh-keygen -L -f "$cert" 2>/dev/null | awk '/Valid:/ && $4 == "to" { print $5; exit }')
+    if [ -n "$until" ] && [ "$(date +%Y-%m-%dT%H:%M:%S)" \> "$until" ]; then
+      printf 'the connection certificate expired %s — `fleet login`' "$until"
+      return 0
+    fi
+  fi
+  printf 'the node token is here but the read was refused — a hub image or a ccquota older than the node-token read door (#2630): redeploy the hub / update ccquota; `fleet login` reads with a certificate meanwhile'
+}
+
 # _fleet_hub_creds_missing → rc 0 and ONE phrase on stdout — what is missing, and
 # the fix — when the default `ccquota …` would exit 1 for want of credentials: no
 # token in the environment and none in node.env (or no hub URL anywhere). rc 1 =

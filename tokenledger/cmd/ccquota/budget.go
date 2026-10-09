@@ -31,6 +31,7 @@ import (
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/api"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/codex"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/identity"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/scan"
@@ -114,6 +115,9 @@ func runBudget(args []string) error {
 	fs := flag.NewFlagSet("budget", flag.ExitOnError)
 	hub := fs.String("hub", os.Getenv("CCQUOTA_HUB_URL"), "hub base URL")
 	token := secretEnvFlag(fs, "token", "CCQUOTA_VIEWER_TOKEN", "viewer `token`")
+	nodeToken := secretEnvFlag(fs, "node-token", "CCQUOTA_TOKEN",
+		"this login's node `token`: with --account all, read the owner's subscriptions\n"+
+			"from the hub's summary door when no viewer token is set or the hub refuses it")
 	account := fs.String("account", "",
 		"subscription to judge: a uuid, or `all`.\n"+
 			"Default: the account THIS machine is logged into, because that is the\n"+
@@ -149,7 +153,7 @@ Flags:
 	if *source != "claude" && *source != "codex" {
 		return fmt.Errorf("source must be claude or codex")
 	}
-	rep := budgetSource(*hub, *token, *account, *home, *source, *codexHome, *ceiling, *timeout)
+	rep := budgetSourceNode(*hub, *token, *nodeToken, *account, *home, *source, *codexHome, *ceiling, *timeout)
 
 	switch {
 	case *asJSON:
@@ -185,6 +189,17 @@ func budget(hub, token, account, home string, ceiling float64, timeout time.Dura
 }
 
 func budgetSource(hub, token, account, home, source, codexHome string, ceiling float64, timeout time.Duration) BudgetReport {
+	return budgetSourceNode(hub, token, "", account, home, source, codexHome, ceiling, timeout)
+}
+
+// budgetSourceNode is budgetSource with this login's node token as a second
+// door (claude-fleet#2630): /v1/limits admits only the operator's viewer token
+// or an admin, so a node login holding just node.env read "HTTP 401: a viewer
+// token is required" on every quota tick — for a day, on the operator's own
+// machine. For `--account all` (what the fleet's quota watch asks) a refused
+// or absent viewer token falls back to the summary door, which admits the node
+// token and answers the subscriptions its owner's logins report under.
+func budgetSourceNode(hub, token, nodeToken, account, home, source, codexHome string, ceiling float64, timeout time.Duration) BudgetReport {
 	rep := BudgetReport{CeilingPct: ceiling, Disclaimer: budgetDisclaimer, Scope: account, Source: source}
 
 	if hub == "" {
@@ -224,6 +239,14 @@ func budgetSource(hub, token, account, home, source, codexHome string, ceiling f
 	}
 
 	across, err := fetchHubLimits(hub, token, account, timeout, source)
+	if err != nil && nodeToken != "" && account == "all" && (source == "" || source == "claude") &&
+		(token == "" || errors.Is(err, errHubRefused)) {
+		if alt, aerr := fetchSummaryLimits(hub, nodeToken, timeout); aerr == nil {
+			across, err = alt, nil
+		} else {
+			err = fmt.Errorf("%w; node token: %v", err, aerr)
+		}
+	}
 	if err != nil {
 		rep.Verdict, rep.Reason = verdictUnknown, "hub unreachable: "+err.Error()
 		return rep
@@ -289,6 +312,62 @@ func (a BudgetAccount) name() string {
 	return a.AccountUUID
 }
 
+// errHubRefused marks a 401/403: the credential was refused, not the hub down.
+var errHubRefused = errors.New("credential refused")
+
+// hubHTTPError is a non-200 answer as an error; a 401/403 wraps errHubRefused
+// while keeping the message the fleet's quota_why already parses.
+func hubHTTPError(code int, body []byte) error {
+	msg := fmt.Sprintf("HTTP %d: %s", code, strings.TrimSpace(string(body)))
+	if code == http.StatusUnauthorized || code == http.StatusForbidden {
+		return &refusedError{msg}
+	}
+	return errors.New(msg)
+}
+
+type refusedError struct{ msg string }
+
+func (e *refusedError) Error() string { return e.msg }
+func (e *refusedError) Unwrap() error { return errHubRefused }
+
+// fetchSummaryLimits reads the summary door (control.SummaryPath) with a node
+// token and flattens its per_account the way fetchHubLimits flattens
+// /v1/limits?account=all — the same AccountLimits rows, narrowed by the hub to
+// the token's owner.
+func fetchSummaryLimits(hub, nodeToken string, timeout time.Duration) ([]BudgetAccount, error) {
+	req, err := http.NewRequest(http.MethodGet, strings.TrimRight(hub, "/")+control.SummaryPath, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+nodeToken)
+	resp, err := (&http.Client{Timeout: timeout}).Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, hubHTTPError(resp.StatusCode, body)
+	}
+	var sum struct {
+		PerAccount []api.AccountLimits `json:"per_account"`
+	}
+	if err := json.Unmarshal(body, &sum); err != nil {
+		return nil, err
+	}
+	out := make([]BudgetAccount, 0, len(sum.PerAccount))
+	for _, e := range sum.PerAccount {
+		out = append(out, flatten(e.AccountUUID, e.Label, e.Limits))
+	}
+	if len(out) == 0 {
+		return nil, errors.New("the hub reports no subscriptions for this login's owner yet")
+	}
+	return out, nil
+}
+
 // fetchHubLimits reads /v1/limits and flattens it. account may be a uuid or "all".
 func fetchHubLimits(hub, token, account string, timeout time.Duration, sources ...string) ([]BudgetAccount, error) {
 	q := url.Values{"account": {account}}
@@ -314,7 +393,7 @@ func fetchHubLimits(hub, token, account string, timeout time.Duration, sources .
 		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return nil, hubHTTPError(resp.StatusCode, body)
 	}
 
 	// "all" returns a list, a single account returns one view. The list shape
