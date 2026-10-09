@@ -433,4 +433,4 @@ BREAK-IT 行 `service-handwritten`。只点名接管过的登录（`logins/<登�
   （不算 FAIL，不触发整机回退）。root 当场看每个家目录，别的登录读上一轮清扫的记录。
 - **只看托管清单**：清扫的手写启动项、`clientshell` 和 doctor 的 `shell` 行只看整机守护接管过的登录
   （`/var/db/fleet-node/logins/<登录>.env` 里登记的）。管理员（例：verkyyi）、不用 fleet 的本地用户一律不扫、不点名、
-  不判断——机器上有其他管理员或非托管账号是正常状态。`shell` 行写明「看 N 个托管登录」。
+  不判断——机器上有其他管理员或非托管账号是正常状态。`shell` 行写明「托管登录 N 个，其余账号不在清单内不扫」。

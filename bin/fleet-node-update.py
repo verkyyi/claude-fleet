@@ -790,7 +790,7 @@ def shell_row(p, st):
     sweep's record in state.json (other homes are not theirs to read). WARN, never
     FAIL: a leftover client is not the release's fault."""
     listed = fns.taken_over(p.sup)
-    seen = "看 %d 个托管登录（logins/*.env）" % len(listed)
+    seen = "托管登录 %d 个，其余账号不在清单内不扫" % len(listed)
     if os.geteuid() == 0:
         found = fns.client_shell(p.sup, listed)
     else:
