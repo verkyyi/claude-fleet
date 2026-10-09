@@ -326,7 +326,11 @@ Do not install from memory: read the doc and work from it.
   `bin/fleet-orchestrator.sh ensure` opens it (fleet-up, and the diskguard tick's
   `home_watch` reopens it — the same conversation when it can): `@fleet_role
   orchestrator`, `@norepo 1`, in `$HOME`, the login's agent at its strongest model
-  and high effort, seeded `/fleet-orchestrate`. Restore / migrate / move read it
+  and high effort, seeded `/fleet-orchestrate` — its ROLE rides the system prompt, not that seed
+  (issue #2582): `--append-system-prompt-file skills/fleet-orchestrate/role.md`
+  (≤ 60 lines; kept by the wrapper's ↵ resume) plus the mod's
+  `fleet:orchestrator-role` section from the same file, so a `/clear` or a
+  compaction leaves it the orchestrator (Codex: the seed alone). Restore / migrate / move read it
   as `home` (the role-aware formats map it there — never snapshotted, never moved);
   the session caps never count it (only `worker` does); `fleet_win_for_key
   orchestrator` addresses it. The inventory's column 20 `role=orchestrator` carries

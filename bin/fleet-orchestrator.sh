@@ -24,7 +24,12 @@
 # fleet's FLEET_MODEL_FALLBACK while that model is capped on the active account,
 # fleet-claude.sh's rule) with `--effort ${FLEET_ORCH_EFFORT:-high}`; Codex:
 # FLEET_ORCH_CODEX_MODEL (else the login's own) with model_reasoning_effort — and
-# starts on `/fleet-orchestrate` (skills/fleet-orchestrate/), its one instruction.
+# starts on `/fleet-orchestrate` (skills/fleet-orchestrate/). Its ROLE is not that
+# seed (issue #2582, EPIC #2581 C1): a Claude orchestrator is launched with
+# `--append-system-prompt-file skills/fleet-orchestrate/role.md`, and the mod adds
+# the same file to every request (`fleet:orchestrator-role`), so a compaction or a
+# /clear leaves it the orchestrator; the seed is sent only to a new conversation,
+# as its first turn's instructions. Codex keeps the seed alone.
 #
 # The client never lists it: the task list's 「新任务」 row wears its state, the
 # writing area hands it a draft (⇧⇥) and says when it is busy
@@ -198,6 +203,11 @@ if [ "$AGENT" = claude ]; then
     sid=$(fleet_fid_mint) || sid=''
     [ -n "$sid" ] && { printf '%s\n' "$sid" > "$SIDF"; args="$args --session-id $sid"; }
   fi
+  # The role rides the system prompt, not the conversation (issue #2582): a
+  # compaction, a /clear or a resume keeps it. The mod adds the same file as its
+  # `fleet:orchestrator-role` section (mod/fleet/hooks/orchestrator.ts).
+  role="$(cd "$BIN/.." && pwd)/skills/fleet-orchestrate/role.md"
+  [ -f "$role" ] && args="$args --append-system-prompt-file $(printf '%q' "$role")"
 else
   [ -n "${FLEET_ORCH_CODEX_MODEL:-}" ] && args="$args -m $(printf '%q' "$FLEET_ORCH_CODEX_MODEL")"
   args="$args -c $(printf '%q' "model_reasoning_effort=\"${FLEET_ORCH_EFFORT:-high}\"")"

@@ -6,14 +6,12 @@
 // The line comes from bin/fleet-client-where.sh, THE one reader (EPIC rule 7):
 // the hub's client lease, or with no hub the fleet-shell client attached here.
 // lifecycle.ts reads it at the start and every WHERE_POLL_MS (the timer and `$`
-// live there: the engine follows `$` only within one file); a `prompt.compose`
-// hook here adds it as the last `session` section, so a takeover (the phone
+// live there: the engine follows `$` only within one file); compose.ts's
+// `prompt.compose` hook adds it as the last `session` section, so a takeover (the phone
 // opening the client) reaches the model's next request within the poll. A read
 // that fails keeps the last line; no line yet adds nothing.
 
-import type { On, PromptComposeSection } from 'claude-code'
-
-import { isOpen } from './gate'
+import type { PromptComposeSection } from 'claude-code'
 
 export const WHERE_POLL_MS = 15_000
 /** The script asks the hub (≤5 s) and maybe tmux; well inside this. */
@@ -59,15 +57,6 @@ export function whereSection(text: string): PromptComposeSection {
       '（fleet 客户端租约；换设备接管后这一行会跟着变。要最新的或要字段，运行 ' +
       '`~/.claude/fleet/bin/fleet-client-where.sh [--json]`；给操作者看网页/文件前按这里的「能：」选送达方式，不要自己猜终端或设备。）',
   }
-}
-
-export function registerWhere(on: On): void {
-  on('prompt.compose', async ($, e, next) => {
-    const r = await next(e)
-    const text = line
-    if (!isOpen() || text === undefined) return r
-    return { sections: [...r.sections.filter(s => s.id !== WHERE_SECTION), whereSection(text)] }
-  }).catch(($, e, next) => next(e))
 }
 
 /** Tests: is this argv the where read (so a test counting its own runs can skip it)? */
