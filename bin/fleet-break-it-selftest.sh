@@ -802,12 +802,12 @@ drill_orchestrator_exited() {
   w=$(oxens) || { WHY="ensure did not open it"; return 1; }
   until_ok 5 test -s "$oa.pid" || { WHY="the orchestrator's agent never started"; return 1; }
   sid=$(cat "$c/fleets/ox/orchestrator.sid" 2>/dev/null)
-  local proj="$h/.claude/projects/$(printf '%s' "$h" | LC_ALL=C tr -c 'A-Za-z0-9' '-')"
+  local proj; proj="$h/.claude/projects/$(printf '%s' "$h" | LC_ALL=C tr -c 'A-Za-z0-9' '-')"
   mkdir -p "$proj"; tr="$proj/$sid.jsonl"; ts=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
   printf '%s\n%s\n' \
     "{\"type\":\"assistant\",\"timestamp\":\"$ts\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"id\":\"t\",\"name\":\"ScheduleWakeup\",\"input\":{\"delaySeconds\":1200,\"prompt\":\"<<autonomous-loop-dynamic>>\"}}]}}" \
     "{\"type\":\"user\",\"timestamp\":\"$ts\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"t\",\"content\":\"ok\"}]}}" > "$tr"
-  local proj; proj="$h/.claude/projects/$(printf '%s' "$h" | LC_ALL=C tr -c 'A-Za-z0-9' '-')"
+  printf 'epoch: %s\nttl: 2700\nepic: 2581\nrepo: o/n\nsession: ox\ntick: 4\n' "$(date +%s)" > "$c/global/epic-running.d/o-n-2581"
   : > "$oa"
   kill -9 "$(cat "$oa.pid")"                      # the break: no SessionEnd, nothing saved
   oxst() { [ "$(o "$w" @claude_state)" = exited ]; }
