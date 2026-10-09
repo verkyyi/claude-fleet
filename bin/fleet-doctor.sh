@@ -724,7 +724,10 @@ if [ -f "$iv" ] && [ -d "$live_dir" ]; then
     fl_off="opt out with FLEET_INSTALL_SYNC=0 in $conf_dir/fleet.settings — then this login neither follows nor warns"
     case "$(_flf verdict)" in
       OK)     pass install "install-sync on — $(_flf why) (last tick $(_flf checked))" ;;
-      STUCK)  warn install "install-sync on but this login is NOT following stable: $(_flf why) (last tick $(_flf checked)); $fl_off" ;;
+      STUCK)  fl_retry=''
+              # issue #2655: a rolled-back version is skipped until stable moves — or retried now
+              case "$(_flf result)" in rolled-back|skipped) fl_retry="; try it again now: \`bash $(dirname "$0")/fleet-install-sync.sh --retry\`" ;; esac
+              warn install "install-sync on but this login is NOT following stable: $(_flf why) (last tick $(_flf checked))$fl_retry; $fl_off" ;;
       OFF)    info install "install-sync off — $(_flf why)" ;;
       UNSEEN) info install "install-sync on — stable not seen at the last tick ($(_flf checked)): $(_flf why)" ;;
       *)      warn install "install-sync state unreadable — $(_flf why); $fl_off" ;;
@@ -2965,12 +2968,16 @@ fi
 # by hand is a line here: without the number, the next approach to the ceiling is a
 # manual hunt across the whole log (the same reasoning as `over=` in #653). Info
 # only — a distribution is never a pass/fail (one exception: a `wrong fleet`
-# majority, issue #2622); the read is tail-bounded.
+# majority, issue #2622); the read is tail-bounded. FLEET_DOCTOR_SINCE=<epoch>
+# (install-sync's doctor after a switch, issue #2655) moves the window's start up
+# to then: what the OLD version's sleep judge wrote is not the new one's verdict.
 slog="$(dirname "$0")/../logs/sleep.log"
+_dsince="${FLEET_DOCTOR_SINCE:-}"; case "$_dsince" in *[!0-9]*) _dsince='' ;; esac
 if [ -f "$slog" ] && command -v python3 >/dev/null 2>&1; then
-  sdist=$(tail -n 6000 "$slog" 2>/dev/null | python3 -c '
-import sys, json, time, collections
-cut = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(time.time() - 3600))
+  sdist=$(tail -n 6000 "$slog" 2>/dev/null | FLEET_DOCTOR_SINCE="$_dsince" python3 -c '
+import os, sys, json, time, collections
+since = max(time.time() - 3600, float(os.environ.get("FLEET_DOCTOR_SINCE") or 0))
+cut = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(since))
 c = collections.Counter(); n = 0
 for line in sys.stdin:
     line = line.strip()
@@ -2986,8 +2993,8 @@ if n:
     print(("FAIL " if 2 * c["wrong fleet"] > n else "") + "%d judgments/hr across %d reasons; top: %s" % (n, len(c), top))
 ' 2>/dev/null)
   case "$sdist" in
-    "FAIL "*) fail state "sleep judgments (last hour): ${sdist#FAIL } — most windows judged \`wrong fleet\`: the sleep judge cannot see this fleet's windows, nothing can sleep" ;;
-    ?*) pass state "sleep judgments (last hour): $sdist" ;;
+    "FAIL "*) fail state "sleep judgments (${_dsince:+since the switch, }last hour): ${sdist#FAIL } — most windows judged \`wrong fleet\`: the sleep judge cannot see this fleet's windows, nothing can sleep" ;;
+    ?*) pass state "sleep judgments (${_dsince:+since the switch, }last hour): $sdist" ;;
   esac
 fi
 # Trips back to the hub over the last day, per fleet, with the top two causes
@@ -3027,7 +3034,12 @@ if [ "$_hub_on" = 1 ] && [ -x "$(dirname "$0")/fleet-hub-sessions.sh" ]; then
     _hsage=$(printf '%s' "$_hst" | sed -n 's/.*cache \([0-9][0-9]*\)s.*/\1/p')
     case "$_hst" in "loop none"*) _hsfix="the loop is not running — \`bash bin/fleet-hub-sessions.sh --ensure\` starts it (the collector does every tick; \`--status\` names the lock holder)" ;;
                     *) _hsfix="the loop runs but no round stands — see the \`hubauth\` row and \`bash bin/fleet-hub-sessions.sh --refresh\`" ;; esac
-    if [ -n "$_hsage" ] && [ "$_hsage" -gt "$_hsfail" ]; then
+    # FLEET_DOCTOR_SINCE (issue #2655): a cache whose last round predates the
+    # switch is the OLD loop's age — no round since yet is a WARN, never the FAIL.
+    if [ -n "$_hsage" ] && [ "$_hsage" -gt "$_hsfail" ] && [ -n "$_dsince" ] \
+       && [ "$_hsage" -gt $(( $(date +%s) - _dsince )) ]; then
+      warn hub-sessions "$_hst — no round since the switch yet (the cache is the old version's); $_hsfix"
+    elif [ -n "$_hsage" ] && [ "$_hsage" -gt "$_hsfail" ]; then
       fail hub-sessions "$_hst — the other machines' sessions are $((_hsage/60))m old (> ${_hsfail}s); $_hsfix"
     else
       warn hub-sessions "${_hst:-no answer} — the other machines' sessions are not refreshing; $_hsfix"
