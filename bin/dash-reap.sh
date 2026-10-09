@@ -350,6 +350,7 @@ fi
 # a local row needing a y/n gives a caller who did not grant one. Hub off, or a
 # key that is live here: nothing below runs. FLEET_REAP_LOCAL=1 (set by the
 # node's own adapter) keeps a reap from bouncing back to the hub.
+loc_why=''
 if [ "${FLEET_REAP_LOCAL:-0}" != 1 ] && [ "$confirm" = 0 ]; then
   case "$target" in
     wid:*|*/*|issue-*|scratch-*|*:issue-*|*:scratch-*)
@@ -358,7 +359,12 @@ if [ "${FLEET_REAP_LOCAL:-0}" != 1 ] && [ "$confirm" = 0 ]; then
         case "$target" in wid:*|*/*|issue-*|scratch-*) ;; *) loc_t="wid:$target" ;; esac
         # fleet_hub_on read the fleet's own conf line (#1539); the map readers
         # read the environment, so hand them the answer.
-        loc=$(CCQUOTA_FLEET=1 fleet_worker_locate "$loc_t" 2>/dev/null)
+        loc_err=$(mktemp "${TMPDIR:-/tmp}/dash-reap-loc.XXXXXX" 2>/dev/null) || loc_err=/dev/null
+        loc=$(CCQUOTA_FLEET=1 fleet_worker_locate "$loc_t" 2>"$loc_err")
+        # A bare key in a 2+ repo fleet may still be ONE window here (the local
+        # resolver below); if it is not, the refusal says why (issue #2729).
+        loc_why=$(grep -m1 'ambiguous' "$loc_err" 2>/dev/null | sed 's/^fleet: //')
+        [ "$loc_err" = /dev/null ] || rm -f "$loc_err"
         case "$loc" in
           remote\ *)
             node=${loc#remote }
@@ -388,7 +394,7 @@ fi
 # back from an unresolved handle to a window name. Pin a unique identity now;
 # popup and delayed tail invocations carry only the resolved @id.
 target=$(python3 "$BIN/fleet-reap-target.py" "$target") \
-  || refuse target "target rejected; use a stable @id or explicit issue/scratch key"
+  || refuse target "target rejected; use a stable @id or explicit issue/scratch key${loc_why:+ — elsewhere: $loc_why}"
 case "$target" in @*) ;; *) refuse target "invalid window id" ;; esac
 case "${target#@}" in ''|*[!0-9]*) refuse target "invalid window id" ;; esac
 

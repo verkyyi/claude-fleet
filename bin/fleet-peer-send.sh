@@ -53,7 +53,11 @@
 #                                      Delivered when it can be; EXPIRED after 7 days in
 #                                      this fleet's delivery book.
 #   one line on stderr                 exit 1 — refused: not found / ambiguous / not a
-#                                      live session; nothing waits. 2 = usage.
+#                                      live session, or the HUB refused the relay (its
+#                                      reason, off the outbox's refused/ — issue #2729);
+#                                      nothing waits. 2 = usage.
+#   A queued cross-machine send from a pane is checked again FLEET_PEER_RECEIPT_SECS
+#   (60) later; still not DELIVERED, the sending session is told over its own inbox.
 #   <target> 已于 <时间> 结束：<结果>    exit 2 — the target ENDED (issue #1649): this
 #                                      fleet's history, or the hub's copy of another
 #                                      machine's, says when and how; nothing sent.
@@ -72,6 +76,37 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 
 die() { printf 'fleet-peer-send: %s\n' "$(printf '%s' "$2" | tr '\n' ' ' | sed 's/ *$//')" >&2; exit "$1"; }
 usage() { sed -n '9,26p' "$0" >&2; exit 2; }
+
+# --receipt-check <sess> <rid> <pane> <to> <secs> <excerpt> — receipt_watch's
+# background pass (issue #2729): after <secs>, a send the delivery book still does
+# not call DELIVERED is told to the session in <pane> — it asked, so it hears.
+if [ "${1:-}" = --receipt-check ]; then
+  rc_sess="${2:-}"; rc_rid="${3:-}"; rc_pane="${4:-}"; rc_to="${5:-}"; rc_secs="${6:-60}"; rc_ex="${7:-}"
+  case "$rc_secs" in ''|*[!0-9]*) rc_secs=60 ;; esac
+  [ -n "$rc_sess" ] && [ -n "$rc_rid" ] && [ -n "$rc_pane" ] || exit 2
+  sleep "$rc_secs"
+  st=$(bash "$BIN/fleet-peer-queue.sh" wait -L "$rc_sess" --rid "$rc_rid" --secs 0 2>/dev/null)
+  [ "$st" = DELIVERED ] && exit 0
+  det=$(python3 -c 'import json, sys
+d = ""
+try:
+    for line in open(sys.argv[1], encoding="utf-8"):
+        try:
+            r = json.loads(line)
+        except ValueError:
+            continue
+        if r.get("rid") == sys.argv[2] and r.get("detail"):
+            d = r["detail"]
+except OSError:
+    pass
+print(d)' "$(fleet_state_dir "$rc_sess")/delivery.ndjson" "$rc_rid" 2>/dev/null)
+  msg="[delivery] 发给 ${rc_to} 的消息 ${rc_secs} 秒内没有送达（${st:-QUEUED}${det:+：$det}）「${rc_ex}」"
+  case "$st" in
+    FAILED|EXPIRED) msg="$msg —— 不会再送了，换条路（对方 issue 的 to-worker 评论，或入口的 worker_message）。" ;;
+    *) msg="$msg —— 仍在排队，对方能接时补送；急的话换条路（对方 issue 的 to-worker 评论，或入口的 worker_message）。" ;;
+  esac
+  exec bash "$BIN/fleet-peer-send.sh" "$rc_pane" "$msg" >/dev/null 2>&1
+fi
 
 SOCK=""; EXPECT=""; REPO=""
 while [ $# -gt 0 ]; do
@@ -104,10 +139,18 @@ if [ $# -eq 0 ] || [ "$1" = "-" ]; then text=$(cat); else text="$*"; fi
 # unless the target window works that repo (a bare `issue:<N>` matched by number).
 HUB_REPO=''
 hub_send() {
-  local full="$1" node="$2" where me='' mysess='' payload suf f how
+  local full="$1" node="$2" where me='' mysess='' payload suf f how why
   where=${node%:lost}; where=${where:-another machine}
   [ -n "${TMUX:-}" ] && mysess=$(fleet_current_session 2>/dev/null)
   [ -n "${TMUX_PANE:-}" ] && [ -n "$mysess" ] && me=$(fleet_worker_id_key "$mysess" "$TMUX_PANE" 2>/dev/null)
+  # The orchestrator / steward key is no worker_id the hub accepts (issue #2729:
+  # every `<uuid>/orchestrator` message was refused INVALID_ARGUMENT, unseen): such
+  # a pane sends as its identity, `<uuid>/<fleet_id>` — what its worker assertion
+  # names too — else as the person at this login.
+  case "${me#*/}" in orchestrator|steward)
+    me=$(fleet_worker_id "$mysess" "$TMUX_PANE" 2>/dev/null) || me=''
+    fleet_is_fid "${me#*/}" || me='' ;;
+  esac
   if [ -z "$me" ]; then
     [ -n "$mysess" ] || mysess=$(fleet_sender_session "$SOCK" 2>/dev/null)
     me=$(fleet_operator_sender "$mysess" 2>/dev/null)
@@ -120,6 +163,13 @@ hub_send() {
     || die 1 "'$tgt' lives on $where — the hub outbox is not available (CCQUOTA_FLEET=1 and a running ccquota agent carry it); nothing sent"
   # Sent only on the hub's receipt that the recipient's machine delivered it.
   if fleet_hub_wait_sent "$f" 3; then
+    # Gone from the outbox is not «stored»: the agent moves a relay the hub
+    # REFUSED to refused/ with its reason (issue #2729) — nothing waits for it.
+    if why=$(fleet_hub_refused "$f"); then
+      bash "$BIN/fleet-peer-queue.sh" note -L "$mysess" --rid "$me#$suf" --state FAILED --to "$full" \
+        --kind message --via hub --detail "refused by the hub: $why" 2>/dev/null || :
+      die 1 "'$tgt' on $where — the hub refused the message: $why; nothing waits"
+    fi
     case "$node" in
       '') how='its machine is not in a fresh hub map' ;;
       *:lost) how='its machine is offline' ;;
@@ -135,8 +185,27 @@ hub_send() {
   fi
   bash "$BIN/fleet-peer-queue.sh" note -L "$mysess" --rid "$me#$suf" --state QUEUED --to "$full" \
     --kind message --via hub --detail "$how" 2>/dev/null || :
-  printf 'queued → %s%s（对方不在线，上线后补送 · %s）\n' "${full#*/}" "${node:+ on ${node%:lost}}" "$how"
+  case "$how" in
+    'not delivered yet') zh='入口已收下，等对方机器确认送达' ;;
+    'the hub is not reachable'*) zh='本机还没交给入口，入口可达后补送' ;;
+    *) zh='对方不在线，上线后补送' ;;
+  esac
+  printf 'queued → %s%s（%s · %s）\n' "${full#*/}" "${node:+ on ${node%:lost}}" "$zh" "$how"
+  receipt_watch "$mysess" "$me#$suf" "${full#*/}"
   exit 3
+}
+
+# receipt_watch <sess> <rid> <to> — a queued cross-machine send from a PANE is not
+# left to one line the caller may never read (issue #2729): FLEET_PEER_RECEIPT_SECS
+# (60; 0 = off) later a background pass (--receipt-check, fleet_bg) reads the
+# delivery book, and when the hub's receipt has not said DELIVERED it tells the
+# sending session itself, over its own inbox.
+receipt_watch() {
+  local secs="${FLEET_PEER_RECEIPT_SECS:-60}" q
+  case "$secs" in ''|*[!0-9]*) secs=60 ;; esac
+  [ "$secs" -gt 0 ] && [ -n "${TMUX_PANE:-}" ] && [ -n "${TMUX:-}" ] && [ -n "${1:-}" ] || return 0
+  q=$(printf '%q ' bash "$BIN/fleet-peer-send.sh" --receipt-check "$1" "$2" "$TMUX_PANE" "$3" "$secs" "${text:0:80}")
+  fleet_bg "$q"
 }
 
 # sender_repo [<key>] → the repo a key's issue number belongs to: --repo, else the

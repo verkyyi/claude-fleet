@@ -6484,6 +6484,20 @@ fleet_hub_wait_sent() {
   return 0
 }
 
+# fleet_hub_refused <outbox file> → the hub's reason, rc 0, when the agent moved
+# that relay to the outbox's refused/ (the hub answered it with an error frame —
+# a refusal for good), else rc 1. The agent renames first and writes `<f>.why`
+# after, so a missing reason is waited for briefly (issue #2729).
+fleet_hub_refused() {
+  local f="${1:-}" r i=0
+  [ -n "$f" ] || return 1
+  r="${f%/*}/refused/${f##*/}"
+  [ -e "$r" ] || return 1
+  while [ ! -s "$r.why" ] && [ "$i" -lt 10 ]; do sleep 0.1; i=$((i + 1)); done
+  if [ -s "$r.why" ]; then head -n1 "$r.why"; else printf 'refused'; fi
+  return 0
+}
+
 # fleet_remote_children <sess> <parent-key> → `<child-key>\t<node>\t<child wid>`,
 # one line per worker on ANOTHER machine whose @origin_wid is this parent's
 # worker_id, per the hub map. Nothing (rc 1) when the hub is off, this machine
