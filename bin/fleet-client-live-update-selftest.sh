@@ -435,7 +435,7 @@ eq 'J: … nothing reloaded' "$D1" "$(dig)"
 exec 7>&- 2>/dev/null; [ -n "$CLIENT_PID" ] && kill "$CLIENT_PID" 2>/dev/null; CLIENT_PID=''
 "$REAL_TMUX" -L "$SESS" kill-server 2>/dev/null; "$REAL_TMUX" -L "$SESS-stage" kill-server 2>/dev/null
 pkill -f "fleet-shell.sh keeper $SESS" 2>/dev/null
-rm -rf "$ROOT" "$V" "$UST" "$FLEET_SHELL_CACHE/bin"
+rm -rf "$ROOT" "$V" "$UST" "${FLEET_SHELL_CACHE:?}/bin"
 # mkplain <key> — a version dir as install-sync checks one out: no mark
 mkplain() { mkver "$V/$1" "$1" "cafe$1"; rm -f "$V/$1/.client-version"; }
 mkplain f1
