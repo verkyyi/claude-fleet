@@ -614,6 +614,32 @@ func TestFleetSessionsPage(t *testing.T) {
 	}
 }
 
+// 我的机器 (claude-fleet#2518) is a user's page beside /sessions: served from
+// the embedded UI, only with the fleet module on, and listed in a user's menu.
+func TestFleetMachinesPage(t *testing.T) {
+	h := newFleetHarness(t)
+	h.srv.UI = fstest.MapFS{
+		"machines.html": &fstest.MapFile{Data: []byte("<!doctype html><title>我的机器</title>")},
+		"index.html":    &fstest.MapFile{Data: []byte("<!doctype html><title>dashboard</title>")},
+	}
+	resp, body := h.get(t, "/machines")
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), "我的机器") {
+		t.Fatalf("GET /machines = %d %q; want machines.html", resp.StatusCode, body)
+	}
+	if routeAccess["/machines"] != accessUser {
+		t.Errorf("/machines is %v; want a user's page", routeAccess["/machines"])
+	}
+	if !hasString(pagesFor(roleUser), "mymachines") || !hasString(pagesFor(roleAdmin), "mymachines") {
+		t.Errorf("/v1/me.pages leaves out mymachines: user %v admin %v", pagesFor(roleUser), pagesFor(roleAdmin))
+	}
+
+	off := newHarness(t)
+	off.srv.UI = h.srv.UI
+	if _, body := off.get(t, "/machines"); strings.Contains(string(body), "我的机器") {
+		t.Errorf("GET /machines served the page with the fleet module off")
+	}
+}
+
 // Config (claude-fleet#1989) is its own page beside /sessions and /connect,
 // served from the embedded UI only when the fleet module is on, and gone /u/.
 func TestFleetConfigPage(t *testing.T) {

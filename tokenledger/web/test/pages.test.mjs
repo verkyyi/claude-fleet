@@ -8,7 +8,7 @@ import { readFileSync } from 'node:fs';
 import {
   dayKeys, dayTokens, stack, delta, bars, areaChart, niceMax,
   sessionRows, counts, filterRows, running, attention, stateOf,
-  activeDevices, looksLikeKey, bundleItems, parseImport, quotaTable, quotaState,
+  activeDevices, looksLikeKey, bundleItems, parseImport, quotaTable, quotaState, myMachines, takesOf,
 } from '../dist/lib/pages.js';
 import { useLocale } from '../dist/lib/i18n.js';
 import { en } from '../dist/lib/i18n/en.js';
@@ -148,7 +148,7 @@ test('import takes an export back, and refuses what is not one', () => {
 // widen them. No page names another person or asks for a by-account / by-team
 // cut, and only an admin's request carries a principal.
 test('no page asks the hub for someone else\'s rows', () => {
-  for (const f of ['overview.js', 'sessions-page.js', 'connect.js', 'config.js', 'quota.js', 'app-shell.js']) {
+  for (const f of ['overview.js', 'sessions-page.js', 'machines.js', 'connect.js', 'config.js', 'quota.js', 'app-shell.js']) {
     const src = readFileSync(new URL('../dist/' + f, import.meta.url), 'utf8');
     assert.doesNotMatch(src, /by=(account|team)/, `${f} asks for a by-account/team cut`);
     assert.doesNotMatch(src, /[?&]user=/, `${f} filters by another user`);
@@ -164,7 +164,7 @@ test('no page asks the hub for someone else\'s rows', () => {
 // no English sentence typed into a template, and no t() key the dictionary
 // lacks (the parity test in i18n.test.mjs then holds zh-CN to it).
 test('the app pages print only dictionary words', () => {
-  for (const f of ['overview.js', 'sessions-page.js', 'connect.js', 'config.js', 'quota.js', 'app-shell.js', 'lib/shell.js', 'lib/pages.js']) {
+  for (const f of ['overview.js', 'sessions-page.js', 'machines.js', 'connect.js', 'config.js', 'quota.js', 'app-shell.js', 'lib/shell.js', 'lib/pages.js']) {
     const src = readFileSync(new URL('../dist/' + f, import.meta.url), 'utf8').replace(/^\s*(\/\/|\*|\/\*).*$/gm, '');
     const bare = src.match(/>[A-Z][a-z]+[ <.]/g) || [];
     assert.deepEqual(bare.filter((m) => !/>(Claude|Codex|GitHub)/.test(m)), [], `${f} types English into markup`);
@@ -202,4 +202,49 @@ test('quotaTable: the empty state, and one row per subscription', () => {
   } finally {
     useLocale('en');
   }
+});
+
+// 我的机器 (claude-fleet#2518): two machines that take sessions and a laptop
+// that only coordinates are three rows; another login, a machine link and a
+// pair /v1/me does not list are none.
+test('my machines: two machines and a coordinating laptop, nobody else', () => {
+  useLocale('en');
+  const node = (hostname, os_user, extra) => ({ endpoint_id: hostname + '/' + os_user, hostname, os_user, status: 'online', load1: 2, ncpu: 8, sessions: 1, ...extra });
+  const snap = {
+    machines: [{ hostname: 'macmini.local', alias: 'm5' }, { hostname: 'mini2.local', alias: 'm4' }],
+    nodes: [
+      node('macmini.local', 'alice', { sessions: 2 }),
+      node('mini2.local', 'alice', { sessions: 0, load1: 1.92 }),
+      node('alice-mbp', 'alice', { compute_off: true, personal: true, status: 'lost' }),
+      node('macmini.local', 'bob', { sessions: 5 }),
+      node('macmini.local', 'root', { machine_link: true }),
+      node('elsewhere', 'alice', {}),
+    ],
+  };
+  const me = { role: 'user', logins: [{ machine: 'macmini.local', login: 'alice' }, { machine: 'mini2.local', login: 'alice' }, { machine: 'alice-mbp', login: 'alice' }] };
+  const rows = myMachines(snap, me);
+  assert.deepEqual(rows.map((r) => [r.label, r.login, r.takes, r.sessions]), [
+    ['m4', 'alice', 'on', 0], ['m5', 'alice', 'on', 2], ['alice-mbp', 'alice', 'coord', null],
+  ]);
+  assert.equal(rows[0].loadCore, 0.24);
+  assert.equal(rows[2].loadCore, null, 'a coordinating laptop has no load to show');
+  assert.ok(!rows.some((r) => r.login === 'bob'), 'another login is never a row');
+});
+
+test('my machines: what takes sessions, and an unknown count stays unknown', () => {
+  assert.equal(takesOf({ status: 'online' }), 'on');
+  assert.equal(takesOf({ status: 'online', admit: false }), 'paused');
+  assert.equal(takesOf({ status: 'maintenance' }), 'maint');
+  assert.equal(takesOf({ status: 'lost' }), 'lost');
+  assert.equal(takesOf({ status: 'lost', compute_off: true }), 'coord');
+  const [r] = myMachines({ nodes: [{ hostname: 'h', os_user: 'u', status: 'lost', sessions: null, load1: 3, ncpu: 4 }] }, {});
+  assert.equal(r.sessions, undefined, 'null sessions is unknown, never 0');
+  assert.equal(r.loadCore, null, 'a lost machine shows no stale load');
+  assert.deepEqual(myMachines(null, null), []);
+});
+
+test('my machines reads only the cut roster: no join code, no retire', () => {
+  const src = readFileSync(new URL('../dist/machines.js', import.meta.url), 'utf8');
+  assert.match(src, /api\('\/v1\/nodes'\)/);
+  assert.doesNotMatch(src, /join-codes|retire|\/v1\/fleet\/settings|POST/);
 });

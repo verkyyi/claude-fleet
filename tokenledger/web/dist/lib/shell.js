@@ -56,6 +56,8 @@ export const ic = (name, cls) => `<svg class="i ${cls || ''}" viewBox="0 0 24 24
 export const PAGES = Object.freeze([
   { id: 'overview', label: 'ui.nav.overview', icon: 'home', href: '/' },
   { id: 'sessions', label: 'ui.nav.sessions', icon: 'list', href: '/sessions' },
+  // 我的机器 (claude-fleet#2518): a user's own machines.
+  { id: 'mymachines', label: 'ui.nav.mymachines', icon: 'server', href: '/machines' },
   { id: 'devices', label: 'ui.nav.devices', icon: 'key', href: '/connect' },
   // 我的额度 (claude-fleet#2517).
   { id: 'quota', label: 'ui.nav.quota', icon: 'card', href: '/quota' },

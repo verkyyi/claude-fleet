@@ -958,6 +958,13 @@ func (s *Server) serveConfigPage(w http.ResponseWriter, r *http.Request) {
 	s.serveStandalonePage(w, r, "config.html")
 }
 
+// serveMachinesPage serves 我的机器 (claude-fleet#2518): the machines the
+// viewer's logins are on — whether each takes sessions, its load, their
+// sessions there. /v1/nodes already cuts a user's roster to their logins.
+func (s *Server) serveMachinesPage(w http.ResponseWriter, r *http.Request) {
+	s.serveStandalonePage(w, r, "machines.html")
+}
+
 // serveSessionsPage serves 我的会话 (claude-fleet#1429): every session the
 // viewer may see, on every machine, laid out for a phone.
 func (s *Server) serveSessionsPage(w http.ResponseWriter, r *http.Request) {
