@@ -420,6 +420,20 @@ eq "G: a hub that does not answer is no answer — the token is not spent" "/v1/
 [ -e "$G/hub_nodes" ] && fail "G: no answer wrote hub_nodes"; CHECKS=$((CHECKS+1))
 for f in hub_nodes hub_limits hubsum.ts; do rm -f "$G/$f"; cp -p "$WORK/$f.pre" "$G/$f" 2>/dev/null; done
 
+# G2 (issue #2692): /v1/fleet/summary has no `nodes` — a machine carries its own
+# fleet_version there, and the row reads it (it used to read "no version reported").
+cp -p "$G/hub_nodes" "$WORK/hub_nodes.g2" 2>/dev/null
+cat > "$WORK/summary-nodes.json" <<EOF
+{"at":"x","machines":[
+ {"hostname":"macmini","status":"online","sessions":14,"load1":5.65234375,"ncpu":15,"mem_free_bytes":29886201856,"mem_total_bytes":68719476736,"last_heartbeat":"$HB","fleet_version":"$C2"},
+ {"hostname":"mini2","status":"online","sessions":0,"load1":1,"ncpu":10,"mem_free_bytes":1,"mem_total_bytes":2,"last_heartbeat":"$HB"}]}
+EOF
+NCMD="cat '$WORK/summary-nodes.json'" hubs || fail "G2: --refresh failed" "$(cat "$WORK/err")"
+g2=$(tr '\037' '|' < "$G/hub_nodes")
+eq "G2: the machine's own fleet_version → column 7, judged ok" "$C2|ok" "$(printf '%s\n' "$g2" | awk -F'|' '$1 == "m5" { print $7 "|" $11 }')"
+eq "G2: a machine with none → empty, never guessed" "|" "$(printf '%s\n' "$g2" | awk -F'|' '$1 == "m4" { print $7 "|" $11 }')"
+rm -f "$G/hub_nodes"; cp -p "$WORK/hub_nodes.g2" "$G/hub_nodes" 2>/dev/null
+
 # ---- H: the one rule
 . "$BIN/fleet-status-lib.sh"
 fleet_status_node '' m5;            eq "H: no @remote → local, this machine" "local m5 " "$FSN_KIND $FSN_NODE $FSN_WID"

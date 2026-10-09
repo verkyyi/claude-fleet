@@ -1288,6 +1288,11 @@ for n in data.get("nodes") or []:
     t = epoch(n.get("last_heartbeat"))
     if t >= version.get(n["hostname"], (0, ""))[0]:
         version[n["hostname"]] = (t, n["fleet_version"])
+# /v1/fleet/summary (the node-token / certificate door) has no `nodes`: the
+# machine itself carries its newest login's version there (issue #2692).
+for m in machines:
+    if isinstance(m, dict) and m.get("hostname") and m.get("fleet_version") and m["hostname"] not in version:
+        version[m["hostname"]] = (epoch(m.get("last_heartbeat")), m["fleet_version"])
 # 旧 (issue #644, EPIC #1524 R4): a machine's fleet_version is the short sha of
 # its live install's HEAD (fleet-install-version.sh, carried on its node's
 # heartbeat). It is judged HERE, once per round, against the stable mark this

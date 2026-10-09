@@ -432,12 +432,22 @@ EOF
 }
 # mirror — the conf-free bin/ the shell runs from: one symlink per file of the
 # real bin/, refreshed (ln -sf) on every start so a synced install is picked up;
-# a link to a file that is gone stays dangling and harmless.
+# a link to a file that is gone stays dangling and harmless. A real bin/ inside a
+# versions dir (<home>.versions/<key>/bin) whose <home> link points at it is
+# mirrored THROUGH <home> (issue #2692): the links follow the install's next
+# switch instead of pinning the shell to <key> until its next start (and going
+# dangling when install-sync prunes <key>). fleet-installs.sh reads which.
 mirror() {
-  local f
+  local f src="$REAL_BIN" vh
   SHADOW="$CACHE/bin"
   mkdir -p "$SHADOW" "$CACHE/tmp" || fail_start "写不了 $CACHE"
-  for f in "$REAL_BIN"/*; do [ -f "$f" ] && ln -sf "$f" "$SHADOW/${f##*/}"; done
+  case "$REAL_BIN" in
+    *.versions/*/bin)
+      vh=${REAL_BIN%.versions/*}
+      [ -L "$vh" ] && [ "$(cd "$vh/bin" 2>/dev/null && pwd -P)" = "$(cd "$REAL_BIN" && pwd -P)" ] \
+        && src="$vh/bin" ;;
+  esac
+  for f in "$REAL_BIN"/*; do [ -f "$f" ] && ln -sf "$src/${f##*/}" "$SHADOW/${f##*/}"; done
   # the colour table (issue #1534): the bar, the rows and the list read it as
   # $BIN/../conf/fleet-palette.conf — a table, not a config, so the mirror has it
   f="$REAL_BIN/../conf/fleet-palette.conf"
