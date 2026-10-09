@@ -985,6 +985,43 @@ orch	b	go to the orchestrator — straight to the orchestrating session of the f
     en:keys_config_06)         printf %s 'refresh now' ;;
     zh:keys_config_07)         printf %s '关闭' ;;
     en:keys_config_07)         printf %s 'close' ;;
+    # the decision format (issue #2669, bin/fleet_decision.py; docs/DECISIONS.md)
+    zh:decision_suggest_fmt)    printf '建议：%s' "${1:-}" ;;
+    en:decision_suggest_fmt)    printf 'suggested: %s' "${1:-}" ;;
+    zh:decision_default_fmt)    printf '不答按：%s' "${1:-}" ;;
+    en:decision_default_fmt)    printf 'if nobody answers: %s' "${1:-}" ;;
+    zh:decision_due_fmt)        printf '截止：%s（到点按上面走，随时可翻案）' "${1:-}" ;;
+    en:decision_due_fmt)        printf 'due: %s (then it goes as above; you can overturn it any time)' "${1:-}" ;;
+    zh:decision_wait)           printf '等你' ;;
+    en:decision_wait)           printf 'waits for you' ;;
+    zh:decision_never_fmt)      printf '等你（永不默认：%s）' "${1:-}" ;;
+    en:decision_never_fmt)      printf 'waits for you (never defaulted: %s)' "${1:-}" ;;
+    zh:decision_class_rule)     printf '改铁律' ;;
+    en:decision_class_rule)     printf 'a fleet rule' ;;
+    zh:decision_class_money)    printf '花钱' ;;
+    en:decision_class_money)    printf 'money' ;;
+    zh:decision_class_publish)  printf '对外发布' ;;
+    en:decision_class_publish)  printf 'publishing' ;;
+    zh:decision_col_item)       printf '事项' ;;
+    en:decision_col_item)       printf 'item' ;;
+    zh:decision_col_suggest)    printf '建议' ;;
+    en:decision_col_suggest)    printf 'suggested' ;;
+    zh:decision_col_default)    printf '不答按' ;;
+    en:decision_col_default)    printf 'if unanswered' ;;
+    zh:decision_col_due)        printf '截止' ;;
+    en:decision_col_due)        printf 'due' ;;
+    zh:decision_col_src)        printf '来源' ;;
+    en:decision_col_src)        printf 'source' ;;
+    zh:decision_answer_fmt)     printf '到点没人答，按建议定：%s' "${1:-}" ;;
+    en:decision_answer_fmt)     printf 'Nobody answered by the deadline — going with the suggestion: %s' "${1:-}" ;;
+    zh:decision_answer_item_fmt) printf '原问题：%s（%s）' "${1:-}" "${2:-}" ;;
+    en:decision_answer_item_fmt) printf 'The question: %s (%s)' "${1:-}" "${2:-}" ;;
+    zh:decision_record_fmt)     printf '默认拍板：%s「%s」→ 按「%s」' "${1:-}" "${2:-}" "${3:-}" ;;
+    en:decision_record_fmt)     printf 'Decided by default: %s "%s" → "%s"' "${1:-}" "${2:-}" "${3:-}" ;;
+    zh:decision_record_why_fmt) printf '建议：%s · 截止：%s · 原话：%s' "${1:-}" "${2:-}" "${3:-}" ;;
+    en:decision_record_why_fmt) printf 'suggested: %s · due: %s · asked: %s' "${1:-}" "${2:-}" "${3:-}" ;;
+    zh:decision_record_undo_fmt) printf '翻案：在 %s 上回一句即可。' "${1:-}" ;;
+    en:decision_record_undo_fmt) printf 'To overturn it, reply on %s.' "${1:-}" ;;
     *)                          printf '%s' "$_fleet_ui_key" ;;
   esac
 }

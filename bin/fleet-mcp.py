@@ -14,7 +14,7 @@ see the same tools (Claude shows them as mcp__fleet__<action>):
   await     issue [+ repo, timeout] → bin/fleet-await.sh
   send      to + text               → bin/fleet-peer-send.sh
   report    state [+ pr, summary]   → bin/fleet-report-parent.sh        (报, issue #1808)
-  ask       question [+ kind]       → bin/fleet-comment.sh + set-claude-state.sh blocked  (问)
+  ask       question [+ kind, suggest, default, due, class] → bin/fleet-comment.sh + set-claude-state.sh blocked  (问)
   comment   issue + body [+ mode]   → bin/fleet-comment.sh              (记)
   evidence  action [+ file|text|pane, note] → bin/fleet-evidence.sh     (记)
   handoff   action [+ slug|doc]     → bin/fleet-handoff-file.sh         (记)
@@ -752,6 +752,11 @@ def tool_report(args):
 
 
 ASK_HEAD = {"question": "⛔ blocked: ", "permission": "⛔ blocked — needs authorization: "}
+ASK_FIELDS = ("suggest", "default", "due", "class")
+try:   # the decision format's one reader / writer (issue #2669), beside this file
+    import fleet_decision
+except ImportError:   # a half-synced install: ask posts today's body
+    fleet_decision = None
 
 
 def tool_ask(args):
@@ -759,6 +764,14 @@ def tool_ask(args):
     if not issue:
         raise Refused("this window has no bound issue to ask on — pass issue, or ask in your reply")
     body = ASK_HEAD[args.get("kind", "question")] + args["question"]
+    fields = [k for k in ASK_FIELDS if k in args]
+    if fields or (fleet_decision and fleet_decision.steward_on()):
+        # the decision format (issue #2669): one marker the steward reads back;
+        # no field and no steward ⇒ the body above, byte for byte
+        if fleet_decision is None:
+            raise Refused("this install has no bin/fleet_decision.py — ask again without %s" % ", ".join(fields))
+        body, _ = fleet_decision.ask_body(args["question"], args.get("suggest"), args.get("default"),
+                                          args.get("due"), args.get("class"), args.get("kind", "question"))
     said = stdin_script([str(BIN / "fleet-comment.sh"), issue, "--note", "--body-file", "-"], body,
                         WRITE_TIMEOUT_S)
     # The red stamp goes on whether or not the comment posted: the session IS
@@ -1064,11 +1077,22 @@ TOOLS = {
                        "authorization you cannot grant yourself. Posts the question on the bound issue "
                        "(bin/fleet-comment.sh --note, as `⛔ blocked: …`) and turns this window red on the dash "
                        "(set-claude-state.sh blocked) until the next prompt arrives. The answer comes back as "
-                       "your next turn, by the existing channels. Then end your turn — do not spin.",
+                       "your next turn, by the existing channels. Then end your turn — do not spin. Give "
+                       "suggest (+ default / due): past the deadline the steward answers with it "
+                       "(bin/fleet_decision.py, docs/DECISIONS.md).",
         "inputSchema": {"type": "object", "properties": {
             "question": {"type": "string", "description": "What you need, and why you cannot go on without it."},
             "kind": {"type": "string", "enum": ["question", "permission"],
                      "description": "question (default) or permission (an authorization you need)."},
+            "suggest": {"type": "string", "description": "What you would decide, and why (docs/DECISIONS.md)."},
+            "default": {"type": "string",
+                        "description": "What happens if nobody answers by the deadline (default: the suggestion)."},
+            "due": {"type": "string",
+                    "description": "Deadline: an ISO time or a duration (90m, 4h); default 4h, a night deadline "
+                                   "(23:00-08:00) moves to 09:00."},
+            "class": {"type": "string", "enum": ["normal", "never:rule", "never:money", "never:publish"],
+                      "description": "never:* = this is never decided by default (a fleet rule, money, "
+                                     "publishing); a keyword in the question makes it never all the same."},
             "issue": dict(ISSUE, description="Ask on this issue instead of the window's bound one.")},
             "required": ["question"], "additionalProperties": False}}),
     "comment": (tool_comment, {

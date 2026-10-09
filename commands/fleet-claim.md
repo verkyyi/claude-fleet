@@ -409,6 +409,17 @@ override them):
   If that input does not resolve the blocker (for example, a `[child-report]`),
   call `mcp__fleet__ask` again with what is still open before stopping. Then
   stop — don't spin.
+  **Every question carries its own answer** (issue #2669, docs/DECISIONS.md):
+  give `suggest` (what you would decide, and why — the batch's charter usually
+  already says), and `default` / `due` when they differ from «the suggestion,
+  4 hours». Past the deadline the steward answers you WITH it — the answer
+  arrives as your next turn — and records 「默认拍板」 on the batch parent, which
+  the person can overturn. A question about a fleet rule (`CLAUDE.md`,
+  BREAK-IT), money or publishing is never defaulted: say `class: never:rule` /
+  `never:money` / `never:publish` (a keyword catches it anyway).
+  **A decision the person tells you in this pane goes on the issue** (EPIC #2668
+  共同约定 5): `mcp__fleet__comment`, first line `决定（直达）：<what>` — the steward
+  reads the issue, not your conversation.
   This is visibility, not permission-seeking: everything you *can* unblock
   yourself, you should. Blocked is an OUTCOME too, so report it the same way a
   merge is reported: `mcp__fleet__report` with `state: blocked`,
