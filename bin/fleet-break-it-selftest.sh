@@ -57,6 +57,7 @@
 #                                                   bin/fleet-migrate.sh (cfg_update_nudge, the /loop rearm)
 #   fleet-down-confirm                              bin/fleet-down.sh (confirm, --yes), fleet-up.sh --undo,
 #                                                   fleet-restore.sh --undo
+#   decision-never-defaulted                        bin/fleet_decision.py (classify, is_due, apply_due)
 #   breakage-three-filers                           bin/fleet-issue-file.sh --breakage, fleet_breakage_probe /
 #                                                   fleet_breakage_find (fleet-lib.sh)
 #   breakage-no-flag                                bin/fleet-issue-file.sh (auto), fleet_breakage_pick /
@@ -5578,6 +5579,30 @@ drill_hub_read_refused_silent() {
   l=$(hrr bash "$BIN/fleet-doctor.sh" 2>/dev/null | grep -E '^ *FAIL +hubauth ')
   case "$l" in *"quota refused"*"node token is here"*) ;; *) WHY="the doctor's hubauth row is not a FAIL naming the fix: [$l]"; return 1 ;; esac
   SECS=$(since "$t0"); WHAT="401 的额度读：ccquota 拿到节点 token，hub_auth_fail 记一行，doctor hubauth FAIL 并给出修法"
+}
+
+# decision-never-defaulted (issue #2669, EPIC #2668 C1): a money question the
+# worker labelled `normal`, with a suggestion, long past its deadline. The
+# steward's `due --apply` must post nothing — on the worker's issue or its parent.
+drill_decision_never_defaulted() {
+  CAP=10; local t0 g="$WORK/dnd" q
+  mkdir -p "$g"
+  printf '#!/bin/sh\ncat "%s/$2.json" 2>/dev/null || echo "[]"\n' "$g" > "$g/comments"
+  printf '#!/bin/sh\ncat >/dev/null; echo "$3 $1#$2" >> "%s/posts"; echo posted\n' "$g" > "$g/post"
+  printf '#!/bin/sh\necho "o/n#1"\n' > "$g/parent"
+  chmod +x "$g/comments" "$g/post" "$g/parent"
+  dnd() { env FLEET_UI_LANG=zh FLEET_DECISION_TZ=UTC FLEET_DECISION_COMMENTS_CMD="$g/comments" \
+              FLEET_DECISION_POST_CMD="$g/post" FLEET_DECISION_PARENT_CMD="$g/parent" python3 "$BIN/fleet_decision.py" "$@"; }
+  q=$(dnd ask-body --question '要不要开一台云机器把抓取跑完？' --suggest '开一台，跑完就关' --class normal \
+        --now 2026-10-09T10:00:00+00:00) || { WHY="ask-body failed"; return 1; }
+  python3 -c 'import json, sys; json.dump([{"body": sys.argv[1], "url": "https://github.com/o/n/issues/2#c1"}], open(sys.argv[2], "w"))' \
+    "$q" "$g/2.json"
+  t0=$(now)
+  dnd due --repo o/n --issue 2 --now 2026-10-12T10:00:00+00:00 --apply >/dev/null 2>&1
+  [ ! -s "$g/posts" ] || { WHY="a money question labelled normal was defaulted: $(cat "$g/posts")"; return 1; }
+  dnd render --rows <(dnd parse --repo o/n --issue 2) | grep -q '永不默认：花钱' \
+    || { WHY="its row does not say 永不默认：花钱"; return 1; }
+  SECS=$(since "$t0"); WHAT="标成 normal 的花钱问题过期三天：一条都没贴，行写「等你（永不默认：花钱）」"
 }
 
 # ================================================================ run ===========

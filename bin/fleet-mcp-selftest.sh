@@ -988,4 +988,30 @@ cli "$WORK/n.u4" --call spawn '{}' extra; rc=$?
 [ "$rc" = 2 ] || fail "N: --call with a fourth word exited $rc, want 2"
 ok "N --call refusals (type · unhosted repo · unknown argument · unknown tool): exit 1, the reason on stdout, nothing ran; non-JSON / a list / no tool / an extra word: exit 2"
 
+# --- O: ask carries the decision format (issue #2669) -------------------------
+# With bin/fleet_decision.py beside it: a field ⇒ 建议 / 不答按 / 截止 + the
+# fleet:ask marker; no field + FLEET_STEWARD=0 ⇒ today's body byte for byte; no
+# field + the steward on ⇒ the marker, a row that waits (「等你」).
+cp "$BIN/fleet_decision.py" "$BIN/fleet_iso.py" "$BIN/fleet-ui-lang.sh" "$WORK/bin/"
+: > "$LOG"
+{
+  call 120 ask '{"question":"which repo owns this?"}'
+  call 121 ask '{"question":"20 or 50?","suggest":"20","due":"90m"}'
+} | FLEET_STEWARD=0 FLEET_UI_LANG=zh serve "$WORK/o"
+{ call 122 ask '{"question":"which repo owns this?"}'; } | FLEET_STEWARD=1 FLEET_UI_LANG=zh serve "$WORK/o2"
+python3 - "$WORK/o" "$WORK/o2" <<'PY' || fail "O: ask with the decision format" "$(cat "$WORK/o" "$WORK/o2")"
+import json, sys
+rows = {}
+for f in sys.argv[1:]:
+    rows.update({r["id"]: r["result"]["structuredContent"] for r in (json.loads(l) for l in open(f) if l.strip())})
+assert rows[120]["body"] == "⛔ blocked: which repo owns this?", rows[120]
+b = rows[121]["body"]
+assert b.startswith("⛔ blocked: 20 or 50?\n\n- 建议：20\n- 不答按：20\n- 截止：") and "<!-- fleet:ask v=1 id=" in b, b
+assert " kind=normal " in b and " suggest=20 " in b, b
+b = rows[122]["body"]
+assert b.startswith("⛔ blocked: which repo owns this?\n\n- 不答按：等你\n\n<!-- fleet:ask v=1 "), b
+PY
+rm -f "$WORK/bin/fleet_decision.py" "$WORK/bin/fleet_iso.py" "$WORK/bin/fleet-ui-lang.sh"
+ok "O ask: a field ⇒ 建议/不答按/截止 + fleet:ask marker; steward off + no field ⇒ today's body; steward on ⇒ 等你 row"
+
 printf 'fleet-mcp-selftest: %d passed\n' "$pass"

@@ -1,0 +1,527 @@
+#!/usr/bin/env python3
+"""fleet_decision.py — THE one reader and writer of the decision format (issue
+#2669, EPIC #2668 C1). docs/DECISIONS.md is the spec; nothing else parses,
+renders or judges a question's deadline.
+
+A worker's `ask` (bin/fleet-mcp.py tool_ask) posts a ⛔ comment on its own
+issue. With the new optional fields it carries one machine marker:
+
+    <!-- fleet:ask v=1 id=<uuid> asked=<ISO> due=<ISO> kind=<kind> item=<q> suggest=<q> default=<q> -->
+
+(values percent-encoded, so a marker never holds a space or a `-->`). A row is
+    item · suggest · default · due(ISO) · src(gh:owner/repo#N + comment URL) · kind
+with kind `normal` or `never:rule|money|publish`. A row with no default — an old
+`ask` with no fields, or a ⛔ comment from before this format — reads 「等你」 and
+is never defaulted; neither is a `never` row, whatever its caller declared.
+
+    fleet_decision.py ask-body --question Q [--suggest S] [--default D] [--due T]
+                               [--class K] [--head question|permission] [--now ISO]
+    fleet_decision.py parse  (--repo R --issue N | --comments-json FILE|-)   → one row per line (JSON)
+    fleet_decision.py render [--demo] [--rows FILE|-] [--id UUID]           → Markdown table + marker
+    fleet_decision.py due    [--rows FILE|- | --repo R --issue N…] [--now ISO] [--apply]
+    fleet_decision.py record --row JSON --parent owner/repo#N               → 「默认拍板」 on the parent
+
+`due --apply` answers each due row on its own issue (fleet-comment.sh
+--to-worker, marker `fleet:answer row=<id> by=default`) and records it on the
+issue's EPIC parent (marker `fleet:default-decided row=<id>`) — each at most
+once: a row already answered or recorded is skipped. Seams for the selftest:
+FLEET_DECISION_COMMENTS_CMD (prints an issue's comments JSON: argv + repo N),
+FLEET_DECISION_POST_CMD (posts: argv + repo N mode, body on stdin),
+FLEET_DECISION_PARENT_CMD (prints `owner/repo#N` or nothing: argv + repo N).
+"""
+import argparse
+import datetime as dt
+import hashlib
+import json
+import os
+import re
+import subprocess
+import sys
+import uuid
+from pathlib import Path
+from urllib.parse import quote, unquote
+
+import fleet_iso   # the one ISO reader for bin/ (issue #2024)
+
+BIN = Path(__file__).resolve().parent
+V = "1"
+ASK_HEAD = {"question": "⛔ blocked: ", "permission": "⛔ blocked — needs authorization: "}
+ASK_RE = re.compile(r"<!-- fleet:ask v=(\d+) ([^>]*?) ?-->")
+ANSWER_RE = re.compile(r"<!-- fleet:answer row=([A-Za-z0-9-]+)")
+RECORD_RE = re.compile(r"<!-- fleet:default-decided row=([A-Za-z0-9-]+)")
+FROM_MARK = "<!-- fleet:from "
+URL_RE = re.compile(r"https://github\.com/([^/\s]+/[^/\s]+)/issues/(\d+)")
+WAIT = None          # a row whose default is WAIT reads 「等你」 and is never defaulted
+DUE_DEFAULT_S = 4 * 3600
+NIGHT_FROM, NIGHT_TO, MORNING = 23, 8, 9
+CLASSES = ("rule", "money", "publish")
+
+# The keyword backstop (EPIC #2668 共同约定 3): any hit makes the row `never`,
+# whatever the caller declared. A false hit only sends a question to a person —
+# the safe direction — so these lean wide.
+NEVER_WORDS = {
+    "rule": ("claude.md", "agents.md", "break-it", "铁律", "改约定", "删约定"),
+    "money": ("付费", "花钱", "云机器", "购买", "充值", "账单", "预算", "billing", "purchase", "paid plan"),
+    "publish": ("stable", "发布", "对外", "公开", "publish", "release"),
+}
+
+
+# ---- strings: THE table is bin/fleet-ui-lang.sh (共同约定 11) -------------------
+
+def _load_text():
+    try:
+        out = subprocess.run(["sh", str(BIN / "fleet-ui-lang.sh"), "dump", "decision_"],
+                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        out = b""
+    parts = out.decode("utf-8", "replace").split("\0")
+    return dict(zip(parts[0::2], parts[1::2]))
+
+
+_TEXT = None
+
+
+def tr(key, *args):
+    global _TEXT
+    if _TEXT is None:
+        _TEXT = _load_text()
+    text = _TEXT.get(key, key)   # a missing key shows itself, never a blank
+    for arg in args:
+        text = text.replace("\x01", str(arg), 1)
+    return text.replace("\x01", "")
+
+
+# ---- time ----------------------------------------------------------------------
+
+def zone():
+    """The person's clock — night is THEIR night. FLEET_DECISION_TZ (an IANA name,
+    e.g. Asia/Shanghai), else this machine's zone."""
+    name = os.environ.get("FLEET_DECISION_TZ", "")
+    if name:
+        try:
+            from zoneinfo import ZoneInfo
+            return ZoneInfo(name)
+        except Exception:    # no zoneinfo / unknown name: the machine's zone
+            pass
+    return dt.datetime.now().astimezone().tzinfo
+
+
+def now_local(given=None):
+    if given:
+        return parse_time(given)
+    return dt.datetime.now(zone())
+
+
+def parse_time(s):
+    t = fleet_iso.parse(s)
+    return t.astimezone(zone()) if t.tzinfo else t.replace(tzinfo=zone())
+
+
+def iso(t):
+    return t.isoformat(timespec="seconds")
+
+
+def _night(t):
+    return t.hour >= NIGHT_FROM or t.hour < NIGHT_TO
+
+
+def _morning_after(t):
+    day = t.date() if t.hour < NIGHT_TO else t.date() + dt.timedelta(days=1)
+    return t.replace(year=day.year, month=day.month, day=day.day, hour=MORNING, minute=0, second=0,
+                     microsecond=0)
+
+
+def due_at(asked, given=None):
+    """The deadline: an ISO time, or a duration (`90m`, `4h`, `1d`) from `asked`,
+    default 4 hours. A question asked at night, or one whose deadline lands at
+    night (23:00–08:00), waits for 09:00 the next morning (发起人拍板 2)."""
+    if given:
+        m = re.fullmatch(r"\s*(\d+)\s*([smhd])\s*", given)
+        if not m:
+            return parse_time(given)            # an explicit time is taken as written
+        due = asked + dt.timedelta(seconds=int(m.group(1)) * {"s": 1, "m": 60, "h": 3600, "d": 86400}[m.group(2)])
+    else:
+        due = asked + dt.timedelta(seconds=DUE_DEFAULT_S)
+    if _night(asked):
+        return _morning_after(asked)
+    if _night(due):
+        return _morning_after(due)
+    return due
+
+
+# ---- kind ----------------------------------------------------------------------
+
+def classify(declared, *texts):
+    """`never:<class>` when the caller declared one OR a keyword hits; else normal.
+    A declared `normal` never beats a keyword (BREAK-IT decision-never-defaulted)."""
+    if declared and declared.startswith("never:") and declared[6:] in CLASSES:
+        return declared
+    hay = " ".join(t for t in texts if t).lower()
+    for cls in CLASSES:
+        if any(w in hay for w in NEVER_WORDS[cls]):
+            return "never:" + cls
+    return "normal"
+
+
+def never(row):
+    return str(row.get("kind", "")).startswith("never:")
+
+
+# ---- on / off (共同约定 9) --------------------------------------------------------
+
+def _conf_val(key):
+    v = os.environ.get(key)
+    if v is not None:
+        return v
+    conf = Path(os.environ.get("FLEET_CONF_DIR") or (Path.home() / ".config" / "claude-fleet")) / "fleet.conf"
+    try:
+        lines = conf.read_text().splitlines()
+    except OSError:
+        return None
+    found = None
+    for line in lines:
+        m = re.match(r"\s*(?:export\s+)?%s\s*=\s*['\"]?([^'\"#\s]*)" % key, line)
+        if m:
+            found = m.group(1)
+    return found
+
+
+def steward_on():
+    """FLEET_STEWARD, default FLEET_ORCHESTRATOR, default FLEET_HOST — the same
+    chain fleet-orchestrator.sh reads. Off ⇒ an ask with no new field is today's."""
+    for key in ("FLEET_STEWARD", "FLEET_ORCHESTRATOR", "FLEET_HOST"):
+        v = _conf_val(key)
+        if v not in (None, ""):
+            return v not in ("0", "off", "no", "false")
+    return False
+
+
+# ---- the ask comment -----------------------------------------------------------
+
+def ask_body(question, suggest=None, default=None, due=None, cls=None, head="question", now=None,
+             row_id=None):
+    asked = now_local(now)
+    if default is None and suggest:
+        default = suggest                       # 「到点没人答就按建议走」
+    kind = classify(cls, question, suggest, default)
+    row = {"id": row_id or str(uuid.uuid4()), "asked": iso(asked), "due": iso(due_at(asked, due)),
+           "kind": kind, "item": question, "suggest": suggest or "", "default": default or ""}
+    lines = [ASK_HEAD.get(head, ASK_HEAD["question"]) + question, ""]
+    if suggest:
+        lines.append("- " + tr("decision_suggest_fmt", suggest))
+    lines.append("- " + tr("decision_default_fmt", default_text(row)))
+    if row_default(row) is not WAIT and not never(row):   # nothing goes ahead at the deadline
+        lines.append("- " + tr("decision_due_fmt", show_time(parse_time(row["due"]))))
+    lines += ["", marker(row)]
+    return "\n".join(lines), row
+
+
+def marker(row):
+    keys = ("id", "asked", "due", "kind", "item", "suggest", "default")
+    return "<!-- fleet:ask v=%s %s -->" % (V, " ".join("%s=%s" % (k, quote(str(row.get(k, "")), safe=""))
+                                                       for k in keys))
+
+
+def row_default(row):
+    d = row.get("default") or ""
+    return WAIT if not d else d
+
+
+def default_text(row):
+    if never(row):
+        return tr("decision_never_fmt", tr("decision_class_" + row["kind"][6:]))
+    d = row_default(row)
+    return tr("decision_wait") if d is WAIT else d
+
+
+def show_time(t):
+    return t.strftime("%m-%d %H:%M")
+
+
+# ---- parse ---------------------------------------------------------------------
+
+def _src(url, repo=None, number=None):
+    m = URL_RE.search(url or "")
+    if m:
+        repo, number = m.group(1), m.group(2)
+    return "gh:%s#%s" % (repo or "?", number or "?")
+
+
+def parse_comments(comments, repo=None, number=None):
+    """Comments (gh --json comments shape: body, url, createdAt) → rows, each with
+    a `state`: open · answered · defaulted. Answered = a later comment carrying
+    `fleet:answer row=<id>`, a later human comment (no fleet:from marker), or a
+    later direct-route decision (first line 「决定」…, 共同约定 5)."""
+    rows = []
+    for i, c in enumerate(comments):
+        body = c.get("body") or ""
+        m = ASK_RE.search(body)
+        if m:
+            row = {}
+            for pair in m.group(2).split():
+                k, _, v = pair.partition("=")
+                row[k] = unquote(v)
+            row["v"] = m.group(1)
+        elif body.startswith(ASK_HEAD["question"]) or body.startswith(ASK_HEAD["permission"]):
+            # a ⛔ comment from before this format (or an old session's ask): a row
+            # that waits for you, never defaulted
+            first = body.split("\n", 1)[0]
+            q = first.split(": ", 1)[1] if ": " in first else first
+            key = c.get("url") or body
+            row = {"id": "legacy-" + hashlib.sha1(key.encode()).hexdigest()[:16], "asked": c.get("createdAt", ""),
+                   "due": "", "kind": classify(None, q), "item": q, "suggest": "", "default": "", "v": "0"}
+        else:
+            continue
+        row["src"] = _src(c.get("url"), repo, number)
+        row["url"] = c.get("url") or ""
+        row["state"] = "open"
+        for later in comments[i + 1:]:
+            lb = later.get("body") or ""
+            a = ANSWER_RE.search(lb)
+            if a and a.group(1) == row["id"]:
+                row["state"] = "defaulted" if "by=default" in lb else "answered"
+                break
+            if a or ASK_RE.search(lb):
+                continue
+            if FROM_MARK not in lb or lb.lstrip().startswith("决定"):
+                row["state"] = "answered"
+                break
+        rows.append(row)
+    return rows
+
+
+def is_due(row, now):
+    if row.get("state") != "open" or never(row) or row_default(row) is WAIT or not row.get("due"):
+        return False
+    return parse_time(row["due"]) <= now
+
+
+# ---- render --------------------------------------------------------------------
+
+def _cell(s):
+    return str(s).replace("|", "\\|").replace("\n", " ")
+
+
+def render(rows, sheet_id=None):
+    out = ["| # | %s | %s | %s | %s | %s |" % tuple(tr(k) for k in (
+               "decision_col_item", "decision_col_suggest", "decision_col_default", "decision_col_due",
+               "decision_col_src")),
+           "|---|---|---|---|---|---|"]
+    for n, r in enumerate(rows, 1):
+        due = "—" if (row_default(r) is WAIT or never(r) or not r.get("due")) else show_time(parse_time(r["due"]))
+        src = r.get("src", "")
+        if r.get("url"):
+            src = "[%s](%s)" % (src, r["url"])
+        out.append("| %d | %s | %s | %s | %s | %s |" % (n, _cell(r.get("item", "")), _cell(r.get("suggest") or "—"),
+                                                       _cell(default_text(r)), due, src))
+    out += ["", "<!-- fleet:decision v=%s id=%s -->" % (V, sheet_id or uuid.uuid4())]
+    return "\n".join(out)
+
+
+def demo_rows():
+    base = dt.datetime(2026, 10, 9, 14, 5, tzinfo=zone())
+    rows = []
+    for q, s, cls, n in (
+            ("试水名单先发 20 家还是 50 家？", "20 家：批次约定写了先小后大", None, 2701),
+            ("要不要开一台云机器跑抓取？", "不开，用 mini2", None, 2702),
+            ("合并后 move stable 吗？", "等批末统一发", None, 2703),
+            ("旧接口的兼容腿留几个版本？", None, None, 2704)):
+        body, row = ask_body(q, s, None, None, cls, now=iso(base), row_id="demo-%d" % n)
+        row.update(src="gh:verkyyi/claude-fleet#%d" % n, state="open",
+                   url="https://github.com/verkyyi/claude-fleet/issues/%d#issuecomment-1" % n)
+        rows.append(row)
+    return rows
+
+
+# ---- GitHub: through the fleet's own channels ------------------------------------
+
+def _seam(name, argv, **kw):
+    cmd = os.environ.get(name)
+    return subprocess.run((cmd.split() if cmd else []) + argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                          universal_newlines=True, timeout=60, **kw) if cmd else None
+
+
+def fetch_comments(repo, number):
+    r = _seam("FLEET_DECISION_COMMENTS_CMD", [repo, str(number)])
+    if r is None:
+        r = subprocess.run(["bash", str(BIN / "fleet-gh.sh"), "issue", "view", str(number), "--repo", repo,
+                            "--json", "comments", "--max-age", "60"],
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=60)
+    if r.returncode != 0:
+        raise RuntimeError("cannot read %s#%s: %s" % (repo, number, r.stderr.strip()))
+    data = json.loads(r.stdout or "{}")
+    return data.get("comments", data) if isinstance(data, dict) else data
+
+
+def post(repo, number, body, mode="note"):
+    r = _seam("FLEET_DECISION_POST_CMD", [repo, str(number), mode], input=body)
+    if r is None:
+        # fleet-comment.sh writes through fleet_gh_write (共同约定 7); C8's
+        # fleet-ticket.sh comment wraps this same script.
+        r = subprocess.run(["bash", str(BIN / "fleet-comment.sh"), str(number), "--repo", repo,
+                            "--to-worker" if mode == "to-worker" else "--note", "--body-file", "-"],
+                           input=body, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True,
+                           timeout=60)
+    if r.returncode != 0:
+        raise RuntimeError("cannot comment on %s#%s: %s" % (repo, number, r.stderr.strip()))
+    return r.stdout.strip()
+
+
+def parent_of(repo, number):
+    r = _seam("FLEET_DECISION_PARENT_CMD", [repo, str(number)])
+    if r is None:
+        r = subprocess.run(["gh", "api", "repos/%s/issues/%s/parent" % (repo, number), "--jq",
+                            '.repository_url + "#" + (.number|tostring)'],
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=30)
+        if r.returncode != 0:
+            return None
+        out = r.stdout.strip()
+        m = re.match(r"https://api\.github\.com/repos/([^/]+/[^/#]+)#(\d+)$", out)
+        return (m.group(1), m.group(2)) if m else None
+    m = re.match(r"([^\s#]+)#(\d+)$", r.stdout.strip())
+    return (m.group(1), m.group(2)) if m else None
+
+
+def split_src(src):
+    m = re.match(r"gh:([^#]+)#(\d+)$", src or "")
+    if not m:
+        raise ValueError("not a gh:owner/repo#N source: %r" % src)
+    return m.group(1), m.group(2)
+
+
+def answer_body(row):
+    return "\n".join([tr("decision_answer_fmt", row["default"]), "",
+                      tr("decision_answer_item_fmt", row["item"], row.get("url", "")), "",
+                      "<!-- fleet:answer row=%s by=default -->" % row["id"]])
+
+
+def record_body(row):
+    repo, n = split_src(row["src"])
+    return "\n".join([tr("decision_record_fmt", "%s#%s" % (repo, n), row["item"], row["default"]), "",
+                      tr("decision_record_why_fmt", row.get("suggest") or "—", show_time(parse_time(row["due"])),
+                         row.get("url", "")),
+                      tr("decision_record_undo_fmt", "%s#%s" % (repo, n)), "",
+                      "<!-- fleet:default-decided row=%s -->" % row["id"]])
+
+
+def record(row, parent):
+    """「默认拍板」 on the parent, once per row (an existing marker is a no-op)."""
+    prepo, pn = parent
+    for c in fetch_comments(prepo, pn):
+        m = RECORD_RE.search(c.get("body") or "")
+        if m and m.group(1) == row["id"]:
+            return None
+    return post(prepo, pn, record_body(row), "note")
+
+
+def apply_due(row):
+    """Answer one due row by its default, then record it. Re-judged right here, so
+    a `never` row (or one with nothing to default to) is never answered."""
+    if never(row) or row_default(row) is WAIT:
+        return {"id": row["id"], "skipped": "never" if never(row) else "wait"}
+    repo, n = split_src(row["src"])
+    rows = [r for r in parse_comments(fetch_comments(repo, n), repo, n) if r["id"] == row["id"]]
+    if not rows or rows[0]["state"] != "open":
+        return {"id": row["id"], "skipped": rows[0]["state"] if rows else "gone"}
+    answered = post(repo, n, answer_body(row), "to-worker")
+    parent = parent_of(repo, n)
+    recorded = record(row, parent) if parent else None
+    return {"id": row["id"], "answered": answered, "recorded": recorded,
+            "parent": "%s#%s" % parent if parent else None}
+
+
+# ---- CLI -----------------------------------------------------------------------
+
+def _read_rows(path):
+    text = sys.stdin.read() if path == "-" else Path(path).read_text()
+    text = text.strip()
+    if text.startswith("["):
+        return json.loads(text)
+    return [json.loads(line) for line in text.splitlines() if line.strip()]
+
+
+def _emit(rows):
+    for r in rows:
+        print(json.dumps(r, ensure_ascii=False, sort_keys=True))
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(prog="fleet_decision.py")
+    sub = ap.add_subparsers(dest="cmd")
+    a = sub.add_parser("ask-body")
+    a.add_argument("--question", required=True)
+    a.add_argument("--suggest")
+    a.add_argument("--default")
+    a.add_argument("--due")
+    a.add_argument("--class", dest="cls")
+    a.add_argument("--head", default="question", choices=sorted(ASK_HEAD))
+    a.add_argument("--now")
+    p = sub.add_parser("parse")
+    p.add_argument("--repo")
+    p.add_argument("--issue")
+    p.add_argument("--comments-json")
+    r = sub.add_parser("render")
+    r.add_argument("--demo", action="store_true")
+    r.add_argument("--rows")
+    r.add_argument("--id")
+    d = sub.add_parser("due")
+    d.add_argument("--rows")
+    d.add_argument("--repo")
+    d.add_argument("--issue", action="append", default=[])
+    d.add_argument("--now")
+    d.add_argument("--apply", action="store_true")
+    c = sub.add_parser("record")
+    c.add_argument("--row", required=True)
+    c.add_argument("--parent", required=True)
+    o = ap.parse_args(argv)
+
+    if o.cmd == "ask-body":
+        body, _ = ask_body(o.question, o.suggest, o.default, o.due, o.cls, o.head, o.now)
+        print(body)
+    elif o.cmd == "parse":
+        if o.comments_json:
+            data = json.loads(sys.stdin.read() if o.comments_json == "-" else Path(o.comments_json).read_text())
+            comments = data.get("comments", []) if isinstance(data, dict) else data
+        elif o.repo and o.issue:
+            comments = fetch_comments(o.repo, o.issue)
+        else:
+            ap.error("parse needs --comments-json, or --repo and --issue")
+        _emit(parse_comments(comments, o.repo, o.issue))
+    elif o.cmd == "render":
+        rows = demo_rows() if o.demo else _read_rows(o.rows or "-")
+        print(render(rows, o.id or ("demo" if o.demo else None)))
+    elif o.cmd == "due":
+        if o.rows:
+            rows = _read_rows(o.rows)
+        elif o.repo and o.issue:
+            rows = [x for n in o.issue for x in parse_comments(fetch_comments(o.repo, n), o.repo, n)]
+        else:
+            ap.error("due needs --rows, or --repo and --issue")
+        now = now_local(o.now)
+        due = [x for x in rows if is_due(x, now)]
+        if not o.apply:
+            _emit(due)
+            return 0
+        rc = 0
+        for x in due:
+            try:
+                _emit([apply_due(x)])
+            except (RuntimeError, ValueError, subprocess.SubprocessError) as e:
+                print("fleet_decision: %s: %s" % (x.get("id"), e), file=sys.stderr)
+                rc = 1
+        return rc
+    elif o.cmd == "record":
+        row = json.loads(o.row)
+        m = re.match(r"([^\s#]+)#(\d+)$", o.parent)
+        if not m:
+            ap.error("--parent is owner/repo#N")
+        out = record(row, (m.group(1), m.group(2)))
+        print(out or "already recorded")
+    else:
+        ap.print_help(sys.stderr)
+        return 2
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
