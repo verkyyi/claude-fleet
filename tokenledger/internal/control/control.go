@@ -721,6 +721,12 @@ const (
 	AccountRemove = "remove"
 )
 
+// RemoveExitNoLogin is fleet-login-remove.sh's exit when the machine has no
+// such login (claude-fleet#2696): nothing to remove, so the hub records the
+// remove done — a create that never made it, or a login closed by hand. An
+// older script refused it (exit 3) and the remove read failed.
+const RemoveExitNoLogin = 4
+
 // AccountOp is the payload of TypeAccountOp.
 type AccountOp struct {
 	Op       string `json:"op"`

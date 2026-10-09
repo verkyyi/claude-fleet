@@ -254,6 +254,10 @@ has "$WORK/out" "would remove: $CS/db/alice" 'the dry run does not list the stor
 # Refuse self, admins, and an archive dir inside the home, before sudo, in either mode.
 run me --apply; [ "$RC" = 3 ] || fail 'self-delete was not refused'
 run bob --apply; [ "$RC" = 3 ] || fail 'admin delete was not refused'
+# No such login (#2696): its own exit 4, nothing run — the hub reads it as removed.
+run ghost --apply; [ "$RC" = 4 ] || fail "a login that is not there: exit $RC (want 4)"
+has "$WORK/out" 'nothing to remove' 'the missing login is not explained'
+[ ! -s "$FLEET_TEST_LOG" ] || fail 'a missing login ran a command'
 run alice --archive-dir "$WORK/homes/alice/backup" --apply; [ "$RC" = 3 ] || fail 'archive into the home itself was not refused'
 has "$WORK/out" 'into itself' 'archive-into-itself refusal not explained'
 [ ! -s "$FLEET_TEST_LOG" ] || fail 'refusal ran a command'

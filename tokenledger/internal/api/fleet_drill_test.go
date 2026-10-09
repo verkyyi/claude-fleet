@@ -450,3 +450,73 @@ func TestDrillOnlyItsOwnMachineAnswersAsBefore(t *testing.T) {
 		t.Fatalf("accounts = %+v; want only its own", as)
 	}
 }
+
+// A create that failed may have left half an OS login (drill10091238 on the
+// 2026-10-09 drill: the user made, the install not), so the drill does not go
+// while it may still be there: DELETE /v1/self removes it first, and a machine
+// with no such login answers the remove with exit 4 — removed, never failed
+// (claude-fleet#2696). Before, the person went at once and the login stayed.
+func TestDrillFailedCreateIsRemovedBeforeItGoes(t *testing.T) {
+	old := drillRemoveRetry
+	drillRemoveRetry = 0
+	t.Cleanup(func() { drillRemoveRetry = old })
+	h, nodes, inv := drillOnFleet(t)
+	m, op := expectAccountOp(t, nodes["m4"].tnode)
+	sendResult(t, nodes["m4"].c, m.OpID, control.AccountResult{Op: control.AccountCreate, Login: op.Login, Exit: 1, Detail: "step 7: clone failed"})
+	waitState(t, h, inv.PersonID, "m4", store.AccountFailed)
+	if st := h.srv.accountStateOf(inv.PersonID, time.Now()); st == nil || st.State != "failed" || !strings.Contains(st.Why, "clone failed") {
+		t.Fatalf("account = %+v; want failed saying why", st)
+	}
+
+	code, body := drillReq(t, h, http.MethodDelete, DrillSelfPath, "", selfDeleteRequest{ApproveCode: inv.ApproveCode})
+	if code != http.StatusAccepted || !strings.Contains(string(body), inv.Login+"@m4") {
+		t.Fatalf("self-delete after a failed create: %d %s; want 202 naming %s@m4", code, body, inv.Login)
+	}
+	m, op = expectAccountOp(t, nodes["m4"].tnode)
+	if op.Op != control.AccountRemove || op.Login != inv.Login || !op.DropHome {
+		t.Fatalf("op = %+v; want a remove of %s with drop_home", op, inv.Login)
+	}
+	sendResult(t, nodes["m4"].c, m.OpID, control.AccountResult{Op: control.AccountRemove, Login: op.Login,
+		Exit: control.RemoveExitNoLogin, Detail: "fleet-login-remove: no login " + op.Login + " on this machine: nothing to remove"})
+	waitState(t, h, inv.PersonID, "m4", store.AccountRemoved)
+	if code, body := drillReq(t, h, http.MethodDelete, DrillSelfPath, "", selfDeleteRequest{ApproveCode: inv.ApproveCode}); code != 200 {
+		t.Fatalf("self-delete after the removal: %d %s", code, body)
+	}
+	if _, err := h.srv.Store.Principal(inv.PersonID); err == nil {
+		t.Fatal("still there")
+	}
+}
+
+// A failed remove is retried, never a reason to drop the person and leave
+// the login; a create that met a login already there (someone else's) is
+// never removed on the drill's behalf.
+func TestDrillFailedRemoveIsRetriedExistingIsLeft(t *testing.T) {
+	old := drillRemoveRetry
+	drillRemoveRetry = 0
+	t.Cleanup(func() { drillRemoveRetry = old })
+	h, nodes, inv := drillOnFleet(t)
+	m, op := expectAccountOp(t, nodes["m4"].tnode)
+	sendResult(t, nodes["m4"].c, m.OpID, control.AccountResult{Op: control.AccountCreate, Login: op.Login, OK: true})
+	waitState(t, h, inv.PersonID, "m4", store.AccountActive)
+	drillReq(t, h, http.MethodDelete, DrillSelfPath, "", selfDeleteRequest{ApproveCode: inv.ApproveCode})
+	m, op = expectAccountOp(t, nodes["m4"].tnode)
+	sendResult(t, nodes["m4"].c, m.OpID, control.AccountResult{Op: control.AccountRemove, Login: op.Login, Exit: 6, Detail: "services not moved"})
+	waitState(t, h, inv.PersonID, "m4", store.AccountFailed)
+	if code, body := drillReq(t, h, http.MethodDelete, DrillSelfPath, "", selfDeleteRequest{ApproveCode: inv.ApproveCode}); code != http.StatusAccepted {
+		t.Fatalf("self-delete after a failed remove: %d %s; want 202 (the login is still there)", code, body)
+	}
+	if _, op = expectAccountOp(t, nodes["m4"].tnode); op.Op != control.AccountRemove {
+		t.Fatalf("op = %+v; want the remove again", op)
+	}
+
+	h2, nodes2, inv2 := drillOnFleet(t)
+	m, op = expectAccountOp(t, nodes2["m4"].tnode)
+	sendResult(t, nodes2["m4"].c, m.OpID, control.AccountResult{Op: control.AccountCreate, Login: op.Login, Exit: 3, Exists: true})
+	waitState(t, h2, inv2.PersonID, "m4", store.AccountFailed)
+	if code, body := drillReq(t, h2, http.MethodDelete, DrillSelfPath, "", selfDeleteRequest{ApproveCode: inv2.ApproveCode}); code != 200 {
+		t.Fatalf("self-delete after a create met an existing login: %d %s; want 200 (left for the operator)", code, body)
+	}
+	if got, ok := readMsg(nodes2["m4"].tnode, 300*time.Millisecond); ok && got.Type == control.TypeAccountOp {
+		t.Fatalf("someone else's login was sent %+v", got)
+	}
+}

@@ -33,7 +33,8 @@
 # daemon's register (`fleet service` / `fleet task`, /var/db/fleet-node/logins/
 # <login>/services) is refused, exit 6, with the `service move` line for each —
 # left there they fail every run under a login that is gone (issue #2528).
-# Exit: 0 done · 1 a step failed · 2 usage · 3 refused · 6 services not moved yet.
+# Exit: 0 done · 1 a step failed · 2 usage · 3 refused · 4 no such login (nothing
+# to remove, #2696) · 6 services not moved yet.
 set -uo pipefail
 
 PROG=fleet-login-remove
@@ -58,7 +59,10 @@ done
 [ -n "$LOGIN" ] || usage
 printf '%s' "$LOGIN" | grep -Eq '^[a-z_][a-z0-9_-]{0,31}$' || die "bad login name '$LOGIN'"
 [ "$EUID" != 0 ] || refuse 'running under sudo/root; run as the admin login'
-UID_TARGET=$(id -u "$LOGIN" 2>/dev/null) || refuse "unknown login '$LOGIN'"
+# No such login (issue #2696): nothing to remove — a create that never made it,
+# or one closed by hand. Its own exit, so the hub records the remove done
+# instead of failed (a failed one kept the drill person waiting, or left it).
+UID_TARGET=$(id -u "$LOGIN" 2>/dev/null) || { printf '%s: no login %s on this machine: nothing to remove\n' "$PROG" "$LOGIN" >&2; exit 4; }
 ADMIN_UID=$(id -u)
 [ "$UID_TARGET" != "$ADMIN_UID" ] || refuse "deleting the current login '$LOGIN'"
 GROUPS_TARGET=$(id -Gn "$LOGIN" 2>/dev/null) || refuse "cannot read groups for '$LOGIN'"

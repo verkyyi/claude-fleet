@@ -97,6 +97,10 @@
 #   login-sandbox-real-conf                         bin/fleet-login.py (conf_dir_env)
 #   drill-person-no-machine                         tokenledger/internal/api fleet_opening.go + fleet_drill.go
 #                                                   (accountStateOf, closeDrillLogins; go test, when a toolchain is here)
+#   opening-never-ends                              tokenledger/internal/api fleet_opening.go
+#                                                   (openingStuck, openingETAFor; go test, when a toolchain is here)
+#   drill-login-orphaned                            tokenledger/internal/api fleet_drill.go + bin/fleet-login-remove.sh
+#                                                   (closeDrillLogins, exit 4; go test, when a toolchain is here)
 #   spare-login-empty                               tokenledger/internal/api fleet_spare.go + fleet_accounts.go
 #                                                   (claimSpare, replenishSpares; go test, when a toolchain is here)
 #   release-tampered                                tokenledger/internal/api fleet_release.go (ReleaseStore) +
@@ -4817,6 +4821,66 @@ drill_drill_person_no_machine() {
   else
     WHAT='没有 go：三条测试按名核对在，Go 门（tokenledger.yml）跑它们'
   fi
+  SECS=$(since "$t0")
+}
+
+# ---- the hub-half drills of #2696 share one runner: the named Go tests must
+# exist, the greps must hold, and with a toolchain they must pass.
+_drill_go_tests() {  # <tests> <test file> <what>
+  local tests=$1 f=$2 what=$3 t out rc
+  for t in $tests; do
+    grep -q "^func $t(" "$f" 2>/dev/null || { WHY="the hub half's test $t is not in ${f#$ROOT/}"; return 1; }
+  done
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/api 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
+      0:*) WHAT=$what ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
+        WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；测试按名核对在' ;;
+      *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  else
+    WHAT='没有 go：测试按名核对在，Go 门（tokenledger.yml）跑它们'
+  fi
+}
+
+# ---- opening-never-ends (#2696): a newcomer's login that cannot be opened
+# read 「about 5s」 forever — a fixed 60 s ETA floored at 5, and no end to
+# pending / creating / unknown. Now: the machine's measured ETA, and failed +
+# why + who to ask past openingGiveUp or with no admin node to run it.
+drill_opening_never_ends() {
+  CAP=120; local t0 f="$ROOT/tokenledger/internal/api/fleet_opening.go"
+  t0=$(now)
+  grep -q 's.openingStuck(\*opening, now)' "$f" \
+    || { WHY="accountStateOf no longer ends an opening nobody can finish"; return 1; }
+  grep -q 's.openingETAFor(opening.Hostname)' "$f" \
+    || { WHY="accountStateOf's ETA is no longer the machine's measured one"; return 1; }
+  _drill_go_tests 'TestOpeningHasAnHonestETAAndAnEnd' "$ROOT/tokenledger/internal/api/fleet_opening_test.go" \
+    '开号预计时长取这台机器的中位数、超时改说离放弃多久；20 分钟没回音或没有管理节点 → failed + why + 找谁（go test）' || return 1
+  SECS=$(since "$t0")
+}
+
+# ---- drill-login-orphaned (#2696): a drill whose create failed half-way (or
+# whose remove failed) was deleted at once and left its OS login on the
+# machine; a remove of a login that is not there exited 3 and read failed.
+drill_drill_login_orphaned() {
+  CAP=120; local t0 rm="$ROOT/bin/fleet-login-remove.sh" out rc
+  t0=$(now)
+  grep -q 'case store.AccountFailed:' "$ROOT/tokenledger/internal/api/fleet_drill.go" \
+    || { WHY="closeDrillLogins no longer removes a failed drill login before the person goes"; return 1; }
+  grep -q 'control.RemoveExitNoLogin' "$ROOT/tokenledger/internal/api/fleet_accounts.go" \
+    || { WHY="the hub no longer reads a remove of a missing login as removed"; return 1; }
+  # the script half, for real: a login this machine does not have → exit 4
+  # (as root the script refuses before it looks — exit 3 — so only the greps there)
+  if [ "$(id -u)" != 0 ]; then
+    out=$(bash "$rm" "zz$(date +%s)nologin" --apply 2>&1); rc=$?
+    [ "$rc" = 4 ] || { WHY="fleet-login-remove.sh on a missing login: exit $rc (want 4): $out"; return 1; }
+  fi
+  _drill_go_tests 'TestDrillFailedCreateIsRemovedBeforeItGoes TestDrillFailedRemoveIsRetriedExistingIsLeft' \
+    "$ROOT/tokenledger/internal/api/fleet_drill_test.go" \
+    '开号失败 / 收号失败的演练登录先收掉才删人，机器上没有这个登录 → 退 4 → removed；撞上已有登录的不碰（go test + 真跑一次 remove）' || return 1
   SECS=$(since "$t0")
 }
 
