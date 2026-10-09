@@ -360,3 +360,43 @@ sudo bin/fleet-node-drill.sh unblock # 演练被杀后留在 /etc/hosts 的 GitH
   不补跑；下一档按新计划。`fleet task restart` 是 `start` 的同义（重新启用）。
 - BREAK-IT 行 `task-rerun-root-only`；Go `TestServiceControl`（入口）、`TestServiceControlWrite`（节点）；
   `fleet-node-supervisor-selftest.py` K（`schedule`）；`fleet-session-cli-selftest.sh` K；`web/test/services.test.mjs`。
+
+## 13. 登录级服务：把手写的启动项收编进登记表（EPIC #2524 C6，#2530）
+
+以某个登录身份跑的后台程序一律登记给整机守护（§10–§12），不再手写 plist。已经手写的，按这一节收编。
+
+**先找出来**：整机守护的清扫（每小时一次，`sudo fleet-node-supervisor.py sweep` 立即）把这类 plist 点名——
+`/Library/LaunchDaemons` 里 `UserName` 是某个人的登录（不是 root、不是 `_` 开头的系统账号），以及各登录
+`~/Library/LaunchAgents` 里程序在该登录家目录、又不在 `~/Library` 下的（应用自带的 agent 不算）。
+它们记在 `state.json` 的 `sweep.handwritten`，`status` 每个一行 `handwritten <label> runs as <登录> …`，
+体检 `services` 行对本登录的 WARN「N 个手写启动项」。只报不动：撤哪个、什么时候撤是人的事。
+BREAK-IT 行 `service-handwritten`。
+
+**收编顺序**（「先让新的跑通一次，再撤旧的」，漏一天比多一份更糟）：
+
+1. 程序和它的状态放进目标登录的家目录（旧登录要退役的，先搬过来）；
+2. 凭据进凭据库：`fleet service cred set <名>`（值从标准输入读），条目只写名字；
+3. 登记：常驻的 `fleet service add`，定时的 `fleet task add`，工作目录和技能目录用 `--path` 记上
+   （`fleet service move` 迁账号时靠它搬）；
+4. 新的跑通一次：常驻的看 `fleet service ls` 在跑、日志有输出；定时的 `fleet task run <名> --now`，看它出了产物；
+5. 撤旧的：`sudo launchctl bootout system/<label>`（LaunchAgent 是 `gui/<uid>/<label>`），plist 挪进
+   `/var/db/fleet-node/attic/<时间>-handwritten/`，不删；清扫下一轮不再点名，体检转绿；
+6. 旧的启动脚本留一版作手动补跑的后路（发起人拍板 4），下一批删。
+
+**mini2 的两项（2026-10-09）**：
+
+    # 短信通知：verkyyi → verky，常驻；Bark 推送密钥进凭据库
+    fleet service cred set BARK_KEY < <(…)            # 值从标准输入
+    fleet service add sms-watch --cred BARK_KEY --path ~/sms-watch -- ~/bin/sms-watch
+    # 每日推送：run.sh 的「07:00 后开会话、做完看 runs/<日>.done.json、试两次」由定时任务接手
+    fleet task add daily-report --at 07:00 --tz Asia/Shanghai --retries 2 \
+        --prompt '/daily-brief {date}' --window 'daily-{date}' \
+        --done-file '~/daily-report/runs/{date}.done.json' \
+        --path ~/daily-report --path ~/.claude/skills/daily-brief
+    fleet task run daily-report --now                  # 跑通一次再撤旧的
+    sudo launchctl bootout system/com.verkyyi.sms-watch
+    sudo launchctl bootout system/com.verky.daily-report
+
+验收：`ls /Library/LaunchDaemons | grep -c -E 'sms-watch|daily-report'` 为 0；`fleet ls --services` 两行都在跑；
+次日 07:00 的 `daily-<日期>` 会话由守护开出；手机收到一条测试短信推送。`~/daily-report/run.sh --now`
+仍可手动补跑一版。

@@ -10,6 +10,7 @@
 #                  [--window <name, {date} = the slot's day> (<name>-{date})]
 #                  [--done-file <path, {date}>] [--timeout S (3600)] [--idle S (600)]
 #                  [--fleet <session>] [--bark <credential>] [--env K=V]… [--cred C]…
+#                  [--path P]… (its work / skill dirs: `fleet service move` carries them, #2530)
 #                               register (or replace) it. With --done-file a run is ok
 #                               only when the session finishes with that file in place
 #   fleet task ls [--json]      your tasks: status · schedule · last run · next run
@@ -68,7 +69,7 @@ case $cmd in
     args=()
     while [ $# -gt 0 ]; do
       case $1 in
-        --at|--cron|--tz|--prompt|--retries|--retry-delay|--window|--done-file|--timeout|--idle|--fleet|--bark|--env|--cred)
+        --at|--cron|--tz|--prompt|--retries|--retry-delay|--window|--done-file|--timeout|--idle|--fleet|--bark|--env|--cred|--path)
           [ $# -ge 2 ] || die "$1 needs a value" 2
           args+=("$1" "$2"); shift 2 ;;
         *) die "add: unknown $1" 2 ;;

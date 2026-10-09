@@ -1744,12 +1744,14 @@ fi
 # #2524 C2): the same table `fleet ls --services` prints — the hub's word for
 # every machine of this person's (global/hub_services), this machine's daemon
 # for the rest. A failed one (down · failed · invalid · no_login) is FAIL;
-# nothing registered is INFO.
+# a hand-written launchd plist of this login's the daemon's sweep found is
+# WARN (issue #2530); nothing registered is INFO.
 _nsvc="$(dirname "$0")/fleet-services.py"
 if [ -f "$_nsvc" ] && command -v python3 >/dev/null 2>&1; then
   sline=$(python3 "$_nsvc" --doctor 2>/dev/null)
   case "$sline" in
     FAIL\ *) fail services "${sline#FAIL }" ;;
+    WARN\ *) warn services "${sline#WARN }" ;;
     PASS\ *) pass services "${sline#PASS }" ;;
     INFO\ *) info services "${sline#INFO }" ;;
   esac
