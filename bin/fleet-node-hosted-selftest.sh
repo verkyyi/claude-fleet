@@ -17,7 +17,8 @@
 #      fleet-connect.py that finds no machine online, a lease stub around the real
 #      `device`), headless: up on its own tmux server, the environment says
 #      FLEET_NODE_HOSTED=1, its scripts are the runtime's (no mirror: no bin/ in
-#      the cache, nothing under ~/.cache/claude-fleet/shell), the where saved for
+#      the cache, nothing under ~/.cache/claude-fleet/shell; the stage's top line —
+#      剩余 · 模型 · effort, #2717 — is the runtime's fleet-topbar.py), the where saved for
 #      the lease says via node-hosted, caps link; then `fleet quit`: both servers
 #      gone, the lease given back, the temp cache removed, no process left running
 #      from the runtime for this client.
@@ -171,6 +172,7 @@ eq "B its server is up" "$(T has-session -t "=$SESS" 2>/dev/null; echo $?)" 0
 eq "B … FLEET_NODE_HOSTED=1 in its environment" "$(T show-environment -g FLEET_NODE_HOSTED 2>/dev/null)" "FLEET_NODE_HOSTED=1"
 eq "B … its cache is the temp one" "$(T show-environment -g TMPDIR 2>/dev/null)" "TMPDIR=$NHC/tmp"
 has "B … its scripts are the runtime's, no mirror" "$(T show-environment -g FLEET_REMOTE_SSH_CMD 2>/dev/null)" "$W/rt/bin/fleet-shell.sh ssh"
+has "B … its top line (剩余 · 模型 · effort, #2717) is the runtime's fleet-topbar.py" "$(TS show-options -gv status-left 2>/dev/null)" "$W/rt/bin/fleet-topbar.py render"
 eq "B … no bin/ copied into the cache" "$(ls -d "$NHC/bin" 2>/dev/null)" ""
 eq "B … nothing under ~/.cache/claude-fleet/shell" "$(ls -d "$W/home/.cache/claude-fleet/shell" 2>/dev/null)" ""
 eq "B … no iTerm2 profile written for the machine's person" "$(ls "$W/home/Library" 2>/dev/null)" ""
