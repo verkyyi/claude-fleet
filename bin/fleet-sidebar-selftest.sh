@@ -926,7 +926,7 @@ try:
             wid, state, glyph, label, tree = row[:5]
             badge = row[5] if len(row) > 5 else ''
             text = label if wid == 'hdr' else sidebar.row_text(
-                '▶' if wid == w1 else ' ', glyph, tree, label, badge, 29)
+                '▶' if wid == w1 else ' ', glyph, tree, label, badge, 29, sidebar.row_num(row))
             want.append(sidebar.clip(text, 29).rstrip())
         return want
     # A working row's glyph is the spinner, which animates between the two reads:
