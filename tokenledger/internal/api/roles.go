@@ -130,6 +130,8 @@ var routeAccess = map[string]string{
 	"/v1/nodes":         accessUser,
 	"/v1/fleet/connect": accessUser, "/v1/fleet/cert": accessUser,
 	"/fleet/login": accessUser, "/connect": accessUser, "/config": accessUser,
+	// 我的机器 (claude-fleet#2518): the page reads only /v1/nodes and /v1/me.
+	"/machines":         accessUser,
 	"/v1/fleet/devices": accessUser, "/v1/fleet/devices/revoke": accessUser,
 	// Take a machine off the hub (claude-fleet#1928): a user only their own.
 	NodeRetirePath: accessUser,
@@ -371,10 +373,11 @@ func (s *Server) auditRoleDenied(r *http.Request) {
 
 // Pages, as /v1/me lists them for the menu (C7, C8). A user's own; an
 // admin's every one: the same, then Subscriptions, Machines, Users,
-// Settings and Audit (claude-fleet#1990). quota is 我的额度 (#2517).
+// Settings and Audit (claude-fleet#1990). mymachines is 我的机器 (#2518),
+// quota is 我的额度 (#2517).
 var (
-	userPages  = []string{"overview", "sessions", "devices", "quota", "config"}
-	adminPages = []string{"overview", "sessions", "devices", "quota", "config",
+	userPages  = []string{"overview", "sessions", "mymachines", "devices", "quota", "config"}
+	adminPages = []string{"overview", "sessions", "mymachines", "devices", "quota", "config",
 		"subscriptions", "machines", "people", "settings", "audit"}
 )
 

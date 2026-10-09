@@ -406,6 +406,9 @@ func (s *Server) routes() *routeMux {
 		// Machines (claude-fleet#1990): an admin's page; a user gets the
 		// shell's 403 (admin_pages.go).
 		mux.Handle("/nodes", s.viewerOnly(s.adminPage("machines", "nodes.html")))
+		// 我的机器 (claude-fleet#2518): a user's own machines, off the same
+		// /v1/nodes cut.
+		mux.Handle("/machines", s.viewerOnly(http.HandlerFunc(s.serveMachinesPage)))
 		// 我的会话 (claude-fleet#1429): the phone view of fleet_sessions.
 		mux.Handle("/sessions", s.viewerOnly(http.HandlerFunc(s.serveSessionsPage)))
 		mux.Handle("/v1/fleet/me", s.viewerOnly(http.HandlerFunc(s.handleFleetMe)))

@@ -280,3 +280,40 @@ export function quotaTable(rows) {
   }).join('');
   return `<div class="tw"><table class="t quota"><thead><tr>${th}</tr></thead><tbody>${body}</tbody></table></div>`;
 }
+
+// 我的机器 (claude-fleet#2518): one row per login of the viewer's, from
+// /v1/nodes (already cut to their logins, nodes.go handleNodes) and
+// /v1/me.logins. A machine link is a carrier, not a login, and is left out;
+// so is any (machine, login) /v1/me does not list as theirs. No join code, no
+// retire, nothing about another login's compute.
+
+/** takesOf is whether a login takes sessions: coord · lost · maint · paused · on.
+ *  A login that only coordinates (a person's laptop) says so even offline. */
+export function takesOf(n) {
+  if (n.compute_off) return 'coord';
+  if (n.status === 'lost') return 'lost';
+  if (n.status === 'maintenance') return 'maint';
+  if (n.admit === false) return 'paused';
+  return 'on';
+}
+
+/** myMachines turns /v1/nodes + /v1/me into the page's rows, the machines
+ *  that take sessions first, then by name. */
+export function myMachines(snap, me) {
+  const pairs = me && Array.isArray(me.logins) && me.logins.length ? me.logins : null;
+  const mine = (n) => !pairs || pairs.some((p) => p.machine === n.hostname && p.login === n.os_user);
+  const alias = new Map(((snap && snap.machines) || []).map((m) => [m.hostname, m.alias || '']));
+  const rows = ((snap && snap.nodes) || []).filter((n) => !n.machine_link && mine(n)).map((n) => {
+    const takes = takesOf(n);
+    const coord = takes === 'coord';
+    const live = takes !== 'lost';
+    return {
+      id: n.endpoint_id, hostname: n.hostname, label: alias.get(n.hostname) || n.hostname,
+      login: n.os_user, takes, why: takes === 'paused' ? n.admit_why || '' : coord ? n.compute_why || '' : '',
+      personal: !!n.personal,
+      loadCore: coord || !live || !(n.ncpu > 0) ? null : (Number(n.load1) || 0) / n.ncpu,
+      sessions: coord ? null : n.sessions == null ? undefined : n.sessions,
+    };
+  });
+  return rows.sort((a, b) => (a.takes === 'coord') - (b.takes === 'coord') || a.label.localeCompare(b.label) || a.login.localeCompare(b.login));
+}
