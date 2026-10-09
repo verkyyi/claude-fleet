@@ -295,13 +295,23 @@ func (s *Server) leastBusyMachine(now time.Time, skip ...string) string {
 }
 
 // drillComputer is the machine a drill person's own computer is on — the
-// bare login `fleet drill invite --host` named (claude-fleet#2549). Its row
-// holds that machine (one row per person per machine: PRIMARY KEY
+// bare login `fleet drill invite --host` named (claude-fleet#2549) — while its
+// row still holds that machine: one row per person per machine (PRIMARY KEY
 // (principal_id, hostname)), so the login opened for the drill goes to
-// another. None for anyone else.
+// another. None for anyone else, or once that row is gone.
 func (s *Server) drillComputer(principal string) []string {
-	if d, err := s.Store.Drill(principal); err == nil && d != nil {
-		return []string{d.Hostname}
+	d, err := s.Store.Drill(principal)
+	if err != nil || d == nil {
+		return nil
+	}
+	accts, err := s.Store.FleetAccounts(principal)
+	if err != nil {
+		return nil
+	}
+	for _, a := range accts {
+		if strings.EqualFold(a.Hostname, d.Hostname) {
+			return []string{d.Hostname}
+		}
 	}
 	return nil
 }
