@@ -33,6 +33,9 @@
 // Quick dispatch (issue #2618): in the orchestrator's window the same start reads
 // the `qd_` strings and registers `/qd` (qd.tsx); any other window has no /qd.
 //
+// Queue (issue #2617): in the orchestrator's window the same start stamps
+// `@orch_queue 0` (queue.ts counts from there), and a real exit unsets it.
+//
 // Tools (issue #2057): a session the launcher gave no fleet tool service (no
 // FLEET_MCP_SERVER=1 — launched before #1828) gets the mod's three fallback tools
 // at the start, from the service's own specs (tools.ts); a served session gets
@@ -46,6 +49,7 @@ import { isOpen, openGate } from './gate'
 import { INBOX_MS, inboxDir, pollInbox } from './inbox'
 import { isOrchestrator, roleArgv, rolePath, takeRole } from './orchestrator'
 import { qdCommand, stringsArgv, takeStrings } from './qd'
+import { QUEUE_OPTION } from './queue'
 import type { InboxIo } from './inbox'
 import { TMUX_TIMEOUT_MS, windowOptionsArgv } from './tmux'
 import { SPEC_TIMEOUT_MS, binDir, fallbackSpecs, specArgv } from './tools'
@@ -235,6 +239,8 @@ async function onReady($: EngineInterface): Promise<void> {
   await readRole($)
   // /qd, the orchestrator's quick dispatch (#2618).
   await registerQuickDispatchCommand($)
+  // What waits behind its turn starts at 0, so a counting orchestrator always says a number (#2617).
+  if (isOrchestrator()) await setOptions($, { [QUEUE_OPTION]: '0' }).catch(() => undefined)
   // Where the person is, in the context from the first request (#1716).
   await pollWhere($)
   whereTimer?.cancel()
@@ -282,7 +288,7 @@ export function registerLifecycle(on: On): void {
       modelTimer = undefined
       whereTimer?.cancel()
       whereTimer = undefined
-      await setOptions($, { '@mod_alive': null })
+      await setOptions($, { '@mod_alive': null, ...(isOrchestrator() ? { [QUEUE_OPTION]: null } : {}) })
     }
     return next(e)
   }).catch(($, e, next) => next(e))

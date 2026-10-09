@@ -130,6 +130,34 @@ for w in (24, 30, 44):
         assert not badge or line.endswith('· 2/3 #1532'), repr(line)
 assert sidebar.row_need(r12) == sidebar.row_need(r12[:9] + [''] * 7) + len(' #1532'), 'row_need keeps room for the number'
 assert sidebar.row_num(r12[:9] + ['—']) == '' and sidebar.row_num(r12[:9] + ['#12x']) == '', 'only a #<digits> number'
+# 「新任务」 ends in what waits behind the orchestrator (issue #2617): orch_<sess>'s
+# 7th column → 「排队 N」 where a session row has its #N; no 7th column (Codex, an
+# older node) or 0 → the row byte for byte as before. The bar's busy line only
+# for a busy orchestrator that cannot count.
+import tempfile
+_g, _stage = os.environ.get('FLEET_STATUS_G'), sidebar.STAGE
+os.environ['FLEET_STATUS_G'] = tempfile.mkdtemp()
+sidebar.STAGE = 'fleet-shell'
+def _orch(cols):
+    with open(os.path.join(os.environ['FLEET_STATUS_G'], 'orch_x'), 'w', encoding='utf-8') as f:
+        f.write('\x1f'.join(['f/o', 'm4', 'online'] + cols) + '\n')
+_orch(['working', '', ''])
+before = sidebar.with_portal([r12], None, 'x')[0]
+assert sidebar.row_num(before) == '' and sidebar.orch_busy('x') == sidebar.tr('orch_busy_hint'), before
+_orch(['working', '', '', '0'])
+assert sidebar.with_portal([r12], None, 'x')[0] == before and sidebar.orch_busy('x') == '', 'a 0 count: as before, no bar line'
+_orch(['working', '', '', '2'])
+top = sidebar.with_portal([r12], None, 'x')[0]
+assert sidebar.row_num(top) == sidebar.tr('orch_queue_row_fmt', '2') and top[:9] == before[:9], top
+for w in (24, 30):
+    line = sidebar.row_text(' ', top[2], top[4], top[3], top[5], w, sidebar.row_num(top))
+    assert sidebar.width_of(line) <= w and line.endswith(sidebar.tr('orch_queue_row_fmt', '2')), repr(line)
+_orch(['done', '', '', '2'])
+assert sidebar.orch_busy('x') == '', 'idle: no bar line'
+assert sidebar.bar_hint([r12], '@1', '@1', 30, True, 'a#b')[3] == 'a##b', 'the busy line: # doubled for tmux'
+sidebar.STAGE = _stage
+if _g is None: os.environ.pop('FLEET_STATUS_G', None)
+else: os.environ['FLEET_STATUS_G'] = _g
 titled = r12[:13] + ['托管机器上旧版 fleet host on 以登录身份重登记：入口换发令牌'] + r12[14:]
 assert sidebar.detail_line(titled).startswith('托管机器上旧版 fleet host on 以登录身份重登记：入口换发令牌 · #1532'), sidebar.detail_line(titled)
 # The urgent conditions take the state glyph's cell: a broken configuration a

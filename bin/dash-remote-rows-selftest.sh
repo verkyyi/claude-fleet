@@ -764,6 +764,24 @@ eq   "O2: …the line is the home machine's (fleet connect's last)" "$F/$OID2" "
 printf '{"last":"nowhere"}' > "$WORK/xdgc/claude-fleet/connect.json"
 FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-orch.json'" XDG_CACHE_HOME="$WORK/xdgc" PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null
 eq   "O2: one again — orch_multi_<sess> empties" "" "$(cat "$G/orch_multi_$S" 2>/dev/null)"
+# O3. what waits behind its turn (issue #2617): the worker's orch_queue (the node's
+# `orchq=`) is orch_<sess>'s 7th column — 0 too; none (Codex, an older node) = the
+# six columns of O, byte for byte.
+for q in 2 0; do
+  python3 - "$WORK/sessions-orch.json" "$WORK/sessions-orchq.json" "$q" <<'PY'
+import json, sys
+src, dst, q = sys.argv[1:4]
+d = json.load(open(src, encoding="utf-8"))
+d["sessions"][-1]["worker"]["orch_queue"] = int(q)
+json.dump(d, open(dst, "w"), ensure_ascii=False)
+PY
+  FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-orchq.json'" PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null || fail "O3: --refresh (queue $q) failed"
+  eq "O3: orch_queue $q → orch_<sess>'s 7th column" \
+     "$F/$OID${US}m4${US}online${US}needs${US}ask${US}开一个 EPIC 还是三个快任务？${US}$q" "$(cat "$G/orch_$S" 2>/dev/null)"
+done
+FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-orch.json'" PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null
+eq   "O3: …no orch_queue: the six columns, as before" \
+     "$F/$OID${US}m4${US}online${US}needs${US}ask${US}开一个 EPIC 还是三个快任务？" "$(cat "$G/orch_$S" 2>/dev/null)"
 PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null
 eq   "O: no orchestrator: orch_<sess> is empty" "" "$(cat "$G/orch_$S" 2>/dev/null)"
 
