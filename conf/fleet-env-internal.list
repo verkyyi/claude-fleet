@@ -96,6 +96,7 @@ FLEET_REMOTE_GONE_SECS             knob: how long a proxy pane waits for a sessi
 FLEET_REMOTE_GONE_STEP             knob: seconds between those asks (fleet-remote-view.sh, #2484)
 FLEET_SESSIONS_STATE_CMD           seam: prints OPEN/CLOSED for <repo> <issue> instead of fleet-gh.sh (fleet-sessions-snapshot.sh restore, #2484)
 FLEET_START_WARM                   knob: 0 = a start never takes a warm-pool window; always the cold path (fleet-control-read.sh, 1, #2234)
+FLEET_STATE_PRIMARY_SECS           knob: how long the agent's OSC 7501 report holds the hooks and guessers off (120; read from the env by hooks, #2537)
 FLEET_SUBMIT_WAIT_SECS             knob: seconds the first turn waits for an idle, empty input before giving up (fleet-pane-submit.sh, 5, #2234)
 FLEET_SUBMIT_CONFIRM_SECS          knob: seconds the first turn is watched after its Enter, re-pressing Enter while the text sits in the box (fleet-pane-submit.sh, 6, #2430)
 FLEET_CODEX_SEED_CONFIRM           knob: 0 = never press Enter for a Codex seed left in the composer (fleet-codex-seed.py, on, #2430)
