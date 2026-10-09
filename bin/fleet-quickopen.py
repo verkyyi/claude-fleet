@@ -201,19 +201,25 @@ def rows_text(rows):
     """The list's rows (fleet-sidebar.py's 15-field rows) as switch-rows.tsv:
     every session row, with the repo heading it sits under — key · state ·
     glyph · name · machine · group · badge, then (issue #2365, appended so a
-    reader of the seven is unchanged) issue · PR · reap policy · title · repo."""
-    out, group, repo = [], "", ""
+    reader of the seven is unchanged) issue · PR · reap policy · title · repo,
+    and `1` (issue #2565) on a row of the 已结束 group — absent on every other."""
+    out, group, repo, ended = [], "", "", ""
     for row in rows:
         if row[0] == "hdr":
             if len(row) > 3 and row[1]:
                 group, repo = row[3].strip(), row[1].strip()
+                # the 已结束 heading (issue #2565) names no repo; its rows say `ended`
+                ended = "1" if repo == "ended" else ""
+                if ended:
+                    repo = ""
             continue
         if row[0].startswith("landed:"):
             continue
         clean = [(f or "").replace("\t", " ").replace("\n", " ") for f in row] + [""] * 15
         out.append("\t".join((clean[0], clean[1], clean[2], clean[3].strip(), clean[8],
                               group, clean[5], clean[9].strip(), clean[10].strip(),
-                              clean[14].strip(), clean[13].strip(), repo)))
+                              clean[14].strip(), clean[13].strip(), repo)
+                             + ((ended,) if ended else ())))
     return "\n".join(out) + ("\n" if out else "")
 
 
@@ -253,11 +259,11 @@ def parse_rows(text):
     for line in text.splitlines():
         f = line.split("\t")
         if len(f) >= 4 and f[0]:
-            f += [""] * (12 - len(f))
+            f += [""] * (13 - len(f))
             rows.append({"key": f[0], "state": f[1], "glyph": f[2], "name": f[3],
                          "node": f[4].rstrip("!~"), "group": f[5], "badge": f[6],
                          "issue": cell(f[7]).lstrip("#"), "pr": cell(f[8]), "reap": f[9],
-                         "title": f[10], "repo": f[11]})
+                         "title": f[10], "repo": f[11], "ended": f[12]})
     return rows
 
 

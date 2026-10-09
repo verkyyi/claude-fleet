@@ -865,13 +865,22 @@ RGFOLD=()
 # (a repo slug is always `owner-name`, so it can never collide) — in a one-repo
 # fleet too, where it is the only heading there is.
 PGRP=-2; PINCNT=0; PINFOLD=0
+# The 已结束 group (issue #2565): a root that is done or exited and carries no
+# issue — a home / scratch session whose work is over — leaves its repo group for
+# ONE group at the very FOOT, headed `已结束 (n)`. It is the one heading folded BY
+# DEFAULT: the list shows what is alive, and → opens the rest. So its bit has the
+# opposite polarity — the token `ended:open` (a slug never holds a `:`) in
+# @repo_fold says it is OPEN; absent ⇒ folded. EGRP sorts below every repo group.
+EGRP=999999; ENDCNT=0; ENDFOLD=1
 # The shell's windows are proxies (no name in WFMT, so pass A never reads their
 # line) and its rows are the hub's: the fold bit is read off its OWN session —
-# one value per client, never per fleet (issue #1680). Only while it groups.
-if [ "${FLEET_SHELL:-0}" = 1 ] && [ "$RGRP" = 1 ] && [ -n "${FLEET_SESSION:-}" ]; then
+# one value per client, never per fleet (issue #1680). Read in a one-repo frame
+# too: the 置顶 and 已结束 headings fold there as well.
+if [ "${FLEET_SHELL:-0}" = 1 ] && [ -n "${FLEET_SESSION:-}" ]; then
   RFOLD=$(tmux show-option -t "=$FLEET_SESSION:" -qv @repo_fold 2>/dev/null) || RFOLD=''
 fi
 case " $RFOLD " in *' pin '*) PINFOLD=1 ;; esac
+case " $RFOLD " in *' ended:open '*) ENDFOLD=0 ;; esac
 if [ "$RGRP" = 1 ] && [ -n "$RFOLD" ]; then
   for _s in $RFOLD; do
     if [ "$_s" = none ]; then RGFOLD[RNREPO + 1]=1
@@ -1319,9 +1328,21 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   # repo. Counted HERE, once the group is resolved and still BEFORE the fold
   # filter, so a heading's `(n)` is the rows that render under it, a collapsed
   # parent's hidden ones too.
-  repod=''
+  # --- the 已结束 group (issue #2565) -------------------------------------------
+  # A root (depth 0, unpinned) that is done or exited, with no issue and no
+  # subtree of its own, renders at the foot under `已结束 (n)` — folded by
+  # default. A pin wins (the 置顶 group is the operator's own word); a row with
+  # children keeps its place so its subtree is never split across two groups.
+  # Like a pinned row it wears its repo tag where the heading names none.
+  repod=''; ended=0
+  if [ "$pinned" = 1 ] && [ "$depth" = 0 ] && [ -z "$iss" ] && [ -z "$carg" ]; then
+    case "$state" in done|exited) ended=1 ;; esac
+  fi
   if [ "$pinned" = 0 ]; then
     rgrp=$PGRP; PINCNT=$((PINCNT + 1))
+    [ "$RGRP" = 1 ] && repod=${RGTAG[ownrgrp]-}
+  elif [ "$ended" = 1 ]; then
+    rgrp=$EGRP; ENDCNT=$((ENDCNT + 1))
     [ "$RGRP" = 1 ] && repod=${RGTAG[ownrgrp]-}
   elif [ "$RGRP" = 1 ]; then
     [ "$depth" -gt 0 ] && rgrp=${AG[depth-1]}
@@ -1340,6 +1361,7 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   # row with the 置顶 heading (#1170), which folds in a one-repo fleet too.
   gfold=0
   if [ "$pinned" = 0 ]; then gfold=$PINFOLD
+  elif [ "$ended" = 1 ]; then gfold=$ENDFOLD
   elif [ "$RGRP" = 1 ]; then gfold=${RGFOLD[rgrp]:-0}; fi
   if [ "$gfold" = 1 ] && [ "$rk" != 0 ] && [ "${FLEET_ROWS_UNFOLD:-0}" != 1 ] &&
      { [ "$SIDEBAR" = 0 ] || [ "$wid" != "${FLEET_SIDEBAR_CURRENT_ROW:-${FLEET_SIDEBAR_CURRENT:-}}" ]; }; then
@@ -1627,6 +1649,19 @@ if [ "$PINCNT" -gt 0 ]; then
   else
     buf+="$PGRP	-1	0	hdr${US}hdr${US}${IN}${t}${R}${US}pin"$'\n'
     buf+="$PGRP	2	0	hdr${US}hdr${US}${GY}${rule:0:USABLE}${R}"$'\n'
+  fi
+fi
+
+# the 已结束 group's heading (issue #2565): `已结束 (n)` at the foot, `▸` while
+# folded (the default). Drawn only while a row is in it, so a list with nothing
+# ended renders byte for byte as before. Its fold target is `ended` — the
+# sidebar's `hdr:ended` key, the hub's 4th field; like `pin` it names no repo.
+if [ "$ENDCNT" -gt 0 ]; then
+  t=$(fleet_ui_t ended_heading_fmt "$ENDCNT"); [ "$ENDFOLD" = 1 ] && t="▸ $t"
+  if [ "$SIDEBAR" = 1 ]; then
+    buf+="$EGRP	-1	0	hdr${US}ended$US$US$t$US "$'\n'
+  else
+    buf+="$EGRP	-1	0	hdr${US}hdr${US}${IN}${t}${R}${US}ended"$'\n'
   fi
 fi
 

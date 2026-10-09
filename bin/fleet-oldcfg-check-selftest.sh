@@ -211,8 +211,9 @@ exit 0
 SHIM
 chmod +x "$WORK/bin/tmux"
 export WLIST_FILE="$WORK/wlist"
+# (each row on issue <idx>: a done row with no issue folds into 已结束, #2565)
 # The 27 WFMT fields (cfg-stale-selftest's fixture): w <idx> <name> <wid> <agent> <fp/ver>
-w() { printf '%s\n' "$S$US$1$US$2$US/w/app-$2${US}done$US$US$3$US$US$US$US$4$US$US$US$US$US$US$US$US$US$US$US$US$US$US$US${1}000$US$5" >> "$WLIST_FILE"; }
+w() { printf '%s\n' "$S$US$1$US$2$US/w/app-$2${US}done$US$US$3$US$1$US$US$US$4$US$US$US$US$US$US$US$US$US$US$US$US$US$US$US${1}000$US$5" >> "$WLIST_FILE"; }
 strip() { LC_ALL=C sed -e $'s/\x1b\\[[0-9;]*m//g'; }
 side() { PATH="$WORK/bin:$PATH" FLEET_SESSION=$S bash "$BIN/tmux-dashboard-rows.sh" --sidebar 2>/dev/null | strip; }
 hub()  { PATH="$WORK/bin:$PATH" FLEET_SESSION=$S FZF_COLUMNS=160 bash "$BIN/tmux-dashboard-rows.sh" 2>/dev/null | strip; }

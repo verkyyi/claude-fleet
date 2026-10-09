@@ -163,6 +163,8 @@ fleet_ui_t() {
     en:peer_hub_lost_fmt)       printf 'hub lost — machine-to-machine access paused; you can still go in directly with `fleet %s`' "${1:-}" ;;
     zh:pin_heading_fmt)         printf '置顶 (%s)' "${1:-}" ;;
     en:pin_heading_fmt)         printf 'Pinned (%s)' "${1:-}" ;;
+    zh:ended_heading_fmt)       printf '已结束 (%s)' "${1:-}" ;;
+    en:ended_heading_fmt)       printf 'Ended (%s)' "${1:-}" ;;
     zh:attn_summary_fmt)        printf '! %s 个在问你 · 点这里跳过去 ⌃K' "${1:-}" ;;
     en:attn_summary_fmt)        printf '! %s need you · tap here ⌃K' "${1:-}" ;;
     zh:attn_summary_dash_fmt)   printf '! %s 个在问你' "${1:-}" ;;
