@@ -65,6 +65,9 @@ cmd=${1:-ls}
 [ $# -gt 0 ] && shift
 case $cmd in
   -h|--help|help) usage; exit 0 ;;
+  # fleet-task.sh's road to root (#2529): the same sudo, the same admin line
+  __root)
+    as_root "$@" ;;
   ls)
     exec "$PY" -I "$SUP" service ls --login "$ME" "$@" ;;
   logs)
