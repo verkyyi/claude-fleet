@@ -77,6 +77,9 @@ var fleetScopeOf = map[string]string{
 	// machine (claude-fleet#2527, EPIC #2524 C3): stop / start / restart /
 	// run now / a new schedule — on their own (machine, login) only.
 	"service_control": "service:control",
+	// The person's orchestrating session opened on its holder machine when ⌘N
+	// found none (claude-fleet#2616): a start's authority.
+	"orch_ensure":     "worker:start",
 	"gh_comment":      "gh:comment",
 	"gh_issue_view":   "gh:read",
 	"gh_pr_view":      "gh:read",
@@ -107,7 +110,8 @@ var fleetConfigKeys = map[string][2]int{
 var (
 	fleetWriteTools = map[string]bool{"worker_start": true, "worker_message": true, "worker_stop": true,
 		"worker_resume": true, "worker_answer": true, "worker_reap": true, "worker_switch": true, "worker_rename": true,
-		"worker_reap_policy": true, "config_set": true, "gh_comment": true, "service_control": true}
+		"worker_reap_policy": true, "config_set": true, "gh_comment": true, "service_control": true,
+		"orch_ensure": true}
 	fleetGHReads = map[string]bool{"gh_issue_view": true, "gh_pr_view": true, "gh_pr_checks": true}
 )
 
@@ -589,6 +593,14 @@ func parseWrite(tool string, args map[string]any) (writeRequest, string, error) 
 	case "worker_move_in":
 		w.fleetID, w.params, err = parseMoveIn(args)
 		w.repo, _ = w.params["repo"].(string)
+	case "orch_ensure":
+		// claude-fleet#2616: no arguments but the key and, optionally, the fleet
+		// — without one the hub picks it (orchEnsureTarget); the node is sent
+		// nothing to name: the fleet IS the session.
+		if err = checkFields(args, []string{"idempotency_key"}, "fleet_id"); err != nil {
+			break
+		}
+		w.fleetID, _ = args["fleet_id"].(string)
 	case "gh_comment":
 		if err = checkFields(args, []string{"fleet_id", "issue", "body", "idempotency_key"}, "repo"); err != nil {
 			break
@@ -756,6 +768,10 @@ func (s *Server) submitWrite(ctx context.Context, p fleetPrincipal, tool string,
 	switch {
 	case w.svc != nil:
 		if target, err = s.serviceTarget(p, *w.svc); err != nil {
+			return nil, err
+		}
+	case tool == "orch_ensure" && w.fleetID == "":
+		if target, err = s.orchEnsureTarget(p, time.Now()); err != nil {
 			return nil, err
 		}
 	case w.fleetID != "":

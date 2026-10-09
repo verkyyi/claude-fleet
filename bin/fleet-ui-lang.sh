@@ -531,6 +531,14 @@ fleet_ui_t() {
     en:compose_orch_none)       printf 'no orchestrating session on this machine' ;;
     zh:orch_window)             printf '编排' ;;
     en:orch_window)             printf 'orchestrator' ;;
+    # ⌘N with no orchestrating session (issue #2616): the bar's line while it is
+    # asked for (fleet-compose.py --orch), and why it never came
+    zh:orch_booting)            printf '正在叫起编排会话…' ;;
+    en:orch_booting)            printf 'starting the orchestrating session…' ;;
+    zh:orch_boot_timeout)       printf '编排会话没起来：%s' "${1:-}" ;;
+    en:orch_boot_timeout)       printf 'the orchestrating session did not come up: %s' "${1:-}" ;;
+    zh:orch_boot_waited)        printf '等了 %s 秒还没出现' "${1:-}" ;;
+    en:orch_boot_waited)        printf 'not there after %s s' "${1:-}" ;;
     zh:compose_sent_fmt)        printf '已发出：%s · 开工中…' "${1:-}" ;;
     en:compose_sent_fmt)        printf 'sent: %s · starting…' "${1:-}" ;;
     zh:compose_empty)           printf '先写一行再 ↵' ;;
@@ -809,8 +817,8 @@ orch	b	go to the orchestrator — straight to the orchestrating session of the f
     en:keys_switch_zoom)       printf %s 'zoom the session on the right; again to restore' ;;
     zh:keys_switch_quickopen)  printf %s '快速跳转：打几个字（名字、机器、状态都算），↵ 切过去；不打字 ↵ = 上一个看的' ;;
     en:keys_switch_quickopen)  printf %s 'quick open: type a few letters (name, machine, state), ↵ switches; ↵ on nothing = the one you saw before' ;;
-    zh:keys_switch_new)        printf %s '新任务：右边打开写作区，多行、附件，↵ 开 issue 和会话；在写作区再按一次：去编排会话，再按回来' ;;
-    en:keys_switch_new)        printf %s 'new task: the writing area on the right — several lines, attachments; ↵ files the issue and opens its session; again in it: the orchestrating session, and back' ;;
+    zh:keys_switch_new)        printf %s '编排：直接到编排会话的输入框，说一句 ↵ 就派出（没在跑先叫起来）；FLEET_COMPOSE=1 时是右边的写作区' ;;
+    en:keys_switch_new)        printf %s 'orchestrator: straight to its input — one line and ↵ dispatches it (woken first when not running); with FLEET_COMPOSE=1 the writing area on the right' ;;
     zh:keys_switch_fold)       printf %s '展开/收起当前会话的子任务；在子任务上按：收起它的父任务' ;;
     en:keys_switch_fold)       printf %s 'open / shut the sub-tasks of the session in view; on a sub-task: shut its parent' ;;
     zh:keys_switch_switcher)   printf %s '切换会话：全部会话按最近使用排，可搜索；最下面「+ 新会话」和「打开多会话视图」（多会话视图里是「收起侧栏」）' ;;

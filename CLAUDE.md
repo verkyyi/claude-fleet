@@ -342,7 +342,7 @@ Do not install from memory: read the doc and work from it.
   the session caps never count it (only `worker` does); `fleet_win_for_key
   orchestrator` addresses it. The inventory's column 20 `role=orchestrator` carries
   it to the client: `fleet-hub-sessions.sh` writes `orch_<sess>`, the rows skip
-  it, 「新任务」 wears its state, the writing area hands it a draft (⇧⇥). Off
+  it, 「新任务」 wears its state, ⌘N lands in its input (issue #2616 — none running: the hub's `orch_ensure` opens it on the holder, the bar says 「正在叫起…」; the client's `FLEET_COMPOSE=1` brings back the writing area, which hands it a draft with ⇧⇥). Off
   unless `FLEET_ORCHESTRATOR` (default: `FLEET_HOST`) — no orchestrator ⇒ byte
   for byte as before. **One per PERSON, not per machine** (issue #2117): with the
   hub on, `ensure` asks `/v1/node/orchestrator` (`fleet_orchestrator.go`: the

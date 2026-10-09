@@ -18,7 +18,7 @@ one box and three options since issue #2231, EPIC #2230 C1).
                                           #2232; null = auto / the fleet's default).
                                           Prints the place's one line and returns
                                           its code.
-    fleet-compose.py --orch <session> [--client C]
+    fleet-compose.py --orch <session> [--client C] [--boot]
                                           ⌘N again on the writing area (issue
                                           #2146, fleet-shell.sh portal) and
                                           「新任务」's menu: the stage straight
@@ -26,7 +26,10 @@ one box and three options since issue #2231, EPIC #2230 C1).
                                           draft — carry()'s own switch; with
                                           none (no orch_<session>), or no list to
                                           jump with, one line on the client C and
-                                          exit 1
+                                          exit 1. --boot (issue #2616, ⌘N with
+                                          FLEET_COMPOSE off): with none, ask the
+                                          hub to open it (orch_ensure) and go
+                                          once it shows — 「正在叫起…」 meanwhile
     fleet-compose.py payload <text-file> [--repo R | --no-repo] [--node N] [--agent A]
                                           the payload a ↵ on that text would write
                                           ({title, body, attachments, repo, node,
@@ -235,7 +238,7 @@ def write_atomic(path, text):
 
 def load_text():
     try:
-        out = subprocess.run(["sh", str(BIN / "fleet-ui-lang.sh"), "dump", "compose_"],
+        out = subprocess.run(["sh", str(BIN / "fleet-ui-lang.sh"), "dump", "compose_", "orch_"],
                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10).stdout
     except (OSError, subprocess.SubprocessError):
         out = b""
@@ -573,18 +576,81 @@ class Shell:
         return True
 
 
-def to_orch(session, client=""):
+def to_orch(session, client="", boot=False):
     """⌘N on the writing area / 进编排会话 (issue #2146): carry() with no text — the list's jump to
     orch_<session>'s window, the road ⇧⇥ takes. Nothing to go to says so on
-    the client's line instead (never an error). 0 switched, 1 not."""
+    the client's line instead (never an error). 0 switched, 1 not.
+    boot (issue #2616 — ⌘N itself, FLEET_COMPOSE off): with no orch_<session>,
+    ask for it first (boot_orch) and go once it shows; the line says why not."""
     shell = Shell(session)
     o = orchestrator(session)
+    if not o and boot:
+        o, why = boot_orch(session, shell, client)
+        if not o:
+            msg = tr("orch_boot_timeout", why)
+            shell.run("display-message", *(["-c", client] if client else []), msg)
+            print(msg)
+            return 1
     if o and carry(shell, o, "")[0]:
+        stamp_role(shell, o)
         return 0
     msg = tr("compose_orch_nolist") if o else tr("compose_orch_none")
     shell.run("display-message", *(["-c", client] if client else []), msg)
     print(msg)
     return 1
+
+
+def boot_orch(session, shell, client="", secs=None):
+    """No orchestrating session anywhere (issue #2616): one line on the client's
+    bar — 「正在叫起编排会话…」 — while the hub is asked to open it on the machine
+    that holds it (fleet-hub-write.sh orch_ensure: fleet-orchestrator.sh ensure
+    there), and orch_<session> is watched until it shows, at most
+    FLEET_ORCH_BOOT_SECS (75 — an older node refuses the write, and its next
+    home_watch tick, ≤ 60 s, opens it anyway). Returns (orchestrator, why)."""
+    secs = float(os.environ.get("FLEET_ORCH_BOOT_SECS") or 75) if secs is None else secs
+    try:
+        ask = subprocess.Popen(["bash", str(BIN / "fleet-hub-write.sh"), "orch_ensure", "{}"],
+                               stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    except OSError:
+        ask = None
+    why, said = "", 0.0
+    deadline = time.monotonic() + secs
+    while True:
+        o = orchestrator(session)
+        if o:
+            break
+        if time.monotonic() >= said:
+            # re-said every 2 s for 2.5 s: gone within a moment of the switch
+            shell.run("display-message", *(["-c", client] if client else []), "-d", "2500", tr("orch_booting"))
+            said = time.monotonic() + 2
+        if ask is not None and ask.poll() is not None:
+            if ask.returncode:
+                lines = (ask.stderr.read() or b"").decode("utf-8", "replace").strip().splitlines()
+                why = lines[-1] if lines else ""
+            ask = None
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(0.5)
+    if ask is not None:
+        ask.kill()
+    return o, ("" if o else why or tr("orch_boot_waited", int(secs)))
+
+
+def stamp_role(shell, o, wait=3.0):
+    """The stage window carry() switched to is the orchestrator's (issue #2616):
+    `@fleet_role orchestrator` on it, as the node's own window says — so the
+    client tells it by its role, never its name. Only a window with no role."""
+    want = o["node"] + ":" + o["wid"]
+    deadline = time.monotonic() + wait
+    while time.monotonic() < deadline:
+        for line in shell.stage("list-windows", "-F", "#{window_id}\t#{@remote}\t#{@fleet_role}").splitlines():
+            w = (line.split("\t") + ["", ""])[:3]
+            if w[1] == want:
+                if not w[2]:
+                    shell.stage("set-window-option", "-t", w[0], "@fleet_role", "orchestrator")
+                return True
+        time.sleep(0.1)
+    return False
 
 
 def go_back(shell, prev):
@@ -1193,8 +1259,11 @@ def main(argv):
             print(json.dumps(data, ensure_ascii=False, sort_keys=True))
             return 0
         return send(argv[1], opts["--repo"], opts["--node"], opts["--reap"], mode, opts["--agent"])
+    boot = argv[-1:] == ["--boot"]
+    if boot:
+        argv = argv[:-1]
     if argv[:1] == ["--orch"] and len(argv) in (2, 4) and (len(argv) == 2 or argv[2] == "--client"):
-        return to_orch(argv[1], argv[3] if len(argv) == 4 else "")
+        return to_orch(argv[1], argv[3] if len(argv) == 4 else "", boot=boot)
     session = ""
     if argv[:1] == ["--session"] and len(argv) >= 2:
         session = argv[1]

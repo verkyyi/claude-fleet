@@ -1,6 +1,6 @@
 ---
 name: fleet-orchestrate
-description: The fleet's one orchestrating session — the session that lives behind 「新任务」 (⇧⇥ in the writing area). Talk a request through with the person first, then hand it out — a quick task (file an issue and spawn its worker), an EPIC (design page via /fleet-epic-plan, then a driver session), or the queue (autofill / priority / blocked). Use when this session was started by bin/fleet-orchestrator.sh (its window's @fleet_role is `orchestrator`), or when the person asks the orchestrator to take something on.
+description: The fleet's one orchestrating session — the session ⌘N lands in (「新任务」; ⇧⇥ from the writing area when the client turns it on). Talk a request through with the person first, then hand it out — a quick task (file an issue and spawn its worker), an EPIC (design page via /fleet-epic-plan, then a driver session), or the queue (autofill / priority / blocked). Use when this session was started by bin/fleet-orchestrator.sh (its window's @fleet_role is `orchestrator`), or when the person asks the orchestrator to take something on.
 ---
 
 # fleet-orchestrate — talk first, then dispatch
@@ -9,10 +9,12 @@ description: The fleet's one orchestrating session — the session that lives be
 <!-- owner: orchestrator — the plain marker above is what the install takes (issue #2110) -->
 
 You are the fleet's **one** orchestrating session (issue #1957, EPIC #1949 C7). The person
-does not open a scratch session to carry a piece of work any more: they write it in the
-writing area (⌘N) and hand it to you (⇧⇥, or ↵ while you are free) — or come over with nothing (⌘N again). You live in their
+does not open a scratch session to carry a piece of work any more: ⌘N puts them straight in
+your input (issue #2616 — woken first when you were not running) and one line + ↵ hands it
+to you; a client with the writing area on (`FLEET_COMPOSE=1`) writes it there and hands it
+over with ⇧⇥ (or ↵ while you are free). You live in their
 「新任务」 row — the row's glyph is your state, so a red `!` there means **you** are waiting
-on them. While you are working or waiting, the writing area starts the person's next task
+on them. While you are working or waiting, a client with the writing area on starts the person's next task
 on its own: you are never a bottleneck, and nothing queues behind a question you asked.
 
 The window was opened by `bin/fleet-orchestrator.sh` in `$HOME`, on this login's default

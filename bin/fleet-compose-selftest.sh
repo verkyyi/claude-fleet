@@ -80,6 +80,12 @@
 #      says 「没发出去：入口连不上… · 字还在，改好再 ↵」 until the next key, the
 #      draft and compose-failed.json hold the text, nothing switched; the direct
 #      road's reason is the place's message (place_why)
+# ⌘N with the writing area off (issue #2616, EPIC #2615 C1 — FLEET_COMPOSE unset):
+#   T. ⌘N → the stage on the orchestrator's window, stamped @fleet_role
+#      orchestrator, no portal window made; no orch_fcs: the hub is asked
+#      (fleet-hub-write.sh orch_ensure) and the stage goes once orch_fcs shows;
+#      the bar says 「正在叫起编排会话…」 meanwhile, and why when it never came
+#      (the write's refusal, else 「等了 N 秒还没出现」)
 # tmux / python3 absent → SKIP (exit 0). Exit 0 = pass. FCS_KEEP=1 keeps the work dir.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -93,6 +99,10 @@ export FLEET_CONF_DIR="$HOME/.config/claude-fleet" FLEET_UI_LANG=zh
 export FLEET_STATUS_G="$WORK/g"; mkdir -p "$FLEET_STATUS_G"
 export FLEET_SWITCH_STATE="$WORK/state"; mkdir -p "$FLEET_SWITCH_STATE"
 export FLEET_COMPOSE_LOG="$WORK/logs/compose.ndjson"   # issue #1955
+# The writing area is the client's FLEET_COMPOSE=1 since issue #2616 (off by
+# default: ⌘N goes to the orchestrator) — every leg but T runs with it on, the
+# shell's server inherits it; T turns it off on that server.
+export FLEET_COMPOSE=1
 unset TMUX TMUX_PANE FLEET_SESSION FLEET_SHELL_STAGE FLEET_HUB_URL FLEET_NODE_ALIASES FLEET_COMPOSE_SHELL_SOCK
 FAIL=0; CHECKS=0
 fail() { FAIL=$((FAIL + 1)); printf 'FAIL: %s\n' "$1" >&2; [ $# -gt 1 ] && printf '      got: %s\n' "$2" >&2; }
@@ -638,6 +648,57 @@ print(c.place_why("fleet-client-place: https://hub.invalid: HTTP 503 Service Una
 print(c.place_why("REFUSED NO_CAPACITY\t没有机器有空\tafter m4:op1:5"))' 2>&1)
 eq 'S: the reason off the place: the last line, or the line'"'"'s message' \
   $'fleet-client-place: https://hub.invalid: HTTP 503 Service Unavailable\n没有机器有空' "$out"
+# T. (issue #2616) FLEET_COMPOSE off on the shell's server: ⌘N is the orchestrator
+sh_ set-environment -g FLEET_COMPOSE 0
+settled; orch 'done'
+st0=$(st_ list-windows -t fcs-stage -F '#{window_id} #{@fleet_role} #{@remote}' | awk '$2 != "portal" && $3 != "m4:U/orch" { print $1; exit }')
+st_ select-window -t "$st0"
+np=$(portal | grep -c .)
+: > "$VIEW"
+type_ '\033[928~'
+CHECKS=$((CHECKS + 1)); n=0; while [ "$(st_ display-message -p -t fcs-stage: '#{@remote}')" != m4:U/orch ] && [ $n -lt 50 ]; do sleep .1; n=$((n + 1)); done
+eq 'T: ⌘N → the stage on the orchestrator' m4:U/orch "$(st_ display-message -p -t fcs-stage: '#{@remote}')"
+CHECKS=$((CHECKS + 1)); n=0; while [ "$(st_ display-message -p -t fcs-stage: '#{@fleet_role}')" != orchestrator ] && [ $n -lt 40 ]; do sleep .1; n=$((n + 1)); done
+eq 'T: …its window told by @fleet_role orchestrator' orchestrator "$(st_ display-message -p -t fcs-stage: '#{@fleet_role}')"
+eq 'T: …no writing area made or shown' "$np" "$(portal | grep -c .)"
+# none running: the hub is asked, the stage goes once orch_fcs shows
+rm -f "$FLEET_STATUS_G/orch_fcs"
+st_ select-window -t "$st0"
+cat > "$WORK/write-ok.sh" <<EOF
+printf '%s\n' "\$*" >> "$WORK/write.log"
+( sleep 1; printf 'U/orch${US}m4${US}online${US}done${US}${US}\n' > "$FLEET_STATUS_G/orch_fcs" ) </dev/null >/dev/null 2>&1 &
+printf '{"operation_id": "op-o", "action": "%s", "status": "accepted"}\n' "\$1"
+EOF
+sh_ set-environment -g FLEET_HUB_WRITE_CMD "bash '$WORK/write-ok.sh' \"\$@\""
+: > "$WORK/write.log"
+type_ '\033[928~'
+CHECKS=$((CHECKS + 1)); n=0; while ! grep -q . "$WORK/write.log" && [ $n -lt 40 ]; do sleep .1; n=$((n + 1)); done
+has 'T: no orchestrator → the hub is asked to open it' "$(head -1 "$WORK/write.log")" 'orch_ensure {"idempotency_key":'
+eq 'T: …once' 1 "$(grep -c . "$WORK/write.log")"
+eq 'T: …the stage stays put meanwhile' "$st0" "$(st_ display-message -p -t fcs-stage: '#{window_id}')"
+CHECKS=$((CHECKS + 1)); n=0; while [ "$(st_ display-message -p -t fcs-stage: '#{@remote}')" != m4:U/orch ] && [ $n -lt 60 ]; do sleep .1; n=$((n + 1)); done
+eq 'T: …and goes once orch_fcs shows' m4:U/orch "$(st_ display-message -p -t fcs-stage: '#{@remote}')"
+sh_ set-environment -gu FLEET_HUB_WRITE_CMD
+# what the bar says (the client line: display-message on the shell's server, a
+# tmux shim on PATH logs it): 「正在叫起…」 while waiting, the reason at the end
+rm -f "$FLEET_STATUS_G/orch_fcs"
+mkdir -p "$WORK/shim"
+printf '#!/bin/sh\ncase " $* " in *" display-message "*) printf "%%s\\n" "$*" >> "%s";; esac\nexec %s "$@"\n' "$WORK/said" "$REAL_TMUX" > "$WORK/shim/tmux"
+chmod +x "$WORK/shim/tmux"
+: > "$WORK/said"
+out=$(cd "$SB" && PATH="$WORK/shim:$PATH" FLEET_ORCH_BOOT_SECS=2 \
+  FLEET_HUB_WRITE_CMD="printf '{\"action\": \"orch_ensure\", \"status\": \"failed\", \"result\": {\"error\": {\"code\": \"INVALID_ARGUMENT\", \"message\": \"Unsupported operation\"}}}\\n'" \
+  python3 fleet-compose.py --orch fcs --boot); rc=$?
+has 'T: the bar says it is starting it' "$(cat "$WORK/said")" '正在叫起编排会话…'
+eq 'T: never came → rc 1' 1 "$rc"
+has 'T: …saying why: the write'"'"'s refusal' "$out" '编排会话没起来：'
+has 'T: …in the node'"'"'s words' "$out" 'Unsupported operation'
+has 'T: …on the bar too' "$(tail -1 "$WORK/said")" '编排会话没起来'
+out=$(cd "$SB" && FLEET_ORCH_BOOT_SECS=1 FLEET_HUB_WRITE_CMD="printf '{\"status\": \"accepted\"}\\n'" \
+  python3 fleet-compose.py --orch fcs --boot)
+eq 'T: accepted but nothing came → how long it waited' '编排会话没起来：等了 1 秒还没出现' "$out"
+sh_ set-environment -g FLEET_COMPOSE 1
+
 # Q. (pure) the machine and the agent (issue #2232): a sandbox bin/ whose
 # fleet-client-place.sh prints its argv (the body file's path masked)
 QB="$WORK/q-bin"; mkdir -p "$QB"
