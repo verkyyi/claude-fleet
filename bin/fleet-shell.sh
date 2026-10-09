@@ -1291,6 +1291,17 @@ EOF
     RESUME\ *) hkey=$(printf '%s' "${hline%%$'\t'*}" | awk '{ print $3 }'); case "$hkey" in */*) hkey="wid:$hkey" ;; *) hkey='' ;; esac ;;
     LOCAL\ *)  hkey=$(printf '%s' "${hline#*$'\t'}" | awk '{ print $1 }'); case "$hkey" in @[0-9]*) ;; *) hkey='' ;; esac ;;
   esac
+  # a check, not a session (issue #2505): the TEST identity's placement with
+  # nothing to attach (FLEET_SHELL_NO_ATTACH — a selftest, `fleet --test-identity
+  # claude` verifying the hub) wanted the line above, not a session left running —
+  # closed at once through the hub's worker_reap, as `fleet close` does
+  if [ "${FLEET_CLIENT_IDENTITY:-}" = test ] && [ "${FLEET_SHELL_NO_ATTACH:-0}" = 1 ]; then
+    case "$hkey" in wid:*)
+      hreap=$(bash -c '. "$1/fleet-lib.sh" && fleet_hub_reap "$2" 90' fleet-test-close "$BIN" "${hkey#wid:}" 2>/dev/null | tail -n1)
+      note "test identity: ${hreap:-no answer} ${hkey#wid:}"
+      exit 0 ;;
+    esac
+  fi
   # `fleet claude`'s own view shows it (--no-stage, issue #2349): the client's
   # stage stays on what it shows
   [ -n "$hnostage" ] && exit 0

@@ -1149,6 +1149,24 @@ class HubTests(HubFixture):
         self.assertNotIn("--repo", call)
         self.assertEqual((self.node.conf / "scratch.seed").read_text(), "整理这周的日报\n按天分。")
 
+    def test_start_test_identity_scratch(self):
+        # issue #2505: the TEST identity's scratch — `test` reaches the adapter as
+        # $10 after the policy ($9, empty when none), dash-raw-session.sh marks it
+        for bad in ({"kind": "scratch", "test": False}, {"kind": "scratch", "test": "1"},
+                    {"kind": "issue", "issue": 1, "test": True}):
+            with self.subTest(bad=bad), self.assertRaises(Fault):
+                validate_write("worker_start", bad)
+        started = self.call("worker_start", dict(fleet_id=self.fleet, idempotency_key="test-1",
+                                                 params={"kind": "scratch", "no_repo": True, "test": True}))
+        self.assertEqual(self.node.wait(started["operation_id"])["status"], "succeeded")
+        started = self.call("worker_start", dict(fleet_id=self.fleet, idempotency_key="test-2",
+                                                 params={"kind": "scratch", "no_repo": True, "test": True,
+                                                         "reap": "keep"}))
+        self.assertEqual(self.node.wait(started["operation_id"])["status"], "succeeded")
+        calls = (self.node.conf / "scratch.calls").read_text().splitlines()
+        self.assertRegex(calls[0], r"^demo --origin hub --print --agent claude --no-repo --test-identity$")
+        self.assertRegex(calls[1], r"^demo --origin hub --print --agent claude --no-repo --reap keep --test-identity$")
+
     def test_new_issue_start_files_then_spawns(self):
         # issue #1953: the client's writing area — kind=new carries a title and a
         # body; the node files the issue through the one filer channel (the body

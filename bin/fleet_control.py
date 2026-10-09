@@ -729,11 +729,15 @@ class Control:
                     # issue #1956: a no-repo scratch says `-` for its repo (the
                     # adapter opens it with --no-repo), and the writing area's
                     # text rides stdin as its seed — never an argv.
+                    # issue #2505: a scratch the test identity placed — `test` as
+                    # the adapter's $10 (its $9, the policy, said or empty); with
+                    # none the argv is exactly what it was.
+                    test_arg = [(reap_arg or [""])[0], "test"] if params.get("test") is True else reap_arg
                     code, output, err = self.adapter("start", fleet["name"], "scratch", params.get("agent", ""),
                                                      "-" if params.get("no_repo") else params.get("repo", ""),
                                                      params.get("origin_wid", ""),
                                                      params.get("account_class", ""), params.get("name", "").strip(),
-                                                     *reap_arg, payload=body.encode("utf-8") if body else None,
+                                                     *test_arg, payload=body.encode("utf-8") if body else None,
                                                      timeout=180)
                 elif filed:
                     # issue #1953: the client's writing area — the adapter's start

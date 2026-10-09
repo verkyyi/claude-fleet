@@ -79,7 +79,7 @@ class Cleaner:
                  "@pin", "@cc_agent", "@cc_launcher_pid", "@codex_identity",
                  "@handoff_manifest", "@agent_transfer_until", "window_name",
                  "@reap_policy", "@loop", "@worker_lifecycle", "@wrap_gone", "pane_dead",
-                 "@fleet_role", "@reap_skip")
+                 "@fleet_role", "@reap_skip", "@test_identity", "@born", "@fleet_id")
         return {n: option(self.tm, window, n) for n in names}
 
     def policy(self, snap):
@@ -210,8 +210,46 @@ class Cleaner:
             "--socket-name", self.args.socket_name)
         return True
 
+    def test_session(self, window, snap):
+        """A no-repo session the TEST identity's client placed (issue #2505,
+        @test_identity): a placement check, never anyone's work — so, unlike every
+        other no-repo session (#791), its own policy closes it (done:10m unless it
+        asked for another). Its clock is its last turn, or its birth when it never
+        took one; working / asking / pinned / holding a job is never closed. No
+        worktree, so nothing to record: stopped the graceful way, by identity
+        (fleet-worker-stop.sh fid:, as dash-reap.sh's no-repo row)."""
+        pol = self.policy(snap)
+        if pol is None or pol[0] not in ("done", "at") or snap["@pin"] == "1":
+            return False
+        if (snap["@claude_state"] not in ("", "done", "exited", "idle")
+                and snap["@wrap_gone"] != "1" and snap["pane_dead"] != "1"):
+            return False
+        stamp = snap["@claude_state_ts"] if snap["@claude_state_ts"].isdigit() else snap["@born"]
+        if pol[0] == "done" and (not stamp.isdigit() or int(stamp) + pol[1] > self.now):
+            return False
+        if pol[0] == "at" and pol[1] > self.now:
+            return False
+        fid = snap["@fleet_id"]
+        if not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", fid or ""):
+            return False
+        if self.busy(window, snap):
+            return False
+        if self.args.dry_run:
+            print("would-reap-test:" + window)
+            return False
+        if self.snapshot(window) != snap:
+            return False
+        self.retire(window)
+        out = subprocess.run(["bash", str(BIN / "fleet-worker-stop.sh"), self.args.session, "fid:" + fid],
+                             env=dict(os.environ, FLEET_SESSION=self.args.session), stdin=subprocess.DEVNULL,
+                             capture_output=True, text=True, timeout=120).stdout.strip()
+        print("reaped-test:" + window + " policy=" + snap["@reap_policy"] + " " + (out or "no answer"))
+        return out.startswith("stopped:")
+
     def candidate(self, window):
         snap = self.snapshot(window)
+        if snap["@test_identity"] == "1" and snap["@norepo"] == "1":
+            return self.test_session(window, snap)
         if self.route(snap) == "no-pr":
             return self.no_pr(window, snap)
         if not self.eligible(window, snap):

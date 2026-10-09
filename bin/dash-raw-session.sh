@@ -110,7 +110,7 @@ set -uo pipefail
 # and input draft; --prompt <t> / --prompt=<t> is the optional submitted seed;
 # --bg backgrounds the slow half of the spawn (the dash ⌃s / typed-↵ path — see
 # below); the lone positional is the headless <fleet-session>.
-NAME=""; PROMPT=""; TARGET_SESS=""; BG=0; PIN=0; ORIGIN=""; AGENT=""; REPO_ARG=""; NOREPO=0; SEL=""; NODE_ARG=""; ORIGIN_WID=""; PRINT_WIN=0; REAP=""; WARM_ONLY=0
+NAME=""; PROMPT=""; TARGET_SESS=""; BG=0; PIN=0; ORIGIN=""; AGENT=""; REPO_ARG=""; NOREPO=0; SEL=""; NODE_ARG=""; ORIGIN_WID=""; PRINT_WIN=0; REAP=""; WARM_ONLY=0; TEST_ID=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --name)        NAME="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
@@ -175,6 +175,11 @@ while [ "$#" -gt 0 ]; do
     # the kind's default, stamped below: done:2h, or loop-end for a /loop seed.
     --reap)        REAP="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
     --reap=*)      REAP="${1#--reap=}"; shift ;;
+    # --test-identity (issue #2505): a session the TEST identity's client placed
+    # (`fleet --test-identity`, #1931) — stamped @test_identity 1, named test-…,
+    # closed once done 10 minutes unless a --reap says otherwise; the person's
+    # list hides it and `fleet ls` marks it.
+    --test-identity) TEST_ID=1; shift ;;
     *)             TARGET_SESS="$1"; shift ;;
   esac
 done
@@ -354,6 +359,7 @@ if [ "$BG" = 1 ]; then
   owarg=''; [ -n "$ORIGIN_WID" ] && owarg=" --origin-wid=$ORIGIN_WID"
   # canonical (checked above): no quote or space can be in it
   [ -n "$REAP" ] && owarg="$owarg --reap=$REAP"
+  [ "$TEST_ID" = 1 ] && owarg="$owarg --test-identity"
   fleet_bg "FLEET_SPAWN_FOCUS='${FLEET_SPAWN_FOCUS:-0}' bash '$0'$nfarg$pfarg$pinarg$nodearg$owarg --origin='${ORIGIN:-hub}'${AGENT:+ --agent=$AGENT}$rarg${TARGET_SESS:+ '$TARGET_SESS'} >/dev/null 2>&1" \
     || { [ -n "$nfarg" ] && rm -f "$nf"; [ -n "$pfarg" ] && rm -f "$pf"
          refuse "raw: background dispatch failed"; exit 1; }
@@ -553,6 +559,7 @@ fi
 # No repo tag, even with 2+ repos (issue #1023 dropped #793's `tl·` prefix): the
 # dash shows the repo, and identity is `@repo`, never the name.
 base="${custom:-$slug}"
+[ "$TEST_ID" = 1 ] && case "$base" in test-*) ;; *) base="test-$base" ;; esac
 existing=$(TM list-windows -t "$SESS" -F '#{window_name}' 2>/dev/null)
 name="$base"; n=2
 while printf '%s\n' "$existing" | grep -qxF "$name"; do name="$base-$n"; n=$((n + 1)); done
@@ -633,6 +640,7 @@ fleet_win_role_stamp "$win" worker "$SOCK"   # what it IS, whatever it is rename
 # kind's default — a /loop seed until its loop stops, any other scratch once done
 # and idle 2 hours. A no-repo session is never closed automatically (#791), so it
 # carries only an explicit one.
+[ "$TEST_ID" = 1 ] && { TM set-window-option -t "$win" @test_identity 1 2>/dev/null; [ -n "$REAP" ] || REAP=done:10m; }
 if [ -z "$REAP" ] && [ "$NOREPO" != 1 ]; then
   case "$PROMPT" in /loop|/loop[[:space:]]*) REAP=loop-end ;; *) REAP=done:2h ;; esac
 fi

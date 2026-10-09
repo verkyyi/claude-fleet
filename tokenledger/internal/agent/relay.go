@@ -76,6 +76,9 @@ type relayPaths struct {
 	// attach is where a start's attachments land (claude-fleet#2393); ""
 	// on a claude-fleet that predates them.
 	attach string
+	// test is whether claude-fleet marks the test identity's scratch
+	// (claude-fleet#2505); false on one that predates it.
+	test bool
 }
 
 // relayState is the outbox's in-flight table, kept across reconnects so a
@@ -124,6 +127,8 @@ func relaySetup(ctx context.Context, home string) (relayPaths, bool) {
 			if filepath.IsAbs(v) {
 				p.attach = v
 			}
+		case "test":
+			p.test = v == "1"
 		}
 	}
 	if !filepath.IsAbs(p.outbox) || !filepath.IsAbs(p.workers) {

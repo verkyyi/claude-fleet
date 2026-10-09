@@ -134,6 +134,18 @@ func (s *Server) canAttach(ctx context.Context, endpointID string) bool {
 	return false
 }
 
+// canTestIdentity reports whether the node behind endpointID marks the test
+// identity's scratch (claude-fleet#2505).
+func (s *Server) canTestIdentity(ctx context.Context, endpointID string) bool {
+	if c := s.nodes.get(endpointID); c != nil {
+		return c.canTest
+	}
+	if peer, ok := s.peerOf(ctx, endpointID); ok {
+		return peer.HasCap(control.CapTestIdentity)
+	}
+	return false
+}
+
 // attachArgs binds held to endpointID and is the start's `attachments`.
 func (s *Server) attachArgs(held []heldAttachment, endpointID string) ([]any, error) {
 	var out []any

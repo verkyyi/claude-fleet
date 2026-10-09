@@ -44,7 +44,9 @@
 #
 # Exit: the view's · the attach's · fleet-client-place.sh's code when nothing was placed ·
 # fleet-run.sh's with --here · 2 usage. FLEET_SHELL_NO_ATTACH=1 (the selftests)
-# stops after step 2 with its code.
+# stops after step 2 with its code, the placement's line on stdout; as the TEST
+# identity (`fleet --test-identity claude`) the session it opened is closed at
+# once (fleet-shell.sh home-session, issue #2505) — a check leaves none behind.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 SH="${FLEET_HOME_SHELL:-$BIN/fleet-shell.sh}"   # the selftests' seam
@@ -130,7 +132,9 @@ print("、".join(x.replace("#", "").replace("\x27", "").replace("\"", "") for x 
   rm -f "$resf"
 fi
 [ "$rc" = 0 ] || exit "$rc"
-[ "${FLEET_SHELL_NO_ATTACH:-0}" = 1 ] && exit 0
+# the seam's answer is the placement's line (issue #2505: `REMOTE … done` is what
+# a check of the hub reads)
+[ "${FLEET_SHELL_NO_ATTACH:-0}" = 1 ] && { printf '%s\n' "$hline"; exit 0; }
 
 # 3. onto it, in a view of its own (issue #2349): one session, no list, whatever
 #    layout the client keeps — `REMOTE <machine> <op> done <worker id>`. Its /exit

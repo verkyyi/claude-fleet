@@ -32,6 +32,9 @@
 #                            ls grows a 进度 column (core merged / core) only when
 #                            some row has a count; show names its 总单 URL — a
 #                            renamed driver, or a scratch wearing an issue cell
+#   J  test rows (issue #2505) a test identity's session (cache field 26 = 1) is
+#                            listed 「（测试）」, ls --json says test; `close --test`
+#                            reaps every one of them and no other row; none → 0
 #
 # tmux only on isolated sockets. Drives: bin/fleet, bin/fleet-session-cli.py,
 # bin/fleet-shell.sh, bin/fleet-quickopen.py, bin/fleet-hub-write.sh.
@@ -269,6 +272,36 @@ has "I show: …of a scratch wearing an issue cell" "总单      https://github.
 case "$(cbi show '#12')" in *总单*) eq "I show: an ordinary worker has no 总单" none 总单 ;; *) eq "I show: an ordinary worker has no 总单" none none ;; esac
 eq "I ls --json: progress + epic_url" "7/9|https://github.com/acme/web/issues/2482;0/4|https://github.com/acme/web/issues/2490;|;" \
   "$(cbi ls --json | python3 -c 'import json,sys; print("".join("%s|%s;" % (r["progress"], r["epic_url"]) for r in json.load(sys.stdin)))')"
+
+# --- J. the test identity's sessions (issue #2505) -------------------------------------
+{
+  printf '%s\n' "wid:F/issue-12${T}needs${T}!${T}登录页重做${T}m4${T}acme/web (1)${T}${T}#12${T}#75✓${T}merged${T}登录页重做${T}acme/web"
+  printf '%s\n' "wid:F/fid-a${T}idle${T}○${T}test-norepo${T}m5${T}无仓库 (2)${T}${T}—${T}—${T}done:10m${T}${T}none"
+  printf '%s\n' "wid:F/fid-b${T}idle${T}○${T}test-norepo-2${T}m4${T}无仓库 (2)${T}${T}—${T}—${T}done:10m${T}${T}none"
+} > "$W/rows-test.tsv"
+{
+  printf '#ts%s%s\n' "$U" "$NOW"
+  printf '%s\n' "wid:F/issue-12${U}m4${U}online${U}12${U}acme/web${U}needs${U}claude${U}登录页重做${U}${U}${U}0${U}${U}hub${U}${U}${U}ok"
+  printf '%s\n' "wid:F/fid-a${U}m5${U}online${U}${U}${U}idle${U}claude${U}test-norepo${U}${U}${U}0${U}${U}hub${U}${U}${U}ok${U}${U}done:10m${U}${U}${U}${U}${U}${U}${U}${U}1"
+  printf '%s\n' "wid:F/fid-b${U}m4${U}online${U}${U}${U}idle${U}claude${U}test-norepo-2${U}${U}${U}0${U}${U}hub${U}${U}${U}ok${U}${U}done:10m${U}${U}${U}${U}${U}${U}${U}${U}1"
+} > "$W/remote-test"
+ctst() { FLEET_SESSION_CLI_ROWS="$W/rows-test.tsv" FLEET_SESSION_CLI_CACHE="$W/remote-test" FLEET_SESSION_CLI_NOW="$NOW" python3 "$BIN/fleet-session-cli.py" "$@"; }
+out=$(ctst ls)
+has "J ls: a test row says so" "test-norepo（测试）" "$out"
+case "$out" in *"登录页重做（测试）"*) eq "J ls: an ordinary row is no test" none test ;; *) eq "J ls: an ordinary row is no test" none none ;; esac
+eq "J ls --json: test" "wid:F/issue-12|False;wid:F/fid-a|True;wid:F/fid-b|True;" \
+  "$(ctst ls --json | python3 -c 'import json,sys; print("".join("%s|%s;" % (r["key"], r["test"]) for r in json.load(sys.stdin)))')"
+ctst close --test </dev/null >/dev/null 2>&1; eq "J close --test with no terminal and no --yes → 2" 2 "$?"
+: > "$W/reaps-test"
+out=$(FLEET_HUB_WRITE_CMD='printf "%s %s\n" "$1" "$2" >> '"$W/reaps-test"'; echo "{\"operation_id\":\"op9\",\"status\":\"succeeded\",\"result\":{\"token\":\"reaped:full\"}}"' \
+  ctst close --test --yes 2>&1); rc=$?
+eq "J close --test --yes exits 0" 0 "$rc"
+has "J …reaps the first" "已回收 test-norepo（reaped:full）" "$out"
+has "J …and the second" "已回收 test-norepo-2（reaped:full）" "$out"
+eq "J …two worker_reaps, the test rows only" "2 0" "$(grep -c '^worker_reap ' "$W/reaps-test") $(grep -c 'issue-12' "$W/reaps-test")"
+out=$(FLEET_SESSION_CLI_ROWS="$W/rows.tsv" FLEET_SESSION_CLI_CACHE="$W/remote" FLEET_SESSION_CLI_NOW="$NOW" python3 "$BIN/fleet-session-cli.py" close --test 2>&1); rc=$?
+eq "J no test rows → exit 0" 0 "$rc"
+has "J …and says so" "没有测试会话" "$out"
 
 if [ "$FAIL" -gt 0 ]; then
   printf 'fleet-session-cli selftest: %d of %d checks FAILED\n' "$FAIL" "$CHECKS" >&2

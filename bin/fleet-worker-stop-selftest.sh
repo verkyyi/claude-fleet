@@ -24,7 +24,9 @@
 #      unknown fid → 5, a fid two windows carry → 6, a malformed one → 2; a
 #      pool window / the hub never answer
 #  11. dash-reap.sh on a no-repo row: done → the same graceful stop (reaped:full),
-#      working → skip:live, untouched (no more refused:no-issue)
+#      working → skip:live, untouched (no more refused:no-issue); no state at all
+#      (issue #2505): skip:live while an agent runs there, reaped:full once it is
+#      a test identity's (@test_identity) or no agent runs (@wrap_gone)
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 REAL_TMUX=$(command -v tmux) || { printf 'selftest: tmux not installed — SKIP\n' >&2; exit 0; }
@@ -218,6 +220,25 @@ reap "$w10n"
 [ "$rc" = 0 ] && [ "$out" = reaped:full ] || fail "11: a done no-repo row expected reaped:full/0" "rc=$rc out=$out err=$(cat "$WORK/err")"
 has_win "$w10n" && fail "11: the done no-repo row survived ⌃x"
 kill -0 "${p10n:-0}" 2>/dev/null && fail "11: the reaped no-repo agent is still alive (not a graceful /exit)"
+# no state (issue #2505): a session that never took a turn
+F5=55555555-5555-4555-8555-555555555555; F6=66666666-6666-4666-8666-666666666666
+w11a=$(mkwin test-norepo "$SHELLED" -); tf set-window-option -t "$w11a" @norepo 1
+tf set-window-option -t "$w11a" @fleet_id "$F5"
+w11b=$(mkwin norepo-2 "$SHELLED" -); tf set-window-option -t "$w11b" @norepo 1
+tf set-window-option -t "$w11b" @fleet_id "$F6"
+sleep 0.4
+tf set-window-option -u -t "$w11a" @claude_state 2>/dev/null; tf set-window-option -u -t "$w11b" @claude_state 2>/dev/null
+reap "$w11b" --yes
+[ "$rc" = 3 ] && [ "$out" = skip:live ] || fail "11: no state, an agent running expected skip:live/3" "rc=$rc out=$out err=$(cat "$WORK/err")"
+has_win "$w11b" || fail "11: a no-state row with its agent was closed"
+tf set-window-option -t "$w11a" @test_identity 1
+reap "$w11a" --yes
+[ "$rc" = 0 ] && [ "$out" = reaped:full ] || fail "11: a test identity's no-state row expected reaped:full/0" "rc=$rc out=$out err=$(cat "$WORK/err")"
+has_win "$w11a" && fail "11: the test identity's row survived ⌃x"
+tf set-window-option -t "$w11b" @wrap_gone 1
+reap "$w11b" --yes
+[ "$rc" = 0 ] && [ "$out" = reaped:full ] || fail "11: no state, no agent expected reaped:full/0" "rc=$rc out=$out err=$(cat "$WORK/err")"
+has_win "$w11b" && fail "11: the no-agent row survived ⌃x"
 
 # --- 9. a multi-repo fleet (issue #1018): `<repo>:issue-N` stops THAT repo's -----
 #        window only; a bare key two repos hold is ambiguous; an unhosted repo is

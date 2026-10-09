@@ -479,9 +479,13 @@ if [ "$NODE" != auto ] && ! fleet_node_is_self "$NODE"; then
   exit 4
 fi
 ef=$(mktemp "${TMPDIR:-/tmp}/fcp-err.XXXXXX" 2>/dev/null) || ef=/dev/null
+# the TEST identity's scratch (issue #2505), as the hub marks it: the adapter's
+# $10 `test` after the policy ($9, said or empty)
+TAIL=(); [ -n "$REAP" ] && TAIL=("$REAP")
+[ "${FLEET_CLIENT_IDENTITY:-}" = test ] && TAIL=("$REAP" test)
 case "$KIND" in
   issue)   out=$(bash "$BIN/fleet-control-read.sh" start "$SESS" "$ISSUE" "$AGENT" "$REPO" '' '' ${REAP:+'' "$REAP"} 2>"$ef"); src=$? ;;
-  scratch) out=$(bash "$BIN/fleet-control-read.sh" start "$SESS" scratch "$AGENT" "$REPO" '' '' "${NAME:-$TITLE}" ${REAP:+"$REAP"} \
+  scratch) out=$(bash "$BIN/fleet-control-read.sh" start "$SESS" scratch "$AGENT" "$REPO" '' '' "${NAME:-$TITLE}" ${TAIL[@]+"${TAIL[@]}"} \
                    < "${BODYF:-/dev/null}" 2>"$ef"); src=$? ;;
   restore) out=$(bash "$BIN/fleet-control-read.sh" resume "$SESS" "$KEY" 2>"$ef"); src=$? ;;
   new)     out=$(bash "$BIN/fleet-control-read.sh" start "$SESS" new "$AGENT" "$REPO" '' '' "$TITLE" ${REAP:+"$REAP"} \

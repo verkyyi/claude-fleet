@@ -252,6 +252,10 @@ func (s *Server) handleFleetClientPlace(w http.ResponseWriter, r *http.Request) 
 	}
 }
 
+// testIdentityReap is a test identity's scratch's reap policy when it asks
+// for none (claude-fleet#2505): a check that is over, never a session kept.
+const testIdentityReap = "done:10m"
+
 // refusedAnswer is a placement fault as the client's line: HELD for a lease
 // held elsewhere, REFUSED <code> for everything else.
 func refusedAnswer(err error, pl *Placement) ClientPlaceResponse {
@@ -262,11 +266,16 @@ func refusedAnswer(err error, pl *Placement) ClientPlaceResponse {
 
 func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 
+// A TEST identity's lease (#1931, leaseKey in its slot) marks the scratch it
+// opens (claude-fleet#2505) — @test_identity on the node, hidden from the
+// person's list — and, with no reap policy asked, closes it once it has sat
+// done 10 minutes.
 func (s *Server) clientPlace(w http.ResponseWriter, r *http.Request, p fleetPrincipal, leaseKey, lease string, req clientPlaceRequest, wait time.Duration, now time.Time) {
 	if (req.Home || req.New) && (!req.Home || !req.NoRepo || req.Kind != "scratch") {
 		httpError(w, http.StatusBadRequest, "home is a no_repo scratch; new goes with home")
 		return
 	}
+	test := strings.HasSuffix(leaseKey, clientTestSlot)
 	if req.NoRepo {
 		// The writing area's 「不关联仓库」 (claude-fleet#1956): a scratch only,
 		// and it names no repo — any of this person's fleets may open it.
@@ -346,6 +355,9 @@ func (s *Server) clientPlace(w http.ResponseWriter, r *http.Request, p fleetPrin
 		args["kind"] = "scratch"
 		if n != "" {
 			args["name"] = n
+		}
+		if test && req.Reap == "" {
+			args["reap"] = testIdentityReap
 		}
 		if req.Body != "" {
 			// The writing area's text (claude-fleet#1956): the scratch
@@ -513,6 +525,12 @@ func (s *Server) clientPlace(w http.ResponseWriter, r *http.Request, p fleetPrin
 			args["idempotency_key"] = retryIdem(idem, try) // a new start, not the declined one again
 		}
 		delete(args, "attachments")
+		// The test identity's scratch is marked where the chosen machine can
+		// (claude-fleet#2505); an older one opens it unmarked, as before.
+		delete(args, "test")
+		if test && req.Kind == "scratch" && s.canTestIdentity(r.Context(), target.EndpointID) {
+			args["test"] = true
+		}
 		attached, attachNote = 0, ""
 		if len(held) > 0 {
 			// The chosen machine downloads them, or is sent none and the
