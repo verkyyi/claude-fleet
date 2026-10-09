@@ -66,6 +66,35 @@ echo '{"sha":"'"$sha"'"}'
 """
 
 
+# a ccquota that resumes (issue #2701): `-h` names --pinned/--cache; the flags
+# land in $FAKE_REL/.argv, the cache's entries at start in .seeded; with
+# $FAKE_REL/.cut present the fetch is cut half way (a .part left in the cache)
+FAKE_CCQUOTA_RESUME = r"""#!/bin/bash
+[ "$1" = release ] && [ "$2" = fetch ] || { echo "fake ccquota: $*" >&2; exit 2; }
+shift 2
+[ "$1" = -h ] && { echo "  -cache string" >&2; echo "  -pinned" >&2; exit 0; }
+echo "$*" >> "$FAKE_REL/.argv"
+cache="" prog=""
+while [ "$#" -gt 2 ]; do
+  case "$1" in --cache) cache=$2; shift ;; --progress) prog=$2; shift ;; esac
+  shift
+done
+sha=$1 dest=$2
+ls "$cache" > "$FAKE_REL/.seeded"
+echo "release ${sha:0:12}: 4 artifacts" >> "$prog"
+if [ -e "$FAKE_REL/.cut" ]; then
+  rm -f "$FAKE_REL/.cut"
+  head -c 1000 /dev/zero > "$cache/$(printf %064d 7).part"
+  echo "  claude: 0.0 MB / 0.2 MB · 0.01 MB/s · eta 20s" >> "$prog"
+  echo "artifact claude: no bytes for 30s" >&2
+  exit 1
+fi
+[ -d "$FAKE_REL/$sha" ] || { echo "HTTP 404 no release $sha" >&2; exit 1; }
+cp -R "$FAKE_REL/$sha" "$dest" || exit 1
+echo '{"sha":"'"$sha"'"}'
+"""
+
+
 def sh256(b):
     return hashlib.sha256(b).hexdigest()
 
@@ -769,6 +798,59 @@ class J_Sessions(Sandbox):
         self.assertEqual(self.log(), [])
 
 
+class L_ResumableFetch(Sandbox):
+    """issue #2701: a ccquota that resumes is asked for the pinned artifacts only,
+    into <root>/.fetch seeded with what the machine has; a cut fetch keeps its
+    bytes and is not backed off — the next tick finishes it."""
+
+    def setUp(self):
+        Sandbox.setUp(self)
+        cq = os.path.join(self.d, "ccquota-resume")
+        with open(cq, "w") as f:
+            f.write(FAKE_CCQUOTA_RESUME)
+        os.chmod(cq, 0o755)
+        self.env["FLEET_NODE_CCQUOTA"] = cq
+
+    def test_pinned_cached_and_resumed(self):
+        cache = os.path.join(self.root, ".fetch")
+        self.release(V1)
+        self.assertEqual(self.tick(V1)["phase"], "switched")
+        with open(os.path.join(self.rel, ".argv")) as f:
+            argv = f.read().split()
+        for flag in ("--artifacts", "--pinned", "--cache", "--progress"):
+            self.assertIn(flag, argv)
+        self.assertEqual(argv[argv.index("--platform") + 1], "darwin-arm64")
+        self.assertEqual(argv[argv.index("--cache") + 1], cache)
+        self.assertFalse(os.path.exists(cache), "the fetch cache outlived a whole stage")
+        self.daemon_on(V1)
+        self.assertEqual(self.tick(V1)["result"], "committed")
+
+        # V2 pins the same claude / codex / tmux: the cache starts with them
+        self.release(V2)
+        open(os.path.join(self.rel, ".cut"), "w").close()
+        st = self.tick(V2)
+        self.assertEqual(st["result"], "failed")
+        self.assertNotIn(V2, st.get("failed") or {}, "a fetch that moved was backed off")
+        with open(os.path.join(self.rel, ".seeded")) as f:
+            seeded = f.read().split()
+        man = self.rj(os.path.join(self.root, "current", ".release", "manifest.json"))
+        for a in man["artifacts"]:
+            self.assertIn(a["sha256"], seeded, "%s was not seeded into the fetch cache" % a["name"])
+        self.assertTrue(any(n.endswith(".part") for n in os.listdir(cache)), "the cut fetch's bytes are gone")
+        out = self.cmd("status").stdout
+        self.assertIn("fetch   claude: 0.0 MB / 0.2 MB", out)
+
+        st = self.tick(V2)   # no FLEET_NODE_UPDATE_RETRY: a backoff would say `backoff`
+        self.assertEqual(st["phase"], "switched", st)
+        self.assertEqual(os.path.basename(os.readlink(os.path.join(self.root, "current"))), V2)
+
+    def test_old_ccquota_keeps_the_old_argv(self):
+        self.env["FLEET_NODE_CCQUOTA"] = os.path.join(self.d, "ccquota")
+        self.release(V1)
+        self.assertEqual(self.tick(V1)["phase"], "switched")
+        self.assertFalse(os.path.exists(os.path.join(self.root, ".fetch")))
+
+
 if __name__ == "__main__":
     # the BREAK-IT drill (node-update-half) builds its fixtures with the same code
     if len(sys.argv) > 1 and sys.argv[1] == "--fake-ccquota":
@@ -786,6 +868,9 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--drill-credsep":
         # BREAK-IT credsep-stale-after-switch: the supervised case, switch + rollback
         unittest.main(argv=[sys.argv[0], "I_Credsep.test_supervised_proxy_follows_switch_and_rollback"], verbosity=1)
+    if len(sys.argv) > 1 and sys.argv[1] == "--drill-fetch":
+        # BREAK-IT release-fetch-slow: the updater half
+        unittest.main(argv=[sys.argv[0], "L_ResumableFetch"], verbosity=1)
     if len(sys.argv) > 1 and sys.argv[1] == "--drill-login-install":
         # BREAK-IT managed-login-install-stale: the doctor half
         unittest.main(argv=[sys.argv[0], "K_LoginInstall"], verbosity=1)
