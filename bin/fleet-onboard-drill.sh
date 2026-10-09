@@ -48,7 +48,20 @@
 #               sidebar's refusal (no repo / no machine of yours / hub down,
 #               zh or en) is 要人帮 — a FAIL naming it. The row's line is the
 #               evidence.
-#   9 offboard  stop the login's processes, revoke its device on the hub
+#   9 attach-attachment  (EPIC #2482 C1) a solid red PNG in the login's home,
+#               its path typed into the writing area after 「看图 这张图是什么颜色？…」,
+#               Enter; the session — on whatever machine the hub put it — must
+#               show the file at ITS machine's path (…/attachments/<id>/…) and
+#               answer 红 / red (FLEET_DRILL_AGENT_SECS, 300). 「附件没带过去」 or
+#               no such path is 要人帮 — a FAIL naming it.
+#  10 node-restart-resume  (C5) the session's machine restarts its tmux as an
+#               update does: as the login that runs it (found by the row's
+#               @fleet_id, `fleet ls --json`), `fleet-sessions-snapshot.sh save`,
+#               kill-server, `restore` — which must say `back`; the client must
+#               come back on the same row and key, its text shown again. A
+#               session on another machine is a FAIL that says so: run the
+#               drill on the machine the hub places on.
+#  11 offboard  stop the login's processes, revoke its device on the hub
 #               (POST /v1/fleet/devices/revoke, viewer token from the
 #               environment), then fleet-login-remove.sh <login> --delete-home
 #               --apply — which takes the login's node off the hub as the login
@@ -59,14 +72,15 @@
 #               With --invite: the drill person deletes ITSELF instead — person,
 #               device, node (DELETE /v1/self, signed by the login's own
 #               certificate, else the code) — no operator token needed.
-#  10 residue   no login record, home, process, access group entry; the device
+#  12 residue   no login record, home, process, access group entry, nor any login
+#               made during the run (the hub's for the drill person); the device
 #               revoked on the hub. With --invite: the hub no longer knows the
 #               drill person (its answer is kept as hub-residue.txt).
 #
 # The reading: 「要人帮的步骤」 = the FAILs a person would have had to be asked
 # about. The scan is the colleague's own and is not counted.
 #
-# --teardown <login>: steps 9–10 only, for a run left up (--keep) or cut short.
+# --teardown <login>: steps 11–12 only, for a run left up (--keep) or cut short.
 #
 # --runs N: the 60-second standard instead (bin/fleet-onboard-clock.sh, #2267) —
 # `fleet-onboard-drill.sh --hub prod --runs 3`: sandbox HOMEs, no new login.
@@ -117,6 +131,54 @@ qr_state() {
   else echo wait; fi
 }
 
+# drill_png <file>: the attach step's screenshot — a 64×64 solid red PNG
+# (python3 alone: no Pillow, no screen to capture on a bare login)
+drill_png() {
+  python3 - "$1" <<'PY'
+import struct, sys, zlib
+def chunk(t, d):
+    return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xffffffff)
+w = h = 64
+raw = b"".join(b"\x00" + b"\xd0\x10\x10" * w for _ in range(h))
+open(sys.argv[1], "wb").write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+                              + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+PY
+}
+# attach_state (a screen on stdin): lost — the client said the file did not go;
+# answered — the session's text names the file on ITS machine
+# (…/attachments/<id>/…) and an answer says the colour; path — the path only;
+# wait — neither yet. The colour is in nothing the drill types.
+ATTACH_LOST='附件没带过去|did not go'
+ATTACH_RED='红|(^|[^[:alpha:]])[Rr]ed([^[:alpha:]]|$)'
+attach_state() {
+  local p
+  p=$(cat)
+  if printf '%s\n' "$p" | grep -Eq -- "$ATTACH_LOST"; then echo lost
+  elif ! printf '%s\n' "$p" | grep -qF '/attachments/'; then echo wait
+  elif printf '%s\n' "$p" | sed -n '/\/attachments\//,$p' | grep -Eq -- "$ATTACH_RED"; then echo answered
+  else echo path; fi
+}
+attach_answer() { sed -n '/\/attachments\//,$p' | grep -Eo -- "$ATTACH_RED" | head -n 1 | tr -d ' '; }
+# ls_row <name> (`fleet ls --json` on stdin): <node> TAB <key> TAB <fleet_id> of
+# the first session whose name starts with <name>. A hub row's key is
+# wid:<fleet UUID>/<fleet_id> — the window's lifelong @fleet_id is what finds it
+# on its machine; a row of this computer's own has none (-).
+ls_row() {
+  python3 -c '
+import json, sys
+try:
+    rows = json.load(sys.stdin)
+except ValueError:
+    sys.exit(1)
+for r in rows:
+    if str(r.get("name", "")).startswith(sys.argv[1]):
+        k = str(r.get("key", ""))
+        fid = k.split("/", 1)[1] if k.startswith("wid:") and "/" in k else "-"
+        print("%s\t%s\t%s" % (r.get("node", "") or "-", k, fid or "-"))
+        sys.exit(0)
+sys.exit(1)' "$1"
+}
+
 # --runs N (issue #2267, EPIC #2259 C8): the 60-second standard — a sandbox per
 # run, timed from the paste to the first key the agent takes, every known pit
 # checked; no OS login is made. That is bin/fleet-onboard-clock.sh, whole.
@@ -141,6 +203,9 @@ while [ $# -gt 0 ]; do
     --keep)     KEEP=1; shift ;;
     --row-named) [ $# -ge 2 ] || usage; ROW_ONLY=$2; shift 2 ;;   # selftest seam: screen on stdin
     --qr-state) QR_ONLY=1; shift ;;                                 # selftest seam: screen on stdin
+    --attach-state) attach_state; exit 0 ;;                         # selftest seam: screen on stdin
+    --ls-row)   [ $# -ge 2 ] || usage; ls_row "$2"; exit ;;            # selftest seam: fleet ls --json on stdin
+    --png)      [ $# -ge 2 ] || usage; drill_png "$2"; exit ;;         # selftest seam: the test image
     -h|--help)  sed -n '2,/^set -u/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 0 ;;
     *)          die2 "unknown argument: $1" ;;
   esac
@@ -300,6 +365,9 @@ step_open() {
   local pw key="$RUN/id_ed25519"
   ssh-keygen -q -t ed25519 -N '' -C "$PROG-$LOGIN" -f "$key" || { failstep open 'ssh-keygen failed'; return 1; }
   pw=$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 24)
+  # every login before this run: a login the hub opens for the drill person
+  # (its session's machine, when that is this one) must be gone at the residue
+  dscl . -list /Users 2>/dev/null | sort > "$RUN/users-before.txt"
   if ! ( cd / && sudo -n sysadminctl -addUser "$LOGIN" -fullName "Onboard Drill ($LOGIN)" -password "$pw" ) > "$RUN/open.log" 2>&1; then
     failstep open "sysadminctl -addUser $LOGIN: $(tail -n 1 "$RUN/open.log")"
     return 1
@@ -456,35 +524,46 @@ SCRATCH_NO='还没有仓库|还没有能开会话的机器|入口连不上|开�
 # sidebar holds the Enter and opens the session itself once the login is up,
 # so the step waits (FLEET_DRILL_OPENING_SECS, default 360) and it is no 要人帮
 SCRATCH_OPENING='正在为你开机器|opening a machine for you'
+# place_wait <text> <row name> <shot prefix>: the writing area (prefix c), the
+# text typed, Enter; the questions on the way each answered with Enter. Sets
+# PW_K (row · no · stuck · '' = nothing within the wait), PW_P (the last
+# screen), PW_ANSWERED and PW_OPENING (the hub's 「正在为你开机器」, if said).
+PW_K='' PW_P='' PW_ANSWERED=0 PW_OPENING=''
+place_wait() {
+  local deadline
+  PW_K='' PW_P='' PW_ANSWERED=0 PW_OPENING=''
+  keys C-b c
+  sleep 1
+  keys -l "$1"; keys Enter
+  deadline=$((SECONDS + STEP_SECS))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    keep_sudo
+    PW_P=$(pane)
+    if printf '%s\n' "$PW_P" | grep -Eq -- "$SCRATCH_NO"; then PW_K=no; break; fi
+    if [ -n "$(row_named "$2")" ]; then PW_K=row; break; fi
+    if [ -z "$PW_OPENING" ] && printf '%s\n' "$PW_P" | grep -Eq -- "$SCRATCH_OPENING"; then
+      PW_OPENING=$(printf '%s\n' "$PW_P" | grep -Eo -- "($SCRATCH_OPENING)[^│]*" | head -n 1 | sed 's/ *$//')
+      shot "$3-opening"
+      deadline=$((SECONDS + ${FLEET_DRILL_OPENING_SECS:-360}))
+    fi
+    if printf '%s\n' "$PW_P" | grep -Eq '→ 开在哪|→ where|→ 选仓库|New session → repo'; then
+      # the repo question, then 「开在哪」: Enter takes the highlighted default
+      PW_ANSWERED=$((PW_ANSWERED + 1)); [ "$PW_ANSWERED" -le 3 ] || { PW_K=stuck; break; }
+      shot "$3-ask-$PW_ANSWERED"; keys Enter; sleep 2; continue
+    fi
+    sleep 1
+  done
+}
 step_scratch() {
-  local k said deadline p answered=0 r opening=
+  local k said p answered r opening
   if pane | grep -Eq -- "$SCRATCH_NOHOST"; then
     shot scratch-nohost
     said=$(pane | grep -Eo -- "($SCRATCH_NOHOST)[^│]*" | head -n 1 | sed 's/ *$//')
     row "右边：$said" "—" "是 — 新人没机器，入口没说在开、也没说找谁"
     failstep scratch "the right pane says no machine and nothing about opening one: $said"; return 1
   fi
-  keys C-b c
-  sleep 1
-  keys -l "$NAME"; keys Enter
-  deadline=$((SECONDS + STEP_SECS)); k=''
-  while [ "$SECONDS" -lt "$deadline" ]; do
-    keep_sudo
-    p=$(pane)
-    if printf '%s\n' "$p" | grep -Eq -- "$SCRATCH_NO"; then k=no; break; fi
-    if [ -n "$(row_named "$NAME")" ]; then k=row; break; fi
-    if [ -z "$opening" ] && printf '%s\n' "$p" | grep -Eq -- "$SCRATCH_OPENING"; then
-      opening=$(printf '%s\n' "$p" | grep -Eo -- "($SCRATCH_OPENING)[^│]*" | head -n 1 | sed 's/ *$//')
-      shot scratch-opening
-      deadline=$((SECONDS + ${FLEET_DRILL_OPENING_SECS:-360}))
-    fi
-    if printf '%s\n' "$p" | grep -Eq '→ 开在哪|→ where|→ 选仓库|New session → repo'; then
-      # the repo question, then 「开在哪」: Enter takes the highlighted default
-      answered=$((answered + 1)); [ "$answered" -le 3 ] || { k=stuck; break; }
-      shot "scratch-ask-$answered"; keys Enter; sleep 2; continue
-    fi
-    sleep 1
-  done
+  place_wait "$NAME" "$NAME" scratch
+  k=$PW_K p=$PW_P answered=$PW_ANSWERED opening=$PW_OPENING
   case "$k" in
     no)  shot scratch-refused
          said=$(printf '%s\n' "$p" | grep -Eo -- "($SCRATCH_NO)[^│]*" | head -n 1 | sed 's/ *$//')
@@ -503,7 +582,145 @@ step_scratch() {
   pass scratch "the new session's row: $r · $(elapsed)"
 }
 
-# --- 9 offboard ---------------------------------------------------------------------
+# --- 9 attach-attachment ---------------------------------------------------------------
+# A task with a screenshot (EPIC #2482 C1, #2393): an image on the colleague's
+# computer, its path dropped into the writing area with a question about it;
+# the session — wherever the hub put it — must get the FILE (its text shows the
+# path on the session's machine, $FLEET_CONF_DIR/attachments/<id>/<name>) and
+# answer what the image shows. The image is one solid red square: 红 / red is
+# the answer, and nothing typed says it.
+ATTACH_FILE=drill-shot.png
+ATTACH_ASK='看图 这张图是什么颜色？只回答一个颜色词'
+RESUME_NAME='' RESUME_MARK=''
+step_attach() {
+  local f="$H/$ATTACH_FILE" png="$RUN/$ATTACH_FILE" st deadline k said
+  drill_png "$png" || { failstep attach-attachment "cannot write the test image"; return 1; }
+  ( cd / && sudo -n install -o "$LOGIN" -g staff -m 644 "$png" "$f" ) >> "$RUN/open.log" 2>&1 \
+    || { failstep attach-attachment "cannot hand the test image to $LOGIN: $(tail -n 1 "$RUN/open.log")"; return 1; }
+  place_wait "$ATTACH_ASK $f" 看图 attach
+  k=$PW_K
+  case "$k" in
+    row) : ;;
+    no)  shot attach-refused
+         said=$(printf '%s\n' "$PW_P" | grep -Eo -- "($SCRATCH_NO)[^│]*" | head -n 1 | sed 's/ *$//')
+         row "提示：$said" "prefix c 新任务，拖进截图、问一句，回车" "是 — 带图的任务开不出会话：$said"
+         failstep attach-attachment "the list refused the task with a screenshot: $said"; return 1 ;;
+    *)   shot attach-none
+         row "带图的任务回车后没有新行" "prefix c 新任务，拖进截图、问一句，回车" "是 — 带图的任务开不出会话"
+         failstep attach-attachment "no row 看图 within ${STEP_SECS}s:"; tail_pane; return 1 ;;
+  esac
+  RESUME_NAME=看图
+  [ "$PW_ANSWERED" = 0 ] || row "问题（选仓库 / 开在哪）×$PW_ANSWERED" "回车（默认，自动）" 否
+  shot attach-row
+  deadline=$((SECONDS + ${FLEET_DRILL_AGENT_SECS:-300}))
+  while :; do
+    keep_sudo
+    st=$(pane | attach_state)
+    case "$st" in lost|answered) break ;; esac
+    [ "$SECONDS" -lt "$deadline" ] || break
+    sleep "$POLL"
+  done
+  shot attach
+  case "$st" in
+    answered)
+      RESUME_MARK='/attachments/'
+      row "会话里：图在会话那台机器上（…/attachments/…/$ATTACH_FILE），回答「$(pane | attach_answer)」" "等" 否
+      pass attach-attachment "the screenshot went with the task: the session read it on its machine and said $(pane | attach_answer) · $(elapsed)" ;;
+    lost)
+      said=$(pane | grep -Eo '附件没带过去[^│]*' | head -n 1 | sed 's/ *$//')
+      row "提示：$said" "等" "是 — 截图没带到会话那台机器"
+      failstep attach-attachment "the screenshot did not go: $said"; return 1 ;;
+    path)
+      RESUME_MARK='/attachments/'
+      row "会话里有图的路径，但没说出图里是什么" "等" "是 — 会话没读图"
+      failstep attach-attachment "the file reached the session's machine, but no answer within ${FLEET_DRILL_AGENT_SECS:-300}s:"; tail_pane; return 1 ;;
+    *)
+      row "会话里没有这张图（没有会话那台机器上的路径）" "等" "是 — 截图没带到会话那台机器"
+      failstep attach-attachment "no path on the session's machine within ${FLEET_DRILL_AGENT_SECS:-300}s:"; tail_pane; return 1 ;;
+  esac
+}
+
+# --- 10 node-restart-resume -------------------------------------------------------------
+# The session's machine restarts its tmux server (EPIC #2482 C5, #2484) the way
+# an update does it: `fleet-sessions-snapshot.sh save`, kill-server, `restore`,
+# as the login that runs the session, demoted exactly like fleet-node-update.py.
+# The client must come back on the SAME session: restore says `back` for it,
+# `fleet ls` still has its key, and the right pane shows its text again. Only
+# a session on THIS machine can be restarted from here — elsewhere is a FAIL
+# that says so (the drill runs on the machine the hub places on, m4).
+SL='' SLH='' SFLEET='' SKEY=''
+# as_sess <cmd…>: run as the session's login, its own HOME / conf dir / TMPDIR
+as_sess() {
+  ( cd / && sudo -n -u "$SL" -H env -i HOME="$SLH" USER="$SL" LOGNAME="$SL" LANG=en_US.UTF-8 \
+      PATH="$SLH/.claude/fleet/tools/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+      FLEET_CONF_DIR="$SLH/.config/claude-fleet" \
+      /bin/sh -c 'TMPDIR="$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null)"; [ -n "$TMPDIR" ] || TMPDIR="/tmp/claude-fleet-$(id -u)"; export TMPDIR; exec "$@"' \
+      fleet-sessions "$@" )
+}
+# locate <row name>: SKEY off the client's own list (`fleet ls --json`); SL ·
+# SLH · SFLEET = the login of this machine, and its fleet, whose tmux holds the
+# window with that row's @fleet_id (never a guess by name)
+locate() {
+  local r fid d s
+  r=$(as_login "$H/.local/bin/fleet" ls --json 2>"$RUN/ls.err" | tee "$RUN/ls.json" | ls_row "$1")
+  [ -n "$r" ] || { printf 'no row %s in `fleet ls --json` (%s)' "$1" "$(head -c 160 "$RUN/ls.err")"; return 1; }
+  SKEY=$(printf '%s' "$r" | cut -f2) fid=$(printf '%s' "$r" | cut -f3)
+  [ "$fid" != - ] || { printf '%s has no hub key (%s) — not a session of the hub'"'"'s' "$1" "$SKEY"; return 1; }
+  for d in "$HOMES"/*; do
+    [ -d "$d" ] && [ "$d" != "$H" ] || continue
+    for s in $( ( cd / && sudo -n ls "$d/.config/claude-fleet/fleets" ) 2>/dev/null); do
+      SL=$(basename "$d") SLH=$d
+      if as_sess "$TMUXB" -L "$s" list-windows -a -F '#{@fleet_id}' 2>/dev/null | grep -qxF -- "$fid"; then
+        SFLEET=$s; return 0
+      fi
+    done
+  done
+  SL='' SLH=''
+  printf '%s (@fleet_id %s) runs on %s — no login of this machine has it' "$1" "$fid" "$(printf '%s' "$r" | cut -f1)"
+  return 1
+}
+RESTART_DOWN='机器在重启|稍等|restarting|connection lost|连接断了|没有活着的'
+step_restart() {
+  local why bin out deadline k back
+  [ -n "$RESUME_NAME" ] || RESUME_NAME=$NAME
+  why=$(locate "$RESUME_NAME") || { failstep node-restart-resume "$why"; return 1; }
+  bin="${FLEET_DRILL_NODE_BIN:-$SLH/.claude/fleet/bin}"
+  ( cd / && sudo -n test -x "$bin/fleet-sessions-snapshot.sh" ) 2>/dev/null \
+    || { failstep node-restart-resume "no fleet-sessions-snapshot.sh in $bin ($SL's runtime)"; return 1; }
+  out=$(as_sess /bin/bash "$bin/fleet-sessions-snapshot.sh" save 2>&1); printf '%s\n' "$out" > "$RUN/restart-save.txt"
+  case "$out" in saved*) note "$SL: $(printf '%s' "$out" | tail -n 1)" ;;
+    *) failstep node-restart-resume "snapshot save as $SL: $(printf '%s' "$out" | tail -n 1)"; return 1 ;; esac
+  as_sess "$TMUXB" -L "$SFLEET" kill-server > "$RUN/restart-kill.txt" 2>&1 || :
+  # the client sees it go (fleet-remote-view.sh run says the machine is restarting)
+  wait_for 30 "$RESTART_DOWN" >/dev/null; shot restart-down
+  out=$(as_sess /bin/bash "$bin/fleet-sessions-snapshot.sh" restore 2>&1); printf '%s\n' "$out" > "$RUN/restart-restore.txt"
+  back=$(printf '%s\n' "$out" | awk -F'\t' -v s="$SFLEET" '$1 == "back" && $2 == s' | grep -c .)
+  if [ "$back" = 0 ] || printf '%s\n' "$out" | awk -F'\t' -v s="$SFLEET" '$2 == s && $1 != "back"' | grep -q .; then
+    shot restart-restore
+    row "机器 tmux 重启后：会话没回来（$(printf '%s\n' "$out" | awk -F'\t' -v s="$SFLEET" '$2 == s {print $1}' | sort -u | tr '\n' ' ')）" "等" "是 — 重启后会话没了"
+    failstep node-restart-resume "restore as $SL did not bring $SFLEET back:"; printf '%s\n' "$out" | tail -n 6 | sed 's/^/        │ /'; return 1
+  fi
+  deadline=$((SECONDS + STEP_SECS)); k=''
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    keep_sudo
+    if [ -n "$(row_named "$RESUME_NAME")" ] && ! pane | grep -Eq -- "$RESTART_DOWN" \
+       && { [ -z "$RESUME_MARK" ] || pane | grep -qF -- "$RESUME_MARK"; }; then k=back; break; fi
+    sleep "$POLL"
+  done
+  shot restart-back
+  if [ "$k" != back ]; then
+    row "机器 tmux 重启后：客户端没回到 $RESUME_NAME" "等" "是 — 重启后要重新打开会话"
+    failstep node-restart-resume "the client did not come back on $RESUME_NAME within ${STEP_SECS}s:"; tail_pane; return 1
+  fi
+  if ! as_login "$H/.local/bin/fleet" ls --json 2>/dev/null | ls_row "$RESUME_NAME" | cut -f2 | grep -qxF -- "$SKEY"; then
+    row "机器 tmux 重启后：列表里 $RESUME_NAME 换了一个" "等" "是 — 回来的不是同一个会话"
+    failstep node-restart-resume "$RESUME_NAME came back under another key (was $SKEY)"; return 1
+  fi
+  row "会话那台机器 tmux 重启（save · kill-server · restore）：右边回到 $RESUME_NAME，还是同一个会话" "等" 否
+  pass node-restart-resume "$SL's tmux restarted: $back session(s) back, the client on $RESUME_NAME ($SKEY) again · $(elapsed)"
+}
+
+# --- 11 offboard ---------------------------------------------------------------------
 hub_revoke() {
   local fp=$1 out
   [ -n "$VIEWER" ] || { printf 'no CCQUOTA_VIEWER_TOKEN / FLEET_HUB_TOKEN in the environment'; return 1; }
@@ -586,10 +803,21 @@ step_offboard() {
   fi
 }
 
-# --- 10 residue ---------------------------------------------------------------------
+# --- 12 residue ---------------------------------------------------------------------
 step_residue() {
   local left='' g n st
   id "$LOGIN" >/dev/null 2>&1 && left="$left · login record"
+  if [ -s "$RUN/users-before.txt" ]; then
+    # the hub takes the login it opened for the drill person off on its own
+    # once the person is gone — give it STEP_SECS, then name what stayed
+    local deadline=$((SECONDS + STEP_SECS)) extra
+    while :; do
+      extra=$(dscl . -list /Users 2>/dev/null | sort | comm -13 "$RUN/users-before.txt" - | grep -vxF -- "$LOGIN" | tr '\n' ' ' | sed 's/ *$//')
+      [ -n "$extra" ] && [ "$SECONDS" -lt "$deadline" ] || break
+      keep_sudo; sleep "$POLL"
+    done
+    [ -z "$extra" ] || left="$left · login(s) made during the run: $extra"
+  fi
   [ ! -e "$H" ] || left="$left · home $H"
   if [ -n "$UIDN" ]; then
     n=$(ps -axo uid= 2>/dev/null | awk -v u="$UIDN" '$1 == u' | grep -c .)
@@ -673,5 +901,5 @@ step_ssh || finish
 step_install || finish
 step_scan || finish
 step_client || finish
-step_scratch || :
+step_scratch && { step_attach || :; step_restart || :; }
 finish

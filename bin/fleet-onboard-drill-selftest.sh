@@ -100,6 +100,31 @@ st=$(printf '%s\n' "$P0" '用时 9 秒' | qrs)
 st=$(printf '%s\n' "$P0" | qrs)
 [ "$st" = wait ] && ok 'qr: the typed curl line is no prompt' || bad "qr: the curl line read '$st'"
 
+# --- attach-attachment (EPIC #2482 C9): the image and the session's screen ----
+bash "$DRILL" --png "$T/shot.png"
+if python3 -c 'import sys,zlib,struct; b=open(sys.argv[1],"rb").read(); assert b[:8]==b"\x89PNG\r\n\x1a\n"; w,h=struct.unpack(">II",b[16:24]); n=struct.unpack(">I",b[33:37])[0]; raw=zlib.decompress(b[41:41+n]); assert (w,h)==(64,64) and raw[1:4]==b"\xd0\x10\x10"' "$T/shot.png" 2>/dev/null
+then ok 'attach: the test image is a 64×64 red PNG'; else bad 'attach: --png wrote no valid red PNG'; fi
+ats() { bash "$DRILL" --attach-state; }
+A0='  ● 看图 这张图是什么颜色  │ ❯ 看图 这张图是什么颜色？只回答一个颜色词'
+st=$(printf '%s\n' "$A0" '  │ /Users/drillx/drill-shot.png' | ats)
+[ "$st" = wait ] && ok 'attach: the client-side path alone is wait' || bad "attach: client path read '$st'"
+st=$(printf '%s\n' "$A0" '  │ /Users/fd-drill/.config/claude-fleet/attachments/a1/drill-shot.png' | ats)
+[ "$st" = path ] && ok "attach: the node's path, no answer yet, is path (drill-shot is no colour)" || bad "attach: node path read '$st'"
+st=$(printf '%s\n' "$A0" '  │ /Users/fd-drill/.config/claude-fleet/attachments/a1/drill-shot.png' '  │ ⏺ 红色' | ats)
+[ "$st" = answered ] && ok 'attach: the path then 红色 is answered' || bad "attach: answer read '$st'"
+st=$(printf '%s\n' "$A0" '  │ …/attachments/a1/drill-shot.png' '  │ ⏺ Red.' | ats)
+[ "$st" = answered ] && ok 'attach: an English 「Red.」 is answered' || bad "attach: Red read '$st'"
+st=$(printf '%s\n' "$A0" '  │ ⏺ 红色' | ats)
+[ "$st" = wait ] && ok 'attach: an answer with no file on the session machine is not a pass' || bad "attach: no-path answer read '$st'"
+st=$(printf '%s\n' "$A0" '附件没带过去：drill-shot.png（入口还不收附件）' | ats)
+[ "$st" = lost ] && ok 'attach: 「附件没带过去」 is lost' || bad "attach: lost read '$st'"
+# --- node-restart-resume: the row's key off `fleet ls --json` -------------------
+LS='[{"key":"@12","name":"first","node":"m4"},{"key":"wid:8f0c-uuid/5a1e-fid","name":"看图 这张图是什么颜色","node":"m4"}]'
+r=$(printf '%s' "$LS" | bash "$DRILL" --ls-row 看图)
+[ "$r" = "$(printf 'm4\twid:8f0c-uuid/5a1e-fid\t5a1e-fid')" ] && ok 'restart: ls_row gives node · key · @fleet_id' || bad "restart: ls_row got '$r'"
+r=$(printf '%s' "$LS" | bash "$DRILL" --ls-row first)
+[ "$(printf '%s' "$r" | cut -f3)" = - ] && ok 'restart: a local row has no @fleet_id (-)' || bad "restart: local row got '$r'"
+if printf '%s' "$LS" | bash "$DRILL" --ls-row nope >/dev/null; then bad 'restart: ls_row found a row that is not there'; else ok 'restart: no such row is rc 1'; fi
 # nothing past the preflight ran: no run dir was made
 if ls -d "$T"/fleet-onboard-drill.* >/dev/null 2>&1; then bad 'a refused run left a run dir'; else ok 'no refused run made a run dir'; fi
 
