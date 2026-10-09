@@ -256,6 +256,8 @@ FLEET_PERSONAL_HOOK_STRIKES        knob: a personal hook failing this many times
 FLEET_PERSONAL_MCP_CHECK           knob: 0 = keep a personal MCP server whose command is not on this machine (fleet-agent-team.py)
 FLEET_SWITCH_STATE                 path: the client's switch history + ⌘P rows dir (fleet-quickopen.py / fleet-sidebar.py, #1903)
 FLEET_WRAP_LAUNCH_ID               handoff: one launch of fleet-session-wrap.sh, the session a personal hook's strikes count in (fleet-hook-personal.sh)
+FLEET_SESSION_SHELL_CMD            seam: the login shell ⌃\'s shell-here execs instead of $SHELL (fleet-remote-view-selftest S, #2744)
+FLEET_SESSION_SHELL_WATCH          knob: seconds between shell-here's checks that its session's window still lives (default 5, #2744)
 FLEET_SESSION_WRAP                 handoff: the pid of the fleet-session-wrap.sh holding this pane, read by session-end-hook.sh
 FLEET_SLEEPWATCH_SELFTEST          seam: fleet-node-sleepwatch.sh posts one sleep + one wake to itself and exits (#1721)
 FLEET_MACHINE_SESSIONS_DIR         path: the machine-wide per-login session-count dir (default /Users/Shared/claude-fleet/sessions)
