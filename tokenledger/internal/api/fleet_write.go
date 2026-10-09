@@ -73,22 +73,26 @@ var fleetScopeOf = map[string]string{
 	// like a start does.
 	"worker_move_in": "worker:start",
 	"config_set":     "config:write",
-	"gh_comment":     "gh:comment",
-	"gh_issue_view":  "gh:read",
-	"gh_pr_view":     "gh:read",
-	"gh_pr_checks":   "gh:read",
+	// A person's own background services and scheduled tasks on a managed
+	// machine (claude-fleet#2527, EPIC #2524 C3): stop / start / restart /
+	// run now / a new schedule — on their own (machine, login) only.
+	"service_control": "service:control",
+	"gh_comment":      "gh:comment",
+	"gh_issue_view":   "gh:read",
+	"gh_pr_view":      "gh:read",
+	"gh_pr_checks":    "gh:read",
 }
 
 // FleetScopes is every scope a grant may hold.
 var FleetScopes = []string{"fleet:read", "worker:start", "worker:message", "worker:stop",
-	"worker:resume", "worker:answer", "worker:reap", "config:write", "gh:read", "gh:comment"}
+	"worker:resume", "worker:answer", "worker:reap", "config:write", "gh:read", "gh:comment", "service:control"}
 
 // DefaultPersonScopes is what a person signed in with GitHub may do on
 // their OWN logins when the hub sets nothing (CCQUOTA_FLEET_PERSON_SCOPES):
 // run their workers and read/comment on GitHub. config:write is the
 // operator's — a fleet's caps and autofill are not a colleague's to move.
 var DefaultPersonScopes = []string{"fleet:read", "worker:start", "worker:message", "worker:stop",
-	"worker:resume", "worker:answer", "worker:reap", "gh:read", "gh:comment"}
+	"worker:resume", "worker:answer", "worker:reap", "gh:read", "gh:comment", "service:control"}
 
 // fleetConfigKeys is the remotely writable configuration, as fleet-control.py
 // allows it: key → inclusive integer range.
@@ -103,7 +107,7 @@ var fleetConfigKeys = map[string][2]int{
 var (
 	fleetWriteTools = map[string]bool{"worker_start": true, "worker_message": true, "worker_stop": true,
 		"worker_resume": true, "worker_answer": true, "worker_reap": true, "worker_switch": true, "worker_rename": true,
-		"worker_reap_policy": true, "config_set": true, "gh_comment": true}
+		"worker_reap_policy": true, "config_set": true, "gh_comment": true, "service_control": true}
 	fleetGHReads = map[string]bool{"gh_issue_view": true, "gh_pr_view": true, "gh_pr_checks": true}
 )
 
@@ -367,6 +371,9 @@ type writeRequest struct {
 	params map[string]any
 	// configKey is config_set's key, for the key grant.
 	configKey string
+	// svc is service_control's entry (machine, login, name): its target is
+	// that login's lane, not a fleet (claude-fleet#2527).
+	svc *serviceRef
 	// canonical is the caller's whole request, for idempotency.
 	canonical string
 }
@@ -672,6 +679,11 @@ func parseWrite(tool string, args map[string]any) (writeRequest, string, error) 
 			}
 			w.params["policy"] = p
 		}
+	case "service_control":
+		w.svc, err = parseServiceControl(args, w.params)
+		if err == nil {
+			w.node = w.svc.machine // in the canonical request: a retry names the same machine
+		}
 	case "config_set":
 		if err = checkFields(args, []string{"fleet_id", "key", "value", "expected_revision", "idempotency_key"}); err != nil {
 			break
@@ -742,6 +754,10 @@ func (s *Server) submitWrite(ctx context.Context, p fleetPrincipal, tool string,
 	var target store.FleetRow
 	var placement *Placement
 	switch {
+	case w.svc != nil:
+		if target, err = s.serviceTarget(p, *w.svc); err != nil {
+			return nil, err
+		}
 	case w.fleetID != "":
 		if target, err = s.visibleFleet(p, w.fleetID); err != nil {
 			return nil, err

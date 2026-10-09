@@ -189,6 +189,10 @@ type Config struct {
 	// serves every login of the machine. Every command the agent starts drops
 	// to it; nil is a plain agent, running as whoever started it.
 	RunAs *RunAs
+	// ServiceCtl is the root runtime's fleet-node-supervisor.py a tenant runs
+	// for the hub's service_control (claude-fleet#2527); set only in machine
+	// mode, where the agent is root — "" refuses the write.
+	ServiceCtl string
 	// FleetNudgePath is the file claude-fleet touches when a window's state
 	// changes (claude-fleet#1481): $FLEET_CONF_DIR/global/hub-nudge. The
 	// agent beats at once when its mtime moves. Empty with Fleet on means

@@ -88,6 +88,9 @@ func runAgentMachine(args []string) error {
 		// The daemon's own state file sits beside the agent's state
 		// directory (/var/db/fleet-node/{agent,state.json}) — claude-fleet#2526.
 		ServicesFile: envOr("CCQUOTA_MACHINE_SERVICES", filepath.Join(filepath.Dir(filepath.Clean(*state)), "state.json")),
+		// …and its script, beside this binary in the root runtime
+		// (<current>/bin/{ccquota,fleet-node-supervisor.py}) — claude-fleet#2527.
+		ServiceCtl: envOr("CCQUOTA_MACHINE_SUPERVISOR", machineSupervisor()),
 	})
 }
 
@@ -231,4 +234,24 @@ func machineFlag(args []string) bool {
 		}
 	}
 	return false
+}
+
+// machineSupervisor is fleet-node-supervisor.py beside this binary, when root
+// may run it: a regular file root owns that no group or other may write (the
+// root runtime's rule, 共同约定 3). "" when there is none — service_control is
+// then refused, never run from anywhere else.
+func machineSupervisor() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	p := filepath.Join(filepath.Dir(exe), "fleet-node-supervisor.py")
+	fi, err := os.Stat(p)
+	if err != nil || !fi.Mode().IsRegular() || fi.Mode().Perm()&0o022 != 0 {
+		return ""
+	}
+	if uid, ok := fileUID(fi); os.Geteuid() == 0 && (!ok || uid != 0) {
+		return ""
+	}
+	return p
 }

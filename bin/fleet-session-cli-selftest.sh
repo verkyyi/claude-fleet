@@ -35,9 +35,17 @@
 #   J  test rows (issue #2505) a test identity's session (cache field 26 = 1) is
 #                            listed 「（测试）」, ls --json says test; `close --test`
 #                            reaps every one of them and no other row; none → 0
+#   K  service / task (issue #2527) `fleet task run <名称> --now` · stop · start ·
+#                            restart · schedule → the hub's service_control on the
+#                            entry's (machine, login) off the services table; no
+#                            --now / a bad schedule → 2 before any write; a name on
+#                            two machines → the candidates and exit 4, --machine
+#                            picks; none → 3; a service has no run → 3; bin/fleet
+#                            routes the verbs here
 #
 # tmux only on isolated sockets. Drives: bin/fleet, bin/fleet-session-cli.py,
-# bin/fleet-shell.sh, bin/fleet-quickopen.py, bin/fleet-hub-write.sh.
+# bin/fleet-shell.sh, bin/fleet-quickopen.py, bin/fleet-hub-write.sh,
+# bin/fleet-services.py.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 CHECKS=0 FAIL=0
@@ -302,6 +310,50 @@ eq "J …two worker_reaps, the test rows only" "2 0" "$(grep -c '^worker_reap ' 
 out=$(FLEET_SESSION_CLI_ROWS="$W/rows.tsv" FLEET_SESSION_CLI_CACHE="$W/remote" FLEET_SESSION_CLI_NOW="$NOW" python3 "$BIN/fleet-session-cli.py" close --test 2>&1); rc=$?
 eq "J no test rows → exit 0" 0 "$rc"
 has "J …and says so" "没有测试会话" "$out"
+
+# --- K. service / task (issue #2527) -------------------------------------------------
+cat > "$W/hub_services" <<'JSON'
+{"ts": 1800000000, "machines": [
+ {"hostname": "mini2.tail.ts.net", "label": "mini2", "services": [
+  {"name": "daily-report", "kind": "task", "login": "verky", "state": "scheduled"},
+  {"name": "sms-watch", "kind": "service", "login": "verky", "state": "running"}]},
+ {"hostname": "m4.tail.ts.net", "label": "m4", "services": [
+  {"name": "sms-watch", "kind": "service", "login": "verky", "state": "running"}]}]}
+JSON
+svc() { FLEET_SERVICES_CACHE="$W/hub_services" FLEET_SERVICES_STATE="" FLEET_SESSION_CLI_WRITE="$W/write" \
+        python3 "$BIN/fleet-session-cli.py" "$@"; }
+: > "$W/writes"
+out=$(svc task run daily-report --now 2>&1); rc=$?
+eq "K task run --now exits 0" 0 "$rc"
+eq "K …→ service_control run_now on its (machine, login)" \
+  'service_control {"machine": "mini2.tail.ts.net", "login": "verky", "name": "daily-report", "action": "run_now"}' \
+  "$(tail -1 "$W/writes")"
+has "K …says so, and where the session shows up" "现在跑一次 mini2/verky/daily-report：已完成" "$out"
+has "K …the session's name" "fleet ls（daily-report-" "$out"
+svc task schedule daily-report --at 07:30 --tz Asia/Shanghai >/dev/null; eq "K schedule exits 0" 0 "$?"
+eq "K …→ set_schedule with at + tz" \
+  'service_control {"machine": "mini2.tail.ts.net", "login": "verky", "name": "daily-report", "action": "set_schedule", "at": "07:30", "tz": "Asia/Shanghai"}' \
+  "$(tail -1 "$W/writes")"
+n=$(wc -l < "$W/writes")
+svc task run daily-report >/dev/null 2>&1; eq "K run without --now → 2" 2 "$?"
+svc task schedule daily-report >/dev/null 2>&1; eq "K schedule with no time → 2" 2 "$?"
+svc task schedule daily-report --at 7 --cron '0 7 * * *' >/dev/null 2>&1; eq "K schedule with both → 2" 2 "$?"
+svc service run sms-watch >/dev/null 2>&1; eq "K a service has no run → usage 2" 2 "$?"
+svc task run sms-watch --now >/dev/null 2>&1; eq "K a service is no task → 3" 3 "$?"
+svc task stop ghost >/dev/null 2>&1; eq "K no such entry → 3" 3 "$?"
+err=$(svc service restart sms-watch 2>&1 >/dev/null); rc=$?
+eq "K a name on two machines → 4" 4 "$rc"
+has "K …the candidates" "m4  verky" "$err"
+eq "K …and nothing was written" "$n" "$(wc -l < "$W/writes")"
+svc service restart sms-watch --machine m4 >/dev/null; eq "K --machine picks" 0 "$?"
+eq "K …→ restart on m4" \
+  'service_control {"machine": "m4.tail.ts.net", "login": "verky", "name": "sms-watch", "action": "restart"}' \
+  "$(tail -1 "$W/writes")"
+err=$(FAKE_REFUSE=1 svc task stop daily-report 2>&1 >/dev/null); rc=$?
+eq "K a refused write → exit 1" 1 "$rc"
+has "K …with why" "the session is gone" "$err"
+# bin/fleet: the control verbs go to the CLI (nothing else of fleet-task.sh does)
+eq "K bin/fleet routes the control verbs" 1 "$(grep -c 'stop|start|restart|run|schedule) exec python3 "$here/fleet-session-cli.py"' "$BIN/fleet")"
 
 if [ "$FAIL" -gt 0 ]; then
   printf 'fleet-session-cli selftest: %d of %d checks FAILED\n' "$FAIL" "$CHECKS" >&2

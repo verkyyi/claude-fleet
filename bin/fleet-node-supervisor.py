@@ -83,7 +83,7 @@ Usage:
                                                (令牌失效 · 需要 relogin, issue #2501)
   fleet-node-supervisor.py sweep [--dry-run]   the leftover sweep, now
   fleet-node-supervisor.py attic [list | restore <id> | purge]
-  fleet-node-supervisor.py service add|rm|stop|start|restart|move|run|cred|ls|logs …
+  fleet-node-supervisor.py service add|rm|stop|start|restart|move|run|schedule|cred|ls|logs …
                                                the login-level register (#2525; writes as root,
                                                ls / logs as anyone who may read them)
   fleet-node-supervisor.py install | uninstall write / remove the LaunchDaemon (root)
@@ -1372,7 +1372,8 @@ class Supervisor(object):
                 # run --now: a slot of its own, today's date in the task's zone
                 at = datetime.datetime.fromtimestamp(clk, task_tz(svc["schedule"]) or None)
                 self.new_slot(ts, clk, at.date().isoformat(), at.strftime("%H%M"))
-            elif prev and prev > (ts.get("slot_t") or 0) and prev >= (svc.get("added") or 0) \
+            elif prev and prev > (ts.get("slot_t") or 0) \
+                    and prev >= max(svc.get("added") or 0, svc.get("rescheduled") or 0) \
                     and clk - prev <= catchup:
                 self.new_slot(ts, prev, day, False)
             elif ts.get("state") == "interrupted":
@@ -2440,6 +2441,7 @@ SERVICE_USAGE = ("usage: fleet-node-supervisor.py service add --login L --name N
                  "(--at HH:MM | --cron 'm h dom mon dow') [--tz Z] [--retries N] [--retry-delay S] [--window W] "
                  "[--done-file F] [--timeout S] [--idle S] [--fleet F] [--bark C] [--env K=V]… [--cred C]…\n"
                  "       fleet-node-supervisor.py service rm|stop|start|restart|run --login L --name N\n"
+                 "       fleet-node-supervisor.py service schedule --login L --name N (--at HH:MM | --cron '…') [--tz Z]\n"
                  "       fleet-node-supervisor.py service move --login L --name N --to L2\n"
                  "       fleet-node-supervisor.py service cred set|rm --login L --name C   (the value on stdin)\n"
                  "       fleet-node-supervisor.py service ls [--login L] [--kind service|task] [--json]\n"
@@ -2568,7 +2570,7 @@ def service_cli(paths, rest):
             print(SERVICE_USAGE, file=sys.stderr)
             return 2
         return service_move(paths, login, name, one("--to"))
-    if sub not in ("add", "rm", "stop", "start", "restart", "run") or not login or not name:
+    if sub not in ("add", "rm", "stop", "start", "restart", "run", "schedule") or not login or not name:
         print(SERVICE_USAGE, file=sys.stderr)
         return 2
     if not SVC_NAME_RE.match(name):
@@ -2602,6 +2604,35 @@ def service_cli(paths, rest):
         write_json(os.path.join(rq, name), {"at": now()}, 0o600)
         print("%s/%s: one run now — the daemon starts it on its next pass (after a run in flight); "
               "fleet task ls shows it" % (login, name))
+        return 0
+    if sub == "schedule":
+        # a task's new schedule (issue #2527): only the slot moves — a slot that
+        # passed before the change is never caught up (`rescheduled`)
+        svc = read_json(f, None)
+        if svc is None:
+            print("fleet-node-supervisor: %s/%s is not registered" % (login, name), file=sys.stderr)
+            return 1
+        if svc.get("kind") != "task":
+            print("fleet-node-supervisor: %s/%s is a service — only a task has a schedule" % (login, name),
+                  file=sys.stderr)
+            return 2
+        if not (one("--at") or one("--cron")):
+            print(SERVICE_USAGE, file=sys.stderr)
+            return 2
+        sched = {"at": one("--at")} if one("--at") else {"cron": one("--cron")}
+        tz = one("--tz") if "--tz" in opts else (svc.get("schedule") or {}).get("tz")
+        if tz:
+            sched["tz"] = tz
+        if one("--at") and one("--cron"):
+            sched["cron"] = one("--cron")      # task_check refuses both
+        svc.update(schedule=sched, rescheduled=task_clock(), changed=now())
+        why = service_check(svc, login, name)
+        if why:
+            print("fleet-node-supervisor: %s" % why, file=sys.stderr)
+            return 2
+        write_json(f, svc, 0o600)
+        print("%s/%s: %s, next run %s" % (login, name, task_when(sched),
+                                           task_time(task_slot(sched, task_clock(), 1)[0], sched)))
         return 0
     if sub in ("stop", "start", "restart"):
         svc = read_json(f, None)

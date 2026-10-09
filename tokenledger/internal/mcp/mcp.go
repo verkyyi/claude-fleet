@@ -1389,6 +1389,24 @@ func fleetToolSpecs() []toolSpec {
 				"body": map[string]any{"type": "string"}, "repo": fleetRepoProp, "idempotency_key": idemProp},
 				"fleet_id", "issue", "body", "idempotency_key"),
 		},
+		{
+			Name:  "service_control",
+			Title: "Stop, start, run or reschedule a background service",
+			Description: "Act on one entry of a managed machine's login-level register (fleet service / fleet task): " +
+				"start · stop · restart, run_now (a scheduled task, one run outside its schedule) or set_schedule " +
+				"(a task: at HH:MM or a five-field cron, optional tz). Your own (machine, login) only — another's " +
+				"is FORBIDDEN; the node answers at once, final. Needs service:control." + fleetWriteCaveat,
+			InputSchema: obj(map[string]any{
+				"machine":         map[string]any{"type": "string", "description": "the machine's roster hostname"},
+				"login":           map[string]any{"type": "string", "description": "the login the entry runs as"},
+				"name":            map[string]any{"type": "string", "description": "the entry's name"},
+				"action":          map[string]any{"type": "string", "enum": []string{"start", "stop", "restart", "run_now", "set_schedule"}},
+				"at":              map[string]any{"type": "string", "description": "set_schedule: HH:MM"},
+				"cron":            map[string]any{"type": "string", "description": "set_schedule: m h dom mon dow"},
+				"tz":              map[string]any{"type": "string", "description": "set_schedule: a zone, e.g. Asia/Shanghai"},
+				"idempotency_key": idemProp},
+				"machine", "login", "name", "action", "idempotency_key"),
+		},
 	}
 }
 

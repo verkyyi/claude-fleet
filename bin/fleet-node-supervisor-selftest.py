@@ -1348,6 +1348,34 @@ class K_AgentTasks(Sandbox):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertTrue(until(10, lambda: "alice/daily" not in (self.state().get("agent_tasks") or {})))
 
+    def test_schedule_moves_the_slot(self):
+        # issue #2527: a new schedule moves the next slot, and a slot it skipped
+        # over (passed before the change) is never caught up
+        self.spawner_rc(0)
+        self.set_clock("05:00:00")
+        self.assertEqual(self.add().returncode, 0)
+        self.set_clock("08:00:00")
+        fe = dict(self.env, FLEET_NODE_SUPERVISOR=SUP, FLEET_SERVICE_SUDO="", FLEET_SERVICE_LOGIN="alice")
+        front = os.path.join(BIN, "fleet-task.sh")
+        r = subprocess.run(["bash", front, "schedule", "daily", "--at", "07:30"], env=fe,
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("daily 07:30 UTC, next run 2026-10-11 07:30", r.stdout, "the tz was not kept")
+        self.start()
+        time.sleep(1.5)
+        self.assertEqual(self.ncalls(), [], "the slot the change skipped over ran")
+        row = self.row()
+        self.assertEqual(fns.task_time(row["next_run"], row["schedule"]), "2026-10-11 07:30")
+        self.assertEqual(self.run_sup("service", "schedule", "--login", "alice", "--name", "daily",
+                                      "--at", "7pm").returncode, 2, "a bad schedule was written")
+        self.assertEqual(self.run_sup("service", "schedule", "--login", "alice", "--name", "daily",
+                                      "--cron", "0 6 * * 1-5", "--tz", "Asia/Shanghai").returncode, 0)
+        self.assertEqual(self.row()["schedule"], {"cron": "0 6 * * 1-5", "tz": "Asia/Shanghai"})
+        self.assertEqual(self.run_sup("service", "add", "--login", "alice", "--name", "s", "--", "/bin/sleep",
+                                      "300").returncode, 0)
+        self.assertEqual(self.run_sup("service", "schedule", "--login", "alice", "--name", "s",
+                                      "--at", "07:00").returncode, 2, "a service has no schedule")
+
     def test_done_file_decides(self):
         self.spawner_rc(0)
         out = os.path.join(self.home, "out-{date}.md")
