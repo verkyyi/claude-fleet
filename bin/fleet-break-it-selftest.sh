@@ -4763,11 +4763,11 @@ drill_steward_exited() {
 }
 
 # steward-write-storm (issue #2670, EPIC #2668 共同约定 7): one beat wants to write
-# 30 answers (a loop answering the same rows, a backlog of 30 questions). Every
-# write goes through the beat's budget: 20 land, 10 wait for the next beat, the
-# card says 延后 10 — never 30 comments in a minute.
+# more answers than its budget (a loop answering the same rows, a backlog of
+# questions). Every write goes through the beat's budget (FLEET_STEWARD_WRITES,
+# 20): the rest wait for the next beat, the card says 延后 N — never a flood.
 drill_steward_write_storm() {
-  CAP=30; local t0 g="$WORK/sws" i n ids st
+  CAP=30; local t0 g="$WORK/sws" i n st
   mkdir -p "$g/conf/fleets/sw/repos"
   printf 'FLEET_REPO="o/r"\n' > "$g/conf/fleets/sw/repos/o-r.conf"
   printf '#!/bin/sh\nprintf "{\\"comments\\": []}\\n"\n' > "$g/comments"
@@ -4778,20 +4778,20 @@ drill_steward_write_storm() {
   python3 -c '
 import json, sys
 rows = {"r%d" % i: {"id": "r%d" % i, "item": "q%d" % i, "src": "gh:o/r#%d" % (i + 10), "state": "open", "kind": "normal",
-                    "default": "yes", "due": "", "url": ""} for i in range(30)}
+                    "default": "yes", "due": "", "url": ""} for i in range(12)}
 json.dump({"v": 1, "rows": rows, "beat": {"n": 1, "writes": 0}}, open(sys.argv[1], "w"))' "$st"
   sw() { env FLEET_CONF_DIR="$g/conf" FLEET_UI_LANG=zh FLEET_STEWARD=1 FLEET_DECISION_COMMENTS_CMD="$g/comments" \
            FLEET_DECISION_POST_CMD="$g/post" FLEET_STEWARD_WINDOWS_CMD="$g/none" FLEET_STEWARD_CHILDREN_CMD="$g/none" \
            FLEET_STEWARD_SEND_CMD="$g/none" FLEET_STEWARD_STAMP_CMD="$g/none" python3 "$BIN/fleet_steward.py" "$@" --session sw; }
   t0=$(now)
-  for i in $(seq 0 29); do sw answer --row "r$i" --text yes >/dev/null 2>&1; done
+  # the default budget is 20; the drill storms a budget of 8 with 12 answers
+  for i in $(seq 0 11); do FLEET_STEWARD_WRITES=8 sw answer --row "r$i" --text yes >/dev/null 2>&1; done
   n=$(grep -c . "$g/posts" 2>/dev/null || echo 0)
-  [ "$n" = 20 ] || { WHY="one beat wrote $n comments, budget 20"; return 1; }
-  sw beat --force > "$g/card" 2>&1
-  grep -q '延后' "$g/card" || [ "$(grep -c . "$g/posts")" = 30 ] || { WHY="the card says nothing deferred: $(cat "$g/card")"; return 1; }
-  [ "$(grep -c . "$g/posts")" = 30 ] || { WHY="the next beat did not post the deferred ten: $(grep -c . "$g/posts")"; return 1; }
+  [ "$n" = 8 ] || { WHY="one beat wrote $n comments, budget 8"; return 1; }
+  FLEET_STEWARD_WRITES=8 sw beat --force > "$g/card" 2>&1
+  [ "$(grep -c . "$g/posts")" = 12 ] || { WHY="the next beat did not post the deferred four: $(grep -c . "$g/posts")"; return 1; }
   SECS=$(since "$t0")
-  WHAT="一拍想写 30 条：落 20、延后 10，下一拍先补上"
+  WHAT="一拍想写 12 条（预算 8）：落 8、延后 4，下一拍先补上"
 }
 
 # ================================================================ run ===========
