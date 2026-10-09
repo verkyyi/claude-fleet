@@ -29,6 +29,7 @@
 #   R–X. the slots of #2233: the node's claim (`--repo <slug|-> --agent`, exit 3),
 #        old-config entries never handed out, no refill on a busy machine, shrink,
 #        pool off, `--status`, the claim's fast-forward to origin/<base>
+#   Y. a warm entry that never opens gives its admission back (#2502)
 #   (scratch-pool-live-selftest.sh runs the same pool on a real tmux server.)
 #
 # Exit 0 = pass; non-zero = fail.
@@ -445,6 +446,24 @@ reset_state; mkfleet; mkconf 1; warm '@19' o/a "$WORK/wt-x"
 out=$(bash "$POOL" claim tf --repo o/a --agent claude 2>&1); rc=$?
 [ "$rc" = 3 ] && grep -q "kill-window -t @19" "$STATE/log" || fail "X a worktree that cannot fast-forward is retired, not handed out" "rc=$rc out=$out"
 ok "X claim fast-forwards the worktree to origin/<base>; a diverged one is retired"
+
+# Y: a warm entry that never opens gives its admission back (issue #2502). The
+# fake tmux opens nothing, so every tick's spawn fails after it was admitted; on
+# mini2 each such tick left a reservation for the settle time and three slots
+# kept "room for 0" on a machine at 54 % free. Five ticks: no reservation left,
+# and the machine's count of admitted-not-yet-counted stays 0.
+reset_state; mkfleet; printf 'FLEET_SCRATCH_POOL=1\n' > "$FLEET_CONF_DIR/fleets/tf/conf"
+mkdir -p "$WORK/adm"; U=$(id -u)
+admenv() { env FLEET_ADMIT=1 TMPDIR="$WORK/adm" FLEET_MEM_TOTAL_MB=16000 FLEET_MEM_PROBE_CMD='echo 1 60 0 0' \
+  FLEET_LOAD_PROBE_CMD='echo 0.10' FLEET_POOL_DISK_PROBE_CMD='echo 500' \
+  FLEET_MEM_PS_CMD="printf '101 1 $U 409600 01:00 claude\\n'" "$@"; }
+for i in 1 2 3 4 5; do admenv bash "$POOL" ensure tf --repo - >/dev/null 2>&1; done
+[ "$(grep -c "new-session -d -s tf-pool .* -n warm-home" "$STATE/log")" = 5 ] || fail "Y setup: five ticks, five admitted spawns" "$(cat "$STATE/log")"
+left=$(find "$WORK/adm/.claude-dash/global/admit-reserve" -type f 2>/dev/null | wc -l | tr -d ' ')
+[ "$left" = 0 ] || fail "Y a spawn that opened nothing must release its reservation (left: $left)"
+r=$(admenv bash -c 'source "$1"; fleet_admit_reserved' _ "$LIB")
+[ "$r" = 0 ] || fail "Y after five failed ticks nothing counts as admitted (got $r)"
+ok "Y five failed warm ticks: every admission given back, 0 admitted-not-yet-counted"
 
 printf '\n%s tests passed\n' "$pass"
 exit 0

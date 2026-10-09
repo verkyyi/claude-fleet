@@ -429,19 +429,22 @@ warm_input() {
 
 # ------------------------------------------------------------------- ensure ----
 spawn_one() {
-  local alloc slug='' wt acct launch stamp='' nsid='' wname win
-  # Never warm the fleet past its own ceiling, and always leave one slot of
-  # headroom so a warm entry can't be the reason a real spawn is refused.
+  local alloc slug='' wt acct launch stamp='' nsid='' wname win held=''
+  # Never warm the fleet past its own ceiling. The account is read BEFORE the
+  # admission: a slot that cannot start for want of one must not hold a session's
+  # memory (issue #2502). Every way out below that opens nothing gives the
+  # admission back at once (fleet_admit_release) — before #2502 each failed tick
+  # left a reservation for the settle time, three slots kept 3–5 of them alive,
+  # and every real spawn on the machine read "room for 0".
+  acct=$(acct_now) || return 1
   if [ "$REPO" = - ]; then
     wt=$HOME; wname=warm-home                 # HOME: the agent runs in $HOME, no worktree
     fleet_session_cap_ok "$SESS" >/dev/null || return 1
-    acct=$(acct_now) || return 1
   else
     [ -n "$MAIN" ] || return 1
     [ -d "$MAIN/.git" ] || return 1
     fleet_session_cap_ok "$SESS" >/dev/null || return 1
-    acct=$(acct_now) || return 1
-    alloc=$(fleet_scratch_alloc "$MAIN" "$BASE" "$SESS") || return 1
+    alloc=$(fleet_scratch_alloc "$MAIN" "$BASE" "$SESS") || { fleet_admit_release; return 1; }
     slug=${alloc%%	*}; wt=${alloc#*	}; wname="warm-${slug#scratch-}"
   fi
   read -r _w _h <<EOF
@@ -474,7 +477,8 @@ EOF
     TM set-option -t "$POOL" window-size manual >/dev/null 2>&1
     win=$(TM list-windows -t "$POOL" -F '#{window_id}' 2>/dev/null | head -1)
   fi
-  [ -n "$win" ] || { [ -n "$slug" ] && fleet_scratch_free "$MAIN" "$slug" "$wt"; return 1; }
+  [ -n "$win" ] || { fleet_admit_release; [ -n "$slug" ] && fleet_scratch_free "$MAIN" "$slug" "$wt"; return 1; }
+  held=$(fleet_admit_confirm)                 # the window is open: it holds the memory now
   TM set-window-option -t "$win" @pool 1 2>/dev/null
   TM set-window-option -t "$win" @pool_born "$(NOW)" 2>/dev/null
   TM set-window-option -t "$win" @pool_account "$acct" 2>/dev/null
@@ -495,7 +499,9 @@ EOF
       return 0
     fi
   elif wait_settled "$win" && warm_input "$win"; then return 0; fi
-  retire "$win"; return 1                     # never came up — don't leave a husk
+  retire "$win"                               # never came up — don't leave a husk,
+  [ -n "$held" ] && fleet_admit_release "$held"   # nor the memory it was admitted for
+  return 1
 }
 
 usable() {                                    # usable <wid> — ready, fresh, right account, current config

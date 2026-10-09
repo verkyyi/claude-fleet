@@ -7611,19 +7611,114 @@ _fleet_session_cost() {
 }
 fleet_session_cost_mb() { local c; c=$(_fleet_session_cost); printf '%s\n' "${c%%$'\t'*}"; }
 
+# A reservation is ONE spawn's, and it lives only as long as that spawn can still
+# open its window (issue #2502). Named <slug>.<owner>.<rand>, the owner being the
+# admitting process (FLEET_ADMIT_OWNER, else $$ — the same across a `$(…)` and an
+# `exec`); once the window exists the spawner calls fleet_admit_confirm and it
+# becomes <slug>.ok.<rand>, held for the settle time from then. A reservation whose
+# owner is gone and never confirmed is a spawn that opened nothing — a refusal, a
+# failed new-window, a warm entry that never came up, a session placed on another
+# machine — and is VOID, deleted on sight. Before this one never went away early:
+# the warm pool's every failing tick left one, three slots kept 3–5 phantoms
+# alive, and mini2 read "room for 0" at 54 % free. And the owner's OWN earlier
+# reservation is not counted against it, nor taken twice (dash-new-session's exec
+# into dash-issue-session, a re-check in the same process): one spawn, one cost.
+_fleet_admit_owner() { printf '%s' "${FLEET_ADMIT_OWNER:-$$}"; }
+
+# _fleet_admit_rows → "<state>\t<owner>\t<age_s>\t<path>" per reservation that still
+# holds, state: ok (window opened) | live (its spawn still running) | self (the
+# caller's own). Settled and void ones are deleted on the way.
+_fleet_admit_rows() {
+  local dir="$FLEET_ADMIT_RESERVE_DIR" ttl="${FLEET_ADMIT_SETTLE_SECS:-120}" me now f m n o st
+  [ -d "$dir" ] || return 0
+  case "$ttl" in ''|*[!0-9]*) ttl=120 ;; esac
+  me=$(_fleet_admit_owner); now=$(date +%s 2>/dev/null || echo 0)
+  while IFS= read -r f; do
+    [ -e "$f" ] || continue
+    m=$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null || echo 0)   # GNU first, as _fleet_fresh_markers
+    case "$m" in ''|*[!0-9]*) m=0;; esac
+    [ "$m" -ge $((now - ttl)) ] || { rm -f "$f" 2>/dev/null; continue; }
+    n=${f##*/}; o=${n%.*}; o=${o##*.}
+    if [ "$o" = ok ]; then st=ok
+    elif [ "$o" = "$me" ]; then st=self
+    else
+      case "$o" in
+        ''|*[!0-9]*) st=live ;;                     # not a pid: never guess it dead
+        *) if kill -0 "$o" 2>/dev/null; then st=live
+           else rm -f "$f" 2>/dev/null; continue; fi ;;
+      esac
+    fi
+    printf '%s\t%s\t%s\t%s\n' "$st" "$o" $((now - m)) "$f"
+  done <<EOF
+$(find "$dir" -maxdepth 1 -type f 2>/dev/null)
+EOF
+}
+
 # fleet_admit_reserved → sessions admitted and not yet in the memory reading.
 fleet_admit_reserved() {
   local r i
-  r=$(_fleet_fresh_markers "$FLEET_ADMIT_RESERVE_DIR" "${FLEET_ADMIT_SETTLE_SECS:-120}" '*')
+  r=$(_fleet_admit_rows | awk -F'\t' '$1 != "self"' | grep -c .)
   i=$(fleet_inflight_count)
   [ "${i:-0}" -gt "${r:-0}" ] 2>/dev/null && r=$i
   printf '%s\n' "${r:-0}"
 }
-# fleet_admit_reserve [sess] — hold ONE session's cost for the settle time.
+# fleet_admit_reserve [sess] — hold ONE session's cost for the settle time; a
+# second admission by the same owner holds nothing more.
 fleet_admit_reserve() {
+  local me; me=$(_fleet_admit_owner)
   mkdir -p "$FLEET_ADMIT_RESERVE_DIR" 2>/dev/null || return 0
-  : > "$FLEET_ADMIT_RESERVE_DIR/$(fleet_slug "${1:-_}").$$.${RANDOM:-0}" 2>/dev/null
+  _fleet_admit_rows | awk -F'\t' '$1 == "self" { f = 1 } END { exit !f }' && return 0
+  : > "$FLEET_ADMIT_RESERVE_DIR/$(fleet_slug "${1:-_}").$me.${RANDOM:-0}" 2>/dev/null
   return 0
+}
+# _fleet_admit_mine <owner> → the paths of that owner's unconfirmed reservations
+# (find, not a glob: zsh — a skill's shell — dies on a glob that matches nothing).
+_fleet_admit_mine() {
+  [ -d "$FLEET_ADMIT_RESERVE_DIR" ] || return 0
+  find "$FLEET_ADMIT_RESERVE_DIR" -maxdepth 1 -type f -name "*.$1.*" 2>/dev/null
+}
+# fleet_admit_confirm — the caller's window is open: its reservation now holds the
+# settle time on its own, whatever becomes of the caller. Prints the kept path(s)
+# (the warm pool drops them again when it retires an entry that never came up).
+fleet_admit_confirm() {
+  local me f n k
+  me=$(_fleet_admit_owner)
+  while IFS= read -r f; do
+    [ -e "$f" ] || continue
+    n=${f##*/}; k="$FLEET_ADMIT_RESERVE_DIR/${n%%."$me".*}.ok.${n##*.}"
+    mv -f "$f" "$k" 2>/dev/null && touch "$k" 2>/dev/null && printf '%s\n' "$k"
+  done <<EOF
+$(_fleet_admit_mine "$me")
+EOF
+  return 0
+}
+# fleet_admit_release [path …] — give a reservation back now: the named ones, or
+# with none the caller's own unconfirmed ones (a spawn that will open nothing).
+fleet_admit_release() {
+  local me f
+  if [ "$#" -gt 0 ]; then rm -f "$@" 2>/dev/null; return 0; fi
+  me=$(_fleet_admit_owner)
+  while IFS= read -r f; do [ -n "$f" ] && rm -f "$f" 2>/dev/null; done <<EOF
+$(_fleet_admit_mine "$me")
+EOF
+  return 0
+}
+# fleet_admit_holders → one line per reservation still counted: "<state> <age>s <who>"
+# — the owner's command line while its spawn runs (ps), `window opened` once
+# confirmed. The doctor's admit row lists them (issue #2502).
+fleet_admit_holders() {
+  local st o age f who
+  while IFS=$'\t' read -r st o age f; do
+    [ -n "$st" ] || continue
+    case "$st" in
+      ok) who="window opened (${f##*/})" ;;
+      *)  who=$(ps -o command= -p "$o" 2>/dev/null | head -1 | cut -c1-120)
+          who="pid $o${who:+ $who}" ;;
+    esac
+    printf '%s %ss %s\n' "$st" "$age" "$who"
+  done <<EOF
+$(FLEET_ADMIT_OWNER=- _fleet_admit_rows)
+EOF
 }
 
 # fleet_machine_headroom [avail_pct] — how many MORE sessions this machine takes

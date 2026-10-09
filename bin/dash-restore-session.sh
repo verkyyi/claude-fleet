@@ -174,6 +174,7 @@ if [ "$is_scratch" = 0 ]; then
   { [ -z "$bissue" ] || [ "$bissue" = "-" ]; } && case "$key" in \#*) bissue="";; *) bissue="$key";; esac
 fi
 bind_marks() {  # $1 = window-id, $2 = worktree (may be empty) — mark the restored window
+  fleet_admit_confirm >/dev/null   # a window opened: its admission holds on its own (#2502)
   if [ "$is_scratch" = 1 ]; then
     TM set-window-option -t "$1" @raw 1 2>/dev/null
     [ -n "${2:-}" ] && TM set-window-option -t "$1" @worktree "$2" 2>/dev/null
