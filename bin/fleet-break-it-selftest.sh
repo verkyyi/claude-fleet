@@ -840,7 +840,7 @@ drill_orchestrator_stale_version() {
     nt set-environment -g "${e%%=*}" "${e#*=}"; done
   nt set-option -g default-shell /bin/sh
   osvens() { env PATH="$WORK/tbin:$PATH" HOME="$h" FLEET_CONF_DIR="$c" FLEET_SKIP_GLOBAL_CONF=1 BREAK_SOCK="$BREAK_SOCK" \
-               FLEET_ORCHESTRATOR=1 FLEET_AGENT=claude FLEET_WRAP_LAUNCH="$WORK/osv-agent" "$@" \
+               FLEET_ORCHESTRATOR=1 FLEET_AGENT=claude FLEET_WRAP_LAUNCH="$WORK/osv-agent" \
                bash "$BIN/fleet-orchestrator.sh" ensure osv 2>/dev/null; }
   w=$(osvens) || { WHY="ensure did not open it"; return 1; }
   until_ok 5 test -s "$oa.pid" || { WHY="the orchestrator's agent never started"; return 1; }
@@ -859,7 +859,7 @@ drill_orchestrator_stale_version() {
      set-window-option -t "$w" @loop "kind=wakeup next=$((nw + 1200)) ttl=1200"
   [ "$(osvens)" = "$w" ] && [ ! -s "$oa" ] || { WHY="renewed in the middle of a turn"; return 1; }
   [ -n "$(o "$w" @renew_since)" ] || { WHY="a pending renew is not marked (@renew_since) — nothing says 待换新"; return 1; }
-  nt set-window-option -t "$w" @claude_state done \; set-window-option -t "$w" @loop "kind=wakeup next=$((nw + 60)) ttl=60"
+  nt set-window-option -t "$w" @claude_state "done" \; set-window-option -t "$w" @loop "kind=wakeup next=$((nw + 60)) ttl=60"
   [ "$(osvens)" = "$w" ] && [ ! -s "$oa" ] || { WHY="renewed a minute before its Loop's next round"; return 1; }
   nt set-window-option -t "$w" @loop "kind=wakeup next=$((nw + 1200)) ttl=1200"
   out=$(osvens) && [ "$out" = "$w" ] || { WHY="the quiet tick did not answer with the same window: [$out]"; return 1; }

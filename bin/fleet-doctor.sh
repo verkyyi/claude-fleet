@@ -2878,9 +2878,9 @@ _rl=$(FLEET_CONF_DIR="$conf_dir" bash -c '. "$1"; for s in $(fleet_sockets); do
         _ "$(dirname "$0")/fleet-lib.sh" 2>/dev/null \
       | awk -v now="$(date +%s)" '($2 == "orchestrator" || $2 == "steward") && $3 ~ /^[0-9]+$/ {
           printf "%s%s:%s %s(%dm)", (n++ ? " " : ""), $1, $2, $4, (now - $3) / 60; if (now - $3 > m) m = now - $3 }
-          END { if (n) printf "\t%d\n", m }')
+          END { if (n) printf "|%d\n", m }')
 if [ -n "$_rl" ]; then
-  _rage=${_rl##*$'\t'}; _rl=${_rl%$'\t'*}
+  _rage=${_rl##*|}; _rl=${_rl%|*}
   if [ "$_rage" -ge "$_rw" ]; then
     warn orch "待换新 等了 $((_rage / 60)) 分钟仍没换上新版本 — $_rl (fix: 它一直不安静：看它是不是一直在跑或在问；要立刻换就让它 /exit，下一拍 ensure 原地续开同一对话)"
   else
