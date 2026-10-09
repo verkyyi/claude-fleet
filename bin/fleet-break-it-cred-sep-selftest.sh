@@ -401,7 +401,7 @@ drill_cred_sep_plain_node_env() {
     || { WHY="the store's copy is not the merge (home wins, store-only kept): $(sed 's/=.*//' "$R/node.env" | tr '\n' ' ')"; return 1; }
   grep -qx 'CCQUOTA_FLEET_COMPUTE=1' "$C/node.pub.env" && ! grep -q TOKEN "$C/node.pub.env" \
     || { WHY="node.pub.env did not follow the store"; return 1; }
-  ls "$R/backup/" 2>/dev/null | grep -q '^node.env.home-' || { WHY="the plain copy was not set aside in the store's backup/"; return 1; }
+  compgen -G "$R/backup/node.env.home-*" >/dev/null || { WHY="the plain copy was not set aside in the store's backup/"; return 1; }
   [ -z "$(home_token "$sb")" ] || { WHY="a node token is still in the home: $(home_token "$sb")"; return 1; }
   # 4. a rerun is a no-op
   # shellcheck disable=SC2086
