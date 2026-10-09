@@ -26,7 +26,7 @@ the person's clock), reads the fleet with NO model, and only when something need
 | `fleet-steward-tick.sh card` | the last beat's report card |
 | `fleet-steward-tick.sh delta` | read the fleet now (no writes) — JSON |
 | `fleet-steward-tick.sh answer --row <id> --text T --source URL` | answer one row on its worker's issue (`--to-worker`, marker `fleet:answer row=<id> by=steward`) |
-| `fleet-steward-tick.sh sheet` | every open row → C1's table → `decision-YYYY-MM-DD.md` (+ C8's desk ticket when `FLEET_STEWARD_DESK` is set) → ONE `[decision]` to the orchestrator; same rows as last time ⇒ not sent again |
+| `fleet-steward-tick.sh sheet` | every open row → C1's table → `decision-YYYY-MM-DD.md` (+ C8's desk ticket when `FLEET_STEWARD_DESK` is set) → ONE `[decision]` to the orchestrator; same rows as last time ⇒ not sent again; a finished batch's sample (issue #2678, `bin/fleet_sample.py`) rides it read-only — the beat posts that sheet itself |
 | `fleet-steward-stats.sh attention · asks` | the batch's metrics |
 | `fleet-steward-conflicts.sh --json` | overlaps · CI queue · quota (C5) — tell, never stop |
 

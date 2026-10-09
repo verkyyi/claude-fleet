@@ -17,7 +17,8 @@ is never defaulted; neither is a `never` row, whatever its caller declared.
     fleet_decision.py ask-body --question Q [--suggest S] [--default D] [--due T]
                                [--class K] [--head question|permission] [--now ISO]
     fleet_decision.py parse  (--repo R --issue N | --comments-json FILE|-)   → one row per line (JSON)
-    fleet_decision.py render [--demo] [--rows FILE|-] [--id UUID]           → Markdown table + marker
+    fleet_decision.py render [--demo] [--rows FILE|-] [--id UUID] [--samples FILE]
+                                                                            → Markdown table + marker
     fleet_decision.py due    [--rows FILE|- | --repo R --issue N…] [--now ISO] [--apply]
     fleet_decision.py record --row JSON --parent owner/repo#N               → 「默认拍板」 on the parent
     fleet_decision.py decided [--date D] [--epic gh:R#N…] [--repo R…] [--json]  → that day's 默认拍板, one line each
@@ -313,11 +314,34 @@ def _cell(s):
     return str(s).replace("|", "\\|").replace("\n", " ")
 
 
-def render(rows, sheet_id=None):
-    out = ["| # | %s | %s | %s | %s | %s |" % tuple(tr(k) for k in (
-               "decision_col_item", "decision_col_suggest", "decision_col_default", "decision_col_due",
-               "decision_col_src")),
-           "|---|---|---|---|---|---|"]
+def render_samples(samples):
+    """The read-only `samples` area (issue #2678): one finished batch's member and
+    its evidence each — never a row, never counted, never answered."""
+    out = ["### " + tr("decision_samples_head"), ""]
+    for s in samples:
+        mem = s.get("member", "")
+        ref = s["epic"] if not mem else "%s → %s" % (s["epic"], mem if "#" in mem else "#" + mem)
+        if s.get("none"):
+            out.append("- " + tr("decision_sample_none_fmt", s["epic"], s.get("members", 0)))
+        else:
+            out.append("- " + tr("decision_sample_fmt", ref, s.get("note") or "—", s.get("ts", "")))
+            if s.get("kind") == "image":
+                out.append("  ![%s](%s)" % (_cell(s.get("note") or mem), s["path"]))
+            else:
+                out.append("  `%s`" % s["path"])
+            if s.get("text"):
+                out += ["  ```"] + ["  " + x for x in s["text"].split("\n")] + ["  ```"]
+        out.append("  <!-- fleet:sample epic=%s member=%s -->" % (s["epic"], mem or "none"))
+    return out
+
+
+def render(rows, sheet_id=None, samples=None):
+    out = []
+    if rows or not samples:
+        out = ["| # | %s | %s | %s | %s | %s |" % tuple(tr(k) for k in (
+                   "decision_col_item", "decision_col_suggest", "decision_col_default", "decision_col_due",
+                   "decision_col_src")),
+               "|---|---|---|---|---|---|"]
     for n, r in enumerate(rows, 1):
         due = "—" if (row_default(r) is WAIT or never(r) or not r.get("due")) else show_time(parse_time(r["due"]))
         src = r.get("src", "")
@@ -325,6 +349,8 @@ def render(rows, sheet_id=None):
             src = "[%s](%s)" % (src, r["url"])
         out.append("| %d | %s | %s | %s | %s | %s |" % (n, _cell(r.get("item", "")), _cell(r.get("suggest") or "—"),
                                                        _cell(default_text(r)), due, src))
+    if samples:
+        out += ([""] if out else []) + render_samples(samples)
     out += ["", "<!-- fleet:decision v=%s id=%s -->" % (V, sheet_id or uuid.uuid4())]
     return "\n".join(out)
 
@@ -586,6 +612,7 @@ def main(argv=None):
     r.add_argument("--demo", action="store_true")
     r.add_argument("--rows")
     r.add_argument("--id")
+    r.add_argument("--samples")
     d = sub.add_parser("due")
     d.add_argument("--rows")
     d.add_argument("--repo")
@@ -616,7 +643,8 @@ def main(argv=None):
         _emit(parse_comments(comments, o.repo, o.issue))
     elif o.cmd == "render":
         rows = demo_rows() if o.demo else _read_rows(o.rows or "-")
-        print(render(rows, o.id or ("demo" if o.demo else None)))
+        samples = json.loads(Path(o.samples).read_text()) if o.samples else None
+        print(render(rows, o.id or ("demo" if o.demo else None), samples))
     elif o.cmd == "due":
         if o.rows:
             rows = _read_rows(o.rows)

@@ -253,6 +253,8 @@ fleet_ui_t() {
     en:steward_todo_done_fmt) printf 'For you to do · %s: %s (list %s)' "${1:-}" "${2:-}" "${3:-}" ;;
     zh:steward_card_todo_fmt) printf '待你动手 %s 件 · 管家已跑 %s 件' "${1:-}" "${2:-}" ;;
     en:steward_card_todo_fmt) printf 'for you to do %s · run by the steward %s' "${1:-}" "${2:-}" ;;
+    zh:steward_card_samples_fmt) printf '抽样 %s 个批次，已贴进决定单' "${1:-}" ;;
+    en:steward_card_samples_fmt) printf 'sampled %s batches onto the decision sheet' "${1:-}" ;;
     zh:steward_card_park_fmt)   printf '停放 %s 个 · 本拍停下 %s · 接回 %s · 请写交接 %s' "${1:-}" "${2:-}" "${3:-}" "${4:-}" ;;
     en:steward_card_park_fmt)   printf 'parked %s · parked now %s · woken %s · asked for a handoff %s' "${1:-}" "${2:-}" "${3:-}" "${4:-}" ;;
     # parking a stuck session (issue #2671, EPIC #2668 C3) — bin/fleet_park.py
@@ -1202,6 +1204,12 @@ orch	b	go to the orchestrator — straight to the orchestrating session of the f
     en:decision_col_due)        printf 'due' ;;
     zh:decision_col_src)        printf '来源' ;;
     en:decision_col_src)        printf 'source' ;;
+    zh:decision_samples_head)   printf '抽样：做完的批次，抽一个成员看它的改动后' ;;
+    en:decision_samples_head)   printf 'Samples: one member of each finished batch, as it looks after the change' ;;
+    zh:decision_sample_fmt)     printf '%s · %s · %s' "${1:-}" "${2:-}" "${3:-}" ;;
+    en:decision_sample_fmt)     printf '%s · %s · %s' "${1:-}" "${2:-}" "${3:-}" ;;
+    zh:decision_sample_none_fmt) printf '%s：%s 个成员里没有一个留了改动后证据' "${1:-}" "${2:-}" ;;
+    en:decision_sample_none_fmt) printf '%s: none of its %s members left an after capture' "${1:-}" "${2:-}" ;;
     zh:decision_answer_fmt)     printf '到点没人答，按建议定：%s' "${1:-}" ;;
     en:decision_answer_fmt)     printf 'Nobody answered by the deadline — going with the suggestion: %s' "${1:-}" ;;
     zh:decision_answer_item_fmt) printf '原问题：%s（%s）' "${1:-}" "${2:-}" ;;
