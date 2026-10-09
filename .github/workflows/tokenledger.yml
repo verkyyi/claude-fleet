@@ -83,9 +83,10 @@ jobs:
           cache-dependency-path: tokenledger/go.sum
       - run: ../bin/fleet-client-pack.sh
       - name: store + api + leader tests on Postgres
+        # claude-fleet#2479: internal/api alone ran 584s of go test's 10m default.
         run: |
           set -o pipefail
-          go test -race -count=1 -v ./internal/store/... ./internal/api/... ./internal/leader/... 2>&1 | tee /tmp/pg.log | grep -E '^(pg leg|  SKIP-PG|--- FAIL|--- SKIP|ok|FAIL|panic)|leader_test.go:[0-9]+: (handover|job )'
+          go test -race -count=1 -v -timeout 20m ./internal/store/... ./internal/api/... ./internal/leader/... 2>&1 | tee /tmp/pg.log | grep -E '^(pg leg|  SKIP-PG|--- FAIL|--- SKIP|ok|FAIL|panic)|leader_test.go:[0-9]+: (handover|job )'
       # claude-fleet#2216: `ccquota db migrate` on a million usage_events
       # rows, without -race, each table's and phase's time in the summary.
       - name: db migrate timing (1M rows)
