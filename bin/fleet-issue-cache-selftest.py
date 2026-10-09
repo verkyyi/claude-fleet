@@ -94,7 +94,7 @@ exit 0
     check(data["issue"] == original and data["preclaimed"], "original JSON preserved; successful assignment recorded")
     calls = [json.loads(line) for line in log.read_text().splitlines()]
     check(sum(call[:2] == ["issue", "view"] for call in calls) == 1, "spawn reuses one issue read for dedup, title and snapshot")
-    check("缓存-issue-数据" in windows.read_text(), "fetched title names the window")
+    check("缓存issue数据" in windows.read_text(), "fetched title names the window")
     check(cache.stat().st_mode & 0o777 == 0o600, "snapshot private mode 0600")
     check(not run(["git", "-C", str(wt), "status", "--porcelain"]), "snapshot cannot enter worktree status")
     run(["git", "-C", str(wt), "add", "-A"])

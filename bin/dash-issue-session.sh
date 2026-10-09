@@ -335,15 +335,28 @@ BASE="${FLEET_BASE_BRANCH:-main}"
 # copy only (a create-then-spawn filer hands its label over as --agent instead).
 # Both labels ⇒ refused: the issue does not say which. Foreground only — the
 # --async tail and a hub-placed start carry the agent this pass resolved.
-if [ "$TAIL_ONLY" != 1 ] && [ -z "$AGENT" ] && [ -n "$REPO" ]; then
-  if [ -n "$WIN_TITLE" ]; then _lbl=$(fleet_cached_labels "$REPO" "$num")
-  else
-    _lbl=$(bash "$BIN/fleet-gh.sh" issue view "$num" --repo "$REPO" --json labels 2>/dev/null \
-           | python3 -c 'import json,sys
+# When the pre-spawn gate below will read the issue anyway, that ONE read happens
+# here and the labels come out of it (issue #2638: spawn reads the issue once for
+# dedup, title, snapshot and agent — #459); the gate then reuses it.
+GATE_CS=''; GATE_AT=0
+_lbl_names='import json,sys
 try: d=json.load(sys.stdin)
 except Exception: sys.exit(0)
 for l in d.get("labels") or []:
-    print(l.get("name","") if isinstance(l,dict) else l)' 2>/dev/null)
+    print(l.get("name","") if isinstance(l,dict) else l)'
+if [ "$TAIL_ONLY" != 1 ] && [ -z "$AGENT" ] && [ -n "$REPO" ]; then
+  if [ -n "$WIN_TITLE" ]; then _lbl=$(fleet_cached_labels "$REPO" "$num")
+  elif [ "${FLEET_PRESPAWN_DEDUP:-1}" != 0 ] && [ "$FORCE_FLAG" != 1 ] && command -v gh >/dev/null 2>&1; then
+    GATE_AT=$(date +%s)
+    GATE_CS=$(gh issue view "$num" --repo "$REPO" --json assignees,state,number,title,url,body,labels,comments \
+          --jq '"\(.assignees|length)\t\(.state)", tojson' 2>/dev/null) || GATE_CS=''
+    case "$GATE_CS" in
+      *$'\n'*) _lbl=$(printf '%s\n' "${GATE_CS#*$'\n'}" | python3 -c "$_lbl_names" 2>/dev/null) ;;
+      *) GATE_CS=''; _lbl='' ;;
+    esac
+  else
+    _lbl=$(bash "$BIN/fleet-gh.sh" issue view "$num" --repo "$REPO" --json labels 2>/dev/null \
+           | python3 -c "$_lbl_names" 2>/dev/null)
   fi
   AGENT=$(fleet_labels_agent "$_lbl") \
     || { refuse "#$num carries both agent:codex and agent:claude — remove one, or pass --agent"; exit "$RC_INFRA"; }
@@ -607,6 +620,7 @@ if [ "$TAIL_ONLY" != 1 ] && [ "${FLEET_PRESPAWN_DEDUP:-1}" != 0 ] && [ "$FORCE_F
   # Keep the same gate header, followed by compact JSON from the SAME read (#459).
   # A failed pre-claim must never cache the pre-edit empty assignee as authoritative.
   issue_fetched_at=$(date +%s)
+  [ -n "$GATE_CS" ] && issue_fetched_at=$GATE_AT
   # The open-PR probe runs beside the issue read (issue #2237): two reads, one wait.
   _prf=$(mktemp "${TMPDIR:-/tmp}/dis-pr.XXXXXX") || _prf=''
   _prp=''
@@ -614,8 +628,11 @@ if [ "$TAIL_ONLY" != 1 ] && [ "${FLEET_PRESPAWN_DEDUP:-1}" != 0 ] && [ "$FORCE_F
     gh pr list --repo "$REPO" --head "$slug" --state open --json number --jq 'length' </dev/null >"$_prf" 2>/dev/null &
     _prp=$!
   fi
-  cs=$(gh issue view "$num" --repo "$REPO" --json assignees,state,number,title,url,body,labels,comments \
-        --jq '"\(.assignees|length)\t\(.state)", tojson' 2>/dev/null) || cs=''
+  if [ -n "$GATE_CS" ]; then cs=$GATE_CS
+  else
+    cs=$(gh issue view "$num" --repo "$REPO" --json assignees,state,number,title,url,body,labels,comments \
+          --jq '"\(.assignees|length)\t\(.state)", tojson' 2>/dev/null) || cs=''
+  fi
   case "$cs" in
     *$'\n'*) issue_json=${cs#*$'\n'}; cs=${cs%%$'\n'*} ;;
   esac

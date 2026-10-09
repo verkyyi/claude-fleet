@@ -156,8 +156,15 @@ echo 127.0.0.1 > "$WORK/ts.ip"
 BASEPORT="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1])')"
 share() { HOME="$WORK/home" PATH="$WORK/fake:$PATH" DOC_PREVIEW_PORT="$BASEPORT" DOC_PREVIEW_SESSION=t "$SH" "$@" 2>&1; }
 reset_state() {
-  [ -f "$ROOT/server.pid" ] && kill "$(cat "$ROOT/server.pid")" 2>/dev/null
-  [ -f "$ROOT/tunnel.pid" ] && kill "$(cat "$ROOT/tunnel.pid")" 2>/dev/null
+  # kill is asynchronous: wait for each process to be gone, or the next case's
+  # port-holder races the dying server for BASEPORT (EADDRINUSE on a slow
+  # macOS runner, issue #2638).
+  local f pid _
+  for f in server.pid tunnel.pid; do
+    [ -f "$ROOT/$f" ] || continue
+    pid="$(cat "$ROOT/$f")"; kill "$pid" 2>/dev/null || continue
+    for _ in $(seq 1 50); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
+  done
   rm -rf "$ROOT"; : > "$WORK/serve.argv"; : > "$WORK/cf.argv"; rm -f "$WORK/ts.json"
 }
 entries() { ls "$ROOT/entries" 2>/dev/null | wc -l | tr -d ' '; }

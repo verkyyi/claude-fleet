@@ -299,6 +299,10 @@ assert_dash_only() {
 # --- REGRESSION: HUB_RESUME_ID from an OLD map must not resurrect anything ----
 : > "$WORK/claude-argv"
 tmux new-session -d -s res -x 200 -y 50 -c "$STEW_PATH" 2>/dev/null || fail "could not create session res"
+# The dash pane may exit on its own here (a slow runner, a missing fzf) and take
+# the plan window with it — "got 0" then says nothing about a SECOND pane, which
+# is what this section checks. Keep a dead pane counted (issue #2638).
+tmux set-window-option -g remain-on-exit on 2>/dev/null
 env -u HUB_CMD -u FLEET_HUB_CMD \
   HUB_SESSION=res HUB_CWD="$STEW_PATH" HUB_RESUME_ID="stew-abc123" FLEET_DASH_WINDOW=1 \
   bash "$HUBSH" >/dev/null 2>&1 || fail "hub-session.sh (stale-id) exited non-zero"
