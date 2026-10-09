@@ -32,6 +32,9 @@ for f in dash-raw-session.sh fleet-ticket.sh fleet-lib.sh fleet-gh-lib.sh fleet-
 done
 command -v python3 >/dev/null 2>&1 || { echo "selftest: python3 absent — SKIP" >&2; exit 0; }
 
+# Each leg states its own switches (the gate runs with no FLEET_* at all; a hand
+# run from a fleet pane inherits the login's).
+unset FLEET_DESK FLEET_DESK_REPO FLEET_STEWARD FLEET_ORCHESTRATOR FLEET_HOST CCQUOTA_FLEET TMUX TMUX_PANE
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/desk-selftest.XXXXXX")" || exit 2
 trap 'rm -rf "$WORK"' EXIT
 pass=0
