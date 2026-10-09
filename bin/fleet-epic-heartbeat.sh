@@ -6,7 +6,8 @@
 #   fleet-epic-heartbeat.sh <epic> [--tick <n>] [--repo <owner/name>]
 #                           [--session <sess>] [--ttl <seconds>]
 #                           [--landed <k> --members <n>]
-#                           [--live <n> --inflight <n>]            # stamp — every tick
+#                           [--live <n> --inflight <n>]
+#                           [--short <简称>]                        # stamp — every tick
 #   fleet-epic-heartbeat.sh --clear <epic>                           # THIS batch ended
 #   fleet-epic-heartbeat.sh --status                                 # every mark, one line each
 #
@@ -67,6 +68,19 @@
 # core members that merged / it has). The members already hang under it by their
 # @origin. `--clear <N>` unsets the window's @epic again when it names <N>. No
 # pane (a daemon, a test) ⇒ no window is touched; no counts ⇒ no badge.
+#
+# THE DRIVER WEARS ITS BATCH'S NAME (issue #2544). A driver opened by
+# `dash-raw-session.sh --prompt '/fleet-epic-run <N>'` was named `scratch-<N>`, and
+# five batches at once were five `scratch-N` rows nobody could tell apart — on
+# another machine, whose row has no title to fall back on, not even a theme.
+# `--short <简称>` (the charter's `<!-- fleet:epic … short=… -->`, which the loop
+# reads every tick) renames the stamping pane's window `<简称>·批次` — the word its
+# members' names already start with — and the task list draws that name beside
+# the landed/members badge. Only a name the fleet gave it is replaced
+# (`scratch-<N>` · `issue-<N>` · `EPIC <N>` · an older `…·批次`); a name the
+# person typed is theirs. Keys resolve by @worktree, never the name, so a member's
+# @origin still finds its driver. The 简称 goes through fleet_epic_short: letters
+# and digits only, at most 4.
 # A bare `touch` of a mark (no epoch:) counts from its mtime — a hand override
 # for «hold the install still for the next 45 min».
 #
@@ -78,7 +92,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
 . "$BIN/fleet-lib.sh"
 
-EPIC='' TICK='' LANDED='' MEMBERS='' LIVE='' INFLIGHT='' REPO="${FLEET_REPO:-}" SESS="${FLEET_SESSION:-}" TTL="${FLEET_EPIC_RUNNING_TTL:-2700}" MODE=stamp
+EPIC='' TICK='' SHORT='' LANDED='' MEMBERS='' LIVE='' INFLIGHT='' REPO="${FLEET_REPO:-}" SESS="${FLEET_SESSION:-}" TTL="${FLEET_EPIC_RUNNING_TTL:-2700}" MODE=stamp
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --tick)      shift; TICK="${1:-}" ;;
@@ -95,12 +109,14 @@ while [ "$#" -gt 0 ]; do
     --live=*)    LIVE="${1#--live=}" ;;
     --inflight)  shift; INFLIGHT="${1:-}" ;;
     --inflight=*) INFLIGHT="${1#--inflight=}" ;;
+    --short)     shift; SHORT="${1:-}" ;;
+    --short=*)   SHORT="${1#--short=}" ;;
     --ttl)       shift; TTL="${1:-}" ;;
     --ttl=*)     TTL="${1#--ttl=}" ;;
     --clear)     MODE=clear ;;
     --clear=*)   MODE=clear; EPIC="${1#--clear=}"; EPIC="${EPIC#\#}" ;;
     --status)    MODE=status ;;
-    -h|--help)   sed -n '2,74p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)   sed -n '2,88p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*)          printf 'fleet-epic-heartbeat: unknown argument %s\n' "$1" >&2; exit 2 ;;
     *)           EPIC="${1#\#}" ;;
   esac
@@ -120,6 +136,20 @@ win_epic() {
     local cur; cur=$(tmux display-message -p -t "$TMUX_PANE" '#{@epic}' 2>/dev/null) || return 0
     case "$cur" in *"#$2") tmux set-option -wqu -t "$TMUX_PANE" @epic 2>/dev/null || : ;; esac
   fi
+}
+
+# The driver's window wears its batch (issue #2544): `<简称>·批次`, from a name the
+# fleet gave it only. Same rail as win_epic: a pane, bare tmux, never fatal.
+win_name() {
+  [ -n "$1" ] && [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ] || return 0
+  local cur want="$1·批次"
+  cur=$(tmux display-message -p -t "$TMUX_PANE" '#{window_name}' 2>/dev/null) || return 0
+  [ "$cur" = "$want" ] && return 0
+  case "$cur" in
+    scratch-[0-9]*|issue-[0-9]*|'EPIC '[0-9]*|?*·批次) ;;
+    *) return 0 ;;
+  esac
+  tmux rename-window -t "$TMUX_PANE" -- "$want" 2>/dev/null || :
 }
 
 case "$MODE" in
@@ -200,5 +230,6 @@ if ! {
   printf 'fleet-epic-heartbeat: cannot write %s\n' "$F" >&2; exit 1
 fi
 case "$REPO" in ''|-) win_epic set "#$EPIC" ;; *) win_epic set "$REPO#$EPIC" ;; esac
+[ -z "$SHORT" ] || win_name "$(fleet_epic_short "$SHORT")"
 printf 'stamped epic=%s session=%s tick=%s ttl=%ss%s (%s)\n' "$EPIC" "${SESS:--}" "${TICK:--}" "$TTL" \
   "${LIVE:+ live=$LIVE inflight=$INFLIGHT}" "$F"

@@ -52,7 +52,7 @@ starting a second one.
 |---|---|
 | one change in one repo, clear enough to start | **quick task**: `mcp__fleet__file_issue` (`title`, `body`, `repo`, `spawn: true`) — one issue, one worker, one PR. Its body says what «done» is. |
 | several independent changes, or one that spans repos | **an EPIC**: run `/fleet-epic-plan <theme>` here. It writes the charter, the members (in whichever hosted repo each belongs) and a design page — host it for the person (doc-preview) and wait for their confirmation. |
-| a confirmed EPIC | **a driver session**: `bin/dash-raw-session.sh --origin hub --prompt '/fleet-epic-run <N>'` (add `--repo <owner/name>` for the parent's repo) — the driver keeps the batch moving; you go back to talking. |
+| a confirmed EPIC | **a driver session**: `bin/dash-raw-session.sh --origin hub --name '<简称>·批次' --prompt '/fleet-epic-run <N>'` (add `--repo <owner/name>` for the parent's repo; `<简称>` is the charter's `short=`, so the row reads `像本地·批次 7/9` from the start — issue #2544) — the driver keeps the batch moving; you go back to talking. |
 | worth doing, not now | **the queue**: file it bare (`mcp__fleet__file_issue`, no `spawn`) with a `priority`, and the label `autofill` when it may start on its own (`bin/fleet-dispatch.sh` fills idle slots by priority on a fleet with `FLEET_AUTOFILL=1`), or `blocked` with 「等 #N 合并」 in the body. |
 | a question, not work | answer it. |
 

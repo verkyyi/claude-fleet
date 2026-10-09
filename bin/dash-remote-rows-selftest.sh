@@ -39,7 +39,10 @@
 #                   carries the same off the cache's 19th field (refresher + render);
 #                   leg G: the stamp marks its own pane's window, the adapter's
 #                   column 21 carries `epic=<ref>:<k>/<n>` + the EPIC's title, and
-#                   --clear unmarks the window
+#                   --clear unmarks the window; issue #2544: --short renames that
+#                   window `<简称>·批次` (only from a fleet-given name), and a driver
+#                   so named reads as that name, badged, here and from another
+#                   machine whose row has no title
 #   T. nobody drives it — issue #1916: a heartbeat mark gone stale, its EPIC still
 #                   on the open-issue list and no window wearing its @epic is ONE grey
 #                   row at the top of its repo's group — `epicstale:<ref>`, `#<N>
@@ -893,6 +896,17 @@ rm -f "$MARK"
 eq "Q: no mark — the subtree's own k/N" "@1|▾|1/3|0|" "$(srow "$(unset CCQUOTA_FLEET; qside)" '侧栏改版')"
 printf 'epoch: %s\nlanded: 2\nmembers: 8\n' "$NOW" > "$MARK"
 eq "Q: the mark's count wins over the live subtree" "@1|▾|2/8|0|" "$(srow "$(unset CCQUOTA_FLEET; qside)" '侧栏改版')"
+# issue #2544: a driver the heartbeat renamed `<简称>·批次` reads as that name
+# (over the theme), badged as ever; its members still drop their 简称· prefix,
+# and the driver's own name is never cut to `批次`
+cp "$WLIST_FILE" "$WORK/wl.r"
+LC_ALL=C sed "s/${US}scratch-7${US}\/w\/app-scratch-7${US}/${US}侧栏·批次${US}\/w\/app-scratch-7${US}/" "$WORK/wl.r" > "$WLIST_FILE"
+qn=$(unset CCQUOTA_FLEET; qside)
+eq "Q: a renamed driver (#2544) is named <简称>·批次, landed/members beside it" "@1|▾|2/8|0|" "$(srow "$qn" '侧栏·批次')"
+eq "Q: …its members keep their place, the 简称· prefix dropped" "单干;侧栏·批次;只看只点;底栏;工具活 ⇢too;" "$(sorder "$qn")"
+eq "Q: …its EPIC still the issue cell" "#1949" \
+   "$(printf '%s\n' "$qn" | LC_ALL=C awk -F"$US" '$4 == "侧栏·批次" { print $10; exit }')"
+cp "$WORK/wl.r" "$WLIST_FILE"
 LC_ALL=C sed "s/${US}acme\/app#1949\$/$US/" "$WLIST_FILE" > "$WORK/wl.noepic"; cp "$WLIST_FILE" "$WORK/wl.epic"; cp "$WORK/wl.noepic" "$WLIST_FILE"
 q0=$(unset CCQUOTA_FLEET; qside)
 eq "Q: no @epic — the window's own name, the members nested as ever" "单干;scratch-7;只看只点;底栏;工具活 ⇢too;" "$(sorder "$q0")"
@@ -903,6 +917,8 @@ cp "$WORK/wl.epic" "$WLIST_FILE"
 FQ=44444444-5555-6666-7777-999999999999
 { printf '#ts\037%s\n#me\037m5\n#node\037m4\037online\0372\037%s\n' "$NOW" "$NOW"
   printf 'wid:%s/acme-app:scratch-9\037m4\037online\037\037acme/app\037looping\037claude\037scratch-9\037\037\0370\037\037\037\037\037\037另一批\037\037acme/app#1982:2/5\n' "$FQ"
+  # issue #2544: a renamed driver whose node sent no title still reads as its batch
+  printf 'wid:%s/acme-app:scratch-10\037m4\037online\037\037acme/app\037looping\037claude\037新批·批次\037\037\0370\037\037\037\037\037\037\037\037acme/app#1984:3/7\n' "$FQ"
   printf 'wid:%s/acme-app:issue-1983\037m4\037online\0371983\037acme/app\037working\037claude\037成员甲\037%s/acme-app:scratch-9\037\0370\037\n' "$FQ" "$FQ"
   # field 20 (issue #2235): a warm start whose issue was never filed
   printf 'wid:%s/acme-app:scratch-8\037m4\037online\037\037acme/app\037working\037claude\037没建上的\037\037\0370\037\037\037\037\037\037\037\037\037failed\n' "$FQ"
@@ -912,6 +928,8 @@ printf '%s/acme-app:scratch-9\n' "$FQ" > "$G/remote_fold_$QS"
 qr=$(CCQUOTA_FLEET=1 qside)
 eq "Q: a remote driver is one row too, named and badged off its node's cell" "wid:$FQ/acme-app:scratch-9|▾|2/5|0|m4" "$(srow "$qr" '另一批')"
 eq "Q: …its member under it" "wid:$FQ/acme-app:issue-1983|└||1|m4" "$(srow "$qr" '成员甲')"
+eq "Q: a remote renamed driver with no title (#2544) — its name, its badge" "新批·批次|3/7|#1984" \
+   "$(printf '%s\n' "$qr" | LC_ALL=C awk -F"$US" '$1 ~ /scratch-10$/ { print $4 "|" $6 "|" $10; exit }')"
 eq "Q: a remote row whose issue was never filed (#2235): sidebar field 16 failed, 13-15 empty before it" "|||failed" \
    "$(printf '%s\n' "$qr" | LC_ALL=C awk -F"$US" '$4 == "没建上的" { print $13 "|" $14 "|" $15 "|" $16 }')"
 # the refresher writes the cell: the worker's `epic` → field 19, title + reap kept before it
@@ -1077,6 +1095,24 @@ print(repr(w["name"]) + "|" + str(w["origin_wid"]) + "|" + str(w["needs"]))' 2>&
   CCQUOTA_FLEET=1 bash "$HUBS" --refresh 2>/dev/null
   eq "G: …and empty again once that window is gone" "1|" \
      "$(LC_ALL=C awk -F"$US" -v w="wid:$U/issue-1420" '$1 == w { print $11 "|" $12 }' "$G/remote_$S")"
+  # The driver wears its batch (issue #2544): fleet-epic-heartbeat.sh --short
+  # renames ITS OWN pane's window `<简称>·批次` beside the @epic stamp — only from a
+  # name the fleet gave it; a person's name stays, and no --short renames nothing.
+  hbsock=$("$REAL_TMUX" -L "$S" display-message -p '#{socket_path}')
+  hbp=$("$REAL_TMUX" -L "$S" new-window -d -P -F '#{pane_id}' -n scratch-12 'while :; do sleep 300; done')
+  hb() { env PATH="$PATH" TMUX="$hbsock,1,0" TMUX_PANE="$hbp" bash "$BIN/fleet-epic-heartbeat.sh" "$@" >/dev/null 2>&1; }
+  hbname() { "$REAL_TMUX" -L "$S" display-message -p -t "$hbp" '#{window_name}|#{@epic}'; }
+  hb 2482 --repo acme/app --tick 1
+  eq "G: no --short — the stamp marks @epic, the name untouched" "scratch-12|acme/app#2482" "$(hbname)"
+  hb 2482 --repo acme/app --tick 2 --short '像本地 x#'
+  eq "G: --short renames the driver <简称>·批次 (fleet_epic_short: 4 letters, no junk)" "像本地x·批次|acme/app#2482" "$(hbname)"
+  hb 2482 --repo acme/app --tick 3 --short 本地
+  eq "G: …a changed 简称 renames it again" "本地·批次|acme/app#2482" "$(hbname)"
+  "$REAL_TMUX" -L "$S" rename-window -t "$hbp" 我的批
+  hb 2482 --repo acme/app --tick 4 --short 本地
+  eq "G: …a name the person gave it stays" "我的批|acme/app#2482" "$(hbname)"
+  hb --clear 2482
+  "$REAL_TMUX" -L "$S" kill-window -t "$hbp" 2>/dev/null
   # Every session the node's own list shows is reported (issue #1749): a no-repo
   # window with no key is listed under the identity the adapter mints for it, and
   # a raw scratch whose @worktree was never stamped keys off its scratch cwd —

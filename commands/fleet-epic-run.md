@@ -74,7 +74,7 @@ that dies at the boundary. Therefore:
 
   ```sh
   bash ~/.claude/fleet/bin/fleet-epic-heartbeat.sh <N> --tick <n> --repo "$FLEET_REPO" \
-    --landed <k> --members <m> --live <l> --inflight <p>
+    --landed <k> --members <m> --live <l> --inflight <p> --short <简称>
   ```
 
   `<l>` is how many member sessions were alive at the LAST tick's read (a member
@@ -89,10 +89,15 @@ that dies at the boundary. Therefore:
   `<m>` is the charter's Core count, `<k>` how many of them are merged — as of
   the LAST tick's read (the first tick: `--landed 0`, or leave both off). They
   are the badge of this batch's ONE row in the task list (issue #1958): the
-  stamp also marks THIS pane's window `@epic <owner/name>#<N>`, so the row is
-  named `#<N> <the EPIC's title>` with its members hanging under it by their
-  `@origin` — another repo's member too, tagged with its repo. `--clear <N>`
-  unmarks the window.
+  stamp also marks THIS pane's window `@epic <owner/name>#<N>`, so the batch is
+  ONE row with its members hanging under it by their `@origin` — another repo's
+  member too, tagged with its repo. `--clear <N>` unmarks the window.
+
+  `<简称>` is the charter's `<!-- fleet:epic … short=<简称> -->` (no `short=` —
+  an EPIC planned before #2355 — leave the flag off). The stamp renames THIS
+  window `<简称>·批次` (issue #2544) when its name is one the fleet gave it
+  (`scratch-<N>` …), so five batches at once are five rows like
+  `像本地·批次 7/9`, on every machine — never `scratch-3`.
 
   It rewrites THIS batch's mark, `$FLEET_CONF_DIR/global/epic-running.d/<repo
   slug>-<N>` — one file per batch (issue #2062), so a second loop on this login
