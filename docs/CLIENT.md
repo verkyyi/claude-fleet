@@ -218,6 +218,18 @@ when that row is gone (`solo_resume`). The layout lives in the server's
 live — remembering it in `fleet.conf` is the caller's. Every other layout's
 screen is byte for byte what it was: `bin/fleet-client-solo-selftest.sh`.
 
+**⌃\ — a shell on this computer, and back** (issue #2566, EPIC #2563 C4). In
+both one-session views (this layout and `fleet claude`'s own, below) ⌃\ opens a
+second window — a login shell of THIS computer's login, in `$HOME`, with
+`~/.local/bin` and the client's `bin/` first on its PATH — and the next ⌃\ is
+back on the session, the same pane, its connection never dropped; then the two
+in turn. `prefix \` is the same for a keyboard with no ⌃\ (an iPad's Blink). The
+window carries `@solo_shell`: the bar's keys read `⌃\ 回到会话` there and
+`⌃\ 本机 shell` on the session, and neither the list nor the window list ever
+shows it. The shell's `exit` closes it (the next ⌃\ opens a new one); ⌃D from it
+puts the view in the background as from the session. In every other layout ⌃\
+goes to the pane. `fleet-client-solo-selftest.sh` B and D5 pin it.
+
 **The top line is the same at every width** — the stage's own status line
 (`conf/tmux-shell-stage.conf` → `bin/fleet-topbar.py`): `‹ i/n ›` · state (●
 working · ? asking you · ⊘ needs OK · ↻ looping · ✓ done · ○ idle) · key · title
@@ -251,7 +263,7 @@ the hub's reason and attaches nothing.
 
 **It opens in a view of its own** (issue #2349, `fleet-shell.sh solo <machine>
 <worker id>`): the whole terminal is that one session, no list, no top line, one
-bottom line 「⌃D 放到后台 · /exit 结束会话」 with the machine on the right —
+bottom line 「⌃\ 本机 shell · ⌃D 放到后台 · /exit 结束会话」 with the machine on the right —
 whatever layout the client keeps, which `fleet claude` neither reads nor writes.
 It is not the client's stage but a tmux server of its own (`-L
 <session>-solo-<pid>`, the stage's conf with this bar over it) holding one proxy

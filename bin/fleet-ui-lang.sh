@@ -437,8 +437,10 @@ fleet_ui_t() {
     zh:solo_resume)             printf 'fleet 可以恢复。' ;;
     en:solo_resume)             printf 'Type fleet to resume it.' ;;
     # `fleet claude` / `fleet codex`'s own one-session view (issue #2349): its bar and its last words
-    zh:solo_view_bar)           printf '⌃D 放到后台 · /exit 结束会话' ;;
-    en:solo_view_bar)           printf '⌃D to the background · /exit ends the session' ;;
+    zh:solo_view_bar)           printf '⌃\\ 本机 shell · ⌃D 放到后台 · /exit 结束会话' ;;
+    en:solo_view_bar)           printf '⌃\\ local shell · ⌃D to the background · /exit ends the session' ;;
+    zh:solo_view_bar_shell)     printf '⌃\\ 回到会话 · ⌃D 放到后台' ;;
+    en:solo_view_bar_shell)     printf '⌃\\ back to the session · ⌃D to the background' ;;
     zh:solo_view_left_fmt)      printf '会话在后台继续（%s）。`fleet` 可以找回。' "${1:-}" ;;
     en:solo_view_left_fmt)      printf 'The session keeps running in the background (%s). `fleet` finds it again.' "${1:-}" ;;
     zh:solo_view_ended_fmt)     printf '会话已结束（%s）。' "${1:-}" ;;

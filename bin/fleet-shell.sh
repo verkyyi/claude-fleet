@@ -1432,7 +1432,23 @@ solo)
   SOLO="$SESS-solo-$$"
   SB=$BIN; [ -x "$CACHE/bin/fleet-remote-view.sh" ] && SB="$CACHE/bin"
   OV="$CACHE/tmux-solo.$$.conf"
-  bar=$(sh "$SB/fleet-ui-lang.sh" t solo_view_bar 2>/dev/null)
+  # the bar's two lines — the session's, and the local shell's (⌃\, issue #2566):
+  # each `key words` part with its key bold, as one tmux format (a `\` doubled
+  # for the conf's double quotes)
+  solo_bar() {
+    local rest="$1 · " part out=''
+    while [ -n "$rest" ]; do
+      part=${rest%% · *}; rest=${rest#* · }
+      [ -n "$out" ] && out="$out · "
+      out="$out#[fg=#c0caf5]#[bold]${part%% *}#[nobold]#[fg=#565f89] ${part#* }"
+    done
+    printf '%s' "${out//\\/\\\\}"
+  }
+  bar=$(solo_bar "$(sh "$SB/fleet-ui-lang.sh" t solo_view_bar 2>/dev/null)")
+  sbar=$(solo_bar "$(sh "$SB/fleet-ui-lang.sh" t solo_view_bar_shell 2>/dev/null)")
+  # ⌃\'s shell (issue #2566): THIS computer, this login, in $HOME, with the
+  # fleet's own commands on its PATH (a `'` in it would end the conf's quotes)
+  spath="$HOME/.local/bin:$SB:$PATH"; spath=${spath//\'/}
   # ONE conf, read at the server's start: the stage's (its environment, its ssh)
   # with this view's bar after it — so not one line of the stage's top line
   # (fleet-topbar.py, the client's record) ever runs on this server
@@ -1443,16 +1459,23 @@ set -g status-position bottom
 set -g status-interval 0
 set -g status-style "bg=#1a1b26,fg=#565f89"
 set -g status-left-length 200
-set -g status-left " #[range=user|bg]#[fg=#c0caf5]#[bold]${bar%% *}#[nobold]#[fg=#565f89] ${bar#* }#[norange]#[default]"
+set -g status-left " #[range=user|bg]#{?#{@solo_shell},${sbar},${bar}}#[norange]#[default]"
 set -g status-right "#[fg=#565f89]$snode "
 set -g status-right-length 40
 set -g pane-border-status off
 bind -n MouseDown1Status if -F '#{==:#{mouse_status_range},bg}' { detach-client }
 bind -n C-d detach-client
-# the client's prefix, with ONE key: d, to the background as everywhere
+# ⌃\\ (issue #2566, EPIC #2563 共同约定 5): to a shell on THIS computer and back —
+# the view's second window, made on the first press (\`@solo_shell\`), then the
+# two windows in turn; the session's own window and its connection never move.
+# Its \`exit\` closes it, and the next press makes a new one.
+bind -n 'C-\\' if -F '#{W:#{?#{@solo_shell},1,}}' { last-window } { new-window -n 本机shell -c '$HOME' -e 'PATH=$spath' ; set-window-option @solo_shell 1 }
+# the client's prefix, with TWO keys: d, to the background as everywhere, and
+# \\ — ⌃\\ for a keyboard that has no ⌃\\ (an iPad's Blink)
 set -g prefix $PREFIX
 unbind -a -T prefix
 bind d detach-client
+bind '\\' if -F '#{W:#{?#{@solo_shell},1,}}' { last-window } { new-window -n 本机shell -c '$HOME' -e 'PATH=$spath' ; set-window-option @solo_shell 1 }
 EOF
   } > "$OV" || { note "写不了 $OV"; exit 1; }
   sw=$(tmux -L "$SOLO" -f "$OV" new-session -d -P -F '#{window_id}' -s "$SOLO" -n "$snode" -c "$HOME" \
