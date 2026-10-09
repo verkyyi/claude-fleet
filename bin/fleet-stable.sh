@@ -45,8 +45,9 @@
 #               none. Red REFUSES (reason `macos:`); a run still going is waited
 #               for; NO run (path-filtered, cancelled) dispatches the FULL suite on
 #               exactly the target (`gh workflow run … -f sha=<target>`) and waits
-#               for it, up to --macos-timeout (default 3600s) — a run that does
-#               not finish in time refuses. --dry-run never dispatches or waits:
+#               for it, up to --macos-timeout (default 5400s: six full
+#               shards, the sixth queued behind five — issue #2638) — a run
+#               that does not finish in time refuses. --dry-run never dispatches or waits:
 #               no green run = refused. --force moves past it and logs one line,
 #               like gate 4. A target whose tree has no such workflow has no BSD
 #               half to wait for and passes.
@@ -79,7 +80,7 @@ set -u
 
 BIN_DIR=$(cd "$(dirname "$0")" && pwd)
 dir="$(cd "$BIN_DIR/.." && pwd)"
-remote=origin branch=master repo="" timeout=15 dry=0 allow_nochecks=0 force=0 macos_timeout=3600 ignore_check=""
+remote=origin branch=master repo="" timeout=15 dry=0 allow_nochecks=0 force=0 macos_timeout=5400 ignore_check=""
 cmd="" target=""
 TAG=stable
 
@@ -98,7 +99,7 @@ while [ "$#" -gt 0 ]; do
     --branch)          shift; branch="${1:-}" ;;
     --repo)            shift; repo="${1:-}" ;;
     --timeout)         shift; timeout="${1:-15}" ;;
-    --macos-timeout)   shift; macos_timeout="${1:-3600}" ;;
+    --macos-timeout)   shift; macos_timeout="${1:-5400}" ;;
     --ignore-check)    shift; ignore_check="${1:-}" ;;
     -h|--help)         sed -n '2,70p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*)                die "unknown flag $1" ;;
@@ -109,7 +110,7 @@ while [ "$#" -gt 0 ]; do
 done
 [ -n "$cmd" ] || die "usage: fleet-stable.sh show | move [<sha>] [--dry-run] [--force]"
 case "$timeout" in ''|*[!0-9]*|0) timeout=15 ;; esac
-case "$macos_timeout" in ''|*[!0-9]*) macos_timeout=3600 ;; esac
+case "$macos_timeout" in ''|*[!0-9]*) macos_timeout=5400 ;; esac
 git -C "$dir" rev-parse --git-dir >/dev/null 2>&1 || die "$dir is not a git checkout (--dir)"
 
 # git's own stall abort bounds every network call — macOS has no timeout(1).
