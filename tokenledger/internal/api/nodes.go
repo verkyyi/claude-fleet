@@ -1002,6 +1002,12 @@ func (s *Server) serveMachinesPage(w http.ResponseWriter, r *http.Request) {
 	s.serveStandalonePage(w, r, "machines.html")
 }
 
+// serveUsagePage serves 我的用量 (claude-fleet#2519): the viewer's tokens per
+// day this week and their budget, from /v1/fleet/person-usage.
+func (s *Server) serveUsagePage(w http.ResponseWriter, r *http.Request) {
+	s.serveStandalonePage(w, r, "usage.html")
+}
+
 // serveSessionsPage serves 我的会话 (claude-fleet#1429): every session the
 // viewer may see, on every machine, laid out for a phone.
 func (s *Server) serveSessionsPage(w http.ResponseWriter, r *http.Request) {

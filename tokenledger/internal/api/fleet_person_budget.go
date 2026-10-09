@@ -369,15 +369,31 @@ func (s *Server) handleCredProxyUsage(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, st)
 }
 
-// handleFleetPersonUsage is the operator's list: everyone with a budget or
-// usage this week (GET /v1/fleet/person-usage).
+// handleFleetPersonUsage is GET /v1/fleet/person-usage, cut by role (我的用量,
+// claude-fleet#2519): the operator's door and an admin read everyone with a
+// budget or usage this week (?principal= narrows it); a user reads only their
+// own, whatever ?principal= says, and an admin their own with ?mine=1. One
+// person's answer also carries `days`, their tokens per UTC day this week —
+// the curve the page draws under the budget.
 func (s *Server) handleFleetPersonUsage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	if r.Method != http.MethodGet {
 		httpError(w, http.StatusMethodNotAllowed, "GET")
 		return
 	}
-	st, err := s.personBudgetStates(strings.TrimSpace(r.URL.Query().Get("principal")), s.budgetClock())
+	now := s.budgetClock()
+	pid := principalOf(r.Context())
+	mine := roleOf(r.Context()) == roleUser || r.URL.Query().Get("mine") != ""
+	if mine && pid == "" {
+		// The operator's door asking for its own: it is nobody.
+		writeJSON(w, http.StatusOK, map[string]any{"people": []PersonBudgetState{}, "days": []PersonUsageDay{}})
+		return
+	}
+	who := strings.TrimSpace(r.URL.Query().Get("principal"))
+	if mine {
+		who = pid
+	}
+	st, err := s.personBudgetStates(who, now)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -387,5 +403,41 @@ func (s *Server) handleFleetPersonUsage(w http.ResponseWriter, r *http.Request) 
 			st[i].DisplayName = p.DisplayName
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"people": st})
+	out := map[string]any{"people": st}
+	if who != "" {
+		days, err := s.personUsageDays(who, now)
+		if err != nil {
+			httpError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		out["days"] = days
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// PersonUsageDay is one UTC day of one person's counted tokens.
+type PersonUsageDay struct {
+	Day    string `json:"day"` // YYYY-MM-DD, UTC
+	Tokens int64  `json:"tokens"`
+}
+
+// personUsageDays is principal's tokens for each of the 7 UTC days ending
+// today, oldest first; a day with nothing is 0.
+func (s *Server) personUsageDays(principal string, now time.Time) ([]PersonUsageDay, error) {
+	today := now.UTC().Truncate(24 * time.Hour)
+	first := today.AddDate(0, 0, -6)
+	rows, err := s.Store.PersonUsageSince(principal, first)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]PersonUsageDay, 7)
+	for i := range out {
+		out[i].Day = first.AddDate(0, 0, i).Format("2006-01-02")
+	}
+	for _, r := range rows {
+		if i := int(store.PersonBucketStart(r.Bucket).Sub(first) / (24 * time.Hour)); i >= 0 && i < len(out) {
+			out[i].Tokens += r.Tokens
+		}
+	}
+	return out, nil
 }

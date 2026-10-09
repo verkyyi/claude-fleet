@@ -533,7 +533,9 @@ func (s *Server) routes() *routeMux {
 		// the operator's.
 		mux.HandleFunc(CredProxyUsagePath, s.handleCredProxyUsage)
 		mux.HandleFunc("/v1/node/usage", s.handleNodeUsage)
-		mux.Handle("/v1/fleet/person-usage", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetPersonUsage))))
+		mux.Handle("/v1/fleet/person-usage", s.viewerOnly(http.HandlerFunc(s.handleFleetPersonUsage)))
+		// 我的用量 (claude-fleet#2519): a person's own usage and budget.
+		mux.Handle("/usage", s.viewerOnly(http.HandlerFunc(s.serveUsagePage)))
 		// The relay (claude-fleet#1413). Both halves authenticate
 		// themselves: the client by session, token or certificate (the
 		// last proven in-band, so outside the viewer gate), the agent by

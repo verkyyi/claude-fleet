@@ -5,14 +5,14 @@ import assert from 'node:assert/strict';
 import { useLocale, fmtCompact, fmtDate, fmtAgo } from '../dist/lib/i18n.js';
 import { navFor, pageAllowed, isAdmin, viewer, fmtTokens, spark, ctxBar, liveLine, esc, titleOf, PAGES, otherView } from '../dist/lib/shell.js';
 
-const USER = ['overview', 'sessions', 'mymachines', 'devices', 'quota', 'config'];
+const USER = ['overview', 'sessions', 'mymachines', 'devices', 'quota', 'usage', 'config'];
 const ADMIN = [...USER, 'all-sessions', 'by-person', 'all-devices', 'subscriptions', 'machines', 'people', 'settings', 'audit'];
 
 test('a user sees their own pages and no Admin group', () => {
   const nav = navFor(USER);
-  assert.deepEqual(nav.map((x) => x.id), ['overview', 'sessions', 'mymachines', 'devices', 'quota', 'config']);
+  assert.deepEqual(nav.map((x) => x.id), ['overview', 'sessions', 'mymachines', 'devices', 'quota', 'usage', 'config']);
   assert.ok(!nav.some((x) => x.heading), 'no Admin heading for a user');
-  assert.deepEqual(nav.map((x) => x.href), ['/', '/sessions', '/machines', '/connect', '/quota', '/config']);
+  assert.deepEqual(nav.map((x) => x.href), ['/', '/sessions', '/machines', '/connect', '/quota', '/usage', '/config']);
 });
 
 test('an admin also sees the Admin group: the whole hub, then the five admin pages (#1990, #2515)', () => {

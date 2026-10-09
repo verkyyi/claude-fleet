@@ -348,7 +348,7 @@ export function kpi(label, val, trend, d) {
 /** hb draws [label, tokens] rows (bars()) as horizontal bars. */
 export function hb(rows, color) {
   if (!rows.length) return `<div class="ghostrow">${esc(t('ui.ov.noUsage7'))}</div>`;
-  const max = rows[0][1] || 1;
+  const max = Math.max(...rows.map((r) => r[1])) || 1;
   return '<div class="hb">' + rows.map((r) => `<div class="hb-row"><span class="name mono" title="${esc(r[0])}">${esc(r[0])}</span><span class="track"><i style="width:${(r[1] / max * 100).toFixed(0)}%;background:${color}"></i></span><span class="v">${esc(fmtTokens(r[1]))}</span></div>`).join('') + '</div>';
 }
 
@@ -357,4 +357,40 @@ export function hb(rows, color) {
 export function bundleList(list, src) {
   if (!list.length) return `<div class="empty">${ic('sliders')}<b>${esc(t('ui.cfg.empty'))}</b><span>${esc(t(src === 'team' ? 'ui.cfg.emptyTeam' : 'ui.cfg.emptyMine'))}</span></div>`;
   return '<div class="items">' + list.map(([k, txt]) => `<div><span class="kind">${esc(k)}</span><span class="mono" style="min-width:0;overflow-wrap:anywhere">${esc(txt)}</span><span class="src chip${src === 'team' ? ' brand' : ''}">${esc(t(src === 'team' ? 'ui.cfg.srcTeam' : 'ui.cfg.srcMine'))}</span></div>`).join('') + '</div>';
+}
+
+// ── 我的用量 (claude-fleet#2519) ─────────────────────────────────────────
+// /v1/fleet/person-usage, cut by the hub to the viewer: their budget's two
+// windows (fleet.person_budget, #1977/#2067) and their tokens per day this
+// week, drawn with By person's bars.
+
+/** usageDays turns the answer's days into hb() rows, oldest first; [] when
+ *  the week has nothing. */
+export function usageDays(days) {
+  const list = Array.isArray(days) ? days : [];
+  if (!list.some((d) => Number(d.tokens) > 0)) return [];
+  return list.map((d) => [dayLabel(d.day), Number(d.tokens) || 0]);
+}
+
+function budgetWin(label, used, limit) {
+  used = Number(used) || 0; limit = Number(limit) || 0;
+  if (!limit) {
+    return `<div class="win"><div class="win-h"><span>${esc(label)}</span><b>${esc(fmtTokens(used))} · ${esc(t('ui.use.noLimit'))}</b></div></div>`;
+  }
+  const p = Math.round(used / limit * 100);
+  return `<div class="win"><div class="win-h"><span>${esc(label)}</span><b>${esc(fmtTokens(used))} / ${esc(fmtTokens(limit))}</b></div>` +
+    `<div class="track"><i class="${qLevel(p)}" style="width:${Math.min(100, p)}%"></i></div></div>`;
+}
+
+/** usageBudget draws one person's standing: both windows against their
+ *  limits, and — over one — which and until when. */
+export function usageBudget(st) {
+  const s = st || {};
+  const set = Number(s.limit_5h) > 0 || Number(s.limit_week) > 0;
+  const chip = s.over
+    ? `<span class="chip bad">${esc(t(s.window === 'week' ? 'ui.use.overWeek' : 'ui.use.over5h'))}</span>`
+    : `<span class="chip${set ? ' ok' : ''}">${esc(t(set ? 'ui.use.within' : 'ui.use.unset'))}</span>`;
+  const reset = s.over && s.reset_at ? `<p class="sub" style="font-size:12.5px;margin:0">${esc(t('ui.use.backAt', { at: fmtDate(s.reset_at) }))}</p>` : '';
+  return `<div style="display:grid;gap:14px"><div>${chip}</div>${budgetWin(t('ui.use.h5'), s.used_5h, s.limit_5h)}${budgetWin(t('ui.use.week'), s.used_week, s.limit_week)}${reset}` +
+    (set ? '' : `<p class="sub" style="font-size:12.5px;color:var(--muted);margin:0">${esc(t('ui.use.unsetHint'))}</p>`) + '</div>';
 }

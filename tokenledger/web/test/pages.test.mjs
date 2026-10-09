@@ -8,7 +8,7 @@ import { readFileSync } from 'node:fs';
 import {
   dayKeys, dayTokens, stack, delta, bars, areaChart, niceMax,
   sessionRows, counts, filterRows, running, attention, stateOf,
-  activeDevices, deviceHistory, looksLikeKey, bundleItems, parseImport, quotaTable, quotaState, myMachines, takesOf,
+  activeDevices, deviceHistory, looksLikeKey, bundleItems, parseImport, quotaTable, quotaState, myMachines, takesOf, usageDays, usageBudget,
 } from '../dist/lib/pages.js';
 import { useLocale } from '../dist/lib/i18n.js';
 import { en } from '../dist/lib/i18n/en.js';
@@ -171,7 +171,7 @@ test('import takes an export back, and refuses what is not one', () => {
 // none of them reads the whole hub (by person, /v1/admin/*) or names a
 // principal, and no admin branch picks a wider read — those are the admin
 // area's three pages, which read only /v1/admin/*.
-const DAILY = ['overview.js', 'sessions-page.js', 'machines.js', 'connect.js', 'config.js', 'quota.js', 'app-shell.js', 'lib/sessions-view.js', 'lib/devices-view.js'];
+const DAILY = ['overview.js', 'sessions-page.js', 'machines.js', 'connect.js', 'config.js', 'quota.js', 'usage.js', 'app-shell.js', 'lib/sessions-view.js', 'lib/devices-view.js'];
 test('no page asks the hub for someone else\'s rows', () => {
   for (const f of DAILY) {
     const src = readFileSync(new URL('../dist/' + f, import.meta.url), 'utf8');
@@ -213,7 +213,7 @@ test('the daily tables carry no person, subscription or owner column', () => {
 // no English sentence typed into a template, and no t() key the dictionary
 // lacks (the parity test in i18n.test.mjs then holds zh-CN to it).
 test('the app pages print only dictionary words', () => {
-  for (const f of ['overview.js', 'sessions-page.js', 'machines.js', 'connect.js', 'config.js', 'quota.js', 'app-shell.js', 'lib/shell.js', 'lib/pages.js', 'lib/sessions-view.js', 'lib/devices-view.js']) {
+  for (const f of ['overview.js', 'sessions-page.js', 'machines.js', 'connect.js', 'config.js', 'quota.js', 'usage.js', 'app-shell.js', 'lib/shell.js', 'lib/pages.js', 'lib/sessions-view.js', 'lib/devices-view.js']) {
     const src = readFileSync(new URL('../dist/' + f, import.meta.url), 'utf8').replace(/^\s*(\/\/|\*|\/\*).*$/gm, '');
     const bare = src.match(/>[A-Z][a-z]+[ <.]/g) || [];
     assert.deepEqual(bare.filter((m) => !/>(Claude|Codex|GitHub)/.test(m)), [], `${f} types English into markup`);
@@ -296,4 +296,40 @@ test('my machines reads only the cut roster: no join code, no retire', () => {
   const src = readFileSync(new URL('../dist/machines.js', import.meta.url), 'utf8');
   assert.match(src, /api\('\/v1\/nodes'\)/);
   assert.doesNotMatch(src, /join-codes|retire|\/v1\/fleet\/settings|POST/);
+});
+
+// 我的用量 (claude-fleet#2519): a quiet week is the empty state; a week with
+// usage is seven bars in day order; the budget panel shows both windows
+// against their limits, says which one ran out and when it frees up, and says
+// so plainly when no admin set one. The page asks only for its own (?mine=1).
+test('my usage: the days, and the budget against both windows', () => {
+  useLocale('zh-CN');
+  try {
+    assert.deepEqual(usageDays([]), []);
+    assert.deepEqual(usageDays([{ day: '2026-10-08', tokens: 0 }]), []);
+    const days = ['03', '04', '05', '06', '07', '08', '09'].map((d, i) => ({ day: `2026-10-${d}`, tokens: i * 1000 }));
+    const rows = usageDays(days);
+    assert.equal(rows.length, 7);
+    assert.deepEqual(rows.map((r) => r[1]), [0, 1000, 2000, 3000, 4000, 5000, 6000]);
+
+    const over = usageBudget({ limit_5h: 200000, limit_week: 1000000, used_5h: 50000, used_week: 1000000, over: true, window: 'week', reset_at: '2026-10-10T23:00:00Z' });
+    assert.match(over, /已达个人额度（近 7 天）/);
+    assert.match(over, /约 .* 恢复/);
+    assert.match(over, /近 5 小时/);
+    assert.match(over, /width:25%/);
+    assert.match(over, /class="bad" style="width:100%"/);
+
+    const ok = usageBudget({ limit_5h: 0, limit_week: 1000000, used_5h: 1200, used_week: 300000, over: false });
+    assert.match(ok, /在预算内/);
+    assert.match(ok, /不限/);
+    assert.doesNotMatch(ok, /恢复/);
+
+    const unset = usageBudget({});
+    assert.match(unset, /没有设预算/);
+    assert.match(unset, /用量不会被拦/);
+  } finally {
+    useLocale('en');
+  }
+  const src = readFileSync(new URL('../dist/usage.js', import.meta.url), 'utf8');
+  assert.match(src, /\/v1\/fleet\/person-usage\?mine=1/);
 });

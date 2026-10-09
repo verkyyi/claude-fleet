@@ -90,8 +90,9 @@ var routeAccess = map[string]string{
 	"/v1/fleet/session-cred":    accessSelf, "/v1/fleet/session-cred/": accessSelf,
 	CredProxyResolvePath: accessSelf, CredProxyRebindPath: accessSelf,
 	// Per-person budgets (claude-fleet#1977): each proxy reports with its own
-	// token; the list is the operator's.
-	CredProxyUsagePath: accessSelf, "/v1/node/usage": accessSelf, "/v1/fleet/person-usage": accessAdmin,
+	// token; the list is the operator's, a user reads their own (我的用量,
+	// claude-fleet#2519).
+	CredProxyUsagePath: accessSelf, "/v1/node/usage": accessSelf, "/v1/fleet/person-usage": accessUser,
 	control.SSHRelayPath: accessSelf, control.SSHRelayDataPath: accessSelf,
 	control.RoutesPath: accessSelf,
 
@@ -135,7 +136,9 @@ var routeAccess = map[string]string{
 	"/v1/fleet/connect": accessUser, "/v1/fleet/cert": accessUser,
 	"/fleet/login": accessUser, "/connect": accessUser, "/config": accessUser,
 	// 我的机器 (claude-fleet#2518): the page reads only /v1/nodes and /v1/me.
-	"/machines":         accessUser,
+	"/machines": accessUser,
+	// 我的用量 (claude-fleet#2519): reads /v1/fleet/person-usage, cut to them.
+	"/usage":            accessUser,
 	"/v1/fleet/devices": accessUser, "/v1/fleet/devices/revoke": accessUser,
 	// Take a machine off the hub (claude-fleet#1928): a user only their own.
 	NodeRetirePath: accessUser,
@@ -418,10 +421,11 @@ func (s *Server) auditRoleDenied(r *http.Request) {
 // admin's every one: the same (their own, claude-fleet#2515), then All
 // sessions, By person and All devices — the whole hub those pages used to
 // show an admin — then Subscriptions, Machines, Users, Settings and Audit
-// (claude-fleet#1990). mymachines is 我的机器 (#2518), quota is 我的额度 (#2517).
+// (claude-fleet#1990). mymachines is 我的机器 (#2518), quota is 我的额度 (#2517),
+// usage is 我的用量 (#2519).
 var (
-	userPages  = []string{"overview", "sessions", "mymachines", "devices", "quota", "config"}
-	adminPages = []string{"overview", "sessions", "mymachines", "devices", "quota", "config",
+	userPages  = []string{"overview", "sessions", "mymachines", "devices", "quota", "usage", "config"}
+	adminPages = []string{"overview", "sessions", "mymachines", "devices", "quota", "usage", "config",
 		"all-sessions", "by-person", "all-devices",
 		"subscriptions", "machines", "people", "settings", "audit"}
 )
