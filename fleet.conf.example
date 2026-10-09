@@ -352,6 +352,20 @@ FLEET_CTX_WINDOW=200000
 # in place with a first turn that re-arms its Loop (issue #2585). `off` keeps the page.
 # @label=Orchestrator revive after (s) @group=spawn @tier=internal @scope=fleet @edit=str
 #FLEET_ORCH_REVIVE_SECS=30
+# An orchestrator / steward launched from an older ~/.claude/fleet than the one
+# installed is renewed by its own `ensure` at a QUIET moment — done/looping for
+# FLEET_ORCH_RENEW_QUIET seconds with no keypress on its window, its Loop's next
+# round FLEET_ORCH_RENEW_LOOP_GAP seconds away or more, no tool call in flight —
+# in place, on the same conversation (issue #2733). Never forced: pending past
+# FLEET_ORCH_RESTART_WAIT seconds is a doctor WARN. FLEET_ORCH_RENEW=0 turns it off.
+# @label=Orchestrator renew on a new version @group=spawn @tier=internal @scope=fleet @edit=bool
+#FLEET_ORCH_RENEW=1
+# @label=Orchestrator renew: quiet for (s) @group=spawn @tier=internal @scope=fleet @edit=str
+#FLEET_ORCH_RENEW_QUIET=60
+# @label=Orchestrator renew: Loop round at least (s) away @group=spawn @tier=internal @scope=fleet @edit=str
+#FLEET_ORCH_RENEW_LOOP_GAP=120
+# @label=Orchestrator renew: WARN when pending past (s) @group=spawn @tier=internal @scope=fleet @edit=str
+#FLEET_ORCH_RESTART_WAIT=7200
 
 # One tier cheaper than the orchestrator (发起人拍板 3): Claude --model
 # FLEET_STEWARD_MODEL --effort FLEET_STEWARD_EFFORT; Codex -m FLEET_STEWARD_CODEX_MODEL.
