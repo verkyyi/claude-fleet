@@ -9,6 +9,9 @@
 #                         bin/fleet-doctor.sh's `node` row
 #   service-killed        bin/fleet-node-supervisor.py's login-level register (#2525):
 #                         a registered service is kill -9'd / dies at start
+#   service-login-moved   bin/fleet-node-supervisor.py `service move` + `account release`,
+#                         bin/fleet-login-remove.sh (#2528): a login is moved to another
+#                         one / retired while a registered task of it still runs
 #   account-adopt-stuck   bin/fleet-node-supervisor.py `account adopt|release` (#2332):
 #                         one of a login's services will not unload mid-migration
 #   account-adopt-agent-left  bin/fleet-node-supervisor.py `account adopt|release` (#2387):
@@ -95,6 +98,50 @@ drill_service_killed() {
   unset FLEET_NODE_STATE FLEET_NODE_LOG FLEET_NODE_RUNTIME FLEET_NODE_DAEMON_DIR FLEET_NODE_USERS FLEET_NODE_TABLE \
     FLEET_NODE_TICK FLEET_NODE_LAUNCHCTL FLEET_NODE_TEST FLEET_NODE_PASSWD
   WHAT="登记的服务 kill -9：守护按子进程退避在 30 秒内以原登录身份重起，日志续写在 logins/<登录>/，status --json 的 services[] 记重启次数；rm 后停掉"
+}
+
+drill_service_login_moved() {
+  CAP=30   # the move → the first run under the new login
+  local sb sup ha hb t0 r
+  sb="$WORK/svcmove"; ha="$sb/Users/verkyyi"; hb="$sb/Users/verky"
+  mkdir -p "$sb/LaunchDaemons" "$ha/daily-report/logs" "$ha/.claude/skills/daily-report" "$hb"
+  printf '{"verkyyi": {"uid": %s, "gid": %s, "home": "%s"}, "verky": {"uid": %s, "gid": %s, "home": "%s"}}\n' \
+    "$(id -u)" "$(id -g)" "$ha" "$(id -u)" "$(id -g)" "$hb" > "$sb/passwd.json"
+  printf '{"children":[],"tasks":[]}\n' > "$sb/table.json"
+  printf 'skill\n' > "$ha/.claude/skills/daily-report/SKILL.md"
+  # the 2026-10-08 case: the daily push gives up when its login's things are not there
+  printf '#!/bin/bash\n[ -f "$HOME/.claude/skills/daily-report/SKILL.md" ] && [ -n "$BARK_KEY" ] || { echo "give up $USER"; exit 1; }\necho "pushed $USER" >> "$HOME/daily-report/logs/run.log"; echo "ok $USER"\nexec sleep 300\n' \
+    > "$ha/daily-report/run.sh"; chmod +x "$ha/daily-report/run.sh"
+  export FLEET_NODE_STATE="$sb/db" FLEET_NODE_LOG="$sb/log" FLEET_NODE_RUNTIME="$sb/rt" \
+    FLEET_NODE_DAEMON_DIR="$sb/LaunchDaemons" FLEET_NODE_USERS="$sb/Users" FLEET_NODE_TABLE="$sb/table.json" \
+    FLEET_NODE_TICK=0.2 FLEET_NODE_LAUNCHCTL='' FLEET_NODE_TEST=1 FLEET_NODE_PASSWD="$sb/passwd.json"
+  printf 'k\n' | python3 "$BIN/fleet-node-supervisor.py" service cred set --login verkyyi --name BARK_KEY >/dev/null
+  python3 "$BIN/fleet-node-supervisor.py" service add --login verkyyi --name daily-report --cred BARK_KEY \
+    --path "$ha/daily-report" --path "$ha/.claude/skills/daily-report" -- "$ha/daily-report/run.sh" >"$sb/add.out" 2>&1 \
+    || { WHY="service add failed: $(tail -2 "$sb/add.out" | tr '\n' ' ')"; return 1; }
+  python3 -I "$BIN/fleet-node-supervisor.py" run 2>>"$sb/sup.err" &
+  sup=$!; printf '%s\n' "$sup" >> "$WORK/cred-pids"
+  until_ok 15 grep -q '^ok verkyyi' "$sb/log/logins/verkyyi/daily-report.log" \
+    || { WHY="it never ran as the old login: $(tail -2 "$sb/sup.err" | tr '\n' ' ')"; kill "$sup" 2>/dev/null; return 1; }
+  python3 "$BIN/fleet-node-supervisor.py" account release verkyyi >"$sb/rel.out" 2>&1; r=$?
+  [ "$r" = 6 ] && grep -q 'service move --login verkyyi --name daily-report' "$sb/rel.out" \
+    || { WHY="releasing the old login with a task left was not refused 6 (rc $r)"; kill "$sup" 2>/dev/null; return 1; }
+  grep -q 'exit 6' "$BIN/fleet-login-remove.sh" || { WHY="fleet-login-remove.sh has no exit 6 refusal"; kill "$sup" 2>/dev/null; return 1; }
+  t0=$(now)
+  python3 "$BIN/fleet-node-supervisor.py" service move --login verkyyi --name daily-report --to verky >"$sb/move.out" 2>&1 \
+    || { WHY="service move failed: $(tail -2 "$sb/move.out" | tr '\n' ' ')"; kill "$sup" 2>/dev/null; return 1; }
+  until_ok 30 grep -q '^ok verky$' "$sb/log/logins/verky/daily-report.log" \
+    || { WHY="it did not run as the new login: $(tail -2 "$sb/log/logins/verky/daily-report.log" | tr '\n' ' ')"; kill "$sup" 2>/dev/null; return 1; }
+  SECS=$(since "$t0")
+  grep -q '^give up' "$sb/log/logins/verky/daily-report.log" && { WHY="it gave up under the new login"; kill "$sup" 2>/dev/null; return 1; }
+  [ -z "$(ls "$sb/db/logins/verkyyi/services")" ] && [ ! -e "$ha/daily-report" ] && [ ! -e "$ha/.claude/skills/daily-report" ] \
+    && [ ! -e "$sb/log/logins/verkyyi/daily-report.log" ] && [ ! -e "$sb/db/logins/verkyyi/creds/BARK_KEY" ] \
+    || { WHY="something of it is left under the old login"; kill "$sup" 2>/dev/null; return 1; }
+  grep -q 'pushed verky' "$hb/daily-report/logs/run.log" || { WHY="the job's own log is not in the new home"; kill "$sup" 2>/dev/null; return 1; }
+  kill "$sup" 2>/dev/null; wait "$sup" 2>/dev/null
+  unset FLEET_NODE_STATE FLEET_NODE_LOG FLEET_NODE_RUNTIME FLEET_NODE_DAEMON_DIR FLEET_NODE_USERS FLEET_NODE_TABLE \
+    FLEET_NODE_TICK FLEET_NODE_LAUNCHCTL FLEET_NODE_TEST FLEET_NODE_PASSWD
+  WHAT="每日推送登记在旧登录下：退役旧登录（account release / fleet-login-remove）因有任务未迁走被拒（退 6，打印 move 命令）；service move 后条目、工作目录、技能目录、日志、凭据都到新登录下，旧登录下一样不剩，守护以新登录身份按时跑起来"
 }
 
 drill_account_adopt_stuck() {

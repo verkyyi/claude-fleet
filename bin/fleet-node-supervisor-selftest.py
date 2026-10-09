@@ -25,6 +25,11 @@ FLEET_NODE_* seams; nothing touches /Library, /var or a real login.
      injected, its log in <log>/logins/<login>/; killed → back within 30 s; stop /
      start / restart / rm; `status --json` .services[]; a bad entry is named, never
      run; a login's services/ never restarts the node agent
+  J  `service move` (#2528): two fake logins — after the move the entry, its
+     paths[] (working + skill dir), its log and its credential are the new login's
+     and none is left under the old; it runs as the new login, never both at once;
+     a move onto an existing path refuses with nothing changed; `account release`
+     of a login with entries left refuses 6 with the move line (--force passes)
 """
 import importlib.util
 import json
@@ -1065,6 +1070,135 @@ class I_Services(Sandbox):
         self.assertTrue(until(10, lambda: self.child(self.key).get("pid")))
         time.sleep(0.5)
         self.assertEqual(self.child("node-agent")["pid"], pid, "a service restarted the node agent")
+
+
+class J_ServiceMove(Sandbox):
+    def setUp(self):
+        Sandbox.setUp(self)
+        self.ha = os.path.join(self.d, "Users", "verkyyi")
+        self.hb = os.path.join(self.d, "Users", "verky")
+        for h in (self.ha, self.hb):
+            os.makedirs(h)
+        with open(os.path.join(self.d, "passwd.json"), "w") as f:
+            json.dump({"verkyyi": {"uid": os.getuid(), "gid": os.getgid(), "home": self.ha},
+                       "verky": {"uid": os.getuid(), "gid": os.getgid(), "home": self.hb}}, f)
+        self.env["FLEET_NODE_PASSWD"] = os.path.join(self.d, "passwd.json")
+        self.table()
+        # the daily-report case: a working dir with its script + logs, a skill dir
+        self.work = os.path.join(self.ha, "daily-report")
+        self.skill = os.path.join(self.ha, ".claude", "skills", "daily-report")
+        os.makedirs(os.path.join(self.work, "logs"))
+        os.makedirs(self.skill)
+        with open(os.path.join(self.skill, "SKILL.md"), "w") as f:
+            f.write("daily report\n")
+        self.run_sh = os.path.join(self.work, "run.sh")
+        with open(self.run_sh, "w") as f:
+            f.write('#!/bin/bash\necho "up home=$HOME user=$USER tok=${BARK_KEY:-none} out=$OUT"\n'
+                    'echo run >> "$OUT/run.log"\nexec sleep 300\n')
+        os.chmod(self.run_sh, 0o755)
+        r = subprocess.run([sys.executable, SUP, "service", "cred", "set", "--login", "verkyyi", "--name",
+                            "BARK_KEY"], env=self.env, input="k3y\n", capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        r = self.run_sup("service", "add", "--login", "verkyyi", "--name", "daily-report", "--cred", "BARK_KEY",
+                         "--env", "OUT=%s/logs" % self.work, "--path", self.work, "--path", self.skill,
+                         "--", "/bin/bash", self.run_sh)
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def reg(self, login):
+        return os.path.join(self.d, "db", "logins", login, "services", "daily-report.json")
+
+    def svclog(self, login):
+        return os.path.join(self.d, "log", "logins", login, "daily-report.log")
+
+    def read(self, f):
+        try:
+            return open(f).read()
+        except IOError:
+            return ""
+
+    def test_move_carries_everything_and_runs_as_the_new_login(self):
+        self.start()
+        pa = until(10, lambda: self.child("svc:verkyyi/daily-report").get("pid"))
+        self.assertTrue(pa, "never ran as the old login")
+        self.assertTrue(until(5, lambda: "home=%s" % self.ha in self.read(self.svclog("verkyyi"))))
+        r = self.run_sup("service", "move", "--login", "verkyyi", "--name", "daily-report", "--to", "verky")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("moved verkyyi/daily-report → verky/daily-report", r.stdout)
+        self.assertFalse(fns.pid_alive(pa), "the old copy still runs")
+        # the entry
+        self.assertFalse(os.path.exists(self.reg("verkyyi")), "the old entry is left")
+        ent = json.load(open(self.reg("verky")))
+        self.assertEqual(os.stat(self.reg("verky")).st_mode & 0o777, 0o600)
+        nwork = os.path.join(self.hb, "daily-report")
+        nskill = os.path.join(self.hb, ".claude", "skills", "daily-report")
+        self.assertEqual((ent["login"], ent["state"]), ("verky", "enabled"))
+        self.assertEqual(ent["exec"], ["/bin/bash", os.path.join(nwork, "run.sh")])
+        self.assertEqual(ent["paths"], [nwork, nskill])
+        self.assertEqual(ent["env"]["OUT"], os.path.join(nwork, "logs"))
+        self.assertEqual(ent["moved_from"]["login"], "verkyyi")
+        # the directories
+        self.assertTrue(os.path.isfile(os.path.join(nwork, "run.sh")))
+        self.assertTrue(os.path.isfile(os.path.join(nskill, "SKILL.md")))
+        self.assertIn("run", self.read(os.path.join(nwork, "logs", "run.log")), "the job's own log did not move")
+        self.assertFalse(os.path.exists(self.work), "the working dir is left in the old home")
+        self.assertFalse(os.path.exists(self.skill), "the skill dir is left in the old home")
+        # the log and the credential
+        self.assertFalse(os.path.exists(self.svclog("verkyyi")), "the log is left under the old login")
+        self.assertIn("home=%s" % self.ha, self.read(self.svclog("verky")), "the log's history did not move")
+        creds = os.path.join(self.d, "db", "logins")
+        self.assertFalse(os.path.exists(os.path.join(creds, "verkyyi", "creds", "BARK_KEY")))
+        self.assertEqual(self.read(os.path.join(creds, "verky", "creds", "BARK_KEY")), "k3y\n")
+        # and it runs as the new login
+        pb = until(10, lambda: self.child("svc:verky/daily-report").get("pid"))
+        self.assertTrue(pb, "it did not start under the new login")
+        self.assertTrue(until(5, lambda: "up home=%s user=verky tok=k3y out=%s/logs" % (self.hb, nwork)
+                              in self.read(self.svclog("verky"))), self.read(self.svclog("verky")))
+        self.assertTrue(until(10, lambda: "svc:verkyyi/daily-report" not in (self.state().get("children") or {})))
+        rows = json.loads(self.run_sup("service", "ls", "--json").stdout)
+        self.assertEqual([(x["login"], x["name"]) for x in rows], [("verky", "daily-report")])
+        # nothing left to stop a release / a removal of the old login
+        self.assertEqual(os.listdir(os.path.dirname(self.reg("verkyyi"))), [])
+
+    def test_move_refuses_onto_an_existing_path(self):
+        os.makedirs(os.path.join(self.hb, ".claude", "skills", "daily-report"))
+        r = self.run_sup("service", "move", "--login", "verkyyi", "--name", "daily-report", "--to", "verky")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("already exists", r.stderr)
+        self.assertTrue(os.path.exists(self.reg("verkyyi")) and not os.path.exists(self.reg("verky")))
+        self.assertEqual(json.load(open(self.reg("verkyyi")))["state"], "enabled")
+        self.assertTrue(os.path.isdir(self.work) and os.path.isdir(self.skill))
+        self.assertEqual(self.run_sup("service", "move", "--login", "verkyyi", "--name", "daily-report",
+                                      "--to", "verkyyi").returncode, 2)
+        self.assertEqual(self.run_sup("service", "move", "--login", "verkyyi", "--name", "nope",
+                                      "--to", "verky").returncode, 1)
+
+    def test_a_stopped_entry_moves_stopped(self):
+        self.assertEqual(self.run_sup("service", "stop", "--login", "verkyyi", "--name", "daily-report").returncode, 0)
+        r = self.run_sup("service", "move", "--login", "verkyyi", "--name", "daily-report", "--to", "verky")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(json.load(open(self.reg("verky")))["state"], "stopped")
+
+    def test_release_refuses_while_entries_are_left(self):
+        with open(os.path.join(self.d, "db", "accounts.json"), "w") as f:
+            json.dump({"verkyyi": {"managed": True, "since": 1}}, f)
+        r = self.run_sup("account", "release", "verkyyi")
+        self.assertEqual(r.returncode, 6, r.stdout + r.stderr)
+        self.assertIn("service move --login verkyyi --name daily-report --to", r.stderr)
+        self.assertTrue(json.load(open(os.path.join(self.d, "db", "accounts.json")))["verkyyi"]["managed"],
+                        "a refused release changed the account")
+        os.makedirs(os.path.join(self.d, "db", "attic"))
+        r = self.run_sup("account", "release", "verkyyi", "--force")
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_front_moves_your_own(self):
+        fe = dict(self.env, FLEET_NODE_SUPERVISOR=SUP, FLEET_SERVICE_SUDO="", FLEET_SERVICE_LOGIN="verkyyi")
+        front = os.path.join(BIN, "fleet-service.sh")
+        r = subprocess.run(["bash", front, "move", "daily-report"], env=fe, capture_output=True, text=True)
+        self.assertEqual(r.returncode, 2)
+        r = subprocess.run(["bash", front, "move", "daily-report", "--to", "verky"], env=fe,
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue(os.path.exists(self.reg("verky")))
 
 
 if __name__ == "__main__":
