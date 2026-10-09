@@ -7597,6 +7597,17 @@ fleet_window_has_agent() {
   return 0
 }
 
+# fleet_reap_state <window> [socket] — the state every reaper judges a window by
+# (issue #2540, EPIC #2535 C5): the agent's own OSC 7501 word (working · blocked ·
+# done · exited), else @claude_state; neither, or a working/blocked word, with no
+# agent process under the pane → exited. ONE reader, bin/fleet-reap-live.py
+# --state — dash-reap's no-repo row, fleet-cleanup and the EPIC backstop call it.
+# rc 1 (nothing printed) when it cannot be read.
+fleet_reap_state() {
+  [ -n "${1:-}" ] || return 1
+  python3 "$_FLEET_LIB_DIR/fleet-reap-live.py" "$1" --state ${2:+--socket-name "$2"} 2>/dev/null
+}
+
 # fleet_session_slot_holders <sess> → `<window id>\t<fleet_id>\t<name>` for each
 # window that holds a slot in that fleet — the refusal names them (issue #2404 ③),
 # so 「4/4」 is never a mystery and the way out is one command.

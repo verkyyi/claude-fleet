@@ -65,6 +65,21 @@ out=$(bash "$GATE" --bogus issue-1 2>&1); eq "unknown flag → usage" 2 "$?"
 printf 'not json' > "$WORK/bad.json"
 out=$(bash "$GATE" --children-json "$WORK/bad.json" issue-1 2>&1); eq "unreadable ledger read → clear (the pre-#921 behaviour)" 0 "$?"
 
+# --- issue #2540: the agent's own word on a window here -------------------------
+# Through the state seam (fleet_reap_state): working / blocked holds even a
+# ledger `done`; done / exited lifts a stale hook `working`, never a looping one.
+cat > "$WORK/self" <<'SH'
+#!/bin/sh
+case "$2" in @1) echo done ;; @2) echo done ;; @3) echo blocked ;; @8) echo working ;; *) exit 1 ;; esac
+SH
+chmod +x "$WORK/self"
+export FLEET_EPIC_BACKSTOP_STATE_CMD="$WORK/self"
+run issue-3; eq "#2540 7501 blocked holds a ledger done" 'backstop skipped: child busy (issue-3 agent: blocked)' "$out"
+run issue-8; eq "#2540 7501 working holds an idle row" 'backstop skipped: child busy (issue-8 agent: working)' "$out"
+run issue-1; eq "#2540 7501 done lifts a stale working stamp" 'clear: issue-1 done' "$out"
+run issue-2; eq "#2540 …never a looping one (@loop says it)" 'backstop skipped: child busy (issue-2 looping)' "$out"
+run issue-7; eq "#2540 no word → the ledger state, as before" 'backstop skipped: child busy (issue-7 waking)' "$out"
+unset FLEET_EPIC_BACKSTOP_STATE_CMD
 
 # --- issue #1110: find before calling it gone -----------------------------------
 # The local lookup (seam): a member missing from the ledger — a keyless hub loop

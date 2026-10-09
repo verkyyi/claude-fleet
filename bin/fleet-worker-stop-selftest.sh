@@ -26,7 +26,9 @@
 #  11. dash-reap.sh on a no-repo row: done → the same graceful stop (reaped:full),
 #      working → skip:live, untouched (no more refused:no-issue); no state at all
 #      (issue #2505): skip:live while an agent runs there, reaped:full once it is
-#      a test identity's (@test_identity) or no agent runs (@wrap_gone)
+#      a test identity's (@test_identity) or no agent runs (@wrap_gone); the
+#      agent's own OSC 7501 word (issue #2540) outranks the stamp — blocked keeps,
+#      done stops — and no word, no state, no agent process stops as exited
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 REAL_TMUX=$(command -v tmux) || { printf 'selftest: tmux not installed — SKIP\n' >&2; exit 0; }
@@ -239,6 +241,28 @@ tf set-window-option -t "$w11b" @wrap_gone 1
 reap "$w11b" --yes
 [ "$rc" = 0 ] && [ "$out" = reaped:full ] || fail "11: no state, no agent expected reaped:full/0" "rc=$rc out=$out err=$(cat "$WORK/err")"
 has_win "$w11b" && fail "11: the no-agent row survived ⌃x"
+# the agent's own word (issue #2540): OSC 7501's @agent_status outranks the stamp
+F7=77777777-7777-4777-8777-777777777777; F8=88888888-8888-4888-8888-888888888888
+w11c=$(mkwin norepo-3 "$SHELLED" -); tf set-window-option -t "$w11c" @norepo 1
+tf set-window-option -t "$w11c" @fleet_id "$F7"
+w11d=$(mkwin norepo-4 'while :; do sleep 300; done' -); tf set-window-option -t "$w11d" @norepo 1
+tf set-window-option -t "$w11d" @fleet_id "$F8"
+sleep 0.4
+tf set-window-option -t "$w11c" @claude_state "done"
+tf set-window-option -t "$w11c" @agent_status '{"state":"blocked","kind":"permission","msg":"","app":"claude","ts":1}'
+reap "$w11c" --yes
+[ "$rc" = 3 ] && [ "$out" = skip:live ] || fail "11: 7501 blocked over a done stamp expected skip:live/3" "rc=$rc out=$out err=$(cat "$WORK/err")"
+has_win "$w11c" || fail "11: a 7501-blocked row was closed"
+tf set-window-option -t "$w11c" @claude_state working
+tf set-window-option -t "$w11c" @agent_status '{"state":"done","kind":"","msg":"","app":"claude","ts":1}'
+reap "$w11c" --yes
+[ "$rc" = 0 ] && [ "$out" = reaped:full ] || fail "11: 7501 done over a working stamp expected reaped:full/0" "rc=$rc out=$out err=$(cat "$WORK/err")"
+has_win "$w11c" && fail "11: the 7501-done row survived ⌃x"
+# no word, no stamp, no agent process (an agent that never started): exited
+tf set-window-option -u -t "$w11d" @claude_state 2>/dev/null
+reap "$w11d" --yes
+[ "$rc" = 0 ] && [ "$out" = reaped:full ] || fail "11: no word, no state, no agent process expected reaped:full/0" "rc=$rc out=$out err=$(cat "$WORK/err")"
+has_win "$w11d" && fail "11: the agentless row survived ⌃x"
 
 # --- 9. a multi-repo fleet (issue #1018): `<repo>:issue-N` stops THAT repo's -----
 #        window only; a bare key two repos hold is ambiguous; an unhosted repo is

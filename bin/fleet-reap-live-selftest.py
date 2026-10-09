@@ -22,8 +22,8 @@ spec.loader.exec_module(live)
 
 class LiveTests(unittest.TestCase):
     def probe(self, state="done", comm="claude", age="00:10", commands=None, roots="100\n", minimum=1800, lifecycle="", hold="",
-              merged_at=None, waived=None, now=None, loop="\t", wait=""):
-        outputs = iter([hold, loop, lifecycle, state, roots, f"100 1 01:00:00 zsh\n101 100 {age} {comm}\n102 1 00:01 codex\n",
+              merged_at=None, waived=None, now=None, loop="\t", wait="", status=""):
+        outputs = iter([hold, loop, lifecycle, state + ("\t" + status if status else ""), roots, f"100 1 01:00:00 zsh\n101 100 {age} {comm}\n102 1 00:01 codex\n",
                         commands if commands is not None else f"100 zsh\n101 {comm}\n102 codex\n"])
         with patch.object(live, "read", side_effect=lambda *args: next(outputs)), \
              patch.object(live, "waiting", return_value=wait):
@@ -101,6 +101,56 @@ class LiveTests(unittest.TestCase):
         self.assertEqual(self.probe(comm="node", commands="", age="10:00", merged_at=NOW-300, now=NOW), "unknown:agent-command")
         # Without --merged-at: unchanged.
         self.assertEqual(self.probe(age="10:00"), "young-agent:claude:600s<1800s")
+
+    def test_agent_self_report_decides(self):
+        # Issue #2540 (EPIC #2535 C5): the agent's own OSC 7501 word first.
+        def st(word):
+            return '{"state":"%s","kind":"","msg":"","app":"claude","ts":1}' % word
+        # done / error / exited: reapable whatever the hook stamped, young or not.
+        for word in ("done", "error", "exited"):
+            for stamped in ("", "done", "working", "needs", "looping"):
+                self.assertIsNone(self.probe(state=stamped, status=st(word)), (word, stamped))
+        # idle is done, but it does not waive the young-agent gate (a fresh agent says it).
+        self.assertTrue(self.probe(state="working", status=st("idle")).startswith("young-agent:claude:"))
+        self.assertIsNone(self.probe(state="working", status=st("idle"), age="2:00:00"))
+        # working / blocked: kept while an agent runs — even stamped done, even old.
+        for word in ("working", "blocked"):
+            self.assertEqual(self.probe(state="done", status=st(word), age="2:00:00"), "agent:" + word)
+            # ...and with no agent left under the pane, the relay died with it: exited.
+            self.assertIsNone(self.probe(state="working", status=st(word), comm="zsh"))
+            self.assertEqual(self.probe(state="done", status=st(word), comm="node", commands=""), "unknown:agent-command")
+        # Every gate ahead of the state still applies.
+        self.assertEqual(self.probe(hold="1", status=st("done")), "retained:hold")
+        self.assertEqual(self.probe(wait="bg", status=st("done")), "retained:bg")
+        self.assertEqual(self.probe(lifecycle="waking", status=st("done")), "retained:waking")
+        # No word, or one that is no state (clear, garbage): the stamp decides, as before.
+        for raw in ("", '{"state":"clear"}', "not json"):
+            self.assertEqual(self.probe(state="working", status=raw, age="2:00:00"), "state:working")
+
+    def test_reap_state_cli(self):
+        # `--state`: the one answer dash-reap's no-repo branch, fleet-cleanup and
+        # the EPIC backstop judge a window by (issue #2540).
+        def run(stamped, status, ps="100 1 01:00:00 zsh\n101 100 10:00 claude", cmds="100 zsh\n101 claude"):
+            replies = iter([stamped + "\t" + status, "100", ps, cmds])
+            out = []
+            with patch.object(sys, "argv", ["probe", "@1", "--state"]), \
+                 patch.object(live, "read", side_effect=lambda *args: next(replies)), \
+                 patch("builtins.print", side_effect=lambda *a, **k: out.append(" ".join(map(str, a)))):
+                rc = live.main()
+            return rc, out[0] if out else ""
+        js = '{"state":"%s"}'
+        self.assertEqual(run("working", js % "done"), (0, "done"))
+        self.assertEqual(run("", js % "idle"), (0, "done"))
+        self.assertEqual(run("done", js % "error"), (0, "exited"))
+        self.assertEqual(run("done", js % "blocked"), (0, "blocked"))
+        self.assertEqual(run("done", js % "working"), (0, "working"))
+        self.assertEqual(run("done", js % "working", ps="100 1 01:00:00 zsh", cmds="100 zsh"), (0, "exited"))
+        # No 7501 word: the stamp; none either and no agent process → exited (#2404).
+        self.assertEqual(run("needs", ""), (0, "needs"))
+        self.assertEqual(run("", ""), (0, ""))
+        self.assertEqual(run("", "", ps="100 1 01:00:00 zsh", cmds="100 zsh"), (0, "exited"))
+        with patch.object(sys, "argv", ["probe", "pane", "--state"]):
+            self.assertEqual(live.main(), 2)
 
     def test_merged_looping_worker_is_reapable(self):
         # Issue #1356 (R4 of EPIC #1529): a worker whose own PR merged during its
@@ -244,6 +294,18 @@ class LiveTests(unittest.TestCase):
                 result = subprocess.run([sys.executable, str(BIN / "fleet-reap-live.py"), wid], env=env, capture_output=True)
                 self.assertEqual(result.returncode, 1)
                 self.assertIn(b"state:working", result.stdout)
+                # Issue #2540: the agent's own word outranks the stamp, both ways.
+                tm("set-window-option", "-t", wid, "@agent_status", '{"state":"done"}')
+                env.pop("FLEET_REAP_MIN_AGE")
+                result = subprocess.run([sys.executable, str(BIN / "fleet-reap-live.py"), wid], env=env, capture_output=True)
+                self.assertEqual(result.returncode, 0, result.stdout)
+                tm("set-window-option", "-t", wid, "@agent_status", '{"state":"blocked"}')
+                tm("set-window-option", "-t", wid, "@claude_state", "done")
+                result = subprocess.run([sys.executable, str(BIN / "fleet-reap-live.py"), wid], env=env, capture_output=True)
+                self.assertEqual((result.returncode, result.stdout), (1, b"agent:blocked\n"))
+                result = subprocess.run([sys.executable, str(BIN / "fleet-reap-live.py"), wid, "--state"],
+                                        env=env, capture_output=True)
+                self.assertEqual(result.stdout, b"blocked\n")
             finally:
                 subprocess.run([tmux, "-L", label, "kill-server"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 

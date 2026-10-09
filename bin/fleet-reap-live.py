@@ -7,6 +7,7 @@ outside caller selects an explicit fleet socket label.
 """
 
 import argparse
+import json
 import os
 from pathlib import Path
 import re
@@ -82,6 +83,104 @@ def merged_in_life(merged_at, age, now):
     return now - age < merged_at <= now
 
 
+# The agent's own word (issue #2540, EPIC #2535 C5): the last OSC 7501 report the
+# relay wrote on @agent_status (bin/fleet-status-7501.py) — mapped the way C2 maps
+# it onto @claude_state. Its LAST word, at any age: a finished agent says nothing
+# more, and one that starts again says `working` first; an agent that dies takes
+# the relay's `exited` with it. Unparsed / clear / a sub-task's entry → None.
+SELF_STATES = {"working": "working", "blocked": "blocked", "done": "done", "idle": "done",
+               "error": "exited", "exited": "exited"}
+
+
+# The words that end a turn: only these waive the young-agent gate. `idle` does
+# not — an agent says it before its seed prompt lands, which is the very window
+# that gate protects (#565).
+FINISHED = ("done", "error", "exited")
+
+
+def self_word(raw):
+    """@agent_status JSON → its raw 7501 state, '' when there is none."""
+    try:
+        rec = json.loads(raw) if raw else None
+    except ValueError:
+        return ""
+    word = rec.get("state") if isinstance(rec, dict) else ""
+    return word if word in SELF_STATES else ""
+
+
+def self_state(raw):
+    return SELF_STATES.get(self_word(raw))
+
+
+def process_table():
+    processes, children, commands = {}, {}, {}
+    for line in read("ps", "-axo", "pid=,ppid=,etime=,comm=").splitlines():
+        fields = line.split(None, 3)
+        if len(fields) != 4 or not fields[0].isdigit() or not fields[1].isdigit():
+            continue
+        pid, parent, age, comm = fields
+        processes[pid] = (age_seconds(age), comm)
+        children.setdefault(parent, []).append(pid)
+    for line in read("ps", "-axo", "pid=,command=").splitlines():
+        parts = line.split(None, 1)
+        if len(parts) == 2:
+            commands[parts[0]] = parts[1]
+    return processes, children, commands
+
+
+def agent_under(roots, table):
+    """True / False: does an agent run under these pane pids? None = cannot tell."""
+    processes, children, commands = table
+    fake = os.environ.get("FLEET_CLAUDE_COMM", "")
+    seen, todo = set(), list(roots)
+    while todo:
+        pid = todo.pop()
+        if pid in seen or pid not in processes:
+            continue
+        seen.add(pid)
+        comm = processes[pid][1]
+        if agent_name(comm, commands.get(pid, "")):
+            return True
+        # a selftest's fake agent is a script: the same FLEET_CLAUDE_COMM seam
+        # fleet_pane_claude_pids honours, on a shell's argv only
+        if fake and Path(comm).name.lstrip("-") in ("bash", "sh", "zsh", "dash") \
+                and fake in commands.get(pid, ""):
+            return True
+        if re.fullmatch(r"node\d*|bun", Path(comm).name) and pid not in commands:
+            return None
+        todo.extend(children.get(pid, []))
+    return False
+
+
+def agent_present(tmux, target):
+    """agent_under for a window's panes; None when its panes cannot be read."""
+    roots = read(*tmux, "list-panes", "-t", target, "-F", "#{pane_pid}").split()
+    if not roots or not all(p.isdigit() for p in roots):
+        return None
+    table = process_table()
+    if not all(pid in table[0] for pid in roots):
+        return None
+    return agent_under(roots, table)
+
+
+def reap_state(tmux, target):
+    """The state every reaper judges a window by (issue #2540) — one answer for
+    dash-reap, fleet-cleanup and the EPIC backstop (`--state`):
+      the agent's 7501 word (working | blocked | done | exited), else @claude_state;
+      a 7501 working/blocked with no agent process left under the pane (the relay
+      went down with it) and a window with neither a 7501 word nor a stamped state
+      nor an agent process (an agent that never started, #2404) → exited."""
+    raw = read(*tmux, "display-message", "-p", "-t", target,
+               "#{@claude_state}\t#{@agent_status}").rstrip("\n")
+    stamped, _, status = raw.partition("\t")
+    stamped = stamped.strip()
+    said = self_state(status)
+    if said in ("working", "blocked") or (said is None and not stamped):
+        if agent_present(tmux, target) is False:
+            return "exited"
+    return said or stamped
+
+
 # Issue #2453: the gate only has to cover a just-spawned agent that has not
 # stamped @claude_state yet; every other reap guard is independent of age.
 DEFAULT_MIN_AGE = 300
@@ -117,7 +216,19 @@ def live_reason(target, minimum, socket_name=None, merged_at=None, waived=None, 
     sleeping = lifecycle == "sleeping"
     if lifecycle and not sleeping:
         return "retained:" + lifecycle
-    state = read(*tmux, "display-message", "-p", "-t", target, "#{@claude_state}").strip()
+    raw = read(*tmux, "display-message", "-p", "-t", target,
+               "#{@claude_state}\t#{@agent_status}").rstrip("\n")
+    state, _, status = raw.partition("\t")
+    state = state.strip()
+    # The agent's own word first (issue #2540): done / idle / error / exited is a
+    # finished agent whatever a hook stamped — reapable, and on done / error /
+    # exited the young-agent gate is waived (FINISHED: it covers an agent that has
+    # not finished anything yet); working /
+    # blocked is a turn in flight — kept, unless the walk below finds no agent
+    # left to say it (the relay went down with it: exited).
+    said, finished = self_state(status), self_word(status) in FINISHED
+    if said in ("done", "exited"):
+        state = said
     # A `looping` stamp on a worker whose PR merged (issue #1356, R4 of EPIC
     # #1529): its own ship is done, and what holds the stamp is a round it
     # scheduled to wait for that merge. It is waived ONLY with a merge time and
@@ -127,27 +238,22 @@ def live_reason(target, minimum, socket_name=None, merged_at=None, waived=None, 
     looping = state == "looping" and merged_at is not None
     # `exited` (issue #1784): the agent left and the pane holds the recovery page —
     # as idle as `done`; the walk below still refuses any agent found under it.
-    if state not in ("", "done", "exited") and not looping:
+    busy = said in ("working", "blocked")
+    if not busy and state not in ("", "done", "exited") and not looping:
         return "state:"+state
     roots = read(*tmux, "list-panes", "-t", target, "-F", "#{pane_pid}").split()
     if not roots or not all(p.isdigit() for p in roots):
         return "unknown:pane-pids"
-    processes = {}
-    children = {}
-    for line in read("ps", "-axo", "pid=,ppid=,etime=,comm=").splitlines():
-        fields = line.split(None, 3)
-        if len(fields) != 4 or not fields[0].isdigit() or not fields[1].isdigit():
-            continue
-        pid, parent, age, comm = fields
-        processes[pid] = (age_seconds(age), comm)
-        children.setdefault(parent, []).append(pid)
+    processes, children, commands = process_table()
     if not all(pid in processes for pid in roots):
         return "unknown:pane-process"
-    commands = {}
-    for line in read("ps", "-axo", "pid=,command=").splitlines():
-        parts = line.split(None, 1)
-        if len(parts) == 2:
-            commands[parts[0]] = parts[1]
+    if busy:
+        found = agent_under(roots, (processes, children, commands))
+        if found is None:
+            return "unknown:agent-command"
+        if found:
+            return "agent:" + said
+        state = "exited"
     seen, todo, shipped = set(), list(roots), False
     while todo:
         pid = todo.pop()
@@ -168,7 +274,7 @@ def live_reason(target, minimum, socket_name=None, merged_at=None, waived=None, 
             if not merged_in_life(merged_at, age, now):
                 return "state:looping"
             shipped = True
-        if agent and age < minimum:
+        if agent and age < minimum and not finished:
             if state in ("done", "looping") and merged_in_life(merged_at, age, now):
                 if waived is not None:
                     waived.append(f"{agent}:{age}s<{minimum}s")
@@ -193,6 +299,8 @@ def main():
     parser.add_argument("--socket-name", help="fleet socket label for callers outside tmux")
     parser.add_argument("--worktree", help="check bound windows/pane paths across registered fleets")
     parser.add_argument("--socket-names", default="", help="newline-separated registered socket labels")
+    parser.add_argument("--state", action="store_true",
+                        help="print the state a reaper judges the target by (issue #2540) and exit 0")
     parser.add_argument("--merged-at", help="PR merge epoch: waive the age gate for an agent alive at the merge (#1329)")
     args = parser.parse_args()
     raw = os.environ.get("FLEET_REAP_MIN_AGE", str(DEFAULT_MIN_AGE))
@@ -201,6 +309,15 @@ def main():
     if args.merged_at is not None and re.fullmatch(r"[1-9]\d*", args.merged_at):
         merged_at = int(args.merged_at)
     waived = []
+    if args.state:
+        tmux = ["tmux"] + (["-L", args.socket_name] if args.socket_name is not None else [])
+        try:
+            if not args.target or not re.fullmatch(r"@\d+", args.target):
+                return 2
+            print(reap_state(tmux, args.target))
+        except (OSError, ValueError, subprocess.SubprocessError):
+            return 1
+        return 0
     try:
         if args.worktree:
             reason = worktree_reason(args.worktree, minimum, args.socket_names.splitlines(),
