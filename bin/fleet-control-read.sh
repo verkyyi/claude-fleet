@@ -178,6 +178,9 @@ case "$mode" in
     # top bar (#1904) show it instead of the window name's slug; empty for a
     # scratch, a no-repo window or an issue the cache does not hold (the reader
     # falls back to the name). Tabs inside a title become spaces: it is a column.
+    # A window bound to no issue and driving no EPIC sends its @task_line there
+    # instead (issue #2359): the first sentence its person typed, so a
+    # `我的会话` / `scratch-N` row says what it is about on every machine.
     # Column 19 (issue #1951): `detail=<question>` — what a session in `needs`
     # asks, in its own words (@claude_needs_detail, ≤120 characters), so the
     # client's bar and its notification can say it; empty when it waits on nothing.
@@ -228,7 +231,7 @@ case "$mode" in
           print ENVIRON["FR"] "\t" substr($2, 2) "\t" t }' "$_f" 2>/dev/null)$'\n'
     done < <(fleet_repos "$sess" 2>/dev/null)
     [ "$_nr" = 1 ] || drepo=''   # a window with no repo column falls to the fleet's ONLY repo
-    cwds=$(tmux -u -L "$sock" list-windows -t "=$sess" ${lwf[@]+"${lwf[@]}"} -F $'#{window_id}\t#{pane_current_path}\t#{@norepo}\t#{@cc_agent}\t#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}\t#{?@born,#{@born},#{window_created}}\t#{@reap_policy}\t#{?#{==:#{@claude_state},needs},#{@claude_needs_detail},}\t#{?#{==:#{@fleet_role},orchestrator},orchestrator,}\t#{@epic}\t#{?#{==:#{@backfill},failed},failed,}\t#{?#{==:#{@test_identity},1},1,}' 2>/dev/null) || cwds=''
+    cwds=$(tmux -u -L "$sock" list-windows -t "=$sess" ${lwf[@]+"${lwf[@]}"} -F $'#{window_id}\t#{pane_current_path}\t#{@norepo}\t#{@cc_agent}\t#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}\t#{?@born,#{@born},#{window_created}}\t#{@reap_policy}\t#{?#{==:#{@claude_state},needs},#{@claude_needs_detail},}\t#{?#{==:#{@fleet_role},orchestrator},orchestrator,}\t#{@epic}\t#{?#{==:#{@backfill},failed},failed,}\t#{?#{==:#{@test_identity},1},1,}\t#{@task_line}' 2>/dev/null) || cwds=''
     fleet_cfg_expected_load; fleet_cfg_broken_load     # broken (#2076): judged here too
     estale=''
     while IFS=$'\t' read -r _sr _sn _sa _st; do
@@ -241,7 +244,9 @@ case "$mode" in
       c2=${rest%%$'\t'*}; rest=${rest#*$'\t'}
       c3=${rest%%$'\t'*}; rest=${rest#*$'\t'}
       wt=${rest%%$'\t'*}; rest=${rest#*$'\t'}
-      wrow=$(printf '%s\n' "$cwds" | awk -F'\t' -v w="$wid" '$1 == w { print $2 "\t" $3 "\t" $4 "\t" $5 "\t" $6 "\t" $7 "\t" $8 "\t" $9 "\t" $10 "\t" $11 "\t" $12; exit }')
+      wrow=$(printf '%s\n' "$cwds" | awk -F'\t' -v w="$wid" '$1 == w { print $2 "\t" $3 "\t" $4 "\t" $5 "\t" $6 "\t" $7 "\t" $8 "\t" $9 "\t" $10 "\t" $11 "\t" $12 "\t" $13; exit }')
+      wtl=${wrow##*$'\t'}; wrow=${wrow%$'\t'*}
+      wtl=${wtl//$'\r'/ }
       wtest=${wrow##*$'\t'}; wrow=${wrow%$'\t'*}
       [ "$wtest" = 1 ] || wtest=''
       wbf=${wrow##*$'\t'}; wrow=${wrow%$'\t'*}
@@ -295,6 +300,9 @@ case "$mode" in
           case "$_el:$_em" in *[!0-9:]*|:*|*:) ;; *) wepic="$wepic:$_el/$_em" ;; esac ;;
         esac
       fi
+      # bound to nothing, driving nothing (issue #2359): the session's first
+      # sentence (@task_line, set-claude-state.sh — tab-free, ≤40 characters)
+      [ -z "$t" ] && [ -z "$c2" ] && [ -z "$wepic" ] && t=$wtl
       row=$wid$'\t'$c2$'\t'$c3$'\t'$wt$'\t'$rest
       b=''; [ -z "$busy" ] || b=$(printf '%s\n' "$busy" | awk -v w="$wid" '$1 == w { print $2; exit }')
       cl='' cb='' cts='' cm='' ce='' cas=''

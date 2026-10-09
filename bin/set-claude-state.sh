@@ -260,6 +260,35 @@ case "${1:-}" in
   *)     sem="working" ;;   # PostToolUse / prompt submitted
 esac
 
+# ── @task_line: the session's first sentence (issue #2359) ───────────────────
+# A session bound to no issue has nothing that says what it is about: its name is
+# `我的会话` / `scratch-N`. Its first prompt does — so the first UserPromptSubmit
+# stamps it, cleaned (control characters → one space, at most 40 characters), and
+# the sidebar, `fleet ls` and the node's inventory (`title=`) show it beside the
+# name. Rides the `working` entry every installed hook table already calls, told
+# apart on the payload's own hook_event_name. Once stamped this is the same one
+# tmux read the blocked check below makes; until then a PostToolUse pays a `cat`
+# (a session's first event is its first prompt, so that is a turn at most).
+_hp=''; _hp_read=0
+if [ -z "$via" ] && [ "${1:-}" = working ] && [ ! -t 0 ] \
+   && [ -z "$(tmux display-message -p -t "$TMUX_PANE" '#{@task_line}' 2>/dev/null)" ]; then
+  _hp=$(cat 2>/dev/null); _hp_read=1
+  case "$_hp" in *UserPromptSubmit*)
+    _tl=$(printf '%s' "$_hp" | python3 -c '
+import json, re, sys
+try:
+    d = json.load(sys.stdin)
+except ValueError:
+    sys.exit(0)
+p = d.get("prompt") if isinstance(d, dict) and d.get("hook_event_name") == "UserPromptSubmit" else None
+if isinstance(p, str):
+    p = re.sub(r"\s+", " ", re.sub(r"[\x00-\x1f\x7f]", " ", p)).strip()
+    sys.stdout.write(p if len(p) <= 40 else p[:39].rstrip() + "…")
+' 2>/dev/null)
+    [ -n "$_tl" ] && tmux set-window-option -t "$TMUX_PANE" @task_line "$_tl" 2>/dev/null ;;
+  esac
+fi
+
 # ── `blocked` is STICKY (issue #704) ─────────────────────────────────────────
 # Every write that is the ordinary traffic of ONE turn — PreToolUse → working,
 # PostToolUse → working, Stop → done — leaves a `blocked` pane exactly as it is.
@@ -289,7 +318,12 @@ case "$sem" in
       if [ "$sem" = working ] && [ "${1:-}" != busy ] && [ ! -t 0 ]; then
         # Parse the root field: JSON whitespace and a nested tool result mentioning
         # UserPromptSubmit must not change the meaning. Unreadable input stays red.
-        _ev=$(python3 -c 'import json, sys; print(json.load(sys.stdin).get("hook_event_name", ""))' 2>/dev/null)
+        # (the @task_line read above may have drained it already: parse its copy)
+        if [ "$_hp_read" = 1 ]; then
+          _ev=$(printf '%s' "$_hp" | python3 -c 'import json, sys; print(json.load(sys.stdin).get("hook_event_name", ""))' 2>/dev/null)
+        else
+          _ev=$(python3 -c 'import json, sys; print(json.load(sys.stdin).get("hook_event_name", ""))' 2>/dev/null)
+        fi
       fi
       [ "$_ev" = UserPromptSubmit ] || sem="leave"
     fi ;;

@@ -167,7 +167,7 @@ eq    "A2: …and back to bare once it goes" "$(fleet_repo_name alpha o/tokenled
 # --- B. the sidebar frame -------------------------------------------------------
 s=$(side)
 eq    "B: sidebar groups the same way" "$(printf '%s\n' "$s" | awk -F'|' '{ print $4 }' | tr '\n' ' ')" \
-      "claude-fleet (2) issue-1 issue-3 tokenledger (2) issue-2 no repo (1) norepo "
+      "claude-fleet (2) issue-1 issue-3 tokenledger (2) issue-2 no repo (1) 我的会话 "
 eq    "B: sidebar headings carry five fields" "$(printf '%s\n' "$s" | grep '^hdr|' | awk -F'|' '{ print NF }' | sort -u)" "5"
 sel=$(printf '%s\n' "$s" | python3 -c '
 import importlib.util, sys

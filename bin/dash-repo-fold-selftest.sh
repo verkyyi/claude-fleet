@@ -114,7 +114,7 @@ eq    "A: …and still carries its spawn target in the 4th field" \
 hasnt "A: no empty-state hint while sessions are merely folded" "$r" "No sessions"
 s=$(side)
 eq    "A: the sidebar draws the same fold" "$(printf '%s\n' "$s" | awk -F'|' '{ print $4 }' | tr '\n' ' ')" \
-      "claude-fleet (2) issue-1 issue-3 ▸ tokenledger (2) no repo (1) norepo "
+      "claude-fleet (2) issue-1 issue-3 ▸ tokenledger (2) no repo (1) 我的会话 "
 eq    "A: …its heading keeps its repo in the state field" "$(printf '%s\n' "$s" | grep '▸ tokenledger' | awk -F'|' '{ print $2 }')" "o/tokenledger"
 out=$(fold collapse hdr 'abc' o/tokenledger)
 eq    "A: with text on the prompt line ← is the cursor key" "$out" "backward-char"
@@ -178,7 +178,7 @@ eq    "D: quiet again — hidden again" "$(rows | names | tr '\n' ' ')" \
 cur=$(tmux list-windows -t alpha -F '#{window_id} #{window_name}' | awk '$2 == "issue-2" { print $1 }')
 eq    "D: the sidebar keeps its current window inside a folded group" \
       "$(FLEET_SIDEBAR_CURRENT=$cur side | awk -F'|' '{ print $4 }' | tr '\n' ' ')" \
-      "claude-fleet (2) issue-1 issue-3 ▸ tokenledger (2) issue-2 no repo (1) norepo "
+      "claude-fleet (2) issue-1 issue-3 ▸ tokenledger (2) issue-2 no repo (1) 我的会话 "
 eq    "D: …the hub does not (it has no current row)" "$(rows | grep -c 'issue-2')" "0"
 fold expand hdr:o/tokenledger >/dev/null
 

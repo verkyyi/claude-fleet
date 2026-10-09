@@ -87,7 +87,7 @@ R="${E}0m"; US=$'\x1f'
 # row: its name reads empty, which every pass skips — unless FLEET_ROWS_TEST=1
 # (`fleet ls`, which lists and closes them).
 _WTEST='#{?@test_identity,,'; [ "${FLEET_ROWS_TEST:-0}" = 1 ] && _WTEST=''
-WFMT="#{session_name}${US}#{window_index}${US}#{?#{||:#{@remote},#{@solo_shell}},,#{?#{==:#{@fleet_role},orchestrator},home,${_WTEST}#{window_name}${_WTEST:+\}}}}${US}#{pane_current_path}${US}#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{?#{==:#{@claude_state},looping},#{@claude_wait},#{@claude_needs}}${US}#{@expand}${US}#{@pin}${US}#{?@degenerate_ts,degen=#{@degenerate_ts}:,}#{?@mem_killed,mem:,}#{?@claude_mem_warn,fat=#{@claude_mem_warn}:,}#{?@ctx_warn,ctxw:,}#{?@quota_stuck,stuck:,}#{@quota_failover}${US}#{@reap_due}${US}#{@reap_seen}${US}#{@reap_state_ts}${US}#{@repo}${US}#{@norepo}${US}#{@sleep_since}#{?@sleep_wake_deferred,:#{@sleep_wake_deferred},}${US}#{@repo_fold}${US}#{@loop}${US}#{@title_info}${US}#{?@born,#{@born},#{window_created}}${US}#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}${US}${US}#{@reap_policy}${US}#{@epic}${US}#{?#{==:#{@backfill},failed},failed,}"
+WFMT="#{session_name}${US}#{window_index}${US}#{?#{||:#{@remote},#{@solo_shell}},,#{?#{==:#{@fleet_role},orchestrator},home,${_WTEST}#{window_name}${_WTEST:+\}}}}${US}#{pane_current_path}${US}#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{?#{==:#{@claude_state},looping},#{@claude_wait},#{@claude_needs}}${US}#{@expand}${US}#{@pin}${US}#{?@degenerate_ts,degen=#{@degenerate_ts}:,}#{?@mem_killed,mem:,}#{?@claude_mem_warn,fat=#{@claude_mem_warn}:,}#{?@ctx_warn,ctxw:,}#{?@quota_stuck,stuck:,}#{@quota_failover}${US}#{@reap_due}${US}#{@reap_seen}${US}#{@reap_state_ts}${US}#{@repo}${US}#{@norepo}${US}#{@sleep_since}#{?@sleep_wake_deferred,:#{@sleep_wake_deferred},}${US}#{@repo_fold}${US}#{@loop}${US}#{@title_info}${US}#{?@born,#{@born},#{window_created}}${US}#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}${US}#{@task_line}${US}#{@reap_policy}${US}#{@epic}${US}#{?#{==:#{@backfill},failed},failed,}"
 
 # pad/truncate a plaintext string to N DISPLAY chars (locale-aware ${#}) → $fld_out
 fld() { local w="$1" s="$2" n=${#2}
@@ -887,6 +887,9 @@ fleet_cfg_expected_load; fleet_cfg_broken_load
 CFG_STALE_T='' CFG_RENEW_T='' CFG_BROKEN_T=''
 while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent hnd nsub exp pin qwait reap_due reap_seen reap_stamp wrepo wnorepo slept _ wloop wtitle wborn wcfg wittl wreap wepic wbf; do
   [ -z "$name" ] && continue
+  # A local window's title slot is its @task_line (issue #2359): the first
+  # sentence of a session bound to no issue, the title's fallback below.
+  wtl=''; case "$wid" in wid:*) ;; *) wtl=$wittl; wittl='' ;; esac
   epic_v "$wepic" "$wid" "$wittl"
   # Is this session's configuration the one it would get now? A local row
   # compares its @agent_cfg (fleet_cfg_state); a row on another machine carries
@@ -916,7 +919,9 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
            if [ -n "$_ik" ]; then
              case "$ITTL" in *$'\n'"$_ik"$'\t'*) wittl=${ITTL#*$'\n'"$_ik"$'\t'}; wittl=${wittl%%$'\n'*} ;; esac
            fi ;;
-         esac ;;
+         esac
+         # bound to nothing (issue #2359): its first sentence is what it is about
+         [ -z "$wittl" ] && [ -z "$iss" ] && [ -z "$en" ] && wittl=$wtl ;;
     esac
     [ -z "$wittl" ] || cfgf="$US${cfgf#"$US"}$US$wittl"
     # field 15 (issue #1902): the session's @reap_policy, the view words it
@@ -1145,13 +1150,18 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
     fi
     dname=${epic_theme:-#$en}
     issd="#$en"
-  elif [ "$SIDEBAR" = 1 ] && [ -n "$wittl" ]; then
+  elif [ "$SIDEBAR" = 1 ]; then
     # A window named only by its number (issue #2355) — `issue-2173`, `scratch-4`
     # (a spawn whose title read missed, a bind, a resume) — shows its issue's
-    # title instead: a number says nothing about the work.
+    # title instead: a number says nothing about the work. An unbound one's
+    # title is its first sentence (@task_line, issue #2359).
+    # A no-repo session (`我的会话`, or an older `norepo-N`) reads
+    # `我的会话 · <first sentence>` (EPIC #2563 约定 3) — never its number.
+    _nn=${name##*-}; case "$_nn" in ''|*[!0-9]*) _nn='' ;; esac
     case "${name##*:}" in
-      issue-*|scratch-*) _nn=${name##*-}
-        case "$_nn" in ''|*[!0-9]*) ;; *) dname=$wittl ;; esac ;;
+      issue-*|scratch-*) [ -n "$_nn" ] && [ -n "$wittl" ] && dname=$wittl ;;
+      我的会话|norepo) dname="我的会话${wittl:+ · $wittl}" ;;
+      我的会话-*|norepo-*) [ -n "$_nn" ] && dname="我的会话${wittl:+ · $wittl}" ;;
     esac
   fi
   # agent tag (issue #547): a window running a non-Claude agent (@cc_agent, stamped

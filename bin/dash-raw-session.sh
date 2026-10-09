@@ -559,6 +559,9 @@ fi
 # No repo tag, even with 2+ repos (issue #1023 dropped #793's `tl·` prefix): the
 # dash shows the repo, and identity is `@repo`, never the name.
 base="${custom:-$slug}"
+# A no-repo session reads `我的会话` (issue #2359, EPIC #2563 约定 3), never
+# `norepo-N`: what it is about is its @task_line, the first sentence, beside it.
+[ "$NOREPO" = 1 ] && [ -z "$custom" ] && base='我的会话'
 [ "$TEST_ID" = 1 ] && case "$base" in test-*) ;; *) base="test-$base" ;; esac
 existing=$(TM list-windows -t "$SESS" -F '#{window_name}' 2>/dev/null)
 name="$base"; n=2

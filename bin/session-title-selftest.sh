@@ -126,6 +126,19 @@ if [ -n "$REAL_TMUX" ]; then
   eq "A: every other column is unchanged by the cache" \
      "$(printf '%s\n' "$out0" | awk -F'\t' '{ $17 = ""; print }' OFS='\t' | sort)" \
      "$(printf '%s\n' "$out" | awk -F'\t' '{ $17 = ""; print }' OFS='\t' | sort)"
+  # @task_line (issue #2359): a window bound to no issue sends its first sentence
+  # as title=; an issue window keeps its issue's title whatever the line says
+  T new-window -d -t "=$S:" -n '我的会话' 'sleep 600'
+  T set-option -w -t "=$S:我的会话" @norepo 1
+  T set-option -w -t "=$S:我的会话" @task_line '帮我看下 mini2 的日志'
+  T set-option -w -t "=$S:draft" @task_line '试一下新的侧栏'
+  T set-option -w -t "=$S:fix-sidebar-slug" @task_line '/fleet-claim'
+  out5=$(bash "$CREAD" workers "$S" 2>"$WORK/err") || fail "A: workers failed" "$(cat "$WORK/err")"
+  eq "A: a no-repo session → its @task_line as title= (#2359)" "title=帮我看下 mini2 的日志" "$(col17 "$out5" '我的会话')"
+  eq "A: a scratch → its @task_line as title=" "title=试一下新的侧栏" "$(col17 "$out5" draft)"
+  eq "A: an issue window keeps its issue's title" "title=修复侧栏：显示 issue 标题" "$(col17 "$out5" fix-sidebar-slug)"
+  eq "A: …and the line moves no other column" "19 reap= detail= role= epic=" \
+     "$(printf '%s\n' "$out5" | awk -F'\t' '$10 == "draft" { print NF - 11, $18, $19, $20, $21 }')"
   T kill-server 2>/dev/null
 else
   echo 'session-title selftest: tmux absent — leg A skipped'
@@ -272,6 +285,39 @@ eq "D: a remote row carries its node's title as field 14" "远程的 issue 标�
 eq "D: …beside its cfg verdict (field 13)" "stale" "$(fld "$s" RT 13)"
 eq "D: a remote row with no title (an older cache) has no field 14" "-" "$(fld "$s" RN 14)"
 eq "D: …nor field 13" "-" "$(fld "$s" RN 13)"
+
+# D2 (issue #2359): a session bound to no issue reads as what it is about — its
+# @task_line (WFMT field 28) as field 14, and as the label when the name is only
+# a number; a no-repo session reads `我的会话 · <line>`, an older `norepo-N`
+# too, never its number. An issue window keeps its name without a title.
+# wl <idx> <name> <window_id> <issue> <norepo> <task_line>
+wl() { printf '%s\n' "$S$US$1$US$2$US/w/app-$2${US}done$US$US$3$US$4$US$US$US$US$US$US$US$US$US$US$US$US$US$5$US$US$US$US$US${1}000$US$US$6" >> "$WLIST_FILE"; }
+unset CCQUOTA_FLEET
+: > "$WLIST_FILE"
+wl 1 scratch-5 @1 '' '' '试一下新的侧栏'
+wl 2 '我的会话' @2 '' 1 '帮我看下 mini2 的日志'
+wl 3 norepo-2 @3 '' 1 ''
+wl 4 '我的会话-2' @4 '' 1 '第二个'
+wl 5 issue-12 @5 12 '' '/fleet-claim'
+s=$(side)
+lbl() { printf '%s\n' "$1" | LC_ALL=C awk -F"$US" -v w="$2" '$1 == w { print $4 }'; }
+eq "D2: an unbound scratch → its first sentence as the label" "试一下新的侧栏" "$(lbl "$s" @1)"
+eq "D2: …and as field 14" "试一下新的侧栏" "$(printf '%s\n' "$s" | LC_ALL=C awk -F"$US" '$1 == "@1" { print $14 }')"
+eq "D2: a no-repo session → 我的会话 · <line>" "我的会话 · 帮我看下 mini2 的日志" "$(lbl "$s" @2)"
+eq "D2: an older norepo-N with no line → 我的会话" "我的会话" "$(lbl "$s" @3)"
+eq "D2: a deduped 我的会话-2 → 我的会话 · <line>" "我的会话 · 第二个" "$(lbl "$s" @4)"
+eq "D2: an issue window with no cached title keeps its name" "issue-12" "$(lbl "$s" @5)"
+eq "D2: …and no field 14 (the line is not its title)" "-" \
+   "$(printf '%s\n' "$s" | LC_ALL=C awk -F"$US" '$1 == "@5" { print (NF >= 14 ? $14 : "-") }')"
+eq "D2: no row reads norepo" "" "$(printf '%s\n' "$s" | LC_ALL=C awk -F"$US" '$4 ~ /norepo/')"
+# fleet ls reads these same rows (fleet-quickopen.py full_rows → parse_rows)
+eq "D2: fleet ls's parse of them — names, no norepo" "试一下新的侧栏|我的会话 · 帮我看下 mini2 的日志|我的会话|我的会话 · 第二个|issue-12" \
+   "$(printf '%s\n' "$s" | python3 -c '
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("qo", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+lines = [l.split(m.US, 14) for l in sys.stdin.read().split("\n") if l.count(m.US) >= 4]
+rows = [(r + [""] * 15)[:15] for r in lines]
+print("|".join(r["name"] for r in m.parse_rows(m.rows_text(rows)) if not r["key"].startswith("hdr")))' "$BIN/fleet-quickopen.py")"
 
 # E (issue #2355): ccquota's agent runs the adapter with no TMPDIR (a
 # LaunchDaemon) — it must find the SAME cache the login's daemons write, or
