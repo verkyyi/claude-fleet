@@ -464,12 +464,28 @@ eq "H: HEAD untouched" "$C6" "$(hd)"; eq "H: nothing ran" 0 "$(applies)"
 contains "H: log line" "$(lastlog)" " off "
 # H2 (issue #2334): a login the machine daemon manages is the machine updater's —
 # no fetch, no move; a machine that manages someone else changes nothing here.
-mkdir -p "$WORK/node"; printf '{"%s": {"managed": true}}\n' "$(id -un)" > "$WORK/node/accounts.json"
+mkdir -p "$WORK/node" "$WORK/noderoot"; printf '{"%s": {"managed": true}}\n' "$(id -un)" > "$WORK/node/accounts.json"
+export FLEET_NODE_ROOT="$WORK/noderoot"   # never this machine's real runtime
 : > "$LOG"; OUT=$(FLEET_NODE_STATE="$WORK/node" bash "$IS" --root "$CO" 2>&1); RC=$?
 eq "H2: exits 0" 0 "$RC"; eq "H2: result off" off "$(st result)"
 contains "H2: says the machine updater has it" "$(st reason)" "managed — the machine updater"
 eq "H2: no fetch (local tag untouched)" "$C6" "$(git -C "$CO" rev-parse refs/tags/stable)"
 eq "H2: HEAD untouched" "$C6" "$(hd)"; eq "H2: nothing ran" 0 "$(applies)"
+# H3 (issue #2688): once the machine has a release, the managed login FOLLOWS it —
+# that sha (C7, `current`'s name), not the stable tag (C5 here). The node agent is
+# the machine updater's: its upgrade is never even asked.
+ln -s "$WORK/noderoot/$C7" "$WORK/noderoot/current"; stable "$C5"
+: > "$LOG"; OUT=$(FLEET_NODE_STATE="$WORK/node" bash "$IS" --root "$CO" 2>&1); RC=$?
+eq "H3: exits 0" 0 "$RC"; eq "H3: result switched" switched "$(st result)"
+eq "H3: HEAD at the machine release, not stable" "$C7" "$(hd)"
+contains "H3: says whose mark it follows" "$OUT" "following the machine's release $(short "$C7")"
+eq "H3: apply ran once" 1 "$(applies)"
+eq "H3: node agent left to the updater" off "$(st node)"
+: > "$LOG"; OUT=$(FLEET_NODE_STATE="$WORK/node" bash "$IS" --root "$CO" 2>&1)
+eq "H3: next tick current" current "$(st result)"
+contains "H3: …at the machine release" "$(st reason)" "install at the machine release $(short "$C7")"
+rm "$WORK/noderoot/current"; unset FLEET_NODE_ROOT
+git -C "$CO" reset -q --hard "$C6"; stable "$C7"; git -C "$CO" update-ref refs/tags/stable "$C6"
 printf '{"someone-else": {"managed": true}}\n' > "$WORK/node/accounts.json"
 OUT=$(FLEET_NODE_STATE="$WORK/node" FLEET_INSTALL_SYNC=0 bash "$IS" --root "$CO" 2>&1)
 contains "H2: another login managed is not this one" "$(st reason)" "FLEET_INSTALL_SYNC=0"

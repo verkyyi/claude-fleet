@@ -34,6 +34,9 @@
 #   credsep-stale-after-switch  bin/fleet-node-update.py + fleet-credsep.py `machine
 #                         refresh` + the supervisor's cred-proxy-shared `reload` (#2435):
 #                         a switch / rollback left the shared credential proxy on old code
+#   managed-login-install-stale  bin/fleet-install-sync.sh's managed branch +
+#                         bin/fleet-node-update.py's `install` doctor row (#2688): a
+#                         managed login's own ~/.claude/fleet sat on its bootstrap copy
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT are read by the sourced runner
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -504,6 +507,43 @@ drill_node_install_half() {
   )
   { read -r SECS; read -r WHY; } < "$WORK/fni.res"
   WHAT="装到一半（取运行时时）被 kill -9：没有 current、没有半个发布版；同一条命令不带码重跑，从断处做完、不再花加入码；之后删掉守护的服务定义，重跑只补它一件"
+}
+
+# managed-login-install-stale (#2688): the machine moved to a release, a managed
+# login's ~/.claude/fleet (what every account task runs) stayed on its old commit
+# — its install-sync tick answered `off · managed` and the updater never moves it.
+drill_managed_login_install_stale() {
+  CAP=60
+  local sb seed co c1 c2 t0 out g
+  sb="$WORK/mlis"; seed="$sb/seed"; co="$sb/home/.claude/fleet"
+  mkdir -p "$sb/home/.claude" "$sb/conf" "$sb/db" "$sb/noderoot" "$sb/tmp"
+  : > "$sb/gitconfig"
+  g() { GIT_CONFIG_GLOBAL="$sb/gitconfig" GIT_CONFIG_SYSTEM=/dev/null GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t \
+        GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t git "$@"; }
+  g init -q --bare -b master "$sb/origin.git" && g clone -q "$sb/origin.git" "$seed" 2>/dev/null \
+    || { WHY="no sandbox repo"; return 1; }
+  mkdir -p "$seed/bin"
+  printf '#!/bin/sh\necho "apply: ok — stub"\n' > "$seed/bin/fleet-install-apply.sh"
+  printf '#!/bin/sh\necho "  PASS  gh  ok"\n' > "$seed/bin/fleet-doctor.sh"
+  printf '#!/bin/sh\nexit 0\n' > "$seed/bin/fleet-diskguard.sh"
+  chmod +x "$seed"/bin/*
+  echo 1 > "$seed/f"; g -C "$seed" add -A; g -C "$seed" commit -qm one; c1=$(g -C "$seed" rev-parse HEAD)
+  echo 2 > "$seed/f"; g -C "$seed" commit -qam two; c2=$(g -C "$seed" rev-parse HEAD)
+  g -C "$seed" push -q origin master && g --git-dir="$sb/origin.git" update-ref refs/tags/stable "$c2"
+  g clone -q "$sb/origin.git" "$co" 2>/dev/null && g -C "$co" reset -q --hard "$c1"
+  printf '{"%s": {"managed": true}}\n' "$(id -un)" > "$sb/db/accounts.json"
+  ln -s "$sb/noderoot/$c2" "$sb/noderoot/current"     # the machine is on c2
+  t0=$(now)
+  out=$(env -i PATH="$PATH" HOME="$sb/home" FLEET_CONF_DIR="$sb/conf" TMPDIR="$sb/tmp" FLEET_SKIP_GLOBAL_CONF=1 \
+        FLEET_NODE_STATE="$sb/db" FLEET_NODE_ROOT="$sb/noderoot" GIT_CONFIG_GLOBAL="$sb/gitconfig" GIT_CONFIG_SYSTEM=/dev/null \
+        bash "$BIN/fleet-install-sync.sh" --root "$co" 2>&1) || { WHY="the tick failed: $(printf '%s' "$out" | tail -2 | tr '\n' ' ')"; return 1; }
+  [ "$(g -C "$co" rev-parse HEAD)" = "$c2" ] \
+    || { WHY="the managed login did not follow the machine's release: $(sed -n 's/^reason: //p' "$sb/conf/global/install-sync.state")"; return 1; }
+  grep -q '^result: switched' "$sb/conf/global/install-sync.state" || { WHY="the tick did not record switched"; return 1; }
+  out=$(python3 -W ignore::ResourceWarning "$BIN/fleet-node-update-selftest.py" --drill-login-install 2>&1) \
+    || { WHY="the machine doctor does not name a stale login install: $(printf '%s' "$out" | grep -E 'Error|FAIL' | head -3 | tr '\n' ' ')"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="整机在新发布版、托管登录的 ~/.claude/fleet 还在旧提交：一拍 install-sync 跟到本机发布版（不是 off · managed），fleet doctor --machine 的 install 行落后时 WARN、到位 PASS"
 }
 
 cred_run_drills "$0"

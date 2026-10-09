@@ -768,6 +768,9 @@ def doctor_rows(p):
                  if os.path.realpath(os.path.join(ident[2], rel)) != os.path.realpath(os.path.join(p.current, "tools", "bin", t))]
         rows.append(("PASS", "account", "%s: claude · codex · tmux from the release" % login) if not drift
                     else ("WARN", "account", "%s: %s not the release's (re-linked on the next tick)" % (login, ", ".join(drift))))
+        ir = install_row(p, cur, login, ident)
+        if ir:
+            rows.append(ir)
     cr = credsep_row(p)
     if cr:
         rows.append(cr)
@@ -777,6 +780,47 @@ def doctor_rows(p):
     if os.path.exists(os.path.join(d, DRILL_FAIL)):
         rows.append(("FAIL", "drill", "%s carries %s — a deliberate drill failure (#2336)" % (cur[:12], DRILL_FAIL)))
     return rows
+
+
+def account_install_sha(login, ident, path):
+    """The commit a login's ~/.claude/fleet is at, or None. git runs AS the login
+    (root never runs git on a tree someone else owns — its config could run code);
+    a doctor that is neither root nor that login reads only a versions link's name."""
+    uid, gid, home = ident
+    if os.geteuid() == 0 or uid == os.geteuid():
+        rc, out, _ = run(["git", "-C", path, "rev-parse", "HEAD"], timeout=30,
+                         preexec_fn=fns.demote(login, uid, gid, home),
+                         env={"HOME": home, "USER": login, "LOGNAME": login,
+                              "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"})
+        if rc == 0 and SHA_RE.match(out):
+            return out
+    if os.path.islink(path):
+        name = os.path.basename(os.readlink(path).rstrip("/"))[:40]
+        if SHA_RE.match(name):
+            return name
+    return None
+
+
+def install_row(p, cur, login, ident):
+    """Is a managed login's own install (~/.claude/fleet — every account task runs
+    from it) on the machine's release? (issue #2688: one sat on its bootstrap copy
+    while the runtime moved on, and nothing said so.) WARN, never FAIL: a login
+    that has not followed yet is not the release's fault, and a FAIL would roll
+    the whole machine back. No install = no row."""
+    path = os.path.join(ident[2], ".claude", "fleet")
+    if not os.path.lexists(path):
+        return None
+    shape = "link" if os.path.islink(path) else "plain directory"
+    sha = account_install_sha(login, ident, path)
+    if sha == cur:
+        return ("PASS", "install", "%s: ~/.claude/fleet at the release %s" % (login, cur[:12]))
+    fix = "install-sync follows the release on its next tick; now: sudo -u %s bash '%s' --root %s" % (
+        login, os.path.join(p.current, "bin", "fleet-install-sync.sh"), path)
+    if not sha:
+        return ("WARN", "install", "%s: ~/.claude/fleet (%s) — its version is unreadable, NOT the release's; %s"
+                % (login, shape, fix))
+    return ("WARN", "install", "%s: ~/.claude/fleet at %s (%s), the release is %s — this login runs old bin/ and "
+            "account tasks; %s" % (login, sha[:12], shape, cur[:12], fix))
 
 
 def credsep_row(p):
