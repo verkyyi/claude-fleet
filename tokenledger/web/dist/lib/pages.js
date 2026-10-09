@@ -8,7 +8,7 @@
 // their own machine login (claude-fleet#1985), and these functions only
 // group, sort and label them.
 
-import { esc, fmtTokens } from './shell.js';
+import { esc, ic, fmtTokens, spark } from './shell.js';
 import { t, fmtDate } from './i18n.js';
 
 const DAY = 86400000;
@@ -316,4 +316,23 @@ export function myMachines(snap, me) {
     };
   });
   return rows.sort((a, b) => (a.takes === 'coord') - (b.takes === 'coord') || a.label.localeCompare(b.label) || a.login.localeCompare(b.login));
+}
+
+/** kpi is one number tile: a label, the value, a trend line and a delta. */
+export function kpi(label, val, trend, d) {
+  return `<div class="panel kpi"><span class="lbl">${esc(label)}</span><span class="val">${esc(val)}</span>${trend && trend.length ? spark(trend, 'var(--brand)', true) : ''}<span class="delta${d && d.down ? ' down' : ''}"${d && d.muted ? ' style="color:var(--muted)"' : ''}>${esc((d && d.text) || ' ')}</span></div>`;
+}
+
+/** hb draws [label, tokens] rows (bars()) as horizontal bars. */
+export function hb(rows, color) {
+  if (!rows.length) return `<div class="ghostrow">${esc(t('ui.ov.noUsage7'))}</div>`;
+  const max = rows[0][1] || 1;
+  return '<div class="hb">' + rows.map((r) => `<div class="hb-row"><span class="name mono" title="${esc(r[0])}">${esc(r[0])}</span><span class="track"><i style="width:${(r[1] / max * 100).toFixed(0)}%;background:${color}"></i></span><span class="v">${esc(fmtTokens(r[1]))}</span></div>`).join('') + '</div>';
+}
+
+/** bundleList draws a settings layer's [kind, text] items (bundleItems);
+ *  src 'team' or 'mine' labels each row's source. */
+export function bundleList(list, src) {
+  if (!list.length) return `<div class="empty">${ic('sliders')}<b>${esc(t('ui.cfg.empty'))}</b><span>${esc(t(src === 'team' ? 'ui.cfg.emptyTeam' : 'ui.cfg.emptyMine'))}</span></div>`;
+  return '<div class="items">' + list.map(([k, txt]) => `<div><span class="kind">${esc(k)}</span><span class="mono" style="min-width:0;overflow-wrap:anywhere">${esc(txt)}</span><span class="src chip${src === 'team' ? ' brand' : ''}">${esc(t(src === 'team' ? 'ui.cfg.srcTeam' : 'ui.cfg.srcMine'))}</span></div>`).join('') + '</div>';
 }
