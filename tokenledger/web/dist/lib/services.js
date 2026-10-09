@@ -3,7 +3,7 @@
 // (`fleet service add`), as the hub hands them on /v1/nodes —
 // `machines[].services`, already cut to the viewer's own (machine, login)s.
 // Two tables (常驻 / 定时) of 机器 · 登录 · 名称 · 状态 · 上次 · 下次 · 最近日志, a
-// failed one red, and a drawer with its log's last line. The same table
+// failed one red, and a drawer (ctx.drawer) with its log's last line. The same table
 // `fleet ls --services` prints (bin/fleet-services.py) and the same failed set
 // as the hub's service_failed alert. No fetch here: the page that shows it
 // (我的机器, Machines) passes its /v1/nodes answer. web/test/services.test.mjs.
@@ -71,7 +71,7 @@ export function servicesSection(rows, now = Date.now()) {
     table('task', rows.filter((r) => r.kind === 'task'), rows, now);
 }
 
-/** logDrawer is the modal for one row: what it is, its state, its log's last
+/** logDrawer is the drawer for one row: what it is, its state, its log's last
  *  line, and the command that shows the whole log on the machine. */
 export function logDrawer(r, now = Date.now()) {
   const kv = [
@@ -79,9 +79,8 @@ export function logDrawer(r, now = Date.now()) {
     ['ui.svc.colState', stateWord(r) + (r.why ? ' — ' + r.why : '')],
     ['ui.svc.colLast', r.lastRun ? relTime(r.lastRun, now) : '—'],
     ['ui.svc.colNext', r.nextRun ? (fmtIn(r.nextRun, now) || relTime(r.nextRun, now)) : '—'],
-    ['ui.svc.restarts', String(r.restarts)],
-  ].map(([k, v]) => `<dt>${esc(t(k))}</dt><dd>${esc(v)}</dd>`).join('');
-  const cmd = `fleet service logs ${r.name} -n 200`;
+  ].concat(r.kind === 'service' ? [['ui.svc.restarts', String(r.restarts)]] : []).map(([k, v]) => `<dt>${esc(t(k))}</dt><dd>${esc(v)}</dd>`).join('');
+  const cmd = `fleet ${r.kind === 'task' ? 'task' : 'service'} logs ${r.name} -n 200`;
   return `<div class="modal-h"><h3>${esc(r.name)}</h3><button class="btn ghost sm" data-shell="close" aria-label="${esc(t('ui.close'))}">${ic('x')}</button></div>` +
     `<div class="modal-b"><dl class="kv">${kv}</dl>` +
     `<p>${esc(t('ui.svc.tail'))}</p><pre class="mono" style="white-space:pre-wrap;${r.failed ? 'color:var(--bad)' : ''}">${esc(r.line || t('ui.svc.noLine'))}</pre>` +
@@ -97,6 +96,6 @@ export function svcClick(ctx, e, rows) {
   const tr = e.target && e.target.closest ? e.target.closest('tr[data-svc]') : null;
   const r = tr ? rows[Number(tr.dataset.svc)] : null;
   if (!r) return false;
-  ctx.modal(logDrawer(r));
+  ctx.drawer(logDrawer(r));
   return true;
 }

@@ -3,14 +3,19 @@
 // sessions (开 · 只协调 · 暂停 · 维护中 · 离线), its load per core, and how many
 // of the viewer's sessions run there. A person's own laptop reads 只协调.
 //
+// Below them, 服务与定时任务 (claude-fleet#2526): the background services and
+// scheduled tasks registered under the viewer's logins (lib/services.js), a
+// failed one red, a row opening its log's last line.
+//
 // Reads /v1/nodes (cut to the viewer's logins by the hub) and /v1/me.logins;
 // writes nothing. Re-read every 30 s while the tab is visible.
 import { Shell } from './app-shell.js';
 import { esc, ic } from './lib/shell.js';
 import { myMachines } from './lib/pages.js';
+import { serviceRows, servicesSection, svcClick } from './lib/services.js';
 import { t } from './lib/i18n.js';
 
-const S = { timer: 0 };
+const S = { timer: 0, svcs: [] };
 
 const CHIP = { on: 'ok', coord: '', paused: 'warn', maint: 'warn', lost: 'bad' };
 
@@ -23,19 +28,23 @@ function row(r) {
     `<td class="mono">${esc(r.login)}</td><td>${takes}</td><td class="mono">${esc(load)}</td><td class="mono r">${esc(ses)}</td></tr>`;
 }
 
-function draw(ctx, rows) {
+function draw(ctx, rows, svcs) {
   const body = rows.length ? rows.map(row).join('')
     : `<tr><td colspan="5"><div class="empty">${ic('server')}<b>${esc(t('ui.my.none'))}</b><span>${esc(t('ui.my.noneSub'))}</span><a class="btn" href="/connect">${esc(t('ui.nav.devices'))}</a></div></td></tr>`;
   ctx.el.innerHTML = `<div class="pagehead"><div><p>${esc(t('ui.my.sub'))}</p></div></div>` +
-    `<div class="panel"><div class="tw"><table class="t" id="mymachines"><thead><tr><th>${esc(t('ui.col.machine'))}</th><th>${esc(t('ui.my.colLogin'))}</th><th>${esc(t('ui.my.colTakes'))}</th><th>${esc(t('ui.my.colLoad'))}</th><th class="r">${esc(t('ui.my.colSessions'))}</th></tr></thead><tbody>${body}</tbody></table></div></div>`;
+    `<div class="panel"><div class="tw"><table class="t" id="mymachines"><thead><tr><th>${esc(t('ui.col.machine'))}</th><th>${esc(t('ui.my.colLogin'))}</th><th>${esc(t('ui.my.colTakes'))}</th><th>${esc(t('ui.my.colLoad'))}</th><th class="r">${esc(t('ui.my.colSessions'))}</th></tr></thead><tbody>${body}</tbody></table></div></div>` +
+    servicesSection(svcs);
 }
 
 Shell.mount('mymachines', async (ctx) => {
   const load = async () => {
-    const rows = myMachines(await ctx.api('/v1/nodes'), ctx.me);
-    draw(ctx, rows);
+    const snap = await ctx.api('/v1/nodes');
+    const rows = myMachines(snap, ctx.me);
+    S.svcs = serviceRows(snap);
+    draw(ctx, rows, S.svcs);
     ctx.setCount('mymachines', rows.length);
   };
+  ctx.el.onclick = (e) => { svcClick(ctx, e, S.svcs); };
   await load();
   if (!S.timer) S.timer = setInterval(() => { if (!document.hidden) load().catch(() => {}); }, 30000);
 });

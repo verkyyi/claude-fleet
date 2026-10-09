@@ -273,7 +273,7 @@ def cmd_doctor():
         what = " · ".join("%s %s%s" % (name(label, r), state_say(r),
                                        ("「%s」" % r["last_log_line"]) if r.get("last_log_line") else "")
                           for label, r in bad)
-        print("FAIL %d/%d failed: %s%s — fleet ls --services · fleet service logs <name>"
+        print("FAIL %d/%d failed: %s%s — fleet ls --services · fleet service|task logs <name>"
               % (len(bad), len(rows), what, age))
         return 0
     print("PASS %d registered, none failed: %s%s"

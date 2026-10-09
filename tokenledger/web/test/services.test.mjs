@@ -56,11 +56,15 @@ test('drawer: the row, its last line, the command for the whole log', () => {
   const d = logDrawer(rows[0], NOW);
   assert.match(d, /<h3>daily-report<\/h3>/);
   assert.match(d, /give up: skill &lt;b&gt;not&lt;\/b&gt; found/);
-  assert.match(d, /fleet service logs daily-report -n 200/);
+  assert.match(d, /fleet task logs daily-report -n 200/, 'a task\'s log is fleet task logs (#2529)');
+  assert.ok(!d.includes('重启次数'), 'a task has no restarts');
+  const f = logDrawer(rows[1], NOW);
+  assert.match(f, /fleet service logs flappy -n 200/);
+  assert.match(f, /重启次数<\/dt><dd>4</);
   assert.match(d, /在 mini2 上运行/);
   assert.match(logDrawer(rows[1], NOW), /还没有输出/);
   let opened = null;
-  const ctx = { modal: (h) => { opened = h; } };
+  const ctx = { drawer: (h) => { opened = h; } };
   const ev = (n) => ({ target: { closest: (sel) => (sel === 'tr[data-svc]' && n != null ? { dataset: { svc: String(n) } } : null) } });
   assert.equal(svcClick(ctx, ev(2), rows), true);
   assert.match(opened, /sms-watch/);
@@ -68,7 +72,7 @@ test('drawer: the row, its last line, the command for the whole log', () => {
 });
 
 test('every word through t(), every key in both dictionaries', () => {
-  for (const f of ['lib/services.js', 'admin/nodes.js']) {
+  for (const f of ['lib/services.js', 'admin/nodes.js', 'machines.js']) {
     const src = readFileSync(new URL('../dist/' + f, import.meta.url), 'utf8');
     for (const m of src.matchAll(/t\('(ui\.[\w.-]*\w)'/g)) assert.ok(m[1] in en && m[1] in zhCN, m[1]);
   }
@@ -78,4 +82,11 @@ test('every word through t(), every key in both dictionaries', () => {
   const src = readFileSync(new URL('../dist/lib/services.js', import.meta.url), 'utf8');
   const markup = src.replace(/\/\/.*$/gm, '').match(/>[^<>${}`'"]*[A-Za-z]{3,}[^<>${}`'"]*</g) || [];
   assert.deepEqual(markup, [], 'bare words in markup');
+});
+
+test('我的机器 shows both tables under the viewer\'s machines, a row opens its drawer', () => {
+  const src = readFileSync(new URL('../dist/machines.js', import.meta.url), 'utf8');
+  assert.match(src, /serviceRows\(snap\)/);
+  assert.match(src, /servicesSection\(svcs\)/);
+  assert.match(src, /svcClick\(ctx, e, S\.svcs\)/);
 });
