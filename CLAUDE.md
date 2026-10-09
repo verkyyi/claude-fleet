@@ -386,7 +386,7 @@ Do not install from memory: read the doc and work from it.
   `global/park.idx` is what `fleet_parked` (fleet-restore.sh's skip) reads. When its
   condition (`answer:` · `pr:…:merged` · `issue:…:closed` · `time:` · `reply:`)
   holds, `dash-issue-session.sh --resume <same sid> --seed-file` reopens it on the
-  same conversation. `@orch_park` → `orchpark=` (column 33) → `park=N` on the
+  same conversation. `@orch_park` → `orchpark=` (the last tag) → `park=N` on the
   client. `FLEET_STEWARD_PARK=0` (or a steward in `count`) parks nothing — `count`
   still measures (`fleet-steward-stats.sh stuck`). `fleet-park-selftest.sh`;
   BREAK-IT `park-lost-progress`, `park-restored-by-restore`.
