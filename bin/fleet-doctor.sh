@@ -2928,7 +2928,20 @@ else
   rlog="$(dirname "$0")/../logs/reconcile.log"
   rung_n=$(grep -c ' rung_health ' "$rlog" 2>/dev/null) || rung_n=0
   rung_live=$(rhb_get contested); rung_live=${rung_live:-0}
-  pass state "state reconcile ${rhb_age}s ago — $(rhb_get working) working window(s) checked against native idle, $(rhb_get demoted) demoted; rung_health: ${rung_n} contradiction(s) in reconcile.log, ${rung_live} live$rhb_note"
+  # Where each window's state came from (issue #2537, EPIC #2535 C2): the agent's
+  # own OSC 7501 report is the primary source; `primary=a/b` is how many live
+  # Claude windows carry a state it said itself, `src=` every source's count.
+  # Per window: global/reconcile.sources. An older heartbeat has neither: no clause.
+  rhb_pri=$(rhb_get primary); rhb_src=$(rhb_get src); rhb_cov=''
+  case "$rhb_pri" in
+    */*) _pa=${rhb_pri%/*}; _pb=${rhb_pri#*/}
+         case "$_pa$_pb" in *[!0-9]*|'') ;; *)
+           if [ "$_pb" -gt 0 ]; then rhb_cov="; 主来源 7501 覆盖 $_pa/$_pb ($(( _pa * 100 / _pb ))%)"
+           else rhb_cov="; 主来源 7501 覆盖 0/0"; fi
+           [ -n "$rhb_src" ] && rhb_cov="$rhb_cov · 来源 $rhb_src" ;;
+         esac ;;
+  esac
+  pass state "state reconcile ${rhb_age}s ago — $(rhb_get working) working window(s) checked against native idle, $(rhb_get demoted) demoted; rung_health: ${rung_n} contradiction(s) in reconcile.log, ${rung_live} live$rhb_cov$rhb_note"
 fi
 # The sleep-judgment distribution over the last hour (#837). Every scan record now
 # carries an `at` timestamp (#838), so the histogram the 2026-09-19 analysis built

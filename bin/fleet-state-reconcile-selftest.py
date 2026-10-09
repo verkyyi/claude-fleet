@@ -298,6 +298,47 @@ class ReconcileTest(unittest.TestCase):
         self.assertEqual(self.state(trusted)[0], 'working')
         self.assertEqual(self.rung_lines(), [])
 
+    def test_the_agents_own_fresh_report_outranks_native_idle(self):
+        # issue #2537: the agent said `working` itself within 120 s (OSC 7501) — the
+        # registry's idle, a guess at this rung, never demotes it. Silent past the
+        # primary window, or its last word the relay's `exited`, and the rule is back.
+        now = int(time.time())
+        cases = [(now - 10, '{"state":"working"}', 'working'),
+                 (now - 300, '{"state":"working"}', 'done'),
+                 (now - 10, '{"state":"exited","rc":0}', 'done')]
+        for ts, status, want in cases:
+            with self.subTest(ts=now - ts, status=status):
+                self.setUp()
+                wid, pane = self.window(**{'@agent_status_ts': str(ts), '@agent_status': status,
+                                           '@claude_state_src': '7501'})
+                self.record(wid, pane, status='idle', since=time.time() - 60)
+                self.run_cli()
+                self.assertEqual(self.state(wid)[0], want)
+                if want == 'done':
+                    self.assertEqual(self.tm('display-message', '-p', '-t', wid, '#{@claude_state_src}'), 'classifier')
+                    self.assertRegex(self.log.read_text(), r'working -> done \(.*\) source=7501')
+                else:
+                    self.assertEqual(self.heartbeat()['primary_kept'], '1')
+                self.tearDown(); self.windows = []
+
+    def test_every_window_says_where_its_state_came_from(self):
+        # issue #2537: the report names each agent window's source, and the
+        # heartbeat counts the primary's coverage over the live Claude windows.
+        self.window(state='done', **{'@claude_state_src': '7501', '@agent_status_ts': str(int(time.time()))})
+        self.window(state='done', **{'@claude_state_src': '7501'})
+        self.window(state='needs', **{'@claude_state_src': 'hook'})
+        self.window(state='looping', **{'@claude_state_src': 'carried'})
+        self.window(state='done')                                       # never labelled
+        self.window(state='done', **{'@cc_agent': 'codex', '@claude_state_src': 'hook'})
+        self.window(state='exited', **{'@claude_state_src': 'wrapper'})  # no agent: not counted
+        self.run_cli()
+        hb = self.heartbeat()
+        self.assertEqual(hb['src'], '-:1,7501:2,carried:1,hook:2')
+        self.assertEqual(hb['primary'], '2/5')
+        rows = [r.split('\t') for r in (self.cache / 'reconcile.sources').read_text().splitlines()[1:]]
+        self.assertEqual(len(rows), 6)
+        self.assertEqual(sorted((r[3], r[4], r[5]) for r in rows)[:2], [('done', '-', 'none'), ('done', '7501', 'fresh')])
+
     def test_disabled_threshold_is_a_no_op(self):
         wid, pane = self.window()
         self.record(wid, pane, status='idle', since=time.time() - 10)

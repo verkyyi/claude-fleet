@@ -701,6 +701,16 @@ Do not install from memory: read the doc and work from it.
   only once a relay set `@agent_replay`. All three confs say `allow-passthrough on`
   (only a pane on screen passes). Ghostty shows it on the tab; iTerm2 has no OSC
   7501 and ignores it. `0` keeps it on the machine. `fleet-status-replay-selftest.sh`.
+  **It is the PRIMARY source** (issue #2537, C2): every `@claude_state` write labels
+  `@claude_state_src` (7501 · hook · classifier · carried · wrapper), and while
+  `@agent_status_ts` is fresh (`fleet_primary_fresh`, `FLEET_STATE_PRIMARY_SECS` 120;
+  the relay re-stamps a repeated report every 30 s) a hook leaves the state alone —
+  except a worker's `blocked` and the prompt that clears it — and the classifier, the
+  spinner's demotes and the native reconcile stay out. A carried state (migrate /
+  move / restore) goes through `fleet_state_carry`, only before the agent's first
+  report; the wrapper clears `@agent_status` before each launch. The reconcile writes
+  each window's source to `reconcile.sources` and `primary=a/b` to its heartbeat
+  (doctor `state` row: 主来源覆盖率). `state-primary-selftest.sh`; BREAK-IT `status-*`.
 - **The hub ships the `fleet` client, and `bin/` + `conf/` stay canonical**
   (issues #1470, #1486). `curl -fsSL <hub>/install | sh` serves
   `bin/fleet-install.sh` (hub URL filled in), which fetches `/install/manifest`

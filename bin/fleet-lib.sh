@@ -3110,6 +3110,50 @@ fleet_mod_alive() {
   [ $((now - at)) -le "$max" ]
 }
 
+# --- one primary state source (issue #2537, EPIC #2535 C2) ----------------------
+# @claude_state has three writers, ranked: the agent's own OSC 7501 report
+# (bin/fleet-status-7501.py) > the hooks (and the mod) > the guessers (the screen
+# classifier, the spinner's demotes, the native reconcile). @claude_state_src
+# names the one that wrote the value on the window (7501 | hook | classifier |
+# carried | wrapper). A lower writer leaves the value alone while the primary is
+# PRESENT: @agent_status_ts within FLEET_STATE_PRIMARY_SECS (120; 0 = never) and
+# the agent's last word not the relay's `exited`.
+#
+# fleet_primary_fresh <win> [session] — exit 0 while the primary is present.
+# bin/set-claude-state.sh and bin/tmux-spinner.sh are `sh` and carry inline
+# copies — KEEP IN SYNC.
+fleet_primary_fresh() {
+  local win="${1:-}" sess="${2:-}" v ts now max="${FLEET_STATE_PRIMARY_SECS:-120}"
+  [ -n "$win" ] || return 1
+  case "$max" in ''|*[!0-9]*) max=120 ;; esac
+  [ "$max" -gt 0 ] || return 1
+  if [ -n "${TMUX:-}" ] || [ -z "$sess" ]; then
+    v=$(tmux display-message -p -t "$win" '#{@agent_status_ts}|#{@agent_status}' 2>/dev/null)
+  else
+    v=$(_fleet_tmux "$sess" display-message -p -t "$win" '#{@agent_status_ts}|#{@agent_status}' 2>/dev/null)
+  fi
+  ts=${v%%|*}
+  case "$ts" in ''|*[!0-9]*) return 1 ;; esac
+  case "$v" in *'"state":"exited"'*) return 1 ;; esac
+  now=$(date +%s)
+  [ $((now - ts)) -lt "$max" ]
+}
+
+# fleet_state_carry <socket|''> <win> <state> — stamp a state carried over from
+# another window (migrate, move, restore) as a BOOTSTRAP value: only while the
+# new agent has said nothing yet (no @agent_status_ts), checked and written in
+# one tmux command, so a carried `looping` never lands on top of the agent's own
+# first report (issue #2537: two sessions migrated from mini2 read looping while
+# they worked). Labelled `carried`, the lowest rank: any writer replaces it.
+fleet_state_carry() {
+  local sock="${1:-}" win="${2:-}" st="${3:-}" now
+  [ -n "$win" ] && [ -n "$st" ] || return 1
+  case "$st" in *[!a-z]*) return 1 ;; esac
+  now=$(date +%s)
+  tmux ${sock:+-L "$sock"} if-shell -F -t "$win" '#{@agent_status_ts}' '' \
+    "set-option -w -t $win @claude_state $st ; set-option -w -t $win @claude_state_ts $now ; set-option -w -t $win @claude_state_src carried" 2>/dev/null
+}
+
 # --- the mod's command inbox (issue #1337, EPIC #1334 C3) -----------------------
 # A slash command the fleet used to TYPE into a pane (`/clear`, `/compact …`,
 # `/model …`, the handoff pickup) is posted to the pane's inbox instead; the mod

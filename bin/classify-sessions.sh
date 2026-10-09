@@ -253,6 +253,14 @@ classify_one() {
   # fleet-restore.sh for a window it could not bring back on its own.
   case "$(TM display-message -p -t "$target" '#{@claude_state}/#{@claude_needs}' 2>/dev/null)" in needs/blocked|needs/restore) return 0 ;; esac
   [ -z "$(TM display-message -p -t "$target" '#{@codex_attention}' 2>/dev/null)" ] || return 0
+  # The agent reports its own state (issue #2537, EPIC #2535 C2): while its OSC 7501
+  # word is fresh (fleet_primary_fresh — @agent_status_ts within 120 s) it is the
+  # primary source, and a screen read has nothing to add — no capture, no model
+  # call, one `skip:7501` line. Two minutes of silence and the screen is read again.
+  if command -v fleet_primary_fresh >/dev/null 2>&1 && fleet_primary_fresh "$target" "${CLASSIFY_SOCK:-}"; then
+    printf '%s  %-10s skip:7501\n' "$(date +%H:%M:%S)" "$target" >> "$LOG"
+    return 0
+  fi
   # The session reports its own state (issue #1336): with the fleet mod alive in the
   # window, turn.start/turn.complete/AskUserQuestion/@loop are written as they happen
   # (mod/fleet/hooks/state.ts), so there is nothing left on the screen to guess — no
@@ -332,6 +340,7 @@ classify_one() {
   # after the slow call, before either the verdict or its change-hash is committed.
   case "$(TM display-message -p -t "$target" '#{@claude_state}/#{@claude_needs}' 2>/dev/null)" in needs/blocked|needs/restore) return 0 ;; esac
   [ -z "$(TM display-message -p -t "$target" '#{@codex_attention}' 2>/dev/null)" ] || return 0
+  if command -v fleet_primary_fresh >/dev/null 2>&1 && fleet_primary_fresh "$target" "${CLASSIFY_SOCK:-}"; then return 0; fi
   [ "$(TM display-message -p -t "$target" '#{@cc_agent}|#{@cc_launcher_pid}|#{@codex_session_id}|#{@claude_state}|#{@claude_state_ts}' 2>/dev/null)" = "$observed" ] || return 0
   echo "$h" > "$hf"     # rc=0 but unparseable: still "seen" — the model answered, we
                         # just could not use it, and re-asking the SAME screen won't help
@@ -371,6 +380,7 @@ classify_one() {
 
   if [ -n "$new" ] && [ "$new" != "$st" ]; then
     TM set-window-option -t "$target" @claude_state "$new" 2>/dev/null
+    TM set-window-option -t "$target" @claude_state_src classifier 2>/dev/null   # issue #2537
     # This verdict comes from a screen read, not from the hook that knows WHY the
     # window went red, so it can never justify a `needs` SUBTYPE (issue #640) —
     # clear whatever bin/set-claude-state.sh left behind rather than let a stale

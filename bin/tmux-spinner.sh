@@ -80,6 +80,22 @@ _hub_nudge() {
   return 0
 }
 
+# _primary_fresh <sock> <win> — exit 0 while the agent's own OSC 7501 report is
+# fresh (issue #2537, EPIC #2535 C2): the demotes below are guesses, and a guess
+# never overwrites the primary source's word. Inline copy of fleet_primary_fresh
+# (bin/fleet-lib.sh) — KEEP IN SYNC. Called only at the moment of a write.
+_primary_fresh() {
+  _pf_max=${FLEET_STATE_PRIMARY_SECS:-120}
+  case "$_pf_max" in ''|*[!0-9]*) _pf_max=120 ;; esac
+  [ "$_pf_max" -gt 0 ] || return 1
+  TMUX_N=$((TMUX_N + 1))
+  _pf_v=$(tmux -L "$1" display-message -p -t "$2" '#{@agent_status_ts}|#{@agent_status}' 2>/dev/null)
+  _pf_ts=${_pf_v%%|*}
+  case "$_pf_ts" in ''|*[!0-9]*) return 1 ;; esac
+  case "$_pf_v" in *'"state":"exited"'*) return 1 ;; esac
+  [ $(( $(date +%s) - _pf_ts )) -lt "$_pf_max" ]
+}
+
 # Every tmux this daemon runs goes through here, so the heartbeat can publish how
 # many it forks (issue #887: `tmux_calls_per_s=`, read by fleet-doctor's machine
 # line). A call inside `$(…)` counts in the subshell and is lost — those sites add
@@ -311,7 +327,9 @@ stuck_check() {
     skey="$sock:$wid"
     case "$STUCK_STRIKES" in
       *"|$skey|"*)                                   # stale last check too -> 2nd strike -> demote
+        _primary_fresh "$sock" "$wid" && continue    # the agent said so itself (#2537)
         tmux -L "$sock" set-window-option -t "$wid" @claude_state 'done' 2>/dev/null
+        tmux -L "$sock" set-window-option -t "$wid" @claude_state_src classifier 2>/dev/null
         tmux -L "$sock" set-window-option -t "$wid" @claude_needs '' 2>/dev/null   # #640: no stale reason on a fresh state
         tmux -L "$sock" set-window-option -t "$wid" @claude_state_ts "$nows" 2>/dev/null
         _hub_nudge
@@ -547,6 +565,10 @@ needs_check() {
       # overwrite that event, even if it agrees with the previous pass (#704).
       TMUX_N=$((TMUX_N + 1))
       [ "$(tmux -L "$sock" display-message -p -t "$wid" "$needs_fmt" 2>/dev/null)" = "$wid $st $nsub $ts $agent" ] || continue
+      # The agent's own word outranks the transcript's (issue #2537) — except `dead`:
+      # no Claude under the pane has nothing left to say.
+      [ "$verdict" != dead ] && _primary_fresh "$sock" "$wid" && continue
+      tmux -L "$sock" set-window-option -t "$wid" @claude_state_src classifier 2>/dev/null
       case "$verdict" in
         dead)
           tmux -L "$sock" set-window-option -t "$wid" @claude_state '' 2>/dev/null

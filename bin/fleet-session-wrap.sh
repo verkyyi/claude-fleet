@@ -206,6 +206,11 @@ while :; do
     export FLEET_CRED_SID="w-$$-$t0"
     [ "$intmux" = 1 ] && wset @cred_sid "$FLEET_CRED_SID"
   fi
+  # A new agent says its own state afresh (issue #2537, EPIC #2535 C2): the last
+  # one's OSC 7501 report — a resume, a cfg-restart, a migrated window's first
+  # launch — must not hold the hooks off for two minutes, nor make a carried
+  # state look like the new agent's word. Cleared before every launch.
+  [ "$intmux" = 1 ] && { wset -u @agent_status; wset -u @agent_status_ts; }
   PATH="$SHIM_PATH" "$LAUNCH" ${cmd[@]+"${cmd[@]}"}
   rc=$?
   if [ -n "${FLEET_WORKER_CRED:-}" ]; then
@@ -264,6 +269,7 @@ while :; do
   wset @wrap_exit_rc "$rc"
   wset @claude_needs ''
   wset @claude_state_ts "$(date +%s)"
+  wset @claude_state_src wrapper
   wset @claude_state exited          # last: a reader that sees it sees the rest
   pargs=(--rc "$rc" --agent "$agent" --sid "$sid" --title "$(opt window_name)")
   [ "$unp" -gt 0 ] && pargs+=(--unpushed "$unp" --branch "$br")
