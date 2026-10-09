@@ -118,6 +118,8 @@ var routeAccess = map[string]string{
 	// A user's own: scoped to their machine login, their principal, or
 	// FleetScope.
 	"/": accessUser, "/v1/me": accessUser,
+	// 我的额度 (claude-fleet#2517): the subscriptions their own logins use.
+	"/v1/me/quota": accessUser, "/quota": accessUser,
 	"/v1/usage": accessUser, "/v1/history": accessUser, "/v1/summary": accessUser,
 	"/v1/sessions": accessUser, "/v1/sessions/": accessUser,
 	"/v1/live": accessUser, "/v1/live/stream": accessUser,
@@ -367,12 +369,12 @@ func (s *Server) auditRoleDenied(r *http.Request) {
 	}
 }
 
-// Pages, as /v1/me lists them for the menu (C7, C8). A user's four; an
-// admin's every one: the four, then Subscriptions, Machines, Users,
-// Settings and Audit (claude-fleet#1990).
+// Pages, as /v1/me lists them for the menu (C7, C8). A user's own; an
+// admin's every one: the same, then Subscriptions, Machines, Users,
+// Settings and Audit (claude-fleet#1990). quota is 我的额度 (#2517).
 var (
-	userPages  = []string{"overview", "sessions", "devices", "config"}
-	adminPages = []string{"overview", "sessions", "devices", "config",
+	userPages  = []string{"overview", "sessions", "devices", "quota", "config"}
+	adminPages = []string{"overview", "sessions", "devices", "quota", "config",
 		"subscriptions", "machines", "people", "settings", "audit"}
 )
 
