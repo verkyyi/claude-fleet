@@ -293,9 +293,17 @@ def inventory_row(parts):
     Column 30 (issue #2505): `test=1` — a session the TEST identity's client
     placed (@test_identity): the person's list hides it, `fleet ls` marks it 测试.
     Absent otherwise. With no 7501 report, a `needs` row's subtype and `detail`
-    fill status_kind / status_msg (issue #2538)."""
+    fill status_kind / status_msg (issue #2538).
+    Column 31 (issue #2617, EPIC #2615 C2): `orchq=<n>` — what waits behind the
+    orchestrator's running turn (@orch_queue, the mod's count) → `orch_queue`
+    (an int); absent on every other window and on an orchestrator that cannot
+    count (Codex, no mod)."""
     parts = list(parts)
     extra = {}
+    if len(parts) >= 31 and parts[-1].startswith("orchq="):
+        q = parts.pop()[6:]
+        if re.fullmatch(r"[0-9]{1,4}", q):
+            extra["orch_queue"] = int(q)
     if len(parts) >= 30 and parts[-1].startswith("test="):
         if parts.pop()[5:] == "1":
             extra["test"] = True

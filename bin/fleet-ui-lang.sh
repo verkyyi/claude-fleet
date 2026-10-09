@@ -564,6 +564,19 @@ fleet_ui_t() {
     en:qd_done_fmt)             printf 'filed #%s and started its worker' "${1:-}" ;;
     zh:qd_failed_fmt)           printf '没派出去：%s' "${1:-}" ;;
     en:qd_failed_fmt)           printf 'not dispatched: %s' "${1:-}" ;;
+    # what waits behind a busy orchestrator (issue #2617): the band above its
+    # prompt (mod queue.ts — n, what it is busy with, seconds: dump fills three),
+    # the 「新任务」 row's end (fleet-sidebar.py), the bar when it cannot count
+    zh:orch_queue_fmt)          printf '排队 %s 条 · 在忙 %s（已 %s 秒）· /qd 直接派' "${1:-}" "${2:-}" "${3:-}" ;;
+    en:orch_queue_fmt)          printf '%s queued · busy with %s (%s s) · /qd to dispatch now' "${1:-}" "${2:-}" "${3:-}" ;;
+    zh:orch_queue_thinking)     printf '想下一步' ;;
+    en:orch_queue_thinking)     printf 'the next step' ;;
+    zh:orch_queue_qd)           printf '快速派发' ;;
+    en:orch_queue_qd)           printf 'quick dispatch' ;;
+    zh:orch_queue_row_fmt)      printf '排队 %s' "${1:-}" ;;
+    en:orch_queue_row_fmt)      printf '%s queued' "${1:-}" ;;
+    zh:orch_busy_hint)          printf '编排在忙 · 你说的会排到它这一步做完' ;;
+    en:orch_busy_hint)          printf 'orchestrator busy · what you say waits for this step to finish' ;;
     zh:compose_sent_fmt)        printf '已发出：%s · 开工中…' "${1:-}" ;;
     en:compose_sent_fmt)        printf 'sent: %s · starting…' "${1:-}" ;;
     zh:compose_empty)           printf '先写一行再 ↵' ;;

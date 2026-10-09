@@ -727,7 +727,7 @@ for s in sessions:
                      issue=w.get("issue") or "", repo=w.get("repo") or "",
                      state=w.get("lifecycle") if w.get("lifecycle") not in (None, "", "awake") else (w.get("state") or ""),
                      agent=w.get("agent") or "", name=w.get("name") or w.get("key") or wid.split("/", 1)[1],
-                     owid=by_ident.get(w.get("origin_wid") or "", w.get("origin_wid") or ""), needs=w.get("needs") or "", busy=w.get("busy") or "", born=born_of(w), cfg=w.get("cfg") if w.get("cfg") in ("stale", "renew", "ok") else "", title=w.get("title") if isinstance(w.get("title"), str) else "", detail=w.get("detail") if isinstance(w.get("detail"), str) else "", role="orchestrator" if w.get("role") == "orchestrator" else "", epic=w.get("epic") if isinstance(w.get("epic"), str) and re.fullmatch(r"(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#[1-9][0-9]{0,9}(?::[0-9]{1,4}/[0-9]{1,4})?", w.get("epic")) else "", reap=w.get("reap") if isinstance(w.get("reap"), str) and re.fullmatch(r"[A-Za-z0-9:.+-]{1,48}", w.get("reap")) else "", backfill="failed" if w.get("backfill") == "failed" else "", test=w.get("test") is True, ctx=ctx_of(w), ask=ask_of(w, w.get("lifecycle") if w.get("lifecycle") not in (None, "", "awake") else (w.get("state") or "")), stale=stale_of(w), seen=epoch(s.get("observed_at")), seenf=fepoch(s.get("observed_at")),
+                     owid=by_ident.get(w.get("origin_wid") or "", w.get("origin_wid") or ""), needs=w.get("needs") or "", busy=w.get("busy") or "", born=born_of(w), cfg=w.get("cfg") if w.get("cfg") in ("stale", "renew", "ok") else "", title=w.get("title") if isinstance(w.get("title"), str) else "", detail=w.get("detail") if isinstance(w.get("detail"), str) else "", role="orchestrator" if w.get("role") == "orchestrator" else "", queue=str(w["orch_queue"]) if type(w.get("orch_queue")) is int and w["orch_queue"] >= 0 else "", epic=w.get("epic") if isinstance(w.get("epic"), str) and re.fullmatch(r"(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#[1-9][0-9]{0,9}(?::[0-9]{1,4}/[0-9]{1,4})?", w.get("epic")) else "", reap=w.get("reap") if isinstance(w.get("reap"), str) and re.fullmatch(r"[A-Za-z0-9:.+-]{1,48}", w.get("reap")) else "", backfill="failed" if w.get("backfill") == "failed" else "", test=w.get("test") is True, ctx=ctx_of(w), ask=ask_of(w, w.get("lifecycle") if w.get("lifecycle") not in (None, "", "awake") else (w.get("state") or "")), stale=stale_of(w), seen=epoch(s.get("observed_at")), seenf=fepoch(s.get("observed_at")),
                      local=here["sess"] if here else None,
                      lwid=windows.get((here["sess"], wid.split("/", 1)[1]), "") if here else ""))
 
@@ -928,7 +928,7 @@ for f in local:
     write(os.path.join(gdir, "needs_" + f["sess"]), "".join(need))
     # The orchestrating session (issue #1957): `orch_<sess>` beside the cache, ONE
     # line — `<worker_id> US <machine> US <online|lost> US <state> US <needs> US
-    # <question>`. The person has one (issue #2117: the hub names the machine that
+    # <question>[ US <queue>]`. The person has one (issue #2117: the hub names the machine that
     # holds it, fleet-orchestrator.sh closes the others); should two still answer
     # — a machine that has not asked yet, an old hub — the line is the online one
     # on the home machine (`fleet connect`'s last pick), then online, then by
@@ -949,8 +949,12 @@ for f in local:
         return (n or "").split(".")[0].lower()
     orch = sorted((r for r in rows if r["role"] == "orchestrator" and not (r["local"] and r["local"] != f["sess"])),
                   key=lambda r: (r["av"] != "online", not home or first_label(r["node"]) != first_label(home), r["node"]))
+    # A 7th column (issue #2617, EPIC #2615 C2): `<queue>`, what waits behind its
+    # running turn (the worker's orch_queue, the node inventory's `orchq=`) — only
+    # when the node counted one (0 included), so an orchestrator that cannot count
+    # (Codex, no mod, an older node) writes the six columns byte for byte as before.
     line = lambda r: "\x1f".join(clean(v) for v in (r["wid"], r["node"], r["av"], r["state"], r["needs"],
-                                                      r["detail"][:120])) + "\n"
+                                                      r["detail"][:120]) + ((r["queue"],) if r["queue"] else ())) + "\n"
     write(os.path.join(gdir, "orch_" + f["sess"]), "".join(line(r) for r in orch[:1]))
     write(os.path.join(gdir, "orch_all_" + f["sess"]), "".join(line(r) for r in orch))
     write(os.path.join(gdir, "orch_multi_" + f["sess"]),

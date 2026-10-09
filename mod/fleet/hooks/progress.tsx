@@ -12,6 +12,10 @@
 // A child newly at `!`, or this PR's checks turning red, toasts once; the
 // alert re-arms when it clears.
 //
+// In the orchestrator's window the same band carries what waits behind its
+// running turn (queue.ts, issue #2617): 「排队 N 条 · 在忙 X（已 M 秒）· /qd 直接派」
+// in yellow above the PR line, with a button that opens /qd (qd.tsx).
+//
 // The refresh timer starts from this file's own session.start hook, past the
 // version gate (`$` is followed only within one file, so it cannot start from
 // lifecycle.ts's onReady, and a render hook is pure — no state writes). While
@@ -23,6 +27,9 @@ import type { EngineInterface, On, Timer } from 'claude-code'
 
 import type { ProgressSnapshot } from '../types'
 import { isOpen } from './gate'
+import { isOrchestrator } from './orchestrator'
+import { QD_COMMAND, t } from './qd'
+import { QUEUE_IDLE, queueText } from './queue'
 import {
   children, newAlerts, parseLedger, parseTmux, PROGRESS_MS, prFor, segments, selfKey, slug, tmuxArgv,
 } from './progress-model'
@@ -30,6 +37,8 @@ import { TMUX_TIMEOUT_MS } from './tmux'
 
 const progress = atom({ plugin: 'fleet', key: 'progress' } as const, null as ProgressSnapshot | null)
 const alerts = atom({ plugin: 'fleet', key: 'alerts' } as const, [] as string[])
+/** queue.ts's count, drawn here: the same `fleet/queue` state (issue #2617). */
+const queue = atom({ plugin: 'fleet', key: 'queue' } as const, QUEUE_IDLE)
 
 // Module state: a reload is a fresh module, and session.start fires again.
 let timer: Timer | undefined
@@ -113,17 +122,40 @@ export function registerProgress(on: On): void {
     // snapshot, so a draw that passed early (gate shut, nothing read yet)
     // would otherwise never be redrawn when the first refresh lands.
     const snap = await read($, progress)
-    if (!isOpen() || e.props.hasSurvey || snap === null) return next(e)
-    const kept = segments(snap)
-    if (kept.length === 0) return next(e)
-    const { Box, Text } = $.ui.resolve(e)
+    const q = await read($, queue)
+    if (!isOpen() || e.props.hasSurvey) return next(e)
+    // The orchestrator's queue (queue.ts, issue #2617) shares this one site:
+    // its yellow line on top, the PR segment under it — one tree, never two.
+    const waiting = isOrchestrator() ? queueText(q) : ''
+    const kept = snap === null ? [] : segments(snap)
+    if (kept.length === 0 && waiting === '') return next(e)
+    const { Box, Text, Button } = $.ui.resolve(e)
     return (
-      <Box key="fleet-progress" flexDirection="row">
-        {kept.map(seg => (
-          <Text key={seg.id} color={seg.color} wrap="truncate-end">
-            {seg.text}
-          </Text>
-        ))}
+      <Box key="fleet-band" flexDirection="column">
+        {waiting !== '' && (
+          <Box key="fleet-queue" flexDirection="row">
+            <Text key="fleet-queue-text" color="yellow" wrap="truncate-end">
+              {waiting}
+            </Text>
+            <Button
+              key="fleet-queue-qd"
+              label={t('orch_queue_qd')}
+              dimColor
+              onPress={() => {
+                void $.command.run({ command: QD_COMMAND }).catch(() => undefined)
+              }}
+            />
+          </Box>
+        )}
+        {kept.length > 0 && (
+          <Box key="fleet-progress" flexDirection="row">
+            {kept.map(seg => (
+              <Text key={seg.id} color={seg.color} wrap="truncate-end">
+                {seg.text}
+              </Text>
+            ))}
+          </Box>
+        )}
       </Box>
     )
   }).catch(($, e, next) => next(e))

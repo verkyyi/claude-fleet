@@ -96,7 +96,8 @@ def load_text():
     locale exactly as every other fleet surface does, and a printf argument
     comes back as a \\001 slot for tr() to fill."""
     try:
-        out = subprocess.run(["sh", str(BIN / "fleet-ui-lang.sh"), "dump", "sidebar_", "no_repo", "needs_"],
+        out = subprocess.run(["sh", str(BIN / "fleet-ui-lang.sh"), "dump", "sidebar_", "no_repo", "needs_",
+                              "orch_queue_row", "orch_busy"],
                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10).stdout
     except (OSError, subprocess.SubprocessError):
         out = b""
@@ -817,19 +818,37 @@ def open_portal(session):
 ORCH_SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 
-def orch_state(session):
-    """The orchestrating session's state (issue #1957) — the first line of
-    fleet-hub-sessions.sh's orch_<session> (online first): "" when no machine
-    runs one. The orchestrator is no row of the list: 「新任务」 wears it."""
+def orch_line(session):
+    """The first line of fleet-hub-sessions.sh's orch_<session> (online first),
+    split on US — `wid·node·av·state·needs·detail[·queue]` — or None when no
+    machine runs one."""
     try:
         with open(os.path.join(status_dir(), "orch_" + (session or "")), encoding="utf-8") as f:
             for line in f:
                 p = line.rstrip("\n").split("\x1f")
                 if len(p) >= 4 and "/" in p[0]:
-                    return p[3]
+                    return p
     except OSError:
         pass
-    return ""
+    return None
+
+
+def orch_state(session):
+    """The orchestrating session's state (issue #1957) — "" when no machine
+    runs one. The orchestrator is no row of the list: 「新任务」 wears it."""
+    p = orch_line(session)
+    return p[3] if p else ""
+
+
+ORCH_BUSY = ("working", "preparing", "waking")
+
+
+def orch_queue(p):
+    """What waits behind its running turn (issue #2617): the line's 7th column as
+    an int, None when the line has none — an orchestrator that cannot count
+    (Codex, no mod) or an older node."""
+    q = p[6].strip() if p and len(p) >= 7 else ""
+    return int(q) if q.isdigit() else None
 
 
 def remote_name(session, wid):
@@ -860,11 +879,17 @@ def with_portal(rows, placing, session=""):
             not (row[0] == "hdr" and row[1] == "" and row[2] == "─")]
     pad = [""] * (ROW_FIELDS - 9)
     state, glyph = "portal", "+"
-    ost = orch_state(session) if session else ""
+    line = orch_line(session) if session else None
+    ost = line[3] if line else ""
     if ost in ("needs", "failed"):
         state, glyph = "needs", "!"
-    elif ost in ("working", "preparing", "waking"):
+    elif ost in ORCH_BUSY:
         state, glyph = "working", ORCH_SPIN[int(time.time() * 4) % len(ORCH_SPIN)]
+    # What waits behind its turn (issue #2617): 「排队 N」 at the row's end, where a
+    # session row has its #N (row_num) — only while something waits.
+    queued = orch_queue(line)
+    if queued:
+        pad = [tr("orch_queue_row_fmt", str(queued))] + pad[1:]
     top = [[PORTAL_KEY, state, glyph, tr("sidebar_portal"), " ", "", "0", "", ""] + pad]
     if placing is not None and placing.get("verb") == "compose" and \
             placing.get("state") in ("placing", "opened", "await"):
@@ -1594,8 +1619,11 @@ def row_right(badge, num=""):
 
 
 def row_num(row):
-    """The issue number a row ends in: field 9 when it is `#<digits>`, else ""."""
+    """The issue number a row ends in: field 9 when it is `#<digits>`, else "".
+    「新任务」's field 9 is what waits behind the orchestrator (「排队 N」, #2617)."""
     num = (row[9] if len(row) > 9 else "").strip()
+    if row and row[0] == PORTAL_KEY:
+        return num
     return num if re.fullmatch(r"#\d+", num) else ""
 
 
@@ -1798,29 +1826,40 @@ def detail_line(row):
     return " · ".join(p.strip() for p in parts if p and p.strip() not in ("", "—", "·"))
 
 
-def bar_hint(rows, selected, current, width, orch=False):
+def bar_hint(rows, selected, current, width, orch=False, busy=""):
     """What the client's bar reads off the list (issue #1951, EPIC #1949 C2), as
     (view, name, orch): view `portal` while the writing area (「新任务」, issue
     #1953) is in the right pane — the bar then says ITS keys — else ""; name =
     the highlighted session row's `detail_line` (issue #2305 — the row itself is
     state · name · N/N), "" on a heading. A literal for tmux: `#` doubled.
     The third, `1` while a machine runs the orchestrating session (issue #2146):
-    the writing area's bar then names ⌘N 编排 and ⇧⇥ — else ""."""
+    the writing area's bar then names ⌘N 编排 and ⇧⇥ — else "". The fourth
+    (issue #2617): `busy` — orch_busy_hint while an orchestrator that cannot
+    count (no 7th column: Codex, no mod) is busy — else ""."""
     view = "portal" if current == PORTAL_KEY else ""
     row = next((r for r in rows if r and r[0] != "hdr" and r[0] == selected), None)
     name = detail_line(row) if row is not None and row[0] != PORTAL_KEY else ""
-    return view, name.replace("#", "##"), "1" if orch else ""
+    return view, name.replace("#", "##"), "1" if orch else "", busy.replace("#", "##")
+
+
+def orch_busy(session):
+    """The bar's busy line (issue #2617): orch_busy_hint while the orchestrator is
+    busy and its line carries no count — an orchestrator with the mod counts, and
+    its band says it in the window; else ""."""
+    p = orch_line(session)
+    return tr("orch_busy_hint") if p and p[3] in ("working", "preparing") and orch_queue(p) is None else ""
 
 
 def publish_hint(window, hint, last):
-    """`@fleet_view` / `@fleet_hint_name` / `@fleet_orch` on the list's window —
+    """`@fleet_view` / `@fleet_hint_name` / `@fleet_orch` / `@fleet_orch_busy` on the list's window —
     the bar's format reads them (conf/tmux-shell.conf @fleet_hint) — only on
     change."""
     if hint == last or not window:
         return last
-    view, name, orch = hint
+    view, name, orch, busy = hint
     cmds = []
-    for opt, val in (("@fleet_view", view), ("@fleet_hint_name", name), ("@fleet_orch", orch)):
+    for opt, val in (("@fleet_view", view), ("@fleet_hint_name", name), ("@fleet_orch", orch),
+                     ("@fleet_orch_busy", busy)):
         cmds += (["set-option", "-w", "-t", window, opt, val] if val else
                  ["set-option", "-uw", "-t", window, opt]) + [";"]
     tmux(*cmds[:-1])
@@ -3160,7 +3199,8 @@ def ui(screen, session, worker, lock):
         # the list clipped it — written only when it changes.
         if view == "live":
             hint_last = publish_hint(window, bar_hint(rows, selected, current_row, width,
-                                                          bool(STAGE and orch_state(session))), hint_last)
+                                                          bool(STAGE and orch_state(session)),
+                                                          orch_busy(session) if STAGE else ""), hint_last)
         if where < offset:
             offset = where
         elif where >= offset + page:

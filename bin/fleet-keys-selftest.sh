@@ -438,6 +438,12 @@ EOF
   ktm shell set-option -g @fleet_compose 1
   bar=$(ktm shell display-message -p '#{E:@fleet_hint_session}' 2>/dev/null | sed 's/#\[[^]]*\]//g')
   case "$bar" in *"⌘N 新任务"*) ;; *) fail "8: with FLEET_COMPOSE=1 the bar does not say ⌘N 新任务: $bar" ;; esac
+  # An orchestrator that cannot count is busy (issue #2617): the list sets
+  # @fleet_orch_busy to the ui-lang line and the bar says it; unset, nothing.
+  case "$bar" in *"编排在忙"*) fail "8: the bar says 编排在忙 with no @fleet_orch_busy: $bar" ;; esac
+  ktm shell set-option -g @fleet_orch_busy '编排在忙 · 你说的会排到它这一步做完'
+  bar=$(ktm shell display-message -p '#{E:@fleet_hint_session}' 2>/dev/null | sed 's/#\[[^]]*\]//g')
+  case "$bar" in *"⌘Q 退出 fleet  编排在忙 · 你说的会排到它这一步做完"*) ;; *) fail "8: @fleet_orch_busy is not on the bar: $bar" ;; esac
   ktm stock kill-server; ktm node kill-server; ktm shell kill-server
   rm -rf "$KW"
 fi
