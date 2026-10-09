@@ -167,7 +167,7 @@ echo "\${FLEET_DOCTOR_BASELINE:-0} \${FLEET_DOCTOR_SINCE:--}" >> "$WORK/doctor-e
 echo '  PASS  gh       ok'
 echo '  WARN  install  behind (a WARN never counts)'
 [ -f "$WORK/doctor-fail-always" ] && echo '  FAIL  quota    cache stale (pre-existing)'
-${1:+[ "\$(cd "\$(dirname "\$0")/.." && pwd -P)" = "\$(cd "$CO" && pwd -P)" ] && echo '$1'}
+${1:+[ "\$(cd "\$(dirname "\$0")/.." && pwd -P)" = "\$(cd '$CO' && pwd -P)" ] && echo '$1'}
 ${2:+[ -f "$WORK/old-evidence" ] && echo '$2'}
 exit 0
 EOF
