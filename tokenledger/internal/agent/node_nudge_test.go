@@ -169,11 +169,20 @@ func TestNudgeDebouncesAndRateLimits(t *testing.T) {
 	}
 	time.Sleep(2 * nodeNudgePoll)
 
-	// Burst: five touches 20 ms apart (each a distinct mtime on any
-	// filesystem with ms resolution) all land inside one debounce window.
+	// Burst: five writes, each a distinct mtime, back to back. They must all
+	// fall between two polls: a burst a poll tick lands inside is two changes
+	// to the watcher, and the limiter rightly sends the second one too (the
+	// last change of a burst always goes out). Spacing them 20 ms apart made
+	// the burst ~100 ms of a 250 ms poll, and a tick running late on a loaded
+	// -race runner landed in it (claude-fleet#2592); set explicit mtimes in a
+	// tight loop so the burst spans microseconds.
+	base := time.Now()
 	for i := 0; i < 5; i++ {
 		touch(t, nudge)
-		time.Sleep(20 * time.Millisecond)
+		at := base.Add(time.Duration(i+1) * time.Millisecond)
+		if err := os.Chtimes(nudge, at, at); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if !waitBeats(t, k, 2, 2*time.Second) {
 		t.Fatalf("burst: no beat (beats=%d)", k.beats())
