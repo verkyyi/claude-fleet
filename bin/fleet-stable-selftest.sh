@@ -50,6 +50,10 @@ contains() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) ;; *) fail "$1 — out
 $2";; esac; }
 
 export GIT_CONFIG_GLOBAL="$WORK/gitconfig" GIT_CONFIG_SYSTEM=/dev/null
+# no hub here: gate 7 (the hub's artifacts, issue #2631) says so and passes —
+# its refusal is docs/BREAK-IT.md's release-artifact-missing drill
+export FLEET_CONF_DIR="$WORK/conf" XDG_CONFIG_HOME="$WORK/conf"
+unset CCQUOTA_HUB_URL FLEET_HUB_URL 2>/dev/null
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
 : > "$WORK/gitconfig"
 

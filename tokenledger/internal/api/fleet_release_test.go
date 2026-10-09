@@ -432,3 +432,75 @@ func TestReleasePinnedArtifactsOnTheReleaseVolume(t *testing.T) {
 		}
 	}
 }
+
+// claude-fleet#2631: release.json pins a Claude Code version whose artifact is
+// not in CCQUOTA_FLEET_RELEASE_ARTIFACTS. The build is refused (named, nothing
+// kept), /artifacts says what a build would carry — what fleet-stable.sh move
+// checks first — and once the file lands the next request builds the whole
+// release, no second stable move needed. A tree with no release.json pins
+// nothing (every other test here).
+func TestReleaseBuildRefusesMissingPinned(t *testing.T) {
+	r := newReleaseRig(t)
+	r.g.files[shaA+"/"+release.ReleaseJSON] = `{"schema":1,"components":{` +
+		`"ccquota":{"artifact":"ccquota-{os}-{arch}"},` +
+		`"claude":{"version":"9.9.9","artifact":"claude-{version}-{os}-{arch}"},` +
+		`"codex":{"version":"0.1.0","artifact":"codex-{version}-{os}-{arch}"},` +
+		`"tmux":{"version":"3.7c","artifact":"tmux-{version}-{os}-{arch}"},` +
+		`"supervisor":{"script":"bin/fleet-node-update.py"}}}`
+	must(t, os.WriteFile(filepath.Join(r.inst, "codex-0.1.0-darwin-arm64"), []byte("CODEX"), 0o755))
+	must(t, os.WriteFile(filepath.Join(r.inst, "tmux-3.7c-darwin-arm64"), []byte("TMUX"), 0o755))
+	must(t, r.rs.Source.Refresh(context.Background()))
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	err := r.rs.Ensure(ctx, shaA)
+	if err == nil || !strings.Contains(err.Error(), "claude-9.9.9-darwin-arm64") {
+		t.Fatalf("Ensure = %v, want a refusal naming claude-9.9.9-darwin-arm64", err)
+	}
+	if r.rs.Has(shaA) {
+		t.Fatal("a release missing a pinned artifact was kept")
+	}
+	resp, body := getBody(t, r.hub.URL+release.Path+"stable")
+	if resp.StatusCode != http.StatusBadGateway || !strings.Contains(body, "claude-9.9.9-darwin-arm64") {
+		t.Fatalf("GET stable: %d %s", resp.StatusCode, body)
+	}
+
+	listed := func() []string {
+		resp, body := getBody(t, r.hub.URL+release.Path+"artifacts")
+		if resp.StatusCode != 200 || resp.Header.Get("Cache-Control") != "no-store" {
+			t.Fatalf("GET artifacts: %d %q %s", resp.StatusCode, resp.Header.Get("Cache-Control"), body)
+		}
+		var v struct {
+			Artifacts []string `json:"artifacts"`
+			Platforms []string `json:"platforms"`
+		}
+		must(t, json.Unmarshal([]byte(body), &v))
+		if strings.Join(v.Platforms, ",") != "darwin-arm64" {
+			t.Errorf("platforms %v", v.Platforms)
+		}
+		return v.Artifacts
+	}
+	if got := strings.Join(listed(), " "); strings.Contains(got, "claude-9.9.9") || !strings.Contains(got, "ccquota-darwin-arm64") || strings.Contains(got, "README") {
+		t.Fatalf("artifacts before the upload: %s", got)
+	}
+
+	must(t, os.WriteFile(filepath.Join(r.inst, "claude-9.9.9-darwin-arm64"), []byte("CLAUDE"), 0o755))
+	if got := strings.Join(listed(), " "); !strings.Contains(got, "claude-9.9.9-darwin-arm64") {
+		t.Fatalf("artifacts after the upload: %s", got)
+	}
+	resp, body = getBody(t, r.hub.URL+release.Path+"stable")
+	if resp.StatusCode != 200 {
+		t.Fatalf("GET stable after the upload: %d %s", resp.StatusCode, body)
+	}
+	var m release.Manifest
+	must(t, json.Unmarshal([]byte(body), &m))
+	have := map[string]bool{}
+	for _, a := range m.Artifacts {
+		have[a.Name] = true
+	}
+	for _, n := range []string{"ccquota-darwin-arm64", "claude-9.9.9-darwin-arm64", "codex-0.1.0-darwin-arm64", "tmux-3.7c-darwin-arm64"} {
+		if !have[n] {
+			t.Errorf("the rebuilt release lacks %s: %v", n, m.Artifacts)
+		}
+	}
+}

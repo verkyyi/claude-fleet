@@ -35,6 +35,7 @@ import (
 // ReleaseKeep (10), never the current stable.
 //
 //	GET /v1/fleet/release/key                   the signing public key
+//	GET /v1/fleet/release/artifacts             the artifact names a build now carries
 //	GET /v1/fleet/release/<sha|stable>          the signed manifest (.files …)
 //	GET /v1/fleet/release/<sha>/manifest.sig    its signature
 //	GET /v1/fleet/release/<sha>/tree.tar.gz     the runtime tree
@@ -62,6 +63,7 @@ type ReleaseStore struct {
 	Source       *StableSource      // where a commit's files come from
 	DistDir      string             // ccquota-<os>-<arch> binaries (FleetDistDir)
 	ArtifactsDir string             // pinned installers (Claude Code, Codex …)
+	Platforms    []string           // <os>-<arch> a release must carry release.json's pins for (default release.DefaultPlatforms)
 	Keep         int                // default ReleaseKeep
 
 	mu       sync.Mutex
@@ -215,7 +217,44 @@ func (rs *ReleaseStore) build(ctx context.Context, sha string) error {
 	if err != nil {
 		return err
 	}
-	return rs.publish(sha, files, rs.artifacts(), time.Now())
+	arts := rs.artifacts()
+	if missing, err := rs.missingPinned(files, arts); err != nil {
+		return err
+	} else if len(missing) > 0 {
+		// never bake a release a managed machine cannot install: it would be
+		// kept, never rebuilt, and every machine would sit in backoff on it
+		// (claude-fleet#2631). Unbuilt, the next request after the file lands
+		// builds the whole one.
+		return fmt.Errorf("release.json pins %s, which CCQUOTA_FLEET_RELEASE_ARTIFACTS does not hold — put it there", strings.Join(missing, ", "))
+	}
+	return rs.publish(sha, files, arts, time.Now())
+}
+
+func (rs *ReleaseStore) platforms() []string {
+	if len(rs.Platforms) > 0 {
+		return rs.Platforms
+	}
+	return release.DefaultPlatforms
+}
+
+// missingPinned: the artifacts the tree's release.json pins that arts lacks.
+// A tree with no release.json pins nothing.
+func (rs *ReleaseStore) missingPinned(files map[string][]byte, arts map[string]string) ([]string, error) {
+	rj, ok := files[release.ReleaseJSON]
+	if !ok {
+		return nil, nil
+	}
+	want, err := release.Pinned(rj, rs.platforms())
+	if err != nil {
+		return nil, err
+	}
+	var missing []string
+	for _, n := range want {
+		if _, ok := arts[n]; !ok {
+			missing = append(missing, n)
+		}
+	}
+	return missing, nil
 }
 
 // publish writes one build of <sha> into its own directory (release.Build
@@ -339,6 +378,19 @@ func (s *Server) handleRelease(w http.ResponseWriter, r *http.Request) {
 	if rest == "key" {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_, _ = w.Write([]byte(release.FormatPublicKey(rs.Key.Public().(ed25519.PublicKey)) + "\n"))
+		return
+	}
+	if rest == "artifacts" {
+		// what a release built now would carry: fleet-stable.sh move checks
+		// release.json's pins against it before stable moves (claude-fleet#2631)
+		names := []string{}
+		for n := range rs.artifacts() {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		_ = json.NewEncoder(w).Encode(map[string]any{"artifacts": names, "platforms": rs.platforms()})
 		return
 	}
 	sha, sub, _ := strings.Cut(rest, "/")
