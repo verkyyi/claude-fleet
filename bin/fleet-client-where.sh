@@ -72,7 +72,7 @@ HUBREAD=$(${FLEET_CLIENT_WHERE_CMD:-python3 "$BIN/fleet-client-lease.py" where} 
 _haw=$(printf '%s' "$HUBREAD" | sed -n 's/.*"node_token": *"refused: \([^"]*\)".*/node token: \1/p')
 [ -n "$_haw" ] || [ "$hrc" != 4 ] || _haw=$(printf '%s' "$HUBREAD" | sed -n 's/.*"why": *"\([^"]*\)".*/\1/p')
 [ -n "$_haw" ] || [ "$hrc" != 4 ] || _haw='HTTP 401'
-if [ -f "$BIN/fleet-lib.sh" ] && [ -z "${FLEET_CLIENT_WHERE_CMD:-}${FLEET_CLIENT_WHERE_NOTE_OFF:-}" ]; then
+if [ -f "$BIN/fleet-lib.sh" ] && [ -z "${FLEET_CLIENT_WHERE_CMD:-}" ]; then
   if [ -n "$_haw" ]; then
     bash -c '. "$1/fleet-lib.sh" && fleet_hub_auth_note client-where fail "$2"' _ "$BIN" "$_haw" >/dev/null 2>&1
   elif [ "$hrc" = 0 ] && grep -q '^client-where	' "${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash/global/hub_auth_fail" 2>/dev/null; then
