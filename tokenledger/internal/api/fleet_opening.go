@@ -70,9 +70,14 @@ func (s *Server) accountStateOf(pid string, now time.Time) *AccountState {
 		}
 	}
 	var opening, failed *store.FleetAccount
+	ownActive := false
 	for i := range accts {
 		a := &accts[i]
-		if !a.Managed() || own(*a) {
+		if own(*a) {
+			ownActive = ownActive || a.State == store.AccountActive
+			continue
+		}
+		if !a.Managed() {
 			continue // a computer the person logged in on, not a machine opened for them (#2212)
 		}
 		switch a.State {
@@ -97,6 +102,11 @@ func (s *Server) accountStateOf(pid string, now time.Time) *AccountState {
 	}
 	if failed != nil {
 		return &AccountState{State: "failed", Machine: failed.Hostname, Login: failed.Login, Ask: ask}
+	}
+	if ownActive {
+		// No other machine to open one on: the drill's own login is all it
+		// has — the answer before #2549, when it may well host its fleet.
+		return nil
 	}
 	return &AccountState{State: "none", Ask: ask}
 }

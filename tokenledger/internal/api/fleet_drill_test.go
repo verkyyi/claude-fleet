@@ -432,3 +432,16 @@ func TestDrillGoesOnlyAfterItsLoginIsRemoved(t *testing.T) {
 		t.Fatal("still there")
 	}
 }
+
+// No other machine to open one on (a one-machine fleet, the drill's own
+// login hosting its fleet): the doors answer as before — no account at all,
+// never 「nobody gave you a machine」.
+func TestDrillOnlyItsOwnMachineAnswersAsBefore(t *testing.T) {
+	h, inv := drillHarness(t)
+	if st := h.srv.accountStateOf(inv.PersonID, time.Now()); st != nil {
+		t.Fatalf("account = %+v; want none at all", st)
+	}
+	if as, _ := h.srv.Store.FleetAccounts(inv.PersonID); len(as) != 1 {
+		t.Fatalf("accounts = %+v; want only its own", as)
+	}
+}
