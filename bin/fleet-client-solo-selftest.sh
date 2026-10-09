@@ -35,6 +35,10 @@
 #      client attached beside it: `fleet claude` → /exit leaves its screen, its
 #      client, its server options (layout, bar), its lease, its where, its
 #      switch history and fleet.conf byte for byte.
+#      D5 ⌃\ (issue #2566) → a shell on this computer, this login in $HOME with
+#      the fleet's commands on its PATH; ⌃\ again → the same session pane, its
+#      proxy never saw the key; prefix \ the same; ⌃D from the shell → the
+#      background. B does the same in the client's `solo` layout.
 #
 # Drives: bin/fleet-shell.sh, bin/fleet-sidebar.py, bin/fleet-sidebar.sh,
 # bin/fleet-topbar.py, bin/fleet-ui-lang.sh, conf/tmux-shell.conf,
@@ -266,6 +270,34 @@ try:
     check(tm('display-message', '-p', '-t', 'fc:home', '#{window_zoomed_flag}') == '1', 'solo: not zoomed')
     print('B: solo — the session and one line:\n    %r' % rows[-1].strip())
 
+    # ⌃\ (issue #2566): to a shell on this computer — a window of the client's
+    # own, as this login in $HOME — and ⌃\ again back to the session: its pane,
+    # its stage window and its `cat` exactly where they were (a ⌃\ reaching it
+    # would SIGQUIT it); prefix \ the same
+    stage_at = tm('display-message', '-p', '-t', 'fc-stage:', '#{window_id} #{pane_id} #{pane_pid}', s=stage)
+    home_pane = tm('display-message', '-p', '-t', 'fc:home', '#{pane_id}')
+
+    def here():
+        return tm('display-message', '-p', '-t', 'fc:', '#{window_name}|#{@solo_shell}|#{pane_id}|#{pane_current_path}')
+    subprocess.run([real_tmux, '-S', term, 'send-keys', '-t', 'term:', 'C-\\'])
+    check(wait(lambda: here().split('|')[1] == '1'), 'solo ⌃\\: not on a shell window: %r' % here())
+    name, _, sh_pane, cwd = here().split('|')
+    check(name == '本机shell' and os.path.realpath(cwd) == os.path.realpath(str(work)),
+          'solo ⌃\\: the shell is not this login\'s, in $HOME: %r' % here())
+    check(wait(lambda: '⌃\\ 回到会话' in screen().split('\n')[-1]), 'solo ⌃\\: the bar: %r' % screen().split('\n')[-1])
+    subprocess.run([real_tmux, '-S', term, 'send-keys', '-t', 'term:', 'C-\\'])
+    check(wait(lambda: here().split('|')[0] == 'home'), 'solo ⌃\\ again: not back on the session: %r' % here())
+    check(here().split('|')[2] == home_pane, 'solo ⌃\\: the session pane changed')
+    check(wait(lambda: solo_drawn() and '⌃\\ 本机 shell' in screen().split('\n')[-1]),
+          'solo ⌃\\ back: the screen:\n%s' % screen())
+    subprocess.run([real_tmux, '-S', term, 'send-keys', '-t', 'term:', 'C-b', '\\'])
+    check(wait(lambda: here().split('|')[2] == sh_pane), 'solo prefix \\: not the same shell again: %r' % here())
+    subprocess.run([real_tmux, '-S', term, 'send-keys', '-t', 'term:', 'C-b', '\\'])
+    check(wait(lambda: here().split('|')[0] == 'home'), 'solo prefix \\ again: not back: %r' % here())
+    check(tm('display-message', '-p', '-t', 'fc-stage:', '#{window_id} #{pane_id} #{pane_pid}', s=stage) == stage_at,
+          'solo ⌃\\: the session moved or saw the key')
+    print('B: ⌃\\ → the shell (%s) → ⌃\\ → the session, its pane untouched; prefix \\ the same' % cwd)
+
     # ⌃D: the client goes, the session stays and never saw it
     before = tm('display-message', '-p', '-t', 'fc-stage:', '#{window_id} #{@remote}', s=stage)
     subprocess.run([real_tmux, '-S', term, 'send-keys', '-t', 'term:', 'C-d'])
@@ -403,7 +435,7 @@ shim.mkdir()
     '#!/bin/sh\nif [ "$1" = -L ]; then l=$2; shift 2; exec %s -S %s/"$l" "$@"; fi\nexec %s "$@"\n'
     % (shlex.quote(real_tmux), shlex.quote(str(socks)), shlex.quote(real_tmux)))
 (shim / 'tmux').chmod(0o755)
-env = dict(os.environ, HOME=str(work), TERM='xterm-256color', FLEET_UI_LANG='zh', FLEET_CONF_DIR=str(conf_dir),
+env = dict(os.environ, HOME=str(work), TERM='xterm-256color', FLEET_UI_LANG='zh', FLEET_CONF_DIR=str(conf_dir), SHELL='/bin/sh',
            FLEET_SHELL_CACHE=str(cache), FLEET_SOLO_WATCH_EVERY='0.2', PATH=str(shim) + os.pathsep + os.environ['PATH'])
 for k in ('TMUX', 'TMUX_PANE', 'FLEET_CLIENT_LAYOUT', 'FLEET_SHELL_SESSION'):
     env.pop(k, None)
@@ -546,6 +578,49 @@ try:
         check(after[i] == before[i], 'D4: /exit changed the regular client\'s %s:\n%r\n→ %r' % (what, before[i], after[i]))
     tm('kill-server', s=reg)
     print('D4: a regular client beside it — screen, client, lease, where, layout, switch history untouched')
+
+    # D5. ⌃\ (issue #2566): to a shell on THIS computer — the view's second
+    # window, this login in $HOME with the fleet's commands on its PATH — and ⌃\
+    # again back: the session's window and pane where they were, its proxy never
+    # saw the key (a ⌃\ reaching it would SIGQUIT the view away); prefix \ the
+    # same; ⌃D from the shell still leaves the view to the background
+    rows.write_text('wid:F/w1\x1fm5\x1f\x1f\x1f\x1fworking\n')
+    terminal()
+    check(wait(drawn, 10), 'D5: not the one-session screen:\n%s' % screen())
+    check('⌃\\ 本机 shell' in screen().split('\n')[-1], 'D5: no ⌃\\ on the bar: %r' % screen().split('\n')[-1])
+    view = str(solos()[0])
+    vname = os.path.basename(view)
+
+    def at():
+        return tm('display-message', '-p', '-t', '=%s:' % vname,
+                  '#{window_id}|#{@solo_shell}|#{pane_id}|#{pane_current_path}', s=view).stdout.strip()
+    sess_win, _, sess_pane, _ = at().split('|')
+    tm('send-keys', '-t', 'term:', 'C-\\', s=term)
+    check(wait(lambda: at().split('|')[1] == '1'), 'D5: ⌃\\ did not open the shell: %r' % at())
+    sh_win, _, sh_pane, cwd = at().split('|')
+    check(os.path.realpath(cwd) == os.path.realpath(str(work)), 'D5: the shell is not in $HOME: %r' % cwd)
+    tm('send-keys', '-t', sh_pane, '-l', 'echo "$PATH" > %s' % shlex.quote(str(work / 'shell-path')), s=view)
+    tm('send-keys', '-t', sh_pane, 'Enter', s=view)
+    check(wait(lambda: (work / 'shell-path').exists() and (work / 'shell-path').read_text().strip() != ''),
+          'D5: the shell did not run a command')
+    spath = (work / 'shell-path').read_text()
+    check(str(work / '.local' / 'bin') in spath and str(cache / 'bin') in spath,
+          'D5: no fleet on the shell\'s PATH: %r' % spath)
+    check(wait(lambda: '⌃\\ 回到会话' in screen().split('\n')[-1]), 'D5: the shell\'s bar: %r' % screen().split('\n')[-1])
+    tm('send-keys', '-t', 'term:', 'C-\\', s=term)
+    check(wait(lambda: at().split('|')[0] == sess_win), 'D5: ⌃\\ again did not come back: %r' % at())
+    check(at().split('|')[2] == sess_pane and wait(drawn), 'D5: the session pane changed:\n%s' % screen())
+    tm('send-keys', '-t', 'term:', 'C-b', '\\', s=term)
+    check(wait(lambda: at().split('|')[2] == sh_pane), 'D5: prefix \\ is not the same shell: %r' % at())
+    tm('send-keys', '-t', 'term:', 'C-b', '\\', s=term)
+    check(wait(lambda: at().split('|')[2] == sess_pane), 'D5: prefix \\ again did not come back: %r' % at())
+    check(not eof.exists(), 'D5: ⌃\\ reached the session')
+    tm('send-keys', '-t', 'term:', 'C-\\', s=term)
+    check(wait(lambda: at().split('|')[1] == '1'), 'D5: not on the shell for ⌃D')
+    tm('send-keys', '-t', 'term:', 'C-d', s=term)
+    check(wait(lambda: 'PROMPT' in screen()), 'D5: ⌃D from the shell did not leave the view:\n%s' % screen())
+    check('会话在后台继续（m5）。`fleet` 可以找回。' in screen() and not eof.exists(), 'D5: the last line: %r' % screen())
+    print('D5: ⌃\\ → a shell in %s → ⌃\\ → the same session pane; prefix \\ the same; ⌃D → the background' % cwd)
     print('D: %d checks' % checks)
 except AssertionError as e:
     print('FAIL D: %s' % e)

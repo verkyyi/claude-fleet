@@ -150,6 +150,7 @@ print_sheet() {
   key "prefix q" "$(fleet_ui_t keys_prefix_05)"
   key "prefix z" "$(fleet_ui_t keys_prefix_09)"
   key "prefix [" "$(fleet_ui_t keys_prefix_10)"
+  key "prefix \\" "$(fleet_ui_t keys_prefix_solo_shell)"
   key "F9" "$(fleet_ui_t keys_prefix_14)"
   key "fleet guide" "$(fleet_ui_t keys_prefix_15)"
   fi
