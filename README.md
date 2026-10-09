@@ -113,7 +113,7 @@ demo repo data.</sub>
 - **Optional Claude Code status line** (`conf/statusline.sh`): wired as a
   *measurement bus*, not a visible line (issue #1452) — it prints nothing and
   stamps the context %, window size, model and effort level (plus the account's
-  rate limits) onto the pane's tmux window, where the pane header shows
+  rate limits) onto the pane's tmux window, where the client's top line shows
   `剩余 62% · Opus 5.5 · high` on its right and the auto-handoff nudge reads the %.
   Opt-in at install time by pointing `settings.json`'s `statusLine` at the
   live-install path, so it improves through `land → /fleet-sync-install`;

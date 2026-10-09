@@ -329,7 +329,7 @@ def bar_record(rows, current):
     if hit is None:
         return None
     row, repo, slug = hit
-    row = list(row) + [""] * (14 - len(row))
+    row = list(row) + [""] * (19 - len(row))
     kind = ""
     if row[1] == "needs":
         kind = "perm" if row[7] == tr("needs_perm") else "ask"
@@ -346,7 +346,28 @@ def bar_record(rows, current):
         # the session's worker id: the top line matches it against what the
         # person's other clients are viewing (issue #1932)
         "wid": current[4:] if current.startswith("wid:") else "",
+        # the measurement bus (issue #2717, field 19 — #2431's five): the top
+        # line's right side, 剩余 % · model · effort
+        **ctx_of(row[18]),
     }
+
+
+def ctx_of(field):
+    """Field 19 `left|band|ts|model|effort` → the record's ctx_left (int) ·
+    ctx_band · ctx_ts (int) · model · effort, each only when valid; {} for none."""
+    part = (field.split("|") + [""] * 5)[:5]
+    out = {}
+    if part[0].isdigit() and int(part[0]) <= 100:
+        out["ctx_left"] = int(part[0])
+    if part[1] in ("ok", "watch", "handoff"):
+        out["ctx_band"] = part[1]
+    if part[2].isdigit() and int(part[2]) > 0:
+        out["ctx_ts"] = int(part[2])
+    if re.fullmatch(r"[A-Za-z0-9 ._()+-]{1,64}", part[3]):
+        out["model"] = part[3]
+    if re.fullmatch(r"[a-z]{1,16}", part[4]):
+        out["effort"] = part[4]
+    return out
 
 
 def publish_bar(rows, current, last, session=""):

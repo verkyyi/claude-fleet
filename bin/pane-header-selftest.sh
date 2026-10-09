@@ -3,24 +3,15 @@
 #
 # Every window shows a top-of-pane header naming its session — its name plus the
 # bound ##{@issue} when issue-bound — EXCEPT the hub, whose operator pane keeps
-# its "▸ FLEET HUB" cue and whose dash pane stays empty. Since issue #1452 a
-# worker / scratch header also carries a RIGHT-aligned `NN% · <model> · <effort>`
-# segment off the window options conf/statusline.sh stamps (@ctx_pct @ctx_band
-# @model @effort) — it replaces the Claude Code bottom status line. All of that
-# lives in ONE line of conf/tmux-attention.conf: `set -g pane-border-format "…"`
-# (plus the `@pct_sign` option beside it). This test takes those REAL lines,
-# sources them on a private tmux server — so the conf parser's treatment of the
-# text (`$`, `%`, quotes) is what is tested, byte for byte — and asserts:
+# its "▸ FLEET HUB" cue and whose dash pane stays empty. It lives in ONE line of
+# conf/tmux-attention.conf: `set -g pane-border-format "…"`. This test takes that
+# REAL line, sources it on a private tmux server — so the conf parser's treatment
+# of the text (`$`, `%`, quotes) is what is tested, byte for byte — and asserts:
 #
 #   • the three-way role routing (#267): worker name + #issue, hub cue, dash empty
-#   • the right segment (#1452, #2431): only with @ctx_pct; `剩余 N% · model ·
-#     effort` off @ctx_left (100 - @ctx_pct without one); coloured by what is
-#     left (>50 green, 20–50 amber, <20 red) or red + 「⚠ 将交接」 for band
-#     handoff; a reading older than 5 minutes (@ctx_ts) greys the whole segment
-#     and says 「N 分钟前」; four widths — ≥100 full, 70–99 no 「剩余」, 50–69
-#     abbreviated (O5.5 / g6a, L/M/H/XH/MX), <50 the % alone; a Claude and a
-#     Codex window read the same (a Codex window with only @cc_model shows it);
-#     no @ctx_pct ⇒ the header is byte for byte the pre-#1452 ` name #issue `
+#   • no right segment (#2717): 剩余 % · model · effort (#1452, #2431) is the
+#     client's top line's (bin/fleet-topbar.py) — a window with every
+#     measurement stamp reads the plain ` name #issue `
 #   • the PR segment (#1954): `PR #N` + ✓ 检查通过 (green) / … 检查中 (amber) /
 #     ✗ <red checks> (red, cut at 24) off @pr_num/@pr_ci/@pr_fail; no @pr_num ⇒
 #     the header is byte for byte the old one
@@ -61,10 +52,9 @@ grep -qE '^[[:space:]]*set(-option)?[[:space:]]+-g[[:space:]]+pane-border-status
 # extract the pane-border-format value (the string between the outer quotes)
 FMT="$(sed -n 's/^[[:space:]]*set\(-option\)\{0,1\}[[:space:]]\{1,\}-g[[:space:]]\{1,\}pane-border-format[[:space:]]\{1,\}"\(.*\)"[[:space:]]*$/\2/p' "$CONF")"
 [ -n "$FMT" ] || fail "could not extract pane-border-format from conf"
-# …and the three lines verbatim, to source: the format, the @pct_sign and the
-# @fleet_ctx_hdr segment it reads (#2431)
-grep -E '^[[:space:]]*set(-option)?[[:space:]]+-g[[:space:]]+(pane-border-format|@pct_sign|@fleet_ctx_hdr)[[:space:]]' "$CONF" > "$WORK/header.conf"
-[ "$(wc -l < "$WORK/header.conf" | tr -d ' ')" = 3 ] || fail "expected exactly one pane-border-format, one @pct_sign and one @fleet_ctx_hdr line in the conf"
+# …and the line verbatim, to source
+grep -E '^[[:space:]]*set(-option)?[[:space:]]+-g[[:space:]]+pane-border-format[[:space:]]' "$CONF" > "$WORK/header.conf"
+[ "$(wc -l < "$WORK/header.conf" | tr -d ' ')" = 1 ] || fail "expected exactly one pane-border-format line in the conf"
 
 # --- build a fleet-shaped session on the private socket ----------------------
 # -f /dev/null: a clean server (no ~/.tmux.conf bleed → base-index etc. stay
@@ -74,7 +64,6 @@ tmux -f /dev/null new-session -d -s s -x 120 -y 40 || fail "could not start isol
 tmux source-file "$WORK/header.conf" || fail "the conf's header lines do not source cleanly"
 [ "$(tmux show-options -gv pane-border-format)" = "$FMT" ] \
   || fail "the sourced pane-border-format differs from the conf's text — the conf parser mangled it ('\$' / '%' / quotes?)"
-[ "$(tmux show-options -gv @pct_sign)" = '%' ] || fail "@pct_sign must source as a lone '%' (got [$(tmux show-options -gv @pct_sign)])"
 
 # an issue-bound worker window
 ww="$(tmux display-message -p '#{window_id}')"
@@ -130,96 +119,15 @@ case "$raw_hdr" in
   *"#"*[0-9]*) fail "raw (no @issue) should show no issue number — got [$raw_hdr]" ;;
 esac
 
-# --- #1452 / #2431: the right segment — 剩余 % · model · effort ---------------
-# every stamp, at the session's 120 columns → all three, right-aligned
-tmux set-window-option -t "$ww" @ctx_pct 38 \; set-window-option -t "$ww" @ctx_left 62 \; set-window-option -t "$ww" @ctx_band ok \; \
+# --- #2717: no right segment — 剩余 % · model · effort is the client's top line's
+# (bin/fleet-topbar.py) to draw; a window with every stamp reads the plain header
+tmux set-window-option -t "$ww" @ctx_pct 38 \; set-window-option -t "$ww" @ctx_left 62 \; set-window-option -t "$ww" @ctx_band handoff \; \
      set-window-option -t "$ww" @model 'Opus 5.5' \; set-window-option -t "$ww" @effort high \; set-window-option -t "$ww" @ctx_ts "$(date +%s)"
-full=" issue-267 #267 剩余 62% · Opus 5.5 · high "
-[ "$(render "$ww")" = "$full" ] || fail "worker header with every stamp — got [$(render "$ww")] want [$full]"
-case "$(raw "$ww")" in
-  *'#[align=right]#[fg=#9ece6a]剩余 62%'*) : ;;
-  *) fail "the segment must be right-aligned and green with 62% left — got [$(raw "$ww")]" ;;
-esac
-# the colour follows what is LEFT: 20–50 amber, <20 red, >50 green
-tmux set-window-option -t "$ww" @ctx_left 50 \; set-window-option -t "$ww" @ctx_band watch
-case "$(raw "$ww")" in *'#[fg=#e0af68]剩余 50%'*) : ;; *) fail "50% left must be amber — got [$(raw "$ww")]" ;; esac
-tmux set-window-option -t "$ww" @ctx_left 20
-case "$(raw "$ww")" in *'#[fg=#e0af68]剩余 20%'*) : ;; *) fail "20% left must be amber — got [$(raw "$ww")]" ;; esac
-tmux set-window-option -t "$ww" @ctx_left 19
-case "$(raw "$ww")" in *'#[fg=#f7768e]剩余 19%'*) : ;; *) fail "19% left must be red — got [$(raw "$ww")]" ;; esac
-case "$(render "$ww")" in *将交接*) fail "under 20% without band=handoff must not say 将交接 — got [$(render "$ww")]" ;; esac
-# at the handoff line: red + ⚠ 将交接, whatever is left
-tmux set-window-option -t "$ww" @ctx_left 35 \; set-window-option -t "$ww" @ctx_band handoff
-[ "$(render "$ww")" = " issue-267 #267 剩余 35% ⚠ 将交接 · Opus 5.5 · high " ] || fail "band=handoff → ⚠ 将交接 — got [$(render "$ww")]"
-case "$(raw "$ww")" in *'#[fg=#f7768e]剩余 35%'*) : ;; *) fail "band=handoff must draw red — got [$(raw "$ww")]" ;; esac
-tmux set-window-option -t "$ww" @ctx_left 62 \; set-window-option -t "$ww" @ctx_band ok
-
-# four widths: ≥100 full · 70–99 no 剩余 · 50–69 abbreviated · <50 the % alone.
-# resize-window works as-is on a detached server; do NOT add `window-size manual`
-# for it — on tmux 3.6a that plus a later new-window kills the (private) server.
-tmux resize-window -t "$ww" -x 100
-[ "$(render "$ww")" = "$full" ] || fail "pane_width 100 is still full — got [$(render "$ww")]"
-tmux resize-window -t "$ww" -x 99
-[ "$(tmux display-message -p -t "$ww" '#{pane_width}')" = 99 ] || fail "could not resize the worker window to 99 columns"
-[ "$(render "$ww")" = " issue-267 #267 62% · Opus 5.5 · high " ] || fail "pane_width 99 drops 剩余 — got [$(render "$ww")]"
-tmux resize-window -t "$ww" -x 70
-[ "$(render "$ww")" = " issue-267 #267 62% · Opus 5.5 · high " ] || fail "pane_width 70 drops 剩余 only — got [$(render "$ww")]"
-tmux resize-window -t "$ww" -x 69
-[ "$(render "$ww")" = " issue-267 #267 62% · O5.5 · H " ] || fail "pane_width 69 abbreviates — got [$(render "$ww")]"
-for ef in low:L medium:M xhigh:XH max:MX; do
-  tmux set-window-option -t "$ww" @effort "${ef%%:*}"
-  [ "$(render "$ww")" = " issue-267 #267 62% · O5.5 · ${ef#*:} " ] || fail "effort ${ef%%:*} abbreviates to ${ef#*:} — got [$(render "$ww")]"
-done
-tmux set-window-option -t "$ww" @effort high \; set-window-option -t "$ww" @ctx_band handoff
-[ "$(render "$ww")" = " issue-267 #267 62% ⚠ · O5.5 · H " ] || fail "pane_width 69 keeps a bare ⚠ — got [$(render "$ww")]"
-tmux set-window-option -t "$ww" @ctx_band ok
-tmux resize-window -t "$ww" -x 50
-[ "$(render "$ww")" = " issue-267 #267 62% · O5.5 · H " ] || fail "pane_width 50 still abbreviates — got [$(render "$ww")]"
-tmux resize-window -t "$ww" -x 49
-[ "$(render "$ww")" = " issue-267 #267 62% " ] || fail "pane_width 49 keeps the %% alone — got [$(render "$ww")]"
-tmux resize-window -t "$ww" -x 120
-[ "$(render "$ww")" = "$full" ] || fail "back at 120 columns the header must carry all three — got [$(render "$ww")]"
-
-# a stale reading (>5 minutes): the whole segment grey + N 分钟前; fresh again → coloured
-tmux set-window-option -t "$ww" @ctx_ts "$(( $(date +%s) - 8 * 60 - 5 ))"
-[ "$(render "$ww")" = " issue-267 #267 剩余 62% · Opus 5.5 · high · 8 分钟前 " ] || fail "stale reading → 8 分钟前 — got [$(render "$ww")]"
-case "$(raw "$ww")" in
-  *'#[fg=#565f89]剩余 62% · Opus 5.5 · high · 8 分钟前#[default]'*) : ;;
-  *) fail "a stale reading must grey the WHOLE segment — got [$(raw "$ww")]" ;;
-esac
-tmux resize-window -t "$ww" -x 69
-[ "$(render "$ww")" = " issue-267 #267 62% · O5.5 · H " ] || fail "narrow + stale: no age, still abbreviated — got [$(render "$ww")]"
-tmux resize-window -t "$ww" -x 120
-tmux set-window-option -t "$ww" @ctx_ts "$(( $(date +%s) - 299 ))"
-case "$(raw "$ww")" in *'#[fg=#9ece6a]剩余 62%'*) : ;; *) fail "a 299 s reading is fresh — got [$(raw "$ww")]" ;; esac
-# no @ctx_ts (a window stamped before #2431) is never stale
-tmux set-window-option -u -t "$ww" @ctx_ts
-[ "$(render "$ww")" = "$full" ] || fail "no @ctx_ts reads fresh — got [$(render "$ww")]"
-# no @ctx_left (before #2431): 100 - @ctx_pct
-tmux set-window-option -u -t "$ww" @ctx_left
-[ "$(render "$ww")" = "$full" ] || fail "no @ctx_left falls back to 100 - @ctx_pct — got [$(render "$ww")]"
-
-# a Codex window: what the hook feeds the bus reads the same; g6a abbreviated
-tmux set-window-option -t "$ww" @cc_agent codex \; set-window-option -t "$ww" @model gpt-6-astra \; set-window-option -t "$ww" @ctx_left 81
-[ "$(render "$ww")" = " issue-267 #267 剩余 81% · gpt-6-astra · high " ] || fail "a Codex window — got [$(render "$ww")]"
-tmux resize-window -t "$ww" -x 60
-[ "$(render "$ww")" = " issue-267 #267 81% · g6a · H " ] || fail "a Codex window abbreviated — got [$(render "$ww")]"
-tmux resize-window -t "$ww" -x 120
-# …an older Codex window with only the launcher's @cc_model (compat-1v) shows it
-tmux set-window-option -u -t "$ww" @model \; set-window-option -u -t "$ww" @effort \; set-window-option -t "$ww" @cc_model gpt-6-sol
-[ "$(render "$ww")" = " issue-267 #267 剩余 81% · gpt-6-sol " ] || fail "a Codex window with @cc_model only — got [$(render "$ww")]"
-# …but a Claude window's launch alias (@cc_model) is never shown in place of @model
-tmux set-window-option -t "$ww" @cc_agent claude \; set-window-option -t "$ww" @cc_model opus
-[ "$(render "$ww")" = " issue-267 #267 剩余 81% " ] || fail "a Claude window without @model shows the % alone — got [$(render "$ww")]"
-tmux set-window-option -u -t "$ww" @cc_agent \; set-window-option -u -t "$ww" @cc_model \; set-window-option -u -t "$ww" @ctx_left
-# @effort without a model never dangles
-tmux set-window-option -t "$ww" @ctx_pct 38 \; set-window-option -t "$ww" @effort high
-[ "$(render "$ww")" = " issue-267 #267 剩余 62% " ] || fail "@effort without @model must not render — got [$(render "$ww")]"
-tmux set-window-option -u -t "$ww" @effort \; set-window-option -u -t "$ww" @ctx_band
-
-# no @ctx_pct → byte for byte the pre-#1452 header
-tmux set-window-option -u -t "$ww" @ctx_pct
-[ "$(render "$ww")" = " issue-267 #267 " ] || fail "no @ctx_pct must leave the old header untouched — got [$(render "$ww")]"
+[ "$(render "$ww")" = " issue-267 #267 " ] || fail "the node header must not draw the ctx segment (#2717) — got [$(render "$ww")]"
+grep -vE '^[[:space:]]*#' "$CONF" | grep -qE 'fleet_ctx_hdr|@pct_sign' \
+  && fail "conf/tmux-attention.conf still carries the ctx segment (#2717)"
+tmux set-window-option -u -t "$ww" @ctx_pct \; set-window-option -u -t "$ww" @ctx_left \; set-window-option -u -t "$ww" @ctx_band \; \
+     set-window-option -u -t "$ww" @model \; set-window-option -u -t "$ww" @effort \; set-window-option -u -t "$ww" @ctx_ts
 
 # --- #1954: the PR segment after the name — PR #N + its checks ----------------
 # what bin/tmux-pr-refresh.sh stamps: @pr_num / @pr_ci / @pr_fail
@@ -243,10 +151,6 @@ tmux set-window-option -t "$ww" @pr_fail ''
 # a PR with no checks at all: just the number, muted
 tmux set-window-option -t "$ww" @pr_ci ''
 [ "$(render "$ww")" = " issue-267 #267  PR #1951  " ] || fail "no-checks PR segment — got [$(render "$ww")]"
-# beside the right segment: both draw
-tmux set-window-option -t "$ww" @pr_ci '✓' \; set-window-option -t "$ww" @ctx_pct 38
-[ "$(render "$ww")" = " issue-267 #267  PR #1951 ✓ 检查通过  剩余 62% " ] || fail "PR segment + ctx % — got [$(render "$ww")]"
-tmux set-window-option -u -t "$ww" @ctx_pct
 # @pr_num empty (the refresher's 'no open PR') or unset → byte for byte the old header
 tmux set-window-option -t "$ww" @pr_num ''
 [ "$(render "$ww")" = " issue-267 #267 " ] || fail "an empty @pr_num must leave the header untouched — got [$(render "$ww")]"
@@ -277,4 +181,4 @@ for nm in dash plan backlog; do
   esac
 done
 
-printf 'selftest OK: top-of-window header routes worker/hub/dash/raw correctly (#267), carries 剩余 %% · model · effort on the right (#1452, #2431) and PR #N + its checks after the name (#1954)\n'
+printf 'selftest OK: top-of-window header routes worker/hub/dash/raw correctly (#267), leaves 剩余 %% · model · effort to the client (#2717) and carries PR #N + its checks after the name (#1954)\n'

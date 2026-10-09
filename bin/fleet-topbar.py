@@ -169,6 +169,50 @@ def machine_text(rec, down, route, now):
     return m, False
 
 
+EFFORT_SHORT = {"low": "L", "medium": "M", "high": "H", "xhigh": "XH", "max": "MX"}
+
+
+def short_model(model):
+    """Opus 5.5 → O5.5, gpt-6-astra → g6a: the node header's 50–69 column form."""
+    m = re.match(r"^([A-Z])[a-z]+ ([0-9][0-9.]*)", model)
+    if m:
+        return m.group(1) + m.group(2)
+    m = re.match(r"^gpt-([0-9][0-9.]*)-([a-z])", model)
+    return "g" + m.group(1) + m.group(2) if m else model
+
+
+def ctx_parts(rec, cols, now):
+    """The right side's 剩余 % · model · effort (issue #2717): the node's pane
+    header (conf/tmux-attention.conf @fleet_ctx_hdr, #2431) said the same way —
+    the % by what is left (>50 green, 20–50 amber, <20 red; handoff red +
+    「⚠ 将交接」), the whole of it grey with 「· N 分钟前」 once the reading is
+    5 minutes old, and its four widths: ≥100 all of it, 70–99 without 「剩余」,
+    50–69 abbreviated, <50 the % alone. No ctx_left (a row nothing measured, an
+    older node) ⇒ no parts."""
+    left = rec.get("ctx_left")
+    if not isinstance(left, int) or isinstance(left, bool):
+        return []
+    ts = rec.get("ctx_ts")
+    old = isinstance(ts, int) and not isinstance(ts, bool) and ts > 0 and now - ts >= 300
+    band = rec.get("ctx_band")
+    pcol = DIM if old else BAD if band == "handoff" or left < 20 else WARN if left <= 50 else OK
+    pct = ("剩余 " if cols >= 100 else "") + "%d%%" % left
+    if band == "handoff" and cols >= 50:
+        pct += " ⚠ 将交接" if cols >= 70 else " ⚠"
+    out = [(pct, pcol, "")]
+    model, effort = rec.get("model") or "", rec.get("effort") or ""
+    tail = ""
+    if model and cols >= 50:
+        tail += " · " + (model if cols >= 70 else short_model(model))
+        if effort:
+            tail += " · " + (effort if cols >= 70 else EFFORT_SHORT.get(effort, effort))
+    if old and cols >= 70:
+        tail += " · %d 分钟前" % ((now - ts) // 60)
+    if tail:
+        out.append((tail, DIM if old else FG, ""))
+    return out
+
+
 def layout(rec, cols, down="", route="", now=None):
     """The line as a list of (text, colour, range) parts plus its background
     (None / BG_ASK / BG_DOWN). Pure: the selftest reads `fit`."""
@@ -194,9 +238,12 @@ def layout(rec, cols, down="", route="", now=None):
         right.append(("PR " + pr if pr[:1] == "#" else pr, prc, "pr"))
     if rec.get("repo") and cols >= REPO_MIN:
         right.append((rec["repo"], DIM, ""))
+    ctx = ctx_parts(rec, cols, now)
     right.append((mach, WARN if grey else HL, "machine"))
     rtext = []
     for part in right:
+        if part[2] == "machine" and ctx:
+            rtext += ctx + [("  ", None, "")]
         rtext += [part, ("  ", None, "")]
     rtext[-1] = (" ", None, "")
     room = cols - sum(cells(t) for t, _, _ in left) - sum(cells(t) for t, _, _ in rtext) - 1
