@@ -423,8 +423,8 @@ func (s *Server) closeDrillLogins(d *store.DrillPerson, now time.Time) []string 
 	var left []string
 	queued := false
 	for _, a := range accts {
-		if d.OwnComputer(a) {
-			continue
+		if d.OwnComputer(a) || (a.Op != control.AccountCreate && a.Op != control.AccountRemove) {
+			continue // not one the hub opened: its own computer, a computer it signed in on (#2212)
 		}
 		where := a.Login + "@" + a.Hostname
 		switch a.State {

@@ -54,7 +54,10 @@ func (s *Server) accountStateOf(pid string, now time.Time) *AccountState {
 	// `fleet drill invite` named: it is where the client runs, never where a
 	// session can open, so it counts for nothing here.
 	drill, _ := s.Store.Drill(pid)
-	own := drill.OwnComputer
+	own := func(a store.FleetAccount) bool {
+		// for a drill, any computer it signed in on (#2212) is no machine either
+		return drill.OwnComputer(a) || (drill != nil && !a.Managed())
+	}
 	if !hasMachine(accts, own) && (s.autoAssignOn() || s.invitedPrincipal(pid)) {
 		// Nothing queued yet — least-busy found no fit machine at the
 		// sign-in, or the setting came on after it: the same idempotent
