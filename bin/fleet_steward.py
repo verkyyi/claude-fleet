@@ -34,6 +34,9 @@ the person's clock (fleet_decision.zone). A due beat:
   5b. gathers what finished batches leave for a person into ONE 「待你动手」 list
      and runs what it may (bin/fleet_followup.py, issue #2672 — its header is
      the spec): @orch_todo carries the open count to the client's list;
+  5d. draws ONE member of each batch that finished (bin/fleet_sample.py, issue
+     #2678 — its header is the spec) and, when it drew one, posts the sheet on
+     this beat with the sample in its read-only area (no model turn);
   5c. moves the parks on (bin/fleet_park.py, issue #2671 C3): a stuck session is
      asked for its handoff, parked once it wrote one (or its grace ran out), and
      woken on the same conversation when what it waits for arrives — within the
@@ -77,6 +80,7 @@ from pathlib import Path
 import fleet_decision as fd
 import fleet_followup as fu
 import fleet_park
+import fleet_sample as samp
 import fleet_steward_health as health
 
 BIN = Path(__file__).resolve().parent
@@ -355,7 +359,8 @@ def issue_of_key(key, slugs):
 
 def collect(sess, st, now_t, apply=True):
     delta = {"v": V, "session": sess, "at": fd.iso(now_t), "events": [], "new_asks": [], "closed": [],
-             "defaulted": [], "orphans": [], "deferred": 0, "followups": {"new": [], "done": [], "refused": []}}
+             "defaulted": [], "orphans": [], "deferred": 0, "followups": {"new": [], "done": [], "refused": []},
+             "samples": []}
     wins = windows(sess)
     slugs = repo_of_slug(sess)
     # 1. the ledgers: the orchestrator, its children that keep one, every driver
@@ -455,6 +460,11 @@ def collect(sess, st, now_t, apply=True):
             fu.beat(sys.modules[__name__], sess, st, int(now_t.timestamp()), delta, wins, marks)
         except Exception as e:      # never the rest of the beat's work
             sys.stderr.write("fleet-steward-tick: followups: %s: %s\n" % (type(e).__name__, e))
+        # 5d. one member of each batch that finished, for the sheet (issue #2678)
+        try:
+            samp.beat(sys.modules[__name__], sess, st, fd.iso(now_t), now_t.strftime("%Y-%m-%d"), delta)
+        except Exception as e:      # never the rest of the beat's work
+            sys.stderr.write("fleet-steward-tick: samples: %s: %s\n" % (type(e).__name__, e))
     delta["deferred"] += len(st.d["deferred"])
     return delta, wins
 
@@ -479,7 +489,7 @@ def empty(delta):
     return not (delta["events"] or delta["new_asks"] or delta["closed"] or delta["defaulted"]
                 or delta["orphans"] or delta["deferred"] or f.get("new") or f.get("done") or f.get("refused")
                 or park_moved(delta)
-                or delta.get("health"))
+                or delta.get("health") or delta.get("samples"))
 
 
 # ---- the card --------------------------------------------------------------------
@@ -504,6 +514,8 @@ def card_lines(st, delta, now_t, nxt):
                             sum(1 for x in hs if x["action"] == "again"),
                             delta.get("health_deferred", 0)))
             lines += ["  %s  %s" % (x.get("url") or x["action"], x["what"][:120]) for x in hs]
+    if delta.get("samples"):
+        lines.append(tr("steward_card_samples_fmt", len(delta["samples"])))
     todo_line = fu.card(sys.modules[__name__], st)
     if todo_line:
         lines.append(todo_line)
@@ -595,6 +607,9 @@ def cmd_beat(a):
     st.d["decide"] = n_open
     stamp_decide(sess, n_open, wins)
     st.d["card"] = card_lines(st, delta, now_t, nxt)
+    if delta.get("samples"):
+        # a finished batch's sample reaches the person on this beat, no model turn
+        post_sheet(sess, st, now_t)
     calls = st.d.setdefault("model_calls", 0)
     if wants_model(delta):
         parts = tr("steward_wake_parts_fmt", len(delta["new_asks"]),
@@ -641,25 +656,32 @@ def cmd_answer(a):
 
 
 def cmd_sheet(a):
-    sess = session(a.session)
-    now_t = fd.now_local(a.now)
     st = State()
+    rc, msg = post_sheet(session(a.session), st, fd.now_local(a.now), a.force)
+    st.save()
+    print(msg)
+    return rc
+
+
+def post_sheet(sess, st, now_t, force=False):
+    """Render, keep and hand over the sheet → (rc, what to print). The caller
+    holds the state lock and saves. A sample not shown yet (issue #2678) is new
+    content like a new row; the day's samples ride every sheet of that day."""
     rows = [r for r in st.d["rows"].values() if r.get("state") == "open"]
     rows.sort(key=lambda r: (not fd.never(r), r.get("due") or "9", r.get("asked") or ""))
     ids = [r["id"] for r in rows]
-    if not ids:
+    day = now_t.strftime("%Y-%m-%d")
+    samples = samp.for_sheet(st, day) if st.d.get("samples") else []
+    if not ids and not samples:
         st.d["sheet"] = {"rows": [], "at": fd.iso(now_t)}
         st.d["decide"] = 0
         stamp_decide(sess, 0, windows(sess))
-        st.save()
-        print(tr("steward_sheet_empty"))
-        return 1
-    if set(ids) <= set(st.d["sheet"].get("rows") or []) and not a.force:
-        print(tr("steward_sheet_same_fmt", len(sheet_open(st))))
-        return 0
+        return 1, tr("steward_sheet_empty")
+    if set(ids) <= set(st.d["sheet"].get("rows") or []) and not force \
+            and not any(not x.get("shown") for x in samples):
+        return 0, tr("steward_sheet_same_fmt", len(sheet_open(st)))
     sid = str(uuid.uuid4())
-    day = now_t.strftime("%Y-%m-%d")
-    table = fd.render(rows, sid)
+    table = fd.render(rows, sid, samples)
     title = tr("steward_sheet_title_fmt", day)
     path = conf_dir() / "fleets" / sess / "steward"
     path.mkdir(parents=True, exist_ok=True)
@@ -684,13 +706,13 @@ def cmd_sheet(a):
     st.d["sheet"] = {"id": sid, "rows": ids, "at": fd.iso(now_t), "where": where, "sent": sent}
     st.d["sheets"][day] = st.d["sheets"].get(day, 0) + 1
     st.d["decide"] = len(ids)
+    if sent:
+        samp.shown(st, samples, sid)
     stamp_decide(sess, len(ids), windows(sess))
     if any(fd.never(r) for r in rows) and os.environ.get("FLEET_NOTIFY_CMD"):
         subprocess.run([os.environ["FLEET_NOTIFY_CMD"], tr("steward_notify_never_fmt", len(rows))],
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
-    st.save()
-    print(tr("steward_sheet_sent_fmt", len(ids), where) if sent else msg)
-    return 0
+    return 0, (tr("steward_sheet_sent_fmt", len(ids), where) if sent else msg)
 
 
 def cmd_followups(a):

@@ -67,7 +67,7 @@
 ```
 fleet_decision.py ask-body --question Q [--suggest S] [--default D] [--due T] [--class K] [--head question|permission]
 fleet_decision.py parse  (--repo R --issue N | --comments-json FILE|-)      一行一个 JSON
-fleet_decision.py render [--demo] [--rows FILE|-] [--id UUID]              Markdown 表 + 标记
+fleet_decision.py render [--demo] [--rows FILE|-] [--id UUID] [--samples FILE]  Markdown 表 + 标记（+ 抽样区）
 fleet_decision.py due    [--rows FILE|- | --repo R --issue N…] [--now ISO] [--apply]
 fleet_decision.py record --row JSON --parent owner/repo#N                  「默认拍板」
 ```
@@ -82,6 +82,28 @@ fleet_decision.py record --row JSON --parent owner/repo#N                  「�
 
 <!-- fleet:decision v=1 id=<uuid> -->
 ```
+
+### 只读区 `samples`（抽样，issue #2678）
+
+批次结束（管家的「待你动手」那一遍看到它的 EPIC 关了）后的下一拍，管家读 `fleet-evidence.sh export
+--epic N`，在留了**改动后**证据的成员里随机抽 1 个（按批次播种，`bin/fleet_sample.py`），文件拷到
+`fleets/<sess>/steward/samples/<owner-name.N>/`，当拍自己发出决定单——不等模型、也不需要有开着的行。
+抽样不是决定行：不编号、不进 `decide` 数、没有人答它。当天之后的每张决定单都带着当天的抽样：
+
+```
+### 抽样：做完的批次，抽一个成员看它的改动后
+
+- o/r#2668 → #2678 · 决定单出现抽样区 · 2026-10-09T10:00:00Z
+  `…/steward/samples/o-r.2668/evidence/2678/after-….txt`
+  ```
+  （文字证据的前 8 行；图片是 ![说明](路径)）
+  ```
+  <!-- fleet:sample epic=o/r#2668 member=2678 -->
+```
+
+一个成员都没有改动后证据：那一条写「o/r#N：K 个成员里没有一个留了改动后证据」——绝不拿改动前顶替。
+`render --samples FILE`（JSON 数组）出同样的区；没有抽样时 `render` 逐字节如前。
+自测：`bin/fleet-steward-sample-selftest.sh`。
 
 `due --apply` 对每一行到期的问题做两件事，各最多一次（已有标记就跳过）：
 
