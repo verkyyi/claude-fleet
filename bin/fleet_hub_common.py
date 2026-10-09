@@ -217,6 +217,24 @@ def epic_stale_cell(cell):
     return out
 
 
+def agent_status_cell(raw):
+    """@agent_status's JSON (bin/fleet-status-7501.py) → {status_kind, status_msg},
+    each only when present and well-formed (issue #2536)."""
+    out = {}
+    try:
+        st = json.loads(raw) if raw else None
+    except ValueError:
+        return out
+    if not isinstance(st, dict):
+        return out
+    k, m = st.get("kind"), st.get("msg")
+    if isinstance(k, str) and re.fullmatch(r"[A-Za-z0-9_.+-]{1,32}", k):
+        out["status_kind"] = k
+    if isinstance(m, str) and m.strip():
+        out["status_msg"] = re.sub(r"[\x00-\x1f\x7f]+", " ", m).strip()[:200]
+    return out
+
+
 def inventory_row(parts):
     """One row of `fleet-control-read.sh workers`, split on tabs → (the first 9
     columns, the optional extras), or None when it is not a row. The ONE reader of
@@ -264,9 +282,15 @@ def inventory_row(parts):
     `ctxband=` (ok|watch|handoff), `ctxts=` (the reading's epoch), `model=`,
     `effort=` → ctx_left / ctx_band / ctx_ts / model / effort, what `fleet ls`
     prints; an empty or malformed value is absent, an adapter older than it has
-    none."""
+    none.
+    Column 29 (issue #2536, EPIC #2535 C1): `agentstatus=<json>` — the agent's
+    own OSC 7501 report (@agent_status) → `status_kind` (permission | question |
+    auth, while it is blocked) and `status_msg` (its words, ≤200 characters);
+    both absent when it said nothing, or nothing but its state."""
     parts = list(parts)
     extra = {}
+    if len(parts) >= 29 and parts[-1].startswith("agentstatus="):
+        extra.update(agent_status_cell(parts.pop()[12:]))
     if len(parts) >= 28 and parts[-1].startswith("effort=") and parts[-2].startswith("model=") \
             and parts[-3].startswith("ctxts=") and parts[-4].startswith("ctxband=") \
             and parts[-5].startswith("ctxleft="):

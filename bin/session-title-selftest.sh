@@ -77,7 +77,7 @@ if [ -n "$REAL_TMUX" ]; then
   # column 22 is epicstale= — the login's batches nobody drives (issue #1916), empty with none
   # column 23 is backfill=failed on a warm start whose issue was never filed (issue #2235)
   # columns 24-28 are the measurement bus (issue #2431) — NF - 11 keeps the count of the 17
-  eq "A: column 17, the reap column 18, the detail column 19, the role column 20, the epic column 21, the epicstale column 22, the backfill column 23; 16 before it as they were" "17 reap= detail= role= epic= epicstale= backfill=" \
+  eq "A: column 17, the reap column 18, the detail column 19, the role column 20, the epic column 21, the epicstale column 22, the backfill column 23 (NF counts through column 29, #2536); 16 before it as they were" "18 reap= detail= role= epic= epicstale= backfill=" \
      "$(printf '%s\n' "$out" | awk -F'\t' '$10 == "fix-sidebar-slug" { print NF - 11, $18, $19, $20, $21, $22, $23 }')"
   T set-option -w -t "=$S:draft" @backfill failed
   T set-option -w -t "=$S:uncached" @backfill filing
@@ -100,6 +100,16 @@ if [ -n "$REAL_TMUX" ]; then
      "$(printf '%s\n' "$out3" | awk -F'\t' '$10 == "draft" { print $24 "|" $25 "|" $26 "|" $27 "|" $28 }')"
   eq "A: no @ctx_left → 100 - @ctx_pct; a Codex @cc_model; a bad band dropped" "ctxleft=47|ctxband=|model=gpt-6-astra" \
      "$(printf '%s\n' "$out3" | awk -F'\t' '$10 == "uncached" { print $24 "|" $25 "|" $27 }')"
+  # column 29 (issue #2536): agentstatus= — @agent_status as fleet-status-7501.py
+  # stamped it, verbatim; empty when the agent said nothing, a non-JSON value dropped
+  eq "A: no @agent_status → column 29 empty" "agentstatus=" \
+     "$(printf '%s\n' "$out3" | awk -F'\t' '$10 == "draft" { print $29 }')"
+  T set-option -w -t "=$S:draft" @agent_status '{"state":"blocked","kind":"permission","msg":"Bash: git push","app":"claude-code","ts":1800000000}'
+  T set-option -w -t "=$S:uncached" @agent_status 'not json'
+  out4=$(bash "$CREAD" workers "$S" 2>"$WORK/err") || fail "A: workers failed" "$(cat "$WORK/err")"
+  eq "A: @agent_status → column 29; a malformed one dropped" 'agentstatus={"state":"blocked","kind":"permission","msg":"Bash: git push","app":"claude-code","ts":1800000000}|agentstatus=' \
+     "$(printf '%s\n' "$out4" | awk -F'\t' '$10 == "draft" { d = $29 } $10 == "uncached" { u = $29 } END { print d "|" u }')"
+  T set-option -wu -t "=$S:draft" @agent_status; T set-option -wu -t "=$S:uncached" @agent_status
   for o in @ctx_pct @ctx_left @ctx_band @ctx_ts @model @effort @cc_agent @cc_model; do
     T set-option -wu -t "=$S:draft" "$o"; T set-option -wu -t "=$S:uncached" "$o"
   done
@@ -154,6 +164,16 @@ p, x = inventory_row(full + ["ctxleft=", "ctxband=bad", "ctxts=x", "model=a;b", 
 assert not any(k in x for k in ("ctx_left", "ctx_band", "ctx_ts", "model", "effort")) and x["title"] == "t", x
 p0, x0 = inventory_row(full)
 assert "model" not in x0 and x0["title"] == "t", x0
+# column 29 (issue #2536): agentstatus= → status_kind / status_msg, after effort=
+bus = ["ctxleft=62", "ctxband=ok", "ctxts=1800000000", "model=Opus 5.5", "effort=high"]
+p, x = inventory_row(full + bus + ['agentstatus={"state":"blocked","kind":"permission","msg":"Bash: git push","app":"claude-code","ts":1}'])
+assert (x["status_kind"], x["status_msg"], x["ctx_left"], x["title"]) == ("permission", "Bash: git push", 62, "t"), x
+p, x = inventory_row(full + bus + ['agentstatus={"state":"working","kind":"","msg":"","app":"claude-code","ts":1}'])
+assert "status_kind" not in x and "status_msg" not in x and x["effort"] == "high", x
+p, x = inventory_row(full + bus + ["agentstatus=nope"])
+assert "status_kind" not in x and x["model"] == "Opus 5.5", x
+p, x = inventory_row(full + bus + ["agentstatus="])
+assert "status_msg" not in x and x["ctx_band"] == "ok", x
 print("ok")
 PY
 )

@@ -209,7 +209,11 @@ case "$mode" in
     # only the launcher's @cc_model gives that — compat-1v: 下一批删), `effort=`.
     # Read as conf/statusline.sh stamped them, never recomputed; an unmeasured
     # window carries the five keys empty.
-    ctxs=$(tmux -u -L "$sock" list-windows -t "=$sess" ${lwf[@]+"${lwf[@]}"} -F $'#{window_id}\t=#{?@ctx_left,#{@ctx_left},#{?@ctx_pct,#{e|-:100,#{@ctx_pct}},}}\t=#{@ctx_band}\t=#{@ctx_ts}\t=#{?@model,#{@model},#{?#{==:#{@cc_agent},codex},#{@cc_model},}}\t=#{@effort}' 2>/dev/null) || ctxs=''
+    # Column 29 (issue #2536, EPIC #2535 C1): `agentstatus=<json>` — the agent's
+    # own report, @agent_status as bin/fleet-status-7501.py stamped it (one line of
+    # JSON, no tab); inventory_row turns it into the worker's `status_kind` /
+    # `status_msg`. Empty on a window whose agent never said anything.
+    ctxs=$(tmux -u -L "$sock" list-windows -t "=$sess" ${lwf[@]+"${lwf[@]}"} -F $'#{window_id}\t=#{?@ctx_left,#{@ctx_left},#{?@ctx_pct,#{e|-:100,#{@ctx_pct}},}}\t=#{@ctx_band}\t=#{@ctx_ts}\t=#{?@model,#{@model},#{?#{==:#{@cc_agent},codex},#{@cc_model},}}\t=#{@effort}\t=#{@agent_status}' 2>/dev/null) || ctxs=''
     ttl=$'\n'; drepo=''; _nr=0
     while IFS= read -r _r; do
       [ -n "$_r" ] || continue
@@ -288,19 +292,20 @@ case "$mode" in
       fi
       row=$wid$'\t'$c2$'\t'$c3$'\t'$wt$'\t'$rest
       b=''; [ -z "$busy" ] || b=$(printf '%s\n' "$busy" | awk -v w="$wid" '$1 == w { print $2; exit }')
-      cl='' cb='' cts='' cm='' ce=''
+      cl='' cb='' cts='' cm='' ce='' cas=''
       if [ -n "$ctxs" ]; then
         # each field `=`-led, so no field is ever empty: a TAB is IFS whitespace and
         # `read` would collapse an empty one (no \037 here — an older tmux prints it as _)
-        IFS=$'\t' read -r _ cl cb cts cm ce <<<"$(printf '%s\n' "$ctxs" | awk -F'\t' -v w="$wid" '$1 == w { print; exit }')"
-        cl=${cl#=} cb=${cb#=} cts=${cts#=} cm=${cm#=} ce=${ce#=}
+        IFS=$'\t' read -r _ cl cb cts cm ce cas <<<"$(printf '%s\n' "$ctxs" | awk -F'\t' -v w="$wid" '$1 == w { print; exit }')"
+        cl=${cl#=} cb=${cb#=} cts=${cts#=} cm=${cm#=} ce=${ce#=} cas=${cas#=}
+        case "$cas" in '{'*'}') ;; *) cas='' ;; esac
         case "$cl" in *[!0-9]*) cl='' ;; esac
         case "$cb" in ok|watch|handoff) ;; *) cb='' ;; esac
         case "$cts" in *[!0-9]*) cts='' ;; esac
         case "$cm" in *[!-A-Za-z0-9\ ._\(\)+]*) cm='' ;; esac
         case "$ce" in *[!a-z]*) ce='' ;; esac
       fi
-      printf '%s\tbusy=%s\tborn=%s\tcfg=%s\ttitle=%s\treap=%s\tdetail=%s\trole=%s\tepic=%s\tepicstale=%s\tbackfill=%s\tctxleft=%s\tctxband=%s\tctxts=%s\tmodel=%s\teffort=%s\n' "$row" "$b" "$born" "$FCFG_STATE" "$t" "$wreap" "$wdet" "$wrole" "$wepic" "$estale" "$wbf" "$cl" "$cb" "$cts" "$cm" "$ce"
+      printf '%s\tbusy=%s\tborn=%s\tcfg=%s\ttitle=%s\treap=%s\tdetail=%s\trole=%s\tepic=%s\tepicstale=%s\tbackfill=%s\tctxleft=%s\tctxband=%s\tctxts=%s\tmodel=%s\teffort=%s\tagentstatus=%s\n' "$row" "$b" "$born" "$FCFG_STATE" "$t" "$wreap" "$wdet" "$wrole" "$wepic" "$estale" "$wbf" "$cl" "$cb" "$cts" "$cm" "$ce" "$cas"
     done <<<"$rows"
     ;;
   # --- wstate <sess> <@win> (issue #2238) --------------------------------------

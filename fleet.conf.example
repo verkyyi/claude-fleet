@@ -555,6 +555,15 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # @label=Fleet mod in sessions @group=spawn @tier=internal @scope=global @edit=bool
 #FLEET_MOD=1
 
+# FLEET_STATUS_7501 — read the agent's own state report (issue #2536, EPIC #2535).
+# Claude Code ≥ 2.1.295 says working / blocked / done as OSC 7501, but only to a
+# terminal that answers its probe, and inside tmux nobody does — so fleet-claude.sh
+# runs the agent under bin/fleet-status-7501.py's pty relay, which answers it and
+# stamps @agent_status (+ @claude_state) off what it says. 0 = the agent runs bare,
+# byte for byte as before (@agent_status never written). Login-wide; read at launch.
+# @label=Agent's own state report (OSC 7501) @group=spawn @tier=internal @scope=global @edit=bool
+#FLEET_STATUS_7501=1
+
 # A session's agent configuration, fixed at launch (issue #1782, EPIC #1776 C6):
 # bin/fleet-claude.sh / fleet-codex.sh compose fleet default < team < local at
 # every launch (bin/fleet-agent-team.py session), hand what the login's files lack
