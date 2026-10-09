@@ -324,7 +324,7 @@ exit_drill() {
   until_ok 10 grep -q . "$c/argv" || { WHY="the agent never started"; return 1; }
   printf '%s' "$1" > "$c/mode"
   t0=$(now); : > "$c/go"
-  until_ok 10 sh -c "'$REAL_TMUX' -S '$BREAK_SOCK' capture-pane -p -t sx:w | grep -qF '这个窗口不会关'" \
+  until_ok 10 sh -c "'$REAL_TMUX' -S '$BREAK_SOCK' capture-pane -p -t sx:w | grep -qF '⌘P 回列表'" \
     || { WHY="no recovery page — the window shows: $(nt capture-pane -p -t sx:w 2>/dev/null | grep . | tail -2 | tr '\n' ' ')"; return 1; }
   page_s=$(since "$t0")
   nt list-windows -t sx -F '#{window_name}' 2>/dev/null | grep -qx w || { WHY="the window closed"; return 1; }
@@ -337,9 +337,9 @@ exit_drill() {
   SECS=$(since "$t0"); WHAT="恢复页 ${page_s}s 出现，↵ 续上同一对话"
 }
 
-drill_session_exit()    { CAP=5; exit_drill rc0 0 '会话已退出'; }
-drill_session_ctrl_c()  { CAP=5; exit_drill rc130 130 '会话已退出（按了 Ctrl+C）'; }
-drill_session_killed()  { CAP=5; exit_drill kill 137 '会话被结束（信号 9）'; }
+drill_session_exit()    { CAP=5; exit_drill rc0 0 '会话已结束'; }
+drill_session_ctrl_c()  { CAP=5; exit_drill rc130 130 '会话已结束'; }
+drill_session_killed()  { CAP=5; exit_drill kill 137 '会话意外退出'; }
 
 # Ctrl+Z (issue #1843). The pane's process group is orphaned (its leader, the
 # pane's shell, is a session leader whose parent is the tmux server), so the
@@ -381,7 +381,7 @@ drill_resume_fails_fast() {
   WRAP_FAST=3 wrapped sx w "$c" || { WHY="cannot start the isolated tmux server"; return 1; }
   until_ok 10 grep -q . "$c/argv" || { WHY="the agent never started"; return 1; }
   sleep 3.2; printf rc0 > "$c/mode"; : > "$c/go"     # a real session: it ran past the window
-  until_ok 10 page_says '这个窗口不会关' || { WHY="no recovery page after the first exit"; return 1; }
+  until_ok 10 page_says '⌘P 回列表' || { WHY="no recovery page after the first exit"; return 1; }
   : > "$c/resume-fails"
   t0=$(now); nt send-keys -t sx:w Enter
   until_ok 10 sh -c "[ \$(grep -c . '$c/argv') = 2 ]" || { WHY="↵ relaunched nothing"; return 1; }
@@ -401,14 +401,14 @@ drill_codex_no_id() {
   wrapped sx w "$c" || { WHY="cannot start the isolated tmux server"; return 1; }
   until_ok 10 grep -q . "$c/argv" || { WHY="the agent never started"; return 1; }
   t0=$(now); printf rc0 > "$c/mode"; : > "$c/go"
-  until_ok 10 page_says '这个窗口不会关' || { WHY="no recovery page"; return 1; }
-  page_says '回车新开' || { WHY="the page does not say ↵ starts a new conversation"; return 1; }
+  until_ok 10 page_says '⌘P 回列表' || { WHY="no recovery page"; return 1; }
+  page_says '↵ 新开对话' || { WHY="the page does not say ↵ starts a new conversation"; return 1; }
   nt send-keys -t sx:w Enter
   until_ok 10 sh -c "[ \$(grep -c . '$c/argv') = 2 ]" || { WHY="↵ relaunched nothing"; return 1; }
   [ "$(sed -n 2p "$c/argv")" = "--agent codex" ] || { WHY="no id, no thread: ↵ ran [$(sed -n 2p "$c/argv")], not a new conversation"; return 1; }
   nt set-option -w -t sx:w @codex_thread_id T-9
   printf rc0 > "$c/mode"; : > "$c/go"
-  until_ok 10 page_says '这个窗口不会关' || { WHY="no recovery page the second time"; return 1; }
+  until_ok 10 page_says '⌘P 回列表' || { WHY="no recovery page the second time"; return 1; }
   nt send-keys -t sx:w Enter
   until_ok 10 sh -c "[ \$(grep -c . '$c/argv') = 3 ]" || { WHY="↵ relaunched nothing the second time"; return 1; }
   [ "$(sed -n 3p "$c/argv")" = "--agent codex resume T-9" ] || { WHY="with the window's thread: ↵ ran [$(sed -n 3p "$c/argv")], not resume T-9"; return 1; }
@@ -732,7 +732,7 @@ drill_orchestrator_cleared() {
   WRAP_ARGS="--append-system-prompt-file '$role' " wrapped sx w "$c" || { WHY="cannot start the wrapped window"; return 1; }
   until_ok 10 grep -q . "$c/argv" || { WHY="the wrapped agent never started"; return 1; }
   printf rc0 > "$c/mode"; : > "$c/go"
-  until_ok 10 page_says '这个窗口不会关' || { WHY="no recovery page"; return 1; }
+  until_ok 10 page_says '⌘P 回列表' || { WHY="no recovery page"; return 1; }
   nt send-keys -t sx:w Enter
   until_ok 10 sh -c "[ \$(grep -c . '$c/argv') = 2 ]" || { WHY="↵ relaunched nothing"; return 1; }
   [ "$(sed -n 2p "$c/argv")" = "--agent claude --append-system-prompt-file $role --resume SID-1" ] \
@@ -965,7 +965,7 @@ drill_break_pane() {
   [ -z "$(wopt "$ow" @fleet_id)$(wopt "$ow" @issue)" ] || { WHY="the old window still carries the identity: two windows answer to it"; return 1; }
   [ "$(wopt "$ow" @fleet_role)" = panel ] || { WHY="the left-behind window is [$(wopt "$ow" @fleet_role)], not a panel"; return 1; }
   printf rc0 > "$c/mode"; : > "$c/go"             # the agent then exits …
-  until_ok 10 sh -c "'$REAL_TMUX' -S '$BREAK_SOCK' capture-pane -p -t '$ap' | grep -qF '这个窗口不会关'" || { WHY="no recovery page in the new window"; return 1; }
+  until_ok 10 sh -c "'$REAL_TMUX' -S '$BREAK_SOCK' capture-pane -p -t '$ap' | grep -qF '⌘P 回列表'" || { WHY="no recovery page in the new window"; return 1; }
   nt send-keys -t "$ap" Enter                     # … and ↵ resumes it
   until_ok 10 sh -c "[ \$(grep -c . '$c/argv') = 2 ]" || { WHY="↵ relaunched nothing"; return 1; }
   [ "$(sed -n 2p "$c/argv")" = "--agent claude --resume SID-1" ] || { WHY="↵ ran [$(sed -n 2p "$c/argv")], not the same conversation"; return 1; }
@@ -1356,7 +1356,7 @@ drill_personal_breaks_session() {
   PERS_CONF="$c/conf" wrapped sx w "$c" || { WHY="cannot start the isolated tmux server"; return 1; }
   until_ok 15 sh -c "[ \"\$(grep -c . '$c/hook-rc' 2>/dev/null)\" = 4 ]" || { WHY="the agent's personal hook calls never finished"; return 1; }
   t0=$(now); printf rc0 > "$c/mode"; : > "$c/go"
-  until_ok 10 page_says '这个窗口不会关' || { WHY="no recovery page"; return 1; }
+  until_ok 10 page_says '⌘P 回列表' || { WHY="no recovery page"; return 1; }
   page_says '不带个人配置重开' \
     || { WHY="the page offers no way to reopen without the personal layer: $(nt capture-pane -p -t sx:w | grep . | tail -1)"; return 1; }
   page_says '个人自动规则' || { WHY="the page does not say a personal hook was switched off"; return 1; }

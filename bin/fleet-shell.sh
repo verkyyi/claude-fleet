@@ -445,7 +445,7 @@ $SHELL_ENV
 EOF
 }
 # mirror — the conf-free bin/ the shell runs from: one symlink per file of the
-# real bin/, refreshed (ln -sf) on every start so a synced install is picked up;
+# real bin/, refreshed on every start so a synced install is picked up;
 # a link to a file that is gone stays dangling and harmless. A real bin/ inside a
 # versions dir (<home>.versions/<key>/bin) whose <home> link points at it is
 # mirrored THROUGH <home> (issue #2692): the links follow the install's next
@@ -467,7 +467,19 @@ mirror() {
       [ -L "$vh" ] && [ "$(cd "$vh/bin" 2>/dev/null && pwd -P)" = "$(cd "$REAL_BIN" && pwd -P)" ] \
         && src="$vh/bin" ;;
   esac
-  for f in "$REAL_BIN"/*; do [ -f "$f" ] && ln -sf "$src/${f##*/}" "$SHADOW/${f##*/}"; done
+  # one `ln` per file is ~800 forks — the biggest part of a start (issue #2743:
+  # ~2 s of 4.5 on a MacBook). So the whole set is linked again only when the
+  # source moved (the stamp beside it); otherwise only a file new since is
+  # linked — a link through <home> already follows every switch.
+  local was='' all=1
+  [ -f "$SHADOW/.mirror-src" ] && read -r was < "$SHADOW/.mirror-src"
+  [ "$was" = "$src" ] && all=''
+  for f in "$REAL_BIN"/*; do
+    [ -f "$f" ] || continue
+    [ -z "$all" ] && [ -L "$SHADOW/${f##*/}" ] && continue
+    ln -sf "$src/${f##*/}" "$SHADOW/${f##*/}"
+  done
+  [ -z "$all" ] || printf '%s\n' "$src" > "$SHADOW/.mirror-src"
   # the colour table (issue #1534): the bar, the rows and the list read it as
   # $BIN/../conf/fleet-palette.conf — a table, not a config, so the mirror has it
   f="$REAL_BIN/../conf/fleet-palette.conf"
@@ -572,6 +584,10 @@ iterm_keys() {
 # attach_client — the attach, exec'd as always; in an iTerm2 window, with the
 # profile there, the window wears it while attached and goes back to the profile
 # it came from after the detach — outside the client iTerm2 is as it was.
+# Every attach a person's terminal sees sends tmux's stdout to /dev/null (issue
+# #2743): the server draws on the tty itself, so all that goes is the client's own
+# last line, 「[detached (from session …)]」 / 「[exited]」 — tmux internals the
+# person never asked for. Errors stay on stderr.
 attach_client() {
   local back="${ITERM_PROFILE:-}" rc iterm=''
   if [ -n "$back" ] && [ "$back" != fleet ] && [ "${FLEET_ITERM_KEYS:-1}" != 0 ] \
@@ -585,7 +601,7 @@ attach_client() {
   # unless another terminal is still on it
   if [ "${FLEET_NODE_HOSTED:-0}" = 1 ]; then
     trap 'bash "$SHADOW/fleet-shell.sh" quit "$SESS" --quiet --if-unattached </dev/null >/dev/null 2>&1; exit 129' HUP TERM
-    tmux -L "$SESS" attach-session -t "=$SESS"; rc=$?
+    tmux -L "$SESS" attach-session -t "=$SESS" >/dev/null; rc=$?
     trap - HUP TERM
     bash "$SHADOW/fleet-shell.sh" quit "$SESS" --quiet --if-unattached </dev/null >/dev/null 2>&1
     exit "$rc"
@@ -595,10 +611,10 @@ attach_client() {
   # solo_ended) — the terminal is told where the session is and how to come
   # back (fleet-topbar.py goodbye). Any other layout: exactly as before.
   if [ -z "$iterm" ] && [ "$(tmux -L "$SESS" show-options -gqv @fleet_layout 2>/dev/null)" != solo ]; then
-    exec tmux -L "$SESS" attach-session -t "=$SESS"
+    exec tmux -L "$SESS" attach-session -t "=$SESS" >/dev/null
   fi
   [ -n "$iterm" ] && printf '\033]1337;SetProfile=fleet\007' > /dev/tty
-  tmux -L "$SESS" attach-session -t "=$SESS"; rc=$?
+  tmux -L "$SESS" attach-session -t "=$SESS" >/dev/null; rc=$?
   [ -n "$iterm" ] && printf '\033]1337;SetProfile=%s\007' "$back" > /dev/tty
   if [ "$(tmux -L "$SESS" show-options -gqv @fleet_layout 2>/dev/null)" = solo ]; then
     python3 "${SHADOW:-$BIN}/fleet-topbar.py" goodbye \
@@ -1236,7 +1252,7 @@ viewer)
   SESS=$s; STAGE="$s-stage"; SHADOW=$BIN
   while tmux -L "$s" has-session -t "=$s" 2>/dev/null; do
     if stage_up; then
-      env -u TMUX -u TMUX_PANE tmux -L "$STAGE" attach-session -t "=$STAGE"
+      env -u TMUX -u TMUX_PANE tmux -L "$STAGE" attach-session -t "=$STAGE" >/dev/null
     else
       printf '\033[2J\033[H  fleet: 右侧起不来（%s）· 1 秒后再试\n' "$CACHE/tmux-stage.conf"
       sleep 1
@@ -1433,11 +1449,20 @@ $(T show-environment -g 2>/dev/null)
 EOF
   export FLEET_CLIENT_DIR="$CL_DIR" FLEET_SESSION="$SESS"
   hopen=home_opening_fmt; [ "${FLEET_CLIENT_LAYOUT:-}" = solo ] && hopen=home_opening_solo_fmt
-  note "$(sh "$BIN/fleet-ui-lang.sh" t "$hopen" "$hagent" 2>/dev/null)"
+  # 「正在开 …」 is a WAIT, not a fact (issue #2743): on a terminal it stays on its
+  # line only while the hub decides, then the answer — 会话开在 m5 / 回到你上一次的
+  # 会话（m4） / why it failed — is written over it, so one line says what happened
+  hwait=''
+  if [ -t 2 ]; then
+    printf 'fleet: %s' "$(sh "$BIN/fleet-ui-lang.sh" t "$hopen" "$hagent" 2>/dev/null)" >&2; hwait=1
+  else
+    note "$(sh "$BIN/fleet-ui-lang.sh" t "$hopen" "$hagent" 2>/dev/null)"
+  fi
   # why THIS computer was not chosen (issue #2480), said after the failure line
   hwhy=$(mktemp "${TMPDIR:-/tmp}/fleet-place-why.XXXXXX" 2>/dev/null) || hwhy=''
   herr=$(mktemp "${TMPDIR:-/tmp}/fleet-place-err.XXXXXX" 2>/dev/null) || herr=/dev/null
   hout=$(FLEET_PLACE_WHY="$hwhy" bash "$BIN/fleet-client-place.sh" - home --agent "$hagent" --node "$hnode" ${hbody:+--body-file "$hbody"} ${hnew:+--new} 2>"$herr"); hrc=$?
+  [ -z "$hwait" ] || printf '\r\033[K' >&2
   [ "$herr" = /dev/null ] || cat "$herr" >&2
   hline=$(printf '%s\n' "$hout" | tail -n1)
   if [ "$hrc" != 0 ]; then
@@ -1734,10 +1759,14 @@ EOF
     done
   ) </dev/null >/dev/null 2>&1 &
   swatch=$!
+  # out of the job table (issue #2743, as the wrapper's #2495): killed below, a
+  # job bash still tracked printed 「Terminated: 15  ( trap '' HUP; … )」 — the
+  # watcher's whole source — onto the person's terminal
+  disown "$swatch" 2>/dev/null
   if [ "${FLEET_SOLO_ATTACH:-1}" = 0 ]; then printf '%s\n' "$SOLO"; exit 0; fi
   # the terminal closed under it (a HUP): the view goes all the same, silently
   trap 'kill "$swatch" 2>/dev/null; tmux -L "$SOLO" kill-server 2>/dev/null; rm -f "$ended" "$(solo_dir)/$SOLO.pid"; exit 0' HUP TERM
-  env -u TMUX -u TMUX_PANE tmux -L "$SOLO" attach-session -t "=$SOLO"
+  env -u TMUX -u TMUX_PANE tmux -L "$SOLO" attach-session -t "=$SOLO" >/dev/null
   trap - HUP TERM
   # whatever ended the attach, the view goes: its connection drops, the session
   # on its machine never notices

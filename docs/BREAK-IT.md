@@ -23,7 +23,7 @@
 | 迁移（换账号、换模型）途中会话 `/exit`，窗口上没有 `@migrating`（旧版 mover、标记随窗口丢了） | 同上：mover 已经拿着这个 worktree 的 rotate 租约（#550），但 SessionEnd 回收不看它，照删不误（上月两次迁移途中被当成已关闭删掉） | SessionEnd 回收先问 rotate 租约：租约在就只关窗口、什么都不动；租约有 TTL，mover 死了也不会永远挡着（#2321） | `migrate-exit-reaps` |
 | 未合并的单在恢复页按 q | 窗口关了，单子还挂在这台登录名下，调度以为有人在做，一直不再派 | q 和 dash ⌃x 走同一个放认领函数：去掉 assignee、留一句说明，单子保持打开可再派（#1842） | `q-releases-claim` |
 | 恢复页上 ↵ / r 重开，5 秒内就失败（对话找不到、认证失效） | 当成「启动失败」直接退出，窗口关掉，看不到原因 | 只有第一次启动沿用快速失败退出；重开失败回到恢复页，写「续上原对话失败」和原因；恢复页自己出错也落到一个最简恢复页（#1842） | `resume-fails-fast` |
-| Codex 会话没记下对话 id 时在恢复页按 ↵ | `codex resume --last` 接上同一 Codex home 里最近的对话——可能是别的会话的 | 先续本窗口记下的 thread（`@codex_thread_id`），没有就新开，恢复页写「回车新开」；从不 `--last`（#1842） | `codex-no-id` |
+| Codex 会话没记下对话 id 时在恢复页按 ↵ | `codex resume --last` 接上同一 Codex home 里最近的对话——可能是别的会话的 | 先续本窗口记下的 thread（`@codex_thread_id`），没有就新开，结束行写「↵ 新开对话」；从不 `--last`（#1842） | `codex-no-id` |
 | 最后一个窗口关闭（home 的 shell 退出、最后一个会话结束） | tmux 服务器随之退出，整台 fleet 停 | 服务器 `exit-empty off`，home 窗格死了立即重开 shell（#1784）；tmux ≤ 3.4 忙时会漏掉 shell 退出的信号、窗格停在死状态，diskguard 节拍的 `home_watch` 补救重开（#1801） | `last-window` |
 | 改窗口名（`prefix ,`、`rename-window`）：把 home 改成别的名字，或把执行会话改叫 `home`、改掉它恢复时用的名字 | fleet 按名字认窗口：改名后的 home 漏了 SIGCHLD 时节拍不再补救、整个 fleet 不再被认作 fleet（上限计数归零）；改叫 `home` 的执行会话不算进上限；恢复认不出改名的会话，再开一个重复的 | 认窗口只看窗口自己的 `@fleet_role`（home / panel / worker，开窗时打上，读一律经 `fleet_win_role`），没打过的老窗口才按名字；恢复先按 `@fleet_id` 认活着的会话（#1844） | `window-renamed` |
 | 编排会话被关掉（`/exit` 后按 q、`kill-window`、⌃x、关它的进程） | 「新任务」后面没人了：交给编排的草稿无处可去，写作区只能直接开工；再要一个就得手开草稿会话 | 编排会话按角色（`@fleet_role orchestrator`）认，不按名字；fleet-up 开 home 后开它，diskguard 节拍的 `home_watch` 每拍 `fleet-orchestrator.sh ensure`：不在就重开在 `$HOME`，续上它记着的同一对话（`fleets/<sess>/orchestrator.sid`），恢复 / 迁移 / 搬家都当它是 home、从不复制它（#1957） | `orchestrator-closed` |
