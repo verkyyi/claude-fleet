@@ -214,7 +214,14 @@ case "$_cu_out" in
       ''|none|-) ;;
       *) [ -n "$_fl_head" ] && _fl_hub="$_fl_hub · stable $(printf '%.7s' "$_fl_st")（install-sync 跟上）" ;;
     esac
-    pass fleet "${_fl_head:+版本 $(printf '%.7s' "$_fl_head") · }$(printf '%s' "$_fl_root" | sed "s#^$HOME#~#") · $_fl_hub" ;;
+    # the client shell running here on code other than this install's (issue
+    # #2737): a switch it was not reloaded by — WARN until it is
+    _fl_txt="${_fl_head:+版本 $(printf '%.7s' "$_fl_head") · }$(printf '%s' "$_fl_root" | sed "s#^$HOME#~#") · $_fl_hub"
+    if [ ! -f "$_cu" ] || _fl_run=$(bash "$_cu" running --root "$_fl_root" 2>/dev/null); then
+      pass fleet "$_fl_txt"
+    else
+      warn fleet "$_fl_txt · $_fl_run"
+    fi ;;
 esac
 
 # A resident daemon on code older than the install (issue #2716): a KeepAlive

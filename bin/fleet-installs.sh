@@ -184,7 +184,7 @@ else:
            [(l["login"], "client", l["client"]) for l in logins if l["client"]]
     for i, (n, what, o) in enumerate(rows):
         if what == "shell":
-            extra = "  (follows its login install)" if o["follows"] else "  (pinned to one version dir until its next start)"
+            extra = "  (follows its login install)" if o["follows"] else "  (pinned to one version dir until the next install switch reloads it)"
         else:
             extra = "  (client install)"
         print("  %-16s %-14s %-8s %s%s" % ("client shell" if i == 0 else "", n, short(o["version"]), word(o), extra))

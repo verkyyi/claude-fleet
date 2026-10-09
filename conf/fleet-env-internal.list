@@ -701,5 +701,6 @@ FLEET_INSTALL_SETTLE_SECS          knob: internal budget, seconds install-sync w
 FLEET_INSTALLS_HOMES               seam: the homes root fleet-installs.sh looks into (default /Users, /home) (#2692)
 FLEET_INSTALLS_STABLE              seam: the stable commit fleet-installs.sh judges against (default the live install's refs/tags/stable) (#2692)
 FLEET_INSTALLS_SUDO                seam: the privilege prefix fleet-installs.sh reads another login's home with (default `sudo -n`; empty = none) (#2692)
+FLEET_INSTALL_SYNC_CLIENT_FOLLOW   seam: 0 — a kept switch does not run `fleet-client-update.sh follow`; the keeper's drift tick reloads the running client shell instead (#2737)
 FLEET_INSTALL_SYNC_HOST            seam: 1|0 — does this computer 承载; an install-sync tick follows the node agent only when 1 (default `fleet-conf.sh host`) (#2716)
 FLEET_DOCTOR_RESIDENT_CMD          seam: prints `<unit> <started epoch>` per resident daemon for the doctor's 「常驻服务还在跑切换前的版本」 row (default launchctl print / systemctl show + ps etime) (#2716)

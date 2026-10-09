@@ -554,7 +554,13 @@ class H_ReleaseJson(Sandbox):
             dict(good, components=dict(good["components"], claude={"version": "1 2", "artifact": "x"})),
             dict(good, components=dict(good["components"], node={"version": "1"})),
             dict(good, components=dict(good["components"], supervisor={"script": "bin/other.py"})),
+            dict(good, client_reload="later"),
         ]
+        # how a running client takes it (issue #2737): hot or restart pass
+        for ok in (dict(good, client_reload="hot"), dict(good, client_reload="restart")):
+            r = subprocess.run([sys.executable, UPD, "check-release", "-"], input=json.dumps(ok), env=self.env,
+                               capture_output=True, text=True, timeout=30)
+            self.assertEqual(r.returncode, 0, r.stderr)
         for b in bad:
             r = subprocess.run([sys.executable, UPD, "check-release", "-"], input=json.dumps(b), env=self.env,
                                capture_output=True, text=True, timeout=30)

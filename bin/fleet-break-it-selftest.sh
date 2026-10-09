@@ -109,6 +109,8 @@
 #   client-files-swapped                            bin/fleet-client-update.sh (tick), fleet-shell.sh reload
 #   client-unversioned-drift                        bin/fleet-client-update.sh (tick, digest), fleet-shell.sh stamp_ver
 #   client-sidebar-stale-after-update               bin/fleet-sidebar.py (VIEW_STAMP, sync), fleet-shell.sh reload
+#   client-hot-reload                               bin/fleet-client-update.sh (follow), fleet-install-sync.sh
+#                                                   client_follow, fleet-shell.sh reload --from
 #   client-other-login-empty-list                   bin/fleet-hub-sessions.sh (fetch: ETag + its mapping stamp)
 #   hub-restart-where                               bin/fleet-shell.sh (keeper renew), fleet-client-lease.py renew,
 #                                                   fleet-client-where.sh
@@ -2644,6 +2646,77 @@ drill_client_sidebar_stale_after_update() {
   exec 8>&-; kill "$cpid" 2>/dev/null
   [ "$rc" = 0 ] || return 1
   WHAT="客户端换了新文件：侧栏按内容认出不是自己启动时的代码，重画成新进程"
+}
+
+# (issue #2737) install-sync switched the install under the running client — a
+# checkout-style home (<home> a link into <home>.versions/, no .client-version):
+# the shell's mirror follows the link, but every long-lived part (the list, the
+# confs it sourced, the loops) kept the code it started with, and the only way
+# to the new one was `fleet quit` + `fleet` (the operator's MacBook, 2026-10-09,
+# after #2717). The drill: such a client running with a list drawn and a proxy
+# window; the break is the link switch to a version whose list code moved; the
+# recovery is what install-sync's client_follow runs, `fleet-client-update.sh
+# follow --from <old>`: within 30 s the list is a new process on the new code,
+# the servers, windows, the window in view and the proxy pane are the same.
+drill_client_hot_reload() {
+  CAP=30; local s="${CSESS}h" H="$WORK/hhome" t0 lp sp pp w0 iv v f rc=0
+  client_setup
+  for v in h1 h2; do
+    mkdir -p "$H.versions/$v/bin" "$H.versions/$v/conf"
+    cp -P "$WORK"/sbin/* "$H.versions/$v/bin/"
+    for f in fleet-shell.sh fleet-client-update.sh fleet-sidebar.py; do rm -f "$H.versions/$v/bin/$f"; cp "$BIN/$f" "$H.versions/$v/bin/$f"; done
+    for f in "$WORK"/conf/*; do cp -L "$f" "$H.versions/$v/conf/${f##*/}"; done
+  done
+  printf '\n# h2: the list moved\n' >> "$H.versions/h2/bin/fleet-sidebar.py"
+  ln -s "$H.versions/h1" "$H"
+  hx() { "$REAL_TMUX" -L "$s" "$@"; }
+  hg() { "$REAL_TMUX" -L "$s-stage" "$@"; }
+  ( client_env
+    export FLEET_SHELL_SESSION="$s" FLEET_SHELL_CACHE="$WORK/hcache" FLEET_CLIENT_LEASE_CMD=false \
+           FLEET_CLIENT_LEASE_EVERY=3600 FLEET_CLIENT_CHECK_SECS=999999
+    bash "$H/bin/fleet-shell.sh" >"$WORK/up-$s.out" 2>"$WORK/up-$s.err" )
+  [ "$(cat "$WORK/up-$s.out" 2>/dev/null)" = "$s" ] || { WHY="the client did not start: $(head -3 "$WORK/up-$s.err")"; return 1; }
+  mkfifo "$WORK/hclient.fifo"
+  hx -C attach-session -t "=$s" < "$WORK/hclient.fifo" >/dev/null 2>&1 &
+  local cpid=$!
+  exec 8> "$WORK/hclient.fifo"
+  hlist() { hx list-panes -s -t "=$s" -F '#{@sidebar} #{pane_pid}' 2>/dev/null | awk '$1 == "1" { print $2; exit }'; }
+  hproxy() { hg list-panes -s -F '#{pane_pid} #{pane_start_command}' 2>/dev/null | awk '/fleet-remote-view.sh/ { print $1; exit }'; }
+  hwins() { hx list-windows -a -F '#{window_id}' 2>/dev/null | sort | tr '\n' ' '; hg list-windows -a -F '#{window_id}' 2>/dev/null | sort | tr '\n' ' '; }
+  hview() { hx display-message -p -t "=$s:" '#{window_id}' 2>/dev/null; hg display-message -p -t "=$s-stage:" '#{window_id}' 2>/dev/null; }
+  until_ok 5 sh -c "[ -n \"\$(\"$REAL_TMUX\" -L $s list-clients -F x 2>/dev/null)\" ]" || { WHY="no client attached"; rc=1; }
+  if [ "$rc" = 0 ]; then
+    hx resize-window -t "=$s:" -x 200 -y 50 2>/dev/null
+    hx run-shell -t "=$s:" "bash '$WORK/hcache/bin/fleet-sidebar.sh' sync '#{session_id}' >/dev/null 2>&1 || :"
+    until_ok 10 sh -c "[ -n \"\$(\"$REAL_TMUX\" -L $s list-panes -s -t =$s -F '#{@sidebar}' 2>/dev/null | grep -x 1)\" ]" \
+      || { WHY="no list drawn"; rc=1; }
+  fi
+  if [ "$rc" = 0 ]; then
+    until_ok 5 sh -c "[ -n \"\$(\"$REAL_TMUX\" -L $s-stage list-panes -s -F '#{pane_start_command}' 2>/dev/null | grep fleet-remote-view.sh)\" ]" \
+      || { WHY="no proxy pane on the stage"; rc=1; }
+  fi
+  if [ "$rc" = 0 ]; then
+    lp=$(hlist); pp=$(hproxy); w0=$(hwins); iv=$(hview); sp=$(hx display-message -p -t "=$s:" '#{pid}')
+    t0=$(now)
+    rm -f "$H"; ln -s "$H.versions/h2" "$H"                    # the break: install-sync's link switch
+    ( client_env
+      export FLEET_SHELL_SESSION="$s" FLEET_SHELL_CACHE="$WORK/hcache" FLEET_CLIENT_LEASE_CMD=false
+      bash "$H/bin/fleet-client-update.sh" follow --from "$H.versions/h1" >/dev/null 2>&1 )   # its client_follow
+    until_ok "$CAP" sh -c "p=\$(\"$REAL_TMUX\" -L $s list-panes -s -t =$s -F '#{@sidebar} #{pane_pid}' 2>/dev/null | awk '\$1 == \"1\" { print \$2; exit }'); [ -n \"\$p\" ] && [ \"\$p\" != $lp ]" \
+      || { WHY="the list ($lp) still runs the code it started with ${CAP}s after the switch"; rc=1; }
+  fi
+  if [ "$rc" = 0 ]; then
+    SECS=$(since "$t0")
+    [ "$(hx display-message -p -t "=$s:" '#{pid}')" = "$sp" ] || { WHY="the shell's tmux server was replaced"; rc=1; }
+  fi
+  [ "$rc" = 0 ] && { [ "$(hwins)" = "$w0" ] || { WHY="the windows changed: $w0 → $(hwins)"; rc=1; }; }
+  [ "$rc" = 0 ] && { [ "$(hview)" = "$iv" ] || { WHY="the window in view changed"; rc=1; }; }
+  [ "$rc" = 0 ] && { [ "$(hproxy)" = "$pp" ] || { WHY="the proxy pane was respawned (fleet-remote-view.sh did not change)"; rc=1; }; }
+  [ "$rc" = 0 ] && { grep -q '"phase": "reloaded"' "$WORK/hcache/update.state" 2>/dev/null || { WHY="no trace: update.state is not reloaded"; rc=1; }; }
+  exec 8>&-; kill "$cpid" 2>/dev/null
+  hx kill-server 2>/dev/null; hg kill-server 2>/dev/null
+  [ "$rc" = 0 ] || return 1
+  WHAT="安装切了新版：正在跑的客户端原地换新——侧栏新进程跑新代码，服务器、窗口、正在看的、代理都不动"
 }
 
 # A client whose node login is not the name of the computer it sits at (issue

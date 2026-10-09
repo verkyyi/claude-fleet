@@ -191,6 +191,10 @@ root 运行。托管账号的 `fleet-install-sync.sh` 不再自己追 stable，�
 | 共享凭据代理 | 发布版提交的 `bin/fleet-cred-proxy.py` / `fleet-credsep-launch.py` | root 代码副本 `<root>/credsep/`：更新器每次切换、回退、验证前和每一轮跑 `<current>/bin/fleet-credsep.py machine refresh`，字节变了代理就重启——launchd 管的（旧 `com.claude-fleet.cred-proxy-shared` 还在）由 refresh bootout / bootstrap，守护管的子进程由守护按 `reload`（`credsep/` 一变）重启，refresh 不另写 plist（#2435） |
 | 守护自身 | 发布版提交 | 它就在 `current` 里：切换后最后一步写 `<state>/update-restart.json`，守护停掉子进程退出，launchd 用新版拉起 |
 
+- 可选的 `"client_reload": "hot" | "restart"`（#2737，缺省 `hot`）：版本切换后正在跑的客户端壳怎么换新。`hot` = install-sync
+  切换成功后 `fleet-client-update.sh follow` 原地重载（同一对 tmux 服务器、窗口、正在看的会话不动）；`restart` = 这一版载入不了
+  正在跑的客户端（tmux.conf 要更新的 tmux、协议变了），不热换，底栏「新版已就绪 · 下次打开生效」，没人连着的客户端在下一次
+  `fleet` 时关掉重开。只在需要的那一版写，下一版去掉。
 - `os` / `arch` 只是 artifact 名字的展开；校验和永远是**入口签名清单**里的那个，`release.json` 不写校验和。
 - 升一个部件 = 改这里的版本 + 把同名 artifact 放进入口的 `CCQUOTA_FLEET_RELEASE_ARTIFACTS`，再移 stable。
   发布包里缺 artifact → 这一版**不换**（`failed`，1 小时后重试），不会只换一半。

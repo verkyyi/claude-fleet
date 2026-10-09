@@ -154,9 +154,13 @@ def check_release(spec):
     comps = spec.get("components")
     if not isinstance(comps, dict):
         raise ValueError("components: missing")
-    unknown = set(spec) - {"schema", "components", "note"}
+    unknown = set(spec) - {"schema", "components", "note", "client_reload"}
     if unknown:
         raise ValueError("unknown field(s): %s" % ", ".join(sorted(unknown)))
+    # how a running client shell takes this release (issue #2737): hot = reloaded
+    # in place (the default), restart = the person reopens it
+    if spec.get("client_reload", "hot") not in ("hot", "restart"):
+        raise ValueError("client_reload: hot or restart")
     out = {}
     for name in ("ccquota", "claude", "codex", "tmux", "supervisor"):
         c = comps.get(name)

@@ -430,6 +430,8 @@ fleet_ui_t() {
     en:badge_update_failed_fmt) printf 'update failed: %s' "${1:-}" ;;
     zh:badge_update_later)      printf '新版已就绪 · 下次打开生效' ;;
     en:badge_update_later)      printf 'new version ready · takes effect next open' ;;
+    zh:badge_update_pending_fmt) printf '待换新（%s）' "${1:-}" ;;
+    en:badge_update_pending_fmt) printf 'update pending (%s)' "${1:-}" ;;
     zh:peer_hub_lost_fmt)       printf '入口失联，机器间访问暂停；你可直接 `fleet %s` 进去' "${1:-}" ;;
     en:peer_hub_lost_fmt)       printf 'hub lost — machine-to-machine access paused; you can still go in directly with `fleet %s`' "${1:-}" ;;
     zh:pin_heading_fmt)         printf '置顶 (%s)' "${1:-}" ;;
