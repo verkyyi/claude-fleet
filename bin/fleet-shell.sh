@@ -638,6 +638,15 @@ spec = importlib.util.spec_from_file_location("q", sys.argv[1])
 q = importlib.util.module_from_spec(spec); spec.loader.exec_module(q)
 print((q.load().get("mru") or [""])[0])' "${SHADOW:-$BIN}/fleet-quickopen.py" 2>/dev/null
 }
+# solo_seen — the client has shown a session before (issue #2739): a session row
+# (`wid:<fleet>/<key>`) anywhere in the switch history; 「新任务」 alone is not one.
+solo_seen() {
+  python3 -c 'import importlib.util, re, sys
+spec = importlib.util.spec_from_file_location("q", sys.argv[1])
+q = importlib.util.module_from_spec(spec); spec.loader.exec_module(q)
+sys.exit(0 if any(re.fullmatch(r"wid:[^/]+/.+", k) for k in q.load().get("mru") or []) else 1)' \
+    "${SHADOW:-$BIN}/fleet-quickopen.py" 2>/dev/null
+}
 # solo_resume <key> <since> — `fleet` with nothing running comes back to the
 # session it left (issue #2265, EPIC #2259 共同约定 3), in the background: a local
 # row (@<id>, no hub) by the list's own jump; a row on a machine once the list's
@@ -1882,7 +1891,8 @@ loops_reap 2>/dev/null
 solo_key=''; solo_since=$(date +%s)
 [ "${FLEET_CLIENT_LAYOUT:-}" = solo ] && solo_key=$(solo_last)
 # …and every other layout to the last session or 「新任务」 (issue #2739, below)
-[ "${FLEET_CLIENT_LAYOUT:-}" != solo ] && [ -z "$machine" ] && solo_key=$(solo_last)
+seen=''
+if [ "${FLEET_CLIENT_LAYOUT:-}" != solo ] && [ -z "$machine" ] && solo_seen; then seen=1; solo_key=$(solo_last); fi
 # 3. the servers: conf (keys, hooks, bar, environment); the stage with the first
 #    machine's window (issue #1759), then the shell's one window, `home`, whose
 #    right pane looks at the stage
@@ -1900,12 +1910,11 @@ if [ -n "$home" ]; then printf '%s\n' "$home" > "$CACHE/home-machine"; else rm -
 # or a newcomer's home page there) when it was asked for — `fleet <machine>` —,
 # is THIS computer's fleet (no hub: the client reads this machine), or the client
 # has never shown a session (no history: the newcomer's road, EPIC #2259). A
-# client that has — the switch history names 「新任务」 or a session row — no
-# longer opens the hub's pick's own window, which with no live session of theirs
+# client that has — a session row in its switch history (solo_seen) — no longer
+# opens the hub's pick's own window, which with no live session of theirs
 # there was a bare shell saying so (issue #2739): its first screen is that last
 # session, else 「新任务」 (solo_resume).
-machine_win=''; FIRST_SCREEN=0; seen=''
-case "$solo_key" in new|wid:?*/?*) seen=1 ;; esac
+machine_win=''; FIRST_SCREEN=0
 if [ -n "$node" ] && { [ -n "$machine" ] || [ -z "$seen" ] || [ "${FLEET_CLIENT_LAYOUT:-}" = solo ] \
                        || this_machine "$node"; }; then machine_win=1
 elif [ -n "$seen" ] && [ "${FLEET_CLIENT_LAYOUT:-}" != solo ]; then FIRST_SCREEN=1; fi

@@ -245,10 +245,11 @@ has 'A: default mode: #me is this host' "$(head -2 "$WORK/degen/.claude-dash/glo
 : > "$WORK/connect.argv"
 : > "$WORK/ssh.log"
 printf '#!/bin/sh\necho "portal $*" >> "%s/first.log"\n' "$WORK" > "$WORK/first-new"; chmod +x "$WORK/first-new"
-# a client that has shown 「新任务」 before (its switch history, fleet-quickopen.py):
+# a client that has shown a session before, and 「新任务」 last (its switch history,
+# fleet-quickopen.py):
 # no history at all is the newcomer's road — the pick's own window (newcomer-e2e.sh)
 mkdir -p "$HOME/.local/state/claude-fleet"
-printf '{"stack": ["new"], "at": 0, "mru": ["new"]}\n' > "$HOME/.local/state/claude-fleet/switch-history.json"
+printf '{"stack": ["wid:11111111-1111-4111-8111-111111111111/gone-1", "new"], "at": 1, "mru": ["new", "wid:11111111-1111-4111-8111-111111111111/gone-1"]}\n' > "$HOME/.local/state/claude-fleet/switch-history.json"
 out=$(FLEET_FIRST_NEW_CMD="$WORK/first-new" "$SB/fleet" 2>"$WORK/up.err"); rc=$?
 eq 'B: bare fleet → the shell started (exit 0)' 0 "$rc"
 eq 'B: it printed its session' "$SESS" "$out"
