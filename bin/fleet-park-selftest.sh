@@ -119,10 +119,10 @@ W7=$(mkwin 7 7200); W8=$(mkwin 8 7200); W9=$(mkwin 9 7200); W10=$(mkwin 10 60); 
 W12=$(mkwin 12 7200)
 touch "$S/busy.$W8"                                                  # a /loop or a bg job
 tmux set-option -w -t "$W9" @claude_state_ts "$((NOW - 100))"       # blocked a moment ago
-echo done > "$S/state.$W10"                                          # idle, but its branch just moved
-echo working > "$S/state.$W11"                                       # 11 is parked by hand (C):
+echo 'done' > "$S/state.$W10"                                          # idle, but its branch just moved
+echo 'working' > "$S/state.$W11"                                       # 11 is parked by hand (C):
 touch "$WORK/projects/$(printf '%s' "$WORK/wt-11" | LC_ALL=C tr -c 'A-Za-z0-9' '-')/$(o "$W11" @cc_session_id).jsonl"
-echo done > "$S/state.$W12"                                          # idle an hour, nothing moved
+echo 'done' > "$S/state.$W12"                                          # idle an hour, nothing moved
 SID7=$(o "$W7" @cc_session_id); FID7=$(o "$W7" @fleet_id)
 mkdir -p "$FLEET_CONF_DIR/global"
 python3 -c '
@@ -228,7 +228,7 @@ grep -q '"ev": "cancel", "ref": "o/r#9"' "$FLEET_CONF_DIR/logs/park.ndjson" && o
 printf '#!/bin/sh\n:\n' > "$S/none"; chmod +x "$S/none"
 beat() { env FLEET_STEWARD=1 FLEET_STEWARD_WINDOWS_CMD="$S/none" FLEET_STEWARD_CHILDREN_CMD="$S/none" \
              FLEET_STEWARD_SEND_CMD="$S/none" FLEET_STEWARD_STAMP_CMD="$S/none" \
-             python3 "$BIN/fleet_steward.py" beat --force --session pk "$@"; }
+             python3 "$BIN/fleet_steward.py" beat --force --session pk; }
 card=$(beat 2>&1)
 printf '%s\n' "$card" | grep -q '停放 1 个' && ok "G the beat's card counts the parked" || bad "G card: $card"
 python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if [p["ref"] for p in d.get("parked", [])] == ["o/r#11"] else 1)' \
