@@ -206,7 +206,13 @@ while IFS= read -r r; do
   case "$r" in
     '!'*) lintfail "a row is not 4 cells ending in \`<id>\` or 登记：<ticket>: ${r#!}" ;;
     '@'*) ;;
-    *) printf '%s\n' "$DRILLS" | grep -qx -- "$r" || lintfail "row \`$r\` has no drill_${r//-/_} in this script"
+    # case, not `printf | grep -qx`: under pipefail the grep quitting on its first
+    # match SIGPIPEs the printf of a long list, and the row reads as missing (#2510).
+    *) case "
+$DRILLS
+" in *"
+$r
+"*) ;; *) lintfail "row \`$r\` has no drill_${r//-/_} in this script" ;; esac
        IDS="$IDS $r" ;;
   esac
 done <<EOF
