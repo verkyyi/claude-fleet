@@ -4958,7 +4958,7 @@ drill_status_agent_not_up() {
   sp_hook '{"hook_event_name":"UserPromptSubmit"}' working
   st=$(sp_state)
   [ "$st" = working//hook ] || { WHY="with no live 7501 report the prompt's hook did not land: [$st] — the window reads unknown"; return 1; }
-  nt set-option -wu -t "$SPW" @agent_status \; set-option -wu -t "$SPW" @agent_status_ts \; set-option -w -t "$SPW" @claude_state done
+  nt set-option -wu -t "$SPW" @agent_status \; set-option -wu -t "$SPW" @agent_status_ts \; set-option -w -t "$SPW" @claude_state 'done'
   sp_env bash "$BIN/classify-sessions.sh" --window "$SPW"
   [ -f "$WORK/sp-claude-calls" ] || { WHY="the screen classifier was skipped although the agent never spoke"; return 1; }
   sp_env python3 "$BIN/fleet-state-reconcile.py" --registry "$WORK/spreg" --cache-dir "$WORK/spcache" \
