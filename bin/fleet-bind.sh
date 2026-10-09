@@ -180,13 +180,14 @@ git -C "$WT" branch -m "$slug" "$branch" >/dev/null 2>&1 \
 # and costs no round-trip; else one gh read; else the bare issue-<N> slug.
 # An EPIC member wears its batch's 简称 first (issue #2355): the one read takes
 # the body with the title. An explicit --title is a fresh issue the filer just
-# wrote (fleet-issue-file.sh --bind) — no EPIC member, and no read at all.
+# wrote (fleet-issue-file.sh --bind) — no EPIC member, and no read at all: it is
+# named by its use, the way any non-member is (issue #2545).
 title="$TITLE"; body=''
 if [ -z "$title" ] && [ -n "$REPO" ] && command -v gh >/dev/null 2>&1; then
   tb=$(gh issue view "$num" --repo "$REPO" --json title,body -q '.title + "\n" + .body' 2>/dev/null) || tb=''
   title=${tb%%$'\n'*}; body=${tb#*$'\n'}; [ "$body" = "$tb" ] && body=''
 fi
-if [ -n "$TITLE" ]; then wname=$(fleet_win_name "$title")
+if [ -n "$TITLE" ]; then wname=$(fleet_issue_plain_name "$title")
 else wname=$(fleet_issue_win_name "$REPO" "$num" "$title" "${body:-.}"); fi
 [ -z "$wname" ] && wname="$branch"
 

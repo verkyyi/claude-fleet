@@ -57,7 +57,7 @@ if lang == "zh":
     check(m.row_glyph(lost) == (m.LOST_GLYPH, "lost") and m.LOST_GLYPH == "⊘",
           "B: a lost machine's row says so in its state glyph: %r" % (m.row_glyph(lost),))
     check(m.row_glyph(row) == ("●", ""), "B: …a live one keeps its own glyph")
-    bare = row[:8] + [""] * 4
+    bare = row[:8] + [""] + row[9:10] + [""] * 2
     check(m.row_need(row) == m.row_need(bare), "B: row_need asks no cells for the machine")
 
     # C. degenerate: no machine field → nothing to name

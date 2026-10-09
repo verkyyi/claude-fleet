@@ -119,7 +119,19 @@ for w in (24, 30, 44):
         line = sidebar.row_text('▶', '·', ' ', 'issue-1532 一个很长很长的名字', badge, w)
         assert sidebar.width_of(line) <= w and not re.search(r'#1532|@m4|45%|合并', line), repr(line)
         assert not badge or line.endswith('· ' + badge), 'the N/N stays whole: %r' % line
-assert sidebar.row_need(r12) == sidebar.row_need(r12[:8] + [''] * 7), 'row_need asks nothing for the moved fields'
+assert sidebar.row_need(r12) == sidebar.row_need(r12[:10] + [''] * 6), 'row_need asks nothing for the moved fields'
+# The row ends in its issue number, whole and right-aligned at any width (issue
+# #2545): the name is the issue's short use, the number tells two alike apart;
+# the bar leads with the issue's full title (field 13) when the row has one.
+for w in (24, 30, 44):
+    for badge in ('', '2/3'):
+        line = sidebar.row_text('▶', '·', ' ', '常备会话预热把机器锁死一个很长的名字', badge, w, sidebar.row_num(r12))
+        assert sidebar.width_of(line) <= w and line.endswith('#1532'), repr(line)
+        assert not badge or line.endswith('· 2/3 #1532'), repr(line)
+assert sidebar.row_need(r12) == sidebar.row_need(r12[:9] + [''] * 7) + len(' #1532'), 'row_need keeps room for the number'
+assert sidebar.row_num(r12[:9] + ['—']) == '' and sidebar.row_num(r12[:9] + ['#12x']) == '', 'only a #<digits> number'
+titled = r12[:13] + ['托管机器上旧版 fleet host on 以登录身份重登记：入口换发令牌'] + r12[14:]
+assert sidebar.detail_line(titled).startswith('托管机器上旧版 fleet host on 以登录身份重登记：入口换发令牌 · #1532'), sidebar.detail_line(titled)
 # The urgent conditions take the state glyph's cell: a broken configuration a
 # red ✗, a lost machine ⊘; a question keeps its red ? / ! (STATE_PAIR needs).
 broken = r12[:12] + ['broken'] + r12[13:]
@@ -914,7 +926,7 @@ try:
             wid, state, glyph, label, tree = row[:5]
             badge = row[5] if len(row) > 5 else ''
             text = label if wid == 'hdr' else sidebar.row_text(
-                '▶' if wid == w1 else ' ', glyph, tree, label, badge, 29)
+                '▶' if wid == w1 else ' ', glyph, tree, label, badge, 29, sidebar.row_num(row))
             want.append(sidebar.clip(text, 29).rstrip())
         return want
     # A working row's glyph is the spinner, which animates between the two reads:
@@ -1085,16 +1097,20 @@ try:
     wait_for(lambda: view_on(w1) == [side], 'the view did not come back after `scratch`')
     tm('kill-window', '-t', new)
 
-    # The ▶ row is state · name only (issue #2305): worker-one's issue (`#1`)
+    # The ▶ row is state · name · its issue number (issues #2305, #2545):
+    # worker-one's `#1` ends the row, right-aligned; the rest of the detail
     # rides the bar — @fleet_hint_name on the list's window, `#` doubled — and
     # the old ⌃i `info` verb is gone (a stale tap changes nothing).
     wait_for(lambda: 'worker-one' in row_line('▶'), 'worker-one is not the ▶ row')
-    check(not re.search(r'#1\b|—', row_line('▶')), 'the row carries more than state · name: %r' % row_line('▶'))
+    check(row_line('▶').rstrip().endswith('#1') and '—' not in row_line('▶'),
+          'the row carries more than state · name · #N: %r' % row_line('▶'))
     hint = lambda: tm('show-options', '-wqv', '-t', side, '@fleet_hint_name')
-    wait_for(lambda: hint().startswith('worker-one · ##1'), 'the bar does not carry the ▶ row\'s detail: %r' % hint())
+    # it leads with the issue's full title when the row carries one (#2545), else the name
+    wait_for(lambda: re.match(r'[^#]+ · ##1\b', hint()), 'the bar does not carry the ▶ row\'s detail: %r' % hint())
     park('info')
     time.sleep(0.5)
-    check(not re.search(r'#1\b', row_line('▶')), 'a stale `info` tap opened a column: %r' % row_line('▶'))
+    check(not re.search(r'#1\b.*#1\b', row_line('▶')) and '—' not in row_line('▶'),
+          'a stale `info` tap opened a column: %r' % row_line('▶'))
 
     # `view`: running ⇄ landed, in place — the rows `fleet-history.sh rows` gives
     # the hub's ⌃t (stubbed: the ledger is not this test's subject). `reload`

@@ -1574,21 +1574,32 @@ def row_left(marker, glyph, tree, name):
     return marker + " " + glyph + " " + (tree or " ") + " " + name
 
 
-def row_right(badge):
+def row_right(badge, num=""):
     """What sits at a row's right edge: the subtree badge (`· k/N`) — an EPIC's
-    done count — and nothing else (issue #2305: the row is state · name · N/N;
-    the machine, reap policy, configuration word and the old ⌃i issue · PR · ctx%
-    column are the bar's, `detail_line`)."""
-    return "· " + badge if badge else ""
+    done count — then the session's issue number (`#2545`, issue #2545: the name
+    is the issue's short use, the number is what tells two alike apart). Nothing
+    else (issue #2305: the machine, reap policy, configuration word and the old
+    ⌃i PR · ctx% column are the bar's, `detail_line`)."""
+    parts = ["· " + badge] if badge else []
+    if num:
+        parts.append(num)
+    return " ".join(parts)
 
 
-def row_text(marker, glyph, tree, name, badge, width):
-    """A session row laid out to `width` cells (issue #1328). The subtree badge
-    (`· k/N`) is right-aligned and ALWAYS whole; the name gets what is left and,
-    when it does not fit, ends in `…`. A narrow pane gives up name, never the
-    count — the one width rule a row has (issue #2305)."""
+def row_num(row):
+    """The issue number a row ends in: field 9 when it is `#<digits>`, else ""."""
+    num = (row[9] if len(row) > 9 else "").strip()
+    return num if re.fullmatch(r"#\d+", num) else ""
+
+
+def row_text(marker, glyph, tree, name, badge, width, num=""):
+    """A session row laid out to `width` cells (issue #1328). The right edge —
+    the subtree badge (`· k/N`) and the issue number (`#N`, issue #2545) — is
+    right-aligned and ALWAYS whole; the name gets what is left and, when it does
+    not fit, ends in `…`. A narrow pane gives up name, never the count or the
+    number — the one width rule a row has (issue #2305)."""
     left = row_left(marker, glyph, tree, "")
-    right = row_right(badge)
+    right = row_right(badge, num)
     room = width - width_of(left) - (width_of(right) + 1 if right else 0)
     if width_of(name) > room:
         name = clip(name, max(0, room - 1)) + "…" if room > 0 else ""
@@ -1633,7 +1644,7 @@ def row_need(row):
     if wid == "hdr":
         return 0 if name.startswith("──") else width_of(name) + 1
     need = width_of(row_left(" ", glyph, tree, name)) + 1
-    right = row_right(badge)
+    right = row_right(badge, row_num(row))
     return need + (width_of(right) + 1 if right else 0)
 
 
@@ -1729,13 +1740,15 @@ def auto_width(rows, cols, base, top):
 
 def detail_line(row):
     """Everything the row no longer carries, for the bar (issue #2305, on
-    #1328's whole-name line): its whole name · #issue · @machine · PR · reap
+    #1328's whole-name line): its whole name — the issue's full title when the
+    row has one (field 13), since the row shows only its short use (issue
+    #2545) — · #issue · @machine · PR · reap
     policy · ctx% · the configuration word · 单子没建上 (#2235) — the empty ones
     left out. Which `!`
     it is and why a ↻ waits (row[7]) live in the worker pane's header,
     @title_info (issue #1377)."""
     field = lambda i: row[i] if len(row) > i else ""
-    parts = [row[3], field(9), machine_tag(field(8)), field(10),
+    parts = [field(13).strip() or row[3], field(9), machine_tag(field(8)), field(10),
              reap_tag(field(14)), field(11), cfg_tag(field(12)),
              tr("sidebar_backfill_failed") if field(15) == "failed" else ""]
     return " · ".join(p.strip() for p in parts if p and p.strip() not in ("", "—", "·"))
@@ -3145,10 +3158,10 @@ def ui(screen, session, worker, lock):
             # `marker glyph tree label` (issue #836): the hierarchy glyph is its own
             # fixed cell between the state glyph and the name, so at 30 columns every
             # name starts in the same place instead of a child's text sitting two
-            # columns right of its parent's. Then the EPIC's `· k/N`, and nothing
-            # else (issue #2305).
+            # columns right of its parent's. Then the EPIC's `· k/N` and the
+            # issue's `#N` (issue #2545), and nothing else (issue #2305).
             w = max(0, width - 1)
-            put(y, row_text(marker, glyph, tree, label, badge, w), attr, fill=raised)
+            put(y, row_text(marker, glyph, tree, label, badge, w, row_num(row)), attr, fill=raised)
             # The state glyph, painted over its own cell in the state's colour —
             # where row_left put it, and only when the row is wide enough for it.
             at = width_of(marker) + 1

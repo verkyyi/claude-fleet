@@ -547,5 +547,18 @@ run_auto t5 "$FX/runs-2170" --title '登录按钮报错 undefined'
                                                      || fail "T5 a red base the text does not name files plain" "$(cat "$WORK/err-t5")"
 ok "T auto: no flag + red base the text names ⇒ breakage (marker, exit 5 dedup); --no-breakage / green base / unrelated text file plain"
 
+# --- U. a title is the issue's use (issue #2545): a long title, or one opening on a
+# script name, files all the same with ONE hint line; a short use says nothing.
+run_auto u1 "$FX/runs-green" --title '托管机器上旧版 fleet host on 以登录身份重登记，入口换发令牌、那条 lane 被拒'
+[ "$(cat "$WORK/rc-u1")" = 0 ] && grep -q 'hint: the title is [0-9]* columns' "$WORK/err-u1" \
+                                                     || fail "U1 a long title files, with a hint" "$(cat "$WORK/err-u1")"
+run_auto u2 "$FX/runs-green" --title 'fleet-issue-file.sh 对超长标题给提示'
+[ "$(cat "$WORK/rc-u2")" = 0 ] && grep -q 'hint: the title opens on a script name' "$WORK/err-u2" \
+                                                     || fail "U2 a script-name title files, with a hint" "$(cat "$WORK/err-u2")"
+run_auto u3 "$FX/runs-green" --title '每日推送没跑成'
+[ "$(cat "$WORK/rc-u3")" = 0 ] && ! grep -q 'hint:' "$WORK/err-u3" \
+                                                     || fail "U3 a short use files with no hint" "$(cat "$WORK/err-u3")"
+ok "U title hint: long / script-name titles file with one hint line, a short use says nothing"
+
 printf '\nselftest OK: %s assertions passed (channel: validate · provenance · create · milestone · parent · spawn · bind · breakage)\n' "$pass"
 exit 0

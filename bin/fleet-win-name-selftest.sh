@@ -223,4 +223,31 @@ eq "I issue name: a member, gh down ⇒ the cache's EPIC title" "托管节点·�
 eq "I issue name: a non-member ⇒ the plain name" "节点程序" \
    "$(PATH="$WORK/gh:$PATH" bash -c '. "$1"; fleet_issue_win_name acme/app 13 "节点程序" "plain body"' _ "$LIB")"
 
-printf 'selftest OK: fleet_win_name (%s assertions — #579 CJK names, determinism for restore #455, 32-column UTF-8-safe cut, emoji/punct slug fallback, reserved-panel guard, ASCII regression guard, no-perl degradation, #2355 EPIC 简称)\n' "$CHECKS"
+# J. an ordinary worker is named by its USE (issue #2545): the part before the
+#    first 「：」/「，」/`: `, no parenthesised aside, no technical token, no hyphen
+#    beside a CJK glyph, clipped to 24 columns — the sidebar's ~18 cells for a
+#    name then read as something, not 「托管机器上旧版-fleet-host-on-以」.
+eq "J use: only the part before 「：」" "常备会话预热把机器锁死" \
+   "$(fleet_issue_plain_name '常备会话预热把机器锁死：scratch-pool ensure 每拍过准入就预留名额')"
+eq "J use: …and before an ASCII ': '" "fix-the-cache" "$(fleet_issue_plain_name 'Fix the cache: fleet_lw drops rows')"
+eq "J use: a （aside） is dropped" "测试身份开出来的home会话" \
+   "$(fleet_issue_plain_name '测试身份（fleet --test-identity claude）开出来的 home 会话落在人的侧栏里当 norepo，没有回收策略')"
+eq "J use: no hyphen beside a CJK glyph" "入口把home会话放进macmin" \
+   "$(fleet_issue_plain_name '入口把 home 会话放进 macmini 上另一个登录（verkyyi）的旧 fleet')"
+eq "J use: fleet- prefix, .sh suffix, --flag, under_score come off" "issue-file对超长标题给提" \
+   "$(fleet_issue_plain_name 'fleet-issue-file.sh --hint 对超长标题给提示 fleet_title_use')"
+eq "J use: an ASCII-only title still slugs" "add-a-hint" "$(fleet_issue_plain_name 'Add a hint --flag fleet_x')"
+eq "J use: a short plain title is itself" "每日推送没跑成" "$(fleet_issue_plain_name '每日推送没跑成')"
+got=$(fleet_issue_plain_name '托管机器上旧版 fleet host on 以登录身份重登记：入口换发令牌')
+eq "J use: clipped to 24 columns" "托管机器上旧版fleet-host" "$got"
+eq "J use: a title that cleans to nothing keeps fleet_win_name's name" "fleet-x-y" \
+   "$(fleet_issue_plain_name 'fleet_x: --y')"
+eq "J use: still never a panel name" "" "$(fleet_issue_plain_name 'Plan')"
+eq "J use: deterministic across processes" "$(fleet_issue_plain_name '入口把 home 会话放进 macmini 上')" \
+   "$(bash -c '. "$1"; fleet_issue_plain_name "入口把 home 会话放进 macmini 上"' _ "$LIB")"
+eq "J issue name: a non-member goes through it" "常备会话预热把机器锁死" \
+   "$(PATH="$WORK/gh:$PATH" bash -c '. "$1"; fleet_issue_win_name acme/app 13 "常备会话预热把机器锁死：scratch-pool" "plain body"' _ "$LIB")"
+eq "J issue name: a member keeps its 简称·title, byte for byte" "托管节点·节点程序-fleet-x" \
+   "$(PATH="$WORK/gh:$PATH" FLEET_C="$WORK/c" bash -c '. "$1"; FLEET_C="$2"; fleet_issue_win_name acme/app 13 "节点程序 fleet_x" "<!-- fleet:epic-member epic=12 key=C1 -->"' _ "$LIB" "$WORK/c")"
+
+printf 'selftest OK: fleet_win_name (%s assertions — #579 CJK names, determinism for restore #455, 32-column UTF-8-safe cut, emoji/punct slug fallback, reserved-panel guard, ASCII regression guard, no-perl degradation, #2355 EPIC 简称, #2545 a worker named by its use)\n' "$CHECKS"

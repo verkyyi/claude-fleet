@@ -303,6 +303,21 @@ if [ -z "$milestone" ] && [ -n "${FLEET_DEFAULT_MILESTONE:-}" ]; then
 fi
 
 # --- 3. create -----------------------------------------------------------------
+# A title is the issue's USE from the person's side, ≤ 20 汉字 (issue #2545): the
+# sidebar names a worker after it. A long one, or one that opens on a script
+# name, gets one hint line on stderr — never a refusal. A breakage title is the
+# filer's own fixed shape and says nothing.
+if [ "$breakage" != 1 ]; then
+  _tw=$(S="$title" perl -CO -MEncode -e 'my $w = 0; for (split //, decode_utf8($ENV{S})) {
+    $w += (/\p{East_Asian_Width=Wide}|\p{East_Asian_Width=Fullwidth}/ ? 2 : 1) } print $w' 2>/dev/null) || _tw=0
+  _tw1=${title%%[ ：:（(]*}
+  case "$_tw1" in
+    fleet-*|bin/*|*.sh|*.py)
+      printf 'fleet-issue-file: hint: the title opens on a script name — say what it is FOR (「每日推送没跑成」); put the script in the body (issue #2545)\n' >&2 ;;
+    *) [ "${_tw:-0}" -gt 40 ] \
+         && printf 'fleet-issue-file: hint: the title is %s columns — keep it to one use, ≤ 20 汉字 (「mini2 开不了会话」); details go in the body (issue #2545)\n' "$_tw" >&2 ;;
+  esac
+fi
 create_args=(--repo "$repo" --title "$title" --body "$body")
 [ -n "$milestone" ] && create_args+=(--milestone "$milestone")
 if [ "${#labels[@]}" -gt 0 ]; then
