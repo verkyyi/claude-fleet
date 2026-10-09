@@ -304,6 +304,22 @@ FLEET_CTX_WINDOW=200000
 # @label=Orchestrator session @group=spawn @tier=internal @scope=fleet @edit=bool
 #FLEET_ORCHESTRATOR=1
 
+# The steward (EPIC #2668): the resident session that patrols every batch for you.
+# Default: follows FLEET_ORCHESTRATOR; 0 = no steward, and everything it brings —
+# the desk tickets below included — stays as before.
+# @label=Steward @group=spawn @tier=internal @scope=fleet @edit=bool
+#FLEET_STEWARD=1
+
+# Desk tickets (issue #2676): a session the orchestrator or you open with no repo
+# (a design page, research, a release) gets a `desk`-labelled ticket of its own in
+# FLEET_DESK_REPO, bound to the window like an issue (no workspace), so a comment
+# there reaches it and its outcome stays there. Default: follows FLEET_STEWARD;
+# 0 = never. The desk repo must be one this fleet hosts, else no ticket is filed.
+# @label=Desk tickets @group=spawn @tier=internal @scope=fleet @edit=bool
+#FLEET_DESK=1
+# @label=Desk repo @group=spawn @tier=internal @scope=fleet @edit=str
+#FLEET_DESK_REPO="verkyyi/claude-fleet"
+
 # ⌘N on the client (its [client] section — issue #2616): 0 (default) = straight
 # to the orchestrating session's input, woken first through the hub
 # (orch_ensure) when no machine runs it, at most FLEET_ORCH_BOOT_SECS; 1 = the

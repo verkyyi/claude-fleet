@@ -269,6 +269,12 @@ snapshot() {
     { tmux -L "$sock" list-windows -t "$sess" -F "#{@reap_policy}|#{@fleet_id}|#{@cc_session_id}|#{?@norepo,norepo:#{@norepo_sid},$rfmt}|"'#{?@remote,,#{?#{==:#{@fleet_role},orchestrator},home,#{window_name}}}|#{?@raw,#{?@worktree,#{@worktree},#{pane_current_path}},#{pane_current_path}}|#{@issue}|#{@claude_state}|#{@prci}|#{@pfg}|#{@raw}|#{@origin}|#{@cc_agent}|#{@cc_launcher_pid}|#{@handoff_manifest}|#{?@worker_lifecycle,#{@sleep_record},}|#{@codex_identity}' 2>/dev/null
       [ -n "$spath" ] && printf '||||__HUB__|%s|-\n' "$spath"
     } | python3 "$BIN/.fleet-restore-resolve.py" "$main" --lead --sid --fid --reap >> "$tmp" 2>/dev/null
+    # A desk session (issue #2676) is a no-repo row whose ticket lives in a repo:
+    # `DESK<TAB><fleet_id><TAB><owner/name>` rows, appended AFTER every FID/WIN pair
+    # (a row between them would unpair it — fleet_restore_wins), restore() stamps
+    # @desk @repo back from it. No desk window ⇒ no row, the map byte for byte.
+    tmux -L "$sock" list-windows -t "$sess" -F '#{@desk}|#{@fleet_id}|#{@repo}' 2>/dev/null \
+      | awk -F'|' '$1 == "1" && $2 != "" && $3 ~ /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/ { printf "DESK\t%s\t%s\n", $2, $3 }' >> "$tmp"
     # Destructive-shrink guard (issue #160): a fleet caught MID-RESTORE is
     # hub-only — fleet-up has rebuilt its panels but restore hasn't reopened the
     # work windows yet — so a snapshot taken in that window has FEWER WIN rows
@@ -463,6 +469,7 @@ pullback_run() {
       printf 'FID\t%s\n%s\n' "$fid" "WIN${line#WIN:"$fid"}" >> "$keep"
       n=$((n + 1))
     done < <(fleet_restore_wins "$pb")
+    awk -F'\t' '$1 == "DESK"' "$mf" >> "$keep" 2>/dev/null   # desk tickets ride along (#2676)
     rm -f "$pb"
     if [ "$n" = 0 ]; then rm -f "$keep"; continue; fi
     log "pullback: $sess — reopening $n killed session window(s)"
@@ -718,6 +725,13 @@ restore() {
         case "$wtag" in WIN:?*)
           _rp=$(awk -F'\t' -v f="${wtag#WIN:}" '$1 == "REAP" && $2 == f { print $3; exit }' "$mf" 2>/dev/null)
           case "$_rp" in ''|*[!A-Za-z0-9:.+-]*) ;; *) tmux -L "$sock" set-window-option -t "$nw" @reap_policy "$_rp" 2>/dev/null ;; esac ;;
+        esac
+        # Its desk ticket's repo (issue #2676): the map's DESK row, by identity —
+        # @issue is re-stamped below from the WIN row as for any worker.
+        case "$wtag" in WIN:?*)
+          _dr=$(awk -F'\t' -v f="${wtag#WIN:}" '$1 == "DESK" && $2 == f { print $3; exit }' "$mf" 2>/dev/null)
+          case "$_dr" in ?*/?*) tmux -L "$sock" set-window-option -t "$nw" @desk 1 2>/dev/null
+                                tmux -L "$sock" set-window-option -t "$nw" @repo "$_dr" 2>/dev/null ;; esac ;;
         esac
         fleet_win_role_stamp "$nw" worker "$sock"   # by role, not name (#1844)
         # Re-stamp the spawn provenance too (issue #503) so a crash-restored
