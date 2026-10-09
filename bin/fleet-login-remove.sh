@@ -297,6 +297,19 @@ fi
 
 step 6 'delete the OS login (and its home)'
 run sudo sysadminctl -deleteUser "$LOGIN"
+# sysadminctl can take the home and leave the record, exiting 0 all the same
+# (drill10092046 on macmini, issue #2728): a "done" here made the hub read
+# removed and the OS login nobody's. Read the record again; delete it with
+# dscl; still there ⇒ exit 1, so the hub keeps it failed and asks again.
+if [ "$APPLY" = 1 ] && dscl . -read "/Users/$LOGIN" UniqueID >/dev/null 2>&1; then
+  printf '%s: WARN record still there after deleteUser: /Users/%s — deleting it with dscl\n' "$PROG" "$LOGIN" >&2
+  show sudo dscl . -delete "/Users/$LOGIN"
+  sudo dscl . -delete "/Users/$LOGIN" || :
+  if dscl . -read "/Users/$LOGIN" UniqueID >/dev/null 2>&1; then
+    printf '%s: login %s is still on this machine (its record survived deleteUser and dscl -delete); stopped\n' "$PROG" "$LOGIN" >&2
+    exit 1
+  fi
+fi
 if [ "$APPLY" = 1 ] && [ -d "$H" ]; then
   printf '%s: WARN home still present after deleteUser: %s — remove it by hand once you have what you need\n' "$PROG" "$H" >&2
 fi

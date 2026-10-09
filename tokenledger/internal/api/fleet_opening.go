@@ -120,15 +120,7 @@ func (s *Server) accountStateOf(pid string, now time.Time) *AccountState {
 			return &AccountState{State: "failed", Machine: opening.Hostname, Login: opening.Login, Ask: ask, Why: why}
 		}
 		took := now.Sub(opening.RequestedAt)
-		eta := s.openingETAFor(opening.Hostname) - int(took.Seconds())
-		if eta < 30 {
-			// Slower than this machine usually is: the honest bound is
-			// how long until the doors give up and say failed.
-			eta = int((openingGiveUp - took).Seconds())
-		}
-		if eta < 5 {
-			eta = 5
-		}
+		eta := openingETALeft(s.openingETAFor(opening.Hostname), took)
 		return &AccountState{State: "opening", EtaS: eta, Machine: opening.Hostname, Login: opening.Login, Ask: ask}
 	}
 	if failed != nil {
@@ -197,6 +189,28 @@ func (s *Server) openingETAFor(host string) int {
 	}
 	if max := int(openingGiveUp.Seconds()); eta > max {
 		eta = max
+	}
+	return eta
+}
+
+// openingETALeft is the seconds left of an opening expected to take est
+// seconds (≤ openingGiveUp) that has run for took: est × (giveUp − took) ÷
+// giveUp, at least 5. It starts at est and only goes down, reaching the floor
+// as the doors give up and say failed. Before claude-fleet#2728 it was est −
+// took and, past it, the time left until the give-up — a number that jumped UP
+// (the drill read 「about 313s」, then 「about 858s」).
+func openingETALeft(est int, took time.Duration) int {
+	giveUp := openingGiveUp.Seconds()
+	if max := int(giveUp); est > max {
+		est = max
+	}
+	left := giveUp - took.Seconds()
+	if left < 0 {
+		left = 0
+	}
+	eta := int(float64(est) * left / giveUp)
+	if eta < 5 {
+		eta = 5
 	}
 	return eta
 }

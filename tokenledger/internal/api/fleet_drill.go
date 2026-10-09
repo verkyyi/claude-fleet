@@ -362,13 +362,14 @@ func (s *Server) handleSelf(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusForbidden, "only a drill person can delete itself")
 		return
 	}
-	if left := s.closeDrillLogins(d, now); len(left) > 0 {
+	left, handed := s.closeDrillLogins(d, now)
+	if len(left) > 0 {
 		// The login the hub opened for it is still on a machine: the person
 		// stays until that is removed — ask again (or the sweep finishes it).
 		writeJSON(w, http.StatusAccepted, map[string]any{"status": "removing", "person_id": pid, "logins": left})
 		return
 	}
-	out, err := s.Store.DeleteDrill(pid, pid, now)
+	out, err := s.deleteDrill(d, pid, now, handed)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -388,11 +389,12 @@ func (s *Server) SweepDrills(now time.Time) {
 		return
 	}
 	for _, d := range gone {
-		if left := s.closeDrillLogins(&d, now); len(left) > 0 {
+		left, handed := s.closeDrillLogins(&d, now)
+		if len(left) > 0 {
 			log.Printf("fleet: drill person %s expired — removing %s first", d.PrincipalID, strings.Join(left, ", "))
 			continue
 		}
-		out, err := s.Store.DeleteDrill(d.PrincipalID, "expired", now)
+		out, err := s.deleteDrill(&d, "expired", now, handed)
 		if err != nil {
 			log.Printf("fleet: drill sweep: delete %s: %v", d.PrincipalID, err)
 			continue
@@ -419,14 +421,23 @@ var drillRemoveRetry = time.Minute
 // what is still on a machine as login@machine; empty means the person can
 // go. Its own computer (the bare login `fleet drill invite` named) is the
 // drill script's to remove, never the hub's.
-func (s *Server) closeDrillLogins(d *store.DrillPerson, now time.Time) []string {
+//
+// handed is every login it gives up on and hands to the operator — a create
+// nobody answered for drillCloseGiveUp, an op stuck that long, a remove still
+// failing an hour past expiry, a name that was already there: still on its
+// machine, so deleteDrill keeps its row and says so (claude-fleet#2728; before,
+// the person went with every row and the OS login was nobody's).
+func (s *Server) closeDrillLogins(d *store.DrillPerson, now time.Time) (left []string, handed []store.FleetAccount) {
 	accts, err := s.Store.FleetAccounts(d.PrincipalID)
 	if err != nil {
 		log.Printf("fleet: drill %s: accounts: %v", d.PrincipalID, err)
-		return []string{"(its accounts could not be read)"}
+		return []string{"(its accounts could not be read)"}, nil
 	}
-	var left []string
 	queued := false
+	hand := func(a store.FleetAccount, why string) {
+		log.Printf("fleet: drill %s: %s@%s %s — left for the operator", d.PrincipalID, a.Login, a.Hostname, why)
+		handed = append(handed, a)
+	}
 	for _, a := range accts {
 		if d.OwnComputer(a) || (a.Op != control.AccountCreate && a.Op != control.AccountRemove) {
 			continue // not one the hub opened: its own computer, a computer it signed in on (#2212)
@@ -449,14 +460,12 @@ func (s *Server) closeDrillLogins(d *store.DrillPerson, now time.Time) []string 
 				queued = true
 			}
 		case store.AccountCreating, store.AccountRemovePending, store.AccountRemoving, store.AccountUnknown:
-			if a.State == store.AccountUnknown && a.Op != control.AccountRemove {
-				// A create nobody heard back on: the name may be someone
-				// else's login there — never removed on a guess.
-				log.Printf("fleet: drill %s: %s was opened with no answer — left for the operator", d.PrincipalID, where)
-				continue
-			}
+			// A create nobody heard back on is never removed on a guess (the
+			// name may be someone else's login there), but neither is the
+			// person dropped at once: its node re-sends the answer when it
+			// reconnects, and that settles it (claude-fleet#2728).
 			if now.Sub(a.RequestedAt) > drillCloseGiveUp {
-				log.Printf("fleet: drill %s: %s still %s after %s — left for the operator", d.PrincipalID, where, a.State, drillCloseGiveUp)
+				hand(a, fmt.Sprintf("still %s after %s", a.State, drillCloseGiveUp))
 				continue
 			}
 		case store.AccountFailed:
@@ -467,12 +476,11 @@ func (s *Server) closeDrillLogins(d *store.DrillPerson, now time.Time) []string 
 			// gone — a login that is not there answers removed — unless the
 			// create met a login that was already there (someone else's).
 			if strings.HasPrefix(a.Detail, existsDetail) {
-				log.Printf("fleet: drill %s: %s met a login already there — left for the operator", d.PrincipalID, where)
+				hand(a, "met a login already there")
 				continue
 			}
 			if now.After(d.ExpiresAt.Add(drillCloseGiveUp)) {
-				log.Printf("fleet: drill %s: %s still failed (%s) past %s — left for the operator",
-					d.PrincipalID, where, truncate(a.Detail, 200), drillCloseGiveUp)
+				hand(a, fmt.Sprintf("still failed (%s) past %s", truncate(a.Detail, 200), drillCloseGiveUp))
 				continue
 			}
 			if now.Sub(a.UpdatedAt) >= drillRemoveRetry {
@@ -484,7 +492,7 @@ func (s *Server) closeDrillLogins(d *store.DrillPerson, now time.Time) []string 
 				}
 			}
 		default:
-			log.Printf("fleet: drill %s: %s %s (%s) — left for the operator", d.PrincipalID, where, a.State, a.Detail)
+			hand(a, fmt.Sprintf("%s (%s)", a.State, a.Detail))
 			continue
 		}
 		left = append(left, where)
@@ -492,5 +500,26 @@ func (s *Server) closeDrillLogins(d *store.DrillPerson, now time.Time) []string 
 	if queued {
 		go s.dispatchAccounts()
 	}
-	return left
+	return left, handed
+}
+
+// deleteDrill deletes drill person d, keeping the rows of the logins handed
+// to the operator and naming them in the answer (claude-fleet#2728).
+func (s *Server) deleteDrill(d *store.DrillPerson, actor string, now time.Time, handed []store.FleetAccount) (*store.DrillDeleted, error) {
+	hosts := make([]string, 0, len(handed))
+	for _, a := range handed {
+		hosts = append(hosts, a.Hostname)
+	}
+	out, err := s.Store.DeleteDrill(d.PrincipalID, actor, now, hosts...)
+	if err != nil {
+		return nil, err
+	}
+	for _, a := range handed {
+		out.LeftForOperator = append(out.LeftForOperator, a.Login+"@"+a.Hostname)
+	}
+	if len(handed) > 0 {
+		log.Printf("fleet: drill person %s deleted; still on a machine, left for the operator (fleet hub accounts): %s",
+			d.PrincipalID, strings.Join(out.LeftForOperator, ", "))
+	}
+	return out, nil
 }
