@@ -63,6 +63,14 @@ machine's work ONCE, however many logins the machine carries:
                 and can be put back (`attic restore <id>`). A fleet plist the
                 machine's expected state (`expected.json`, written from the hub —
                 C2) does not name is only REPORTED, never moved: it may be loaded.
+                It also NAMES, never touches, a login that still carries the
+                person's client here (issue #2702): `~/.cache/claude-fleet/shell`
+                or a `~/.zshrc` line that sources shell/fleet-login.zsh / cw.zsh /
+                the old bootstrap block — a managed machine is no one's client;
+                bin/fleet-node-shell-retire.sh --login <login> clears it. The
+                machine's ADMIN logins (`admins`: FLEET_NODE_ADMINS in machine.env,
+                or expected.json's `admins`) are skipped by both halves — their
+                own launchd jobs and dotfiles are not the fleet's.
 
 State survives a restart: `state.json` (0644, so any login's doctor can read it)
 carries every task's last run and every child's pid; a restarted supervisor ADOPTS
@@ -82,6 +90,8 @@ Usage:
                                                3 running, but the hub refuses a login's lane
                                                (令牌失效 · 需要 relogin, issue #2501)
   fleet-node-supervisor.py sweep [--dry-run]   the leftover sweep, now
+  fleet-node-supervisor.py admins [list|add <login>|rm <login>]
+                                               the admin logins the sweep skips
   fleet-node-supervisor.py attic [list | restore <id> | purge]
   fleet-node-supervisor.py service add|rm|stop|start|restart|move|run|schedule|cred|ls|logs …
                                                the login-level register (#2525; writes as root,
@@ -1529,6 +1539,7 @@ class Supervisor(object):
         if not dry:
             sw = self.state["sweep"]
             sw.update(last=now(), moved=len(res["moved"]), extra=len(res["extra"]), handwritten=res["handwritten"],
+                      clientshell=res["clientshell"],
                       purged=res["purged"], total_moved=(sw.get("total_moved") or 0) + len(res["moved"]))
             self.dirty = True
         return res
@@ -1708,8 +1719,108 @@ def _handwritten(paths, d, n, src):
     return None
 
 
+ADMINS_KEY = "FLEET_NODE_ADMINS"
+
+
+def admin_logins(paths):
+    """The machine's admin logins (issue #2702): not managed logins — the sweep
+    names none of their launchd jobs or dotfiles. FLEET_NODE_ADMINS (machine.env,
+    or the environment), plus expected.json's `admins` when the hub sends one."""
+    out = set()
+    me = _env_file(os.path.join(paths.state, "machine.env"), 0) or {}
+    for v in (env(ADMINS_KEY, ""), me.get(ADMINS_KEY, "")):
+        out.update(x for x in re.split(r"[\s,]+", v) if x)
+    ex = read_json(paths.expected, None)
+    if isinstance(ex, dict) and isinstance(ex.get("admins"), list):
+        out.update(x for x in ex["admins"] if isinstance(x, str) and x)
+    return out
+
+
+def admins_cli(paths, rest):
+    sub = rest[0] if rest else "list"
+    if sub == "list":
+        for a in sorted(admin_logins(paths)):
+            print(a)
+        return 0
+    if sub not in ("add", "rm") or len(rest) < 2 or not re.match(r"^[A-Za-z0-9._-]+$", rest[1]):
+        print("usage: fleet-node-supervisor.py admins [list|add <login>|rm <login>]", file=sys.stderr)
+        return 2
+    path = os.path.join(paths.state, "machine.env")
+    try:
+        with open(path) as f:
+            lines = f.read().splitlines()
+    except OSError:
+        lines = []
+    cur = []
+    for ln in lines:
+        if ln.startswith(ADMINS_KEY + "="):
+            cur += [x for x in re.split(r"[\s,]+", ln.partition("=")[2].strip("\"'")) if x]
+    want = [x for x in cur if x != rest[1]] + ([rest[1]] if sub == "add" else [])
+    keep = [ln for ln in lines if not ln.startswith(ADMINS_KEY + "=")]
+    if want:
+        keep.append("%s=%s" % (ADMINS_KEY, " ".join(sorted(set(want)))))
+    tmp = path + ".tmp.%d" % os.getpid()
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write("\n".join(keep) + ("\n" if keep else ""))
+    os.rename(tmp, path)
+    print("admins: %s" % (" ".join(sorted(set(want))) or "(none)"))
+    return 0
+
+
+SHELL_HOOK_RE = re.compile(r"shell/fleet-login\.zsh|shell/cw\.zsh")
+
+
+def _shell_hook(line):
+    """A ~/.zshrc line that hooks the fleet into a login shell — the old first-login
+    block's opening line, or a live line sourcing fleet-login.zsh / cw.zsh (a
+    comment is not one). The same rule bin/fleet-node-shell-retire.sh takes out."""
+    s = line.strip()
+    return s.startswith("# >>> claude-fleet") or (not s.startswith("#") and bool(SHELL_HOOK_RE.search(s)))
+
+
+def client_shell(paths, admins=None):
+    """[{login, cache, zshrc}] — every login (not an admin) whose home still carries
+    the person's client (issue #2702): `cache` = ~/.cache/claude-fleet/shell is
+    there, `zshrc` = how many ~/.zshrc lines hook the fleet into a login shell
+    (the PATH line is not one). Read only; a home this process cannot read is
+    skipped, never guessed."""
+    admins = admin_logins(paths) if admins is None else admins
+    out = []
+    try:
+        names = sorted(os.listdir(paths.users))
+    except OSError:
+        return out
+    for login in names:
+        if login.startswith(".") or login in ("Shared", "Guest") or login in admins:
+            continue
+        home = os.path.join(paths.users, login)
+        cache = os.path.isdir(os.path.join(home, ".cache", "claude-fleet", "shell"))
+        hooks = 0
+        try:
+            with open(os.path.join(home, ".zshrc"), errors="replace") as f:
+                hooks = sum(1 for ln in f if _shell_hook(ln))
+        except OSError:
+            pass
+        if cache or hooks:
+            out.append({"login": login, "cache": cache, "zshrc": hooks})
+    return out
+
+
+def client_shell_says(c, paths):
+    """One status / doctor phrase for a client_shell entry."""
+    what = []
+    if c.get("cache"):
+        what.append("~/.cache/claude-fleet/shell")
+    if c.get("zshrc"):
+        what.append("~/.zshrc %d hook line(s)" % c["zshrc"])
+    return "%s: %s — a managed machine is no one's client; sudo bash '%s' --login %s" % (
+        c["login"], " · ".join(what), os.path.join(paths.runtime, "bin", "fleet-node-shell-retire.sh"), c["login"])
+
+
 def _sweep(paths, dry=False):
     moved, extra, hand = [], [], []
+    admins = admin_logins(paths)
     expected = read_json(paths.expected, None)
     labels = set(expected.get("labels") or []) if isinstance(expected, dict) else None
     index = read_json(paths.attic_index, [])
@@ -1739,12 +1850,13 @@ def _sweep(paths, dry=False):
                     extra.append(src)
             else:
                 h = _handwritten(paths, d, n, src)
-                if h:
+                if h and h["login"] not in admins:
                     hand.append(h)
     purged = 0 if dry else attic_purge(paths, index)
     if not dry and (moved or purged):
         write_json(paths.attic_index, index, 0o600)
-    return {"moved": moved, "extra": extra, "purged": purged, "handwritten": hand}
+    return {"moved": moved, "extra": extra, "purged": purged, "handwritten": hand,
+            "clientshell": client_shell(paths, admins)}
 
 
 def attic_purge(paths, index):
@@ -2354,6 +2466,8 @@ def status_lines(paths, table, state):
     for h in sw.get("handwritten") or []:
         out.append("handwritten %-12s runs as %s, not in the register — fleet service|task add, then "
                    "archive %s" % (h.get("label"), h.get("login"), h.get("path")))
+    for c in sw.get("clientshell") or []:
+        out.append("clientshell %-12s %s" % (c.get("login"), client_shell_says(c, paths)))
     out.append("sweep  %-18s last %s · moved %s (total %s) · extra %s (report only) · attic %d entries"
                % ("leftovers", iso(sw.get("last")), sw.get("moved", 0), sw.get("total_moved", 0),
                   sw.get("extra", 0), len(read_json(paths.attic_index, []))))
@@ -2997,6 +3111,8 @@ def main(argv):
         return uninstall(paths)
     if cmd == "service":
         return service_cli(paths, rest)
+    if cmd == "admins":
+        return admins_cli(paths, rest)
     if cmd == "account":
         sub = rest[0] if rest else "list"
         if sub == "list":
@@ -3043,6 +3159,8 @@ def main(argv):
             print("extra (not in expected.json, left in place): %s" % x)
         for h in res["handwritten"]:
             print("handwritten (runs as %s, not in the register, left in place): %s" % (h["login"], h["path"]))
+        for c in res["clientshell"]:
+            print("clientshell (left in place): %s" % client_shell_says(c, paths))
         return 0
     if cmd == "attic":
         sub = rest[0] if rest else "list"
@@ -3060,7 +3178,7 @@ def main(argv):
             print("purged %d" % n)
             return 0
     print("usage: fleet-node-supervisor.py run|tick|status [--json|--check]|sweep [--dry-run]|"
-          "attic [list|restore <id>|purge]|account [list|adopt|release|manages <login>]|install|uninstall",
+          "attic [list|restore <id>|purge]|admins [list|add|rm <login>]|account [list|adopt|release|manages <login>]|install|uninstall",
           file=sys.stderr)
     return 2
 

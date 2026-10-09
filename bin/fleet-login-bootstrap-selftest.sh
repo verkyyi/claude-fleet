@@ -2,14 +2,14 @@
 # fleet-login-bootstrap-selftest.sh — a new login sets itself up (issue #1165),
 # in a fake HOME against a local fixture "GitHub" (FLEET_BOOTSTRAP_GIT_BASE):
 #   A. first run: install cloned at `stable` (not master's tip) and on a master
-#      branch; apply --from an EMPTY-tree commit --to HEAD; tmux line; the zshrc
-#      block once; fleet-up <seed> <checkout> --seed --no-attach, the seed checkout
+#      branch; apply --from an EMPTY-tree commit --to HEAD; tmux line; ~/.zshrc =
+#      the PATH line alone (issue #2702: no login block); fleet-up <seed> <checkout> --seed --no-attach, the seed checkout
 #      cloned first; doctor output passed through; `global/bootstrapped` written.
 #   B. second run: exit 0, nothing called, not one file in HOME changed.
 #   C. a HOME that already has a fleet (set up by hand): exit 0, nothing called,
 #      not one file changed — not even the zshrc it lacks.
 #   D. a failed apply: exit 1, no marker, the other steps still done; the next run
-#      re-applies only (fleet-up not called again, the zshrc block still once).
+#      re-applies only (fleet-up not called again, the PATH line still once).
 #   E. (#1214) launchd with neither a GUI session nor this login's system
 #      LaunchDaemons — #1210 ①②: apply still runs, with --no-daemons, so every
 #      hook, command and skill lands; bootstrap.applied + bootstrapped written,
@@ -22,13 +22,14 @@
 #      (FLEET_INSTALL_DAEMON_DIR/com.claude-fleet.<login>.*.plist): apply runs in
 #      full, says no GUI sign-in is needed, bootstrap.applied written, exit 0 —
 #      no --no-daemons, no WARN line: the pre-#1214 output, unchanged.
-#   F. --print-zshrc parses as zsh; its guard names the marker the script writes;
-#      --print-path-line is one zsh line that puts ~/.local/bin on PATH once.
+#   F. --print-path-line is one zsh line that puts ~/.local/bin on PATH once;
+#      --print-zshrc is gone (issue #2702: an unknown arg, rc 2).
 #   G. claude (issue #1191): one on PATH → no install; none → the install command
 #      once (FLEET_CLAUDE_INSTALL_CMD), before fleet-up, which then runs with
 #      ~/.local/bin first on PATH; a failed install → exit 1, retried alone.
-#   H. the ~/.local/bin PATH line: before the block, once — put first in an older
-#      zshrc that has the block without it; a login's own line is kept, not doubled.
+#   H. the ~/.local/bin PATH line: appended once, an older zshrc's lines kept
+#      byte for byte (its old block is fleet-node-shell-retire.sh's, never this
+#      script's); a login's own line is kept, not doubled.
 #   I. first-run Claude UI state and wizard permissions: seed missing keys, keep
 #      existing values/rules, and cover every shell command in the wizard.
 #   J. (#2297) this machine's cache (fleet-bootstrap-cache.sh refresh from a
@@ -36,8 +37,7 @@
 #      at addresses that fail: rc 0, install at stable from the cache with origin
 #      re-pointed at GitHub, master tracking origin/master, claude laid out as
 #      versions/<ver> + ~/.local/bin/claude and runnable, the installer never
-#      called, the starter repo cloned from the cache; the zshrc block's clone
-#      names the same cache. An empty cache dir → today's road (GitHub + the
+#      called, the starter repo cloned from the cache. An empty cache dir → today's road (GitHub + the
 #      installer), unchanged; FLEET_BOOTSTRAP_CACHE=off (every other leg) too.
 # Every step past the clone is a stub in the fixture repo's bin/ that logs its
 # argv — the real scripts have their own selftests.
@@ -135,9 +135,8 @@ hasnt "A no launchd: no daemons WARN" "$out" "daemons: WARN"
 eq "A apply --from the empty tree" "$(git -C "$R" rev-parse "$from^{tree}" 2>/dev/null)" 4b825dc642cb6eb9a060e54bf8d69288fbee4904
 eq "A applied stamp" "$(cat "$FLEET_CONF_DIR/global/bootstrap.applied" 2>/dev/null)" "$STABLE"
 eq "A tmux line once" "$(grep -c tmux-attention.conf "$HOME/.tmux.conf")" 1
-eq "A zshrc = the PATH line, then the block" "$(cat "$HOME/.zshrc")" "$(boot --print-path-line; boot --print-zshrc)"
+eq "A zshrc = the PATH line alone (#2702)" "$(cat "$HOME/.zshrc")" "$(boot --print-path-line)"
 eq "A PATH line once" "$(grep -c '\.local/bin' "$HOME/.zshrc")" 1
-eq "A PATH line first, block second" "$(grep -n -e '\.local/bin' -e '>>> claude-fleet' "$HOME/.zshrc" | cut -d: -f1 | tr '\n' ' ')" "1 2 "
 # claude (issue #1191): installed once, before fleet-up, which runs with ~/.local/bin first
 eq "A claude installed once" "$(grep -c '^claude-install' "$CALLS")" 1
 has "A claude ok line" "$out" "claude: ok — installed $HOME/.local/bin/claude"
@@ -189,11 +188,11 @@ has "D names the step" "$out" "apply: FAIL"
 [ -e "$FLEET_CONF_DIR/global/bootstrapped" ] && fail "D: marked done after a failed apply"
 [ -e "$FLEET_CONF_DIR/global/bootstrap.applied" ] && fail "D: apply stamped after failing"
 eq "D fleet still up" "$(grep -c '^fleet-up.sh ' "$CALLS")" 1
-eq "D zshrc block still written" "$(grep -c '>>> claude-fleet' "$HOME/.zshrc")" 1
+eq "D zshrc PATH line still written" "$(grep -c '\.local/bin' "$HOME/.zshrc")" 1
 : > "$CALLS"
 out=$(boot); eq "D re-run rc" "$?" 0
 eq "D re-run: apply + doctor only" "$(awk '{print $1}' "$CALLS" | tr '\n' ' ')" "fleet-install-apply.sh fleet-doctor.sh "
-eq "D zshrc block still once" "$(grep -c '>>> claude-fleet' "$HOME/.zshrc")" 1
+eq "D zshrc PATH line still once" "$(grep -c '\.local/bin' "$HOME/.zshrc")" 1
 eq "D tmux line still once" "$(grep -c tmux-attention.conf "$HOME/.tmux.conf")" 1
 [ -s "$FLEET_CONF_DIR/global/bootstrapped" ] || fail "D: re-run did not mark done"
 leg "D a failed step is retried alone"
@@ -262,14 +261,8 @@ has "E2 other login: the WARN" "$out" "daemons: WARN — not installed: no syste
 hasnt "E2 other login: not the admin's line" "$out" "are installed — no GUI sign-in needed"
 leg "E2 system LaunchDaemons installed → apply runs in full without a GUI session"
 
-# ---- F. the zshrc block ----
-z=$(boot --print-zshrc)
-if command -v zsh >/dev/null 2>&1; then
-  printf '%s\n' "$z" | zsh -n || fail "F: block does not parse as zsh"
-fi
-has "F guard = the marker" "$z" '[[ ! -f ~/.config/claude-fleet/global/bootstrapped ]]'
-has "F clones stable" "$z" "clone -q -b stable https://github.com/verkyyi/claude-fleet.git"
-has "F sources fleet-login.zsh" "$z" 'source ~/.claude/fleet/shell/fleet-login.zsh'
+# ---- F. the PATH line; no login block any more (#2702) ----
+out=$(boot --print-zshrc 2>&1); eq "F --print-zshrc gone (rc 2)" "$?" 2
 pl=$(boot --print-path-line)
 eq "F path line is one line" "$(printf '%s\n' "$pl" | wc -l | tr -d ' ')" 1
 has "F path line exports the dir" "$pl" 'export PATH="$HOME/.local/bin:$PATH"'
@@ -285,7 +278,7 @@ $pl
 printf '%s' \"\$PATH\"" 2>/dev/null | tr ':' '\n' | grep -cx /h/.local/bin)
 eq "F path line: sourced twice, on PATH once (bash)" "$n" 1
 out=$(boot --bogus); eq "F bad arg rc" "$?" 2
-leg "F --print-zshrc / --print-path-line"
+leg "F --print-path-line; --print-zshrc gone"
 
 # ---- G. claude: on PATH → nothing; a failed install → retried alone (#1191) ----
 newhome "$WORK/g"
@@ -307,22 +300,21 @@ has "G2 re-run installed" "$out" "claude: ok — installed $HOME/.local/bin/clau
 [ -s "$FLEET_CONF_DIR/global/bootstrapped" ] || fail "G2: re-run did not mark done"
 leg "G claude: on PATH → nothing; failed install → retried alone"
 
-# ---- H. the PATH line: before the block, once (#1191) ----
+# ---- H. the PATH line: appended once, an older block left as it is (#1191, #2702) ----
 newhome "$WORK/h"
-{ echo '# mine'; boot --print-zshrc; } > "$HOME/.zshrc"        # an older login: the block, no PATH line
+old='# >>> claude-fleet (bin/fleet-login-bootstrap.sh, issue #1165) >>>
+[[ -r ~/.claude/fleet/shell/fleet-login.zsh ]] && source ~/.claude/fleet/shell/fleet-login.zsh
+# <<< claude-fleet <<<'
+{ echo '# mine'; printf '%s\n' "$old"; } > "$HOME/.zshrc"        # an older login: the block, no PATH line
 out=$(boot); eq "H rc" "$?" 0
-has "H says so" "$out" "PATH line before the claude-fleet block"
-eq "H line put first" "$(head -1 "$HOME/.zshrc")" "$(boot --print-path-line)"
-eq "H PATH line once" "$(grep -c '\.local/bin' "$HOME/.zshrc")" 1
-eq "H block once" "$(grep -c '>>> claude-fleet' "$HOME/.zshrc")" 1
-eq "H the rest intact" "$(tail -n +2 "$HOME/.zshrc")" "$(echo '# mine'; boot --print-zshrc)"
+has "H says so" "$out" "zshrc: ok — added the ~/.local/bin PATH line to ~/.zshrc"
+eq "H = the old file, blank, the PATH line" "$(cat "$HOME/.zshrc")" "$(echo '# mine'; printf '%s\n\n' "$old"; boot --print-path-line)"
 newhome "$WORK/h2"
 echo 'export PATH="$HOME/.local/bin:$PATH"' > "$HOME/.zshrc"   # a line of the login's own
 out=$(boot); eq "H2 rc" "$?" 0
-has "H2 block only" "$out" "zshrc: ok — added the claude-fleet block to ~/.zshrc"
-eq "H2 PATH line once" "$(grep -c '\.local/bin' "$HOME/.zshrc")" 1
-eq "H2 = own line, blank, block" "$(cat "$HOME/.zshrc")" "$(printf 'export PATH="$HOME/.local/bin:$PATH"\n\n'; boot --print-zshrc)"
-leg "H the PATH line goes before the block, once"
+has "H2 already" "$out" "zshrc: ok — ~/.zshrc already puts ~/.local/bin on PATH"
+eq "H2 file untouched" "$(cat "$HOME/.zshrc")" 'export PATH="$HOME/.local/bin:$PATH"'
+leg "H the PATH line, once; nothing else written"
 
 # ---- I. preserve existing values; all wizard shell lines have a rule ----
 newhome "$WORK/i"
@@ -398,8 +390,6 @@ grep -q '^claude-install' "$CALLS" && fail "J: the claude.ai installer ran"
 eq "J seed from cache" "$(git -C "$HOME/projects/claude-fleet" remote get-url origin 2>/dev/null)" "$WORK/abroad-unreachable/verkyyi/claude-fleet.git"
 eq "J fleet-up once" "$(grep -c '^fleet-up.sh ' "$CALLS")" 1
 [ -s "$FLEET_CONF_DIR/global/bootstrapped" ] || fail "J: not marked done"
-zb=$(boot --print-zshrc)
-has "J zshrc block clones the cache first" "$zb" "/Library/Application Support/claude-fleet/cache/claude-fleet.git"
 # an empty cache dir: today's road, untouched
 mkdir -p "$WORK/cache-empty"; newhome "$WORK/j2"
 out=$(FLEET_BOOTSTRAP_CACHE="$WORK/cache-empty" boot); eq "J2 rc" "$?" 0

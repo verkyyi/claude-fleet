@@ -774,12 +774,27 @@ def doctor_rows(p):
     cr = credsep_row(p)
     if cr:
         rows.append(cr)
+    rows.append(shell_row(p, st))
     # the drill's deliberate failure (issue #2336): a release carrying this marker
     # fails its own doctor, so the updater must roll it back. On trunk, so a
     # non-managed install that follows stable onto it moves forward off it again.
     if os.path.exists(os.path.join(d, DRILL_FAIL)):
         rows.append(("FAIL", "drill", "%s carries %s — a deliberate drill failure (#2336)" % (cur[:12], DRILL_FAIL)))
     return rows
+
+
+def shell_row(p, st):
+    """Does any login still carry the person's client here (issue #2702)? ONE row:
+    root looks now (fns.client_shell — every home); anyone else reads the last
+    sweep's record in state.json (other homes are not theirs to read). WARN, never
+    FAIL: a leftover client is not the release's fault."""
+    if os.geteuid() == 0:
+        found = fns.client_shell(p.sup)
+    else:
+        found = ((st.get("sweep") or {}).get("clientshell")) or []
+    if not found:
+        return ("PASS", "shell", "no login carries the client shell or a login hook (admins skipped)")
+    return ("WARN", "shell", "; ".join(fns.client_shell_says(c, p.sup) for c in found))
 
 
 def account_install_sha(login, ident, path):

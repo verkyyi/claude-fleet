@@ -39,6 +39,7 @@ FLEET_NODE_* seams; nothing touches /Library, /var or a real login.
 import importlib.util
 import json
 import os
+import plistlib
 import shutil
 import signal
 import subprocess
@@ -281,6 +282,56 @@ class C_Sweep(Sandbox):
         self.assertIn("old.collect", r.stdout)
         self.assertNotIn("keep.plist", r.stdout)
         self.assertTrue(os.path.exists(os.path.join(self.dd, "com.claude-fleet.old.collect.plist")))
+
+    def test_client_shell_named_admins_skipped(self):
+        """issue #2702: a login still carrying the person's client (the shell's cache,
+        a ~/.zshrc hook) is NAMED, never touched; the PATH line and a comment are no
+        hook; an admin login (machine.env FLEET_NODE_ADMINS, `admins add|rm`) is
+        skipped by both halves — its handwritten plists too."""
+        users = os.path.join(self.d, "Users")
+        for login in ("alice", "bob", "carol", "root_admin"):
+            os.makedirs(os.path.join(users, login, "Library", "LaunchAgents"), exist_ok=True)
+        os.makedirs(os.path.join(users, "alice", ".cache", "claude-fleet", "shell", "bin"))
+        with open(os.path.join(users, "bob", ".zshrc"), "w") as f:
+            f.write("# >>> claude-fleet (bin/fleet-login-bootstrap.sh, issue #1165) >>>\n"
+                    "[[ -r ~/.claude/fleet/shell/cw.zsh ]] && source ~/.claude/fleet/shell/cw.zsh\n"
+                    "# <<< claude-fleet <<<\n")
+        with open(os.path.join(users, "carol", ".zshrc"), "w") as f:      # no hook
+            f.write('export PATH="$HOME/.local/bin:$PATH"  # claude-fleet: x\n'
+                    "# source ~/.claude/fleet/shell/fleet-login.zsh\n")
+        os.makedirs(os.path.join(users, "root_admin", ".cache", "claude-fleet", "shell"))
+        hw = os.path.join(users, "root_admin", "Library", "LaunchAgents", "com.root_admin.ddns.plist")
+        with open(hw, "wb") as f:
+            plistlib.dump({"Label": "com.root_admin.ddns",
+                           "ProgramArguments": [os.path.join(users, "root_admin", "bin", "ddns")]}, f)
+        r = self.run_sup("sweep", "--dry-run")
+        self.assertIn("clientshell (left in place): alice: ~/.cache/claude-fleet/shell — ", r.stdout)
+        self.assertIn("clientshell (left in place): bob: ~/.zshrc 2 hook line(s)", r.stdout)
+        self.assertIn("fleet-node-shell-retire.sh' --login bob", r.stdout)
+        self.assertNotIn("carol", r.stdout)
+        self.assertIn("runs as root_admin", r.stdout)
+        self.assertIn("root_admin: ~/.cache", r.stdout)
+        os.makedirs(os.path.join(self.d, "db"), exist_ok=True)
+        with open(os.path.join(self.d, "db", "machine.env"), "w") as f:
+            f.write("CCQUOTA_HUB_URL=https://hub.invalid\n")
+        a = self.run_sup("admins", "add", "root_admin")
+        self.assertEqual(a.returncode, 0, a.stderr)
+        self.assertEqual(self.run_sup("admins", "add", "x;y").returncode, 2)
+        with open(os.path.join(self.d, "db", "machine.env")) as f:
+            self.assertEqual(f.read(), "CCQUOTA_HUB_URL=https://hub.invalid\nFLEET_NODE_ADMINS=root_admin\n")
+        self.assertEqual(self.run_sup("admins").stdout, "root_admin\n")
+        r = self.run_sup("sweep")
+        self.assertNotIn("root_admin", r.stdout)
+        self.assertEqual(sorted(c["login"] for c in self.state()["sweep"]["clientshell"]), ["alice", "bob"])
+        self.assertEqual(self.state()["sweep"]["handwritten"], [])
+        self.assertIn("clientshell alice", self.run_sup("status").stdout)
+        self.assertTrue(os.path.isdir(os.path.join(users, "alice", ".cache", "claude-fleet", "shell")))
+        self.assertEqual(self.run_sup("admins", "rm", "root_admin").returncode, 0)
+        self.assertIn("runs as root_admin", self.run_sup("sweep", "--dry-run").stdout)
+        # the hub's list counts too
+        with open(os.path.join(self.d, "db", "expected.json"), "w") as f:
+            json.dump({"admins": ["root_admin"]}, f)
+        self.assertNotIn("root_admin", self.run_sup("sweep", "--dry-run").stdout)
 
 
 class D_RestartKeepsState(Sandbox):

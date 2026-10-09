@@ -199,6 +199,13 @@ export FLEET_ADMIT=0
 # stale bound. A throwaway dir, inside the shadow root when there is one.
 FLEET_MACHINE_SESSIONS_DIR="${FLEET_SELFTEST_ROOT:-${TMPDIR:-/tmp}/fleet-selftest-$$}/machine-sessions"
 export FLEET_MACHINE_SESSIONS_DIR
+# The machine daemon's state dir (/var/db/fleet-node): on a MANAGED machine its
+# machine.env turns the person's client off (bin/fleet, shell/fleet-login.zsh — issue
+# #2702) and every managed-only branch on, so a test reproduced on a fleet machine
+# saw a different box than CI. The suite sees an unmanaged one; a test that wants a
+# managed machine points this at its own sandbox, as before.
+FLEET_NODE_STATE="${FLEET_SELFTEST_ROOT:-${TMPDIR:-/tmp}/fleet-selftest-$$}/node-state"
+export FLEET_NODE_STATE
 
 # The PER-FLEET confs are the same leak one directory over (issue #660): fleet_load_conf
 # reads $FLEET_CONF_DIR/fleets/<sess>/conf, defaulting to the operator's real

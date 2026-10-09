@@ -1,10 +1,11 @@
 #!/bin/bash
 # fleet-login-bootstrap.sh — a new login sets claude-fleet up for itself, once
-# (issue #1165, EPIC #1163 C2). Run AS the new login — by the one-time block
-# fleet-login-new.sh writes into its ~/.zshrc, on its first interactive login.
+# (issue #1165, EPIC #1163 C2). Run AS the new login — by fleet-login-new.sh
+# right after it opens the login (issue #2702: no ~/.zshrc block runs it on a
+# first SSH login any more — a fleet machine is no one's client).
 #
-# Steps, each skipped when already done (a failed run is re-run on the next login
-# and only fills in what is missing):
+# Steps, each skipped when already done (a failed run is re-run by hand and only
+# fills in what is missing):
 #
 #   install   ~/.claude/fleet — cloned at refs/tags/stable (the hook's clone, or
 #             this script's own), on a `master` branch so install-sync can
@@ -33,9 +34,10 @@
 #             --no-daemons), and its daemons are one `daemons: WARN` line naming
 #             who installs them, never a failed step. `global/bootstrap.applied`
 #             records the sha once it passed, so it never runs twice.
-#   zshrc     the claude-fleet block (--print-zshrc) appended to ~/.zshrc unless
-#             it already sources shell/fleet-login.zsh — with the ~/.local/bin
-#             PATH line (--print-path-line) BEFORE it, unless the file has one.
+#   zshrc     the ~/.local/bin PATH line (--print-path-line) in ~/.zshrc, unless
+#             the file has one — and nothing else (issue #2702: no banner, no
+#             client on login, no cw.zsh; a block an older login still carries is
+#             fleet-node-shell-retire.sh's to take out).
 #   onboard   seed Claude's first-run theme + onboarding state, and append only
 #             the wizard's commands to ~/.claude/settings.json permissions.allow.
 #   fleet     fleet-up.sh <FLEET_SEED_REPO> --seed --no-attach, when this login
@@ -56,7 +58,6 @@
 #
 # Usage:
 #   fleet-login-bootstrap.sh              # set this login up (idempotent)
-#   fleet-login-bootstrap.sh --print-zshrc        # the one-time block
 #   fleet-login-bootstrap.sh --print-path-line    # the ~/.local/bin PATH line
 #
 # Env: FLEET_SEED_REPO (verkyyi/claude-fleet) · FLEET_INSTALL_ROOT
@@ -66,7 +67,7 @@
 #      FLEET_INSTALL_PLATFORM / FLEET_INSTALL_LAUNCHCTL / FLEET_INSTALL_DAEMON_DIR /
 #      FLEET_INSTALL_LOGIN (as fleet-install-apply.sh)
 # Exit: 0 bootstrapped (now or before) or left alone · 1 a step failed (the
-#       lines say which; the next login retries) · 2 usage
+#       lines say which; re-run it) · 2 usage
 set -uo pipefail
 
 PROG=fleet-login-bootstrap
@@ -75,24 +76,6 @@ SEED="${FLEET_SEED_REPO:-verkyyi/claude-fleet}"
 ROOT="${FLEET_INSTALL_ROOT:-$HOME/.claude/fleet}"
 GITBASE="${FLEET_BOOTSTRAP_GIT_BASE:-https://github.com}"
 
-print_zshrc() {
-  cat <<'ZSH'
-# >>> claude-fleet (bin/fleet-login-bootstrap.sh, issue #1165) >>>
-# First interactive login(s): install claude-fleet and bring the fleet up — until
-# it has succeeded once (~/.config/claude-fleet/global/bootstrapped).
-if [[ -o interactive ]] && [[ -z "$TMUX" ]] && [[ ! -f ~/.config/claude-fleet/global/bootstrapped ]]; then
-  _fc='/Library/Application Support/claude-fleet/cache/claude-fleet.git'   # this machine's copy first (issue #2297)
-  [[ -d ~/.claude/fleet/.git ]] || { [[ -d $_fc/objects && ! -e ~/.claude/fleet ]] && { git -c safe.directory="$_fc" clone -q --no-local -b stable "$_fc" ~/.claude/fleet && git -C ~/.claude/fleet remote set-url origin https://github.com/verkyyi/claude-fleet.git || { rm -rf ~/.claude/fleet; false; }; }; } \
-    || git clone -q -b stable https://github.com/verkyyi/claude-fleet.git ~/.claude/fleet
-  unset _fc
-  [[ -x ~/.claude/fleet/bin/fleet-login-bootstrap.sh ]] && ~/.claude/fleet/bin/fleet-login-bootstrap.sh
-fi
-[[ -r ~/.claude/fleet/shell/cw.zsh ]] && source ~/.claude/fleet/shell/cw.zsh
-# banner, then an SSH login goes straight into the fleet (issue #1166)
-[[ -r ~/.claude/fleet/shell/fleet-login.zsh ]] && source ~/.claude/fleet/shell/fleet-login.zsh
-# <<< claude-fleet <<<
-ZSH
-}
 # One line, idempotent (sourced again in every tmux pane's shell), POSIX so it
 # reads the same in a .bashrc: Claude Code's native install dir, first on PATH.
 print_path_line() {
@@ -101,7 +84,6 @@ print_path_line() {
 
 case "${1:-}" in
   '') ;;
-  --print-zshrc) print_zshrc; exit 0 ;;
   --print-path-line) print_path_line; exit 0 ;;
   -h|--help) sed -n '2,/^set -uo pipefail/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit 0 ;;
   *) printf '%s: unknown arg %s\n' "$PROG" "$1" >&2; exit 2 ;;
@@ -240,29 +222,13 @@ if [ -n "$nodaemons" ]; then
 fi
 
 # --- zshrc --------------------------------------------------------------------
-# The PATH line goes BEFORE the block (issue #1191): the block's bootstrap call,
-# and the fleet-up it runs, must already see ~/.local/bin. A file that has the
-# block but no PATH line (a login opened before #1191) gets the line at the top;
-# a PATH line of the login's own is kept, never doubled.
+# The ~/.local/bin PATH line only (issues #1191, #2702); a PATH line of the
+# login's own is kept, never doubled.
 zrc="$HOME/.zshrc"
-has_block=0; grep -q 'fleet-login\.zsh' "$zrc" 2>/dev/null && has_block=1
-has_path=0;  grep -qF '.local/bin' "$zrc" 2>/dev/null && has_path=1
-if [ "$has_block" = 1 ] && [ "$has_path" = 1 ]; then
-  say "zshrc: ok — ~/.zshrc already sources fleet-login.zsh"
-elif [ "$has_block" = 1 ]; then
-  if { print_path_line; cat "$zrc"; } > "$zrc.tmp.$$" && cat "$zrc.tmp.$$" > "$zrc"; then
-    rm -f "$zrc.tmp.$$"
-    say "zshrc: ok — put the ~/.local/bin PATH line before the claude-fleet block in ~/.zshrc"
-  else
-    rm -f "$zrc.tmp.$$"
-    fail zshrc "could not write ~/.zshrc"
-  fi
-elif { [ ! -s "$zrc" ] || printf '\n'; [ "$has_path" = 1 ] || print_path_line; print_zshrc; } >> "$zrc"; then
-  if [ "$has_path" = 1 ]; then
-    say "zshrc: ok — added the claude-fleet block to ~/.zshrc"
-  else
-    say "zshrc: ok — added the ~/.local/bin PATH line + the claude-fleet block to ~/.zshrc"
-  fi
+if grep -qF '.local/bin' "$zrc" 2>/dev/null; then
+  say "zshrc: ok — ~/.zshrc already puts ~/.local/bin on PATH"
+elif { [ ! -s "$zrc" ] || printf '\n'; print_path_line; } >> "$zrc"; then
+  say "zshrc: ok — added the ~/.local/bin PATH line to ~/.zshrc"
 else
   fail zshrc "could not write ~/.zshrc"
 fi
@@ -307,5 +273,5 @@ fi
 say "doctor:"
 bash "$ROOT/bin/fleet-doctor.sh" 2>&1 | sed 's/^/    /'
 
-[ "$FAILS" = 0 ] || { say "$FAILS step(s) failed — fixed on the next login, or re-run: $ROOT/bin/fleet-login-bootstrap.sh"; exit 1; }
+[ "$FAILS" = 0 ] || { say "$FAILS step(s) failed — re-run: $ROOT/bin/fleet-login-bootstrap.sh"; exit 1; }
 exit 0

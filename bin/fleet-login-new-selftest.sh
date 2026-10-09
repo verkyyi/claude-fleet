@@ -22,8 +22,8 @@
 #                 .ssh 700 + authorized_keys 600 holding the key; chown to the
 #                 login; the pool copy = exactly the source's tokens + .conf
 #                 (no dotfiles, no editor backups), dir 700, files 600; ~/.zshrc =
-#                 the ~/.local/bin PATH line (#1191) then the bootstrap block
-#                 (#1165) — the line once and first — 644, owned by the login
+#                 the ~/.local/bin PATH line (#1191) alone — no login block
+#                 (#2702) — 644, owned by the login
 #   B2. password  (#1192) a random one → ~/<login>-onboard/password.txt (600) in
 #                 the ADMIN's home, never printed; --password-file <f> uses f's
 #                 first line and writes nothing. (#2396) It is on NO shim's argv:
@@ -290,13 +290,13 @@ contains "A manual codex" "$OUT" "1. as victor: ccquota codex login personal --d
 contains "A manual gh" "$OUT" "2. as victor: gh auth login"
 contains "A manual enroll" "$OUT" "3. on the hub: ccquota enroll --name mini-victor"
 contains "A zshrc" "$OUT" "sudo chown victor:staff $FLEET_LOGIN_HOMES/victor/.zshrc"
-contains "A installs itself" "$OUT" "claude-fleet + Claude Code install themselves"
+contains "A installs it (8b, #2702)" "$OUT" "bring victor's fleet up now, as victor (fleet-login-bootstrap.sh"
 contains "A clone as the login" "$OUT" "sudo -u victor -H git -c advice.detachedHead=false clone -q -b stable $GB/verkyyi/claude-fleet.git $FLEET_LOGIN_HOMES/victor/.claude/fleet"
 contains "A daemons step" "$OUT" "[8] install victor's $NTMPL background services as system LaunchDaemons (com.claude-fleet.victor.*, UserName victor — no GUI sign-in needed)"
 contains "A daemon install" "$OUT" "sudo install -m 644 <com.claude-fleet.victor.spinner.plist, rendered from launchd/com.claude-fleet.spinner.plist.tmpl> $FLEET_INSTALL_DAEMON_DIR/com.claude-fleet.victor.spinner.plist"
 contains "A daemon bootstrap" "$OUT" "sudo launchctl bootstrap system $FLEET_INSTALL_DAEMON_DIR/com.claude-fleet.victor.spinner.plist"
 contains "A password path at the end" "$OUT" "password: $HOME/victor-onboard/password.txt (mode 600"
-contains "A finishes itself" "$OUT" "claude-fleet + Claude Code install themselves on victor's first SSH login"
+contains "A says it was installed" "$OUT" "claude-fleet + Claude Code were installed for victor above (step 8b)"
 eq "A nothing executed" 0 "$(mutations)"
 eq "A nothing created" "" "$(ls "$FLEET_LOGIN_HOMES")"
 eq "A no daemon written" "" "$(ls "$FLEET_INSTALL_DAEMON_DIR")"
@@ -306,7 +306,7 @@ eq "A --no-daemons exit" 0 "$RC"
 not_contains "A --no-daemons no step 8" "$OUT" "system LaunchDaemons"
 contains "A --no-daemons GUI step" "$OUT" "1. sign in as victor ONCE in the GUI"
 contains "A --no-daemons codex is 2" "$OUT" "2. as victor: ccquota codex login"
-contains "A --no-daemons installs itself" "$OUT" "claude-fleet + Claude Code install themselves on victor's first terminal login after step 1"
+contains "A --no-daemons: installed, daemons wait" "$OUT" "claude-fleet + Claude Code were installed for victor above (step 8b); its daemons wait for step 1"
 
 # --- B. apply ---------------------------------------------------------------
 run victor --full-name 'Victor V' --pubkey "$KEY" --share-pool --pool-src "$POOL" --machine box --apply $DAEMONS
@@ -383,12 +383,11 @@ if [ -z "$DAEMONS" ]; then
   eq "B3 render matches the bootstrap's" "$same" "$(plutil -convert xml1 -o - "$FLEET_INSTALL_DAEMON_DIR/com.claude-fleet.victor.spinner.plist")"
   not_contains "B3 no GUI step" "$OUT" "ONCE in the GUI"
 fi
-# the first-login file (issues #1165, #1191): the ~/.local/bin PATH line, then the
-# block — exactly what the bootstrap prints, in that order, owned by the login
+# ~/.zshrc (issues #1191, #2702): the ~/.local/bin PATH line ALONE — no banner,
+# no client on login, no cw.zsh — exactly what the bootstrap prints, owned by the login
 BS="$BIN/fleet-login-bootstrap.sh"
-eq "B zshrc = PATH line + bootstrap block" "$(bash "$BS" --print-path-line; bash "$BS" --print-zshrc)" "$(cat "$H/.zshrc")"
-eq "B PATH line once" 1 "$(grep -c '\.local/bin' "$H/.zshrc")"
-eq "B PATH line first, block second" "1 2" "$(grep -n -e '\.local/bin' -e '>>> claude-fleet' "$H/.zshrc" | cut -d: -f1 | tr '\n' ' ' | sed 's/ $//')"
+eq "B zshrc = the PATH line alone" "$(bash "$BS" --print-path-line)" "$(cat "$H/.zshrc")"
+not_contains "B no login block (#2702)" "$(cat "$H/.zshrc")" "claude-fleet/shell/"
 eq "B zshrc mode" 644 "$(mode "$H/.zshrc")"
 contains "B zshrc chown" "$CALLS" "chown victor:staff $H/.zshrc"
 # B2. --password-file: its first line, nothing generated
@@ -905,12 +904,12 @@ contains "O credsep stays last" "$(printf '%s\n' "$OUT" | tail -n 1)" "credsep:"
 unlock_homes
 eq "O refused code: still opened" 0 "$RC"
 contains "O refused code: named" "$OUT" "node: WARN — the hub did not take the join code (HTTP 401)"
-# no join code: neither step, byte for byte as before
+# no join code: no node step; the bring-up runs for every login (#2702)
 : > "$WORK/nj.log"; : > "$WORK/bs.log"; : > "$LOG"; OUT=$("$BASH_BIN" "$S" lou --full-name Lou --pubkey "$KEY" --apply $DAEMONS 2>&1); RC=$?
 unlock_homes
 eq "O no code: exit" 0 "$RC"
 eq "O no code: no node-join" "" "$(cat "$WORK/nj.log")"
-eq "O no code: no bring-up" "" "$(cat "$WORK/bs.log")"
+contains "O no code: the fleet brought up all the same (#2702: no login shell does it)" "$(cat "$WORK/bs.log")" "conf=$FLEET_LOGIN_HOMES/lou/.config/claude-fleet"
 not_contains "O no code: no node line" "$OUT" "node:"
 # a malformed code is refused before anything runs
 : > "$LOG"; OUT=$(FLEET_LOGIN_JOIN_CODE='fj_x;rm' FLEET_LOGIN_HUB=$HUBU "$BASH_BIN" "$S" kai --full-name Kai --pubkey "$KEY" --apply $DAEMONS 2>&1); RC=$?; CALLS=$(cat "$LOG")

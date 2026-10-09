@@ -732,6 +732,26 @@ class K_LoginInstall(Sandbox):
         self.assertRegex(r.stdout, r"WARN\s+install\s+alice: ~/.claude/fleet \(plain directory\) — its version is unreadable")
 
 
+class L_ClientShell(Sandbox):
+    """issue #2702: ONE `shell` row — PASS when no login carries the person's client
+    here, WARN (never FAIL: no rollback) naming the login + the retire command; a
+    non-root doctor reads the last sweep's record (other homes are not its to read)."""
+    def test_shell_row(self):
+        self.install(V1, claude="2.1.1")
+        r = self.cmd("doctor")
+        self.assertRegex(r.stdout, r"PASS\s+shell\s+no login carries the client shell")
+        sp = os.path.join(self.d, "db", "state.json")
+        with open(sp) as f:
+            st = json.load(f)
+        st["sweep"] = {"clientshell": [{"login": "alice", "cache": True, "zshrc": 3}]}
+        with open(sp, "w") as f:
+            json.dump(st, f)
+        r = self.cmd("doctor")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertRegex(r.stdout, r"WARN\s+shell\s+alice: ~/.cache/claude-fleet/shell · ~/.zshrc 3 hook line\(s\)")
+        self.assertIn("fleet-node-shell-retire.sh' --login alice", r.stdout)
+
+
 class J_Sessions(Sandbox):
     """issue #2484: every managed account's sessions are pinned before the switch
     (the target release's fleet-sessions-snapshot.sh save, demoted, its own HOME and
