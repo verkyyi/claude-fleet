@@ -3,7 +3,8 @@
 # fleet-shell.sh `quit`, `fleet status` (`running --say`), and `fleet claude`
 # leaving nothing behind (bin/fleet-home-session.sh step 3).
 #
-#   A  `fleet status` with no client: 「客户端没在运行（`fleet` 进入）。」, exit 1
+#   A  `fleet status` with no client: 「客户端没在运行（`fleet` 进入）。」, exit 1 —
+#      then the who line (#2577: 登录人 …（GitHub）· 这台电脑 …)
 #   B  `fleet quit` with the client up — its server, its stage, a keeper, a hub
 #      loop, an actions loop, a warm loop, a lease: every one of them gone, the
 #      lease given back (`release --lease L1`) and its files removed; a pid file
@@ -101,7 +102,8 @@ up() {
 # --- A ---------------------------------------------------------------------------
 out=$(sh "$BIN/fleet" status 2>&1); rc=$?
 eq "A fleet status, no client: exit 1" "$rc" 1
-eq "A …and says so" "$out" '客户端没在运行（`fleet` 进入）。'
+eq "A …and says so" "$(printf '%s\n' "$out" | head -n 1)" '客户端没在运行（`fleet` 进入）。'
+has "A …then who is signed in and where (#2577)" "$out" '（GitHub）· 这台电脑 '
 
 # --- B ---------------------------------------------------------------------------
 tmux -L fq-node -f /dev/null new-session -d -s fleet "sleep 600"   # the sessions on their machine
