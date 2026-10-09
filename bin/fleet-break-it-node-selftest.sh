@@ -199,7 +199,7 @@ drill_service_failed_unseen() {
   t0=$(now)
   python3 -I "$BIN/fleet-node-supervisor.py" run 2>>"$sb/sup.err" &
   sup=$!; printf '%s\n' "$sup" >> "$WORK/cred-pids"
-  until_ok 30 sh -c 'FLEET_SERVICES_CACHE="" FLEET_SERVICES_STATE="$1" FLEET_SERVICES_LOGIN=alice python3 "$2" --doctor | grep -q "^FAIL	1/1 failed: alice/daily-report@"' \
+  until_ok 30 sh -c 'FLEET_SERVICES_CACHE="" FLEET_SERVICES_STATE="$1" FLEET_SERVICES_LOGIN=alice python3 "$2" --doctor | grep -q "^FAIL 1/1 failed: alice/daily-report@"' \
       _ "$sb/db/state.json" "$BIN/fleet-services.py" \
     || { WHY="the dying service never read red in the doctor: $(FLEET_SERVICES_CACHE='' FLEET_SERVICES_STATE="$sb/db/state.json" FLEET_SERVICES_LOGIN=alice python3 "$BIN/fleet-services.py" --doctor)"; kill "$sup" 2>/dev/null; return 1; }
   SECS=$(since "$t0")

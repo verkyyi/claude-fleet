@@ -7,7 +7,7 @@ alert bar's `service · failed` rows.
     fleet-services.py [--json]     the table: 机器 · 登录 · 名称 · 类型 · 状态 ·
                                    上次 · 下次 · 最近日志 (a failed row red on a
                                    terminal)
-    fleet-services.py --doctor     one line, `<LEVEL>\\t<text>`: FAIL when an
+    fleet-services.py --doctor     one line, `<LEVEL> <text>`: FAIL when an
                                    entry is failed, PASS when all run, INFO when
                                    nothing is registered
     fleet-services.py --alerts     one TSV line per failed entry:
@@ -264,7 +264,7 @@ def cmd_doctor():
     if isinstance(ts, (int, float)) and n - ts > STALE_SECS:
         age = "（入口读数 %s）" % when(ts, n)
     if not rows:
-        print("INFO\t无登记 — no background service or scheduled task registered (fleet service add)")
+        print("INFO 无登记 — no background service or scheduled task registered (fleet service add)")
         return 0
     bad = [(label, r) for label, _h, r in rows if failed(r)]
     def name(label, r):
@@ -273,10 +273,10 @@ def cmd_doctor():
         what = " · ".join("%s %s%s" % (name(label, r), state_say(r),
                                        ("「%s」" % r["last_log_line"]) if r.get("last_log_line") else "")
                           for label, r in bad)
-        print("FAIL\t%d/%d failed: %s%s — fleet ls --services · fleet service logs <name>"
+        print("FAIL %d/%d failed: %s%s — fleet ls --services · fleet service logs <name>"
               % (len(bad), len(rows), what, age))
         return 0
-    print("PASS\t%d registered, none failed: %s%s"
+    print("PASS %d registered, none failed: %s%s"
           % (len(rows), ", ".join("%s %s" % (name(label, r), STATE_SAY.get(r.get("state"), r.get("state")))
                                   for label, _h, r in rows), age))
     return 0

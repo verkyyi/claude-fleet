@@ -1749,9 +1749,9 @@ _nsvc="$(dirname "$0")/fleet-services.py"
 if [ -f "$_nsvc" ] && command -v python3 >/dev/null 2>&1; then
   sline=$(python3 "$_nsvc" --doctor 2>/dev/null)
   case "$sline" in
-    FAIL$'\t'*) fail services "${sline#*$'\t'}" ;;
-    PASS$'\t'*) pass services "${sline#*$'\t'}" ;;
-    INFO$'\t'*) info services "${sline#*$'\t'}" ;;
+    FAIL\ *) fail services "${sline#FAIL }" ;;
+    PASS\ *) pass services "${sline#PASS }" ;;
+    INFO\ *) info services "${sline#INFO }" ;;
   esac
 fi
 # The machine's one updater (issue #2334): where the last tick left it. No

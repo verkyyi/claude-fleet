@@ -86,11 +86,11 @@ eq "B: …so mini2's rows are the hub's two" 2 "$(HOST=mini2 svc --json | python
 
 # ------------------------------------------------------------------------- C ----
 d=$(svc --doctor)
-has "C: a failed entry is FAIL (a retrying task is not one)" "FAIL	2/5 failed:" "$d"
+has "C: a failed entry is FAIL (a retrying task is not one)" "FAIL 2/5 failed:" "$d"
 has "C: …naming it and its last line" "verky/daily-report@mini2 失败「give up: skill not found」" "$d"
 has "C: …and the daemon's" "$ME/web@box 已退出·待重启（rc=2）" "$d"
 d=$(STATE='' CACHE="$WORK/none.json" svc --doctor)
-eq "C: nothing registered is INFO 无登记" "INFO	无登记 — no background service or scheduled task registered (fleet service add)" "$d"
+eq "C: nothing registered is INFO 无登记" "INFO 无登记 — no background service or scheduled task registered (fleet service add)" "$d"
 python3 - "$WORK/hub.json" "$WORK/ok.json" <<'PY'
 import json, sys
 d = json.load(open(sys.argv[1]))
@@ -101,7 +101,7 @@ d["alerts"] = []
 json.dump(d, open(sys.argv[2], "w"))
 PY
 d=$(STATE='' CACHE="$WORK/ok.json" svc --doctor)
-has "C: all running is PASS" "PASS	2 registered, none failed: verky/daily-report@mini2 运行中, verky/sms-watch@mini2 运行中" "$d"
+has "C: all running is PASS" "PASS 2 registered, none failed: verky/daily-report@mini2 运行中, verky/sms-watch@mini2 运行中" "$d"
 
 # ------------------------------------------------------------------------- D ----
 a=$(svc --alerts)
