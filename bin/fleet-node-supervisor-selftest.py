@@ -20,6 +20,11 @@ FLEET_NODE_* seams; nothing touches /Library, /var or a real login.
      service that will not unload puts every one back; expected.json narrows who runs;
      a lane the hub refuses is named (status, --check 3) and `adopt --rejoin` renews
      the login's token (issue #2501)
+  I  the login-level register (#2525): `service add` (and bin/fleet-service.sh)
+     writes a root 0600 entry; the daemon runs it as its login with its credential
+     injected, its log in <log>/logins/<login>/; killed → back within 30 s; stop /
+     start / restart / rm; `status --json` .services[]; a bad entry is named, never
+     run; a login's services/ never restarts the node agent
 """
 import importlib.util
 import json
@@ -911,6 +916,155 @@ class H_Accounts(Sandbox):
     def test_adopt_refuses_unknown(self):
         r = self.run_sup("account", "adopt", "nobody-here")
         self.assertEqual(r.returncode, 2)
+
+
+class I_Services(Sandbox):
+    def setUp(self):
+        Sandbox.setUp(self)
+        self.home = os.path.join(self.d, "Users", "alice")
+        os.makedirs(self.home)
+        with open(os.path.join(self.d, "passwd.json"), "w") as f:
+            json.dump({"alice": {"uid": os.getuid(), "gid": os.getgid(), "home": self.home}}, f)
+        self.env["FLEET_NODE_PASSWD"] = os.path.join(self.d, "passwd.json")
+        self.table()
+        self.svc_sh = self.script("svc.sh", 'echo "up uid=$(id -u) home=$HOME user=$USER svc=$FLEET_SERVICE '
+                                  'tok=${TOKEN:-none} mode=$MODE"\necho oops >&2\nexec sleep 300\n')
+        self.key = "svc:alice/watch"
+
+    def svc(self, *args, **kw):
+        return self.run_sup("service", *args, **kw)
+
+    def services(self):
+        r = self.run_sup("status", "--json")
+        return {x["name"]: x for x in json.loads(r.stdout)["services"]}
+
+    def log(self):
+        try:
+            return open(os.path.join(self.d, "log", "logins", "alice", "watch.log")).read()
+        except IOError:
+            return ""
+
+    def test_register_run_restart_stop_rm(self):
+        r = subprocess.run([sys.executable, SUP, "service", "cred", "set", "--login", "alice", "--name", "TOKEN"],
+                           env=self.env, input="s3cret\n", capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("s3cret", r.stdout + r.stderr)
+        r = self.svc("add", "--login", "alice", "--name", "watch", "--env", "MODE=prod", "--cred", "TOKEN",
+                     "--", "/bin/bash", self.svc_sh)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        f = os.path.join(self.d, "db", "logins", "alice", "services", "watch.json")
+        self.assertEqual(os.stat(f).st_mode & 0o777, 0o600)
+        ent = json.load(open(f))
+        self.assertEqual((ent["login"], ent["kind"], ent["state"]), ("alice", "service", "enabled"))
+        self.assertEqual(ent["creds"], ["TOKEN"])
+        self.assertNotIn("s3cret", open(f).read(), "a credential value in the entry")
+        self.start()
+        pid = until(10, lambda: self.child(self.key).get("pid"))
+        self.assertTrue(pid, "the service never started")
+        self.assertTrue(until(5, lambda: "up uid=" in self.log()), "no log in <log>/logins/alice/")
+        line = [l for l in self.log().splitlines() if l.startswith("up ")][-1]
+        self.assertIn("uid=%d home=%s user=alice svc=watch tok=s3cret mode=prod" % (os.getuid(), self.home), line)
+        self.assertIn("oops", self.log(), "stderr not in the log")
+        st = self.services()["watch"]
+        self.assertEqual((st["status"], st["pid"], st["login"]), ("running", pid, "alice"))
+        self.assertEqual(st["creds"], ["TOKEN"])
+        self.assertIn("MODE", st["env_keys"])
+        self.assertEqual(st["last_line"], "oops")
+        self.assertNotIn("s3cret", json.dumps(self.state()), "a credential value in state.json")
+        self.assertIn("service alice/watch", self.run_sup("status").stdout)
+        # killed: back within 30 s
+        os.kill(pid, signal.SIGKILL)
+        t0 = time.time()
+        pid2 = until(30, lambda: (self.child(self.key).get("pid") or pid) != pid and self.child(self.key)["pid"])
+        self.assertTrue(pid2, "the killed service was not restarted")
+        self.assertLess(time.time() - t0, 30)
+        self.assertEqual(self.child(self.key)["restarts"], 1)
+        # restart: a new process; stop: none; start: back
+        self.assertEqual(self.svc("restart", "--login", "alice", "--name", "watch").returncode, 0)
+        pid3 = until(10, lambda: (self.child(self.key).get("pid") or pid2) != pid2 and self.child(self.key)["pid"])
+        self.assertTrue(pid3, "restart did not start it again")
+        self.assertTrue(until(5, lambda: not fns.pid_alive(pid2)))
+        self.assertEqual(self.svc("stop", "--login", "alice", "--name", "watch").returncode, 0)
+        self.assertTrue(until(10, lambda: not fns.pid_alive(pid3)), "stop left it running")
+        self.assertTrue(until(20, lambda: self.services()["watch"]["status"] == "stopped"))
+        time.sleep(0.5)
+        self.assertFalse(fns.pid_alive(self.child(self.key).get("pid")), "a stopped service came back")
+        self.assertEqual(self.svc("start", "--login", "alice", "--name", "watch").returncode, 0)
+        pid4 = until(10, lambda: self.child(self.key).get("pid"))
+        self.assertTrue(pid4, "start did not bring it back")
+        # rm: stopped, the row gone; the log stays
+        self.assertEqual(self.svc("rm", "--login", "alice", "--name", "watch").returncode, 0)
+        self.assertTrue(until(10, lambda: not fns.pid_alive(pid4)), "rm left it running")
+        self.assertTrue(until(10, lambda: self.key not in (self.state().get("children") or {})))
+        self.assertNotIn("watch", self.services())
+        self.assertTrue(os.path.exists(os.path.join(self.d, "log", "logins", "alice", "watch.log")))
+
+    def test_missing_credential_waits(self):
+        r = self.svc("add", "--login", "alice", "--name", "watch", "--cred", "TOKEN", "--", "/bin/bash", self.svc_sh)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("not stored yet", r.stdout)
+        self.start()
+        self.assertTrue(until(10, lambda: self.child(self.key).get("status") == "missing credential TOKEN"))
+        self.assertFalse(self.child(self.key).get("pid"))
+        subprocess.run([sys.executable, SUP, "service", "cred", "set", "--login", "alice", "--name", "TOKEN"],
+                       env=self.env, input="v\n", capture_output=True, text=True)
+        self.assertTrue(until(10, lambda: self.child(self.key).get("pid")), "the credential arrived, no start")
+
+    def test_bad_entries_refused(self):
+        self.assertEqual(self.svc("add", "--login", "alice", "--name", "Bad/Name", "--", "/bin/true").returncode, 2)
+        self.assertEqual(self.svc("add", "--login", "alice", "--name", "x", "--", "true").returncode, 2)
+        self.assertEqual(self.svc("add", "--login", "nobody-here", "--name", "x", "--", "/bin/true").returncode, 1)
+        self.assertEqual(self.svc("add", "--login", "alice", "--name", "x").returncode, 2)
+        # a hand-written entry that lies about its login is named, never run
+        d = os.path.join(self.d, "db", "logins", "alice", "services")
+        os.makedirs(d)
+        with open(os.path.join(d, "evil.json"), "w") as f:
+            json.dump({"name": "evil", "login": "root", "kind": "service", "exec": ["/bin/sleep", "300"]}, f)
+        self.assertEqual(self.run_sup("tick").returncode, 0)
+        self.start()
+        time.sleep(1)
+        self.assertFalse(self.child("svc:alice/evil").get("pid"))
+        self.assertFalse(self.child("svc:root/evil").get("pid"))
+        row = self.services()["evil"]
+        self.assertEqual(row["status"], "invalid")
+        self.assertIn("login root", row["why"])
+        self.assertIn("INVALID", self.run_sup("status").stdout)
+
+    def test_front_registers_through_the_supervisor(self):
+        fe = dict(self.env, FLEET_NODE_SUPERVISOR=SUP, FLEET_SERVICE_SUDO="", FLEET_SERVICE_LOGIN="alice",
+                  MYMODE="dev")
+        front = os.path.join(BIN, "fleet-service.sh")
+        r = subprocess.run(["bash", front, "add", "watch", "--env-key", "MYMODE", "--", "sleep", "300"],
+                           env=fe, capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        ent = json.load(open(os.path.join(self.d, "db", "logins", "alice", "services", "watch.json")))
+        self.assertTrue(os.path.isabs(ent["exec"][0]) and ent["exec"][1:] == ["300"], ent["exec"])
+        self.assertEqual(ent["env"], {"MYMODE": "dev"})
+        self.assertIn("alice/watch", subprocess.run(["bash", front, "ls"], env=fe, capture_output=True,
+                                                    text=True).stdout)
+        r = subprocess.run(["bash", front, "rm", "watch"], env=fe, capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        # no passwordless sudo: the line an admin runs
+        fake = self.script("nosudo", "exit 1\n")
+        r = subprocess.run(["bash", front, "stop", "watch"], env=dict(fe, FLEET_SERVICE_SUDO=fake),
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 3, r.stderr)
+        self.assertIn("service stop --login alice --name watch", r.stderr)
+
+    def test_services_do_not_restart_the_node_agent(self):
+        lg = os.path.join(self.d, "db", "logins")
+        os.makedirs(lg)
+        with open(os.path.join(lg, "alice.env"), "w") as f:
+            f.write("CCQUOTA_TOKEN=x\n")
+        self.table(children=[{"name": "node-agent", "cmd": [self.script("na.sh", "exec sleep 300\n")],
+                              "requires": [os.path.join(lg, "*.env")], "reload": os.path.join(lg, "*.env")}])
+        self.start()
+        pid = until(10, lambda: self.child("node-agent").get("pid"))
+        self.assertTrue(pid)
+        self.assertEqual(self.svc("add", "--login", "alice", "--name", "watch", "--", "/bin/sleep", "300").returncode, 0)
+        self.assertTrue(until(10, lambda: self.child(self.key).get("pid")))
+        time.sleep(0.5)
+        self.assertEqual(self.child("node-agent")["pid"], pid, "a service restarted the node agent")
 
 
 if __name__ == "__main__":

@@ -36,6 +36,14 @@ machine's work ONCE, however many logins the machine carries:
                 logins/ changes. `account release <login>` is the way back, one
                 command: the env goes first, then the old services come back.
                 expected.json's `accounts` (C2), when present, narrows who runs.
+  * services  — the login-level register (issue #2525, EPIC #2524 C1): a program a
+                person keeps running as themselves is one root-owned entry,
+                <state>/logins/<login>/services/<name>.json, which this daemon runs
+                as a child demoted to that login — kept up with the children's
+                backoff, its output in <log>/logins/<login>/<name>.log, the
+                credentials it names injected at start from
+                <state>/logins/<login>/creds/. `fleet service` (bin/fleet-service.sh)
+                is the person's command; `status --json` carries `services[]`.
   * update    — the machine's one updater (issue #2334, C6): a task like the
                 rest (fleet-node-update.py tick). When it moves `current` it asks
                 this daemon to restart (<state>/update-restart.json): the daemon
@@ -67,6 +75,9 @@ Usage:
                                                (令牌失效 · 需要 relogin, issue #2501)
   fleet-node-supervisor.py sweep [--dry-run]   the leftover sweep, now
   fleet-node-supervisor.py attic [list | restore <id> | purge]
+  fleet-node-supervisor.py service add|rm|stop|start|restart|cred|ls|logs …
+                                               the login-level register (#2525; writes as root,
+                                               ls / logs as anyone who may read them)
   fleet-node-supervisor.py install | uninstall write / remove the LaunchDaemon (root)
   fleet-node-supervisor.py install --check     exit 0 = already installed as install writes it
                                                and loaded (fleet-node-install.sh, #2330)
@@ -228,11 +239,17 @@ def requires_missing(c):
 
 
 def dir_sig(d):
-    """What a directory holds, as one string: each entry's name, size and mtime."""
-    try:
-        names = sorted(os.listdir(d))
-    except OSError:
-        return ""
+    """What a directory holds, as one string: each entry's name, size and mtime.
+    A pattern (`*`) is the files it matches, a file is itself (issue #2525)."""
+    if "*" in d:
+        names = sorted(glob.glob(d))
+    elif os.path.isfile(d):
+        names = [d]
+    else:
+        try:
+            names = sorted(os.listdir(d))
+        except OSError:
+            return ""
     out = []
     for n in names:
         try:
@@ -292,8 +309,9 @@ def default_table(paths):
              "requires": [os.path.join(paths.state, "machine.env"),
                           os.path.join(paths.state, "logins", "*.env")],
              # it reads its tenants once, at start: an adopt / release (#2387)
-             # changes the directory, and the daemon starts it again on it
-             "reload": os.path.join(paths.state, "logins"),
+             # changes them, and the daemon starts it again on them — the
+             # <login>.env files only: a login's services/ (#2525) is not a tenant
+             "reload": os.path.join(paths.state, "logins", "*.env"),
              "note": "C5 #2333"},
         ],
         "tasks": [
@@ -498,6 +516,188 @@ def account_runnable(ent):
     return None
 
 
+# --------------------------------------------------------------- services -------
+# The login-level register (issue #2525, EPIC #2524 C1): a program a person keeps
+# running AS THEMSELVES on the machine is one root-owned JSON (0600) in
+# <state>/logins/<login>/services/<name>.json — `fleet service add` (bin/
+# fleet-service.sh) hands it to root through `service add`. The daemon runs each
+# `kind: service` entry as a child demoted to its login (the account half's own
+# road: initgroups/setgid/setuid, its HOME / USER / TMPDIR), keeps it up with the
+# children's backoff, and the demoted process appends its stdout + stderr to
+# <log>/logins/<login>/<name>.log (the directory is the login's; root never writes
+# in it). A credential it names is injected at start from
+# <state>/logins/<login>/creds/<name> (root 0600) — the entry holds the name only.
+# Editing the entry (stop / start / restart rewrite it) starts it again; removing
+# it stops it. `status --json` carries `services[]`.
+SVC_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,47}$")
+LOGIN_RE = re.compile(r"^[a-z0-9_][a-z0-9_.-]{0,31}$")
+ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
+SVC_KINDS = ("service",)        # `task` (a schedule) is C5's, #2529
+SVC_STATES = ("enabled", "stopped")
+SVC_ENV_DROP = ("HOME", "USER", "LOGNAME", "FLEET_SERVICE", "FLEET_NODE_ACCOUNT")
+SVC_LINE_MAX = 200
+
+
+def service_dir(paths, login):
+    return os.path.join(paths.logins, login, "services")
+
+
+def service_cred_dir(paths, login):
+    return os.path.join(paths.logins, login, "creds")
+
+
+def service_log(paths, login, name):
+    return os.path.join(paths.log, "logins", login, name + ".log")
+
+
+def service_check(svc, login=None, name=None):
+    """Why an entry is not a valid one, or None."""
+    if not isinstance(svc, dict):
+        return "not a JSON object"
+    if not SVC_NAME_RE.match(str(svc.get("name") or "")):
+        return "bad name %r" % svc.get("name")
+    if not LOGIN_RE.match(str(svc.get("login") or "")):
+        return "bad login %r" % svc.get("login")
+    if login is not None and svc["login"] != login:
+        return "login %s in %s's register" % (svc["login"], login)
+    if name is not None and svc["name"] != name:
+        return "name %s in %s.json" % (svc["name"], name)
+    if svc.get("kind", "service") not in SVC_KINDS:
+        return "kind %r — only %s" % (svc.get("kind"), "/".join(SVC_KINDS))
+    ex = svc.get("exec")
+    if not isinstance(ex, list) or not ex or not all(isinstance(a, str) for a in ex):
+        return "exec must be a non-empty list of strings"
+    if not os.path.isabs(ex[0]):
+        return "exec[0] %s is not an absolute path" % ex[0]
+    if svc.get("state", "enabled") not in SVC_STATES:
+        return "state %r" % svc.get("state")
+    env_ = svc.get("env") or {}
+    if not isinstance(env_, dict) or not all(ENV_KEY_RE.match(k) and isinstance(v, str)
+                                              for k, v in env_.items()):
+        return "env must map NAME to a string"
+    for f in ("env_keys", "creds", "paths"):
+        if not isinstance(svc.get(f) or [], list):
+            return "%s must be a list" % f
+    for c in svc.get("creds") or []:
+        if not ENV_KEY_RE.match(str(c)):
+            return "bad credential name %r" % c
+    return None
+
+
+def service_files(paths):
+    """[(login, name, path, entry or None, why-not or None)] of every register."""
+    out = []
+    for f in sorted(glob.glob(os.path.join(paths.logins, "*", "services", "*.json"))):
+        login = os.path.basename(os.path.dirname(os.path.dirname(f)))
+        name = os.path.basename(f)[:-len(".json")]
+        if not trusted(f):
+            out.append((login, name, f, None, "REFUSED — not root-owned / writable"))
+            continue
+        svc = read_json(f, None)
+        why = service_check(svc, login, name)
+        out.append((login, name, f, None if why else svc, why))
+    return out
+
+
+def service_entry(paths, svc, path, ident):
+    """A service as a child of the daemon (account_entry's shape)."""
+    uid, gid, home = ident
+    login, name = svc["login"], svc["name"]
+    e = {"PATH": "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin", "LANG": "en_US.UTF-8"}
+    e.update((k, v) for k, v in (svc.get("env") or {}).items() if k not in SVC_ENV_DROP)
+    e.update(HOME=home, USER=login, LOGNAME=login, FLEET_SERVICE=name)
+    lg = service_log(paths, login, name)
+    return {"name": "svc:%s/%s" % (login, name), "account": login, "service": name,
+            "uid": uid, "gid": gid, "home": home, "env": e, "keepalive": True,
+            "creds": list(svc.get("creds") or []), "script": svc["exec"][0],
+            "logdir": os.path.dirname(lg), "reload": path,
+            "cmd": ["/bin/sh", "-c", ACCOUNT_SH, "fleet-service", lg, lg] + list(svc["exec"])}
+
+
+def service_creds(paths, ent):
+    """{name: value} of the credentials an entry names, and the missing ones."""
+    got, missing = {}, []
+    d = service_cred_dir(paths, ent["account"])
+    for c in ent.get("creds") or []:
+        try:
+            fd = os.open(os.path.join(d, c), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+            with os.fdopen(fd) as f:
+                got[c] = f.read().rstrip("\n")
+        except (IOError, OSError):
+            missing.append(c)
+    return got, missing
+
+
+def service_logdir(ent):
+    """<log>/logins/<login>/ — the login's own, so the demoted process opens its
+    log itself; the log rotated at 1 MB (a rename: never follows a link)."""
+    d = ent["logdir"]
+    if not os.path.isdir(d):
+        os.makedirs(d, 0o755)
+    if os.geteuid() == 0:
+        st = os.lstat(d)
+        if st.st_uid != ent["uid"]:
+            os.lchown(d, ent["uid"], ent["gid"])
+    lg = ent["cmd"][4]
+    try:
+        st = os.lstat(lg)
+        if st.st_size > 1 << 20:
+            os.rename(lg, lg + ".1")
+    except OSError:
+        pass
+
+
+def log_tail(path, n=1, limit=SVC_LINE_MAX):
+    """The last n lines of a log (each at most limit bytes), or [] — never a link."""
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except OSError:
+        return []
+    with os.fdopen(fd, "rb") as f:
+        f.seek(0, 2)
+        size = f.tell()
+        f.seek(max(0, size - 65536))
+        lines = f.read().decode("utf-8", "replace").splitlines()
+    return [l[:limit] for l in lines if l.strip()][-n:]
+
+
+def services_summary(paths, state, tail=False):
+    """services[] for state.json / status --json: what each entry is and how it
+    runs — names only, never an env value or a credential. tail: + the log's last
+    line (status, as a reader that may read it; never into the 0644 state.json)."""
+    out = []
+    for login, name, path, svc, why in service_files(paths):
+        key = "svc:%s/%s" % (login, name)
+        cs = (state.get("children") or {}).get(key) or {}
+        row = {"name": name, "login": login, "kind": "service", "file": path,
+               "log": service_log(paths, login, name)}
+        if svc is None:
+            row.update(status="invalid", why=why)
+            out.append(row)
+            continue
+        row.update(kind=svc.get("kind", "service"), state=svc.get("state", "enabled"),
+                   exec=svc["exec"], env_keys=sorted(set(list(svc.get("env_keys") or [])
+                                                         + list((svc.get("env") or {}).keys()))),
+                   creds=list(svc.get("creds") or []), paths=list(svc.get("paths") or []),
+                   added=svc.get("added"), pid=None, started=cs.get("started"),
+                   restarts=cs.get("restarts") or 0, last_exit=cs.get("last_exit"), last_rc=cs.get("last_rc"))
+        if row["state"] == "stopped":
+            row["status"] = "stopped"
+        elif account_ident(login) is None:
+            row["status"] = "no such login"
+        elif pid_alive(cs.get("pid")):
+            row.update(status="running", pid=cs["pid"])
+        else:
+            st = cs.get("status")
+            row["status"] = st if st and st not in ("supervised", "stopped") else "down"
+            row["next_start"] = cs.get("next_start")
+        if tail:
+            t = log_tail(row["log"])
+            row["last_line"] = t[-1] if t else None
+        out.append(row)
+    return out
+
+
 # --------------------------------------------------------------- the daemon -----
 class Supervisor(object):
     def __init__(self, paths, table):
@@ -543,8 +743,21 @@ class Supervisor(object):
                 out.append(account_entry(u, login, ident, brew))
         return out
 
+    def service_entries(self):
+        """The login-level register (#2525): every valid, enabled entry of a login
+        this machine has, as a child."""
+        out = []
+        for login, name, path, svc, why in service_files(self.p):
+            if svc is None or svc.get("state", "enabled") != "enabled":
+                continue
+            ident = account_ident(login)
+            if ident is not None:
+                out.append(service_entry(self.p, svc, path, ident))
+        return out
+
     def all_children(self):
-        return list(self.table["children"]) + [e for e in self.account_entries() if e.get("keepalive")]
+        return (list(self.table["children"]) + [e for e in self.account_entries() if e.get("keepalive")]
+                + self.service_entries())
 
     def all_tasks(self):
         return list(self.table["tasks"]) + [e for e in self.account_entries() if not e.get("keepalive")]
@@ -553,8 +766,12 @@ class Supervisor(object):
         """Popen one child / task: a machine one as root in the daemon's own env, an
         account one demoted to its login, its output opened by itself (ACCOUNT_SH)."""
         if ent.get("account"):
+            e = ent["env"]
+            if ent.get("service"):
+                service_logdir(ent)
+                e = dict(e, **service_creds(self.p, ent)[0])
             return subprocess.Popen(ent["cmd"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                    stderr=fh, env=ent["env"], start_new_session=True, close_fds=True,
+                                    stderr=fh, env=e, start_new_session=True, close_fds=True,
                                     preexec_fn=demote(ent["account"], ent["uid"], ent["gid"], ent["home"]))
         return subprocess.Popen(ent["cmd"], stdin=subprocess.DEVNULL, stdout=fh, stderr=fh,
                                 env=self.child_env(extra_env), start_new_session=True, close_fds=True)
@@ -576,6 +793,10 @@ class Supervisor(object):
         if not force and not self.dirty and t - self.last_save < 15:
             return
         self.state["supervisor"] = dict(self.state.get("supervisor") or {}, pid=os.getpid(), heartbeat=t)
+        try:
+            self.state["services"] = services_summary(self.p, self.state)
+        except Exception as e:  # the register must never take the heartbeat down
+            self.log("services summary failed: %s" % e)
         write_json(self.p.state_file, self.state)
         self.dirty = False
         self.last_save = t
@@ -626,7 +847,11 @@ class Supervisor(object):
 
     def child_status(self, c):
         if c.get("account"):
-            return account_runnable(c) or "supervised"
+            why = account_runnable(c)
+            if not why and c.get("creds"):
+                missing = service_creds(self.p, c)[1]
+                why = "missing credential %s" % ", ".join(missing) if missing else None
+            return why or "supervised"
         if not c.get("cmd"):
             return "pending"
         if requires_missing(c):
@@ -644,6 +869,11 @@ class Supervisor(object):
         live = set(c["name"] for c in kids)
         for name in [n for n in list(self.procs) + list(self.adopted) if n not in live]:
             self.stop_one(name)
+        # a service removed from the register leaves no row behind (#2525)
+        files = set("svc:%s/%s" % (f[0], f[1]) for f in service_files(self.p))
+        for name in [n for n in self.state["children"] if n.startswith("svc:") and n not in files]:
+            del self.state["children"][name]
+            self.dirty = True
         for c in kids:
             name = c["name"]
             cs = self.state["children"].setdefault(name, {})
@@ -1619,6 +1849,19 @@ def status_lines(paths, table, state):
                 bad.append("%s %s" % (u["name"], x.get("result") or x.get("status") or "never"))
         out.append("account %-17s %d/%d ok · last run %s%s"
                    % (login, ok, len(units), iso(last), (" · " + ", ".join(bad)) if bad else ""))
+    for r in services_summary(paths, state):
+        if r["status"] == "invalid":
+            out.append("service %-17s INVALID — %s (%s)" % ("%s/%s" % (r["login"], r["name"]), r["why"], r["file"]))
+            continue
+        if r["status"] == "running":
+            what = "running pid %s · up %s" % (r["pid"], ago(r.get("started")))
+        elif r["status"] == "down":
+            what = "down · restart at %s" % iso(r.get("next_start"))
+        else:
+            what = r["status"]
+        out.append("service %-17s %s · restarts %s · last exit %s rc=%s · log %s"
+                   % ("%s/%s" % (r["login"], r["name"]), what, r["restarts"], iso(r.get("last_exit")),
+                      r.get("last_rc"), r["log"]))
     for login, ln in sorted(lanes_now(paths, state).items()):
         out.append("lane   %-18s 令牌失效 · 需要 relogin since %s — the hub: %s — fix: "
                    "sudo fleet-node-supervisor.py account adopt %s --rejoin" % (login, ln.get("since") or "-",
@@ -1698,6 +1941,182 @@ def uninstall(paths):
     return 0
 
 
+# --------------------------------------------------------------- service CLI ----
+SERVICE_USAGE = ("usage: fleet-node-supervisor.py service add --login L --name N [--env K=V]… [--env-key K]… "
+                 "[--cred C]… [--path P]… -- <exec> [args…]\n"
+                 "       fleet-node-supervisor.py service rm|stop|start|restart --login L --name N\n"
+                 "       fleet-node-supervisor.py service cred set|rm --login L --name C   (the value on stdin)\n"
+                 "       fleet-node-supervisor.py service ls [--login L] [--json]\n"
+                 "       fleet-node-supervisor.py service logs --login L --name N [-n LINES]")
+
+
+def _svc_args(rest):
+    """(options {flag: [values]}, exec argv after `--`) — every option takes a value."""
+    opts, ex = {}, []
+    i = 0
+    while i < len(rest):
+        a = rest[i]
+        if a == "--":
+            ex = rest[i + 1:]
+            break
+        if a in ("--json",):
+            opts.setdefault(a, []).append("1")
+            i += 1
+            continue
+        if not a.startswith("-") or i + 1 >= len(rest):
+            raise ValueError("unexpected %r" % a)
+        opts.setdefault(a, []).append(rest[i + 1])
+        i += 2
+    return opts, ex
+
+
+def _svc_root(what):
+    if os.geteuid() != 0 and env("FLEET_NODE_TEST", "") != "1":
+        print("fleet-node-supervisor: service %s writes root's register — run it as root "
+              "(bin/fleet-service.sh runs it through sudo -n)" % what, file=sys.stderr)
+        return False
+    return True
+
+
+def _svc_mkdir(d):
+    if not os.path.isdir(d):
+        os.makedirs(d, 0o700)
+    os.chmod(d, 0o700)
+
+
+def _svc_ident(login):
+    if not LOGIN_RE.match(login or ""):
+        print("fleet-node-supervisor: bad login %r" % login, file=sys.stderr)
+        return None
+    ident = account_ident(login)
+    if ident is None:
+        print("fleet-node-supervisor: %s is no login of this machine (uid ≥ 500)" % login, file=sys.stderr)
+    return ident
+
+
+def service_cli(paths, rest):
+    sub = rest[0] if rest else "ls"
+    verb = rest[1] if sub == "cred" and len(rest) > 1 else None
+    try:
+        opts, ex = _svc_args(rest[2:] if verb else rest[1:])
+    except ValueError as e:
+        print("fleet-node-supervisor: %s\n%s" % (e, SERVICE_USAGE), file=sys.stderr)
+        return 2
+    one = lambda k: (opts.get(k) or [None])[-1]
+    login, name = one("--login"), one("--name")
+    if sub == "ls":
+        rows = services_summary(paths, read_json(paths.state_file, {}), tail=True)
+        if login:
+            rows = [r for r in rows if r["login"] == login]
+        if "--json" in opts:
+            print(json.dumps(rows, indent=1, sort_keys=True))
+            return 0
+        for r in rows:
+            print("%-24s %-9s %s%s" % ("%s/%s" % (r["login"], r["name"]), r["status"],
+                                       " ".join(r.get("exec") or []) or r.get("why", ""),
+                                       ("  · %s" % r["last_line"]) if r.get("last_line") else ""))
+        if not rows:
+            print("(no service registered%s)" % (" for %s" % login if login else ""))
+        return 0
+    if sub == "logs":
+        if not (login and name and SVC_NAME_RE.match(name) and LOGIN_RE.match(login)):
+            print(SERVICE_USAGE, file=sys.stderr)
+            return 2
+        lg = service_log(paths, login, name)
+        if not os.path.exists(lg):
+            print("fleet-node-supervisor: no log yet (%s)" % lg, file=sys.stderr)
+            return 1
+        for l in log_tail(lg, int(one("-n") or 50), 4096):
+            print(l)
+        return 0
+    if sub == "cred":
+        if verb not in ("set", "rm") or not login or not name or not ENV_KEY_RE.match(name):
+            print(SERVICE_USAGE, file=sys.stderr)
+            return 2
+        if not _svc_root("cred") or _svc_ident(login) is None:
+            return 1
+        d = service_cred_dir(paths, login)
+        _svc_mkdir(os.path.dirname(d))
+        _svc_mkdir(d)
+        f = os.path.join(d, name)
+        if verb == "rm":
+            try:
+                os.remove(f)
+            except OSError:
+                pass
+            print("removed credential %s of %s" % (name, login))
+            return 0
+        val = sys.stdin.read().rstrip("\n")
+        if not val:
+            print("fleet-node-supervisor: no value on stdin", file=sys.stderr)
+            return 2
+        tmp = os.path.join(d, ".%s.%d" % (name, os.getpid()))
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as fh:
+            fh.write(val + "\n")
+        os.rename(tmp, f)
+        print("stored credential %s of %s (the value is never printed or logged)" % (name, login))
+        return 0
+    if sub not in ("add", "rm", "stop", "start", "restart") or not login or not name:
+        print(SERVICE_USAGE, file=sys.stderr)
+        return 2
+    if not SVC_NAME_RE.match(name):
+        print("fleet-node-supervisor: bad name %r (a-z 0-9 . _ -, ≤ 48)" % name, file=sys.stderr)
+        return 2
+    if not _svc_root(sub) or _svc_ident(login) is None:
+        return 1
+    d = service_dir(paths, login)
+    f = os.path.join(d, name + ".json")
+    if sub == "rm":
+        if not os.path.exists(f):
+            print("fleet-node-supervisor: %s/%s is not registered" % (login, name), file=sys.stderr)
+            return 1
+        os.remove(f)
+        print("removed %s/%s — the daemon stops it on its next pass" % (login, name))
+        return 0
+    if sub in ("stop", "start", "restart"):
+        svc = read_json(f, None)
+        if svc is None:
+            print("fleet-node-supervisor: %s/%s is not registered" % (login, name), file=sys.stderr)
+            return 1
+        svc["state"] = "stopped" if sub == "stop" else "enabled"
+        svc["changed"] = now()     # a new entry file = the daemon starts it again
+        write_json(f, svc, 0o600)
+        print("%s/%s %s" % (login, name, {"stop": "stopped", "start": "enabled",
+                                           "restart": "restarting"}[sub]))
+        return 0
+    if not ex:
+        print("fleet-node-supervisor: nothing to run — add … -- <exec> [args…]", file=sys.stderr)
+        return 2
+    envs = {}
+    for kv in opts.get("--env") or []:
+        k, sep, v = kv.partition("=")
+        if not sep or not ENV_KEY_RE.match(k):
+            print("fleet-node-supervisor: --env %r is not K=V" % kv, file=sys.stderr)
+            return 2
+        envs[k] = v
+    keys = list(opts.get("--env-key") or [])
+    old = read_json(f, {}) or {}
+    svc = {"name": name, "login": login, "kind": "service", "exec": list(ex), "schedule": None,
+           "retries": None, "env": envs, "env_keys": sorted(set(keys + list(envs))),
+           "creds": list(opts.get("--cred") or []), "paths": list(opts.get("--path") or []),
+           "state": "enabled", "added": old.get("added") or now(), "changed": now()}
+    why = service_check(svc, login, name)
+    if why:
+        print("fleet-node-supervisor: %s" % why, file=sys.stderr)
+        return 2
+    _svc_mkdir(os.path.dirname(d))
+    _svc_mkdir(d)
+    write_json(f, svc, 0o600)
+    missing = [c for c in svc["creds"] if not os.path.exists(os.path.join(service_cred_dir(paths, login), c))]
+    print("%s %s/%s — the daemon runs it as %s on its next pass; log %s"
+          % ("updated" if old else "registered", login, name, login, service_log(paths, login, name)))
+    if missing:
+        print("note: credential %s not stored yet — it waits until `fleet service cred set` has it"
+              % ", ".join(missing))
+    return 0
+
+
 # --------------------------------------------------------------- main -----------
 def main(argv):
     paths = Paths()
@@ -1710,6 +2129,8 @@ def main(argv):
         return install_check(paths) if "--check" in rest else install(paths)
     if cmd == "uninstall":
         return uninstall(paths)
+    if cmd == "service":
+        return service_cli(paths, rest)
     if cmd == "account":
         sub = rest[0] if rest else "list"
         if sub == "list":
@@ -1732,7 +2153,8 @@ def main(argv):
         state = read_json(paths.state_file, {})
         code, lines = status_lines(paths, table, state)
         if "--json" in rest:
-            print(json.dumps({"health": code, "state": state}, indent=1, sort_keys=True))
+            print(json.dumps({"health": code, "state": state,
+                              "services": services_summary(paths, state, tail=True)}, indent=1, sort_keys=True))
         elif "--check" in rest:
             refused = sorted(lanes_now(paths, state)) if code == 0 else []
             if refused:

@@ -263,3 +263,27 @@ sudo bin/fleet-node-drill.sh unblock # 演练被杀后留在 /etc/hosts 的 GitH
 演练记录与五个指标的读数：#2336（m4，2026-10-08）。
 演练里的「升级」用一个只改这份文档的提交；「回退」用一个只加 `conf/drill-fail` 的提交，再用一个删掉它的提交往前走。
 演练前先在被演练的机器上 `count` 一次；中途新开的登录不在 `--logins` 里就不会被迁。
+
+## 10. 后台服务登记表（EPIC #2524 C1，#2525）
+
+以某个登录身份在托管机器上常驻的程序（短信通知这类），不再手写 LaunchDaemon / LaunchAgent，而是登记给整机守护：
+
+    fleet service add sms-watch --cred BARK_KEY -- ~/bin/sms-watch.py   # 登记（或替换）
+    fleet service cred set BARK_KEY                                     # 值从标准输入读，永不进参数
+    fleet service ls / logs sms-watch [-f] / stop / start / restart / rm sms-watch
+
+- **一个条目一个 JSON**：`/var/db/fleet-node/logins/<登录>/services/<名>.json`（root 0600）——
+  `{name, login, kind: "service", exec, schedule, retries, env, env_keys, creds, paths, state}`（共同约定 2；
+  `schedule` / `retries` 留给 C5 的 `kind: task`）。条目里只有凭据的**名字**；值在
+  `/var/db/fleet-node/logins/<登录>/creds/<名>`（root 0600），守护起进程时注入成同名环境变量。
+- **写表是 root 的**：`fleet-service.sh` 经 `sudo -n` 跑 root 运行时里的 `fleet-node-supervisor.py service …`；
+  没有免密 sudo 时打印一条给管理员跑的命令（exit 3）。`ls` / `logs` 不用 root。
+- **守护代跑**：每个 `state: enabled` 的条目是守护的一个子进程，降权成那个登录（initgroups/setgid/setuid，
+  它的 HOME / USER / TMPDIR，和账号半边同一条路），退出即按子进程退避重起（1 秒起翻倍，封顶 60 秒）。
+  stdout + stderr 由降权后的进程自己续写 `/var/log/fleet-node/logins/<登录>/<名>.log`（目录归该登录，1 MB 轮转一次）。
+  改条目（stop / start / restart 都是改写它）= 重起；删条目 = 停。条目不是 root 所有、或登录名与目录不符，
+  守护只报 `INVALID`，不跑。
+- **看得到**：`fleet-node-supervisor.py status` 每项一行；`status --json` 顶层 `services[]`
+  （状态、pid、重启次数、上次退出码、日志末行 ≤ 200 字节；`state.json` 0644 里的同一份不带日志末行）。
+- 一个登录的 `services/` 不是节点程序的租户：节点程序只在 `logins/*.env` 变时重起。
+- BREAK-IT 行 `service-killed`；`fleet-node-supervisor-selftest.py` I。
