@@ -682,7 +682,7 @@ locate() {
     [ -d "$d" ] && [ "$d" != "$H" ] || continue
     for s in $( ( cd / && sudo -n ls "$d/.config/claude-fleet/fleets" ) 2>/dev/null); do
       SL=$(basename "$d") SLH=$d
-      if as_sess "$TMUXB" -L "$s" list-windows -a -F '#{@fleet_id}' 2>/dev/null | grep -qxF -- "$fid"; then
+      if as_sess "$TMUXB" -L "$s" list-windows -a -F '#{@fleet_id}' 2>/dev/null | grep -qxF -- "$fid"; then  # view-ok: presence test as another login (no fleet-lib); a view session's duplicate row is harmless
         SFLEET=$s; return 0
       fi
     done

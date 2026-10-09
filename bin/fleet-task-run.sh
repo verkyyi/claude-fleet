@@ -70,8 +70,8 @@ fi
 
 # every window once (a view session lists them twice — fleet_lw's rule, issue #1489)
 win_by_name() {
-  tmux -L "$SESS" list-windows -a -F '#{window_id}	#{window_name}' 2>/dev/null \
-    | awk -F '\t' -v w="$1" '$2 == w && !seen[$1]++ { print $1; exit }'
+  tmux -L "$SESS" list-windows -a -F '#{window_id}	#{window_name}' 2>/dev/null |  # view-ok: no fleet-lib here; the awk keeps each window_id once
+    awk -F '\t' -v w="$1" '$2 == w && !seen[$1]++ { print $1; exit }'
 }
 
 wid=$(win_by_name "$W")
