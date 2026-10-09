@@ -536,7 +536,9 @@ the bodies they always did. Only now, and in this order:
 
    - A **proposed split** (`new`) is created with this body **in its card's repo**
      (`gh issue create --repo <the member's repo>`; titles in the repo's own
-     language — CJK titles survive into window names, issue #579), then its
+     language — CJK titles survive into window names, issue #579 — and the
+     title is the card's 名称: the member's use from the person's side, ≤ 20 汉字,
+     no script names or flags, the mechanism in the body — issue #2545), then its
      number replaces `#new` in the parent's list (`gh issue edit <P> --repo "$PREPO"
      --body-file`) — as `owner/name#N` when that repo is not the parent's.
    - An **existing issue** keeps its own body: **append** the section below it

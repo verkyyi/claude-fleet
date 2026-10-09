@@ -644,8 +644,8 @@ if [ -z "$title" ]; then
 fi
 # An EPIC member's window wears its batch's 简称 first — 托管·一个节点… (issue
 # #2355): fleet_issue_win_name reads it off the body the gate just read, one
-# parent read per batch an hour; any other issue's name is fleet_win_name's,
-# byte for byte. No body in hand (no gate ran) ⇒ no read: --title promises no
+# parent read per batch an hour; any other issue is named by its use
+# (fleet_issue_plain_name, issue #2545). No body in hand (no gate ran) ⇒ no read: --title promises no
 # round-trip (#216). The async tail is handed the name the gate's pass derived
 # (FLEET_SPAWN_WNAME), so it never re-derives one without the body.
 if [ "$TAIL_ONLY" = 1 ] && [ -n "${FLEET_SPAWN_WNAME:-}" ]; then
@@ -654,7 +654,7 @@ elif [ -n "$issue_json" ]; then
   _ibody=$(printf '%s\n' "$issue_json" | python3 -c 'import json,sys; sys.stdout.write(json.load(sys.stdin).get("body") or "")' 2>/dev/null)
   wname=$(fleet_issue_win_name "$REPO" "$num" "$title" "${_ibody:-.}")
 else
-  wname=$(fleet_win_name "$title")
+  wname=$(fleet_issue_plain_name "$title")
 fi
 [ -z "$wname" ] && wname="$slug"
 # No repo tag on the name, even with 2+ repos (issue #1023 dropped #793's `tl·`

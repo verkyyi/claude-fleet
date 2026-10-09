@@ -56,6 +56,13 @@ starting a second one.
 | worth doing, not now | **the queue**: file it bare (`mcp__fleet__file_issue`, no `spawn`) with a `priority`, and the label `autofill` when it may start on its own (`bin/fleet-dispatch.sh` fills idle slots by priority on a fleet with `FLEET_AUTOFILL=1`), or `blocked` with 「等 #N 合并」 in the body. |
 | a question, not work | answer it. |
 
+**A title is the issue's use, from the person's side** (issue #2545): one sentence of
+what is wrong or wanted — 「每日推送没跑成」「mini2 开不了会话」 — at most 20 汉字, no
+script name, flag or `snake_name`. The worker's window and its sidebar row are named
+after it (the part before the first 「：」, technical tokens dropped), and a row has room
+for ~9 glyphs; the mechanism, the script, the error line go in the body.
+`fleet-issue-file` hints on a long or script-named title — rewrite it, don't ignore it.
+
 One worker per issue, one issue per worker: never chase the change yourself, never take
 over a worker's issue. A worker's outcome comes back to you as a `[child-report]` — note
 it, tell the person what landed in one line if they are here, and do not reply to the

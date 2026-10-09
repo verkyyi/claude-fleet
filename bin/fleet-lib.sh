@@ -7178,8 +7178,56 @@ fleet_member_win_name() {
   printf '%s·%s' "$sh" "$n"
 }
 
+# ---- an ordinary worker's name, from the person's side (issue #2545) ---------
+# A sidebar row has ~18 cells for a name, and an issue title written from the
+# implementation's side (「托管机器上旧版 fleet host on 以登录身份重登记：…」) cut to
+# that reads as nothing. So a non-member window takes the title's USE, not its
+# whole: the part before the first 「：」/「，」/「；」/「。」/`: `/`; `/` — `,
+# parentheses dropped, the technical tokens dropped — a `--flag`, an
+# under_score_name or run of underscores, a backtick; a `fleet-` word prefix and a
+# `.sh`/`.py`/… suffix come off the word they sit on — and no hyphen between a
+# CJK glyph and its neighbour (「入口把home会话放进macmini上」, not
+# 「入口把-home-会话…」). Then fleet_win_name's rules (character set, reserved
+# panel names) and a FLEET_ISSUE_NAME_COLS (24) column clip. Deterministic: a
+# pure function of the title, one perl fork, spawn / bind / reopen only. A title
+# that cleans to nothing keeps fleet_win_name's name of the whole title.
+
+# fleet_title_use <title> → the title's use, cleaned as above (not yet a name).
+fleet_title_use() {
+  S="${1:-}" perl -CO -Mutf8 -MEncode -e '
+    my $s = decode_utf8($ENV{S});
+    $s =~ s/（[^）]*）//g; $s =~ s/\([^)]*\)//g;
+    $s = $1 if $s =~ /^(.*?)(?:[：，；。]|[:;,](?=\s|$)| — )/s;
+    $s =~ s/`//g;
+    $s =~ s/(?<!\S)--\S+//g;
+    $s =~ s/\S*_\S*//g;
+    $s =~ s/(?<![\w-])fleet-(?=\w)//gi;
+    $s =~ s/\.(?:sh|py|md|ts|go|json|conf|ya?ml|toml)\b//gi;
+    $s =~ s/(?<=\p{Han})\s+|\s+(?=\p{Han})//g;
+    $s =~ s/\s+/ /g; $s =~ s/^ //; $s =~ s/ $//;
+    print $s;' 2>/dev/null
+}
+
+# fleet_issue_plain_name <title> → an ordinary (non-member) worker's window name.
+fleet_issue_plain_name() {
+  local t="${1:-}" u n cols="${FLEET_ISSUE_NAME_COLS:-24}" clip_out='' clip_w=0
+  case "$cols" in ''|*[!0-9]*) cols=24 ;; esac
+  u=$(fleet_title_use "$t")
+  n=$(fleet_win_name "$u")
+  if [ -n "$n" ]; then
+    case "$n" in *[![:ascii:]]*)
+      n=$(S="$n" perl -CO -MEncode -e 'my $s = decode_utf8($ENV{S});
+        $s =~ s/(?<=\p{Han})-|-(?=\p{Han})//g; print $s;' 2>/dev/null) || n='' ;;
+    esac
+  fi
+  [ -n "$n" ] || { fleet_win_name "$t"; return 0; }
+  fleet_clip_display "$cols" "$n"; n="${clip_out:-}"; n="${n%-}"
+  printf '%s' "$n"
+}
+
 # fleet_issue_win_name <repo> <num> <title> [body] → the window name of a session
-# on (repo, num): fleet_member_win_name with the 简称 of the EPIC its body names.
+# on (repo, num): fleet_member_win_name with the 简称 of the EPIC its body names;
+# an issue no EPIC claims takes fleet_issue_plain_name (issue #2545).
 # Network only for an EPIC member — one `gh issue view` of the parent, kept
 # ($FLEET_C/global/epic_short/<slug>-<N>, an hour) so eight members spawned in a
 # row ask once. No body given ⇒ read it. gh down ⇒ the parent's title off this
@@ -7214,6 +7262,7 @@ fleet_issue_win_name() {
       fi
     fi
   fi
+  if [ -z "$sh" ]; then fleet_issue_plain_name "$t"; return 0; fi
   fleet_member_win_name "$t" "$sh"
 }
 

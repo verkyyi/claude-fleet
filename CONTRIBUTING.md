@@ -1,5 +1,17 @@
 # Contributing to claude-fleet
 
+## Issue titles：从用户视角起（issue #2545）
+
+An issue title is one sentence of what is wrong or wanted, **as the person sees it** —
+「每日推送没跑成」「mini2 开不了会话」, not 「托管机器上旧版 fleet host on 以登录身份重登记」.
+At most 20 汉字 (40 columns); no script name, `--flag` or `snake_name`; the mechanism,
+the script and the error line go in the body. A worker's window and its sidebar row
+are named after the title (`fleet_issue_plain_name`: the part before the first
+「：」/「，」, technical tokens dropped, 24 columns), and the row keeps `#N` on its right,
+so the title is all the person reads there. `fleet-issue-file.sh` prints a hint for a
+long or script-named title (never a refusal); a `--breakage` title keeps its fixed shape.
+EPIC members already work this way — the card's 名称 is the title.
+
 ## Shell script conventions
 
 Every script in `bin/` and `extras/` is linted by `shellcheck` in CI
