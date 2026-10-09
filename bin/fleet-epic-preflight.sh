@@ -224,6 +224,10 @@ fi
 # in fleet_labels_canonical, so the seeder installs them; the check is whether
 # THIS repo has been seeded at all.
 EPIC_LABELS='epic autofill blocked'
+# The desk repo also needs `desk` (issue #2676): a no-code session of the batch
+# is ticketed there with it (fleet-ticket.sh new).
+[ "$(fleet_norm_repo "$repo")" = "$(fleet_norm_repo "${FLEET_DESK_REPO:-verkyyi/claude-fleet}")" ] \
+  && EPIC_LABELS="$EPIC_LABELS desk"
 labels_missing() {  # rc 1 = the label list could not be read under a GraphQL limit
   local have miss='' l
   if [ -n "$gql_limited" ]; then
@@ -238,7 +242,7 @@ labels_missing() {  # rc 1 = the label list could not be read under a GraphQL li
   printf '%s' "${miss# }"
 }
 if [ "$gh_ok" = 1 ] && [ -n "$perm" ] && ! missing=$(labels_missing); then
-  warn labels "GitHub rate-limited$(gh_until) — could not list $repo's labels over REST either; epic · autofill · blocked unverified"
+  warn labels "GitHub rate-limited$(gh_until) — could not list $repo's labels over REST either; $(printf '%s' "$EPIC_LABELS" | sed 's/ / · /g') unverified"
 elif [ "$gh_ok" = 1 ] && [ -n "$perm" ]; then
   if [ -n "$missing" ] && [ "$do_fix" = 1 ]; then
     # The seeder is idempotent (`gh label create --force`) and reconciles the WHOLE
@@ -250,7 +254,7 @@ elif [ "$gh_ok" = 1 ] && [ -n "$perm" ]; then
     missing=$(labels_missing)
   fi
   if [ -z "$missing" ]; then
-    pass labels "epic · autofill · blocked all present in $repo"
+    pass labels "$(printf '%s' "$EPIC_LABELS" | sed 's/ / · /g') all present in $repo"
   elif [ "$do_fix" = 1 ]; then
     fail labels "still missing after --fix:$missing — \`gh label create\` failed (rerun \`bash $BIN/fleet-labels-seed.sh --repo $repo\` to see why)"
   else

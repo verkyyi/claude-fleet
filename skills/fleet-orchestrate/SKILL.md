@@ -111,7 +111,12 @@ write anything yourself.
   (`mcp__fleet__file_issue` with `spawn: true`, or `bin/dash-raw-session.sh --prompt`
   when there is no issue): visible on the sidebar, the person can talk to it directly,
   it has its own workspace, it survives your compaction or reopening, and it reports
-  back when it ends.
+  back when it ends. Work with **no code to change** (a design page, research, a
+  release) goes without `--repo`: it opens in `$HOME` and gets a **desk ticket** of
+  its own (issue #2676 — `desk`-labelled in `FLEET_DESK_REPO`, the window bound
+  `@issue` / `@desk`), so a comment there reaches it and its outcome stays there; a
+  private project's no-code work takes `--desk=<that repo>`. Every ticket is read and
+  written through `bin/fleet-ticket.sh read|comment|state|children|evidence gh:<repo>#<N>`.
 - A **subagent is for one thing only**: one read-only, bounded lookup (`Explore` /
   `Plan`) to answer the conversation you are having right now. Never a writing
   subagent (it is refused anyway).

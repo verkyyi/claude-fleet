@@ -312,6 +312,9 @@ bridge_lease_acquire() { # $1 = lease path
 # "session<TAB>window_id<TAB>@claude_state" for the first match, empty if none.
 # A window matches when @issue == the number AND its session resolves to <repo>
 # (cached sessmap slug), so a same-numbered issue in another fleet never collides.
+# A desk session (issue #2676: `@desk 1`, `@norepo 1`, no worktree) is that
+# ticket's worker like any other: it carries `@issue` + `@repo <desk repo>`, and
+# fleet_window_repo reads @repo before @norepo — so it matches here unchanged.
 #
 # The read splits on \037, never TAB (issue #918): TAB is IFS *whitespace*, so
 # consecutive tabs collapse and a window with an EMPTY @claude_state (fresh

@@ -7129,7 +7129,35 @@ autofill|0e8a16|Opt this issue into hands-off auto-start: claude-fleet spawns a 
 epic|8250DF|Tracking parent for a batch of sub-issues planned and run together by claude-fleet
 agent:codex|10A37F|claude-fleet starts this issue's worker in Codex instead of the fleet default
 agent:claude|D97757|claude-fleet starts this issue's worker in Claude Code instead of the fleet default
+desk|C5DEF5|No code to change (design page, research, release) — claude-fleet opens it with no workspace
 EOF
+}
+
+# ---- the desk: a ticket for work with no code to change (issue #2676) --------
+# A session the orchestrator (or the person, `--origin hub`) opens with no repo
+# gets a ticket all the same: filed in the desk repo with the `desk` label, the
+# window stamped `@issue N` `@repo <desk>` `@desk 1` and still `@norepo 1` — no
+# workspace. So the bridge (which matches a window by its own @repo + @issue)
+# relays a comment on that ticket into it, and report / evidence / comment work
+# as for any worker.
+
+# fleet_desk_repo [<sess>] → the desk repo, when the desk is on AND this fleet
+# hosts it; nothing (rc 1) otherwise. On follows FLEET_DESK, else FLEET_STEWARD,
+# else FLEET_ORCHESTRATOR, else FLEET_HOST (EPIC #2668 共同约定 9: off ⇒ byte for
+# byte as before). The repo is FLEET_DESK_REPO (default verkyyi/claude-fleet) —
+# a fleet that does not host it has no desk, never a ticket in a stranger's repo.
+fleet_desk_repo() {
+  local r
+  case "${FLEET_DESK:-${FLEET_STEWARD:-${FLEET_ORCHESTRATOR:-${FLEET_HOST:-0}}}}" in
+    1|on|yes|true) ;;
+    *) return 1 ;;
+  esac
+  r=$(fleet_norm_repo "${FLEET_DESK_REPO:-verkyyi/claude-fleet}")
+  [ -n "$r" ] || return 1
+  # a here-string, never a pipe: grep -q leaves early, and under pipefail the
+  # writer's SIGPIPE would fail the test
+  grep -qxF -- "$r" <<<"$(fleet_repos "${1:-}")" || return 1
+  printf '%s\n' "$r"
 }
 
 # fleet_labels_allowed — just the label NAMES from the canonical taxonomy, one

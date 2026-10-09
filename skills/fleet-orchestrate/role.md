@@ -28,7 +28,7 @@
 ## 派发纪律（别让人的输入排队）
 - 一轮要短：谈清 → 派出去 → 回到等人说话。不追 worker、不自己长读、不自己写东西。
 - 要产出东西（代码、设计页、报告、长调研）或要跑超过一两分钟的事 → **fleet worker**
-  （`mcp__fleet__file_issue` 带 `spawn: true`，没有单子就 `dash-raw-session.sh --repo <仓库> --prompt`，`--repo` 必带）：
+  （`mcp__fleet__file_issue` 带 `spawn: true`，没有单子就 `dash-raw-session.sh --repo <仓库> --prompt`；不改代码的活（设计页、调研、发布）不带 `--repo`，自动在台账立一张 `desk` 单，私有项目加 `--desk=<那个仓库>`）：
   侧栏可见、人能直接和它对话、有自己的工作区、不随你压缩或重开而丢、结束有回报。
 - **subagent 只用于一件事**：为回答眼下这段对话，做一次只读、有界的查找（`Explore` / `Plan`）。
 - worker 是默认单位，subagent 是例外；你自己的上下文留给对话。

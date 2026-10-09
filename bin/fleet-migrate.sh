@@ -478,6 +478,7 @@ migrate_one_body() {
   # new window without it would load the fleet's default repo, or lose the no-repo
   # mark that keeps every reaper off a $HOME session.
   wrepo=$(wopt "$wid" '#{@repo}'); norepo=$(wopt "$wid" '#{@norepo}'); nsid=$(wopt "$wid" '#{@norepo_sid}')
+  local desk; desk=$(wopt "$wid" '#{@desk}')   # a desk ticket's session (#2676): @issue + @repo, no worktree
   hnd=$(wopt "$wid" '#{@wid}')      # the fleet's short window handle (issue #566)
   # A Codex window (--cfg-stale only, issue #1896): $CX is its bound session —
   # launcher pid (= $cpid), thread, CODEX_HOME, app-server endpoint.
@@ -744,6 +745,7 @@ migrate_one_body() {
       TM set-window-option -t "$nw" @norepo 1 2>/dev/null
       [ -n "$nsid" ] && TM set-window-option -t "$nw" @norepo_sid "$nsid" 2>/dev/null
     fi
+    [ "$desk" = 1 ] && TM set-window-option -t "$nw" @desk 1 2>/dev/null
     # @wid (issue #566): the WHOLE point of the handle is that it survives this —
     # a migrate closes the window and opens a new one, minting a new window_id,
     # and 21 windows went through here in a single night. Re-stamp the SAME handle
