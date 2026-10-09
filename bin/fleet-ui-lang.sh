@@ -115,6 +115,21 @@ fleet_ui_t() {
     en:needs_exited)            printf 'exited' ;;
     zh:needs_other)             printf '要你处理' ;;
     en:needs_other)             printf 'needs' ;;
+    # fleet-steward-conflicts.sh's text mode (issue #2673): only told, never held back
+    zh:steward_conf_none)       printf '没有跨批次改同一文件' ;;
+    en:steward_conf_none)       printf 'no file touched by two batches' ;;
+    zh:steward_conf_overlap_fmt) printf '撞车 %s · %s · 建议先合 %s' "${1:-}" "${2:-}" "${3:-}" ;;
+    en:steward_conf_overlap_fmt) printf 'overlap %s · %s · merge %s first' "${1:-}" "${2:-}" "${3:-}" ;;
+    zh:steward_conf_ci_fmt)     printf '测试排队 %s 个 · 最老等了 %s' "${1:-}" "${2:-}" ;;
+    en:steward_conf_ci_fmt)     printf 'CI queue %s · oldest waiting %s' "${1:-}" "${2:-}" ;;
+    zh:steward_conf_ci_blind)   printf '测试排队读不到' ;;
+    en:steward_conf_ci_blind)   printf 'CI queue unreadable' ;;
+    zh:steward_conf_quota_fmt)  printf '额度最多还剩 %s' "${1:-}" ;;
+    en:steward_conf_quota_fmt)  printf 'quota: best account has %s left' "${1:-}" ;;
+    zh:steward_conf_quota_blind) printf '额度读不到（%s）' "${1:-}" ;;
+    en:steward_conf_quota_blind) printf 'quota unreadable (%s)' "${1:-}" ;;
+    zh:steward_conf_quota_off)  printf '没配额度池' ;;
+    en:steward_conf_quota_off)  printf 'no quota pool configured' ;;
     zh:repo_none_tag)           printf '⇢无' ;;
     en:repo_none_tag)           printf '⇢none' ;;
     zh:remote_lost)             printf '失联' ;;
