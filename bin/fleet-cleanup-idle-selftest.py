@@ -481,6 +481,33 @@ class HomeReap(ReapPolicy):
         self.due()
         self.assertTrue(self.exists())
 
+    def test_spawned_norepo_closes_on_its_policy_after_a_finished_turn(self):
+        # issue #2623: a no-repo session another session spawned (a batch driver,
+        # a design-page writer) is nobody's home session — done:5m closes it five
+        # minutes after its last turn; the same window with no parent stays.
+        self.policy("done:5m")
+        self.set("@claude_state_ts", str(int(time.time()) - 600))
+        self.due()
+        self.assertTrue(self.exists())               # no parent: #2565's exited rule
+        self.set("@origin", "orchestrator")
+        self.set("@claude_state_ts", str(int(time.time()) - 120))
+        self.due()
+        self.assertTrue(self.exists())               # done 120 s < 5 m: not yet
+        self.set("@claude_state", "working")
+        self.set("@claude_state_ts", str(int(time.time()) - 600))
+        self.due()
+        self.assertTrue(self.exists())               # still working: never
+        self.set("@claude_state", "done")
+        out = self.due()
+        self.assertIn("reaped-idle:" + self.win + " policy=done:5m norepo", out)
+        self.assertFalse(self.exists())
+
+    def test_spawned_norepo_without_policy_is_never_closed(self):
+        self.set("@origin", "orchestrator")
+        self.set("@claude_state_ts", str(int(time.time()) - 900000))
+        self.due()
+        self.assertTrue(self.exists())               # no policy: #791, as before
+
     # the inherited worktree-session cases do not apply to a home session
     test_done_waits_its_own_idle_then_reaps_keeping_unpushed_work = None
     test_keep_and_merged_are_never_this_pass = None

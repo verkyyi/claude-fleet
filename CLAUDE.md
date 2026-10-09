@@ -337,7 +337,7 @@ Do not install from memory: read the doc and work from it.
   (compact · resume · startup) hands back ≤ 40 lines ending in «re-arm the Loop»;
   a typed `/compact` gets its next turn from `fleet-compact-resume.sh`. And it comes back AS IT WAS (issue #2585): a Claude orchestrator on the wrapper's recovery page past `FLEET_ORCH_REVIVE_SECS` (30 s) is respawned in place by the next `ensure` on the same conversation, and every resumed one gets a first turn (the resume seed) — SessionStart resume/startup re-reads the batches and the Loop first, since a killed process ran no SessionEnd. BREAK-IT `orchestrator-exited`. A hand-typed /exit or /clear there
   first answers a hint (⌃D 放后台; the same command within 60 s, or `/exit!`, runs it —
-  `mod/fleet/hooks/exit-guard.ts`, issue #2584); a plugin's run (the inbox) passes. Restore / migrate / move read it
+  `mod/fleet/hooks/exit-guard.ts`, issue #2584); a plugin's run (the inbox) passes. While it is busy, `/qd` (mod `hooks/qd.tsx`, `immediate`, its window only — issue #2618) opens a title + repo dialog that files through `fleet-mcp.py --call file_issue {spawn: true}` past the model and the queue (`派：` prefix: `FLEET_ORCH_QD_PREFIX=1`). Restore / migrate / move read it
   as `home` (the role-aware formats map it there — never snapshotted, never moved);
   the session caps never count it (only `worker` does); `fleet_win_for_key
   orchestrator` addresses it. The inventory's column 20 `role=orchestrator` carries

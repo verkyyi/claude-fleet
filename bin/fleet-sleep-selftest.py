@@ -254,6 +254,39 @@ print(json.dumps(dict(agent='claude',session_id=SID,pid=pid,transcript=TRANSCRIP
             except subprocess.TimeoutExpired: client.kill();client.wait(timeout=3)
             os.close(master)
 
+    def test_grouped_view_session_is_still_this_fleet(self):
+        # Issue #2622: a client on a grouped view session (`<fleet>@view-<id>`)
+        # makes tmux answer a window's bare #{session_name} with the view's name;
+        # every worker then read `wrong fleet` and nothing ever slept.
+        import pty
+        view=self.socket+'@view-selftest'
+        self.tm('new-session','-d','-t',self.socket,'-s',view)
+        master,slave=pty.openpty()
+        client=subprocess.Popen(['tmux','-L',self.socket,'attach-session','-t','='+view],
+                                stdin=slave,stdout=slave,stderr=slave,env=dict(self.env,TERM='xterm-256color'))
+        os.close(slave)
+        try:
+            until=time.monotonic()+3
+            while time.monotonic()<until:
+                if self.tm('list-clients','-F','#{session_name}')==view:break
+                time.sleep(.05)
+            else:self.fail('view client did not attach')
+            self.tm('switch-client','-c',self.tm('list-clients','-F','#{client_name}'),'-t','='+view+':0')
+            self.assertEqual(self.opt('session_name'),view)  # the hazard, reproduced
+            out=self.cli('scan','--dry-run').stdout.strip().splitlines()
+            mine=[json.loads(l) for l in out if l.startswith('{')]
+            mine=[r for r in mine if r.get('window')==self.opt('window_id')]
+            self.assertTrue(mine)
+            self.assertFalse([r for r in mine if r.get('skip')=='wrong fleet'],mine)
+            self.cli('sleep',self.pane)
+            self.assertEqual(self.opt('@worker_lifecycle'),'sleeping')
+        finally:
+            self.tm('detach-client','-s',view)
+            try: client.wait(timeout=3)
+            except subprocess.TimeoutExpired: client.kill();client.wait(timeout=3)
+            os.close(master)
+            subprocess.run(['tmux','-L',self.socket,'kill-session','-t','='+view],stderr=subprocess.DEVNULL)
+
     def test_activity_invalidates_stop_proof(self):
         socket_path=self.opt('socket_path')
         env=dict(self.env,TMUX=socket_path+',0,0',TMUX_PANE=self.pane)

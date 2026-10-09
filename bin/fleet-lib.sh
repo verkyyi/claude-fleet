@@ -5036,6 +5036,9 @@ fleet_origin_gate() {
   local sess="${1:-}" ex="${2:-}" o="${3:-}" ow="${4:-}" v
   [ "${FLEET_ORIGIN_GATE:-1}" = 0 ] && return 0   # seam: a test whose subject is not the parent
   [ -n "$ow" ] && return 0
+  # `--origin hub` is the operator's own word (issue #2623: from the orchestrator's
+  # pane canon stamps `orchestrator` for it — the caller itself, never refused).
+  [ "$ex" = hub ] && return 0
   if [ -z "$ex" ] && fleet_pane_lost; then
     printf 'cannot tell who is spawning — $TMUX is set but $TMUX_PANE is not; run it from a scratch/worker pane, or pass --origin hub (you, the operator) / --origin <key>'
     return 4
@@ -5063,7 +5066,8 @@ fleet_origin_gate() {
 #                `↳cd-conductor-scratch-52` tag and no parent. So an explicit value
 #                is CANONICALIZED: `…-scratch-<N>`/`scratch-<N>` → scratch-<N>,
 #                `…issue-<N>` → issue-<N>; a canonical key and the known literals
-#                pass through (`hub` → empty: stamp nothing, issue #896); anything else yields to <detected> when there is
+#                pass through (`hub` → empty: stamp nothing, issue #896 — `orchestrator` when
+#                that is the detected key, issue #2623); anything else yields to <detected> when there is
 #                one (a stderr warning names the swap — a Claude caller sees it in
 #                its tool output) and is otherwise kept as a free-form label
 #                (`↳<label>`, no nesting — how a source-fleet name renders).
@@ -5096,8 +5100,11 @@ fleet_origin_canon() {
   case "$ex" in autofill|bridge|orchestrator) printf '%s' "$ex"; return 0 ;; esac
   # `hub` (issue #896): the caller IS the hub's ⌃s by another road — the worker
   # sidebar's input line runs inside a worker's window, so detection would nest
-  # the new session under that worker. Empty ≡ hub, whatever was detected.
-  [ "$ex" = hub ] && return 0
+  # the new session under that worker. Empty ≡ hub, whatever was detected —
+  # except the orchestrator's own pane (issue #2623): it spawns on the person's
+  # behalf, and a batch driver it starts with `--origin hub` is still ITS child,
+  # whose ship report must come back to it.
+  [ "$ex" = hub ] && { [ "$det" = orchestrator ] && printf 'orchestrator'; return 0; }
   k=$(fleet_scratch_key "$ex")                    # scratch-<N> and *-scratch-<N>
   if [ -z "$k" ]; then
     case "$ex" in

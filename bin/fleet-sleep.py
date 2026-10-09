@@ -179,12 +179,21 @@ def process_tree_rss(pid):
     return total
 
 
+# bin/fleet-lib.sh's FLEET_SESSION_FMT: the fleet's own name from any window or
+# pane, never a grouped view session's (issue #1489).
+SESSION_FMT='#{?#{session_group},#{session_group},#{session_name}}'
+
+
 class Worker:
     def __init__(self, session, target):
         self.session = session
         self.window = self.tm('display-message', '-p', '-t', target, '#{window_id}')
         if not re.fullmatch(r'@\d+', self.window): raise ValueError('unknown window')
-        if self.opt('session_name') != session: raise ValueError('wrong fleet')
+        # The fleet a window belongs to is its session's GROUP when it has one
+        # (issue #2622): with a client on a grouped view session
+        # (`<fleet>@view-<id>`) tmux answers a bare #{session_name} with the
+        # view's name, and every worker read `wrong fleet` — nothing slept.
+        if self.tm('display-message','-p','-t',self.window,SESSION_FMT) != session: raise ValueError('wrong fleet')
         panes = self.tm('list-panes', '-t', self.window, '-F', '#{pane_id} #{@sidebar} #{@dash}').splitlines()
         workers = [p.split()[0] for p in panes if len(p.split()) == 1]
         if len(workers) != 1: raise NotAWorker('requires exactly one worker pane')
@@ -1073,7 +1082,7 @@ def hook():
     payload=json.load(sys.stdin)
     if payload.get('hook_event_name')!='Stop': return
     pane=os.environ['TMUX_PANE']
-    session=run(['tmux','display-message','-p','-t',pane,'#{?#{session_group},#{session_group},#{session_name}}'])
+    session=run(['tmux','display-message','-p','-t',pane,SESSION_FMT])
     w=Worker(session,pane)
     source=w.inspect()
     if payload.get('session_id')!=source['session_id']: return
