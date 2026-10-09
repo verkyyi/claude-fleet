@@ -1332,6 +1332,7 @@ class K_AgentTasks(Sandbox):
         r = subprocess.run(["bash", front, "run", "daily", "--now"], env=fe, capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertTrue(until(10, lambda: len(self.ncalls()) == 1), self.ncalls())
+        self.assertIn("--name|daily-2026-10-10-now1200|", self.ncalls()[0], "a manual run took the slot's window")
         self.assertTrue(until(10, lambda: self.agent().get("state") == "ok"))
         time.sleep(1)
         self.assertEqual(len(self.ncalls()), 1)

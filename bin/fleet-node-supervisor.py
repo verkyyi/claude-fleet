@@ -888,12 +888,14 @@ def task_fill(s, day):
     return (s or "").replace("{date}", day)
 
 
-def task_entry(paths, svc, ident, day, attempt):
+def task_entry(paths, svc, ident, day, attempt, manual=None):
     """One attempt of a task as a process of the daemon (service_entry's shape): the
-    runner, demoted to the login, its output appended to the task's log."""
+    runner, demoted to the login, its output appended to the task's log. A `run
+    --now` (manual: its HHMM) gets a window of its own, never the slot's."""
     uid, gid, home = ident
     login, name = svc["login"], svc["name"]
-    win = task_fill(svc.get("window") or name + "-{date}", day) + ("-%d" % attempt if attempt > 1 else "")
+    win = (task_fill(svc.get("window") or name + "-{date}", day) + ("-now%s" % manual if manual else "")
+           + ("-%d" % attempt if attempt > 1 else ""))
     done = task_fill((svc.get("done_when") or {}).get("file"), day)
     if done.startswith("~/"):
         done = os.path.join(home, done[2:])
@@ -1368,8 +1370,8 @@ class Supervisor(object):
             catchup = env_num("FLEET_NODE_TASK_CATCHUP", 6 * 3600)
             if want:
                 # run --now: a slot of its own, today's date in the task's zone
-                tz = task_tz(svc["schedule"]) or None
-                self.new_slot(ts, clk, datetime.datetime.fromtimestamp(clk, tz).date().isoformat(), True)
+                at = datetime.datetime.fromtimestamp(clk, task_tz(svc["schedule"]) or None)
+                self.new_slot(ts, clk, at.date().isoformat(), at.strftime("%H%M"))
             elif prev and prev > (ts.get("slot_t") or 0) and prev >= (svc.get("added") or 0) \
                     and clk - prev <= catchup:
                 self.new_slot(ts, prev, day, False)
@@ -1393,7 +1395,7 @@ class Supervisor(object):
         self.dirty = True
 
     def start_agent(self, key, ts, svc, ident, t):
-        ent = task_entry(self.p, svc, ident, ts["slot"], ts["attempt"])
+        ent = task_entry(self.p, svc, ident, ts["slot"], ts["attempt"], ts.get("manual") or None)
         why = account_runnable(ent)
         if not why and ent["creds"]:
             missing = service_creds(self.p, ent)[1]
