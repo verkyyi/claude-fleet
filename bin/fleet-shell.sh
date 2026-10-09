@@ -644,6 +644,67 @@ stage_select() {
   [ -n "$w" ] && TS select-window -t "$w" 2>/dev/null
 }
 
+# The one-session views (issue #2716): each `solo` registers itself as
+# $CL_DIR/solo/<its server's label>.pid (its pid) for as long as it lives, so
+# `quit` closes every one — the view's process and its own tmux server, which
+# takes its proxy (fleet-remote-view.sh) and the session command under it along.
+# A view from before the registry is found by its server's socket, named
+# `<session>-solo-<pid>` in tmux's own socket dir: what tmux keeps, not a guess
+# from ps.
+solo_dir() { printf '%s/solo' "$CL_DIR"; }
+solo_sockdir() { printf '%s/tmux-%s' "${TMUX_TMPDIR:-/tmp}" "$(id -u)"; }
+# solo_labels → every view server's label of this client, registered or not
+solo_labels() {
+  local f
+  for f in "$(solo_dir)"/"$SESS"-solo-*.pid "$(solo_sockdir)"/"$SESS"-solo-*; do
+    [ -e "$f" ] || continue
+    f=${f##*/}; f=${f%.pid}
+    case "$f" in "$SESS"-solo-*[!0-9]*|"$SESS"-solo-) continue ;; esac
+    printf '%s\n' "$f"
+  done | sort -u
+}
+# solo_reap — close them all: the registered process (when the pid is still a
+# `fleet-shell.sh solo`), then the server; a dead server's socket is removed.
+# Prints how many it closed.
+solo_reap() {
+  local l p c n=0
+  for l in $(solo_labels); do
+    p=''; c=''; { read -r p < "$(solo_dir)/$l.pid"; } 2>/dev/null
+    case "$p" in
+      ''|*[!0-9]*) ;;
+      *) c=$(ps -o command= -p "$p" 2>/dev/null) || c=''
+         case "$c" in *fleet-shell.sh*solo*) kill "$p" 2>/dev/null ;; *) c='' ;; esac ;;
+    esac
+    if tmux -L "$l" kill-server 2>/dev/null; then n=$((n + 1))
+    else
+      [ -S "$(solo_sockdir)/$l" ] && rm -f "$(solo_sockdir)/$l" 2>/dev/null
+      [ -n "$c" ] && n=$((n + 1))
+    fi
+    rm -f "$(solo_dir)/$l.pid"
+  done
+  printf '%s\n' "$n"
+}
+# qkill <pid file> <argv pattern> — that loop, when the pid is still it, with
+# its process group (the curl or sleep it left running goes too); a pid that is
+# no longer that loop kills nothing.
+qkill() {
+  local p='' c
+  { read -r p < "$1"; } 2>/dev/null
+  case "$p" in ''|*[!0-9]*) case "$1" in *.lock) ;; *) rm -f "$1" ;; esac; return 0 ;; esac
+  c=$(ps -o command= -p "$p" 2>/dev/null) || c=''
+  case "$c" in *$2*) kill -TERM -- "-$p" 2>/dev/null || kill "$p" 2>/dev/null ;; esac
+  case "$1" in *.lock) ;; *) rm -f "$1" ;; esac
+}
+# loops_reap — the client's loops by their pid files; the hub loop also by the
+# lock its holder writes its loop's pid in (issue #2630) — two loops on one
+# cache are two pids, and both go.
+loops_reap() {
+  qkill "$CL_DIR/.claude-dash/global/hubsess.lock" 'fleet-hub-sessions.sh'
+  qkill "$CL_DIR/.claude-dash/global/hubsess.pid" 'fleet-hub-sessions.sh'
+  qkill "$CL_DIR/actions.pid" 'fleet-client-actions.py'
+  qkill "$CL_DIR/warm/loop.pid" 'fleet-shell.sh warm'
+}
+
 mode="${1:-}"
 case "$mode" in
 # ---------------------------------------------------------------------------------
@@ -1386,13 +1447,26 @@ quit)
       *) SESS=$1; STAGE="$1-stage"; shift ;;
     esac
   done
-  if [ -n "${TMUX:-}" ] && [ "${TMUX%%,*}" = "$(T display-message -p '#{socket_path}' 2>/dev/null)" ]; then
+  # inside a one-session view too (its ⌃\ shell, issue #2716): that server goes
+  qin=''
+  if [ -n "${TMUX:-}" ]; then
+    qsock=${TMUX%%,*}
+    case "${qsock##*/}" in "$SESS"-solo-[0-9]*) qin=1 ;; esac
+    [ "$qsock" = "$(T display-message -p '#{socket_path}' 2>/dev/null)" ] && qin=1
+  fi
+  if [ -n "$qin" ]; then
     ( trap '' HUP; cd "$HOME" 2>/dev/null || :
       nohup env -u TMUX -u TMUX_PANE bash "$SELF" quit "$SESS" --quiet </dev/null >/dev/null 2>&1 & )
     exit 0
   fi
   qrun=''; T has-session -t "=$SESS" 2>/dev/null && qrun=1
   [ -n "$qifun" ] && [ -n "$(T list-clients -F '#{client_name}' 2>/dev/null)" ] && exit 0
+  # … nor while another terminal still shows a one-session view (issue #2716)
+  if [ -n "$qifun" ]; then
+    for l in $(solo_labels 2>/dev/null); do
+      [ -n "$(tmux -L "$l" list-clients -F '#{client_name}' 2>/dev/null)" ] && exit 0
+    done
+  fi
   # the server's environment: the hub, the device's certificate, the cache's
   # TMPDIR — what the keeper gives the lease back with
   if [ -n "$qrun" ]; then
@@ -1406,29 +1480,22 @@ EOF
   # the machines the sessions are on, read before the list's cache goes quiet
   qnodes=$(LC_ALL=C awk -F $'\037' '$1 ~ /^wid:/ && $2 != "" { print $2 }' \
              "$CL_DIR/.claude-dash/global/remote_$SESS" 2>/dev/null | sort -u | paste -sd / -)
-  # qkill <pid file> <argv pattern> — that loop, when the pid is still it
-  qkill() {
-    local p='' c
-    { read -r p < "$1"; } 2>/dev/null
-    case "$p" in ''|*[!0-9]*) return 0 ;; esac
-    c=$(ps -o command= -p "$p" 2>/dev/null) || c=''
-    case "$c" in *$2*) kill "$p" 2>/dev/null ;; esac
-    rm -f "$1"
-  }
   # 1. the keeper first, so nothing renews what is given back here
   qkill "$CL_DIR/keeper.pid" 'fleet-shell.sh keeper'
   id=''; { read -r id < "$CL_DIR/client.lease"; } 2>/dev/null
   [ -n "$id" ] && lease release --lease "$id"
   rm -f "$CL_DIR/client.lease" "$CL_DIR/client.lease.old" "$CL_DIR/client.standby" "$CL_DIR/client.nohub" "$CL_DIR/client.where.json" "$CL_DIR/client.key" "$CL_DIR/client.list.json" "$CL_DIR/client.why" "$CL_DIR/client.rescan"
   # 2. the loops beside it, and the warm lines (closed, not left to ControlPersist)
-  qkill "$CL_DIR/.claude-dash/global/hubsess.pid" 'fleet-hub-sessions.sh'
-  qkill "$CL_DIR/actions.pid" 'fleet-client-actions.py'
-  qkill "$CL_DIR/warm/loop.pid" 'fleet-shell.sh warm'
+  loops_reap 2>/dev/null
   for sk in "$CL_DIR"/warm/*.sock; do
     [ -S "$sk" ] && ssh -S "$sk" -O exit fleet >/dev/null 2>&1
     rm -f "$sk" "$sk.pending"
   done
-  # 3. the two servers — the client's own, never a fleet's
+  # 3. the servers — the client's own, never a fleet's: every one-session view
+  #    (issue #2716: a `fleet claude` view open in another terminal, or left by
+  #    an older version), then the shell's and the stage's
+  qsolo=$(solo_reap 2>/dev/null)
+  [ "${qsolo:-0}" -gt 0 ] && qrun=1
   T kill-server 2>/dev/null
   TS kill-server 2>/dev/null
   if [ -z "$qquiet" ]; then
@@ -1537,6 +1604,8 @@ EOF
   rm -f "$OV"
   ended="$CL_DIR/solo-ended.$SOLO"; rm -f "$ended"; smain=$$
   [ "${FLEET_SOLO_ATTACH:-1}" = 0 ] && smain=''   # no attach to outlive: the caller ends it
+  # registered for `quit` (issue #2716) while it lives
+  mkdir -p "$(solo_dir)" 2>/dev/null && printf '%s\n' "$$" > "$(solo_dir)/$SOLO.pid"
   # the watcher: the row's state off the list's cache, once a second, while the
   # view lives — a change to `exited` it SAW ends the view (opening a session
   # already exited is no exit, as the client's own solo_ended)
@@ -1559,13 +1628,14 @@ EOF
   swatch=$!
   if [ "${FLEET_SOLO_ATTACH:-1}" = 0 ]; then printf '%s\n' "$SOLO"; exit 0; fi
   # the terminal closed under it (a HUP): the view goes all the same, silently
-  trap 'kill "$swatch" 2>/dev/null; tmux -L "$SOLO" kill-server 2>/dev/null; rm -f "$ended"; exit 0' HUP TERM
+  trap 'kill "$swatch" 2>/dev/null; tmux -L "$SOLO" kill-server 2>/dev/null; rm -f "$ended" "$(solo_dir)/$SOLO.pid"; exit 0' HUP TERM
   env -u TMUX -u TMUX_PANE tmux -L "$SOLO" attach-session -t "=$SOLO"
   trap - HUP TERM
   # whatever ended the attach, the view goes: its connection drops, the session
   # on its machine never notices
   kill "$swatch" 2>/dev/null
   tmux -L "$SOLO" kill-server 2>/dev/null
+  rm -f "$(solo_dir)/$SOLO.pid"
   if [ -s "$ended" ]; then sh "$SB/fleet-ui-lang.sh" t solo_view_ended_fmt "$snode"
   else sh "$SB/fleet-ui-lang.sh" t solo_view_left_fmt "$snode"; fi
   echo
@@ -1720,6 +1790,12 @@ if T has-session -t "=$SESS" 2>/dev/null; then
   [ "${FLEET_SHELL_NO_ATTACH:-0}" = 1 ] && { printf '%s\n' "$SESS"; exit 0; }
   attach_client
 fi
+
+# No client runs, so whatever of one is still here is the LAST client's (issue
+# #2716) — an older version's one-session views and their servers, its loops:
+# closed before this one starts, so `ps` holds only this version's processes.
+solo_reap >/dev/null 2>&1
+loops_reap 2>/dev/null
 
 # the one-session view comes back to the row it left (issue #2265): read before
 # the new list writes its first visit

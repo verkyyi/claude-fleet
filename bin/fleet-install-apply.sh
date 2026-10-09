@@ -513,7 +513,7 @@ daemons_launchd() {
     else $pre install -m 644 "$tmp" "$dst"; fi || { rm -f "$tmp"; fail daemons "write $dst"; continue; }
     rm -f "$tmp"
     [ "$verb" = reloaded ] && $pre "$LAUNCHCTL" bootout "$dom/$label" >/dev/null 2>&1
-    if $pre "$LAUNCHCTL" bootstrap "$dom" "$dst" >/dev/null 2>&1; then say "daemons: $verb $u"; acted=1
+    if $pre "$LAUNCHCTL" bootstrap "$dom" "$dst" >/dev/null 2>&1; then say "daemons: $verb $u"; acted=1; RESTARTED="$RESTARTED $u"
     else fail daemons "bootstrap $dom $dst — $u is NOT loaded"; fi
     [ "$u" = spinner ] && spin=0
   done
@@ -529,7 +529,7 @@ daemons_launchd() {
       say "daemons: ok spinner — script new since ${from:0:7}, the installed unit runs it (no kick)"
     elif [ "$shape" = system ] && [ "$sudo_ok" = 0 ]; then need_root="$need_root; sudo launchctl kickstart -k system/$label"
     elif [ "$DRY" = 1 ]; then say "daemons: would kickstart -k $dom/$label (spinner script changed)"; acted=1
-    elif $pre "$LAUNCHCTL" kickstart -k "$dom/$label" >/dev/null 2>&1; then say 'daemons: kicked spinner (script changed)'; acted=1
+    elif $pre "$LAUNCHCTL" kickstart -k "$dom/$label" >/dev/null 2>&1; then say 'daemons: kicked spinner (script changed)'; acted=1; RESTARTED="$RESTARTED spinner"
     else fail daemons "kickstart -k $dom/$label"; fi
   fi
   if [ -n "$need_root" ]; then
@@ -582,24 +582,74 @@ daemons_systemd() {
   if [ "$dirty" = 1 ]; then run "$SYSTEMCTL" --user daemon-reload || fail daemons 'systemctl --user daemon-reload'; fi
   for u in $RESTART; do
     unit=$(unit_of "$u")
-    if run "$SYSTEMCTL" --user restart "$unit"; then say "daemons: $([ "$DRY" = 1 ] && echo 'would reload' || echo reloaded) $u"; acted=1
+    if run "$SYSTEMCTL" --user restart "$unit"; then say "daemons: $([ "$DRY" = 1 ] && echo 'would reload' || echo reloaded) $u"; acted=1; RESTARTED="$RESTARTED $u"
     else fail daemons "restart $unit"; fi
     [ "$u" = spinner ] && spin=0
   done
   for u in $ENABLE; do
     unit=$(unit_of "$u")
-    if run "$SYSTEMCTL" --user enable --now "$unit"; then say "daemons: $([ "$DRY" = 1 ] && echo 'would add' || echo added) $u"; acted=1
+    if run "$SYSTEMCTL" --user enable --now "$unit"; then say "daemons: $([ "$DRY" = 1 ] && echo 'would add' || echo added) $u"; acted=1; RESTARTED="$RESTARTED $u"
     else fail daemons "enable --now $unit"; fi
   done
   if [ "$spin" = 1 ]; then
     if [ ! -f "$SDIR/claude-fleet-spinner.service" ]; then say 'daemons: skip spinner kick — not installed'
     elif run "$SYSTEMCTL" --user restart claude-fleet-spinner.service; then
+      RESTARTED="$RESTARTED spinner"
       say "daemons: $([ "$DRY" = 1 ] && echo 'would kick' || echo kicked) spinner (script changed)"; acted=1
     else fail daemons 'restart claude-fleet-spinner.service'; fi
   fi
   [ "$acted" = 1 ] || say 'daemons: ok — nothing to reload on this login'
 }
 
+# resident — a version switch restarts every RESIDENT daemon (KeepAlive /
+# Restart=) this login runs, once (issue #2716). The interval ones re-read the
+# install each tick; a resident one keeps the code it started with until it is
+# restarted — cred-proxy and memguard ran the old version for a day after a
+# switch. Not one this apply already (re)loaded or kicked; a system LaunchDaemon
+# with no passwordless sudo is named, not failed (the doctor's `daemons-old`
+# row says which still runs old code). Nothing moved (from = to) ⇒ nothing.
+resident_units() { # launchd | systemd → the resident unit names this version ships
+  local f u
+  if [ "$1" = launchd ]; then
+    for f in "$ROOT"/launchd/com.claude-fleet.*.plist.tmpl; do
+      [ -f "$f" ] && grep -q '<key>KeepAlive</key>' "$f" || continue
+      u=${f##*/com.claude-fleet.}; printf '%s\n' "${u%.plist.tmpl}"
+    done
+  else
+    for f in "$ROOT"/systemd/claude-fleet-*.service; do
+      [ -f "$f" ] && grep -q '^Restart=' "$f" || continue
+      u=${f##*/claude-fleet-}; printf '%s\n' "${u%.service}"
+    done
+  fi
+}
+daemons_resident() {
+  local u shape label dst dom pre kicked='' skipped=''
+  [ "${from:-}" != "${to:-}" ] || return 0
+  if [ "$PLATFORM" = launchd ]; then
+    shape=$(fleet_daemon_shape "$LOGIN"); dom=$(fleet_daemon_domain "$shape")
+    pre=''; [ "$shape" = system ] && pre="$SUDO"
+  fi
+  for u in $(resident_units "$PLATFORM"); do
+    case " $RESTARTED " in *" $u "*) continue ;; esac
+    if [ "$PLATFORM" = launchd ]; then
+      label=$(fleet_daemon_label "$u" "$shape" "$LOGIN"); dst=$(fleet_daemon_plist "$u" "$shape" "$LOGIN")
+      [ -f "$dst" ] || continue
+      if [ "$DRY" = 1 ]; then kicked="$kicked $u"; continue; fi
+      if [ "$shape" = system ] && [ -n "$pre" ] && ! $pre true >/dev/null 2>&1; then skipped="$skipped $u"; continue; fi
+      if $pre "$LAUNCHCTL" kickstart -k "$dom/$label" >/dev/null 2>&1; then kicked="$kicked $u"
+      else fail daemons "kickstart -k $dom/$label (resident, after the switch)"; fi
+    else
+      [ -f "$SDIR/claude-fleet-$u.service" ] || continue
+      if run "$SYSTEMCTL" --user try-restart "claude-fleet-$u.service"; then kicked="$kicked $u"
+      else fail daemons "try-restart claude-fleet-$u.service (resident, after the switch)"; fi
+    fi
+  done
+  [ -n "$kicked" ] && say "daemons: $([ "$DRY" = 1 ] && echo 'would restart' || echo restarted) resident${kicked} (version ${from:0:7} -> ${to:0:7})"
+  [ -n "$skipped" ] && say "daemons: resident${skipped} still on ${from:0:7} — system LaunchDaemons, no passwordless sudo: sudo launchctl kickstart -k system/<label>"
+  return 0
+}
+
+RESTARTED=''
 BREW=$(brew_prefix)
 if [ "$NODAEMONS" = 0 ] && [ "$PLATFORM" = launchd ] && fleet_node_manages "$LOGIN"; then
   # issue #2332: the machine daemon runs this login's tasks from the runtime's
@@ -611,8 +661,8 @@ elif [ "$NODAEMONS" = 1 ]; then
   say 'daemons: skip — --no-daemons (nothing rendered, loaded or removed; the caller reports them)'
 else
   case "$PLATFORM" in
-    launchd) daemons_launchd ;;
-    systemd) daemons_systemd ;;
+    launchd) daemons_launchd; daemons_resident ;;
+    systemd) daemons_systemd; daemons_resident ;;
     *) say "daemons: skip — no launchd/systemd on this platform" ;;
   esac
 fi

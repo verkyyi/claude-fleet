@@ -250,9 +250,10 @@ out=$(run FLEET_NODE_UPGRADE_OS=Linux -- "$FULL" --status); rc=$?
 contains "G: macOS only" "$out" "macOS (launchd) only"
 
 # ── H doctor `agent` line ───────────────────────────────────────────────────
-DFILES="fleet-doctor.sh fleet-account.sh fleet-lib.sh usage-lib.sh fleet-quotawatch.sh fleet-hub-node.sh fleet-daemon-lib.sh fleet-node-upgrade.sh"
+DFILES="fleet-doctor.sh fleet-account.sh fleet-lib.sh usage-lib.sh fleet-quotawatch.sh fleet-hub-node.sh fleet-daemon-lib.sh fleet-node-upgrade.sh fleet-conf.sh"
 setup
 mkdir -p "$S/dbin" "$S/conf"
+printf 'FLEET_HOST=1\n' > "$S/conf/fleet.conf"   # it 承载: the row is a host's (issue #2716)
 for f in $DFILES; do [ -f "$BIN/$f" ] || fail "H: $f missing"; cp "$BIN/$f" "$S/dbin/"; done
 agent_line() {
   env HOME="$S/home" TMPDIR="$W" FLEET_SKIP_GLOBAL_CONF=1 FLEET_CONF_DIR="$S/conf" \
@@ -273,6 +274,11 @@ contains "H: PASS" "$out" "PASS  agent    5 login(s) on this machine run prod-bc
 rm -f "$S/up/com.ccquota.agent.a4"
 out=$(agent_line)
 contains "H: not restarted is behind" "$out" "1/5 login(s) behind stable prod-bc4e8e1: a4"
+# A client computer (承载 off) has no node agent of the fleet's to follow: no row.
+printf 'FLEET_HOST=0\n' > "$S/conf/fleet.conf"
+out=$(agent_line)
+[ -z "$out" ] || fail "H: 承载 off must print no agent line" "$out"; ok
+printf 'FLEET_HOST=1\n' > "$S/conf/fleet.conf"
 rm -f "$S/daemons/"* "$S/agents/"*
 out=$(agent_line)
 [ -z "$out" ] || fail "H: no agent service must print no agent line" "$out"; ok

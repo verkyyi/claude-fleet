@@ -546,6 +546,42 @@ run_ap --from "$P1" --to "$P2"
 contains 'P2 released: the unit is added again' "$OUT" 'daemons: added pnew'
 rm -rf "$WORK/fleet-node"
 
+# --- P3. resident daemons follow a switch (issue #2716) ------------------------------
+# A KeepAlive unit keeps the code it started with: any move restarts every one
+# this login has installed, once — not one the same apply (re)loaded, and nothing
+# when nothing moved (from = to).
+cat > "$R/launchd/com.claude-fleet.resid.plist.tmpl" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.claude-fleet.resid</string>
+  <key>ProgramArguments</key><array><string>/bin/bash</string><string>__HOME__/.claude/fleet/bin/resid.sh</string></array>
+  <key>KeepAlive</key><true/>
+</dict></plist>
+EOF
+printf '[Service]\nExecStart=__HOME__/x\nRestart=always\n' > "$R/systemd/claude-fleet-resid.service"
+R0=$(commit 'a resident unit')
+render "$R/launchd/com.claude-fleet.resid.plist.tmpl" > "$H/Library/LaunchAgents/com.claude-fleet.resid.plist"
+echo 'echo resid v2' > "$R/bin/resid.sh"
+R1=$(commit 'script only, a resident runs it')
+run_ap --from "$R0" --to "$R1"
+eq 'P3 exit' 0 "$RC"
+ok 'P3 resident kicked' "grep -qx 'launchctl kickstart -k gui/$(id -u)/com.claude-fleet.resid' '$LOG'"
+contains 'P3 says so' "$OUT" "daemons: restarted resident resid (version ${R0:0:7} -> ${R1:0:7})"
+run_ap --from "$R1" --to "$R1"
+ok 'P3 nothing moved -> no kick' "! grep -q 'kickstart -k gui/$(id -u)/com.claude-fleet.resid' '$LOG'"
+run_ap --from "$R0" --to "$R1" --dry-run
+ok 'P3 dry-run -> no launchctl' "! grep -q '^launchctl' '$LOG'"
+contains 'P3 dry-run says it would' "$OUT" 'daemons: would restart resident resid'
+rm -f "$H/Library/LaunchAgents/com.claude-fleet.resid.plist"
+run_ap --from "$R0" --to "$R1"
+ok 'P3 not installed -> no kick' "! grep -q 'com.claude-fleet.resid' '$LOG'"
+FLEET_INSTALL_PLATFORM=systemd run_ap --from "$R0" --to "$R1"
+ok 'P3 systemd: not installed -> no restart' "! grep -q 'claude-fleet-resid' '$LOG'"
+mkdir -p "$H/.config/systemd/user" && printf 'x\n' > "$H/.config/systemd/user/claude-fleet-resid.service"
+FLEET_INSTALL_PLATFORM=systemd run_ap --from "$R0" --to "$R1"
+ok 'P3 systemd: try-restart' "grep -qx 'systemctl --user try-restart claude-fleet-resid.service' '$LOG'"
+rm -f "$H/.config/systemd/user/claude-fleet-resid.service"
+
 # --- Q. settings (issue #1558) --------------------------------------------------------
 Q0=$(git -C "$R" rev-parse HEAD)
 printf '{"settings": {"permissions": {"defaultMode": "bypassPermissions"}}, "globalConfig": {"leftArrowOpensAgents": false}}\n' > "$R/conf/claude-settings.default.json"

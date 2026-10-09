@@ -22,6 +22,11 @@
 #      `quit --quiet --if-unattached` after the view only when the client was not
 #      running before (and nobody attached it since); a LOCAL placement attaches
 #      the client
+#   G  every one-session view goes too (issue #2716): a registered view (its
+#      pid file + its server) and an older version's unregistered one (only its
+#      server's socket, `fq-solo-<pid>`) — both servers and the view's process
+#      gone; a second hub loop named only by the lock goes with the one in the
+#      pid file; `--if-unattached` leaves everything while a terminal shows a view
 #   F  the guard (#1931): `fleet quit` / `fleet status` / `fleet-shell.sh quit`
 #      start no client; a bare `fleet-shell.sh` still does
 #
@@ -62,6 +67,8 @@ if [ "\$1" = -L ]; then l=\$2; shift 2; exec $REAL_TMUX -S $W/s/"\$l" "\$@"; fi
 exec $REAL_TMUX "\$@"
 EOF
 chmod +x "$W/path/tmux"
+mkdir -p "$W/tt" && ln -s "$W/s" "$W/tt/tmux-$(id -u)"   # tmux's socket dir, as the shim lays it out
+export TMUX_TMPDIR="$W/tt"
 export PATH="$W/path:$PATH" HOME="$W/home" FLEET_CONF_DIR="$W/conf" FLEET_UI_LANG=zh \
        FLEET_SHELL_SESSION=fq FLEET_SHELL_CACHE="$W/cache" FLEET_CLIENT_LEASE_CMD="$W/lease.sh"
 unset TMUX TMUX_PANE FLEET_CLIENT_LAYOUT
@@ -183,6 +190,36 @@ eq "E --if-unattached: an attached client is left running" "$(T has-session -t =
 tmux -L fq-term kill-server 2>/dev/null; sleep 0.2
 bash "$BIN/fleet-shell.sh" quit fq --quiet --if-unattached
 eq "E --if-unattached: with no terminal on it, it goes" "$(T has-session -t =fq 2>/dev/null; echo $?)" 1
+
+# --- G ---------------------------------------------------------------------------
+: > "$W/lease.log"
+up
+bash "$W/fake/fleet-shell.sh" solo m5 F/w1 & SV=$!
+bash "$W/fake/fleet-hub-sessions.sh" --loop & H2=$!
+PIDS="$PIDS $SV $H2"; disown $SV $H2 2>/dev/null
+tmux -L "fq-solo-$SV" -f /dev/null new-session -d -s "fq-solo-$SV" "sleep 600"
+tmux -L fq-solo-111 -f /dev/null new-session -d -s fq-solo-111 "sleep 600"   # an older version's: no pid file
+mkdir -p "$CL/solo" && printf '%s\n' "$SV" > "$CL/solo/fq-solo-$SV.pid"
+printf '%s\n' "$H2" > "$G/hubsess.lock"
+sleep 0.3
+# a terminal on the view: fleet claude's own quit leaves everything
+tmux -L fq-term -f /dev/null new-session -d -s t -x 80 -y 20 "env -u TMUX $REAL_TMUX -S $W/s/fq-solo-111 attach -t fq-solo-111"
+n=0; while [ -z "$(tmux -L fq-solo-111 list-clients 2>/dev/null)" ] && [ "$n" -lt 50 ]; do sleep 0.1; n=$((n + 1)); done
+bash "$BIN/fleet-shell.sh" quit fq --quiet --if-unattached
+eq "G --if-unattached: a terminal on a view keeps the client" "$(T has-session -t =fq 2>/dev/null; echo $?)" 0
+eq "G …and the view" "$(tmux -L fq-solo-111 has-session 2>/dev/null; echo $?)" 0
+tmux -L fq-term kill-server 2>/dev/null; sleep 0.2
+out=$(sh "$BIN/fleet" quit 2>&1); rc=$?
+eq "G fleet quit: exit 0" "$rc" 0
+eq "G the registered view's server gone" "$(tmux -L "fq-solo-$SV" has-session 2>/dev/null; echo $?)" 1
+eq "G the older version's view server gone" "$(tmux -L fq-solo-111 has-session 2>/dev/null; echo $?)" 1
+sleep 0.3
+eq "G the view's process gone" "$(alive "$SV" && echo alive || echo gone)" gone
+eq "G its registration gone" "$(ls "$CL/solo" 2>/dev/null | wc -l | tr -d ' ')" 0
+eq "G the hub loop in the pid file gone" "$(alive "$H" && echo alive || echo gone)" gone
+eq "G the second hub loop, named by the lock, gone" "$(alive "$H2" && echo alive || echo gone)" gone
+eq "G the client's server gone" "$(T has-session -t =fq 2>/dev/null; echo $?)" 1
+kill "$WM" "$OTHER" 2>/dev/null
 
 # --- F ---------------------------------------------------------------------------
 g() { printf '{"tool_name":"Bash","tool_input":{"command":"%s"}}' "$1" \
