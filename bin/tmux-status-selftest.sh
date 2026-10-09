@@ -378,6 +378,7 @@ out=''; url=''; auth=''; prev=''
 for a in "\$@"; do
   [ "\$prev" = -o ] && out=\$a
   case "\$a" in http*) url=\$a ;; Authorization:*) auth=token ;; esac
+  [ "\$prev" = -K ] && [ "\$a" = - ] && grep -q Authorization && auth=token   # the bearer on stdin (#2630)
   prev=\$a
 done
 printf '%s %s\n' "\${url#http://hub.test}" "\${auth:-cert}" >> '$WORK/curl.log'

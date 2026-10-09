@@ -161,11 +161,15 @@ case "$*" in *show-option*@repo_fold*) [ -n "${REPO_FOLD:-}" ] && printf '%s\n' 
 exit 0
 SHIM
 # network tools: every call logged (argv verbatim — printf, since /bin/sh's echo
-# would turn a JSON body's `\n` into newlines), every call refused
+# would turn a JSON body's `\n` into newlines), every call refused. A config on
+# stdin (`curl -K -`: how a bearer travels since #2630, never in argv) is logged
+# after the argv, on the same line.
 for n in curl wget nc ccquota; do
   cat > "$WORK/bin/$n" <<SHIM
 #!/bin/sh
-printf '%s %s\n' '$n' "\$*" >> "\$NET_LOG"
+cfg=''
+case " \$* " in *" -K - "*) cfg=" \$(cat)" ;; esac
+printf '%s %s%s\n' '$n' "\$*" "\$cfg" >> "\$NET_LOG"
 exit 1
 SHIM
 done
