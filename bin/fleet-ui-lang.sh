@@ -857,6 +857,8 @@ fleet_ui_t() {
     en:orch_queue_thinking)     printf 'the next step' ;;
     zh:orch_queue_qd)           printf '快速派发' ;;
     en:orch_queue_qd)           printf 'quick dispatch' ;;
+    zh:orch_queue_idle)         printf '说一句即派 · /qd 或 ⌘T 快速派单' ;;
+    en:orch_queue_idle)         printf 'one line dispatches it · /qd or ⌘T for a quick dispatch' ;;
     zh:orch_queue_row_fmt)      printf '排队 %s' "${1:-}" ;;
     en:orch_queue_row_fmt)      printf '%s queued' "${1:-}" ;;
     zh:orch_busy_hint)          printf '编排在忙 · 你说的会排到它这一步做完' ;;
@@ -875,6 +877,29 @@ fleet_ui_t() {
     en:compose_nolist)          printf 'no task list found: sending straight to the hub' ;;
     zh:compose_result_fmt)      printf '入口回话：%s' "${1:-}" ;;
     en:compose_result_fmt)      printf 'the hub says: %s' "${1:-}" ;;
+    # ⌘T 派一件事 (issue #2753, bin/fleet-quick-dispatch.py)
+    zh:dispatch_field_title)    printf '派一件事' ;;
+    en:dispatch_field_title)    printf 'Dispatch' ;;
+    zh:dispatch_field_repo)     printf '仓库' ;;
+    en:dispatch_field_repo)     printf 'repo' ;;
+    zh:dispatch_field_codex)    printf '交给 Codex' ;;
+    en:dispatch_field_codex)    printf 'hand it to Codex' ;;
+    zh:dispatch_keys)           printf '↵ 建单并开工 · Tab 下一项 · ←→ 换仓库 · ⌃X Codex · esc 关' ;;
+    en:dispatch_keys)           printf '↵ file + start · Tab next · ←→ repo · ⌃X Codex · esc close' ;;
+    zh:dispatch_norepo)         printf '还没有可派的仓库（入口还没说这台电脑的机器托管哪些仓库）' ;;
+    en:dispatch_norepo)         printf 'no repo to dispatch to yet (the hub has not said which repos your machines host)' ;;
+    zh:dispatch_sending)        printf '发出中…' ;;
+    en:dispatch_sending)        printf 'sending…' ;;
+    zh:popup_dispatch)          printf '派一件事' ;;
+    en:popup_dispatch)          printf 'Dispatch' ;;
+    zh:sidebar_dispatch_done_fmt) printf '已建 #%s 并开工' "${1:-}" ;;
+    en:sidebar_dispatch_done_fmt) printf 'filed #%s and started its worker' "${1:-}" ;;
+    zh:sidebar_dispatch_started_fmt) printf '已开工：%s' "${1:-}" ;;
+    en:sidebar_dispatch_started_fmt) printf 'started: %s' "${1:-}" ;;
+    zh:panel_dispatch)          printf '⚡ 派一件事…' ;;
+    en:panel_dispatch)          printf '⚡ Dispatch a task…' ;;
+    zh:keys_switch_dispatch)    printf %s '派一件事：一行标题 + 仓库（默认上次用的）+ 可选交给 Codex，↵ 建单并开工；任何窗口都能按，不经过模型' ;;
+    en:keys_switch_dispatch)    printf %s 'dispatch: a title + a repo (the last one used) + optionally Codex, ↵ files it and starts its worker; from any window, no model on the way' ;;
     # the questions asked on the input line instead of a popup (issue #1620)
     zh:sidebar_ask_new)         printf '新任务› ' ;;
     en:sidebar_ask_new)         printf 'task› ' ;;

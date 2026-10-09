@@ -1518,6 +1518,12 @@ def compose_told(plan, done):
         toast, ask = done(rc, text)
         if plan.get("state") in ("opened", "await"):
             compose_tell(plan, True)
+            if plan.get("via") == "dispatch" and not toast:
+                # ⌘T (issue #2753): the popup is gone — say what was filed
+                # (fleet-compose.py --send's `filed: #N` line), else what started
+                num = re.search(r"^filed: #(\d+)", text, re.M)
+                toast = (tr("sidebar_dispatch_done_fmt", num.group(1)) if num
+                         else tr("sidebar_dispatch_started_fmt", plan.get("title", "")))
         else:
             compose_tell(plan, False, toast or (ask.prompt if ask is not None else "") or last_line(text))
         return toast, ask
@@ -3124,7 +3130,7 @@ def ui(screen, session, worker, lock):
         plan = {"verb": "compose", "what": "new" if data.get("issue", True) else "scratch",
                 "title": data.get("title", ""), "name": "", "payload": str(dst),
                 "node": data.get("node") or "auto",   # the machine picked in the area (#2232); null = auto
-                "cid": data.get("id", ""), "at": data.get("at", 0),
+                "cid": data.get("id", ""), "at": data.get("at", 0), "via": data.get("via") or "",
                 "label": data.get("node") or "", "repo": data.get("repo") or repo_of(base, data.get("prev") or "")}
         if ("repo" in data and data["repo"] is None) or data.get("repo_mode") in ("none", "multi"):
             # HOME (repo null, issue #2231; an older area's 「不关联仓库」 /

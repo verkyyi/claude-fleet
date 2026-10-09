@@ -13,7 +13,8 @@
 // Two readers, one count:
 // - the band above the prompt: progress.tsx draws 「排队 N 条 · 在忙 X（已 M 秒）·
 //   /qd 直接派」 in the same AbovePrompt tree as the PR segment (one site, one
-//   tree), plus a button that opens /qd;
+//   tree), plus a button that opens /qd; idle (no turn, nothing waits) a dim
+//   「说一句即派 · /qd 或 ⌘T 快速派单」 there instead (issue #2753);
 // - the window option `@orch_queue` (0 at the start, so a counting orchestrator
 //   always says a number), which fleet-control-read.sh carries as the inventory's
 //   `orchq=` and fleet-hub-sessions.sh as `orch_<sess>`'s 7th column — the
@@ -50,6 +51,12 @@ export function queueText(q: OrchQueue): string {
   if (q.n <= 0) return ''
   const secs = q.since > 0 && q.now >= q.since ? String(Math.floor((q.now - q.since) / 1000)) : '0'
   return t('orch_queue_fmt', String(q.n), q.what !== '' ? q.what : t('orch_queue_thinking'), secs)
+}
+
+/** The idle line (issue #2753): no turn running, nothing waits — say how to
+ *  dispatch in one go (a line ↵ here, or /qd · ⌘T past the model); '' otherwise. */
+export function idleText(q: OrchQueue): string {
+  return q.n <= 0 && q.since === 0 ? t('orch_queue_idle') : ''
 }
 
 /** A submission that counts: typed by hand over a running turn, not /qd itself. */

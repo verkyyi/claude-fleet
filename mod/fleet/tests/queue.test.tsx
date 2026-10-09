@@ -10,7 +10,7 @@ import type { On, RenderPropsOf, TurnStepInput } from 'claude-code'
 
 import { isRoleRun, resetRole } from '../hooks/orchestrator'
 import { isStringsRun } from '../hooks/qd'
-import { QUEUE_OPTION, counts, queueText, resetQueue } from '../hooks/queue'
+import { QUEUE_OPTION, counts, idleText, queueText, resetQueue } from '../hooks/queue'
 import { SUPPORTED } from '../hooks/version'
 
 const START = { cwd: '/tmp', surface: 'terminal', isInteractive: true } as const
@@ -20,6 +20,7 @@ const NOW = 1_000_000_000_000
 const DUMP = [
   'orch_queue_fmt', '排队 \u0001 条 · 在忙 \u0001（已 \u0001 秒）· /qd 直接派',
   'orch_queue_thinking', '想下一步', 'orch_queue_qd', '快速派发',
+  'orch_queue_idle', '说一句即派 · /qd 或 ⌘T 快速派单',
 ].join('\0') + '\0'
 
 function engine(on: On, windowRole = 'orchestrator') {
@@ -153,6 +154,24 @@ test('idle prompts and a peer delivery do not count; the band button opens /qd',
   await ui.press({ key: 'fleet-queue-qd' })
   await ui.unmount()
   expect(m.commands).toContain('qd')
+})
+
+test('idle (issue #2753): 「说一句即派 · /qd 或 ⌘T 快速派单」, gone while a turn runs', async ($, on) => {
+  fresh()
+  engine(on)
+  await $.session.start(START)
+  const idle = async () => {
+    const ui = await $.ui.mount({ plugin: 'fleet', surface: 'terminal', component: 'AbovePrompt', props: band() })
+    const text = (await ui.find({ key: 'fleet-idle' }))?.text
+    await ui.unmount()
+    return text
+  }
+  expect(idleText({ n: 0, since: 0, what: '', now: NOW })).not.toBe('')
+  expect(await idle()).toContain('⌘T')
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  expect(await idle()).toBeUndefined()
+  await $.turn.complete(COMPLETE)
+  expect(await idle()).toContain('/qd')
 })
 
 test('not the orchestrator: nothing counted, nothing stamped, nothing drawn', async ($, on) => {

@@ -146,8 +146,22 @@ ok
 # rows first; the list's rows carry 单号 · PR · 回收方式 (rows_text ⇄ parse_rows).
 tmux -S "$SOCK" set-option -g @fleet_layout solo
 out=$(Q panel-cmds)
-[ "$(printf '%s\n' "$out" | cut -f1 | tr '\n' ' ')" = "quit new:claude new:codex layout:multi rename-current " ] \
-  || fail "E: > does not start with 退出 · 新会话 claude / codex · the layout flip · 改名当前会话" "$out"; ok
+[ "$(printf '%s\n' "$out" | cut -f1 | tr '\n' ' ')" = "dispatch quit new:claude new:codex layout:multi rename-current " ] \
+  || fail "E: > does not start with 派一件事 (#2753) · 退出 · 新会话 claude / codex · the layout flip · 改名当前会话" "$out"; ok
+printf '%s\n' "$out" | grep -qx 'dispatch	⚡ 派一件事…	!dispatch' || fail "E: > has no ⚡ 派一件事… (#2753)" "$out"; ok
+# ⌘P's pinned group (issue #2753): 派一件事 first, then + 新会话 · the flip · 退出, a
+# rule under them — no `>` needed; a query keeps the ones it names
+python3 - "$BIN" <<'PY2' || exit 1
+import importlib.util, os, sys
+spec = importlib.util.spec_from_file_location("q", os.path.join(sys.argv[1], "fleet-quickopen.py"))
+q = importlib.util.module_from_spec(spec); spec.loader.exec_module(q)
+top = q.top_lines("", "multi")
+assert [a[1][0] if a[0] == "act" else a[0] for a in top] == ["dispatch", "new", "layout:solo", "quit", "sep"], top
+assert top[0] == ("act", ("dispatch", "⚡ 派一件事…")), top
+assert [a[1][0] for a in q.top_lines("派", "solo") if a[0] == "act"] == ["dispatch"], q.top_lines("派", "solo")
+assert q.top_lines("zzzz", "multi") == [], "a query that names none: no group, no rule"
+PY2
+ok
 printf '%s\n' "$out" | grep -qx "quit	退出 fleet（会话在后台继续）	!quit" || fail "E: 退出 fleet is not the client's own quit (#2349)" "$out"; ok
 printf '%s\n' "$out" | grep -qx 'new:codex	新会话 · codex	!new:codex' || fail "E: 新会话 · codex" "$out"; ok
 tmux -S "$SOCK" set-option -g @fleet_layout multi

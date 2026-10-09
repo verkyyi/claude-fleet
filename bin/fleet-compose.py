@@ -445,6 +445,12 @@ def send(path, repo="", node="", reap="", mode="", agent=""):
                 except OSError:
                     pass
     sys.stdout.write(out.stdout)
+    # the issue a `new` filed (issue #2753 — ⌘T's 「已建 #N 并开工」), on stderr:
+    # stdout stays the place's one line
+    num = re.search(r"/issues/(\d+)|^#?(\d+)$|^issue-(\d+)$", opened.get("filed") or "") or \
+        re.search(r"(?:^|:)issue-(\d+)$", opened.get("key") or "")
+    if out.returncode == 0 and num:
+        print("filed: #%s" % next(g for g in num.groups() if g), file=sys.stderr)
     line = next((l for l in reversed(out.stdout.splitlines()) if l.split(" ", 1)[0] in PLACE_WORDS), "")
     words = line.partition("\t")[0].split()
     remote = words[:1] == ["REMOTE"]

@@ -14,6 +14,7 @@ keyboard on the list.
 | back / forward through the sessions you were on | ⌘[ ⌘] | prefix h / l | a closed session is stepped over |
 | zoom the right pane | ⌘↩ | F9 | again to restore |
 | sessions and actions (also ⌘K / prefix s, issue #2365) | ⌘P | prefix / | type a few letters, ↵ — below |
+| 派一件事: one line + a repo, ↵ files it and starts its worker, from any window (issue #2753) | ⌘T | prefix t | below |
 | a new task: the writing area on the right | ⌘N | prefix c | below |
 | the orchestrating session ⇄ the writing area (issue #2146) | ⌘N again | prefix c again | only with an orchestrator; also the 「新任务」 row's right-click menu |
 | open / shut the sub-tasks of the session in view (issue #2167) | ⌘. | prefix . | on a sub-task: shuts its parent |
@@ -44,6 +45,18 @@ in four keys.
 From a zoomed session, ⌘↓ ⌘↑ ⌘[ ⌘] unzoom first (⌘P keeps the zoom while you
 pick). With no task list on screen they do nothing — prefix h is then still
 «the machine before», as prefix q.
+
+**派一件事** (issue #2753): ⌘T — or prefix t, or ⌘P's first line 「⚡ 派一件事…」 —
+from any window (a worker's, the orchestrator's, Claude or Codex, a bare shell, a
+session on another machine) opens a small popup (`bin/fleet-quick-dispatch.py`): a
+title, the repo (the one your last task went to; ←→ when there are several) and
+「交给 Codex」 (⌃X). ↵ writes the writing area's own payload and hands the list
+`compose`, exactly as the writing area's ↵ does — no model and no orchestrator
+queue on the way — so the list draws 「开工中…」, switches to the new session's
+row when it shows, and says 「已建 #N 并开工」. `/qd` in the orchestrator's window
+is the same thing from inside it (fleet-issue-file.sh either way). ⌘P's top group
+— 派一件事 · + 新会话 · the layout flip · 退出 fleet — needs no `>`; an empty ⌘P
+still lights the session before, so ↵ there is «the one before» as it was.
 
 **A new task** (issue #1953): ⌘N — or prefix c, or a tap on the list's first row
 「+ 新任务」 — turns the right pane into the writing area (`bin/fleet-compose.py`,
@@ -174,7 +187,7 @@ k) do the same jobs if a key does not arrive.*
 **The bar** (issue #2365) holds three things: who is signed in (the GitHub login
 off `fleet login`'s certificate — orange, with why, when the hub cannot be asked
 or refuses this computer), the ⟳ slot, and the keys of WHERE THE KEYBOARD IS — in
-a session `⌘P 会话与动作 · ⌘N 新任务 · ⌘↑↓ 切换 · ⌘Q 退出 fleet`, in the writing
+a session `⌘P 会话与动作 · ⌘T 派单 · ⌘N 新任务 · ⌘↑↓ 切换 · ⌘Q 退出 fleet`, in the writing
 area its keys, in ⌘P the panel's, with the prefix pressed the prefix keys. It is
 the same whichever list row is lit. No quota, no 「N 等你」 (the list's red `!` and
 ⌘P's order say who waits), no machine or issue of the row in view (⌘P and
