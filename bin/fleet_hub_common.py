@@ -300,9 +300,16 @@ def inventory_row(parts):
     count (Codex, no mod).
     Column 32 (issue #2670, EPIC #2668 C2): `orchdec=<n>` — the steward's decision
     sheet rows still open (@orch_decide on the orchestrator) → `orch_decide` (an
-    int); absent unless the steward stamped one. `role=steward` is its steward."""
+    int); absent unless the steward stamped one. `role=steward` is its steward.
+    Column 33 (issue #2672, EPIC #2668 C4): `orchtodo=<n>` — the steward's 待你动手
+    rows still open (@orch_todo) → `orch_todo` (an int); it follows orchdec= when
+    both are written, so it is read first."""
     parts = list(parts)
     extra = {}
+    if len(parts) >= 32 and parts[-1].startswith("orchtodo="):
+        d = parts.pop()[9:]
+        if re.fullmatch(r"[0-9]{1,4}", d):
+            extra["orch_todo"] = int(d)
     if len(parts) >= 32 and parts[-1].startswith("orchdec="):
         d = parts.pop()[8:]
         if re.fullmatch(r"[0-9]{1,4}", d):

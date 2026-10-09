@@ -10,6 +10,7 @@
 #   fleet-ticket.sh read     <id> [--json f,g] [--max-age S]   → fleet-gh.sh issue view (cache first)
 #   fleet-ticket.sh comment  <id> [--to-worker|--note] [--close] (--body T | --body-file F)
 #                                                              → fleet-comment.sh (marker + footer)
+#   fleet-ticket.sh edit     <id> (--body T | --body-file F|-)    → gh issue edit --body via fleet_gh_write
 #   fleet-ticket.sh state    <id> open|closed [--reason completed|not_planned]
 #                                                              → gh issue reopen|close via fleet_gh_write
 #   fleet-ticket.sh children <id>                              → one `gh:<repo>#<N>\t<state>` per sub-issue
@@ -40,7 +41,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/fleet-gh-lib.sh"
 
 die() { printf 'fleet-ticket: %s\n' "$1" >&2; exit "${2:-1}"; }
-usage() { sed -n '9,22p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '9,23p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 # ticket_parse <id> → `<owner/name>\t<N>`; rc 2 = not an id this batch reads.
 ticket_parse() {
@@ -118,6 +119,32 @@ case "$verb" in
     esac
     printf '%s\n' "$want" ;;
 
+  edit)
+    # A desk ticket's body is its list (the steward's 「待你动手」, issue #2672):
+    # replaced whole, through the one write throttle.
+    p=$(ticket_parse "${1:-}") || exit 2; shift
+    ebody=''; efile=''
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --body)      ebody="${2-}"; efile=''; shift; [ "$#" -gt 0 ] && shift ;;
+        --body-file) efile="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
+        *) die "edit: unknown argument '$1'" 2 ;;
+      esac
+    done
+    if [ "$efile" = - ]; then ebody=$(cat); efile=''; fi
+    [ -z "$efile" ] || [ -r "$efile" ] || die "edit: cannot read $efile" 2
+    if [ -z "$efile" ]; then
+      [ -n "$ebody" ] || die "edit: say --body or --body-file" 2
+      efile=$(mktemp "${TMPDIR:-/tmp}/fleet-ticket-edit.XXXXXX") || die "edit: no temp file"
+      printf '%s\n' "$ebody" > "$efile"
+      fleet_gh_write issue edit "${p#*	}" --repo "${p%%	*}" --body-file "$efile" >/dev/null; rc=$?
+      rm -f "$efile"
+    else
+      fleet_gh_write issue edit "${p#*	}" --repo "${p%%	*}" --body-file "$efile" >/dev/null; rc=$?
+    fi
+    [ "$rc" = 0 ] || die "could not edit the ticket"
+    printf 'edited\n' ;;
+
   children)
     p=$(ticket_parse "${1:-}") || exit 2
     out=$(fleet_sub_issues "${p%%	*}" "${p#*	}") || die "could not read the sub-issues of gh:${p%%	*}#${p#*	}"
@@ -161,5 +188,5 @@ case "$verb" in
     printf '%s\t%s\n' "$id" "$url" ;;
 
   -h|--help|help) usage ;;
-  *) die "unknown verb '$verb' — read|comment|state|children|evidence|new|parse" 2 ;;
+  *) die "unknown verb '$verb' — read|comment|edit|state|children|evidence|new|parse" 2 ;;
 esac

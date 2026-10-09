@@ -237,8 +237,11 @@ What earns its place, in page order:
    and there is **no row**: stable already contains the batch's last merge, or
    this is not the repo that carries `bin/fleet-stable.sh` (a team repo's own
    `stable` tag is not ours to talk about). The row hands the operator
-   `fleet-stable.sh move <sha>` to paste; **the report never runs it** — moving
-   stable is what puts a version on every login, and that call is theirs.
+   `fleet-stable.sh move <sha>` to paste; **the report never runs it**. Its
+   `mark:` line goes into the durable comment verbatim (issue #2672): the
+   steward reads it, merges every batch's into ONE 「待你动手」 row and runs the
+   move once the release gates are green and no batch holds the install
+   (EPIC #2668 发起人拍板 5) — never the report, never the driver.
 5. **运行情况** (`#ops`) — **folded, complete, last.** 墙钟 · 执行会话占用时长 ·
    额度曲线（annotated where an account was benched or a window was waited out —
    the waits are where the batch's wall-clock went）· 甘特, plus the PR-merge
