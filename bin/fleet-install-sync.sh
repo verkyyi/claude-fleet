@@ -623,7 +623,7 @@ settle() {
   [ -f "$slog" ] || return 0
   end=$(( t0 + budget ))
   while :; do
-    m=$(stat -f %m "$slog" 2>/dev/null || stat -c %Y "$slog" 2>/dev/null)
+    m=$(stat -c %Y "$slog" 2>/dev/null || stat -f %m "$slog" 2>/dev/null)  # GNU first: its -f is the filesystem
     case "$m" in ''|*[!0-9]*) return 0 ;; esac
     [ "$m" -gt "$t0" ] && return 0
     [ "$(now)" -lt "$end" ] || break
