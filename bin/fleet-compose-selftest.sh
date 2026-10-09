@@ -85,7 +85,8 @@
 #      orchestrator, no portal window made; no orch_fcs: the hub is asked
 #      (fleet-hub-write.sh orch_ensure) and the stage goes once orch_fcs shows;
 #      the bar says 「正在叫起编排会话…」 meanwhile, and why when it never came
-#      (the write's refusal, else 「等了 N 秒还没出现」)
+#      (the write's refusal, else 「等了 N 秒还没出现」); the window's @cc_agent is
+#      the cache row's agent (issue #2619: a Codex orchestrator reads codex)
 # tmux / python3 absent → SKIP (exit 0). Exit 0 = pass. FCS_KEEP=1 keeps the work dir.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -655,12 +656,17 @@ st0=$(st_ list-windows -t fcs-stage -F '#{window_id} #{@fleet_role} #{@remote}' 
 st_ select-window -t "$st0"
 np=$(portal | grep -c .)
 : > "$VIEW"
+# its agent too (issue #2619): the list's cache row (remote_fcs, field 7) says codex
+printf 'wid:U/orch%sm4%sonline%s%s%sworking%scodex%sorch%s%s%s0%s%s%s%s%s\n' "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" > "$FLEET_STATUS_G/remote_fcs"
 type_ '\033[928~'
 CHECKS=$((CHECKS + 1)); n=0; while [ "$(st_ display-message -p -t fcs-stage: '#{@remote}')" != m4:U/orch ] && [ $n -lt 50 ]; do sleep .1; n=$((n + 1)); done
 eq 'T: ⌘N → the stage on the orchestrator' m4:U/orch "$(st_ display-message -p -t fcs-stage: '#{@remote}')"
 CHECKS=$((CHECKS + 1)); n=0; while [ "$(st_ display-message -p -t fcs-stage: '#{@fleet_role}')" != orchestrator ] && [ $n -lt 40 ]; do sleep .1; n=$((n + 1)); done
 eq 'T: …its window told by @fleet_role orchestrator' orchestrator "$(st_ display-message -p -t fcs-stage: '#{@fleet_role}')"
 eq 'T: …no writing area made or shown' "$np" "$(portal | grep -c .)"
+CHECKS=$((CHECKS + 1)); n=0; while [ "$(st_ display-message -p -t fcs-stage: '#{@cc_agent}')" != codex ] && [ $n -lt 30 ]; do sleep .1; n=$((n + 1)); done
+eq 'T: …and its @cc_agent the cache'"'"'s (a Codex orchestrator)' codex "$(st_ display-message -p -t fcs-stage: '#{@cc_agent}')"
+rm -f "$FLEET_STATUS_G/remote_fcs"
 # none running: the hub is asked, the stage goes once orch_fcs shows
 rm -f "$FLEET_STATUS_G/orch_fcs"
 st_ select-window -t "$st0"
