@@ -40,7 +40,18 @@
 # for every live fleet, and fleet-up.sh calls it after home is built — so a window
 # closed by hand (or by anything) is open again on the next tick, resuming the
 # same Claude conversation when its transcript is still on disk (the id kept in
-# $FLEET_CONF_DIR/fleets/<sess>/orchestrator.sid). Restore, migrate and move treat
+# $FLEET_CONF_DIR/fleets/<sess>/orchestrator.sid).
+#
+# And it comes back AS IT WAS (issue #2585, EPIC #2581 C4). A Claude orchestrator
+# whose agent exited — /exit, a crash, a killed process — sits on the wrapper's
+# recovery page with the window still open; once it has sat there
+# FLEET_ORCH_REVIVE_SECS (default 30; `off` keeps the page) the next `ensure`
+# respawns that pane in place (same window, same @fleet_id) on the same
+# conversation (the window's @cc_session_id, else orchestrator.sid). A resumed
+# conversation is handed a first turn, ORCH_RESUME_SEED: SessionStart (resume)
+# has just injected the saved state (bin/fleet-orchestrator-state.py, C2) and the
+# seed makes the session act on its next step — re-arm the Loop, say the batch —
+# with nobody typing. Codex keeps its page and its seed (convention 5). Restore, migrate and move treat
 # it as a panel: never snapshotted, never moved off its machine — `ensure` is how
 # it comes back.
 #
@@ -162,8 +173,21 @@ case "$ans" in
     exit 5 ;;
 esac
 
+# orch_exited <window id> — a Claude orchestrator on the wrapper's recovery page
+# for FLEET_ORCH_REVIVE_SECS or longer: rc 0 = revive it.
+orch_exited() {
+  local grace=${FLEET_ORCH_REVIVE_SECS:-30} st ts ag
+  case "$grace" in off) return 1 ;; ''|*[!0-9]*) grace=30 ;; esac
+  IFS='|' read -r st ts ag <<EOF2
+$(T display-message -p -t "$1" '#{@claude_state}|#{@claude_state_ts}|#{@cc_agent}' 2>/dev/null)
+EOF2
+  [ "$st" = exited ] && [ "$ag" != codex ] || return 1
+  case "$ts" in ''|*[!0-9]*) ts=0 ;; esac
+  [ $(( $(date +%s) - ts )) -ge "$grace" ]
+}
+
 w=$(orch_find)
-[ -n "$w" ] && { printf '%s\n' "$w"; exit 0; }
+[ -n "$w" ] && ! orch_exited "$w" && { printf '%s\n' "$w"; exit 0; }
 
 # One opener at a time (the tick and fleet-up can meet): a lock dir, taken over
 # when it is older than a minute (an opener that died holding it).
@@ -175,12 +199,15 @@ if ! mkdir "$LOCK" 2>/dev/null; then
 fi
 trap 'rmdir "$LOCK" 2>/dev/null' EXIT
 w=$(orch_find)
-[ -n "$w" ] && { printf '%s\n' "$w"; exit 0; }
+[ -n "$w" ] && ! orch_exited "$w" && { printf '%s\n' "$w"; exit 0; }
 
 AGENT=${FLEET_AGENT:-claude}
 case "$AGENT" in claude|codex) ;; *) AGENT=claude ;; esac
 SIDF="$DIR/orchestrator.sid"
 SEED='/fleet-orchestrate'
+# The first turn of a RESUMED conversation (issue #2585): SessionStart (resume)
+# injects the saved state; this makes the session act on it.
+ORCH_RESUME_SEED='[fleet orchestrator] 会话刚被 fleet 接回（退出、崩溃或重启之后）。照上面「fleet orchestrator state」摘要的下一步做：先重新 arm 循环，再一句话报出当前批次和未读回报；没有摘要就先用 mcp__fleet__children 看一眼子会话。'
 args="--agent $AGENT"; sid=''
 if [ "$AGENT" = claude ]; then
   model=${FLEET_ORCH_MODEL-fable}
@@ -196,9 +223,17 @@ if [ "$AGENT" = claude ]; then
   [ -n "$model" ] && args="$args --model $(printf '%q' "$model")"
   args="$args --effort $(printf '%q' "${FLEET_ORCH_EFFORT:-high}")"
   # the same conversation when it is still on disk, else a new one
+  proj="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/$(fleet_mangle_path "$HOME")"
   sid=''; [ -f "$SIDF" ] && sid=$(LC_ALL=C tr -cd '0-9a-f-' < "$SIDF")
-  if [ -n "$sid" ] && [ -f "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/$(fleet_mangle_path "$HOME")/$sid.jsonl" ]; then
-    args="$args --resume $sid"; SEED=''
+  # a window being revived: the conversation it last ran (↵ r may have started a new one)
+  if [ -n "$w" ]; then
+    wsid=$(T display-message -p -t "$w" '#{@cc_session_id}' 2>/dev/null | LC_ALL=C tr -cd '0-9a-f-')
+    if [ -n "$wsid" ] && [ "$wsid" != "$sid" ] && [ -f "$proj/$wsid.jsonl" ]; then
+      sid=$wsid; printf '%s\n' "$sid" > "$SIDF"
+    fi
+  fi
+  if [ -n "$sid" ] && [ -f "$proj/$sid.jsonl" ]; then
+    args="$args --resume $sid"; SEED=$ORCH_RESUME_SEED
   else
     sid=$(fleet_fid_mint) || sid=''
     [ -n "$sid" ] && { printf '%s\n' "$sid" > "$SIDF"; args="$args --session-id $sid"; }
@@ -222,9 +257,20 @@ envs=''
 [ -n "${FLEET_WRAP_LAUNCH:-}" ] && envs="env FLEET_WRAP_LAUNCH=$(printf '%q' "$FLEET_WRAP_LAUNCH") "
 # the window says what it is BEFORE the launcher reads its conf (fleet_win_stamp_cmd)
 stamp=$(fleet_win_stamp_cmd @fleet_role orchestrator @norepo 1 ${sid:+@norepo_sid "$sid"})
+launch="$stamp$envs'$BIN/fleet-session-wrap.sh' $args$seed; exec \$SHELL"
+if [ -n "$w" ]; then
+  # revive in place (issue #2585): the page's wrapper goes, the window and its
+  # identity stay; a reader that sees the state cleared sees the new launch
+  T respawn-pane -k -t "$w" -c "$HOME" "$launch" 2>/dev/null || exit 1
+  T set-window-option -t "$w" @claude_state '' \; set-window-option -t "$w" @claude_state_ts "$(date +%s)" 2>/dev/null
+  [ -n "$sid" ] && T set-window-option -t "$w" @norepo_sid "$sid" 2>/dev/null
+  printf 'revived %s\n' "$w" >&2
+  printf '%s\n' "$w"
+  exit 0
+fi
 name=$(sh "$BIN/fleet-ui-lang.sh" t orch_window 2>/dev/null); [ -n "$name" ] || name=编排
 w=$(T new-window -d -P -F '#{window_id}' -t "=$SESS:" -n "$name" -c "$HOME" \
-      "$stamp$envs'$BIN/fleet-session-wrap.sh' $args$seed; exec \$SHELL" 2>/dev/null) || exit 1
+      "$launch" 2>/dev/null) || exit 1
 [ -n "$w" ] || exit 1
 fleet_win_role_stamp "$w" orchestrator "$SOCK"
 T set-window-option -t "$w" @norepo 1 \; set-window-option -t "$w" automatic-rename off \; \
