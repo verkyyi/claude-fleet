@@ -227,7 +227,7 @@ grep -q '"ev": "cancel", "ref": "o/r#9"' "$FLEET_CONF_DIR/logs/park.ndjson" && o
 # --- G: the steward's beat -------------------------------------------------------------
 printf '#!/bin/sh\n:\n' > "$S/none"; chmod +x "$S/none"
 beat() { env FLEET_STEWARD=1 FLEET_STEWARD_WINDOWS_CMD="$S/none" FLEET_STEWARD_CHILDREN_CMD="$S/none" \
-             FLEET_STEWARD_SEND_CMD="$S/none" FLEET_STEWARD_STAMP_CMD="$S/none" \
+             FLEET_STEWARD_SEND_CMD="$S/none" FLEET_STEWARD_STAMP_CMD="$S/none" FLEET_STEWARD_DOCTOR_CMD="$S/none" FLEET_STEWARD_IDLE_CMD="$S/none" \
              python3 "$BIN/fleet_steward.py" beat --force --session pk; }
 card=$(beat 2>&1)
 printf '%s\n' "$card" | grep -q '停放 1 个' && ok "G the beat's card counts the parked" || bad "G card: $card"

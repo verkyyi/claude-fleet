@@ -4782,7 +4782,8 @@ rows = {"r%d" % i: {"id": "r%d" % i, "item": "q%d" % i, "src": "gh:o/r#%d" % (i 
 json.dump({"v": 1, "rows": rows, "beat": {"n": 1, "writes": 0}}, open(sys.argv[1], "w"))' "$st"
   sw() { env FLEET_CONF_DIR="$g/conf" FLEET_UI_LANG=zh FLEET_STEWARD=1 FLEET_DECISION_COMMENTS_CMD="$g/comments" \
            FLEET_DECISION_POST_CMD="$g/post" FLEET_STEWARD_WINDOWS_CMD="$g/none" FLEET_STEWARD_CHILDREN_CMD="$g/none" \
-           FLEET_STEWARD_SEND_CMD="$g/none" FLEET_STEWARD_STAMP_CMD="$g/none" python3 "$BIN/fleet_steward.py" "$@" --session sw; }
+           FLEET_STEWARD_SEND_CMD="$g/none" FLEET_STEWARD_STAMP_CMD="$g/none" FLEET_STEWARD_DOCTOR_CMD="$g/none" \
+           FLEET_STEWARD_IDLE_CMD="$g/none" python3 "$BIN/fleet_steward.py" "$@" --session sw; }
   t0=$(now)
   # the default budget is 20; the drill storms a budget of 8 with 12 answers
   for i in $(seq 0 11); do FLEET_STEWARD_WRITES=8 sw answer --row "r$i" --text yes >/dev/null 2>&1; done

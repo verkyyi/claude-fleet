@@ -25,6 +25,9 @@ the person's clock (fleet_decision.zone). A due beat:
      beat's write budget;
   4. asks fleet-epic-backstop.sh about the open PRs of a batch whose driver is
      gone (its mark stale), so the model never merges under a busy worker;
+  4b. watches the fleet's own health (bin/fleet_steward_health.py, issue #2674):
+     a doctor row newly WARN / FAIL, or idle sessions nothing has slept or
+     reaped for two hours, files ONE issue per fingerprint — within the budget;
   5. writes global/steward.delta.json + global/steward.state.json, stamps
      @orch_decide on the orchestrator's window (the open rows of the last sheet —
      fleet-control-read.sh carries it to the client's 「新任务」 row), and
@@ -74,6 +77,7 @@ from pathlib import Path
 import fleet_decision as fd
 import fleet_followup as fu
 import fleet_park
+import fleet_steward_health as health
 
 BIN = Path(__file__).resolve().parent
 V = 1
@@ -474,7 +478,8 @@ def empty(delta):
     f = delta.get("followups") or {}
     return not (delta["events"] or delta["new_asks"] or delta["closed"] or delta["defaulted"]
                 or delta["orphans"] or delta["deferred"] or f.get("new") or f.get("done") or f.get("refused")
-                or park_moved(delta))
+                or park_moved(delta)
+                or delta.get("health"))
 
 
 # ---- the card --------------------------------------------------------------------
@@ -493,6 +498,12 @@ def card_lines(st, delta, now_t, nxt):
                             sum(1 for e in delta["events"] if e["state"] in WAKE_STATES)))
         for o in delta["orphans"]:
             lines.append(tr("steward_card_orphan_fmt", o["epic"], len(o["members"])))
+        hs = delta.get("health") or []
+        if hs or delta.get("health_deferred"):
+            lines.append(tr("steward_card_health_fmt", sum(1 for x in hs if x["action"] == "filed"),
+                            sum(1 for x in hs if x["action"] == "again"),
+                            delta.get("health_deferred", 0)))
+            lines += ["  %s  %s" % (x.get("url") or x["action"], x["what"][:120]) for x in hs]
     todo_line = fu.card(sys.modules[__name__], st)
     if todo_line:
         lines.append(todo_line)
@@ -552,6 +563,12 @@ def cmd_beat(a):
                 except Exception as e:  # a metric never stops the beat
                     sys.stderr.write("fleet-steward-tick: park observe: %s\n" % e)
             return 3
+    # the doctor runs before the lock: an `answer` never waits out its ~20 s
+    try:
+        peek = json.loads((gdir() / "steward.state.json").read_text()).get("health") or {}
+    except (OSError, ValueError):
+        peek = {}
+    doctor_rows = health.run_doctor() if health.doctor_due(peek, int(now_t.timestamp())) else None
     st = State()
     due = st.d.get("next_at", 0)
     if not a.force and now_t.timestamp() < due:
@@ -566,6 +583,9 @@ def cmd_beat(a):
         st.d["parked"] = pk.pop("list")
         delta["park"] = pk
         stamp_decide(sess, pk["n_parked"], wins, "@orch_park")
+    hf, ha, hd, delta["health"] = health.check(st, sess, socket(sess), repo_of_slug(sess), now_t, doctor_rows, tr)
+    delta["deferred"] += hd
+    delta["health_deferred"] = hd
     path = write_delta(delta)
     changed = not empty(delta)
     nxt = next_beat(now_t, changed)

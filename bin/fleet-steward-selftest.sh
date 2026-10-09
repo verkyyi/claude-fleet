@@ -31,6 +31,14 @@
 #   J  the decide count travels: orchdec=2 → orch_decide 2 → `decide=2` → red;
 #      the park count beside it (issue #2671): @orch_park → orchpark= (the last
 #      tag) → orch_park → `park=N`
+#   K  the health watch (bin/fleet_steward_health.py, fleet-doctor.sh --json,
+#      issue #2674): the first doctor run is the baseline; PASS→WARN files ONE
+#      issue; still WARN files nothing; gone and back is a 又出现 comment; an
+#      unreadable run changes nothing; idle sessions with every sleep refused in
+#      the window file ONE issue, once, a scan that accepts none; done:<dur>
+#      sessions no idle reap closed file ONE more (a merged cleanup is not one),
+#      a reaped-idle line none; a row new on one doctor run only
+#      (FLEET_STEWARD_HEALTH_CONFIRM 2) files nothing
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/steward-st.XXXXXX")
@@ -77,12 +85,18 @@ cat > "$WORK/bin/send" <<'EOF'
 { printf '>>> %s\n' "$1"; cat; printf '\n'; } >> "$ST_GH/sends.log"
 EOF
 printf '#!/bin/sh\nprintf "%%s\\n" "$1" > "$ST_GH/decide"\n' > "$WORK/bin/stamp"
+# the health watch (issue #2674): the doctor prints $ST_DOCTOR, the idle windows $ST_IDLE
+printf '#!/bin/sh\ncat "$ST_DOCTOR" 2>/dev/null || printf "{\\"rows\\": []}\\n"\n' > "$WORK/bin/doctor"
+printf '#!/bin/sh\ncat "$ST_IDLE" 2>/dev/null\n' > "$WORK/bin/idle"
 chmod +x "$WORK/bin/"*
+export ST_DOCTOR="$WORK/doctor.json" ST_IDLE="$WORK/idle.txt"
 export ST_GH="$WORK/gh" ST_WINS="$WORK/wins.txt" \
   FLEET_DECISION_COMMENTS_CMD="$WORK/bin/gh-comments" FLEET_DECISION_POST_CMD="$WORK/bin/gh-post" \
   FLEET_DECISION_PARENT_CMD="$WORK/bin/gh-parent" FLEET_STEWARD_WINDOWS_CMD="$WORK/bin/wins" \
   FLEET_STEWARD_CHILDREN_CMD="$WORK/bin/children" FLEET_STEWARD_SEND_CMD="$WORK/bin/send" \
-  FLEET_STEWARD_STAMP_CMD="$WORK/bin/stamp" FLEET_STEWARD=1
+  FLEET_STEWARD_STAMP_CMD="$WORK/bin/stamp" FLEET_STEWARD=1 \
+  FLEET_STEWARD_DOCTOR_CMD="$WORK/bin/doctor" FLEET_STEWARD_IDLE_CMD="$WORK/bin/idle" \
+  FLEET_STEWARD_SLEEP_LOG="$WORK/sleep.log" FLEET_STEWARD_CLEANUP_LOG="$WORK/cleanup.log" FLEET_SLEEP=observe
 : > "$ST_WINS"
 TICK() { python3 "$BIN/fleet_steward.py" "$@" --session st; }
 STATE="$FLEET_CONF_DIR/global/steward.state.json"
@@ -177,6 +191,94 @@ grep -q '延后 1 条' "$WORK/out" && ok "E: the card says 延后 N 条" || bad 
 # F — not due: returns 4 at once
 TICK beat >/dev/null 2>&1; rc=$?
 [ "$rc" = 4 ] && ok "F: not due — the every-minute caller returns 4" || bad "F: rc=$rc"
+
+# K — the health watch (issue #2674): doctor rows that got worse, idle sessions
+# nothing put down; one issue per fingerprint, a recurrence a comment
+cat > "$WORK/bin/hfile" <<'EOF'
+#!/bin/sh
+n=$(( $(grep -c . "$ST_GH/hissues" 2>/dev/null || echo 0) + 500 ))
+printf '%s\t%s\t%s\n' "$n" "$2" "$(tr '\n' ' ')" >> "$ST_GH/hissues"
+printf 'https://github.com/%s/issues/%s\n' "$1" "$n"
+EOF
+printf '#!/bin/sh\ngrep -F -- "$2" "$ST_GH/hissues" 2>/dev/null | head -1 | cut -f1\n' > "$WORK/bin/hfind"
+chmod +x "$WORK/bin/hfile" "$WORK/bin/hfind"
+doc() { python3 -c 'import json,sys; print(json.dumps({"rows": [dict(zip(("level","row","msg"), r.split("|"))) for r in sys.argv[1:]]}))' "$@" > "$ST_DOCTOR"; }
+HT() { FLEET_STEWARD_HEALTH_EVERY=0 FLEET_STEWARD_HEALTH_CONFIRM="${FLEET_STEWARD_HEALTH_CONFIRM:-1}" FLEET_STEWARD_HEALTH_REPO=o/f FLEET_STEWARD_HEALTH_FILE_CMD="$WORK/bin/hfile" \
+         FLEET_STEWARD_HEALTH_FIND_CMD="$WORK/bin/hfind" FLEET_STEWARD_IDLE_SECS=60 TICK beat --force; }
+hn() { grep -c . "$ST_GH/hissues" 2>/dev/null || echo 0; }
+# the beats above ran the doctor too (no rows): start this leg on a fresh watch
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d.pop("health", None); json.dump(d, open(sys.argv[1], "w"))' "$STATE"
+doc 'PASS|tmux|tmux 3.4' 'WARN|labels|missing fleet labels: desk' 'PASS|quota|reading fresh'
+HT >/dev/null 2>&1
+[ "$(hn)" = 0 ] && ok "K: the first doctor run is the baseline — an old WARN files nothing" \
+  || bad "K: the baseline filed $(hn): $(cat "$ST_GH/hissues")"
+doc 'PASS|tmux|tmux 3.4' 'WARN|labels|missing fleet labels: desk' 'WARN|quota|ccquota read 401 for 3 accounts — check the hub'
+HT >"$WORK/out" 2>&1
+[ "$(hn)" = 1 ] && grep -q 'fleet:health key=quota:' "$ST_GH/hissues" && grep -q '体检变差：quota' "$ST_GH/hissues" \
+  && grep -q '健康：新立 1' "$WORK/out" \
+  && ok "K: a doctor row PASS→WARN files ONE issue, marked fleet:health key=quota:<fp>; the card says 新立 1" \
+  || bad "K: PASS→WARN filed $(hn): $(cat "$ST_GH/hissues" 2>/dev/null) / $(cat "$WORK/out")"
+doc 'PASS|tmux|tmux 3.4' 'WARN|labels|missing fleet labels: desk' 'WARN|quota|ccquota read 401 for 5 accounts — check the hub'
+HT >/dev/null 2>&1
+[ "$(hn)" = 1 ] && ok "K: still WARN next beat (its numbers changed) — nothing filed again" \
+  || bad "K: a still-WARN row filed again: $(hn)"
+doc 'PASS|tmux|tmux 3.4' 'WARN|labels|missing fleet labels: desk' 'PASS|quota|reading fresh'
+HT >/dev/null 2>&1
+before=$(posts)
+doc 'PASS|tmux|tmux 3.4' 'WARN|labels|missing fleet labels: desk' 'WARN|quota|ccquota read 401 for 2 accounts — check the hub'
+HT >/dev/null 2>&1
+[ "$(hn)" = 1 ] && [ $(( $(posts) - before )) = 1 ] && grep -q 'fleet:health key=quota:' "$ST_GH/o-f-500.json" \
+  && ok "K: gone and back — a 又出现 comment on the open issue, no second issue" \
+  || bad "K: recurrence: issues $(hn), comments $(( $(posts) - before ))"
+printf 'garbage\n' > "$ST_DOCTOR"
+HT >/dev/null 2>&1
+[ "$(hn)" = 1 ] && python3 -c 'import json,sys; a=json.load(open(sys.argv[1]))["health"]["active"]; sys.exit(0 if any(k.startswith("quota:") for k in a) else 1)' "$STATE" \
+  && ok "K: an unreadable doctor run is not \"all good\" — the last rows stand, nothing filed" \
+  || bad "K: an unreadable doctor changed the picture"
+now=$(date +%s); old=$((now - 600)); at=$(date '+%Y-%m-%dT%H:%M:%S')
+printf '@71\tworker\tdone\t%s\t\t\tissue-71\n@72\tworker\tdone\t%s\t\t\tscratch-3\n@73\tworker\tworking\t%s\t\t\tissue-73\n' \
+  "$old" "$old" "$old" > "$ST_IDLE"
+printf '{"session": "st", "window": "@71", "at": "%s", "skip": "wrong fleet"}\n{"session": "st", "window": "@72", "at": "%s", "eligible": true, "session_id": "x"}\n' \
+  "$at" "$at" > "$WORK/sleep.log"
+HT >/dev/null 2>&1
+[ "$(hn)" = 1 ] && ok "K: idle sessions the sleep scan still accepts — no issue" || bad "K: an accepting scan filed: $(hn)"
+printf '{"session": "st", "window": "@71", "at": "%s", "skip": "wrong fleet"}\n{"session": "st", "window": "@72", "at": "%s", "skip": "wrong fleet"}\n' \
+  "$at" "$at" > "$WORK/sleep.log"
+HT >/dev/null 2>&1
+[ "$(hn)" = 2 ] && grep -q 'fleet:health key=idle-sleep:st' "$ST_GH/hissues" && grep -q 'wrong fleet × 2' "$ST_GH/hissues" \
+  && grep -q '闲置会话 2 个' "$ST_GH/hissues" \
+  && ok "K: 2 idle sessions, every sleep refused in the window — ONE issue naming the refusal" \
+  || bad "K: sleep silence filed $(hn): $(tail -1 "$ST_GH/hissues" 2>/dev/null)"
+HT >/dev/null 2>&1
+[ "$(hn)" = 2 ] && ok "K: the same silence next beat — not filed twice" || bad "K: idle filed again: $(hn)"
+# the reaper, judged apart: a merged PR's cleanup is no idle reap
+printf '@71\tworker\tdone\t%s\tdone:2h\t\tissue-71\n@72\tworker\tdone\t%s\t\t\tscratch-3\n' "$old" "$old" > "$ST_IDLE"
+printf '%s fleet-cleanup: st: cleaned:abc123  (PR #9, issue-9)  [slot 1/4]\n' "$(date +%H:%M:%S)" > "$WORK/cleanup.log"
+HT >/dev/null 2>&1
+[ "$(hn)" = 3 ] && grep -q 'fleet:health key=idle-reap:st' "$ST_GH/hissues" && grep -q '到点该回收的会话 1 个' "$ST_GH/hissues" \
+  && ok "K: a done:2h session idle past the window, the idle reaper closed none (a merged cleanup ran) — ONE issue" \
+  || bad "K: reap silence filed $(hn): $(tail -1 "$ST_GH/hissues" 2>/dev/null)"
+printf '%s fleet-cleanup: st: reaped-idle:@70 policy=done:2h norepo stopped:@70\n' "$(date +%H:%M:%S)" >> "$WORK/cleanup.log"
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["health"]["active"].pop("idle-reap:st", None); json.dump(d, open(sys.argv[1], "w"))' "$STATE"
+before=$(posts)
+HT >/dev/null 2>&1
+[ "$(hn)" = 3 ] && [ "$(posts)" = "$before" ] \
+  && ok "K: the idle reaper closed one in the window — it is alive, nothing noted" \
+  || bad "K: a fresh idle reap still read as silence"
+# a one-run hiccup: with the default 2 runs to confirm, a row new once files nothing
+doc 'PASS|tmux|tmux 3.4' 'WARN|labels|missing fleet labels: desk' 'WARN|quota|ccquota read 401 for 2 accounts — check the hub' \
+    'WARN|machine|could not read the load average'
+FLEET_STEWARD_HEALTH_CONFIRM=2 HT >/dev/null 2>&1
+doc 'PASS|tmux|tmux 3.4' 'WARN|labels|missing fleet labels: desk' 'WARN|quota|ccquota read 401 for 2 accounts — check the hub'
+FLEET_STEWARD_HEALTH_CONFIRM=2 HT >/dev/null 2>&1
+n1=$(hn)
+doc 'PASS|tmux|tmux 3.4' 'WARN|labels|missing fleet labels: desk' 'WARN|quota|ccquota read 401 for 2 accounts — check the hub' \
+    'WARN|machine|could not read the load average'
+FLEET_STEWARD_HEALTH_CONFIRM=2 HT >/dev/null 2>&1
+FLEET_STEWARD_HEALTH_CONFIRM=2 HT >/dev/null 2>&1
+[ "$n1" = 3 ] && [ "$(hn)" = 4 ] && ok "K: a row new on one run only files nothing; new on two runs in a row files one" \
+  || bad "K: confirm: after the hiccup $n1, after two runs $(hn)"
+: > "$WORK/cleanup.log"; : > "$ST_IDLE"
 
 # G/H/I need a tmux
 if [ -z "$REAL_TMUX" ]; then

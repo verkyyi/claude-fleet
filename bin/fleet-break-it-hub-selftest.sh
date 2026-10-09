@@ -56,6 +56,7 @@
 #                                                   steward's beat (bin/fleet_steward.py)
 #   park-lost-progress / park-restored-by-restore   bin/fleet_park.py, fleet-restore.sh (fleet_parked) — through
 #                                                   bin/fleet-park-selftest.sh's sandbox (its own isolated tmux socket)
+#   health-silent-pass                              bin/fleet_steward_health.py (the steward's beat), fleet-doctor.sh --json
 #
 # Each prints `PASS <id> <secs>s ≤<cap>s <what came back>` like its parent.
 # BREAK_KEEP=1 keeps the work dir; BREAK_ONLY narrows to those ids.
@@ -989,6 +990,7 @@ drill_followup_stable_storm() {
            FLEET_STEWARD_TICKET_CMD="$g/ticket" FLEET_DECISION_POST_CMD="$g/post" FLEET_DECISION_COMMENTS_CMD="$g/none" \
            FLEET_STEWARD_WINDOWS_CMD="$g/none" FLEET_STEWARD_CHILDREN_CMD="$g/children" FLEET_STEWARD_SEND_CMD="$g/none" \
            FLEET_STEWARD_STAMP_CMD="$g/none" FLEET_STEWARD_STAMP_TODO_CMD="$g/none" \
+           FLEET_STEWARD_DOCTOR_CMD="$g/none" FLEET_STEWARD_IDLE_CMD="$g/none" \
            python3 "$BIN/fleet_steward.py" "$@" --session fs; }
   : > "$g/held"
   for n in 11 12 13 14; do
@@ -1048,6 +1050,47 @@ drill_park_restored_by_restore() {
             "H restore does nothing else with it" "H an ordinary lost window still takes" || return 1
   SECS=$(since "$t0")
   WHAT="拿停放前的地图恢复：停放的不重开（写 parked），旁边普通丢的照走恢复；拉回认 retired 不碰"
+}
+
+# health-silent-pass (issue #2674, EPIC #2668 C6): a systemic fault arrives
+# quietly — a doctor row goes PASS→FAIL, and every sleep is refused (#2622's
+# `wrong fleet`) while sessions sit idle. The steward's beat files ONE issue for
+# each, once: the next beat with the fault still there writes nothing more.
+drill_health_silent_pass() {
+  CAP=30; local t0 g="$WORK/hsp" at old
+  mkdir -p "$g/conf/fleets/hp/repos"
+  printf 'FLEET_REPO="o/r"\n' > "$g/conf/fleets/hp/repos/o-r.conf"
+  printf '#!/bin/sh\n:\n' > "$g/none"
+  printf '#!/bin/sh\ncat "%s/doctor.json"\n' "$g" > "$g/doctor"
+  printf '#!/bin/sh\ncat "%s/idle.txt"\n' "$g" > "$g/idle"
+  printf '#!/bin/sh\nn=$(( $(grep -c . "%s/issues" 2>/dev/null || echo 0) + 1 ))\nprintf "%%s\\t%%s\\n" "$n" "$(tr "\\n" " ")" >> "%s/issues"\necho "https://github.com/$1/issues/$n"\n' "$g" "$g" > "$g/file"
+  printf '#!/bin/sh\ngrep -F -- "$2" "%s/issues" 2>/dev/null | head -1 | cut -f1\n' "$g" > "$g/find"
+  printf '#!/bin/sh\ncat >/dev/null; echo "$1#$2" >> "%s/posts"\n' "$g" > "$g/post"
+  chmod +x "$g/none" "$g/doctor" "$g/idle" "$g/file" "$g/find" "$g/post"
+  hp() { env FLEET_CONF_DIR="$g/conf" FLEET_UI_LANG=zh FLEET_STEWARD=1 FLEET_SLEEP=observe \
+           FLEET_DECISION_COMMENTS_CMD="$g/none" FLEET_DECISION_POST_CMD="$g/post" FLEET_STEWARD_WINDOWS_CMD="$g/none" \
+           FLEET_STEWARD_CHILDREN_CMD="$g/none" FLEET_STEWARD_SEND_CMD="$g/none" FLEET_STEWARD_STAMP_CMD="$g/none" \
+           FLEET_STEWARD_DOCTOR_CMD="$g/doctor" FLEET_STEWARD_IDLE_CMD="$g/idle" FLEET_STEWARD_SLEEP_LOG="$g/sleep.log" \
+           FLEET_STEWARD_CLEANUP_LOG="$g/cleanup.log" FLEET_STEWARD_HEALTH_REPO=o/f FLEET_STEWARD_HEALTH_EVERY=0 FLEET_STEWARD_HEALTH_CONFIRM=1 \
+           FLEET_STEWARD_HEALTH_FILE_CMD="$g/file" FLEET_STEWARD_HEALTH_FIND_CMD="$g/find" FLEET_STEWARD_IDLE_SECS=60 \
+           python3 "$BIN/fleet_steward.py" beat --force --session hp >/dev/null 2>&1; }
+  printf '{"rows": [{"level": "PASS", "row": "qwatch", "msg": "quota cache fresh"}]}\n' > "$g/doctor.json"
+  : > "$g/idle.txt"
+  hp
+  [ ! -s "$g/issues" ] || { WHY="a healthy baseline filed: $(cat "$g/issues")"; return 1; }
+  t0=$(now)
+  printf '{"rows": [{"level": "FAIL", "row": "qwatch", "msg": "quota cache is FRESH BUT EMPTY — the last 1746 reads returned no rows"}]}\n' > "$g/doctor.json"
+  old=$(( $(date +%s) - 600 )); at=$(date '+%Y-%m-%dT%H:%M:%S')
+  printf '@1\tworker\tdone\t%s\t\t\tissue-1\n@2\tworker\tdone\t%s\t\t\tissue-2\n' "$old" "$old" > "$g/idle.txt"
+  printf '{"session": "hp", "window": "@1", "at": "%s", "skip": "wrong fleet"}\n{"session": "hp", "window": "@2", "at": "%s", "skip": "wrong fleet"}\n' \
+    "$at" "$at" > "$g/sleep.log"
+  hp
+  SECS=$(since "$t0")
+  [ "$(grep -c . "$g/issues" 2>/dev/null)" = 2 ] && grep -q 'key=qwatch:' "$g/issues" && grep -q 'key=idle-sleep:hp' "$g/issues" \
+    || { WHY="one beat after the fault: issues [$(cat "$g/issues" 2>/dev/null)]"; return 1; }
+  hp
+  [ "$(grep -c . "$g/issues")" = 2 ] && [ ! -s "$g/posts" ] || { WHY="the fault still there next beat wrote again"; return 1; }
+  WHAT="体检 PASS→FAIL、休眠全被拒：同一拍各立一张单，下一拍仍在不再写"
 }
 
 cred_run_drills "$0"

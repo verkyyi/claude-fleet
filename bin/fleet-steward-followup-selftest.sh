@@ -103,7 +103,8 @@ export FLEET_DECISION_COMMENTS_CMD="$WORK/bin/gh-comments" FLEET_DECISION_POST_C
   FLEET_STEWARD_CHILDREN_CMD="$WORK/bin/children" FLEET_STEWARD_SEND_CMD="$WORK/bin/send" \
   FLEET_STEWARD_STAMP_CMD="$WORK/bin/noop" FLEET_STEWARD_STAMP_TODO_CMD="$WORK/bin/stamp-todo" \
   FLEET_STEWARD_ISSUE_CMD="$WORK/bin/issue" FLEET_STEWARD_STABLE_CMD="$WORK/bin/stable" \
-  FLEET_STEWARD_TICKET_CMD="$WORK/bin/ticket" FLEET_STEWARD_HOLD_CMD="$WORK/bin/hold"
+  FLEET_STEWARD_TICKET_CMD="$WORK/bin/ticket" FLEET_STEWARD_HOLD_CMD="$WORK/bin/hold" \
+  FLEET_STEWARD_DOCTOR_CMD="$WORK/bin/noop" FLEET_STEWARD_IDLE_CMD="$WORK/bin/noop"
 
 # fresh <leg> — a clean conf dir and GitHub for one leg
 fresh() {

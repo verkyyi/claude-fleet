@@ -89,6 +89,29 @@ if [ "${1:-}" = --installs ]; then
   exec sh "$(dirname "$0")/fleet-installs.sh" "$@"
 fi
 
+# `fleet doctor --json` (issue #2674): the same run, its rows as one JSON object —
+# {"v":1,"rc":N,"fails":N,"warns":N,"rows":[{"level","row","msg"}…]} — for the
+# steward's health watch (bin/fleet_steward_health.py). It runs the doctor once,
+# off a tty (no color), and parses the `  LEVEL  label  msg` lines; a line indented
+# past the label column continues the row above. Exit = the doctor's.
+if [ "${1:-}" = --json ]; then
+  shift
+  _dj=$(sh "$0" "$@" </dev/null 2>/dev/null); _djrc=$?
+  printf '%s\n' "$_dj" | python3 -c '
+import json, re, sys
+rows = []
+for line in sys.stdin.read().splitlines():
+    m = re.match(r"^  (PASS|WARN|FAIL|INFO)  (\S+)\s+(.*)$", line)
+    if m:
+        rows.append({"level": m.group(1), "row": m.group(2), "msg": m.group(3).rstrip()})
+    elif rows and line.startswith("    ") and line.strip():
+        rows[-1]["msg"] += "\n" + line.strip()
+n = lambda lv: sum(1 for r in rows if r["level"] == lv)
+print(json.dumps({"v": 1, "rc": int(sys.argv[1]), "fails": n("FAIL"), "warns": n("WARN"), "rows": rows},
+                 ensure_ascii=False))' "$_djrc"
+  exit "$_djrc"
+fi
+
 printf '%sclaude-fleet doctor%s\n' "$B" "$Z"
 
 # --- per-fleet conf enumeration (shared by the optional-daemon checks below) ---
