@@ -330,7 +330,12 @@ Do not install from memory: read the doc and work from it.
   (issue #2582): `--append-system-prompt-file skills/fleet-orchestrate/role.md`
   (≤ 60 lines; kept by the wrapper's ↵ resume) plus the mod's
   `fleet:orchestrator-role` section from the same file, so a `/clear` or a
-  compaction leaves it the orchestrator (Codex: the seed alone). Restore / migrate / move read it
+  compaction leaves it the orchestrator (Codex: the seed alone). Its WORKING STATE rides a
+  compaction too (issue #2583): `bin/fleet-orchestrator-state.py` writes
+  `global/orchestrator.state.json` (batches · waiting · unread reports · loop) on
+  PreCompact / SessionEnd / ScheduleWakeup / a `[child-report]`, and SessionStart
+  (compact · resume · startup) hands back ≤ 40 lines ending in «re-arm the Loop»;
+  a typed `/compact` gets its next turn from `fleet-compact-resume.sh`. Restore / migrate / move read it
   as `home` (the role-aware formats map it there — never snapshotted, never moved);
   the session caps never count it (only `worker` does); `fleet_win_for_key
   orchestrator` addresses it. The inventory's column 20 `role=orchestrator` carries

@@ -46,7 +46,8 @@
       {
         "matcher": "ScheduleWakeup|CronCreate|CronDelete",
         "hooks": [
-          { "type": "command", "command": "python3 ~/.claude/fleet/bin/fleet_loop_mark.py hook" }
+          { "type": "command", "command": "python3 ~/.claude/fleet/bin/fleet_loop_mark.py hook" },
+          { "type": "command", "command": "python3 ~/.claude/fleet/bin/fleet-orchestrator-state.py hook" }
         ]
       }
     ],
@@ -54,7 +55,8 @@
       {
         "hooks": [
           { "type": "command", "command": "sh ~/.claude/fleet/bin/set-claude-state.sh working" },
-          { "type": "command", "command": "bash ~/.claude/fleet/bin/fleet-whats-new.sh --hook" }
+          { "type": "command", "command": "bash ~/.claude/fleet/bin/fleet-whats-new.sh --hook" },
+          { "type": "command", "command": "python3 ~/.claude/fleet/bin/fleet-orchestrator-state.py hook" }
         ]
       }
     ],
@@ -94,6 +96,12 @@
         "hooks": [
           { "type": "command", "command": "bash ~/.claude/fleet/bin/fleet-history.sh resumed --stdin-json" }
         ]
+      },
+      {
+        "matcher": "compact|resume|startup",
+        "hooks": [
+          { "type": "command", "command": "python3 ~/.claude/fleet/bin/fleet-orchestrator-state.py hook" }
+        ]
       }
     ],
     "PreCompact": [
@@ -101,6 +109,11 @@
         "matcher": "auto",
         "hooks": [
           { "type": "command", "command": "bash ~/.claude/fleet/bin/precompact-hook.sh" }
+        ]
+      },
+      {
+        "hooks": [
+          { "type": "command", "command": "python3 ~/.claude/fleet/bin/fleet-orchestrator-state.py hook" }
         ]
       }
     ],
@@ -113,7 +126,8 @@
       },
       {
         "hooks": [
-          { "type": "command", "command": "bash ~/.claude/fleet/bin/fleet-emit.sh session.end --via hook --stdin-json" }
+          { "type": "command", "command": "bash ~/.claude/fleet/bin/fleet-emit.sh session.end --via hook --stdin-json" },
+          { "type": "command", "command": "python3 ~/.claude/fleet/bin/fleet-orchestrator-state.py hook" }
         ]
       }
     ]

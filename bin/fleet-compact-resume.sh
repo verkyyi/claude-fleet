@@ -60,6 +60,13 @@ if [ "${1:-}" = --brief ]; then
   # shellcheck source=/dev/null
   . "$BIN/fleet-lib.sh" 2>/dev/null || { echo 'fleet-compact-resume: fleet-lib.sh missing'; exit 0; }
   pane="${TMUX_PANE:-}"
+  # The orchestrator (issue #2583) has no map and no git: its state file is the brief.
+  if [ -n "$pane" ] && [ -n "${TMUX:-}" ] \
+     && [ "$(tmux display-message -p -t "$pane" '#{@fleet_role}' 2>/dev/null)" = orchestrator ]; then
+    printf '[fleet compact-resume] orchestrator\n'
+    python3 "$BIN/fleet-orchestrator-state.py" brief --source compact 2>/dev/null
+    exit 0
+  fi
   cwd=$(pwd -P 2>/dev/null)
   ir=''
   [ -n "$pane" ] && [ -n "${TMUX:-}" ] && ir=$(tmux display-message -p -t "$pane" '#{@issue}|#{@raw}' 2>/dev/null)

@@ -740,6 +740,43 @@ drill_orchestrator_cleared() {
   SECS=$(since "$t0"); WHAT="新开、续开、恢复页 ↵ 都带 role.md 进系统提示；mod 每轮加 fleet:orchestrator-role"
 }
 
+# orchestrator-compacted (issue #2583, EPIC #2581 C2): a compaction leaves the
+# orchestrator a summary that may drop the batches it follows, the children it
+# waits on, the reports it has not passed on — and the Loop, which then never
+# wakes it again. PreCompact writes global/orchestrator.state.json, SessionStart
+# (compact) hands it back with the next step: re-arm the Loop. A /compact the
+# person typed also gets its next turn started. No real Claude here: the hook's
+# own input and output are the drill (the model's answer is the issue's 上线证据).
+drill_orchestrator_compacted() {
+  CAP=10; BREAK_SOCK="$WORK/sock-oc"; local t0 w p out c="$WORK/occonf" tr="$WORK/oc-tr.jsonl" ts
+  [ -f "$BIN/fleet-orchestrator-state.py" ] || { WHY="no bin/fleet-orchestrator-state.py — nothing carries the state across"; return 1; }
+  grep -q 'fleet-orchestrator-state.py hook' "$ROOT/hooks/settings-hooks.json" \
+    || { WHY="the hook table never runs the state relay"; return 1; }
+  nt -f /dev/null new-session -d -s oc -n home -x 100 -y 30 'exec sleep 600' || { WHY="cannot start the isolated tmux server"; return 1; }
+  w=$(nt new-window -d -P -F '#{window_id}' -t oc: -n orchestrator 'exec sleep 600')
+  p=$(nt display-message -p -t "$w" '#{pane_id}')
+  nt set-option -wq -t "$w" @fleet_role orchestrator
+  mkdir -p "$c/global/epic-running.d"
+  printf 'epoch: %s\nttl: 2700\nepic: 2581\nrepo: o/n\nsession: oc\ntick: 3\n' "$(date +%s)" > "$c/global/epic-running.d/o-n-2581"
+  ts=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
+  printf '%s\n%s\n' \
+    "{\"type\":\"assistant\",\"timestamp\":\"$ts\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"id\":\"t\",\"name\":\"ScheduleWakeup\",\"input\":{\"delaySeconds\":1200,\"prompt\":\"<<autonomous-loop-dynamic>>\"}}]}}" \
+    "{\"type\":\"user\",\"timestamp\":\"$ts\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"t\",\"content\":\"ok\"}]}}" > "$tr"
+  printf '#!/bin/sh\necho "{\\"seq\\":0,\\"summary\\":{\\"text\\":\\"0 children\\"},\\"children\\":[]}"\n' > "$WORK/oc-children"; chmod +x "$WORK/oc-children"
+  och() { printf '%s' "$1" | env PATH="$WORK/tbin:$PATH" HOME="$WORK/home" FLEET_CONF_DIR="$c" BREAK_SOCK="$BREAK_SOCK" \
+            TMUX="$BREAK_SOCK,1,0" TMUX_PANE="$p" CLAUDE_CODE_ENTRYPOINT=cli FLEET_ORCH_CHILDREN_CMD="$WORK/oc-children" \
+            FLEET_COMPACT_RESUME=0 python3 "$BIN/fleet-orchestrator-state.py" hook 2>/dev/null; }
+  t0=$(now)
+  och "{\"hook_event_name\":\"PreCompact\",\"trigger\":\"manual\",\"transcript_path\":\"$tr\"}" >/dev/null   # the break: /compact
+  out=$(och '{"hook_event_name":"SessionStart","source":"compact"}')
+  SECS=$(since "$t0")
+  case "$out" in *'EPIC #2581'*) ;; *) WHY="after the compaction the session is not told its batch: [$out]"; return 1 ;; esac
+  case "$out" in *'<<autonomous-loop-dynamic>>'*'重新 arm 循环'*) ;; *) WHY="after the compaction the Loop is not handed back: [$out]"; return 1 ;; esac
+  [ "$(nt display-message -p -t "$p" '#{@compact_stage}')" = restored ] \
+    || { WHY="a typed /compact leaves the REPL idle and nothing starts the next turn"; return 1; }
+  WHAT="压缩前存下批次、在等谁、未读回报、循环；压缩后注入 ≤40 行并让会话先重新 arm 循环；人敲的 /compact 自动起下一轮"
+}
+
 # window-renamed (issue #1844): a name is not an identity. Home renamed, a worker
 # renamed `home`, a restored session renamed — every automatic reader still finds
 # the right window, because it reads @fleet_role / @fleet_id, not the name.
