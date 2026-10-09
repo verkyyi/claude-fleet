@@ -1689,6 +1689,7 @@ done
 case "\$*" in
   *" attach "*) printf 'FAR-END-SESSION\n'; echo \$\$ > "$WORK/attach.pid"; sleep 600 & wait \$!; exit 255 ;;
   *" watch "*|*" serve "*) sleep 600 ;;
+  *" shell-here "*) sleep 600 ;;   # ⌃\'s far-end shell (#2744): holds like one
 esac
 exit 0
 EOF
