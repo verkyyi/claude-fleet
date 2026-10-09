@@ -727,6 +727,14 @@ Do not install from memory: read the doc and work from it.
   `fleet-reap-live.py`, dash-reap's no-repo row, `fleet-cleanup.sh` and
   `fleet-epic-backstop.sh` read it; a 7501 done/error waives the young-agent gate
   (`idle` does not — a fresh agent says it before its seed lands).
+  **What it asks travels with it** (issue #2538, C3): `kind=auth` is its own
+  `@claude_needs` subtype; a needs row carries its kind + words (≤200, the current
+  question only) as the sidebar's fields 17-18 (the row shows the start, the bar
+  all of it), the hub cache's fields 27-28, `fleet ls`'s 在问 column / `fleet show`
+  / `fleet answer`'s 题干, and the hub page's row + drawer — the agent's own
+  status_kind / status_msg first, else the hooks' subtype + `@claude_needs_detail`
+  (`inventory_row` fills the pair). Nothing asked ⇒ byte for byte as before.
+  `ask-words-selftest.sh`.
 - **The hub ships the `fleet` client, and `bin/` + `conf/` stay canonical**
   (issues #1470, #1486). `curl -fsSL <hub>/install | sh` serves
   `bin/fleet-install.sh` (hub URL filled in), which fetches `/install/manifest`

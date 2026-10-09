@@ -10,6 +10,7 @@ import {
   sessionRows, counts, filterRows, running, attention, stateOf,
   activeDevices, deviceHistory, looksLikeKey, bundleItems, parseImport, quotaTable, quotaState, myMachines, takesOf, usageDays, usageBudget,
 } from '../dist/lib/pages.js';
+import { askOf, askLine } from '../dist/lib/pages.js';
 import { useLocale } from '../dist/lib/i18n.js';
 import { en } from '../dist/lib/i18n/en.js';
 
@@ -81,6 +82,26 @@ test('rows join live context and model by worktree, newest first', () => {
   assert.equal(w.account, 'Max · A');
   assert.equal(rows.find((r) => r.key === 'issue-1953').ctx, null, 'unknown context is a dash, not 0%');
   assert.equal(rows.find((r) => r.key === 'issue-1953').availability, 'lost');
+});
+
+test('a worker that waits on you says what it asks, in its own words (claude-fleet#2538)', () => {
+  const fs = { sessions: [
+    { machine_name: 'm5', availability: 'online', worker: { worker_id: 'a', key: 'issue-1', state: 'needs', needs: 'ask', detail: 'hook words', status_kind: 'permission', status_msg: 'Bash: git push origin x', born: 3 } },
+    { machine_name: 'm5', availability: 'online', worker: { worker_id: 'b', key: 'issue-2', state: 'needs', needs: 'ask', detail: '放在 m5 还是 m4？', born: 2 } },
+    { machine_name: 'm5', availability: 'online', worker: { worker_id: 'c', key: 'issue-3', state: 'working', status_msg: 'Running tests', born: 1 } },
+  ] };
+  const rows = sessionRows(fs, null);
+  const by = (k) => rows.find((r) => r.key === k);
+  assert.equal(by('issue-1').state, 'waiting', 'a fleet worker\'s needs is a waiting row');
+  assert.deepEqual(by('issue-1').ask, { kind: 'permission', msg: 'Bash: git push origin x' }, 'the agent\'s own report wins');
+  assert.deepEqual(by('issue-2').ask, { kind: 'question', msg: '放在 m5 还是 m4？' }, 'else the needs subtype + detail');
+  assert.equal(by('issue-3').ask, null, 'a working session asks nothing');
+  assert.equal(askLine(by('issue-1').ask), 'permission: Bash: git push origin x');
+  assert.equal(askLine(by('issue-1').ask, 8), 'permission: Bash: gi…');
+  assert.equal(askLine(null), '');
+  assert.equal(askOf({ status_msg: 'x'.repeat(300) }, 'waiting').msg.length, 200);
+  assert.match(attention(rows, [], false)[0].sub, /^permission: Bash: git push origin x · /);
+  try { useLocale('zh-CN'); assert.equal(askLine(by('issue-2').ask), '问题：放在 m5 还是 m4？'); } finally { useLocale('en'); }
 });
 
 test('an empty or failed list is no rows, not a crash', () => {

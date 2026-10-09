@@ -252,11 +252,12 @@ case "${1:-}" in
     ;;
   needs7501)
     # The agent says it is blocked (OSC 7501 state=blocked): its kind is the
-    # subtype (permission → perm, question → ask, anything else → ''), its msg the
+    # subtype (permission → perm, question → ask, auth → auth — issue #2538 —,
+    # anything else → ''), its msg the
     # question in its own words — the same @claude_needs / _detail pair the hooks
     # derive from a payload. fleet-status-7501.py is the only caller.
     sem="needs"; sub=${2:-}
-    case "$sub" in perm|ask) ;; *) sub='' ;; esac
+    case "$sub" in perm|ask|auth) ;; *) sub='' ;; esac
     detail=$(printf '%s' "${3:-}" | cut -c1-200)
     ;;
   exited)

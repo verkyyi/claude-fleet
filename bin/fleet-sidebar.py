@@ -1744,17 +1744,54 @@ def auto_width(rows, cols, base, top):
     return max(base, want)
 
 
+ASK_ROW_CHARS = 60
+ASK_WORD = {"permission": "sidebar_ask_permission", "question": "sidebar_ask_question",
+            "auth": "sidebar_ask_auth"}
+
+
+def ask_of(row):
+    """(kind word, words) a needs row asks (issue #2538, fields 17-18), else
+    None: the agent's question / permission request in its own words."""
+    text = (row[17] if len(row) > 17 else "").strip()
+    if row[1] != "needs" or not text:
+        return None
+    key = ASK_WORD.get(row[16] if len(row) > 16 else "")
+    return (tr(key) if key else ""), text
+
+
+def ask_label(row, label):
+    """The row's name, then its kind and the start of what it asks (issue
+    #2538) — `名称  权限：Bash: git push…`; the row clips it like any name."""
+    ask = ask_of(row)
+    if ask is None:
+        return label
+    word, text = ask
+    if len(text) > ASK_ROW_CHARS:
+        text = text[:ASK_ROW_CHARS] + "…"
+    return label + "  " + (word + "：" if word else "") + text
+
+
+def ask_line(row):
+    """The bar's whole question for a needs row (issue #2538), "" else."""
+    ask = ask_of(row)
+    if ask is None:
+        return ""
+    word, text = ask
+    return tr("sidebar_ask_fmt", word or tr("needs_other"), text)
+
+
 def detail_line(row):
     """Everything the row no longer carries, for the bar (issue #2305, on
     #1328's whole-name line): its whole name — the issue's full title when the
     row has one (field 13), since the row shows only its short use (issue
     #2545) — · #issue · @machine · PR · reap
     policy · ctx% · the configuration word · 单子没建上 (#2235) — the empty ones
-    left out. Which `!`
+    left out. A needs row that says what it asks leads with the whole of it
+    (`在问你（权限）：…`, issue #2538). Which `!`
     it is and why a ↻ waits (row[7]) live in the worker pane's header,
     @title_info (issue #1377)."""
     field = lambda i: row[i] if len(row) > i else ""
-    parts = [field(13).strip() or row[3], field(9), machine_tag(field(8)), field(10),
+    parts = [ask_line(row), field(13).strip() or row[3], field(9), machine_tag(field(8)), field(10),
              reap_tag(field(14)), field(11), cfg_tag(field(12)),
              tr("sidebar_backfill_failed") if field(15) == "failed" else ""]
     return " · ".join(p.strip() for p in parts if p and p.strip() not in ("", "—", "·"))
@@ -2281,8 +2318,9 @@ def collect_rows(proc):
 # absent when unknown; #1921 — title is the session's issue title, absent when
 # none: a reader falls back to name; #1902 — reap is the @reap_policy, absent when
 # none; #2235 — backfill is `failed` when a warm start's issue could not be filed /
-# bound, absent otherwise)
-ROW_FIELDS = 16
+# bound, absent otherwise; #2538 — ask_kind / ask_text: what a needs row asks,
+# permission | question | auth and its words, absent when it asks nothing)
+ROW_FIELDS = 18
 
 
 def row_fields(line):
@@ -3173,7 +3211,7 @@ def ui(screen, session, worker, lock):
             # columns right of its parent's. Then the EPIC's `· k/N` and the
             # issue's `#N` (issue #2545), and nothing else (issue #2305).
             w = max(0, width - 1)
-            put(y, row_text(marker, glyph, tree, label, badge, w, row_num(row)), attr, fill=raised)
+            put(y, row_text(marker, glyph, tree, ask_label(row, label), badge, w, row_num(row)), attr, fill=raised)
             # The state glyph, painted over its own cell in the state's colour —
             # where row_left put it, and only when the row is wide enough for it.
             at = width_of(marker) + 1

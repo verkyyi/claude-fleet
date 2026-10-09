@@ -155,7 +155,8 @@ def decode(payload, now=None):
     return rec
 
 
-NEEDS_SUB = {"permission": "perm", "question": "ask"}
+# auth (issue #2538): its own @claude_needs subtype, so 「在问你」 can say 登录.
+NEEDS_SUB = {"permission": "perm", "question": "ask", "auth": "auth"}
 
 
 def claude_verb(rec):

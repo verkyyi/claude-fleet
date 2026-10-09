@@ -108,7 +108,7 @@ assert sidebar.fold_now(frows, 'wid:m4/x', 'collapse', '@9', fcache)[1] is None
 # producer's fields 9-15 — machine · issue · PR · ctx% · cfg · reap — are the
 # bar's, for the highlighted row (detail_line → @fleet_hint_name).
 r12 = sidebar.row_fields('\x1f'.join(['@1', 'working', '·', 'issue-1532', ' ', '', '0', '', 'm4', '#1532', '#1552✓', '45%', '', '', 'merged']))
-assert len(r12) == sidebar.ROW_FIELDS == 16 and r12[9:12] == ['#1532', '#1552✓', '45%'] and r12[14] == 'merged', r12   # 13: cfg (#1783) · 14: title (#1921) · 15: reap (#1902)
+assert len(r12) == sidebar.ROW_FIELDS == 18 and r12[9:12] == ['#1532', '#1552✓', '45%'] and r12[14] == 'merged', r12   # 13: cfg (#1783) · 14: title (#1921) · 15: reap (#1902) · 17-18: ask (#2538)
 want = 'issue-1532 · #1532 · @m4 · #1552✓ · 合并后回收 · 45%'
 assert sidebar.detail_line(r12) == want, repr(sidebar.detail_line(r12))
 assert sidebar.bar_hint([r12], '@1', '@1', 30)[1] == want.replace('#', '##'), 'the bar: # doubled for tmux'
@@ -671,8 +671,9 @@ try:
     # (field 13, cfg, rides only a row whose configuration is known — #1783;
     # field 14, title, only a row whose issue title is known — #1921; field
     # 15, reap, only a row with a @reap_policy — #1902; field 16, backfill, only a
-    # warm start whose issue was never filed — #2235)
-    check(all(len(r) == 5 if r[0] == 'hdr' else len(r) in (sidebar.ROW_FIELDS - 4, sidebar.ROW_FIELDS - 3, sidebar.ROW_FIELDS - 2, sidebar.ROW_FIELDS - 1, sidebar.ROW_FIELDS)
+    # warm start whose issue was never filed — #2235; fields 17-18, what a needs
+    # row asks, only when it asks something — #2538)
+    check(all(len(r) == 5 if r[0] == 'hdr' else 12 <= len(r) <= sidebar.ROW_FIELDS
               for r in row_data()),
           'sidebar rows must carry 9 fields (a heading 5)')
     root = [r for r in row_data() if r[0] == w1]

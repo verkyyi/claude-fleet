@@ -9,7 +9,7 @@
 // Re-read every 15 s while the tab is visible; the filter, search and an open
 // drawer survive it.
 import { esc, ic, ctxBar, relTime } from './shell.js';
-import { sessionRows, counts, filterRows, stateOf, FILTERS, hhmm } from './pages.js';
+import { sessionRows, counts, filterRows, stateOf, FILTERS, hhmm, askLine } from './pages.js';
 import { t, punct } from './i18n.js';
 
 const S = { filter: 'all', query: '', rows: [], open: '', all: false };
@@ -23,7 +23,7 @@ function table(ctx) {
   if (!S.rows.length) return `<tr><td colspan="${cols}"><div class="empty">${ic('list')}<b>${esc(t('ui.ses.none'))}</b><span>${esc(t(a ? 'ui.ses.noneAdmin' : 'ui.ses.noneUser'))}</span></div></td></tr>`;
   if (!rows.length) return `<tr><td colspan="${cols}"><div class="empty">${ic('search')}<b>${esc(t('ui.ses.noMatch'))}</b><span>${esc(t('ui.ses.noMatchSub'))}</span></div></td></tr>`;
   return rows.map((r) => `<tr class="click" data-id="${esc(r.id)}" tabindex="0"><td><div class="status">${dot(r.state)}<span><span class="sname">${esc(r.key)}</span><br><span class="repo">${esc(r.title || '—')}</span></span></div></td>` +
-    `<td class="repo mono">${esc(r.repo || '—')}</td><td>${esc(stateOf(r.state).label)}</td><td class="mono">${esc(r.machine)}${r.availability !== 'online' ? ` <span class="chip ${r.availability === 'lost' ? 'bad' : 'warn'}">${esc(t('ui.avail.' + (r.availability === 'lost' ? 'lost' : 'maintenance')))}</span>` : ''}</td>` +
+    `<td class="repo mono">${esc(r.repo || '—')}</td><td>${esc(stateOf(r.state).label)}${r.ask && r.ask.msg ? `<br><span class="repo" title="${esc(r.ask.msg)}">${esc(askLine(r.ask, 60))}</span>` : ''}</td><td class="mono">${esc(r.machine)}${r.availability !== 'online' ? ` <span class="chip ${r.availability === 'lost' ? 'bad' : 'warn'}">${esc(t('ui.avail.' + (r.availability === 'lost' ? 'lost' : 'maintenance')))}</span>` : ''}</td>` +
     (a ? `<td>${esc(r.person || '—')}</td><td>${esc(r.account || '—')}</td>` : '') +
     `<td>${ctxBar(r.ctx)}</td><td class="mono r">${esc(hhmm(r.born))}</td></tr>`).join('');
 }
@@ -50,6 +50,7 @@ function detail(ctx) {
   if (!r) return;
   const st = stateOf(r.state);
   const cmd = `fleet connect ${r.machine}`;
+  const answer = `fleet answer ${r.key}`;
   const tl = [];
   if (r.born) tl.push([t('ui.ses.startedOn', { m: r.machine }), hhmm(r.born)]);
   if (r.needs) tl.push([r.needs, '']);
@@ -57,6 +58,10 @@ function detail(ctx) {
   ctx.drawer(`<div class="modal-h"><div style="display:grid;gap:2px;min-width:0"><h3 class="mono">${esc(r.key)}</h3><span style="font-size:12.5px;color:var(--muted)">${esc(r.repo || t('ui.ses.noRepo'))}</span></div><button class="btn ghost sm" data-shell="close" aria-label="${esc(t('ui.close'))}">${ic('x')}</button></div>` +
     `<div class="modal-b"><div class="status">${dot(r.state)}<b>${esc(st.label)}</b></div>` +
     (r.title ? `<p style="font-size:15px;font-weight:500">${esc(r.title)}</p>` : '') +
+    // what it asks, in its own words (claude-fleet#2538) — the current question only
+    (r.ask && r.ask.msg ? `<div class="ask"><h4 style="font:600 13px var(--f-ui);margin-bottom:6px">${esc(r.ask.kind ? t('ui.ses.asksKind', { kind: t('ui.ask.' + r.ask.kind) }) : t('ui.ses.asks'))}</h4>` +
+      `<p style="white-space:pre-wrap;overflow-wrap:anywhere">${esc(r.ask.msg)}</p>` +
+      `<p style="font-size:12.5px;color:var(--muted);margin:8px 0 6px">${esc(t('ui.ses.answer'))}</p><div class="cmdbox"><span>${esc(answer)}</span><button class="btn sm" data-shell="copy" data-text="${esc(answer)}" aria-label="${esc(t('ui.copy'))}">${ic('copy')}</button></div></div>` : '') +
     `<dl class="kv"><dt>${esc(t('ui.col.machine'))}</dt><dd class="mono">${esc(r.machine)}</dd><dt>${esc(t('ui.ses.agent'))}</dt><dd>${esc(r.agent || '—')}${r.model ? ` · <span class="mono">${esc(r.model)}</span>` : ''}</dd>` +
     (S.all ? `<dt>${esc(t('ui.col.person'))}</dt><dd>${esc(r.person || '—')}</dd><dt>${esc(t('ui.col.subscription'))}</dt><dd>${esc(r.account || '—')}</dd>` : '') +
     `<dt>${esc(t('ui.col.context'))}</dt><dd>${ctxBar(r.ctx)}</dd><dt>${esc(t('ui.col.started'))}</dt><dd class="mono">${esc(hhmm(r.born))}</dd>${r.worktree ? `<dt>${esc(t('ui.ses.worktree'))}</dt><dd class="mono">${esc(r.worktree)}</dd>` : ''}</dl>` +

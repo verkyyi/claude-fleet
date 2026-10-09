@@ -112,6 +112,26 @@ const STATE_DEF = {
   unknown: { dot: 'idle', group: 'idle' },
 };
 export const STATES = Object.freeze(Object.fromEntries(Object.entries(STATE_DEF).map(([k, v]) => [k, Object.freeze({ ...v, key: 'ui.st.' + k })])));
+/** A fleet worker's own word for a state the page names otherwise: `needs` is
+ *  a session waiting on you (claude-fleet#2538). */
+const STATE_ALIAS = { needs: 'waiting' };
+const stateKey = (s) => (STATES[s] ? s : STATES[STATE_ALIAS[s]] ? STATE_ALIAS[s] : 'unknown');
+/** ASK_KINDS are what a waiting session can ask (OSC 7501's kind). */
+export const ASK_KINDS = Object.freeze(['permission', 'question', 'auth']);
+const NEEDS_KIND = { perm: 'permission', ask: 'question', auth: 'auth' };
+
+/** askOf is what a waiting worker asks (claude-fleet#2538) — {kind, msg}: the
+ *  agent's own report (status_kind / status_msg), else its needs subtype and
+ *  detail; null when it waits on nothing or said nothing. Only the current
+ *  question: a worker that moved on carries none. */
+export function askOf(w, state) {
+  if (state !== 'waiting' && state !== 'blocked') return null;
+  const kind = ASK_KINDS.includes(w.status_kind) ? w.status_kind : (NEEDS_KIND[w.needs] || '');
+  const raw = typeof w.status_msg === 'string' && w.status_msg.trim() ? w.status_msg : (typeof w.detail === 'string' ? w.detail : '');
+  const msg = raw.replace(/[\x00-\x1f\x7f]+/g, ' ').trim().slice(0, 200);
+  return kind || msg ? { kind, msg } : null;
+}
+
 export const stateOf = (s) => { const d = STATES[s] || STATES.unknown; return { ...d, label: t(d.key) }; };
 
 /** FILTERS are the segmented control's buttons, in order: [id, t() key]. */
@@ -140,8 +160,9 @@ export function sessionRows(fs, live) {
       key: w.key || w.name || w.handle || '—',
       repo: w.repo || '',
       title: w.title || w.name || '',
-      state: STATES[w.state] ? w.state : 'unknown',
+      state: stateKey(w.state),
       needs: w.needs || '',
+      ask: askOf(w, stateKey(w.state)),
       machine: s.machine_name || '',
       availability: s.availability || 'online',
       person: s.os_user || '',
@@ -179,7 +200,7 @@ export const running = (rows) => rows.filter((r) => ['working', 'waiting', 'bloc
 export function attention(rows, nodes, admin) {
   const out = [];
   for (const r of rows) {
-    if (r.state === 'waiting') out.push({ tone: 'warn', icon: 'alert', title: t('ui.att.waiting', { key: r.key }), sub: [r.title, r.machine].filter(Boolean).join(' · ') });
+    if (r.state === 'waiting') out.push({ tone: 'warn', icon: 'alert', title: t('ui.att.waiting', { key: r.key }), sub: [askLine(r.ask, 80), r.title, r.machine].filter(Boolean).join(' · ') });
     if (r.state === 'blocked') out.push({ tone: 'bad', icon: 'alert', title: t('ui.att.blocked', { key: r.key }), sub: [r.title, r.machine].filter(Boolean).join(' · ') });
   }
   if (admin) {
@@ -189,6 +210,14 @@ export function attention(rows, nodes, admin) {
     }
   }
   return out;
+}
+
+/** askLine is a waiting row's question as one line — `权限：Bash: git push`,
+ *  its words cut to `max` characters when given; '' when it asks nothing. */
+export function askLine(ask, max) {
+  if (!ask || !ask.msg) return '';
+  const msg = max && ask.msg.length > max ? ask.msg.slice(0, max) + '…' : ask.msg;
+  return ask.kind ? t('ui.ask.line', { kind: t('ui.ask.' + ask.kind), msg }) : msg;
 }
 
 /** hhmm is when a session was born (epoch seconds): the clock time today,

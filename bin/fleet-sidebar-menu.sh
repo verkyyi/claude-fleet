@@ -166,7 +166,7 @@ group() {   # a rule before the next group, never two in a row, never first
 }
 state_word() {   # <state> <needs kind> → the act cell's word, or nothing
   case "$1" in
-    needs)  case "$2" in ask|perm|blocked|restore) t "needs_$2" ;; *) t needs_other ;; esac ;;
+    needs)  case "$2" in ask|perm|auth|blocked|restore) t "needs_$2" ;; *) t needs_other ;; esac ;;
     failed) t needs_failed ;;
   esac
 }

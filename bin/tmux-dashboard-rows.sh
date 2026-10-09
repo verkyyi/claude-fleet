@@ -89,7 +89,7 @@ R="${E}0m"; US=$'\x1f'
 # bash 3.2 keeps the backslash of a `${v:+\}}` inside double quotes (issue #2601).
 _WTEST='#{?@test_identity,,'; _WTEND='}'
 [ "${FLEET_ROWS_TEST:-0}" = 1 ] && { _WTEST=''; _WTEND=''; }
-WFMT="#{session_name}${US}#{window_index}${US}#{?#{||:#{@remote},#{@solo_shell}},,#{?#{==:#{@fleet_role},orchestrator},home,${_WTEST}#{window_name}${_WTEND}}}${US}#{pane_current_path}${US}#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{?#{==:#{@claude_state},looping},#{@claude_wait},#{@claude_needs}}${US}#{@expand}${US}#{@pin}${US}#{?@degenerate_ts,degen=#{@degenerate_ts}:,}#{?@mem_killed,mem:,}#{?@claude_mem_warn,fat=#{@claude_mem_warn}:,}#{?@ctx_warn,ctxw:,}#{?@quota_stuck,stuck:,}#{@quota_failover}${US}#{@reap_due}${US}#{@reap_seen}${US}#{@reap_state_ts}${US}#{@repo}${US}#{@norepo}${US}#{@sleep_since}#{?@sleep_wake_deferred,:#{@sleep_wake_deferred},}${US}#{@repo_fold}${US}#{@loop}${US}#{@title_info}${US}#{?@born,#{@born},#{window_created}}${US}#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}${US}#{@task_line}${US}#{@reap_policy}${US}#{@epic}${US}#{?#{==:#{@backfill},failed},failed,}"
+WFMT="#{session_name}${US}#{window_index}${US}#{?#{||:#{@remote},#{@solo_shell}},,#{?#{==:#{@fleet_role},orchestrator},home,${_WTEST}#{window_name}${_WTEND}}}${US}#{pane_current_path}${US}#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{?#{==:#{@claude_state},looping},#{@claude_wait},#{@claude_needs}}${US}#{@expand}${US}#{@pin}${US}#{?@degenerate_ts,degen=#{@degenerate_ts}:,}#{?@mem_killed,mem:,}#{?@claude_mem_warn,fat=#{@claude_mem_warn}:,}#{?@ctx_warn,ctxw:,}#{?@quota_stuck,stuck:,}#{@quota_failover}${US}#{@reap_due}${US}#{@reap_seen}${US}#{@reap_state_ts}${US}#{@repo}${US}#{@norepo}${US}#{@sleep_since}#{?@sleep_wake_deferred,:#{@sleep_wake_deferred},}${US}#{@repo_fold}${US}#{@loop}${US}#{@title_info}${US}#{?@born,#{@born},#{window_created}}${US}#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}${US}#{@task_line}${US}#{@reap_policy}${US}#{@epic}${US}#{?#{==:#{@backfill},failed},failed,}${US}${US}#{?#{==:#{@claude_state},needs},#{@claude_needs_detail},}"
 
 # pad/truncate a plaintext string to N DISPLAY chars (locale-aware ${#}) → $fld_out
 fld() { local w="$1" s="$2" n=${#2}
@@ -519,11 +519,11 @@ if [ -n "${FLEET_SESSION:-}" ] && fleet_hub_on "$FLEET_SESSION" && [ -s "$G/remo
   if [ -s "$_orchf" ]; then
     while IFS=$US read -r _ow _; do [ -n "$_ow" ] && _orchw+="wid:$_ow "; done < "$_orchf"
   fi
-  while IFS=$US read -r r_wid r_node r_av r_iss r_repo r_state r_agent r_name r_orig r_needs r_local r_lwid r_via _r_busy r_born r_cfg r_ttl r_reap r_epic r_bf _r_ctx; do
+  while IFS=$US read -r r_wid r_node r_av r_iss r_repo r_state r_agent r_name r_orig r_needs r_local r_lwid r_via _r_busy r_born r_cfg r_ttl r_reap r_epic r_bf _ _ _ _ _ r_test r_akind r_atext _; do
     case "$_orchw" in *" $r_wid "*) continue ;; esac
     # field 26 (issue #2505): a test identity's session — after the five
     # measurement fields, so the sixth of the rest; hidden but for `fleet ls`
-    case "$_r_ctx" in *"$US"*"$US"*"$US"*"$US"*"$US"1) [ "${FLEET_ROWS_TEST:-0}" = 1 ] || continue ;; esac
+    [ "$r_test" = 1 ] && { [ "${FLEET_ROWS_TEST:-0}" = 1 ] || continue; }
     case "$r_wid" in
       '#ts'|'#me') continue ;;
       '#node') [ -n "$r_node" ] || continue
@@ -551,13 +551,13 @@ if [ -n "${FLEET_SESSION:-}" ] && fleet_hub_on "$FLEET_SESSION" && [ -s "$G/remo
       # about the row changes (its place, its nesting, its colour)
       r_node="$r_node~"
     fi
-    _rrows+=("$r_wid$US$r_node$US$r_iss$US$r_repo$US$r_state$US$r_agent$US$r_name$US$r_orig$US$r_needs$US$r_born$US$r_cfg$US$r_ttl$US$r_reap$US$r_epic$US$r_bf")
+    _rrows+=("$r_wid$US$r_node$US$r_iss$US$r_repo$US$r_state$US$r_agent$US$r_name$US$r_orig$US$r_needs$US$r_born$US$r_cfg$US$r_ttl$US$r_reap$US$r_epic$US$r_bf$US$r_akind$US$r_atext")
   done < "$G/remote_$FLEET_SESSION"
   for _rr in ${_rrows[@]+"${_rrows[@]}"}; do
-    IFS=$US read -r r_wid r_node r_iss r_repo r_state r_agent r_name r_orig r_needs r_born r_cfg r_ttl r_reap r_epic r_bf <<< "$_rr"
+    IFS=$US read -r r_wid r_node r_iss r_repo r_state r_agent r_name r_orig r_needs r_born r_cfg r_ttl r_reap r_epic r_bf r_akind r_atext <<< "$_rr"
     _rn=$((_rn + 1)); _rno=''; [ -n "$r_repo" ] || _rno=1   # no repo = @norepo
     _rexp=''; case "$_rexpd" in *$'\n'"${r_wid#wid:}"$'\n'*) _rexp=1 ;; esac
-    RLIST+="$FLEET_SESSION$US$_rn$US$r_name$US$US$r_state$US$US$r_wid$US$r_iss$US$r_orig$US$US$r_agent$US${r_node:-?}$US$r_needs$US$_rexp$US$US$US$US$US$US$r_repo$US$_rno$US$US$US$US$US$r_born$US$r_cfg$US$r_ttl$US$r_reap$US$r_epic$US$r_bf"$'\n'
+    RLIST+="$FLEET_SESSION$US$_rn$US$r_name$US$US$r_state$US$US$r_wid$US$r_iss$US$r_orig$US$US$r_agent$US${r_node:-?}$US$r_needs$US$_rexp$US$US$US$US$US$US$r_repo$US$_rno$US$US$US$US$US$r_born$US$r_cfg$US$r_ttl$US$r_reap$US$r_epic$US$r_bf$US$r_akind$US$r_atext"$'\n'
   done
   unset _rrows _rr _rexpd _rexp
   WLIST="$RLIST$WLIST"
@@ -896,7 +896,7 @@ buf=""
 # frame — every row below is a compare against it, no fork.
 fleet_cfg_expected_load; fleet_cfg_broken_load
 CFG_STALE_T='' CFG_RENEW_T='' CFG_BROKEN_T=''
-while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent hnd nsub exp pin qwait reap_due reap_seen reap_stamp wrepo wnorepo slept _ wloop wtitle wborn wcfg wittl wreap wepic wbf; do
+while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent hnd nsub exp pin qwait reap_due reap_seen reap_stamp wrepo wnorepo slept _ wloop wtitle wborn wcfg wittl wreap wepic wbf wakind wask; do
   [ -z "$name" ] && continue
   # A local window's title slot is its @task_line (issue #2359): the first
   # sentence of a session bound to no issue, the title's fallback below.
@@ -950,6 +950,22 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
       _c13=''; [ "$cfgst" = unknown ] || _c13=$cfgst
       _c15=$wreap; case "$_c15" in *[!A-Za-z0-9:.+-]*) _c15='' ;; esac
       cfgf="$US$_c13$US$wittl$US$_c15$US$wbf"
+    fi
+    # fields 17-18 (issue #2538, 「在问你」带原话): what a needs row asks — its
+    # kind (permission · question · auth: a remote row's off the hub, a local
+    # one's from @claude_needs) and its words (@claude_needs_detail / the hub's
+    # status_msg, ≤200). The view puts the start of the words on the row and all
+    # of them on the bar. Fields 13-16 stay, empty, before them; nothing asked ⇒
+    # no field, byte for byte as before.
+    if [ "$state" = needs ] && [ -n "$wask" ]; then
+      wask=${wask//[[:cntrl:]]/ }; wask=${wask:0:200}
+      case "$wakind" in
+        ''|*[!A-Za-z0-9_.+-]*) case "$nsub" in perm) wakind=permission ;; ask) wakind=question ;; auth) wakind=auth ;; *) wakind='' ;; esac ;;
+      esac
+      _c13=''; [ "$cfgst" = unknown ] || _c13=$cfgst
+      _c15=$wreap; case "$_c15" in *[!A-Za-z0-9:.+-]*) _c15='' ;; esac
+      _c16=''; [ "$wbf" = failed ] && _c16=failed
+      cfgf="$US$_c13$US$wittl$US$_c15$US$_c16$US$wakind$US$wask"
     fi
   fi
   # strict per-fleet: only windows from the viewing dash's own tmux session.
@@ -1078,7 +1094,7 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   # kind a frame (fleet_ui_t forks), cached in ND_<kind>.
   ndet=''
   case "$state" in
-    needs)  case "$nsub" in ask|perm|blocked|restore) _nk=$nsub ;; *) _nk=other ;; esac ;;
+    needs)  case "$nsub" in ask|perm|auth|blocked|restore) _nk=$nsub ;; *) _nk=other ;; esac ;;
     failed) _nk=failed ;;
     exited) _nk=exited ;;
     *)      _nk='' ;;
