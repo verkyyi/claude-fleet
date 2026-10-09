@@ -244,7 +244,8 @@ try:
 
     # auto, as today: the list beside the session — the screen multi must equal
     attach()
-    check(wait(lambda: '新任务' in screen() and 'CLAUDE-SESSION' in screen()), 'auto: no list: %r' % screen())
+    # the bar says 新任务 too: wait for the list itself (issue #2627)
+    check(wait(lambda: '暂无会话' in screen() and 'CLAUDE-SESSION' in screen(), 10), 'auto: no list: %r' % screen())
     time.sleep(1.5)
     auto = screen()
     tm('kill-server', s=term)
@@ -330,8 +331,9 @@ try:
     check(r.returncode == 0, 'layout multi: rc %d %s' % (r.returncode, r.stderr))
     check(tm('show-options', '-gqv', 'status', s=stage) == 'on', 'multi: the stage top line stayed off')
     attach()
-    check(wait(lambda: '新任务' in screen(), 10), 'multi: no list:\n%s' % screen())
-    time.sleep(1.5)
+    check(wait(lambda: '暂无会话' in screen(), 10), 'multi: no list:\n%s' % screen())
+    # a slow runner draws the list a beat late (issue #2627): give it time to settle
+    wait(lambda: screen() == auto, 10)
     multi = screen()
     check(multi == auto, 'multi: not today\'s screen:\n--- auto\n%s\n--- multi\n%s' % (auto, multi))
     subprocess.run([real_tmux, '-S', term, 'send-keys', '-t', 'term:', 'C-d'])
