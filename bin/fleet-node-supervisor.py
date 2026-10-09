@@ -2247,7 +2247,27 @@ def account_adopt(paths, login, dry=False, rejoin=False):
     if agent:
         print("  its node agent %s → %s (keys: %s)" % (agent["label"], login_env_path(paths, login),
                                                      " ".join(sorted(agent["env"]))))
+    adopt_follow(paths, login)
     return 0
+
+
+def adopt_follow(paths, login):
+    """Taken over = its install taken over too (issue #2714): the release's updater
+    links the login's tools and runs the release's install-sync for it NOW, in the
+    background (an apply + doctor takes minutes), not on the next update tick. A
+    machine with no release yet has nothing to follow."""
+    upd = os.path.join(paths.runtime, "bin", "fleet-node-update.py")
+    if env("FLEET_NODE_ADOPT_FOLLOW", "1") == "0" or not os.path.exists(upd):
+        return
+    try:
+        subprocess.Popen(["/usr/bin/python3", "-I", upd, "follow", login], stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
+                         close_fds=True)
+    except OSError as e:
+        print("  its install follows the release on the next update tick (%s)" % e)
+        return
+    print("  its ~/.claude/fleet follows the release %s now (log: %s)"
+          % ((runtime_sha(paths) or "?")[:12], os.path.join(paths.log, "update.log")))
 
 
 def _undo(paths, index, moved):
