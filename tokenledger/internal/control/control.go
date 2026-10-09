@@ -573,8 +573,9 @@ type ServiceStatus struct {
 	Kind  string `json:"kind"`
 	Login string `json:"login"`
 	// State is the daemon's word: running · stopped · down (exited, waiting
-	// to restart) · failed (a task past its retries) · invalid (an entry the
-	// daemon will not run) · no_login (the login is gone).
+	// to restart) · invalid (an entry the daemon will not run) · no_login
+	// (the login is gone); a task's also scheduled · retrying · ok · failed
+	// (past its retries, #2529).
 	State       string     `json:"state"`
 	StartedAt   *time.Time `json:"started_at,omitempty"`
 	LastRun     *time.Time `json:"last_run,omitempty"`
@@ -582,7 +583,8 @@ type ServiceStatus struct {
 	LastLogLine string     `json:"last_log_line,omitempty"`
 	Restarts    int        `json:"restarts,omitempty"`
 	LastRC      *int       `json:"last_rc,omitempty"`
-	// Why says what is wrong with an invalid entry.
+	// Why says what is wrong: an invalid entry's reason, a failing task's
+	// last error.
 	Why string `json:"why,omitempty"`
 }
 

@@ -45,7 +45,8 @@ import fleet_iso  # noqa: E402 — the one ISO reader (issue #2024)
 
 FAILED = ("down", "failed", "invalid", "no_login")
 STATE_SAY = {"running": "运行中", "stopped": "已停", "down": "已退出·待重启", "failed": "失败",
-             "invalid": "条目无效", "no_login": "登录不存在", "unknown": "未知"}
+             "invalid": "条目无效", "no_login": "登录不存在", "unknown": "未知",
+             "scheduled": "待运行", "retrying": "重试中", "ok": "上次成功"}   # the last three: a task's (#2529)
 KIND_SAY = {"service": "常驻", "task": "定时"}
 LINE_MAX = 200
 STALE_SECS = 300
@@ -155,8 +156,10 @@ def local_rows():
         state = str(state).replace(" ", "_")
         row = {"name": r.get("name") or "", "kind": r.get("kind") or "service", "login": login, "state": state,
                "started_at": r.get("started"), "last_run": r.get("last_run") or r.get("started"),
-               "next_run": r.get("next_run") or (r.get("next_start") if state == "down" else None),
-               "restarts": r.get("restarts") or 0, "last_rc": r.get("last_rc"), "why": r.get("why") or "",
+               "next_run": (r.get("next_try") if state == "retrying" and r.get("next_try") else None)
+               or r.get("next_run") or (r.get("next_start") if state == "down" else None),
+               "restarts": r.get("restarts") or 0, "last_rc": r.get("last_rc"),
+               "why": r.get("why") or (r.get("last_error") if state in ("failed", "retrying") else "") or "",
                "last_log_line": log_line(r.get("log"), login)}
         out.append(row)
     return out
@@ -210,7 +213,7 @@ def state_say(r):
     s = STATE_SAY.get(r.get("state"), r.get("state") or "?")
     if r.get("state") == "down" and r.get("last_rc") not in (None, 0):
         s += "（rc=%s）" % r["last_rc"]
-    if r.get("state") == "invalid" and r.get("why"):
+    if r.get("state") in ("invalid", "failed", "retrying") and r.get("why"):
         s += "：" + r["why"]
     return s
 

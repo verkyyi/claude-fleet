@@ -51,6 +51,7 @@ cat > "$WORK/state.json" <<EOF
 {"version": 1, "services": [
  {"name": "web", "login": "$ME", "kind": "service", "status": "down", "started": $((NOW - 600)), "next_start": $((NOW + 30)), "last_rc": 2, "restarts": 4, "log": "$WORK/web.log"},
  {"name": "linked", "login": "$ME", "kind": "service", "status": "running", "started": $((NOW - 60)), "log": "$WORK/link.log"},
+ {"name": "nightly", "login": "$ME", "kind": "task", "status": "retrying", "last_run": $((NOW - 300)), "next_run": $((NOW + 86100)), "next_try": $((NOW + 120)), "last_error": "window never opened"},
  {"name": "theirs", "login": "someone-else", "kind": "service", "status": "down"}]}
 EOF
 svc() { FLEET_SERVICES_CACHE="${CACHE-$WORK/hub.json}" FLEET_SERVICES_STATE="${STATE-$WORK/state.json}" \
@@ -70,6 +71,8 @@ has "A: this machine's daemon row: down, its rc, restart in 30s" "已退出·待
 has "A: …next start" "30 秒后" "$(printf '%s\n' "$t" | grep ' web ')"
 has "A: …its own log's last line" "listening on 127.0.0.1:8080" "$(printf '%s\n' "$t" | grep ' web ')"
 eq "A: a log reached through a link is not read" "" "$(svc --json | python3 -c 'import json,sys; print([r for r in json.load(sys.stdin) if r["name"]=="linked"][0].get("last_log_line",""))')"
+has "A: a retrying task (#2529): its last error, not failed yet" "重试中：window never opened" "$(printf '%s\n' "$t" | grep nightly)"
+has "A: …its next run is its next try" "2 分钟后" "$(printf '%s\n' "$t" | grep nightly)"
 hasnt "A: another login's entry is not this login's" "theirs" "$t"
 eq "A: --json marks the failed ones" "daily-report web" "$(svc --json | python3 -c 'import json,sys; print(" ".join(sorted(r["name"] for r in json.load(sys.stdin) if r["failed"])))')"
 eq "A: --json names the machine" "box mini2" "$(svc --json | python3 -c 'import json,sys; print(" ".join(sorted({r["machine"] for r in json.load(sys.stdin)})))')"
@@ -83,7 +86,7 @@ eq "B: …so mini2's rows are the hub's two" 2 "$(HOST=mini2 svc --json | python
 
 # ------------------------------------------------------------------------- C ----
 d=$(svc --doctor)
-has "C: a failed entry is FAIL" "FAIL	2/4 failed:" "$d"
+has "C: a failed entry is FAIL (a retrying task is not one)" "FAIL	2/5 failed:" "$d"
 has "C: …naming it and its last line" "verky/daily-report@mini2 失败「give up: skill not found」" "$d"
 has "C: …and the daemon's" "$ME/web@box 已退出·待重启（rc=2）" "$d"
 d=$(STATE='' CACHE="$WORK/none.json" svc --doctor)

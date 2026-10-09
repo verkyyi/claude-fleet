@@ -4,7 +4,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { FAILED, serviceRows, servicesSection, logDrawer, stateWord, svcClick } from '../dist/lib/services.js';
+import { FAILED, STATES, serviceRows, servicesSection, logDrawer, stateWord, svcClick } from '../dist/lib/services.js';
 import { useLocale } from '../dist/lib/i18n.js';
 import { en } from '../dist/lib/i18n/en.js';
 import { zhCN } from '../dist/lib/i18n/zh-CN.js';
@@ -74,7 +74,7 @@ test('every word through t(), every key in both dictionaries', () => {
   }
   for (const k of Object.keys(en).filter((k) => k.startsWith('ui.svc.'))) assert.ok(k in zhCN, k);
   for (const s of ['service', 'task']) for (const p of ['ui.svc.title.', 'ui.svc.none.', 'ui.svc.kind.']) assert.ok(en[p + s] && zhCN[p + s], p + s);
-  for (const st of ['running', 'stopped', 'down', 'failed', 'invalid', 'no_login', 'unknown']) assert.ok(en['ui.svc.st.' + st] && zhCN['ui.svc.st.' + st], st);
+  for (const st of [...STATES, 'unknown']) assert.ok(en['ui.svc.st.' + st] && zhCN['ui.svc.st.' + st], st);
   const src = readFileSync(new URL('../dist/lib/services.js', import.meta.url), 'utf8');
   const markup = src.replace(/\/\/.*$/gm, '').match(/>[^<>${}`'"]*[A-Za-z]{3,}[^<>${}`'"]*</g) || [];
   assert.deepEqual(markup, [], 'bare words in markup');

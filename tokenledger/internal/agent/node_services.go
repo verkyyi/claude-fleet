@@ -33,6 +33,8 @@ type supervisorService struct {
 	NextStart *float64 `json:"next_start"`
 	LastRun   any      `json:"last_run"` // a task's (#2529): epoch or ISO
 	NextRun   any      `json:"next_run"`
+	NextTry   any      `json:"next_try"`   // a retrying task's next attempt
+	LastError string   `json:"last_error"` // a task's (#2529)
 	Restarts  int      `json:"restarts"`
 	LastRC    *int     `json:"last_rc"`
 }
@@ -69,8 +71,14 @@ func readServices(stateFile string) []control.ServiceStatus {
 			s.LastRun = s.StartedAt
 		}
 		s.NextRun = anyTime(r.NextRun)
-		if s.NextRun == nil && s.State == "down" {
+		switch {
+		case s.State == "retrying" && anyTime(r.NextTry) != nil:
+			s.NextRun = anyTime(r.NextTry)
+		case s.NextRun == nil && s.State == "down":
 			s.NextRun = epochTime(r.NextStart)
+		}
+		if s.Why == "" && (s.State == "failed" || s.State == "retrying") {
+			s.Why = r.LastError
 		}
 		s.LastLogLine = serviceLogLine(r.Log, r.Login)
 		out = append(out, s)

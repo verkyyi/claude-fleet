@@ -14,6 +14,10 @@ import { fmtIn } from './admin.js';
 /** FAILED is the states that want a person (control.ServiceStatus.Failed). */
 export const FAILED = ['down', 'failed', 'invalid', 'no_login'];
 
+/** STATES is every state with a word: a service's, and a task's
+ *  scheduled · retrying · ok (claude-fleet#2529). */
+export const STATES = ['running', 'stopped', 'down', 'failed', 'invalid', 'no_login', 'scheduled', 'retrying', 'ok'];
+
 /** serviceRows is every registered entry on snap's machines, by machine,
  *  login, name — failed or not. */
 export function serviceRows(snap) {
@@ -37,7 +41,7 @@ export function serviceRows(snap) {
 
 /** stateWord is a row's state as a person reads it. */
 export function stateWord(r) {
-  const w = t('ui.svc.st.' + (['running', 'stopped', 'down', 'failed', 'invalid', 'no_login'].includes(r.state) ? r.state : 'unknown'));
+  const w = t('ui.svc.st.' + (STATES.includes(r.state) ? r.state : 'unknown'));
   return r.state === 'down' && r.rc ? t('ui.svc.rc', { state: w, rc: r.rc }) : w;
 }
 
@@ -45,7 +49,7 @@ function row(r, i, now) {
   const next = r.nextRun ? (fmtIn(r.nextRun, now) || relTime(r.nextRun, now)) : '—';
   return `<tr data-svc="${i}" style="cursor:pointer${r.failed ? ';color:var(--bad)' : ''}">` +
     `<td><b>${esc(r.machine)}</b></td><td class="mono">${esc(r.login)}</td><td class="mono">${esc(r.name)}</td>` +
-    `<td><span class="chip ${r.failed ? 'bad' : r.state === 'running' ? 'ok' : ''}">${esc(stateWord(r))}</span></td>` +
+    `<td><span class="chip ${r.failed ? 'bad' : r.state === 'running' || r.state === 'ok' ? 'ok' : r.state === 'retrying' ? 'warn' : ''}">${esc(stateWord(r))}</span></td>` +
     `<td class="mono">${esc(r.lastRun ? relTime(r.lastRun, now) : '—')}</td><td class="mono">${esc(next)}</td>` +
     `<td class="mono" style="max-width:28em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(r.line)}">${esc(r.line || '—')}</td></tr>`;
 }
