@@ -214,10 +214,16 @@ has "http://127.0.0.1:$(cat "$ROOT/server.port")" "$(cat "$WORK/serve.argv")" "3
 
 # --- 4. start port held by a socket lsof cannot see → next port ------------
 reset_state; echo operator > "$WORK/serve.mode"
+# SO_REUSEADDR: case 1's request left a TIME_WAIT on BASEPORT, and BSD refuses a
+# plain bind beside one (EADDRINUSE) while server.py (allow_reuse_address) binds
+# fine — so the holder died and the share took BASEPORT (issue #2646). A second
+# SO_REUSEADDR socket is still refused while this one listens.
 python3 -c 'import socket,sys,time
-s=socket.socket(); s.bind(("127.0.0.1",int(sys.argv[1]))); s.listen(1); time.sleep(120)' "$BASEPORT" &
-PIDS+=($!)
+s=socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(("127.0.0.1",int(sys.argv[1]))); s.listen(1); time.sleep(120)' "$BASEPORT" &
+HOLDER=$!; PIDS+=($HOLDER)
 for _ in $(seq 1 50); do python3 -c 'import socket,sys;s=socket.socket();sys.exit(s.connect_ex(("127.0.0.1",int(sys.argv[1]))))' "$BASEPORT" && break; sleep 0.1; done
+kill -0 "$HOLDER" 2>/dev/null || fail "4: the port-holder could not bind BASEPORT $BASEPORT (test setup)" ""
 out="$(share "$WORK/a.md")"; rc=$?
 [ "$rc" = 0 ] || fail "4: a held start port must be skipped, not fatal (rc=$rc)" "$out"
 PORT="$(cat "$ROOT/server.port" 2>/dev/null)"
