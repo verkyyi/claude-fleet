@@ -115,7 +115,7 @@ if [ "${target#hdr:}" != "$target" ]; then
   case " $cur " in *" $slug "*) folded=1 ;; *) folded=0 ;; esac
   # the token's presence means "open" for `ended`: swap the verb, not the bookkeeping
   if [ "$hkey" = ended ]; then
-    case "$verb" in collapse) verb=expand ;; *) verb=collapse ;; esac
+    case "$verb" in collapse) verb="expand" ;; *) verb="collapse" ;; esac
   fi
   if [ "$verb" = collapse ]; then
     # `←` on an open heading shuts it; on a folded one it is a dead key.
