@@ -1436,13 +1436,13 @@ solo)
   # each `key words` part with its key bold, as one tmux format (a `\` doubled
   # for the conf's double quotes)
   solo_bar() {
-    local rest="$1 · " part out=''
-    while [ -n "$rest" ]; do
-      part=${rest%% · *}; rest=${rest#* · }
-      [ -n "$out" ] && out="$out · "
-      out="$out#[fg=#c0caf5]#[bold]${part%% *}#[nobold]#[fg=#565f89] ${part#* }"
+    local brest="$1 · " bpart bout=''
+    while [ -n "$brest" ]; do
+      bpart=${brest%% · *}; brest=${brest#* · }
+      [ -n "$bout" ] && bout="$bout · "
+      bout="$bout#[fg=#c0caf5]#[bold]${bpart%% *}#[nobold]#[fg=#565f89] ${bpart#* }"
     done
-    printf '%s' "${out//\\/\\\\}"
+    printf '%s' "${bout//\\/\\\\}"
   }
   bar=$(solo_bar "$(sh "$SB/fleet-ui-lang.sh" t solo_view_bar 2>/dev/null)")
   sbar=$(solo_bar "$(sh "$SB/fleet-ui-lang.sh" t solo_view_bar_shell 2>/dev/null)")
