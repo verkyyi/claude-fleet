@@ -992,7 +992,7 @@ ok "N --call refusals (type · unhosted repo · unknown argument · unknown tool
 # With bin/fleet_decision.py beside it: a field ⇒ 建议 / 不答按 / 截止 + the
 # fleet:ask marker; no field + FLEET_STEWARD=0 ⇒ today's body byte for byte; no
 # field + the steward on ⇒ the marker, a row that waits (「等你」).
-cp "$BIN/fleet_decision.py" "$BIN/fleet-ui-lang.sh" "$WORK/bin/"
+cp "$BIN/fleet_decision.py" "$BIN/fleet_iso.py" "$BIN/fleet-ui-lang.sh" "$WORK/bin/"
 : > "$LOG"
 {
   call 120 ask '{"question":"which repo owns this?"}'
@@ -1011,7 +1011,7 @@ assert " kind=normal " in b and " suggest=20 " in b, b
 b = rows[122]["body"]
 assert b.startswith("⛔ blocked: which repo owns this?\n\n- 不答按：等你\n\n<!-- fleet:ask v=1 "), b
 PY
-rm -f "$WORK/bin/fleet_decision.py" "$WORK/bin/fleet-ui-lang.sh"
+rm -f "$WORK/bin/fleet_decision.py" "$WORK/bin/fleet_iso.py" "$WORK/bin/fleet-ui-lang.sh"
 ok "O ask: a field ⇒ 建议/不答按/截止 + fleet:ask marker; steward off + no field ⇒ today's body; steward on ⇒ 等你 row"
 
 printf 'fleet-mcp-selftest: %d passed\n' "$pass"

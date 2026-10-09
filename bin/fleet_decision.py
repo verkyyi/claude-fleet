@@ -41,6 +41,8 @@ import uuid
 from pathlib import Path
 from urllib.parse import quote, unquote
 
+import fleet_iso   # the one ISO reader for bin/ (issue #2024)
+
 BIN = Path(__file__).resolve().parent
 V = "1"
 ASK_HEAD = {"question": "⛔ blocked: ", "permission": "⛔ blocked — needs authorization: "}
@@ -111,10 +113,7 @@ def now_local(given=None):
 
 
 def parse_time(s):
-    s = s.strip()
-    if s.endswith("Z"):
-        s = s[:-1] + "+00:00"
-    t = dt.datetime.fromisoformat(s)
+    t = fleet_iso.parse(s)
     return t.astimezone(zone()) if t.tzinfo else t.replace(tzinfo=zone())
 
 
