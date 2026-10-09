@@ -93,8 +93,14 @@ assert sorted(fcache) == ['@1', '@2', 'hdr:o/a', 'hdr:o/b'], fcache
 ids = lambda rows: [r[0] for r in rows]
 shut, holder = sidebar.fold_now(frows, '@3', 'collapse', '@9', fcache)
 assert holder == '@2' and ids(shut) == ['hdr', '@1', '@2', '@4', 'hdr', '@5'] and shut[2][4] == '└▸', shut
+# a root shut in the batch view (issue #2675) takes its needs row in too; with
+# FLEET_SIDEBAR_FOLD=off it stays, as before
+os.environ['FLEET_SIDEBAR_FOLD'] = 'off'
+old_shut, holder = sidebar.fold_now(shut, '@1', 'collapse', '@9', dict(fcache))
+assert holder == '@1' and ids(old_shut) == ['hdr', '@1', '@4', 'hdr', '@5'] and old_shut[1][4] == '▸', old_shut
+del os.environ['FLEET_SIDEBAR_FOLD']
 shut, holder = sidebar.fold_now(shut, '@1', 'collapse', '@9', fcache)
-assert holder == '@1' and ids(shut) == ['hdr', '@1', '@4', 'hdr', '@5'] and shut[1][4] == '▸', shut
+assert holder == '@1' and ids(shut) == ['hdr', '@1', 'hdr', '@5'] and shut[1][4] == '▸', shut
 opened, holder = sidebar.fold_now(shut, '@1', 'expand', '@9', fcache)
 assert holder == '@1' and ids(opened) == ['hdr', '@1', '@2', '@4', 'hdr', '@5'], opened
 shut, holder = sidebar.fold_now(frows, 'hdr:o/a', 'collapse', '@2', fcache)

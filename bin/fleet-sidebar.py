@@ -27,7 +27,7 @@ import unicodedata
 
 BIN = Path(__file__).absolute().parent  # preserve the selftest shadow root
 US = "\x1f"
-VIEW_VERSION = "30"  # #2146: @fleet_orch for the bar · #1957: 「新任务」 wears the orchestrator · #1953: 「新任务」 on top + `compose` · #1950: sessions only, no keys — questions under the session (fleet-ask.py)
+VIEW_VERSION = "31"  # #2675: the batch view — batches, 单独的活 groups, 停放 / 待你动手 · #2146: @fleet_orch for the bar · #1957: 「新任务」 wears the orchestrator · #1953: 「新任务」 on top + `compose` · #1950: sessions only, no keys — questions under the session (fleet-ask.py)
 # What a drawn list runs, by CONTENT (issue #2345): VIEW_VERSION is bumped by
 # hand, so a client update that changed this file without bumping it kept the
 # old process drawing — sync reuses a view whose @sidebar_version matches. The
@@ -719,6 +719,7 @@ def sync(session, enabled, width, lock):
         "env", "FLEET_UI_LANG=" + os.environ.get("FLEET_UI_LANG", ""),
         "FLEET_SIDEBAR_WIDTH=" + str(width),
         "FLEET_SIDEBAR_WIDTH_MAX=" + os.environ.get("FLEET_SIDEBAR_WIDTH_MAX", ""),
+        "FLEET_SIDEBAR_FOLD=" + os.environ.get("FLEET_SIDEBAR_FOLD", ""),
         "python3", str(BIN / "fleet-sidebar.py"), "ui", session, worker, lock))
     if here and run(["tmux", "respawn-pane", "-k", "-t", here, "-c", cwd, cmd]).returncode == 0:
         # The window keeps a slot (issue #1702): the new view takes its cell.
@@ -769,8 +770,9 @@ def jump(session, window, pane, lock, node="", name=""):
     LOCK_WAIT — the caller paints what was pressed and retries. `node` / `name`
     (issue #2236): another machine's session the list does not carry yet — just
     opened there — is stepped into on that machine, under that name."""
-    if window == PORTAL_KEY:
-        # 「新任务」 (issue #1953): the stage's writing-area window, made once.
+    if window == PORTAL_KEY or window.startswith(STEWARD):
+        # 「新任务」 (issue #1953): the stage's writing-area window, made once —
+        # and 停放 / 待你动手 (issue #2675), whose cards are the orchestrator's.
         open_portal(session)
         return True
     # Another machine's row (`wid:<worker_id>`, #1423): step in through a proxy
@@ -851,6 +853,35 @@ def orch_queue(p):
     return int(q) if q.isdigit() else None
 
 
+# 停放 / 待你动手 (issue #2675, EPIC #2668 C7): with the steward on, orch_<sess>
+# carries tagged columns past the 7th — `park=N` (sessions parked, waiting on
+# something) and `todo=N` (the 待你动手 list), written by the steward's members
+# (C2-C4) beside its `decide=N`. Each count > 0 is one row at the list's foot;
+# a tap opens the orchestrator, where the card is. No such column (no steward,
+# an older node) ⇒ no row. FLEET_SIDEBAR_FOLD=off draws neither.
+STEWARD = "steward:"
+STEWARD_ROWS = (("park", "⏸", "sidebar_steward_park_fmt"), ("todo", "☐", "sidebar_steward_todo_fmt"))
+
+
+def orch_counts(p):
+    """The tagged `name=N` columns of an orch_<sess> line past the 7th, as ints."""
+    out = {}
+    for cell in (p or [])[7:]:
+        name, eq, num = cell.strip().partition("=")
+        if eq and num.isdigit():
+            out[name] = int(num)
+    return out
+
+
+def steward_rows(line):
+    """The 停放 / 待你动手 rows an orch_<sess> line asks for (above)."""
+    if not batch_fold():
+        return []
+    counts = orch_counts(line)
+    return [[STEWARD + name, "steward", glyph, tr(key, counts[name]), " ", "", "0"] + [""] * (ROW_FIELDS - 7)
+            for name, glyph, key in STEWARD_ROWS if counts.get(name, 0) > 0]
+
+
 def remote_name(session, wid):
     """A row on another machine's window name, off the refresh loop's cache
     (fleet-hub-sessions.sh remote_<session>: worker key in column 1, name in 8)
@@ -876,6 +907,7 @@ def with_portal(rows, placing, session=""):
     if not STAGE:
         return rows
     body = [row for row in rows if row[0] not in (PORTAL_KEY, PLACING_KEY) and
+            not row[0].startswith(STEWARD) and
             not (row[0] == "hdr" and row[1] == "" and row[2] == "─")]
     pad = [""] * (ROW_FIELDS - 9)
     state, glyph = "portal", "+"
@@ -902,7 +934,7 @@ def with_portal(rows, placing, session=""):
                     tr("sidebar_portal_placing_fmt", title),
                     " ", "", "0", "", ""] + pad)
     top.append(["hdr", "", "─", "─" * 120] + [""] * (ROW_FIELDS - 4))
-    return top + body
+    return top + body + steward_rows(line)
 
 
 def clip(text, width):
@@ -1985,7 +2017,7 @@ def is_attn_summary(row):
 def sessions(rows):
     """The window ids alone — what a close lands on (#900), never a heading, nor
     a batch nobody drives (issue #1916: it has no window)."""
-    return [row[0] for row in rows if row[0] != "hdr" and not row[0].startswith(EPIC_STALE)]
+    return [row[0] for row in rows if row[0] != "hdr" and not row[0].startswith((EPIC_STALE, SOLO, STEWARD))]
 
 
 # A batch NOBODY drives (issue #1916): the producer's grey row for a stale EPIC
@@ -2087,6 +2119,10 @@ def tap(hit, highlighted):
         return "new" if hit == highlighted else "select"
     if hit.startswith(EPIC_STALE):
         return "epic" if hit == highlighted else "select"   # no window to jump to (#1916)
+    if hit.startswith(STEWARD):
+        return "jump"   # 停放 / 待你动手 (issue #2675): the orchestrator, as 「新任务」
+    if hit.startswith(SOLO):
+        return "select"   # 单独的活 (issue #2675): no window; the caret path folds it
     return "menu" if hit == highlighted else "jump"
 
 
@@ -2095,7 +2131,7 @@ def acts(key):
     a heading (`hdr:…`) is none — jump, menu, tap all stay no-ops on it (EPIC #994)
     — and so is a landed row (`landed:…`, issue #1532): its one action is ↵,
     restore, which the landed view handles itself."""
-    return "" if key.startswith(("hdr", "landed:", EPIC_STALE)) or key == PLACING_KEY else key
+    return "" if key.startswith(("hdr", "landed:", EPIC_STALE, SOLO, STEWARD)) or key == PLACING_KEY else key
 
 
 def folds(key):
@@ -2105,7 +2141,7 @@ def folds(key):
     empty-state hint), a batch nobody drives (issue #1916) or no row at all:
     nothing to fold."""
     return key if key and key != "hdr" and key not in (PORTAL_KEY, PLACING_KEY) \
-        and not key.startswith(EPIC_STALE) else ""
+        and not key.startswith((EPIC_STALE, STEWARD)) else ""
 
 
 # ←/→ fold AT ONCE (issue #1530): the view applies the fold to the rows it has
@@ -2220,7 +2256,9 @@ def fold_now(rows, key, verb, current, cache):
     hidden = rows[j + 1:end]
     if hidden:
         cache[key_of(rows[j])] = hidden
-    keep = [row for row in hidden if row[1] in FOLD_KEEP or row[0] == current]
+    # a batch shut in the batch view takes its loud rows in too (issue #2675)
+    loud = not (batch_fold() and rows[j][0] != "hdr" and row_depth(rows[j]) == 0)
+    keep = [row for row in hidden if (loud and row[1] in FOLD_KEEP) or row[0] == current]
     return rows[:j] + [with_fold(rows[j], False)] + keep + rows[end:], key_of(rows[j])
 
 
@@ -2237,10 +2275,120 @@ def fold_key(rows, current):
     return "collapse", current
 
 
-def fold_write(folding, verb, key, env):
+# THE BATCH VIEW (issue #2675, EPIC #2668 C7): the list is the batches and what
+# wants you, not every session. The producer folds a subtree by default already
+# (@expand) but keeps a row waiting on you out of the fold (FOLD_KEEP) — 17 rows
+# with 7 batches running. Here a FOLDED batch takes those in too and wears a `!`
+# on its own row (never red, never opened for you), and every repo's sessions
+# with no batch above them become ONE row, 「单独的活 · N」 (`solo:<owner/name>`):
+# no window behind it, a tap opens / shuts it, its bit kept in this machine's
+# solo_fold_<session> (the producer's remote_fold beside it). What still turns
+# red for you is 「新任务」 alone. The 置顶 and 已结束 groups stay as they are.
+# FLEET_SIDEBAR_FOLD=off: the producer's rows untouched, byte for byte.
+SOLO = "solo:"
+SOLO_GLYPH = "≡"
+
+
+def batch_fold():
+    return (os.environ.get("FLEET_SIDEBAR_FOLD") or "batch") != "off"
+
+
+def solo_path(session):
+    return os.path.join(status_dir(), "solo_fold_" + (session or ""))
+
+
+def solo_opened(session):
+    """The `solo:` groups opened on this machine (folded is the default)."""
+    try:
+        with open(solo_path(session), encoding="utf-8") as f:
+            return {line.strip() for line in f if line.strip().startswith(SOLO)}
+    except OSError:
+        return set()
+
+
+def solo_write(session, key, opened):
+    """Remember one `solo:` group open or shut — a whole-file rename."""
+    keys = solo_opened(session)
+    (keys.add if opened else keys.discard)(key)
+    path = solo_path(session)
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path + ".tmp", "w", encoding="utf-8") as out:
+            out.write("".join(k + "\n" for k in sorted(keys)))
+        os.replace(path + ".tmp", path)
+    except OSError:
+        pass
+
+
+def batch_badge(badge, loud):
+    """A batch row's badge with the `!` that says someone under it waits on you."""
+    return ("! " + badge if badge else "!") if loud else badge
+
+
+def batch_view(rows, current, opened, cache=None):
+    """The producer's rows as the batch view (above). `opened` = the `solo:` keys
+    open here; `cache` (the fold cache) gets each solo group's rows, so → draws
+    them the moment it opens. The current window is never hidden from itself."""
+    if not batch_fold():
+        return rows
+    out, solo, section = [], [], ["", True]   # (repo, groups its strays)
+
+    def flush():
+        if not solo:
+            return
+        key = SOLO + (section[0] or "all")
+        kids = []
+        for row in solo:
+            row = list(row)
+            row[4], row[6] = "└", "1"
+            kids.append(row)
+        is_open = key in opened
+        loud = any(row[1] in FOLD_KEEP for row in kids)
+        out.append([key, "solo", SOLO_GLYPH, tr("sidebar_solo_fmt", len(kids)), "▾" if is_open else "▸",
+                    batch_badge("", loud), "0"] + [""] * (ROW_FIELDS - 7))
+        if cache is not None:
+            cache[key] = kids
+        out.extend(kids if is_open else [row for row in kids if row[0] == current])
+        del solo[:]
+
+    i = 0
+    while i < len(rows):
+        row = rows[i]
+        if row[0] == "hdr":
+            if row[1]:   # a heading with a target opens a section; a bare one is paint
+                flush()
+                section[:] = [row[1], key_of(row) not in FOLD_HEADINGS]
+            out.append(row)
+            i += 1
+            continue
+        if row_depth(row) == 0 and owns_fold(row) and not row[0].startswith(EPIC_STALE):
+            end = block_end(rows, i)
+            block = rows[i + 1:end]
+            loud = any(r[1] in FOLD_KEEP for r in block)
+            row = list(row)
+            row[5] = batch_badge(row[5], loud)
+            out.append(row)
+            out.extend(block if fold_open(row) else [r for r in block if r[0] == current])
+            i = end
+            continue
+        if row_depth(row) == 0 and section[1] and not row[0].startswith(EPIC_STALE) \
+                and row[0] not in (PORTAL_KEY, PLACING_KEY):
+            solo.append(row)
+        else:
+            out.append(row)
+        i += 1
+    flush()
+    return out
+
+
+def fold_write(folding, verb, key, env, holder=None):
     """Write the fold bit behind a fold already painted (fold_now): the toggle
     before it finished first, then dash-fold-toggle.sh in the background. The
-    running toggle, which no producer starts before."""
+    running toggle, which no producer starts before. A `solo:` group's bit is
+    this view's own (batch_view): written here and now, no toggle."""
+    if (holder or key).startswith(SOLO):
+        solo_write(env.get("FLEET_SESSION", ""), holder or key, verb == "expand")
+        return folding
     if folding is not None:
         try:
             folding.wait(timeout=10)
@@ -2904,11 +3052,14 @@ def ui(screen, session, worker, lock):
                 # you is its own red `!`. The producer still writes it (EPIC
                 # #1949 convention 3: it goes there after #1940).
                 fresh = [row for row in fresh if not is_attn_summary(row)]
-                rows, loaded, frame_at, failure, empty_held, stalled = fresh, True, now, "", False, False
+                # the batch view (issue #2675): what is painted; ⌘P, the close
+                # landing and the rest below still read every row the producer gave
+                rows = batch_view(fresh, current_row, solo_opened(session), fold_cache)
+                loaded, frame_at, failure, empty_held, stalled = True, now, "", False, False
                 remember_folds(rows, fold_cache)
                 if SWITCH_ON:
                     # what ⌘P lists (issue #1903) — written only on change
-                    text = switch_lib().rows_text(rows)
+                    text = switch_lib().rows_text(fresh)
                     if text != switch_rows and switch_lib().write_atomic(switch_lib().rows_path(), text):
                         switch_rows = text
                 # Publish the close-landing candidates for THIS window (issue
@@ -2916,8 +3067,8 @@ def ui(screen, session, worker, lock):
                 # `@sidebar_next_of` pins them to the window they were read
                 # against: the hub-arrival hook uses them only when THAT is
                 # the window that just closed.
-                nxt = " ".join(landing(sessions(rows), window))
-                if (window, nxt) != published and window in [row[0] for row in rows]:
+                nxt = " ".join(landing(sessions(fresh), window))
+                if (window, nxt) != published and window in [row[0] for row in fresh]:
                     tmux("set-option", "-t", "=" + session + ":", "@sidebar_next", nxt, ";",
                          "set-option", "-t", "=" + session + ":", "@sidebar_next_of", window)
                     published = (window, nxt)
@@ -3107,7 +3258,7 @@ def ui(screen, session, worker, lock):
                         if what is not None:
                             base, holder = fold_now(base, what[1], what[0], current_row, fold_cache)
                             if holder is not None:
-                                folding = fold_write(folding, what[0], what[1], env)
+                                folding = fold_write(folding, what[0], what[1], env, holder)
                     if view == "live":
                         rows = base
                     else:
@@ -3340,7 +3491,7 @@ def ui(screen, session, worker, lock):
                     rows, holder = fold_now(rows, what[1], what[0], current_row, fold_cache)
                     if holder is not None:
                         selected, follow_at, refresh_at = holder, None, 0
-                        folding = fold_write(folding, what[0], what[1], env)
+                        folding = fold_write(folding, what[0], what[1], env, holder)
                 todo = [v for v in todo if v != "fold"]
             if todo and spawning is None:
                 if view != "live":
@@ -3446,7 +3597,8 @@ def ui(screen, session, worker, lock):
             elif buttons & (curses.BUTTON1_PRESSED | curses.BUTTON1_CLICKED | MULTI_CLICK):
                 refresh_at = 0
                 armed = None
-                if hit_row is not None and view == "live" and folds(hit) and on_caret(hit_row, x):
+                if hit_row is not None and view == "live" and folds(hit) and \
+                        (on_caret(hit_row, x) or hit.startswith(SOLO)):
                     # A tap on a row's caret (▸ / ▾ and the tree left of the name,
                     # or a heading's first cells) folds or opens its block (issue
                     # #1950: ←/→ went with the keyboard). Painted at once
@@ -3463,7 +3615,7 @@ def ui(screen, session, worker, lock):
                     caret_tap = (hit, time.monotonic(), True)
                     verb = "collapse" if fold_open(hit_row) else "expand"
                     rows, holder = fold_now(rows, hit, verb, window, fold_cache)
-                    folding = fold_write(folding, verb, hit, env)
+                    folding = fold_write(folding, verb, hit, env, holder)
                 elif not buttons & (curses.BUTTON1_PRESSED | curses.BUTTON1_CLICKED):
                     pass   # a double / triple click off the caret: nothing, as ever
                 elif action in ("menu", "new"):
