@@ -772,7 +772,7 @@ func (s *Server) restoreTarget(p fleetPrincipal, repo, key, node string, now tim
 	}
 	hb, _, _ := s.nodeStatusOf(target.EndpointID, now)
 	if cv := s.computeOf(target.EndpointID, hb, settings, now); cv.Off {
-		return pl, target, fault("NO_ELIGIBLE_NODE", s.nodeMachineLabel(target.Hostname)+": "+cv.Why)
+		return pl, target, fault("NO_ELIGIBLE_NODE", s.nodeMachineLabel(target.Hostname)+": "+cv.Reason())
 	}
 	return pl, target, nil
 }

@@ -20,8 +20,9 @@ import (
 // `fleet node compute on|off` rewrites node.env's CCQUOTA_FLEET_COMPUTE (and
 // CCQUOTA_FLEET_COMPUTE_FORCE) and bin/fleet-node-probe.sh rewrites
 // node-probe.json; the agent re-reads both on every hello and beat, so neither
-// needs the agent restarted. A node.env the agent cannot read keeps the
-// start-time reading (Config.FleetComputeOff) — exactly #1719's behaviour.
+// needs the agent restarted. A node.env the agent has never been able to read
+// (nor node.pub.env) keeps the start-time reading (Config.FleetComputeOff) —
+// exactly #1719's behaviour.
 
 // defaultConfPath is name under the default claude-fleet conf dir.
 func defaultConfPath(home, name string) string {
@@ -29,11 +30,33 @@ func defaultConfPath(home, name string) string {
 }
 
 // nodeEnv reads node.env's KEY=value lines; ok false when it is unreadable.
+//
+// A credential-separated login's node.env is a link into a root-only
+// directory (claude-fleet#1971): an agent that cannot follow it reads
+// node.pub.env beside it — the same lines without the token. Neither readable
+// (a restart's window, a switch half done) ⇒ the last reading that succeeded,
+// never the start-time setting: on 2026-10-09 an agent started before the
+// separation fell back to its start-time CCQUOTA_FLEET_COMPUTE=0 and the hub
+// excluded a login that had never stopped running (claude-fleet#2661).
 func (a *Agent) nodeEnv() (map[string]string, bool) {
 	if a.cfg.FleetNodeEnvPath == "" {
 		return nil, false
 	}
-	f, err := os.Open(a.cfg.FleetNodeEnvPath)
+	pub := filepath.Join(filepath.Dir(a.cfg.FleetNodeEnvPath), "node.pub.env")
+	for _, p := range []string{a.cfg.FleetNodeEnvPath, pub} {
+		if env, ok := readEnvFile(p); ok {
+			a.lastNodeEnv.Store(&env)
+			return env, true
+		}
+	}
+	if last := a.lastNodeEnv.Load(); last != nil {
+		return *last, true
+	}
+	return nil, false
+}
+
+func readEnvFile(path string) (map[string]string, bool) {
+	f, err := os.Open(path)
 	if err != nil {
 		return nil, false
 	}
@@ -45,12 +68,15 @@ func (a *Agent) nodeEnv() (map[string]string, bool) {
 			env[strings.TrimPrefix(k, "export ")] = strings.Trim(v, `"'`)
 		}
 	}
+	if sc.Err() != nil {
+		return nil, false
+	}
 	return env, true
 }
 
-// computeOffNow is this login's own word on compute: node.env's line when the
-// file is readable (no line = on, a node from before #1719), else the
-// start-time setting.
+// computeOffNow is this login's own word on compute: node.env's line (or
+// node.pub.env's, or the last one read — see nodeEnv; no line = on, a node
+// from before #1719), else the start-time setting.
 func (a *Agent) computeOffNow() bool {
 	if env, ok := a.nodeEnv(); ok {
 		return env["CCQUOTA_FLEET_COMPUTE"] == "0"

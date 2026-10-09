@@ -1499,7 +1499,7 @@ func (s *Server) judge(r store.FleetRow, settings map[string]string, accounts ma
 		// 只协调 (claude-fleet#1719): the login asked for no sessions, or its
 		// egress region closed it (#1720) — out for auto AND for a start
 		// that names it.
-		c.Excluded = cv.Why
+		c.Excluded = cv.Reason()
 	case flagged:
 		// 维护中 (claude-fleet#1427): the operator is taking the machine down.
 		// Out for auto AND for a start that names it — unlike not-ready, this

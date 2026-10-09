@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"strings"
 	"time"
@@ -54,6 +55,19 @@ type computeVerdict struct {
 	// compute_region finding.
 	Closed bool
 	Probe  *control.NodeProbe
+	// Src says which report carried the login's own off and when — a beat
+	// or the hello, its time and agent build — plus how often the link
+	// changed hands lately (claude-fleet#2661). Empty when the off is not
+	// the login's word.
+	Src string
+}
+
+// Reason is Why with its source: what placement and a refused lease say.
+func (v computeVerdict) Reason() string {
+	if v.Src == "" {
+		return v.Why
+	}
+	return v.Why + " · " + v.Src
 }
 
 func computeAutoOn(settings map[string]string) bool {
@@ -96,13 +110,21 @@ func orUnknown(s string) string {
 func (s *Server) computeOf(endpointID string, hb control.Heartbeat, settings map[string]string, now time.Time) computeVerdict {
 	claimOn := control.ComputeOn(hb.Compute)
 	force, probe := hb.ComputeForce, hb.Probe
-	if c := s.nodes.get(endpointID); c != nil {
+	var src string
+	if !claimOn {
+		src = reportedBy("heartbeat", hb.ObservedAt, hb.AgentVersion)
+	}
+	c := s.nodes.get(endpointID)
+	if c != nil {
 		if c.machineLink {
 			// A machine's own link carries logins; it is never one to run
 			// sessions on (claude-fleet#2333), whatever the team policy says.
 			return computeVerdict{Off: true, Why: "machine link"}
 		}
 		if c.computeOff && !c.beatSaidOn.Load() {
+			if claimOn {
+				src = reportedBy("hello", c.helloAt, c.agentVersion)
+			}
 			claimOn = false
 		}
 		if hb.ObservedAt.IsZero() {
@@ -112,7 +134,30 @@ func (s *Server) computeOf(endpointID string, hb control.Heartbeat, settings map
 			probe = c.probe
 		}
 	}
-	return decideCompute(claimOn, force, probe, computeAutoOn(settings), now)
+	v := decideCompute(claimOn, force, probe, computeAutoOn(settings), now)
+	if v.Off && v.Why == excludedComputeOff {
+		v.Src = src
+		if k := s.nodes.supersededSince(endpointID, now); k > 0 {
+			// Two agents of one login displace each other's link, each
+			// hello with its own word: the flapping of claude-fleet#2661.
+			v.Src += fmt.Sprintf(" · 链接 %d 分钟内被顶替 %d 次（同一登录多个 agent？）", int(supersedeWindow/time.Minute), k)
+		}
+		v.Src = strings.TrimPrefix(v.Src, " · ")
+	}
+	return v
+}
+
+// reportedBy is a compute word's provenance: `reported 15:11:02Z by agent
+// 1.2.3 heartbeat`.
+func reportedBy(kind string, at time.Time, version string) string {
+	out := "reported"
+	if !at.IsZero() {
+		out += " " + at.UTC().Format("15:04:05Z")
+	}
+	if version != "" {
+		out += " by agent " + version
+	}
+	return out + " " + kind
 }
 
 // auditComputeForce writes a forced compute into fleet_audit once per link:
