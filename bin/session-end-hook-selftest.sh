@@ -18,6 +18,8 @@
 #   * panel (no @issue, no @raw)    → never touched (no dispatch)
 #   * prompt_input_exit on MERGED   → worktree+branch removed, issue closed, a
 #                                     `landed` row (PR resolved), window gone
+#   * merged but the PR does not close it / parked / reopened / blocked
+#                                   → issue KEPT open; parked keeps the wt (#2949)
 #   * prompt_input_exit on ANCESTOR → worktree+branch removed, `closed-unlanded`
 #                                     row, window gone, issue KEPT OPEN (no merge)
 #   * prompt_input_exit on UNMERGED → worktree + issue KEPT, `closed-unlanded` row,
@@ -89,6 +91,10 @@ WT4="$(add_wt 4 ancestor)"  # strict ancestor       → ancestor  → reap, issu
 WT5="$(add_wt 5 commit)"    # not merged (stdin test)→ unmerged  → KEEP
 WT7="$(add_wt 7 zero)"      # no merged PR, tip == base → KEEP
 WT6="$(add_wt 6 commit)"    # not merged (default-on) → unmerged  → KEEP
+WT8="$(add_wt 8 commit)"    # merged, PR does not close #8     → issue KEPT open (#2949)
+WT9="$(add_wt 9 commit)"    # merged + parked (@parking)       → issue + wt KEPT (#2949)
+WT10="$(add_wt 10 commit)"  # merged, closes it, but REOPENED  → issue KEPT open (#2949)
+WT11="$(add_wt 11 commit)"  # merged, closes it, but `blocked` → issue KEPT open (#2949)
 
 # A scratch worktree (issue #466): same shape dash-raw-session.sh creates — branch
 # `scratch-<N>`, dir `<base>-scratch-<N>` — with an unmerged commit, so the shared
@@ -120,6 +126,7 @@ case "$*" in
   *pane_current_path*) printf '%s\n' "${PCWD:-}" ;;
   *@raw*)         printf '%s\n' "${RAW:-}" ;;
   *@hub*)         printf '%s\n' "${HUB:-}" ;;
+  *@parking*)     printf '%s\n' "${PARKING:-}" ;;
   *window_id*)    printf '%s\n' "${WID:-@9}" ;;
   *session_name*) printf 's1\n' ;;
   *kill-window*)  printf 'KILL %s\n' "$*" >> "$TMLOG" ;;
@@ -132,7 +139,9 @@ chmod +x "$WORK/fakepath/tmux"
 # --- fake gh: a merged PR exists iff --head == $GH_MERGED_HEAD -----------------
 #   pr list … --head <b> --json headRefName  → the head (so fleet_reap_ok = merged-pr)
 #   pr list … --head <b> --json number       → $GH_MERGED_PR (landed-row PR resolution)
-#   issue view  → $GH_ISSUE_STATE (default OPEN)   issue close → logged
+#   pr list … --json closingIssuesReferences,body → $GH_CLOSES (refs + bodies, #2949)
+#   issue view  → $GH_ISSUE_STATE (default OPEN) [+ $GH_ISSUE_REASON, $GH_ISSUE_LABELS]
+#   issue close → logged
 cat > "$WORK/fakepath/gh" <<'FAKE'
 #!/bin/bash
 head=""; prev=""
@@ -141,10 +150,13 @@ case "$*" in
   *"pr list"*)
     if [ -n "$head" ] && [ "$head" = "${GH_MERGED_HEAD:-}" ]; then
       case "$*" in
+        *closingIssuesReferences*) printf '%s\n' "${GH_CLOSES:-}" ;;
         *"--json number"*)      printf '%s\n' "${GH_MERGED_PR:-}" ;;
         *"--json headRefName"*) printf '%s\n' "$head" ;;
       esac
     fi ;;
+  *"issue view"*stateReason*)
+    printf '%s\t%s\t%s\n' "${GH_ISSUE_STATE:-OPEN}" "${GH_ISSUE_REASON:-}" "${GH_ISSUE_LABELS:-}" ;;
   *"issue view"*)  printf '%s\n' "${GH_ISSUE_STATE:-OPEN}" ;;
   *"issue close"*) printf 'CLOSE %s\n' "$*" >> "$GHLOG" ;;
 esac
@@ -159,11 +171,12 @@ chmod +x "$WORK/fakepath/gh"
 # FLEET_REPO/MAIN/BASE env below win (matching dash-reap-selftest).
 run_hook() {
   ISS="${ISS:-}" RAW="${RAW:-}" HUB="${HUB:-}" WID="${WID:-@9}" \
-  WT="${WT:-}" PCWD="${PCWD:-}" \
+  WT="${WT:-}" PCWD="${PCWD:-}" PARKING="${PARKING:-}" \
   TRANSFER_UNTIL="${TRANSFER_UNTIL:-}" \
   AGENT="${AGENT:-}" LAUNCH_PID="${LAUNCH_PID:-}" \
   TMLOG="$TMLOG" GHLOG="$GHLOG" \
   GH_MERGED_HEAD="${GH_MERGED_HEAD:-}" GH_MERGED_PR="${GH_MERGED_PR:-}" GH_ISSUE_STATE="${GH_ISSUE_STATE:-OPEN}" \
+  GH_CLOSES="${GH_CLOSES:-}" GH_ISSUE_REASON="${GH_ISSUE_REASON:-}" GH_ISSUE_LABELS="${GH_ISSUE_LABELS:-}" \
   FLEET_SESSION_END_REASON="${REASON:-}" \
   FLEET_CLOSE_ON_EXIT="${CLOSE:-1}" \
   FLEET_REPO="fake/repo" FLEET_MAIN="$BASEDIR" FLEET_BASE_BRANCH="$BASE_BR" \
@@ -264,7 +277,7 @@ ok "panel (no @issue/@raw) → never touched"
 
 # ============================ ACTING PATHS ===================================
 # T6: MERGED worker → reap worktree+branch, close issue, landed row (PR resolved), window gone.
-clr; REASON=prompt_input_exit ISS=1 WID='@1' GH_MERGED_HEAD=issue-1 GH_MERGED_PR=111 run_hook
+clr; REASON=prompt_input_exit ISS=1 WID='@1' GH_MERGED_HEAD=issue-1 GH_MERGED_PR=111 GH_CLOSES='closes #1' run_hook
 grep -q 'RUNSHELL' "$TMLOG" || fail "merged exit must dispatch the reap" "$(cat "$TMLOG")"
 grep -q 'KILL' "$TMLOG" || fail "merged exit must close the window"
 [ -d "$WT1" ] && fail "merged worktree must be removed"
@@ -274,6 +287,38 @@ lp="$(awk -F'\t' '$2==1{print $4}' "$LEDGER")"
 [ "$lp" = 111 ] || fail "landed #1 row must carry the resolved PR 111 (got [$lp])"
 grep -q 'CLOSE' "$GHLOG" || fail "merged exit must close the issue"
 ok "prompt_input_exit on MERGED → wt+branch reaped, issue closed, landed row (PR 111), window gone"
+
+# T6b-e (issue #2949): a merged PR is not a finished issue.
+# A merged PR that only REFERS to the issue (an intermediate fix) → reaped, issue open.
+clr; REASON=prompt_input_exit ISS=8 WID='@8' GH_MERGED_HEAD=issue-8 GH_MERGED_PR=118 \
+  GH_CLOSES="$(printf 'drill script fix (#8)\nRefs #8, closes #80')" run_hook
+[ -d "$WT8" ] && fail "merged #8 worktree must still be reaped"
+[ "$(rows 8 landed)" = 1 ] || fail "merged #8 must still write its landed row" "$(cat "$LEDGER")"
+grep -q 'CLOSE' "$GHLOG" && fail "a merged PR that does not close #8 must KEEP the issue open" "$(cat "$GHLOG")"
+ok "merged PR that does not say it closes the issue → issue KEPT open"
+
+# A park's stop: merged PR that even says Closes, but the window is @parking →
+# issue OPEN, worktree + branch KEPT, row still recorded.
+clr; REASON=prompt_input_exit ISS=9 WID='@9' PARKING='fake/repo#9' GH_MERGED_HEAD=issue-9 GH_MERGED_PR=119 \
+  GH_CLOSES='closes #9' run_hook
+grep -q 'KILL' "$TMLOG" || fail "a parked exit must still close the window"
+[ -d "$WT9" ] || fail "a parked worktree must be KEPT"
+git -C "$BASEDIR" show-ref --verify -q refs/heads/issue-9 || fail "a parked branch must be KEPT"
+[ "$(rows 9 landed)" = 1 ] || fail "a parked exit must still record its row" "$(cat "$LEDGER")"
+grep -q 'CLOSE' "$GHLOG" && fail "a parked issue that merged a PR must stay OPEN" "$(cat "$GHLOG")"
+ok "merged PR + parked → issue OPEN, worktree + branch kept, row recorded"
+
+clr; REASON=prompt_input_exit ISS=10 WID='@10' GH_MERGED_HEAD=issue-10 GH_MERGED_PR=120 \
+  GH_CLOSES='Closes #10' GH_ISSUE_REASON=REOPENED run_hook
+grep -q 'CLOSE' "$GHLOG" && fail "a REOPENED issue must stay open" "$(cat "$GHLOG")"
+[ -d "$WT10" ] && fail "a reopened issue's merged worktree is still reaped"
+ok "merged closing PR but the issue was reopened → issue KEPT open"
+
+clr; REASON=prompt_input_exit ISS=11 WID='@11' GH_MERGED_HEAD=issue-11 GH_MERGED_PR=121 \
+  GH_CLOSES='fixes #11' GH_ISSUE_LABELS='bug,blocked' run_hook
+grep -q 'CLOSE' "$GHLOG" && fail "a blocked issue must stay open" "$(cat "$GHLOG")"
+[ -d "$WT11" ] && fail "a blocked issue's merged worktree is still reaped"
+ok "merged closing PR but the issue is labelled blocked → issue KEPT open"
 
 # T7: UNMERGED worker → KEEP worktree + issue, closed-unlanded row, window gone, no gh close.
 clr; REASON=prompt_input_exit ISS=2 WID='@2' run_hook

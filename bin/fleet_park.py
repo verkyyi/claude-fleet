@@ -456,6 +456,9 @@ def finalize(sess, book, p, w, now, budget):
         run(["bash", str(BIN / "fleet-report-parent.sh"), "-L", socket(sess), "--state", "blocked",
              "--win", w["wid"], "--summary", summary], timeout=60)
     sh_lib('fleet_win_retire "$1" "$2"', w["wid"], socket(sess))
+    # The stop below is an /exit: session-end-hook.sh reads @parking and keeps the
+    # issue OPEN and the worktree in place — a parked issue comes back (#2949).
+    tm(sess, "set-option", "-w", "-t", w["wid"], "@parking", ref)
     sr = seam("FLEET_PARK_STOP_CMD", [sess, p["key"]])
     if sr is None:
         sr = run(["bash", str(BIN / "fleet-worker-stop.sh"), sess, p["key"]], timeout=180)
