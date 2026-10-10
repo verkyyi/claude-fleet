@@ -18,7 +18,7 @@
 #             to pf-pool lands in pf; one attaching to pf stays there
 #   PAGE      a launch refused for a 404 says so (cred_unknown), not 「代理没给」
 #
-# tmux / python3 / script absent → SKIP (exit 0). Exit 0 = pass.
+# tmux / python3 absent → SKIP (exit 0). Exit 0 = pass.
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -87,35 +87,50 @@ ok "CLAIMED the same window, moved into pf, mints the same UUID (↵ retry after
 tmux new-session -d -s pf-pool -n warm-68 -c "$WORK"   # the claim emptied the pool: the next warm entry
 
 # --- ATTACH ------------------------------------------------------------------
-if command -v script >/dev/null 2>&1; then
-  hook=$(grep '^set-hook -g client-attached\[77\]' "$BIN/../conf/tmux-attention.conf")
-  [ -n "$hook" ] || fail "ATTACH: conf/tmux-attention.conf carries no client-attached[77]"
-  printf '%s\n' "$hook" > "$WORK/hook.conf"
-  tmux source-file "$WORK/hook.conf" || fail "ATTACH: the hook line does not parse"
-  attach_to() { # attach_to <session> → the session the client sits in a moment later
-    if script --version >/dev/null 2>&1; then   # util-linux: the command is -c's string
-      (sleep 4 | script -qfc "'$WORK/bin/tmux' attach -t '$1'" /dev/null >/dev/null 2>&1 &)
-    else                                         # BSD: the command follows the file
-      (sleep 4 | script -q /dev/null "$WORK/bin/tmux" attach -t "$1" >/dev/null 2>&1 &)
-    fi
-    local i s=''
-    for i in 1 2 3 4 5 6 7 8 9 10; do
-      sleep 0.3
-      s=$(tmux list-clients -F '#{client_session}' 2>/dev/null | head -1)
-      [ "$s" = pf ] && break
-    done
-    printf '%s' "$s"
-    for c in $(tmux list-clients -F '#{client_name}' 2>/dev/null); do tmux detach-client -t "$c" >/dev/null 2>&1; done
-    sleep 0.5
-  }
-  got=$(attach_to pf-pool)
-  [ "$got" = pf ] || fail "ATTACH: a client attaching to pf-pool stayed in '$got'"
-  got=$(attach_to pf)
-  [ "$got" = pf ] || fail "ATTACH: a client attaching to pf ended in '$got'"
-  ok "ATTACH a client landing in pf-pool is moved to pf; one landing in pf stays"
-else
-  printf 'skip ATTACH (no script(1))\n'
-fi
+hook=$(grep '^set-hook -g client-attached\[77\]' "$BIN/../conf/tmux-attention.conf")
+[ -n "$hook" ] || fail "ATTACH: conf/tmux-attention.conf carries no client-attached[77]"
+printf '%s\n' "$hook" > "$WORK/hook.conf"
+tmux source-file "$WORK/hook.conf" || fail "ATTACH: the hook line does not parse"
+# attach_to <session> → the session a real (pty) client sits in once the hook ran
+attach_to() {
+  python3 - "$REAL_TMUX" "$SOCK" "$1" <<'PY'
+import os, pty, select, subprocess, sys, time
+tmux, sock, sess = sys.argv[1:4]
+pid, fd = pty.fork()
+if pid == 0:
+    os.environ["TERM"] = "xterm-256color"
+    os.execvp(tmux, [tmux, "-S", sock, "attach", "-t", sess])
+def T(*a):
+    return subprocess.run([tmux, "-S", sock, *a], capture_output=True, text=True).stdout.strip()
+got = ""
+end = time.time() + 6
+while time.time() < end:
+    r, _, _ = select.select([fd], [], [], 0.1)
+    if r:
+        try: os.read(fd, 65536)
+        except OSError: break
+    got = T("list-clients", "-F", "#{client_session}").split("\n")[0]
+    if got == "pf":
+        break
+end = time.time() + 0.5                # let a late switch land before reading again
+while time.time() < end:
+    r, _, _ = select.select([fd], [], [], 0.1)
+    if r:
+        try: os.read(fd, 65536)
+        except OSError: break
+got = T("list-clients", "-F", "#{client_session}").split("\n")[0]
+for c in T("list-clients", "-F", "#{client_name}").split():
+    T("detach-client", "-t", c)
+try: os.waitpid(pid, 0)
+except OSError: pass
+print(got)
+PY
+}
+got=$(attach_to pf-pool)
+[ "$got" = pf ] || fail "ATTACH: a client attaching to pf-pool stayed in '$got'"
+got=$(attach_to pf)
+[ "$got" = pf ] || fail "ATTACH: a client attaching to pf ended in '$got'"
+ok "ATTACH a client landing in pf-pool is moved to pf; one landing in pf stays"
 
 # --- PAGE --------------------------------------------------------------------
 line=$(cd "$BIN" && python3 -c 'import importlib.util, sys
