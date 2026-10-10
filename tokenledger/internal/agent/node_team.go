@@ -78,7 +78,7 @@ func (a *Agent) handleTeam(ctx context.Context, m control.Message) {
 	st.mu.Lock()
 	st.want = t.TeamVersion
 	st.mu.Unlock()
-	a.teamKick(ctx)
+	a.kickLayer(ctx, st)
 }
 
 // handlePerson takes the hub's TypePerson (claude-fleet#2784).
