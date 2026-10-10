@@ -727,3 +727,7 @@ FLEET_INSTALL_SYNC_CLIENT_FOLLOW   seam: 0 — a kept switch does not run `fleet
 FLEET_INSTALL_SYNC_HOST            seam: 1|0 — does this computer 承载; an install-sync tick follows the node agent only when 1 (default `fleet-conf.sh host`) (#2716)
 FLEET_DOCTOR_RESIDENT_CMD          seam: prints `<unit> <started epoch>` per resident daemon for the doctor's 「常驻服务还在跑切换前的版本」 row (default launchctl print / systemctl show + ps etime) (#2716)
 FLEET_RULES_LOG                    path: where fleet-issue-file.sh notes an orchestrator filing with no rule (default `<install>/logs/rules.log`) (#2786)
+FLEET_REDACT                       seam: python|awk — which redactor fleet-doctor-bundle.sh uses (default python3 when it runs, else awk) (#2890)
+FLEET_BUNDLE_DOCTOR_CMD            seam: a command run instead of the doctor by fleet-doctor-bundle.sh (#2890)
+FLEET_BUNDLE_NET                   seam: 0 — fleet-doctor-bundle.sh asks no hub and runs no ssh (#2890)
+FLEET_BUNDLE_WHOAMI_GAP            seam: seconds between fleet-doctor-bundle.sh's three egress reads (default 10) (#2890)
