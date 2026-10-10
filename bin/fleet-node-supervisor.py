@@ -89,6 +89,13 @@ Usage:
                                                running (stale heartbeat) · 2 not installed ·
                                                3 running, but the hub refuses a login's lane
                                                (令牌失效 · 需要 relogin, issue #2501)
+  fleet-node-supervisor.py tenants [--json] [--check]
+                                               the taken-over logins' abilities (issue #2842):
+                                               admin group · sudo rules · sudoers. --check: exit
+                                               0 none can · 1 one can (the doctor's FAIL) · 2 no
+                                               taken-over login · 3 the sudo half unread (not
+                                               root, no daemon reading yet). `account adopt`
+                                               refuses (5) a login that can.
   fleet-node-supervisor.py sweep [--dry-run]   the leftover sweep, now
   fleet-node-supervisor.py attic [list | restore <id> | purge]
   fleet-node-supervisor.py service add|rm|stop|start|restart|move|run|schedule|cred|ls|logs …
@@ -119,8 +126,10 @@ Seams (sandbox tests, docs/BREAK-IT.md `node-supervisor-dead`):
   FLEET_NODE_ATTIC_DAYS (7)  FLEET_NODE_SWEEP_EVERY (3600)  FLEET_NODE_HEARTBEAT_STALE (120)
   FLEET_NODE_LAUNCHCTL  launchctl's path ('' = do not load/unload)
   FLEET_NODE_TEST=1     skip the root-ownership check on the runtime
-  FLEET_NODE_PASSWD     a JSON {login: {uid, gid, home}} read instead of the passwd
-                        database (tests; under FLEET_NODE_TEST only)
+  FLEET_NODE_PASSWD     a JSON {login: {uid, gid, home[, groups, sudo]}} read instead of
+                        the passwd database and the tenant check (tests; under
+                        FLEET_NODE_TEST only)
+  FLEET_NODE_TENANT_EVERY (300)  how often the daemon re-reads the tenants' abilities
   FLEET_NODE_BREW_PREFIX  __BREW_PREFIX__ in the templates (default /opt/homebrew, or
                         /usr/local when that is where brew is)
 """
@@ -445,6 +454,103 @@ def account_ident(login):
 def accounts_read(paths):
     a = read_json(paths.accounts, {})
     return a if isinstance(a, dict) else {}
+
+
+# -- tenants (issue #2842): a taken-over login is a TENANT — no admin, no sudo.
+# What a session may destroy is what its login can do, never a rule in a prompt:
+# the fleet keeps that true by checking it here, refusing to adopt an admin and
+# FAILing the doctor's `tenants` row when a tenant gains the ability.
+SUDOERS = ("/etc/sudoers", "/etc/sudoers.d")
+
+
+def _sudoers_files():
+    out = []
+    for p in SUDOERS:
+        if os.path.isdir(p):
+            try:
+                out += [os.path.join(p, n) for n in sorted(os.listdir(p))
+                        if not n.startswith(".") and not n.endswith("~")]
+            except OSError:
+                pass
+        elif os.path.exists(p):
+            out.append(p)
+    return out
+
+
+def tenant_privileges(login):
+    """(why, complete): what lets <login> do what only an admin may — `admin 组`,
+    `sudo -l: …`, `sudoers: <file>` — [] when nothing. complete is False when this
+    reader could not look at all of it: the sudo rules and the sudoers files are
+    root's to read, the groups anyone's. Test mode reads the fake passwd entry's
+    `groups` / `sudo` instead."""
+    fake = os.environ.get("FLEET_NODE_PASSWD")
+    if fake and env("FLEET_NODE_TEST", "") == "1":
+        e = (read_json(fake, {}) or {}).get(login) or {}
+        why = ["admin 组"] if "admin" in (e.get("groups") or []) else []
+        if e.get("sudo"):
+            why.append("sudo -l: %s" % e["sudo"])
+        return why, True
+    why = []
+    try:
+        g = subprocess.check_output(["id", "-Gn", login], stderr=subprocess.DEVNULL,
+                                    universal_newlines=True, timeout=10).split()
+    except (OSError, subprocess.SubprocessError):
+        g = []
+    if "admin" in g:
+        why.append("admin 组")
+    if os.geteuid() != 0:
+        return why, False
+    try:
+        r = subprocess.run(["sudo", "-n", "-l", "-U", login], stdout=subprocess.PIPE,
+                           stderr=subprocess.DEVNULL, universal_newlines=True, timeout=10)
+        if r.returncode == 0 and "may run" in r.stdout:
+            rules = [l.strip() for l in r.stdout.split("may run", 1)[1].splitlines()[1:] if l.strip()]
+            why.append("sudo -l: %s" % (rules[0] if rules else "has rules"))
+    except (OSError, subprocess.SubprocessError):
+        pass
+    word = re.compile(r"(^|[\s,=:!])%s($|[\s,=])" % re.escape(login))
+    for f in _sudoers_files():
+        try:
+            with open(f, errors="replace") as fh:
+                if any(word.search(l) for l in fh if l.strip() and not l.lstrip().startswith("#")):
+                    why.append("sudoers: %s" % f)
+        except OSError:
+            pass
+    return why, True
+
+
+def tenant_logins(paths):
+    """Every login this daemon took over: managed in accounts.json, or with a
+    logins/<login>.env."""
+    return sorted({k for k, v in accounts_read(paths).items() if (v or {}).get("managed")}
+                  | taken_over(paths))
+
+
+def tenants_reading(paths):
+    """{"at", "complete", "bad": {login: [why]}, "logins": [...]} for every tenant."""
+    bad, complete = {}, True
+    logins = tenant_logins(paths)
+    for login in logins:
+        why, full = tenant_privileges(login)
+        complete = complete and full
+        if why:
+            bad[login] = why
+    return {"at": now(), "complete": complete, "bad": bad, "logins": logins}
+
+
+def tenants_now(paths, state):
+    """The tenants reading: fresh where this reader sees all of it (root), else the
+    daemon's last complete reading in state.json with this reader's own fresh look
+    (the groups) on top."""
+    cur = tenants_reading(paths)
+    if cur["complete"]:
+        return cur
+    last = state.get("tenants") or {}
+    for login, why in (last.get("bad") or {}).items():
+        if login in cur["logins"]:
+            cur["bad"][login] = sorted(set(cur["bad"].get(login, [])) | set(why))
+    cur["daemon_at"] = last.get("at")
+    return cur
 
 
 def expected_accounts(paths):
@@ -1528,6 +1634,20 @@ class Supervisor(object):
             self.state["lanes"] = cur
             self.dirty = True
 
+    # -- tenants (issue #2842)
+    def tend_tenants(self, t):
+        """Every FLEET_NODE_TENANT_EVERY (300 s): the tenants' reading, root's to
+        take, into state.json for every login's doctor."""
+        last = self.state.get("tenants") or {}
+        if t - (last.get("at") or 0) < env_num("FLEET_NODE_TENANT_EVERY", 300):
+            return
+        cur = tenants_reading(self.p)
+        for login in sorted(set(cur["bad"]) - set(last.get("bad") or {})):
+            self.log("tenant %s can do what only an admin may: %s — a taken-over login has no admin "
+                     "and no sudo (issue #2842)" % (login, "; ".join(cur["bad"][login])))
+        self.state["tenants"] = cur
+        self.dirty = True
+
     # -- sweep
     def sweep_due(self, t):
         return t - (self.state["sweep"].get("last") or 0) >= env_num("FLEET_NODE_SWEEP_EVERY", 3600)
@@ -1578,6 +1698,10 @@ class Supervisor(object):
             except Exception as e:  # one bad entry must never take the daemon down
                 self.log("agent tasks: %s" % e)
             self.tend_lanes()
+            try:
+                self.tend_tenants(t)
+            except Exception as e:  # a check must never take the daemon down
+                self.log("tenants: %s" % e)
             if self.sweep_due(t):
                 try:
                     self.do_sweep()
@@ -1637,6 +1761,7 @@ class Supervisor(object):
                 self.start_task(tk, t)
         self.reap_tasks(wait=True)
         self.do_sweep()
+        self.tend_tenants(t)
         self.dirty = True
         write_json(self.p.state_file, self.state)
         return 0
@@ -2173,6 +2298,12 @@ def account_adopt(paths, login, dry=False, rejoin=False):
         print("fleet-node-supervisor: account adopt boots out %s's services — run it as root (sudo)" % login,
               file=sys.stderr)
         return 1
+    why, _full = tenant_privileges(login)
+    if why:
+        print("fleet-node-supervisor: refusing to adopt %s — %s. A taken-over login is a tenant: no admin, "
+              "no sudo (issue #2842); an admin keeps its own services. Take it out of the admin group / "
+              "sudoers first, or leave it unmanaged" % (login, "; ".join(why)), file=sys.stderr)
+        return 5
     uid, gid, home = ident
     a = accounts_read(paths)
     was = a.get(login) if (a.get(login) or {}).get("managed") else None
@@ -3101,6 +3232,26 @@ def main(argv):
             return account_adopt(paths, rest[1], dry="--dry-run" in rest, rejoin="--rejoin" in rest)
         if sub == "release" and len(rest) > 1:
             return account_release(paths, rest[1], force="--force" in rest)
+    if cmd == "tenants":
+        cur = tenants_now(paths, read_json(paths.state_file, {}))
+        bad = cur["bad"]
+        code = 2 if not cur["logins"] else 1 if bad else 0 if cur["complete"] or cur.get("daemon_at") else 3
+        if "--json" in rest:
+            print(json.dumps(cur, indent=1, sort_keys=True))
+        elif not cur["logins"]:
+            print("no taken-over login")
+        elif "--check" in rest:
+            if bad:
+                print("; ".join("%s: %s" % (l, ", ".join(w)) for l, w in sorted(bad.items())))
+            else:
+                print("%d taken-over login(s), none admin or sudo-capable: %s%s" % (
+                    len(cur["logins"]), " ".join(cur["logins"]),
+                    "" if cur["complete"] else " (sudo rules: the daemon's reading of %s)" % iso(cur["daemon_at"])
+                    if cur.get("daemon_at") else " (sudo rules unread: not root, no daemon reading yet)"))
+        else:
+            for login in cur["logins"]:
+                print("%-16s %s" % (login, "FAIL " + "; ".join(bad[login]) if login in bad else "ok"))
+        return code if "--check" in rest else 0
     table = load_table(paths)
     if cmd == "run":
         return Supervisor(paths, table).run()
@@ -3153,7 +3304,8 @@ def main(argv):
             print("purged %d" % n)
             return 0
     print("usage: fleet-node-supervisor.py run|tick|status [--json|--check]|sweep [--dry-run]|"
-          "attic [list|restore <id>|purge]|account [list|adopt|release|manages <login>]|install|uninstall",
+          "attic [list|restore <id>|purge]|account [list|adopt|release|manages <login>]|tenants [--json|--check]|"
+          "install|uninstall",
           file=sys.stderr)
     return 2
 

@@ -720,7 +720,12 @@ Do not install from memory: read the doc and work from it.
   one list: `fleet_node_manages` (`fleet-daemon-lib.sh`) reads it, and a managed
   login's `fleet-install-apply.sh` renders no plist, its probe asks the daemon.
   expected.json's `accounts` narrows who runs. No accounts.json ⇒ byte for byte
-  as before. BREAK-IT `account-adopt-stuck`.
+  as before. BREAK-IT `account-adopt-stuck`. **A taken-over login is a tenant: no
+  admin, no sudo** (issue #2842) — what a session may destroy is its login's
+  ability, never a rule in its prompt: adopt refuses an admin (5), the doctor's
+  `tenants` row FAILs on a tenant that can sudo, and a script that needs root asks
+  `sudo -n` («需要管理员登录（有 sudo）»), never «am I a worker»
+  (docs/MANAGED-NODE.md §15, BREAK-IT `tenant-admin-adopted`).
 - **A managed machine has ONE node program, `ccquota agent --machine`** (issue
   #2333, EPIC #2329 C5). Root, started by the supervisor's `node-agent` child once
   `/var/db/fleet-node/machine.env` + `logins/<login>.env` exist; one control link

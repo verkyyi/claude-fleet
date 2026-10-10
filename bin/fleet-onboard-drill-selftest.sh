@@ -48,7 +48,7 @@ run 2 'unknown argument'            'an unknown argument'       --frobnicate
 run 2 'bad login name'              'a bad login name'          --login 'Bad Name'
 run 2 '--name: lowercase'           'a bad scratch name'        --login drilltest --name 'X Y'
 run 2 'not a number'                'a non-numeric timeout'     --login drilltest --timeout soon
-SUDO_OK=0 run 2 'no sudo ticket'    'no sudo ticket'            --login drilltest
+SUDO_OK=0 run 2 'no sudo ticket'    '需要管理员登录（有 sudo）'  --login drilltest
 out=$(env PATH="$T/shim:$PATH" FLEET_CONF_DIR="$T/empty" FLEET_LOGIN_HOMES="$T/homes" bash "$DRILL" --login drilltest 2>&1); rc=$?
 if [ "$rc" = 2 ] && printf '%s\n' "$out" | grep -q 'no hub'; then ok 'no hub anywhere (exit 2)'; else bad "no hub: exit $rc: $out"; fi
 # a login that exists (the one running this test) → 3, before anything is made

@@ -59,8 +59,10 @@
 # here prompts; the ticket is refreshed while polling), ssh, tmux, and sshd
 # reachable at --ssh-host:--ssh-port (default 127.0.0.1:22 — this machine's own
 # Remote Login; the public entry is for the letter, not for this run).
-# NEVER from a fleet worker (EPIC #1212 convention 2): it opens a real login and
-# runs sudo. Its selftest runs it against PATH shims only.
+# Who may run it is the LOGIN's ability (issue #2842): it opens a real login and
+# runs sudo, so the preflight refuses 「需要管理员登录（有 sudo）」 without a sudo
+# ticket — a worker's taken-over login has none; an admin's session runs it. Its
+# selftest runs it against PATH shims only.
 #
 # Exit: 0 every step passed · 1 a step failed (the teardown still ran) ·
 #       2 bad arguments / preflight · 3 the login (or its home) already exists
@@ -120,7 +122,7 @@ for t in ssh tmux sudo; do
   command -v "$t" >/dev/null 2>&1 || die2 "$t not found — nothing was changed"
 done
 [ -f "$NEW_SH" ] && [ -f "$RM_SH" ] || die2 "fleet-login-new.sh / fleet-login-remove.sh not found beside $0"
-sudo -n -v >/dev/null 2>&1 || die2 "no sudo ticket — run 'sudo -v' first (this script never prompts)"
+sudo -n -v >/dev/null 2>&1 || die2 "需要管理员登录（有 sudo）— no sudo ticket for $(id -un): run it as an admin login; run 'sudo -v' first (this script never prompts)"
 if id "$LOGIN" >/dev/null 2>&1; then
   printf '%s: login %s already exists — refusing (pick another --login, or offboard it: %s %s --apply)\n' "$PROG" "$LOGIN" "$RM_SH" "$LOGIN" >&2
   exit 3

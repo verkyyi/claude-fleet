@@ -35,6 +35,11 @@ FLEET_NODE_* seams; nothing touches /Library, /var or a real login.
      spawner failing every time → retried up to the limit, then `failed`, no more
      tries, an alert file; `service run` / `fleet task run --now` → one run at once;
      a done file decides ok vs failed; cron + tz slots; bad entries refused
+  L  tenants (#2842): a taken-over login in the admin group or with sudo rules is
+     named (`tenants --check` 1, the doctor's FAIL), a clean one passes (0), none
+     taken over is no row (2); `account adopt` refuses such a login (5) with nothing
+     moved; the daemon's tick writes the reading into state.json and a non-root
+     reader's check carries it
 """
 import importlib.util
 import json
@@ -1472,6 +1477,72 @@ class K_AgentTasks(Sandbox):
         n = fns.task_slot({"at": "07:00", "tz": "Asia/Shanghai"}, t, 1)[0]
         self.assertEqual(n, calendar.timegm((2026, 10, 10, 23, 0, 0)))
         self.assertEqual(fns.task_slot({"cron": "0 9 1 * *", "tz": "UTC"}, t, 1)[1], "2026-11-01")
+
+
+
+class L_Tenants(Sandbox):
+    def setUp(self):
+        Sandbox.setUp(self)
+        pw = {}
+        for who in ("alice", "bob"):
+            home = os.path.join(self.d, "Users", who)
+            os.makedirs(os.path.join(home, "Library", "LaunchAgents"))
+            pw[who] = {"uid": os.getuid(), "gid": os.getgid(), "home": home}
+        pw["bob"].update(groups=["staff", "admin"], sudo="(ALL) NOPASSWD: ALL")
+        self.pw = os.path.join(self.d, "passwd.json")
+        with open(self.pw, "w") as f:
+            json.dump(pw, f)
+        self.env["FLEET_NODE_PASSWD"] = self.pw
+        self.logins = os.path.join(self.d, "db", "logins")
+        os.makedirs(self.logins)
+
+    def take(self, who):
+        open(os.path.join(self.logins, who + ".env"), "w").close()
+
+    def test_check_codes(self):
+        r = self.run_sup("tenants", "--check")
+        self.assertEqual(r.returncode, 2, "nobody taken over: no row — " + r.stdout + r.stderr)
+        self.take("alice")
+        r = self.run_sup("tenants", "--check")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("none admin or sudo-capable: alice", r.stdout)
+        self.take("bob")
+        r = self.run_sup("tenants", "--check")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("bob: admin 组, sudo -l: (ALL) NOPASSWD: ALL", r.stdout)
+        self.assertNotIn("alice", r.stdout)
+        js = json.loads(self.run_sup("tenants", "--json").stdout)
+        self.assertEqual(sorted(js["bad"]), ["bob"])
+
+    def test_adopt_refuses_an_admin(self):
+        ag = os.path.join(self.d, "Users", "bob", "Library", "LaunchAgents", "com.claude-fleet.x.plist")
+        with open(ag, "wb") as f:
+            plistlib.dump({"Label": "com.claude-fleet.x", "ProgramArguments": ["/bin/true"]}, f)
+        r = self.run_sup("account", "adopt", "bob")
+        self.assertEqual(r.returncode, 5, r.stderr)
+        self.assertIn("refusing to adopt bob", r.stderr)
+        self.assertTrue(os.path.exists(ag), "a refused adopt moved a service")
+        self.assertFalse(fns.read_json(os.path.join(self.d, "db", "accounts.json"), {}).get("bob"))
+
+    def test_tick_writes_the_reading(self):
+        self.table()
+        self.take("bob")
+        self.assertEqual(self.run_sup("tick").returncode, 0)
+        t = self.state().get("tenants") or {}
+        self.assertEqual(t.get("bad", {}).get("bob"), ["admin 组", "sudo -l: (ALL) NOPASSWD: ALL"])
+        self.assertTrue(t.get("complete"))
+
+    def test_non_root_reader_carries_the_daemons_reading(self):
+        keep = fns.tenant_privileges, fns.tenant_logins
+        try:
+            fns.tenant_logins = lambda paths: ["alice", "bob"]
+            fns.tenant_privileges = lambda login: ([], False)       # groups clean, sudo unreadable
+            cur = fns.tenants_now(None, {"tenants": {"at": 5, "bad": {"bob": ["sudo -l: x"], "gone": ["y"]}}})
+            self.assertEqual(cur["bad"], {"bob": ["sudo -l: x"]})
+            self.assertEqual(cur["daemon_at"], 5)
+            self.assertFalse(cur["complete"])
+        finally:
+            fns.tenant_privileges, fns.tenant_logins = keep
 
 
 if __name__ == "__main__":

@@ -1872,6 +1872,16 @@ if [ -f "$_nsup" ] && command -v python3 >/dev/null 2>&1; then
     3) warn node "machine daemon com.claude-fleet.node: $nline — the hub refuses that login's lane on the machine's node program (its token was reissued away or retired; issue #2501): \`sudo fleet-node-supervisor.py account adopt <login> --rejoin\`, or an admin: \`fleet hub accounts relogin\`; detail: \`fleet-node-supervisor.py status\`" ;;
     1) warn node "machine daemon com.claude-fleet.node is installed but not running — $nline. launchd's KeepAlive should bring it back within seconds; if it does not: \`sudo launchctl kickstart -k system/com.claude-fleet.node\`, log /var/log/fleet-node/supervisor.log, \`fleet-node-supervisor.py status\`" ;;
   esac
+  # A taken-over login is a TENANT: no admin, no sudo (issue #2842). What a session
+  # may destroy is what its login can do — this row is the guarantee, never a rule
+  # in a prompt. The groups are read fresh, the sudo rules from the daemon's
+  # reading (root's to take). No taken-over login ⇒ no row.
+  tline=$(python3 "$_nsup" tenants --check 2>/dev/null); trc=$?
+  case "$trc" in
+    0) pass tenants "$tline" ;;
+    1) fail tenants "a taken-over login can do what only an admin may — $tline. A tenant has no admin and no sudo: take it out of the admin group / sudoers (\`sudo dseditgroup -o edit -d <login> -t user admin\`), or, for an admin's own login, \`sudo fleet-node-supervisor.py account release <login>\`; detail: \`fleet-node-supervisor.py tenants\`" ;;
+    3) warn tenants "$tline — run \`sudo fleet-node-supervisor.py tenants\` for the whole reading" ;;
+  esac
 fi
 # The registered background services and scheduled tasks (issue #2526, EPIC
 # #2524 C2): the same table `fleet ls --services` prints — the hub's word for

@@ -269,12 +269,15 @@ run() {
   else row 安装 人 0 SKIP "没装"; fi
 
   # 迁账号 — one at a time; the person's own login last (risk table)
-  local l list="${LOGINS:-$(val "$(cat "$OUT/before.env")" accounts)}" me="${SUDO_USER:-}"
+  local l rc list="${LOGINS:-$(val "$(cat "$OUT/before.env")" accounts)}" me="${SUDO_USER:-}"
   list="$(printf '%s' "$list" | tr ',' '\n' | grep -v "^${me:-^}$"; [ -n "$me" ] && printf '%s\n' "$list" | tr ',' '\n' | grep -x "$me")"
   for l in $list; do
     if ask "把 $l 的服务交给守护（account adopt ${l}；退回：account release ${l}）"; then
       t0
-      if SUP account adopt "$l" >"$OUT/adopt-$l.log" 2>&1; then row "迁:$l" 自动 "$(dt)" PASS "$(tail -n 1 "$OUT/adopt-$l.log")"
+      SUP account adopt "$l" >"$OUT/adopt-$l.log" 2>&1; rc=$?
+      if [ "$rc" = 0 ]; then row "迁:$l" 自动 "$(dt)" PASS "$(tail -n 1 "$OUT/adopt-$l.log")"
+      # 5: an admin login (issue #2842) — a tenant has no sudo, so the daemon never takes it; not a failure
+      elif [ "$rc" = 5 ]; then row "迁:$l" 自动 "$(dt)" SKIP "管理员登录不交给守护（#2842）"
       else row "迁:$l" 自动 "$(dt)" FAIL "$(tail -n 1 "$OUT/adopt-$l.log") — 退回：sudo $(script fleet-node-supervisor.py "${FLEET_DRILL_SUPERVISOR:-}") account release $l"; report; exit 1; fi
     else row "迁:$l" 自动 0 SKIP "没迁"; fi
   done

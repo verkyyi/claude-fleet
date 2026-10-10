@@ -47,7 +47,7 @@ t = r.load()
 ns = [x["n"] for x in t["rows"]]
 print(len(ns), len(set(ns)) == len(ns), r.never_words(t) == {k: tuple(v) for k, v in d.NEVER_WORDS.items()},
       t["problems"])')
-[ "$got" = "19 True True []" ] && ok "A: 19 rules, unique numbers, keywords ≡ NEVER_WORDS class by class" \
+[ "$got" = "21 True True []" ] && ok "A: 21 rules, unique numbers, keywords ≡ NEVER_WORDS class by class" \
   || bad "A: default table — $got"
 corpus=$(grep -oE "\"[^\"]{2,}\"|'[^']{2,}'" "$BIN/fleet-decision-selftest.sh" | sed 's/^.//; s/.$//')
 diff=$(printf '%s\n' "$corpus" | PY '
@@ -127,7 +127,7 @@ case "$sec" in *"v=$v2"*'| 1 | 一处改动 | 一律先问 | ask |'*'| 12 |'*)
   *) bad "F: orchestrator section: $sec" ;; esac
 rm -f "$FLEET_CONF_DIR/roles/rules.md"
 sb=$(R render steward --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["body"])')
-grep -q '^| 16 | 改 fleet 的铁律' "$sb" && ! grep -q '^| 1 |' "$sb" && ok "F: the steward's prompt carries rules 13–19 only" || bad "F: steward section"
+grep -q '^| 16 | 改 fleet 的铁律' "$sb" && ! grep -q '^| 1 |' "$sb" && ok "F: the steward's prompt carries its rules only (13–19, 21)" || bad "F: steward section"
 case "$(R render worker)" in *append-system-prompt*) bad "F: a worker launch carries a prompt file" ;; *) ok "F: a worker's launch carries no table" ;; esac
 
 # --- G a broken fleet table ------------------------------------------------------------
