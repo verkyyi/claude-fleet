@@ -570,6 +570,27 @@ stop_group(); waitpid($pid, 0);
 exit 124;
 '
 
+# PER-TEST TMUX SOCKET DIR (issue #2970). A test's `tmux -L <label>` server lands
+# in ${TMUX_TMPDIR:-/tmp}/tmux-<uid> — the dir the live fleets share — and a test
+# that failed, timed out or forgot its kill-server left it running there (two
+# machines held 6 live `hubs*` servers and ~250 dead sockets). So each test gets
+# its OWN dir: whatever is still listening there when the test ends — pass, fail
+# or TIMEOUT — is kill-server'd and the dir removed. Only a socket inside that
+# dir is ever touched, so no fleet's socket can be. A test that sets its own
+# TMUX_TMPDIR keeps it. Short (/tmp, not $TMPDIR): an AF_UNIX path caps at 104.
+# `selftest` in its name lets fleet-selftest-reap.sh collect one a SIGKILL left.
+tt_dir=''
+tt_sweep() {
+  [ -n "$tt_dir" ] && [ -d "$tt_dir" ] || return 0
+  for tt_s in "$tt_dir"/tmux-*/*; do
+    [ -S "$tt_s" ] && tmux -S "$tt_s" kill-server >/dev/null 2>&1
+  done
+  rm -rf "$tt_dir"; tt_dir=''
+}
+trap 'tt_sweep' EXIT
+trap 'tt_sweep; exit 130' INT HUP
+trap 'tt_sweep; exit 143' TERM
+
 total=0 passed=0 failed=0
 failures='' timings=''
 run_start=$(now_ms)
@@ -579,12 +600,14 @@ for t in $tests; do
   total=$((total + 1))
   printf '\n=== %s ===\n' "$t"
   start_ms=$(now_ms)
+  tt_dir=$(mktemp -d /tmp/selftest-tt.XXXXXX 2>/dev/null) || tt_dir=''
   if [ "$supervise" -eq 1 ]; then
-    if perl -e "$SUPERVISOR" "$test_timeout" "./$t" </dev/null; then rc=0; else rc=$?; fi
+    if TMUX_TMPDIR="${tt_dir:-${TMUX_TMPDIR:-}}" perl -e "$SUPERVISOR" "$test_timeout" "./$t" </dev/null; then rc=0; else rc=$?; fi
   else
-    if bash "./$t" </dev/null; then rc=0; else rc=$?; fi
+    if TMUX_TMPDIR="${tt_dir:-${TMUX_TMPDIR:-}}" bash "./$t" </dev/null; then rc=0; else rc=$?; fi
   fi
   ms=$(( $(now_ms) - start_ms ))
+  tt_sweep
   timings="$timings$ms $t
 "
   if [ "$rc" -eq 0 ]; then

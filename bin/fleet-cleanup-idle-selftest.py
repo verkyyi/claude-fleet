@@ -609,5 +609,57 @@ class DoneNoPr(Rig):
         self.assertIn("finished with no PR", (self.root / "ledger.tsv").read_text())
 
 
+    def test_no_policy_closed_ticket_with_final_prs_closes(self):
+        # #2970: no @reap_policy is not «never». Its issue closed, every PR on its
+        # branch final, idle past the grace ⇒ closed the done-no-pr way; an open
+        # issue, an open PR or `keep` ⇒ kept.
+        self.ago(9000)
+        self.set("@issue", "12")
+        (self.root / "prs.json").write_text('[{"state":"MERGED"},{"state":"CLOSED"}]')
+        (self.root / "issue.json").write_text('{"state":"OPEN"}')
+        self.assertIn("skip:issue-open " + self.win, self.due())
+        self.assertTrue(self.exists())
+        (self.root / "issue.json").write_text('{"state":"CLOSED"}')
+        (self.root / "prs.json").write_text('[{"state":"MERGED"},{"state":"OPEN"}]')
+        self.assertIn("skip:has-pr " + self.win, self.due())
+        self.assertTrue(self.exists())
+        (self.root / "prs.json").write_text('[{"state":"MERGED"}]')
+        self.set("@reap_policy", "keep")
+        self.due()
+        self.assertTrue(self.exists())                # keep: never
+        self.tm("set-option", "-wu", "-t", self.win, "@reap_policy")
+        out = self.due()
+        self.assertIn("cleaned:done-no-pr " + self.win + " scratch-7", out)
+        self.assertFalse(self.exists())
+        self.assertIn("every PR final", (self.root / "ledger.tsv").read_text())
+
+    def test_sleep_on_no_policy_closed_ticket_closes(self):
+        # #2970: FLEET_SLEEP=on (--policy-only) used to skip every window with no
+        # policy; one bound to a closed ticket is closed all the same.
+        conf = self.root / "conf" / (self.label + ".conf")
+        conf.write_text(conf.read_text() + "FLEET_SLEEP=on\n")
+        self.ago(9000)
+        self.set("@issue", "12")
+        (self.root / "issue.json").write_text('{"state":"OPEN"}')
+        self.assertIn("skip:issue-open " + self.win, self.due())
+        self.assertTrue(self.exists())
+        (self.root / "issue.json").write_text('{"state":"CLOSED"}')
+        self.assertIn("cleaned:done-no-pr " + self.win, self.due())
+        self.assertFalse(self.exists())
+
+    def test_driver_scratch_closes_once_its_epic_is_closed(self):
+        # #2970: a batch driver's scratch (@raw, no @issue, @epic) with no policy
+        # goes by its EPIC: open ⇒ kept, closed ⇒ closed; another repo's EPIC is
+        # not this pass's ticket (a plain scratch: the idle rule).
+        self.set("@raw", "1")
+        self.set("@epic", "acme/repo#99")
+        self.ago(9000)
+        (self.root / "issue.json").write_text('{"state":"OPEN"}')
+        self.assertIn("skip:issue-open " + self.win + " scratch-7 #99", self.due())
+        self.assertTrue(self.exists())
+        (self.root / "issue.json").write_text('{"state":"CLOSED"}')
+        self.assertIn("cleaned:done-no-pr " + self.win, self.due())
+        self.assertFalse(self.exists())
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -513,6 +513,26 @@ inbox_watch() {
   return 0
 }
 
+# selftest_watch — the selftests' tmux debris (issue #2970): a test server left
+# running and the dead socket files beside the fleets' own, swept once an hour by
+# fleet-selftest-reap.sh (never `default`, never a `fleet*` socket; a live server
+# only when it is a test's — `selftest`-named or `-f /dev/null` with no client —
+# and past its age gate). FLEET_SELFTEST_REAP=0 turns it off.
+selftest_watch() {
+  [ "${FLEET_SELFTEST_REAP:-1}" != 0 ] || return 0
+  [ -x "$BIN/fleet-selftest-reap.sh" ] || return 0
+  mkdir -p "$GDIR" 2>/dev/null || return 0
+  local st="$GDIR/last-selftest-reap" last nowt out
+  nowt="$(now)"; last="$(cat "$st" 2>/dev/null || echo 0)"
+  case "$last" in ''|*[!0-9]*) last=0 ;; esac
+  [ $((nowt - last)) -ge 3600 ] 2>/dev/null || return 0
+  printf '%s\n' "$nowt" > "$st" 2>/dev/null
+  out="$(bash "$BIN/fleet-selftest-reap.sh" 2>/dev/null)"
+  case "$out" in *"reaped 0 dead socket(s), 0 live selftest server(s), 0 orphan"*|'') ;;
+    *) printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$out" >> "$GDIR/selftest-reaped.log" 2>/dev/null ;; esac
+  return 0
+}
+
 listen_watch() {
   { [ "$LISTEN_SECS" -gt 0 ]; } 2>/dev/null || return 0
   type fleet_reap_orphan_listeners >/dev/null 2>&1 || return 0
@@ -965,6 +985,7 @@ EOF2
     fseventsd_watch                               # fseventsd bloat reminder (#889), report-only
     listen_watch                                  # orphaned-listener sweep (#1154), throttled
     inbox_watch                                   # what clients sent gone sessions (#2757), throttled
+    selftest_watch                                # selftests' tmux debris (#2970), hourly
     crash_watch                                   # metrics row + reboot harvest (#1294)
     mem_watch                                     # memory / files / pty edges (#1293), notify-only
     transcript_watch                              # daily transcript archive (#1299), budgeted

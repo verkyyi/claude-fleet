@@ -31,6 +31,8 @@
 # Modes:
 #   (default)     reap; print a one-line summary of what was reaped
 #   -n|--dry-run  report what WOULD be reaped; change nothing
+#   --count       read-only, no age gate, one line `live=<n> dead=<n>`: live
+#                 selftest servers + dead sockets (fleet-doctor's `testtmux` row)
 #   --age MINS    override the age gate for live servers + temp dirs
 #   -v|--verbose  print each item as it is handled
 #   -h|--help
@@ -53,19 +55,21 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 
 AGE="${FLEET_SELFTEST_REAP_MIN_AGE:-30}"
-DRY=0; VERBOSE=0
+DRY=0; VERBOSE=0; COUNT=0
 while [ $# -gt 0 ]; do
   case "$1" in
     -n|--dry-run) DRY=1 ;;
     -v|--verbose) VERBOSE=1 ;;
+    --count)      COUNT=1 ;;
     --age)        AGE="${2:-$AGE}"; shift ;;
     --age=*)      AGE="${1#*=}" ;;
-    -h|--help)    sed -n '2,49p' "$0"; exit 0 ;;
+    -h|--help)    sed -n '2,51p' "$0"; exit 0 ;;
     *)            printf 'fleet-selftest-reap: unknown arg %s\n' "$1" >&2; exit 0 ;;
   esac
   shift
 done
 case "$AGE" in ''|*[!0-9]*) AGE=30 ;; esac   # non-numeric → back to the default
+[ "$COUNT" = 1 ] && { DRY=1; VERBOSE=0; AGE=0; }
 
 TMUX="$(command -v tmux 2>/dev/null)"
 [ -n "$TMUX" ] || { echo "fleet-selftest-reap: tmux not installed — nothing to do"; exit 0; }
@@ -76,13 +80,24 @@ SOCKDIR="${FLEET_SELFTEST_REAP_SOCKDIR:-${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)}"
 # mktemp roots to sweep for orphan temp dirs — $TMPDIR (where selftests mktemp -d)
 # plus a bare /tmp for the harnesses that hardcode it; deduped below.
 ROOTS="${FLEET_SELFTEST_REAP_ROOTS:-${TMPDIR:-/tmp} /tmp}"
+[ "$COUNT" = 1 ] && ROOTS=''          # the count is about sockets only
 
 sockets=0; servers=0; dirs=0        # reaped counters
 say()  { [ "$VERBOSE" = 1 ] && printf '  %s\n' "$*"; return 0; }
 alive() { "$TMUX" -S "$1" ls >/dev/null 2>&1; }   # server behind this socket is up?
 # stale <path> — true when <path>'s mtime is older than the age gate (spares a
 # run in flight). find -mmin +N is supported on both BSD (macOS) and GNU find.
-stale() { [ -n "$(find "$1" -maxdepth 0 -mmin "+$AGE" 2>/dev/null)" ]; }
+stale() { [ "$COUNT" = 1 ] && return 0; [ -n "$(find "$1" -maxdepth 0 -mmin "+$AGE" 2>/dev/null)" ]; }
+# test_server <sock> — the server behind <sock> was started `-f /dev/null` (every
+# selftest's form; a fleet's server and a person's load a conf) and has no client.
+test_server() {
+  local pid
+  pid=$("$TMUX" -S "$1" display-message -p '#{pid}' 2>/dev/null) || return 1
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  [ -z "$("$TMUX" -S "$1" list-clients 2>/dev/null)" ] || return 1
+  case " $(ps -o command= -p "$pid" 2>/dev/null) " in *" -f /dev/null "*) return 0 ;; esac
+  return 1
+}
 
 # --- 1 & 2: sockets in the tmux socket dir -----------------------------------
 # NEVER `default` — that is the production fleet's shared server.
@@ -91,6 +106,7 @@ if [ -d "$SOCKDIR" ]; then
     [ -e "$sock" ] || continue                       # empty glob → literal, skip
     name="$(basename "$sock")"
     [ "$name" = default ] && continue                # hard rail: never the prod server
+    case "$name" in fleet*) continue ;; esac         # nor any fleet's own socket (issue #2970)
     if ! alive "$sock"; then
       # dead server → the socket file is litter; remove it regardless of age.
       say "dead socket   $name"
@@ -110,7 +126,17 @@ if [ -d "$SOCKDIR" ]; then
           say "live selftest server  $name  → SPARED (younger than ${AGE}m)"
         fi
         ;;
-      *) say "live server    $name  → SPARED (not a selftest socket)" ;;
+      *)
+        # A selftest server under any label (issue #2970: `hubs$$`, `brk*`…): it
+        # was started `-f /dev/null` — a fleet's server and a person's load a conf
+        # — and nobody is attached to it. Same age gate.
+        if test_server "$sock" && stale "$sock"; then
+          say "live test server  $name  → kill-server (-f /dev/null, no client)"
+          [ "$DRY" = 1 ] || { "$TMUX" -S "$sock" kill-server 2>/dev/null; rm -f "$sock" 2>/dev/null; }
+          servers=$((servers + 1))
+        else
+          say "live server    $name  → SPARED (not a selftest server)"
+        fi ;;
     esac
   done
 fi
@@ -134,12 +160,15 @@ for root in $ROOTS; do
     if [ "$DRY" != 1 ]; then
       # kill any server still holding the inner socket, then drop the whole dir.
       [ -e "$d/tmux.sock" ] && "$TMUX" -S "$d/tmux.sock" kill-server 2>/dev/null
+      # …and any server in a TMUX_TMPDIR it held (run-selftests.sh's per-test dir)
+      for s in "$d"/tmux-*/*; do [ -S "$s" ] && "$TMUX" -S "$s" kill-server 2>/dev/null; done
       rm -rf "$d" 2>/dev/null
     fi
     dirs=$((dirs + 1))
   done
 done
 
+[ "$COUNT" = 1 ] && { printf 'live=%d dead=%d\n' "$servers" "$sockets"; exit 0; }
 verb="reaped"; [ "$DRY" = 1 ] && verb="would reap"
 printf 'fleet-selftest-reap: %s %d dead socket(s), %d live selftest server(s), %d orphan temp dir(s)\n' \
   "$verb" "$sockets" "$servers" "$dirs"

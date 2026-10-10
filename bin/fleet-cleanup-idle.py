@@ -80,8 +80,19 @@ class Cleaner:
                  "@handoff_manifest", "@agent_transfer_until", "window_name",
                  "@reap_policy", "@loop", "@worker_lifecycle", "@wrap_gone", "pane_dead",
                  "@fleet_role", "@reap_skip", "@test_identity", "@born", "@fleet_id",
-                 "@origin", "@origin_fid")
+                 "@origin", "@origin_fid", "@epic")
         return {n: option(self.tm, window, n) for n in names}
+
+    def ticket(self, snap):
+        """The ticket a session is bound to: its @issue, else — for a batch
+        driver — the EPIC its @epic names (`[owner/name]#N`, this repo's only).
+        Empty for a plain scratch."""
+        if re.fullmatch(r"\d{1,9}", snap["@issue"]):
+            return snap["@issue"]
+        m = re.fullmatch(r"(?:([\w.-]+/[\w.-]+))?#(\d{1,9})", snap["@epic"])
+        if m and (not m[1] or norm_repo(m[1]) == norm_repo(self.args.repo)):
+            return m[2]
+        return ""
 
     def policy(self, snap):
         """(kind, value) of the window's own @reap_policy (issue #1902), or None
@@ -93,16 +104,19 @@ class Cleaner:
         the window's own done / loop-end / at policy (issue #1902); 'no-pr' — a
         finished session no PR will ever close (issue #1832): an issue window
         with no policy or `merged`, a spawned scratch with none; None — never
-        this pass (keep, merged on a scratch, sleep on without a policy)."""
+        this pass (keep, merged on a scratch). No policy is not «never» (issue
+        #2970): a window bound to a ticket — its @issue, or the EPIC its @epic
+        drives — goes the no-pr road, which closes it only once that ticket is
+        closed, sleep on or not."""
         pol = self.policy(snap)
         if pol is not None:
             if pol[0] in ("done", "loop-end", "at"):
                 return "idle"
             return "no-pr" if pol[0] == "merged" and snap["@issue"] else None
         if self.args.policy_only:
-            return None
+            return "no-pr" if self.ticket(snap) else None
         if snap["@raw"] == "1" and not snap["@issue"]:
-            return "idle"
+            return "no-pr" if self.ticket(snap) else "idle"
         return "no-pr"
 
     def say(self, window, token, detail=""):
@@ -400,11 +414,12 @@ class Cleaner:
         if self.args.window_repo and not snap["@repo"]:
             return False                      # repo unknown: skipped, never guessed
         wt = snap["@worktree"]
-        issue = snap["@issue"] if re.fullmatch(r"\d{1,9}", snap["@issue"]) else ""
+        issue = self.ticket(snap)
         if wt and Path(wt).resolve() == Path(self.args.main).resolve():
             return False
         m = re.search(r"(?:^|-)(scratch|issue)-(\d+)$", Path(wt).name) if wt else None
-        key = (m[1] + "-" + m[2]) if m else ("issue-" + issue if issue else "")
+        own = snap["@issue"] if re.fullmatch(r"\d{1,9}", snap["@issue"]) else ""
+        key = (m[1] + "-" + m[2]) if m else ("issue-" + own if own else "")
         if not key:
             self.say(window, "skip:no-key")
             return False
@@ -448,7 +463,7 @@ class Cleaner:
             except subprocess.CalledProcessError:
                 branch = ""                   # detached: no branch, so no PR
             head = run("git", "-C", wt, "rev-parse", "HEAD")
-        elif m or issue:
+        elif m or own:
             branch, head = key, ""
         else:
             self.say(window, "skip:no-worktree", key)
@@ -474,13 +489,19 @@ class Cleaner:
                 self.say(window, "skip:issue-open" if state == "OPEN" else "skip:issue-unknown",
                          "%s #%s" % (key, issue))
                 return False
+        prs = []
         if branch:
             prs = json.loads(run("gh", "pr", "list", "--repo", self.args.repo, "--head", branch,
                                  "--state", "all", "--limit", "100", "--json", "state"))
             if not isinstance(prs, list):
                 return False
-            if prs:
-                # A PR's head is fleet-cleanup.sh's (merged / closed) or still open.
+            # A PR's head is fleet-cleanup.sh's (merged / closed) or still open —
+            # unless its ticket is closed and every PR on it final, with no policy
+            # or `merged` (issue #2970): the PR's own reap was missed (a migrate
+            # restarted the agent under it), and nothing will come back for it.
+            final = (issue and (self.policy(snap) or ("merged",))[0] == "merged"
+                     and all(isinstance(p, dict) and p.get("state") in ("MERGED", "CLOSED") for p in prs))
+            if prs and not final:
                 self.say(window, "skip:has-pr", key + " " + branch)
                 return False
         if self.args.dry_run:                 # past its two hours: the one visible tick is all that is left
@@ -493,7 +514,8 @@ class Cleaner:
         history = str(BIN / "fleet-history.sh")
         run("bash", history, "record-closed", "--repo", self.args.repo, "--session", self.args.session,
             "--key", key, "--worktree", wt or "", "--win", window, "--title", snap["window_name"],
-            "--summary", "Automatically closed: finished with no PR (done-no-pr)")
+            "--summary", ("Automatically closed: finished, its ticket closed, every PR final (done-no-pr)" if prs
+                          else "Automatically closed: finished with no PR (done-no-pr)"))
         if present:
             resume = run("bash", history, "resume", "--repo", self.args.repo,
                          "--main", self.args.main, key).split("\t")

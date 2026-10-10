@@ -121,6 +121,11 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 PANEL_RE='^(plan|dash|backlog|home)$'
 ACCT_DIR="${FLEET_ACCOUNTS_DIR:-$FLEET_CONF_DIR/accounts}"
 LAUNCH="${FLEET_MIGRATE_LAUNCH:-$BIN/fleet-session-wrap.sh}"   # selftest seam: a fake launcher
+# The window options a moved session keeps besides its identity (issue #2970) —
+# what the reapers (@reap_policy, @reap_hold, @pin, @epic, @test_identity), the
+# report chain (@origin_gen, @origin_retired), the launcher (@account_class) and
+# the lists (@task_line) read. @fleet_role rides apart: it defaults to worker.
+MIGRATE_CARRY="@reap_policy @reap_hold @pin @epic @test_identity @origin_gen @origin_retired @account_class @task_line"
 EXIT_WAIT="${FLEET_MIGRATE_EXIT_WAIT:-30}"                 # s to wait for Claude to exit
 CLOSE_WAIT="${FLEET_MIGRATE_CLOSE_WAIT:-15}"               # s to wait for the hook to close the window
 BOOT_WAIT="${FLEET_MIGRATE_BOOT_WAIT:-15}"                 # s to wait for the resumed Claude to appear
@@ -480,6 +485,18 @@ migrate_one_body() {
   wrepo=$(wopt "$wid" '#{@repo}'); norepo=$(wopt "$wid" '#{@norepo}'); nsid=$(wopt "$wid" '#{@norepo_sid}')
   local desk; desk=$(wopt "$wid" '#{@desk}')   # a desk ticket's session (#2676): @issue + @repo, no worktree
   hnd=$(wopt "$wid" '#{@wid}')      # the fleet's short window handle (issue #566)
+  # What the reapers, the caps and the lists read off the window (issue #2970): a
+  # new window without them was a role-less, policy-less session nothing closed.
+  # Read now, stamped on the new window below; a window with no role is a worker
+  # (every opener stamps one, #1844 — only an orchestrator / steward / hub, never
+  # migrated, is anything else). Ephemeral state (@claude_*, @loop, @ctx_*) is not
+  # carried: the resumed agent stamps its own.
+  local role o v cpairs=()
+  role=$(wopt "$wid" '#{@fleet_role}'); role=${role:-worker}
+  for o in $MIGRATE_CARRY; do
+    v=$(wopt "$wid" "#{$o}")
+    [ -n "$v" ] && cpairs+=("$o" "$v")
+  done
   # A Codex window (--cfg-stale only, issue #1896): $CX is its bound session —
   # launcher pid (= $cpid), thread, CODEX_HOME, app-server endpoint.
   local sid cxhome='' cxremote=''
@@ -727,6 +744,9 @@ migrate_one_body() {
     local stamp=''
     [ -n "$wrepo" ] && stamp=$(fleet_win_stamp_cmd @repo "$wrepo")
     [ "$norepo" = 1 ] && stamp=$(fleet_win_stamp_cmd @norepo 1 ${nsid:+@norepo_sid "$nsid"})
+    # Before the launcher runs, as a spawn stamps them (@account_class is read by
+    # fleet-claude.sh; a set-option after new-window would race it).
+    stamp="$stamp$(fleet_win_stamp_cmd @fleet_role "$role" ${cpairs[@]+"${cpairs[@]}"})"
     nw=$(TM new-window -d -t "$SESS:" -n "$name" -c "$cwd" -P -F '#{window_id}' "$stamp$cmd" 2>/dev/null)
     # Stamped first thing (issue #870): a cold `claude --resume` takes seconds to
     # render the old wall, this takes one tmux call.
@@ -746,6 +766,10 @@ migrate_one_body() {
       [ -n "$nsid" ] && TM set-window-option -t "$nw" @norepo_sid "$nsid" 2>/dev/null
     fi
     [ "$desk" = 1 ] && TM set-window-option -t "$nw" @desk 1 2>/dev/null
+    # …and again here, in case the shell's stamp lost the race to a fast launch.
+    fleet_win_role_stamp "$nw" "$role" "$SOCK"
+    local k
+    for ((k=0; k+1<${#cpairs[@]}; k+=2)); do TM set-window-option -t "$nw" "${cpairs[k]}" "${cpairs[k+1]}" 2>/dev/null; done
     # @wid (issue #566): the WHOLE point of the handle is that it survives this —
     # a migrate closes the window and opens a new one, minting a new window_id,
     # and 21 windows went through here in a single night. Re-stamp the SAME handle

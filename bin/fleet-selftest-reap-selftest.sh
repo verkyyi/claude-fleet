@@ -75,6 +75,13 @@ boot "$SOCKDIR/bindtest-selftest" oldst
 age  "$SOCKDIR/bindtest-selftest"
 # (e) LIVE selftest server, FRESH → must be spared (an in-flight run).
 boot "$SOCKDIR/fresh-selftest" freshst
+# issue #2970: a selftest server under a label without `selftest` (`hubs$$`) is
+# told by its `-f /dev/null`; a dead `fleet*` socket is a fleet's, never litter.
+"$REAL_TMUX" -S "$SOCKDIR/hubs123" -f /dev/null new-session -d -s hubs123 2>/dev/null || fail "boot hubs123"
+started="$started$SOCKDIR/hubs123"$'\n'; age "$SOCKDIR/hubs123"
+"$REAL_TMUX" -S "$SOCKDIR/hubsfresh" -f /dev/null new-session -d -s hubsfresh 2>/dev/null || fail "boot hubsfresh"
+started="$started$SOCKDIR/hubsfresh"$'\n'
+touch "$SOCKDIR/fleet-gone"
 
 # ============================================================================
 # mktemp-root fixtures (sweep 3)
@@ -91,6 +98,8 @@ KEEPD="$TMPROOT/unrelated-work"; mkdir -p "$KEEPD"
 # ============================================================================
 # 1. --dry-run changes nothing
 # ============================================================================
+out="$(reap --count 2>&1)" || fail "--count should exit 0"
+[ "$out" = "live=4 dead=1" ] || fail "--count: 4 live selftest servers, 1 dead non-fleet socket (got: $out)"
 out="$(reap --dry-run 2>&1)" || fail "dry-run should exit 0"
 case "$out" in *"would reap"*) ;; *) fail "dry-run summary should say 'would reap' (got: $out)";; esac
 [ -e "$SOCKDIR/deadone" ]                || fail "dry-run must NOT remove the dead socket"
@@ -118,6 +127,11 @@ out="$(reap 2>&1)" || fail "reap should exit 0"
 "$REAL_TMUX" -S "$SOCKDIR/fresh-selftest" ls >/dev/null 2>&1 \
   || fail "a FRESH live selftest server must be spared (in-flight run)"
 # (f) aged orphan temp dir reaped (inner server killed, dir gone)
+"$REAL_TMUX" -S "$SOCKDIR/hubs123" ls >/dev/null 2>&1 \
+  && fail "an aged -f /dev/null server with no client should be killed whatever its label"
+"$REAL_TMUX" -S "$SOCKDIR/hubsfresh" ls >/dev/null 2>&1 \
+  || fail "a FRESH -f /dev/null server must be spared (in-flight run)"
+[ -e "$SOCKDIR/fleet-gone" ] || fail "a fleet* socket must never be removed, dead or not"
 [ -d "$ORPH" ] && fail "an aged orphan *selftest* temp dir should be removed"
 # (g) fresh temp dir spared
 [ -d "$FRESHD" ] || fail "a FRESH selftest temp dir must be spared"
@@ -126,7 +140,7 @@ out="$(reap 2>&1)" || fail "reap should exit 0"
 
 # summary must report the three aged reaps (1 dead sock + 1 live srv + 1 dir).
 case "$out" in
-  *"reaped 1 dead socket(s), 1 live selftest server(s), 1 orphan temp dir(s)"*) ;;
+  *"reaped 1 dead socket(s), 2 live selftest server(s), 1 orphan temp dir(s)"*) ;;
   *) fail "unexpected reap summary: $out" ;;
 esac
 
