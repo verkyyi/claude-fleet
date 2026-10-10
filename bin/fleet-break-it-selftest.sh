@@ -5031,6 +5031,50 @@ drill_cross_send_refused_unseen() {
   WHAT="编排用身份发、入口收下；被拒的当场退出 1，账本记 FAILED、原因在 stderr"
 }
 
+# paste-image-lost (issue #2757): a file dropped into a session on another machine
+# goes through the proxy pane's ssh as its Mac path. The drill runs the pane's own
+# program (fleet-remote-view.sh run --shell) against a fake ssh whose session
+# records what it receives, and whose remote commands run in a sandbox HOME (the
+# node): the session must get the node's inbox path, never the Mac's.
+drill_paste_image_lost() {
+  CAP=10; local d="$WORK/paste" t0 got
+  mkdir -p "$d/mac" "$d/node" "$d/cli"
+  printf 'png-bytes' > "$d/mac/shot one.png"
+  cat > "$d/ssh" <<EOF_SSH
+#!/bin/bash
+for a in "\$@"; do [ "\$a" = -O ] && exit 0; done
+last="\${@: -1}"
+case "\$last" in
+  *fleet-inbox*) HOME="$d/node" exec sh -c "\$last" ;;
+  *" attach "*) cat > "$d/session.in"; exit 0 ;;
+  *) exit 0 ;;
+esac
+EOF_SSH
+  printf '#!/bin/sh\nfor a in "$@"; do case "$a" in ControlPath=*) : > "${a#ControlPath=}" ;; esac; done\n' > "$d/connect"
+  chmod +x "$d/ssh" "$d/connect"
+  t0=$(now)
+  printf '\033[200~%s \033[201~' "$d/mac/shot\\ one.png" \
+    | env -u TMUX -u TMUX_PANE TMPDIR="$d/cli" FLEET_CLIENT_DIR="$d/cli" FLEET_REMOTE_SSH_CMD="$d/ssh" \
+        FLEET_CLIENT_ACTIONS_CONNECT="$d/connect" FLEET_SHELL_WARM=0 FLEET_PASTE_LOG="$d/paste.log" \
+        bash "$BIN/fleet-remote-view.sh" run --shell m9 "11111111-2222-3333-4444-555555555555/issue-7" >/dev/null 2>&1
+  got=$(cat "$d/session.in" 2>/dev/null)
+  case "$got" in
+    *"$d/node/.cache/claude-fleet/inbox/issue-7/"*shot_one.png*) ;;
+    *) WHY="the session got [$(printf '%s' "$got" | tr '\033' '^')] — not a path in its machine's inbox"; return 1 ;;
+  esac
+  case "$got" in *"$d/mac/"*) WHY="the Mac's path still reached the session: $got"; return 1 ;; esac
+  [ "$(cat "$d"/node/.cache/claude-fleet/inbox/issue-7/*shot_one.png 2>/dev/null)" = png-bytes ] \
+    || { WHY="the file did not land in the node's inbox"; return 1; }
+  # off: byte for byte as before
+  printf '\033[200~%s\033[201~' "$d/mac/shot\\ one.png" \
+    | env -u TMUX -u TMUX_PANE TMPDIR="$d/cli" FLEET_CLIENT_DIR="$d/cli" FLEET_REMOTE_SSH_CMD="$d/ssh" FLEET_CLIENT_PASTE=0 \
+        FLEET_CLIENT_ACTIONS_CONNECT="$d/connect" FLEET_SHELL_WARM=0 \
+        bash "$BIN/fleet-remote-view.sh" run --shell m9 "11111111-2222-3333-4444-555555555555/issue-7" >/dev/null 2>&1
+  [ "$(cat "$d/session.in")" = "$(printf '\033[200~%s\033[201~' "$d/mac/shot\\ one.png")" ] \
+    || { WHY="FLEET_CLIENT_PASTE=0 changed the paste"; return 1; }
+  SECS=$(since "$t0"); WHAT="拖入的文件先送到会话那台机器的 inbox，会话收到的是那边的路径；关掉开关逐字节如今天"
+}
+
 # ================================================================ run ===========
 FAILS=$LINT; PASSES=0
 printf 'fleet-break-it: %d rows in docs/BREAK-IT.md\n' "$NROWS"

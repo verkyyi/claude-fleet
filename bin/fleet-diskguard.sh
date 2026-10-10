@@ -496,6 +496,23 @@ Stop leaked load experiments with \`bin/fleet-loadgen.sh --stop\`."
 # and what it finds is not waste but exposure. `notify` reports only.
 # Throttled to LISTEN_EVERY: the tick is 60s and nothing here is urgent to the
 # minute, while a machine under load is exactly when an lsof sweep costs most.
+# inbox_watch — what clients sent sessions on this login (issue #2757,
+# fleet-client-upload.py): a session's inbox goes once no live window carries
+# its @fleet_id (fleet-window-reap.sh does it at the close; this is the belt),
+# any file older than FLEET_INBOX_DAYS (7) goes. Every 10 minutes at most.
+inbox_watch() {
+  [ -d "$HOME/.cache/claude-fleet/inbox" ] || return 0
+  mkdir -p "$GDIR" 2>/dev/null || return 0
+  local st="$GDIR/last-inbox-sweep" last nowt out
+  nowt="$(now)"; last="$(cat "$st" 2>/dev/null || echo 0)"
+  case "$last" in ''|*[!0-9]*) last=0 ;; esac
+  [ $((nowt - last)) -ge 600 ] 2>/dev/null || return 0
+  printf '%s\n' "$nowt" > "$st" 2>/dev/null
+  out="$(python3 "$BIN/fleet-client-upload.py" sweep 2>/dev/null)"
+  [ -n "$out" ] && printf '%s\n' "$out" | sed "s/^/$(date '+%Y-%m-%dT%H:%M:%S') /" >> "$GDIR/inbox-swept.log" 2>/dev/null
+  return 0
+}
+
 listen_watch() {
   { [ "$LISTEN_SECS" -gt 0 ]; } 2>/dev/null || return 0
   type fleet_reap_orphan_listeners >/dev/null 2>&1 || return 0
@@ -940,6 +957,7 @@ EOF2
     orphan_watch                                  # orphaned-runaway check (#697), likewise
     fseventsd_watch                               # fseventsd bloat reminder (#889), report-only
     listen_watch                                  # orphaned-listener sweep (#1154), throttled
+    inbox_watch                                   # what clients sent gone sessions (#2757), throttled
     crash_watch                                   # metrics row + reboot harvest (#1294)
     mem_watch                                     # memory / files / pty edges (#1293), notify-only
     transcript_watch                              # daily transcript archive (#1299), budgeted
