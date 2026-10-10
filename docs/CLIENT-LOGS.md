@@ -87,6 +87,27 @@ stops `fleet connect` too, and ssh's exit is its exit.
 `FLEET_CONNECT_SSH_VERBOSE=1` adds `ssh -v -E <logs>/ssh-v.log` (off by default:
 it is long).
 
+### thin.log — `bin/fleet-thin.py` (the thin client, #3003)
+
+`${XDG_CACHE_HOME:-~/.cache}/claude-fleet/thin.log` (`FLEET_THIN_LOG`), the one
+file the thin client writes; rotated and redacted as the others. Its own nine
+fields, only ever added at the end:
+
+    time  event  home  route  pick_ms  ssh_ms  first_ms  rc  reason
+
+| event | when | fields |
+|---|---|---|
+| `connect` | each connection, when it ends | `pick_ms` = `fleet-connect.py --argv` (certificate · machine · route); `ssh_ms` = ssh spawned → the first byte back (handshake + the far end starting); `first_ms` = spawned → the home's first valid `cur` (the view drawn); `rc` = ssh's exit; reason `up` · `never up` · `quit` |
+| `rehome` | three connections in a row never came up — a new home asked for (`--avoid`), or the machine named changed | reason: from / other than which |
+| `upload` | a drop or a ⌃V picture sent through the home | `ssh_ms` = the one-shot's time; reason `<name> → <path there>` |
+| `exec` | a new client version between two connections | reason `<old> → <new>` |
+| `say` | a word for the person (a file not sent) — also an OSC 9 notification | the words |
+| `quit` / `end` | ⌘Q or a detach / a signal | `rc` |
+
+`connect.log` keeps the `home` / `pick` lines of each `--argv` run; the ssh
+itself is the thin client's child, so it has no `ssh-start` / `ssh-end` there —
+its end is the `connect` line here.
+
 ### place.log — `bin/fleet-client-place.sh`
 
 | event | `issue-N` · `scratch` · `home` · `new` · `restore:<key>` |

@@ -37,6 +37,14 @@ it, on whatever machine it runs (issue #2757, EPIC #2756 C1).
         every first connection to a machine hung on 「正在连接」).
         A filter that cannot start runs the command bare.
 
+  fleet-client-upload.py recv <machine> <login> <worker_id> [--name N]
+        the HOME machine's side of the thin client (issue #3003, bin/fleet-thin.py):
+        the file on stdin, for the session <worker_id> that runs on <machine> as
+        <login>. This machine and this login: into the inbox here. Another one:
+        over the home's standing connection to it ($FLEET_CONF_DIR/peerlink/
+        <machine>@<login>.sock, EPIC #2999 约定 7 — never a connection of its
+        own; none there = rc 1, said). Prints the path THERE. rc as `put`.
+
   fleet-client-upload.py sweep [--dry]
         the node's side (fleet-window-reap.sh's sweep, the diskguard tick): a
         session's inbox goes when no live window carries its @fleet_id any
@@ -161,22 +169,46 @@ def bound(name):
 # put
 # ---------------------------------------------------------------------------
 
-def put(node, wid, src, name="", ctl="", client=None):
-    """(rc, path there | why) — rc 0 delivered, 1 failed, 3 over the bound."""
+def inbox_args(wid, src, name):
+    """(rc, INBOX_SH's four args | why, size) — rc 0, 1 unreadable, 3 over the bound."""
     name = safe(name or src)
     try:
         size = os.path.getsize(src)
     except OSError as e:
-        return 1, tr("paste_failed", "%s: %s" % (name, e.strerror))
+        return 1, tr("paste_failed", "%s: %s" % (name, e.strerror)), 0
     if size > bound(name):
-        return 3, tr("paste_too_big", name, bound(name) >> 20)
+        return 3, tr("paste_too_big", name, bound(name) >> 20), size
     h = hashlib.sha256()
     with open(src, "rb") as f:
         for chunk in iter(lambda: f.read(1 << 20), b""):
             h.update(chunk)
     fname = "%s-%s" % (time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()), name)
     cap = str(int(os.environ.get("FLEET_INBOX_CAP_MB") or 1024) * 1024)
-    args = [fleet_id(wid), fname, h.hexdigest(), cap]
+    return 0, [fleet_id(wid), fname, h.hexdigest(), cap], size
+
+
+def deliver(cmd, src, name, node, wid, size, t0, tag="put"):
+    """Run the inbox script (cmd) with src on stdin: (rc, path there | why)."""
+    with open(src, "rb") as f:
+        try:
+            r = subprocess.run(cmd, stdin=f, capture_output=True, timeout=600)
+        except (OSError, subprocess.SubprocessError) as e:
+            return 1, tr("paste_failed", "%s: %s" % (name, e))
+    out = r.stdout.decode("utf-8", "replace").strip().splitlines()
+    path = out[-1] if out else ""
+    log(tag, node or "-", fleet_id(wid), size, r.returncode, "%.2f" % (time.time() - t0), path)
+    if r.returncode != 0 or not path.startswith("/"):
+        why = (r.stderr.decode("utf-8", "replace").strip().splitlines() or ["exit %d" % r.returncode])[-1]
+        return 1, tr("paste_failed", "%s: %s" % (name, why[:80]))
+    return 0, path
+
+
+def put(node, wid, src, name="", ctl="", client=None):
+    """(rc, path there | why) — rc 0 delivered, 1 failed, 3 over the bound."""
+    name = safe(name or src)
+    rc, args, size = inbox_args(wid, src, name)
+    if rc != 0:
+        return rc, args
     c = client or actions().Client(os.environ.get("FLEET_SHELL_SESSION") or "fleet-shell")
     t0 = time.time()
     if not node or c.this_machine(node):
@@ -191,18 +223,79 @@ def put(node, wid, src, name="", ctl="", client=None):
             return 1, tr("paste_failed", tr("paste_no_line", node))
         remote = "sh -c %s fleet-inbox %s" % (shlex.quote(INBOX_SH), " ".join(shlex.quote(a) for a in args))
         cmd = c.sshc() + ["-S", sock, c.ssh_host(node), remote]
-    with open(src, "rb") as f:
+    return deliver(cmd, src, name, node, wid, size, t0)
+
+
+# ---------------------------------------------------------------------------
+# recv — the home machine's half of the thin client (issue #3003)
+# ---------------------------------------------------------------------------
+
+def this_machine(label):
+    """label names THIS machine: its hostname's first label, or the alias
+    FLEET_NODE_ALIASES gives it (`macmini=m5`) — fleet-client-actions' rule."""
+    import platform
+    me = platform.node().split(".", 1)[0]
+    if not label or label in ("-", "local"):
+        return True
+    if label.split(".", 1)[0] == me:
+        return True
+    return any(x == "%s=%s" % (me, label) for x in (os.environ.get("FLEET_NODE_ALIASES") or "").split())
+
+
+def peerlink_sock(machine, login):
+    """The home's standing connection to (machine, login) — EPIC #2999 约定 7."""
+    base = os.environ.get("FLEET_CONF_DIR") or os.path.join(
+        os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config"), "claude-fleet")
+    return os.path.join(base, "peerlink", "%s@%s.sock" % (machine, login))
+
+
+def cmd_recv(argv):
+    import argparse
+    import getpass
+    ap = argparse.ArgumentParser(prog="fleet-client-upload recv")
+    ap.add_argument("machine")
+    ap.add_argument("login")
+    ap.add_argument("wid")
+    ap.add_argument("--name", default="")
+    a = ap.parse_args(argv)
+    try:
+        me = getpass.getuser()
+    except Exception:
+        me = ""
+    fd, tmp = tempfile.mkstemp(prefix="fleet-recv.")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            while True:
+                b = sys.stdin.buffer.read(1 << 20)
+                if not b:
+                    break
+                f.write(b)
+        name = safe(a.name or "file")
+        rc, args, size = inbox_args(a.wid, tmp, name)
+        if rc == 0:
+            t0 = time.time()
+            if this_machine(a.machine) and a.login in ("", "-", me):
+                cmd = ["sh", "-c", INBOX_SH, "fleet-inbox"] + args
+            else:
+                sock = peerlink_sock(a.machine, a.login)
+                ssh = shlex.split(os.environ.get("FLEET_REMOTE_SSH_CMD") or "ssh")
+                if not os.path.exists(sock) or subprocess.call(ssh + ["-S", sock, "-O", "check", a.machine],
+                                                               stdout=subprocess.DEVNULL,
+                                                               stderr=subprocess.DEVNULL) != 0:
+                    rc, args = 1, tr("paste_failed", tr("paste_no_line", a.machine))
+                else:
+                    remote = "sh -c %s fleet-inbox %s" % (shlex.quote(INBOX_SH),
+                                                         " ".join(shlex.quote(x) for x in args))
+                    cmd = ssh + ["-S", sock, "-o", "ControlMaster=no", a.machine, remote]
+            if rc == 0:
+                rc, args = deliver(cmd, tmp, name, a.machine, a.wid, size, t0, "recv")
+    finally:
         try:
-            r = subprocess.run(cmd, stdin=f, capture_output=True, timeout=600)
-        except (OSError, subprocess.SubprocessError) as e:
-            return 1, tr("paste_failed", "%s: %s" % (name, e))
-    out = r.stdout.decode("utf-8", "replace").strip().splitlines()
-    path = out[-1] if out else ""
-    log("put", node or "-", fleet_id(wid), size, r.returncode, "%.2f" % (time.time() - t0), path)
-    if r.returncode != 0 or not path.startswith("/"):
-        why = (r.stderr.decode("utf-8", "replace").strip().splitlines() or ["exit %d" % r.returncode])[-1]
-        return 1, tr("paste_failed", "%s: %s" % (name, why[:80]))
-    return 0, path
+            os.unlink(tmp)
+        except OSError:
+            pass
+    (sys.stdout if rc == 0 else sys.stderr).write(args + "\n")
+    return rc
 
 
 def cmd_put(argv):
@@ -345,11 +438,14 @@ def cmd_paste(argv):
 class Rewriter:
     """The bytes from the person's terminal toward ssh, a drop's paths swapped."""
 
-    def __init__(self, node, wid, ctl):
+    def __init__(self, node, wid, ctl, send=None, say=None):
         self.node, self.wid, self.ctl = node, wid, ctl
         self.buf = b""          # a paste being collected, START included
         self.held = b""         # a chunk's tail that may be the start of START
         self.client = None
+        # the thin client (issue #3003): send(path) -> (rc, path there | why)
+        # replaces `put` over the stage's master, say(text) the shell's bottom line
+        self.send, self.say = send, say or globals()["say"]
 
     def current_wid(self):
         """The row the stage window shows now (`open` retargets the window)."""
@@ -425,19 +521,22 @@ class Rewriter:
         inbox = inbox_root() + os.sep
         if not toks or not all(t.startswith("/") and os.path.isfile(t) and not t.startswith(inbox) for t in toks):
             return None
-        if self.client is None:
-            self.client = actions().Client(os.environ.get("FLEET_SHELL_SESSION") or "fleet-shell")
-        if self.client.this_machine(self.node):
-            return None
-        wid = self.current_wid()
+        if self.send is None:
+            if self.client is None:
+                self.client = actions().Client(os.environ.get("FLEET_SHELL_SESSION") or "fleet-shell")
+            if self.client.this_machine(self.node):
+                return None
+            wid = self.current_wid()
+        else:
+            wid = self.wid
         if any(os.path.getsize(t) > (1 << 20) for t in toks):
-            say(tr("paste_sending", ", ".join(os.path.basename(t) for t in toks)))
+            self.say(tr("paste_sending", ", ".join(os.path.basename(t) for t in toks)))
         got, why = [], []
         for t in toks:
-            rc, out = put(self.node, wid, t, t, self.ctl, self.client)
+            rc, out = self.send(t) if self.send else put(self.node, wid, t, t, self.ctl, self.client)
             (got if rc == 0 else why).append(out)
         if why:
-            say(" · ".join(why))
+            self.say(" · ".join(why))
         tail = text[len(text.rstrip()):]
         log("drop", self.node, fleet_id(wid), len(got), len(why))
         return (" ".join(got) + tail).encode() if got else b""
@@ -677,9 +776,11 @@ def main(argv):
         return cmd_paste(rest)
     if sub == "filter":
         return cmd_filter(rest)
+    if sub == "recv":
+        return cmd_recv(rest)
     if sub == "sweep":
         return cmd_sweep(rest)
-    sys.stderr.write("fleet-client-upload: put | paste | filter | sweep\n")
+    sys.stderr.write("fleet-client-upload: put | paste | filter | recv | sweep\n")
     return 2
 
 

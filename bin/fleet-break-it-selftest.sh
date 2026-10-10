@@ -163,6 +163,8 @@
 # Hub half — release / hub-shape / placement / the hub's Go-tested rows, admission and
 #   the node's sessions riding a tmux restart or a node update: bin/fleet-break-it-hub-selftest.sh (issue #2699, split
 #   off when this run crossed the gate's 240 s per-test cap).
+# Peerlink half — peerlink-* rows (issue #3002): the home machine's standing
+#   connections, bin/fleet-break-it-peerlink-selftest.sh (a fake ssh, no network).
 # Shell half — a sandbox fleet on -L kf (TMUX_TMPDIR under $WORK), the real wrapper:
 #   shell-kill-fleet                                bin/tmux-shim/tmux, fleet-session-wrap.sh, hooks/bash-guard.py
 #   zsh-guard-fleet-label                           shell/cw.zsh tmux()
@@ -243,7 +245,7 @@ lintfail() { LINT=$((LINT + 1)); printf 'FAIL  lint: %s\n' "$1"; }
 [ -f "$DOC" ] || lintfail "docs/BREAK-IT.md is missing"
 # The cred half lives in its own script (issue #1975: its own run, its own
 # durations row) — its drills are listed rows like any other.
-DRILLS=$(sed -n 's/^drill_\([a-z0-9_]*\)() *{.*/\1/p' "$0" "$BIN/fleet-break-it-cred-selftest.sh" "$BIN/fleet-break-it-cred-shared-selftest.sh" "$BIN/fleet-break-it-cred-sep-selftest.sh" "$BIN/fleet-break-it-node-selftest.sh" "$BIN/fleet-break-it-tenant-selftest.sh" "$BIN/fleet-break-it-hub-selftest.sh" | tr _ -)
+DRILLS=$(sed -n 's/^drill_\([a-z0-9_]*\)() *{.*/\1/p' "$0" "$BIN/fleet-break-it-cred-selftest.sh" "$BIN/fleet-break-it-cred-shared-selftest.sh" "$BIN/fleet-break-it-cred-sep-selftest.sh" "$BIN/fleet-break-it-node-selftest.sh" "$BIN/fleet-break-it-tenant-selftest.sh" "$BIN/fleet-break-it-hub-selftest.sh" "$BIN/fleet-break-it-peerlink-selftest.sh" | tr _ -)
 IDS=''
 NROWS=0
 while IFS= read -r r; do
@@ -4412,7 +4414,7 @@ drill_release_artifact_missing() {
   hub_has() { printf '{"artifacts":[' > "$d/hub/v1/fleet/release/artifacts"
     printf '"%s",' "$@" | sed 's/,$//' >> "$d/hub/v1/fleet/release/artifacts"
     printf ']}\n' >> "$d/hub/v1/fleet/release/artifacts"; }
-  hub_has ccquota-darwin-arm64 claude-2.1.293-darwin-arm64 codex-0.154.0-darwin-arm64 tmux-3.7c-darwin-arm64
+  hub_has ccquota-darwin-arm64 claude-2.1.293-darwin-arm64 codex-0.154.0-darwin-arm64 codex-code-mode-host-0.154.0-darwin-arm64 tmux-3.7c-darwin-arm64
   t0=$(now)
   out=$(PATH="$d/shim:$PATH" FLEET_CONF_DIR="$d/conf" XDG_CONFIG_HOME="$d/conf" CCQUOTA_HUB_URL='' FLEET_HUB_URL="file://$d/hub" \
           sh "$BIN/fleet-stable.sh" move "$c2" --dir "$d/co" --repo o/r 2>&1); rc=$?
@@ -4421,7 +4423,7 @@ drill_release_artifact_missing() {
   case "$out" in *'claude-9.9.9-darwin-arm64'*) ;; *) WHY="the refusal does not name claude-9.9.9-darwin-arm64: $(printf '%s' "$out" | tr '\n' '|')"; return 1 ;; esac
   [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable)" = "$c1" ] || { WHY="stable moved onto a release the hub cannot build"; return 1; }
   # the operator drops the file in → the same move goes through
-  hub_has ccquota-darwin-arm64 claude-9.9.9-darwin-arm64 codex-0.154.0-darwin-arm64 tmux-3.7c-darwin-arm64
+  hub_has ccquota-darwin-arm64 claude-9.9.9-darwin-arm64 codex-0.154.0-darwin-arm64 codex-code-mode-host-0.154.0-darwin-arm64 tmux-3.7c-darwin-arm64
   out=$(PATH="$d/shim:$PATH" FLEET_CONF_DIR="$d/conf" XDG_CONFIG_HOME="$d/conf" CCQUOTA_HUB_URL='' FLEET_HUB_URL="file://$d/hub" \
           sh "$BIN/fleet-stable.sh" move "$c2" --dir "$d/co" --repo o/r 2>&1) \
     || { WHY="the move after the artifact landed failed: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1; }
@@ -4457,10 +4459,9 @@ drill_release_ccquota_behind() {
     git --git-dir="$d/origin.git" update-ref refs/tags/stable "$(cat "$d/c1")" && git clone -q "$d/origin.git" "$d/co" 2>/dev/null
   ) || { WHY="could not build the rig repo"; return 1; }
   c1=$(cat "$d/c1"); c2=$(cat "$d/c2")
-  printf '{"artifacts":["ccquota-darwin-arm64","claude-%s-darwin-arm64","codex-%s-darwin-arm64","tmux-%s-darwin-arm64"]}\n' \
-    "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["components"]["claude"]["version"])' "$ROOT/release.json")" \
-    "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["components"]["codex"]["version"])' "$ROOT/release.json")" \
-    "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["components"]["tmux"]["version"])' "$ROOT/release.json")" \
+  # every name release.json pins (a tool's helpers too — issue #3017), as the updater expands them
+  python3 "$BIN/fleet-node-update.py" pinned-artifacts - darwin-arm64 < "$ROOT/release.json" \
+    | python3 -c 'import json,sys; print(json.dumps({"artifacts": sys.stdin.read().split()}))' \
     > "$d/hub/v1/fleet/release/artifacts"
   printf '{"version":"prod-%.7s"}\n' "$c1" > "$d/hub/version"
   t0=$(now)

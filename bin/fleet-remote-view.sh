@@ -44,6 +44,11 @@
 #                           registers it as a proxy VIEW with a fleet-open spool.
 #                           A registered client attaches to a VIEW SESSION of its
 #                           own (issue #1489, below), a plain one to the fleet's.
+#   attach --thin --view <id> [--want <worker_id>|--resume] --device <b64>
+#          --route <name> --token <nonce>   (ON <node>, the thin client's home —
+#                           issue #2763, EPIC #2999 C1) — the client's 看台: a view
+#                           session that wears the top line itself and outlives its
+#                           client for FLEET_VIEW_KEEP_SECS; see rv_attach_thin.
 #   select <worker_id> [<view>]  (runs ON <node>, over the proxy's own ssh
 #                           connection, issue #1484) — select the worker's window
 #                           in the proxy's view session (its <view> id; the fleet
@@ -158,6 +163,47 @@
 # needed or used; a hub that says no or is down pauses the view and says why.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+
+# --- a registry row's key=value columns (issue #2763) ------------------------------
+# A row is `<tty> <session> <kind> <since> <pid>` and, for a thin 看台, key=value
+# columns after the fifth (cur= route= device= token= fuid= node= left=).
+# rv_row_get <file> <key> — the value, or nothing.
+rv_row_get() {
+  awk -F '\t' -v k="$2" 'NR == 1 { for (i = 6; i <= NF; i++) if (index($i, k "=") == 1) { print substr($i, length(k) + 2); exit } }' "$1" 2>/dev/null
+}
+# rv_row_set <file> <key> <value> — set it (added when absent), atomically: a
+# dot-name temp file, which no `$VIEWS/*` scan reads as a row.
+rv_row_set() {
+  local f="$1" t
+  [ -f "$f" ] || return 1
+  t="${f%/*}/.${f##*/}.$$"
+  awk -F '\t' -v OFS='\t' -v k="$2" -v v="$(printf '%s' "$3" | tr -d '\t\n')" '
+    NR == 1 { n = 0; for (i = 6; i <= NF; i++) if (index($i, k "=") == 1) { $i = k "=" v; n = 1 }
+              if (!n) $(NF + 1) = k "=" v; print }' "$f" > "$t" 2>/dev/null && mv -f "$t" "$f" || { rm -f "$t"; return 1; }
+}
+
+# `cur <views dir> <socket> <session>` (issue #2763) — run by the server's
+# session-window-changed[78] hook, only in a session marked `@view_thin` (a thin
+# 看台): the 看台's registry row gets `cur=` — the session in view, as a worker id
+# (`<fleet UUID>/<@fleet_id>`), or the far session's for another machine's window
+# (its `@peer_cur`, EPIC #2999 C4), else `@<window id>`. Before the lib: it runs on
+# every window change of a 看台, so it costs one tmux call and one awk.
+if [ "${1:-}" = cur ]; then
+  command -v tmux >/dev/null 2>&1 || PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+  _v=${4#*@view-}; _f="${2:-}/$_v"
+  case "$_v" in ''|*[!A-Za-z0-9-]*) exit 0 ;; esac
+  [ "$(cut -f3 "$_f" 2>/dev/null)" = thin ] || exit 0
+  IFS='|' read -r _w _fid _pc <<EOF
+$(tmux -S "$3" display-message -p -t "=$4:" '#{window_id}|#{@fleet_id}|#{@peer_cur}' 2>/dev/null)
+EOF
+  [ -n "$_w" ] || exit 0
+  _fu=$(rv_row_get "$_f" fuid); _c="@${_w#@}"
+  if [ -n "${_pc:-}" ]; then _c=${_pc#wid:}
+  elif [ -n "${_fid:-}" ] && [ -n "$_fu" ]; then _c="$_fu/$_fid"; fi
+  [ "$(rv_row_get "$_f" cur)" = "$_c" ] || rv_row_set "$_f" cur "$_c"
+  exit 0
+fi
+
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 # shellcheck source=/dev/null
 . "$BIN/fleet-lib.sh"
@@ -272,10 +318,10 @@ rv_ssh_why() {
 # attach shell is gone does not count; a row without a pid (written by an older
 # attach) is trusted as before.
 rv_registry() {
-  local f tty sess kind since pid
+  local f tty sess kind since pid _rest
   for f in "$VIEWS"/*; do
     [ -f "$f" ] || continue
-    IFS=$'\t' read -r tty sess kind since pid < "$f" || :
+    IFS=$'\t' read -r tty sess kind since pid _rest < "$f" || :
     [ -n "$tty" ] || continue
     case "${pid:-}" in '') ;; *[!0-9]*) continue ;; *) kill -0 "$pid" 2>/dev/null || continue ;; esac
     printf '%s\t%s\t%s\t%s\t%s\n' "$tty" "$sess" "${kind:-view}" "${since:-}" "${pid:-}"
@@ -284,12 +330,15 @@ rv_registry() {
 # Drop the rows (and spools) whose attach shell is gone: a SIGKILL skipped its
 # cleanup, and the next login may get that very tty.
 rv_prune() {
-  local f tty sess kind since pid g v
+  local f tty sess kind since pid g v _rest
   for f in "$VIEWS"/*; do
     [ -f "$f" ] || continue
-    IFS=$'\t' read -r tty sess kind since pid < "$f" || :
+    IFS=$'\t' read -r tty sess kind since pid _rest < "$f" || :
     case "${pid:-}" in ''|*[!0-9]*) continue ;; esac
-    kill -0 "$pid" 2>/dev/null || rm -rf "$f" "$f.d"
+    kill -0 "$pid" 2>/dev/null && continue
+    # a thin 看台 outlives its client for FLEET_VIEW_KEEP_SECS (issue #2763)
+    [ "$kind" = thin ] && rv_thin_kept "$f" && continue
+    rm -rf "$f" "$f.d"
   done
   # A view session with no client (issue #1489): destroy-unattached takes it when
   # its client goes; this is the belt for one left detached by an attach that
@@ -298,6 +347,7 @@ rv_prune() {
     fleet_is_view_session "$g" || continue
     v=${g#*@view-}
     [ -f "$VIEWS/$v" ] && kill -0 "$(cut -f5 "$VIEWS/$v" 2>/dev/null)" 2>/dev/null && continue
+    [ "$(cut -f3 "$VIEWS/$v" 2>/dev/null)" = thin ] && rv_thin_kept "$VIEWS/$v" && continue
     # a uniquely-suffixed one (`<id>-x<pid>`, #1907) belongs to <id>'s row
     case "$v" in *-x*) [ -f "$VIEWS/${v%-x*}" ] && kill -0 "$(cut -f5 "$VIEWS/${v%-x*}" 2>/dev/null)" 2>/dev/null && continue ;; esac
     T kill-session -t "=$g" 2>/dev/null
@@ -321,7 +371,10 @@ rv_attach_procs() {
     { e = $3; d = 0; if (index(e, "-")) { split(e, dp, "-"); d = dp[1]; e = dp[2] }
       n = split(e, t, ":"); secs = 0; for (i = 1; i <= n; i++) secs = secs * 60 + t[i]
       secs += d * 86400
-      i = 7; kind = "plain"; if ($i == "--shell") { kind = "shell"; i++ }
+      i = 7; kind = "plain"
+      if ($i == "--thin") { v = "-"; for (j = i + 1; j < NF; j++) if ($j == "--view") { v = $(j + 1); break }
+        printf "%s\t%s\t%s\t%s\n", $2, secs, v, "thin"; next }
+      if ($i == "--shell") { kind = "shell"; i++ }
       if ($i == "--") i++
       v = $(i + 1); if (v == "") v = "-"; else if (kind == "plain") kind = "view"
       printf "%s\t%s\t%s\t%s\n", $2, secs, v, kind }'
@@ -387,6 +440,11 @@ rv_reap_orphans() {
     case "$v" in ''|-|*[!A-Za-z0-9-]*) continue ;; esac
     [ -f "$VIEWS/$v" ] || continue
     rp=$(cut -f5 "$VIEWS/$v" 2>/dev/null)
+    # a thin 看台's row stays for its keep window, counted from now (issue #2763)
+    if [ "$(cut -f3 "$VIEWS/$v" 2>/dev/null)" = thin ]; then
+      [ "$rp" = "$p" ] && rv_row_set "$VIEWS/$v" left "$(date +%s)"
+      continue
+    fi
     [ -z "$rp" ] || [ "$rp" = "$p" ] && rm -rf "${VIEWS:?}/$v" "${VIEWS:?}/$v.d"
   done <<EOF
 $(rv_scan)
@@ -547,6 +605,156 @@ rv_within() {
     sleep 0.1; n=$((n - 1))
   done
   wait "$p"
+}
+
+# --- the thin client's 看台 (issue #2763, EPIC #2999 C1, 共同约定 6) ---------------
+# `attach --thin --view <id> [--want <worker_id>|--resume] --device <b64 json>
+#  --route <name> --token <nonce>` — what the thin client (C6) runs on its home
+# machine. Like a view client it gets a grouped session of its own,
+# `<fleet>@view-<id>`, but the 看台 is the client's whole screen now — it has no
+# tmux of its own — so the session wears the top line itself: `status on`, at the
+# top, every 2 s, its one status line `fleet-topbar.py render --node` (the
+# session's name · machine · 剩余 · model · effort · route, drawn HERE off this
+# machine's books — EPIC #2999 共同约定 2), and `key-table fleet-view` once C2's
+# conf/tmux-view.conf has defined that table. All of it session options of the
+# 看台: the fleet session, its windows and every global option are untouched.
+#
+# The registry row (kind `thin`) carries `cur= route= device= token= fuid= node=`
+# after the five columns; `cur=` follows the session in view — a server hook,
+# session-window-changed[78], gated on the session's `@view_thin`, runs `cur`
+# above on every change. The 看台 OUTLIVES its client: no destroy-unattached; on
+# the attach's exit the row gets `left=<epoch>` and rv_prune (every attach, the
+# collector's `views` phase) takes row + session FLEET_VIEW_KEEP_SECS (600) later.
+# `--resume` comes back to it — the same session when it is still kept, else a
+# new one on `cur=` — and lands, with no `cur=` to go back to, on the
+# orchestrator's window, else the fleet's current one.
+rv_thin_kept() {   # <row file> — still inside its keep window (left=, else its mtime)
+  local t keep="${FLEET_VIEW_KEEP_SECS:-600}"
+  case "$keep" in ''|*[!0-9]*) keep=600 ;; esac
+  t=$(rv_row_get "$1" left)
+  case "$t" in ''|*[!0-9]*) t=$(stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null) ;; esac
+  case "$t" in ''|*[!0-9]*) return 1 ;; esac
+  [ $(( $(date +%s) - t )) -lt "$keep" ]
+}
+# rv_thin_window <session> <cur> — the window of <session> a `cur=` / `--want`
+# names: a window id, a worker id (its @fleet_id), or another machine's session a
+# C4 window shows (@peer_cur). Nothing when none.
+rv_thin_window() {
+  local c="${2#wid:}"
+  [ -n "$c" ] || return 1
+  T list-windows -t "=$1" -F '#{window_id}|#{@fleet_id}|#{@peer_cur}' 2>/dev/null \
+    | awk -F '|' -v c="$c" -v f="${c##*/}" '
+        $1 == c || (index(c, "/") && (($2 != "" && $2 == f) || $3 == c || $3 == "wid:" c)) { print $1; exit }'
+}
+# rv_thin_home <session> — where a 看台 with nowhere to go back to lands: the
+# orchestrator's window (「新任务」), else the session's current window.
+rv_thin_home() {
+  local w
+  w=$(T list-windows -t "=$1" -F '#{window_id} #{@fleet_role}' 2>/dev/null | awk '$2 == "orchestrator" { print $1; exit }')
+  [ -n "$w" ] || w=$(T display-message -p -t "=$1:" '#{window_id}' 2>/dev/null)
+  printf '%s' "$w"
+}
+# rv_thin_cur <session> <window> <fleet uuid> — that window as `cur=` says it
+# (the `cur` hook's rule, for the attach's own first write).
+rv_thin_cur() {
+  local fid pc
+  IFS='|' read -r fid pc <<EOF
+$(T display-message -p -t "$2" '#{@fleet_id}|#{@peer_cur}' 2>/dev/null)
+EOF
+  if [ -n "${pc:-}" ]; then printf '%s' "${pc#wid:}"
+  elif [ -n "${fid:-}" ] && [ -n "$3" ]; then printf '%s/%s' "$3" "$fid"
+  else printf '@%s' "${2#@}"; fi
+}
+# rv_node_label — this machine's name as the hub's rows say it: its
+# FLEET_NODE_ALIASES name (`macmini=m5`), else the short hostname.
+rv_node_label() {
+  local h lh a
+  h=${FLEET_SIDEBAR_HOST:-$(hostname -s 2>/dev/null)}; h=${h%%.*}
+  lh=$(printf '%s' "$h" | tr '[:upper:]' '[:lower:]')
+  for a in ${FLEET_NODE_ALIASES:-}; do
+    case "$a" in *=*) [ "$(printf '%s' "${a%%=*}" | tr '[:upper:]' '[:lower:]')" = "$lh" ] && { printf '%s' "${a#*=}"; return 0; } ;; esac
+  done
+  printf '%s' "$h"
+}
+# rv_thin_dress <session id> <view id> <fleet session> — the 看台's own options.
+rv_thin_dress() {
+  local gid="$1" v="$2" s="$3" bar
+  bar="#(python3 '$BIN/fleet-topbar.py' render --node view=$v s=$s reg='$VIEWS' g='$FLEET_C/global'"
+  bar="$bar sock=#{q:socket_path} cw=#{client_width} w=#{window_id} pc=#{q:@peer_cur} pd=#{pane_dead})"
+  T set-option -t "$gid" status on \; set-option -t "$gid" status-position top \; \
+    set-option -t "$gid" status-interval 2 \; set-option -t "$gid" status-style "bg=#1a1b26,fg=#565f89" \; \
+    set-option -t "$gid" status-format[0] "$bar" \; set-option -t "$gid" destroy-unattached off \; \
+    set-option -t "$gid" @view_thin "$v" 2>/dev/null
+  # C2's key table, once it exists — a table tmux does not have would take every key
+  T list-keys -T fleet-view >/dev/null 2>&1 && T set-option -t "$gid" key-table fleet-view 2>/dev/null
+  # the `cur=` hook: global, but it acts only in a session marked @view_thin
+  T set-hook -g 'session-window-changed[78]' \
+    "if -F '#{@view_thin}' { run-shell -b \"bash '$BIN/fleet-remote-view.sh' cur '$VIEWS' '#{socket_path}' '#{hook_session_name}' >/dev/null 2>&1 || :\" }" 2>/dev/null
+  return 0
+}
+rv_attach_thin() {
+  local view='' want='' resume='' device='' route='' token='' s w='' g gid='' tty f p fu cur rc kept
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --view) view="${2:-}"; shift 2 ;;
+      --want) want="${2:-}"; shift 2 ;;
+      --resume) resume=1; shift ;;
+      --device) device="${2:-}"; shift 2 ;;
+      --route) route="${2:-}"; shift 2 ;;
+      --token) token="${2:-}"; shift 2 ;;
+      *) note "attach --thin: unknown option $1"; return 2 ;;
+    esac
+  done
+  case "$view" in ''|*[!A-Za-z0-9-]*) note "attach --thin: bad or missing --view"; return 2 ;; esac
+  case "$route$token" in *[!A-Za-z0-9._:-]*) note "attach --thin: bad --route / --token"; return 2 ;; esac
+  case "$device" in *[!A-Za-z0-9+/=_-]*) note "attach --thin: --device is not base64"; return 2 ;; esac
+  s=$(fleet_sockets | head -n 1)
+  [ -n "$s" ] || { note "no fleet session is live on $(hostname -s)"; return 3; }
+  sock=$(fleet_socket "$s")
+  rv_prune
+  rv_legacy_undo "$s"
+  f="$VIEWS/$view"; g="$s@view-$view"
+  cur=''; [ -n "$resume" ] && cur=$(rv_row_get "$f" cur)
+  # The last connection of this id: its attach goes, its 看台 stays to be resumed.
+  p=$(cut -f5 "$f" 2>/dev/null)
+  case "$p" in ''|*[!0-9]*) ;; *)
+    [ "$p" != "$$" ] && kill -0 "$p" 2>/dev/null \
+      && ps -o command= -p "$p" 2>/dev/null | grep -q "fleet-remote-view\.sh attach .*$view" && rv_kill_attach "$p" ;;
+  esac
+  if T has-session -t "=$g" 2>/dev/null; then
+    T detach-client -s "=$g" 2>/dev/null
+    [ -n "$resume" ] || [ -n "$want" ] || [ -f "$f" ] || T kill-session -t "=$g" 2>/dev/null
+  fi
+  if [ -n "$want" ]; then
+    w=$(rv_thin_window "$s" "$want")
+    [ -n "$w" ] || note "attach --thin: ${want#*/} is not live on $(hostname -s) — landing elsewhere"
+  fi
+  kept=''
+  T has-session -t "=$g" 2>/dev/null && gid=$(T display-message -p -t "=$g:" '#{session_id}' 2>/dev/null) && kept=1
+  if [ -z "$gid" ]; then
+    gid=$(T new-session -d -P -F '#{session_id}' -t "=$s" -s "$g" 2>/dev/null) \
+      || { note "attach --thin: no 看台 session for $view"; return 1; }
+    [ -n "$w" ] || w=$(rv_thin_window "$s" "$cur")
+  fi
+  # Nowhere named: a resumed 看台 still kept stays where it was; anything else lands home.
+  [ -n "$w" ] || { [ -n "$resume" ] && [ -n "$kept" ]; } || w=$(rv_thin_home "$s")
+  [ -z "$w" ] || T select-window -t "$gid:$w" 2>/dev/null
+  rv_thin_dress "$gid" "$view" "$s"
+  rv_hide_borders "$s"
+  tty=$(tty 2>/dev/null) || tty=-
+  fu=$(fleet_uuid "$s" 2>/dev/null) || fu=''
+  mkdir -p "$VIEWS" 2>/dev/null
+  w=$(T display-message -p -t "$gid:" '#{window_id}' 2>/dev/null)
+  ( umask 077
+    printf '%s\t%s\tthin\t%s\t%s\tcur=%s\troute=%s\tdevice=%s\ttoken=%s\tfuid=%s\tnode=%s\n' \
+      "$tty" "$s" "$(date +%s)" "$$" "$(rv_thin_cur "$s" "$w" "$fu")" "$route" "$device" "$token" "$fu" "$(rv_node_label)" \
+      > "$VIEWS/.$view.$$" && mv -f "$VIEWS/.$view.$$" "$f" ) \
+    || { note "attach --thin: cannot register $view"; return 1; }
+  trap 'rc=129' HUP
+  T attach-session -t "$gid"; rc=$?
+  # The 看台 stays: its row says since when nobody looks (only while it is ours).
+  [ "$(cut -f5 "$f" 2>/dev/null)" = "$$" ] && rv_row_set "$f" left "$(date +%s)"
+  return "$rc"
 }
 
 case "$mode" in
@@ -1157,6 +1365,8 @@ EOF_PEER
 # ---------------------------------------------------------------------------------
 attach)
   shell=''
+  # `--thin` (issue #2763): the thin client's 看台, its own options — rv_attach_thin
+  [ "${1:-}" = --thin ] && { shift; rv_attach_thin "$@"; exit $?; }
   while [ $# -gt 0 ]; do
     # a bare `-` is the machine itself (the shell's first window), not an option (#1712)
     case "$1" in --shell) shell=1; shift ;; --) shift; break ;; -) break ;; -*) note "attach: unknown option $1"; exit 2 ;; *) break ;; esac

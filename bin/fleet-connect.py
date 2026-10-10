@@ -5,6 +5,7 @@
     fleet connect [MACHINE] [--verbose] [--retest] [--route ROUTE] [--print] [-o SSH-OPTION]… [-- SSH-ARGS…]
     fleet connect --proxy MACHINE
     fleet connect --pick [MACHINE] [--route ROUTE]
+    fleet connect --argv [MACHINE] [--avoid MACHINE] [-o SSH-OPTION]…
     fleet connect --probe-direct MACHINE
     fleet connect --cert-check
     fleet connect --principal-hint < BODY
@@ -82,6 +83,17 @@ prints them). With no hub URL at all (claude-fleet#1712) the pick is THIS
 computer, reason `local` (FLEET_NODE_ALIASES names it) — the client reads this
 machine — and a MACHINE that is not this one exits 1; `fleet connect --print`
 then prints `local <machine>`: the route is no ssh at all.
+
+--argv [MACHINE] (claude-fleet#3003): `fleet` up to the ssh, and the ssh as
+ONE JSON line instead of running it — what the thin client (bin/fleet-thin.py)
+spawns on every connection, so it never re-implements the certificate, the
+machine or the route: {"argv": [...], "host": <index of the host in argv>,
+"machine", "login", "route": {"kind", "name"}, "pin"}. The caller puts its own
+options before argv[host] and its remote command after it. `--avoid MACHINE`:
+the hub's pick is MACHINE → the next ONLINE candidate the home answer lists
+(exit 1 when there is none) — the thin client's 换家 after three failures. With
+no hub URL and this computer the one machine: {"local": true, "machine", "argv":
+[]} — run the remote command here, no ssh.
 
 --cert-check (claude-fleet#2457): the doctor's `cert` row — this computer's
 ~/.ssh/fleet-cert-cert.pub, its principals and how long it is still valid, and
@@ -915,6 +927,8 @@ def print_table(label, rows, chosen, probes, hub):
 
 
 def pick_machine(machines, want, last):
+    if not want and AVOID:
+        machines = [m for m in machines if AVOID not in (m.get("alias"), m.get("hostname"))]
     if want:
         for m in machines:
             if want.lower() in (str(m.get("alias") or "").lower(), str(m.get("hostname") or "").lower()):
@@ -1030,7 +1044,7 @@ def connect(want, hub, token, verbose, retest, print_only, ssh_args, info=None, 
     # 0 — a pinned route (claude-fleet#2886): that one, untested, every time.
     # The machine as remembered serves it without asking the hub; a machine
     # never seen yet is looked up below first.
-    key = want or cache.get("last") or ""
+    key = want or (cache.get("last") if cache.get("last") != AVOID else "") or ""
     ent = entries.get(key) if key else None
     pin = pin_for(key, *machine_names((ent or {}).get("machine")))
     if pin and ent and ent.get("hub") == hub and isinstance(ent.get("machine"), dict):
@@ -1178,11 +1192,22 @@ def run_pinned(machine, label, route, pin, login, hub, verbose, print_only, ssh_
     return run_ssh(machine, route, login, hub, print_only, ssh_args, ssh_opts, pin=pin)
 
 
+ARGV_OUT = False   # --argv (claude-fleet#3003): --print as one JSON line
+AVOID = ""         # --avoid: never this machine (the thin client's 换家)
+
+
 def run_ssh(machine, route, login, hub, print_only, ssh_args, ssh_opts=(), pin=""):
     alias = machine.get("alias") or machine.get("hostname") or "?"
     login = login_override(login)
     kh = write_known_hosts(machine)
-    cmd = ssh_command(machine, route, login, hub, ssh_opts, known_hosts=kh) + list(ssh_args)
+    base = ssh_command(machine, route, login, hub, ssh_opts, known_hosts=kh)
+    cmd = base + list(ssh_args)
+    if print_only and ARGV_OUT:
+        sys.stdout.write(json.dumps({"argv": cmd, "host": len(base) - 1, "machine": alias, "login": login or "",
+                                     "route": {"kind": route["kind"], "name": route["name"]},
+                                     "pin": pin or ""}, ensure_ascii=False) + "\n")
+        sys.stdout.flush()
+        return 0
     rf = os.environ.get("FLEET_CONNECT_ROUTE_FILE")
     if rf and not print_only:
         try:
@@ -1452,6 +1477,18 @@ def enter(want, hub, token, verbose, retest, print_only, ssh_args, ssh_opts=(), 
             return connect(None, hub, token, verbose, retest, print_only, ssh_args, ssh_opts=ssh_opts)
     m = home.get("machine") or {}
     name = m.get("alias") or m.get("hostname")
+    if name and AVOID and AVOID in (m.get("alias"), m.get("hostname")):
+        # 换家 (claude-fleet#3003): the next machine the hub says is online
+        alt = next((c for c in home.get("candidates") or [] if c.get("online")
+                    and AVOID not in (c.get("alias"), c.get("machine"))), None)
+        alias = (alt or {}).get("alias") or (alt or {}).get("machine") or ""
+        m = pick_machine(home.get("machines") or [], alias, None) if alias else None
+        if m is None:
+            sys.stderr.write("fleet · 除了 %s 没有别的在线机器\n" % AVOID)
+            print_candidates(home)
+            sys.exit(1)
+        name = m.get("alias") or m.get("hostname")
+        home = dict(home, machine=m, reason="换家：%s 连不上" % AVOID)
     if not name:
         sys.stderr.write("fleet · %s\n" % (home.get("reason") or "你的机器都不在线"))
         print_candidates(home)
@@ -1546,6 +1583,10 @@ def main(argv):
                     help="one handshake on MACHINE's remembered direct routes; exit 0 when one answers (the shell)")
     ap.add_argument("--pick", action="store_true",
                     help="certificate + the hub's machine pick as one JSON line; no measuring, no ssh (the shell)")
+    ap.add_argument("--argv", action="store_true",
+                    help="the whole of `fleet` up to ssh, the ssh as one JSON line (the thin client)")
+    ap.add_argument("--avoid", metavar="MACHINE", default="",
+                    help="with --argv: never MACHINE — the next online one (the thin client's 换家)")
     ap.add_argument("--cert-check", action="store_true",
                     help="the doctor's cert row: principals, validity, and whether the hub accepts it")
     ap.add_argument("--tls-check", action="store_true",
@@ -1560,6 +1601,9 @@ def main(argv):
         return 0 if hint else 1
     if a.probe_direct:
         return probe_remembered_direct(a.probe_direct)
+    if a.argv:
+        global ARGV_OUT, AVOID
+        ARGV_OUT, AVOID, a.print_only = True, a.avoid, True
     if os.environ.get("FLEET_CONNECT_RETEST") == "1":
         a.retest = True
     elif os.environ.get("FLEET_CONNECT_RETEST") == "last" and not a.retest:
@@ -1577,6 +1621,8 @@ def main(argv):
     # its old "url" is read for one version.
     hub = a.hub or os.environ.get("FLEET_HUB_URL") or machine_conf_hub() or conf.get("url") or ""
     token = os.environ.get("FLEET_HUB_TOKEN") or conf.get("token") or ""
+    if a.argv and hub:
+        a.enter = True   # the certificate and the hub's pick, as `fleet` (no hub: the remembered routes)
     if a.cert_check:
         r = cert_check(a.hub or os.environ.get("FLEET_HUB_URL") or machine_conf_hub() or conf.get("url") or "")
         if r is None:
@@ -1599,6 +1645,9 @@ def main(argv):
         # No hub and no remembered routes (claude-fleet#1712): the one machine is
         # this one, and its route is `local` — the client attaches here, no ssh.
         m = local_machine()
+        if a.argv:
+            sys.stdout.write(json.dumps({"local": True, "machine": m["alias"], "argv": []}) + "\n")
+            return 0
         if a.print_only:
             sys.stdout.write("local %s\n" % m["alias"])
             return 0

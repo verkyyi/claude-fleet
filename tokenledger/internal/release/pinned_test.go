@@ -29,3 +29,20 @@ func TestPinned(t *testing.T) {
 		t.Error("a climbing artifact name accepted")
 	}
 }
+
+// claude-fleet#3017: a tool's helpers are pinned beside it, the same expansion.
+func TestPinnedHelpers(t *testing.T) {
+	rj := []byte(`{"components":{"codex":{"version":"0.154.0","artifact":"codex-{version}-{os}-{arch}",` +
+		`"helpers":{"codex-code-mode-host":"codex-code-mode-host-{version}-{os}-{arch}"}}}}`)
+	got, err := Pinned(rj, DefaultPlatforms)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "codex-0.154.0-darwin-arm64 codex-code-mode-host-0.154.0-darwin-arm64"
+	if strings.Join(got, " ") != want {
+		t.Fatalf("Pinned = %v, want %s", got, want)
+	}
+	if _, err := Pinned([]byte(`{"components":{"codex":{"artifact":"c","helpers":{"h":"../{os}"}}}}`), DefaultPlatforms); err == nil {
+		t.Error("a climbing helper artifact name accepted")
+	}
+}

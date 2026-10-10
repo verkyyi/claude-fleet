@@ -322,6 +322,7 @@ fcfg_label_i18n() {
     FLEET_COLLECT_AGENTCFG_BUDGET) printf 'Collector agentcfg 预算' ;;
     FLEET_COLLECT_SNAPSHOT_BUDGET) printf 'Collector snapshot 预算' ;;
     FLEET_COLLECT_HUBSESS_BUDGET) printf 'Collector hubsess 预算' ;;
+    FLEET_COLLECT_VIEWS_BUDGET) printf 'Collector views 预算' ;;
     FLEET_COLLECT_STALE) printf 'Dash 陈旧告警' ;;
     FLEET_COLLECT_KICK) printf 'Dash 自愈' ;;
     FLEET_COLLECT_KICK_COOLDOWN) printf '自愈冷却时间' ;;

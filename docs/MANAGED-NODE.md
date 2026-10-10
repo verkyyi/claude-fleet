@@ -225,9 +225,9 @@ root 运行。**托管登录的 `~/.claude/fleet` 就是机器运行时那一份
 |---|---|---|
 | 脚本（运行时） | 发布版提交本身（签名清单的 `sha`） | `<root>/<sha>/`（`<root>` = `/Library/Application Support/claude-fleet`） |
 | `ccquota` | 发布包里的 `ccquota-<os>-<arch>`（入口 dist 构建，sha256 在签名清单里） | `<root>/<sha>/bin/ccquota`——节点程序（C5）从 `current` 跑它 |
-| Claude Code / Codex / tmux | `version` 钉住；可执行文件本身是发布包的 artifact（`{version}` `{os}` `{arch}` 展开，`{arch}` 是 `arm64` / `amd64`） | root 缓存 `<root>/tools/<名>/<sha256>/<名>`，发布目录里 `tools/bin/<名>` 链过去 |
+| Claude Code / Codex / tmux | `version` 钉住；可执行文件本身是发布包的 artifact（`{version}` `{os}` `{arch}` 展开，`{arch}` 是 `arm64` / `amd64`） | root 缓存 `<root>/tools/<名>/<sha256>/<名>`，发布目录里 `tools/bin/<名>` 链过去。部件可带 `helpers`（文件名 → artifact 模板，同样展开、同样算钉住制品）：工具在**启动路径旁**找的辅助程序（codex 的 `codex-code-mode-host`，#3017）装进同一个缓存目录、`tools/bin/<辅助名>` 链过去；旧更新器装的发布版缺它，下一轮补上（`ensure_helpers`） |
 | 开号缓存 | 同 `claude.version` | `<root>/cache/claude/<ver>/claude` + `current`（`fleet-bootstrap-cache.sh claude` 从这里装新账号） |
-| 账号 | — | 每个托管账号的 `~/.local/bin/{claude,codex}`、`~/.local/share/claude-fleet-vendor/bin/tmux` 链到 `<root>/current/tools/bin/<名>`；由降权到该账号的进程建，每轮重建（Claude Code 自己更新换掉了链接就换回来），**从不覆盖账号自己的普通文件** |
+| 账号 | — | 每个托管账号的 `~/.local/bin/{claude,codex}`、`~/.local/share/claude-fleet-vendor/bin/tmux` 链到 `<root>/current/tools/bin/<名>`，工具的辅助程序链在同一目录（工具是发布版的时，那里手放的副本换成链接）；由降权到该账号的进程建，每轮重建（Claude Code 自己更新换掉了链接就换回来），**从不覆盖账号自己的普通文件** |
 | 共享凭据代理 | 发布版提交的 `bin/fleet-cred-proxy.py` / `fleet-credsep-launch.py` | root 代码副本 `<root>/credsep/`：更新器每次切换、回退、验证前和每一轮跑 `<current>/bin/fleet-credsep.py machine refresh`，字节变了代理就重启——launchd 管的（旧 `com.claude-fleet.cred-proxy-shared` 还在）由 refresh bootout / bootstrap，守护管的子进程由守护按 `reload`（`credsep/` 一变）重启，refresh 不另写 plist（#2435）。旧 plist 由守护的清扫在子进程能起时 bootout 进 attic，此后 credsep 的 install / join / leave / purge 要重启代理时只在 `credsep/` 写一个 `.restart` 戳、不再写 plist（#2981） |
 | 守护自身 | 发布版提交 | 它就在 `current` 里：切换后最后一步写 `<state>/update-restart.json`，守护停掉子进程退出，launchd 用新版拉起 |
 

@@ -835,6 +835,12 @@ fleet_ui_t() {
     en:paste_no_line)           printf 'no connection to %s' "${1:-}" ;;
     zh:paste_sending)           printf '正在传 %s …' "${1:-}" ;;
     en:paste_sending)           printf 'sending %s …' "${1:-}" ;;
+    zh:thin_reconnect)          printf '和 %s 的连接断了，%s 秒后重连（第 %s 次）' "${1:-}" "${2:-}" "${3:-}" ;;
+    en:thin_reconnect)          printf 'lost the connection to %s, reconnecting in %ss (attempt %s)' "${1:-}" "${2:-}" "${3:-}" ;;
+    zh:thin_debug_hint)         printf '一直连不上？跑 fleet debug report，把这台电脑的情况交给入口看' ;;
+    en:thin_debug_hint)         printf 'still failing? run fleet debug report to hand this computer'"'"'s state to the hub' ;;
+    zh:thin_no_tty)             printf 'fleet --thin 要在终端里运行（这里是管道或脚本）' ;;
+    en:thin_no_tty)             printf 'fleet --thin needs a terminal (this is a pipe or a script)' ;;
     zh:compose_go_issue)        printf '↵ 开工' ;;
     en:compose_go_issue)        printf '↵ start' ;;
     zh:compose_keys)            printf '⇧↵ 换行 · Tab 改选项 · esc 返回' ;;

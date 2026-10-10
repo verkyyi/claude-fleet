@@ -65,9 +65,13 @@ ok()   { CHECKS=$((CHECKS + 1)); }
 #                                 login passes through it (issue #1970): a
 #                                 Background QoS proxy would put its throttle on
 #                                 each streamed token
+#   peerlink                      the home machine's standing ssh masters (issue
+#                                 #3002): every session a view shows from another
+#                                 machine streams through them, and its 2 s beat
+#                                 is the rebuild bound
 # POLL: gh / tmux / network polling only — Background is correct and stays.
 IO_UNITS='cleanup worktree-autoclean diskguard base-sync dispatch sleep install-sync'
-CADENCE_UNITS='collect memguard cred-proxy'
+CADENCE_UNITS='collect memguard cred-proxy peerlink'
 POLL_UNITS='pr-refresh spinner quotawatch issue-bridge ledger-watch webhook'
 
 ptype() {  # $1 = unit → the ProcessType string, or the empty string if absent

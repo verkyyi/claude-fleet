@@ -31,6 +31,9 @@ the way `ccquota release fetch --artifacts` lays one out (C7). Nothing touches
      row FAILs on a stale copy and on a proxy still on the old code
   N  the release key (issue #2843): status prints the pinned and the signer's
      fingerprints; a fetch that failed its signature check is a doctor FAIL
+  P  a tool's helpers (issue #3017): staged beside it, linked beside every
+     account's link (a hand-placed copy replaced), a release staged without
+     them completed on the next tick — from its artifacts, else fetched again
   O  a stale fail (issue #2906): a torn read a later signed fetch outlived is
      no FAIL and rolls nothing back; a current one is a WARN; a rolled-back
      release is retried once its cause is gone, else after a doubling wait
@@ -180,6 +183,11 @@ def make_release(rel, sha, claude="2.1.1", codex="0.154.0", tmux="3.7c", broken=
         "codex-%s-darwin-arm64" % codex: 'echo "codex-cli %s"' % codex,
         "tmux-%s-darwin-arm64" % tmux: 'echo "tmux %s"' % tmux,
     }
+    # each tool's helpers (issue #3017), named the way release.json pins them
+    for t, ver in (("claude", claude), ("codex", codex), ("tmux", tmux)):
+        for h, a in sorted((c[t].get("helpers") or {}).items()):
+            arts[a.replace("{version}", ver).replace("{os}", "darwin").replace("{arch}", "arm64")] = \
+                'echo "%s %s"' % (h, ver)
     man = []
     for n, body in sorted(arts.items()):
         if any(n.startswith(x) for x in drop):
@@ -356,6 +364,74 @@ class A_Fresh(Sandbox):
         open(link, "w").write("mine")
         self.tick(V1)
         self.assertEqual(open(link).read(), "mine")
+
+
+class P_Helpers(Sandbox):
+    """issue #3017: codex runs every shell command through codex-code-mode-host,
+    which it looks for beside the path it was started from (~/.local/bin)."""
+    H = "codex-code-mode-host"
+
+    def hbin(self):
+        return os.path.join(self.root, "current", "tools", "bin", self.H)
+
+    def test_stage_and_account_link(self):
+        self.install(V1)
+        self.assertEqual(self.out(self.H), self.H + " 0.154.0")
+        # in the tools cache beside codex, and the release links it
+        self.assertEqual(os.path.dirname(os.path.realpath(self.hbin())),
+                         os.path.dirname(os.path.realpath(os.path.join(self.root, "current", "tools", "bin", "codex"))))
+        acct = os.path.join(self.home, ".local", "bin", self.H)
+        self.assertEqual(os.readlink(acct), self.hbin())
+        self.assertEqual(subprocess.run([acct], capture_output=True, text=True).stdout.strip(), self.H + " 0.154.0")
+        r = self.cmd("doctor").stdout
+        self.assertRegex(r, r"PASS\s+account")
+        self.assertNotRegex(r, r"WARN\s+helper")
+        self.assertIn(self.H + "-0.154.0-darwin-arm64",
+                      self.cmd("pinned-artifacts", os.path.join(REPO, "release.json")).stdout.split())
+        # a copy put there by hand is drift, and becomes the release's link
+        os.remove(acct)
+        with open(acct, "w") as f:
+            f.write("#!/bin/sh\necho by-hand\n")
+        self.assertRegex(self.cmd("doctor").stdout, r"WARN\s+account.*%s" % self.H)
+        self.tick(V1)
+        self.assertEqual(os.readlink(acct), self.hbin())
+        # the account's own codex (a regular file): its helper is its own too
+        cx = os.path.join(self.home, ".local", "bin", "codex")
+        os.remove(cx)
+        os.remove(acct)
+        open(cx, "w").write("mine")
+        open(acct, "w").write("mine too")
+        self.tick(V1)
+        self.assertEqual(open(acct).read(), "mine too")
+
+    def test_release_staged_without_it_is_completed(self):
+        # what an updater from before helpers left: the release, no helper beside codex
+        self.install(V1)
+        os.remove(self.hbin())
+        r = self.cmd("doctor")
+        self.assertRegex(r.stdout, r"WARN\s+helper\s+codex without its helper " + self.H)
+        self.assertNotRegex(r.stdout, r"FAIL")
+        fetches = lambda: open(os.path.join(self.rel, ".fetched")).read().split().count(V1)
+        fetched = fetches()
+        self.tick(V1)
+        self.assertEqual(self.out(self.H), self.H + " 0.154.0")
+        self.assertEqual(fetches(), fetched, "fetched with the artifact here")
+        # its fetch never brought the helper either (a --pinned fetch of the old
+        # list): fetched again, the release left as it was
+        os.remove(self.hbin())
+        os.remove(os.path.join(self.root, V1, ".release", "artifacts", self.H + "-0.154.0-darwin-arm64"))
+        self.tick(V1)
+        self.assertEqual(self.out(self.H), self.H + " 0.154.0")
+        self.assertEqual(fetches(), fetched + 1)
+        self.assertEqual([e for e in os.listdir(self.root) if e.startswith(".helpers")], [])
+        self.assertNotRegex(self.cmd("doctor").stdout, r"WARN\s+(helper|account)")
+        # the hub cannot serve it: noted, tried again only after the retry wait
+        os.remove(self.hbin())
+        os.rename(os.path.join(self.rel, V1), os.path.join(self.rel, "gone"))
+        self.tick(V1)
+        self.tick(V1)
+        self.assertEqual(fetches(), fetched + 2)
+        self.assertEqual(self.current(), V1)
 
 
 class B_RollbackWhole(Sandbox):
@@ -809,6 +885,14 @@ class H_ReleaseJson(Sandbox):
             dict(good, components=dict(good["components"], node={"version": "1"})),
             dict(good, components=dict(good["components"], supervisor={"script": "bin/other.py"})),
             dict(good, client_reload="later"),
+            # a tool's helpers (issue #3017): {file name: artifact}, never a path or a tool's name
+            dict(good, components=dict(good["components"], codex=dict(good["components"]["codex"], helpers=["x"]))),
+            dict(good, components=dict(good["components"], codex=dict(good["components"]["codex"],
+                                                                      helpers={"../x": "x-{version}"}))),
+            dict(good, components=dict(good["components"], codex=dict(good["components"]["codex"],
+                                                                      helpers={"claude": "x-{version}"}))),
+            dict(good, components=dict(good["components"], codex=dict(good["components"]["codex"],
+                                                                      helpers={"h": "a/b"}))),
         ]
         # how a running client takes it (issue #2737): hot or restart pass
         for ok in (dict(good, client_reload="hot"), dict(good, client_reload="restart")):
@@ -1481,6 +1565,9 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--drill-torn-read":
         # BREAK-IT node-update-stale-fail (issue #2906): an outlived torn read rolls nothing back
         unittest.main(argv=[sys.argv[0], "O_TornReadPast"], verbosity=1)
+    if len(sys.argv) > 1 and sys.argv[1] == "--drill-helpers":
+        # BREAK-IT codex-helper-missing (issue #3017): staged, linked, completed
+        unittest.main(argv=[sys.argv[0], "P_Helpers"], verbosity=1)
     if len(sys.argv) > 1 and sys.argv[1] == "--drill-credsep":
         # BREAK-IT credsep-stale-after-switch: the supervised case, switch + rollback
         unittest.main(argv=[sys.argv[0], "I_Credsep.test_supervised_proxy_follows_switch_and_rollback"], verbosity=1)
