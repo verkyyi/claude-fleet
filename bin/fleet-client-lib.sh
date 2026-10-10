@@ -43,6 +43,18 @@
 #                                (darwin|linux), FC_SUDO (default `sudo -n`),
 #                                FC_BREW_DIRS (where else to look for brew),
 #                                FC_LOG (the package manager's output)
+#
+# And the client's own record (issue #2896, EPIC #2889 C7; docs/CLIENT-LOGS.md):
+#   fleet_clientlog <kind> <event> [machine] [route] [ms] [result] [reason]
+#                              → one TSV line in <logs>/<kind>.log (connect ·
+#                                place · keeper · login), rotated to .1 past
+#                                FLEET_CLIENT_LOG_MAX (512 KiB), the reason cut
+#                                at 2000 bytes and passed through
+#                                conf/secret-shapes.list. The sh twin of
+#                                bin/fleet_clientlog.py, held byte for byte to it
+#                                by bin/client-log-selftest.sh; never fails. POSIX
+#                                sh. The table is found at FLEET_SECRET_SHAPES,
+#                                else $BIN/../conf (the sourcing script's BIN).
 # shellcheck disable=SC2034  # the FC_* globals are read by the sourcing script
 
 fc_session() {
@@ -174,5 +186,44 @@ fc_pkg_install() {  # <pkg>
     *yum*) fc_priv yum install -y "$1" >>"$_fc_log" 2>&1 </dev/null ;;
     *) fc_priv apk add --no-cache "$1" >>"$_fc_log" 2>&1 </dev/null ;;
   esac || { FC_WHY="${FC_HOW#sudo } 失败：$(tail -n 2 "$_fc_log" 2>/dev/null | tr '\n' ' ')"; return 1; }
+  return 0
+}
+
+# ── the client's own record (issue #2896) ─────────────────────────────────────
+fleet_clientlog_dir() {
+  if [ -n "${FLEET_CLIENT_LOG_DIR:-}" ]; then printf '%s\n' "$FLEET_CLIENT_LOG_DIR"; return 0; fi
+  printf '%s/logs\n' "${FLEET_SHELL_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/claude-fleet/shell}"
+}
+# fleet_clientlog_redact — stdin → stdout: flatten, cut, every shape replaced
+fleet_clientlog_redact() {
+  _fcl_sh=${FLEET_SECRET_SHAPES:-${BIN:-.}/../conf/secret-shapes.list}
+  _fcl_t=$(tr '\t\r\n' '   ')
+  if [ "$(printf '%s' "$_fcl_t" | wc -c | tr -d ' ')" -gt 2000 ]; then
+    # a cut mid-character drops that character (python's decode "ignore")
+    if command -v iconv >/dev/null 2>&1; then
+      _fcl_t=$(printf '%s' "$_fcl_t" | head -c 2000 | iconv -c -f UTF-8 -t UTF-8 2>/dev/null)
+    else
+      _fcl_t=$(printf '%s' "$_fcl_t" | head -c 2000)
+    fi
+  fi
+  printf '%s\n' "$_fcl_t" | LC_ALL=C awk -v SH="$_fcl_sh" '
+    BEGIN { while ((getline l < SH) > 0) {
+              i = index(l, "\t"); if (l ~ /^#/ || i == 0) continue
+              n++; nm[n] = substr(l, 1, i - 1); re[n] = substr(l, i + 1) } }
+    { for (k = 1; k <= n; k++) gsub(re[k], "<redacted:" nm[k] ">"); print }'
+}
+fleet_clientlog() {
+  [ "${FLEET_CLIENT_LOG:-}" = 0 ] && return 0
+  case "${1:-}" in connect|place|keeper|login) ;; *) return 0 ;; esac
+  (
+    d=$(fleet_clientlog_dir); f="$d/$1.log"
+    umask 077; mkdir -p "$d" 2>/dev/null || exit 0
+    sz=$(wc -c < "$f" 2>/dev/null | tr -d ' ')
+    [ "${sz:-0}" -ge "${FLEET_CLIENT_LOG_MAX:-524288}" ] 2>/dev/null && mv -f "$f" "$f.1" 2>/dev/null
+    fl() { printf '%s' "$1" | tr '\t\r\n' '   '; }
+    r=$(printf '%s' "${7:-}" | fleet_clientlog_redact)
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(fl "$2")" "$(fl "${3:-}")" \
+      "$(fl "${4:-}")" "$(fl "${5:-}")" "$(fl "${6:-}")" "$r" >> "$f"
+  ) 2>/dev/null
   return 0
 }

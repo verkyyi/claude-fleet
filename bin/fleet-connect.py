@@ -105,8 +105,16 @@ The hub's URL: --hub, else FLEET_HUB_URL, else FLEET_HUB_URL in fleet.conf
 ~/.config/claude-fleet/hub.json.
 
 Exit: --proxy: 0 the stream ended; 1 the hub refused (the reason is on
-stderr). Otherwise ssh's own exit (it replaces this process), 1 when no route
-answers or no machine is known. 2 usage / configuration.
+stderr). Otherwise ssh's own exit, 1 when no route answers or no machine is
+known. 2 usage / configuration.
+
+Every step leaves one line in the client's connect.log (claude-fleet#2896,
+docs/CLIENT-LOGS.md): the hub's machine answer when it is not one (`home`), the
+route measured (`pick`), ssh's start and end with its exit (`ssh-start` /
+`ssh-end` — ssh runs as a child for that, ^C / ^Z / a SIGHUP reach it as
+before), and each relay's handshake and end with who closed it and the
+WebSocket close code (`relay-open` / `relay-end`). FLEET_CONNECT_SSH_VERBOSE=1
+adds `ssh -v -E <logs>/ssh-v.log`. FLEET_CLIENT_LOG=0: no line, ssh exec'd.
 
 Standard library only: this runs on a colleague's laptop, where nothing of the
 fleet is installed but this file.
@@ -132,6 +140,30 @@ try:  # the ONE TLS context for the hub: every CA source this computer has (clau
     fleet_tls.install()
 except ImportError:
     fleet_tls = None
+
+
+def _clientlog():
+    """bin/fleet_clientlog.py beside this file (claude-fleet#2896) — also when
+    this file is loaded by path (fleet-client-place.sh), where bin/ is not on
+    sys.path; an older install without it logs nothing."""
+    try:
+        import importlib.util
+        here = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fleet_clientlog.py")
+        spec = importlib.util.spec_from_file_location("fleet_clientlog", here)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+    except Exception:
+        return None
+
+
+fleet_clientlog = _clientlog()
+
+
+def clog(event, machine="", route="", ms="", result="", reason=""):
+    """One line in the client's connect.log (docs/CLIENT-LOGS.md); never fails."""
+    if fleet_clientlog:
+        fleet_clientlog.write("connect", event, machine, route, "" if ms == "" else str(int(ms)), result, reason)
 
 RELAY_PATH = "/v1/ssh-relay/connect"
 SIG_NAMESPACE = "fleet-relay@claude-fleet"
@@ -432,26 +464,51 @@ def open_relay(node, hub, token, timeout=20):
         raise
 
 
+def ws_close_text(data):
+    """A close frame's payload → 'ws close <code>[: <reason>]'."""
+    if len(data) < 2:
+        return "ws close (no code)"
+    code = struct.unpack("!H", data[:2])[0]
+    reason = data[2:].decode(errors="replace").strip()
+    return "ws close %d%s" % (code, (": " + reason) if reason else "")
+
+
 def proxy(node, hub, token):
+    t0 = time.time()
     try:
         ws = open_relay(node, hub, token)
     except (Refused, OSError) as e:
+        clog("relay-open", node, "relay", (time.time() - t0) * 1000, "fail", "%s%s" % (e, tls_hint(e)))
         die(str(e), 1)
+    t1 = time.time()
+    clog("relay-open", node, "relay", (t1 - t0) * 1000, "ok", hub)
 
     out = sys.stdout.buffer
     done = threading.Event()
+    # who ended the stream first (claude-fleet#2896): the hub (a close frame,
+    # its code + reason), the network (the socket gone with no close frame), or
+    # this side (ssh closed our stdin) — the first one to happen is the answer
+    ended = {}
+
+    def end(by, why):
+        ended.setdefault("at", time.time())
+        ended.setdefault("by", by)
+        ended.setdefault("why", why)
 
     def down():
         try:
             while True:
                 op, data = ws.recv()
                 if op == 0x8:
+                    end("hub", ws_close_text(data))
                     break
                 if op == 0x2 and data:
                     out.write(data)
                     out.flush()
-        except (EOFError, OSError):
-            pass
+        except EOFError:
+            end("net", "the hub's socket closed with no close frame")
+        except OSError as e:
+            end("net", "socket error: %s" % e)
         done.set()
 
     threading.Thread(target=down, daemon=True).start()
@@ -459,14 +516,18 @@ def proxy(node, hub, token):
         while not done.is_set():
             chunk = os.read(0, CHUNK)
             if not chunk:
+                end("client", "ssh closed the stream (stdin EOF)")
                 break
             ws.send(0x2, chunk)
-    except OSError:
-        pass
+    except OSError as e:
+        end("client", "stdin/send error: %s" % e)
     # stdin ended (ssh is done writing): give the far side's last bytes a
     # moment rather than cutting them off. FLEET_CONNECT_DRAIN_SECS for tests.
     done.wait(timeout=float(os.environ.get("FLEET_CONNECT_DRAIN_SECS") or 10))
     ws.close()
+    # the stream's length: from ready to the first end, not to this exit
+    clog("relay-end", node, "relay", (ended.get("at", time.time()) - t1) * 1000,
+         ended.get("by", "client"), ended.get("why", ""))
     return 0
 
 
@@ -720,6 +781,9 @@ def ssh_command(machine, route, login, hub, ssh_opts=()):
         cmd += ["-l", login]
     for o in ssh_opts:
         cmd += ["-o", o]
+    vlog = ssh_verbose_log()
+    if vlog:
+        cmd += ["-v", "-E", vlog]
     if route["kind"] == "relay":
         me = os.path.abspath(__file__)
         pc = "%s %s --proxy %s --hub %s" % (shlex.quote(sys.executable or "python3"), shlex.quote(me),
@@ -730,6 +794,21 @@ def ssh_command(machine, route, login, hub, ssh_opts=()):
             cmd += ["-p", str(route["port"])]
         cmd.append(route["host"])
     return cmd
+
+
+def ssh_verbose_log():
+    """FLEET_CONNECT_SSH_VERBOSE=1 (claude-fleet#2896): ssh -v into
+    <logs>/ssh-v.log, rotated like the client's other logs; default off."""
+    if os.environ.get("FLEET_CONNECT_SSH_VERBOSE") != "1" or not fleet_clientlog:
+        return ""
+    try:
+        d = fleet_clientlog.log_dir()
+        os.makedirs(d, mode=0o700, exist_ok=True)
+        path = os.path.join(d, "ssh-v.log")
+        fleet_clientlog.rotate(path)
+        return path
+    except OSError:
+        return ""
 
 
 def connect(want, hub, token, verbose, retest, print_only, ssh_args, info=None, ssh_opts=()):
@@ -791,6 +870,12 @@ def connect(want, hub, token, verbose, retest, print_only, ssh_args, info=None, 
     best = rows[0] if rows and rows[0]["ms"] else None
     if verbose or best is None:
         print_table(label, rows, best, probes, hub)
+    clog("pick", m.get("alias") or m.get("hostname"), best["kind"] if best else "-",
+         median(best["ms"]) if best else "", "ok" if best else "fail",
+         "; ".join("%s %d/%d%s" % (r["name"], len(r["ms"]), probes,
+                                   (" " + r["errors"][-1]) if not r["ms"] and r.get("errors") else
+                                   (" skip " + str(r["skip"])) if r.get("skip") else "")
+                   for r in rows))
     if best is None:
         die("%s: 没有一条线能连通" % label, 1)
     login = machine_login(m, info)
@@ -845,10 +930,68 @@ def run_ssh(machine, route, login, hub, print_only, ssh_args, ssh_opts=()):
         print(" ".join(shlex.quote(c) for c in cmd))
         return 0
     sys.stderr.flush()
+    if not fleet_clientlog or os.environ.get("FLEET_CLIENT_LOG") == "0":
+        try:
+            os.execvp(cmd[0], cmd)
+        except OSError as e:
+            die("cannot run ssh: %s" % e, 1)
+    return run_logged(cmd, alias, route, login)
+
+
+def run_logged(cmd, alias, route, login):
+    """ssh as a child, its start and end in connect.log (claude-fleet#2896) —
+    otherwise as exec would have it: the terminal's ^C / ^\\ / ^Z reach ssh
+    alone (this process ignores them), a SIGHUP / SIGTERM sent to this process
+    is passed on, a self-suspended ssh (~^Z) stops this one too, and ssh's exit
+    is this one's."""
+    import signal
+    t0 = time.time()
+    clog("ssh-start", alias, route["kind"], "", "", "%s %s:%s login=%s" % (route["name"], route["host"],
+                                                                         route.get("port") or 22, login or "-"))
     try:
-        os.execvp(cmd[0], cmd)
+        child = subprocess.Popen(cmd)
     except OSError as e:
+        clog("ssh-end", alias, route["kind"], 0, "fail", "cannot run ssh: %s" % e)
         die("cannot run ssh: %s" % e, 1)
+    for sig in (signal.SIGINT, signal.SIGQUIT, signal.SIGTSTP):
+        signal.signal(sig, signal.SIG_IGN)
+    got = {}
+
+    def forward(sig, _frame):
+        got.setdefault("sig", sig)
+        try:
+            child.send_signal(sig)
+        except OSError:
+            pass
+    for sig in (signal.SIGHUP, signal.SIGTERM):
+        signal.signal(sig, forward)
+    while True:
+        try:
+            _, st = os.waitpid(child.pid, os.WUNTRACED)
+        except InterruptedError:
+            continue
+        except ChildProcessError:
+            st = 0
+            break
+        if os.WIFSTOPPED(st):
+            # ssh suspended itself (~^Z): stop as a job would, wake it with us
+            os.kill(os.getpid(), signal.SIGSTOP)
+            try:
+                child.send_signal(signal.SIGCONT)
+            except OSError:
+                pass
+            continue
+        break
+    rc = -os.WTERMSIG(st) if os.WIFSIGNALED(st) else os.WEXITSTATUS(st)
+    if rc < 0:
+        result, why, code = "signal %d" % -rc, "ssh killed by signal %d" % -rc, 128 - rc
+    else:
+        result, code = "exit %d" % rc, rc
+        why = {0: "ssh ended normally", 255: "ssh: connection failed or was cut (255)"}.get(rc, "the remote command's exit")
+    if got.get("sig"):
+        why += "; this side got signal %d" % got["sig"]
+    clog("ssh-end", alias, route["kind"], (time.time() - t0) * 1000, result, why)
+    return code
 
 
 def probe_remembered_direct(want):
@@ -997,6 +1140,7 @@ def enter(want, hub, token, verbose, retest, print_only, ssh_args, ssh_opts=(), 
             home = fetch_home(hub, token, cache.get("last"))
             break
         except Refused as e:
+            clog("home", cache.get("last") or "", "-", "", e.code or ("http %d" % e.status if e.status else "refused"), str(e))
             if e.code == "opening":
                 # The hub is opening this person's first login (issue #2069):
                 # nothing to enter yet, and nothing to ask anyone for.
@@ -1032,6 +1176,7 @@ def enter(want, hub, token, verbose, retest, print_only, ssh_args, ssh_opts=(), 
                 return pick_named(cache.get("last") or "", hub, token) if cache.get("last") else pick_json(None, None, "hub: %s" % e)
             return connect(None, hub, token, verbose, retest, print_only, ssh_args, ssh_opts=ssh_opts)
         except (OSError, ValueError) as e:
+            clog("home", cache.get("last") or "", "-", "", "unreachable", "%s%s" % (e, tls_hint(e)))
             sys.stderr.write("fleet · 入口连不上（%s%s），按上次的记录直连\n" % (e, tls_hint(e)))
             if pick_only:
                 return pick_named(cache.get("last") or "", hub, token) if cache.get("last") else pick_json(None, None, "hub: %s" % e)

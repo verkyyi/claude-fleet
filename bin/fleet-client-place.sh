@@ -205,6 +205,37 @@ def read(path):
 
 
 fc = connect_module()
+# Every answer leaves one line in the client's place.log (issue #2896,
+# docs/CLIENT-LOGS.md): the line printed, plus every reason said on stderr —
+# the hub's `No machine can take…` with each machine's reason included.
+T0, SAID = time.time(), []
+
+
+class Tee:
+    def write(self, s):
+        SAID.append(s)
+        return sys.__stderr__.write(s)
+
+    def flush(self):
+        sys.__stderr__.flush()
+
+
+sys.stderr = Tee()
+
+
+def bye(code, line=""):
+    cl = getattr(fc, "fleet_clientlog", None)
+    if cl:
+        w = line.split("\t", 1)
+        head = w[0].split()
+        what = {"issue": "issue-" + issue, "restore": "restore:" + key}.get(kind, ("home" if home else kind))
+        said = " ".join(x.strip() for x in SAID if x.strip())
+        cl.write("place", what, head[1] if len(head) > 1 and head[0] != "REFUSED" else node, "-",
+                 str(int((time.time() - T0) * 1000)), "%s %d" % (head[0] if head else "error", code),
+                 " | ".join(x for x in ("repo=" + repo, w[1] if len(w) > 1 else "", said) if x))
+    sys.exit(code)
+
+
 conf = fc.load_hub_conf()
 hub = os.environ.get("FLEET_HUB_URL") or fc.machine_conf_hub() or conf.get("url") or ""
 token = os.environ.get("FLEET_HUB_TOKEN") or conf.get("token") or ""
@@ -280,7 +311,7 @@ except urllib.error.HTTPError as e:
     hint = fc.principal_hint(raw.decode("utf-8", "replace"))
     if hint:
         sys.stderr.write("fleet-client-place: %s\n" % hint)
-        sys.exit(1)
+        bye(1)
     try:
         err = json.loads(raw).get("error") or {}
         why = (err.get("message") if isinstance(err, dict) else err) or ""
@@ -291,19 +322,19 @@ except urllib.error.HTTPError as e:
     # the lease is not one the hub holds for us (#2464): the caller takes it again once
     if e.code == 401 and retry == "1" and why.startswith("not your client"):
         sys.stderr.write("fleet-client-place: hub answered HTTP 401: %s\n" % why)
-        sys.exit(11)
+        bye(11)
     sys.stderr.write("fleet-client-place: hub answered HTTP %d%s\n" % (e.code, (": " + why) if why else ""))
-    sys.exit(1)
+    bye(1)
 except fc.Refused as e:
     sys.stderr.write("fleet-client-place: %s\n" % e)
-    sys.exit(1)
+    bye(1)
 except (OSError, ValueError) as e:
     sys.stderr.write("fleet-client-place: the hub could not be asked: %s\n" % e)
-    sys.exit(1)
+    bye(1)
 line = out.get("line") or ""
 if not line:
     sys.stderr.write("fleet-client-place: the hub's answer has no line\n")
-    sys.exit(1)
+    bye(1)
 # The node's timing points (issue #2238), for a caller that asked for them by
 # naming a file (fleet-compose.py → compose.ndjson); the line stays ONE line.
 tf = os.environ.get("FLEET_PLACE_TIMING") or ""
@@ -428,7 +459,7 @@ if tried and "\tafter " not in line:
     line += "\tafter " + ",".join("%s:%s:%s" % (a.get("machine", "?"), a.get("operation_id") or "-", a.get("exit", 1))
                                   for a in tried)
 print(line.replace("\n", " "))
-sys.exit(int(out.get("exit") or 0))
+bye(int(out.get("exit") or 0), line.replace("\n", " "))
 PY
 }
 
@@ -468,14 +499,27 @@ fi
 
 # --- no hub: this computer's own fleet, if it has one -------------------------------
 . "$BIN/fleet-lib.sh" 2>/dev/null
+# shellcheck source=fleet-client-lib.sh
+. "$BIN/fleet-client-lib.sh" 2>/dev/null
+T0=$(date +%s)
+plog() {   # <line> <code> — the no-hub answer in place.log (issue #2896)
+  command -v fleet_clientlog >/dev/null 2>&1 || return 0
+  local w=${1%%$'\t'*} r='' what=$KIND m=$NODE
+  case "$1" in *$'\t'*) r=${1#*$'\t'} ;; esac
+  case "$KIND" in issue) what=issue-$ISSUE ;; restore) what=restore:$KEY ;; scratch) [ -n "$HOME_ASK" ] && what=home ;; esac
+  case "$w" in LOCAL\ *|HELD\ *|DECLINED\ *) m=${w#* }; m=${m%% *} ;; esac
+  fleet_clientlog place "$what" "$m" - "$(( ($(date +%s) - T0) * 1000 ))" "${w%% *} $2" "repo=$REPO${r:+ | $r}"
+}
 SESS=$(fleet_login_fleet 2>/dev/null) || SESS=''
 if [ -z "$SESS" ] || [ ! -f "$BIN/fleet-control-read.sh" ]; then
   printf '这台电脑没有 fleet，也连不上入口\n' >&2
+  plog $'NOHUB\t这台电脑没有 fleet，也连不上入口' 1
   exit 1
 fi
 HOST=$(hostname -s 2>/dev/null); HOST=${HOST%%.*}
 if [ "$NODE" != auto ] && ! fleet_node_is_self "$NODE"; then
   printf 'REFUSED NO_HUB\t连不上入口，开不到 %s；这台 (%s) 可以开\n' "$NODE" "$HOST"
+  plog "REFUSED NO_HUB"$'\t'"连不上入口，开不到 ${NODE}；这台 (${HOST}) 可以开" 4
   exit 4
 fi
 ef=$(mktemp "${TMPDIR:-/tmp}/fcp-err.XXXXXX" 2>/dev/null) || ef=/dev/null
@@ -494,7 +538,10 @@ esac
 why=$(tail -n1 "$ef" 2>/dev/null | tr '\t' ' ')
 [ "$ef" = /dev/null ] || rm -f "$ef"
 case "$src" in
-  0) printf 'LOCAL %s\t%s\n' "$HOST" "$(printf '%s' "$out" | head -n1 | tr '\t' ' ')"; exit 0 ;;
-  3) printf 'HELD %s\t%s\n' "$HOST" "$why"; exit 3 ;;
-  *) printf 'DECLINED %s - %s\t%s\n' "$HOST" "$src" "$why"; exit 5 ;;
+  0) line=$(printf 'LOCAL %s\t%s' "$HOST" "$(printf '%s' "$out" | head -n1 | tr '\t' ' ')"); rc=0 ;;
+  3) line=$(printf 'HELD %s\t%s' "$HOST" "$why"); rc=3 ;;
+  *) line=$(printf 'DECLINED %s - %s\t%s' "$HOST" "$src" "$why"); rc=5 ;;
 esac
+printf '%s\n' "$line"
+plog "$line" "$rc"
+exit "$rc"
