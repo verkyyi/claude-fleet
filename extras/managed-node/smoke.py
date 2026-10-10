@@ -75,7 +75,9 @@ def main():
     hub = ThreadingHTTPServer(('127.0.0.1', 0), Hub)
     threading.Thread(target=hub.serve_forever, daemon=True).start()
     proc = None
-    with tempfile.TemporaryDirectory(prefix='fleet-linux-ci-') as tmp:
+    # The supervisor correctly rejects root programs beneath world-writable
+    # /tmp. Use a root-owned prefix, just as the production /opt runtime does.
+    with tempfile.TemporaryDirectory(prefix='fleet-linux-ci-', dir='/opt') as tmp:
         d = Path(tmp)
         d.chmod(0o755)
         state = d / 'state'
