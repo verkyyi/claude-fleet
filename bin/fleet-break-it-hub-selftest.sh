@@ -58,6 +58,8 @@
 #                                                   bin/fleet-park-selftest.sh's sandbox (its own isolated tmux socket)
 #   dist-no-github                                  bin/dist-no-github-selftest.sh (GitHub a black hole: install-sync,
 #                                                   client stage, login bootstrap, the updater's follow → the new version)
+#   dist-bad-signature                              bin/dist-no-github-selftest.sh bad-signature (the hub's release
+#                                                   refused by ccquota → fetch-failed, still the old version, no GitHub)
 #   health-silent-pass                              bin/fleet_steward_health.py (the steward's beat), fleet-doctor.sh --json
 #   hub-stream-silent                               tokenledger/web/dist/lib/stream.js (watchdog, backoff, poll fallback;
 #                                                   node --test stream.test.mjs, when node is here) + internal/api
@@ -1186,6 +1188,18 @@ drill_hub_stream_silent() {
     esac
   fi
   SECS=$(since "$t0")
+}
+
+# ---- dist-bad-signature (#2773, EPIC #2770 C3): the hub's release does not
+# verify against the key this login pinned — the install-sync tick takes nothing:
+# fetch-failed, still the old version, nothing half-made in fleet.versions/, and
+# GitHub not asked instead. Same sandbox as dist-no-github, one named leg.
+drill_dist_bad_signature() {
+  CAP=60; local t0 out
+  t0=$(now)
+  out=$(bash "$BIN/dist-no-github-selftest.sh" bad-signature 2>&1) || { WHY="$(printf '%s\n' "$out" | grep -m 2 -E '^(RED|FAIL)' | cut -c1-220 | tr '\n' '|')"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="入口发来的包验不过章：install-sync 记 fetch-failed、不切、不留半成品、不找 GitHub"
 }
 
 cred_run_drills "$0"

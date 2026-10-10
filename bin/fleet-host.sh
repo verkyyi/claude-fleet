@@ -30,6 +30,10 @@
 #   fleet host status
 #       One line: 能力 基础 · 承载 已开 / 未开, then the hub's word when this
 #       login is a node.
+#   fleet host trust-release-key [--yes]
+#       The hub's release signing key (issue #2773) is pinned once, at the first
+#       install with a hub; a NEW one is only ever taken here: both fingerprints
+#       printed, asked (y/N; --yes = already compared) — fleet-release-key.sh.
 #
 # No terminal and no --yes: prints what `on` would do and exits 2 — never a
 # silent change. Exit 0 done / on / off · 1 a step failed or was refused · 2 usage
@@ -193,6 +197,8 @@ cmd_status() {
 
 YES=0; PASS=()
 verb="${1:-status}"; [ $# -gt 0 ] && shift
+# the hub's release key is its own command (issue #2773): never folded into on
+[ "$verb" = trust-release-key ] && exec bash "$here/fleet-release-key.sh" trust "$@"
 while [ $# -gt 0 ]; do
   case "$1" in
     -y|--yes) YES=1 ;;

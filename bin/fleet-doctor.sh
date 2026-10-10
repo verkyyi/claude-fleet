@@ -206,7 +206,9 @@ case "$_cu_out" in
     # <stable's short commit> — so two computers on one stable read alike on
     # their first row (issue #1805); install-sync's state says where stable is
     _fl_root=$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)
-    _fl_head=$(git -C "$_fl_root" rev-parse HEAD 2>/dev/null)
+    # an imported hub release (issue #2773) is named by its upstream sha
+    _fl_head=$(git -C "$_fl_root" log -1 --format=%s 2>/dev/null | sed -n 's/^fleet-release: \([0-9a-f]\{40\}\) seq=.*/\1/p')
+    [ -n "$_fl_head" ] || _fl_head=$(git -C "$_fl_root" rev-parse HEAD 2>/dev/null)
     _fl_st=$(sed -n 's/^stable: //p' "$conf_dir/global/install-sync.state" 2>/dev/null | head -n 1)
     if [ -n "$_hub_url" ]; then _fl_hub="入口 $(printf '%s' "$_hub_url" | sed 's#^[a-z]*://##')"; else _fl_hub='入口 不接'; fi
     case "$_fl_st" in

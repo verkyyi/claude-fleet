@@ -57,6 +57,10 @@ bin/fleet-host.sh
 # bin/fleet-host-install.sh: `fleet host on` turns the base in ~/.claude/fleet
 # into the full install in place — the install line's 「2 承载」 (#1804).
 bin/fleet-host-install.sh
+# the hub's signed release (#2773): fleet-host-install.sh takes stable from it,
+# `fleet host trust-release-key` is the one way to accept a new signing key
+bin/fleet-release-lib.sh
+bin/fleet-release-key.sh
 # the admin's two commands (#1986): `fleet users list|add|remove` and
 # `fleet hub set|get|unset|settings` — the people list and the hub's settings,
 # through the hub's API; fleet-hub.py forwards those words to fleet-hub-admin.py

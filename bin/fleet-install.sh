@@ -95,9 +95,12 @@
 # WHICH VERSION (claude-fleet#1805): the part everyone has is stable's — the one
 # version every computer follows. 接: the hub's /version names stable's commit
 # (client_version) and where its files are through the hub (client_url, which
-# reaches where GitHub does not), GitHub's raw host at that commit the fallback
-# per file; a hub that names no client_url hands out its image's files, as
-# before. 不接: GitHub's API names stable's commit (FLEET_STABLE_API), the files
+# reaches where GitHub does not) — only the hub: a file it cannot hand out fails
+# the install, never GitHub behind it (issue #2773); a hub that names no
+# client_url hands out its image's files, as before. The hub's release key is
+# pinned here too ($FLEET_CONF_DIR/release.pub, from /v1/fleet/release/key, once
+# — a later key is `fleet host trust-release-key`'s): install-sync checks every
+# release it takes against it. 不接: GitHub's API names stable's commit (FLEET_STABLE_API), the files
 # come from the raw host AT that commit (FLEET_STABLE_RAW) — one install is one
 # version, never a mix of two. Either way .client-version records it, and
 # `fleet` follows stable from there (fleet-client-update.sh). FLEET_INSTALL_SRC
@@ -130,13 +133,12 @@ case "$PRE_HUB" in http://*|https://*) PRE_HUB="${PRE_HUB%/}" ;; *) PRE_HUB='' ;
 # the invitation the hub's /i/<code> filled in (EPIC #2259 C2), or none
 INVITE="${FLEET_INVITE:-__FLEET_INVITE__}"
 case "$INVITE" in __FLEET_INV*|''|*[!A-Za-z0-9_-]*) INVITE='' ;; esac
-SRC="${FLEET_INSTALL_SRC:-https://raw.githubusercontent.com/verkyyi/claude-fleet/stable}"
+SRC="${FLEET_INSTALL_SRC:-https://raw.githubusercontent.com/verkyyi/claude-fleet/stable}"  # dist-ok: 不接 only (no hub: the developer's road)
 SRC="${SRC%/}"
-RAW="${FLEET_STABLE_RAW:-https://raw.githubusercontent.com/verkyyi/claude-fleet}"
+RAW="${FLEET_STABLE_RAW:-https://raw.githubusercontent.com/verkyyi/claude-fleet}"  # dist-ok: 不接 only
 RAW="${RAW%/}"
-API="${FLEET_STABLE_API:-https://api.github.com/repos/verkyyi/claude-fleet/commits/stable}"
+API="${FLEET_STABLE_API:-https://api.github.com/repos/verkyyi/claude-fleet/commits/stable}"  # dist-ok: 不接 only
 MANIFEST_PATH=tokenledger/internal/api/fleetclient/manifest
-ALT=''
 
 say() { printf '%s\n' "$*" >&2; }
 sq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
@@ -228,37 +230,15 @@ tmp="$(mktemp -d "${TMPDIR:-/tmp}/fleet-install.XXXXXX")"
 LOCK='' STG=''
 trap 'rm -rf "$tmp"; [ -z "$STG" ] || rm -rf "$STG"; [ -z "$LOCK" ] || rm -rf "$LOCK"' EXIT INT TERM HUP
 
-# fetch <path> [<rel>] → $tmp/<path>, from $FROM/<rel> (default <path>), and
-# when that fails from $ALT/<rel> (GitHub's raw host at the same commit, #1805).
-# Each file's SHA-256 rides in a header from the hub; a download that does not
-# match it (a proxy's error page, a cut connection) is refused rather than
-# installed.
-
-# fetch_from <url> <out>: FROM's copy — quiet and bounded when ALT backs it up
-fetch_from() {
-  if [ -n "$ALT" ]; then
-    curl -fsL --max-time 30 -D "$2.hdr" "$1" -o "$2"
-  else
-    curl -fsSL -D "$2.hdr" "$1" -o "$2"
-  fi
-}
-
+# fetch <path> [<rel>] → $tmp/<path>, from $FROM/<rel> (default <path>) — one
+# source: with a hub, never GitHub behind it (issue #2773; the per-file GitHub
+# fallback of #1805 / #1901 is gone). Each file's SHA-256 rides in a header from
+# the hub; a download that does not match it (a proxy's error page, a cut
+# connection) is refused rather than installed.
 fetch() {
   src_url="$FROM/${2:-$1}"
   mkdir -p "$tmp/$(dirname "$1")"
-  # Once FROM failed a file and ALT served it, the rest come from ALT straight
-  # (issue #1901): a hub that cannot reach GitHub's raw host answered every
-  # file with a 15 s 502 — ~300 of them, each one a `curl: (56)` line on the
-  # newcomer's screen. With an ALT the first try is quiet (no -S).
-  if [ "${ALT_ONLY:-0}" = 1 ]; then
-    curl -fsSL -D "$tmp/$1.hdr" "$ALT/${2:-$1}" -o "$tmp/$1" || { say "fleet-install: 下载 $ALT/${2:-$1} 失败"; exit 1; }
-  elif ! fetch_from "$src_url" "$tmp/$1"; then
-    if [ -z "$ALT" ] || ! curl -fsSL -D "$tmp/$1.hdr" "$ALT/${2:-$1}" -o "$tmp/$1"; then
-      say "fleet-install: 下载 $src_url 失败"; exit 1
-    fi
-    ALT_ONLY=1
-    say "fleet: 入口这会儿给不了 stable 的文件，其余直接从 GitHub 下（${ALT}）"
-  fi
+  curl -fsSL -D "$tmp/$1.hdr" "$src_url" -o "$tmp/$1" || { say "fleet-install: 下载 $src_url 失败"; exit 1; }
   want="$(tr -d '\r' <"$tmp/$1.hdr" | awk 'tolower($1)=="x-ccquota-sha256:"{print $2}')"
   if [ -n "$want" ]; then
     got="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$tmp/$1")"
@@ -433,7 +413,7 @@ if full; then
   say "fleet: $ROOT 已是完整安装（跟 stable），基础文件不重下"
 else
   # which version, and from where (WHICH VERSION above): FROM, the manifest's
-  # path under it, ALT (the per-file fallback), and what .client-version says
+  # path under it, and what .client-version says
   VER='' COMPAT='' COMMIT='' MARK=0 MPATH="$MANIFEST_PATH" STABLE='' CURL='' HCOMMIT=''
   if [ "$HUB_ANS" = 1 ]; then
     MARK=1
@@ -454,7 +434,7 @@ for k, v in (("VER", s("client_version")), ("COMPAT", s("client_compat")), ("HCO
 PYV
 )"
     if [ -n "$CURL" ]; then
-      FROM="${CURL%/}" ALT="$RAW/$STABLE" COMMIT=$(printf '%.7s' "$STABLE")
+      FROM="${CURL%/}" COMMIT=$(printf '%.7s' "$STABLE")
     else
       FROM="$HUBURL/install" MPATH=manifest COMMIT=$HCOMMIT     # the image's client
     fi
@@ -587,6 +567,17 @@ PY
   fi
 elif [ -n "$CUR_HUB" ]; then
   say "入口: 这次选了不接 — fleet.conf 里原来的地址 $CUR_HUB 没删"
+fi
+# the hub's release key, pinned ONCE (issue #2773): every release install-sync
+# takes is checked against it; a key already here is never replaced (that is
+# `fleet host trust-release-key`). A hub that keeps no releases has none: nothing.
+if [ "$HUB_ANS" = 1 ] && [ ! -s "$CONF/release.pub" ]; then
+  if curl -fsS --max-time 10 "$HUBURL/v1/fleet/release/key" -o "$tmp/release.pub" 2>/dev/null \
+     && grep -Eq '^ed25519 [A-Za-z0-9+/=_-]{8,}$' "$tmp/release.pub"; then
+    head -n 1 "$tmp/release.pub" > "$CONF/release.pub.tmp" && chmod 0644 "$CONF/release.pub.tmp" \
+      && mv -f "$CONF/release.pub.tmp" "$CONF/release.pub" \
+      && say "入口: 记下了它的发布签名钥匙（指纹 $(awk '{print $2}' "$CONF/release.pub" | { shasum -a 256 2>/dev/null || sha256sum; } | cut -c1-16)）— 之后只认它"
+  fi
 fi
 # the invitation, for the first `fleet login` (EPIC #2259 C2): 0600, never shown
 if [ -n "$INVITE" ]; then

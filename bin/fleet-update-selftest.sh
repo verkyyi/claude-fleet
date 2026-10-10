@@ -23,8 +23,12 @@
 #                    moves, the hub's /install is byte for byte what it was, and
 #                    the client still lands on the new stable; the version string
 #                    is the same one a 不接 computer on that stable has
-#   D. proxy down    the hub's client_url fails → each file from GitHub's raw
-#                    host at the same commit; the install is that version
+#   C2. black hole   接 with FLEET_STABLE_API / _RAW pointing at nothing: the
+#                    client still follows the hub to the new stable; `fleet
+#                    update stable` is the hub's word, and «unknown» when the
+#                    hub does not say — GitHub never asked (issue #2773)
+#   D. proxy down    the hub's client_url fails → the install fails; nothing
+#                    comes from GitHub behind the hub (issue #2773)
 #   E. 承载 follows  a checkout + `fleet update tick --root`: stable moved → the
 #                    next tick switches it (install-sync's `switched`, the
 #                    install now a link into fleet.versions/, issue #1894); an
@@ -154,13 +158,32 @@ C_VER=$(cv version)
 s=$(envrun FLEET_HUB_URL="$HUB" bash "$ROOT/bin/fleet-update.sh" 2>&1)
 case "$s" in "基础 · 版本 ${S3:0:7} · 跟 stable 同版 · 经入口取"*) ok "C fleet update: $s" ;; *) bad "C fleet update: $s" ;; esac
 
-# --- D. the hub's proxy down: GitHub's raw host at the same commit ----------------
+# --- C2. 接 with GitHub a black hole: still follows (issue #2773) ----------------
+# FLEET_STABLE_API / _RAW name nothing at all — with a hub nothing reads them
+ln -s "$GH/raw/$S4" "$HUBD/proxy/$S4"; stable "$S4"; hub_version "$S4"
+mv "$GH/api" "$GH/api.off"
+startbh() { mkdir -p "$STATE"; echo 0 > "$STATE/checked"
+  OUT=$(envrun FLEET_STABLE_API=file://$WORK/blackhole/api FLEET_STABLE_RAW=file://$WORK/blackhole/raw \
+    bash "$ROOT/bin/fleet-client-update.sh" start 2>&1); RC=$?; }
+startbh; wait_staged "$S4"; startbh
+if [ "$RC" = 3 ] && [ "$(cv version)" = "$S4" ] && [ "$(release_of "$ROOT")" = "$S4" ]; then
+  ok "C2 GitHub a black hole: the hub's client still moves to $S4"
+else bad "C2 black hole: rc=$RC out=$OUT cv=$(cv version) log=$(cat "$STATE/stage.log" 2>&1)"; fi
+s=$(envrun FLEET_HUB_URL="$HUB" FLEET_STABLE_API=file://$WORK/blackhole/api bash "$ROOT/bin/fleet-update.sh" stable 2>&1)
+[ "$s" = "$S4" ] && ok "C2 fleet update stable: the hub's word ($s)" || bad "C2 fleet update stable: [$s]"
+hub_version "$S4" "$HUB/no-such-proxy/$S4"; mv "$HUBD/version" "$HUBD/version.off"
+s=$(envrun FLEET_HUB_URL="$HUB" bash "$ROOT/bin/fleet-update.sh" stable 2>&1); rc=$?
+mv "$GH/api.off" "$GH/api"
+[ "$rc" = 1 ] && [ -z "$s" ] && ok "C2 a hub that does not say: stable unknown, GitHub never asked" || bad "C2 hub silent: rc=$rc [$s]"
+mv "$HUBD/version.off" "$HUBD/version"
+
+# --- D. the hub's proxy down: never GitHub behind it (issue #2773) ------------------
 stable "$S4"; hub_version "$S4" "$HUB/no-such-proxy/$S4"
 sandbox d
 out=$(envrun FLEET_INSTALL_HUB=1 sh "$HUBD/install" 2>&1); rc=$?
-if [ "$rc" = 0 ] && [ "$(cv version)" = "$S4" ] && [ "$(release_of "$ROOT")" = "$S4" ]; then
-  ok "D client_url down: every file from GitHub at $S4"
-else bad "D fallback: rc=$rc out=$(printf '%s' "$out" | tail -3)"; fi
+if [ "$rc" != 0 ] && [ ! -f "$ROOT/.client-version" ] && ! printf '%s' "$out" | grep -q 'GitHub'; then
+  ok "D client_url down: the install fails, nothing from GitHub"
+else bad "D no fallback: rc=$rc cv=$(cat "$ROOT/.client-version" 2>&1) out=$(printf '%s' "$out" | tail -3)"; fi
 
 # --- E. 承载: the checkout follows the same stable -------------------------------
 export GIT_CONFIG_GLOBAL="$WORK/gitconfig" GIT_CONFIG_SYSTEM=/dev/null

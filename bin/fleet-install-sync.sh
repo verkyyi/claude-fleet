@@ -50,6 +50,24 @@
 #              the remote is `none`. The + is deliberate: a clone auto-follows the
 #              tag once and a later plain fetch would refuse to move it
 #              ("would clobber existing tag"), leaving a stale local `stable`.
+#   hub        WITH A HUB (FLEET_HUB_URL / CCQUOTA_HUB_URL; issue #2773, EPIC
+#              #2770 C3) the fetch above is not run: the hub's
+#              /v1/fleet/release/stable names stable (sha + seq, a hint), and only
+#              past every gate below is that release fetched and verified —
+#              `ccquota release fetch --hub … --pubkey <FLEET_CONF_DIR>/release.pub`
+#              (the key pinned the first time, fleet-release-lib.sh) — then
+#              imported into the install's repository as ONE local commit
+#              (`fleet-release: <upstream sha> seq=<n>`, refs/fleet/rel/<sha>) on
+#              the commit the install is at, so apply's `git diff from to` is
+#              unchanged and the version dir is still the upstream sha. The
+#              `origin` remote goes (global/install-origin.bak keeps it one
+#              version). «Only forward» is the signed seq, not ancestry: a seq not
+#              past this install's is `refused`, a hand commit on top of a release
+#              too. The hub not answering is `fetch-failed` (入口不可达), a release
+#              that does not verify too (nothing switched, no alarm); a hub that
+#              keeps no releases (404) is followed over git, as before. No hub, a
+#              managed login, or FLEET_DIST_SOURCE=github (one version's way
+#              back, origin restored): the git fetch above, byte for byte.
 #   current    HEAD == stable → nothing to do.
 #   skipped    stable == the version the doctor rejected last time (`skip:` in
 #              the state) → not retried until stable moves again. No flapping.
@@ -200,6 +218,8 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/fleet-lib.sh"
 # shellcheck source=/dev/null
 . "$BIN/fleet-versions-lib.sh"
+# shellcheck source=/dev/null
+. "$BIN/fleet-release-lib.sh"
 
 ROOT="${FLEET_INSTALL_ROOT:-$(cd "$BIN/.." && pwd)}"
 REMOTE=origin TAG=stable TIMEOUT="${FLEET_INSTALL_SYNC_TIMEOUT:-30}"
@@ -223,7 +243,7 @@ case "$NODE_RETRY" in ''|*[!0-9]*) NODE_RETRY=21600 ;; esac
 LOGIN=$(id -un 2>/dev/null || printf '%s' "${USER:-?}")
 HOST=$(hostname -s 2>/dev/null || hostname 2>/dev/null || printf '?')
 
-usage() { sed -n '2,186p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,204p' "$0" | sed 's/^# \{0,1\}//'; }
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --dry-run|-n) DRY=1 ;;
@@ -253,6 +273,8 @@ STATE="$STATE_DIR/install-sync.state"
 HOLDD="$STATE_DIR/epic-hold.d"
 LOCK="$STATE_DIR/install-sync.lock"
 LOGF="$ROOT/logs/install-sync.log"
+# the remote the hub road took away (issue #2773), kept for one version
+ORIGIN_BAK="$STATE_DIR/install-origin.bak"
 
 now() { date +%s; }
 utc() { date -u +%Y-%m-%dT%H:%M:%SZ; }
@@ -693,12 +715,13 @@ EOF
 }
 
 # --- versions (issue #1894) -----------------------------------------------------
-# vers_build <sha> — a git worktree of <sha> at $VERS/<sha>/ on its own branch
-# fleet-live/<key> (tracking the install's trunk, so `git pull --ff-only` in it
-# still works), printed. A stale dir of that name is replaced — unless it is the
-# version in use, which gets a fresh name instead.
+# vers_build <sha> [<commit>] — a git worktree of <commit> (default <sha>) at
+# $VERS/<sha>/ on its own branch fleet-live/<key> (tracking the install's trunk,
+# so `git pull --ff-only` in it still works), printed. A stale dir of that name
+# is replaced — unless it is the version in use, which gets a fresh name
+# instead. A hub release (issue #2773) is <its upstream sha> <its local import>.
 vers_build() {
-  local vsha="$1" vd up
+  local vsha="$1" vcom="${2:-$1}" vd up
   vd="$VERS/$vsha"
   if [ -e "$vd" ]; then
     if [ "$(fleet_versions_current "$ROOT")" = "$vsha" ]; then vd="$VERS/$vsha-$(now)"; else vers_drop "$vd"; fi
@@ -708,7 +731,7 @@ vers_build() {
   up=$(git -C "$ROOT" rev-parse -q --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null) || up=''
   [ -n "$up" ] || up=$(git -C "$ROOT" symbolic-ref -q --short "refs/remotes/$REMOTE/HEAD" 2>/dev/null) || up=''
   [ -n "$up" ] || up="$REMOTE/master"
-  git -C "$ROOT" worktree add -q -B "fleet-live/${vd##*/}" "$vd" "$vsha" >/dev/null 2>&1 </dev/null || { rm -rf "$vd"; return 1; }
+  git -C "$ROOT" worktree add -q -B "fleet-live/${vd##*/}" "$vd" "$vcom" >/dev/null 2>&1 </dev/null || { rm -rf "$vd"; return 1; }
   git -C "$vd" branch -q --set-upstream-to="$up" >/dev/null 2>&1 </dev/null || :
   printf '%s\n' "$vd"
 }
@@ -845,6 +868,13 @@ main() {
     esac
   done
   HEAD_SHA=$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || :)
+  # HEAD_C is the commit the install is at; HEAD_SHA names it the way stable
+  # does — an imported hub release (issue #2773) by its upstream sha
+  HEAD_C="$HEAD_SHA" HEAD_SEQ='' STABLE_C='' STABLE_SEQ='' DIST=git HUB='' SRCW=''
+  local relof
+  if [ -n "$HEAD_SHA" ] && relof=$(fleet_rel_of "$ROOT" HEAD); then
+    HEAD_SHA=${relof%% *} HEAD_SEQ=${relof#* }
+  fi
 
   # --- off ---------------------------------------------------------------------
   if [ "${FLEET_INSTALL_SYNC:-1}" = 0 ]; then
@@ -871,6 +901,14 @@ main() {
       DEFERRED_SINCE=''
       finish off "managed — the machine updater (com.claude-fleet.node · fleet-node-update.py) moves this machine to the release, and $NODE_ROOT/current names none yet; \`fleet doctor --machine\` shows it"
     fi
+  fi
+
+  # Where stable comes from (issue #2773): the hub's signed release when this
+  # login has a hub — a managed login follows the machine (above) — else, and
+  # with FLEET_DIST_SOURCE=github (one version's way back), the tag over git.
+  if [ -z "$MANAGED_SHA" ] && [ "${FLEET_DIST_SOURCE:-}" != github ]; then
+    HUB=$(fleet_rel_hub_url)
+    [ -n "$HUB" ] && DIST=hub
   fi
 
   git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1 \
@@ -906,27 +944,51 @@ main() {
     trap 'drop_lock; exit 143' TERM
   fi
 
+  # --- the hub's stable (issue #2773) ---------------------------------------------
+  # A hint first — sha + seq, unsigned — so a tick with nothing new downloads
+  # nothing; the release itself is fetched and verified only past every gate.
+  if [ "$DIST" = hub ]; then
+    local hrc
+    fleet_rel_stable "$HUB" "$TIMEOUT"; hrc=$?
+    case "$hrc" in
+      0) STABLE_SHA=$REL_SHA STABLE_SEQ=$REL_SEQ SRCW=" from hub (seq $REL_SEQ)"
+         [ "$DRY" = 1 ] || fleet_rel_drop_origin "$ROOT" "$REMOTE" "$ORIGIN_BAK" ;;
+      3) say "the hub ($HUB) keeps no releases (/v1/fleet/release/stable is 404) — following $TAG over git, as before"
+         DIST=git ;;
+      *) finish fetch-failed "入口不可达（${HUB}）: $REL_ERR — not seen, not refused; still at $(short "$HEAD_SHA")" ;;
+    esac
+  fi
+
   # --- fetch the mark ----------------------------------------------------------
   local ferr
-  if ! ferr=$(g fetch --no-tags -q "$REMOTE" "+refs/tags/$TAG:refs/tags/$TAG" 2>&1 </dev/null); then
-    case "$ferr" in
-      *"couldn't find remote ref"*|*"Couldn't find remote ref"*)
-        STABLE_SHA=''
-        finish none "no refs/tags/$TAG on $REMOTE yet — nothing to follow; the operator sets it with fleet-stable.sh move" ;;
-    esac
-    finish fetch-failed "could not read refs/tags/$TAG from $REMOTE (offline? timeout ${TIMEOUT}s) — not seen, not refused: $(printf '%s\n' "$ferr" | tail -1)"
-  fi
-  STABLE_SHA=$(git -C "$ROOT" rev-parse -q --verify "refs/tags/$TAG^{commit}" 2>/dev/null) \
-    || finish fetch-failed "refs/tags/$TAG fetched but does not resolve to a commit"
-  # A managed login's mark is the machine's release (issue #2688). The stable
-  # fetch above brings its objects in the usual case (the release is stable or
-  # behind it); one the tag does not reach is fetched by its sha.
-  if [ -n "$MANAGED_SHA" ]; then
-    git -C "$ROOT" cat-file -e "$MANAGED_SHA^{commit}" 2>/dev/null \
-      || ferr=$(g fetch --no-tags -q "$REMOTE" "$MANAGED_SHA" 2>&1 </dev/null) \
-      || finish fetch-failed "could not fetch the machine's release $(short "$MANAGED_SHA") from $REMOTE — not seen, not refused: $(printf '%s\n' "$ferr" | tail -1)"
-    say "managed: following the machine's release $(short "$MANAGED_SHA") ($NODE_ROOT/current), not $TAG $(short "$STABLE_SHA")"
-    STABLE_SHA="$MANAGED_SHA" MARKW="the machine release"
+  if [ "$DIST" = git ]; then
+    # the remote a hub tick took away comes back for the git road (one version)
+    [ "$DRY" = 1 ] || fleet_rel_restore_origin "$ROOT" "$REMOTE" "$ORIGIN_BAK"
+    # an imported release's own commit is not in the repository's history: fetch
+    # it by sha, so the ancestry gate below can read it
+    if [ -n "$HEAD_SEQ" ] && ! git -C "$ROOT" cat-file -e "$HEAD_SHA^{commit}" 2>/dev/null; then
+      g fetch --no-tags -q "$REMOTE" "$HEAD_SHA" >/dev/null 2>&1 </dev/null || :
+    fi
+    if ! ferr=$(g fetch --no-tags -q "$REMOTE" "+refs/tags/$TAG:refs/tags/$TAG" 2>&1 </dev/null); then
+      case "$ferr" in
+        *"couldn't find remote ref"*|*"Couldn't find remote ref"*)
+          STABLE_SHA=''
+          finish none "no refs/tags/$TAG on $REMOTE yet — nothing to follow; the operator sets it with fleet-stable.sh move" ;;
+      esac
+      finish fetch-failed "could not read refs/tags/$TAG from $REMOTE (offline? timeout ${TIMEOUT}s) — not seen, not refused: $(printf '%s\n' "$ferr" | tail -1)"
+    fi
+    STABLE_SHA=$(git -C "$ROOT" rev-parse -q --verify "refs/tags/$TAG^{commit}" 2>/dev/null) \
+      || finish fetch-failed "refs/tags/$TAG fetched but does not resolve to a commit"
+    # A managed login's mark is the machine's release (issue #2688). The stable
+    # fetch above brings its objects in the usual case (the release is stable or
+    # behind it); one the tag does not reach is fetched by its sha.
+    if [ -n "$MANAGED_SHA" ]; then
+      git -C "$ROOT" cat-file -e "$MANAGED_SHA^{commit}" 2>/dev/null \
+        || ferr=$(g fetch --no-tags -q "$REMOTE" "$MANAGED_SHA" 2>&1 </dev/null) \
+        || finish fetch-failed "could not fetch the machine's release $(short "$MANAGED_SHA") from $REMOTE — not seen, not refused: $(printf '%s\n' "$ferr" | tail -1)"
+      say "managed: following the machine's release $(short "$MANAGED_SHA") ($NODE_ROOT/current), not $TAG $(short "$STABLE_SHA")"
+      STABLE_SHA="$MANAGED_SHA" MARKW="the machine release"
+    fi
   fi
 
   # A remembered rejection is about ONE version; stable moving on clears it.
@@ -939,7 +1001,7 @@ main() {
   # --- nothing to do -------------------------------------------------------------
   if [ "$HEAD_SHA" = "$STABLE_SHA" ]; then
     DEFERRED_SINCE=''
-    finish current "install at $MARKW $(short "$STABLE_SHA")"
+    finish current "install at $MARKW $(short "$STABLE_SHA")$SRCW"
   fi
   FROM="$HEAD_SHA"; TO="$STABLE_SHA"
   if [ -n "$SKIP" ]; then
@@ -948,7 +1010,25 @@ main() {
   fi
 
   # --- the two refusals --------------------------------------------------------------
-  if ! git -C "$ROOT" merge-base --is-ancestor "$HEAD_SHA" "$STABLE_SHA" 2>/dev/null; then
+  # From the hub (issue #2773) «only forward» is the signed seq, never ancestry:
+  # a hand commit on top of a release is a divergence, a seq not past this
+  # install's a backward move; an upstream HEAD already past the hub's stable (a
+  # hand sync) is behind, as on the git road.
+  if [ "$DIST" = hub ]; then
+    if [ -z "$HEAD_SEQ" ] && fleet_rel_below "$ROOT" HEAD; then
+      DEFERRED_SINCE=''
+      finish refused "HEAD $(short "$HEAD_C") is a commit on top of a hub release, not one — this install carries local commits; only ever takes whole releases from the hub, never over local work (reset it to the release, then the next tick follows)" diverged
+    fi
+    if [ -n "$HEAD_SEQ" ] && [ "$STABLE_SEQ" -le "$HEAD_SEQ" ] 2>/dev/null; then
+      DEFERRED_SINCE=''
+      finish refused "the hub's stable $(short "$STABLE_SHA") is seq $STABLE_SEQ, not past this install's seq $HEAD_SEQ ($(short "$HEAD_SHA")) — only ever moves forward; the next stable move past it aligns it" behind
+    fi
+    if [ -z "$HEAD_SEQ" ] && git -C "$ROOT" cat-file -e "$STABLE_SHA^{commit}" 2>/dev/null \
+       && git -C "$ROOT" merge-base --is-ancestor "$STABLE_SHA" "$HEAD_SHA" 2>/dev/null; then
+      DEFERRED_SINCE=''
+      finish refused "the hub's stable $(short "$STABLE_SHA") is behind this install ($(git -C "$ROOT" rev-list --count "$STABLE_SHA..$HEAD_SHA" 2>/dev/null) commit(s)) — a hand sync pushed HEAD past it; only ever moves forward" behind
+    fi
+  elif ! git -C "$ROOT" merge-base --is-ancestor "$HEAD_SHA" "$STABLE_SHA" 2>/dev/null; then
     DEFERRED_SINCE=''
     local rel why
     if git -C "$ROOT" merge-base --is-ancestor "$STABLE_SHA" "$HEAD_SHA" 2>/dev/null; then
@@ -994,9 +1074,50 @@ main() {
   DEFERRED_SINCE=''
 
   if [ "$DRY" = 1 ]; then
+    [ "$DIST" = hub ] && printf 'would fetch the hub'"'"'s release %s (seq %s) from %s, check its signature, import it as a local commit, then:\n' \
+      "$(short "$STABLE_SHA")" "$STABLE_SEQ" "$HUB"
     printf 'would switch %s %s..%s (check out %s/%s, check, switch the link), then fleet-install-apply.sh --from %s --to %s, then fleet-doctor.sh (dry-run)\n' \
       "$ROOT" "$(short "$HEAD_SHA")" "$(short "$STABLE_SHA")" "$VERS" "$STABLE_SHA" "$(short "$HEAD_SHA")" "$(short "$STABLE_SHA")"
     exit 0
+  fi
+
+  # --- take the hub's release (issue #2773) ------------------------------------------------
+  # Fetched and verified against the key pinned at install (ccquota release
+  # fetch: the manifest's signature, every file's sha256) — a release that does
+  # not verify is fetch-failed, nothing switched, no alarm — then its signed seq
+  # judged again, then imported as one local commit for the switch below.
+  STABLE_C="$STABLE_SHA"
+  if [ "$DIST" = hub ]; then
+    local ccq pub stage msha mseq mprev
+    ccq=$(fleet_rel_ccquota) \
+      || finish fetch-failed "no ccquota on this login (PATH, ~/.local/bin, FLEET_CCQUOTA) — the hub's release cannot be checked, so it is not taken; still at $(short "$HEAD_SHA")"
+    pub=$(fleet_rel_pubkey "$CONF_DIR" "$HUB" "$TIMEOUT") \
+      || finish fetch-failed "入口不可达（${HUB}）: no release key to pin — $REL_ERR; still at $(short "$HEAD_SHA")"
+    mkdir -p "$VERS" 2>/dev/null
+    stage="$VERS/.incoming.$$"; rm -rf "$stage" "$stage.partial"
+    if ! fleet_rel_fetch "$ccq" "$HUB" "$pub" "$STABLE_SHA" "$stage"; then
+      rm -rf "$stage" "$stage.partial"
+      finish fetch-failed "the hub's release $(short "$STABLE_SHA") did not arrive or did not verify against $pub ($(fleet_rel_fp "$pub")): $REL_ERR — nothing switched, still at $(short "$HEAD_SHA")"
+    fi
+    read -r msha mseq mprev <<MAN
+$(fleet_rel_manifest "$stage")
+MAN
+    if [ "$msha" != "$STABLE_SHA" ] || [ "${mseq:-0}" -lt 1 ] 2>/dev/null; then
+      rm -rf "$stage"
+      finish refused "the hub's signed release reads sha $(short "$msha") seq ${mseq:-?}, not stable $(short "$STABLE_SHA") on the stable chain — not taken" behind
+    fi
+    if [ -n "$HEAD_SEQ" ] && [ "$mseq" -le "$HEAD_SEQ" ]; then
+      rm -rf "$stage"
+      finish refused "the hub's signed release $(short "$STABLE_SHA") is seq $mseq, not past this install's seq $HEAD_SEQ — only ever moves forward" behind
+    fi
+    STABLE_SEQ=$mseq SRCW=" from hub (seq $mseq, prev $(short "$mprev"))"
+    cp "$stage/.release/manifest.json" "$STATE_DIR/install-release.json" 2>/dev/null || :
+    if ! STABLE_C=$(fleet_rel_import "$ROOT" "$stage" "$HEAD_C" "$STABLE_SHA" "$mseq"); then
+      rm -rf "$stage"
+      finish failed "the hub's release $(short "$STABLE_SHA") verified but could not be imported into $ROOT's repository — still at $(short "$HEAD_SHA")"
+    fi
+    rm -rf "$stage"
+    say "hub release $(short "$STABLE_SHA") seq $mseq verified ($(fleet_rel_fp "$pub")) and imported as $(short "$STABLE_C")"
   fi
 
   # --- switch ---------------------------------------------------------------------------------
@@ -1014,7 +1135,7 @@ main() {
     say "migrated: $ROOT -> $VERS/$oldkey"
   fi
   oldkey=$(fleet_versions_current "$ROOT"); olddir="$VERS/$oldkey"
-  if ! newdir=$(vers_build "$STABLE_SHA"); then
+  if ! newdir=$(vers_build "$STABLE_SHA" "$STABLE_C"); then
     finish refused "could not check out stable $(short "$STABLE_SHA") into $VERS/ (git worktree add failed) — still at $(short "$HEAD_SHA")$migrated" build
   fi
   newkey=${newdir##*/}
@@ -1034,7 +1155,7 @@ main() {
     finish failed "could not switch the link $ROOT -> $newdir — still at $(short "$HEAD_SHA")$migrated"
   fi
   printf '%s\n' "$oldkey" > "$VERS/.prev"; vers_retire "$oldkey"
-  run_apply "$HEAD_SHA" "$STABLE_SHA" || :
+  run_apply "$HEAD_C" "$STABLE_C" || :
   settle "$t_switch"
   post=$(FLEET_DOCTOR_SINCE="$t_switch" doctor_fail_tags)
   new=$(comm -13 <(printf '%s\n' "$pre" | sed '/^$/d') <(printf '%s\n' "$post" | sed '/^$/d') | tr '\n' ',')
@@ -1042,7 +1163,7 @@ main() {
   if [ -z "$new" ]; then
     vers_prune
     client_follow "$olddir"
-    finish switched "$(short "$HEAD_SHA") -> $(short "$STABLE_SHA") in one link switch (.prev $(short "$oldkey")); apply: ${APPLY_LINE}$([ -n "$post" ] && printf '; doctor FAIL already present before: %s' "$(printf '%s\n' "$pre" | tr '\n' ',' | sed 's/,$//')")$migrated"
+    finish switched "$(short "$HEAD_SHA") -> $(short "$STABLE_SHA")$SRCW in one link switch (.prev $(short "$oldkey")); apply: ${APPLY_LINE}$([ -n "$post" ] && printf '; doctor FAIL already present before: %s' "$(printf '%s\n' "$pre" | tr '\n' ',' | sed 's/,$//')")$migrated"
   fi
 
   # --- roll back ----------------------------------------------------------------------------
@@ -1053,7 +1174,7 @@ main() {
     finish failed "doctor FAIL ($new) at $(short "$STABLE_SHA") and the link back to $olddir FAILED — the install is at $(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null); fix by hand: ln -sfn $olddir $ROOT"
   fi
   printf '%s\n' "$newkey" > "$VERS/.prev"; vers_retire "$newkey"; vers_unretire "$oldkey"
-  run_apply "$STABLE_SHA" "$HEAD_SHA" || :
+  run_apply "$STABLE_C" "$HEAD_C" || :
   SKIP="$STABLE_SHA"
   FROM="$STABLE_SHA"; TO="$HEAD_SHA"
   finish rolled-back "doctor FAIL after the switch: $new — the link is back at $(short "$HEAD_SHA"); stable $(short "$STABLE_SHA") is not retried until it moves or fleet-install-sync.sh --retry (forward apply: $fwd; rollback apply: $APPLY_LINE)"

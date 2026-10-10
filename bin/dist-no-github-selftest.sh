@@ -28,6 +28,11 @@
 #                 the release's install-sync for a managed login at A
 # A leg is GREEN when the install reads DIST-MARK=B AND the recorder saw no
 # GitHub host while it ran. Otherwise RED, with the hits and the last lines.
+# One more leg runs only by name (BREAK-IT `dist-bad-signature`, issue #2773):
+#   bad-signature the install-sync leg with the hub's release refused by its
+#                 signature check: GREEN when the install still reads A, the
+#                 tick is fetch-failed («did not verify»), nothing half-made is
+#                 left in fleet.versions/ — and GitHub was not asked instead
 #
 # Red first (#1786): the members that make a leg green are not merged when this
 # lands, so DIST_AWAIT names, per leg, the member it waits for. A RED leg on the
@@ -42,7 +47,7 @@
 set -uo pipefail
 
 # leg:member — the leg is red until that member merges; remove the entry then.
-DIST_AWAIT="install-sync:C3#2773 bootstrap:C5#2775 node-follow:C4#2774"
+DIST_AWAIT="bootstrap:C5#2775 node-follow:C4#2774"
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$BIN/.." && pwd)"
@@ -53,7 +58,7 @@ STRICT=0 LEGS=''
 for a in "$@"; do
   case "$a" in
     --strict) STRICT=1 ;;
-    install-sync|client|bootstrap|node-follow) LEGS="$LEGS $a" ;;
+    install-sync|client|bootstrap|node-follow|bad-signature) LEGS="$LEGS $a" ;;
     *) printf 'dist-no-github: unknown arg %s\n' "$a" >&2; exit 2 ;;
   esac
 done
@@ -120,6 +125,7 @@ while [ \$# -gt 0 ]; do
     *) if [ -z "\$ref" ]; then ref=\$1; else dir=\$1; fi; shift ;;
   esac
 done
+[ -f "$WORK/badsig.flag" ] && { echo "release \$ref: manifest signature does not verify against the pinned key" >&2; exit 1; }
 [ "\$ref" = stable ] && ref=\$(cat "$WORK/rel/stable")
 [ -d "$WORK/rel/\$ref" ] && [ -n "\$dir" ] || { echo "fake ccquota: no release \$ref" >&2; exit 1; }
 mkdir -p "\$dir" && cp -R "$WORK/rel/\$ref/." "\$dir/"
@@ -252,7 +258,7 @@ mark_of() { cat "$1/DIST-MARK" 2>/dev/null | head -1; }
 # Each sets WHY (red) or nothing (green); OUT holds the last lines it printed.
 
 leg_install_sync() {
-  local h="$WORK/is" co conf
+  local h="$WORK/${1:-is}" co conf
   blackhole "$h"; conf="$h/.config/claude-fleet"
   mkdir -p "$conf/fleets/f1" "$h/.claude"
   printf 'FLEET_REPO=o/r\n' > "$conf/fleets/f1/conf"
@@ -263,8 +269,23 @@ leg_install_sync() {
     || { WHY="fixture: cannot clone the seed"; return; }
   OUT=$(HOME="$h" FLEET_CONF_DIR="$conf" TMPDIR="$WORK" PATH="$WORK/fakebin:$PATH" \
     FLEET_HUB_URL="$HUB" FLEET_SKIP_GLOBAL_CONF=1 FLEET_INSTALL_SYNC_HOST=1 FLEET_NODE_FOLLOW=0 \
+    FLEET_NODE_STATE="$h/no-node" FLEET_NODE_ROOT="$h/no-node" \
     GIT_TERMINAL_PROMPT=0 bash "$BIN/fleet-install-sync.sh" --root "$co" 2>&1 | tail -3)
   [ "$(mark_of "$co")" = B ] || WHY="the install reads $(mark_of "$co") — $(sed -n 's/^result: //p;s/^reason: //p' "$conf/global/install-sync.state" 2>/dev/null | tr '\n' ' ')"
+}
+
+leg_bad_signature() {
+  local co st p
+  touch "$WORK/badsig.flag"
+  leg_install_sync badsig
+  rm -f "$WORK/badsig.flag"
+  co="$WORK/badsig/.claude/fleet"
+  st=$(sed -n 's/^result: //p;s/^reason: //p' "$WORK/badsig/.config/claude-fleet/global/install-sync.state" 2>/dev/null | tr '\n' ' ')
+  WHY=''
+  [ "$(mark_of "$co")" = A ] || WHY="the install moved to $(mark_of "$co") on a release that did not verify"
+  case "$st" in "fetch-failed "*"did not verify"*) ;; *) WHY="${WHY:+$WHY · }the tick reads [$st], not fetch-failed «did not verify»" ;; esac
+  for p in "$co.versions"/.incoming*; do [ -e "$p" ] && WHY="${WHY:+$WHY · }a half-fetched release was left in $co.versions/"; done
+  return 0
 }
 
 leg_client() {
@@ -343,7 +364,8 @@ for leg in $LEGS; do
       printf 'FAIL   %-12s green now — drop `%s:%s` from DIST_AWAIT in %s\n' "$leg" "$leg" "$wait_for" "${0##*/}"
     else
       GREEN=$((GREEN + 1))
-      printf 'GREEN  %-12s at B (%.7s), no GitHub reach\n' "$leg" "$B"
+      if [ "$leg" = bad-signature ]; then printf 'GREEN  %-12s refused, still at A, no GitHub reach\n' "$leg"
+      else printf 'GREEN  %-12s at B (%.7s), no GitHub reach\n' "$leg" "$B"; fi
     fi
   elif [ -n "$wait_for" ]; then
     AWAITED=$((AWAITED + 1))

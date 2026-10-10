@@ -140,6 +140,9 @@ chmod +x "$WORK/shim/tmux"
 export HOME="$H" FLEET_CONF_DIR="$CONF" TMPDIR="$WORK/tmp" FLEET_SKIP_GLOBAL_CONF=1
 export PATH="$WORK/shim:$PATH"
 export FLEET_INSTALL_SYNC_HOST=1   # this sandbox 承载 (issue #2716: a client follows no node agent)
+# never this machine's own managed-node state (a managed Mac's accounts.json made
+# every tick here follow its real runtime); H2 points it at its own
+export FLEET_NODE_STATE="$WORK/no-node"
 STATE="$CONF/global/install-sync.state"
 
 # --- the repo: bare origin + seed clone with stub bin/ ----------------------------
@@ -860,6 +863,144 @@ dout=$(CCQUOTA_FLEET=1 FLEET_DOCTOR_SINCE=$(( $(date +%s) - 60 )) sh "$DD/bin/do
 contains "S: doctor since the switch: only its samples" "$dout" "PASS state sleep judgments (since the switch, last hour): 2 judgments/hr"
 contains "S: doctor since the switch: an older cache is a WARN" "$dout" "WARN hub-sessions loop none · cache 12499s — no round since the switch yet"
 not_contains "S: doctor since the switch: no FAIL" "$dout" "FAIL"
+
+# --- U. from the hub (issue #2773, EPIC #2770 C3) ---------------------------------------------
+# A sandbox hub on 127.0.0.1 keeps releases as `ccquota release fetch` leaves
+# them (<sha>/ = the tree + .release/manifest.json with sha/prev/seq); a fake
+# ccquota copies one out — or, with $UW/badsig, refuses it the way a bad
+# signature is refused. Its own HOME, conf dir and install: an install at C5
+# whose origin is the bare repo.
+UW="$WORK/hub" CO2="$WORK/install2" CONF2="$WORK/conf2"
+mkdir -p "$UW/rel" "$UW/bin" "$CONF2/fleets/f1"
+printf 'FLEET_REPO=o/r\n' > "$CONF2/fleets/f1/conf"
+printf 'ed25519 AAAAhubreleasekey0001\n' > "$UW/key"
+rel() { # <commit> <seq> <prev> — the hub keeps that release
+  rm -rf "$UW/rel/$1"; mkdir -p "$UW/rel/$1/.release"
+  git -C "$SEED" archive "$1" | tar -x -C "$UW/rel/$1"
+  printf '{"schema": 1, "sha": "%s", "prev": "%s", "seq": %s, "artifacts": []}\n' "$1" "$3" "$2" > "$UW/rel/$1/.release/manifest.json"
+}
+hubstable() { printf '%s\n' "$1" > "$UW/rel/stable"; }
+cat > "$UW/bin/ccquota" <<EOF
+#!/bin/bash
+printf '%s\n' "\$*" >> "$UW/ccquota.log"
+[ "\$1 \$2" = "release fetch" ] || exit 2
+shift 2; ref='' dir='' pub=''
+while [ \$# -gt 0 ]; do
+  case "\$1" in --pubkey) pub=\$2; shift 2 ;; --hub) shift 2 ;; --*) shift ;; *) if [ -z "\$ref" ]; then ref=\$1; else dir=\$1; fi; shift ;; esac
+done
+[ -f "\$pub" ] || { echo "--pubkey \$pub: no such file" >&2; exit 1; }
+[ -f "$UW/badsig" ] && { echo "release \$ref: manifest signature does not verify against key \$(cut -c9-16 "\$pub")" >&2; exit 1; }
+[ "\$ref" = stable ] && ref=\$(cat "$UW/rel/stable")
+[ -d "$UW/rel/\$ref" ] || { echo "release \$ref: 404" >&2; exit 1; }
+mkdir -p "\$dir" && cp -R "$UW/rel/\$ref/." "\$dir/"
+EOF
+chmod +x "$UW/bin/ccquota"
+cat > "$UW/srv.py" <<'PY2'
+import os, sys, threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+w = sys.argv[1]
+class H(BaseHTTPRequestHandler):
+    def do_GET(self):
+        with open(os.path.join(w, "hub.log"), "a") as f:
+            f.write(self.path + "\n")
+        body, code = b"", 404
+        if not os.path.exists(os.path.join(w, "nostore")):
+            if self.path == "/v1/fleet/release/key":
+                body, code = open(os.path.join(w, "key"), "rb").read(), 200
+            elif self.path == "/v1/fleet/release/stable":
+                st = open(os.path.join(w, "rel", "stable")).read().strip()
+                body, code = open(os.path.join(w, "rel", st, ".release", "manifest.json"), "rb").read(), 200
+        self.send_response(code)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+    def log_message(self, *a):
+        pass
+s = ThreadingHTTPServer(("127.0.0.1", 0), H)
+threading.Thread(target=s.serve_forever, daemon=True).start()
+open(os.path.join(w, "port.tmp"), "w").write(str(s.server_address[1]))
+os.rename(os.path.join(w, "port.tmp"), os.path.join(w, "port"))
+threading.Event().wait()
+PY2
+python3 "$UW/srv.py" "$UW" 2>"$UW/srv.err" &
+UPID=$!
+for _ in $(seq 1 100); do [ -s "$UW/port" ] && break; sleep 0.05; done
+[ -s "$UW/port" ] || fail "U: the sandbox hub did not start: $(cat "$UW/srv.err")"
+HUBU="http://127.0.0.1:$(cat "$UW/port")"
+trap 'kill "$UPID" 2>/dev/null; cleanup' EXIT
+trap 'kill "$UPID" 2>/dev/null; cleanup; exit 130' INT TERM HUP
+git clone -q "$BARE" "$CO2" 2>/dev/null; git -C "$CO2" reset -q --hard "$C5"
+V2="$CO2.versions"
+run2() { OUT=$(env -u FLEET_NOTIFY_CMD -u FLEET_DIST_SOURCE FLEET_CONF_DIR="$CONF2" FLEET_HUB_URL="$HUBU" \
+  FLEET_CCQUOTA="$UW/bin/ccquota" FLEET_NODE_STATE="$WORK/no-node" FLEET_NODE_FOLLOW=0 "$@" bash "$IS" --root "$CO2" 2>&1); RC=$?; }
+st2() { sed -n "s/^$1: //p" "$CONF2/global/install-sync.state" | head -1; }
+up2() { git -C "$CO2" log -1 --format=%s; }
+: > "$LOG"
+rel "$C6" 5 "$C5"; hubstable "$C6"
+run2
+eq "U: tick exits 0" 0 "$RC"
+eq "U: switched from the hub" switched "$(st2 result)"
+contains "U: the reason says from hub + its seq" "$(st2 reason)" "from hub (seq 5"
+contains "U: the log line says from hub" "$(tail -1 "$CO2/logs/install-sync.log")" "switched $(short "$C5")..$(short "$C6") $(short "$C5") -> $(short "$C6") from hub"
+eq "U: the version dir is the upstream sha" "$V2/$C6" "$(readlink "$CO2")"
+eq "U: HEAD is the imported release" "fleet-release: $C6 seq=5" "$(up2)"
+eq "U: …kept by refs/fleet/rel/<sha>" "$(git -C "$CO2" rev-parse HEAD)" "$(git -C "$CO2" rev-parse "refs/fleet/rel/$C6")"
+eq "U: …on the commit the install was at" "$C5" "$(git -C "$CO2" rev-parse HEAD^)"
+eq "U: …the same tree as upstream" "$(git -C "$CO2" rev-parse "$C6^{tree}")" "$(git -C "$CO2" rev-parse 'HEAD^{tree}')"
+eq "U: state stable: is the upstream sha" "$C6" "$(st2 stable)"
+eq "U: no remote left" "" "$(git -C "$CO2" remote)"
+contains "U: the origin is kept for one version" "$(cat "$CONF2/global/install-origin.bak")" "origin $BARE"
+I1=$(git -C "$CO2" rev-parse HEAD)
+eq "U: apply only the two versions' difference" "apply --from $C5 --to $I1 --root $CO2" "$(grep '^apply ' "$LOG" | tail -1)"
+eq "U: …which is the upstream diff" "f" "$(git -C "$CO2" diff --name-only "$C5" "$I1")"
+eq "U: the key was pinned from the hub" "$(cat "$UW/key")" "$(cat "$CONF2/release.pub")"
+contains "U: ccquota checked it against the pinned key" "$(tail -1 "$UW/ccquota.log")" "--pubkey $CONF2/release.pub $C6"
+not_contains "U: no git fetch: no remote was asked" "$OUT" "could not read refs/tags"
+# current — no download
+n=$(wc -l < "$UW/ccquota.log" | tr -d " "); run2
+eq "U: current" current "$(st2 result)"
+contains "U: …from hub" "$(st2 reason)" "from hub"
+eq "U: …nothing downloaded" "$n" "$(wc -l < "$UW/ccquota.log" | tr -d ' ')"
+# a release that does not verify: fetch-failed, nothing switched, the pin kept
+printf 'ed25519 AAAAsomeoneelse000000\n' > "$UW/key"
+rel "$C7" 6 "$C6"; hubstable "$C7"; touch "$UW/badsig"; run2
+eq "U: a bad signature is fetch-failed" fetch-failed "$(st2 result)"
+contains "U: …says it did not verify" "$(st2 reason)" "did not arrive or did not verify"
+eq "U: …nothing switched" "$I1" "$(git -C "$CO2" rev-parse HEAD)"
+eq "U: …no half version left" "" "$(for p in "$V2"/.incoming*; do [ -e "$p" ] && printf '%s' "$p"; done)"
+eq "U: a new hub key is never taken by itself" "ed25519 AAAAhubreleasekey0001" "$(cat "$CONF2/release.pub")"
+rm -f "$UW/badsig"; : > "$LOG"; run2
+eq "U: the next stable verified → switched" switched "$(st2 result)"
+I2=$(git -C "$CO2" rev-parse HEAD)
+eq "U: the second import sits on the first" "$I1" "$(git -C "$CO2" rev-parse HEAD^)"
+eq "U: apply from one import to the next" "apply --from $I1 --to $I2 --root $CO2" "$(grep '^apply ' "$LOG" | tail -1)"
+eq "U: …only their difference" "f" "$(git -C "$CO2" diff --name-only "$I1" "$I2")"
+# seq going back: refused, never moved
+rel "$C6" 4 "$C5"; hubstable "$C6"; run2
+eq "U: a seq not past this install's is refused" refused "$(st2 result)"
+contains "U: …says why" "$(st2 reason)" "seq 4, not past this install's seq 6"
+eq "U: …HEAD untouched" "$I2" "$(git -C "$CO2" rev-parse HEAD)"
+# a hand commit on top of a release: refused
+rel "$C3" 8 "$C7"; hubstable "$C3"
+git -C "$CO2" commit -q --allow-empty -m 'hand edit'; run2
+eq "U: a hand commit on a release is refused" refused "$(st2 result)"
+contains "U: …says local commits" "$(st2 reason)" "carries local commits"
+git -C "$CO2" reset -q --hard "$I2"
+# the hub out of reach: fetch-failed, 入口不可达
+run2 FLEET_HUB_URL=http://127.0.0.1:9
+eq "U: a hub that does not answer is fetch-failed" fetch-failed "$(st2 result)"
+contains "U: …入口不可达" "$(st2 reason)" "入口不可达"
+# a hub with no release store: today's git road, the origin put back
+stable "$C7"; touch "$UW/nostore"; run2
+eq "U: no store → the tag over git" "$C7" "$(st2 stable)"
+eq "U: …the origin is back" "$BARE" "$(git -C "$CO2" remote get-url origin)"
+eq "U: …and the git road reads the release's upstream sha" current "$(st2 result)"
+rm -f "$UW/nostore"
+# FLEET_DIST_SOURCE=github: the git road too
+n=$(wc -l < "$UW/hub.log" | tr -d " "); run2 FLEET_DIST_SOURCE=github
+eq "U: FLEET_DIST_SOURCE=github never asks the hub" "$n" "$(wc -l < "$UW/hub.log" | tr -d ' ')"
+eq "U: …follows the tag, current on it" current "$(st2 result)"
+kill "$UPID" 2>/dev/null
 
 # --- K. registry lockstep ------------------------------------------------------------------------------------
 ROOT="$(cd "$BIN/.." && pwd)"
