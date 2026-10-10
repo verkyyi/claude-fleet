@@ -67,7 +67,8 @@ class H(http.server.BaseHTTPRequestHandler):
         self.send(404, "")
     def do_POST(self):
         n = int(self.headers.get("Content-Length") or 0); self.rfile.read(n)
-        if self.path == "/v1/fleet/debug/ticket" and mode == "all": return self.send(200, '{"ticket":"x"}', "application/json")
+        if self.path == "/v1/fleet/debug/ticket" and mode == "all":
+            return self.send(400, "fp 要是这台电脑安装指纹的 SHA-256（64 位十六进制）\n")   # the real hub on the probe's fake fp
         if self.path.startswith("/v1/"): return self.viewer()
         self.send(404, "")
     def do_DELETE(self):
