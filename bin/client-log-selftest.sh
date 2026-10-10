@@ -99,7 +99,7 @@ ts=$(cut -f1 "$LOGS/connect.log" | grep -cE '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2
 grep -q 'ghp_SECRET' "$LOGS/connect.log" && bad "C the token reached connect.log" \
   || { grep -q '<redacted:github>' "$LOGS/connect.log" && ok "C a token in a reason is <redacted:github> on disk (both writers)" \
        || bad "C no redaction mark in connect.log"; }
-[ "$(stat -f %Lp "$LOGS/connect.log" 2>/dev/null || stat -c %a "$LOGS/connect.log")" = 600 ] \
+[ "$(python3 -c 'import os,sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777)[2:])' "$LOGS/connect.log")" = 600 ] \
   && ok "C the log is 0600" || bad "C connect.log is not 0600"
 
 # ── D — rotation ──────────────────────────────────────────────────────────────
