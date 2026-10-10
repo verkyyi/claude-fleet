@@ -1006,6 +1006,35 @@ class I_Credsep(Sandbox):
         os.remove(os.path.join(self.env["FLEET_CREDSEP_ROOT_BASE"], ".shared.json"))
         self.assertIsNone(self.doctor())
 
+    def test_supervised_restart_writes_no_definition(self):
+        """issue #2981: once the daemon's sweep retired launchd's definition and
+        the daemon runs the proxy, a credsep restart (install / join / leave /
+        purge) is a stamp in LIB — which the child's `reload` watches — never a
+        definition beside it; while launchd still runs it, the definition stays
+        credsep's."""
+        snip = ("import importlib.util, os, sys\n"
+                "s = importlib.util.spec_from_file_location('c', sys.argv[1]); m = importlib.util.module_from_spec(s)\n"
+                "s.loader.exec_module(m)\n"
+                "print(m.shared_supervised(), m.shared_service())\n"
+                "m.shared_restart()\n")
+        run = lambda: subprocess.run([sys.executable, "-c", snip, os.path.join(BIN, "fleet-credsep.py")],
+                                     env=self.env, capture_output=True, text=True, timeout=30)
+        os.makedirs(os.path.join(self.d, "db"), exist_ok=True)
+        self.wj(os.path.join(self.d, "db", "state.json"), {"children": {"cred-proxy-shared": {"status": "supervised"}}})
+        r = run()
+        self.assertEqual(r.stdout.split(), ["True", "False"], r.stderr)
+        self.assertFalse(os.path.exists(self.svc), "a definition beside the daemon's child")
+        self.assertTrue(os.path.exists(os.path.join(self.lib, ".restart")), r.stderr)
+        first = open(os.path.join(self.lib, ".restart")).read()
+        time.sleep(0.01)
+        run()
+        self.assertNotEqual(open(os.path.join(self.lib, ".restart")).read(), first, "a second restart wrote nothing new")
+        # launchd's definition still installed: credsep's own road, as before
+        with open(self.svc, "w") as f:
+            f.write("legacy\n")
+        r = run()
+        self.assertEqual(r.stdout.split()[0], "False", r.stderr)
+
     def test_default_table_reloads_on_lib(self):
         e = dict(os.environ, FLEET_CREDSEP_LIB=self.lib)
         out = subprocess.run([sys.executable, "-c", "import importlib.util, json, sys\n"

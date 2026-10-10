@@ -13,7 +13,8 @@
 #      TERM-ignoring one too), removes the cache, takes the first-login block and
 #      the cw.zsh / fleet-login.zsh lines out of ~/.zshrc — the PATH line, a
 #      comment and the person's own lines kept, the old file kept beside — and a
-#      rerun is all `skip`, rc 0.
+#      rerun is all `skip`, rc 0. --if-idle (the daemon's own run, issue #2981)
+#      with the client running: rc 3, nothing changed; once nothing runs: rc 0.
 #   C. another login without root → rc 2, nothing touched; no --login → rc 2.
 set -uo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -105,6 +106,10 @@ case "$out" in *"client: would stop 2 process(es)"*"cache: would remove"*"zshrc:
   *) bad "dry run said: $out" ;; esac
 [ -d "$C" ] && [ "$(cat "$H/.zshrc")" = "$before" ] && kill -0 "${PIDS[0]}" 2>/dev/null \
   && ok "dry run changed nothing" || bad "dry run changed something"
+rt --login "$ME" --if-idle
+[ "$rc" = 3 ] && [ -d "$C" ] && [ "$(cat "$H/.zshrc")" = "$before" ] && kill -0 "${PIDS[0]}" 2>/dev/null \
+  && case "$out" in *"left for later (--if-idle), nothing changed"*) true ;; *) false ;; esac \
+  && ok "--if-idle with the client running: rc 3, nothing changed (issue #2981)" || bad "--if-idle rc $rc: $out"
 rt --login "$ME"
 [ "$rc" = 0 ] && ok "run rc 0" || bad "run rc $rc: $out"
 case "$out" in *"client: stopped 2 process(es)"*"cache: removed $C"*"zshrc: took out 9 line(s)"*"retired: $ME"*) ok "each step said what it did" ;;
@@ -120,6 +125,9 @@ $own" ] && ok "zshrc: PATH line, comment and own lines kept, hooks gone" || { ba
 [ "$(cat "$H/.zshrc.pre-shell-retire")" = "$before" ] && ok "old zshrc kept beside" || bad "no backup"
 rt --login "$ME"
 [ "$rc" = 0 ] && [ "$(printf '%s\n' "$out" | grep -c ': skip — ')" = 3 ] && ok "rerun: every step skip, rc 0" || bad "rerun rc $rc: $out"
+
+rt --login "$ME" --if-idle
+[ "$rc" = 0 ] && ok "--if-idle once nothing runs: rc 0" || bad "--if-idle idle rc $rc: $out"
 
 # ---- C. refusals -------------------------------------------------------------
 echo "C. refusals"

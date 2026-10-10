@@ -181,7 +181,7 @@ credentials and `node.env` moved, the agent through the launcher — and then:
 
 | | per login (today) | shared (`machine install`) |
 |---|---|---|
-| proxy process | one per login (its own or `com.claude-fleet.credsep.<login>`) | ONE, `com.claude-fleet.cred-proxy-shared` / `claude-fleet-cred-proxy-shared.service`, as `_fleetcred` |
+| proxy process | one per login (its own or `com.claude-fleet.credsep.<login>`) | ONE, `com.claude-fleet.cred-proxy-shared` / `claude-fleet-cred-proxy-shared.service`, as `_fleetcred` — on a managed machine the node daemon's child `cred-proxy-shared` instead (its sweep retires the definition, issue #2981) |
 | port | one per login | one fixed `127.0.0.1:18923` (`FLEET_CRED_SHARED_PORT`) — plus each login's OLD port, answering that login only |
 | control socket | per login | `/var/run/fleet-cred/.shared/ctl.sock` (0666): the kernel's peer uid (`getpeereid` / `SO_PEERCRED`) names the login |
 | the login's proxy state (signing key, held passes, relay pass) | `~/.config/claude-fleet/cred-proxy/` | MOVED to `/var/db/fleet-cred/<login>/cred-proxy/` (binds / revocations / live sessions / trust copied) |

@@ -216,7 +216,7 @@ root 运行。**托管登录的 `~/.claude/fleet` 就是机器运行时那一份
 | Claude Code / Codex / tmux | `version` 钉住；可执行文件本身是发布包的 artifact（`{version}` `{os}` `{arch}` 展开，`{arch}` 是 `arm64` / `amd64`） | root 缓存 `<root>/tools/<名>/<sha256>/<名>`，发布目录里 `tools/bin/<名>` 链过去 |
 | 开号缓存 | 同 `claude.version` | `<root>/cache/claude/<ver>/claude` + `current`（`fleet-bootstrap-cache.sh claude` 从这里装新账号） |
 | 账号 | — | 每个托管账号的 `~/.local/bin/{claude,codex}`、`~/.local/share/claude-fleet-vendor/bin/tmux` 链到 `<root>/current/tools/bin/<名>`；由降权到该账号的进程建，每轮重建（Claude Code 自己更新换掉了链接就换回来），**从不覆盖账号自己的普通文件** |
-| 共享凭据代理 | 发布版提交的 `bin/fleet-cred-proxy.py` / `fleet-credsep-launch.py` | root 代码副本 `<root>/credsep/`：更新器每次切换、回退、验证前和每一轮跑 `<current>/bin/fleet-credsep.py machine refresh`，字节变了代理就重启——launchd 管的（旧 `com.claude-fleet.cred-proxy-shared` 还在）由 refresh bootout / bootstrap，守护管的子进程由守护按 `reload`（`credsep/` 一变）重启，refresh 不另写 plist（#2435） |
+| 共享凭据代理 | 发布版提交的 `bin/fleet-cred-proxy.py` / `fleet-credsep-launch.py` | root 代码副本 `<root>/credsep/`：更新器每次切换、回退、验证前和每一轮跑 `<current>/bin/fleet-credsep.py machine refresh`，字节变了代理就重启——launchd 管的（旧 `com.claude-fleet.cred-proxy-shared` 还在）由 refresh bootout / bootstrap，守护管的子进程由守护按 `reload`（`credsep/` 一变）重启，refresh 不另写 plist（#2435）。旧 plist 由守护的清扫在子进程能起时 bootout 进 attic，此后 credsep 的 install / join / leave / purge 要重启代理时只在 `credsep/` 写一个 `.restart` 戳、不再写 plist（#2981） |
 | 守护自身 | 发布版提交 | 它就在 `current` 里：切换后最后一步写 `<state>/update-restart.json`，守护停掉子进程退出，launchd 用新版拉起 |
 
 - 可选的 `"client_reload": "hot" | "restart"`（#2737，缺省 `hot`）：版本切换后正在跑的客户端壳怎么换新。`hot` = install-sync
@@ -496,13 +496,23 @@ BREAK-IT 行 `service-handwritten`。只点名接管过的登录（`logins/<登�
   再停掉还从 `~/.cache/claude-fleet/shell` 跑的进程（TERM，3 秒后 KILL），删掉这个目录，把 `~/.zshrc` 里的首登块和
   source `fleet-login.zsh` / `cw.zsh` 的行拿掉（旧文件留作 `~/.zshrc.pre-shell-retire`）；每步先看、没事可做就 `skip`，
   文件操作都以那个登录的身份做。会话、`~/.claude/fleet`、它的服务都不碰。
-- **清扫点名**：整机守护的清扫把「家目录里还有壳 / `~/.zshrc` 还有钩子」的登录记进 `sweep.clientshell`，`status`
-  每个一行 `clientshell <登录> …`（带上面那条命令）；`fleet doctor --machine` 一行 `shell`：都没有 PASS，有就 WARN
-  （不算 FAIL，不触发整机回退）。root 当场看每个家目录，别的登录读上一轮清扫的记录。
+- **清扫自己清**（#2981）：托管机器（有 `expected.json`）上，整机守护的清扫对「家目录里还有壳 / `~/.zshrc` 还有钩子」
+  的托管登录直接跑上面那条命令（加 `--if-idle`：客户端还在跑就什么都不动、退出 3，下一轮再来）；清不掉的才记进
+  `sweep.clientshell`，`status` 每个一行 `clientshell <登录> …`（带命令和这一轮的结果）；`fleet doctor --machine`
+  一行 `shell`：都没有 PASS，有就 WARN（不算 FAIL，不触发整机回退）。root 当场看每个家目录，别的登录读上一轮清扫的记录。
   节点上的客户端（#2720）只在 `$TMPDIR` 里、只在一次 SSH 期间存在，不在点名之列。
 - **只看托管清单**：清扫的手写启动项、`clientshell` 和 doctor 的 `shell` 行只看整机守护接管过的登录
   （`/var/db/fleet-node/logins/<登录>.env` 里登记的）。管理员（例：verkyyi）、不用 fleet 的本地用户一律不扫、不点名、
   不判断——机器上有其他管理员或非托管账号是正常状态。`shell` 行写明「托管登录 N 个，其余账号不在清单内不扫」。
+- **fleet 自己的启动项例外**（#2981）：托管机器上，清扫把「期望集合」之外的 fleet 启动项（`com.claude-fleet.*` /
+  `com.ccquota.*`）先 bootout 再挪进 attic（7 天，`attic restore <id>` 放回）——整机守护不跑的机器级单元、
+  **管理员登录**的（管理员永不被接管，#2842；它在托管机器上只当节点管理员：ssh、sudo、`~/.ccquota/` 的查看令牌、
+  从运行时跑节点工具都不碰）、托管登录残留的、已不存在的登录的，以及子进程的旧 LaunchDaemon（守护能自己起它时：
+  `cred-proxy-shared`）。期望集合 = 守护自己、`expected.json` 的 `labels`、root 的 `/var/db/fleet-node/keep-labels`
+  （一行一个，本机想留的）、每个现存登录自己的凭据代理 `com.claude-fleet.credsep.<登录>`（`machine join` 是它的路）。
+  **只点名不动**的：没被接管的非管理员登录的（`account adopt` 是它的路）、卸不下来的、子进程还起不来的旧 daemon；
+  有 `fleet-onboard-drill.sh` 在跑时这一轮一个都不动（`held:`）。`status` 每个留下的一行 `extra <label> left in place — <为什么>`，
+  末行 `removed N · extra M (left in place)`。
 
 ## 15. 破坏能力 = 登录的能力，不是提示词（#2842）
 
