@@ -563,8 +563,8 @@ stage-health)
   hwd="$htmp/warm"
   hbad='' hn=0 hpanes=' ' US='|'   # not a tab (`read` collapses empty tab fields), not a control byte (tmux escapes one in a format)
   hsay() { case "$hbad" in *"$1"*) ;; *) hbad="$hbad${hbad:+ · }$1" ;; esac; }
-  hrows=$( { tmux -L "$hs-stage" list-windows -a -F "#{window_id}$US#{@remote}$US#{@remote_login}$US#{@remote_ctl}$US#{@remote_down}$US#{pane_pid}" 2>/dev/null
-             tmux -L "$hs" list-windows -a -F "#{window_id}$US#{@remote}$US#{@remote_login}$US#{@remote_ctl}$US#{@remote_down}$US#{pane_pid}" 2>/dev/null; } )
+  hrows=$( { tmux -L "$hs-stage" list-windows -t "=$hs-stage" -F "#{window_id}$US#{@remote}$US#{@remote_login}$US#{@remote_ctl}$US#{@remote_down}$US#{pane_pid}" 2>/dev/null
+             tmux -L "$hs" list-windows -t "=$hs" -F "#{window_id}$US#{@remote}$US#{@remote_login}$US#{@remote_ctl}$US#{@remote_down}$US#{pane_pid}" 2>/dev/null; } )
   while IFS="$US" read -r _ hrem hlg hctl hdown hpid; do
     case "$hrem" in -:*|'') continue ;; *:?*) ;; *) continue ;; esac
     hnode=${hrem%%:*}
