@@ -95,6 +95,11 @@
 #                                                   fleetBeatBudget) + internal/api nodes.go (foldSys); go test
 #   login-remove-record-left                        bin/fleet-login-remove.sh (step 6 checks the record is gone)
 #   login-remove-respawn-hang                       bin/fleet-login-remove.sh (quiesce: bootout user/gui, deleteUser time limit)
+#   newcomer-login-no-gh                            bin/fleet-control-read.sh ready (gh only with a hosted repo)
+#                                                   + bin/fleet-client-place.sh self_lines (no host-here hint)
+#   login-remove-no-fda                             bin/fleet-login-remove.sh (a failed deleteUser is checked, not
+#                                                   the end; leftover home moved aside) + agent accountWhy
+#   account-remove-tenant-held                      tokenledger/internal/agent runas.go (holdLogin; go test)
 #   drill-login-handed-silently                     tokenledger/internal/api fleet_drill.go (closeDrillLogins
 #                                                   handed) + store DeleteDrill (keeps the handed rows)
 #   machine-lane-reissued                           tokenledger/internal/api fleet_login_node.go (deviceNode, machineServing)
@@ -5081,6 +5086,61 @@ drill_login_remove_respawn_hang() {
   _login_remove_selftest \
     || { WHY="fleet-login-remove-selftest.sh is red (its respawn / deleteUser-hang legs): $(printf '%s\n' "$LOGIN_REMOVE_ST_OUT" | grep -m1 'selftest FAIL')"; return 1; }
   WHAT='pkill 之后 distnoted 被 launchd 拉回 → 先 bootout user/gui 域再杀、删号不挂；deleteUser 挂住 → 到时限杀掉（真跑 shim 化的 remove）'
+  SECS=$(since "$t0")
+}
+
+# ---- newcomer-login-no-gh (#2953): a login the hub opened for a newcomer has
+# no gh and hosts no repo; the ready check wanted gh all the same, so auto never
+# placed the first (HOME) session there. Now gh holds only a login with a repo.
+drill_newcomer_login_no_gh() {
+  CAP=30; local t0 w got
+  t0=$(now)
+  w=$(mktemp -d "${TMPDIR:-/tmp}/brk-nogh.XXXXXX")
+  mkdir -p "$w/bin" "$w/home/.claude" "$w/c1/fleets/solo" "$w/c2/fleets/app" "$w/main"
+  printf '#!/bin/sh\nexit 1\n' > "$w/bin/gh"; printf '#!/bin/sh\nexit 1\n' > "$w/bin/security"
+  chmod +x "$w/bin/gh" "$w/bin/security"; printf '{}' > "$w/home/.claude/.credentials.json"
+  printf 'FLEET_SESSION=solo\n' > "$w/c1/fleets/solo/conf"
+  printf 'FLEET_REPO=acme/app\nFLEET_MAIN=%s/main\n' "$w" > "$w/c2/fleets/app/conf"
+  got=$(HOME="$w/home" FLEET_CONF_DIR="$w/c1" PATH="$w/bin:$PATH" bash "$ROOT/bin/fleet-control-read.sh" ready 2>/dev/null)
+  case "$got" in *'"ready":true'*) ;; *) rm -rf "$w"; WHY="a login with no repo and no gh reads not ready: $got"; return 1 ;; esac
+  got=$(HOME="$w/home" FLEET_CONF_DIR="$w/c2" PATH="$w/bin:$PATH" bash "$ROOT/bin/fleet-control-read.sh" ready 2>/dev/null)
+  rm -rf "$w"
+  case "$got" in *'"ready":false'*'"gh"'*) ;; *) WHY="a login hosting a repo with no gh reads ready: $got"; return 1 ;; esac
+  grep -q 'FLEET_CLIENT_LAYOUT") == "solo"' "$ROOT/bin/fleet-client-place.sh" \
+    || { WHY="fleet-client-place.sh tells a newcomer's client to host here again"; return 1; }
+  WHAT='没有仓库、没有 gh 的新登录 → ready；有仓库没 gh → not ready: gh；新人客户端不再被叫去本机 host on（真跑就绪检查）'
+  SECS=$(since "$t0")
+}
+
+# ---- login-remove-no-fda (#2953): the node program has no Full Disk Access, so
+# TCC kept sysadminctl -deleteUser out of the home's ~/Desktop and it failed every
+# hub-sent remove (33 of 33 on mini2), exit 1 with the record left. Now a failed
+# deleteUser is checked like a timed-out one: the record goes with dscl, the home
+# left behind is moved aside, and the node log keeps the script's last words.
+drill_login_remove_no_fda() {
+  CAP=60; local t0
+  t0=$(now)
+  grep -q 'checking what it left' "$ROOT/bin/fleet-login-remove.sh" \
+    || { WHY="fleet-login-remove.sh stops at a failed deleteUser again"; return 1; }
+  grep -q 'accountWhy(res.Detail)' "$ROOT/tokenledger/internal/agent/node_accounts.go" \
+    || { WHY="the node log no longer says why an account op failed"; return 1; }
+  _login_remove_selftest \
+    || { WHY="fleet-login-remove-selftest.sh is red (its TCC leg): $(printf '%s\n' "$LOGIN_REMOVE_ST_OUT" | grep -m1 'selftest FAIL')"; return 1; }
+  WHAT='deleteUser 因 TCC 失败 → dscl 补删记录、剩下的家目录挪开、退 0；记录还删不掉 → 退 1（真跑 shim 化的 remove）'
+  SECS=$(since "$t0")
+}
+
+# ---- account-remove-tenant-held (#2953): the supervisor holds the node
+# program's restart while an account op runs, so the login being removed kept
+# its tenant — reads started as it while the remove waited for quiet. Now
+# nothing starts as a login while its remove runs.
+drill_account_remove_tenant_held() {
+  CAP=120; local t0
+  t0=$(now)
+  grep -q 'defer holdLogin(op.Login)()' "$ROOT/tokenledger/internal/agent/node_accounts.go" \
+    || { WHY="runAccountScript no longer holds the login it removes"; return 1; }
+  _drill_go_tests 'TestHoldLoginRefusesItsCommands' "$ROOT/tokenledger/internal/agent/runas_unix_test.go" \
+    '删号跑着时节点程序不以该登录起命令、别的登录照常、删完放开（go test）' ./internal/agent || return 1
   SECS=$(since "$t0")
 }
 

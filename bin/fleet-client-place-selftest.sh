@@ -288,6 +288,13 @@ eq "B: self — one line per login" 2 "$(wc -l < "$WHY" | tr -d ' ')"
 run "$P" verkyyi/claude-fleet 17
 eq "B: self absent exit" 4 "$RC"
 has "B: self absent — said so" "$ERR" "你这台（${SELF}）不在入口的候选里"
+# … but not to a newcomer's client, nor beside this login's own place elsewhere
+# (issue #2953): their sessions run on the login the hub opened, and the hint
+# sent them after the wrong computer
+FLEET_CLIENT_LAYOUT=solo run "$P" verkyyi/claude-fleet 17
+case "$ERR" in *候选*) fail "B: self absent — said to a solo (newcomer) client" "$ERR" ;; esac
+USER=bob run "$P" verkyyi/claude-fleet 17
+case "$ERR" in *候选*) fail "B: self absent — said though this login is a candidate elsewhere" "$ERR" ;; esac
 run "$P" verkyyi/claude-fleet 12
 case "$ERR" in *没被选*|*候选*) fail "B: no placement — a self hint anyway" "$ERR" ;; esac
 

@@ -373,7 +373,13 @@ if [ "$APPLY" = 1 ]; then
     # Killed past its limit: what it did is read below, as for an exit 0.
     printf '%s: WARN sysadminctl -deleteUser %s timed out after %ss (FLEET_LOGIN_REMOVE_DELETE_SECS) and was killed\n' "$PROG" "$LOGIN" "$DELETE_SECS" >&2
   elif [ "$rc" != 0 ]; then
-    printf '%s: failed; stopped before deleting the login\n' "$PROG" >&2; exit 1
+    # Not the end (issue #2953): from the node program (root's daemon, no Full
+    # Disk Access) macOS privacy protection (TCC) keeps sysadminctl out of the
+    # home's ~/Desktop · ~/Documents …, so it fails EVERY time there, while the
+    # same command over ssh passes — 33 of 33 hub-sent removes on mini2 ended
+    # exit 1 and each needed a person. What it did is read below, as for a
+    # timeout: the record goes with dscl, a home left behind is moved aside.
+    printf '%s: WARN sysadminctl -deleteUser %s failed (exit %s) — checking what it left\n' "$PROG" "$LOGIN" "$rc" >&2
   fi
 fi
 # sysadminctl can take the home and leave the record, exiting 0 all the same
@@ -389,8 +395,17 @@ if [ "$APPLY" = 1 ] && dscl . -read "/Users/$LOGIN" UniqueID >/dev/null 2>&1; th
     exit 1
   fi
 fi
+# A home left behind (a macOS that keeps it, or one TCC would not let go of —
+# issue #2953) is moved aside, out of the way of the next login of that name:
+# a rename in /Users needs no access to what is inside. One that will not move
+# is said and left.
 if [ "$APPLY" = 1 ] && [ -d "$H" ]; then
-  printf '%s: WARN home still present after deleteUser: %s — remove it by hand once you have what you need\n' "$PROG" "$H" >&2
+  LEFTOVER="$ARCHIVE_DIR/$LOGIN-$(date -u +%Y%m%dT%H%M%SZ).left"
+  if sudo install -d -m 700 -o "$ADMIN_UID" "$ARCHIVE_DIR" 2>/dev/null && sudo mv "$H" "$LEFTOVER" 2>/dev/null; then
+    printf '%s: WARN home still present after deleteUser: %s — moved to %s; what is left there macOS kept from this process (privacy protection): remove it from a session with Full Disk Access: sudo rm -rf %q\n' "$PROG" "$H" "$LEFTOVER" "$LEFTOVER" >&2
+  else
+    printf '%s: WARN home still present after deleteUser: %s — remove it by hand once you have what you need\n' "$PROG" "$H" >&2
+  fi
 fi
 
 step 7 "remove $LOGIN from the com.apple.access_* service groups"

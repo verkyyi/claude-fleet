@@ -77,6 +77,9 @@ func prepCmd(ctx context.Context, cmd *exec.Cmd) error {
 		}
 		return nil
 	}
+	if loginClosing(ra.Login) {
+		return fmt.Errorf("machine agent: login %s is being removed: nothing more runs as it", ra.Login)
+	}
 	setCredential(cmd, ra)
 	env := cmd.Env
 	if env == nil {
@@ -247,4 +250,34 @@ func (a *Agent) osLogin() string {
 // that deliberately outlives the context it started from.
 func (a *Agent) bgCtx() context.Context {
 	return withRunAs(context.Background(), a.cfg.RunAs)
+}
+
+// closingLogins is every login an account remove is running for now
+// (claude-fleet#2953): the supervisor holds this program's restart while the
+// op runs (#2922), so the login's own tenant lived on through its removal —
+// heartbeat reads started as it while fleet-login-remove.sh waited for the
+// login's processes to stop. While a remove runs nothing starts as that login.
+var (
+	closingMu     sync.Mutex
+	closingLogins = map[string]int{}
+)
+
+// holdLogin marks login as being removed until the returned release runs.
+func holdLogin(login string) (release func()) {
+	closingMu.Lock()
+	closingLogins[login]++
+	closingMu.Unlock()
+	return func() {
+		closingMu.Lock()
+		defer closingMu.Unlock()
+		if closingLogins[login]--; closingLogins[login] <= 0 {
+			delete(closingLogins, login)
+		}
+	}
+}
+
+func loginClosing(login string) bool {
+	closingMu.Lock()
+	defer closingMu.Unlock()
+	return closingLogins[login] > 0
 }
