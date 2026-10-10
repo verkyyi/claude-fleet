@@ -588,6 +588,9 @@ func (s *Server) routes() *routeMux {
 		if s.Debug != nil {
 			mux.HandleFunc(DebugTicketPath, s.handleDebugTicket)
 			mux.Handle(DebugTicketsPath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleDebugTickets))))
+			// the stand-alone fleet-debug (claude-fleet#2892): public like /install
+			mux.HandleFunc(DebugScriptPath, s.handleDebugScript)
+			mux.HandleFunc(DebugScriptSumPath, s.handleDebugScript)
 		}
 	}
 

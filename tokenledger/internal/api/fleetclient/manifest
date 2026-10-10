@@ -86,6 +86,10 @@ bin/fleet_clientlog.py
 bin/fleet-doctor-bundle.sh
 bin/fleet-redact.awk
 conf/debug-collect.list
+# `fleet-debug report` (#2892): sends that bundle to the hub when fleet itself
+# is broken — sh + /usr/bin/curl only; `fleet debug` forwards to it, and
+# GET /debug serves it alone (with the four files above spliced in)
+bin/fleet-debug
 bin/fleet-client-lib.sh
 # keeps up with stable by itself (#1722, #1805): newer client + the team's
 # defaults; `fleet update` says where this computer stands
