@@ -199,6 +199,8 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 	if a.teamCapable() {
 		// The team layer follows the hub's push (claude-fleet#1899).
 		caps = append(caps, control.CapTeam)
+		// … and so does the person's own layer (claude-fleet#2784).
+		caps = append(caps, control.CapPerson)
 	}
 	if a.relaysOAuthRefresh() {
 		caps = append(caps, control.CapOAuthRefresh)
@@ -290,6 +292,8 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 				}
 			case control.TypeTeam:
 				a.handleTeam(ctx, m)
+			case control.TypePerson:
+				a.handlePerson(ctx, m)
 			case control.TypeSSHRelayOpen:
 				// Bound to this session's ctx: when the control channel
 				// drops, every relay it opened is closed with it
@@ -364,7 +368,7 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 			if err := beat(); err != nil {
 				return true, err
 			}
-			// A team sync that failed runs again on this beat.
+			// A team (or person) sync that failed runs again on this beat.
 			a.teamKick(ctx)
 		case <-nudge:
 			nb.arm()

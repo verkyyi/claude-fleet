@@ -2873,15 +2873,28 @@ if [ -f "$_at" ] && command -v python3 >/dev/null 2>&1; then
   esac
 fi
 
-# --- roles: a person's layer over a role's definition (issue #2783) ---
+# --- roles: a person's layer over a role's definition (issues #2783, #2784) ---
 # A local layer ($FLEET_CONF_DIR/roles/<role>.md) is for development and
 # emergencies — it holds this computer only — and a layer that was not used
-# (written badly) leaves its last good copy standing. Either is said here; with
-# neither there is no row.
+# (written badly) leaves its last good copy standing. Either is said here. The
+# person's layer itself is kept on the hub and read here (EPIC #2781 C3): the
+# row reads 入口 v<N> · 本机 v<M> · 拉到 <when>, and WARNs when that read is over
+# a day old (a launch with the hub away uses that copy) or the hub pushed a
+# version this login does not hold. No personal layer and no note → no row.
 if [ -f "$(dirname "$0")/fleet-role.py" ]; then
-  _rl=$(python3 "$(dirname "$0")/fleet-role.py" doctor 2>/dev/null)
-  [ -n "$_rl" ] && warn roles "${_rl#*	}"
-  unset _rl
+  _rl=$(FLEET_CONF_DIR="$conf_dir" python3 "$(dirname "$0")/fleet-role.py" doctor 2>/dev/null)
+  _rp=''; _rprc=3
+  if [ -f "$(dirname "$0")/fleet-agent-team.py" ]; then
+    _rp=$(FLEET_CONF_DIR="$conf_dir" python3 "$(dirname "$0")/fleet-agent-team.py" status --roles 2>/dev/null); _rprc=$?
+  fi
+  if [ -n "$_rl" ]; then
+    warn roles "${_rp:+$_rp · }${_rl#*	}"
+  elif [ "$_rprc" = 1 ]; then
+    warn roles "$_rp (fix: python3 $(dirname "$0")/fleet-agent-team.py sync — the hub may be away; launches use this copy meanwhile)"
+  elif [ "$_rprc" = 0 ] && [ -n "$_rp" ]; then
+    pass roles "$_rp"
+  fi
+  unset _rl _rp _rprc
 fi
 
 # --- orch: the person has ONE orchestrating session (issue #2117) ---
