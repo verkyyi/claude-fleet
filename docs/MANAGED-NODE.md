@@ -212,6 +212,11 @@ BREAK-IT `managed-login-own-copy`）。跟不上的记进 `update.json` 的 `fol
   钉的制品（`fleet-node-update.py pinned-artifacts`，按入口说的平台展开，默认 `darwin-arm64`）缺一个就拒挪
   （`artifacts:`，点名缺哪个；`--force` 记一行）；入口自己也不打包缺钉住制品的发布版（构建报错、不落盘），
   制品放进去后下一次请求就建出完整的一版。
+- **ccquota 是入口自己编的那份**（`ccquota-<os>-<arch>` 来自入口镜像的 dist 目录，版本 = 入口 `/version` 的
+  `prod-<sha>`），不是从 stable 那个提交编的。所以 `fleet-stable.sh move` 第 8 道门（#2927）：目标在
+  `tokenledger/` 下（测试、*.md 除外）有入口那个 sha 没有的提交就拒挪（`ccquota:`，列出缺的提交）——先部署入口，
+  再移 stable；`--force` 记一行。否则机器会跑上树的一半、节点程序的旧一半（stable 003e89bb 带着 prod-343c92b：
+  #2922 的 hold 上了机、账本没上，开号被重启截断后重跑，撞「登录已存在」）。
 - **Claude Code 不用人传**（#2631）：升 `components.claude.version` 即可。入口建包时缺 `claude-<ver>-<os>-<arch>`
   就自己取 Anthropic 发到 npm 的 `@anthropic-ai/claude-code-<os>-<arch>@<ver>`（与 downloads.claude.ai 同一份字节；
   入口所在集群连不上那边的 Google 存储），按 registry 的 `dist.integrity`（sha512）校验，取出 `package/claude`

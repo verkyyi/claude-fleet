@@ -76,6 +76,7 @@
 #   macos-red-to-stable                             bin/fleet-macos-watch.sh (breakage filing), fleet-stable.sh move (macos gate)
 #   release-artifact-missing                        bin/fleet-stable.sh move (the artifacts gate),
 #                                                   fleet-node-update.py pinned-artifacts, the hub's build refusal
+#   release-ccquota-behind                          bin/fleet-stable.sh move (the ccquota gate)
 #   login-browser-silent                            bin/fleet-login.py (scan: open_browser, KeyWatch, nudge, timeout)
 #   login-sandbox-real-conf                         bin/fleet-login.py (conf_dir_env)
 #   opening-never-ends                              tokenledger/internal/api fleet_opening.go
@@ -4266,6 +4267,56 @@ drill_release_artifact_missing() {
   SECS=$(since "$t0")
   [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable)" = "$c2" ] || { WHY="stable did not move once the artifact was there"; return 1; }
   WHAT="release.json 钉的 claude 入口没有：stable 拒挪（artifacts: 点名缺的制品）；放进去后同一提交照常挪"
+}
+
+# ---- release-ccquota-behind (#2927): a release's ccquota is the hub's own build
+# (its image's dist dir), not the target's. Stable 003e89bb shipped prod-343c92b:
+# #2922's supervisor half (hold while the book names an op) went live without
+# its node-program half (the book), nothing held, a create was cut off and run
+# again into exit 3. Now `fleet-stable.sh move` reads the hub's /version and
+# refuses with `ccquota:` while a tokenledger/ commit of the target is not in
+# that build; once the hub runs it, the same move goes through.
+# A file:// hub; a real bare repo + tag; fake gh.
+drill_release_ccquota_behind() {
+  CAP=30; local t0 d out rc c1 c2
+  d="$WORK/relccq"; mkdir -p "$d/shim" "$d/seed" "$d/conf" "$d/hub/v1/fleet/release"
+  printf '#!/bin/sh\nprintf "completed success ci\\n"\n' > "$d/shim/gh"; chmod +x "$d/shim/gh"
+  ( export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+    export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
+    git init -q --bare -b master "$d/origin.git" && git clone -q "$d/origin.git" "$d/seed" 2>/dev/null || exit 1
+    mkdir -p "$d/seed/bin" "$d/seed/tokenledger/internal/agent"
+    printf '#!/usr/bin/env python3\n' > "$d/seed/bin/fleet-node-update.py"
+    cp "$ROOT/release.json" "$d/seed/release.json"
+    printf 'package agent\n' > "$d/seed/tokenledger/internal/agent/node_accounts.go"
+    git -C "$d/seed" add -A && git -C "$d/seed" commit -qm old && git -C "$d/seed" push -q origin HEAD:master || exit 1
+    git -C "$d/seed" rev-parse HEAD > "$d/c1"
+    printf 'package agent\n\n// the book\n' > "$d/seed/tokenledger/internal/agent/node_accounts.go"
+    git -C "$d/seed" add -A && git -C "$d/seed" commit -qm 'the node program keeps a book' && git -C "$d/seed" push -q origin HEAD:master || exit 1
+    git -C "$d/seed" rev-parse HEAD > "$d/c2"
+    git --git-dir="$d/origin.git" update-ref refs/tags/stable "$(cat "$d/c1")" && git clone -q "$d/origin.git" "$d/co" 2>/dev/null
+  ) || { WHY="could not build the rig repo"; return 1; }
+  c1=$(cat "$d/c1"); c2=$(cat "$d/c2")
+  printf '{"artifacts":["ccquota-darwin-arm64","claude-%s-darwin-arm64","codex-%s-darwin-arm64","tmux-%s-darwin-arm64"]}\n' \
+    "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["components"]["claude"]["version"])' "$ROOT/release.json")" \
+    "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["components"]["codex"]["version"])' "$ROOT/release.json")" \
+    "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["components"]["tmux"]["version"])' "$ROOT/release.json")" \
+    > "$d/hub/v1/fleet/release/artifacts"
+  printf '{"version":"prod-%.7s"}\n' "$c1" > "$d/hub/version"
+  t0=$(now)
+  out=$(PATH="$d/shim:$PATH" FLEET_CONF_DIR="$d/conf" XDG_CONFIG_HOME="$d/conf" CCQUOTA_HUB_URL='' FLEET_HUB_URL="file://$d/hub" \
+          sh "$BIN/fleet-stable.sh" move "$c2" --dir "$d/co" --repo o/r 2>&1); rc=$?
+  [ "$rc" = 3 ] || { WHY="move onto a tokenledger/ change the hub's build lacks exited $rc, want 3: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1; }
+  case "$out" in *'REFUSED — ccquota:'*) ;; *) WHY="the refusal is not prefixed ccquota: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1 ;; esac
+  case "$out" in *'the node program keeps a book'*) ;; *) WHY="the refusal does not name the missing commit: $(printf '%s' "$out" | tr '\n' '|')"; return 1 ;; esac
+  [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable)" = "$c1" ] || { WHY="stable moved onto a release whose ccquota trails its tree"; return 1; }
+  # the hub is deployed at the target → the same move goes through
+  printf '{"version":"prod-%.7s"}\n' "$c2" > "$d/hub/version"
+  out=$(PATH="$d/shim:$PATH" FLEET_CONF_DIR="$d/conf" XDG_CONFIG_HOME="$d/conf" CCQUOTA_HUB_URL='' FLEET_HUB_URL="file://$d/hub" \
+          sh "$BIN/fleet-stable.sh" move "$c2" --dir "$d/co" --repo o/r 2>&1) \
+    || { WHY="the move after the hub caught up failed: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1; }
+  SECS=$(since "$t0")
+  [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable)" = "$c2" ] || { WHY="stable did not move once the hub ran the target"; return 1; }
+  WHAT="入口的 ccquota 落后于目标的 tokenledger/：stable 拒挪（ccquota: 点名缺的提交）；入口部署到目标后同一提交照常挪"
 }
 
 # A release that deletes what an OPEN session's start still names (a hook script,
