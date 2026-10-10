@@ -31,6 +31,9 @@ the way `ccquota release fetch --artifacts` lays one out (C7). Nothing touches
      row FAILs on a stale copy and on a proxy still on the old code
   N  the release key (issue #2843): status prints the pinned and the signer's
      fingerprints; a fetch that failed its signature check is a doctor FAIL
+  O  a stale fail (issue #2906): a torn read a later signed fetch outlived is
+     no FAIL and rolls nothing back; a current one is a WARN; a rolled-back
+     release is retried once its cause is gone, else after a doubling wait
 """
 import base64
 import filecmp
@@ -53,6 +56,7 @@ REPO = os.path.dirname(BIN)
 V1 = "1" * 40
 V2 = "2" * 40
 V3 = "3" * 40
+V9 = "9" * 40
 CREDSEP_CODE = ("fleet-cred-proxy.py", "fleet-credsep-launch.py", "fleet-credsep.py")
 
 FAKE_CCQUOTA = r"""#!/bin/bash
@@ -568,7 +572,8 @@ class N_ReleaseKey(Sandbox):
         r = self.cmd("doctor")
         self.assertRegex(r.stdout, r"PASS  key +pinned [0-9a-f]{16}")
         st = self.state()
-        st.update(result="backoff", failed={V2: {"at": 1, "reason": "fetch: ccquota: signature does not match the pinned key"}})
+        st.update(result="backoff", failed={V2: {"at": int(time.time()) + 5,
+                                                 "reason": "fetch: ccquota: signature does not match the pinned key"}})
         self.wj(os.path.join(self.d, "db", "update.json"), st)
         r = self.cmd("doctor")
         self.assertIn("FAIL  key", r.stdout)
@@ -576,6 +581,107 @@ class N_ReleaseKey(Sandbox):
         r = self.cmd("status", "--check")
         self.assertEqual(r.returncode, 1, r.stdout)
         self.assertIn("failed its signature check", r.stdout)
+
+
+TORN = ("fetch: ccquota: signature does not match the pinned key")
+
+
+class O_TornReadPast(Sandbox):
+    """issue #2906: macmini's updater from before #2843 left one torn read in
+    `failed` after the stages that followed it landed; every new release's
+    doctor read it as a new key FAIL, rolled back, and skipped the sha forever."""
+
+    def stale_failure(self, at):
+        st = self.state()
+        st["failed"] = {V9: {"at": at, "reason": TORN}}
+        self.wj(os.path.join(self.d, "db", "update.json"), st)
+
+    def test_outlived_torn_read_does_not_roll_back(self):
+        self.install(V1)
+        self.stale_failure(int(time.time()) - 3600)          # before V1's stage landed
+        self.assertRegex(self.cmd("doctor").stdout, r"PASS  key")
+        self.assertEqual(self.cmd("status", "--check").returncode, 0)
+        self.release(V2, claude="2.1.2")
+        st = self.tick(V2)
+        self.assertEqual(st["phase"], "switched", st)
+        st["baseline"] = []                                  # the old version's doctor had no key row
+        self.wj(os.path.join(self.d, "db", "update.json"), st)
+        self.daemon_on(V2)
+        st = self.tick(V2)
+        self.assertEqual(st["result"], "committed", st)
+        self.assertEqual(self.current(), V2)
+
+    def test_fresh_torn_read_is_a_warn(self):
+        import http.server
+        import threading
+        key = "ed25519 %s\n" % base64.b64encode(b"\x01" * 32).decode()
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(key.encode())
+
+            def log_message(self, *a):
+                pass
+        srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.shutdown)
+        self.install(V1)
+        with open(os.path.join(self.d, "db", "machine.env"), "w") as f:
+            f.write("CCQUOTA_HUB_URL=http://127.0.0.1:%d\n" % srv.server_address[1])
+        self.stale_failure(int(time.time()) + 5)             # after every landed stage: still current
+        r = self.cmd("doctor")
+        self.assertIn("WARN  key", r.stdout)
+        self.assertIn("a torn read", r.stdout)
+        self.assertEqual(r.returncode, 0, r.stdout)
+
+    def test_skip_is_retried(self):
+        self.install(V1, claude="2.1.1")
+        self.release(V2, claude="2.1.9", broken=("claude-",))
+        self.tick(V2)
+        self.daemon_on(V2)
+        st = self.tick(V2)
+        self.assertEqual(st["result"], "rolled-back", st)
+        self.assertEqual(st["skip"][V2]["tries"], 1)
+        self.assertEqual(st["skip"][V2]["rows"], ["claude"])
+        self.daemon_on(V1)
+        st = self.tick(V2)
+        self.assertEqual(st["result"], "skipped", st)
+        self.assertIn("retried at", st["reason"])
+        # the skip ran out: tried again, rolled back again, the wait doubles
+        st["skip"][V2]["at"] -= 21601
+        self.wj(os.path.join(self.d, "db", "update.json"), st)
+        st = self.tick(V2)
+        self.assertEqual(st["phase"], "switched", st)
+        self.daemon_on(V2)
+        st = self.tick(V2)
+        self.assertEqual(st["result"], "rolled-back", st)
+        self.assertEqual(st["skip"][V2]["tries"], 2)
+        st["skip"][V2]["at"] -= 21601                        # 6h is not 12h
+        self.wj(os.path.join(self.d, "db", "update.json"), st)
+        self.daemon_on(V1)
+        self.assertEqual(self.tick(V2)["result"], "skipped")
+        # 0 = the pre-#2906 rule: until the target moves
+        st = self.state()
+        st["skip"][V2]["at"] -= 10 ** 7
+        self.wj(os.path.join(self.d, "db", "update.json"), st)
+        self.assertEqual(self.tick(V2, FLEET_NODE_UPDATE_SKIP_RETRY="0")["result"], "skipped")
+
+    def test_skip_retried_once_the_torn_read_is_past(self):
+        """macmini's 336f12c5: skipped for a key FAIL whose cause is gone."""
+        self.install(V1)
+        self.release(V2, claude="2.1.2")
+        st = self.state()
+        st["skip"] = {V2: {"at": int(time.time()), "reason": "new FAIL: key %s failed its signature check "
+                                                           "2026-10-10T00:17:46Z against pinned f82f: a torn read" % V9[:12]}}
+        st["failed"] = {V9: {"at": int(time.time()) - 3600, "reason": TORN}}
+        self.wj(os.path.join(self.d, "db", "update.json"), st)
+        st = self.tick(V2)
+        self.assertEqual(st["phase"], "switched", st)
+        self.daemon_on(V2)
+        self.assertEqual(self.tick(V2)["result"], "committed")
+        self.assertIn("its cause is gone", open(os.path.join(self.d, "log", "update.log")).read())
 
 
 class G_DaemonRestart(Sandbox):
@@ -1228,6 +1334,9 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--drill-sessions":
         # BREAK-IT node-update-sessions: pinned before the switch, back after
         unittest.main(argv=[sys.argv[0], "J_Sessions.test_save_before_restore_after"], verbosity=1)
+    if len(sys.argv) > 1 and sys.argv[1] == "--drill-torn-read":
+        # BREAK-IT node-update-stale-fail (issue #2906): an outlived torn read rolls nothing back
+        unittest.main(argv=[sys.argv[0], "O_TornReadPast"], verbosity=1)
     if len(sys.argv) > 1 and sys.argv[1] == "--drill-credsep":
         # BREAK-IT credsep-stale-after-switch: the supervised case, switch + rollback
         unittest.main(argv=[sys.argv[0], "I_Credsep.test_supervised_proxy_follows_switch_and_rollback"], verbosity=1)
