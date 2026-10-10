@@ -20,9 +20,9 @@ const DUMP = ['panel_summary_fmt', 'open=\u0001 live=\u0002 parked=\u0003 beat=\
   .join('\0').replace(/\u0002|\u0003|\u0004/g, '\u0001') + '\0'
 const RUN = { origin: { kind: 'composer' }, presentation: { layout: 'fullscreen', columns: 200 } } as never
 
-/** What the panels hold now, as bare `/sheet` says it. */
+/** What the panels hold now, as `/sheet --summary` says it. */
 async function summary($: { command: { run: (i: never) => Promise<{ text?: string }> } }): Promise<string> {
-  return (await $.command.run({ command: SHEET_COMMAND, args: '', ...(RUN as object) } as never)).text ?? ''
+  return (await $.command.run({ command: SHEET_COMMAND, args: '--summary', ...(RUN as object) } as never)).text ?? ''
 }
 
 const START = { cwd: '/tmp', surface: 'terminal', isInteractive: false } as const

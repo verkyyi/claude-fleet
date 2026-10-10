@@ -208,6 +208,7 @@ mod/fleet/hooks/progress.tsx
 mod/fleet/hooks/qd.tsx
 mod/fleet/hooks/queue.ts
 mod/fleet/hooks/register.ts
+mod/fleet/hooks/sheet.tsx
 mod/fleet/hooks/state.ts
 mod/fleet/hooks/tmux.ts
 mod/fleet/hooks/tools.ts

@@ -155,13 +155,18 @@ def merge(rows):
     suggestion, numbers aside) asked by several sessions is ONE line."""
     groups = {}
     order = []
-    for r in rows:
-        key = (action_of(r), _norm(r.get("say") or r.get("item")), _norm(r.get("suggest")),
-               fd.default_text(r))
+    by_id = {r.get("id"): r for r in rows}
+    # the open asks on ONE ticket are one thing first (fleet_decision.group, the
+    # rule the orchestrator's panel draws — issue #2832), then the same words
+    for g in fd.group(rows):
+        rs = [by_id[i] for i in g["ids"] if i in by_id]
+        head = rs[-1]
+        key = (action_of(head), _norm(head.get("say") or head.get("item")), _norm(head.get("suggest")),
+               fd.default_text(head))
         if key not in groups:
             groups[key] = []
             order.append(key)
-        groups[key].append(r)
+        groups[key].extend(rs)
     out = []
     for a in ACTIONS:
         lines = [groups[k] for k in order if k[0] == a]
@@ -250,7 +255,12 @@ def link(url, text):
 
 def line_parts(rows, now_t):
     """One merged line's four parts: (what, suggestion, if unanswered, due or "")."""
-    r0 = min(rows, key=lambda r: r.get("due") or "9")
+    # one ticket asked again: its latest ask speaks (fleet_decision.group); several
+    # tickets with the same words: the nearest deadline
+    if len({r.get("src") for r in rows}) == 1:
+        r0 = max(rows, key=lambda r: r.get("asked") or "")
+    else:
+        r0 = min(rows, key=lambda r: r.get("due") or "9")
     return (say_of(r0), plain(r0.get("suggest")) or tr("steward_page_no_suggest"),
             plain(fd.default_text(r0)) or fd.default_text(r0), due_text(r0, now_t))
 
@@ -259,6 +269,14 @@ def open_rows(st):
     rows = [r for r in st.d["rows"].values() if r.get("state") == "open" and not r.get("followup")]
     rows.sort(key=lambda r: (not fd.never(r), r.get("due") or "9", r.get("asked") or ""))
     return rows
+
+
+def merged_text(rows):
+    """How a line that stands for several asks says so: one ticket asked again
+    (fleet_decision.group's words), else several sessions asking the same."""
+    if len({r.get("src") for r in rows}) == 1:
+        return fd.group(rows)[0]["from"]
+    return tr("steward_page_merged_fmt", len(rows))
 
 
 def brief(rows, now_t):
@@ -274,7 +292,7 @@ def brief(rows, now_t):
             text += (" · " + tr("steward_page_due_fmt", due)) if due else ""
             text += "（%s）" % tr("steward_page_act_" + action)
             if len(rs) > 1:
-                text += " · " + tr("steward_page_merged_fmt", len(rs))
+                text += " · " + merged_text(rs)
             out.append((text, [r["id"] for r in rs]))
     return out
 
@@ -286,7 +304,7 @@ def decision_block(n, rows, now_t):
              "%s%s" % (esc(tr("steward_page_default")), esc(dflt))]
     if due:
         parts.append(esc(tr("steward_page_due_fmt", due)))
-    merged = (" <span class=\"pill muted\">%s</span>" % esc(tr("steward_page_merged_fmt", len(rows)))
+    merged = (" <span class=\"pill muted\">%s</span>" % esc(merged_text(rows))
               if len(rows) > 1 else "")
     fold = []
     for r in rows:

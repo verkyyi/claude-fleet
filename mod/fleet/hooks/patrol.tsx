@@ -139,9 +139,9 @@ async function openPatrol($: EngineInterface) {
 
 export function registerPatrol(on: On): void {
   // /sheet in the steward's window opens the patrol (asked: placed at any width);
-  // `--stats`, and every other window, go on to panels.ts.
+  // `--stats` / `--summary`, and every other window, go on to panels.ts.
   on('command.run', { command: 'sheet' }, async ($, e, next) => {
-    if (!patrolHere() || /(^|\s)--stats(\s|$)/.test(e.args)) return next(e)
+    if (!patrolHere() || /(^|\s)--(stats|summary)(\s|$)/.test(e.args)) return next(e)
     const opened = await openPatrol($)
     autoOpened = true
     return { text: opened.isPlaced ? t('panel_patrol_opened') : t('panel_patrol_waits') }

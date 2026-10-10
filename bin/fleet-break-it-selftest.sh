@@ -2382,12 +2382,14 @@ drill_orch_busy_queue_invisible() {
 
 # the panels' mod half (issue #2835): panels.test.ts alone, when a claude CLI can run it here
 panel_mod_test() {
-  local d="$1" out
+  local d="$1" tf="${3:-panels.test.ts}" out m
   command -v claude >/dev/null 2>&1 || return 2
-  mkdir -p "$d/mod" && cp -R "$ROOT/mod/fleet/." "$d/mod/" && find "$d/mod/tests" -type f ! -name panels.test.ts -delete
-  out=$(cd "$d/mod" && claude plugin test . 2>&1)
+  m="$d/mod-${tf%%.*}"
+  mkdir -p "$m" && cp -R "$ROOT/mod/fleet/." "$m/" \
+    && find "$m/tests" -type f ! -name "$tf" ! -name '*-fixture.ts' -delete
+  out=$(cd "$m" && claude plugin test . 2>&1)
   case "$out" in *"(pass) $2"*) return 0 ;; esac
-  WHY="panels.test.ts «$2» did not pass: $(printf '%s' "$out" | grep -E 'fail|error' | head -3 | tr '\n' ' ')"; return 1
+  WHY="$tf «$2» did not pass: $(printf '%s' "$out" | grep -E 'fail|error' | head -3 | tr '\n' ' ')"; return 1
 }
 
 # the steward saves its books but the change stamp does not move (a writer that
@@ -2419,6 +2421,10 @@ drill_panel_wrong_window() {
   panel_mod_test "$d" 'panels: a worker window stats nothing and registers no /sheet (panel-wrong-window)'; rc=$?
   [ "$rc" = 1 ] && return 1
   [ "$rc" = 0 ] && m='mod：worker 窗口零 stat、无 /sheet · '
+  # the decision sheet (issue #2832): never opened, never @sheet_pane, outside the orchestrator
+  panel_mod_test "$d" 'sheet: a worker window opens no sheet, stamps no @sheet_pane and draws nothing of it (panel-wrong-window)' sheet.test.tsx; rc=$?
+  [ "$rc" = 1 ] && return 1
+  [ "$rc" = 0 ] && m="${m}无决定单、无 @sheet_pane · "
   SECS=$(since "$t0"); WHAT="执行会话窗口装了 mod：${m}只认编排 / 管家两个角色"
 }
 

@@ -22,13 +22,16 @@
 // Each read is timed (performance.now()) into $FLEET_CONF_DIR/logs/panel.ndjson
 // (`refresh` rows, the last 200), and the first time a new sheet is drawn its
 // 「写出→看见」 seconds (`seen`, from the sheet's own `at`); `/sheet --stats`
-// prints p50 / p95 and the last five. Rows of another kind in that file (the
-// sheet's answers, C1) are kept as they are.
+// prints p50 / p95 and the last five. The decision sheet's answers (sheet.tsx,
+// issue #2832) are `answer` rows handed over through noteAnswer and written on
+// the next tick; `/sheet --stats` prints their median presses. Rows of another
+// kind in that file are kept as they are.
 
 import { atom, read } from 'claude-code'
 import type { CommandSpec, On } from 'claude-code'
 
 import { isOpen } from './gate'
+import { isOrchestrator } from './orchestrator'
 import type { WindowRole } from './orchestrator'
 import { foldPanels, percentile } from './panels-model'
 import type { PanelsView } from '../types'
@@ -42,6 +45,7 @@ export const SHEET_COMMAND = 'sheet'
 export const BATCHES_ARG = /^\s*(batches|批次)\s*$/
 export const REFRESH_KEEP = 200
 export const SEEN_KEEP = 50
+export const ANSWER_KEEP = 100
 /** The file's own cap, every kind counted. */
 export const LOG_KEEP = 500
 
@@ -109,6 +113,7 @@ export function sheetCommand(): CommandSpec {
 
 // Module state: a reload is a fresh module, and session.start starts it again.
 let paths: PanelPaths | undefined
+let session = ''
 let print = ''
 let busy = false
 let lastSheet = ''
@@ -116,12 +121,26 @@ let reads = 0
 let logLoaded = false
 let refreshRows: string[] = []
 let seenRows: string[] = []
+let answerRows: string[] = []
 let lastFlush = 0
+let dirty = false
 
-/** lifecycle.ts: this window's panels run, reading these books. */
-export function startPanels(p: PanelPaths): void {
+/** lifecycle.ts: this window's panels run, reading these books (of this fleet session). */
+export function startPanels(p: PanelPaths, sess = ''): void {
   paths = p
+  session = sess
   print = ''
+}
+
+/** The fleet session the books are this window's (sheet.tsx's answers name it). */
+export function currentSession(): string {
+  return session
+}
+
+/** sheet.tsx: one answer sent — written to the log on the next tick. */
+export function noteAnswer(row: { kind: 'answer'; ts: number; gid: string; how: string; presses: number; ms: number }): void {
+  answerRows.push(JSON.stringify(row))
+  dirty = true
 }
 
 export function stopPanels(): void {
@@ -139,6 +158,7 @@ export function currentPaths(): PanelPaths | undefined {
 /** Tests: forget everything. */
 export function resetPanels(): void {
   paths = undefined
+  session = ''
   print = ''
   busy = false
   lastSheet = ''
@@ -146,7 +166,9 @@ export function resetPanels(): void {
   logLoaded = false
   refreshRows = []
   seenRows = []
+  answerRows = []
   lastFlush = 0
+  dirty = false
 }
 
 async function readOr(io: PanelsIo, path: string): Promise<string> {
@@ -188,21 +210,26 @@ async function flush(io: PanelsIo, p: PanelPaths): Promise<void> {
   const others: string[] = []
   const oldRefresh: string[] = []
   const oldSeen: string[] = []
+  const oldAnswers: string[] = []
   for (const line of text.split('\n')) {
     if (line.trim() === '') continue
     const k = kindOf(line)
     if (k === 'refresh') oldRefresh.push(line)
     else if (k === 'seen') oldSeen.push(line)
+    else if (k === 'answer') oldAnswers.push(line)
     else others.push(line)
   }
   if (!logLoaded) {
     refreshRows = [...oldRefresh, ...refreshRows]
     seenRows = [...oldSeen, ...seenRows]
+    answerRows = [...oldAnswers, ...answerRows]
     logLoaded = true
   }
   refreshRows = refreshRows.slice(-REFRESH_KEEP)
   seenRows = seenRows.slice(-SEEN_KEEP)
-  const all = [...others.slice(-(LOG_KEEP - refreshRows.length - seenRows.length)), ...seenRows, ...refreshRows]
+  answerRows = answerRows.slice(-ANSWER_KEEP)
+  const ours = seenRows.length + refreshRows.length + answerRows.length
+  const all = [...others.slice(-(LOG_KEEP - ours)), ...answerRows, ...seenRows, ...refreshRows]
   await io.write(p.log, `${all.join('\n')}\n`)
 }
 
@@ -220,7 +247,13 @@ export async function panelsTick(io: PanelsIo, full = false): Promise<'off' | 'b
     const t0 = performance.now()
     const now = watched(p)
     const fp = (await Promise.all(now.map(path => io.stat(path).catch(() => '-')))).join('|')
-    if (!full && fp === print) return 'same'
+    if (!full && fp === print) {
+      if (dirty) {
+        dirty = false
+        await flush(io, p).catch(() => undefined)
+      }
+      return 'same'
+    }
     print = fp
     const src = await readAll(io, p)
     const at = await io.now()
@@ -244,8 +277,9 @@ export async function panelsTick(io: PanelsIo, full = false): Promise<'off' | 'b
       }
       lastSheet = sheetKey
     }
-    if (seen || at - lastFlush >= PANELS_FULL_MS) {
+    if (seen || dirty || at - lastFlush >= PANELS_FULL_MS) {
       lastFlush = at
+      dirty = false
       await flush(io, p).catch(() => undefined)
     }
     return 'read'
@@ -258,12 +292,14 @@ export async function panelsTick(io: PanelsIo, full = false): Promise<'off' | 'b
 export function statsText(log: string): string {
   const ms: number[] = []
   const seen: number[] = []
+  const presses: number[] = []
   for (const line of log.split('\n')) {
     if (line.trim() === '') continue
     try {
-      const v = JSON.parse(line) as { kind?: unknown; ms?: unknown; s?: unknown }
+      const v = JSON.parse(line) as { kind?: unknown; ms?: unknown; s?: unknown; presses?: unknown }
       if (v.kind === 'refresh' && typeof v.ms === 'number') ms.push(v.ms)
       if (v.kind === 'seen' && typeof v.s === 'number') seen.push(v.s)
+      if (v.kind === 'answer' && typeof v.presses === 'number') presses.push(v.presses)
     } catch {
       // A torn line is skipped.
     }
@@ -274,11 +310,13 @@ export function statsText(log: string): string {
       : t('panel_stats_fmt', String(last.length), String(percentile(last, 50)), String(percentile(last, 95))),
     seen.length === 0 ? t('panel_seen_none')
       : t('panel_seen_fmt', String(Math.min(5, seen.length)), seen.slice(-5).join(' · ')),
+    presses.length === 0 ? t('panel_answer_none')
+      : t('panel_answer_stats_fmt', String(presses.length), String(percentile(presses, 50))),
   ]
   return lines.join('\n')
 }
 
-/** Bare `/sheet` until the sheet's panel lands (C1): one line of what the books say. */
+/** `/sheet --summary` (bare `/sheet` in the steward's window): one line of what the books say. */
 export function summaryText(v: PanelsView | null): string {
   if (v === null) return t('panel_empty')
   const open = v.sheet?.rows.filter(r => r.state === 'open').length ?? 0
@@ -298,6 +336,9 @@ export function registerPanels(on: On): void {
       }
       return { text: statsText(log) }
     }
+    // The orchestrator's bare /sheet opens / closes the decision sheet (sheet.tsx).
+    // `--summary` is the one line of the books, anywhere.
+    if (isOrchestrator() && !/(^|\s)--summary(\s|$)/.test(e.args)) return next(e)
     return { text: summaryText(await read($, panels)) }
   }).catch(($, e, next) => next(e))
 }

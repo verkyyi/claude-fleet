@@ -452,6 +452,16 @@ Do not install from memory: read the doc and work from it.
   only when one moved (a 10 s full read covers a missed stamp), no process run;
   each read's time and a new sheet's 写出→看见 go to `logs/panel.ndjson`,
   `/sheet --stats` prints them. BREAK-IT `panel-stale`, `panel-wrong-window`.
+  **The decision sheet is a pane there, answered in one press** (issue #2832, C1):
+  mod `hooks/sheet.tsx` draws the steward's `groups` (`fleet_decision.group` — the
+  open asks on ONE ticket are one line, the latest ask speaks; the ONE merge rule,
+  the `[decision]` text and the steward page use it too, the panel never merges)
+  with 按建议 `y` · 翻案 `f` · 看原话 `t`; an answer waits 10 s for `u`, then runs
+  `fleet-steward-tick.sh answer --by person` once per row id (the steward logs one
+  line in `decision-<day>.md`). The orchestrator's first fullscreen band opens it
+  (never on the main screen) and stamps `@sheet_pane 1` while it is up — the steward
+  then sends one sentence (`panel_sheet_ping_fmt`), never the table; no option = the
+  whole sheet, byte for byte, counted in `sheets_full[day]`.
   `FLEET_STEWARD`: `0` byte for byte · `count` (default where an orchestrator runs:
   only the attention count, the node conf's [76] hooks → `logs/attention.ndjson`,
   `fleet-steward-stats.sh`) · `1` the window too. `fleet-steward-selftest.sh`;
