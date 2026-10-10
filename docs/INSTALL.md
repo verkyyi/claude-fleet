@@ -63,6 +63,10 @@ login is one fleet; a shared login gives everyone one quota record.
 
 ## Install steps
 
+For a managed Linux host or a persistent Aliyun ACK node, follow
+[MANAGED-LINUX.md](MANAGED-LINUX.md). It uses the managed installer and
+supervisor; the ACK image owns its runtime version.
+
 Worker hibernation is described in [WORKER-SLEEP.md](WORKER-SLEEP.md). Install
 `com.claude-fleet.sleep` / `claude-fleet-sleep.timer` with the other interval
 daemons in step 6. Its default `FLEET_SLEEP=observe` reports candidates only;

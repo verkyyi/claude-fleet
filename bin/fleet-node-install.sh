@@ -43,7 +43,9 @@
 # use this command instead, and still work for one version.
 #
 # Usage: fleet-node-install.sh [--join <fj_code>] [--hub <url>] [--target <sha>]
-#                              [--release-key <file>]
+#                              [--release-key <file>] [--join-file <file>]
+#                              [--login <login> --login-join-file <file>]
+#                              [--service systemd|foreground]
 # Env (sandbox seams, docs/BREAK-IT.md `node-install-half`): FLEET_NODE_STATE
 #   (/var/db/fleet-node) · FLEET_NODE_ROOT (/Library/Application Support/claude-fleet) ·
 #   FLEET_NODE_LOG · FLEET_NODE_DAEMON_DIR · FLEET_NODE_LAUNCHCTL · FLEET_NODE_TEST=1
@@ -54,7 +56,7 @@
 set -uo pipefail
 
 PROG=fleet-node-install
-CODE="" HUB="" TARGET="" RKEY=""
+CODE="" HUB="" TARGET="" RKEY="" CODE_FILE="" LOGIN="" LOGIN_CODE_FILE="" SERVICE=""
 usage() {
   if [ -f "$0" ]; then sed -n '2,/^set -uo pipefail/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'
   else echo "usage: fleet-node-install.sh --join <fj_code> --hub <url> [--target <sha>] [--release-key <file>]"; fi
@@ -63,6 +65,10 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --join) CODE="${2:-}"; shift ;;
     --join=*) CODE="${1#--join=}" ;;
+    --join-file) CODE_FILE="${2:-}"; shift ;;
+    --login) LOGIN="${2:-}"; shift ;;
+    --login-join-file) LOGIN_CODE_FILE="${2:-}"; shift ;;
+    --service) SERVICE="${2:-}"; shift ;;
     --hub) HUB="${2:-}"; shift ;;
     --hub=*) HUB="${1#--hub=}" ;;
     --target) TARGET="${2:-}"; shift ;;
@@ -72,6 +78,12 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
+if [ -n "$CODE_FILE" ]; then
+  [ -r "$CODE_FILE" ] || { echo "$PROG: cannot read join-code file" >&2; exit 2; }
+  CODE=$(cat "$CODE_FILE")
+fi
+case "$SERVICE" in ''|systemd|foreground) ;; *) echo "$PROG: --service systemd|foreground" >&2; exit 2 ;; esac
+[ -z "$SERVICE" ] || export FLEET_NODE_SERVICE="$SERVICE"
 if [ -n "$CODE" ] && ! printf '%s' "$CODE" | grep -Eq '^fj_[a-z2-7]{26}$'; then
   echo "$PROG: --join does not look like a join code (fj_ + 26 characters)" >&2; exit 2
 fi
@@ -81,7 +93,10 @@ if [ -n "$RKEY" ] && [ ! -r "$RKEY" ]; then echo "$PROG: --release-key $RKEY is 
 here=""
 [ -f "$0" ] && here="$(cd "$(dirname "$0")" && pwd -P)"
 STATE="${FLEET_NODE_STATE:-/var/db/fleet-node}"
-ROOT="${FLEET_NODE_ROOT:-/Library/Application Support/claude-fleet}"
+OS="${FLEET_NODE_INSTALL_OS:-$(uname -s | tr '[:upper:]' '[:lower:]')}"
+DEFAULT_ROOT='/Library/Application Support/claude-fleet'
+[ "$OS" != linux ] || DEFAULT_ROOT=/opt/claude-fleet
+ROOT="${FLEET_NODE_ROOT:-$DEFAULT_ROOT}"
 CUR="$ROOT/current"
 ENVF="$STATE/machine.env"
 PUB="$STATE/release.pub"
@@ -90,7 +105,9 @@ CURL="${FLEET_NODE_INSTALL_CURL:-curl}"
 PY="${FLEET_NODE_PYTHON:-/usr/bin/python3}"
 SSHDIR="${FLEET_NODE_SSH_DIR:-/etc/ssh}"
 SSHD="${FLEET_NODE_SSHD-/usr/sbin/sshd}"
-ROLE="${FLEET_CREDSEP_ROLE:-_fleetcred}"
+DEFAULT_ROLE=_fleetcred
+[ "$OS" != linux ] || DEFAULT_ROLE=fleetcred
+ROLE="${FLEET_CREDSEP_ROLE:-$DEFAULT_ROLE}"
 OS="${FLEET_NODE_INSTALL_OS:-$(uname -s | tr '[:upper:]' '[:lower:]')}"
 ARCH="${FLEET_NODE_INSTALL_ARCH:-$(uname -m)}"
 case "$ARCH" in x86_64|amd64) ARCH=amd64 ;; arm64|aarch64) ARCH=arm64 ;; esac
@@ -128,7 +145,16 @@ envval() { [ -r "$ENVF" ] && sed -n "s/^$1=//p" "$ENVF" | head -n 1; }
 if [ "$(id -u)" != 0 ] && [ "${FLEET_NODE_TEST:-}" != 1 ]; then
   fail 检查 "要以 root 运行（它写 /Library、/var/db 和 /etc/ssh）：sudo fleet node install --join <码>"
 fi
-[ "$OS" = darwin ] || fail 检查 "托管机器只做 macOS（这台是 ${OS}）"
+case "$OS" in darwin|linux) ;; *) fail 检查 "unsupported platform: $OS" ;; esac
+if [ "$OS" = linux ]; then
+  export FLEET_NODE_SERVICE="${FLEET_NODE_SERVICE:-systemd}"
+  for dep in python3 curl useradd groupadd ssh-keygen; do
+    command -v "$dep" >/dev/null 2>&1 || fail 检查 "missing $dep: install the Linux prerequisites in docs/MANAGED-LINUX.md"
+  done
+  if [ "${FLEET_NODE_SERVICE:-systemd}" != foreground ]; then
+    command -v systemctl >/dev/null 2>&1 || fail 检查 "Linux needs systemd; use --service foreground inside a container"
+  fi
+fi
 "$PY" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)' >/dev/null 2>&1 \
   || fail 检查 "$PY 不能用 — 先装 Xcode 命令行工具：xcode-select --install"
 command -v "$CURL" >/dev/null 2>&1 || fail 检查 "没有 curl"
@@ -141,7 +167,7 @@ case "$HUB" in
 esac
 RERUN="sudo fleet node install --join <码> --hub $HUB"
 mkdir -p "$STATE" && chmod 755 "$STATE" || fail 检查 "建不了 $STATE"
-ok 检查 "root · macOS $ARCH · $("$PY" -c 'import platform; print("python " + platform.python_version())')"
+ok 检查 "root · $OS $ARCH · $("$PY" -c 'import platform; print("python " + platform.python_version())')"
 
 # ---------------------------------------------------------------- 加入 ----------
 TOKEN="$(envval CCQUOTA_TOKEN)"
@@ -150,6 +176,9 @@ if [ -n "$TOKEN" ] && [ "$(envval CCQUOTA_HUB_URL)" = "$HUB" ] \
    && [ "$(req GET /v1/node/self "$WORK/self" "" "$TOKEN")" = 200 ]; then
   skip 加入 "这台机器已加入 ${HUB}（入口仍认 $ENVF 里的令牌）"
 else
+  if [ "${FLEET_NODE_UPDATE_OWNER:-hub}" = image ] && [ -n "$TOKEN" ]; then
+    fail 加入 "persisted machine identity could not be verified; retry connectivity or repair enrollment explicitly (never re-enroll a pod automatically)"
+  fi
   if [ -z "$CODE" ]; then
     if [ -n "$TOKEN" ]; then fail 加入 "入口不再认 $ENVF 里的令牌 — 在入口「机器」页点「添加机器」拿一个新码，加 --join <码> 重跑"
     else fail 加入 "要一个加入码：在入口「机器」页点「添加机器」，加 --join <码> 重跑"; fi
@@ -239,7 +268,7 @@ else
     -H "Authorization: Bearer $TOKEN" "$HUB/v1/node/dist/$OS-$ARCH" 2>/dev/null) || code=000
   [ "$code" = 200 ] || fail ccquota "入口没给 ccquota-$OS-${ARCH}（HTTP ${code}）"
   want="$(tr -d '\r' < "$WORK/dist.h" | sed -n 's/^[Xx]-[Cc]cquota-[Ss]ha256: *//p' | head -n 1)"
-  got="$(shasum -a 256 "$WORK/ccquota" | awk '{print $1}')"
+  got="$("$PY" -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$WORK/ccquota")"
   [ -n "$want" ] && [ "$want" = "$got" ] || fail ccquota "下载的 ccquota 校验和不对（要 ${want:-?}，得 ${got}）"
   mkdir -p "$STATE/bin" && chmod 755 "$STATE/bin" || fail ccquota "建不了 $STATE/bin"
   put "$WORK/ccquota" "$CCQ" 755 || fail ccquota "写不了 $CCQ"
@@ -249,7 +278,11 @@ fi
 # ---------------------------------------------------------------- 运行时 --------
 cur_sha() { basename "$(readlink "$CUR" 2>/dev/null)"; }
 staged() { [ -L "$CUR" ] && [ -f "$CUR/.release/staged.json" ] && [ -f "$CUR/bin/fleet-node-supervisor.py" ]; }
-if staged && [ -z "$TARGET" ]; then
+if [ "${FLEET_NODE_UPDATE_OWNER:-hub}" = image ]; then
+  staged || fail 运行时 "the image must contain a complete pinned runtime at $CUR"
+  [ -z "$TARGET" ] || [ "$(cur_sha)" = "$TARGET" ] || fail 运行时 "change the image to select another runtime"
+  skip 运行时 "image-owned runtime $(cur_sha); Kubernetes owns upgrades"
+elif staged && [ -z "$TARGET" ]; then
   skip 运行时 "current = $(cur_sha | cut -c1-12)（之后由守护的更新器跟发布版走）"
 else
   upd=""
@@ -351,7 +384,9 @@ esac
 # cannot be set up now is no stop — the remove says why when it runs.
 RMSSH="$CUR/bin/fleet-login-remove-ssh.sh"
 ADM="${SUDO_USER:-}"
-if [ ! -f "$RMSSH" ]; then
+if [ "$OS" != darwin ]; then
+  skip 删号通道 "Linux does not use the macOS deletion channel"
+elif [ ! -f "$RMSSH" ]; then
   skip 删号通道 "这一版没有 $RMSSH"
 elif [ -z "$ADM" ] || [ "$ADM" = root ] || ! id -Gn "$ADM" 2>/dev/null | tr ' ' '\n' | grep -qx admin; then
   skip 删号通道 "不是从管理员账号 sudo 跑的，删号时再设"
@@ -359,6 +394,13 @@ elif out="$(bash "$RMSSH" setup --admin "$ADM" 2>&1)"; then
   ok 删号通道 "$(printf '%s' "$out" | tail -n 1)；还要：系统设置 › 共享 › 远程登录 › ⓘ 打开「允许远程用户完全磁盘访问」"
 else
   skip 删号通道 "$(printf '%s' "$out" | tail -n 1)"
+fi
+
+# A first Linux tenant is enrolled separately from the machine identity.
+if [ -n "$LOGIN" ]; then
+  [ "$OS" = linux ] || fail 账号 "--login is the Linux bootstrap; macOS uses its existing account opener"
+  "$PY" -I "$CUR/bin/fleet-node-linux.py" prepare --login "$LOGIN" --hub "$HUB" \
+    ${LOGIN_CODE_FILE:+--join-file "$LOGIN_CODE_FILE"} || fail 账号 "Linux tenant preparation failed"
 fi
 
 # ---------------------------------------------------------------- 守护 ----------
@@ -369,6 +411,10 @@ if "$PY" -I "$SUP" install --check >/dev/null 2>&1; then
 else
   out="$("$PY" -I "$SUP" install 2>&1)" || fail 守护 "$(printf '%s' "$out" | tail -n 1)"
   ok 守护 "$(printf '%s' "$out" | tail -n 1)"
+fi
+
+if [ -n "$LOGIN" ] && [ "${FLEET_NODE_SERVICE:-systemd}" != foreground ]; then
+  "$PY" -I "$CUR/bin/fleet-node-linux.py" bootstrap --login "$LOGIN" || fail 账号 "tenant bootstrap failed; rerun to resume"
 fi
 
 if [ -n "$joined" ]; then

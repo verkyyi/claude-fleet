@@ -177,7 +177,22 @@ import sys
 import tempfile
 import time
 
+# Existing launchd fixtures run on Linux CI too; this seam never applies on a node.
+MAC = sys.platform == "darwin" or (os.environ.get("FLEET_NODE_TEST") == "1"
+                                     and "FLEET_NODE_LAUNCHCTL" in os.environ)
 LABEL = "com.claude-fleet.node"
+SYSTEMD_UNIT = "claude-fleet-node.service"
+DEFAULT_ROOT = "/Library/Application Support/claude-fleet" if MAC else "/opt/claude-fleet"
+# Non-secret managed settings needed by root children AND demoted tenant jobs.
+NODE_ENV_KEYS = ("FLEET_NODE_ROOT", "FLEET_NODE_STATE", "FLEET_NODE_RUNTIME", "FLEET_NODE_LOG",
+                 "FLEET_NODE_USERS", "FLEET_NODE_SERVICE", "FLEET_NODE_UPDATE_OWNER", "FLEET_NODE_BOOT_ID",
+                 "FLEET_CREDSEP_LIB", "FLEET_CREDSEP_ROOT_BASE", "FLEET_CREDSEP_RUN_BASE",
+                 "FLEET_CREDSEP_ROLE", "FLEET_NODE_SSHD")
+
+
+def node_environment():
+    return {k: os.environ[k] for k in NODE_ENV_KEYS if os.environ.get(k)}
+
 # A fleet plist name, and a LEFTOVER of one: anything after `.plist`.
 FLEET_PLIST_RE = re.compile(r"^(com\.claude-fleet\.|com\.ccquota\.)")
 LEFTOVER_RE = re.compile(r"^(com\.claude-fleet\.|com\.ccquota\.).*\.plist\..+$")
@@ -204,9 +219,9 @@ class Paths(object):
     def __init__(self):
         self.state = env("FLEET_NODE_STATE", "/var/db/fleet-node")
         self.log = env("FLEET_NODE_LOG", "/var/log/fleet-node")
-        self.runtime = env("FLEET_NODE_RUNTIME", "/Library/Application Support/claude-fleet/current")
-        self.daemon_dir = env("FLEET_NODE_DAEMON_DIR", "/Library/LaunchDaemons")
-        self.users = env("FLEET_NODE_USERS", "/Users")
+        self.runtime = env("FLEET_NODE_RUNTIME", os.path.join(env("FLEET_NODE_ROOT", DEFAULT_ROOT), "current"))
+        self.daemon_dir = env("FLEET_NODE_DAEMON_DIR", "/Library/LaunchDaemons" if MAC else "/etc/systemd/system")
+        self.users = env("FLEET_NODE_USERS", "/Users" if MAC else "/home")
         self.state_file = os.path.join(self.state, "state.json")
         self.attic = os.path.join(self.state, "attic")
         self.attic_index = os.path.join(self.attic, "index.json")
@@ -215,7 +230,7 @@ class Paths(object):
         self.expected = os.path.join(self.state, "expected.json")
         self.accounts = os.path.join(self.state, "accounts.json")
         self.logins = os.path.join(self.state, "logins")
-        self.plist = os.path.join(self.daemon_dir, LABEL + ".plist")
+        self.plist = os.path.join(self.daemon_dir, LABEL + ".plist" if MAC else SYSTEMD_UNIT)
 
 
 def now():
@@ -401,9 +416,9 @@ def descendant_cmds(pid):
 # --------------------------------------------------------------- the table -----
 def default_table(paths):
     rt_bin = os.path.join(paths.runtime, "bin")
-    cred_lib = env("FLEET_CREDSEP_LIB", "/Library/Application Support/claude-fleet/credsep")
+    cred_lib = env("FLEET_CREDSEP_LIB", "/Library/Application Support/claude-fleet/credsep" if MAC else "/usr/local/lib/claude-fleet/credsep")
     launcher = os.path.join(cred_lib, "fleet-credsep-launch.py")
-    return {
+    table = {
         "children": [
             {"name": "cred-proxy-shared",
              "cmd": ["/usr/bin/python3", "-I", launcher, "shared"],
@@ -468,6 +483,11 @@ def default_table(paths):
         # give the list itself, in account_units' shape.
         "account": None,
     }
+    if env("FLEET_NODE_UPDATE_OWNER", "hub") == "image":
+        table["tasks"] = [t for t in table["tasks"] if t["name"] != "update"]
+    if not MAC and env("FLEET_NODE_SSHD", "0") == "1":
+        table["children"].append({"name": "sshd", "cmd": ["/usr/sbin/sshd", "-D", "-e"]})
+    return table
 
 
 def load_table(paths):
@@ -488,6 +508,8 @@ def brew_prefix():
     v = os.environ.get("FLEET_NODE_BREW_PREFIX")
     if v:
         return v
+    if not MAC:
+        return "/usr"
     return "/opt/homebrew" if os.path.isdir("/opt/homebrew") or not os.path.isdir("/usr/local/bin") else "/usr/local"
 
 
@@ -599,8 +621,9 @@ def tenant_privileges(login):
                                     universal_newlines=True, timeout=10).split()
     except (OSError, subprocess.SubprocessError):
         g = []
-    if "admin" in g:
-        why.append("admin 组")
+    for group in (("admin",) if MAC else ("sudo", "wheel", "admin", "docker", "lxd", "incus")):
+        if group in g:
+            why.append("%s 组" % group)
     if os.geteuid() != 0:
         return why, False
     try:
@@ -729,6 +752,7 @@ def account_entry(unit, login, ident, brew):
     e.update(HOME=home, USER=login, LOGNAME=login,
              FLEET_CONF_DIR=os.path.join(home, ".config", "claude-fleet"),
              FLEET_NODE_ACCOUNT=login)
+    e.update(node_environment())
     ent = {"name": "%s/%s" % (login, unit["name"]), "account": login, "unit": unit["name"],
            "uid": uid, "gid": gid, "home": home, "env": e, "script": None,
            "cmd": ["/bin/sh", "-c", ACCOUNT_SH, "fleet-account",
@@ -1323,9 +1347,7 @@ class Supervisor(object):
             "LANG": "en_US.UTF-8",
             "FLEET_NODE": "1",
         }
-        for k in ("FLEET_CREDSEP_LIB",):
-            if os.environ.get(k):
-                e[k] = os.environ[k]
+        e.update(node_environment())
         e.update(extra or {})
         return e
 
@@ -1334,6 +1356,10 @@ class Supervisor(object):
 
     # -- children
     def adopt(self):
+        boot = os.environ.get("FLEET_NODE_BOOT_ID")
+        if boot and (self.state.get("supervisor") or {}).get("boot_id") != boot:
+            self.state["children"] = {}
+            return
         for c in self.all_children():
             cs = self.state["children"].get(c["name"]) or {}
             pid = cs.get("pid")
@@ -1850,6 +1876,7 @@ class Supervisor(object):
                 ts.update(state="interrupted", pid=None)
         self.state["supervisor"]["runtime"] = runtime_sha(self.p)
         self.adopt()
+        self.state["supervisor"]["boot_id"] = os.environ.get("FLEET_NODE_BOOT_ID", "")
         self.log("supervisor up pid %d (start #%d) on %s" % (os.getpid(), self.state["supervisor"]["starts"],
                                                             self.state["supervisor"]["runtime"] or "?"))
         tick = env_num("FLEET_NODE_TICK", 1)
@@ -1900,6 +1927,8 @@ class Supervisor(object):
         code and its children the old binaries — stop them all and exit; launchd's
         KeepAlive starts the new one from `current`. A request naming the version
         this process already runs is done: removed."""
+        if env("FLEET_NODE_UPDATE_OWNER", "hub") == "image":
+            return False
         req = os.path.join(self.p.state, "update-restart.json")
         if not os.path.exists(req):
             return False
@@ -2520,7 +2549,7 @@ def _env_file(path, uid, also=()):
 
 def _role_uids():
     try:
-        return (pwd.getpwnam(env("FLEET_CREDSEP_ROLE", "_fleetcred")).pw_uid,)
+        return (pwd.getpwnam(env("FLEET_CREDSEP_ROLE", "_fleetcred" if MAC else "fleetcred")).pw_uid,)
     except KeyError:
         return ()
 
@@ -3138,6 +3167,29 @@ def launchctl(*args):
     return subprocess.call([lc] + list(args), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
+def systemd_body(paths):
+    # JSON quoting is also valid systemd quoted-word escaping; reject newlines.
+    values = node_environment()
+    values.update(FLEET_NODE_ROOT=env("FLEET_NODE_ROOT", DEFAULT_ROOT),
+                  FLEET_NODE_RUNTIME=paths.runtime, FLEET_NODE_STATE=paths.state,
+                  FLEET_NODE_LOG=paths.log, FLEET_NODE_USERS=paths.users)
+    for v in values.values():
+        if "\n" in v or "\r" in v or "%" in v:
+            raise ValueError("invalid systemd setting")
+    args = ["/usr/bin/python3", "-I", os.path.join(paths.runtime, "bin", "fleet-node-supervisor.py"), "run"]
+    return ("[Unit]\nDescription=Fleet managed node\nAfter=network-online.target\nWants=network-online.target\n\n"
+            "[Service]\nType=simple\n" +
+            "".join("Environment=%s\n" % json.dumps(k + "=" + v) for k, v in sorted(values.items())) +
+            "ExecStart=%s\nRestart=always\nRestartSec=5\nKillMode=mixed\nTimeoutStopSec=120\n"
+            "LimitNOFILE=65536\nUMask=0022\n\n[Install]\nWantedBy=multi-user.target\n"
+            % " ".join(json.dumps(a) for a in args))
+
+
+def systemctl(*args):
+    return subprocess.call([env("FLEET_NODE_SYSTEMCTL", "systemctl")] + list(args),
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
 def install(paths):
     if os.geteuid() != 0 and env("FLEET_NODE_TEST", "") != "1":
         print("fleet-node-supervisor: install writes %s — run it as root (sudo)" % paths.plist, file=sys.stderr)
@@ -3148,6 +3200,19 @@ def install(paths):
               "runtime (共同约定 3); stage it first" % script, file=sys.stderr)
         return 1
     Supervisor(paths, {"children": [], "tasks": []}).ensure_dirs()
+    if env("FLEET_NODE_SERVICE", "") == "foreground":
+        print("foreground: the container starts the supervisor")
+        return 0
+    if not MAC:
+        os.makedirs(paths.daemon_dir, exist_ok=True)
+        tmp = paths.plist + ".tmp-node"
+        with open(tmp, "w") as f:
+            f.write(systemd_body(paths))
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, paths.plist)
+        if systemctl("daemon-reload") or systemctl("enable", "--now", SYSTEMD_UNIT):
+            return 1
+        return systemctl("restart", SYSTEMD_UNIT)
     tmp = paths.plist + ".tmp-node"
     with open(tmp, "wb") as f:
         plistlib.dump(plist_body(paths), f)
@@ -3162,6 +3227,16 @@ def install(paths):
 def install_check(paths):
     """0 = the LaunchDaemon on disk is the one install writes and launchd has it
     loaded (`fleet node install`'s 守护 step skips); 1 = install would change it."""
+    if env("FLEET_NODE_SERVICE", "") == "foreground":
+        return 0
+    if not MAC:
+        try:
+            with open(paths.plist) as f:
+                if f.read() != systemd_body(paths):
+                    return 1
+        except OSError:
+            return 1
+        return systemctl("is-active", "--quiet", SYSTEMD_UNIT)
     try:
         with open(paths.plist, "rb") as f:
             if plistlib.load(f) != plist_body(paths):
@@ -3172,7 +3247,10 @@ def install_check(paths):
 
 
 def uninstall(paths):
-    launchctl("bootout", "system/" + LABEL)
+    if not MAC:
+        systemctl("disable", "--now", SYSTEMD_UNIT)
+    else:
+        launchctl("bootout", "system/" + LABEL)
     try:
         os.remove(paths.plist)
     except OSError:
