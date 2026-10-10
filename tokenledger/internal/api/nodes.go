@@ -98,6 +98,9 @@ type nodeConn struct {
 	// canSSHRelay is the hello's CapSSHRelay: this node splices relays onto its
 	// sshd (claude-fleet#1413). Set once, before the conn is published.
 	canSSHRelay bool
+	// canServiceLog is the hello's CapServiceLog: this machine program's lane
+	// reads its login's service logs (claude-fleet#2797).
+	canServiceLog bool
 	// canOAuthRefresh is the hello's CapOAuthRefresh: this admin node posts
 	// one token refresh to the provider from its own network and hands the
 	// answer back (claude-fleet#1490). Set once, before the conn is published.
@@ -394,9 +397,10 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 		canWrite: hp.HasCap(control.CapWrite), canRelay: hp.HasCap(control.CapRelay),
 		canMove: hp.HasCap(control.CapMove), canSSHRelay: hp.HasCap(control.CapSSHRelay),
 		canTeam: hp.HasCap(control.CapTeam), canPerson: hp.HasCap(control.CapPerson), canAttach: hp.HasCap(control.CapAttach),
-		canTest:    hp.HasCap(control.CapTestIdentity),
-		canCredsep: hp.HasCap(control.CapCredsep),
-		computeOff: !control.ComputeOn(hp.Compute), computeForce: hp.ComputeForce, probe: hp.Probe,
+		canTest:       hp.HasCap(control.CapTestIdentity),
+		canCredsep:    hp.HasCap(control.CapCredsep),
+		canServiceLog: hp.HasCap(control.CapServiceLog),
+		computeOff:    !control.ComputeOn(hp.Compute), computeForce: hp.ComputeForce, probe: hp.Probe,
 		personal: hp.Personal, machineLink: hp.HasCap(control.CapMachine),
 		helloAt: time.Now().UTC(), agentVersion: hp.AgentVersion}
 	// The refresh relay is an ADMIN role: a node that offers it without
@@ -423,6 +427,9 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 	// has dropped its halves, and the client deserves a clean close, not a
 	// stream that silently stops moving.
 	defer s.sshRelays.closeNode(nc)
+	// So do the service logs it was following (claude-fleet#2797): each
+	// viewer is told, and its page reconnects.
+	defer s.svcLogs.closeNode(nc)
 	if nc.admin {
 		// Every admin connect re-sends the SSH user CA: the node checks
 		// what it already has, so a matching machine changes nothing
@@ -561,6 +568,9 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 			nc.pending.deliver(m)
 		case control.TypeSSHCAResult:
 			s.applySSHCAResult(ep.ID, nc, m)
+		case control.TypeServiceLogLines:
+			// A service's log, for the viewers following it (claude-fleet#2797).
+			s.svcLogs.deliver(nc, m)
 		case control.TypeOAuthRefreshResult:
 			// A relayed token refresh's answer (claude-fleet#1490) goes to
 			// the lease that is waiting on it; nothing of it is kept here.
@@ -568,7 +578,7 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 		case control.TypeError:
 			// A refused hub read or write goes to its waiter; any other
 			// error is a refused account op.
-			if nc.pending.deliver(m) {
+			if nc.pending.deliver(m) || s.svcLogs.refused(nc, m) {
 				break
 			}
 			if nc.admin && m.Error != nil {

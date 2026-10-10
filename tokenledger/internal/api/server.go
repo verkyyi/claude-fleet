@@ -128,6 +128,9 @@ type Server struct {
 
 	// relays holds the relays in flight.
 	sshRelays sshRelayTable
+	// svcLogs are the service logs being followed (claude-fleet#2797): one
+	// node stream per service, however many viewers.
+	svcLogs svcLogHub
 	// clientLeases is each person's one connected client (claude-fleet#1715).
 	clientLeases clientLeaseTable
 

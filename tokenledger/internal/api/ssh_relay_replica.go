@@ -101,6 +101,9 @@ func (s *Server) proxyRelay(w http.ResponseWriter, r *http.Request, peer store.N
 	}
 	s.forwarded.Add(1)
 	rp := &httputil.ReverseProxy{
+		// A stream (a service log's events, claude-fleet#2797) is passed on
+		// as it comes; a websocket is hijacked and never buffered anyway.
+		FlushInterval: -1,
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.SetURL(target)
 			pr.SetXForwarded()

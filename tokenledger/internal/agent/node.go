@@ -205,6 +205,10 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 	if a.relaysOAuthRefresh() {
 		caps = append(caps, control.CapOAuthRefresh)
 	}
+	if a.serviceLogCapable() {
+		// A service's log, live (claude-fleet#2797).
+		caps = append(caps, control.CapServiceLog)
+	}
 	if a.cfg.FleetAdmin && credsepCapable(a.cfg.Home) {
 		// Every login this node's create op opens is separated (claude-fleet#2294).
 		caps = append(caps, control.CapCredsep)
@@ -301,6 +305,12 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 				if a.cfg.FleetSSHRelay {
 					go a.openSSHRelay(ctx, m)
 				}
+			case control.TypeServiceLog:
+				// One entry's log (claude-fleet#2797): a page, or a
+				// follow bound to this session — a dropped link ends it.
+				a.serviceLog(ctx, conn, m)
+			case control.TypeServiceLogStop:
+				a.svcLogs.stop(m.OpID)
 			case control.TypeOAuthRefresh:
 				// One token refresh posted for the hub (claude-fleet#1490),
 				// off the read loop so a slow provider never stalls it.

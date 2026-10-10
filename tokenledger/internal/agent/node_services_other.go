@@ -6,3 +6,6 @@ import "os"
 
 // openOwnedLog: no machine daemon here, so no service log is read.
 func openOwnedLog(string, int) (*os.File, os.FileInfo, bool) { return nil, nil, false }
+
+// fileID: no inode here.
+func fileID(os.FileInfo) (dev, ino uint64) { return 0, 0 }

@@ -193,6 +193,10 @@ type Config struct {
 	// for the hub's service_control (claude-fleet#2527); set only in machine
 	// mode, where the agent is root — "" refuses the write.
 	ServiceCtl string
+	// ServicesFile is the machine daemon's state.json (claude-fleet#2797): the
+	// register a tenant finds a service's log path in for the hub's
+	// service_log; set only in machine mode — "" refuses it.
+	ServicesFile string
 	// FleetNudgePath is the file claude-fleet touches when a window's state
 	// changes (claude-fleet#1481): $FLEET_CONF_DIR/global/hub-nudge. The
 	// agent beats at once when its mtime moves. Empty with Fleet on means
@@ -236,6 +240,9 @@ const spoolFraction = 4
 // Agent is a running collector.
 type Agent struct {
 	cfg Config
+	// svcLogs are the service-log follows open on this login's lane
+	// (claude-fleet#2797), by the hub's op_id.
+	svcLogs svcLogFollows
 	// machine is the machine link this agent is a tenant of
 	// (claude-fleet#2333); nil for a plain agent with its own link.
 	machine *machineLink

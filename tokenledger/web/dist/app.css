@@ -302,6 +302,16 @@ pre.out { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/
 .md-trend svg.spark { width: 100%; height: 56px; display: block; }
 .md-sh { display: flex; align-items: baseline; gap: 10px; margin: 0 2px 8px; }
 .md-sh h3 { font: 600 14px var(--f-ui); }
+/* 日志 (claude-fleet#2797): a service's log, live. */
+#md-logs { margin-top: 14px; }
+.logbox { margin: 0; max-height: 440px; min-height: 120px; overflow: auto; padding: 10px 14px; font: 12px/1.5 var(--f-mono); background: var(--panel-2); border-radius: 0 0 12px 12px; white-space: pre-wrap; word-break: break-all; outline: none; }
+.logbox:focus-visible { box-shadow: inset 0 0 0 2px var(--brand); }
+.logbox .ll { min-height: 1.5em; }
+.logbox .lt { color: var(--muted); margin-right: 10px; user-select: none; }
+.logbox .ll.lhead, .logbox .ll.skip { color: var(--muted); text-align: center; font-family: var(--f-ui); }
+.logbox .ll.skip { color: var(--warn); }
+.md-follow { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; color: var(--muted); cursor: pointer; }
+tr[data-svc][aria-selected="true"] td { background: var(--line-2); }
 .hint { font-size: 12px; color: var(--muted); }
 .fresh { font-size: 12px; color: var(--muted); white-space: nowrap; }
 .fresh.warn { color: var(--warn); }

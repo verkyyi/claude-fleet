@@ -212,6 +212,7 @@ What each replica keeps in its own memory, and why that is acceptable:
 |---|---|---|
 | node links (`nodes`), replies in flight (`pending`) | `nodes.go` | the reason for `fleet_node_conns`: a call for another replica's link is forwarded — session start/resume/move, live reads, relays, the SSH CA, a relayed token refresh; the roster, placement and `move plan` count those links as connected |
 | beat-driven pushes: worker map, team version, queued account ops, waiting relays | `pushWorkers` / `pushTeam` / `dispatchAccounts` / `dispatchRelays` | run by the holder on the node's next beat (≤ one heartbeat late); a relay accepted elsewhere also kicks the holder at once |
+| service-log follows (`svcLogs`) | `fleet_service_log.go` | the holder of the login's lane: one node stream per service fanned out to its viewers there; a viewer that lands on the other replica is reverse-proxied to it whole, the way an SSH relay is (claude-fleet#2797) |
 | SSH relays (`sshRelays`) | `ssh_relay.go`, `ssh_relay_replica.go` | a byte stream on the link — not forwardable per call, so a replica that holds no link able to relay to the machine reverse-proxies the client's whole websocket to the one that does (claude-fleet#2151), and an agent's data half that lands on the wrong replica is proxied to its link's holder the same way; the holder checks, audits and caps it as its own. The connect page counts the other replica's `ssh_relay` links as relayable |
 | starts just sent (`recent`, #2077) | `fleet_recent.go` | each replica counts its own: a burst split across both is spread a little less well until the beats show it (≤ 90 s); never a lost write |
 | session-pass verify cache (`sessCred`) | `fleet_session_cred.go` | ≤ 30 s: a revocation made through the other replica is seen within the TTL (one made here at once) |
@@ -671,6 +672,18 @@ services and tasks, versions, load and memory (the last hour's trend) and
 sessions, each block with the time it was measured (`*_at`, null = unknown),
 cut like the roster — a user opens only a machine one of their logins is on
 (else 404) and sees their own rows plus `other_logins`, a count.
+
+A service's or task's log follows below it (claude-fleet#2797):
+`GET /v1/nodes/<host>/services/<login>/<name>/log` is a Server-Sent Events
+stream (`lines` · `end` · `ping` every 20 s; `?before=<offset>` one page
+earlier as JSON, `HEAD` the may-I). A reader who may not see (host, login) gets
+403 before any node is asked; every line is masked on the hub (the team
+bundle's credential patterns → `••••`). The hub asks the login's lane once per
+service however many watch it (`service_log` follow, renewed every 20 s,
+`service_log_stop` 10 s after the last viewer; the node ends an unrenewed one
+at 60 s), and the machine program reads only the register's
+`<log>/logins/<login>/<name>.log` for the lane's own login — a lane says
+`CapServiceLog`, an older one is never asked (503).
 
 Set it on an **agent** and the agent dials OUT to the hub — a WebSocket over
 the hub URL you already gave it (`wss://` for `https://`), so a machine behind

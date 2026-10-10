@@ -26,3 +26,11 @@ func openOwnedLog(path string, uid int) (*os.File, os.FileInfo, bool) {
 	}
 	return f, fi, true
 }
+
+// fileID is fi's device and inode (0, 0 when the platform does not say).
+func fileID(fi os.FileInfo) (dev, ino uint64) {
+	if st, ok := fi.Sys().(*syscall.Stat_t); ok {
+		return uint64(st.Dev), uint64(st.Ino)
+	}
+	return 0, 0
+}
