@@ -1654,6 +1654,32 @@ def ctl_handle(req, t):
         write_private(own_path(cfg, kind, label), data)
         t.log(ev="store", kind=kind, acct=label, bytes=len(data))
         return {"ok": True}
+    if op == "pool-drop":
+        # the node's pool sweep (issue #2850): a token the hub no longer lists
+        # leaves the machine — every tenant's index entry naming it, then its
+        # file. Root only: it reaches past the calling tenant.
+        if not req.get("_root"):
+            return {"ok": False, "err": "pool-drop: root only"}
+        if not getattr(cfg, "pool", ""):
+            return {"ok": False, "err": "pool-drop: not the shared proxy"}
+        kind, key = req.get("kind") or "", req.get("key") or ""
+        if kind not in POOL_FILE or not re.match(r"^[0-9a-f]{32}$", key):
+            return {"ok": False, "err": "pool-drop: kind claude|codex and a 32-hex key"}
+        dropped = []
+        with POOL_LOCK:
+            cfgs = [x.cfg for x in Proxy.tenants.values()]
+            for c in cfgs:
+                idx = pool_index(c)
+                gone = [k for k, v in idx.items() if v == key and k.startswith(kind + ":")]
+                for k in gone:
+                    del idx[k]
+                    dropped.append(k.split(":", 1)[1])
+                if gone:
+                    write_json(os.path.join(c.state, "pool.json"), idx)
+            shutil.rmtree(os.path.join(cfg.pool, kind, key), ignore_errors=True)
+            pool_gc(cfg.pool, cfgs)
+        t.log(ev="pool_drop", kind=kind, pool=key[:12], accts=",".join(sorted(set(dropped))) or "-")
+        return {"ok": True, "labels": sorted(set(dropped))}
     if op == "accounts":
         # a separated login cannot read its leased files: when each Claude
         # account's lease runs out — the expiry only, never a token (issue #2308)

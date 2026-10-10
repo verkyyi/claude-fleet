@@ -18,6 +18,9 @@
 #   cred-pool-dup       bin/fleet-cred-proxy.py pool_held / pool_resolve / store, bin/fleet-credsep.py
 #                       machine pooldup (issue #2849): a token held twice — the pool's and a
 #                       login's own accounts/<label>.hub — is seen, and folds back to ONE
+#   cred-pool-follows-hub   bin/fleet-credsep.py machine pool-sync + bin/fleet-cred-proxy.py
+#                       pool-drop (issue #2850): the hub puts / revokes a pool token, the
+#                       pool follows in one sync (bin/fleet-node-update.py sync_pool runs it)
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT / CP are read by the sourced runner
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -351,6 +354,69 @@ drill_cred_pool_dup() {
     || { WHY="pooldup after the fold (rc $rc): $(printf '%s' "$out" | tail -1)"; dup_down; return 1; }
   dup_down
   WHAT="同一令牌两份（共享池一份 + alpha 按登录的 accounts/a1.hub 一份，machine join 的 pool_hold 没落到在跑的代理）：machine pooldup WARN 点名 alpha:a1；hold 一撤，下一次续租 + 请求就并回池里一份，两个登录都 200，pooldup OK"
+}
+
+# cred-pool-follows-hub (issue #2850): the hub's pool changes — a new one-year
+# token put, an old one revoked. Before: the machine's shared pool stayed as it
+# was at join (a new token waited for some login's lease, hours out; a revoked
+# one stayed for good). Now each updater round runs `machine pool-sync`: the
+# hub's manifest (fingerprint + expiry, no token) against the pool — the new
+# one pulled through the login's own lease, the revoked one dropped from every
+# index and from disk, a token near its end a WARN.
+drill_cred_pool_follows_hub() {
+  CAP=10   # put → in the pool, revoke → gone: one sync each (two HTTP calls + a ctl store / drop)
+  local t0 out far hp
+  shared_up poolsync || return 1
+  far='2100-01-01T00:00:00Z'
+  cat > "$SB/hub.py" <<'PY'
+import hashlib, json, sys
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+class H(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    def log_message(self, *a): pass
+    def ans(self, o):
+        b = json.dumps(o).encode()
+        self.send_response(200); self.send_header("content-length", str(len(b))); self.end_headers(); self.wfile.write(b)
+    def any(self):
+        n = int(self.headers.get("content-length") or 0)
+        if n: self.rfile.read(n)
+        pool = json.load(open(sys.argv[2]))
+        if self.path == "/v1/node/pool":
+            return self.ans({"pool": [{"provider": "claude", "account": a, "expires_at": e,
+                "fingerprint": hashlib.sha256(("claude\0" + t).encode()).hexdigest()[:32]} for a, t, e in pool]})
+        self.ans({"credentials": [{"provider": "claude", "account": a, "pool": True, "expires_at": e,
+            "access": {"access_token": t}} for a, t, e in pool]})
+    do_GET = do_POST = any
+s = ThreadingHTTPServer(("127.0.0.1", 0), H)
+open(sys.argv[1], "w").write(str(s.server_address[1]))
+s.serve_forever()
+PY
+  printf '[["a1","sk-ant-oat-a1","%s"],["a2","sk-ant-oat-a2","%s"]]' "$far" "$far" > "$SB/hub.state"
+  python3 "$SB/hub.py" "$SB/hub.port" "$SB/hub.state" 2>/dev/null &
+  printf '%s\n' "$!" >> "$WORK/cred-pids"
+  until_ok 10 test -s "$SB/hub.port" || { WHY="the fake hub did not start"; shared_down; return 1; }
+  hp=$(cat "$SB/hub.port")
+  mkdir -p "$SB/node/logins"
+  printf 'CCQUOTA_HUB_URL=http://127.0.0.1:%s\nCCQUOTA_TOKEN=mtok\n' "$hp" > "$SB/node/machine.env"
+  printf 'CCQUOTA_TOKEN=atok\n' > "$SB/node/logins/alpha.env"
+  psync() { FLEET_NODE_STATE="$SB/node" python3 -I "$BIN/fleet-credsep.py" machine pool-sync 2>&1; }
+  out=$(psync) || { WHY="pool-sync (the hub as joined): $(printf '%s' "$out" | tail -2 | tr '\n' ' ')"; shared_down; return 1; }
+  # the hub: a3 put (ten days left), a2 revoked
+  printf '[["a1","sk-ant-oat-a1","%s"],["a3","sk-ant-oat-a3","%s"]]' "$far" \
+    "$(python3 -c 'import time; print(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time()+10*86400)))')" > "$SB/hub.state"
+  t0=$(now)
+  out=$(psync) || { WHY="pool-sync after the hub changed: $(printf '%s' "$out" | tail -2 | tr '\n' ' ')"; shared_down; return 1; }
+  SECS=$(since "$t0")
+  grep -rqs sk-ant-oat-a3 "$SB/db/.shared/pool/claude" && grep -qs '"claude:a3"' "$SB/db/alpha/cred-proxy/pool.json" \
+    || { WHY="the token the hub put is not in the pool: $(printf '%s' "$out" | tr '\n' ' ')"; shared_down; return 1; }
+  ! grep -rqs sk-ant-oat-a2 "$SB/db/.shared/pool/claude" && ! grep -qs '"claude:a2"' "$SB/db/alpha/cred-proxy/pool.json" \
+    || { WHY="the token the hub revoked is still on the machine: $(printf '%s' "$out" | tr '\n' ' ')"; shared_down; return 1; }
+  grep -rqs sk-ant-oat-a1 "$SB/db/.shared/pool/claude" || { WHY="a1 (unchanged) went too"; shared_down; return 1; }
+  printf '%s' "$out" | grep -q '^WARN pool: a3 expires' || { WHY="no WARN for a3 (10 days left): $out"; shared_down; return 1; }
+  case "$(bash "$BIN/fleet-credsep.sh" machine status 2>&1)" in *"pool synced "*) ;;
+    *) WHY="machine status shows no pool sync time"; shared_down; return 1 ;; esac
+  shared_down
+  WHAT="入口 put a3、吊销 a2：一轮 pool-sync 内 a3 进池（经 alpha 自己的租约）、a2 从索引和磁盘一起删掉、a1 不动；a3 剩 10 天打 WARN，machine status 显示同步时间"
 }
 
 cred_run_drills "$0"

@@ -784,6 +784,18 @@ class I_Credsep(Sandbox):
         p.send_signal(signal.SIGTERM)
         p.wait(timeout=15)
 
+    def test_every_round_syncs_the_pool(self):
+        """issue #2850: each round also runs `machine pool-sync` — the hub's manifest
+        is asked (here a hub that does not answer: noted, the pool left alone)."""
+        with open(os.path.join(self.d, "db", "machine.env"), "w") as f:
+            f.write("CCQUOTA_HUB_URL=http://127.0.0.1:9\nCCQUOTA_TOKEN=mtok\n")
+        self.install(V1)
+        rec = os.path.join(self.env["FLEET_CREDSEP_ROOT_BASE"], ".pool-sync.json")
+        with open(rec) as f:
+            st = json.load(f)
+        self.assertTrue(st.get("tried") and "manifest" in st.get("error", ""), st)
+        self.assertNotIn("mtok", open(rec).read())
+
     def test_legacy_proxy_is_restarted_and_drift_healed(self):
         """launchd still runs the proxy (its plist is there): machine refresh restarts it."""
         with open(self.svc, "w") as f:

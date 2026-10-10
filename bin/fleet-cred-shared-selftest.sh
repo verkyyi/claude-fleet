@@ -39,6 +39,12 @@
 #      login's only for an account the asker also holds — never a sid or a token
 #   R  a separated login's fleet-session-cred.sh mint names no account (the proxy picks)
 #      and its rebind exits 2 (issue #2412)
+#   S  the pool follows the hub's (issue #2850): `machine pool-sync` with no hub
+#      writes nothing (status unchanged); a token the hub puts appears in the pool
+#      in one sync — through the lease of a login the hub leases it to, never one
+#      it refuses — with a WARN inside 30 days and `machine status`'s sync time; a
+#      token the hub revokes is gone in one sync (every index entry, the file); a
+#      hub that does not answer leaves the pool alone and says so
 #   I  machine install whose agent bootstrap fails AND whose way back fails too:
 #      exit 5, the credentials back anyway, the store kept as <login>.rolledback-*,
 #      the steps to do by hand printed (the clean rollback is BREAK-IT
@@ -48,7 +54,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 SB=$(mktemp -d "/tmp/credshared-st.XXXXXX")
 ME=$(id -un); MYUID=$(id -u); MYGID=$(id -g); BUID=1999991
 cleanup() {
-  for f in "$SB/shared.pid" "$SB/alpha-own.pid" "$SB/fake.pid"; do kill "$(cat "$f" 2>/dev/null)" 2>/dev/null; done
+  for f in "$SB/shared.pid" "$SB/alpha-own.pid" "$SB/fake.pid" "$SB/hub.pid"; do kill "$(cat "$f" 2>/dev/null)" 2>/dev/null; done
   kill "$(cat "$SB/run/.shared/pid" 2>/dev/null)" 2>/dev/null
   rm -rf "$SB"
 }
@@ -252,6 +258,88 @@ out=$(FLEET_CONF_DIR="$CA" FLEET_CRED_PROXY=1 bash "$BIN/fleet-session-cred.sh" 
 [ "$rc" = 2 ] && pass "R fleet-session-cred.sh rebind (separated): refused, exit 2" || fail "R rebind rc=$rc: $out"
 FLEET_CONF_DIR="$CA" bash "$BIN/fleet-session-cred.sh" revoke --sid r1 >/dev/null 2>&1
 case "$(call "$PORT" "$cred")" in *revoked*) pass "R revoke (account=proxy): the session credential is dead" ;; *) fail "R revoke: $(call "$PORT" "$cred")" ;; esac
+
+# ── S: the pool follows the hub's manifest (issue #2850) ────────────────────────────
+pool_has() { grep -rqs "$1" "$SB/db/.shared/pool/claude"; }
+sync_pool() { FLEET_NODE_STATE="$SB/node" python3 -I "$BIN/fleet-credsep.py" machine pool-sync 2>&1; }
+P0=$(pool_n claude)
+out=$(sync_pool); rc=$?
+st=$(bash "$BIN/fleet-credsep.sh" machine status 2>&1)
+[ "$rc" = 3 ] && [ ! -e "$SB/db/.pool-sync.json" ] && case "$st" in *pool*) false ;; *) true ;; esac \
+  && pass "S no hub: pool-sync asks nothing, writes nothing, status unchanged" || fail "S no hub rc=$rc: $out / $st"
+cat > "$SB/hub.py" <<'PY'
+import hashlib, json, sys
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+st = sys.argv[2]
+class H(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    def log_message(self, *a): pass
+    def ans(self, code, o):
+        b = json.dumps(o).encode()
+        self.send_response(code); self.send_header("content-length", str(len(b))); self.end_headers(); self.wfile.write(b)
+    def any(self):
+        n = int(self.headers.get("content-length") or 0)
+        if n: self.rfile.read(n)
+        pool = json.load(open(st))          # [[account, token, expires_at]]
+        tok = self.headers.get("authorization", "")[7:]
+        if tok not in ("mtok", "atok", "btok"):
+            return self.ans(401, {"error": "unrecognised"})
+        if self.path == "/v1/node/pool":
+            return self.ans(200, {"at": "now", "pool": [{"provider": "claude", "account": a, "expires_at": e,
+                "fingerprint": hashlib.sha256(("claude\0" + t).encode()).hexdigest()[:32]} for a, t, e in pool]})
+        if self.path == "/v1/node/credentials":
+            if tok != "atok":
+                return self.ans(403, {"error": "untrusted"})
+            return self.ans(200, {"principal_id": "p", "credentials": [{"provider": "claude", "account": a, "pool": True,
+                "kind": "setup_token", "expires_at": e, "access": {"access_token": t, "scopes": ["user:inference"]}}
+                for a, t, e in pool]})
+        self.ans(404, {})
+    do_GET = do_POST = any
+s = ThreadingHTTPServer(("127.0.0.1", 0), H)
+open(sys.argv[1], "w").write(str(s.server_address[1]))
+s.serve_forever()
+PY
+far='2100-01-01T00:00:00Z'; soon=$(python3 -c 'import time; print(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time()+10*86400)))')
+base='["pool1","sk-ant-oat01-pool-v2","'$far'"]'     # the hub's pool; main / solo are the logins' own leases
+printf '[%s,["hubnew","sk-ant-oat01-HUBNEW","%s"]]' "$base" "$soon" > "$SB/hub.state"
+python3 "$SB/hub.py" "$SB/hub.port" "$SB/hub.state" & echo $! > "$SB/hub.pid"
+for _ in $(seq 1 300); do [ -s "$SB/hub.port" ] && break; sleep 0.1; done
+mkdir -p "$SB/node/logins"
+printf 'CCQUOTA_HUB_URL=http://127.0.0.1:%s\nCCQUOTA_TOKEN=mtok\n' "$(cat "$SB/hub.port")" > "$SB/node/machine.env"
+printf 'CCQUOTA_TOKEN=atok\n' > "$SB/node/logins/alpha.env"; printf 'CCQUOTA_TOKEN=btok\n' > "$SB/node/logins/beta.env"
+out=$(sync_pool); rc=$?
+ia=$(cat "$SB/db/alpha/cred-proxy/pool.json" 2>/dev/null); ib=$(cat "$SB/db/beta/cred-proxy/pool.json" 2>/dev/null)
+[ "$rc" = 0 ] && pool_has sk-ant-oat01-HUBNEW && [ "$(pool_n claude)" = $((P0 + 1)) ] \
+  && case "$ia" in *'"claude:hubnew"'*) true ;; *) false ;; esac && case "$ib" in *hubnew*) false ;; *) true ;; esac \
+  && printf '%s' "$out" | grep -q 'pulled hubnew' \
+  && pass "S put at the hub: in the pool after one sync, alpha's (leased), never beta's (refused)" \
+  || fail "S put rc=$rc pool=$(pool_n claude) alpha=$ia beta=$ib: $out"
+printf '%s' "$out" | grep -q '^WARN pool: hubnew expires .* (9 day(s))\|^WARN pool: hubnew expires .* (10 day(s))' \
+  && ! printf '%s' "$out" | grep -q 'WARN pool: pool1' \
+  && pass "S a token inside 30 days: WARN (a year out: none)" || fail "S warn: $out"
+st=$(bash "$BIN/fleet-credsep.sh" machine status 2>&1)
+case "$st" in *" · pool synced 20"*" · WARN pool expiring: hubnew ("*) pass "S machine status: the sync time and the expiring token" ;;
+  *) fail "S status: $st" ;; esac
+! grep -qs 'sk-ant-' "$SB/db/.pool-sync.json" "$SB/log/shared.log" && pass "S no token in the sync record or the log" \
+  || fail "S a token leaked into .pool-sync.json / shared.log"
+printf '[%s]' "$base" > "$SB/hub.state"
+out=$(sync_pool); rc=$?
+[ "$rc" = 0 ] && ! pool_has sk-ant-oat01-HUBNEW && [ "$(pool_n claude)" = "$P0" ] \
+  && ! grep -qs hubnew "$SB/db/alpha/cred-proxy/pool.json" && pool_has sk-ant-oat01-pool-v2 \
+  && pool_has sk-ant-oat01-alpha && pool_has sk-ant-oat01-beta-only \
+  && printf '%s' "$out" | grep -q 'dropped hubnew' \
+  && pass "S revoked at the hub: gone after one sync (index + file); the other pool token and the logins' own leases untouched" \
+  || fail "S revoke rc=$rc pool=$(pool_n claude): $out"
+T1=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["synced"])' "$SB/db/.pool-sync.json")
+kill "$(cat "$SB/hub.pid")" 2>/dev/null; sleep 0.3
+out=$(sync_pool); rc=$?
+st=$(bash "$BIN/fleet-credsep.sh" machine status 2>&1)
+[ "$rc" = 1 ] && [ "$(pool_n claude)" = "$P0" ] \
+  && [ "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["synced"])' "$SB/db/.pool-sync.json")" = "$T1" ] \
+  && case "$st" in *"pool sync failing"*) true ;; *) false ;; esac \
+  && pass "S hub down: the pool left alone, the last sync time kept, status says failing" \
+  || fail "S hub down rc=$rc: $out / $st"
+rm -rf "$SB/node" "$SB/db/.pool-sync.json"
 
 # ── D: no login reaches another's ────────────────────────────────────────────────
 out=$(FLEET_CRED_AS=beta FLEET_CONF_DIR="$CA" bash "$BIN/fleet-cred-proxy.sh" mint --account main --sid x 2>&1); rc=$?
