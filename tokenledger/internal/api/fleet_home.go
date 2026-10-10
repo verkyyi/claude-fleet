@@ -48,6 +48,7 @@ type HomeCandidate struct {
 	Online      bool     `json:"online"`
 	Sessions    int      `json:"sessions"`
 	LoadPerCore *float64 `json:"load_per_core,omitempty"`
+	CPUBusy     *float64 `json:"cpu_busy,omitempty"` // claude-fleet#2882
 	Score       float64  `json:"score"`
 	Last        bool     `json:"last,omitempty"`
 	Excluded    string   `json:"excluded,omitempty"`
@@ -132,7 +133,7 @@ func (s *Server) homePick(pid, last string, now time.Time) (HomeResponse, error)
 			c.Excluded = "no node has reported from it"
 		} else {
 			j := s.judge(store.FleetRow{Hostname: m.Hostname, OSUser: ep.OSUser, EndpointID: ep.EndpointID}, settings, accounts, now)
-			c.LoadPerCore, c.Score = j.LoadPerCore, j.Score
+			c.LoadPerCore, c.CPUBusy, c.Score = j.LoadPerCore, j.CPUBusy, j.Score
 			// Entering a machine over ssh needs it online — not a writable
 			// control channel, free memory or cap headroom, which gate new
 			// WORK, not a login.

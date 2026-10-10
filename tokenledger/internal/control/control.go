@@ -504,6 +504,16 @@ type Heartbeat struct {
 	// 4 critical. 0 (absent) is unknown: Linux and an older agent; placement
 	// excludes a machine at warn (2) or above, and never one for being unknown.
 	MemPressure int `json:"mem_pressure,omitempty"`
+	// CPUBusy is the share of the machine's CPU time spent in user + system
+	// over about the last minute, 0..1 (claude-fleet#2882): what placement
+	// gates on, since load1 counts every runnable process — two hundred small
+	// fleet processes read a 15-core machine at 20 while three cores work.
+	// Absent from an older agent and before the first minute was read; load
+	// is then the gate, as before.
+	CPUBusy *float64 `json:"cpu_busy,omitempty"`
+	// MaxCPUBusy is this machine's own CPU-busy ceiling for new sessions
+	// (machine.env FLEET_MAX_CPU_BUSY, 0..1); 0 = the hub's.
+	MaxCPUBusy float64 `json:"max_cpu_busy,omitempty"`
 	// SysAt is when Load1 / NCPU / MemFreeBytes / MemTotalBytes / MemPressure
 	// were read (claude-fleet#2798): the agent samples them on their own
 	// clock, so a beat held up by a slow fleet read never carries a stale or

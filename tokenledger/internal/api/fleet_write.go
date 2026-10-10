@@ -1092,6 +1092,7 @@ func validGHFields(s string) bool {
 // session wants ~1 GB, and the system keeps one session's worth on top.
 var (
 	maxLoadPerCore          = 0.8
+	maxCPUBusy              = 0.8
 	minFreeMem      float64 = 2 << 30
 	minFreeMemFrac          = 0.10
 	memPressureWarn         = 2
@@ -1101,8 +1102,49 @@ var (
 // (claude-fleet#2267: newcomer-e2e's hub, whose fake node reports a shared CI
 // runner's own load — the drill under test pushes it past 0.8). Unset, or not
 // a positive number: 0.8, as before.
+//
+// CCQUOTA_FLEET_MAX_CPU_BUSY is the hub's CPU-busy ceiling (claude-fleet#2882,
+// a share, default 0.8): the gate for a machine whose beat carries cpu_busy,
+// unless the beat names its own (max_cpu_busy, from machine.env). Load per
+// core gates only a machine whose agent does not read CPU busy yet.
 func init() {
 	maxLoadPerCore = loadCeiling(os.Getenv("CCQUOTA_FLEET_MAX_LOAD_PER_CORE"), maxLoadPerCore)
+	if v := loadCeiling(os.Getenv("CCQUOTA_FLEET_MAX_CPU_BUSY"), 0); v > 0 && v <= 1 {
+		maxCPUBusy = v
+	}
+}
+
+// cpuCeiling is the CPU-busy ceiling for a machine: its own when its beat
+// names a share in (0,1], else the hub's.
+func cpuCeiling(own float64) float64 {
+	if own > 0 && own <= 1 {
+		return own
+	}
+	return maxCPUBusy
+}
+
+// cpuVerdict judges a machine's CPU for a new session (claude-fleet#2882).
+// With a CPU-busy reading it is busy against cpuCeiling(own), the load only
+// shown beside it; without one it is load per core against maxLoadPerCore,
+// byte for byte the old rule. excluded is "" when there is room; eq is the
+// reading on the load-per-core scale the score reads (busy / ceiling ×
+// maxLoadPerCore), nil when there is neither.
+func cpuVerdict(busy *float64, own float64, loadPerCore *float64) (excluded string, eq *float64) {
+	if busy != nil {
+		ceil := cpuCeiling(own)
+		e := *busy / ceil * maxLoadPerCore
+		if *busy > ceil {
+			excluded = fmt.Sprintf("CPU busy %.0f%% > %.0f%%", *busy*100, ceil*100)
+			if loadPerCore != nil {
+				excluded += fmt.Sprintf(" (load %.2f/core)", *loadPerCore)
+			}
+		}
+		return excluded, &e
+	}
+	if loadPerCore != nil && *loadPerCore > maxLoadPerCore {
+		excluded = fmt.Sprintf("load %.2f/core > %.1f", *loadPerCore, maxLoadPerCore)
+	}
+	return excluded, loadPerCore
 }
 
 func loadCeiling(v string, def float64) float64 {
@@ -1129,7 +1171,12 @@ type Candidate struct {
 	FleetID    string `json:"fleet_id"`
 	FleetName  string `json:"fleet_name"`
 	// LoadPerCore is load1 / ncpu; nil when the node did not say.
-	LoadPerCore   *float64 `json:"load_per_core"`
+	LoadPerCore *float64 `json:"load_per_core"`
+	// CPUBusy is the machine's CPU busy over the last minute (0..1) and
+	// CPUBusyMax the ceiling it was judged against (claude-fleet#2882);
+	// both absent from an agent that does not read it — load then gates.
+	CPUBusy       *float64 `json:"cpu_busy,omitempty"`
+	CPUBusyMax    float64  `json:"cpu_busy_max,omitempty"`
 	MemFreeBytes  uint64   `json:"mem_free_bytes"`
 	MemTotalBytes uint64   `json:"mem_total_bytes,omitempty"`
 	// MemPressure is the node's memory-pressure level (darwin: 1 normal,
@@ -1345,7 +1392,15 @@ func (s *Server) pickNodeAfter(p fleetPrincipal, repo, node string, now time.Tim
 		}
 	}
 	seen := map[string]bool{}
+	// skipped says why a machine where the caller has a login gave no
+	// candidate (claude-fleet#2882): the refusal names it, never drops it.
+	skipped := map[string]string{}
 	for _, r := range rows {
+		if !r.Present && !seen[r.EndpointID] {
+			skipped[strings.ToLower(r.Hostname)] = "fleet not running"
+		} else if r.Present && repo != "" && !hostsRepo(r, repo) && skipped[strings.ToLower(r.Hostname)] == "" {
+			skipped[strings.ToLower(r.Hostname)] = "no fleet of yours hosts " + repo
+		}
 		if !r.Present || seen[r.EndpointID] || (repo != "" && !hostsRepo(r, repo)) {
 			continue
 		}
@@ -1395,10 +1450,16 @@ func (s *Server) pickNodeAfter(p fleetPrincipal, repo, node string, now time.Tim
 		if node != "auto" {
 			where = node
 		}
-		if repo == "" {
-			return pl, fault("NOT_FOUND", "No fleet on "+where)
+		more := ""
+		if node == "auto" {
+			if rest, _ := s.unplacedMachines(pl.Candidates, skipped, now); len(rest) > 0 {
+				more = " — " + strings.Join(rest, "; ")
+			}
 		}
-		return pl, fault("NOT_FOUND", "No fleet hosting "+repo+" on "+where)
+		if repo == "" {
+			return pl, fault("NOT_FOUND", "No fleet on "+where+more)
+		}
+		return pl, fault("NOT_FOUND", "No fleet hosting "+repo+" on "+where+more)
 	}
 	best := -1
 	for i, c := range pl.Candidates {
@@ -1418,12 +1479,26 @@ func (s *Server) pickNodeAfter(p fleetPrincipal, repo, node string, now time.Tim
 		return pl, fault("ALL_DECLINED", "every machine that could take it said no — "+strings.Join(reasons, "; "))
 	}
 	if best < 0 {
+		// Every other machine the hub could place on, and why it is not a
+		// candidate (claude-fleet#2882): a refusal naming one machine read as
+		// "there is only one". They are no candidates, so the all-full
+		// verdict stays the candidates'; a machine mid-update says so.
+		var rest []string
+		updating := map[string]string{}
+		if node == "auto" {
+			rest, updating = s.unplacedMachines(pl.Candidates, skipped, now)
+		}
 		reasons, full, paused := []string{}, true, false
 		for _, c := range pl.Candidates {
-			reasons = append(reasons, c.Machine+": "+c.Excluded)
+			why := c.Excluded
+			if ph := updating[strings.ToLower(c.Machine)]; ph != "" {
+				why += "；正在更新（" + ph + "）"
+			}
+			reasons = append(reasons, c.Machine+": "+why)
 			full = full && excludedForFullness(c.Excluded)
 			paused = paused || strings.HasPrefix(c.Excluded, excludedPaused)
 		}
+		reasons = append(reasons, rest...)
 		msg := "No machine can take a new session now — " + strings.Join(reasons, "; ")
 		if full {
 			// Every candidate is at its own cap (claude-fleet#1587): say so
@@ -1452,6 +1527,54 @@ func (s *Server) pickNodeAfter(p fleetPrincipal, repo, node string, now time.Tim
 	return pl, nil
 }
 
+// unplacedMachines is "<machine>: <why>" for every machine the hub could place
+// sessions on that gave no candidate (claude-fleet#2882): online (or 维护中)
+// hosts — never a person's own computer or a SPOT node — with skipped's reason
+// where the caller has a login there, else 没有你的登录; a machine its updater
+// is switching says so. Sorted by machine. updating maps every machine whose
+// updater is mid-switch (lower-cased) to its phase.
+func (s *Server) unplacedMachines(cands []Candidate, skipped map[string]string, now time.Time) (out []string, updating map[string]string) {
+	updating = map[string]string{}
+	snap, err := s.Nodes(now)
+	if err != nil {
+		return nil, updating
+	}
+	for _, m := range snap.Machines {
+		if ph := updatingPhase(m.Versions); ph != "" {
+			updating[strings.ToLower(m.Hostname)] = ph
+		}
+		if m.Role != MachineRoleHost || m.Personal || m.Kind == store.NodeKindEphemeral || m.Online == 0 {
+			continue
+		}
+		in := false
+		for _, c := range cands {
+			in = in || sameMachine(c.Machine, m.Hostname)
+		}
+		if in {
+			continue
+		}
+		why := skipped[strings.ToLower(m.Hostname)]
+		if why == "" {
+			why = "没有你的登录"
+		}
+		if ph := updating[strings.ToLower(m.Hostname)]; ph != "" {
+			why += "；正在更新（" + ph + "）"
+		}
+		out = append(out, m.Hostname+": "+why)
+	}
+	sort.Strings(out)
+	return out, updating
+}
+
+// updatingPhase is the updater's phase when a tick is mid-switch, "" when idle
+// or unknown.
+func updatingPhase(v *control.Versions) string {
+	if v == nil || v.Update == nil || v.Update.Phase == "idle" {
+		return ""
+	}
+	return v.Update.Phase
+}
+
 // judge scores one candidate login.
 func (s *Server) judge(r store.FleetRow, settings map[string]string, accounts map[string]string, now time.Time) Candidate {
 	c := Candidate{Machine: r.Hostname, OSUser: r.OSUser, EndpointID: r.EndpointID, FleetID: r.FleetID, FleetName: r.Name}
@@ -1469,6 +1592,10 @@ func (s *Server) judge(r store.FleetRow, settings map[string]string, accounts ma
 	if hb.NCPU > 0 {
 		l := hb.Load1 / float64(hb.NCPU)
 		c.LoadPerCore = &l
+	}
+	cpuOut, cpuEq := cpuVerdict(hb.CPUBusy, hb.MaxCPUBusy, c.LoadPerCore)
+	if hb.CPUBusy != nil {
+		c.CPUBusy, c.CPUBusyMax = hb.CPUBusy, cpuCeiling(hb.MaxCPUBusy)
 	}
 	if n, ok := s.nodeCap(r.Hostname, settings); ok {
 		c.Cap = &n
@@ -1514,8 +1641,8 @@ func (s *Server) judge(r store.FleetRow, settings map[string]string, accounts ma
 		c.Excluded = otherLoginExcluded(r.Hostname, r.OSUser, settings)
 	case connErr != nil:
 		c.Excluded = errorObject(connErr)["message"]
-	case c.LoadPerCore != nil && *c.LoadPerCore > maxLoadPerCore:
-		c.Excluded = fmt.Sprintf("load %.2f/core > %.1f", *c.LoadPerCore, maxLoadPerCore)
+	case cpuOut != "":
+		c.Excluded = cpuOut
 	case hb.MemTotalBytes > 0 && float64(hb.MemFreeBytes) < memFloor(hb.MemTotalBytes):
 		c.Excluded = fmt.Sprintf("free memory %.1f GiB < %.1f GiB", float64(hb.MemFreeBytes)/(1<<30), memFloor(hb.MemTotalBytes)/(1<<30))
 	case hb.MemPressure >= memPressureWarn:
@@ -1537,7 +1664,7 @@ func (s *Server) judge(r store.FleetRow, settings map[string]string, accounts ma
 	default:
 		c.Eligible = true
 	}
-	score := recentScore(c.LoadPerCore, hb.NCPU, hb.MemFreeBytes, hb.MemTotalBytes, c.Recent)
+	score := recentScore(cpuEq, hb.NCPU, hb.MemFreeBytes, hb.MemTotalBytes, c.Recent)
 	if c.Sessions == nil {
 		// A login whose fleet could not be read may run any number of
 		// sessions (claude-fleet#1465): never scored as the idle 0 the
@@ -1629,6 +1756,9 @@ func placementReason(c Candidate, all []Candidate) string {
 	parts := []string{fmt.Sprintf("chose %s (score %.3f", c.Machine, c.Score)}
 	if c.Kind == store.NodeKindEphemeral {
 		parts = append(parts, "SPOT node")
+	}
+	if c.CPUBusy != nil {
+		parts = append(parts, fmt.Sprintf("CPU busy %.0f%%", *c.CPUBusy*100))
 	}
 	if c.LoadPerCore != nil {
 		parts = append(parts, fmt.Sprintf("load %.2f/core", *c.LoadPerCore))

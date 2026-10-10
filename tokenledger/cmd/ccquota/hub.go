@@ -1145,6 +1145,9 @@ func runAgent(args []string) error {
 	cfg.Once = *once
 	cfg.AccountsDir = *accountsDir
 	cfg.ProbeModels = splitList(*probeModels)
+	// This machine's own CPU-busy ceiling for new sessions (claude-fleet#2882);
+	// a managed machine's comes from machine.env through the machine agent.
+	agent.SetMaxCPUBusy(os.Getenv("FLEET_MAX_CPU_BUSY"))
 	a, err := agent.New(cfg)
 	if err != nil {
 		return err

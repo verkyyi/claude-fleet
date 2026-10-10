@@ -209,7 +209,12 @@ func (s *Server) spareFitMachines(now time.Time) []string {
 			m.Sessions == nil || !admin[h] || paused[h] || !s.nodes.credsepAdminFor(m.Hostname) {
 			continue
 		}
-		if m.NCPU > 0 && m.Load1/float64(m.NCPU) > maxLoadPerCore {
+		var lpc *float64
+		if m.NCPU > 0 {
+			l := m.Load1 / float64(m.NCPU)
+			lpc = &l
+		}
+		if out, _ := cpuVerdict(m.CPUBusy, m.MaxCPUBusy, lpc); out != "" {
 			continue
 		}
 		if m.MemTotal > 0 && float64(m.MemFree) < memFloor(m.MemTotal) {

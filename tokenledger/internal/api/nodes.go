@@ -655,6 +655,10 @@ type NodeView struct {
 	NCPU          int     `json:"ncpu"`
 	MemFreeBytes  uint64  `json:"mem_free_bytes"`
 	MemTotalBytes uint64  `json:"mem_total_bytes"`
+	// CPUBusy / MaxCPUBusy are the beat's CPU busy and the machine's own
+	// ceiling (claude-fleet#2882); absent from an older agent.
+	CPUBusy    *float64 `json:"cpu_busy,omitempty"`
+	MaxCPUBusy float64  `json:"max_cpu_busy,omitempty"`
 	// SysAt is when the load and memory above were read, SysUnread what the
 	// node could not read (claude-fleet#2798); FleetAt when its fleets,
 	// sessions and readiness were read — older than LastHeartbeat when the
@@ -760,6 +764,9 @@ type MachineView struct {
 	NCPU            int      `json:"ncpu"`
 	MemFree         uint64   `json:"mem_free_bytes"`
 	MemTotal        uint64   `json:"mem_total_bytes"`
+	// CPUBusy / MaxCPUBusy ride with the load (claude-fleet#2882).
+	CPUBusy    *float64 `json:"cpu_busy,omitempty"`
+	MaxCPUBusy float64  `json:"max_cpu_busy,omitempty"`
 	// SysAt is when that load and memory were read: the newest reading any
 	// heard row of the machine carries — its machine link's or a login's
 	// (claude-fleet#2798) — so one login whose fleet read is slow, or a lane
@@ -1095,6 +1102,7 @@ func (m *MachineView) foldSys(best *sysPick, v NodeView) {
 	}
 	*best = sysPick{seen: true, known: known, at: at}
 	m.Load1, m.NCPU, m.MemFree, m.MemTotal = v.Load1, v.NCPU, v.MemFreeBytes, v.MemTotalBytes
+	m.CPUBusy, m.MaxCPUBusy = v.CPUBusy, v.MaxCPUBusy
 	m.SysUnread = v.SysUnread
 	m.SysAt = nil
 	if known {
@@ -1141,6 +1149,7 @@ func nodeView(n store.Node, now time.Time) NodeView {
 	var hb control.Heartbeat
 	if json.Unmarshal([]byte(n.StatusJSON), &hb) == nil {
 		v.Load1, v.NCPU = hb.Load1, hb.NCPU
+		v.CPUBusy, v.MaxCPUBusy = hb.CPUBusy, hb.MaxCPUBusy
 		v.MemFreeBytes, v.MemTotalBytes = hb.MemFreeBytes, hb.MemTotalBytes
 		v.Sessions, v.SessionsUnknown = hb.SessionsCount(), hb.UnreadableFleets()
 		v.MaxSessions, v.CapSessions = hb.MaxSessions, hb.CapSessions

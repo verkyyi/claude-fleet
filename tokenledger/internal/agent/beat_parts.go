@@ -155,6 +155,7 @@ func (s *sysSampler) sample() {
 func fillSys(hb *control.Heartbeat, s *sysSampler) {
 	si, at := s.last()
 	hb.Load1, hb.MemFreeBytes, hb.MemTotalBytes, hb.MemPressure = si.Load1, si.MemFree, si.MemTotal, si.MemPressure
+	hb.CPUBusy, hb.MaxCPUBusy = processCPU.busy(), maxCPUBusy
 	if !at.IsZero() {
 		hb.SysAt = &at
 	}
