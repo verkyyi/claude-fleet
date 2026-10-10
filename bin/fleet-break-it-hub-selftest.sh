@@ -59,12 +59,12 @@
 #   dist-no-github                                  bin/dist-no-github-selftest.sh (GitHub a black hole: install-sync,
 #                                                   client stage, login bootstrap, the updater's follow → the new version)
 #   health-silent-pass                              bin/fleet_steward_health.py (the steward's beat), fleet-doctor.sh --json
-#   dist-publish-tampered                           tokenledger/internal/api fleet_publish.go (POST …/publish: the archive
-#                                                   hashed into the commit's tree, OIDC, forward only; go test, when a
-#                                                   toolchain is here) + bin/fleet-release-publish.sh (what CI sends)
 #   hub-stream-silent                               tokenledger/web/dist/lib/stream.js (watchdog, backoff, poll fallback;
 #                                                   node --test stream.test.mjs, when node is here) + internal/api
 #                                                   fleet_stream.go (ping, scope; go test, when a toolchain is here)
+#   dist-publish-tampered                           tokenledger/internal/api fleet_publish.go (POST …/publish: the archive
+#                                                   hashed into the commit's tree, OIDC, forward only; go test, when a
+#                                                   toolchain is here) + bin/fleet-release-publish.sh (what CI sends)
 #
 # Each prints `PASS <id> <secs>s ≤<cap>s <what came back>` like its parent.
 # BREAK_KEEP=1 keeps the work dir; BREAK_ONLY narrows to those ids.
@@ -1134,6 +1134,22 @@ drill_dist_publish_tampered() {
   out=$(bash "$BIN/fleet-release-publish-selftest.sh" 2>&1) \
     || { WHY="the CI half: $(printf '%s' "$out" | grep -m 3 FAIL | cut -c1-200 | tr '\n' '|')"; return 1; }
   WHAT='CI 送的是整个提交 + 从入口 stable 起的提交链，令牌不上命令行'
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/api 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
+      0:*) WHAT="${WHAT}；入口：改一个字节 400、别的仓 / 分支 / 流程 401、回退 / 横跳 409、GitHub 黑洞零命中（go test 四条）" ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
+        WHAT="${WHAT}；入口的 Go 测试这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们" ;;
+      *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  else
+    WHAT="${WHAT}；没有 go：四条测试按名核对在，Go 门（tokenledger.yml）跑它们"
+  fi
+  SECS=$(since "$t0")
+}
+
 # ---- hub-stream-silent (#2794, EPIC #2792 C2): the push channel held open by a
 # proxy that neither sends nor closes — the page must not believe it is live.
 # The page half for real (node --test on lib/stream.js under a virtual clock: a
@@ -1164,13 +1180,6 @@ drill_hub_stream_silent() {
           go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/api 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
-      0:*) WHAT="${WHAT}；入口：改一个字节 400、别的仓 / 分支 / 流程 401、回退 / 横跳 409、GitHub 黑洞零命中（go test 四条）" ;;
-      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
-        WHAT="${WHAT}；入口的 Go 测试这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们" ;;
-      *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
-    esac
-  else
-    WHAT="${WHAT}；没有 go：四条测试按名核对在，Go 门（tokenledger.yml）跑它们"
       0:*) WHAT="${WHAT}；入口每 20 s ping、只发本人的、没变不发（go test）" ;;
       *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
       *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
