@@ -72,6 +72,12 @@ type FleetMachine struct {
 	Hostname string       `json:"hostname"`
 	Alias    string       `json:"alias,omitempty"`
 	Routes   []FleetRoute `json:"routes"`
+	// HostKeys is the machine's sshd host keys, "<type> <base64>" each
+	// (claude-fleet#2983): the operator's list, plus what the machine's
+	// newest heartbeat reported. `fleet connect` writes them into
+	// ~/.ssh/fleet-known-hosts under fleet-<alias>, so the first connection
+	// asks no yes/no question and a key not listed is still refused.
+	HostKeys []string `json:"host_keys,omitempty"`
 }
 
 // FleetRoute is one way in: LAN, tailnet, public port. The first route is the
