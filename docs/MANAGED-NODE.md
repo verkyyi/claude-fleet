@@ -335,6 +335,11 @@ sudo bin/fleet-node-drill.sh unblock # 演练被杀后留在 /etc/hosts 的 GitH
 - **退役前必须搬完**：`fleet-login-remove.sh <登录>` 在第 1 步之前（dry run 也一样）、`account release <登录>`
   在动手之前查该登录的登记表，还有条目就拒绝、**退 6**，逐项打印 `service move` 命令；`account release --force`
   照样释放（条目仍由守护以该登录身份跑）。BREAK-IT 行 `service-login-moved`；`fleet-node-supervisor-selftest.py` J。
+- **删号先让守护放手**（#2924）：`fleet-login-remove.sh` 第 1c 步（服务下线、杀进程之前）跑
+  `account forget <登录>`——条目从 `accounts.json` 删掉、`logins/<登录>.env` 删掉、等守护停掉它的任务和子进程，
+  attic 里的旧服务**不装回**（只取消保留，7 天后清掉）；不然守护会把杀掉的任务再拉起，删号三轮后退 1。
+  `account release` 遇到机器上已没有的登录也只做这一件，不装回任何 plist。BREAK-IT 行 `login-remove-managed`、
+  `account-release-gone-login`。
 - **命令行、体检、入口都看得到**（C2，#2526）：机器链路（`ccquota agent --machine`）每拍读守护的 `state.json`，
   心跳带 `services[]`（`name, kind, login, state, started_at, last_run, next_run, last_log_line`，日志末行只读该登录
   自己的、非链接的文件，≤ 200 字节）；入口把它挂在 `/v1/nodes` 的机器行上（`services` / `services_at`），**按
