@@ -11,6 +11,7 @@ import (
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/sshca"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
 // The sidebar's session list by connection certificate (claude-fleet#1475).
@@ -227,5 +228,66 @@ func TestFleetSessionsByDeviceOwnRowsOnly(t *testing.T) {
 	}
 	if code, _, raw = read(b); code != http.StatusUnauthorized {
 		t.Fatalf("a revoked device: HTTP %d %s, want 401", code, raw)
+	}
+}
+
+// A node token reads its login's PERSON's sessions — every login they hold,
+// on every machine (claude-fleet#3001): a person with a daily login on m5 and
+// an admin login on m4 sees both from either machine, never another person's.
+// A login no person holds is refused as it always was (the node falls back to
+// its other credentials and keeps `id -un`'s rows), so nothing changes there.
+func TestFleetSessionsNodeTokenReadsPersonsLogins(t *testing.T) {
+	h := newFleetHarness(t)
+	const machineC = "33333333-3333-4333-8333-333333333333"
+	a := connectFakeNode(t, h, "m5", false)
+	b := connectFakeNode(t, h, "m4", false)
+	c := connectFakeNode(t, h, "m6", false)
+	a.beat("m5", "alice", machineA, fakeFleet(t, machineA, "fleet", "", "", 1, 2))
+	b.beat("m4", "aliceadm", machineB, fakeFleet(t, machineB, "fleet", "", "", 7))
+	c.beat("m6", "carol", machineC, fakeFleet(t, machineC, "fleet", "", "", 9))
+	waitFor(t, 3*time.Second, "registered", func() bool {
+		return len(getFleet(t, h, "/v1/fleet/fleet_list", 200)["fleets"].([]any)) == 3
+	})
+	now := time.Now()
+	p, _ := h.srv.Store.AdoptPrincipal("wx-alice", "alice", "Alice", now)
+	h.srv.Store.AdoptAccount(p, "m5", now)
+	// one login per machine per person: the admin one is on m4
+	if err := h.srv.Store.AdoptAccount(&store.Principal{ID: p.ID, Login: "aliceadm"}, "m4", now); err != nil {
+		t.Fatal(err)
+	}
+	daily := connectNode(t, h, "m5-alice", "m5", "alice", false)
+	admin := connectNode(t, h, "m4-admin", "m4", "aliceadm", false)
+	carol := connectNode(t, h, "m6-carol", "m6", "carol", false)
+	asNode := func(tok string) func(http.Header) {
+		return func(hdr http.Header) { hdr.Set("Authorization", "Bearer "+tok) }
+	}
+	logins := func(tok string) map[string]int {
+		t.Helper()
+		code, out, raw := postSessions(t, h, asNode(tok), nil)
+		if code != 200 {
+			t.Fatalf("node token: HTTP %d %s", code, raw)
+		}
+		got := map[string]int{}
+		for _, s := range out["sessions"].([]any) {
+			got[s.(map[string]any)["machine_name"].(string)+"/"+s.(map[string]any)["os_user"].(string)]++
+		}
+		return got
+	}
+	for name, tok := range map[string]string{"daily login": daily.token, "admin login": admin.token} {
+		got := logins(tok)
+		if len(got) != 2 || got["m5/alice"] != 2 || got["m4/aliceadm"] != 1 {
+			t.Fatalf("%s's node token reads %v, want m5/alice ×2 and m4/aliceadm ×1 — never m6/carol", name, got)
+		}
+	}
+
+	// No person holds carol: refused, byte for byte as before.
+	if code, _, raw := postSessions(t, h, asNode(carol.token), nil); code != http.StatusUnauthorized {
+		t.Fatalf("an unowned login's node token: HTTP %d %s, want 401", code, raw)
+	}
+	// Once one does, that person's read is theirs alone.
+	q, _ := h.srv.Store.AdoptPrincipal("wx-carol", "carol", "Carol", now)
+	h.srv.Store.AdoptAccount(q, "m6", now)
+	if got := logins(carol.token); len(got) != 1 || got["m6/carol"] != 1 {
+		t.Fatalf("carol's node token reads %v, want m6/carol ×1", got)
 	}
 }

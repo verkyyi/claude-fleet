@@ -216,6 +216,7 @@ WAIT=''      # the long poll's wait for THIS round (issue #1526); set by loop on
 LP_SENT=0    # 1 = this round's ask carried a validator AND a wait
 LAST_FETCH=1 # this round's fetch rc (0 = 200, 3 = 304)
 SCOPED=0     # 1 = this round's answer came over YOUR certificate (issue #2388)
+NSCOPED=0    # 1 = …over this login's node token: cut to its person's logins (issue #3001)
 PIDF="$G/hubsess.pid"
 SESSIONS_NS='fleet-sessions@claude-fleet'
 SUMMARY_NS='fleet-summary@claude-fleet'   # the status bar's two summaries (#1502)
@@ -422,12 +423,15 @@ fetch() {
     done < "$lf"
   fi
   # the long poll (issue #1526): only with a validator to hold against
-  q=''; LP_SENT=0; SCOPED=0
+  q=''; LP_SENT=0; SCOPED=0; NSCOPED=0
   if [ -n "$WAIT" ] && [ -n "$etag" ]; then LP_SENT=1; q="?wait=$WAIT"; fi
   if [ -n "$NTOK" ]; then
     AUTH_TOK=$NTOK
     curl_sessions "$out" "$etag" "$url/v1/fleet/fleet_sessions$q"; rc=$?; AUTH_TOK=''
-    [ "$rc" = 4 ] || return "$rc"
+    # The hub answers a node token with its login's PERSON's rows — every login
+    # of theirs, on every machine (FleetScope, issue #3001); a login no person
+    # holds is refused below and reads as before.
+    [ "$rc" = 4 ] || { NSCOPED=1; return "$rc"; }
     # A hub older than the node-token door (#2630) says 401: remember it for
     # NODE_REFUSED_TTL, so the 2 s cadence does not ask twice a round.
     date +%s > "$G/hubsess.nodetok.refused" 2>/dev/null
@@ -516,10 +520,14 @@ restamp() {
 # else `*` for the shell when the hub answered over the person's certificate (issue
 # #2388: the hub already scoped it to their logins, and the login on a node is not
 # the name of the computer they sit at — cj's sidebar matched `id -un` against it
-# and dropped every session, the one just opened included), else `id -un`.
+# and dropped every session, the one just opened included), else `*` for a node
+# whose answer came over its node token (issue #3001: the hub cut it to this
+# login's person — their other logins' sessions, here and on every machine, are
+# theirs too), else `id -un`.
 rows_user() {
   if [ -n "${FLEET_HUB_SESSIONS_USER:-}" ]; then printf '%s' "$FLEET_HUB_SESSIONS_USER"
   elif [ -n "$CLIENT" ] && [ "$SCOPED" = 1 ]; then printf '*'
+  elif [ -z "$CLIENT" ] && [ "$NSCOPED" = 1 ]; then printf '*'
   else id -un 2>/dev/null; fi
 }
 
@@ -605,10 +613,10 @@ map_write() {
   local json="$1" lf="$2" mf="$3" now="$4" via="$5" user="$6"
   python3 - "$json" "$lf" "$G" "$FLEET_C" "$FLEET_CONF_DIR/control/hub-workers.tsv" \
     "$user" "$(hostname 2>/dev/null)" \
-    "${FLEET_NODE_ALIASES:-}" "$now" "$mf" "$BIN" "$CLIENT" "$via" <<'PY'
+    "${FLEET_NODE_ALIASES:-}" "$now" "$mf" "$BIN" "$CLIENT" "$via" "$(id -un 2>/dev/null)" <<'PY'
 import json, os, re, sys, tempfile, time
 from datetime import datetime, timezone
-jpath, lpath, gdir, cdir, wpath, user, host, aliases, now, mpath, bindir, client, via = sys.argv[1:14]
+jpath, lpath, gdir, cdir, wpath, user, host, aliases, now, mpath, bindir, client, via, login = sys.argv[1:15]
 sys.path.insert(0, bindir)
 import fleet_iso  # the one ISO reader (issue #2024)
 try:
@@ -696,7 +704,11 @@ if not client:
                          for s in sessions if s.get("worker_id")
                          for w in (s["worker_id"], ident_wid(s)) if w))
 
-is_local = lambda s: not client and (s.get("fleet_id") in local_uuids or short(s.get("machine_name")) == me)
+# Another login's session on this machine (issue #3001: a node's answer may carry
+# every login of its person) is never this login's local row — its fleet may well
+# share this one's name. A row with no os_user (an older hub) reads as before.
+other_login = lambda s: not client and isinstance(s.get("os_user"), str) and s["os_user"] != login
+is_local = lambda s: not client and not other_login(s) and (s.get("fleet_id") in local_uuids or short(s.get("machine_name")) == me)
 def local_fleet(s):
     """The fleet HERE a local session belongs to: by UUID; else, for a session the
     hub places on THIS host, by fleet name — a machine with no control database
@@ -800,8 +812,8 @@ for n in (data.get("nodes") or []) if isinstance(data.get("nodes"), list) else [
         cur["av"] = n.get("availability")
     cur["seen"] = max(cur["seen"], epoch(n.get("observed_at")))
 for r in rows:
-    if r["local"]:
-        continue                                     # this machine is `#me`, never a #node
+    if r["local"] or (me and r["node"] == label(host)):
+        continue                                     # this machine is `#me`, never a #node (another login's row here too, #3001)
     cur = nodes.setdefault(r["node"], dict(av="lost", n=0, seen=0))
     cur["n"] += 1
     if not data.get("nodes"):
