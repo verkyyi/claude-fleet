@@ -480,6 +480,8 @@ if [ -n "${FLEET_CRED_SID:-}" ] && [ -z "${FLEET_CODEX_PROFILE:-}" ]; then
               -c 'features.plugins=false' -c 'features.apps=false' -c 'analytics.enabled=false')
       unset _fx_home _fx_port ;;
     4) : ;;
+    5) echo 'fleet-codex: the hub does not know this session (404: not registered for this node) — refusing to launch; ↵ on the page re-registers it and retries' >&2
+       _fx_refused cred_unknown; exit 1 ;;
     *) echo 'fleet-codex: FLEET_CRED_PROXY=1 but no session credential could be had from the proxy — refusing to launch (fleet-cred-proxy.sh status; logs/cred-proxy.log)' >&2
        _fx_refused cred; exit 1 ;;
   esac

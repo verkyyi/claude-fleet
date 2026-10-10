@@ -51,7 +51,7 @@ TEXT = {
            'unpushed': '未推送：{n} 个提交（分支 {b}）', 'unpushed_nob': '未推送：{n} 个提交',
            'failed_resume': '续上原对话失败', 'failed_new': '新开会话失败', 'failed_launch': '会话没能启动',
            'why_conversation': '找不到这个对话', 'why_auth': '认证失效，需要重新登录',
-           'why_cred': '凭据代理没给出会话凭据', 'why_account': '指定的订阅账号不可用',
+           'why_cred': '凭据代理没给出会话凭据', 'why_cred_unknown': '入口不认这个会话（没有登记）· ↵ 补登记并重试', 'why_account': '指定的订阅账号不可用',
            'hooks_off': '个人自动规则 {n} 条这次连续失败、已停用：{w}',
            'personal_off': '这个窗口已不带个人配置（FLEET_PERSONAL=0）；长期退回：fleet config restore N',
            'resume': '重开', 'resume_new': '新开对话', 'retry': '重试启动', 'list': '回列表',
@@ -61,7 +61,7 @@ TEXT = {
            'failed_resume': 'Resuming the conversation failed', 'failed_new': 'Starting a new session failed',
            'failed_launch': 'The session could not start',
            'why_conversation': 'conversation not found', 'why_auth': 'authentication expired — log in again',
-           'why_cred': 'the credential proxy gave no session credential', 'why_account': 'the pinned subscription is unavailable',
+           'why_cred': 'the credential proxy gave no session credential', 'why_cred_unknown': 'the hub does not know this session (not registered) · ↵ re-registers and retries', 'why_account': 'the pinned subscription is unavailable',
            'hooks_off': '{n} personal hook(s) kept failing and were switched off: {w}',
            'personal_off': 'This window runs without the personal layer (FLEET_PERSONAL=0); to roll it back: fleet config restore N',
            'resume': 'reopen', 'resume_new': 'new conversation', 'retry': 'retry the launch', 'list': 'list',
@@ -77,7 +77,7 @@ def headline(rc, words, failed='', why=''):
     launcher itself refused (failed = launch, issue #2404)."""
     if failed in ('resume', 'new', 'launch'):
         head = words['failed_' + failed]
-        if why in ('conversation', 'auth', 'cred', 'account'):
+        if why in ('conversation', 'auth', 'cred', 'cred_unknown', 'account'):
             head += ('：' if words is TEXT['zh'] else ': ') + words['why_' + why]
         return head, RED
     if rc in (0, 130): return words['ended'], YELLOW
