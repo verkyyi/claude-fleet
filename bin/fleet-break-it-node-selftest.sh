@@ -34,6 +34,8 @@
 #   credsep-stale-after-switch  bin/fleet-node-update.py + fleet-credsep.py `machine
 #                         refresh` + the supervisor's cred-proxy-shared `reload` (#2435):
 #                         a switch / rollback left the shared credential proxy on old code
+#   shift-enter-sends     conf/tmux-shell.conf, conf/tmux-shell-stage.conf, conf/tmux-attention.conf
+#                         (extended keys, #2760): ⇧↵ through the client's three tmux servers
 #   release-fetch-slow    tokenledger/internal/release fetch.go (Fetcher: Cache, Platforms,
 #                         Stall; go test, when a toolchain is here) + bin/fleet-node-update.py
 #                         stage (#2701): a 700 MB release at ~1 MB/s against a whole-fetch
@@ -602,6 +604,93 @@ drill_managed_login_install_predates() {
     || { WHY="the updater did not move a login install behind the release: $(printf '%s' "$out" | grep -E 'Error|FAIL' | head -3 | tr '\n' ' ')"; return 1; }
   SECS=$(since "$t0")
   WHAT="登录安装早于 #2688（自己的 install-sync 仍答 off · managed）：更新器提交新版后、以及每拍在发布版时，降权跑发布版的 install-sync 把它带到同一版；被退回的版本不跟；跟不上的记进 update.json 并在 install 行写明，1 小时后再试；钉在版本目录的客户端壳镜像改走登录链接"
+}
+
+# shift-enter-sends (issue #2760): ⇧↵ typed into the client went through three tmux
+# servers (the client, its stage, the machine's fleet session) none of which asked
+# for extended keys, so it reached Claude as a bare ↵ and sent half a sentence. The
+# drill renders the three real confs as fleet-shell.sh fills them, nests them on
+# sockets of its own, types ⇧↵ (CSI 13;2u) into an outer pty and reads what the
+# session's pane — asking for keys the way Claude Code does — received: ⇧↵ itself;
+# FLEET_KEYS_PARITY=0 (the client's two confs without it) is not ⇧↵, as
+# before. Here, not in fleet-break-it-selftest.sh: that run sits at the gate's cap.
+drill_shift_enter_sends() {
+  CAP=30; local d t0 got par s ROOT REAL_TMUX
+  ROOT="$(cd "$BIN/.." && pwd)"; REAL_TMUX=$(command -v tmux 2>/dev/null)
+  [ -n "$REAL_TMUX" ] || { WHY="no tmux"; return 1; }
+  d=$(mktemp -d /tmp/brk-keys.XXXXXX) || { WHY="mktemp"; return 1; }   # AF_UNIX: a short path
+  cat > "$d/rec.py" <<'PY'
+import os, sys, tty
+tty.setraw(0)
+os.write(1, b"\x1b[>4;2m\x1b[>5u\x1b[?2004hREADY\r\n")
+with open(sys.argv[1], "ab", buffering=0) as f:
+    while True:
+        d = os.read(0, 1024)
+        if not d:
+            break
+        f.write(d.hex().encode() + b"\n")
+PY
+  cat > "$d/term.py" <<'PY'
+import fcntl, os, pty, re, select, struct, subprocess, sys, termios, time
+tm, d = sys.argv[1], sys.argv[2]
+pid, fd = pty.fork()
+if pid == 0:
+    os.environ.update(TERM="xterm-256color", HOME=d); os.environ.pop("TMUX", None)
+    os.execvp(tm, [tm, "-S", d + "/s", "attach", "-t", "shell"])
+fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
+ANS = ((rb"\x1b\[>0?q", b"\x1bP>|iTerm2 3.6.6\x1b\\"), (rb"\x1b\[>0?c", b"\x1b[>0;95;0c"),
+       (rb"\x1b\[0?c", b"\x1b[?62;22c"), (rb"\x1b\[\?996n", b"\x1b[?997;1n"),
+       (rb"\x1b\]10;\?", b"\x1b]10;rgb:c0c0/caca/f5f5\x1b\\"), (rb"\x1b\]11;\?", b"\x1b]11;rgb:1a1a/1b1b/2626\x1b\\"))
+def pump(secs):
+    end = time.time() + secs
+    while time.time() < end:
+        r, _, _ = select.select([fd], [], [], 0.03)
+        if r:
+            try: b = os.read(fd, 65536)
+            except OSError: return
+            for q, a in ANS:
+                if re.search(q, b): os.write(fd, a)
+for _ in range(150):
+    pump(0.1)
+    if "READY" in subprocess.run([tm, "-S", d + "/n", "capture-pane", "-p", "-t", "node"], capture_output=True, text=True).stdout:
+        break
+pump(0.8)
+open(d + "/rec.out", "w").close()
+os.write(fd, b"\x1b[13;2u")
+end = time.time() + 4
+while time.time() < end and not os.path.getsize(d + "/rec.out"):
+    pump(0.02)
+pump(0.3)
+print("".join(open(d + "/rec.out").read().split()))
+os.kill(pid, 9)
+PY
+  t0=$(now)
+  for par in 1 0; do
+    mkdir -p "$d/conf"
+    for s in tmux-shell tmux-shell-stage tmux-attention fleet-palette tmux-bar tmux-node-human; do
+      sed -e "s#__BIN__#$BIN#g" -e "s#__PARITY__#$par#g" -e 's#__PREFIX__#C-b#g' -e 's#__STAGE__#kst#g' \
+          -e 's#__SESS__#ks#g' -e 's#__PASTE__#0#g' -e '/^set-hook -g /d' -e '/^run-shell /d' \
+          "$ROOT/conf/$s.conf" > "$d/conf/$s.conf"
+    done
+    HOME="$d" "$REAL_TMUX" -S "$d/n" -f "$d/conf/tmux-attention.conf" new-session -d -s node -x 96 -y 24 \
+      "python3 $d/rec.py $d/rec.out"
+    HOME="$d" "$REAL_TMUX" -S "$d/n" set -t node prefix None
+    HOME="$d" "$REAL_TMUX" -S "$d/st" -f "$d/conf/tmux-shell-stage.conf" new-session -d -s stage -x 98 -y 26 \
+      "TMUX= exec $REAL_TMUX -S $d/n attach -t node"
+    HOME="$d" "$REAL_TMUX" -S "$d/s" -f "$d/conf/tmux-shell.conf" new-session -d -s shell -x 100 -y 28 \
+      "TMUX= exec $REAL_TMUX -S $d/st attach -t stage"
+    got=$(python3 "$d/term.py" "$REAL_TMUX" "$d" 2>/dev/null)
+    for s in s st n; do "$REAL_TMUX" -S "$d/$s" kill-server 2>/dev/null; done
+    if [ "$par" = 1 ] && [ "$got" != 1b5b31333b3275 ]; then
+      rm -rf "$d"; WHY="⇧↵ reached the session as [$got] — not ⇧↵ (1b5b31333b3275; 0d = ↵, it sends)"; return 1
+    fi
+    # off: not ⇧↵ — as before (a bare ↵ here; an older tmux drops the key)
+    if [ "$par" = 0 ] && [ "$got" = 1b5b31333b3275 ]; then
+      rm -rf "$d"; WHY="FLEET_KEYS_PARITY=0 still hands ⇧↵ on — not as before"; return 1
+    fi
+  done
+  rm -rf "$d"
+  SECS=$(since "$t0"); WHAT="⇧↵ 穿过客户端、stage、节点三层 tmux 到会话还是 ⇧↵（扩展键）；关掉开关就不再是 ⇧↵，如今天"
 }
 
 cred_run_drills "$0"
