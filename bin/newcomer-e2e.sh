@@ -90,7 +90,7 @@ ok() { printf '   ✓ %s\n' "$1"; }
 scrub() { sed -E 's/fd_[a-z2-7]{20,}/fd_…/g; s/"(token|approve_code|certificate)":"[^"]*"/"\1":"…"/g'; }
 logs() {
   local f
-  for f in hub.log agent.log install.log login.out fleet.err fleet2.err fleet4.err ssh.log clock.log; do
+  for f in hub.log gh.log agent.log install.log login.out fleet.err fleet2.err fleet4.err ssh.log clock.log; do
     [ -s "$WORK/$f" ] || continue
     printf -- '--- %s (last 40)\n' "$f"; tail -n 40 "$WORK/$f" | scrub
   done
@@ -169,6 +169,8 @@ http.server.HTTPServer(("127.0.0.1", $GHPORT), H).serve_forever()
 EOF
 python3 "$WORK/gh.py" >"$WORK/gh.log" 2>&1 &
 GH_PID=$!
+# ready before the hub asks it (a slow python3 start read as GitHub timing out)
+waitfor 10 curl -s -m 1 -o /dev/null "http://127.0.0.1:$GHPORT/users/nobody" || die 'the GitHub stand-in never answered' "$(cat "$WORK/gh.log" 2>/dev/null)"
 ssh-keygen -q -t ed25519 -N '' -C newcomer-e2e-ca -f "$WORK/ca" || die 'ssh-keygen could not make the CA key'
 mkdir -p "$WORK/dist"
 # the agent a computer downloads when its login enrols it (/v1/node/dist/<os>-<arch>):
@@ -177,12 +179,13 @@ case "$(uname -m)" in x86_64|amd64) DARCH=amd64 ;; arm64|aarch64) DARCH=arm64 ;;
 cp "$CCQ" "$WORK/dist/ccquota-$(uname -s | tr 'A-Z' 'a-z')-$DARCH"
 # CCQUOTA_FLEET_MAX_LOAD_PER_CORE: the fake node reports this box's own load,
 # and a shared runner (the clock step's drill on top) sits above the 0.8 a real
-# machine is held to (#2267)
+# machine is held to (#2267); CCQUOTA_FLEET_MAX_CPU_BUSY=1 the same for the
+# CPU-busy ceiling (#2882) — a macOS runner reads ~85% busy against 80% (#3018)
 env CCQUOTA_FLEET=1 CCQUOTA_VIEWER_TOKEN="$VT" CCQUOTA_FLEET_DIST_DIR="$WORK/dist" \
     CCQUOTA_FLEET_SSH_CA_KEY="$WORK/ca" CCQUOTA_GITHUB_CLIENT_ID=newcomer-e2e \
     CCQUOTA_GITHUB_CLIENT_SECRET="placeholder-$RANDOM$RANDOM" \
     CCQUOTA_GITHUB_API_BASE="http://127.0.0.1:$GHPORT" CCQUOTA_FLEET_PUBLIC_URL="$HUB" \
-    CCQUOTA_FLEET_STABLE_REPO="$STABLE" CCQUOTA_FLEET_MAX_LOAD_PER_CORE=100 \
+    CCQUOTA_FLEET_STABLE_REPO="$STABLE" CCQUOTA_FLEET_MAX_LOAD_PER_CORE=100 CCQUOTA_FLEET_MAX_CPU_BUSY=1 \
   "$CCQ" hub --addr "127.0.0.1:$PORT" --db "$WORK/hub.db" >"$WORK/hub.log" 2>&1 &
 HUB_PID=$!
 waitfor 20 curl -fs -m 2 -o /dev/null "$HUB/healthz" || die 'the hub never answered /healthz'
@@ -287,7 +290,7 @@ FLEET="$CH/.local/bin/fleet"
 grep -qs "FLEET_HUB_URL=\"\\{0,1\\}$HUB" "$CH/.config/claude-fleet/fleet.conf" || die 'fleet.conf does not carry the hub address' "$(cat "$CH/.config/claude-fleet/fleet.conf" 2>&1)"
 grep -qs '\.local/bin' "$CH/.zshrc" || die 'the install did not put ~/.local/bin on the PATH of a new zsh' "$(cat "$CH/.zshrc" 2>&1)"
 [ -n "$(ls -A "$CH/.ssh")" ] && die 'the install wrote into ~/.ssh before any login' "$(ls -la "$CH/.ssh")"
-REAL_TMUX=$(PATH="$CH/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH" command -v tmux) || die 'no tmux after the install line' "$(grep -i tmux "$WORK/install.log")"
+REAL_TMUX=$(PATH="$CH/.local/bin:$CH/.local/share/claude-fleet-vendor/bin:/opt/homebrew/bin:/usr/local/bin:$PATH" command -v tmux) || die 'no tmux after the install line' "$(grep -i tmux "$WORK/install.log")"
 ok "fleet installed, fleet.conf names $HUB, ~/.ssh untouched"
 
 # The newcomer's environment: nothing of the admin's — no token, no viewer token.

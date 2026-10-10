@@ -208,7 +208,7 @@ IH="$CH/.claude/fleet"   # the one fleet directory (#1804)
 [ -x "$IH/bin/fleet-shell.sh" ] && [ -f "$IH/conf/tmux-shell.conf" ] || die 'the client files are not in ~/.claude/fleet' "$(find "$IH" -maxdepth 2 2>&1 | head -20)"
 grep -qs "FLEET_HUB_URL=\"\\{0,1\\}$HUB" "$CH/.config/claude-fleet/fleet.conf" || die 'fleet.conf does not carry the hub address' "$(cat "$CH/.config/claude-fleet/fleet.conf" 2>&1)"
 # tmux is the install line's to provide (its deps step) — from here on it must be there
-REAL_TMUX=$(PATH="$CH/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH" command -v tmux) || die 'no tmux after the install line' "$(grep -i tmux "$WORK/install.log")"
+REAL_TMUX=$(PATH="$CH/.local/bin:$CH/.local/share/claude-fleet-vendor/bin:/opt/homebrew/bin:/usr/local/bin:$PATH" command -v tmux) || die 'no tmux after the install line' "$(grep -i tmux "$WORK/install.log")"
 ok "fleet installed ($(find "$IH" -type f | wc -l | tr -d ' ') files), fleet.conf names $HUB"
 
 # =============================================================================
@@ -250,8 +250,10 @@ SC=$(mktemp -d /tmp/cfe2e-c.XXXXXX) || die 'no short cache dir'
 # $SHIM: an `ssh` on the PATH would answer fleet-connect's `ssh -G` too.
 HSHIM="$WORK/hshim"; mkdir -p "$HSHIM"
 printf '#!/bin/sh\necho client-laptop\n' > "$HSHIM/hostname"; chmod +x "$HSHIM/hostname"
+# the vendor dir first, as `fleet` puts it (#2260): a script the test calls
+# directly runs without `fleet` in front, on a runner that may have no tmux (#3018)
 cenv() {
-  env -i PATH="$HSHIM:$CH/.local/bin:$PATH" HOME="$CH" SHELL=/bin/bash TERM=xterm-256color LANG=C.UTF-8 \
+  env -i PATH="$HSHIM:$CH/.local/share/claude-fleet-vendor/bin:$CH/.local/bin:$PATH" HOME="$CH" SHELL=/bin/bash TERM=xterm-256color LANG=C.UTF-8 \
     FLEET_SHELL_SESSION="$SESS" FLEET_SHELL_CACHE="$SC" FLEET_SHELL_NO_ATTACH=1 FLEET_SHELL_WARM=0 \
     FLEET_HUB_TOKEN="$VT" CCQUOTA_VIEWER_TOKEN="$VT" FLEET_REMOTE_SSH_CMD="$SHIM/ssh" \
     FLEET_HUB_SESSIONS_EVERY=1 FLEET_HUB_SESSIONS_LOOP_SECS=8 "$@"
@@ -297,9 +299,11 @@ ok 'the list shows issue-7 and scratch-3 on the node'
 step 'switch: open the issue-7 row, the right pane points at it'
 waitfor 10 test -S "$(tp show-options -wqv -t "$w1" @remote_ctl)" || die 'no live @remote_ctl on the node window' "$(tp show-options -wqv -t "$w1" @remote_ctl)"
 got=$(cd "$SC/bin" && cenv TMUX="$sock,0,0" FLEET_SHELL=1 ${STG:+FLEET_SHELL_STAGE="$STG"} FLEET_SESSION="$SESS" CCQUOTA_FLEET=1 TMPDIR="$SC/tmp" \
-        FLEET_CONF_DIR="$CH/.config/claude-fleet" bash "$SC/bin/fleet-remote-view.sh" open "wid:$FID/issue-7" 2>&1)
+        FLEET_CONF_DIR="$CH/.config/claude-fleet" bash -x "$SC/bin/fleet-remote-view.sh" open "wid:$FID/issue-7" 2>"$WORK/open.trace"); orc=$?
 remote=$(tp show-options -wqv -t "$w1" @remote)
-[ "$remote" = "$NODE:$FID/issue-7" ] || die "the right pane does not point at issue-7" "open → $got · @remote=$remote"
+[ "$remote" = "$NODE:$FID/issue-7" ] || die "the right pane does not point at issue-7" \
+  "open (exit $orc) → $got · @remote=$remote · windows: $(tp list-windows -t "=$P" -F '#{window_id} #{@remote} [#{@remote_login}]' | tr '\n' ' ')
+$(tail -n 40 "$WORK/open.trace")"
 grep -q "select '$FID/issue-7'" "$WORK/ssh.log" || die 'the node was not asked to select issue-7' "$(cat "$WORK/ssh.log")"
 ok "@remote=$remote, window $(tp display-message -p -t "$w1" '#{window_name}')"
 
