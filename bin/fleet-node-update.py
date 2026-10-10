@@ -1152,6 +1152,35 @@ def tool_version(path, args):
     return rc, ((out or err).splitlines() or [""])[0][:80]
 
 
+def ccquota_row(p, cur, d):
+    """Is the runtime's ccquota THIS release's (issue #2930)? A release used to
+    take whatever ccquota the hub image had — 003e89bb went out with
+    prod-343c92b, and a new hub + old node reran a login's creation (#2928).
+    The manifest's ccquota_src (the commit's Go source, checked by the hub at
+    build) against `ccquota version`'s `src` line: different = FAIL (the
+    rollback gate). A release from before (no ccquota_src) names no source: a
+    ccquota whose build commit is not the runtime's is a WARN, never a FAIL —
+    its Go may well be the same."""
+    rc, out, err = run([os.path.join(p.current, "bin", "ccquota"), "version"], timeout=30)
+    lines = (out or err or "").splitlines()
+    v = (lines or [""])[0][:80]
+    if rc != 0:
+        return ("FAIL", "ccquota", "bin/ccquota version: rc %d %s" % (rc, v))
+    src = next((ln.split(None, 1)[1].strip() for ln in lines[1:] if ln.startswith("src ")), "")
+    want = (read_json(os.path.join(d, ".release", "manifest.json"), {}) or {}).get("ccquota_src") or ""
+    built = re.search(r"(?:^|[-_.g ])([0-9a-f]{7,40})(?:-dirty)?$", v)
+    built = built.group(1) if built else ""
+    if want:
+        if src == want:
+            return ("PASS", "ccquota", "%s · Go source %s = runtime %s's" % (v, want[:12], cur[:12]))
+        return ("FAIL", "ccquota", "%s 的 Go 源 %s 不是 runtime %s 的 %s — 发布版带错了 ccquota（#2930）"
+                % (v, (src or "未标")[:12], cur[:12], want[:12]))
+    if built and not cur.startswith(built):
+        return ("WARN", "ccquota", "%s 不是 runtime %s 那次提交构建的；发布版未记 Go 源（#2930 之前建的），核对不了是否落后"
+                % (v, cur[:12]))
+    return ("PASS", "ccquota", v)
+
+
 def doctor_rows(p):
     """[(LEVEL, row, message)] — the machine half of `fleet doctor`. FAIL = a part
     that does not work or is not the release's; the updater's rollback gate."""
@@ -1170,8 +1199,7 @@ def doctor_rows(p):
         rows.append(("FAIL", "runtime", "%s was never staged whole (no %s)" % (cur[:12], STAGED)))
     else:
         rows.append(("PASS", "runtime", "%s · release.json schema 1" % cur[:12]))
-    rc, v = tool_version(os.path.join(p.current, "bin", "ccquota"), ["version"])
-    rows.append(("PASS", "ccquota", v) if rc == 0 else ("FAIL", "ccquota", "bin/ccquota version: rc %d %s" % (rc, v)))
+    rows.append(ccquota_row(p, cur, d))
     for tool in TOOLS:
         want = spec["components"][tool]["version"]
         tb = os.path.join(p.current, "tools", "bin", tool)

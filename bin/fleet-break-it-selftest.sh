@@ -77,6 +77,8 @@
 #   release-artifact-missing                        bin/fleet-stable.sh move (the artifacts gate),
 #                                                   fleet-node-update.py pinned-artifacts, the hub's build refusal
 #   release-ccquota-behind                          bin/fleet-stable.sh move (the ccquota gate)
+#   release-ccquota-stale                           bin/fleet-stable.sh move (the ccquota gate), fleet-src-digest.py;
+#                                                   the hub half is tokenledger/internal/api (go test, held by name)
 #   login-browser-silent                            bin/fleet-login.py (scan: open_browser, KeyWatch, nudge, timeout)
 #   login-sandbox-real-conf                         bin/fleet-login.py (conf_dir_env)
 #   opening-never-ends                              tokenledger/internal/api fleet_opening.go
@@ -4317,6 +4319,59 @@ drill_release_ccquota_behind() {
   SECS=$(since "$t0")
   [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable)" = "$c2" ] || { WHY="stable did not move once the hub ran the target"; return 1; }
   WHAT="入口的 ccquota 落后于目标的 tokenledger/：stable 拒挪（ccquota: 点名缺的提交）；入口部署到目标后同一提交照常挪"
+}
+
+# ---- release-ccquota-stale (#2930): the hub image is older than the commit
+# stable moves to (its Go changed, the hub was not redeployed). Before: the
+# release took the image's ccquota — new scripts, old Go on every managed
+# machine (#2928). Now `fleet-stable.sh move` holds the target's tokenledger/
+# digest to the hub's /artifacts ccquota_src and refuses with `ccquota:`; once
+# the hub runs the target's Go the same move goes through. The hub half (the
+# build / publish refusal, the heal keeping its own ccquota) and the node's
+# rollback are their tests, held by name. A file:// hub; a real bare repo + tag.
+drill_release_ccquota_stale() {
+  CAP=30; local t0 d out rc c1 c2 f t pins
+  for t in tokenledger/internal/api/fleet_release_test.go:TestReleaseRefusesStaleCCQuota \
+           tokenledger/internal/api/fleet_publish_test.go:TestPublishRefusesStaleCCQuota \
+           bin/fleet-node-update-selftest.py:test_ccquota_not_the_releases_is_rolled_back; do
+    f="$ROOT/${t%%:*}"
+    grep -q "${t#*:}(" "$f" 2>/dev/null || { WHY="${t#*:} is not in ${t%%:*}"; return 1; }
+  done
+  d="$WORK/relcq"; mkdir -p "$d/shim" "$d/seed" "$d/conf" "$d/hub/v1/fleet/release"
+  printf '#!/bin/sh\nprintf "completed success ci\\n"\n' > "$d/shim/gh"; chmod +x "$d/shim/gh"
+  ( export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+    export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
+    git init -q --bare -b master "$d/origin.git" && git clone -q "$d/origin.git" "$d/seed" 2>/dev/null || exit 1
+    mkdir -p "$d/seed/bin" "$d/seed/tokenledger/internal/x"; printf '#!/usr/bin/env python3\n' > "$d/seed/bin/fleet-node-update.py"
+    printf 'module x\n' > "$d/seed/tokenledger/go.mod"; printf 'package x\n' > "$d/seed/tokenledger/internal/x/x.go"
+    cp "$ROOT/release.json" "$d/seed/release.json"
+    git -C "$d/seed" add -A && git -C "$d/seed" commit -qm old && git -C "$d/seed" push -q origin HEAD:master || exit 1
+    git -C "$d/seed" rev-parse HEAD > "$d/c1"
+    printf 'package x\n\nconst OpID = true\n' > "$d/seed/tokenledger/internal/x/x.go"
+    git -C "$d/seed" add -A && git -C "$d/seed" commit -qm 'go: op_id' && git -C "$d/seed" push -q origin HEAD:master || exit 1
+    git -C "$d/seed" rev-parse HEAD > "$d/c2"
+    git --git-dir="$d/origin.git" update-ref refs/tags/stable "$(cat "$d/c1")" && git clone -q "$d/origin.git" "$d/co" 2>/dev/null
+  ) || { WHY="could not build the rig repo"; return 1; }
+  c1=$(cat "$d/c1"); c2=$(cat "$d/c2")
+  # every pin is on the hub (gate 7 passes): only the ccquota differs
+  pins=$(python3 "$BIN/fleet-node-update.py" pinned-artifacts - darwin-arm64 < "$ROOT/release.json" | tr -s ' \n' ' ')
+  hub_src() { printf '{"artifacts":[%s],"platforms":["darwin-arm64"],"ccquota_src":"%s"}\n' \
+    "$(for n in $pins; do printf '"%s",' "$n"; done | sed 's/,$//')" "$1" > "$d/hub/v1/fleet/release/artifacts"; }
+  hub_src "$(python3 "$BIN/fleet-src-digest.py" "$d/co" "$c1")"   # the hub image is c1's
+  t0=$(now)
+  out=$(PATH="$d/shim:$PATH" FLEET_CONF_DIR="$d/conf" XDG_CONFIG_HOME="$d/conf" CCQUOTA_HUB_URL='' FLEET_HUB_URL="file://$d/hub" \
+          sh "$BIN/fleet-stable.sh" move "$c2" --dir "$d/co" --repo o/r 2>&1); rc=$?
+  [ "$rc" = 3 ] || { WHY="move onto the Go change exited $rc, want 3 (refused): $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1; }
+  case "$out" in *'REFUSED — ccquota:'*redeploy*) ;; *) WHY="the refusal is not ccquota: … redeploy: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1 ;; esac
+  [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable)" = "$c1" ] || { WHY="stable moved onto a commit the hub's ccquota is not"; return 1; }
+  # the hub is redeployed from c2 → the same move goes through
+  hub_src "$(python3 "$BIN/fleet-src-digest.py" "$d/co" "$c2")"
+  out=$(PATH="$d/shim:$PATH" FLEET_CONF_DIR="$d/conf" XDG_CONFIG_HOME="$d/conf" CCQUOTA_HUB_URL='' FLEET_HUB_URL="file://$d/hub" \
+          sh "$BIN/fleet-stable.sh" move "$c2" --dir "$d/co" --repo o/r 2>&1) \
+    || { WHY="the move after the redeploy failed: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1; }
+  SECS=$(since "$t0")
+  [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable)" = "$c2" ] || { WHY="stable did not move once the hub ran the target's Go"; return 1; }
+  WHAT="入口镜像的 ccquota 早于目标提交的 Go：stable 拒挪（ccquota: 点名两边摘要）；入口重部署后同一提交照常挪"
 }
 
 # A release that deletes what an OPEN session's start still names (a hook script,

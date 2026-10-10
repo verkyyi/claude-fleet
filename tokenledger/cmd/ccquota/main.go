@@ -20,6 +20,10 @@ import (
 // Version is stamped at build time via -ldflags.
 var Version = "dev"
 
+// SrcDigest is the digest of the Go source this binary was built from
+// (release.SourceDigest, claude-fleet#2930), stamped like Version; "" = unstamped.
+var SrcDigest = ""
+
 func main() {
 	if len(os.Args) < 2 {
 		usage()
@@ -71,6 +75,10 @@ func main() {
 		err = runRelease(os.Args[2:])
 	case "version", "--version", "-v":
 		fmt.Println("ccquota", Version)
+		if SrcDigest != "" {
+			// a second line: the first stays `ccquota <ver>` for every reader
+			fmt.Println("src", SrcDigest)
+		}
 	case "help", "--help", "-h":
 		usage()
 	default:

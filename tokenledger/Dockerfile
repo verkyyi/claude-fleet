@@ -26,8 +26,12 @@ RUN test -f internal/api/fleetclient/pack/bin/fleet || { \
 ARG VERSION=docker
 ARG TARGETOS
 ARG TARGETARCH
+# SrcDigest: the digest of the Go source compiled here (claude-fleet#2930) — the
+# hub builds a node release only from a commit whose tokenledger/ hashes the
+# same, so a release never carries a ccquota older (or newer) than its commit.
+RUN go run ./cmd/ccquota-srcdigest . > /tmp/srcdigest
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
-    go build -ldflags "-s -w -X main.Version=${VERSION}" -o /out/ccquota ./cmd/ccquota
+    go build -ldflags "-s -w -X main.Version=${VERSION} -X main.SrcDigest=$(cat /tmp/srcdigest)" -o /out/ccquota ./cmd/ccquota
 # The agent binaries a joining machine downloads from this hub
 # (/v1/node/dist/<os>-<arch>, claude-fleet#1418) — there are no tagged releases,
 # and `go install` on a fresh SPOT box means installing Go first. Pure Go, so
@@ -35,7 +39,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
 ARG DIST_TARGETS="darwin/arm64 darwin/amd64 linux/amd64 linux/arm64"
 RUN mkdir -p /out/dist && for t in $DIST_TARGETS; do \
       CGO_ENABLED=0 GOOS=${t%/*} GOARCH=${t#*/} \
-      go build -ldflags "-s -w -X main.Version=${VERSION}" -o /out/dist/ccquota-${t%/*}-${t#*/} ./cmd/ccquota || exit 1; \
+      go build -ldflags "-s -w -X main.Version=${VERSION} -X main.SrcDigest=$(cat /tmp/srcdigest)" -o /out/dist/ccquota-${t%/*}-${t#*/} ./cmd/ccquota || exit 1; \
     done
 
 # Run
