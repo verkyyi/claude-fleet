@@ -133,6 +133,9 @@ case "$PRE_HUB" in http://*|https://*) PRE_HUB="${PRE_HUB%/}" ;; *) PRE_HUB='' ;
 # the invitation the hub's /i/<code> filled in (EPIC #2259 C2), or none
 INVITE="${FLEET_INVITE:-__FLEET_INVITE__}"
 case "$INVITE" in __FLEET_INV*|''|*[!A-Za-z0-9_-]*) INVITE='' ;; esac
+# the hub hands out debug tickets (claude-fleet#2891): it fills this with 1;
+# GitHub's copy and a hub with the feature off leave it, and nothing is asked
+DEBUG_TICKETS="${FLEET_DEBUG_TICKETS:-__FLEET_DEBUG__}"
 SRC="${FLEET_INSTALL_SRC:-https://raw.githubusercontent.com/verkyyi/claude-fleet/stable}"  # dist-ok: 不接 only (no hub: the developer's road)
 SRC="${SRC%/}"
 RAW="${FLEET_STABLE_RAW:-https://raw.githubusercontent.com/verkyyi/claude-fleet}"  # dist-ok: 不接 only
@@ -601,6 +604,37 @@ fi
 if [ -n "$INVITE" ]; then
   ( umask 077; printf '%s\n' "$INVITE" > "$CONF/invite.tmp" ) && mv -f "$CONF/invite.tmp" "$CONF/invite"
   if [ "$NEWBIE" = 1 ]; then say "邀请: 已收下，登录时一起带上"; else say "邀请: 已收下，登录时一起交给入口"; fi
+fi
+# the debug ticket (claude-fleet#2891, EPIC #2889 C2): asked for before any
+# sign-in, since a failed sign-in is when it is needed — 24 hours, good only on
+# this computer (the hub binds it to the install fingerprint below, of which it
+# gets the hash only), kept 0600 beside the invitation (~/.claude/fleet is a
+# version link: a file in it would go with the next update). fleet-debug
+# computes the same fingerprint. One younger than 12 hours is kept as it is;
+# a hub that says no (429, down, off) changes nothing — the install goes on.
+debug_fp() {
+  _hw="${FLEET_DEBUG_HWID:-}"
+  if [ -z "$_hw" ]; then
+    case "$(uname -s)" in
+      Darwin) _hw=$(ioreg -rd1 -c IOPlatformExpertDevice 2>/dev/null | awk -F'"' '/IOPlatformUUID/ { print $4; exit }') ;;
+      *) _hw=$(cat /etc/machine-id 2>/dev/null || cat /var/lib/dbus/machine-id 2>/dev/null) ;;
+    esac
+  fi
+  [ -n "$_hw" ] || return 1
+  printf '%s|%s|%s' "$_hw" "$(id -un)" "$ROOT" | { shasum -a 256 2>/dev/null || sha256sum; } | awk '{ print $1 }'
+}
+if [ "$HUB_ANS" = 1 ] && [ "$DEBUG_TICKETS" = 1 ] && [ -z "$(find "$CONF/debug-ticket" -mmin -720 2>/dev/null)" ] \
+   && _fp=$(debug_fp) && [ -n "$_fp" ]; then
+  _dv=$(printf '%s' "${COMMIT:-}" | tr -cd 'A-Za-z0-9._-')
+  if curl -fsS --max-time 10 -X POST -H 'Content-Type: application/json' \
+       --data "{\"fp\":\"$_fp\",\"version\":\"$_dv\",\"invite\":\"$INVITE\"}" \
+       "$HUBURL/v1/fleet/debug/ticket" -o "$tmp/debug-ticket.json" 2>/dev/null; then
+    _dt=$(sed -n 's/.*"ticket":"\(fdt1\.[A-Za-z0-9_.-]*\)".*/\1/p' "$tmp/debug-ticket.json")
+    if [ -n "$_dt" ]; then
+      ( umask 077; printf '%s\n' "$_dt" > "$CONF/debug-ticket.tmp" ) && mv -f "$CONF/debug-ticket.tmp" "$CONF/debug-ticket"
+      [ "$NEWBIE" = 1 ] || say "调试票: 已存好（24 小时，只认这台电脑；出问题时 fleet-debug 用）"
+    fi
+  fi
 fi
 # a computer the fleet was never on: the newcomer's one-session view (共同约定 1)
 if [ "$FRESH" = 1 ]; then
