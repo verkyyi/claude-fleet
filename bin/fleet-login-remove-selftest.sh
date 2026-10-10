@@ -136,9 +136,9 @@ EOF
 cat > "$WORK/shim/launchctl" <<'EOF'
 #!/bin/sh
 printf 'launchctl %s\n' "$*" >> "$FLEET_TEST_LOG"
-case "$1 $2" in
-  'bootout user/602'|'bootout gui/602') : > "$FLEET_TEST_PROCS.booted"; exit 0 ;;
-  'print gui/602') [ "${FAKE_GUI:-0}" = 1 ]; exit ;;
+case "$#:$1 $2" in
+  '2:bootout user/602'|'2:bootout gui/602') : > "$FLEET_TEST_PROCS.booted"; exit 0 ;;
+  '2:print gui/602') [ "${FAKE_GUI:-0}" = 1 ]; exit ;;
 esac
 case "$1" in
   bootout) [ "${FAKE_BOOTOUT_FAIL:-0}" = 1 ] && exit 1 ;;
