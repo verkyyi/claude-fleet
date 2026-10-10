@@ -1705,6 +1705,15 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # @label=Handoff typing hold @group=handoff @tier=internal @scope=fleet @edit=int @unit=sec
 #FLEET_HANDOFF_DEFER_SECS=30     # keypress at the pane's window within N s holds the handoff; 0 = off
 
+# A person mid-step holds every automatic reopen and handoff (issue #2869): a
+# session that ran `report waiting` with a page / code to scan or click, or (never
+# having reported) still has a Playwright browser open under its pane, reads
+# `looping` (@claude_wait=human) — no ver-stale / config reopen, sleep, idle reap or
+# park, and the auto-handoff nudge waits (one `hold` line in logs/attention.ndjson).
+# Its next report marks the step done; past this many seconds it lets go anyway.
+# @label=Person-step hold @group=handoff @tier=internal @scope=fleet @edit=int @unit=sec
+#FLEET_HUMAN_WAIT_SECS=1800      # how long a person's scan / click step holds reopen + handoff
+
 # Compact a worker IN PLACE before handing it off (issue #1269). A handoff makes
 # the fresh session re-read the code and re-learn the task — often dearer than the
 # work left. So when a worker's context sits at/over this % but under
