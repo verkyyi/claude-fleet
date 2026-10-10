@@ -200,7 +200,12 @@ sessions reach it. Two logins share a file exactly when the hub handed both the
 same token (the pool accounts); a token only one login leased is never served to
 another, and two people's accounts that happen to share a label stay two files.
 A tenant that joined before the pool moves its copies in when the proxy starts;
-a file no index names any more is removed; `uninstall` puts each tenant's copies
+an own copy left after that (`accounts/<label>.hub` beside the pool's — a join's
+`pool_hold` the running proxy re-reads from `meta.json`, issue #2849) moves in at
+the tenant's next lease or the first read of that label, so a label resolves to
+the pool's copy only; `fleet-credsep.py machine pooldup` (root; the machine
+doctor's `credpool` row) WARNs on a token held twice, by `<login>:<label>` and
+fingerprint, never the token; a file no index names any more is removed; `uninstall` puts each tenant's copies
 back as its own files. A session credential minted on the shared proxy carries its
 login (`lg`) and is verified with **that** login's key, so a credential relabelled
 to another login only fails the signature. A hub pass (the central route) is

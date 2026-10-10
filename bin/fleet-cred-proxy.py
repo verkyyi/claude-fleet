@@ -1053,7 +1053,7 @@ class Proxy(BaseHTTPRequestHandler):
             put["Authorization"] = "Bearer " + hubcred
             return base, upath, put, drop, "none"
         if provider == "codex":
-            path = pool_entry(c, "codex", acct) or codex_auth_path(c, acct)
+            path = pool_resolve(c, "codex", acct) or codex_auth_path(c, acct)
             at, aid, fp = codex_tokens(path)
             self.codex_seen = (os.path.dirname(path), fp)
             put["Authorization"] = "Bearer " + at
@@ -1061,7 +1061,7 @@ class Proxy(BaseHTTPRequestHandler):
             if aid:   # ALWAYS the bound account's: a session never picks its workspace (#1912)
                 put["chatgpt-account-id"] = aid
         else:
-            pp = pool_entry(c, "claude", acct)
+            pp = pool_resolve(c, "claude", acct)
             if pp:
                 with open(pp) as f:
                     put["Authorization"] = "Bearer " + json.load(f)["claudeAiOauth"]["accessToken"]
@@ -1339,6 +1339,44 @@ def own_path(cfg, kind, label):
     return codex_auth_path(cfg, label)
 
 
+def pool_held(cfg):
+    """Its own proxy still reads the store's files (`machine join`, issue #2432)?
+    The hold is read at start, but join drops it in the tenant's meta.json only
+    after — with this proxy already running. So a held tenant re-reads it every
+    time: a hold the meta no longer carries is released here, or every renewal
+    would go on writing a second copy beside the pool's (issue #2849)."""
+    if not getattr(cfg, "pool_hold", False):
+        return False
+    try:
+        with open(os.path.join(os.path.dirname(cfg.state), "meta.json")) as f:
+            m = json.load(f)
+        if isinstance(m, dict) and not m.get("pool_hold"):
+            cfg.pool_hold = False
+    except (OSError, ValueError):
+        pass
+    return cfg.pool_hold
+
+
+def pool_resolve(cfg, kind, label):
+    """-> the pool file for <kind>:<label>, folding a tenant's own copy in first
+    (issue #2849): on the shared proxy a label resolves to the pool's copy only,
+    and an own accounts/<label>.hub left from before (a join's hold, an install)
+    moves in on the first read. "" when there is none (the own path is read)."""
+    pp = pool_entry(cfg, kind, label)
+    if pp or not getattr(cfg, "pool", "") or pool_held(cfg):
+        return pp
+    own = own_path(cfg, kind, label)
+    if not os.path.isfile(own):
+        return ""
+    try:
+        with POOL_LOCK:
+            with open(own, "rb") as f:
+                pool_put(cfg, kind, label, f.read())
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        sys.stderr.write("fleet-cred-proxy: pool: %s %s:%s left in place (%s)\n" % (cfg.name, kind, label, e))
+    return pool_entry(cfg, kind, label)
+
+
 def pool_index(cfg):
     d = read_json(os.path.join(cfg.state, "pool.json"), {})
     return d if isinstance(d, dict) else {}
@@ -1433,7 +1471,7 @@ def pool_adopt(cfgs):
     """A tenant that joined before the pool: its own copies move in, one each."""
     n = 0
     for c in cfgs:
-        if getattr(c, "pool_hold", False):
+        if pool_held(c):
             continue        # its own proxy still reads these files (issue #2432): next start
         found = []
         acc = c.accounts
@@ -1593,7 +1631,7 @@ def ctl_handle(req, t):
             return {"ok": False, "err": "store: empty or oversized"}
         if kind not in POOL_FILE:
             return {"ok": False, "err": "store: kind claude|codex"}
-        if getattr(cfg, "pool", "") and getattr(cfg, "pool_hold", False):
+        if getattr(cfg, "pool", "") and pool_held(cfg):
             # joining from its own proxy (issue #2432): that one still reads the
             # store's files until `machine join` boots it out — no pool yet
             write_private(own_path(cfg, kind, label), data)
@@ -1607,6 +1645,7 @@ def ctl_handle(req, t):
             try:
                 with POOL_LOCK:
                     key = pool_put(cfg, kind, label, data)
+                    pool_adopt([cfg])   # an own copy left from before goes in too (issue #2849)
                     pool_gc(cfg.pool, [x.cfg for x in Proxy.tenants.values()])
             except (OSError, ValueError, KeyError, TypeError) as e:
                 return {"ok": False, "err": "store: %s" % e}
