@@ -80,6 +80,8 @@
 #   drill-login-orphaned                            tokenledger/internal/api fleet_drill.go + bin/fleet-login-remove.sh
 #                                                   (closeDrillLogins, exit 4; go test, when a toolchain is here)
 #   opening-eta-climbs                              tokenledger/internal/api fleet_opening.go (openingETALeft)
+#   heartbeat-sys-blocked                           tokenledger/internal/agent beat_parts.go (sysSampler, asyncReading,
+#                                                   fleetBeatBudget) + internal/api nodes.go (foldSys); go test
 #   login-remove-record-left                        bin/fleet-login-remove.sh (step 6 checks the record is gone)
 #   drill-login-handed-silently                     tokenledger/internal/api fleet_drill.go (closeDrillLogins
 #                                                   handed) + store DeleteDrill (keeps the handed rows)
@@ -4466,14 +4468,14 @@ FAKE
 
 # ---- the hub-half drills of #2696 share one runner: the named Go tests must
 # exist, the greps must hold, and with a toolchain they must pass.
-_drill_go_tests() {  # <tests> <test file> <what>
-  local tests=$1 f=$2 what=$3 t out rc
+_drill_go_tests() {  # <tests> <test file> <what> [<package>, default ./internal/api]
+  local tests=$1 f=$2 what=$3 pkg=${4:-./internal/api} t out rc
   for t in $tests; do
     grep -q "^func $t(" "$f" 2>/dev/null || { WHY="the hub half's test $t is not in ${f#$ROOT/}"; return 1; }
   done
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
     out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/api 2>&1); rc=$?
+          go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" "$pkg" 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
       0:*) WHAT=$what ;;
@@ -4569,6 +4571,35 @@ drill_drill_login_handed_silently() {
     || { WHY="DeleteDrill no longer keeps the rows of a login left on a machine"; return 1; }
   _drill_go_tests 'TestDrillUnknownCreateIsWaitedThenHanded' "$ROOT/tokenledger/internal/api/fleet_drill_test.go" \
     '开号没回音的演练登录先等、一小时后交还运营者：200 带 left_for_operator，账户行留着（go test）' || return 1
+  SECS=$(since "$t0")
+}
+
+# ---- heartbeat-sys-blocked (#2798): the beat ran the fleet probe before it
+# read the load, under one observed_at, and the hub folded a machine's load from
+# its login rows only — the machine link's row was skipped — so a slow probe or
+# a refused lane left m5 with no load all day. Now the load is sampled on its
+# own clock (sys_at), the fleet half waits at most fleetBeatBudget and carries
+# the last completed read with its own fleet_at, and the machine row takes the
+# newest timed reading of any heard row, the machine link's included.
+drill_heartbeat_sys_blocked() {
+  CAP=180; local t0 w1 ag="$ROOT/tokenledger/internal/agent" api="$ROOT/tokenledger/internal/api"
+  t0=$(now)
+  grep -q 'fillSys(&hb, processSys)' "$ag/node.go" \
+    || { WHY="nodeHeartbeat no longer takes the sampler's load"; return 1; }
+  grep -q 'a.fleetRd.get(ctx, 0, fleetBeatBudget' "$ag/node.go" \
+    || { WHY="nodeHeartbeat waits on the fleet read with no budget again"; return 1; }
+  if grep -q 'readSysInfo()' "$ag/node.go" "$ag/node_machine.go"; then
+    WHY="a beat reads the kernel inline again instead of the sampler"; return 1
+  fi
+  grep -q 'm.foldSys(sysBest\[v.Hostname\], v)' "$api/nodes.go" \
+    || { WHY="the roster no longer folds every heard row's load (the machine link's too)"; return 1; }
+  _drill_go_tests 'TestHeartbeatGoesOutWhileTheFleetProbeHangs TestUnreadSysIsSaidAndLoggedOnce' "$ag/beat_parts_test.go" \
+    'fleet 探测卡住，心跳照常按时发出：负载新鲜（sys_at）、fleet 那一半是上一次读完的（旧 fleet_at，不为空）（go test）' \
+    ./internal/agent || return 1
+  w1=$WHAT
+  _drill_go_tests 'TestMachineLoadIsTheNewestTimedReadingOfAnyRow' "$api/nodes_sys_test.go" \
+    '机器行取任一在线行（含整机连接）带时间的最新负载，旧节点为「时间未知」（go test）' || return 1
+  WHAT="${w1}；${WHAT}"
   SECS=$(since "$t0")
 }
 

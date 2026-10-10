@@ -11,13 +11,16 @@ import (
 // estimate of what can be allocated without swapping).
 func readSysInfo() sysInfo {
 	var si sysInfo
-	if b, err := os.ReadFile("/proc/loadavg"); err == nil {
-		if f := strings.Fields(string(b)); len(f) > 0 {
-			si.Load1, _ = strconv.ParseFloat(f[0], 64)
-		}
+	if b, err := os.ReadFile("/proc/loadavg"); err != nil {
+		si.unread("load", err.Error())
+	} else if f := strings.Fields(string(b)); len(f) == 0 {
+		si.unread("load", "/proc/loadavg: empty")
+	} else if si.Load1, err = strconv.ParseFloat(f[0], 64); err != nil {
+		si.unread("load", "/proc/loadavg: "+err.Error())
 	}
 	f, err := os.Open("/proc/meminfo")
 	if err != nil {
+		si.unread("mem", err.Error())
 		return si
 	}
 	defer f.Close()
@@ -37,6 +40,9 @@ func readSysInfo() sysInfo {
 		case "MemAvailable:":
 			si.MemFree = kb << 10
 		}
+	}
+	if si.MemTotal == 0 {
+		si.unread("mem", "/proc/meminfo: no MemTotal")
 	}
 	return si
 }

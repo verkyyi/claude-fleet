@@ -8,7 +8,7 @@ the way `ccquota release fetch --artifacts` lays one out (C7). Nothing touches
 
   A  a fresh machine: every part lands on the release (runtime, ccquota, claude,
      codex, tmux, the bootstrap cache, a managed account's links, the daemon) and
-     `versions` says 各部件 = 发布版声明
+     `versions` says 各部件 = 发布版声明, and `versions --json` (issue #2798) the same
   B  an upgrade whose new Claude Code fails the doctor: the whole machine goes
      back — current, ccquota, every tool, the cache, the account links — and the
      version is skipped until the target moves
@@ -303,6 +303,15 @@ class A_Fresh(Sandbox):
         self.assertIn("各部件 = 发布版声明", v)
         self.assertIn("claude 2.1.1", v)
         self.assertIn("codex codex-cli 0.154.0", v)
+        # --json: the machine link's 版本与更新 (issue #2798) — the release,
+        # what each part answers, what release.json pins, the updater's record
+        j = json.loads(self.cmd("versions", "--json").stdout)
+        self.assertEqual(j["runtime"], V1)
+        self.assertEqual(j["actual"]["claude"], "2.1.1")
+        self.assertEqual(j["actual"]["codex"], "0.154.0")
+        self.assertEqual(j["want"]["claude"], "2.1.1")
+        self.assertTrue(j["update"].get("result"), j)
+        self.assertRegex(j["update"].get("at", ""), r"^\d{4}-\d\d-\d\dT")
         # the daemon is asked to restart onto it
         self.assertEqual(self.rj(os.path.join(self.d, "db", "update-restart.json"))["to"], V1)
         # again: nothing to do, still current

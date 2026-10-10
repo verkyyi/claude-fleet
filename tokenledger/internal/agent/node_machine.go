@@ -74,6 +74,10 @@ type MachineConfig struct {
 	// service_control (claude-fleet#2527): fleet-node-supervisor.py beside
 	// the ccquota binary in the root runtime; "" = no service control.
 	ServiceCtl string
+	// Updater is the machine's updater (fleet-node-update.py beside the
+	// ccquota binary), asked `versions --json` every versionsEvery for the
+	// beat's 版本与更新 (claude-fleet#2798); "" = no versions reported.
+	Updater string
 	// Tenants is one Config per login served: its own Token (that login's
 	// node token), Home, StateDir and RunAs. Fleet is forced on.
 	Tenants []Config
@@ -90,6 +94,9 @@ type machineLink struct {
 	// refused is login → the hub's WRONG_LOGIN for its last hello
 	// (claude-fleet#2501), carried on the link's own heartbeat.
 	refused map[string]string
+	// vers is the machine's last 版本与更新 reading (claude-fleet#2798),
+	// refreshed off the beat — a slow updater never holds the beat up.
+	vers asyncReading[control.Versions]
 }
 
 // setRefused records (why != "") or clears a login's refused hello.
@@ -299,7 +306,9 @@ func (ml *machineLink) session(ctx context.Context) (bool, error) {
 	}()
 
 	beat := func() error {
-		m, err := control.New(control.TypeHeartbeat, machineHeartbeat(ml.cfg.Version, ml.refusedNow(), ml.cfg.ServicesFile))
+		hb := machineHeartbeat(ml.cfg.Version, ml.refusedNow(), ml.cfg.ServicesFile)
+		ml.fillVersions(ctx, &hb)
+		m, err := control.New(control.TypeHeartbeat, hb)
 		if err != nil {
 			return err
 		}
@@ -370,7 +379,7 @@ func (ml *machineLink) demux(ctx context.Context, conn *websocket.Conn, m contro
 }
 
 // machineHeartbeat is the machine link's own beat: liveness and the machine's
-// load, never sessions — its logins report those on their own lanes — the
+// load (the sampler's, with its time — claude-fleet#2798), never sessions — its logins report those on their own lanes — the
 // logins whose hello the hub refused (claude-fleet#2501) and the machine
 // daemon's register of login services (claude-fleet#2526).
 func machineHeartbeat(version string, refused map[string]string, servicesFile string) control.Heartbeat {
@@ -382,9 +391,24 @@ func machineHeartbeat(version string, refused map[string]string, servicesFile st
 	if u, err := user.Current(); err == nil {
 		hb.OSUser = u.Username
 	}
-	si := readSysInfo()
-	hb.Load1, hb.MemFreeBytes, hb.MemTotalBytes, hb.MemPressure = si.Load1, si.MemFree, si.MemTotal, si.MemPressure
+	fillSys(&hb, processSys)
 	return hb
+}
+
+// fillVersions puts the machine's last 版本与更新 into its beat
+// (claude-fleet#2798), starting a fresh read when the last is versionsEvery
+// old. It never waits: the first beats go out without versions.
+func (ml *machineLink) fillVersions(ctx context.Context, hb *control.Heartbeat) {
+	if ml.cfg.Updater == "" {
+		return
+	}
+	updater := ml.cfg.Updater
+	v, at, ok := ml.vers.get(ctx, versionsEvery, 0, false, func(ctx context.Context) (control.Versions, bool) {
+		return readVersions(ctx, updater)
+	})
+	if ok {
+		hb.Versions, hb.VersionsAt = &v, &at
+	}
 }
 
 // loginToken is what a tenant's hello proves its login with; empty for a

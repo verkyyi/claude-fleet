@@ -91,6 +91,9 @@ func runAgentMachine(args []string) error {
 		// …and its script, beside this binary in the root runtime
 		// (<current>/bin/{ccquota,fleet-node-supervisor.py}) — claude-fleet#2527.
 		ServiceCtl: envOr("CCQUOTA_MACHINE_SUPERVISOR", machineSupervisor()),
+		// …and the updater beside it, for the beat's 版本与更新
+		// (claude-fleet#2798).
+		Updater: envOr("CCQUOTA_MACHINE_UPDATER", machineScript("fleet-node-update.py")),
 	})
 }
 
@@ -240,12 +243,16 @@ func machineFlag(args []string) bool {
 // may run it: a regular file root owns that no group or other may write (the
 // root runtime's rule, 共同约定 3). "" when there is none — service_control is
 // then refused, never run from anywhere else.
-func machineSupervisor() string {
+func machineSupervisor() string { return machineScript("fleet-node-supervisor.py") }
+
+// machineScript is a root-owned, not group/world-writable script beside this
+// binary in the root runtime, or "" — never one anyone else could swap.
+func machineScript(name string) string {
 	exe, err := os.Executable()
 	if err != nil {
 		return ""
 	}
-	p := filepath.Join(filepath.Dir(exe), "fleet-node-supervisor.py")
+	p := filepath.Join(filepath.Dir(exe), name)
 	fi, err := os.Stat(p)
 	if err != nil || !fi.Mode().IsRegular() || fi.Mode().Perm()&0o022 != 0 {
 		return ""

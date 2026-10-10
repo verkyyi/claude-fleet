@@ -485,6 +485,26 @@ type Heartbeat struct {
 	// 4 critical. 0 (absent) is unknown: Linux and an older agent; placement
 	// excludes a machine at warn (2) or above, and never one for being unknown.
 	MemPressure int `json:"mem_pressure,omitempty"`
+	// SysAt is when Load1 / NCPU / MemFreeBytes / MemTotalBytes / MemPressure
+	// were read (claude-fleet#2798): the agent samples them on their own
+	// clock, so a beat held up by a slow fleet read never carries a stale or
+	// empty load under a fresh ObservedAt. SysUnread names what the platform
+	// would not say ("load", "mem") — a zero there is 「读不到」, not a zero.
+	// Both absent from an older agent: the hub then says 「时间未知」.
+	SysAt     *time.Time `json:"sys_at,omitempty"`
+	SysUnread []string   `json:"sys_unread,omitempty"`
+	// FleetAt is when the fleet half (Fleets, Sessions, the capacity, Ready,
+	// Credsep, FleetVersion) was read (claude-fleet#2798). A read past its
+	// budget leaves the beat carrying the LAST completed one with its own
+	// older time — never an empty one. Absent from an older agent and before
+	// any read finished.
+	FleetAt *time.Time `json:"fleet_at,omitempty"`
+	// Versions is a managed machine's parts against its release
+	// (claude-fleet#2798): only on the machine link's beat, read on its own
+	// slower clock at VersionsAt. Absent from a plain agent, an older machine
+	// agent, and a machine with no updater.
+	Versions   *Versions  `json:"versions,omitempty"`
+	VersionsAt *time.Time `json:"versions_at,omitempty"`
 
 	// Sessions is how many fleet sessions (worker + scratch windows) this
 	// login runs across all its fleets. It sums only the fleets that were
@@ -562,6 +582,34 @@ type Heartbeat struct {
 
 	AgentVersion string    `json:"agent_version,omitempty"`
 	ObservedAt   time.Time `json:"observed_at"`
+}
+
+// Versions is a managed machine's 版本与更新 (claude-fleet#2798), as
+// `fleet-node-update.py versions --json` says it: the release its runtime link
+// names, what each part actually answers, what release.json pins, and where the
+// updater is.
+type Versions struct {
+	// Runtime is the release sha <root>/current names; "" = no release here.
+	Runtime string `json:"runtime,omitempty"`
+	// Actual is part → the version it answers (ccquota · claude · codex ·
+	// tmux), "" for one that did not answer. Want is release.json's pins.
+	Actual map[string]string `json:"actual,omitempty"`
+	Want   map[string]string `json:"want,omitempty"`
+	// Daemon is the release the machine daemon runs.
+	Daemon string `json:"daemon,omitempty"`
+	// Update is the updater's own record (update.json): its last result,
+	// the phase a tick is in, when, and why.
+	Update *UpdateState `json:"update,omitempty"`
+	// Error says why the read failed; the rest is then absent.
+	Error string `json:"error,omitempty"`
+}
+
+// UpdateState is the updater's state as update.json keeps it.
+type UpdateState struct {
+	Result string     `json:"result,omitempty"`
+	Phase  string     `json:"phase,omitempty"`
+	At     *time.Time `json:"at,omitempty"`
+	Reason string     `json:"reason,omitempty"`
 }
 
 // ServiceStatus is one entry of a machine's login-level register

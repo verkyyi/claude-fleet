@@ -78,7 +78,8 @@ Usage:
                                             failure / rollback / stuck · 2 not set up
   fleet-node-update.py doctor               the machine doctor: PASS/WARN/FAIL rows,
                                             exit = the FAIL count (`fleet doctor --machine`)
-  fleet-node-update.py versions             one line: every part's version vs release.json
+  fleet-node-update.py versions [--json]    one line: every part's version vs release.json;
+                                            --json: the machine link's 版本与更新 (issue #2798)
   fleet-node-update.py check-release <file|->  validate a release.json (fleet-stable.sh move)
   fleet-node-update.py pinned-artifacts <file|-> [<os>-<arch>…]
                                             the artifact names it pins, one a line
@@ -1049,6 +1050,45 @@ def credsep_row(p):
             % (live[0], want))
 
 
+_VER_RE = re.compile(r"\d+(?:\.\d+)+[0-9A-Za-z.+-]*")
+
+
+def versions_json(p):
+    """The machine's 版本与更新 as the machine link's beat carries it (issue
+    #2798, control.Versions): the release sha, what each part answers, what
+    release.json pins, the daemon's release, the updater's own record. Every
+    part best effort — one that does not answer is "", never a guess."""
+    out = {}
+    cur = link_sha(p.current)
+    if cur:
+        out["runtime"] = cur
+        try:
+            out["want"] = {k: v for k, v in wanted(check_release(
+                read_json(os.path.join(p.rel(cur), RELEASE_FILE), None))).items() if v}
+        except ValueError:
+            pass
+        actual = {}
+        for name, path, args in [("ccquota", os.path.join(p.current, "bin", "ccquota"), ["version"])] + [
+                (t, os.path.join(p.current, "tools", "bin", t), ["-V"] if t == "tmux" else ["--version"])
+                for t in TOOLS]:
+            rc, v = tool_version(path, args) if os.path.exists(path) else (127, "")
+            m = _VER_RE.search(v) if rc == 0 else None
+            # ccquota says `ccquota prod-<sha>`: its last word is its version
+            actual[name] = m.group(0) if m else (v.split()[-1] if rc == 0 and v.split() else "")
+        out["actual"] = actual
+    st = read_json(p.sup.state_file, {}) or {}
+    rt = (st.get("supervisor") or {}).get("runtime")
+    if rt:
+        out["daemon"] = rt
+    u = read_json(p.file, None)
+    if isinstance(u, dict):
+        upd = {k: u[k] for k in ("result", "phase", "reason") if u.get(k)}
+        if u.get("at"):
+            upd["at"] = iso(u["at"])
+        out["update"] = upd
+    return out
+
+
 def versions_line(p):
     cur = link_sha(p.current)
     if not cur:
@@ -1181,6 +1221,9 @@ def main(argv):
         print("  INFO  %s" % versions_line(p)[len("version  "):])
         return sum(1 for r in rows if r[0] == "FAIL")
     if cmd == "versions":
+        if "--json" in rest:
+            print(json.dumps(versions_json(p), sort_keys=True))
+            return 0
         print(versions_line(p))
         return 0
     if cmd == "status":

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"encoding/binary"
+	"fmt"
 
 	"golang.org/x/sys/unix"
 )
@@ -19,11 +20,17 @@ import (
 // reads beside the free-memory floor.
 func readSysInfo() sysInfo {
 	var si sysInfo
-	if b, err := unix.SysctlRaw("vm.loadavg"); err == nil && len(b) >= 24 {
+	if b, err := unix.SysctlRaw("vm.loadavg"); err != nil {
+		si.unread("load", "vm.loadavg: "+err.Error())
+	} else if len(b) < 24 {
+		si.unread("load", fmt.Sprintf("vm.loadavg: %d bytes", len(b)))
+	} else {
 		// struct loadavg { fixpt_t ldavg[3]; long fscale; } — 3×u32, pad, i64.
 		ld := binary.LittleEndian.Uint32(b[0:4])
 		if fscale := binary.LittleEndian.Uint64(b[16:24]); fscale > 0 {
 			si.Load1 = float64(ld) / float64(fscale)
+		} else {
+			si.unread("load", "vm.loadavg: fscale 0")
 		}
 	}
 	if lv, err := unix.SysctlUint32("kern.memorystatus_vm_pressure_level"); err == nil {
@@ -31,9 +38,12 @@ func readSysInfo() sysInfo {
 	}
 	if total, err := unix.SysctlUint64("hw.memsize"); err == nil {
 		si.MemTotal = total
+	} else {
+		si.unread("mem", "hw.memsize: "+err.Error())
 	}
 	page, err := unix.SysctlUint32("hw.pagesize")
 	if err != nil || page == 0 {
+		si.unread("mem", fmt.Sprintf("hw.pagesize: %d %v", page, err))
 		return si
 	}
 	var pages uint64
