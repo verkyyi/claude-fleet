@@ -551,17 +551,17 @@ rv_within() {
 
 case "$mode" in
 # ---------------------------------------------------------------------------------
-# health [<client session>] [<client tmp>] — the client's proxy windows, as `fleet
+# stage-health [<client session>] [<client tmp>] — the client's proxy windows, as `fleet
 # doctor`'s `stage` row reads them (issue #2987). One line, `PASS|WARN<TAB><words>`,
 # exit 1 on WARN. It flags what made every switch a full reconnect on the
 # operator's MacBook: a window whose `@remote_ctl` socket is gone while its line is
 # up, a warm master logged in as another login than the sessions it should carry,
 # and a `run` loop no proxy pane runs (a stray: more than one per window).
-health)
+stage-health)
   hs="${1:-${FLEET_SHELL_SESSION:-fleet-shell}}"
   htmp="${2:-${FLEET_SHELL_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/claude-fleet/shell}/tmp}"
   hwd="$htmp/warm"
-  hbad='' hn=0 hpanes=' ' US=$'\037'   # not a tab: `read` collapses empty tab fields
+  hbad='' hn=0 hpanes=' ' US='|'   # not a tab (`read` collapses empty tab fields), not a control byte (tmux escapes one in a format)
   hsay() { case "$hbad" in *"$1"*) ;; *) hbad="$hbad${hbad:+ · }$1" ;; esac; }
   hrows=$( { tmux -L "$hs-stage" list-windows -a -F "#{window_id}$US#{@remote}$US#{@remote_login}$US#{@remote_ctl}$US#{@remote_down}$US#{pane_pid}" 2>/dev/null
              tmux -L "$hs" list-windows -a -F "#{window_id}$US#{@remote}$US#{@remote_login}$US#{@remote_ctl}$US#{@remote_down}$US#{pane_pid}" 2>/dev/null; } )

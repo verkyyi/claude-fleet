@@ -326,7 +326,7 @@ RCHAN=$(tl show-options -wqv -t "$PW" @remote_chan)
 RPID=$(tl display-message -p -t "$PW" '#{pane_pid}')
 tl set-window-option -t "$PW" @remote_chan "$WORK/nochan"   # no serve channel: the one-shot path
 rm -f "$RCTL"
-out=$(bash "$BIN/fleet-remote-view.sh" health "$LS" "$TMPDIR"); rc=$?
+out=$(bash "$BIN/fleet-remote-view.sh" stage-health "$LS" "$TMPDIR"); rc=$?
 eq "R: health WARNs (exit 1) on the gone control socket" 1 "$rc"
 has "R: …naming it" "$out" "m4 的控制连接 ${RCTL##*/} 不在了"
 mkdir -p "$TMPDIR/warm"
@@ -340,17 +340,17 @@ on7() { [ "$(vcur "$VS")" = "$RW" ]; }
 waitfor 5 on7 || fail "R: the re-adopted select never showed worker 7" "$(vcur "$VS")"
 eq "R: the window adopted the warm master" "$TMPDIR/warm/m4.sock" "$(tl show-options -wqv -t "$PW" @remote_ctl)"
 has "R: the switch is logged as readopt" "$(cat "$WORK/clog/connect.log" 2>/dev/null)" "switch	m4	readopt	"
-out=$(bash "$BIN/fleet-remote-view.sh" health "$LS" "$TMPDIR"); rc=$?
+out=$(bash "$BIN/fleet-remote-view.sh" stage-health "$LS" "$TMPDIR"); rc=$?
 eq "R: health PASSes once re-adopted" "0" "$rc"
 has "R: …one proxy window" "$out" "PASS	1 个代理窗口"
 tl set-window-option -t "$PW" @remote_login verky
 printf '{"machine": "m4", "kind": "direct", "name": "public", "login": "verkyyi"}\n' > "$TMPDIR/warm/m4.sock.route"
-out=$(bash "$BIN/fleet-remote-view.sh" health "$LS" "$TMPDIR"); rc=$?
+out=$(bash "$BIN/fleet-remote-view.sh" stage-health "$LS" "$TMPDIR"); rc=$?
 eq "R: health WARNs on a warm master of another login" 1 "$rc"
 has "R: …naming both logins" "$out" "m4 的预热连接登的是 verkyyi，看的会话在 verky"
 python3 -c 'import socket, sys
 s = socket.socket(socket.AF_UNIX); s.bind(sys.argv[1])' "$TMPDIR/warm/m4@verky.sock"
-out=$(bash "$BIN/fleet-remote-view.sh" health "$LS" "$TMPDIR"); rc=$?
+out=$(bash "$BIN/fleet-remote-view.sh" stage-health "$LS" "$TMPDIR"); rc=$?
 eq "R: …and passes once that login has its own (m4@verky.sock)" "0" "$rc"
 rm -f "$TMPDIR/warm/m4.sock" "$TMPDIR/warm/m4.sock.route" "$TMPDIR/warm/m4@verky.sock"
 tl set-window-option -u -t "$PW" @remote_login
