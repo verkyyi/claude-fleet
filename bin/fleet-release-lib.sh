@@ -70,6 +70,7 @@ if not re.match(r"^[0-9a-f]{40}$", s):
 print(s, q)' "$f" 2>/dev/null)
   rm -f "$f"
   [ -n "$out" ] || { REL_ERR='the hub answered /v1/fleet/release/stable with no release'; return 1; }
+  # shellcheck disable=SC2034  # read by the caller (fleet-install-sync.sh, fleet-host-install.sh)
   REL_SHA=${out%% *} REL_SEQ=${out#* }
   return 0
 }

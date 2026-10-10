@@ -967,7 +967,7 @@ rel "$C7" 6 "$C6"; hubstable "$C7"; touch "$UW/badsig"; run2
 eq "U: a bad signature is fetch-failed" fetch-failed "$(st2 result)"
 contains "U: …says it did not verify" "$(st2 reason)" "did not arrive or did not verify"
 eq "U: …nothing switched" "$I1" "$(git -C "$CO2" rev-parse HEAD)"
-eq "U: …no half version left" "" "$(ls -A "$V2" | grep incoming)"
+eq "U: …no half version left" "" "$(for p in "$V2"/.incoming*; do [ -e "$p" ] && printf '%s' "$p"; done)"
 eq "U: a new hub key is never taken by itself" "ed25519 AAAAhubreleasekey0001" "$(cat "$CONF2/release.pub")"
 rm -f "$UW/badsig"; : > "$LOG"; run2
 eq "U: the next stable verified → switched" switched "$(st2 result)"

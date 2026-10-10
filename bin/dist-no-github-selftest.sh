@@ -275,7 +275,7 @@ leg_install_sync() {
 }
 
 leg_bad_signature() {
-  local co st
+  local co st p
   touch "$WORK/badsig.flag"
   leg_install_sync badsig
   rm -f "$WORK/badsig.flag"
@@ -284,7 +284,7 @@ leg_bad_signature() {
   WHY=''
   [ "$(mark_of "$co")" = A ] || WHY="the install moved to $(mark_of "$co") on a release that did not verify"
   case "$st" in "fetch-failed "*"did not verify"*) ;; *) WHY="${WHY:+$WHY · }the tick reads [$st], not fetch-failed «did not verify»" ;; esac
-  ls -A "$co.versions" 2>/dev/null | grep -q incoming && WHY="${WHY:+$WHY · }a half-fetched release was left in $co.versions/"
+  for p in "$co.versions"/.incoming*; do [ -e "$p" ] && WHY="${WHY:+$WHY · }a half-fetched release was left in $co.versions/"; done
   return 0
 }
 
