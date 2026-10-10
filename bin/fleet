@@ -94,6 +94,8 @@
 #                               `能力` row (基础 · 承载, #1806), then this
 #                               login's Agent configuration — hooks · skills ·
 #                               MCP · mod (#1725)
+#   fleet doctor --bundle <dir> everything a diagnosis needs from this computer,
+#                               credentials taken out, in one directory (#2890)
 #
 # The client is the ONLY way in (issue #1628): there is no fallback to ssh-ing
 # into a machine's own list. It needs tmux ≥ 3.2 and a terminal; without either
@@ -198,7 +200,7 @@ fi
 cmd=${1-}
 case $cmd in
   -h|--help|help)
-    sed -n '2,96p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,98p' "$0" | sed 's/^# \{0,1\}//'
     exit 0 ;;
   '')
     client ;;
@@ -206,6 +208,12 @@ case $cmd in
     echo "fleet · 不认识的选项 ${cmd}；选路调试用 fleet connect $* （fleet --help）" >&2
     exit 2 ;;
 esac
+# `fleet doctor --bundle <dir>` with only the client here (issue #2890): the
+# diagnosis bundle — on a node fleet-doctor.sh execs the same script.
+if [ "$cmd" = doctor ] && [ "${2:-}" = --bundle ] && [ ! -x "$here/fleet-doctor.sh" ]; then
+  shift
+  exec sh "$here/fleet-doctor-bundle.sh" "$@"
+fi
 # `fleet doctor` with only the client here: no fleet-doctor.sh beside — the
 # client's own row (issue #1722: version, hub, tmux, cert), then the Agent
 # configuration package's (issue #1725). Non-zero when either warns.

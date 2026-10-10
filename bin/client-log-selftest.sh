@@ -58,6 +58,15 @@ bearer	got bearer abc.DEF-123_~+/= back
 url_query	GET https://hub.example/v1/x?node=m5&token=SEKRIT123&a=1 failed
 env_secret	FLEET_HUB_TOKEN=tok-zzz9 in the environment
 json_token	{"url": "https://h", "token": "hub-json-token-77"}
+gitlab	token glpat-FAKE-not-real in the remote
+slack	posted with xoxb-1234567890-abcdef
+aws	key AKIAABCDEFGHIJKLMNOP used
+google	maps AIzaSyA1234567890abcdefghijklmno key
+jwt	session eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.sig_x ok
+fleet_debug_ticket	paste: fleet-debug ticket fdt.abc.def
+env_key	CCQUOTA_FLEET_DEBUG_KEY=s3cret set
+env_secret_quoted	FLEET_HUB_TOKEN="abc def" quoted
+url_secret	GET https://hub.example/x?api_key=SEKRIT&a=1
 EOF
 rules=$(grep -v '^#' "$SHAPES" | grep -n . | awk -F '\t' '$2 ~ /\\/ || $2 ~ /[{]/ || $2 ~ /\(\?/ || $2 ~ /\[\[:/ { print $1 }')
 [ -z "$rules" ] && ok "A shapes: no backslash, interval, (?…) or [[:class:]]" || bad "A shapes break the shared rules: $rules"

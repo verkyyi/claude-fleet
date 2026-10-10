@@ -101,6 +101,8 @@
 #                                                   receipt_watch), fleet-lib.sh fleet_hub_refused
 #   notify-silent                                   bin/fleet_notify.py (beat), bin/fleet-hub-sessions.sh (map_write),
 #                                                   bin/fleet-client-actions.py notify
+#   debug-bundle-leaks-secret                       bin/fleet-doctor-bundle.sh, bin/fleet_redact.py, bin/fleet-redact.awk,
+#                                                   conf/secret-shapes.list, conf/debug-collect.list
 #   status-agent-not-up / status-perm-overwritten / status-migrated-looping / status-question-lost
 #                                                   bin/set-claude-state.sh (the primary-source rule),
 #                                                   fleet-status-7501.py pipe, classify-sessions.sh (skip:7501),
@@ -5411,6 +5413,48 @@ drill_notify_silent() {
   nsr; sleep 0.5
   [ "$(wc -l < "$d/out" | tr -d ' ')" = 1 ] || { WHY="the same question rang again: $(cat "$d/out")"; return 1; }
   WHAT="客户端在后台、没有终端挂着：别机会话一开始问你，下一拍就弹一条（点了切过去），同一问题不再响"
+}
+
+# debug-bundle-leaks-secret (issue #2890, EPIC #2889 C1): a diagnosis bundle is
+# built on a computer whose whitelisted logs carry one credential of every kind
+# 共同约定第 1 条 names, and whose ~/.ssh / hub.json / secrets.env hold more.
+# The check is LITERAL — each planted value grepped in the bundle, never through
+# conf/secret-shapes.list — so a new kind planted here that the table does not
+# cover turns this red. Both redactors (python, awk) build a bundle.
+drill_debug_bundle_leaks_secret() {
+  CAP=60; local d="$WORK/dbl" t0 r v left='' lg
+  mkdir -p "$d/home/.cache/claude-fleet/shell/logs" "$d/home/.ssh" "$d/conf"
+  lg="$d/home/.cache/claude-fleet/shell/logs"
+  set -- ghp_FAKEaaaaaaaaaaaaaaaaaaaaaaaa1 github_pat_11FAKEbbbbbbbbbbbbbbbbbbbbb sk-ant-api03-FAKEcccccccccccc \
+         b3BlbnNzaC1rZXktdjEFAKEdddddddddd MIIEowIBAAKCAQEAFAKEeeeeeeeeeee Zm9vOkZBS0VhdXRoaGVhZGVy \
+         sid_FAKEcookieggggg FAKEurlsighhhhh FAKEenvpasswordiii FAKEhubjsontokenjjj fdt.FAKEticketkkk \
+         eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJGQUtFbGxsbGxsIn0.FAKEsig NOTLISTED_cert NOTLISTED_hubjson NOTLISTED_secrets
+  { printf 'connect m5 relay token %s\nclone with %s\nkey %s\n' "$1" "$2" "$3"
+    printf -- '-----BEGIN OPENSSH PRIVATE KEY-----\n%s\n-----END OPENSSH PRIVATE KEY-----\n' "$4"
+    printf -- '-----BEGIN RSA PRIVATE KEY-----\n%s\n-----END RSA PRIVATE KEY-----\n' "$5"
+    printf '> Authorization: Basic %s\n< Set-Cookie: sid=%s; Path=/\n' "$6" "$7"
+    printf 'GET https://hub.example/v1/x?a=1&sig=%s\nexport DB_PASSWORD=%s\n' "$8" "$9"
+    printf '{"url": "https://hub.example", "token": "%s"}\nfleet-debug ticket %s\njwt %s\n' "${10}" "${11}" "${12}"
+  } > "$lg/connect.log"
+  printf 'place m5 → No machine can take it\n' > "$lg/place.log"
+  printf '%s\n' "${13}" > "$d/home/.ssh/fleet-cert"
+  printf '{"token": "%s"}\n' "${14}" > "$d/conf/hub.json"
+  printf 'FLEET_X=%s\n' "${15}" > "$d/conf/secrets.env"
+  t0=$(now)
+  for r in python awk; do
+    ( unset FLEET_HUB_URL HTTPS_PROXY https_proxy
+      export HOME="$d/home" FLEET_CONF_DIR="$d/conf" TMPDIR="$WORK" FLEET_REDACT=$r FLEET_BUNDLE_NET=0 \
+             FLEET_BUNDLE_DOCTOR_CMD="printf '  FAIL  cert     GITHUB_TOKEN=$1\n'; exit 1"
+      sh "$BIN/fleet-doctor.sh" --bundle "$d/b-$r" >/dev/null 2>&1 ) \
+      || { WHY="the $r bundle was not built (exit $?)"; return 1; }
+    [ -s "$d/b-$r/logs/connect.log" ] || { WHY="the $r bundle has no logs/connect.log"; return 1; }
+    for v in "$@"; do
+      grep -rqF -e "$v" "$d/b-$r" && left="$left $r:$v"
+    done
+  done
+  SECS=$(since "$t0")
+  [ -z "$left" ] || { WHY="credentials left in the bundle:$left"; return 1; }
+  WHAT="十二类假凭据 + 白名单外三个文件：两种去密码实现打出的包里一处不剩"
 }
 
 # ================================================================ run ===========

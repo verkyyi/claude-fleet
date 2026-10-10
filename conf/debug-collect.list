@@ -1,0 +1,20 @@
+# conf/debug-collect.list — the ONE list of files a diagnosis bundle reads
+# (issue #2890, EPIC #2889 C1; 共同约定第 1 条). `fleet doctor --bundle`
+# (bin/fleet-doctor-bundle.sh) reads a file on this list and NOTHING else: no
+# ~/.ssh, no hub.json, no secrets.env, no environment dump. Every file it does
+# read goes through conf/secret-shapes.list before it lands in the bundle.
+#
+# One row:  <path in the bundle> TAB <source> TAB <last N lines>
+# <source> may start with one of (expanded by the collector, never by a shell):
+#   ~/            $HOME
+#   $SHELL_CACHE/ the client's cache — ${FLEET_SHELL_CACHE:-${XDG_CACHE_HOME:-~/.cache}/claude-fleet/shell}
+#                 (bin/fleet-shell.sh's CACHE)
+#   $CONF_DIR/    ${FLEET_CONF_DIR:-~/.config/claude-fleet}
+# A source that is not there is listed in manifest.json's `missing`, never guessed.
+#
+# The client's own logs (EPIC #2889 C7, docs/CLIENT-LOGS.md): where it connected,
+# where it asked for a session, the keeper's renewals, each login.
+logs/connect.log	$SHELL_CACHE/logs/connect.log	200
+logs/place.log	$SHELL_CACHE/logs/place.log	200
+logs/keeper.log	$SHELL_CACHE/logs/keeper.log	200
+logs/login.log	$SHELL_CACHE/logs/login.log	200

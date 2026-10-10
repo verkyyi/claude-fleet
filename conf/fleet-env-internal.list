@@ -744,3 +744,7 @@ FLEET_CLIENT_LOG_DIR               path: where the client's connect/place/keeper
 FLEET_CLIENT_LOG_MAX               knob: bytes a client log reaches before it is rotated to .1 (524288, #2896)
 FLEET_CONNECT_SSH_VERBOSE          knob: 1 = fleet-connect runs ssh -v -E <logs>/ssh-v.log (off, #2896)
 FLEET_SECRET_SHAPES                seam: the credential-shape table instead of conf/secret-shapes.list (#2896)
+FLEET_REDACT                       seam: python|awk — which redactor fleet-doctor-bundle.sh uses (default python3 when it runs, else awk) (#2890)
+FLEET_BUNDLE_DOCTOR_CMD            seam: a command run instead of the doctor by fleet-doctor-bundle.sh (#2890)
+FLEET_BUNDLE_NET                   seam: 0 — fleet-doctor-bundle.sh asks no hub and runs no ssh (#2890)
+FLEET_BUNDLE_WHOAMI_GAP            seam: seconds between fleet-doctor-bundle.sh's three egress reads (default 10) (#2890)

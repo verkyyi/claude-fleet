@@ -80,6 +80,12 @@ bin/fleet_tls.py
 # the client's own record (#2896): connect / place / keeper / login logs, and the
 # ONE credential-shape table every redactor reads
 bin/fleet_clientlog.py
+# `fleet doctor --bundle <dir>` (#2890): the diagnosis bundle, its awk redactor
+# (no python needed) and the one list of files it may read; fleet_redact.py
+# rides the agent bundle below
+bin/fleet-doctor-bundle.sh
+bin/fleet-redact.awk
+conf/debug-collect.list
 bin/fleet-client-lib.sh
 # keeps up with stable by itself (#1722, #1805): newer client + the team's
 # defaults; `fleet update` says where this computer stands
@@ -232,6 +238,7 @@ bin/fleet-install-apply.sh
 bin/fleet-hooks-merge.py
 bin/fleet-agent-defaults.py
 bin/fleet-agent-team.py
+bin/fleet_redact.py
 bin/fleet-config.py
 bin/fleet-cred-proxy.sh
 bin/fleet-cred-proxy.py
