@@ -33,7 +33,7 @@
 #   触发  `curl -fsSL <hub>/install | sh` typed into the sandbox's terminal; its
 #         questions answered with Enter, the login confirmed as the drill person,
 #         `fleet claude` run again each time the person is back at the prompt —
-#         until the client asks 「要不要让远端看一眼」 (C5; 「按 d」 on a stuck
+#         until the client asks 「要不要让远端帮你看一眼」 (C5; 「按 d」 on a stuck
 #         connect page) and the drill answers y / d. Then fleet-debug's
 #         「已上传」 line and the short link (…/s/<id>) — t_upload.
 #   读页  GET /v1/fleet/debug/<id> until 「已出结论」 (t_concluded, ≤ 5 min), the
@@ -61,9 +61,10 @@
 # a run cut short (INT / TERM / HUP) restores first, then reads ABORTED and
 # exits 128+signal. teardown also deletes each uploaded report on the hub
 # (DELETE /v1/fleet/debug/<id>, the operator's CCQUOTA_VIEWER_TOKEN) and checks
-# /s/<id> is gone.
+# /s/<id> is gone — read with that same token (/s/ is 404 to anyone else anyway).
 #
-# Exit: 0 every step passed · 1 a step failed / check red · 2 usage / preflight
+# Exit: 0 every step passed · 1 a step failed / check red · 2 usage / preflight ·
+#       3 check: no member missing, only deploy GAPs (hub switch off / stable behind)
 # Env: FLEET_DEBUG_DRILL_STEP_SECS (180, any wait) · FLEET_DEBUG_DRILL_PAGE_SECS
 #      (300, uploaded → concluded) · FLEET_DEBUG_DRILL_POLL (1) ·
 #      FLEET_DEBUG_DRILL_TRIES (5, `fleet claude` runs before the prompt) ·
@@ -87,8 +88,9 @@ MACHINE_ENV=${FLEET_DEBUG_DRILL_MACHINE_ENV:-/var/db/fleet-node/machine.env}
 RESTORE_SECS=900   # 共同约定 8: every machine back within 15 minutes
 
 # --- what the drill reads off screens and pages (the seams below test these) ----
-ASK_RE='要不要让远端看一眼|让远端看一眼|[Ll]et (us|the remote|someone) take a look'
-ASK_D_RE='按 ?d ?让远端看一眼|[Pp]ress d'
+# C5's words (fleet-ui-lang.sh debug_prompt_q_fmt / debug_stall_key_fmt)
+ASK_RE='要不要让远端(帮你)?看一眼|让远端(帮你)?看一眼|[Ss]hall the hub take a look|[Ll]et (us|the hub|the remote|someone) take a look'
+ASK_D_RE='按 ?d ?让远端看一眼|[Pp]ress d to let the hub'
 UPLOADED_RE='已上传|[Uu]ploaded'
 SHORT_RE='https?://[^[:space:]]+/s/[A-Za-z0-9]{8}'
 DEBUG_FAIL_RE='票过期|票无效|今天次数用完|入口连不上|脱敏后仍有命中|ticket (expired|invalid)|rate.?limited'
@@ -102,6 +104,14 @@ cause_re() {
   esac
 }
 
+# ask_key (a screen on stdin): d when its last lines offer 「按 d」 (the stuck connect
+# page), y when they ask 「要不要让远端帮你看一眼」 (three failures), else nothing
+ask_key() {
+  local p
+  p=$(grep -v '^ *$' | tail -n 6)
+  if printf '%s\n' "$p" | grep -Eq -- "$ASK_D_RE"; then echo d
+  elif printf '%s\n' "$p" | grep -Eq -- "$ASK_RE"; then echo y; fi
+}
 # page_text <section regex> (page.html on stdin): the text under the first heading
 # matching it, up to the next heading — plain lines
 page_section() {
@@ -219,6 +229,7 @@ readings() {
 # --- arguments ----------------------------------------------------------------------
 CMD=${1:-}; [ $# -gt 0 ] && shift
 case "$CMD" in
+  --ask)      ask_key; exit 0 ;;                                          # seam: a screen on stdin
   --sections) page_sections; exit 0 ;;                                    # seam: page.html on stdin
   --section)  [ $# -ge 1 ] || usage; page_section "$1" "${2:-text}"; exit 0 ;;  # seam
   --cause)    [ $# -ge 1 ] || usage; cause_ok "$1"; exit 0 ;;             # seam: page.html on stdin
@@ -263,33 +274,72 @@ case "$HUB" in http://*|https://*) HUB=${HUB%/} ;; *) die2 'no hub: --hub https:
 VIEWER=${CCQUOTA_VIEWER_TOKEN:-${FLEET_HUB_TOKEN:-}}
 
 # --- check: what each member gives the drill, nothing changed -----------------------
-CHK_FAIL=0
-chk() {  # chk <PASS|FAIL|WARN> <member> <what>
+# FAIL = a member's code is missing; GAP = the code is merged but not where a
+# newcomer meets it yet — the hub's debug switch off (CCQUOTA_FLEET_DEBUG_DIR /
+# _KEY unset: no /v1/fleet/debug/ route at all) or `stable` short of the commit
+# (the client a newcomer installs is stable's, /version's client_url) — the
+# operator's to deploy, never the drill's.
+CHK_FAIL=0 CHK_GAP=0
+chk() {  # chk <PASS|FAIL|GAP|WARN> <member> <what>
   [ "$1" = FAIL ] && CHK_FAIL=$((CHK_FAIL + 1))
+  [ "$1" = GAP ] && CHK_GAP=$((CHK_GAP + 1))
   printf '  %-4s  %-4s %s\n' "$1" "$2" "$3"
 }
 hub_code() { local o=$1; shift; curl -s -m 10 -o "$o" -w '%{http_code}' "$@" 2>/dev/null; }  # hub_code <out> <curl args…>
+# client_has <path>: 0 stable's client (what `curl <hub>/install | sh` lands) has it ·
+# 1 only the hub image's own pack or this tree has it (stable behind) · 2 neither
+client_has() {
+  if [ -n "$CLIENT_URL" ] && [ "$(hub_code /dev/null "$CLIENT_URL/$1")" = 200 ]; then return 0; fi
+  if [ -z "$CLIENT_URL" ] && grep -Eq "^$1([[:space:]]|\$)" "$MAN"; then return 0; fi
+  grep -Eq "^$1([[:space:]]|\$)" "$MAN" && return 1
+  [ -f "$ROOT/$1" ] && return 1   # merged here (this tree), in no release yet
+  return 2
+}
+# chk_client <member> <issue> <what> <path>…: one line for the client files a member ships
+chk_client() {
+  local m=$1 i=$2 w=$3 f worst=0 r
+  shift 3
+  for f in "$@"; do client_has "$f"; r=$?; [ "$r" -gt "$worst" ] && worst=$r; done
+  case $worst in
+    0) chk PASS "$m" "the client carries $w" ;;
+    1) chk GAP "$m" "$w merged, not on stable yet ($CLIENT_VER) — fleet-stable.sh move past #$i" ;;
+    *) chk FAIL "$m" "the hub's client has no $w (#$i)" ;;
+  esac
+}
+DEBUG_OFF_MSG='the hub has remote debugging off — CCQUOTA_FLEET_DEBUG_DIR + CCQUOTA_FLEET_DEBUG_KEY unset (docs/FLEET-HUB.md)'
 run_check() {
-  local man tmp c
+  local tmp c off=0
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fleet-debug-drill-check.XXXXXX") || die2 'mktemp failed'
   printf '%s check  hub=%s\n' "$PROG" "$HUB"
   c=$(curl -s -m 10 -o "$tmp/manifest" -w '%{http_code}' "$HUB/install/manifest" 2>/dev/null)
-  man=$tmp/manifest; [ "$c" = 200 ] || : > "$man"
+  MAN=$tmp/manifest; [ "$c" = 200 ] || : > "$MAN"
+  CLIENT_URL='' CLIENT_VER=''
+  if [ "$(hub_code "$tmp/version" "$HUB/version")" = 200 ]; then
+    CLIENT_URL=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("client_url") or "")' "$tmp/version" 2>/dev/null)
+    CLIENT_VER=$(python3 -c 'import json,sys; print((json.load(open(sys.argv[1])).get("client_version") or "")[:8])' "$tmp/version" 2>/dev/null)
+    CLIENT_URL=${CLIENT_URL%/}
+  fi
+  [ -n "$CLIENT_URL" ] && printf '  client = stable %s (%s)\n' "$CLIENT_VER" "$CLIENT_URL"
   # C1: the bundle — its collect list and the shared shape table go with the client
-  if grep -q '^conf/secret-shapes.list' "$man" && grep -q '^conf/debug-collect.list' "$man"; then
-    chk PASS C1 'the client carries conf/secret-shapes.list + conf/debug-collect.list (fleet doctor --bundle)'
-  else chk FAIL C1 "the hub's client has no conf/secret-shapes.list / conf/debug-collect.list (#2890)"; fi
-  # C2: a ticket is issued with no identity
+  chk_client C1 2890 'conf/secret-shapes.list + conf/debug-collect.list (fleet doctor --bundle)' \
+    conf/secret-shapes.list conf/debug-collect.list
+  # C2: a ticket is issued with no identity; a hub with the switch off has no such
+  # route and answers the viewer gate's generic 401
   c=$(printf '{"fp":"drill-check","client":"drill"}' | curl -s -m 10 -o "$tmp/ticket" -w '%{http_code}' -X POST \
         -H 'Content-Type: application/json' --data-binary @- "$HUB/v1/fleet/debug/ticket" 2>/dev/null)
-  case "$c" in 200|201|429) chk PASS C2 "POST /v1/fleet/debug/ticket answers ($c)" ;;
-               *) chk FAIL C2 "POST /v1/fleet/debug/ticket answers $c — no ticket (#2891)" ;; esac
+  case "$c" in
+    200|201|429) chk PASS C2 "POST /v1/fleet/debug/ticket answers ($c)" ;;
+    401) if grep -q 'viewer token' "$tmp/ticket" && [ -f "$ROOT/tokenledger/internal/api/fleet_debug_ticket.go" ]; then
+           off=1; chk GAP C2 "$DEBUG_OFF_MSG"
+         elif grep -q 'viewer token' "$tmp/ticket"; then chk FAIL C2 "POST /v1/fleet/debug/ticket is not routed — no ticket (#2891)"
+         else chk FAIL C2 "POST /v1/fleet/debug/ticket answers 401 — no ticket (#2891)"; fi ;;
+    *) chk FAIL C2 "POST /v1/fleet/debug/ticket answers $c — no ticket (#2891)" ;;
+  esac
   # C3: fleet-debug, with the client and alone (curl <hub>/debug | sh)
-  if grep -Eq '^bin/fleet-debug([[:space:]]|$)' "$man"; then
-    chk PASS C3 'the client carries bin/fleet-debug'
-  else chk FAIL C3 "the hub's client has no bin/fleet-debug (#2892)"; fi
+  chk_client C3 2892 'bin/fleet-debug' bin/fleet-debug
   c=$(hub_code "$tmp/debug.sh" "$HUB/debug")
   if [ "$c" = 200 ] && head -n 1 "$tmp/debug.sh" | grep -q '^#!'; then chk PASS C3 'GET /debug serves the script'
+  elif [ "$off" = 1 ] && [ -f "$ROOT/bin/fleet-debug" ]; then chk GAP C3 "GET /debug answers $c — remote debugging off (see C2)"
   else chk FAIL C3 "GET /debug answers $c — no stand-alone fleet-debug (#2892)"; fi
   # C4: the page and its debugger — the role ships with the node
   if [ -f "$ROOT/agents/debugger.md" ]; then chk PASS C4 'agents/debugger.md (the debugger role)'
@@ -297,17 +347,19 @@ run_check() {
   # a hub without the route answers its generic 「viewer token」 401; C4's says how to get a ticket
   c=$(hub_code "$tmp/status" -H 'Authorization: FleetDebug drill-check' "$HUB/v1/fleet/debug/drillchk")
   case "$c" in
-    401|403|404) if grep -q 'viewer token' "$tmp/status"; then chk FAIL C4 "GET /v1/fleet/debug/<id> is not routed — no report status (#2893)"
-                 else chk PASS C4 "GET /v1/fleet/debug/<id> is routed ($c without a good ticket)"; fi ;;
+    401|403|404) if ! grep -q 'viewer token' "$tmp/status"; then chk PASS C4 "GET /v1/fleet/debug/<id> is routed ($c without a good ticket)"
+                 elif [ "$off" = 1 ] && [ -f "$ROOT/tokenledger/internal/api/fleet_debug.go" ]; then chk GAP C4 'GET /v1/fleet/debug/<id> not routed — remote debugging off (see C2)'
+                 else chk FAIL C4 "GET /v1/fleet/debug/<id> is not routed — no report status (#2893)"; fi ;;
     *) chk FAIL C4 "GET /v1/fleet/debug/<id> answers $c — no report status (#2893)" ;;
   esac
-  # C5: the client asks by itself
-  c=$(hub_code "$tmp/lang" "$HUB/install/bin/fleet-ui-lang.sh")
-  if [ "$c" = 200 ] && grep -Eq -- "$ASK_RE" "$tmp/lang"; then chk PASS C5 'the client asks 「要不要让远端看一眼」'
-  else chk FAIL C5 "the hub's client never asks 「要不要让远端看一眼」 (#2894)"; fi
+  [ "$off" = 1 ] && chk WARN C4 'the debugger login: CCQUOTA_FLEET_DEBUG_LOGIN=<machine>/<login> (unset ⇒ every report goes 没看完 to the admin) — not visible from outside'
+  # C5: the client asks by itself — its words (fleet-ui-lang.sh) and the asker
+  c=$(hub_code "$tmp/lang" "${CLIENT_URL:-$HUB/install}/bin/fleet-ui-lang.sh")
+  if [ "$c" = 200 ] && grep -Eq -- "$ASK_RE" "$tmp/lang"; then chk_client C5 2894 'bin/fleet-debug-prompt.sh (「要不要让远端帮你看一眼」)' bin/fleet-debug-prompt.sh
+  elif grep -Eq '^bin/fleet-debug-prompt.sh([[:space:]]|$)' "$MAN" || [ -f "$ROOT/bin/fleet-debug-prompt.sh" ]; then chk GAP C5 "the client asks 「要不要让远端帮你看一眼」 — merged, not on stable yet ($CLIENT_VER) — fleet-stable.sh move past #2894"
+  else chk FAIL C5 "the hub's client never asks 「要不要让远端帮你看一眼」 (#2894)"; fi
   # C7: the client keeps its own logs
-  if grep -q '^bin/fleet_clientlog.py' "$man"; then chk PASS C7 'the client carries bin/fleet_clientlog.py'
-  else chk FAIL C7 "the hub's client keeps no logs of its own (bin/fleet_clientlog.py, #2896)"; fi
+  chk_client C7 2896 'bin/fleet_clientlog.py' bin/fleet_clientlog.py
   # this computer
   local t miss=''
   for t in curl python3 tar ssh-keygen; do command -v "$t" >/dev/null 2>&1 || miss="$miss $t"; done
@@ -321,6 +373,7 @@ run_check() {
   else chk WARN cap '需要管理员登录（有 sudo）— cap edits machine.env; tls and conn run without'; fi
   rm -rf "$tmp"
   if [ "$CHK_FAIL" -gt 0 ]; then printf 'RED — %s missing: the drill cannot run yet\n' "$CHK_FAIL"; return 1; fi
+  if [ "$CHK_GAP" -gt 0 ]; then printf 'NOT DEPLOYED — the code is all there; %s to deploy (GAP lines) before the drill can run\n' "$CHK_GAP"; return 3; fi
   printf 'READY\n'; return 0
 }
 find_tmux() {
@@ -393,9 +446,12 @@ if [ "$CMD" = teardown ]; then
   if [ -f "$OUT/reports.tsv" ]; then
     while IFS="$(printf '\t')" read -r _ id url; do
       [ -n "$id" ] || continue
-      c=$(curl -s -m 10 -o /dev/null -w '%{http_code}' -X DELETE ${VIEWER:+-H "Authorization: Bearer $VIEWER"} \
+      # /s/<id> answers 404 to anyone it does not let read — so «gone» is read
+      # with the admin's token, the one door that sees a report that is still there
+      if [ -z "$VIEWER" ]; then echo "report $id: not deleted — no CCQUOTA_VIEWER_TOKEN (the admin's; DELETE /v1/fleet/debug/<id> takes nothing else)"; rc=1; continue; fi
+      c=$(curl -s -m 10 -o /dev/null -w '%{http_code}' -X DELETE -H "Authorization: Bearer $VIEWER" \
             "$HUB/v1/fleet/debug/$id" 2>/dev/null)
-      g=$(curl -s -m 10 -o /dev/null -w '%{http_code}' "$HUB/s/$id" 2>/dev/null)
+      g=$(curl -s -m 10 -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $VIEWER" "$HUB/s/$id" 2>/dev/null)
       if [ "$g" = 404 ]; then echo "report $id: gone (DELETE $c)"; else echo "report $id: still there (DELETE $c, /s/ $g)"; rc=1; fi
     done < "$OUT/reports.tsv"
   fi
@@ -410,7 +466,7 @@ fi
 [ "$YES" = 1 ] || die2 '改真机网络 / Python / 门槛只在发起人确认的时间做 — 确认了再加 --yes（check 不改任何东西）'
 [ "$(id -u)" != 0 ] || die2 'run this as the admin login, not under sudo'
 [ -n "$OUT" ] && [ -f "$OUT/armed" ] && die2 "$OUT/armed is left from a run that did not restore — $0 teardown --out $OUT first"
-run_check || exit 1
+run_check || exit 1   # a GAP (3) stops a run too: nothing to diagnose with
 case " $SCEN " in *' cap '*)
   [ -n "${FLEET_DEBUG_DRILL_CAP_ARM:-}" ] || sudo -n true >/dev/null 2>&1 \
     || die2 "需要管理员登录（有 sudo）— cap edits $MACHINE_ENV (run 'sudo -v' first; this script never prompts)"
@@ -492,13 +548,14 @@ cap_arm() {
                  && chmod "$2" "$1.drill-tmp" && mv -f "$1.drill-tmp" "$1"' _ "$me" "$mode" || return 1
   agent_restart
 }
-# debug_auth <home>: the two headers fleet-debug sends (C2), one per line
+# debug_auth <home>: the two headers fleet-debug sends (C2), one per line — its
+# TICKET_FILE ($CONF/debug-ticket) and its debug_fp (hardware id | login | IROOT)
 debug_auth() {
   local h=$1 tf fp
-  for tf in "$h/.local/share/claude-fleet/debug-ticket" "$h/.claude/fleet/debug-ticket"; do [ -s "$tf" ] && break; done
+  tf="$h/.config/claude-fleet/debug-ticket"
   [ -s "$tf" ] || return 1
-  fp=$(printf '%s|%s|%s' "$(ioreg -rd1 -c IOPlatformExpertDevice 2>/dev/null | awk -F'"' '/IOPlatformUUID/{print $4}')" \
-         "$(id -un)" "$h/.local/share/claude-fleet" | shasum -a 256 | cut -d' ' -f1)
+  fp=$(printf '%s|%s|%s' "$(ioreg -rd1 -c IOPlatformExpertDevice 2>/dev/null | awk -F'"' '/IOPlatformUUID/{print $4; exit}')" \
+         "$(id -un)" "$h/.claude/fleet" | shasum -a 256 | cut -d' ' -f1)
   printf 'Authorization: FleetDebug %s\nX-Fleet-FP: %s\n' "$(head -n 1 "$tf")" "$fp"
 }
 
@@ -579,9 +636,10 @@ EOF
       r_trig=PASS; line PASS 触发 "$url (after $tries runs of fleet claude)"; row "已上传 · $url" '—' '否'; break
     fi
     # the client asks: y — or d on a stuck connect page (C5)
-    if [ "$asked" = 0 ] && printf '%s\n' "$p" | tail -n 4 | grep -Eq -- "$ASK_RE|$ASK_D_RE"; then
+    k=$(printf '%s\n' "$p" | ask_key)
+    if [ "$asked" = 0 ] && [ -n "$k" ]; then
       asked=1
-      if printf '%s\n' "$p" | tail -n 4 | grep -Eq -- "$ASK_D_RE"; then dt send-keys -t drill d; row '「按 d 让远端看一眼」' 'd' '否'
+      if [ "$k" = d ]; then dt send-keys -t drill d; row '「按 d 让远端看一眼」' 'd' '否'
       else dt send-keys -t drill y Enter; row '「要不要让远端看一眼」' 'y ↵' '否'; fi
       sleep "$POLL"; continue
     fi
@@ -616,7 +674,8 @@ EOF
   done
   # the bundle: fleet-debug --dry-run packs what it sent (same list, same scrub) into
   # the sandbox's TMPDIR / cache; none of the planted values may be in it
-  fd="$sb/home/.local/share/claude-fleet/bin/fleet-debug"
+  fd="$sb/home/.claude/fleet/bin/fleet-debug"
+  [ -f "$fd" ] || fd="$sb/home/.local/share/claude-fleet/bin/fleet-debug"
   if [ -f "$fd" ]; then
     env -i HOME="$sb/home" PATH="$pth" TMPDIR="$sb/tmp" LANG=zh_CN.UTF-8 ${extra[@]+"${extra[@]}"} \
       sh "$fd" report --dry-run > "$OUT/$SC-dry-run.txt" 2>&1

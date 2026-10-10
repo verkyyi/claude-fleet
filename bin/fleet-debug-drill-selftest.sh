@@ -6,11 +6,16 @@
 #      without --yes changes nothing (exit 2, says why)
 #   B  check against a hub with none of C1–C5 / C7: RED, exit 1, each member named
 #   C  check against a hub that has them all: every member line PASS
+#   C2 check against a hub whose code is merged but not deployed (debug switch
+#      off, stable behind): no FAIL, each gap a GAP line, NOT DEPLOYED, exit 3
+#   H  the client's real words (fleet-ui-lang.sh): the 3-failure question reads y,
+#      the stuck page's 「按 d」 reads d, a plain screen nothing
 #   D  the page: its four sections, 是什么问题 against each day's cause, 请你做's commands
 #   E  the leak count: a bundle with a planted credential counts it, a clean one is 0
 #   F  the readings: results.tsv → the EPIC's five readings
 #   G  teardown --out: every armed line put back (gate, proxy, sandbox), each
-#      uploaded report checked gone on the hub
+#      uploaded report checked gone on the hub WITH the admin's token (/s/<id>
+#      is 404 to anyone else either way); no token = not deleted, exit 1
 set -u
 BIN="$(cd "$(dirname "$0")" && pwd)"
 D="$BIN/fleet-debug-drill.sh"
@@ -22,14 +27,18 @@ pass=0
 ok()   { pass=$((pass + 1)); }
 fail() { printf 'fleet-debug-drill-selftest FAIL: %s\n' "$1" >&2; exit 1; }
 
-# fake_hub <mode none|all>: sets port (never in a $(…): the parent must hold its pid)
+# fake_hub <mode none|all|off>: sets port (never in a $(…): the parent must hold its pid)
 fake_hub() {
   hub_stop
   rm -f "$T/port"
-  python3 - "$1" "$T/port" <<'PY' >/dev/null 2>&1 &
+  python3 - "$1" "$T/port" "$BIN/fleet-ui-lang.sh" <<'PY' >/dev/null 2>&1 &
 import http.server, sys
-mode, portf = sys.argv[1], sys.argv[2]
-MAN_ALL = "# manifest\nbin/fleet\nbin/fleet-debug\nbin/fleet_clientlog.py\nconf/secret-shapes.list\nconf/debug-collect.list\n"
+mode, portf, langf = sys.argv[1], sys.argv[2], sys.argv[3]
+LANG_REAL = open(langf).read()          # C5's own words, as the client carries them
+MAN_ALL = "# manifest\nbin/fleet\nbin/fleet-debug\nbin/fleet-debug-prompt.sh\nbin/fleet_clientlog.py\nconf/secret-shapes.list\nconf/debug-collect.list\n"
+# off: the image's pack has every member, stable (client_url) only the first ones
+STABLE_HAS = {"bin/fleet", "bin/fleet_clientlog.py", "conf/secret-shapes.list", "conf/debug-collect.list"}
+deleted = set()
 class H(http.server.BaseHTTPRequestHandler):
     def log_message(self, *a): pass
     def send(self, code, body, ctype="text/plain"):
@@ -37,15 +46,23 @@ class H(http.server.BaseHTTPRequestHandler):
         self.send_response(code); self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
     def viewer(self): self.send(401, '{"error":"a viewer token is required"}', "application/json")
+    def admin(self): return self.headers.get("Authorization") == "Bearer drill-viewer"
     def do_GET(self):
         p = self.path
-        if p == "/install/manifest": return self.send(200, MAN_ALL if mode == "all" else "# manifest\nbin/fleet\n")
+        if p == "/install/manifest": return self.send(200, "# manifest\nbin/fleet\n" if mode == "none" else MAN_ALL)
+        if p == "/version" and mode == "off":
+            return self.send(200, '{"client_version":"0123456789ab","client_url":"http://%s/install/stable/0123456789ab"}' % self.headers.get("Host"), "application/json")
+        if p.startswith("/install/stable/0123456789ab/"):
+            f = p.split("/", 4)[4]
+            if f == "bin/fleet-ui-lang.sh": return self.send(200, "x=1\n")
+            return self.send(200, "x\n") if f in STABLE_HAS else self.send(404, "")
         if p == "/install/bin/fleet-ui-lang.sh":
-            return self.send(200, "ask='连了三次没成，要不要让远端看一眼？'\n" if mode == "all" else "x=1\n")
+            return self.send(200, LANG_REAL if mode == "all" else "x=1\n")
         if p == "/debug": return self.send(200, "#!/bin/sh\necho fleet-debug\n") if mode == "all" else self.send(404, "")
         if p.startswith("/v1/fleet/debug/"):
             return self.send(401, "票无效：请管理员补发\n") if mode == "all" else self.viewer()
-        if p.startswith("/s/"): return self.send(404, "")
+        if p.startswith("/s/"):
+            return self.send(200, "<h1>远端诊断</h1>") if self.admin() and p[3:] not in deleted else self.send(404, "")
         if p.startswith("/v1/"): return self.viewer()
         self.send(404, "")
     def do_POST(self):
@@ -54,7 +71,8 @@ class H(http.server.BaseHTTPRequestHandler):
         if self.path.startswith("/v1/"): return self.viewer()
         self.send(404, "")
     def do_DELETE(self):
-        self.send(204 if mode == "all" else 404, "")
+        if mode != "all" or not self.admin(): return self.viewer()
+        deleted.add(self.path.rsplit("/", 1)[-1]); self.send(200, '{"deleted":true}', "application/json")
 s = http.server.HTTPServer(("127.0.0.1", 0), H)
 open(portf, "w").write(str(s.server_address[1]))
 s.serve_forever()
@@ -93,6 +111,33 @@ for m in C1 C2 C3 C4 C5 C7; do
   printf '%s\n' "$out" | grep -Eq "FAIL +$m " && fail "C: $m reads red on a full hub: $out"
   printf '%s\n' "$out" | grep -Eq "PASS +$m " || fail "C: $m has no PASS: $out"; ok
 done
+
+# --- C2 check, merged but not deployed: GAP lines only, exit 3 --------------------------------
+fake_hub off
+mkdir -p "$T/root/bin" "$T/root/tokenledger/internal/api"
+for f in bin/fleet-debug bin/fleet-debug-prompt.sh tokenledger/internal/api/fleet_debug_ticket.go tokenledger/internal/api/fleet_debug.go; do
+  : > "$T/root/$f"
+done
+out=$(FLEET_DEBUG_DRILL_ROOT="$T/root" bash "$D" check --hub "http://127.0.0.1:$port" 2>&1); rc=$?
+[ "$rc" = 3 ] || fail "C2: check on an undeployed hub exit $rc: $out"; ok
+printf '%s\n' "$out" | grep -Eq '^ +FAIL +C' && fail "C2: a merged member reads FAIL: $out"; ok
+printf '%s\n' "$out" | grep -Eq 'GAP +C2 .*CCQUOTA_FLEET_DEBUG_DIR' || fail "C2: the debug switch is not named: $out"; ok
+for m in C3 C5; do
+  printf '%s\n' "$out" | grep -Eq "GAP +$m .*not on stable yet \(01234567\)" || fail "C2: $m not named stable-behind: $out"; ok
+done
+printf '%s\n' "$out" | grep -Eq 'PASS +C7 ' || fail "C2: a file stable has reads other than PASS: $out"; ok
+printf '%s\n' "$out" | grep -q '^NOT DEPLOYED' || fail "C2: no NOT DEPLOYED line: $out"; ok
+
+# --- H the client's real words ----------------------------------------------------------
+L="$BIN/fleet-ui-lang.sh"
+for lang in zh en; do
+  q=$(FLEET_UI_LANG=$lang sh "$L" t debug_prompt_q_fmt 3); k=$(FLEET_UI_LANG=$lang sh "$L" t debug_prompt_keys)
+  w=$(FLEET_UI_LANG=$lang sh "$L" t debug_prompt_what)
+  [ "$(printf 'newcomer%% fleet claude\n\n%s\n%s\n%s \n\n\n' "$q" "$w" "$k" | bash "$D" --ask)" = y ] || fail "H: $lang question not read as y: $q"; ok
+  d=$(FLEET_UI_LANG=$lang sh "$L" t debug_stall_key_fmt 40)
+  [ "$(printf '正在连接…\n%s\n\n' "$d" | bash "$D" --ask)" = d ] || fail "H: $lang stall key not read as d: $d"; ok
+done
+[ -z "$(printf 'newcomer%% fleet claude\n连不上\n' | bash "$D" --ask)" ] || fail 'H: a plain screen read as a question'; ok
 
 # --- D the page ---------------------------------------------------------------------------
 page() {  # page <cause text>
@@ -154,7 +199,7 @@ mkdir -p "$T/G" "$T/G/sb"
 sleep 300 & SPID=$!; disown "$SPID" 2>/dev/null
 { printf 'sandbox %s\n' "$T/G/sb"; printf 'cap %s\n' "$T/G/machine.env"; printf 'proxy %s\n' "$SPID"; } > "$T/G/armed"
 printf 'tls\tabcd2345\thttp://127.0.0.1:%s/s/abcd2345\n' "$port" > "$T/G/reports.tsv"
-out=$(FLEET_DEBUG_DRILL_CAP_DISARM="touch '$T/G/disarmed'" bash "$D" teardown --out "$T/G" --hub "http://127.0.0.1:$port" 2>&1); rc=$?
+out=$(CCQUOTA_VIEWER_TOKEN=drill-viewer FLEET_DEBUG_DRILL_CAP_DISARM="touch '$T/G/disarmed'" bash "$D" teardown --out "$T/G" --hub "http://127.0.0.1:$port" 2>&1); rc=$?
 [ "$rc" = 0 ] || fail "G: teardown exit $rc: $out"; ok
 [ -e "$T/G/disarmed" ] || fail 'G: the gate was not put back'; ok
 sleep 0.3; kill -0 "$SPID" 2>/dev/null && { kill "$SPID"; fail 'G: the proxy is still running'; }; ok
@@ -163,6 +208,12 @@ sleep 0.3; kill -0 "$SPID" 2>/dev/null && { kill "$SPID"; fail 'G: the proxy is 
 printf '%s\n' "$out" | grep -q 'report abcd2345: gone' || fail "G: the report not checked gone: $out"; ok
 # the order: newest first — the proxy before the gate before the sandbox
 printf '%s\n' "$out" | grep -E '^(stopped|restored|removed)' | head -n 1 | grep -q '^stopped proxy' || fail "G: not undone newest first: $out"; ok
+# no admin token: the report cannot be deleted, and the teardown says so (exit 1) —
+# never «gone» off an anonymous /s/ 404
+printf 'tls\tefgh2345\thttp://127.0.0.1:%s/s/efgh2345\n' "$port" > "$T/G/reports.tsv"
+out=$(CCQUOTA_VIEWER_TOKEN='' FLEET_HUB_TOKEN='' bash "$D" teardown --out "$T/G" --hub "http://127.0.0.1:$port" 2>&1); rc=$?
+[ "$rc" = 1 ] || fail "G: teardown with no admin token exit $rc: $out"; ok
+printf '%s\n' "$out" | grep -q 'efgh2345: not deleted' || fail "G: no token not said: $out"; ok
 # a second run with nothing armed is a no-op, still exit 0
 rm -f "$T/G/reports.tsv"
 FLEET_DEBUG_DRILL_CAP_DISARM=false bash "$D" teardown --out "$T/G" --hub "http://127.0.0.1:$port" >/dev/null 2>&1 \
