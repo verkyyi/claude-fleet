@@ -123,10 +123,10 @@ export const pageAllowed = (me, id) => {
  *  past `warn` yellow, past `stale` grey 「数据旧了」. The one place. */
 export const FRESH = Object.freeze({ warn: 60000, stale: 300000 });
 
-/** freshness is one block's age: {cls: ''|'warn'|'stale'|'unknown', text}.
- *  No time = 时间未知, never passed off as fresh. */
+/** freshness is one block's age: {cls: ''|'warn'|'stale'|'unknown', text},
+ *  from an ISO time or epoch ms. No time = 时间未知, never passed off as fresh. */
 export function freshness(at, now = Date.now()) {
-  const ms = at ? Date.parse(at) : NaN;
+  const ms = typeof at === 'number' ? at : (at ? Date.parse(at) : NaN);
   if (!Number.isFinite(ms) || ms <= 0) return { cls: 'unknown', text: t('ui.fresh.unknown') };
   const age = Math.max(0, now - ms);
   const s = Math.round(age / 1000);
@@ -177,44 +177,25 @@ export function ctxBar(p) {
 /** relTime is "12 min ago" / "12 分钟前", from an epoch-ms or ISO time. */
 export const relTime = (t0, now = Date.now()) => fmtAgo(t0, now);
 
-// How old a piece of data may look before it says so (EPIC #2792 rule 3,
-// claude-fleet#2794) — the one definition: past FRESH_WARN_MS a block's age
-// turns yellow, past FRESH_STALE_MS grey with 「数据旧了」. A block whose source
-// gave no time reads 「时间未知」, never a fresh-looking age.
-export const FRESH_WARN_MS = 60000;
-export const FRESH_STALE_MS = 300000;
-
-/** freshness is a block's age: { tone: ok | warn | stale | unknown, text },
- *  from when its source measured it (epoch ms or ISO; null = not said). */
-export function freshness(at, now = Date.now()) {
-  const n = typeof at === 'number' ? at : (at ? Date.parse(at) : NaN);
-  if (!Number.isFinite(n) || n <= 0) return { tone: 'unknown', text: t('ui.fresh.unknown') };
-  const age = Math.max(0, now - n);
-  const s = Math.floor(age / 1000);
-  const ago = s < 60 ? t('ui.fresh.secs', { n: s }) : fmtAgo(n, now);
-  if (age > FRESH_STALE_MS) return { tone: 'stale', text: t('ui.fresh.old', { ago }) };
-  return { tone: age > FRESH_WARN_MS ? 'warn' : 'ok', text: ago };
-}
-
-/** freshTag is a block's 「N 秒前」: the shell repaints every [data-fresh-at]
- *  each second (an empty one is 时间未知). */
+/** freshTag is a block's 「N 秒前」 (freshness above, the one definition): the
+ *  shell repaints every [data-fresh-at] each second (an empty one is 时间未知). */
 export function freshTag(at, now = Date.now()) {
   const f = freshness(at, now);
   const v = typeof at === 'number' ? String(at) : (at || '');
-  return `<span class="fresh ${f.tone}" data-fresh-at="${esc(v)}">${esc(f.text)}</span>`;
+  return `<span class="fresh ${f.cls}" data-fresh-at="${esc(v)}">${esc(f.text)}</span>`;
 }
 
 /** streamLine is the top bar's word on the push channel (lib/stream.js
- *  status()): { tone: ok | warn | stale | unknown, text } — 「N 秒前更新」 while
+ *  status()): { cls: '' | warn | stale | unknown, text } — 「N 秒前更新」 while
  *  live, yellow and 重连中 when down, 轮询 on the fallback. */
 export function streamLine(st, now = Date.now()) {
-  if (!st) return { tone: 'unknown', text: '' };
+  if (!st) return { cls: 'unknown', text: '' };
   const f = st.lastAt ? freshness(st.lastAt, now) : null;
-  if (st.mode === 'connecting') return { tone: 'unknown', text: t('ui.stream.connecting') };
-  if (st.mode === 'down') return { tone: f && f.tone === 'stale' ? 'stale' : 'warn', text: t('ui.stream.down', { ago: f ? f.text : '' }) };
+  if (st.mode === 'connecting') return { cls: 'unknown', text: t('ui.stream.connecting') };
+  if (st.mode === 'down') return { cls: f && f.cls === 'stale' ? 'stale' : 'warn', text: t('ui.stream.down', { ago: f ? f.text : '' }) };
   const text = t('ui.stream.updated', { ago: f ? f.text : t('ui.fresh.unknown') });
-  if (st.mode === 'poll') return { tone: f ? f.tone : 'unknown', text: t('ui.stream.poll', { text }) };
-  return { tone: f ? f.tone : 'unknown', text };
+  if (st.mode === 'poll') return { cls: f ? f.cls : 'unknown', text: t('ui.stream.poll', { text }) };
+  return { cls: f ? f.cls : 'unknown', text };
 }
 
 /** greeting is the overview's hello, by the viewer's local hour. */

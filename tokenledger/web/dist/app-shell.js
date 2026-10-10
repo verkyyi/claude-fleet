@@ -162,11 +162,11 @@ function paintStream() {
   const l = streamLine(st);
   box.hidden = !l.text;
   box.dataset.mode = st.mode;
-  const dot = 'dot' + (l.tone === 'ok' ? (st.mode === 'live' ? ' ok pulse' : ' ok') : l.tone === 'warn' ? ' warn' : '');
+  const dot = 'dot' + (l.cls === '' ? (st.mode === 'live' ? ' ok pulse' : ' ok') : l.cls === 'warn' ? ' warn' : '');
   // 「实时 · N 个会话」's dot is only as live as the channel behind it.
   const ld = $('#live .dot'); if (ld) ld.className = dot;
   const f = box.querySelector('.fresh');
-  f.className = 'fresh ' + l.tone;
+  f.className = 'fresh ' + l.cls;
   f.textContent = l.text;
 }
 
@@ -176,7 +176,7 @@ function paintFresh() {
   for (const el of document.querySelectorAll('[data-fresh-at]')) {
     const v = el.dataset.freshAt;
     const f = freshness(/^\d+$/.test(v) ? Number(v) : v, now);
-    el.className = 'fresh ' + f.tone;
+    el.className = 'fresh ' + f.cls;
     el.textContent = f.text;
   }
 }

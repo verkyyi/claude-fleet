@@ -6,7 +6,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createStream, observedOf, WATCHDOG_MS, BACKOFF, POLL_MS, POLL_AFTER, PROBE_EVERY, POLL_URLS, TOPICS } from '../dist/lib/stream.js';
-import { freshness, freshTag, streamLine, FRESH_WARN_MS, FRESH_STALE_MS } from '../dist/lib/shell.js';
+import { freshness, freshTag, streamLine, FRESH } from '../dist/lib/shell.js';
 import { timerBag } from '../dist/lib/router.js';
 import { useLocale } from '../dist/lib/i18n.js';
 
@@ -175,16 +175,16 @@ test('observedOf reads each topic the way the hub does', () => {
 test('freshness: N s ago, yellow past a minute, grey 数据旧了 past five, 时间未知 without a time', () => {
   useLocale('zh-CN');
   const now = Date.parse('2026-10-09T10:10:00Z');
-  assert.deepEqual(freshness(now - 12000, now), { tone: 'ok', text: '12 秒前' });
-  assert.equal(freshness(now - FRESH_WARN_MS - 1000, now).tone, 'warn');
-  const old = freshness(now - FRESH_STALE_MS - 1000, now);
-  assert.equal(old.tone, 'stale');
+  assert.deepEqual(freshness(now - 12000, now), { cls: '', text: '12 秒前' });
+  assert.equal(freshness(now - FRESH.warn - 1000, now).cls, 'warn');
+  const old = freshness(now - FRESH.stale - 1000, now);
+  assert.equal(old.cls, 'stale');
   assert.match(old.text, /^数据旧了/);
-  assert.deepEqual(freshness(null, now), { tone: 'unknown', text: '时间未知' });
+  assert.deepEqual(freshness(null, now), { cls: 'unknown', text: '时间未知' });
   assert.equal(freshness('2026-10-09T10:09:50Z', now).text, '10 秒前');
   assert.match(freshTag(null, now), /data-fresh-at=""/);
   assert.equal(streamLine({ mode: 'live', lastAt: now - 3000 }, now).text, '3 秒前更新');
-  assert.equal(streamLine({ mode: 'down', lastAt: now - 40000 }, now).tone, 'warn');
+  assert.equal(streamLine({ mode: 'down', lastAt: now - 40000 }, now).cls, 'warn');
   assert.match(streamLine({ mode: 'poll', lastAt: now - 3000 }, now).text, /^轮询/);
   useLocale('en');
   assert.equal(streamLine({ mode: 'live', lastAt: now - 3000 }, now).text, 'updated 3 s ago');
