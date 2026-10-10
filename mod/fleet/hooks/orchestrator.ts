@@ -3,9 +3,12 @@
 // The fleet's one orchestrating session (bin/fleet-orchestrator.sh) used to know
 // what it was from one seed turn, `/fleet-orchestrate` — a compaction kept only a
 // summary of it, a /clear nothing at all. Its role now rides the system prompt
-// two ways from ONE file, skills/fleet-orchestrate/role.md: the launcher's
-// `--append-system-prompt-file`, and this `session` section, so a session the
-// launcher did not start (a hand `claude --resume`, a handoff) still carries it.
+// two ways from ONE text, its definition's body (agents/orchestrator.md, issue
+// #2782): the launcher's `--append-system-prompt-file` — the rendered copy it
+// stamps on the window as `@fleet_role_body` — and this `session` section, so a
+// session the launcher did not start (a hand `claude --resume`, a handoff) still
+// carries it. A window with no stamp (one opened before #2782) reads the copy
+// generated beside the skill, skills/fleet-orchestrate/role.md (compat-1v).
 //
 // lifecycle.ts reads the window's `@fleet_role` and the file once at the start
 // (the run and `$` live there: the engine follows `$` only within one file); a
@@ -25,6 +28,16 @@ let orchestrator = false
 export function rolePath(root: string): string {
   const base = root.replace(/\/+$/, '').replace(/\/\.claude-plugin$/, '')
   return `${base}/../../skills/fleet-orchestrate/role.md`
+}
+
+/** The argv that prints the rendered body's path the launcher stamped (#2782). */
+export function bodyArgv(pane: string): string[] {
+  return ['tmux', 'display-message', '-p', '-t', pane, '#{@fleet_role_body}']
+}
+
+/** Tests: is this argv the body-path read? */
+export function isBodyRun(argv: readonly string[]): boolean {
+  return argv[0] === 'tmux' && argv[1] === 'display-message' && argv[argv.length - 1] === '#{@fleet_role_body}'
 }
 
 /** The argv that prints this pane's window's `@fleet_role`. */

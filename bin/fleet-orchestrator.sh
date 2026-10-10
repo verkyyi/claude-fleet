@@ -19,15 +19,16 @@
 # `@fleet_role orchestrator` — never its name, the person may rename it — and
 # addressed as `orchestrator`, never by a recycled scratch number: the inventory
 # carries `role=orchestrator` beside its identity (fleet-control-read.sh column
-# 20 → the worker's `role`), fleet_win_for_key answers `orchestrator`. It runs this login's default agent (FLEET_AGENT) on that agent's
-# strongest model at high effort — Claude: FLEET_ORCH_MODEL (default `fable`, the
-# fleet's FLEET_MODEL_FALLBACK while that model is capped on the active account,
-# fleet-claude.sh's rule) with `--effort ${FLEET_ORCH_EFFORT:-high}`; Codex:
-# FLEET_ORCH_CODEX_MODEL (else the login's own) with model_reasoning_effort — and
-# starts on `/fleet-orchestrate` (skills/fleet-orchestrate/). Its ROLE is not that
-# seed (issue #2582, EPIC #2581 C1): a Claude orchestrator is launched with
-# `--append-system-prompt-file skills/fleet-orchestrate/role.md`, and the mod adds
-# the same file to every request (`fleet:orchestrator-role`), so a compaction or a
+# 20 → the worker's `role`), fleet_win_for_key answers `orchestrator`. It runs this login's default agent (FLEET_AGENT) as its
+# definition says, agents/orchestrator.md (issue #2782; `fleet-role.py render
+# orchestrator`): the strongest model at high effort — Claude `fable` (the fleet's
+# FLEET_MODEL_FALLBACK while that model is capped on the active account,
+# fleet-claude.sh's rule), Codex the login's own model, with model_reasoning_effort;
+# FLEET_ORCH_MODEL / FLEET_ORCH_EFFORT / FLEET_ORCH_CODEX_MODEL still win for one
+# version — and starts on `/fleet-orchestrate` (skills/fleet-orchestrate/). Its ROLE
+# is not that seed (issue #2582, EPIC #2581 C1): a Claude orchestrator is launched
+# with `--append-system-prompt-file` the definition's body, and the mod adds the
+# same text to every request (`fleet:orchestrator-role`), so a compaction or a
 # /clear leaves it the orchestrator; the seed is sent only to a new conversation,
 # as its first turn's instructions. Codex keeps the seed alone.
 #
@@ -232,19 +233,23 @@ SEED='/fleet-orchestrate'
 # injects the saved state; this makes the session act on it.
 ORCH_RESUME_SEED='[fleet orchestrator] 会话刚被 fleet 接回（退出、崩溃或重启之后）。照上面「fleet orchestrator state」摘要的下一步做：先重新 arm 循环，再一句话报出当前批次和未读回报；没有摘要就先用 mcp__fleet__children 看一眼子会话。'
 args="--agent $AGENT"; sid=''
+# What it runs with is its definition, agents/orchestrator.md (issue #2782):
+# model, effort and the role in the system prompt — the role rides it, not the
+# conversation (issue #2582), so a compaction, a /clear or a resume keeps it; the
+# mod adds the same text as its `fleet:orchestrator-role` section
+# (mod/fleet/hooks/orchestrator.ts, off @fleet_role_body). --cap: the per-model
+# cap's fallback (issue #524) while the strongest is walled.
+ROLE_SHA=''; ROLE_BODY=''; cap=''; [ "$AGENT" = claude ] && cap=--cap
+while IFS=$'\t' read -r k v; do
+  case "$k" in
+    sha)  ROLE_SHA=$v ;;
+    body) ROLE_BODY=$v ;;
+    arg)  args="$args $(printf '%q' "$v")" ;;
+  esac
+done <<EOF2
+$(fleet_role_render orchestrator "$AGENT" $cap 2>/dev/null)
+EOF2
 if [ "$AGENT" = claude ]; then
-  model=${FLEET_ORCH_MODEL-fable}
-  if [ -n "$model" ] && [ -n "${FLEET_MODEL_FALLBACK-opus}" ]; then
-    # the per-model cap (issue #524): the fallback while the strongest is walled
-    label=$("$BIN/fleet-account.sh" active 2>/dev/null)
-    if [ -n "$label" ]; then
-      till=$("$BIN/fleet-account.sh" model-limited-until "$label" "$model" 2>/dev/null)
-      case "$till" in ''|*[!0-9]*) till=0 ;; esac
-      [ "$till" -gt "$(date +%s)" ] && model=${FLEET_MODEL_FALLBACK-opus}
-    fi
-  fi
-  [ -n "$model" ] && args="$args --model $(printf '%q' "$model")"
-  args="$args --effort $(printf '%q' "${FLEET_ORCH_EFFORT:-high}")"
   # the same conversation when it is still on disk, else a new one
   proj="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/$(fleet_mangle_path "$HOME")"
   sid=''; [ -f "$SIDF" ] && sid=$(LC_ALL=C tr -cd '0-9a-f-' < "$SIDF")
@@ -261,14 +266,6 @@ if [ "$AGENT" = claude ]; then
     sid=$(fleet_fid_mint) || sid=''
     [ -n "$sid" ] && { printf '%s\n' "$sid" > "$SIDF"; args="$args --session-id $sid"; }
   fi
-  # The role rides the system prompt, not the conversation (issue #2582): a
-  # compaction, a /clear or a resume keeps it. The mod adds the same file as its
-  # `fleet:orchestrator-role` section (mod/fleet/hooks/orchestrator.ts).
-  role="$(cd "$BIN/.." && pwd)/skills/fleet-orchestrate/role.md"
-  [ -f "$role" ] && args="$args --append-system-prompt-file $(printf '%q' "$role")"
-else
-  [ -n "${FLEET_ORCH_CODEX_MODEL:-}" ] && args="$args -m $(printf '%q' "$FLEET_ORCH_CODEX_MODEL")"
-  args="$args -c $(printf '%q' "model_reasoning_effort=\"${FLEET_ORCH_EFFORT:-high}\"")"
 fi
 
 seed=''
@@ -279,7 +276,8 @@ fi
 envs=''
 [ -n "${FLEET_WRAP_LAUNCH:-}" ] && envs="env FLEET_WRAP_LAUNCH=$(printf '%q' "$FLEET_WRAP_LAUNCH") "
 # the window says what it is BEFORE the launcher reads its conf (fleet_win_stamp_cmd)
-stamp=$(fleet_win_stamp_cmd @fleet_role orchestrator @norepo 1 ${sid:+@norepo_sid "$sid"})
+stamp=$(fleet_win_stamp_cmd @fleet_role orchestrator @norepo 1 ${sid:+@norepo_sid "$sid"} \
+  ${ROLE_SHA:+@fleet_role_file "$ROLE_SHA"} ${ROLE_BODY:+@fleet_role_body "$ROLE_BODY"})
 launch="$stamp$envs'$BIN/fleet-session-wrap.sh' $args$seed; exec \$SHELL"
 if [ -n "$w" ]; then
   if [ "$RENEW" = 1 ]; then

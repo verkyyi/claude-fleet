@@ -642,7 +642,7 @@ drill_orchestrator_closed() {
              FLEET_ORCHESTRATOR=1 FLEET_AGENT=claude FLEET_WRAP_LAUNCH="$WORK/orch-agent" bash "$BIN/fleet-orchestrator.sh" ensure or 2>/dev/null; }
   w=$(oens) || { WHY="ensure did not open it"; return 1; }
   until_ok 5 grep -q . "$oa" || { WHY="the orchestrator's agent never started"; return 1; }
-  grep -q -- '--model fable --effort high --session-id .* /fleet-orchestrate' "$oa" || { WHY="not the strongest model at high effort, seeded: $(cat "$oa")"; return 1; }
+  grep -q -- '--model fable --effort high .*--session-id .* /fleet-orchestrate' "$oa" || { WHY="not the strongest model at high effort, seeded: $(cat "$oa")"; return 1; }
   [ "$(o "$w" @fleet_role)" = orchestrator ] || { WHY="no @fleet_role orchestrator on $w"; return 1; }
   [ "$(o "$w" pane_current_path)" = "$(cd "$h" && pwd -P)" ] || [ "$(o "$w" pane_current_path)" = "$h" ] || { WHY="not opened in \$HOME: $(o "$w" pane_current_path)"; return 1; }
   [ "$(oens)" = "$w" ] || { WHY="a second ensure opened a second one"; return 1; }
@@ -698,8 +698,10 @@ EOC
 # orchestrator-cleared (issue #2582, EPIC #2581 C1): a /clear (or a compaction)
 # empties the conversation, and the orchestrator's role was only its first turn,
 # the `/fleet-orchestrate` seed — after it the session no longer knew it was the
-# orchestrator. Its role rides the system prompt now, from ONE file
-# (skills/fleet-orchestrate/role.md): the launcher's --append-system-prompt-file
+# orchestrator. Its role rides the system prompt now, from ONE text — its
+# definition's body, agents/orchestrator.md (issue #2782), rendered to
+# $FLEET_CONF_DIR/roles/ and generated as skills/fleet-orchestrate/role.md for a
+# window opened before it: the launcher's --append-system-prompt-file
 # on a new AND a resumed launch, kept by the wrapper's ↵ resume, and the mod's
 # `fleet:orchestrator-role` section on every request. No real Claude here: the
 # drill pins every road that carries the file (the model's answer is the issue's
@@ -722,15 +724,17 @@ drill_orchestrator_cleared() {
   t0=$(now)
   w=$(oqens) || { WHY="ensure did not open it"; return 1; }
   until_ok 5 grep -q . "$oa" || { WHY="the orchestrator's agent never started"; return 1; }
-  grep -q -- "--append-system-prompt-file .*skills/fleet-orchestrate/role.md .*/fleet-orchestrate\$" "$oa" \
+  grep -q -- "--append-system-prompt-file .*/roles/orchestrator-[0-9a-f]*\.md .*/fleet-orchestrate\$" "$oa" \
     || { WHY="a new orchestrator is not launched with its role in the system prompt: $(cat "$oa")"; return 1; }
+  cmp -s "$(ls "$WORK"/oqconf/roles/orchestrator-*.md 2>/dev/null | head -1)" "$role" \
+    || { WHY="the rendered role is not the definition's body (skills/fleet-orchestrate/role.md)"; return 1; }
   sid=$(cat "$WORK/oqconf/fleets/oq/orchestrator.sid" 2>/dev/null)
   mkdir -p "$h/.claude/projects/$(printf '%s' "$h" | LC_ALL=C tr -c 'A-Za-z0-9' '-')"
   : > "$h/.claude/projects/$(printf '%s' "$h" | LC_ALL=C tr -c 'A-Za-z0-9' '-')/$sid.jsonl"
   nt kill-window -t "$w"; : > "$oa"
   oqens >/dev/null || { WHY="ensure did not reopen it"; return 1; }
   until_ok 5 grep -q . "$oa" || { WHY="the reopened orchestrator never started"; return 1; }
-  grep -q -- "--resume $sid --append-system-prompt-file .*skills/fleet-orchestrate/role.md" "$oa" \
+  grep -q -- "--append-system-prompt-file .*/roles/orchestrator-[0-9a-f]*\.md --resume $sid" "$oa" \
     || { WHY="a resumed orchestrator lost its role: $(cat "$oa")"; return 1; }
   # the recovery page's ↵ (the wrapper's own resume) keeps the flag too
   WRAP_ARGS="--append-system-prompt-file '$role' " wrapped sx w "$c" || { WHY="cannot start the wrapped window"; return 1; }
@@ -742,6 +746,36 @@ drill_orchestrator_cleared() {
   [ "$(sed -n 2p "$c/argv")" = "--agent claude --append-system-prompt-file $role --resume SID-1" ] \
     || { WHY="↵ resumed without the role: [$(sed -n 2p "$c/argv")]"; return 1; }
   SECS=$(since "$t0"); WHAT="新开、续开、恢复页 ↵ 都带 role.md 进系统提示；mod 每轮加 fleet:orchestrator-role"
+}
+
+# role-def-broken (issue #2782, EPIC #2781 C1): every role starts as its
+# definition, agents/<role>.md, says — so a definition written badly (a
+# frontmatter that cannot be read, a file gone) would open the orchestrator with
+# no model, no effort and no role. A broken definition is not used at all: the
+# launch this computer last rendered for it stands (fleet-role.py render's
+# `<role>.<agent>.last.json`), with one stderr line saying so.
+drill_role_def_broken() {
+  CAP=5; BREAK_SOCK="$WORK/sock-rd"; local t0 w oa="$WORK/rd-argv" h="$WORK/rdhome" ag="$WORK/rd-agents"
+  mkdir -p "$h" "$ag"; cp "$ROOT"/agents/*.md "$ag/"; : > "$oa"
+  printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> %s\nexec sleep 600\n' "$oa" > "$WORK/rd-agent"; chmod +x "$WORK/rd-agent"
+  nt -f /dev/null new-session -d -s rd -n home -x 100 -y 30 'exec sh' || { WHY="cannot start the isolated tmux server"; return 1; }
+  rdens() { env PATH="$WORK/tbin:$PATH" HOME="$h" FLEET_CONF_DIR="$WORK/rdconf" FLEET_SKIP_GLOBAL_CONF=1 BREAK_SOCK="$BREAK_SOCK" \
+              FLEET_ROLE_AGENTS_DIR="$ag" FLEET_ORCHESTRATOR=1 FLEET_AGENT=claude FLEET_WRAP_LAUNCH="$WORK/rd-agent" \
+              bash "$BIN/fleet-orchestrator.sh" ensure rd 2>/dev/null; }
+  w=$(rdens) || { WHY="ensure did not open it"; return 1; }
+  until_ok 5 grep -q . "$oa" || { WHY="the orchestrator's agent never started"; return 1; }
+  grep -q -- '--model fable --effort high --append-system-prompt-file ' "$oa" || { WHY="not opened as agents/orchestrator.md says: $(cat "$oa")"; return 1; }
+  printf -- '---\nname: orchestrator\nthis line is no field\n---\n' > "$ag/orchestrator.md"   # the break
+  nt kill-window -t "$w"; : > "$oa"; t0=$(now)
+  rdens >/dev/null || { WHY="ensure did not reopen it"; return 1; }
+  until_ok "$CAP" grep -q . "$oa" || { WHY="the reopened orchestrator never started"; return 1; }
+  SECS=$(since "$t0")
+  grep -q -- '--model fable --effort high --append-system-prompt-file .*/roles/orchestrator-[0-9a-f]*\.md' "$oa" \
+    || { WHY="a broken definition opened it bare: $(cat "$oa")"; return 1; }
+  rm -f "$ag/orchestrator.md"
+  FLEET_CONF_DIR="$WORK/rdconf" FLEET_ROLE_AGENTS_DIR="$ag" python3 "$BIN/fleet-role.py" render orchestrator 2>"$WORK/rd-err" | grep -qx -- '--model' \
+    && grep -q 'using the last good orchestrator launch' "$WORK/rd-err" || { WHY="a deleted definition is not covered, or says nothing: $(cat "$WORK/rd-err")"; return 1; }
+  WHAT="定义写坏或删掉：整份不用，按这台机器上次好的那份开（模型、用力、角色都在），stderr 说一句"
 }
 
 # orchestrator-compacted (issue #2583, EPIC #2581 C2): a compaction leaves the
@@ -872,7 +906,7 @@ drill_orchestrator_stale_version() {
   until_ok 10 grep -q -- "--resume $sid" "$oa" || { WHY="not renewed onto the same conversation at a quiet moment: [$(cat "$oa")]"; return 1; }
   SECS=$(since "$t0")
   grep -q '会话刚被 fleet 接回' "$oa" || { WHY="renewed with no first turn — the Loop waits for the person: $(cat "$oa")"; return 1; }
-  grep -q -- '--append-system-prompt-file .*skills/fleet-orchestrate/role.md' "$oa" \
+  grep -q -- '--append-system-prompt-file .*/roles/orchestrator-[0-9a-f]*\.md' "$oa" \
     || { WHY="renewed without its role in the system prompt: $(cat "$oa")"; return 1; }
   kill -0 "$opid" 2>/dev/null && { WHY="the old agent ($opid) still runs beside the new one"; return 1; }
   python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d.get("reason") == "renew" and d.get("loop") else 1)' \

@@ -27,7 +27,8 @@
 // start and every WHERE_POLL_MS; where.ts puts the line in the context.
 //
 // Orchestrator (issue #2582): the same start reads the window's @fleet_role and,
-// in the orchestrator's window, skills/fleet-orchestrate/role.md; orchestrator.ts
+// in the orchestrator's window, its role's text (@fleet_role_body, #2782);
+// orchestrator.ts
 // puts it in every request, so a /clear leaves the session its role.
 //
 // Quick dispatch (issue #2618): in the orchestrator's window the same start reads
@@ -47,7 +48,7 @@ import type { EngineInterface, On, Timer, ToolSpec } from 'claude-code'
 import type { FleetModStatus } from '../types'
 import { isOpen, openGate } from './gate'
 import { INBOX_MS, inboxDir, pollInbox } from './inbox'
-import { isOrchestrator, roleArgv, rolePath, takeRole } from './orchestrator'
+import { bodyArgv, isOrchestrator, roleArgv, rolePath, takeRole } from './orchestrator'
 import { qdCommand, stringsArgv, takeStrings } from './qd'
 import { QUEUE_OPTION } from './queue'
 import type { InboxIo } from './inbox'
@@ -150,12 +151,24 @@ async function readRole($: EngineInterface): Promise<void> {
   }
   // A role file that cannot be read drops the section, never the window's role
   // (exit-guard.ts and /qd ask isOrchestrator with or without it).
+  // The launcher's rendered body first (@fleet_role_body, #2782), else the copy
+  // beside the skill — a window opened before the stamp existed.
   let text: string | undefined
   if (windowRole.trim() === 'orchestrator') {
+    let body = ''
     try {
-      text = await $.fs.read(rolePath($.plugin.root))
+      const b = await $.process.run(bodyArgv(pane), { timeoutMs: TMUX_TIMEOUT_MS })
+      body = b.exitCode === 0 ? b.stdout.trim() : ''
     } catch {
-      text = undefined
+      body = ''
+    }
+    for (const path of body !== '' ? [body, rolePath($.plugin.root)] : [rolePath($.plugin.root)]) {
+      try {
+        text = await $.fs.read(path)
+        break
+      } catch {
+        text = undefined
+      }
     }
   }
   takeRole(windowRole, text)

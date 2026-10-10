@@ -318,7 +318,7 @@ EOF
   i=0; while [ ! -s "$WORK/args" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
   sid=$(cat "$FLEET_CONF_DIR/fleets/st/steward.sid" 2>/dev/null)
   [ "$(TT display-message -p -t "$w" '#{@fleet_role}|#{@norepo}')" = 'steward|1' ] \
-    && grep -q -- "--session-id $sid" "$WORK/args" && grep -q 'fleet-steward/role.md' "$WORK/args" && grep -q '/fleet-steward' "$WORK/args" \
+    && grep -q -- "--session-id $sid" "$WORK/args" && grep -q -- '--append-system-prompt-file .*/roles/steward-[0-9a-f]*\.md' "$WORK/args" && grep -q '/fleet-steward' "$WORK/args" \
     && ok "H: the window opens — @fleet_role steward, @norepo 1, its role file, /fleet-steward" \
     || bad "H: open: $o / $(cat "$WORK/args")"
   k=$(PATH="$WORK/tbin:$PATH" bash -c '. "$1/fleet-lib.sh"; fleet_win_for_key steward' _ "$BIN" 2>/dev/null)

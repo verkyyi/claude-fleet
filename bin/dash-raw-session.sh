@@ -115,7 +115,7 @@ set -uo pipefail
 # and input draft; --prompt <t> / --prompt=<t> is the optional submitted seed;
 # --bg backgrounds the slow half of the spawn (the dash ⌃s / typed-↵ path — see
 # below); the lone positional is the headless <fleet-session>.
-NAME=""; PROMPT=""; TARGET_SESS=""; BG=0; PIN=0; ORIGIN=""; AGENT=""; REPO_ARG=""; NOREPO=0; SEL=""; NODE_ARG=""; ORIGIN_WID=""; PRINT_WIN=0; REAP=""; WARM_ONLY=0; TEST_ID=0; DESK_ARG=""
+NAME=""; PROMPT=""; TARGET_SESS=""; BG=0; PIN=0; ORIGIN=""; AGENT=""; REPO_ARG=""; NOREPO=0; SEL=""; NODE_ARG=""; ORIGIN_WID=""; PRINT_WIN=0; REAP=""; WARM_ONLY=0; TEST_ID=0; DESK_ARG=""; ROLE=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --name)        NAME="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
@@ -141,6 +141,13 @@ while [ "$#" -gt 0 ]; do
     # launched under the fleet default, which may be the other agent.
     --agent)       AGENT="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
     --agent=*)     AGENT="${1#--agent=}"; shift ;;
+    # --role (issue #2782): the role definition this session runs — `worker`
+    # (any seeded session) or `epic-driver` (the orchestrator's driver for a
+    # confirmed EPIC, skills/fleet-orchestrate/SKILL.md). Handed to the launcher
+    # (fleet-claude.sh renders agents/<role>.md); none = a plain scratch, as before.
+    # A start the hub places on ANOTHER machine opens there without it (a worker).
+    --role)        ROLE="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
+    --role=*)      ROLE="${1#--role=}"; shift ;;
     --bg)          BG=1; shift ;;
     # --pin (issue #1169): stamp @pin 1 so the window sorts to the top of the
     # dash (dash-pin-toggle.sh's tier) — fleet-up's first-fleet guide.
@@ -200,6 +207,10 @@ case "$ORIGIN_WID" in ''|*[!A-Za-z0-9/:._-]*) ORIGIN_WID='' ;; esac
 case "$DESK_ARG" in ''|on|off) ;; */*/*|*[!A-Za-z0-9/._-]*|/*|*/) DESK_ARG=on ;; */*) ;; *) DESK_ARG=on ;; esac
 # Trim the seed; a whitespace-only prompt is no prompt (plain scratch).
 PROMPT="${PROMPT#"${PROMPT%%[![:space:]]*}"}"; PROMPT="${PROMPT%"${PROMPT##*[![:space:]]}"}"
+case "$ROLE" in
+  ''|worker|epic-driver) ;;
+  *) printf 'dash-raw-session: unknown --role %s (worker|epic-driver)\n' "$ROLE" >&2; exit 1 ;;
+esac
 case "$AGENT" in
   ''|claude|codex) : ;;
   *) printf 'dash-raw-session: unknown --agent %s (claude|codex) — using the fleet default\n' "$AGENT" >&2
@@ -378,7 +389,7 @@ if [ "$BG" = 1 ]; then
     '') ;; on) owarg="$owarg --desk" ;; off) owarg="$owarg --no-desk" ;;
     *) owarg="$owarg --desk='$DESK_ARG'" ;;   # sanitized to owner/name below
   esac
-  fleet_bg "FLEET_SPAWN_FOCUS='${FLEET_SPAWN_FOCUS:-0}' bash '$0'$nfarg$pfarg$pinarg$nodearg$owarg --origin='${ORIGIN:-hub}'${AGENT:+ --agent=$AGENT}$rarg${TARGET_SESS:+ '$TARGET_SESS'} >/dev/null 2>&1" \
+  fleet_bg "FLEET_SPAWN_FOCUS='${FLEET_SPAWN_FOCUS:-0}' bash '$0'$nfarg$pfarg$pinarg$nodearg$owarg --origin='${ORIGIN:-hub}'${AGENT:+ --agent=$AGENT}${ROLE:+ --role=$ROLE}$rarg${TARGET_SESS:+ '$TARGET_SESS'} >/dev/null 2>&1" \
     || { [ -n "$nfarg" ] && rm -f "$nf"; [ -n "$pfarg" ] && rm -f "$pf"
          refuse "raw: background dispatch failed"; exit 1; }
   exit 0
@@ -547,7 +558,7 @@ if [ "$WARM_ONLY" = 1 ]; then
     exit 3
   fi
 else
-[ "$_pool_ok" = 1 ] && [ -z "$PROMPT" ] && { [ -z "$AGENT" ] || [ "$AGENT" = "${FLEET_AGENT:-claude}" ]; } && claimed=$(bash "$BIN/scratch-pool.sh" claim "$SESS" ${_pool_repo:+--repo "$_pool_repo"} 2>/dev/null | head -1)
+[ "$_pool_ok" = 1 ] && [ -z "$PROMPT" ] && [ -z "$ROLE" ] && { [ -z "$AGENT" ] || [ "$AGENT" = "${FLEET_AGENT:-claude}" ]; } && claimed=$(bash "$BIN/scratch-pool.sh" claim "$SESS" ${_pool_repo:+--repo "$_pool_repo"} 2>/dev/null | head -1)
 if [ -n "$claimed" ]; then
   warm=1
   win=${claimed%%	*}; _rest=${claimed#*	}; slug=${_rest%%	*}; wt=${_rest#*	}
@@ -663,7 +674,7 @@ else
   # worker seed (tiny, and the path is the debug trail for "what did I seed?").
   # `--agent <a>` (issue #547) rides in the command when a caller chose one; the
   # launcher consumes it. Validated to claude|codex above, so bare is safe.
-  launch="'$BIN/fleet-session-wrap.sh'${AGENT:+ --agent $AGENT}"
+  launch="'$BIN/fleet-session-wrap.sh'${AGENT:+ --agent $AGENT}${ROLE:+ --role $ROLE}"
   # The window stamps its own repo identity BEFORE the launcher reads its conf
   # (issue #789 — see fleet_win_stamp_cmd).
   stamp=''; nsid=''
