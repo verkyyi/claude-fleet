@@ -28,7 +28,7 @@ A merge to `master` that touches `tokenledger/**` or `deploy/k8s/**` starts
 
 **Cadence** (issue #2052) — a push does not deploy at once. Its `gate` job holds
 until master has been **quiet for `QUIET_MINUTES` (10)** — no newer
-`tokenledger/` / `deploy/k8s/` commit — **and `MIN_GAP_MINUTES` (30)** have
+`tokenledger/` / `deploy/k8s/` commit — **and `MIN_GAP_MINUTES` (10)** have
 passed since the last successful release (the newest success of environment
 `prod`). When a newer such commit lands while it holds, the run stands down
 green (summary: 已合并到后面的发布): that commit's run is already queued behind
