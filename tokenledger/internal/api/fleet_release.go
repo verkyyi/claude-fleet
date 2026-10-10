@@ -43,6 +43,11 @@ import (
 //	GET /v1/fleet/release/<sha>/manifest.sig    its signature
 //	GET /v1/fleet/release/<sha>/tree.tar.gz     the runtime tree
 //	GET /v1/fleet/release/<sha>/artifacts/<n>   one binary / installer
+//	POST /v1/fleet/release/publish              the CI hands over a stable (fleet_publish.go)
+//
+// Since claude-fleet#2772 stable comes by that POST, not by StableSource's
+// lookup: the commit's own bytes, checked against its sha here, then built from
+// them — and once one has landed the store never asks GitHub again.
 //
 // Public like /install: it is the public repo's files and the binaries
 // /install already hands out — nothing here is a credential, and what makes it
@@ -81,6 +86,7 @@ type ReleaseStore struct {
 	NPMRegistries []string           // where a missing Claude Code is fetched from (default DefaultNPMRegistries)
 	Client        *http.Client       // the fetches' client (tests); nil = one per call
 	Keep          int                // default ReleaseKeep
+	Publish       *PublishAuth       // who may POST …/publish (claude-fleet#2772); nil = the route is off
 
 	mu        sync.Mutex
 	building  map[string]*releaseBuild
@@ -88,6 +94,10 @@ type ReleaseStore struct {
 	promoteMu sync.Mutex
 	whole     map[string]bool      // build dirs found carrying every pin (heal)
 	healTried map[string]time.Time // sha → last heal look
+	pubMu     sync.Mutex
+	pubAt     time.Time // when PublishedStable last read the disk
+	pubSHA    string
+	pubOn     bool
 }
 
 type releaseBuild struct {
@@ -218,11 +228,13 @@ func (rs *ReleaseStore) artifacts() map[string]string {
 
 // Ensure builds <sha> unless it is on disk; concurrent callers share one build.
 func (rs *ReleaseStore) Ensure(ctx context.Context, sha string) error {
-	return rs.ensure(ctx, sha, false)
+	return rs.ensure(ctx, sha, false, nil)
 }
 
 // ensure builds <sha>; rebuild builds it again even when one is on disk (heal).
-func (rs *ReleaseStore) ensure(ctx context.Context, sha string, rebuild bool) error {
+// all, when given, is the commit's files (a publish) — else the build reads
+// them from its own disk or the source.
+func (rs *ReleaseStore) ensure(ctx context.Context, sha string, rebuild bool, all map[string][]byte) error {
 	if !release.ValidSHA(sha) {
 		return fmt.Errorf("bad sha %q", sha)
 	}
@@ -240,7 +252,7 @@ func (rs *ReleaseStore) ensure(ctx context.Context, sha string, rebuild bool) er
 		go func() {
 			bctx, cancel := context.WithTimeout(context.Background(), releaseBuildTime)
 			defer cancel()
-			b.err = rs.build(bctx, sha)
+			b.err = rs.build(bctx, sha, all)
 			if b.err != nil {
 				log.Printf("fleet: release %s: %v", sha[:7], b.err)
 			} else {
@@ -261,13 +273,22 @@ func (rs *ReleaseStore) ensure(ctx context.Context, sha string, rebuild bool) er
 	}
 }
 
-func (rs *ReleaseStore) build(ctx context.Context, sha string) error {
-	if rs.Source == nil {
+func (rs *ReleaseStore) build(ctx context.Context, sha string, all map[string][]byte) error {
+	var err error
+	switch base := rs.dir(sha); {
+	case all != nil:
+	case base != "":
+		// a rebuild (heal) takes the commit's files from the build it replaces:
+		// the same bytes, no network (claude-fleet#2772)
+		if all, err = treeFiles(filepath.Join(base, release.TreeName)); err != nil {
+			return err
+		}
+	case rs.Source == nil:
 		return errors.New("no stable source")
-	}
-	all, err := rs.Source.Tree(ctx, sha, releasePathSafe)
-	if err != nil {
-		return err
+	default:
+		if all, err = rs.Source.Tree(ctx, sha, releasePathSafe); err != nil {
+			return err
+		}
 	}
 	files, err := releaseTree(all)
 	if err != nil {
@@ -430,6 +451,12 @@ func (rs *ReleaseStore) StableSHA() string {
 // the pointer already on sha is a no-op, a build already carrying the wanted
 // seal is not redone.
 func (rs *ReleaseStore) promote(ctx context.Context, sha string) error {
+	return rs.promoteWith(ctx, sha, nil)
+}
+
+// promoteWith is promote building from all — a publish's files — when the
+// release is not on disk yet.
+func (rs *ReleaseStore) promoteWith(ctx context.Context, sha string, all map[string][]byte) error {
 	if !release.ValidSHA(sha) {
 		return fmt.Errorf("bad sha %q", sha)
 	}
@@ -437,7 +464,7 @@ func (rs *ReleaseStore) promote(ctx context.Context, sha string) error {
 	defer rs.promoteMu.Unlock()
 	cur := rs.stable()
 	if cur.SHA == sha {
-		return rs.Ensure(ctx, sha)
+		return rs.ensure(ctx, sha, false, all)
 	}
 	want := release.Seal{Prev: cur.SHA, Seq: cur.Seq + 1}
 	rs.mu.Lock()
@@ -451,7 +478,7 @@ func (rs *ReleaseStore) promote(ctx context.Context, sha string) error {
 		delete(rs.pending, sha)
 		rs.mu.Unlock()
 	}()
-	if err := rs.Ensure(ctx, sha); err != nil {
+	if err := rs.ensure(ctx, sha, false, all); err != nil {
 		return err
 	}
 	if m := rs.manifest(sha); m == nil || m.Prev != want.Prev || m.Seq != want.Seq {
@@ -465,6 +492,9 @@ func (rs *ReleaseStore) promote(ctx context.Context, sha string) error {
 	if err := replaceFile(filepath.Join(rs.Dir, releaseStable), fmt.Sprintf(".stable-%d-%s", want.Seq, sha[:12]), append(b, '\n')); err != nil {
 		return err
 	}
+	rs.pubMu.Lock()
+	rs.pubAt = time.Time{} // PublishedStable reads the new pointer
+	rs.pubMu.Unlock()
 	log.Printf("fleet: release %s is stable #%d", sha[:7], want.Seq)
 	rs.prune()
 	return nil
@@ -602,6 +632,12 @@ func (rs *ReleaseStore) chain(sha string) []string {
 // OnStable is StableSource.OnStable: build each new stable in the background
 // and make it the store's stable.
 func (rs *ReleaseStore) OnStable(sha string) {
+	if rs.published() {
+		// stable comes by publish now (claude-fleet#2772): a lookup still in
+		// flight from before the first one never moves the pointer
+		log.Printf("fleet: release %s: GitHub says stable, ignored — this store takes publishes", sha[:7])
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), releaseBuildTime)
 	defer cancel()
 	if err := rs.promote(ctx, sha); err != nil {
@@ -614,6 +650,10 @@ func (s *Server) handleRelease(w http.ResponseWriter, r *http.Request) {
 	rs := s.Releases
 	if rs == nil {
 		http.NotFound(w, r)
+		return
+	}
+	if strings.TrimPrefix(r.URL.Path, release.Path) == "publish" {
+		s.handlePublish(w, r)
 		return
 	}
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -759,7 +799,7 @@ func (rs *ReleaseStore) heal(ctx context.Context, sha string) {
 		}
 	}
 	log.Printf("fleet: release %s lacks %s — rebuilding", sha[:7], strings.Join(lack, ", "))
-	if err := rs.ensure(ctx, sha, true); err != nil {
+	if err := rs.ensure(ctx, sha, true, nil); err != nil {
 		log.Printf("fleet: release %s: heal: %v", sha[:7], err)
 	}
 }

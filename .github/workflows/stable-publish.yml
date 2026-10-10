@@ -1,0 +1,59 @@
+# Hand the hub a stable by hand (issue #2772, EPIC #2770 C2). The hub takes stable
+# only from a publish: stable-auto.yml publishes after its own move, and a move by
+# hand (`bin/fleet-stable.sh move`) dispatches this with the sha it moved to. Also
+# the way to repair a hub that missed one: re-run, or `gh workflow run
+# stable-publish.yml -f sha=<the stable tag's commit>` — the same sha twice is a
+# 200 no-op, a sha not forward of the hub's stable a 409.
+#
+# The identity is this run's OIDC token (id-token: write): the hub checks the
+# repository, refs/heads/master and this file's name — so it runs on master only.
+name: stable publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: the commit stable names (default the stable tag's)
+        required: false
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: stable-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: publish stable
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+
+      - name: publish to the hub
+        env:
+          SHA: ${{ inputs.sha }}
+          FLEET_HUB_URL: https://claudefleet.24haowan.com
+        run: |
+          if [ -z "$SHA" ]; then
+            git fetch -q origin +refs/tags/stable:refs/tags/stable
+            SHA=$(git rev-parse 'stable^{commit}')
+          fi
+          case "$SHA" in *[!0-9a-f]*|'') echo "::error::not a commit sha: $SHA"; exit 1 ;; esac
+          set +e
+          bash bin/fleet-release-publish.sh "$SHA" --dir . > pub.txt 2>&1
+          rc=$?
+          cat pub.txt
+          {
+            echo "### publish \`${SHA:0:7}\` → hub"
+            echo '```'
+            cat pub.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit $rc

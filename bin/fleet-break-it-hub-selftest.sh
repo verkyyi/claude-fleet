@@ -59,6 +59,9 @@
 #   dist-no-github                                  bin/dist-no-github-selftest.sh (GitHub a black hole: install-sync,
 #                                                   client stage, login bootstrap, the updater's follow → the new version)
 #   health-silent-pass                              bin/fleet_steward_health.py (the steward's beat), fleet-doctor.sh --json
+#   dist-publish-tampered                           tokenledger/internal/api fleet_publish.go (POST …/publish: the archive
+#                                                   hashed into the commit's tree, OIDC, forward only; go test, when a
+#                                                   toolchain is here) + bin/fleet-release-publish.sh (what CI sends)
 #
 # Each prints `PASS <id> <secs>s ≤<cap>s <what came back>` like its parent.
 # BREAK_KEEP=1 keeps the work dir; BREAK_ONLY narrows to those ids.
@@ -1107,6 +1110,41 @@ drill_dist_no_github() {
   out=$(bash "$BIN/dist-no-github-selftest.sh" 2>&1) || { WHY="$(printf '%s\n' "$out" | grep -m 3 -E '^(RED|FAIL)' | cut -c1-220 | tr '\n' '|')"; return 1; }
   SECS=$(since "$t0")
   WHAT="GitHub 黑洞下：$(printf '%s\n' "$out" | tail -1 | sed 's/^dist-no-github: //')$(printf '%s\n' "$out" | sed -n 's/^AWAIT  *\([a-z-]*\) *red until \([^:]*\):.*/ · \1 等 \2/p' | tr -d '\n')"
+}
+
+# ---- dist-publish-tampered (#2772, EPIC #2770 C2): the hub takes stable only from a
+# publish, so a publish is the one door a wrong version could come in by — bytes
+# changed on the way, a token from another repo / branch / workflow, a stable moved
+# backwards. The hub hashes the archive into git's tree and the commit objects into
+# their shas and refuses (400 / 401 / 409), leaving its stable where it was; the Go
+# tests do it for real against a real `git archive`, GitHub a black hole. The CI
+# half — what fleet-release-publish.sh sends, its token never on an argv — is its
+# selftest against a loopback hub.
+drill_dist_publish_tampered() {
+  CAP=120; local t0 out rc tests f
+  tests='TestPublishTamperedTreeRefused TestPublishIdentityRefused TestPublishOnlyForward TestPublishStoresAndServesWithGitHubGone'
+  f="$ROOT/tokenledger/internal/api/fleet_publish_test.go"
+  for out in $tests; do
+    grep -q "^func $out(" "$f" 2>/dev/null || { WHY="the hub half's test $out is not in ${f#$ROOT/}"; return 1; }
+  done
+  t0=$(now)
+  out=$(bash "$BIN/fleet-release-publish-selftest.sh" 2>&1) \
+    || { WHY="the CI half: $(printf '%s' "$out" | grep -m 3 FAIL | cut -c1-200 | tr '\n' '|')"; return 1; }
+  WHAT='CI 送的是整个提交 + 从入口 stable 起的提交链，令牌不上命令行'
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/api 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
+      0:*) WHAT="${WHAT}；入口：改一个字节 400、别的仓 / 分支 / 流程 401、回退 / 横跳 409、GitHub 黑洞零命中（go test 四条）" ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
+        WHAT="${WHAT}；入口的 Go 测试这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们" ;;
+      *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  else
+    WHAT="${WHAT}；没有 go：四条测试按名核对在，Go 门（tokenledger.yml）跑它们"
+  fi
+  SECS=$(since "$t0")
 }
 
 cred_run_drills "$0"
