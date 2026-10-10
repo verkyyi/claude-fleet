@@ -132,6 +132,7 @@ bin/fleet-reap-policy.sh
 bin/fleet-sidebar-menu.sh
 bin/fleet-client-menu.sh
 bin/fleet-sidebar-remote.sh
+bin/fleet-sidebar-steward.sh
 bin/tmux-dashboard-rows.sh
 bin/tmux-status.sh
 bin/fleet-lib.sh

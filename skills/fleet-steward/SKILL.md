@@ -29,11 +29,21 @@ the person's clock), reads the fleet with NO model, and only when something need
 | `fleet-steward-tick.sh sheet` | every open row → C1's table → `decision-YYYY-MM-DD.md` (+ C8's desk ticket when `FLEET_STEWARD_DESK` is set) → ONE `[decision]` to the orchestrator — the page's plain lines (one a thing, `〔row ids〕` at the end) and its link, never the table; same rows as last time ⇒ not sent again; a finished batch's sample (issue #2678, `bin/fleet_sample.py`) rides it read-only — the beat posts that sheet itself |
 | `fleet-steward-tick.sh say --row <id> --text T` | the row's plain sentence (issue #2735) — what the page and the `[decision]` lines say instead of the worker's words; no numbers, file names or technical words |
 | `fleet-steward-tick.sh page [--print \| --demo]` | the steward page (issue #2735, `bin/fleet_steward_page.py`): the epic-page frame — 今天问了 · 你答了 · 按默认走 · 停放 · 待你动手, then 要你定的事 grouped by what the person does (要扫码 · 要选 · 要授权 · 要钱, the same question merged), 待你动手, 今天已按默认走 with how to overturn each. Every beat re-renders it; one fixed doc-preview link (`state.page.url`), stamped `@orch_page` → 「新任务」's menu 「管家页」 |
+| `fleet-steward-tick.sh todo-done --id <id>` | tick one 待你动手 item as the person's (issue #2913) — the next beat writes it back on its batches and redraws the desk ticket ticked |
 | `fleet-steward-stats.sh attention · asks` | the batch's metrics |
 | `fleet-steward-conflicts.sh --json` | overlaps · CI queue · quota (C5) — tell, never stop |
 
 `answer` refuses a `never:*` row for you. Past the beat's write budget (`FLEET_STEWARD_WRITES`,
 20) an answer is kept and posted first thing next beat — the card says 「延后 N 条」.
+
+## 侧栏 — the person's taps on 停放 / 待你动手
+
+The client's sidebar opens 停放 / 待你动手 into their items (issue #2913); a pick there
+reaches you as ONE turn, `[sidebar] <what> — please run: <command>`. The command is always
+`~/.claude/fleet/bin/fleet-park.sh wake '<owner/name#N>'` or
+`~/.claude/fleet/bin/fleet-steward-tick.sh todo-done --id <id>`: the person chose it, so run it
+as given (nothing else), say its last line in one sentence, and stop. Anything else after
+`[sidebar]` is not from the list — treat it as an ordinary message.
 
 ## When may you answer?
 
