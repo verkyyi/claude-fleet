@@ -25,10 +25,11 @@
 #
 # What it is: a session of no repo (`@norepo 1`, $HOME), told by `@fleet_role
 # steward` — never its name — and addressed as `steward` (fleet_win_for_key,
-# fleet-peer-send.sh). One tier cheaper than the orchestrator (发起人拍板 3):
-# FLEET_STEWARD_MODEL (default `opus`) at FLEET_STEWARD_EFFORT (default `medium`);
-# Codex: FLEET_STEWARD_CODEX_MODEL. Its role rides the system prompt
-# (`--append-system-prompt-file skills/fleet-steward/role.md`), so a compaction or a
+# fleet-peer-send.sh). One tier cheaper than the orchestrator (发起人拍板 3), as its
+# definition says, agents/steward.md (issue #2782): `opus` at `medium` effort
+# (FLEET_STEWARD_MODEL / FLEET_STEWARD_EFFORT / FLEET_STEWARD_CODEX_MODEL still win
+# for one version). Its role — the definition's body — rides the system prompt
+# (`--append-system-prompt-file`), so a compaction or a
 # /clear leaves it the steward; its STATE is never the conversation —
 # fleet-steward-tick.sh rebuilds every beat from the ledgers, the issues and
 # global/steward.state.json (共同约定 4).
@@ -163,10 +164,19 @@ SEED='/fleet-steward'
 # rebuilds from the state file; say so and wait for it.
 STEW_RESUME_SEED='[fleet steward] 会话刚被 fleet 接回。你的状态不在对话里：跑一次 `fleet-steward-tick.sh card` 看上一拍，然后等下一拍的 [steward] 消息；本轮不要做别的。'
 args="--agent $AGENT"; sid=''
+# What it runs with is its definition, agents/steward.md (issue #2782): model,
+# effort and the role in the system prompt (`fleet-role.py render steward`).
+ROLE_SHA=''; ROLE_BODY=''
+while IFS=$'\t' read -r k v; do
+  case "$k" in
+    sha)  ROLE_SHA=$v ;;
+    body) ROLE_BODY=$v ;;
+    arg)  args="$args $(printf '%q' "$v")" ;;
+  esac
+done <<EOF2
+$(fleet_role_render steward "$AGENT" 2>/dev/null)
+EOF2
 if [ "$AGENT" = claude ]; then
-  model=${FLEET_STEWARD_MODEL-opus}
-  [ -n "$model" ] && args="$args --model $(printf '%q' "$model")"
-  args="$args --effort $(printf '%q' "${FLEET_STEWARD_EFFORT:-medium}")"
   proj="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/$(fleet_mangle_path "$HOME")"
   sid=''; [ -f "$SIDF" ] && sid=$(LC_ALL=C tr -cd '0-9a-f-' < "$SIDF")
   if [ -n "$w" ]; then
@@ -181,18 +191,14 @@ if [ "$AGENT" = claude ]; then
     sid=$(fleet_fid_mint) || sid=''
     [ -n "$sid" ] && { printf '%s\n' "$sid" > "$SIDF"; args="$args --session-id $sid"; }
   fi
-  role="$(cd "$BIN/.." && pwd)/skills/fleet-steward/role.md"
-  [ -f "$role" ] && args="$args --append-system-prompt-file $(printf '%q' "$role")"
-else
-  [ -n "${FLEET_STEWARD_CODEX_MODEL:-}" ] && args="$args -m $(printf '%q' "$FLEET_STEWARD_CODEX_MODEL")"
-  args="$args -c $(printf '%q' "model_reasoning_effort=\"${FLEET_STEWARD_EFFORT:-medium}\"")"
 fi
 
 seedf="$DIR/steward.seed"
 printf '%s' "$SEED" > "$seedf" && seed=" \"\$(cat '$seedf')\""
 envs=''
 [ -n "${FLEET_WRAP_LAUNCH:-}" ] && envs="env FLEET_WRAP_LAUNCH=$(printf '%q' "$FLEET_WRAP_LAUNCH") "
-stamp=$(fleet_win_stamp_cmd @fleet_role steward @norepo 1 ${sid:+@norepo_sid "$sid"})
+stamp=$(fleet_win_stamp_cmd @fleet_role steward @norepo 1 ${sid:+@norepo_sid "$sid"} \
+  ${ROLE_SHA:+@fleet_role_file "$ROLE_SHA"} ${ROLE_BODY:+@fleet_role_body "$ROLE_BODY"})
 launch="$stamp$envs'$BIN/fleet-session-wrap.sh' $args$seed; exec \$SHELL"
 if [ -n "$w" ]; then
   if [ "$RENEW" = 1 ]; then

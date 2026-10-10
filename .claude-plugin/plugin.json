@@ -28,5 +28,6 @@
     "github-issues",
     "orchestration"
   ],
-  "hooks": "./hooks/settings-hooks.json"
+  "hooks": "./hooks/settings-hooks.json",
+  "agents": []
 }

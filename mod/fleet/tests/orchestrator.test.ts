@@ -6,23 +6,27 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import { ROLE_SECTION, isRoleRun, resetRole, rolePath, takeRole, currentRole } from '../hooks/orchestrator'
+import { ROLE_SECTION, isBodyRun, isRoleRun, resetRole, rolePath, takeRole, currentRole } from '../hooks/orchestrator'
 import { SUPPORTED } from '../hooks/version'
 
 const START = { cwd: '/tmp', surface: 'terminal', isInteractive: false } as const
 const COMPOSE = { model: 'claude-opus-5-5', promptModel: 'claude-opus-5-5', surfaces: ['terminal'], tools: [], outputStyle: null, traits: [] } as const
 const ROLE_MD = '# 你是编排会话（fleet 的编排会话）\n先谈，再派。\n'
 
-function engine(on: On, windowRole: string, file: string | null = ROLE_MD) {
+const BODY = '/c/roles/orchestrator-0123456789abcdef.md'
+const BODY_MD = '# 你是编排会话（fleet 的编排会话）\n照定义来。\n'
+
+function engine(on: On, windowRole: string, file: string | null = ROLE_MD, body = '') {
   const reads: string[] = []
   on('session.version', () => ({ value: { version: SUPPORTED.min, base: SUPPORTED.min } }))
   on('session.model', () => ({ value: 'claude-opus-5-5' }))
   on('process.run', (_$, e) => {
-    const stdout = isRoleRun(e.argv) ? `${windowRole}\n` : ''
+    const stdout = isRoleRun(e.argv) ? `${windowRole}\n` : isBodyRun(e.argv) ? `${body}\n` : ''
     return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('fs.read', (_$, e) => {
     reads.push(e.path)
+    if (body !== '' && e.path === body && body === BODY) return { value: BODY_MD }
     if (file === null || !e.path.endsWith('/skills/fleet-orchestrate/role.md')) throw new Error('ENOENT')
     return { value: file }
   })
@@ -80,4 +84,22 @@ test('a role.md that cannot be read adds nothing', async ($, on) => {
   engine(on, 'orchestrator', null)
   await $.session.start(START)
   expect((await $.prompt.compose(COMPOSE)).sections.map(s => s.id)).not.toContain(ROLE_SECTION)
+})
+
+test('the rendered body the launcher stamped (#2782) is the text, the skill copy its fallback', async ($, on) => {
+  resetRole()
+  const { reads } = engine(on, 'orchestrator', ROLE_MD, BODY)
+  await $.session.start(START)
+  const role = (await $.prompt.compose(COMPOSE)).sections.find(s => s.id === ROLE_SECTION)
+  expect(role?.text).toBe(BODY_MD.trim())
+  expect(reads).toContain(BODY)
+  expect(reads.filter(p => p.endsWith('/skills/fleet-orchestrate/role.md'))).toEqual([])
+})
+
+test('a stamped body that cannot be read falls back to the skill copy', async ($, on) => {
+  resetRole()
+  engine(on, 'orchestrator', ROLE_MD, '/c/roles/gone.md')
+  await $.session.start(START)
+  const role = (await $.prompt.compose(COMPOSE)).sections.find(s => s.id === ROLE_SECTION)
+  expect(role?.text).toBe(ROLE_MD.trim())
 })

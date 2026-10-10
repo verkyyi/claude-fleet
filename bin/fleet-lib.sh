@@ -9020,6 +9020,24 @@ fleet_role_renew_why() {
   return 0
 }
 
+# fleet_role_render <role> <claude|codex> [--cap] — a role's launch arguments from
+# its definition, agents/<role>.md (issue #2782): bin/fleet-role.py render --kv,
+# `sha`/`model`/`effort`/`body`/`arg` TAB value. The launcher's old knobs a sourced
+# conf left as shell variables (FLEET_ORCH_* / FLEET_STEWARD_* / FLEET_MODEL —
+# compat-1v) are handed over explicitly; set-but-empty stays a choice.
+fleet_role_render() {
+  local role="${1:-}" agent="${2:-claude}" bin v
+  shift 2 2>/dev/null || shift $#
+  bin="${_FLEET_LIB_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)}"
+  local envs=()
+  for v in FLEET_ORCH_MODEL FLEET_ORCH_EFFORT FLEET_ORCH_CODEX_MODEL \
+           FLEET_STEWARD_MODEL FLEET_STEWARD_EFFORT FLEET_STEWARD_CODEX_MODEL \
+           FLEET_MODEL FLEET_MODEL_FALLBACK; do
+    eval "[ -n \"\${$v+x}\" ] && envs+=(\"$v=\${$v}\")"
+  done
+  env ${envs[@]+"${envs[@]}"} python3 "$bin/fleet-role.py" render "$role" --agent "$agent" --kv "$@"
+}
+
 # fleet_role_renew_due <session> <win> — the `ensure` half of #2733: judge <win>
 # with fleet_role_renew_why and keep its pending mark. A pending window carries
 # @renew_since (the epoch it was first seen on an older version; the doctor's

@@ -75,16 +75,25 @@ SHIM_PATH="$PATH"
   *) SHIM_PATH="$BIN/tmux-shim:$PATH" ;;
 esac
 
-# The launch POLICY a resume / new session keeps: its Codex home, an explicit
-# model and an appended system prompt — the orchestrator's role (issue #2582)
-# (the agent is the one that just ran, @cc_agent). The rest — a seed prompt,
-# a --resume + nudge, a --session-id — belonged to the first launch only.
+# The launch POLICY a resume / new session keeps: its Codex home and the whole
+# group a role's definition rendered (issue #2782, `fleet-role.py render`): model,
+# effort, an appended system prompt — the orchestrator's role (issue #2582) —,
+# tools, permission mode, and a worker's `--role` (fleet-claude.sh renders it
+# again). The agent is the one that just ran, @cc_agent. The rest — a seed
+# prompt, a --resume + nudge, a --session-id — belonged to the first launch only.
 policy=(); want=''
 for a in "$@"; do
-  if [ -n "$want" ]; then [ "$want" = --agent ] || policy+=("$want" "$a"); want=''; continue; fi
+  if [ -n "$want" ]; then
+    case "$want" in
+      --agent) ;;
+      -c) case "$a" in model_reasoning_effort=*) policy+=("$want" "$a") ;; esac ;;
+      *) policy+=("$want" "$a") ;;
+    esac
+    want=''; continue
+  fi
   case "$a" in
-    --agent|--codex-home|--model|--append-system-prompt-file) want=$a ;;
-    --model=*|--append-system-prompt-file=*) policy+=("$a") ;;
+    --agent|--codex-home|--model|-m|--effort|-c|--append-system-prompt-file|--permission-mode|--role) want=$a ;;
+    --model=*|--effort=*|--append-system-prompt-file=*|--permission-mode=*|--tools=*|--disallowedTools=*|--role=*) policy+=("$a") ;;
   esac
 done
 

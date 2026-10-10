@@ -322,14 +322,34 @@ Do not install from memory: read the doc and work from it.
   carries it as a `REAP<TAB><fleet_id><TAB><policy>` row, the inventory as
   `reap=`. **No @reap_policy = the kind's old rule, byte for byte** —
   `fleet-cleanup-idle-selftest.py` (`ReapPolicy`, `PolicyGrammar`) pins both.
+- **A role starts as its ONE definition says: `agents/<role>.md`** (issue #2782,
+  EPIC #2781 C1). orchestrator · steward · worker · epic-driver, each in Claude
+  Code's subagent file format (model · effort · tools · disallowedTools ·
+  mcpServers · permissionMode … + the body); `bin/fleet-role.py render <role>
+  [--agent claude|codex]` is the one reader. The orchestrator's and the steward's
+  launchers splice what `fleet_role_render` gives (and stamp `@fleet_role_file`
+  <sha> + `@fleet_role_body`); a worker / driver launch carries `--role
+  worker|epic-driver` (dash-issue-session.sh; `dash-raw-session.sh --role
+  epic-driver`) and fleet-claude.sh renders it — the definition's model is the
+  FLEET_MODEL default, the cap / subagent tier / @cc_model go on as before; no
+  `--role` = byte for byte as before; the wrapper's resume keeps the rendered
+  group. A worker's / driver's body is read by its seed skill, injected nowhere.
+  The old knobs (`FLEET_ORCH_*`, `FLEET_STEWARD_*`, `FLEET_MODEL`, the login's
+  `effortLevel`) still win for one version (`# compat-1v`), and
+  `skills/*/role.md` stay as copies of the bodies for a window opened before
+  (`fleet-role-selftest.sh` B: byte-identical). The repo root is the plugin root:
+  `plugin.json` says `"agents": []`, so the roles never register as plugin
+  subagents. A definition that cannot be read is not used: the last good launch
+  (`$FLEET_CONF_DIR/roles/<role>.<agent>.last.json`) stands — BREAK-IT
+  `role-def-broken`. Never hard-code a role's model, effort or prompt in a launcher.
 - **The fleet has ONE orchestrating session, and it is no row** (issue #1957).
   `bin/fleet-orchestrator.sh ensure` opens it (fleet-up, and the diskguard tick's
   `home_watch` reopens it — the same conversation when it can): `@fleet_role
   orchestrator`, `@norepo 1`, in `$HOME`, the login's agent at its strongest model
-  and high effort, seeded `/fleet-orchestrate` — its ROLE rides the system prompt, not that seed
-  (issue #2582): `--append-system-prompt-file skills/fleet-orchestrate/role.md`
+  and high effort (its definition, `agents/orchestrator.md`), seeded `/fleet-orchestrate` — its ROLE rides the system prompt, not that seed
+  (issue #2582): `--append-system-prompt-file` the definition's body
   (≤ 60 lines; kept by the wrapper's ↵ resume) plus the mod's
-  `fleet:orchestrator-role` section from the same file, so a `/clear` or a
+  `fleet:orchestrator-role` section from the same text (`@fleet_role_body`), so a `/clear` or a
   compaction leaves it the orchestrator (Codex: the seed alone). Its WORKING STATE rides a
   compaction too (issue #2583): `bin/fleet-orchestrator-state.py` writes
   `global/orchestrator.state.json` (batches · waiting · unread reports · loop) on
@@ -353,8 +373,8 @@ Do not install from memory: read the doc and work from it.
   `fleet-orchestrator-selftest.sh`.
 - **The orchestrator has a STEWARD, and a calm beat calls no model** (issue #2670,
   EPIC #2668 C2). `bin/fleet-steward.sh ensure` opens it like the orchestrator
-  (`@fleet_role steward`, `@norepo 1`, `$HOME`, `skills/fleet-steward/role.md` in
-  the system prompt, one tier cheaper: `FLEET_STEWARD_MODEL` opus), home_watch
+  (`@fleet_role steward`, `@norepo 1`, `$HOME`, as `agents/steward.md` says: its body in
+  the system prompt, one tier cheaper — opus at medium), home_watch
   reopens it on the same conversation (`steward.sid`); caps never count it, restore /
   migrate / move read it as `home`, `fleet_win_for_key steward` addresses it, the
   client draws no row for it (`steward_all_<sess>`). Its beat is
