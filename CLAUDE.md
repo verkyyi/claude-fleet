@@ -339,7 +339,13 @@ Do not install from memory: read the doc and work from it.
   `--role` = byte for byte as before; the wrapper's resume keeps the rendered
   group. A worker's / driver's body is read by its seed skill, injected nowhere.
   The old knobs (`FLEET_ORCH_*`, `FLEET_STEWARD_*`, `FLEET_MODEL`, the login's
-  `effortLevel`) still win for one version (`# compat-1v`), and
+  `effortLevel`) still win for one version (`# compat-1v`) —
+  `fleet-conf.sh migrate`'s roles step (`fleet-role.py migrate-conf`, issue #2788)
+  moves every one that differs from the built-in into the person's layer (one PUT;
+  a field the person already set is theirs), comments its line out (.bak kept),
+  writes nothing on a second run, and the doctor's `roles` row WARNs while one is
+  left; Codex models and `FLEET_SUBAGENT_MODEL` stay the machine's
+  (docs/ROLES-ACCEPTANCE.md) — and
   `skills/*/role.md` stay as copies of the bodies for a window opened before
   (`fleet-role-selftest.sh` B: byte-identical). The repo root is the plugin root:
   `plugin.json` says `"agents": []`, so the roles never register as plugin

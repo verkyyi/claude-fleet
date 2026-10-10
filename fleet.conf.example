@@ -282,6 +282,10 @@ FLEET_CTX_WINDOW=200000
 # The prefix+c config modal edits this as an fzf picker of the CLI's latest-of-tier
 # aliases — opus, sonnet, haiku, fable, opusplan, default — plus a custom claude-*
 # entry, so you choose instead of type.
+# ⚠ Read for ONE more version (issue #2788): a worker's / batch driver's model is
+# its role's (agents/worker.md, your layer: `fleet role set worker model <m>`);
+# `fleet-conf.sh migrate` moves this line there and comments it out. A repo conf's
+# FLEET_MODEL (per-repo) stays.
 # @label=Worker model @group=spawn @tier=common @scope=fleet @edit=enum
 #FLEET_MODEL="opus"
 
@@ -341,6 +345,10 @@ FLEET_CTX_WINDOW=200000
 # while that model is capped on the active account) --effort FLEET_ORCH_EFFORT;
 # Codex -m FLEET_ORCH_CODEX_MODEL (empty: the login's own) with
 # model_reasoning_effort = FLEET_ORCH_EFFORT. Read when it is (re)opened.
+# ⚠ FLEET_ORCH_MODEL / FLEET_ORCH_EFFORT are read for ONE more version (issue
+# #2788): the role's definition says them (agents/orchestrator.md, your layer:
+# `fleet role set orchestrator model <m>`), and `fleet-conf.sh migrate` moves them
+# there. FLEET_ORCH_CODEX_MODEL has no field in a layer and stays here.
 # @label=Orchestrator model (Claude) @group=spawn @tier=internal @scope=fleet @edit=str
 #FLEET_ORCH_MODEL="fable"
 # @label=Orchestrator model (Codex) @group=spawn @tier=internal @scope=fleet @edit=str
@@ -369,6 +377,8 @@ FLEET_CTX_WINDOW=200000
 
 # One tier cheaper than the orchestrator (发起人拍板 3): Claude --model
 # FLEET_STEWARD_MODEL --effort FLEET_STEWARD_EFFORT; Codex -m FLEET_STEWARD_CODEX_MODEL.
+# ⚠ FLEET_STEWARD_MODEL / _EFFORT: read for ONE more version, moved into your layer
+# by `fleet-conf.sh migrate` (issue #2788) — as the orchestrator's above.
 # @label=Steward model (Claude) @group=spawn @tier=internal @scope=fleet @edit=str
 #FLEET_STEWARD_MODEL="opus"
 # @label=Steward model (Codex) @group=spawn @tier=internal @scope=fleet @edit=str

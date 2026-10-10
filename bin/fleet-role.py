@@ -46,6 +46,11 @@ launcher asks it, so what the file says is what the session runs.
                           1 the hub refused / did not answer
   merge <base.md> <overlay.md…> | merge --vector <file.json>
                           the pure merge, as JSON {fields, body, sources, locked}
+  migrate-conf [<fleet.conf>] [--dry-run] [--machine M]
+                          fleet-conf.sh migrate's roles step (issue #2788): the
+                          old knobs below move from fleet.conf into the person's
+                          layer (one PUT), their lines commented out (.bak kept);
+                          exit 1 = lines left because the hub could not be reached
   list                    the roles
 
 How a field lands (Claude / Codex):
@@ -73,7 +78,8 @@ orchestrator FLEET_ORCH_MODEL / FLEET_ORCH_EFFORT / FLEET_ORCH_CODEX_MODEL,
 steward FLEET_STEWARD_MODEL / FLEET_STEWARD_EFFORT / FLEET_STEWARD_CODEX_MODEL,
 worker and epic-driver FLEET_MODEL and the login's own `effortLevel`
 (settings.json; a Codex worker's effort is its config.toml) — so with none of
-them changed, every role starts exactly as it did.
+them changed, every role starts exactly as it did. `migrate-conf` moves them
+out of fleet.conf, and the doctor's `roles` row WARNs while one is still there.
 
 Before `render`, a personal layer read longer ago than FLEET_ROLE_STALE (600 s)
 is read again from the hub (`fleet-agent-team.py person`, at most
@@ -1413,6 +1419,184 @@ def write_cmd(cmd, rest):
     raise Refused('unknown command %s' % cmd)
 
 
+# ---- moving the old knobs out of fleet.conf (issue #2788, EPIC #2781 C7) ----------
+# A machine's fleet.conf still carries the launchers' old role knobs, and while it
+# does they win over the person's layer (COMPAT above) — two places, nobody sure
+# which one speaks. `migrate-conf` (fleet-conf.sh migrate's roles step) moves each
+# into the person's layer and comments the line out, so the merged definition is
+# the only answer. Per (role, field):
+#   the person's layer already names it     → the line is commented out; the
+#                                             person's value stands (one person, many
+#                                             machines: the first to say it wins,
+#                                             never a later machine's leftover)
+#   the value is the built-in's             → commented out, nothing written
+#   else                                    → written into the person's layer, ONE
+#                                             PUT for the whole file, note
+#                                             「从 <机器> 的 fleet.conf 迁入」
+# Lines that need the hub stay as they are while it cannot be reached (they still
+# win, as before); a second run finds no active line and writes nothing. Codex
+# model names (FLEET_*_CODEX_MODEL) and the subagent tier (FLEET_SUBAGENT_MODEL)
+# have no field in a layer — they stay this machine's and are only listed.
+MIGRATE = (('FLEET_ORCH_MODEL', (('orchestrator', 'model'),)),
+           ('FLEET_ORCH_EFFORT', (('orchestrator', 'effort'),)),
+           ('FLEET_STEWARD_MODEL', (('steward', 'model'),)),
+           ('FLEET_STEWARD_EFFORT', (('steward', 'effort'),)),
+           ('FLEET_MODEL', (('worker', 'model'), ('epic-driver', 'model'))))
+MIGRATE_STAY = ('FLEET_ORCH_CODEX_MODEL', 'FLEET_STEWARD_CODEX_MODEL', 'FLEET_SUBAGENT_MODEL')
+MIGRATE_MARK = '# → 你的那一层（fleet-conf.sh migrate, #2788）'
+
+
+def _conf_lines(path, keys):
+    """[(line index, key, value | None)] — every active assignment of `keys` in a
+    shell conf; value None = not a plain literal (left as it is)."""
+    import re
+    import shlex
+    rx = re.compile(r'^\s*(?:export\s+)?(%s)=(.*)$' % '|'.join(keys))
+    try:
+        with open(path, encoding='utf-8') as f:
+            lines = f.read().split('\n')
+    except OSError:
+        return [], []
+    out = []
+    for i, ln in enumerate(lines):
+        m = rx.match(ln)
+        if not m:
+            continue
+        try:
+            tok = shlex.split(m.group(2), comments=True)
+        except ValueError:
+            tok = None
+        val = None
+        if tok is not None and len(tok) <= 1 and '$' not in m.group(2) and '`' not in m.group(2):
+            val = tok[0] if tok else ''
+        out.append((i, m.group(1), val))
+    return lines, out
+
+
+def local_role_vars(path=None):
+    """The MIGRATE keys fleet.conf still sets (the doctor's WARN)."""
+    path = path or os.path.join(conf_dir(), 'fleet.conf')
+    return sorted({k for _, k, _ in _conf_lines(path, [k for k, _ in MIGRATE])[1]})
+
+
+def _machine():
+    import socket
+    return os.environ.get('FLEET_MACHINE_NAME') or socket.gethostname().split('.')[0] or '这台机器'
+
+
+def migrate_conf(path, dry=False, machine=None):
+    """Exit 0 done or nothing to do · 1 lines left for the hub (said why)."""
+    keys = [k for k, _ in MIGRATE]
+    lines, found = _conf_lines(path, keys)
+    stay = sorted({k for _, k, _ in _conf_lines(path, list(MIGRATE_STAY))[1]})
+    if not found:
+        return 0
+    targets = dict(MIGRATE)
+    last = {}                       # the shell's answer: the last assignment wins
+    for i, k, v in found:
+        last[k] = v
+    builtin = {r: load(r)['front'] for r in ROLES}
+    want, why, odd = {}, {}, []     # (role, field) → value; key → how it went
+    for k, v in last.items():
+        if v is None:
+            odd.append(k)
+            continue
+        for role, field in targets[k]:
+            val = v
+            if field == 'model' and val == '':
+                val = 'inherit'     # empty = the login's own default, as render reads it
+            if field == 'effort' and val == '':
+                continue            # an empty effort never won (render ignores it)
+            if str(builtin[role].get(field, '') or '') == val:
+                continue
+            want[(role, field)] = val
+    version, pending = None, False
+    if want:
+        cfg = a = None
+        try:
+            cfg, a = _config()
+            moved = {}
+            for attempt in (1, 2):
+                cur = _get(cfg, a)
+                bundle = json.loads(json.dumps(cur.get('bundle') or {}))
+                base = int(cur.get('version') or 0)
+                lines_said, todo = [], 0
+                for (role, field), val in sorted(want.items()):
+                    if field in _overlay(bundle, role)[0]:
+                        moved[(role, field)] = 'person'
+                        continue
+                    _, said = set_change(role, field, [val])(bundle)
+                    lines_said += said
+                    moved[(role, field)] = 'written'
+                    todo += 1
+                if not todo:
+                    version = base
+                    break
+                _check_bundle(cfg, bundle)
+                if dry:
+                    for ln in lines_said:
+                        print('fleet-conf: would move into your layer: %s' % ln)
+                    version = base
+                    break
+                code, resp = cfg.person_call(a, 'PUT', {'bundle': bundle, 'base': base,
+                                                       'note': '从 %s 的 fleet.conf 迁入' % (machine or _machine())})
+                if code == 409 and attempt == 1:
+                    continue
+                if code != 200:
+                    cfg.hub_err(code, resp)
+                _write_cache(cfg, resp)
+                version = resp.get('version')
+                for ln in lines_said:
+                    print('fleet-conf: moved into your layer (入口 v%s): %s' % (version, ln))
+                break
+            for (role, field), how in moved.items():
+                if how == 'person' and not dry:
+                    print('fleet-conf: %s.%s — 入口上已有你的设定，本机这一行不搬，只注释掉' % (role, field))
+        except (Refused, SystemExit) as e:
+            pending = True
+            msg = str(e) if isinstance(e, Refused) else 'the hub could not be read or written'
+            print('fleet-conf: role knobs left in %s (%s): %s — they still win here; the next migrate moves them'
+                  % (path, ' '.join(sorted({k for k in last if any(t in want for t in targets[k])})), msg),
+                  file=sys.stderr)
+    # comment out every line whose value is now carried (or never differed)
+    drop = []
+    for i, k, v in found:
+        if k in odd:
+            continue
+        if pending and any(t in want for t in targets[k]):
+            continue
+        drop.append(i)
+    if odd:
+        print('fleet-conf: %s not a plain value in %s — left as it is (move it by hand: fleet role set …)'
+              % (' '.join(sorted(odd)), path), file=sys.stderr)
+    if stay:
+        print('fleet-conf: %s stay in %s — a layer has no Codex model / subagent tier field'
+              % (' '.join(stay), path), file=sys.stderr)
+    if not drop:
+        return 1 if pending else 0
+    if dry:
+        print('fleet-conf: would comment out in %s: %s' % (path, ' '.join(lines[i].strip() for i in drop)))
+        return 1 if pending else 0
+    import shutil
+    st = os.stat(path)
+    bak = '%s.bak-%s' % (path, time.strftime('%Y%m%d-%H%M%S'))
+    if not os.path.exists(bak):
+        shutil.copy2(path, bak)
+    tag = MIGRATE_MARK + (' v%s' % version if version else '')
+    same = '# 与自带定义相同，不必搬（fleet-conf.sh migrate, #2788）'
+    for i in drop:
+        k = next(k for j, k, _ in found if j == i)
+        lines[i] = '# %s  %s' % (lines[i], tag if any(t in want for t in targets[k]) else same)
+    tmp = '%s.tmp.%d' % (path, os.getpid())
+    with open(tmp, 'w', encoding='utf-8') as f:
+        f.write('\n'.join(lines))
+    os.chmod(tmp, st.st_mode & 0o7777)
+    os.replace(tmp, path)
+    print('fleet-conf: role knobs commented out in %s (%s; was kept as %s)'
+          % (path, ' '.join(sorted({k for i, k, _ in found if i in drop})), os.path.basename(bak)))
+    return 1 if pending else 0
+
+
 def _vector(path):
     """One test vector (tests/role-merge/*.json): {base: {front, body}, layers:
     [{label, kind, front, body} | {label, kind, text}], locks} → merge's answer."""
@@ -1444,6 +1628,18 @@ def main(argv):
             return 0
         if cmd == 'rules':
             return rules_cmd(rest)
+        if cmd == 'migrate-conf':
+            dry, mach, pth, i = False, None, None, 0
+            while i < len(rest):
+                if rest[i] == '--dry-run':
+                    dry = True
+                elif rest[i] == '--machine' and i + 1 < len(rest):
+                    mach = rest[i + 1]
+                    i += 1
+                else:
+                    pth = rest[i]
+                i += 1
+            return migrate_conf(pth or os.path.join(conf_dir(), 'fleet.conf'), dry, mach)
         if cmd in WRITES:
             try:
                 return write_cmd(cmd, rest)
@@ -1484,8 +1680,12 @@ def main(argv):
                 if 'local' in d['layers'] or os.path.isfile(os.path.join(conf_dir(), 'roles', r + '.md')):
                     local.append(r)
                 notes += ['%s: %s' % (r, n) for n in d['notes']]
-            if local or notes:
+            left = local_role_vars()
+            if local or notes or left:
                 say = []
+                if left:
+                    say.append('本机还有角色变量：%s（fleet.conf 里的这一版还算数；`fleet-conf.sh migrate` 把它们搬进你的那一层）'
+                               % ' '.join(left))
                 if local:
                     say.append('有本机层：%s（%s/roles/<role>.md，只管这台；用完删掉）' % (' '.join(local), conf_dir()))
                 say += notes
@@ -1535,9 +1735,11 @@ def main(argv):
             return 0
         d = load(role)
         if cmd == 'get':
+            # the merged definition (#2788): a launch with no --role (a scratch
+            # session's model) follows the person's layer too
             if len(rest) < 2:
                 raise RoleError('get: which field?')
-            v = d['front'].get(rest[1], '')
+            v = effective(role)['front'].get(rest[1], '')
             print(','.join(_listval(v)) if isinstance(v, list) else v)
         elif cmd == 'body':
             sys.stdout.write(d['body'])

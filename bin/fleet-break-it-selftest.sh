@@ -807,6 +807,38 @@ drill_role_overlay_broken() {
   WHAT="覆盖层写坏：整层不用，用这一层上一份好的（模型还是 sonnet），show 第一行说原因"
 }
 
+# role-unlock (issue #2788, EPIC #2781 C7): a person's layer that tries to let a
+# worker loose — a list emptied with `!replace`, a permissionMode below the
+# built-in's, the guard's own Agent tool given back — must change nothing that
+# guards: conf/agent-locked.list holds the definition's half at the built-in
+# after the merge (the show marks it 🔒), and the guard hooks never read a role
+# at all, so agent-guard.py still refuses a writing subagent. The built-in here is
+# a sandbox worker.md that carries a disallowedTools and a permissionMode, so the
+# lock has something to hold.
+drill_role_unlock() {
+  CAP=5; local t0 c="$WORK/ruconf" ag="$WORK/ru-agents" kv sh rc
+  mkdir -p "$c" "$ag"; cp "$ROOT"/agents/*.md "$ag/"
+  python3 - "$ag/worker.md" <<'PY'
+import sys
+p = sys.argv[1]; s = open(p).read()
+open(p, 'w').write(s.replace('mcpServers:', 'disallowedTools:\n  - Agent\npermissionMode: default\nmcpServers:', 1))
+PY
+  printf '{"version": 7, "fetched": %s, "bundle": {"roles": {"worker": "---\\ndisallowedTools: [\\"!replace\\"]\\npermissionMode: bypassPermissions\\ntools: [\\"+Agent\\"]\\n---\\n"}}}\n' \
+    "$(date +%s)" > "$c/person-bundle.json"   # the break
+  t0=$(now)
+  kv=$(FLEET_CONF_DIR="$c" FLEET_ROLE_AGENTS_DIR="$ag" python3 "$BIN/fleet-role.py" render worker --kv 2>/dev/null)
+  sh=$(FLEET_CONF_DIR="$c" FLEET_ROLE_AGENTS_DIR="$ag" python3 "$BIN/fleet-role.py" show worker --sources 2>/dev/null)
+  printf '{"tool_name":"Agent","tool_input":{"subagent_type":"general-purpose","prompt":"x"}}' \
+    | env -u FLEET_ALLOW_SUBAGENT FLEET_MAIN="$WORK" FLEET_CONF_DIR="$c" python3 "$ROOT/hooks/agent-guard.py" >/dev/null 2>&1; rc=$?
+  SECS=$(since "$t0")
+  printf '%s\n' "$kv" | grep -qx 'arg	--disallowedTools=Agent' || { WHY="the layer emptied the worker's disallowedTools: $kv"; return 1; }
+  printf '%s\n' "$kv" | grep -qx 'arg	bypassPermissions' && { WHY="the layer lowered the worker's permissionMode: $kv"; return 1; }
+  printf '%s\n' "$kv" | grep -qx 'arg	default' || { WHY="the built-in permissionMode is gone: $kv"; return 1; }
+  printf '%s\n' "$sh" | grep -q '^permissionMode: default .*🔒' || { WHY="show does not mark the lock: $(printf '%s' "$sh" | grep permissionMode)"; return 1; }
+  [ "$rc" = 2 ] || { WHY="agent-guard let a general-purpose subagent through beside the layer (rc=$rc)"; return 1; }
+  WHAT="覆盖层想放开执行会话（清空禁用工具、降权限、还回 Agent）：合并后锁回自带（🔒），守门钩子照拒写代码的子代理"
+}
+
 # person-hub-down (issue #2784, EPIC #2781 C3): a person's role layer is kept on
 # the hub and read again before a launch when the cache is old. With the hub
 # away the launch must neither wait on it nor drop the person's change: it waits
