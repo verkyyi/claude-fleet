@@ -5952,6 +5952,17 @@ drill_selftest_tmux_leak() {
   WHAT="测试漏掉的服务器（-f /dev/null、无客户端、超龄）被收掉，死 socket 删掉，fleet* 不动；跑测试的入口给每个测试一个自己的 socket 目录、跑完清空"
 }
 
+# A PVC carries old process/update state into a new container (#3022).
+drill_node_container_restart() {
+  CAP=15; local t0
+  t0=$(now)
+  if ! python3 "$BIN/fleet-node-linux-selftest.py" LinuxNode.test_image_update_never_resumes_saved_switch LinuxNode.test_new_container_does_not_adopt_old_pid >"$WORK/container-restart.out" 2>&1; then
+    WHY="container adopted an old PID or switched the image runtime: $(tail -n 2 "$WORK/container-restart.out")"; return 1
+  fi
+  SECS=$(since "$t0")
+  WHAT="新容器不接管上次的 PID；镜像负责升级时不恢复旧的切换"
+}
+
 # ================================================================ run ===========
 FAILS=$LINT; PASSES=0
 printf 'fleet-break-it: %d rows in docs/BREAK-IT.md\n' "$NROWS"

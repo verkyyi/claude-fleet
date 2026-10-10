@@ -1184,6 +1184,10 @@ class Updater(object):
 
     # -- one tick
     def tick(self):
+        # Image ownership wins BEFORE recovering any persisted partial switch.
+        if env("FLEET_NODE_UPDATE_OWNER", "hub") == "image":
+            print("image-managed: runtime updates belong to Kubernetes")
+            return 0
         ph = self.st["phase"]
         if ph == "switching":
             self.log("resuming a switch to %s cut short" % self.st["to"][:12])
@@ -1583,7 +1587,7 @@ def versions_line(p):
 def link_account(login):
     """Run AS <login>: ~/.local/bin/{claude,codex} and the vendor tmux → the
     release's. A regular file is the account's own install: left, reported."""
-    root = env("FLEET_NODE_ROOT", "/Library/Application Support/claude-fleet")
+    root = env("FLEET_NODE_ROOT", fns.DEFAULT_ROOT)
     home = os.environ.get("HOME") or os.path.expanduser("~")
     bad = []
     try:
@@ -1875,7 +1879,7 @@ def link_tree(sha, apply=True):
     <root>/<sha>, then that version's fleet-install-apply.sh --tree-from <old>
     --tree-to <new> (daemons reloaded, hooks merged, skills installed). Already
     there: nothing. Prints ONE line `linked …` (or `at …`); rc 1 = not moved."""
-    root = env("FLEET_NODE_ROOT", "/Library/Application Support/claude-fleet")
+    root = env("FLEET_NODE_ROOT", fns.DEFAULT_ROOT)
     home = os.environ.get("HOME") or os.path.expanduser("~")
     live = os.path.join(home, ".claude", "fleet")
     vers = live + ".versions"
@@ -1951,7 +1955,7 @@ def release_copy():
     is a checkout of one commit `fleet-release: <sha> seq=<n>` (what
     fleet-install-sync.sh's hub road imports, #2773), so the login lives and
     follows on its own after the machine lets it go. Not linked: nothing."""
-    root = env("FLEET_NODE_ROOT", "/Library/Application Support/claude-fleet")
+    root = env("FLEET_NODE_ROOT", fns.DEFAULT_ROOT)
     home = os.environ.get("HOME") or os.path.expanduser("~")
     live = os.path.join(home, ".claude", "fleet")
     vers = live + ".versions"

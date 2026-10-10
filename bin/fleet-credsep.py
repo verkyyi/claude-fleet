@@ -1646,6 +1646,11 @@ def shared_supervised():
     plist / unit — one would start a second proxy beside the daemon's (#2435)."""
     if os.path.exists(SHARED_PATH):
         return False
+    # A Linux managed bootstrap owns this child before its first heartbeat.
+    # Root only: a tenant cannot opt its proxy out of service supervision.
+    if not MAC and os.geteuid() == 0 and E("FLEET_NODE_SERVICE", "") in ("systemd", "foreground") \
+            and os.path.isfile(os.path.join(NODE_STATE, "machine.env")):
+        return True
     try:
         st = json.load(open(os.path.join(NODE_STATE, "state.json")))
     except (OSError, ValueError):
