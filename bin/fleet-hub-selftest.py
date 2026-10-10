@@ -1208,6 +1208,25 @@ class HubTests(HubFixture):
         self.assertRegex(calls[0], r"^demo --origin hub --print --agent claude --no-repo --test-identity$")
         self.assertRegex(calls[1], r"^demo --origin hub --print --agent claude --no-repo --reap keep --test-identity$")
 
+    def test_start_debugger_scratch(self):
+        # issue #2893: the hub's debugger for a report — `debug:<id>` reaches the
+        # adapter as $10; dash-raw-session.sh opens it with the debugger role and a
+        # desk ticket, never from the warm pool (no --warm-only call before it)
+        for bad in ({"kind": "scratch", "no_repo": True, "debug": "ABCDEFGH"},
+                    {"kind": "scratch", "debug": "abcdefgh"},
+                    {"kind": "scratch", "no_repo": True, "test": True, "debug": "abcdefgh"},
+                    {"kind": "issue", "issue": 1, "debug": "abcdefgh"}):
+            with self.subTest(bad=bad), self.assertRaises(Fault):
+                validate_write("worker_start", bad)
+        started = self.call("worker_start", dict(fleet_id=self.fleet, idempotency_key="debug-1",
+                                                 params={"kind": "scratch", "no_repo": True, "debug": "abcdefgh",
+                                                         "reap": "done:30m", "body": "〔诊断〕票 dt_x · https://hub/s/abcdefgh"}))
+        self.assertEqual(self.node.wait(started["operation_id"])["status"], "succeeded")
+        calls = (self.node.conf / "scratch.calls").read_text().splitlines()
+        self.assertEqual(len(calls), 1, calls)
+        self.assertRegex(calls[0], r"^demo --origin hub --print --agent claude --no-repo --reap done:30m "
+                                   r"--role debugger --desk --prompt-file=\S+$")
+
     def test_new_issue_start_files_then_spawns(self):
         # issue #1953: the client's writing area — kind=new carries a title and a
         # body; the node files the issue through the one filer channel (the body

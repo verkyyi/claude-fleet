@@ -1687,6 +1687,68 @@ out, else the image's client: one version, no second copy of the table. `GET
 `CCQUOTA_FLEET_DEBUG_DIR` — neither route exists. BREAK-IT
 `debug-upload-no-python-ca`; `fleet-debug-selftest.sh`.
 
+### Debug reports: the bundle, the debugger, the page (claude-fleet#2893)
+
+What the ticket is for (EPIC #2889 C4, `tokenledger/internal/api/fleet_debug.go`):
+
+- **The upload** — `POST /v1/fleet/debug/bundle` (the ticket's two headers; one
+  `upload` use) takes `multipart/form-data`: `bundle` = C1's bundle directory as a
+  `tar.gz` (`manifest.json` at its top or under its one top directory), `note` = the
+  person's one sentence (≤ 200 characters). The hub opens it whole (≤ 20 MB, ≤ 200
+  files, ≤ 64 MB unpacked, regular files only, no path outside it), checks every
+  file against the manifest's sha256 — nothing missing, nothing unlisted — and holds
+  every file against `conf/secret-shapes.list` (the client pack's copy) once more:
+  a hit is a 400 `<file> 里还有像 <shape> 的东西`, nothing kept. The same bytes from
+  the same computer again are the same report (`again: true`, the use given back).
+  The answer is `{id, url, open_url, state, again}`: `url` is the short link
+  `/s/<id>` (8 base32 letters), `open_url` the same with `?k=` — opened once in that
+  computer's browser it sets a cookie for that one page and redirects.
+- **Kept** in `<CCQUOTA_FLEET_DEBUG_DIR>/<id>/` — `bundle.tar.gz`, `hub.json`, and
+  later `result.json` + `page.html` — written in place (an object store's mount); the
+  `fleet_debug_reports` row is what says it exists. `hub.json` is the hub's half of
+  the evidence, so the debugger never asks: the ticket, and when the ticket knows
+  whose it is, that person's relays of the last 24 hours (`/v1/fleet/ssh-relays`'s
+  rows: direction, length, outcome, who hung up), their `fleet_audit` rows, their
+  logins on every machine with the last heartbeat, and what placement answers them
+  now. Seven days after the upload the directory and the row go (`RunDebug`, one
+  replica at a time); an admin's `DELETE /v1/fleet/debug/<id>` does it now.
+- **The debugger** — one `session` use of the ticket and of the hub's day (3 a
+  ticket, 20 the hub; spent ⇒ `queued`, 「等管理员点头」, and `POST
+  /v1/fleet/debug/<id>/start` by an admin opens it). The hub sends `worker_start`
+  (`kind: scratch`, `no_repo`, `debug: <id>`, reap `done:30m`) to the fleet of
+  `CCQUOTA_FLEET_DEBUG_LOGIN` (`<machine>/<login>`, the managed machine's dedicated
+  login); the node opens it `dash-raw-session.sh --role debugger --desk` (never from
+  the warm pool). Its seed's first line — the only one its desk ticket carries — is
+  the ticket id and the short link; the person's sentence follows, quoted as data.
+  `agents/debugger.md` is the role: opus · high, its body in the system prompt, only
+  Read / Grep / Glob / Bash, no Edit / Write / push / issue writes / network. Its
+  three fleet tools (`debug_bundle` · `debug_publish` · `debug_propose`,
+  `bin/fleet-debug-desk.py`) call `/v1/node/debug/<id>/{bundle,hub.json,page,propose}`
+  with the login's node token — the hub answers only the endpoint the report was
+  sent to.
+- **The page** — `debug_publish` hands in `{cause, evidence[], steps[{why, cmd,
+  system?}], ours[]}`: every section there, 1–3 steps of one command each, nothing
+  credential-shaped (400 otherwise, saying what). The hub renders the fixed page
+  (doc-preview's look; h2 是什么问题 · 证据 · 请你做 · 要我们改的, each command in a
+  `<code>`) and the report reads 已出结论. `/s/<id>` serves it — or, before, a page
+  that says where it is and refreshes itself — to that computer's cookie or ticket
+  headers, or an admin (the viewer token or an admin's GitHub session); **anyone
+  else gets a 404**. A report whose debugger never opened, or that has no page 15
+  minutes after it was asked, reads 没看完, 「已转给管理员」.
+- **Status** — `GET /v1/fleet/debug/<id>` with the ticket of that computer (or as an
+  admin) → `{id, state: uploaded|queued|diagnosing|concluded|unfinished,
+  state_word, why?, url, uploaded_at, started_at?, finished_at?, took_secs?, cause?}`;
+  `GET /v1/fleet/debug/reports` the admin's seven days, and `fleet hub debug-ticket
+  --list` prints them under the tickets, 送达 → 出结论 as `took`.
+- **The orchestrator's line** — `GET /v1/node/debug/feed?after=<t>` answers only
+  `CCQUOTA_FLEET_DEBUG_NOTIFY`'s login (the orchestrator's); its steward's beat
+  (`fleet_steward.py debug_step`, every minute while an orchestrator window is up)
+  turns each change into one line — 「〔诊断〕谁 · 是什么问题 · 短链接」, and what the
+  debugger asks us to change (`ours`, `debug_propose`) for the person to nod at;
+  it becomes an issue only through `file_issue`, after the nod.
+- **Off** — no `CCQUOTA_FLEET_DEBUG_DIR` — none of these routes exists
+  (`TestDebugReportsOffAddsNothing`). BREAK-IT `debug-page-stuck`.
+
 ## Validation and next increments
 
 Run the hermetic regression suite through the normal shadow-root gate:

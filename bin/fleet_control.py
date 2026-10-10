@@ -749,6 +749,10 @@ class Control:
                     # the adapter's $10 (its $9, the policy, said or empty); with
                     # none the argv is exactly what it was.
                     test_arg = [(reap_arg or [""])[0], "test"] if params.get("test") is True else reap_arg
+                    # issue #2893: the hub's debugger for a report — `debug:<id>` in
+                    # the same $10 slot (validate_write keeps it apart from `test`).
+                    if params.get("debug"):
+                        test_arg = [(reap_arg or [""])[0], "debug:" + params["debug"]]
                     code, output, err = self.adapter("start", fleet["name"], "scratch", params.get("agent", ""),
                                                      "-" if params.get("no_repo") else params.get("repo", ""),
                                                      params.get("origin_wid", ""),

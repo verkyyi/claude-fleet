@@ -530,13 +530,25 @@ case "$mode" in
       # $10 = `test` (issue #2505): the TEST identity's client placed it — the
       # window is marked, named test-… and closed soon (dash-raw-session.sh).
       tiarg=''; [ "${10:-}" = test ] && tiarg=--test-identity
+      # $10 = `debug:<id>` (issue #2893): the hub's debugger for one diagnostic
+      # report — the debugger role, a desk ticket (its first seed line: the
+      # ticket and the short link, nothing from the bundle), never the warm pool
+      # (a pool window was launched with no role). The id is validated twice
+      # (the hub, validate_write); held to its shape once more before argv.
+      dbgarg=''
+      case "${10:-}" in
+        debug:*) dbgid=${10#debug:}
+                 case "$dbgid" in ''|*[!a-z2-7]*) printf 'start: bad debug report id\n' >&2; exit 6 ;; esac
+                 [ "${#dbgid}" = 8 ] || { printf 'start: bad debug report id\n' >&2; exit 6; }
+                 dbgarg=1 ;;
+      esac
       # 发出即开 (issue #2234, EPIC #2230 C4): a seeded scratch is first offered a
       # window from the warm pool — the seed submitted into it as its first turn,
       # the receipt the same four fields plus `<t_window> <t_ready> <t_prompt>`.
       # An empty slot (exit 3) opens it exactly as before; FLEET_START_WARM=0 = off.
       # An unseeded HOME session (`fleet claude`, issue #2339) takes its slot's
       # entry too — nothing to submit, the receipt's stamps after t_window empty.
-      if { [ -n "$seedf" ] || [ "$norepo" = 1 ]; } && [ "${FLEET_START_WARM:-1}" != 0 ]; then
+      if [ -z "$dbgarg" ] && { [ -n "$seedf" ] || [ "$norepo" = 1 ]; } && [ "${FLEET_START_WARM:-1}" != 0 ]; then
         wseed=''; wok=1
         if [ -n "$seedf" ]; then
           wseed=$(mktemp "${TMPDIR:-/tmp}/fcr-seed.XXXXXX") && cp "$seedf" "$wseed" || { wseed=''; wok=0; }
@@ -551,7 +563,7 @@ case "$mode" in
           fi
         fi
       fi
-      exec bash "$BIN/dash-raw-session.sh" "$sess" --origin hub --print --agent "$agent" ${srepo:+--repo "$srepo"} ${nrarg:+"$nrarg"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} ${sname:+--name "$sname"} ${9:+--reap "$9"} $tiarg ${seedf:+"--prompt-file=$seedf"}
+      exec bash "$BIN/dash-raw-session.sh" "$sess" --origin hub --print --agent "$agent" ${srepo:+--repo "$srepo"} ${nrarg:+"$nrarg"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} ${sname:+--name "$sname"} ${9:+--reap "$9"} $tiarg ${dbgarg:+--role debugger --desk} ${seedf:+"--prompt-file=$seedf"}
     fi
     num="${3:-}"
     if [ "$num" = new ]; then

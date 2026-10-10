@@ -591,6 +591,16 @@ func (s *Server) routes() *routeMux {
 			// the stand-alone fleet-debug (claude-fleet#2892): public like /install
 			mux.HandleFunc(DebugScriptPath, s.handleDebugScript)
 			mux.HandleFunc(DebugScriptSumPath, s.handleDebugScript)
+			// Debug reports (claude-fleet#2893): the bundle door takes an
+			// upload use of the ticket; a report's status answers its own
+			// computer's ticket or an admin; the page answers the same or
+			// 404; the node doors take the node token of the login the
+			// report was sent to.
+			mux.HandleFunc(DebugBundlePath, s.debugTicketAuth(DebugUseUpload, s.debugUpload))
+			mux.Handle(DebugReportsPath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleDebugReports))))
+			mux.HandleFunc(debugReportsPfx, s.handleDebugReport)
+			mux.HandleFunc(DebugShortPrefix, s.handleDebugShort)
+			mux.HandleFunc(NodeDebugPrefix, s.handleNodeDebug)
 		}
 	}
 

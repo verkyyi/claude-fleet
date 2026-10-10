@@ -25,7 +25,8 @@
                                          a new debug ticket for them (claude-fleet#2891):
                                          prints the one line they paste; their old one stops
     fleet hub debug-ticket --list        every ticket of the last 7 days: id, state, owner,
-                                         by, expiry, today's uses
+                                         by, expiry, today's uses; then the reports they
+                                         sent: 送达 → 出结论 and the short link (claude-fleet#2893)
     fleet hub machines                   every machine: status, sessions, load, and its logins:
                                          备用 N · 已用 M / 上限 K (fleet.spares, claude-fleet#2263)
 
@@ -63,6 +64,7 @@ ACCOUNTS_PATH = "/v1/fleet/accounts"
 INVITES_PATH = "/v1/fleet/invites"
 NODES_PATH = "/v1/nodes"
 DEBUG_TICKETS_PATH = "/v1/fleet/debug/tickets"
+DEBUG_REPORTS_PATH = "/v1/fleet/debug/reports"
 MIGRATED = "hub.legacy_migrated."
 
 
@@ -109,7 +111,8 @@ def auth_headers():
         "browser's ccq_sess cookie (an admin's)", 3)
 
 
-def call(a, method, path, body=None):
+def call(a, method, path, body=None, soft=False):
+    """The hub's JSON answer; a refusal or no answer dies — or, soft, is None."""
     url = hub_url(a.hub)
     if not url:
         die("no hub configured — pass --hub <url> or set FLEET_HUB_URL", 3)
@@ -125,11 +128,15 @@ def call(a, method, path, body=None):
     except urllib.error.HTTPError as e:
         code, raw = e.code, e.read()
     except (urllib.error.URLError, OSError, ValueError) as e:
+        if soft:
+            return None
         die("could not reach %s: %s%s" % (url, e, (" — " + fleet_tls.hint(e)) if fleet_tls and fleet_tls.hint(e) else ""), 3)
     try:
         resp = json.loads(raw.decode() or "{}")
     except ValueError:
         resp = {"error": raw.decode(errors="replace")[:200]}
+    if code >= 300 and soft:
+        return None
     if code >= 300:
         why = resp.get("error", resp) if isinstance(resp, dict) else resp
         die("the hub answered %s: %s" % (code, why), 1)
@@ -285,6 +292,20 @@ def debug_ticket_main(a):
             today = " ".join("%s %d" % (k, uses[k]) for k in sorted(uses)) or "-"
             print(fmt % (t.get("id", ""), t.get("state", ""), t.get("owner") or "-", t.get("by", ""),
                          (t.get("expires_at") or "").replace("T", " ")[:16], today))
+        # the reports those tickets sent up (claude-fleet#2893): 送达 → 出结论, the
+        # EPIC's reading — an older hub has none, and says nothing here
+        got = call(a, "GET", DEBUG_REPORTS_PATH, soft=True)
+        reps = got.get("reports") if isinstance(got, dict) else None
+        if isinstance(reps, list) and reps:
+            fmt = "\n%-9s %-15s %-14s %-17s %-7s %s" % ("report", "ticket", "owner", "uploaded (UTC)", "took", "state")
+            print(fmt)
+            for r in reps:
+                took = r.get("took_secs")
+                print("%-9s %-15s %-14s %-17s %-7s %s · %s" % (
+                    r.get("id", ""), r.get("ticket_id", ""), r.get("owner") or "-",
+                    (r.get("uploaded_at") or "").replace("T", " ")[:16],
+                    ("%dm%02ds" % (took // 60, took % 60)) if isinstance(took, int) else "-",
+                    r.get("state_word") or r.get("state", ""), r.get("url", "")))
         return
     if not a.login:
         die("whose: fleet hub debug-ticket <github login> [--hours 24] (or --list)", 2)
