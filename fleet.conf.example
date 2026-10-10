@@ -1548,6 +1548,13 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # @label=Notification click window @group=status @tier=internal @scope=global @edit=int @unit=seconds
 #FLEET_NOTIFY_JUMP_SECS=60
 
+# ⌃V a picture, drop a file into a session on another machine (issue #2757): the
+# client sends it to that machine's inbox (~/.cache/claude-fleet/inbox/<fleet_id>/)
+# over the session's ssh master and hands the session the path there. Mac
+# clients only. 0 = ⌃V and every paste go on exactly as before.
+# @label=Paste pictures and drop files into sessions @group=status @tier=internal @scope=global @edit=bool
+#FLEET_CLIENT_PASTE=1
+
 # Closing the task you are on (reap, exit, kill) lands on its NEIGHBOUR in the
 # task sidebar — the next row, or the previous one when it was the last — instead
 # of tmux's pick, which is usually the hub (issue #900). A sleeping task is

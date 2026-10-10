@@ -59,7 +59,7 @@ printf 'shot' > "$W/mac/a shot.png"
 p=$(python3 "$UP" put "m9:$WID" "$W/mac/a shot.png"); rc=$?
 case "$p" in "$INBOX/$FID/"*-a_shot.png) ok "A put prints the node's path" ;; *) fail "A put printed [$p] rc $rc" ;; esac
 [ "$(cat "$p" 2>/dev/null)" = shot ] && ok "A the bytes are there" || fail "A the file in the inbox is not the bytes sent"
-[ "$(stat -f %Lp "$INBOX/$FID" 2>/dev/null || stat -c %a "$INBOX/$FID")" = 700 ] && ok "A the inbox is 0700" \
+[ "$(python3 -c 'import os, sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777))' "$INBOX/$FID")" = 0o700 ] && ok "A the inbox is 0700" \
   || fail "A the inbox mode is $(ls -ld "$INBOX/$FID")"
 p2=$(python3 "$UP" put "m9:$WID" "$W/mac/a shot.png")
 [ "$p2" = "$p" ] && [ "$(ls "$INBOX/$FID" | wc -l | tr -d ' ')" = 1 ] && ok "A the same bytes land once" \

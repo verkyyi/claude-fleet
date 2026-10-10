@@ -68,6 +68,7 @@ FLEET_CLAUDE_TMP_ROOT              seam: the Claude scratchpad root the listener
 FLEET_CLIENT_ACTIONS               knob: 0 = the shell starts no action loop — nothing a session asks to show you opens here (fleet-shell.sh actions, 1, #1717)
 FLEET_CLIENT_ACTIONS_CONNECT       seam: what opens an ssh master to a machine for a forward / a fetch (default python3 fleet-connect.py; the selftest's fake, #1717)
 FLEET_CLIENT_ACTIONS_IDLE          knob: seconds the action loop sleeps when it has no lease or no hub (fleet-client-actions.py, 3, #1717)
+FLEET_CLIENT_PASTE_OS               test seam: the OS fleet-shell.sh paste_sed decides ⌃V by (uname -s; fleet-client-upload-selftest.sh, #2757)
 FLEET_CLIENT_ACTIONS_POLL          seam: one poll answer instead of the hub (fleet-client-actions-selftest.sh, #1717)
 FLEET_CLIENT_DIR                   path: the shell's state dir the action loop reads (lease, key, where; fleet-shell.sh sets it, #1717)
 FLEET_CLIENT_DOWNLOADS             seam: where a shown file lands instead of ~/Downloads (fleet-client-actions-selftest.sh, #1717)
