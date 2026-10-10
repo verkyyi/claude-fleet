@@ -709,3 +709,4 @@ FLEET_INSTALLS_SUDO                seam: the privilege prefix fleet-installs.sh 
 FLEET_INSTALL_SYNC_CLIENT_FOLLOW   seam: 0 — a kept switch does not run `fleet-client-update.sh follow`; the keeper's drift tick reloads the running client shell instead (#2737)
 FLEET_INSTALL_SYNC_HOST            seam: 1|0 — does this computer 承载; an install-sync tick follows the node agent only when 1 (default `fleet-conf.sh host`) (#2716)
 FLEET_DOCTOR_RESIDENT_CMD          seam: prints `<unit> <started epoch>` per resident daemon for the doctor's 「常驻服务还在跑切换前的版本」 row (default launchctl print / systemctl show + ps etime) (#2716)
+FLEET_RULES_LOG                    path: where fleet-issue-file.sh notes an orchestrator filing with no rule (default `<install>/logs/rules.log`) (#2786)
