@@ -6,8 +6,9 @@
 //
 // Rows are fleet_sessions (/v1/fleet/fleet_sessions, or /v1/admin/sessions);
 // context %, model and the subscription are joined from /v1/live by worktree.
-// Re-read every 15 s while the tab is visible; the filter, search and an open
-// drawer survive it.
+// Re-read every 15 s while the tab is visible and the page shown (the poll is
+// the page's: leaving it stops it, claude-fleet#2793); the filter, search and
+// an open drawer survive it.
 import { esc, ic, ctxBar, relTime } from './shell.js';
 import { sessionRows, counts, filterRows, stateOf, FILTERS, hhmm, askLine } from './pages.js';
 import { t, punct } from './i18n.js';
@@ -84,6 +85,6 @@ export function sessionsPage({ all = false } = {}) {
       ctx.setCount(id, S.rows.length);
     };
     await load(false);
-    if (!S.timer) S.timer = setInterval(() => { if (!document.hidden) load(true).catch(() => {}); }, 15000);
+    ctx.every(15000, () => { if (!document.hidden) load(true).catch(() => {}); });
   };
 }

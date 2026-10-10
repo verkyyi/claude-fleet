@@ -14,7 +14,7 @@ import { t, fmtDate } from './lib/i18n.js';
 const ttl = (sec) => (sec >= 3600 ? t('ui.dur.hours', { n: Math.round(sec / 3600) }) : t('ui.dur.minutes', { n: Math.round(sec / 60) }));
 const failed = (e) => `<div class="ghostrow err">${ic('alert')} ${esc(e.message)}</div>`;
 
-Shell.mount('devices', async (ctx) => {
+export default Shell.mount('devices', async (ctx) => {
   const [conn, devs, nodes] = await Promise.allSettled([ctx.api('/v1/fleet/connect'), ctx.api('/v1/fleet/devices'), ctx.api('/v1/nodes')]);
   const c = conn.status === 'fulfilled' ? conn.value : null;
   const hours = ttl((c && c.cert_ttl_sec) || 43200);

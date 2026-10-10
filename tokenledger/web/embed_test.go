@@ -39,7 +39,7 @@ func TestAssets_AppPagesAreEmbedded(t *testing.T) {
 	if assets == nil {
 		t.Fatal("no dashboard embedded: web/dist/index.html is missing from this checkout")
 	}
-	for _, name := range []string{"app.css", "app-shell.js", "lib/shell.js", "lib/pages.js", "lib/admin.js", "lib/sessions-view.js", "lib/devices-view.js"} {
+	for _, name := range []string{"app.css", "app-shell.js", "app.html", "app-start.js", "lib/router.js", "lib/shell.js", "lib/pages.js", "lib/admin.js", "lib/sessions-view.js", "lib/devices-view.js"} {
 		if _, err := fs.Stat(assets, name); err != nil {
 			t.Fatalf("%s is not embedded: %v", name, err)
 		}
@@ -85,6 +85,31 @@ func TestAssets_MenuLinksResolve(t *testing.T) {
 		}
 		if _, err := fs.Stat(assets, file); err != nil {
 			t.Errorf("menu links %s but %s is not embedded", m[1], file)
+		}
+	}
+}
+
+// One document, many pages (claude-fleet#2793): app.html starts the shell,
+// and every PAGES entry names the module the shell import()s for it —
+// embedded, and registering itself under that id as its default export.
+func TestAssets_AppDocumentRoutesEveryPage(t *testing.T) {
+	assets := Assets()
+	html := string(mustRead(t, assets, "app.html"))
+	if !strings.Contains(html, `<script type="module" src="/app-start.js"`) || !strings.Contains(html, `href="/app.css"`) {
+		t.Errorf("app.html does not start the shell: %q", html)
+	}
+	if !strings.Contains(string(mustRead(t, assets, "app-start.js")), "Shell.start()") {
+		t.Error("app-start.js does not start the shell")
+	}
+	src := string(mustRead(t, assets, "lib/shell.js"))
+	rows := regexp.MustCompile(`\{ id: '([^']+)'[^}]*href: '([^']+)', module: '/([^']+)' \}`).FindAllStringSubmatch(src, -1)
+	if len(rows) != len(appPages) {
+		t.Fatalf("%d PAGES rows carry a module; want %d (one per page)", len(rows), len(appPages))
+	}
+	for _, m := range rows {
+		js := string(mustRead(t, assets, m[3]))
+		if !strings.Contains(js, "export default Shell.mount('"+m[1]+"'") {
+			t.Errorf("%s (the module for %s) does not export its page as %q", m[3], m[2], m[1])
 		}
 	}
 }

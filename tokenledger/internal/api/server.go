@@ -781,7 +781,12 @@ func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) {
 
 	path := strings.TrimPrefix(r.URL.Path, "/")
 	if path == "" {
+		// "/" is the overview page: the app document, like every page path
+		// (claude-fleet#2793), else a build's own index.html.
 		path = "index.html"
+		if _, err := fs.Stat(s.UI, appPage); err == nil {
+			path = appPage
+		}
 	}
 	// An admin page's files are refused a user whole, by where they sit
 	// (claude-fleet#2516) -- the direct path as much as the route.

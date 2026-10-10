@@ -16,7 +16,7 @@ const enc = encodeURIComponent;
 
 const failed = (r) => `<div class="ghostrow err">${ic('alert')} ${esc(r.reason ? r.reason.message : t('ui.unavailable'))}</div>`;
 
-Shell.mount('overview', async (ctx) => {
+export default Shell.mount('overview', async (ctx) => {
   const { api, me } = ctx;
   const now = Date.now();
   const keys = dayKeys(now, 14);

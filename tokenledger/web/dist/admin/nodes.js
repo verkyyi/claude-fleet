@@ -102,10 +102,10 @@ async function pollJoin(ctx) {
       return;
     }
   } catch { /* keep waiting */ }
-  join.timer = setTimeout(() => pollJoin(ctx), 3000);
+  join.timer = ctx.after(3000, () => pollJoin(ctx));
 }
 
-Shell.mount('machines', async (ctx) => {
+export default Shell.mount('machines', async (ctx) => {
   const [snapR, setR] = await Promise.allSettled([ctx.api('/v1/nodes'), ctx.api('/v1/fleet/settings')]);
   if (snapR.status === 'rejected') throw snapR.reason;
   const snap = snapR.value;
@@ -176,13 +176,13 @@ Shell.mount('machines', async (ctx) => {
         // it on its own identity, no separate 「标记可信」 step.
         const j = await ctx.api('/v1/fleet/nodes/join-codes', { json: { label: join.label } });
         joinModal(ctx, j);
-        join.tick = setInterval(() => {
+        join.tick = ctx.every(1000, () => {
           const el = document.getElementById('exp');
           if (!el) { stop(); return; }
           el.textContent = countdown(j.expires_at);
-        }, 1000);
+        });
         pollJoin(ctx);
       } catch (err) { ctx.toast(t('ui.err.action', { e: err.message })); }
     }
   };
-});
+}, { dispose: stop });
