@@ -250,8 +250,10 @@ SC=$(mktemp -d /tmp/cfe2e-c.XXXXXX) || die 'no short cache dir'
 # $SHIM: an `ssh` on the PATH would answer fleet-connect's `ssh -G` too.
 HSHIM="$WORK/hshim"; mkdir -p "$HSHIM"
 printf '#!/bin/sh\necho client-laptop\n' > "$HSHIM/hostname"; chmod +x "$HSHIM/hostname"
+# the vendor dir first, as `fleet` puts it (#2260): a script the test calls
+# directly runs without `fleet` in front, on a runner that may have no tmux (#3018)
 cenv() {
-  env -i PATH="$HSHIM:$CH/.local/bin:$PATH" HOME="$CH" SHELL=/bin/bash TERM=xterm-256color LANG=C.UTF-8 \
+  env -i PATH="$HSHIM:$CH/.local/share/claude-fleet-vendor/bin:$CH/.local/bin:$PATH" HOME="$CH" SHELL=/bin/bash TERM=xterm-256color LANG=C.UTF-8 \
     FLEET_SHELL_SESSION="$SESS" FLEET_SHELL_CACHE="$SC" FLEET_SHELL_NO_ATTACH=1 FLEET_SHELL_WARM=0 \
     FLEET_HUB_TOKEN="$VT" CCQUOTA_VIEWER_TOKEN="$VT" FLEET_REMOTE_SSH_CMD="$SHIM/ssh" \
     FLEET_HUB_SESSIONS_EVERY=1 FLEET_HUB_SESSIONS_LOOP_SECS=8 "$@"
