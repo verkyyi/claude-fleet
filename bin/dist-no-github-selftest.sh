@@ -25,7 +25,8 @@
 #   bootstrap     bin/fleet-login-bootstrap.sh in a fresh HOME on a managed
 #                 machine (FLEET_NODE_ROOT/current = B), no bootstrap cache
 #   node-follow   bin/fleet-node-update.py follow <login> (FLEET_NODE_TEST=1):
-#                 the release's install-sync for a managed login at A
+#                 a managed login at A linked to the runtime's B (link-tree,
+#                 issue #2774 — no fetch at all)
 # A leg is GREEN when the install reads DIST-MARK=B AND the recorder saw no
 # GitHub host while it ran. Otherwise RED, with the hits and the last lines.
 # One more leg runs only by name (BREAK-IT `dist-bad-signature`, issue #2773):
@@ -47,7 +48,7 @@
 set -uo pipefail
 
 # leg:member — the leg is red until that member merges; remove the entry then.
-DIST_AWAIT="bootstrap:C5#2775 node-follow:C4#2774"
+DIST_AWAIT="bootstrap:C5#2775"
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$BIN/.." && pwd)"

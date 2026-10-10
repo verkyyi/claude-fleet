@@ -21,7 +21,8 @@
 # 来源 (issue #2776, EPIC #2770): where each install takes its new versions from —
 #   hub      the hub's signed release (the runtime always; a login install with
 #            no GitHub remote, a refs/fleet/rel/* import; a client with a hub)
-#   runtime  a managed login whose files link into the machine runtime
+#   runtime  a managed login whose files link into the machine runtime (its
+#            bin/fleet-lib.sh, or the updater's .fleet-linked mark — #2774)
 #   github   a login install whose origin is GitHub, FLEET_DIST_SOURCE=github, a
 #            client that follows GitHub (no hub on its .client-version)
 #   dev      a local checkout (a plain dir or a link outside fleet.versions/
@@ -65,7 +66,8 @@ HEX = re.compile(r"^[0-9a-f]{7,40}$")
 PROBE = r'''
 h=$1
 d=$h/.claude/fleet
-if [ -L "$d" ]; then t=$(readlink "$d"); t=${t%/}; echo "login link ${t##*/}"; echo "target $t"
+# a version dir's name is its sha, maybe with a suffix (-<stamp>, -linked, -own)
+if [ -L "$d" ]; then t=$(readlink "$d"); t=${t%/}; k=${t##*/}; echo "login link ${k%%-*}"; echo "target $t"
 elif [ -d "$d" ]; then
   # an imported hub release (#2773) is named by its upstream sha
   v=$(git -C "$d" log -1 --format=%s 2>/dev/null | sed -n 's/^fleet-release: \([0-9a-f]\{40\}\) seq=.*/\1/p')
@@ -76,6 +78,8 @@ if [ -d "$d" ]; then
   echo "origin $(git -C "$d" remote get-url origin 2>/dev/null || echo -)"
   echo "rel $(git -C "$d" for-each-ref --count=1 --format=x refs/fleet/rel/ 2>/dev/null)"
   echo "lib $(readlink "$d/bin/fleet-lib.sh" 2>/dev/null || echo -)"
+  # a tree the machine updater linked to its runtime (issue #2774): its root
+  echo "linked $(sed -n 's/.*"root": *"\([^"]*\)".*/\1/p' "$d/.fleet-linked" 2>/dev/null | head -n 1)"
 fi
 echo "distsrc $(sed -n 's/^[[:space:]]*\(export \)\{0,1\}FLEET_DIST_SOURCE=["'"'"']\{0,1\}\([a-z]*\).*/\2/p' "$h/.config/claude-fleet/fleet.conf" 2>/dev/null | tail -n 1)"
 s=$h/.cache/claude-fleet/shell/bin/fleet-shell.sh
@@ -142,6 +146,8 @@ def login_source(r, kind):
         return "github"
     lib = r.get("lib", "-")
     if lib.startswith("/") and root and lib.startswith(root.rstrip("/") + "/"):
+        return "runtime"
+    if root and r.get("linked") and os.path.realpath(r["linked"]) == os.path.realpath(root):
         return "runtime"
     origin = r.get("origin", "-")
     if GH.search(origin):

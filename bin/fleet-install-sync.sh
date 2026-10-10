@@ -38,10 +38,11 @@
 #
 #   off        FLEET_INSTALL_SYNC=0 (this login's fleet.conf / fleet.settings)
 #              → nothing is fetched or moved. Default 1 (on). A login the
-#              machine daemon manages (accounts.json, issue #2334) follows the
-#              MACHINE's release instead of the tag — the sha the root runtime's
-#              `current` names (issue #2688; the updater never moves this
-#              login's own copy) — and is off only while there is none.
+#              machine daemon manages (accounts.json, issue #2334) is off too:
+#              `off · managed · 跟随 <root>/current` — its ~/.claude/fleet is a
+#              tree of links into the root runtime that the machine updater
+#              builds and moves with the machine (issue #2774, EPIC #2770 C4;
+#              #2688 had it follow the runtime's sha over git).
 #   fetch      `git fetch --no-tags origin +refs/tags/stable:refs/tags/stable`
 #              over https, no credentials, bounded by --timeout (git's own
 #              low-speed abort — macOS has no timeout(1)). A fetch that fails is
@@ -65,9 +66,10 @@
 #              past this install's is `refused`, a hand commit on top of a release
 #              too. The hub not answering is `fetch-failed` (入口不可达), a release
 #              that does not verify too (nothing switched, no alarm); a hub that
-#              keeps no releases (404) is followed over git, as before. No hub, a
-#              managed login, or FLEET_DIST_SOURCE=github (one version's way
-#              back, origin restored): the git fetch above, byte for byte.
+#              keeps no releases (404) is followed over git, as before. No hub
+#              or FLEET_DIST_SOURCE=github (one version's way back, origin
+#              restored): the git fetch above, byte for byte. A managed login
+#              never gets here (`off` above, issue #2774).
 #   current    HEAD == stable → nothing to do.
 #   skipped    stable == the version the doctor rejected last time (`skip:` in
 #              the state) → not retried until stable moves again. No flapping.
@@ -890,23 +892,32 @@ main() {
   # and every account task the daemon runs for this login is
   # __HOME__/.claude/fleet/bin/…, so a login whose tick said off sat on the copy
   # it was bootstrapped with (issue #2688: mini2's verky, no fleet-service.sh, its
-  # fleet-answer.sh answering «no live pane»). So a managed login follows the
-  # MACHINE's release — the sha <root>/current names — instead of the stable tag:
-  # the same version every other part of the machine runs, moved by the same
-  # link switch below. No runtime yet (a half-installed node) ⇒ off, as before.
+  # fleet-answer.sh answering «no live pane»). #2688 had it follow the MACHINE's
+  # release over git; since issue #2774 (EPIC #2770 C4) the updater does it: it makes
+  # this login's ~/.claude/fleet a tree of links into the runtime's <root>/<sha>/
+  # (fleet-node-update.py link-tree) and moves it in the same switch as the
+  # machine — so this tick has nothing left to do here and says so, naming what
+  # the install follows. Its own git road for a managed login is gone (the
+  # objects came from GitHub).
   MANAGED_SHA='' MARKW=stable
   if command -v fleet_node_manages >/dev/null 2>&1 && fleet_node_manages; then
     MANAGED_SHA=$(managed_release)
+    DEFERRED_SINCE=''
     if [ -z "$MANAGED_SHA" ]; then
-      DEFERRED_SINCE=''
       finish off "managed — the machine updater (com.claude-fleet.node · fleet-node-update.py) moves this machine to the release, and $NODE_ROOT/current names none yet; \`fleet doctor --machine\` shows it"
     fi
+    local lk at
+    lk=$(cat "$(cd "$ROOT" 2>/dev/null && pwd -P)/.fleet-linked" 2>/dev/null | sed -n 's/.*"sha": *"\([0-9a-f]\{40\}\)".*/\1/p')
+    if [ "$lk" = "$MANAGED_SHA" ]; then at="linked to it"
+    elif [ -n "$lk" ]; then at="linked to $(short "$lk") — the updater moves it on its next tick"
+    else at="not linked yet (an own copy at $(short "$HEAD_SHA")) — the updater links it on its next tick"; fi
+    finish off "managed · 跟随 $NODE_ROOT/current ($(short "$MANAGED_SHA")): the machine updater (fleet-node-update.py) links this install to the runtime and moves it with the machine; $at"
   fi
 
   # Where stable comes from (issue #2773): the hub's signed release when this
-  # login has a hub — a managed login follows the machine (above) — else, and
+  # login has a hub — a managed login is the machine's (above) — else, and
   # with FLEET_DIST_SOURCE=github (one version's way back), the tag over git.
-  if [ -z "$MANAGED_SHA" ] && [ "${FLEET_DIST_SOURCE:-}" != github ]; then
+  if [ "${FLEET_DIST_SOURCE:-}" != github ]; then
     HUB=$(fleet_rel_hub_url)
     [ -n "$HUB" ] && DIST=hub
   fi
@@ -979,16 +990,6 @@ main() {
     fi
     STABLE_SHA=$(git -C "$ROOT" rev-parse -q --verify "refs/tags/$TAG^{commit}" 2>/dev/null) \
       || finish fetch-failed "refs/tags/$TAG fetched but does not resolve to a commit"
-    # A managed login's mark is the machine's release (issue #2688). The stable
-    # fetch above brings its objects in the usual case (the release is stable or
-    # behind it); one the tag does not reach is fetched by its sha.
-    if [ -n "$MANAGED_SHA" ]; then
-      git -C "$ROOT" cat-file -e "$MANAGED_SHA^{commit}" 2>/dev/null \
-        || ferr=$(g fetch --no-tags -q "$REMOTE" "$MANAGED_SHA" 2>&1 </dev/null) \
-        || finish fetch-failed "could not fetch the machine's release $(short "$MANAGED_SHA") from $REMOTE — not seen, not refused: $(printf '%s\n' "$ferr" | tail -1)"
-      say "managed: following the machine's release $(short "$MANAGED_SHA") ($NODE_ROOT/current), not $TAG $(short "$STABLE_SHA")"
-      STABLE_SHA="$MANAGED_SHA" MARKW="the machine release"
-    fi
   fi
 
   # A remembered rejection is about ONE version; stable moving on clears it.

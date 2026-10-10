@@ -118,6 +118,19 @@
 #             here. A login that HAS the full install (~/.claude/fleet,
 #             FLEET_INSTALL_NODE_ROOT) is that install's to apply — one line, exit 0.
 #
+#   --tree-from <dir> --tree-to <dir>
+#             (issue #2774, EPIC #2770 C4) two version DIRECTORIES instead of two
+#             commits: a managed login's ~/.claude/fleet.versions/<sha>/ is a tree
+#             of links into the machine runtime (<root>/<sha>/, the updater's
+#             `link-tree`) with no git in it, so what moved is read by comparing
+#             the two trees file by file (.git, .release, tools/, __pycache__ and
+#             the top-level links into .shared/ are not the version's), a file's
+#             old bytes from <tree-from>. --root must resolve to <tree-to> (the
+#             install has been moved); --from / --to only name the versions
+#             (default: each dir's name). Every step runs as on the git road;
+#             --sync-logins is refused (a managed machine's logins move together,
+#             by the updater).
+#
 # /fleet-sync-install is: ff -> this (--sync-logins) -> report. The install-sync
 # daemon (C3) calls it the same way, minus the flag — one implementation of
 # "sync once".
@@ -125,6 +138,8 @@
 # Usage:
 #   fleet-install-apply.sh --from <sha> --to <sha> [--dry-run] [--root <dir>]
 #                          [--sync-logins[=a,b]] [--no-daemons]
+#   fleet-install-apply.sh --tree-from <dir> --tree-to <dir> [--from <name> --to <name>]
+#                          [--dry-run] [--root <dir>] [--no-daemons]
 #   fleet-install-apply.sh --bundle [--root <dir>] [--dry-run]
 #   fleet-install-apply.sh --is-command <file>    # exit 0 iff the #858 gate passes
 #   fleet-install-apply.sh --is-skill <dir>       # exit 0 iff the skills pass installs it
@@ -215,6 +230,7 @@ render_system() { # $1 template $2 unit $3 out
 }
 
 FROM='' TO='' DRY=0 ROOT="${FLEET_INSTALL_ROOT:-$HOME/.claude/fleet}" SYNCL=0 SYNCL_ONLY='' RENDER='' NODAEMONS=0 BUNDLE=0
+TREEF='' TREET=''
 while [ $# -gt 0 ]; do
   case "$1" in
     --from) FROM="${2:-}"; shift 2 || { usage >&2; exit 2; } ;;
@@ -224,6 +240,8 @@ while [ $# -gt 0 ]; do
     --sync-logins=*) SYNCL=1; SYNCL_ONLY="${1#--sync-logins=}"; shift ;;
     --no-daemons) NODAEMONS=1; shift ;;
     --bundle) BUNDLE=1; shift ;;
+    --tree-from) TREEF="${2:-}"; shift 2 || { usage >&2; exit 2; } ;;
+    --tree-to) TREET="${2:-}"; shift 2 || { usage >&2; exit 2; } ;;
     --root) ROOT="${2:-}"; shift 2 || { usage >&2; exit 2; } ;;
     --is-command) is_command "${2:-}"; exit $? ;;
     --is-skill)   is_skill "${2:-}"; exit $? ;;
@@ -258,7 +276,16 @@ if [ -n "$RENDER" ]; then
   rm -f "$tmp"; exit "$rc"
 fi
 
-if [ "$BUNDLE" = 0 ]; then
+if [ "$BUNDLE" = 0 ] && { [ -n "$TREEF" ] || [ -n "$TREET" ]; }; then
+# two version directories (issue #2774): no git, the trees are the versions
+[ -d "$TREEF" ] && [ -d "$TREET" ] \
+  || { printf 'fleet-install-apply: --tree-from and --tree-to must both be directories (%s, %s)\n' "$TREEF" "$TREET" >&2; exit 2; }
+[ "$SYNCL" = 0 ] || { echo 'fleet-install-apply: --sync-logins is not for --tree-to (the machine updater moves every managed login)' >&2; exit 2; }
+TREEF=$(cd "$TREEF" && pwd -P) TREET=$(cd "$TREET" && pwd -P)
+[ "$(cd "$ROOT" 2>/dev/null && pwd -P)" = "$TREET" ] \
+  || { printf 'fleet-install-apply: --tree-to %s is not the install %s — move the install first\n' "$TREET" "$ROOT" >&2; exit 2; }
+from=${FROM:-${TREEF##*/}} to=${TO:-${TREET##*/}}
+elif [ "$BUNDLE" = 0 ]; then
 [ -n "$FROM" ] && [ -n "$TO" ] || { echo 'fleet-install-apply: --from and --to are required' >&2; exit 2; }
 git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1 \
   || { printf 'fleet-install-apply: %s is not a git checkout\n' "$ROOT" >&2; exit 2; }
@@ -298,6 +325,69 @@ except Exception:
 keys = {k for k in d if isinstance(k, str)} if isinstance(d, (list, dict)) else set()
 p = sys.argv[2].split(".")
 sys.exit(0 if any(".".join(p[:i]) in keys for i in range(1, len(p) + 1)) else 1)
+PY
+}
+
+# ver_has <rev> <path> / ver_show <rev> <path> — is <path> in version <rev>, and
+# its bytes: a commit's on the git road, the matching tree's (--tree-from for
+# $from, --tree-to for $to) on the two-directory one (issue #2774).
+ver_dir() { if [ "$1" = "$from" ]; then printf '%s' "$TREEF"; else printf '%s' "$TREET"; fi; }
+ver_has() {
+  if [ -n "$TREET" ]; then [ -f "$(ver_dir "$1")/$2" ]
+  else git -C "$ROOT" cat-file -e "$1:$2" 2>/dev/null; fi
+}
+ver_show() {
+  if [ -n "$TREET" ]; then cat "$(ver_dir "$1")/$2" 2>/dev/null
+  else git -C "$ROOT" show "$1:$2" 2>/dev/null; fi
+}
+# tree_ns <from dir> <to dir> — `git diff --name-status` of two version trees:
+# A / M / D per file (no rename detection: a move is a D and an A, which the
+# lists below flatten the same way). Not the version's: .git, .release, tools/
+# (the runtime's own), __pycache__, .DS_Store, .fleet-linked, and a top-level
+# link into ../.shared/ (logs/, epic-pages/ … — what every version shares).
+tree_ns() {
+  python3 - "$1" "$2" <<'PY'
+import filecmp, os, sys
+SKIP = {".git", ".release", "__pycache__", ".DS_Store", ".fleet-linked"}
+
+def files(top):
+    out = {}
+    for d, dirs, fs in os.walk(top):
+        rel = os.path.relpath(d, top)
+        keep = []
+        for n in sorted(dirs):
+            p = os.path.join(d, n)
+            if n in SKIP or (rel == "." and n == "tools"):
+                continue
+            if os.path.islink(p):      # a link to a dir: the link itself is the entry
+                if not (rel == "." and os.readlink(p).startswith("../.shared")):
+                    out[os.path.normpath(os.path.join(rel, n))] = p
+                continue
+            keep.append(n)
+        dirs[:] = keep
+        for n in fs:
+            p = os.path.join(d, n)
+            if n in SKIP or (rel == "." and os.path.islink(p) and os.readlink(p).startswith("../.shared")):
+                continue
+            out[os.path.normpath(os.path.join(rel, n))] = p
+    return out
+
+def same(a, b):
+    if os.path.isdir(a) or os.path.isdir(b):
+        return os.path.islink(a) and os.path.islink(b) and os.readlink(a) == os.readlink(b)
+    try:
+        return os.path.realpath(a) == os.path.realpath(b) or filecmp.cmp(a, b, shallow=False)
+    except OSError:
+        return os.path.islink(a) and os.path.islink(b) and os.readlink(a) == os.readlink(b)
+
+f, t = files(sys.argv[1]), files(sys.argv[2])
+for k in sorted(set(f) | set(t)):
+    if k not in f:
+        print("A\t" + k)
+    elif k not in t:
+        print("D\t" + k)
+    elif not same(f[k], t[k]):
+        print("M\t" + k)
 PY
 }
 
@@ -385,7 +475,7 @@ if [ "$BUNDLE" = 1 ]; then
   say "range: package ${from:-none}..$to · $(printf '%s\n' "$BFILES" | sed '/^$/d' | wc -l | tr -d ' ') file(s)$([ -n "$GONE" ] && printf ' · %s gone' "$(printf '%s\n' "$GONE" | wc -l | tr -d ' ')")$([ "$DRY" = 1 ] && printf ' (dry-run)')"
 else
 say "range: ${from:0:7}..${to:0:7}$([ "$DRY" = 1 ] && printf ' (dry-run)')"
-if [ "$from" = "$to" ]; then
+if [ "$from" = "$to" ] && [ "$TREEF" = "$TREET" ]; then
   # nothing moved for THIS login — the machine's other logins may still be behind it
   logins_step
   finish "install already at ${to:0:7}, nothing to apply"
@@ -394,7 +484,8 @@ fi
 # name-status with renames: "<S>\t<path>" or "R<n>\t<old>\t<new>". Flattened to
 # two lists — ADDED (A/M/C + a rename's new path) and GONE (D + a rename's old
 # path) — which is all every step below needs.
-NS=$(git -C "$ROOT" diff --name-status -M "$from" "$to")
+if [ -n "$TREET" ]; then NS=$(tree_ns "$TREEF" "$TREET")
+else NS=$(git -C "$ROOT" diff --name-status -M "$from" "$to"); fi
 ADDED=$(printf '%s\n' "$NS" | awk -F'\t' '$1 ~ /^[AMCT]/ {print $2} $1 ~ /^R/ {print $3}')
 GONE=$(printf '%s\n' "$NS" | awk -F'\t' '$1 ~ /^D/ {print $2} $1 ~ /^R/ {print $2}')
 CHANGED=$(printf '%s\n%s\n' "$ADDED" "$GONE" | sed '/^$/d' | sort -u)
@@ -403,7 +494,7 @@ fi
 touched() { printf '%s\n' "$CHANGED" | grep -qx "$1"; }
 # is_new <path> — present at --to, absent at --from: an upstream addition, which
 # this login has never had the chance to install (so "not installed" ≠ opted out)
-is_new() { [ -f "$ROOT/$1" ] && ! git -C "$ROOT" cat-file -e "${from}:$1" 2>/dev/null; }
+is_new() { [ -f "$ROOT/$1" ] && ! ver_has "$from" "$1"; }
 
 # layout · conf · daemons are a node's: a --bundle apply skips all three.
 if [ "$BUNDLE" = 0 ]; then
@@ -755,7 +846,7 @@ elif [ "$COPY" = 1 ]; then
   # when it is byte-identical to a repo version — then it is ours, not personal.
   if [ "$BUNDLE" = 0 ] && [ -f "$CDIR/commands/README.md" ] && ! is_command "$CDIR/commands/README.md"; then
     for rev in "$to" "$from"; do
-      if cmp -s <(git -C "$ROOT" show "${rev}:commands/README.md" 2>/dev/null) "$CDIR/commands/README.md"; then
+      if cmp -s <(ver_show "$rev" commands/README.md) "$CDIR/commands/README.md"; then
         if [ "$DRY" = 1 ]; then say 'commands: would remove README.md (installed by the pre-#858 gate)'
         else rm -f "$CDIR/commands/README.md" && say 'commands: removed README.md (installed by the pre-#858 gate)'; fi
         break
@@ -1023,7 +1114,7 @@ if touched conf/tmux-attention.conf || touched conf/tmux-bar.conf || touched con
   # The pre-sync conf, straight from --from — never from a shell var a caller
   # might have lost (#295) or a zsh-mangled ref (#325).
   beforeconf=$(mktemp "${TMPDIR:-/tmp}/fleet-apply-conf.XXXXXX")
-  git -C "$ROOT" show "${from}:conf/tmux-attention.conf" > "$beforeconf" 2>/dev/null || : > "$beforeconf"
+  ver_show "$from" conf/tmux-attention.conf > "$beforeconf" || : > "$beforeconf"
   # Re-source what the fleet servers start from (issue #1845), not ~/.tmux.conf:
   # an error in the person's file must not keep the new layer off every fleet.
   uiargs+=(--conf "$beforeconf" "$ROOT/conf/tmux-attention.conf" "$ROOT/conf/tmux-fleet-server.conf")
