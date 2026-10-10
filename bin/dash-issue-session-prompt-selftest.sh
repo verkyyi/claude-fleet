@@ -132,14 +132,15 @@ done
 ok "C the collapsed seed carries none of the retired paragraph pieces or skills"
 
 # ===== SEED D: --agent rides the launch command, never the seed (issue #547) ====
-# A per-spawn `--agent codex` reaches bin/fleet-claude.sh as its own flag INSIDE
+# Every worker launch says its role, `--role worker` (issue #2782 — fleet-claude.sh
+# renders agents/worker.md). A per-spawn `--agent codex` reaches bin/fleet-claude.sh as its own flag INSIDE
 # the new-window command (the launcher consumes it and execs fleet-codex.sh); the
 # seed file stays the bare `/fleet-claim` (fleet-codex.sh expands it). A default
 # spawn carries no --agent — byte-for-byte the historic command. An unknown token
 # is dropped, not embedded.
 : > "$WORK/newwin"; run_spawn 234 --agent codex
 [ "$(seed)" = "/fleet-claim" ] || fail "D --agent must not change the seed" "$(seed)"
-grep -qF -- "fleet-session-wrap.sh' --agent codex \"\$(cat '" "$WORK/newwin" \
+grep -qF -- "fleet-session-wrap.sh' --agent codex --role worker \"\$(cat '" "$WORK/newwin" \
   || fail "D --agent codex must sit between the launcher and the seed in the new-window command" "$(cat "$WORK/newwin")"
 : > "$WORK/newwin"; run_spawn 234
 grep -q -- '--agent' "$WORK/newwin" && fail "D a default spawn must carry NO --agent" "$(cat "$WORK/newwin")"
@@ -165,7 +166,7 @@ mkdir -p "$WORK/projects/$(printf '%s' "$WT" | LC_ALL=C tr -c 'A-Za-z0-9' '-')"
 : > "$WORK/newwin"
 CLAUDE_PROJECTS_DIR="$WORK/projects" run_spawn 234 --resume "$SID" --seed-file "$WORK/park.seed"
 [ "$(seed)" = "[fleet park] read the handoff" ] || fail "R the seed file must be the first turn" "$(seed)"
-grep -qF -- "fleet-session-wrap.sh' --resume $SID \"\$(cat '" "$WORK/newwin" \
+grep -qF -- "fleet-session-wrap.sh' --role worker --resume $SID \"\$(cat '" "$WORK/newwin" \
   || fail "R --resume <sid> must sit between the launcher and the seed" "$(cat "$WORK/newwin")"
 : > "$WORK/newwin"
 CLAUDE_PROJECTS_DIR="$WORK/projects" run_spawn 234 --resume "$SID" --seed-file "$WORK/park.seed" --agent codex
