@@ -110,7 +110,7 @@ HUB="http://127.0.0.1:$(cat "$H/port")"
 C="$WORK/confA"
 p=$(fleet_rel_pubkey "$C" "$HUB" 5 2>"$WORK/err"); eq "A: pinned → its path" "$C/release.pub" "$p"
 eq "A: the hub's key" "$(cat "$H/key")" "$(cat "$C/release.pub")"
-eq "A: 0644" 644 "$(stat -f %Lp "$C/release.pub" 2>/dev/null || stat -c %a "$C/release.pub")"  # portable-ok: both ways
+eq "A: 0644" 644 "$(python3 -c 'import os, sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777)[2:])' "$C/release.pub")"
 has "A: said with its fingerprint" "$(cat "$WORK/err")" "pinned the hub's release key"
 printf 'ed25519 AAAAotherkey00000002\n' > "$H/key"
 fleet_rel_pubkey "$C" "$HUB" 5 >/dev/null 2>&1
