@@ -25,9 +25,13 @@ import (
 // its machine has opened none yet. It was 60 s — "one useradd + the fleet's
 // own install" — but a real create on a Mac runs sysadminctl (minutes), the
 // clone, credential separation and the daemons: the drill of 2026-10-09 read
-// 「about 5s」 for six minutes (claude-fleet#2696). A machine that has opened
-// logins answers with its own measured median instead (openingETAFor).
-const openingETA = 8 * 60
+// 「about 5s」 for six minutes (claude-fleet#2696). 8 min was still short:
+// macmini's create of drill10100612 (claude-fleet#2908) — record 23:14,
+// `sysadminctl -addUser` done 23:19 (5 min alone, on every drill run), home
+// with the install and daemons 23:27 — took 13 min and more, so a machine
+// with no history of its own is told 14. A machine that has opened logins
+// answers with its own measured median instead (openingETAFor).
+const openingETA = 14 * 60
 
 // openingGiveUp is how long a create may stay pending / creating / unknown
 // before the doors stop saying opening and say failed — name who to ask: the

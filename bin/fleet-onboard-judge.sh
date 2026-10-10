@@ -13,6 +13,8 @@
 #   drill_png <file>        the attach step's solid red PNG
 #   agent_state <word>      exited · answered · up · wait — a `fleet claude` view
 #   curl_noise              how many `curl: (` lines the screen carries
+#   opening_eta             the seconds 「正在为你开机器…约 N 秒」 says, '' when it says none
+#   eta_rises               the first ETA that went UP (「a→b」), '' when none did
 
 # list_row_named <name> (a screen on stdin): a list ROW carrying the name — the left column before 「│」,
 # never the input line 「› <name>」 (the typed name is not a session; matching
@@ -109,3 +111,18 @@ agent_state() {
 # curl_noise (a screen on stdin): the count of 「curl: (」 lines — each one is
 # noise on a newcomer's screen (a retried download, a blocked mirror).
 curl_noise() { grep -c 'curl: (' || :; }
+
+# opening_eta (a VISIBLE screen on stdin): the seconds the hub's 「正在为你开机器
+# （<machine>），约 N 秒」 / 「opening a machine for you (…), about Ns」 says now —
+# the smallest one when the right pane and the bar both carry it (the bar's is
+# held from the Enter, the pane's redrawn every second); '' when the screen
+# says no opening (issue #2908: while it does, the drill keeps waiting).
+OPENING_SAYS='正在为你开机器|opening a machine for you'
+opening_eta() {
+  grep -E -- "$OPENING_SAYS" | grep -Eo '约 [0-9]+ 秒|about [0-9]+s' | tr -dc '0-9\n' \
+    | grep -E '^[0-9]+$' | sort -n | head -n 1
+}
+# eta_rises (one ETA a line on stdin, in the order seen): the first step where
+# the number went UP, as 「a→b」 — the hub's ETA only goes down (#2731, the
+# drill read 「约 313 秒」 then 「约 858 秒」); nothing when it never rose.
+eta_rises() { awk 'NR > 1 && $1 + 0 > p + 0 { print p "→" $1; exit } { p = $1 }'; }

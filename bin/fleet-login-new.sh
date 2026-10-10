@@ -17,7 +17,9 @@
 #      then `sudo dscl .` reading `passwd /Users/<login> <pw>` on its STDIN, then
 #      the shell back to /bin/zsh. <pw> never enters any argv (issue #2396: the
 #      old `-password <pw>` sat in `ps` for the ~5 minutes sysadminctl ran, to
-#      every login on the machine); the login is shell-less while it still has
+#      every login on the machine — and still runs, every time on macmini:
+#      the whole create, home + install + daemons, is 13 min and more, #2908);
+#      the login is shell-less while it still has
 #      no password, so a blank-password `su` reaches nothing. <pw> is
 #      --password-file's first line, or (default) a random one this script
 #      writes to ~/<login>-onboard/password.txt (mode 600, yours only) — never a
