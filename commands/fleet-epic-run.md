@@ -74,8 +74,11 @@ that dies at the boundary. Therefore:
 
   ```sh
   bash ~/.claude/fleet/bin/fleet-epic-heartbeat.sh <N> --tick <n> --repo "$FLEET_REPO" \
-    --landed <k> --members <m> --live <l> --inflight <p> --short <简称>
+    --landed <k> --members <m> --live <l> --inflight <p> --short <简称> --title "<parent title>"
   ```
+
+  `--title` is the parent issue's title as you read it (the stamp drops a leading
+  `EPIC: `); the orchestrator's batches pane names the batch with it (issue #2833).
 
   `<l>` is how many member sessions were alive at the LAST tick's read (a member
   window still open, running or waiting), `<p>` how many member PRs were open and

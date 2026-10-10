@@ -5,7 +5,7 @@
 #
 #   fleet-epic-heartbeat.sh <epic> [--tick <n>] [--repo <owner/name>]
 #                           [--session <sess>] [--ttl <seconds>]
-#                           [--landed <k> --members <n>]
+#                           [--landed <k> --members <n>] [--title <parent title>]
 #                           [--live <n> --inflight <n>]
 #                           [--short <简称>]                        # stamp — every tick
 #   fleet-epic-heartbeat.sh --clear <epic>                           # THIS batch ended
@@ -81,6 +81,12 @@
 # person typed is theirs. Keys resolve by @worktree, never the name, so a member's
 # @origin still finds its driver. The 简称 goes through fleet_epic_short: letters
 # and digits only, at most 4.
+# THE MARK CARRIES ITS BATCH'S TITLE (issue #2833, EPIC #2831 C2). `--title` (the
+# parent issue's title, which the loop already read) is written as one `title:`
+# line, a leading `EPIC: ` / `EPIC:` dropped, newlines folded, ≤ 120 characters —
+# the orchestrator's batches pane names the row with it (mod/fleet/hooks/batches.tsx)
+# and shows `#<N>` for a mark without one. No reader of the lease looks at it
+# (fleet_epic_running reads epoch / ttl / epic / session / tick / live / inflight).
 # A bare `touch` of a mark (no epoch:) counts from its mtime — a hand override
 # for «hold the install still for the next 45 min».
 #
@@ -92,7 +98,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
 . "$BIN/fleet-lib.sh"
 
-EPIC='' TICK='' SHORT='' LANDED='' MEMBERS='' LIVE='' INFLIGHT='' REPO="${FLEET_REPO:-}" SESS="${FLEET_SESSION:-}" TTL="${FLEET_EPIC_RUNNING_TTL:-2700}" MODE=stamp
+EPIC='' TICK='' SHORT='' TITLE='' LANDED='' MEMBERS='' LIVE='' INFLIGHT='' REPO="${FLEET_REPO:-}" SESS="${FLEET_SESSION:-}" TTL="${FLEET_EPIC_RUNNING_TTL:-2700}" MODE=stamp
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --tick)      shift; TICK="${1:-}" ;;
@@ -109,6 +115,8 @@ while [ "$#" -gt 0 ]; do
     --live=*)    LIVE="${1#--live=}" ;;
     --inflight)  shift; INFLIGHT="${1:-}" ;;
     --inflight=*) INFLIGHT="${1#--inflight=}" ;;
+    --title)     shift; TITLE="${1:-}" ;;
+    --title=*)   TITLE="${1#--title=}" ;;
     --short)     shift; SHORT="${1:-}" ;;
     --short=*)   SHORT="${1#--short=}" ;;
     --ttl)       shift; TTL="${1:-}" ;;
@@ -210,6 +218,8 @@ case "$LANDED$MEMBERS" in *[!0-9]*) LANDED='' MEMBERS='' ;; esac
 case "$LIVE$INFLIGHT" in *[!0-9]*) LIVE='' INFLIGHT='' ;; esac
 { [ -n "$LIVE" ] && [ -n "$INFLIGHT" ]; } || LIVE='' INFLIGHT=''
 [ -n "$SESS" ] || SESS=$(fleet_current_session 2>/dev/null || :)
+# One line: newlines/tabs folded, `EPIC:` dropped, trimmed, ≤ 120 characters.
+TITLE=$(printf '%s' "$TITLE" | tr '\n\t\r' '   ' | sed -e 's/^ *//' -e 's/^EPIC: *//' -e 's/^ *//' -e 's/ *$//' | cut -c1-120)
 
 F=$(fleet_epic_mark_file "$REPO" "$EPIC")
 d=$(dirname "$F")
@@ -225,6 +235,7 @@ if ! {
   printf 'tick: %s\n' "${TICK:--}"
   [ -z "$MEMBERS" ] || printf 'landed: %s\nmembers: %s\n' "$LANDED" "$MEMBERS"
   [ -z "$LIVE" ] || printf 'live: %s\ninflight: %s\n' "$LIVE" "$INFLIGHT"
+  [ -z "$TITLE" ] || printf 'title: %s\n' "$TITLE"
 } > "$tmp" 2>/dev/null || ! mv -f "$tmp" "$F" 2>/dev/null; then
   rm -f "$tmp" 2>/dev/null
   printf 'fleet-epic-heartbeat: cannot write %s\n' "$F" >&2; exit 1

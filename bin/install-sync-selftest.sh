@@ -289,8 +289,11 @@ eq "O: HEAD untouched" "$C3" "$(hd)"; eq "O: no apply" "$n" "$(applies)"
 eq "O: deferred_since kept from the disk-gate deferral" "$T1" "$(st deferred_since)"
 contains "O: log line" "$(lastlog)" "deferred $(short "$C3")..$(short "$C4") EPIC batch running"
 # a second batch on the same login: its own file, the first one's untouched (#2062)
-OUT=$(bash "$HB" 1982 --tick 10 --repo o/r --session f1 2>&1)
+# …carrying a `title:` line (issue #2833): the lease reading never looks at it
+OUT=$(bash "$HB" 1982 --tick 10 --repo o/r --session f1 --title 'EPIC: 面板 批次' 2>&1)
 [ -f "$EPD/o-r-1982" ] || fail "O: the second batch has no mark of its own"; CHECKS=$((CHECKS + 1))
+eq "O: the mark carries its title, EPIC: dropped" "面板 批次" "$(sed -n 's/^title: //p' "$EPD/o-r-1982")"
+not_contains "O: the first batch's mark has no title" "$(cat "$EPD/o-r-1117")" "title:"
 eq "O: the first batch's mark is untouched" 3 "$(sed -n 's/^tick: //p' "$EPD/o-r-1117")"
 run
 eq "O: still deferred" deferred "$(st result)"

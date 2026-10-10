@@ -191,6 +191,8 @@ commands/fleet-onboard.md
 commands/fleet-sync-install.md
 conf/codex-preamble.md
 mod/fleet/.claude-plugin/plugin.json
+mod/fleet/hooks/batches-model.ts
+mod/fleet/hooks/batches.tsx
 mod/fleet/hooks/compose.ts
 mod/fleet/hooks/exit-guard.ts
 mod/fleet/hooks/gate.ts

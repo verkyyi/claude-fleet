@@ -281,7 +281,8 @@ for (const role of ['orchestrator', 'worker']) {
       viewport: { columns: 200, rows: 50, isFullscreen: true },
     } as never)
     await ui.unmount()
-    expect(opened).toEqual([])
+    // the orchestrator opens its own batches pane (issue #2833), never the patrol
+    expect(opened).not.toContain(PATROL_PANE)
     expect(await texts($, 'terminal')).toEqual([])
   })
 }

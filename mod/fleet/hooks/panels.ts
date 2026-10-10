@@ -38,6 +38,8 @@ import { t } from './qd'
 /** The full read that covers a missed stamp (ms). */
 export const PANELS_FULL_MS = 10_000
 export const SHEET_COMMAND = 'sheet'
+/** `/sheet batches` (or 批次): the batches pane's own (batches.tsx, issue #2833) — passed on here. */
+export const BATCHES_ARG = /^\s*(batches|批次)\s*$/
 export const REFRESH_KEEP = 200
 export const SEEN_KEEP = 50
 /** The file's own cap, every kind counted. */
@@ -286,7 +288,7 @@ export function summaryText(v: PanelsView | null): string {
 
 export function registerPanels(on: On): void {
   on('command.run', { command: SHEET_COMMAND }, async ($, e, next) => {
-    if (!isOpen() || paths === undefined) return next(e)
+    if (!isOpen() || paths === undefined || BATCHES_ARG.test(e.args)) return next(e)
     if (/(^|\s)--stats(\s|$)/.test(e.args)) {
       let log = ''
       try {

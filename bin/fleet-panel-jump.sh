@@ -2,7 +2,10 @@
 # fleet-panel-jump.sh — a panel's 「到 …」 button (EPIC #2831; issues #2833, #2834):
 # show the window a key names to whoever is looking at THIS window.
 #
-#   fleet-panel-jump.sh <key>        orchestrator · steward · <slug>:issue-<N> · scratch-<N> …
+#   fleet-panel-jump.sh <key> [--pane <%id>]   orchestrator · steward · <slug>:issue-<N> · scratch-<N> …
+#
+# `--pane` names whose viewers move (default $TMUX_PANE) — the batches pane's
+# 「到驱动」 passes its own (issue #2833).
 #
 # The key goes through the one resolver, fleet_win_for_key (CLAUDE.md «跨会话寻址
 # 只有一个解析器»): rc 1 NOTFOUND, rc 2 AMBIGUOUS — nothing switches, never a guess.
@@ -17,7 +20,16 @@ BIN=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=/dev/null
 . "$BIN/fleet-lib.sh"
 
-key=${1:-}
+key=''
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --pane)   shift; TMUX_PANE="${1:-}" ;;
+    --pane=*) TMUX_PANE="${1#--pane=}" ;;
+    -*)       echo "fleet-panel-jump: unknown argument $1" >&2; exit 3 ;;
+    *)        key=$1 ;;
+  esac
+  shift
+done
 if [ -z "$key" ] || [ -z "${TMUX_PANE:-}" ]; then
   echo "usage: fleet-panel-jump.sh <key>   (from a fleet pane)" >&2
   exit 3
