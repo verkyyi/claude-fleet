@@ -315,10 +315,14 @@ def trusted(path, as_root=None):
         p = parent
 
 
-def reload_held(c):
+def reload_held(c, pid=None):
     """What holds a child's reload (#2918): the first op its `hold` books
     (a glob of JSON files) name as running, by a live pid — "account create
-    alice (op …)" — else "". A book left by a dead process holds nothing."""
+    alice (op …)" — else "". A book left by a dead process holds nothing.
+    No book naming one, the child's own process tree still may (#2927): a
+    `hold_argv` script running under <pid> — a node program from before the
+    book (the release's ccquota trails its tree) writes none, and the restart
+    cut its create off all the same."""
     if not c.get("hold"):
         return ""
     for f in sorted(glob.glob(c["hold"])):
@@ -327,7 +331,38 @@ def reload_held(c):
         for op_id, x in sorted((running or {}).items()):
             if isinstance(x, dict) and pid_alive(x.get("pid")):
                 return "account %s %s (op %s)" % (x.get("op"), x.get("login"), op_id)
+    names = c.get("hold_argv") or []
+    if pid and names:
+        for cmd in descendant_cmds(pid):
+            for n in names:
+                if n in cmd:
+                    return "%s (under pid %s)" % (cmd[cmd.find(n):][:120], pid)
     return ""
+
+
+def descendant_cmds(pid):
+    """The command lines of every process under <pid> (one `ps`, walked)."""
+    try:
+        out = subprocess.check_output(["ps", "-axo", "pid=,ppid=,command="],
+                                      stderr=subprocess.DEVNULL).decode("utf-8", "replace")
+    except Exception:
+        return []
+    kids, cmds = {}, {}
+    for line in out.splitlines():
+        f = line.split(None, 2)
+        if len(f) < 2 or not f[0].isdigit() or not f[1].isdigit():
+            continue
+        kids.setdefault(int(f[1]), []).append(int(f[0]))
+        cmds[int(f[0])] = f[2] if len(f) > 2 else ""
+    seen, todo, res = set(), list(kids.get(int(pid), [])), []
+    while todo:
+        q = todo.pop()
+        if q in seen:
+            continue
+        seen.add(q)
+        res.append(cmds.get(q, ""))
+        todo.extend(kids.get(q, []))
+    return res
 
 
 # --------------------------------------------------------------- the table -----
@@ -366,6 +401,9 @@ def default_table(paths):
              # cut off the very create that wrote it. Each tenant's book names
              # the op running; the restart waits for it (reload_held)
              "hold": os.path.join(paths.state, "agent", "*", "account-ops.json"),
+             # …and, book or none, the account scripts still running under it
+             # (#2927: the release's ccquota predated the book, nothing held)
+             "hold_argv": ["fleet-login-new.sh", "fleet-login-remove.sh"],
              "note": "C5 #2333"},
         ],
         "tasks": [
@@ -1295,7 +1333,8 @@ class Supervisor(object):
                 continue
             if c.get("reload") and (name in self.procs or name in self.adopted) \
                     and cs.get("reload_sig") != dir_sig(c["reload"]):
-                held, since = reload_held(c), cs.get("reload_held_since")
+                cpid = self.procs[name].pid if name in self.procs else self.adopted.get(name)
+                held, since = reload_held(c, cpid), cs.get("reload_held_since")
                 if held and (since is None or t - since < env_num("FLEET_NODE_RELOAD_HOLD", 960)):
                     if since is None:
                         cs["reload_held_since"] = t

@@ -1036,6 +1036,35 @@ class H_Accounts(Sandbox):
         self.assertTrue(pid2, "the op ended and the node agent kept its old tenants")
         self.assertFalse(self.child("node-agent").get("reload_held_since"))
 
+    def test_node_agent_reload_held_by_its_script_without_a_book(self):
+        # #2927: the release's ccquota predated the book (prod-343c92b under
+        # stable 003e89bb), so it wrote none and nothing held — the restart cut
+        # the create off and the hub's re-ask ran it again into exit 3. The
+        # account script running under the node agent holds the reload too.
+        lg = os.path.join(self.d, "db", "logins")
+        os.makedirs(lg)
+        with open(os.path.join(lg, "verky.env"), "w") as f:
+            f.write("CCQUOTA_TOKEN=x\n")
+        flag = os.path.join(self.d, "op-done")
+        login_new = self.script("fleet-login-new.sh", "while [ ! -e %s ]; do sleep 0.1; done\n" % flag)
+        self.table(children=[{"name": "node-agent",
+                              "cmd": [self.script("na.sh", "/bin/sh %s & wait; exec sleep 300\n" % login_new)],
+                              "requires": [os.path.join(lg, "*.env")], "reload": os.path.join(lg, "*.env"),
+                              "hold": os.path.join(self.d, "db", "agent", "*", "account-ops.json"),
+                              "hold_argv": ["fleet-login-new.sh"]}])
+        self.start()
+        pid = until(10, lambda: self.child("node-agent").get("pid"))
+        self.assertTrue(pid)
+        with open(os.path.join(lg, "alice.env"), "w") as f:
+            f.write("CCQUOTA_TOKEN=y\n")
+        self.assertTrue(until(10, lambda: self.child("node-agent").get("reload_held_since")),
+                        "a create running under the node agent did not hold the reload (no book)")
+        time.sleep(0.6)
+        self.assertEqual(self.child("node-agent")["pid"], pid, "restarted mid account op")
+        open(flag, "w").close()
+        pid2 = until(10, lambda: (self.child("node-agent").get("pid") or pid) != pid and self.child("node-agent")["pid"])
+        self.assertTrue(pid2, "the script ended and the node agent kept its old tenants")
+
     def test_node_agent_reload_hold_has_a_cap(self):
         # a book from a dead process holds nothing; a live one at most
         # FLEET_NODE_RELOAD_HOLD seconds

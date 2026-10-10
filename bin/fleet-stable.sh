@@ -70,6 +70,15 @@
 #               --force moves anyway and logs. No hub address here
 #               (CCQUOTA_HUB_URL / FLEET_HUB_URL / fleet.conf / hub.json), or a
 #               hub with no such list (releases off, an older hub): said, passes.
+#            8. the ccquota the release would ship is the hub's own build (its
+#               /version `prod-<sha>`, the image's dist binaries), not the
+#               target's: every tokenledger/ commit the target has (tests and
+#               *.md aside) must already be in that sha (issue #2927 — stable
+#               003e89bb shipped prod-343c92b, #2922's supervisor half without
+#               its node-program half). One missing REFUSES (reason `ccquota:`,
+#               listing them) — deploy the hub first; --force moves anyway and
+#               logs. No hub address, a /version with no prod-<sha>, or a sha
+#               this checkout cannot find: said, passes.
 #          Then pushes <sha>:refs/tags/stable with --force-with-lease pinned to
 #          the value it read, so two concurrent moves cannot both win — the
 #          loser's push is rejected and nothing is overwritten.
@@ -90,7 +99,7 @@
 #   move  0 moved (or already there, or dry-run passed) · 2 usage / read error
 #         3 refused (not on trunk / backward / CI not green / oldcfg red / macos not
 #           green / release.json missing or invalid / a pinned artifact not on
-#           the hub) · 4 push failed
+#           the hub / the hub's ccquota behind the target's tokenledger/) · 4 push failed
 #           (lease lost to a concurrent move, or no push rights)
 set -u
 
@@ -103,7 +112,7 @@ TAG=stable
 die() { printf 'fleet-stable: %s\n' "$*" >&2; exit 2; }
 refuse() { printf 'fleet-stable: REFUSED — %s\n' "$*" >&2; exit 3; }
 
-[ "$#" -gt 0 ] || { sed -n '2,70p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+[ "$#" -gt 0 ] || { sed -n '2,80p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 while [ "$#" -gt 0 ]; do
   case "$1" in
     show|move)         [ -z "$cmd" ] || die "one subcommand only"; cmd="$1" ;;
@@ -117,7 +126,7 @@ while [ "$#" -gt 0 ]; do
     --timeout)         shift; timeout="${1:-15}" ;;
     --macos-timeout)   shift; macos_timeout="${1:-5400}" ;;
     --ignore-check)    shift; ignore_check="${1:-}" ;;
-    -h|--help)         sed -n '2,70p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)         sed -n '2,80p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*)                die "unknown flag $1" ;;
     *)                 [ "$cmd" = move ] && [ -z "$target" ] || die "unexpected argument $1"
                        target="$1" ;;
@@ -282,6 +291,40 @@ print(" ".join(json.load(open(sys.argv[1])).get("fetchable") or []))' "$_tmp" 2>
   refuse "artifacts: $_why — put it there first (docs/MANAGED-NODE.md §7), or --force to move anyway (logged)"
 }
 
+# 8. The ccquota a release ships is the HUB's own build (its image's dist dir,
+# `version` prod-<sha> on /version), not one built from the target (issue
+# #2927): stable 003e89bb shipped prod-343c92b, the supervisor's half of #2922
+# landed without the node program's half, nothing held, and a create ran twice.
+# So the hub's build must already carry every tokenledger/ commit the target
+# has (tests and docs aside).
+ccquota_gate() {   # ccquota_gate <old> <new>
+  git -C "$dir" cat-file -e "$2:bin/fleet-node-update.py" 2>/dev/null || return 0
+  git -C "$dir" cat-file -e "$2:tokenledger" 2>/dev/null || return 0
+  _hub=$(hub_url)
+  [ -n "$_hub" ] || { printf 'ccquota: no hub address here — the ccquota a release ships not checked\n'; return 0; }
+  _hv=$(curl -sS -m "$timeout" "$_hub/version" 2>/dev/null | python3 -c 'import json,sys
+try: print(json.load(sys.stdin).get("version") or "")
+except Exception: pass' 2>/dev/null)
+  case "$_hv" in
+    (prod-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) _hs=${_hv#prod-} ;;
+    (*) printf 'ccquota: %s/version names no prod-<sha> build (%s) — the ccquota a release ships not checked\n' "$_hub" "${_hv:-unreadable}"; return 0 ;;
+  esac
+  if ! _hs=$(git -C "$dir" rev-parse --verify -q "$_hs^{commit}" 2>/dev/null); then
+    git -C "$dir" fetch -q "$remote" "$branch" >/dev/null 2>&1 </dev/null
+    _hs=$(git -C "$dir" rev-parse --verify -q "${_hv#prod-}^{commit}" 2>/dev/null) || {
+      printf 'ccquota: the hub runs %s, a commit this checkout does not have — not checked\n' "$_hv"; return 0; }
+  fi
+  _behind=$(git -C "$dir" log --format='%h %s' "$_hs..$2" -- tokenledger \
+              ':(exclude,glob)tokenledger/**/*_test.go' ':(exclude,glob)tokenledger/**/*.md' 2>/dev/null)
+  if [ -z "$_behind" ]; then
+    printf 'ccquota: the hub (%s) ships a ccquota with every tokenledger/ change %s has\n' "$_hv" "$(short "$2")"; return 0
+  fi
+  printf '%s\n' "$_behind" | head -5 | sed 's/^/  not in the hub'"'"'s ccquota: /' >&2
+  _why="the hub runs $_hv, so $(short "$2")'s release would ship that ccquota — $(printf '%s\n' "$_behind" | wc -l | tr -d ' ') tokenledger/ commit(s) of the target are not in it, and a machine would run the tree's half of a change without the node program's"
+  if [ "$force" -eq 1 ]; then force_log "$1" "$2" ccquota "$_why" "a hub build behind the tree"; return 0; fi
+  refuse "ccquota: $_why — deploy the hub at $(short "$2") or later first, or --force to move anyway (logged)"
+}
+
 # 4. An old session of the current stable, run on the target (issue #2075): the
 # replay's findings are printed as they came.
 oldcfg_log() { force_log "$1" "$2" oldcfg "$3" "the replay"; }
@@ -410,6 +453,7 @@ do_move() {
   fi
   release_gate "$old" "$new"
   artifacts_gate "$old" "$new"
+  ccquota_gate "$old" "$new"
   [ -z "$old" ] || oldcfg_gate "$old" "$new"
   macos_gate "$old" "$new" "$slug"
 
