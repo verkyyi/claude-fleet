@@ -238,7 +238,11 @@ type Agent struct {
 	cfg Config
 	// machine is the machine link this agent is a tenant of
 	// (claude-fleet#2333); nil for a plain agent with its own link.
-	machine         *machineLink
+	machine *machineLink
+	// fleetRd is the fleet half of this login's beat, read on its own
+	// (claude-fleet#2798): kept across reconnects, so a slow read lands on
+	// a later beat instead of emptying this one.
+	fleetRd         asyncReading[fleetPart]
 	scanner         *scan.Scanner
 	codex           *scan.Scanner
 	codexProfiles   []*codexCollector

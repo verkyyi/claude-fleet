@@ -384,7 +384,9 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 // nodeHeartbeat assembles one heartbeat. Every part is best effort: a missing
 // claude-fleet, a wedged tmux or an unreadable sysctl leaves its fields empty
 // and says why, and the beat still goes out — liveness is the one thing it
-// must always carry.
+// must always carry. The load is the sampler's last reading and the fleet half
+// waits at most fleetBeatBudget (claude-fleet#2798): a slow fleet read never
+// holds up the beat or empties its load, and each half says when it was read.
 func (a *Agent) nodeHeartbeat(ctx context.Context, probe *fleetProbe) control.Heartbeat {
 	hb := control.Heartbeat{
 		OS: runtime.GOOS, Arch: runtime.GOARCH, NCPU: runtime.NumCPU(),
@@ -392,36 +394,16 @@ func (a *Agent) nodeHeartbeat(ctx context.Context, probe *fleetProbe) control.He
 	}
 	hb.Hostname, _ = os.Hostname()
 	hb.OSUser = a.osLogin()
-	si := readSysInfo()
-	hb.Load1, hb.MemFreeBytes, hb.MemTotalBytes = si.Load1, si.MemFree, si.MemTotal
-	hb.MemPressure = si.MemPressure
+	fillSys(&hb, processSys)
 
-	snap, err := readFleets(ctx, a.cfg.Home)
-	switch {
-	case errors.Is(err, errNoFleet):
-	case err != nil:
-		hb.FleetError = err.Error()
-	default:
-		hb.MachineID, hb.Fleets = snap.machineID, snap.fleets
-		for _, f := range snap.fleets {
-			hb.Sessions += f.Count
-		}
-		if c := snap.capacity; c != nil {
-			if c.MaxSessions > 0 {
-				n := c.Sessions
-				hb.MaxSessions, hb.CapSessions = c.MaxSessions, &n
-			}
-			// The gate's own verdict (claude-fleet#1836), as discover said it:
-			// absent from a claude-fleet older than that, and then unsaid here.
-			hb.Admit, hb.AdmitWhy, hb.Room = c.Admit, c.AdmitWhy, c.Room
-		}
-	}
-	if fv := probe.reading(ctx, a.cfg.Home); fv != nil {
-		hb.FleetVersion = fv.Head
-	}
-	hb.Ready, hb.NotReady = probe.ready.reading(ctx, a.cfg.Home, time.Now())
+	// The first beat of the process has no earlier reading to fall back on,
+	// so it waits for the read (as every beat did before #2798): a beat that
+	// says no fleets would read a busy login as idle.
+	fp, at, _ := a.fleetRd.get(ctx, 0, fleetBeatBudget, true, func(ctx context.Context) (fleetPart, bool) {
+		return a.readFleetPart(ctx, probe)
+	})
+	fp.fill(&hb, at)
 	hb.Routes = a.nodeRoutes(ctx)
-	hb.Credsep = probe.credsep.reading(ctx, a.cfg.Home, time.Now())
 	// Explicit either way in a beat (claude-fleet#1720): a true tells the hub
 	// that `fleet node compute on` overrode a hello that said off.
 	on := !a.computeOffNow()
@@ -482,6 +464,24 @@ type sysInfo struct {
 	// MemPressure is the kernel's memory-pressure level (darwin: 1 normal,
 	// 2 warn, 4 critical); 0 where the platform does not say.
 	MemPressure int
+	// Unread names what could not be read — "load", "mem" — and Why says
+	// why (claude-fleet#2798): a zero there is 读不到, never a reading.
+	Unread []string
+	Why    string
+}
+
+// unread records one part the platform would not give, and why.
+func (si *sysInfo) unread(part, why string) {
+	for _, u := range si.Unread {
+		if u == part {
+			return
+		}
+	}
+	si.Unread = append(si.Unread, part)
+	if si.Why != "" {
+		si.Why += "; "
+	}
+	si.Why += why
 }
 
 // errNoFleet means this login has no claude-fleet install: not an error, the

@@ -501,7 +501,11 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 				m.Proto, payload, now); err != nil {
 				log.Printf("node %s: record heartbeat: %v", ep.ID, err)
 			}
-			s.loadHist.add(hb.Hostname, hb.Load1, hb.NCPU, now)
+			// A load the node could not read is no point on the trend
+			// (claude-fleet#2798): 读不到 is not a zero.
+			if !hasString(hb.SysUnread, "load") {
+				s.loadHist.add(hb.Hostname, hb.Load1, hb.NCPU, now)
+			}
 			// The Fleet Hub registry (claude-fleet#1409): this login's
 			// fleets, re-derived and checked before they are registered.
 			s.nodeBack(*ep, now)
@@ -630,6 +634,16 @@ type NodeView struct {
 	NCPU          int     `json:"ncpu"`
 	MemFreeBytes  uint64  `json:"mem_free_bytes"`
 	MemTotalBytes uint64  `json:"mem_total_bytes"`
+	// SysAt is when the load and memory above were read, SysUnread what the
+	// node could not read (claude-fleet#2798); FleetAt when its fleets,
+	// sessions and readiness were read — older than LastHeartbeat when the
+	// node's fleet read ran past its budget. Versions / VersionsAt are a
+	// machine link's 版本与更新. All absent from an older node: 时间未知.
+	SysAt      *time.Time        `json:"sys_at,omitempty"`
+	SysUnread  []string          `json:"sys_unread,omitempty"`
+	FleetAt    *time.Time        `json:"fleet_at,omitempty"`
+	Versions   *control.Versions `json:"versions,omitempty"`
+	VersionsAt *time.Time        `json:"versions_at,omitempty"`
 	// Sessions is nil when a fleet of this login could not be read
 	// (claude-fleet#1465): its count is unknown, never 0. SessionsUnknown
 	// then names each unreadable fleet and why.
@@ -725,6 +739,18 @@ type MachineView struct {
 	NCPU            int      `json:"ncpu"`
 	MemFree         uint64   `json:"mem_free_bytes"`
 	MemTotal        uint64   `json:"mem_total_bytes"`
+	// SysAt is when that load and memory were read: the newest reading any
+	// heard row of the machine carries — its machine link's or a login's
+	// (claude-fleet#2798) — so one login whose fleet read is slow, or a lane
+	// the hub refused, never empties the machine's load. Absent when only an
+	// older node reported (时间未知); SysUnread names what the machine could
+	// not read (读不到).
+	SysAt     *time.Time `json:"sys_at,omitempty"`
+	SysUnread []string   `json:"sys_unread,omitempty"`
+	// Versions is the machine's 版本与更新 as its machine link last read it
+	// at VersionsAt (claude-fleet#2798); absent from a machine without one.
+	Versions   *control.Versions `json:"versions,omitempty"`
+	VersionsAt *time.Time        `json:"versions_at,omitempty"`
 	// LastHeartbeat is the newest from any login.
 	LastHeartbeat *time.Time `json:"last_heartbeat"`
 	// FleetVersion is the claude-fleet install (fleet-install-version.sh's
@@ -839,10 +865,12 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 	aliases := s.staticAliases(settings)
 	machines := map[string]*MachineView{}
 	fleetVerAt := map[string]time.Time{} // when each machine's FleetVersion was heard
+	sysBest := map[string]*sysPick{}     // each machine's load reading so far (#2798)
 	order := []string{}
 	// The register rides the machine link's beat (claude-fleet#2526), a row
 	// a person never sees — its entries are narrowed one by one below.
 	registers := map[string]machineServices{}
+	linkSys := map[string][]NodeView{} // a narrowed roster's machine-link rows (#2798)
 	for _, n := range rows {
 		var hbs struct {
 			Services []control.ServiceStatus `json:"services"`
@@ -850,6 +878,16 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 		if len(n.StatusJSON) > 0 && json.Unmarshal([]byte(n.StatusJSON), &hbs) == nil && len(hbs.Services) > 0 {
 			if old, ok := registers[n.Hostname]; !ok || (n.LastHeartbeat != nil && (old.at == nil || n.LastHeartbeat.After(*old.at))) {
 				registers[n.Hostname] = machineServices{at: n.LastHeartbeat, services: hbs.Services}
+			}
+		}
+		// The machine link's load is the machine's, not a login's
+		// (claude-fleet#2798): a person who sees the machine gets it too,
+		// though the link's own row is never theirs to see.
+		if visible != nil {
+			if c := s.nodes.get(n.EndpointID); c != nil && c.machineLink {
+				if lv := nodeView(n, now); lv.Status != "lost" {
+					linkSys[n.Hostname] = append(linkSys[n.Hostname], lv)
+				}
 			}
 		}
 		if visible != nil && !visible(n.Hostname, n.OSUser) {
@@ -908,6 +946,12 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 		if v.Connected && v.Via == "" {
 			m.Links++
 		}
+		if v.Status != "lost" {
+			if sysBest[v.Hostname] == nil {
+				sysBest[v.Hostname] = &sysPick{}
+			}
+			m.foldSys(sysBest[v.Hostname], v)
+		}
 		if v.MachineLink {
 			// The link, not a login: it carries the logins below it — and
 			// says which of them the hub refused.
@@ -941,11 +985,8 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 		case m.Sessions != nil:
 			*m.Sessions += *v.Sessions
 		}
-		// One machine, one load: every login reads the same kernel, so the
-		// newest reading stands for all of them.
 		if m.LastHeartbeat == nil || (v.LastHeartbeat != nil && v.LastHeartbeat.After(*m.LastHeartbeat)) {
 			m.LastHeartbeat = v.LastHeartbeat
-			m.Load1, m.NCPU, m.MemFree, m.MemTotal = v.Load1, v.NCPU, v.MemFreeBytes, v.MemTotalBytes
 		}
 		// The fleet version: the newest login that reported one — a login
 		// without claude-fleet reports none and must not blank the machine's.
@@ -972,6 +1013,12 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 	}
 	sort.Strings(order)
 	for _, h := range order {
+		for _, lv := range linkSys[h] {
+			if sysBest[h] == nil {
+				sysBest[h] = &sysPick{}
+			}
+			machines[h].foldSys(sysBest[h], lv)
+		}
 		if reg, ok := registers[h]; ok {
 			if svcs := visibleServices(h, reg, visible); len(svcs) > 0 {
 				machines[h].Services, machines[h].ServicesAt = svcs, reg.at
@@ -984,6 +1031,55 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 	}
 	out.Spot = s.spotSummary(now, out.Nodes)
 	return out, nil
+}
+
+// sysAt is when a row's load was read: its own sys_at, else (an older node)
+// its heartbeat — known says which.
+func sysAt(v NodeView) (at time.Time, known bool) {
+	if v.SysAt != nil {
+		return *v.SysAt, true
+	}
+	if v.LastHeartbeat != nil {
+		return *v.LastHeartbeat, false
+	}
+	return time.Time{}, false
+}
+
+// sysPick is the reading foldSys holds so far for one machine.
+type sysPick struct {
+	seen, known bool
+	at          time.Time
+}
+
+// foldSys takes a heard row's load and memory into the machine when it is the
+// best reading so far (claude-fleet#2798). One machine, one load: every row
+// reads the same kernel, so the newest timed reading stands for all of them —
+// a reading with its own time beats one without, and the machine link's row
+// counts like any login's. Its versions ride along from the machine link.
+func (m *MachineView) foldSys(best *sysPick, v NodeView) {
+	if v.Versions != nil && (m.VersionsAt == nil || (v.VersionsAt != nil && v.VersionsAt.After(*m.VersionsAt))) {
+		m.Versions, m.VersionsAt = v.Versions, v.VersionsAt
+	}
+	at, known := sysAt(v)
+	if at.IsZero() {
+		return
+	}
+	if best.seen {
+		if best.known && !known {
+			return
+		}
+		if best.known == known && !at.After(best.at) {
+			return
+		}
+	}
+	*best = sysPick{seen: true, known: known, at: at}
+	m.Load1, m.NCPU, m.MemFree, m.MemTotal = v.Load1, v.NCPU, v.MemFreeBytes, v.MemTotalBytes
+	m.SysUnread = v.SysUnread
+	m.SysAt = nil
+	if known {
+		t := at
+		m.SysAt = &t
+	}
 }
 
 // Machine roles (claude-fleet#2795).
@@ -1031,6 +1127,8 @@ func nodeView(n store.Node, now time.Time) NodeView {
 		v.FleetError, v.FleetVersion = hb.FleetError, hb.FleetVersion
 		v.Credsep = hb.Credsep
 		v.LoginsRefused = hb.LoginsRefused
+		v.SysAt, v.SysUnread, v.FleetAt = hb.SysAt, hb.SysUnread, hb.FleetAt
+		v.Versions, v.VersionsAt = hb.Versions, hb.VersionsAt
 		for _, f := range hb.Fleets {
 			v.Fleets = append(v.Fleets, NodeFleetSummary{FleetID: f.FleetID, Name: f.Name, Repo: f.Repo, Repos: reportedRepos(f.Repos), State: f.State, Count: f.Count, Error: f.Error})
 		}
