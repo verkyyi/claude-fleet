@@ -56,6 +56,8 @@
 #                                                   steward's beat (bin/fleet_steward.py)
 #   park-lost-progress / park-restored-by-restore   bin/fleet_park.py, fleet-restore.sh (fleet_parked) — through
 #                                                   bin/fleet-park-selftest.sh's sandbox (its own isolated tmux socket)
+#   dist-no-github                                  bin/dist-no-github-selftest.sh (GitHub a black hole: install-sync,
+#                                                   client stage, login bootstrap, the updater's follow → the new version)
 #   health-silent-pass                              bin/fleet_steward_health.py (the steward's beat), fleet-doctor.sh --json
 #
 # Each prints `PASS <id> <secs>s ≤<cap>s <what came back>` like its parent.
@@ -1091,6 +1093,20 @@ drill_health_silent_pass() {
   hp
   [ "$(grep -c . "$g/issues")" = 2 ] && [ ! -s "$g/posts" ] || { WHY="the fault still there next beat wrote again"; return 1; }
   WHAT="体检 PASS→FAIL、休眠全被拒：同一拍各立一张单，下一拍仍在不再写"
+}
+
+
+# ---- dist-no-github (#2776, EPIC #2770 C6): GitHub out of reach and stable moved —
+# every install still reaches the new version from the hub alone. The sandbox is
+# bin/dist-no-github-selftest.sh's (git insteadOf + a curl proxy into a recorder,
+# a fake hub on 127.0.0.1, the real scripts); a leg still waiting for its member
+# (DIST_AWAIT) is named, not failed — a leg that went green and is still listed fails.
+drill_dist_no_github() {
+  CAP=120; local t0 out
+  t0=$(now)
+  out=$(bash "$BIN/dist-no-github-selftest.sh" 2>&1) || { WHY="$(printf '%s\n' "$out" | grep -m 3 -E '^(RED|FAIL)' | cut -c1-220 | tr '\n' '|')"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="GitHub 黑洞下：$(printf '%s\n' "$out" | tail -1 | sed 's/^dist-no-github: //')$(printf '%s\n' "$out" | sed -n 's/^AWAIT  *\([a-z-]*\) *red until \([^:]*\):.*/ · \1 等 \2/p' | tr -d '\n')"
 }
 
 cred_run_drills "$0"

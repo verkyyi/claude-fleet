@@ -13,6 +13,16 @@
 #   D. a home nobody here can read is `unreadable`, never "no install";
 #   E. `fleet-doctor.sh --installs` is the same table and exit code;
 #   F. no runtime → "none (not a managed machine)".
+#   G. 来源 (issue #2776): the runtime is hub; a versions-link install with no
+#      GitHub remote hub, one whose origin is GitHub github, FLEET_DIST_SOURCE=github
+#      in its fleet.conf github, one whose files link into the runtime runtime, a
+#      plain checkout dev; a client with a hub= hub, an empty hub= github; the
+#      shell takes its install's; the summary counts github; --json carries it.
+#   H. the doctor's `dist` row (bin/fleet-dist-source.sh, issue #2776): nothing
+#      installed → no line; no hub → INFO; a hub + origin GitHub → WARN naming the
+#      fix; + FLEET_DIST_SOURCE=github (conf or env) → WARN; a client with an empty
+#      hub= → WARN with the install line; a hub, no GitHub remote, a client with
+#      the hub → PASS; the doctor prints it as its `dist` row.
 # Hermetic: a sandbox homes root, FLEET_INSTALLS_SUDO empty. Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -58,7 +68,7 @@ has "A: link install = its version" "$OUT" "alice          1111111  = stable"
 has "A: plain checkout = its HEAD" "$OUT" "bob            $(printf '%.7s' "$B_HEAD")"
 has "A: plain checkout named" "$OUT" "plain checkout"
 has "A: alice's shell follows" "$OUT" "(follows its login install)"
-has "A: bob's shell pinned" "$OUT" "2222222  ≠ stable  (pinned to one version dir until the next install switch"
+has "A: bob's shell pinned" "$OUT" "2222222  ≠ stable  来源 ?  (pinned to one version dir until the next install switch"
 has "A: client install read" "$OUT" "(client install)"
 case "$OUT" in *carol*) bad "A: a home with no install is not listed" ;; *) ok ;; esac
 eq "B: one behind → exit 1" 1 "$RC"
@@ -72,6 +82,39 @@ print(d["runtime"]["version"], d["runtime"]["at_stable"], L["alice"]["install"][
       L["alice"]["shell"]["follows"], L["alice"]["shell"]["version"] == d["runtime"]["version"], L["bob"]["install"]["kind"],
       L["bob"]["install"]["at_stable"], L["bob"]["shell"]["follows"], L["bob"]["client"]["version"], sorted(L))' 2>&1)
 eq "C: json facts" "$S1 True link True True True dir False False $S2 ['alice', 'bob']" "$J"
+
+# --- G. 来源 -----------------------------------------------------------------------
+FLEET_INSTALLS_STABLE=$S1 run
+has "G: runtime from the hub" "$OUT" "machine runtime  1111111  = stable  来源 hub"
+has "G: a versions link with no GitHub remote" "$OUT" "alice          1111111  = stable  来源 hub"
+has "G: a plain checkout is dev" "$OUT" "bob            $(printf '%.7s' "$B_HEAD")  ≠ stable  来源 dev"
+has "G: the shell takes its install's" "$OUT" "1111111  = stable  来源 hub  (follows its login install)"
+has "G: no github in the summary" "$OUT" "· github 0"
+# erin: origin GitHub; frank: FLEET_DIST_SOURCE=github; gina: files link into the runtime;
+# hana: a client with a hub, ivan: a client that follows GitHub
+for u in erin frank gina; do
+  mkdir -p "$H/$u/.claude/fleet.versions/$S1/bin"; ln -s "$H/$u/.claude/fleet.versions/$S1" "$H/$u/.claude/fleet"
+  ( cd "$H/$u/.claude/fleet.versions/$S1" && git init -q && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m e ) || exit 2
+done
+git -C "$H/erin/.claude/fleet" remote add origin https://github.com/verkyyi/claude-fleet.git
+mkdir -p "$H/frank/.config/claude-fleet"; printf '[common]\nFLEET_DIST_SOURCE=github\n' > "$H/frank/.config/claude-fleet/fleet.conf"
+ln -s "$WORK/root/$S1/bin/fleet-lib.sh" "$H/gina/.claude/fleet/bin/fleet-lib.sh"
+mkdir -p "$H/hana/.local/share/claude-fleet" "$H/ivan/.local/share/claude-fleet"
+printf 'version=%s\nhub=https://hub.example\n' "$S1" > "$H/hana/.local/share/claude-fleet/.client-version"
+printf 'version=%s\nhub=\n' "$S1" > "$H/ivan/.local/share/claude-fleet/.client-version"
+FLEET_INSTALLS_STABLE=$S1 run
+has "G: origin GitHub" "$OUT" "erin           1111111  = stable  来源 github"
+has "G: FLEET_DIST_SOURCE=github" "$OUT" "frank          1111111  = stable  来源 github"
+has "G: linked into the runtime" "$OUT" "gina           1111111  = stable  来源 runtime"
+has "G: a client with a hub" "$OUT" "hana           1111111  = stable  来源 hub  (client install)"
+has "G: a client on GitHub" "$OUT" "ivan           1111111  = stable  来源 github  (client install)"
+has "G: the summary counts github" "$OUT" "· github 3"
+FLEET_INSTALLS_STABLE=$S1 run --json
+J=$(printf '%s' "$OUT" | python3 -c 'import json,sys
+d=json.load(sys.stdin); L={l["login"]: l for l in d["logins"]}
+print(d["runtime"]["source"], L["erin"]["install"]["source"], L["gina"]["install"]["source"], L["alice"]["shell"]["source"], L["ivan"]["client"]["source"])' 2>&1)
+eq "G: json sources" "hub github runtime hub github" "$J"
+rm -rf "$H/erin" "$H/frank" "$H/gina" "$H/hana" "$H/ivan"
 
 # --- B. all at stable → 0; no stable → 2 -------------------------------------------
 rm -rf "$H/bob"
@@ -103,5 +146,34 @@ OUT=$(FLEET_INSTALLS_HOMES="$H" FLEET_INSTALLS_SUDO='' FLEET_NODE_ROOT="$WORK/ro
 eq "E: doctor --installs exit" 0 "$RC"
 has "E: doctor --installs is the table" "$OUT" "claude-fleet installs —"
 
+# --- H. the doctor's dist row --------------------------------------------------------
+DH="$WORK/dist"; mkdir -p "$DH/conf" "$DH/client"
+ds() { OUT=$(env -u FLEET_DIST_SOURCE HOME="$DH" FLEET_CONF_DIR="$DH/conf" FLEET_LIVE_DIR="$DH/live" FLEET_INSTALL_HOME="$DH/client" "$@" sh "$BIN/fleet-dist-source.sh" 2>&1); }
+ds FLEET_HUB_URL=https://hub.example
+eq "H: nothing installed → no line" "" "$OUT"
+mkdir -p "$DH/live"; git -C "$DH/live" init -q
+ds FLEET_HUB_URL=
+has "H: no hub → INFO" "$OUT" "INFO	没有入口"
+ds FLEET_HUB_URL=https://hub.example/
+has "H: a hub, no GitHub remote → PASS" "$OUT" "PASS	新版本只从入口来（https://hub.example）"
+git -C "$DH/live" remote add origin git@github.com:verkyyi/claude-fleet.git
+ds FLEET_HUB_URL=https://hub.example
+has "H: origin GitHub → WARN" "$OUT" "WARN	还在找 GitHub 拿新版本：$DH/live 的 origin 是 GitHub"
+has "H: …with the fix" "$OUT" "修：bash $DH/live/bin/fleet-install-sync.sh"
+git -C "$DH/live" remote remove origin
+printf '[common]\nFLEET_DIST_SOURCE="github"\n' > "$DH/conf/fleet.conf"
+ds FLEET_HUB_URL=https://hub.example
+has "H: FLEET_DIST_SOURCE=github in fleet.conf → WARN" "$OUT" "FLEET_DIST_SOURCE=github（一版内的回退开关）"
+rm -f "$DH/conf/fleet.conf"
+ds FLEET_HUB_URL=https://hub.example FLEET_DIST_SOURCE=github
+has "H: …or in the environment" "$OUT" "FLEET_DIST_SOURCE=github"
+printf 'version=%s\nhub=\n' "$S1" > "$DH/client/.client-version"
+ds FLEET_HUB_URL=https://hub.example
+has "H: a client on GitHub → WARN with the install line" "$OUT" "修：curl -fsSL https://hub.example/install | sh"
+printf 'version=%s\nhub=https://hub.example\n' "$S1" > "$DH/client/.client-version"
+ds FLEET_HUB_URL=https://hub.example
+has "H: a client with the hub → PASS" "$OUT" "PASS	"
+grep -q 'fleet-dist-source.sh' "$BIN/fleet-doctor.sh" && grep -q 'pass dist\|warn dist' "$BIN/fleet-doctor.sh" && ok || bad "H: the doctor does not print fleet-dist-source.sh as its dist row"
+
 if [ "$BAD" -gt 0 ]; then printf 'selftest FAIL: %d of %d\n' "$BAD" "$N" >&2; exit 1; fi
-printf 'selftest OK: fleet-installs (%d assertions — runtime, link/plain installs, follow/pinned shells, client, verdicts, json, doctor --installs)\n' "$N"
+printf 'selftest OK: fleet-installs (%d assertions — runtime, link/plain installs, follow/pinned shells, client, verdicts, json, doctor --installs, 来源)\n' "$N"

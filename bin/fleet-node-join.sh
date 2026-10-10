@@ -362,6 +362,7 @@ install_deps() {
   if [ "$OS" = darwin ]; then
     BREW="$(brew_bin)" || {
       can_priv || { say "deps: FAIL — no Homebrew, and installing it needs passwordless sudo. Install https://brew.sh, then rerun"; return 1; }
+      # dist-ok: Homebrew's own installer, not the fleet's code
       NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" >"$WORK/brew.log" 2>&1 \
         || { say "deps: FAIL — Homebrew install (log: $(tail -n 3 "$WORK/brew.log" | tr '\n' ' '))"; return 1; }
       BREW="$(brew_bin)" || { say "deps: FAIL — Homebrew installed but not found"; return 1; }

@@ -295,7 +295,7 @@ if [ "$_hub_on" = 1 ]; then
   _nenv="$conf_dir/node.env"
   _nfix="\`bash $(dirname "$0")/fleet-hub-node.sh env --write\` (fills it from this login's agent service), or re-join with fleet-node-join.sh"
   if ! command -v ccquota >/dev/null 2>&1; then
-    _tok_lv=WARN _tok_msg="CCQUOTA_FLEET=1 but ccquota is not on PATH — the entry's lease / placement / move all fall back: spawns are guarded by the GitHub claim alone, every session opens here, no move lands. Install the agent (fleet-node-join.sh, or \`go install github.com/verkyyi/claude-fleet/tokenledger/cmd/ccquota@latest\`)"
+    _tok_lv=WARN _tok_msg="CCQUOTA_FLEET=1 but ccquota is not on PATH — the entry's lease / placement / move all fall back: spawns are guarded by the GitHub claim alone, every session opens here, no move lands. Install the agent (fleet-node-join.sh, or \`go install github.com/verkyyi/claude-fleet/tokenledger/cmd/ccquota@latest\`)"  # dist-ok: advice printed to a person, never fetched here
   elif [ -n "${CCQUOTA_TOKEN:-}" ]; then
     # Reaches the hub, but the wrong way round: a token exported into the shell is
     # inherited by every worker a pane spawns (a node credential in each session's
@@ -1148,7 +1148,7 @@ if [ -d "$acct_dir" ] && [ -n "$(find "$acct_dir" -maxdepth 1 -type f ! -name '.
         fi
       fi
     else
-      warn quota "CCQUOTA_HUB_URL set but ccquota not on PATH — pre-emptive rotation off; install it with \`go install github.com/verkyyi/claude-fleet/tokenledger/cmd/ccquota@latest\` (needs Go 1.25+; the product is TokenLedger, tokenledger/ in the claude-fleet repo, the binary is still \`ccquota\`)"
+      warn quota "CCQUOTA_HUB_URL set but ccquota not on PATH — pre-emptive rotation off; install it with \`go install github.com/verkyyi/claude-fleet/tokenledger/cmd/ccquota@latest\` (needs Go 1.25+; the product is TokenLedger, tokenledger/ in the claude-fleet repo, the binary is still \`ccquota\`)"  # dist-ok: advice printed to a person, never fetched here
     fi
   else
     printf '        note: set CCQUOTA_HUB_URL (fleet.conf) for pre-emptive rotation via ccquota — today it rotates only after a limit banner.\n'
@@ -1309,6 +1309,17 @@ case "$_tr_rc" in
   0) warn sshtrust "$(printf '%s\n' "$_tr" | awk 'NF' | wc -l | tr -d ' ') 把其它 fleet 机器的钥匙留在 ~/.ssh/authorized_keys（永久互信）: $(printf '%s\n' "$_tr" | awk -F '\t' 'NF { printf "%s%s (第 %s 行)", s, $3, $1; s = ", " }') — 跨机已改走入口签发的 5 分钟证书（#1626），确认跨机照常后删掉这些行"
      ;;
   1) pass sshtrust "authorized_keys 里没有其它 fleet 机器的钥匙 — 跨机只认入口签发的 5 分钟证书" ;;
+esac
+
+# --- dist (issue #2776, EPIC #2770 C6): this login's new versions come from the
+# hub only — bin/fleet-dist-source.sh judges (origin GitHub, FLEET_DIST_SOURCE=github,
+# a client that follows GitHub ⇒ WARN with the fix; no hub ⇒ INFO; none ⇒ no row).
+_d_out=$(FLEET_HUB_URL="$_hub_url" FLEET_CONF_DIR="$conf_dir" FLEET_INSTALL_HOME="$_cu_root" \
+  sh "$(dirname "$0")/fleet-dist-source.sh" 2>/dev/null)
+case "$_d_out" in
+  PASS*) pass dist "${_d_out#*	}" ;;
+  WARN*) warn dist "${_d_out#*	}" ;;
+  INFO*) info dist "${_d_out#*	}" ;;
 esac
 
 # --- cert (issue #2457): this computer's connection certificate, as the hub sees it

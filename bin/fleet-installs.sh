@@ -18,6 +18,17 @@
 #                    pinned to one version dir; plus a client install
 #                    (~/.local/share/claude-fleet/.client-version) when present.
 #
+# 来源 (issue #2776, EPIC #2770): where each install takes its new versions from —
+#   hub      the hub's signed release (the runtime always; a login install with
+#            no GitHub remote, a refs/fleet/rel/* import; a client with a hub)
+#   runtime  a managed login whose files link into the machine runtime
+#   github   a login install whose origin is GitHub, FLEET_DIST_SOURCE=github, a
+#            client that follows GitHub (no hub on its .client-version)
+#   dev      a local checkout (a plain dir or a link outside fleet.versions/
+#            whose origin is not GitHub)
+#   ?        nothing to tell from
+# A shell's is the install it resolves to.
+#
 # Every home under /Users (/home) is looked into, not a glob (a home is 0700): a
 # home the caller can read answers for itself, another through its owner
 # (`sudo -n -u`), one nobody here can read is listed `unreadable` — never taken
@@ -35,7 +46,7 @@ as_json=0
 case "${1:-}" in
   --json) as_json=1 ;;
   '') ;;
-  -h|--help) sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  -h|--help) sed -n '2,/^set -u$/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit 0 ;;
   *) printf 'fleet-installs: unknown argument %s\n' "$1" >&2; exit 2 ;;
 esac
 case "$(uname -s 2>/dev/null)" in Darwin) homes_default=/Users ;; *) homes_default=/home ;; esac
@@ -54,9 +65,15 @@ HEX = re.compile(r"^[0-9a-f]{7,40}$")
 PROBE = r'''
 h=$1
 d=$h/.claude/fleet
-if [ -L "$d" ]; then t=$(readlink "$d"); t=${t%/}; echo "login link ${t##*/}"
+if [ -L "$d" ]; then t=$(readlink "$d"); t=${t%/}; echo "login link ${t##*/}"; echo "target $t"
 elif [ -d "$d" ]; then echo "login dir $(git -C "$d" rev-parse HEAD 2>/dev/null || echo -)"
 else echo "login none -"; fi
+if [ -d "$d" ]; then
+  echo "origin $(git -C "$d" remote get-url origin 2>/dev/null || echo -)"
+  echo "rel $(git -C "$d" for-each-ref --count=1 --format=x refs/fleet/rel/ 2>/dev/null)"
+  echo "lib $(readlink "$d/bin/fleet-lib.sh" 2>/dev/null || echo -)"
+fi
+echo "distsrc $(sed -n 's/^[[:space:]]*\(export \)\{0,1\}FLEET_DIST_SOURCE=["'"'"']\{0,1\}\([a-z]*\).*/\2/p' "$h/.config/claude-fleet/fleet.conf" 2>/dev/null | tail -n 1)"
 s=$h/.cache/claude-fleet/shell/bin/fleet-shell.sh
 if [ -L "$s" ]; then
   t=$(readlink "$s"); l=${t%/bin/*}
@@ -72,6 +89,7 @@ else echo "shell -"; fi
 c=$h/.local/share/claude-fleet/.client-version
 v=$(sed -n 's/^version=//p' "$c" 2>/dev/null | head -n 1)
 echo "client ${v:--}"
+if grep -q '^hub=' "$c" 2>/dev/null; then echo "clienthub $(sed -n 's/^hub=//p' "$c" | head -n 1)"; fi
 '''
 
 def owner(path):
@@ -111,6 +129,29 @@ def same(a, b):
         return a[:n] == b[:n]
     return a == b
 
+GH = re.compile(r"(^|[@/.])github\.com[:/]")
+
+def login_source(r, kind):
+    """来源 of a login install (see the header)."""
+    if r.get("distsrc") == "github":
+        return "github"
+    lib = r.get("lib", "-")
+    if lib.startswith("/") and root and lib.startswith(root.rstrip("/") + "/"):
+        return "runtime"
+    origin = r.get("origin", "-")
+    if GH.search(origin):
+        return "github"
+    if r.get("rel") or (kind == "link" and origin == "-" and "/fleet.versions/" in r.get("target", "")):
+        return "hub"
+    if kind == "dir" or "/fleet.versions/" not in r.get("target", ""):
+        return "dev"
+    return "?"
+
+def client_source(r):
+    if "clienthub" not in r:
+        return "?"
+    return "hub" if r["clienthub"] else "github"
+
 def short(v):
     return v[:7] if v and HEX.match(v) else (v or "-")
 
@@ -135,17 +176,20 @@ for name in entries:
             unreadable.append(name)
         continue
     kind, _, ver = r["login"].partition(" ")
+    lsrc = None if kind == "none" else login_source(r, kind)
     shell = None
     if r.get("shell", "-") != "-":
         follows = os.path.basename(r["shell"]) == "fleet" and r["shell"].endswith("/.claude/fleet")
-        shell = {"version": r.get("shellv", "-"), "follows": follows}
+        sp = r.get("shellp", "-")
+        ssrc = lsrc if (follows or "/.claude/fleet" in sp) else (client_source(r) if "/.local/share/claude-fleet" in sp else "?")
+        shell = {"version": r.get("shellv", "-"), "follows": follows, "source": ssrc or "?"}
     client = r.get("client", "-")
     if kind == "none" and shell is None and client == "-":
         continue
     logins.append({"login": name,
-                   "install": None if kind == "none" else {"kind": kind, "version": ver},
+                   "install": None if kind == "none" else {"kind": kind, "version": ver, "source": lsrc},
                    "shell": shell,
-                   "client": None if client == "-" else {"version": client}})
+                   "client": None if client == "-" else {"version": client, "source": client_source(r)}})
 
 judged = []
 def judge(obj):
@@ -156,7 +200,7 @@ def judge(obj):
 
 rt = None
 if runtime is not None:
-    rt = {"version": runtime or "-"}
+    rt = {"version": runtime or "-", "source": "hub"}
     judge(rt)
 for l in logins:
     judge(l["install"]); judge(l["shell"]); judge(l["client"])
@@ -168,7 +212,8 @@ if as_json:
 else:
     def word(o):
         a = o.get("at_stable")
-        return "= stable" if a else ("≠ stable" if a is False else "? (unknown)")
+        w = "= stable" if a else ("≠ stable" if a is False else "? (unknown)")
+        return "%s  来源 %s" % (w, o.get("source") or "?")
     print("claude-fleet installs — %s (stable %s)" % (host, short(stable) if stable else "unknown: no local refs/tags/stable"))
     if rt is None:
         print("  machine runtime  none (not a managed machine)")
@@ -194,5 +239,8 @@ else:
         print("  unreadable       %s (no passwordless sudo here — run as an admin login)" % " ".join(unreadable))
     n_ok = sum(1 for a in judged if a)
     print("verdict: %d of %d install(s) at stable" % (n_ok, len(judged)))
+    srcs = [o.get("source") for o in [rt] + [x for l in logins for x in (l["install"], l["shell"], l["client"])] if o]
+    print("来源: %s · github %d" % (" · ".join("%s %d" % (k, srcs.count(k)) for k in ("hub", "runtime", "dev", "?") if srcs.count(k)) or "-",
+                                   srcs.count("github")))
 sys.exit(2 if not stable else (0 if all(a for a in judged) else 1))
 PY
