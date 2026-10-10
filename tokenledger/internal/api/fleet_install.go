@@ -76,8 +76,18 @@ func (s *Server) installerScript(w http.ResponseWriter, r *http.Request, invite 
 		}
 	}
 	body := strings.ReplaceAll(string(tmpl), fleetclient.HubPlaceholder, s.hubURL(r))
+	debug := "" // off: the installer asks for no debug ticket (claude-fleet#2891)
+	if s.Debug != nil {
+		debug = "1"
+	}
+	body = strings.ReplaceAll(body, DebugPlaceholder, debug)
 	return strings.ReplaceAll(body, InvitePlaceholder, invite), true
 }
+
+// DebugPlaceholder is where bin/fleet-install.sh learns the hub hands out
+// debug tickets (claude-fleet#2891): "1" with CCQUOTA_FLEET_DEBUG_DIR set,
+// else "" — so with the feature off the installer asks for none.
+const DebugPlaceholder = "__FLEET_DEBUG__"
 
 // InvitePlaceholder is where bin/fleet-install.sh takes the invite code
 // (claude-fleet#2260), filled the way fleetclient.HubPlaceholder is.

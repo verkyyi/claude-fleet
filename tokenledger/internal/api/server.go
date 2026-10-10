@@ -204,6 +204,10 @@ type Server struct {
 	// /v1/fleet/release/ (claude-fleet#2335; CCQUOTA_FLEET_RELEASE_KEY +
 	// CCQUOTA_FLEET_RELEASE_DIR). Nil: those routes 404.
 	Releases *ReleaseStore
+	// Debug issues the tickets a computer that never signed in sends its
+	// diagnostics up with (claude-fleet#2891; CCQUOTA_FLEET_DEBUG_DIR +
+	// CCQUOTA_FLEET_DEBUG_KEY). Nil: no /v1/fleet/debug/ route exists.
+	Debug *DebugTickets
 	// joinClock replaces the join-code clock in tests.
 	joinClock func() time.Time
 	// roleTreeFn replaces where the merged roles view reads the built-in
@@ -575,6 +579,14 @@ func (s *Server) routes() *routeMux {
 		// itself, outside the viewer gate.
 		mux.HandleFunc(control.RoutesPath, s.handleFleetRoutes)
 		mux.Handle("/v1/fleet/ssh-relays", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleSSHRelayAudit))))
+		// Debug tickets (claude-fleet#2891): a computer whose sign-in failed
+		// asks for one with nothing in hand (rate limited), and every
+		// /v1/fleet/debug/ door checks it itself; the list and the re-issue
+		// are the admin's. Off: not registered at all.
+		if s.Debug != nil {
+			mux.HandleFunc(DebugTicketPath, s.handleDebugTicket)
+			mux.Handle(DebugTicketsPath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleDebugTickets))))
+		}
 	}
 
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {

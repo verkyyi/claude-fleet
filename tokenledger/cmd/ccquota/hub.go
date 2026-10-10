@@ -256,6 +256,9 @@ func loadFleetCerts(srv *api.Server) error {
 	if err := loadFleetReleases(srv); err != nil {
 		return err
 	}
+	if err := loadFleetDebug(srv); err != nil {
+		return err
+	}
 	switch {
 	case srv.Stable.Offline && srv.Releases == nil:
 		srv.Stable = nil
@@ -327,6 +330,39 @@ func loadFleetReleases(srv *api.Server) error {
 		CacheFile: filepath.Join(dir, ".publish-jwks.json"),
 	}
 	log.Printf("fleet: node releases in %s, signed by %s", dir, release.KeyID(key.Public().(ed25519.PublicKey)))
+	return nil
+}
+
+// loadFleetDebug wires the debug tickets (claude-fleet#2891).
+// CCQUOTA_FLEET_DEBUG_DIR is where the diagnostic bundles are kept (the
+// cluster's OSS bucket, mounted) and the switch: unset, the feature is off and
+// no /v1/fleet/debug/ route exists. CCQUOTA_FLEET_DEBUG_KEY is the tickets'
+// HMAC key (its own k8s Secret) — the key itself, or the path of a file
+// holding it; at least 32 bytes. A dir without a usable key: the hub refuses
+// to start.
+func loadFleetDebug(srv *api.Server) error {
+	dir := os.Getenv("CCQUOTA_FLEET_DEBUG_DIR")
+	if dir == "" {
+		log.Printf("fleet: no CCQUOTA_FLEET_DEBUG_DIR — debug tickets are off")
+		return nil
+	}
+	key := strings.TrimSpace(os.Getenv("CCQUOTA_FLEET_DEBUG_KEY"))
+	if strings.HasPrefix(key, "/") {
+		b, err := os.ReadFile(key)
+		if err != nil {
+			if m := checkUnmounted(key); m != "" && errors.Is(err, os.ErrNotExist) {
+				log.Printf("fleet: check: CCQUOTA_FLEET_DEBUG_KEY %s is on %s, which only the new render mounts — not checked; the real start reads it", key, m)
+				return nil
+			}
+			return fmt.Errorf("CCQUOTA_FLEET_DEBUG_KEY: %w", err)
+		}
+		key = strings.TrimSpace(string(b))
+	}
+	if len(key) < 32 {
+		return errors.New("CCQUOTA_FLEET_DEBUG_DIR is set but CCQUOTA_FLEET_DEBUG_KEY is missing or shorter than 32 bytes")
+	}
+	srv.Debug = &api.DebugTickets{Dir: dir, Key: []byte(key)}
+	log.Printf("fleet: debug tickets on, bundles in %s", dir)
 	return nil
 }
 

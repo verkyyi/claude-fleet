@@ -1607,6 +1607,44 @@ machine must now stop refreshing the account. Details
 and the environment table: `tokenledger/README.md`, "Credentials live at the
 entrance".
 
+## Debug tickets: a stranger's one way in (claude-fleet#2891)
+
+A computer whose `fleet login` failed has no certificate — and that is when its
+diagnostics are needed most (EPIC #2889). So the installer takes a **debug
+ticket** before any sign-in: `POST /v1/fleet/debug/ticket {fp, version, invite?}`
+with nothing in hand, `fp` = SHA-256 of `IOPlatformUUID | login | install dir`
+(Linux: `/etc/machine-id`; only the hash leaves the computer). The answer's
+`ticket` is kept 0600 at `$FLEET_CONF_DIR/debug-ticket` (beside `invite` —
+`~/.claude/fleet` is a version link). A signed-in computer may exchange its
+certificate instead (`cert`, `ts`, `sig` = `ssh-keygen -Y sign -n
+fleet-debug@claude-fleet` over `fleet-debug <ts> ticket <fp>`): the ticket is
+then the person's.
+
+- **The ticket** is `fdt1.<payload>.<HMAC-SHA256>` (base64url), keyed with
+  `CCQUOTA_FLEET_DEBUG_KEY` (its own Secret — the key, or a file path; ≥ 32 bytes);
+  the payload is `{id, fp, exp (+24 h), quota, by}`. `by` = `anon`,
+  `invite:<invite id>`, `cert:<principal>` or `admin:<who>`.
+- **Every `/v1/fleet/debug/*` door** wants `Authorization: FleetDebug <ticket>` +
+  `X-Fleet-FP: <fp>` (`debugTicketAuth`). Another computer's fingerprint, a changed
+  byte, past `exp`, superseded → **401**, one Chinese line on how to get a new one.
+  `GET /v1/fleet/debug/ticket` with it = what it may still do today.
+- **Limits**: issue ≤ 5 an hour per address (the right-most public
+  `X-Forwarded-For` entry), ≤ 60 an hour hub-wide (admin re-issues not counted) →
+  **429**; per ticket per day 5 uploads, 3 diagnosis sessions, 20 MB a bundle;
+  hub-wide 20 sessions a day — the overflow is handed on as `Queued` (C4 puts it
+  on the orchestrator's decision sheet), never refused.
+- **Overwrite, never add**: a new ticket for the same fingerprint, or for the same
+  owner, retires the old (`fleet_debug_tickets.revoked_at`). An admin's
+  `fleet hub debug-ticket <github login> [--hours 24]` (`POST
+  /v1/fleet/debug/tickets`, ≤ 72 h) carries no fingerprint and binds to the first
+  computer that uses it; it prints the one line to paste, `fleet-debug ticket <ticket>`.
+  `fleet hub debug-ticket --list` = the last 7 days, state and today's uses.
+- Every issue, re-issue, bind and refusal of a ticket the hub signed is one
+  `fleet_audit` row (`debug_ticket`, `ticket:<id>`); a forged one is only logged.
+- **Off** — no `CCQUOTA_FLEET_DEBUG_DIR` — no `/v1/fleet/debug/` route exists and
+  `/install` fills `__FLEET_DEBUG__` with nothing, so the installer asks for no
+  ticket (`TestDebugOffAddsNothing`). BREAK-IT `debug-ticket-replayed`.
+
 ## Validation and next increments
 
 Run the hermetic regression suite through the normal shadow-root gate:
