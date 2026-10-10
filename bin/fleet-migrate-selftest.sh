@@ -230,6 +230,10 @@ w3=$(spawn w3 runner-nohook sid-3333 "$WORK/wt3")
 # stamps exactly this); w2 and w3 never reported. The move must hand each window
 # back its OWN value, not a blanket clear.
 TM set-window-option -t "$w1" @reported 1
+# issue #2970: what the reapers read rides the move — w1 carries a role and a
+# policy, w5 (below) carries neither and comes back a worker.
+TM set-window-option -t "$w1" @fleet_role worker; TM set-window-option -t "$w1" @reap_policy merged
+TM set-window-option -t "$w1" @epic 'acme/repo#7'
 sleep 1.5
 diag() { printf 'windows: %s\nlaunched: %s\ntyped: %s\n' "$(TM list-windows -t "$SESS" -F '#{window_id}:#{window_name}' | tr '\n' ' ')" "$(cat "$WORK/launched" 2>/dev/null)" "$(cat "$WORK/typed" 2>/dev/null)"; }
 
@@ -337,6 +341,9 @@ ok; [ "$(cd "$(TM display-message -p -t "$nw1" '#{pane_current_path}')" && pwd -
 for opt in @raw=1 @worktree="$WORK/wt1" @origin=scratch-9 @claude_state=working; do
   ok; [ "$(TM display-message -p -t "$nw1" "#{${opt%%=*}}")" = "${opt#*=}" ] || fail "new w1 must carry ${opt%%=*}=${opt#*=} (got $(TM display-message -p -t "$nw1" "#{${opt%%=*}}"))"
 done
+for opt in @fleet_role=worker @reap_policy=merged '@epic=acme/repo#7'; do
+  ok; [ "$(TM display-message -p -t "$nw1" "#{${opt%%=*}}")" = "${opt#*=}" ] || fail "#2970: new w1 must carry ${opt%%=*}=${opt#*=} (got '$(TM display-message -p -t "$nw1" "#{${opt%%=*}}")')"
+done
 ok; [ -n "$(TM display-message -p -t "$nw1" '#{@migrated_at}')" ] || fail "new w1 must be stamped @migrated_at"
 # #870: the wall w1 left behind rides to the new window, and the copy its resume
 # re-rendered there reads as a replay — the collector will not bench acctB on it
@@ -396,6 +403,8 @@ nw5=$(TM list-windows -t "$SESS" -F '#{window_id} #{window_name}' | awk '$2=="w5
 ok; [ -n "$nw5" ] && [ "$nw5" != "$w5" ] && [ -z "$(TM display-message -p -t "$nw5" '#{@reported}')" ] \
   && printf 'case #936 unreported: new w5 @reported=%s (was empty)\n' "'$(TM display-message -p -t "$nw5" '#{@reported}')'" \
   || fail "#936: an unreported session's NEW window must have @reported empty (window '$nw5', got '$(TM display-message -p -t "$nw5" '#{@reported}')')"
+ok; [ "$(TM display-message -p -t "$nw5" '#{@fleet_role}')" = worker ] && [ -z "$(TM display-message -p -t "$nw5" '#{@reap_policy}')" ] \
+  || fail "#2970: a role-less window must come back @fleet_role worker with no invented policy (got '$(TM display-message -p -t "$nw5" '#{@fleet_role}')' / '$(TM display-message -p -t "$nw5" '#{@reap_policy}')')"
 ok; printf '%s' "$out" | grep -q "stopped 1 background command" || fail "the move must report what it stopped: $out"
 for _ in $(seq 1 20); do kill -0 "$bgpid" 2>/dev/null || break; sleep 0.3; done
 ok; ! kill -0 "$bgpid" 2>/dev/null || fail "--force-bg must stop the background command Claude left running (pid $bgpid)"

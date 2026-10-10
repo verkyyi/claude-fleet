@@ -1955,6 +1955,27 @@ else
   pass listen "no fleet process listening on the LAN"
 fi
 
+# --- selftest tmux debris (issue #2970) -------------------------------------------
+# A selftest's isolated tmux server left running, and the dead socket files beside
+# the fleets' own in the tmux socket dir (two machines held 6 live servers and ~250
+# dead sockets). Read-only (fleet-selftest-reap.sh --count); the diskguard tick
+# sweeps them hourly. WARN past FLEET_DOCTOR_TESTTMUX_LIVE live (default 0) or
+# FLEET_DOCTOR_TESTTMUX_DEAD dead (default 50).
+_str="$(dirname "$0")/fleet-selftest-reap.sh"
+if [ -f "$_str" ] && command -v tmux >/dev/null 2>&1; then
+  ttc="$(bash "$_str" --count 2>/dev/null)"
+  ttl=$(printf '%s' "$ttc" | sed -n 's/.*live=\([0-9]*\).*/\1/p'); ttd=$(printf '%s' "$ttc" | sed -n 's/.*dead=\([0-9]*\).*/\1/p')
+  ttlmax=${FLEET_DOCTOR_TESTTMUX_LIVE:-0}; ttdmax=${FLEET_DOCTOR_TESTTMUX_DEAD:-50}
+  case "$ttlmax" in ''|*[!0-9]*) ttlmax=0 ;; esac; case "$ttdmax" in ''|*[!0-9]*) ttdmax=50 ;; esac
+  if [ -n "$ttl" ] && [ -n "$ttd" ]; then
+    if [ "$ttl" -gt "$ttlmax" ] || [ "$ttd" -gt "$ttdmax" ]; then
+      warn testtmux "$ttl selftest tmux server(s) still running, $ttd dead socket file(s) in the tmux socket dir — a selftest that did not clean up (issue #2970). \`bin/fleet-selftest-reap.sh -n -v\` lists them; the diskguard tick sweeps them hourly (fleet sockets and \`default\` are never touched)"
+    else
+      pass testtmux "$ttl selftest tmux server(s), $ttd dead socket file(s)"
+    fi
+  fi
+fi
+
 # --- remote clients of this machine (issue #1907) ---------------------------------
 # A shell / proxy client of this machine sits on a view session of its own
 # (`<fleet>@view-<id>`, #1489): one on the FLEET session shows the node's status

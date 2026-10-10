@@ -5816,6 +5816,61 @@ PY
   WHAT="唯一的 python3 连 import ssl 都失败、没装 fleet：curl … | sh -s report 照样打包、用 curl 送上、打出短链接"
 }
 
+# A migrate opened the new window with its identity but not its @fleet_role /
+# @reap_policy; and a window with no policy bound to a closed ticket was «never»
+# — under FLEET_SLEEP=on not even looked at (#2970).
+drill_migrate_loses_policy() {
+  CAP=10; local t0 out
+  t0=$(now)
+  grep -q '^MIGRATE_CARRY="[^"]*@reap_policy' "$BIN/fleet-migrate.sh" \
+    && grep -q 'fleet_win_stamp_cmd @fleet_role "\$role"' "$BIN/fleet-migrate.sh" \
+    || { WHY="fleet-migrate.sh does not carry @reap_policy / @fleet_role to the new window"; return 1; }
+  out=$(python3 - "$BIN" <<'PY'
+import importlib.util, sys, types
+spec = importlib.util.spec_from_file_location("idle", sys.argv[1] + "/fleet-cleanup-idle.py")
+m = importlib.util.module_from_spec(spec); sys.path.insert(0, sys.argv[1]); spec.loader.exec_module(m)
+c = m.Cleaner.__new__(m.Cleaner)
+def snap(**kw):
+    d = {k: "" for k in ("@issue", "@epic", "@raw", "@reap_policy")}; d.update(kw); return d
+res = []
+for only in (False, True):
+    c.args = types.SimpleNamespace(policy_only=only, repo="acme/repo")
+    res += [c.route(snap(**{"@issue": "12"})), c.route(snap(**{"@raw": "1", "@epic": "acme/repo#9"})),
+            c.route(snap(**{"@issue": "12", "@reap_policy": "keep"}))]
+print(" ".join(str(r) for r in res))
+PY
+)
+  SECS=$(since "$t0")
+  [ "$out" = "no-pr no-pr None no-pr no-pr None" ] \
+    || { WHY="a no-policy window bound to a ticket is not routed to the closed-ticket reap (got: $out)"; return 1; }
+  WHAT="迁移带上 @fleet_role / @reap_policy；无策略、绑了单（或 EPIC）的窗口走「单已关才收」，sleep on 也一样，keep 不收"
+}
+
+# A selftest's tmux server outlived its test (a failure, a timeout, a missed
+# kill-server) and its dead sockets piled up beside the fleets' (#2970).
+drill_selftest_tmux_leak() {
+  CAP=15; local tt t0 s
+  [ -n "$REAL_TMUX" ] || { WHY="no tmux"; return 1; }
+  grep -q 'TMUX_TMPDIR="\${tt_dir' "$BIN/run-selftests.sh" && grep -q '^  tt_sweep$' "$BIN/run-selftests.sh" \
+    || { WHY="run-selftests.sh gives a test no private TMUX_TMPDIR it sweeps"; return 1; }
+  tt=$(mktemp -d /tmp/brkst.XXXXXX) || { WHY="mktemp"; return 1; }
+  s="$tt/tmux-$(id -u)"
+  TMUX_TMPDIR="$tt" "$REAL_TMUX" -L "hubs$$" -f /dev/null new-session -d 'sleep 60' 2>/dev/null \
+    || { rm -rf "$tt"; WHY="could not start the leaked server"; return 1; }
+  touch -t 202001010000 "$s/hubs$$"; : > "$s/stitle$$"; : > "$s/fleet-gone$$"
+  t0=$(now)
+  FLEET_SELFTEST_REAP_SOCKDIR="$s" FLEET_SELFTEST_REAP_ROOTS="$tt/none" bash "$BIN/fleet-selftest-reap.sh" >/dev/null 2>&1
+  SECS=$(since "$t0")
+  if TMUX_TMPDIR="$tt" "$REAL_TMUX" -L "hubs$$" has-session 2>/dev/null; then
+    TMUX_TMPDIR="$tt" "$REAL_TMUX" -L "hubs$$" kill-server 2>/dev/null; rm -rf "$tt"
+    WHY="the leaked -f /dev/null server is still running"; return 1
+  fi
+  [ ! -e "$s/stitle$$" ] || { rm -rf "$tt"; WHY="the dead socket is still there"; return 1; }
+  [ -e "$s/fleet-gone$$" ] || { rm -rf "$tt"; WHY="a fleet* socket was removed"; return 1; }
+  rm -rf "$tt"
+  WHAT="测试漏掉的服务器（-f /dev/null、无客户端、超龄）被收掉，死 socket 删掉，fleet* 不动；跑测试的入口给每个测试一个自己的 socket 目录、跑完清空"
+}
+
 # ================================================================ run ===========
 FAILS=$LINT; PASSES=0
 printf 'fleet-break-it: %d rows in docs/BREAK-IT.md\n' "$NROWS"
