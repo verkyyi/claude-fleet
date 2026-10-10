@@ -86,9 +86,9 @@ mkdir -p "$WORK/post"
 python3 -W ignore "$WORK/hub.py" "$WORK" & HUBPID=$!
 for _ in $(seq 1 50); do [ -s "$WORK/port" ] && break; sleep 0.1; done
 HUB="http://127.0.0.1:$(cat "$WORK/port")"
-last() { ls "$WORK/post" | sort -n | tail -1; }
-part() { cat "$WORK/post/$(last)/$1" 2>/dev/null; }
-posts() { ls "$WORK/post" | grep -c .; }
+# the hub numbers the posts 0, 1, 2 …
+posts() { local n=0 d; for d in "$WORK"/post/*/; do [ -d "$d" ] && n=$((n + 1)); done; echo "$n"; }
+part() { cat "$WORK/post/$(($(posts) - 1))/$1" 2>/dev/null; }
 
 # a curl shim that keeps every argv, so a credential on it is caught
 mkdir -p "$WORK/shim"
