@@ -8,7 +8,11 @@ FLEET_NODE_* seams; nothing touches /Library, /var or a real login.
   B  every task runs as ONE copy (an overlong task is skipped, not doubled; a hand
      `tick` beside a running supervisor refuses)
   C  leftover plists move to the attic, come back with `attic restore`, purge after N days;
-     a fleet plist expected.json does not name is reported, never moved
+     a fleet plist outside expected.json's labels is booted out into the attic
+  O  the sweep's removals on a managed machine (#2981): what goes, what stays
+     named and why, a unit that will not unload, a running drill holding all of
+     it, a legacy child taken over by the running daemon, the client shell
+     retired by the sweep itself
   D  the supervisor restarted (kill -9) keeps its state and ADOPTS a live child
   E  status: one line per item; --check 2 not installed · 0 ok · 1 stale/down
   F  root runs only a root-owned, non-writable script; the built-in table's shape
@@ -276,17 +280,18 @@ class C_Sweep(Sandbox):
         self.assertEqual(self.run_sup("attic", "list").stdout, "")
         self.assertFalse(os.path.exists(os.path.dirname(idx[0]["dst"])))
 
-    def test_extra_reported_never_moved(self):
+    def test_expected_labels_kept_extra_booted_out(self):
+        """expected.json's labels stay; a fleet unit outside the expected set goes
+        to the attic (issue #2981 — before, report only)."""
         self.touch(self.dd, "com.claude-fleet.old.collect.plist")
         self.touch(self.dd, "com.claude-fleet.keep.plist")
-        json.dump({"labels": ["com.claude-fleet.keep"]}, open(os.path.join(self.d, "db.expected.json"), "w"))
         os.makedirs(os.path.join(self.d, "db"))
-        shutil.move(os.path.join(self.d, "db.expected.json"), os.path.join(self.d, "db", "expected.json"))
+        json.dump({"labels": ["com.claude-fleet.keep"]}, open(os.path.join(self.d, "db", "expected.json"), "w"))
         r = self.run_sup("sweep")
-        self.assertIn("extra (not in expected.json, left in place)", r.stdout)
-        self.assertIn("old.collect", r.stdout)
+        self.assertIn("booted out %s" % os.path.join(self.dd, "com.claude-fleet.old.collect.plist"), r.stdout)
         self.assertNotIn("keep.plist", r.stdout)
-        self.assertTrue(os.path.exists(os.path.join(self.dd, "com.claude-fleet.old.collect.plist")))
+        self.assertFalse(os.path.exists(os.path.join(self.dd, "com.claude-fleet.old.collect.plist")))
+        self.assertTrue(os.path.exists(os.path.join(self.dd, "com.claude-fleet.keep.plist")))
 
     def test_client_shell_only_taken_over_logins(self):
         """issue #2702: a TAKEN-OVER login (logins/<login>.env) still carrying the
@@ -334,6 +339,175 @@ class C_Sweep(Sandbox):
         self.assertIn("clientshell alice", st)
         self.assertNotIn("verkyyi", st)
         self.assertTrue(os.path.isdir(os.path.join(users, "alice", ".cache", "claude-fleet", "shell")))
+
+
+class O_SweepRemoves(Sandbox):
+    """issue #2981: on a managed machine (expected.json) the sweep boots out and
+    moves to the attic every fleet unit outside the expected set — a machine unit
+    the daemon does not run, an admin login's (never taken over) LaunchAgents, a
+    taken-over login's left behind, a gone login's — and a child's old
+    LaunchDaemon once the daemon can run that child itself; it leaves named a
+    login that is not taken over (adopt is its road), a legacy child that could
+    not start, a unit that will not unload, everything while a drill runs; each
+    existing login's own credential proxy and keep-labels are expected. A managed
+    machine's taken-over login carrying the client shell is retired by the sweep
+    itself (--if-idle)."""
+    def setUp(self):
+        Sandbox.setUp(self)
+        self.dd = self.env["FLEET_NODE_DAEMON_DIR"]
+        users = os.path.join(self.d, "Users")
+        pw = {}
+        for who in ("alice", "bob", "carol"):
+            home = os.path.join(users, who)
+            os.makedirs(os.path.join(home, "Library", "LaunchAgents"))
+            pw[who] = {"uid": os.getuid(), "gid": os.getgid(), "home": home}
+        pw["bob"].update(groups=["staff", "admin"], sudo="(ALL) NOPASSWD: ALL")     # the machine's admin
+        with open(os.path.join(self.d, "passwd.json"), "w") as f:
+            json.dump(pw, f)
+        self.env["FLEET_NODE_PASSWD"] = os.path.join(self.d, "passwd.json")
+        os.makedirs(os.path.join(self.d, "db", "logins"))
+        open(os.path.join(self.d, "db", "logins", "alice.env"), "w").close()        # alice: taken over
+        json.dump({"role": "managed", "version": 0}, open(os.path.join(self.d, "db", "expected.json"), "w"))
+        # launchctl: bootout logged; `print` says loaded only for a label in stuck.txt
+        self.lclog = os.path.join(self.d, "launchctl.log")
+        self.stuck = os.path.join(self.d, "stuck.txt")
+        open(self.stuck, "w").close()
+        self.env["FLEET_NODE_LAUNCHCTL"] = self.script("launchctl", (
+            'echo "$*" >> %s\n'
+            '[ "$1" = print ] || exit 0\n'
+            'grep -qxF "${2##*/}" %s && exit 0\n'
+            'exit 113\n') % (self.lclog, self.stuck))
+        self.env["FLEET_NODE_BOOTOUT_WAIT"] = "0.3"
+        self.env["FLEET_NODE_SWEEP_HOLD"] = "fns-hold-%d.sh" % os.getpid()
+        self.la = {w: os.path.join(users, w, "Library", "LaunchAgents") for w in ("alice", "bob", "carol")}
+        ok = self.script("child.sh", "exec sleep 300\n")
+        self.table(children=[
+            {"name": "c", "cmd": ["/bin/bash", ok], "legacy": "com.claude-fleet.c-legacy"},
+            {"name": "w", "cmd": ["/bin/bash", ok], "legacy": "com.claude-fleet.w-legacy",
+             "requires": [os.path.join(self.d, "nowhere")]}])
+
+    def plist(self, d, label, **kw):
+        p = os.path.join(d, label + ".plist")
+        with open(p, "wb") as f:
+            plistlib.dump(dict({"Label": label, "ProgramArguments": ["/bin/true"]}, **kw), f)
+        return p
+
+    def lay(self):
+        dd, la = self.dd, self.la
+        return {
+            "node": self.plist(dd, "com.claude-fleet.node"),
+            "own-proxy": self.plist(dd, "com.claude-fleet.credsep.alice"),
+            "gone-proxy": self.plist(dd, "com.claude-fleet.credsep.ghost"),
+            "machine": self.plist(dd, "com.claude-fleet.memguard"),
+            "kept": self.plist(dd, "com.claude-fleet.mine"),
+            "legacy-ok": self.plist(dd, "com.claude-fleet.c-legacy"),
+            "legacy-waits": self.plist(dd, "com.claude-fleet.w-legacy"),
+            "carol-daemon": self.plist(dd, "com.claude-fleet.carol.collect"),
+            "bob-daemon": self.plist(dd, "com.claude-fleet.x", UserName="bob"),
+            "bob-agent": self.plist(la["bob"], "com.claude-fleet.dispatch"),
+            "bob-agent2": self.plist(la["bob"], "com.ccquota.agent.bob"),
+            "bob-own": self.plist(la["bob"], "com.bob.ddns"),
+            "alice-agent": self.plist(la["alice"], "com.claude-fleet.spinner"),
+            "carol-agent": self.plist(la["carol"], "com.claude-fleet.dispatch"),
+        }
+
+    def test_removes_outside_the_expected_set(self):
+        with open(os.path.join(self.d, "db", "keep-labels"), "w") as f:
+            f.write("# mine\ncom.claude-fleet.mine\n")
+        p = self.lay()
+        gone = ("gone-proxy", "machine", "legacy-ok", "bob-daemon", "bob-agent", "bob-agent2", "alice-agent")
+        stay = ("node", "own-proxy", "kept", "legacy-waits", "carol-daemon", "bob-own", "carol-agent")
+        dry = self.run_sup("sweep", "--dry-run")
+        self.assertEqual(dry.stdout.count("would boot out"), len(gone), dry.stdout)
+        for k in p:
+            self.assertTrue(os.path.exists(p[k]), "dry run moved %s" % k)
+        self.assertFalse(os.path.exists(self.lclog), "dry run called launchctl")
+        r = self.run_sup("sweep")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        for k in gone:
+            self.assertFalse(os.path.exists(p[k]), "%s left: %s" % (k, r.stdout))
+        for k in stay:
+            self.assertTrue(os.path.exists(p[k]), "%s moved: %s" % (k, r.stdout))
+        self.assertIn("bob is an admin login", r.stdout)
+        self.assertIn("child c runs under com.claude-fleet.node", r.stdout)
+        self.assertIn("launchd still runs child w: %s missing" % os.path.join(self.d, "nowhere"), r.stdout)
+        self.assertIn("carol is not taken over — sudo fleet-node-supervisor.py account adopt carol", r.stdout)
+        calls = open(self.lclog).read()
+        uid = os.getuid()
+        for t in ("bootout system/com.claude-fleet.memguard", "bootout system/com.claude-fleet.c-legacy",
+                  "bootout gui/%d/com.claude-fleet.dispatch" % uid, "bootout gui/%d/com.claude-fleet.spinner" % uid):
+            self.assertIn(t, calls)
+        self.assertNotIn("carol", calls)
+        sw = self.state()["sweep"]
+        self.assertEqual((sw["removed"], sw["extra"]), (len(gone), 3))
+        st = self.run_sup("status").stdout
+        self.assertIn("removed %d (total %d) · extra 3 (left in place)" % (len(gone), len(gone)), st)
+        self.assertIn("extra  com.claude-fleet.carol.collect", st)
+        # the attic keeps them: a restore puts one back
+        lst = self.run_sup("attic", "list").stdout.splitlines()
+        self.assertEqual(len(lst), len(gone))
+        ident = [x.split()[0] for x in lst if "memguard" in x][0]
+        self.assertEqual(self.run_sup("attic", "restore", ident).returncode, 0)
+        self.assertTrue(os.path.exists(p["machine"]))
+        # a second sweep finds only what it leaves named (the restored one goes again)
+        r = self.run_sup("sweep")
+        self.assertEqual(r.stdout.count("booted out"), 1, r.stdout)
+
+    def test_one_that_will_not_unload_stays(self):
+        p = self.plist(self.dd, "com.claude-fleet.memguard")
+        with open(self.stuck, "w") as f:
+            f.write("com.claude-fleet.memguard\n")
+        r = self.run_sup("sweep")
+        self.assertTrue(os.path.exists(p))
+        self.assertIn("system/com.claude-fleet.memguard did not unload", r.stdout)
+        self.assertEqual(self.run_sup("attic", "list").stdout, "")
+
+    def test_a_running_drill_holds_every_removal(self):
+        p = self.lay()
+        drill = self.script(self.env["FLEET_NODE_SWEEP_HOLD"], "sleep 30\n")
+        hp = subprocess.Popen(["/bin/bash", drill])
+        try:
+            until(5, lambda: subprocess.run(["pgrep", "-f", drill], capture_output=True).returncode == 0)
+            r = self.run_sup("sweep")
+            for k in p:
+                self.assertTrue(os.path.exists(p[k]), "%s moved under a drill" % k)
+            self.assertIn("held: pid %d runs %s" % (hp.pid, self.env["FLEET_NODE_SWEEP_HOLD"]), r.stdout)
+            self.assertIn("held: pid %d" % hp.pid, self.run_sup("status").stdout)
+        finally:
+            hp.kill()
+            hp.wait()
+        r = self.run_sup("sweep")
+        self.assertFalse(os.path.exists(p["bob-agent"]), r.stdout)
+
+    def test_legacy_child_taken_over_by_the_running_daemon(self):
+        p = self.plist(self.dd, "com.claude-fleet.c-legacy")
+        self.start(FLEET_NODE_SWEEP_EVERY="3600")
+        until(10, lambda: self.child("c").get("pid"))
+        self.assertFalse(os.path.exists(p), "the legacy definition is still installed")
+        self.assertEqual(self.child("c").get("status"), "supervised")
+        self.assertTrue(fns.pid_alive(self.child("c")["pid"]))
+        self.assertEqual(self.child("w").get("status"), "waiting")
+
+    def test_client_shell_retired_by_the_sweep(self):
+        rt = os.path.join(self.d, "rt", "bin")
+        os.makedirs(rt)
+        shutil.copy(os.path.join(BIN, "fleet-node-shell-retire.sh"), rt)
+        home = os.path.join(self.d, "Users", "alice")
+        os.makedirs(os.path.join(home, ".cache", "claude-fleet", "shell", "bin"))
+        with open(os.path.join(home, ".zshrc"), "w") as f:
+            f.write("alias y=yazi\nsource ~/.claude/fleet/shell/cw.zsh\n")
+        # carol is not taken over: hers is not the fleet's to touch
+        os.makedirs(os.path.join(self.d, "Users", "carol", ".cache", "claude-fleet", "shell"))
+        dry = self.run_sup("sweep", "--dry-run")
+        self.assertIn("clientshell (would retire): alice", dry.stdout)
+        self.assertTrue(os.path.isdir(os.path.join(home, ".cache", "claude-fleet", "shell")))
+        r = self.run_sup("sweep")
+        self.assertNotIn("clientshell", r.stdout)
+        self.assertFalse(os.path.exists(os.path.join(home, ".cache", "claude-fleet", "shell")))
+        self.assertEqual(open(os.path.join(home, ".zshrc")).read(), "alias y=yazi\n")
+        self.assertEqual(self.state()["sweep"]["clientshell"], [])
+        self.assertNotIn("clientshell", self.run_sup("status").stdout)
+        self.assertTrue(os.path.isdir(os.path.join(self.d, "Users", "carol", ".cache", "claude-fleet", "shell")))
 
 
 class D_RestartKeepsState(Sandbox):

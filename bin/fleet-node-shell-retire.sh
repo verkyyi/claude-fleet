@@ -23,19 +23,24 @@
 # this (`clientshell` in `fleet-node-supervisor.py status`, the doctor's `shell`
 # row). The login's sessions, ~/.claude/fleet and its services are not touched.
 #
-# Usage: sudo fleet-node-shell-retire.sh --login <login> [--dry-run]
+# Usage: sudo fleet-node-shell-retire.sh --login <login> [--dry-run] [--if-idle]
 #        (as that login itself, no sudo needed)
+#        --if-idle: the machine daemon's own run (issue #2981) — while the client
+#        still runs, change nothing and exit 3 (a person may be using it; the
+#        next sweep tries again)
 # Env:   FLEET_NODE_USERS (/Users — where homes live; a test seam) ·
 #        FLEET_RETIRE_GRACE (3) · FLEET_RETIRE_QUIT_WAIT (20, seconds for `fleet quit`)
-# Exit:  0 done (or nothing to do) · 1 a step failed · 2 usage / not allowed
+# Exit:  0 done (or nothing to do) · 1 a step failed · 2 usage / not allowed ·
+#        3 --if-idle and the client still runs (nothing changed)
 set -uo pipefail
 PROG=fleet-node-shell-retire
 
-LOGIN='' DRY=0
+LOGIN='' DRY=0 IDLE=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --login) LOGIN=${2:-}; shift 2 || shift ;;
     --dry-run) DRY=1; shift ;;
+    --if-idle) IDLE=1; shift ;;
     -h|--help) sed -n '2,/^set -uo pipefail/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) printf '%s: unknown arg %s\n' "$PROG" "$1" >&2; exit 2 ;;
   esac
@@ -46,6 +51,8 @@ esac
 H="${FLEET_NODE_USERS:-/Users}/$LOGIN"
 [ -d "$H" ] || { printf '%s: no home %s\n' "$PROG" "$H" >&2; exit 2; }
 ME=$(id -un)
+# the supervisor selftest's sandbox homes (FLEET_NODE_TEST=1): file ops run as us
+[ "${FLEET_NODE_TEST:-}" = 1 ] && ME=$LOGIN
 if [ "$ME" != "$LOGIN" ] && [ "$(id -u)" != 0 ]; then
   printf '%s: run it as root (sudo) or as %s\n' "$PROG" "$LOGIN" >&2
   exit 2
@@ -72,6 +79,10 @@ pids() {
 
 # --- client -------------------------------------------------------------------
 n=$(pids | wc -l | tr -d ' ')
+if [ "$n" != 0 ] && [ "$IDLE" = 1 ]; then
+  say "client: $n process(es) of $LOGIN still run from $CACHE — left for later (--if-idle), nothing changed"
+  exit 3
+fi
 if [ "$n" = 0 ]; then
   say "client: skip — nothing of $LOGIN's runs from $CACHE"
 elif [ "$DRY" = 1 ]; then

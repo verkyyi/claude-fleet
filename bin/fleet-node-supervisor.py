@@ -63,17 +63,26 @@ machine's work ONCE, however many logins the machine carries:
                 `.disabled*` …) in /Library/LaunchDaemons and every login's
                 ~/Library/LaunchAgents are MOVED to the attic
                 (`/var/db/fleet-node/attic/`), kept FLEET_NODE_ATTIC_DAYS (7) days,
-                and can be put back (`attic restore <id>`). A fleet plist the
-                machine's expected state (`expected.json`, written from the hub —
-                C2) does not name is only REPORTED, never moved: it may be loaded.
-                It also NAMES, never touches, a login that still carries the
-                person's client here (issue #2702): `~/.cache/claude-fleet/shell`
-                or a `~/.zshrc` line that sources shell/fleet-login.zsh / cw.zsh /
-                the old bootstrap block — a managed machine is no one's client;
-                bin/fleet-node-shell-retire.sh --login <login> clears it. Both
-                halves look ONLY at the logins this daemon took over
-                (logins/<login>.env): an admin, a local user who never used the
-                fleet — not the fleet's, never named.
+                and can be put back (`attic restore <id>`). On a managed machine
+                (expected.json) a fleet unit OUTSIDE its expected set is booted out
+                and moved there too (issue #2981): a machine unit this daemon does
+                not run, an admin login's (never taken over, #2842), a taken-over
+                login's left behind, a gone login's, and a child's old LaunchDaemon
+                once the child can start here (cred-proxy-shared). The expected set:
+                this daemon, expected.json's `labels`, <state>/keep-labels, and
+                each existing login's own credential proxy (credsep.<login>). A
+                login not taken over keeps its units, named (`account adopt` is
+                its road); a unit that will not unload stays, named; a running
+                fleet-onboard-drill.sh holds every removal until the next sweep.
+                It also clears a taken-over login that still carries the person's
+                client here (issue #2702): `~/.cache/claude-fleet/shell` or a
+                `~/.zshrc` line that sources shell/fleet-login.zsh / cw.zsh / the
+                old bootstrap block — a managed machine is no one's client — by
+                running bin/fleet-node-shell-retire.sh --login <login> --if-idle
+                itself (issue #2981; a client still running is named and left for
+                the next sweep). Handwritten units and the client shell look ONLY
+                at the logins this daemon took over (logins/<login>.env): an admin,
+                a local user who never used the fleet — not the fleet's, never named.
 
 State survives a restart: `state.json` (0644, so any login's doctor can read it)
 carries every task's last run and every child's pid; a restarted supervisor ADOPTS
@@ -392,6 +401,10 @@ def default_table(paths):
             {"name": "cred-proxy-shared",
              "cmd": ["/usr/bin/python3", "-I", launcher, "shared"],
              "legacy": "com.claude-fleet.cred-proxy-shared",
+             # only while the machine has a shared proxy (`fleet-credsep.py machine
+             # install`): without its record the launcher exits at once, and a
+             # `machine uninstall` stops the daemon's copy (issue #2981)
+             "requires": [os.path.join(env("FLEET_CREDSEP_ROOT_BASE", "/var/db/fleet-cred"), ".shared.json")],
              # it runs root's code copy in LIB, which the updater refreshes from
              # `current` on every switch / rollback (issue #2435): a new copy (or a
              # login's <L>.conf) starts it again on the new bytes
@@ -1801,7 +1814,9 @@ class Supervisor(object):
         if not dry:
             sw = self.state["sweep"]
             sw.update(last=now(), moved=len(res["moved"]), extra=len(res["extra"]), handwritten=res["handwritten"],
-                      clientshell=res["clientshell"],
+                      clientshell=res["clientshell"], extras=res["extra"], hold=res["hold"],
+                      removed=len(res["removed"]),
+                      total_removed=(sw.get("total_removed") or 0) + len(res["removed"]),
                       purged=res["purged"], total_moved=(sw.get("total_moved") or 0) + len(res["moved"]))
             self.dirty = True
         return res
@@ -2045,15 +2060,190 @@ def client_shell_says(c, paths):
         what.append("~/.cache/claude-fleet/shell")
     if c.get("zshrc"):
         what.append("~/.zshrc %d hook line(s)" % c["zshrc"])
-    return "%s: %s — a managed machine is no one's client; sudo bash '%s' --login %s" % (
-        c["login"], " · ".join(what), os.path.join(paths.runtime, "bin", "fleet-node-shell-retire.sh"), c["login"])
+    return "%s: %s — a managed machine is no one's client; sudo bash '%s' --login %s%s" % (
+        c["login"], " · ".join(what), os.path.join(paths.runtime, "bin", "fleet-node-shell-retire.sh"), c["login"],
+        " (the sweep's own run: %s)" % c["retire"] if c.get("retire") else "")
+
+
+# What holds the sweep's removals (issue #2981): a process running one of these
+# — a drill run by hand from an admin login must not lose a launchd unit under it.
+SWEEP_HOLD_ARGV = ("fleet-onboard-drill.sh",)
+
+
+def keep_labels(paths):
+    """<state>/keep-labels: one label a line (# comments) this machine keeps
+    beside expected.json's — the person's word for a unit of their own the
+    expected set does not name (issue #2981). Root's file: one a login could
+    write is not read."""
+    path = os.path.join(paths.state, "keep-labels")
+    out = set()
+    try:
+        st = os.stat(path)
+        if st.st_mode & 0o022 or (st.st_uid != 0 and env("FLEET_NODE_TEST", "") != "1"):
+            return out
+        with open(path, errors="replace") as f:
+            for ln in f:
+                ln = ln.split("#", 1)[0].strip()
+                if ln:
+                    out.add(ln)
+    except OSError:
+        pass
+    return out
+
+
+def sweep_hold():
+    """"" — or what holds the sweep's removals: the first live process whose argv
+    names one of SWEEP_HOLD_ARGV (FLEET_NODE_SWEEP_HOLD, comma-separated, overrides)."""
+    names = [x for x in env("FLEET_NODE_SWEEP_HOLD", ",".join(SWEEP_HOLD_ARGV)).split(",") if x]
+    try:
+        out = subprocess.check_output(["ps", "-axo", "pid=,command="], stderr=subprocess.DEVNULL,
+                                      universal_newlines=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    for ln in out.splitlines():
+        pid, _, cmd = ln.strip().partition(" ")
+        if pid == str(os.getpid()):
+            continue
+        for n in names:
+            if n in cmd:
+                return "pid %s runs %s" % (pid, cmd.strip()[cmd.strip().find(n):][:120])
+    return ""
+
+
+def _runnable_without_legacy(c):
+    """Would the daemon run child <c> itself once its old LaunchDaemon is gone?
+    "" yes, else why not — never take launchd's copy away before ours can start."""
+    if not c.get("cmd"):
+        return "no command yet"
+    miss = requires_missing(c)
+    if miss:
+        return "%s missing" % ", ".join(miss)
+    if not trusted(script_of(c["cmd"])):
+        return "%s is not root-owned / is writable" % script_of(c["cmd"])
+    return ""
+
+
+def _unit_login(paths, d, src, label):
+    """The login a fleet unit belongs to, or None (a machine unit): a LaunchAgent
+    is its home's; a LaunchDaemon names it in UserName, com.ccquota.agent.<login>
+    or com.claude-fleet.<login>.<unit>."""
+    if d != paths.daemon_dir:
+        return os.path.basename(os.path.dirname(os.path.dirname(d)))
+    try:
+        with open(src, "rb") as f:
+            u = (plistlib.load(f) or {}).get("UserName")
+    except Exception:
+        u = None
+    if isinstance(u, str) and u and u != "root" and not u.startswith("_"):
+        return u
+    m = re.match(r"^com\.ccquota\.agent\.([A-Za-z0-9._-]+)$", label)
+    if m:
+        return m.group(1)
+    m = re.match(r"^com\.claude-fleet\.([A-Za-z0-9_-]+)\.[A-Za-z0-9_-]+$", label)
+    if m and account_ident(m.group(1)) is not None:
+        return m.group(1)
+    return None
+
+
+def _extra_verdict(paths, d, src, label, legacy, managed):
+    """A fleet unit not in the machine's expected set (issue #2981): (True, why)
+    to boot it out into the attic, (False, why) to leave it named, (None, "") when
+    it IS expected. The expected set: this daemon, expected.json's labels (the
+    caller), and each existing login's own credential proxy
+    (com.claude-fleet.credsep.<login> — `fleet-credsep.py machine join` is its
+    road; the sweep never cuts a login's credentials)."""
+    if d == paths.daemon_dir:
+        m = re.match(r"^com\.claude-fleet\.credsep\.(.+)$", label)
+        if m:
+            if account_ident(m.group(1)) is not None:
+                return None, ""
+            return True, "the own credential proxy of %s, no such login" % m.group(1)
+        if label in legacy:
+            why = _runnable_without_legacy(legacy[label])
+            if why:
+                return False, "launchd still runs child %s: %s" % (legacy[label]["name"], why)
+            return True, "child %s runs under %s from now on" % (legacy[label]["name"], LABEL)
+    login = _unit_login(paths, d, src, label)
+    if login is None:
+        return True, "a machine unit %s does not run" % LABEL
+    if account_ident(login) is None:
+        return True, "no such login %s" % login
+    if login in managed:
+        return True, "%s is taken over: %s runs its units" % (login, LABEL)
+    if tenant_privileges(login)[0]:
+        # an admin is never taken over (#2842): what the fleet left in it is a leftover
+        return True, "%s is an admin login — the machine's admin, never a fleet login" % login
+    return False, "%s is not taken over — sudo fleet-node-supervisor.py account adopt %s moves them" % (login, login)
+
+
+def _attic_id(paths, stamp, index, pending=0):
+    """A fresh attic id: <stamp>-<n>, never one the index or the attic holds."""
+    taken = set(e.get("id") for e in index)
+    n = len(index) + pending + 1
+    while "%s-%d" % (stamp, n) in taken or os.path.exists(os.path.join(paths.attic, "%s-%d" % (stamp, n))):
+        n += 1
+    return "%s-%d" % (stamp, n)
+
+
+def _retire_unit(paths, d, src, label, index, ident_, dry):
+    """Boot one unit out and move it into the attic (7 days, `attic restore`).
+    The attic entry, or a string: why it stays."""
+    if d == paths.daemon_dir:
+        domain = "system"
+    else:
+        ident = account_ident(os.path.basename(os.path.dirname(os.path.dirname(d))))
+        domain = "gui/%d" % ident[0] if ident else None
+    e = {"id": ident_, "src": src, "dst": os.path.join(paths.attic, ident_, os.path.basename(src)),
+         "label": label, "domain": domain}
+    if dry:
+        return e
+    if domain:
+        target = "%s/%s" % (domain, label)
+        launchctl("bootout", target)
+        if not launchctl_gone(target):
+            return "%s did not unload" % target
+    st = os.stat(src)
+    os.makedirs(os.path.dirname(e["dst"]), 0o700)
+    shutil.move(src, e["dst"])
+    e.update(moved=now(), uid=st.st_uid, gid=st.st_gid, mode=st.st_mode & 0o7777)
+    index.append(e)
+    return e
+
+
+def retire_client_shells(paths, entries):
+    """Run the retire script for every taken-over login still carrying the person's
+    client (issue #2981) — --if-idle: a client still running is left for the next
+    sweep. The entries left, each with the script's last word."""
+    script = os.path.join(paths.runtime, "bin", "fleet-node-shell-retire.sh")
+    if not entries or not trusted(script):
+        return entries
+    words = {}
+    for c in entries:
+        try:
+            r = subprocess.run(["/bin/bash", script, "--login", c["login"], "--if-idle"], stdout=subprocess.PIPE,
+                               stderr=subprocess.STDOUT, universal_newlines=True, timeout=120)
+            rc, out = r.returncode, r.stdout
+        except (OSError, subprocess.SubprocessError) as ex:
+            rc, out = 1, str(ex)
+        if rc != 0:
+            words[c["login"]] = "retire rc %s: %s" % (rc, (out.strip().splitlines() or ["-"])[-1][:200])
+    left = client_shell(paths, [c["login"] for c in entries])
+    for c in left:
+        if c["login"] in words:
+            c["retire"] = words[c["login"]]
+    return left
 
 
 def _sweep(paths, dry=False):
-    moved, extra, hand = [], [], []
+    moved, extra, hand, removed = [], [], [], []
     listed = taken_over(paths)
     expected = read_json(paths.expected, None)
     labels = set(expected.get("labels") or []) if isinstance(expected, dict) else None
+    if labels is not None:
+        labels |= keep_labels(paths)
+    managed = listed | set(k for k, v in accounts_read(paths).items() if (v or {}).get("managed"))
+    legacy = dict((c["legacy"], c) for c in load_table(paths).get("children") or [] if c.get("legacy"))
+    hold = sweep_hold() if labels is not None else ""
     index = read_json(paths.attic_index, [])
     stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
     for d in _agent_dirs(paths):
@@ -2076,18 +2266,36 @@ def _sweep(paths, dry=False):
                     index.append({"id": ident, "src": src, "dst": dst, "moved": now(),
                                   "uid": st.st_uid, "gid": st.st_gid, "mode": st.st_mode & 0o7777})
             elif labels is not None and n.endswith(".plist") and FLEET_PLIST_RE.match(n):
+                # a managed machine (expected.json): what is not in its expected set
+                # goes to the attic, booted out first (issue #2981)
                 lb = _plist_label(src) or n[:-len(".plist")]
-                if lb not in labels and lb != LABEL:
-                    extra.append(src)
+                if lb in labels or lb == LABEL:
+                    continue
+                go, why = _extra_verdict(paths, d, src, lb, legacy, managed)
+                if go is None:
+                    continue
+                if go and hold:
+                    go, why = False, "held: %s" % hold
+                if go:
+                    ident = _attic_id(paths, stamp, index, len(moved) + len(removed) if dry else 0)
+                    e = _retire_unit(paths, d, src, lb, index, ident, dry)
+                    if isinstance(e, dict):
+                        removed.append(dict(e, why=why))
+                        continue
+                    why = e
+                extra.append({"path": src, "label": lb, "why": why})
             else:
                 h = _handwritten(paths, d, n, src)
                 if h and h["login"] in listed:
                     hand.append(h)
     purged = 0 if dry else attic_purge(paths, index)
-    if not dry and (moved or purged):
+    if not dry and (moved or removed or purged):
         write_json(paths.attic_index, index, 0o600)
-    return {"moved": moved, "extra": extra, "purged": purged, "handwritten": hand,
-            "clientshell": client_shell(paths, listed)}
+    shells = client_shell(paths, listed)
+    if not dry and labels is not None:
+        shells = retire_client_shells(paths, shells)
+    return {"moved": moved, "extra": extra, "removed": removed, "purged": purged, "handwritten": hand,
+            "clientshell": shells, "hold": hold}
 
 
 def attic_purge(paths, index):
@@ -2802,9 +3010,13 @@ def status_lines(paths, table, state):
                    "archive %s" % (h.get("label"), h.get("login"), h.get("path")))
     for c in sw.get("clientshell") or []:
         out.append("clientshell %-12s %s" % (c.get("login"), client_shell_says(c, paths)))
-    out.append("sweep  %-18s last %s · moved %s (total %s) · extra %s (report only) · attic %d entries"
+    for x in sw.get("extras") or []:
+        out.append("extra  %-18s left in place — %s (%s)" % (x.get("label"), x.get("why"), x.get("path")))
+    out.append("sweep  %-18s last %s · moved %s (total %s) · removed %s (total %s) · extra %s (left in place)%s"
+               " · attic %d entries"
                % ("leftovers", iso(sw.get("last")), sw.get("moved", 0), sw.get("total_moved", 0),
-                  sw.get("extra", 0), len(read_json(paths.attic_index, []))))
+                  sw.get("removed", 0), sw.get("total_removed", 0), sw.get("extra", 0),
+                  " · held: %s" % sw["hold"] if sw.get("hold") else "", len(read_json(paths.attic_index, []))))
     return code, out
 
 
@@ -3513,12 +3725,15 @@ def main(argv):
             write_json(paths.state_file, sup.state)
         for m in res["moved"]:
             print("%s %s -> attic %s" % ("would move" if dry else "moved", m["src"], m["id"]))
+        for x in res["removed"]:
+            print("%s %s -> attic %s (%s)" % ("would boot out" if dry else "booted out", x["src"], x["id"], x["why"]))
         for x in res["extra"]:
-            print("extra (not in expected.json, left in place): %s" % x)
+            print("extra (not in the expected set, left in place — %s): %s" % (x["why"], x["path"]))
         for h in res["handwritten"]:
             print("handwritten (runs as %s, not in the register, left in place): %s" % (h["login"], h["path"]))
         for c in res["clientshell"]:
-            print("clientshell (left in place): %s" % client_shell_says(c, paths))
+            print("clientshell (%s): %s" % ("would retire" if dry and os.path.exists(paths.expected)
+                                            else "left in place", client_shell_says(c, paths)))
         return 0
     if cmd == "attic":
         sub = rest[0] if rest else "list"

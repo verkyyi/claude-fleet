@@ -805,7 +805,7 @@ def adopt(a):
     if not settings_conf(a.login, os.path.abspath(a.conf_dir), a.install_dir or meta.get("install_dir", ""), True):
         return 0
     if meta.get("mode") == "shared":
-        load_daemon(SHARED_PATH, SHARED_LABEL)
+        shared_restart()
     else:
         plabel = "com.claude-fleet.credsep.%s" % a.login if MAC else "claude-fleet-credsep-%s.service" % a.login
         load_daemon(os.path.join(DAEMON_DIR, plabel + (".plist" if MAC else "")), plabel)
@@ -1104,8 +1104,8 @@ def purge(a):
     if tenant and rec:
         if not DRY:
             shared_record([m["login"] for m in shared_tenants()])
-        if os.path.exists(SHARED_PATH):
-            load_daemon(SHARED_PATH, SHARED_LABEL)     # its tenants.json and pool follow
+        if os.path.exists(SHARED_PATH) or shared_supervised():
+            shared_restart()     # its tenants.json and pool follow
         gone.append("tenant of %s" % SHARED_LABEL)
     if not gone:
         say("purge: %s — nothing of credsep here" % login)
@@ -1461,7 +1461,10 @@ def code_version(path):
 
 
 def shared_service():
-    """The shared proxy's service definition → (changed?)."""
+    """The shared proxy's service definition → (changed?). None while the
+    machine daemon runs it (issue #2981): a definition would start a second one."""
+    if shared_supervised():
+        return False
     owner = "root" if os.geteuid() == 0 else pwd.getpwuid(os.getuid()).pw_name
     mkdir(LOG_BASE, 0o755, owner)
     if MAC:
@@ -1531,7 +1534,7 @@ def machine_install(a):
         logins = sorted({m["login"] for m in shared_tenants()} | {r[0] for r in rows}) if not DRY else [r[0] for r in rows]
         shared_service()
         shared_record(logins)
-        load_daemon(SHARED_PATH, SHARED_LABEL)
+        shared_restart()
     except BaseException as e:  # noqa: B036 — die() is a SystemExit; any stop here is half a machine
         if DRY:
             raise
@@ -1623,6 +1626,19 @@ def machine_uninstall(a):
     return 0
 
 
+def shared_restart():
+    """(Re)start the shared proxy on what its tenants file and LIB now say: its
+    service definition's job — or, once the machine daemon runs it as its child
+    (issue #2981, the definition retired by the daemon's sweep), the daemon's: a
+    stamp in LIB, which that child's `reload` watches, starts it again on the
+    daemon's next tick. Never a definition beside the daemon's child."""
+    if shared_supervised():
+        put(os.path.join(LIB, ".restart"), "%f\n" % time.time(), 0o644,
+            "root" if os.geteuid() == 0 else pwd.getpwuid(os.getuid()).pw_name)
+        return
+    load_daemon(SHARED_PATH, SHARED_LABEL)
+
+
 def shared_supervised():
     """True when the machine daemon runs the shared proxy (its child
     `cred-proxy-shared`) and no service definition of ours is installed: the
@@ -1659,7 +1675,7 @@ def machine_refresh(a):
     for m in shared_tenants():
         relog_agent(m["login"])     # separated before issue #2296
     if moved and not sup:
-        load_daemon(SHARED_PATH, SHARED_LABEL)
+        shared_restart()
     say("shared: %s — version %s" % (("refreshed, restarted" + (" by the machine daemon" if sup else "")) if moved
                                       else "current", code_version(os.path.join(LIB, "fleet-cred-proxy.py"))))
     return 0
@@ -1825,7 +1841,7 @@ def join_login(login, wait=None):
     if meta.get("mode") == "shared":
         say("join: %s is already a tenant of the shared proxy" % login)
         return True
-    if not shared_rec() or not os.path.exists(SHARED_PATH):
+    if not shared_rec() or not (os.path.exists(SHARED_PATH) or shared_supervised()):
         die("machine join: this machine has no shared proxy yet — `machine install` first", 3)
     plabel, ppath = own_label(login)
     conf, pw = meta["conf_dir"], getpw(login)
@@ -1858,14 +1874,14 @@ def join_login(login, wait=None):
                                            if "conf_prior" not in old})
         put(os.path.join(R, "meta.json"), json.dumps(old, indent=1), 0o600, ROLE)
         shared_record([m["login"] for m in shared_tenants()])
-        load_daemon(SHARED_PATH, SHARED_LABEL)
+        shared_restart()
         say("join: %s — FAILED, still on its own proxy (nothing else moved)" % login)
         return False
 
     # 1. the shared proxy takes the tenant — its own answer is the proof
     shared_service()
     shared_record([m["login"] for m in shared_tenants()])
-    load_daemon(SHARED_PATH, SHARED_LABEL)
+    shared_restart()
     if not wait_for(lambda: shared_ask(login) is not None, wait):
         return back("the shared proxy did not take it within %ds" % wait)
     say("join: %s — the shared proxy serves it" % login)
@@ -1912,7 +1928,7 @@ def leave_login(login, wait=None):
         conf_switch_back(login, conf, pw, meta.pop("conf_prior", None) or {})
     put(os.path.join(R, "meta.json"), json.dumps(meta, indent=1), 0o600, ROLE)
     shared_record([m["login"] for m in shared_tenants()])
-    load_daemon(SHARED_PATH, SHARED_LABEL)
+    shared_restart()
     if legacy and not wait_for(lambda: port_free(legacy), wait):
         say("leave: %s — port %d still held after %ds; its own proxy will take another" % (login, legacy, wait))
     if legacy:
