@@ -303,7 +303,7 @@ got=$(cd "$SC/bin" && cenv TMUX="$sock,0,0" FLEET_SHELL=1 ${STG:+FLEET_SHELL_STA
 remote=$(tp show-options -wqv -t "$w1" @remote)
 [ "$remote" = "$NODE:$FID/issue-7" ] || die "the right pane does not point at issue-7" \
   "open (exit $orc) → $got · @remote=$remote · windows: $(tp list-windows -t "=$P" -F '#{window_id} #{@remote} [#{@remote_login}]' | tr '\n' ' ')
-$(grep -v '^++' "$WORK/open.trace" | tail -n 40)"
+$(tail -n 40 "$WORK/open.trace")"
 grep -q "select '$FID/issue-7'" "$WORK/ssh.log" || die 'the node was not asked to select issue-7' "$(cat "$WORK/ssh.log")"
 ok "@remote=$remote, window $(tp display-message -p -t "$w1" '#{window_name}')"
 
