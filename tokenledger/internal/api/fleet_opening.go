@@ -78,7 +78,8 @@ type AccountState struct {
 	// Ask is who gives a person a machine: the hub's admin logins.
 	Ask string `json:"ask,omitempty"`
 	// Why is, on failed, what went wrong in one line (claude-fleet#2696): the
-	// create's own failure, no answer in openingGiveUp, or no admin node.
+	// create's own failure, no answer in openingGiveUp, or no admin node; on
+	// none, why nothing is coming when no machine can open a login (#2997).
 	Why string `json:"why,omitempty"`
 	// Stage is, on opening, what is awaited (claude-fleet#2941): create (the
 	// node opening the login) or fleet (the login opened, its fleet not yet
@@ -176,7 +177,13 @@ func (s *Server) accountStateOf(pid string, now time.Time) *AccountState {
 		// has — the answer before #2549, when it may well host its fleet.
 		return nil
 	}
-	return &AccountState{State: "none", Ask: ask}
+	none := &AccountState{State: "none", Ask: ask}
+	if snap, err := s.Nodes(now); err == nil && len(adminNodesOnline(snap)) == 0 {
+		// Nothing is coming because no machine can open a login
+		// (claude-fleet#2997): say so, never a bare none.
+		none.Why = noLoginOpener
+	}
+	return none
 }
 
 // hasMachine says accts holds a row that is a machine for the person: any

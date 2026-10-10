@@ -516,10 +516,11 @@ BREAK-IT 行 `service-handwritten`。只点名接管过的登录（`logins/<登�
   不判断——机器上有其他管理员或非托管账号是正常状态。`shell` 行写明「托管登录 N 个，其余账号不在清单内不扫」。
 - **fleet 自己的启动项例外**（#2981）：托管机器上，清扫把「期望集合」之外的 fleet 启动项（`com.claude-fleet.*` /
   `com.ccquota.*`）先 bootout 再挪进 attic（7 天，`attic restore <id>` 放回）——整机守护不跑的机器级单元、
-  **管理员登录**的（管理员永不被接管，#2842；它在托管机器上只当节点管理员：ssh、sudo、`~/.ccquota/` 的查看令牌、
-  从运行时跑节点工具都不碰）、托管登录残留的、已不存在的登录的，以及子进程的旧 LaunchDaemon（守护能自己起它时：
+  托管登录残留的、已不存在的登录的，以及子进程的旧 LaunchDaemon（守护能自己起它时：
   `cred-proxy-shared`）。期望集合 = 守护自己、`expected.json` 的 `labels`、root 的 `/var/db/fleet-node/keep-labels`
-  （一行一个，本机想留的）、每个现存登录自己的凭据代理 `com.claude-fleet.credsep.<登录>`（`machine join` 是它的路）。
+  （一行一个，本机想留的）、每个现存登录自己的凭据代理 `com.claude-fleet.credsep.<登录>`（`machine join` 是它的路），
+  以及**管理员登录**的每个单元（管理员永不被接管，#2842；它的 `com.ccquota.agent.<管理员>` 就是这台机器的 admin node，
+  入口靠它开新人的登录——#2997：清扫曾把它收进 attic，两台机器都没了 admin node，新人一个号也开不出来）。
   **只点名不动**的：没被接管的非管理员登录的（`account adopt` 是它的路）、卸不下来的、子进程还起不来的旧 daemon；
   有 `fleet-onboard-drill.sh` 在跑时这一轮一个都不动（`held:`）。`status` 每个留下的一行 `extra <label> left in place — <为什么>`，
   末行 `removed N · extra M (left in place)`。

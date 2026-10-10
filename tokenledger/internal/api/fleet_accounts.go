@@ -263,12 +263,7 @@ func (s *Server) leastBusyMachine(now time.Time, skip ...string) string {
 		log.Printf("fleet: least-busy: roster: %v", err)
 		return ""
 	}
-	admin := map[string]bool{}
-	for _, n := range snap.Nodes {
-		if n.Admin && n.Connected && n.Status == "online" {
-			admin[strings.ToLower(n.Hostname)] = true
-		}
-	}
+	admin := adminNodesOnline(snap)
 	var fit []MachineView
 	for _, m := range snap.Machines {
 		if m.Status != "online" || m.ComputeOff || m.Personal || m.Kind == store.NodeKindEphemeral ||
@@ -306,6 +301,25 @@ func (s *Server) leastBusyMachine(now time.Time, skip ...string) string {
 	})
 	return fit[0].Hostname
 }
+
+// adminNodesOnline is every machine (lower-cased) with an admin node the
+// roster hears right now — the one that opens a login there. A machine with
+// none cannot open one (claude-fleet#2997: the sweep had booted the admin
+// login's own agent out on both machines, and the newcomer heard only
+// 「No fleet」).
+func adminNodesOnline(snap NodesSnapshot) map[string]bool {
+	admin := map[string]bool{}
+	for _, n := range snap.Nodes {
+		if n.Admin && n.Connected && n.Status == "online" {
+			admin[strings.ToLower(n.Hostname)] = true
+		}
+	}
+	return admin
+}
+
+// noLoginOpener is the newcomer's word when no machine can open a login:
+// none has an admin node online (claude-fleet#2997).
+const noLoginOpener = "没有能开号的机器：没有一台机器的管理员节点在线"
 
 // drillComputer is the machine a drill person's own computer is on — the
 // bare login `fleet drill invite --host` named (claude-fleet#2549) — while its

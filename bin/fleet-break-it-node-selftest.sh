@@ -19,6 +19,10 @@
 #   service-handwritten   bin/fleet-node-supervisor.py's sweep + bin/fleet-services.py --doctor
 #                         (#2530): a hand-written launchd plist runs as a login beside the
 #                         register — the doctor WARNs until it is registered and archived
+#   sweep-admin-agent     bin/fleet-node-supervisor.py's sweep `_extra_verdict` (#2997): a
+#                         managed machine's sweep booted the admin login's own node agent
+#                         (com.ccquota.agent.<admin>) into the attic — no admin node, no
+#                         newcomer's login opened anywhere
 #   task-rerun-root-only  bin/fleet-session-cli.py `fleet task run --now` → the hub's
 #                         service_control → the node's fixed supervisor argv (#2527):
 #                         a missed daily push is run again from the client, no root
@@ -303,6 +307,55 @@ plistlib.dump(d, open(sys.argv[1], "wb"))' "$@"
   unset FLEET_NODE_STATE FLEET_NODE_LOG FLEET_NODE_RUNTIME FLEET_NODE_DAEMON_DIR FLEET_NODE_USERS FLEET_NODE_TABLE \
     FLEET_NODE_LAUNCHCTL FLEET_NODE_TEST FLEET_NODE_PASSWD
   WHAT="手写的 plist 以某个登录跑、登记表里没有：整机守护的清扫点名、体检 services 行 WARN；登记并归档后转绿（root 的、系统账号的、应用自带的不算）"
+}
+
+drill_sweep_admin_agent() {
+  CAP=20   # two sweeps
+  local sb t0 out
+  sb="$WORK/sweepadmin"; mkdir -p "$sb/LaunchDaemons" "$sb/Users/bob/Library/LaunchAgents" \
+    "$sb/Users/alice/Library/LaunchAgents" "$sb/db/logins"
+  # bob: the machine's admin (never taken over, #2842); alice: taken over
+  printf '{"bob": {"uid": %s, "gid": %s, "home": "%s", "groups": ["staff", "admin"], "sudo": "(ALL) ALL"},
+ "alice": {"uid": %s, "gid": %s, "home": "%s"}}\n' "$(id -u)" "$(id -g)" "$sb/Users/bob" \
+    "$(id -u)" "$(id -g)" "$sb/Users/alice" > "$sb/passwd.json"
+  : > "$sb/db/logins/alice.env"
+  printf '{"role": "managed", "version": 0}\n' > "$sb/db/expected.json"
+  printf '{"children":[],"tasks":[]}\n' > "$sb/table.json"
+  # launchctl: every bootout takes (print says gone)
+  printf '#!/bin/bash\necho "$*" >> "%s/launchctl.log"\n[ "$1" = print ] && exit 113\nexit 0\n' "$sb" > "$sb/launchctl"
+  chmod +x "$sb/launchctl"
+  pl() {   # pl <file> <label> [user]
+    python3 -c 'import plistlib, sys
+d = {"Label": sys.argv[2], "ProgramArguments": ["/bin/true"]}
+if len(sys.argv) > 3: d["UserName"] = sys.argv[3]
+plistlib.dump(d, open(sys.argv[1], "wb"))' "$@"
+  }
+  # the 2026-10-10 machines: the admin's own node agent (a LaunchDaemon) and its fleet's daemons
+  pl "$sb/LaunchDaemons/com.ccquota.agent.bob.plist" com.ccquota.agent.bob bob
+  pl "$sb/Users/bob/Library/LaunchAgents/com.claude-fleet.dispatch.plist" com.claude-fleet.dispatch
+  # what the sweep is for: a taken-over login's leftover
+  pl "$sb/Users/alice/Library/LaunchAgents/com.claude-fleet.spinner.plist" com.claude-fleet.spinner
+  export FLEET_NODE_STATE="$sb/db" FLEET_NODE_LOG="$sb/log" FLEET_NODE_RUNTIME="$sb/rt" \
+    FLEET_NODE_DAEMON_DIR="$sb/LaunchDaemons" FLEET_NODE_USERS="$sb/Users" FLEET_NODE_TABLE="$sb/table.json" \
+    FLEET_NODE_LAUNCHCTL="$sb/launchctl" FLEET_NODE_BOOTOUT_WAIT=0.3 FLEET_NODE_TEST=1 \
+    FLEET_NODE_PASSWD="$sb/passwd.json" FLEET_NODE_SWEEP_HOLD="fbi-hold-$$.sh"
+  t0=$(now)
+  for _ in 1 2; do
+    out=$(python3 "$BIN/fleet-node-supervisor.py" sweep 2>&1) \
+      || { WHY="sweep failed: $(printf '%s' "$out" | tail -2 | tr '\n' ' ')"; break; }
+  done
+  SECS=$(since "$t0")
+  unset FLEET_NODE_STATE FLEET_NODE_LOG FLEET_NODE_RUNTIME FLEET_NODE_DAEMON_DIR FLEET_NODE_USERS FLEET_NODE_TABLE \
+    FLEET_NODE_LAUNCHCTL FLEET_NODE_BOOTOUT_WAIT FLEET_NODE_TEST FLEET_NODE_PASSWD FLEET_NODE_SWEEP_HOLD
+  [ -z "${WHY:-}" ] || return 1
+  [ -f "$sb/LaunchDaemons/com.ccquota.agent.bob.plist" ] \
+    || { WHY="the admin's own node agent went to the attic: $(printf '%s' "$out" | tr '\n' ' ')"; return 1; }
+  [ -f "$sb/Users/bob/Library/LaunchAgents/com.claude-fleet.dispatch.plist" ] \
+    || { WHY="the admin's fleet daemon went to the attic"; return 1; }
+  if grep -q 'bob' "$sb/launchctl.log" 2>/dev/null; then WHY="booted the admin's unit out: $(tr '\n' ' ' < "$sb/launchctl.log")"; return 1; fi
+  [ ! -f "$sb/Users/alice/Library/LaunchAgents/com.claude-fleet.spinner.plist" ] \
+    || { WHY="the taken-over login's leftover stayed — the sweep did nothing: $(printf '%s' "$out" | tr '\n' ' ')"; return 1; }
+  WHAT="托管机器清扫两轮：管理员登录自己的节点 agent（com.ccquota.agent.<管理员>）和它的 fleet 守护原地不动、不 bootout；托管登录的残留照样进 attic"
 }
 
 drill_task_rerun_root_only() {

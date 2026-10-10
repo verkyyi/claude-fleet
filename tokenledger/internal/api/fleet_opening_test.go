@@ -92,6 +92,14 @@ func TestAutoAssignLeastBusyNoneFit(t *testing.T) {
 	if st == nil || st.State != "none" || st.Ask != "verkyyi" {
 		t.Fatalf("account state = %+v; want none, ask verkyyi", st)
 	}
+	// No machine has an admin node online (claude-fleet#2997: the sweep had
+	// booted the admin login's own agent out): said, never a bare none.
+	if st.Why != noLoginOpener {
+		t.Fatalf("why = %q; want %q", st.Why, noLoginOpener)
+	}
+	if _, err := h.srv.pickNode(fleetPrincipal{Person: p}, "", "auto", time.Now()); err == nil || !strings.Contains(err.Error(), noLoginOpener) {
+		t.Fatalf("placement = %v; want it to say %q", err, noLoginOpener)
+	}
 }
 
 // The username is the login only when nobody has it: a roster login, an

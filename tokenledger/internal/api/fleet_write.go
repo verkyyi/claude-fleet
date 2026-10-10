@@ -1477,6 +1477,13 @@ func (s *Server) pickNodeAfter(p fleetPrincipal, repo, node string, now time.Tim
 			if rest, _ := s.unplacedMachines(pl.Candidates, skipped, now); len(rest) > 0 {
 				more = " — " + strings.Join(rest, "; ")
 			}
+			if snap, err := s.Nodes(now); err == nil && len(adminNodesOnline(snap)) == 0 {
+				// nothing will be opened for them either (claude-fleet#2997)
+				if more != "" {
+					more = "；" + strings.TrimPrefix(more, " — ")
+				}
+				more = " — " + noLoginOpener + more
+			}
 		}
 		if repo == "" {
 			return pl, fault("NOT_FOUND", "No fleet on "+where+more)
