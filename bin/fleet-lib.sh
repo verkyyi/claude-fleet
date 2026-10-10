@@ -590,6 +590,7 @@ fleet_pane_lost() { [ -n "${TMUX:-}" ] && [ -z "${TMUX_PANE:-}" ]; }
 # could not count the grandchildren and their reports went to parked parents.
 # FLEET_ALLOW_WORKER_SPAWN=1 is the operator's hatch. The filer, the `spawn` tool
 # and fleet-await.sh's spawn ask here; FLEET_SPAWN_REFUSAL is what they say.
+# shellcheck disable=SC2034  # read by the filer, fleet-await.sh and fleet-mcp.py
 FLEET_SPAWN_REFUSAL='a worker does not spawn sessions (issue #2960) — fix it in place when it blocks your own done condition and is small, local and yours; else file it without spawning: with --parent <your issue> and report blocked to your parent when it blocks you, bare when it does not; a red base branch: file it --breakage and the steward spawns its fixer'
 fleet_spawn_refused() {
   [ "${FLEET_ALLOW_WORKER_SPAWN:-0}" = 1 ] && return 1
