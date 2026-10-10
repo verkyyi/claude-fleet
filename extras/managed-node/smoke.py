@@ -131,6 +131,16 @@ def main():
         os.environ.update(FLEET_NODE_RUNTIME=str(d / 'runtime/current'), FLEET_NODE_UID='31022',
                           FLEET_NODE_SSH_DIR=str(sshdir), FLEET_NODE_SSHD=str(check), FLEET_NODE_RUN_SSHD='1')
         m = load('fleet-node-linux')
+        outside = d / 'outside'
+        outside.mkdir()
+        (d / 'store-link').symlink_to(outside)
+        try:
+            m.private_write(d / 'store-link/blocked', 'fixture')
+        except OSError:
+            pass
+        else:
+            raise AssertionError('root store write followed a directory symlink')
+        assert not (outside / 'blocked').exists()
         args = argparse.Namespace(login=login, uid=31022, hub='http://127.0.0.1:%d' % hub.server_port,
                                   join_file=str(code), relay='https://fleet-relay.24hw.cn')
         try:

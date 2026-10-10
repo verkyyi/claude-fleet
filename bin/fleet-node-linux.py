@@ -52,20 +52,36 @@ def request(hub, path, token=None, body=None):
 
 
 def private_write(path, data, uid=0, gid=0):
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + '.tmp-' + uuid.uuid4().hex)
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    # Some store subdirectories belong to the credential role. Walk with
+    # directory descriptors and O_NOFOLLOW so a replaced parent cannot turn
+    # root's atomic write/chown into a write anywhere else on the machine.
+    path = Path(path).absolute()
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    parent = os.open('/', flags)
+    tmp = path.name + '.tmp-' + uuid.uuid4().hex
     try:
+        for part in path.parent.parts[1:]:
+            try:
+                child = os.open(part, flags, dir_fd=parent)
+            except FileNotFoundError:
+                os.mkdir(part, 0o700, dir_fd=parent)
+                child = os.open(part, flags, dir_fd=parent)
+                os.fchown(child, uid, gid)
+            os.close(parent)
+            parent = child
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=parent)
         with os.fdopen(fd, 'w') as f:
+            os.fchown(f.fileno(), uid, gid)
             f.write(data)
             f.flush()
             os.fsync(f.fileno())
-        os.chown(tmp, uid, gid)
-        os.replace(tmp, path)
+        os.replace(tmp, path.name, src_dir_fd=parent, dst_dir_fd=parent)
     finally:
-        if tmp.exists():
-            tmp.unlink()
+        try:
+            os.unlink(tmp, dir_fd=parent)
+        except FileNotFoundError:
+            pass
+        os.close(parent)
 
 
 def env_read(path):
