@@ -128,7 +128,7 @@ mkdir -p "$T/lone/bin" "$T/lone/conf"
 cp "$BIN/fleet-debug" "$BIN/fleet-doctor-bundle.sh" "$BIN/fleet-redact.awk" "$T/lone/bin/"
 cp "$ROOT/conf/secret-shapes.list" "$ROOT/conf/debug-collect.list" "$T/lone/conf/"
 h=$(home b "$TICKET")
-out=$(FDOC= fd "$h" "$T/lone/bin/fleet-debug" report --dry-run 2>&1); rc=$?
+out=$(FDOC='' fd "$h" "$T/lone/bin/fleet-debug" report --dry-run 2>&1); rc=$?
 pkg=$(ls "$h/pkgs"/*.tar.gz 2>/dev/null | head -n 1)
 if [ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q '最小采集' && [ -n "$pkg" ] \
    && tar xzf "$pkg" -O bundle/doctor.txt 2>/dev/null | grep -q '体检没跑' \
