@@ -23,3 +23,13 @@ claude.mcp.github   # the fleet's own tool connections (bin/mcp-github.sh, bin/m
 claude.mcp.fetch
 codex.mcp.github
 codex.mcp.fetch
+
+# A role's definition (agents/<role>.md, issues #2782 / #2783): `role.<role>.<field>`
+# (`*` = every role) is held at the built-in after a person's layers merge — a
+# list keeps every built-in item, a permissionMode never ends below the
+# built-in's, any other field is the built-in's (bin/fleet-role.py merge). The
+# guard hooks never read a role file, so these are the definition's half only.
+role.worker.disallowedTools
+role.worker.permissionMode
+role.epic-driver.disallowedTools
+role.epic-driver.permissionMode

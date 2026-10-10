@@ -29,6 +29,11 @@
 #                               see where each Agent setting comes from (fleet ·
 #                               团队 · 个人 · 本机) and change your own (#1860);
 #                               export / import a layer as one file (#1865)
+#   fleet role show <role> [--sources] [--json]
+#                               a role's definition (orchestrator · steward ·
+#                               worker · epic-driver) with your layers merged
+#                               in; --sources says where each field came from:
+#                               自带 · 你的 vN · 本机 · 🔒 (#2783)
 #   fleet --test-identity [m4]  the client as the TEST identity (#1931): its
 #                               own lease beside yours — takes nothing over,
 #                               never where you are; the default inside a
@@ -175,7 +180,7 @@ fi
 cmd=${1-}
 case $cmd in
   -h|--help|help)
-    sed -n '2,81p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,87p' "$0" | sed 's/^# \{0,1\}//'
     exit 0 ;;
   '')
     client ;;

@@ -1,0 +1,83 @@
+{
+ "name": "06-tools-on-all",
+ "why": "no tools = every tool: +X changes nothing, -X becomes a disallowedTools entry",
+ "role": "worker",
+ "base": {
+  "front": {
+   "name": "worker",
+   "description": "d",
+   "model": "opus",
+   "effort": "xhigh",
+   "skills": [
+    "a",
+    "b"
+   ],
+   "mcpServers": [
+    "fleet"
+   ]
+  },
+  "body": "# worker\n\nrules.\n"
+ },
+ "layers": [
+  {
+   "label": "person:v3",
+   "kind": "person",
+   "front": {
+    "tools": [
+     "+Read",
+     "-Bash",
+     "-WebFetch"
+    ]
+   }
+  }
+ ],
+ "locks": [],
+ "expect": {
+  "body": "# worker\n\nrules.\n",
+  "fields": {
+   "description": "d",
+   "disallowedTools": [
+    "Bash",
+    "WebFetch"
+   ],
+   "effort": "xhigh",
+   "mcpServers": [
+    "fleet"
+   ],
+   "model": "opus",
+   "name": "worker",
+   "skills": [
+    "a",
+    "b"
+   ]
+  },
+  "locked": [],
+  "refused": [],
+  "sources": {
+   "body": [
+    "agents"
+   ],
+   "description": [
+    "agents"
+   ],
+   "disallowedTools": [
+    "person:v3"
+   ],
+   "effort": [
+    "agents"
+   ],
+   "mcpServers": [
+    "agents"
+   ],
+   "model": [
+    "agents"
+   ],
+   "name": [
+    "agents"
+   ],
+   "skills": [
+    "agents"
+   ]
+  }
+ }
+}

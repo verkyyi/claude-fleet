@@ -1,0 +1,103 @@
+{
+ "name": "09-hooks",
+ "why": "hooks merged by event, null deletes the event",
+ "role": "worker",
+ "base": {
+  "front": {
+   "name": "worker",
+   "description": "d",
+   "model": "opus",
+   "effort": "xhigh",
+   "skills": [
+    "a",
+    "b"
+   ],
+   "mcpServers": [
+    "fleet"
+   ]
+  },
+  "body": "# worker\n\nrules.\n"
+ },
+ "layers": [
+  {
+   "label": "person:v3",
+   "kind": "person",
+   "front": {
+    "hooks": {
+     "Stop": [
+      {
+       "command": "say done"
+      }
+     ],
+     "PreCompact": [
+      {
+       "command": "x"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "label": "local",
+   "kind": "local",
+   "front": {
+    "hooks": {
+     "PreCompact": null
+    }
+   }
+  }
+ ],
+ "locks": [],
+ "expect": {
+  "body": "# worker\n\nrules.\n",
+  "fields": {
+   "description": "d",
+   "effort": "xhigh",
+   "hooks": {
+    "Stop": [
+     {
+      "command": "say done"
+     }
+    ]
+   },
+   "mcpServers": [
+    "fleet"
+   ],
+   "model": "opus",
+   "name": "worker",
+   "skills": [
+    "a",
+    "b"
+   ]
+  },
+  "locked": [],
+  "refused": [],
+  "sources": {
+   "body": [
+    "agents"
+   ],
+   "description": [
+    "agents"
+   ],
+   "effort": [
+    "agents"
+   ],
+   "hooks": [
+    "person:v3",
+    "local"
+   ],
+   "mcpServers": [
+    "agents"
+   ],
+   "model": [
+    "agents"
+   ],
+   "name": [
+    "agents"
+   ],
+   "skills": [
+    "agents"
+   ]
+  }
+ }
+}

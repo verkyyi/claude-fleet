@@ -17,6 +17,15 @@ launcher asks it, so what the file says is what the session runs.
   get <role> <field>      one frontmatter field (a list joins with `,`)
   body <role>             the body — what skills/*/role.md is generated from
   sha <role>              the definition's content address (@fleet_role_file)
+  show <role> [--sources] [--json]
+                          the definition with every layer merged in (`fleet role
+                          show`): --sources puts each field's layers beside it
+                          (自带 · 你的 vN · 本机 · 🔒); a layer not used says why
+                          on the first line
+  doctor                  fleet-doctor's `roles` row: a WARN line when a role has a
+                          local layer or a layer was not used, else nothing
+  merge <base.md> <overlay.md…> | merge --vector <file.json>
+                          the pure merge, as JSON {fields, body, sources, locked}
   list                    the roles
 
 How a field lands (Claude / Codex):
@@ -36,7 +45,8 @@ How a field lands (Claude / Codex):
   maxTurns · background · isolation · color · initialPrompt
                   subagent-only — read, ignored, listed under `ignored`
 
-Nothing overrides a definition yet (C2 adds the person's layer). What still wins
+A person's layers merge over a definition (issue #2783 — see «the layers»
+below); `render` uses the merged one. What still wins
 for ONE version is the old knob a launcher read (# compat-1v: 下一批删):
 orchestrator FLEET_ORCH_MODEL / FLEET_ORCH_EFFORT / FLEET_ORCH_CODEX_MODEL,
 steward FLEET_STEWARD_MODEL / FLEET_STEWARD_EFFORT / FLEET_STEWARD_CODEX_MODEL,
@@ -163,6 +173,370 @@ def _listval(v):
     return [x.strip() for x in str(v).split(',') if x.strip()]
 
 
+# --- the layers (issue #2783, EPIC #2781 C2) ----------------------------------
+# A role's definition is the base; a person changes it with an OVERLAY in the
+# same format, writing only what changes. Low → high: the built-in agents/<role>.md
+# < the person's layer (the person bundle's `roles.<role>`, $FLEET_CONF_DIR/
+# person-bundle.json — fetched by C3) < this computer's
+# $FLEET_CONF_DIR/roles/<role>.md (development and emergencies; the doctor says
+# when one is there). merge() is pure; tests/role-merge/*.json are its vectors,
+# and the hub's Go copy (C6) is held to the same set.
+#
+#   scalar  model effort permissionMode memory description  — replaced
+#   list    tools disallowedTools skills  — `+X` / `X` adds, `-X` removes;
+#           a first item `!replace` replaces the whole list. A role with no
+#           `tools` has every tool: `+X` there changes nothing and `-X` becomes
+#           a disallowedTools entry (never a one-tool allowlist)
+#   dict    mcpServers hooks  — merged by key, a `null` value deletes the key;
+#           mcpServers may be a list (a name = the login's own server, `-name`
+#           removes, `{name: config}` inline)
+#   body    appended under 「## （你加的）」 (本机: 「## （本机加的）」);
+#           `body: replace` in the frontmatter replaces it
+#
+# A layer with any key or value it may not carry is not used at all: the last
+# good copy of that layer stands (`$FLEET_CONF_DIR/roles/<role>.<layer>.good.json`,
+# for the person's layer else person-bundle.good.json's), and `show` says why on
+# its first line. Locks (conf/agent-locked.list, `role.<role>.<field>`, `*` for
+# every role) are written back after the merge: a locked field never ends looser
+# than the built-in — a list keeps every built-in item, a permissionMode is never
+# below the built-in's, any other field is the built-in's. The guard hooks never
+# read a role file, so no layer can loosen them anyway (EPIC #2781 共同约定 9).
+SCALARS = ('description', 'model', 'effort', 'permissionMode', 'memory')
+LISTS = ('tools', 'disallowedTools', 'skills')
+DICTS = ('mcpServers', 'hooks')
+OVERRIDABLE = SCALARS + LISTS + DICTS          # the ten a person can change
+EFFORTS = ('low', 'medium', 'high', 'xhigh', 'max')
+MODES = ('default', 'acceptEdits', 'auto', 'dontAsk', 'plan', 'bypassPermissions')
+MODE_RANK = {'bypassPermissions': 0, 'acceptEdits': 1, 'auto': 1, 'default': 2, 'dontAsk': 3, 'plan': 3}
+MEMORY = ('user', 'project', 'local')
+BODY_HEAD = {'person': '## （你加的）', 'local': '## （本机加的）'}
+REPLACE = '!replace'
+HOOK_EVENTS = ('PreToolUse', 'PostToolUse', 'UserPromptSubmit', 'Stop', 'SubagentStop',
+               'SessionStart', 'SessionEnd', 'Notification', 'PreCompact')
+_NAME_RE = r'[A-Za-z0-9_.:-]{1,64}'
+
+
+def _secret(v):
+    """The person bundle's own credential rule (bin/fleet-agent-team.py, kept in
+    step with the hub's): a path when `v` carries something credential-shaped."""
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('fleet_agent_team', os.path.join(BIN, 'fleet-agent-team.py'))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+    except (OSError, ImportError, SyntaxError, AttributeError, SystemExit):
+        return ''
+    return mod.secret_in('', v)
+
+
+def overlay_of(obj):
+    """(front, body) of one overlay: the agents/*.md text, or the same as an
+    object — {"front": {<field>: …}, "body": "…"} (where `body: replace` goes
+    in front, as in the text), or flat {<field>: …, "body": "<text>"}."""
+    if isinstance(obj, str):
+        text = obj if obj.startswith('---\n') else '---\n---\n' + obj
+        return parse(text)
+    if isinstance(obj, dict) and isinstance(obj.get('front'), dict):
+        return dict(obj['front']), obj.get('body') or ''
+    if isinstance(obj, dict):
+        front = {k: v for k, v in obj.items() if k != 'body'}
+        return front, obj.get('body') or ''
+    raise RoleError('an overlay is the definition text or an object, not %s' % type(obj).__name__)
+
+
+def check_overlay(role, front, body):
+    """'' when the layer may be used, else the one-line reason."""
+    import re
+    for k, v in front.items():
+        if k == 'name':
+            if v != role:
+                return 'name: %s is not this role (%s)' % (v, role)
+            continue
+        if k == 'body':
+            if v not in ('replace', 'append'):
+                return 'body: %s — only replace (or append, the default)' % v
+            continue
+        if k not in OVERRIDABLE:
+            return '%s is not something a layer can change (%s)' % (k, ' '.join(OVERRIDABLE))
+        if k in SCALARS:
+            if v is not None and not isinstance(v, str):
+                return '%s must be one value' % k
+            if v and k == 'effort' and v not in EFFORTS:
+                return 'effort: %s is none of %s' % (v, ' '.join(EFFORTS))
+            if v and k == 'permissionMode' and v not in MODES:
+                return 'permissionMode: %s is none of %s' % (v, ' '.join(MODES))
+            if v and k == 'memory' and v not in MEMORY:
+                return 'memory: %s is none of %s' % (v, ' '.join(MEMORY))
+            if v and k == 'model' and not re.fullmatch(r'[A-Za-z0-9._\[\]-]{1,64}', v):
+                return 'model: %s is no model name' % v
+        elif k in LISTS:
+            items = v if isinstance(v, list) else _listval(v or '')
+            for i, x in enumerate(items):
+                if not isinstance(x, str) or not x.strip() or (x == REPLACE and i):
+                    return '%s[%d] must be a name (+X adds, -X removes, %s first)' % (k, i, REPLACE)
+        elif k == 'mcpServers':
+            if isinstance(v, list):
+                for x in v:
+                    if isinstance(x, dict):
+                        if len(x) != 1 or not re.fullmatch(_NAME_RE, next(iter(x))) \
+                                or not isinstance(next(iter(x.values())), dict):
+                            return 'mcpServers: an inline server is {name: {command|url…}}'
+                    elif not isinstance(x, str) or not re.fullmatch('[+-]?' + _NAME_RE, x):
+                        return 'mcpServers: %r is no server name' % (x,)
+            elif isinstance(v, dict):
+                for n, s in v.items():
+                    if not re.fullmatch(_NAME_RE, n) or not (s is None or isinstance(s, (dict, str))):
+                        return 'mcpServers.%s: a config object, the name again, or null to remove' % n
+            else:
+                return 'mcpServers must be a list or an object'
+        elif k == 'hooks':
+            if not isinstance(v, dict):
+                return 'hooks must be an object of hook events'
+            for ev, h in v.items():
+                if ev not in HOOK_EVENTS or not (h is None or isinstance(h, list)):
+                    return 'hooks.%s is not a hook event with a list (or null)' % ev
+    if not isinstance(body, str):
+        return 'the body must be text'
+    s = _secret({'front': front, 'body': body})
+    if s:
+        return 'carries something credential-shaped (%s) — a key goes in a wrapper script and an env name' % s
+    return ''
+
+
+def items_of(v):
+    return v if isinstance(v, list) else _listval(v or '')
+
+
+def _mcp_dict(v):
+    """mcpServers as an ordered (name → config | True for 'the login's own')."""
+    out = {}
+    for x in (v if isinstance(v, list) else ([] if v in (None, '') else [v])):
+        if isinstance(x, dict):
+            out.update(x)
+        else:
+            out[str(x)] = True
+    if isinstance(v, dict):
+        out = dict(v)
+    return out
+
+
+def _mcp_list(d):
+    return [n if c is True or isinstance(c, str) else {n: c} for n, c in d.items()]
+
+
+def merge(base_front, base_body, layers, locks=()):
+    """The pure merge. `layers` = [(label, kind, front, body)] low → high, kind
+    'person' | 'local'; `locks` = the fields held at the built-in. Returns
+    {fields, body, sources, locked}; sources[field] lists who shaped it, low →
+    high ('agents', a layer's label, 'lock')."""
+    fields = {k: v for k, v in base_front.items()}
+    sources = {k: ['agents'] for k in base_front}
+    body, bsrc = base_body, ['agents']
+    for label, kind, front, obody in layers:
+        for k, v in front.items():
+            if k in ('name', 'body'):
+                continue
+            if k in SCALARS:
+                fields[k], sources[k] = (v if v is not None else ''), [label]
+            elif k == 'tools' and not fields.get(k) and items_of(v)[:1] != [REPLACE]:
+                # no `tools` = every tool: adding to it changes nothing, and a
+                # removal is a disallowedTools entry (never a one-tool allowlist)
+                gone = [x[1:] for x in items_of(v) if x.startswith('-')]
+                if gone:
+                    cur = _listval(fields.get('disallowedTools') or [])
+                    fields['disallowedTools'] = cur + [x for x in gone if x not in cur]
+                    srcs = sources.get('disallowedTools', [])
+                    sources['disallowedTools'] = srcs + ([label] if label not in srcs else [])
+            elif k in LISTS:
+                items = items_of(v)
+                cur = [] if items[:1] == [REPLACE] else _listval(fields.get(k) or [])
+                srcs = [label] if items[:1] == [REPLACE] else sources.get(k, [])
+                for x in (items[1:] if items[:1] == [REPLACE] else items):
+                    if x.startswith('-'):
+                        cur = [y for y in cur if y != x[1:]]
+                    else:
+                        x = x[1:] if x.startswith('+') else x
+                        if x not in cur:
+                            cur.append(x)
+                fields[k] = cur
+                sources[k] = srcs + ([label] if label not in srcs else [])
+            elif k == 'mcpServers':
+                cur = _mcp_dict(fields.get(k))
+                if isinstance(v, list):
+                    for x in v:
+                        if isinstance(x, dict):
+                            cur.update(x)
+                        elif x.startswith('-'):
+                            cur.pop(x[1:], None)
+                        else:
+                            cur[x.lstrip('+')] = True
+                else:
+                    for n, c in v.items():
+                        if c is None:
+                            cur.pop(n, None)
+                        else:
+                            cur[n] = True if isinstance(c, str) else c
+                fields[k] = _mcp_list(cur)
+                sources[k] = sources.get(k, []) + [label]
+            elif k == 'hooks':
+                cur = dict(fields.get(k) or {}) if isinstance(fields.get(k), dict) else {}
+                for ev, h in v.items():
+                    if h is None:
+                        cur.pop(ev, None)
+                    else:
+                        cur[ev] = h
+                fields[k] = cur
+                sources[k] = sources.get(k, []) + [label]
+        if front.get('body') == 'replace':
+            body, bsrc = obody, [label]
+        elif obody.strip():
+            body = '%s\n\n%s\n\n%s\n' % (body.rstrip('\n'), BODY_HEAD.get(kind, BODY_HEAD['person']),
+                                         obody.strip('\n'))
+            bsrc = bsrc + [label]
+    locked = []
+    for k in locks:
+        if k not in base_front and k not in fields:
+            continue
+        locked.append(k)
+        b, cur = base_front.get(k), fields.get(k)
+        if k in LISTS:
+            want = _listval(b or [])
+            have = _listval(cur or [])
+            miss = [x for x in want if x not in have]
+            if miss:
+                fields[k] = have + miss
+                sources[k] = sources.get(k, []) + ['lock']
+        elif k == 'permissionMode':
+            if MODE_RANK.get(cur or '', 0) < MODE_RANK.get(b or '', 0):
+                fields[k], sources[k] = b, sources.get(k, []) + ['lock']
+        elif cur != b:
+            if b is None:
+                fields.pop(k, None)
+            else:
+                fields[k] = b
+            sources[k] = sources.get(k, []) + ['lock']
+    for k in [k for k, v in fields.items() if v in ('', None) and k not in base_front]:
+        fields.pop(k)
+        sources.pop(k, None)
+    sources['body'] = bsrc
+    return {'fields': fields, 'body': body, 'sources': sources, 'locked': sorted(locked)}
+
+
+def role_locks(role, root=None):
+    """The fields conf/agent-locked.list holds for `role` (`role.<role>.<field>`,
+    `role.*.<field>`)."""
+    out = []
+    try:
+        with open(os.path.join(root or ROOT, 'conf', 'agent-locked.list')) as f:
+            for ln in f:
+                p = ln.split('#', 1)[0].strip().split('.')
+                if len(p) == 3 and p[0] == 'role' and p[1] in (role, '*') and p[2] not in out:
+                    out.append(p[2])
+    except OSError:
+        pass
+    return out
+
+
+def _read_json(path):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def _person_overlay(pc, role):
+    """(version, overlay | None) out of a person-bundle cache object."""
+    if not isinstance(pc, dict):
+        return None, None
+    b = pc.get('bundle') if isinstance(pc.get('bundle'), dict) else {}
+    roles = b.get('roles') if isinstance(b.get('roles'), dict) else pc.get('roles')
+    if not isinstance(roles, dict) or role not in roles:
+        return pc.get('version'), None
+    return pc.get('version'), roles[role]
+
+
+def _good_path(role, kind):
+    return os.path.join(conf_dir(), 'roles', '%s.%s.good.json' % (role, kind))
+
+
+def layers_for(role):
+    """([(label, kind, front, body)], notes) — every layer this computer holds
+    for `role`, each checked; a bad one gives way to its last good copy."""
+    layers, notes = [], []
+    cands = []
+    pc = _read_json(os.path.join(conf_dir(), 'person-bundle.json'))
+    ver, ov = _person_overlay(pc, role)
+    if ov is not None:
+        cands.append(('person', 'person:v%s' % (ver or 0), ov, '你的 v%s' % (ver or 0)))
+    lp = os.path.join(conf_dir(), 'roles', role + '.md')
+    if os.path.isfile(lp):
+        try:
+            with open(lp, encoding='utf-8') as f:
+                cands.append(('local', 'local', f.read(), '本机 %s' % lp))
+        except (OSError, UnicodeDecodeError) as e:
+            cands.append(('local', 'local', None, '本机 %s（%s）' % (lp, e)))
+    for kind, label, raw, say in cands:
+        why = ''
+        try:
+            if raw is None:
+                raise RoleError('unreadable')
+            front, body = overlay_of(raw)
+            why = check_overlay(role, front, body)
+        except RoleError as e:
+            why = str(e)
+        if not why:
+            layers.append((label, kind, front, body))
+            _write_good(role, kind, {'label': label, 'front': front, 'body': body})
+            continue
+        good = _read_json(_good_path(role, kind))
+        if kind == 'person' and not isinstance(good, dict):
+            gver, gov = _person_overlay(_read_json(os.path.join(conf_dir(), 'person-bundle.good.json')), role)
+            if gov is not None:
+                try:
+                    gf, gb = overlay_of(gov)
+                    if not check_overlay(role, gf, gb):
+                        good = {'label': 'person:v%s' % (gver or 0), 'front': gf, 'body': gb}
+                except RoleError:
+                    pass
+        if isinstance(good, dict) and isinstance(good.get('front'), dict):
+            layers.append((good.get('label') or label, kind, good['front'], good.get('body') or ''))
+            notes.append('%s 不用：%s——用上一份好的（%s）' % (say, why, good.get('label') or label))
+        else:
+            notes.append('%s 不用：%s——没有上一份好的，这一层不算' % (say, why))
+    return layers, notes
+
+
+def _write_good(role, kind, data):
+    try:
+        dst, txt = _good_path(role, kind), json.dumps(data, ensure_ascii=False, sort_keys=True)
+        if os.path.isfile(dst):
+            with open(dst) as f:
+                if f.read() == txt:
+                    return
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        tmp = '%s.%d.tmp' % (dst, os.getpid())
+        with open(tmp, 'w') as f:
+            f.write(txt)
+        os.replace(tmp, dst)
+    except OSError:
+        pass
+
+
+def effective(role):
+    """load() with every layer merged in: the same keys, plus `sources`,
+    `locked`, `notes`, `layers`. No layer ⇒ front / body / sha are load()'s."""
+    d = load(role)
+    layers, notes = layers_for(role)
+    m = merge(d['front'], d['body'], layers, role_locks(role))
+    d = dict(d, front=m['fields'], body=m['body'], sources=m['sources'], locked=m['locked'],
+             notes=notes, layers=[l[0] for l in layers])
+    if layers:
+        d['sha'] = hashlib.sha256(d['raw'] + json.dumps(
+            [list(l) for l in layers], ensure_ascii=False, sort_keys=True).encode('utf-8')).hexdigest()[:16]
+    return d
+
+
 def _env(name):
     """(set?, value) — an empty value is a choice (no --model), unset is not."""
     return (name in os.environ, os.environ.get(name, ''))
@@ -256,17 +630,21 @@ def render(role, agent='claude', cap=False):
 
 
 def _render(role, agent, cap):
-    d = load(role)
+    d = effective(role)
     fr, compat = d['front'], COMPAT.get(role, {})
     out = {'role': role, 'agent': agent, 'sha': d['sha'], 'file': d['path'], 'args': [],
            'model': '', 'effort': '', 'body': '', 'sources': {},
            'ignored': sorted(k for k in fr if k in SUBAGENT_ONLY),
            'unknown': sorted(k for k in fr if k not in FIELDS and k not in SUBAGENT_ONLY)}
+    if d['layers'] or d['notes']:
+        out['layers'], out['notes'] = d['layers'], d['notes']
     args, src = out['args'], out['sources']
+    # who set a field last: 'agents', a layer's label (person:vN · local) or 'lock'
+    top = {k: (v[-1] if v else 'agents') for k, v in d['sources'].items()}
 
     # model
     if agent == 'claude':
-        model, src['model'] = str(fr.get('model', '') or ''), 'agents'
+        model, src['model'] = str(fr.get('model', '') or ''), top.get('model', 'agents')
         if 'model' in compat and _env(compat['model'])[0]:
             model, src['model'] = _env(compat['model'])[1], 'local:' + compat['model']
         if model == 'inherit':
@@ -284,10 +662,11 @@ def _render(role, agent, cap):
         args += (['--model', model] if agent == 'claude' else ['-m', model])
 
     # effort
-    effort, src['effort'] = str(fr.get('effort', '') or ''), 'agents'
+    effort, src['effort'] = str(fr.get('effort', '') or ''), top.get('effort', 'agents')
     if 'effort' in compat and _env(compat['effort'])[1]:
         effort, src['effort'] = _env(compat['effort'])[1], 'local:' + compat['effort']
-    elif 'effort' not in compat:
+    elif 'effort' not in compat and src['effort'] in ('agents', 'lock'):
+        # (a layer that names an effort is the person's choice, and it wins)
         # a worker's effort was always the login's own (settings.json / config.toml)
         if agent == 'codex':
             effort, src['effort'] = '', 'config.toml'
@@ -311,6 +690,69 @@ def _render(role, agent, cap):
     return out
 
 
+def say_source(label):
+    """A source label as a person reads it."""
+    if label == 'agents':
+        return '自带'
+    if label == 'lock':
+        return '🔒'
+    if label.startswith('person:'):
+        return '你的 ' + label.split(':', 1)[1]
+    if label == 'local':
+        return '本机'
+    return label
+
+
+def _yaml_lines(k, v):
+    if isinstance(v, list):
+        return ['%s:' % k] + ['  - %s' % (json.dumps(x, ensure_ascii=False) if isinstance(x, (dict, list)) else x)
+                              for x in v]
+    if isinstance(v, dict):
+        return ['%s: %s' % (k, json.dumps(v, ensure_ascii=False, sort_keys=True))]
+    return ['%s: %s' % (k, v)]
+
+
+def show(role, sources=False):
+    """The merged definition as text — the agents/*.md format — with, under
+    --sources, each field's layers beside it."""
+    d = effective(role)
+    out = ['# ⚠ %s' % n for n in d['notes']]
+    lines = []
+    for k in [k for k in FIELDS if k in d['front']] + [k for k in d['front'] if k not in FIELDS]:
+        yl = _yaml_lines(k, d['front'][k])
+        if sources:
+            src = ' + '.join(say_source(x) for x in d['sources'].get(k, ['agents']))
+            if k in d['locked'] and '🔒' not in src:
+                src += ' 🔒'
+            yl[0] = '%-34s # %s' % (yl[0], src)
+        lines += yl
+    out += ['---'] + lines + ['---']
+    text = '\n'.join(out) + '\n' + d['body']
+    if sources:
+        text += '\n# 正文：%s\n' % ' + '.join(say_source(x) for x in d['sources'].get('body', ['agents']))
+    return d, text
+
+
+def _vector(path):
+    """One test vector (tests/role-merge/*.json): {base: {front, body}, layers:
+    [{label, kind, front, body} | {label, kind, text}], locks} → merge's answer."""
+    with open(path, encoding='utf-8') as f:
+        v = json.load(f)
+    layers = []
+    for l in v.get('layers', []):
+        front, body = overlay_of(l['text'] if 'text' in l else {'front': l.get('front', {}), 'body': l.get('body', '')})
+        why = check_overlay(v.get('role', 'worker'), front, body)
+        if why:
+            layers.append(None)
+            continue
+        layers.append((l['label'], l.get('kind', 'person'), front, body))
+    base = v['base']
+    bf, bb = (parse(base['text']) if 'text' in base else (base.get('front', {}), base.get('body', '')))
+    m = merge(bf, bb, [l for l in layers if l], v.get('locks', []))
+    m['refused'] = [i for i, l in enumerate(layers) if l is None]
+    return m
+
+
 def main(argv):
     if not argv or argv[0] in ('-h', '--help'):
         print(__doc__.strip())
@@ -320,9 +762,56 @@ def main(argv):
         if cmd == 'list':
             print('\n'.join(ROLES))
             return 0
+        if not rest and cmd == 'doctor':
+            rest = ['-']
         if not rest:
             raise RoleError('%s: which role?' % cmd)
+        if cmd == 'merge':
+            if rest[0] == '--vector':
+                print(json.dumps(_vector(rest[1]), ensure_ascii=False, indent=1, sort_keys=True))
+                return 0
+            with open(rest[0], encoding='utf-8') as f:
+                bf, bb = parse(f.read())
+            layers = []
+            for p in rest[1:]:
+                with open(p, encoding='utf-8') as f:
+                    front, body = overlay_of(f.read())
+                why = check_overlay(str(bf.get('name') or ''), front, body)
+                if why:
+                    raise RoleError('%s: %s' % (p, why))
+                layers.append((os.path.basename(p), 'person', front, body))
+            print(json.dumps(merge(bf, bb, layers), ensure_ascii=False, indent=1, sort_keys=True))
+            return 0
         role = rest[0]
+        if cmd == 'doctor':
+            # fleet-doctor's `roles` row: nothing when no role has a local layer
+            # and every layer was used (the degenerate case prints no row)
+            local, notes = [], []
+            for r in ROLES:
+                try:
+                    d = effective(r)
+                except RoleError as e:
+                    notes.append('%s: %s' % (r, e))
+                    continue
+                if 'local' in d['layers'] or os.path.isfile(os.path.join(conf_dir(), 'roles', r + '.md')):
+                    local.append(r)
+                notes += ['%s: %s' % (r, n) for n in d['notes']]
+            if local or notes:
+                say = []
+                if local:
+                    say.append('有本机层：%s（%s/roles/<role>.md，只管这台；用完删掉）' % (' '.join(local), conf_dir()))
+                say += notes
+                print('WARN\t%s (fleet role show <role> --sources)' % ' · '.join(say))
+            return 0
+        if cmd == 'show':
+            d, text = show(role, '--sources' in rest)
+            if '--json' in rest:
+                print(json.dumps({k: d[k] for k in ('role', 'sha', 'front', 'body', 'sources', 'locked',
+                                                    'notes', 'layers')},
+                                 ensure_ascii=False, indent=1, sort_keys=True))
+            else:
+                sys.stdout.write(text)
+            return 0
         if cmd == 'render':
             agent, fmt, cap, i = 'claude', 'lines', False, 1
             while i < len(rest):

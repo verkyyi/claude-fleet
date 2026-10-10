@@ -778,6 +778,28 @@ drill_role_def_broken() {
   WHAT="定义写坏或删掉：整份不用，按这台机器上次好的那份开（模型、用力、角色都在），stderr 说一句"
 }
 
+# role-overlay-broken (issue #2783, EPIC #2781 C2): a person changes a role
+# with a layer over agents/<role>.md, writing only what changes. A layer written
+# badly (a key no layer carries, a value out of range) is not used at all: the
+# last good copy of that layer stands, and `fleet role show --sources` says why on
+# its first line — never a session opened on the bad value, never the person's
+# change silently gone.
+drill_role_overlay_broken() {
+  CAP=5; local t0 c="$WORK/roconf" kv sh
+  mkdir -p "$c/roles"
+  printf '{"version": 1, "bundle": {"roles": {"steward": "---\\nmodel: sonnet\\n---\\n"}}}\n' > "$c/person-bundle.json"
+  kv=$(FLEET_CONF_DIR="$c" python3 "$BIN/fleet-role.py" render steward --kv 2>/dev/null)
+  printf '%s\n' "$kv" | grep -qx 'model	sonnet' || { WHY="the person's layer is not merged at all: $kv"; return 1; }
+  printf '{"version": 2, "bundle": {"roles": {"steward": "---\\nmodel: haiku\\nmaxTurns: 3\\n---\\n"}}}\n' > "$c/person-bundle.json"   # the break
+  t0=$(now)
+  kv=$(FLEET_CONF_DIR="$c" python3 "$BIN/fleet-role.py" render steward --kv 2>/dev/null)
+  sh=$(FLEET_CONF_DIR="$c" python3 "$BIN/fleet-role.py" show steward --sources 2>/dev/null)
+  SECS=$(since "$t0")
+  printf '%s\n' "$kv" | grep -qx 'model	sonnet' || { WHY="a broken layer changed the launch: $kv"; return 1; }
+  printf '%s\n' "$sh" | head -1 | grep -q '不用：maxTurns.*用上一份好的' || { WHY="show does not say why: $(printf '%s' "$sh" | head -1)"; return 1; }
+  WHAT="覆盖层写坏：整层不用，用这一层上一份好的（模型还是 sonnet），show 第一行说原因"
+}
+
 # orchestrator-compacted (issue #2583, EPIC #2581 C2): a compaction leaves the
 # orchestrator a summary that may drop the batches it follows, the children it
 # waits on, the reports it has not passed on — and the Loop, which then never
