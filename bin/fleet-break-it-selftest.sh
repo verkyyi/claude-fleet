@@ -37,6 +37,7 @@
 #                                                   fleet_epic_running_fresh, fleet-install-sync.sh (the EPIC gate)
 #   epic-idle-held / epic-hold-uncapped / epic-hold-rotating fleet_epic_holding (live/inflight), fleet-install-sync.sh
 #                                                   (epic_gate: idle never holds, FLEET_EPIC_HOLD_CAP_SECS caps a hold)
+#   epic-hold-default                               fleet-install-sync.sh (epic_gate: no hold unless the cap is set, #2934)
 #   doctor-stricter-rollback                        bin/fleet-install-sync.sh (the new doctor joins the
 #                                                   baseline; FLEET_DOCTOR_SINCE), bin/fleet-doctor.sh
 #   personal-tmux-conf                              conf/tmux-fleet-server.conf, fleet_server_new_session,
@@ -1200,7 +1201,10 @@ epic_sandbox() {
     git --git-dir="$d/origin.git" update-ref refs/tags/stable master
   ) >/dev/null 2>&1
 }
-epic_tick() { HOME="$1/home" FLEET_CONF_DIR="$1/conf" FLEET_SKIP_GLOBAL_CONF=1 bash "$BIN/fleet-install-sync.sh" --root "$1/install"; }
+# the hold is opt-in since issue #2934: the hold drills turn it on (EPIC_CAP, 2h),
+# epic-hold-default runs the default (epic_tick_default)
+epic_tick() { HOME="$1/home" FLEET_CONF_DIR="$1/conf" FLEET_SKIP_GLOBAL_CONF=1 FLEET_EPIC_HOLD_CAP_SECS="${EPIC_CAP:-7200}" bash "$BIN/fleet-install-sync.sh" --root "$1/install"; }
+epic_tick_default() { HOME="$1/home" FLEET_CONF_DIR="$1/conf" FLEET_SKIP_GLOBAL_CONF=1 bash "$BIN/fleet-install-sync.sh" --root "$1/install"; }
 epic_hb()   { local d="$1"; shift; HOME="$d/home" FLEET_CONF_DIR="$d/conf" FLEET_SKIP_GLOBAL_CONF=1 bash "$BIN/fleet-epic-heartbeat.sh" "$@"; }
 epic_st()   { sed -n "s/^$2: //p" "$1/conf/global/install-sync.state" | head -1; }
 
@@ -1313,6 +1317,28 @@ drill_epic_hold_rotating() {
     || { WHY="batches taking turns held past the login's cap: $(epic_st "$d" result) $(epic_st "$d" reason)"; return 1; }
   [ -e "$d/conf/global/epic-hold.d/.since" ] && { WHY="at stable the login's hold clock was kept"; return 1; }
   SECS=$(since "$t0"); WHAT="批次轮流挡、stable 一直在动：按登录（整机）一个钟，满 2 小时即放行 switched，到 stable 才清钟"
+}
+
+# epic-hold-default (issue #2934): a batch with work held every update — the
+# login's and the machine's — until it ended or the 2h cap fired, so with batches
+# running all day the fleet sat behind stable (macmini two versions behind, the
+# bar 「旧」 all day) to buy only «a batch's new workers on its old version». A
+# switch never stops a running session. Now the hold is off unless
+# FLEET_EPIC_HOLD_CAP_SECS is set: the tick switches under a live batch, the
+# state names the batch `off (不挡)`, no clock, no note.
+drill_epic_hold_default() {
+  CAP=20; local t0 d="$WORK/epic6" stable
+  epic_sandbox "$d" || { WHY="sandbox install did not build"; return 1; }
+  epic_hb "$d" 2934 --tick 3 --repo o/r --session f1 --live 2 --inflight 1 >/dev/null 2>&1
+  stable=$(git --git-dir="$d/origin.git" rev-parse stable)
+  t0=$(now)
+  epic_tick_default "$d" >"$d/tick1.out" 2>&1
+  [ "$(git -C "$d/install" rev-parse HEAD)" = "$stable" ] \
+    || { WHY="a batch with work held the update by default: $(epic_st "$d" result) $(epic_st "$d" reason)"; return 1; }
+  case "$(epic_st "$d" epic)" in *"off (不挡) epic=2934"*) ;;
+    *) WHY="the state's epic: line does not name the batch as not holding: [$(epic_st "$d" epic)]"; return 1 ;; esac
+  [ -e "$d/conf/global/epic-hold.d/.since" ] && { WHY="a hold clock started with the hold off"; return 1; }
+  SECS=$(since "$t0"); WHAT="有活的批次在跑、stable 前进：默认不挡，那一拍照常 switched，epic: 行写 off (不挡)，不起钟"
 }
 
 # doctor-stricter-rollback (issue #2655): the new version's doctor has a check the

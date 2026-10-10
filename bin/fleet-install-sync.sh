@@ -84,19 +84,23 @@
 #   deferred   the disk gate is closed (fleet-diskguard.sh --gate) — a new
 #              version is a new checkout. `deferred_since` keeps the first
 #              deferral's time so the doctor (C7 #1123) can say "waiting 26h".
-#              Busy windows no longer defer (#1894); a fresh EPIC mark — any
-#              batch on this login — does (#953, #2062), before the switch: the
+#              Busy windows no longer defer (#1894), and neither does an EPIC
+#              batch — by default (issue #2934): a switch moves the link, not a
+#              running session, so a batch may span versions (/fleet-epic-run
+#              records each member's stable). FLEET_EPIC_HOLD_CAP_SECS > 0 turns
+#              the old hold back on: a fresh EPIC mark — any
+#              batch on this login — defers (#953, #2062), before the switch: the
 #              loop's pane and its workers are idle between ticks, so no busy
 #              gate can see a batch. Only a batch WITH WORK holds it (issue
 #              #2247, fleet_epic_holding): a mark stamped live 0 + inflight 0 is
 #              idle and switched under; a mark with no such reading (an older
 #              loop) still holds. And a hold is CAPPED: one mark holding the same
-#              stable longer than FLEET_EPIC_HOLD_CAP_SECS (7200 = 2h) is
+#              stable longer than FLEET_EPIC_HOLD_CAP_SECS (e.g. 7200 = 2h) is
 #              released — the tick goes on, and ONE record-only comment on that
 #              EPIC says who, when and from which version to which
 #              ($STATE_DIR/epic-hold.d/<mark> keeps since / stable / released).
 #              The state's `epic:` line says which kind: holding (有活·封顶前),
-#              released (已放行), idle (空转，不挡) or `-`.
+#              released (已放行), idle (空转，不挡), off (不挡) or `-`.
 #   switched   the new version checked out beside the old one
 #              (`git worktree add` → fleet.versions/<stable>/), checked (every
 #              bin/*.sh parses with `bash -n`, every bin/ + hooks/ *.py
@@ -236,9 +240,10 @@ LOCK_TTL=3600   # an apply + two doctor runs take well under a minute; older = a
 STUCK_SECS="${FLEET_INSTALL_FOLLOW_STUCK_SECS:-86400}"
 case "$STUCK_SECS" in ''|*[!0-9]*) STUCK_SECS=86400 ;; esac
 NOTIFY_BUDGET=30   # a notifier that hangs must not hold the tick lock
-# One EPIC mark holds the same stable at most this long (issue #2247).
-HOLD_CAP="${FLEET_EPIC_HOLD_CAP_SECS:-7200}"
-case "$HOLD_CAP" in ''|*[!0-9]*) HOLD_CAP=7200 ;; esac
+# One EPIC mark holds the same stable at most this long (issue #2247); 0, the
+# default since issue #2934, = no hold at all.
+HOLD_CAP="${FLEET_EPIC_HOLD_CAP_SECS:-0}"
+case "$HOLD_CAP" in ''|*[!0-9]*) HOLD_CAP=0 ;; esac
 # A failed agent upgrade is not retried on the same stable for this long (#1723).
 NODE_RETRY="${FLEET_NODE_FOLLOW_RETRY_SECS:-21600}"
 case "$NODE_RETRY" in ''|*[!0-9]*) NODE_RETRY=21600 ;; esac
@@ -303,8 +308,13 @@ state_get() { [ -f "$STATE" ] && sed -n "s/^$1: //p" "$STATE" | head -1; }
 # DEFERRED_SINCE SKIP APPLY_LINE NOTIFIED NOTIFIED_AT NODE NODE_REASON
 # NODE_FAILED_AT NODE_FAIL_STABLE NODE_NOTIFIED.
 write_state() { # $1 result $2 reason
-  local tmp t
+  local tmp t ss
   t=$(now)
+  # stable_since: when this login first saw this stable — `fleet doctor
+  # --installs` says how long an install has been behind it (issue #2934)
+  ss=$(state_get stable_since)
+  case "$ss" in ''|*[!0-9]*) ss='' ;; esac
+  [ -n "$ss" ] && [ "$(state_get stable)" = "${STABLE_SHA:-none}" ] || ss=$t
   [ -d "$STATE_DIR" ] || mkdir -p "$STATE_DIR" 2>/dev/null || return 0
   tmp="$STATE.tmp.$$"
   {
@@ -313,6 +323,7 @@ write_state() { # $1 result $2 reason
     printf 'result: %s\n' "$1"
     printf 'head: %s\n' "${HEAD_SHA:-?}"
     printf 'stable: %s\n' "${STABLE_SHA:-none}"
+    printf 'stable_since: %s\n' "$ss"
     printf 'from: %s\n' "${FROM:-${HEAD_SHA:-?}}"
     printf 'to: %s\n' "${TO:-${HEAD_SHA:-?}}"
     printf 'reason: %s\n' "$2"
@@ -545,6 +556,16 @@ epic_gate() {
   EPIC_HOLD='' EPIC_NOTE=''
   local rows kind f out key since='' rel held keep='' notes=''
   rows=$(fleet_epic_holding 2>/dev/null)
+  if [ "$HOLD_CAP" -eq 0 ]; then   # off (issue #2934): name what runs, hold nothing
+    while IFS='	' read -r kind f out; do
+      [ -n "$f" ] && notes="$notes; off (不挡) $out"
+    done <<EOF_ROWS
+$rows
+EOF_ROWS
+    hold_prune ''
+    EPIC_NOTE=${notes#; }
+    return 0
+  fi
   while IFS='	' read -r kind f out; do
     [ -n "$f" ] || continue
     key=${f##*/}
@@ -616,6 +637,7 @@ epic_release() {
 # that has not been released for the stable it held (rc 0 + their lines).
 epic_holding_now() {
   local rows kind f out key hold=''
+  [ "$HOLD_CAP" -eq 0 ] && return 1
   rows=$(fleet_epic_holding 2>/dev/null)
   while IFS='	' read -r kind f out; do
     [ "$kind" = active ] || continue
@@ -1061,8 +1083,10 @@ main() {
 
   # --- a running EPIC batch holds the switch (issue #953, back before the switch
   # with #2062) ---------------------------------------------------------------------
-  # One mark per batch (global/epic-running.d/, fleet-epic-heartbeat.sh): ANY
-  # fresh one defers the whole tick here, before anything is checked out — not
+  # The EPIC gate is OFF unless FLEET_EPIC_HOLD_CAP_SECS > 0 (issue #2934: a
+  # switch stops no running session; epic_gate then only names the batches).
+  # With it on — one mark per batch (global/epic-running.d/, fleet-epic-heartbeat.sh):
+  # ANY fresh one defers the whole tick here, before anything is checked out — not
   # only the agent half below. The loop's pane and its workers are idle between
   # ticks, so no busy gate can see a batch; and a version switched under one
   # changes what its later members and its skill text run on (2026-10-07: EPIC
@@ -1074,7 +1098,7 @@ main() {
   # (issue #2843) — a second hold here would only add a second, independent wait.
   local epic
   if [ -n "${MANAGED_SHA:-}" ]; then
-    EPIC_HOLD='' EPIC_NOTE="managed — the machine updater holds for EPIC batches (fleet-node-update.py, #2843)"
+    EPIC_HOLD='' EPIC_NOTE="managed — the machine updater decides (fleet-node-update.py; no EPIC hold unless FLEET_EPIC_HOLD_CAP_SECS, #2934)"
   else
     epic_gate
   fi

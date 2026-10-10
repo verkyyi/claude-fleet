@@ -58,7 +58,9 @@
 # and fleet_epic_holding (bin/fleet-lib.sh) reads a fresh mark with live 0 AND
 # inflight 0 as `idle`: install-sync switches under it. A mark without the two
 # fields (an older loop) is `active` — the conservative reading, byte for byte
-# what it did before. install-sync also caps a hold (FLEET_EPIC_HOLD_CAP_SECS).
+# what it did before. install-sync also caps a hold (FLEET_EPIC_HOLD_CAP_SECS) —
+# and since issue #2934 holds nothing at all unless that cap is set: a switch
+# stops no running session, so the mark is a batch's presence, not a lock.
 #
 # ONE EPIC, ONE ROW (issue #1958). The mark is also what the task list reads to
 # draw a running batch as ONE row: the stamp marks the window it runs in — the

@@ -62,15 +62,18 @@ A tick, in order (each a `result` in <state>/update.json, one log line):
               of the same release up to a week. No flapping (issue #2906).
   backoff     the last stage of this target failed less than
               FLEET_NODE_UPDATE_RETRY (3600) seconds ago.
-  deferred    a running EPIC batch WITH WORK holds the machine (issue #2247's
-              rule: fleet_epic_holding over every managed account's marks),
-              for at most FLEET_EPIC_HOLD_CAP_SECS (7200) in total: ONE clock for
+  deferred    only when the person turned the EPIC hold on (issue #2934: off by
+              default — FLEET_EPIC_HOLD_CAP_SECS 0). A switch never stops a
+              running session (each is on its own fleet.versions/<sha>) — only
+              current/ and the daemons move — so a batch's members may span
+              versions; /fleet-epic-run records the stable each member started on.
+              With a cap N > 0: a running EPIC batch WITH WORK holds the machine
+              (issue #2247's rule: fleet_epic_holding over every managed
+              account's marks) for at most N seconds in total: ONE clock for
               the machine from its first deferral, whichever batches hold and
               however often stable moves (issue #2843); reaching the target
               clears it. Past the cap the tick goes on (`hold released` in the
-              log, and a note on each holding batch's EPIC as its login). A
-              switch never stops a running session (each is on its own
-              fleet.versions/<sha>) — only current/ and the daemons move.
+              log, and a note on each holding batch's EPIC as its login).
   failed      staging failed (fetch, signature, a missing artifact, release.json
               invalid) — nothing switched; the staged dir is removed.
               A fetch is resumable (issue #2701): only the artifacts release.json
@@ -488,12 +491,18 @@ def key_row(p, st):
     return ("PASS", "key", "pinned %s · current release signed by %s" % (pinned, signer or "?"))
 
 
+def hold_cap():
+    """FLEET_EPIC_HOLD_CAP_SECS: 0 (the default, issue #2934) = no EPIC hold at
+    all; N > 0 = a batch with work holds the machine at most N seconds."""
+    return max(0, env_num("FLEET_EPIC_HOLD_CAP_SECS", 0))
+
+
 def hold_row(p, st):
     """An EPIC hold under way (issue #2843), said with what it is for."""
     h = (st or {}).get("hold") or {}
-    if (st or {}).get("result") != "deferred" or not h.get("since"):
+    cap = hold_cap()
+    if not cap or (st or {}).get("result") != "deferred" or not h.get("since"):
         return None
-    cap = env_num("FLEET_EPIC_HOLD_CAP_SECS", 7200)
     return ("WARN", "install", "EPIC batches hold the machine on %s, not %s, since %s (%dm of %dm, one clock for "
             "the machine) — a switch would not stop a running session (each is on its own fleet.versions/<sha>); "
             "the hold only keeps a batch's new workers on the version its others run"
@@ -567,8 +576,10 @@ class Updater(object):
             return s, "hub stable"
         return None, "the hub named no stable (%s)" % (err or out or "rc %d" % rc)[:120]
 
-    # -- the EPIC gate (#2062 / #2247): any managed account's batch with work holds.
-    # The clock is the MACHINE's (issue #2843): `hold.since` is the first tick
+    # -- the EPIC gate (#2062 / #2247) — OFF unless FLEET_EPIC_HOLD_CAP_SECS > 0
+    # (issue #2934: the person's call — a switch stops no session, so holding a
+    # machine behind stable bought too little). On: any managed account's batch
+    # with work holds. The clock is the MACHINE's (issue #2843): `hold.since` is the first tick
     # any batch deferred the machine, and only reaching the target clears it
     # (`current`, or a switch). A new stable or another batch taking over the
     # hold does not restart it — with 3-7 batches running in parallel and stable
@@ -578,6 +589,9 @@ class Updater(object):
     # sits on its own fleet.versions/<sha>); it only moves `current/` and the
     # daemons, so new workers of a batch start on the version its others run.
     def epic_hold(self, target):
+        if not hold_cap():   # off by default (issue #2934): a new stable switches at once
+            self.st.pop("hold", None)
+            return None
         lib = env("FLEET_NODE_UPDATE_LIB", os.path.join(self.p.current, "bin", "fleet-lib.sh"))
         if not os.path.exists(lib):
             return None
@@ -602,7 +616,7 @@ class Updater(object):
             h = {"since": now()}
         h["target"] = target
         self.st["hold"] = h
-        cap = env_num("FLEET_EPIC_HOLD_CAP_SECS", 7200)
+        cap = hold_cap()
         if now() - h["since"] > cap:
             if h.get("released") != target:
                 h["released"] = target
@@ -843,7 +857,8 @@ class Updater(object):
         from GitHub: #2714). The switch and the rollback move every login with
         the machine (force); a tick at the release puts back one that drifted (a
         login pointed by hand at an own old copy — BREAK-IT
-        managed-login-own-copy), unless an EPIC batch with work holds it. One
+        managed-login-own-copy), unless an EPIC batch with work holds it (only
+        with the hold turned on, #2934). One
         already linked costs one read; one that did not move is tried again on the
         same release only after FLEET_NODE_UPDATE_RETRY. -> notes."""
         self.follow_held = False
@@ -1094,6 +1109,10 @@ class Updater(object):
             return self.end("unknown", src, current=cur)
         if not SHA_RE.match(target):
             return self.end("unknown", "%s is not a commit sha (%s)" % (target, src), current=cur)
+        # when this machine first saw this target: `fleet doctor --installs` says
+        # how long an install has been behind it (issue #2934)
+        if (self.st.get("target_seen") or {}).get("sha") != target:
+            self.st["target_seen"] = {"sha": target, "at": now()}
         if target == cur:
             notes = self.sync_outside() + self.sync_credsep() + self.follow_installs()
             if not self.follow_held:
@@ -1916,10 +1935,13 @@ def main(argv):
             (" · hub serves %s" % (served or "? (unreadable)")) if (sf or "--keys" in rest) else ""))
         if sf:
             print("        %s failed its signature check: %s" % (sf[0][:12], sf[1].get("reason", "")))
-        if (st.get("hold") or {}).get("since"):
+        if not hold_cap():
+            print("hold    off — a new stable switches at once, EPIC batch or not "
+                  "(FLEET_EPIC_HOLD_CAP_SECS=<secs> turns the capped hold on, #2934)")
+        elif (st.get("hold") or {}).get("since"):
             h = st["hold"]
             print("hold    EPIC batches since %s (one clock for the machine, cap %dm)%s" % (
-                iso(h["since"]), env_num("FLEET_EPIC_HOLD_CAP_SECS", 7200) // 60,
+                iso(h["since"]), hold_cap() // 60,
                 " · released for %s" % h["released"][:12] if h.get("released") else ""))
         fl = fetch_line(p)
         if fl:

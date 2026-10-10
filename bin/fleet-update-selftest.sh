@@ -32,7 +32,7 @@
 #   E. 承载 follows  a checkout + `fleet update tick --root`: stable moved → the
 #                    next tick switches it (install-sync's `switched`, the
 #                    install now a link into fleet.versions/, issue #1894); an
-#                    EPIC heartbeat no longer holds it back; `fleet update` on
+#                    EPIC batch with work does not hold it back (#2934); `fleet update` on
 #                    each layer names the same short commit (the doctor's
 #                    first-row word)
 #   F. degenerate    a home with no .client-version → start / tick touch nothing
@@ -214,17 +214,13 @@ htick
 if [ "$(hst result)" = switched ] && [ -L "$CO" ] && [ "$(git -C "$CO" rev-parse HEAD)" = "$H2" ] && grep -q "^apply --from $H1 --to $H2" "$LOG"; then
   ok "E stable moved: the next tick switches the install to it (install-sync switched)"
 else bad "E follow: rc=$RC result=$(hst result) reason=$(hst reason) head=$(git -C "$CO" rev-parse HEAD) out=$OUT"; fi
-env FLEET_CONF_DIR="$HCONF" bash "$BIN/fleet-epic-heartbeat.sh" 1813 --tick 1 --repo o/r --session f1 >/dev/null 2>&1
+env FLEET_CONF_DIR="$HCONF" bash "$BIN/fleet-epic-heartbeat.sh" 1813 --tick 1 --repo o/r --session f1 --live 2 --inflight 1 >/dev/null 2>&1
 git --git-dir="$BARE" update-ref refs/tags/stable "$H3"
 htick
-if [ "$(hst result)" = deferred ] && [ "$(git -C "$CO" rev-parse HEAD)" = "$H2" ]; then
-  ok "E a fresh EPIC heartbeat holds the install at $H2 (#953, #2062): deferred, not switched"
+if [ "$(hst result)" = switched ] && [ "$(git -C "$CO" rev-parse HEAD)" = "$H3" ]; then
+  ok "E a batch with work does not hold the install (#2934): switched to $H3"
 else bad "E epic: result=$(hst result) reason=$(hst reason) head=$(git -C "$CO" rev-parse HEAD)"; fi
 env FLEET_CONF_DIR="$HCONF" bash "$BIN/fleet-epic-heartbeat.sh" --clear 1813 >/dev/null 2>&1
-htick
-if [ "$(hst result)" = switched ] && [ "$(git -C "$CO" rev-parse HEAD)" = "$H3" ]; then
-  ok "E the batch cleared its mark: the next tick switches to $H3"
-else bad "E after the clear: result=$(hst result) reason=$(hst reason) head=$(git -C "$CO" rev-parse HEAD)"; fi
 htick
 [ "$(hst result)" = current ] && ok "E next tick: current at $H3" || bad "E after epic: $(hst result) $(hst reason)"
 s=$(env HOME="$WORK/host" FLEET_CONF_DIR="$HCONF" FLEET_UPDATE_ROOT="$CO" FLEET_STABLE_API="file://$WORK/nothing" bash "$BIN/fleet-update.sh" 2>&1)

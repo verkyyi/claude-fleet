@@ -63,7 +63,7 @@ echo "repo=${FLEET_REPO:-} main=${FLEET_MAIN:-} base=${FLEET_BASE_BRANCH:-master
 - **No fleet** → **ABORT**: *"not inside a fleet — run this from a fleet session."*
 - **Wrong seat** — `owner: hub`: refuse when `$SEAT` is `worker`.
 
-## 1. Gather — six sources, no invention
+## 1. Gather — seven sources, no invention
 
 - **The parent**: charter, the `<!-- fleet:epic-tick -->` comment stream (the
   batch's own minute-by-minute log), the 待决 section.
@@ -84,6 +84,13 @@ echo "repo=${FLEET_REPO:-} main=${FLEET_MAIN:-} base=${FLEET_BASE_BRANCH:-master
 - **The spend proxy**: **worker × hours**, from each member's window lifetime
   (spawn → reap) as recorded in `/fleet-history` and the tick log.
 - **The quota trace**: the 5h% / week% snapshots the tick lines carry.
+- **The versions it ran on** (issue #2934): installs follow stable even while a
+  batch runs, so members spawned later may start on a newer version —
+  `~/.claude/fleet/bin/fleet-epic-floor.sh show <N> --repo "$FLEET_REPO"` prints
+  `versions: K` and one line per version with the members that started on it
+  (recorded by `/fleet-epic-run` at each spawn). Spanning versions is allowed,
+  never a defect; `versions: 0` = nothing recorded (a batch from before #2934) —
+  say so, never guess.
 - **The evidence**: what each member looks like live, as its own worker captured
   it (issue #810) — `~/.claude/fleet/bin/fleet-evidence.sh list --repo "$FLEET_REPO" --epic <N>`
   prints one row per capture (`member · stage · ts · path · note`) and a `none`
@@ -245,7 +252,9 @@ What earns its place, in page order:
 5. **运行情况** (`#ops`) — **folded, complete, last.** 墙钟 · 执行会话占用时长 ·
    额度曲线（annotated where an account was benched or a window was waited out —
    the waits are where the batch's wall-clock went）· 甘特, plus the PR-merge
-   count. Nothing here is cut — including step 1's occupancy-not-tokens caveat,
+   count and one line 「本批跨了 K 个版本」 (each version's short sha and the
+   members that started on it, from step 1's `fleet-epic-floor.sh show`; K = 1 is
+   「本批在同一版本上跑完」, nothing recorded is 「版本未记录」). Nothing here is cut — including step 1's occupancy-not-tokens caveat,
    which sits beside the numbers it qualifies and **keeps its wording**. Folding
    is about position, not about softening.
 
