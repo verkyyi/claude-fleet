@@ -212,6 +212,37 @@ def numbers(st, now_t):
     return n
 
 
+HANDOFF_FAIL_SECS = 86400   # a stored-not-cleared handoff stays on the page a day
+
+
+def handoff_failed(now_t):
+    """Handoffs stored but never cleared (issue #2937): a pane whose newest
+    `handoff-complete` / `handoff-failed` row on the context-ladder ledger
+    (bin/fleet-ladder-log.sh, where fleet-handoff-cycle.sh writes both) is a
+    failure younger than a day — the session goes on in the conversation it meant
+    to leave, and only grows. Oldest first; [] when none or no ledger."""
+    d = os.environ.get("FLEET_HANDOFF_LOG_DIR") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "logs")
+    try:
+        with open(os.path.join(d, "context-ladder.log"), encoding="utf-8", errors="replace") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return []
+    last = {}
+    for ln in lines:
+        f = ln.split("\t")
+        if ln.startswith("#") or len(f) < 9 or f[2] not in ("handoff-complete", "handoff-failed"):
+            continue
+        try:
+            t = int(f[0])
+        except ValueError:
+            continue
+        last[(f[3], f[4])] = {"t": t, "step": f[2], "session": f[3], "pane": f[4], "window": f[5],
+                              "ctx": f[6], "reason": f[8]}
+    now = now_t.timestamp()
+    return sorted((r for r in last.values() if r["step"] == "handoff-failed" and now - r["t"] <= HANDOFF_FAIL_SECS),
+                  key=lambda r: r["t"])
+
+
 def fd_conf():
     return Path(os.environ.get("FLEET_CONF_DIR") or (Path.home() / ".config" / "claude-fleet"))
 
@@ -330,6 +361,8 @@ def render(st, sess, now_t, nums=None):
     todo.sort(key=lambda i: (i.get("due") or "9", i.get("id") or ""))
     # a followup row on the sheet (a refused release, a hub deploy) is the person's to do, too
     todo_rows = [r for r in st.d["rows"].values() if r.get("state") == "open" and r.get("followup")]
+    # a handoff that stored its doc but never cleared the conversation (issue #2937)
+    stuck = handoff_failed(now_t)
     decided = decided_today(st, now_t)
     out = ["<!doctype html>", "<html lang=\"%s\">" % ("zh" if tr("steward_page_lang") == "zh" else "en"),
            "<head>", "<meta charset=\"utf-8\">",
@@ -340,11 +373,11 @@ def render(st, sess, now_t, nums=None):
            "<p class=\"eyebrow\">%s</p>" % esc(tr("steward_page_eyebrow_fmt", now_t.strftime("%Y-%m-%d"),
                                                      fd.show_time(now_t))),
            "<h1>%s</h1>" % esc(tr("steward_page_h1")),
-           "<p class=\"sub\">%s</p>" % esc(tr("steward_page_sub_fmt", n_lines, nums["todo"] + len(todo_rows))),
+           "<p class=\"sub\">%s</p>" % esc(tr("steward_page_sub_fmt", n_lines, nums["todo"] + len(todo_rows) + len(stuck))),
            "<div class=\"verdict\">"]
     for key, cls in (("asked", ""), ("person", ""), ("defaulted", ""), ("parked", "warn" if nums["parked"] else ""),
-                     ("todo", "warn" if nums["todo"] + len(todo_rows) else "")):
-        val = nums[key] + (len(todo_rows) if key == "todo" else 0)
+                     ("todo", "warn" if nums["todo"] + len(todo_rows) + len(stuck) else "")):
+        val = nums[key] + (len(todo_rows) + len(stuck) if key == "todo" else 0)
         out.append("  <div class=\"v%s\"><div class=\"n\">%d</div><div class=\"k\">%s</div></div>"
                    % (" " + cls if cls else "", val, esc(tr("steward_page_k_" + key))))
     out.append("</div>")
@@ -364,7 +397,7 @@ def render(st, sess, now_t, nums=None):
     out.append("</section>")
 
     out += ["<section id=\"todo\">", "<h2>%s</h2>" % esc(tr("steward_page_todo_h"))]
-    if not todo and not todo_rows:
+    if not todo and not todo_rows and not stuck:
         out.append("<p class=\"lede\">%s</p>" % esc(tr("steward_page_todo_none")))
     else:
         out.append("<ul>")
@@ -384,6 +417,13 @@ def render(st, sess, now_t, nums=None):
                                             kv([(tr("steward_page_kv_src"), link(r.get("url"), r.get("src", ""))),
                                                 (tr("steward_page_kv_said"), esc(r.get("item"))),
                                                 (tr("steward_page_kv_id"), esc(r.get("id")))])))
+        for r in stuck:
+            t = dt.datetime.fromtimestamp(r["t"])
+            out.append("<li><p><strong>%s</strong> · %s</p><details class=\"fold\"><summary>%s</summary>%s</details></li>"
+                       % (esc(tr("steward_page_handoff_fmt", r["window"], t.strftime("%H:%M"), r["ctx"])),
+                          esc(tr("steward_page_handoff_do")), esc(tr("steward_page_fold")),
+                          kv([(tr("steward_page_kv_src"), esc("%s · %s" % (r["session"], r["pane"]))),
+                              (tr("steward_page_kv_said"), esc(r["reason"]))])))
         out.append("</ul>")
     out.append("</section>")
 

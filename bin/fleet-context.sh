@@ -231,6 +231,29 @@ if [ "$quiet" = "1" ]; then
   [ "$verdict" = "OK" ] && exit 0 || exit 1
 fi
 
+# --- the last compaction / handoff of THIS pane (issue #2937) -----------------
+# Off the context-ladder ledger (bin/fleet-ladder-log.sh — the same directory the
+# handoff cycle logs to): the newest `compacting` row (a fleet /compact, its ctx the
+# FROM figure) and the newest `handoff-complete` / `handoff-failed` row. A failed
+# one is stored-not-cleared: the whole point of the line is that it is never quiet.
+# `<epoch>\t<time>\t<ctx>\t<count>\t<reason>` each, empty when none.
+last_c='' last_h='' last_hs=''
+_llog="${FLEET_HANDOFF_LOG_DIR:-$BIN/../logs}/context-ladder.log"
+if [ -n "$pane" ] && [ -f "$_llog" ]; then
+  _lv=$(awk -F'\t' -v p="$pane" '
+    $1 ~ /^#/ || $5 != p { next }
+    $3 == "compacting" { c = $1 "\t" $2 "\t" $7 "\t" $8 "\t" $9 }
+    $3 == "handoff-complete" || $3 == "handoff-failed" { h = $1 "\t" $2 "\t" $7 "\t" $8 "\t" $9; hs = $3 }
+    END { print c; print h; print hs }' "$_llog" 2>/dev/null)
+  last_c=$(printf '%s\n' "$_lv" | sed -n 1p)
+  last_h=$(printf '%s\n' "$_lv" | sed -n 2p)
+  last_hs=$(printf '%s\n' "$_lv" | sed -n 3p)
+fi
+# _lf <row> <field 1-5>
+_lf() { printf '%s\n' "$1" | cut -f"$2"; }
+# 2026-10-10T14:02:03 → 10-10 14:02
+_lt() { _t=$(_lf "$1" 2); _t=${_t#*-}; _t=${_t%:*}; printf '%s' "${_t/T/ }"; }
+
 # --- render -------------------------------------------------------------------
 _k() { awk -v n="${1:-0}" 'BEGIN {
   if (n < 1000)              printf "%d", n
@@ -246,12 +269,19 @@ if [ -n "${TMUX:-}" ] && [ -n "$pane" ]; then
   account=$(bash "$BIN/fleet-account-truth.sh" --pane "$pane" 2>/dev/null | cut -f3)
 fi
 
+_n() { case "${1:-}" in ''|*[!0-9]*) echo null ;; *) echo "$1" ;; esac; }
+_hok=null
+[ "$last_hs" = handoff-complete ] && _hok=true
+[ "$last_hs" = handoff-failed ] && _hok=false
 if [ "$as_json" = "1" ]; then
   printf '{"account":%s,' "$(printf '%s' "$account" | jq -Rs 'if . == "" then null else . end')"
   printf '"verdict":"%s","pct":%s,"source":"%s","live_tokens":%s,"limit":%s,"limit_source":"%s","bus":"%s",' \
     "$verdict" "$pct" "$src" "$live" "$LIMIT" "$limit_src" "$bus"
   printf '"derived_pct":%s,"stamp_pct":%s,"turns":%s,"output_tokens":%s,"peak_tokens":%s,' \
     "$derived" "${stamp:--1}" "$turns" "$out_total" "$peak"
+  printf '"last_compact_ts":%s,"last_compact_from":%s,"last_handoff_ts":%s,"last_handoff_from":%s,"last_handoff_ok":%s,' \
+    "$(_n "$(_lf "$last_c" 1)")" "$(_n "$(_lf "$last_c" 3)")" "$(_n "$(_lf "$last_h" 1)")" "$(_n "$(_lf "$last_h" 3)")" \
+    "$_hok"
   printf '"warn_pct":%s,"handoff_pct":%s,"auto_handoff_pct":%s,"compact_prep_pct":%s,"compact_max":%s,"armed":%s,"transcript":"%s"}\n' \
     "$warn" "$hand" "$thr" "$cprep" "$cmax" "$([ -n "$armed" ] && echo true || echo false)" "${tpath//\"/}"
   [ "$verdict" = "OK" ] && exit 0 || exit 1
@@ -310,6 +340,33 @@ if [ "$cprep" -gt 0 ]; then
   printf 'compact   in place from %s%% · %s\n' "$cprep" "$_cmx"
 else
   printf 'compact   in-place compaction OFF (FLEET_COMPACT_PREP_PCT=0)\n'
+fi
+# last — when this pane was last compacted / handed off, from how full (issue #2937)
+if [ -n "$last_c$last_h" ]; then
+  _lo=''
+  if [ -n "$last_c" ]; then
+    _lc=$(_lf "$last_c" 4); case "$_lc" in ''|*[!0-9]*) _lc=0 ;; esac
+    _lo="compacted $(_lt "$last_c") from $(_lf "$last_c" 3)% (compaction #$(( _lc + 1 )))"
+  fi
+  if [ -n "$last_h" ]; then
+    [ -n "$_lo" ] && _lo="$_lo · "
+    if [ "$last_hs" = handoff-failed ]; then
+      _lr=$(_lf "$last_h" 5); _lr=${_lr%% *}
+      _lo="${_lo}handoff $(_lt "$last_h") at $(_lf "$last_h" 3)% FAILED ($_lr) — stored, NOT cleared"
+    else
+      _lo="${_lo}handed off $(_lt "$last_h") from $(_lf "$last_h" 3)%"
+    fi
+  fi
+  # the newest of the two, unless it failed, ended at today's figure
+  _le=$(_lf "$last_c" 1); _lh=$(_lf "$last_h" 1)
+  case "$_le" in ''|*[!0-9]*) _le=0 ;; esac
+  case "$_lh" in ''|*[!0-9]*) _lh=0 ;; esac
+  if [ "$pct" -ge 0 ] && { [ "$_le" -gt "$_lh" ] || [ "$last_hs" = handoff-complete ]; }; then
+    _lo="$_lo → now $pct%"
+  fi
+  printf 'last      %s\n' "$_lo"
+else
+  printf 'last      no compaction or handoff recorded for this pane\n'
 fi
 if [ -n "$account" ]; then
   printf 'account   %s (verified process token)\n' "$account"

@@ -285,6 +285,10 @@ fleet_ui_t() {
     en:steward_page_todo_h)     printf 'For you to do' ;;
     zh:steward_page_todo_none)  printf '没有待你动手的事。' ;;
     en:steward_page_todo_none)  printf 'Nothing left for you to do.' ;;
+    zh:steward_page_handoff_fmt) printf '「%s」%s 换新对话没成：交接写好了，旧对话没清掉，还在 %s%% 往上涨' "${1:-}" "${2:-}" "${3:-}" ;;
+    en:steward_page_handoff_fmt) printf '“%s” at %s did not start fresh: the handoff is written, the old conversation was not cleared (%s%% and growing)' "${1:-}" "${2:-}" "${3:-}" ;;
+    zh:steward_page_handoff_do) printf '在那个会话里说「按交接换新对话」，它会再跑一次 /fleet-handoff' ;;
+    en:steward_page_handoff_do) printf 'tell that session “start fresh from the handoff” and it runs /fleet-handoff again' ;;
     zh:steward_page_todo_due_fmt) printf '%s 前' "${1:-}" ;;
     en:steward_page_todo_due_fmt) printf 'by %s' "${1:-}" ;;
     zh:steward_page_decided_h)  printf '今天已按默认走' ;;

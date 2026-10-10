@@ -239,15 +239,53 @@ printf '%s\n' "$$" > "$LOCK" 2>/dev/null || true
 # ---- this whole process even if a phase wedges; killed on normal exit.
 ( sleep "$HARD_TIMEOUT" 2>/dev/null; kill -TERM "$$" 2>/dev/null ) &
 WATCHDOG=$!
+# The window says a cycle owns it (issue #2937): @handoff_cycle <epoch>:<pid>,
+# read by fleet_handoff_cycle_live — the orchestrator's / steward's `ensure`
+# (renew, revive) and the cfg-restart leave the window alone while it holds, so
+# no reopen resumes the conversation this cycle is about to clear. Unset on exit,
+# only while it is still ours.
+CYCLE_MARK="$(date +%s 2>/dev/null || echo 0):$$"
+TM set-window-option -t "$PANE" @handoff_cycle "$CYCLE_MARK" 2>/dev/null || true
 cleanup() { rm -f "$LOCK" 2>/dev/null || true; kill "$WATCHDOG" 2>/dev/null || true
+  [ "$(TM display-message -p -t "$PANE" '#{@handoff_cycle}' 2>/dev/null)" = "$CYCLE_MARK" ] \
+    && TM set-window-option -u -t "$PANE" @handoff_cycle 2>/dev/null
   [ -z "$TRANSITION_WT" ] || fleet_transition_lock_drop "$TRANSITION_WT"; }
 trap cleanup EXIT
-trap 'log "TERM (hard timeout ${HARD_TIMEOUT}s or signal) — exiting; doc left intact"; exit 0' TERM
+trap 'log "TERM (hard timeout ${HARD_TIMEOUT}s or signal) — exiting; doc left intact"; ladder_fail timeout; exit 0' TERM
 
 log "armed: store=$STORE pane=$PANE socket=${SOCKET:-\$TMUX} idle_to=${IDLE_TIMEOUT}s hard_to=${HARD_TIMEOUT}s"
 # The ladder row at completion wants the context % and compaction count the
 # session had BEFORE the /clear (whose SessionStart zeroes the count): read now.
 LADDER_AT="$(TM display-message -p -t "$PANE" '#{@ctx_pct}|#{@compact_count}' 2>/dev/null)"
+
+# ladder_fail <why> — a fail-safe abort is a ladder step of its own (issue #2937):
+# `handoff-failed` (stored, not cleared), read by fleet-context.sh's `last` line and
+# the steward's page; the alert is notify()'s.
+ladder_fail() {
+  [ -f "$BIN/fleet-ladder-log.sh" ] && FLEET_HANDOFF_LOG_DIR="$LOG_DIR" sh "$BIN/fleet-ladder-log.sh" handoff-failed \
+    --pane "$PANE" ${SOCKET:+--socket "$SOCKET"} --ctx "${LADDER_AT%%|*}" --count "${LADDER_AT#*|}" \
+    --reason "$1 · $STORE" </dev/null >/dev/null 2>&1
+  return 0
+}
+
+# The orchestrator and the steward are reopened by their own `ensure`, which
+# resumes a conversation id it keeps (issue #2937). Record which one this cycle
+# hands off — $FLEET_CONF_DIR/fleets/<sess>/<role>.handoff — so that one is never
+# resumed again (fleet_role_handoff_sid): won race or lost, the next conversation
+# is a new one whose first turn is $PICKUP. The /clear's SessionStart appends
+# `next=<sid>` (handoff-latch-reset-hook.sh).
+ROLE_V="$(TM display-message -p -t "$PANE" '#{@fleet_role}|#{@cc_session_id}|#{?#{session_group},#{session_group},#{session_name}}' 2>/dev/null)"
+ROLE=${ROLE_V%%|*}; ROLE_V=${ROLE_V#*|}; ROLE_SID=${ROLE_V%%|*}; ROLE_SESS=${ROLE_V#*|}
+case "$ROLE" in orchestrator|steward)
+  if [ -n "$ROLE_SID" ] && [ -n "$ROLE_SESS" ]; then
+    _rd="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/fleets/$ROLE_SESS"
+    mkdir -p "$_rd" 2>/dev/null
+    printf 'sid=%s\nstore=%s\npickup=%s\nat=%s\nctx=%s\n' "$ROLE_SID" "$STORE" "$PICKUP" \
+      "$(date +%s 2>/dev/null || echo 0)" "${LADDER_AT%%|*}" > "$_rd/$ROLE.handoff.tmp" 2>/dev/null \
+      && mv -f "$_rd/$ROLE.handoff.tmp" "$_rd/$ROLE.handoff" 2>/dev/null
+    log "role $ROLE: handing off conversation $ROLE_SID (never resumed again)"
+  fi ;;
+esac
 
 # ============================ 2. WAIT-IDLE =====================================
 # The arming turn is still running (this was its last tool call). Wait until the
@@ -329,9 +367,11 @@ if [ "$idle" != 1 ]; then
     # fingers, and DON'T re-arm the nudge — it would only fire again into the same
     # conversation. They are told; a manual pickup resumes from the stored handoff.
     notify "operator still active at this pane after ${IDLE_TIMEOUT}s — NOT clearing (handoff saved: $STORE); run /fleet-handoff pickup when ready"
+    ladder_fail operator
   else
     unlatch
     notify "arming turn never went idle within ${IDLE_TIMEOUT}s — NOT clearing (handoff saved: $STORE); see the diag lines below in $LOG"
+    ladder_fail never-idle
     backstop_diag
   fi
   exit 0   # fail-safe: doc intact, context untouched
@@ -430,6 +470,7 @@ if [ "$fresh" != 1 ]; then
   # cleared the latch and this is a no-op.
   unlatch
   notify "could not confirm a fresh session after /clear — resume manually: $PICKUP"
+  ladder_fail unconfirmed
   exit 0   # fail-safe: cleared (or not) but pickup withheld; manual pickup still works
 fi
 

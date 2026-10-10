@@ -80,6 +80,14 @@
 # asked for a tick changes nothing; no hub, an old hub (404) or no answer ever
 # kept ⇒ this machine decides alone, as before.
 #
+# And a handoff ends a conversation for good (issue #2937). /fleet-handoff in this
+# window arms fleet-handoff-cycle.sh, which stamps @handoff_cycle while it waits
+# to /clear: no renew and no revive meanwhile (fleet_handoff_cycle_live). The
+# /clear's SessionStart writes the new conversation into orchestrator.sid
+# (handoff-latch-reset-hook.sh); the cycle's record, orchestrator.handoff, names
+# the one handed off — `ensure` never resumes that one: a new conversation whose
+# first turn is the pickup.
+#
 # Seams: FLEET_WRAP_LAUNCH is handed to the window when set (the wrapper's own
 # selftest seam — a fake agent); FLEET_HUB_CURL (default `curl`) is the transport
 # to the hub, as in fleet-node-maintenance.sh.
@@ -203,6 +211,8 @@ EOF2
 # left: RENEW=1 and the respawn below takes it onto the installed version.
 RENEW=0
 orch_live() {
+  # a /fleet-handoff cycle owns the window until it has cleared it (issue #2937)
+  fleet_handoff_cycle_live "$SESS" "$1" && return 0
   orch_exited "$1" && return 1
   if [ "${FLEET_ORCH_RENEW:-1}" != 0 ] && fleet_role_renew_due "$SESS" "$1" >/dev/null; then
     RENEW=1; return 1
@@ -259,6 +269,16 @@ if [ "$AGENT" = claude ]; then
     if [ -n "$wsid" ] && [ "$wsid" != "$sid" ] && [ -f "$proj/$wsid.jsonl" ]; then
       sid=$wsid; printf '%s\n' "$sid" > "$SIDF"
     fi
+  fi
+  # A conversation a /fleet-handoff handed off is never resumed (issue #2937): its
+  # cycle lost a race (a renew, an exit) or never cleared — a new one starts, its
+  # first turn the pickup. SessionStart (clear) moved $SIDF on when the cycle won.
+  hsid=$(fleet_role_handoff_sid "$DIR" orchestrator) || hsid=''
+  if [ -n "$sid" ] && [ "$sid" = "$hsid" ]; then
+    SEED=$(fleet_role_handoff_pickup "$DIR" orchestrator) || SEED='/fleet-orchestrate'
+    printf '%s %s orchestrator %s handed-off %s → new conversation (%s)\n' "$(date '+%Y-%m-%dT%H:%M:%S')" \
+      "$SESS" "${w:-new}" "$sid" "$SEED" >> "$DIR/renew.log" 2>/dev/null
+    sid=''
   fi
   if [ -n "$sid" ] && [ -f "$proj/$sid.jsonl" ]; then
     args="$args --resume $sid"; SEED=$ORCH_RESUME_SEED

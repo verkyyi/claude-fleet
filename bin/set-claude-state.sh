@@ -557,16 +557,18 @@ if [ "$sem" = "done" ]; then
   # compact-prep line is handed off instead: the handoff below fires with the prep
   # % as its line, through the same latch and typing hold, and the compaction
   # section skips. At/over the handoff % the plain handoff keeps its own line. Same
-  # scope as compaction — a Claude worker (@issue) or scratch (@raw=1, issue #1318);
-  # codex is untouched.
+  # scope as compaction — a Claude worker (@issue), scratch (@raw=1, issue #1318) or
+  # the orchestrator (@fleet_role orchestrator, issue #2937); codex is untouched.
   _cmaxed=''
   if [ "$_cm" -gt 0 ] && [ "$_cp" -gt 0 ] && [ "$_sha" = 0 ] && [ "$_agent" != codex ] \
      && [ "$handoff_prev" != needs ] && { [ "$_hp" -eq 0 ] || [ "$_cp" -lt "$_hp" ]; }; then
-    _ccv=$(tmux display-message -p -t "$TMUX_PANE" '#{@compact_count}|#{@issue}|#{@raw}|#{@ctx_pct}' 2>/dev/null)
+    _ccv=$(tmux display-message -p -t "$TMUX_PANE" '#{@compact_count}|#{@issue}|#{@raw}|#{@fleet_role}|#{@ctx_pct}' 2>/dev/null)
     _ccn=${_ccv%%|*}; _ccv=${_ccv#*|}
     case "$_ccn" in ''|*[!0-9]*) _ccn=0 ;; esac
     _cci=${_ccv%%|*}; _ccv=${_ccv#*|}
     [ "${_ccv%%|*}" = 1 ] && _cci=${_cci:-raw}
+    _ccv=${_ccv#*|}
+    [ "${_ccv%%|*}" = orchestrator ] && _cci=${_cci:-orchestrator}
     _ccx=${_ccv#*|}
     case "$_ccx" in ''|*[!0-9]*) _ccx=-1 ;; esac
     if [ "$_ccn" -ge "$_cm" ] && [ -n "$_cci" ] && [ "$_ccx" -ge "$_cp" ] \
@@ -584,6 +586,10 @@ if [ "$sem" = "done" ]; then
     # Panels (dash/plan/backlog) and the operator hub carry neither → never nudged.
     _issue=$(tmux display-message -p -t "$TMUX_PANE" '#{@issue}' 2>/dev/null)
     _raw=$(tmux display-message -p -t "$TMUX_PANE" '#{@raw}' 2>/dev/null)
+    # The orchestrator has /fleet-handoff too (issue #2937): FILE storage, and its
+    # own `ensure` never resumes the conversation handed off. Before this it fell to
+    # the hub warning below — one notice, no action — and only grew.
+    [ "$(tmux display-message -p -t "$TMUX_PANE" '#{@fleet_role}' 2>/dev/null)" = orchestrator ] && _raw=1
     # Measure: the statusline (conf/statusline.sh) stamps the rounded context %
     # onto @ctx_pct each render — the Stop-hook stdin doesn't carry it, but the
     # statusline does. Unstamped / non-numeric ⇒ -1 ⇒ never crosses a positive PCT.
@@ -682,8 +688,12 @@ PYCODEX
   # a pending transfer are untouched.
   # Unset knob ⇒ 55; 0 = off. Past the compaction cap (#1316) the handoff owns it.
   if [ "$_cp" -gt 0 ] && [ -z "$_cmaxed" ] && [ "$_agent" != codex ] && [ "$handoff_prev" != needs ]; then
-    _cissue=$(tmux display-message -p -t "$TMUX_PANE" '#{@issue}|#{@raw}' 2>/dev/null)
+    _cissue=$(tmux display-message -p -t "$TMUX_PANE" '#{@issue}|#{@raw}|#{@fleet_role}' 2>/dev/null)
+    _crole=${_cissue##*|}; _cissue=${_cissue%|*}
     _craw=${_cissue#*|}; _cissue=$(printf '%s' "${_cissue%%|*}" | tr -cd '0-9')
+    # the orchestrator compacts in place like a scratch (issue #2937): its state file
+    # (fleet-orchestrator-state.py, PreCompact) and the map ride the compaction
+    [ "$_crole" = orchestrator ] && _craw=1
     [ -z "$_cissue" ] && [ "$_craw" = 1 ] || _craw=''
     if [ -n "$_cissue" ] || [ -n "$_craw" ]; then
       _cctx=$(tmux display-message -p -t "$TMUX_PANE" '#{@ctx_pct}' 2>/dev/null)
@@ -734,6 +744,7 @@ PYCODEX
               _cwhat="issue #$_cissue, branch"
               # A scratch has no issue: the map carries what it is driving instead.
               [ -n "$_cissue" ] || _cwhat="scratch session — the goal you are driving (EPIC / issues / PRs it covers), cwd + branch if any"
+              [ "$_crole" = orchestrator ] && _cwhat="orchestrator session — the batches you follow, who you wait on, unread reports, the Loop (ScheduleWakeup prompt + delay), what the person asked last"
               printf '{"decision":"block","reason":"Context is at %s%% (>= %s%% compact-prep threshold). The fleet will compact this session IN PLACE instead of handing it off. First write a RECOVERY MAP %s: %s, PR (number + state, or none), what is done, what is in progress, the exact next step(s), and any background job still running — under 40 lines. Then end this turn; do not start new work. Once the pane is idle the fleet runs /compact keeping that map, and afterwards asks you to check it against git and the PR.%s"}\n' \
                 "$_cctx" "$_cp" "$_cwhere" "$_cwhat" "${FLEET_LANG_RULE_RESUME:+ $FLEET_LANG_RULE_RESUME}"
             fi ;;
@@ -754,8 +765,10 @@ PYCODEX
   # converted) — auto-handoff off ⇒ no line ⇒ nothing here. One tmux read.
   _ha=$(printf '%s\n' "$_kv" | sed -n 7p)
   if [ "$_hp_conf" -gt 0 ] && [ "$_ha" != off ]; then
-    _hv=$(tmux display-message -p -t "$TMUX_PANE" '#{@issue}|#{@raw}|#{@ctx_pct}|#{@ctx_warn}|#{?#{session_group},#{session_group},#{session_name}}|#{window_name}' 2>/dev/null)
+    _hv=$(tmux display-message -p -t "$TMUX_PANE" '#{@fleet_role}|#{@issue}|#{@raw}|#{@ctx_pct}|#{@ctx_warn}|#{?#{session_group},#{session_group},#{session_name}}|#{window_name}' 2>/dev/null)
+    _hrole=${_hv%%|*}; _hv=${_hv#*|}
     _hiss=${_hv%%|*}; _hv=${_hv#*|}
+    [ "$_hrole" = orchestrator ] && _hiss=orch   # its ladder is above (#2937), not a hub warning
     _hraw=${_hv%%|*}; _hv=${_hv#*|}
     _hctx=${_hv%%|*}; _hv=${_hv#*|}
     _hwarn=${_hv%%|*}; _hv=${_hv#*|}
