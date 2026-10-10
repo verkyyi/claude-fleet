@@ -248,7 +248,7 @@ case "${1:-}" in
           esac
         fi ;;
     esac
-    if [ "$sem" = done ]; then
+    if [ "$sem" = 'done' ]; then
       wwait=$(bash -c '. "$1/fleet-lib.sh"; fleet_stop_wait "$2" "$3"' stop-wait \
                 "$_lbin" "$TMUX_PANE" "$_tp" 2>/dev/null </dev/null) || wwait=''
       [ -n "$wwait" ] && wstate=looping

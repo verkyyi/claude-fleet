@@ -90,15 +90,15 @@ tf set-window-option -t "$PANE" @cc_session_id "$SID"
 tf set-window-option -t "$PANE" @loop "kind=wakeup next=$next ttl=1500"
 STOP="{\"hook_event_name\":\"Stop\",\"transcript_path\":\"$TP\"}"
 : > "$TP"
-hook done "$STOP"
+hook 'done' "$STOP"
 [ "$(st)" = looping/ ] && ok "S: a driver with a Loop pending stops as looping" || bad "S: before the wake: $(st)"
 # the wake's turn opens the dialog
 ask toolu_A '谁来部署入口？' '我来部署 (Recommended)' '等发起人'
 hook busy '{"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"谁来部署入口？","options":[{"label":"我来部署 (Recommended)"},{"label":"等发起人"}]}]}}'
 [ "$(st)" = needs/ask ] && ok "S: the dialog opened inside the /loop wake reads needs/ask" || bad "S: wake dialog: $(st)"
-hook done "$STOP"
+hook 'done' "$STOP"
 [ "$(st)" = needs/ask ] && ok "S: a Stop with the dialog still open leaves needs/ask (not looping)" || bad "S: Stop over the open dialog: $(st)"
-hook done '' '--via mod'
+hook 'done' '' '--via mod'
 [ "$(st)" = needs/ask ] && ok "S: the mod's turn.complete (no payload: @cc_session_id's transcript) leaves needs/ask" \
   || bad "S: mod done over the open dialog: $(st)"
 rm -f "$WORK/claude.calls"
@@ -109,7 +109,7 @@ env FLEET_MOD=0 CLASSIFY_SETTLE=0 bash "$BIN/classify-sessions.sh" --window "$PA
 answered toolu_A '我来部署 (Recommended)'
 hook working '{"hook_event_name":"PostToolUse","tool_name":"AskUserQuestion"}'
 [ "$(st)" = working/ ] || bad "S: after the answer: $(st)"
-hook done "$STOP"
+hook 'done' "$STOP"
 [ "$(st)" = looping/ ] && ok "S: answered, the turn ends ⇒ looping again" || bad "S: after the answer's Stop: $(st)"
 
 # ===================== W — the steward ========================================
