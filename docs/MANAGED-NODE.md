@@ -166,7 +166,8 @@ root 运行。**托管登录的 `~/.claude/fleet` 就是机器运行时那一份
 `~/.claude/fleet.versions/<sha>/` 仍是登录自己的**真目录**，但里面每个文件都是指向 `<root>/<sha>/<同一路径>` 的链接
 （与 `bin/selftest-shadow-root.sh` 同一做法：目录是真的、文件是链接，所以 `$BIN/..` 落在登录自己的目录里——
 `logs/`、`epic-pages/`、`fleet.conf*` 照旧由 `fleet.versions/.shared/` 链入）。字节只在 `<root>/<sha>/` 存一份，
-登录目录只是链接（< 1 MB），毫秒级建好；最后写的 `.fleet-linked`（`{sha, root}`）是「这棵树完整、属于哪一版」的记号。
+登录目录只是链接（< 1 MB），毫秒级建好——唯一的例外是 `mod/`：整棵真拷贝（几百 KB），因为 Claude Code 解析插件文件的真实路径、
+拒绝落在 `--plugin-dir` 之外的（「Path escapes plugin directory」），之前建的树由在发布版的下一拍原地补成拷贝（#2964）；最后写的 `.fleet-linked`（`{sha, root}`）是「这棵树完整、属于哪一版」的记号。
 建它的是更新器的 `link-tree <sha>`，**降权到该登录**（它的 HOME / TMPDIR / `FLEET_CONF_DIR`）运行：建树 → 一次 rename 切
 `~/.claude/fleet`（普通目录先收成版本布局）→ 跑新版的 `fleet-install-apply.sh --tree-from <旧版本目录> --tree-to <新>`
 （两目录比较模式：链接树里没有 git，改了什么逐文件比两棵树得出；守护重载、hook 合并、技能安装照旧）。
