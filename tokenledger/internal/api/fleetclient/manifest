@@ -77,6 +77,12 @@ bin/fleet-route.py
 # the ONE TLS context every hub-facing python imports (#2878): a python3 with
 # no CA store still verifies the hub (certifi · macOS system roots · OpenSSL)
 bin/fleet_tls.py
+# `fleet doctor --bundle <dir>` (#2890): the diagnosis bundle, its awk redactor
+# (no python needed) and the one list of files it may read; the shape table and
+# fleet_redact.py ride the agent bundle below
+bin/fleet-doctor-bundle.sh
+bin/fleet-redact.awk
+conf/debug-collect.list
 bin/fleet-client-lib.sh
 # keeps up with stable by itself (#1722, #1805): newer client + the team's
 # defaults; `fleet update` says where this computer stands
@@ -228,6 +234,8 @@ bin/fleet-install-apply.sh
 bin/fleet-hooks-merge.py
 bin/fleet-agent-defaults.py
 bin/fleet-agent-team.py
+bin/fleet_redact.py
+conf/secret-shapes.list
 bin/fleet-config.py
 bin/fleet-cred-proxy.sh
 bin/fleet-cred-proxy.py

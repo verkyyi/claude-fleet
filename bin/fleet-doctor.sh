@@ -89,6 +89,14 @@ if [ "${1:-}" = --installs ]; then
   exec sh "$(dirname "$0")/fleet-installs.sh" "$@"
 fi
 
+# `fleet doctor --bundle <dir>` (issue #2890, EPIC #2889 C1): this doctor in full
+# plus the system, the tools, the route to the hub and the client's logs, every
+# credential taken out — bin/fleet-doctor-bundle.sh (the client-only `fleet`
+# execs it too). Exit 0 bundled · 3 a credential survived, nothing written.
+if [ "${1:-}" = --bundle ]; then
+  exec sh "$(dirname "$0")/fleet-doctor-bundle.sh" "$@"
+fi
+
 # `fleet doctor --json` (issue #2674): the same run, its rows as one JSON object —
 # {"v":1,"rc":N,"fails":N,"warns":N,"rows":[{"level","row","msg"}…]} — for the
 # steward's health watch (bin/fleet_steward_health.py). It runs the doctor once,

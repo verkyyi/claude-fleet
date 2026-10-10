@@ -215,11 +215,9 @@ CODEX_DENIED = {"model", "mcp_servers", "model_providers"}
 SECRET_KEY = re.compile(r"(?i)(token|secret|passw(or)?d|api[_-]?key|credential|private[_-]?key|authorization"
                         r"|(^|[_-])auth($|[_-])|cookie|session[_-]?key)")
 SECRET_REF = re.compile(r"^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?$")
-SECRET_VALS = [re.compile(p) for p in (
-    r"sk-ant-[A-Za-z0-9_-]{8,}", r"\bsk-[A-Za-z0-9_-]{20,}", r"\bgh[pousr]_[A-Za-z0-9]{20,}",
-    r"\bgithub_pat_[A-Za-z0-9_]{20,}", r"\bglpat-[A-Za-z0-9_-]{20,}", r"\bxox[abprs]-[A-Za-z0-9-]{10,}",
-    r"\bAKIA[0-9A-Z]{16}\b", r"\bAIza[0-9A-Za-z_-]{30,}", r"-----BEGIN [A-Z ]*PRIVATE KEY-----",
-    r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{16,}", r"\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}")]
+# What a credential VALUE looks like is conf/secret-shapes.list's `value` and
+# `block` rows (issue #2890) — the one table the diagnosis bundle redacts by too.
+_SHAPES = []
 
 
 def die(msg, code=2):
@@ -262,6 +260,18 @@ def write_json_atomic(path, data):
 
 # --- the rules ---------------------------------------------------------------------
 
+def secret_value(s):
+    """True when s holds a credential-shaped value (conf/secret-shapes.list)."""
+    if not _SHAPES:
+        mod = load_mod("fleet_redact", "fleet_redact.py")
+        try:
+            _SHAPES.append((mod, mod.load()))
+        except (OSError, ValueError) as e:
+            die("cannot read the credential shapes: %s" % e)
+    mod, shapes = _SHAPES[0]
+    return mod.find_str(s, shapes)
+
+
 def secret_in(path, v):
     if isinstance(v, dict):
         for k in sorted(v):
@@ -278,7 +288,7 @@ def secret_in(path, v):
             if r:
                 return r
     elif isinstance(v, str):
-        if any(rx.search(v) for rx in SECRET_VALS):
+        if secret_value(v):
             return path
     return ""
 
