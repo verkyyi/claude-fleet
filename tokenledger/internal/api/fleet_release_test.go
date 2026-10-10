@@ -283,7 +283,7 @@ func TestReleasePruneKeepsNewestAndStable(t *testing.T) {
 	must(t, r.rs.Source.Refresh(context.Background())) // stable = shaA
 	files := map[string][]byte{"bin/x": []byte("x")}
 	mk := func(sha string, age time.Duration) {
-		must(t, r.rs.publish(sha, files, nil, time.Now().Add(-age)))
+		must(t, r.rs.publish(sha, files, nil, time.Now().Add(-age), release.Seal{}))
 	}
 	mk(shaA, 100*time.Hour) // the oldest — but stable
 	var shas []string
@@ -341,7 +341,7 @@ func TestReleaseTwoReplicasOneVolume(t *testing.T) {
 			if n == 1 { // a replica on another image: different binaries
 				arts = map[string]string{}
 			}
-			errs <- s.publish(shaA, files, arts, time.Now())
+			errs <- s.publish(shaA, files, arts, time.Now(), release.Seal{})
 		}(s, i)
 	}
 	must(t, <-errs)
@@ -395,7 +395,7 @@ func TestReleasePinnedArtifactsOnTheReleaseVolume(t *testing.T) {
 
 	// a release built before the files land: no installers, and it stays so
 	files := map[string][]byte{"bin/x": []byte("x")}
-	must(t, r.rs.publish(shaB, files, r.rs.artifacts(), time.Now().Add(-time.Hour)))
+	must(t, r.rs.publish(shaB, files, r.rs.artifacts(), time.Now().Add(-time.Hour), release.Seal{}))
 
 	names := []string{"claude-2.1.293-darwin-arm64", "codex-0.154.0-darwin-arm64", "tmux-3.7c-darwin-arm64"}
 	for _, n := range names {
@@ -677,7 +677,7 @@ func TestReleaseHealsLackingPinned(t *testing.T) {
 	must(t, r.rs.Source.Refresh(context.Background()))
 	// what the old hub left: shaA signed without claude
 	files := map[string][]byte{"bin/fleet": []byte("#!/bin/sh\n"), release.ReleaseJSON: []byte(rj)}
-	must(t, r.rs.publish(shaA, files, r.rs.artifacts(), time.Now().Add(-time.Hour)))
+	must(t, r.rs.publish(shaA, files, r.rs.artifacts(), time.Now().Add(-time.Hour), release.Seal{}))
 
 	carries := func() bool {
 		t.Helper()

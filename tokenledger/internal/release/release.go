@@ -66,14 +66,21 @@ type Blob struct {
 
 // Manifest is what the hub signs.
 type Manifest struct {
-	Schema    int       `json:"schema"`
-	Repo      string    `json:"repo"`
-	SHA       string    `json:"sha"`
-	Created   time.Time `json:"created"`
-	Key       string    `json:"key"` // the signing key's fingerprint (KeyID)
-	Tree      Blob      `json:"tree"`
-	Files     []File    `json:"files"`
-	Artifacts []Blob    `json:"artifacts"`
+	Schema  int       `json:"schema"`
+	Repo    string    `json:"repo"`
+	SHA     string    `json:"sha"`
+	Created time.Time `json:"created"`
+	Key     string    `json:"key"` // the signing key's fingerprint (KeyID)
+	// Prev and Seq place the release on the hub's stable chain
+	// (claude-fleet#2771): Prev is the stable this one replaced, Seq the hub's
+	// publish number — rising by one per stable move, so a machine's
+	// «only forward» gate reads one signed integer, never git ancestry. Both
+	// are under the signature; a release never made stable has neither.
+	Prev      string `json:"prev,omitempty"`
+	Seq       int64  `json:"seq,omitempty"`
+	Tree      Blob   `json:"tree"`
+	Files     []File `json:"files"`
+	Artifacts []Blob `json:"artifacts"`
 }
 
 var (
@@ -174,11 +181,25 @@ func fileMode(p string, b []byte) int64 {
 	return 0o644
 }
 
+// Seal is a release's place on the stable chain (Manifest.Prev / .Seq).
+type Seal struct {
+	Prev string
+	Seq  int64
+}
+
 // Build writes a signed release for sha into dir (which must not exist yet):
 // files is the runtime tree, artifacts maps a name to the file to copy in.
 func Build(dir, repo, sha string, files map[string][]byte, artifacts map[string]string, key ed25519.PrivateKey, now time.Time) (*Manifest, error) {
+	return BuildSealed(dir, repo, sha, files, artifacts, key, now, Seal{})
+}
+
+// BuildSealed is Build with the release's place on the stable chain signed in.
+func BuildSealed(dir, repo, sha string, files map[string][]byte, artifacts map[string]string, key ed25519.PrivateKey, now time.Time, seal Seal) (*Manifest, error) {
 	if !ValidSHA(sha) {
 		return nil, fmt.Errorf("bad sha %q", sha)
+	}
+	if (seal.Prev != "" && !ValidSHA(seal.Prev)) || seal.Prev == sha || seal.Seq < 0 {
+		return nil, fmt.Errorf("bad seal prev %q seq %d", seal.Prev, seal.Seq)
 	}
 	if len(files) == 0 {
 		return nil, errors.New("no files")
@@ -187,7 +208,7 @@ func Build(dir, repo, sha string, files map[string][]byte, artifacts map[string]
 		return nil, err
 	}
 	m := Manifest{Schema: Schema, Repo: repo, SHA: sha, Created: now.UTC().Truncate(time.Second),
-		Key: KeyID(key.Public().(ed25519.PublicKey)), Files: []File{}, Artifacts: []Blob{}}
+		Key: KeyID(key.Public().(ed25519.PublicKey)), Prev: seal.Prev, Seq: seal.Seq, Files: []File{}, Artifacts: []Blob{}}
 
 	names := make([]string, 0, len(files))
 	for p := range files {

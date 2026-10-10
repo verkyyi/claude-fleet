@@ -1,0 +1,37 @@
+# What an install of claude-fleet holds — the ONE list (claude-fleet#2771,
+# EPIC #2770 C1). The hub filters each stable's tree by the copy inside that
+# commit (tokenledger internal/release TreeList), and
+# bin/release-tree-selftest.sh reds when a script in bin/ reads a top-level
+# item of the repo that this list leaves out.
+#
+#   dir/    every file under it        !dir/   never anything under it
+#   path    that one file              !path   never that file
+#   *       every top-level file not starting with "."
+#
+# A `!` wins over `dir/` and `*`; an exact `path` wins over a `!dir/`.
+
+# the runtime trees
+bin/
+conf/
+hooks/
+commands/
+skills/
+mod/
+shell/
+launchd/
+systemd/
+docs/
+
+# read by a login's install too: the plugin manifest (fleet-lib.sh,
+# fleet-install-apply.sh) and the laptop / proxy halves (fleet-doctor.sh,
+# open-url.sh)
+.claude-plugin/
+extras/
+
+# README.md, LICENSE, release.json, fleet.conf.example, …
+*
+
+# never: the hub's Go source, its deploy tree, the CI's files
+!tokenledger/
+!deploy/
+!.github/
