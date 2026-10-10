@@ -236,7 +236,7 @@ case $s1 in *"-o X=1 -tt -o ControlMaster=no -o ControlPath=none -o ServerAliveI
   *) fail "B: ssh argv: $s1" ;; esac
 case $out in *7502*) fail "B: an OSC 7502 reached the terminal" ;; *) ok "B: no OSC 7502 reaches the terminal (ours and the bad-token one)" ;; esac
 case $out in $'\e]1337;SetProfile=fleet\a'*) ok "B: the iTerm2 profile goes to fleet first" ;; *) fail "B: no SetProfile=fleet first" ;; esac
-case $res in *"CHILDREN 1 bash .claude/fleet/bin/fleet-remote-view.sh attach --thin "*) ok "B: the loop's only child is the ssh" ;; *) fail "B: children: $(grep CHILDREN "$T/res.main")" ;; esac
+case $res in *"CHILDREN 1 "*"fleet-remote-view.sh attach --thin "*) ok "B: the loop's only child is the ssh" ;; *) fail "B: children: $(grep CHILDREN "$T/res.main")" ;; esac
 socks=$(find "$T/client" -type s 2>/dev/null | wc -l | tr -d ' ')
 [ "$socks" = 0 ] && ok "B: no socket file under the client's HOME / cache" || fail "B: $socks socket file(s)"
 case $out in *'和 m1 的连接断了，0.2 秒后重连（第 1 次）'*) ok "C: a drop → one line 「和 m1 的连接断了…（第 1 次）」" ;; *) fail "C: no reconnect line" ;; esac
