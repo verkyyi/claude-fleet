@@ -117,6 +117,12 @@ FLEET_SWITCH_QUIT_CMD="$seam quit" Q switch-run quit sw || fail "C: switch-run q
 for _ in 1 2 3 4 5 6 7 8 9 10; do [ -s "$rec" ] && break; sleep 0.2; done
 grep -qx 'sw|quit sw' "$rec" || fail "C: 「退出 fleet」 did not quit the client (fleet-shell.sh quit <session>)" "$(cat "$rec")"; ok
 grep -q '"fleet-shell.sh"), "quit"' "$BIN/fleet-quickopen.py" || fail "C: 「退出 fleet」 is not fleet-shell.sh quit"; ok
+# 连接路线… (claude-fleet#2886): `fleet route --pick` in a popup
+: > "$rec"
+FLEET_SWITCH_ROUTE_CMD="$seam route" Q switch-run route sw || fail "C: switch-run route exited non-zero"
+for _ in 1 2 3 4 5 6 7 8 9 10; do [ -s "$rec" ] && break; sleep 0.2; done
+grep -qx 'sw|route' "$rec" || fail "C: 「连接路线…」 did not run its popup" "$(cat "$rec")"; ok
+grep -q '"fleet-route.py"), "--pick"' "$BIN/fleet-quickopen.py" || fail "C: 「连接路线…」 is not fleet-route.py --pick"; ok
 
 # --- D ----------------------------------------------------------------------------
 python3 - "$BIN" <<'PY' || exit 1
@@ -146,8 +152,11 @@ ok
 # rows first; the list's rows carry 单号 · PR · 回收方式 (rows_text ⇄ parse_rows).
 tmux -S "$SOCK" set-option -g @fleet_layout solo
 out=$(Q panel-cmds)
-[ "$(printf '%s\n' "$out" | cut -f1 | tr '\n' ' ')" = "dispatch quit new:claude new:codex layout:multi rename-current " ] \
-  || fail "E: > does not start with 派一件事 (#2753) · 退出 · 新会话 claude / codex · the layout flip · 改名当前会话" "$out"; ok
+[ "$(printf '%s\n' "$out" | cut -f1 | tr '\n' ' ')" = "dispatch quit new:claude new:codex layout:multi rename-current route " ] \
+  || fail "E: > does not start with 派一件事 (#2753) · 退出 · 新会话 claude / codex · the layout flip · 改名当前会话 · 连接路线" "$out"; ok
+# claude-fleet#2886: 连接路线… runs `fleet route --pick`; 「/route」 is in its name
+printf '%s\n' "$out" | grep -qx 'route	连接路线…（/route）	!route' || fail "E: > has no 连接路线…（/route） (#2886)" "$out"; ok
+grep -q 'query.startswith("/")' "$BIN/fleet-quickopen.py" || fail "E: a query led by / is not a command query (#2886)"; ok
 printf '%s\n' "$out" | grep -qx 'dispatch	⚡ 派一件事…	!dispatch' || fail "E: > has no ⚡ 派一件事… (#2753)" "$out"; ok
 # ⌘P's pinned group (issue #2753): 派一件事 first, then + 新会话 · the flip · 退出, a
 # rule under them — no `>` needed; a query keeps the ones it names

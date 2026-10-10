@@ -507,6 +507,11 @@ fleet_ui_t() {
     en:panel_solo)              printf 'Switch to the one-session view' ;;
     zh:panel_rename_current)    printf '改名当前会话' ;;
     en:panel_rename_current)    printf 'Rename the session in view' ;;
+    # ⌘P's 连接路线… (claude-fleet#2886): pin the route to a machine — `fleet route`
+    zh:panel_route)             printf '连接路线…（/route）' ;;
+    en:panel_route)             printf 'Connection route… (/route)' ;;
+    zh:popup_route)             printf '连接路线' ;;
+    en:popup_route)             printf 'Connection route' ;;
     zh:panel_no_action_fmt)     printf '这一行不能%s' "${1:-}" ;;
     en:panel_no_action_fmt)     printf 'this row cannot %s' "${1:-}" ;;
     zh:panel_no_waiting)        printf '没有在问你的会话' ;;

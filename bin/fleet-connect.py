@@ -2,9 +2,9 @@
 """fleet connect — get into your own fleet over the best route there is.
 
     fleet [MACHINE] [--verbose] [--retest] [--print] [-o SSH-OPTION]… [-- SSH-ARGS…]
-    fleet connect [MACHINE] [--verbose] [--retest] [--print] [-o SSH-OPTION]… [-- SSH-ARGS…]
+    fleet connect [MACHINE] [--verbose] [--retest] [--route ROUTE] [--print] [-o SSH-OPTION]… [-- SSH-ARGS…]
     fleet connect --proxy MACHINE
-    fleet connect --pick [MACHINE]
+    fleet connect --pick [MACHINE] [--route ROUTE]
     fleet connect --probe-direct MACHINE
     fleet connect --cert-check
     fleet connect --principal-hint < BODY
@@ -41,8 +41,11 @@ window one handshake re-checks the remembered route before it is used; if that
 route has gone dark, every route is measured again — so closing any one line
 moves the next `fleet connect` onto another, with nothing to edit.
 FLEET_CONNECT_RETEST=1 is --retest from the environment: the shell's right pane
-sets it on every RECONNECT (claude-fleet#1628), so a dropped connection always
-comes back over whatever is fastest now, never the remembered line.
+sets it when it leaves the relay for a direct line that answered (#1628). On an
+ordinary RECONNECT it sets FLEET_CONNECT_RETEST=last (claude-fleet#2886): the
+remembered line first, whatever its age — only when it does not answer is every
+route measured again, so a slow network does not wait out a measurement on
+every drop.
 
 The shell's seams (claude-fleet#1628): FLEET_CONNECT_ROUTE_FILE names a file
 this writes the chosen route to just before ssh starts — one JSON line,
@@ -59,6 +62,15 @@ option placed BEFORE the host — a ControlMaster/ControlPath pair, RequestTTY �
 so a caller that wants a remote command over a shared connection need not
 rebuild the route (the shell, claude-fleet#1484). Anything after `--` goes to
 ssh (a remote command, -L forwards, …).
+
+A PINNED route (claude-fleet#2886, `fleet route <machine> <route>`, or
+--route ROUTE here — with --pick too, on the machine picked) is taken every
+time, before anything above: no handshake, no measuring, no switching; the
+route file then says "source": "manual" and the "pin", so the client's bar
+names it and its loop never upgrades it. FLEET_CONNECT_RETEST=last is a
+reconnect in auto: the remembered route first, whatever its age, and every
+route measured only when it does not answer (=1 still measures them all —
+the upgrade off the relay).
 
 --pick [MACHINE] (claude-fleet#1484): the certificate step and the machine
 step of `fleet`, and nothing else — no measuring, no ssh. Prints one JSON
@@ -670,6 +682,106 @@ def measure(rows, hub, token, probes, timeout):
     return rank_routes([r for r in rows if not r.get("skip")]) + [r for r in rows if r.get("skip")]
 
 
+# ── a pinned route (claude-fleet#2886) ──────────────────────────────────────
+# `fleet route <machine> <route>` writes one line `<machine> <route>` to
+# ~/.config/claude-fleet/routes; with a line there, every connect to that
+# machine takes that one route — no measuring, no switching — and a drop comes
+# back over the same one. `auto` (no line) is the measuring above.
+
+PIN_WORDS = ("auto", "relay", "direct", "tailscale")
+PIN_RE = re.compile(r"^(auto|relay|direct|tailscale|tailnet|[A-Za-z0-9._-]+(:[0-9]{1,5})?|\[[0-9A-Fa-f:.]+\](:[0-9]{1,5})?)$")
+
+
+def routes_path():
+    return os.path.join(config_dir(), "routes")
+
+
+def load_pins():
+    """{machine: route} from the routes file; a malformed line is skipped."""
+    pins = {}
+    try:
+        with open(routes_path()) as f:
+            for line in f:
+                w = line.split("#", 1)[0].split()
+                if len(w) == 2 and PIN_RE.match(w[1]) and w[1] != "auto":
+                    pins[w[0]] = w[1]
+                elif len(w) == 2 and w[1] == "auto":
+                    pins.pop(w[0], None)
+    except OSError:
+        pass
+    return pins
+
+
+def save_pin(machine, route):
+    """Pin MACHINE to ROUTE (`auto` removes its line). One rename: a reader
+    never sees half a file."""
+    pins = load_pins()
+    if route == "auto":
+        pins.pop(machine, None)
+    else:
+        pins[machine] = "tailscale" if route == "tailnet" else route
+    path = routes_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        f.write("# fleet route — one machine a line: <machine> relay|direct|tailscale|<route name>|<host[:port]>\n")
+        for k in sorted(pins):
+            f.write("%s %s\n" % (k, pins[k]))
+    os.replace(tmp, path)
+
+
+def pin_for(*names):
+    """The pinned route for the first of NAMES that has one ('' = auto)."""
+    pins = load_pins()
+    for n in names:
+        if n and n in pins:
+            return pins[n]
+    return ""
+
+
+def machine_names(m):
+    return [x for x in ((m or {}).get("alias"), (m or {}).get("hostname")) if x]
+
+
+def pinned_row(rows, pin):
+    """The row PIN names among a machine's ROWS: `relay`, `tailscale` (the
+    tailnet route), `direct` (the first direct route that is not the tailnet, in
+    the hub's order), a route's own name — else PIN is an address, host[:port].
+    None when the machine has no such route."""
+    def tail(r):
+        return "tail" in r["name"]
+    if pin == "relay":
+        return next((r for r in rows if r["kind"] == "relay"), None)
+    if pin in ("tailscale", "tailnet"):
+        return next((r for r in rows if r["kind"] == "direct" and tail(r)), None)
+    if pin == "direct":
+        return (next((r for r in rows if r["kind"] == "direct" and not tail(r)), None)
+                or next((r for r in rows if r["kind"] == "direct"), None))
+    hit = next((r for r in rows if r["name"] == pin), None)
+    if hit:
+        return hit
+    m = re.match(r"^\[?([^\[\]]+?)\]?(?::([0-9]{1,5}))?$", pin)
+    if not m or (":" in m.group(1) and not pin.startswith("[")):
+        return None
+    return {"name": pin, "kind": "direct", "host": m.group(1), "port": int(m.group(2) or 22),
+            "order": 0, "ms": [], "errors": []}
+
+
+def route_label(kind, name):
+    """A route in a person's words: 中转 · Tailscale · 直连 <name>."""
+    if kind == "relay":
+        return "中转"
+    if "tail" in (name or ""):
+        return "Tailscale"
+    if name and (re.search(r"[.:]", name) or name[:1].isdigit()):
+        return name  # an address the person pinned
+    return "直连" + ((" " + name) if name and name not in ("public", "direct") else "")
+
+
+def pin_label(pin):
+    return {"relay": "中转", "tailscale": "Tailscale", "tailnet": "Tailscale", "direct": "直连"}.get(pin, pin)
+
+
 def addr(r, hub):
     return ("经入口 " + hub) if r["kind"] == "relay" else "%s:%d" % (r["host"], r["port"])
 
@@ -742,10 +854,23 @@ def connect(want, hub, token, verbose, retest, print_only, ssh_args, info=None, 
     entries = cache.get("machines") if isinstance(cache.get("machines"), dict) else {}
     now = time.time()
 
-    # 1 — a remembered choice, still fresh: one handshake to confirm it.
+    # 0 — a pinned route (claude-fleet#2886): that one, untested, every time.
+    # The machine as remembered serves it without asking the hub; a machine
+    # never seen yet is looked up below first.
     key = want or cache.get("last") or ""
     ent = entries.get(key) if key else None
-    if ent and not retest and ent.get("hub") == hub and now - float(ent.get("at", 0)) < ttl:
+    pin = pin_for(key, *machine_names((ent or {}).get("machine")))
+    if pin and ent and ent.get("hub") == hub and isinstance(ent.get("machine"), dict):
+        r = pinned_row(route_rows(ent["machine"], hub), pin)
+        if r is not None:
+            return run_pinned(ent["machine"], ent.get("label") or key, r, pin, ent.get("login", ""), hub,
+                              verbose, print_only, ssh_args, ssh_opts)
+
+    # 1 — a remembered choice: one handshake to confirm it. Fresh (inside the
+    # TTL), or — retest "last", a reconnect (claude-fleet#2886) — of any age:
+    # only when it does not answer is every route measured again.
+    if not pin and ent and retest is not True and ent.get("hub") == hub \
+            and (retest == "last" or now - float(ent.get("at", 0)) < ttl):
         r = ent["route"]
         r = dict(r, ms=[], errors=[], order=0)
         measure([r], hub, token, 1, timeout)
@@ -785,6 +910,27 @@ def connect(want, hub, token, verbose, retest, print_only, ssh_args, info=None, 
     label = m.get("alias") or m.get("hostname")
     if m.get("hostname") and m.get("alias") and m["hostname"] != m["alias"]:
         label = "%s (%s)" % (m["alias"], m["hostname"])
+    name = m.get("alias") or m.get("hostname")
+
+    pin = pin_for(want, *machine_names(m))
+    if pin:
+        r = pinned_row(route_rows(m, hub), pin)
+        if r is None:
+            die("%s 钉住的线路「%s」这台机器没有%s — 改回自动：fleet route %s auto"
+                % (label, pin_label(pin), "（中转要入口）" if pin == "relay" and not hub else "", name), 1)
+        # remembered for the next connect (step 0 then needs no hub); its
+        # measured table, if any, is kept for `fleet route`'s list
+        old = entries.get(name) or {}
+        ent = dict(old, at=old.get("at", now), hub=hub, label=label, machine=m, login=machine_login(m, info),
+                   route=old.get("route") or {k: r[k] for k in ("name", "kind", "host", "port")},
+                   routes=[{k: x[k] for k in ("name", "kind", "host", "port")}
+                           for x in route_rows(m, hub) if x["kind"] != "relay"])
+        entries[name] = ent
+        if want and want != name:
+            entries[want] = ent
+        cache["machines"], cache["last"] = entries, name
+        save_cache(cache)
+        return run_pinned(m, label, r, pin, ent["login"], hub, verbose, print_only, ssh_args, ssh_opts)
 
     # 3 — measure every route, pick, remember.
     rows = measure(route_rows(m, hub), hub, token, probes, timeout)
@@ -794,7 +940,6 @@ def connect(want, hub, token, verbose, retest, print_only, ssh_args, info=None, 
     if best is None:
         die("%s: 没有一条线能连通" % label, 1)
     login = machine_login(m, info)
-    name = m.get("alias") or m.get("hostname")
     route = {k: best[k] for k in ("name", "kind", "host", "port")}
     ent = {"at": now, "hub": hub, "label": label, "machine": m, "login": login, "route": route,
            "routes": [{k: r[k] for k in ("name", "kind", "host", "port")} for r in rows if r["kind"] != "relay"],
@@ -829,16 +974,27 @@ def login_override(login):
     return login
 
 
-def run_ssh(machine, route, login, hub, print_only, ssh_args, ssh_opts=()):
+def run_pinned(machine, label, route, pin, login, hub, verbose, print_only, ssh_args, ssh_opts=()):
+    if verbose:
+        sys.stderr.write("fleet connect · %s · 钉住：%s（手动）— 不测速，只走 %s；改回自动：fleet route %s auto\n"
+                         % (label, pin_label(pin), addr(route, hub),
+                            machine.get("alias") or machine.get("hostname")))
+    return run_ssh(machine, route, login, hub, print_only, ssh_args, ssh_opts, pin=pin)
+
+
+def run_ssh(machine, route, login, hub, print_only, ssh_args, ssh_opts=(), pin=""):
     alias = machine.get("alias") or machine.get("hostname") or "?"
     login = login_override(login)
     cmd = ssh_command(machine, route, login, hub, ssh_opts) + list(ssh_args)
     rf = os.environ.get("FLEET_CONNECT_ROUTE_FILE")
     if rf and not print_only:
         try:
+            # source / pin (claude-fleet#2886): a pinned line is never upgraded,
+            # and the bar says 手动
             with open(rf, "w") as f:
                 f.write(json.dumps({"machine": alias, "kind": route["kind"], "name": route["name"],
-                                    "login": login or ""}) + "\n")
+                                    "login": login or "", "source": "manual" if pin else "auto",
+                                    "pin": pin or ""}) + "\n")
         except OSError:
             pass  # the pane then just does not know its route: no 「· 中转」, no upgrade
     if print_only:
@@ -1122,6 +1278,9 @@ def main(argv):
     ap.add_argument("--hub", help="the hub's URL (default: FLEET_HUB_URL, then hub.json)")
     ap.add_argument("-v", "--verbose", action="store_true", help="print the measurement table and the choice")
     ap.add_argument("--retest", action="store_true", help="measure again even if a recent choice is remembered")
+    ap.add_argument("--route", metavar="ROUTE",
+                    help="pin MACHINE (default: the one used last) to ROUTE and remember it — auto · relay · "
+                         "direct · tailscale · a route name · host[:port] (`fleet route`, claude-fleet#2886)")
     ap.add_argument("--print", dest="print_only", action="store_true", help="print the ssh command, don't run it")
     ap.add_argument("-o", "--ssh-option", dest="ssh_opts", action="append", default=[], metavar="KEY=VALUE",
                     help="an ssh option placed before the host (repeatable): ControlPath=…, RequestTTY=force, …")
@@ -1145,6 +1304,16 @@ def main(argv):
         return probe_remembered_direct(a.probe_direct)
     if os.environ.get("FLEET_CONNECT_RETEST") == "1":
         a.retest = True
+    elif os.environ.get("FLEET_CONNECT_RETEST") == "last" and not a.retest:
+        a.retest = "last"  # a reconnect: the remembered route first, of any age (claude-fleet#2886)
+    if a.route is not None:
+        if not PIN_RE.match(a.route):
+            die("--route %s: auto · relay · direct · tailscale · a route name · host[:port]" % a.route)
+        target = a.machine or ("" if a.pick else load_cache().get("last") or "")
+        if target:
+            save_pin(target, a.route)
+        elif not a.pick:
+            die("--route: name the machine (fleet connect <machine> --route %s)" % a.route)
     conf = load_hub_conf()
     # The address lives in fleet.conf (issue #1623); hub.json keeps the token, and
     # its old "url" is read for one version.
@@ -1177,6 +1346,12 @@ def main(argv):
             return 0
         sys.stderr.write("fleet connect · %s 是本机（没有入口）：不用 ssh，敲 fleet 开客户端\n" % m["alias"])
         return 0
+    if a.pick and a.route is not None and not a.machine:
+        # the machine is the hub's pick: pinned once it is known
+        rc = enter(None, hub, token, a.verbose, a.retest, a.print_only, ssh_args, a.ssh_opts, True)
+        if rc == 0 and load_cache().get("last"):
+            save_pin(load_cache()["last"], a.route)
+        return rc
     if a.enter or a.pick:
         return enter(a.machine, hub, token, a.verbose, a.retest, a.print_only, ssh_args, a.ssh_opts, a.pick)
     return connect(a.machine, hub.rstrip("/"), token, a.verbose, a.retest, a.print_only, ssh_args, ssh_opts=a.ssh_opts)

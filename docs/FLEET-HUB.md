@@ -506,15 +506,26 @@ runs `fleet` there: the same client, on that machine, and its bar says
 `客户端在 m5 上运行` (`client_where` stamps `@fleet_client_remote` =
 `<tty>|<machine>` when `SSH_CONNECTION` is set; `tmux-status.sh`'s `cr=` draws it
 for that tty's client alone).
-The client's right pane always rides the fastest line: every reconnect
-re-measures every route (`FLEET_CONNECT_RETEST=1`, never the 600 s memory), and
-while it is on the hub relay the window carries `@remote_route relay` — the bar's
+The client's right pane rides the fastest line: a reconnect first tries the
+line remembered last, whatever its age (`FLEET_CONNECT_RETEST=last`, issue
+#2886), and re-measures every route only when that one does not answer; while it
+is on the hub relay the window carries `@remote_route relay` — the bar's
 machine chip reads `m4 · 中转` — and one direct handshake runs every
 `FLEET_CONNECT_UPGRADE_SECS` (15; `fleet connect --probe-direct`, ~0.1–0.2 s);
 when one answers, the pane waits for the keys to rest `FLEET_REMOTE_IDLE_SECS`
 (2), closes the relay's ControlMaster and reconnects direct in about a second —
-≤ 20 s from the line coming back. `bin/fleet-client-route-selftest.sh` pins all
-of it. The shell opens the
+≤ 20 s from the line coming back (a re-measure, `FLEET_CONNECT_RETEST=1`).
+`bin/fleet-client-route-selftest.sh` pins all of it. **A person can pin the line
+instead** (issue #2886): `fleet route <machine> relay|direct|tailscale|<route
+name>|<host[:port]>` (⌘P 连接路线…, `/route` there; `fleet connect --route R`)
+writes `~/.config/claude-fleet/routes`, and from then on every connect to that
+machine — `fleet connect`, the warm master, the right pane — takes that one route:
+no handshake, no measuring, never upgraded; a drop reconnects over it with the
+usual backoff, the page and the top line say 「钉住：中转（手动）· 第 N 次重连」
+(`@remote_pin` / `@remote_tries`; `@remote_via` 「<自动|手动> <route>」 once up),
+and after `FLEET_ROUTE_FAIL_HINT` (5) failures in a row the page suggests `fleet
+route <machine> auto` — it never goes back by itself. `fleet route` alone lists
+every machine, its route and source, and the last handshakes. The shell opens the
 same three things a fleet pane shows, without a fleet on that computer: LEFT the
 hub's list, BOTTOM the hub's bar, RIGHT a direct ssh into the session you look
 at. Nothing is rendered anew — the shell is a composition: its own tmux server
