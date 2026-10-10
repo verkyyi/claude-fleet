@@ -4702,12 +4702,12 @@ drill_opening_eta_climbs() {
 # the hub read removed and the OS login was nobody's. Now step 6 reads the
 # record again: dscl -delete it, and exit 1 if even that leaves it.
 drill_login_remove_record_left() {
-  CAP=60; local t0
+  CAP=60; local t0 out
   t0=$(now)
   grep -q 'record still there after deleteUser' "$ROOT/bin/fleet-login-remove.sh" \
     || { WHY="fleet-login-remove.sh no longer checks the record is gone after deleteUser"; return 1; }
-  bash "$ROOT/bin/fleet-login-remove-selftest.sh" >/dev/null 2>&1 \
-    || { WHY="fleet-login-remove-selftest.sh is red (its record-left legs)"; return 1; }
+  out=$(bash "$ROOT/bin/fleet-login-remove-selftest.sh" 2>&1) \
+    || { WHY="fleet-login-remove-selftest.sh is red (its record-left legs): $(printf '%s\n' "$out" | grep -m1 'selftest FAIL')"; return 1; }
   WHAT='deleteUser 留下账号记录 → dscl -delete 补删；补删不掉 → 退 1，不说 done（真跑 shim 化的 remove）'
   SECS=$(since "$t0")
 }
@@ -4718,14 +4718,14 @@ drill_login_remove_record_left() {
 # login's user/gui domains are booted out before every kill, nothing may come
 # back for a settle window, and deleteUser runs under a time limit.
 drill_login_remove_respawn_hang() {
-  CAP=60; local t0
+  CAP=60; local t0 out
   t0=$(now)
   grep -q 'launchctl bootout "user/\$UID_TARGET"' "$ROOT/bin/fleet-login-remove.sh" \
     || { WHY="fleet-login-remove.sh no longer boots out the login's user domain before killing"; return 1; }
   grep -q 'FLEET_LOGIN_REMOVE_DELETE_SECS' "$ROOT/bin/fleet-login-remove.sh" \
     || { WHY="fleet-login-remove.sh runs sysadminctl -deleteUser with no time limit"; return 1; }
-  bash "$ROOT/bin/fleet-login-remove-selftest.sh" >/dev/null 2>&1 \
-    || { WHY="fleet-login-remove-selftest.sh is red (its respawn / deleteUser-hang legs)"; return 1; }
+  out=$(bash "$ROOT/bin/fleet-login-remove-selftest.sh" 2>&1) \
+    || { WHY="fleet-login-remove-selftest.sh is red (its respawn / deleteUser-hang legs): $(printf '%s\n' "$out" | grep -m1 'selftest FAIL')"; return 1; }
   WHAT='pkill 之后 distnoted 被 launchd 拉回 → 先 bootout user/gui 域再杀、删号不挂；deleteUser 挂住 → 到时限杀掉（真跑 shim 化的 remove）'
   SECS=$(since "$t0")
 }
