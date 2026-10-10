@@ -122,9 +122,16 @@ function engine(on: On, windowRole: string, env: Record<string, string> = ENV) {
   })
   on('command.register', (_$, e) => ({ value: { command: e.name } }))
   on('command.run', () => ({ text: 'engine' }))
+  const up = new Set<string>()
   on('ui.open', (_$, e) => {
     opened.push(e.id)
+    up.add(e.id)
     return { value: { isPlaced: true } }
+  })
+  on('ui.panes', () => ({ value: [...up].map(id => ({ id, title: id, isShown: true, isFocused: false, isPlaced: true })) }))
+  on('ui.close', (_$, e) => {
+    up.delete(e.id)
+    return { value: undefined }
   })
   on('ui.toast', (_$, e) => {
     toasts.push(e.text)
@@ -265,8 +272,11 @@ test('patrol: /sheet in the steward opens it; a fullscreen band opens it once un
     await ui.unmount()
   }
   expect(opened).toEqual([PATROL_PANE])
-  const r = await $.command.run({ command: 'sheet', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 200 } } as never)
-  expect(r.text).toBe('巡检面板在右边')
+  const run = () => $.command.run({ command: 'sheet', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 200 } } as never)
+  // placed: /sheet closes it (issue #2836); again: opens it
+  expect((await run()).text).toBe('panel_patrol_closed')
+  expect(opened).toEqual([PATROL_PANE])
+  expect((await run()).text).toBe('巡检面板在右边')
   expect(opened).toEqual([PATROL_PANE, PATROL_PANE])
 })
 

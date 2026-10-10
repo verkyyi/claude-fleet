@@ -41,8 +41,8 @@ import { t } from './qd'
 /** The full read that covers a missed stamp (ms). */
 export const PANELS_FULL_MS = 10_000
 export const SHEET_COMMAND = 'sheet'
-/** `/sheet batches` (or 批次): the batches pane's own (batches.tsx, issue #2833) — passed on here. */
-export const BATCHES_ARG = /^\s*(batches|批次)\s*$/
+/** `/sheet b` (batches, 批次): the batches pane's own (batches.tsx, issue #2833) — passed on here. */
+export const BATCHES_ARG = /^\s*(b|batches|批次)\s*$/
 export const REFRESH_KEEP = 200
 export const SEEN_KEEP = 50
 export const ANSWER_KEEP = 100
@@ -107,8 +107,10 @@ export function sessionOf(tmux: string | undefined): string | undefined {
   return sock === '' ? undefined : sock
 }
 
-export function sheetCommand(): CommandSpec {
-  return { name: SHEET_COMMAND, description: t('panel_desc') }
+/** `immediate`: it runs while a turn does, like /qd (issue #2836). */
+export function sheetCommand(immediate = true): CommandSpec {
+  const spec: CommandSpec = { name: SHEET_COMMAND, description: t('panel_cmd_desc') }
+  return immediate ? { ...spec, immediate: true } : spec
 }
 
 // Module state: a reload is a fresh module, and session.start starts it again.

@@ -14,7 +14,10 @@
 //
 // In the orchestrator's window the same band carries what waits behind its
 // running turn (queue.ts, issue #2617): 「排队 N 条 · 在忙 X（已 M 秒）· /qd 直接派」
-// in yellow above the PR line, with a button that opens /qd (qd.tsx).
+// in yellow above the PR line, with a button that opens /qd (qd.tsx). After it,
+// while decision lines wait and the sheet's pane is not placed (narrower than
+// 144 columns, the main screen, or closed), 「决定单 N 件待定」 with an 打开
+// button (`s`) that runs /sheet (sheet.tsx, issue #2836).
 //
 // The refresh timer starts from this file's own session.start hook, past the
 // version gate (`$` is followed only within one file, so it cannot start from
@@ -25,20 +28,25 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, On, Timer } from 'claude-code'
 
-import type { ProgressSnapshot } from '../types'
+import type { PanelsView, ProgressSnapshot } from '../types'
 import { isOpen } from './gate'
 import { isOrchestrator } from './orchestrator'
+import { SHEET_COMMAND, panelsOn } from './panels'
 import { QD_COMMAND, t } from './qd'
 import { QUEUE_IDLE, idleText, queueText } from './queue'
 import {
   children, newAlerts, parseLedger, parseTmux, PROGRESS_MS, prFor, segments, selfKey, slug, tmuxArgv,
 } from './progress-model'
+import { SHEET_PANE, sheetHint } from './sheet'
 import { TMUX_TIMEOUT_MS } from './tmux'
 
 const progress = atom({ plugin: 'fleet', key: 'progress' } as const, null as ProgressSnapshot | null)
 const alerts = atom({ plugin: 'fleet', key: 'alerts' } as const, [] as string[])
 /** queue.ts's count, drawn here: the same `fleet/queue` state (issue #2617). */
 const queue = atom({ plugin: 'fleet', key: 'queue' } as const, QUEUE_IDLE)
+/** The books (panels.ts) and the sheet's open / close count (sheet.tsx): the hint's two inputs. */
+const panels = atom({ plugin: 'fleet', key: 'panels' } as const, null as PanelsView | null)
+const sheetPane = atom({ plugin: 'fleet', key: 'sheetPane' } as const, 0)
 
 // Module state: a reload is a fresh module, and session.start fires again.
 let timer: Timer | undefined
@@ -129,8 +137,18 @@ export function registerProgress(on: On): void {
     const waiting = isOrchestrator() ? queueText(q) : ''
     // …and idle, how to dispatch in one go (issue #2753)
     const idle = isOrchestrator() && waiting === '' ? idleText(q) : ''
+    // The decision sheet's hint: only where the sheet lives, only while it is not placed.
+    let hint = ''
+    if (isOrchestrator() && panelsOn()) {
+      const view = await read($, panels)
+      await read($, sheetPane)
+      if (sheetHint(view, false) !== '') {
+        const placed = await $.ui.panes().then(ps => ps.some(p => p.id === SHEET_PANE && p.isPlaced), () => false)
+        hint = sheetHint(view, placed)
+      }
+    }
     const kept = snap === null ? [] : segments(snap)
-    if (kept.length === 0 && waiting === '' && idle === '') return next(e)
+    if (kept.length === 0 && waiting === '' && idle === '' && hint === '') return next(e)
     const { Box, Text, Button } = $.ui.resolve(e)
     return (
       <Box key="fleet-band" flexDirection="column">
@@ -145,6 +163,21 @@ export function registerProgress(on: On): void {
               dimColor
               onPress={() => {
                 void $.command.run({ command: QD_COMMAND }).catch(() => undefined)
+              }}
+            />
+          </Box>
+        )}
+        {hint !== '' && (
+          <Box key="fleet-sheet-hint" flexDirection="row" gap={1}>
+            <Text key="fleet-sheet-hint-text" color="yellow" wrap="truncate-end">
+              {hint}
+            </Text>
+            <Button
+              key="fleet-sheet-hint-open"
+              label={t('panel_sheet_hint_open')}
+              hotkey="s"
+              onPress={() => {
+                void $.command.run({ command: SHEET_COMMAND, args: '' }).catch(() => undefined)
               }}
             />
           </Box>

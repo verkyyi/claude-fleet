@@ -474,6 +474,13 @@ Do not install from memory: read the doc and work from it.
   (never on the main screen) and stamps `@sheet_pane 1` while it is up — the steward
   then sends one sentence (`panel_sheet_ping_fmt`), never the table; no option = the
   whole sheet, byte for byte, counted in `sheets_full[day]`.
+  **Narrow or on the main screen, one command brings it** (issue #2836, C5): it opens
+  unasked only fullscreen from 144 columns; otherwise the band above the prompt
+  says 「决定单 N 件待定」 + 打开 (`s`), and `/sheet` (`immediate`, runs mid-turn)
+  opens it asked — focused, Esc closes it, placed from 110 — and closes it only
+  when it is placed (an open but unplaced pane is opened, never closed); the
+  steward's `/sheet` does the same for its patrol, `/sheet b` the batches. Codex
+  (no mod) never stamps `@sheet_pane`, so it gets the text sheet as before.
   `FLEET_STEWARD`: `0` byte for byte · `count` (default where an orchestrator runs:
   only the attention count, the node conf's [76] hooks → `logs/attention.ndjson`,
   `fleet-steward-stats.sh`) · `1` the window too. `fleet-steward-selftest.sh`;

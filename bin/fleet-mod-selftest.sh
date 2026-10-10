@@ -168,7 +168,8 @@ else
   case "$t" in *'Enter files exactly once with spawn'*) : ;; *) fail "D: the quick-dispatch tests (tests/qd.test.tsx, #2618) did not run" "$t" ;; esac
   case "$t" in *'the next step folds them in'*) : ;; *) fail "D: the orchestrator queue tests (tests/queue.test.tsx, #2617) did not run" "$t" ;; esac
   case "$t" in *'a moved stamp reads once'*) : ;; *) fail "D: the panels tests (tests/panels.test.ts, #2835) did not run" "$t" ;; esac
-  ok "D claude plugin validate + test pass (out-of-range gate + command inbox + session state + bus feed + fallback tools + orchestrator exit guard + quick dispatch + orchestrator queue + panels covered)"
+  case "$t" in *'narrow (#2836): 120 columns opens nothing unasked'*) : ;; *) fail "D: the narrow-screen /sheet tests (tests/sheet.test.tsx, #2836) did not run" "$t" ;; esac
+  ok "D claude plugin validate + test pass (out-of-range gate + command inbox + session state + bus feed + fallback tools + orchestrator exit guard + quick dispatch + orchestrator queue + panels + narrow /sheet covered)"
 fi
 
 # --- E: the fallback tools — one implementation, in bin/fleet-mcp.py (issue #2057) ---

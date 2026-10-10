@@ -334,7 +334,8 @@ async function onReady($: EngineInterface): Promise<void> {
     try {
       await $.command.register(sheetCommand())
     } catch {
-      // A refused name: no /sheet; the panels still follow the books.
+      // An engine without `immediate`: /sheet between turns; a refused name: none.
+      await $.command.register(sheetCommand(false)).catch(() => undefined)
     }
     await tickPanels($, true)
     panelsTimer = $.clock.every(PANELS_FULL_MS, () => {

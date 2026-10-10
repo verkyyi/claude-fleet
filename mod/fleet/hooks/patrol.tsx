@@ -138,12 +138,18 @@ async function openPatrol($: EngineInterface) {
 }
 
 export function registerPatrol(on: On): void {
-  // /sheet in the steward's window opens the patrol (asked: placed at any width);
-  // `--stats` / `--summary`, and every other window, go on to panels.ts.
+  // /sheet in the steward's window opens the patrol (asked: placed from 110
+  // columns, focused, Esc closes it) — or closes it when it is placed (issue
+  // #2836: an open but unplaced pane is opened, never closed); `--stats` /
+  // `--summary`, and every other window, go on to panels.ts.
   on('command.run', { command: 'sheet' }, async ($, e, next) => {
     if (!patrolHere() || /(^|\s)--(stats|summary)(\s|$)/.test(e.args)) return next(e)
-    const opened = await openPatrol($)
     autoOpened = true
+    if ((await $.ui.panes()).some(p => p.id === PATROL_PANE && p.isPlaced)) {
+      await $.ui.close({ id: PATROL_PANE })
+      return { text: t('panel_patrol_closed') }
+    }
+    const opened = await $.ui.open({ id: PATROL_PANE, title: t('panel_patrol_pane'), focus: true, closeOnEscape: true })
     return { text: opened.isPlaced ? t('panel_patrol_opened') : t('panel_patrol_waits') }
   }).catch(($, e, next) => next(e))
 

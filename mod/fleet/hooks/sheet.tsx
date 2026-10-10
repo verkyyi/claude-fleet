@@ -22,9 +22,15 @@
 // the median presses.
 //
 // Only the orchestrator's window draws it: the first band drawn on a fullscreen
-// terminal opens it unasked, once (the engine seats that from 144 columns; the
-// main screen would set it inline over the prompt — no), bare `/sheet` opens it
-// (asked, so it is placed down to 110 columns) or closes it, and the window's
+// terminal of AUTO_COLUMNS or more opens it unasked, once (the engine seats an
+// unasked pane only from 144 columns; the main screen would set it inline over
+// the prompt — no), bare `/sheet` (immediate: it runs while a turn does) opens
+// it — asked, focused, Esc closes it, placed down to 110 columns — when it is
+// not placed, and closes it only when it is (issue #2836: a pane open but
+// unplaced is opened, never closed). Narrower, or on the main screen, the band
+// above the prompt says 「决定单 N 件待定」 with an 打开 button (`s`) while
+// open lines wait and the pane is not placed (sheetHint, drawn by progress.tsx
+// after the queue line). The window's
 // `@sheet_pane` says 1 while it is up — the steward then sends one sentence
 // instead of the whole table; never opened, no option, the whole sheet as
 // before. Any other window: no pane, no `/sheet` handling here.
@@ -47,11 +53,15 @@ export const UNDO_MS = 10_000
 /** fleet-steward-tick.sh answer posts one comment; its own timeouts are 60 s. */
 export const ANSWER_TIMEOUT_MS = 90_000
 export const OPEN_TIMEOUT_MS = 20_000
+/** The engine places an unasked pane only from here; below it nothing opens unasked. */
+export const AUTO_COLUMNS = 144
 
 export const SHEET_IDLE: SheetUi = { pending: {}, editing: '', expanded: '', sending: [], presses: {} }
 
 const panels = atom({ plugin: 'fleet', key: 'panels' } as const, null as PanelsView | null)
 const sheet = atom({ plugin: 'fleet', key: 'sheet' } as const, SHEET_IDLE)
+/** Bumped on every open / close, so the band's hint redraws (the truth is $.ui.panes()). */
+const sheetPane = atom({ plugin: 'fleet', key: 'sheetPane' } as const, 0)
 
 // The undo timers: a module's, so a reload re-arms them from the state (session.start).
 const timers = new Map<string, Timer>()
@@ -190,16 +200,36 @@ async function thread($: EngineInterface, g: SheetGroup): Promise<void> {
   if (r === null || r.exitCode > 2) $.ui.toast(t('panel_sheet_failed_fmt', g.url))
 }
 
-/** Bare `/sheet` in the orchestrator: open the pane (asked), or close one that is up. */
-async function toggle($: EngineInterface): Promise<string> {
-  const up = (await $.ui.panes()).find(p => p.id === SHEET_PANE)
-  if (up?.isPlaced === true) {
+/** Is the decision sheet drawn right now (the engine's record)? */
+async function sheetPlaced($: EngineInterface): Promise<boolean> {
+  return (await $.ui.panes()).some(p => p.id === SHEET_PANE && p.isPlaced)
+}
+
+/** The band's line: 「决定单 N 件待定」 while open lines wait and the pane is not placed, else ''. */
+export function sheetHint(view: PanelsView | null, placed: boolean): string {
+  const open = (view?.groups ?? []).filter(g => g.state === 'open').length
+  return open === 0 || placed ? '' : t('panel_sheet_hint_fmt', String(open))
+}
+
+async function moved($: EngineInterface): Promise<void> {
+  await update($, sheetPane, n => (n ?? 0) + 1)
+}
+
+/**
+ * Bare `/sheet` (the band's 打开 runs it too) in the orchestrator: close the pane only when
+ * it is placed; otherwise open it — asked, focused, Esc closes it. Never
+ * `holdToasts`: it stays up.
+ */
+async function toggleSheet($: EngineInterface): Promise<string> {
+  if (await sheetPlaced($)) {
     await $.ui.close({ id: SHEET_PANE })
     await setPaneOption($, false)
+    await moved($)
     return t('panel_sheet_closed')
   }
-  const r = await $.ui.open({ id: SHEET_PANE, title: t('panel_sheet_title') })
+  const r = await $.ui.open({ id: SHEET_PANE, title: t('panel_sheet_title'), focus: true, closeOnEscape: true })
   await setPaneOption($, r.isPlaced)
+  await moved($)
   return r.isPlaced ? t('panel_sheet_opened') : t('panel_sheet_waiting')
 }
 
@@ -217,16 +247,20 @@ export function registerSheet(on: On): void {
   on('command.run', { command: SHEET_COMMAND }, async ($, e, next) => {
     // bare /sheet only: `--stats` / `--summary` are panels.ts's, `batches` batches.tsx's
     if (!isOpen() || !isOrchestrator() || !panelsOn() || e.args.trim() !== '') return next(e)
-    return { text: await toggle($) }
+    return { text: await toggleSheet($) }
   }).catch(($, e, next) => next(e))
 
-  // Unasked, once: the first band drawn on a fullscreen terminal opens it.
+  // Unasked, once: the first band drawn on a fullscreen terminal wide enough
+  // opens it. Narrower, nothing opens (the hint says so); a widening redraws the
+  // band, and that draw opens it.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    if (!autoOpened && isOpen() && isOrchestrator() && panelsOn() && e.viewport?.isFullscreen === true) {
+    const vp = e.viewport
+    if (!autoOpened && isOpen() && isOrchestrator() && panelsOn() && vp?.isFullscreen === true && vp.columns >= AUTO_COLUMNS) {
       autoOpened = true
       void (async () => {
         const r = await $.ui.open({ id: SHEET_PANE, title: t('panel_sheet_title') })
         await setPaneOption($, r.isPlaced)
+        await moved($)
       })().catch(() => undefined)
     }
     return next(e)
@@ -235,7 +269,10 @@ export function registerSheet(on: On): void {
   // The person's close mark: the steward sends the whole sheet again.
   on('ui.close', { id: SHEET_PANE }, async ($, e, next) => {
     const result = await next(e)
-    if (isOpen() && e.origin.kind !== 'unload') await setPaneOption($, false)
+    if (isOpen() && e.origin.kind !== 'unload') {
+      await setPaneOption($, false)
+      await moved($)
+    }
     return result
   }).catch(($, e, next) => next(e))
 
