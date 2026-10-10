@@ -97,9 +97,9 @@ R render nobody >/dev/null 2>&1; [ $? = 2 ] && ok "B: an unknown role is refused
 
 # --- C the old knobs (compat-1v) -------------------------------------------
 want2() { [ "$2" = "$3" ] && ok "C: $1" || bad "C: $1 — got [$2], want [$3]"; }
-want2 "FLEET_ORCH_MODEL='' → no --model" "$(FLEET_ORCH_MODEL= line orchestrator)" "--effort high --append-system-prompt-file $ob"
+want2 "FLEET_ORCH_MODEL='' → no --model" "$(FLEET_ORCH_MODEL='' line orchestrator)" "--effort high --append-system-prompt-file $ob"
 want2 "FLEET_ORCH_EFFORT=low" "$(FLEET_ORCH_EFFORT=low line orchestrator)" "--model fable --effort low --append-system-prompt-file $ob"
-want2 "FLEET_ORCH_EFFORT='' → the definition's" "$(FLEET_ORCH_EFFORT= line orchestrator)" "--model fable --effort high --append-system-prompt-file $ob"
+want2 "FLEET_ORCH_EFFORT='' → the definition's" "$(FLEET_ORCH_EFFORT='' line orchestrator)" "--model fable --effort high --append-system-prompt-file $ob"
 want2 "FLEET_STEWARD_MODEL=sonnet" "$(FLEET_STEWARD_MODEL=sonnet line steward)" "--model sonnet --effort medium --append-system-prompt-file $sb"
 want2 "FLEET_ORCH_CODEX_MODEL=gpt-x → -m" "$(FLEET_ORCH_CODEX_MODEL=gpt-x line orchestrator --agent codex)" '-m gpt-x -c model_reasoning_effort="high"'
 want2 "FLEET_MODEL=fable for a worker" "$(FLEET_MODEL=fable line worker)" "--model fable"
