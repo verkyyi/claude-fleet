@@ -228,29 +228,31 @@ Do not install from memory: read the doc and work from it.
   rebuilds a fleet whose session vanished — admit-gated, unfinished sessions only,
   never one `fleet-down` took down (`restore.down`). claude / tmux are found off a
   bare PATH by `fleet_find_tool` / `fleet_path_fill`; `fleet-doctor`'s `tools` row.
-- **A running EPIC batch holds the live install still — one mark PER BATCH, any
-  fresh one is true** (issues #953, #2062; EPIC #2074 C1). `/fleet-epic-run`
-  stamps `$FLEET_CONF_DIR/global/epic-running.d/<repo slug>-<N>` every tick
-  (`bin/fleet-epic-heartbeat.sh`) and at its end clears ONLY its own
-  (`--clear <N>`; a bare `--clear` refuses while several batches are marked).
-  `fleet_epic_running_fresh` (`bin/fleet-lib.sh`) is the ONE reader — every
-  fresh mark, `; `-joined — and `fleet-install-sync.sh` defers the whole tick on
-  it BEFORE the switch (a fresh mark ⇒ `deferred`, never `switched`; #1894 had
-  left only the node-agent half behind the gate, and EPIC #1935's last member
-  ran on a new floor). Busy windows still never defer. The pre-#2062 single
-  file `global/epic-running` is read for one version, never written
-  (`# compat-1v: 下一批删`). `install-sync-selftest.sh` O, `fleet-update-selftest.sh`
-  E and the `epic-mark-overwritten` / `epic-fresh-switched` BREAK-IT drills pin it.
-  **Only a batch WITH WORK holds, and never past the cap** (issue #2247): the
-  stamp carries `--live` / `--inflight`, `fleet_epic_holding` reads `live 0` +
-  `inflight 0` as idle (switched under) and a mark with no reading as active;
-  a login (a managed machine: the whole machine) is held at most
-  `FLEET_EPIC_HOLD_CAP_SECS` (2h) on ONE clock — from its first deferral, cleared
-  only at stable; another batch taking over or stable moving never restarts it
-  (issue #2843: six batches in turn kept macmini two stables behind) — then it
-  switches and notes it on each holding EPIC. A managed login's install-sync does
-  not hold again: `fleet-node-update.py` held for it. `install-sync-selftest.sh` O2,
-  BREAK-IT `epic-idle-held` / `epic-hold-uncapped` / `epic-hold-rotating`.
+- **A running EPIC batch does NOT hold the install — one mark PER BATCH, and a
+  batch may span versions** (issues #953, #2062, #2934; EPIC #2074 C1).
+  `/fleet-epic-run` stamps `$FLEET_CONF_DIR/global/epic-running.d/<repo slug>-<N>`
+  every tick (`bin/fleet-epic-heartbeat.sh`) and at its end clears ONLY its own
+  (`--clear <N>`; a bare `--clear` refuses while several batches are marked);
+  `fleet_epic_running_fresh` / `fleet_epic_holding` (`bin/fleet-lib.sh`) are the
+  readers. **The hold is off by default** (issue #2934, the 发起人's call): a
+  switch moves `current/` and the daemons, never a running session, so
+  `fleet-install-sync.sh` and `fleet-node-update.py` switch to a new stable even
+  mid-batch (state `epic: off (不挡) …`, `status` `hold    off`). Batch
+  consistency is the driver's book: `/fleet-epic-run` runs
+  `bin/fleet-epic-floor.sh record <EPIC> <N>` after each spawn and the report
+  prints 「本批跨了 K 个版本」 (`show`). `FLEET_EPIC_HOLD_CAP_SECS=<secs>` opts back
+  into the old capped hold: a batch WITH WORK (#2247: `--live` / `--inflight`,
+  `live 0` + `inflight 0` = idle) defers the tick BEFORE the switch, for at most
+  that long on ONE clock per login / machine (#2843), then switches and notes it
+  on each holding EPIC. The pre-#2062 single file `global/epic-running` is read
+  for one version (`# compat-1v: 下一批删`). Every install records when it first
+  saw stable (install-sync `stable_since`, the updater's `target_seen`) and
+  `fleet doctor --installs` prints 「落后 Nm」, WARN past 30 min. Pinned by
+  `install-sync-selftest.sh` O/O2/O3, `fleet-node-update-selftest.py` F,
+  `fleet-installs-selftest.sh` L, `fleet-epic-floor-selftest.sh` and BREAK-IT
+  `epic-hold-default` (+ the opt-in drills `epic-mark-overwritten` /
+  `epic-fresh-switched` / `epic-idle-held` / `epic-hold-uncapped` /
+  `epic-hold-rotating`).
 - **A new way to break the fleet gets its row and its drill BEFORE its fix**
   (issue #1786). `docs/BREAK-IT.md` lists every known way (方式 · 后果 · 自愈方式 ·
   演练); `bin/fleet-break-it-selftest.sh` does each one for real on isolated

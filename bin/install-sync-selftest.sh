@@ -51,7 +51,9 @@
 #                    whatever stable or batch — issue #2843) → switched + ONE
 #                    record-only note on its EPIC (who, from → to) + an
 #                    epic-released log line; the state's `epic:` line says
-#                    holding / idle / released
+#                    holding / idle / released (O/O2 run with the hold turned on)
+#   O3. no hold      (issue #2934) FLEET_EPIC_HOLD_CAP_SECS unset = 0: a batch with
+#                    work does not defer the tick, no hold clock, no note
 #   F. rollback      a FAIL line the new doctor prints → the link back + the OLD
 #                    version's apply back; that version is skipped until stable
 #                    moves; the next stable move is followed
@@ -276,6 +278,7 @@ eq "M: HEAD untouched" "$C3" "$(hd)"; eq "M: no apply" "$n" "$(applies)"
 # is the assertion: a fresh mark defers for the EPIC before the disk gate is even
 # asked; a stale or cleared one falls through to it — HEAD never moves either way.
 HB="$BIN/fleet-epic-heartbeat.sh"; EPD="$CONF/global/epic-running.d"
+export FLEET_EPIC_HOLD_CAP_SECS=7200   # the hold is opt-in since issue #2934 (O3: the default)
 T1=$(st deferred_since)
 OUT=$(bash "$HB" 1117 --tick 3 --repo o/r --session f1 2>&1); RC=$?
 eq "O: stamp exits 0" 0 "$RC"; contains "O: stamp says what it wrote" "$OUT" "stamped epic=1117 session=f1 tick=3 ttl=2700s"
@@ -426,8 +429,18 @@ eq "O2: the clock records the release" "$C3a" "$(sed -n 's/^released: //p' "$CON
 run; eq "O2: then current" current "$(st result)"
 eq "O2: still one note" 1 "$(grep -c '^note ' "$WORK/notes.log")"
 unset FLEET_EPIC_HOLD_CAP_SECS FLEET_EPIC_HOLD_NOTE_CMD
-bash "$HB" --clear 1117 >/dev/null 2>&1
 stable "$C4"
+# --- O3. no hold by default (issue #2934) -----------------------------------------------
+# the same active batch, the knob unset: stable moved → the tick would switch,
+# the state names the batch as `off (不挡)`, no hold clock, no note
+: > "$WORK/notes.log"; rm -rf "$CONF/global/epic-hold.d"
+bash "$HB" 1117 --tick 11 --repo o/r --session f1 --live 2 --inflight 1 >/dev/null 2>&1
+run --dry-run
+contains "O3: a batch with work does not hold by default" "$OUT" "would switch"
+not_contains "O3: …no deferral" "$OUT" "deferred"
+[ -e "$CONF/global/epic-hold.d/.since" ] && fail "O3: a hold clock was started with the hold off"; CHECKS=$((CHECKS + 1))
+eq "O3: no note" 0 "$(grep -c '^note ' "$WORK/notes.log")"
+bash "$HB" --clear 1117 >/dev/null 2>&1
 
 # --- F. rollback ----------------------------------------------------------------------------------
 : > "$LOG"; run

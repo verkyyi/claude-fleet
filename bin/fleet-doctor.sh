@@ -2169,7 +2169,8 @@ fi
 # --- epic: which batches are being driven (issue #1846; one mark per batch, #2062) --
 # /fleet-epic-run stamps global/epic-running.d/<repo>-<N> every tick
 # (fleet-epic-heartbeat.sh), one file per batch. Every fresh mark is a batch in
-# flight: ONE row names them all — they are what holds install-sync still. A
+# flight: ONE row names them all — they hold install-sync still only with
+# FLEET_EPIC_HOLD_CAP_SECS set (off by default, #2934). A
 # lease that went stale while its EPIC is still OPEN means the loop's window went
 # away (killed, its machine down) and nobody is driving the batch: WARN with the
 # one way back, per batch. No mark → no row; a closed EPIC's leftover mark is history.
@@ -2203,8 +2204,12 @@ while IFS= read -r _ep_f; do
 done <<EP_MARKS
 $(bash -c '. "$1/fleet-lib.sh" >/dev/null 2>&1; fleet_epic_running_marks' _ "$(dirname "$0")" 2>/dev/null)
 EP_MARKS
-_ep_cap=${FLEET_EPIC_HOLD_CAP_SECS:-7200}; case "$_ep_cap" in ''|*[!0-9]*) _ep_cap=7200 ;; esac
-[ -n "$_ep_run" ] && pass epic "批次 $_ep_run 在跑 — 有活的批次挡住 install-sync（每个最多 $((_ep_cap / 60)) 分钟），空转的不挡"
+_ep_cap=${FLEET_EPIC_HOLD_CAP_SECS:-0}; case "$_ep_cap" in ''|*[!0-9]*) _ep_cap=0 ;; esac
+if [ -n "$_ep_run" ]; then
+  # #2934: no hold by default — a switch stops no running session
+  if [ "$_ep_cap" -eq 0 ]; then pass epic "批次 $_ep_run 在跑 — 不挡升级（FLEET_EPIC_HOLD_CAP_SECS 未开，#2934）"
+  else pass epic "批次 $_ep_run 在跑 — 有活的批次挡住 install-sync（最多 $((_ep_cap / 60)) 分钟），空转的不挡"; fi
+fi
 
 # --- last crash + the record a crash would leave (issue #1294) -----------------
 # The diskguard tick harvests the system's panic / Jetsam reports into

@@ -18,6 +18,12 @@
 #                    pinned to one version dir; plus a client install
 #                    (~/.local/share/claude-fleet/.client-version) when present.
 #
+# 落后 (issue #2934): how long an install that is not at stable has been behind
+# it — counted from the first time THIS machine saw that stable (a login's
+# install-sync.state `stable_since`, the machine updater's update.json
+# `target_seen`; the earliest of them). Past FLEET_INSTALLS_LAG_WARN (1800 s)
+# the row says WARN, and so does a closing line. Nothing recorded = no 落后.
+#
 # 来源 (issue #2776, EPIC #2770): where each install takes its new versions from —
 #   hub      the hub's signed release (the runtime always; a login install with
 #            no GitHub remote, a refs/fleet/rel/* import; a client with a hub)
@@ -41,7 +47,8 @@
 #
 # Seams (selftest): FLEET_INSTALLS_HOMES (the homes root), FLEET_INSTALLS_SUDO
 # (the privilege prefix, default `sudo -n`; empty = none), FLEET_INSTALLS_STABLE
-# (the stable commit), FLEET_NODE_ROOT (the runtime root), FLEET_LIVE_DIR.
+# (the stable commit), FLEET_NODE_ROOT (the runtime root), FLEET_NODE_STATE (the
+# machine updater's state dir), FLEET_INSTALLS_NOW (the clock), FLEET_LIVE_DIR.
 set -u
 as_json=0
 case "${1:-}" in
@@ -56,10 +63,20 @@ stable="${FLEET_INSTALLS_STABLE-}"
 [ -n "$stable" ] || stable=$(git -C "$live" rev-parse -q --verify 'refs/tags/stable^{commit}' 2>/dev/null)
 
 exec python3 - "$as_json" "${FLEET_INSTALLS_HOMES:-$homes_default}" "${FLEET_INSTALLS_SUDO-sudo -n}" \
-  "$stable" "${FLEET_NODE_ROOT:-/Library/Application Support/claude-fleet}" <<'PY'
-import json, os, re, socket, subprocess, sys
+  "$stable" "${FLEET_NODE_ROOT:-/Library/Application Support/claude-fleet}" \
+  "${FLEET_NODE_STATE:-/var/db/fleet-node}" "${FLEET_INSTALLS_LAG_WARN:-1800}" "${FLEET_INSTALLS_NOW:-}" <<'PY'
+import json, os, re, socket, subprocess, sys, time
 
 as_json, homes, sudo, stable, root = sys.argv[1] == "1", sys.argv[2], sys.argv[3].split(), sys.argv[4], sys.argv[5]
+node_state = sys.argv[6]
+try:
+    lag_warn = int(sys.argv[7])
+except ValueError:
+    lag_warn = 1800
+try:
+    clock = int(sys.argv[8]) if sys.argv[8] else int(time.time())
+except ValueError:
+    clock = int(time.time())
 HEX = re.compile(r"^[0-9a-f]{7,40}$")
 
 # One probe per home, run as whoever can read it: four lines, each `<what> <value>`.
@@ -95,6 +112,9 @@ if [ -L "$s" ]; then
   esac
   echo "shellv ${v:--}"
 else echo "shell -"; fi
+f=$h/.config/claude-fleet/global/install-sync.state
+echo "syncstable $(sed -n 's/^stable: //p' "$f" 2>/dev/null | head -n 1)"
+echo "syncsince $(sed -n 's/^stable_since: //p' "$f" 2>/dev/null | head -n 1)"
 c=$h/.local/share/claude-fleet/.client-version
 v=$(sed -n 's/^version=//p' "$c" 2>/dev/null | head -n 1)
 echo "client ${v:--}"
@@ -172,6 +192,15 @@ if os.path.islink(cur):
     b = os.path.basename(os.readlink(cur).rstrip("/"))
     runtime = b if re.match(r"^[0-9a-f]{40}$", b) else ""
 
+# when this machine first saw stable (issue #2934): the earliest record of it
+seen = []
+try:
+    ts = (json.load(open(os.path.join(node_state, "update.json"))) or {}).get("target_seen") or {}
+    if same(ts.get("sha"), stable) and int(ts.get("at") or 0) > 0:
+        seen.append(int(ts["at"]))
+except (OSError, ValueError, TypeError, AttributeError):
+    pass
+
 logins, unreadable = [], []
 try:
     entries = sorted(os.listdir(homes))
@@ -186,6 +215,8 @@ for name in entries:
         if owner(home) not in ("", "root"):
             unreadable.append(name)
         continue
+    if same(r.get("syncstable"), stable) and r.get("syncsince", "").isdigit() and int(r["syncsince"]) > 0:
+        seen.append(int(r["syncsince"]))
     kind, _, ver = r["login"].partition(" ")
     lsrc = None if kind == "none" else login_source(r, kind)
     shell = None
@@ -202,12 +233,18 @@ for name in entries:
                    "shell": shell,
                    "client": None if client == "-" else {"version": client, "source": client_source(r)}})
 
-judged = []
+since = min(seen) if seen else None
+judged, late = [], []
 def judge(obj):
     if obj is None:
         return
     obj["at_stable"] = same(obj.get("version"), stable)
     judged.append(obj["at_stable"])
+    if obj["at_stable"] is False:
+        obj["behind_secs"] = max(0, clock - since) if since else None
+        obj["late"] = bool(since and obj["behind_secs"] > lag_warn)
+        if obj["late"]:
+            late.append(obj)
 
 rt = None
 if runtime is not None:
@@ -218,12 +255,18 @@ for l in logins:
 
 host = socket.gethostname().split(".")[0]
 if as_json:
-    print(json.dumps({"host": host, "stable": stable or None, "runtime": rt,
-                      "logins": logins, "unreadable": unreadable}, ensure_ascii=False))
+    print(json.dumps({"host": host, "stable": stable or None, "stable_seen": since, "lag_warn": lag_warn,
+                      "late": len(late), "runtime": rt, "logins": logins, "unreadable": unreadable},
+                     ensure_ascii=False))
 else:
+    def dur(secs):
+        m = secs // 60
+        return "%dm" % m if m < 120 else ("%dh%02dm" % (m // 60, m % 60) if m < 2880 else "%dd" % (m // 1440))
     def word(o):
         a = o.get("at_stable")
         w = "= stable" if a else ("≠ stable" if a is False else "? (unknown)")
+        if a is False and o.get("behind_secs") is not None:
+            w += " · 落后 %s%s" % (dur(o["behind_secs"]), " WARN" if o.get("late") else "")
         return "%s  来源 %s" % (w, o.get("source") or "?")
     print("claude-fleet installs — %s (stable %s)" % (host, short(stable) if stable else "unknown: no local refs/tags/stable"))
     if rt is None:
@@ -250,6 +293,10 @@ else:
         print("  unreadable       %s (no passwordless sudo here — run as an admin login)" % " ".join(unreadable))
     n_ok = sum(1 for a in judged if a)
     print("verdict: %d of %d install(s) at stable" % (n_ok, len(judged)))
+    if late:
+        print("WARN: %d install(s) behind stable for over %dm — stable %s first seen here %s"
+              % (len(late), lag_warn // 60, short(stable),
+                 time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(since))))
     srcs = [o.get("source") for o in [rt] + [x for l in logins for x in (l["install"], l["shell"], l["client"])] if o]
     print("来源: %s · github %d" % (" · ".join("%s %d" % (k, srcs.count(k)) for k in ("hub", "runtime", "dev", "?") if srcs.count(k)) or "-",
                                    srcs.count("github")))

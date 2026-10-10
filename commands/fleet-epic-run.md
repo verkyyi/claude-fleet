@@ -82,12 +82,10 @@ that dies at the boundary. Therefore:
 
   `<l>` is how many member sessions were alive at the LAST tick's read (a member
   window still open, running or waiting), `<p>` how many member PRs were open and
-  not yet merged (issue #2247). They decide whether this batch holds the
-  machine's upgrade: a mark stamped `--live 0 --inflight 0` — the batch is only
-  waiting on the operator — does NOT hold install-sync, so an idle batch never
-  keeps the machine on an old version. Leave both off and the mark holds as it
-  always did. Never stamp `0 0` while a member is running or a PR is in flight:
-  that is exactly what lets the floor move under the batch.
+  not yet merged (issue #2247). The batches pane, the steward and the doctor
+  read them as «has work» vs «idle» (and, only when the person opted into the EPIC
+  hold with `FLEET_EPIC_HOLD_CAP_SECS`, whether the batch holds the upgrade —
+  off by default, issue #2934). Stamp what is true.
 
   `<m>` is the charter's Core count, `<k>` how many of them are merged — as of
   the LAST tick's read (the first tick: `--landed 0`, or leave both off). They
@@ -104,17 +102,19 @@ that dies at the boundary. Therefore:
 
   It rewrites THIS batch's mark, `$FLEET_CONF_DIR/global/epic-running.d/<repo
   slug>-<N>` — one file per batch (issue #2062), so a second loop on this login
-  never overwrites yours — and the install-sync daemon (`bin/fleet-install-sync.sh`,
-  C3 of #1117) holds the whole version switch while ANY mark on this login is
-  fresh (`deferred`, never `switched`). Without it the daemon cannot see this
-  batch: between ticks this pane is idle and the workers sit idle while CI runs,
-  so no busy gate reads anything but a quiet machine, and the live install moves
-  under a batch that is still merging onto it. A lease, not a lock — fresh for
-  45 min, past the longest planned gap in step 3 — so a loop that dies without
-  its closing tick holds nothing forever; the closing tick clears it (step 4).
-  And capped: one mark holds the same stable at most 2 hours
-  (`FLEET_EPIC_HOLD_CAP_SECS`); past it install-sync switches anyway and leaves
-  a note on this EPIC saying who, when and from which version to which.
+  never overwrites yours. The mark says the batch is running (the task list's
+  batch row, the steward, `fleet doctor`'s `epic` row); it does **not** hold the
+  install still (issue #2934): a version switch moves `current/` and the
+  daemons, never a running session, so install-sync and the machine updater
+  switch to a new stable even while this batch runs, and members spawned later
+  may start on a newer version than earlier ones. That is allowed, not blocked —
+  it is RECORDED (step 2c: `fleet-epic-floor.sh record` after each spawn) and the
+  report says 「本批跨了 K 个版本」. A lease, not a lock — fresh for 45 min, past
+  the longest planned gap in step 3 — so a loop that dies without its closing
+  tick leaves a mark that expires; the closing tick clears it (step 4).
+  (`FLEET_EPIC_HOLD_CAP_SECS=<secs>` is the person's opt-in to the old capped
+  hold: a batch with work then holds the switch up to that long, and past it
+  install-sync switches anyway and notes it on this EPIC.)
 - **Each tick begins by re-reading the EPIC** — the parent body (the charter), the
   sub-issue list and their states, and each member repo's open PRs. Never carry
   a plan from the previous tick.
@@ -237,9 +237,9 @@ Do **not** run `/fleet-sync-install` mid-batch — the loop runs on the live ins
 and swapping the floor under running workers is how one bad merge takes the batch
 with it. Sync once, at the end (step 4). The same rule binds the workers through
 `/fleet-claim` (issue #953: on EPIC #883 one synced right after its own merge and
-reloaded a daemon under the rest of the batch), and the install-sync daemon holds
-off on its own while this loop's heartbeat — or any other batch's on this login —
-is fresh (step 1; issue #2062).
+reloaded a daemon under the rest of the batch). The install-sync daemon itself
+follows stable even mid-batch (issue #2934) — a stable move is the operator's /
+the steward's, and it stops no running session.
 
 ### b. Reclaim finished slots
 
@@ -291,6 +291,16 @@ AG=$(bash -c 'source ~/.claude/fleet/bin/fleet-lib.sh; fleet_epic_charter_agent 
        "$FLEET_REPO" "<the charter body this tick read>" "$MREPO" <N>)
 bash ~/.claude/fleet/bin/dash-issue-session.sh <N> --repo "$MREPO" --origin "<PKEY>" --title "<the issue's own title>" ${AG:+--agent "$AG"}
 ```
+
+Right after a spawn that opened a window (exit 0), record the version it starts
+on (issue #2934) — the batch's own book, read back by the report:
+
+```sh
+bash ~/.claude/fleet/bin/fleet-epic-floor.sh record <EPIC> <N> --repo "$FLEET_REPO"
+```
+
+`--repo` is the PARENT's repo (the batch's book), `<N>` the member. It never
+blocks and never fails the spawn; a batch spanning versions is fine.
 
 **Which agent** (issue #2562): the member's own charter row wins — a row ending
 `(codex)` / `(claude)` (`- [ ] **C3** #N — 标题 (codex)`) — then the charter's
@@ -445,7 +455,8 @@ survives a context boundary the same way everything else here does:
    first, always; `human` — listed, with its due date. No followup, no line.
    The report's 挪稳定版 row prints its own `mark:` (step 2 of
    `/fleet-epic-report`); write the others here. Never run the move yourself.
-2. **Run `/fleet-epic-report <N> --repo "$FLEET_REPO"` right here.** Not «hand off to», not «suggest
+2. **Run `/fleet-epic-report <N> --repo "$FLEET_REPO"` right here** (its page
+   carries 「本批跨了 K 个版本」 from `fleet-epic-floor.sh show <N> --repo "$FLEET_REPO"`). Not «hand off to», not «suggest
    the operator run» — execute it, this tick. It gathers, builds the page, hosts
    it via doc-preview, posts the durable comment, and closes the EPIC when every
    member is resolved. Its own rails still apply; you are just its caller.
@@ -456,13 +467,10 @@ survives a context boundary the same way everything else here does:
 4. **Clear the heartbeat** — `bash ~/.claude/fleet/bin/fleet-epic-heartbeat.sh --clear <N>`
    (issue #953) — `<N>` is this EPIC: it removes THIS batch's mark and no other's
    (issue #2062: a bare `--clear` once took the file every batch on the login
-   shared, and the other loop ran unprotected until its next tick). Only now —
-   once every batch on this login has cleared its own — may the live install move: the batch-end sync is
-   `/fleet-sync-install` by hand, or `fleet-stable.sh move` and every login's
-   install-sync daemon follows on its next tick. After the report, not before —
-   the closing sequence is one tick, and a floor that moves while the report is
-   still building is the mid-batch bug in miniature. A loop that never reaches
-   this line leaves a mark that expires on its own, 45 min after its last tick.
+   shared). The batch's own followups (`move stable`) are the steward's, never
+   this loop's; the installs follow stable on their own tick whether a batch runs
+   or not (issue #2934). A loop that never reaches this line leaves a mark that
+   expires on its own, 45 min after its last tick.
 5. **Report to whoever started this driver** (issue #2623) — one call, the last
    of the run: `mcp__fleet__report` with `state: merged` and a `summary` that
    carries the report page's URL and what the batch leaves for the person

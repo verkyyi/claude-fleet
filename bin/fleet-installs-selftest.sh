@@ -23,6 +23,9 @@
 #      fix; + FLEET_DIST_SOURCE=github (conf or env) → WARN; a client with an empty
 #      hub= → WARN with the install line; a hub, no GitHub remote, a client with
 #      the hub → PASS; the doctor prints it as its `dist` row.
+#   L. 落后 (issue #2934): an install not at stable says how long since this
+#      machine first saw that stable (install-sync's stable_since, the updater's
+#      target_seen — the earliest); past 30m WARN on the row + a closing line.
 # Hermetic: a sandbox homes root, FLEET_INSTALLS_SUDO empty. Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -59,7 +62,7 @@ mkdir -p "$H/carol"
 # the machine runtime at S1
 mkdir -p "$WORK/root/$S1"; ln -s "$WORK/root/$S1" "$WORK/root/current"
 
-run() { OUT=$(FLEET_INSTALLS_HOMES="$H" FLEET_INSTALLS_SUDO='' FLEET_NODE_ROOT="$WORK/root" sh "$IS" "$@" 2>&1); RC=$?; }
+run() { OUT=$(FLEET_INSTALLS_HOMES="$H" FLEET_INSTALLS_SUDO='' FLEET_NODE_ROOT="$WORK/root" FLEET_NODE_STATE="$WORK/state" sh "$IS" "$@" 2>&1); RC=$?; }
 
 # --- A/B. alice's install is the version S1; stable = S1 ----------------------------
 FLEET_INSTALLS_STABLE=$S1 run
@@ -82,6 +85,34 @@ print(d["runtime"]["version"], d["runtime"]["at_stable"], L["alice"]["install"][
       L["alice"]["shell"]["follows"], L["alice"]["shell"]["version"] == d["runtime"]["version"], L["bob"]["install"]["kind"],
       L["bob"]["install"]["at_stable"], L["bob"]["shell"]["follows"], L["bob"]["client"]["version"], sorted(L))' 2>&1)
 eq "C: json facts" "$S1 True link True True True dir False False $S2 ['alice', 'bob']" "$J"
+
+# --- L. 落后 (issue #2934) ------------------------------------------------------------
+# nothing recorded: no 落后 word (above). alice's install-sync saw S2 at T0, the
+# machine updater at T0+600: the earliest counts — 40m on, every install not at
+# S2 says 落后 40m WARN; 20m on, 落后 20m and no WARN; a record of ANOTHER
+# stable says nothing.
+T0=1800000000
+mkdir -p "$H/alice/.config/claude-fleet/global" "$WORK/state"
+printf 'result: deferred\nstable: %s\nstable_since: %s\n' "$S2" "$T0" > "$H/alice/.config/claude-fleet/global/install-sync.state"
+printf '{"target_seen": {"sha": "%s", "at": %s}}\n' "$S2" "$((T0 + 600))" > "$WORK/state/update.json"
+FLEET_INSTALLS_STABLE=$S2 FLEET_INSTALLS_NOW=$((T0 + 2400)) run
+has "L: the runtime says how long" "$OUT" "machine runtime  1111111  ≠ stable · 落后 40m WARN  来源 hub"
+has "L: a login install too" "$OUT" "alice          1111111  ≠ stable · 落后 40m WARN"
+has "L: a closing WARN line" "$OUT" "WARN: 4 install(s) behind stable for over 30m — stable 2222222 first seen here"
+case "$OUT" in *"2222222  = stable · 落后"*) bad "L: an install at stable says 落后" ;; *) ok ;; esac
+FLEET_INSTALLS_STABLE=$S2 FLEET_INSTALLS_NOW=$((T0 + 1200)) run
+has "L: under 30m no WARN" "$OUT" "alice          1111111  ≠ stable · 落后 20m  来源"
+case "$OUT" in *WARN*) bad "L: a WARN under the threshold" ;; *) ok ;; esac
+FLEET_INSTALLS_STABLE=$S2 FLEET_INSTALLS_NOW=$((T0 + 2400)) run --json
+J=$(printf '%s' "$OUT" | python3 -c 'import json,sys
+d=json.load(sys.stdin); L={l["login"]: l for l in d["logins"]}
+print(d["stable_seen"], d["late"], d["runtime"]["behind_secs"], L["alice"]["install"]["late"])' 2>&1)
+eq "L: json lag" "$T0 4 2400 True" "$J"
+printf 'stable: %s\nstable_since: %s\n' "$S1" "$T0" > "$H/alice/.config/claude-fleet/global/install-sync.state"
+rm -f "$WORK/state/update.json"
+FLEET_INSTALLS_STABLE=$S2 FLEET_INSTALLS_NOW=$((T0 + 2400)) run
+case "$OUT" in *落后*) bad "L: another stable's record counted" ;; *) ok ;; esac
+rm -rf "$H/alice/.config"
 
 # --- G. 来源 -----------------------------------------------------------------------
 FLEET_INSTALLS_STABLE=$S1 run

@@ -172,8 +172,7 @@ root 运行。**托管登录的 `~/.claude/fleet` 就是机器运行时那一份
 （两目录比较模式：链接树里没有 git，改了什么逐文件比两棵树得出；守护重载、hook 合并、技能安装照旧）。
 **机器换版时所有登录同时换**：切换那一拍（`current` 换完、请守护重启之前）每个托管登录 `link-tree` 到新版；
 体检 FAIL 整机退回时每个登录一起退回；提交后、以及每拍处于发布版时，没链接到 `current` 的登录（被手动指回一份
-独立旧副本、开号时那份自己的拷贝）重新链接——有活的 EPIC 批次在跑时先等（`fleet_epic_holding`，同 2 小时封顶；
-BREAK-IT `managed-login-own-copy`）。跟不上的记进 `update.json` 的 `follow`，`install` 行写明最后一次结果，同一版
+独立旧副本、开号时那份自己的拷贝）重新链接（BREAK-IT `managed-login-own-copy`；只有打开了 EPIC 挡（`FLEET_EPIC_HOLD_CAP_SECS`）时，有活的批次在跑才先等）。跟不上的记进 `update.json` 的 `follow`，`install` 行写明最后一次结果，同一版
 `FLEET_NODE_UPDATE_RETRY` 后再试（`FLEET_NODE_UPDATE_FOLLOW=0` 关）。登录自己的 `fleet-install-sync.sh` 在托管登录上答
 `off · managed · 跟随 <root>/current (<sha>)`（这次是对的：更新器负责），不再自己去取——以前（#2688 / #2714）它按提交
 从 GitHub 取对象、每个登录各存一份。`account adopt` 接管那一刻**当场同步**做一次 `fleet-node-update.py follow <login>`
@@ -243,7 +242,7 @@ BREAK-IT `managed-login-own-copy`）。跟不上的记进 `update.json` 的 `fol
 `<state>/update.json` 记阶段，被杀后下一轮照记录做完（BREAK-IT `node-update-half`）：
 
 1. **目标**：`expected.json` 的 `release`（§3 期望状态），否则入口 `/version` 的 `stable`。
-2. **推迟**：任何托管账号有「有活」的 EPIC 批次在跑（#2247 的 `fleet_epic_holding`）→ `deferred`，最长 2 小时（`FLEET_EPIC_HOLD_CAP_SECS`）——整机一个钟，从第一次 deferred 起算，换批次、换 stable 都不重开，到达目标版本才清（#2843）。超封顶照常切换：在跑的会话不受影响（各在 `fleet.versions/<sha>`），只换 `current/` 和守护；更新器以各登录身份在每个在挡批次的 EPIC 上留一条记录型说明。托管登录的 install-sync 不再自己挡第二次。签名：`status` 打出钉住的 key 指纹与当前发布版的签名 key 指纹；取包验签失败是 doctor 的 `key` FAIL（附入口现在的 key：同一把 = 读到两次构建的半对，ccquota 已自动重读一次；不同 = 入口换了钥匙，需重钉）。
+2. **不为批次推迟**（#2934）：切换只换 `current/` 和守护，在跑的会话不受影响（各在 `fleet.versions/<sha>`），所以默认有 EPIC 批次在跑也照常切换——批次跨版本由 `/fleet-epic-run` 自己记（`fleet-epic-floor.sh`，报告写「本批跨了几个版本」），`status` 写 `hold    off`。`FLEET_EPIC_HOLD_CAP_SECS=<秒>` 是可选开关：设了之后任何托管账号有「有活」的 EPIC 批次在跑（#2247 的 `fleet_epic_holding`）→ `deferred`，最长这么久——整机一个钟，从第一次 deferred 起算，换批次、换 stable 都不重开，到达目标版本才清（#2843）；超封顶照常切换，更新器以各登录身份在每个在挡批次的 EPIC 上留一条记录型说明。托管登录的 install-sync 不再自己挡第二次。每拍记下第一次看到目标版本的时间（`update.json` 的 `target_seen`），`fleet doctor --installs` 据此写「落后 stable 多久」，超过 30 分钟 WARN。签名：`status` 打出钉住的 key 指纹与当前发布版的签名 key 指纹；取包验签失败是 doctor 的 `key` FAIL（附入口现在的 key：同一把 = 读到两次构建的半对，ccquota 已自动重读一次；不同 = 入口换了钥匙，需重钉）。
 3. **取包**：`ccquota release fetch --artifacts`（C7，只问入口、验钉住的公钥 `<state>/release.pub`）→ 装 ccquota 和各工具 → 写 `.release/staged.json`。没有这个标记的目录 = 没装完，删掉重取。取包可续传（#2701）：只取 `release.json` 为本机平台钉住的制品（`--pinned`），每个落 `<root>/.fetch/<sha256>.part`、断了用 Range 接着取，只有 30 秒没有一个字节才算断、没有整包 deadline；取之前把工具缓存和当前 / 上一版的制品按 sha256 硬链进去，同字节的不再下；有进展的失败不退避，下一轮接着取。进度写 `<state>/fetch.progress`（`status` 打最后一行，`fleet node install` 边取边打印）。不认这些参数的旧 ccquota 照旧整包取。
 4. **切换**：每个托管账号（降权、它自己的 HOME / TMPDIR）先跑新版的 `fleet-sessions-snapshot.sh save`，把没做完的会话钉进它的 `global/sessions.snapshot`（#2484）→ 记下当前（旧版）的机器体检 FAIL 作基线 → `.prev` = 旧版、`current` = 新版（各一次 rename）→ 开号缓存、账号链接、共享凭据代理的代码副本（`machine refresh`）、每个托管登录的 `~/.claude/fleet`（`link-tree` + 两目录 apply，#2774）→ 请守护重启。
 5. **验证**（下一轮，新代码，`FLEET_NODE_UPDATE_SETTLE` 30 秒后）：机器体检（`fleet doctor --machine`）比基线多出 FAIL

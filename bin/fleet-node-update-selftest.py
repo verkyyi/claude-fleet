@@ -519,28 +519,46 @@ class E_MissingArtifact(Sandbox):
 
 
 class F_EpicHold(Sandbox):
+    def test_no_hold_by_default(self):
+        """issue #2934: a batch with work does not hold the machine unless the
+        person turned the hold on — a new stable switches at once, and status
+        says the hold is off."""
+        self.install(V1)
+        lib = os.path.join(self.d, "lib.sh")
+        with open(lib, "w") as f:
+            f.write('fleet_epic_holding() { echo "active epic=2329 live=1"; return 0; }\n')
+        self.release(V2)
+        st = self.tick(V2, FLEET_NODE_UPDATE_LIB=lib)
+        self.assertEqual(st["phase"], "switched", st)
+        self.assertNotIn("hold", st)
+        self.assertNotIn("hold released", open(os.path.join(self.d, "log", "update.log")).read())
+        self.assertIn("hold    off", self.cmd("status").stdout)
+
     def test_batch_with_work_defers_until_the_cap(self):
         self.install(V1)
         lib = os.path.join(self.d, "lib.sh")
         with open(lib, "w") as f:
             f.write('fleet_epic_holding() { echo "active epic=2329 conf=$FLEET_CONF_DIR"; return 0; }\n')
         self.release(V2)
-        st = self.tick(V2, FLEET_NODE_UPDATE_LIB=lib)
+        st = self.tick(V2, FLEET_NODE_UPDATE_LIB=lib, FLEET_EPIC_HOLD_CAP_SECS="7200")
         self.assertEqual(st["result"], "deferred", st)
         self.assertIn("alice", st["reason"])
         self.assertIn(os.path.join(self.home, ".config", "claude-fleet"), st["reason"])
         self.assertEqual(self.current(), V1)
         # past the cap the tick goes on
-        st = self.tick(V2, FLEET_NODE_UPDATE_LIB=lib, FLEET_EPIC_HOLD_CAP_SECS="0")
+        st["hold"]["since"] -= 7300
+        self.wj(os.path.join(self.d, "db", "update.json"), st)
+        st = self.tick(V2, FLEET_NODE_UPDATE_LIB=lib, FLEET_EPIC_HOLD_CAP_SECS="7200")
         self.assertEqual(st["phase"], "switched", st)
         self.assertIn("hold released", open(os.path.join(self.d, "log", "update.log")).read())
         # an idle batch (fleet_epic_holding rc 1) never holds
         with open(lib, "w") as f:
             f.write('fleet_epic_holding() { echo idle; return 1; }\n')
         self.daemon_on(V2)
-        self.tick(V2, FLEET_NODE_UPDATE_LIB=lib)
+        self.tick(V2, FLEET_NODE_UPDATE_LIB=lib, FLEET_EPIC_HOLD_CAP_SECS="7200")
         self.release(V3)
-        self.assertEqual(self.tick(V3, FLEET_NODE_UPDATE_LIB=lib)["phase"], "switched")
+        self.assertEqual(self.tick(V3, FLEET_NODE_UPDATE_LIB=lib, FLEET_EPIC_HOLD_CAP_SECS="7200")["phase"],
+                         "switched")
 
 
     def test_one_clock_for_the_machine(self):
@@ -560,6 +578,7 @@ class F_EpicHold(Sandbox):
             f.write('echo "note $*" >> %s; while [ $# -gt 0 ]; do [ "$1" = --body-file ] && cat "$2" >> %s; shift; done\n'
                     % (notes, notes))
         self.release(V2)
+        self.env["FLEET_EPIC_HOLD_CAP_SECS"] = "7200"   # the hold is opt-in (#2934)
         st = self.tick(V2, FLEET_NODE_UPDATE_LIB=lib)
         self.assertEqual(st["result"], "deferred", st)
         since = st["hold"]["since"]
@@ -1178,7 +1197,8 @@ class M_FollowInstall(Sandbox):
 
     def test_own_copy_is_reclaimed(self):
         """BREAK-IT managed-login-own-copy: pointed back at an own old copy by hand,
-        WARN on the doctor, linked again on the next tick — unless a batch holds it."""
+        WARN on the doctor, linked again on the next tick — unless a batch holds it
+        (only with the hold turned on, #2934)."""
         self.install(V1)
         own = os.path.join(self.live("alice") + ".versions", "own-old")
         os.makedirs(os.path.join(own, "bin"))
@@ -1190,7 +1210,7 @@ class M_FollowInstall(Sandbox):
         lib = os.path.join(self.d, "lib.sh")
         with open(lib, "w") as f:
             f.write('fleet_epic_holding() { echo "active epic=2770"; return 0; }\n')
-        st = self.tick(V1, FLEET_NODE_UPDATE_LIB=lib)
+        st = self.tick(V1, FLEET_NODE_UPDATE_LIB=lib, FLEET_EPIC_HOLD_CAP_SECS="7200")
         self.assertIn("install alice: not linked to %s yet — an EPIC batch with work" % V1[:12], st["reason"])
         self.assertEqual(os.path.realpath(self.live("alice")), os.path.realpath(own))
         self.tick(V1)
