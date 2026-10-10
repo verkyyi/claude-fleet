@@ -329,6 +329,10 @@ run_check() {
         -H 'Content-Type: application/json' --data-binary @- "$HUB/v1/fleet/debug/ticket" 2>/dev/null)
   case "$c" in
     200|201|429) chk PASS C2 "POST /v1/fleet/debug/ticket answers ($c)" ;;
+    # the probe's fp is deliberately no install fingerprint: the route refuses it
+    # with its own words — routed, and no anonymous ticket spent on a check
+    400) if grep -q 'fp' "$tmp/ticket"; then chk PASS C2 "POST /v1/fleet/debug/ticket is routed (400 on the probe's fake fp)"
+         else chk FAIL C2 "POST /v1/fleet/debug/ticket answers 400 — $(head -c 80 "$tmp/ticket") (#2891)"; fi ;;
     401) if grep -q 'viewer token' "$tmp/ticket" && [ -f "$ROOT/tokenledger/internal/api/fleet_debug_ticket.go" ]; then
            off=1; chk GAP C2 "$DEBUG_OFF_MSG"
          elif grep -q 'viewer token' "$tmp/ticket"; then chk FAIL C2 "POST /v1/fleet/debug/ticket is not routed — no ticket (#2891)"
