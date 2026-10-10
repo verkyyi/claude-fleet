@@ -781,7 +781,7 @@ drill_node_install_half() {
     # 3. a part deleted later (the LaunchDaemon): only it comes back
     rm -f "$SB/LaunchDaemons/com.claude-fleet.node.plist" "$SB/loaded"
     run
-    [ "$RC" = 0 ] && [ "$(shape)" = "+检查 -加入 -发布公钥 -期望状态 -ccquota -运行时 -角色用户 -ssh +守护 " ] \
+    [ "$RC" = 0 ] && [ "$(shape)" = "+检查 -加入 -发布公钥 -期望状态 -ccquota -运行时 -角色用户 -ssh -删号通道 +守护 " ] \
       || res "" "a deleted daemon was not the only thing redone: $(shape)"
     clean || res "" "something half written was left: $(find "$SB" -name '*.partial' -o -name '*.tmp-*' | grep -v /rel/ | head -n 1)"
     res "$(since "$t0")" ""
