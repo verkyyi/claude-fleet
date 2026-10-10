@@ -134,6 +134,14 @@ PUT 的请求体就是上面可写的字段，外加可选的 `if_version`（读
 （`fleet-login.py node-pass`，降权到它）向入口要新通行证，写进凭据库与 `logins/<账号>.env`，
 节点程序重读后上线；不要管理员的浏览器会话（设备没登记过就先以这个账号 `fleet login` 一次）。
 
+**删号要完全磁盘访问**（#2973，BREAK-IT `login-remove-dscl-denied`）：macOS 不让没有「完全磁盘访问」
+的进程删用户记录，root 也不行（`dscl . -delete` 答 `eDSPermissionError`）。入口下发的删号由节点程序跑，
+它的进程链归守护的解释器（launchd 起的 `python3`）。守护每 5 分钟以 root 读一次 TCC 库，读不到就记
+`state.json` 的 `fda`，`status --check` 退 4、doctor `node` 行 WARN，点名要加的程序。修（一个人点一次，
+程序拿不到）：系统设置 › 隐私与安全性 › 完全磁盘访问 加上那个程序，再
+`sudo launchctl kickstart -k system/com.claude-fleet.node`。没授权前，卡住的删号由 admin 经 ssh 手跑
+`sudo fleet-login-remove.sh <账号> --delete-home --apply`（删号脚本被拒时最后一行就是这条）。
+
 **以账号身份跑**：每个账号是进程里一个租户；它启动的每条命令（`fleet-control.py`、
 开号脚本、中继、git、tailscale）降权到这个账号——uid / gid / 附属组、`HOME` / `USER` /
 `LOGNAME`、工作目录是它的家（`internal/agent/runas.go` `prepCmd`）；root 的机器程序遇到

@@ -391,6 +391,13 @@ if [ "$APPLY" = 1 ] && dscl . -read "/Users/$LOGIN" UniqueID >/dev/null 2>&1; th
   show sudo dscl . -delete "/Users/$LOGIN"
   sudo dscl . -delete "/Users/$LOGIN" || :
   if dscl . -read "/Users/$LOGIN" UniqueID >/dev/null 2>&1; then
+    # dscl's eDSPermissionError as root is macOS privacy (TCC): no process
+    # without Full Disk Access may delete a user record (issue #2973) — the node
+    # program's chain has none unless a person granted it. Say so, last: these
+    # lines are what the node log keeps (accountWhy) and what the hub shows.
+    if ! sudo head -c 1 "${FLEET_LOGIN_REMOVE_TCC_DB:-/Library/Application Support/com.apple.TCC/TCC.db}" >/dev/null 2>&1; then
+      printf '%s: this process has no Full Disk Access (macOS privacy protection), so macOS refuses to delete a login from it — grant it to the machine daemon (fleet-node-supervisor.py status --check names the program), or run this from an admin ssh: sudo %q %s --delete-home --apply\n' "$PROG" "$0" "$LOGIN" >&2
+    fi
     printf '%s: login %s is still on this machine (its record survived deleteUser and dscl -delete); stopped\n' "$PROG" "$LOGIN" >&2
     exit 1
   fi

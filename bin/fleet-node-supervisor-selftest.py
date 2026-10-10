@@ -1687,5 +1687,62 @@ class L_Tenants(Sandbox):
             fns.tenant_privileges, fns.tenant_logins = keep
 
 
+class M_UpdateVerifySoon(Sandbox):
+    """A switched release is verified once its settle passed, not on the update
+    task's next 5-minute slot (issue #2973: 「正在更新（switched）」 for minutes)."""
+    def test_verify_due_after_settle(self):
+        db = os.path.join(self.d, "db")
+        os.makedirs(db)
+        p = type("P", (), {"state": db})()
+        uj = os.path.join(db, "update.json")
+        self.assertFalse(fns.update_verify_due(p, 1000, 100), "no update.json is never due")
+        with open(uj, "w") as f:
+            json.dump({"phase": "idle", "switched_at": 900}, f)
+        self.assertFalse(fns.update_verify_due(p, 1000, 100), "an idle updater waits for its slot")
+        with open(uj, "w") as f:
+            json.dump({"phase": "switched", "switched_at": 990}, f)
+        self.assertFalse(fns.update_verify_due(p, 1000, 100), "inside the settle: not yet")
+        with open(uj, "w") as f:
+            json.dump({"phase": "switched", "switched_at": 960}, f)
+        self.assertTrue(fns.update_verify_due(p, 1000, 100), "settle passed: verify now")
+        self.assertFalse(fns.update_verify_due(p, 1000, 10), "the task ran 10 s ago: no busy loop")
+
+
+class N_FullDiskAccess(Sandbox):
+    """The daemon reads whether its chain holds Full Disk Access, and the status
+    line names what to grant (issue #2973: the hub's removes, dscl refused)."""
+    def reading(self, mode):
+        db = os.path.join(self.d, "TCC.db")
+        if os.path.exists(db):
+            os.remove(db)
+        if mode is not None:
+            with open(db, "w") as f:
+                f.write("x")
+            os.chmod(db, mode)
+        os.environ["FLEET_NODE_TCC_DB"] = db
+        try:
+            return fns.fda_reading()
+        finally:
+            del os.environ["FLEET_NODE_TCC_DB"]
+            if os.path.exists(db):
+                os.chmod(db, 0o600)
+
+    def test_reading(self):
+        self.assertIs(self.reading(0o600)["ok"], True)
+        self.assertIs(self.reading(None)["ok"], None, "no TCC database: nothing to tell")
+        if os.geteuid() != 0:   # root reads a 000 file; macOS's TCC is what stops it there
+            self.assertIs(self.reading(0o000)["ok"], False)
+        self.assertTrue(self.reading(0o600)["program"].startswith("/"))
+
+    def test_line(self):
+        self.assertEqual(fns.fda_line({}), "")
+        self.assertEqual(fns.fda_line({"fda": {"ok": True}}), "")
+        self.assertEqual(fns.fda_line({"fda": {"ok": None}}), "")
+        line = fns.fda_line({"fda": {"ok": False, "program": "/x/Python"}})
+        self.assertIn("完全磁盘访问", line)
+        self.assertIn("/x/Python", line)
+        self.assertIn("kickstart -k system/com.claude-fleet.node", line)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

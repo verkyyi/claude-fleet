@@ -344,6 +344,8 @@ FLEET_LIVE_ROOT                    path: state/log location override (fleet-daem
 FLEET_LOGIN_HOMES                  seam: an injectable command/path for tests (fleet-login-new.sh)
 FLEET_LOGIN_REMOVE_DELETE_SECS     knob: time limit (s) on sysadminctl -deleteUser before it is killed, default 120 (fleet-login-remove.sh, #2866)
 FLEET_LOGIN_REMOVE_SETTLE          knob: seconds watched for a respawned process after bootout + kill, default 3 (fleet-login-remove.sh, #2866)
+FLEET_LOGIN_REMOVE_TCC_DB          test seam: the TCC database probed for Full Disk Access when dscl is refused (fleet-login-remove.sh, #2973)
+FLEET_NODE_TCC_DB                  test seam: the TCC database the machine daemon reads for its Full Disk Access (fleet-node-supervisor.py, #2973)
 FLEET_LOGIN_CREDSEP_WAIT           knob: seconds fleet-login-new.sh step 7b waits for `credsep check` to pass while the new proxy starts (15; #2294)
 FLEET_LOGIN_HUB                    handoff: the hub the admin agent hands fleet-login-new.sh with a create's join code (#2652)
 FLEET_LOGIN_JOIN_CODE              handoff: a create's one-time join code, admin agent → fleet-login-new.sh, env only (#2652)

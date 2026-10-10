@@ -33,6 +33,8 @@ export FLEET_LOGIN_HOMES="$WORK/homes" FLEET_INSTALL_DAEMON_DIR="$WORK/LaunchDae
 export FLEET_CONF_DIR="$WORK/homes/alice/.config/claude-fleet" FLEET_SKIP_GLOBAL_CONF=1
 export FLEET_TEST_LOG="$WORK/calls.log" FLEET_TEST_LIVE="$WORK/live" FLEET_TEST_DS="$WORK/ds" FLEET_TEST_PROCS="$WORK/procs"
 export FLEET_LOGIN_REMOVE_SETTLE=0   # no settle watch but in the respawn leg (#2866)
+mkdir -p "$WORK/tcc-ok"; : > "$WORK/tcc-ok/TCC.db"
+export FLEET_LOGIN_REMOVE_TCC_DB="$WORK/tcc-ok/TCC.db"   # this run holds Full Disk Access but in the #2973 leg
 export HOME="$WORK/admin" PATH="$WORK/shim:$PATH"
 # the machine daemon's register (issue #2528): absent unless a leg writes one
 export FLEET_NODE_STATE="$WORK/node" FLEET_NODE_SUPERVISOR="$WORK/rt/fleet-node-supervisor.py"
@@ -393,6 +395,17 @@ FAKE_RECORD_STAYS=1 FAKE_USER_DELETE_FAILS=1 run alice --delete-home --apply
 [ "$RC" = 1 ] || { cat "$WORK/out" >&2; fail "record that survives dscl: exit $RC (want 1)"; }
 has "$WORK/out" 'is still on this machine' 'a login left on the machine was not said'
 not_has "$WORK/out" 'fleet-login-remove: done' 'a login left on the machine read done'
+# a process that can read the TCC database has Full Disk Access: no FDA line
+not_has "$WORK/out" 'no Full Disk Access' 'an FDA-holding run was told it has none'
+# … and from a process with no Full Disk Access (the node program, #2973): its
+# last words say so and name the way out — they are what the hub shows
+reset_fixture
+mkdir -p "$WORK/tcc"; : > "$WORK/tcc/TCC.db"; chmod 000 "$WORK/tcc/TCC.db"
+FLEET_LOGIN_REMOVE_TCC_DB="$WORK/tcc/TCC.db" FAKE_RECORD_STAYS=1 FAKE_USER_DELETE_FAILS=1 run alice --delete-home --apply
+chmod 600 "$WORK/tcc/TCC.db"
+[ "$RC" = 1 ] || { cat "$WORK/out" >&2; fail "record kept by TCC: exit $RC (want 1)"; }
+has "$WORK/out" 'this process has no Full Disk Access' 'a dscl refused by TCC did not say Full Disk Access'
+has "$WORK/out" 'alice --delete-home --apply' 'the FDA line does not name the admin-ssh way out'
 
 # deleteUser fails outright — the node program has no Full Disk Access, so TCC
 # keeps ~/Desktop from it, every time (33 of 33 hub-sent removes on mini2,
