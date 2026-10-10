@@ -16,7 +16,8 @@
 #                              the hub (POST /v1/fleet/session-cred, the node token
 #                              + this session's own worker assertion) — no account
 #          exit 3 switched off · 4 nothing to bind (no account on a trusted route:
-#          the ambient login, which holds nothing to protect) · 1 failed
+#          the ambient login, which holds nothing to protect) · 5 central: the hub
+#          does not know this session (404, not registered — issue #2914) · 1 failed
 #   fleet-session-cred.sh revoke --sid SID    at the session's exit: the proxy's
 #                              revoke (or the revoked list when it is down), the
 #                              hub pass's DELETE, the Codex home marked dead
@@ -124,6 +125,13 @@ try:
     with urllib.request.urlopen(req, timeout=15) as r:
         d = json.loads(r.read() or b"{}")
 except Exception as e:
+    if getattr(e, "code", None) == 404:
+        # not_found: the hub has no fleet of this node behind the session's worker
+        # assertion — the session is not registered there (issue #2914: a warm-pool
+        # window asserted its holding session's fleet). Exit 5 tells the launcher.
+        sys.stderr.write("fleet-session-cred: central route: the hub does not know this session "
+                         "(404 — its fleet is not registered for this node); relaunch it to re-register\n")
+        sys.exit(5)
     sys.exit("fleet-session-cred: central route: the hub refused a pass (%s)" % getattr(e, "code", type(e).__name__))
 cred, pid = d.get("cred", ""), d.get("id", "")
 if not cred.startswith("fcp-h1.") or not pid or "\t" in pid:
@@ -184,7 +192,8 @@ case "$cmd" in
     route=$(printf '%s' "$rt" | python3 -c 'import json,sys; print(json.load(sys.stdin)["route"])' 2>/dev/null) \
       || die "the proxy did not say which route this machine takes"
     if [ "$route" = central ]; then
-      row=$(hub_pass "$provider") || exit 1
+      row=$(hub_pass "$provider"); hrc=$?
+      [ "$hrc" = 0 ] || exit $(( hrc == 5 ? 5 : 1 ))
       rec_set "$sid" hub_id "${row%%	*}"
       cred="${row#*	}"
       # the machine's shared proxy (issue #2217) serves every login on one port:

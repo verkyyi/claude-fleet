@@ -417,6 +417,8 @@ if [ -n "${FLEET_CRED_SID:-}" ]; then
         elif [ "$_fc_route" != central ]; then tmux set-option -w -t "$TMUX_PANE" @cc_account "$label" 2>/dev/null || true; fi
       fi ;;
     4) : ;;
+    5) echo 'fleet-claude: the hub does not know this session (404: not registered for this node) — refusing to launch; ↵ on the page re-registers it and retries' >&2
+       _fc_refused cred_unknown; exit 1 ;;
     *) echo 'fleet-claude: FLEET_CRED_PROXY=1 but no session credential could be had from the proxy — refusing to launch (fleet-cred-proxy.sh status; logs/cred-proxy.log)' >&2
        _fc_refused cred; exit 1 ;;
   esac

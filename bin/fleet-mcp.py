@@ -149,6 +149,16 @@ def current_session():
     sess = tmux("display-message", "-p", "-t", pane, "#{?#{session_group},#{session_group},#{session_name}}")
     if not sess:
         raise ToolFault("could not resolve the current fleet session")
+    # A warm-pool window is parked in its fleet's HOLDING session <fleet>-pool
+    # until claimed — it belongs to the fleet all the same (fleet-claude.sh's
+    # rule). Without this its credential named the pool's fleet UUID, which no
+    # hub knows: a central-route session pass came back 404 (issue #2914).
+    launch = os.environ.get("FLEET_LAUNCH_SESSION", "")
+    if launch and sess == launch + "-pool":
+        return launch
+    sock = os.environ.get("TMUX", "").split(",", 1)[0].rsplit("/", 1)[-1]
+    if sock and sess == sock + "-pool":
+        return sock
     return sess
 
 
