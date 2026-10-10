@@ -252,6 +252,8 @@ FLEET_INSTALL_BUNDLE               seam: 0 = fleet-install.sh skips the hub's on
 FLEET_INSTALL_VENDOR               path: where fleet-install.sh puts tmux's static build (default ~/.local/share/claude-fleet-vendor, #2260)
 FLEET_INSTALL_STATIC_TMUX          seam: 0 = fleet-install.sh skips tmux's static build, straight to Homebrew / apt (fleet-install-selftest.sh, #2260)
 FLEET_INVITE                       handoff: the invitation code the install line keeps for the first login, instead of the one the hub's /i/<code> filled in (EPIC #2259 C1/C2)
+FLEET_DEBUG_TICKETS                handoff: 1 = the hub hands out debug tickets, instead of the __FLEET_DEBUG__ /install filled in (#2891)
+FLEET_DEBUG_HWID                   seam: the hardware id fleet-install.sh hashes into the debug-ticket fingerprint (fleet-install-selftest.sh leg L, #2891)
 FLEET_PACK_VENDOR                  seam: 0 = fleet-client-pack.sh packs no static tmux (offline builds, the selftests' sandbox pack; #2260)
 FLEET_INSTALL_NO_NODE              seam: fleet-install.sh --no-node — skip the node step (--no-hub: this machine's fleet, #1712; hub: the join, #1719)
 FLEET_INSTALL_NODE_FORCE           seam: 1 = fleet-install.sh joins with no tty on stderr (fleet-install-join-selftest.sh's fake hub confirms the scan itself; #1719)
