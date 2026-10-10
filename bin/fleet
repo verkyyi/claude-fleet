@@ -205,6 +205,13 @@ if [ "$cmd" = doctor ] && [ ! -x "$here/fleet-doctor.sh" ] \
     if [ "$(bash "$here/fleet-conf.sh" host 2>/dev/null)" = 1 ]; then w='基础 · 承载'; else w='基础 · 承载 未开（fleet host on）'; fi
     printf '  PASS  能力     %s\n' "$w"
   fi
+  # notify (issue #2759): a click lands on the session only through
+  # terminal-notifier — said, never installed for you; never a non-zero exit
+  if [ "$(uname -s 2>/dev/null)" = Darwin ] && [ -f "$here/fleet-ui-lang.sh" ]; then
+    if [ "${FLEET_NOTIFY:-1}" = 0 ]; then printf '  PASS  %-8s %s\n' notify "$(sh "$here/fleet-ui-lang.sh" t notify_doctor_off)"
+    elif command -v terminal-notifier >/dev/null 2>&1; then printf '  PASS  %-8s %s\n' notify "$(sh "$here/fleet-ui-lang.sh" t notify_doctor_tn)"
+    else printf '  WARN  %-8s %s\n' notify "$(sh "$here/fleet-ui-lang.sh" t notify_doctor_no_tn)"; fi
+  fi
   # orch (issue #2117): the person has ONE orchestrating session — fleet-doctor.sh's row
   for _of in "${FLEET_STATUS_G:-${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash/global}"/orch_multi_*; do
     [ -s "$_of" ] || continue

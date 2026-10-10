@@ -11,14 +11,9 @@
 #                 AskUserQuestion payload → @claude_needs_detail beside
 #                 needs/ask; the mod's `ask` with the payload on stdin → the same;
 #                 the next `working` clears it with the subtype
-#   C. notify   — bin/fleet-alerts.sh fleet_alerts_notify on the CLIENT
-#                 (FLEET_SHELL=1) through bin/fleet-client-actions.py notify, a
-#                 fake notifier (FLEET_CLIENT_NOTIFY_CMD) and an isolated tmux
-#                 server holding a list pane: the first look seeds silently; a new
-#                 needs row is ONE notification — who, what they ask — and its
-#                 click lands `jump=wid:<worker>` on the list (the ⌘P road); the
-#                 same row again is none; answered and asked again is a new one;
-#                 FLEET_NOTIFY=0 is nothing; a node (no FLEET_SHELL) never notifies
+#   C. notify   — moved to bin/notify-selftest.sh (issue #2759: the client's
+#                 refresh loop decides it); here: the bar's old road is a no-op,
+#                 and FLEET_NOTIFY=0 reaches the notifier
 #   D. focus    — a notifier with no click of its own (iTerm2's OSC 9): the jump
 #                 waits in @notify_jump and `jump-pending` (the client's focus-in)
 #                 takes it once; past FLEET_NOTIFY_JUMP_SECS it is dropped
@@ -109,36 +104,12 @@ exit 0
 SH
 chmod +x "$WORK/notifier"
 export NOTIFY_LOG="$WORK/notify.log" FLEET_CLIENT_NOTIFY_CMD="$WORK/notifier" FLEET_SHELL_SESSION="$L"
-AF="$G/alerts.ndjson"
-row() { printf '{"id":"needs-wid-%s","severity":"needs","subject":"%s","condition":"%s","value":"%s","since":1,"action":"jump","healed_at":0,"target":"wid:%s","detail":"%s"}\n' "${1//\//}" "$2" "$3" "$4" "$1" "$5"; }
-notify() { TMUX="$SOCK,0,0" FLEET_SHELL="${SHELLV-1}" bash -c '. "$1/usage-lib.sh"; . "$1/fleet-alerts.sh"; fleet_alerts_notify' _ "$BIN"; }
-# the notification is a background child: wait for its line (or 5s)
-settle() { local i=0; while [ "$i" -lt 50 ]; do [ "$(wc -l < "$NOTIFY_LOG" 2>/dev/null | tr -d ' ')" = "$1" ] && break; sleep 0.1; i=$((i+1)); done; sleep 0.3; }
-lines() { wc -l < "$NOTIFY_LOG" 2>/dev/null | tr -d ' '; }
-: > "$NOTIFY_LOG"
-row F/issue-7 '#7' question m4 '早就在问的' > "$AF"
-notify; sleep 0.5
-eq "C: the first look seeds silently" "0" "$(lines)"
-eq "C: …and remembers the id" "needs-wid-Fissue-7" "$(cat "$AF.notified")"
-{ row F/issue-7 '#7' question m4 '早就在问的'; row F/issue-1909 '#1909' question m5 '演练放在 m5 还是只在 m4？'; } > "$AF"
-notify; settle 1
-eq "C: a new wait → one notification: who, what, where" "#1909 在问你|演练放在 m5 还是只在 m4？ · m5" "$(cat "$NOTIFY_LOG")"
-eq "C: its click lands on the list as jump=wid:<worker>" "jump=wid:F/issue-1909" "$(T show-options -pqv -t "$LIST" @sidebar_do | tr -d ' ')"
-T set-option -up -t "$LIST" @sidebar_do
-notify; sleep 0.5
-eq "C: the same wait again → nothing" "1" "$(lines)"
-row F/issue-7 '#7' question m4 '早就在问的' > "$AF"
-notify; sleep 0.3
-{ row F/issue-7 '#7' question m4 '早就在问的'; row F/issue-1909 '#1909' permission m5 'Bash: git push'; } > "$AF"
-notify; settle 2
-eq "C: answered, then a new wait → a new notification" "#1909 要你批准|Bash: git push · m5" "$(tail -1 "$NOTIFY_LOG")"
-{ row F/issue-7 '#7' question m4 'x'; row F/scratch-3 'scratch-3' question m4 'y'; } > "$AF"
-FLEET_NOTIFY=0 notify; sleep 0.5
-eq "C: FLEET_NOTIFY=0 → nothing" "2" "$(lines)"
-SHELLV=0 notify; sleep 0.5
-eq "C: a node (no FLEET_SHELL) → nothing" "2" "$(lines)"
+# The notification itself is bin/fleet_notify.py's since issue #2759 (the
+# client's refresh loop — bin/notify-selftest.sh); the bar's old road is a no-op.
+eq "C: fleet_alerts_notify (the bar's road) is retired — nothing" "0|" \
+   "$(TMUX="$SOCK,0,0" FLEET_SHELL=1 bash -c '. "$1/usage-lib.sh"; . "$1/fleet-alerts.sh"; fleet_alerts_notify; echo $?' _ "$BIN")|$(cat "$NOTIFY_LOG" 2>/dev/null)"
 FLEET_NOTIFY=0 python3 "$BIN/fleet-client-actions.py" notify --title t --body b --jump wid:F/x; sleep 0.2
-eq "C: FLEET_NOTIFY=0 reaches the notifier too → nothing" "2" "$(lines)"
+eq "C: FLEET_NOTIFY=0 reaches the notifier too → nothing" "" "$(cat "$NOTIFY_LOG" 2>/dev/null)"
 
 # ============================================================================
 # D. focus — a notifier with no click: the focus-in takes the jump

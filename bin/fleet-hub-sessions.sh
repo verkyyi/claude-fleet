@@ -26,7 +26,8 @@
 #               (10s), see refresh_summaries below.
 #   --loop      --refresh every FLEET_HUB_SESSIONS_WATCHED_EVERY (2s) while a client
 #               is attached to any fleet session on this machine — someone is
-#               looking — else every FLEET_HUB_SESSIONS_EVERY (10s), for
+#               looking, or (client mode, FLEET_NOTIFY on) a notification may be
+#               due, issue #2759 — else every FLEET_HUB_SESSIONS_EVERY (10s), for
 #               FLEET_HUB_SESSIONS_LOOP_SECS (70s), then exit. One at a time (pid
 #               file). The 2 s is half of the 「3 秒内看到」 budget (issue #1481);
 #               the other half is the node reporting a change at once
@@ -1046,6 +1047,16 @@ for f in local:
             st_lines.append("\x1f".join(clean(v) for v in (ref, r["node"], r["av"], age, title[:200],
                                                          "1" if r["local"] else "0")) + "\n")
     write(os.path.join(gdir, "epicstale_" + f["sess"]), "".join(st_lines))
+# A session needs you (issue #2759, EPIC #2756 C3): the CLIENT's notification,
+# decided here — on every round that brought rows, a terminal attached or not
+# (the bar's status-right job ran only while one drew it). bin/fleet_notify.py is
+# the one rule; it can never cost the cache above.
+if client:
+    try:
+        import fleet_notify
+        fleet_notify.beat(rows, gdir, client)
+    except Exception as e:
+        sys.stderr.write("fleet-hub-sessions: notify: %s\n" % e)
 PY
 }
 
@@ -1158,6 +1169,10 @@ PY
 # sooner, and the hub is asked every EVERY as before.
 watched() {
   local sess _c
+  # The client (issue #2759): its notifications are for when nobody is looking —
+  # the client in the background, `fleet claude`'s own view — so it keeps the
+  # watched pace (the long poll) while FLEET_NOTIFY is on.
+  [ -n "$CLIENT" ] && [ "${FLEET_NOTIFY:-1}" != 0 ] && return 0
   while IFS=$'\t' read -r sess _c; do
     [ -n "$sess" ] || continue
     [ -n "$(tmux -L "$sess" list-clients 2>/dev/null)" ] && return 0

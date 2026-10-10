@@ -710,50 +710,12 @@ fleet_alerts_bar() {
   return 0
 }
 
-# fleet_alerts_notify — the CLIENT's notification (issue #1951, EPIC #1949 C2):
-# a needs row of the hub's (`needs-wid-*`, _fa_client_needs) that was not there
-# on the last look gets ONE notification — who, what they ask, a click that goes
-# there (fleet-client-actions.py notify). Dedup key = the alert id: a session is
-# told once while it waits, and again only for a new wait after it was answered.
-# The first look seeds the list silently (a client starting with three sessions
-# waiting is not three notifications). Builtins only until something is new; one
-# writer across the clients (a mkdir lock — the loser skips, the winner told).
-# FLEET_NOTIFY=0 turns it off. A node draws no bar and never gets here.
-fleet_alerts_notify() {
-  [ "${FLEET_NOTIFY:-1}" = 0 ] && return 0
-  [ "${FLEET_SHELL:-0}" = 1 ] || return 0
-  local f nf line cur="" old="" seeded=0 new="" id su co va ta de title body nl=$'\n'
-  f=$(fleet_alerts_file); nf="$f.notified"
-  [ -f "$f" ] || return 0
-  [ -f "$nf" ] && { seeded=1; old=$(<"$nf"); }
-  while IFS= read -r line; do
-    [[ $line =~ $_FA_RE ]] || continue
-    [ "${BASH_REMATCH[2]}" = needs ] || continue
-    id=${BASH_REMATCH[1]}
-    case "$id" in needs-wid-*) ;; *) continue ;; esac
-    cur="$cur$id$nl"
-    case "$nl$old$nl" in *"$nl$id$nl"*) continue ;; esac
-    new="$new$line$nl"
-  done < "$f"
-  cur=${cur%"$nl"}
-  [ "$seeded" = 1 ] && [ "$cur" = "$old" ] && return 0   # nothing moved: no write, no fork
-  mkdir "$nf.lock" 2>/dev/null || return 0
-  printf '%s\n' "$cur" > "$nf.$$" 2>/dev/null && mv -f "$nf.$$" "$nf" 2>/dev/null || rm -f "$nf.$$"
-  rmdir "$nf.lock" 2>/dev/null
-  [ "$seeded" = 1 ] && [ -n "$new" ] || return 0
-  while IFS= read -r line; do
-    [[ $line =~ $_FA_RE ]] || continue
-    su=${BASH_REMATCH[3]}; co=${BASH_REMATCH[4]}; va=${BASH_REMATCH[5]}; ta=${BASH_REMATCH[9]}; de=${BASH_REMATCH[10]}
-    case "$co" in
-      question) title="$su 在问你" ;; permission) title="$su 要你批准" ;;
-      blocked) title="$su 被卡住了" ;; failed) title="$su 失败了" ;; *) title="$su 在等你" ;;
-    esac
-    body=$de; [ -n "$va" ] && body="${body:+$body · }$va"
-    ( python3 "$_FA_BIN/fleet-client-actions.py" notify --title "$title" --body "$body" --jump "$ta" \
-        </dev/null >/dev/null 2>&1 & )
-  done <<< "$new"
-  return 0
-}
+# fleet_alerts_notify — retired (issue #2759): the client's notification is
+# decided by bin/fleet_notify.py on the client's refresh loop
+# (fleet-hub-sessions.sh), which runs with no terminal attached — this ran on the
+# bar's status-right job, so a client in the background never notified. Kept as
+# a no-op one version for a bar an older conf still renders (# compat-1v: 下一批删).
+fleet_alerts_notify() { return 0; }
 
 # fleet_alerts_list [--level L] [--plain] [--history] — the popup's rows, alarm →
 # warning → needs → ↻, longest-standing first within a level; --history adds the

@@ -14,18 +14,31 @@
         Exit 0 = the hub answered (or nohub); 1 = the hub could not be asked.
 
   fleet-client-actions.py notify --title T [--body B] [--jump <key>] [--session S]
-        THIS device's notification, raised by the client itself (issue #1951,
-        EPIC #1949 C2): bin/fleet-alerts.sh fleet_alerts_notify calls it for a
-        session that newly waits on you — the title says who, the body what it
-        asks. The same `notify` below (iterm2 / notify / a bottom line), plus a
-        click that goes there: `--jump` is the list's key (`wid:<worker_id>`).
-        terminal-notifier on PATH (notify): its -execute runs the jump. Any other
-        notifier (osascript, iTerm2's OSC 9) can only bring the terminal forward,
-        so the jump waits as the server's @notify_jump and the client's next
-        focus-in (conf/tmux-shell.conf) takes it — within FLEET_NOTIFY_JUMP_SECS
-        (60; 0 = never). iterm2 also gets OSC 1337 RequestAttention (the Dock).
-        FLEET_NOTIFY=0: nothing. Seam: FLEET_CLIENT_NOTIFY_CMD gets the title and
-        body, and the click as FLEET_NOTIFY_CLICK in its environment.
+                               [--group G] [--sound] [--phone] [--log-key K --log-state S]
+        THIS device's notification, raised by the client itself (issue #1951;
+        since issue #2759 bin/fleet_notify.py decides it, on the client's refresh
+        loop, for a session that newly asks you, is stuck or is done). The title
+        says who, the body what it asks; `--jump` is the list's key
+        (`wid:<worker_id>`). The roads, each tried when the one before could not:
+        terminal-notifier on PATH (caps notify) — its -execute runs `click`
+        below, `--group` replaces an earlier one of the same group, `--sound`
+        the default sound; iTerm2's OSC 9 (caps iterm2, a client attached) —
+        it can only bring the terminal forward, so the jump waits as the
+        server's @notify_jump and the client's next focus-in
+        (conf/tmux-shell.conf) takes it within FLEET_NOTIFY_JUMP_SECS (60; 0 =
+        never), plus OSC 1337 RequestAttention (the Dock); the system's own
+        (osascript, `--sound` = "Glass"). `--phone`: a Bark push too, to
+        FLEET_NOTIFY_BARK_URL read from secrets.env alone. `--log-key`: one line
+        of logs/notify.ndjson with what happened (fleet_notify.log).
+        FLEET_NOTIFY=0: nothing. Seams: FLEET_CLIENT_NOTIFY_CMD gets the title
+        and body (the click as FLEET_NOTIFY_CLICK, the sound as
+        FLEET_NOTIFY_SOUND=1 in its environment); FLEET_NOTIFY_BARK_CMD gets
+        the title and body, the address on stdin.
+  fleet-client-actions.py click [--session S] <key>
+        a notification's click: the list's jump to <key> and — no terminal
+        attached to the client (it is in the background, or only in `fleet
+        claude`'s view) — a new iTerm2 window running `fleet`, which attaches on
+        that session. Seam: FLEET_NOTIFY_OPEN_CMD gets the fleet command.
   fleet-client-actions.py jump-pending [--session S]
         the focus-in half: take @notify_jump when it is young enough, and jump.
 
@@ -94,6 +107,25 @@ def lease_module():
     m = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(m)
     return m
+
+
+def bark_url():
+    """FLEET_NOTIFY_BARK_URL from secrets.env (issue #2759) — the one place it
+    may live; '' when it is not there."""
+    path = os.path.join(os.environ.get("FLEET_CONF_DIR") or os.path.expanduser("~/.config/claude-fleet"), "secrets.env")
+    try:
+        with open(path, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return ""
+    url = ""
+    for line in lines:
+        line = line.strip()
+        if line.startswith("export "):
+            line = line[7:].lstrip()
+        if line.startswith("FLEET_NOTIFY_BARK_URL="):
+            url = line.split("=", 1)[1].strip().strip("'\"")
+    return url if url.startswith(("https://", "http://")) else ""
 
 
 # ---------------------------------------------------------------------------
@@ -434,28 +466,81 @@ class Client:
             return ""
 
     def click(self, key):
-        """The argv a notification's click runs: the list's own jump to `key`
-        (fleet-quickopen.py jump, the ⌘P road), on this server."""
+        """The argv a notification's click runs: `click <key>` below — the list's
+        own jump to `key` (fleet-quickopen.py jump, the ⌘P road) on this server,
+        and a terminal on it when none is attached."""
+        if not key or not self.tmux("display-message", "-p", "#{socket_path}"):
+            return []
+        return [sys.executable, os.path.realpath(__file__), "click", "--session", self.sess, key]
+
+    def jump_cmd(self, key):
         sock = self.tmux("display-message", "-p", "#{socket_path}")
         if not key or not sock:
             return []
         return ["env", "TMUX=%s,0,0" % sock, "python3", os.path.join(BIN, "fleet-quickopen.py"), "jump", key]
 
-    def notify_local(self, title, body, key):
-        """(ok, result) — a notification raised here, with a click that jumps."""
+    def click_run(self, key):
+        """A click (issue #2759): the jump, then — the client in the background
+        (⌃D) or only in `fleet claude`'s own view, so no terminal shows this
+        server — a terminal window running `fleet`, which attaches to it on the
+        session the jump just picked."""
+        cmd = self.jump_cmd(key)
+        ok = bool(cmd) and subprocess.call(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) == 0
+        if self.tmux("list-clients", "-F", "#{client_name}"):
+            return ok
+        seam = os.environ.get("FLEET_NOTIFY_OPEN_CMD")
+        fleet = shutil.which("fleet") or os.path.expanduser("~/.local/bin/fleet")
+        if seam:
+            argv = shlex.split(seam) + [fleet]
+        elif sys.platform == "darwin":
+            line = "%s -lc %s" % (os.environ.get("SHELL") or "/bin/zsh", shlex.quote("exec " + shlex.quote(fleet)))
+            argv = ["osascript", "-e", "on run a\ntell application \"iTerm2\" to create window with default profile command (item 1 of a)\nend run", line]
+        else:
+            return ok
+        try:
+            return subprocess.call(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) == 0 and ok
+        except OSError:
+            return False
+
+    def system_notify(self, title, body, sound=False):
+        """(ok, result) — the system's own notifier (osascript / notify-send);
+        `sound`: with the default sound (the seam gets FLEET_NOTIFY_SOUND=1)."""
+        seam = os.environ.get("FLEET_CLIENT_NOTIFY_CMD")
+        env = None
+        if seam:
+            cmd = shlex.split(seam) + [title, body]
+            env = dict(os.environ, FLEET_NOTIFY_SOUND="1" if sound else "")
+        elif sys.platform == "darwin":
+            cmd = ["osascript", "-e", "on run a\ndisplay notification (item 2 of a) with title (item 1 of a)%s\nend run"
+                   % (' sound name "Glass"' if sound else ""), title, body]
+        else:
+            cmd = ["notify-send"] + (["-u", "critical"] if sound else []) + [title, body]
+        try:
+            ok = subprocess.call(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env) == 0
+        except OSError:
+            ok = False
+        return (True, "notified") if ok else (False, "the notifier failed")
+
+    def notify_local(self, title, body, key, sound=False, group=""):
+        """(ok, result) — a notification raised here, with a click that jumps.
+        The roads in order (issue #2759): terminal-notifier (its click runs the
+        jump), iTerm2's OSC 9 with the jump waiting for the focus-in, the
+        system's notifier — each tried when the one before could not."""
         w = self.where()
         caps = w.get("caps") or []
         click = self.click(key)
         seam = os.environ.get("FLEET_CLIENT_NOTIFY_CMD")
         tn = shutil.which("terminal-notifier") if not seam and sys.platform == "darwin" else None
         if click and "notify" in caps and tn:
-            cmd = [tn, "-title", title, "-message", body or title, "-group", "fleet-" + key,
+            cmd = [tn, "-title", title, "-message", body or title, "-group", group or "fleet-" + key,
                    "-activate", "com.googlecode.iterm2", "-execute", shlex.join(click)]
+            if sound:
+                cmd += ["-sound", "default"]
             try:
-                ok = subprocess.call(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) == 0
+                if subprocess.call(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) == 0:
+                    return True, "terminal-notifier"
             except OSError:
-                ok = False
-            return (True, "notified") if ok else (False, "the notifier failed")
+                pass
         # No click of its own: the focus-in the click causes takes the jump — only
         # while the terminal is NOT in front (focus-events: tmux's `focused` flag);
         # in front, the person sees the bar's 「! n 等你」 and nothing is armed.
@@ -466,7 +551,35 @@ class Client:
             self.escape(b"\033]1337;RequestAttention=yes\a")
         if seam and click:
             os.environ["FLEET_NOTIFY_CLICK"] = shlex.join(click)
+        if "iterm2" in caps:
+            # OSC 9 reaches a terminal only through an attached client: none
+            # (the client in the background) ⇒ the system's notifier instead
+            ok, result = self.do({"kind": "notify", "title": title, "body": body})
+            if ok:
+                return ok, result
+        if "notify" in caps or "iterm2" in caps:
+            return self.system_notify(title, body, sound)
         return self.do({"kind": "notify", "title": title, "body": body})
+
+    def phone(self, title, body):
+        """The phone (issue #2759): a Bark push to FLEET_NOTIFY_BARK_URL — read
+        from secrets.env alone, never the environment, never written anywhere.
+        'off' when there is none."""
+        url = bark_url()
+        if not url:
+            return "off"
+        seam = os.environ.get("FLEET_NOTIFY_BARK_CMD")
+        try:
+            if seam:
+                r = subprocess.run(shlex.split(seam) + [title, body], input=url, text=True,
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
+                return "sent" if r.returncode == 0 else "failed"
+            from urllib.parse import quote
+            full = "%s/%s/%s?group=fleet" % (url.rstrip("/"), quote(title, safe=""), quote(body or title, safe=""))
+            with urllib.request.urlopen(full, timeout=10) as resp:
+                return "sent" if resp.status == 200 else "failed"
+        except Exception:
+            return "failed"
 
     def jump_pending(self):
         """The focus-in half: a click on a notification that could not run one."""
@@ -481,7 +594,7 @@ class Client:
             young = False
         if not young or not key:
             return False
-        cmd = self.click(key)
+        cmd = self.jump_cmd(key)
         return bool(cmd) and subprocess.call(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) == 0
 
     def do(self, a):
@@ -532,19 +645,7 @@ class Client:
                 msg = ("%s: %s" % (title, body) if body else title).replace("\a", " ").replace("\033", " ")
                 return (True, "iterm2") if self.escape(("\033]9;%s\a" % msg).encode()) else (False, "the escape failed")
             if "notify" in caps:
-                seam = os.environ.get("FLEET_CLIENT_NOTIFY_CMD")
-                if seam:
-                    cmd = shlex.split(seam) + [title, body]
-                elif sys.platform == "darwin":
-                    cmd = ["osascript", "-e", "on run a\ndisplay notification (item 2 of a) with title (item 1 of a)\nend run",
-                           title, body]
-                else:
-                    cmd = ["notify-send", title, body]
-                try:
-                    ok = subprocess.call(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) == 0
-                except OSError:
-                    ok = False
-                return (True, "notified") if ok else (False, "the notifier failed")
+                return self.system_notify(title, body, bool(a.get("sound")))
             self.bottom_line("%s %s" % (title, body))
             return True, "line"
         return False, "unknown kind %s" % kind
@@ -653,6 +754,14 @@ def main(argv):
     n.add_argument("--body", default="")
     n.add_argument("--jump", default="")
     n.add_argument("--session", default=os.environ.get("FLEET_SHELL_SESSION") or "fleet-shell")
+    n.add_argument("--group", default="")
+    n.add_argument("--sound", action="store_true")
+    n.add_argument("--phone", action="store_true")
+    n.add_argument("--log-key", default="")
+    n.add_argument("--log-state", default="")
+    k = sub.add_parser("click")
+    k.add_argument("--session", default=os.environ.get("FLEET_SHELL_SESSION") or "fleet-shell")
+    k.add_argument("key")
     j = sub.add_parser("jump-pending")
     j.add_argument("--session", default=os.environ.get("FLEET_SHELL_SESSION") or "fleet-shell")
     r = sub.add_parser("run")
@@ -665,9 +774,20 @@ def main(argv):
         if os.environ.get("FLEET_NOTIFY", "1") == "0":
             return 0
         c = Client(a.session)
-        ok, result = c.notify_local(a.title, a.body, a.jump)
+        ok, result = c.notify_local(a.title, a.body, a.jump, a.sound, a.group)
         c.note("", "notify-local", result)
+        phone = c.phone(a.title, a.body) if a.phone else ""
+        if a.log_key:
+            sys.path.insert(0, HERE)
+            import fleet_notify
+            rec = {"key": a.log_key, "state": a.log_state}
+            rec.update({"sent": result} if ok else {"skip": "failed:" + result})
+            if phone:
+                rec["phone"] = phone
+            fleet_notify.log(rec)
         return 0 if ok else 1
+    if a.cmd == "click":
+        return 0 if Client(a.session).click_run(a.key) else 1
     if a.cmd == "jump-pending":
         return 0 if Client(a.session).jump_pending() else 1
     return run(a)
