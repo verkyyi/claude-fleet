@@ -90,7 +90,7 @@ ok() { printf '   ✓ %s\n' "$1"; }
 scrub() { sed -E 's/fd_[a-z2-7]{20,}/fd_…/g; s/"(token|approve_code|certificate)":"[^"]*"/"\1":"…"/g'; }
 logs() {
   local f
-  for f in hub.log agent.log install.log login.out fleet.err fleet2.err fleet4.err ssh.log clock.log; do
+  for f in hub.log gh.log agent.log install.log login.out fleet.err fleet2.err fleet4.err ssh.log clock.log; do
     [ -s "$WORK/$f" ] || continue
     printf -- '--- %s (last 40)\n' "$f"; tail -n 40 "$WORK/$f" | scrub
   done
@@ -169,6 +169,8 @@ http.server.HTTPServer(("127.0.0.1", $GHPORT), H).serve_forever()
 EOF
 python3 "$WORK/gh.py" >"$WORK/gh.log" 2>&1 &
 GH_PID=$!
+# ready before the hub asks it (a slow python3 start read as GitHub timing out)
+waitfor 10 curl -s -m 1 -o /dev/null "http://127.0.0.1:$GHPORT/users/nobody" || die 'the GitHub stand-in never answered' "$(cat "$WORK/gh.log" 2>/dev/null)"
 ssh-keygen -q -t ed25519 -N '' -C newcomer-e2e-ca -f "$WORK/ca" || die 'ssh-keygen could not make the CA key'
 mkdir -p "$WORK/dist"
 # the agent a computer downloads when its login enrols it (/v1/node/dist/<os>-<arch>):
@@ -287,7 +289,7 @@ FLEET="$CH/.local/bin/fleet"
 grep -qs "FLEET_HUB_URL=\"\\{0,1\\}$HUB" "$CH/.config/claude-fleet/fleet.conf" || die 'fleet.conf does not carry the hub address' "$(cat "$CH/.config/claude-fleet/fleet.conf" 2>&1)"
 grep -qs '\.local/bin' "$CH/.zshrc" || die 'the install did not put ~/.local/bin on the PATH of a new zsh' "$(cat "$CH/.zshrc" 2>&1)"
 [ -n "$(ls -A "$CH/.ssh")" ] && die 'the install wrote into ~/.ssh before any login' "$(ls -la "$CH/.ssh")"
-REAL_TMUX=$(PATH="$CH/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH" command -v tmux) || die 'no tmux after the install line' "$(grep -i tmux "$WORK/install.log")"
+REAL_TMUX=$(PATH="$CH/.local/bin:$CH/.local/share/claude-fleet-vendor/bin:/opt/homebrew/bin:/usr/local/bin:$PATH" command -v tmux) || die 'no tmux after the install line' "$(grep -i tmux "$WORK/install.log")"
 ok "fleet installed, fleet.conf names $HUB, ~/.ssh untouched"
 
 # The newcomer's environment: nothing of the admin's — no token, no viewer token.

@@ -208,7 +208,7 @@ IH="$CH/.claude/fleet"   # the one fleet directory (#1804)
 [ -x "$IH/bin/fleet-shell.sh" ] && [ -f "$IH/conf/tmux-shell.conf" ] || die 'the client files are not in ~/.claude/fleet' "$(find "$IH" -maxdepth 2 2>&1 | head -20)"
 grep -qs "FLEET_HUB_URL=\"\\{0,1\\}$HUB" "$CH/.config/claude-fleet/fleet.conf" || die 'fleet.conf does not carry the hub address' "$(cat "$CH/.config/claude-fleet/fleet.conf" 2>&1)"
 # tmux is the install line's to provide (its deps step) — from here on it must be there
-REAL_TMUX=$(PATH="$CH/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH" command -v tmux) || die 'no tmux after the install line' "$(grep -i tmux "$WORK/install.log")"
+REAL_TMUX=$(PATH="$CH/.local/bin:$CH/.local/share/claude-fleet-vendor/bin:/opt/homebrew/bin:/usr/local/bin:$PATH" command -v tmux) || die 'no tmux after the install line' "$(grep -i tmux "$WORK/install.log")"
 ok "fleet installed ($(find "$IH" -type f | wc -l | tr -d ' ') files), fleet.conf names $HUB"
 
 # =============================================================================
