@@ -73,6 +73,7 @@ var routeAccess = map[string]string{
 	"/v1/node/client": accessSelf, "/v1/node/client/actions": accessSelf,
 	"/v1/node/worker-records": accessSelf, "/v1/node/progress": accessSelf,
 	"/v1/node/credentials": accessSelf,
+	NodePoolPath:           accessSelf, // claude-fleet#2850: the pool manifest, any enrollment token
 	// The Singapore relay (claude-fleet#1974): a node token mints a pass;
 	// the check authenticates the pass the forwarder carries.
 	"/v1/node/relay-credential": accessSelf, RelayCheckPath: accessSelf,
