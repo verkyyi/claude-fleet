@@ -89,6 +89,8 @@
 #   drill-login-orphaned                            tokenledger/internal/api fleet_drill.go + bin/fleet-login-remove.sh
 #                                                   (closeDrillLogins, exit 4; go test, when a toolchain is here)
 #   opening-eta-climbs                              tokenledger/internal/api fleet_opening.go (openingETALeft)
+#   opened-login-fleet-silent                       tokenledger/internal/api fleet_opening.go (settling, settleWhy,
+#                                                   openingNotes, openingOver; go test) + bin/fleet-shell.sh first_home
 #   heartbeat-sys-blocked                           tokenledger/internal/agent beat_parts.go (sysSampler, asyncReading,
 #                                                   fleetBeatBudget) + internal/api nodes.go (foldSys); go test
 #   login-remove-record-left                        bin/fleet-login-remove.sh (step 6 checks the record is gone)
@@ -5005,6 +5007,30 @@ drill_opening_eta_climbs() {
   fi
   _drill_go_tests 'TestOpeningETANeverClimbs' "$ROOT/tokenledger/internal/api/fleet_opening_test.go" \
     '开号预计剩余从中位数起只减不增，到放弃时限归零（go test）' || return 1
+  SECS=$(since "$t0")
+}
+
+# ---- opened-login-fleet-silent (#2941): the node said create ok, the account went
+# active, and every door went quiet while the login's own fleet never reached
+# the hub — placement said 「mini2: 没有你的登录」, the client gave up after two
+# tries, and an opening far past its machine's ETA never failed. Now: active
+# counts once its fleet registered, else opening (stage fleet) then failed with
+# the missing step; the refusal names the login; past ETA × 3 is failed; the
+# client's first session waits on the hub's opening.
+drill_opened_login_fleet_silent() {
+  CAP=120; local t0 f="$ROOT/tokenledger/internal/api/fleet_opening.go"
+  t0=$(now)
+  grep -q 'reported\[\[2\]string{a.Hostname, a.Login}\]' "$f" \
+    || { WHY="accountStateOf reads an opened login as done before its fleet reported"; return 1; }
+  grep -q 's.openingNotes(p.Person)' "$ROOT/tokenledger/internal/api/fleet_write.go" \
+    || { WHY="a refused placement no longer names the login being opened"; return 1; }
+  grep -q 'took > openingOver(est)' "$f" \
+    || { WHY="an opening far past its machine's ETA no longer fails"; return 1; }
+  grep -q 'FLEET_HOME_FIRST_OPENING_MAX' "$ROOT/bin/fleet-shell.sh" \
+    || { WHY="the client's first session no longer waits while the hub says opening"; return 1; }
+  _drill_go_tests 'TestOpenedLoginWithoutFleetIsNotDone TestOpeningPastItsOwnETAFails' \
+    "$ROOT/tokenledger/internal/api/fleet_opening_test.go" \
+    '开好的登录要等它的 fleet 报上来才算好：之前 opening(stage fleet)，10 分钟后 failed 说缺哪步；放置点名；超过预计 ×3 failed（go test）' || return 1
   SECS=$(since "$t0")
 }
 

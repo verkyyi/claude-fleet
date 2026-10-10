@@ -223,6 +223,21 @@ w=$(cat "$WORK/wait.out")
 has "E2 the waiting page: 没开出来" "$w" "你的第一个会话没开出来"
 has "E2 …原因" "$w" "原因：没有机器能开"
 has "E2 …下一步" "$w" "下一步："
+# E3 (issue #2941): the hub still opening this person's login — a fresh
+# `#account` opening line in hub_repos — is no failure: first_home keeps trying,
+# says nothing failed, until the hub says otherwise or
+# FLEET_HOME_FIRST_OPENING_MAX runs out; a stale line (or failed) is the old two tries
+mkdir -p "$WORK/fhg"
+acct() { printf '#ts\037%s\n#account\037%s\0375\037mini2\037verkyyi\037%s\n' "$(date +%s)" "$1" "$2" > "$WORK/fhg/hub_repos"; }
+acct opening "$(date +%s)"
+out=$(first2 FLEET_STATUS_G="$WORK/fhg" FLEET_HOME_FIRST_OPENING_MAX=3)
+eq "E3 opening: held on the hub's word (3 more tries), then the old two" "$(printf '%s\n' "$out" | grep -c '^call:home-session claude --first')" 5
+acct opening "$(( $(date +%s) - 600 ))"
+out=$(first2 FLEET_STATUS_G="$WORK/fhg" FLEET_HOME_FIRST_OPENING_MAX=3)
+eq "E3 a stale opening line: the old two tries" "$(printf '%s\n' "$out" | grep -c '^call:home-session claude --first')" 2
+acct failed "$(date +%s)"
+out=$(first2 FLEET_STATUS_G="$WORK/fhg" FLEET_HOME_FIRST_OPENING_MAX=3)
+eq "E3 the hub says failed: the old two tries" "$(printf '%s\n' "$out" | grep -c '^call:home-session claude --first')" 2
 
 # --- F. the guard ---------------------------------------------------------------------
 g() { printf '{"tool_name":"Bash","tool_input":{"command":"%s"}}' "$1" \

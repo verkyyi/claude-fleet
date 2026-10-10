@@ -285,9 +285,11 @@ func (s *Server) handleFleetHome(w http.ResponseWriter, r *http.Request) {
 		// No active login (claude-fleet#2069): one being opened is "wait a
 		// minute", not "forbidden" — the client holds and asks again.
 		st := s.accountStateOf(pid, now)
-		if st == nil {
+		if st == nil || st.Stage == "fleet" {
 			// The look itself placed them on a ready spare login
 			// (claude-fleet#2263): they hold an active one now — pick again.
+			// A login opened whose fleet has not reported yet
+			// (claude-fleet#2941) is a login all the same: home needs no fleet.
 			out, err = s.homePick(pid, req.Last, now)
 			out.Hub = s.hubURL(r)
 		} else if st.State == "opening" {

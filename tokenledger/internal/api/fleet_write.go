@@ -1412,6 +1412,11 @@ func (s *Server) pickNodeAfter(p fleetPrincipal, repo, node string, now time.Tim
 	// skipped says why a machine where the caller has a login gave no
 	// candidate (claude-fleet#2882): the refusal names it, never drops it.
 	skipped := map[string]string{}
+	// A login still being opened, or opened with no fleet reported yet
+	// (claude-fleet#2941), is named as such — never 「没有你的登录」.
+	for host, why := range s.openingNotes(p.Person) {
+		skipped[host] = why
+	}
 	for _, r := range rows {
 		if !r.Present && !seen[r.EndpointID] {
 			skipped[strings.ToLower(r.Hostname)] = "fleet not running"
