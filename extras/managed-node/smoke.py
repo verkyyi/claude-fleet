@@ -107,13 +107,16 @@ def main():
         sshdir = d / 'ssh'
         sshdir.mkdir()
         subprocess.run(['ssh-keygen', '-q', '-t', 'ed25519', '-N', '', '-f', str(d / 'ca')], check=True)
+        (d / 'ca').chmod(0o600)
         Hub.ca = (d / 'ca.pub').read_bytes()
         # The native daemon check uses a temporary config, never the runner's.
         conf = sshdir / 'sshd_config'
         conf.write_text('Include ' + str(sshdir / 'sshd_config.d/*.conf') + '\n'
                         'HostKey ' + str(d / 'ca') + '\nUsePAM yes\n')
         check = d / 'check-sshd'
-        check.write_text('#!/bin/sh\nexec /usr/sbin/sshd -f ' + shlex.quote(str(conf)) + ' "$@"\n')
+        check.write_text('#!/bin/sh\n/usr/sbin/sshd -f ' + shlex.quote(str(conf)) +
+                         ' "$@" 2>' + shlex.quote(str(d / 'sshd-check.log')) +
+                         '\nrc=$?\ncat ' + shlex.quote(str(d / 'sshd-check.log')) + ' >&2\nexit "$rc"\n')
         check.chmod(0o755)
         Path('/run/sshd').mkdir(exist_ok=True)
         pub = d / 'release.pub'
@@ -127,7 +130,9 @@ def main():
             install = ['bash', str(runtime / 'bin/fleet-node-install.sh'), '--hub', args.hub,
                        '--join-file', str(code), '--login', login, '--login-join-file', str(code),
                        '--release-key', str(pub), '--service', 'foreground']
-            subprocess.run(install, check=True)
+            result = subprocess.run(install)
+            if result.returncode:
+                raise RuntimeError('installer failed: ' + (d / 'sshd-check.log').read_text())
             assert (sshdir / 'fleet_user_ca.pub').read_bytes() == Hub.ca
             # Native systemd convergence uses a recording service manager, so
             # no service on the CI host is enabled or reloaded.
