@@ -489,6 +489,15 @@ Do not install from memory: read the doc and work from it.
   when it is placed (an open but unplaced pane is opened, never closed); the
   steward's `/sheet` does the same for its patrol, `/sheet b` the batches. Codex
   (no mod) never stamps `@sheet_pane`, so it gets the text sheet as before.
+  **A driver here but not moving is seen** (issue #2958): a batch whose heartbeat
+  went stale while its driver's window is still open gets a `dialog-<fp>` row when
+  it waits on a choice dialog (the question + options off its transcript) or a
+  `stalled-…` row + the page's 「没在走」 line a TTL later; an open dialog stays
+  `needs/ask` through a Stop, the mod's turn.complete and the screen classifier.
+  Such a dialog is answered for its person ONLY through `bin/fleet-dialog-answer.sh`
+  (the `answer_dialog` tool): fingerprint + labels verbatim, never over a person
+  typing, pressed once via `fleet-answer.sh`, the trail on the decision log and the
+  batch issue — the guard opens no general send-keys. `dialog-wait-selftest.sh`.
   `FLEET_STEWARD`: `0` byte for byte · `count` (default where an orchestrator runs:
   only the attention count, the node conf's [76] hooks → `logs/attention.ndjson`,
   `fleet-steward-stats.sh`) · `1` the window too. `fleet-steward-selftest.sh`;

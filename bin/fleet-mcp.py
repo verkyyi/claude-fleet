@@ -794,6 +794,18 @@ def tool_ask(args):
     return dict(said, issue=int(issue), body=body, state=red)
 
 
+def tool_answer_dialog(args):
+    """答 — the one guarded road into another session's open choice dialog (issue #2958)."""
+    argv = [str(BIN / "fleet-dialog-answer.sh"), args["window"], "--fp", args["fp"],
+            "--by", args.get("by", "person")]
+    for p in args["picks"]:
+        argv += ["--pick", p]
+    for k in ("basis", "issue"):
+        if args.get(k):
+            argv += ["--" + k, args[k]]
+    return script(argv, WRITE_TIMEOUT_S + 90)
+
+
 def tool_comment(args):
     argv = [str(BIN / "fleet-comment.sh"), str(args["issue"]),
             "--to-worker" if args.get("mode") == "to-worker" else "--note"]
@@ -1131,6 +1143,28 @@ TOOLS = {
                                      "publishing); a keyword in the question makes it never all the same."},
             "issue": dict(ISSUE, description="Ask on this issue instead of the window's bound one.")},
             "required": ["question"], "additionalProperties": False}}),
+    "answer_dialog": (tool_answer_dialog, {
+        "description": "答 — answer another session's open choice dialog (AskUserQuestion) for its person, through "
+                       "the one guarded road (bin/fleet-dialog-answer.sh; issue #2958): only a window waiting on "
+                       "a dialog (needs/ask), only the dialog whose fingerprint you read (fp, from the steward's "
+                       "decision row or `fleet_needs_detail.py dialog <transcript>`), only its own labels verbatim — "
+                       "never a free-text answer, never over a person typing there, pressed once and confirmed in "
+                       "the transcript, the trail left on the decision log and the batch's issue. Exit 0 answered "
+                       "· 3 refused, nothing sent (changed / answered / not waiting) · 4 pressed but unconfirmed "
+                       "(left for a person, never pressed again) · 5 a person is typing there.",
+        "inputSchema": {"type": "object", "properties": {
+            "window": {"type": "string", "pattern": "^[@%][0-9]+$",
+                       "description": "The window (@<id>) or pane (%<id>) holding the dialog."},
+            "fp": {"type": "string", "pattern": "^[0-9a-f]{16}$", "description": "The dialog's fingerprint."},
+            "picks": {"type": "array", "minItems": 1, "items": {"type": "string"},
+                      "description": "One option label per question, verbatim; N=<label> when it has several "
+                                     "questions; several labels for one multiSelect question."},
+            "by": {"type": "string", "enum": ["person", "steward", "default"],
+                   "description": "Whose answer this is (default person)."},
+            "basis": {"type": "string", "description": "Why: the charter's rule, the sheet, the deadline."},
+            "issue": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[0-9]+$",
+                      "description": "Where the trail goes (default: the window's @epic, else its issue)."}},
+            "required": ["window", "fp", "picks"], "additionalProperties": False}}),
     "comment": (tool_comment, {
         "description": "记 — comment on an issue through bin/fleet-comment.sh (the marker + sender footer). "
                        "mode note (the DEFAULT) is RECORD-ONLY: the issue's worker never sees it. mode to-worker "

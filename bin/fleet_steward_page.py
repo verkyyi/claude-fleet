@@ -243,6 +243,12 @@ def handoff_failed(now_t):
                   key=lambda r: r["t"])
 
 
+def stalled_drivers(st):
+    """Batches whose heartbeat stopped a TTL ago while their driver's window is
+    still here and waits on no one (issue #2958): [{epic, mins, window, wid}]."""
+    return sorted((st.d.get("stalled") or {}).values(), key=lambda r: r.get("epic") or "")
+
+
 def fd_conf():
     return Path(os.environ.get("FLEET_CONF_DIR") or (Path.home() / ".config" / "claude-fleet"))
 
@@ -297,7 +303,10 @@ def line_parts(rows, now_t):
 
 
 def open_rows(st):
-    rows = [r for r in st.d["rows"].values() if r.get("state") == "open" and not r.get("followup")]
+    # a driver that is not moving (issue #2958) is the person's to look at: its
+    # line is under 待你动手 (stalled_drivers), not a thing to decide
+    rows = [r for r in st.d["rows"].values() if r.get("state") == "open" and not r.get("followup")
+            and r.get("local") != "stalled"]
     rows.sort(key=lambda r: (not fd.never(r), r.get("due") or "9", r.get("asked") or ""))
     return rows
 
@@ -363,6 +372,7 @@ def render(st, sess, now_t, nums=None):
     todo_rows = [r for r in st.d["rows"].values() if r.get("state") == "open" and r.get("followup")]
     # a handoff that stored its doc but never cleared the conversation (issue #2937)
     stuck = handoff_failed(now_t)
+    stalled = stalled_drivers(st)
     decided = decided_today(st, now_t)
     out = ["<!doctype html>", "<html lang=\"%s\">" % ("zh" if tr("steward_page_lang") == "zh" else "en"),
            "<head>", "<meta charset=\"utf-8\">",
@@ -373,11 +383,11 @@ def render(st, sess, now_t, nums=None):
            "<p class=\"eyebrow\">%s</p>" % esc(tr("steward_page_eyebrow_fmt", now_t.strftime("%Y-%m-%d"),
                                                      fd.show_time(now_t))),
            "<h1>%s</h1>" % esc(tr("steward_page_h1")),
-           "<p class=\"sub\">%s</p>" % esc(tr("steward_page_sub_fmt", n_lines, nums["todo"] + len(todo_rows) + len(stuck))),
+           "<p class=\"sub\">%s</p>" % esc(tr("steward_page_sub_fmt", n_lines, nums["todo"] + len(todo_rows) + len(stuck) + len(stalled))),
            "<div class=\"verdict\">"]
     for key, cls in (("asked", ""), ("person", ""), ("defaulted", ""), ("parked", "warn" if nums["parked"] else ""),
-                     ("todo", "warn" if nums["todo"] + len(todo_rows) + len(stuck) else "")):
-        val = nums[key] + (len(todo_rows) + len(stuck) if key == "todo" else 0)
+                     ("todo", "warn" if nums["todo"] + len(todo_rows) + len(stuck) + len(stalled) else "")):
+        val = nums[key] + (len(todo_rows) + len(stuck) + len(stalled) if key == "todo" else 0)
         out.append("  <div class=\"v%s\"><div class=\"n\">%d</div><div class=\"k\">%s</div></div>"
                    % (" " + cls if cls else "", val, esc(tr("steward_page_k_" + key))))
     out.append("</div>")
@@ -397,7 +407,7 @@ def render(st, sess, now_t, nums=None):
     out.append("</section>")
 
     out += ["<section id=\"todo\">", "<h2>%s</h2>" % esc(tr("steward_page_todo_h"))]
-    if not todo and not todo_rows and not stuck:
+    if not todo and not todo_rows and not stuck and not stalled:
         out.append("<p class=\"lede\">%s</p>" % esc(tr("steward_page_todo_none")))
     else:
         out.append("<ul>")
@@ -424,6 +434,10 @@ def render(st, sess, now_t, nums=None):
                           esc(tr("steward_page_handoff_do")), esc(tr("steward_page_fold")),
                           kv([(tr("steward_page_kv_src"), esc("%s · %s" % (r["session"], r["pane"]))),
                               (tr("steward_page_kv_said"), esc(r["reason"]))])))
+        for r in stalled:
+            out.append("<li><p><strong>%s</strong> · %s</p></li>"
+                       % (esc(tr("steward_page_stalled_fmt", "#" + (r.get("epic") or "").rsplit("#", 1)[-1],
+                                 r.get("mins", ""))), esc(tr("steward_page_stalled_do", r.get("window", "")))))
         out.append("</ul>")
     out.append("</section>")
 

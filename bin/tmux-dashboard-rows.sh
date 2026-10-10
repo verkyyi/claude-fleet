@@ -1313,7 +1313,9 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
       tinfo="${tinfo:+$tinfo · }$WD_bg" ;;
     esac
   fi
-  _lp=0; loop_live_v "$wloop" && _lp=1
+  # …but never on a row that waits on its person (issue #2958): a question asked
+  # from inside a /loop wake is the row's news, not the round after it.
+  _lp=0; [ "$state" != needs ] && loop_live_v "$wloop" && _lp=1
   [ "$state" = looping ] && case ",$nsub," in *,loop,*) _lp=1 ;; esac
   if [ "$_lp" = 1 ]; then
     _ln=''

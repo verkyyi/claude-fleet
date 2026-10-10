@@ -252,6 +252,16 @@ classify_one() {
   # needs/restore (issue #1265) is the same kind of declaration, written by
   # fleet-restore.sh for a window it could not bring back on its own.
   case "$(TM display-message -p -t "$target" '#{@claude_state}/#{@claude_needs}' 2>/dev/null)" in needs/blocked|needs/restore) return 0 ;; esac
+  # So is an open dialog the hooks / the mod saw (issue #2958): needs/ask (an
+  # AskUserQuestion) or needs/perm, written at the call itself and cleared by its
+  # answer's PostToolUse. A screen read of a session that asked from inside a /loop
+  # wake comes back STOPPED + @loop ⇒ `looping`, and the question sat unseen for
+  # hours. The agent's own 7501 word goes stale on its own clock (#2537), so a
+  # 7501-sourced one is still read.
+  case "$(TM display-message -p -t "$target" '#{@claude_state}/#{@claude_needs}/#{@claude_state_src}' 2>/dev/null)" in
+    needs/ask/7501|needs/perm/7501) : ;;
+    needs/ask/*|needs/perm/*) return 0 ;;
+  esac
   [ -z "$(TM display-message -p -t "$target" '#{@codex_attention}' 2>/dev/null)" ] || return 0
   # The agent reports its own state (issue #2537, EPIC #2535 C2): while its OSC 7501
   # word is fresh (fleet_primary_fresh — @agent_status_ts within 120 s) it is the
@@ -338,7 +348,11 @@ classify_one() {
   fi
   # The helper may have started BEFORE the worker declared its blocker. Re-check
   # after the slow call, before either the verdict or its change-hash is committed.
-  case "$(TM display-message -p -t "$target" '#{@claude_state}/#{@claude_needs}' 2>/dev/null)" in needs/blocked|needs/restore) return 0 ;; esac
+  case "$(TM display-message -p -t "$target" '#{@claude_state}/#{@claude_needs}/#{@claude_state_src}' 2>/dev/null)" in
+    needs/blocked/*|needs/restore/*) return 0 ;;
+    needs/ask/7501|needs/perm/7501) : ;;
+    needs/ask/*|needs/perm/*) return 0 ;;   # a dialog opened during the call (#2958)
+  esac
   [ -z "$(TM display-message -p -t "$target" '#{@codex_attention}' 2>/dev/null)" ] || return 0
   if command -v fleet_primary_fresh >/dev/null 2>&1 && fleet_primary_fresh "$target" "${CLASSIFY_SOCK:-}"; then return 0; fi
   [ "$(TM display-message -p -t "$target" '#{@cc_agent}|#{@cc_launcher_pid}|#{@codex_session_id}|#{@claude_state}|#{@claude_state_ts}' 2>/dev/null)" = "$observed" ] || return 0
