@@ -31,6 +31,37 @@ const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v)
 const obj = (v: unknown): Obj => (typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Obj) : {})
 const arr = (v: unknown): unknown[] => (Array.isArray(v) ? v : [])
 
+/**
+ * Who closed a row: `by` as the steward wrote it (steward · person · default);
+ * a row written before the field (#2834) is read off its state — defaulted ⇒
+ * default, answered ⇒ person — and an open one is nobody's yet ('').
+ */
+export function rowBy(r: Obj): string {
+  const by = str(r.by)
+  if (by !== '') return by
+  const st = str(r.state)
+  return st === 'defaulted' ? 'default' : st === 'answered' ? 'person' : ''
+}
+
+/** The first sentence of a finding (its first line, cut at the first full stop), ≤ 80 chars. */
+export function firstSentence(text: string): string {
+  const line = (text.split('\n')[0] ?? '').trim()
+  const m = /^(.*?[。！？]|.*?[.!?](?=\s|$))/.exec(line)
+  const one = (m?.[1] ?? line).trim()
+  return one.length > 80 ? `${one.slice(0, 79)}…` : one
+}
+
+function health(h: Obj): { n: number; top: string } {
+  const active = obj(h.active)
+  const issues = obj(h.issues)
+  const keys = Object.keys(active)
+  if (keys.length === 0) return { n: 0, top: '' }
+  // newest by the issue it was filed on; else the last the steward noted
+  const at = (k: string): string => str(obj(issues[k]).at)
+  const newest = keys.reduce((a, k) => (at(k) > at(a) ? k : a), keys[keys.length - 1] as string)
+  return { n: keys.length, top: firstSentence(str(obj(active[newest]).msg) || newest) }
+}
+
 function sheetRow(id: string, r: Obj): SheetRow {
   return {
     id,
@@ -42,7 +73,7 @@ function sheetRow(id: string, r: Obj): SheetRow {
     src: str(r.src),
     url: str(r.url),
     state: str(r.state),
-    by: str(r.by),
+    by: rowBy(r),
     asked: str(r.asked),
   }
 }
@@ -57,6 +88,7 @@ function parked(v: unknown): Parked[] {
 export const EMPTY_PATROL: Patrol = {
   beat: 0, at: '', changed: false, writes: 0, nextAt: 0, card: [], modelCalls: 0,
   parked: [], newAsks: 0, closed: 0, defaulted: 0,
+  drivers: 0, openRows: 0, events: 0, bySteward: 0, byDefault: 0, groups: 0, health: 0, healthTop: '', deferred: 0, page: '',
 }
 
 export type StateView = { sheet: Sheet | null; todo: Todo; patrol: Patrol }
@@ -76,6 +108,22 @@ export function parseState(text: string): StateView {
     rows: ids.filter(id => id in rows).map(id => sheetRow(id, obj(rows[id]))),
   }
   const beat = obj(d.beat)
+  // today = the beat's own local day (the steward writes on the person's clock)
+  const today = str(beat.at).slice(0, 10)
+  let bySteward = 0
+  let byDefault = 0
+  let openRows = 0
+  for (const v of Object.values(rows)) {
+    const r = obj(v)
+    if (str(r.state) === 'open') openRows++
+    if (today === '' || (str(r.closed_at) || str(r.asked)).slice(0, 10) !== today) continue
+    const by = rowBy(r)
+    if (by === 'steward') bySteward++
+    else if (by === 'default') byDefault++
+  }
+  const open = sheet?.rows.filter(r => r.state === 'open') ?? []
+  const groups = new Set(open.map(r => str(obj(rows[r.id]).group) || r.id)).size
+  const hl = health(obj(d.health))
   return {
     sheet,
     todo: { open: num(d.todo_open), desk: str(obj(d.todo).desk) },
@@ -89,16 +137,28 @@ export function parseState(text: string): StateView {
       card: arr(d.card).map(str),
       modelCalls: num(d.model_calls),
       parked: parked(d.parked),
+      drivers: Object.keys(obj(d.drivers)).length,
+      openRows,
+      bySteward,
+      byDefault,
+      groups,
+      health: hl.n,
+      healthTop: hl.top,
+      deferred: arr(d.deferred).length,
+      page: str(obj(d.page).url),
     },
   }
 }
 
-export type DeltaView = { at: string; newAsks: number; closed: number; defaulted: number }
+export type DeltaView = { at: string; newAsks: number; closed: number; defaulted: number; events: number }
 
 /** steward.delta.json → what the last beat saw, counted. */
 export function parseDelta(text: string): DeltaView {
   const d = json(text) ?? {}
-  return { at: str(d.at), newAsks: arr(d.new_asks).length, closed: arr(d.closed).length, defaulted: arr(d.defaulted).length }
+  return {
+    at: str(d.at), newAsks: arr(d.new_asks).length, closed: arr(d.closed).length, defaulted: arr(d.defaulted).length,
+    events: arr(d.events).length,
+  }
 }
 
 /** One epic-running.d mark (`key: value` lines, bin/fleet-epic-heartbeat.sh) → a batch, or null. */
@@ -179,6 +239,7 @@ export function foldPanels(src: PanelsText, at: number, ms: number): PanelsView 
       newAsks: delta.newAsks,
       closed: delta.closed,
       defaulted: delta.defaulted,
+      events: delta.events,
     },
     at,
     ms,

@@ -346,11 +346,16 @@ def do_answer(st, row, text, by, source):
     row["closed_at"] = fd.iso(fd.now_local())
     if row.get("followup"):
         fu.answered(st, row, text, by)
-    st.d.setdefault("counts", {})
-    day = time.strftime("%Y-%m-%d")
-    c = st.d["counts"].setdefault(day, {})
-    c[by] = c.get(by, 0) + 1
+    tally(st, by)
     return 0
+
+
+def tally(st, by):
+    """Today's count of closes by who closed them — steward · person · default
+    (the patrol panel's 自答 / 默认拍板, issue #2834)."""
+    day = time.strftime("%Y-%m-%d")
+    c = st.d.setdefault("counts", {}).setdefault(day, {})
+    c[by] = c.get(by, 0) + 1
 
 
 def flush_deferred(st):
@@ -455,7 +460,9 @@ def collect(sess, st, now_t, apply=True):
         if res.get("answered"):
             st.spend(2 if res.get("recorded") else 1)
             row["state"] = "defaulted"
+            row["by"] = "default"
             row["closed_at"] = fd.iso(now_t)
+            tally(st, "default")
             delta["defaulted"].append({"id": row["id"], "src": row["src"], "default": row.get("default", "")})
         elif res.get("skipped") in ("answered", "defaulted", "gone"):
             row["state"] = res["skipped"] if res["skipped"] != "gone" else "answered"
