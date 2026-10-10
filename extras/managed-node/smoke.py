@@ -76,9 +76,13 @@ def main():
     hub = ThreadingHTTPServer(('127.0.0.1', 0), Hub)
     threading.Thread(target=hub.serve_forever, daemon=True).start()
     proc = None
-    # The supervisor correctly rejects root programs beneath world-writable
-    # /tmp. Use a root-owned prefix, just as the production /opt runtime does.
-    with tempfile.TemporaryDirectory(prefix='fleet-linux-ci-', dir='/opt') as tmp:
+    # Hosted runners may make /opt writable for tool installation. Select a
+    # prefix through the supervisor's real trust check, never weaken that check.
+    supervisor = load('fleet-node-supervisor')
+    prefix = next((p for p in ('/opt', '/var/lib', '/usr/local/lib') if supervisor.trusted(p, as_root=True)), None)
+    if prefix is None:
+        raise RuntimeError('CI has no trusted root prefix for the native runtime test')
+    with tempfile.TemporaryDirectory(prefix='fleet-linux-ci-', dir=prefix) as tmp:
         d = Path(tmp)
         d.chmod(0o755)
         state = d / 'state'
@@ -147,6 +151,10 @@ def main():
                               FLEET_NODE_DAEMON_DIR=str(d / 'units'))
             native = ['bash', str(runtime / 'bin/fleet-node-install.sh'), '--hub', args.hub,
                       '--release-key', str(pub), '--service', 'systemd']
+            script = runtime / 'bin/fleet-node-supervisor.py'
+            if not supervisor.trusted(str(script), as_root=True):
+                detail = [(str(p), p.stat().st_uid, oct(p.stat().st_mode & 0o777)) for p in (script, *script.parents)]
+                raise RuntimeError('CI runtime is untrusted: ' + repr(detail))
             subprocess.run(native, env=native_env, check=True)
             assert 'reload ssh.service' in calls.read_text()
             assert 'enable --now claude-fleet-node.service' in calls.read_text()
