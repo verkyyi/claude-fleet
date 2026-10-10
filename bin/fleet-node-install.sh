@@ -34,6 +34,8 @@
 #   ssh CA    the hub's SSH user CA at /etc/ssh/fleet_user_ca.pub + the
 #             sshd_config.d drop-in, exactly as the admin agent writes them;
 #             `sshd -t` and `sshd -T` must agree or both go back (no hub CA ⇒ 跳过)
+#   删号通道  root's key on the admin who ran sudo, loopback + a forced command
+#             (fleet-login-remove-ssh.sh setup, #2994) — no admin ⇒ 跳过
 #   守护      <state>/logins, then the machine daemon's LaunchDaemon
 #             (fleet-node-supervisor.py install, from `current` — C3)
 #
@@ -341,6 +343,23 @@ case "$code" in
   000) fail "ssh CA" "连不上 $HUB" ;;
   *) fail "ssh CA" "入口答 HTTP $code" ;;
 esac
+
+# ---------------------------------------------------------------- 删号通道 ------
+# The node program has no Full Disk Access, so macOS will not let it delete a
+# login (#2973); the delete rides a local ssh session to the admin who ran this
+# (issue #2994). Its key is set up here and again by every remove; one that
+# cannot be set up now is no stop — the remove says why when it runs.
+RMSSH="$CUR/bin/fleet-login-remove-ssh.sh"
+ADM="${SUDO_USER:-}"
+if [ ! -f "$RMSSH" ]; then
+  skip 删号通道 "这一版没有 $RMSSH"
+elif [ -z "$ADM" ] || [ "$ADM" = root ] || ! id -Gn "$ADM" 2>/dev/null | tr ' ' '\n' | grep -qx admin; then
+  skip 删号通道 "不是从管理员账号 sudo 跑的，删号时再设"
+elif out="$(bash "$RMSSH" setup --admin "$ADM" 2>&1)"; then
+  ok 删号通道 "$(printf '%s' "$out" | tail -n 1)；还要：系统设置 › 共享 › 远程登录 › ⓘ 打开「允许远程用户完全磁盘访问」"
+else
+  skip 删号通道 "$(printf '%s' "$out" | tail -n 1)"
+fi
 
 # ---------------------------------------------------------------- 守护 ----------
 mkdir -p "$STATE/logins" && chmod 700 "$STATE/logins" || fail 守护 "建不了 $STATE/logins"

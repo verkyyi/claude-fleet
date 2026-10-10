@@ -142,6 +142,16 @@ PUT 的请求体就是上面可写的字段，外加可选的 `if_version`（读
 `sudo launchctl kickstart -k system/com.claude-fleet.node`。没授权前，卡住的删号由 admin 经 ssh 手跑
 `sudo fleet-login-remove.sh <账号> --delete-home --apply`（删号脚本被拒时最后一行就是这条）。
 
+**删号不再等这个授权：走本机 ssh**（#2994）。sshd 的会话在「系统设置 › 通用 › 共享 › 远程登录 › ⓘ ›
+允许远程用户完全磁盘访问」开着时自带完全磁盘访问，所以删号脚本读出自己没有时，先把删的那一步交给
+`bin/fleet-login-remove-ssh.sh`：root 的钥匙 `/var/db/fleet-node/remove-ssh/id_ed25519`（known_hosts 取本机
+主机公钥，不首次信任）授给跑删号的 admin，`authorized_keys` 里一行
+`from="127.0.0.1,::1",restrict,command="/bin/bash '<current>/bin/fleet-login-remove-ssh.sh' forced"`——强制命令
+只认 `probe` 与 `delete <登录名>`（普通登录名、uid ≥ 501、不是 admin 组、不是自己），删记录、清
+`com.apple.access_*` 组。钥匙由 `fleet node install` 的「删号通道」一步、以及每次删号自己设（幂等）。走不通时
+（远程登录关着 · 钥匙没被收 · 那个开关没开 = exit 7）各说一句，然后照原路直删；节点程序有完全磁盘访问时只走原路。
+要做一次：在机器上打开「远程登录」和它的「允许远程用户完全磁盘访问」，跑删号的 admin 在远程登录的允许名单里。
+
 **以账号身份跑**：每个账号是进程里一个租户；它启动的每条命令（`fleet-control.py`、
 开号脚本、中继、git、tailscale）降权到这个账号——uid / gid / 附属组、`HOME` / `USER` /
 `LOGNAME`、工作目录是它的家（`internal/agent/runas.go` `prepCmd`）；root 的机器程序遇到

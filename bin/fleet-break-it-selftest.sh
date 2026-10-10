@@ -101,7 +101,7 @@
 #                                                   the end; leftover home moved aside) + agent accountWhy
 #   account-remove-tenant-held                      tokenledger/internal/agent runas.go (holdLogin; go test)
 #   newcomer-login-hosts-repo                       bin/fleet-control-read.sh ready (a seed repo needs no gh)
-#   login-remove-dscl-denied                        bin/fleet-node-supervisor.py (fda reading, status --check 4)
+#   login-remove-dscl-denied                        bin/fleet-node-supervisor.py (fda reading, status --check 4), bin/fleet-login-remove-ssh.sh
 #                                                   + bin/fleet-login-remove.sh (says Full Disk Access)
 #   drill-login-handed-silently                     tokenledger/internal/api fleet_drill.go (closeDrillLogins
 #                                                   handed) + store DeleteDrill (keeps the handed rows)
@@ -5184,7 +5184,10 @@ print(m.fda_line({"fda": {"ok": False, "program": "/x/Python"}}))' 2>&1)
     || { WHY="the doctor's node row ignores status --check 4 (no Full Disk Access)"; return 1; }
   _login_remove_selftest \
     || { WHY="fleet-login-remove-selftest.sh is red (its Full Disk Access leg): $(printf '%s\n' "$LOGIN_REMOVE_ST_OUT" | grep -m1 'selftest FAIL')"; return 1; }
-  WHAT='守护读出自己没有完全磁盘访问 → status --check 4、医生 node 行 WARN 点名要授权的程序；dscl 被拒时删号脚本最后一行说清（真跑 shim 化的 remove）'
+  # #2994: no Full Disk Access ⇒ the delete rides a local ssh session first
+  got=$(bash "$ROOT/bin/fleet-login-remove-ssh-selftest.sh" 2>&1) \
+    || { WHY="fleet-login-remove-ssh-selftest.sh is red: $(printf '%s\n' "$got" | grep -m1 'selftest FAIL')"; return 1; }
+  WHAT='守护读出自己没有完全磁盘访问 → status --check 4、医生 node 行 WARN 点名要授权的程序；没有完全磁盘访问时删号先走本机 ssh（强制命令只认 delete <登录名>），走不通说清原因再直删；dscl 被拒时删号脚本最后一行说清（真跑 shim 化的 remove）'
   SECS=$(since "$t0")
 }
 

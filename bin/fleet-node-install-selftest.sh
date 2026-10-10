@@ -147,7 +147,7 @@ sandbox
 run --join "$CODE1"
 check "exit 0" [ "$RC" = 0 ]
 check "every step ✓ (检查 加入 发布公钥 期望状态 ccquota 运行时; 角色用户 already there)" \
-  [ "$(shape)" = "+检查 +加入 +发布公钥 +期望状态 +ccquota +运行时 -角色用户 +ssh +守护 " ]
+  [ "$(shape)" = "+检查 +加入 +发布公钥 +期望状态 +ccquota +运行时 -角色用户 +ssh -删号通道 +守护 " ]
 check "says it converged" line "已收敛"
 check "machine.env: the hub + the machine's token, root 600" \
   sh -c "grep -qx 'CCQUOTA_TOKEN=tok-1' '$SB/db/machine.env' && grep -qx 'CCQUOTA_HUB_URL=https://hub.test' '$SB/db/machine.env' && [ $(mode "$SB/db/machine.env") = 600 ]"
@@ -170,18 +170,18 @@ before="$(fp)"
 calls0=$(grep -c . "$HUBD/calls")
 run --join "$CODE2"
 check "exit 0" [ "$RC" = 0 ]
-check "every step 跳过" [ "$(shape)" = "+检查 -加入 -发布公钥 -期望状态 -ccquota -运行时 -角色用户 -ssh -守护 " ]
+check "every step 跳过" [ "$(shape)" = "+检查 -加入 -发布公钥 -期望状态 -ccquota -运行时 -角色用户 -ssh -删号通道 -守护 " ]
 check "no join spent" sh -c "! sed -n '$((calls0 + 1)),\$p' '$HUBD/calls' | grep -q /v1/node/join"
 check "nothing rewritten" [ "$(fp)" = "$before" ]
 run
-check "without a code too" sh -c "[ $RC = 0 ] && [ \"$(shape)\" = '+检查 -加入 -发布公钥 -期望状态 -ccquota -运行时 -角色用户 -ssh -守护 ' ]"
+check "without a code too" sh -c "[ $RC = 0 ] && [ \"$(shape)\" = '+检查 -加入 -发布公钥 -期望状态 -ccquota -运行时 -角色用户 -ssh -删号通道 -守护 ' ]"
 
 echo "C  one part gone → only that part comes back"
 redo() { # <what> <step> <rm…>
   local what="$1" step="$2"; shift 2
   rm -rf "$@"
   run --join "$CODE2"
-  local want="+检查 -加入 -发布公钥 -期望状态 -ccquota -运行时 -角色用户 -ssh -守护 "
+  local want="+检查 -加入 -发布公钥 -期望状态 -ccquota -运行时 -角色用户 -ssh -删号通道 -守护 "
   want="${want/-$step /+$step }"
   OUT="$OUT
 (shape: $(shape))"
@@ -195,11 +195,11 @@ daemon_commits >/dev/null 2>&1
 redo "the ssh CA key" ssh "$SB/ssh/fleet_user_ca.pub"
 redo "the LaunchDaemon" 守护 "$SB/LaunchDaemons/com.claude-fleet.node.plist"
 rm -f "$SB/loaded"; run
-check "the daemon unloaded → reloaded" sh -c "[ \"$(shape)\" = '+检查 -加入 -发布公钥 -期望状态 -ccquota -运行时 -角色用户 -ssh +守护 ' ] && [ -f '$SB/loaded' ]"
+check "the daemon unloaded → reloaded" sh -c "[ \"$(shape)\" = '+检查 -加入 -发布公钥 -期望状态 -ccquota -运行时 -角色用户 -ssh -删号通道 +守护 ' ] && [ -f '$SB/loaded' ]"
 printf '%s\n' "$CODE2" >> "$HUBD/codes"; rm -f "$HUBD/token"
 run --join "$CODE2"
 check "the hub forgot the token → a new code joins again, nothing else redone" \
-  sh -c "[ $RC = 0 ] && [ \"$(shape)\" = '+检查 +加入 -发布公钥 -期望状态 -ccquota -运行时 -角色用户 -ssh -守护 ' ] && grep -qx CCQUOTA_TOKEN=tok-2 '$SB/db/machine.env'"
+  sh -c "[ $RC = 0 ] && [ \"$(shape)\" = '+检查 +加入 -发布公钥 -期望状态 -ccquota -运行时 -角色用户 -ssh -删号通道 -守护 ' ] && grep -qx CCQUOTA_TOKEN=tok-2 '$SB/db/machine.env'"
 rm -f "$HUBD/token"; run
 check "… and without a code it says so" sh -c "[ $RC = 1 ] && printf '%s' \"\$OUT\" | grep -q '^✗ 加入：' && printf '%s' \"\$OUT\" | grep -q '重跑：sudo fleet node install --join <码>'"
 check "nothing half written" clean
@@ -233,13 +233,13 @@ check "nothing half written" clean
 rm -f "$SB/sshd.bad"
 run
 check "fixed → the same command converges, doing only what was left" \
-  sh -c "[ $RC = 0 ] && [ \"$(shape)\" = '+检查 -加入 -发布公钥 -期望状态 -ccquota -运行时 -角色用户 +ssh +守护 ' ]"
+  sh -c "[ $RC = 0 ] && [ \"$(shape)\" = '+检查 -加入 -发布公钥 -期望状态 -ccquota -运行时 -角色用户 +ssh -删号通道 +守护 ' ]"
 
 echo "E  piped from curl"
 sandbox
 cp -R "$SB/rel/$V1" "$SB/rel/stable"
 OUT="$(cd "$SB" && bash -s -- --hub https://hub.test --join "$CODE1" < "$INST" 2>&1)"; RC=$?
-check "converged with no checkout beside the script" sh -c "[ $RC = 0 ] && [ \"$(shape)\" = '+检查 +加入 +发布公钥 +期望状态 +ccquota +运行时 -角色用户 +ssh +守护 ' ]"
+check "converged with no checkout beside the script" sh -c "[ $RC = 0 ] && [ \"$(shape)\" = '+检查 +加入 +发布公钥 +期望状态 +ccquota +运行时 -角色用户 +ssh -删号通道 +守护 ' ]"
 check "the updater came from the release (stable fetched first)" grep -qx stable "$SB/rel/.fetched"
 
 echo "F  the old roads on a managed machine"

@@ -106,6 +106,7 @@ cat > "$WORK/shim/id" <<'EOF'
 #!/bin/sh
 case "$*" in
   -u) echo 501 ;;
+  -un) echo admin1 ;;
   '-u alice') echo 602 ;;
   '-u me') echo 501 ;;
   '-u bob') echo 603 ;;
@@ -655,5 +656,50 @@ grep -q '"keep"' "$WORK/node/attic/index.json" && fail 'the attic copy is still 
 has "$WORK/out" 'forgot alice: its tasks stopped, 1 service(s) left in the attic' 'the forget did not report what it did'
 has "$FLEET_TEST_LOG" 'sysadminctl -deleteUser alice' 'managed login: not deleted'
 rm -rf "${WORK:?}/rt" "${WORK:?}/node"
+
+# The local ssh road (issue #2994). A stub stands in for fleet-login-remove-ssh.sh:
+# it logs each call and answers FAKE_ROAD (0 deleted · 5 cannot work · 7 the
+# sshd session has no Full Disk Access). Fallback order: Full Disk Access here ⇒
+# the direct road only; none ⇒ the road first, and the direct road only when the
+# road did not delete.
+cat > "$WORK/road.sh" <<'EOF'
+#!/bin/sh
+printf 'road %s\n' "$*" >> "$FLEET_TEST_LOG"
+[ "$1" = run ] || exit 0
+case "${FAKE_ROAD:-0}" in
+  0) : > "$FLEET_TEST_DS/$2.gone"; rm -rf "${FLEET_LOGIN_HOMES:?}/$2"
+     printf 'GroupMembership: admin1 bob\nGroupMembers: GUID-ADMIN1 GUID-BOB\n' > "$FLEET_TEST_DS/groups/com.apple.access_ssh"; exit 0 ;;
+  7) echo 'fleet-login-remove-ssh: the ssh session has no Full Disk Access — turn on … 「允许远程用户完全磁盘访问」' >&2; exit 7 ;;
+  *) echo 'fleet-login-remove-ssh: Remote Login is off' >&2; exit "$FAKE_ROAD" ;;
+esac
+EOF
+export FLEET_LOGIN_REMOVE_SSH="$WORK/road.sh"
+# FDA here: the road is never asked
+reset_fixture; : > "$FLEET_TEST_LOG"
+run alice --delete-home --apply
+[ "$RC" = 0 ] || { cat "$WORK/out" >&2; fail "road leg (FDA): exit $RC"; }
+not_has "$FLEET_TEST_LOG" 'road ' 'with Full Disk Access the ssh road was used'
+has "$FLEET_TEST_LOG" 'sysadminctl -deleteUser alice' 'with Full Disk Access the direct road did not run'
+# no FDA, the road deletes: the direct road never runs, step 7 finds nothing left
+reset_fixture; : > "$FLEET_TEST_LOG"; chmod 000 "$WORK/tcc/TCC.db"
+FLEET_LOGIN_REMOVE_TCC_DB="$WORK/tcc/TCC.db" FAKE_TCC=1 run alice --delete-home --apply
+[ "$RC" = 0 ] || { cat "$WORK/out" >&2; fail "road leg (deleted): exit $RC (want 0)"; }
+has "$FLEET_TEST_LOG" "road setup --admin admin1" 'no FDA: the road was not set up'
+has "$FLEET_TEST_LOG" "road run alice --admin admin1" 'no FDA: the road was not taken'
+not_has "$FLEET_TEST_LOG" 'sysadminctl -deleteUser' 'the road deleted, yet the direct road ran too'
+not_has "$FLEET_TEST_LOG" 'dscl . -delete /Groups/com.apple.access_ssh' 'step 7 deleted what the road had already dropped'
+has "$WORK/out" 'fleet-login-remove: done' 'road leg: not done'
+# no FDA, the road cannot work (5), or its session has no FDA (7): said, then the direct road
+for r in 5 7; do
+  reset_fixture; : > "$FLEET_TEST_LOG"
+  FLEET_LOGIN_REMOVE_TCC_DB="$WORK/tcc/TCC.db" FAKE_ROAD=$r FAKE_RECORD_STAYS=1 FAKE_USER_DELETE_FAILS=1 run alice --delete-home --apply
+  [ "$RC" = 1 ] || { cat "$WORK/out" >&2; fail "road leg ($r): exit $RC (want 1)"; }
+  has "$WORK/out" "the local ssh road did not delete alice (exit $r" "road $r: the fallback was not said"
+  has "$FLEET_TEST_LOG" 'sysadminctl -deleteUser alice' "road $r: no fallback to the direct road"
+  has "$WORK/out" 'this process has no Full Disk Access' "road $r: #2974's reason is gone"
+done
+has "$WORK/out" '允许远程用户完全磁盘访问' 'road 7: the Remote Login switch was not named'
+chmod 600 "$WORK/tcc/TCC.db"; rm -rf "$ARCH"/alice-*.left
+unset FLEET_LOGIN_REMOVE_SSH
 
 printf 'fleet-login-remove-selftest: PASS\n'
