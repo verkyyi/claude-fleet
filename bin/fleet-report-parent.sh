@@ -166,6 +166,21 @@ esac
 # either. A window name is operator-renameable free text (⌃e) — never trusted markup.
 wname=$(printf '%s' "$wname" | tr -d '"<>')
 
+# A person's step (issue #2869): the agent's OWN `waiting` report (no --win: not a
+# reaper's, not a re-filed stopped/merged) that names something to scan / click — a
+# URL, an image / page file, a code — stamps @human_wait (the epoch); any other
+# report of its own writes `off`: the step is done. fleet_window_human reads it: until the step is done
+# (its next report) or FLEET_HUMAN_WAIT_SECS pass, no idle reopen, sleep, park or
+# auto-handoff takes the process — and the browser and the login it holds.
+if [ -z "$WIN" ] && [ "$DRY" != 1 ]; then
+  if [ "$STATE" = waiting ] && printf '%s' "$SUMMARY" \
+       | grep -qiE 'https?://|\.(png|jpe?g|gif|svg|pdf|html?)([^a-z]|$)|扫|二维码|确认码|验证码|点击|点一下|\bqr\b|scan|click'; then
+    TM set-window-option -t "$selfwin" @human_wait "$(date +%s)" 2>/dev/null
+  else
+    TM set-window-option -t "$selfwin" @human_wait off 2>/dev/null
+  fi
+fi
+
 # The ship path reports and stamps; a reaper passes --only-once so its blunter
 # reap-time line is a BACKSTOP for the sessions that never got there (a crash, a
 # never-shipped worker, a hand ⌃x) rather than a second report for every child.

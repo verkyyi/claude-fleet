@@ -53,6 +53,9 @@
 #   tool-wait-idle                                  fleet_window_tool_busy / fleet_window_wait (fleet-lib.sh),
 #                                                   fleet-state-reconcile.py, bin/set-claude-state.sh (Stop),
 #                                                   fleet-wait-reeval.sh
+#   human-step-reopen                               fleet_window_human / fleet_window_wait (fleet-lib.sh),
+#                                                   bin/set-claude-state.sh (Stop + nudge), fleet-report-parent.sh,
+#                                                   fleet_cfg_restart_why, fleet-wait-reeval.sh
 #   cfg-reopen-loop                                 fleet_cfg_restart_why (fleet-lib.sh: the transcript backfill),
 #                                                   bin/fleet-migrate.sh (cfg_update_nudge, the /loop rearm)
 #   fleet-down-confirm                              bin/fleet-down.sh (confirm, --yes), fleet-up.sh --undo,
@@ -1705,6 +1708,64 @@ PY
   st="$(o "$w" @claude_state)/$(o "$w" @claude_wait)"
   [ "$st" = done/ ] || { WHY="after the call returned the re-ask left [$st], want done/"; return 1; }
   SECS=$(since "$t0"); WHAT="等工具时状态核对不降级、Stop 记 looping·tool、cfg-restart 答 tool 不重开；调用返回后重判回 done"
+}
+
+# ---- a reopen / handoff mid-scan (issue #2869) ------------------------------------
+# 2026-10-10 03:46Z: a worker had its first confirmation code out for the person to
+# scan, a Playwright browser holding the mini-program console login under it, when
+# the ver-stale idle reopen took the process — browser and login with it; the person
+# scanned three more times. The Stop hook, the reopen judge, the report and the
+# re-ask are the real ones; the browser is a process carrying Playwright's argv.
+hw_env() {   # <args…> — the sandbox's hooks and lib, against sock-hw
+  env PATH="$WORK/tbin:$PATH" HOME="$WORK/home" BREAK_SOCK="$BREAK_SOCK" TMUX="$BREAK_SOCK,1,0" \
+    FLEET_CONF_DIR="$WORK/hw/conf" FLEET_SKIP_GLOBAL_CONF=1 "$@"
+}
+drill_human_step_reopen() {
+  CAP=60; BREAK_SOCK="$WORK/sock-hw"; local d="$WORK/hw" w p t0 st why out
+  mkdir -p "$d/conf/global" "$d/ms-playwright-mcp"
+  printf 'claude fp-new x\n' > "$d/conf/global/agent-cfg.expected"
+  # The pane: the browser Playwright opened (its own argv, the pane's child) and the agent.
+  nt -f /dev/null new-session -d -s hw -n issue-9 -x 100 -y 30 \
+    "python3 -c 'import time; time.sleep(600)' --remote-debugging-pipe --user-data-dir='$d/ms-playwright-mcp/mcp-chrome-1' & exec sleep 600" \
+    || { WHY="cannot start the isolated tmux server"; return 1; }
+  w=$(nt display-message -p -t hw:issue-9 '#{window_id}'); p=$(nt display-message -p -t "$w" '#{pane_id}')
+  nt set-option -w -t "$w" @issue 9 \; set-option -w -t "$w" @cc_agent claude \; \
+     set-option -w -t "$w" @claude_state working \; set-option -w -t "$w" @claude_state_ts "$(date +%s)" \; \
+     set-option -w -t "$w" @ctx_pct 90
+  # the browser alone already reads as a person's step
+  until_ok 10 sh -c 'ps -axo command= | grep -q "[m]cp-chrome-1"' || { WHY="the fake browser never started"; return 1; }
+  why=$(hw_env bash -c '. "$1/fleet-lib.sh"; fleet_window_human hw "$2"' _ "$BIN" "$w")
+  [ "$why" = browser ] || { WHY="an open Playwright browser did not read as a person's step: [$why]"; return 1; }
+  # the agent puts the code up: `report waiting` with the page to scan
+  printf '' | hw_env TMUX_PANE="$p" bash "$BIN/fleet-report-parent.sh" --state waiting \
+    --summary '请扫第 1 张确认码 https://example.invalid/qr.html' >/dev/null 2>&1
+  case "$(o "$w" @human_wait)" in ''|*[!0-9]*) WHY="report waiting with a page left @human_wait=[$(o "$w" @human_wait)]"; return 1 ;; esac
+  # the break ①: the turn ends at 90% context — the auto-handoff would cycle the pane
+  out=$(printf '' | hw_env TMUX_PANE="$p" sh "$BIN/set-claude-state.sh" 'done' 2>/dev/null)
+  case "$out" in *'"decision":"block"'*) WHY="the Stop nudged a handoff while the person was scanning: $out"; return 1 ;; esac
+  st="$(o "$w" @claude_state)/$(o "$w" @claude_wait)/$(o "$w" @handoff_armed)"
+  [ "$st" = looping/human/ ] || { WHY="the Stop left state/wait/armed=[$st], want looping/human/"; return 1; }
+  grep -q '"hold": "handoff".*"wid": "'"$w"'"' "$d/conf/logs/attention.ndjson" 2>/dev/null \
+    || { WHY="the held handoff left no attention line: $(tail -1 "$d/conf/logs/attention.ndjson" 2>/dev/null)"; return 1; }
+  # the break ②: the ver-stale idle reopen, even on a window stamped `done` long ago
+  nt set-option -w -t "$w" @agent_cfg fp-old \; set-option -w -t "$w" @claude_state 'done' \; set-option -w -t "$w" @claude_state_ts 1
+  why=$(hw_env bash -c '. "$1/fleet-lib.sh"; fleet_cfg_restart_why hw "$2"' _ "$BIN" "$w")
+  [ "$why" = human ] || { WHY="cfg-restart would reopen it mid-scan: fleet_cfg_restart_why said [$why], want human"; return 1; }
+  # the step is done: the agent's next report — the browser still open, the report decides
+  nt set-option -w -t "$w" @claude_state looping \; set-option -w -t "$w" @claude_wait human \; \
+     set-option -w -t "$w" @claude_state_ts "$(date +%s)"
+  t0=$(now)
+  printf '' | hw_env TMUX_PANE="$p" bash "$BIN/fleet-report-parent.sh" --state waiting \
+    --summary 'step done, carrying on' >/dev/null 2>&1
+  [ "$(o "$w" @human_wait)" = off ] || { WHY="the next report left @human_wait=[$(o "$w" @human_wait)], want off"; return 1; }
+  hw_env bash "$BIN/fleet-wait-reeval.sh" --window "$w" hw >/dev/null 2>&1
+  st="$(o "$w" @claude_state)/$(o "$w" @claude_wait)"
+  [ "$st" = done/ ] || { WHY="after the step the re-ask left [$st], want done/"; return 1; }
+  nt set-option -w -t "$w" @claude_state working
+  out=$(printf '' | hw_env TMUX_PANE="$p" sh "$BIN/set-claude-state.sh" 'done' 2>/dev/null)
+  case "$out" in *'"decision":"block"'*) ;; *) WHY="after the step the Stop at 90% nudged no handoff: [$out]"; return 1 ;; esac
+  [ "$(o "$w" @handoff_armed)" = 1 ] || { WHY="the handoff nudge left no @handoff_armed latch"; return 1; }
+  SECS=$(since "$t0"); WHAT="扫码中：Stop 记 looping·human、不接力（attention 记一行）、cfg-restart 答 human 不重开；report 标完成后下一次 Stop 即接力"
 }
 
 # ---- a config reopen dropping a /loop and a ship (issue #2189) ---------------------

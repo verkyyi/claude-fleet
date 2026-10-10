@@ -1068,7 +1068,9 @@ TOOLS = {
                        "Exit 0 reported (or no parent to tell — a hub-spawned session), 3 queued: the parent "
                        "cannot take it now and it is delivered when it can (do not resend), 1 refused. A merged "
                        "report is checked against the PR's real state: report merged only after pr_merge says "
-                       "MERGED.",
+                       "MERGED. A waiting report whose summary names a page / code for a person to scan or click "
+                       "holds every automatic reopen and handoff of this session until your next report "
+                       "(issue #2869).",
         "inputSchema": {"type": "object", "properties": {
             "state": {"type": "string", "enum": ["merged", "blocked", "failed", "stopped", "waiting"],
                       "description": "How it ended."},

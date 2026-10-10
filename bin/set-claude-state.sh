@@ -616,6 +616,18 @@ if [ "$sem" = "done" ]; then
           | awk -v w="$_wid" -v now="$_now" -v ds="$_ds" \
               '$2 == w && $1 ~ /^[0-9]+$/ && (now - $1) <= ds { print 1; exit }')
       fi
+      # Person-step hold (issue #2869): a pane waiting on a person's hand — its
+      # `report waiting` page, its Playwright browser (fleet_window_human, the
+      # `human` reason the Stop wait above found) — keeps its process: a cycle
+      # would take the browser and its login with it mid-scan. No ceiling here: an
+      # in-place autocompact keeps the process; the hold ends with the step or at
+      # FLEET_HUMAN_WAIT_SECS, and the next Stop judges again. One attention line.
+      case ",$wwait," in
+        *,human,*)
+          _hold=1; _now=$(date +%s 2>/dev/null || echo 0)
+          _hwhy=$(bash -c '. "$1/fleet-lib.sh"; w=$(tmux display-message -p -t "$2" "#{window_id}"); h=$(fleet_window_human "" "$w") || h=report; fleet_human_hold_note "" "$w" handoff "$h"' \
+                    hold "$_bin" "$TMUX_PANE" 2>/dev/null </dev/null) ;;
+      esac
       if [ "$_hold" = "1" ]; then
         tmux set-window-option -t "$TMUX_PANE" @handoff_deferred_ts "$_now" 2>/dev/null
       else
