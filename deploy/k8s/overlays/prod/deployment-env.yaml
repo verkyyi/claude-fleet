@@ -76,6 +76,16 @@ spec:
             # once. Roll back: delete this entry.
             - name: CCQUOTA_FLEET_HUB_QUOTA
               value: "relay"
+            # Placement's load ceiling (#2882): macmini's load1 sits at 17-24 on
+            # 15 cores from ~200 small fleet processes while 3-4 cores work, so
+            # 0.8/core refused every new session there. 1.6 was set by hand
+            # (`kubectl set env`) and lives here so an apply keeps it. It gates
+            # only a machine whose agent does not report cpu_busy yet; one that
+            # does is judged on CPU busy (CCQUOTA_FLEET_MAX_CPU_BUSY, default
+            # 0.8, or the machine's own FLEET_MAX_CPU_BUSY). Roll back: delete
+            # this entry once every node runs an agent that reports cpu_busy.
+            - name: CCQUOTA_FLEET_MAX_LOAD_PER_CORE
+              value: "1.6"
             - name: CCQUOTA_FLEET_ROUTES
               value: |-
                 [{"hostname":"macmini","alias":"m5"},{"hostname":"mini2","alias":"m4"}]

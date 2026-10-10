@@ -23,6 +23,10 @@ func stubSys(t *testing.T, read func() sysInfo) {
 	old := processSys
 	processSys = newSysSampler(read, 10*time.Millisecond)
 	t.Cleanup(func() { processSys.stop(); processSys = old })
+	oldCPU := processCPU
+	processCPU = &cpuWindow{}
+	processCPU.once.Do(func() {}) // no real iostat / proc reader in a test
+	t.Cleanup(func() { processCPU = oldCPU })
 }
 
 // claude-fleet#2798 完成判据: the fleet probe hangs, and the beat still goes

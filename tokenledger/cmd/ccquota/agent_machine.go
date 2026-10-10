@@ -59,10 +59,14 @@ func runAgentMachine(args []string) error {
 		}
 		*token = t
 	}
+	maxBusy := os.Getenv("FLEET_MAX_CPU_BUSY")
 	if *machineEnv != "" {
 		env, err := readLoginEnv(*machineEnv, os.Geteuid() == 0)
 		if err != nil {
 			return err
+		}
+		if v := env["FLEET_MAX_CPU_BUSY"]; v != "" {
+			maxBusy = v
 		}
 		if *token == "" {
 			*token = env["CCQUOTA_TOKEN"]
@@ -71,6 +75,10 @@ func runAgentMachine(args []string) error {
 			*hub = env["CCQUOTA_HUB_URL"]
 		}
 	}
+	// The machine's own CPU-busy ceiling for new sessions (claude-fleet#2882),
+	// carried in every beat it and its logins send: machine.env
+	// FLEET_MAX_CPU_BUSY, else the environment's; neither = the hub's.
+	agent.SetMaxCPUBusy(maxBusy)
 	tenants, err := machineTenants(*logins, *state, os.Geteuid() == 0)
 	if err != nil {
 		return err

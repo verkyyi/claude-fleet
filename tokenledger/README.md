@@ -1088,6 +1088,20 @@ verdict as the operation's `placement`. Account quota is shown in each
 candidate (`quota_used_pct`) but never scored: every machine spends the same
 shared subscription (claude-fleet#1994).
 
+**CPU busy before load** (claude-fleet#2882). Load counts every runnable
+process, and a machine running two hundred small fleet processes reads 20 on 15
+cores while three of them work. So an agent that reports `cpu_busy` (user +
+system share of CPU time over the last minute — darwin: one long-lived
+`iostat -n0 -w 10`, linux: `/proc/stat`) is judged on that instead: excluded
+above **0.8 busy** (`CCQUOTA_FLEET_MAX_CPU_BUSY` for the hub; a machine's own
+`FLEET_MAX_CPU_BUSY` in machine.env — or the plain agent's environment — rides
+its beat as `max_cpu_busy` and wins), scored with `cpu_idle = 1 − busy /
+ceiling`, the load shown beside it (`m5 excluded: CPU busy 85% > 80% (load
+2.00/core)`). An agent that does not report it is judged on load per core as
+above (`CCQUOTA_FLEET_MAX_LOAD_PER_CORE`). A refusal (`node=auto`) names every
+host machine, not only the candidates: one where the caller has no login says
+`没有你的登录`, one whose updater is mid-switch adds `正在更新（<phase>）`.
+
 ```json
 "placement": {"machine": "m4", "reason": "chose m4 (score 0.500, load 0.10/core, 8.0/16 GiB free, 1 sessions); m5 excluded: load 1.00/core > 0.8", "candidates": [...]}
 ```

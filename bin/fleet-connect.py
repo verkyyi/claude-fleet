@@ -929,6 +929,8 @@ def print_candidates(home):
         extra = []
         if c.get("sessions"):
             extra.append("%d 个会话" % c["sessions"])
+        if c.get("cpu_busy") is not None:
+            extra.append("CPU 繁忙 %.0f%%" % (c["cpu_busy"] * 100))
         if c.get("load_per_core") is not None:
             extra.append("负载 %.2f/核" % c["load_per_core"])
         if c.get("last"):
