@@ -131,7 +131,7 @@ fresh D4
 mkdir -p "$FLEET_SHELL_CACHE/logs"
 printf '2026-10-10T06:16:04Z\tplace\tm5\t-\t\trefused\tno machine can take it\n' > "$FLEET_SHELL_CACHE/logs/place.log"
 sh "$P" fail place 1 < /dev/null
-has 'D: no reason given → the client log’s last line' "$(book)" 'refused · no machine can take it'
+has 'D: no reason given → the client log's last line' "$(book)" 'refused · no machine can take it'
 
 # --- E: fleet login -------------------------------------------------------------------
 fresh E
