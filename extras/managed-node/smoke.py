@@ -127,13 +127,27 @@ def main():
                        '--release-key', str(pub), '--service', 'foreground']
             subprocess.run(install, check=True)
             assert (sshdir / 'fleet_user_ca.pub').read_bytes() == Hub.ca
+            # Native systemd convergence uses a recording service manager, so
+            # no service on the CI host is enabled or reloaded.
+            manager = d / 'systemctl'
+            calls = d / 'systemctl.calls'
+            manager.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> ' + shlex.quote(str(calls)) + '\n')
+            manager.chmod(0o755)
+            native_env = dict(os.environ, FLEET_NODE_SYSTEMCTL=str(manager),
+                              FLEET_NODE_DAEMON_DIR=str(d / 'units'))
+            native = ['bash', str(runtime / 'bin/fleet-node-install.sh'), '--hub', args.hub,
+                      '--release-key', str(pub), '--service', 'systemd']
+            subprocess.run(native, env=native_env, check=True)
+            assert 'reload ssh.service' in calls.read_text()
+            assert 'enable --now claude-fleet-node.service' in calls.read_text()
+            assert (d / 'units/claude-fleet-node.service').is_file()
             token_path = d / 'cred' / login / 'node.env'
             original = token_path.read_bytes()
             code.unlink()  # restart after the one-time Secret has been removed
             m.prepare(args)
             assert Hub.joins == 2, 'restart enrolled another endpoint (one machine + one tenant expected)'
             assert token_path.read_bytes() == original, 'node token changed on retry'
-            assert not list((d / 'units').glob('*.service')), 'duplicate proxy service was installed'
+            assert not (d / 'units/claude-fleet-cred-proxy-shared.service').exists(), 'duplicate proxy service was installed'
             s = load('fleet-node-supervisor')
             denied = subprocess.run(['cat', str(token_path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                     preexec_fn=s.demote(login, 31022, 31022, str(d / 'homes' / login)))
