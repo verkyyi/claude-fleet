@@ -46,7 +46,9 @@ done
 hits=''
 for d in hooks launchd systemd conf; do
   [ -d "$ROOT/$d" ] || continue
-  h=$(grep -rln 'tokenledger/' "$ROOT/$d" 2>/dev/null)
+  # a line that only keeps it OUT (conf/release-tree.list's `!tokenledger/`,
+  # #2771) or a comment is not acting on it
+  h=$(grep -rlE '^[^#!]*tokenledger/' "$ROOT/$d" 2>/dev/null)
   [ -n "$h" ] && hits="$hits$h
 "
 done
