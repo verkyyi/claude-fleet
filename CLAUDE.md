@@ -244,9 +244,13 @@ Do not install from memory: read the doc and work from it.
   **Only a batch WITH WORK holds, and never past the cap** (issue #2247): the
   stamp carries `--live` / `--inflight`, `fleet_epic_holding` reads `live 0` +
   `inflight 0` as idle (switched under) and a mark with no reading as active;
-  one active mark holds one stable at most `FLEET_EPIC_HOLD_CAP_SECS` (2h), then
-  install-sync switches and notes it on the EPIC. `install-sync-selftest.sh` O2,
-  BREAK-IT `epic-idle-held` / `epic-hold-uncapped`.
+  a login (a managed machine: the whole machine) is held at most
+  `FLEET_EPIC_HOLD_CAP_SECS` (2h) on ONE clock — from its first deferral, cleared
+  only at stable; another batch taking over or stable moving never restarts it
+  (issue #2843: six batches in turn kept macmini two stables behind) — then it
+  switches and notes it on each holding EPIC. A managed login's install-sync does
+  not hold again: `fleet-node-update.py` held for it. `install-sync-selftest.sh` O2,
+  BREAK-IT `epic-idle-held` / `epic-hold-uncapped` / `epic-hold-rotating`.
 - **A new way to break the fleet gets its row and its drill BEFORE its fix**
   (issue #1786). `docs/BREAK-IT.md` lists every known way (方式 · 后果 · 自愈方式 ·
   演练); `bin/fleet-break-it-selftest.sh` does each one for real on isolated

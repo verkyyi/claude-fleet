@@ -35,7 +35,7 @@
 #   install-sync-killed                             bin/fleet-install-sync.sh (the tick lock)
 #   epic-mark-overwritten / epic-fresh-switched     bin/fleet-epic-heartbeat.sh (one mark per batch),
 #                                                   fleet_epic_running_fresh, fleet-install-sync.sh (the EPIC gate)
-#   epic-idle-held / epic-hold-uncapped             fleet_epic_holding (live/inflight), fleet-install-sync.sh
+#   epic-idle-held / epic-hold-uncapped / epic-hold-rotating fleet_epic_holding (live/inflight), fleet-install-sync.sh
 #                                                   (epic_gate: idle never holds, FLEET_EPIC_HOLD_CAP_SECS caps a hold)
 #   doctor-stricter-rollback                        bin/fleet-install-sync.sh (the new doctor joins the
 #                                                   baseline; FLEET_DOCTOR_SINCE), bin/fleet-doctor.sh
@@ -1236,7 +1236,7 @@ drill_epic_hold_uncapped() {
   epic_hb "$d" 2140 --tick 30 --repo o/r --session f1 --live 1 --inflight 1 >/dev/null 2>&1
   stable=$(git --git-dir="$d/origin.git" rev-parse stable)
   mkdir -p "$d/conf/global/epic-hold.d"
-  printf 'since: %s\nstable: %s\nreleased: -\n' "$(( $(date +%s) - 7300 ))" "$stable" > "$d/conf/global/epic-hold.d/o-r-2140"
+  printf 'since: %s\n' "$(( $(date +%s) - 7300 ))" > "$d/conf/global/epic-hold.d/.since"
   printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s/notes.log"\n' "$d" > "$d/note.sh"
   t0=$(now)
   FLEET_EPIC_HOLD_NOTE_CMD="sh $d/note.sh" epic_tick "$d" >"$d/tick1.out" 2>&1
@@ -1246,6 +1246,31 @@ drill_epic_hold_uncapped() {
     || { WHY="the release was not noted once on the EPIC: [$(cat "$d/notes.log" 2>/dev/null)]"; return 1; }
   grep -q ' epic-released ' "$d/install/logs/install-sync.log" 2>/dev/null || { WHY="no epic-released log line"; return 1; }
   SECS=$(since "$t0"); WHAT="有活的批次挡同一 stable 满 2 小时：放行 switched，EPIC 上一条记录型说明，日志 epic-released"
+}
+
+# epic-hold-rotating (issue #2843): with 3-7 batches running in parallel and
+# stable moving every hour or two, a per-batch clock (reset when a batch went
+# quiet for a tick, or when stable moved) never reached the cap — macmini sat two
+# stables behind, deferred every 5 minutes for hours. Now the clock is the
+# login's (and the machine's, in fleet-node-update.py): .since from the first
+# deferral, cleared only at stable. Here the batch holding now has a fresh clock
+# of its own on an older stable, another batch held before it: still released.
+drill_epic_hold_rotating() {
+  CAP=20; local t0 d="$WORK/epic5" stable
+  epic_sandbox "$d" || { WHY="sandbox install did not build"; return 1; }
+  epic_hb "$d" 2141 --tick 30 --repo o/r --session f1 --live 1 --inflight 1 >/dev/null 2>&1
+  stable=$(git --git-dir="$d/origin.git" rev-parse stable)
+  mkdir -p "$d/conf/global/epic-hold.d"
+  printf 'since: %s\nstable: %s\nreleased: -\n' "$(date +%s)" "0000000000000000000000000000000000000000" \
+    > "$d/conf/global/epic-hold.d/o-r-2141"
+  printf 'since: %s\n' "$(( $(date +%s) - 7300 ))" > "$d/conf/global/epic-hold.d/.since"
+  printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s/notes.log"\n' "$d" > "$d/note.sh"
+  t0=$(now)
+  FLEET_EPIC_HOLD_NOTE_CMD="sh $d/note.sh" epic_tick "$d" >"$d/tick1.out" 2>&1
+  [ "$(git -C "$d/install" rev-parse HEAD)" = "$stable" ] \
+    || { WHY="batches taking turns held past the login's cap: $(epic_st "$d" result) $(epic_st "$d" reason)"; return 1; }
+  [ -e "$d/conf/global/epic-hold.d/.since" ] && { WHY="at stable the login's hold clock was kept"; return 1; }
+  SECS=$(since "$t0"); WHAT="批次轮流挡、stable 一直在动：按登录（整机）一个钟，满 2 小时即放行 switched，到 stable 才清钟"
 }
 
 # doctor-stricter-rollback (issue #2655): the new version's doctor has a check the

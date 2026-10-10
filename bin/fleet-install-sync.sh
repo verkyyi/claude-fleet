@@ -525,24 +525,33 @@ team_follow() {
 # --- the EPIC gate (issues #953, #2062, #2247) ---------------------------------------
 # epic_gate — sets EPIC_HOLD (what holds this tick, `; `-joined; '' = nothing)
 # and EPIC_NOTE (the state's `epic:` line). fleet_epic_holding classifies every
-# fresh mark: `idle` never holds; `active` holds until it has held THIS stable for
-# HOLD_CAP seconds, then it is released — once, with one comment on its EPIC.
-# The clock is $HOLDD/<mark name>: `since:` (first tick it held), `stable:` (the
-# version it held back — a new stable starts a new clock), `released:`. A mark
-# that is not active this tick loses its file: the hold has to be continuous.
+# fresh mark: `idle` never holds; `active` holds until THIS LOGIN has been held
+# back HOLD_CAP seconds, then it is released — once, with one comment on its EPIC.
+# The clock is the LOGIN's, not a batch's (issue #2843): $HOLDD/.since is the
+# first tick any batch held, and only reaching stable (finish current|switched)
+# clears it — a new stable, or another batch taking over the hold, does not. With
+# 3-7 batches in parallel a per-batch clock (each mark's own, reset when the mark
+# went quiet for a tick or stable moved) never reached the cap: macmini sat two
+# stables behind. $HOLDD/<mark name> keeps `released:` (one comment per mark per
+# stable); a mark not active this tick loses its file.
 hold_get() { sed -n "s/^$2: //p" "$HOLDD/$1" 2>/dev/null | head -1; }
+hold_since() {
+  local s
+  s=$(hold_get .since since)
+  case "$s" in ''|*[!0-9]*) s=$(now); [ "$DRY" = 1 ] || { mkdir -p "$HOLDD" 2>/dev/null; printf 'since: %s\n' "$s" > "$HOLDD/.since" 2>/dev/null; } ;; esac
+  printf '%s\n' "$s"
+}
 epic_gate() {
   EPIC_HOLD='' EPIC_NOTE=''
-  local rows kind f out key since st rel held keep='' notes=''
+  local rows kind f out key since='' rel held keep='' notes=''
   rows=$(fleet_epic_holding 2>/dev/null)
   while IFS='	' read -r kind f out; do
     [ -n "$f" ] || continue
     key=${f##*/}
     if [ "$kind" = idle ]; then notes="$notes; idle (空转，不挡) $out"; continue; fi
     keep="$keep $key "
-    since=$(hold_get "$key" since); st=$(hold_get "$key" stable); rel=$(hold_get "$key" released)
-    case "$since" in ''|*[!0-9]*) since='' ;; esac
-    if [ -z "$since" ] || [ "$st" != "$STABLE_SHA" ]; then since=$(now); rel=''; fi
+    [ -n "$since" ] || since=$(hold_since)
+    rel=$(hold_get "$key" released)
     held=$(( $(now) - since ))
     if [ "$rel" != "$STABLE_SHA" ] && [ "$held" -ge "$HOLD_CAP" ]; then
       epic_release "$f" "$out" "$held"; rel="$STABLE_SHA"
@@ -634,6 +643,7 @@ finish() {
   local nodeq=0
   case "$1" in current|switched) nodeq=1 ;; esac
   if [ "$nodeq" = 1 ]; then
+    rm -f "$HOLDD/.since" 2>/dev/null   # at stable: the login's hold clock starts over (#2843)
     log_line "$1" "$2"; say "$1 — $2"
     node_follow "$1"
     write_state "$1" "$2"
@@ -1059,8 +1069,15 @@ main() {
   # #1935's last member ran on a new floor). Every fresh batch is named, so the
   # log line shows who is holding the install.
   # Only a batch with work holds it, and only up to the cap (issue #2247).
+  # A managed login follows the MACHINE's release (#2688), and the machine updater
+  # already held that release for every managed login's batches, on one clock
+  # (issue #2843) — a second hold here would only add a second, independent wait.
   local epic
-  epic_gate
+  if [ -n "${MANAGED_SHA:-}" ]; then
+    EPIC_HOLD='' EPIC_NOTE="managed — the machine updater holds for EPIC batches (fleet-node-update.py, #2843)"
+  else
+    epic_gate
+  fi
   if [ -n "$EPIC_HOLD" ]; then
     [ -n "$DEFERRED_SINCE" ] || DEFERRED_SINCE=$(now)
     finish deferred "EPIC batch running on this login ($EPIC_HOLD) — not switching the floor under a running batch (issues #953, #2062); each loop clears its own mark at its closing tick (fleet-epic-heartbeat.sh --clear <N>), else it expires; a batch with no live member and nothing in flight does not hold, and no batch holds longer than $((HOLD_CAP / 60))m (#2247)"

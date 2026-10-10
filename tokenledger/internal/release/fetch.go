@@ -160,7 +160,23 @@ func (f *Fetcher) get(ctx context.Context, rel string, max int64) ([]byte, error
 // Manifest fetches and verifies <sha>'s manifest ("stable" = whatever the hub
 // names stable now; the signed manifest then says which sha that is). It
 // returns the parsed manifest and the exact signed bytes + signature.
+//
+// The manifest and its signature are two reads, and the hub resolves each
+// through <sha>/current on its own: a build or reseal of the same sha landing
+// between them hands back a manifest of one build and the signature of another,
+// which fails the check with the right key (claude-fleet#2843: macmini, 341ae18,
+// right after stable moved). So a failed check reads the pair once more; a key
+// that really differs fails both times.
 func (f *Fetcher) Manifest(ctx context.Context, sha string) (*Manifest, []byte, string, error) {
+	m, mb, sig, err := f.manifestOnce(ctx, sha)
+	if errors.Is(err, errBadSignature) {
+		f.say("  %s: the signature did not match — reading the manifest and its signature again", sha)
+		m, mb, sig, err = f.manifestOnce(ctx, sha)
+	}
+	return m, mb, sig, err
+}
+
+func (f *Fetcher) manifestOnce(ctx context.Context, sha string) (*Manifest, []byte, string, error) {
 	if sha != "stable" && !ValidSHA(sha) {
 		return nil, nil, "", fmt.Errorf("bad sha %q", sha)
 	}

@@ -16,7 +16,8 @@ the way `ccquota release fetch --artifacts` lays one out (C7). Nothing touches
   D  killed half way: a stage without its mark is fetched again, a switch and a
      rollback cut short are finished — never half old, half new
   E  a release missing an artifact fails BEFORE anything switches, then backs off
-  F  a running EPIC batch with work defers the switch, until the hold cap
+  F  a running EPIC batch with work defers the switch, until the hold cap —
+     one clock for the machine, whatever the target (issue #2843)
   G  the daemon: a restart request after `current` moved stops it (launchd brings
      the new code); on the new code, or with nothing moved, the request is removed
   H  release.json: the repo's own passes the one validator; broken ones do not
@@ -28,7 +29,10 @@ the way `ccquota release fetch --artifacts` lays one out (C7). Nothing touches
      switch made by an updater that did not know (the first version carrying
      this) is not rolled back by its own new doctor row; the doctor's `credsep`
      row FAILs on a stale copy and on a proxy still on the old code
+  N  the release key (issue #2843): status prints the pinned and the signer's
+     fingerprints; a fetch that failed its signature check is a doctor FAIL
 """
+import base64
 import filecmp
 import hashlib
 import json
@@ -226,7 +230,7 @@ class Sandbox(unittest.TestCase):
         with open(os.path.join(self.d, "db", "machine.env"), "w") as f:
             f.write("CCQUOTA_HUB_URL=https://hub.invalid\n")
         with open(os.path.join(self.d, "db", "release.pub"), "w") as f:
-            f.write("ed25519 AAAA\n")
+            f.write("ed25519 %s\n" % base64.b64encode(b"\x01" * 32).decode())
         self.procs = []
 
     def tearDown(self):
@@ -503,6 +507,75 @@ class F_EpicHold(Sandbox):
         self.tick(V2, FLEET_NODE_UPDATE_LIB=lib)
         self.release(V3)
         self.assertEqual(self.tick(V3, FLEET_NODE_UPDATE_LIB=lib)["phase"], "switched")
+
+
+    def test_one_clock_for_the_machine(self):
+        """issue #2843: a new stable, or another batch taking over the hold, does
+        not restart the clock — past the cap the machine moves, and each holding
+        batch's EPIC gets one note as its login."""
+        self.install(V1)
+        mark = os.path.join(self.d, "mark-2770")
+        with open(mark, "w") as f:
+            f.write("epic: 2770\nrepo: o/r\n")
+        lib = os.path.join(self.d, "lib.sh")
+        with open(lib, "w") as f:
+            f.write('fleet_epic_holding() { printf "active\\t%s\\tepic=2770 live=1\\n" "%s"; return 0; }\n' % (mark, mark))
+        notes = os.path.join(self.d, "notes.log")
+        note = os.path.join(self.d, "note.sh")
+        with open(note, "w") as f:
+            f.write('echo "note $*" >> %s; while [ $# -gt 0 ]; do [ "$1" = --body-file ] && cat "$2" >> %s; shift; done\n'
+                    % (notes, notes))
+        self.release(V2)
+        st = self.tick(V2, FLEET_NODE_UPDATE_LIB=lib)
+        self.assertEqual(st["result"], "deferred", st)
+        since = st["hold"]["since"]
+        self.assertIn("held 0m of 120m", st["reason"])
+        # stable moves on while the batches hold: the clock does not start over
+        self.release(V3)
+        st = self.tick(V3, FLEET_NODE_UPDATE_LIB=lib)
+        self.assertEqual(st["result"], "deferred", st)
+        self.assertEqual(st["hold"]["since"], since, "a new target restarted the machine's hold clock")
+        # the doctor's install row says what the hold is for
+        r = self.cmd("doctor")
+        self.assertIn("one clock for the machine", r.stdout)
+        self.assertIn("fleet.versions/<sha>", r.stdout)
+        r = self.cmd("status")
+        self.assertIn("hold    EPIC batches since", r.stdout)
+        # two hours on (the state's clock moved back), the machine moves
+        st["hold"]["since"] = since - 7300
+        self.wj(os.path.join(self.d, "db", "update.json"), st)
+        st = self.tick(V3, FLEET_NODE_UPDATE_LIB=lib, FLEET_EPIC_HOLD_NOTE_CMD="sh " + note)
+        self.assertEqual(st["phase"], "switched", st)
+        self.assertNotIn("hold", st)
+        log = open(os.path.join(self.d, "log", "update.log")).read()
+        self.assertIn("hold released", log)
+        self.assertIn("one clock for the machine", log)
+        said = open(notes).read()
+        self.assertEqual(len([l for l in said.splitlines() if l.startswith("note ")]), 1, said)
+        self.assertIn("note 2770 --repo o/r --note --from fleet --body-file", said)
+        self.assertIn("fleet.versions/<sha>", said)
+        self.assertIn("hold note on o/r#2770 as alice: posted", log)
+
+
+class N_ReleaseKey(Sandbox):
+    def test_key_fingerprints_and_a_signature_failure(self):
+        """issue #2843: status prints the pinned key's and the current release's
+        signer's fingerprints; a fetch that failed its signature check is a doctor
+        FAIL, not only a backoff in update.log."""
+        self.install(V1)
+        r = self.cmd("status")
+        self.assertRegex(r.stdout, r"key     pinned [0-9a-f]{16} · current release signed by ")
+        r = self.cmd("doctor")
+        self.assertRegex(r.stdout, r"PASS  key +pinned [0-9a-f]{16}")
+        st = self.state()
+        st.update(result="backoff", failed={V2: {"at": 1, "reason": "fetch: ccquota: signature does not match the pinned key"}})
+        self.wj(os.path.join(self.d, "db", "update.json"), st)
+        r = self.cmd("doctor")
+        self.assertIn("FAIL  key", r.stdout)
+        self.assertIn("failed its signature check", r.stdout)
+        r = self.cmd("status", "--check")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("failed its signature check", r.stdout)
 
 
 class G_DaemonRestart(Sandbox):

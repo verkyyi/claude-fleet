@@ -150,11 +150,14 @@ func Sign(key ed25519.PrivateKey, manifest []byte) string {
 	return base64.StdEncoding.EncodeToString(ed25519.Sign(key, manifest))
 }
 
+// errBadSignature: the signature is not the pinned key's over these bytes.
+var errBadSignature = errors.New("signature does not match the pinned key")
+
 // Verify checks sig over manifest with pub and parses it.
 func Verify(pub ed25519.PublicKey, manifest []byte, sig string) (*Manifest, error) {
 	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(sig))
 	if err != nil || !ed25519.Verify(pub, manifest, raw) {
-		return nil, errors.New("signature does not match the pinned key")
+		return nil, errBadSignature
 	}
 	var m Manifest
 	if err := json.Unmarshal(manifest, &m); err != nil {
