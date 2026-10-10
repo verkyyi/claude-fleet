@@ -281,7 +281,7 @@ def foreground(a):
             subprocess.run(['ssh-keygen', '-q', '-t', 'ed25519', '-N', '', '-f', str(key)], check=True)
         Path('/run/sshd').mkdir(parents=True, exist_ok=True)
         Path('/etc/ssh/sshd_config.d/90-fleet-container.conf').write_text(
-            'HostKey ' + str(key) + '\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nPermitRootLogin no\n')
+            'HostKey ' + str(key) + '\nUsePAM yes\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nPermitRootLogin no\n')
         cmd = ['bash', str(HERE / 'fleet-node-install.sh'), '--hub', a.hub, '--service', 'foreground',
                '--login', a.login, '--login-join-file', a.join_file]
         if a.machine_join_file and Path(a.machine_join_file).exists():

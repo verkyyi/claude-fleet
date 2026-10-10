@@ -676,6 +676,7 @@ FLEET_NODE_SSHD                    seam: the sshd fleet-node-install.sh checks w
 FLEET_NODE_SERVICE                 handoff: installer selects systemd or foreground supervision on Linux (#3022)
 FLEET_NODE_UPDATE_OWNER            handoff: image disables runtime self-updates in ACK; Kubernetes owns the pinned image (#3022)
 FLEET_NODE_RUN_SSHD                handoff: foreground supervisor owns the container SSH daemon (#3022)
+FLEET_NODE_SYSTEMCTL               seam: Linux systemd command for supervisor and SSH CA reload (#3022)
 FLEET_NODE_DAEMON_DIR              path: the LaunchDaemons dir fleet-node-drill.sh counts and the supervisor manages (selftests: a temp dir, #2336)
 FLEET_NODE_USERS                   path: the home-directory root fleet-node-drill.sh counts LaunchAgents under (selftests: a temp dir, #2336)
 FLEET_DRILL_HOSTS                  seam: the hosts file fleet-node-drill.sh blocks GitHub in (default /etc/hosts; selftests: a temp file, #2336)

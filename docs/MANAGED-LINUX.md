@@ -42,6 +42,7 @@ The supervisor owns the shared credential proxy and machine agent. It reads
 the existing Fleet task templates and runs each account's jobs as that account.
 Its systemd service starts at boot. Native runtime upgrades still use the
 signed hub release updater.
+After installing the hub SSH CA, native installs reload the active SSH service.
 
 ## Build the ACK image
 
@@ -134,6 +135,10 @@ and a manual updater tick refuses to resume even an old persisted switch while
 `FLEET_NODE_UPDATE_OWNER=image`. The StatefulSet uses `OnDelete`: update its image
 digest, arrange a suitable restart, and delete the pod normally. Roll back by
 restoring the previous image digest and restarting again. The PVC stays.
+Credential pool synchronization continues independently of runtime updates.
+Each image activation relinks the tenant's runtime and reapplies its hooks and
+settings before restoring sessions. A failed apply remains pending for retry;
+the previous image's files do not need to exist on the replacement container.
 
 On SIGTERM, the entrypoint saves Fleet's session snapshot before stopping the
 supervisor. On startup it restores snapshots through the existing restore
@@ -149,7 +154,8 @@ only; a hub outage should not restart an otherwise healthy pod.
 ## Acceptance evidence
 
 CI runs the portable lifecycle contracts, existing managed-node regression
-tests, and a Linux/root bootstrap smoke with real users and the shared proxy
+tests (including image replacement, rollback and failed-apply retry), and a
+Linux/root installer smoke with real users, SSH CA validation and the shared proxy
 against a loopback hub fixture. That proves OS integration, not a live ACK or
 Anthropic request.
 

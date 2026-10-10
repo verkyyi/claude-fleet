@@ -377,6 +377,17 @@ case "$code" in
   *) fail "ssh CA" "入口答 HTTP $code" ;;
 esac
 
+# Linux sshd keeps its startup configuration until reloaded. ACK starts sshd
+# after this installer; a native machine already has a running system service.
+if [ "$code" = 200 ] && [ "$OS" = linux ] && [ "${FLEET_NODE_SERVICE:-systemd}" = systemd ]; then
+  for ssh_unit in ssh.service sshd.service; do
+    if "${FLEET_NODE_SYSTEMCTL:-systemctl}" is-active --quiet "$ssh_unit"; then
+      "${FLEET_NODE_SYSTEMCTL:-systemctl}" reload "$ssh_unit" || fail "ssh CA" "could not reload $ssh_unit"
+      break
+    fi
+  done
+fi
+
 # ---------------------------------------------------------------- 删号通道 ------
 # The node program has no Full Disk Access, so macOS will not let it delete a
 # login (#2973); the delete rides a local ssh session to the admin who ran this

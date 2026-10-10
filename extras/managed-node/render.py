@@ -24,7 +24,7 @@ def resources(image, hub, storage_class, namespace='fleet-workers', size='100Gi'
         'resources': {'requests': {'cpu': '2', 'memory': '8Gi'}, 'limits': {'cpu': '4', 'memory': '16Gi'}},
         'securityContext': {'runAsUser': 0, 'allowPrivilegeEscalation': False,
                             'capabilities': {'drop': ['ALL'], 'add': ['CHOWN', 'DAC_OVERRIDE', 'FOWNER',
-                                'SETUID', 'SETGID', 'KILL', 'NET_BIND_SERVICE', 'SYS_CHROOT']},
+                                'SETUID', 'SETGID', 'KILL', 'NET_BIND_SERVICE', 'SYS_CHROOT', 'AUDIT_WRITE']},
                             'seccompProfile': {'type': 'RuntimeDefault'}},
         'ports': [{'name': 'ssh', 'containerPort': 22}],
         'volumeMounts': mounts + [{'name': 'join', 'mountPath': '/run/fleet-join', 'readOnly': True}],

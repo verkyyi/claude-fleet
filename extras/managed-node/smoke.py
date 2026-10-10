@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import pwd
 import shutil
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -30,11 +31,17 @@ def load(name):
 
 class Hub(BaseHTTPRequestHandler):
     joins = 0
+    ca = b''
 
     def log_message(self, *_):
         pass
 
     def do_GET(self):
+        if self.path == '/v1/fleet/ssh-ca.pub':
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(self.ca)
+            return
         self.reply({'trust': 'trusted', 'trusted': True, 'role': 'managed'})
 
     def do_POST(self):
@@ -73,8 +80,6 @@ def main():
         d.chmod(0o755)
         state = d / 'state'
         state.mkdir()
-        (state / 'machine.env').write_text('CCQUOTA_TOKEN=fixture-machine-token\n')
-        (state / 'machine.env').chmod(0o600)
         code = d / 'join'
         code.write_text('fj_' + 'a' * 26)
         code.chmod(0o600)
@@ -86,16 +91,47 @@ def main():
                           FLEET_CREDSEP_LIB=str(d / 'lib'), FLEET_CREDSEP_LOG_BASE=str(d / 'credlogs'),
                           FLEET_CREDSEP_DAEMON_DIR=str(d / 'units'))
         (d / 'units').mkdir()
+        # Run the real installer against a staged image and the loopback hub.
+        # Files are copied out of the runner's private checkout so a real
+        # unprivileged tenant can read its runtime.
+        runtime = d / 'runtime' / ('a' * 40)
+        shutil.copytree(ROOT / 'bin', runtime / 'bin')
+        shutil.copytree(ROOT / 'conf', runtime / 'conf')
+        (runtime / '.release').mkdir()
+        (runtime / '.release/staged.json').write_text('{}')
+        (runtime / 'bin/ccquota').write_text('#!/bin/sh\nexit 0\n')
+        (runtime / 'bin/ccquota').chmod(0o755)
+        (d / 'runtime/current').symlink_to(runtime.name)
+        sshdir = d / 'ssh'
+        sshdir.mkdir()
+        subprocess.run(['ssh-keygen', '-q', '-t', 'ed25519', '-N', '', '-f', str(d / 'ca')], check=True)
+        Hub.ca = (d / 'ca.pub').read_bytes()
+        # The native daemon check uses a temporary config, never the runner's.
+        conf = sshdir / 'sshd_config'
+        conf.write_text('Include ' + str(sshdir / 'sshd_config.d/*.conf') + '\n'
+                        'HostKey ' + str(d / 'ca') + '\nUsePAM yes\n')
+        check = d / 'check-sshd'
+        check.write_text('#!/bin/sh\nexec /usr/sbin/sshd -f ' + shlex.quote(str(conf)) + ' "$@"\n')
+        check.chmod(0o755)
+        Path('/run/sshd').mkdir(exist_ok=True)
+        pub = d / 'release.pub'
+        pub.write_text('ed25519 ' + 'A' * 43 + '=\n')
+        os.environ.update(FLEET_NODE_RUNTIME=str(d / 'runtime/current'), FLEET_NODE_UID='31022',
+                          FLEET_NODE_SSH_DIR=str(sshdir), FLEET_NODE_SSHD=str(check), FLEET_NODE_RUN_SSHD='1')
         m = load('fleet-node-linux')
         args = argparse.Namespace(login=login, uid=31022, hub='http://127.0.0.1:%d' % hub.server_port,
                                   join_file=str(code), relay='https://fleet-relay.24hw.cn')
         try:
-            m.prepare(args)
+            install = ['bash', str(runtime / 'bin/fleet-node-install.sh'), '--hub', args.hub,
+                       '--join-file', str(code), '--login', login, '--login-join-file', str(code),
+                       '--release-key', str(pub), '--service', 'foreground']
+            subprocess.run(install, check=True)
+            assert (sshdir / 'fleet_user_ca.pub').read_bytes() == Hub.ca
             token_path = d / 'cred' / login / 'node.env'
             original = token_path.read_bytes()
             code.unlink()  # restart after the one-time Secret has been removed
             m.prepare(args)
-            assert Hub.joins == 1, 'restart enrolled a second endpoint'
+            assert Hub.joins == 2, 'restart enrolled another endpoint (one machine + one tenant expected)'
             assert token_path.read_bytes() == original, 'node token changed on retry'
             assert not list((d / 'units').glob('*.service')), 'duplicate proxy service was installed'
             s = load('fleet-node-supervisor')
@@ -123,7 +159,7 @@ def main():
             mint = d / 'mint.py'
             shutil.copyfile(ROOT / 'bin/fleet-cred-proxy.py', mint)
             mint.chmod(0o644)
-            result = subprocess.run([sys.executable, str(mint), 'mint', '--sid', 'smoke'],
+            result = subprocess.run([sys.executable, str(mint), 'mint', '--sid', 'smoke', '--provider', 'claude'],
                                     env=env, cwd=p.pw_dir, preexec_fn=s.demote(login, p.pw_uid, p.pw_gid, p.pw_dir),
                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             assert result.returncode == 0 and result.stdout.strip().startswith('fcp1.'), result.stderr
@@ -134,7 +170,7 @@ def main():
                 pass
             else:
                 raise AssertionError('changed tenant UID accepted on existing PVC')
-            print('PASS Linux tenant: one join across restart; fixed UID; root-only store; shared proxy; session mint')
+            print('PASS Linux installer/SSH CA; one machine + one tenant join across retry; fixed UID; separated store; shared proxy; mint')
         finally:
             if proc:
                 proc.terminate()
