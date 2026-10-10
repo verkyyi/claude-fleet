@@ -36,7 +36,8 @@ done <<EOF
 $(tmux list-clients -F "#{session_name}$(printf '\t')#{window_id}" 2>/dev/null)
 EOF
 if [ "$moved" -eq 0 ]; then
-  sess=$(tmux display-message -p -t "$TMUX_PANE" '#{session_name}' 2>/dev/null)
+  # the session GROUP (#1489): a bare #{session_name} off a pane may name a view
+  sess=$(tmux display-message -p -t "$TMUX_PANE" "$FLEET_SESSION_FMT" 2>/dev/null)
   tmux select-window -t "$sess:$target" 2>/dev/null || exit 1
 fi
 exit 0
