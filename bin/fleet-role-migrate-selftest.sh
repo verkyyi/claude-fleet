@@ -100,7 +100,7 @@ moved=1; for k in FLEET_ORCH_MODEL FLEET_ORCH_EFFORT FLEET_STEWARD_MODEL FLEET_S
 active FLEET_ORCH_CODEX_MODEL && active FLEET_ORCHESTRATOR && active FLEET_PARK_STALL_SECS \
   && ok "A Codex model, switch and threshold stay" || bad "A took a machine key: $(cat "$S/conf/fleet.conf")"
 ls "$S/conf"/fleet.conf.bak-* >/dev/null 2>&1 && ok "A fleet.conf kept as .bak" || bad "A no .bak"
-[ "$(stat -f '%Lp' "$S/conf/fleet.conf" 2>/dev/null || stat -c '%a' "$S/conf/fleet.conf")" = 600 ] \
+[ "$(stat -c '%a' "$S/conf/fleet.conf" 2>/dev/null || stat -f '%Lp' "$S/conf/fleet.conf")" = 600 ] \
   && ok "A the file keeps its mode" || bad "A mode changed"
 case "$out" in *'moved into your layer (入口 v1)'*) ok "A says what moved" ;; *) bad "A output: $out" ;; esac
 
