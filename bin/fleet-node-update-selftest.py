@@ -1086,8 +1086,9 @@ class K_LoginInstall(Sandbox):
 
 class L_ClientShell(Sandbox):
     """issue #2702: ONE `shell` row over the taken-over logins only — PASS when none
-    carries the person's client here, WARN (never FAIL: no rollback) naming the login + the retire command; a
-    non-root doctor reads the last sweep's record (other homes are not its to read)."""
+    carries the person's client here, WARN (never FAIL: no rollback) naming the login + the retire command. A
+    home the doctor can read is read NOW (issue #2991: the last sweep's word goes stale once a retire ran); one
+    it cannot read keeps the last sweep's record, marked with its time."""
     def test_shell_row(self):
         self.install(V1, claude="2.1.1")
         r = self.cmd("doctor")
@@ -1098,14 +1099,30 @@ class L_ClientShell(Sandbox):
         sp = os.path.join(self.d, "db", "state.json")
         with open(sp) as f:
             st = json.load(f)
-        st["sweep"] = {"clientshell": [{"login": "alice", "cache": True, "zshrc": 3}]}
+        st["sweep"] = {"clientshell": [{"login": "alice", "cache": True, "zshrc": 3}], "last": 1791663924}
         with open(sp, "w") as f:
             json.dump(st, f)
-        r = self.cmd("doctor")
+        # alice's home readable and clean: the record is stale, the row reads her home now
+        home = os.path.join(self.d, "Users", "alice")
+        os.makedirs(home, exist_ok=True)
+        with open(os.path.join(home, ".zshrc"), "w") as f:
+            f.write("export PATH=x\n")
+        self.assertRegex(self.cmd("doctor").stdout, r"PASS\s+shell\s")
+        # a home it cannot read: the record stands, with its time
+        os.chmod(home, 0)
+        try:
+            r = self.cmd("doctor")
+        finally:
+            os.chmod(home, 0o755)
         self.assertEqual(r.returncode, 0, r.stdout)
         self.assertRegex(r.stdout, r"WARN\s+shell\s+alice: ~/.cache/claude-fleet/shell · ~/.zshrc 3 hook line\(s\)")
         self.assertIn("fleet-node-shell-retire.sh' --login alice", r.stdout)
+        self.assertIn("(read at 2026-10-10T20:25:24Z — this login cannot read that home now)", r.stdout)
         self.assertIn("托管登录 1 个，其余账号不在清单内不扫", r.stdout)
+        # read now: one fleet header comment left behind by an older retire counts
+        with open(os.path.join(home, ".zshrc"), "w") as f:
+            f.write("export PATH=x\n\n# cfguest:shell — claude-fleet helpers: cf, cw\n")
+        self.assertRegex(self.cmd("doctor").stdout, r"WARN\s+shell\s+alice: ~/.zshrc 1 hook line\(s\)")
         # a login the record names that is not taken over (an admin) is not the fleet's
         os.remove(os.path.join(self.d, "db", "logins", "alice.env"))
         self.assertRegex(self.cmd("doctor").stdout, r"PASS\s+shell\s")

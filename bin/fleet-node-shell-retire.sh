@@ -12,8 +12,11 @@
 #            KILL after FLEET_RETIRE_GRACE seconds, default 3)
 #   cache    ~/.cache/claude-fleet/shell, removed
 #   zshrc    the lines that hook the fleet into a login shell — the first-login
-#            block (`# >>> claude-fleet` … `# <<< claude-fleet <<<`) and any line
-#            sourcing shell/fleet-login.zsh or shell/cw.zsh. The ~/.local/bin
+#            block (`# >>> claude-fleet` … `# <<< claude-fleet <<<`), any line
+#            sourcing shell/fleet-login.zsh or shell/cw.zsh, and the fleet's own
+#            header comment above one (`# cfguest:shell …`, `# claude-fleet login:
+#            …` — issue #2991): fleet-node-supervisor.py's shell_hooks, the ONE
+#            rule its status and sweep count by. The ~/.local/bin
 #            PATH line and everything else stay; the old file is kept as
 #            ~/.zshrc.pre-shell-retire[.<stamp>]
 #
@@ -122,51 +125,11 @@ fi
 
 # --- zshrc --------------------------------------------------------------------
 ZRC="$H/.zshrc"
-out=$(as_login python3 - "$ZRC" "$DRY" <<'PY'
-import os, re, sys, time
-path, dry = sys.argv[1], sys.argv[2] == "1"
-hook = re.compile(r"shell/fleet-login\.zsh|shell/cw\.zsh")
-try:
-    with open(path) as f:
-        lines = f.read().split("\n")
-except OSError:
-    print("skip — no ~/.zshrc"); sys.exit(0)
-keep, gone, inblock = [], 0, False
-for ln in lines:
-    s = ln.strip()
-    if s.startswith("# >>> claude-fleet"):
-        inblock = True
-    if inblock:
-        gone += 1
-        if s.startswith("# <<< claude-fleet"):
-            inblock = False
-        continue
-    if hook.search(s) and not s.startswith("#"):
-        gone += 1
-        continue
-    keep.append(ln)
-if inblock:
-    print("FAIL — a `# >>> claude-fleet` block with no end line; left as it is"); sys.exit(1)
-if not gone:
-    print("skip — no fleet hook in ~/.zshrc"); sys.exit(0)
-if dry:
-    print("would take out %d line(s)" % gone); sys.exit(0)
-bak = path + ".pre-shell-retire"
-if os.path.exists(bak):
-    bak += "." + time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
-with open(bak, "w") as f:
-    f.write("\n".join(lines))
-os.chmod(bak, os.stat(path).st_mode & 0o777)
-text = "\n".join(keep)
-text = re.sub(r"\n{3,}", "\n\n", text)
-tmp = path + ".tmp.%d" % os.getpid()
-with open(tmp, "w") as f:
-    f.write(text)
-os.chmod(tmp, os.stat(path).st_mode & 0o777)
-os.rename(tmp, path)
-print("took out %d line(s) — the old file is %s" % (gone, bak.replace(os.path.dirname(path), "~", 1)))
-PY
-); rc=$?
+# the ONE rule for which lines go (issue #2991): the machine daemon's shell_hooks,
+# the same reading its `status` / sweep count — run AS the login, no state touched
+SUP="$(cd "$(dirname "$0")" && pwd)/fleet-node-supervisor.py"
+if [ "$DRY" = 1 ]; then out=$(as_login python3 "$SUP" shell-hooks "$ZRC" --dry-run); rc=$?
+else out=$(as_login python3 "$SUP" shell-hooks "$ZRC"); rc=$?; fi
 case "$out" in
   FAIL*) fail zshrc "${out#FAIL — }" ;;
   *) if [ "$rc" = 0 ]; then say "zshrc: $out"; else fail zshrc "${out:-exit $rc}"; fi ;;

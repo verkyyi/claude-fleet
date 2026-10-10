@@ -73,11 +73,13 @@ machine's work ONCE, however many logins the machine carries:
                 each existing login's own credential proxy (credsep.<login>). A
                 login not taken over keeps its units, named (`account adopt` is
                 its road); a unit that will not unload stays, named; a running
-                fleet-onboard-drill.sh holds every removal until the next sweep.
+                fleet-onboard-drill.sh (a process running it, never a command line
+                that merely names it — issue #2991) holds every removal until the next sweep.
                 It also clears a taken-over login that still carries the person's
                 client here (issue #2702): `~/.cache/claude-fleet/shell` or a
                 `~/.zshrc` line that sources shell/fleet-login.zsh / cw.zsh / the
-                old bootstrap block — a managed machine is no one's client — by
+                old bootstrap block / the fleet's header comment above one
+                (shell_hooks, the one rule) — a managed machine is no one's client — by
                 running bin/fleet-node-shell-retire.sh --login <login> --if-idle
                 itself (issue #2981; a client still running is named and left for
                 the next sweep). Handwritten units and the client shell look ONLY
@@ -95,6 +97,10 @@ that is not root-owned or that a group / other may write.
 Usage:
   fleet-node-supervisor.py run                 the daemon loop (what launchd runs)
   fleet-node-supervisor.py tick                one pass: due tasks (waited for) + the sweep
+  fleet-node-supervisor.py shell-hooks <zshrc> [--dry-run]
+                                               take the fleet's login-shell hook lines out of one
+                                               file — the ONE rule (issue #2991); what
+                                               fleet-node-shell-retire.sh runs as the login
   fleet-node-supervisor.py status [--json] [--check]
                                                one line per item: what · last run · result.
                                                --check: exit 0 healthy · 1 installed but not
@@ -2022,34 +2028,75 @@ def taken_over(paths):
 
 
 SHELL_HOOK_RE = re.compile(r"shell/fleet-login\.zsh|shell/cw\.zsh")
+# the comment lines the fleet wrote above such a hook (a guest login's header, the
+# login-banner line of docs/INSTALL.md) — fleet text, nothing of the person's
+SHELL_HEAD_RE = re.compile(r"^#\s*(cfguest:shell\b|claude-fleet login:|banner, then an SSH login)")
 
 
-def _shell_hook(line):
-    """A ~/.zshrc line that hooks the fleet into a login shell — the old first-login
-    block's opening line, or a live line sourcing fleet-login.zsh / cw.zsh (a
-    comment is not one). The same rule bin/fleet-node-shell-retire.sh takes out."""
-    s = line.strip()
-    return s.startswith("# >>> claude-fleet") or (not s.startswith("#") and bool(SHELL_HOOK_RE.search(s)))
+def shell_hooks(lines):
+    """(keep, gone, err) — THE rule for a ~/.zshrc line that hooks the fleet into a
+    login shell (issues #2702, #2991), one for the sweep's count, `status` and
+    bin/fleet-node-shell-retire.sh (which runs `shell-hooks`): the old first-login
+    block (`# >>> claude-fleet` … `# <<< claude-fleet`, whole), a live line sourcing
+    shell/fleet-login.zsh or shell/cw.zsh (a commented-out one is the person's),
+    and the fleet's own header comment above one (SHELL_HEAD_RE — kept by an older
+    retire, so it may stand alone). The ~/.local/bin PATH line and everything else
+    stay. err: a block with no end line (everything from it counted, nothing kept)."""
+    keep, gone, inblock = [], [], False
+    for ln in lines:
+        s = ln.strip()
+        if s.startswith("# >>> claude-fleet"):
+            inblock = True
+        if inblock:
+            gone.append(ln)
+            if s.startswith("# <<< claude-fleet"):
+                inblock = False
+            continue
+        if (SHELL_HOOK_RE.search(s) and not s.startswith("#")) or SHELL_HEAD_RE.match(s):
+            gone.append(ln)
+            continue
+        keep.append(ln)
+    return keep, gone, "a `# >>> claude-fleet` block with no end line" if inblock else ""
 
 
-def client_shell(paths, logins=None):
+def client_shell_of(home):
+    """{cache, zshrc} for one home, read now — or None when this process cannot
+    read it (never guessed: a home it cannot read is not a clean one)."""
+    cache = os.path.join(home, ".cache", "claude-fleet", "shell")
+    try:
+        os.stat(cache)
+        has = os.path.isdir(cache)
+    except OSError as ex:
+        if ex.errno != errno.ENOENT:
+            return None
+        has = False
+    try:
+        with open(os.path.join(home, ".zshrc"), errors="replace") as f:
+            hooks = len(shell_hooks(f.read().split("\n"))[1])
+    except OSError as ex:
+        if ex.errno != errno.ENOENT:
+            return None
+        hooks = 0
+    return {"cache": has, "zshrc": hooks}
+
+
+def client_shell(paths, logins=None, stale=None, as_of=None):
     """[{login, cache, zshrc}] — every taken-over login whose home still carries
     the person's client (issue #2702): `cache` = ~/.cache/claude-fleet/shell is
-    there, `zshrc` = how many ~/.zshrc lines hook the fleet into a login shell
-    (the PATH line is not one). Read only; a home this process cannot read is
-    skipped, never guessed."""
+    there, `zshrc` = how many ~/.zshrc lines shell_hooks takes out. Read only. A
+    home this process cannot read is skipped — or, given `stale` (an earlier
+    reading's entries, taken at `as_of`), that reading is kept, marked so (issue
+    #2991): `status` re-reads every home it can instead of showing the last sweep's."""
     out = []
+    old = dict((c.get("login"), c) for c in stale or [])
     for login in sorted(taken_over(paths) if logins is None else logins):
-        home = os.path.join(paths.users, login)
-        cache = os.path.isdir(os.path.join(home, ".cache", "claude-fleet", "shell"))
-        hooks = 0
-        try:
-            with open(os.path.join(home, ".zshrc"), errors="replace") as f:
-                hooks = sum(1 for ln in f if _shell_hook(ln))
-        except OSError:
-            pass
-        if cache or hooks:
-            out.append({"login": login, "cache": cache, "zshrc": hooks})
+        r = client_shell_of(os.path.join(paths.users, login))
+        if r is None:
+            if login in old:
+                out.append(dict(old[login], as_of=old[login].get("as_of") or as_of))
+            continue
+        if r["cache"] or r["zshrc"]:
+            out.append(dict(r, login=login))
     return out
 
 
@@ -2060,9 +2107,10 @@ def client_shell_says(c, paths):
         what.append("~/.cache/claude-fleet/shell")
     if c.get("zshrc"):
         what.append("~/.zshrc %d hook line(s)" % c["zshrc"])
-    return "%s: %s — a managed machine is no one's client; sudo bash '%s' --login %s%s" % (
+    return "%s: %s — a managed machine is no one's client; sudo bash '%s' --login %s%s%s" % (
         c["login"], " · ".join(what), os.path.join(paths.runtime, "bin", "fleet-node-shell-retire.sh"), c["login"],
-        " (the sweep's own run: %s)" % c["retire"] if c.get("retire") else "")
+        " (the sweep's own run: %s)" % c["retire"] if c.get("retire") else "",
+        " (read at %s — this login cannot read that home now)" % iso(c["as_of"]) if c.get("as_of") else "")
 
 
 # What holds the sweep's removals (issue #2981): a process running one of these
@@ -2091,15 +2139,55 @@ def keep_labels(paths):
     return out
 
 
+SHELLS = ("bash", "sh", "zsh", "dash", "ksh")
+
+
+def runs_script(cmd, name):
+    """Is this command line a process RUNNING the script `name` (issue #2991)? Only
+    when the program itself is it (argv[0], by base name) or a shell running it as
+    its script file (`bash /path/name …`, also behind `env [VAR=x]`). A line that
+    merely mentions it — an ssh remote command, `pgrep -f`, `grep`, `bash -c '…'`
+    — is not a drill. ps joins argv with spaces, so a path with a space in it
+    reads as more words: the script's own path never has one here."""
+    words = cmd.split()
+    while words and os.path.basename(words[0]) == "env":
+        words = words[1:]
+        while words and (words[0].startswith("-") or "=" in words[0]):
+            words = words[1:]
+    if not words:
+        return False
+    if os.path.basename(words[0]) == name:
+        return True
+    if os.path.basename(words[0]).lstrip("-") not in SHELLS:
+        return False
+    for w in words[1:]:
+        if w in ("-c", "-s") or (w.startswith("-") and not w.startswith("--") and "c" in w[1:]):
+            return False          # an inline command / stdin, not a script file
+        if w.startswith("-") or w.startswith("+"):
+            continue
+        return os.path.basename(w) == name
+    return False
+
+
 def sweep_hold():
-    """"" — or what holds the sweep's removals: the first live process whose argv
-    names one of SWEEP_HOLD_ARGV (FLEET_NODE_SWEEP_HOLD, comma-separated, overrides)."""
+    """"" — or what holds the sweep's removals: the first live process RUNNING one
+    of SWEEP_HOLD_ARGV (FLEET_NODE_SWEEP_HOLD, comma-separated, overrides) —
+    runs_script, never a substring of some other command line (issue #2991)."""
     names = [x for x in env("FLEET_NODE_SWEEP_HOLD", ",".join(SWEEP_HOLD_ARGV)).split(",") if x]
     try:
         out = subprocess.check_output(["ps", "-axo", "pid=,command="], stderr=subprocess.DEVNULL,
                                       universal_newlines=True, timeout=10)
     except (OSError, subprocess.SubprocessError):
         return ""
+    for ln in out.splitlines():
+        pid, _, cmd = ln.strip().partition(" ")
+        if pid == str(os.getpid()):
+            continue
+        cmd = cmd.strip()
+        for n in names:
+            if runs_script(cmd, n):
+                return "pid %s runs %s" % (pid, cmd[cmd.find(n):][:120])
+    return ""
     for ln in out.splitlines():
         pid, _, cmd = ln.strip().partition(" ")
         if pid == str(os.getpid()):
@@ -3008,7 +3096,8 @@ def status_lines(paths, table, state):
     for h in sw.get("handwritten") or []:
         out.append("handwritten %-12s runs as %s, not in the register — fleet service|task add, then "
                    "archive %s" % (h.get("label"), h.get("login"), h.get("path")))
-    for c in sw.get("clientshell") or []:
+    # read now, never the last sweep's word (issue #2991): one retired since reads clean
+    for c in client_shell(paths, stale=sw.get("clientshell"), as_of=sw.get("last")):
         out.append("clientshell %-12s %s" % (c.get("login"), client_shell_says(c, paths)))
     for x in sw.get("extras") or []:
         out.append("extra  %-18s left in place — %s (%s)" % (x.get("label"), x.get("why"), x.get("path")))
@@ -3644,10 +3733,50 @@ def _svc_logdir_for(d, uid, gid):
 
 
 # --------------------------------------------------------------- main -----------
+def shell_hooks_cli(path, dry):
+    """`shell-hooks <~/.zshrc> [--dry-run]`: take shell_hooks' lines out of one file
+    (bin/fleet-node-shell-retire.sh runs it AS the login — this touches no state).
+    The old file is kept as <file>.pre-shell-retire[.<stamp>]. One line out; exit 0
+    done / nothing to do · 1 a block with no end line (left as it is)."""
+    try:
+        with open(path) as f:
+            lines = f.read().split("\n")
+    except OSError:
+        print("skip — no ~/.zshrc")
+        return 0
+    keep, gone, err = shell_hooks(lines)
+    if err:
+        print("FAIL — %s; left as it is" % err)
+        return 1
+    if not gone:
+        print("skip — no fleet hook in ~/.zshrc")
+        return 0
+    if dry:
+        print("would take out %d line(s)" % len(gone))
+        return 0
+    bak = path + ".pre-shell-retire"
+    if os.path.exists(bak):
+        bak += "." + time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    mode = os.stat(path).st_mode & 0o777
+    with open(bak, "w") as f:
+        f.write("\n".join(lines))
+    os.chmod(bak, mode)
+    text = re.sub(r"\n{3,}", "\n\n", "\n".join(keep))
+    tmp = path + ".tmp.%d" % os.getpid()
+    with open(tmp, "w") as f:
+        f.write(text)
+    os.chmod(tmp, mode)
+    os.rename(tmp, path)
+    print("took out %d line(s) — the old file is %s" % (len(gone), bak.replace(os.path.dirname(path), "~", 1)))
+    return 0
+
+
 def main(argv):
-    paths = Paths()
     cmd = argv[1] if len(argv) > 1 else "status"
     rest = argv[2:]
+    if cmd == "shell-hooks" and rest:
+        return shell_hooks_cli(rest[0], "--dry-run" in rest[1:])
+    paths = Paths()
     if cmd in ("-h", "--help", "help"):
         print(__doc__)
         return 0
@@ -3751,7 +3880,7 @@ def main(argv):
             print("purged %d" % n)
             return 0
     print("usage: fleet-node-supervisor.py run|tick|status [--json|--check]|sweep [--dry-run]|"
-          "attic [list|restore <id>|purge]|account [list|adopt|release|forget|manages <login>]|tenants [--json|--check]|"
+          "shell-hooks <zshrc> [--dry-run]|attic [list|restore <id>|purge]|account [list|adopt|release|forget|manages <login>]|tenants [--json|--check]|"
           "install|uninstall",
           file=sys.stderr)
     return 2
