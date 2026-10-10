@@ -297,7 +297,7 @@ last_release_epoch() { # the newest successful prod deployment (the deploy job's
 }
 
 cmd_hold() {
-  local quiet=$(( ${QUIET_MINUTES:-10} * 60 )) gap=$(( ${MIN_GAP_MINUTES:-30} * 60 )) poll=${HOLD_POLL:-60}
+  local quiet=$(( ${QUIET_MINUTES:-10} * 60 )) gap=$(( ${MIN_GAP_MINUTES:-10} * 60 )) poll=${HOLD_POLL:-60}
   local mine=${GITHUB_SHA:?} last latest latest_ct v secs why now
   last=$(last_release_epoch || true)
   if [ -n "$last" ]; then
@@ -314,7 +314,7 @@ cmd_hold() {
       go) echo "verdict=go"; return 0 ;;
       superseded*) echo "verdict=superseded"; echo "newer=${v#superseded }"; return 0 ;;
       wait*) read -r _ secs why <<<"$v"
-             echo "waiting ${secs}s ($why: $( [ "$why" = quiet ] && echo "master quiet for ${QUIET_MINUTES:-10} min" || echo "${MIN_GAP_MINUTES:-30} min since the last release" ))" >&2
+             echo "waiting ${secs}s ($why: $( [ "$why" = quiet ] && echo "master quiet for ${QUIET_MINUTES:-10} min" || echo "${MIN_GAP_MINUTES:-10} min since the last release" ))" >&2
              [ "$secs" -le "$poll" ] || secs=$poll
              sleep "$secs" ;;
     esac

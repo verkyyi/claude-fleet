@@ -87,9 +87,11 @@ permissions:
 env:
   # The release cadence (issue #2052): a push ships once master has been quiet
   # this long, and never sooner than this after the last successful release.
-  # workflow_dispatch ignores both.
+  # workflow_dispatch ignores both. The gap was 30 while the hub was one SQLite
+  # pod (every restart was downtime); the rolling shape restarts with none, so
+  # it is 10 (issue #2972).
   QUIET_MINUTES: 10
-  MIN_GAP_MINUTES: 30
+  MIN_GAP_MINUTES: 10
   NS: new-deploy
   PUSH_REPO: registry.cn-shenzhen.aliyuncs.com/24haowan/ccquota
   PLACEHOLDER: set-by-hub-deploy
