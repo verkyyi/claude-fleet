@@ -261,6 +261,14 @@ if [ "$cmd" = doctor ] && [ ! -x "$here/fleet-doctor.sh" ] \
     printf '  %-4s  %-8s %s\n' "${r%%"$tab"*}" tls "${r#*"$tab"}"
     case $r in FAIL*) rc=1 ;; esac
   fi
+  # stage (issue #2987): the client's proxy windows — a control socket gone, a warm
+  # master of another login, a stray `run` loop: what makes a switch a reconnect
+  if [ -f "$here/fleet-remote-view.sh" ] && command -v tmux >/dev/null 2>&1 \
+     && r=$(bash "$here/fleet-remote-view.sh" stage-health 2>/dev/null; :) && [ -n "$r" ]; then
+    tab=$(printf '\t')
+    printf '  %-4s  %-8s %s\n' "${r%%"$tab"*}" stage "${r#*"$tab"}"
+    case $r in PASS*) ;; *) rc=1 ;; esac
+  fi
   if [ -f "$here/fleet-agent-bundle.py" ]; then
     python3 "$here/fleet-agent-bundle.py" doctor --root "$here/.." "$@" || rc=1
   fi

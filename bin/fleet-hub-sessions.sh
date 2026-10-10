@@ -1101,12 +1101,14 @@ node_sources() {
   [ -n "$out" ] && printf '%s\n' "$out"
   for ctl in "${TMPDIR:-/tmp}"/warm/*.sock; do
     [ -S "$ctl" ] || continue
-    node=${ctl##*/}; node=${node%.sock}
+    # `<machine>@<login>.sock` (issue #2987: one per login) — one per machine here
+    node=${ctl##*/}; node=${node%.sock}; node=${node%@*}
     case "$node" in ''|*[!A-Za-z0-9._-]*) continue ;; esac
     printf '%s\n' "$out" | cut -f1 | grep -qxF "$node" && continue
     host=$(node_ssh_host "$node")
     ${FLEET_REMOTE_SSH_CMD:-ssh} -S "$ctl" -O check "$host" >/dev/null 2>&1 || continue
     printf '%s\t%s\t%s\n' "$node" "$host" "$ctl"
+    out=$(printf '%s\n%s' "$out" "$node")
   done
   return 0
 }

@@ -24,6 +24,9 @@
 #                  asked for again with 「机器在重启，稍等」 and the same address is
 #                  attached when it is back; only past FLEET_REMOTE_GONE_SECS does
 #                  the pane say it is gone
+#   G. orphan    — (issue #2987) a loop whose server was replaced (same socket, the pane
+#                  id reused by another window) ends at its next round and writes no
+#                  @remote_ctl / @remote_down on the window that now has its pane id
 # ssh is a shim (FLEET_REMOTE_SSH_CMD) that logs its argv. python3 absent → SKIP.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -85,6 +88,7 @@ case "$*" in
         fi
         exit 0 ;;
       gone) exit 3 ;;
+      fail) exit 255 ;;
       gone-twice)   # the machine's tmux restarting: not there twice, then back (#2484)
         n=$(cat "$FAKE_DIR/gone.n" 2>/dev/null || echo 0); echo $((n + 1)) > "$FAKE_DIR/gone.n"
         [ "$n" -lt 2 ] && exit 3
@@ -178,6 +182,38 @@ CHECKS=$((CHECKS + 1)); [ "$(grep ' attach' "$WORK/ssh.log" | grep -c "$WID")" =
   || fail 'F: asked again for the same session until it answered (3 attaches)' "$(grep -c ' attach' "$WORK/ssh.log")"
 FAKE_MODE=gone FLEET_REMOTE_GONE_SECS=0 bash "$RV" run m9 "$WID" > "$WORK/f2.out" 2>&1 < /dev/null
 has 'F: past the wait it says the session is gone' "$(cat "$WORK/f2.out")" '已不在 m9 上'
+
+# --- G. an orphan never writes on a pane that is not its own (issue #2987) ---------------
+# The operator's MacBook: a loop whose stage server was replaced lived on (PPID 1); the
+# new server, on the same socket, gave its pane id to another window, and the orphan
+# kept stamping its line's @remote_ctl / @remote_down there — every switch to that
+# window became a full reconnect. Here the loop ignores HUP (as a lineage started
+# under nohup does), so it survives kill-server exactly as that one did.
+if command -v tmux >/dev/null 2>&1; then
+  RUNENV="FLEET_REMOTE_SSH_CMD=$WORK/ssh FAKE_LOG=$WORK/ssh.log FAKE_DIR=$WORK FAKE_MODE=fail HOME=$HOME TMPDIR=$TMPDIR FLEET_CONF_DIR=$FLEET_CONF_DIR FLEET_REMOTE_VIA_HUB=0"
+  tmux -L "$TSOCK" kill-server 2>/dev/null
+  tmux -L "$TSOCK" -f /dev/null new-session -d -s g -x 80 -y 20 \
+    "exec env $RUNENV bash -c 'trap \"\" HUP; exec bash $RV run m9 $WID'"
+  sleep 1
+  orun=$(tmux -L "$TSOCK" display-message -p -t g:0 '#{pane_pid}' 2>/dev/null)
+  opane=$(tmux -L "$TSOCK" display-message -p -t g:0 '#{pane_id}' 2>/dev/null)
+  printf '%s\n' "$orun" >> "$WORK/pids"
+  ok 'G: the loop is up' test -n "$orun"
+  has 'G: …and owns its window (@remote_run)' "$(tmux -L "$TSOCK" show-options -wqv -t g:0 @remote_run)" "$orun"
+  tmux -L "$TSOCK" kill-server 2>/dev/null
+  sleep 0.5
+  ok 'G: the loop outlived its server (the orphan)' alive "${orun:-0}"
+  # the replacement server: same socket, and its first pane takes the same id again
+  tmux -L "$TSOCK" -f /dev/null new-session -d -s g2 -x 80 -y 20 'sleep 600'
+  npane=$(tmux -L "$TSOCK" display-message -p -t g2:0 '#{pane_id}')
+  ok 'G: the new server reuses the pane id' test "$npane" = "$opane"
+  ok 'G: the orphan ends at its next round' gone_within "${orun:-0}" 12
+  CHECKS=$((CHECKS + 1)); w=$(tmux -L "$TSOCK" show-options -wqv -t g2:0 @remote_ctl)$(tmux -L "$TSOCK" show-options -wqv -t g2:0 @remote_down)
+  [ -z "$w" ] || fail 'G: …and wrote nothing on the window that now has its pane id' "$w"
+  tmux -L "$TSOCK" kill-server 2>/dev/null
+else
+  echo 'skip G: no tmux'
+fi
 
 if [ "$FAILS" -gt 0 ]; then printf '%d/%d checks FAILED\n' "$FAILS" "$CHECKS"; exit 1; fi
 printf 'PASS: %d checks\n' "$CHECKS"

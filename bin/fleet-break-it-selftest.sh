@@ -191,6 +191,9 @@ DOC="$ROOT/docs/BREAK-IT.md"
 command -v python3 >/dev/null 2>&1 || { printf 'fleet-break-it: python3 absent — SKIP\n'; exit 0; }
 REAL_TMUX="$(command -v tmux 2>/dev/null)"
 [ -n "$REAL_TMUX" ] || { printf 'fleet-break-it: tmux absent — SKIP\n'; exit 0; }
+# never the caller's pane: a drill's `run` loop would take a pane it does not own
+# for a replaced server's and end at once (#2987), and nothing here is that pane's
+unset TMUX TMUX_PANE
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/brk.XXXXXX")" || exit 2
 WORK="$(cd "$WORK" && pwd -P)"
@@ -2813,6 +2816,36 @@ drill_proxy_orphan() {
   until_ok "$CAP" sh -c "! kill -0 $run 2>/dev/null && ! kill -0 $att 2>/dev/null" \
     || { kill -KILL "$run" "$att" 2>/dev/null; WHY="the pane is gone, its run loop / attach still live after ${CAP}s"; return 1; }
   SECS=$(since "$t0"); WHAT="窗格关掉，run 循环和它的 ssh 一起退出"
+}
+
+# The stage server replaced under a live `run` (issue #2987). The loop ignores HUP
+# (a lineage under nohup), so it outlives kill-server; the new server on the same
+# socket reuses its pane id for another window. Before: the orphan wrote its line's
+# @remote_ctl / @remote_down there every round. The recovery: it ends within CAP
+# seconds and writes nothing.
+drill_stage_orphan_run() {
+  CAP=12; local t0 so="$WORK/sock-so" run p0 p1 w
+  rv_shim; : > "$WORK/rv/down"
+  "$REAL_TMUX" -S "$so" -f /dev/null new-session -d -s so -x 80 -y 20 \
+    "exec env $(rv_env) bash -c 'trap \"\" HUP; exec bash $BIN/fleet-remote-view.sh run m9 $RVWID'"
+  sleep 1
+  run=$("$REAL_TMUX" -S "$so" display-message -p -t so:0 '#{pane_pid}' 2>/dev/null)
+  p0=$("$REAL_TMUX" -S "$so" display-message -p -t so:0 '#{pane_id}' 2>/dev/null)
+  [ -n "$run" ] || { WHY="the proxy's run loop never came up"; return 1; }
+  "$REAL_TMUX" -S "$so" kill-server 2>/dev/null                   # the break
+  sleep 0.5
+  kill -0 "$run" 2>/dev/null || { WHY="the loop did not outlive its server (the break did not happen)"; return 1; }
+  "$REAL_TMUX" -S "$so" -f /dev/null new-session -d -s so2 -x 80 -y 20 'sleep 600'
+  p1=$("$REAL_TMUX" -S "$so" display-message -p -t so2:0 '#{pane_id}' 2>/dev/null)
+  [ "$p1" = "$p0" ] || { kill -KILL "$run" 2>/dev/null; WHY="the new server did not reuse $p0 (got $p1)"; return 1; }
+  t0=$(now)
+  until_ok "$CAP" sh -c "! kill -0 $run 2>/dev/null" \
+    || { kill -KILL "$run" 2>/dev/null; WHY="the orphan run loop still runs ${CAP}s after its server was replaced"; return 1; }
+  SECS=$(since "$t0")
+  w=$("$REAL_TMUX" -S "$so" show-options -wqv -t so2:0 @remote_ctl)$("$REAL_TMUX" -S "$so" show-options -wqv -t so2:0 @remote_down)
+  "$REAL_TMUX" -S "$so" kill-server 2>/dev/null
+  [ -z "$w" ] || { WHY="the orphan wrote on the window that now has $p0: [$w]"; return 1; }
+  WHAT="stage 服务器换了，孤儿 run 循环认出窗格不是自己的，什么都不写就退出"
 }
 
 # A dropped line, then a switch (issue #1876). The proxy pane (run --shell, on

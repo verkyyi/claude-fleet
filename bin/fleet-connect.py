@@ -728,12 +728,29 @@ def median(xs):
     return None if not n else (xs[n // 2] if n % 2 else (xs[n // 2 - 1] + xs[n // 2]) / 2)
 
 
+def is_tailnet(r):
+    """A direct route over the tailnet (the hub names it `tailnet` / `tailscale`)."""
+    return (r or {}).get("kind", "direct") == "direct" and "tail" in ((r or {}).get("name") or "")
+
+
+def prefer_tailnet():
+    return os.environ.get("FLEET_CONNECT_PREFER_TAILNET", "1") != "0"
+
+
 def rank_routes(rows):
-    """Best first: most handshakes answered, then lowest median latency, then
-    the hub's own order. A route that answered none is never chosen."""
+    """Best first: most handshakes answered, then the tailnet (claude-fleet#2987),
+    then lowest median latency, then the hub's own order. A route that answered
+    none is never chosen. On one LAN the public gateway's port and the tailnet
+    answer within the same few ms and noise used to pick either — and the one
+    picked was kept for every reconnect after it; the tailnet is the line that
+    keeps working when the person leaves that LAN.
+    FLEET_CONNECT_PREFER_TAILNET=0: latency alone, as before."""
+    pt = prefer_tailnet()
+
     def key(r):
         med = median(r["ms"])
-        return (-len(r["ms"]), med if med is not None else float("inf"), r["order"])
+        return (-len(r["ms"]), 0 if pt and r["ms"] and is_tailnet(r) else 1,
+                med if med is not None else float("inf"), r["order"])
     return sorted(rows, key=key)
 
 
@@ -1029,7 +1046,24 @@ def connect(want, hub, token, verbose, retest, print_only, ssh_args, info=None, 
             and (retest == "last" or now - float(ent.get("at", 0)) < ttl):
         r = ent["route"]
         r = dict(r, ms=[], errors=[], order=0)
-        measure([r], hub, token, 1, timeout)
+        # A remembered line that is not the tailnet while the machine has one
+        # (claude-fleet#2987): the tailnet is asked in the same breath, and taken
+        # when it answers — a line picked once (the tailnet down that minute, or a
+        # coin toss of latency) is no longer kept for every reconnect after it.
+        tl = None
+        if prefer_tailnet() and not is_tailnet(r):
+            tl = next((dict(x, kind="direct", ms=[], errors=[], order=1) for x in (ent.get("routes") or [])
+                       if isinstance(x, dict) and x.get("host") and is_tailnet(x)), None)
+        measure([r] + ([tl] if tl else []), hub, token, 1, timeout)
+        if tl and tl["ms"]:
+            ent["route"] = {k: tl[k] for k in ("name", "kind", "host", "port")}
+            ent["at"] = now
+            save_cache(cache)
+            clog("pick", ent.get("label") or key, "direct", tl["ms"][0], "ok",
+                 "tailnet %s over remembered %s" % (tl["name"], r["name"]))
+            if verbose:
+                sys.stderr.write("fleet connect · %s · Tailscale 通了，换掉记住的 %s\n" % (ent["label"], r["name"]))
+            return run_ssh(ent["machine"], tl, ent.get("login", ""), hub, print_only, ssh_args, ssh_opts)
         if r["ms"]:
             if verbose:
                 sys.stderr.write("fleet connect · %s · 用 %d 秒前测出的 %s（复核 %.0fms 通过；--retest 重测）\n"

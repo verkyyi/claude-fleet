@@ -37,6 +37,10 @@
 #   I. shells      — (#1485/#1713) shells, a plain hand-run attach, a shell beside
 #                    it, each leaving: the registry follows every one (a shell row,
 #                    no spool without a view id) and the node's panes never change
+#   R. readopt     — (#2987) the proxy's control socket gone, the line up: `open`
+#                    selects over the warm master instead of respawning, adopts it,
+#                    logs `switch … readopt`; `health` WARNs on the gone socket and
+#                    on a warm master logged in as another login
 #   K. one title   — (#1549) a window a shell/view looks at loses its own header
 #                    ONE WAY — off at the attach, still off after every client
 #                    has gone — so the proxy pane shows no second header and no
@@ -309,6 +313,50 @@ on8() { [ "$(vcur "$VS")" = "$RW8" ] && attached; }
 waitfor 10 on8 || fail "B: the retargeted proxy never showed worker 8" "$(vcur "$VS")"
 eq "B: …over the proxy's own connection — no reconnect: the same view session, the fleet session untouched (#1489)" "plan $VS" "$(rscur) $(vsess | tr '\n' ' ' | sed 's/ $//')"
 eq "B: the proxy window knows its view id, the one select targets (#1489)" "${VS#"$RS@view-"}" "$(tl show-options -wqv -t "$PW" @remote_view)"
+
+# ============================================================================
+# R. (#2987) the proxy's control socket gone while its line lives: `open`
+#    re-adopts the warm master for the select — no respawn, the window rides it
+#    from then on, the switch logged — and `health` (fleet doctor's `stage` row)
+#    flags the gone socket and a warm master of another login
+# ============================================================================
+waitfor 5 attached
+RCTL=$(tl show-options -wqv -t "$PW" @remote_ctl)
+RCHAN=$(tl show-options -wqv -t "$PW" @remote_chan)
+RPID=$(tl display-message -p -t "$PW" '#{pane_pid}')
+tl set-window-option -t "$PW" @remote_chan "$WORK/nochan"   # no serve channel: the one-shot path
+rm -f "$RCTL"
+out=$(bash "$BIN/fleet-remote-view.sh" stage-health "$LS" "$TMPDIR"); rc=$?
+eq "R: health WARNs (exit 1) on the gone control socket" 1 "$rc"
+has "R: …naming it" "$out" "m4 的控制连接 ${RCTL##*/} 不在了"
+mkdir -p "$TMPDIR/warm"
+python3 -c 'import socket, sys
+s = socket.socket(socket.AF_UNIX); s.bind(sys.argv[1])' "$TMPDIR/warm/m4.sock"
+: > "$WORK/ssh.log"
+FLEET_SHELL=1 FLEET_CLIENT_LOG_DIR="$WORK/clog" FLEET_SESSION=$LS bash "$BIN/fleet-remote-view.sh" open "$WID" >/dev/null 2>&1
+eq "R: no respawn — the same run loop in the pane" "$RPID" "$(tl display-message -p -t "$PW" '#{pane_pid}')"
+has "R: the select went over the warm master" "$(cat "$WORK/ssh.log")" "fleet-remote-view.sh select '$WID'"
+on7() { [ "$(vcur "$VS")" = "$RW" ]; }
+waitfor 5 on7 || fail "R: the re-adopted select never showed worker 7" "$(vcur "$VS")"
+eq "R: the window adopted the warm master" "$TMPDIR/warm/m4.sock" "$(tl show-options -wqv -t "$PW" @remote_ctl)"
+has "R: the switch is logged as readopt" "$(cat "$WORK/clog/connect.log" 2>/dev/null)" "switch	m4	readopt	"
+out=$(bash "$BIN/fleet-remote-view.sh" stage-health "$LS" "$TMPDIR"); rc=$?
+eq "R: health PASSes once re-adopted" "0" "$rc"
+has "R: …one proxy window" "$out" "PASS	1 个代理窗口"
+tl set-window-option -t "$PW" @remote_login verky
+printf '{"machine": "m4", "kind": "direct", "name": "public", "login": "verkyyi"}\n' > "$TMPDIR/warm/m4.sock.route"
+out=$(bash "$BIN/fleet-remote-view.sh" stage-health "$LS" "$TMPDIR"); rc=$?
+eq "R: health WARNs on a warm master of another login" 1 "$rc"
+has "R: …naming both logins" "$out" "m4 的预热连接登的是 verkyyi，看的会话在 verky"
+python3 -c 'import socket, sys
+s = socket.socket(socket.AF_UNIX); s.bind(sys.argv[1])' "$TMPDIR/warm/m4@verky.sock"
+out=$(bash "$BIN/fleet-remote-view.sh" stage-health "$LS" "$TMPDIR"); rc=$?
+eq "R: …and passes once that login has its own (m4@verky.sock)" "0" "$rc"
+rm -f "$TMPDIR/warm/m4.sock" "$TMPDIR/warm/m4.sock.route" "$TMPDIR/warm/m4@verky.sock"
+tl set-window-option -u -t "$PW" @remote_login
+tl set-window-option -t "$PW" @remote_chan "$RCHAN"
+FLEET_SESSION=$LS bash "$BIN/fleet-remote-view.sh" open "$WID2" >/dev/null 2>&1   # back on worker 8 (D needs it)
+waitfor 5 on8
 
 # ============================================================================
 # D. fleet-open from the remote session goes back through the proxy
