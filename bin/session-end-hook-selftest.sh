@@ -311,11 +311,13 @@ ok "merged PR + parked → issue OPEN, worktree + branch kept, row recorded"
 clr; REASON=prompt_input_exit ISS=10 WID='@10' GH_MERGED_HEAD=issue-10 GH_MERGED_PR=120 \
   GH_CLOSES='Closes #10' GH_ISSUE_REASON=REOPENED run_hook
 grep -q 'CLOSE' "$GHLOG" && fail "a REOPENED issue must stay open" "$(cat "$GHLOG")"
+[ -d "$WT10" ] && fail "a reopened issue's merged worktree is still reaped"
 ok "merged closing PR but the issue was reopened → issue KEPT open"
 
 clr; REASON=prompt_input_exit ISS=11 WID='@11' GH_MERGED_HEAD=issue-11 GH_MERGED_PR=121 \
   GH_CLOSES='fixes #11' GH_ISSUE_LABELS='bug,blocked' run_hook
 grep -q 'CLOSE' "$GHLOG" && fail "a blocked issue must stay open" "$(cat "$GHLOG")"
+[ -d "$WT11" ] && fail "a blocked issue's merged worktree is still reaped"
 ok "merged closing PR but the issue is labelled blocked → issue KEPT open"
 
 # T7: UNMERGED worker → KEEP worktree + issue, closed-unlanded row, window gone, no gh close.
