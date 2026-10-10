@@ -223,9 +223,35 @@ def principal_hint(text):
             "仍不行则入口需要升级（#2437）" % (have, m.group(1)))
 
 
+_LAST_DIE = [""]
+_SSH_RAN = [False]  # ssh started: from then on only its 255 is a failed connect
+
+
 def die(msg, code=2):
+    _LAST_DIE[0] = msg
     sys.stderr.write("fleet connect: " + msg + "\n")
     sys.exit(code)
+
+
+def debug_after(run):
+    """A person's connect (claude-fleet#2894): its outcome to
+    fleet-debug-prompt.sh — a third failure in half an hour asks whether the hub
+    should take a look. The code is the connect's, whatever the prompt does; an
+    interrupt (130, 143) is no failure, nor is the far end's own exit once ssh
+    connected — only ssh's 255 is. FLEET_DEBUG_PROMPT=0: as before."""
+    try:
+        rc = run()
+    except SystemExit as e:
+        rc = e.code if isinstance(e.code, int) else (0 if e.code is None else 1)
+    prompt = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fleet-debug-prompt.sh")
+    if os.environ.get("FLEET_DEBUG_PROMPT", "1") != "0" and os.path.isfile(prompt) and rc not in (130, 143, -2, -15):
+        failed = bool(rc) and (not _SSH_RAN[0] or rc == 255)
+        try:
+            subprocess.call(["sh", prompt, "after", "connect", str(rc) if failed else "0",
+                             _LAST_DIE[0] if failed else ""])
+        except OSError:
+            pass
+    return rc
 
 
 def env_num(name, default, cast=float):
@@ -1106,6 +1132,7 @@ def run_logged(cmd, alias, route, login):
                                                                          route.get("port") or 22, login or "-"))
     try:
         child = subprocess.Popen(cmd)
+        _SSH_RAN[0] = True
     except OSError as e:
         clog("ssh-end", alias, route["kind"], 0, "fail", "cannot run ssh: %s" % e)
         die("cannot run ssh: %s" % e, 1)
@@ -1497,9 +1524,14 @@ def main(argv):
         if rc == 0 and load_cache().get("last"):
             save_pin(load_cache()["last"], a.route)
         return rc
-    if a.enter or a.pick:
-        return enter(a.machine, hub, token, a.verbose, a.retest, a.print_only, ssh_args, a.ssh_opts, a.pick)
-    return connect(a.machine, hub.rstrip("/"), token, a.verbose, a.retest, a.print_only, ssh_args, ssh_opts=a.ssh_opts)
+    if a.pick or a.print_only:
+        if a.enter or a.pick:
+            return enter(a.machine, hub, token, a.verbose, a.retest, a.print_only, ssh_args, a.ssh_opts, a.pick)
+        return connect(a.machine, hub.rstrip("/"), token, a.verbose, a.retest, a.print_only, ssh_args, ssh_opts=a.ssh_opts)
+    if a.enter:
+        return debug_after(lambda: enter(a.machine, hub, token, a.verbose, a.retest, False, ssh_args, a.ssh_opts, False))
+    return debug_after(lambda: connect(a.machine, hub.rstrip("/"), token, a.verbose, a.retest, False, ssh_args,
+                                       ssh_opts=a.ssh_opts))
 
 
 if __name__ == "__main__":
