@@ -418,6 +418,7 @@ func (a *Agent) nodeHeartbeat(ctx context.Context, probe *fleetProbe) control.He
 	})
 	fp.fill(&hb, at)
 	hb.Routes = a.nodeRoutes(ctx)
+	hb.HostKeys = nodeHostKeys()
 	// Explicit either way in a beat (claude-fleet#1720): a true tells the hub
 	// that `fleet node compute on` overrode a hello that said off.
 	on := !a.computeOffNow()

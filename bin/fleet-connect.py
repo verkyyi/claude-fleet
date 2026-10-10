@@ -909,9 +909,60 @@ def pick_machine(machines, want, last):
     return machines[0] if machines else None
 
 
-def ssh_command(machine, route, login, hub, ssh_opts=()):
+def known_hosts_path():
+    return os.environ.get("FLEET_KNOWN_HOSTS") or os.path.join(os.path.expanduser("~"), ".ssh", "fleet-known-hosts")
+
+
+HOST_KEY_RE = re.compile(r"^(ssh-ed25519|ecdsa-sha2-nistp(256|384|521)|ssh-rsa) [A-Za-z0-9+/]+={0,3}$")
+
+
+def host_keys(machine):
+    """The machine's sshd host keys as the hub lists them (claude-fleet#2983),
+    each "<type> <base64>" — anything else is dropped: it goes into a file ssh
+    trusts."""
+    ks = machine.get("host_keys") if isinstance(machine, dict) else None
+    return [k for k in ks if isinstance(k, str) and HOST_KEY_RE.match(k)] if isinstance(ks, list) else []
+
+
+def write_known_hosts(machine):
+    """The hub's word for this machine's host keys, under the HostKeyAlias ssh
+    checks (fleet-<alias>), into ~/.ssh/fleet-known-hosts (claude-fleet#2983):
+    a new person's first connection then asks no yes/no question, and a key
+    the hub does not list is still refused (ssh's own "host key has changed").
+    The file is the hub's: this machine's lines are replaced, the others kept.
+    False when the hub listed no keys — ssh then checks as it always did."""
+    keys = host_keys(machine)
+    if not keys:
+        return False
+    alias = "fleet-" + (machine.get("alias") or machine.get("hostname"))
+    path = known_hosts_path()
+    try:
+        with open(path) as f:
+            keep = [l for l in f.read().splitlines() if l.strip() and l.split()[0] != alias]
+    except OSError:
+        keep = []
+    text = "\n".join(keep + ["%s %s" % (alias, k) for k in keys]) + "\n"
+    try:
+        os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+        tmp = "%s.%d.tmp" % (path, os.getpid())
+        with open(tmp, "w") as f:
+            f.write(text)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, path)
+    except OSError:
+        return False
+    return True
+
+
+def ssh_command(machine, route, login, hub, ssh_opts=(), known_hosts=False):
+    """known_hosts: write_known_hosts wrote this machine's keys — ssh checks
+    ~/.ssh/fleet-known-hosts first, then the person's own known_hosts."""
     alias = machine.get("alias") or machine.get("hostname")
     cmd = ["ssh", "-o", "HostKeyAlias=fleet-" + alias, "-o", "ConnectTimeout=15"]
+    if known_hosts:
+        # ~ as ssh expands it: a home with a space would split an absolute path
+        mine = os.environ.get("FLEET_KNOWN_HOSTS") or "~/.ssh/fleet-known-hosts"
+        cmd += ["-o", "UserKnownHostsFile=%s ~/.ssh/known_hosts" % mine]
     key, cert = cert_paths()
     if os.path.exists(key) and os.path.exists(cert):
         cmd += ["-i", key, "-o", "CertificateFile=" + cert]
@@ -1096,7 +1147,8 @@ def run_pinned(machine, label, route, pin, login, hub, verbose, print_only, ssh_
 def run_ssh(machine, route, login, hub, print_only, ssh_args, ssh_opts=(), pin=""):
     alias = machine.get("alias") or machine.get("hostname") or "?"
     login = login_override(login)
-    cmd = ssh_command(machine, route, login, hub, ssh_opts) + list(ssh_args)
+    kh = write_known_hosts(machine)
+    cmd = ssh_command(machine, route, login, hub, ssh_opts, known_hosts=kh) + list(ssh_args)
     rf = os.environ.get("FLEET_CONNECT_ROUTE_FILE")
     if rf and not print_only:
         try:

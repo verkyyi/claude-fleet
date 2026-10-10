@@ -578,6 +578,14 @@ type Heartbeat struct {
 	// agent older than #1414, or one that knows no route.
 	Routes []NodeRoute `json:"routes,omitempty"`
 
+	// HostKeys is this machine's sshd host public keys, one
+	// "<type> <base64>" each (claude-fleet#2983): the hub hands them to
+	// `fleet connect` with the routes, so a new person's first connection
+	// is checked against them instead of asking ssh's yes/no question. A
+	// key the machine does not report is still refused. Absent on an agent
+	// older than #2983, or one that cannot read /etc/ssh.
+	HostKeys []string `json:"host_keys,omitempty"`
+
 	// Credsep is this login's credential separation as `fleet-credsep.sh
 	// status` + `check` judge it (claude-fleet#2295, EPIC #2293 共同约定 1):
 	// CredsepSeparated only when status says separated AND check passes,

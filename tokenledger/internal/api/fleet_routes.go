@@ -61,6 +61,7 @@ func (s *Server) fleetMachinesRaw() []FleetMachine {
 			if out[i].Alias == "" {
 				out[i].Alias = m.Alias
 			}
+			out[i].HostKeys = append(append([]string(nil), out[i].HostKeys...), m.HostKeys...)
 			continue
 		}
 		m.Routes = append([]FleetRoute(nil), m.Routes...)
@@ -68,18 +69,31 @@ func (s *Server) fleetMachinesRaw() []FleetMachine {
 		out = append(out, m)
 	}
 	if s.Store == nil {
-		return out
+		return withHostKeys(out, nil)
 	}
 	rows, err := s.Store.Nodes()
 	if err != nil {
 		log.Printf("fleet routes: read the node roster: %v", err)
-		return out
+		return withHostKeys(out, nil)
 	}
+	// A machine's host keys are its NEWEST heartbeat's (claude-fleet#2983):
+	// several logins report the same machine, and a login that stopped
+	// beating before the machine's keys changed must not keep the old ones
+	// trusted.
+	keys := map[string][]string{}
+	keysAt := map[string]time.Time{}
 	for _, n := range rows {
 		var hb struct {
-			Routes []control.NodeRoute `json:"routes"`
+			Routes   []control.NodeRoute `json:"routes"`
+			HostKeys []string            `json:"host_keys"`
 		}
-		if json.Unmarshal([]byte(n.StatusJSON), &hb) != nil || len(hb.Routes) == 0 || !sshToken(n.Hostname) {
+		if json.Unmarshal([]byte(n.StatusJSON), &hb) != nil || !sshToken(n.Hostname) {
+			continue
+		}
+		if hk := control.HostKeys(hb.HostKeys); len(hk) > 0 && n.LastHeartbeat != nil && !n.LastHeartbeat.Before(keysAt[n.Hostname]) {
+			keys[n.Hostname], keysAt[n.Hostname] = hk, *n.LastHeartbeat
+		}
+		if len(hb.Routes) == 0 {
 			continue
 		}
 		i, ok := idx[n.Hostname]
@@ -102,7 +116,17 @@ func (s *Server) fleetMachinesRaw() []FleetMachine {
 			out[i].Routes = append(out[i].Routes, FleetRoute{Name: r.Name, Host: r.Host, Port: r.Port})
 		}
 	}
-	return out
+	return withHostKeys(out, keys)
+}
+
+// withHostKeys sets each machine's HostKeys: what the operator's lists gave,
+// then what the machine reported (byHost), each held to control.HostKey —
+// they end up in a known_hosts file.
+func withHostKeys(ms []FleetMachine, byHost map[string][]string) []FleetMachine {
+	for i := range ms {
+		ms[i].HostKeys = control.HostKeys(append(append([]string(nil), ms[i].HostKeys...), byHost[ms[i].Hostname]...))
+	}
+	return ms
 }
 
 // RoutesRequest proves a connection certificate: Sig is `ssh-keygen -Y sign

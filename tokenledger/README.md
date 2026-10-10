@@ -1802,7 +1802,14 @@ snippet), without the relay.
 The route list is the hub's `CCQUOTA_FLEET_ROUTES` merged with what each node's
 heartbeat advertises (`routes`); the static list comes first and wins by route
 name. Each machine also carries `relay: true` while an agent there can carry a
-relay. The list admits the same credentials as the relay — a certificate proves
+relay, and `host_keys` — its sshd host keys (`"<type> <base64>"`), the
+static entry's own plus what the machine's NEWEST heartbeat reported from
+`/etc/ssh/ssh_host_*_key.pub` (claude-fleet#2983). `fleet connect` writes
+them into `~/.ssh/fleet-known-hosts` as `fleet-<alias> <key>` and adds
+`UserKnownHostsFile=~/.ssh/fleet-known-hosts ~/.ssh/known_hosts`, so a new
+person's first connection asks no yes/no question while a key the hub did not
+list is still refused; a machine with no listed key is checked as before. The
+list admits the same credentials as the relay — a certificate proves
 itself by signing `fleet-routes <unix-seconds>` with `ssh-keygen -Y sign -n
 fleet-routes@claude-fleet` (POST `{"cert","sig","ts"}`, accepted within 5
 minutes of the hub's clock) — and filters to the caller's machines. The same
