@@ -117,9 +117,16 @@ def _person_layer():
             bundle = json.load(f)
     except (OSError, ValueError):
         return None
-    if not isinstance(bundle, dict) or bundle.get('rules') in (None, '', []):
+    if not isinstance(bundle, dict):
         return None
-    rules, ver = bundle['rules'], bundle.get('version')
+    ver = bundle.get('version')
+    # the cache C3 writes is {version, bundle: {rules, roles, …}}; a flat
+    # {version, rules} (written by hand) reads the same
+    if isinstance(bundle.get('bundle'), dict) and 'rules' in bundle['bundle']:
+        bundle = bundle['bundle']
+    if bundle.get('rules') in (None, '', []):
+        return None
+    rules = bundle['rules']
     label = '你的 v%s' % ver if ver not in (None, '') else '你的'
     if isinstance(rules, str):
         return parse(rules), label

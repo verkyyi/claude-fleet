@@ -63,6 +63,17 @@
 #                  doctor row reads 入口 vN · 本机 vN · 拉到 <UTC>; a failed sync
 #                  is recorded (rc) and, past FLEET_TEAM_PUSH_WARN_SECS, WARNs
 #                  尚未生效; the retry clears it
+#
+# A person's roles and rules, kept on the hub (issue #2784, EPIC #2781 C3):
+#   U. roles       a personal layer carrying `roles` / `rules` is taken (the
+#                  hub's allow-list, kept in step): an unknown role, a role over
+#                  16 KiB, a literal token in an overlay are refused, the cache
+#                  kept; `person` reads the layer alone (no team read, no apply)
+#                  and records person-sync.json; `sync --person-version N` records
+#                  the push; `status --roles` is the doctor's row — 入口 vN · 本机 vN
+#                  · 拉到 …, WARN past a day or behind the push; no layer → no
+#                  file, no row; two logins on one machine (two FLEET_CONF_DIRs)
+#                  each keep their own person's
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 real="$BIN/fleet-agent-team.py"
@@ -444,7 +455,7 @@ before=$(snap)
 presp '{"version":6,"prev":5,"bundle":{"mcp":{"gh":{"command":"x","env":{"GITHUB_TOKEN":"abc123"}}}}}'
 out=$(team sync)
 printf '%s' "$out" | grep -q '^personal: refused v6: .*GITHUB_TOKEN looks like a credential — the personal layer' \
-  && [ "$(j "$CONF/person-bundle.json" "d['version']")" = 5 ] && [ "$(snap | grep -v agent-)" = "$(printf '%s\n' "$before" | grep -v agent-)" ] \
+  && [ "$(j "$CONF/person-bundle.json" "d['version']")" = 5 ] && [ "$(snap | grep -v -e agent- -e person-sync)" = "$(printf '%s\n' "$before" | grep -v -e agent- -e person-sync)" ] \
   && ok "Q a credential in the personal layer is refused; v5 kept, nothing written" || bad "Q: $out"
 presp '{"version":6,"prev":5,"bundle":{"hook_scripts":{"x.sh":"echo hi"},"mcp":{"pnew":{"command":"p-new"}}}}'
 out=$(team sync)
@@ -521,6 +532,57 @@ out=$(PSEAM='printf ""' team sync --hub-version 12); rc=$?
 out2=$(env -i PATH="$PATH" HOME="$H" FLEET_CONF_DIR="$CONF" FLEET_TEAM_PUSH_WARN_SECS=-1 "$PY" "$T" status --team 2>&1); rc2=$?
 [ "$rc" = 0 ] && [ "$rc2" = 0 ] && printf '%s\n' "$out2" | grep -q '^入口 v12 · 本机 v12 · 拉到 ' \
   && ok "T the retry applies v12 and clears the WARN" || bad "T retry rc=$rc/$rc2: $out / $out2"
+
+# ── U — a person's roles and rules (#2784) ────────────────────────────────────
+for who in alice bob; do mkdir -p "$WORK/u-$who/h" "$WORK/u-$who/c"; done
+ut() {   # ut <login> <args…> — one login's script; its person's answer is $WORK/u-<login>.json
+  local who="$1"; shift
+  env -i PATH="$PATH" HOME="$WORK/u-$who/h" FLEET_CONF_DIR="$WORK/u-$who/c" \
+    ${USEAM:+FLEET_PERSON_BUNDLE_CMD="$USEAM"} ${UWARN:+FLEET_ROLES_WARN_SECS="$UWARN"} \
+    FLEET_TEAM_BUNDLE_CMD="printf '{\"version\":0,\"bundle\":{}}'" "$PY" "$T" "$@" 2>&1
+}
+out=$(USEAM='printf ""' ut alice person); rc=$?
+out2=$(ut alice status --roles); rc2=$?
+[ "$rc" = 0 ] && [ -z "$out" ] && [ "$rc2" = 3 ] && [ -z "$out2" ] && [ -z "$(ls -A "$WORK/u-alice/c")" ] \
+  && ok "U no personal layer → person writes nothing, status --roles no row (exit 3)" || bad "U degenerate rc=$rc/$rc2: $out $out2 $(ls -A "$WORK/u-alice/c")"
+printf '%s\n' '{"version":4,"prev":3,"bundle":{"roles":{"steward":"---\nmodel: sonnet\n---\n","worker":{"effort":"high"}},"rules":"| 编号 | 角色 | 条件 | 动作 | 档位 | 关键词 |\n|---|---|---|---|---|---|\n| 101 | steward | 问的是金额 | 必须问你（never:money） | ask | 报价, 金额 |\n"}}' > "$WORK/u-alice.json"
+printf '%s\n' '{"version":2,"prev":1,"bundle":{"roles":{"orchestrator":"---\neffort: max\n---\n"}}}' > "$WORK/u-bob.json"
+for who in alice bob; do USEAM="cat $WORK/u-$who.json" ut "$who" person >/dev/null; done
+[ "$(j "$WORK/u-alice/c/person-bundle.json" "[d['version'], sorted(d['bundle']['roles']), '| 101 | steward |' in d['bundle']['rules']]")" = '[4, ["steward", "worker"], true]' ] \
+  && [ "$(j "$WORK/u-bob/c/person-bundle.json" "[d['version'], sorted(d['bundle']['roles'])]")" = '[2, ["orchestrator"]]' ] \
+  && [ "$(j "$WORK/u-alice/c/person-sync.json" "[d['rc'], d['checked'] == d['tried']]")" = '[0, true]' ] \
+  && [ ! -e "$WORK/u-alice/c/agent-effective.json" ] \
+  && ok "U person: roles + rules taken, each login its own person's (alice v4, bob v2), no apply" \
+  || bad "U person: $(cat "$WORK/u-alice/c/person-bundle.json" "$WORK/u-bob/c/person-bundle.json" 2>&1 | head -5)"
+src=$(env -i PATH="$PATH" HOME="$WORK/u-alice/h" FLEET_CONF_DIR="$WORK/u-alice/c" "$PY" "$REPO/bin/fleet-role.py" rules --json 2>/dev/null \
+        | "$PY" -c 'import json,sys; print([r["source"] for r in json.load(sys.stdin)["rows"] if r["n"]==101])')
+[ "$src" = "['你的 v4']" ] && ok "U the rule table (C5) reads rule 101 from the cache this fetch wrote: 你的 v4" || bad "U rules source: $src"
+out=$(ut alice status --roles); rc=$?
+[ "$rc" = 0 ] && printf '%s\n' "$out" | grep -Eq '^入口未推送（随同步拉） · 本机 v4 · 角色 steward worker · 拉到 20[0-9-]+T[0-9:]+Z（[0-9]+ 秒前）$' \
+  && ok "U doctor row: $out" || bad "U status --roles rc=$rc: $out"
+for bad_b in '{"roles":{"reviewer":"x"}}' '{"roles":{"worker":3}}' '{"rules":{"r1":"x"}}' '{"rules":["x"]}' \
+    '{"roles":{"worker":"---\nmcpServers:\n  gh: {env: {X: ghp_abcdefghijklmnopqrstuvwxyz0123}}\n---\n"}}' \
+    "{\"roles\":{\"worker\":\"$(head -c 17000 /dev/zero | tr '\0' a)\"}}"; do
+  printf '{"version":5,"prev":4,"bundle":%s}\n' "$bad_b" > "$WORK/u-bad.json"
+  out=$(USEAM="cat $WORK/u-bad.json" ut alice person); rc=$?
+  [ "$rc" = 2 ] && [ "$(j "$WORK/u-alice/c/person-bundle.json" "d['version']")" = 4 ] \
+    && ok "U refused, v4 kept: $(printf '%s' "$out" | cut -c1-80)" || bad "U not refused rc=$rc: $out"
+done
+printf '%s\n' '{"version":5,"prev":4,"bundle":{"roles":{"steward":"---\nmodel: haiku\n---\n"}}}' > "$WORK/u-alice.json"
+out=$(USEAM='exit 7' ut alice sync --person-version 5); rc=$?
+out2=$(UWARN=999999 ut alice status --roles); rc2=$?
+[ "$(j "$WORK/u-alice/c/person-sync.json" "[d['hub_version'], d['rc']]")" = '[5, 1]' ] && [ "$rc2" = 0 ] \
+  && printf '%s\n' "$out2" | grep -q '^入口 v5 · 本机 v4 .*入口已推 v5，本机还没拿到' \
+  && ok "U a push whose read failed: recorded, named, not yet a WARN" || bad "U push failed rc=$rc/$rc2: $out / $out2"
+out=$(USEAM="cat $WORK/u-alice.json" ut alice sync --person-version 5); rc=$?
+out2=$(ut alice status --roles); rc2=$?
+[ "$rc" = 0 ] && [ "$rc2" = 0 ] && printf '%s\n' "$out2" | grep -q '^入口 v5 · 本机 v5 · 角色 steward · 拉到 ' \
+  && [ "$(j "$WORK/u-alice/c/person-bundle.json" "d['bundle']['roles']['steward']")" = '"---\nmodel: haiku\n---\n"' ] \
+  && ok "U sync --person-version 5 → 入口 v5 = 本机 v5" || bad "U push rc=$rc/$rc2: $out / $out2"
+out=$(UWARN=-1 ut alice status --roles); rc=$?
+[ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q '缓存超过' && ok "U a read older than FLEET_ROLES_WARN_SECS → WARN" || bad "U stale rc=$rc: $out"
+[ "$(j "$WORK/u-bob/c/person-bundle.json" "d['version']")" = 2 ] && [ "$(j "$WORK/u-bob/c/person-sync.json" "d.get('hub_version')")" = null ] \
+  && ok "U bob's login untouched by alice's push" || bad "U bob crossed: $(cat "$WORK/u-bob/c/"*.json)"
 
 [ "$fail" = 0 ] && echo "fleet-agent-team-selftest: PASS" || echo "fleet-agent-team-selftest: FAIL"
 exit "$fail"

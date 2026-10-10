@@ -18,6 +18,11 @@
 #   F  a credential-shaped value refuses the layer
 #   G  `fleet role show` reaches it (bin/fleet's fleet-<cmd>.py dispatch)
 #   H  fleet-doctor's `roles` row: none in the degenerate case, 有本机层 with one
+#   I  the person's layer is read again before a launch (issue #2784, C3): a cache
+#      older than FLEET_ROLE_STALE is re-read and the launch uses the new version;
+#      a fresh one is not; the hub refusing (503) or hanging leaves the cache
+#      standing within FLEET_ROLE_FETCH_SECS; FLEET_ROLE_STALE=0 or no layer here
+#      asks nothing
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$BIN/.." && pwd)"
@@ -178,6 +183,45 @@ rm -f "$FLEET_CONF_DIR/roles/steward.md"
 [ -x "$BIN/fleet-role.py" ] && sh "$BIN/fleet" role show steward --sources 2>/dev/null | grep -q '^model: opus *# 自带$' \
   && ok "G: fleet role show reaches fleet-role.py" || bad "G: fleet role show: $(sh "$BIN/fleet" role show steward 2>&1 | head -3)"
 grep -q 'fleet role show' "$BIN/fleet" && ok "G: fleet --help names it" || bad "G: fleet --help lacks fleet role show"
+
+# --- I the person's layer, read again before a launch (#2784) ---------------------
+rm -f "$FLEET_CONF_DIR"/roles/*.good.json "$FLEET_CONF_DIR"/roles/*.last.json
+asked="$WORK/asked"
+pb() {   # pb <version> <model> <age secs> — this login's cached personal layer
+  python3 - "$FLEET_CONF_DIR/person-bundle.json" "$1" "$2" "$3" <<'PY'
+import json, sys, time
+p, v, m, age = sys.argv[1], int(sys.argv[2]), sys.argv[3], int(sys.argv[4])
+json.dump({"version": v, "fetched": int(time.time()) - age,
+           "bundle": {"roles": {"steward": "---\nmodel: %s\n---\n" % m}}}, open(p, "w"))
+PY
+  rm -f "$FLEET_CONF_DIR/person-sync.json" "$FLEET_CONF_DIR/roles/person-refresh.at" "$asked"
+}
+printf '{"version":2,"bundle":{"roles":{"steward":"---\\nmodel: haiku\\n---\\n"}}}\n' > "$WORK/hub-v2.json"
+model() { R render steward --kv 2>/dev/null | sed -n 's/^model	//p'; }
+pb 1 sonnet 3600
+[ "$(FLEET_PERSON_BUNDLE_CMD="touch $asked; cat $WORK/hub-v2.json" model)" = haiku ] && [ -e "$asked" ] \
+  && [ "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "$FLEET_CONF_DIR/person-bundle.json")" = 2 ] \
+  && ok "I: a cache older than FLEET_ROLE_STALE is read again; the launch uses v2 (haiku)" || bad "I: stale not refreshed: $(model)"
+[ "$(FLEET_PERSON_BUNDLE_CMD="touch $asked.2; exit 1" model)" = haiku ] && [ ! -e "$asked.2" ] \
+  && ok "I: a fresh cache asks nothing" || bad "I: a fresh cache was read again"
+pb 1 sonnet 3600
+t0=$(date +%s)
+[ "$(FLEET_PERSON_BUNDLE_CMD="touch $asked; echo 503 >&2; exit 1" model)" = sonnet ] && [ -e "$asked" ] \
+  && [ "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["rc"])' "$FLEET_CONF_DIR/person-sync.json")" = 1 ] \
+  && ok "I: the hub refusing → the launch uses the cached v1, the failure recorded" || bad "I: 503: $(model)"
+pb 1 sonnet 3600
+t0=$(date +%s)
+m=$(FLEET_ROLE_FETCH_SECS=2 FLEET_PERSON_BUNDLE_CMD="touch $asked; sleep 20" model); t1=$(date +%s)
+[ "$m" = sonnet ] && [ $((t1 - t0)) -le 8 ] && [ -e "$asked" ] \
+  && ok "I: the hub hanging → the launch waits FLEET_ROLE_FETCH_SECS, then uses the cache ($((t1 - t0))s)" || bad "I: hang: $m in $((t1 - t0))s"
+[ "$(FLEET_PERSON_BUNDLE_CMD="touch $asked.3; cat $WORK/hub-v2.json" model)" = sonnet ] && [ ! -e "$asked.3" ] \
+  && ok "I: a refresh that just failed is not tried again for a minute" || bad "I: retried at once"
+pb 1 sonnet 3600
+[ "$(FLEET_ROLE_STALE=0 FLEET_PERSON_BUNDLE_CMD="touch $asked; cat $WORK/hub-v2.json" model)" = sonnet ] && [ ! -e "$asked" ] \
+  && ok "I: FLEET_ROLE_STALE=0 → nothing asked" || bad "I: STALE=0 asked"
+rm -f "$FLEET_CONF_DIR/person-bundle.json" "$FLEET_CONF_DIR/person-sync.json" "$FLEET_CONF_DIR"/roles/*.good.json "$FLEET_CONF_DIR"/roles/person-refresh.at
+[ "$(FLEET_PERSON_BUNDLE_CMD="touch $asked; cat $WORK/hub-v2.json" model)" = opus ] && [ ! -e "$asked" ] \
+  && [ ! -e "$FLEET_CONF_DIR/person-bundle.json" ] && ok "I: no personal layer here → nothing asked, the built-in launch" || bad "I: degenerate asked"
 
 [ "$fails" = 0 ] && { echo "fleet-role-merge selftest: all green"; exit 0; }
 echo "fleet-role-merge selftest: $fails FAILED"; exit 1

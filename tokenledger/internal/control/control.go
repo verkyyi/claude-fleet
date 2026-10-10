@@ -98,6 +98,14 @@ const (
 	// runs fleet-agent-team.py sync and retries on its next beat until one
 	// succeeds; it answers nothing. No team layer (version 0) → never sent.
 	TypeTeam = "team"
+	// TypePerson is the hub's word that a person's own configuration is at
+	// Version (claude-fleet#2784, EPIC #2781 C3): sent to a node that listed
+	// CapPerson and whose login is bound to that person, on the first
+	// heartbeat of each connection and the moment the person (or the
+	// operator's restore) PUTs a new version. The node runs the same
+	// fleet-agent-team.py sync as for TypeTeam and retries on its next beat.
+	// No personal layer (version 0) or no person behind the login → never sent.
+	TypePerson = "person"
 )
 
 // CapRead is the hello capability a node lists when it answers TypeRequest.
@@ -120,6 +128,11 @@ const CapRelay = "relay"
 // hub never pushes a team version to a node that did not say it, so an older
 // agent sees nothing new and keeps following on install-sync's tick.
 const CapTeam = "team"
+
+// CapPerson is the hello capability a node lists when it follows TypePerson
+// (claude-fleet#2784). An older agent never says it, so it is never sent one
+// and keeps reading the personal layer on install-sync's tick.
+const CapPerson = "person"
 
 // CapMove is the hello capability a node lists when it takes a session moved
 // to it through the hub (claude-fleet#1426): before it hands a
@@ -252,6 +265,12 @@ type WorkerLoc struct {
 // Team is the payload of TypeTeam.
 type Team struct {
 	TeamVersion int `json:"team_version"`
+}
+
+// Person is the payload of TypePerson: whose layer, and its version.
+type Person struct {
+	Principal string `json:"principal"`
+	Version   int    `json:"version"`
 }
 
 // Workers is the payload of TypeWorkers.

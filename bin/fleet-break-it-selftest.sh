@@ -805,6 +805,26 @@ drill_role_overlay_broken() {
   WHAT="覆盖层写坏：整层不用，用这一层上一份好的（模型还是 sonnet），show 第一行说原因"
 }
 
+# person-hub-down (issue #2784, EPIC #2781 C3): a person's role layer is kept on
+# the hub and read again before a launch when the cache is old. With the hub
+# away the launch must neither wait on it nor drop the person's change: it waits
+# FLEET_ROLE_FETCH_SECS at most, opens on the cached copy, and the doctor's
+# `roles` row says how old that copy is.
+drill_person_hub_down() {
+  CAP=6; local t0 c="$WORK/phconf" kv row
+  mkdir -p "$c"
+  printf '{"version": 3, "fetched": %s, "bundle": {"roles": {"steward": "---\\nmodel: sonnet\\n---\\n"}}}\n' \
+    "$(( $(date +%s) - 2 * 86400 ))" > "$c/person-bundle.json"
+  t0=$(now)
+  kv=$(FLEET_CONF_DIR="$c" FLEET_ROLE_FETCH_SECS=2 FLEET_PERSON_BUNDLE_CMD='sleep 30' \
+         python3 "$BIN/fleet-role.py" render steward --kv 2>/dev/null)   # the break: the hub hangs
+  SECS=$(since "$t0")
+  printf '%s\n' "$kv" | grep -qx 'model	sonnet' || { WHY="the hub away dropped the person's change: $kv"; return 1; }
+  row=$(FLEET_CONF_DIR="$c" python3 "$BIN/fleet-agent-team.py" status --roles 2>/dev/null)
+  case "$row" in *'本机 v3'*'2 天前'*'缓存超过'*) ;; *) WHY="the doctor does not say how old the copy is: [$row]"; return 1 ;; esac
+  WHAT="入口挂住：开会话最多等 2 秒，用缓存的 v3（模型还是 sonnet）照常开；doctor 说「拉到 … 2 天前」并 WARN"
+}
+
 # orchestrator-compacted (issue #2583, EPIC #2581 C2): a compaction leaves the
 # orchestrator a summary that may drop the batches it follows, the children it
 # waits on, the reports it has not passed on — and the Loop, which then never

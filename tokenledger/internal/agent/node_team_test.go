@@ -113,3 +113,83 @@ func TestTeamPushSyncRetryDedup(t *testing.T) {
 		t.Fatalf("exit 3: %d runs, want 5 (no retry)", count())
 	}
 }
+
+// A pushed person version (claude-fleet#2784): the same sync, flagged
+// --person-version, followed apart from the team's — a person's failing sync
+// never holds a team version, and the other way round.
+func TestPersonPushSyncFollowsApart(t *testing.T) {
+	home := t.TempDir()
+	a := &Agent{cfg: Config{Home: home}}
+	script := filepath.Join(home, fleetTeamScript)
+	if err := os.MkdirAll(filepath.Dir(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(script, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var runs []string
+	old := teamCommand
+	teamCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		mu.Lock()
+		runs = append(runs, strings.Join(args, " "))
+		mu.Unlock()
+		code := "0"
+		if args[1] == "--person-version" && args[2] == "2" {
+			code = "1"
+		}
+		return exec.CommandContext(ctx, "sh", "-c", "exit "+code)
+	}
+	t.Cleanup(func() { teamCommand = old })
+	idle := func() {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			busy := false
+			for _, st := range []*teamFollow{a.team(), a.person()} {
+				st.mu.Lock()
+				busy = busy || st.running
+				st.mu.Unlock()
+			}
+			if !busy {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		t.Fatal("sync never finished")
+	}
+	got := func() []string { mu.Lock(); defer mu.Unlock(); return append([]string(nil), runs...) }
+	ctx := context.Background()
+
+	pm, _ := control.New(control.TypePerson, control.Person{Principal: "p_alice", Version: 2})
+	a.handlePerson(ctx, pm)
+	idle()
+	tm, _ := control.New(control.TypeTeam, control.Team{TeamVersion: 7})
+	a.handleTeam(ctx, tm)
+	idle()
+	if r := got(); len(r) != 2 || r[0] != "sync --person-version 2" || r[1] != "sync --hub-version 7" {
+		t.Fatalf("person v2 then team v7: runs %q", r)
+	}
+	// the person's failed v2 is retried on the beat; the synced team v7 is not
+	a.teamKick(ctx)
+	idle()
+	if r := got(); len(r) != 3 || r[2] != "sync --person-version 2" {
+		t.Fatalf("beat: runs %q, want only the person's retry", r)
+	}
+	// a newer person version replaces the one that failed
+	pm, _ = control.New(control.TypePerson, control.Person{Principal: "p_alice", Version: 3})
+	a.handlePerson(ctx, pm)
+	idle()
+	a.teamKick(ctx)
+	idle()
+	if r := got(); len(r) != 4 || r[3] != "sync --person-version 3" {
+		t.Fatalf("person v3: runs %q, want one run and no retry", r)
+	}
+	// version 0 never runs
+	pm, _ = control.New(control.TypePerson, control.Person{Principal: "p_alice"})
+	a.handlePerson(ctx, pm)
+	idle()
+	if r := got(); len(r) != 4 {
+		t.Fatalf("person v0: runs %q", r)
+	}
+}

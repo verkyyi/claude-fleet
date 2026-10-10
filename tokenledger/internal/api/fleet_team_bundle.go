@@ -99,6 +99,22 @@ const personHookScriptMax = 32 << 10
 
 var personScriptRE = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 
+// A person's role overlays and rule table (claude-fleet#2784, EPIC #2781 C3):
+// `roles` is {<role>: overlay} — the agents/<role>.md text, or the same as an
+// object — for the four roles there are, each at most 16 KiB; `rules` is the
+// rows that override the built-in table by number — a Markdown table in
+// conf/role-rules.default.md's format, or a list of rows (bin/fleet_rules.py,
+// C5, owns a row's shape and refuses a layer it cannot read) — at most 32 KiB.
+// Both are the personal layer's alone; the team layer takes no roles this batch.
+const (
+	personRoleMax  = 16 << 10
+	personRulesMax = 32 << 10
+)
+
+var (
+	personRoles = map[string]bool{"orchestrator": true, "steward": true, "worker": true, "epic-driver": true}
+)
+
 // validateBundle is validateTeamBundle for either layer: a person's layer
 // (claude-fleet#1856) takes the same allow-list plus hook_scripts — the
 // programs their own hooks run — and the same credential scan over all of it.
@@ -110,12 +126,12 @@ func validateBundle(raw json.RawMessage, personal bool) (string, error) {
 		return "", errors.New("bundle must be a JSON object")
 	}
 	for k := range b {
-		if personal && k == "hook_scripts" {
+		if personal && (k == "hook_scripts" || k == "roles" || k == "rules") {
 			continue
 		}
 		if !teamBundleKeys[k] {
 			if personal {
-				return "", fmt.Errorf("bundle: %q is not part of a personal configuration (only mcp, hooks, skills, claude_settings, codex_config, hook_scripts)", k)
+				return "", fmt.Errorf("bundle: %q is not part of a personal configuration (only mcp, hooks, skills, claude_settings, codex_config, hook_scripts, roles, rules)", k)
 			}
 			return "", fmt.Errorf("bundle: %q is not something a team hands out (only mcp, hooks, skills, claude_settings, codex_config)", k)
 		}
@@ -219,6 +235,41 @@ func validateBundle(raw json.RawMessage, personal bool) (string, error) {
 		}
 		if len(txt) > personHookScriptMax {
 			return "", fmt.Errorf("bundle.hook_scripts.%s is over 32 KiB", n)
+		}
+	}
+	roles, err := obj("roles")
+	if err != nil {
+		return "", err
+	}
+	for n, v := range roles {
+		if !personRoles[n] {
+			return "", fmt.Errorf("bundle.roles.%s is not a role (orchestrator, steward, worker, epic-driver)", n)
+		}
+		switch v.(type) {
+		case string, map[string]any:
+		default:
+			return "", fmt.Errorf("bundle.roles.%s must be the overlay's text or an object", n)
+		}
+		if raw, _ := json.Marshal(v); len(raw) > personRoleMax {
+			return "", fmt.Errorf("bundle.roles.%s is over 16 KiB", n)
+		}
+	}
+	if rules, ok := all["rules"]; ok {
+		switch t := rules.(type) {
+		case string:
+		case []any:
+			for i, row := range t {
+				switch row.(type) {
+				case map[string]any, []any:
+				default:
+					return "", fmt.Errorf("bundle.rules[%d] must be a row (an object or its six cells)", i)
+				}
+			}
+		default:
+			return "", errors.New("bundle.rules must be a Markdown table or a list of rows")
+		}
+		if raw, _ := json.Marshal(rules); len(raw) > personRulesMax {
+			return "", errors.New("bundle.rules is over 32 KiB")
 		}
 	}
 	if path := secretIn("bundle", all); path != "" {

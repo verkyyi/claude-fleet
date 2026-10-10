@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -246,6 +247,9 @@ func (s *Server) putPersonBundle(w http.ResponseWriter, c personCaller, req Team
 		return
 	}
 	s.personAudit(c.id.Actor, c.person, fmt.Sprintf("OK v%d", b.Version), now)
+	// Every machine this person runs sessions on hears it now, not on its
+	// next install-sync tick (claude-fleet#2784).
+	s.broadcastPerson(c.person, b.Version)
 	created := b.Created
 	w.Header().Set("ETag", personETag(c.person, b.Version))
 	writeJSON(w, http.StatusOK, TeamBundleResponse{Version: b.Version, Prev: b.Prev, Actor: b.Actor,
@@ -362,4 +366,81 @@ func (s *Server) writePersonBundlePeople(w http.ResponseWriter) {
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// nodePerson is the canonical person a node connection's login is bound to,
+// "" when none (PrincipalForLogin, as the GET answers it).
+func (s *Server) nodePerson(endpointID string) string {
+	ep, err := s.Store.EndpointByID(endpointID)
+	if err != nil || ep == nil {
+		return ""
+	}
+	host, user := s.peerSelf(ep)
+	owner, err := s.Store.PrincipalForLogin(host, user)
+	if err != nil || owner == "" {
+		return ""
+	}
+	if p, err := s.Store.Principal(owner); err == nil {
+		return p.ID
+	}
+	return owner
+}
+
+// pushPerson tells one node's connection its person's version
+// (claude-fleet#2784, EPIC #2781 C3) when it has not been told it yet — the
+// team push's twin. person "" = the one its login is bound to; v 0 = read the
+// current version. No person, or a person who never wrote → no message, so a
+// hub where nobody keeps a layer sends byte for byte what it did. A failed
+// write is not recorded: the next beat tries again.
+func (s *Server) pushPerson(endpointID string, nc *nodeConn, person string, v int) {
+	if !nc.canPerson {
+		return
+	}
+	if person == "" {
+		if person = s.nodePerson(endpointID); person == "" {
+			return
+		}
+	}
+	if v <= 0 {
+		b, err := s.Store.PersonBundle(person, 0)
+		if err != nil {
+			if !errors.Is(err, store.ErrNoTeamBundle) {
+				log.Printf("node %s: read the person's version: %v", endpointID, err)
+			}
+			return
+		}
+		v = b.Version
+	}
+	key := fmt.Sprintf("%s#%d", person, v)
+	if v <= 0 || nc.personSent.Load() == key {
+		return
+	}
+	msg, err := control.New(control.TypePerson, control.Person{Principal: person, Version: v})
+	if err != nil {
+		return
+	}
+	wctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if s.nodes.get(endpointID) != nc {
+		return // a newer link took over; it hears the version on its own first beat
+	}
+	if err := s.SendNodeWrite(wctx, endpointID, msg); err != nil {
+		return
+	}
+	nc.personSent.Store(key)
+}
+
+// broadcastPerson pushes person's version v to every connected node whose
+// login is bound to that person — and to no one else's.
+func (s *Server) broadcastPerson(person string, v int) {
+	s.nodes.each(func(id string, c *nodeConn) {
+		if !c.canPerson {
+			return
+		}
+		go func() {
+			if s.nodePerson(id) == person {
+				s.pushPerson(id, c, person, v)
+			}
+		}()
+	})
 }

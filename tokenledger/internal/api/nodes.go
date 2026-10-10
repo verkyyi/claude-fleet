@@ -87,6 +87,11 @@ type nodeConn struct {
 	// none yet), so a beat pushes only a version the node has not heard.
 	canTeam  bool
 	teamSent atomic.Int64
+	// canPerson is the hello's CapPerson (claude-fleet#2784): this node
+	// follows TypePerson. personSent is the "<principal>#<version>" last
+	// told this connection, so a beat pushes only what it has not heard.
+	canPerson  bool
+	personSent atomic.Value
 	// canCredsep is an admin hello's CapCredsep (claude-fleet#2263/#2294):
 	// the logins it opens are credential-separated, so spares may go there.
 	canCredsep bool
@@ -388,7 +393,7 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 	nc := &nodeConn{wire: wire, admin: hp.Admin && s.isFleetAdmin(ep.OSUser), canRead: hp.HasCap(control.CapRead),
 		canWrite: hp.HasCap(control.CapWrite), canRelay: hp.HasCap(control.CapRelay),
 		canMove: hp.HasCap(control.CapMove), canSSHRelay: hp.HasCap(control.CapSSHRelay),
-		canTeam: hp.HasCap(control.CapTeam), canAttach: hp.HasCap(control.CapAttach),
+		canTeam: hp.HasCap(control.CapTeam), canPerson: hp.HasCap(control.CapPerson), canAttach: hp.HasCap(control.CapAttach),
 		canTest:    hp.HasCap(control.CapTestIdentity),
 		canCredsep: hp.HasCap(control.CapCredsep),
 		computeOff: !control.ComputeOn(hp.Compute), computeForce: hp.ComputeForce, probe: hp.Probe,
@@ -532,6 +537,10 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 				// The team version this link has not heard yet — on a
 				// (re)connect, the current one (claude-fleet#1899).
 				go s.pushTeam(ep.ID, nc, 0)
+			}
+			if nc.canPerson {
+				// The person's own layer, likewise (claude-fleet#2784).
+				go s.pushPerson(ep.ID, nc, "", 0)
 			}
 			if nc.admin {
 				// Each admin beat is a chance to send what is queued for

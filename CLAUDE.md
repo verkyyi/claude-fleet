@@ -352,6 +352,18 @@ Do not install from memory: read the doc and work from it.
   merge (never looser than the built-in). A bad layer is not used — its last good
   copy stands (BREAK-IT `role-overlay-broken`); no layer ⇒ byte for byte C1.
   `tests/role-merge/*.json` are the vectors the hub's Go copy (C6) runs too.
+  **The person's layer lives on the hub** (issue #2784, C3): the person bundle
+  takes `roles` (`{<role>: overlay}`, the four roles only, ≤ 16 KiB each) and
+  `rules` (C5's table text or list of rows, ≤ 32 KiB) — Go `validateBundle` and
+  `fleet-agent-team.py validate` in step, the same credential scan. A PUT pushes
+  `person` {principal, version} (`CapPerson`) to every connected login bound to
+  that person (`PrincipalForLogin`), and the agent runs `fleet-agent-team.py sync
+  --person-version N` (retried every beat, apart from the team's); `render` re-reads
+  a cache older than `FLEET_ROLE_STALE` (600 s) via `fleet-agent-team.py person`,
+  at most `FLEET_ROLE_FETCH_SECS` (3 s) — the hub away, the cache stands. The
+  doctor's `roles` row: 入口 vN · 本机 vM · 拉到 … (`status --roles`,
+  `person-sync.json`), WARN past a day. No person ⇒ no file, no row, no message
+  (`TestPersonRolesOffAddsNothing`); BREAK-IT `person-hub-down`.
 - **How the orchestrator dispatches and what the steward may answer is ONE rule
   table** (issue #2786, EPIC #2781 C5): `conf/role-rules.default.md` (编号 · 角色 ·
   条件 · 动作 · 档位 auto|default|ask|off · 关键词) < the person's layer

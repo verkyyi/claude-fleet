@@ -63,6 +63,10 @@ worker and epic-driver FLEET_MODEL and the login's own `effortLevel`
 (settings.json; a Codex worker's effort is its config.toml) — so with none of
 them changed, every role starts exactly as it did.
 
+Before `render`, a personal layer read longer ago than FLEET_ROLE_STALE (600 s)
+is read again from the hub (`fleet-agent-team.py person`, at most
+FLEET_ROLE_FETCH_SECS = 3 s; issue #2784) — the hub away, the cache stands.
+
 Reads the definition and the environment; the only writes are under
 $FLEET_CONF_DIR/roles/: the body's content-addressed copy (made once, never
 changed — a session resumed after a release still finds the file it started
@@ -72,6 +76,7 @@ definition that cannot be read (the session opens as it last did, and says so).
 import hashlib
 import json
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -615,12 +620,83 @@ def _last_path(role, agent):
     return os.path.join(conf_dir(), 'roles', '%s.%s.last.json' % (role, agent))
 
 
+def _person_age():
+    """Seconds since this login last read its personal layer from the hub
+    (person-sync.json's `checked`, else the cache's `fetched`), or None when it
+    holds no personal layer — or one with no clock (made by hand)."""
+    cd = conf_dir()
+    pc = _read_json(os.path.join(cd, 'person-bundle.json'))
+    if not isinstance(pc, dict):
+        pc = _read_json(os.path.join(cd, 'person-bundle.good.json'))
+    if not isinstance(pc, dict):
+        return None
+    rec = _read_json(os.path.join(cd, 'person-sync.json'))
+    ts = rec.get('checked') if isinstance(rec, dict) else None
+    if not isinstance(ts, (int, float)):
+        ts = pc.get('fetched')
+    if not isinstance(ts, (int, float)) or isinstance(ts, bool):
+        return None
+    return max(0, time.time() - ts)
+
+
+def refresh_person():
+    """Before a launch (issue #2784, EPIC #2781 C3): a personal layer read longer
+    ago than FLEET_ROLE_STALE (600 s) is read again — `fleet-agent-team.py person`,
+    bounded at FLEET_ROLE_FETCH_SECS (3 s). The hub down, slow or refusing: the
+    cache stands and the launch goes on with it (the doctor's `roles` row says how
+    old it is). No personal layer here, or FLEET_ROLE_STALE=0 → nothing at all,
+    byte for byte. A refresh that did not finish is not tried again for a minute,
+    so a hub that is away costs one wait, not one per launch."""
+    try:
+        stale = int(os.environ.get('FLEET_ROLE_STALE') or 600)
+        wait = float(os.environ.get('FLEET_ROLE_FETCH_SECS') or 3)
+    except ValueError:
+        stale, wait = 600, 3.0
+    if stale <= 0:
+        return
+    age = _person_age()
+    if age is None or age < stale:
+        return
+    mark = os.path.join(conf_dir(), 'roles', 'person-refresh.at')
+    try:
+        if time.time() - os.path.getmtime(mark) < 60:
+            return
+    except OSError:
+        pass
+    try:
+        os.makedirs(os.path.dirname(mark), exist_ok=True)
+        with open(mark, 'w') as f:
+            f.write('%d\n' % time.time())
+    except OSError:
+        pass
+    script = os.path.join(BIN, 'fleet-agent-team.py')
+    if not os.path.isfile(script):
+        return
+    try:
+        # its own process group: a read cut short takes everything it started with it
+        p = subprocess.Popen([sys.executable or 'python3', script, 'person', '--timeout', str(max(0.5, wait - 0.5))],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    except OSError:
+        return
+    try:
+        p.wait(timeout=wait)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(p.pid, signal.SIGKILL)
+        except OSError:
+            pass
+        p.wait()
+        print('fleet-role: the personal layer was not read again in %gs — using the copy from %d minutes ago'
+              % (wait, age // 60), file=sys.stderr)
+
+
 def render(role, agent='claude', cap=False):
     """The role's launch, and the last good one when its definition is broken:
     a definition that cannot be read or parsed is not used at all — the launch
     this computer last rendered for it stands (`stale`), so a bad edit never
     opens a session with no model and no role (docs/BREAK-IT.md role-def-broken).
     No last good one ⇒ the error."""
+    refresh_person()
     try:
         out = _render(role, agent, cap)
     except RoleError as e:
