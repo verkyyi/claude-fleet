@@ -6,6 +6,7 @@ from pathlib import Path
 import tempfile
 import unittest
 import json
+import hashlib
 import subprocess
 import sys
 from unittest.mock import patch, Mock
@@ -158,6 +159,36 @@ class LinuxNode(unittest.TestCase):
         self.assertNotIn('hostNetwork', pod)
         self.assertFalse(pod['containers'][0]['securityContext']['allowPrivilegeEscalation'])
         self.assertEqual(st['volumeClaimTemplates'][0]['spec']['accessModes'], ['ReadWriteOncePod'])
+
+    def test_image_stages_and_verifies_codex_helper(self):
+        spec = importlib.util.spec_from_file_location('image_stage', BIN.parent / 'extras/managed-node/image-stage.py')
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        with tempfile.TemporaryDirectory() as d:
+            src, dest = Path(d, 'src'), Path(d, 'dest')
+            artifacts = src / '.release/artifacts'
+            artifacts.mkdir(parents=True)
+            names = ('ccquota', 'claude', 'codex', 'tmux', 'codex-code-mode-host')
+            manifest = {'sha': 'a' * 40, 'artifacts': []}
+            for name in names:
+                content = ('fixture ' + name).encode()
+                (artifacts / name).write_bytes(content)
+                manifest['artifacts'].append({'name': name, 'sha256': hashlib.sha256(content).hexdigest()})
+            (src / '.release/manifest.json').write_text(json.dumps(manifest))
+            release = {'components': {name: {'artifact': name, 'version': '1'} for name in names[:4]}}
+            release['components']['codex']['helpers'] = {'codex-code-mode-host': 'codex-code-mode-host'}
+            (src / 'release.json').write_text(json.dumps(release))
+            helper = artifacts / 'codex-code-mode-host'
+            original = helper.read_bytes()
+            helper.write_bytes(b'wrong bytes')
+            with self.assertRaisesRegex(ValueError, 'checksum mismatch'):
+                m.stage(src, dest)
+            self.assertFalse(dest.exists())
+            helper.write_bytes(original)
+            m.stage(src, dest)
+            installed = dest / 'current/tools/bin/codex-code-mode-host'
+            self.assertEqual(installed.read_bytes(), original)
+            self.assertTrue(installed.stat().st_mode & 0o111)
 
     def test_image_update_never_resumes_saved_switch(self):
         u = module('fleet-node-update')

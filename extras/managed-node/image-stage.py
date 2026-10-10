@@ -22,14 +22,18 @@ def stage(src, root):
     got = {'release': sha}
     for tool in ('ccquota', 'claude', 'codex', 'tmux'):
         component = spec['components'][tool]
-        name = component['artifact'].format(os='linux', arch=arch, version=component.get('version', ''))
-        if Path(name).name != name or name in ('.', '..'):
-            raise ValueError('invalid artifact name')
-        file = src / '.release/artifacts' / name
-        if file.is_symlink() or hashlib.sha256(file.read_bytes()).hexdigest() != artifacts[name]['sha256']:
-            raise ValueError('artifact checksum mismatch: ' + name)
-        selected.append((tool, file))
-        got[tool] = component.get('version', artifacts[name]['sha256'])
+        binaries = {tool: component['artifact'], **component.get('helpers', {})}
+        for binary, template in binaries.items():
+            if not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_.-]*', binary):
+                raise ValueError('invalid tool/helper name')
+            name = template.format(os='linux', arch=arch, version=component.get('version', ''))
+            if Path(name).name != name or name in ('.', '..'):
+                raise ValueError('invalid artifact name')
+            file = src / '.release/artifacts' / name
+            if file.is_symlink() or hashlib.sha256(file.read_bytes()).hexdigest() != artifacts[name]['sha256']:
+                raise ValueError('artifact checksum mismatch: ' + name)
+            selected.append((binary, file))
+            got[binary] = component.get('version', artifacts[name]['sha256'])
     root.mkdir(parents=True, exist_ok=True)
     dest = root / sha
     if dest.exists() or (root / 'current').exists():
