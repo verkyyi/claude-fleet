@@ -114,6 +114,13 @@ label.f { display: grid; gap: 5px; font-size: 12.5px; font-weight: 500; color: v
 .live { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--muted); }
 .menu-btn { display: none; }
 .content { padding: 24px clamp(16px, 3vw, 32px) 64px; display: grid; gap: 20px; align-content: start; min-width: 0; }
+/* one page inside the content, swapped in place (claude-fleet#2793) */
+.content > .page { display: grid; gap: 20px; align-content: start; min-width: 0; }
+.skel { display: grid; gap: 20px; }
+.skel i { display: block; height: 14px; border-radius: 7px; background: var(--line, rgba(127,127,127,.18)); animation: skel 1.2s ease-in-out infinite alternate; }
+.skel .panel { display: grid; gap: 14px; padding: 18px; }
+@keyframes skel { from { opacity: .45; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .skel i { animation: none; } }
 .pagehead { display: flex; align-items: flex-end; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
 .pagehead p { color: var(--muted); max-width: 46rem; }
 .pagehead .acts { display: flex; gap: 8px; flex-wrap: wrap; }

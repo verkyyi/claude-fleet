@@ -5,4 +5,4 @@
 import { Shell } from '../app-shell.js';
 import { sessionsPage } from '../lib/sessions-view.js';
 
-Shell.mount('all-sessions', sessionsPage({ all: true }));
+export default Shell.mount('all-sessions', sessionsPage({ all: true }));

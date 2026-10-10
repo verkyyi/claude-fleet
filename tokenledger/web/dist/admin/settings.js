@@ -13,7 +13,7 @@ import { SETTING_GROUPS, settingValue } from '../lib/admin.js';
 import { bundleItems, bundleList, parseImport } from '../lib/pages.js';
 import { t } from '../lib/i18n.js';
 
-Shell.mount('settings', async (ctx) => {
+export default Shell.mount('settings', async (ctx) => {
   const [setR, usR, acR, tr] = await Promise.allSettled([ctx.api('/v1/fleet/settings'), ctx.api('/v1/fleet/users'), ctx.api('/v1/access'), ctx.api('/v1/fleet/team-bundle?history=1')]);
   if (setR.status === 'rejected') throw setR.reason;
   const answer = setR.value;

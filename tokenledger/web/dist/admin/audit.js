@@ -9,13 +9,19 @@ import { AUDIT_KINDS, auditDays, auditWho } from '../lib/admin.js';
 import { t } from '../lib/i18n.js';
 
 let kind = 'all';
-try { kind = new URLSearchParams(location.search).get('kind') || 'all'; } catch { /* default */ }
-if (!AUDIT_KINDS.includes(kind)) kind = 'all';
+// The filter is the address's (?kind=), read on every draw: the module is
+// loaded once and the page opened many times (claude-fleet#2793).
+function kindFromURL() {
+  let k = 'all';
+  try { k = new URLSearchParams(location.search).get('kind') || 'all'; } catch { /* default */ }
+  return AUDIT_KINDS.includes(k) ? k : 'all';
+}
 
 const avatar = (who) => `<span class="av" style="background:var(--brand)">${esc(String(who || '?').slice(0, 2).toUpperCase())}</span>`;
 const hhmm = (at) => { const d = new Date(at); return Number.isFinite(d.getTime()) ? `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}` : ''; };
 
-Shell.mount('audit', async (ctx) => {
+export default Shell.mount('audit', async (ctx) => {
+  kind = kindFromURL();
   const q = kind === 'all' ? '' : '?kind=' + encodeURIComponent(kind);
   const a = await ctx.api('/v1/admin/audit' + q);
   const counts = a.counts || {};

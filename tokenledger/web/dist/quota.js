@@ -9,7 +9,7 @@ import { esc } from './lib/shell.js';
 import { quotaTable } from './lib/pages.js';
 import { t } from './lib/i18n.js';
 
-Shell.mount('quota', async (ctx) => {
+export default Shell.mount('quota', async (ctx) => {
   const rows = await ctx.api('/v1/me/quota');
   ctx.el.innerHTML = `<div class="panel"><div class="panel-h"><div><h3>${esc(t('ui.nav.quota'))}</h3>` +
     `<span class="sub">${esc(t('ui.q.sub'))}</span></div></div>${quotaTable(rows)}</div>` +

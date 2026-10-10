@@ -8,14 +8,15 @@
 // failed one red, a row opening its log's last line.
 //
 // Reads /v1/nodes (cut to the viewer's logins by the hub) and /v1/me.logins;
-// writes nothing. Re-read every 30 s while the tab is visible.
+// writes nothing. Re-read every 30 s while the tab is visible and the page
+// shown (the poll is the page's: leaving it stops it, claude-fleet#2793).
 import { Shell } from './app-shell.js';
 import { esc, ic } from './lib/shell.js';
 import { myMachines } from './lib/pages.js';
 import { serviceRows, servicesSection, svcClick } from './lib/services.js';
 import { t } from './lib/i18n.js';
 
-const S = { timer: 0, svcs: [] };
+const S = { svcs: [] };
 
 const CHIP = { on: 'ok', coord: '', paused: 'warn', maint: 'warn', lost: 'bad' };
 
@@ -36,7 +37,7 @@ function draw(ctx, rows, svcs) {
     servicesSection(svcs);
 }
 
-Shell.mount('mymachines', async (ctx) => {
+export default Shell.mount('mymachines', async (ctx) => {
   const load = async () => {
     const snap = await ctx.api('/v1/nodes');
     const rows = myMachines(snap, ctx.me);
@@ -46,5 +47,5 @@ Shell.mount('mymachines', async (ctx) => {
   };
   ctx.el.onclick = (e) => { svcClick(ctx, e, S.svcs); };
   await load();
-  if (!S.timer) S.timer = setInterval(() => { if (!document.hidden) load().catch(() => {}); }, 30000);
+  ctx.every(30000, () => { if (!document.hidden) load().catch(() => {}); });
 });

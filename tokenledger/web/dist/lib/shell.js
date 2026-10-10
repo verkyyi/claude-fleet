@@ -52,28 +52,30 @@ export const ICONS = Object.freeze({
 export const ic = (name, cls) => `<svg class="i ${cls || ''}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name] || ''}</svg>`;
 
 /** PAGES is every page the menu can draw, in menu order; `label` is a t()
- *  key. `group` 'admin' goes under the Admin heading. Ids are /v1/me's (roles.go pagesFor). */
+ *  key. `group` 'admin' goes under the Admin heading. Ids are /v1/me's (roles.go pagesFor).
+ *  It is also the route table (claude-fleet#2793): `href` is the page's path,
+ *  `module` the script the shell imports to draw it (lib/router.js). */
 export const PAGES = Object.freeze([
-  { id: 'overview', label: 'ui.nav.overview', icon: 'home', href: '/' },
-  { id: 'sessions', label: 'ui.nav.sessions', icon: 'list', href: '/sessions' },
+  { id: 'overview', label: 'ui.nav.overview', icon: 'home', href: '/', module: '/overview.js' },
+  { id: 'sessions', label: 'ui.nav.sessions', icon: 'list', href: '/sessions', module: '/sessions-page.js' },
   // 我的机器 (claude-fleet#2518): a user's own machines.
-  { id: 'mymachines', label: 'ui.nav.mymachines', icon: 'server', href: '/machines' },
-  { id: 'devices', label: 'ui.nav.devices', icon: 'key', href: '/connect' },
+  { id: 'mymachines', label: 'ui.nav.mymachines', icon: 'server', href: '/machines', module: '/machines.js' },
+  { id: 'devices', label: 'ui.nav.devices', icon: 'key', href: '/connect', module: '/connect.js' },
   // 我的额度 (claude-fleet#2517).
-  { id: 'quota', label: 'ui.nav.quota', icon: 'card', href: '/quota' },
+  { id: 'quota', label: 'ui.nav.quota', icon: 'card', href: '/quota', module: '/quota.js' },
   // 我的用量 (claude-fleet#2519).
-  { id: 'usage', label: 'ui.nav.usage', icon: 'scroll', href: '/usage' },
-  { id: 'config', label: 'ui.nav.config', icon: 'sliders', href: '/config' },
+  { id: 'usage', label: 'ui.nav.usage', icon: 'scroll', href: '/usage', module: '/usage.js' },
+  { id: 'config', label: 'ui.nav.config', icon: 'sliders', href: '/config', module: '/config.js' },
   // The admin group (claude-fleet#1990): first the whole hub the four pages
   // above used to show an admin (claude-fleet#2515), then the hub's own.
-  { id: 'all-sessions', label: 'ui.nav.allSessions', icon: 'list', group: 'admin', href: '/admin/sessions' },
-  { id: 'by-person', label: 'ui.nav.byPerson', icon: 'users', group: 'admin', href: '/admin/overview' },
-  { id: 'all-devices', label: 'ui.nav.allDevices', icon: 'key', group: 'admin', href: '/admin/devices' },
-  { id: 'subscriptions', label: 'ui.nav.subscriptions', icon: 'card', group: 'admin', href: '/subscriptions' },
-  { id: 'machines', label: 'ui.nav.machines', icon: 'server', group: 'admin', href: '/nodes' },
-  { id: 'people', label: 'ui.nav.people', icon: 'users', group: 'admin', href: '/admin/users' },
-  { id: 'settings', label: 'ui.nav.settings', icon: 'gear', group: 'admin', href: '/admin/settings' },
-  { id: 'audit', label: 'ui.nav.audit', icon: 'scroll', group: 'admin', href: '/admin/audit' },
+  { id: 'all-sessions', label: 'ui.nav.allSessions', icon: 'list', group: 'admin', href: '/admin/sessions', module: '/admin/sessions.js' },
+  { id: 'by-person', label: 'ui.nav.byPerson', icon: 'users', group: 'admin', href: '/admin/overview', module: '/admin/overview.js' },
+  { id: 'all-devices', label: 'ui.nav.allDevices', icon: 'key', group: 'admin', href: '/admin/devices', module: '/admin/devices.js' },
+  { id: 'subscriptions', label: 'ui.nav.subscriptions', icon: 'card', group: 'admin', href: '/subscriptions', module: '/admin/subscriptions.js' },
+  { id: 'machines', label: 'ui.nav.machines', icon: 'server', group: 'admin', href: '/nodes', module: '/admin/nodes.js' },
+  { id: 'people', label: 'ui.nav.people', icon: 'users', group: 'admin', href: '/admin/users', module: '/admin/users.js' },
+  { id: 'settings', label: 'ui.nav.settings', icon: 'gear', group: 'admin', href: '/admin/settings', module: '/admin/settings.js' },
+  { id: 'audit', label: 'ui.nav.audit', icon: 'scroll', group: 'admin', href: '/admin/audit', module: '/admin/audit.js' },
 ]);
 
 /** navFor turns /v1/me's pages into the menu: [{heading}|{id,label,icon,href}].

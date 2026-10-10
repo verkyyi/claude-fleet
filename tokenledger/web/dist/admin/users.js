@@ -24,7 +24,7 @@ function inviteModal(ctx, inv) {
     `<div class="modal-f"><button class="btn ghost" data-shell="close">${esc(t('ui.close'))}</button></div>`);
 }
 
-Shell.mount('people', async (ctx) => {
+export default Shell.mount('people', async (ctx) => {
   const list = await ctx.api('/v1/fleet/users');
   const rows = userRows(list);
   ctx.setCount('people', rows.length);

@@ -21,7 +21,7 @@ function download(name, obj) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-Shell.mount('config', async (ctx) => {
+export default Shell.mount('config', async (ctx) => {
   const { me, admin } = ctx;
   // Everyone's own layer, an admin's included (claude-fleet#2515).
   const [pr, tr] = await Promise.allSettled([ctx.api('/v1/fleet/person-bundle?history=1'), ctx.api('/v1/fleet/team-bundle?history=1')]);

@@ -4,15 +4,25 @@
 // side drawer, confirm). A page is one call:
 //
 //   import { Shell } from './app-shell.js';
-//   Shell.mount('sessions', async (ctx) => { ctx.el.innerHTML = '…'; });
+//   export default Shell.mount('sessions', async (ctx) => { ctx.el.innerHTML = '…'; });
 //
-// ctx is { me, admin, el, api, toast, drawer, modal, confirm, close, refresh }.
-// The page draws into ctx.el; refresh() runs it again. The shell is the same
-// for the admin pages (#1990) — they mount the same way.
+// ctx is { me, admin, el, api, toast, drawer, modal, confirm, close, refresh,
+// navigate, every, after, on }. The page draws into ctx.el; refresh() runs it
+// again. The shell is the same for the admin pages (#1990) — they mount the
+// same way.
+//
+// One document, many pages (claude-fleet#2793): the frame is drawn once and
+// /v1/me read once; a click on a page the route table (PAGES' `module`) knows
+// swaps only ctx.el — history.pushState, the page's module import()ed once
+// and kept. The page left is disposed: its every/after/on timers cleared, its
+// own dispose() run, an open drawer closed. Its reads stay 30 s, so a page
+// just seen draws at once and then reads again. Shell.mount is both the
+// registration and, opened by its own old .html, the start.
 //
 // Fails closed: no /v1/me, no menu — the page says it could not tell who you
 // are and offers to sign in again, rather than drawing a menu that guesses.
-import { esc, ic, ICONS, navFor, pageAllowed, titleOf, isAdmin, viewer, liveLine, otherView } from './lib/shell.js';
+import { esc, ic, ICONS, PAGES, navFor, pageAllowed, titleOf, isAdmin, viewer, liveLine, otherView } from './lib/shell.js';
+import { routeFor, intercept, timerBag, readCache, isRead, CACHE_TTL } from './lib/router.js';
 import { t, locale, chooseLocale } from './lib/i18n.js';
 
 /** api fetches a same-origin JSON endpoint; a non-2xx throws an Error whose
@@ -82,11 +92,9 @@ export function copyText(text) {
 
 function frame(me, page) {
   const v = viewer(me);
-  // An admin's daily page and its whole-hub half, one click apart (claude-fleet#2515).
-  const sw = otherView(me, page);
   const nav = navFor(me && me.pages).map((x) => x.heading
     ? `<div class="nav-h">${esc(x.heading)}</div>`
-    : `<a class="navi" href="${esc(x.href)}"${x.id === page ? ' aria-current="page"' : ''}>${ic(x.icon)}<span>${esc(x.label)}</span><span class="cnt" data-cnt="${esc(x.id)}"></span></a>`).join('');
+    : `<a class="navi" href="${esc(x.href)}" data-page="${esc(x.id)}"${x.id === page ? ' aria-current="page"' : ''}>${ic(x.icon)}<span>${esc(x.label)}</span><span class="cnt" data-cnt="${esc(x.id)}"></span></a>`).join('');
   // The language switch (claude-fleet#2023): chooseLocale writes the cookie
   // and reloads with ?lang=, which the hub saves on the account.
   const zh = locale() === 'zh-CN';
@@ -98,11 +106,21 @@ function frame(me, page) {
     <aside class="side" id="side"><a class="logo" href="/"><span class="logo-mark"><svg viewBox="0 0 24 24">${ICONS.fleet}</svg></span>claudefleet</a>
       <div class="fleet-sw"><b>${esc(t('ui.fleet', { name: v ? v.name : '' }))}</b><span>${esc(location.host)}</span></div>
       <nav class="nav" aria-label="${esc(t('ui.nav.label'))}">${nav}</nav>${foot}</aside>
-    <div class="main"><header class="top"><button class="btn ghost sm menu-btn" data-shell="menu" aria-label="${esc(t('ui.nav.menu'))}">${ic('menu')}</button><h1>${esc(titleOf(page))}</h1><span class="spacer"></span>${sw ? `<a class="btn sm${sw.admin ? '' : ' ghost'}" id="viewsw" href="${esc(sw.href)}">${ic(sw.admin ? 'shield' : 'home')}${esc(sw.label)}</a>` : ''}<span class="live" id="live" hidden><span class="dot ok pulse"></span><span class="txt"></span></span></header>
+    <div class="main"><header class="top"><button class="btn ghost sm menu-btn" data-shell="menu" aria-label="${esc(t('ui.nav.menu'))}">${ic('menu')}</button><h1>${esc(titleOf(page))}</h1><span class="spacer"></span><span id="viewslot">${viewSwitch(me, page)}</span><span class="live" id="live" hidden><span class="dot ok pulse"></span><span class="txt"></span></span></header>
       <div class="content" id="content" aria-live="polite"><div class="ghostrow">${esc(t('ui.loading'))}</div></div></div>
     <div class="scrim nav-scrim" data-shell="menu" hidden style="z-index:44"></div>
   </div>`;
 }
+
+// viewSwitch is the top bar's way to an admin's daily page's whole-hub half
+// and back, one click apart (claude-fleet#2515).
+function viewSwitch(me, page) {
+  const sw = otherView(me, page);
+  return sw ? `<a class="btn sm${sw.admin ? '' : ' ghost'}" id="viewsw" href="${esc(sw.href)}">${ic(sw.admin ? 'shield' : 'home')}${esc(sw.label)}</a>` : '';
+}
+
+// skeleton is what the content shows between a click and the page's data.
+const skeleton = () => `<div class="skel" aria-busy="true" aria-label="${esc(t('ui.loading'))}"><i style="width:38%"></i><div class="panel"><i></i><i></i><i style="width:72%"></i><i style="width:56%"></i></div></div>`;
 
 function wire() {
   document.addEventListener('click', (e) => {
@@ -134,42 +152,193 @@ export function setCount(id, n) {
   if (c) c.textContent = n == null ? '' : String(n);
 }
 
-async function mount(page, render) {
-  document.body.innerHTML = '';
-  let me = null, err = null;
-  try { me = await api('/v1/me'); } catch (e) { err = e; }
-  document.body.innerHTML = frame(me, page);
-  document.title = `${titleOf(page)} · claudefleet`;
-  wire();
-  const el = $('#content');
+// The app, once per document: who is looking, the frame, the page shown.
+const R = { started: null, me: null, err: null, cur: null, seq: 0, pages: new Map(), cache: readCache(), fleetP: null, fleetAt: 0, perf: false };
+
+// The fleet's session list, shared by every page and the top bar's live line;
+// a read younger than the cache's 30 s answers a page's first draw.
+function fleet(fresh) {
+  if (!R.fleetP || fresh || Date.now() - R.fleetAt > CACHE_TTL) {
+    R.fleetAt = Date.now();
+    R.fleetP = api('/v1/fleet/fleet_sessions');
+    R.fleetP.catch(() => { R.fleetP = null; });
+  }
+  return R.fleetP;
+}
+
+/** mount registers a page — { id, title, render, dispose } — and returns it,
+ *  so a module ends `export default Shell.mount(…)`. Opened by its own old
+ *  .html (nothing started yet), it starts the app on itself. */
+function mount(id, render, opts = {}) {
+  const page = Object.freeze({ id, title: titleOf(id), render, dispose: opts.dispose || (() => {}) });
+  R.pages.set(id, page);
+  if (!R.started) start(id);
+  return page;
+}
+
+/** start draws the frame and the page the address names (else `fallback`).
+ *  app.html calls it with nothing; a page's old .html through mount. */
+function start(fallback) {
+  if (R.started) return R.started;
+  R.started = (async () => {
+    try {
+      const q = new URLSearchParams(location.search).get('perf');
+      if (q !== null) sessionStorage.setItem('fleet.perf', q === '0' ? '' : '1');
+      R.perf = sessionStorage.getItem('fleet.perf') === '1';
+    } catch { R.perf = false; }
+    document.body.innerHTML = '';
+    try { R.me = await api('/v1/me'); } catch (e) { R.err = e; }
+    const first = routeFor(location.pathname);
+    const id = first ? first.id : (fallback || 'overview');
+    if (!first && !fallback) history.replaceState(null, '', '/' + location.search + location.hash);
+    document.body.innerHTML = frame(R.me, id);
+    wire();
+    document.addEventListener('click', onLink);
+    window.addEventListener('popstate', () => { const p = routeFor(location.pathname); if (p) show(p.id); });
+    await show(id);
+    if (R.me) prefetch(R.me);
+    if (R.me) {
+      const live = (fresh) => fleet(fresh).then((fs) => { setLive(liveLine(fs)); setCount('sessions', (fs.sessions || []).length); }, () => setLive(''));
+      live();
+      setInterval(() => { if (!document.hidden) live(true); }, 30000);
+    }
+  })();
+  return R.started;
+}
+
+// prefetch loads the menu's other page modules once the first page is drawn
+// and the browser is idle, so a first visit costs only its own reads. A
+// module only registers its page; nothing draws until it is shown.
+function prefetch(me) {
+  const idle = window.requestIdleCallback || ((fn) => setTimeout(fn, 200));
+  idle(() => {
+    for (const p of PAGES) {
+      if (p.module && pageAllowed(me, p.id) && !R.pages.has(p.id)) import(p.module).catch(() => {});
+    }
+  });
+}
+
+// onLink opens a same-origin page link in place; everything else (⌘-click,
+// a new tab, a download, a path the app has no page for) is the browser's.
+function onLink(e) {
+  const a = e.target.closest && e.target.closest('a[href]');
+  const hit = intercept(e, a, location.origin);
+  if (!hit) return;
+  e.preventDefault();
+  navigate(hit.url);
+}
+
+/** navigate shows the page at url (a path, with its query) in place, and
+ *  writes it to the history; a path the app has no page for is a real load. */
+function navigate(url) {
+  const u = new URL(url, location.origin);
+  const p = routeFor(u.pathname);
+  if (!p) { location.assign(u.href); return Promise.resolve(); }
+  if (R.perf) performance.mark('nav-click');
+  const same = u.pathname + u.search + u.hash === location.pathname + location.search + location.hash;
+  if (!same) history.pushState(null, '', u.pathname + u.search + u.hash);
+  const app = $('#app'); if (app) app.classList.remove('nav-open');
+  const s = $('.nav-scrim'); if (s) s.hidden = true;
+  return show(p.id);
+}
+
+// leave disposes the page shown: its timers and listeners, its own
+// dispose(), and an open drawer or dialog.
+function leave() {
+  const c = R.cur;
+  if (!c) return;
+  R.cur = null;
+  c.timers.clear();
+  try { c.page && c.page.dispose(); } catch { /* the page is gone either way */ }
+  close();
+}
+
+async function show(id) {
+  const seq = ++R.seq;
+  leave();
+  // The frame's page-dependent parts: the menu's current item, the title,
+  // the view switch.
+  for (const a of document.querySelectorAll('a.navi')) {
+    if (a.dataset.page === id) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
+  }
+  const h = $('header.top h1'); if (h) h.textContent = titleOf(id);
+  const vs = $('#viewslot'); if (vs) vs.innerHTML = viewSwitch(R.me, id);
+  document.title = `${titleOf(id)} · claudefleet`;
+  const content = $('#content');
+  const el = document.createElement('div');
+  el.className = 'page';
+  el.dataset.page = id;
+  el.innerHTML = skeleton();
+  content.replaceChildren(el);
+  const me = R.me;
   if (!me) {
-    el.innerHTML = `<div class="panel"><div class="empty">${ic('alert')}<b>${esc(t('ui.err.who'))}</b><span>${esc(err ? err.message : '')}</span><a class="btn" href="/signin">${esc(t('ui.err.signinAgain'))}</a></div></div>`;
+    el.innerHTML = `<div class="panel"><div class="empty">${ic('alert')}<b>${esc(t('ui.err.who'))}</b><span>${esc(R.err ? R.err.message : '')}</span><a class="btn" href="/signin">${esc(t('ui.err.signinAgain'))}</a></div></div>`;
     return;
   }
+  const page = id;
   if (!pageAllowed(me, page)) {
     el.innerHTML = `<div class="panel"><div class="empty">${ic('lock')}<b>${esc(t('ui.err.notOnMenu'))}</b><span>${esc(t('ui.err.askAdmin'))}</span><a class="btn" href="/">${esc(t('ui.err.goOverview'))}</a></div></div>`;
     return;
   }
-  const ctx = { me, admin: isAdmin(me), el, api, toast, drawer, modal, confirm, close, copy: copyText, setLive, setCount };
-  // The fleet's session list, read once per draw and shared by the page and
-  // the top bar's live line. A hub without the fleet module answers 404:
-  // the line stays hidden and a page shows its empty state.
-  let fleetP = null;
-  ctx.fleet = (fresh) => {
-    if (!fleetP || fresh) fleetP = api('/v1/fleet/fleet_sessions');
-    return fleetP;
+  const timers = timerBag();
+  const cur = { id, el, timers, page: null };
+  R.cur = cur;
+  let pg = R.pages.get(id);
+  if (!pg) {
+    const entry = PAGES.find((x) => x.id === id);
+    try {
+      const mod = await import(entry.module);
+      pg = (mod && mod.default) || R.pages.get(id);
+    } catch (e) {
+      if (seq !== R.seq) return;
+      el.innerHTML = `<div class="panel"><div class="empty">${ic('alert')}<b>${esc(t('ui.err.load'))}</b><span class="err">${esc(e.message)}</span></div></div>`;
+      return;
+    }
+  }
+  if (seq !== R.seq || !pg) return;
+  cur.page = pg;
+  // The page's reads: the first draw may take a read younger than 30 s, so
+  // a page just seen is drawn at once; every later read is fresh, and any
+  // write empties the cache.
+  let warm = true, hit = false;
+  const capi = async (url, opts) => {
+    if (!isRead(opts)) { R.cache.clear(); R.fleetP = null; return api(url, opts); }
+    if (warm) { const b = R.cache.get(url); if (b !== undefined) { hit = true; return b; } }
+    const body = await api(url, opts);
+    R.cache.set(url, body);
+    return body;
   };
-  const live = (fresh) => ctx.fleet(fresh).then((fs) => { setLive(liveLine(fs)); setCount('sessions', (fs.sessions || []).length); }, () => setLive(''));
+  const ctx = {
+    me, admin: isAdmin(me), el, api: capi, toast, drawer, modal, confirm, close, copy: copyText, setLive, setCount,
+    fleet: (fresh) => { if (!fresh && warm && R.fleetP) hit = true; return fleet(fresh || !warm); },
+    navigate, every: timers.every, after: timers.after, on: timers.on,
+  };
   ctx.refresh = async () => {
-    try { await render(ctx); } catch (e) {
+    if (timers.dead) return;
+    try { await pg.render(ctx); } catch (e) {
+      if (timers.dead) return;
       el.innerHTML = `<div class="panel"><div class="empty">${ic('alert')}<b>${esc(t('ui.err.load'))}</b><span class="err">${esc(e.message)}</span><button class="btn" data-shell-retry>${esc(t('ui.err.retry'))}</button></div></div>`;
       const b = el.querySelector('[data-shell-retry]'); if (b) b.onclick = () => ctx.refresh();
     }
   };
   await ctx.refresh();
-  live();
-  setInterval(() => { if (!document.hidden) live(true); }, 30000);
+  warm = false;
+  if (R.perf && seq === R.seq) {
+    requestAnimationFrame(() => {
+      try {
+        performance.mark('nav-drawn');
+        const m = performance.measure('nav', 'nav-click', 'nav-drawn');
+        console.info(`[perf] ${id} ${Math.round(m.duration)}ms${hit ? ' (cache)' : ''}`);
+      } catch { /* the first page has no click */ }
+      performance.clearMarks(); performance.clearMeasures();
+    });
+  }
+  // Drawn from what was read under 30 s ago: read again now.
+  if (hit && seq === R.seq && !timers.dead) ctx.refresh();
 }
 
-export const Shell = Object.freeze({ mount, api, toast, setLive, setCount, copy: copyText });
+/** timers is how many timers and listeners the page shown holds (a test's read). */
+const timers = () => (R.cur ? R.cur.timers.count() : 0);
+
+export const Shell = Object.freeze({ mount, start, navigate, timers, api, toast, setLive, setCount, copy: copyText });
 if (typeof window !== 'undefined') window.Shell = Shell;

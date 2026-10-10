@@ -8,7 +8,7 @@ import { esc, ic } from './lib/shell.js';
 import { usageBudget, usageDays, hb } from './lib/pages.js';
 import { t } from './lib/i18n.js';
 
-Shell.mount('usage', async (ctx) => {
+export default Shell.mount('usage', async (ctx) => {
   const u = await ctx.api('/v1/fleet/person-usage?mine=1');
   const st = (u.people || [])[0] || {};
   const days = usageDays(u.days);

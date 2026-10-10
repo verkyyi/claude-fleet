@@ -7,4 +7,4 @@
 import { Shell } from './app-shell.js';
 import { sessionsPage } from './lib/sessions-view.js';
 
-Shell.mount('sessions', sessionsPage());
+export default Shell.mount('sessions', sessionsPage());

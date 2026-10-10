@@ -9,7 +9,7 @@ import { esc } from '../lib/shell.js';
 import { devicesPanel, wireRevoke } from '../lib/devices-view.js';
 import { t } from '../lib/i18n.js';
 
-Shell.mount('all-devices', async (ctx) => {
+export default Shell.mount('all-devices', async (ctx) => {
   const [devs, nodes] = await Promise.all([ctx.api('/v1/admin/devices'), ctx.api('/v1/nodes').catch(() => null)]);
   ctx.el.innerHTML = `<div class="pagehead"><div><p>${esc(t('ui.dev.allLead'))}</p></div></div>` + devicesPanel(devs, true, nodes);
   ctx.setCount('all-devices', ((devs && devs.devices) || []).length);

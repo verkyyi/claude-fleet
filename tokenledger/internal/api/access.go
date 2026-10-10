@@ -1,6 +1,7 @@
 package api
 
 import (
+	"io/fs"
 	"net/http"
 	"strconv"
 	"strings"
@@ -293,11 +294,22 @@ func (s *Server) doors(f HubFacts) []Door {
 	}
 }
 
-// serveStandalonePage serves one self-contained page from the built UI.
+// appPage is the one document every page path answers (claude-fleet#2793):
+// the shell inside it draws the page the address names and swaps pages in
+// place, so a click is no page load. A path's own .html stays in the build
+// for a bookmark of the file itself.
+const appPage = "app.html"
+
+// serveStandalonePage serves a page path: the app document when the built UI
+// holds one, else the page's own file (a build from before #2793). Who may
+// open the path is decided before this, by the route's own gate.
 func (s *Server) serveStandalonePage(w http.ResponseWriter, r *http.Request, name string) {
 	if s.UI == nil {
 		httpError(w, http.StatusNotFound, "this binary was built without the UI")
 		return
+	}
+	if _, err := fs.Stat(s.UI, appPage); err == nil {
+		name = appPage
 	}
 	f, err := s.UI.Open(name)
 	if err != nil {

@@ -8,7 +8,7 @@ import { esc, ic, fmtTokens } from '../lib/shell.js';
 import { t } from '../lib/i18n.js';
 import { attention, kpi, hb } from '../lib/pages.js';
 
-Shell.mount('by-person', async (ctx) => {
+export default Shell.mount('by-person', async (ctx) => {
   const ov = await ctx.api('/v1/admin/overview?since=7d');
   const tot = ov.totals || {};
   const nodes = ov.nodes || [];

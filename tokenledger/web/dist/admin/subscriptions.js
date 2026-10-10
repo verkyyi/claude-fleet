@@ -89,10 +89,10 @@ async function poll(ctx) {
       return;
     }
   } catch { /* keep waiting: a blip is not an answer */ }
-  add.timer = setTimeout(() => poll(ctx), 3000);
+  add.timer = ctx.after(3000, () => poll(ctx));
 }
 
-Shell.mount('subscriptions', async (ctx) => {
+export default Shell.mount('subscriptions', async (ctx) => {
   const [lim, acc, cr, live, us, sw, set] = await Promise.allSettled([
     ctx.api('/v1/limits?account=all'), ctx.api('/v1/accounts'), ctx.api('/v1/fleet/credentials'),
     ctx.api('/v1/live'), ctx.api('/v1/fleet/users'), ctx.api('/v1/account-switches?limit=8'), ctx.api('/v1/fleet/settings'),
@@ -171,8 +171,9 @@ Shell.mount('subscriptions', async (ctx) => {
       });
     }
   };
-  // The modal lives in the shell's layer, outside ctx.el.
-  document.onclick = (e) => {
+  // The modal lives in the shell's layer, outside ctx.el; the listener is the
+  // page's, gone when it is left (claude-fleet#2793).
+  ctx.on(document, 'click', (e) => {
     const b = e.target.closest('[data-add]');
     if (!b) return;
     if (b.dataset.add === 'prov') {
@@ -187,5 +188,5 @@ Shell.mount('subscriptions', async (ctx) => {
       addModal(ctx);
       poll(ctx);
     }
-  };
-});
+  });
+}, { dispose: () => clearTimeout(add.timer) });
