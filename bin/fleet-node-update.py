@@ -1285,16 +1285,15 @@ def doctor_rows(p):
 
 def shell_row(p, st):
     """Does any TAKEN-OVER login still carry the person's client here (issue #2702)?
-    Only logins/<login>.env's logins are looked at — anyone else is not the fleet's. ONE row:
-    root looks now (fns.client_shell — every home); anyone else reads the last
-    sweep's record in state.json (other homes are not theirs to read). WARN, never
-    FAIL: a leftover client is not the release's fault."""
+    Only logins/<login>.env's logins are looked at — anyone else is not the fleet's. ONE row,
+    the same reading as the daemon's `status` (issue #2991): every home this
+    process can read is looked at now (root: all of them); one it cannot keeps the
+    last sweep's record in state.json, marked with its time. WARN, never FAIL: a
+    leftover client is not the release's fault."""
     listed = fns.taken_over(p.sup)
     seen = "托管登录 %d 个，其余账号不在清单内不扫" % len(listed)
-    if os.geteuid() == 0:
-        found = fns.client_shell(p.sup, listed)
-    else:
-        found = [c for c in ((st.get("sweep") or {}).get("clientshell")) or [] if c.get("login") in listed]
+    sw = st.get("sweep") or {}
+    found = fns.client_shell(p.sup, listed, stale=sw.get("clientshell"), as_of=sw.get("last"))
     if not found:
         return ("PASS", "shell", "no taken-over login carries the client shell or a login hook · " + seen)
     return ("WARN", "shell", "; ".join(fns.client_shell_says(c, p.sup) for c in found) + " · " + seen)

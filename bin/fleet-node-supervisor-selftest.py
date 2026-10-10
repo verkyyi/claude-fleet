@@ -328,7 +328,7 @@ class C_Sweep(Sandbox):
             open(os.path.join(lg, login + ".env"), "w").close()
         r = self.run_sup("sweep")
         self.assertIn("clientshell (left in place): alice: ~/.cache/claude-fleet/shell — ", r.stdout)
-        self.assertIn("clientshell (left in place): bob: ~/.zshrc 2 hook line(s)", r.stdout)
+        self.assertIn("clientshell (left in place): bob: ~/.zshrc 3 hook line(s)", r.stdout)
         self.assertIn("fleet-node-shell-retire.sh' --login bob", r.stdout)
         self.assertIn("runs as alice", r.stdout)
         self.assertNotIn("carol", r.stdout)
@@ -338,7 +338,28 @@ class C_Sweep(Sandbox):
         st = self.run_sup("status").stdout
         self.assertIn("clientshell alice", st)
         self.assertNotIn("verkyyi", st)
-        self.assertTrue(os.path.isdir(os.path.join(users, "alice", ".cache", "claude-fleet", "shell")))
+        self.assertTrue(os.path.isdir(os.path.join(users, "alice", ".cache", "claude-fleet", "shell")))   # named, not touched
+        # status reads the homes NOW (issue #2991): retired by hand since the sweep,
+        # the record still names them, status does not
+        shutil.rmtree(os.path.join(users, "alice", ".cache", "claude-fleet", "shell"))
+        with open(os.path.join(users, "bob", ".zshrc"), "w") as f:
+            f.write('export PATH="$HOME/.local/bin:$PATH"\n')
+        self.assertEqual(len(self.state()["sweep"]["clientshell"]), 2)
+        st = self.run_sup("status").stdout
+        self.assertNotIn("clientshell", st)
+        # ...and the fleet's header comments an older retire left behind are the same rule's lines
+        with open(os.path.join(users, "bob", ".zshrc"), "a") as f:
+            f.write("\n# cfguest:shell — claude-fleet helpers: cf (enter/attach a fleet), cw (worktree + window)\n\n"
+                    "# claude-fleet login: banner (+ machine lines from intro.d, e.g. `vnc`), then an SSH login goes "
+                    "straight into the fleet\n")
+        self.assertIn("clientshell bob          bob: ~/.zshrc 2 hook line(s)", self.run_sup("status").stdout)
+        # a home this process cannot read keeps the sweep's reading, marked with its time
+        os.chmod(os.path.join(users, "carol"), 0)
+        try:
+            st = self.run_sup("status").stdout
+        finally:
+            os.chmod(os.path.join(users, "carol"), 0o755)
+        self.assertNotIn("carol", st)          # never named by a sweep: nothing to keep
 
 
 class O_SweepRemoves(Sandbox):
@@ -479,6 +500,35 @@ class O_SweepRemoves(Sandbox):
         r = self.run_sup("sweep")
         self.assertFalse(os.path.exists(p["bob-agent"]), r.stdout)
 
+    def test_a_command_line_naming_the_drill_holds_nothing(self):
+        """issue #2991: only a process RUNNING the drill holds the sweep — an ssh
+        remote command, `pgrep -f`, `bash -c '… drill …'` merely name it."""
+        p = self.lay()
+        name = self.env["FLEET_NODE_SWEEP_HOLD"]
+        decoys = [subprocess.Popen(["/bin/sh", "-c", "sleep 30; : %s --help" % name]),
+                  subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)", name, "--help"]),
+                  subprocess.Popen(["/bin/bash", "-c", 'exec -a ssh "$0" -c "import time; time.sleep(30)" mini "$1" --help',
+                                   sys.executable, name])]
+        try:
+            until(5, lambda: subprocess.run(["pgrep", "-f", name], capture_output=True).stdout.count(b"\n") >= 2)
+            r = self.run_sup("sweep")
+            self.assertNotIn("held", r.stdout)
+            self.assertFalse(os.path.exists(p["bob-agent"]), r.stdout)
+        finally:
+            for d in decoys:
+                d.kill()
+                d.wait()
+
+    def test_runs_script_rule(self):
+        n = "fleet-onboard-drill.sh"
+        for cmd in ("/bin/bash /Users/x/.claude/fleet/bin/%s --login t" % n, "/x/bin/%s" % n,
+                    "env FOO=1 bash -x /a/%s" % n, "bash -- /a/%s" % n):
+            self.assertTrue(fns.runs_script(cmd, n), cmd)
+        for cmd in ("ssh mini %s --help" % n, "pgrep -f onboard-drill", "bash -c %s --help" % n,
+                    "zsh -lc /a/%s" % n, "grep %s x" % n, "-zsh", "sshd: verkyyi@ttys001 %s" % n,
+                    "/bin/bash /a/other.sh %s" % n):
+            self.assertFalse(fns.runs_script(cmd, n), cmd)
+
     def test_legacy_child_taken_over_by_the_running_daemon(self):
         p = self.plist(self.dd, "com.claude-fleet.c-legacy")
         self.start(FLEET_NODE_SWEEP_EVERY="3600")
@@ -492,6 +542,7 @@ class O_SweepRemoves(Sandbox):
         rt = os.path.join(self.d, "rt", "bin")
         os.makedirs(rt)
         shutil.copy(os.path.join(BIN, "fleet-node-shell-retire.sh"), rt)
+        shutil.copy(SUP, rt)          # the retire script's one rule (shell-hooks, issue #2991)
         home = os.path.join(self.d, "Users", "alice")
         os.makedirs(os.path.join(home, ".cache", "claude-fleet", "shell", "bin"))
         with open(os.path.join(home, ".zshrc"), "w") as f:

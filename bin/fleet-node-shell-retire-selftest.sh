@@ -129,6 +129,20 @@ rt --login "$ME"
 rt --login "$ME" --if-idle
 [ "$rc" = 0 ] && ok "--if-idle once nothing runs: rc 0" || bad "--if-idle idle rc $rc: $out"
 
+# the fleet's header comments an older retire left without their hook (issue #2991,
+# macmini's guest logins): the same rule the daemon's status counts takes them out
+cat > "$H/.zshrc" <<'EOF'
+export PATH="$HOME/.local/bin:$PATH"
+
+# cfguest:shell — claude-fleet helpers: cf (enter/attach a fleet), cw (worktree + window)
+
+# claude-fleet login: banner (+ machine lines from intro.d, e.g. `vnc`), then an SSH login goes straight into the fleet
+EOF
+rt --login "$ME" --if-idle
+[ "$rc" = 0 ] && case "$out" in *"zshrc: took out 2 line(s)"*) true ;; *) false ;; esac \
+  && [ "$(cat "$H/.zshrc")" = 'export PATH="$HOME/.local/bin:$PATH"' ] \
+  && ok "leftover fleet header comments taken out, PATH line kept" || { bad "headers rc $rc: $out"; cat "$H/.zshrc"; }
+
 # ---- C. refusals -------------------------------------------------------------
 echo "C. refusals"
 if [ "$(id -u)" != 0 ]; then
