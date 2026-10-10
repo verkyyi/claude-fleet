@@ -1903,6 +1903,19 @@ if [ -f "$_nsup" ] && command -v python3 >/dev/null 2>&1; then
     3) warn tenants "$tline — run \`sudo fleet-node-supervisor.py tenants\` for the whole reading" ;;
   esac
 fi
+# The home machine's standing connections to the other machines (issue #3002,
+# EPIC #2999 C5): one line per link (machine@login · route · age · round trip ·
+# failures). WARN: a link failing its check past 60 s, a wrong login, a second
+# keeper, the hub away so a new link cannot open, or the keeper not running.
+# Never ran on this login (no peerlink/state.json) ⇒ no row.
+_npl="$(dirname "$0")/fleet-peerlink.py"
+if [ -f "$_npl" ] && command -v python3 >/dev/null 2>&1; then
+  plline=$(python3 "$_npl" status --check 2>/dev/null); plrc=$?
+  case "$plrc" in
+    0) pass peerlink "$plline" ;;
+    1) warn peerlink "$plline — detail and the last rebuilds: \`fleet-peerlink.py status\`; the keeper's log: logs/peerlink.launchd.log" ;;
+  esac
+fi
 # The registered background services and scheduled tasks (issue #2526, EPIC
 # #2524 C2): the same table `fleet ls --services` prints — the hub's word for
 # every machine of this person's (global/hub_services), this machine's daemon
