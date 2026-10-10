@@ -55,8 +55,11 @@ A tick, in order (each a `result` in <state>/update.json, one log line):
   current     target == current → nothing to switch (account links and the
               cache are still checked — a Claude Code that updated itself is
               put back).
-  skipped     target is the version the doctor rejected (`skip`) — not retried
-              until the target moves. No flapping.
+  skipped     target is the version the doctor rejected (`skip`) — retried
+              once the cause the rollback named is gone (a signature failure a
+              later signed fetch outlived), else after FLEET_NODE_UPDATE_SKIP_RETRY
+              (21600 s; 0 = until the target moves), doubling with each rollback
+              of the same release up to a week. No flapping (issue #2906).
   backoff     the last stage of this target failed less than
               FLEET_NODE_UPDATE_RETRY (3600) seconds ago.
   deferred    a running EPIC batch WITH WORK holds the machine (issue #2247's
@@ -402,12 +405,61 @@ def key_ids(p, hub=False):
     return pinned, signer, served
 
 
-def sig_failure(st):
-    """(target, reason) of a recorded fetch that failed its signature check, or None."""
+def signed_since(st, p=None):
+    """When a fetch last passed its signature check: a stage that landed (the
+    switch, a commit or a rollback of a staged release) or the current release's
+    staged mark. 0 when nothing says so."""
+    st = st or {}
+    at = [st.get("switched_at") or 0]
+    at += [h.get("at") or 0 for h in st.get("history") or [] if h.get("result") in ("committed", "rolled-back")]
+    if p is not None:
+        try:
+            at.append(int(os.path.getmtime(os.path.join(p.current, STAGED))))
+        except OSError:
+            pass
+    return max(at)
+
+
+def sig_failure(st, p=None):
+    """(target, reason) of a recorded fetch that failed its signature check, or
+    None. A failure a later signed fetch outlived is past tense (issue #2906): an
+    updater from before #2843 never cleared `failed` after a stage that landed, so
+    one torn read stayed in update.json for hours and every new release's doctor
+    called it a new FAIL."""
+    since = signed_since(st, p)
     for t, f in sorted(((st or {}).get("failed") or {}).items()):
-        if "signature" in (f.get("reason") or ""):
+        if "signature" in (f.get("reason") or "") and (f.get("at") or 0) > since:
             return t, f
     return None
+
+
+def skip_rows(reason):
+    """The doctor rows a rollback reason names ("new FAIL: <row> <detail>; …")."""
+    r = (reason or "").split("new FAIL: ", 1)
+    return sorted(set(x.split()[0] for x in r[1].split("; ") if x.split())) if len(r) > 1 else []
+
+
+def cause_gone(sk, st, p):
+    """A rollback made only by the key row's signature failure, and that failure
+    is no longer on record — past tense (issue #2906)."""
+    rows = sk.get("rows") or skip_rows(sk.get("reason"))
+    return rows == ["key"] and "signature check" in (sk.get("reason") or "") and sig_failure(st, p) is None
+
+
+def skip_retry(sk, st, p):
+    """None = try the rolled-back release again now; else when (an epoch). A
+    rejected release is not skipped forever (issue #2906): it is retried once the
+    cause the rollback named is gone, else after FLEET_NODE_UPDATE_SKIP_RETRY
+    (21600 s), doubling with each rollback of the same release up to a week — so
+    a broken one does not flap, and a transient FAIL does not pin the machine
+    until stable moves again. 0 = never (the pre-#2906 rule)."""
+    if cause_gone(sk, st, p):
+        return None
+    base = env_num("FLEET_NODE_UPDATE_SKIP_RETRY", 21600)
+    if base <= 0:
+        return -1
+    at = int((sk.get("at") or 0) + min(base * 2 ** max(int(sk.get("tries") or 1) - 1, 0), 604800))
+    return None if now() >= at else at
 
 
 def key_row(p, st):
@@ -416,7 +468,7 @@ def key_row(p, st):
     check — the hub's key said beside it, so a changed key and a torn read
     (manifest and signature from two builds) tell apart. A doctor row, not only
     an update.log backoff."""
-    sf = sig_failure(st)
+    sf = sig_failure(st, p)
     pinned, signer, served = key_ids(p, hub=bool(sf))
     if not pinned:   # WARN: the next stage refuses with the same words; the rollback gate stays out of it
         return ("WARN", "key", "no pinned release key at %s — `sudo fleet node install` pins it" % p.pubkey)
@@ -424,12 +476,15 @@ def key_row(p, st):
         return ("FAIL", "key", "pinned %s, but the current release is signed by %s" % (pinned, signer))
     if sf:
         t, f = sf
+        torn = served == pinned
         why = ("the hub serves the same key — a torn read (manifest and signature from two builds); "
                "the next fetch retries" if served == pinned else
                "the hub now serves %s — the hub's key changed; re-pin: sudo fleet node install --release-key <file>"
                % served if served else "the hub's key could not be read")
-        return ("FAIL", "key", "%s failed its signature check %s against pinned %s: %s" % (t[:12], iso(f.get("at")),
-                                                                                         pinned, why))
+        # a torn read is the hub's passing state, not this machine's: WARN, so
+        # it never rolls a release back (issue #2906); a changed key stays FAIL
+        return ("WARN" if torn else "FAIL", "key", "%s failed its signature check %s against pinned %s: %s"
+                % (t[:12], iso(f.get("at")), pinned, why))
     return ("PASS", "key", "pinned %s · current release signed by %s" % (pinned, signer or "?"))
 
 
@@ -952,7 +1007,9 @@ class Updater(object):
         self.sync_outside()
         self.sync_credsep()
         self.follow_installs(sha=frm, force=True)     # the logins go back with it
-        self.st["skip"] = {to: {"at": now(), "reason": why}}
+        prev = self.st["skip"].get(to) or {}
+        self.st["skip"] = {to: {"at": now(), "reason": why, "rows": self.st.pop("rollback_rows", None) or skip_rows(why),
+                                "tries": int(prev.get("tries") or 1) + 1 if prev else 1}}
         self.st["retired"][to] = now()
         self.st["retired"].pop(frm, None)
         self.record("rolled-back", frm, to, why)
@@ -977,6 +1034,7 @@ class Updater(object):
             detail = "; ".join("%s %s" % (r[1], r[2]) for r in rows if r[0] == "FAIL" and r[1] in new)
             self.st["phase"] = "rolling-back"
             self.st["rollback_reason"] = "new FAIL: %s" % detail
+            self.st["rollback_rows"] = new
             self.save()
             return self.rollback(self.st["rollback_reason"])
         self.record("committed", self.st.get("from"), self.st["to"], "; ".join(new))
@@ -1044,8 +1102,15 @@ class Updater(object):
             return self.end("current", "%s (%s)%s" % (cur[:12], src, (" · " + "; ".join(notes)) if notes else ""),
                             current=cur, notes=notes)
         if target in self.st["skip"]:
-            return self.end("skipped", "%s was rolled back: %s" % (target[:12], self.st["skip"][target].get("reason", "")),
-                            current=cur)
+            sk = self.st["skip"][target]
+            again = skip_retry(sk, self.st, self.p)
+            if again is not None:
+                return self.end("skipped", "%s was rolled back: %s · retried %s" % (
+                    target[:12], sk.get("reason", ""), "when its cause is gone" if again < 0 else "at " + iso(again)),
+                    current=cur)
+            self.log("retrying %s, rolled back %s: %s" % (target[:12], iso(sk.get("at")),
+                                                          "its cause is gone" if cause_gone(sk, self.st, self.p)
+                                                          else "the skip ran out"))
         f = self.st["failed"].get(target) or {}
         if f and now() - f.get("at", 0) < env_num("FLEET_NODE_UPDATE_RETRY", 3600):
             return self.end("backoff", "%s failed %s: %s" % (target[:12], iso(f["at"]), f.get("reason", "")), current=cur)
@@ -1816,7 +1881,7 @@ def main(argv):
             st.get("result", "-"), iso(st.get("at")), (link_sha(p.current) or "none")[:12],
             st.get("phase", "idle"), st.get("reason", ""))
         print(line)
-        sf = sig_failure(st)
+        sf = sig_failure(st, p)
         pinned, signer, served = key_ids(p, hub=bool(sf) or "--keys" in rest)
         print("key     pinned %s · current release signed by %s%s" % (
             pinned or "none (%s)" % p.pubkey, signer or "?",
