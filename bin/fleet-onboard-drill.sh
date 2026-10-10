@@ -515,10 +515,13 @@ SCRATCH_NO='还没有仓库|还没有能开会话的机器|入口连不上|开�
 # (300) more for the row. A 360 s cap shorter than a real create judged a
 # login still being opened a FAIL (#2908). It is no 要人帮.
 SCRATCH_OPENING=$OPENING_SAYS
+# ssh's first-contact question on the way to the opened machine: a newcomer
+# cannot judge a fingerprint, so it is 要人帮 — named, never 「没开好」 (run 13)
+SCRATCH_HOSTKEY='Are you sure you want to continue connecting|authenticity of host'
 OPENING_CAP=${FLEET_DRILL_OPENING_SECS:-1260}
 # place_wait <text> <row name> <shot prefix>: the writing area (prefix c), the
 # text typed, Enter; the questions on the way each answered with Enter. Sets
-# PW_K (row · no · stuck · '' = nothing within the wait), PW_P (the last
+# PW_K (row · no · hostkey · stuck · '' = nothing within the wait), PW_P (the last
 # screen), PW_ANSWERED, PW_OPENING (the hub's 「正在为你开机器」, if said) and
 # PW_OPENED (seconds from it first said to the end). Every ETA it read lands in
 # $RUN/<shot prefix>-eta.txt (<secs since first said> <eta>, one a change).
@@ -536,6 +539,7 @@ place_wait() {
     if printf '%s\n' "$PW_P" | grep -Eq -- "$SCRATCH_NO"; then PW_K=no; break; fi
     if [ -n "$(row_named "$2")" ]; then PW_K=row; break; fi
     v=$(screen)
+    if printf '%s\n' "$v" | grep -Eq -- "$SCRATCH_HOSTKEY"; then PW_K=hostkey; break; fi
     if printf '%s\n' "$v" | grep -Eq -- "$SCRATCH_OPENING"; then
       if [ -z "$open0" ]; then
         open0=$SECONDS open_end=$((SECONDS + OPENING_CAP))
@@ -598,6 +602,11 @@ step_scratch() {
          row "提示：$said" "prefix c 新任务，敲名字 ${NAME}，回车" "是 — 开不出会话：$said"
          failstep scratch "the list refused a new session: $said"; return 1 ;;
     row) : ;;
+    hostkey)
+         shot scratch-hostkey
+         said=$(printf '%s\n' "$p" | grep -Eo -- "authenticity of host '[^']*'" | head -n 1)
+         row "ssh 问：${said:-authenticity of host} … continue connecting (yes/no)?" "—" "是 — 连到新开的机器时 ssh 问主机指纹，新人判断不了"
+         failstep scratch "the client stopped at ssh's host-key question on the way to the opened machine:"; tail_pane; return 1 ;;
     *)   shot scratch-none
          if [ -n "$opening" ]; then
            # the hub said it is opening a machine (#2069) and neither a row

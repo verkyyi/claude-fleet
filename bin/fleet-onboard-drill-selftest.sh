@@ -234,6 +234,13 @@ else bad "opening: the drill's cap '${CAP}'s is not past the hub's give-up '${GI
 if grep -q 'deadline=\$open_end' "$DRILL" && grep -q '^screen() { tmux_own capture-pane -p -J -t ' "$DRILL"; then
   ok 'opening: waits to the cap while the visible screen says so'
 else bad 'opening: the wait is not held by the visible screen'; fi
+# ssh's host-key question on the way to the opened machine is named, never
+# read as 「没开好」 (#2139 run 13)
+if grep -q 'PW_K=hostkey; break' "$DRILL" && grep -q '^    hostkey)$' "$DRILL" \
+   && printf '%s\n' "Are you sure you want to continue connecting (yes/no/[fingerprint])?" \
+      | grep -Eq "$(sed -n "s/^SCRATCH_HOSTKEY='\(.*\)'$/\1/p" "$DRILL")"; then
+  ok 'scratch: the ssh host-key question is its own failure'
+else bad 'scratch: the ssh host-key question is not caught'; fi
 # bash 3.2 in a UTF-8 locale reads 「$opening，」's full-width comma as part of
 # the name — under set -u the drill died at scratch (C9 run 4): braces only
 bad_vars=$(LC_ALL=C grep -nE '\$[A-Za-z_][A-Za-z0-9_]*[^ -~[:space:]]' "$DRILL" | grep -vE '^[0-9]+:[[:space:]]*#')
