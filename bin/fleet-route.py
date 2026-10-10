@@ -140,7 +140,7 @@ def print_list(only=None):
     if not rs:
         print("还没连过任何机器 · 钉一条：fleet route <机器> relay|direct|tailscale|<地址>")
         return 0
-    w = max(4, max(fc_cells(r["machine"]) for r in rs)) + 2
+    w = max(4, max(fc_cells(r["machine"]) + (2 if r["last"] else 0) for r in rs)) + 2
     print(fc.pad("机器", w) + fc.pad("路线", 24) + "最近一次各路线握手")
     for r in rs:
         print(fc.pad(r["machine"] + (" *" if r["last"] else ""), w) + fc.pad(describe(r), 24) + handshakes(r))

@@ -806,7 +806,10 @@ except Exception: pass' "$use.route" "$BIN/fleet-connect.py" 2>/dev/null
     pin=''
     if [ -n "$shellopt" ]; then
       if [ -n "${FLEET_ROUTE_GET_CMD:-}" ]; then pin=$($FLEET_ROUTE_GET_CMD "$node" "$host" 2>/dev/null)
-      elif [ -f "$BIN/fleet-route.py" ]; then pin=$(python3 "$BIN/fleet-route.py" --get "$node" "$host" 2>/dev/null); fi
+      elif [ -f "$BIN/fleet-route.py" ] && [ -s "${XDG_CONFIG_HOME:-$HOME/.config}/claude-fleet/routes" ]; then
+        # no routes file = nothing pinned: no python started (fleet-connect.py's config_dir)
+        pin=$(python3 "$BIN/fleet-route.py" --get "$node" "$host" 2>/dev/null)
+      fi
     fi
     if [ -n "${TMUX:-}" ]; then
       if [ -n "$pin" ]; then
