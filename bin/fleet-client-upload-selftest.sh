@@ -9,7 +9,8 @@
 #   A  put: the file lands in the node's inbox/<fleet_id>/ (0700) and its path
 #      there is printed; the same bytes twice land once; over the bound → rc 3
 #      and one line, nothing sent; the login's cap drops the oldest first
-#   B  filter (the bytes toward ssh): a drop of existing paths is swapped for
+#   B  filter (the bytes toward ssh): what the child says on its /dev/tty reaches
+#      the pane (#2904); a drop of existing paths is swapped for
 #      the node's; any other paste, a path that does not exist, a lone Escape
 #      pass byte for byte; a pty child sees the pane's size
 #   C  paste (⌃V): a picture on the clipboard → put + bracket-paste of the
@@ -136,6 +137,35 @@ while time.time() < deadline:
     time.sleep(0.05)
 out = open(w + "/pty.out").read()
 sys.exit(0 if out.startswith("101x33 ") and "hi" in out else (print(out) or 1))
+EOF
+# a question on the child's /dev/tty (ssh's first-connection host-key prompt,
+# issue #2904) reaches the pane, and the answer typed there reaches the child
+python3 - "$UP" "$W" <<'EOF' && ok "B a question on the child's /dev/tty reaches the pane, its answer the child (#2904)" || fail "B the /dev/tty leg"
+import os, pty, select, sys, time
+up, w = sys.argv[1], sys.argv[2]
+child = "import os,sys; t=os.open('/dev/tty', os.O_RDWR); os.write(t, b'continue connecting (yes/no)? '); open(sys.argv[1],'w').write(os.read(t, 64).decode())"
+pid, fd = pty.fork()
+if pid == 0:
+    os.execvp("python3", ["python3", up, "filter", "--node", "m9", "--", "python3", "-c", child, w + "/tty.out"])
+seen, deadline = b"", time.time() + 10
+while b"(yes/no)?" not in seen and time.time() < deadline:
+    if select.select([fd], [], [], 0.2)[0]:
+        try:
+            seen += os.read(fd, 1024)
+        except OSError:
+            break
+if b"(yes/no)?" not in seen:
+    os.kill(pid, 9)
+    sys.exit(print("no question on the pane:", repr(seen)) or 1)
+os.write(fd, b"yes\r")
+while time.time() < deadline and os.waitpid(pid, os.WNOHANG)[0] != pid:
+    if select.select([fd], [], [], 0.05)[0]:
+        try:
+            os.read(fd, 1024)
+        except OSError:
+            pass
+got = open(w + "/tty.out").read() if os.path.exists(w + "/tty.out") else ""
+sys.exit(0 if b"(yes/no)?" in seen and got.startswith("yes") else (print(repr(seen), repr(got)) or 1))
 EOF
 printf 'abc' | FLEET_CLIENT_PASTE=0 python3 "$UP" filter --node m9 -- sh -c "cat > '$W/off.out'"
 [ "$(cat "$W/off.out")" = abc ] && ok "B FLEET_CLIENT_PASTE=0 runs the command bare" || fail "B off: [$(cat "$W/off.out")]"

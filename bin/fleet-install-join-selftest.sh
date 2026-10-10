@@ -40,11 +40,16 @@
 #                 token once (link + 登录即认人), node.env unchanged; a pass
 #                 the hub refused, or whose login it did not bind
 #                 (account_refused, #2249), leaves no node-login.ok and says why
+#   G2. managed   a managed machine (FLEET_NODE_STATE/machine.env, issue #2904):
+#                 ensure asks the hub nothing (no `login/node`, which it
+#                 answers 409 for a trusted machine), exit 0, a stale reason gone
 #   H. logout     `fleet logout`: the node leaves the hub (/v1/node/leave),
 #                 node.env, the certificate and the device key are gone
 set -uo pipefail
 # the scans draw the QR: a runner with a GUI session never opens a real browser (#2262)
 export FLEET_LOGIN_BROWSER=0
+# never this computer's own managed-machine state (#2904): G2 makes its own
+export FLEET_NODE_STATE="${TMPDIR:-/tmp}/fleet-install-join-st.no-node-state.$$"
 BIN="$(cd "$(dirname "$0")" && pwd)"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/fleet-install-join-st.XXXXXX") || exit 2
 HUB_PID=""
@@ -352,6 +357,14 @@ rm -f "$WORK/lnode.mode"
 fleet_in h1 node ensure
 [ "$(cat "$CONF/node-login.ok" 2>/dev/null)" = "$HUB" ] && [ ! -e "$CONF/node-login.why" ] && [ "$(lnodes)" = 6 ] \
   && ok "G bound at last: marked, the reason cleared" || bad "G bound: lnode=$(lnodes) ok=$(cat "$CONF/node-login.ok" 2>&1)"
+
+# ── G2. a managed machine ───────────────────────────────────────────────────
+mkdir -p "$WORK/node-state" && : > "$WORK/node-state/machine.env"
+rm -f "$CONF/node-login.ok"; echo 'stale 409' > "$CONF/node-login.why"
+FLEET_NODE_STATE="$WORK/node-state" fleet_in h1 node ensure
+[ "$(cat "$WORK/rc")" = 0 ] && [ "$(lnodes)" = 6 ] && [ ! -e "$CONF/node-login.why" ] && [ ! -s "$WORK/out" ] \
+  && ok "G2 a managed machine: ensure asks the hub nothing, exit 0, the stale reason gone" \
+  || bad "G2 managed: rc=$(cat "$WORK/rc") lnode=$(lnodes) why=$(cat "$CONF/node-login.why" 2>&1): $(cat "$WORK/out")"
 
 # ── H. logout ───────────────────────────────────────────────────────────────
 fleet_in h1 logout

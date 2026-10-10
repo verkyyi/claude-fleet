@@ -639,6 +639,7 @@ FLEET_NODE_CLIENT                  hatch: 1 = bin/fleet on a managed machine tak
 FLEET_NODE_HOSTED                  handoff: 1 = the client runs ON a managed machine for one ssh (bin/fleet → fleet-shell.sh, fleet-client-lease.py via node-hosted; #2720)
 FLEET_NODE_HOSTED_CACHE            path: the node-hosted client's temp cache (default $TMPDIR/fleet-node-client-<uid>, #2720)
 FLEET_NODE_HOSTED_IDLE             pacing: seconds the node-hosted client's keeper waits with no terminal attached before it quits it (default 30, #2720)
+FLEET_NODE_HOSTED_SESSION          name: the node-hosted client's tmux session / socket label (default fleet-node-client, never the resident fleet-shell — #2904)
 FLEET_NODE_RUNTIME                 path: the managed machine's runtime link (default /Library/Application Support/claude-fleet/current) — the node-hosted client runs from its bin/ (#2720)
 FLEET_RETIRE_GRACE                 pacing: seconds fleet-node-shell-retire.sh waits between TERM and KILL for a client process (default 3, #2702)
 FLEET_RETIRE_QUIT_WAIT             pacing: seconds fleet-node-shell-retire.sh gives the login's own `fleet quit` (default 20, #2702)

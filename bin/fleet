@@ -130,12 +130,16 @@ unset _fp
 # here, so `fleet quit` / `fleet status` find it. A session's test of the client
 # (FLEET_CLIENT_IDENTITY=test) and FLEET_NODE_CLIENT=1 (the operator's hatch — a
 # client from before #2702 still running here) keep the device client's road.
+# Its tmux servers are `-L fleet-node-client[-stage]` (issue #2904), never the
+# resident client's `fleet-shell`: one of those left behind on this login was
+# taken over, and its stale screen read as this client's.
 SHELL_BIN=$here
 if [ -e "${FLEET_NODE_STATE:-/var/db/fleet-node}/machine.env" ] \
    && [ "${FLEET_CLIENT_IDENTITY:-}" != test ] && [ "${FLEET_NODE_CLIENT:-0}" != 1 ]; then
   FLEET_NODE_HOSTED=1
   FLEET_SHELL_CACHE=${FLEET_NODE_HOSTED_CACHE:-${TMPDIR:-/tmp}/fleet-node-client-$(id -u)}
-  export FLEET_NODE_HOSTED FLEET_SHELL_CACHE
+  FLEET_SHELL_SESSION=${FLEET_NODE_HOSTED_SESSION:-fleet-node-client}
+  export FLEET_NODE_HOSTED FLEET_SHELL_CACHE FLEET_SHELL_SESSION
   _rt=${FLEET_NODE_RUNTIME:-/Library/Application Support/claude-fleet/current}
   [ -f "$_rt/bin/fleet-shell.sh" ] && SHELL_BIN=$(cd "$_rt/bin" && pwd)
   unset _rt
@@ -147,7 +151,7 @@ managed() {
   echo "fleet · 客户端在 ${_me:-这台托管机器} 上运行；平时请在自己设备上用 fleet（装：curl -fsSL <入口>/install | sh）。" >&2
   # a resident client from before #2702 still here: how to clear it
   _sc="${XDG_CACHE_HOME:-$HOME/.cache}/claude-fleet/shell"
-  if [ -d "$_sc" ]; then
+  if [ -d "$_sc" ] || tmux -L fleet-shell has-session -t =fleet-shell 2>/dev/null; then
     echo "fleet · 这台上还留着旧的常驻客户端（${_sc}）：不用了 sudo bash $here/fleet-node-shell-retire.sh --login $(id -un) 清掉。" >&2
   fi
   unset _me _sc
