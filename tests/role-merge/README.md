@@ -16,5 +16,8 @@ is not one a layer may carry. `sources[<field>]` lists who shaped it, low → hi
 `agents` (the built-in), a layer's label, `lock`.
 
 Run one: `bin/fleet-role.py merge --vector tests/role-merge/04-list-add-remove.json`.
-`bin/fleet-role-merge-selftest.sh` runs them all. A new case: write it without
+`bin/fleet-role-merge-selftest.sh` runs them all; the hub's Go copy
+(`tokenledger/internal/rolemerge`, issue #2787) runs the same set in
+`go test ./internal/rolemerge/`.
+A new case: write it without
 `expect`, run the line above, read the answer, then paste it in.

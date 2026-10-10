@@ -80,7 +80,7 @@ var routeAccess = map[string]string{
 	// The team layer is read by every machine that applies it — a node's
 	// token, a client's certificate — and its PUT is refused to anyone but an
 	// admin by the handler itself.
-	control.TeamBundlePath: accessSelf, control.PersonBundlePath: accessSelf,
+	control.TeamBundlePath: accessSelf, control.PersonBundlePath: accessSelf, control.PersonBundlePath + "/roles": accessSelf,
 	// Session, token or certificate; the handler scopes a person's answer
 	// through FleetScope.
 	control.SessionsPath: accessUser, control.SummaryPath: accessUser,

@@ -30,6 +30,9 @@ import (
 //        POST {cert, sig, ts} by a connection certificate. The operator's
 //        doors read anyone's with ?principal=<id>. ETag
 //        "person-<pid8>-v<N>"; If-None-Match answers 304.
+//   GET  /roles?merged=1   the same caller's layer merged into the stable
+//        tree's role definitions and rule table (claude-fleet#2787) — what
+//        `fleet role show --sources` prints; fleet_person_roles_view.go.
 //   GET  ?all=1   the operator's alone (claude-fleet#1866): every person's
 //        current version, updated time and item count — a summary, never a
 //        body; reading one stays ?principal=<id>&version=N.
@@ -61,6 +64,12 @@ type personCaller struct {
 func (s *Server) handleFleetPersonBundle(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	now := time.Now()
+	if strings.HasSuffix(r.URL.Path, "/roles") && r.Method != http.MethodGet {
+		// The merged view is read-only: a change is a PUT of the layer itself.
+		w.Header().Set("Allow", "GET")
+		httpError(w, http.StatusMethodNotAllowed, "GET only — a change is a PUT of "+control.PersonBundlePath)
+		return
+	}
 	var req TeamBundleRequest
 	if r.Method == http.MethodPost || r.Method == http.MethodPut {
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, teamBundleMax+4096)).Decode(&req); err != nil {
@@ -177,6 +186,10 @@ func (s *Server) handleFleetPersonBundle(w http.ResponseWriter, r *http.Request)
 	}
 	c := personCaller{id: id, person: p.ID}
 
+	if strings.HasSuffix(r.URL.Path, "/roles") {
+		s.writePersonRoles(w, c.person)
+		return
+	}
 	switch r.Method {
 	case http.MethodGet, http.MethodPost:
 		v, _ := strconv.Atoi(r.URL.Query().Get("version"))
