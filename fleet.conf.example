@@ -2254,6 +2254,20 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 #FLEET_ORPHAN_LISTEN_SECS=21600    # 6h; 0 = sweep OFF
 # @label=Orphan listener action @group=disk @tier=advanced @scope=global @edit=str
 #FLEET_ORPHAN_LISTEN_ACTION=kill   # kill (the default) | notify
+
+# The selftests' tmux debris (issue #2970): once an hour the diskguard tick runs
+# bin/fleet-selftest-reap.sh — dead socket files in the tmux socket dir (never
+# `default`, never a `fleet*` socket) and a test's tmux server left running
+# (`selftest`-named, or started `-f /dev/null` with no client, past 30 min).
+# Log: ~/.config/claude-fleet/diskguard/selftest-reaped.log. 0 = off.
+# @label=Selftest tmux sweep @group=disk @tier=internal @scope=global @edit=bool
+#FLEET_SELFTEST_REAP=1
+# `fleet-doctor`'s `testtmux` line WARNs past this many live selftest servers…
+# @label=Doctor test-server limit @group=disk @tier=internal @scope=global @edit=int
+#FLEET_DOCTOR_TESTTMUX_LIVE=0
+# …or this many dead socket files.
+# @label=Doctor dead-socket limit @group=disk @tier=internal @scope=global @edit=int
+#FLEET_DOCTOR_TESTTMUX_DEAD=50
 # @label=Orphan listener sweep interval @group=disk @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_ORPHAN_LISTEN_EVERY=300     # min seconds between sweeps
 # @label=Listener exemptions @group=disk @tier=internal @scope=global @edit=str
