@@ -1275,6 +1275,20 @@ stewardpage	j	steward page — the steward page of the day, in your own browser:
     en:notify_doctor_tn)        printf 'a click on a notification goes to its session (terminal-notifier)' ;;
     zh:notify_doctor_no_tn)     printf '没装 terminal-notifier：通知照弹，点了只把终端叫到前面（brew install terminal-notifier 可直接切到会话）' ;;
     en:notify_doctor_no_tn)     printf 'terminal-notifier is not installed: notifications still come, a click only brings the terminal forward (brew install terminal-notifier to land on the session)' ;;
+    # after the third failure in a row (issue #2894, fleet-debug-prompt.sh) · the
+    # right pane's reconnect page stuck past a minute (fleet-remote-view.sh)
+    zh:debug_prompt_q_fmt)      printf '连了 %s 次都没成。要不要让远端帮你看一眼？' "${1:-}" ;;
+    en:debug_prompt_q_fmt)      printf '%s tries in a row did not work. Shall the hub take a look?' "${1:-}" ;;
+    zh:debug_prompt_what)       printf '会收集这台电脑的体检结果和连接记录（不含密码、令牌、私钥），传给入口，5 分钟内给你一页结论。' ;;
+    en:debug_prompt_what)       printf "This computer's checkup and connection logs (no passwords, tokens or keys) go to the hub; a page with the answer comes back within 5 minutes." ;;
+    zh:debug_prompt_keys)       printf 'y 好 · n 不用（以后可以随时跑 fleet-debug report）[y/n]' ;;
+    en:debug_prompt_keys)       printf 'y yes · n no (you can run fleet-debug report any time) [y/n]' ;;
+    zh:debug_prompt_no)         printf '好的。需要时随时跑：fleet-debug report' ;;
+    en:debug_prompt_no)         printf 'OK. Whenever you need it: fleet-debug report' ;;
+    zh:debug_stall_key_fmt)     printf '已经连了 %s 秒 · 按 d 让远端看一眼' "${1:-}" ;;
+    en:debug_stall_key_fmt)     printf 'connecting for %ss · press d to let the hub take a look' "${1:-}" ;;
+    zh:debug_stall_done)        printf '按任意键接着重连' ;;
+    en:debug_stall_done)        printf 'press any key to reconnect' ;;
     zh:notify_doctor_off)       printf '通知已关（FLEET_NOTIFY=0）' ;;
     en:notify_doctor_off)       printf 'notifications off (FLEET_NOTIFY=0)' ;;
     zh:menu_reap_policy)        printf '改回收方式…' ;;

@@ -801,7 +801,10 @@ except Exception: pass' "$use.route" "$BIN/fleet-connect.py" 2>/dev/null
   # say 「钉住：<route>（手动）· 第 N 次重连」, and after FLEET_ROUTE_FAIL_HINT (5)
   # failures in a row the page suggests auto — it never switches by itself.
   # A fleet's own proxy alternates direct / hub below.
-  route=direct; delay=1; retest=''; gone_since=''; tries=0; fails=0
+  # Stuck past FLEET_DEBUG_STALL_SECS (60) with no session lasting (issue #2894):
+  # the reconnect page says 「按 d 让远端看一眼」 and d sends fleet-debug report
+  # from here — only on this page, never a key of the node's or the client's.
+  route=direct; delay=1; retest=''; gone_since=''; tries=0; fails=0; stuck_since=''
   while :; do
     pin=''
     if [ -n "$shellopt" ]; then
@@ -906,6 +909,7 @@ EOF_PEER
     upgrader & upg=$!
     chan & chn=$!
     started=$(date +%s)
+    [ -n "$stuck_since" ] || stuck_since=$started
     # In the BACKGROUND, then `wait` (issue #1704): bash runs a trap only once the
     # foreground command returns, and an attach never returns — a TERM waited
     # forever. `wait` returns on a trapped signal; `0<&0` keeps the pane's tty as
@@ -975,7 +979,7 @@ EOF_PEER
     # A drop after a good session reconnects at once; a failing route backs off and,
     # when the hub relay is configured, alternates with it.
     tries=$(( tries + 1 ))
-    if [ $(( $(date +%s) - started )) -gt 30 ]; then delay=1; tries=1; fails=0
+    if [ $(( $(date +%s) - started )) -gt 30 ]; then delay=1; tries=1; fails=0; stuck_since=''
     else
       fails=$(( fails + 1 ))
       [ -z "$shellopt" ] && hub_relay_ok && { [ "$route" = direct ] && route=hub || route=direct; }
@@ -990,8 +994,25 @@ EOF_PEER
       # it — Enter reconnects now, and ⌃c, which closed the window (and with the
       # stage's last one, the right pane), does nothing while it waits.
       printf '\n与 %s 的连接断了（exit %s）· %ss 后重连 · 回车立即重连\n' "$node" "$rc" "$delay"
+      stall=''
+      if [ -n "$stuck_since" ] && [ -t 0 ] && [ -f "$BIN/fleet-debug-prompt.sh" ] \
+         && sh "$BIN/fleet-debug-prompt.sh" can; then
+        stall=$(( $(date +%s) - stuck_since ))
+        [ "$stall" -ge "${FLEET_DEBUG_STALL_SECS:-60}" ] || stall=''
+      fi
+      [ -z "$stall" ] || printf '%s\n' "$(sh "$BIN/fleet-ui-lang.sh" t debug_stall_key_fmt "$stall")"
       trap '' INT
-      if [ -t 0 ]; then read -r -s -t "$delay" _ 2>/dev/null || :; else sleep "$delay"; fi
+      if [ -t 0 ] && [ -n "$stall" ]; then
+        k=''; read -r -s -n 1 -t "$delay" k 2>/dev/null || :
+        case "$k" in
+          d|D)
+            stty echo 2>/dev/null
+            sh "$BIN/fleet-debug-prompt.sh" stall "正在连接 $node 卡住 ${stall}s · exit $rc${why:+ · $why}"
+            printf '\n%s\n' "$(sh "$BIN/fleet-ui-lang.sh" t debug_stall_done)"
+            read -r -s -n 1 _ 2>/dev/null || :
+            stty -echo 2>/dev/null ;;
+        esac
+      elif [ -t 0 ]; then read -r -s -t "$delay" _ 2>/dev/null || :; else sleep "$delay"; fi
       trap 'cleanup; exit 0' INT
     else
       printf '\n与 %s 的连接断了（exit %s），%ss 后重连 · Ctrl-C 关闭窗口\n' "$node" "$rc" "$delay"

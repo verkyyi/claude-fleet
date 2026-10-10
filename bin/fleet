@@ -97,7 +97,9 @@
 #   fleet doctor --bundle <dir> everything a diagnosis needs from this computer,
 #                               credentials taken out, in one directory (#2890)
 #   fleet debug report          send that bundle to the hub and print a short
-#                               link — fleet-debug, which needs none of fleet (#2892)
+#                               link — fleet-debug, which needs none of fleet (#2892);
+#                               a third failed login / session / connection in
+#                               half an hour offers it (#2894, FLEET_DEBUG_PROMPT=0 off)
 #
 # The client is the ONLY way in (issue #1628): there is no fallback to ssh-ing
 # into a machine's own list. It needs tmux ≥ 3.2 and a terminal; without either
@@ -202,7 +204,7 @@ fi
 cmd=${1-}
 case $cmd in
   -h|--help|help)
-    sed -n '2,98p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,102p' "$0" | sed 's/^# \{0,1\}//'
     exit 0 ;;
   '')
     client ;;
@@ -268,6 +270,16 @@ fi
 if [ "$cmd" = debug ]; then
   shift
   exec sh "$here/fleet-debug" "$@"
+fi
+# `fleet login` (issue #2894): its outcome goes to fleet-debug-prompt.sh — a
+# third failure in half an hour asks whether the hub should take a look. The
+# login's own exit code is kept; FLEET_DEBUG_PROMPT=0 execs it as before.
+if [ "$cmd" = login ] && [ "${FLEET_DEBUG_PROMPT:-1}" != 0 ] && [ -x "$here/fleet-login.py" ] \
+   && [ -f "$here/fleet-debug-prompt.sh" ]; then
+  shift
+  "$here/fleet-login.py" "$@"; rc=$?
+  sh "$here/fleet-debug-prompt.sh" after login "$rc"
+  exit "$rc"
 fi
 # `fleet claude` / `fleet codex` (issue #2264): a session in one command — never
 # the node's own launchers of the same name (fleet-claude.sh / fleet-codex.sh)

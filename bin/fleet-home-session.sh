@@ -50,6 +50,12 @@
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 SH="${FLEET_HOME_SHELL:-$BIN/fleet-shell.sh}"   # the selftests' seam
+# a failed step goes to fleet-debug-prompt.sh (issue #2894): the third in half an
+# hour asks whether the hub should take a look; a placement emptied the book
+debug_after() {
+  [ "${FLEET_DEBUG_PROMPT:-1}" != 0 ] && [ -f "$BIN/fleet-debug-prompt.sh" ] || return 0
+  sh "$BIN/fleet-debug-prompt.sh" after "$1" "$2"
+}
 
 usage() { sed -n '5,6p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 helpn=$(awk '/^set -uo pipefail/ { print NR - 1; exit }' "$0")
@@ -107,7 +113,7 @@ fi
 #    machine on its stage, take the lease for THIS terminal and say where it is
 #    in use — it holds its lease already, and that lease signs the ask.
 if [ -z "$was_up" ] || [ "${FLEET_SHELL_NO_ATTACH:-0}" = 1 ]; then
-  FLEET_SHELL_NO_ATTACH=1 FLEET_SHELL_NO_FIRST=1 bash "$SH" ${node:+"$node"} >/dev/null || exit $?
+  FLEET_SHELL_NO_ATTACH=1 FLEET_SHELL_NO_FIRST=1 bash "$SH" ${node:+"$node"} >/dev/null || { rc=$?; debug_after connect "$rc"; exit "$rc"; }
 fi
 
 # 2. the session — the client's own stage left where it is when this command
@@ -131,6 +137,7 @@ except Exception: d = {}
 print("、".join(x.replace("#", "").replace("\x27", "").replace("\"", "") for x in d.get("also_open") or [] if isinstance(x, str)))' "$resf" 2>/dev/null)
   rm -f "$resf"
 fi
+debug_after place "$rc"
 [ "$rc" = 0 ] || exit "$rc"
 # the seam's answer is the placement's line (issue #2505: `REMOTE … done` is what
 # a check of the hub reads)

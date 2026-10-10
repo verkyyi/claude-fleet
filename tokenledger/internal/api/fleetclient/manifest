@@ -90,6 +90,8 @@ conf/debug-collect.list
 # is broken — sh + /usr/bin/curl only; `fleet debug` forwards to it, and
 # GET /debug serves it alone (with the four files above spliced in)
 bin/fleet-debug
+# the third failure in half an hour asks whether the hub should look (#2894)
+bin/fleet-debug-prompt.sh
 bin/fleet-client-lib.sh
 # keeps up with stable by itself (#1722, #1805): newer client + the team's
 # defaults; `fleet update` says where this computer stands

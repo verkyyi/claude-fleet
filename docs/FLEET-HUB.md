@@ -1749,6 +1749,28 @@ What the ticket is for (EPIC #2889 C4, `tokenledger/internal/api/fleet_debug.go`
 - **Off** — no `CCQUOTA_FLEET_DEBUG_DIR` — none of these routes exists
   (`TestDebugReportsOffAddsNothing`). BREAK-IT `debug-page-stuck`.
 
+### The client asks after the third failure (#2894)
+
+`bin/fleet-debug-prompt.sh` keeps a failure book in the shell cache
+(`debug-fails`: epoch · UTC time · action · exit code · reason, the last 20).
+`fleet login` (bin/fleet), `fleet claude|codex`'s client start and placement
+(`fleet-home-session.sh`) and a person's `fleet connect` (`fleet-connect.py`;
+once ssh ran only its 255 counts, never `--print` / `--pick`) write each
+failure there and empty it on a success; a failure with no words of its own
+takes the client log's last line for that action (docs/CLIENT-LOGS.md). The
+`FLEET_DEBUG_PROMPT_AFTER`-th (3) inside `FLEET_DEBUG_PROMPT_WINDOW` (1800 s)
+asks 「连了 3 次都没成。要不要让远端帮你看一眼？」: y runs `fleet-debug report
+--note "<the last failure>"` and passes its words on (an expired ticket: its
+re-issue line), n says `fleet-debug report` and asks nothing for
+`FLEET_DEBUG_PROMPT_QUIET` (24 h). Asked only with a terminal on stdin and
+stdout, never inside the client's tmux (`FLEET_SHELL=1`: sidebar, stage,
+keeper), never without a debug ticket (the hub has no remote debugging). The
+right pane's reconnect page (`fleet-remote-view.sh run --shell`), with no
+session lasting for `FLEET_DEBUG_STALL_SECS` (60), adds 「已经连了 N 秒 · 按 d 让远端
+看一眼」 — d runs the same report there, on that page only. No command's exit
+code changes; `FLEET_DEBUG_PROMPT=0` turns all of it off (`fleet login` execs as
+before). `fleet-debug-prompt-selftest.sh`.
+
 ## Validation and next increments
 
 Run the hermetic regression suite through the normal shadow-root gate:
