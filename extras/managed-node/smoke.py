@@ -66,6 +66,7 @@ class Hub(BaseHTTPRequestHandler):
 def main():
     if os.geteuid() != 0 or not sys.platform.startswith('linux') or os.environ.get('CI') != 'true':
         raise SystemExit('only run as root on an ephemeral Linux CI machine (CI=true)')
+    os.umask(0o022)
     login = 'fleetci3022'
     try:
         pwd.getpwnam(login)
@@ -99,6 +100,8 @@ def main():
         runtime = d / 'runtime' / ('a' * 40)
         shutil.copytree(ROOT / 'bin', runtime / 'bin')
         shutil.copytree(ROOT / 'conf', runtime / 'conf')
+        for path in (runtime, *runtime.rglob('*')):
+            path.chmod(path.stat().st_mode & ~0o022)
         (runtime / '.release').mkdir()
         (runtime / '.release/staged.json').write_text('{}')
         (runtime / 'bin/ccquota').write_text('#!/bin/sh\nexit 0\n')
