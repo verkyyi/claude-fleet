@@ -582,9 +582,8 @@ exit 124;
 tt_dir=''
 tt_sweep() {
   [ -n "$tt_dir" ] && [ -d "$tt_dir" ] || return 0
-  local s
-  for s in "$tt_dir"/tmux-*/*; do
-    [ -S "$s" ] && tmux -S "$s" kill-server >/dev/null 2>&1
+  for tt_s in "$tt_dir"/tmux-*/*; do
+    [ -S "$tt_s" ] && tmux -S "$tt_s" kill-server >/dev/null 2>&1
   done
   rm -rf "$tt_dir"; tt_dir=''
 }
