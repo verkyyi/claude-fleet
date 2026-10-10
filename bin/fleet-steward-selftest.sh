@@ -31,6 +31,8 @@
 #   J  the decide count travels: orchdec=2 → orch_decide 2 → `decide=2` → red;
 #      the park count beside it (issue #2671): @orch_park → orchpark= (the last
 #      tag) → orch_park → `park=N`
+#   L  the panels' change stamp: every State.save() moves global/steward.stamp
+#      (`<seq> <epoch_ms>`, issue #2835) by exactly one
 #   K  the health watch (bin/fleet_steward_health.py, fleet-doctor.sh --json,
 #      issue #2674): the first doctor run is the baseline; PASS→WARN files ONE
 #      issue; still WARN files nothing; gone and back is a 又出现 comment; an
@@ -117,6 +119,19 @@ TICK beat --force >"$WORK/out" 2>&1; rc=$?
 [ "$rc" = 1 ] && [ "$(sends)" = 0 ] && [ "$(calls)" = 0 ] && grep -q '平静' "$WORK/out" \
   && ok "A: a calm beat — exit 1, card 平静, no turn sent (0 model calls)" \
   || bad "A: calm beat rc=$rc sends=$(sends) calls=$(calls): $(cat "$WORK/out")"
+
+# L — the panels' change stamp (issue #2835): every State.save() moves
+# global/steward.stamp `<seq> <epoch_ms>` by exactly one
+STAMP="$FLEET_CONF_DIR/global/steward.stamp"
+s0=$(cut -d' ' -f1 "$STAMP" 2>/dev/null || echo 0)
+TICK beat --force >/dev/null 2>&1
+s1=$(cut -d' ' -f1 "$STAMP" 2>/dev/null || echo 0)
+python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import fleet_steward as f; f.State().save()' "$BIN"
+s2=$(cut -d' ' -f1 "$STAMP" 2>/dev/null || echo 0)
+ms=$(cut -d' ' -f2 "$STAMP" 2>/dev/null)
+[ "$s0" -gt 0 ] && [ "$s1" -gt "$s0" ] && [ "$s2" = $((s1 + 1)) ] && [ "${#ms}" = 13 ] \
+  && ok "L: every State.save() moves steward.stamp by one (<seq> <epoch_ms>)" \
+  || bad "L: stamp seq $s0 → $s1 → $s2, ms='$ms'"
 
 # B — three questions, one the charter answers
 ask 11 '先发 20 家还是 50 家？' --suggest '20 家' --due 4h

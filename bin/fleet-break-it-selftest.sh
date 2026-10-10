@@ -125,6 +125,9 @@
 #   orch-busy-queue-invisible                       mod/fleet/hooks/queue.ts (its test, when a claude CLI is here),
 #                                                   fleet-control-read.sh (orchq=), fleet_hub_common inventory_row,
 #                                                   fleet-hub-sessions.sh (orch_<sess> col 7), fleet-sidebar.py
+#   panel-stale / panel-wrong-window                mod/fleet/hooks/panels.ts (its tests, when a claude CLI is here),
+#                                                   lifecycle.ts (PANELS_FULL_MS timer, role gate), fleet_steward.py
+#                                                   write_stamp
 #   cmdn-no-orch / cmdn-codex-orch                  bin/fleet-shell.sh portal, fleet-compose.py --orch --boot
 #                                                   (boot_orch, stamp_role), fleet-hub-write.sh orch_ensure,
 #                                                   conf/tmux-shell.conf (User927/928, ⌃\), fleet-sidebar.py orch_busy
@@ -2353,6 +2356,48 @@ drill_orch_busy_queue_invisible() {
     || { WHY="the list's 「新任务」 row does not end in 排队 2: [$(orch_list "$s" | grep -m1 新任务)] orch_${s}=[$(tr '\037' '|' < "$G/orch_$s" 2>/dev/null)]"; orch_down "$s" "$d"; return 1; }
   SECS=$(since "$t0"); orch_down "$s" "$d"
   WHAT="忙时连发 3 条：${m}节点 orchq=2 · 侧栏「新任务 … 排队 2」"
+}
+
+# the panels' mod half (issue #2835): panels.test.ts alone, when a claude CLI can run it here
+panel_mod_test() {
+  local d="$1" out
+  command -v claude >/dev/null 2>&1 || return 2
+  mkdir -p "$d/mod" && cp -R "$ROOT/mod/fleet/." "$d/mod/" && find "$d/mod/tests" -type f ! -name panels.test.ts -delete
+  out=$(cd "$d/mod" && claude plugin test . 2>&1)
+  case "$out" in *"(pass) $2"*) return 0 ;; esac
+  WHY="panels.test.ts «$2» did not pass: $(printf '%s' "$out" | grep -E 'fail|error' | head -3 | tr '\n' ' ')"; return 1
+}
+
+# the steward saves its books but the change stamp does not move (a writer that
+# bypasses State.save, a stamp it cannot write): the panels still draw the new
+# books within one full read (≤ 10 s), and every State.save() moves the stamp
+drill_panel_stale() {
+  CAP=30; local d="$WORK/ps" t0 s0 s1 m='' rc full
+  mkdir -p "$d/conf/global"; t0=$(now)
+  full=$(sed -n "s/^export const PANELS_FULL_MS = \([0-9_]*\).*/\1/p" "$ROOT/mod/fleet/hooks/panels.ts" | tr -d _)
+  [ -n "$full" ] && [ "$full" -le 10000 ] || { WHY="PANELS_FULL_MS is [$full], want ≤ 10000"; return 1; }
+  grep -q 'every(PANELS_FULL_MS' "$ROOT/mod/fleet/hooks/lifecycle.ts" || { WHY="lifecycle.ts starts no full-read timer"; return 1; }
+  # the stamp half: two saves, two moves
+  s0=$(FLEET_CONF_DIR="$d/conf" python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import fleet_steward as f; f.State().save(); print(open(f.gdir() / "steward.stamp").read().split()[0])' "$BIN" 2>/dev/null)
+  s1=$(FLEET_CONF_DIR="$d/conf" python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import fleet_steward as f; f.State().save(); print(open(f.gdir() / "steward.stamp").read().split()[0])' "$BIN" 2>/dev/null)
+  [ -n "$s0" ] && [ "$s1" = $((s0 + 1)) ] || { WHY="State.save() did not move steward.stamp: [$s0] → [$s1]"; return 1; }
+  panel_mod_test "$d" 'panels: a writer that forgets the stamp is drawn within the full read (panel-stale)'; rc=$?
+  [ "$rc" = 1 ] && return 1
+  [ "$rc" = 0 ] && m='mod：戳不动、10 秒整读画出新账 · '
+  SECS=$(since "$t0"); WHAT="账变了戳没动：${m}兜底整读 ${full} ms · 每次 save 戳 +1"
+}
+
+# a worker (or scratch / driver) window loads the mod: it must not register
+# /sheet, open a panel or stat one file of the steward's books
+drill_panel_wrong_window() {
+  CAP=30; local d="$WORK/pw" t0 rc m=''
+  mkdir -p "$d"; t0=$(now)
+  grep -q "return role === 'orchestrator' || role === 'steward'" "$ROOT/mod/fleet/hooks/panels.ts" \
+    || { WHY="panelsWanted lets another role in"; return 1; }
+  panel_mod_test "$d" 'panels: a worker window stats nothing and registers no /sheet (panel-wrong-window)'; rc=$?
+  [ "$rc" = 1 ] && return 1
+  [ "$rc" = 0 ] && m='mod：worker 窗口零 stat、无 /sheet · '
+  SECS=$(since "$t0"); WHAT="执行会话窗口装了 mod：${m}只认编排 / 管家两个角色"
 }
 
 # ② no orchestrating session anywhere: ⌘N is not lost — the hub is asked to open

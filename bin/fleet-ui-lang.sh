@@ -836,6 +836,20 @@ fleet_ui_t() {
     zh:orch_boot_waited)        printf '等了 %s 秒还没出现' "${1:-}" ;;
     en:orch_boot_waited)        printf 'not there after %s s' "${1:-}" ;;
     # quick dispatch — the mod's /qd dialog in the orchestrator (issue #2618, EPIC #2615 C3)
+    zh:panel_desc)              printf '编排 / 管家的面板：/sheet 看台账一行，/sheet --stats 看刷新耗时' ;;
+    en:panel_desc)              printf 'Orchestrator / steward panels: /sheet for one line of the books, /sheet --stats for refresh timings' ;;
+    zh:panel_stats_fmt)         printf '面板刷新 %s 次 · p50 %s ms · p95 %s ms' "${1:-}" "${2:-}" "${3:-}" ;;
+    en:panel_stats_fmt)         printf 'Panel refreshes %s · p50 %s ms · p95 %s ms' "${1:-}" "${2:-}" "${3:-}" ;;
+    zh:panel_stats_none)        printf '面板还没有刷新记录' ;;
+    en:panel_stats_none)        printf 'No panel refresh recorded yet' ;;
+    zh:panel_seen_fmt)          printf '最近 %s 次「写出→看见」（秒）：%s' "${1:-}" "${2:-}" ;;
+    en:panel_seen_fmt)          printf 'Last %s written→seen (s): %s' "${1:-}" "${2:-}" ;;
+    zh:panel_seen_none)         printf '还没有「写出→看见」的记录' ;;
+    en:panel_seen_none)         printf 'No written→seen recorded yet' ;;
+    zh:panel_summary_fmt)       printf '决定单 %s 件待定 · 在跑批次 %s · 停放 %s · 上一拍 %s' "${1:-}" "${2:-}" "${3:-}" "${4:-}" ;;
+    en:panel_summary_fmt)       printf 'Sheet %s open · batches running %s · parked %s · last beat %s' "${1:-}" "${2:-}" "${3:-}" "${4:-}" ;;
+    zh:panel_empty)             printf '面板还没读到台账' ;;
+    en:panel_empty)             printf 'The panels have not read the books yet' ;;
     zh:qd_title)                printf '快速派发' ;;
     en:qd_title)                printf 'Quick dispatch' ;;
     zh:qd_desc)                 printf '快速派发：一行标题、选个仓库，回车就建单开工，不用等编排会话' ;;

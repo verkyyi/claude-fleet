@@ -47,7 +47,7 @@ let strings: Record<string, string> = {}
 
 /** The argv that prints the `qd_` strings and queue.ts's `orch_queue` ones (KEY NUL TEXT NUL, a \001 per printf slot). */
 export function stringsArgv(root: string): string[] {
-  return ['sh', `${binDir(root)}/fleet-ui-lang.sh`, 'dump', 'qd_', 'orch_queue']
+  return ['sh', `${binDir(root)}/fleet-ui-lang.sh`, 'dump', 'qd_', 'orch_queue', 'panel_']
 }
 
 /** Take the dump; one that cannot be read leaves every key showing itself. */

@@ -53,6 +53,72 @@ export type OrchQueue = {
   now: number
 }
 
+// The orchestrator's / steward's panels (issue #2835): what panels-model.ts
+// folds out of the books.
+
+export type SheetRow = {
+  id: string
+  item: string
+  suggest: string
+  default: string
+  due: string
+  kind: string
+  src: string
+  url: string
+  state: string
+  by: string
+  asked: string
+}
+
+export type Sheet = { id: string; at: string; where: string; sent: boolean; rows: SheetRow[] }
+
+export type Batch = {
+  repo: string
+  epic: number
+  tick: number
+  landed: number
+  members: number
+  /** null: a mark written before the heartbeat carried the reading (#2247). */
+  live: number | null
+  inflight: number | null
+  epoch: number
+  ttl: number
+  fresh: boolean
+}
+
+export type Parked = { ref: string; at: number; wait: string[]; key: string }
+
+export type QueueRow = { child: string; state: string; verdict: string }
+
+export type Patrol = {
+  beat: number
+  at: string
+  changed: boolean
+  writes: number
+  nextAt: number
+  card: string[]
+  modelCalls: number
+  parked: Parked[]
+  newAsks: number
+  closed: number
+  defaulted: number
+}
+
+export type Todo = { open: number; desk: string }
+
+/** The `{plugin:'fleet', key:'panels'}` state (EPIC #2831's interface). */
+export type PanelsView = {
+  sheet: Sheet | null
+  batches: Batch[]
+  todo: Todo
+  queue: QueueRow[]
+  patrol: Patrol
+  /** When this view was read (epoch ms). */
+  at: number
+  /** How long the read took (ms). */
+  ms: number
+}
+
 declare module 'claude-code' {
   interface PluginState {
     fleet: {
@@ -64,6 +130,8 @@ declare module 'claude-code' {
       qd: QdState
       /** What waits behind the orchestrator's turn (issue #2617). */
       queue: OrchQueue
+      /** What the panels last read from the books (issue #2835); null before the first read. */
+      panels: PanelsView | null
     }
   }
 }

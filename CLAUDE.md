@@ -432,6 +432,14 @@ Do not install from memory: read the doc and work from it.
   `page=<url>` on `orch_<sess>` → 「新任务」's menu 管家页 · 进管家会话; the `[decision]`
   message carries the same plain lines + `〔row ids〕`. `FLEET_STEWARD_PAGE=0` off;
   `fleet-steward-page-selftest.sh`.
+  **The right-hand panels follow its books by a change stamp** (issue #2835, EPIC
+  #2831 C4): every `State.save()` writes `global/steward.stamp` (`<seq> <epoch_ms>`);
+  mod `hooks/panels.ts` — the orchestrator's and the steward's windows only
+  (`windowRole()`), `FLEET_MOD_PANELS=0` off — stats it, the orchestrator's children
+  ledger, `epic-running.d/` and `park.json` on the inbox's 1 s tick and re-reads
+  only when one moved (a 10 s full read covers a missed stamp), no process run;
+  each read's time and a new sheet's 写出→看见 go to `logs/panel.ndjson`,
+  `/sheet --stats` prints them. BREAK-IT `panel-stale`, `panel-wrong-window`.
   `FLEET_STEWARD`: `0` byte for byte · `count` (default where an orchestrator runs:
   only the attention count, the node conf's [76] hooks → `logs/attention.ndjson`,
   `fleet-steward-stats.sh`) · `1` the window too. `fleet-steward-selftest.sh`;
