@@ -179,12 +179,13 @@ case "$(uname -m)" in x86_64|amd64) DARCH=amd64 ;; arm64|aarch64) DARCH=arm64 ;;
 cp "$CCQ" "$WORK/dist/ccquota-$(uname -s | tr 'A-Z' 'a-z')-$DARCH"
 # CCQUOTA_FLEET_MAX_LOAD_PER_CORE: the fake node reports this box's own load,
 # and a shared runner (the clock step's drill on top) sits above the 0.8 a real
-# machine is held to (#2267)
+# machine is held to (#2267); CCQUOTA_FLEET_MAX_CPU_BUSY=1 the same for the
+# CPU-busy ceiling (#2882) — a macOS runner reads ~85% busy against 80% (#3018)
 env CCQUOTA_FLEET=1 CCQUOTA_VIEWER_TOKEN="$VT" CCQUOTA_FLEET_DIST_DIR="$WORK/dist" \
     CCQUOTA_FLEET_SSH_CA_KEY="$WORK/ca" CCQUOTA_GITHUB_CLIENT_ID=newcomer-e2e \
     CCQUOTA_GITHUB_CLIENT_SECRET="placeholder-$RANDOM$RANDOM" \
     CCQUOTA_GITHUB_API_BASE="http://127.0.0.1:$GHPORT" CCQUOTA_FLEET_PUBLIC_URL="$HUB" \
-    CCQUOTA_FLEET_STABLE_REPO="$STABLE" CCQUOTA_FLEET_MAX_LOAD_PER_CORE=100 \
+    CCQUOTA_FLEET_STABLE_REPO="$STABLE" CCQUOTA_FLEET_MAX_LOAD_PER_CORE=100 CCQUOTA_FLEET_MAX_CPU_BUSY=1 \
   "$CCQ" hub --addr "127.0.0.1:$PORT" --db "$WORK/hub.db" >"$WORK/hub.log" 2>&1 &
 HUB_PID=$!
 waitfor 20 curl -fs -m 2 -o /dev/null "$HUB/healthz" || die 'the hub never answered /healthz'

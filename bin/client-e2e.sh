@@ -297,9 +297,11 @@ ok 'the list shows issue-7 and scratch-3 on the node'
 step 'switch: open the issue-7 row, the right pane points at it'
 waitfor 10 test -S "$(tp show-options -wqv -t "$w1" @remote_ctl)" || die 'no live @remote_ctl on the node window' "$(tp show-options -wqv -t "$w1" @remote_ctl)"
 got=$(cd "$SC/bin" && cenv TMUX="$sock,0,0" FLEET_SHELL=1 ${STG:+FLEET_SHELL_STAGE="$STG"} FLEET_SESSION="$SESS" CCQUOTA_FLEET=1 TMPDIR="$SC/tmp" \
-        FLEET_CONF_DIR="$CH/.config/claude-fleet" bash "$SC/bin/fleet-remote-view.sh" open "wid:$FID/issue-7" 2>&1)
+        FLEET_CONF_DIR="$CH/.config/claude-fleet" bash -x "$SC/bin/fleet-remote-view.sh" open "wid:$FID/issue-7" 2>"$WORK/open.trace"); orc=$?
 remote=$(tp show-options -wqv -t "$w1" @remote)
-[ "$remote" = "$NODE:$FID/issue-7" ] || die "the right pane does not point at issue-7" "open → $got · @remote=$remote"
+[ "$remote" = "$NODE:$FID/issue-7" ] || die "the right pane does not point at issue-7" \
+  "open (exit $orc) → $got · @remote=$remote · windows: $(tp list-windows -t "=$P" -F '#{window_id} #{@remote} [#{@remote_login}]' | tr '\n' ' ')
+$(grep -v '^++' "$WORK/open.trace" | tail -n 40)"
 grep -q "select '$FID/issue-7'" "$WORK/ssh.log" || die 'the node was not asked to select issue-7' "$(cat "$WORK/ssh.log")"
 ok "@remote=$remote, window $(tp display-message -p -t "$w1" '#{window_name}')"
 
