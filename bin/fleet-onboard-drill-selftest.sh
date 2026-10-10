@@ -206,6 +206,34 @@ out=$(env PATH="$T/shim:$PATH" FLEET_CONF_DIR="$T/conf" FLEET_LOGIN_HOMES="$T/ho
 if [ "$rc" = 143 ] && printf '%s\n' "$out" | grep -q 'ABORTED (interrupted by SIGTERM)' \
    && ! printf '%s\n' "$out" | grep -q ': PASS '; then ok 'a SIGTERM mid-run reads ABORTED, exit 143, no PASS'
 else bad "SIGTERM mid-run: exit $rc: $(printf '%s' "$out" | tail -n 4)"; fi
+# --- the scratch step's wait while the hub opens the login (issue #2908) -----------
+# the ETA on the visible screen: the smallest of the pane's and the bar's, none
+# when the screen says no opening
+e=$(printf '%s\n' '  first   │ 正在为你开机器（mini2），约 412 秒。' \
+      '正在为你开机器（mini2），约 480 秒 — 开好后自动接着开' | bash "$DRILL" --opening-eta)
+[ "$e" = 412 ] && ok 'opening: the ETA read off the screen (the smaller one)' || bad "opening: ETA got '$e'"
+e=$(printf '%s\n' 'opening a machine for you (mini2), about 95s.' | bash "$DRILL" --opening-eta)
+[ "$e" = 95 ] && ok 'opening: the English ETA' || bad "opening: English ETA got '$e'"
+e=$(printf '%s\n' '  first  scratch  │ 约 30 秒' | bash "$DRILL" --opening-eta)
+[ -z "$e" ] && ok 'opening: a number with no 正在为你开机器 is no ETA' || bad "opening: ETA off a non-opening screen: '$e'"
+# an ETA only goes down (#2731): the #2728 run's 313 → 858 is a rise
+r=$(printf '480\n412\n412\n5\n' | bash "$DRILL" --eta-rises)
+[ -z "$r" ] && ok 'eta: going down (or level) is no rise' || bad "eta: a fall read as a rise: $r"
+r=$(printf '313\n858\n100\n' | bash "$DRILL" --eta-rises)
+[ "$r" = '313→858' ] && ok 'eta: 313 → 858 is a rise' || bad "eta: the rise got '$r'"
+# the wait outlasts the hub's own give-up: never again a cap shorter than a
+# real create (360 s judged a login still opening a FAIL, #2908)
+GIVEUP=$(sed -n 's/^[[:space:]]*openingGiveUp[[:space:]]*=[[:space:]]*\([0-9]*\) \* time\.Minute.*/\1/p' \
+           "$(dirname "$DRILL")/../tokenledger/internal/api/fleet_opening.go")
+CAP=$(sed -n 's/^OPENING_CAP=\${FLEET_DRILL_OPENING_SECS:-\([0-9]*\)}$/\1/p' "$DRILL")
+if [ -n "$GIVEUP" ] && [ -n "$CAP" ] && [ "$CAP" -gt $((GIVEUP * 60)) ]; then
+  ok "opening: the drill waits ${CAP}s, past the hub's ${GIVEUP} min give-up"
+else bad "opening: the drill's cap '${CAP}'s is not past the hub's give-up '${GIVEUP}' min"; fi
+# while the screen says opening the deadline is the cap, read off the VISIBLE
+# screen — the scrollback keeps the words after the login is up
+if grep -q 'deadline=\$open_end' "$DRILL" && grep -q '^screen() { tmux_own capture-pane -p -J -t ' "$DRILL"; then
+  ok 'opening: waits to the cap while the visible screen says so'
+else bad 'opening: the wait is not held by the visible screen'; fi
 # bash 3.2 in a UTF-8 locale reads 「$opening，」's full-width comma as part of
 # the name — under set -u the drill died at scratch (C9 run 4): braces only
 bad_vars=$(LC_ALL=C grep -nE '\$[A-Za-z_][A-Za-z0-9_]*[^ -~[:space:]]' "$DRILL" | grep -vE '^[0-9]+:[[:space:]]*#')

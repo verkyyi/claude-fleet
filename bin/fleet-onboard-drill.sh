@@ -46,7 +46,11 @@
 #               appear, the name a whole word (default `first`: never a part
 #               of the login, which is refused). Before any key: the right
 #               pane's 「入口没有在线的机器」 is a FAIL (issue #2220 — a
-#               newcomer is told 「正在为你开机器」 or who to ask). The
+#               newcomer is told 「正在为你开机器」 or who to ask). While
+#               the screen says 「正在为你开机器」 the step waits on — a real
+#               create is 13 min+ (#2908) — until the row, the hub's failed, or
+#               the hub's own give-up + 1 min; every ETA it shows is kept
+#               (scratch-eta.txt) and one that went UP is 要人帮 (#2731). The
 #               sidebar's refusal (no repo / no machine of yours / hub down,
 #               zh or en) is 要人帮 — a FAIL naming it. The row's line is the
 #               evidence.
@@ -106,6 +110,9 @@
 #       2 bad arguments / preflight · 3 the login (or its home) already exists
 # Env: FLEET_DRILL_TIMEOUT (900 s, the download) · FLEET_DRILL_SCAN_SECS (600,
 #      the QR's life) · FLEET_DRILL_STEP_SECS (120, any other wait) ·
+#      FLEET_DRILL_OPENING_SECS (1260, while the hub still says 「正在为你开
+#      机器」: its own 20 min give-up + 1) · FLEET_DRILL_OPENED_SECS (300, the row
+#      after it stops saying so) ·
 #      FLEET_DRILL_POLL_SECS (2) · FLEET_DRILL_REMOVE_SECS (600, the hub closing
 #      the drill person's login) · FLEET_DRILL_RETIRE_CMD · FLEET_LOGIN_HOMES (/Users)
 set -u
@@ -147,6 +154,8 @@ while [ $# -gt 0 ]; do
     --row-named) [ $# -ge 2 ] || usage; ROW_ONLY=$2; shift 2 ;;   # selftest seam: screen on stdin
     --qr-state) QR_ONLY=1; shift ;;                                 # selftest seam: screen on stdin
     --attach-state) attach_state; exit 0 ;;                         # selftest seam: screen on stdin
+    --opening-eta) opening_eta; exit 0 ;;                           # selftest seam: screen on stdin
+    --eta-rises) eta_rises; exit 0 ;;                               # selftest seam: ETAs on stdin
     --ls-row)   [ $# -ge 2 ] || usage; ls_row "$2"; exit ;;            # selftest seam: fleet ls --json on stdin
     --png)      [ $# -ge 2 ] || usage; drill_png "$2"; exit ;;         # selftest seam: the test image
     -h|--help)  sed -n '2,/^set -u/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 0 ;;
@@ -233,6 +242,8 @@ as_login() { ( cd / && sudo -n -u "$LOGIN" -H "$@" ); }
 keep_sudo() { sudo -n -v >/dev/null 2>&1 || :; }   # refreshes a ticket; NOPASSWD needs none
 tmux_own() { TMUX='' "$TMUXB" -L "$SOCK" "$@"; }
 pane() { tmux_own capture-pane -p -J -S - -t "$TSESS" 2>/dev/null; }
+# screen: the visible pane only — what it says NOW, never what scrolled past
+screen() { tmux_own capture-pane -p -J -t "$TSESS" 2>/dev/null; }
 # shot <name>: the screen as the person sees it now (the visible pane only)
 shot() {
   NSHOT=$((NSHOT + 1))
@@ -307,17 +318,22 @@ hub_body() { case "$1" in *$'\n'*) printf '%s' "${1%$'\n'*}" ;; esac; }
 
 # --- 1 open ------------------------------------------------------------------------
 step_open() {
-  local pw key="$RUN/id_ed25519"
+  local pw t key="$RUN/id_ed25519"
   ssh-keygen -q -t ed25519 -N '' -C "$PROG-$LOGIN" -f "$key" || { failstep open 'ssh-keygen failed'; return 1; }
   pw=$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 24)
   # every login before this run: a login the hub opens for the drill person
   # (its session's machine, when that is this one) must be gone at the residue
   dscl . -list /Users 2>/dev/null | sort > "$RUN/users-before.txt"
+  t=$SECONDS
   if ! ( cd / && sudo -n sysadminctl -addUser "$LOGIN" -fullName "Onboard Drill ($LOGIN)" -password "$pw" ) > "$RUN/open.log" 2>&1; then
     failstep open "sysadminctl -addUser $LOGIN: $(tail -n 1 "$RUN/open.log")"
     return 1
   fi
   pw=''
+  # how long addUser itself took here — the hub's create of the drill
+  # person's login takes ~5 min in it on macmini (#2908); this is the
+  # comparison from an admin's shell
+  t=$((SECONDS - t)); note "sysadminctl -addUser: ${t}s"; printf 'sysadminctl -addUser: %ss\n' "$t" >> "$RUN/open.log"
   ( cd / && sudo -n createhomedir -c -u "$LOGIN" ) >> "$RUN/open.log" 2>&1 || :
   if dseditgroup -o read com.apple.access_ssh >/dev/null 2>&1; then
     ( cd / && sudo -n dseditgroup -o edit -a "$LOGIN" -t user com.apple.access_ssh ) >> "$RUN/open.log" 2>&1 || :
@@ -477,17 +493,26 @@ SCRATCH_NOHOST='入口没有在线的机器|no machine of yours is online'
 # the bar until a key since #2069 (a 4 s toast before), polled every second
 SCRATCH_NO='还没有仓库|还没有能开会话的机器|入口连不上|开机器没成功|机器还没开好|no repo yet|no machine of yours|hub is unreachable|machine for you failed|machine is not ready yet'
 # the hub opening the person's first login (issue #2069): not a refusal — the
-# sidebar holds the Enter and opens the session itself once the login is up,
-# so the step waits (FLEET_DRILL_OPENING_SECS, default 360) and it is no 要人帮
-SCRATCH_OPENING='正在为你开机器|opening a machine for you'
+# sidebar holds the Enter and opens the session itself once the login is up.
+# A real create on a Mac takes 13 min and more (sysadminctl alone ~5, #2908),
+# so while the VISIBLE screen still says it (opening_eta, fleet-onboard-judge.sh)
+# the step keeps waiting — up to FLEET_DRILL_OPENING_SECS from the first
+# sighting (1260 s: the hub's own give-up, openingGiveUp 20 min, + 1 min; past
+# it the hub says failed) — and once it stops saying it, FLEET_DRILL_OPENED_SECS
+# (300) more for the row. A 360 s cap shorter than a real create judged a
+# login still being opened a FAIL (#2908). It is no 要人帮.
+SCRATCH_OPENING=$OPENING_SAYS
+OPENING_CAP=${FLEET_DRILL_OPENING_SECS:-1260}
 # place_wait <text> <row name> <shot prefix>: the writing area (prefix c), the
 # text typed, Enter; the questions on the way each answered with Enter. Sets
 # PW_K (row · no · stuck · '' = nothing within the wait), PW_P (the last
-# screen), PW_ANSWERED and PW_OPENING (the hub's 「正在为你开机器」, if said).
-PW_K='' PW_P='' PW_ANSWERED=0 PW_OPENING=''
+# screen), PW_ANSWERED, PW_OPENING (the hub's 「正在为你开机器」, if said) and
+# PW_OPENED (seconds from it first said to the end). Every ETA it read lands in
+# $RUN/<shot prefix>-eta.txt (<secs since first said> <eta>, one a change).
+PW_K='' PW_P='' PW_ANSWERED=0 PW_OPENING='' PW_OPENED=0
 place_wait() {
-  local deadline
-  PW_K='' PW_P='' PW_ANSWERED=0 PW_OPENING=''
+  local deadline open0='' open_end=0 eta last_eta='' v
+  PW_K='' PW_P='' PW_ANSWERED=0 PW_OPENING='' PW_OPENED=0
   keys C-b c
   sleep 1
   keys -l "$1"; keys Enter
@@ -497,10 +522,24 @@ place_wait() {
     PW_P=$(pane)
     if printf '%s\n' "$PW_P" | grep -Eq -- "$SCRATCH_NO"; then PW_K=no; break; fi
     if [ -n "$(row_named "$2")" ]; then PW_K=row; break; fi
-    if [ -z "$PW_OPENING" ] && printf '%s\n' "$PW_P" | grep -Eq -- "$SCRATCH_OPENING"; then
-      PW_OPENING=$(printf '%s\n' "$PW_P" | grep -Eo -- "($SCRATCH_OPENING)[^│]*" | head -n 1 | sed 's/ *$//')
-      shot "$3-opening"
-      deadline=$((SECONDS + ${FLEET_DRILL_OPENING_SECS:-360}))
+    v=$(screen)
+    if printf '%s\n' "$v" | grep -Eq -- "$SCRATCH_OPENING"; then
+      if [ -z "$open0" ]; then
+        open0=$SECONDS open_end=$((SECONDS + OPENING_CAP))
+        PW_OPENING=$(printf '%s\n' "$v" | grep -Eo -- "($SCRATCH_OPENING)[^│]*" | head -n 1 | sed 's/ *$//')
+        shot "$3-opening"
+      fi
+      eta=$(printf '%s\n' "$v" | opening_eta)
+      if [ -n "$eta" ] && [ "$eta" != "$last_eta" ]; then
+        printf '%s %s\n' "$((SECONDS - open0))" "$eta" >> "$RUN/$3-eta.txt"; last_eta=$eta
+      fi
+      # still opening: wait on, never past the hub's own give-up (+ a minute)
+      deadline=$open_end
+    elif [ -n "$open0" ] && [ "$deadline" -ge "$open_end" ]; then
+      # it stopped saying so: the login is up (or failed) — the row is next
+      deadline=$((SECONDS + ${FLEET_DRILL_OPENED_SECS:-300}))
+      [ "$deadline" -le "$open_end" ] || deadline=$open_end
+      [ "$deadline" -gt "$SECONDS" ] || deadline=$((SECONDS + 1))
     fi
     if printf '%s\n' "$PW_P" | grep -Eq '→ 开在哪|→ where|→ 选仓库|New session → repo'; then
       # the repo question, then 「开在哪」: Enter takes the highlighted default
@@ -509,6 +548,20 @@ place_wait() {
     fi
     sleep 1
   done
+  [ -z "$open0" ] || PW_OPENED=$((SECONDS - open0))
+}
+# eta_row <shot prefix>: the ETAs place_wait read, as one steps.md row — a
+# number that went UP is 要人帮 (#2731: the hub's ETA only goes down)
+eta_row() {
+  local f="$RUN/$1-eta.txt" seen up
+  [ -s "$f" ] || return 0
+  seen=$(awk '{ printf "%s%s秒@%ss", (NR > 1 ? " → " : ""), $2, $1 }' "$f")
+  up=$(awk '{ print $2 }' "$f" | eta_rises)
+  if [ -n "$up" ]; then
+    row "ETA：$seen" "等" "是 — ETA 回跳 ${up}（应只降不升，#2731）"; note "ETA rose: $up ($seen)"
+  else
+    row "ETA：$seen" "等" 否
+  fi
 }
 step_scratch() {
   local k said p answered r opening
@@ -520,23 +573,29 @@ step_scratch() {
   fi
   place_wait "$NAME" "$NAME" scratch
   k=$PW_K p=$PW_P answered=$PW_ANSWERED opening=$PW_OPENING
+  eta_row scratch
   case "$k" in
     no)  shot scratch-refused
          said=$(printf '%s\n' "$p" | grep -Eo -- "($SCRATCH_NO)[^│]*" | head -n 1 | sed 's/ *$//')
+         if [ -n "$opening" ]; then
+           # the hub said opening, then failed: a result that says why (#2908)
+           row "提示：${opening}，${PW_OPENED}s 后：$said" "等" "是 — 入口开机器失败：$said"
+           failstep scratch "the hub said '$opening', then after ${PW_OPENED}s: $said"; return 1
+         fi
          row "提示：$said" "prefix c 新任务，敲名字 ${NAME}，回车" "是 — 开不出会话：$said"
          failstep scratch "the list refused a new session: $said"; return 1 ;;
     row) : ;;
     *)   shot scratch-none
          if [ -n "$opening" ]; then
-           # the hub said it is opening a machine (#2069) and none came up in
-           # FLEET_DRILL_OPENING_SECS: the newcomer is left waiting (C9 run 3)
-           row "提示：${opening}，但 ${FLEET_DRILL_OPENING_SECS:-360}s 后左边仍没有机器、开不出会话" "等" "是 — 入口说在开机器，却一直没开好"
-           failstep scratch "the hub said '$opening' but no machine came up and no row $NAME within ${FLEET_DRILL_OPENING_SECS:-360}s:"; tail_pane; return 1
+           # the hub said it is opening a machine (#2069) and neither a row
+           # nor its failed came in its own give-up + a minute (#2908)
+           row "提示：${opening}，${PW_OPENED}s 后左边仍没有机器、入口也没说失败" "等" "是 — 入口说在开机器，过了它自己的放弃时限仍没开好也没说失败"
+           failstep scratch "the hub said '$opening' and neither a row $NAME nor a failure came within ${PW_OPENED}s (cap ${OPENING_CAP}s):"; tail_pane; return 1
          fi
          row "敲名字回车后没有问题、没有新行、也没有提示" "prefix c 新任务，敲名字，回车" "是 — 不知道怎么开会话"
          failstep scratch "no question, no row named $NAME and no refusal within ${STEP_SECS}s:"; tail_pane; return 1 ;;
   esac
-  [ -z "$opening" ] || row "提示：$opening" "等（入口在开机器，开好自动接着开）" 否
+  [ -z "$opening" ] || row "提示：${opening}（${PW_OPENED}s 后开好）" "等（入口在开机器，开好自动接着开）" 否
   [ "$answered" = 0 ] || row "问题（选仓库 / 开在哪）×$answered" "回车（默认，自动）" 否
   shot scratch
   r=$(row_named "$NAME")
