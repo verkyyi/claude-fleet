@@ -334,7 +334,7 @@ def bar_record(rows, current, session=""):
     if hit is None:
         return cache_record(session, current, rows, ids)
     row, repo, slug = hit
-    row = list(row) + [""] * (19 - len(row))
+    row = list(row) + [""] * (ROW_FIELDS - len(row))
     kind = ""
     if row[1] == "needs":
         kind = "perm" if row[7] == tr("needs_perm") else "ask"
@@ -2762,8 +2762,12 @@ def collect_rows(proc):
 # none: a reader falls back to name; #1902 — reap is the @reap_policy, absent when
 # none; #2235 — backfill is `failed` when a warm start's issue could not be filed /
 # bound, absent otherwise; #2538 — ask_kind / ask_text: what a needs row asks,
-# permission | question | auth and its words, absent when it asks nothing)
-ROW_FIELDS = 18
+# permission | question | auth and its words, absent when it asks nothing;
+# #2717 — ctx: the measurement bus `left|band|ts|model|effort`, absent when
+# unmeasured. A field the producer adds is a field here, or the split folds it
+# into the last one — issue #2963: field 19 rode in ask_text, the top line drew
+# no 剩余 % for any row)
+ROW_FIELDS = 19
 
 
 def row_fields(line):

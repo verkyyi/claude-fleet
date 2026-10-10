@@ -79,15 +79,15 @@ path, f, me, ts = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
 def s(key, **w):
     w.setdefault("key", key); w.setdefault("state", "working"); w.setdefault("lifecycle", "awake")
     w.setdefault("agent", "claude"); w.setdefault("repo", "acme/app")
-    return dict(worker_id=f + "/" + key, machine_name="mini2.local", os_user=me, fleet_id=f,
+    return dict(worker_id=f + "/" + key, machine_name="tbctx-peer.invalid", os_user=me, fleet_id=f,
                 fleet_name="x", availability="online", worker=w, observed_at="2026-10-09T10:00:00Z")
 sessions = [s("issue-41", issue=41, name="RM", ctx_left=23, ctx_band="watch", ctx_ts=ts,
               model="Fable 5.1", effort="high"),
             s("issue-42", issue=42, name="RN")]
-nodes = [dict(machine_name="mini2.local", availability="online", sessions=2, observed_at="2026-10-09T10:00:00Z", age_sec=3)]
+nodes = [dict(machine_name="tbctx-peer.invalid", availability="online", sessions=2, observed_at="2026-10-09T10:00:00Z", age_sec=3)]
 json.dump({"machines": [], "sessions": sessions, "nodes": nodes}, open(path, "w"), ensure_ascii=False)
 PY
-export CCQUOTA_FLEET=1 FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions.json'" FLEET_NODE_ALIASES="mini2=m4"
+export CCQUOTA_FLEET=1 FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions.json'" FLEET_NODE_ALIASES="tbctx-peer=m4"
 bash "$HUBS" --refresh 2>"$WORK/err" || fail "B: --refresh failed" "$(cat "$WORK/err")"
 R=$(cat "$G/remote_$S" 2>/dev/null)
 eq "B: the cache's fields 21-25" "23|watch|$TS|Fable 5.1|high" \
@@ -118,7 +118,9 @@ def load(name, path):
     return mod
 sb, tb = load("sb", "fleet-sidebar.py"), load("tb", "fleet-topbar.py")
 ts = int(sys.argv[2])
-rows = [r.split("\x1f") for r in sys.argv[3:7]]
+# the way the sidebar reads a producer line (issue #2963: a bare split hid
+# that row_fields cut field 19 off into ask_text)
+rows = [sb.row_fields(r) for r in sys.argv[3:7]]
 bad = []
 def chk(what, got, want):
     if got != want:
@@ -131,6 +133,15 @@ for r, want, line in ((rows[0], (62, "ok", ts, "Opus 5.5", "high"), "剩余 62% 
     text, _ = tb.fit(rec, 150, now=ts + 30)
     if line not in text:
         bad.append("line %s: %r lacks %r" % (r[3], text, line))
+for r in rows:
+    chk("row_fields %s: field 18 is ask_text only" % r[3], r[17], "")
+# a needs row asking AND measured: 19 fields, ask_text stays its words alone
+asking = sb.row_fields("\x1f".join(["wid:f/w9", "needs", "?", "asking"] + [""] * 12
+                                    + ["question", "Bash: git push", "70|ok|%d|opus|xhigh" % ts]))
+chk("row_fields: 19 fields", len(asking), 19)
+chk("row_fields: ask_text is the words", asking[17], "Bash: git push")
+rec = sb.bar_record([asking], asking[0])
+chk("record asking", tuple(rec.get(k) for k in five), (70, "ok", ts, "opus", "xhigh"))
 for r in (rows[1], rows[3]):
     rec = sb.bar_record(rows, r[0])
     chk("record %s: no bus" % r[3], [k for k in five if k in rec], [])
