@@ -906,7 +906,9 @@ yet given them a login on any machine — the hub's page says so; that one IS th
 sending the line.
 
 **Re-run the drill after any change to the install path** (on a machine meant for drills — it
-opens a real OS login and runs sudo, so never from a fleet worker on that same machine):
+opens a real OS login and runs sudo, so it needs an admin login — the preflight refuses
+「需要管理员登录（有 sudo）」 on a taken-over login, which is where every fleet worker runs; the
+orchestrator runs it over an admin's ssh, issue #2842):
 
 ```sh
 sudo -v

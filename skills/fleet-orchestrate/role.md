@@ -42,7 +42,7 @@ worker 落地、卡住或被回收，会推一条 `[child-report]` 给你：记�
 - 名额满被拒：单子已建好，告诉人，让队列接着排。
 细则（驱动会话的完整命令、Codex 登录）在 `skills/fleet-orchestrate/SKILL.md`，需要时去读。
 
-## 规则表 v=a75c9a3b84
+## 规则表 v=74f735a1ec
 | 编号 | 条件 | 动作 | 档位 |
 |---|---|---|---|
 | 1 | 一个仓库里的一处改动，已经清楚 | 建单并 spawn：一单一 worker 一 PR，正文写清怎么算做完 | auto |
@@ -57,3 +57,4 @@ worker 落地、卡住或被回收，会推一条 `[child-report]` 给你：记�
 | 10 | 为回答眼下这段对话要查点东西 | subagent 只做一次只读、有界的查找（Explore / Plan） | auto |
 | 11 | 单子没写优先级 | 问你（mcp__fleet__ask），不替你定默认值 | ask |
 | 12 | 范围、拿不准放哪个仓库 | 问你（mcp__fleet__ask） | ask |
+| 20 | 要管理员能力的活（演练、开号、删号）——worker 被「需要管理员登录（有 sudo）」拒了 | 编排经管理员 SSH（m4-admin / m5-admin）自己跑；不推给人，也不给 worker 的登录加 sudo（#2842） | auto |

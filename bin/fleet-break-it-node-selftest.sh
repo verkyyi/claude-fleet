@@ -24,6 +24,9 @@
 #                         a missed daily push is run again from the client, no root
 #   account-adopt-stuck   bin/fleet-node-supervisor.py `account adopt|release` (#2332):
 #                         one of a login's services will not unload mid-migration
+#   tenant-admin-adopted  bin/fleet-node-supervisor.py `account adopt` + `tenants --check`
+#                         + bin/fleet-doctor.sh's `tenants` row (#2842): an admin login
+#                         taken over, or a taken-over login put in the admin group
 #   account-adopt-agent-left  bin/fleet-node-supervisor.py `account adopt|release` (#2387):
 #                         the login's own node agent (com.ccquota.agent.<login>) moves
 #                         with it — logins/<login>.env written, the old one in the attic
@@ -366,6 +369,39 @@ LC
     || { WHY="release did not put every service back and loaded"; return 1; }
   SECS=$(since "$t0")
   WHAT="迁移中一个服务卸不掉：adopt 退 1，已卸的全部放回并重新加载、账号不算托管；卸得掉之后 adopt 成功，release 一条命令全部还原"
+}
+
+# tenant-admin-adopted (#2842): what a session may destroy is its login's ability,
+# so a taken-over login that can sudo is the whole guarantee gone. adopt refuses an
+# admin (5, nothing moved); a tenant that LATER joins admin reads FAIL on the
+# doctor's row, and PASS again once it is out.
+drill_tenant_admin_adopted() {
+  CAP=10
+  local sb t0 rc
+  sb="$WORK/tenant-admin"; mkdir -p "$sb/LaunchDaemons" "$sb/db/logins" "$sb/Users/alice" "$sb/Users/bob/Library/LaunchAgents"
+  python3 -c 'import plistlib, sys; plistlib.dump({"Label": "com.claude-fleet.cleanup", "ProgramArguments": ["/bin/true"]}, open(sys.argv[1], "wb"))' \
+    "$sb/Users/bob/Library/LaunchAgents/com.claude-fleet.cleanup.plist"
+  pw() { printf '{"alice": {"uid": %s, "gid": %s, "home": "%s", "groups": [%s]}, "bob": {"uid": %s, "gid": %s, "home": "%s", "groups": ["staff", "admin"], "sudo": "(ALL) NOPASSWD: ALL"}}\n' \
+         "$(id -u)" "$(id -g)" "$sb/Users/alice" "$1" "$(id -u)" "$(id -g)" "$sb/Users/bob" > "$sb/passwd.json"; }
+  sup() { FLEET_NODE_STATE="$sb/db" FLEET_NODE_LOG="$sb/log" FLEET_NODE_RUNTIME="$sb/rt" FLEET_NODE_DAEMON_DIR="$sb/LaunchDaemons" \
+          FLEET_NODE_USERS="$sb/Users" FLEET_NODE_TEST=1 FLEET_NODE_PASSWD="$sb/passwd.json" FLEET_NODE_LAUNCHCTL='' \
+          python3 "$BIN/fleet-node-supervisor.py" "$@"; }
+  grep -q 'tenants --check' "$BIN/fleet-doctor.sh" && grep -q 'fail tenants' "$BIN/fleet-doctor.sh" \
+    || { WHY="fleet-doctor.sh has no tenants row"; return 1; }
+  t0=$(now)
+  pw '"staff"'
+  sup account adopt bob >"$sb/adopt.out" 2>&1; rc=$?
+  [ "$rc" = 5 ] || { WHY="adopt of an admin login exited $rc, not 5: $(head -c 200 "$sb/adopt.out")"; return 1; }
+  [ -e "$sb/Users/bob/Library/LaunchAgents/com.claude-fleet.cleanup.plist" ] || { WHY="a refused adopt moved bob's service"; return 1; }
+  : > "$sb/db/logins/alice.env"
+  sup tenants --check >/dev/null 2>&1 || { WHY="a clean tenant does not PASS"; return 1; }
+  pw '"staff", "admin"'
+  sup tenants --check >"$sb/fail.out" 2>&1; rc=$?
+  [ "$rc" = 1 ] && grep -q 'alice: admin' "$sb/fail.out" || { WHY="a tenant in the admin group reads rc $rc: $(head -c 200 "$sb/fail.out")"; return 1; }
+  pw '"staff"'
+  sup tenants --check >/dev/null 2>&1 || { WHY="still FAIL once alice left the admin group"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="接管管理员登录被拒（退 5、什么没挪）；已接管的登录进了 admin 组 → tenants FAIL 写明是谁，撤出后回到 PASS"
 }
 
 # account-adopt-agent-left (#2387): adopt moved a login's fleet services but not

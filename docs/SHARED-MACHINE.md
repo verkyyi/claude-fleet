@@ -416,8 +416,10 @@ left, #1210 defects still open out of 5, letters to write by hand). Exit 0
 means every step passed; 1 a step failed (the teardown still ran); 2 usage or
 preflight; 3 the login already exists. Every child transcript and the pane
 captures stay in the run's log dir (printed on the second line); the
-temporary key, password and letter go with the login. Never run it from a
-fleet worker — it opens a real login and needs sudo; its selftest
+temporary key, password and letter go with the login. It opens a real login
+and needs sudo, so it runs only where the login has sudo — the preflight
+refuses 「需要管理员登录（有 sudo）」 otherwise (a taken-over login, which every
+fleet worker runs on, has none; issue #2842). Its selftest
 (`fleet-login-smoke-selftest.sh`) runs it against PATH shims only.
 
 ## Offboarding a person

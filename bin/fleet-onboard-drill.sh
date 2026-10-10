@@ -91,8 +91,12 @@
 # here prompts), ssh, tmux, Remote Login on --ssh-host:--ssh-port (default
 # 127.0.0.1:22), and for the device revoke CCQUOTA_VIEWER_TOKEN (or
 # FLEET_HUB_TOKEN) in the environment — read at start, never written.
-# NEVER from a fleet worker on the machine it runs on: it opens a real login and
-# runs sudo (EPIC #1212 convention 2) — run it on the machine meant for drills.
+# Who may run it is the LOGIN's ability, never a rule about the caller (issue
+# #2842): it opens a real login and runs sudo, so the preflight asks `sudo -n
+# true` and refuses with 「需要管理员登录（有 sudo）」 when it does not pass — a
+# fleet worker runs on a taken-over login with no admin and no sudo, so it is
+# refused by that, and a session that has the ability (the orchestrator over an
+# admin's ssh) runs the drill. Run it on the machine meant for drills.
 #
 # Exit: 0 every step passed · 1 a step failed (the teardown still ran) ·
 #       2 bad arguments / preflight · 3 the login (or its home) already exists
@@ -251,7 +255,7 @@ for t in ssh ssh-keygen sudo curl python3; do
 done
 [ -n "$TMUXB" ] || die2 'tmux not found — nothing was changed'
 [ -f "$RM_SH" ] || die2 "fleet-login-remove.sh not found beside $0"
-sudo -n true >/dev/null 2>&1 || die2 "no sudo ticket — run 'sudo -v' first (this script never prompts)"
+sudo -n true >/dev/null 2>&1 || die2 "需要管理员登录（有 sudo）— no sudo ticket for $(id -un): run it as an admin login, after 'sudo -v' (this script never prompts)"
 if [ "$TEARDOWN" = 0 ]; then
   if id "$LOGIN" >/dev/null 2>&1; then
     printf '%s: login %s already exists — refusing (another --login, or clean it: %s --teardown %s)\n' "$PROG" "$LOGIN" "$0" "$LOGIN" >&2

@@ -278,7 +278,7 @@ sudo bin/fleet-node-drill.sh unblock # 演练被杀后留在 /etc/hosts 的 GitH
 ```
 
 在**被演练的那台**上跑（先 m4，共同约定 6）。每一步动真机前先问（y 做 · n 跳过记 SKIP · q 停）：
-基线 → 加入码（人）→ 安装（人，§8 那一条）→ 逐个账号 `account adopt`（发起人自己的账号最后迁；失败即停并打印 `account release`）
+基线 → 加入码（人）→ 安装（人，§8 那一条）→ 逐个账号 `account adopt`（发起人自己的账号最后迁；管理员登录 adopt 退 5、记 SKIP——它不交给守护，§15；其余失败即停并打印 `account release`）
 → 升级（人移 stable 到 `--to`，等更新器 `committed`）→ 回退（人移到 `--fail`：master 上一个只加 `conf/drill-fail` 的提交——带这个标记的发布版 doctor 多一行 FAIL（`fleet-node-update.py` `DRILL_FAIL`）——等 `rolled-back` 回到 `--to`；看完 stable **往前**移到删掉标记的下一提交。不用演练分支：install-sync 从不往回移，停在主干外的提交上的非托管账号就再也跟不上 stable）
 → 复查（`doctor --machine` + 五个指标）→ 断 GitHub（这一步内 `/etc/hosts` 挡住 github.com 等，重装应全部跳过、只从入口取到当前发布版；挡板总会撤掉，下次启动也先撤）
 → 回话（人确认会话能回话、入口能往这台派会话）。
@@ -460,3 +460,23 @@ BREAK-IT 行 `service-handwritten`。只点名接管过的登录（`logins/<登�
 - **只看托管清单**：清扫的手写启动项、`clientshell` 和 doctor 的 `shell` 行只看整机守护接管过的登录
   （`/var/db/fleet-node/logins/<登录>.env` 里登记的）。管理员（例：verkyyi）、不用 fleet 的本地用户一律不扫、不点名、
   不判断——机器上有其他管理员或非托管账号是正常状态。`shell` 行写明「托管登录 N 个，其余账号不在清单内不扫」。
+
+## 15. 破坏能力 = 登录的能力，不是提示词（#2842）
+
+一个会话能毁掉什么，由它跑在哪个登录下决定，不由它的提示词决定。
+
+- **接管的登录是租户**：守护 `account adopt` 的登录没有 admin、没有 sudo——物理上建不了账号、删不了账号、
+  改不了 root 的守护进程。worker 就跑在这样的登录下，所以「worker 不许建临时账号」不需要写成一句提示词，
+  也不该写：一句提示词拦不住一个不听话（或被注入）的会话，却会让有能力的会话也不敢动手（#2139 的演练被连推 5 轮给人）。
+- **管理员的能力是管理员的**：verkyyi 这类有 sudo 的登录可以做，任何以它身份跑的会话也可以做——包括编排经
+  `m4-admin` / `m5-admin` 的管理员 SSH。限制的对象是普通租户，不是角色。
+- **要 root 的脚本只看能力**：`fleet-onboard-drill.sh`、`fleet-login-smoke.sh` 的预检只问 `sudo -n`，
+  不通就拒并说「需要管理员登录（有 sudo）」，从不问「调用的是不是 worker」。新写的同类脚本照此办。
+- **能力面是检查出来的**：`account adopt` 先查这个登录——admin 组、`sudo -l -U` 的规则、sudoers 里的名字——
+  有一条就退 5、什么也不挪（管理员登录不交给守护）；守护每 `FLEET_NODE_TENANT_EVERY`（300 s）以 root 重读每个接管的
+  登录写进 `state.json`；`fleet doctor` 的 **`tenants`** 行（`fleet-node-supervisor.py tenants --check`：组当场读，
+  sudo 读守护的那份）任何一条成立就 **FAIL**，写明是谁、哪条。BREAK-IT `tenant-admin-adopted`；登录自己往外看的一半是
+  `fleet-tenant-scan.sh` 的 `sudo` 项（`tenant-sudo`）。
+- **派活跟着能力走**：worker 被「需要管理员登录」拒了的活，编排经管理员 SSH 自己跑（规则 20），管家不把它当「只能人做」（规则 21）。
+- **不做的**：不改 sudoers，不给任何接管的登录任何 sudo。一个管理员登录已经被接管了（`tenants` FAIL 指着它）：
+  `sudo fleet-node-supervisor.py account release <登录>` 把它的服务放回去，它照旧以自己的 LaunchAgents 跑。
