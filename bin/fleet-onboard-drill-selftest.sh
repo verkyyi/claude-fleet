@@ -58,6 +58,7 @@ mkdir -p "$T/homes/drillghost"
 run 3 'already exists'              'a home with no login'      --login drillghost
 run 2 'nothing to clean'            'a teardown of nothing'     --teardown drillnone
 run 2 'not an approve code'         '--invite: a malformed code' --login drillx --invite nope
+run 2 '--invite: empty'             '--invite given empty (#2865), never a person scans' --login drillx --invite ''
 run 2 'needs --login'               '--invite with no --login'  --invite fd_abcdefghijklmnopqrstuvwxyz
 # a scratch name inside the login: the prompt line could show it (#2221)
 run 2 'part of the login'           '--name inside the login'   --login drill1007b --name drill
@@ -184,6 +185,27 @@ out=$(env PATH="$T/shim:$PATH" FLEET_CONF_DIR="$T/conf" FLEET_LOGIN_HOMES="$T/ho
 if [ "$rc" = 0 ] && [ "$(grep -c '^DELETE ' "$T/curl.log")" = 4 ] && printf '%s\n' "$out" | grep -q 'no drill person on the hub'
 then ok 'teardown --invite: 202 removing is waited out, then the person is gone (exit 0)'
 else bad "202 removing: exit $rc, $(grep -c '^DELETE ' "$T/curl.log") DELETEs: $(printf '%s' "$out" | tail -n 4)"; fi
+# --- a SIGTERM mid-run is ABORTED, never PASS (#2865) ----------------------------
+# the remove seam signals the drill while its teardown runs: the run still
+# finishes tearing down, then says ABORTED and exits 143 — no PASS line
+cat > "$T/shim/remove-term" <<'EOF2'
+#!/bin/sh
+p=$PPID d=''   # the OUTERMOST drill process (its subshells carry the same argv)
+while [ "${p:-1}" -gt 1 ]; do
+  ps -o command= -p "$p" | grep -Eq '^bash [^ ]*/fleet-onboard-drill\.sh --teardown drillz$' && d=$p
+  p=$(ps -o ppid= -p "$p" | tr -d ' ')
+done
+[ -n "$d" ] && kill -TERM "$d"
+rm -rf "$FLEET_LOGIN_HOMES/$1"; echo "removed $1"
+EOF2
+chmod +x "$T/shim/remove-term"
+mkdir -p "$T/homes/drillz"
+out=$(env PATH="$T/shim:$PATH" FLEET_CONF_DIR="$T/conf" FLEET_LOGIN_HOMES="$T/homes" TMPDIR="$T" \
+      FLEET_DRILL_LOGIN_REMOVE="$T/shim/remove-term" CCQUOTA_VIEWER_TOKEN='' FLEET_HUB_TOKEN='' \
+      bash "$DRILL" --teardown drillz 2>&1); rc=$?
+if [ "$rc" = 143 ] && printf '%s\n' "$out" | grep -q 'ABORTED (interrupted by SIGTERM)' \
+   && ! printf '%s\n' "$out" | grep -q ': PASS '; then ok 'a SIGTERM mid-run reads ABORTED, exit 143, no PASS'
+else bad "SIGTERM mid-run: exit $rc: $(printf '%s' "$out" | tail -n 4)"; fi
 # bash 3.2 in a UTF-8 locale reads 「$opening，」's full-width comma as part of
 # the name — under set -u the drill died at scratch (C9 run 4): braces only
 bad_vars=$(LC_ALL=C grep -nE '\$[A-Za-z_][A-Za-z0-9_]*[^ -~[:space:]]' "$DRILL" | grep -vE '^[0-9]+:[[:space:]]*#')
