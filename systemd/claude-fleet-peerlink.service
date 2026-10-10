@@ -1,0 +1,24 @@
+# claude-fleet peerlink — Linux systemd user unit (parity with launchd
+# com.claude-fleet.peerlink, issue #3002). The home machine's standing ssh
+# connections to the other machines your sessions are on, one owner per login
+# (bin/fleet-peerlink.py run, flock). Always-on: the launchd plist uses KeepAlive,
+# here Restart=always. With no thin view attached it holds no connection. Install:
+# substitute __HOME__, drop into ~/.config/systemd/user/, then
+# `systemctl --user enable --now claude-fleet-peerlink.service`.
+[Unit]
+Description=claude-fleet peerlink (standing connections to the other machines, one owner)
+
+[Service]
+Type=simple
+ExecStart=/bin/bash __HOME__/.claude/fleet/bin/fleet-peerlink.sh run
+Environment=HOME=__HOME__
+Environment=LANG=en_US.UTF-8
+Environment=PATH=__HOME__/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+Restart=always
+LimitNOFILE=65536
+RestartSec=2
+StandardOutput=null
+StandardError=append:__HOME__/.claude/fleet/logs/peerlink.systemd.log
+
+[Install]
+WantedBy=default.target
