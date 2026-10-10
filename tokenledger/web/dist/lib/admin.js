@@ -227,11 +227,23 @@ export function arrived(audit, prov, label, since) {
   return rows.find((r) => r.action === 'put' && r.provider === prov && norm(r.account) === norm(label) && toMs(r.at) >= since - 1000) || null;
 }
 
-/** machineCards are /v1/nodes' machines, lost last, by name. name is the
+/** isClient is a /v1/nodes machine that only runs a shell or a browser
+ *  (machines[].role, claude-fleet#2795): no session is placed on it, so it is
+ *  a device, not a machine. An older hub says no role — every machine a host. */
+export const isClient = (m) => !!m && m.role === 'client';
+
+/** clientMachines are /v1/nodes' client machines, by name. */
+export function clientMachines(snap) {
+  const ms = (snap && Array.isArray(snap.machines)) ? snap.machines : [];
+  return ms.filter(isClient).slice().sort((a, b) => String(a.hostname).localeCompare(String(b.hostname)));
+}
+
+/** machineCards are /v1/nodes' host machines (claude-fleet#2795: a client
+ *  device is on All devices), lost last, by name. name is the
  *  hostname's first label (what the actions send); label is the short name
  *  the admin gave it (fleet.machine_names → alias), else name. */
 export function machineCards(snap) {
-  const ms = (snap && Array.isArray(snap.machines)) ? snap.machines : [];
+  const ms = ((snap && Array.isArray(snap.machines)) ? snap.machines : []).filter((m) => !isClient(m));
   const vers = {};
   const eps = {};
   const trust = {};

@@ -1,5 +1,7 @@
 // web/dist/admin/nodes.js — Machines, at /nodes (claude-fleet#1990): one card per
-// computer that runs sessions (load trend, status, sessions, version), the
+// computer that runs sessions (load trend, status, sessions, version) — a
+// client device (role client) is on All devices instead, one grey line
+// pointing there (claude-fleet#2795) — the
 // maintenance switch behind a confirm, «add a machine» (a one-time join code,
 // its command and countdown, waiting for the machine to join), and the SPOT
 // switch. A code from 「添加机器」 is trusted and managed (claude-fleet#2214,
@@ -12,7 +14,7 @@
 // machine's 服务与定时任务 (claude-fleet#2526, lib/services.js). An admin's.
 import { Shell } from '../app-shell.js';
 import { esc, ic, spark, relTime } from '../lib/shell.js';
-import { machineCards, joined, countdown } from '../lib/admin.js';
+import { machineCards, clientMachines, joined, countdown } from '../lib/admin.js';
 import { serviceRows, servicesSection, svcClick } from '../lib/services.js';
 import { t } from '../lib/i18n.js';
 
@@ -121,8 +123,11 @@ Shell.mount('machines', async (ctx) => {
     : `<div class="panel"><div class="empty">${ic('server')}<b>${esc(t('ui.mach.empty'))}</b><span>${esc(t('ui.mach.emptySub'))}</span><button class="btn primary" data-act="add">${ic('plus')}${esc(t('ui.mach.addBtn'))}</button></div></div>`;
   // 服务与定时任务 (claude-fleet#2526): every machine's register, when any
   const svcs = serviceRows(snap);
+  // The client devices left off (claude-fleet#2795): said, so none looks lost.
+  const nClient = clientMachines(snap).length;
+  const clientsLine = nClient ? `<p class="sub" style="font-size:12.5px;color:var(--muted);margin:-4px 0 14px"><a href="/admin/devices" data-clients style="color:inherit">${esc(t('ui.mach.clients', { n: nClient }))}</a></p>` : '';
   ctx.el.innerHTML = `<div class="pagehead"><div><p>${esc(t('ui.mach.lead'))}</p></div><div class="acts"><button class="btn primary" data-act="add">${ic('plus')}${esc(t('ui.mach.addBtn'))}</button></div></div>` +
-    cards + (svcs.length ? servicesSection(svcs) : '') +
+    cards + clientsLine + (svcs.length ? servicesSection(svcs) : '') +
     `<div class="panel"><div class="panel-h"><div><h3>${esc(t('ui.mach.spotTitle'))}</h3><span class="sub">${esc(t('ui.mach.spotSub'))}</span></div>` +
     `<button class="switch" role="switch" aria-checked="${spotOn}" data-act="spot" aria-label="${esc(t('ui.mach.spotTitle'))}"${settings ? '' : ' disabled'}></button></div>` +
     `<div class="panel-b" style="font-size:13px;color:var(--muted)">${esc(spotLine)}</div></div>`;

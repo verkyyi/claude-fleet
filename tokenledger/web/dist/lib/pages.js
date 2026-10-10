@@ -259,6 +259,25 @@ export function whyNotClient(body, now = Date.now()) {
   return why;
 }
 
+/** deviceMachines are the client machines of /v1/nodes (role client,
+ *  claude-fleet#2795) that no device of list already names — a device named
+ *  after the machine (its whole name or first label, any case) is the same
+ *  computer, listed once. Each: { hostname, label, logins, seen, status }. */
+export function deviceMachines(snap, list) {
+  const first = (s) => String(s || '').split('.')[0].toLowerCase();
+  const named = new Set((Array.isArray(list) ? list : []).map((d) => first(d.name)).filter(Boolean));
+  const logins = new Map();
+  for (const n of (snap && snap.nodes) || []) {
+    if (n.machine_link || !n.os_user) continue;
+    if (!logins.has(n.hostname)) logins.set(n.hostname, new Set());
+    logins.get(n.hostname).add(n.os_user);
+  }
+  return ((snap && snap.machines) || []).filter((m) => m.role === 'client')
+    .filter((m) => !named.has(first(m.hostname)) && !(m.alias && named.has(first(m.alias))))
+    .map((m) => ({ hostname: m.hostname, label: m.alias || String(m.hostname || '').split('.')[0], logins: [...(logins.get(m.hostname) || [])].sort().join(' · '), seen: m.last_heartbeat || null, status: m.status || 'lost' }))
+    .sort((a, b) => a.label.localeCompare(b.label));
+}
+
 /** clientDevices are the viewer's client devices (whyNotClient is ''). */
 export function clientDevices(body, now = Date.now()) {
   const why = whyNotClient(body, now);
@@ -394,8 +413,10 @@ export function myMachines(snap, me) {
   const pairs = me && Array.isArray(me.logins) && me.logins.length ? me.logins : null;
   const mine = (n) => !pairs || pairs.some((p) => p.machine === n.hostname && p.login === n.os_user);
   const alias = new Map(((snap && snap.machines) || []).map((m) => [m.hostname, m.alias || '']));
+  // A client machine (claude-fleet#2795) is a device: 我的设备 lists it.
+  const client = new Set(((snap && snap.machines) || []).filter((m) => m.role === 'client').map((m) => m.hostname));
   const by = new Map();
-  for (const n of ((snap && snap.nodes) || []).filter((n) => !n.machine_link && mine(n))) {
+  for (const n of ((snap && snap.nodes) || []).filter((n) => !n.machine_link && !client.has(n.hostname) && mine(n))) {
     if (!by.has(n.hostname)) by.set(n.hostname, []);
     by.get(n.hostname).push(n);
   }

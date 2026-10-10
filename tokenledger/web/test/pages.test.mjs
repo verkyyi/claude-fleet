@@ -154,7 +154,7 @@ test('deviceHistory: past devices and the certificate audit, named', () => {
   assert.deepEqual(h.events.map((e) => [e.action, e.device, e.bad]), [['renew', 'mbp-2026', false], ['revoke', 'mbp-2023', true], ['renew_refused', '', true]]);
   assert.deepEqual(deviceHistory(undefined), { past: [], events: [] });
   const con = readFileSync(new URL('../dist/connect.js', import.meta.url), 'utf8');
-  assert.match(con, /devicesPanel\(devs\.value, false\) \+ historyPanel\(devs\.value\)/, 'Devices & SSH draws the history fold under its table');
+  assert.match(con, /devicesPanel\(devs\.value, false[^)]*\) \+ historyPanel\(devs\.value\)/, 'Devices & SSH draws the history fold under its table');
   const dev = readFileSync(new URL('../dist/lib/devices-view.js', import.meta.url), 'utf8');
   assert.match(dev, /<details class="panel fold" id="devhistory">/, 'the history is folded');
 });
@@ -262,7 +262,7 @@ test('the daily tables carry no person, subscription or owner column', () => {
   const dev = readFileSync(new URL('../dist/lib/devices-view.js', import.meta.url), 'utf8');
   assert.match(dev, /a \? `<th>\$\{esc\(t\('ui\.col\.owner'\)\)\}<\/th>`/);
   const con = readFileSync(new URL('../dist/connect.js', import.meta.url), 'utf8');
-  assert.match(con, /devicesPanel\(devs\.value, false\)/, 'Devices & SSH draws the viewer\'s own, no owner column');
+  assert.match(con, /devicesPanel\(devs\.value, false[,)]/, 'Devices & SSH draws the viewer\'s own, no owner column');
   const cfg = readFileSync(new URL('../dist/config.js', import.meta.url), 'utf8');
   assert.doesNotMatch(cfg, /id="publish"|data-restore/, 'publish and restore are the admin area\'s (Settings)');
   assert.match(cfg, /id="import"/);
