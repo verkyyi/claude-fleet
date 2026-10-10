@@ -1167,6 +1167,13 @@ standby)
 # every master is closed and the loop ends. A master that will not come up (an
 # OpenSSH older than 8.7, a host key never accepted: BatchMode) leaves the window to
 # connect the old way. FLEET_SHELL_WARM=0 turns it off. Its log: warm/warm.log.
+# One master per (machine, LOGIN) the sessions are in (issue #2987): the sidebar's
+# session rows name their fleet, `fleet_logins` (fleet-hub-sessions.sh) that fleet's
+# login — a master is `<machine>@<login>.sock`, opened as that login
+# (FLEET_CONNECT_LOGIN), the one `run` rides for a session of it; a login the map
+# does not know is `<machine>.sock`, the person's default, as before. Before this
+# every master was the default login, and a session in the person's other login
+# (#2430) never rode one.
 warm)
   s="${2:-$SESS}"; once=''; [ "${3:-}" = --once ] && once=1
   [ "${FLEET_SHELL_WARM:-1}" != 0 ] || exit 0
@@ -1186,23 +1193,30 @@ warm)
     h=$(printf '%s\n' ${FLEET_REMOTE_SSH:-} | awk -F= -v n="$1" '$1 == n { print $2; exit }')
     printf '%s' "${h:-$1}"
   }
-  walive() { [ -S "$WD/$1.sock" ] && $SSHC -S "$WD/$1.sock" -O check "$(whost "$1")" >/dev/null 2>&1; }
-  # wanted → one label per line: online (or 维护中), n > 0, busiest first, capped
+  walive() { [ -S "$WD/$1.sock" ] && $SSHC -S "$WD/$1.sock" -O check "$(whost "${1%@*}")" >/dev/null 2>&1; }
+  # wanted → one label per line, `<machine>` or `<machine>@<login>` (issue #2987):
+  # the machine online (or 维护中) with n > 0, each login its sessions there are
+  # in, busiest first, capped
   wanted() {
     [ -s "$CACHEF" ] || return 0
-    LC_ALL=C awk -F $'\037' '$1 == "#node" && $3 != "lost" && $4 + 0 > 0 && $2 ~ /^[A-Za-z0-9._-]+$/ { print $4 "\t" $2 }' "$CACHEF" \
+    LC_ALL=C awk -F $'\037' -v lmap="${CACHEF%/*}/fleet_logins" '
+      BEGIN { while ((getline l < lmap) > 0) { split(l, a, "\t"); if (a[2] ~ /^[a-z_][a-z0-9_.-]*$/) lg[a[1]] = a[2] } }
+      $1 == "#node" && $3 != "lost" && $4 + 0 > 0 && $2 ~ /^[A-Za-z0-9._-]+$/ { up[$2] = 1; next }
+      $1 ~ /^wid:/ && $2 ~ /^[A-Za-z0-9._-]+$/ { u = substr($1, 5); sub(/\/.*/, "", u); n[$2 "\t" lg[u]]++ }
+      END { for (k in n) { split(k, b, "\t"); if (up[b[1]]) print n[k] "\t" b[1] (b[2] != "" ? "@" b[2] : "") } }' "$CACHEF" \
       | sort -t "$(printf '\t')" -k1,1nr -k2,2 | cut -f2 \
-      | while IFS= read -r m; do this_machine "$m" || printf '%s\n' "$m"; done \
+      | while IFS= read -r m; do this_machine "${m%@*}" || printf '%s\n' "$m"; done \
       | head -n "${FLEET_SHELL_WARM_MAX:-4}"
   }
   wstart() {   # <label> — in the background; the pid sits in <sock>.pending
-    local m="$1" sock="$WD/$1.sock" p=''
+    local m="${1%@*}" lg='' sock="$WD/$1.sock" p=''
+    case "$1" in *@*) lg=${1#*@} ;; esac
     { read -r p < "$sock.pending"; } 2>/dev/null
     case "$p" in ''|*[!0-9]*) ;; *) kill -0 "$p" 2>/dev/null && return 0 ;; esac
     rm -f "$sock" "$sock.route"
-    wlog "start $m"
+    wlog "start $1"
     (
-      export FLEET_CONNECT_ROUTE_FILE="$sock.route"
+      export FLEET_CONNECT_ROUTE_FILE="$sock.route" FLEET_CONNECT_LOGIN="$lg"
       set -- "$m" -o ControlMaster=yes -o "ControlPath=$sock" -o ControlPersist=10m \
              -o SessionType=none -o ForkAfterAuthentication=yes -o StdinNull=yes -o BatchMode=yes \
              -o ServerAliveInterval=2 -o ServerAliveCountMax=3 -o ConnectTimeout=8 \
@@ -1218,7 +1232,7 @@ warm)
   wstop() {    # <label>
     local sock="$WD/$1.sock"
     wlog "close $1"
-    $SSHC -S "$sock" -O exit "$(whost "$1")" >/dev/null 2>&1
+    $SSHC -S "$sock" -O exit "$(whost "${1%@*}")" >/dev/null 2>&1
     rm -f "$sock" "$sock.route" "$sock.pending"
   }
   # riding <sock> — a window's proxy session is on it right now
