@@ -636,14 +636,21 @@ cluster access, no token.
 **Machines take stable from the hub, signed** (issue #2335, EPIC #2329 C7). Each
 time the hub sees stable move it builds a **node release** for that commit
 (`tokenledger/internal/api/fleet_release.go`, format in `internal/release`): the
-runtime tree (`bin/ conf/ hooks/ commands/ skills/ mod/ shell/ launchd/ systemd/
-docs/` + the top-level files — never `tokenledger/`, `deploy/`, `.github/`) as one
-deterministic tar, every `ccquota-<os>-<arch>` in `CCQUOTA_FLEET_DIST_DIR`, every
+whole install — what that commit's own `conf/release-tree.list` names (issue
+#2771: the runtime trees, `.claude-plugin/`, `extras/`, the top-level files; never
+`tokenledger/`, `deploy/`, `.github/`; `bin/release-tree-selftest.sh` reds when a
+script reads a top-level item the list leaves out; a commit without the list gets
+the old fixed set) — as one deterministic tar, every `ccquota-<os>-<arch>` in `CCQUOTA_FLEET_DIST_DIR`, every
 pinned installer in `CCQUOTA_FLEET_RELEASE_ARTIFACTS` (Claude Code, Codex), a
 sha256 for each in `manifest.json` and an ed25519 signature over it with
 `CCQUOTA_FLEET_RELEASE_KEY` (its own Secret; `ccquota release keygen --out F`).
 Kept in `CCQUOTA_FLEET_RELEASE_DIR` (the cluster's OSS bucket, mounted), newest
-10, the current stable never pruned. Public like `/install`:
+10, the current stable never pruned. Which release is stable is the store's own
+pointer `<dir>/stable` (`{"sha","seq"}`, one rename), moved only once that release
+is built and **sealed**: every stable carries `prev` (the stable it replaced) and
+`seq` (+1 per move — a rollback is a new move) under the signature, so a machine's
+«only forward» gate reads one signed integer; prune keeps the newest links of
+that chain as one unbroken run (issue #2771). Public like `/install`:
 `GET /v1/fleet/release/key` · `/artifacts` (the names a build now would carry +
 the platforms it must carry `release.json`'s pins for, `CCQUOTA_FLEET_RELEASE_PLATFORMS`,
 default `darwin-arm64` — `fleet-stable.sh move` checks the pins against it, issue

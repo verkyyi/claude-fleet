@@ -51,6 +51,17 @@ import (
 // does not already hold is a 404 — never an open builder. No signing key
 // (CCQUOTA_FLEET_RELEASE_KEY unset) ⇒ no store ⇒ every route 404s: the hub
 // exactly as before.
+//
+// What a release holds is the commit's own conf/release-tree.list
+// (claude-fleet#2771, EPIC #2770 C1): the whole install a login needs — the
+// runtime trees, .claude-plugin/, extras/ — and never the Go source, the
+// deploy tree or the CI's files. A commit from before the list gets the old
+// fixed set (releasePathOK).
+//
+// Which release is stable is the store's own pointer, <Dir>/stable — moved by
+// one rename once the release it names is built and sealed (promote) — and
+// every stable release carries its place on that chain under the signature:
+// prev (the stable it replaced) and seq (+1 per move).
 
 // ReleaseKeep is how many releases the store keeps.
 const ReleaseKeep = 10
@@ -73,6 +84,8 @@ type ReleaseStore struct {
 
 	mu        sync.Mutex
 	building  map[string]*releaseBuild
+	pending   map[string]release.Seal // sha → the seal promote wants its build to carry
+	promoteMu sync.Mutex
 	whole     map[string]bool      // build dirs found carrying every pin (heal)
 	healTried map[string]time.Time // sha → last heal look
 }
@@ -126,14 +139,41 @@ func (rs *ReleaseStore) Has(sha string) bool {
 	return err == nil
 }
 
-// releasePathOK — what a node runtime holds: the repo's top-level files and
-// its runtime trees; never the Go source, the deploy tree or the CI's files.
-// The client manifest rides along (the tarball reader requires it).
+// releasePathSafe — a path that stays inside the tree; what the tarball
+// reader takes before the commit's release-tree.list picks.
+func releasePathSafe(p string) bool {
+	return p != "" && !strings.Contains(p, "..") && !strings.Contains(p, "//") && !strings.HasSuffix(p, "/") && !strings.ContainsAny(p, "\\\x00")
+}
+
+// releaseTree keeps what the commit's own conf/release-tree.list names
+// (claude-fleet#2771); a commit without one gets releasePathOK's old set. The
+// client manifest rides along either way (the tarball reader requires it).
+func releaseTree(files map[string][]byte) (map[string][]byte, error) {
+	keep := releasePathOK
+	if b, ok := files[release.TreeListPath]; ok {
+		l, err := release.ParseTreeList(b)
+		if err != nil {
+			return nil, err
+		}
+		keep = func(p string) bool { return p == StableManifestPath || l.Keep(p) }
+	}
+	out := make(map[string][]byte, len(files))
+	for p, b := range files {
+		if releasePathSafe(p) && keep(p) {
+			out[p] = b
+		}
+	}
+	return out, nil
+}
+
+// releasePathOK — what a node runtime held before release-tree.list: the
+// repo's top-level files and its runtime trees; never the Go source, the
+// deploy tree or the CI's files.
 func releasePathOK(p string) bool {
 	if p == StableManifestPath {
 		return true
 	}
-	if p == "" || strings.Contains(p, "..") || strings.Contains(p, "//") || strings.HasSuffix(p, "/") || strings.ContainsAny(p, "\\\x00") {
+	if !releasePathSafe(p) {
 		return false
 	}
 	if !strings.Contains(p, "/") {
@@ -225,7 +265,11 @@ func (rs *ReleaseStore) build(ctx context.Context, sha string) error {
 	if rs.Source == nil {
 		return errors.New("no stable source")
 	}
-	files, err := rs.Source.Tree(ctx, sha, releasePathOK)
+	all, err := rs.Source.Tree(ctx, sha, releasePathSafe)
+	if err != nil {
+		return err
+	}
+	files, err := releaseTree(all)
 	if err != nil {
 		return err
 	}
@@ -248,7 +292,40 @@ func (rs *ReleaseStore) build(ctx context.Context, sha string) error {
 		// builds the whole one.
 		return fmt.Errorf("release.json pins %s, which CCQUOTA_FLEET_RELEASE_ARTIFACTS does not hold — put it there", strings.Join(missing, ", "))
 	}
-	return rs.publish(sha, files, arts, time.Now())
+	return rs.publish(sha, files, arts, time.Now(), rs.sealFor(sha))
+}
+
+// sealFor: the seal a new build of sha carries — the one promote is waiting
+// on, else the one the served build already has (a heal keeps its place on
+// the chain), else none.
+func (rs *ReleaseStore) sealFor(sha string) release.Seal {
+	rs.mu.Lock()
+	seal, ok := rs.pending[sha]
+	rs.mu.Unlock()
+	if ok {
+		return seal
+	}
+	if m := rs.manifest(sha); m != nil {
+		return release.Seal{Prev: m.Prev, Seq: m.Seq}
+	}
+	return release.Seal{}
+}
+
+// manifest: the served build's manifest of sha (nil when none).
+func (rs *ReleaseStore) manifest(sha string) *release.Manifest {
+	base := rs.dir(sha)
+	if base == "" {
+		return nil
+	}
+	b, err := os.ReadFile(filepath.Join(base, release.ManifestName))
+	if err != nil {
+		return nil
+	}
+	var m release.Manifest
+	if json.Unmarshal(b, &m) != nil {
+		return nil
+	}
+	return &m
 }
 
 func (rs *ReleaseStore) platforms() []string {
@@ -280,7 +357,7 @@ func (rs *ReleaseStore) missingPinned(files map[string][]byte, arts map[string]s
 
 // publish writes one build of <sha> into its own directory (release.Build
 // writes the signature last) and then points current at it.
-func (rs *ReleaseStore) publish(sha string, files map[string][]byte, artifacts map[string]string, now time.Time) error {
+func (rs *ReleaseStore) publish(sha string, files map[string][]byte, artifacts map[string]string, now time.Time, seal release.Seal) error {
 	shaDir := filepath.Join(rs.Dir, sha)
 	if err := os.MkdirAll(shaDir, 0o755); err != nil {
 		return err
@@ -288,23 +365,133 @@ func (rs *ReleaseStore) publish(sha string, files map[string][]byte, artifacts m
 	var rnd [6]byte
 	_, _ = rand.Read(rnd[:])
 	id := fmt.Sprintf("b%d-%s", now.Unix(), hex.EncodeToString(rnd[:]))
-	if _, err := release.Build(filepath.Join(shaDir, id), rs.Repo, sha, files, artifacts, rs.Key, now); err != nil {
+	if _, err := release.BuildSealed(filepath.Join(shaDir, id), rs.Repo, sha, files, artifacts, rs.Key, now, seal); err != nil {
 		_ = os.RemoveAll(filepath.Join(shaDir, id))
 		return err
 	}
 	// a file rename is one server-side copy on an object store: a reader sees
 	// the old current or the new one, never half of it
-	tmp := filepath.Join(shaDir, ".current-"+id)
-	if err := os.WriteFile(tmp, []byte(id+"\n"), 0o644); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	if err := os.Rename(tmp, filepath.Join(shaDir, releaseCurrent)); err != nil {
-		_ = os.Remove(tmp)
+	if err := replaceFile(filepath.Join(shaDir, releaseCurrent), ".current-"+id, []byte(id+"\n")); err != nil {
 		return err
 	}
 	rs.prune()
 	return nil
+}
+
+// replaceFile writes b to path by one rename from <dir>/<tmpName>.
+func replaceFile(path, tmpName string, b []byte) error {
+	tmp := filepath.Join(filepath.Dir(path), tmpName)
+	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
+// releaseStable is the store's stable pointer, <Dir>/stable (claude-fleet#2771).
+const releaseStable = "stable"
+
+// stablePointer is what <Dir>/stable holds.
+type stablePointer struct {
+	SHA string `json:"sha"`
+	Seq int64  `json:"seq"`
+}
+
+// stable reads the pointer (zero when there is none yet).
+func (rs *ReleaseStore) stable() stablePointer {
+	var p stablePointer
+	b, err := os.ReadFile(filepath.Join(rs.Dir, releaseStable))
+	if err != nil || json.Unmarshal(b, &p) != nil || !release.ValidSHA(p.SHA) || p.Seq < 1 {
+		return stablePointer{}
+	}
+	return p
+}
+
+// StableSHA is the release /v1/fleet/release/stable serves: the pointer, else
+// — a store that has promoted nothing yet — what the source last saw.
+func (rs *ReleaseStore) StableSHA() string {
+	if p := rs.stable(); p.SHA != "" {
+		return p.SHA
+	}
+	if rs.Source != nil {
+		return rs.Source.Commit()
+	}
+	return ""
+}
+
+// promote makes sha the stable release: built, sealed one past the pointer
+// (prev = the pointer's sha, seq = its seq + 1), then the pointer moved by one
+// rename. Every step looks before it acts, so a promote that died half way —
+// or another replica's promote of the same sha — is finished, never repeated:
+// the pointer already on sha is a no-op, a build already carrying the wanted
+// seal is not redone.
+func (rs *ReleaseStore) promote(ctx context.Context, sha string) error {
+	if !release.ValidSHA(sha) {
+		return fmt.Errorf("bad sha %q", sha)
+	}
+	rs.promoteMu.Lock()
+	defer rs.promoteMu.Unlock()
+	cur := rs.stable()
+	if cur.SHA == sha {
+		return rs.Ensure(ctx, sha)
+	}
+	want := release.Seal{Prev: cur.SHA, Seq: cur.Seq + 1}
+	rs.mu.Lock()
+	if rs.pending == nil {
+		rs.pending = map[string]release.Seal{}
+	}
+	rs.pending[sha] = want
+	rs.mu.Unlock()
+	defer func() {
+		rs.mu.Lock()
+		delete(rs.pending, sha)
+		rs.mu.Unlock()
+	}()
+	if err := rs.Ensure(ctx, sha); err != nil {
+		return err
+	}
+	if m := rs.manifest(sha); m == nil || m.Prev != want.Prev || m.Seq != want.Seq {
+		// built before it was stable (or stable once before, under another
+		// seq): sign it again with its new place, from its own files
+		if err := rs.reseal(sha, want); err != nil {
+			return err
+		}
+	}
+	b, _ := json.Marshal(stablePointer{SHA: sha, Seq: want.Seq})
+	if err := replaceFile(filepath.Join(rs.Dir, releaseStable), fmt.Sprintf(".stable-%d-%s", want.Seq, sha[:12]), append(b, '\n')); err != nil {
+		return err
+	}
+	log.Printf("fleet: release %s is stable #%d", sha[:7], want.Seq)
+	rs.prune()
+	return nil
+}
+
+// reseal publishes a new build of sha from its served build — the same tree
+// and artifacts — carrying seal. No network: the bytes are already here.
+func (rs *ReleaseStore) reseal(sha string, seal release.Seal) error {
+	base := rs.dir(sha)
+	if base == "" {
+		return fmt.Errorf("release %s: nothing to reseal", sha[:7])
+	}
+	files, err := treeFiles(filepath.Join(base, release.TreeName))
+	if err != nil {
+		return err
+	}
+	arts := map[string]string{}
+	ents, err := os.ReadDir(filepath.Join(base, release.ArtifactDir))
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	for _, e := range ents {
+		if release.ValidArtifact(e.Name()) && e.Type().IsRegular() {
+			arts[e.Name()] = filepath.Join(base, release.ArtifactDir, e.Name())
+		}
+	}
+	return rs.publish(sha, files, arts, time.Now(), seal)
 }
 
 // prune keeps the newest Keep releases (by their manifest's time) and never
@@ -320,6 +507,7 @@ func (rs *ReleaseStore) prune() {
 	if rs.Source != nil {
 		cur = rs.Source.Commit()
 	}
+	ptr := rs.stable().SHA
 	stale := func(unix int64) bool { return time.Since(time.Unix(unix, 0)) > 2*releaseBuildTime }
 	type rel struct {
 		sha string
@@ -358,29 +546,67 @@ func (rs *ReleaseStore) prune() {
 			}
 		}
 		at := time.Time{}
-		if served != "" {
-			if b, err := os.ReadFile(filepath.Join(served, release.ManifestName)); err == nil {
-				var m release.Manifest
-				if json.Unmarshal(b, &m) == nil {
-					at = m.Created
-				}
-			}
+		if m := rs.manifest(n); m != nil {
+			at = m.Created
 		}
 		rels = append(rels, rel{n, at})
 	}
+	// the stable chain first (claude-fleet#2771), walked back from the
+	// pointer, then the rest newest first: the kept links stay one unbroken
+	// run — every kept link's prev is kept too, but the oldest's. Never the
+	// stable, nor a release being built or promoted (its pointer moves after).
+	keep := map[string]bool{cur: true, ptr: true}
+	rs.mu.Lock()
+	for sha := range rs.pending {
+		keep[sha] = true
+	}
+	for sha := range rs.building {
+		keep[sha] = true
+	}
+	rs.mu.Unlock()
+	order := rs.chain(ptr)
+	onChain := map[string]bool{}
+	for _, sha := range order {
+		onChain[sha] = true
+	}
 	sort.Slice(rels, func(i, j int) bool { return rels[i].at.After(rels[j].at) })
-	for i, r := range rels {
-		if i >= rs.keep() && r.sha != cur {
-			_ = os.RemoveAll(filepath.Join(rs.Dir, r.sha))
+	for _, r := range rels {
+		if !onChain[r.sha] {
+			order = append(order, r.sha)
+		}
+	}
+	for i, sha := range order {
+		if i >= rs.keep() && !keep[sha] {
+			_ = os.RemoveAll(filepath.Join(rs.Dir, sha))
 		}
 	}
 }
 
-// OnStable is StableSource.OnStable: build each new stable in the background.
+// chain: from sha back along prev, every release on disk, each seq below the
+// last (a release made stable again — a rollback — is resealed under a new
+// seq, so the walk never loops).
+func (rs *ReleaseStore) chain(sha string) []string {
+	var out []string
+	last := int64(-1)
+	for sha != "" {
+		m := rs.manifest(sha)
+		if m == nil || m.Seq < 1 || (last >= 0 && m.Seq >= last) {
+			break
+		}
+		out = append(out, sha)
+		last, sha = m.Seq, m.Prev
+	}
+	return out
+}
+
+// OnStable is StableSource.OnStable: build each new stable in the background
+// and make it the store's stable.
 func (rs *ReleaseStore) OnStable(sha string) {
 	ctx, cancel := context.WithTimeout(context.Background(), releaseBuildTime)
 	defer cancel()
-	_ = rs.Ensure(ctx, sha)
+	if err := rs.promote(ctx, sha); err != nil {
+		log.Printf("fleet: release %s: promote: %v", sha[:7], err)
+	}
 }
 
 // handleRelease serves GET /v1/fleet/release/….
@@ -424,8 +650,8 @@ func (s *Server) handleRelease(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sha, sub, _ := strings.Cut(rest, "/")
-	if sha == "stable" && sub == "" && rs.Source != nil {
-		sha = rs.Source.Commit()
+	if sha == "stable" && sub == "" {
+		sha = rs.StableSHA()
 	}
 	if !release.ValidSHA(sha) {
 		http.NotFound(w, r)
@@ -568,6 +794,38 @@ func (rs *ReleaseStore) lacking(base string) ([]string, error) {
 		}
 	}
 	return out, nil
+}
+
+// treeFiles: every file of a release's tree.tar.gz.
+func treeFiles(tgz string) (map[string][]byte, error) {
+	f, err := os.Open(tgz)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	zr, err := gzip.NewReader(f)
+	if err != nil {
+		return nil, err
+	}
+	tr := tar.NewReader(zr)
+	out := map[string][]byte{}
+	for {
+		hd, err := tr.Next()
+		if err == io.EOF {
+			return out, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		if hd.Typeflag != tar.TypeReg {
+			continue
+		}
+		b, err := io.ReadAll(io.LimitReader(tr, hd.Size))
+		if err != nil {
+			return nil, err
+		}
+		out[hd.Name] = b
+	}
 }
 
 // treeFile: one file out of a release's tree.tar.gz (nil when it has none).
