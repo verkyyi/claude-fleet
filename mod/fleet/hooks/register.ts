@@ -15,6 +15,7 @@
 
 import type { Register } from 'claude-code'
 
+import { registerBatches } from './batches'
 import { registerCompose } from './compose'
 import { registerExitGuard } from './exit-guard'
 import { registerLifecycle } from './lifecycle'
@@ -39,4 +40,5 @@ export const register: Register = on => {
   registerQueue(on)
   registerPatrol(on)
   registerPanels(on)
+  registerBatches(on)
 }

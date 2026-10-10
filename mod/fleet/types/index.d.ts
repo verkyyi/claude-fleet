@@ -84,6 +84,8 @@ export type Batch = {
   epoch: number
   ttl: number
   fresh: boolean
+  /** The mark's `title:` line (issue #2833); '' on a mark from before it. */
+  title: string
 }
 
 export type Parked = { ref: string; at: number; wait: string[]; key: string }
@@ -121,6 +123,26 @@ export type Patrol = {
 
 export type Todo = { open: number; desk: string }
 
+/** One batch on the batches pane (issue #2833): a mark, or a driver the ledger still has going with no mark. */
+export type BoardBatch = Batch & {
+  /** `<repo>#<N>`, or `#<N>` with no repo. */
+  ref: string
+  /** The driver's key off the steward's `drivers` book; '' when it names none. */
+  driver: string
+  /** Sessions of this batch the steward parked (park.json, by their origin). */
+  parked: number
+  /** No mark at all: the ledger says the driver is going, the progress cannot be read. */
+  noMark: boolean
+}
+
+/** A batch the steward saw close today (its `todo.epics` row `done`). */
+export type BoardDone = { ref: string; epic: number; title: string }
+
+/** One open row of the steward's 「待你动手」 list (`todo.items`). */
+export type BoardTodo = { id: string; kind: string; what: string; due: string; url: string }
+
+export type Board = { batches: BoardBatch[]; done: BoardDone[]; todo: BoardTodo[] }
+
 /** The `{plugin:'fleet', key:'panels'}` state (EPIC #2831's interface). */
 export type PanelsView = {
   sheet: Sheet | null
@@ -128,6 +150,8 @@ export type PanelsView = {
   todo: Todo
   queue: QueueRow[]
   patrol: Patrol
+  /** The batches pane's rows (issue #2833). */
+  board: Board
   /** When this view was read (epoch ms). */
   at: number
   /** How long the read took (ms). */

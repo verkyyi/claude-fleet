@@ -10,6 +10,7 @@
 //   - fleets/<sess>/children/orchestrator.ndjson   the orchestrator's children
 // A source that is missing or torn just leaves its part empty.
 
+import { foldBoard } from './batches-model'
 import { parseLedger } from './progress-model'
 
 export type { Batch, PanelsView, Parked, Patrol, QueueRow, Sheet, SheetRow, Todo } from '../types'
@@ -184,6 +185,8 @@ export function parseMark(text: string, nowSec: number): Batch | null {
     epoch,
     ttl,
     fresh: epoch > 0 && nowSec - epoch <= ttl,
+    // # compat-1v: 下一批删 — a mark from before #2833 has no title: (the pane shows #N)
+    title: kv.title ?? '',
   }
 }
 
@@ -228,9 +231,10 @@ export function foldPanels(src: PanelsText, at: number, ms: number): PanelsView 
   const st = parseState(src.state)
   const delta = parseDelta(src.delta)
   const park = parsePark(src.park)
+  const batches = parseMarks(src.marks, Math.floor(at / 1000))
   return {
     sheet: st.sheet,
-    batches: parseMarks(src.marks, Math.floor(at / 1000)),
+    batches,
     todo: st.todo,
     queue: parseQueue(src.ledger),
     patrol: {
@@ -241,6 +245,7 @@ export function foldPanels(src: PanelsText, at: number, ms: number): PanelsView 
       defaulted: delta.defaulted,
       events: delta.events,
     },
+    board: foldBoard(batches, src, at),
     at,
     ms,
   }
