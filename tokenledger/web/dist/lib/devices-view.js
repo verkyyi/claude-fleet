@@ -7,27 +7,35 @@
 // newer key, or a login on a machine that runs sessions (claude-fleet#2680) —
 // and every registration, renewal and revoke.
 import { esc, ic, relTime } from './shell.js';
-import { activeDevices, clientDevices, deviceHistory, DEVICE_EVENTS } from './pages.js';
+import { activeDevices, clientDevices, deviceHistory, deviceMachines, DEVICE_EVENTS } from './pages.js';
 import { t, fmtDate } from './i18n.js';
 
 const day = (iso) => fmtDate(iso, undefined, false);
 
 /** devicesPanel draws /v1/fleet/devices (all=false) or /v1/admin/devices
- *  (all=true, with each device's owner). */
-export function devicesPanel(devs, all) {
+ *  (all=true, with each device's owner). snap, when given, is /v1/nodes: its
+ *  client machines (claude-fleet#2795) — a laptop or tablet that runs only the
+ *  shell — join the list as rows of their own, unless a device already names
+ *  them; nothing to revoke there, the owner column names their logins. */
+export function devicesPanel(devs, all, snap) {
   const a = !!all;
   // A person's own list is their client devices only (claude-fleet#2680);
   // the rest — revoked, idle, replaced, a login on a hosting machine — is in
   // the history fold. The admin's list is every device, as it was.
   const list = a ? (devs && devs.devices) || [] : clientDevices(devs);
   const cols = a ? 8 : 7;
-  const rows = list.length ? list.map((d) => `<tr><td><div class="status">${ic('term')}<span><b style="font-weight:500">${esc(d.name || t('ui.dev.device'))}</b><br><span class="repo mono">${esc(d.fingerprint)}</span></span></div></td>` +
+  const machines = snap ? deviceMachines(snap, a ? list.filter((d) => !d.revoked_at) : list) : [];
+  const mrows = machines.map((m) => `<tr data-client="${esc(m.hostname)}"><td><div class="status">${ic('server')}<span><b style="font-weight:500">${esc(m.label)}</b><br><span class="repo mono">${esc(m.hostname)}</span></span></div></td>` +
+    (a ? `<td class="mono">${esc(m.logins || '—')}</td>` : '') +
+    `<td class="mono">—</td><td>${esc(m.seen ? relTime(m.seen) : '—')}</td><td class="mono">—</td><td class="mono r">—</td>` +
+    `<td><span class="chip${m.status === 'lost' ? '' : ' ok'}">${esc(t('ui.dev.clientMachine'))}</span></td><td class="r"></td></tr>`).join('');
+  const rows = (list.length || mrows) ? list.map((d) => `<tr><td><div class="status">${ic('term')}<span><b style="font-weight:500">${esc(d.name || t('ui.dev.device'))}</b><br><span class="repo mono">${esc(d.fingerprint)}</span></span></div></td>` +
     (a ? `<td>${esc(d.principal_id || '—')}</td>` : '') +
     `<td class="mono">${esc(day(d.registered_at))}</td><td>${esc(relTime(d.last_used_at))}</td><td class="mono">${esc(d.last_machine || '—')}</td><td class="mono r">${Number(d.renewals) || 0}</td>` +
     `<td>${d.revoked_at ? `<span class="chip bad">${esc(t('ui.dev.revoked'))}</span>` : `<span class="chip ok">${esc(t('ui.dev.activeChip'))}</span>`}</td>` +
-    `<td class="r">${d.revoked_at ? '' : `<button class="btn sm danger" data-revoke="${esc(d.fingerprint)}" data-name="${esc(d.name || d.fingerprint)}">${esc(t('ui.dev.revoke'))}</button>`}</td></tr>`).join('')
+    `<td class="r">${d.revoked_at ? '' : `<button class="btn sm danger" data-revoke="${esc(d.fingerprint)}" data-name="${esc(d.name || d.fingerprint)}">${esc(t('ui.dev.revoke'))}</button>`}</td></tr>`).join('') + mrows
     : `<tr><td colspan="${cols}"><div class="empty">${ic('key')}<b>${esc(t('ui.dev.none'))}</b><span>${t('ui.dev.noneSub', { cmd: '<code>fleet login</code>' })}</span></div></td></tr>`;
-  return `<div class="panel"><div class="panel-h"><h3>${esc(t(a ? 'ui.dev.all' : 'ui.dev.mine'))}</h3><span class="sub">${esc(t('ui.dev.active', { n: a ? activeDevices(list).length : list.length }))}</span></div>` +
+  return `<div class="panel"><div class="panel-h"><h3>${esc(t(a ? 'ui.dev.all' : 'ui.dev.mine'))}</h3><span class="sub">${esc(t('ui.dev.active', { n: (a ? activeDevices(list).length : list.length) + machines.length }))}</span></div>` +
     `<div class="tw"><table class="t"><thead><tr><th>${esc(t('ui.col.device'))}</th>${a ? `<th>${esc(t('ui.col.owner'))}</th>` : ''}<th>${esc(t('ui.col.registered'))}</th><th>${esc(t('ui.col.lastUsed'))}</th><th>${esc(t('ui.col.lastMachine'))}</th><th class="r">${esc(t('ui.col.renewals'))}</th><th>${esc(t('ui.col.status'))}</th><th></th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
 }
 

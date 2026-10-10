@@ -171,6 +171,10 @@ func TestFleetUnmappedSignInLeavesNoRow(t *testing.T) {
 	if len(snap.Nodes) != 0 {
 		t.Fatalf("zhangsan sees %+v", snap.Nodes)
 	}
+	// Nor another's machine, nor its role (claude-fleet#2795).
+	if len(snap.Machines) != 0 {
+		t.Fatalf("zhangsan sees machines %+v", snap.Machines)
+	}
 	if code, _ := asPerson(t, h, http.MethodGet, "/v1/fleet/accounts", pZhang, nil); code != http.StatusForbidden {
 		t.Fatalf("a person listed accounts: HTTP %d", code)
 	}

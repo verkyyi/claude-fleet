@@ -737,6 +737,11 @@ type MachineView struct {
 	ComputeOff bool `json:"compute_off,omitempty"`
 	// Personal: a login of the machine is personal (claude-fleet#1721).
 	Personal bool `json:"personal,omitempty"`
+	// Role is host for a machine the hub can place sessions on and client for
+	// one that only runs a shell or a browser (claude-fleet#2795): the admin
+	// 「机器」 page and 我的机器 list hosts, 我的设备 / 全部设备 the clients.
+	// machineRole is its one judge.
+	Role string `json:"role"`
 	// Kind is ephemeral when the machine is a SPOT node (claude-fleet#1428).
 	Kind string `json:"kind"`
 	// Maintenance is the 维护中 record when the operator flagged the machine
@@ -973,11 +978,36 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 			}
 		}
 		sort.Strings(machines[h].Repos)
+		machines[h].Role = machineRole(*machines[h], out.Nodes)
 		machines[h].LoadHist = s.loadHist.series(h, now)
 		out.Machines = append(out.Machines, *machines[h])
 	}
 	out.Spot = s.spotSummary(now, out.Nodes)
 	return out, nil
+}
+
+// Machine roles (claude-fleet#2795).
+const (
+	MachineRoleHost   = "host"
+	MachineRoleClient = "client"
+)
+
+// machineRole judges one machine from the roster rows it folds: host when it
+// carries a machine link (its own node program — a managed machine), or any
+// of its logins is managed, or is neither personal nor only-coordinating
+// (the hub may place a session there); client otherwise — a person's laptop
+// or tablet that only runs the shell. A lost login still counts: a host that
+// went quiet is a host that is down, not a client.
+func machineRole(m MachineView, nodes []NodeView) string {
+	for _, n := range nodes {
+		if n.Hostname != m.Hostname {
+			continue
+		}
+		if n.MachineLink || n.Role == store.NodeRoleManaged || (!n.Personal && !n.ComputeOff) {
+			return MachineRoleHost
+		}
+	}
+	return MachineRoleClient
 }
 
 func nodeView(n store.Node, now time.Time) NodeView {

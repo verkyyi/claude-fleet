@@ -4,7 +4,7 @@
 // claude-fleet#2515; everyone's is All devices, admin/devices.js), each
 // machine's ways in, and the ~/.ssh/config snippet — from /v1/fleet/connect,
 // /v1/fleet/devices (its audit folds under the table as the history,
-// claude-fleet#2520), POST /v1/fleet/cert and POST /v1/fleet/devices/revoke.
+// claude-fleet#2520) with /v1/nodes' client machines (claude-fleet#2795), POST /v1/fleet/cert and POST /v1/fleet/devices/revoke.
 import { Shell } from './app-shell.js';
 import { esc, ic } from './lib/shell.js';
 import { looksLikeKey } from './lib/pages.js';
@@ -15,7 +15,7 @@ const ttl = (sec) => (sec >= 3600 ? t('ui.dur.hours', { n: Math.round(sec / 3600
 const failed = (e) => `<div class="ghostrow err">${ic('alert')} ${esc(e.message)}</div>`;
 
 Shell.mount('devices', async (ctx) => {
-  const [conn, devs] = await Promise.allSettled([ctx.api('/v1/fleet/connect'), ctx.api('/v1/fleet/devices')]);
+  const [conn, devs, nodes] = await Promise.allSettled([ctx.api('/v1/fleet/connect'), ctx.api('/v1/fleet/devices'), ctx.api('/v1/nodes')]);
   const c = conn.status === 'fulfilled' ? conn.value : null;
   const hours = ttl((c && c.cert_ttl_sec) || 43200);
   const install = c && c.install_command;
@@ -41,7 +41,7 @@ Shell.mount('devices', async (ctx) => {
 
   ctx.el.innerHTML = `<div class="pagehead"><div><p>${esc(t('ui.dev.lead', { ttl: hours }))}</p></div></div>` +
     `<div class="grid g2">${connectPanel}${certPanel}</div>` +
-    (devs.status === 'fulfilled' ? devicesPanel(devs.value, false) + historyPanel(devs.value) : `<div class="panel"><div class="panel-h"><h3>${esc(t('ui.dev.mine'))}</h3></div>${failed(devs.reason)}</div>`) +
+    (devs.status === 'fulfilled' ? devicesPanel(devs.value, false, nodes.status === 'fulfilled' ? nodes.value : null) + historyPanel(devs.value) : `<div class="panel"><div class="panel-h"><h3>${esc(t('ui.dev.mine'))}</h3></div>${failed(devs.reason)}</div>`) +
     `<div class="grid g2">${routes}${snippet}</div>`;
 
   const btn = ctx.el.querySelector('#cert');
