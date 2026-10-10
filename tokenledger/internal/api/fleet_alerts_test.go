@@ -1,10 +1,12 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
 
+	"github.com/coder/websocket/wsjson"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
@@ -39,6 +41,31 @@ func lastBeat(t *testing.T, h *harness) time.Time {
 	return *nodes[0].LastHeartbeat
 }
 
+// settle waits until the hub has handled everything this node sent so far.
+// The hub stores a beat's heartbeat BEFORE it clears node_lost (nodeBack), so
+// seeing the heartbeat in the store is not enough: a sweep run in between
+// raises an alert the late nodeBack then clears. The read loop is sequential,
+// so the refusal of a malformed beat sent after it is the end of that beat.
+func (n *fakeNode) settle() {
+	n.t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	m := control.Message{Type: control.TypeHeartbeat, OpID: "settle", Proto: control.Proto,
+		Payload: json.RawMessage(`"not a heartbeat"`)}
+	if err := wsjson.Write(ctx, n.conn, m); err != nil {
+		n.t.Fatal(err)
+	}
+	for {
+		var r control.Message
+		if err := wsjson.Read(ctx, n.conn, &r); err != nil {
+			n.t.Fatalf("settle: %v", err)
+		}
+		if r.Type == control.TypeError && r.OpID == "settle" {
+			return
+		}
+	}
+}
+
 // A node silent for 120 s gets one node_lost; its next beat clears it, and the
 // row keeps both moments.
 func TestNodeLostRaisedAfter120sAndClearedOnReturn(t *testing.T) {
@@ -51,6 +78,7 @@ func TestNodeLostRaisedAfter120sAndClearedOnReturn(t *testing.T) {
 		ns, _ := h.srv.Store.Nodes()
 		return len(ns) == 1 && ns[0].LastHeartbeat != nil && ns[0].OSUser == "verkyyi"
 	})
+	n.settle()
 	last := lastBeat(t, h)
 	since := last.Add(-time.Hour)
 
@@ -97,6 +125,7 @@ func TestNodeLostCountsFromHubStart(t *testing.T) {
 		ns, _ := h.srv.Store.Nodes()
 		return len(ns) == 1 && ns[0].LastHeartbeat != nil && ns[0].OSUser == "verkyyi"
 	})
+	n.settle()
 	start := lastBeat(t, h).Add(10 * time.Minute) // the hub restarted 10 min later
 	h.srv.NodeAlertTick(start, start.Add(60*time.Second))
 	if a := openAlerts(t, h, store.AlertNodeLost); len(a) != 0 {
