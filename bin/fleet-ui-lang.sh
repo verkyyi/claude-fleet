@@ -990,6 +990,14 @@ fleet_ui_t() {
     en:panel_sheet_opened)     printf 'The decision sheet is on the right' ;;
     zh:panel_sheet_waiting)    printf '终端太窄，决定单等着：加宽后自己出来' ;;
     en:panel_sheet_waiting)    printf 'Too narrow: the sheet shows once the terminal is wider' ;;
+    zh:panel_sheet_hint_fmt)   printf '决定单 %s 件待定 · /sheet 展开，Esc 收起' "${1:-}" ;;
+    en:panel_sheet_hint_fmt)   printf '%s decisions waiting · /sheet opens them, Esc closes' "${1:-}" ;;
+    zh:panel_sheet_hint_open)  printf '打开' ;;
+    en:panel_sheet_hint_open)  printf 'Open' ;;
+    zh:panel_cmd_desc)         printf '/sheet 开或收面板（编排会话：决定单；管家会话：巡检），/sheet b 批次总览，/sheet --summary 台账一行，/sheet --stats 刷新耗时与作答按键' ;;
+    en:panel_cmd_desc)         printf '/sheet opens or closes the panel (orchestrator: decisions; steward: patrol), /sheet b the batches, /sheet --summary one line of the books, /sheet --stats refresh timings and answer presses' ;;
+    zh:panel_patrol_closed)    printf '巡检面板已收起（/sheet 再打开）' ;;
+    en:panel_patrol_closed)    printf 'The patrol panel is closed (/sheet opens it again)' ;;
     zh:panel_sheet_closed)     printf '决定单已收起（/sheet 再打开）' ;;
     en:panel_sheet_closed)     printf 'The sheet is closed (/sheet opens it again)' ;;
     zh:panel_sheet_ping_fmt)   printf '[decision] 决定单有 %s 件新的，在右边的面板里，人在那里按一下就答完；不用转述、不贴表（记录：%s）' "${1:-}" "${2:-}" ;;

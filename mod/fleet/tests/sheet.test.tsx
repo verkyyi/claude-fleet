@@ -10,7 +10,7 @@ import type { On } from 'claude-code'
 
 import { INBOX_MS } from '../hooks/inbox'
 import { isRoleRun, resetRole } from '../hooks/orchestrator'
-import { SHEET_COMMAND, panelPaths, resetPanels } from '../hooks/panels'
+import { BATCHES_ARG, SHEET_COMMAND, panelPaths, resetPanels, sheetCommand } from '../hooks/panels'
 import { isStringsRun } from '../hooks/qd'
 import { SHEET_OPTION, SHEET_PANE, UNDO_MS, answerArgv, closedText, isAnswerRun, resetSheet, splitGroups } from '../hooks/sheet'
 import { parseState } from '../hooks/panels-model'
@@ -21,6 +21,7 @@ const DUMP = [
   'panel_sheet_defaulted_fmt', '已按默认 \u0001', 'panel_sheet_answered_fmt', '已答（\u0001）\u0001',
   'panel_sheet_pending_fmt', '已答：\u0001 · 10 秒内可撤回', 'panel_sheet_failed_fmt', '没写回去：\u0001',
   'panel_sheet_take', '按建议', 'panel_sheet_opened', '摆好了', 'panel_sheet_closed', '收起了',
+  'panel_sheet_hint_fmt', '决定单 \u0001 件待定', 'panel_sheet_hint_open', '打开',
 ].join('\0') + '\0'
 const START = { cwd: '/tmp', surface: 'terminal', isInteractive: true } as const
 const ENV = { TMUX_PANE: '%7', TMUX: '/private/tmp/tmux-501/fleet,123,0', FLEET_CONF_DIR: '/conf', HOME: '/h' }
@@ -81,14 +82,22 @@ function engine(on: On, windowRole: string, opts: { exit?: number; env?: Record<
     registered.push(e.name)
     return { value: { command: e.name } }
   })
-  on('command.run', () => ({ text: 'engine' }))
+  const commands: string[] = []
+  on('command.run', (_$, e) => {
+    commands.push(e.command)
+    return { text: 'engine' }
+  })
   let placed = false
+  // The engine's placing rule: unasked from 144 columns, asked (here: `focus`) from 110.
+  const room = { columns: 200 }
+  const asks: { focus: boolean; closeOnEscape: boolean; holdToasts: boolean }[] = []
   on('ui.open', (_$, e) => {
     // the other panes of the window (batches.tsx) are theirs to test
     if (e.id !== SHEET_PANE) return { value: { isPlaced: true } }
     opened.push(e.id)
-    placed = true
-    return { value: { isPlaced: true } }
+    asks.push({ focus: e.focus === true, closeOnEscape: e.closeOnEscape === true, holdToasts: e.holdToasts === true })
+    placed = room.columns >= (e.focus === true ? 110 : 144)
+    return { value: placed ? { isPlaced: true } : { isPlaced: false, reason: 'narrow' } }
   })
   on('ui.panes', () => ({
     value: placed ? [{ id: SHEET_PANE, title: '决定单', isShown: true, isFocused: false, isPlaced: true }] : [],
@@ -113,7 +122,7 @@ function engine(on: On, windowRole: string, opts: { exit?: number; env?: Record<
   const clock = mock.clock(on, { now: NOW })
   put(P.stamp, '1 1000\n')
   put(P.state, JSON.stringify(SHEET_STATE))
-  return { files, answered, options, opened, closed, toasts, registered, put, clock }
+  return { files, answered, options, opened, closed, toasts, registered, put, clock, room, asks, commands }
 }
 
 type T$ = Parameters<Parameters<typeof test>[1]>[0]
@@ -128,12 +137,24 @@ async function start($: T$): Promise<void> {
 const BAND = { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 200, scroll: { offset: 0, bodyRows: 10 }, view: {} }
 
 /** One band drawn: fullscreen (the pane docks beside the transcript) or the main screen. */
-async function band($: T$, isFullscreen: boolean): Promise<void> {
-  const ui = await $.ui.mount({
-    plugin: 'fleet', surface: 'terminal', component: 'AbovePrompt', props: BAND as never,
-    viewport: { columns: 200, rows: 50, isFullscreen },
-  } as never)
+async function band($: T$, isFullscreen: boolean, columns = 200): Promise<void> {
+  const ui = await mountBand($, isFullscreen, columns)
   await ui.unmount()
+}
+
+function mountBand($: T$, isFullscreen: boolean, columns = 200) {
+  return $.ui.mount({
+    plugin: 'fleet', surface: 'terminal', component: 'AbovePrompt', props: { ...BAND, bodyColumns: columns } as never,
+    viewport: { columns, rows: 50, isFullscreen },
+  } as never)
+}
+
+/** The band's 「决定单 N 件待定」 line, or undefined. */
+async function hintOf($: T$, isFullscreen: boolean, columns: number): Promise<string | undefined> {
+  const ui = await mountBand($, isFullscreen, columns)
+  const text = (await ui.find({ key: 'fleet-sheet-hint' }))?.text
+  await ui.unmount()
+  return text
 }
 
 test('sheet: the steward\'s six asks of the day draw as 2 groups — five on one ticket are one line', () => {
@@ -269,4 +290,89 @@ test('sheet: the steward\'s window has the panels but not the decision sheet', a
   expect(options).toEqual([])
   const g = parseState(JSON.stringify(SHEET_STATE)).groups.find(x => x.gid === 'rdef')
   expect(g === undefined ? '' : closedText({ ...g, never: true })).not.toContain('已按默认')
+})
+
+// Narrow screens and the main screen (issue #2836, EPIC #2831 C5).
+
+test('narrow (#2836): 120 columns opens nothing unasked and the band says 决定单 N 件待定; /sheet opens it placed, focused, Esc closes; /sheet again closes it', async ($, on) => {
+  const m = engine(on, 'orchestrator')
+  m.room.columns = 120
+  await start($)
+  await band($, true, 120)
+  await band($, true, 120)
+  expect(m.opened).toEqual([])
+  expect(m.options).toEqual([])
+  expect(await hintOf($, true, 120)).toBe('决定单 2 件待定打开')
+  const run = (args = '') => $.command.run({ command: SHEET_COMMAND, args, ...(RUN as object) } as never) as Promise<{ text?: string }>
+  expect((await run()).text).toBe('摆好了')
+  expect(m.asks).toEqual([{ focus: true, closeOnEscape: true, holdToasts: false }])
+  expect(m.options).toEqual(['1'])
+  expect(await hintOf($, true, 120)).toBeUndefined()
+  expect((await run()).text).toBe('收起了')
+  expect(m.closed).toEqual([SHEET_PANE])
+  expect(m.options.slice(-1)).toEqual(['0'])
+  expect(await hintOf($, true, 120)).toBe('决定单 2 件待定打开')
+})
+
+test('narrow (#2836): open but unplaced (90 columns), /sheet opens it again — never closes it', async ($, on) => {
+  const m = engine(on, 'orchestrator')
+  m.room.columns = 90
+  await start($)
+  const run = () => $.command.run({ command: SHEET_COMMAND, args: '', ...(RUN as object) } as never) as Promise<{ text?: string }>
+  await run()
+  await run()
+  expect(m.opened).toEqual([SHEET_PANE, SHEET_PANE])
+  expect(m.closed).toEqual([])
+  expect(m.options).toEqual(['0', '0'])
+})
+
+test('narrow (#2836): the band\'s 打开 runs /sheet', async ($, on) => {
+  const m = engine(on, 'orchestrator')
+  m.room.columns = 120
+  await start($)
+  const ui = await mountBand($, true, 120)
+  await ui.press({ key: 'fleet-sheet-hint-open' })
+  await ui.unmount()
+  // as /qd's band button (queue.test.tsx): the press runs /sheet; the command's own test is above
+  expect(m.commands).toEqual([SHEET_COMMAND])
+})
+
+test('wide (#2836): 200 columns opens it unasked and draws no hint', async ($, on) => {
+  const m = engine(on, 'orchestrator')
+  await start($)
+  await band($, true, 200)
+  expect(m.opened).toEqual([SHEET_PANE])
+  expect(m.asks).toEqual([{ focus: false, closeOnEscape: false, holdToasts: false }])
+  expect(await hintOf($, true, 200)).toBeUndefined()
+})
+
+test('wide (#2836): a terminal widened past 144 opens the sheet on its next band', async ($, on) => {
+  const m = engine(on, 'orchestrator')
+  m.room.columns = 120
+  await start($)
+  await band($, true, 120)
+  expect(m.opened).toEqual([])
+  m.room.columns = 160
+  await band($, true, 160)
+  expect(m.opened).toEqual([SHEET_PANE])
+})
+
+test('main screen (#2836): isFullscreen false never opens unasked; the hint and /sheet are the way', async ($, on) => {
+  const m = engine(on, 'orchestrator')
+  await start($)
+  await band($, false, 200)
+  expect(m.opened).toEqual([])
+  expect(await hintOf($, false, 200)).toBeDefined()
+  const run = () => $.command.run({ command: SHEET_COMMAND, args: '', ...(RUN as object) } as never) as Promise<{ text?: string }>
+  await run()
+  expect(m.opened).toEqual([SHEET_PANE])
+})
+
+test('/sheet (#2836) registers immediate (runs mid-turn) where the panels run; a worker draws no hint', async ($, on) => {
+  const m = engine(on, 'worker')
+  await start($)
+  expect(m.registered).not.toContain(SHEET_COMMAND)
+  expect(await hintOf($, true, 120)).toBeUndefined()
+  expect(sheetCommand().immediate).toBe(true)
+  expect(BATCHES_ARG.test('b')).toBe(true)
 })

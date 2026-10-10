@@ -221,6 +221,8 @@ declare module 'claude-code' {
       panels: PanelsView | null
       /** The decision sheet's own state (issue #2832). */
       sheet: SheetUi
+      /** Bumped on each open / close of the decision sheet (issue #2836): the band's hint redraws. */
+      sheetPane: number
     }
   }
 }
