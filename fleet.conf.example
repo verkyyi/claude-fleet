@@ -1536,11 +1536,27 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # @label=Task list folds into batches @group=status @tier=internal @scope=global @edit=str
 #FLEET_SIDEBAR_FOLD=batch
 
-# The client's macOS notification when a session newly waits on you (issue
-# #1951): the title says who, the body what it asks, a click goes there. Once per
-# wait (deduped by the alert id); 0 = no notification (the bar's 「! n 等你」 stays).
-# @label=Notify when a session asks you @group=status @tier=internal @scope=global @edit=bool
+# The client's notification when a session needs you (issues #1951, #2759):
+# 在问你 (a question, an approval, a sign-in, the orchestrator's decision
+# sheet) and 卡住 with a sound, 做完 without; the title says who, the body what it
+# asks, a click goes there. Once per entry — the same question every beat is one
+# notification, asked again after an answer is a new one; one batch's 做完
+# within 10 minutes is one. Decided on the client's refresh loop, so it comes
+# with the client in the background too; logs/notify.ndjson has one line per
+# event. 0 = no notification (the bar's 「! n 等你」 stays).
+# @label=Notify when a session needs you @group=status @tier=internal @scope=global @edit=bool
 #FLEET_NOTIFY=1
+
+# 做完 notifications (issue #2759); 0 = only 在问你 and 卡住.
+# @label=Notify when a session is done @group=status @tier=internal @scope=global @edit=bool
+#FLEET_NOTIFY_DONE=1
+
+# Quiet hours, local time (issue #2759): notifications still reach the
+# Notification Centre, with no sound and nothing to the phone. `off` = never.
+# The phone (a Bark push, 在问你 and 卡住 only) is FLEET_NOTIFY_BARK_URL
+# (`https://api.day.app/<key>`) — put it in secrets.env, never here.
+# @label=Quiet hours @group=status @tier=internal @scope=global @edit=str
+#FLEET_NOTIFY_QUIET=23:00-08:00
 
 # A notification whose notifier cannot run a click (osascript, iTerm2's OSC 9)
 # only brings the terminal forward; that focus-in jumps to the session if it

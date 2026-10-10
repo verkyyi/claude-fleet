@@ -95,6 +95,8 @@
 #   pretrust-norepo                                 bin/fleet-trust.sh (node, grant --home), bin/fleet-claude.sh
 #   cross-send-refused-unseen                       bin/fleet-peer-send.sh (hub_send: identity sender, fleet_hub_refused,
 #                                                   receipt_watch), fleet-lib.sh fleet_hub_refused
+#   notify-silent                                   bin/fleet_notify.py (beat), bin/fleet-hub-sessions.sh (map_write),
+#                                                   bin/fleet-client-actions.py notify
 #   status-agent-not-up / status-perm-overwritten / status-migrated-looping / status-question-lost
 #                                                   bin/set-claude-state.sh (the primary-source rule),
 #                                                   fleet-status-7501.py pipe, classify-sessions.sh (skip:7501),
@@ -5225,6 +5227,37 @@ EOF_SSH
   [ "$(cat "$d/session.in")" = "$(printf '\033[200~%s\033[201~' "$d/mac/shot\\ one.png")" ] \
     || { WHY="FLEET_CLIENT_PASTE=0 changed the paste"; return 1; }
   SECS=$(since "$t0"); WHAT="拖入的文件先送到会话那台机器的 inbox，会话收到的是那边的路径；关掉开关逐字节如今天"
+}
+
+# notify-silent (issue #2759, EPIC #2756 C3): the client in the background (⌃D —
+# no terminal attached to anything) and a session on another machine starts
+# asking. Before: the notification rode the bar's status-right job, which tmux
+# runs only for an attached client — nothing rang, ever. Now the client's
+# refresh loop decides it (bin/fleet_notify.py): the next round that brings the
+# row raises ONE notification, no terminal needed.
+drill_notify_silent() {
+  CAP=5; local d="$WORK/ns" t0 F=cccccccc-cccc-4ccc-8ccc-cccccccccccc
+  mkdir -p "$d/home" "$d/t" "$d/conf"
+  printf '{"caps":["notify"]}\n' > "$d/t/client.where.json"
+  printf '#!/bin/sh\nprintf "%%s|%%s\\n" "$1" "$2" >> "%s/out"\n' "$d" > "$d/notifier"; chmod +x "$d/notifier"
+  nsj() { printf '{"sessions":[{"worker_id":"%s/issue-5","fleet_id":"%s","machine_name":"m4","os_user":"u","availability":"online","worker":{"issue":5,"repo":"o/r","state":"%s","needs":"%s","detail":"%s","agent":"claude"}}],"nodes":[{"machine_name":"m4","availability":"online","sessions":1}]}\n' \
+            "$F" "$F" "$1" "${2:-}" "${3:-}" > "$d/sessions.json"; }
+  nsr() { ( unset TMUX TMUX_PANE CCQUOTA_HUB_URL CCQUOTA_VIEWER_TOKEN FLEET_HUB_SESSIONS_LOCAL FLEET_NODE_ALIASES FLEET_HUB_URL FLEET_NOTIFY
+            export HOME="$d/home" TMPDIR="$d/t" FLEET_CONF_DIR="$d/conf" FLEET_SKIP_GLOBAL_CONF=1 CCQUOTA_FLEET=1 FLEET_UI_LANG=zh \
+                   FLEET_HUB_SESSIONS_CLIENT=ns FLEET_SHELL_SESSION=ns FLEET_HUB_SESSIONS_USER='*' FLEET_NOTIFY_QUIET=off \
+                   FLEET_HUB_SESSIONS_CMD="cat '$d/sessions.json'" FLEET_CLIENT_NOTIFY_CMD="$d/notifier" FLEET_NOTIFY_LOG="$d/notify.ndjson"
+            bash "$BIN/fleet-hub-sessions.sh" --refresh >/dev/null 2>&1 ); }
+  nsj working; nsr
+  nsj needs ask '要合并 #5 吗？'
+  t0=$(now)
+  nsr
+  until_ok "$CAP" test -s "$d/out" || { WHY="the session asks, no terminal is attached, and nothing rang"; return 1; }
+  SECS=$(since "$t0")
+  [ "$(cat "$d/out")" = '#5 在问你|要合并 #5 吗？ · m4' ] || { WHY="the notification says [$(cat "$d/out")]"; return 1; }
+  grep -q '"state": "ask", "sent"' "$d/notify.ndjson" 2>/dev/null || { WHY="logs/notify.ndjson has no sent line: $(cat "$d/notify.ndjson" 2>/dev/null)"; return 1; }
+  nsr; sleep 0.5
+  [ "$(wc -l < "$d/out" | tr -d ' ')" = 1 ] || { WHY="the same question rang again: $(cat "$d/out")"; return 1; }
+  WHAT="客户端在后台、没有终端挂着：别机会话一开始问你，下一拍就弹一条（点了切过去），同一问题不再响"
 }
 
 # ================================================================ run ===========

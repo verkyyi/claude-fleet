@@ -22,8 +22,8 @@
 #                    the client, every machine's, issue #1951), red; a tap on it
 #                    jumps to the next one (`#[range=user|needs]`,
 #                    conf/tmux-shell.conf — ⌘J went with issue #2362). Narrow:
-#                    `! N`. A NEW one also gets its macOS notification here
-#                    (fleet_alerts_notify — once per wait, FLEET_NOTIFY=0 off)
+#                    `! N`. (Its macOS notification is bin/fleet_notify.py's,
+#                    on the client's refresh loop — issue #2759)
 #   ✖ N  ▲ N         alarms / warnings (bin/fleet-alerts.sh), each only when ≠ 0;
 #                    负载 / 内存 / 盘 in the red are warnings there now, not chips
 #   ○ 入口 Nm        hub mode, and the hub has been silent past
@@ -293,14 +293,13 @@ status_ctr_cached
 fleet_alerts_refresh --kick
 fleet_alerts_bar
 # Who waits on you (issue #1951, EPIC #1949 C2): the needs count fleet_alerts_bar
-# just read (FA_NEEDS), and the notification for a new one — the client only.
+# just read (FA_NEEDS). The notification is not here any more (issue #2759).
 needs_seg=''
 if [ "${FA_NEEDS:-0}" -gt 0 ]; then
     _nn=$FA_NEEDS; [ "$_nn" -gt 99 ] && _nn=99
     if [ "$STATUS_NARROW" = 1 ]; then needs_seg="#[range=user|needs]${RED}#[bold]! ${_nn}#[nobold]#[norange]"
     else needs_seg="#[range=user|needs]${RED}#[bold]! ${_nn} 等你#[nobold]#[norange]"; fi
 fi
-fleet_alerts_notify
 
 # --- GitHub rate limit (issue #989, EPIC #1262 C2): `⚠ GitHub 受限至 HH:MM` while
 # the shared gh-limit marker (bin/fleet-gh-lib.sh, written by whichever caller saw
