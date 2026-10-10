@@ -37,6 +37,11 @@
 // Queue (issue #2617): in the orchestrator's window the same start stamps
 // `@orch_queue 0` (queue.ts counts from there), and a real exit unsets it.
 //
+// Panels (issue #2835): in the orchestrator's and the steward's windows only,
+// the same start registers /sheet and starts the panels (panels.ts): the inbox
+// tick also stats the books' change marks and re-reads them when one moved, and
+// a PANELS_FULL_MS timer reads them whole. Any other window stats nothing.
+//
 // Tools (issue #2057): a session the launcher gave no fleet tool service (no
 // FLEET_MCP_SERVER=1 — launched before #1828) gets the mod's three fallback tools
 // at the start, from the service's own specs (tools.ts); a served session gets
@@ -45,10 +50,15 @@
 import { atom, update } from 'claude-code'
 import type { EngineInterface, On, Timer, ToolSpec } from 'claude-code'
 
-import type { FleetModStatus } from '../types'
+import type { FleetModStatus, PanelsView } from '../types'
 import { isOpen, openGate } from './gate'
 import { INBOX_MS, inboxDir, pollInbox } from './inbox'
-import { bodyArgv, isOrchestrator, roleArgv, rolePath, takeRole } from './orchestrator'
+import { bodyArgv, isOrchestrator, roleArgv, rolePath, takeRole, windowRole } from './orchestrator'
+import {
+  PANELS_FULL_MS, panelPaths, panelsOn, panelsTick, panelsWanted, sessionOf, sheetCommand, startPanels,
+  stopPanels,
+} from './panels'
+import type { PanelsIo } from './panels'
 import { qdCommand, stringsArgv, takeStrings } from './qd'
 import { QUEUE_OPTION } from './queue'
 import type { InboxIo } from './inbox'
@@ -64,12 +74,15 @@ export const HEARTBEAT_MS = 15_000
 const EXITS = new Set(['prompt_input_exit', 'logout', 'other'])
 
 const status = atom({ plugin: 'fleet', key: 'status' } as const, null as FleetModStatus | null)
+/** panels.ts's view (issue #2835): written here, where `$` is. */
+const panels = atom({ plugin: 'fleet', key: 'panels' } as const, null as PanelsView | null)
 
 // Module state: a reload is a fresh module, and session.start fires again.
 let timer: Timer | undefined
 let inboxTimer: Timer | undefined
 let modelTimer: Timer | undefined
 let whereTimer: Timer | undefined
+let panelsTimer: Timer | undefined
 let whereBusy = false
 let inboxBusy = false
 let pane: string | undefined
@@ -101,6 +114,36 @@ function inboxIo($: EngineInterface): InboxIo {
     run: async (command, args) => {
       await $.command.run({ command, args })
     },
+  }
+}
+
+// The panels' reads (panels.ts): four stats a tick, the books only when one moved.
+function panelsIo($: EngineInterface): PanelsIo {
+  return {
+    stat: async path => {
+      try {
+        const st = await $.fs.stat(path)
+        return `${st.mtimeMs}:${st.size}`
+      } catch {
+        return '-'
+      }
+    },
+    list: async dir => (await $.fs.list(dir)).filter(f => f.kind === 'file').map(f => f.name),
+    read: path => $.fs.read(path),
+    write: (path, text) => $.fs.write(path, text),
+    now: () => $.clock.now(),
+    publish: async view => {
+      await update($, panels, () => view)
+    },
+  }
+}
+
+async function tickPanels($: EngineInterface, full = false): Promise<void> {
+  if (!panelsOn()) return
+  try {
+    await panelsTick(panelsIo($), full)
+  } catch {
+    // The next tick reads again; a panel never holds up the session.
   }
 }
 
@@ -176,14 +219,19 @@ async function readRole($: EngineInterface): Promise<void> {
 
 // Quick dispatch (qd.tsx): the orchestrator's window only — its strings, then the
 // command. A read or a register that fails costs /qd, never the session.
-async function registerQuickDispatchCommand($: EngineInterface): Promise<void> {
-  if (!isOrchestrator()) return
+// The `qd_` / `panel_` strings, for the two windows that show them.
+async function readStrings($: EngineInterface): Promise<void> {
+  if (!isOrchestrator() && !panelsOn()) return
   try {
     const r = await $.process.run(stringsArgv($.plugin.root), { timeoutMs: TMUX_TIMEOUT_MS })
     if (r.exitCode === 0) takeStrings(r.stdout)
   } catch {
     // Every key shows itself; the command still works.
   }
+}
+
+async function registerQuickDispatchCommand($: EngineInterface): Promise<void> {
+  if (!isOrchestrator()) return
   try {
     await $.command.register(qdCommand())
   } catch {
@@ -250,6 +298,16 @@ async function onReady($: EngineInterface): Promise<void> {
   })
   // The orchestrator's role, in the context from the first request (#2582).
   await readRole($)
+  const home = (await $.env.get('HOME')) ?? ''
+  const conf = (await $.env.get('FLEET_CONF_DIR')) || `${home}/.config/claude-fleet`
+  const tmux = await $.env.get('TMUX')
+  // The panels: the orchestrator's and the steward's windows only (#2835).
+  const session = pane === undefined ? undefined : sessionOf(tmux)
+  stopPanels()
+  if (session !== undefined && panelsWanted(windowRole(), await $.env.get('FLEET_MOD_PANELS'), session)) {
+    startPanels(panelPaths(conf, session))
+  }
+  await readStrings($)
   // /qd, the orchestrator's quick dispatch (#2618).
   await registerQuickDispatchCommand($)
   // What waits behind its turn starts at 0, so a counting orchestrator always says a number (#2617).
@@ -260,13 +318,25 @@ async function onReady($: EngineInterface): Promise<void> {
   whereTimer = $.clock.every(WHERE_POLL_MS, () => {
     void pollWhere($)
   })
-  const home = (await $.env.get('HOME')) ?? ''
-  const conf = (await $.env.get('FLEET_CONF_DIR')) || `${home}/.config/claude-fleet`
-  inbox = inboxDir(conf, await $.env.get('TMUX'), pane)
+  inbox = inboxDir(conf, tmux, pane)
   inboxTimer?.cancel()
-  inboxTimer = inbox === undefined ? undefined : $.clock.every(INBOX_MS, () => {
+  inboxTimer = inbox === undefined && !panelsOn() ? undefined : $.clock.every(INBOX_MS, () => {
     void pollOnce($)
+    void tickPanels($)
   })
+  panelsTimer?.cancel()
+  panelsTimer = undefined
+  if (panelsOn()) {
+    try {
+      await $.command.register(sheetCommand())
+    } catch {
+      // A refused name: no /sheet; the panels still follow the books.
+    }
+    await tickPanels($, true)
+    panelsTimer = $.clock.every(PANELS_FULL_MS, () => {
+      void tickPanels($, true)
+    })
+  }
 }
 
 export function registerLifecycle(on: On): void {
@@ -301,6 +371,9 @@ export function registerLifecycle(on: On): void {
       modelTimer = undefined
       whereTimer?.cancel()
       whereTimer = undefined
+      panelsTimer?.cancel()
+      panelsTimer = undefined
+      stopPanels()
       await setOptions($, { '@mod_alive': null, ...(isOrchestrator() ? { [QUEUE_OPTION]: null } : {}) })
     }
     return next(e)

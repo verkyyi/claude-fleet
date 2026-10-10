@@ -23,6 +23,10 @@ export const ROLE_SECTION = 'fleet:orchestrator-role'
 
 let role: string | undefined
 let orchestrator = false
+let kept: WindowRole = 'other'
+
+/** The window's role as the panels tell it apart (issue #2835). */
+export type WindowRole = 'orchestrator' | 'steward' | 'other'
 
 /** <install>/skills/fleet-orchestrate/role.md from the plugin root (<install>/mod/fleet). */
 export function rolePath(root: string): string {
@@ -52,8 +56,15 @@ export function roleArgv(pane: string): string[] {
  */
 export function takeRole(windowRole: string, text: string | undefined): void {
   const body = text?.trim() ?? ''
-  orchestrator = windowRole.trim() === 'orchestrator'
+  const name = windowRole.trim()
+  orchestrator = name === 'orchestrator'
+  kept = orchestrator || name === 'steward' ? (name as WindowRole) : 'other'
   role = orchestrator && body !== '' ? body : undefined
+}
+
+/** The window's role from the same start-up read: orchestrator · steward · other (panels.ts, #2835). */
+export function windowRole(): WindowRole {
+  return kept
 }
 
 export function currentRole(): string | undefined {
@@ -69,6 +80,7 @@ export function isOrchestrator(): boolean {
 export function resetRole(): void {
   role = undefined
   orchestrator = false
+  kept = 'other'
 }
 
 export function roleSection(text: string): PromptComposeSection {

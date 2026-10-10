@@ -275,6 +275,25 @@ def epic_marks(now):
 
 # ---- state -----------------------------------------------------------------------
 
+def write_stamp():
+    """global/steward.stamp, one line `<seq> <epoch_ms>`, after every save (issue #2835).
+
+    The panels (mod/fleet/hooks/panels.ts) stat this one file every second and
+    re-read the books only when it moved; a stamp that cannot be written costs
+    them up to their 10 s full read, never the save."""
+    p = gdir() / "steward.stamp"
+    try:
+        seq = int(p.read_text().split()[0]) + 1
+    except (OSError, ValueError, IndexError):
+        seq = 1
+    try:
+        tmp = p.with_suffix(".stamp.tmp")
+        tmp.write_text("%d %d\n" % (seq, int(time.time() * 1000)))
+        os.replace(str(tmp), str(p))
+    except OSError:
+        pass
+
+
 class State:
     def __init__(self):
         self.path = gdir() / "steward.state.json"
@@ -293,6 +312,7 @@ class State:
         tmp = self.path.with_suffix(".tmp")
         tmp.write_text(json.dumps(self.d, ensure_ascii=False, indent=1, sort_keys=True))
         os.replace(str(tmp), str(self.path))
+        write_stamp()
 
     # every GitHub write goes through here: the beat's budget (共同约定 7)
     def budget_left(self):
