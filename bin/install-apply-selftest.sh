@@ -45,6 +45,10 @@
 #                       ($CLAUDE_CONFIG_DIR/.claude.json), even when the file did
 #                       not change; FLEET_KEEP_AGENTS_KEY=1 -> --skip
 #                       leftArrowOpensAgents; a version without the file -> skip
+#   T. two trees        (issue #2774) --tree-from/--tree-to: what moved is read by
+#                       comparing two version dirs (one of links into a runtime),
+#                       the same paths git diff names; logs/ tools/ .release not
+#                       counted; --tree-to must be the install; no --sync-logins
 #   K. usage            --to must be HEAD, both revs required, from==to no-ops
 #   L. the skill        /fleet-sync-install calls apply (ff -> apply -> report)
 #                       rather than carrying its own copy of the steps
@@ -715,5 +719,42 @@ ok 'N after a FAIL: not called' "! grep -q '^fleet-sync-logins.sh' '$LOG'"
 if [ -f "$SKILL" ]; then
   contains 'N the skill passes --sync-logins' "$(cat "$SKILL")" 'fleet-install-apply.sh --from "$before" --to "$after" --sync-logins'
 fi
+
+# --- T. two version directories (issue #2774) --------------------------------------
+# A managed login's version dir is a tree of links into the runtime, no git in
+# it: --tree-from <old dir> --tree-to <new dir> reads what moved by comparing
+# the trees. The old one here a plain copy (a checkout's files), the new one
+# links to a "runtime" copy; epic-pages/ (a .shared link) and tools/ are not the version's.
+T0=$(git -C "$R" rev-parse HEAD)
+sed -i.bak 's/^v2$/v3/' "$R/commands/fleet-claim.md"; rm -f "$R/commands/"*.bak
+printf '# /fleet-tree\n\n<!-- fleet skill · owner: either -->\n' > "$R/commands/fleet-tree.md"
+git -C "$R" rm -q "$R/commands/fleet-new.md"
+printf 'bind a run tree\n' > "$R/conf/tmux-attention.conf"
+T1=$(commit 'tree mode')
+TF="$WORK/tv.versions/$T0" RT="$WORK/runtime/$T1" TT="$WORK/tv.versions/$T1" TL="$WORK/tv"
+mkdir -p "$TF" "$RT" "$WORK/tv.versions/.shared/epic-pages"
+git -C "$R" archive "$T0" | tar -x -C "$TF"
+git -C "$R" archive "$T1" | tar -x -C "$RT"
+mkdir -p "$RT/tools/bin" "$RT/.release"; echo x > "$RT/tools/bin/claude"; echo '{}' > "$RT/.release/manifest.json"
+( cd "$RT" && find . -type d ! -path './tools*' ! -path './.release*' ) | while read -r d; do mkdir -p "$TT/$d"; done
+( cd "$RT" && find . -type f ! -path './tools/*' ! -path './.release/*' ) | while read -r f; do ln -s "$RT/${f#./}" "$TT/${f#./}"; done
+ln -s ../.shared/epic-pages "$TT/epic-pages"; ln -s "$TT" "$TL"
+TPLAIN=$(git -C "$R" diff --no-renames --name-only "$T0" "$T1" | wc -l | tr -d ' ')
+run_ap --tree-from "$TF" --tree-to "$TT" --root "$TL"
+eq 'T exit' 0 "$RC"
+contains 'T range names the versions' "$OUT" "range: ${T0:0:7}..${T1:0:7}"
+contains 'T the same paths as git diff (not epic-pages/, tools/, .release)' "$OUT" "range: $TPLAIN path(s) changed"
+ok 'T command updated through the links' "grep -qx v3 '$H/.claude/commands/fleet-claim.md'"
+ok 'T new command installed' "[ -f '$H/.claude/commands/fleet-tree.md' ]"
+ok 'T retired command removed' "[ ! -f '$H/.claude/commands/fleet-new.md' ]"
+ok 'T the conf reload gets --tree-from conf as its before-file' "grep -qx 'bind a run x' '$WORK/seen-before.conf' || grep -q 'bind b run y' '$WORK/seen-before.conf'"
+contains 'T final line' "$OUT" "apply: ok — ${T0:0:7}..${T1:0:7}"
+run_ap --tree-from "$TT" --tree-to "$TT" --root "$TL"
+contains 'T same tree: nothing to apply' "$OUT" 'apply: ok — install already at'
+run_ap --tree-from "$TF" --tree-to "$TF" --root "$TL"
+eq 'T --tree-to must be the install' 2 "$RC"
+contains 'T says move it first' "$OUT" 'move the install first'
+run_ap --tree-from "$TF" --tree-to "$TT" --root "$TL" --sync-logins
+eq 'T --sync-logins refused' 2 "$RC"
 
 printf 'install-apply-selftest: PASS (%d checks)\n' "$CHECKS"

@@ -114,7 +114,13 @@ J=$(printf '%s' "$OUT" | python3 -c 'import json,sys
 d=json.load(sys.stdin); L={l["login"]: l for l in d["logins"]}
 print(d["runtime"]["source"], L["erin"]["install"]["source"], L["gina"]["install"]["source"], L["alice"]["shell"]["source"], L["ivan"]["client"]["source"])' 2>&1)
 eq "G: json sources" "hub github runtime hub github" "$J"
-rm -rf "$H/erin" "$H/frank" "$H/gina" "$H/hana" "$H/ivan"
+# issue #2774: a linked tree beside a checkout of the same sha is <sha>-linked —
+# still that sha, still the runtime's
+mkdir -p "$H/jade/.claude/fleet.versions/$S1-linked/bin"; ln -s "$H/jade/.claude/fleet.versions/$S1-linked" "$H/jade/.claude/fleet"
+ln -s "$WORK/root/$S1/bin/fleet-lib.sh" "$H/jade/.claude/fleet/bin/fleet-lib.sh"
+FLEET_INSTALLS_STABLE=$S1 run
+has "G: a -linked version dir is its sha" "$OUT" "jade           1111111  = stable  来源 runtime"
+rm -rf "$H/erin" "$H/frank" "$H/gina" "$H/hana" "$H/ivan" "$H/jade"
 
 # --- B. all at stable → 0; no stable → 2 -------------------------------------------
 rm -rf "$H/bob"

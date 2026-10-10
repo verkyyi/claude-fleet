@@ -2252,22 +2252,45 @@ def account_adopt(paths, login, dry=False, rejoin=False):
 
 
 def adopt_follow(paths, login):
-    """Taken over = its install taken over too (issue #2714): the release's updater
-    links the login's tools and runs the release's install-sync for it NOW, in the
-    background (an apply + doctor takes minutes), not on the next update tick. A
-    machine with no release yet has nothing to follow."""
+    """Taken over = its install taken over too (issues #2714, #2774): the
+    release's updater links the login's tools and makes its ~/.claude/fleet a
+    tree linked to the runtime NOW, in this command — a link tree is built in
+    milliseconds; the apply after it (daemons reloaded) is what takes the time.
+    A machine with no release yet has nothing to follow."""
     upd = os.path.join(paths.runtime, "bin", "fleet-node-update.py")
     if env("FLEET_NODE_ADOPT_FOLLOW", "1") == "0" or not os.path.exists(upd):
         return
     try:
-        subprocess.Popen(["/usr/bin/python3", "-I", upd, "follow", login], stdin=subprocess.DEVNULL,
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
-                         close_fds=True)
-    except OSError as e:
+        r = subprocess.run(["/usr/bin/python3", "-I", upd, "follow", login], stdin=subprocess.DEVNULL,
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True,
+                           timeout=env_num("FLEET_NODE_FOLLOW_TIMEOUT", 1200) + 60)
+    except (OSError, subprocess.SubprocessError) as e:
         print("  its install follows the release on the next update tick (%s)" % e)
         return
-    print("  its ~/.claude/fleet follows the release %s now (log: %s)"
-          % ((runtime_sha(paths) or "?")[:12], os.path.join(paths.log, "update.log")))
+    if r.returncode == 0:
+        print("  its ~/.claude/fleet is linked to the release %s (log: %s)"
+              % ((runtime_sha(paths) or "?")[:12], os.path.join(paths.log, "update.log")))
+    else:
+        print("  its install did not move yet (%s) — the next update tick tries again"
+              % ((r.stderr or r.stdout).strip().splitlines() or ["rc %d" % r.returncode])[-1][:200])
+
+
+def release_install(paths, login):
+    """Let go = its install its own again (issue #2774): the linked
+    ~/.claude/fleet becomes a copy of the same files, a checkout of one
+    `fleet-release:` commit, so the login runs and follows on its own."""
+    upd = os.path.join(paths.runtime, "bin", "fleet-node-update.py")
+    if not os.path.exists(upd):
+        return
+    try:
+        r = subprocess.run(["/usr/bin/python3", "-I", upd, "release-install", login], stdin=subprocess.DEVNULL,
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=660)
+    except (OSError, subprocess.SubprocessError) as e:
+        print("  its ~/.claude/fleet still links to the runtime (%s) — by hand: sudo python3 %s release-install %s"
+              % (e, upd, login))
+        return
+    line = ((r.stdout if r.returncode == 0 else (r.stderr or r.stdout)).strip().splitlines() or [""])[-1]
+    print("  its ~/.claude/fleet: %s" % (line or "rc %d" % r.returncode))
 
 
 def _undo(paths, index, moved):
@@ -2319,6 +2342,8 @@ def account_release(paths, login, force=False):
         end = now() + env_num("FLEET_NODE_RELEASE_WAIT", 20)
         while now() < end and (_account_running(paths, login) or (gone_env and _node_agent_stale(paths))):
             time.sleep(0.2)
+    # its install its own again before its own services come back on it
+    release_install(paths, login)
     back = 0
     with attic_lock(paths):
         index = read_json(paths.attic_index, [])

@@ -46,6 +46,8 @@
 #   managed-login-install-predates  bin/fleet-node-update.py follow_installs (#2714):
 #                         a login install from before #2688 never follows — its own
 #                         install-sync still answers off · managed
+#   managed-login-own-copy  bin/fleet-node-update.py link-tree + follow_installs
+#                         (#2774): a managed login pointed back at an own old copy
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT are read by the sourced runner
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -557,7 +559,10 @@ drill_node_install_half() {
 
 # managed-login-install-stale (#2688): the machine moved to a release, a managed
 # login's ~/.claude/fleet (what every account task runs) stayed on its old commit
-# — its install-sync tick answered `off · managed` and the updater never moves it.
+# — its install-sync tick answered `off · managed` and the updater never moved it.
+# Since #2774 the updater links it to the runtime and moves it with the machine;
+# the login's own tick says so (off · managed · 跟随 <root>/current, no fetch) and
+# the machine doctor's install row WARNs until it is linked.
 drill_managed_login_install_stale() {
   CAP=60
   local sb seed co c1 c2 t0 out g
@@ -568,11 +573,6 @@ drill_managed_login_install_stale() {
         GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t git "$@"; }
   g init -q --bare -b master "$sb/origin.git" && g clone -q "$sb/origin.git" "$seed" 2>/dev/null \
     || { WHY="no sandbox repo"; return 1; }
-  mkdir -p "$seed/bin"
-  printf '#!/bin/sh\necho "apply: ok — stub"\n' > "$seed/bin/fleet-install-apply.sh"
-  printf '#!/bin/sh\necho "  PASS  gh  ok"\n' > "$seed/bin/fleet-doctor.sh"
-  printf '#!/bin/sh\nexit 0\n' > "$seed/bin/fleet-diskguard.sh"
-  chmod +x "$seed"/bin/*
   echo 1 > "$seed/f"; g -C "$seed" add -A; g -C "$seed" commit -qm one; c1=$(g -C "$seed" rev-parse HEAD)
   echo 2 > "$seed/f"; g -C "$seed" commit -qam two; c2=$(g -C "$seed" rev-parse HEAD)
   g -C "$seed" push -q origin master && g --git-dir="$sb/origin.git" update-ref refs/tags/stable "$c2"
@@ -583,19 +583,20 @@ drill_managed_login_install_stale() {
   out=$(env -i PATH="$PATH" HOME="$sb/home" FLEET_CONF_DIR="$sb/conf" TMPDIR="$sb/tmp" FLEET_SKIP_GLOBAL_CONF=1 \
         FLEET_NODE_STATE="$sb/db" FLEET_NODE_ROOT="$sb/noderoot" GIT_CONFIG_GLOBAL="$sb/gitconfig" GIT_CONFIG_SYSTEM=/dev/null \
         bash "$BIN/fleet-install-sync.sh" --root "$co" 2>&1) || { WHY="the tick failed: $(printf '%s' "$out" | tail -2 | tr '\n' ' ')"; return 1; }
-  [ "$(g -C "$co" rev-parse HEAD)" = "$c2" ] \
-    || { WHY="the managed login did not follow the machine's release: $(sed -n 's/^reason: //p' "$sb/conf/global/install-sync.state")"; return 1; }
-  grep -q '^result: switched' "$sb/conf/global/install-sync.state" || { WHY="the tick did not record switched"; return 1; }
+  grep -q "^reason: managed · 跟随 $sb/noderoot/current" "$sb/conf/global/install-sync.state" \
+    || { WHY="the managed login's tick does not name what it follows: $(sed -n 's/^reason: //p' "$sb/conf/global/install-sync.state")"; return 1; }
+  [ "$(g -C "$co" rev-parse HEAD)" = "$c1" ] || { WHY="the login's own tick moved its copy (the updater's, #2774)"; return 1; }
   out=$(python3 -W ignore::ResourceWarning "$BIN/fleet-node-update-selftest.py" --drill-login-install 2>&1) \
     || { WHY="the machine doctor does not name a stale login install: $(printf '%s' "$out" | grep -E 'Error|FAIL' | head -3 | tr '\n' ' ')"; return 1; }
   SECS=$(since "$t0")
-  WHAT="整机在新发布版、托管登录的 ~/.claude/fleet 还在旧提交：一拍 install-sync 跟到本机发布版（不是 off · managed），fleet doctor --machine 的 install 行落后时 WARN、到位 PASS"
+  WHAT="整机在新发布版、托管登录的 ~/.claude/fleet 还在旧提交：登录自己的一拍答 off · managed · 跟随 <root>/current（不再自己去取），fleet doctor --machine 的 install 行未链接到发布版时 WARN、链接到位 PASS"
 }
 
 # managed-login-install-predates (#2714): the login's own install is older than
 # #2688, so its install-sync — the code that would move it — still answers
-# `off · managed`. The updater (root, always the release's code) runs the
-# RELEASE's install-sync for it after a commit and every tick at the release.
+# `off · managed`. The updater (root, always the release's code) moves it: since
+# #2774 by linking it to the runtime (link-tree), at the switch, the rollback and
+# every tick at the release.
 drill_managed_login_install_predates() {
   CAP=60
   local t0 out
@@ -603,7 +604,21 @@ drill_managed_login_install_predates() {
   out=$(python3 -W ignore::ResourceWarning "$BIN/fleet-node-update-selftest.py" --drill-login-follow 2>&1) \
     || { WHY="the updater did not move a login install behind the release: $(printf '%s' "$out" | grep -E 'Error|FAIL' | head -3 | tr '\n' ' ')"; return 1; }
   SECS=$(since "$t0")
-  WHAT="登录安装早于 #2688（自己的 install-sync 仍答 off · managed）：更新器提交新版后、以及每拍在发布版时，降权跑发布版的 install-sync 把它带到同一版；被退回的版本不跟；跟不上的记进 update.json 并在 install 行写明，1 小时后再试；钉在版本目录的客户端壳镜像改走登录链接"
+  WHAT="登录安装早于 #2688（自己的 install-sync 仍答 off · managed）：更新器在换版那一拍把每个托管登录的 ~/.claude/fleet 换成链接到 <root>/<sha> 的目录树并跑新版 apply（两目录模式），退回时一起退回，接管时当场做；放手时换回独立副本；钉在版本目录的客户端壳镜像改走登录链接"
+}
+
+# managed-login-own-copy (#2774): a managed login's ~/.claude/fleet pointed back
+# by hand at an own old copy (or left on its bootstrap copy) no longer moves with
+# the machine. The machine doctor WARNs (never FAIL), and the next update tick
+# links it to the release again — unless an EPIC batch with work holds it.
+drill_managed_login_own_copy() {
+  CAP=60
+  local t0 out
+  t0=$(now)
+  out=$(python3 -W ignore::ResourceWarning "$BIN/fleet-node-update-selftest.py" --drill-login-own-copy 2>&1) \
+    || { WHY="a login pointed at an own copy was not linked back: $(printf '%s' "$out" | grep -E 'Error|FAIL' | head -3 | tr '\n' ' ')"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="托管登录被手动指回一份独立旧副本：fleet doctor --machine 的 install 行 WARN（不 FAIL、不回退整机），下一拍更新器把它重新链接到发布版；有活的批次在跑时先等（同 2 小时封顶）；换版一次两个登录一起链接、体检 FAIL 一起退回、每个登录目录 < 1 MB"
 }
 
 # shift-enter-sends (issue #2760): ⇧↵ typed into the client went through three tmux

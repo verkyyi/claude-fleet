@@ -475,19 +475,16 @@ eq "H2: exits 0" 0 "$RC"; eq "H2: result off" off "$(st result)"
 contains "H2: says the machine updater has it" "$(st reason)" "managed — the machine updater"
 eq "H2: no fetch (local tag untouched)" "$C6" "$(git -C "$CO" rev-parse refs/tags/stable)"
 eq "H2: HEAD untouched" "$C6" "$(hd)"; eq "H2: nothing ran" 0 "$(applies)"
-# H3 (issue #2688): once the machine has a release, the managed login FOLLOWS it —
-# that sha (C7, `current`'s name), not the stable tag (C5 here). The node agent is
-# the machine updater's: its upgrade is never even asked.
+# H3 (issues #2688, #2774): once the machine has a release, the managed login is
+# STILL off here — the machine updater links its install to the runtime and moves
+# it with the machine (fleet-node-update.py link-tree); the tick names what it
+# follows and whether the install is linked to it yet. No fetch, no move.
 ln -s "$WORK/noderoot/$C7" "$WORK/noderoot/current"; stable "$C5"
 : > "$LOG"; OUT=$(FLEET_NODE_STATE="$WORK/node" bash "$IS" --root "$CO" 2>&1); RC=$?
-eq "H3: exits 0" 0 "$RC"; eq "H3: result switched" switched "$(st result)"
-eq "H3: HEAD at the machine release, not stable" "$C7" "$(hd)"
-contains "H3: says whose mark it follows" "$OUT" "following the machine's release $(short "$C7")"
-eq "H3: apply ran once" 1 "$(applies)"
-eq "H3: node agent left to the updater" off "$(st node)"
-: > "$LOG"; OUT=$(FLEET_NODE_STATE="$WORK/node" bash "$IS" --root "$CO" 2>&1)
-eq "H3: next tick current" current "$(st result)"
-contains "H3: …at the machine release" "$(st reason)" "install at the machine release $(short "$C7")"
+eq "H3: exits 0" 0 "$RC"; eq "H3: result off" off "$(st result)"
+contains "H3: says it follows the runtime" "$(st reason)" "managed · 跟随 $WORK/noderoot/current ($(short "$C7"))"
+contains "H3: …and that it is not linked yet" "$(st reason)" "not linked yet"
+eq "H3: HEAD untouched" "$C6" "$(hd)"; eq "H3: nothing ran" 0 "$(applies)"
 rm "$WORK/noderoot/current"; unset FLEET_NODE_ROOT
 git -C "$CO" reset -q --hard "$C6"; stable "$C7"; git -C "$CO" update-ref refs/tags/stable "$C6"
 printf '{"someone-else": {"managed": true}}\n' > "$WORK/node/accounts.json"

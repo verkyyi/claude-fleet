@@ -739,10 +739,16 @@ Do not install from memory: read the doc and work from it.
   last (`update-restart.json`). The machine
   doctor (`fleet doctor --machine`) after the switch: a FAIL the old version did
   not have rolls EVERYTHING back and skips that sha. `update.json`'s phase makes
-  a killed tick resume or roll back. A managed login's install-sync follows the
-  MACHINE, not stable (issue #2688): its target is the commit the runtime's
-  `current` names, through its own apply + doctor gate (no `current` yet ⇒
-  `off`; BREAK-IT `managed-login-install-stale`); `fleet doctor --installs`
+  a killed tick resume or roll back. A managed login's `~/.claude/fleet` IS the
+  runtime (issue #2774, EPIC #2770 C4): `fleet.versions/<sha>/` is its own real
+  directory tree whose every file links into `<root>/<sha>/` (the shadow-root
+  shape — `$BIN/..` stays the login's), built demoted by the updater's
+  `link-tree` and moved in the machine's own switch / rollback, then that
+  version's `fleet-install-apply.sh --tree-from <old> --tree-to <new>` (no git);
+  its own install-sync answers `off · managed · 跟随 <root>/current`, the
+  doctor's `install` row PASSes only when linked to `current`, `account release`
+  makes it an own copy again (BREAK-IT `managed-login-own-copy`,
+  `managed-login-install-stale`); `fleet doctor --installs`
   (`bin/fleet-installs.sh`, issue #2692) lists the runtime, every login install
   and every client shell against stable. `fleet-stable.sh move` refuses an updater tree without a valid
   release.json (`release:`), or one pinning an artifact the hub's

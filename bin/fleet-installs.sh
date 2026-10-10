@@ -65,7 +65,8 @@ HEX = re.compile(r"^[0-9a-f]{7,40}$")
 PROBE = r'''
 h=$1
 d=$h/.claude/fleet
-if [ -L "$d" ]; then t=$(readlink "$d"); t=${t%/}; echo "login link ${t##*/}"; echo "target $t"
+# a version dir's name is its sha, maybe with a suffix (-<stamp>, -linked, -own)
+if [ -L "$d" ]; then t=$(readlink "$d"); t=${t%/}; k=${t##*/}; echo "login link ${k%%-*}"; echo "target $t"
 elif [ -d "$d" ]; then
   # an imported hub release (#2773) is named by its upstream sha
   v=$(git -C "$d" log -1 --format=%s 2>/dev/null | sed -n 's/^fleet-release: \([0-9a-f]\{40\}\) seq=.*/\1/p')
