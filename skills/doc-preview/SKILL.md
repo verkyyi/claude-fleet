@@ -58,7 +58,9 @@ with `tailscale serve` (HTTPS on the tailnet). The viewing browser needs interne
   (it would make every session's docs public). The hostname changes whenever cloudflared
   restarts (reboot, `--stop`), so earlier links die with it. Use it only when the user
   wants a link without the tailnet — it is public-by-obscurity, not private.
-- **`local`** — **no tailnet, nothing public** (issue #1379). Opt-in: `share.sh --local
+- **`local`** — **no tailnet, nothing public** (issue #1379). Opt-in: `DOC_PREVIEW_MODE=local` in the
+  login shell makes it the default for every share on that machine (readers without a tailnet get the
+  page through `fleet-open`'s ssh forward instead); per call: `share.sh --local
   <file>`. `server.py` on `127.0.0.1` only; `READY http://127.0.0.1:<port>/d/<id>/` — a URL
   that works on THIS machine alone, made to be handed to `bin/fleet-open.sh`, which opens it
   in the operator's own browser over their ssh (the `fleet-open` skill). `share.sh --open

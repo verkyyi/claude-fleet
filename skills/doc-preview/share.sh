@@ -57,7 +57,8 @@
 #                doc headers + source paths are stripped and /_ctl is 404.
 #                Sticky until --stop. The hostname changes whenever cloudflared restarts
 #                (reboot, --stop), so old links die with it: a live preview, not hosting.
-#   local        no tailnet involved (issue #1379): opt-in with --local. server.py on
+#   local        no tailnet involved (issue #1379): opt-in with --local or DOC_PREVIEW_MODE=local
+#                (set it in the login shell of a machine whose readers have no tailnet). server.py on
 #                127.0.0.1 only (#1154), the URL http://127.0.0.1:<port>/ — reachable from
 #                this machine alone, which is the point: bin/fleet-open.sh forwards it to the
 #                operator's browser over their ssh. A later share WITHOUT --local turns it
@@ -509,6 +510,7 @@ esac
 
 WANT_TUNNEL=0; WANT_LOCAL=0; WANT_OPEN=0; TTL="${DOC_PREVIEW_TTL:-7d}"
 [ "${DOC_PREVIEW_MODE:-}" = tunnel ] && WANT_TUNNEL=1
+[ "${DOC_PREVIEW_MODE:-}" = local ] && WANT_LOCAL=1   # a machine whose readers have no tailnet: every share loopback-only, delivered by fleet-open
 while [ $# -gt 0 ]; do
   case "$1" in
     --tunnel) WANT_TUNNEL=1 ;;
