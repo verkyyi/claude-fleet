@@ -77,6 +77,9 @@ bin/fleet-route.py
 # the ONE TLS context every hub-facing python imports (#2878): a python3 with
 # no CA store still verifies the hub (certifi · macOS system roots · OpenSSL)
 bin/fleet_tls.py
+# the client's own record (#2896): connect / place / keeper / login logs, and the
+# ONE credential-shape table every redactor reads
+bin/fleet_clientlog.py
 bin/fleet-client-lib.sh
 # keeps up with stable by itself (#1722, #1805): newer client + the team's
 # defaults; `fleet update` says where this computer stands
@@ -154,6 +157,7 @@ conf/tmux-shell.conf
 conf/tmux-shell-stage.conf
 conf/fleet-palette.conf
 conf/vendor-tmux.lock
+conf/secret-shapes.list
 # --- agent bundle: generated from conf/agent-bundle.manifest by bin/fleet-client-mirror.sh — do not edit (#1725) ---
 conf/agent-bundle.manifest
 hooks/settings-hooks.json

@@ -735,3 +735,8 @@ FLEET_INSTALL_SYNC_CLIENT_FOLLOW   seam: 0 — a kept switch does not run `fleet
 FLEET_INSTALL_SYNC_HOST            seam: 1|0 — does this computer 承载; an install-sync tick follows the node agent only when 1 (default `fleet-conf.sh host`) (#2716)
 FLEET_DOCTOR_RESIDENT_CMD          seam: prints `<unit> <started epoch>` per resident daemon for the doctor's 「常驻服务还在跑切换前的版本」 row (default launchctl print / systemctl show + ps etime) (#2716)
 FLEET_RULES_LOG                    path: where fleet-issue-file.sh notes an orchestrator filing with no rule (default `<install>/logs/rules.log`) (#2786)
+FLEET_CLIENT_LOG                   knob: 0 = the client writes none of its own logs and fleet-connect exec's ssh as before (fleet_clientlog, #2896)
+FLEET_CLIENT_LOG_DIR               path: where the client's connect/place/keeper/login logs go (default <shell cache>/logs, #2896)
+FLEET_CLIENT_LOG_MAX               knob: bytes a client log reaches before it is rotated to .1 (524288, #2896)
+FLEET_CONNECT_SSH_VERBOSE          knob: 1 = fleet-connect runs ssh -v -E <logs>/ssh-v.log (off, #2896)
+FLEET_SECRET_SHAPES                seam: the credential-shape table instead of conf/secret-shapes.list (#2896)
