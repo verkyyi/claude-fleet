@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
@@ -83,6 +84,20 @@ type DebugTickets struct {
 	Key []byte
 	// Now replaces the clock in tests.
 	Now func() time.Time
+
+	// C4 (claude-fleet#2893) — the debug reports:
+	// Login is CCQUOTA_FLEET_DEBUG_LOGIN, <machine>/<login>: where a
+	// debugger session opens ("" = none opens; a report goes unfinished).
+	Login string
+	// Notify is CCQUOTA_FLEET_DEBUG_NOTIFY, <machine>/<login>: the one login
+	// whose node may read the feed (the orchestrator's).
+	Notify string
+	// ShapesFile is conf/secret-shapes.list's path when the hub carries no
+	// client pack (tests); "" = the pack's copy.
+	ShapesFile string
+	// Start replaces the debugger's start in tests: it returns the endpoint
+	// the session opened on.
+	Start func(ctx context.Context, rep store.DebugReport, seed string) (string, error)
 }
 
 func (d *DebugTickets) now() time.Time {
@@ -330,90 +345,101 @@ func (s *Server) mintDebugTicket(fp, owner, by, ip, version string, ttl time.Dur
 // C4 queues the request for the person rather than refusing the ticket.
 var errDebugGlobalFull = errors.New("the hub's diagnosis sessions for today are spent")
 
+// debugRefusal is why a ticket was not admitted: the status and the one
+// line the caller is answered with.
+type debugRefusal struct {
+	status int
+	msg    string
+}
+
 // debugTicketAuth guards a /v1/fleet/debug/* door: the request must carry a
 // good ticket for this computer, and — for kind "upload" / "session" — the
 // ticket must still have a use of that kind today, which this takes. kind ""
 // takes nothing. A refusal is answered here; next runs only when admitted.
 func (s *Server) debugTicketAuth(kind string, next func(http.ResponseWriter, *http.Request, *DebugTicket)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		d := s.Debug
-		now := d.now()
-		tok, ok := strings.CutPrefix(r.Header.Get("Authorization"), "FleetDebug ")
-		tok = strings.TrimSpace(tok)
-		if !ok || tok == "" {
-			debugRefuse(w, http.StatusUnauthorized, "没带调试票。"+debugHowTo)
-			return
-		}
-		fp := strings.ToLower(strings.TrimSpace(r.Header.Get("X-Fleet-FP")))
-		if !debugFPRe.MatchString(fp) {
-			debugRefuse(w, http.StatusUnauthorized, "没带这台电脑的安装指纹（X-Fleet-FP）。"+debugHowTo)
-			return
-		}
-		p, ok := d.parse(tok)
-		if !ok {
-			// not ours: logged, never audited — a stranger's garbage must not
-			// be able to fill the audit table
-			log.Printf("debug ticket: unreadable or forged ticket from %s", debugClientIP(r))
-			debugRefuse(w, http.StatusUnauthorized, "调试票无效（被改过，或不是这个入口发的）。"+debugHowTo)
-			return
-		}
-		refuse := func(why, msg string) {
-			s.debugAudit(p.By, p.ID, "REFUSE 401 "+why, now)
-			debugRefuse(w, http.StatusUnauthorized, msg+debugHowTo)
-		}
-		if now.Unix() >= p.Exp {
-			refuse("expired", "调试票已过期（"+time.Unix(p.Exp, 0).UTC().Format("2006-01-02 15:04 UTC")+" 到期）。")
-			return
-		}
-		row, err := s.Store.DebugTicketByID(p.ID)
-		if err != nil {
-			httpError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		if row == nil {
-			refuse("unknown", "入口查不到这张调试票。")
-			return
-		}
-		if !row.RevokedAt.IsZero() {
-			refuse("revoked", "这张调试票已被新票替换或作废 — 用最新的那张；没有的话，")
-			return
-		}
+		t, no, err := s.debugTicketCheck(r, kind)
 		switch {
-		case p.FP != "" && p.FP != fp, p.FP == "" && row.FP != "" && row.FP != fp:
-			refuse("fp", "这张调试票属于另一台电脑，不能在这台用。")
-			return
-		case p.FP == "" && row.FP == "":
-			bound, err := s.Store.BindDebugTicket(p.ID, fp, now)
-			if err != nil {
-				httpError(w, http.StatusInternalServerError, err.Error())
-				return
+		case err != nil:
+			httpError(w, http.StatusInternalServerError, err.Error())
+		case no != nil:
+			if no.status == http.StatusTooManyRequests {
+				w.Header().Set("Retry-After", "3600")
 			}
-			if !bound { // another computer bound it a moment ago
-				refuse("fp", "这张调试票属于另一台电脑，不能在这台用。")
-				return
-			}
-			s.debugAudit(p.By, p.ID, "BIND "+fp[:12], now)
+			debugRefuse(w, no.status, no.msg)
+		default:
+			next(w, r, t)
 		}
-		t := &DebugTicket{debugTicketPayload: p, Row: row, FP: fp}
-		if kind != "" {
-			if err := s.useDebugTicket(t, kind, now); err != nil {
-				if errors.Is(err, store.ErrDebugQuota) {
-					s.debugAudit(p.By, p.ID, "REFUSE 429 "+kind, now)
-					w.Header().Set("Retry-After", "3600")
-					debugRefuse(w, http.StatusTooManyRequests, fmt.Sprintf("这张调试票今天的%s次数用完了（每天 %d 次）— 明天再试，或请管理员补发一张。", debugKindWord(kind), debugKindLimit(t.Quota, kind)))
-					return
-				}
-				if errors.Is(err, errDebugGlobalFull) {
-					t.Queued = true
-					next(w, r, t)
-					return
-				}
-				httpError(w, http.StatusInternalServerError, err.Error())
-				return
-			}
-		}
-		next(w, r, t)
 	}
+}
+
+// debugTicketCheck is debugTicketAuth's judgement without the answer: the
+// ticket the request proved, or why not (an error is the hub's own failure).
+// C4's page door (/s/<id>) asks it too, and answers a refusal with a 404.
+func (s *Server) debugTicketCheck(r *http.Request, kind string) (*DebugTicket, *debugRefusal, error) {
+	d := s.Debug
+	now := d.now()
+	tok, ok := strings.CutPrefix(r.Header.Get("Authorization"), "FleetDebug ")
+	tok = strings.TrimSpace(tok)
+	if !ok || tok == "" {
+		return nil, &debugRefusal{http.StatusUnauthorized, "没带调试票。" + debugHowTo}, nil
+	}
+	fp := strings.ToLower(strings.TrimSpace(r.Header.Get("X-Fleet-FP")))
+	if !debugFPRe.MatchString(fp) {
+		return nil, &debugRefusal{http.StatusUnauthorized, "没带这台电脑的安装指纹（X-Fleet-FP）。" + debugHowTo}, nil
+	}
+	p, ok := d.parse(tok)
+	if !ok {
+		// not ours: logged, never audited — a stranger's garbage must not
+		// be able to fill the audit table
+		log.Printf("debug ticket: unreadable or forged ticket from %s", debugClientIP(r))
+		return nil, &debugRefusal{http.StatusUnauthorized, "调试票无效（被改过，或不是这个入口发的）。" + debugHowTo}, nil
+	}
+	refuse := func(why, msg string) (*DebugTicket, *debugRefusal, error) {
+		s.debugAudit(p.By, p.ID, "REFUSE 401 "+why, now)
+		return nil, &debugRefusal{http.StatusUnauthorized, msg + debugHowTo}, nil
+	}
+	if now.Unix() >= p.Exp {
+		return refuse("expired", "调试票已过期（"+time.Unix(p.Exp, 0).UTC().Format("2006-01-02 15:04 UTC")+" 到期）。")
+	}
+	row, err := s.Store.DebugTicketByID(p.ID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if row == nil {
+		return refuse("unknown", "入口查不到这张调试票。")
+	}
+	if !row.RevokedAt.IsZero() {
+		return refuse("revoked", "这张调试票已被新票替换或作废 — 用最新的那张；没有的话，")
+	}
+	switch {
+	case p.FP != "" && p.FP != fp, p.FP == "" && row.FP != "" && row.FP != fp:
+		return refuse("fp", "这张调试票属于另一台电脑，不能在这台用。")
+	case p.FP == "" && row.FP == "":
+		bound, err := s.Store.BindDebugTicket(p.ID, fp, now)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !bound { // another computer bound it a moment ago
+			return refuse("fp", "这张调试票属于另一台电脑，不能在这台用。")
+		}
+		s.debugAudit(p.By, p.ID, "BIND "+fp[:12], now)
+	}
+	t := &DebugTicket{debugTicketPayload: p, Row: row, FP: fp}
+	if kind != "" {
+		if err := s.useDebugTicket(t, kind, now); err != nil {
+			if errors.Is(err, store.ErrDebugQuota) {
+				s.debugAudit(p.By, p.ID, "REFUSE 429 "+kind, now)
+				return nil, &debugRefusal{http.StatusTooManyRequests, fmt.Sprintf("这张调试票今天的%s次数用完了（每天 %d 次）— 明天再试，或请管理员补发一张。", debugKindWord(kind), debugKindLimit(t.Quota, kind))}, nil
+			}
+			if errors.Is(err, errDebugGlobalFull) {
+				t.Queued = true
+				return t, nil, nil
+			}
+			return nil, nil, err
+		}
+	}
+	return t, nil, nil
 }
 
 func debugKindWord(kind string) string {

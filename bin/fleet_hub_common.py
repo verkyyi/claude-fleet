@@ -520,10 +520,13 @@ def validate_gh_read(params):
         raise Fault("INVALID_ARGUMENT", "fields must be comma-separated gh --json field names")
 
 
+DEBUG_ID_RE = re.compile(r"[a-z2-7]{8}")
+
+
 def validate_write(action, params):
     if action == "worker_start":
         fields(params, (), ("issue", "kind", "name", "title", "body", "agent", "repo", "no_repo", "origin_wid",
-                            "account_class", "reap", "attachments", "test"))
+                            "account_class", "reap", "attachments", "test", "debug"))
         # kind (issue #1541): "issue" (the default — a worker on an issue, `issue`
         # required) or "scratch" (a raw scratch session: no issue, an optional
         # name — dash-raw-session.sh opens it). Held to the hub's own rule
@@ -549,6 +552,14 @@ def validate_write(action, params):
                 raise Fault("INVALID_ARGUMENT", "test must be true when given")
             if kind != "scratch":
                 raise Fault("INVALID_ARGUMENT", "test belongs to a scratch start (kind=scratch)")
+        # debug (issue #2893): the hub's debugger for one diagnostic report — a
+        # no-repo scratch opened with the debugger role (the adapter's $10
+        # `debug:<id>`). Only a no-repo scratch, only a report id.
+        if "debug" in params:
+            if not (isinstance(params["debug"], str) and DEBUG_ID_RE.fullmatch(params["debug"])):
+                raise Fault("INVALID_ARGUMENT", "debug is a report id (8 letters a-z, 2-7)")
+            if kind != "scratch" or params.get("no_repo") is not True or "test" in params:
+                raise Fault("INVALID_ARGUMENT", "debug belongs to a no-repo scratch start")
         if kind == "new":
             # issue #1953: the client's writing area — this machine files the
             # issue (a title, an optional body), then opens its worker.

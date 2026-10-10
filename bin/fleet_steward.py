@@ -69,7 +69,9 @@ Seams (selftest): FLEET_STEWARD_WINDOWS_CMD (prints `wid TAB role TAB state TAB
 issue TAB repo TAB epic TAB key`), FLEET_STEWARD_CHILDREN_CMD (argv + key --json
 --since N), FLEET_STEWARD_SEND_CMD (argv + target, text on stdin),
 FLEET_STEWARD_BACKSTOP_CMD (argv + key --pr N --parent P), FLEET_STEWARD_STAMP_CMD
-(argv + N: the decide count), and fleet_decision.py's own three.
+(argv + N: the decide count), FLEET_STEWARD_DEBUG_CMD (argv + feed --json: the
+debug reports' feed, issue #2893; FLEET_STEWARD_DEBUG=0 skips it), and
+fleet_decision.py's own three.
 """
 import argparse
 import base64
@@ -632,12 +634,53 @@ def write_delta(delta):
 
 # ---- commands --------------------------------------------------------------------
 
+def debug_step(sess, now_s):
+    """The hub's debug reports (issue #2893, EPIC #2889 C4): what changed since
+    the last read, one line each, to the orchestrator — 「〔诊断〕谁 · 是什么问题 ·
+    短链接」, and what the debugger asks us to change, for the person to nod at.
+    Every minute at most; a login the hub has no feed for (it answers only
+    CCQUOTA_FLEET_DEBUG_NOTIFY's) or no hub at all asks again in an hour. No
+    orchestrator window here ⇒ nothing is read, so nothing is lost."""
+    stp = gdir() / "debug-feed.step"
+    try:
+        if now_s < int(stp.read_text().strip() or 0):
+            return 0
+    except (OSError, ValueError):
+        pass
+    if not any(w["role"] == "orchestrator" for w in windows(sess)):
+        return 0
+    r = _seam("FLEET_STEWARD_DEBUG_CMD", ["feed", "--json"])
+    if r is None:
+        r = subprocess.run([sys.executable, str(BIN / "fleet-debug-desk.py"), "feed", "--json"],
+                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, universal_newlines=True, timeout=60)
+    wait = {0: 60, 1: 300}.get(r.returncode, 3600)
+    try:
+        stp.parent.mkdir(parents=True, exist_ok=True)
+        stp.write_text("%d\n" % (now_s + wait))
+    except OSError:
+        pass
+    if r.returncode != 0:
+        return 0
+    try:
+        lines = json.loads(r.stdout or "{}").get("lines") or []
+    except ValueError:
+        return 0
+    for ln in lines:
+        send(sess, "orchestrator", ln)
+    return len(lines)
+
+
 def cmd_beat(a):
     sess = session(a.session)
     if not sess:
         sys.stderr.write("fleet-steward-tick: no fleet session\n")
         return 2
     now_t = fd.now_local(a.now)
+    if os.environ.get("FLEET_STEWARD_DEBUG", "1") != "0":
+        try:
+            debug_step(sess, int(now_t.timestamp()))
+        except Exception as e:  # the feed never stops the beat
+            sys.stderr.write("fleet-steward-tick: debug feed: %s\n" % e)
     if not a.force:
         # the every-minute caller's fast path: not due ⇒ no lock, no fork — but a
         # park asked for its handoff is moved on every minute (its grace is 5)

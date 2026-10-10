@@ -361,9 +361,28 @@ func loadFleetDebug(srv *api.Server) error {
 	if len(key) < 32 {
 		return errors.New("CCQUOTA_FLEET_DEBUG_DIR is set but CCQUOTA_FLEET_DEBUG_KEY is missing or shorter than 32 bytes")
 	}
-	srv.Debug = &api.DebugTickets{Dir: dir, Key: []byte(key)}
-	log.Printf("fleet: debug tickets on, bundles in %s", dir)
+	// The reports (claude-fleet#2893): CCQUOTA_FLEET_DEBUG_LOGIN is where a
+	// debugger session opens, CCQUOTA_FLEET_DEBUG_NOTIFY whose node reads the
+	// feed the orchestrator is told from — each <machine>/<login>; unset, no
+	// debugger opens (a report goes unfinished, to the admin) / no feed.
+	login := strings.TrimSpace(os.Getenv("CCQUOTA_FLEET_DEBUG_LOGIN"))
+	notify := strings.TrimSpace(os.Getenv("CCQUOTA_FLEET_DEBUG_NOTIFY"))
+	for name, v := range map[string]string{"CCQUOTA_FLEET_DEBUG_LOGIN": login, "CCQUOTA_FLEET_DEBUG_NOTIFY": notify} {
+		if m, l, ok := strings.Cut(v, "/"); v != "" && (!ok || m == "" || l == "" || strings.Contains(l, "/")) {
+			return fmt.Errorf("%s=%q: want <machine>/<login>", name, v)
+		}
+	}
+	srv.Debug = &api.DebugTickets{Dir: dir, Key: []byte(key), Login: login, Notify: notify}
+	log.Printf("fleet: debug tickets on, bundles in %s; debugger %s; feed to %s", dir,
+		orNone(login), orNone(notify))
 	return nil
+}
+
+func orNone(s string) string {
+	if s == "" {
+		return "(none)"
+	}
+	return s
 }
 
 // checkUnmounted: the mount path, among CCQUOTA_CHECK_UNMOUNTED, that holds
@@ -796,6 +815,9 @@ func runHub(args []string) error {
 		go srv.RunNodeAlerts(ctx)
 		// Off (srv.HubQuota nil): returns at once.
 		go srv.RunHubQuota(ctx)
+		// Debug reports (claude-fleet#2893): no page in 15 minutes ⇒ unfinished,
+		// seven days ⇒ deleted. Off (srv.Debug nil): returns at once.
+		go srv.RunDebug(ctx)
 	}
 	// Pin each CCQUOTA_GITHUB_ADMINS name to its GitHub ID (claude-fleet#1984).
 	// In the background: GitHub being slow must not hold the hub's start.

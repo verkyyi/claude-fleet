@@ -392,7 +392,7 @@ func parseWrite(tool string, args map[string]any) (writeRequest, string, error) 
 	var err error
 	switch tool {
 	case "worker_start":
-		if err = checkFields(args, []string{"idempotency_key"}, "issue", "kind", "name", "title", "body", "fleet_id", "agent", "repo", "no_repo", "node", "origin_wid", "account_class", "reap", "attachments", "test"); err != nil {
+		if err = checkFields(args, []string{"idempotency_key"}, "issue", "kind", "name", "title", "body", "fleet_id", "agent", "repo", "no_repo", "node", "origin_wid", "account_class", "reap", "attachments", "test", "debug"); err != nil {
 			break
 		}
 		// kind (claude-fleet#1541): "issue" (the default — a worker on an
@@ -446,6 +446,9 @@ func parseWrite(tool string, args map[string]any) (writeRequest, string, error) 
 				noRepo = true
 			}
 		}
+		if _, ok := args["debug"]; err == nil && ok && kind != "scratch" {
+			err = fault("INVALID_ARGUMENT", "debug belongs to a no-repo scratch start")
+		}
 		if err != nil {
 			break
 		}
@@ -492,6 +495,20 @@ func parseWrite(tool string, args map[string]any) (writeRequest, string, error) 
 					break
 				}
 				w.params["test"] = true
+			}
+			// debug (claude-fleet#2893): the hub's own debugger for a report —
+			// a no-repo scratch the node opens with the debugger role.
+			if v, ok := args["debug"]; ok {
+				id, isStr := v.(string)
+				if !isStr || !debugIDRe.MatchString(id) {
+					err = fault("INVALID_ARGUMENT", "debug is a report id (8 letters a-z, 2-7)")
+					break
+				}
+				if !noRepo || w.params["test"] == true {
+					err = fault("INVALID_ARGUMENT", "debug belongs to a no-repo scratch start")
+					break
+				}
+				w.params["debug"] = id
 			}
 		} else {
 			if _, ok := args["test"]; ok {

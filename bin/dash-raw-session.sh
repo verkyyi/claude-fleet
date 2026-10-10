@@ -207,9 +207,11 @@ case "$ORIGIN_WID" in ''|*[!A-Za-z0-9/:._-]*) ORIGIN_WID='' ;; esac
 case "$DESK_ARG" in ''|on|off) ;; */*/*|*[!A-Za-z0-9/._-]*|/*|*/) DESK_ARG=on ;; */*) ;; *) DESK_ARG=on ;; esac
 # Trim the seed; a whitespace-only prompt is no prompt (plain scratch).
 PROMPT="${PROMPT#"${PROMPT%%[![:space:]]*}"}"; PROMPT="${PROMPT%"${PROMPT##*[![:space:]]}"}"
+# debugger (issue #2893): the hub's read-only debugger for one diagnostic report,
+# opened by the node adapter for a worker_start carrying `debug`.
 case "$ROLE" in
-  ''|worker|epic-driver) ;;
-  *) printf 'dash-raw-session: unknown --role %s (worker|epic-driver)\n' "$ROLE" >&2; exit 1 ;;
+  ''|worker|epic-driver|debugger) ;;
+  *) printf 'dash-raw-session: unknown --role %s (worker|epic-driver|debugger)\n' "$ROLE" >&2; exit 1 ;;
 esac
 case "$AGENT" in
   ''|claude|codex) : ;;

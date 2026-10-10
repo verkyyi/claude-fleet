@@ -74,6 +74,9 @@ lints it): a script path appears only under a heading marked `运营者` or `排
 | `whats_new` | `from`?, `to`? (shas; default this session's `@agent_ver` → the current version) | `fleet-whats-new.sh --full [<from> [<to>]]` | 0 printed · 1 nothing changed / no version |
 | `show` | `file`, `inline`? | `fleet-show.sh [--inline] -- <file>` | 0 SENT · 2 PATH (say the path) |
 | `open` | `target` (URL · `:port[/path]` · file) | `fleet-open.sh -- <target>` | 0 sent / copied · 2 fallback:path |
+| `debug_bundle` | `id` (a debug report, `[a-z2-7]{8}`) | `fleet-debug-desk.py fetch <id>` — the debugger's (issue #2893): the bundle + the hub's `hub.json`, unpacked into `$TMPDIR/fleet-debug/<id>/` | 0 · 3 no hub / node token · 4 the hub refused (not this login's report) · 1 no answer |
+| `debug_publish` | `id`, `result` (JSON text: `cause`, `evidence[]`, `steps[{why, cmd, system?}]` 1–3, `ours[]`) | `fleet-debug-desk.py publish <id> -` (result on stdin) — the page at `/s/<id>`, the report 已出结论 | 0 · 2 a section missing / > 3 steps / credential-shaped · 3 · 4 · 1 |
+| `debug_propose` | `id`, `text` | `fleet-debug-desk.py propose <id> <text>` — one thing to change, a line for the orchestrator to nod at (the steward's beat says it), never an issue | 0 · 2 · 3 · 4 · 1 |
 
 `file_issue`'s body goes as `--body` (the script takes no stdin); it never passes
 through a shell. `--` before a file / target keeps a name starting with `-` a name.

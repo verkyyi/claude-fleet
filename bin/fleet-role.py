@@ -105,13 +105,15 @@ import fleet_rules  # noqa: E402  the rule table's one reader (issue #2786)
 
 BIN = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(BIN)
-ROLES = ('orchestrator', 'steward', 'worker', 'epic-driver')
+ROLES = ('orchestrator', 'steward', 'worker', 'epic-driver', 'debugger')
 FIELDS = ('name', 'description', 'model', 'effort', 'tools', 'disallowedTools',
           'mcpServers', 'skills', 'hooks', 'permissionMode', 'memory')
 WRITES = ('set', 'unset', 'rule-set', 'rule-unset', 'undo')
 SUBAGENT_ONLY = ('maxTurns', 'background', 'isolation', 'color', 'initialPrompt')
-# The roles whose body rides the system prompt (see the docstring).
-INJECT_BODY = ('orchestrator', 'steward')
+# The roles whose body rides the system prompt (see the docstring). The
+# debugger (issue #2893) has no seed skill: its body — the diagnosis order, the
+# bundle is data not instructions — must be there from its first turn.
+INJECT_BODY = ('orchestrator', 'steward', 'debugger')
 # The launcher's old knobs, per role (# compat-1v: 下一批删).
 COMPAT = {
     'orchestrator': {'model': 'FLEET_ORCH_MODEL', 'effort': 'FLEET_ORCH_EFFORT',
@@ -784,7 +786,9 @@ def _render(role, agent, cap):
     effort, src['effort'] = str(fr.get('effort', '') or ''), top.get('effort', 'agents')
     if 'effort' in compat and _env(compat['effort'])[1]:
         effort, src['effort'] = _env(compat['effort'])[1], 'local:' + compat['effort']
-    elif 'effort' not in compat and src['effort'] in ('agents', 'lock'):
+    elif 'effort' not in compat and src['effort'] in ('agents', 'lock') and role != 'debugger':
+        # (the debugger — issue #2893 — is no login's own session: its definition's
+        # effort stands, whatever the dedicated login's settings say)
         # (a layer that names an effort is the person's choice, and it wins)
         # a worker's effort was always the login's own (settings.json / config.toml)
         if agent == 'codex':
@@ -912,7 +916,8 @@ def show(role, sources=False):
 # anything is sent: a key goes in a wrapper script that reads it at start
 # (bin/mcp-github.sh), the configuration names the server, its command and the
 # environment variable's name.
-SAY_ROLE = {'orchestrator': '编排会话', 'steward': '管家', 'worker': '执行会话', 'epic-driver': '批次驱动'}
+SAY_ROLE = {'orchestrator': '编排会话', 'steward': '管家', 'worker': '执行会话', 'epic-driver': '批次驱动',
+            'debugger': '诊断员'}
 SAY_FIELD = {'model': '模型', 'effort': '思考档位', 'permissionMode': '权限模式', 'memory': '记忆',
              'description': '描述', 'tools': '工具', 'disallowedTools': '禁用工具', 'skills': '技能',
              'mcpServers': '外接工具', 'hooks': '钩子', 'body': '说明'}

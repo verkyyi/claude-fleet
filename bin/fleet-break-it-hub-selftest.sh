@@ -73,6 +73,10 @@
 #   debug-ticket-replayed                           tokenledger/internal/api fleet_debug_ticket.go (debugTicketAuth: the
 #                                                   fingerprint, the HMAC, expiry, the superseded row; go test, when a
 #                                                   toolchain is here) + bin/fleet-install.sh (debug_fp: only the hash sent)
+#   debug-page-stuck                                tokenledger/internal/api fleet_debug.go (debugTick: no page in 15
+#                                                   minutes ⇒ unfinished, to the admin; seven days ⇒ gone; the upload
+#                                                   re-checked against the shape table; go test, when a toolchain is
+#                                                   here) + bin/fleet_steward.py debug_step (the orchestrator's line)
 #   dist-publish-tampered                           tokenledger/internal/api fleet_publish.go (POST …/publish: the archive
 #                                                   hashed into the commit's tree, OIDC, forward only; go test, when a
 #                                                   toolchain is here) + bin/fleet-release-publish.sh (what CI sends)
@@ -1290,6 +1294,43 @@ drill_debug_ticket_replayed() {
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
       0:*) WHAT='拷到别的电脑 / 改一字节 / 过期 / 已被补发替换的调试票 → 401 并说怎么补，第 6 次上传 → 429，关掉 ⇒ 路由不存在（go test）；安装只送指纹哈希' ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
+      *) WHY="the Go half is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  fi
+  SECS=$(since "$t0")
+}
+
+# ---- debug-page-stuck (#2893, EPIC #2889 C4): the debugger session a report
+# opened dies, never opens (no login, no machine), or never hands in its page;
+# or a bundle arrives still holding a credential. The page would read 「诊断员
+# 正在看」 forever and the person would wait. The hub moves a report with no page
+# 15 minutes after its debugger was asked (or with none opened) to 没看完 — the
+# page says it went to the admin, the orchestrator is told in one line — refuses
+# a bundle with anything credential-shaped in any file (400, the file named),
+# and deletes everything seven days on. Go tests by name (run with a toolchain).
+drill_debug_page_stuck() {
+  CAP=120; local t0 out rc t f="$ROOT/tokenledger/internal/api/fleet_debug.go"
+  local tests='TestDebugBundleToPage TestDebugBundleRefusals TestDebugTickUnfinishedAndPrune TestDebugSessionsQueueWhenSpent TestDebugReportsOffAddsNothing'
+  t0=$(now)
+  grep -q 'case r.State == store.DebugDiagnosing && now.Sub(r.DispatchedAt) > debugPageLimit:' "$f" 2>/dev/null \
+    || { WHY="debugTick no longer moves a report with no page past its limit to unfinished"; return 1; }
+  grep -q 'debugPageLimit = 15 \* time.Minute' "$f" || { WHY="the debugger's page limit is no longer 15 minutes"; return 1; }
+  grep -q 'if hit := debugShapeHit(shapes, string(files\[n\])); hit != "" {' "$f" \
+    || { WHY="the upload no longer holds every file of the bundle against the shape table"; return 1; }
+  grep -q 'send(sess, "orchestrator", ln)' "$ROOT/bin/fleet_steward.py" \
+    || { WHY="the steward's beat no longer tells the orchestrator a report's outcome"; return 1; }
+  for t in $tests; do
+    grep -q "^func $t(" "$ROOT/tokenledger/internal/api/fleet_debug_test.go" 2>/dev/null \
+      || { WHY="the hub half's test $t is not in tokenledger/internal/api/fleet_debug_test.go"; return 1; }
+  done
+  WHAT='诊断员没开成 / 中途死了 / 15 分钟没交页 → 没看完、转给管理员、编排会话一行；包里还有凭据 → 400 说哪个文件；7 天后全删（测试按名核对在，Go 门跑它们）'
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/api 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
+      0:*) WHAT='诊断员没开成 / 15 分钟没交页 → 没看完、转给管理员；包里还有凭据 → 400 说哪个文件；同包重传同一页；7 天后全删；关掉 ⇒ 路由不存在（go test）' ;;
       *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
       *) WHY="the Go half is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
     esac
