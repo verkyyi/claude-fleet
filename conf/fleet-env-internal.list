@@ -65,6 +65,7 @@ FLEET_CLAUDE_BIN                   path: the claude binary fleet_find_tool tries
 FLEET_CLAUDE_COMM                  seam: the process name pane scans treat as Claude
 FLEET_CLAUDE_INSTALL_CMD           seam: the Claude Code installer command (fleet-login-bootstrap.sh) — tests swap in a stub
 FLEET_CLAUDE_TMP_ROOT              seam: the Claude scratchpad root the listener sweep anchors on (selftest sandbox)
+FLEET_CLIENT                       knob: thin = a bare `fleet` opens the thin client (bin/fleet → fleet-thin.py, #3003) — the person's opt-in until EPIC #2999 C10 makes it the default
 FLEET_CLIENT_ACTIONS               knob: 0 = the shell starts no action loop — nothing a session asks to show you opens here (fleet-shell.sh actions, 1, #1717)
 FLEET_CLIENT_ACTIONS_CONNECT       seam: what opens an ssh master to a machine for a forward / a fetch (default python3 fleet-connect.py; the selftest's fake, #1717)
 FLEET_CLIENT_ACTIONS_IDLE          knob: seconds the action loop sleeps when it has no lease or no hub (fleet-client-actions.py, 3, #1717)
