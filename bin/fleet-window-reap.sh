@@ -30,7 +30,21 @@ LOG="$DIR/window-reap.log"
 LOCK="$DIR/window-reap.lock"
 RERUN="$DIR/window-reap.rerun"
 
+# inbox_sweep — the files clients sent a session that just closed (issue #2757):
+# fleet-client-upload.py sweep drops every inbox no live window's @fleet_id owns.
+inbox_sweep() {   # $1 = kill|dry
+  [ -d "$HOME/.cache/claude-fleet/inbox" ] || return 0
+  local out; out="$(python3 "$BIN/fleet-client-upload.py" sweep $([ "$1" = dry ] && printf '%s' --dry) 2>/dev/null)"
+  [ -n "$out" ] || return 0
+  printf '%s\n' "$out" | sed 's/^/inbox /'
+  [ "$1" = kill ] || return 0
+  mkdir -p "$DIR" 2>/dev/null
+  printf '%s\n' "$out" | sed "s/^/$(date '+%Y-%m-%dT%H:%M:%S%z') inbox /" >> "$LOG" 2>/dev/null
+  return 0
+}
+
 sweep() {   # $1 = kill|dry
+  inbox_sweep "$1"
   local out; out="$(fleet_reap_orphan_trees "$1" 2)"
   [ -n "$out" ] || return 0
   printf '%s\n' "$out"

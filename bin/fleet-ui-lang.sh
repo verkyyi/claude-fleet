@@ -774,6 +774,16 @@ fleet_ui_t() {
     en:compose_attach)          printf 'attached' ;;
     zh:compose_attach_big)      printf '（超过 10 MB，带不过去）' ;;
     en:compose_attach_big)      printf ' (over 10 MB, will not go)' ;;
+    # ⌃V a picture / a dropped file into a session on another machine (issue #2757,
+    # fleet-client-upload.py)
+    zh:paste_too_big)           printf '没传：%s 超过 %s MB' "${1:-}" "${2:-}" ;;
+    en:paste_too_big)           printf 'not sent: %s is over %s MB' "${1:-}" "${2:-}" ;;
+    zh:paste_failed)            printf '没传：%s' "${1:-}" ;;
+    en:paste_failed)            printf 'not sent: %s' "${1:-}" ;;
+    zh:paste_no_line)           printf '连不上 %s' "${1:-}" ;;
+    en:paste_no_line)           printf 'no connection to %s' "${1:-}" ;;
+    zh:paste_sending)           printf '正在传 %s …' "${1:-}" ;;
+    en:paste_sending)           printf 'sending %s …' "${1:-}" ;;
     zh:compose_go_issue)        printf '↵ 开工' ;;
     en:compose_go_issue)        printf '↵ start' ;;
     zh:compose_keys)            printf '⇧↵ 换行 · Tab 改选项 · esc 返回' ;;

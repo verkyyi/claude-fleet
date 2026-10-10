@@ -495,6 +495,7 @@ def carry(shell, o, text, wait=None):
         return False, False
     if not text.strip():
         return True, True
+    text = carried_files(text, o)
     want = o["node"] + ":" + o["wid"]
     wait = float(os.environ.get("FLEET_COMPOSE_CARRY_SECS") or 8) if wait is None else wait
     deadline = time.monotonic() + wait
@@ -518,6 +519,31 @@ def carry(shell, o, text, wait=None):
                 return True, True
         time.sleep(0.2)
     return True, False
+
+
+def carried_files(text, o):
+    """The draft's files onto the session's machine first (issue #2757): each
+    path a drop put in the text is sent to that session's inbox
+    (fleet-client-upload.py put — the same road as a drop into a session) and
+    the text names it there. One that did not go keeps its path and says why."""
+    files = attachments(text)
+    if not files:
+        return text
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("fleet_client_upload", str(BIN / "fleet-client-upload.py"))
+    up = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(up)
+    for f in files:
+        rc, out = up.put(o["node"], o["wid"], f, f)
+        forms = [f.replace(" ", "\\ "), "'%s'" % f, '"%s"' % f, f]
+        home = os.path.expanduser("~")
+        if f.startswith(home + "/"):
+            forms += ["~" + f[len(home):].replace(" ", "\\ "), "~" + f[len(home):]]
+        for form in forms:
+            if form in text:
+                text = text.replace(form, out if rc == 0 else form + "（%s）" % out)
+                break
+    return text
 
 
 # --- where the writing area came from ----------------------------------------------

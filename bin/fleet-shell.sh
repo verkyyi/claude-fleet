@@ -425,7 +425,7 @@ FLEET_NODE_ALIASES=$FLEET_NODE_ALIASES"
            FLEET_SHELL_WARM FLEET_SHELL_WARM_MAX FLEET_SHELL_WARM_EVERY FLEET_SHELL_WARM_CONNECT \
            CCQUOTA_VIEWER_TOKEN FLEET_UI_LANG FLEET_SIDEBAR_WIDTH_MAX FLEET_SIDEBAR_FOLD XDG_CONFIG_HOME XDG_CACHE_HOME FLEET_SHELL_CACHE \
            FLEET_SKIP_GLOBAL_CONF LANG LC_ALL FLEET_CLIENT_LAYOUT FLEET_SWITCH_STATE XDG_STATE_HOME FLEET_NOTIFY FLEET_NOTIFY_JUMP_SECS \
-           FLEET_NODE_HOSTED FLEET_NODE_HOSTED_IDLE; do
+           FLEET_NODE_HOSTED FLEET_NODE_HOSTED_IDLE FLEET_CLIENT_PASTE; do
     eval "v=\${$n:-}"
     [ -n "$v" ] && SHELL_ENV="$SHELL_ENV
 $n=$v"
@@ -622,6 +622,17 @@ attach_client() {
   fi
   exit "$rc"
 }
+# paste_sed — the conf's `__PASTE__` (@fleet_paste, issue #2757: ⌃V a picture
+# into a session): 1 on a Mac's own client, 0 on any other, on a managed
+# machine's (#2720 — not the person's clipboard) and under FLEET_CLIENT_PASTE=0.
+paste_sed() {
+  if [ "${FLEET_CLIENT_PASTE:-1}" != 0 ] && [ "${FLEET_NODE_HOSTED:-0}" != 1 ] \
+     && [ "${FLEET_CLIENT_PASTE_OS:-$(uname -s 2>/dev/null)}" = Darwin ]; then
+    printf 's|__PASTE__|1|g'
+  else
+    printf 's|__PASTE__|0|g'
+  fi
+}
 # write_conf — conf/tmux-shell.conf (the shell's server) and conf/tmux-shell-stage.conf
 # (the stage's, issue #1759) with the paths filled + the environment
 write_conf() {
@@ -632,7 +643,8 @@ write_conf() {
     [ -f "$tpl" ] || fail_start "缺 $tpl"
     out="$CACHE/tmux.conf"; [ "$name" = tmux-shell ] || out="$CACHE/tmux-stage.conf"
     {
-      sed -e "s|__BIN__|$SHADOW|g" -e "s|__PREFIX__|$PREFIX|g" -e "s|__STAGE__|$STAGE|g" -e "s|__SESS__|$SESS|g" "$tpl"
+      sed -e "s|__BIN__|$SHADOW|g" -e "s|__PREFIX__|$PREFIX|g" -e "s|__STAGE__|$STAGE|g" -e "s|__SESS__|$SESS|g" \
+          -e "$(paste_sed)" "$tpl"
       while IFS= read -r line; do
         [ -n "$line" ] || continue
         case "$line" in *"'"*) continue ;; esac     # a value no single-quoted tmux string can hold

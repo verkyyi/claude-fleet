@@ -634,7 +634,7 @@ run)
     # view session (a session on the warm master outlives our own `-O exit`)
     [ -n "$att" ] && { pkill -P "$att" 2>/dev/null; kill "$att" 2>/dev/null; att=''; }
     $SSH -S "$ctl" -O exit "$host" >/dev/null 2>&1   # our own master only — never the warm one (#1631)
-    rm -f "$ctl" "$ctl.route" "$ctl.upgrade" "$ctl.ssherr"
+    rm -f "$ctl" "$ctl.route" "$ctl.upgrade" "$ctl.ssherr" "$ctl.nopaste"
     [ "$use" = "$ctl" ] || rm -f "$use.upgrade"
   }
   # pane_gone — before a reconnect: this loop's pane (or its whole tmux server)
@@ -866,8 +866,19 @@ EOF_PEER
     # ssh -tt takes the tty raw for the session and gives back this state.
     [ -t 0 ] && stty -echo 2>/dev/null
     [ -n "${TMUX:-}" ] && tmux set-window-option -u -t "${TMUX_PANE:-}" @remote_down 2>/dev/null
+    # A file dropped in the shell (issue #2757): the ssh runs behind
+    # fleet-client-upload.py's filter, which sends a bracketed paste of this
+    # computer's file paths to the session's machine first and hands on the paths
+    # there; every other byte passes untouched. A filter that broke once
+    # (`$ctl.nopaste`) leaves this connection's later rounds on the bare ssh;
+    # FLEET_CLIENT_PASTE=0 never starts it.
+    pastewrap=()
+    if [ -n "$shellopt" ] && [ "${FLEET_CLIENT_PASTE:-1}" != 0 ] && [ ! -e "$ctl.nopaste" ] \
+       && [ -f "$BIN/fleet-client-upload.py" ]; then
+      pastewrap=(python3 "$BIN/fleet-client-upload.py" filter --node "$node" --wid "$wid" --ctl "$use" --mark "$ctl.nopaste" --)
+    fi
     FLEET_CONNECT_ROUTE_FILE="$ctl.route" FLEET_CONNECT_RETEST="$retest" \
-      $SSH ${opts[@]+"${opts[@]}"} "$host" "bash $rbin/fleet-remote-view.sh attach$shellopt $(sq "$wid") $(sq "$view")" \
+      ${pastewrap[@]+"${pastewrap[@]}"} $SSH ${opts[@]+"${opts[@]}"} "$host" "bash $rbin/fleet-remote-view.sh attach$shellopt $(sq "$wid") $(sq "$view")" \
       0<&0 2>"$ctl.ssherr" &
     att=$!
     wait "$att"; rc=$?
