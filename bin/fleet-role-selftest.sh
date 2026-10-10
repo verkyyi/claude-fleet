@@ -10,7 +10,8 @@
 #      --effort high` + its role, steward `--model opus --effort medium` + its
 #      role, worker / epic-driver `--model opus` and the login's own effort)
 #   B  the bodies: orchestrator / steward ≡ skills/*/role.md (the generated copy
-#      a window opened before #2782 still reads — compat-1v), ≤ 60 lines; worker /
+#      a window opened before #2782 still reads — compat-1v: the body + the role's
+#      rule-table rows, issue #2786), the body ≤ 60 lines; worker /
 #      epic-driver ≤ 40; every role names itself; subagent-only fields ignored
 #   C  the old knobs still win for one version: FLEET_ORCH_MODEL='' (no --model),
 #      FLEET_ORCH_EFFORT, FLEET_STEWARD_MODEL, FLEET_ORCH_CODEX_MODEL
@@ -71,12 +72,12 @@ case "$ob" in "$FLEET_CONF_DIR/roles/orchestrator-"*.md) ok "A: the body is a co
   && ok "A: rendering twice names the same file (made once)" || bad "A: the body path moved on a second render"
 
 # --- B bodies ---------------------------------------------------------------
-cmp -s "$ob" "$ROOT/skills/fleet-orchestrate/role.md" && cmp -s <(R body orchestrator) "$ROOT/skills/fleet-orchestrate/role.md" \
-  && ok "B: orchestrator body ≡ skills/fleet-orchestrate/role.md (compat-1v copy)" \
-  || bad "B: agents/orchestrator.md body and skills/fleet-orchestrate/role.md differ — regenerate: fleet-role.py body orchestrator > skills/fleet-orchestrate/role.md"
+cmp -s "$ob" "$ROOT/skills/fleet-orchestrate/role.md" && cmp -s <(R prompt orchestrator) "$ROOT/skills/fleet-orchestrate/role.md" \
+  && ok "B: orchestrator prompt ≡ skills/fleet-orchestrate/role.md (compat-1v copy)" \
+  || bad "B: agents/orchestrator.md + the rule table and skills/fleet-orchestrate/role.md differ — regenerate: fleet-role.py prompt orchestrator > skills/fleet-orchestrate/role.md"
 cmp -s "$sb" "$ROOT/skills/fleet-steward/role.md" \
-  && ok "B: steward body ≡ skills/fleet-steward/role.md (compat-1v copy)" \
-  || bad "B: agents/steward.md body and skills/fleet-steward/role.md differ — regenerate: fleet-role.py body steward > skills/fleet-steward/role.md"
+  && ok "B: steward prompt ≡ skills/fleet-steward/role.md (compat-1v copy)" \
+  || bad "B: agents/steward.md + the rule table and skills/fleet-steward/role.md differ — regenerate: fleet-role.py prompt steward > skills/fleet-steward/role.md"
 for r in orchestrator steward worker epic-driver; do
   n=$(R body $r | wc -l | tr -d ' ')
   cap=60; case "$r" in worker|epic-driver) cap=40 ;; esac

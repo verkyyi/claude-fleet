@@ -6894,7 +6894,8 @@ fleet_slug() {
 # fleet_from_role [<explicit>] — resolve the posting role: an explicit value wins
 # (a caller can force it), else the durable FLEET_HUB env (hub-session.sh exports
 # it, surviving a Bash-tool subshell) ⇒ 'operator', else fleet_seat() ⇒ 'worker',
-# else the generic word 'fleet'. Pure env — only the WORD carries identity (the
+# else the pane's @fleet_role when it is orchestrator / steward (issue #2786 — the
+# rule-marker share counts `role=orchestrator` filings), else the generic word 'fleet'. Pure env — only the WORD carries identity (the
 # charter scrub: never $(hostname) / $USER).
 fleet_from_role() {
   local explicit="${1:-}"
@@ -6904,6 +6905,10 @@ fleet_from_role() {
   seat=$(fleet_seat 2>/dev/null)
   case "$seat" in
     worker)  printf 'worker';  return ;;
+  esac
+  seat=$(fleet_pane_fmt '#{@fleet_role}' 2>/dev/null)
+  case "$seat" in
+    orchestrator|steward) printf '%s' "$seat"; return ;;
   esac
   printf 'fleet'
 }

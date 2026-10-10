@@ -352,6 +352,21 @@ Do not install from memory: read the doc and work from it.
   merge (never looser than the built-in). A bad layer is not used — its last good
   copy stands (BREAK-IT `role-overlay-broken`); no layer ⇒ byte for byte C1.
   `tests/role-merge/*.json` are the vectors the hub's Go copy (C6) runs too.
+- **How the orchestrator dispatches and what the steward may answer is ONE rule
+  table** (issue #2786, EPIC #2781 C5): `conf/role-rules.default.md` (编号 · 角色 ·
+  条件 · 动作 · 档位 auto|default|ask|off · 关键词) < the person's layer
+  (`person-bundle.json` `rules`) < this computer's `$FLEET_CONF_DIR/roles/rules.md`,
+  merged by number in `bin/fleet_rules.py` (the one reader; a number is never
+  reused, a new one starts at 100, a layer with a bad row is not used at all).
+  `fleet-role.py render` appends the role's rows to the orchestrator's / steward's
+  system prompt (`prompt <role>`, ≤ 40 lines; `skills/*/role.md` are its copies);
+  `fleet_decision.classify` reads the `ask` rows' `never:<class>` keywords
+  (`NEVER_WORDS` is only the backstop). A dispatch carries `rule: N` (`--rule N`):
+  the ticket ends 「按规则 N 派发」 + `<!-- fleet:rule n=N v=<version> -->`, every
+  version kept as `roles/rules-<v>.md` (`fleet-role.py rules --version`); an
+  orchestrator filing with none gets 「未注明规则」 + `logs/rules.log`, never a
+  refusal. Never list a keyword or a dispatch shape anywhere else.
+  `fleet-rules-selftest.sh`, `fleet-issue-file-selftest.sh` V.
 - **The fleet has ONE orchestrating session, and it is no row** (issue #1957).
   `bin/fleet-orchestrator.sh ensure` opens it (fleet-up, and the diskguard tick's
   `home_watch` reopens it — the same conversation when it can): `@fleet_role

@@ -55,9 +55,14 @@
 改铁律（`CLAUDE.md` 约定、`docs/BREAK-IT.md` 删行）、花钱、对外发布三类**一次都不被默认**：
 
 - 提问方声明 `class: never:*`；或
-- 关键词兜底：问题 / 建议 / 默认里出现 `CLAUDE.md` · `AGENTS.md` · `BREAK-IT` · 铁律 · 改约定 · 删约定（rule）、
-  付费 · 花钱 · 云机器 · 购买 · 充值 · 账单 · 预算 · billing · purchase（money）、`stable` · 发布 · 对外 ·
-  公开 · publish · release（publish）——任一命中即 `never`，声明的 `normal` 压不过它。
+- 关键词兜底：问题 / 建议 / 默认里出现**规则表**里 `ask` 档、动作写着 `never:<类>` 那几行的任一关键词——
+  任一命中即 `never`，声明的 `normal` 压不过它。
+
+关键词只在规则表里列（issue #2786）：自带的 `conf/role-rules.default.md`（规则 16 rule · 17 money ·
+18 publish），加上你那一层（个人包的 `rules`，本机 `$FLEET_CONF_DIR/roles/rules.md`）按编号覆盖、
+从 100 起新加——比如加一行 `| 101 | steward | 问的是钱 | 必须问你（never:money） | ask | 报价, 金额 |`，
+含「报价」的问题就判 `never:money`。`fleet-role.py rules --role steward` 看合并后的那几行。
+`bin/fleet_decision.py` 里的 `NEVER_WORDS` 只在规则表读不出来时兜底。
 
 `never` 行不进 `due`；`due --apply` 拿到这样一行时再判一次，什么都不贴。BREAK-IT 行
 `decision-never-defaulted`。

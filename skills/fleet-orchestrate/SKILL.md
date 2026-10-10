@@ -56,13 +56,21 @@ starting a second one.
 
 ## 2. Pick the shape, then dispatch
 
+**The rule table decides** (issue #2786): `conf/role-rules.default.md` merged with the
+person's layer — your system prompt ends with its orchestrator rows, `fleet-role.py rules`
+prints the whole table. Pick the row that applies and dispatch with `rule: N` on
+`mcp__fleet__file_issue`: the ticket ends 「按规则 N 派发」 + `<!-- fleet:rule n=N v=… -->`
+(a filing from this pane without one gets 「未注明规则」 and a log line). An `ask` row
+means ask the person first; no row applies ⇒ ask, never invent one. The table below is
+the HOW of each rule.
+
 | The request is… | Do |
 |---|---|
-| one change in one repo, clear enough to start | **quick task**: `mcp__fleet__file_issue` (`title`, `body`, `repo`, `spawn: true`) — one issue, one worker, one PR. Its body says what «done» is. |
-| several independent changes, or one that spans repos | **an EPIC**: run `/fleet-epic-plan <theme>` here. It writes the charter, the members (in whichever hosted repo each belongs) and a design page — host it for the person (doc-preview) and wait for their confirmation. |
-| a confirmed EPIC | **a driver session**: `bin/dash-raw-session.sh --repo <owner/name> --origin hub --role epic-driver --name '<简称>·批次' --prompt '/fleet-epic-run <N>'` — `--repo` is ALWAYS the parent EPIC's repo (your pane sits in `$HOME`, so without it the driver is a no-repo session); `--role epic-driver` starts it as its definition says (`agents/epic-driver.md`); `<简称>` is the charter's `short=`, so the row reads `像本地·批次 7/9` from the start (issue #2544). Started from your pane it is YOUR child (issue #2623): when the batch closes it reports `merged` back to you — the report page and whatever it leaves for the person (move stable, redeploy the hub) — and its `done:2h` closes it. The driver keeps the batch moving; you go back to talking. |
-| worth doing, not now | **the queue**: file it bare (`mcp__fleet__file_issue`, no `spawn`) with a `priority`, and the label `autofill` when it may start on its own (`bin/fleet-dispatch.sh` fills idle slots by priority on a fleet with `FLEET_AUTOFILL=1`), or `blocked` with 「等 #N 合并」 in the body. |
-| a question, not work | answer it. |
+| one change in one repo, clear enough to start (rule 1) | **quick task**: `mcp__fleet__file_issue` (`title`, `body`, `repo`, `spawn: true`) — one issue, one worker, one PR. Its body says what «done» is. |
+| several independent changes, or one that spans repos (rule 2) | **an EPIC**: run `/fleet-epic-plan <theme>` here. It writes the charter, the members (in whichever hosted repo each belongs) and a design page — host it for the person (doc-preview) and wait for their confirmation. |
+| a confirmed EPIC (rule 3) | **a driver session**: `bin/dash-raw-session.sh --repo <owner/name> --origin hub --role epic-driver --name '<简称>·批次' --prompt '/fleet-epic-run <N>'` — `--repo` is ALWAYS the parent EPIC's repo (your pane sits in `$HOME`, so without it the driver is a no-repo session); `--role epic-driver` starts it as its definition says (`agents/epic-driver.md`); `<简称>` is the charter's `short=`, so the row reads `像本地·批次 7/9` from the start (issue #2544). Started from your pane it is YOUR child (issue #2623): when the batch closes it reports `merged` back to you — the report page and whatever it leaves for the person (move stable, redeploy the hub) — and its `done:2h` closes it. The driver keeps the batch moving; you go back to talking. |
+| worth doing, not now (rule 4) | **the queue**: file it bare (`mcp__fleet__file_issue`, no `spawn`) with a `priority`, and the label `autofill` when it may start on its own (`bin/fleet-dispatch.sh` fills idle slots by priority on a fleet with `FLEET_AUTOFILL=1`), or `blocked` with 「等 #N 合并」 in the body. |
+| a question, not work (rule 5) | answer it. |
 
 **A title is the issue's use, from the person's side** (issue #2545): one sentence of
 what is wrong or wanted — 「每日推送没跑成」「mini2 开不了会话」 — at most 20 汉字, no
@@ -76,7 +84,7 @@ over a worker's issue. A worker's outcome comes back to you as a `[child-report]
 it, tell the person what landed in one line if they are here, and do not reply to the
 report. `mcp__fleet__children` is the one place to read them all.
 
-### 派给谁 — Claude or Codex (issue #2562)
+### 派给谁 — Claude or Codex (issue #2562; rules 6–8)
 
 Every issue runs in ONE agent, start to finish — never mix them on one issue. Default
 **Claude**. Say **Codex** when the work is:

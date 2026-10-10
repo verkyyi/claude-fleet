@@ -47,6 +47,12 @@
 #   T. auto (issue #2175): no flag + a red base + a text naming it ⇒ filed as
 #      breakage (marker, dedup → exit 5); --no-breakage files plain; a red word
 #      on a green base, or a text naming neither base nor check, files plain.
+#   V. which rule dispatched it (issue #2786): from the orchestrator's pane
+#      (@fleet_role orchestrator ⇒ the marker says role=orchestrator) the five
+#      shapes filed with --rule 1…5 carry 「按规则 N 派发」 + `<!-- fleet:rule n=N
+#      v=… -->` 5/5; one with no rule files all the same with 「未注明规则」 and a
+#      logs/rules.log line; a rule the table lacks is refused (exit 2, no create);
+#      a filing from anywhere else gets no rule line at all (byte for byte).
 #
 # Exit 0 = pass; non-zero = fail (prints the failing assertion + captured output).
 set -uo pipefail
@@ -72,6 +78,8 @@ GH_LOG="$WORK/ghlog"; SPAWN_LOG="$WORK/spawns"; BIND_LOG="$WORK/binds"; BODY="$W
 # is absent (env FLEET_REPO wins) — fully hermetic.
 cp "$SRC" "$WORK/bin/fleet-issue-file.sh"; cp "$LIB" "$WORK/bin/fleet-lib.sh"
 cp "$BIN/fleet-gh-lib.sh" "$WORK/bin/fleet-gh-lib.sh"   # its write queue (issue #1264)
+cp "$BIN/fleet-role.py" "$BIN/fleet_rules.py" "$WORK/bin/"   # --rule's table (issue #2786)
+export FLEET_RULES_DEFAULT="$BIN/../conf/role-rules.default.md" FLEET_RULES_LOG="$WORK/rules.log"
 chmod +x "$WORK/bin/fleet-issue-file.sh"
 # Stub the spawn choke point the channel hands to on --spawn: log its args, honour
 # SPAWN_RC so a cap-refusal (non-zero) can be simulated.
@@ -172,7 +180,7 @@ cat > "$WORK/fakebin/tmux" <<'TMUXFAKE'
 #!/bin/bash
 if [ "${1:-}" = -L ] || [ "${1:-}" = -S ]; then shift 2; fi
 case "${1:-}" in
-  display-message) case "$*" in *-p*) case "$*" in *session_name*) echo fifsess ;; *) echo '' ;; esac ;; esac ;;
+  display-message) case "$*" in *-p*) case "$*" in *session_name*) echo fifsess ;; *@fleet_role*) echo "${FAKE_FLEET_ROLE:-}" ;; *) echo '' ;; esac ;; esac ;;
 esac
 exit 0
 TMUXFAKE
@@ -559,6 +567,27 @@ run_auto u3 "$FX/runs-green" --title '每日推送没跑成'
 [ "$(cat "$WORK/rc-u3")" = 0 ] && ! grep -q 'hint:' "$WORK/err-u3" \
                                                      || fail "U3 a short use files with no hint" "$(cat "$WORK/err-u3")"
 ok "U title hint: long / script-name titles file with one hint line, a short use says nothing"
+
+# --- V. which rule dispatched it (issue #2786) -------------------------------------
+marked=0
+for n in 1 2 3 4 5; do
+  FAKE_FLEET_ROLE=orchestrator TMUX_PANE=%9 run_fif --title "形状 $n" --body "要做的事 $n" --rule "$n"
+  [ "$RC" -eq 0 ] || fail "V1 --rule $n should file" "$(cat "$WORK/err")"
+  grep -q '<!-- fleet:from role=orchestrator' "$BODY" || fail "V1 the orchestrator's filing says role=orchestrator" "$(cat "$BODY")"
+  grep -qx "按规则 $n 派发" "$BODY" && grep -Eq "^<!-- fleet:rule n=$n v=[0-9a-f]{10} -->$" "$BODY" && marked=$((marked+1))
+done
+[ "$marked" = 5 ] || fail "V1 5/5 shapes carry their rule mark (got $marked/5)" "$(cat "$BODY")"
+: > "$FLEET_RULES_LOG"
+FAKE_FLEET_ROLE=orchestrator TMUX_PANE=%9 run_fif --title "没注明" --body "随手一单"
+[ "$RC" -eq 0 ] && grep -qx '未注明规则' "$BODY" && grep -q $'\tunmarked\trepo=acme/widgets\ttitle=没注明' "$FLEET_RULES_LOG" \
+  || fail "V2 an orchestrator filing with no rule files with 「未注明规则」 + a log line" "$(cat "$BODY" "$FLEET_RULES_LOG" "$WORK/err")"
+FAKE_FLEET_ROLE=orchestrator TMUX_PANE=%9 run_fif --title "已带" --body $'x\n<!-- fleet:rule n=1 v=abcdef0123 -->'
+grep -q '未注明规则' "$BODY" && fail "V3 a body already carrying a fleet:rule marker gets no 「未注明规则」" "$(cat "$BODY")"
+run_fif --title "没这条" --rule 999
+[ "$RC" -eq 2 ] && ! grep -q 'issue create' "$GH_LOG" || fail "V4 a rule the table lacks is refused (exit 2, no create; got $RC)" "$(cat "$WORK/err")"
+run_fif --title "别处" --body "y"
+grep -q '未注明规则\|fleet:rule' "$BODY" && fail "V5 a non-orchestrator filing gets no rule line" "$(cat "$BODY")"
+ok "V rules: 5/5 orchestrator shapes marked; no rule ⇒ 「未注明规则」 + log; unknown rule refused; elsewhere untouched"
 
 printf '\nselftest OK: %s assertions passed (channel: validate · provenance · create · milestone · parent · spawn · bind · breakage)\n' "$pass"
 exit 0

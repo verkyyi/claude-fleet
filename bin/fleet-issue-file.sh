@@ -40,6 +40,12 @@
 #      provenance marker into the body via the shared fleet_from_marker helper —
 #      the byte-identical marker bin/fleet-comment.sh puts on a comment (the
 #      convention lives in fleet-lib.sh now; this reuses it, #224/#332).
+#   2a. --rule N (issue #2786) → the body ends 「按规则 N 派发」 +
+#      `<!-- fleet:rule n=N v=<table version> -->` (bin/fleet_rules.py; a number
+#      the merged rule table lacks is refused, exit 2). A filing from the
+#      ORCHESTRATOR's pane with neither --rule nor a fleet:rule marker in its body
+#      is filed all the same, with 「未注明规则」 added and one line in
+#      logs/rules.log — never refused.
 #   3. `gh issue create` (title · body · labels · milestone). When no --milestone
 #      is given and FLEET_DEFAULT_MILESTONE is set for the fleet, default to it —
 #      auto-creating the milestone if absent — so nothing lands unsorted (issue
@@ -67,7 +73,7 @@
 #
 # Usage:
 #   fleet-issue-file.sh --title T [--body B] [--label L,...]… [--priority pN] \
-#                       [--parent N] [--from ROLE] [--milestone M] \
+#                       [--parent N] [--from ROLE] [--milestone M] [--rule N] \
 #                       [--repo R] [--spawn | --bind] [--breakage | --breakage-key K | --no-breakage]
 set -uo pipefail
 
@@ -76,7 +82,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/fleet-lib.sh"
 . "$BIN/fleet-gh-lib.sh"   # fleet_gh_write: every write below is queued (issue #1264)
 
-title='' body='' priority='' parent='' from='' milestone='' repo='' spawn=0 bind=0
+title='' body='' priority='' parent='' from='' milestone='' repo='' spawn=0 bind=0 rule=''
 breakage='' bk_auto=0 breakage_key='' bk_sha='' bk_check='' bk_line='' bk_lock='' bk_held=0
 labels=()
 while [ "$#" -gt 0 ]; do
@@ -94,6 +100,7 @@ while [ "$#" -gt 0 ]; do
     --parent)    shift; parent="${1//[^0-9]/}" ;;
     --from)      shift; from="${1:-}" ;;
     --milestone) shift; milestone="${1:-}" ;;
+    --rule)      shift; rule="${1:-}" ;;
     --repo)      shift; repo="${1:-}" ;;
     --spawn)     spawn=1 ;;
     --bind)      bind=1 ;;
@@ -114,6 +121,15 @@ case "$breakage_key" in
 esac
 # --spawn starts a NEW worker; --bind makes the CALLER one. Asking for both is a
 # caller bug with no sane resolution, so refuse before filing anything.
+rule_mark=''
+if [ -n "$rule" ]; then
+  case "$rule" in
+    *[!0-9]*) printf 'fleet-issue-file: --rule must be a rule number (got %s)\n' "$rule" >&2; exit 2 ;;
+  esac
+  rule_mark=$(python3 "$BIN/fleet-role.py" rules --mark "$rule") \
+    || { printf 'fleet-issue-file: --rule %s: no such rule in the table (fleet-role.py rules)\n' "$rule" >&2; exit 2; }
+fi
+
 [ "$spawn" = 1 ] && [ "$bind" = 1 ] \
   && { printf 'fleet-issue-file: --spawn and --bind are mutually exclusive\n' >&2; exit 2; }
 # --spawn from a pane that lost $TMUX_PANE (issue #1355): the spawn cannot tell
@@ -268,6 +284,24 @@ fi
 # records which fleet actor filed it, from which session/issue.
 role=$(fleet_from_role "$from")
 marker=$(fleet_from_marker "$role" "$repo")
+# --- 2a. which rule dispatched it (issue #2786) ---------------------------------
+_rule_add=''
+if [ -n "$rule_mark" ]; then
+  _rule_add="$rule_mark"
+elif [ "$role" = orchestrator ]; then
+  case "$body" in
+    *'<!-- fleet:rule '*) ;;
+    *) _rule_add='未注明规则'
+       _rl="${FLEET_RULES_LOG:-$BIN/../logs/rules.log}"
+       mkdir -p "$(dirname "$_rl")" 2>/dev/null
+       printf '%s\tunmarked\trepo=%s\ttitle=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$repo" \
+         "$(printf '%s' "$title" | tr '\t\n' '  ')" >> "$_rl" 2>/dev/null
+       printf 'fleet-issue-file: filed without a rule — add --rule N (fleet-role.py rules); noted 「未注明规则」\n' >&2 ;;
+  esac
+fi
+if [ -n "$_rule_add" ]; then
+  if [ -n "$body" ]; then body="$body"$'\n\n'"$_rule_add"; else body="$_rule_add"; fi
+fi
 if [ -n "$body" ]; then
   body="$body"$'\n\n'"$marker"
 else
