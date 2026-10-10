@@ -80,7 +80,11 @@
 #               drill person (its answer is kept as hub-residue.txt).
 #
 # The reading: 「要人帮的步骤」 = the FAILs a person would have had to be asked
-# about. The scan is the colleague's own and is not counted.
+# about. The scan is the colleague's own and is not counted. A run cut short
+# (INT / TERM / HUP, or a step that died) still tears down, then reads
+# `ABORTED (<why>)` — never PASS — exits 128+signal (1 for a died step) and
+# gives the reading no number (issue #2865). `--invite ''` is refused, never
+# taken for 「a person scans」.
 #
 # --teardown <login>: steps 11–12 only, for a run left up (--keep) or cut short.
 #
@@ -191,7 +195,7 @@ sys.exit(1)' "$1"
 # checked; no OS login is made. That is bin/fleet-onboard-clock.sh, whole.
 for a in "$@"; do [ "$a" = --runs ] && exec bash "$BIN/fleet-onboard-clock.sh" "$@"; done
 
-LOGIN='' HUB='' SCAN_CMD='' KEEP=0 TEARDOWN=0 NAME=first INVITE='' ROW_ONLY='' QR_ONLY=0
+LOGIN='' HUB='' SCAN_CMD='' KEEP=0 TEARDOWN=0 NAME=first INVITE='' INVITE_SET=0 ROW_ONLY='' QR_ONLY=0
 DRILL_NS=fleet-drill@claude-fleet
 HOST=127.0.0.1 PORT=22
 TIMEOUT=${FLEET_DRILL_TIMEOUT:-900} SCAN_SECS=${FLEET_DRILL_SCAN_SECS:-600}
@@ -207,7 +211,7 @@ while [ $# -gt 0 ]; do
     --ssh-port) [ $# -ge 2 ] || usage; PORT=$2; shift 2 ;;
     --name)     [ $# -ge 2 ] || usage; NAME=$2; shift 2 ;;
     --teardown) [ $# -ge 2 ] || usage; LOGIN=$2; TEARDOWN=1; shift 2 ;;
-    --invite)   [ $# -ge 2 ] || usage; INVITE=$2; shift 2 ;;
+    --invite)   [ $# -ge 2 ] || usage; INVITE=$2; INVITE_SET=1; shift 2 ;;
     --keep)     KEEP=1; shift ;;
     --row-named) [ $# -ge 2 ] || usage; ROW_ONLY=$2; shift 2 ;;   # selftest seam: screen on stdin
     --qr-state) QR_ONLY=1; shift ;;                                 # selftest seam: screen on stdin
@@ -220,6 +224,8 @@ while [ $# -gt 0 ]; do
 done
 if [ "$QR_ONLY" = 1 ]; then qr_state "$LOGIN"; exit 0; fi
 if [ -n "$ROW_ONLY" ]; then r=$(list_row_named "$ROW_ONLY"); [ -n "$r" ] && printf '%s\n' "$r"; [ -n "$r" ]; exit; fi
+# an --invite given empty (an unset $CODE) is a mistake, never 「a person scans」 (#2865)
+[ "$INVITE_SET" = 0 ] || [ -n "$INVITE" ] || die2 "--invite: empty — pass the fd_… code fleet drill invite printed, or leave --invite off for a person to scan"
 if [ -n "$INVITE" ]; then
   printf '%s' "$INVITE" | grep -Eq '^fd_[a-z2-7]{26}$' || die2 "--invite: not an approve code (fd_… from fleet drill invite)"
   # the drill person's certificate names ITS login: the OS login must be it
@@ -274,7 +280,7 @@ printf '%s: login=%s  hub=%s  ssh=%s:%s  confirm=%s  log dir %s\n' "$PROG" "$LOG
 # --- bookkeeping -----------------------------------------------------------------
 T0=$SECONDS TS=$SECONDS
 STEP=0 NPASS=0 NFAIL=0 NSKIP=0 NHELP=0 NSHOT=0
-UIDN='' GUID='' FPR='' EPID='' TMUX_UP=0 SUMMARISED=0 NOISE=0 SCAN_URL=''
+UIDN='' GUID='' FPR='' EPID='' TMUX_UP=0 SUMMARISED=0 NOISE=0 SCAN_URL='' ABORTED='' ABORT_RC=1
 STEPS="$RUN/steps.md"
 printf '| # | 看到什么 | 按了什么 | 用时 | 要人帮 |\n|---|---|---|---|---|\n' > "$STEPS"
 
@@ -913,23 +919,40 @@ finish() {
   fi
   rm -f "$RUN/id_ed25519" "$RUN/id_ed25519.pub"
   printf '\n'
-  if [ "$NFAIL" = 0 ]; then
+  # an interrupted run is no verdict (#2865): never PASS, the reading gives no number
+  if [ -n "$ABORTED" ]; then
+    printf '%s: ABORTED (%s)  %d passed · %d failed · %d skipped · %s · log %s\n' "$PROG" "$ABORTED" "$NPASS" "$NFAIL" "$NSKIP" "$(elapsed)" "$RUN"
+  elif [ "$NFAIL" = 0 ]; then
     printf '%s: PASS  %d passed · %d skipped · %s · log %s\n' "$PROG" "$NPASS" "$NSKIP" "$(elapsed)" "$RUN"
   else
     printf '%s: FAIL  %d passed · %d failed · %d skipped · %s · log %s\n' "$PROG" "$NPASS" "$NFAIL" "$NSKIP" "$(elapsed)" "$RUN"
   fi
   if [ "$TEARDOWN" = 0 ]; then
-    printf '\nreading (EPIC #1906): 同事从拿到命令到开出第一个会话要人帮的步骤: %s\n' "$NHELP"
+    if [ -n "$ABORTED" ]; then
+      printf '\nreading (EPIC #1906): 不出数 — the drill was interrupted (%s) before its steps finished\n' "$ABORTED"
+    else
+      printf '\nreading (EPIC #1906): 同事从拿到命令到开出第一个会话要人帮的步骤: %s\n' "$NHELP"
+    fi
     printf 'steps (%s, %s screens beside it):\n' "$STEPS" "$NSHOT"
     sed 's/^/  /' "$STEPS"
   fi
+  [ -z "$ABORTED" ] || exit "$ABORT_RC"
   [ "$NFAIL" = 0 ] && exit 0
   exit 1
 }
-on_signal() { trap - INT TERM HUP; printf '\n%s: interrupted — tearing down\n' "$PROG" >&2; finish; }
-trap on_signal INT TERM HUP
+# on_signal <SIG> <rc>: a signal mid-finish (the teardown) marks the run too —
+# the finish already under way prints the verdict when it resumes
+on_signal() {
+  trap - INT TERM HUP
+  ABORTED="interrupted by SIG$1" ABORT_RC=$2
+  printf '\n%s: interrupted (SIG%s) — tearing down\n' "$PROG" "$1" >&2
+  finish
+}
+trap 'on_signal INT 130' INT
+trap 'on_signal TERM 143' TERM
+trap 'on_signal HUP 129' HUP
 # a step that dies (set -u, a typo) still tears the login down: finish is idempotent
-trap '[ "$SUMMARISED" = 1 ] || { printf "\\n%s: a step died — tearing down\\n" "$PROG" >&2; finish; }' EXIT
+trap '[ "$SUMMARISED" = 1 ] || { ABORTED="a step died"; printf "\\n%s: a step died — tearing down\\n" "$PROG" >&2; finish; }' EXIT
 
 if [ "$TEARDOWN" = 1 ]; then
   UIDN=$(id -u "$LOGIN" 2>/dev/null || :)
