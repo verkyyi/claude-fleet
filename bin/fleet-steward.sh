@@ -135,6 +135,7 @@ EOF2
 # a quiet moment (issue #2733, fleet_role_renew_why) it is renewed: RENEW=1.
 RENEW=0
 stew_live() {
+  fleet_handoff_cycle_live "$SESS" "$1" && return 0   # a handoff cycle owns it (#2937)
   stew_exited "$1" && return 1
   if [ "${FLEET_ORCH_RENEW:-1}" != 0 ] && fleet_role_renew_due "$SESS" "$1" >/dev/null; then
     RENEW=1; return 1
@@ -184,6 +185,12 @@ if [ "$AGENT" = claude ]; then
     if [ -n "$wsid" ] && [ "$wsid" != "$sid" ] && [ -f "$proj/$wsid.jsonl" ]; then
       sid=$wsid; printf '%s\n' "$sid" > "$SIDF"
     fi
+  fi
+  # never the conversation a /fleet-handoff handed off (issue #2937, as the orchestrator)
+  hsid=$(fleet_role_handoff_sid "$DIR" steward) || hsid=''
+  if [ -n "$sid" ] && [ "$sid" = "$hsid" ]; then
+    SEED=$(fleet_role_handoff_pickup "$DIR" steward) || SEED='/fleet-steward'
+    sid=''
   fi
   if [ -n "$sid" ] && [ -f "$proj/$sid.jsonl" ]; then
     args="$args --resume $sid"; SEED=$STEW_RESUME_SEED

@@ -8923,7 +8923,7 @@ fleet_cfg_state() {
 # fleet_cfg_restart_why <session> <win> [idle-secs] — may <win> be reopened onto
 # the current configuration NOW (issue #1783)? Exit 0 = yes. Else exit 1 and ONE
 # word on stdout says why not: gone · panel · remote · unknown · ok ·
-# state:<s> · recent · asleep · looping · bg · tool · human. The ONE judge — fleet-cfg-restart.sh
+# state:<s> · recent · asleep · handoff · looping · bg · tool · human. The ONE judge — fleet-cfg-restart.sh
 # picks with it and fleet-migrate.sh --cfg-stale asks it again right before /exit,
 # so a session that started a turn in between is never interrupted. Only a
 # session — Claude or Codex alike (issue #1896) — whose @agent_cfg differs from
@@ -8953,6 +8953,8 @@ fleet_cfg_restart_why() {
   [ "$st" = "done" ] || { echo "state:${st:-none}"; return 1; }
   case "$ts" in ''|*[!0-9]*) ts=0 ;; esac
   [ $(( $(date +%s) - ts )) -ge "$idle" ] || { echo recent; return 1; }
+  # A handoff cycle is about to /clear it (issue #2937): the reopen would race it.
+  fleet_handoff_cycle_live "$sess" "$win" && { echo handoff; return 1; }
   bin="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
   if [ -n "$lp" ] && [ -f "$bin/fleet_loop_mark.py" ] \
      && python3 "$bin/fleet_loop_mark.py" status --value "$lp" >/dev/null 2>&1; then
@@ -8980,7 +8982,7 @@ fleet_cfg_restart_why() {
 # fleet_role_renew_why <session> <win> — may the orchestrator / steward window
 # <win> be reopened onto the installed fleet version NOW (issue #2733)? Exit 0 =
 # yes. Else exit 1 and ONE word on stdout: gone · unknown · ok (nothing to renew)
-# · codex · state:<s> · recent · typing · loop-due · bg · tool (renew pending, not
+# · codex · state:<s> · recent · handoff · typing · loop-due · bg · tool (renew pending, not
 # a quiet moment). fleet_cfg_restart_why's sibling for the two sessions it never
 # reopens (fleet-migrate.sh skips them: they stay on their machine and come back
 # through their own `ensure`). Pending = fleet_cfg_state stale / renew / broken —
@@ -9008,6 +9010,9 @@ fleet_role_renew_why() {
   now=$(date +%s)
   case "$ts" in ''|*[!0-9]*) ts=0 ;; esac
   [ $(( now - ts )) -ge "$quiet" ] || { echo recent; return 1; }
+  # A /fleet-handoff cycle is about to /clear it (issue #2937): a renew now resumes
+  # the very conversation being handed off, and the cycle never sees its clear.
+  fleet_handoff_cycle_live "$sess" "$win" && { echo handoff; return 1; }
   if [ "$quiet" -gt 0 ] && _fleet_tmux "$sess" list-clients -F '#{client_activity} #{window_id}' 2>/dev/null \
        | awk -v w="$win" -v now="$now" -v ds="$quiet" \
            '$2 == w && $1 ~ /^[0-9]+$/ && (now - $1) < ds { f = 1 } END { exit !f }'; then
@@ -9069,6 +9074,48 @@ fleet_role_renew_due() {
   esac
   [ -n "$why" ] && printf '%s\n' "$why"
   return "$rc"
+}
+
+# fleet_handoff_cycle_live <session> <win> — is a fleet-handoff-cycle.sh pending on
+# <win> (issue #2937)? The cycle stamps @handoff_cycle <epoch>:<pid> once armed and
+# unsets it on exit; exit 0 = its pid is alive and the stamp younger than the
+# cycle's own hard timeout (+60 s), so a stamp a SIGKILLed cycle left never holds a
+# window forever. Every reopener of a live window asks it first — ensure's renew
+# (fleet_role_renew_why) and the cfg-restart (fleet_cfg_restart_why): a reopen
+# mid-cycle resumes the conversation being handed off and the /clear never lands.
+fleet_handoff_cycle_live() {
+  local sess="${1:-}" win="${2:-}" v ts pid hard
+  [ -n "$win" ] || return 1
+  v=$(_fleet_tmux "$sess" display-message -p -t "$win" '#{@handoff_cycle}' 2>/dev/null)
+  ts=${v%%:*}; pid=${v#*:}
+  case "$ts" in ''|*[!0-9]*) return 1 ;; esac
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  hard=${FLEET_HANDOFF_HARD_TIMEOUT:-300}
+  case "$hard" in ''|*[!0-9]*) hard=300 ;; esac
+  [ $(( $(date +%s) - ts )) -le $(( hard + 60 )) ] || return 1
+  kill -0 "$pid" 2>/dev/null
+}
+
+# fleet_role_handoff_sid <state dir> <role> — the conversation the role's last
+# /fleet-handoff handed off (issue #2937): `sid` from $DIR/<role>.handoff, which
+# fleet-handoff-cycle.sh writes when it arms in an orchestrator / steward window.
+# A handed-off conversation is never resumed again — ensure starts a new one with
+# the pickup as its first turn instead (fleet_role_handoff_pickup). rc 1 = none.
+fleet_role_handoff_sid() {
+  local f="${1:-}/${2:-}.handoff" v
+  [ -f "$f" ] || return 1
+  v=$(sed -n 's/^sid=//p' "$f" 2>/dev/null | head -n 1 | LC_ALL=C tr -cd '0-9a-f-')
+  [ -n "$v" ] || return 1
+  printf '%s\n' "$v"
+}
+# fleet_role_handoff_pickup <state dir> <role> — that handoff's pickup command
+# (`/fleet-handoff pickup <doc>`); rc 1 = none recorded.
+fleet_role_handoff_pickup() {
+  local f="${1:-}/${2:-}.handoff" v
+  [ -f "$f" ] || return 1
+  v=$(sed -n 's/^pickup=//p' "$f" 2>/dev/null | head -n 1)
+  [ -n "$v" ] || return 1
+  printf '%s\n' "$v"
 }
 
 # fleet_window_bg_busy <session> <win> [quick] — does <win>'s agent still own a

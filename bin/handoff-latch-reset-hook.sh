@@ -74,7 +74,32 @@ case "$sid" in *[!0-9a-fA-F-]*) sid="" ;; esac
 case "$sid" in
   ????????-????-????-????-????????????)
     tmux set-window-option -t "$TMUX_PANE" @cc_session_id "$sid" 2>/dev/null || true ;;
+  *) sid='' ;;
 esac
+
+# 3b. The orchestrator / steward come back through their own `ensure`, which resumes
+#     $FLEET_CONF_DIR/fleets/<sess>/<role>.sid when its window is gone (issue #2937).
+#     A /clear (the handoff cycle's) or a new startup is a NEW conversation: write it
+#     there and as @norepo_sid, or the next reopen resumes the one just handed off.
+#     The role's last handoff record (<role>.handoff, fleet-handoff-cycle.sh) gets
+#     `next=<sid>` once: the conversation that picked it up.
+if [ -n "$sid" ]; then
+  case "$src" in clear|startup)
+    _rv=$(tmux display-message -p -t "$TMUX_PANE" '#{@fleet_role}|#{?#{session_group},#{session_group},#{session_name}}' 2>/dev/null)
+    _role=${_rv%%|*}; _rsess=${_rv#*|}
+    case "$_role" in orchestrator|steward)
+      if [ -n "$_rsess" ]; then
+        _rdir="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/fleets/$_rsess"
+        mkdir -p "$_rdir" 2>/dev/null
+        printf '%s\n' "$sid" > "$_rdir/$_role.sid" 2>/dev/null
+        tmux set-window-option -t "$TMUX_PANE" @norepo_sid "$sid" 2>/dev/null
+        if [ -f "$_rdir/$_role.handoff" ] && ! grep -q '^next=' "$_rdir/$_role.handoff" 2>/dev/null; then
+          printf 'next=%s\n' "$sid" >> "$_rdir/$_role.handoff" 2>/dev/null
+        fi
+      fi ;;
+    esac ;;
+  esac
+fi
 
 # A fresh context — the handoff cycle's /clear, a manual /clear, a new startup —
 # starts the compaction count over (issue #1316). A compact keeps counting (that

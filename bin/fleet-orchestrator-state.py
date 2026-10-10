@@ -32,7 +32,8 @@ WHAT IT DOES. ONE file, `$FLEET_CONF_DIR/global/orchestrator.state.json` (EPIC
            place; UserPromptSubmit carrying a `[child-report]` — the children half,
            detached (the hub read behind fleet-children.sh may take seconds, and a
            prompt must not wait for it).
-  read     SessionStart (`compact`, `resume`, `startup`) — a ≤ 40-line 「你是编排会话，
+  read     SessionStart (`compact`, `resume`, `startup`, `clear` — a /fleet-handoff's
+           new conversation, issue #2937, its doc named) — a ≤ 40-line 「你是编排会话，
            当前状态如下」 as additionalContext, ending in the next step: re-arm the Loop
            (ScheduleWakeup with the same prompt and delay). A state older than 2 hours
            is marked 只当参考 — check the children first. Reading it marks the reports
@@ -72,6 +73,7 @@ sys.path.insert(0, BIN)
 
 MAX_LINES = 40                       # convention 2 / 发起人拍板 2
 STALE_SECS = 7200                    # older than this: 只当参考
+HANDOFF_FRESH = 7200                    # a handoff record names the new conversation for 2 h (#2937)
 CHILDREN_SECS = 12                   # bound on the fleet-children.sh read
 SENTINEL = '[child-report]'
 
@@ -317,15 +319,48 @@ def ago(secs):
     return '%d 小时前' % (secs // 3600)
 
 
-def brief(d, source='compact', now=None):
+def handoff_rec(session, sid='', now=None):
+    """The orchestrator's last /fleet-handoff (issue #2937): `$FLEET_CONF_DIR/fleets/
+    <session>/orchestrator.handoff`, written by fleet-handoff-cycle.sh when it arms —
+    {'store': doc or issue, 'pickup': command, 'at': epoch}. None when there is none,
+    it is older than HANDOFF_FRESH, or its `next` (the first conversation after it,
+    handoff-latch-reset-hook.sh) is another one than <sid> — the doc was picked up."""
+    if not session:
+        return None
+    now = int(time.time()) if now is None else now
+    rec = {}
+    try:
+        with open(os.path.join(conf_dir(), 'fleets', session, 'orchestrator.handoff'), encoding='utf-8') as f:
+            for line in f:
+                k, _, v = line.rstrip('\n').partition('=')
+                rec[k] = v
+    except OSError:
+        return None
+    try:
+        at = int(rec.get('at') or 0)
+    except ValueError:
+        at = 0
+    if not rec.get('store') or now - at > HANDOFF_FRESH:
+        return None
+    if rec.get('next') and sid and rec['next'] != sid:
+        return None
+    rec['at'] = at
+    return rec
+
+
+def brief(d, source='compact', now=None, handoff=None):
     """The ≤ 40-line summary the session gets back. '' when there is no state."""
     if not d or not d.get('ts'):
         return ''
     now = int(time.time()) if now is None else now
     age = now - int(d['ts'])
-    why = {'compact': '上下文刚被压缩', 'resume': '会话刚续开', 'startup': '会话刚重开'}.get(source, '会话刚回来')
+    why = {'compact': '上下文刚被压缩', 'resume': '会话刚续开', 'startup': '会话刚重开',
+           'clear': '刚接力到一段新对话'}.get(source, '会话刚回来')
     head = ['[fleet orchestrator state] 你是这台 fleet 的编排会话；%s，这是压缩/退出前存下的状态（%s 存，%s）。'
             % (why, hm(d['ts']), ago(age))]
+    if handoff:
+        head.append('接力文档：%s（%s 写）——这一轮之后会跑 /fleet-handoff pickup，照它的 NEXT ACTION 接着做。'
+                    % (handoff['store'], hm(handoff['at'])))
     if age > STALE_SECS:
         head.append('⚠ 这份状态已超过 2 小时，只当参考：先用 mcp__fleet__children 和 mcp__fleet__gh 核对再说。')
     body = ['## 在跟的批次']
@@ -368,7 +403,8 @@ def brief(d, source='compact', now=None):
     else:
         body.append('- （没有在跑的循环）')
         step = '下一步：①'
-    step += '②一句话报出当前批次和未读回报（人在就告诉人）；③接着做压缩前在做的事。'
+    step += ('②一句话报出当前批次和未读回报（人在就告诉人）；③%s。'
+             % ('照接力文档的 NEXT ACTION 接着做' if handoff else '接着做压缩前在做的事'))
     tail = [step, '详情（完整字段）：%s' % state_path()]
     room = MAX_LINES - len(head) - len(tail)
     if len(body) > room:
@@ -457,12 +493,15 @@ def hook():
         store(d)
     elif ev == 'SessionStart':
         src = payload.get('source', '')
-        if src not in ('compact', 'resume', 'startup'):
+        # `clear` is a /fleet-handoff's new conversation (issue #2937): it gets the
+        # same picture plus the handoff doc, as a resume does
+        if src not in ('compact', 'resume', 'startup', 'clear'):
             return 0
         d = load()
-        if src in ('resume', 'startup'):
+        if src in ('resume', 'startup', 'clear'):
             refresh(d, tr)
-        text = brief(d, src)
+        ho = handoff_rec(_session(), payload.get('session_id') or '') if src in ('startup', 'clear') else None
+        text = brief(d, src, handoff=ho)
         if not text:
             return 0
         mark_read(d)

@@ -208,7 +208,11 @@ printf 'selftest: key-sequence leg PASS (Escape · /clear · Enter · pickup · 
 # refusal/abort leg above ran first — writes one handoff-complete row beside its log.
 _lrows=$(grep -c "	handoff-complete	.*	resumed from $DOC\$" "$WORK/logs/context-ladder.log" 2>/dev/null)
 [ "$_lrows" = 1 ] || fail "a completed cycle must write exactly one handoff-complete ladder row, got ${_lrows:-0}"
-[ "$(grep -vc '^#' "$WORK/logs/context-ladder.log")" = 1 ] || fail "a refused/aborted cycle must write no ladder row"
+# A refusal writes nothing; the never-idle abort is the one `handoff-failed` row
+# (issue #2937: stored, not cleared — fleet-context.sh's `last` line reads it).
+_frows=$(grep -c "	handoff-failed	.*	never-idle · $DOC\$" "$WORK/logs/context-ladder.log" 2>/dev/null)
+[ "$_frows" = 1 ] || fail "the never-idle abort must write exactly one handoff-failed ladder row, got ${_frows:-0}: $(cat "$WORK/logs/context-ladder.log")"
+[ "$(grep -vc '^#' "$WORK/logs/context-ladder.log")" = 2 ] || fail "a refused cycle must write no ladder row: $(cat "$WORK/logs/context-ladder.log")"
 
 # ---- KEY-SEQUENCE-COMMENT (--issue + marker round-trip) → ARGUMENT-FREE pickup -
 # Marker present (round-trip), idle, fresh capture → clears and injects a pickup

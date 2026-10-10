@@ -6,7 +6,7 @@
 # logs/handoff-cycle.log, but an in-place compaction (#1269) left no record at all
 # — it lived only on tmux options that the next step overwrites, so the only way
 # to know a session had been compacted was to read its transcript. This ledger is
-# that record: eight steps, each written by the one script that performs it.
+# that record: nine steps, each written by the one script that performs it.
 #
 #   prep              bin/set-claude-state.sh   Stop blocked: write the recovery map
 #   compacting        bin/fleet-compact-send.sh `/compact …` typed into the pane
@@ -16,6 +16,11 @@
 #   handoff-nudge     bin/set-claude-state.sh   Stop blocked: run /fleet-handoff —
 #                                               reason `pct`, `cap` (#1316) or `codex`
 #   handoff-complete  bin/fleet-handoff-cycle.sh pane cleared and resumed
+#   handoff-failed    bin/fleet-handoff-cycle.sh a fail-safe abort: the handoff is
+#                                               stored, the context NOT cleared — reason
+#                                               `never-idle`, `operator`, `unconfirmed`,
+#                                               `timeout` (issue #2937; fleet-context.sh's
+#                                               `last` line and the steward's page read it)
 #   hub-warn          bin/set-claude-state.sh   the HUB reached the handoff line:
 #                                               warned + notified, never blocked (#1319)
 #   native-precompact bin/precompact-hook.sh    PreCompact: Claude Code's OWN compaction
@@ -86,7 +91,7 @@ fi
 
 STEP="${1:-}"
 case "$STEP" in
-  prep|compacting|restored|resumed|handoff-nudge|handoff-complete|hub-warn|native-precompact) shift ;;
+  prep|compacting|restored|resumed|handoff-nudge|handoff-complete|handoff-failed|hub-warn|native-precompact) shift ;;
   *) exit 0 ;;
 esac
 PANE="${TMUX_PANE:-}" SOCKET='' CTX='' COUNT='' REASON=''

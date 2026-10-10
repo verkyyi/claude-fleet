@@ -16,7 +16,9 @@
 #   E. PostToolUse ScheduleWakeup updates the loop in place, stop:true clears it;
 #      a UserPromptSubmit without a [child-report] touches nothing;
 #   F. fleet-compact-resume.sh --brief in the orchestrator window prints the state;
-#   G. the hook table wires every event, and the Codex emit drops the command.
+#   G. the hook table wires every event, and the Codex emit drops the command;
+#   B also: SessionStart(clear) — a /fleet-handoff's new conversation (#2937) — gets
+#      the picture plus the handoff doc, until another conversation picked it up.
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -112,7 +114,24 @@ nt set-option -wqu -t "$OP" @compact_stage
 run "$OP" '{"hook_event_name":"SessionStart","source":"compact"}' >/dev/null
 [ -z "$(nt display-message -p -t "$OP" '#{@compact_stage}')" ] || fail "B: an AUTO compaction (it carries on) got a resume turn"; ok
 out=$(run "$OP" '{"hook_event_name":"SessionStart","source":"resume"}'); has "B: resume injects too" "$out" 'EPIC #2581'
-out=$(run "$OP" '{"hook_event_name":"SessionStart","source":"clear"}'); [ -z "$out" ] || fail "B: source clear injected" "$out"; ok
+# a /fleet-handoff's new conversation (source clear, issue #2937) gets the picture too,
+# and — while the handoff record has not been picked up by another — its doc
+out=$(run "$OP" '{"hook_event_name":"SessionStart","source":"clear","session_id":"s-1"}')
+has "B: clear injects (a handoff's new conversation)" "$out" 'EPIC #2581'
+hasnt "B: no handoff record, no doc" "$out" '接力文档'
+mkdir -p "$T/conf/fleets/fl"
+printf 'sid=s-0\nstore=/x/handoff.md\npickup=/fleet-handoff pickup /x/handoff.md\nat=%s\nctx=65\n' "$(date +%s)" \
+  > "$T/conf/fleets/fl/orchestrator.handoff"
+out=$(run "$OP" '{"hook_event_name":"SessionStart","source":"clear","session_id":"s-1"}')
+has "B: the handoff doc named" "$out" '接力文档：/x/handoff.md'
+has "B: the next step is the doc's" "$out" '照接力文档的 NEXT ACTION'
+out=$(run "$OP" '{"hook_event_name":"SessionStart","source":"compact","session_id":"s-1"}')
+hasnt "B: a compaction does not re-point at the handoff" "$out" '接力文档'
+printf 'next=s-1\n' >> "$T/conf/fleets/fl/orchestrator.handoff"
+out=$(run "$OP" '{"hook_event_name":"SessionStart","source":"startup","session_id":"s-2"}')
+has "B: a later startup still gets the picture" "$out" 'EPIC #2581'
+hasnt "B: a doc another conversation picked up is not named again" "$out" '接力文档'
+rm -f "$T/conf/fleets/fl/orchestrator.handoff"
 
 # --- C. nobody else -----------------------------------------------------------
 cp "$STATE" "$T/before"

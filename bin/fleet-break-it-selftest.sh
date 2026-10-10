@@ -29,6 +29,8 @@
 #                                                   fleet-orchestrator-state.py (SessionStart resume)
 #   orchestrator-stale-version                      fleet_role_renew_why (fleet-lib.sh), fleet-orchestrator.sh
 #                                                   ensure (renew in place at a quiet moment)
+#   handoff-renew-race                              fleet_handoff_cycle_live (fleet-lib.sh), fleet-handoff-cycle.sh,
+#                                                   handoff-latch-reset-hook.sh (<role>.sid), ensure
 #   orchestrator-two                                bin/fleet-orchestrator.sh ensure asks the hub
 #                                                   (/v1/node/orchestrator) which machine holds it
 #   break-pane                                      bin/fleet-window-carry.sh (conf/tmux-attention.conf hook)
@@ -1007,6 +1009,87 @@ drill_orchestrator_stale_version() {
   grep -q 'renewed OLD0000000000 → NEW0000000000' "$c/fleets/osv/renew.log" 2>/dev/null || { WHY="the renew left no line in renew.log"; return 1; }
   [ "$(nt list-windows -t osv -F '#{@fleet_role}' | grep -cx orchestrator)" = 1 ] || { WHY="more than one orchestrator"; return 1; }
   WHAT="版本旧了：忙时、循环将到时不换；安静的那一拍原地续开同一对话，先存状态与循环、带首轮、角色在系统提示里"
+}
+
+# handoff-renew-race (issue #2937): the orchestrator ran /fleet-handoff at 65% and
+# armed the cycle; the same minute stable moved, its `ensure` renewed it — a
+# respawn `--resume` of the very conversation being handed off — and the cycle,
+# never seeing its /clear, exited 「存了、没清」. The context only grew (79% by
+# night). Now the cycle stamps @handoff_cycle and no renew runs while it holds;
+# the /clear's SessionStart writes the new conversation into orchestrator.sid,
+# so the renew after resumes THAT one; and a conversation a handoff named is never
+# resumed again — a cycle that lost anyway leaves a new conversation, its first
+# turn the pickup.
+drill_handoff_renew_race() {
+  CAP=60; BREAK_SOCK="$WORK/sock-hrr"; local t0 w sid nsid p out h="$WORK/hrrhome" c="$WORK/hrrconf" oa="$WORK/hrr-argv" \
+    doc="$WORK/hrr-handoff.md" lg="$WORK/hrr-log" nw proj cpid
+  mkdir -p "$h" "$c/global" "$lg"; : > "$oa"; printf '# handoff\nNEXT ACTION: re-arm the Loop\n' > "$doc"
+  printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> %s\necho $$ > %s.pid\nexec sleep 600\n' "$oa" "$oa" > "$WORK/hrr-agent"; chmod +x "$WORK/hrr-agent"
+  nt -f /dev/null new-session -d -s hrr -n home -x 100 -y 30 'exec sh' || { WHY="cannot start the isolated tmux server"; return 1; }
+  local e; for e in BREAK_SOCK="$BREAK_SOCK" FLEET_WRAP_FAST_FAIL=0 FLEET_MCP=0 FLEET_CRED_PROXY=0 SHELL=/bin/sh; do
+    nt set-environment -g "${e%%=*}" "${e#*=}"; done
+  nt set-option -g default-shell /bin/sh
+  hrrenv() { env PATH="$WORK/tbin:$PATH" HOME="$h" FLEET_CONF_DIR="$c" FLEET_SKIP_GLOBAL_CONF=1 BREAK_SOCK="$BREAK_SOCK" "$@"; }
+  hrrens() { hrrenv FLEET_ORCHESTRATOR=1 FLEET_AGENT=claude FLEET_WRAP_LAUNCH="$WORK/hrr-agent" \
+               bash "$BIN/fleet-orchestrator.sh" ensure hrr 2>/dev/null; }
+  w=$(hrrens) || { WHY="ensure did not open it"; return 1; }
+  until_ok 5 test -s "$oa.pid" || { WHY="the orchestrator's agent never started"; return 1; }
+  sid=$(cat "$c/fleets/hrr/orchestrator.sid" 2>/dev/null); p=$(o "$w" pane_id); : > "$oa"
+  proj="$h/.claude/projects/$(printf '%s' "$h" | LC_ALL=C tr -c 'A-Za-z0-9' '-')"; mkdir -p "$proj"
+  printf '{"type":"user","message":{"content":"hi"}}\n' > "$proj/$sid.jsonl"
+  # it started on OLD and is mid-turn: the turn that runs /fleet-handoff
+  nw=$(date +%s)
+  nt set-window-option -t "$w" @agent_cfg fpX \; set-window-option -t "$w" @agent_ver OLD0000000000 \; \
+     set-window-option -t "$w" @cc_session_id "$sid" \; set-window-option -t "$w" @ctx_pct 65 \; \
+     set-window-option -t "$w" @claude_state working \; set-window-option -t "$w" @claude_state_ts $((nw - 300))
+  hrrenv TMUX="$BREAK_SOCK,1,0" TMUX_PANE="$p" FLEET_HANDOFF_LOG_DIR="$lg" FLEET_HANDOFF_POLL=1 FLEET_HANDOFF_DEFER_SECS=0 \
+    FLEET_HANDOFF_IDLE_TIMEOUT=40 FLEET_HANDOFF_VERIFY_TIMEOUT=30 FLEET_HANDOFF_RETRY_AFTER=100 FLEET_MOD_TAKE_SECS=1 \
+    FLEET_HANDOFF_PICKUP_CMD='/fleet-handoff pickup' bash "$BIN/fleet-handoff-cycle.sh" --pane "$p" --doc "$doc" >/dev/null 2>&1 &
+  cpid=$!
+  hrrmk() { [ -n "$(o "$w" @handoff_cycle)" ] && [ -s "$c/fleets/hrr/orchestrator.handoff" ]; }
+  until_ok 5 hrrmk || { WHY="the armed cycle does not mark the window (@handoff_cycle)"; return 1; }
+  grep -q "^sid=$sid\$" "$c/fleets/hrr/orchestrator.handoff" 2>/dev/null \
+    || { WHY="the cycle did not record which conversation it hands off"; return 1; }
+  # the break: stable moves, and the arming turn ends — a quiet, stale window
+  printf 'claude fpX fleet\nver NEW0000000000\n' > "$c/global/agent-cfg.expected"
+  t0=$(now)
+  nt set-window-option -t "$w" @claude_state "done"
+  # the cycle has typed its /clear and waits for the fresh session — the window a renew would take
+  until_ok 10 grep -q 'verifying fresh session' "$lg/handoff-cycle.log" || { WHY="the cycle never reached its /clear"; return 1; }
+  [ "$(hrrens)" = "$w" ] && [ ! -s "$oa" ] || { WHY="renewed while the handoff cycle waited to /clear: $(cat "$oa")"; return 1; }
+  out=$(hrrenv bash -c '. "$1/fleet-lib.sh"; fleet_role_renew_why hrr "$2"' _ "$BIN" "$w")
+  [ "$out" = handoff ] || { WHY="fleet_role_renew_why does not say handoff mid-cycle: [$out]"; return 1; }
+  # the cycle's /clear lands: SessionStart(clear) of a NEW conversation
+  nsid=$(python3 -c 'import uuid; print(uuid.uuid4())')
+  printf '{"type":"user","message":{"content":"hi"}}\n' > "$proj/$nsid.jsonl"
+  printf '{"hook_event_name":"SessionStart","source":"clear","session_id":"%s"}' "$nsid" \
+    | hrrenv TMUX="$BREAK_SOCK,1,0" TMUX_PANE="$p" CLAUDE_CODE_ENTRYPOINT=cli sh "$BIN/handoff-latch-reset-hook.sh" >/dev/null 2>&1
+  wait "$cpid" 2>/dev/null
+  grep -q 'handoff-complete' "$lg/context-ladder.log" 2>/dev/null \
+    || { WHY="the cycle did not complete: $(tail -3 "$lg/handoff-cycle.log" 2>/dev/null)"; return 1; }
+  [ -z "$(o "$w" @handoff_cycle)" ] || { WHY="@handoff_cycle outlived the cycle — no renew could ever run"; return 1; }
+  [ "$(cat "$c/fleets/hrr/orchestrator.sid")" = "$nsid" ] \
+    || { WHY="orchestrator.sid still names the handed-off conversation after the /clear"; return 1; }
+  grep -q "^next=$nsid\$" "$c/fleets/hrr/orchestrator.handoff" || { WHY="the handoff record does not name who picked it up"; return 1; }
+  # the renew runs at the next quiet tick — onto the NEW conversation
+  nt set-window-option -t "$w" @cc_session_id "$nsid" \; set-window-option -t "$w" @claude_state "done" \; \
+     set-window-option -t "$w" @claude_state_ts $(( $(date +%s) - 300 ))
+  [ "$(hrrens)" = "$w" ] || { WHY="the quiet tick after the handoff did not answer with the same window"; return 1; }
+  until_ok 10 grep -q -- "--resume $nsid" "$oa" || { WHY="the renew after the handoff did not resume the new conversation: [$(cat "$oa")]"; return 1; }
+  SECS=$(since "$t0")
+  grep -q -- "--resume $sid" "$oa" && { WHY="the handed-off conversation was resumed"; return 1; }
+  # a cycle that lost anyway (the record names the live conversation): never resumed
+  : > "$oa"; rm -f "$oa.pid"
+  printf 'sid=%s\nstore=%s\npickup=/fleet-handoff pickup %s\nat=%s\nctx=65\n' "$nsid" "$doc" "$doc" "$(date +%s)" \
+    > "$c/fleets/hrr/orchestrator.handoff"
+  nt set-window-option -t "$w" @agent_ver OLD0000000000 \; set-window-option -t "$w" @claude_state "done" \; \
+     set-window-option -t "$w" @claude_state_ts $(( $(date +%s) - 300 ))
+  hrrens >/dev/null
+  until_ok 10 grep -q -- '--session-id ' "$oa" || { WHY="a handed-off conversation was resumed, not replaced: [$(cat "$oa")]"; return 1; }
+  grep -q -- "--resume $nsid" "$oa" && { WHY="the handed-off conversation was resumed"; return 1; }
+  grep -q "fleet-handoff pickup $doc" "$oa" || { WHY="the new conversation's first turn is not the pickup: [$(cat "$oa")]"; return 1; }
+  [ "$(nt list-windows -t hrr -F '#{@fleet_role}' | grep -cx orchestrator)" = 1 ] || { WHY="more than one orchestrator"; return 1; }
+  WHAT="接力 arm 期间版本移动：不换新、cycle 清完；/clear 把新对话写进 orchestrator.sid，之后换新接的是新对话；被接力过的对话再也不 resume（输了也开新对话、首轮 pickup）"
 }
 
 # window-renamed (issue #1844): a name is not an identity. Home renamed, a worker
