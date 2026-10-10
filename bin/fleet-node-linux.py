@@ -85,10 +85,13 @@ def private_write(path, data, uid=0, gid=0):
 
 
 def env_read(path):
-    if not Path(path).exists():
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except FileNotFoundError:
         return {}
-    return dict(line.split('=', 1) for line in Path(path).read_text().splitlines()
-                if '=' in line and not line.startswith('#'))
+    with os.fdopen(fd) as f:
+        return dict(line.split('=', 1) for line in f.read().splitlines()
+                    if '=' in line and not line.startswith('#'))
 
 
 def tenant_env(s, login):

@@ -141,6 +141,14 @@ def main():
         else:
             raise AssertionError('root store write followed a directory symlink')
         assert not (outside / 'blocked').exists()
+        (outside / 'secret').write_text('CCQUOTA_TOKEN=fixture')
+        (d / 'token-link').symlink_to(outside / 'secret')
+        try:
+            m.env_read(d / 'token-link')
+        except OSError:
+            pass
+        else:
+            raise AssertionError('root token read followed a symlink')
         args = argparse.Namespace(login=login, uid=31022, hub='http://127.0.0.1:%d' % hub.server_port,
                                   join_file=str(code), relay='https://fleet-relay.24hw.cn')
         try:
