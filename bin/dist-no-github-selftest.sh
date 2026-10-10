@@ -185,8 +185,10 @@ class Hub(BaseHTTPRequestHandler):
             rel = p[len(pre):]
             if rel.startswith("bundle"):
                 return self.send(404, "")
-            f = os.path.realpath(os.path.join(repo, rel))
-            if f.startswith(os.path.realpath(repo) + os.sep) and os.path.isfile(f):
+            # never realpath: the selftest gate's shadow root links bin/ and the
+            # rest out of the root (selftest-shadow-root.sh)
+            f = os.path.join(repo, rel)
+            if rel and not rel.startswith("/") and ".." not in rel.split("/") and os.path.isfile(f):
                 return self.send(200, open(f, "rb").read(), "application/octet-stream", sha=True)
         return self.send(404, "")
 
