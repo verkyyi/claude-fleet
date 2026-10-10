@@ -123,7 +123,7 @@ sec=$(sed -n '/^## 规则表 v=/,$p' "$ob")
 nl=$(printf '%s\n' "$sec" | wc -l | tr -d ' ')
 case "$sec" in *"v=$v2"*'| 1 | 一处改动 | 一律先问 | ask |'*'| 12 |'*)
     printf '%s' "$sec" | grep -q '^| 13 |' && bad "F: a steward row in the orchestrator's prompt" \
-      || { [ "$nl" -le 40 ] && ok "F: the orchestrator's prompt ends with its $((nl - 4)) rows at v=$v2 (≤ 40 lines), the local edit in" || bad "F: $nl lines"; } ;;
+      || { [ "$nl" -le 40 ] && ok "F: the orchestrator's prompt ends with its $((nl - 3)) rows at v=$v2 (≤ 40 lines), the local edit in" || bad "F: $nl lines"; } ;;
   *) bad "F: orchestrator section: $sec" ;; esac
 rm -f "$FLEET_CONF_DIR/roles/rules.md"
 sb=$(R render steward --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["body"])')

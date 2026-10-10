@@ -208,7 +208,7 @@ def section(table, role):
     rows = [r for r in table['rows'] if r['role'] == role]
     if not rows:
         return ''
-    lines = ['', '## 规则表 v=%s' % table['version'], '',
+    lines = ['', '## 规则表 v=%s' % table['version'],
              '| 编号 | 条件 | 动作 | 档位 |', '|---|---|---|---|']
     for r in rows[:SECTION_MAX - len(lines)]:
         lines.append('| %d | %s | %s | %s |' % (r['n'], r['cond'], r['action'], r['tier']))
