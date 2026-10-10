@@ -255,7 +255,7 @@ for t in ssh ssh-keygen sudo curl python3; do
 done
 [ -n "$TMUXB" ] || die2 'tmux not found — nothing was changed'
 [ -f "$RM_SH" ] || die2 "fleet-login-remove.sh not found beside $0"
-sudo -n true >/dev/null 2>&1 || die2 "需要管理员登录（有 sudo）— no sudo ticket for $(id -un): run it as an admin login, after 'sudo -v' (this script never prompts)"
+sudo -n true >/dev/null 2>&1 || die2 "需要管理员登录（有 sudo）— no sudo ticket for $(id -un): run it as an admin login; run 'sudo -v' first (this script never prompts)"
 if [ "$TEARDOWN" = 0 ]; then
   if id "$LOGIN" >/dev/null 2>&1; then
     printf '%s: login %s already exists — refusing (another --login, or clean it: %s --teardown %s)\n' "$PROG" "$LOGIN" "$0" "$LOGIN" >&2

@@ -122,7 +122,7 @@ for t in ssh tmux sudo; do
   command -v "$t" >/dev/null 2>&1 || die2 "$t not found — nothing was changed"
 done
 [ -f "$NEW_SH" ] && [ -f "$RM_SH" ] || die2 "fleet-login-new.sh / fleet-login-remove.sh not found beside $0"
-sudo -n -v >/dev/null 2>&1 || die2 "需要管理员登录（有 sudo）— no sudo ticket for $(id -un): run it as an admin login, after 'sudo -v' (this script never prompts)"
+sudo -n -v >/dev/null 2>&1 || die2 "需要管理员登录（有 sudo）— no sudo ticket for $(id -un): run it as an admin login; run 'sudo -v' first (this script never prompts)"
 if id "$LOGIN" >/dev/null 2>&1; then
   printf '%s: login %s already exists — refusing (pick another --login, or offboard it: %s %s --apply)\n' "$PROG" "$LOGIN" "$RM_SH" "$LOGIN" >&2
   exit 3
