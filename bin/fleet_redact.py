@@ -23,7 +23,10 @@ import re
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-TABLE = os.path.join(HERE, "..", "conf", "secret-shapes.list")
+# beside this file's bin/, else beside the real file's (a dir-of-symlinks shadow)
+TABLE = next((t for t in (os.path.join(d, "..", "conf", "secret-shapes.list")
+                          for d in (HERE, os.path.dirname(os.path.realpath(__file__))))
+              if os.path.isfile(t)), os.path.join(HERE, "..", "conf", "secret-shapes.list"))
 KINDS = ("value", "text", "block")
 WORD = re.compile(rb"[A-Za-z0-9_]")
 

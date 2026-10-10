@@ -263,7 +263,11 @@ def write_json_atomic(path, data):
 def secret_value(s):
     """True when s holds a credential-shaped value (conf/secret-shapes.list)."""
     if not _SHAPES:
-        mod = load_mod("fleet_redact", "fleet_redact.py")
+        real = os.path.dirname(os.path.realpath(__file__))
+        if not os.path.exists(os.path.join(HERE, "fleet_redact.py")) and real != HERE:
+            mod = load_mod("fleet_redact", os.path.join(real, "fleet_redact.py"))  # a dir-of-symlinks shadow
+        else:
+            mod = load_mod("fleet_redact", "fleet_redact.py")
         try:
             _SHAPES.append((mod, mod.load()))
         except (OSError, ValueError) as e:
