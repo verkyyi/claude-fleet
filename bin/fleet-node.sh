@@ -40,6 +40,7 @@
 #       person's (account_refused, issue #2249) — writes no node-login.ok; the
 #       reason goes to node-join.log and node-login.why, and `fleet login`
 #       says it as its last line.
+#       A managed machine (machine.env, issue #2904) ⇒ nothing, exit 0.
 #       No hub ⇒ nothing. Exit 0 a token is in node.env · 2 no hub · 3 not
 #       logged in · 4 the hub offers no such door · 1 anything else.
 #   sudo fleet node install --join <码> [--hub URL]
@@ -177,6 +178,14 @@ cmd_ensure() {
     esac
     shift
   done
+  # A managed machine (#2330) is a trusted node already, its logins the
+  # machine's tenants: no device-key node pass for it (issue #2904 — the hub
+  # answered `login/node` 409 after every `fleet login` there, and the reason
+  # stayed as the login's last line)
+  if [ -e "${FLEET_NODE_STATE:-/var/db/fleet-node}/machine.env" ]; then
+    rm -f "$CONF/node-login.why"
+    return 0
+  fi
   if [ -n "$hub_arg" ]; then hub=$("$here/fleet-login.py" hub --hub "$hub_arg" 2>/dev/null) || return 2
   else hub=$("$here/fleet-login.py" hub 2>/dev/null) || return 2; fi
   [ -f "$CERT" ] || { is_node && return 0; return 3; }

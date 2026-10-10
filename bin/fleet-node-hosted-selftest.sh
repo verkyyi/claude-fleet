@@ -8,7 +8,9 @@
 #      (FLEET_NODE_STATE/machine.env) `fleet` says ONE line 「客户端在 <机器> 上运行；
 #      平时请在自己设备上用」 and runs the RUNTIME's fleet-shell.sh (FLEET_NODE_RUNTIME
 #      /bin), never the install's, with FLEET_NODE_HOSTED=1 and a temp cache
-#      ($TMPDIR/fleet-node-client-<uid>), no update asked; `fleet quit` / `fleet
+#      ($TMPDIR/fleet-node-client-<uid>) and its own tmux server
+#      (`fleet-node-client`, never the resident `fleet-shell` — #2904; one of
+#      those running adds the retire command), no update asked; `fleet quit` / `fleet
 #      status` reach the same script with the same cache; `fleet claude` answers
 #      one line, exit 3, `fleet claude --here` is its road as before. An unmanaged
 #      machine, the hatch FLEET_NODE_CLIENT=1 and the test identity: the install's
@@ -69,9 +71,9 @@ trap cleanup EXIT INT TERM
 mkdir -p "$W/node" "$W/home" "$W/tmp" "$W/conf" "$W/inst/bin" "$W/rt/bin" "$W/rt/conf"
 : > "$W/node/machine.env"
 export HOME="$W/home" TMPDIR="$W/tmp" FLEET_CONF_DIR="$W/conf" XDG_CACHE_HOME="$W/home/.cache" \
-       XDG_CONFIG_HOME="$W/home/.config" FLEET_UI_LANG=zh FLEET_SHELL_SESSION="$SESS" \
-       FLEET_NODE_STATE="$W/node" FLEET_NODE_RUNTIME="$W/rt"
-unset TMUX TMUX_PANE FLEET_CLIENT_IDENTITY FLEET_NODE_CLIENT FLEET_NODE_HOSTED FLEET_SHELL_CACHE \
+       XDG_CONFIG_HOME="$W/home/.config" FLEET_UI_LANG=zh FLEET_NODE_HOSTED_SESSION="$SESS" \
+       FLEET_NODE_STATE="$W/node" FLEET_NODE_RUNTIME="$W/rt" TMUX_TMPDIR="$W"
+unset TMUX TMUX_PANE FLEET_CLIENT_IDENTITY FLEET_NODE_CLIENT FLEET_NODE_HOSTED FLEET_SHELL_CACHE FLEET_SHELL_SESSION \
       FLEET_NODE_HOSTED_CACHE FLEET_CLIENT_UPDATED FLEET_CLIENT_LAYOUT SSH_CONNECTION
 NHC="$W/tmp/fleet-node-client-$UIDN"     # the temp cache bin/fleet names
 
@@ -90,6 +92,7 @@ mkdir -p "$W/fakert/bin"
 cat > "$W/fakert/bin/fleet-shell.sh" <<EOF
 #!/bin/sh
 printf 'runtime fleet-shell.sh %s|hosted=%s|cache=%s\n' "\$*" "\${FLEET_NODE_HOSTED:-}" "\${FLEET_SHELL_CACHE:-}" >> "$W/calls"
+printf '%s\n' "\${FLEET_SHELL_SESSION:-}" > "$W/sess"
 exit 0
 EOF
 chmod +x "$W/fakert/bin/fleet-shell.sh"
@@ -116,6 +119,13 @@ eq "A fleet claude → exit 3" "$rc" 3
 has "A … says to type fleet or --here" "$out" "敲 fleet 在这台上开客户端，或 fleet claude --here"
 fa -- claude --here
 eq "A fleet claude --here → its road as before" "$calls" "inst fleet-home-session.sh claude --here|hosted=1|cache=$NHC"
+fa FLEET_NODE_HOSTED_SESSION= --
+eq "A … its own tmux server, never the resident client's fleet-shell (#2904)" "$(cat "$W/sess")" fleet-node-client
+# a resident client from before #2702 still running here: the line says how to retire it
+"$REAL_TMUX" -L fleet-shell -f /dev/null new-session -d -s fleet-shell 'sleep 30' 2>/dev/null
+fa --
+"$REAL_TMUX" -L fleet-shell kill-server 2>/dev/null
+has "A … an old resident client's server running: the retire command (#2904)" "$out" "fleet-node-shell-retire.sh --login"
 fa FLEET_NODE_HOSTED_CACHE="$W/elsewhere" --
 has "A FLEET_NODE_HOSTED_CACHE moves the temp cache" "$calls" "cache=$W/elsewhere"
 fa FLEET_NODE_CLIENT=1 --
@@ -175,7 +185,7 @@ has "B … its scripts are the runtime's, no mirror" "$(T show-environment -g FL
 has "B … its top line (剩余 · 模型 · effort, #2717) is the runtime's fleet-topbar.py" "$(TS show-options -gv status-left 2>/dev/null)" "$W/rt/bin/fleet-topbar.py render"
 eq "B … no bin/ copied into the cache" "$(ls -d "$NHC/bin" 2>/dev/null)" ""
 eq "B … nothing under ~/.cache/claude-fleet/shell" "$(ls -d "$W/home/.cache/claude-fleet/shell" 2>/dev/null)" ""
-eq "B … no iTerm2 profile written for the machine's person" "$(ls "$W/home/Library" 2>/dev/null)" ""
+eq "B … no iTerm2 profile written for the machine's person" "$(ls "$W/home/Library/Application Support/iTerm2" 2>/dev/null)" ""
 waitfor 5 test -s "$NHC/tmp/client.where.json"
 has "B the where it leases with: via node-hosted" "$(cat "$NHC/tmp/client.where.json" 2>/dev/null)" '"via": "node-hosted"'
 has "B … caps link only" "$(cat "$NHC/tmp/client.where.json" 2>/dev/null)" '"caps": ["link"]'
