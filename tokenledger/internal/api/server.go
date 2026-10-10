@@ -90,6 +90,9 @@ type Server struct {
 	// sessionsChanged fires on every recorded fleet heartbeat: a held
 	// fleet_sessions long poll (claude-fleet#1526) wakes and reads again.
 	sessionsChanged changeBroadcast
+	// nodesChanged fires on every recorded node heartbeat: the app's push
+	// channel (/v1/fleet/stream, claude-fleet#2794) reads its nodes topic.
+	nodesChanged changeBroadcast
 
 	// Fleet turns on the fleet module (CCQUOTA_FLEET=1, claude-fleet#1408):
 	// the node control channel, the node roster and its page. Off, none of
@@ -434,6 +437,9 @@ func (s *Server) routes() *routeMux {
 		// The Fleet Hub's read tools (claude-fleet#1409), the same ones
 		// /mcp lists when the module is on.
 		mux.Handle("/v1/fleet/", s.viewerOnly(http.HandlerFunc(s.handleFleet)))
+		// The app's push channel (claude-fleet#2794): nodes, sessions and
+		// usage over one SSE connection, each cut like its own route.
+		mux.Handle(FleetStreamPath, s.viewerOnly(http.HandlerFunc(s.handleFleetStream)))
 		// The sidebar's session list (claude-fleet#1475): the same doors,
 		// plus a connection certificate proven by a signed timestamp — so
 		// it authenticates itself, outside the viewer gate, like the routes.

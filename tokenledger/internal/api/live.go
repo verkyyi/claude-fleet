@@ -100,6 +100,9 @@ type Live struct {
 	// zero, not ignorance.
 	startedAt time.Time
 	reported  bool
+	// lastAt is when the last report arrived: the push channel's usage
+	// topic's observed_at (claude-fleet#2794). Zero until one does.
+	lastAt time.Time
 
 	// enrich attaches data Live cannot reach on its own — the durable token
 	// total behind the hero counter, which lives in the store. Snapshots go out
@@ -143,6 +146,7 @@ func (l *Live) report(endpointID, endpointLabel string, in []LiveSession, comple
 	// endpoint that reports "nothing is running here" has told us something, and
 	// from then on an empty picture is a measured zero.
 	l.reported = true
+	l.lastAt = now
 	present := map[string]bool{}
 	for i := range in {
 		s := in[i]
@@ -378,6 +382,14 @@ func (s *Server) attachOSUsers(snap *Snapshot) {
 			snap.Sessions[i].OSUser = u
 		}
 	}
+}
+
+// LastHeard is when the last report arrived — one saying "nothing runs
+// here" too (zero: none since start).
+func (l *Live) LastHeard() time.Time {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return l.lastAt
 }
 
 // subscribe registers a listener for pushed snapshots.

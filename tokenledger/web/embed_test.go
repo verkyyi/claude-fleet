@@ -39,7 +39,7 @@ func TestAssets_AppPagesAreEmbedded(t *testing.T) {
 	if assets == nil {
 		t.Fatal("no dashboard embedded: web/dist/index.html is missing from this checkout")
 	}
-	for _, name := range []string{"app.css", "app-shell.js", "app.html", "app-start.js", "lib/router.js", "lib/shell.js", "lib/pages.js", "lib/admin.js", "lib/sessions-view.js", "lib/devices-view.js"} {
+	for _, name := range []string{"app.css", "app-shell.js", "app.html", "app-start.js", "lib/router.js", "lib/stream.js", "lib/shell.js", "lib/pages.js", "lib/admin.js", "lib/sessions-view.js", "lib/devices-view.js"} {
 		if _, err := fs.Stat(assets, name); err != nil {
 			t.Fatalf("%s is not embedded: %v", name, err)
 		}

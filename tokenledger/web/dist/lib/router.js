@@ -43,8 +43,8 @@ export function intercept(ev, a, origin) {
   return page ? { page, url: u.pathname + u.search + u.hash } : null;
 }
 
-/** timerBag is the timers one page holds: every / after / on, all gone at
- *  clear(). After clear() it starts nothing, so a read that lands after the
+/** timerBag is the timers one page holds: every / after / on (and the
+ *  stream subscriptions it holds), all gone at clear(). After clear() it starts nothing, so a read that lands after the
  *  page was left cannot leave a poll behind. */
 export function timerBag(T = globalThis) {
   const ivs = new Set(), tos = new Set(), offs = new Set();
@@ -62,6 +62,12 @@ export function timerBag(T = globalThis) {
       if (dead || !target) return;
       target.addEventListener(type, fn, opts);
       offs.add(() => target.removeEventListener(type, fn, opts));
+    },
+    /** hold keeps an off() — a stream subscription — to run at clear(). */
+    hold(off) {
+      if (typeof off !== 'function') return;
+      if (dead) { off(); return; }
+      offs.add(off);
     },
     count: () => ivs.size + tos.size + offs.size,
     get dead() { return dead; },
