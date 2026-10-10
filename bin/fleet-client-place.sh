@@ -427,7 +427,15 @@ def self_lines(o):
         if lg != me:
             say = say.replace("在这台运行", "以 %s 登录在这台运行" % lg)
         out.append("%s（%s/%s）没被选：%s" % (who, host, lg, say))
-    if not here and host and node in ("auto", "") and kind != "restore" and (pl.get("candidates") or pl.get("reason")):
+    # Not when this person's sessions are meant to run elsewhere (issue #2953):
+    # a newcomer's client (`solo`, what a fresh install writes) runs them on the
+    # login the hub opened for it, and a candidate of this same login name on
+    # another machine is that place — telling them to `fleet host on` HERE sent
+    # the drill's newcomer after the wrong computer while mini2 said why.
+    elsewhere = os.environ.get("FLEET_CLIENT_LAYOUT") == "solo" or any(
+        isinstance(c, dict) and me and str(c.get("os_user") or "") == me for c in pl.get("candidates") or [])
+    if not here and not elsewhere and host and node in ("auto", "") and kind != "restore" \
+            and (pl.get("candidates") or pl.get("reason")):
         out.append("你这台（%s）不在入口的候选里——没登记成节点，或没有能开它的 fleet（在这台运行 fleet host on）" % host)
     return out
 

@@ -75,7 +75,7 @@ cs_fixture own
 reset_fixture() {
   rm -rf "${WORK:?}/homes/alice" "${WORK:?}/ds/groups" "${WORK:?}/ds/alice.gone" "${WORK:?}"/procs*
   # an archive is named to the second: two quick legs must not meet the last one's
-  rm -f "${ARCH:?}"/alice-*.tar.gz
+  rm -rf "${ARCH:?}"/alice-*.tar.gz "${ARCH:?}"/alice-*.left
   mkdir -p "$FLEET_CONF_DIR/fleets/alice-fleet" "$WORK/homes/alice/Library/LaunchAgents" "$FLEET_CONF_DIR/accounts" "$WORK/ds/groups"
   printf 'FLEET_REPO=example/repo\n' > "$FLEET_CONF_DIR/fleets/alice-fleet/conf"
   printf 'alive\n' > "$FLEET_TEST_LIVE"
@@ -154,6 +154,12 @@ cat > "$WORK/shim/sysadminctl" <<'EOF'
 #!/bin/sh
 printf 'sysadminctl %s\n' "$*" >> "$FLEET_TEST_LOG"
 case " $* " in *' -keepHome '*) echo "'-keepHome' options is not available on this system" >&2; exit 1 ;; esac
+# FAKE_TCC=1: run from the node program, which has no Full Disk Access (#2953):
+# the home goes but for ~/Desktop, the record stays, and it exits 1.
+if [ "$1" = -deleteUser ] && [ "${FAKE_TCC:-0}" = 1 ]; then
+  find "${FLEET_LOGIN_HOMES:?}/${2:?}" -mindepth 1 -maxdepth 1 ! -name Desktop -exec rm -rf {} +
+  echo "sysadminctl: Operation not permitted: ${FLEET_LOGIN_HOMES}/$2/Desktop" >&2; exit 1
+fi
 if [ "$1" = -deleteUser ] && [ "${FAKE_HOME_STAYS:-0}" = 0 ]; then rm -rf "${FLEET_LOGIN_HOMES:?}/${2:?}"; fi
 # A process of the login still alive (the respawned distnoted, #2866), or
 # FAKE_DELETE_HANGS=1: deleteUser hangs — a real one retried for minutes.
@@ -387,6 +393,28 @@ FAKE_RECORD_STAYS=1 FAKE_USER_DELETE_FAILS=1 run alice --delete-home --apply
 [ "$RC" = 1 ] || { cat "$WORK/out" >&2; fail "record that survives dscl: exit $RC (want 1)"; }
 has "$WORK/out" 'is still on this machine' 'a login left on the machine was not said'
 not_has "$WORK/out" 'fleet-login-remove: done' 'a login left on the machine read done'
+
+# deleteUser fails outright — the node program has no Full Disk Access, so TCC
+# keeps ~/Desktop from it, every time (33 of 33 hub-sent removes on mini2,
+# #2953): no longer the end — the record goes with dscl, the home that is left
+# is moved aside out of /Users, and the run ends done.
+reset_fixture
+mkdir -p "$WORK/homes/alice/Desktop"
+FAKE_TCC=1 run alice --delete-home --apply
+[ "$RC" = 0 ] || { cat "$WORK/out" >&2; fail "deleteUser failing on TCC: exit $RC (want 0 once dscl took the record)"; }
+has "$WORK/out" 'sysadminctl -deleteUser alice failed (exit 1)' 'a failed deleteUser was not said'
+has "$FLEET_TEST_LOG" 'dscl . -delete /Users/alice' 'after a failed deleteUser the record was not deleted with dscl'
+[ -e "$WORK/ds/alice.gone" ] || fail 'TCC leg: the record is still there'
+[ ! -e "$WORK/homes/alice" ] || fail 'TCC leg: the leftover home still stands in the homes dir'
+has "$WORK/out" "moved to $ARCH/alice-" 'TCC leg: where the leftover home went was not said'
+ls -d "$ARCH"/alice-*.left/Desktop >/dev/null 2>&1 || fail 'TCC leg: the leftover home was not moved aside whole'
+has "$WORK/out" 'fleet-login-remove: done' 'TCC leg: the run did not end done'
+rm -rf "$ARCH"/alice-*.left
+# … and with the record surviving dscl too: still never done.
+reset_fixture
+FAKE_TCC=1 FAKE_USER_DELETE_FAILS=1 run alice --delete-home --apply
+[ "$RC" = 1 ] || { cat "$WORK/out" >&2; fail "TCC + record surviving dscl: exit $RC (want 1)"; }
+rm -rf "$ARCH"/alice-*.left
 
 # launchd's per-user domain brings distnoted back after the pkill (drill10100326
 # on macmini, #2866): user/<uid> (and gui/<uid> when there is one) is booted

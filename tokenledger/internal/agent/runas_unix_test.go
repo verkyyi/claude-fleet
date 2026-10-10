@@ -106,3 +106,24 @@ func TestStartWhyLeavesOthersAlone(t *testing.T) {
 		t.Fatalf("errno not named or not wrapped: %v", got)
 	}
 }
+
+// claude-fleet#2953: while a remove runs for a login, nothing more starts as
+// it — the held machine agent's own tenant kept reading as the login while
+// fleet-login-remove.sh waited for its processes to stop. Others run on, and
+// the login runs again once the remove is over.
+func TestHoldLoginRefusesItsCommands(t *testing.T) {
+	gone := withRunAs(context.Background(), &RunAs{Login: "drillx", UID: 1, Home: "/nonexistent"})
+	other := withRunAs(context.Background(), &RunAs{Login: "verkyyi", UID: 1, Home: "/nonexistent"})
+	release := holdLogin("drillx")
+	err := prepCmd(gone, exec.Command("/bin/true"))
+	if err == nil || !strings.Contains(err.Error(), "drillx is being removed") {
+		t.Fatalf("prepCmd for a login being removed = %v, want refused", err)
+	}
+	if err := prepCmd(other, exec.Command("/bin/true")); err != nil {
+		t.Fatalf("prepCmd for another login = %v, want it run", err)
+	}
+	release()
+	if err := prepCmd(gone, exec.Command("/bin/true")); err != nil {
+		t.Fatalf("prepCmd after the remove = %v, want it run again", err)
+	}
+}

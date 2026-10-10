@@ -398,7 +398,13 @@ func (a *Agent) handleAccountOp(ctx context.Context, conn nodeLink, m control.Me
 			return
 		}
 		out.OpID = m.OpID
-		log.Printf("control channel: account op %s %s: ok=%v exit=%d", op.Op, op.Login, res.OK, res.Exit)
+		if res.OK {
+			log.Printf("control channel: account op %s %s: ok=%v exit=%d", op.Op, op.Login, res.OK, res.Exit)
+		} else {
+			// What the script last said (claude-fleet#2953): 18 failed removes on
+			// mini2 left only «exit=1» here, and the why was on the hub alone.
+			log.Printf("control channel: account op %s %s: ok=%v exit=%d: %s", op.Op, op.Login, res.OK, res.Exit, accountWhy(res.Detail))
+		}
 		a.acct.deliver(out)
 	}()
 }
@@ -462,6 +468,9 @@ func (a *Agent) runAccountOp(opID string, op control.AccountOp) control.AccountR
 // runAccountScript runs op's script once and reads its exit.
 func (a *Agent) runAccountScript(ctx context.Context, opID string, op control.AccountOp) control.AccountResult {
 	res := control.AccountResult{Op: op.Op, Login: op.Login, Exit: -1}
+	if op.Op == control.AccountRemove {
+		defer holdLogin(op.Login)()
+	}
 	script, args := accountArgv(a.cfg.Home, op)
 	cmd := accountCommand(ctx, script, args...)
 	// The scripts cd to / themselves; starting there too means a sudo -u in
@@ -625,6 +634,22 @@ func (a *Agent) resumeAccountOps() {
 		log.Printf("account ops: %s %s (op %s) settled after the restart: ok=%v exit=%d", f.Op, f.Login, id, res.OK, res.Exit)
 		a.acct.deliver(out)
 	}
+}
+
+// accountWhy is a failed op's last words for the node's log: its last three
+// non-empty lines, joined, at most 600 bytes.
+func accountWhy(detail string) string {
+	var keep []string
+	lines := strings.Split(detail, "\n")
+	for i := len(lines) - 1; i >= 0 && len(keep) < 3; i-- {
+		if l := strings.TrimSpace(lines[i]); l != "" {
+			keep = append([]string{l}, keep...)
+		}
+	}
+	if len(keep) == 0 {
+		return "(no output)"
+	}
+	return tail(strings.Join(keep, " | "), 600)
 }
 
 func tail(s string, n int) string {

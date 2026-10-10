@@ -386,9 +386,13 @@ case "$mode" in
     # pool token file, a pool account's hub credential, Claude Code's own
     # credential file or keychain item, Codex's auth.json), and every hosted
     # repo's checkout. One JSON object on stdout; never an exit status.
+    # gh is asked of a login that hosts a repo only (issue #2953): a login the
+    # hub just opened for a newcomer hosts none and has no GitHub credential —
+    # its first session is a HOME one — and «not ready: gh» kept every session
+    # off it. `gh` still says what gh is; `missing` names what holds it.
     missing=''
     gh_ok=false
-    if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then gh_ok=true; else missing="$missing gh"; fi
+    if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then gh_ok=true; fi
     creds=false
     adir="${FLEET_ACCOUNTS_DIR:-${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/accounts}"
     for f in "$adir"/*; do
@@ -405,15 +409,19 @@ case "$mode" in
     [ "$creds" = true ] || [ -s "${CODEX_HOME:-$HOME/.codex}/auth.json" ] && creds=true
     [ "$creds" = true ] || missing="$missing creds"
     checkouts=true
+    nrepos=0
     while IFS=$'\t' read -r s _c; do
       [ -n "$s" ] || continue
       while IFS= read -r r; do
         [ -n "$r" ] || continue
+        nrepos=$((nrepos + 1))
         m=$( fleet_load_conf "$s" >/dev/null 2>&1; fleet_load_repo_conf "$s" "$r" >/dev/null 2>&1; printf '%s' "${FLEET_MAIN:-}" )
         [ -n "$m" ] && [ -d "$m" ] || { checkouts=false; missing="$missing checkout:$s/${r##*/}"; }
       done < <(fleet_repos "$s" 2>/dev/null)
     done < <(fleet_each_conf)
-    ready=false; [ "$gh_ok" = true ] && [ "$creds" = true ] && [ "$checkouts" = true ] && ready=true
+    gh_met=$gh_ok; [ "$gh_ok" = true ] || [ "$nrepos" -gt 0 ] || gh_met=true
+    [ "$gh_met" = true ] || missing="gh$missing"
+    ready=false; [ "$gh_met" = true ] && [ "$creds" = true ] && [ "$checkouts" = true ] && ready=true
     printf '{"ready":%s,"gh":%s,"creds":%s,"checkouts":%s,"missing":[' "$ready" "$gh_ok" "$creds" "$checkouts"
     sep=''; for w in $missing; do printf '%s"%s"' "$sep" "$w"; sep=','; done
     printf ']}\n'
