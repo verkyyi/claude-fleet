@@ -93,7 +93,11 @@ if command -v script >/dev/null 2>&1; then
   printf '%s\n' "$hook" > "$WORK/hook.conf"
   tmux source-file "$WORK/hook.conf" || fail "ATTACH: the hook line does not parse"
   attach_to() { # attach_to <session> → the session the client sits in a moment later
-    (sleep 4 | script -q /dev/null "$WORK/bin/tmux" attach -t "$1" >/dev/null 2>&1 &)
+    if script --version >/dev/null 2>&1; then   # util-linux: the command is -c's string
+      (sleep 4 | script -qfc "'$WORK/bin/tmux' attach -t '$1'" /dev/null >/dev/null 2>&1 &)
+    else                                         # BSD: the command follows the file
+      (sleep 4 | script -q /dev/null "$WORK/bin/tmux" attach -t "$1" >/dev/null 2>&1 &)
+    fi
     local i s=''
     for i in 1 2 3 4 5 6 7 8 9 10; do
       sleep 0.3
