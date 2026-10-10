@@ -29,6 +29,8 @@
 # `dseditgroup -d` cannot do that once the user record is gone ("Record was not
 # found"); only `dscl . -delete` on the attribute can — without it the name stays
 # in the SSH allow-list forever.
+# Step 1c lets the machine daemon go of a login it took over (#2924) before
+# anything is booted out or killed: it would start its tasks again.
 # Before step 1, in a dry run too: a login that still has entries in the machine
 # daemon's register (`fleet service` / `fleet task`, /var/db/fleet-node/logins/
 # <login>/services) is refused, exit 6, with the `service move` line for each —
@@ -257,6 +259,20 @@ if [ "$APPLY" = 1 ]; then
     printf '%s: WARN %s was not taken off the hub — an admin removes it on the machines page (「移除」), or: fleet-node-revoke.sh <machine>:%s\n' "$PROG" "$LOGIN" "$LOGIN" >&2
   fi
   [ -z "$LCOPY" ] || rm -f "$LCOPY"
+fi
+
+# A login the machine daemon took over (`account adopt`, #2332) has its tasks
+# and children run by root's supervisor, demoted to it: step 4 kills them and
+# the daemon starts them again, three rounds, exit 1 (drill10092351 on mini2,
+# issue #2924). So the daemon lets go of it first — `account forget`: its tasks
+# stop, its accounts.json entry and logins/<login>.env go, its old services stay
+# in the attic, never loaded back for a login about to be gone. Idempotent: a
+# login it never took over prints "nothing". No daemon on this machine, no step.
+step 1c "take $LOGIN out of the machine daemon (account forget)"
+if [ -f "$NODE_SUP" ]; then
+  run sudo /usr/bin/python3 -I "$NODE_SUP" account forget "$LOGIN"
+else
+  printf '  (no machine daemon here: %s)\n' "$NODE_SUP"
 fi
 
 # System shape belongs to this login by label. GUI shape belongs to the login's

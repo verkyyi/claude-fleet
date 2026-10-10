@@ -667,6 +667,55 @@ class H_Accounts(Sandbox):
         self.assertEqual(self.run_sup("account", "manages", "alice").returncode, 1)
         self.assertEqual(self.run_sup("attic", "list").stdout, "")
 
+    def test_forget_stops_tasks_and_never_loads_back(self):
+        # issue #2924: a login being deleted — the daemon lets go of it and loads nothing back
+        la = os.path.join(self.home("alice"), "Library", "LaunchAgents")
+        self.plist(os.path.join(la, "com.claude-fleet.dispatch.plist"), "com.claude-fleet.dispatch")
+        self.acct_script("alice", "keep.sh", "exec sleep 300\n")
+        self.acct_table({"name": "keep", "argv": ["/bin/bash", "__HOME__/.claude/fleet/bin/keep.sh"], "keepalive": True})
+        for who in ("alice", "bob"):
+            self.assertEqual(self.run_sup("account", "adopt", who).returncode, 0)
+        self.start()
+        self.assertTrue(until(5, lambda: self.child("alice/keep").get("pid")), "alice's KeepAlive unit never started")
+        kpid = self.child("alice/keep")["pid"]
+        r = self.run_sup("account", "forget", "alice")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("1 service(s) left in the attic", r.stdout)
+        self.assertFalse(fns.pid_alive(kpid), "forget left the account's KeepAlive unit running")
+        a = json.load(open(os.path.join(self.d, "db", "accounts.json")))
+        self.assertNotIn("alice", a)
+        self.assertTrue(a["bob"]["managed"])
+        self.assertEqual(os.listdir(la), [], "forget put a service back")
+        self.assertNotIn("bootstrap", self.lclog())
+        lst = self.run_sup("attic", "list").stdout
+        self.assertNotIn("kept", lst)
+        idx_p = os.path.join(self.d, "db", "attic", "index.json")
+        idx = json.load(open(idx_p))
+        for e in idx:
+            e["moved"] -= 30 * 86400
+        json.dump(idx, open(idx_p, "w"))
+        self.assertIn("purged 1", self.run_sup("attic", "purge").stdout)
+        r = self.run_sup("account", "forget", "alice")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("nothing", r.stdout)
+
+    def test_release_of_a_gone_login_loads_nothing(self):
+        # issue #2924: release of a login no longer on the machine put its node
+        # agent's LaunchDaemon back, loaded for nobody — now it only forgets it
+        dd = self.env["FLEET_NODE_DAEMON_DIR"]
+        self.plist(os.path.join(dd, "com.claude-fleet.alice.collect.plist"), "com.claude-fleet.alice.collect")
+        self.acct_table()
+        self.assertEqual(self.run_sup("account", "adopt", "alice").returncode, 0)
+        pw = json.load(open(self.env["FLEET_NODE_PASSWD"]))
+        del pw["alice"]
+        json.dump(pw, open(self.env["FLEET_NODE_PASSWD"], "w"))
+        r = self.run_sup("account", "release", "alice")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("not a login on this machine", r.stderr)
+        self.assertFalse(os.path.exists(os.path.join(dd, "com.claude-fleet.alice.collect.plist")))
+        self.assertNotIn("bootstrap", self.lclog())
+        self.assertNotIn("alice", json.load(open(os.path.join(self.d, "db", "accounts.json"))))
+
     def test_slow_unload_is_waited_for(self):
         # m4 (issue #2336): a KeepAlive daemon is still loaded right after its bootout
         dd = self.env["FLEET_NODE_DAEMON_DIR"]

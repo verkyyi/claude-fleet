@@ -576,4 +576,43 @@ run alice --delete-home --apply
 [ "$RC" = 0 ] || { cat "$WORK/out" >&2; fail 'an emptied register still refused'; }
 has "$FLEET_TEST_LOG" 'sysadminctl -deleteUser alice' 'emptied register: the login was not deleted'
 
+# A login the machine daemon took over (#2924): its tasks ran as root's demoted
+# children, step 4 killed them, the daemon started them again — exit 1, three
+# rounds. Now step 1c `account forget`s it before anything is booted out or
+# killed: its accounts.json entry and logins/alice.env go, bob's stay, and the
+# service it kept in the attic is never loaded back (only no longer kept).
+reset_fixture; cs_fixture own
+mkdir -p "$WORK/rt" "$WORK/node/logins" "$WORK/node/attic/a1"
+cp "$BIN/fleet-node-supervisor.py" "$WORK/rt/"
+printf '{"alice": {"managed": true, "since": 1}, "bob": {"managed": true, "since": 1}}\n' > "$WORK/node/accounts.json"
+: > "$WORK/node/logins/alice.env"; : > "$WORK/node/logins/bob.env"
+printf 'plist\n' > "$WORK/node/attic/a1/com.claude-fleet.dispatch.plist"
+AT_SRC="$WORK/homes/alice/Library/LaunchAgents/com.claude-fleet.dispatch.plist"
+printf '[{"id": "a1", "account": "alice", "keep": true, "src": "%s", "dst": "%s", "moved": 1, "uid": 602, "gid": 20, "mode": 420}]\n' \
+  "$AT_SRC" "$WORK/node/attic/a1/com.claude-fleet.dispatch.plist" > "$WORK/node/attic/index.json"
+run alice --delete-home
+[ "$RC" = 0 ] || { cat "$WORK/out" >&2; fail "managed dry run exited $RC"; }
+has "$WORK/out" 'account forget alice' 'the dry run does not show the forget step'
+grep -q '"alice"' "$WORK/node/accounts.json" || fail 'the dry run forgot alice'
+FLEET_NODE_TEST=1 run alice --delete-home --apply
+[ "$RC" = 0 ] || { cat "$WORK/out" >&2; fail "a managed login: exit $RC (want 0)"; }
+python3 - "$FLEET_TEST_LOG" <<'PY2' || fail 'account forget must run before the services are booted out and the processes killed'
+import sys
+log = open(sys.argv[1]).read().splitlines()
+f = next(i for i, l in enumerate(log) if 'account forget alice' in l)
+k = next(i for i, l in enumerate(log) if 'pkill' in l or 'launchctl bootout' in l)
+sys.exit(0 if f < k else 1)
+PY2
+python3 - "$WORK/node/accounts.json" <<'PY2' || fail "accounts.json after the remove: $(cat "$WORK/node/accounts.json")"
+import json, sys
+a = json.load(open(sys.argv[1]))
+sys.exit(0 if "alice" not in a and a.get("bob", {}).get("managed") else 1)
+PY2
+[ ! -e "$WORK/node/logins/alice.env" ] && [ -e "$WORK/node/logins/bob.env" ] || fail 'logins/alice.env left (or bob.env taken)'
+[ ! -e "$AT_SRC" ] || fail 'forget put the attic plist back'
+grep -q '"keep"' "$WORK/node/attic/index.json" && fail 'the attic copy is still kept for a forgotten login'
+has "$WORK/out" 'forgot alice: its tasks stopped, 1 service(s) left in the attic' 'the forget did not report what it did'
+has "$FLEET_TEST_LOG" 'sysadminctl -deleteUser alice' 'managed login: not deleted'
+rm -rf "${WORK:?}/rt" "${WORK:?}/node"
+
 printf 'fleet-login-remove-selftest: PASS\n'

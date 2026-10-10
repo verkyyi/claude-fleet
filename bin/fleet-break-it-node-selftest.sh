@@ -30,6 +30,11 @@
 #   account-adopt-agent-left  bin/fleet-node-supervisor.py `account adopt|release` (#2387):
 #                         the login's own node agent (com.ccquota.agent.<login>) moves
 #                         with it — logins/<login>.env written, the old one in the attic
+#   login-remove-managed  bin/fleet-login-remove.sh step 1c + bin/fleet-node-supervisor.py
+#                         `account forget` (#2924): a login the daemon took over is deleted —
+#                         its demoted tasks came back after every kill, its entry stayed
+#   account-release-gone-login  bin/fleet-node-supervisor.py `account release` (#2924):
+#                         release of a login no longer on the machine loaded its services back
 #   account-op-reload-cut bin/fleet-node-supervisor.py's node-agent `hold` (#2918) +
 #                         tokenledger/internal/agent/node_accounts.go's book
 #                         (account-ops.json): logins/*.env changes while the machine's
@@ -378,6 +383,92 @@ LC
     || { WHY="release did not put every service back and loaded"; return 1; }
   SECS=$(since "$t0")
   WHAT="迁移中一个服务卸不掉：adopt 退 1，已卸的全部放回并重新加载、账号不算托管；卸得掉之后 adopt 成功，release 一条命令全部还原"
+}
+
+# login-remove-managed (#2924): deleting a login the daemon took over — step 4
+# killed its demoted tasks, root's supervisor started them again, three rounds,
+# exit 1 (drill10092351 on mini2); its accounts.json entry outlived the login.
+# Now fleet-login-remove.sh's step 1c `account forget`s it first: the live
+# daemon stops its tasks and starts none again, its entry and env go.
+drill_login_remove_managed() {
+  CAP=15
+  local sb t0 kpid
+  sb="$WORK/forget"; mkdir -p "$sb/Users/alice/.claude/fleet/bin" "$sb/LaunchDaemons"
+  grep -q 'account forget "\$LOGIN"' "$ROOT/bin/fleet-login-remove.sh" \
+    || { WHY="fleet-login-remove.sh no longer has the machine daemon forget the login"; return 1; }
+  [ "$(grep -n 'account forget' "$ROOT/bin/fleet-login-remove.sh" | head -1 | cut -d: -f1)" -lt \
+    "$(grep -n "^step 2 " "$ROOT/bin/fleet-login-remove.sh" | cut -d: -f1)" ] \
+    || { WHY="account forget runs after the services are booted out"; return 1; }
+  printf '{"alice": {"uid": %s, "gid": %s, "home": "%s"}, "bob": {"uid": %s, "gid": %s, "home": "%s"}}\n' \
+    "$(id -u)" "$(id -g)" "$sb/Users/alice" "$(id -u)" "$(id -g)" "$sb/Users/alice" > "$sb/passwd.json"
+  printf '#!/bin/bash\nexec sleep 300\n' > "$sb/Users/alice/.claude/fleet/bin/keep.sh"; chmod +x "$sb/Users/alice/.claude/fleet/bin/keep.sh"
+  printf '{"children": [], "tasks": [], "account": [{"name": "keep", "argv": ["/bin/bash", "__HOME__/.claude/fleet/bin/keep.sh"], "keepalive": true}]}\n' > "$sb/table.json"
+  export FLEET_NODE_STATE="$sb/db" FLEET_NODE_LOG="$sb/log" FLEET_NODE_RUNTIME="$sb/rt" FLEET_NODE_DAEMON_DIR="$sb/LaunchDaemons" \
+    FLEET_NODE_USERS="$sb/Users" FLEET_NODE_TABLE="$sb/table.json" FLEET_NODE_TICK=0.2 FLEET_NODE_LAUNCHCTL='' \
+    FLEET_NODE_TEST=1 FLEET_NODE_PASSWD="$sb/passwd.json"
+  python3 "$BIN/fleet-node-supervisor.py" account adopt alice >/dev/null 2>&1 \
+    && python3 "$BIN/fleet-node-supervisor.py" account adopt bob >/dev/null 2>&1 || { WHY="adopt failed"; _forget_unset; return 1; }
+  python3 -I "$BIN/fleet-node-supervisor.py" run 2>>"$sb/sup.err" &
+  printf '%s\n' "$!" >> "$WORK/cred-pids"
+  _kp() { python3 -c 'import json,sys; print((json.load(open(sys.argv[1])).get("children", {}).get(sys.argv[2]) or {}).get("pid") or "")' \
+           "$sb/db/state.json" "$1" 2>/dev/null; }
+  _has_kp() { [ -n "$(_kp "$1")" ]; }
+  until_ok 10 _has_kp alice/keep || { WHY="alice's task never started: $(tail -2 "$sb/sup.err")"; _forget_unset; return 1; }
+  kpid=$(_kp alice/keep)
+  t0=$(now)
+  python3 "$BIN/fleet-node-supervisor.py" account forget alice >"$sb/forget.out" 2>&1 \
+    || { WHY="account forget failed: $(cat "$sb/forget.out")"; _forget_unset; return 1; }
+  kill -0 "$kpid" 2>/dev/null && { WHY="alice's task still runs after forget"; _forget_unset; return 1; }
+  sleep 1
+  [ -z "$(_kp alice/keep)" ] || ! kill -0 "$(_kp alice/keep)" 2>/dev/null \
+    || { WHY="the daemon started alice's task again after forget"; _forget_unset; return 1; }
+  python3 -c 'import json,sys; a=json.load(open(sys.argv[1])); sys.exit(0 if "alice" not in a and a["bob"]["managed"] else 1)' \
+    "$sb/db/accounts.json" || { WHY="accounts.json still holds alice (or lost bob)"; _forget_unset; return 1; }
+  [ -n "$(_kp bob/keep)" ] || { WHY="forget stopped bob's task too"; _forget_unset; return 1; }
+  SECS=$(since "$t0")
+  _forget_unset
+  WHAT="删托管账号前先 account forget：守护停掉它降权跑的任务、不再拉起，accounts.json / logins env 摘掉，别的账号不动"
+}
+_forget_unset() {
+  unset FLEET_NODE_STATE FLEET_NODE_LOG FLEET_NODE_RUNTIME FLEET_NODE_DAEMON_DIR FLEET_NODE_USERS FLEET_NODE_TABLE \
+    FLEET_NODE_TICK FLEET_NODE_LAUNCHCTL FLEET_NODE_TEST FLEET_NODE_PASSWD
+}
+
+# account-release-gone-login (#2924): `account release` of a login already
+# deleted put its node agent's LaunchDaemon back and loaded it — a daemon for a
+# user that is not there, exiting 1 forever (drill10092257 on macmini). Now a
+# release of a login not on the machine loads nothing and only forgets it.
+drill_account_release_gone_login() {
+  CAP=10
+  local sb dd t0
+  sb="$WORK/relgone"; dd="$sb/LaunchDaemons"; mkdir -p "$dd" "$sb/lc/loaded" "$sb/Users/alice"
+  printf '{"alice": {"uid": %s, "gid": %s, "home": "%s"}}\n' "$(id -u)" "$(id -g)" "$sb/Users/alice" > "$sb/passwd.json"
+  cat > "$sb/launchctl" <<'LC'
+#!/bin/bash
+d="$FAKE_LC"; echo "$*" >> "$d/log"
+case "$1" in
+  bootout) rm -f "$d/loaded/${2##*/}" ;;
+  bootstrap) touch "$d/loaded/$(basename "$3" .plist)" ;;
+  print) [ -e "$d/loaded/${2##*/}" ] ;;
+esac
+LC
+  chmod +x "$sb/launchctl"
+  python3 -c 'import plistlib, sys; plistlib.dump({"Label": "com.claude-fleet.alice.collect", "ProgramArguments": ["/bin/true"]}, open(sys.argv[1], "wb"))' \
+    "$dd/com.claude-fleet.alice.collect.plist"
+  : > "$sb/lc/loaded/com.claude-fleet.alice.collect"
+  printf '{"account": []}\n' > "$sb/table.json"
+  sup() { FLEET_NODE_STATE="$sb/db" FLEET_NODE_LOG="$sb/log" FLEET_NODE_RUNTIME="$sb/rt" FLEET_NODE_DAEMON_DIR="$dd" \
+          FLEET_NODE_USERS="$sb/Users" FLEET_NODE_TABLE="$sb/table.json" FLEET_NODE_TEST=1 FLEET_NODE_PASSWD="$sb/passwd.json" \
+          FLEET_NODE_LAUNCHCTL="$sb/launchctl" FLEET_NODE_BOOTOUT_WAIT=1 FAKE_LC="$sb/lc" python3 "$BIN/fleet-node-supervisor.py" "$@"; }
+  sup account adopt alice >/dev/null 2>&1 || { WHY="adopt failed"; return 1; }
+  printf '{}\n' > "$sb/passwd.json"      # the login is deleted
+  t0=$(now)
+  sup account release alice >"$sb/rel.out" 2>&1 || { WHY="release of a gone login failed: $(cat "$sb/rel.out")"; return 1; }
+  [ ! -e "$dd/com.claude-fleet.alice.collect.plist" ] && [ ! -e "$sb/lc/loaded/com.claude-fleet.alice.collect" ] \
+    || { WHY="release put a gone login's service back and loaded it"; return 1; }
+  grep -q '"alice"' "$sb/db/accounts.json" && { WHY="release left the gone login in accounts.json"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="对已删掉的登录 account release：不装回、不加载任何 plist，只把它从 accounts.json 摘掉"
 }
 
 # tenant-admin-adopted (#2842): what a session may destroy is its login's ability,

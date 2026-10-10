@@ -110,6 +110,11 @@ Usage:
   fleet-node-supervisor.py account [list | adopt <login> | release <login> [--force] | manages <login>]
                                                the account half (#2332); manages: exit 0 = this
                                                daemon runs <login>'s tasks (install-apply, doctor)
+  fleet-node-supervisor.py account forget <login> [--force]
+                                               a login being DELETED (fleet-login-remove.sh, #2924):
+                                               its tasks stop, its entry and logins/<login>.env go,
+                                               its attic copies are never loaded back; release of a
+                                               login no longer on the machine does only this
   fleet-node-supervisor.py account adopt <login> --rejoin
                                                a new node token for <login> (issue #2501): its
                                                device key asks the hub (`fleet-login.py
@@ -2491,6 +2496,13 @@ def account_release(paths, login, force=False):
     # (the daemon keeps running them as <login>)
     if not force and service_refuse_left(paths, login, "account release %s" % login):
         return SVC_LEFT_RC
+    # a login no longer on this machine has nothing to come back to (#2924): its
+    # old services would run for nobody — the agent's plist loaded, exiting 1
+    # forever. Only its entry goes.
+    if account_ident(login) is None:
+        print("fleet-node-supervisor: %s is not a login on this machine — nothing put back, forgetting it"
+              % login, file=sys.stderr)
+        return account_forget(paths, login, force=force)
     a = accounts_read(paths)
     if not (a.get(login) or {}).get("managed"):
         print("fleet-node-supervisor: %s is not managed" % login, file=sys.stderr)
@@ -2522,6 +2534,51 @@ def account_release(paths, login, force=False):
             back += 1
         write_json(paths.attic_index, index, 0o600)
     print("released %s: %d service(s) put back and loaded" % (login, back))
+    return 0
+
+
+def account_forget(paths, login, force=False):
+    """A login on its way OUT (fleet-login-remove.sh, issue #2924): stop running
+    as it and forget it — its entry leaves accounts.json, its logins/<login>.env
+    goes, the daemon's tasks and children for it stop, and its services stay in
+    the attic (no longer kept: the 7-day purge takes them), never loaded again.
+    Idempotent: a login this daemon never took over prints so and exits 0."""
+    if os.geteuid() != 0 and env("FLEET_NODE_TEST", "") != "1":
+        print("fleet-node-supervisor: account forget stops %s's tasks — run it as root (sudo)" % login,
+              file=sys.stderr)
+        return 1
+    if not force and service_refuse_left(paths, login, "account forget %s" % login):
+        return SVC_LEFT_RC
+    a = accounts_read(paths)
+    had = login in a
+    if had:
+        del a[login]
+        _accounts_write(paths, a)
+    gone_env = remove_login_env(paths, login)
+    sv = read_json(paths.state_file, {}).get("supervisor") or {}
+    if pid_alive(sv.get("pid")):
+        end = now() + env_num("FLEET_NODE_RELEASE_WAIT", 20)
+        while now() < end and (_account_running(paths, login) or (gone_env and _node_agent_stale(paths))):
+            time.sleep(0.2)
+        if _account_running(paths, login):
+            print("fleet-node-supervisor: %s's tasks still run %ss on — the daemon has not dropped them"
+                  % (login, env_num("FLEET_NODE_RELEASE_WAIT", 20)), file=sys.stderr)
+            return 1
+    left = 0
+    with attic_lock(paths):
+        index = read_json(paths.attic_index, [])
+        for e in index:
+            if e.get("account") == login and e.get("keep"):
+                e.pop("keep", None)
+                e["moved"] = now()      # the purge's clock starts at the forget
+                left += 1
+        if left:
+            write_json(paths.attic_index, index, 0o600)
+    if not (had or gone_env or left):
+        print("forgot %s: nothing — this daemon never took it over" % login)
+        return 0
+    print("forgot %s: its tasks stopped, %d service(s) left in the attic (purged in %d days), not loaded"
+          % (login, left, env_num("FLEET_NODE_ATTIC_DAYS", 7)))
     return 0
 
 
@@ -3291,6 +3348,8 @@ def main(argv):
             return account_adopt(paths, rest[1], dry="--dry-run" in rest, rejoin="--rejoin" in rest)
         if sub == "release" and len(rest) > 1:
             return account_release(paths, rest[1], force="--force" in rest)
+        if sub == "forget" and len(rest) > 1:
+            return account_forget(paths, rest[1], force="--force" in rest)
     if cmd == "tenants":
         cur = tenants_now(paths, read_json(paths.state_file, {}))
         bad = cur["bad"]
@@ -3363,7 +3422,7 @@ def main(argv):
             print("purged %d" % n)
             return 0
     print("usage: fleet-node-supervisor.py run|tick|status [--json|--check]|sweep [--dry-run]|"
-          "attic [list|restore <id>|purge]|account [list|adopt|release|manages <login>]|tenants [--json|--check]|"
+          "attic [list|restore <id>|purge]|account [list|adopt|release|forget|manages <login>]|tenants [--json|--check]|"
           "install|uninstall",
           file=sys.stderr)
     return 2
