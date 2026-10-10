@@ -101,11 +101,11 @@ eq "B: failed → 失败了, with a sound" 1 "$(grep -c '^#7 失败了|m5|1$' "$
 # ============================================================================ C
 E=',"epic":"o/r#2756:1/3"'
 answer "$(row issue-1909 working '' '' "$E")" "$(row issue-7 working '' '' "$E")" "$(row issue-8 working)"; round
-answer "$(row issue-1909 done '' '' "$E")" "$(row issue-7 working '' '' "$E")" "$(row issue-8 working)"; round; settle 6
+answer "$(row issue-1909 'done' '' '' "$E")" "$(row issue-7 working '' '' "$E")" "$(row issue-8 working)"; round; settle 6
 eq "C: working → done: 做完, no sound" "#1909 做完了|m5|" "$(last)"
-answer "$(row issue-1909 done '' '' "$E")" "$(row issue-7 done '' '' "$E")" "$(row issue-8 working)"; round; settle 7
+answer "$(row issue-1909 'done' '' '' "$E")" "$(row issue-7 'done' '' '' "$E")" "$(row issue-8 working)"; round; settle 7
 eq "C: the same batch within 10 minutes → its one notification grown" "#2756 做完了 2 个|最新：#7 · m5|" "$(last)"
-answer "$(row issue-1909 done '' '' "$E")" "$(row issue-7 done '' '' "$E")" "$(row issue-8 done)"
+answer "$(row issue-1909 'done' '' '' "$E")" "$(row issue-7 'done' '' '' "$E")" "$(row issue-8 'done')"
 FLEET_NOTIFY_DONE=0 round; sleep 0.5
 eq "C: FLEET_NOTIFY_DONE=0 → no 做完" 7 "$(lines)"
 has "C: …logged as a skip" "$(tail -1 "$WORK/notify.ndjson")" '"skip": "done-off"'
@@ -123,8 +123,8 @@ eq "D: …and nothing to the phone" "" "$(cat "$WORK/phone")"
 
 # ============================================================================ E
 O='"role":"orchestrator"'
-answer "$(row issue-1909 needs ask '夜里的问题')" "$(row issue-90 done '' '' ",$O")"; round
-answer "$(row issue-1909 needs ask '夜里的问题')" "$(row issue-90 done '' '' ",$O,\"orch_decide\":2")"; round; settle 9
+answer "$(row issue-1909 needs ask '夜里的问题')" "$(row issue-90 'done' '' '' ",$O")"; round
+answer "$(row issue-1909 needs ask '夜里的问题')" "$(row issue-90 'done' '' '' ",$O,\"orch_decide\":2")"; round; settle 9
 eq "E: the orchestrator's decide=N going red → 有事要你定" "编排会话 有事要你定|决定单 2 行 · m5|1" "$(last)"
 
 # ============================================================================ F
