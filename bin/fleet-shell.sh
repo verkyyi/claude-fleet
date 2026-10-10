@@ -225,6 +225,27 @@ client_where() {
   fi
   return 0
 }
+# clip_hint — a copy made in a session reaches the person's clipboard as OSC 52
+# (conf/tmux-shell.conf, issue #2758); a terminal that does not take it (Termius,
+# macOS Terminal) or one we cannot name (通用终端 — a phone's, often) gets ONE
+# line on its own bar at the attach: how to copy with the terminal itself. The
+# terminal is the one client_open saved for this tty (fleet-client-lease.py).
+clip_reach() {  # <terminal name> → rc 0 when it is known to take OSC 52
+  case "$(printf '%s' "$1" | tr 'A-Z' 'a-z')" in
+    *iterm*|*blink*|*ghostty*|*kitty*|*wezterm*|*alacritty*|*foot*|*contour*) return 0 ;;
+  esac
+  return 1
+}
+clip_hint() {
+  local tt f term
+  tt=$(tty 2>/dev/null) || return 0
+  case "$tt" in /dev/*) ;; *) return 0 ;; esac
+  f=$(where_file "$tt")
+  term=$(sed -n 's/.*"terminal": *"\([^"]*\)".*/\1/p' "$f" 2>/dev/null | head -n 1)
+  clip_reach "$term" && return 0
+  T run-shell -b "sleep 2; tmux display-message -c $(sq "$tt") -d 10000 $(sq "$(sh "$BIN/fleet-ui-lang.sh" t clip_hint 2>/dev/null)") 2>/dev/null || :" 2>/dev/null
+  return 0
+}
 # this_machine <host-label> — is that machine THIS computer? (its hostname, or
 # FLEET_NODE_ALIASES mapping this hostname to that label)
 this_machine() {
@@ -1965,6 +1986,7 @@ if T has-session -t "=$SESS" 2>/dev/null; then
   ( nohup bash "$SHADOW/fleet-shell.sh" actions "$SESS" </dev/null >/dev/null 2>&1 & )
   first_home
   client_where
+  clip_hint
   [ "${FLEET_SHELL_NO_ATTACH:-0}" = 1 ] && { printf '%s\n' "$SESS"; exit 0; }
   attach_client
 fi
@@ -2055,5 +2077,6 @@ client_open
 first_home
 solo_resume "$solo_key" "$solo_since"
 client_where
+clip_hint
 [ "${FLEET_SHELL_NO_ATTACH:-0}" = 1 ] && { printf '%s\n' "$SESS"; exit 0; }
 attach_client

@@ -303,9 +303,11 @@ def summary(root):
 def iterm_clipboard():
     """The `clipboard` row (issue #1766): text selected in another machine's
     session reaches this computer as OSC 52, which iTerm2 drops unless
-    「Applications in terminal may access clipboard」 is on. Advice only —
-    never counted in the exit code, never changed for the person. None = no
-    iTerm2 here (not macOS, or never run), so no row."""
+    「Applications in terminal may access clipboard」 is on. The client turns
+    it on once at its start (fleet-iterm-profile.py write, issue #2758); this
+    row only reads it — a WARN means the person turned it off since. Never
+    counted in the exit code. None = no iTerm2 here (not macOS, or never run),
+    so no row."""
     val = os.environ.get("FLEET_ITERM_CLIPBOARD")  # selftest seam
     if val is None:
         plist = os.path.expanduser("~/Library/Preferences/com.googlecode.iterm2.plist")

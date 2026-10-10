@@ -137,6 +137,48 @@ around the popup. The popups' own frame has a background of its own (the
 palette's `PAL_BG`, `fleet_popup_draw`), so no cell inside is the terminal's
 default.
 
+## 复制 — a copy made in a session lands on your device (issues #1766, #2758)
+
+Text you select in a session, and text the session copies for you (Claude Code's
+own copy), goes into the clipboard of the device you are typing on — not the
+machine the session runs on.
+
+- **How it travels.** The copy is made by the tmux nearest the text (the
+  machine's fleet session, `conf/tmux-attention.conf`; or the client's own when
+  you are in its copy-mode), which writes it as OSC 52 to its terminal. Each tmux
+  further out — the stage (`conf/tmux-shell-stage.conf`), the client
+  (`conf/tmux-shell.conf`) — says `set-clipboard on`, so it passes it on, and
+  gives every terminal `Ms` (`terminal-overrides[92]`), so it sends one even to a
+  terminal tmux has no clipboard row for. A program's own OSC 52, raw or wrapped
+  as tmux passthrough, takes the same road.
+- **Drag to select.** Press, drag, release: the release copies (tmux's
+  `MouseDragEnd1Pane` → `copy-pipe-and-cancel`). Double-click copies a word. In
+  copy-mode (prefix `[`), `y` and `↵` copy and close it. A session that takes the
+  mouse itself (Claude Code's own selection) copies with its own OSC 52.
+- **iTerm2** drops every OSC 52 unless *Settings → General → Selection →
+  「Applications in terminal may access clipboard」* is on, which it is not by
+  default. That setting is iTerm2-wide (there is no per-profile one), so the
+  client turns it on ONCE at its start (`fleet-iterm-profile.py write`) and
+  leaves a mark (`~/.config/claude-fleet/iterm-clipboard`); turn it off
+  afterwards and it stays off — `fleet doctor`'s `clipboard` row then WARNs and
+  says where it is.
+- **A terminal that may not take it** — Termius, macOS Terminal, or one the
+  client cannot name (`通用终端`) — gets one line on its own bar when it attaches:
+  copy with the terminal itself (⌥-drag on a Mac, long-press on an iPad or a
+  phone).
+
+| Terminal | Select in a session → clipboard | Claude's copy |
+|---|---|---|
+| iTerm2 (Mac) | yes, once the permission is on (the client turns it on) | yes |
+| Blink (iPad) | yes | yes |
+| Termius (phone) | no OSC 52 — long-press to select with Termius itself | no |
+| macOS Terminal | no OSC 52 — ⌥-drag to select with Terminal itself | no |
+
+`bin/clipboard-osc52-selftest.sh` runs the three servers on isolated sockets: a
+copy-mode copy, a real mouse drag typed into the outer terminal, a program's own
+OSC 52 (raw and passthrough) and an outer terminal with no `Ms` of its own all
+arrive as OSC 52; the iTerm2 permission's once-only rule; the doctor row.
+
 ## Where the state lives
 
 Per client computer, under `$XDG_STATE_HOME/claude-fleet`

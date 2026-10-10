@@ -27,6 +27,19 @@ after — so outside the client iTerm2 behaves as it always did. Nothing happens
 off a Mac, or on a Mac with no iTerm2 (no ~/Library/Application Support/iTerm2):
 `status` says `no-iterm`, `write` writes nothing. FLEET_ITERM_KEYS=0 removes it
 and keeps it away.
+
+`write` also lets programs in the terminal set the clipboard (issue #2758): a copy
+made in a session reaches the Mac as OSC 52, and iTerm2 drops one unless
+「Applications in terminal may access clipboard」 (Settings → General → Selection,
+the preference `AllowClipboardAccess`) is on — off by default. It is APP-WIDE:
+iTerm2 reads it for every OSC 52 / OSC 1337 Copy and has no per-profile key, so
+it cannot live in this profile. So `write` turns it on ONCE (`defaults write`,
+which the running iTerm2 picks up at once) and leaves a mark
+(~/.config/claude-fleet/iterm-clipboard; FLEET_ITERM_CLIP_MARK overrides): a
+person who turns it off afterwards keeps it off — the doctor's `clipboard` row
+(fleet-agent-bundle.py) then says where to turn it back on. With FLEET_ITERM_DIR
+set (a selftest) it touches iTerm2's preferences only through FLEET_ITERM_PREFS,
+never the real ones.
 """
 import json
 import os
@@ -125,6 +138,63 @@ def build(existing=None):
     return {"Profiles": [profile]}
 
 
+CLIP_KEY = "AllowClipboardAccess"
+
+
+def clip_mark():
+    return Path(os.environ.get("FLEET_ITERM_CLIP_MARK") or
+                os.path.expanduser("~/.config/claude-fleet/iterm-clipboard"))
+
+
+def clip_read():
+    """(readable, value): value None when unset."""
+    test = os.environ.get("FLEET_ITERM_PREFS")
+    if test:
+        try:
+            with open(test, "rb") as f:
+                return True, plistlib.load(f).get(CLIP_KEY)
+        except Exception:
+            return False, None
+    r = subprocess.run(["defaults", "read", "com.googlecode.iterm2", CLIP_KEY],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        return True, None  # the key is not there: iTerm2's default, off
+    return True, r.stdout.strip() in ("1", "true", "YES")
+
+
+def clip_on():
+    test = os.environ.get("FLEET_ITERM_PREFS")
+    if test:
+        with open(test, "rb") as f:
+            data = plistlib.load(f)
+        data[CLIP_KEY] = True
+        with open(test, "wb") as f:
+            plistlib.dump(data, f)
+        return True
+    r = subprocess.run(["defaults", "write", "com.googlecode.iterm2", CLIP_KEY, "-bool", "true"],
+                       capture_output=True)
+    return r.returncode == 0
+
+
+def clipboard():
+    """Turn iTerm2's clipboard permission on once (see the docstring)."""
+    if os.environ.get("FLEET_ITERM_DIR") and not os.environ.get("FLEET_ITERM_PREFS"):
+        return  # a selftest's profile dir: never the real preferences
+    mark = clip_mark()
+    if mark.exists():
+        return  # done once; whatever it is now is the person's
+    readable, val = clip_read()
+    if not readable:
+        return
+    try:
+        if val is not True and not clip_on():
+            return
+        mark.parent.mkdir(parents=True, exist_ok=True)
+        mark.write_text("AllowClipboardAccess turned on by fleet-iterm-profile.py (issue #2758)\n")
+    except Exception:
+        return
+
+
 def current():
     try:
         return json.loads(profile_path().read_text())
@@ -137,6 +207,7 @@ def write():
         return remove()
     if not has_iterm():
         return 0
+    clipboard()
     old = current()
     old_profile = (old or {}).get("Profiles", [{}])[0] if old else {}
     text = json.dumps(build(old_profile), indent=2, ensure_ascii=False, sort_keys=True) + "\n"
