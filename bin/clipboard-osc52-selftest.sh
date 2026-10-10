@@ -35,6 +35,11 @@
 #             copy-pipe-and-cancel in both copy-mode tables (a copy made in its
 #             own copy-mode leaves the same way); the node conf binds none
 #             (fleet-keys-selftest.sh leg 8 — the node only opens capabilities).
+#   J. hint   a terminal that may not take a copy (Termius, macOS Terminal, one
+#             the client cannot name) reads how to copy on its own bar for a
+#             moment: status-left shows @fleet_clip_hint_text to the ttys in
+#             @fleet_clip_hint — never a display-message, which would keep a
+#             popup (the standby screen, ⌘P) from drawing while it shows.
 #   I. own    the program in the node's pane copies by itself (Claude Code's own
 #             copy): an OSC 52 it writes — raw, or as tmux passthrough (the node
 #             conf's allow-passthrough) — reaches the outer terminal too.
@@ -106,6 +111,17 @@ for tbl in copy-mode copy-mode-vi; do
 done
 grep -Eq '^[[:space:]]*bind(-key)?[[:space:]]+-T[[:space:]]+copy-mode' "$REPO/conf/tmux-attention.conf" \
   && bad "G the node conf binds a copy-mode key (it may only open capabilities)" || ok "G the node conf binds no copy-mode key"
+
+# --- J. the hint for a terminal that may not take a copy (fleet-shell.sh clip_hint)
+grep -q '^set -g status-left .*#{m:\*|#{client_tty}|\*,#{@fleet_clip_hint}}' "$REPO/conf/tmux-shell.conf" \
+  && ok "J the bar shows @fleet_clip_hint_text to the ttys in @fleet_clip_hint" || bad "J status-left does not read @fleet_clip_hint"
+body=$(sed -n '/^clip_hint()/,/^}/p' "$BIN/fleet-shell.sh")
+case "$body" in
+  *display-message*) bad "J clip_hint uses display-message (a message keeps a popup from drawing)" ;;
+  *@fleet_clip_hint*) ok "J clip_hint writes the bar's option, never a message" ;;
+  *) bad "J clip_hint not found in fleet-shell.sh" ;;
+esac
+[ "$(sh "$BIN/fleet-ui-lang.sh" t clip_hint)" != clip_hint ] && ok "J the words come from fleet-ui-lang.sh (clip_hint)" || bad "J fleet-ui-lang.sh has no clip_hint"
 
 # --- H. the iTerm2 permission ---------------------------------------------------
 HW="$(mktemp -d /tmp/cliph.XXXXXX)" || exit 2
