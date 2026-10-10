@@ -102,6 +102,21 @@ export type Patrol = {
   newAsks: number
   closed: number
   defaulted: number
+  /** The rest of what the patrol panel shows (issue #2834). */
+  drivers: number
+  openRows: number
+  events: number
+  /** Today's closes (the beat's local day): answered by the steward, by their default. */
+  bySteward: number
+  byDefault: number
+  /** What is handed to the person: open sheet groups (a row's `group`, else one a row). */
+  groups: number
+  health: number
+  /** The newest active health finding's first sentence ('' when none). */
+  healthTop: string
+  deferred: number
+  /** The steward page's URL ('' when none). */
+  page: string
 }
 
 export type Todo = { open: number; desk: string }

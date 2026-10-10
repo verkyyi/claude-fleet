@@ -31,6 +31,9 @@
 #   J  the decide count travels: orchdec=2 → orch_decide 2 → `decide=2` → red;
 #      the park count beside it (issue #2671): @orch_park → orchpark= (the last
 #      tag) → orch_park → `park=N`
+#   M  who closed a row (issue #2834): rows[id].by is steward · person · default,
+#      today's counts carry the default too; a state file written before the field
+#      (no `by` on any row) still beats
 #   L  the panels' change stamp: every State.save() moves global/steward.stamp
 #      (`<seq> <epoch_ms>`, issue #2835) by exactly one
 #   K  the health watch (bin/fleet_steward_health.py, fleet-doctor.sh --json,
@@ -187,6 +190,21 @@ TICK beat --force >/dev/null 2>&1
 nd=$(grep -c 'by=default' "$ST_GH/o-r-15.json")
 [ "$nd" = 1 ] && grep -q 'fleet:default-decided' "$ST_GH/o-r-100.json" \
   && ok "D: a due row answered by its default once + 默认拍板 on the parent" || bad "D: defaults posted $nd times"
+
+# M — who closed a row (issue #2834): the patrol panel's 自答 / 默认拍板 count
+by_of() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["rows"][sys.argv[2]].get("by", "-"))' "$STATE" "$1"; }
+r15=$(rowid 日志)
+ndef=$(python3 -c 'import json,sys,time; d=json.load(open(sys.argv[1])); print(d["counts"][time.strftime("%Y-%m-%d")].get("default", 0))' "$STATE")
+[ "$(by_of "$r11")" = steward ] && [ "$(by_of "$r12")" = person ] && [ "$(by_of "$r15")" = default ] && [ "$ndef" = 1 ] \
+  && ok "M: rows[id].by — steward · person · default, today's counts carry the default" \
+  || bad "M: by r11=$(by_of "$r11") r12=$(by_of "$r12") r15=$(by_of "$r15") default count=$ndef"
+python3 -c 'import json,sys
+d=json.load(open(sys.argv[1]))
+for r in d["rows"].values(): r.pop("by", None)
+json.dump(d, open(sys.argv[1], "w"))' "$STATE"
+TICK beat --force >"$WORK/out" 2>&1; rc=$?
+case "$rc" in 0|1) ok "M: a state file with no \`by\` on any row still beats (rc $rc)" ;;
+  *) bad "M: an old state file broke the beat rc=$rc: $(cat "$WORK/out")" ;; esac
 
 # E — a write storm: budget 3, five answers
 for i in 21 22 23 24 25; do ask "$i" "问题 ${i}？" --suggest 是 --due 4h; needs "$i"; done

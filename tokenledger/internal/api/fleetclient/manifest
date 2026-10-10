@@ -199,6 +199,7 @@ mod/fleet/hooks/lifecycle.ts
 mod/fleet/hooks/orchestrator.ts
 mod/fleet/hooks/panels-model.ts
 mod/fleet/hooks/panels.ts
+mod/fleet/hooks/patrol.tsx
 mod/fleet/hooks/progress-model.ts
 mod/fleet/hooks/progress.tsx
 mod/fleet/hooks/qd.tsx

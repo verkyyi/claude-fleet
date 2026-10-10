@@ -166,7 +166,8 @@ test('panelsWanted: orchestrator and steward only, a fleet session, not switched
 
 test('panels: an unchanged stamp reads nothing; a moved stamp reads once and updates the state', async ($, on) => {
   fresh()
-  const { stats, reads, registered, put, clock } = engine(on, 'steward')
+  // the orchestrator: in the steward's window bare /sheet opens the patrol (patrol.tsx)
+  const { stats, reads, registered, put, clock } = engine(on, 'orchestrator')
   seed(put)
   await $.session.start(START)
   expect(registered).toContain(SHEET_COMMAND)

@@ -19,6 +19,7 @@ import { registerCompose } from './compose'
 import { registerExitGuard } from './exit-guard'
 import { registerLifecycle } from './lifecycle'
 import { registerPanels } from './panels'
+import { registerPatrol } from './patrol'
 import { registerProgress } from './progress'
 import { registerQuickDispatch } from './qd'
 import { registerQueue } from './queue'
@@ -36,5 +37,6 @@ export const register: Register = on => {
   registerExitGuard(on)
   registerQuickDispatch(on)
   registerQueue(on)
+  registerPatrol(on)
   registerPanels(on)
 }
