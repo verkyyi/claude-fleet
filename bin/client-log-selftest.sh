@@ -104,7 +104,7 @@ grep -q 'ghp_SECRET' "$LOGS/connect.log" && bad "C the token reached connect.log
 
 # ── D — rotation ──────────────────────────────────────────────────────────────
 pad=$(python3 -c 'print("x" * 1000)')
-for i in $(seq 1 330); do fleet_clientlog keeper renew - - "" ok "$pad"; done
+for _ in $(seq 1 330); do fleet_clientlog keeper renew - - "" ok "$pad"; done
 FLEET_CLIENT_LOG_MAX=524288 python3 - "$BIN" "$pad" <<'EOF'
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("cl", sys.argv[1] + "/fleet_clientlog.py")
