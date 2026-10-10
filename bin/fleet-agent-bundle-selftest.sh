@@ -122,14 +122,16 @@ n=$(grep -c '^\[mcp_servers\.' "$H/.codex/config.toml" 2>/dev/null)
 # The sandbox install names no version (FLEET_INSTALL_SRC, no .client-version —
 # the installer's selftest seam), and the doctor rightly WARNs on that (#2145):
 # that WARN must be the ONLY thing short of PASS (#2183) ...
-doc=$(env -i PATH="$SYS_PATH" HOME="$H" FLEET_STABLE_API="file://$WORK/stable-api" "$H/.local/bin/fleet" doctor 2>&1); rc=$?
+# (FLEET_NOTIFY=0: the macOS notify row WARNs on a box with no terminal-notifier
+# — the machine's, not the package's — #2868)
+doc=$(env -i PATH="$SYS_PATH" HOME="$H" FLEET_NOTIFY=0 FLEET_STABLE_API="file://$WORK/stable-api" "$H/.local/bin/fleet" doctor 2>&1); rc=$?
 [ "$rc" = 1 ] && [ "$(printf '%s\n' "$doc" | grep -cv '^ *PASS ')" = 1 ] && printf '%s\n' "$doc" | grep >/dev/null '^ *WARN  fleet .*没有 .client-version' \
   && ok "B unversioned sandbox: the doctor's one WARN is the missing .client-version (#2145)" || bad "B unversioned doctor rc=$rc: $doc"
 # ... and with the mark a line install writes (following a fake stable over
 # file://, never the network) the doctor is all PASS.
 printf '%s\n' 0123456789abcdef0123456789abcdef01234567 > "$WORK/stable-api"
 printf 'version=0123456789abcdef0123456789abcdef01234567\ncompat=\ncommit=0123456\nhub=\nat=%s\n' "$(date +%s)" > "$R/.client-version"
-doc=$(env -i PATH="$SYS_PATH" HOME="$H" FLEET_STABLE_API="file://$WORK/stable-api" "$H/.local/bin/fleet" doctor 2>&1); rc=$?
+doc=$(env -i PATH="$SYS_PATH" HOME="$H" FLEET_NOTIFY=0 FLEET_STABLE_API="file://$WORK/stable-api" "$H/.local/bin/fleet" doctor 2>&1); rc=$?
 [ "$rc" = 0 ] && printf '%s\n' "$doc" | grep >/dev/null 'PASS  agents   4/4 · hooks .* · skills .* · mcp ok · mod ' \
   && ok "B fleet doctor: $(printf '%s' "$doc" | sed 's/^ *//')" || bad "B fleet doctor rc=$rc: $doc"
 
