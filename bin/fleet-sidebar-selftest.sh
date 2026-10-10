@@ -117,7 +117,7 @@ assert sidebar.fold_now(frows, 'wid:m4/x', 'collapse', '@9', fcache)[1] is None
 # producer's fields 9-15 — machine · issue · PR · ctx% · cfg · reap — are the
 # bar's, for the highlighted row (detail_line → @fleet_hint_name).
 r12 = sidebar.row_fields('\x1f'.join(['@1', 'working', '·', 'issue-1532', ' ', '', '0', '', 'm4', '#1532', '#1552✓', '45%', '', '', 'merged']))
-assert len(r12) == sidebar.ROW_FIELDS == 18 and r12[9:12] == ['#1532', '#1552✓', '45%'] and r12[14] == 'merged', r12   # 13: cfg (#1783) · 14: title (#1921) · 15: reap (#1902) · 17-18: ask (#2538)
+assert len(r12) == sidebar.ROW_FIELDS == 19 and r12[9:12] == ['#1532', '#1552✓', '45%'] and r12[14] == 'merged', r12   # 13: cfg (#1783) · 14: title (#1921) · 15: reap (#1902) · 17-18: ask (#2538) · 19: ctx (#2717, #2963)
 want = 'issue-1532 · #1532 · @m4 · #1552✓ · 合并后回收 · 45%'
 assert sidebar.detail_line(r12) == want, repr(sidebar.detail_line(r12))
 assert sidebar.bar_hint([r12], '@1', '@1', 30)[1] == want.replace('#', '##'), 'the bar: # doubled for tmux'

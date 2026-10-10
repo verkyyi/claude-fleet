@@ -117,7 +117,7 @@ out=$(FLEET_SIDEBAR_HOST="MacBookPro.local" FLEET_NODE_ALIASES="macmini=m5 mini2
   python3 - "$BIN/fleet-sidebar.py" <<'PY'
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("sb", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-assert m.ROW_FIELDS == 18   # 14: title (#1921), 15: reap (#1902), 16: backfill (#2235), 17-18: ask (#2538)
+assert m.ROW_FIELDS == 19   # 14: title (#1921), 15: reap (#1902), 16: backfill (#2235), 17-18: ask (#2538), 19: ctx (#2717, #2963)
 row = ["@1", "done", "✓", "worker-one", " ", "", "0", "", "m4", "", "", ""]
 assert m.cfg_tag("stale") == "配置旧" and m.cfg_tag("ok") == "" and m.cfg_tag("") == ""
 assert m.detail_line(row + ["stale"]) == "worker-one · @m4 · 配置旧", m.detail_line(row + ["stale"])
