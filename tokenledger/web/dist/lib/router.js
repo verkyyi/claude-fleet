@@ -11,10 +11,20 @@ import { PAGES } from './shell.js';
 /** CACHE_TTL is how long a page's reads are good for a revisit (ms). */
 export const CACHE_TTL = 30000;
 
-/** routeFor is the page a path draws, or null when the app has none there. */
+/** routeFor is the page a path draws, or null when the app has none there.
+ *  A `prefix` page draws one name under its href (/machines/<host>,
+ *  claude-fleet#2796) — the bare href is the list's. */
 export function routeFor(pathname) {
   const p = String(pathname || '/').replace(/\/+$/, '') || '/';
-  return PAGES.find((x) => x.href === p && x.module) || null;
+  return PAGES.find((x) => x.href === p && x.module && !x.prefix) ||
+    PAGES.find((x) => x.prefix && x.module && p.startsWith(x.href) && p.length > x.href.length && !p.slice(x.href.length).includes('/')) || null;
+}
+
+/** pathParam is the name a prefix page's path carries ('' for none). */
+export function pathParam(pathname, page) {
+  const p = String(pathname || '').replace(/\/+$/, '');
+  if (!page || !page.prefix || !p.startsWith(page.href)) return '';
+  try { return decodeURIComponent(p.slice(page.href.length)); } catch { return ''; }
 }
 
 /** intercept is the page a click should open in place, or null to let the

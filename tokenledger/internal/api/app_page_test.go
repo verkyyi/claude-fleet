@@ -73,6 +73,13 @@ func TestAppPage_EveryPagePathAnswersTheAppDocument(t *testing.T) {
 	if code, body := get(admin, "/no-such-page"); code != http.StatusNotFound || strings.Contains(body, doc) {
 		t.Errorf("admin GET /no-such-page = %d %q; want 404", code, body)
 	}
+	// One machine's page (claude-fleet#2796) is a deep link into the app, for
+	// a user too: the page's read, /v1/nodes/<host>, is what cuts.
+	for _, sess := range []*http.Cookie{admin, user} {
+		if code, body := get(sess, "/machines/m4"); code != http.StatusOK || !strings.Contains(body, doc) {
+			t.Errorf("GET /machines/m4 = %d %q; want 200 and the app document", code, body)
+		}
+	}
 	// A build from before the app document: each page its own file.
 	delete(ui, appPage)
 	for _, p := range []string{"/", "/sessions", "/nodes"} {

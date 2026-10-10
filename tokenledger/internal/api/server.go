@@ -407,12 +407,17 @@ func (s *Server) routes() *routeMux {
 		mux.Handle("/v1/fleet/peer-certs", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetPeerCerts))))
 		mux.Handle("/v1/fleet/spot", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetSpot))))
 		mux.Handle("/v1/nodes", s.viewerOnly(http.HandlerFunc(s.handleNodes)))
+		// One machine's page (claude-fleet#2796): its five blocks, the same cut.
+		mux.Handle(NodeDetailPrefix, s.viewerOnly(http.HandlerFunc(s.handleNodeDetail)))
 		// Machines (claude-fleet#1990): an admin's page; a user gets the
 		// shell's 403 (admin_pages.go).
 		mux.Handle("/nodes", s.viewerOnly(s.adminPage("machines", "admin/nodes.html")))
 		// 我的机器 (claude-fleet#2518): a user's own machines, off the same
 		// /v1/nodes cut.
 		mux.Handle("/machines", s.viewerOnly(http.HandlerFunc(s.serveMachinesPage)))
+		// …and one of them, /machines/<host> (claude-fleet#2796): the app
+		// document; the page reads /v1/nodes/<host>, which does the cut.
+		mux.Handle("/machines/", s.viewerOnly(http.HandlerFunc(s.serveMachinesPage)))
 		// 我的会话 (claude-fleet#1429): the phone view of fleet_sessions.
 		mux.Handle("/sessions", s.viewerOnly(http.HandlerFunc(s.serveSessionsPage)))
 		mux.Handle("/v1/fleet/me", s.viewerOnly(http.HandlerFunc(s.handleFleetMe)))
