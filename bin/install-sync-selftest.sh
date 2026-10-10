@@ -47,7 +47,8 @@
 #                    inflight>0 → deferred, half a reading → deferred, live 0 +
 #                    inflight 0 → the tick goes on (idle beside an active one is
 #                    noted, not held); an active mark past
-#                    FLEET_EPIC_HOLD_CAP_SECS on one stable → switched + ONE
+#                    FLEET_EPIC_HOLD_CAP_SECS (ONE clock for the login, $HOLDD/.since,
+#                    whatever stable or batch — issue #2843) → switched + ONE
 #                    record-only note on its EPIC (who, from → to) + an
 #                    epic-released log line; the state's `epic:` line says
 #                    holding / idle / released
@@ -403,7 +404,11 @@ NOTE
 run; eq "O2: under the cap = deferred" deferred "$(st result)"
 contains "O2: …says before the cap" "$(st epic)" "holding (有活·封顶前 0m/10m)"
 eq "O2: no note before the cap" 0 "$(grep -c '^note ' "$WORK/notes.log")"
-printf 'since: %s\nstable: %s\nreleased: -\n' "$(( $(date +%s) - 700 ))" "$C3a" > "$CONF/global/epic-hold.d/o-r-1117"
+# the clock is the LOGIN's (issue #2843): only .since counts — the mark's own
+# `since:` (or a new stable in it) neither starts nor restarts it
+[ -f "$CONF/global/epic-hold.d/.since" ] || fail "O2: no login hold clock written"; CHECKS=$((CHECKS + 1))
+printf 'since: %s\nstable: %s\nreleased: -\n' "$(date +%s)" "$C3" > "$CONF/global/epic-hold.d/o-r-1117"
+printf 'since: %s\n' "$(( $(date +%s) - 700 ))" > "$CONF/global/epic-hold.d/.since"
 : > "$CO/logs/install-sync.log"; run
 eq "O2: past the cap = switched" switched "$(st result)"
 eq "O2: …to stable" "$C3a" "$(hd)"
@@ -414,6 +419,7 @@ contains "O2: …and who" "$(cat "$WORK/notes.log")" "$(id -un)@"
 contains "O2: a released log line" "$(cat "$CO/logs/install-sync.log")" "epic-released $(short "$C3")..$(short "$C3a") epic=1117"
 contains "O2: the state says released" "$(st epic)" "released (已放行：挡满 10m 封顶) epic=1117"
 eq "O2: the clock records the release" "$C3a" "$(sed -n 's/^released: //p' "$CONF/global/epic-hold.d/o-r-1117")"
+[ -e "$CONF/global/epic-hold.d/.since" ] && fail "O2: at stable the login's hold clock was kept"; CHECKS=$((CHECKS + 1))
 run; eq "O2: then current" current "$(st result)"
 eq "O2: still one note" 1 "$(grep -c '^note ' "$WORK/notes.log")"
 unset FLEET_EPIC_HOLD_CAP_SECS FLEET_EPIC_HOLD_NOTE_CMD

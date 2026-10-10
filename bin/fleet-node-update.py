@@ -61,8 +61,13 @@ A tick, in order (each a `result` in <state>/update.json, one log line):
               FLEET_NODE_UPDATE_RETRY (3600) seconds ago.
   deferred    a running EPIC batch WITH WORK holds the machine (issue #2247's
               rule: fleet_epic_holding over every managed account's marks),
-              for at most FLEET_EPIC_HOLD_CAP_SECS (7200); past the cap the tick
-              goes on (`hold released` in the log).
+              for at most FLEET_EPIC_HOLD_CAP_SECS (7200) in total: ONE clock for
+              the machine from its first deferral, whichever batches hold and
+              however often stable moves (issue #2843); reaching the target
+              clears it. Past the cap the tick goes on (`hold released` in the
+              log, and a note on each holding batch's EPIC as its login). A
+              switch never stops a running session (each is on its own
+              fleet.versions/<sha>) — only current/ and the daemons move.
   failed      staging failed (fetch, signature, a missing artifact, release.json
               invalid) — nothing switched; the staged dir is removed.
               A fetch is resumable (issue #2701): only the artifacts release.json
@@ -81,9 +86,13 @@ A tick, in order (each a `result` in <state>/update.json, one log line):
 
 Usage:
   fleet-node-update.py tick                 one pass (what the daemon runs)
-  fleet-node-update.py status [--json] [--check]
-                                            where it is; --check: 0 settled · 1 a
-                                            failure / rollback / stuck · 2 not set up
+  fleet-node-update.py status [--json] [--check] [--keys]
+                                            where it is, the release key fingerprints
+                                            (pinned · the current release's signer;
+                                            --keys or a signature failure: the hub's
+                                            too) and an EPIC hold; --check: 0 settled
+                                            · 1 a failure / rollback / stuck / a
+                                            signature failure · 2 not set up
   fleet-node-update.py doctor               the machine doctor: PASS/WARN/FAIL rows,
                                             exit = the FAIL count (`fleet doctor --machine`)
   fleet-node-update.py versions [--json]    one line: every part's version vs release.json;
@@ -121,6 +130,7 @@ FLEET_NODE_USERS, plus
 """
 from __future__ import print_function
 
+import base64
 import fcntl
 import hashlib
 import importlib.util
@@ -129,9 +139,12 @@ import os
 import platform
 import re
 import shutil
+import socket
 import subprocess
 import sys
+import tempfile
 import time
+from urllib.request import urlopen
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 _spec = importlib.util.spec_from_file_location("fleet_node_supervisor", os.path.join(HERE, "fleet-node-supervisor.py"))
@@ -360,6 +373,79 @@ def fetch_line(p, fresh=120):
         return ""
 
 
+def key_id(text):
+    """The fingerprint ccquota's release.KeyID prints for an `ed25519 <base64>`
+    line: sha256 of the raw key, 16 hex. None when it is not one."""
+    try:
+        raw = base64.b64decode(text.strip().split()[-1])
+    except (ValueError, IndexError, TypeError):
+        return None
+    return hashlib.sha256(raw).hexdigest()[:16] if len(raw) == 32 else None
+
+
+def key_ids(p, hub=False):
+    """(pinned, the current release's signer, the hub's key) fingerprints — None
+    each when unreadable. The hub is asked only when hub=True (a network read)."""
+    try:
+        pinned = key_id(open(p.pubkey).read())
+    except (OSError, IOError):
+        pinned = None
+    signer = (read_json(os.path.join(p.current, ".release", "manifest.json"), {}) or {}).get("key") or None
+    served = None
+    url = hub_url(p) if hub else None
+    if url:
+        try:
+            with urlopen(url.rstrip("/") + "/v1/fleet/release/key", timeout=5) as r:
+                served = key_id(r.read(4096).decode("utf-8", "replace").splitlines()[0])
+        except (OSError, ValueError, IndexError):
+            served = None
+    return pinned, signer, served
+
+
+def sig_failure(st):
+    """(target, reason) of a recorded fetch that failed its signature check, or None."""
+    for t, f in sorted(((st or {}).get("failed") or {}).items()):
+        if "signature" in (f.get("reason") or ""):
+            return t, f
+    return None
+
+
+def key_row(p, st):
+    """The release key (issue #2843): FAIL when the pinned key is not the one the
+    current release is signed with, or when the last fetch failed its signature
+    check — the hub's key said beside it, so a changed key and a torn read
+    (manifest and signature from two builds) tell apart. A doctor row, not only
+    an update.log backoff."""
+    sf = sig_failure(st)
+    pinned, signer, served = key_ids(p, hub=bool(sf))
+    if not pinned:   # WARN: the next stage refuses with the same words; the rollback gate stays out of it
+        return ("WARN", "key", "no pinned release key at %s — `sudo fleet node install` pins it" % p.pubkey)
+    if signer and signer != pinned:
+        return ("FAIL", "key", "pinned %s, but the current release is signed by %s" % (pinned, signer))
+    if sf:
+        t, f = sf
+        why = ("the hub serves the same key — a torn read (manifest and signature from two builds); "
+               "the next fetch retries" if served == pinned else
+               "the hub now serves %s — the hub's key changed; re-pin: sudo fleet node install --release-key <file>"
+               % served if served else "the hub's key could not be read")
+        return ("FAIL", "key", "%s failed its signature check %s against pinned %s: %s" % (t[:12], iso(f.get("at")),
+                                                                                         pinned, why))
+    return ("PASS", "key", "pinned %s · current release signed by %s" % (pinned, signer or "?"))
+
+
+def hold_row(p, st):
+    """An EPIC hold under way (issue #2843), said with what it is for."""
+    h = (st or {}).get("hold") or {}
+    if (st or {}).get("result") != "deferred" or not h.get("since"):
+        return None
+    cap = env_num("FLEET_EPIC_HOLD_CAP_SECS", 7200)
+    return ("WARN", "install", "EPIC batches hold the machine on %s, not %s, since %s (%dm of %dm, one clock for "
+            "the machine) — a switch would not stop a running session (each is on its own fleet.versions/<sha>); "
+            "the hold only keeps a batch's new workers on the version its others run"
+            % ((link_sha(p.current) or "?")[:12], (h.get("target") or "?")[:12], iso(h["since"]),
+               (now() - h["since"]) // 60, cap // 60))
+
+
 def run(cmd, timeout=600, **kw):
     try:
         r = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -426,12 +512,21 @@ class Updater(object):
             return s, "hub stable"
         return None, "the hub named no stable (%s)" % (err or out or "rc %d" % rc)[:120]
 
-    # -- the EPIC gate (#2062 / #2247): any managed account's batch with work holds
+    # -- the EPIC gate (#2062 / #2247): any managed account's batch with work holds.
+    # The clock is the MACHINE's (issue #2843): `hold.since` is the first tick
+    # any batch deferred the machine, and only reaching the target clears it
+    # (`current`, or a switch). A new stable or another batch taking over the
+    # hold does not restart it — with 3-7 batches running in parallel and stable
+    # moving every hour or two, a clock keyed on the target never reached the cap
+    # (macmini 2026-10-10: two stables behind, deferred every 5 minutes).
+    # What the hold buys is small: a switch never stops a running session (each
+    # sits on its own fleet.versions/<sha>); it only moves `current/` and the
+    # daemons, so new workers of a batch start on the version its others run.
     def epic_hold(self, target):
         lib = env("FLEET_NODE_UPDATE_LIB", os.path.join(self.p.current, "bin", "fleet-lib.sh"))
         if not os.path.exists(lib):
             return None
-        held = []
+        held, marks = [], []
         for login, why in fns.managed_accounts(self.p.sup).items():
             ident = fns.account_ident(login)
             if why or ident is None:
@@ -441,21 +536,77 @@ class Updater(object):
                              timeout=30, env=dict(os.environ, FLEET_CONF_DIR=conf, HOME=ident[2]))
             if rc == 0:
                 held.append("%s: %s" % (login, (out.splitlines() or ["?"])[0][:120]))
+                for line in out.splitlines():
+                    f = line.split("\t")
+                    if len(f) >= 2 and f[0] == "active":
+                        marks.append((login, ident, f[1]))
         if not held:
-            self.st.pop("hold", None)
             return None
         h = self.st.get("hold") or {}
-        if h.get("target") != target:
-            h = {"target": target, "since": now()}
-            self.st["hold"] = h
+        if not h.get("since"):
+            h = {"since": now()}
+        h["target"] = target
+        self.st["hold"] = h
         cap = env_num("FLEET_EPIC_HOLD_CAP_SECS", 7200)
         if now() - h["since"] > cap:
-            if not h.get("released"):
-                h["released"] = now()
-                self.log("hold released — an EPIC batch held %s for more than %ds: %s"
-                         % (target[:12], int(cap), "; ".join(held)))
+            if h.get("released") != target:
+                h["released"] = target
+                self.log("hold released — EPIC batches have held this machine since %s, more than %ds (one clock "
+                         "for the machine, #2843); switching to %s. Running sessions stay on their own "
+                         "fleet.versions/<sha>; only current/ and the daemons move, so new workers start on %s: %s"
+                         % (iso(h["since"]), int(cap), target[:12], target[:12], "; ".join(held)))
+                self.note_release(marks, target, now() - h["since"], cap)
             return None
-        return "; ".join(held)
+        return "%s (held %dm of %dm, since %s)" % ("; ".join(held), (now() - h["since"]) // 60, cap // 60,
+                                                 iso(h["since"]))
+
+    def note_release(self, marks, target, held, cap):
+        """One record-only comment on each holding batch's EPIC, posted AS the
+        login whose mark it is (its own gh, its own fleet-comment.sh), so the
+        driver learns the floor moved. A comment that cannot be posted is logged;
+        the release stands either way."""
+        cur = link_sha(self.p.current) or "?"
+        seen = set()
+        for login, ident, mark in marks:
+            try:
+                kv = dict(l.split(": ", 1) for l in open(mark).read().splitlines() if ": " in l)
+            except OSError:
+                continue
+            n, repo = kv.get("epic", ""), kv.get("repo", "")
+            if not n.isdigit() or "/" not in repo or (repo, n) in seen:
+                continue
+            seen.add((repo, n))
+            body = ("⏱ 整机更新放行：EPIC 批次已连续挡住 **%s** 的整机更新 %d 分钟（封顶 %d 分钟，按机器计，"
+                    "`FLEET_EPIC_HOLD_CAP_SECS`，#2843），%s 起切换 `%s` → `%s`。\n\n"
+                    "在跑的会话不受影响（各自在 `fleet.versions/<sha>` 上）；只换 `current/` 和守护，"
+                    "本批之后新开的 worker 在新版本上起。"
+                    % (socket.gethostname().split(".")[0], held // 60, cap // 60, iso(now()), cur[:12], target[:12]))
+            uid, gid, home = ident
+            cmd = env("FLEET_EPIC_HOLD_NOTE_CMD", "") or "/bin/bash %s" % os.path.join(
+                home, ".claude", "fleet", "bin", "fleet-comment.sh")
+            try:
+                # root's own TMPDIR is not the login's to read
+                fd, bf = tempfile.mkstemp(prefix="fleet-hold-note.", dir="/tmp" if os.geteuid() == 0 else None)
+                with os.fdopen(fd, "w") as f:
+                    f.write(body + "\n")
+                os.chmod(bf, 0o644)
+            except OSError as e:
+                self.log("hold note: no temp file (%s) — no comment on %s#%s" % (e, repo, n))
+                continue
+            kw = {}
+            if os.geteuid() == 0 and uid != 0:
+                kw["preexec_fn"] = fns.demote(login, uid, gid, home)
+            rc, out, err = run(cmd.split() + [n, "--repo", repo, "--note", "--from", "fleet", "--body-file", bf],
+                               timeout=60, env={"HOME": home, "USER": login, "LOGNAME": login, "LANG": "en_US.UTF-8",
+                                                "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
+                                                "FLEET_CONF_DIR": os.path.join(home, ".config", "claude-fleet")},
+                               **kw)
+            try:
+                os.remove(bf)
+            except OSError:
+                pass
+            self.log("hold note on %s#%s as %s: %s" % (repo, n, login, "posted" if rc == 0 else
+                     "rc %d %s — released anyway" % (rc, ((err or out).splitlines() or [""])[-1][:120])))
 
     # -- staging: fetch, check, install the pinned tools; `staged.json` = whole
     def stage(self, sha):
@@ -875,6 +1026,7 @@ class Updater(object):
             notes = self.sync_outside() + self.sync_credsep() + self.follow_installs()
             if not self.follow_held:
                 self.st.pop("hold", None)
+            self.st["failed"] = {}
             return self.end("current", "%s (%s)%s" % (cur[:12], src, (" · " + "; ".join(notes)) if notes else ""),
                             current=cur, notes=notes)
         if target in self.st["skip"]:
@@ -895,7 +1047,8 @@ class Updater(object):
                 self.st["failed"] = {target: {"at": now(), "reason": str(e)}}
             self.record("failed", cur, target, str(e))
             return self.end("failed", "%s: %s" % (target[:12], e), current=cur)
-        self.st["failed"].pop(target, None)
+        self.st["failed"] = {}      # an older target's failure says nothing now (key row, #2843)
+        self.st.pop("hold", None)   # the machine reaches the target: its hold clock starts over (#2843)
         baseline = sorted(set(r[1] for r in doctor_rows(self.p) if r[0] == "FAIL")) if cur else []
         self.sessions("save", target)
         self.st.update(phase="switching", **{"from": cur, "to": target, "baseline": baseline})
@@ -990,6 +1143,11 @@ def doctor_rows(p):
         pr = credpool_row(p)
         if pr:
             rows.append(pr)
+    ust = read_json(p.file, {}) or {}
+    rows.append(key_row(p, ust))
+    hr = hold_row(p, ust)
+    if hr:
+        rows.append(hr)
     rows.append(shell_row(p, st))
     # the drill's deliberate failure (issue #2336): a release carrying this marker
     # fails its own doctor, so the updater must roll it back. On trunk, so a
@@ -1644,11 +1802,23 @@ def main(argv):
             st.get("result", "-"), iso(st.get("at")), (link_sha(p.current) or "none")[:12],
             st.get("phase", "idle"), st.get("reason", ""))
         print(line)
+        sf = sig_failure(st)
+        pinned, signer, served = key_ids(p, hub=bool(sf) or "--keys" in rest)
+        print("key     pinned %s · current release signed by %s%s" % (
+            pinned or "none (%s)" % p.pubkey, signer or "?",
+            (" · hub serves %s" % (served or "? (unreadable)")) if (sf or "--keys" in rest) else ""))
+        if sf:
+            print("        %s failed its signature check: %s" % (sf[0][:12], sf[1].get("reason", "")))
+        if (st.get("hold") or {}).get("since"):
+            h = st["hold"]
+            print("hold    EPIC batches since %s (one clock for the machine, cap %dm)%s" % (
+                iso(h["since"]), env_num("FLEET_EPIC_HOLD_CAP_SECS", 7200) // 60,
+                " · released for %s" % h["released"][:12] if h.get("released") else ""))
         fl = fetch_line(p)
         if fl:
             print("fetch   %s" % fl)
         if "--check" in rest:
-            bad = st.get("result") in ("failed", "rolled-back", "skipped") or (
+            bad = st.get("result") in ("failed", "rolled-back", "skipped") or bool(sf) or (
                 st.get("phase") != "idle" and now() - (st.get("at") or 0) > 3600)
             return 1 if bad else 0
         return 0
@@ -1665,7 +1835,7 @@ def main(argv):
             print("fleet-node-update: another tick holds %s" % p.lock, file=sys.stderr)
             return 3
         return Updater(p).tick()
-    print("usage: fleet-node-update.py tick|status [--json|--check]|doctor|versions|check-release <f>",
+    print("usage: fleet-node-update.py tick|status [--json|--check|--keys]|doctor|versions|check-release <f>",
           file=sys.stderr)
     return 2
 

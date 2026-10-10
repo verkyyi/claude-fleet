@@ -261,3 +261,58 @@ func TestFetchSlowButSteady(t *testing.T) {
 	}
 	checkFetched(t, dest, map[string][]byte{"big": big})
 }
+
+// The hub reads <sha>/current once for the manifest and once for its signature:
+// a rebuild of the same sha between the two hands back a torn pair, which fails
+// the check with the right key. Manifest reads the pair once more and goes on;
+// a key that really differs still fails (claude-fleet#2843).
+func TestManifestTornReadRetried(t *testing.T) {
+	pub, key, _ := ed25519.GenerateKey(rand.Reader)
+	files := map[string][]byte{"bin/x": []byte("#!/bin/sh\n")}
+	builds := [2]string{}
+	for i := range builds {
+		builds[i] = filepath.Join(t.TempDir(), sha)
+		if _, err := Build(builds[i], "o/r", sha, files, nil, key, time.Unix(1e9+int64(i), 0)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var mu sync.Mutex
+	reads := map[string]int{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rest := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, Path+sha), "/")
+		if rest == "" {
+			rest = ManifestName
+		}
+		mu.Lock()
+		n := reads[rest]
+		reads[rest]++
+		mu.Unlock()
+		// the first manifest is build 0's, everything after it build 1's
+		b := builds[1]
+		if rest == ManifestName && n == 0 {
+			b = builds[0]
+		}
+		http.ServeFile(w, r, filepath.Join(b, rest))
+	}))
+	defer srv.Close()
+
+	var said bytes.Buffer
+	f := &Fetcher{Hub: srv.URL, Key: pub, Progress: &said}
+	m, _, _, err := f.Manifest(context.Background(), sha)
+	if err != nil {
+		t.Fatalf("a torn read was not retried: %v", err)
+	}
+	if m.SHA != sha || reads[ManifestName] != 2 || reads[SigName] != 2 {
+		t.Fatalf("sha %s, reads %v", m.SHA, reads)
+	}
+	if !strings.Contains(said.String(), "reading the manifest and its signature again") {
+		t.Fatalf("the retry was not said: %q", said.String())
+	}
+
+	other, _, _ := ed25519.GenerateKey(rand.Reader)
+	reads = map[string]int{}
+	_, _, _, err = (&Fetcher{Hub: srv.URL, Key: other}).Manifest(context.Background(), sha)
+	if !errors.Is(err, errBadSignature) || reads[ManifestName] != 2 {
+		t.Fatalf("another key: %v after %v", err, reads)
+	}
+}
