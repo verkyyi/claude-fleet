@@ -395,7 +395,7 @@ not_has "$WORK/out" 'fleet-login-remove: done' 'a login left on the machine read
 reset_fixture
 echo '/usr/sbin/distnoted agent' > "$WORK/procs"
 t0=$(date +%s)
-FAKE_GUI=1 FAKE_RESPAWN=1 FLEET_LOGIN_REMOVE_SETTLE=2 FLEET_LOGIN_REMOVE_DELETE_SECS=20 run alice --delete-home --apply
+FAKE_GUI=1 FAKE_RESPAWN=1 FLEET_LOGIN_REMOVE_SETTLE=1 FLEET_LOGIN_REMOVE_DELETE_SECS=20 run alice --delete-home --apply
 el=$(( $(date +%s) - t0 ))
 [ "$RC" = 0 ] || { cat "$WORK/out" >&2; fail "respawn apply: exit $RC (want 0)"; }
 has "$FLEET_TEST_LOG" 'launchctl bootout user/602' "the login's user domain was not booted out"
@@ -422,10 +422,10 @@ grep -qx 'launchctl bootout gui/602' "$FLEET_TEST_LOG" && fail 'an absent gui do
 # record check of step 6 decides (here dscl takes the record: done).
 reset_fixture
 t0=$(date +%s)
-FAKE_DELETE_HANGS=1 FAKE_RECORD_STAYS=1 FLEET_LOGIN_REMOVE_DELETE_SECS=2 run alice --delete-home --apply
+FAKE_DELETE_HANGS=1 FAKE_RECORD_STAYS=1 FLEET_LOGIN_REMOVE_DELETE_SECS=1 run alice --delete-home --apply
 el=$(( $(date +%s) - t0 ))
 [ "$el" -lt 15 ] || fail "a hanging deleteUser was not cut off at its limit (${el}s)"
-has "$WORK/out" 'sysadminctl -deleteUser alice timed out after 2s' 'the deleteUser time limit was not said'
+has "$WORK/out" 'sysadminctl -deleteUser alice timed out after 1s' 'the deleteUser time limit was not said'
 has "$FLEET_TEST_LOG" 'dscl . -delete /Users/alice' 'after a timed-out deleteUser the record was not deleted with dscl'
 [ "$RC" = 0 ] || { cat "$WORK/out" >&2; fail "timed-out deleteUser, record then deleted: exit $RC (want 0)"; }
 

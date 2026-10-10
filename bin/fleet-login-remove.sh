@@ -171,7 +171,8 @@ with_limit() {
   "$@" & pid=$!
   while kill -0 "$pid" 2>/dev/null; do
     if [ "$n" -ge $((secs * 5)) ]; then
-      kill -TERM "$pid" 2>/dev/null; sleep 3
+      kill -TERM "$pid" 2>/dev/null; n=0
+      while [ "$n" -lt 15 ] && kill -0 "$pid" 2>/dev/null; do sleep 0.2; n=$((n + 1)); done
       if kill -0 "$pid" 2>/dev/null; then
         sudo pkill -KILL -P "$pid" 2>/dev/null; kill -KILL "$pid" 2>/dev/null
       fi
