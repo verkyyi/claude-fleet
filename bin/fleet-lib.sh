@@ -8923,7 +8923,7 @@ fleet_cfg_state() {
 # fleet_cfg_restart_why <session> <win> [idle-secs] — may <win> be reopened onto
 # the current configuration NOW (issue #1783)? Exit 0 = yes. Else exit 1 and ONE
 # word on stdout says why not: gone · panel · remote · unknown · ok ·
-# state:<s> · recent · asleep · looping · bg · tool. The ONE judge — fleet-cfg-restart.sh
+# state:<s> · recent · asleep · looping · bg · tool · human. The ONE judge — fleet-cfg-restart.sh
 # picks with it and fleet-migrate.sh --cfg-stale asks it again right before /exit,
 # so a session that started a turn in between is never interrupted. Only a
 # session — Claude or Codex alike (issue #1896) — whose @agent_cfg differs from
@@ -8935,7 +8935,7 @@ fleet_cfg_state() {
 # qualify: a pending question is the operator's, and a reopen would drop it; a
 # Codex loop between rounds reads `looping`, never `done`.
 fleet_cfg_restart_why() {
-  local sess="${1:-}" win="${2:-}" idle="${3:-${FLEET_CFG_RESTART_IDLE:-600}}" o ag fp av st ts lp slp rem hub nm bin
+  local sess="${1:-}" win="${2:-}" idle="${3:-${FLEET_CFG_RESTART_IDLE:-600}}" o ag fp av st ts lp slp rem hub nm bin h
   case "$idle" in ''|*[!0-9]*) idle=600 ;; esac
   o=$(_fleet_tmux "$sess" display-message -p -t "$win" \
         '#{@cc_agent}|#{@agent_cfg}|#{@agent_ver}|#{@claude_state}|#{@claude_state_ts}|#{@loop}|#{@sleep_since}|#{@remote}|#{@hub}|#{window_name}' 2>/dev/null) \
@@ -8969,6 +8969,11 @@ fleet_cfg_restart_why() {
   fi
   fleet_window_bg_busy "$sess" "$win" 1 && { echo bg; return 1; }
   fleet_window_tool_busy "$sess" "$win" && { echo tool; return 1; }
+  # A person is mid-step on what it put up (issue #2869): a `done` stamped before
+  # the reason existed, or one the reeval has not turned to `looping` yet.
+  if h=$(fleet_window_human "$sess" "$win"); then
+    fleet_human_hold_note "$sess" "$win" reopen "$h"; echo human; return 1
+  fi
   return 0
 }
 
@@ -9164,6 +9169,77 @@ fleet_window_tool_busy() {
     }'
 }
 
+# fleet_window_human <session> <win> — is <win> waiting on a PERSON's hand (issue
+# #2869)? Exit 0 + ONE word on stdout: `report` — its agent ran `report waiting`
+# with a page / code for someone to scan or click (@human_wait, the epoch,
+# stamped by fleet-report-parent.sh) — or `browser` — a browser Playwright opened
+# is still up under its pane (the playwright-mcp server's Chrome,
+# `--remote-debugging-pipe`, not one of its `--type=` helpers). Both hold
+# FLEET_HUMAN_WAIT_SECS (1800) from the stamp / the agent's last activity
+# (@claude_state_ts; mid-turn: now), then let go. Any other report of its own
+# writes @human_wait `off` — the step is done — and from then on the report
+# decides, never the browser (a login it keeps open is no person waiting).
+# Exit 1 otherwise. On 2026-10-10 a worker had its first confirmation code out
+# for the person to scan when the ver-stale idle reopen (fleet-cfg-restart.sh)
+# took it: the browser and its login died with the process, the person scanned
+# three times over. The fifth fleet_window_wait reason, so a Stop writes
+# `looping` and every idle judge (cfg-restart, auto-sleep, the idle reap, park)
+# leaves it alone; the auto-handoff nudge holds on it too. One tmux read; the
+# ps only when no stamp answers. FLEET_HUMAN_WAIT=0 turns it off.
+fleet_window_human() {
+  local sess="${1:-}" win="${2:-}" secs o hw st ts pp now
+  [ "${FLEET_HUMAN_WAIT:-1}" != 0 ] || return 1
+  [ -n "$win" ] || return 1
+  [ -n "$sess" ] || sess=$(fleet_current_session)
+  secs=${FLEET_HUMAN_WAIT_SECS:-1800}; case "$secs" in ''|*[!0-9]*) secs=1800 ;; esac
+  o=$(_fleet_tmux "$sess" display-message -p -t "$win" \
+        '#{@human_wait}|#{@claude_state}|#{@claude_state_ts}|#{pane_pid}' 2>/dev/null) || return 1
+  hw=${o%%|*}; o=${o#*|}; st=${o%%|*}; o=${o#*|}; ts=${o%%|*}; pp=${o#*|}
+  now=$(date +%s)
+  case "$hw" in
+    off) return 1 ;;
+    ''|*[!0-9]*) ;;
+    *) [ $(( now - hw )) -lt "$secs" ] && { echo report; return 0; }; return 1 ;;
+  esac
+  case "$st" in done|looping) ;; *) ts=$now ;; esac
+  case "$ts" in ''|*[!0-9]*) ts=$now ;; esac
+  [ $(( now - ts )) -lt "$secs" ] || return 1
+  case "$pp" in ''|*[!0-9]*) return 1 ;; esac
+  ps -axo pid=,ppid=,command= 2>/dev/null | awk -v root="$pp" '
+    {
+      pid = $1; par[pid] = $2; $1 = ""; $2 = ""; cmd[pid] = substr($0, 3)
+    }
+    function under(p,   n) { n = 0; while (p != root && (p in par) && n++ < 64) p = par[p]; return p == root }
+    END {
+      for (p in cmd) {
+        c = cmd[p]
+        if (index(c, "--type=") || !index(c, "--remote-debugging-pipe")) continue
+        if (!index(c, "playwright")) continue
+        if (under(p)) exit 0
+      }
+      exit 1
+    }' || return 1
+  echo browser
+}
+
+# fleet_human_hold_note <session> <win> <what> <why> — one line in
+# logs/attention.ndjson that an automatic <what> (handoff · reopen · sleep · park)
+# was put off because <win> waits on a person (issue #2869). `hold` lines carry no
+# `role`, so the attention count (fleet-steward-stats.sh) never reads one as a look.
+# Once per window per <what> in 10 minutes (@human_hold_<what>): a tick re-asks.
+fleet_human_hold_note() {
+  local sess="${1:-}" win="${2:-}" what="${3:-}" why="${4:-}" d now last
+  now=$(date +%s)
+  last=$(_fleet_tmux "$sess" display-message -p -t "$win" "#{@human_hold_$what}" 2>/dev/null)
+  case "$last" in ''|*[!0-9]*) last=0 ;; esac
+  [ $(( now - last )) -ge 600 ] || return 0
+  _fleet_tmux "$sess" set-option -w -t "$win" "@human_hold_$what" "$now" 2>/dev/null
+  d="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs"
+  mkdir -p "$d" 2>/dev/null || return 0
+  printf '{"ts": %s, "hold": "%s", "session": "%s", "wid": "%s", "why": "human:%s"}\n' \
+    "$now" "$what" "$sess" "$win" "$why" >> "$d/attention.ndjson" 2>/dev/null || :
+}
+
 # fleet_window_okey <session> <win> → <win>'s own ledger key — `<slug>:issue-<N>` /
 # `<slug>:scratch-<N>` (issue #1939: in every fleet) — the key its children's
 # @origin carries; nothing when it has none. fleet_origin_key's rule, for any
@@ -9334,9 +9410,12 @@ sys.exit(0 if tot else 1)' "$f" ${al:+"$d/$al.ndjson"} 2>/dev/null
 #   bg        its agent still owns a Bash-tool job (fleet_window_bg_busy, quick)
 #   tool      a fleet tool call it made is still running (fleet_window_tool_busy,
 #             issue #1880) — an MCP call Claude Code backgrounded past 120 s
+#   human     a person is to scan / click something it put up (fleet_window_human,
+#             issue #2869) — a `report waiting` with a page, or its Playwright
+#             browser still open — for FLEET_HUMAN_WAIT_SECS
 # The Stop hook writes `looping` + @claude_wait from this; fleet-reap-live.py
-# retains on it. A window with none of the four pays one list-windows, two tmux
-# reads and two ps.
+# retains on it. A window with none of the five pays one list-windows, three tmux
+# reads and three ps.
 fleet_window_wait() {
   local sess="${1:-}" t="${2:-}" out=''
   [ -n "$t" ] || return 1
@@ -9345,6 +9424,7 @@ fleet_window_wait() {
   fleet_window_waiting_children "$sess" "$t" >/dev/null 2>&1 && out="${out:+$out,}children"
   fleet_window_bg_busy "$sess" "$t" 1 && out="${out:+$out,}bg"
   fleet_window_tool_busy "$sess" "$t" && out="${out:+$out,}tool"
+  fleet_window_human "$sess" "$t" >/dev/null && out="${out:+$out,}human"
   [ -n "$out" ] || return 1
   printf '%s\n' "$out"
 }

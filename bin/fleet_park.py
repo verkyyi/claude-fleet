@@ -250,7 +250,9 @@ def reap_word(sess, w):
 
 
 def busy(sess, w):
-    """A pending /loop or a background job: its turn is over, its work is not."""
+    """A pending /loop or a background job: its turn is over, its work is not. Or a
+    person mid-step on what it put up (issue #2869: a `report waiting` page, its
+    Playwright browser) — parking stops the process and the browser with it."""
     r = seam("FLEET_PARK_BUSY_CMD", [w["wid"]])
     if r is not None:
         return r.returncode == 0
@@ -260,7 +262,10 @@ def busy(sess, w):
             args += ["--manifest", w["manifest"]]
         if run(args, timeout=15).returncode == 0:
             return True
-    return sh_lib('fleet_window_bg_busy "$1" "$2" 1', sess, w["wid"])[1] == 0
+    if sh_lib('fleet_window_bg_busy "$1" "$2" 1', sess, w["wid"])[1] == 0:
+        return True
+    return sh_lib('h=$(fleet_window_human "$1" "$2") && fleet_human_hold_note "$1" "$2" park "$h"',
+                  sess, w["wid"])[1] == 0
 
 
 def transcript(w):

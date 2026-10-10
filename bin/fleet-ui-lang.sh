@@ -87,6 +87,8 @@ fleet_ui_t() {
     en:wait_bg)                 printf 'background command running' ;;
     zh:wait_tool)               printf '等 fleet 工具返回' ;;
     en:wait_tool)               printf 'waiting on a fleet tool call' ;;
+    zh:wait_human)              printf '等人扫码 / 点击' ;;
+    en:wait_human)              printf 'waiting on a person to scan / click' ;;
     # the worker pane header's @title_info segments (issue #1377)
     zh:title_kids)              printf '子任务' ;;
     en:title_kids)              printf 'sub-tasks' ;;

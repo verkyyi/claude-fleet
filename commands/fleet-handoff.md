@@ -79,6 +79,17 @@ the iteration. Record the invocation verbatim, and do **not** call `ScheduleWake
 this turn — that wakeup dies with the session, and C4 forbids the extra tool call
 anyway. §P re-arms it after the clear.
 
+**If a person is mid-step on something this session put up** (issue #2869) — a
+page or code you sent them to scan / click (`report waiting` with it), a Playwright
+browser holding a login — the clear is about to take the browser with it. Before
+anything else: write ONE line where they are looking (the same page / issue / reply
+you sent the step on) — 「会话正在交接，请稍候」 — and **put up no new code**. Then
+give the doc a `## 等待中的人工步骤` section: what they were asked to do, where
+(URL / page / file), what you were about to do with the result, and how to tell
+whether they already did it. The fleet holds an AUTOMATIC handoff while such a step
+is open (`@claude_wait human`, up to `FLEET_HUMAN_WAIT_SECS`), so this only bites
+when one fires past that or you were told to hand off.
+
 **Record the language this session has been speaking** — the base skill's skeleton
 carries a `Language:` line for it. This is the one piece of state that CANNOT be
 re-derived after the clear: a pickup session has no transcript, only the doc, and
@@ -340,7 +351,11 @@ mode verbatim** on the resolved source:
    isn't `—`): invoke the `loop` skill with that invocation verbatim, interval
    included. The clear that brought you here killed the old one. Nothing to re-arm
    when the section is missing or `—`.
-5. **Resume from the NEXT ACTION** — don't redo finished work or re-investigate
+5. **A `## 等待中的人工步骤` section comes first** (issue #2869): check whether the
+   person finished it (the doc says how) and carry that flow on — re-open the page
+   in the state it names rather than starting the flow over; ask them for a new
+   scan only when the old step can no longer complete, and say why.
+6. **Resume from the NEXT ACTION** — don't redo finished work or re-investigate
    ruled-out dead-ends.
 
 The hub pane needs no special-casing beyond the doc path: its `/clear` leaves a

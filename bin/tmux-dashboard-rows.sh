@@ -1508,6 +1508,7 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
     # cell is the red `!` column, and a ↻ is not one.
     if [ -z "$ndet" ] && [ "$state" = looping ]; then
       case ",$nsub," in
+        *,human,*)    [ -n "${WD_human-}" ] || WD_human=$(fleet_ui_t wait_human); ndet=$WD_human ;;   # #2869
         *,children,*) [ -n "${WD_children-}" ] || WD_children=$(fleet_ui_t wait_children)
                       ndet="$WD_children${kidd:+ $kidd}" ;;
         *,bg,*)       [ -n "${WD_bg-}" ] || WD_bg=$(fleet_ui_t wait_bg); ndet=$WD_bg ;;
