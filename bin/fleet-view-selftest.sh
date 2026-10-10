@@ -104,7 +104,7 @@ row() { local IFS="$US"; printf '%s\n' "$*"; }
   row "wid:$MU/far1" idle · 'gamma' ' ' '' 0 '' m4 '#13' — · ok 'Gamma 在 m4' keep '' '' '' ''
   row "wid:$OU/oth1" working ⠹ 'delta' ' ' '' 0 '' nodeA '#14' — · ok 'Delta 另一个登录' merged '' '' '' ''
   row hdr ended '' '▸ Ended (1)' ' '
-  row "$W0" done ✓ 'old' ' ' '' 0 '' '' '#9' merged · ok 'Old 做完的' merged '' '' '' ''
+  row "$W0" 'done' ✓ 'old' ' ' '' 0 '' '' '#9' merged · ok 'Old 做完的' merged '' '' '' ''
 } > "$W/rows.txt"
 pl=$(printf '{"i":[{"r":"o/r#21","k":"epsilon","w":"answer:o/r#21","a":%d}]}' "$(( $(date +%s) - 7200 ))" | base64 | tr '+/' '-_' | tr -d '=\n')
 printf '%s\n' "x${US}nodeA${US}online${US}looping${US}${US}${US}0${US}park=1${US}parkl=$pl" > "$W/g/orch_fl"

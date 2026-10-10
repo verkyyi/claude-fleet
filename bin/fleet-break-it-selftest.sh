@@ -1742,7 +1742,7 @@ drill_node_prefix_keys() {
 # a root changed after the copy (a person re-sourcing ~/.tmux.conf) leaves the
 # 看台's mouse unlike a direct attach's, until attach --thin's --if-stale rebuild.
 drill_view_mouse_stale() {
-  CAP=10; local t0 fv rt
+  CAP=10; local t0
   hnode vm || return 1
   vmcopy() { nt list-keys -T fleet-view | awk '$4 !~ /^User9[0-9][0-9]$/ && $4 != "C-]" { $3 = "root"; $1 = $1; print }' | sort; }
   vmroot() { nt list-keys -T root | awk '{ $1 = $1; print }' | sort; }
