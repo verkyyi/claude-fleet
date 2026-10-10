@@ -7,6 +7,10 @@ the sessions with a thumb.
     fleet-topbar.py render cw=<cols> [down=<epoch>] [rr=<route>] [rv=<auto|manual> <route>]
                            [rp=<pinned route>] [rt=<reconnects>] [wn=<window name>] [gen=…]
         the line, as tmux format: ‹ i/n ›  state  key  title …… PR  repo  @machine
+    fleet-topbar.py render --node view=<id> s=<fleet> reg=<dir> g=<dir> sock=<socket> cw= w= [pc=] [pd=]
+        the same line drawn ON the machine, as a thin client's 看台's status line
+        (issue #2763, EPIC #2999 C1; fleet-remote-view.sh attach --thin) — see
+        render_node below
     fleet-topbar.py click <range> <shell session>
         a tap on one of its parts (the stage's MouseDown1Status bind):
         prev / next — the session above / below, as ⌘↑ ⌘↓ (the list's queue);
@@ -291,6 +295,8 @@ def tmux_text(text):
 def render(args):
     kv = dict(a.split("=", 1) for a in args if "=" in a)
     cols = int(kv["cw"]) if kv.get("cw", "").isdigit() else 80
+    if "--node" in args:
+        return render_node(kv, cols)
     path = state_dir() / "switch-bar.json"
     rec = read_record(path)
     if rec is None:
@@ -308,6 +314,12 @@ def render(args):
     rec["also"] = also_on(rec)
     parts, bg = layout(rec, cols, kv.get("down", ""), kv.get("rr", ""), None,
                        kv.get("rv", ""), kv.get("rp", ""), kv.get("rt", ""))
+    print(paint(parts, bg))
+    return 0
+
+
+def paint(parts, bg):
+    """The (text, colour, range) parts as tmux format, on `bg`."""
     fg_all = "#1a1b26" if bg == BG_ASK else None
     out = "#[bg=%s]" % bg if bg else ""
     if fg_all:
@@ -323,7 +335,140 @@ def render(args):
         if style:
             seg = "#[%s%s]%s#[nobold]" % (style, bold, seg)
         out += seg
-    print(out + "#[default]")
+    return out + "#[default]"
+
+
+# --- the line drawn ON the machine (issue #2763, EPIC #2999 C1) ---------------------
+# A thin client's 看台 (fleet-remote-view.sh attach --thin) wears its top line as
+# its own status line: `render --node view=<id> s=<fleet session> reg=<registry dir>
+# g=<the refresh loop's cache dir> sock=<socket> cw= w=<window> pc=<@peer_cur>
+# pd=<pane_dead>`. No switch-bar.json and no task list here: the record is built
+# off this machine's own books for the 看台's current window — the refresh loop's
+# `remote_<session>` line for its worker id (the same columns cache_record reads;
+# for another machine's window, C4, the far session's `@peer_cur`), else the
+# window's own stamps (the measurement bus, the same ones `fleet ls` reads). The
+# route comes from the 看台's registry row, another machine's link state from
+# peerlink/state.json (C5). layout() and fit() are the client's, unchanged.
+
+US = "\x1f"
+NODE_FMT = "|".join(["#{@fleet_id}", "#{@peer_cur}", "#{@peer_node}", "#{@peer_login}",
+                     "#{@claude_state}", "#{@claude_needs}", "#{@issue}", "#{@ctx_left}",
+                     "#{@ctx_band}", "#{@ctx_ts}", "#{@model}", "#{@effort}", "#{@fleet_role}",
+                     "#{window_name}"])
+
+
+def reg_row(path):
+    """A registry row's key=value columns (after the fifth) as a dict."""
+    try:
+        cols = path.read_text().split("\n", 1)[0].split("\t")
+    except OSError:
+        return {}
+    return dict(c.split("=", 1) for c in cols[5:] if "=" in c)
+
+
+def cache_lines(gdir, sess):
+    try:
+        with open(os.path.join(gdir, "remote_" + sess), encoding="utf-8", errors="replace") as f:
+            return [l.rstrip("\n").split(US) for l in f if l.startswith("wid:")]
+    except OSError:
+        return []
+
+
+def peer_down(conf_dir, node, login):
+    """Whether the machine-to-machine link C5 keeps to <node> as <login> is
+    down, off peerlink/state.json: its entry says not ok, or failures since its
+    last good check. No file / no entry = not known = not down."""
+    try:
+        with open(os.path.join(conf_dir, "peerlink", "state.json")) as f:
+            d = json.load(f)
+    except (OSError, ValueError):
+        return False
+    links = d.get("links", d) if isinstance(d, dict) else d
+    if isinstance(links, dict):
+        links = [dict(v, key=k) if isinstance(v, dict) else {} for k, v in links.items()]
+    for e in links if isinstance(links, list) else []:
+        if not isinstance(e, dict):
+            continue
+        if (e.get("machine") or e.get("node")) == node and (not login or e.get("login") in (login, None)):
+            fails = e.get("fails") or e.get("failures") or 0
+            return e.get("ok") is False or e.get("up") is False or (isinstance(fails, int) and fails > 0)
+    return False
+
+
+def stamp_ctx(p):
+    """The window's own measurement-bus stamps as the record's ctx fields."""
+    out = {}
+    if p[7].isdigit() and int(p[7]) <= 100:
+        out["ctx_left"] = int(p[7])
+    if p[8] in ("ok", "watch", "handoff"):
+        out["ctx_band"] = p[8]
+    if p[9].isdigit() and int(p[9]) > 0:
+        out["ctx_ts"] = int(p[9])
+    if re.fullmatch(r"[A-Za-z0-9 ._()+-]{1,64}", p[10]):
+        out["model"] = p[10]
+    if re.fullmatch(r"[a-z]{1,16}", p[11]):
+        out["effort"] = p[11]
+    return out
+
+
+def line_ctx(p):
+    """The cache line's columns 21-25 (left|band|ts|model|effort) as ctx fields."""
+    p = p + [""] * (25 - len(p))
+    return stamp_ctx([""] * 7 + p[20:25])
+
+
+def node_record(kv):
+    """The record for the 看台's current window, and the route / down words."""
+    reg = Path(kv.get("reg") or "")
+    row = reg_row(reg / kv.get("view", "")) if kv.get("view") else {}
+    sock, win, sess = kv.get("sock") or "", kv.get("w") or "", kv.get("s") or ""
+    out = subprocess.run(["tmux", "-S", sock, "display-message", "-p", "-t", win, NODE_FMT],
+                         capture_output=True, text=True, stdin=subprocess.DEVNULL).stdout if sock and win else ""
+    p = out.rstrip("\n").split("|", 13)
+    p += [""] * (14 - len(p))
+    fid, peer, pnode, plogin = p[0], p[1][4:] if p[1].startswith("wid:") else p[1], p[2], p[3]
+    wid = peer or ("%s/%s" % (row["fuid"], fid) if row.get("fuid") and fid else "")
+    lines = cache_lines(kv.get("g") or "", sess)
+    hit = None
+    for i, line in enumerate(lines):
+        key = line[0][4:]
+        if (wid and key == wid) or (not peer and fid and not row.get("fuid") and key.endswith("/" + fid)):
+            hit = (i, line)
+            break
+    here = row.get("node") or ""
+    if hit:
+        i, line = hit
+        q = line + [""] * (25 - len(line))
+        state = q[5] or "idle"
+        rec = {"i": i + 1, "n": len(lines), "state": state,
+               "kind": ("perm" if q[9].startswith("perm") else "ask") if state == "needs" else "",
+               "key": "#" + q[3] if q[3].isdigit() else "", "title": (q[16] or q[7]).strip(),
+               "node": q[1].strip() or pnode or here, "lost": q[2] == "lost", "wid": q[0][4:]}
+        rec.update(line_ctx(q))
+    else:
+        state = p[4] or "idle"
+        rec = {"i": 0, "n": len(lines), "state": state,
+               "kind": ("perm" if p[5].startswith("perm") else "ask") if state == "needs" else "",
+               "key": "#" + p[6] if p[6].isdigit() else "", "title": p[13].strip(),
+               "node": pnode or here, "lost": False, "wid": wid}
+    if not peer:
+        rec.update(stamp_ctx(p))   # this machine's own window: its stamps are the freshest reading
+    if p[12] == "orchestrator" and not rec.get("title"):
+        rec["title"] = say("sidebar_portal") or "新任务"
+    down = ""
+    if peer and (kv.get("pd") == "1" or peer_down(str(reg.parent), pnode, plogin)):
+        down = "1"
+    route = row.get("route") or ""
+    src, _, rname = route.rpartition(":")
+    via = "" if not rname or rname == "relay" else "%s %s" % ("manual" if src == "manual" else "auto",
+                                                                 PIN_WORDS.get(rname, rname))
+    return rec, down, "relay" if rname == "relay" else "", via
+
+
+def render_node(kv, cols):
+    rec, down, rr, via = node_record(kv)
+    parts, bg = layout(rec, cols, down, rr, None, via)
+    print(paint(parts, bg))
     return 0
 
 
