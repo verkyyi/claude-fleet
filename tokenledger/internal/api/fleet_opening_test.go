@@ -162,6 +162,12 @@ func TestAccountOpeningOnEveryDoor(t *testing.T) {
 
 	sendResult(t, nodes["m5"].c, m.OpID, control.AccountResult{Op: control.AccountCreate, Login: op.Login, OK: true})
 	waitState(t, h, p, "m5", store.AccountActive)
+	// Opened is not yet placeable (claude-fleet#2941): until the login's own
+	// node reports its fleet the doors still say opening.
+	if st := h.srv.accountStateOf(p, time.Now()); st == nil || st.State != "opening" || st.Stage != "fleet" || st.Machine != "m5" {
+		t.Fatalf("opened, no fleet yet: account = %+v; want opening (stage fleet) on m5", st)
+	}
+	loginReportsFleet(t, h, "m5", op.Login, machineA)
 	code, body = asUID(t, h, http.MethodGet, "/v1/nodes", p, "", nil)
 	snap = NodesSnapshot{}
 	if err := json.Unmarshal(body, &snap); err != nil || code != http.StatusOK {
@@ -264,5 +270,95 @@ func TestOpeningETANeverClimbs(t *testing.T) {
 	// then 342 s in — the second reading is the smaller one now.
 	if a, b := openingETALeft(openingETA, 167*time.Second), openingETALeft(openingETA, 342*time.Second); b >= a {
 		t.Fatalf("eta at 167 s = %d, at 342 s = %d; want it to go down", a, b)
+	}
+}
+
+// loginReportsFleet connects login's own node on host and has it report a
+// fleet, then waits for the registry to carry it (claude-fleet#2941).
+func loginReportsFleet(t *testing.T, h *harness, host, login, machine string) {
+	t.Helper()
+	n := connectNode(t, h, host+"-"+login, host, login, false)
+	beat(t, n.c, control.Proto, control.Heartbeat{Hostname: host, OSUser: login, MachineID: machine,
+		Fleets: []control.Fleet{fakeFleet(t, machine, "fleet", "o/r", "/Users/"+login+"/r")}, ObservedAt: time.Now()})
+	waitFor(t, 3*time.Second, login+"@"+host+"'s fleet to be registered", func() bool {
+		return h.srv.loginsWithFleet()[[2]string{host, login}]
+	})
+}
+
+// A login the node opened but whose fleet never reports (claude-fleet#2941,
+// the 10th C9 drill: mini2 said create ok, its fleet ran, the hub went on
+// saying 「mini2: 没有你的登录」 and the client waited for nothing): the
+// doors say opening (stage fleet) for openingSettle, then failed naming the
+// missing step; a refused placement names the login instead of 没有你的登录;
+// once its fleet reports the person reads as anyone with a login.
+func TestOpenedLoginWithoutFleetIsNotDone(t *testing.T) {
+	h, nodes, inv := drillOnFleet(t)
+	m, op := expectAccountOp(t, nodes["m4"].tnode)
+	sendResult(t, nodes["m4"].c, m.OpID, control.AccountResult{Op: control.AccountCreate, Login: op.Login, OK: true})
+	waitState(t, h, inv.PersonID, "m4", store.AccountActive)
+
+	now := time.Now()
+	st := h.srv.accountStateOf(inv.PersonID, now)
+	if st == nil || st.State != "opening" || st.Stage != "fleet" || st.Login != op.Login || st.EtaS < 5 || st.EtaS > openingSettleETA {
+		t.Fatalf("opened, no fleet: account = %+v; want opening, stage fleet, eta ≤ %d", st, openingSettleETA)
+	}
+	notes := h.srv.openingNotes(inv.PersonID)
+	if !strings.Contains(notes["m4"], op.Login) || !strings.Contains(notes["m4"], "fleet 还没报上来") {
+		t.Fatalf("placement note for m4 = %q; want the opened login named", notes["m4"])
+	}
+	st = h.srv.accountStateOf(inv.PersonID, now.Add(openingSettle+time.Minute))
+	if st == nil || st.State != "failed" || !strings.Contains(st.Why, "never connected") || st.Ask == "" {
+		t.Fatalf("past the settle: account = %+v; want failed: its node never connected, and who to ask", st)
+	}
+
+	// Its node connects but cannot read its fleet: the why says so.
+	n := connectNode(t, h, "m4-"+op.Login+"-first", "m4", op.Login, false)
+	beat(t, n.c, control.Proto, control.Heartbeat{Hostname: "m4", OSUser: op.Login, FleetError: "fleet-control: no fleet.conf", ObservedAt: time.Now()})
+	waitFor(t, 3*time.Second, "the login's beat to land", func() bool {
+		st := h.srv.accountStateOf(inv.PersonID, time.Now().Add(openingSettle+time.Minute))
+		return st != nil && strings.Contains(st.Why, "no fleet.conf")
+	})
+
+	loginReportsFleet(t, h, "m4", op.Login, machineB)
+	if st := h.srv.accountStateOf(inv.PersonID, time.Now().Add(openingSettle+time.Minute)); st != nil {
+		t.Fatalf("its fleet reported, yet account = %+v", st)
+	}
+	if notes := h.srv.openingNotes(inv.PersonID); notes["m4"] != "" {
+		t.Fatalf("its fleet reported, yet the placement note = %q", notes["m4"])
+	}
+}
+
+// A create far past what its machine usually takes reads failed before the
+// 20-minute give-up (claude-fleet#2941): 3 × the machine's median, never
+// sooner than openingOverFloor; the countdown reaches its floor there.
+func TestOpeningPastItsOwnETAFails(t *testing.T) {
+	if got := openingOver(60); got != openingOverFloor {
+		t.Fatalf("over(60 s) = %s; want the floor %s", got, openingOverFloor)
+	}
+	if got := openingOver(300); got != 15*time.Minute {
+		t.Fatalf("over(300 s) = %s; want 15m", got)
+	}
+	if got := openingOver(openingETA); got != openingGiveUp {
+		t.Fatalf("over(%d s) = %s; want the give-up %s", openingETA, got, openingGiveUp)
+	}
+	if got := openingETALeft(60, openingOverFloor); got != 5 {
+		t.Fatalf("eta at the floor = %d; want 5", got)
+	}
+
+	h, nodes, inv := drillOnFleet(t)
+	m, op := expectAccountOp(t, nodes["m4"].tnode)
+	// m4 has opened one before, in a minute: its median is the 60 s floor.
+	sendResult(t, nodes["m4"].c, m.OpID, control.AccountResult{Op: control.AccountCreate, Login: op.Login, OK: true})
+	waitState(t, h, inv.PersonID, "m4", store.AccountActive)
+	if got := h.srv.openingETAFor("m4"); got != 60 {
+		t.Fatalf("eta = %d; want 60", got)
+	}
+	slow := store.FleetAccount{Hostname: "m4", Login: "slow", State: store.AccountCreating, RequestedAt: time.Now().Add(-openingOverFloor - time.Minute)}
+	if why := h.srv.openingStuck(slow, time.Now()); !strings.Contains(why, "usually takes about 1 min") {
+		t.Fatalf("a create past 3 × its machine's median: why = %q", why)
+	}
+	slow.RequestedAt = time.Now().Add(-openingOverFloor + time.Minute)
+	if why := h.srv.openingStuck(slow, time.Now()); why != "" {
+		t.Fatalf("a create inside the floor is stuck already: %q", why)
 	}
 }

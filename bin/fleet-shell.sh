@@ -2016,10 +2016,23 @@ first_home() {
   fi
   ( trap '' HUP; cd "$HOME" 2>/dev/null || :
     failed="$CACHE/home-first.failed"; retry="${FLEET_HOME_FIRST_RETRY:-60}"; try=1
+    # while the hub is still opening this person's login (issue #2941) a refused
+    # placement is no failure: wait on the hub's word, not two tries — it says
+    # failed on its own (ETA x 3 / 20 min, or the opened login's fleet never
+    # reporting in 10), and FLEET_HOME_FIRST_OPENING_MAX (40 min) bounds it
+    hr="${FLEET_STATUS_G:-${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash/global}/hub_repos"
+    held=0; hmax="${FLEET_HOME_FIRST_OPENING_MAX:-2400}"
     rm -f "$failed" "$failed.why"
     while :; do
       if FLEET_HOME_FAILED="$failed.why" bash "$SHADOW/fleet-shell.sh" home-session claude --first; then
         rm -f "$failed" "$failed.why"; break
+      fi
+      ast=$(awk -F $'\037' -v now="$(date +%s)" '$1 == "#account" { if (now - $6 < 120) print $2; exit }' "$hr" 2>/dev/null)
+      if [ "$ast" = opening ] && [ "$held" -lt "$hmax" ]; then
+        rm -f "$failed" "$failed.why"
+        sleep "$retry"; held=$((held + (retry > 0 ? retry : 1)))
+        [ ! -e "$CONF_DIR/home-session.first" ] || break
+        continue
       fi
       why=$(sed -n 1p "$failed.why" 2>/dev/null); nxt=$(sed -n 2p "$failed.why" 2>/dev/null)
       [ -n "$why" ] || why='-'

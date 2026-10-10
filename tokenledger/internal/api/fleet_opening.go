@@ -1,11 +1,13 @@
 package api
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
@@ -43,6 +45,24 @@ var (
 	openingNoAdmin = 2 * time.Minute
 )
 
+// openingOverFloor is the least a create may run before running past its
+// machine's own estimate fails it (claude-fleet#2941): past 3 × the estimate,
+// never sooner than this, never later than openingGiveUp. A machine whose
+// median is 60 s gave its newcomer 「about 59s」 and then nothing for six
+// minutes; a real create that runs long still turns active when it answers.
+var openingOverFloor = 8 * time.Minute
+
+// A login the node opened (create ok → active) is not yet a place a session
+// can open: its own node must enroll with the create's join code, say hello
+// and report its fleet (claude-fleet#2941). Until a fleet of that login is
+// registered the doors keep saying opening — about openingSettleETA more —
+// and past openingSettle they say failed, naming the step that did not come.
+// Before, active alone read as done: every door went quiet, placement said
+// 「mini2: 没有你的登录」 and nobody said why.
+const openingSettleETA = 90
+
+var openingSettle = 10 * time.Minute
+
 // AccountState is a person's login, when they have no active one yet.
 type AccountState struct {
 	// State is opening (a create is queued or in flight), failed (the last
@@ -60,10 +80,15 @@ type AccountState struct {
 	// Why is, on failed, what went wrong in one line (claude-fleet#2696): the
 	// create's own failure, no answer in openingGiveUp, or no admin node.
 	Why string `json:"why,omitempty"`
+	// Stage is, on opening, what is awaited (claude-fleet#2941): create (the
+	// node opening the login) or fleet (the login opened, its fleet not yet
+	// reported).
+	Stage string `json:"stage,omitempty"`
 }
 
 // accountStateOf is pid's AccountState, nil when they hold an active login
-// (or pid is the operator, "").
+// a session can open on — one the hub opened counts once its fleet has
+// reported (claude-fleet#2941) — or pid is the operator, "".
 func (s *Server) accountStateOf(pid string, now time.Time) *AccountState {
 	if pid == "" || s.Store == nil || !s.Fleet {
 		return nil
@@ -93,8 +118,9 @@ func (s *Server) accountStateOf(pid string, now time.Time) *AccountState {
 			}
 		}
 	}
-	var opening, failed *store.FleetAccount
+	var opening, failed, settling *store.FleetAccount
 	ownActive := false
+	reported := s.loginsWithFleet()
 	for i := range accts {
 		a := &accts[i]
 		if own(*a) {
@@ -106,7 +132,12 @@ func (s *Server) accountStateOf(pid string, now time.Time) *AccountState {
 		}
 		switch a.State {
 		case store.AccountActive:
-			return nil
+			if a.Op != "create" || reported == nil || reported[[2]string{a.Hostname, a.Login}] {
+				return nil
+			}
+			if settling == nil {
+				settling = a
+			}
 		case store.AccountPending, store.AccountCreating, store.AccountUnknown:
 			if opening == nil {
 				opening = a
@@ -117,6 +148,11 @@ func (s *Server) accountStateOf(pid string, now time.Time) *AccountState {
 			}
 		}
 	}
+	if settling != nil && now.Sub(settling.UpdatedAt) <= openingSettle {
+		// Opened, its fleet not yet reported: the nearest to done.
+		return &AccountState{State: "opening", EtaS: etaLeft(openingSettleETA, now.Sub(settling.UpdatedAt), openingSettle),
+			Machine: settling.Hostname, Login: settling.Login, Ask: ask, Stage: "fleet"}
+	}
 	if opening != nil {
 		if why := s.openingStuck(*opening, now); why != "" {
 			// Never 「about 5s」 forever (claude-fleet#2696): an opening
@@ -125,7 +161,11 @@ func (s *Server) accountStateOf(pid string, now time.Time) *AccountState {
 		}
 		took := now.Sub(opening.RequestedAt)
 		eta := openingETALeft(s.openingETAFor(opening.Hostname), took)
-		return &AccountState{State: "opening", EtaS: eta, Machine: opening.Hostname, Login: opening.Login, Ask: ask}
+		return &AccountState{State: "opening", EtaS: eta, Machine: opening.Hostname, Login: opening.Login, Ask: ask, Stage: "create"}
+	}
+	if settling != nil {
+		return &AccountState{State: "failed", Machine: settling.Hostname, Login: settling.Login, Ask: ask,
+			Why: s.settleWhy(*settling, now.Sub(settling.UpdatedAt))}
 	}
 	if failed != nil {
 		return &AccountState{State: "failed", Machine: failed.Hostname, Login: failed.Login, Ask: ask,
@@ -160,6 +200,11 @@ func (s *Server) openingStuck(a store.FleetAccount, now time.Time) string {
 	took := now.Sub(a.RequestedAt)
 	if took > openingGiveUp {
 		return fmt.Sprintf("no answer from %s in %d min (%s)", a.Hostname, int(openingGiveUp.Minutes()), a.State)
+	}
+	if est := s.openingETAFor(a.Hostname); took > openingOver(est) {
+		// Far past what this machine takes (claude-fleet#2941).
+		return fmt.Sprintf("no answer from %s in %d min — it usually takes about %d min (%s)",
+			a.Hostname, int(took.Minutes()), (est+59)/60, a.State)
 	}
 	if a.State == store.AccountPending && took > openingNoAdmin {
 		if _, ok := s.nodes.adminFor(a.Hostname); !ok {
@@ -202,9 +247,31 @@ func (s *Server) openingETAFor(host string) int {
 // giveUp, at least 5. It starts at est and only goes down, reaching the floor
 // as the doors give up and say failed. Before claude-fleet#2728 it was est −
 // took and, past it, the time left until the give-up — a number that jumped UP
-// (the drill read 「about 313s」, then 「about 858s」).
+// (the drill read 「about 313s」, then 「about 858s」). Its give-up is the
+// create's own (openingOver, claude-fleet#2941): it reaches the floor when
+// the doors say failed.
 func openingETALeft(est int, took time.Duration) int {
-	giveUp := openingGiveUp.Seconds()
+	return etaLeft(est, took, openingOver(est))
+}
+
+// openingOver is how long a create expected to take est seconds may run
+// before it reads failed: 3 × est, clamped to [openingOverFloor,
+// openingGiveUp].
+func openingOver(est int) time.Duration {
+	d := 3 * time.Duration(est) * time.Second
+	if d < openingOverFloor {
+		d = openingOverFloor
+	}
+	if d > openingGiveUp {
+		d = openingGiveUp
+	}
+	return d
+}
+
+// etaLeft is openingETALeft against any give-up: est × (giveUp − took) ÷
+// giveUp, at least 5 — a countdown that only goes down.
+func etaLeft(est int, took, giveUpAfter time.Duration) int {
+	giveUp := giveUpAfter.Seconds()
 	if max := int(giveUp); est > max {
 		est = max
 	}
@@ -223,4 +290,96 @@ func openingETALeft(est int, took time.Duration) int {
 func lastLine(s string) string {
 	lines := strings.Split(strings.TrimRight(s, " \t\r\n"), "\n")
 	return strings.TrimSpace(lines[len(lines)-1])
+}
+
+// loginsWithFleet is every (machine, login) a fleet was ever registered under
+// — present or not: a login whose fleet reported once has come up, and a
+// fleet stopped since is placement's to say. nil when the registry cannot be
+// read (then nothing is held back).
+func (s *Server) loginsWithFleet() map[[2]string]bool {
+	rows, err := s.Store.Fleets()
+	if err != nil {
+		return nil
+	}
+	out := map[[2]string]bool{}
+	for _, r := range rows {
+		out[[2]string{r.Hostname, r.OSUser}] = true
+	}
+	return out
+}
+
+// settleWhy is why an opened login a has no fleet after took: its node never
+// connected, or what its last beat says (claude-fleet#2941).
+func (s *Server) settleWhy(a store.FleetAccount, took time.Duration) string {
+	head := fmt.Sprintf("login %s on %s was opened %d min ago, but ", a.Login, a.Hostname, int(took.Minutes()))
+	nodes, err := s.Store.Nodes()
+	if err != nil {
+		return head + "its fleet has not reported"
+	}
+	var last *store.Node
+	for i := range nodes {
+		n := &nodes[i]
+		if n.Hostname != a.Hostname || n.OSUser != a.Login {
+			continue
+		}
+		if last == nil || (n.LastHeartbeat != nil && (last.LastHeartbeat == nil || n.LastHeartbeat.After(*last.LastHeartbeat))) {
+			last = n
+		}
+	}
+	if last == nil {
+		return head + "its own node never connected (join code not redeemed, or its agent did not start)"
+	}
+	if last.LastHeartbeat == nil {
+		return head + "its node said hello and sent no heartbeat"
+	}
+	var hb control.Heartbeat
+	_ = json.Unmarshal([]byte(last.StatusJSON), &hb)
+	switch {
+	case hb.FleetError != "":
+		return head + "its node cannot read its fleet: " + truncate(hb.FleetError, 160)
+	case hb.MachineID == "":
+		return head + "its node reports no claude-fleet (no machine_id)"
+	case len(hb.Fleets) == 0:
+		return head + "its node reports no fleet running"
+	}
+	return head + "its node reports a fleet the hub did not register (see the hub log)"
+}
+
+// openingNotes is, for each machine (lower-cased) where pid has a login the
+// hub is opening or has opened with no fleet registered yet, what a refused
+// placement says about it (claude-fleet#2941): 「正在为你开登录 X」 or 「登录 X
+// 已开好，它的 fleet 还没报上来」. Nil for the operator ("").
+func (s *Server) openingNotes(pid string) map[string]string {
+	if pid == "" || s.Store == nil {
+		return nil
+	}
+	accts, err := s.Store.FleetAccounts(pid)
+	if err != nil {
+		return nil
+	}
+	var reported map[[2]string]bool
+	out := map[string]string{}
+	for _, a := range accts {
+		if !a.Managed() {
+			continue
+		}
+		host := strings.ToLower(a.Hostname)
+		switch a.State {
+		case store.AccountPending, store.AccountCreating, store.AccountUnknown:
+			out[host] = "正在为你开登录 " + a.Login + "（" + a.State + "）"
+		case store.AccountActive:
+			if a.Op != "create" {
+				continue
+			}
+			if reported == nil {
+				if reported = s.loginsWithFleet(); reported == nil {
+					return out
+				}
+			}
+			if !reported[[2]string{a.Hostname, a.Login}] {
+				out[host] = "登录 " + a.Login + " 已开好，它的 fleet 还没报上来"
+			}
+		}
+	}
+	return out
 }

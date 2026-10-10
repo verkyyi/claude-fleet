@@ -717,10 +717,16 @@ func (s *Server) applyAccountResult(ctx context.Context, wire nodeWire, epID str
 		// adopts it if it is this person's.
 		detail = existsDetail + detail
 	}
-	if _, err := s.Store.FinishAccountOp(m.OpID, epID, state, truncate(detail, 4000), time.Now()); err != nil {
+	applied, err := s.Store.FinishAccountOp(m.OpID, epID, state, truncate(detail, 4000), time.Now())
+	if err != nil {
 		log.Printf("fleet: record account result %s: %v", m.OpID, err)
 		return // no ack: the node re-sends it on the next connection
 	}
+	// One line per answer (claude-fleet#2941): an opening that never ends
+	// has a timeline only if the hub says when the node answered — and
+	// whether the answer landed (a stale or foreign op_id is acked unapplied).
+	log.Printf("fleet: %s %s answered by %s (op %s): ok=%v exit=%d → %s applied=%v",
+		res.Op, res.Login, epID, m.OpID, res.OK, res.Exit, state, applied)
 	ack := control.Message{Type: control.TypeAck, OpID: m.OpID, Proto: control.Proto}
 	wctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()

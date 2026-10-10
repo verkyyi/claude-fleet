@@ -389,6 +389,7 @@ func TestDrillFirstSessionGetsAMachine(t *testing.T) {
 	}
 	sendResult(t, nodes["m4"].c, m.OpID, control.AccountResult{Op: control.AccountCreate, Login: op.Login, OK: true})
 	waitState(t, h, inv.PersonID, "m4", store.AccountActive)
+	loginReportsFleet(t, h, "m4", op.Login, machineA) // #2941: placeable once its fleet reports
 	if st := h.srv.accountStateOf(inv.PersonID, time.Now()); st != nil {
 		t.Fatalf("an active drill still gets account = %+v", st)
 	}
