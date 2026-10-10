@@ -28,6 +28,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 if [ -n "$esock" ]; then export TMUX="$esock,0,0"; unset TMUX_PANE; fi
+# shellcheck disable=SC2034  # FC_SESS is read by fleet-client-lib.sh's functions
 if [ -n "$esess" ]; then FC_SESS="$esess"; else
   fc_session || { echo "fleet-client-escape: $FC_WHY" >&2; exit 1; }
 fi

@@ -109,11 +109,11 @@ os.kill(pid, 9)
 PY
 attach() {  # <name> <session> <terminal word>
   python3 "$W/term_pty.py" "$REAL_TMUX" "$S/fl" "$2" "$1" "$3" "$W" & PIDS="$PIDS $!"
-  eval "PTY_$(printf '%s' "$1" | tr -c 'a-z\n' '_')=$!"
+  LASTPID=$!
 }
-attach a 'fl@view-a' 'iTerm2 3.6.1'
-attach b 'fl@view-b' 'iTerm2 3.6.1'
-attach x 'fl@view-x-via-home' 'tmux 3.5a'
+attach a 'fl@view-a' 'iTerm2 3.6.1'; PTY_a=$LASTPID
+attach b 'fl@view-b' 'iTerm2 3.6.1'; PTY_b=$LASTPID
+attach x 'fl@view-x-via-home' 'tmux 3.5a'; PTY_x=$LASTPID
 for _ in $(seq 1 50); do [ "$(T list-clients | wc -l | tr -d ' ')" -ge 3 ] && break; sleep 0.1; done
 sleep 0.5
 TTY_A=$(T list-clients -F '#{client_session} #{client_tty}' | awk '$1 == "fl@view-a" { print $2 }')
@@ -121,6 +121,7 @@ TTY_B=$(T list-clients -F '#{client_session} #{client_tty}' | awk '$1 == "fl@vie
 TTY_X=$(T list-clients -F '#{client_session} #{client_tty}' | awk '$1 == "fl@view-x-via-home" { print $2 }')
 [ -n "$TTY_A" ] && [ -n "$TTY_B" ] && [ -n "$TTY_X" ] || { bad "the three 看台 clients did not attach"; exit 1; }
 
+spool_made() { local d; for d in "$1"/*.d; do [ -d "$d" ] && return 0; done; return 1; }
 dev() { printf '{"device":"%s","os":"macOS","terminal":"iTerm2 3.6.1","via":"local","caps":["open_url"]}' "$1" | base64 | tr -d '\n'; }
 row() {  # <view> <tty> <pid> <device>
   printf '%s\tfl\tthin\t%s\t%s\tcur=u/f-one\troute=-\tdevice=%s\ttoken=t\tfuid=u\tnode=home1\n' "$2" "$(date +%s)" "$3" "$(dev "$4")" \
@@ -248,7 +249,7 @@ r=$(openit); sleep 1
 [ "$r" = sent:iterm2 ] && ok "F fleet-open → sent:iterm2" || bad "F fleet-open said '$r' ($(cat "$W/open.err"))"
 [ ! -f "$W/actions.called" ] && ok "F no hub action for a thin lease (nobody polls one)" || bad "F the hub action road was taken"
 grep -aq $'\033]1337;Custom=id=' "$W/out-a" && ok "F OSC 1337 Custom on 看台 a's terminal" || bad "F a got no OSC 1337"
-ls "$W/conf/remote-views" | grep -q '\.d$' && bad "F a spool dir was made" || ok "F no spool for a thin 看台"
+spool_made "$W/conf/remote-views" && bad "F a spool dir was made" || ok "F no spool for a thin 看台"
 : > "$W/out-x"
 printf 'z' > "$W/ctl-x"; sleep 0.5            # now the -via- client is the newest
 r=$(openit); sleep 1

@@ -122,7 +122,7 @@ drill_thin_notify_two_views() {
 
 drill_thin_open_no_loop() {
   CAP=4
-  local t0 r p0
+  local t0 r p0 d
   th_box || { WHY="the two 看台 terminals did not attach"; th_done; return 1; }
   printf '#!/bin/sh\necho %s\n' "'{\"state\":\"active\",\"source\":\"hub\",\"via\":\"thin\"}'" > "$B/where.sh"
   printf '#!/bin/sh\necho called >> "%s/actions.called"; echo "{\\"state\\":\\"queued\\"}"\n' "$B" > "$B/actions.sh"
@@ -136,10 +136,18 @@ drill_thin_open_no_loop() {
     || { WHY="no OSC 1337 on 看台 a's terminal ($r: $(cat "$B/open.err"))"; th_done; return 1; }
   SECS=$(since "$t0")
   [ -f "$B/actions.called" ] && { WHY="the page went to the hub's action queue (nobody polls it for a thin client)"; th_done; return 1; }
-  ls "$B/conf/remote-views" | grep -q '\.d$' && { WHY="a spool nobody reads was made"; th_done; return 1; }
+  for d in "$B"/conf/remote-views/*.d; do [ -d "$d" ] && { WHY="a spool nobody reads was made"; th_done; return 1; }; done
   th_done
   WHAT="租约 via=thin：fleet open 不进入口的动作队列、不建 spool，OSC 1337 直接到看台客户端的终端（${r}）"
 }
 
-trap 'th_done 2>/dev/null; [ -f "$WORK/thin-boxes" ] && while read -r b; do "$RT" -S "$b/s/fl" kill-server 2>/dev/null; [ -n "${BREAK_KEEP:-}" ] || rm -rf "$b"; done < "$WORK/thin-boxes"; cleanup' EXIT
+th_cleanup() {
+  local bx
+  th_done 2>/dev/null
+  if [ -f "$WORK/thin-boxes" ]; then
+    while read -r bx; do "$RT" -S "$bx/s/fl" kill-server 2>/dev/null; [ -n "${BREAK_KEEP:-}" ] || rm -rf "$bx"; done < "$WORK/thin-boxes"
+  fi
+  cleanup
+}
+trap th_cleanup EXIT
 cred_run_drills "$0"
