@@ -90,6 +90,11 @@ type NodeDetailMem struct {
 
 // handleNodeDetail serves GET /v1/nodes/<host>.
 func (s *Server) handleNodeDetail(w http.ResponseWriter, r *http.Request) {
+	if h, login, name, ok := parseServiceLogPath(strings.TrimPrefix(r.URL.Path, NodeDetailPrefix)); ok {
+		// One service's log, live (claude-fleet#2797).
+		s.handleServiceLog(w, r, h, login, name)
+		return
+	}
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		w.Header().Set("Allow", "GET")
 		httpError(w, http.StatusMethodNotAllowed, "GET")

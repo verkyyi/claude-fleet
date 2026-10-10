@@ -64,6 +64,10 @@
 #   hub-stream-silent                               tokenledger/web/dist/lib/stream.js (watchdog, backoff, poll fallback;
 #                                                   node --test stream.test.mjs, when node is here) + internal/api
 #                                                   fleet_stream.go (ping, scope; go test, when a toolchain is here)
+#   service-log-cross-login                         tokenledger/internal/api fleet_service_log.go (FleetScope before any
+#                                                   node read, one follow per service, masking; go test, when a toolchain
+#                                                   is here) + internal/agent node_service_log.go (the register's path only)
+#                                                   + web/dist/lib/svc-log.js (403 is a word; node --test, when node is here)
 #   dist-publish-tampered                           tokenledger/internal/api fleet_publish.go (POST …/publish: the archive
 #                                                   hashed into the commit's tree, OIDC, forward only; go test, when a
 #                                                   toolchain is here) + bin/fleet-release-publish.sh (what CI sends)
@@ -1200,6 +1204,47 @@ drill_dist_bad_signature() {
   out=$(bash "$BIN/dist-no-github-selftest.sh" bad-signature 2>&1) || { WHY="$(printf '%s\n' "$out" | grep -m 2 -E '^(RED|FAIL)' | cut -c1-220 | tr '\n' '|')"; return 1; }
   SECS=$(since "$t0")
   WHAT="入口发来的包验不过章：install-sync 记 fetch-failed、不切、不留半成品、不找 GitHub"
+}
+
+# ---- service-log-cross-login (#2797, EPIC #2792 C5): a person spells another
+# login (or a made-up one) into …/services/<login>/<name>/log, or the node is
+# asked for a file the register does not name. The hub answers 403 before any
+# node is asked, masks every credential-shaped line, asks the node once per
+# service; the node opens only the register's <log>/logins/<login>/<name>.log,
+# the lane's own login, never a link. Go tests by name (and run with a
+# toolchain), the page's 403-is-a-word by node --test.
+drill_service_log_cross_login() {
+  CAP=180; local t0 out rc api agt fa fg
+  api='TestServiceLogCrossLoginIs403 TestServiceLogOneFollowForManyViewers TestRedactLogLine'
+  agt='TestServiceLogOnlyTheRegisteredFile'
+  fa="$ROOT/tokenledger/internal/api/fleet_service_log_test.go"
+  fg="$ROOT/tokenledger/internal/agent/node_service_log_test.go"
+  t0=$(now)
+  grep -q 'if visible != nil && !visible(host, login) {' "$ROOT/tokenledger/internal/api/fleet_service_log.go" \
+    || { WHY="handleServiceLog no longer asks FleetScope before anything else"; return 1; }
+  grep -q 'serviceLogPath(a.cfg.ServicesFile, login, req.Name)' "$ROOT/tokenledger/internal/agent/node_service_log.go" \
+    || { WHY="the node no longer takes the log path from the register for the lane's own login"; return 1; }
+  for out in $api; do
+    grep -q "^func $out(" "$fa" 2>/dev/null || { WHY="the hub half's test $out is not in ${fa#$ROOT/}"; return 1; }
+  done
+  grep -q "^func $agt(" "$fg" 2>/dev/null || { WHY="the node half's test $agt is not in ${fg#$ROOT/}"; return 1; }
+  WHAT='别人的登录名拼进地址 → 403、节点一次都没被问；只读登记表里本登录的那个文件（测试按名核对在，Go 门跑它们）'
+  if command -v node >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger/web" && node --test test/svc-log.test.mjs 2>&1); rc=$?
+    [ "$rc" = 0 ] || { WHY="the page half is red: $(printf '%s\n' "$out" | grep -m 4 -E 'not ok|Error|expected|actual' | tr '\n' ' ')"; return 1; }
+    WHAT="${WHAT}；页面：403 写「只有管理员看得到」、不重试（node --test）"
+  fi
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run "^($(printf '%s %s' "$api" "$agt" | tr ' ' '|'))\$" ./internal/api ./internal/agent 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
+      0:*) WHAT="${WHAT}；go test：403、一份节点流、打码、只读登记的文件" ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
+      *) WHY="the Go half is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  fi
+  SECS=$(since "$t0")
 }
 
 cred_run_drills "$0"

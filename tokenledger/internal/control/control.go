@@ -669,6 +669,76 @@ func (s ServiceStatus) Failed() bool {
 	return false
 }
 
+// A service's log, live (claude-fleet#2797, EPIC #2792 C5): the hub asks the
+// login's lane for ONE entry of the register — the lane's own login, never a
+// path — and the machine program (root) reads only that entry's log file, the
+// path the daemon's service_log() computed into state.json, opened without
+// following a link and only when the login owns it. TypeServiceLog opens a
+// follow (the last Tail lines, then each new one) or answers one page before
+// an offset; every TypeServiceLogLines carries the request's op_id; a follow
+// ends at TypeServiceLogStop, or when no TypeServiceLog with Renew and the same
+// op_id has come for ServiceLogLease. Sent only to a lane whose hello listed
+// CapServiceLog; a refusal is a TypeError by op_id.
+const (
+	TypeServiceLog      = "service_log"
+	TypeServiceLogLines = "service_log_lines"
+	TypeServiceLogStop  = "service_log_stop"
+	// CapServiceLog is the hello capability of a machine program's lane that
+	// serves TypeServiceLog. An older one never says it and is never asked.
+	CapServiceLog = "service_log"
+)
+
+// The bounds of a log stream: a page of at most ServiceLogTail lines (the
+// first screen, and each page scrolled up), a line cut at ServiceLogLineMax
+// bytes, at most ServiceLogRate bytes a second (the middle of a burst is
+// dropped and counted), and a follow nobody renewed for ServiceLogLease ends.
+const (
+	ServiceLogTail    = 200
+	ServiceLogLineMax = 2 << 10
+	ServiceLogRate    = 64 << 10
+	ServiceLogLease   = 60 * time.Second
+)
+
+// ServiceLog is the payload of TypeServiceLog.
+type ServiceLog struct {
+	// Login is the lane's own; a lane refuses another (WRONG_LOGIN).
+	Login string `json:"login"`
+	Name  string `json:"name"`
+	// Tail is how many lines to start with (≤ ServiceLogTail).
+	Tail int `json:"tail"`
+	// Follow keeps the stream open for new lines; without it the answer is
+	// one page, Done.
+	Follow bool `json:"follow,omitempty"`
+	// Before asks for the page ending at this byte offset (scrolling up).
+	Before *int64 `json:"before,omitempty"`
+	// Renew extends a follow already open under this op_id; nothing is re-sent.
+	Renew bool `json:"renew,omitempty"`
+}
+
+// ServiceLogLine is one line of a log; TS is when the node read it (a new
+// line of a follow), absent for a line that was already there.
+type ServiceLogLine struct {
+	TS   *time.Time `json:"ts,omitempty"`
+	Text string     `json:"text"`
+}
+
+// ServiceLogLines is the payload of TypeServiceLogLines.
+type ServiceLogLines struct {
+	Lines []ServiceLogLine `json:"lines"`
+	// Skipped counts the lines dropped from the middle of a burst past
+	// ServiceLogRate.
+	Skipped int `json:"skipped,omitempty"`
+	// From is the byte offset of the first line (the next page's Before);
+	// Start says nothing comes before it in this file.
+	From  int64 `json:"from"`
+	Start bool  `json:"start,omitempty"`
+	// Rotated: the file was replaced (rotated) and the follow reopened it.
+	Rotated bool `json:"rotated,omitempty"`
+	// Done ends the stream: a page answered, or a follow stopped.
+	Done bool      `json:"done,omitempty"`
+	At   time.Time `json:"at"`
+}
+
 // DesiredReport is a managed node's word on its desired state: the version it
 // last converged to, the release it runs, and a one-line summary of what
 // still differs ("" = nothing).

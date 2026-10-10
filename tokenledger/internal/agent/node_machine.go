@@ -444,6 +444,7 @@ func RunMachine(ctx context.Context, mc MachineConfig) error {
 		}
 		tc.HubURL, tc.Version, tc.Fleet, tc.Once = mc.HubURL, mc.Version, true, false
 		tc.ServiceCtl = mc.ServiceCtl
+		tc.ServicesFile = mc.ServicesFile
 		if tc.FleetCreds && tc.FleetCredStore == "" {
 			// Root would otherwise write the login's credential files: in
 			// machine mode they go to the shared proxy or nowhere.
