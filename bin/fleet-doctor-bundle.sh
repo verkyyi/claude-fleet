@@ -51,7 +51,7 @@ done
 # the redactor: python3 when it runs, else awk — the same bytes either way
 red=${FLEET_REDACT:-}
 if [ -z "$red" ]; then
-  if [ -f "$here/fleet_redact.py" ] && python3 -c 'import re' >/dev/null 2>&1; then red=python; else red=awk; fi
+  if [ -f "$here/fleet_redact.py" ] && python3 -c 'import re' >/dev/null 2>&1; then red='python'; else red='awk'; fi
 fi
 redact() {  # redact <in> <out> <stats>
   if [ "$red" = python ]; then python3 "$here/fleet_redact.py" --table "$SHAPES" --stats "$3" < "$1" > "$2"
@@ -253,7 +253,7 @@ while IFS="$tab" read -r bp sp nl; do
   case $bp in *..*|*/) continue ;; esac
   case $nl in ''|*[!0-9]*) nl=200 ;; esac
   case $sp in
-    '~/'*) p="$HOME/${sp#\~/}" ;;
+    \~/*) p="$HOME/${sp#\~/}" ;;
     '$SHELL_CACHE/'*) p="$shell_cache/${sp#\$SHELL_CACHE/}" ;;
     '$CONF_DIR/'*) p="$conf_dir/${sp#\$CONF_DIR/}" ;;
     *) p=$sp ;;

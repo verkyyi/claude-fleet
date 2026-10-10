@@ -166,7 +166,7 @@ sys.stdout.buffer.write(sys.stdin.buffer.read())
 EOF
 run "$T/e" python env FLEET_BUNDLE_DOCTOR_CMD='echo doctor' sh "$T/e/root/bin/fleet-doctor.sh" --bundle "$T/e/b" > "$T/e/out" 2>&1
 rc=$?
-if [ "$rc" = 3 ] && [ ! -e "$T/e/b" ] && grep -q 'logs/connect.log' "$T/e/out" && [ -z "$(ls "$T/e" | grep '^b\.tmp')" ]; then
+if [ "$rc" = 3 ] && [ ! -e "$T/e/b" ] && grep -q 'logs/connect.log' "$T/e/out" && ! find "$T/e" -maxdepth 1 -name 'b.tmp*' | grep -q .; then
   ok "E a credential past redaction: exit 3, logs/connect.log named, nothing written"
 else bad "E (exit $rc)"; cat "$T/e/out"; ls "$T/e"; fi
 
