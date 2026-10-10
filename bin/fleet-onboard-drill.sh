@@ -114,81 +114,12 @@ PROG=fleet-onboard-drill
 BIN="$(cd "$(dirname "$0")" && pwd)"
 usage() { sed -n '2,5p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 die2() { printf '%s: %s\n' "$PROG" "$1" >&2; exit 2; }
-# list_row_named <name> (a screen on stdin): a list ROW carrying the name — the left column before 「│」,
-# never the input line 「› <name>」 (the typed name is not a session; matching
-# it passed the #1901 final run while the list said 「No sessions」). Only a
-# line of the split counts (one with 「│」: the shell prompt 「drill1007b@mini2 %」
-# above it passed #2221's run), and the name is a whole word — no letter,
-# digit, @, _ or - against either side.
-list_row_named() {
-  grep -F '│' | sed 's/│.*//' | grep -Ev '^[[:space:]]*›' \
-    | grep -E -- "(^|[^[:alnum:]@_-])$1(\$|[^[:alnum:]@_-])" | head -n 1 | sed 's/ *$//'
-}
-
-# qr_state <login> (a screen on stdin): qr — a 验证码 is up; none — the
-# installer is past its end (「能力:」, or 「用时 N 秒」 — the newcomer's install
-# prints no 能力 line, issue #2347) AND finished with no code (the client is up, it
-# could not open, or the person is back at a prompt); wait — anything else.
-# The installer prints 「能力:」 BEFORE its QR (#2255): 能力: alone is no proof
-# that this computer was already known, so it never reads none by itself.
-CLIENT_UP='新任务|[Nn]ew task|⌘N|⌘P'   # the list's portal row, else its bar's keys (run 2: 「⌘N 编排」, no 新任务)
-INSTALL_END='^(能力:|用时 [0-9]+ 秒)'
-qr_state() {
-  local p
-  p=$(cat)
-  if printf '%s\n' "$p" | grep -Eq '验证码 [A-Z]{4}-[A-Z]{4}'; then echo qr
-  elif printf '%s\n' "$p" | grep -Eq "$INSTALL_END" \
-       && printf '%s\n' "$p" | grep -Eq -- "$CLIENT_UP|open terminal failed|not a terminal|$1@[^ ]+ [^ ]* ?[%\$#] *\$"; then echo none
-  else echo wait; fi
-}
-
-# drill_png <file>: the attach step's screenshot — a 64×64 solid red PNG
-# (python3 alone: no Pillow, no screen to capture on a bare login)
-drill_png() {
-  python3 - "$1" <<'PY'
-import struct, sys, zlib
-def chunk(t, d):
-    return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xffffffff)
-w = h = 64
-raw = b"".join(b"\x00" + b"\xd0\x10\x10" * w for _ in range(h))
-open(sys.argv[1], "wb").write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
-                              + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
-PY
-}
-# attach_state (a screen on stdin): lost — the client said the file did not go;
-# answered — the session's text names the file on ITS machine
-# (…/attachments/<id>/…) and an answer says the colour; path — the path only;
-# wait — neither yet. The colour is in nothing the drill types.
-ATTACH_LOST='附件没带过去|did not go'
-ATTACH_RED='红|(^|[^[:alpha:]])[Rr]ed([^[:alpha:]]|$)'
-attach_state() {
-  local p
-  p=$(cat)
-  if printf '%s\n' "$p" | grep -Eq -- "$ATTACH_LOST"; then echo lost
-  elif ! printf '%s\n' "$p" | grep -qF '/attachments/'; then echo wait
-  elif printf '%s\n' "$p" | sed -n '/\/attachments\//,$p' | grep -Eq -- "$ATTACH_RED"; then echo answered
-  else echo path; fi
-}
-attach_answer() { sed -n '/\/attachments\//,$p' | grep -Eo -- "$ATTACH_RED" | head -n 1 | tr -d ' '; }
-# ls_row <name> (`fleet ls --json` on stdin): <node> TAB <key> TAB <fleet_id> of
-# the first session whose name starts with <name>. A hub row's key is
-# wid:<fleet UUID>/<fleet_id> — the window's lifelong @fleet_id is what finds it
-# on its machine; a row of this computer's own has none (-).
-ls_row() {
-  python3 -c '
-import json, sys
-try:
-    rows = json.load(sys.stdin)
-except ValueError:
-    sys.exit(1)
-for r in rows:
-    if str(r.get("name", "")).startswith(sys.argv[1]):
-        k = str(r.get("key", ""))
-        fid = k.split("/", 1)[1] if k.startswith("wid:") and "/" in k else "-"
-        print("%s\t%s\t%s" % (r.get("node", "") or "-", k, fid or "-"))
-        sys.exit(0)
-sys.exit(1)' "$1"
-}
+# The screen judgments (list_row_named · qr_state · attach_state · ls_row ·
+# drill_png) are platform-free and live in fleet-onboard-judge.sh, shared with
+# the Linux newcomer run bin/newcomer-cn.sh (issue #2888); this script keeps
+# the macOS login half (sysadminctl, Remote Login, fleet-login-remove).
+# shellcheck source=fleet-onboard-judge.sh
+. "$BIN/fleet-onboard-judge.sh"
 
 # --runs N (issue #2267, EPIC #2259 C8): the 60-second standard — a sandbox per
 # run, timed from the paste to the first key the agent takes, every known pit
@@ -446,7 +377,7 @@ step_install() {
   pass ask "$asked question(s), each answered with Enter (the default)"
   # 5 download: on to the QR, the end, or an error
   k=$(wait_for "$TIMEOUT" '验证码 [A-Z]{4}-[A-Z]{4}' "$INSTALL_END" 'fleet-install: |✗ |\[fleet-onboard-drill\] ssh exited')
-  NOISE=$(pane | grep -c 'curl: (')
+  NOISE=$(pane | curl_noise)
   case "$k" in
     1|2) shot download
          row "下载安装$([ "$NOISE" = 0 ] || printf '（屏上 %s 行 curl 报错）' "$NOISE")" "等" "$([ "$NOISE" = 0 ] && echo 否 || echo "是 — $NOISE 行 curl 报错会让人以为装坏了")"

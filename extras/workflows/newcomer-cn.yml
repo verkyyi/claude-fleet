@@ -1,0 +1,89 @@
+name: newcomer-cn
+
+# ⚠ STAGED here, not live: a fleet worker's token has no `workflow` scope, so it
+# cannot write .github/workflows/. Copy it in as is:
+#   cp extras/workflows/newcomer-cn.yml .github/workflows/  (a push with workflow scope)
+# bin/newcomer-cn-selftest.sh D reads whichever copy exists (.github first).
+
+# A newcomer's whole first time from a 国内 network, every day (issue #2888).
+#
+# Arvin's new machine in China hit three pits in a row (TLS roots #2878, the
+# placement threshold #2882, the relay dropping under Clash) on a road we had
+# only ever walked from the US. The self-hosted runner in the Shenzhen ACK
+# cluster is a Linux box on the same side of the firewall, so bin/newcomer-cn.sh
+# walks the road there against the REAL hub: a throwaway useradd login, the
+# install line, `fleet login` confirmed by a drill code (`fleet drill invite`,
+# no scan), `fleet claude` answering one sentence, `fleet connect <machine> --
+# true`, `fleet doctor` — each step timed against its budget (install ≤ 60 s,
+# login ≤ 10 s, first session ≤ 120 s, relay ssh ≤ 2 s) into the job summary,
+# a failing step's screen beside it — then the login and the drill person go.
+#
+# It needs two things this repo has to be given (both off until set, so the job
+# never queues for a runner that is not there):
+#   vars.NEWCOMER_CN_RUNNER     the runner label — `ack` once an ARC scale set
+#                               registered to THIS repo carries it (the cluster's
+#                               sets are registered to the monorepo today)
+#   secrets.FLEET_HUB_ADMIN_TOKEN  an admin's hub token: it mints the drill person
+#
+# Daily, by hand (with an optional proxy — the Clash leg; the no-proxy leg first),
+# and after every stable publish (the hub serves the new client from then on).
+# Two green days in a row, then it joins `fleet release`'s ① checks.
+
+on:
+  schedule:
+    - cron: '23 1 * * *'   # 09:23 CST
+  workflow_run:
+    workflows: ['stable publish']
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      hub:
+        description: the hub (入口) to walk against
+        required: false
+        default: https://claudefleet.24haowan.com
+      host:
+        description: the drill person's machine (fleet drill invite --host)
+        required: false
+        default: mini2
+      proxy:
+        description: an http(s)/socks5 proxy for the newcomer (empty = none) — the Clash leg
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: newcomer-cn
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  walk:
+    name: newcomer (国内 · ${{ inputs.proxy != '' && 'proxy' || 'no proxy' }})
+    if: >-
+      vars.NEWCOMER_CN_RUNNER != '' &&
+      (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success')
+    runs-on: ${{ vars.NEWCOMER_CN_RUNNER || 'ack' }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Walk the newcomer's road
+        env:
+          CCQUOTA_VIEWER_TOKEN: ${{ secrets.FLEET_HUB_ADMIN_TOKEN }}
+          HUB: ${{ inputs.hub || 'https://claudefleet.24haowan.com' }}
+          HOST: ${{ inputs.host || 'mini2' }}
+          PROXY: ${{ inputs.proxy || '' }}
+        run: |
+          bin/newcomer-cn.sh --hub "$HUB" --host "$HOST" --out "$RUNNER_TEMP/newcomer-cn" ${PROXY:+--proxy "$PROXY"}
+      - name: Keep the screens
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: newcomer-cn-screens
+          path: ${{ runner.temp }}/newcomer-cn
+          retention-days: 14
+          if-no-files-found: ignore
