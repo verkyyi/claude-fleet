@@ -232,7 +232,7 @@ client_where() {
 # terminal is the one client_open saved for this tty (fleet-client-lease.py).
 # Not a display-message: a message on a client keeps a popup from drawing until
 # it clears (the standby screen, ⌘P). The bar's format shows it instead, for the
-# ttys in `@fleet_clip_hint` (`|<tty>|…`), FLEET_CLIP_HINT_SECS (20) long.
+# ttys in `@fleet_clip_hint` (`|<tty>|…`), 20 seconds long.
 clip_reach() {  # <terminal name> → rc 0 when it is known to take OSC 52
   case "$(printf '%s' "$1" | tr 'A-Z' 'a-z')" in
     *iterm*|*blink*|*ghostty*|*kitty*|*wezterm*|*alacritty*|*foot*|*contour*) return 0 ;;
@@ -252,7 +252,7 @@ clip_hint() {
   T set-option -g @fleet_clip_hint_text "$(sh "$BIN/fleet-ui-lang.sh" t clip_hint 2>/dev/null)" 2>/dev/null
   # this tty off the list again once it has been read (the attach exec's this
   # shell away; the subshell outlives it, as the keeper does)
-  ( trap '' HUP; sleep "${FLEET_CLIP_HINT_SECS:-20}"
+  ( trap '' HUP; sleep 20
     cur=$(T show-options -gqv @fleet_clip_hint 2>/dev/null); cur=${cur//"|$tt|"/|}
     if [ "$cur" = '|' ] || [ -z "$cur" ]; then T set-option -gu @fleet_clip_hint 2>/dev/null
     else T set-option -g @fleet_clip_hint "$cur" 2>/dev/null; fi ) </dev/null >/dev/null 2>&1 &
