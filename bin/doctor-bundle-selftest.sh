@@ -28,7 +28,7 @@ awkr() { LC_ALL=C awk -v table="$SHAPES" -f "$BIN/fleet-redact.awk" "$@"; }
 cat > "$T/corpus" <<'EOF'
 plain: desk-session-handoff-notes-and-more task-runner HostKeyAlias=fleet-m5 ConnectTimeout=15
 GH ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123 and github_pat_11ABCDEFGHIJKLMNOPQRST_xyz
-key sk-ant-api03-abcdefghijklmnop more sk-proj-abcdefghijklmnopqrstuvwx
+key sk-ant-api03-abcdefghijklmnop more
 -----BEGIN OPENSSH PRIVATE KEY-----
 b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
 -----END OPENSSH PRIVATE KEY----- tail
@@ -37,11 +37,12 @@ x -----BEGIN RSA PRIVATE KEY-----abc-----END RSA PRIVATE KEY----- y
 curl -H "bearer abcdefghijklmnopqrstuvwxyz0123"
 < set-cookie: sid=abc; Path=/
 GET https://hub.example/v1/x?a=1&token=deadbeef&sig=zz#frag
-export FLEET_HUB_TOKEN="abc def" CCQUOTA_FLEET_DEBUG_KEY=s3cret DB_PASSWORD='p w' OTHER=1
+export FLEET_HUB_TOKEN="abc def" CCQUOTA_FLEET_DEBUG_KEY=s3cret DB_PASSWORD='p w' GH_TOKEN=plainval OTHER=1
+GET https://hub.example/x?api_key=SEKRIT&b=2
   "token": "hub-secret-value", "url": "https://x"
 fleet-debug ticket fdt.abc.def · Authorization: FleetDebug fdt.x
 jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.sig_abc-123 end
-AKIAABCDEFGHIJKLMNOP xoxb-1234567890-abc AIzaSyA1234567890abcdefghijklmnopqrstu glpat-abcdefghijklmnopqrstu
+AKIAABCDEFGHIJKLMNOP xoxb-1234567890-abc AIzaSyA1234567890abcdefghijklmnopqrstu glpat-FAKE-not-real
 üñï ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123ü
 -----BEGIN EC PRIVATE KEY-----
 unterminated body
@@ -51,7 +52,7 @@ printf 'no newline ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123' >> "$T/corpus"
 # --- A ---------------------------------------------------------------------------
 if python3 "$BIN/fleet_redact.py" --lint; then ok "A the table passes fleet_redact.py --lint"; else bad "A the table fails its lint"; fi
 if printf '' | awkr >/dev/null; then ok "A the awk copy loads the table"; else bad "A the awk copy cannot load the table"; fi
-printf 'bad\tvalue\tx^y\n' > "$T/bad.list"
+printf 'bad\tx^y\n' > "$T/bad.list"
 python3 "$BIN/fleet_redact.py" --table "$T/bad.list" --lint 2>/dev/null
 [ $? = 2 ] && ok "A a row with ^ is refused (exit 2)" || bad "A a row with ^ was accepted"
 python3 "$BIN/fleet_redact.py" --stats "$T/st" < "$T/corpus" > /dev/null
@@ -96,7 +97,7 @@ run() {  # run <sandbox> <redactor> <cmd…>
     [ "$r" = auto ] || export FLEET_REDACT="$r"
     "$@" )
 }
-PLANTED='ghp_ABCDEFGHIJ github_pat_11ABC sk-ant-api03 sk-proj- b3BlbnNzaC1 abcdefghijklmnopqrstuvwxyz deadbeef s3cret hub-secret-value fdt.abc eyJhbGci AKIAABCD xoxb- AIzaSy glpat- hunter2pw NOTLISTED_'
+PLANTED='ghp_ABCDEFGHIJ github_pat_11ABC sk-ant-api03 b3BlbnNzaC1 abcdefghijklmnopqrstuvwxyz deadbeef s3cret plainval SEKRIT hub-secret-value fdt.abc eyJhbGci AKIAABCD xoxb- AIzaSy glpat-FAKE hunter2pw NOTLISTED_'
 leaks() {  # leaks <bundle dir> → the planted words still in it
   local w out=''
   for w in $PLANTED; do grep -rqF -e "$w" "$1" && out="$out $w"; done
@@ -149,7 +150,7 @@ printf '#!/bin/sh\n[ "$1" = doctor ] && printf "PASS\\tclient stub ghp_ABCDEFGHI
 chmod +x "$T/d/root/bin/"*
 run "$T/d" auto sh "$T/d/root/bin/fleet" doctor --bundle "$T/d/b" > "$T/d/out" 2>&1
 rc=$?
-if [ "$rc" = 0 ] && grep -q 'PASS  fleet    client stub <redacted:github-token>' "$T/d/b/doctor.txt" \
+if [ "$rc" = 0 ] && grep -q 'PASS  fleet    client stub <redacted:github>' "$T/d/b/doctor.txt" \
    && grep -q '"source": "fleet doctor (client)"' "$T/d/b/manifest.json" && [ -z "$(leaks "$T/d/b")" ]; then
   ok "D bin/fleet doctor --bundle with only the client: the client's doctor, redacted"
 else bad "D client-only (exit $rc)"; cat "$T/d/out"; cat "$T/d/b/doctor.txt" 2>/dev/null; fi

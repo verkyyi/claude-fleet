@@ -58,9 +58,8 @@ bin/fleet-install-apply.sh          tool
 bin/fleet-hooks-merge.py            tool
 bin/fleet-agent-defaults.py         tool
 bin/fleet-agent-team.py             tool
-# the credential shapes its scan reads — one table with the diagnosis bundle (#2890)
+# its credential scan reads conf/secret-shapes.list through this (#2890)
 bin/fleet_redact.py                 tool
-conf/secret-shapes.list             tool
 bin/fleet-config.py                 tool
 bin/fleet-daemon-lib.sh             tool
 

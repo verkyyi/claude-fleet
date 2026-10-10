@@ -96,6 +96,10 @@ try:  # the ONE TLS context for the hub: every CA source this computer has (clau
     fleet_tls.install()
 except ImportError:
     fleet_tls = None
+try:  # the client's own record: login.log (claude-fleet#2896, docs/CLIENT-LOGS.md)
+    import fleet_clientlog
+except ImportError:
+    fleet_clientlog = None
 
 HOME = os.path.expanduser("~")
 SSH_DIR = os.path.join(HOME, ".ssh")
@@ -181,7 +185,11 @@ def tls_hint(e):
     return (" — " + h) if h else ""
 
 
+DIED = []   # die()'s words, for login.log (claude-fleet#2896)
+
+
 def die(msg, code=2):
+    DIED.append(msg)
     print("fleet login: " + msg, file=sys.stderr)
     sys.exit(code)
 
@@ -540,11 +548,36 @@ def cert_refused(hub):
     return why if any(r in why for r in RESCAN_REFUSALS) else ""
 
 
+def tls_sources():
+    """Which CA sources this python verifies the hub with (#2878), for login.log."""
+    try:
+        return "tls: " + fleet_tls.describe() if fleet_tls else "tls: no fleet_tls"
+    except Exception as e:  # a log line, never the login's failure
+        return "tls: %s" % e
+
+
+def llog(event, hub, ms, result, reason):
+    """One line in the client's login.log (claude-fleet#2896); never fails."""
+    if fleet_clientlog:
+        fleet_clientlog.write("login", event, hub, "-", str(int(ms)), result, reason)
+
+
 def renew(hub, quiet=False, include=True):
     """Renew by the device key. Returns 0 renewed · NEEDS_SCAN (3) when the hub
     says this device must scan again · 1 for anything else (hub unreachable,
-    a refused clock, no key yet)."""
-    say = (lambda *_: None) if quiet else (lambda m: print("fleet login: " + m, file=sys.stderr))
+    a refused clock, no key yet). Each call is one line in login.log."""
+    t0, said = time.time(), []
+    rc = _renew(hub, quiet, include, said)
+    llog("renew", hub, (time.time() - t0) * 1000, {0: "ok", NEEDS_SCAN: "scan"}.get(rc, "fail"),
+         " | ".join(said[-2:] + [tls_sources()]))
+    return rc
+
+
+def _renew(hub, quiet, include, said):
+    def say(m):
+        said.append(m)
+        if not quiet:
+            print("fleet login: " + m, file=sys.stderr)
     if not (os.path.exists(KEY) and os.path.exists(KEY + ".pub")):
         say("no device key yet (%s) — scan to sign in" % KEY)
         return NEEDS_SCAN
@@ -956,7 +989,13 @@ def cmd_login(argv):
     hub_arg, invert, include, _, qr = parse_scan_opts(argv)
     hub = hub_url(hub_arg)
     clear_stale_identity(hub)
-    res = scan(hub, invert, qr=qr)
+    t0 = time.time()
+    try:
+        res = scan(hub, invert, qr=qr)
+    except SystemExit as e:
+        llog("scan", hub, (time.time() - t0) * 1000, "fail %s" % e.code, " | ".join(DIED[-1:] + [tls_sources()]))
+        raise
+    llog("scan", hub, (time.time() - t0) * 1000, "ok", "valid_before %s · %s" % (res.get("valid_before", "?"), tls_sources()))
     was_node = os.path.exists(NODE_ENV)
     # 登录即登记 (claude-fleet#2212): the same confirmation makes it a node —
     # before the snippet is written, so it carries a node's machine-to-machine

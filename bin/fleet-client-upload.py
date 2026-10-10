@@ -30,7 +30,11 @@ it, on whatever machine it runs (issue #2757, EPIC #2756 C1).
         and the paths swapped for theirs on the session's machine. A file that
         did not go is said on the client's bottom line, never handed on as a
         path the session cannot open. The child gets a pty of its own (its
-        size follows the pane's), so ssh -tt behaves exactly as on the pane.
+        size follows the pane's), so ssh -tt behaves exactly as on the pane —
+        and what ssh says on that pty (its /dev/tty: the first connection's
+        «Are you sure you want to continue connecting», a passphrase) is
+        written to the pane, so the person can answer it (issue #2904: dropped,
+        every first connection to a machine hung on 「正在连接」).
         A filter that cannot start runs the command bare.
 
   fleet-client-upload.py sweep [--dry]
@@ -566,7 +570,7 @@ def filter_loop(a, cmd):
                 break
             fds = [0] if stdin_open else []
             if tty_in:
-                fds.append(master)   # the slave's echo before ssh goes raw: read, dropped
+                fds.append(master)   # what ssh says on its /dev/tty (#2904): to the pane
             tmo = 0.05 if waiting_since else 0.5
             try:
                 r, _, _ = select.select(fds, [], [], tmo)
@@ -577,9 +581,14 @@ def filter_loop(a, cmd):
                 waiting_since = 0.0
             if tty_in and master in r:
                 try:
-                    os.read(master, 65536)
+                    said = os.read(master, 65536)
                 except OSError:
-                    pass
+                    said = b""
+                if said:
+                    try:
+                        _writeall(1, said)
+                    except OSError:
+                        pass
             if 0 in r:
                 try:
                     data = os.read(0, 65536)

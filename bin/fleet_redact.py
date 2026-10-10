@@ -2,9 +2,10 @@
 """fleet_redact.py — take credentials out of text, by conf/secret-shapes.list.
 
 Issue #2890 (EPIC #2889 C1, 共同约定第 1 条). The ONE table of credential shapes
-is conf/secret-shapes.list; this file and bin/fleet-redact.awk (for a computer
-with no working Python — C3's fleet-debug) both read it and must write the same
-bytes for the same input (doctor-bundle-selftest.sh pins it).
+is conf/secret-shapes.list (C7 #2896 made it; bin/fleet_clientlog.py and
+fleet_clientlog in bin/fleet-client-lib.sh read it too). This file and
+bin/fleet-redact.awk (for a computer with no working Python — C3's fleet-debug)
+must write the same bytes for the same input (doctor-bundle-selftest.sh pins it).
 
     fleet_redact.py [--table F] [--stats F] < in > out   every match → <redacted:name>
     fleet_redact.py [--table F] --check FILE…             FILE<TAB>shape per hit; exit 1 on any
@@ -13,10 +14,10 @@ bytes for the same input (doctor-bundle-selftest.sh pins it).
 --stats writes `<name><TAB><count>` for every shape that replaced something, in
 table order. Exit 2: the table is missing or a row is bad.
 
-Same semantics as the awk copy, line by line (bytes, `\\n`-split, every line
-written back with a `\\n`): the open block shape first (its lines dropped, the
-end line's rest kept), then each row in table order, left to right — a `value`
-match that follows [A-Za-z0-9_] is skipped and the search goes on one byte later.
+Line by line (bytes, `\\n`-split, every line written back with a `\\n`): an open
+`#@block` first (its lines dropped, the end line's rest kept; a begin whose end
+is not on its line opens one), then every row top to bottom, each over the whole
+line — the client logs' own semantics (fleet_clientlog.py's `sub`, awk's `gsub`).
 """
 import os
 import re
@@ -27,79 +28,75 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 TABLE = next((t for t in (os.path.join(d, "..", "conf", "secret-shapes.list")
                           for d in (HERE, os.path.dirname(os.path.realpath(__file__))))
               if os.path.isfile(t)), os.path.join(HERE, "..", "conf", "secret-shapes.list"))
-KINDS = ("value", "text", "block")
-WORD = re.compile(rb"[A-Za-z0-9_]")
 
 
 class Shape(object):
-    __slots__ = ("name", "kind", "rx", "end")
+    __slots__ = ("name", "rx", "end", "tok")
 
-    def __init__(self, name, kind, pat, end):
-        self.name, self.kind = name, kind
+    def __init__(self, name, pat, end=""):
+        self.name = name
         self.rx = re.compile(pat.encode())
         self.end = re.compile(end.encode()) if end else None
+        self.tok = b"<redacted:" + name.encode() + b">"
 
 
-def lint_row(cols):
-    """'' when a row is good, else why not."""
-    if len(cols) < 3:
-        return "needs name, kind and an ERE"
-    name, kind, pat = cols[0], cols[1], cols[2]
-    if not re.match(r"^[a-z0-9-]+$", name):
-        return "name %r: lowercase letters, digits and - only" % name
-    if kind not in KINDS:
-        return "kind %r: one of %s" % (kind, " ".join(KINDS))
-    if (kind == "block") != (len(cols) == 4):
-        return "only a block row has an end ERE"
-    for p in cols[2:]:
-        for bad in ("\\", "^", "$"):
-            if bad in p.replace("[^", "["):
-                return "ERE %r: no %r (awk and Python read it differently)" % (p, bad)
-        try:
-            if re.compile(p).search(""):
-                return "ERE %r matches the empty string" % p
-        except re.error as e:
-            return "ERE %r: %s" % (p, e)
+class Table(object):
+    def __init__(self):
+        self.rows, self.blocks, self.scan = [], [], []
+
+
+def lint_pat(p):
+    """'' when an ERE keeps to the rules both readers share, else why not."""
+    for bad, why in (("\\", "a backslash"), ("{", "an interval"), ("(?", "(?…)"), ("[[:", "a [[:class:]]"),
+                     ("$", "an anchor")):
+        if bad in p:
+            return "%r: no %s (awk and Python read it differently)" % (p, why)
+    if "^" in p.replace("[^", "["):
+        return "%r: no anchor" % p
+    try:
+        if re.compile(p).search(""):
+            return "%r matches the empty string" % p
+    except re.error as e:
+        return "%r: %s" % (p, e)
     return ""
 
 
 def load(path=None):
     path = path or TABLE
-    shapes, seen = [], set()
+    t, names = Table(), set()
     with open(path) as f:
         for n, line in enumerate(f, 1):
             line = line.rstrip("\n")
-            if not line.strip() or line.startswith("#"):
-                continue
             cols = line.split("\t")
-            why = lint_row(cols)
-            if not why and cols[0] in seen:
-                why = "name %r twice" % cols[0]
+            why = ""
+            if line.startswith("#@block\t"):
+                if len(cols) != 4:
+                    why = "#@block needs a name, a begin and an end"
+                else:
+                    why = lint_pat(cols[2]) or lint_pat(cols[3])
+                    t.blocks.append(Shape(cols[1], cols[2], cols[3]))
+            elif line.startswith("#@scan\t"):
+                t.scan = line.split("\t", 1)[1].split()
+            elif line.startswith("#") or "\t" not in line:
+                continue
+            elif len(cols) != 2:
+                why = "one tab: <name><TAB><ERE>"
+            elif not re.match(r"^[a-z0-9_]+$", cols[0]) or cols[0] in names:
+                why = "name %r: lowercase, digits and _, once" % cols[0]
+            else:
+                why = lint_pat(cols[1])
+                names.add(cols[0])
+                t.rows.append(Shape(cols[0], cols[1]))
             if why:
                 raise ValueError("%s:%d: %s" % (path, n, why))
-            seen.add(cols[0])
-            shapes.append(Shape(cols[0], cols[1], cols[2], cols[3] if len(cols) > 3 else ""))
-    return shapes
+    unknown = [x for x in t.scan if x not in names]
+    if unknown or not t.rows:
+        raise ValueError("%s: %s" % (path, "#@scan names no row: %s" % " ".join(unknown) if unknown else "no shapes"))
+    return t
 
 
-def _search(sh, line, pos):
-    """The leftmost match at or after pos, honouring a value's boundary."""
-    while pos <= len(line):
-        m = sh.rx.search(line, pos)
-        if not m:
-            return None
-        s = m.start()
-        if sh.kind == "value" and s > 0 and WORD.match(line, s - 1):
-            pos = s + 1
-            continue
-        return m
-    return None
-
-
-def redact_lines(lines, shapes, counts):
+def redact_lines(lines, t, counts):
     """Yield the redacted lines (bytes, no newline); counts[name] += hits."""
-    blocks = [s for s in shapes if s.kind == "block"]
-    inline = [s for s in shapes if s.kind != "block"]
     inside = None
     for line in lines:
         if inside is not None:
@@ -109,37 +106,16 @@ def redact_lines(lines, shapes, counts):
             inside, line = None, line[m.end():]
             if not line:
                 continue
-        for sh in blocks:
-            pos = 0
-            while True:
-                m = sh.rx.search(line, pos)
-                if not m:
-                    break
+        for sh in t.blocks:
+            m = sh.rx.search(line)
+            if m and not sh.end.search(line, m.end()):
                 counts[sh.name] = counts.get(sh.name, 0) + 1
-                tok = b"<redacted:" + sh.name.encode() + b">"
-                rest = line[m.end():]
-                e = sh.end.search(rest)
-                if not e:
-                    line, inside = line[:m.start()] + tok, sh
-                    break
-                line = line[:m.start()] + tok + rest[e.end():]
-                pos = m.start() + len(tok)
-            if inside is not None:
+                line, inside = line[:m.start()] + sh.tok, sh
                 break
-        for sh in inline:
-            out, pos = [], 0
-            tok = b"<redacted:" + sh.name.encode() + b">"
-            while True:
-                m = _search(sh, line, pos)
-                if not m:
-                    break
-                out.append(line[pos:m.start()])
-                out.append(tok)
-                counts[sh.name] = counts.get(sh.name, 0) + 1
-                pos = m.end()
-            if out:
-                out.append(line[pos:])
-                line = b"".join(out)
+        for sh in t.rows:
+            line, k = sh.rx.subn(sh.tok, line)
+            if k:
+                counts[sh.name] = counts.get(sh.name, 0) + k
         yield line
 
 
@@ -150,39 +126,31 @@ def split_lines(data):
     return lines
 
 
-def redact(data, shapes=None, counts=None):
+def redact(data, t=None, counts=None):
     """bytes → (bytes, {name: hits})."""
-    shapes = load() if shapes is None else shapes
+    t = load() if t is None else t
     counts = {} if counts is None else counts
-    out = b"".join(l + b"\n" for l in redact_lines(split_lines(data), shapes, counts))
+    out = b"".join(l + b"\n" for l in redact_lines(split_lines(data), t, counts))
     return out, counts
 
 
-def hits(data, shapes=None):
+def hits(data, t=None):
     """The shape names found in bytes (the whole-bundle check)."""
-    shapes = load() if shapes is None else shapes
+    t = load() if t is None else t
     found = []
     for line in split_lines(data):
-        for sh in shapes:
-            if sh.name in found:
-                continue
-            if (sh.rx.search(line) if sh.kind == "block" else _search(sh, line, 0)):
+        for sh in t.blocks + t.rows:
+            if sh.name not in found and sh.rx.search(line):
                 found.append(sh.name)
     return found
 
 
-def find_str(text, shapes=None):
-    """True when a str holds a `value` or `block` shape — fleet-agent-team.py's
-    credential scan of a config value (a context shape is not its business)."""
-    shapes = load() if shapes is None else shapes
+def find_str(text, t=None):
+    """True when a str holds a credential VALUE — a `#@scan` row:
+    fleet-agent-team.py's scan of a config value."""
+    t = load() if t is None else t
     data = text.encode("utf-8", "surrogateescape")
-    for line in split_lines(data):
-        for sh in shapes:
-            if sh.kind == "block" and sh.rx.search(line):
-                return True
-            if sh.kind == "value" and _search(sh, line, 0):
-                return True
-    return False
+    return any(sh.rx.search(data) for sh in t.rows if sh.name in t.scan)
 
 
 def main(argv):
@@ -230,8 +198,10 @@ def main(argv):
     sys.stdout.buffer.write(out)
     if stats:
         with open(stats, "w") as f:
-            for sh in shapes:
-                if counts.get(sh.name):
+            done = set()
+            for sh in shapes.blocks + shapes.rows:
+                if counts.get(sh.name) and sh.name not in done:
+                    done.add(sh.name)
                     f.write("%s\t%d\n" % (sh.name, counts[sh.name]))
     return 0
 

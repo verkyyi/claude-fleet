@@ -6,39 +6,28 @@
 #   LC_ALL=C awk -v table=conf/secret-shapes.list [-v stats=F] -f fleet-redact.awk [in]
 #   LC_ALL=C awk -v table=… -v mode=check -f fleet-redact.awk FILE…   FILE<TAB>shape per hit; exit 1
 #
-# Line by line: the open block shape first (its lines dropped, the end line's rest
-# kept), then each row in table order, left to right — a `value` match that
-# follows [A-Za-z0-9_] is skipped and the search goes on one byte later.
-# Exit 2: the table is missing or a row breaks its rules (fleet_redact.py --lint
-# says which).
+# Line by line: an open `#@block` first (its lines dropped, the end line's rest
+# kept; a begin whose end is not on its line opens one), then every row top to
+# bottom, each over the whole line (gsub — fleet_clientlog's own semantics).
+# Exit 2: the table cannot be read (fleet_redact.py --lint says what is wrong
+# with a row).
 
 function die(msg) { printf "fleet-redact.awk: %s\n", msg > "/dev/stderr"; bad = 1; exit 2 }
-
-# vsearch(i, s, from) — the leftmost match of row i in s at or after byte `from`;
-# sets M_S / M_L (1-based start, length), 0 when none.
-function vsearch(i, s, from,    rest, off) {
-  while (from <= length(s) + 1) {
-    rest = substr(s, from)
-    if (!match(rest, RE[i])) return 0
-    if (RLENGTH == 0) return 0
-    off = from + RSTART - 1
-    if (KIND[i] == "value" && off > 1 && substr(s, off - 1, 1) ~ /[A-Za-z0-9_]/) { from = off + 1; continue }
-    M_S = off; M_L = RLENGTH
-    return 1
-  }
-  return 0
-}
+function cnt(name, k) { if (!(name in CNT)) { ORD[++no] = name; CNT[name] = 0 } CNT[name] += k }
 
 BEGIN {
   if (table == "") die("no table (-v table=conf/secret-shapes.list)")
-  n = 0
+  n = 0; nb = 0; no = 0
   while ((r = (getline row < table)) > 0) {
-    if (row ~ /^[ \t]*$/ || substr(row, 1, 1) == "#") continue
     k = split(row, f, "\t")
-    if (k < 3 || (f[2] != "value" && f[2] != "text" && f[2] != "block") || ((f[2] == "block") != (k == 4)))
-      die(table ": bad row: " row)
-    n++; NAME[n] = f[1]; KIND[n] = f[2]; RE[n] = f[3]; END_RE[n] = (k == 4 ? f[4] : "")
-    TOK[n] = "<redacted:" f[1] ">"; CNT[n] = 0
+    if (f[1] == "#@block") {
+      if (k != 4) die(table ": bad #@block: " row)
+      nb++; BNAME[nb] = f[2]; BRE[nb] = f[3]; BEND[nb] = f[4]
+      continue
+    }
+    if (substr(row, 1, 1) == "#" || k < 2) continue
+    if (k != 2) die(table ": bad row: " row)
+    n++; NAME[n] = f[1]; RE[n] = f[2]; TOK[n] = "<redacted:" f[1] ">"
   }
   if (r < 0) die("cannot read " table)
   if (n == 0) die(table ": no shapes")
@@ -48,44 +37,31 @@ BEGIN {
 
 mode == "check" {
   if (FNR == 1) { delete HIT }
-  for (i = 1; i <= n; i++) {
-    if (i in HIT) continue
-    if (KIND[i] == "block" ? match($0, RE[i]) : vsearch(i, $0, 1)) {
-      HIT[i] = 1; printf "%s\t%s\n", FILENAME, NAME[i]; rc = 1
-    }
-  }
+  for (i = 1; i <= nb; i++)
+    if (!(BNAME[i] in HIT) && match($0, BRE[i])) { HIT[BNAME[i]] = 1; printf "%s\t%s\n", FILENAME, BNAME[i]; rc = 1 }
+  for (i = 1; i <= n; i++)
+    if (!(NAME[i] in HIT) && match($0, RE[i])) { HIT[NAME[i]] = 1; printf "%s\t%s\n", FILENAME, NAME[i]; rc = 1 }
   next
 }
 
 {
   line = $0
   if (inside) {
-    if (!match(line, END_RE[inside])) next
+    if (!match(line, BEND[inside])) next
     line = substr(line, RSTART + RLENGTH); inside = 0
     if (line == "") next
   }
-  for (i = 1; i <= n && !inside; i++) {
-    if (KIND[i] != "block") continue
-    pos = 1
-    while (pos <= length(line) + 1) {
-      rest = substr(line, pos)
-      if (!match(rest, RE[i])) break
-      s = pos + RSTART - 1; after = substr(line, s + RLENGTH)
-      CNT[i]++
-      if (!match(after, END_RE[i])) { line = substr(line, 1, s - 1) TOK[i]; inside = i; break }
-      line = substr(line, 1, s - 1) TOK[i] substr(after, RSTART + RLENGTH)
-      pos = s + length(TOK[i])
-    }
+  for (i = 1; i <= nb; i++) {
+    if (!match(line, BRE[i])) continue
+    s = RSTART
+    if (match(substr(line, s + RLENGTH), BEND[i])) continue
+    cnt(BNAME[i], 1)
+    line = substr(line, 1, s - 1) "<redacted:" BNAME[i] ">"; inside = i
+    break
   }
   for (i = 1; i <= n; i++) {
-    if (KIND[i] == "block") continue
-    out = ""; pos = 1; got = 0
-    while (vsearch(i, line, pos)) {
-      out = out substr(line, pos, M_S - pos) TOK[i]
-      CNT[i]++; got = 1
-      pos = M_S + M_L
-    }
-    if (got) line = out substr(line, pos)
+    k = gsub(RE[i], TOK[i], line)
+    if (k) cnt(NAME[i], k)
   }
   print line
 }
@@ -95,7 +71,9 @@ END {
   if (mode == "check") exit rc
   if (stats != "") {
     printf "" > stats
-    for (i = 1; i <= n; i++) if (CNT[i] > 0) printf "%s\t%d\n", NAME[i], CNT[i] > stats
+    # the table's order, as the Python copy writes it: blocks, then rows
+    for (i = 1; i <= nb; i++) if (BNAME[i] in CNT && !(BNAME[i] in DONE)) { DONE[BNAME[i]] = 1; printf "%s\t%d\n", BNAME[i], CNT[BNAME[i]] > stats }
+    for (i = 1; i <= n; i++) if (NAME[i] in CNT && !(NAME[i] in DONE)) { DONE[NAME[i]] = 1; printf "%s\t%d\n", NAME[i], CNT[NAME[i]] > stats }
     close(stats)
   }
 }

@@ -232,7 +232,7 @@ BREAK-IT `managed-login-own-copy`）。跟不上的记进 `update.json` 的 `fol
 4. **切换**：每个托管账号（降权、它自己的 HOME / TMPDIR）先跑新版的 `fleet-sessions-snapshot.sh save`，把没做完的会话钉进它的 `global/sessions.snapshot`（#2484）→ 记下当前（旧版）的机器体检 FAIL 作基线 → `.prev` = 旧版、`current` = 新版（各一次 rename）→ 开号缓存、账号链接、共享凭据代理的代码副本（`machine refresh`）、每个托管登录的 `~/.claude/fleet`（`link-tree` + 两目录 apply，#2774）→ 请守护重启。
 5. **验证**（下一轮，新代码，`FLEET_NODE_UPDATE_SETTLE` 30 秒后）：机器体检（`fleet doctor --machine`）比基线多出 FAIL
    （判之前先 `machine refresh` 一次：由不认识 credsep 的旧更新器换上来的版本，副本还是旧的）
-   → `current` 切回 `.prev`，缓存、链接、代理副本、每个托管登录的 `~/.claude/fleet` 一起回，这一版记 `skip`（stable 再动之前不重试），再请守护重启；否则 `committed`。提交或回退之后每个托管账号跑那一版的 `fleet-sessions-snapshot.sh restore`：钉住的会话按原名、原目录、原对话经 `fleet-restore.sh` 开回（已关单 / 已删目录 / fleet-down 的不开），回来几个、缺哪个记进 `update.log`（BREAK-IT `node-update-sessions`；`FLEET_NODE_UPDATE_SESSIONS=0` 关）。
+   → `current` 切回 `.prev`，缓存、链接、代理副本、每个托管登录的 `~/.claude/fleet` 一起回，这一版记 `skip`（回退的原因只是一条已成过去时的签名失败就当拍重试，否则 `FLEET_NODE_UPDATE_SKIP_RETRY` 6 小时后再试、同一版每回退一次翻倍、最多一周；`0` = stable 再动之前不重试——#2906）。机器体检的 `key` 行只认比最近一次验过章的取包更新的签名失败；入口的 torn read（入口给的钥匙 = 钉住的）只 WARN，不作回退依据，再请守护重启；否则 `committed`。提交或回退之后每个托管账号跑那一版的 `fleet-sessions-snapshot.sh restore`：钉住的会话按原名、原目录、原对话经 `fleet-restore.sh` 开回（已关单 / 已删目录 / fleet-down 的不开），回来几个、缺哪个记进 `update.log`（BREAK-IT `node-update-sessions`；`FLEET_NODE_UPDATE_SESSIONS=0` 关）。
 6. 退下来的版本留 7 天（`FLEET_NODE_UPDATE_KEEP_SECS`），`current` / `.prev` 永不删，还有托管登录的版本树链接着的也不删（#2774）；没有发布版再引用的工具缓存一起清。
 
 ### 机器体检
@@ -439,7 +439,7 @@ BREAK-IT 行 `service-handwritten`。只点名接管过的登录（`logins/<登�
 次日 07:00 的 `daily-<日期>` 会话由守护开出；手机收到一条测试短信推送。`~/daily-report/run.sh --now`
 仍可手动补跑一版。
 
-## 14. 托管机器不是谁的常驻客户端（#2702 · #2720）
+## 14. 托管机器不是谁的常驻客户端（#2702 · #2720 · #2904）
 
 人在自己的设备上跑 `fleet`（客户端壳）；托管机器只跑会话和后台服务。所以在托管机器上
 （有 `/var/db/fleet-node/machine.env`）：
@@ -455,7 +455,12 @@ BREAK-IT 行 `service-handwritten`。只点名接管过的登录（`logins/<登�
   是本机行，别机行走入口缓存；没有入口地址就说「先 fleet login」，没有 #1712「读本机」的特例。
   `fleet claude|codex`（`--here` 除外）答一行、退出码 3（单会话视图跟着设备上的客户端走）。会话里的测试身份
   （`FLEET_CLIENT_IDENTITY=test`）和 `FLEET_NODE_CLIENT=1`（#2702 之前留下的常驻客户端）照旧走设备客户端的路；
-  还留着 `~/.cache/claude-fleet/shell` 时再提示怎么清掉。
+  还留着 `~/.cache/claude-fleet/shell`（或旧常驻壳的 `-L fleet-shell` 还在跑）时再提示怎么清掉。
+  它的 tmux 服务器是自己的 `-L fleet-node-client[-stage]`（`FLEET_NODE_HOSTED_SESSION`，#2904），从不复用旧常驻壳的
+  `fleet-shell`——同名复用时看到的是旧壳的旧画面。托管机器已是受信任节点：`fleet login` / `fleet login status`
+  末尾的「登录即登记」（`fleet node ensure`）在这里什么也不做，不再向入口要节点通行证（入口对它答 409）。
+  首连某台机器时 ssh 的主机密钥确认（`continue connecting (yes/no)?`）出现在右侧，敲 `yes` 继续——#2757 的贴图
+  过滤器曾把它吞掉，首连永远停在「正在连接」（#2904，设备上的客户端同样受影响）。
 - **SSH 登录是一个普通 shell**：`shell/fleet-login.zsh` 在这里不出横幅、不开客户端；`fleet-login-new.sh` 开号时
   `~/.zshrc` 只写 `~/.local/bin` 的 PATH 行（没有首登块、没有 cw.zsh），fleet 由它当场以新登录的身份拉起（8b）。
 - **一次性清理**：`sudo fleet-node-shell-retire.sh --login <登录> [--dry-run]`——先 `fleet quit`（把入口租约还回去），

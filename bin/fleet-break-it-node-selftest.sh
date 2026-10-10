@@ -32,6 +32,9 @@
 #                         with it — logins/<login>.env written, the old one in the attic
 #   node-update-half      bin/fleet-node-update.py (#2334): an update killed half way,
 #                         and a release whose new part fails the doctor
+#   node-update-stale-fail  bin/fleet-node-update.py key_row + skip_retry (#2906): one
+#                         torn read an older updater never cleared rolled every new
+#                         release back as a «new FAIL» and skipped each sha for good
 #   node-install-half     bin/fleet-node-install.sh (#2330): `fleet node install`
 #                         killed half way through, then a part deleted afterwards
 #   credsep-stale-after-switch  bin/fleet-node-update.py + fleet-credsep.py `machine
@@ -511,6 +514,20 @@ drill_node_update_half() {
   case "$out" in *skipped*) ;; *) WHY="the rejected release was tried again: $out"; return 1 ;; esac
   SECS=$(since "$t0")
   WHAT="更新取包时被 kill -9：整台机器原样不动；下一轮从头取完、所有部件一起换上；新版体检多出 FAIL（Claude Code 起不来）→ 运行时、ccquota、Claude、开号缓存、账号链接全部回到上一版，这一版不再重试"
+}
+
+# node-update-stale-fail (#2906): macmini sat on ee7099a for hours — a torn read
+# recorded at 00:17 by an updater that never cleared `failed` after a stage that
+# landed; every new release's doctor (the first with a key row) called it a new
+# FAIL, rolled back, and skipped that sha until stable moved again.
+drill_node_update_stale_fail() {
+  CAP=60
+  local t0 out
+  t0=$(now)
+  out=$(python3 -W ignore::ResourceWarning "$BIN/fleet-node-update-selftest.py" --drill-torn-read 2>&1) \
+    || { WHY="a past failure still rolls back / pins the machine: $(printf '%s' "$out" | grep -E 'Error|FAIL' | head -3 | tr '\n' ' ')"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="一条之后已有签名取包成功的 torn read：体检 key 行 PASS、新版提交不回退；仍是当下的 torn read 只 WARN；被回退的版本原因消失就重试、否则按 6h 起翻倍再试"
 }
 
 # credsep-stale-after-switch (#2435): the updater moved `current` but credsep's

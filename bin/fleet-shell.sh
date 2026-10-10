@@ -315,12 +315,27 @@ CL_DIR="$CACHE/tmp"
 export FLEET_CLIENT_KEY_FILE="$CL_DIR/client.key"
 export FLEET_CLIENT_LIST_FILE="$CL_DIR/client.list.json"
 LEASE_CMD="${FLEET_CLIENT_LEASE_CMD:-python3 $BIN/fleet-client-lease.py}"
+# The client's own record (issue #2896, docs/CLIENT-LOGS.md): connect / place /
+# keeper / login .log beside each other. The keeper's raw stdout + stderr go to
+# keeper.out (rotated before each start: the keeper holds it open), its renewals
+# to keeper.log as lines (fleet_clientlog, bin/fleet-client-lib.sh).
+CLOG_DIR="${FLEET_CLIENT_LOG_DIR:-$CACHE/logs}"
+# keeper_out — the file a keeper about to start writes to (/dev/null when none)
+keeper_out() {
+  local f="$CLOG_DIR/keeper.out" sz
+  [ "${FLEET_CLIENT_LOG:-}" != 0 ] && (umask 077; mkdir -p "$CLOG_DIR") 2>/dev/null || { printf '/dev/null'; return 0; }
+  sz=$(wc -c < "$f" 2>/dev/null | tr -d ' ')
+  [ "${sz:-0}" -ge "${FLEET_CLIENT_LOG_MAX:-524288}" ] 2>/dev/null && mv -f "$f" "$f.1" 2>/dev/null
+  printf '%s' "$f"
+}
 cl_key() { printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_'; }
 # lease <action> [args…] → L_STATE L_ID L_BY L_WHY; rc 1 = the hub was not asked
 lease() {
   local line
-  L_STATE=''; L_ID=''; L_BY=''; L_WHY=''
-  line=$($LEASE_CMD "$@" 2>/dev/null) || return 1
+  L_STATE=''; L_ID=''; L_BY=''; L_WHY=''; L_ERR=''
+  # a failure's last stderr line is kept for keeper.log (issue #2896)
+  line=$($LEASE_CMD "$@" 2>"$CL_DIR/lease.err") || {
+    L_ERR=$(tail -n 1 "$CL_DIR/lease.err" 2>/dev/null); return 1; }
   # TAB is whitespace to `read`: two in a row (an empty field) would collapse
   line=${line//$'\t'/$'\037'}
   IFS=$'\037' read -r L_STATE L_ID L_BY _ L_WHY _ <<< "$line"
@@ -974,6 +989,15 @@ keeper)
   case "$p" in ''|*[!0-9]*) ;; *) [ "$p" != $$ ] && kill -0 "$p" 2>/dev/null && exit 0 ;; esac
   printf '%s\n' $$ > "$CL_DIR/keeper.pid"
   code_sum "$BIN/fleet-shell.sh" > "$CL_DIR/keeper.pid.code" 2>/dev/null
+  # keeper.log (issue #2896): its start and stop, and each renewal whose outcome
+  # differs from the last one written — a steady lease writes nothing
+  # shellcheck source=fleet-client-lib.sh
+  . "$BIN/fleet-client-lib.sh" 2>/dev/null
+  klog() { command -v fleet_clientlog >/dev/null 2>&1 && fleet_clientlog keeper "$@"; return 0; }
+  klast=''
+  # kseen <event> <outcome> <reason> — written only when <outcome> is new
+  kseen() { [ "$2" = "$klast" ] && return 0; klast=$2; klog "$1" - - '' "$2" "$3"; }
+  klog start - - '' "pid $$" "session $s"
   # every FLEET_CLIENT_INPUT_EVERY (5 s): an input on a client here is reported
   # (#1932); the renewal and the rest every FLEET_CLIENT_LEASE_EVERY (15 s)
   every=${FLEET_CLIENT_LEASE_EVERY:-15}; tick=${FLEET_CLIENT_INPUT_EVERY:-5}
@@ -1021,10 +1045,13 @@ keeper)
           if lease "$what" --lease "$id" ${act:+--last-input "$act"} --viewing "$v" ${wf:+--where-file "$wf"} \
              || { [ "$what" = input ] && lease renew --lease "$id"; }; then
             last=$now
+            kseen "$what" "$L_STATE" "${L_BY:+by $L_BY }$L_WHY"
             case "$L_STATE" in
               taken_over) go_standby "$L_BY" "$L_WHY" ;;
               active) [ -z "$L_ID" ] || [ "$L_ID" = "$id" ] || printf '%s\n' "$L_ID" > "$CL_DIR/client.lease" ;;
             esac
+          else
+            kseen "$what" fail "${L_ERR:-the hub did not answer}"
           fi
         fi
       elif [ ! -f "$CL_DIR/client.nohub" ] && [ $((now - last)) -ge "$every" ]; then
@@ -1033,7 +1060,8 @@ keeper)
         last=$now
         c=$(T list-clients -t "=$s" -F '#{client_name}' 2>/dev/null | head -n 1)
         d=''; [ -n "$c" ] && { read -r d < "$CL_DIR/client.dev/$(cl_key "$c")"; } 2>/dev/null
-        client_take "$c" "${d:-未知设备}" '' || :
+        if client_take "$c" "${d:-未知设备}" ''; then kseen take ok "device ${d:-未知设备}"
+        else kseen take fail "no lease taken (device ${d:-未知设备})"; fi
       fi
       if [ $((now - ${slow:-0})) -ge "$every" ]; then
         slow=$now
@@ -1071,6 +1099,7 @@ keeper)
   done
   # the server is gone: give the lease up at once, so the next client anywhere
   # takes nothing over
+  klog stop - - '' "pid $$" "the client's tmux server is gone"
   id=''; { read -r id < "$CL_DIR/client.lease"; } 2>/dev/null
   [ -n "$id" ] && lease release --lease "$id"
   rm -f "$CL_DIR/client.lease" "$CL_DIR/client.lease.old" "$CL_DIR/client.standby" "$CL_DIR/client.nohub" "$CL_DIR/keeper.pid" "$CL_DIR/client.where.json" "$CL_DIR/client.key" "$CL_DIR/client.list.json" "$CL_DIR/client.why" "$CL_DIR/client.rescan"
@@ -1431,7 +1460,11 @@ reload)
     { read -r p < "$pf"; } 2>/dev/null
     case "$p" in ''|*[!0-9]*) ;; *) kill "$p" 2>/dev/null ;; esac
     rm -f "$pf"
-    ( nohup "$@" </dev/null >/dev/null 2>&1 & )
+    if [ "$pf" = "$CL_DIR/keeper.pid" ]; then
+      ( nohup "$@" </dev/null >>"$(keeper_out)" 2>&1 & )
+    else
+      ( nohup "$@" </dev/null >/dev/null 2>&1 & )
+    fi
   }
   if changed fleet-shell.sh || stale "$CACHE/tmp/warm/loop.pid" "$SHADOW/fleet-shell.sh"; then
     restart_loop "$CACHE/tmp/warm/loop.pid" bash "$SHADOW/fleet-shell.sh" warm "$SESS"
@@ -2021,7 +2054,7 @@ if T has-session -t "=$SESS" 2>/dev/null; then
   fi
   layout_apply
   client_open
-  ( nohup bash "$SHADOW/fleet-shell.sh" keeper "$SESS" </dev/null >/dev/null 2>&1 & )
+  ( nohup bash "$SHADOW/fleet-shell.sh" keeper "$SESS" </dev/null >>"$(keeper_out)" 2>&1 & )
   ( nohup bash "$SHADOW/fleet-shell.sh" warm "$SESS" </dev/null >/dev/null 2>&1 & )
   ( nohup bash "$SHADOW/fleet-shell.sh" actions "$SESS" </dev/null >/dev/null 2>&1 & )
   first_home
@@ -2108,7 +2141,7 @@ stamp_ver
 # 4. the lease (#1715) before anything renews it; the data: the refresh loop,
 #    kept alive while the server lives; the warm connections (#1631) beside it
 client_open
-( nohup bash "$SHADOW/fleet-shell.sh" keeper "$SESS" </dev/null >/dev/null 2>&1 & )
+( nohup bash "$SHADOW/fleet-shell.sh" keeper "$SESS" </dev/null >>"$(keeper_out)" 2>&1 & )
 ( nohup bash "$SHADOW/fleet-shell.sh" warm "$SESS" </dev/null >/dev/null 2>&1 & )
 ( nohup bash "$SHADOW/fleet-shell.sh" actions "$SESS" </dev/null >/dev/null 2>&1 & )
 # 登录即登记 (issue #2212): a logged-in computer with no node token yet takes
