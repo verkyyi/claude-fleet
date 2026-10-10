@@ -120,6 +120,11 @@ mkdir -p "$H/jade/.claude/fleet.versions/$S1-linked/bin"; ln -s "$H/jade/.claude
 ln -s "$WORK/root/$S1/bin/fleet-lib.sh" "$H/jade/.claude/fleet/bin/fleet-lib.sh"
 FLEET_INSTALLS_STABLE=$S1 run
 has "G: a -linked version dir is its sha" "$OUT" "jade           1111111  = stable  来源 runtime"
+# …and one known only by the updater's mark (no fleet-lib.sh link to read)
+rm "$H/jade/.claude/fleet/bin/fleet-lib.sh"
+printf '{"sha": "%s", "root": "%s", "at": 1}\n' "$S1" "$WORK/root" > "$H/jade/.claude/fleet/.fleet-linked"
+FLEET_INSTALLS_STABLE=$S1 run
+has "G: the .fleet-linked mark is the runtime" "$OUT" "jade           1111111  = stable  来源 runtime"
 rm -rf "$H/erin" "$H/frank" "$H/gina" "$H/hana" "$H/ivan" "$H/jade"
 
 # --- B. all at stable → 0; no stable → 2 -------------------------------------------
