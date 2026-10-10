@@ -204,7 +204,15 @@ Do not install from memory: read the doc and work from it.
   block re-spells the ones an older version overrode, so a conf reload converges)
   and its status line is one static `请用 fleet` hint (`conf/tmux-bar.conf`); the
   person's keys live in `conf/tmux-shell.conf`. `fleet-keys-selftest.sh` leg 8
-  pins both sides on isolated sockets — never add a `bind` to the node conf.
+  pins both sides on isolated sockets — root and prefix on a node stay tmux's;
+  **a key is added only in the 看台's own tables** (issue #3000, EPIC #2999 C2):
+  `conf/tmux-view.conf` (loaded last, after the human layer) sets `user-keys[920..932]`
+  and rebuilds `fleet-view` — a COPY of root first (tmux does not fall back to
+  root for a key a session's key-table lacks, so the 看台's mouse is root's own
+  bindings) — and `fleet-view-pfx` (⌃] + a letter) off `dash-keymap.sh`'s switch
+  table (`fleet-quickopen.py view-keys`); only a 看台 (`attach --thin`) wears
+  that key-table, so a direct attach sees none of it. A 看台 changes session only
+  through `bin/fleet-view-go.sh` (`fleet_view.go`, `logs/view-switch.ndjson`).
   The one exception only TAKES AWAY (issue #1840): `conf/tmux-node-human.conf`
   (fleet-human), loaded at the end of the node conf and again AFTER the person's
   `~/.tmux.conf`, unbinds prefix x & $ < > and swaps the pane's right-click for a
