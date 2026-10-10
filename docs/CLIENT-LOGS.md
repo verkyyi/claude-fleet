@@ -60,10 +60,19 @@ Tabs and newlines inside a field become spaces. The reason is passed through
 |---|---|---|---|
 | `home` | the hub's machine pick (`fleet`) did not give one | the hub's code (`no_machine_online`, `opening`, `device_revoked`, …) or `unreachable` | the hub's words (+ the TLS hint, #2878) |
 | `pick` | the routes were measured | `ok` · `fail` | every route: `<name> <answered>/<probes>` and its last error or skip |
+| `pick` (route column `direct`) | a reconnect's remembered line was not the tailnet and the tailnet answered (#2987) | `ok` | `tailnet <name> over remembered <name>` |
+| `switch` | `fleet-remote-view.sh open` — a click on a session row (#2987); ms = the whole `open` | `ok` | route column = how: `chan` (the serve channel, one round trip) · `select` (a one-shot over the window's master) · `readopt` (its control socket was gone; the warm master did it and the window took it) · `respawn` (a full reconnect — the reason says why: `down` · `chan no answer` · `ctl gone: <path>` · `select failed`) · `new` (a new proxy window) |
+| `stray-end` | a proxy `run` loop that found its pane not its own ended (#2987) | `ok` | `pid N` |
 | `ssh-start` | ssh is started | — | `<route name> <host>:<port> login=<login>` |
 | `ssh-end` | ssh ended | `exit N` · `signal N` | `ssh ended normally` · `ssh: connection failed or was cut (255)` · `the remote command's exit` (+ `this side got signal N` when the client was signalled) |
 | `relay-open` | a relay's handshake (ssh's ProxyCommand) | `ok` (ms = handshake) · `fail` | the hub URL · the refusal |
 | `relay-end` | the relay's stream ended (ms = ready → the first end) | **who ended it**: `hub` · `client` · `net` | `ws close <code>: <reason>` (hub) · `ssh closed the stream (stdin EOF)` (client) · `the hub's socket closed with no close frame` (net) |
+
+A slow switch reads off `switch` lines: one that is not `chan` / `select` names
+why it was not. The ranking (`pick`) puts the tailnet first among routes that
+answered every handshake — on one LAN the public gateway and the tailnet answer
+within noise, and the one picked is kept for every reconnect;
+`FLEET_CONNECT_PREFER_TAILNET=0` ranks by latency alone, as before.
 
 `relay-end` is the line to put beside the hub's `/v1/fleet/ssh-relays` row for
 the same minute: the hub records its own view of the same stream (direction,

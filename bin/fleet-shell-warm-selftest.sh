@@ -30,6 +30,10 @@
 #                   is never run, the warm master is NOT closed when the pane ends;
 #                   cold (no warm master): fleet connect --enter with
 #                   ServerAliveInterval=2 / ServerAliveCountMax=3 / IPQoS / Compression=no
+#   L. login      — (issue #2987) a machine whose sessions are in another login's
+#                   fleet (`fleet_logins`) gets `<m>@<login>.sock`, opened as that
+#                   login; `run` for such a session rides it; gone when no session
+#                   of that login is left
 #   E. sources    — a warm master is a node source for the hub-lost refresh
 #   F. e2e        — the client-mode loop logs one line per row whose state moved
 #                   (lag = received − observed_at), none for an unchanged row or
@@ -194,7 +198,7 @@ cache m5:online:2
 FLEET_REMOTE_SSH_CMD="$SB/fleet-shell.sh ssh" FLEET_REMOTE_BIN=rb bash "$SB/fleet-remote-view.sh" run --shell m5 "$WID" >/dev/null 2>&1; rc=$?
 eq 'D: the pane ended cleanly' 0 "$rc"
 sl=$(cat "$WORK/ssh.log")
-has 'D: the session rode the warm master' "$sl" "RUN -tt -o ControlMaster=no -o ClearAllForwardings=yes -S $WD/m5.sock m5 bash rb/fleet-remote-view.sh attach --shell"
+has 'D: the session rode the warm master' "$sl" "RUN -tt -o ClearAllForwardings=yes -o ControlMaster=no -S $WD/m5.sock m5 bash rb/fleet-remote-view.sh attach --shell"
 hasnt 'D: fleet connect never ran' "$(cat "$WORK/fc.log" 2>/dev/null)" 'm5'
 hasnt 'D: the warm master was not closed by the pane' "$sl" "EXIT $WD/m5.sock"
 [ -S "$WD/m5.sock" ] || fail 'D: the warm master is gone after the pane'
@@ -206,6 +210,52 @@ for o in ServerAliveInterval=2 ServerAliveCountMax=3 'IPQoS=lowdelay throughput'
   has "D: cold master carries $o" "$fc" "-o $o"
 done
 hasnt 'D: the old 5 s keepalive is gone' "$fc" 'ServerAliveInterval=5'
+
+# ================================================================================
+# L. login (issue #2987) — the sessions on m5 are in the fleet of login `verky`
+#    (`fleet_logins`), the person's default login is another: the warm master is
+#    `m5@verky.sock`, opened as verky (FLEET_CONNECT_LOGIN), and `run` for a
+#    session of that fleet rides it. Before: one `m5.sock` as the default login,
+#    which `run` refused to ride for verky — every switch a private master.
+rm -rf "$WD"; : > "$WORK/connect.log"; : > "$WORK/ssh.log"
+LU=22222222-2222-4222-8222-222222222222
+printf '%s\tverky\n' "$LU" > "$G/fleet_logins"
+cat > "$WORK/connect" <<EOF
+#!/bin/bash
+printf '%s login=%s\n' "\$*" "\${FLEET_CONNECT_LOGIN:-}" >> "$WORK/connect.log"
+for a in "\$@"; do case "\$a" in ControlPath=*) ctl=\${a#ControlPath=} ;; esac; done
+[ -n "\${ctl:-}" ] && python3 -c 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1])' "\$ctl"
+[ -n "\${FLEET_CONNECT_ROUTE_FILE:-}" ] && printf '{"machine": "m5", "kind": "direct", "name": "tailnet", "login": "%s"}\n' "\${FLEET_CONNECT_LOGIN:-verkyyi}" > "\$FLEET_CONNECT_ROUTE_FILE"
+exit 0
+EOF
+cache m5:online:2
+printf 'wid:%s/issue-3\037m5\037online\n' "$LU" >> "$G/remote_$S"
+tick; sleep 0.5
+log=$(cat "$WORK/connect.log")
+has 'L: the master is the login'"'"'s own: m5@verky.sock' "$log" "ControlPath=$WD/m5@verky.sock"
+has 'L: …opened as that login' "$log" 'login=verky'
+eq 'L: one master, not one per login it does not need' 1 "$(grep -c . "$WORK/connect.log")"
+[ -S "$WD/m5@verky.sock" ] || fail 'L: m5@verky.sock is up'
+: > "$WORK/ssh.log"
+FLEET_CONF_DIR="$WORK/conf" FLEET_REMOTE_SSH_CMD="$SB/fleet-shell.sh ssh" FLEET_REMOTE_BIN=rb \
+  bash "$SB/fleet-remote-view.sh" run --shell m5 "$LU/issue-3" >/dev/null 2>&1
+sl=$(cat "$WORK/ssh.log")
+has 'L: run rides the login'"'"'s warm master' "$sl" "-S $WD/m5@verky.sock"
+has 'L: …as that login' "$sl" '-l verky'
+hasnt 'L: …no private master' "$(cat "$WORK/fc.log" 2>/dev/null)" "$LU"
+# a tick with the login's sessions gone closes its master
+cache m5:online:2
+: > "$WORK/ssh.log"; tick
+has 'L: no session of that login left → its master closed' "$(cat "$WORK/ssh.log")" "EXIT $WD/m5@verky.sock"
+rm -f "$G/fleet_logins"
+cat > "$WORK/connect" <<EOF
+#!/bin/bash
+printf '%s\n' "\$*" >> "$WORK/connect.log"
+for a in "\$@"; do case "\$a" in ControlPath=*) ctl=\${a#ControlPath=} ;; esac; done
+[ -n "\${ctl:-}" ] && python3 -c 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1])' "\$ctl"
+exit 0
+EOF
+rm -rf "$WD"; : > "$WORK/connect.log"; tick; sleep 0.3
 
 # ================================================================================
 # E. sources — a warm master answers when the hub is lost

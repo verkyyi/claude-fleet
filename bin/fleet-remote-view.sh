@@ -561,20 +561,20 @@ health)
   hs="${1:-${FLEET_SHELL_SESSION:-fleet-shell}}"
   htmp="${2:-${FLEET_SHELL_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/claude-fleet/shell}/tmp}"
   hwd="$htmp/warm"
-  hbad='' hn=0 hpanes=' '
+  hbad='' hn=0 hpanes=' ' US=$'\037'   # not a tab: `read` collapses empty tab fields
   hsay() { case "$hbad" in *"$1"*) ;; *) hbad="$hbad${hbad:+ · }$1" ;; esac; }
-  hrows=$( { tmux -L "$hs-stage" list-windows -a -F '#{window_id}	#{@remote}	#{@remote_login}	#{@remote_ctl}	#{@remote_down}	#{pane_pid}' 2>/dev/null
-             tmux -L "$hs" list-windows -a -F '#{window_id}	#{@remote}	#{@remote_login}	#{@remote_ctl}	#{@remote_down}	#{pane_pid}' 2>/dev/null; } )
-  while IFS='	' read -r _ hrem hlg hctl hdown hpid; do
+  hrows=$( { tmux -L "$hs-stage" list-windows -a -F "#{window_id}$US#{@remote}$US#{@remote_login}$US#{@remote_ctl}$US#{@remote_down}$US#{pane_pid}" 2>/dev/null
+             tmux -L "$hs" list-windows -a -F "#{window_id}$US#{@remote}$US#{@remote_login}$US#{@remote_ctl}$US#{@remote_down}$US#{pane_pid}" 2>/dev/null; } )
+  while IFS="$US" read -r _ hrem hlg hctl hdown hpid; do
     case "$hrem" in -:*|'') continue ;; *:?*) ;; *) continue ;; esac
     hnode=${hrem%%:*}
     hn=$((hn + 1)); hpanes="$hpanes$hpid "
     if [ -n "$hctl" ] && [ -z "$hdown" ] && [ ! -S "$hctl" ]; then
-      hsay "$hnode 的控制连接 ${hctl##*/} 不在了（每次切换都重连）"
+      hsay "${hnode} 的控制连接 ${hctl##*/} 不在了（每次切换都重连）"
     fi
     if [ -n "$hlg" ] && [ ! -S "$hwd/$hnode@$hlg.sock" ] && [ -S "$hwd/$hnode.sock" ]; then
       hwl=$(rv_route_login "$hwd/$hnode.sock.route")
-      [ -n "$hwl" ] && [ "$hwl" != "$hlg" ] && hsay "$hnode 的预热连接登的是 $hwl，看的会话在 $hlg"
+      [ -n "$hwl" ] && [ "$hwl" != "$hlg" ] && hsay "${hnode} 的预热连接登的是 ${hwl}，看的会话在 ${hlg}"
     fi
   done <<EOF_HROWS
 $hrows
@@ -727,6 +727,9 @@ run)
   # the one the window named, if it still runs.
   stray=''
   if [ -n "${TMUX:-}" ]; then
+    # a pane that is not ours (see `mine` below): touch nothing, end
+    pp=$(tmux display-message -p -t "${TMUX_PANE:-}" '#{pane_pid}' 2>/dev/null)
+    case "$pp" in ''|*[!0-9]*|"$$"|"$PPID") ;; *) exit 0 ;; esac
     oldrun=$(tmux show-options -wqv -t "${TMUX_PANE:-}" @remote_run 2>/dev/null)
     case "$oldrun" in ''|*[!0-9]*|"$$") ;; *)
       case "$(ps -o command= -p "$oldrun" 2>/dev/null)" in
@@ -738,11 +741,20 @@ run)
          set-window-option -t "${TMUX_PANE:-}" @remote_ctl "$ctl" \; \
          set-window-option -t "${TMUX_PANE:-}" @remote_view "$view" 2>/dev/null
   fi
-  # mine — this loop still owns its pane (`@remote_run` is this pid); no tmux = yes
+  # mine — this loop still owns its pane: the pane's process is this loop (`open`
+  # execs `run` as the pane's command), and its window's `@remote_run` is not
+  # another loop's. No tmux, or a server that does not answer = yes. Seen on the
+  # operator's MacBook (issue #2987): a loop whose stage server was replaced kept
+  # running as an orphan — the new server has the same socket path and REUSES the
+  # pane ids, so `pane_gone` saw `%1` alive — and wrote its m5 line's
+  # `@remote_ctl` / `@remote_down` onto the m4 window that now had `%1`.
   mine() {
     [ -n "$stray" ] && return 1
     [ -n "${TMUX:-}" ] || return 0
-    local r
+    local pp r
+    pp=$(tmux display-message -p -t "${TMUX_PANE:-}" '#{pane_pid}' 2>/dev/null) || return 0
+    # (or its parent: a pane whose command is `run …; more` runs it as a child)
+    case "$pp" in ''|*[!0-9]*) ;; *) [ "$pp" = "$$" ] || [ "$pp" = "$PPID" ] || { stray=1; return 1; } ;; esac
     r=$(tmux show-options -wqv -t "${TMUX_PANE:-}" @remote_run 2>/dev/null) || return 0
     [ -z "$r" ] || [ "$r" = "$$" ] && return 0
     stray=1; return 1

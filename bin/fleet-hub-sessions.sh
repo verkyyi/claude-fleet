@@ -1108,8 +1108,7 @@ node_sources() {
     host=$(node_ssh_host "$node")
     ${FLEET_REMOTE_SSH_CMD:-ssh} -S "$ctl" -O check "$host" >/dev/null 2>&1 || continue
     printf '%s\t%s\t%s\n' "$node" "$host" "$ctl"
-    out="$out${out:+
-}$node"
+    out=$(printf '%s\n%s' "$out" "$node")
   done
   return 0
 }

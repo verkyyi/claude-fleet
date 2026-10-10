@@ -1201,9 +1201,12 @@ warm)
     [ -s "$CACHEF" ] || return 0
     LC_ALL=C awk -F $'\037' -v lmap="${CACHEF%/*}/fleet_logins" '
       BEGIN { while ((getline l < lmap) > 0) { split(l, a, "\t"); if (a[2] ~ /^[a-z_][a-z0-9_.-]*$/) lg[a[1]] = a[2] } }
-      $1 == "#node" && $3 != "lost" && $4 + 0 > 0 && $2 ~ /^[A-Za-z0-9._-]+$/ { up[$2] = 1; next }
-      $1 ~ /^wid:/ && $2 ~ /^[A-Za-z0-9._-]+$/ { u = substr($1, 5); sub(/\/.*/, "", u); n[$2 "\t" lg[u]]++ }
-      END { for (k in n) { split(k, b, "\t"); if (up[b[1]]) print n[k] "\t" b[1] (b[2] != "" ? "@" b[2] : "") } }' "$CACHEF" \
+      $1 == "#node" && $3 != "lost" && $4 + 0 > 0 && $2 ~ /^[A-Za-z0-9._-]+$/ { up[$2] = $4 + 0; next }
+      $1 ~ /^wid:/ && $2 ~ /^[A-Za-z0-9._-]+$/ { u = substr($1, 5); sub(/\/.*/, "", u); n[$2 "\t" lg[u]]++; rows[$2] = 1 }
+      END {
+        for (k in n) { split(k, b, "\t"); if (up[b[1]]) print n[k] "\t" b[1] (b[2] != "" ? "@" b[2] : "") }
+        for (m in up) if (!(m in rows)) print up[m] "\t" m   # its rows not in the cache yet: the default login
+      }' "$CACHEF" \
       | sort -t "$(printf '\t')" -k1,1nr -k2,2 | cut -f2 \
       | while IFS= read -r m; do this_machine "${m%@*}" || printf '%s\n' "$m"; done \
       | head -n "${FLEET_SHELL_WARM_MAX:-4}"
