@@ -120,7 +120,10 @@ def main():
             # session pass; no provider credential enters its environment.
             p, env = m.tenant_env(s, login)
             env['FLEET_CRED_CTL_DIR'] = str(d / 'run/.shared')
-            result = subprocess.run([sys.executable, str(ROOT / 'bin/fleet-cred-proxy.py'), 'mint', '--sid', 'smoke'],
+            mint = d / 'mint.py'
+            shutil.copyfile(ROOT / 'bin/fleet-cred-proxy.py', mint)
+            mint.chmod(0o644)
+            result = subprocess.run([sys.executable, str(mint), 'mint', '--sid', 'smoke'],
                                     env=env, cwd=p.pw_dir, preexec_fn=s.demote(login, p.pw_uid, p.pw_gid, p.pw_dir),
                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             assert result.returncode == 0 and result.stdout.strip().startswith('fcp1.'), result.stderr

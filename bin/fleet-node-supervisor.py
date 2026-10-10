@@ -187,7 +187,7 @@ DEFAULT_ROOT = "/Library/Application Support/claude-fleet" if MAC else "/opt/cla
 NODE_ENV_KEYS = ("FLEET_NODE_ROOT", "FLEET_NODE_STATE", "FLEET_NODE_RUNTIME", "FLEET_NODE_LOG",
                  "FLEET_NODE_USERS", "FLEET_NODE_SERVICE", "FLEET_NODE_UPDATE_OWNER", "FLEET_NODE_BOOT_ID",
                  "FLEET_CREDSEP_LIB", "FLEET_CREDSEP_ROOT_BASE", "FLEET_CREDSEP_RUN_BASE",
-                 "FLEET_CREDSEP_ROLE", "FLEET_NODE_SSHD")
+                 "FLEET_CREDSEP_ROLE", "FLEET_NODE_RUN_SSHD")
 
 
 def node_environment():
@@ -485,7 +485,10 @@ def default_table(paths):
     }
     if env("FLEET_NODE_UPDATE_OWNER", "hub") == "image":
         table["tasks"] = [t for t in table["tasks"] if t["name"] != "update"]
-    if not MAC and env("FLEET_NODE_SSHD", "0") == "1":
+        table["tasks"].append({"name": "credential-pool", "every": 300, "timeout": 180,
+                               "cmd": ["/usr/bin/python3", "-I", os.path.join(rt_bin, "fleet-credsep.py"),
+                                       "machine", "pool-sync"]})
+    if not MAC and env("FLEET_NODE_RUN_SSHD", "0") == "1":
         table["children"].append({"name": "sshd", "cmd": ["/usr/sbin/sshd", "-D", "-e"]})
     return table
 

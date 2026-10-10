@@ -8,7 +8,7 @@ import unittest
 import json
 import subprocess
 import sys
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 
 BIN = Path(__file__).resolve().parent
 
@@ -44,8 +44,80 @@ class LinuxNode(unittest.TestCase):
         s = module('fleet-node-supervisor')
         with patch.dict(os.environ, {'FLEET_NODE_UPDATE_OWNER': 'image'}):
             self.assertNotIn('update', [x['name'] for x in s.default_table(s.Paths())['tasks']])
+            pool = next(x for x in s.default_table(s.Paths())['tasks'] if x['name'] == 'credential-pool')
+            self.assertEqual(pool['cmd'][-2:], ['machine', 'pool-sync'])
         with patch.dict(os.environ, {'FLEET_NODE_UPDATE_OWNER': 'hub'}):
             self.assertIn('update', [x['name'] for x in s.default_table(s.Paths())['tasks']])
+
+    def test_sshd_path_and_supervision_are_independent(self):
+        s = module('fleet-node-supervisor')
+        with patch.object(s, 'MAC', False), patch.dict(os.environ, {
+                'FLEET_NODE_RUN_SSHD': '1', 'FLEET_NODE_SSHD': '/usr/sbin/sshd'}):
+            child = next(x for x in s.default_table(s.Paths())['children'] if x['name'] == 'sshd')
+            self.assertEqual(child['cmd'][0], '/usr/sbin/sshd')
+
+    def test_bootstrap_refreshes_image_before_restore_and_allows_empty_snapshot(self):
+        m = module('fleet-node-linux')
+        with tempfile.TemporaryDirectory() as d, patch.dict(os.environ, {'FLEET_NODE_ROOT': d}), \
+                patch.object(m, 'load'), patch.object(m.Path, 'exists', return_value=True), \
+                patch.object(m, 'as_tenant', return_value=Mock(returncode=3)) as run:
+            Path(d, 'current').symlink_to('a' * 40)
+            m.bootstrap(Mock(login='fleet'))
+            commands = [c.args[2] for c in run.call_args_list]
+            self.assertEqual(commands[0][-1], 'activate')
+            self.assertTrue(commands[1][-1].endswith('fleet-login-bootstrap.sh'))
+            self.assertEqual(commands[2][-1], 'restore')
+            run.return_value.returncode = 1
+            with self.assertRaisesRegex(RuntimeError, 'restore failed'):
+                m.bootstrap(Mock(login='fleet'))
+
+    def test_image_replacement_and_rollback_keep_home_and_retry_failed_apply(self):
+        m = module('fleet-node-linux')
+        with tempfile.TemporaryDirectory() as d:
+            home, root = Path(d, 'home'), Path(d, 'runtime')
+            home.mkdir()
+            root.mkdir()
+            for sha in ('a' * 40, 'b' * 40):
+                b = root / sha / 'bin'
+                b.mkdir(parents=True)
+                (b / 'fleet-install-apply.sh').write_text(
+                    '#!/bin/bash\n[ ! -f "$HOME/fail-apply" ] || exit 7\n'
+                    'echo applied >> "$HOME/applies"\n')
+                (b / 'version').write_text(sha)
+            cur = root / 'current'
+            cur.symlink_to('a' * 40)
+            with patch.dict(os.environ, {'HOME': str(home), 'FLEET_NODE_ROOT': str(root),
+                                         'FLEET_INSTALL_PLATFORM': 'none'}):
+                m.activate(None)
+                live = home / '.claude/fleet'
+                (live / 'logs').mkdir(exist_ok=True)
+                (live / 'logs/kept').write_text('history')
+                (home / 'project').write_text('worktree')
+                marker = home / '.config/claude-fleet/global/linux-image-applied'
+                m.activate(None)
+                self.assertEqual((home / 'applies').read_text().splitlines(), ['applied'])
+                cur.unlink()
+                cur.symlink_to('b' * 40)
+                # The previous image's runtime disappears, as on Kubernetes.
+                import shutil
+                shutil.rmtree(root / ('a' * 40))
+                (home / 'fail-apply').touch()
+                with self.assertRaises(subprocess.CalledProcessError):
+                    m.activate(None)
+                self.assertEqual(marker.read_text().strip(), 'a' * 40)
+                (home / 'fail-apply').unlink()
+                m.activate(None)
+                self.assertEqual((live / 'bin/version').read_text(), 'b' * 40)
+                # Restore image A and roll back against the same persistent home.
+                shutil.copytree(root / ('b' * 40), root / ('a' * 40))
+                (root / ('a' * 40) / 'bin/version').write_text('a' * 40)
+                cur.unlink()
+                cur.symlink_to('a' * 40)
+                m.activate(None)
+                self.assertEqual((live / 'bin/version').read_text(), 'a' * 40)
+                self.assertEqual((live / 'logs/kept').read_text(), 'history')
+                self.assertEqual((home / 'project').read_text(), 'worktree')
+                self.assertEqual(len((home / 'applies').read_text().splitlines()), 3)
 
     def test_privileged_linux_groups_refused_without_sudo_binary(self):
         s = module('fleet-node-supervisor')

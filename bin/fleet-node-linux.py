@@ -18,6 +18,7 @@ import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -90,7 +91,7 @@ def as_tenant(s, login, cmd, **kwargs):
     p, e = tenant_env(s, login)
     return subprocess.run(cmd, env=e, cwd=p.pw_dir,
                           preexec_fn=s.demote(login, p.pw_uid, p.pw_gid, p.pw_dir),
-                          check=True, **kwargs)
+                          check=kwargs.pop('check', True), **kwargs)
 
 
 def ensure_login(s, paths, login, uid):
@@ -114,6 +115,9 @@ def ensure_login(s, paths, login, uid):
             pass
         else:
             raise ValueError('tenant UID is already in use')
+        # Record the intended identity before passwd changes, so an interrupted
+        # native bootstrap can reconcile its own partially created account.
+        private_write(identity, json.dumps(expected) + '\n')
         try:
             g = grp.getgrnam(login)
             if g.gr_gid != uid:
@@ -185,7 +189,12 @@ def prepare(a):
         if any(x in value for x in ('\n', '\r')):
             raise ValueError('invalid route setting')
     proxy = c.proxy_mod()
-    if not all(proxy.loopback_ok(v) for v in route.values()):
+    # Root selected these endpoints. Persist their exact hosts in the launcher
+    # allow-list too, so custom hub domains work after a container replacement.
+    route['FLEET_CRED_ALLOW_HOSTS'] = ' '.join(sorted({
+        urllib.parse.urlsplit(v).hostname or '' for v in route.values()}))
+    proxy.ALLOWED = proxy.allowed_hosts(route['FLEET_CRED_ALLOW_HOSTS'])
+    if not all(proxy.loopback_ok(route[k]) for k in ('FLEET_HUB_URL', 'FLEET_CRED_RELAY_URL')):
         raise ValueError('hub/relay must use HTTPS to an allowed host; configure root allow-list first')
     setting_path = lib / (a.login + '.conf')
     settings = env_read(setting_path)
@@ -214,6 +223,31 @@ def prepare(a):
     print('prepared tenant %s (UID %d); credentials separated' % (a.login, a.uid))
 
 
+def activate(_a):
+    """Run as the tenant: reconcile an image, including a retry after failed apply.
+
+    The previous image's files need not exist. Apply from an empty tree so all
+    hooks/settings are reconciled, and stamp success only when apply succeeds.
+    """
+    root = Path(os.environ.get('FLEET_NODE_ROOT', '/opt/claude-fleet'))
+    sha = (root / 'current').resolve().name
+    updater = load('fleet-node-update')
+    if updater.link_account(pwd.getpwuid(os.geteuid()).pw_name) or updater.link_tree(sha, apply=False):
+        raise RuntimeError('could not link tenant to current runtime')
+    home = Path.home()
+    marker = home / '.config/claude-fleet/global/linux-image-applied'
+    if marker.exists() and marker.read_text().strip() == sha:
+        return
+    live = home / '.claude/fleet'
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix='image-apply-') as empty:
+        subprocess.run(['bash', str(live / 'bin/fleet-install-apply.sh'), '--tree-from', empty,
+                        '--tree-to', str(live.resolve()), '--root', str(live), '--from', 'none',
+                        '--to', sha, '--no-daemons'], check=True)
+    marker.write_text(sha + '\n')
+    (marker.parent / 'bootstrap.applied').write_text(sha + '\n')
+
+
 def bootstrap(a):
     s = load('fleet-node-supervisor')
     ctl = Path(os.environ.get('FLEET_CREDSEP_RUN_BASE', '/var/run/fleet-cred')) / '.shared/ctl.sock'
@@ -223,9 +257,11 @@ def bootstrap(a):
         time.sleep(1)
     else:
         raise ValueError('shared credential proxy did not become ready')
-    as_tenant(s, a.login, [sys.executable, '-I', str(HERE / 'fleet-node-update.py'), 'link-account', a.login])
+    as_tenant(s, a.login, [sys.executable, '-I', str(HERE / 'fleet-node-linux.py'), 'activate'])
     as_tenant(s, a.login, ['bash', str(HERE / 'fleet-login-bootstrap.sh')])
-    as_tenant(s, a.login, ['bash', str(HERE / 'fleet-sessions-snapshot.sh'), 'restore'])
+    restored = as_tenant(s, a.login, ['bash', str(HERE / 'fleet-sessions-snapshot.sh'), 'restore'], check=False)
+    if restored.returncode not in (0, 3):  # 3 = a fresh home has no snapshot yet
+        raise RuntimeError('persisted session restore failed')
 
 
 def foreground(a):
@@ -236,7 +272,7 @@ def foreground(a):
     with open(state / 'container.lock', 'a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         os.environ.update(FLEET_NODE_SERVICE='foreground', FLEET_NODE_UPDATE_OWNER='image',
-                          FLEET_NODE_BOOT_ID=uuid.uuid4().hex, FLEET_NODE_SSHD='1')
+                          FLEET_NODE_BOOT_ID=uuid.uuid4().hex, FLEET_NODE_RUN_SSHD='1')
         # SSH host identity must also survive container replacement.
         ssh_dir = state / 'ssh'
         ssh_dir.mkdir(mode=0o700, exist_ok=True)
@@ -304,7 +340,7 @@ def probe(a):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument('action', choices=('prepare', 'bootstrap', 'foreground', 'live', 'ready'))
+    ap.add_argument('action', choices=('prepare', 'activate', 'bootstrap', 'foreground', 'live', 'ready'))
     ap.add_argument('--login', default=os.environ.get('FLEET_NODE_LOGIN', 'fleet'))
     ap.add_argument('--uid', type=int, default=int(os.environ.get('FLEET_NODE_UID', '10002')))
     ap.add_argument('--hub', default=os.environ.get('FLEET_HUB_URL', ''))
@@ -312,10 +348,10 @@ def main():
     ap.add_argument('--join-file', default=os.environ.get('FLEET_LOGIN_JOIN_FILE', ''))
     ap.add_argument('--machine-join-file', default=os.environ.get('FLEET_MACHINE_JOIN_FILE', ''))
     a = ap.parse_args()
-    if os.geteuid() != 0 or not sys.platform.startswith('linux'):
+    if (os.geteuid() != 0 and a.action != 'activate') or not sys.platform.startswith('linux'):
         ap.error('run as root on Linux')
     try:
-        return {'prepare': prepare, 'bootstrap': bootstrap, 'foreground': foreground,
+        return {'prepare': prepare, 'activate': activate, 'bootstrap': bootstrap, 'foreground': foreground,
                 'live': probe, 'ready': probe}[a.action](a) or 0
     except (ValueError, RuntimeError, OSError, subprocess.SubprocessError) as e:
         # Never print HTTP bodies, tokens or the enrollment command arguments.
