@@ -60,6 +60,10 @@ export const PAGES = Object.freeze([
   { id: 'sessions', label: 'ui.nav.sessions', icon: 'list', href: '/sessions', module: '/sessions-page.js' },
   // 我的机器 (claude-fleet#2518): a user's own machines.
   { id: 'mymachines', label: 'ui.nav.mymachines', icon: 'server', href: '/machines', module: '/machines.js' },
+  // One machine (claude-fleet#2796): /machines/<host>, opened from either
+  // machine list — no menu item of its own (`prefix`: the path under href;
+  // `within`: shown to whoever's menu lists one of these).
+  { id: 'machine', label: 'ui.nav.machine', icon: 'server', href: '/machines/', prefix: true, within: ['mymachines', 'machines'], module: '/machine.js' },
   { id: 'devices', label: 'ui.nav.devices', icon: 'key', href: '/connect', module: '/connect.js' },
   // 我的额度 (claude-fleet#2517).
   { id: 'quota', label: 'ui.nav.quota', icon: 'card', href: '/quota', module: '/quota.js' },
@@ -107,8 +111,29 @@ export function otherView(me, id) {
   return p ? { href: p.href, label: t(toAdmin ? 'ui.view.toAdmin' : 'ui.view.toMine'), admin: toAdmin } : null;
 }
 
-/** pageAllowed is whether the menu lists this page for the viewer. */
-export const pageAllowed = (me, id) => !!(me && Array.isArray(me.pages) && me.pages.includes(id));
+/** pageAllowed is whether the menu lists this page for the viewer — for a
+ *  page with no menu item of its own (`within`), one of the pages it opens from. */
+export const pageAllowed = (me, id) => {
+  if (!(me && Array.isArray(me.pages))) return false;
+  const p = PAGES.find((x) => x.id === id);
+  return p && p.within ? p.within.some((w) => me.pages.includes(w)) : me.pages.includes(id);
+};
+
+/** FRESH is when a block's data reads old (EPIC #2792 共同约定 3), in ms:
+ *  past `warn` yellow, past `stale` grey 「数据旧了」. The one place. */
+export const FRESH = Object.freeze({ warn: 60000, stale: 300000 });
+
+/** freshness is one block's age: {cls: ''|'warn'|'stale'|'unknown', text}.
+ *  No time = 时间未知, never passed off as fresh. */
+export function freshness(at, now = Date.now()) {
+  const ms = at ? Date.parse(at) : NaN;
+  if (!Number.isFinite(ms) || ms <= 0) return { cls: 'unknown', text: t('ui.fresh.unknown') };
+  const age = Math.max(0, now - ms);
+  const s = Math.round(age / 1000);
+  const ago = s < 60 ? t('ui.fresh.secs', { n: s }) : fmtAgo(ms, now);
+  if (age > FRESH.stale) return { cls: 'stale', text: t('ui.fresh.stale', { ago }) };
+  return { cls: age > FRESH.warn ? 'warn' : '', text: ago };
+}
 
 /** title is a page id's heading in the top bar. */
 export const titleOf = (id) => { const p = PAGES.find((x) => x.id === id); return p ? t(p.label) : ''; };

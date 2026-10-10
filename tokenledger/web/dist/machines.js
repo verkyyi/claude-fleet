@@ -7,6 +7,9 @@
 // scheduled tasks registered under the viewer's logins (lib/services.js), a
 // failed one red, a row opening its log's last line.
 //
+// A row opens the machine's page, /machines/<host> (claude-fleet#2796): a
+// click, or j/k to pick and ↵.
+//
 // Reads /v1/nodes (cut to the viewer's logins by the hub) and /v1/me.logins;
 // writes nothing. Re-read every 30 s while the tab is visible and the page
 // shown (the poll is the page's: leaving it stops it, claude-fleet#2793).
@@ -14,6 +17,7 @@ import { Shell } from './app-shell.js';
 import { esc, ic } from './lib/shell.js';
 import { myMachines } from './lib/pages.js';
 import { serviceRows, servicesSection, svcClick } from './lib/services.js';
+import { machineHref, listNav } from './lib/machine-view.js';
 import { t } from './lib/i18n.js';
 
 const S = { svcs: [] };
@@ -25,7 +29,9 @@ function row(r) {
   const takes = `<span class="chip ${CHIP[r.takes]}"${why ? ` title="${esc(why)}"` : ''}>${esc(t('ui.my.' + r.takes))}</span>`;
   const load = r.loadCore == null ? '—' : t('ui.my.perCore', { n: r.loadCore.toFixed(2) });
   const ses = r.sessions === null ? '—' : r.sessions === undefined ? '?' : String(r.sessions);
-  return `<tr data-m="${esc(r.hostname)}"><td><b>${esc(r.label)}</b>${r.label !== r.hostname ? ` <span class="mono" style="opacity:.6">${esc(r.hostname)}</span>` : ''}</td>` +
+  // One click (or j/k + ↵) into the machine's page (claude-fleet#2796).
+  const href = machineHref(r.hostname);
+  return `<tr class="click" data-m="${esc(r.hostname)}" data-href="${esc(href)}" tabindex="0"><td><a href="${esc(href)}"><b>${esc(r.label)}</b></a>${r.label !== r.hostname ? ` <span class="mono" style="opacity:.6">${esc(r.hostname)}</span>` : ''}</td>` +
     `<td class="mono">${esc(r.login)}</td><td>${takes}</td><td class="mono">${esc(load)}</td><td class="mono r">${esc(ses)}</td></tr>`;
 }
 
@@ -46,6 +52,7 @@ export default Shell.mount('mymachines', async (ctx) => {
     ctx.setCount('mymachines', rows.length);
   };
   ctx.el.onclick = (e) => { svcClick(ctx, e, S.svcs); };
+  listNav(ctx, '#mymachines tr[data-href]');
   await load();
   ctx.every(30000, () => { if (!document.hidden) load().catch(() => {}); });
 });

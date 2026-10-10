@@ -16,6 +16,7 @@ import { Shell } from '../app-shell.js';
 import { esc, ic, spark, relTime } from '../lib/shell.js';
 import { machineCards, clientMachines, joined, countdown } from '../lib/admin.js';
 import { serviceRows, servicesSection, svcClick } from '../lib/services.js';
+import { machineHref, listNav } from '../lib/machine-view.js';
 import { t } from '../lib/i18n.js';
 
 const join = { label: '', expires: 0, timer: 0, tick: 0 };
@@ -37,7 +38,8 @@ function card(m) {
     ? `<button class="btn sm" data-act="leave" data-m="${esc(m.name)}">${ic('wrench')}${esc(t('ui.mach.endMaint'))}</button>`
     : m.status === 'online' ? `<button class="btn sm" data-act="enter" data-m="${esc(m.name)}" data-n="${m.sessions == null ? '' : m.sessions}">${ic('wrench')}${esc(t('ui.mach.maintBtn'))}</button>` : '';
   const rm = m.eps.length ? `<button class="btn sm ghost" data-act="remove" data-m="${esc(m.name)}" data-eps="${esc(m.eps.join(' '))}" data-n="${m.sessions == null ? '' : m.sessions}">${ic('trash')}${esc(t('ui.mach.removeBtn'))}</button>` : '';
-  return `<div class="panel mc"><div class="mc-h"><b>${esc(m.label)}</b>${m.label !== m.name ? `<span class="mono" style="opacity:.6">${esc(m.name)}</span>` : ''}${m.kind === 'ephemeral' ? `<span class="chip brand">${esc(t('ui.mach.spot'))}</span>` : ''}${status(m)}</div>${why}` +
+  const href = machineHref(m.host, true);
+  return `<div class="panel mc" data-href="${esc(href)}" tabindex="0"><div class="mc-h"><a href="${esc(href)}" style="color:inherit"><b>${esc(m.label)}</b></a>${m.label !== m.name ? `<span class="mono" style="opacity:.6">${esc(m.name)}</span>` : ''}${m.kind === 'ephemeral' ? `<span class="chip brand">${esc(t('ui.mach.spot'))}</span>` : ''}${status(m)}</div>${why}` +
     trend +
     `<div class="stats"><div><b>${m.sessions == null ? '?' : m.sessions}</b>${esc(t('ui.mach.sessions'))}</div><div><b>${esc(load)}</b>${esc(t('ui.mach.load'))}</div><div><b>${esc(m.version || '—')}</b>${esc(t('ui.mach.version'))}</div>${m.spare == null ? '' : `<div><b>${m.spare}</b>${esc(t('ui.mach.spare', { used: m.used ?? '?', cap: m.cap ?? '?' }))}</div>`}${desired(m)}</div>` +
     trustLine(m) + linksLine(m) + refusedLine(m) +
@@ -139,6 +141,9 @@ export default Shell.mount('machines', async (ctx) => {
       await ctx.refresh();
     } catch (err) { ctx.toast(t('ui.err.action', { e: err.message })); }
   };
+  // A card opens the machine's page (claude-fleet#2796): a click off its
+  // buttons, or j/k to pick and ↵.
+  listNav(ctx, '.mc[data-href]');
   ctx.el.onclick = async (e) => {
     if (svcClick(ctx, e, svcs)) return;
     const b = e.target.closest('[data-act]');

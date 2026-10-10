@@ -665,7 +665,12 @@ they were before it existed (no route, no table, no extra connection).
 Set `CCQUOTA_FLEET=1` on the **hub** and it creates a `nodes` table, accepts
 node control channels at `/v1/node/connect` (enrollment-token auth, like
 ingest) and serves the roster at `/nodes` (page) and `/v1/nodes` (JSON), both
-behind the viewer gate.
+behind the viewer gate. One machine's page is `/machines/<host>` (claude-fleet#2796),
+reading `/v1/nodes/<host>` (short name, full hostname or alias): its logins,
+services and tasks, versions, load and memory (the last hour's trend) and
+sessions, each block with the time it was measured (`*_at`, null = unknown),
+cut like the roster — a user opens only a machine one of their logins is on
+(else 404) and sees their own rows plus `other_logins`, a count.
 
 Set it on an **agent** and the agent dials OUT to the hub — a WebSocket over
 the hub URL you already gave it (`wss://` for `https://`), so a machine behind

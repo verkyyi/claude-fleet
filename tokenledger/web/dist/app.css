@@ -289,6 +289,26 @@ pre.out { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/
 .mc .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; font-size: 12px; color: var(--muted); }
 .mc .stats b { display: block; font: 500 15px var(--f-mono); color: var(--ink); }
 .mc svg.spark { width: 100%; height: 38px; display: block; }
+/* One machine (claude-fleet#2796): its blocks, each saying how old it is. */
+.crumb { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13px; color: var(--muted); }
+.crumb a { display: inline-flex; align-items: center; gap: 6px; color: inherit; }
+.crumb b { font: 500 15px var(--f-mono); color: var(--ink); }
+.md-top .panel-b { display: grid; gap: 10px; }
+.md-top .kv { gap: 6px 12px; grid-template-columns: 6.5rem minmax(0, 1fr); }
+.md-age { display: inline-flex; align-items: baseline; gap: 8px; white-space: nowrap; }
+.md-scroll { max-height: 300px; overflow: auto; }
+.md-top .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; font-size: 12px; color: var(--muted); }
+.md-top .stats b { display: block; font: 500 15px var(--f-mono); color: var(--ink); }
+.md-trend svg.spark { width: 100%; height: 56px; display: block; }
+.md-sh { display: flex; align-items: baseline; gap: 10px; margin: 0 2px 8px; }
+.md-sh h3 { font: 600 14px var(--f-ui); }
+.hint { font-size: 12px; color: var(--muted); }
+.fresh { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.fresh.warn { color: var(--warn); }
+.fresh.stale, .fresh.unknown { color: var(--muted); font-style: italic; }
+.fresh.stale { opacity: .7; }
+[data-href] { cursor: pointer; }
+[data-href]:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 .mc-f { display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: var(--muted); gap: 8px; flex-wrap: wrap; }
 .stepper { display: flex; gap: 8px; font-size: 12px; color: var(--muted); flex-wrap: wrap; }
 .stepper span { display: inline-flex; align-items: center; gap: 6px; }

@@ -134,11 +134,13 @@ var routeAccess = map[string]string{
 	"/sessions": accessUser, "/v1/fleet/me": accessUser, "/v1/fleet/": accessUser,
 	// The roster, cut by FleetScope to the machines where their login runs
 	// (claude-fleet#1411); maintenance, SPOT and join codes stay an admin's.
-	"/v1/nodes":         accessUser,
+	"/v1/nodes": accessUser,
+	// One machine (claude-fleet#2796): 404 unless one of their logins is on it.
+	NodeDetailPrefix:    accessUser,
 	"/v1/fleet/connect": accessUser, "/v1/fleet/cert": accessUser,
 	"/fleet/login": accessUser, "/connect": accessUser, "/config": accessUser,
 	// 我的机器 (claude-fleet#2518): the page reads only /v1/nodes and /v1/me.
-	"/machines": accessUser,
+	"/machines": accessUser, "/machines/": accessUser,
 	// 我的用量 (claude-fleet#2519): reads /v1/fleet/person-usage, cut to them.
 	"/usage":            accessUser,
 	"/v1/fleet/devices": accessUser, "/v1/fleet/devices/revoke": accessUser,

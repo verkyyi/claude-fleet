@@ -5,7 +5,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { PAGES } from '../dist/lib/shell.js';
-import { routeFor, intercept, timerBag, readCache, isRead, CACHE_TTL } from '../dist/lib/router.js';
+import { routeFor, pathParam, intercept, timerBag, readCache, isRead, CACHE_TTL } from '../dist/lib/router.js';
+
+// A prefix page's path is one name under its href (/machines/<host>, claude-fleet#2796).
+const pathOf = (p) => (p.prefix ? p.href + 'm4' : p.href);
 
 const ORIGIN = 'https://hub.example';
 const anchor = (href, attrs = {}) => ({ href, target: attrs.target || '', hasAttribute: (n) => n in attrs });
@@ -14,21 +17,36 @@ const click = (mods = {}) => ({ button: 0, metaKey: false, ctrlKey: false, shift
 test('every page in the menu is a route, and its path is its href', () => {
   for (const p of PAGES) {
     assert.ok(p.module && p.module.startsWith('/') && p.module.endsWith('.js'), `${p.id} names its module`);
-    assert.equal(routeFor(p.href), p, p.href);
+    assert.equal(routeFor(pathOf(p)), p, pathOf(p));
   }
   assert.equal(routeFor('/sessions/'), routeFor('/sessions'), 'a trailing slash is the same page');
   assert.equal(routeFor(''), routeFor('/'));
   for (const p of ['/signin', '/sessions.html', '/v1/me', '/no-such', '/admin']) assert.equal(routeFor(p), null, p);
 });
 
+test('one machine is a page under /machines/; the bare path stays the list (claude-fleet#2796)', () => {
+  const one = PAGES.find((p) => p.id === 'machine');
+  assert.equal(routeFor('/machines').id, 'mymachines');
+  assert.equal(routeFor('/machines/').id, 'mymachines', 'a trailing slash is still the list');
+  assert.equal(routeFor('/machines/macmini'), one);
+  assert.equal(routeFor('/machines/macmini/'), one);
+  assert.equal(routeFor('/machines/a/b'), null, 'one name, no deeper');
+  assert.equal(pathParam('/machines/macmini', one), 'macmini');
+  assert.equal(pathParam('/machines/m%C3%A9', one), 'mé');
+  assert.equal(pathParam('/sessions', routeFor('/sessions')), '');
+  const hit = intercept(click(), anchor(ORIGIN + '/machines/macmini?from=nodes'), ORIGIN);
+  assert.equal(hit.page, one);
+  assert.equal(hit.url, '/machines/macmini?from=nodes');
+});
+
 test('a plain click on a page link opens it in place; between every pair of pages', () => {
   for (const from of PAGES) {
     for (const to of PAGES) {
       if (from === to) continue;
-      const hit = intercept(click(), anchor(ORIGIN + to.href), ORIGIN);
+      const hit = intercept(click(), anchor(ORIGIN + pathOf(to)), ORIGIN);
       assert.ok(hit, `${from.id} → ${to.id}`);
       assert.equal(hit.page, to);
-      assert.equal(hit.url, to.href);
+      assert.equal(hit.url, pathOf(to));
     }
   }
   // The query rides along (Audit's ?kind=).

@@ -258,8 +258,14 @@ async function show(id) {
   leave();
   // The frame's page-dependent parts: the menu's current item, the title,
   // the view switch.
+  // A page with no menu item (one machine, claude-fleet#2796) lights the
+  // list it was opened from: ?from=nodes the admin's Machines, else the first.
+  const entry = PAGES.find((x) => x.id === id);
+  const navId = entry && entry.within
+    ? (new URLSearchParams(location.search).get('from') === 'nodes' && pageAllowed(R.me, 'machines') ? 'machines' : entry.within.find((w) => pageAllowed(R.me, w)) || id)
+    : id;
   for (const a of document.querySelectorAll('a.navi')) {
-    if (a.dataset.page === id) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
+    if (a.dataset.page === navId) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
   }
   const h = $('header.top h1'); if (h) h.textContent = titleOf(id);
   const vs = $('#viewslot'); if (vs) vs.innerHTML = viewSwitch(R.me, id);
