@@ -141,6 +141,13 @@
 #                            FLEET_REMOTE_IDLE_SECS (2). The window carries
 #                            `@remote_route relay` while on the relay (the bar's
 #                            「· 中转」, issue #1628)
+#   FLEET_ROUTE_FAIL_HINT    5 — on a PINNED route (`fleet route`, claude-fleet#2886),
+#                            failures in a row before the page suggests going back
+#                            to auto (it never switches by itself). The window
+#                            carries `@remote_pin` <route> + `@remote_tries` <N>
+#                            while pinned, and `@remote_via` `<auto|manual> <route>`
+#                            once connected — the top bar's connection part
+#   FLEET_ROUTE_GET_CMD      (selftests) the pin lookup, given the node + host
 #   FLEET_REMOTE_SSH_CMD     (selftests) the ssh program
 #   FLEET_CONNECT_PROBE_CMD  (selftests) the direct probe, given the host
 #   FLEET_REMOTE_OPENER      (selftests) what re-issues a request (fleet-open.sh)
@@ -723,11 +730,26 @@ for line in sys.stdin:
     [ -n "$k" ] || { [ "$route" = hub ] && k=relay || k=direct; }
     printf '%s' "$k"
   }
-  # @remote_route on the window: `relay` → the bar's machine chip says 「· 中转」
+  # route_via — `<auto|manual> <the route in words>` off `fleet connect`'s route
+  # file (claude-fleet#2886; its route_label: 中转 · Tailscale · 直连 …); nothing
+  # when it did not say (this loop's own line)
+  route_via() {
+    [ -s "$use.route" ] && [ -f "$BIN/fleet-connect.py" ] || return 0
+    python3 -c 'import importlib.util,json,sys
+try:
+    spec = importlib.util.spec_from_file_location("fc", sys.argv[2]); fc = importlib.util.module_from_spec(spec); spec.loader.exec_module(fc)
+    d = json.load(open(sys.argv[1]))
+    print("%s %s" % ("manual" if d.get("source") == "manual" else "auto", fc.route_label(d.get("kind"), d.get("name"))))
+except Exception: pass' "$use.route" "$BIN/fleet-connect.py" 2>/dev/null
+  }
+  # @remote_route on the window: `relay` → the bar's machine chip says 「· 中转」;
+  # @remote_via (claude-fleet#2886) the line and who chose it, for the top bar
   mark_route() {
     [ -n "${TMUX:-}" ] || return 0
     if [ "${1:-}" = relay ]; then tmux set-window-option -t "${TMUX_PANE:-}" @remote_route relay 2>/dev/null
     else tmux set-window-option -u -t "${TMUX_PANE:-}" @remote_route 2>/dev/null; fi
+    if [ -n "${2:-}" ]; then tmux set-window-option -t "${TMUX_PANE:-}" @remote_via "$2" 2>/dev/null
+    else tmux set-window-option -u -t "${TMUX_PANE:-}" @remote_via 2>/dev/null; fi
     return 0
   }
   # keys_idle <secs> — no key on any client of this tmux for that long
@@ -749,13 +771,15 @@ for line in sys.stdin:
   # reconnects at once and re-measures, so the pane is back on the direct line in
   # about a second. A failed probe costs ~0.1–0.2 s and nothing else.
   upgrader() {
-    local every="${FLEET_CONNECT_UPGRADE_SECS:-15}" idle="${FLEET_REMOTE_IDLE_SECS:-2}" _ up='' kind
+    local every="${FLEET_CONNECT_UPGRADE_SECS:-15}" idle="${FLEET_REMOTE_IDLE_SECS:-2}" _ up='' kind via
     for _ in $(seq 1 50); do
       $SSH -S "$use" -O check "$host" >/dev/null 2>&1 && { up=1; break; }
       sleep 0.2
     done
     [ -n "$up" ] || return 0
-    kind=$(route_kind); mark_route "$kind"
+    kind=$(route_kind); via=$(route_via); mark_route "$kind" "$via"
+    # a pinned line (claude-fleet#2886) is never left for a faster one
+    case "$via" in manual\ *) return 0 ;; esac
     [ "$kind" = relay ] && [ -n "$shellopt" ] || return 0
     while sleep "$every"; do
       $SSH -S "$use" -O check "$host" >/dev/null 2>&1 || return 0
@@ -769,11 +793,37 @@ for line in sys.stdin:
       return 0
     done
   }
-  # In the shell (`--shell`) `fleet connect` picks the line on every connect, and
-  # every RECONNECT re-measures them all (FLEET_CONNECT_RETEST, issue #1628) —
-  # never the remembered one. A fleet's own proxy alternates direct / hub below.
-  route=direct; delay=1; retest=''; gone_since=''
+  # In the shell (`--shell`) `fleet connect` picks the line on every connect; a
+  # RECONNECT tries the remembered one first (FLEET_CONNECT_RETEST=last,
+  # claude-fleet#2886) and re-measures them all only when it does not answer, or
+  # after the upgrader found a direct line (=1, issue #1628). A PINNED machine
+  # (`fleet route`, #2886) takes its one route every time: the page and the bar
+  # say 「钉住：<route>（手动）· 第 N 次重连」, and after FLEET_ROUTE_FAIL_HINT (5)
+  # failures in a row the page suggests auto — it never switches by itself.
+  # A fleet's own proxy alternates direct / hub below.
+  route=direct; delay=1; retest=''; gone_since=''; tries=0; fails=0
   while :; do
+    pin=''
+    if [ -n "$shellopt" ]; then
+      if [ -n "${FLEET_ROUTE_GET_CMD:-}" ]; then pin=$($FLEET_ROUTE_GET_CMD "$node" "$host" 2>/dev/null)
+      elif [ -f "$BIN/fleet-route.py" ] && [ -s "${XDG_CONFIG_HOME:-$HOME/.config}/claude-fleet/routes" ]; then
+        # no routes file = nothing pinned: no python started (fleet-connect.py's config_dir)
+        pin=$(python3 "$BIN/fleet-route.py" --get "$node" "$host" 2>/dev/null)
+      fi
+    fi
+    if [ -n "${TMUX:-}" ]; then
+      if [ -n "$pin" ]; then
+        tmux set-window-option -t "${TMUX_PANE:-}" @remote_pin "$pin" \; set-window-option -t "${TMUX_PANE:-}" @remote_tries "$tries" 2>/dev/null
+      else
+        tmux set-window-option -u -t "${TMUX_PANE:-}" @remote_pin \; set-window-option -u -t "${TMUX_PANE:-}" @remote_tries 2>/dev/null
+      fi
+    fi
+    pinsay=''
+    if [ -n "$pin" ]; then
+      case "$pin" in relay) pinsay='中转' ;; tailscale|tailnet) pinsay='Tailscale' ;; direct) pinsay='直连' ;; *) pinsay=$pin ;; esac
+      pinsay=" · 钉住：${pinsay}（手动）"
+      [ "$tries" -gt 0 ] && pinsay="${pinsay}· 第 ${tries} 次重连"
+    fi
     # Machine to machine (issue #1626): a plain-ssh view from a hub node asks the
     # hub for a five-minute certificate to THIS machine first. rc 3 = no hub here
     # (or it predates #1626): plain ssh, as before; rc 1 = the hub said no or is
@@ -838,11 +888,11 @@ EOF_PEER
     fi
     [ -n "${TMUX:-}" ] && tmux set-window-option -t "${TMUX_PANE:-}" @remote_ctl "$use" 2>/dev/null
     if [ "$use" != "$ctl" ]; then
-      printf '\033[2J\033[H→ 正在连接 %s (%s · 已连) …\n' "$node" "$host"
+      printf '\033[2J\033[H→ 正在连接 %s (%s · 已连%s) …\n' "$node" "$host" "$pinsay"
       opts=(-tt -o ControlMaster=no "${MUXO[@]}" -S "$use" ${lopt[@]+"${lopt[@]}"})
     else
-      printf '\033[2J\033[H→ 正在连接 %s (%s%s%s) …\n' "$node" "$host" "$( [ "$route" = hub ] && printf ' · 经入口中转')" \
-        "$( [ ${#peer[@]} -gt 0 ] && printf ' · 入口证书 5 分钟')"
+      printf '\033[2J\033[H→ 正在连接 %s (%s%s%s%s) …\n' "$node" "$host" "$( [ "$route" = hub ] && printf ' · 经入口中转')" \
+        "$( [ ${#peer[@]} -gt 0 ] && printf ' · 入口证书 5 分钟')" "$pinsay"
       # keepalive 2 s × 3: a dead line is seen in ≤ 6 s (issue #1631, was 5 × 3);
       # no compression (a LAN / tailnet only pays its latency), low-delay QoS
       opts=(-tt -o ServerAliveInterval=2 -o ServerAliveCountMax=3 -o ConnectTimeout=8
@@ -896,9 +946,10 @@ EOF_PEER
     # the reason on a line of its own, above the drop line (issue #1775 §3): a
     # long one wrapping into it would split the line a person reads
     mark_route ''
-    retest=1
+    retest=last
     if [ -f "$use.upgrade" ]; then
       rm -f "$use.upgrade"
+      retest=1
       # the upgrader closed the relay: a direct line answered — over to it now
       printf '\n%s 的直连通了，切回直连 …\n' "$node"
       delay=1; continue
@@ -923,12 +974,17 @@ EOF_PEER
     gone_since=''
     # A drop after a good session reconnects at once; a failing route backs off and,
     # when the hub relay is configured, alternates with it.
-    if [ $(( $(date +%s) - started )) -gt 30 ]; then delay=1
+    tries=$(( tries + 1 ))
+    if [ $(( $(date +%s) - started )) -gt 30 ]; then delay=1; tries=1; fails=0
     else
+      fails=$(( fails + 1 ))
       [ -z "$shellopt" ] && hub_relay_ok && { [ "$route" = direct ] && route=hub || route=direct; }
       [ "$delay" -lt 10 ] && delay=$(( delay * 2 ))
     fi
     [ -n "$why" ] && printf '\n原因：%s' "$why"
+    if [ -n "$pin" ] && [ "$fails" -ge "${FLEET_ROUTE_FAIL_HINT:-5}" ]; then
+      printf '\n钉住的线路已连续 %s 次连不上 · 要不要改回自动？fleet route %s auto（或 ⌘P 连接路线…）' "$fails" "$node"
+    fi
     if [ -n "$shellopt" ]; then
       # The client's right pane (issue #1785): a dropped line is never the end of
       # it — Enter reconnects now, and ⌃c, which closed the window (and with the

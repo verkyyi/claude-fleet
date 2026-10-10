@@ -23,6 +23,12 @@
 #   fleet connect [machine]     route + ssh only — what the client runs inside;
 #                               for debugging (`fleet connect m4 --print`)
 #   fleet connect --proxy <m>   ssh's ProxyCommand through the hub
+#   fleet route [<m> [auto|relay|direct|tailscale|<host[:port]>]]
+#                               the route to each machine — measured (auto, the
+#                               default) or pinned by you: no measuring, no
+#                               switching, a drop reconnects the same way; bare
+#                               lists every machine's route + last handshakes
+#                               (#2886; ⌘P 连接路线…)
 #   fleet host on|off|status    承载: whether this computer also runs sessions
 #                               (#1806 — the hub's word for it is node)
 #   fleet config [show|add|set|rm|promote|history|restore|people|export|import]
@@ -188,7 +194,7 @@ fi
 cmd=${1-}
 case $cmd in
   -h|--help|help)
-    sed -n '2,87p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,96p' "$0" | sed 's/^# \{0,1\}//'
     exit 0 ;;
   '')
     client ;;

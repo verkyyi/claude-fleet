@@ -402,5 +402,71 @@ else
   echo "skip fleet legs: no ssh-keygen"
 fi
 
+# ── 14 — a pinned route (claude-fleet#2886): `fleet route` / --route ─────────
+#   pinned: that one route, never a handshake (no relay probe), never switched
+#   when another is up; the route file says source manual; tailscale / an
+#   address; a route the machine lacks exits 1 naming the way back; the list,
+#   --json, --get; auto removes the line. Then auto's reconnect
+#   (FLEET_CONNECT_RETEST=last): the remembered route first, whatever its age.
+echo '{"tailnet_up": true, "relay_ok": true}' > "$WORK/state"
+RF="$XDG_CONFIG_HOME/claude-fleet/routes"
+export FLEET_HUB_TOKEN=tok-1
+"$BIN/fleet" connect m4 --hub "$HUB" --retest --print >/dev/null 2>&1   # m4 remembered, measured
+out=$("$BIN/fleet" route m4 relay); rc=$?
+if [ "$rc" = 0 ] && grep -qx 'm4 relay' "$RF" && [[ "$out" == *"已钉住 m4：中转（手动）"* ]]; then
+  ok "fleet route m4 relay: one line in ~/.config/claude-fleet/routes"
+else bad "fleet route set: rc=$rc out=$out $(cat "$RF" 2>/dev/null)"; fi
+before=$(hits relay_hits)
+out=$("$BIN/fleet" connect m4 --hub "$HUB" --verbose --print 2>"$WORK/err14"); rc=$?
+if [ "$rc" = 0 ] && [[ "$out" == *"ProxyCommand="*"--proxy mini"* ]] && [ "$(hits relay_hits)" = "$before" ] \
+   && grep -q '钉住：中转（手动）— 不测速' "$WORK/err14"; then
+  ok "pinned relay: the relay with no handshake, though the tailnet is up and faster"
+else bad "pinned relay: rc=$rc relay ${before}→$(hits relay_hits) out=$out $(cat "$WORK/err14")"; fi
+out=$(FLEET_CONNECT_RETEST=1 "$BIN/fleet" connect m4 --hub "$HUB" --print 2>/dev/null)
+[[ "$out" == *"--proxy mini"* ]] && ok "pinned relay: --retest / RETEST=1 measure nothing either" || bad "pinned + retest: $out"
+mkdir -p "$WORK/shim"; printf '#!/bin/sh\nexit 0\n' > "$WORK/shim/ssh"; chmod +x "$WORK/shim/ssh"
+PATH="$WORK/shim:$PATH" FLEET_CONNECT_ROUTE_FILE="$WORK/route14" "$BIN/fleet" connect m4 --hub "$HUB" >/dev/null 2>&1
+grep -q '"source": "manual"' "$WORK/route14" && grep -q '"pin": "relay"' "$WORK/route14" && grep -q '"kind": "relay"' "$WORK/route14" \
+  && ok "pinned: the route file says source manual + the pin (the bar's 手动, no upgrade)" \
+  || bad "pinned route file: $(cat "$WORK/route14" 2>/dev/null)"
+"$BIN/fleet" route m4 tailscale >/dev/null
+out=$("$BIN/fleet" connect m4 --hub "$HUB" --print 2>/dev/null)
+[[ "$out" == *"-p $SSHD_PORT 127.0.0.1"* ]] && [[ "$out" != *ProxyCommand* ]] && ok "pinned tailscale: the tailnet route" \
+  || bad "pinned tailscale: $out"
+"$BIN/fleet" route m4 127.0.0.1:2222 >/dev/null
+out=$("$BIN/fleet" connect m4 --hub "$HUB" --print 2>/dev/null)
+[[ "$out" == *"-p 2222 127.0.0.1"* ]] && ok "pinned address: host:port as given" || bad "pinned address: $out"
+"$BIN/fleet" route m4 'bad/route' >/dev/null 2>&1; rc=$?
+[ "$rc" = 2 ] && ok "fleet route: a word that is no route exits 2" || bad "bad route: rc=$rc"
+"$BIN/fleet" route m5 tailscale >/dev/null
+out=$("$BIN/fleet" connect m5 --hub "$HUB" --retest --print 2>&1); rc=$?
+[ "$rc" = 1 ] && [[ "$out" == *"fleet route m5 auto"* ]] && ok "pinned to a route the machine lacks: exit 1, says how back to auto" \
+  || bad "pinned missing: rc=$rc $out"
+lst=$("$BIN/fleet" route)
+js=$("$BIN/fleet" route --json)
+if [[ "$lst" == *"m4"*"钉住：127.0.0.1:2222（手动）"* ]] && [[ "$lst" == *"m5"*"钉住：Tailscale（手动）"* ]] && [[ "$lst" == *"tailnet"*ms* ]] \
+   && python3 -c 'import json,sys; d={r["machine"]: r for r in json.loads(sys.argv[1])}; assert d["m4"]["mode"] == "manual" and d["m4"]["table"]' "$js"; then
+  ok "fleet route: each machine, its pin, the last handshakes; --json"
+else bad "fleet route list: $lst"$'\n'"$js"; fi
+[ "$("$BIN/fleet-route.py" --get mini)" = "127.0.0.1:2222" ] && ok "--get: a hostname finds its alias's pin (the view loop)" \
+  || bad "--get by hostname: $("$BIN/fleet-route.py" --get mini)"
+"$BIN/fleet" route m4 auto >/dev/null; "$BIN/fleet" route m5 auto >/dev/null
+"$BIN/fleet-route.py" --get m4 >/dev/null; rc=$?
+[ "$rc" = 1 ] && ! grep -q '^m4 ' "$RF" && ok "fleet route m4 auto: the line goes, --get exits 1" || bad "auto: rc=$rc $(cat "$RF")"
+out=$("$BIN/fleet" connect m4 --hub "$HUB" --route relay --print 2>/dev/null)
+grep -qx 'm4 relay' "$RF" && [[ "$out" == *"--proxy mini"* ]] && ok "fleet connect --route relay: pins and connects" \
+  || bad "connect --route: $out $(cat "$RF")"
+"$BIN/fleet" route m4 auto >/dev/null
+# auto's reconnect: the remembered line first, past its TTL; RETEST=1 measures all
+"$BIN/fleet" connect m4 --hub "$HUB" --retest --print >/dev/null 2>&1
+before=$(hits routes_hits)
+FLEET_CONNECT_CACHE_SECS=0 FLEET_CONNECT_RETEST=last "$BIN/fleet" connect m4 --hub "$HUB" --verbose --print >/dev/null 2>"$WORK/err14b"; rc=$?
+[ "$rc" = 0 ] && grep -q '秒前测出的 tailnet' "$WORK/err14b" && [ "$(hits routes_hits)" = "$before" ] \
+  && ok "RETEST=last: the remembered route first, though older than the TTL" \
+  || bad "RETEST=last: rc=$rc hits ${before}→$(hits routes_hits) $(cat "$WORK/err14b")"
+FLEET_CONNECT_RETEST=1 "$BIN/fleet" connect m4 --hub "$HUB" --print >/dev/null 2>&1
+[ "$(hits routes_hits)" = $((before + 1)) ] && ok "RETEST=1: every route measured again" || bad "RETEST=1: hits ${before}→$(hits routes_hits)"
+unset FLEET_HUB_TOKEN
+
 [ "$fail" = 0 ] && echo "PASS fleet-connect-route-selftest" || echo "FAIL fleet-connect-route-selftest"
 exit "$fail"

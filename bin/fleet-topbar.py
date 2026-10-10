@@ -4,7 +4,8 @@ C11): the line above the right pane, which the shell's STAGE server draws
 (conf/tmux-shell-stage.conf's status-left) — and, at phone width, the way round
 the sessions with a thumb.
 
-    fleet-topbar.py render cw=<cols> [down=<epoch>] [rr=<route>] [wn=<window name>] [gen=…]
+    fleet-topbar.py render cw=<cols> [down=<epoch>] [rr=<route>] [rv=<auto|manual> <route>]
+                           [rp=<pinned route>] [rt=<reconnects>] [wn=<window name>] [gen=…]
         the line, as tmux format: ‹ i/n ›  state  key  title …… PR  repo  @machine
     fleet-topbar.py click <range> <shell session>
         a tap on one of its parts (the stage's MouseDown1Status bind):
@@ -26,7 +27,9 @@ state dir (fleet-quickopen.py state_dir), written by the task list
 list never disagree — and only on change, when it also bumps the stage's
 `@fleet_bar_gen`, which status-left names: tmux runs the line again at once.
 The stage adds what only it knows: `@remote_down` (this machine's connection to
-that one dropped: ⟳ and for how long) and `@remote_route` (on the hub relay).
+that one dropped: ⟳ and for how long), `@remote_route` (on the hub relay) and —
+claude-fleet#2886 — `@remote_via` (the route and who chose it: 自动 / 手动),
+`@remote_pin` + `@remote_tries` (a pinned route reconnecting: 第 N 次).
 
 Narrow, the line gives up, in this order (the prototype's widths): the repo
 (< 130 columns), the PR (< 110), the state's word (< 70, its glyph stays), then
@@ -155,7 +158,16 @@ def node_old(node):
     return False
 
 
-def machine_text(rec, down, route, now):
+PIN_WORDS = {"relay": "中转", "tailscale": "Tailscale", "tailnet": "Tailscale", "direct": "直连"}
+
+
+def machine_text(rec, down, route, now, via="", pin="", tries="", cols=100):
+    """@machine and its connection: offline · ⟳ (dropped, how long) · the route.
+    The route (claude-fleet#2886): `via` is the stage's `@remote_via`, `<auto|
+    manual> <route in words>` — a pinned one always 「· 中转·手动」, an automatic
+    one 「· Tailscale·自动」 from 100 columns (the relay keeps its 「· 中转」 below);
+    no via ⇒ `route` alone, as before. `pin` / `tries` (`@remote_pin` /
+    `@remote_tries`): while a pinned line is down, 「钉住：中转（手动）· 第 N 次重连」."""
     m = "@" + (rec.get("node") or "?")
     if rec.get("node") and node_old(rec["node"]):
         m += " 旧"
@@ -163,7 +175,20 @@ def machine_text(rec, down, route, now):
         return m + " offline", True
     if down:
         secs = now - int(down) if str(down).isdigit() and int(down) > 1 else -1
-        return m + (" ⟳ %ds" % secs if secs >= 0 else " ⟳"), True
+        m += " ⟳ %ds" % secs if secs >= 0 else " ⟳"
+        if pin:
+            word = PIN_WORDS.get(pin, pin)
+            n = int(tries) if str(tries).isdigit() else 0
+            if cols >= 100:
+                m += " · 钉住：%s（手动）" % word + ("· 第 %d 次重连" % n if n else "")
+            else:
+                m += " · 钉%s" % word + (" %d" % n if n else "")
+        return m, True
+    src, _, label = (via or "").partition(" ")
+    if label and src == "manual":
+        return m + " · %s·手动" % label, False
+    if label and cols >= 100:
+        return m + " · %s·自动" % label, False
     if route == "relay":
         return m + " · 中转", False
     return m, False
@@ -213,12 +238,12 @@ def ctx_parts(rec, cols, now):
     return out
 
 
-def layout(rec, cols, down="", route="", now=None):
+def layout(rec, cols, down="", route="", now=None, via="", pin="", tries=""):
     """The line as a list of (text, colour, range) parts plus its background
     (None / BG_ASK / BG_DOWN). Pure: the selftest reads `fit`."""
     now = int(time.time()) if now is None else now
     glyph, word = state_of(rec)
-    mach, grey = machine_text(rec, down, route, now)
+    mach, grey = machine_text(rec, down, route, now, via, pin, tries, cols)
     asking = rec.get("state") == "needs" and rec.get("kind") != "perm"
     bg = BG_DOWN if grey else BG_ASK if asking else None
     scol = (BAD if glyph in ("?", "✖") else WARN if glyph in ("⊘", "↻") else
@@ -254,8 +279,8 @@ def layout(rec, cols, down="", route="", now=None):
     return parts + rtext, bg
 
 
-def fit(rec, cols, down="", route="", now=None):
-    parts, bg = layout(rec, cols, down, route, now)
+def fit(rec, cols, down="", route="", now=None, via="", pin="", tries=""):
+    parts, bg = layout(rec, cols, down, route, now, via, pin, tries)
     return "".join(t for t, _, _ in parts), bg
 
 
@@ -281,7 +306,8 @@ def render(args):
               % (DIM, HL, tmux_text(kv.get("wn", "")), missing))
         return 0
     rec["also"] = also_on(rec)
-    parts, bg = layout(rec, cols, kv.get("down", ""), kv.get("rr", ""))
+    parts, bg = layout(rec, cols, kv.get("down", ""), kv.get("rr", ""), None,
+                       kv.get("rv", ""), kv.get("rp", ""), kv.get("rt", ""))
     fg_all = "#1a1b26" if bg == BG_ASK else None
     out = "#[bg=%s]" % bg if bg else ""
     if fg_all:

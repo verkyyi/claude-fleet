@@ -33,6 +33,10 @@
 #                    reconnect (scaled clock: 1 s for the 15 s tick) the master is
 #                    closed, the reconnect runs with FLEET_CONNECT_RETEST=1 and
 #                    lands direct (@remote_route gone)
+#   F. pinned      — (claude-fleet#2886) the same with a pinned relay: @remote_via
+#                    「manual 中转」 + @remote_pin; the direct line answering moves
+#                    nothing; a drop reconnects with FLEET_CONNECT_RETEST=last and
+#                    the page / @remote_tries say 第 1 次重连
 # tmux / python3 absent → SKIP (exit 0). Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -265,6 +269,37 @@ not_relay() { [ -z "$(route_opt)" ]; }
 waitfor 5 not_relay || fail 'E: on the direct line @remote_route is gone' "$(route_opt)"
 sleep 2
 eq 'E: on the direct line no further switch' 2 "$(cat "$WORK/connects")"
+
+# ================================================================================
+# F. pinned (claude-fleet#2886) — a pinned relay is never upgraded, a drop comes
+#    back over it with the remembered-first retest (=last), and the window and
+#    the page say 钉住：中转（手动）· 第 N 次重连
+# ================================================================================
+FSSH="$WORK/fssh"; mkdir -p "$FSSH"
+sed -e 's|connect-e.log|connect-f.log|; s|/connects"|/fconnects"|g' \
+    -e 's|if \[ "\$n" = 1 \]; then k=relay; else k=direct; fi|k=relay|' \
+    -e 's|{"machine": "m5", "kind": "%s", "name": "x"}|{"machine": "m5", "kind": "%s", "name": "relay", "source": "manual", "pin": "relay"}|' \
+    "$ESSH/ssh" > "$FSSH/ssh"; chmod +x "$FSSH/ssh"
+printf '#!/bin/sh\necho relay\n' > "$WORK/getpin"; chmod +x "$WORK/getpin"
+"$REAL_TMUX" -L "$SOCK" new-window -d -n F -P -F '#{window_id}' \
+  "env FLEET_REMOTE_SSH_CMD=$FSSH/ssh FLEET_ROUTE_GET_CMD=$WORK/getpin FLEET_CONNECT_PROBE_CMD=$WORK/probe FLEET_CONNECT_UPGRADE_SECS=1 FLEET_REMOTE_IDLE_SECS=0 FLEET_REMOTE_BIN=$BIN FLEET_REMOTE_VIA_HUB=0 TMPDIR=$WORK/f bash $BIN/fleet-remote-view.sh run --shell m5 -" \
+  > "$WORK/fwin"
+mkdir -p "$WORK/f"
+FW=$(cat "$WORK/fwin")
+wopt() { "$REAL_TMUX" -L "$SOCK" show-options -wqv -t "$FW" "$1" 2>/dev/null; }
+f_via() { [ "$(wopt @remote_via)" = "manual 中转" ]; }
+waitfor 10 f_via || fail 'F: a pinned relay marks @remote_via "manual 中转"' "$(wopt @remote_via)"
+eq 'F: @remote_pin relay while pinned' relay "$(wopt @remote_pin)"
+eq 'F: still @remote_route relay (the bars before #2886 read it)' relay "$(wopt @remote_route)"
+sleep 3                                            # the direct probe answers (direct.up): no upgrade
+eq 'F: pinned → the direct line answering moves nothing' 1 "$(cat "$WORK/fconnects" 2>/dev/null)"
+kill "$(cat "$WORK/f/"*.mpid 2>/dev/null | head -n 1)" 2>/dev/null   # the line drops
+ftwo() { [ "$(grep -c . "$WORK/connect-f.log" 2>/dev/null)" = 2 ]; }
+waitfor 10 ftwo || fail 'F: the drop reconnects' "$(cat "$WORK/connect-f.log" 2>/dev/null)"
+has 'F: the reconnect tries the remembered/pinned line first (RETEST=last)' "$(tail -n 1 "$WORK/connect-f.log")" 'retest=last'
+eq 'F: @remote_tries counts the reconnect' 1 "$(wopt @remote_tries)"
+fpage() { "$REAL_TMUX" -L "$SOCK" capture-pane -p -t "$FW" 2>/dev/null; }
+has 'F: the page says 钉住：中转（手动）· 第 1 次重连' "$(fpage)" '钉住：中转（手动）· 第 1 次重连'
 
 printf 'fleet-client-route selftest: %d checks, %d failed\n' "$CHECKS" "$FAIL"
 [ "$FAIL" -eq 0 ]
