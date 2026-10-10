@@ -19,6 +19,8 @@ through ONE script, `bin/fleet-role.py` (on a client: `fleet role …`); never e
 The orchestrator, a scratch session, the person's own shell. **A worker's window (a batch
 driver's too) only reads**: `fleet-role.py`'s writes exit 3 there — say so in one line
 (「执行会话里只能看不能改——到编排会话里说」) and stop. Never try another road around it.
+`fleet-role.py` lives in a full install (`~/.claude/fleet/bin/`, a worktree's `bin/`); a
+computer with only the `fleet` client has no `fleet role` yet — there, say 「到编排会话里说」.
 
 ## 1. Read what is there now
 
