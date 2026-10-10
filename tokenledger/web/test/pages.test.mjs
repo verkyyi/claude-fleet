@@ -264,7 +264,8 @@ test('the daily tables carry no person, subscription or owner column', () => {
   const con = readFileSync(new URL('../dist/connect.js', import.meta.url), 'utf8');
   assert.match(con, /devicesPanel\(devs\.value, false[,)]/, 'Devices & SSH draws the viewer\'s own, no owner column');
   const cfg = readFileSync(new URL('../dist/config.js', import.meta.url), 'utf8');
-  assert.doesNotMatch(cfg, /id="publish"|data-restore/, 'publish and restore are the admin area\'s (Settings)');
+  assert.doesNotMatch(cfg, /id="publish"|data-restore/, 'the team layer\'s publish and restore are the admin area\'s (Settings)');
+  assert.match(cfg, /data-mine-restore/, 'a person puts back their OWN layer here (claude-fleet#2787)');
   assert.match(cfg, /id="import"/);
   assert.doesNotMatch(cfg, /admin \? '' : `<button class="btn sm" id="import"/, 'an admin imports their own settings too');
 });

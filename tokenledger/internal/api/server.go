@@ -203,6 +203,11 @@ type Server struct {
 	Releases *ReleaseStore
 	// joinClock replaces the join-code clock in tests.
 	joinClock func() time.Time
+	// roleTreeFn replaces where the merged roles view reads the built-in
+	// definitions from (claude-fleet#2787) in tests; nil = the release
+	// store's stable tree, cached per sha in roleTree.
+	roleTreeFn func() (sha string, files map[string][]byte, note string)
+	roleTree   roleTreeCache
 
 	// Spot starts and releases SPOT execution nodes in the hub's cluster
 	// (claude-fleet#1428); nil when CCQUOTA_FLEET_SPOT_IMAGE is unset.
@@ -434,6 +439,8 @@ func (s *Server) routes() *routeMux {
 		// Each person's own layer (claude-fleet#1856): the same doors, each
 		// reading and writing its own; the operator reads and restores.
 		mux.HandleFunc(control.PersonBundlePath, s.handleFleetPersonBundle)
+		// The merged roles + rule table, read-only (claude-fleet#2787).
+		mux.HandleFunc(control.PersonBundlePath+"/roles", s.handleFleetPersonBundle)
 		// The Fleet Hub's read tools (claude-fleet#1409), the same ones
 		// /mcp lists when the module is on.
 		mux.Handle("/v1/fleet/", s.viewerOnly(http.HandlerFunc(s.handleFleet)))

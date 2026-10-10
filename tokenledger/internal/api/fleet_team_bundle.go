@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/rolemerge"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
@@ -105,6 +106,8 @@ var personScriptRE = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 // rows that override the built-in table by number — a Markdown table in
 // conf/role-rules.default.md's format, or a list of rows (bin/fleet_rules.py,
 // C5, owns a row's shape and refuses a layer it cannot read) — at most 32 KiB.
+// Since claude-fleet#2787 the hub refuses (422) an overlay or a row that every
+// machine would refuse, through internal/rolemerge — the merge's Go copy.
 // Both are the personal layer's alone; the team layer takes no roles this batch.
 const (
 	personRoleMax  = 16 << 10
@@ -250,8 +253,20 @@ func validateBundle(raw json.RawMessage, personal bool) (string, error) {
 		default:
 			return "", fmt.Errorf("bundle.roles.%s must be the overlay's text or an object", n)
 		}
-		if raw, _ := json.Marshal(v); len(raw) > personRoleMax {
+		raw, _ := json.Marshal(v)
+		if len(raw) > personRoleMax {
 			return "", fmt.Errorf("bundle.roles.%s is over 16 KiB", n)
+		}
+		// What every machine would refuse (fleet-role.py check_overlay), the
+		// hub refuses first (claude-fleet#2787) — a credential is the scan's below.
+		if ov, err := rolemerge.Decode(raw); err == nil {
+			front, body, err := rolemerge.OverlayOf(ov)
+			if err != nil {
+				return "", fmt.Errorf("bundle.roles.%s: %v", n, err)
+			}
+			if why := rolemerge.CheckOverlay(n, front, body); why != "" && !strings.HasPrefix(why, "carries something credential-shaped") {
+				return "", fmt.Errorf("bundle.roles.%s: %s", n, why)
+			}
 		}
 	}
 	if rules, ok := all["rules"]; ok {
@@ -268,8 +283,16 @@ func validateBundle(raw json.RawMessage, personal bool) (string, error) {
 		default:
 			return "", errors.New("bundle.rules must be a Markdown table or a list of rows")
 		}
-		if raw, _ := json.Marshal(rules); len(raw) > personRulesMax {
+		raw, _ := json.Marshal(rules)
+		if len(raw) > personRulesMax {
 			return "", errors.New("bundle.rules is over 32 KiB")
+		}
+		if secretIn("bundle.rules", rules) == "" {
+			if rv, err := rolemerge.Decode(raw); err == nil {
+				if _, err := rolemerge.PersonRules(rv); err != nil {
+					return "", fmt.Errorf("bundle.rules: %v", err)
+				}
+			}
 		}
 	}
 	if path := secretIn("bundle", all); path != "" {
