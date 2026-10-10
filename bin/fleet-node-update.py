@@ -720,6 +720,20 @@ class Updater(object):
             return ["credsep: machine refresh rc %d %s" % (rc, (err or out).strip()[-160:])]
         if last and not last.startswith("shared: current"):
             self.log("credsep: %s" % last)
+        return self.sync_pool(cs)
+
+    def sync_pool(self, cs):
+        """`machine pool-sync` (issue #2850): the shared pool against the hub's
+        manifest — pull, drop, warn — every round. rc 3 = no shared proxy / no
+        hub: nothing. -> notes."""
+        rc, out, err = run([sys.executable, "-I", cs, "machine", "pool-sync"], timeout=180)
+        if rc == 3:
+            return []
+        for l in out.splitlines():
+            if l.startswith("WARN pool:") or " pulled " in l or " dropped " in l or l.startswith("pool: note"):
+                self.log("credsep: %s" % l)
+        if rc != 0:
+            return ["credsep: pool-sync rc %d %s" % (rc, (err or out).strip()[-160:])]
         return []
 
     # -- the sessions ride through a switch (issue #2484, EPIC #2482 C5)

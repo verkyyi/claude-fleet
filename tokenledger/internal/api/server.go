@@ -519,6 +519,9 @@ func (s *Server) routes() *routeMux {
 		// node's enrollment token, like the control channel; everything else
 		// is the operator's.
 		mux.HandleFunc("/v1/node/credentials", s.handleNodeCredentials)
+		// The shared pool's manifest (claude-fleet#2850): fingerprint +
+		// expiry per pool token, never a secret — any enrollment token.
+		mux.HandleFunc(NodePoolPath, s.handleNodePool)
 		// The Singapore relay (claude-fleet#1974): a trusted node mints its
 		// own relay credential with its token; the forwarder's forward_auth
 		// asks the check, which authenticates the pass it carries.

@@ -1710,18 +1710,21 @@ def own_proxies():
     return out
 
 
-def shared_ask(login):
-    """-> the shared proxy's view of <login> ({live, legacy_port}) — or None when
-    it does not serve it (not up, not a tenant). Root names the login; in the
-    sandbox the login's uid stands in for the kernel's peer uid."""
+def shared_ctl(login, req, root=False):
+    """One control call to the shared proxy as <login> -> its answer, or None
+    when it is not up. Root names the login; in the sandbox the login's uid —
+    or, for a root-only op, 0 — stands in for the kernel's peer uid."""
     import socket
-    req = {"op": "machine"}
+    req = dict(req)
     if os.geteuid() == 0:
         req["as"] = login
     elif TEST:
-        req["peer_uid"] = getpw(login).pw_uid
+        if root:
+            req["peer_uid"], req["as"] = 0, login
+        else:
+            req["peer_uid"] = getpw(login).pw_uid
     s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    s.settimeout(5)
+    s.settimeout(10)
     try:
         s.connect(os.path.join(SHARED_RUN, "ctl.sock"))
         s.sendall((json.dumps(req) + "\n").encode())
@@ -1731,11 +1734,17 @@ def shared_ask(login):
             if not d:
                 break
             buf += d
-        res = json.loads(buf or b"{}")
+        return json.loads(buf or b"{}")
     except (OSError, ValueError):
         return None
     finally:
         s.close()
+
+
+def shared_ask(login):
+    """-> the shared proxy's view of <login> ({live, legacy_port}) — or None when
+    it does not serve it (not up, not a tenant)."""
+    res = shared_ctl(login, {"op": "machine"}) or {}
     return (res.get("logins") or {}).get(login) if res.get("ok") else None
 
 
@@ -1963,15 +1972,20 @@ def machine_status(a):
         out["install_version"] = code_version(os.path.join(HERE, "fleet-cred-proxy.py"))
         out["machine_logins"] = [n for n, _, _ in fleet_logins()]
     out["own"] = own_proxies()
+    try:
+        out["pool_sync"] = json.load(open(POOL_SYNC))
+    except (OSError, ValueError):
+        out["pool_sync"] = None
     if a.json:
         print(json.dumps(out))
     elif not rec:
         print("per-login (no shared proxy on this machine)")
     else:
-        print("shared · %s · %d login(s) · 127.0.0.1:%s · version %s%s%s"
+        print("shared · %s · %d login(s) · 127.0.0.1:%s · version %s%s%s%s"
               % (rec.get("user"), len(rec.get("logins") or []), out["live_port"] or "down", out["live_version"] or "-",
                  "" if out["live_version"] == out["install_version"] else " (this install: %s)" % out["install_version"],
-                 " · own proxy: %s (machine join)" % ", ".join(out["own"]) if out["own"] else ""))
+                 " · own proxy: %s (machine join)" % ", ".join(out["own"]) if out["own"] else "",
+                 pool_sync_line(out["pool_sync"])))
     return 0 if rec else 3
 
 
@@ -2018,6 +2032,217 @@ def machine_pooldup(a):
     else:
         print("pooldup: OK — every pooled token held once")
     return 1 if dups else 0
+
+
+# ---- the shared pool follows the hub's (issue #2850) ---------------------------------
+# The pool (<SHARED_DIR>/pool/claude/<key>/) used to fill only when a login's own
+# lease came round (hours apart) and never lost a token the hub dropped. Every
+# updater round (fleet-node-update.py sync_credsep) runs `machine pool-sync`: the
+# hub's manifest (GET /v1/node/pool — fingerprint = the pool key + expiry, never a
+# token) against the pool; a fingerprint missing here is pulled through each
+# tenant's own lease (the hub's gates stay its gates) and filed by the proxy's
+# `store`; a pool key the hub no longer lists goes (`pool-drop`) — never a
+# login's own lease, which shares the directory but no manifest names; one within
+# POOL_WARN_DAYS of its end is a WARN. The outcome lands in POOL_SYNC (no
+# secret: anyone reads it — `machine status`). No shared proxy, no hub ⇒ nothing
+# asked, nothing written.
+POOL_SYNC = os.path.join(ROOT_BASE, ".pool-sync.json")
+POOL_WARN_DAYS = int(E("FLEET_POOL_WARN_DAYS", "30"))
+SAFE_LABEL = re.compile(r"^[A-Za-z0-9_-][A-Za-z0-9._-]{0,63}$")     # the agent's safeLabel
+
+
+def pool_hub_tokens(tenants):
+    """-> [(login or "", hub url, token)]: the machine's own first, then each
+    tenant's (the managed daemon's logins/<login>.env, else the store's node.env)."""
+    out = []
+    me = env_file(os.path.join(NODE_STATE, "machine.env"))
+    if me.get("CCQUOTA_HUB_URL") and me.get("CCQUOTA_TOKEN"):
+        out.append(("", me["CCQUOTA_HUB_URL"], me["CCQUOTA_TOKEN"]))
+    for m in tenants:
+        for f in (os.path.join(NODE_STATE, "logins", m["login"] + ".env"),
+                  os.path.join(ROOT_BASE, m["login"], "node.env")):
+            e = env_file(f)
+            url = e.get("CCQUOTA_HUB_URL") or me.get("CCQUOTA_HUB_URL")
+            if url and e.get("CCQUOTA_TOKEN"):
+                out.append((m["login"], url, e["CCQUOTA_TOKEN"]))
+                break
+    return out
+
+
+def pool_hub(url, token, method, path):
+    import urllib.request
+    req = urllib.request.Request(url.rstrip("/") + path, method=method,
+                                 data=b"{}" if method == "POST" else None,
+                                 headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return json.loads(r.read() or b"{}")
+
+
+def pool_key(tok):
+    import hashlib
+    return hashlib.sha256(("claude\0%s" % tok).encode()).hexdigest()[:32]
+
+
+def pool_local():
+    """-> {key: expiresAt ms or None} of every Claude token in the pool."""
+    d = os.path.join(SHARED_DIR, "pool", "claude")
+    out = {}
+    for k in sorted(os.listdir(d)) if os.path.isdir(d) else []:
+        if not re.match(r"^[0-9a-f]{32}$", k):
+            continue
+        try:
+            o = json.load(open(os.path.join(d, k, ".credentials.json")))["claudeAiOauth"]
+            out[k] = o.get("expiresAt")
+        except (OSError, ValueError, KeyError, TypeError):
+            out[k] = None
+    return out
+
+
+def pool_iso_epoch(v):
+    """The hub's RFC 3339 time (UTC, or with an offset) -> epoch seconds."""
+    import calendar
+    try:
+        t = calendar.timegm(time.strptime(v[:19], "%Y-%m-%dT%H:%M:%S"))
+    except (TypeError, ValueError):
+        return None
+    m = re.search(r"([+-])(\d\d):(\d\d)$", v)
+    if m:
+        t -= (1 if m.group(1) == "+" else -1) * (int(m.group(2)) * 3600 + int(m.group(3)) * 60)
+    return t
+
+
+def machine_pool_sync(a):
+    rec = shared_rec()
+    if not rec:
+        say("pool: off — no shared proxy on this machine")
+        return 3
+    tenants = shared_tenants()
+    toks = pool_hub_tokens(tenants)
+    if not toks:
+        say("pool: no hub — nothing to sync")
+        return 3
+    old = {}
+    try:
+        old = json.load(open(POOL_SYNC))
+    except (OSError, ValueError):
+        pass
+    now = time.time()
+    state = {"synced": old.get("synced") or "", "tried": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))}
+    man, err = None, ""
+    for _, url, tok in toks:
+        try:
+            man = pool_hub(url, tok, "GET", "/v1/node/pool")
+            break
+        except Exception as e:      # HTTPError, URLError, a bad body: the next token, else the note
+            err = "%s: %s" % (type(e).__name__, e)
+    if not isinstance(man, dict) or not isinstance(man.get("pool"), list):
+        state["error"] = "manifest: " + (err or "no answer")
+        for k in ("hub", "local", "expiring", "known"):
+            if k in old:
+                state[k] = old[k]
+        if not DRY:
+            put(POOL_SYNC, json.dumps(state, indent=1) + "\n", 0o644, "root" if os.geteuid() == 0 else pwd.getpwuid(os.getuid()).pw_name)
+        say("pool: hub manifest unreadable — %s" % state["error"])
+        return 1
+    want = {e["fingerprint"]: e for e in man["pool"] if isinstance(e, dict) and e.get("provider") == "claude"
+            and re.match(r"^[0-9a-f]{32}$", e.get("fingerprint") or "")}
+    local = pool_local()
+    added, dropped, notes = [], [], []
+    missing = set(want) - set(local)
+    for login, url, tok in [t for t in toks if t[0]] if missing else []:
+        try:
+            lease = pool_hub(url, tok, "POST", "/v1/node/credentials")
+        except Exception as e:
+            notes.append("%s: lease %s" % (login, type(e).__name__))
+            continue
+        for c in lease.get("credentials") or []:
+            acc = c.get("access") or {}
+            tk = acc.get("access_token") or ""
+            if not (c.get("pool") and c.get("provider") == "claude" and tk and pool_key(tk) in want):
+                continue
+            exp = pool_iso_epoch(c.get("expires_at") or "")
+            if exp is None or not SAFE_LABEL.match(c.get("account") or ""):
+                continue
+            o = {"accessToken": tk, "refreshToken": None, "expiresAt": int(exp * 1000),
+                 "scopes": acc.get("scopes") or ["user:inference"]}
+            if acc.get("subscription_type"):
+                o["subscriptionType"] = acc["subscription_type"]
+            data = json.dumps({"claudeAiOauth": o}, separators=(",", ":")).encode()
+            import base64
+            if DRY:
+                say("    would store claude:%s for %s" % (c["account"], login))
+                res = {"ok": True}
+            else:
+                res = shared_ctl(login, {"op": "store", "kind": "claude", "label": c["account"],
+                                         "data": base64.b64encode(data).decode()}, root=True) or {}
+            if res.get("ok"):
+                if pool_key(tk) in missing:
+                    added.append(c["account"])
+                    missing.discard(pool_key(tk))
+            else:
+                notes.append("%s: store %s — %s" % (login, c["account"], res.get("err") or "proxy down"))
+    for k in missing:
+        notes.append("%s not pulled (no login here leases it)" % want[k].get("account"))
+    # Only a POOL token goes: the pool also files every login's own lease (#2311),
+    # which no manifest lists. A key is the hub's pool when a manifest named it
+    # (remembered in `known`), or when a login's index files it under an account
+    # the manifest names now (the token was replaced before this machine saw it).
+    known = {k: v for k, v in (old.get("known") or {}).items() if re.match(r"^[0-9a-f]{32}$", k)}
+    names = {e.get("account") for e in want.values()}
+    for m in tenants:
+        try:
+            idx = json.load(open(os.path.join(ROOT_BASE, m["login"], "cred-proxy", "pool.json")))
+        except (OSError, ValueError):
+            continue
+        for lk, k in (idx.items() if isinstance(idx, dict) else []):
+            if lk.startswith("claude:") and lk[7:] in names and isinstance(k, str):
+                known.setdefault(k, lk[7:])
+    for k in sorted((set(local) & set(known)) - set(want)):
+        if not tenants:
+            break
+        if DRY:
+            say("    would drop pool key %s" % k[:12])
+            dropped.append(k[:12])
+            continue
+        res = shared_ctl(tenants[0]["login"], {"op": "pool-drop", "kind": "claude", "key": k}, root=True) or {}
+        if res.get("ok"):
+            dropped.append(",".join(res.get("labels") or []) or known.get(k) or k[:12])
+            known.pop(k, None)
+        else:
+            notes.append("drop %s — %s" % (k[:12], res.get("err") or "proxy down"))
+    expiring = []
+    for e in sorted(man["pool"], key=lambda e: e.get("account") or "") if isinstance(man["pool"], list) else []:
+        exp = pool_iso_epoch((e or {}).get("expires_at") or "")
+        if exp is not None and exp - now < POOL_WARN_DAYS * 86400:
+            expiring.append({"account": e.get("account"), "expires_at": e.get("expires_at"),
+                             "days": max(0, int((exp - now) // 86400))})
+    known.update({k: e.get("account") for k, e in want.items()})
+    state.update(known={k: v for k, v in known.items() if k in want or k in local},
+                 synced=state["tried"], hub=len(want), local=len(pool_local()) if not DRY else len(local),
+                 added=added, dropped=dropped, expiring=expiring)
+    if notes:
+        state["notes"] = notes
+    if not DRY:
+        put(POOL_SYNC, json.dumps(state, indent=1) + "\n", 0o644, "root" if os.geteuid() == 0 else pwd.getpwuid(os.getuid()).pw_name)
+    say("pool: synced — hub %d · here %d%s%s" % (state["hub"], state["local"],
+        " · pulled %s" % ", ".join(added) if added else "", " · dropped %s" % ", ".join(dropped) if dropped else ""))
+    for x in expiring:
+        say("WARN pool: %s expires %s (%d day(s)) — put a new token at the hub" % (x["account"], x["expires_at"][:10], x["days"]))
+    for n in notes:
+        say("pool: note — %s" % n)
+    return 0
+
+
+def pool_sync_line(st):
+    """`machine status`'s pool part: when the last sync landed, and what expires."""
+    if not st:
+        return ""
+    t = " · pool synced %s (%s)" % ((st.get("synced") or "never").replace("T", " ").rstrip("Z"), st.get("local", "-"))
+    if st.get("error"):
+        t += " · pool sync failing: %s" % st["error"][:80]
+    if st.get("expiring"):
+        t += " · WARN pool expiring: %s" % ", ".join("%s (%dd)" % (x["account"], x["days"]) for x in st["expiring"])
+    return t
 
 
 # ---- every login on the machine -----------------------------------------------------
@@ -2518,7 +2743,7 @@ def main():
     sub.add_parser("role")      # the role account alone (fleet-node-install.sh, #2330)
     pl = sub.add_parser("plan"); pl.add_argument("--bin", default=HERE)
     mc = sub.add_parser("machine")
-    mc.add_argument("verb", choices=("install", "uninstall", "refresh", "status", "join", "leave", "pooldup"))
+    mc.add_argument("verb", choices=("install", "uninstall", "refresh", "status", "join", "leave", "pooldup", "pool-sync"))
     mc.add_argument("--logins", default="all")
     mc.add_argument("--dry-run", action="store_true")
     mc.add_argument("--force", action="store_true")
@@ -2565,7 +2790,8 @@ def main():
         if os.geteuid() != 0 and not TEST and not DRY:
             die("machine %s needs root (bin/fleet-credsep.sh machine runs it through sudo)" % a.verb, 2)
         return {"install": machine_install, "uninstall": machine_uninstall, "refresh": machine_refresh,
-                "join": machine_join, "leave": machine_leave, "pooldup": machine_pooldup}[a.verb](a)
+                "join": machine_join, "leave": machine_leave, "pooldup": machine_pooldup,
+                "pool-sync": machine_pool_sync}[a.verb](a)
     if a.cmd in ("install", "uninstall"):
         DRY = a.dry_run
         if not re.match(r"^[a-z0-9_][a-z0-9_.-]{0,31}$", a.login):
