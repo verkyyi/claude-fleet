@@ -66,7 +66,11 @@ PROBE = r'''
 h=$1
 d=$h/.claude/fleet
 if [ -L "$d" ]; then t=$(readlink "$d"); t=${t%/}; echo "login link ${t##*/}"; echo "target $t"
-elif [ -d "$d" ]; then echo "login dir $(git -C "$d" rev-parse HEAD 2>/dev/null || echo -)"
+elif [ -d "$d" ]; then
+  # an imported hub release (#2773) is named by its upstream sha
+  v=$(git -C "$d" log -1 --format=%s 2>/dev/null | sed -n 's/^fleet-release: \([0-9a-f]\{40\}\) seq=.*/\1/p')
+  [ -n "$v" ] || v=$(git -C "$d" rev-parse HEAD 2>/dev/null)
+  echo "login dir ${v:--}"
 else echo "login none -"; fi
 if [ -d "$d" ]; then
   echo "origin $(git -C "$d" remote get-url origin 2>/dev/null || echo -)"
@@ -82,6 +86,7 @@ if [ -L "$s" ]; then
   case "$p" in
     *.versions/*) v=${p##*/} ;;
     *) v=$(sed -n 's/^version=//p' "$p/.client-version" 2>/dev/null | head -n 1)
+       [ -n "$v" ] || v=$(git -C "$p" log -1 --format=%s 2>/dev/null | sed -n 's/^fleet-release: \([0-9a-f]\{40\}\) seq=.*/\1/p')
        [ -n "$v" ] || v=$(git -C "$p" rev-parse HEAD 2>/dev/null) ;;
   esac
   echo "shellv ${v:--}"

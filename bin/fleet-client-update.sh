@@ -103,8 +103,9 @@
 # refs/tags/stable — the same one a 承载 machine's install-sync follows — so
 # moving stable is the whole release; the hub is not redeployed for a client to
 # move. A hub's /version names stable's commit as client_version (and its
-# /install installs stable's files through the hub, GitHub's raw host the
-# fallback); a hub that predates it names its image's digest, as before. No hub
+# /install installs stable's files through the hub — and ONLY the hub: one that
+# does not answer is «stay on this version», never GitHub behind it, issue
+# #2773); a hub that predates it names its image's digest, as before. No hub
 # (不接 — .client-version with an empty hub=): GitHub's API names stable
 # (FLEET_STABLE_API) and `stage` runs stable's own installer from the raw host
 # AT that commit (FLEET_STABLE_RAW). Same staging, same idle switch, same
@@ -138,9 +139,10 @@ VERS="$ROOT.versions"
 # shellcheck source=fleet-versions-lib.sh
 [ -f "$BIN/fleet-versions-lib.sh" ] && . "$BIN/fleet-versions-lib.sh"
 CONF_DIR="${FLEET_CONF_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/claude-fleet}"
-# GitHub's stable, for a client with no hub (issue #1805)
-RAW="${FLEET_STABLE_RAW:-https://raw.githubusercontent.com/verkyyi/claude-fleet}"; RAW=${RAW%/}
-API="${FLEET_STABLE_API:-https://api.github.com/repos/verkyyi/claude-fleet/commits/stable}"
+# GitHub's stable, ONLY for a client with no hub (issue #1805): with a hub every
+# read below goes to the hub alone (issue #2773)
+RAW="${FLEET_STABLE_RAW:-https://raw.githubusercontent.com/verkyyi/claude-fleet}"; RAW=${RAW%/}  # dist-ok: 不接 only
+API="${FLEET_STABLE_API:-https://api.github.com/repos/verkyyi/claude-fleet/commits/stable}"  # dist-ok: 不接 only
 STATE="${FLEET_CLIENT_STATE:-${XDG_CACHE_HOME:-$HOME/.cache}/claude-fleet/client}"
 TMO="${FLEET_CLIENT_TIMEOUT:-3}"
 case "$TMO" in ''|*[!0-9]*) TMO=3 ;; esac

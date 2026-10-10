@@ -30,13 +30,9 @@ set -uo pipefail
 # <file> <reaches> <member who takes them away>
 DIST_PENDING='
 fleet-bootstrap-cache.sh 1 C5#2775
-fleet-client-update.sh   2 C3#2773
-fleet-host-install.sh    1 C3#2773
-fleet-install.sh         3 C3#2773
 fleet-login-bootstrap.sh 1 C5#2775
 fleet-login-new.sh       1 C5#2775
 fleet-node-join.sh       2 C5#2775
-fleet-update.sh          1 C3#2773
 '
 DIST_RE='api\.github\.com|raw\.githubusercontent\.com|codeload\.github\.com|objects\.githubusercontent\.com|https://github\.com\}|github\.com[:/][^ "'"'"')]*\.git([^A-Za-z0-9_]|$)|go install github\.com'
 
@@ -76,10 +72,12 @@ if [ -z "${1:-}" ]; then
   mkdir -p "$SB/new" "$SB/ok" "$SB/less"
   printf '#!/bin/sh\ns=$(curl -fsS https://api.github.com/repos/o/r/commits/stable)\n' > "$SB/new/fleet-x.sh"
   printf '#!/bin/sh\ncurl -fsS https://api.github.com/x  # dist-ok: a drill\necho https://github.com/o/r/issues/1\n# dist-ok: Homebrew, not the fleet\ncurl https://raw.githubusercontent.com/h/i \\\n  >/dev/null\n' > "$SB/ok/fleet-y.sh"
-  printf '#!/bin/sh\n: nothing from GitHub any more\n' > "$SB/less/fleet-update.sh"
+  # a file still pending (the first row; none left = nothing to lower)
+  lessf=$(printf '%s\n' "$DIST_PENDING" | awk 'NF { print $1; exit }')
+  [ -z "$lessf" ] || printf '#!/bin/sh\n: nothing from GitHub any more\n' > "$SB/less/$lessf"
   bash "$0" "$SB/new" >/dev/null 2>&1 && finding "the lint missed a new \`curl https://api.github.com\`"
   bash "$0" "$SB/ok" >/dev/null 2>&1 || finding "the lint flagged a dist-ok line or an issue link: $(bash "$0" "$SB/ok" 2>&1 | head -2)"
-  case "$(bash "$0" "$SB/less" 2>/dev/null)" in *'lower it to 0'*) ;; *) false ;; esac || finding "the lint did not ask to lower a pending count that fell"
+  [ -z "$lessf" ] || case "$(bash "$0" "$SB/less" 2>/dev/null)" in *'lower it to 0'*) ;; *) false ;; esac || finding "the lint did not ask to lower a pending count that fell"
   rm -rf "$SB"
 fi
 if [ "$FAILS" -gt 0 ]; then

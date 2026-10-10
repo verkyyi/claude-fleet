@@ -6,8 +6,9 @@
 #                           the stable it follows and where it stands
 #   fleet update stable     the commit refs/tags/stable names, as this computer
 #                           sees it: the hub's /version (`stable`) when it has a
-#                           hub that says, else GitHub's API — 40 hex, rc 1 when
-#                           neither answers
+#                           hub — only the hub, never GitHub behind it (issue
+#                           #2773) — else (no hub) GitHub's API; 40 hex, rc 1
+#                           when it does not answer
 #   fleet update tick [--root <dir>] [args…]   one beat of this computer's layer
 #
 # There is one version — stable's commit — and one place it moves: the operator
@@ -40,7 +41,7 @@ BIN="$(cd "$(dirname "$SELF")" && pwd -P)"
 ROOT="${FLEET_UPDATE_ROOT:-$(cd "$BIN/.." && pwd -P)}"
 case "$ROOT" in *.versions/*) [ -n "${FLEET_UPDATE_ROOT:-}" ] || ROOT=${ROOT%.versions/*} ;; esac
 CONF_DIR="${FLEET_CONF_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/claude-fleet}"
-API="${FLEET_STABLE_API:-https://api.github.com/repos/verkyyi/claude-fleet/commits/stable}"
+API="${FLEET_STABLE_API:-https://api.github.com/repos/verkyyi/claude-fleet/commits/stable}"  # dist-ok: only with no hub (the developer's road)
 TMO="${FLEET_CLIENT_TIMEOUT:-3}"
 case "$TMO" in ''|*[!0-9]*) TMO=3 ;; esac
 
@@ -64,7 +65,9 @@ hub_url() {
   printf '%s' "${u%/}"
 }
 
-# stable_sha — what stable names: the hub's word first, GitHub's after
+# stable_sha — what stable names: the hub's word with a hub (and only its —
+# a hub that does not answer is «unknown», never GitHub behind it, issue #2773);
+# GitHub's with none
 stable_sha() {
   local hub s=''
   hub=$(hub_url)
@@ -74,8 +77,7 @@ try:
     print(json.load(sys.stdin).get("stable") or "")
 except Exception:
     pass' 2>/dev/null)
-  fi
-  if ! is_sha "$s"; then
+  else
     s=$(curl -fsS --max-time "$TMO" -H 'Accept: application/vnd.github.sha' "$API" 2>/dev/null | tr -d ' \r\n' | cut -c1-40)
   fi
   is_sha "$s" || return 1
@@ -87,7 +89,9 @@ cmd_status() {
   l=$(layer "$ROOT")
   case "$l" in
     full)
-      v=$(git -C "$ROOT" rev-parse HEAD 2>/dev/null)
+      # an imported hub release (issue #2773) is named by its upstream sha
+      v=$(git -C "$ROOT" log -1 --format=%s 2>/dev/null | sed -n 's/^fleet-release: \([0-9a-f]\{40\}\) seq=.*/\1/p')
+      [ -n "$v" ] || v=$(git -C "$ROOT" rev-parse HEAD 2>/dev/null)
       st=$(sed -n 's/^stable: //p' "$CONF_DIR/global/install-sync.state" 2>/dev/null | head -n 1)
       res=$(sed -n 's/^result: //p' "$CONF_DIR/global/install-sync.state" 2>/dev/null | head -n 1)
       is_sha "$st" || st=$(stable_sha) || st=''
