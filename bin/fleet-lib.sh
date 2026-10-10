@@ -9035,7 +9035,7 @@ fleet_role_render() {
     for v in FLEET_ORCH_MODEL FLEET_ORCH_EFFORT FLEET_ORCH_CODEX_MODEL \
              FLEET_STEWARD_MODEL FLEET_STEWARD_EFFORT FLEET_STEWARD_CODEX_MODEL \
              FLEET_MODEL FLEET_MODEL_FALLBACK; do
-      eval "[ -n \"\${$v+x}\" ]" && export "$v"
+      eval "[ -n \"\${$v+x}\" ] && export $v"
     done
     exec python3 "$bin/fleet-role.py" render "$role" --agent "$agent" --kv "$@"
   )
