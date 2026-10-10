@@ -83,6 +83,7 @@
 #   heartbeat-sys-blocked                           tokenledger/internal/agent beat_parts.go (sysSampler, asyncReading,
 #                                                   fleetBeatBudget) + internal/api nodes.go (foldSys); go test
 #   login-remove-record-left                        bin/fleet-login-remove.sh (step 6 checks the record is gone)
+#   login-remove-respawn-hang                       bin/fleet-login-remove.sh (quiesce: bootout user/gui, deleteUser time limit)
 #   drill-login-handed-silently                     tokenledger/internal/api fleet_drill.go (closeDrillLogins
 #                                                   handed) + store DeleteDrill (keeps the handed rows)
 #   machine-lane-reissued                           tokenledger/internal/api fleet_login_node.go (deviceNode, machineServing)
@@ -4708,6 +4709,24 @@ drill_login_remove_record_left() {
   bash "$ROOT/bin/fleet-login-remove-selftest.sh" >/dev/null 2>&1 \
     || { WHY="fleet-login-remove-selftest.sh is red (its record-left legs)"; return 1; }
   WHAT='deleteUser 留下账号记录 → dscl -delete 补删；补删不掉 → 退 1，不说 done（真跑 shim 化的 remove）'
+  SECS=$(since "$t0")
+}
+
+# ---- login-remove-respawn-hang (#2866): launchd's per-user domain brought
+# distnoted back after step 4's pkill, and sysadminctl -deleteUser hung on it
+# for minutes a try (drill10100326 on macmini, 9m27s and counting). Now the
+# login's user/gui domains are booted out before every kill, nothing may come
+# back for a settle window, and deleteUser runs under a time limit.
+drill_login_remove_respawn_hang() {
+  CAP=60; local t0
+  t0=$(now)
+  grep -q 'launchctl bootout "user/\$UID_TARGET"' "$ROOT/bin/fleet-login-remove.sh" \
+    || { WHY="fleet-login-remove.sh no longer boots out the login's user domain before killing"; return 1; }
+  grep -q 'FLEET_LOGIN_REMOVE_DELETE_SECS' "$ROOT/bin/fleet-login-remove.sh" \
+    || { WHY="fleet-login-remove.sh runs sysadminctl -deleteUser with no time limit"; return 1; }
+  bash "$ROOT/bin/fleet-login-remove-selftest.sh" >/dev/null 2>&1 \
+    || { WHY="fleet-login-remove-selftest.sh is red (its respawn / deleteUser-hang legs)"; return 1; }
+  WHAT='pkill 之后 distnoted 被 launchd 拉回 → 先 bootout user/gui 域再杀、删号不挂；deleteUser 挂住 → 到时限杀掉（真跑 shim 化的 remove）'
   SECS=$(since "$t0")
 }
 
