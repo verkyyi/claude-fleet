@@ -27,7 +27,9 @@ func TestDebugScriptSplicesTheKit(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := string(body)
-	if strings.Contains(s, debugEmbMarker) || strings.Contains(s, debugVersionPlaceholder) {
+	// a marker LINE left is a file not spliced (the script's own check for
+	// one, mid-line, stays)
+	if strings.Contains(s, "\n"+debugEmbMarker) || strings.Contains(s, debugVersionPlaceholder) {
 		t.Fatal("a placeholder survived the splice")
 	}
 	if !strings.Contains(s, "HUB_BAKED='https://hub.example'") || !strings.Contains(s, "# fleet-debug-version: abc123") {
@@ -84,7 +86,7 @@ func TestDebugScriptServed(t *testing.T) {
 	}
 	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
-	if resp.StatusCode != 200 || !strings.HasPrefix(string(body), "#!") || strings.Contains(string(body), debugEmbMarker) {
+	if resp.StatusCode != 200 || !strings.HasPrefix(string(body), "#!") || strings.Contains(string(body), "\n"+debugEmbMarker) {
 		t.Fatalf("/debug = %d %.80q", resp.StatusCode, body)
 	}
 	if !strings.Contains(string(body), "HUB_BAKED='"+h.http.URL+"'") {
