@@ -16,14 +16,15 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 D="$BIN/fleet-debug-drill.sh"
 T=$(mktemp -d "${TMPDIR:-/tmp}/fdd-selftest.XXXXXX") || exit 2
 HUBPID=''
-trap '[ -n "$HUBPID" ] && kill "$HUBPID" 2>/dev/null; rm -rf "$T"' EXIT
+hub_stop() { [ -n "$HUBPID" ] || return 0; kill "$HUBPID" 2>/dev/null; wait "$HUBPID" 2>/dev/null; HUBPID=''; }
+trap 'hub_stop; rm -rf "$T"' EXIT
 pass=0
 ok()   { pass=$((pass + 1)); }
 fail() { printf 'fleet-debug-drill-selftest FAIL: %s\n' "$1" >&2; exit 1; }
 
 # fake_hub <mode none|all>: sets port (never in a $(…): the parent must hold its pid)
 fake_hub() {
-  [ -n "$HUBPID" ] && kill "$HUBPID" 2>/dev/null
+  hub_stop
   rm -f "$T/port"
   python3 - "$1" "$T/port" <<'PY' >/dev/null 2>&1 &
 import http.server, sys
