@@ -83,6 +83,10 @@
 #                 <root>/current/bin/fleet-node-supervisor.py account adopt
 #                 <login>` — no per-login LaunchDaemon rendered or bootstrapped;
 #                 --no-daemons: linked, not adopted, one WARN naming the command
+#   Q. op mark    (#2928) FLEET_LOGIN_OP_ID → ~/<login>-onboard/op: op= pid=
+#                 before step 1, done= + the result's lines at the end (credsep
+#                 last); a run stopped half way has no done=; the same op again
+#                 still exits 3 and leaves the mark; a malformed id is usage
 #   N. full name  (#2210) a full name another login carries → `<name> (<login>)`
 #                 passed to sysadminctl, a note on stderr; that one taken too →
 #                 exit 3, nothing run; sysadminctl "succeeding" without making
@@ -190,7 +194,7 @@ export FLEET_CREDSEP_ROOT_BASE="$WORK/credsep/db" FLEET_CREDSEP_RUN_BASE="$SRUN"
        FLEET_CREDSEP_PW="$WORK/credsep/pw" FLEET_LOGIN_CREDSEP_WAIT=0
 unset FLEET_CRED_SEPARATE FLEET_CRED_PROXY
 mkdir -p "$WORK/credsep/daemons"
-for l in victor victor2 pam dora eve fay gus hal ian jo kai kim lee lou max ned nohome oda oli pat pia quin pru pry uma vee wen lena 24haowan; do
+for l in victor victor2 pam dora eve fay gus hal ian jo kai kim lee lou max ned nohome oda oli pat pia quin pru pry uma vee wen lena 24haowan qen qix; do
   printf '%s:%s:%s:%s\n' "$l" "$(/usr/bin/id -u)" "$(/usr/bin/id -g)" "$FLEET_LOGIN_HOMES/$l"
 done > "$FLEET_CREDSEP_PW"
 # the admin's HOME (the password file lands there) + the daemons dir (#1192)
@@ -963,4 +967,37 @@ not_contains "O no code: no node line" "$OUT" "node:"
 eq "O malformed code: usage" 2 "$RC"
 not_contains "O malformed code: nothing ran" "$CALLS" "addUser"
 kill "$HPID" 2>/dev/null; wait "$HPID" 2>/dev/null; HPID=''
+
+# --- Q. the op's mark (issue #2928) -------------------------------------------
+# the admin agent hands its op_id; the run marks the login as that op's before
+# step 1 and records its result at the end — what the agent answers the SAME op
+# arriving again from (never 「already exists」, never a second run)
+OPI=c15b9c43230eafe5f971f0dc15eff5d0
+: > "$LOG"; OUT=$(FLEET_LOGIN_OP_ID=$OPI "$BASH_BIN" "$S" qen --full-name Qen --pubkey "$KEY" --apply $DAEMONS 2>&1); RC=$?
+unlock_homes
+eq "Q exit" 0 "$RC"
+MK="$HOME/qen-onboard/op"
+eq "Q mark: this op" "op=$OPI" "$(sed -n 1p "$MK" 2>/dev/null)"
+contains "Q mark: the run's pid" "$(cat "$MK" 2>/dev/null)" "pid="
+contains "Q mark: finished" "$(cat "$MK" 2>/dev/null)" "done="
+eq "Q mark: the result's last line is the output's (credsep)" "line=$(printf '%s\n' "$OUT" | tail -n 1)" "$(tail -n 1 "$MK" 2>/dev/null)"
+eq "Q mark: yours only" 600 "$(mode "$MK")"
+# a run that stops half way leaves the op but no done= (the agent rolls it back)
+: > "$LOG"; OUT=$(FAKE_FAIL=dseditgroup FLEET_LOGIN_OP_ID=$OPI "$BASH_BIN" "$S" qix --full-name Qix --pubkey "$KEY" --apply $DAEMONS 2>&1); RC=$?
+unlock_homes
+eq "Q half way: exit 1" 1 "$RC"
+eq "Q half way: marked this op's" "op=$OPI" "$(sed -n 1p "$HOME/qix-onboard/op" 2>/dev/null)"
+not_contains "Q half way: never done" "$(cat "$HOME/qix-onboard/op" 2>/dev/null)" "done="
+# the same op again on a login now there: exit 3, the mark left as the first run wrote it
+before=$(cat "$MK")
+: > "$LOG"; OUT=$(FAKE_EXISTING=qen FLEET_LOGIN_OP_ID=$OPI "$BASH_BIN" "$S" qen --full-name Qen --pubkey "$KEY" --apply $DAEMONS 2>&1); RC=$?
+eq "Q again: the script still refuses (the agent decides first)" 3 "$RC"
+eq "Q again: the mark untouched" "$before" "$(cat "$MK")"
+# a malformed op id is refused before anything runs
+: > "$LOG"; OUT=$(FLEET_LOGIN_OP_ID='x;rm' "$BASH_BIN" "$S" kim --full-name Kim --pubkey "$KEY" --apply $DAEMONS 2>&1); RC=$?; CALLS=$(cat "$LOG")
+eq "Q malformed op id: usage" 2 "$RC"
+not_contains "Q malformed op id: nothing ran" "$CALLS" "addUser"
+# no op id (a hand run): no mark
+[ -e "$HOME/lou-onboard/op" ] && fail "Q a run with no op id wrote a mark"
+
 echo "fleet-login-new-selftest PASS ($CHECKS checks, $("$BASH_BIN" -c 'echo $BASH_VERSION'))"

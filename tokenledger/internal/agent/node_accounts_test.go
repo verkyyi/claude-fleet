@@ -232,12 +232,12 @@ func TestAdminAgentHandsJoinCodeInEnv(t *testing.T) {
 	if want := "[alice][--full-name][Alice][--share-pool][--apply]\n"; string(got) != want {
 		t.Fatalf("argv = %q, want %q (the code never in it)", got, want)
 	}
-	env := accountEnv(a.cfg.HubURL, control.AccountOp{Op: control.AccountCreate, JoinCode: code})
+	env := accountEnv(a.cfg.HubURL, "", control.AccountOp{Op: control.AccountCreate, JoinCode: code})
 	joined := strings.Join(env, "\n")
 	if !strings.Contains(joined, "FLEET_LOGIN_JOIN_CODE="+code) || !strings.Contains(joined, "FLEET_LOGIN_HUB="+a.cfg.HubURL) {
 		t.Fatalf("env lacks the join code / hub")
 	}
-	if accountEnv(a.cfg.HubURL, control.AccountOp{Op: control.AccountRemove, JoinCode: code}) != nil {
+	if accountEnv(a.cfg.HubURL, "", control.AccountOp{Op: control.AccountRemove, JoinCode: code}) != nil {
 		t.Fatal("a remove got the join code")
 	}
 	if err := validateAccountOp(control.AccountOp{Op: control.AccountCreate, Login: "alice", FullName: "A", JoinCode: "fj_x; rm -rf /"}, ""); err == nil {

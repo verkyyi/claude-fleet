@@ -108,6 +108,7 @@ PUT 的请求体就是上面可写的字段，外加可选的 `if_version`（读
 | `/var/db/fleet-node/machine.env` | `CCQUOTA_HUB_URL`、`CCQUOTA_TOKEN`（**机器自己**的节点令牌，§1） | 安装 / 迁移（C1 / C4），root 600 |
 | `/var/db/fleet-node/logins/<账号>.env` | 这个账号原来那份 agent 的设置（`CCQUOTA_*`、`FLEET_CONF_DIR`），`CCQUOTA_TOKEN` = **这个账号**的节点令牌 | `account adopt <账号>` 写（#2387）：键取自旧 `com.ccquota.agent.<账号>` plist 的 `CCQUOTA_*` / `FLEET_CONF_DIR` + 这个账号 node.env 的 `CCQUOTA_*`（凭据隔离的从 credsep 存储读，带 `CCQUOTA_FLEET_CRED_STORE`），旧 agent 一起进 attic；`account release` 删它、放回旧 agent。root 600；别人能读写就拒；`logins/` 一变，守护重启节点程序——账本里有正在跑的账号操作时先等它结束（最多 `FLEET_NODE_RELOAD_HOLD` 960 秒，#2918） |
 | `/var/db/fleet-node/agent/<账号>/account-ops.json` | 节点程序的账号操作账本：见过的 op_id、正在跑的操作（pid、哪个登录，不含加入码）、入口还没确认的结果 | 节点程序写（root 600、一次 rename，#2918）：重启后照账本补发结果，被截断的操作答成失败（写明登录在不在）；入口按同一 op_id 再问时不重跑。守护读它的 `inflight` 决定要不要先等再重启 |
+| `~<管理员>/<登录>-onboard/op` | 开号脚本记下的「这个登录是哪次 op 建的」：`op=` `pid=` `started=`（第 1 步之前），跑完追加 `done=` 和结果行（credsep 最后） | fleet-login-new.sh 写（管理员 600，op_id 来自节点程序给的 `FLEET_LOGIN_OP_ID`，#2928）。不靠账本也认得出同一 op：登录已在、记号是同一 op ⇒ 跑完了按结果答成功、还在跑就等、半路停了就收回（fleet-login-remove，家目录保留）再报失败；开号失败而登录是这次 op 建的也当场收回 |
 | `/var/db/fleet-node/agent/<账号>/` | 每个账号的游标、待发队列 | 节点程序自己 |
 
 `machine.env` 在、`logins/` 里至少有一个 `<账号>.env` 之前，守护显示 `node-agent waiting — … missing`，不启动（空的 `logins/` 不算，#2421）；最后一个账号 release 掉，它停下回到 waiting。
