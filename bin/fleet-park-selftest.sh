@@ -65,7 +65,7 @@ cat > "$S/stop" <<EOF
 n=\${2##*issue-}
 w=\$(tmux list-windows -t pk -F '#{window_id} #{@issue}' | awk -v n="\$n" '\$2 == n { print \$1; exit }')
 [ -n "\$w" ] || exit 5
-echo "\$1 \$2" >> "$S/stopped"
+echo "\$1 \$2 parking=\$(tmux show-options -wqv -t "\$w" @parking)" >> "$S/stopped"
 tmux kill-window -t "\$w"
 EOF
 cat > "$S/gh" <<EOF
@@ -165,6 +165,8 @@ mkdir -p "$(dirname "$HP")"; printf '# handoff\nnext: swap the lib\n' > "$HP"
 park tick --session pk >/dev/null
 tmux list-windows -t pk -F '#{window_id}' | grep -qx "$W7" && bad "B the window is still there after its handoff" \
   || ok "B handoff written ⇒ the window is closed"
+grep -q 'issue-7 parking=o/r#7$' "$S/stopped" && ok "B the stop sees @parking (session-end-hook keeps the issue open, #2949)" \
+  || bad "B no @parking at the stop: $(cat "$S/stopped" 2>&1)"
 [ -f "$WORK/wt-7/wip.txt" ] && ok "B the worktree stays, uncommitted work in it" || bad "B the worktree or its wip is gone"
 [ "$(git --git-dir="$WORK/remote.git" rev-parse issue-7 2>/dev/null)" = "$(git -C "$WORK/wt-7" rev-parse HEAD)" ] \
   && ok "B the branch is pushed" || bad "B the branch is not on the remote"

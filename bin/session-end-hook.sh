@@ -27,7 +27,7 @@
 # reapers (dash-reap.sh, worktree-autoclean.sh, fleet-cleanup.sh).
 #
 # Decision table (the crux: committed ≠ merged) — verdict from the shared gate:
-#   merged-pr  reap: record landed         → remove wt+branch → close issue → close window
+#   merged-pr  reap: record landed         → remove wt+branch → close issue*→ close window
 #   ancestor   reap: record closed-unlanded→ remove wt+branch →               close window
 #   tip==base  keep: no merged PR → unmerged; keep wt + issue,                close window
 #   unmerged   keep: record closed-unlanded, keep wt + issue,                 close window
@@ -36,6 +36,9 @@
 # work is KEPT for resume. Equivalent to auto-firing the dash ⌃x one-key rule on exit.
 # NB (matches #403's table, not the other reapers): only a MERGED PR closes the issue;
 # a bare ancestor-of-base has no landed work, so its issue is kept OPEN for re-pickup.
+# * and only when the merged PR says it closes the issue, the issue was not reopened
+#   and is not `blocked` (issue_done_by_merge, #2949). A park's stop (@parking) acts
+#   on no verdict: row recorded, issue + worktree + branch kept.
 #
 # reason gate (only a GENUINE walk-away acts): prompt_input_exit | logout act; clear
 # (`/clear`, and every `/fleet-handoff` cycle), resume, bypass_permissions_disabled,
@@ -102,6 +105,30 @@ transfer_holds_window() {
   [ "$until" -gt "$(date +%s)" ] || return 1
   wt=$(tmux display-message -p -t "$1" '#{@worktree}' 2>/dev/null)
   [ -n "$wt" ] && fleet_rotate_lease_held "$wt" >/dev/null
+}
+
+# A merged PR is not a finished issue (issue #2949): one issue can take several
+# PRs, and a PR can be an intermediate step ("演练脚本的修补" while the issue's bar
+# is "the drill PASSes"). So an exit closes the issue only when a merged PR of
+# this branch SAYS it closes it — GitHub's closingIssuesReferences, or a
+# close/fix/resolve #N keyword in its body (a base that is not the default branch
+# links none) — and nobody has said otherwise since: an issue someone REOPENED, or
+# one labelled `blocked` (a park, a question), stays open. Prints nothing and
+# returns 0 when the issue may close; else prints why it stays open, rc 1.
+issue_done_by_merge() {  # <repo> <issue> <branch>
+  local repo="$1" n="$2" br="$3" st reason labels says
+  st=$(gh -R "$repo" issue view "$n" --json state,stateReason,labels \
+    -q '"\(.state)\t\(.stateReason // "")\t\([.labels[].name] | join(","))"' 2>/dev/null)
+  [ -n "$st" ] || { printf 'issue state unknown'; return 1; }
+  reason=$(printf '%s' "$st" | cut -f2); labels=$(printf '%s' "$st" | cut -f3)
+  [ "$(printf '%s' "$st" | cut -f1)" = OPEN ] || { printf 'not open'; return 1; }
+  [ "$reason" = REOPENED ] && { printf 'reopened'; return 1; }
+  case ",$labels," in *,blocked,*) printf 'blocked'; return 1 ;; esac
+  says=$(gh -R "$repo" pr list --state merged --head "$br" --json closingIssuesReferences,body \
+    -q '.[] | (.closingIssuesReferences[] | "closes #\(.number)"), .body' 2>/dev/null)
+  printf '%s\n' "$says" | grep -Eiq "(^|[^[:alnum:]])(close[sd]?|fix(e[sd])?|resolve[sd]?):?[[:space:]]+#$n([^0-9]|\$)" \
+    || { printf 'no merged PR closes it'; return 1; }
+  return 0
 }
 
 # ============================================================================
@@ -262,6 +289,10 @@ if [ "${1:-}" = "--exec" ]; then
   wname=$(tmux display-message -p -t "$win" '#{window_name}' 2>/dev/null)
   # @origin rides along as the row's provenance (issue #503) — read pre-kill.
   worigin=$(tmux display-message -p -t "$win" '#{@origin}' 2>/dev/null)
+  # A park's stop (issue #2949): fleet_park.py stamps @parking before its /exit.
+  # Parked means it comes back — the row is still recorded, but the issue stays
+  # OPEN and the worktree stays where the park book says it is, merged PR or not.
+  parking=$(tmux display-message -p -t "$win" '#{@parking}' 2>/dev/null)
   fleet_reap_record "$verdict" "$REPO" "$MAIN" "$iss" "$wtdir" "$win" "$sess" "" "$branch" "$wname" "$worigin"
 
   # Child-report BACKSTOP (issue #574) — see the raw branch above for why this is
@@ -275,7 +306,8 @@ if [ "${1:-}" = "--exec" ]; then
   # the dash row vanishes on the next repaint. run-shell -b already backgrounds us.
   [ -n "$win" ] && tmux kill-window -t "$win" 2>/dev/null
 
-  case "$verdict" in
+  act="$verdict"; [ -n "$parking" ] && act=parking
+  case "$act" in
     merged-pr|ancestor)
       if [ -n "$wtdir" ] && [ -n "$MAIN" ]; then
         # Reap any detached proc anchored to this worktree first (#151), then a PLAIN
@@ -287,15 +319,18 @@ if [ "${1:-}" = "--exec" ]; then
         git -C "$MAIN" worktree prune 2>/dev/null || true
       fi
       # Close the issue ONLY on a merged PR (a bare ancestor-of-base has no merged
-      # PR evidence — so keep its issue OPEN for re-pickup, per
-      # the #403 decision table). Idempotent: a merge may have closed it already.
-      if [ "$verdict" = merged-pr ] && [ -n "$REPO" ] && command -v gh >/dev/null 2>&1; then
-        st=$(gh -R "$REPO" issue view "$iss" --json state -q .state 2>/dev/null)
-        [ "$st" = OPEN ] && gh -R "$REPO" issue close "$iss" \
+      # PR evidence — so keep its issue OPEN for re-pickup, per the #403 decision
+      # table), and only when that PR says it closes it and nothing since says
+      # otherwise (issue #2949, issue_done_by_merge). Idempotent: a merge may have
+      # closed it already.
+      if [ "$verdict" = merged-pr ] && [ -n "$REPO" ] && command -v gh >/dev/null 2>&1 \
+         && issue_done_by_merge "$REPO" "$iss" "$branch" >/dev/null; then
+        gh -R "$REPO" issue close "$iss" \
           --comment "Closed on manual worker exit: merged PR reaped, worktree cleaned." \
           >/dev/null 2>&1 || true
       fi
       ;;
+    parking) : ;;   # parked: issue OPEN, worktree + branch kept (the park book's)
     *)  # unmerged | dirty → KEEP the worktree + issue (resumable); window already closed.
       # Its detached LISTENERS go now, though (issue #1154): the kept-worktree sweep
       # is hourly and age-gated, and a dev server bound to `*` serves the tree to
@@ -307,7 +342,7 @@ if [ "${1:-}" = "--exec" ]; then
   # q on an issue whose work did not land: release the claim so it can be
   # dispatched again (issue #1842). A merged PR closed it above; `live` is a
   # window still working it — neither is released.
-  case "$verdict" in merged-pr|live) ;; *)
+  case "$act" in merged-pr|live|parking) ;; *)
     if [ "$how" = recycle ] && [ -n "$REPO" ] && command -v gh >/dev/null 2>&1 \
        && [ "$(gh -R "$REPO" issue view "$iss" --json state -q .state 2>/dev/null)" = OPEN ]; then
       what="its work did not land"
