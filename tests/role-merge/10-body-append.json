@@ -1,0 +1,79 @@
+{
+ "name": "10-body-append",
+ "why": "bodies append under their layer's heading, low to high",
+ "role": "worker",
+ "base": {
+  "front": {
+   "name": "worker",
+   "description": "d",
+   "model": "opus",
+   "effort": "xhigh",
+   "skills": [
+    "a",
+    "b"
+   ],
+   "mcpServers": [
+    "fleet"
+   ]
+  },
+  "body": "# worker\n\nrules.\n"
+ },
+ "layers": [
+  {
+   "label": "person:v3",
+   "kind": "person",
+   "front": {},
+   "body": "Write one line after each round.\n"
+  },
+  {
+   "label": "local",
+   "kind": "local",
+   "front": {},
+   "body": "\nlocal note\n\n"
+  }
+ ],
+ "locks": [],
+ "expect": {
+  "body": "# worker\n\nrules.\n\n## （你加的）\n\nWrite one line after each round.\n\n## （本机加的）\n\nlocal note\n",
+  "fields": {
+   "description": "d",
+   "effort": "xhigh",
+   "mcpServers": [
+    "fleet"
+   ],
+   "model": "opus",
+   "name": "worker",
+   "skills": [
+    "a",
+    "b"
+   ]
+  },
+  "locked": [],
+  "refused": [],
+  "sources": {
+   "body": [
+    "agents",
+    "person:v3",
+    "local"
+   ],
+   "description": [
+    "agents"
+   ],
+   "effort": [
+    "agents"
+   ],
+   "mcpServers": [
+    "agents"
+   ],
+   "model": [
+    "agents"
+   ],
+   "name": [
+    "agents"
+   ],
+   "skills": [
+    "agents"
+   ]
+  }
+ }
+}

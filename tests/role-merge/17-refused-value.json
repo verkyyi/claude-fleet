@@ -1,0 +1,74 @@
+{
+ "name": "17-refused-value",
+ "why": "a bad value refuses the layer too",
+ "role": "worker",
+ "base": {
+  "front": {
+   "name": "worker",
+   "description": "d",
+   "model": "opus",
+   "effort": "xhigh",
+   "skills": [
+    "a",
+    "b"
+   ],
+   "mcpServers": [
+    "fleet"
+   ]
+  },
+  "body": "# worker\n\nrules.\n"
+ },
+ "layers": [
+  {
+   "label": "person:v3",
+   "kind": "person",
+   "front": {
+    "effort": "turbo"
+   }
+  }
+ ],
+ "locks": [],
+ "expect": {
+  "body": "# worker\n\nrules.\n",
+  "fields": {
+   "description": "d",
+   "effort": "xhigh",
+   "mcpServers": [
+    "fleet"
+   ],
+   "model": "opus",
+   "name": "worker",
+   "skills": [
+    "a",
+    "b"
+   ]
+  },
+  "locked": [],
+  "refused": [
+   0
+  ],
+  "sources": {
+   "body": [
+    "agents"
+   ],
+   "description": [
+    "agents"
+   ],
+   "effort": [
+    "agents"
+   ],
+   "mcpServers": [
+    "agents"
+   ],
+   "model": [
+    "agents"
+   ],
+   "name": [
+    "agents"
+   ],
+   "skills": [
+    "agents"
+   ]
+  }
+ }
+}

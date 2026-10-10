@@ -1,0 +1,86 @@
+{
+ "name": "07-mcp-list",
+ "why": "mcpServers as a list: a name adds the login's own server, -name removes, {name: cfg} inline",
+ "role": "worker",
+ "base": {
+  "front": {
+   "name": "worker",
+   "description": "d",
+   "model": "opus",
+   "effort": "xhigh",
+   "skills": [
+    "a",
+    "b"
+   ],
+   "mcpServers": [
+    "fleet"
+   ]
+  },
+  "body": "# worker\n\nrules.\n"
+ },
+ "layers": [
+  {
+   "label": "person:v3",
+   "kind": "person",
+   "front": {
+    "mcpServers": [
+     "+playwright",
+     {
+      "docs": {
+       "command": "/usr/local/bin/docs-mcp"
+      }
+     },
+     "-fleet"
+    ]
+   }
+  }
+ ],
+ "locks": [],
+ "expect": {
+  "body": "# worker\n\nrules.\n",
+  "fields": {
+   "description": "d",
+   "effort": "xhigh",
+   "mcpServers": [
+    "playwright",
+    {
+     "docs": {
+      "command": "/usr/local/bin/docs-mcp"
+     }
+    }
+   ],
+   "model": "opus",
+   "name": "worker",
+   "skills": [
+    "a",
+    "b"
+   ]
+  },
+  "locked": [],
+  "refused": [],
+  "sources": {
+   "body": [
+    "agents"
+   ],
+   "description": [
+    "agents"
+   ],
+   "effort": [
+    "agents"
+   ],
+   "mcpServers": [
+    "agents",
+    "person:v3"
+   ],
+   "model": [
+    "agents"
+   ],
+   "name": [
+    "agents"
+   ],
+   "skills": [
+    "agents"
+   ]
+  }
+ }
+}

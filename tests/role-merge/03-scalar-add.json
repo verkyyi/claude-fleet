@@ -1,0 +1,77 @@
+{
+ "name": "03-scalar-add",
+ "why": "a scalar the built-in lacks is added; an empty value on one it lacks adds nothing",
+ "role": "worker",
+ "base": {
+  "front": {
+   "name": "worker",
+   "description": "d",
+   "model": "opus",
+   "effort": "xhigh",
+   "skills": [
+    "a",
+    "b"
+   ],
+   "mcpServers": [
+    "fleet"
+   ]
+  },
+  "body": "# worker\n\nrules.\n"
+ },
+ "layers": [
+  {
+   "label": "person:v3",
+   "kind": "person",
+   "front": {
+    "permissionMode": "acceptEdits",
+    "memory": ""
+   }
+  }
+ ],
+ "locks": [],
+ "expect": {
+  "body": "# worker\n\nrules.\n",
+  "fields": {
+   "description": "d",
+   "effort": "xhigh",
+   "mcpServers": [
+    "fleet"
+   ],
+   "model": "opus",
+   "name": "worker",
+   "permissionMode": "acceptEdits",
+   "skills": [
+    "a",
+    "b"
+   ]
+  },
+  "locked": [],
+  "refused": [],
+  "sources": {
+   "body": [
+    "agents"
+   ],
+   "description": [
+    "agents"
+   ],
+   "effort": [
+    "agents"
+   ],
+   "mcpServers": [
+    "agents"
+   ],
+   "model": [
+    "agents"
+   ],
+   "name": [
+    "agents"
+   ],
+   "permissionMode": [
+    "person:v3"
+   ],
+   "skills": [
+    "agents"
+   ]
+  }
+ }
+}

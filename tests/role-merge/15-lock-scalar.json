@@ -1,0 +1,78 @@
+{
+ "name": "15-lock-scalar",
+ "why": "any other locked field is the built-in's",
+ "role": "worker",
+ "base": {
+  "front": {
+   "name": "worker",
+   "description": "d",
+   "model": "opus",
+   "effort": "xhigh",
+   "skills": [
+    "a",
+    "b"
+   ],
+   "mcpServers": [
+    "fleet"
+   ]
+  },
+  "body": "# worker\n\nrules.\n"
+ },
+ "layers": [
+  {
+   "label": "person:v3",
+   "kind": "person",
+   "front": {
+    "model": "haiku",
+    "effort": "low"
+   }
+  }
+ ],
+ "locks": [
+  "model"
+ ],
+ "expect": {
+  "body": "# worker\n\nrules.\n",
+  "fields": {
+   "description": "d",
+   "effort": "low",
+   "mcpServers": [
+    "fleet"
+   ],
+   "model": "opus",
+   "name": "worker",
+   "skills": [
+    "a",
+    "b"
+   ]
+  },
+  "locked": [
+   "model"
+  ],
+  "refused": [],
+  "sources": {
+   "body": [
+    "agents"
+   ],
+   "description": [
+    "agents"
+   ],
+   "effort": [
+    "person:v3"
+   ],
+   "mcpServers": [
+    "agents"
+   ],
+   "model": [
+    "person:v3",
+    "lock"
+   ],
+   "name": [
+    "agents"
+   ],
+   "skills": [
+    "agents"
+   ]
+  }
+ }
+}

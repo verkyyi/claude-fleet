@@ -1,0 +1,82 @@
+{
+ "name": "16-refused",
+ "why": "a layer with a key it may not carry is not used at all",
+ "role": "worker",
+ "base": {
+  "front": {
+   "name": "worker",
+   "description": "d",
+   "model": "opus",
+   "effort": "xhigh",
+   "skills": [
+    "a",
+    "b"
+   ],
+   "mcpServers": [
+    "fleet"
+   ]
+  },
+  "body": "# worker\n\nrules.\n"
+ },
+ "layers": [
+  {
+   "label": "person:v3",
+   "kind": "person",
+   "front": {
+    "model": "haiku",
+    "maxTurns": "3"
+   }
+  },
+  {
+   "label": "local",
+   "kind": "local",
+   "front": {
+    "effort": "low"
+   }
+  }
+ ],
+ "locks": [],
+ "expect": {
+  "body": "# worker\n\nrules.\n",
+  "fields": {
+   "description": "d",
+   "effort": "low",
+   "mcpServers": [
+    "fleet"
+   ],
+   "model": "opus",
+   "name": "worker",
+   "skills": [
+    "a",
+    "b"
+   ]
+  },
+  "locked": [],
+  "refused": [
+   0
+  ],
+  "sources": {
+   "body": [
+    "agents"
+   ],
+   "description": [
+    "agents"
+   ],
+   "effort": [
+    "local"
+   ],
+   "mcpServers": [
+    "agents"
+   ],
+   "model": [
+    "agents"
+   ],
+   "name": [
+    "agents"
+   ],
+   "skills": [
+    "agents"
+   ]
+  }
+ }
+}

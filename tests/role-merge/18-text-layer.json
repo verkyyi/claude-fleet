@@ -1,0 +1,73 @@
+{
+ "name": "18-text-layer",
+ "why": "a layer may be the agents/*.md text itself",
+ "role": "worker",
+ "base": {
+  "front": {
+   "name": "worker",
+   "description": "d",
+   "model": "opus",
+   "effort": "xhigh",
+   "skills": [
+    "a",
+    "b"
+   ],
+   "mcpServers": [
+    "fleet"
+   ]
+  },
+  "body": "# worker\n\nrules.\n"
+ },
+ "layers": [
+  {
+   "label": "person:v3",
+   "kind": "person",
+   "text": "---\nname: worker\nmodel: sonnet\nskills: [+c]\n---\nmore\n"
+  }
+ ],
+ "locks": [],
+ "expect": {
+  "body": "# worker\n\nrules.\n\n## （你加的）\n\nmore\n",
+  "fields": {
+   "description": "d",
+   "effort": "xhigh",
+   "mcpServers": [
+    "fleet"
+   ],
+   "model": "sonnet",
+   "name": "worker",
+   "skills": [
+    "a",
+    "b",
+    "c"
+   ]
+  },
+  "locked": [],
+  "refused": [],
+  "sources": {
+   "body": [
+    "agents",
+    "person:v3"
+   ],
+   "description": [
+    "agents"
+   ],
+   "effort": [
+    "agents"
+   ],
+   "mcpServers": [
+    "agents"
+   ],
+   "model": [
+    "person:v3"
+   ],
+   "name": [
+    "agents"
+   ],
+   "skills": [
+    "agents",
+    "person:v3"
+   ]
+  }
+ }
+}
