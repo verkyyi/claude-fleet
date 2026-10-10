@@ -1583,8 +1583,10 @@ def migrate_conf(path, dry=False, machine=None):
     if not os.path.exists(bak):
         shutil.copy2(path, bak)
     tag = MIGRATE_MARK + (' v%s' % version if version else '')
+    same = '# 与自带定义相同，不必搬（fleet-conf.sh migrate, #2788）'
     for i in drop:
-        lines[i] = '# %s  %s' % (lines[i], tag)
+        k = next(k for j, k, _ in found if j == i)
+        lines[i] = '# %s  %s' % (lines[i], tag if any(t in want for t in targets[k]) else same)
     tmp = '%s.tmp.%d' % (path, os.getpid())
     with open(tmp, 'w', encoding='utf-8') as f:
         f.write('\n'.join(lines))
