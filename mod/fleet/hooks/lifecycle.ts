@@ -37,6 +37,9 @@
 // Queue (issue #2617): in the orchestrator's window the same start stamps
 // `@orch_queue 0` (queue.ts counts from there), and a real exit unsets it.
 //
+// Decision sheet (issue #2832): sheet.tsx opens its pane and stamps @sheet_pane;
+// a real exit of the orchestrator unsets it here.
+//
 // Panels (issue #2835): in the orchestrator's and the steward's windows only,
 // the same start registers /sheet and starts the panels (panels.ts): the inbox
 // tick also stats the books' change marks and re-reads them when one moved, and
@@ -61,6 +64,7 @@ import {
 import type { PanelsIo } from './panels'
 import { qdCommand, stringsArgv, takeStrings } from './qd'
 import { QUEUE_OPTION } from './queue'
+import { SHEET_OPTION } from './sheet'
 import type { InboxIo } from './inbox'
 import { TMUX_TIMEOUT_MS, windowOptionsArgv } from './tmux'
 import { SPEC_TIMEOUT_MS, binDir, fallbackSpecs, specArgv } from './tools'
@@ -305,7 +309,7 @@ async function onReady($: EngineInterface): Promise<void> {
   const session = pane === undefined ? undefined : sessionOf(tmux)
   stopPanels()
   if (session !== undefined && panelsWanted(windowRole(), await $.env.get('FLEET_MOD_PANELS'), session)) {
-    startPanels(panelPaths(conf, session))
+    startPanels(panelPaths(conf, session), session)
   }
   await readStrings($)
   // /qd, the orchestrator's quick dispatch (#2618).
@@ -374,7 +378,10 @@ export function registerLifecycle(on: On): void {
       panelsTimer?.cancel()
       panelsTimer = undefined
       stopPanels()
-      await setOptions($, { '@mod_alive': null, ...(isOrchestrator() ? { [QUEUE_OPTION]: null } : {}) })
+      await setOptions($, {
+        '@mod_alive': null,
+        ...(isOrchestrator() ? { [QUEUE_OPTION]: null, [SHEET_OPTION]: null } : {}),
+      })
     }
     return next(e)
   }).catch(($, e, next) => next(e))

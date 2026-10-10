@@ -72,6 +72,52 @@ export type SheetRow = {
 
 export type Sheet = { id: string; at: string; where: string; sent: boolean; rows: SheetRow[] }
 
+/** One ask behind a group: its own words (the panel's 原话). */
+export type SheetAsk = { id: string; item: string; asked: string; url: string }
+
+/**
+ * One line of the decision sheet's panel (issue #2832): fleet_decision.group's
+ * output, kept by the steward as `groups` in steward.state.json — the panel
+ * never merges on its own. `gid` is the latest ask's row id, `ids` every row it
+ * answers; `default` / `dueShow` are already the words to draw.
+ */
+export type SheetGroup = {
+  gid: string
+  ids: string[]
+  item: string
+  suggest: string
+  default: string
+  due: string
+  dueShow: string
+  kind: string
+  never: boolean
+  src: string
+  url: string
+  from: string
+  state: string
+  by: string
+  answer: string
+  closedAt: string
+  asked: string
+  asks: SheetAsk[]
+}
+
+/** An answer pressed and not sent yet: it waits UNDO_MS for `u`. */
+export type SheetPending = { ids: string[]; text: string; how: 'take' | 'turn'; at: number; presses: number }
+
+/** The `{plugin:'fleet', key:'sheet'}` state: the panel's own, never the books'. */
+export type SheetUi = {
+  pending: Record<string, SheetPending>
+  /** The group whose 翻案 field is open ('' none). */
+  editing: string
+  /** The group whose 原话 are shown ('' none). */
+  expanded: string
+  /** Groups being written back right now. */
+  sending: string[]
+  /** Presses on a group since it was last answered (the metric's 按几下). */
+  presses: Record<string, number>
+}
+
 export type Batch = {
   repo: string
   epic: number
@@ -146,6 +192,8 @@ export type Board = { batches: BoardBatch[]; done: BoardDone[]; todo: BoardTodo[
 /** The `{plugin:'fleet', key:'panels'}` state (EPIC #2831's interface). */
 export type PanelsView = {
   sheet: Sheet | null
+  /** The decision sheet's lines, open first (issue #2832); [] from a steward before it. */
+  groups: SheetGroup[]
   batches: Batch[]
   todo: Todo
   queue: QueueRow[]
@@ -171,6 +219,8 @@ declare module 'claude-code' {
       queue: OrchQueue
       /** What the panels last read from the books (issue #2835); null before the first read. */
       panels: PanelsView | null
+      /** The decision sheet's own state (issue #2832). */
+      sheet: SheetUi
     }
   }
 }

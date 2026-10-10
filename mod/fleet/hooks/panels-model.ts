@@ -13,8 +13,8 @@
 import { foldBoard } from './batches-model'
 import { parseLedger } from './progress-model'
 
-export type { Batch, PanelsView, Parked, Patrol, QueueRow, Sheet, SheetRow, Todo } from '../types'
-import type { Batch, PanelsView, Parked, Patrol, QueueRow, Sheet, SheetRow, Todo } from '../types'
+export type { Batch, PanelsView, Parked, Patrol, QueueRow, Sheet, SheetGroup, SheetRow, Todo } from '../types'
+import type { Batch, PanelsView, Parked, Patrol, QueueRow, Sheet, SheetGroup, SheetRow, Todo } from '../types'
 
 type Obj = Record<string, unknown>
 
@@ -79,6 +79,37 @@ function sheetRow(id: string, r: Obj): SheetRow {
   }
 }
 
+/** One of the steward's `groups` (fleet_decision.group, issue #2832); null without an id. */
+function sheetGroup(v: unknown): SheetGroup | null {
+  const g = obj(v)
+  const ids = arr(g.ids).map(str).filter(id => id !== '')
+  const gid = str(g.gid) || (ids[ids.length - 1] ?? '')
+  if (gid === '') return null
+  return {
+    gid,
+    ids: ids.length > 0 ? ids : [gid],
+    item: str(g.item),
+    suggest: str(g.suggest),
+    default: str(g.default),
+    due: str(g.due),
+    dueShow: str(g.due_show),
+    kind: str(g.kind),
+    never: g.never === true,
+    src: str(g.src),
+    url: str(g.url),
+    from: str(g.from),
+    state: str(g.state),
+    by: str(g.by),
+    answer: str(g.answer),
+    closedAt: str(g.closed_at),
+    asked: str(g.asked),
+    asks: arr(g.asks).map(a => {
+      const o = obj(a)
+      return { id: str(o.id), item: str(o.item), asked: str(o.asked), url: str(o.url) }
+    }),
+  }
+}
+
 function parked(v: unknown): Parked[] {
   return arr(v).map(o => {
     const p = obj(o)
@@ -92,12 +123,12 @@ export const EMPTY_PATROL: Patrol = {
   drivers: 0, openRows: 0, events: 0, bySteward: 0, byDefault: 0, groups: 0, health: 0, healthTop: '', deferred: 0, page: '',
 }
 
-export type StateView = { sheet: Sheet | null; todo: Todo; patrol: Patrol }
+export type StateView = { sheet: Sheet | null; groups: SheetGroup[]; todo: Todo; patrol: Patrol }
 
 /** steward.state.json → the sheet (its rows in the sheet's order), the to-do count, the beat. */
 export function parseState(text: string): StateView {
   const d = json(text)
-  if (d === null) return { sheet: null, todo: { open: 0, desk: '' }, patrol: { ...EMPTY_PATROL } }
+  if (d === null) return { sheet: null, groups: [], todo: { open: 0, desk: '' }, patrol: { ...EMPTY_PATROL } }
   const rows = obj(d.rows)
   const s = obj(d.sheet)
   const ids = arr(s.rows).map(str).filter(id => id !== '')
@@ -127,6 +158,7 @@ export function parseState(text: string): StateView {
   const hl = health(obj(d.health))
   return {
     sheet,
+    groups: arr(d.groups).map(sheetGroup).filter((g): g is SheetGroup => g !== null),
     todo: { open: num(d.todo_open), desk: str(obj(d.todo).desk) },
     patrol: {
       ...EMPTY_PATROL,
@@ -234,6 +266,7 @@ export function foldPanels(src: PanelsText, at: number, ms: number): PanelsView 
   const batches = parseMarks(src.marks, Math.floor(at / 1000))
   return {
     sheet: st.sheet,
+    groups: st.groups,
     batches,
     todo: st.todo,
     queue: parseQueue(src.ledger),

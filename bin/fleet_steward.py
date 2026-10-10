@@ -113,7 +113,7 @@ def tr(key, *args):
     global _TEXT
     if _TEXT is None:
         try:
-            out = subprocess.run(["sh", str(BIN / "fleet-ui-lang.sh"), "dump", "steward_"],
+            out = subprocess.run(["sh", str(BIN / "fleet-ui-lang.sh"), "dump", "steward_", "panel_sheet_"],
                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10).stdout
         except (OSError, subprocess.SubprocessError):
             out = b""
@@ -165,18 +165,19 @@ def _seam(name, argv, **kw):
 
 
 def windows(sess):
-    """[{wid, role, state, issue, repo, epic, key}] of this fleet's windows."""
+    """[{wid, role, state, issue, repo, epic, key, sheet}] of this fleet's windows
+    (`sheet`: the window's @sheet_pane — 1 while the mod's decision sheet is up)."""
     r = _seam("FLEET_STEWARD_WINDOWS_CMD", [sess])
     if r is None:
         fmt = "\t".join(("#{window_id}", "#{@fleet_role}",
                          "#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}",
-                         "#{@issue}", "#{@repo}", "#{@epic}"))
+                         "#{@issue}", "#{@repo}", "#{@epic}", "", "#{@sheet_pane}"))
         r = subprocess.run(["tmux", "-L", socket(sess), "list-windows", "-t", "=" + sess, "-F", fmt],
                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, universal_newlines=True, timeout=30)
     out = []
     for line in (r.stdout or "").splitlines():
-        p = (line.split("\t") + [""] * 7)[:7]
-        w = dict(zip(("wid", "role", "state", "issue", "repo", "epic", "key"), p))
+        p = (line.split("\t") + [""] * 8)[:8]
+        w = dict(zip(("wid", "role", "state", "issue", "repo", "epic", "key", "sheet"), p))
         if w["epic"] and not w["key"] and os.environ.get("FLEET_STEWARD_WINDOWS_CMD") is None:
             w["key"] = sh_lib('fleet_window_okey "$1" "$2"', sess, w["wid"])
         out.append(w)
@@ -294,6 +295,25 @@ def write_stamp():
         pass
 
 
+def panel_groups(d, now_t=None):
+    """What the decision sheet's panel draws (issue #2832): the rows asked today
+    and the rows of the last sheet, through fleet_decision.group — the panel never
+    merges on its own. The person's todo rows (followups) are the batches panel's."""
+    day = (now_t or fd.now_local()).date()
+    on_sheet = set(d.get("sheet", {}).get("rows") or [])
+    rows = []
+    for rid, r in d.get("rows", {}).items():
+        if r.get("followup"):
+            continue
+        try:
+            today = fd.parse_time(r.get("asked") or "").date() == day
+        except (TypeError, ValueError):
+            today = False
+        if rid in on_sheet or today or r.get("state") == "open":
+            rows.append(r)
+    return fd.group(rows)
+
+
 class State:
     def __init__(self):
         self.path = gdir() / "steward.state.json"
@@ -309,6 +329,7 @@ class State:
             self.d.setdefault(k, dflt)
 
     def save(self):
+        self.d["groups"] = panel_groups(self.d)
         tmp = self.path.with_suffix(".tmp")
         tmp.write_text(json.dumps(self.d, ensure_ascii=False, indent=1, sort_keys=True))
         os.replace(str(tmp), str(self.path))
@@ -343,6 +364,7 @@ def do_answer(st, row, text, by, source):
     st.spend(1)
     row["state"] = "answered"
     row["by"] = by
+    row["answer"] = text
     row["closed_at"] = fd.iso(fd.now_local())
     if row.get("followup"):
         fu.answered(st, row, text, by)
@@ -681,6 +703,7 @@ def cmd_answer(a):
         return 1
     rc = do_answer(st, row, a.text, a.by, a.source)
     if rc == 0:
+        log_answer(session(a.session), st, row, a.text, a.by, fd.now_local(getattr(a, "now", None)))
         st.d["decide"] = len(sheet_open(st))
         wins = windows(session(a.session))
         stamp_decide(session(a.session), st.d["decide"], wins)
@@ -688,6 +711,28 @@ def cmd_answer(a):
     st.save()
     print("answered %s" % a.row if rc == 0 else tr("steward_card_deferred_fmt", 1))
     return rc
+
+
+def log_answer(sess, st, row, text, by, now_t):
+    """One line in today's decision-<day>.md for an answer (issue #2832): which
+    thing on the last sheet, as suggested or overturned, by whom. A merged group
+    is answered id by id: its line is written once, with the answer that closes
+    its last open row."""
+    sheet = [st.d["rows"][i] for i in (st.d["sheet"].get("rows") or []) if i in st.d["rows"]]
+    groups = fd.group([dict(r, state="open") for r in sheet])
+    n, mates = next(((k, g["ids"]) for k, g in enumerate(groups, 1) if row["id"] in g["ids"]), ("?", []))
+    if any(st.d["rows"].get(i, {}).get("state") == "open" for i in mates if i != row["id"]):
+        return
+    hm = now_t.strftime("%H:%M")
+    line = "- " + (tr("steward_answer_log_take_fmt", hm, n, by) if text.strip() == (row.get("suggest") or "").strip()
+            else tr("steward_answer_log_turn_fmt", hm, n, " ".join(text.split()), by))
+    f = conf_dir() / "fleets" / sess / "steward" / ("decision-%s.md" % now_t.strftime("%Y-%m-%d"))
+    try:
+        f.parent.mkdir(parents=True, exist_ok=True)
+        with open(str(f), "a", encoding="utf-8") as fh:
+            fh.write(line + "\n")
+    except OSError as e:  # the record never stops the answer
+        sys.stderr.write("fleet-steward-tick: decision log: %s\n" % e)
 
 
 def cmd_say(a):
@@ -788,10 +833,21 @@ def post_sheet(sess, st, now_t, force=False):
     body += ["%s　〔row %s〕" % (page.tr("steward_page_todo_h") + " · " + page.say_of(r), r["id"]) for r in todo_rows]
     if samples:
         body += [""] + fd.render_samples(samples)
+    # the decision sheet is on the orchestrator's screen (@sheet_pane 1, issue
+    # #2832): one sentence, never the table; else the whole sheet as before
+    pane_up = any(w["role"] == "orchestrator" and w.get("sheet") == "1" for w in windows(sess))
     msg = "\n".join([tr("steward_decision_head_fmt", len(rows), where),
                      page.tr("steward_page_card_fmt", url or str(conf_dir() / "fleets" / sess / "steward" / "page.html")),
                      ""] + body + ["", tr("steward_decision_how"), "", "<!-- fleet:decision v=%s id=%s -->" % (fd.V, sid)])
+    if pane_up:
+        prev = set(st.d["sheet"].get("rows") or [])
+        groups = fd.group(rows)
+        new = sum(1 for g in groups if set(g["ids"]) - prev) or len(groups)
+        msg = "\n".join([tr("panel_sheet_ping_fmt", new, where),
+                         "<!-- fleet:decision v=%s id=%s -->" % (fd.V, sid)])
     sent = send(sess, "orchestrator", msg)
+    if sent and not pane_up:
+        st.d.setdefault("sheets_full", {})[day] = st.d.setdefault("sheets_full", {}).get(day, 0) + 1
     st.d["sheet"] = {"id": sid, "rows": ids, "at": fd.iso(now_t), "where": where, "sent": sent}
     st.d["sheets"][day] = st.d["sheets"].get(day, 0) + 1
     st.d["decide"] = len(ids)

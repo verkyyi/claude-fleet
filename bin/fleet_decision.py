@@ -19,6 +19,7 @@ is never defaulted; neither is a `never` row, whatever its caller declared.
     fleet_decision.py parse  (--repo R --issue N | --comments-json FILE|-)   → one row per line (JSON)
     fleet_decision.py render [--demo] [--rows FILE|-] [--id UUID] [--samples FILE]
                                                                             → Markdown table + marker
+    fleet_decision.py group  [--rows FILE|-]   (rows, or a steward.state.json) → one merged group per line
     fleet_decision.py due    [--rows FILE|- | --repo R --issue N…] [--now ISO] [--apply]
     fleet_decision.py record --row JSON --parent owner/repo#N               → 「默认拍板」 on the parent
     fleet_decision.py decided [--date D] [--epic gh:R#N…] [--repo R…] [--json]  → that day's 默认拍板, one line each
@@ -355,20 +356,86 @@ def render_samples(samples):
     return out
 
 
+def _due_show(r):
+    return "—" if (row_default(r) is WAIT or never(r) or not r.get("due")) else show_time(parse_time(r["due"]))
+
+
+def _asked_show(r):
+    try:
+        return show_time(parse_time(r["asked"]))
+    except (KeyError, TypeError, ValueError):
+        return "?"
+
+
+def _open_key(r):
+    return (not never(r), r.get("due") or "9", r.get("asked") or "")
+
+
+def group(rows):
+    """THE merge rule (issue #2832): the rows still open on ONE ticket (`src`) are
+    one thing — the latest ask speaks for them (its item, suggestion, default,
+    deadline); every other row stands alone. The sheet's text and the panel
+    (mod/fleet/hooks/sheet.tsx, which only draws what the steward keeps as
+    `groups`) both go through here, so they never count differently.
+
+    → [{gid, ids, item, suggest, default, due, due_show, kind, never, src, url,
+        from, state, by, answer, closed_at, asked, asks}] — open groups first in
+    the sheet's order (never first, the nearest deadline, the earliest ask),
+    then the closed rows, the last closed first. `gid` is the latest row's id;
+    `asks` every row's own words, oldest first; `from` says how often it was
+    asked when more than once. A row of the old format (v=0, no fields) groups
+    the same way: it has a src."""
+    by_src, order, closed = {}, [], []
+    for r in rows:
+        if r.get("state") != "open":
+            closed.append([r])
+            continue
+        key = r.get("src") or r.get("id")
+        if key not in by_src:
+            by_src[key] = []
+            order.append(key)
+        by_src[key].append(r)
+    out = []
+    # ties (the same deadline, asked the same second) break by ticket, never by
+    # the order a dict happened to keep
+    for rs in sorted((by_src[k] for k in order), key=lambda rs: (min(_open_key(r) for r in rs), rs[0].get("src") or "")):
+        out.append(_group_of(sorted(rs, key=lambda r: r.get("asked") or "")))
+    closed.sort(key=lambda rs: rs[0].get("closed_at") or rs[0].get("asked") or "", reverse=True)
+    return out + [_group_of(rs) for rs in closed]
+
+
+def _group_of(rs):
+    head = rs[-1]
+    g = {"gid": head.get("id", ""), "ids": [r.get("id", "") for r in rs]}
+    for k in ("item", "suggest", "due", "kind", "src", "url", "state", "by", "answer", "closed_at", "asked"):
+        g[k] = head.get(k) or ""
+    g["default"] = default_text(head)
+    g["due_show"] = _due_show(head)
+    g["never"] = never(head)
+    g["from"] = tr("decision_group_from_fmt", len(rs), _asked_show(rs[0]), _asked_show(head)) if len(rs) > 1 else ""
+    g["asks"] = [{"id": r.get("id", ""), "item": r.get("item", ""), "asked": r.get("asked", ""),
+                  "url": r.get("url", "")} for r in rs]
+    return g
+
+
 def render(rows, sheet_id=None, samples=None):
+    """The sheet's table: one line a group (group()); a line that stands for
+    several asks says so in its source cell. Rows that merge nothing render
+    byte for byte as before."""
     out = []
     if rows or not samples:
         out = ["| # | %s | %s | %s | %s | %s |" % tuple(tr(k) for k in (
                    "decision_col_item", "decision_col_suggest", "decision_col_default", "decision_col_due",
                    "decision_col_src")),
                "|---|---|---|---|---|---|"]
-    for n, r in enumerate(rows, 1):
-        due = "—" if (row_default(r) is WAIT or never(r) or not r.get("due")) else show_time(parse_time(r["due"]))
-        src = r.get("src", "")
-        if r.get("url"):
-            src = "[%s](%s)" % (src, r["url"])
-        out.append("| %d | %s | %s | %s | %s | %s |" % (n, _cell(r.get("item", "")), _cell(r.get("suggest") or "—"),
-                                                       _cell(default_text(r)), due, src))
+    for n, g in enumerate(group(rows), 1):
+        src = g["src"]
+        if g["url"]:
+            src = "[%s](%s)" % (src, g["url"])
+        if g["from"]:
+            src += " · " + g["from"]
+        out.append("| %d | %s | %s | %s | %s | %s |" % (n, _cell(g["item"]), _cell(g["suggest"] or "—"),
+                                                       _cell(g["default"]), g["due_show"], _cell(src)))
     if samples:
         out += ([""] if out else []) + render_samples(samples)
     out += ["", "<!-- fleet:decision v=%s id=%s -->" % (V, sheet_id or uuid.uuid4())]
@@ -608,6 +675,20 @@ def _read_rows(path):
     return [json.loads(line) for line in text.splitlines() if line.strip()]
 
 
+def _rows_of(path):
+    """--rows: a JSON list, JSON lines, or a steward state (its `rows` map)."""
+    text = sys.stdin.read() if path == "-" else Path(path).read_text()
+    text = text.strip()
+    if text.startswith("{") and "\n{" not in text:
+        d = json.loads(text)
+        if isinstance(d.get("rows"), dict):
+            return list(d["rows"].values())
+        return [d]
+    if text.startswith("["):
+        return json.loads(text)
+    return [json.loads(line) for line in text.splitlines() if line.strip()]
+
+
 def _emit(rows):
     for r in rows:
         print(json.dumps(r, ensure_ascii=False, sort_keys=True))
@@ -633,6 +714,8 @@ def main(argv=None):
     r.add_argument("--rows")
     r.add_argument("--id")
     r.add_argument("--samples")
+    g = sub.add_parser("group")
+    g.add_argument("--rows", default="-")
     d = sub.add_parser("due")
     d.add_argument("--rows")
     d.add_argument("--repo")
@@ -665,6 +748,8 @@ def main(argv=None):
         rows = demo_rows() if o.demo else _read_rows(o.rows or "-")
         samples = json.loads(Path(o.samples).read_text()) if o.samples else None
         print(render(rows, o.id or ("demo" if o.demo else None), samples))
+    elif o.cmd == "group":
+        _emit(group(_rows_of(o.rows)))
     elif o.cmd == "due":
         if o.rows:
             rows = _read_rows(o.rows)

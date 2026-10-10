@@ -34,6 +34,9 @@
 #   M  who closed a row (issue #2834): rows[id].by is steward · person · default,
 #      today's counts carry the default too; a state file written before the field
 #      (no `by` on any row) still beats
+#   N  the decision sheet's panel (issue #2832): one ticket asked thrice = one
+#      group; @sheet_pane 1 ⇒ one sentence, 0 / none ⇒ the whole sheet byte for
+#      byte; a group answered id by id ⇒ one line in decision-<day>.md; v=0 rows group
 #   L  the panels' change stamp: every State.save() moves global/steward.stamp
 #      (`<seq> <epoch_ms>`, issue #2835) by exactly one
 #   K  the health watch (bin/fleet_steward_health.py, fleet-doctor.sh --json,
@@ -227,6 +230,67 @@ grep -q '延后 1 条' "$WORK/out" && ok "E: the card says 延后 N 条" || bad 
 # F — not due: returns 4 at once
 TICK beat >/dev/null 2>&1; rc=$?
 [ "$rc" = 4 ] && ok "F: not due — the every-minute caller returns 4" || bad "F: rc=$rc"
+
+# N — the decision sheet's panel (issue #2832, EPIC #2831 C1), in a book of its
+# own: one ticket asked three times is ONE group (fleet_decision.group, kept as
+# `groups` on every save); the orchestrator's @sheet_pane 0 (or none at all) gets
+# the whole sheet byte for byte as before, 1 gets one sentence and no table; an
+# answer through the panel's road lands on the row and once in decision-<day>.md;
+# old-format rows (v=0, no fields) group the same way
+(
+  export FLEET_CONF_DIR="$WORK/confM" ST_GH="$WORK/ghM" ST_WINS="$WORK/winsM.txt"
+  STATE="$FLEET_CONF_DIR/global/steward.state.json"
+  mkdir -p "$FLEET_CONF_DIR/fleets/st/repos" "$ST_GH"
+  printf 'FLEET_REPO="o/r"\n' > "$FLEET_CONF_DIR/fleets/st/repos/o-r.conf"
+  : > "$ST_WINS"
+  ask 31 '真机演练第 1 次可以开始吗？' --suggest '开始' --due 4h
+  ask 31 '真机演练第 2 次可以开始吗？' --suggest '开始' --due 4h
+  ask 31 '真机演练第 3 次可以开始吗？' --suggest '开始' --due 4h
+  ask 32 '小程序试点选哪家商户？' --suggest '甲' --due 4h
+  needs 31; needs 32
+  TICK beat --force >/dev/null 2>&1
+  g=$(python3 -c 'import json,sys; g=json.load(open(sys.argv[1]))["groups"]; o=[x for x in g if x["state"]=="open"]; print(len(o), len(o[0]["ids"]), "问了 3 次" in o[0]["from"], o[0]["item"])' "$STATE")
+  n=$(python3 "$BIN/fleet_decision.py" group --rows "$STATE" | grep -c '"state": "open"')
+  [ "$g" = "2 3 True 真机演练第 3 次可以开始吗？" ] && [ "$n" = 2 ] \
+    && ok "N: one ticket asked 3 times + one more = 2 groups (the latest ask speaks), kept as groups; the CLI agrees" \
+    || bad "N: groups '$g', CLI open groups $n"
+  last() { awk '/^>>> orchestrator/{m=""; f=1; next} /^>>> /{f=0} f{m=m $0 "\n"} END{printf "%s", m}' "$ST_GH/sends.log" \
+    | sed 's/id=[0-9a-f-]*/id=X/'; }
+  printf '@0\torchestrator\tidle\t\t\t\t\n' >> "$ST_WINS"
+  TICK sheet --force >/dev/null 2>&1; none=$(last)
+  sed -i.bak '/orchestrator/d' "$ST_WINS"; printf '@0\torchestrator\tidle\t\t\t\t\t0\n' >> "$ST_WINS"
+  TICK sheet --force >/dev/null 2>&1; zero=$(last)
+  full=$(python3 -c 'import json,sys,time; print(json.load(open(sys.argv[1])).get("sheets_full", {}).get(time.strftime("%Y-%m-%d", time.gmtime()), 0))' "$STATE")
+  [ -n "$none" ] && [ "$none" = "$zero" ] && printf '%s\n' "$zero" | grep -q '〔row ' && [ "$full" = 2 ] \
+    && ok "N: @sheet_pane 0 = no option at all, byte for byte: the whole sheet, counted in sheets_full (2)" \
+    || bad "N: pane 0 vs none differ or not full (sheets_full=$full): [$none] vs [$zero]"
+  sed -i.bak '/orchestrator/d' "$ST_WINS"; printf '@0\torchestrator\tidle\t\t\t\t\t1\n' >> "$ST_WINS"
+  TICK sheet --force >/dev/null 2>&1; one=$(last)
+  full=$(python3 -c 'import json,sys,time; print(json.load(open(sys.argv[1])).get("sheets_full", {}).get(time.strftime("%Y-%m-%d", time.gmtime()), 0))' "$STATE")
+  [ "$(printf '%s\n' "$one" | grep -c .)" = 2 ] && printf '%s\n' "$one" | grep -q '决定单有 2 件新的，在右边' \
+    && ! printf '%s\n' "$one" | grep -q '〔row \|^| ' && printf '%s\n' "$one" | grep -q 'fleet:decision' && [ "$full" = 2 ] \
+    && ok "N: @sheet_pane 1 — one sentence (+ the marker), no table, not counted as a full sheet" \
+    || bad "N: pane 1 sent [$one] (sheets_full=$full)"
+  ids=$(python3 -c 'import json,sys; g=json.load(open(sys.argv[1]))["groups"]; print(" ".join([x for x in g if x["src"] == "gh:o/r#31"][0]["ids"]))' "$STATE")
+  for id in $ids; do TICK answer --row "$id" --text '开始' --by person >/dev/null 2>&1; done
+  md="$FLEET_CONF_DIR/fleets/st/steward/decision-$(TZ=UTC date +%Y-%m-%d).md"
+  hits=$(grep -c '第 1 件：按建议（by person）' "$md" 2>/dev/null)
+  marks=$(grep -o 'fleet:answer row=[^ ]* by=person' "$ST_GH/o-r-31.json" | sort -u | grep -c .)
+  st=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); r=[d["rows"][i] for i in sys.argv[2].split()]; print(set((x["state"], x["by"], x["answer"]) for x in r))' "$STATE" "$ids")
+  [ "$hits" = 1 ] && tail -n 1 "$md" | grep -q '按建议' && [ "$marks" = 3 ] && [ "$st" = "{('answered', 'person', '开始')}" ] \
+    && ok "N: the group answered id by id — 3 answer marks, rows answered/by/answer, ONE line in decision-<day>.md" \
+    || bad "N: answer log hits=$hits marks=$marks rows=$st ids=$ids: $(tail -n 3 "$md" 2>&1)"
+  python3 - "$BIN" <<'PY' && ok "N: old-format rows (v=0, no fields) on one ticket group the same way" || bad "N: v=0 rows did not group"
+import sys; sys.path.insert(0, sys.argv[1]); import fleet_decision as fd
+rows = [{"id": "legacy-%d" % i, "v": "0", "src": "gh:o/r#9", "state": "open", "asked": "2026-10-09T0%d:00:00Z" % i,
+         "item": "旧问题 %d" % i, "due": "", "default": "", "suggest": "", "kind": "normal"} for i in (1, 2)]
+g = fd.group(rows + [{"id": "x", "src": "gh:o/r#8", "state": "open", "v": "0", "item": "另一件"}])
+g9 = [x for x in g if x["src"] == "gh:o/r#9"]
+assert len(g) == 2 and len(g9) == 1 and g9[0]["ids"] == ["legacy-1", "legacy-2"] and g9[0]["item"] == "旧问题 2" and g9[0]["default"]
+assert fd.group([{"id": "a", "src": "gh:o/r#1", "state": "answered"}, {"id": "b", "src": "gh:o/r#1", "state": "answered"}])[1]["ids"] == ["b"]
+PY
+) | while IFS= read -r line; do printf '%s\n' "$line"; case "$line" in FAIL*) echo x >> "$WORK/failsN" ;; esac; done
+[ -s "$WORK/failsN" ] && fails=$((fails + $(grep -c . "$WORK/failsN")))
 
 # K — the health watch (issue #2674): doctor rows that got worse, idle sessions
 # nothing put down; one issue per fingerprint, a recurrence a comment
