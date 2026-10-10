@@ -80,6 +80,8 @@
 #   drill-login-orphaned                            tokenledger/internal/api fleet_drill.go + bin/fleet-login-remove.sh
 #                                                   (closeDrillLogins, exit 4; go test, when a toolchain is here)
 #   opening-eta-climbs                              tokenledger/internal/api fleet_opening.go (openingETALeft)
+#   heartbeat-sys-blocked                           tokenledger/internal/agent beat_parts.go (sysSampler, asyncReading,
+#                                                   fleetBeatBudget) + internal/api nodes.go (foldSys); go test
 #   login-remove-record-left                        bin/fleet-login-remove.sh (step 6 checks the record is gone)
 #   drill-login-handed-silently                     tokenledger/internal/api fleet_drill.go (closeDrillLogins
 #                                                   handed) + store DeleteDrill (keeps the handed rows)
@@ -776,6 +778,28 @@ drill_role_def_broken() {
   FLEET_CONF_DIR="$WORK/rdconf" FLEET_ROLE_AGENTS_DIR="$ag" python3 "$BIN/fleet-role.py" render orchestrator 2>"$WORK/rd-err" | grep -qx -- '--model' \
     && grep -q 'using the last good orchestrator launch' "$WORK/rd-err" || { WHY="a deleted definition is not covered, or says nothing: $(cat "$WORK/rd-err")"; return 1; }
   WHAT="定义写坏或删掉：整份不用，按这台机器上次好的那份开（模型、用力、角色都在），stderr 说一句"
+}
+
+# role-overlay-broken (issue #2783, EPIC #2781 C2): a person changes a role
+# with a layer over agents/<role>.md, writing only what changes. A layer written
+# badly (a key no layer carries, a value out of range) is not used at all: the
+# last good copy of that layer stands, and `fleet role show --sources` says why on
+# its first line — never a session opened on the bad value, never the person's
+# change silently gone.
+drill_role_overlay_broken() {
+  CAP=5; local t0 c="$WORK/roconf" kv sh
+  mkdir -p "$c/roles"
+  printf '{"version": 1, "bundle": {"roles": {"steward": "---\\nmodel: sonnet\\n---\\n"}}}\n' > "$c/person-bundle.json"
+  kv=$(FLEET_CONF_DIR="$c" python3 "$BIN/fleet-role.py" render steward --kv 2>/dev/null)
+  printf '%s\n' "$kv" | grep -qx 'model	sonnet' || { WHY="the person's layer is not merged at all: $kv"; return 1; }
+  printf '{"version": 2, "bundle": {"roles": {"steward": "---\\nmodel: haiku\\nmaxTurns: 3\\n---\\n"}}}\n' > "$c/person-bundle.json"   # the break
+  t0=$(now)
+  kv=$(FLEET_CONF_DIR="$c" python3 "$BIN/fleet-role.py" render steward --kv 2>/dev/null)
+  sh=$(FLEET_CONF_DIR="$c" python3 "$BIN/fleet-role.py" show steward --sources 2>/dev/null)
+  SECS=$(since "$t0")
+  printf '%s\n' "$kv" | grep -qx 'model	sonnet' || { WHY="a broken layer changed the launch: $kv"; return 1; }
+  printf '%s\n' "$sh" | head -1 | grep -q '不用：maxTurns.*用上一份好的' || { WHY="show does not say why: $(printf '%s' "$sh" | head -1)"; return 1; }
+  WHAT="覆盖层写坏：整层不用，用这一层上一份好的（模型还是 sonnet），show 第一行说原因"
 }
 
 # orchestrator-compacted (issue #2583, EPIC #2581 C2): a compaction leaves the
@@ -4500,14 +4524,14 @@ FAKE
 
 # ---- the hub-half drills of #2696 share one runner: the named Go tests must
 # exist, the greps must hold, and with a toolchain they must pass.
-_drill_go_tests() {  # <tests> <test file> <what>
-  local tests=$1 f=$2 what=$3 t out rc
+_drill_go_tests() {  # <tests> <test file> <what> [<package>, default ./internal/api]
+  local tests=$1 f=$2 what=$3 pkg=${4:-./internal/api} t out rc
   for t in $tests; do
     grep -q "^func $t(" "$f" 2>/dev/null || { WHY="the hub half's test $t is not in ${f#$ROOT/}"; return 1; }
   done
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
     out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/api 2>&1); rc=$?
+          go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" "$pkg" 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
       0:*) WHAT=$what ;;
@@ -4603,6 +4627,35 @@ drill_drill_login_handed_silently() {
     || { WHY="DeleteDrill no longer keeps the rows of a login left on a machine"; return 1; }
   _drill_go_tests 'TestDrillUnknownCreateIsWaitedThenHanded' "$ROOT/tokenledger/internal/api/fleet_drill_test.go" \
     '开号没回音的演练登录先等、一小时后交还运营者：200 带 left_for_operator，账户行留着（go test）' || return 1
+  SECS=$(since "$t0")
+}
+
+# ---- heartbeat-sys-blocked (#2798): the beat ran the fleet probe before it
+# read the load, under one observed_at, and the hub folded a machine's load from
+# its login rows only — the machine link's row was skipped — so a slow probe or
+# a refused lane left m5 with no load all day. Now the load is sampled on its
+# own clock (sys_at), the fleet half waits at most fleetBeatBudget and carries
+# the last completed read with its own fleet_at, and the machine row takes the
+# newest timed reading of any heard row, the machine link's included.
+drill_heartbeat_sys_blocked() {
+  CAP=180; local t0 w1 ag="$ROOT/tokenledger/internal/agent" api="$ROOT/tokenledger/internal/api"
+  t0=$(now)
+  grep -q 'fillSys(&hb, processSys)' "$ag/node.go" \
+    || { WHY="nodeHeartbeat no longer takes the sampler's load"; return 1; }
+  grep -q 'a.fleetRd.get(ctx, 0, fleetBeatBudget' "$ag/node.go" \
+    || { WHY="nodeHeartbeat waits on the fleet read with no budget again"; return 1; }
+  if grep -q 'readSysInfo()' "$ag/node.go" "$ag/node_machine.go"; then
+    WHY="a beat reads the kernel inline again instead of the sampler"; return 1
+  fi
+  grep -q 'm.foldSys(sysBest\[v.Hostname\], v)' "$api/nodes.go" \
+    || { WHY="the roster no longer folds every heard row's load (the machine link's too)"; return 1; }
+  _drill_go_tests 'TestHeartbeatGoesOutWhileTheFleetProbeHangs TestUnreadSysIsSaidAndLoggedOnce' "$ag/beat_parts_test.go" \
+    'fleet 探测卡住，心跳照常按时发出：负载新鲜（sys_at）、fleet 那一半是上一次读完的（旧 fleet_at，不为空）（go test）' \
+    ./internal/agent || return 1
+  w1=$WHAT
+  _drill_go_tests 'TestMachineLoadIsTheNewestTimedReadingOfAnyRow' "$api/nodes_sys_test.go" \
+    '机器行取任一在线行（含整机连接）带时间的最新负载，旧节点为「时间未知」（go test）' || return 1
+  WHAT="${w1}；${WHAT}"
   SECS=$(since "$t0")
 }
 

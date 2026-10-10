@@ -2873,6 +2873,17 @@ if [ -f "$_at" ] && command -v python3 >/dev/null 2>&1; then
   esac
 fi
 
+# --- roles: a person's layer over a role's definition (issue #2783) ---
+# A local layer ($FLEET_CONF_DIR/roles/<role>.md) is for development and
+# emergencies — it holds this computer only — and a layer that was not used
+# (written badly) leaves its last good copy standing. Either is said here; with
+# neither there is no row.
+if [ -f "$(dirname "$0")/fleet-role.py" ]; then
+  _rl=$(python3 "$(dirname "$0")/fleet-role.py" doctor 2>/dev/null)
+  [ -n "$_rl" ] && warn roles "${_rl#*	}"
+  unset _rl
+fi
+
 # --- orch: the person has ONE orchestrating session (issue #2117) ---
 # The client's refresh loop writes orch_multi_<sess> when more than one machine
 # still answers with one (fleet-hub-sessions.sh); the hub names the holder and

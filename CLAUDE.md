@@ -342,6 +342,16 @@ Do not install from memory: read the doc and work from it.
   subagents. A definition that cannot be read is not used: the last good launch
   (`$FLEET_CONF_DIR/roles/<role>.<agent>.last.json`) stands — BREAK-IT
   `role-def-broken`. Never hard-code a role's model, effort or prompt in a launcher.
+  **A person writes only what changes** (issue #2783, C2): a layer in the same
+  format — the person bundle's `roles.<role>` (`person-bundle.json`), then this
+  computer's `$FLEET_CONF_DIR/roles/<role>.md` — merged by `fleet-role.py merge`
+  (pure; scalars replace, lists `+X`/`-X` or `!replace`, dicts by key with `null`
+  deleting, the body appended unless `body: replace`), render launches the merge,
+  `fleet role show <role> --sources` names each field's 自带 · 你的 vN · 本机 · 🔒.
+  `role.<role>.<field>` in `conf/agent-locked.list` is written back after the
+  merge (never looser than the built-in). A bad layer is not used — its last good
+  copy stands (BREAK-IT `role-overlay-broken`); no layer ⇒ byte for byte C1.
+  `tests/role-merge/*.json` are the vectors the hub's Go copy (C6) runs too.
 - **How the orchestrator dispatches and what the steward may answer is ONE rule
   table** (issue #2786, EPIC #2781 C5): `conf/role-rules.default.md` (编号 · 角色 ·
   条件 · 动作 · 档位 auto|default|ask|off · 关键词) < the person's layer
