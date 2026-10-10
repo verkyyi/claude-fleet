@@ -165,6 +165,13 @@
 # tmux / python3 absent → SKIP (exit 0). BREAK_KEEP=1 keeps the work dir.
 # BREAK_ONLY="<id> <id>" runs only those drills (the lockstep lint always runs);
 # so do ids given as arguments (`fleet-break-it-selftest.sh cmdn-no-orch …`).
+# BREAK_PART=K/N runs the K-th of N contiguous slices of this script's drills, in
+# the table's order (issue #2955: the whole list outgrew the gate's 240 s per-test
+# ceiling). This file runs 1/2 by default, bin/fleet-break-it-2-selftest.sh 2/2 —
+# each its own test, its own ceiling, its own durations row; `BREAK_PART=all` runs
+# every drill in one go. BREAK_ONLY / ids win over the part. Drills keep no state
+# across each other beyond lazy, idempotent rigs (client_setup, drive), so any
+# slice runs on its own.
 set -uo pipefail
 # Every session its own row (issue #2675): the batch view folds a flat list into
 # 「单独的活」 — sidebar-batch-view-selftest.sh pins it; these rows are the old ones.
@@ -5752,12 +5759,34 @@ PY
 # ================================================================ run ===========
 FAILS=$LINT; PASSES=0
 printf 'fleet-break-it: %d rows in docs/BREAK-IT.md\n' "$NROWS"
+# BREAK_PART → the ids of this slice (" id id … "); empty = every drill
+PART_IDS=''
+part=${BREAK_PART:-1/2}
+if [ -z "${BREAK_ONLY:-}" ] && [ "$part" != all ]; then
+  case "$part" in
+    [1-9]/[1-9]|[1-9]/[1-9][0-9]) pk=${part%/*} pn=${part#*/} ;;
+    *) printf 'fleet-break-it: BREAK_PART=%s is not K/N or all\n' "$part" >&2; exit 2 ;;
+  esac
+  [ "$pk" -le "$pn" ] || { printf 'fleet-break-it: BREAK_PART=%s: K is past N\n' "$part" >&2; exit 2; }
+  mine=''
+  for r in $IDS; do type "drill_${r//-/_}" >/dev/null 2>&1 && mine="$mine $r"; done
+  # shellcheck disable=SC2086  # ids carry no whitespace
+  set -- $mine
+  pt=$#; lo=$(( (pk - 1) * pt / pn )); hi=$(( pk * pt / pn )); i=0
+  for r in $mine; do
+    [ "$i" -ge "$lo" ] && [ "$i" -lt "$hi" ] && PART_IDS="$PART_IDS $r"
+    i=$((i + 1))
+  done
+  PART_IDS="$PART_IDS "
+  printf 'fleet-break-it: part %s — drills %d..%d of %d\n' "$part" $((lo + 1)) "$hi" "$pt"
+fi
 while IFS= read -r r; do
   case "$r" in
-    '@'*) printf 'REG   %-20s %s\n' '—' "${r#@}"; continue ;;
+    '@'*) [ "${pk:-1}" -gt 1 ] || printf 'REG   %-20s %s\n' '—' "${r#@}"; continue ;;
     '!'*|'') continue ;;
   esac
   if [ -n "${BREAK_ONLY:-}" ]; then case " $BREAK_ONLY " in *" $r "*) ;; *) continue ;; esac; fi
+  if [ -n "$PART_IDS" ]; then case "$PART_IDS" in *" $r "*) ;; *) continue ;; esac; fi
   fn="drill_${r//-/_}"
   type "$fn" >/dev/null 2>&1 || continue
   SECS='' CAP='' WHY='' WHAT=''

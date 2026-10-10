@@ -4,7 +4,7 @@
 哪条演练在隔离环境里真做一遍（issue #1786，EPIC #1776 C10）。
 
 **规则：新发现一种弄坏 fleet 的方式，先在这张表加一行、在
-`bin/fleet-break-it-selftest.sh` 加一条演练（先红），再修（变绿）。凭据代理的 `cred-*` 几行由 `bin/fleet-break-it-cred-selftest.sh` 演练（#1975），表与它同样互相校验。** 一条演练 =
+`bin/fleet-break-it-selftest.sh` 加一条演练（先红），再修（变绿）。凭据代理的 `cred-*` 几行由 `bin/fleet-break-it-cred-selftest.sh` 演练（#1975），表与它同样互相校验。主脚本的演练按表中顺序分两半跑（#2955，各自一个测试、各自 240 s 上限）：它自己跑前一半，`bin/fleet-break-it-2-selftest.sh` 跑后一半，`BREAK_PART=all` 一次跑完。** 一条演练 =
 一个 `drill_<id>` 函数；`演练` 一列写它的 `id`。不在本仓库修的（别的仓库、别的单），
 `演练` 一列写 `登记：<单号>`，只登记不演练。
 

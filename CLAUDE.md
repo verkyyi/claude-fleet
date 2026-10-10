@@ -255,7 +255,7 @@ Do not install from memory: read the doc and work from it.
   `epic-hold-rotating`).
 - **A new way to break the fleet gets its row and its drill BEFORE its fix**
   (issue #1786). `docs/BREAK-IT.md` lists every known way (方式 · 后果 · 自愈方式 ·
-  演练); `bin/fleet-break-it-selftest.sh` does each one for real on isolated
+  演练); `bin/fleet-break-it-selftest.sh` (+ `-2-` for its second half, #2955) does each one for real on isolated
   sockets and a sandbox HOME and prints `PASS <id> <secs>s ≤<cap>s`. One row ⇔
   one `drill_<id>` (the test reds on either side missing); a way fixed in another
   repo is `登记：<ticket>`, listed, never drilled. Found a new one: add the row
