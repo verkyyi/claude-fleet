@@ -365,12 +365,14 @@ class C_Sweep(Sandbox):
 class O_SweepRemoves(Sandbox):
     """issue #2981: on a managed machine (expected.json) the sweep boots out and
     moves to the attic every fleet unit outside the expected set — a machine unit
-    the daemon does not run, an admin login's (never taken over) LaunchAgents, a
-    taken-over login's left behind, a gone login's — and a child's old
+    the daemon does not run, a taken-over login's left behind, a gone login's — and a child's old
     LaunchDaemon once the daemon can run that child itself; it leaves named a
     login that is not taken over (adopt is its road), a legacy child that could
     not start, a unit that will not unload, everything while a drill runs; each
-    existing login's own credential proxy and keep-labels are expected. A managed
+    existing login's own credential proxy and keep-labels are expected, and so is
+    every unit of an admin login (never taken over, #2842): its agent is the
+    machine's admin node, the one that opens a newcomer's login (issue #2997 —
+    the sweep had booted com.ccquota.agent.<admin> out on both machines). A managed
     machine's taken-over login carrying the client shell is retired by the sweep
     itself (--if-idle)."""
     def setUp(self):
@@ -436,8 +438,9 @@ class O_SweepRemoves(Sandbox):
         with open(os.path.join(self.d, "db", "keep-labels"), "w") as f:
             f.write("# mine\ncom.claude-fleet.mine\n")
         p = self.lay()
-        gone = ("gone-proxy", "machine", "legacy-ok", "bob-daemon", "bob-agent", "bob-agent2", "alice-agent")
-        stay = ("node", "own-proxy", "kept", "legacy-waits", "carol-daemon", "bob-own", "carol-agent")
+        gone = ("gone-proxy", "machine", "legacy-ok", "alice-agent")
+        stay = ("node", "own-proxy", "kept", "legacy-waits", "carol-daemon", "bob-own", "carol-agent",
+                "bob-daemon", "bob-agent", "bob-agent2")
         dry = self.run_sup("sweep", "--dry-run")
         self.assertEqual(dry.stdout.count("would boot out"), len(gone), dry.stdout)
         for k in p:
@@ -449,16 +452,17 @@ class O_SweepRemoves(Sandbox):
             self.assertFalse(os.path.exists(p[k]), "%s left: %s" % (k, r.stdout))
         for k in stay:
             self.assertTrue(os.path.exists(p[k]), "%s moved: %s" % (k, r.stdout))
-        self.assertIn("bob is an admin login", r.stdout)
+        self.assertNotIn("bob", r.stdout)     # the admin's units: expected, never named (#2997)
         self.assertIn("child c runs under com.claude-fleet.node", r.stdout)
         self.assertIn("launchd still runs child w: %s missing" % os.path.join(self.d, "nowhere"), r.stdout)
         self.assertIn("carol is not taken over — sudo fleet-node-supervisor.py account adopt carol", r.stdout)
         calls = open(self.lclog).read()
         uid = os.getuid()
         for t in ("bootout system/com.claude-fleet.memguard", "bootout system/com.claude-fleet.c-legacy",
-                  "bootout gui/%d/com.claude-fleet.dispatch" % uid, "bootout gui/%d/com.claude-fleet.spinner" % uid):
+                  "bootout gui/%d/com.claude-fleet.spinner" % uid):
             self.assertIn(t, calls)
-        self.assertNotIn("carol", calls)
+        for t in ("carol", "com.ccquota.agent.bob", "com.claude-fleet.x", "com.claude-fleet.dispatch"):
+            self.assertNotIn(t, calls)
         sw = self.state()["sweep"]
         self.assertEqual((sw["removed"], sw["extra"]), (len(gone), 3))
         st = self.run_sup("status").stdout
@@ -498,7 +502,7 @@ class O_SweepRemoves(Sandbox):
             hp.kill()
             hp.wait()
         r = self.run_sup("sweep")
-        self.assertFalse(os.path.exists(p["bob-agent"]), r.stdout)
+        self.assertFalse(os.path.exists(p["alice-agent"]), r.stdout)
 
     def test_a_command_line_naming_the_drill_holds_nothing(self):
         """issue #2991: only a process RUNNING the drill holds the sweep — an ssh
@@ -513,7 +517,7 @@ class O_SweepRemoves(Sandbox):
             until(5, lambda: subprocess.run(["pgrep", "-f", name], capture_output=True).stdout.count(b"\n") >= 2)
             r = self.run_sup("sweep")
             self.assertNotIn("held", r.stdout)
-            self.assertFalse(os.path.exists(p["bob-agent"]), r.stdout)
+            self.assertFalse(os.path.exists(p["alice-agent"]), r.stdout)
         finally:
             for d in decoys:
                 d.kill()

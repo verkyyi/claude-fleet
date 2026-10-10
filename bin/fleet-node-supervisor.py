@@ -66,11 +66,12 @@ machine's work ONCE, however many logins the machine carries:
                 and can be put back (`attic restore <id>`). On a managed machine
                 (expected.json) a fleet unit OUTSIDE its expected set is booted out
                 and moved there too (issue #2981): a machine unit this daemon does
-                not run, an admin login's (never taken over, #2842), a taken-over
-                login's left behind, a gone login's, and a child's old LaunchDaemon
+                not run, a taken-over login's left behind, a gone login's, and a child's old LaunchDaemon
                 once the child can start here (cred-proxy-shared). The expected set:
-                this daemon, expected.json's `labels`, <state>/keep-labels, and
-                each existing login's own credential proxy (credsep.<login>). A
+                this daemon, expected.json's `labels`, <state>/keep-labels, each
+                existing login's own credential proxy (credsep.<login>), and every
+                unit of an admin login (never taken over, #2842 — its agent is the
+                machine's admin node; issue #2997). A
                 login not taken over keeps its units, named (`account adopt` is
                 its road); a unit that will not unload stays, named; a running
                 fleet-onboard-drill.sh (a process running it, never a command line
@@ -2259,8 +2260,11 @@ def _extra_verdict(paths, d, src, label, legacy, managed):
     if login in managed:
         return True, "%s is taken over: %s runs its units" % (login, LABEL)
     if tenant_privileges(login)[0]:
-        # an admin is never taken over (#2842): what the fleet left in it is a leftover
-        return True, "%s is an admin login — the machine's admin, never a fleet login" % login
+        # an admin is never taken over (#2842), so ITS units are the machine's
+        # admin node — com.ccquota.agent.<admin> opens every login here, and its
+        # fleet's daemons are its own. Never the sweep's (issue #2997: booted out
+        # on both machines, the hub had no admin node and opened no newcomer).
+        return None, ""
     return False, "%s is not taken over — sudo fleet-node-supervisor.py account adopt %s moves them" % (login, login)
 
 
