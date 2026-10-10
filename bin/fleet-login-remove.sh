@@ -366,8 +366,33 @@ fi
 
 step 6 'delete the OS login (and its home)'
 quiesce   # again: the archive took its time, and launchd may have relaunched one
-show sudo sysadminctl -deleteUser "$LOGIN"
-if [ "$APPLY" = 1 ]; then
+# No Full Disk Access here (the node program, #2973) ⇒ the delete rides a local
+# ssh session first (issue #2994): sshd's sessions have it when Remote Login's
+# 「允许远程用户完全磁盘访问」 is on. fleet-login-remove-ssh.sh sets its key up
+# (idempotent) and runs the delete through the admin's forced command; a road
+# that cannot work says why and the direct road below runs as before. With
+# Full Disk Access the direct road is the only one.
+TCC_DB=${FLEET_LOGIN_REMOVE_TCC_DB:-/Library/Application Support/com.apple.TCC/TCC.db}
+RM_SSH=${FLEET_LOGIN_REMOVE_SSH:-$BIN/fleet-login-remove-ssh.sh}
+VIA=direct
+if [ "$APPLY" = 1 ] && ! sudo head -c 1 "$TCC_DB" >/dev/null 2>&1; then
+  ME_ADMIN=$(id -un 2>/dev/null)
+  if [ "$RM_SSH" = 0 ] || [ ! -f "$RM_SSH" ] || [ -z "$ME_ADMIN" ]; then
+    printf '  (no Full Disk Access here, and no local ssh road: %s)\n' "$RM_SSH"
+  else
+    printf '  (no Full Disk Access here: deleting through a local ssh session as %s)\n' "$ME_ADMIN"
+    show sudo bash "$RM_SSH" setup --admin "$ME_ADMIN"
+    sudo bash "$RM_SSH" setup --admin "$ME_ADMIN" 2>&1 | sed 's/^/    /'
+    show sudo bash "$RM_SSH" run "$LOGIN" --admin "$ME_ADMIN"
+    sudo bash "$RM_SSH" run "$LOGIN" --admin "$ME_ADMIN"; rc=$?
+    case "$rc" in
+      0|4) VIA=ssh ;;
+      *) printf '%s: WARN the local ssh road did not delete %s (exit %s, why above) — trying directly\n' "$PROG" "$LOGIN" "$rc" >&2 ;;
+    esac
+  fi
+fi
+[ "$VIA" = ssh ] || show sudo sysadminctl -deleteUser "$LOGIN"
+if [ "$APPLY" = 1 ] && [ "$VIA" = direct ]; then
   with_limit "$DELETE_SECS" sudo sysadminctl -deleteUser "$LOGIN"; rc=$?
   if [ "$rc" = 124 ]; then
     # Killed past its limit: what it did is read below, as for an exit 0.
@@ -395,7 +420,7 @@ if [ "$APPLY" = 1 ] && dscl . -read "/Users/$LOGIN" UniqueID >/dev/null 2>&1; th
     # without Full Disk Access may delete a user record (issue #2973) — the node
     # program's chain has none unless a person granted it. Say so, last: these
     # lines are what the node log keeps (accountWhy) and what the hub shows.
-    if ! sudo head -c 1 "${FLEET_LOGIN_REMOVE_TCC_DB:-/Library/Application Support/com.apple.TCC/TCC.db}" >/dev/null 2>&1; then
+    if ! sudo head -c 1 "$TCC_DB" >/dev/null 2>&1; then
       printf '%s: this process has no Full Disk Access (macOS privacy protection), so macOS refuses to delete a login from it — grant it to the machine daemon (fleet-node-supervisor.py status --check names the program), or run this from an admin ssh: sudo %q %s --delete-home --apply\n' "$PROG" "$0" "$LOGIN" >&2
     fi
     printf '%s: login %s is still on this machine (its record survived deleteUser and dscl -delete); stopped\n' "$PROG" "$LOGIN" >&2
@@ -419,10 +444,13 @@ step 7 "remove $LOGIN from the com.apple.access_* service groups"
 if [ "${#ACL_BY_NAME[@]}" = 0 ] && [ "${#ACL_BY_GUID[@]}" = 0 ]; then
   printf '  (no com.apple.access_* group lists %s)\n' "$LOGIN"
 fi
+# Read again first: the local ssh road (#2994) drops them as it deletes.
 for g in ${ACL_BY_NAME[@]+"${ACL_BY_NAME[@]}"}; do
+  acl_values "$g" GroupMembership | grep -Fxq -- "$LOGIN" || { printf '  (%s no longer lists %s)\n' "$g" "$LOGIN"; continue; }
   run_post sudo dscl . -delete "/Groups/$g" GroupMembership "$LOGIN"
 done
 for g in ${ACL_BY_GUID[@]+"${ACL_BY_GUID[@]}"}; do
+  acl_values "$g" GroupMembers | grep -Fxq -- "$GUID_TARGET" || { printf '  (%s no longer lists %s)\n' "$g" "$GUID_TARGET"; continue; }
   run_post sudo dscl . -delete "/Groups/$g" GroupMembers "$GUID_TARGET"
 done
 
