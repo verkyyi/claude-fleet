@@ -350,7 +350,10 @@ elif [ -n "$PWFILE" ]; then
 else
   PWFILE="$ONBOARD/password.txt"; PWGEN=1
 fi
-gen_password() { LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 24; }
+# 24 random letters and digits, ending in one of each: a machine's password
+# policy may want both (macmini: hasLetter · hasDigit), and a draw with no
+# digit is refused (dscl / sysadminctl 5402, C9 run 11)
+gen_password() { printf '%sa7' "$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 22)"; }
 
 # The pool: every regular file but dotfiles and editor backups — i.e. each
 # <label> token AND its <label>.conf (fleet-account.sh's acct_labels, .conf kept).
