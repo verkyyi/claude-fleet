@@ -12,6 +12,11 @@
 #   B. client + viewer token (the operator's: every login) → still `id -un` only
 #   C. FLEET_HUB_SESSIONS_USER still wins over the certificate
 #   D. a node (no client mode) + certificate → `id -un` only, as before
+#   F. a node + its node token (issue #3001: the hub cut the answer to the login's
+#      PERSON) → every login of theirs is kept: another login's row elsewhere, and
+#      one on THIS machine — never mistaken for this login's local row, even when
+#      its fleet shares this one's name, and no #node line for this machine; a
+#      login no person holds is refused (401) and reads as before
 #
 # Hermetic: curl is a PATH shim that answers 200 with a fixture; leg A mints its
 # own throwaway CA + certificate. No network. Exit 0 = pass.
@@ -86,6 +91,38 @@ bash "$HUBS" --refresh 2>"$WORK/err"
 out=$(cat "$G/remote_$S" 2>/dev/null)
 has   "D: a node + certificate still writes its cache" "$out" "wid:$F/issue-9"
 hasnt "D: …with \`id -un\`'s rows only, as before" "$out" "wid:$F/issue-7"
+
+# F (issue #3001): node mode over the node token keeps the person's other logins.
+HERE=$(hostname 2>/dev/null); HERE=${HERE%%.*}
+G2=22222222-2222-4222-8222-222222222222
+cat > "$WORK/sessions.json" <<EOF
+{"sessions": [
+ {"worker_id": "$F/issue-7", "machine_name": "m5", "os_user": "admin", "availability": "online",
+  "worker": {"issue": 7, "repo": "acme/app", "state": "working", "agent": "claude", "name": "admin-m5", "needs": ""}},
+ {"worker_id": "$G2/issue-8", "machine_name": "$HERE", "os_user": "admin", "fleet_id": "$G2",
+  "fleet_name": "$S", "availability": "online",
+  "worker": {"issue": 8, "repo": "acme/app", "state": "working", "agent": "claude", "name": "admin-here", "needs": ""}},
+ {"worker_id": "$F/issue-9", "machine_name": "m5", "os_user": "$ME", "availability": "online",
+  "worker": {"issue": 9, "repo": "acme/app", "state": "working", "agent": "claude", "name": "mine", "needs": ""}}],
+ "nodes": [{"machine_name": "m5", "availability": "online", "sessions": 2}]}
+EOF
+rm -f "$G/remote_$S" "$G"/hubsess.etag* "$G/fleet_logins" "$G/hubsess.nodetok.refused"
+printf 'CCQUOTA_TOKEN=node-tok\n' > "$WORK/conf/node.env"
+bash "$HUBS" --refresh 2>"$WORK/err"
+out=$(cat "$G/remote_$S" 2>/dev/null)
+has   "F: node + node token keeps another login's row elsewhere" "$out" "wid:$F/issue-7"
+has   "F: …and this login's own" "$out" "wid:$F/issue-9"
+row=$(printf '%s\n' "$out" | grep "^wid:$G2/issue-8")
+has   "F: …and another login's row on THIS machine" "$row" "admin-here"
+CHECKS=$((CHECKS + 1)); [ "$(printf '%s' "$row" | cut -d$'\037' -f11)" = 0 ] \
+  || fail "F: another login's row here is not this login's local row" "$row"
+hasnt "F: no #node line for this machine" "$out" "#node"$'\037'"$HERE"$'\037'
+has   "F: the fleet → login map carries the other login" "$(cat "$G/fleet_logins" 2>/dev/null)" "$G2	admin"
+printf 401 > "$WORK/code"; rm -f "$G/remote_$S" "$G"/hubsess.etag*
+bash "$HUBS" --refresh 2>/dev/null
+CHECKS=$((CHECKS + 1)); [ -f "$G/hubsess.nodetok.refused" ] \
+  || fail "F: a login no person holds is refused (401) and remembered, as before"
+rm -f "$WORK/conf/node.env" "$WORK/code" "$G/hubsess.nodetok.refused"
 
 # E (issue #2465): WHY a round did not stand sits beside hub_ok — refused (401)
 # told apart from no answer, its since kept while the reason holds, gone on 200.
