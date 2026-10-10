@@ -671,7 +671,8 @@ def tick(sess, now=None, judge=False, budget=None):
     book.save()
     return {"requested": requested, "parked": parked, "woken": woken, "writes": spent,
             "n_parked": len(book.d["parked"]), "n_pending": len(book.d["pending"]),
-            "list": [{"ref": r, "wait": p["wait"], "at": p.get("at", 0)} for r, p in sorted(book.d["parked"].items())]}
+            "list": [{"ref": r, "wait": p["wait"], "at": p.get("at", 0), "key": p.get("key", "")}
+                     for r, p in sorted(book.d["parked"].items())]}
 
 
 # ---- commands ---------------------------------------------------------------------

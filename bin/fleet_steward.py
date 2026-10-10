@@ -33,19 +33,25 @@ the person's clock (fleet_decision.zone). A due beat:
      fleet-control-read.sh carries it to the client's 「新任务」 row), and
   5b. gathers what finished batches leave for a person into ONE 「待你动手」 list
      and runs what it may (bin/fleet_followup.py, issue #2672 — its header is
-     the spec): @orch_todo carries the open count to the client's list;
+     the spec): @orch_todo carries the open count to the client's list,
+     @orch_todo_list the open items themselves (list_cell, issue #2913);
   5d. draws ONE member of each batch that finished (bin/fleet_sample.py, issue
      #2678 — its header is the spec) and, when it drew one, posts the sheet on
      this beat with the sample in its read-only area (no model turn);
   5c. moves the parks on (bin/fleet_park.py, issue #2671 C3): a stuck session is
      asked for its handoff, parked once it wrote one (or its grace ran out), and
      woken on the same conversation when what it waits for arrives — within the
-     same write budget; @orch_park carries the count to the client's 「停放 N」.
+     same write budget; @orch_park carries the count to the client's 「停放 N」,
+     @orch_park_list who is parked and on what (list_cell, issue #2913).
      FLEET_STEWARD_PARK=0 leaves parking off. A pending park is advanced on every
      minute's call, due or not (its grace is 5 minutes, the beat 10-60);
   6. ONLY when there is something for the model — a new open question, a BLOCKED /
      FAILED report, a batch with no driver — hands the steward window one turn
      (`[steward] …`). A calm beat calls no model (共同约定 · 怎么算成功).
+
+`todo-done --id <id>` ticks one 「待你动手」 item as the person's (issue #2913: the
+client's list, through the steward) — the next beat records it on its batches
+and redraws the desk ticket with the box ticked, as a tick on the ticket does.
 
 `answer` is the one road an answer takes: the steward's own (`--by steward`,
 `--source` = where the batch's charter says so) and the person's from the
@@ -66,6 +72,7 @@ FLEET_STEWARD_BACKSTOP_CMD (argv + key --pr N --parent P), FLEET_STEWARD_STAMP_C
 (argv + N: the decide count), and fleet_decision.py's own three.
 """
 import argparse
+import base64
 import datetime as dt
 import fcntl
 import json
@@ -229,6 +236,28 @@ def stamp_decide(sess, n, wins, opt="@orch_decide"):
             args = ["tmux", "-L", socket(sess), "set-window-option", "-t", w["wid"]]
             subprocess.run(args + ([opt, str(n)] if n else ["-u", opt]),
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+
+
+# The lists the client's 停放 / 待你动手 rows open into (issue #2913): what is
+# parked, on what, since when, and the open 待你动手 items — at most LIST_MAX, each
+# string clipped, as compact JSON in base64url without padding: one token of
+# [-A-Za-z0-9_], so it rides a tmux option, the inventory's tag and orch_<sess>'s
+# column untouched. Empty ⇒ the option unset, no tag — byte for byte as before.
+LIST_MAX = 12
+
+
+def list_cell(payload):
+    if not payload or not payload.get("i"):
+        return ""
+    raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    return base64.urlsafe_b64encode(raw.encode("utf-8")).decode("ascii").rstrip("=")
+
+
+def park_cell(lst):
+    """park_step's list → the @orch_park_list cell: ref, key, wait, since."""
+    return list_cell({"i": [{"r": e.get("ref", "")[:80], "k": (e.get("key") or "")[:40],
+                             "w": " ".join(e.get("wait") or [])[:80], "a": int(e.get("at") or 0)}
+                            for e in (lst or [])[:LIST_MAX]]})
 
 
 def park_on():
@@ -649,6 +678,7 @@ def cmd_beat(a):
         st.d["parked"] = pk.pop("list")
         delta["park"] = pk
         stamp_decide(sess, pk["n_parked"], wins, "@orch_park")
+        stamp_decide(sess, park_cell(st.d["parked"]), wins, "@orch_park_list")
     hf, ha, hd, delta["health"] = health.check(st, sess, socket(sess), repo_of_slug(sess), now_t, doctor_rows, tr)
     delta["deferred"] += hd
     delta["health_deferred"] = hd
@@ -884,6 +914,27 @@ def cmd_followups(a):
     return 0
 
 
+def cmd_todo_done(a):
+    """One 「待你动手」 item ticked by the person (issue #2913) — the client's list
+    sends it through the steward; the next beat writes it back and redraws the
+    desk ticket. rc 0 ticked (or already closed), 1 no such item."""
+    st = State()
+    t = fu.todo(st)
+    item = t["items"].get(a.id)
+    if not item:
+        sys.stderr.write("fleet-steward-tick: no todo item %s\n" % a.id)
+        return 1
+    if item["state"] in fu.CLOSED:
+        print("already %s" % item["state"])
+        return 0
+    fu.finish(st, item, "person", int(time.time()), {"followups": {"done": []}})
+    sess = session(a.session)
+    fu.stamp(sys.modules[__name__], sess, st, windows(sess))
+    st.save()
+    print("ticked %s" % a.id)
+    return 0
+
+
 def cmd_card(a):
     st = State()
     print("\n".join(st.d.get("card") or [tr("steward_card_none")]))
@@ -912,13 +963,17 @@ def main(argv=None):
     p.add_argument("--source")
     p.add_argument("--by", choices=("steward", "person"), default="steward")
     p.add_argument("--session")
+    p = sub.add_parser("todo-done")
+    p.add_argument("--id", required=True)
+    p.add_argument("--session")
     p = sub.add_parser("followups")
     p.add_argument("--watch", action="append")
     p.add_argument("--json", action="store_true")
     p.add_argument("--session")
     a = ap.parse_args(argv)
     fn = {"beat": cmd_beat, "delta": cmd_delta, "answer": cmd_answer, "sheet": cmd_sheet, "card": cmd_card,
-          "followups": cmd_followups, "page": cmd_page, "say": cmd_say}.get(a.cmd)
+          "followups": cmd_followups, "page": cmd_page, "say": cmd_say,
+          "todo-done": cmd_todo_done}.get(a.cmd)
     if not fn:
         ap.print_help(sys.stderr)
         return 2

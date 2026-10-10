@@ -497,6 +497,20 @@ eq "P: …the proxy's local window id alone never matched a \`wid:\` row (the #1
 : > "$TMUX_LOG"
 PATH="$SHIMPATH" FLEET_SHELL=1 FLEET_SESSION=$SH DASH_FOLD_PLAIN=1 bash "$BIN/dash-fold-toggle.sh" collapse hdr:acme/tool >/dev/null 2>&1
 has "P: ← on a shell heading writes the fold to the shell's OWN session" "$(cat "$TMUX_LOG")" "set-option -t =$SH: @repo_fold acme-tool"
+# 已结束 on the shell (issue #2913): a done no-issue row of the hub's goes under
+# the folded 已结束 heading, the shell's own @repo_fold `ended:open` opens it, and
+# → on the heading writes that token to the shell's own session.
+printf 'wid:%s/scratch-4\037m4\037online\037\037\037done\037claude\037完了四\037\037\0370\037\n' "$F" >> "$G/remote_$SH"
+pe=$(FLEET_SHELL=1 shell_side)
+has "P: a done no-issue hub row folds under 已结束 on the shell" "$(shdrs "$pe")" "▸ 已结束 (1);"
+hasnt "P: …hidden while folded" "$(sorder "$pe")" "完了四"
+po=$(REPO_FOLD=ended:open FLEET_SHELL=1 shell_side)
+has "P: the shell's ended:open opens it" "$(sorder "$po")" "完了四"
+hasnt "P: …the heading open" "$(shdrs "$po")" "▸ 已结束"
+: > "$TMUX_LOG"
+PATH="$SHIMPATH" FLEET_SHELL=1 FLEET_SESSION=$SH DASH_FOLD_PLAIN=1 bash "$BIN/dash-fold-toggle.sh" expand hdr:ended >/dev/null 2>&1
+has "P: → on 已结束 writes ended:open to the shell's OWN session" "$(cat "$TMUX_LOG")" "set-option -t =$SH: @repo_fold ended:open"
+shell_cache
 : > "$TMUX_LOG"
 PATH="$SHIMPATH" FLEET_SESSION=$SH DASH_FOLD_PLAIN=1 bash "$BIN/dash-fold-toggle.sh" collapse hdr:acme/tool >/dev/null 2>&1
 hasnt "P: …a node with no conf repos writes nothing" "$(cat "$TMUX_LOG")" "@repo_fold"

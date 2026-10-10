@@ -478,6 +478,17 @@ def write_back(fs, st, delta):
             item["writeback"].pop(0)
 
 
+def todo_cell(fs, t):
+    """The open items as @orch_todo_list (issue #2913, fs.list_cell): id, the
+    line the ticket shows, the batch it came from, its due day — and the desk
+    ticket's link, where a tick lands."""
+    items = sorted((i for i in t["items"].values() if i["state"] not in CLOSED), key=lambda i: i["id"])
+    return fs.list_cell({"u": (t.get("desk_url") or "")[:200], "i": [
+        {"id": i["id"], "w": (fs.tr("steward_todo_kind_" + i["kind"].replace("-", "_")) + "：" + i["what"])[:90],
+         "s": ((i.get("sources") or [{}])[0].get("epic") or "")[:80], "d": i.get("due") or ""}
+        for i in items[:fs.LIST_MAX]]})
+
+
 def stamp(fs, sess, st, wins):
     n = sum(1 for i in todo(st)["items"].values() if i["state"] not in CLOSED)
     st.d["todo_open"] = n
@@ -485,10 +496,13 @@ def stamp(fs, sess, st, wins):
     if cmd:
         subprocess.run(cmd.split() + [str(n)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
         return
+    cell = todo_cell(fs, todo(st))
     for w in wins:
         if w["role"] == "orchestrator":
             args = ["tmux", "-L", fs.socket(sess), "set-window-option", "-t", w["wid"]]
             subprocess.run(args + (["@orch_todo", str(n)] if n else ["-u", "@orch_todo"]),
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+            subprocess.run(args + (["@orch_todo_list", cell] if cell else ["-u", "@orch_todo_list"]),
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
 
 

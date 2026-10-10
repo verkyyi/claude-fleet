@@ -748,3 +748,4 @@ FLEET_REDACT                       seam: python|awk — which redactor fleet-doc
 FLEET_BUNDLE_DOCTOR_CMD            seam: a command run instead of the doctor by fleet-doctor-bundle.sh (#2890)
 FLEET_BUNDLE_NET                   seam: 0 — fleet-doctor-bundle.sh asks no hub and runs no ssh (#2890)
 FLEET_BUNDLE_WHOAMI_GAP            seam: seconds between fleet-doctor-bundle.sh's three egress reads (default 10) (#2890)
+FLEET_SIDEBAR_STEWARD_LOCAL        seam: 1 = fleet-sidebar-steward.sh runs wake / tick on this machine without asking fleet_win_for_key steward (#2913)

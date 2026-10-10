@@ -153,11 +153,13 @@ def _orch(cols):
 _orch(['working', '', ''])
 before = sidebar.with_portal([r12], None, 'x')[0]
 assert sidebar.row_num(before) == '' and sidebar.orch_busy('x') == sidebar.tr('orch_busy_hint'), before
+# the glyph is the working spinner's frame, which turns every 0.25 s: never compared
+_ng = lambda r: r[:2] + r[3:]
 _orch(['working', '', '', '0'])
-assert sidebar.with_portal([r12], None, 'x')[0] == before and sidebar.orch_busy('x') == '', 'a 0 count: as before, no bar line'
+assert _ng(sidebar.with_portal([r12], None, 'x')[0]) == _ng(before) and sidebar.orch_busy('x') == '', 'a 0 count: as before, no bar line'
 _orch(['working', '', '', '2'])
 top = sidebar.with_portal([r12], None, 'x')[0]
-assert sidebar.row_num(top) == sidebar.tr('orch_queue_row_fmt', '2') and top[:9] == before[:9], top
+assert sidebar.row_num(top) == sidebar.tr('orch_queue_row_fmt', '2') and _ng(top[:9]) == _ng(before[:9]), top
 for w in (24, 30):
     line = sidebar.row_text(' ', top[2], top[4], top[3], top[5], w, sidebar.row_num(top))
     assert sidebar.width_of(line) <= w and line.endswith(sidebar.tr('orch_queue_row_fmt', '2')), repr(line)

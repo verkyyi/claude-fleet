@@ -217,7 +217,7 @@ case "$mode" in
     # own report, @agent_status as bin/fleet-status-7501.py stamped it (one line of
     # JSON, no tab); inventory_row turns it into the worker's `status_kind` /
     # `status_msg`. Empty on a window whose agent never said anything.
-    ctxs=$(tmux -u -L "$sock" list-windows -t "=$sess" ${lwf[@]+"${lwf[@]}"} -F $'#{window_id}\t=#{?@ctx_left,#{@ctx_left},#{?@ctx_pct,#{e|-:100,#{@ctx_pct}},}}\t=#{@ctx_band}\t=#{@ctx_ts}\t=#{?@model,#{@model},#{?#{==:#{@cc_agent},codex},#{@cc_model},}}\t=#{@effort}\t=#{@agent_status}\t=#{@orch_queue}\t=#{@orch_decide}\t=#{@orch_todo}\t=#{@orch_park}\t=#{@orch_page}' 2>/dev/null) || ctxs=''
+    ctxs=$(tmux -u -L "$sock" list-windows -t "=$sess" ${lwf[@]+"${lwf[@]}"} -F $'#{window_id}\t=#{?@ctx_left,#{@ctx_left},#{?@ctx_pct,#{e|-:100,#{@ctx_pct}},}}\t=#{@ctx_band}\t=#{@ctx_ts}\t=#{?@model,#{@model},#{?#{==:#{@cc_agent},codex},#{@cc_model},}}\t=#{@effort}\t=#{@agent_status}\t=#{@orch_queue}\t=#{@orch_decide}\t=#{@orch_todo}\t=#{@orch_park}\t=#{@orch_page}\t=#{@orch_park_list}\t=#{@orch_todo_list}' 2>/dev/null) || ctxs=''
     # Column 30 (issue #2505): `test=1` on a session the TEST identity's client
     # placed (@test_identity, `fleet --test-identity`): the person's list hides
     # it, `fleet ls` marks it 测试. Empty on every other window.
@@ -241,7 +241,12 @@ case "$mode" in
     # the last tag (after orchdec= / orchtodo= when they are) — read first.
     # Column 35 (issue #2735): `orchpage=<url>` — the steward's page (@orch_page,
     # fleet_steward_page.py's doc-preview link) → `orch_<sess>`'s `page=<url>`, which
-    # 「新任务」's menu opens. Only with a link, after every other tag — read first.
+    # 「新任务」's menu opens. Only with a link, after orchpark= — read before it.
+    # Columns 36-37 (issue #2913): `orchparkl=<cell>` / `orchtodol=<cell>` — who is
+    # parked on what, and the open 待你动手 items (@orch_park_list / @orch_todo_list,
+    # fleet_steward.py list_cell: base64url JSON, one [-A-Za-z0-9_] token, ≤4000) →
+    # `orch_<sess>`'s `parkl=` / `todol=`, what the client's two rows open into.
+    # Only when set, after every other tag — read first.
     ttl=$'\n'; drepo=''; _nr=0
     while IFS= read -r _r; do
       [ -n "$_r" ] || continue
@@ -327,13 +332,17 @@ case "$mode" in
       [ -z "$t" ] && [ -z "$c2" ] && [ -z "$wepic" ] && t=$wtl
       row=$wid$'\t'$c2$'\t'$c3$'\t'$wt$'\t'$rest
       b=''; [ -z "$busy" ] || b=$(printf '%s\n' "$busy" | awk -v w="$wid" '$1 == w { print $2; exit }')
-      cl='' cb='' cts='' cm='' ce='' cas='' cq='' cdec='' ctodo='' cpark='' cpage=''
+      cl='' cb='' cts='' cm='' ce='' cas='' cq='' cdec='' ctodo='' cpark='' cpage='' cparkl='' ctodol=''
       if [ -n "$ctxs" ]; then
         # each field `=`-led, so no field is ever empty: a TAB is IFS whitespace and
         # `read` would collapse an empty one (no \037 here — an older tmux prints it as _)
-        IFS=$'\t' read -r _ cl cb cts cm ce cas cq cdec ctodo cpark cpage <<<"$(printf '%s\n' "$ctxs" | awk -F'\t' -v w="$wid" '$1 == w { print; exit }')"
-        cl=${cl#=} cb=${cb#=} cts=${cts#=} cm=${cm#=} ce=${ce#=} cas=${cas#=} cq=${cq#=} cdec=${cdec#=} ctodo=${ctodo#=} cpark=${cpark#=} cpage=${cpage#=}
-        [ "$wrole" = orchestrator ] || { cq=''; cdec=''; ctodo=''; cpark=''; cpage=''; }
+        IFS=$'\t' read -r _ cl cb cts cm ce cas cq cdec ctodo cpark cpage cparkl ctodol <<<"$(printf '%s\n' "$ctxs" | awk -F'\t' -v w="$wid" '$1 == w { print; exit }')"
+        cl=${cl#=} cb=${cb#=} cts=${cts#=} cm=${cm#=} ce=${ce#=} cas=${cas#=} cq=${cq#=} cdec=${cdec#=} ctodo=${ctodo#=} cpark=${cpark#=} cpage=${cpage#=} cparkl=${cparkl#=} ctodol=${ctodol#=}
+        [ "$wrole" = orchestrator ] || { cq=''; cdec=''; ctodo=''; cpark=''; cpage=''; cparkl=''; ctodol=''; }
+        case "$cparkl" in *[!-A-Za-z0-9_]*) cparkl='' ;; esac
+        case "$ctodol" in *[!-A-Za-z0-9_]*) ctodol='' ;; esac
+        [ "${#cparkl}" -le 4000 ] || cparkl=''
+        [ "${#ctodol}" -le 4000 ] || ctodol=''
         case "$cdec" in *[!0-9]*) cdec='' ;; esac
         case "$ctodo" in *[!0-9]*) ctodo='' ;; esac
         case "$cpark" in *[!0-9]*) cpark='' ;; esac
@@ -351,6 +360,8 @@ case "$mode" in
       [ -n "$ctodo" ] && od="$od"$'\t'"orchtodo=$ctodo"
       [ -n "$cpark" ] && od="$od"$'\t'"orchpark=$cpark"
       [ -n "$cpage" ] && od="$od"$'\t'"orchpage=$cpage"
+      [ -n "$cparkl" ] && od="$od"$'\t'"orchparkl=$cparkl"
+      [ -n "$ctodol" ] && od="$od"$'\t'"orchtodol=$ctodol"
       printf '%s\tbusy=%s\tborn=%s\tcfg=%s\ttitle=%s\treap=%s\tdetail=%s\trole=%s\tepic=%s\tepicstale=%s\tbackfill=%s\tctxleft=%s\tctxband=%s\tctxts=%s\tmodel=%s\teffort=%s\tagentstatus=%s\ttest=%s\torchq=%s%s\n' "$row" "$b" "$born" "$FCFG_STATE" "$t" "$wreap" "$wdet" "$wrole" "$wepic" "$estale" "$wbf" "$cl" "$cb" "$cts" "$cm" "$ce" "$cas" "$wtest" "$cq" "$od"
     done <<<"$rows"
     ;;

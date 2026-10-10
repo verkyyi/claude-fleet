@@ -308,9 +308,18 @@ def inventory_row(parts):
     (@orch_park) → `orch_park` (an int).
     Column 35 (issue #2735): `orchpage=<url>` — the steward's page (@orch_page) →
     `orch_page` (an http(s) link, ≤300 characters); the last tag when written,
-    read first."""
+    read first.
+    Columns 36-37 (issue #2913): `orchparkl=<cell>` / `orchtodol=<cell>` — who is
+    parked on what and the open 待你动手 items (fleet_steward.py list_cell) →
+    `orch_park_list` / `orch_todo_list`, the cell kept as it came (one
+    [-A-Za-z0-9_] token ≤4000, the client decodes it); the last tags, read first."""
     parts = list(parts)
     extra = {}
+    for tag, field in (("orchtodol=", "orch_todo_list"), ("orchparkl=", "orch_park_list")):
+        if len(parts) >= 32 and parts[-1].startswith(tag):
+            c = parts.pop()[len(tag):]
+            if re.fullmatch(r"[-A-Za-z0-9_]{1,4000}", c):
+                extra[field] = c
     if len(parts) >= 32 and parts[-1].startswith("orchpage="):
         u = parts.pop()[9:]
         if re.fullmatch(r"https?://[-A-Za-z0-9._~:/?#@+,=%]{1,292}", u):
