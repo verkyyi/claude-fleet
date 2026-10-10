@@ -1,0 +1,51 @@
+# Remote debugging (claude-fleet#2891 code, wired by #2940): the diagnostic
+# bundles a debug ticket uploads live under /debug on the OSS bucket
+# `haowan24-fleet-releases` — its own PV (path /debug), never inside /releases:
+# /releases is the public release store, a bundle is sensitive and deleted
+# after 7 days. Same bucket, RAM user and Secret `ccquota-release-oss` as
+# release-volume.yaml; both replicas write it at once during a rolling release,
+# hence RWX. Not in kustomization.yaml — hub-deploy's Role may not create a PV
+# or a claim — so a person applies this file once, with an admin kubeconfig,
+# before deployment-debug.yaml ships (../../RUNBOOK.md «远端调试»):
+#   kubectl apply -n new-deploy -f deploy/k8s/overlays/prod/debug-volume.yaml
+# Retain: deleting the claim keeps the bucket and its bundles.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: ccquota-debug-oss
+  labels:
+    alicloud-pvname: ccquota-debug-oss
+spec:
+  capacity:
+    storage: 20Gi
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  csi:
+    driver: ossplugin.csi.alibabacloud.com
+    volumeHandle: ccquota-debug-oss
+    nodePublishSecretRef:
+      name: ccquota-release-oss
+      namespace: new-deploy
+    volumeAttributes:
+      bucket: haowan24-fleet-releases
+      path: /debug
+      url: oss-cn-shenzhen-internal.aliyuncs.com
+      # uid/gid 10001 as the image runs (base/deployment.yaml); umask 077 —
+      # a bundle is readable by the hub only; no stat cache, so a bundle the
+      # other replica just wrote is seen at once
+      otherOpts: "-o allow_other -o uid=10001 -o gid=10001 -o umask=077 -o max_stat_cache_size=0"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ccquota-debug
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: ""
+  volumeName: ccquota-debug-oss
+  resources:
+    requests:
+      storage: 20Gi

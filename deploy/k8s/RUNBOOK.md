@@ -338,3 +338,32 @@ kubectl -n new-deploy get pvc ccquota-releases     # Bound 之后才合并带挂
 - 关掉：删 `deployment-release.yaml` 和 kustomization 里它那一行；桶和 PV 是 Retain，留着无害。
 - 公钥：`curl -fsS https://claudefleet.24haowan.com/v1/fleet/release/key`。换钥匙 = 新 keygen、
   `kubectl create secret … --dry-run=client -o yaml | kubectl replace -f -`、滚一次；已装机器钉的旧公钥要跟着换。
+
+## 远端调试（#2891 代码，#2940 接上）
+
+入口发调试票（`/v1/fleet/debug/*`、`GET /debug`、`/install` 里的领票逻辑），诊断包收在
+同一个 OSS 桶 `haowan24-fleet-releases` 的 `debug/` 下，两个副本同时挂在 `/debug`。
+诊断包是 7 天即删的敏感数据，**不进 `/releases`**（那是对外发布目录），所以有自己的 PV。
+
+| 东西 | 谁建 | 内容 |
+|---|---|---|
+| Secret `ccquota-debug-key` | 人 | 键 `debug-key`：64 字节 hex（票的 HMAC 钥匙，≥ 32 字节）；只读挂到 `/etc/ccquota-debug`（0440，fsGroup 10001） |
+| Secret `ccquota-release-oss` | 已有 | 与发布包共用（同一桶、同一 RAM 用户） |
+| PV `ccquota-debug-oss` + PVC `ccquota-debug` | 人，一次 | `overlays/prod/debug-volume.yaml`（桶内 `path: /debug`，umask 077）——部署 Role 建不了 PV / PVC |
+| 环境变量 + 两个挂载 | hub-deploy | `overlays/prod/deployment-debug.yaml`（`CCQUOTA_FLEET_DEBUG_DIR=/debug`、`CCQUOTA_FLEET_DEBUG_KEY=<文件路径>`） |
+
+```sh
+kubectl apply -n new-deploy -f deploy/k8s/overlays/prod/debug-volume.yaml
+kubectl -n new-deploy get pvc ccquota-debug        # Bound 之后才合并带挂载的那次发布
+```
+
+- 桶里的 `debug/` 前缀要先有（OSS CSI 挂子目录前要求它存在）：在挂着 `/releases` 的 pod 里
+  `mkdir -p /releases/debug` 一次即可，之后入口只经 `/debug` 读写它。
+- 上线后入口日志：`fleet: debug tickets on, bundles in /debug; debugger (none); feed to (none)`；
+  `curl -s -o /dev/null -w '%{http_code}' https://claudefleet.24haowan.com/v1/fleet/debug/ticket` 是 401（无票），
+  不再是 404。
+- `CCQUOTA_FLEET_DEBUG_LOGIN` / `_NOTIFY`（`<machine>/<login>`）等诊断员登录建好后再配；
+  不配 = 诊断单「没看完」转管理员，发票和收包照常。
+- 发布前的 `--check`：钥匙文件在 `/etc/ccquota-debug`，只有新渲染挂它，hub-deploy 把它写进
+  `CCQUOTA_CHECK_UNMOUNTED`，`--check` 报告而不拒绝。
+- 关掉：删 `deployment-debug.yaml` 和 kustomization 里它那一行；PV 是 Retain，留着无害。

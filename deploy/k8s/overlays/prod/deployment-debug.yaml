@@ -1,0 +1,41 @@
+# Remote debugging (#2891 code, #2940 wiring): the ticket signing key from its
+# own Secret `ccquota-debug-key` (key `debug-key`, 64 hex bytes, made by a
+# person — never here), read-only and group-readable like the release key
+# (fsGroup 10001); the bundles on their own OSS volume (debug-volume.yaml).
+# CCQUOTA_FLEET_DEBUG_LOGIN / _NOTIFY stay unset until the debugger login
+# exists (a report then goes unfinished, to the admin). hub-deploy's
+# pre-switch --check runs this env on the live pod's volumes: the key under
+# /etc/ccquota-debug is then named in CCQUOTA_CHECK_UNMOUNTED and reported,
+# not refused (cmd/ccquota/hub.go loadFleetDebug). Roll back: delete this
+# patch and its line in kustomization.yaml.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ccquota-hub
+spec:
+  template:
+    spec:
+      containers:
+        - name: ccquota
+          env:
+            - name: CCQUOTA_FLEET_DEBUG_DIR
+              value: /debug
+            - name: CCQUOTA_FLEET_DEBUG_KEY
+              value: /etc/ccquota-debug/debug-key
+          volumeMounts:
+            - name: debug-key
+              mountPath: /etc/ccquota-debug
+              readOnly: true
+            - name: debug
+              mountPath: /debug
+      volumes:
+        - name: debug-key
+          secret:
+            secretName: ccquota-debug-key
+            defaultMode: 0440
+            items:
+              - key: debug-key
+                path: debug-key
+        - name: debug
+          persistentVolumeClaim:
+            claimName: ccquota-debug
