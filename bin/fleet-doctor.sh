@@ -1334,6 +1334,17 @@ _cc=$(python3 "$(dirname "$0")/fleet-connect.py" --cert-check 2>/dev/null) && [ 
   *)     fail cert "${_cc#*	}" ;;
 esac
 
+# --- tls (issue #2878): can the python fleet runs on verify the hub's certificate?
+# A python3 with no CA store (python.org / Homebrew / pyenv, no certifi) kept
+# `fleet login` and the keeper's renewal failing CERTIFICATE_VERIFY_FAILED while
+# curl reached the hub. One handshake through bin/fleet_tls.py's context; FAIL
+# names the python, the CA sources it tried and the fix. No hub prints nothing.
+_tl=$(python3 "$(dirname "$0")/fleet-connect.py" --tls-check 2>/dev/null) && [ -n "$_tl" ] && case "$_tl" in
+  PASS*) pass tls "${_tl#*	}" ;;
+  WARN*) warn tls "${_tl#*	}" ;;
+  *)     fail tls "${_tl#*	}" ;;
+esac
+
 # --- agent (issue #1525): every login's node agent on this machine vs stable ---
 # Same reading as `fleet-node-upgrade.sh --status`: the bytes on disk AND the
 # version the hub sees running (an agent upgraded on disk but never restarted is

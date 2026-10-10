@@ -900,6 +900,26 @@ What the drill found and where it went:
   goes), the machines page's 「移除」 does it from the hub, and `fleet-login-remove.sh` runs the
   leave as the login it deletes.
 
+- **`fleet login` failed `CERTIFICATE_VERIFY_FAILED` right after the line worked** (#2878,
+  2026-10-10, a colleague's new Mac). curl reads the system keychain; the first `python3` on
+  PATH (python.org / Homebrew / pyenv) reads none, and with no (or an old) `certifi` urllib had
+  nothing to verify the hub with — the keeper's renewal failed the same way. Now every
+  hub-facing Python builds its context through `bin/fleet_tls.py`: the UNION of
+  `FLEET_CA_BUNDLE` / `SSL_CERT_FILE`, `certifi`, the macOS system roots (`security export …
+  SystemRootCertificates.keychain` into `~/.cache/claude-fleet/ca-roots.pem`, refreshed daily)
+  and OpenSSL's default paths; a failure names the python, the sources it tried and the fix.
+  The install line records Apple's `/usr/bin/python3` on macOS (when the developer tools are
+  there) as `$FLEET_CONF_DIR/python` and links it as `$FLEET_CONF_DIR/pybin/python3`, which
+  `fleet` puts first on PATH — the launcher, the keeper and every `#!/usr/bin/env python3`
+  under it run on it. `fleet doctor`'s **`tls`** row does one verified handshake with the hub
+  from that python: FAIL says what to run. By hand on a computer installed before:
+
+  ```sh
+  security export -t certs -f pemseq -k /System/Library/Keychains/SystemRootCertificates.keychain -o ~/.config/ca-roots.pem
+  echo 'export FLEET_CA_BUNDLE=$HOME/.config/ca-roots.pem' >> ~/.zshrc && exec zsh
+  fleet login
+  ```
+
 **The person's own steps** (never counted as 要人帮): the WeCom scan, and — when the hub has not
 yet given them a login on any machine — the hub's page says so; that one IS the operator's
 (`fleet_accounts.go`: only the operator assigns logins), so give the colleague a login BEFORE

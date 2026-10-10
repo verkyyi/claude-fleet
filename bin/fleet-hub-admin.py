@@ -45,6 +45,12 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+try:  # the ONE TLS context for the hub: every CA source this computer has (claude-fleet#2878)
+    import fleet_tls
+    fleet_tls.install()
+except ImportError:
+    fleet_tls = None
+
 CONF_DIR = os.environ.get("FLEET_CONF_DIR") or os.path.expanduser("~/.config/claude-fleet")
 SETTINGS_PATH = "/v1/fleet/settings"
 USERS_PATH = "/v1/fleet/users"
@@ -113,7 +119,7 @@ def call(a, method, path, body=None):
     except urllib.error.HTTPError as e:
         code, raw = e.code, e.read()
     except (urllib.error.URLError, OSError, ValueError) as e:
-        die("could not reach %s: %s" % (url, e), 3)
+        die("could not reach %s: %s%s" % (url, e, (" — " + fleet_tls.hint(e)) if fleet_tls and fleet_tls.hint(e) else ""), 3)
     try:
         resp = json.loads(raw.decode() or "{}")
     except ValueError:

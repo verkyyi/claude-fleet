@@ -164,6 +164,12 @@ import time
 import urllib.error
 import urllib.request
 
+try:  # the ONE TLS context for the hub: every CA source this computer has (claude-fleet#2878)
+    import fleet_tls
+    fleet_tls.install()
+except ImportError:
+    fleet_tls = None
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_ROOT = os.path.dirname(HERE)
 CONF_DIR = os.environ.get("FLEET_CONF_DIR") or os.path.expanduser("~/.config/claude-fleet")

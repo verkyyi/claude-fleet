@@ -127,6 +127,12 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+try:  # the ONE TLS context for the hub: every CA source this computer has (claude-fleet#2878)
+    import fleet_tls
+    fleet_tls.install()
+except ImportError:
+    fleet_tls = None
+
 RELAY_PATH = "/v1/ssh-relay/connect"
 SIG_NAMESPACE = "fleet-relay@claude-fleet"
 ROUTES_PATH = "/v1/fleet/routes"
@@ -251,6 +257,12 @@ def load_hub_conf():
         die("cannot read %s: %s" % (path, e))
 
 
+def tls_hint(e):
+    """' — <why + fix>' when e is a certificate verify failure (claude-fleet#2878), else ''."""
+    h = fleet_tls.hint(e) if fleet_tls else ""
+    return (" — " + h) if h else ""
+
+
 def cert_paths():
     key = os.environ.get("FLEET_CERT") or os.path.join(os.path.expanduser("~"), ".ssh", "fleet-cert")
     return key, key + "-cert.pub"
@@ -267,7 +279,7 @@ class WS:
         port = u.port or (443 if secure else 80)
         raw = socket.create_connection((u.hostname, port), timeout=timeout)
         if secure:
-            ctx = ssl.create_default_context()
+            ctx = fleet_tls.context() if fleet_tls else ssl.create_default_context()
             raw = ctx.wrap_socket(raw, server_hostname=u.hostname)
         self.sock = raw
         self.wlock = threading.Lock()
@@ -901,6 +913,9 @@ def ensure_cert(login, hub, verbose, force=False):
         say("fleet · 续期没成功，先用手里还有 %s 的证书\n" % fmt_left(left))
         return "kept"
     if rc != login.NEEDS_SCAN:
+        bad = fleet_tls.check(hub) if fleet_tls else (None, "")
+        if bad[0] is False:  # this python cannot verify the hub (claude-fleet#2878)
+            die("renewal failed and no valid certificate is left — %s" % bad[1], 1)
         die("renewal failed and no valid certificate is left — check the hub URL (%s) and the network" % hub, 1)
     say("fleet · 需要登录（第一次，或 7 天没用，或设备被吊销）\n")
     login.cmd_login(["--hub", hub])  # browser (or QR), polls, writes the certificate; dies on failure
@@ -950,7 +965,7 @@ def pick_named(want, hub, token):
             if getattr(e, "code", "") == "principal_mismatch":
                 sys.stderr.write("fleet · %s；先按 %s 里的机器\n" % (e, ssh_config_snippet_path()))
             else:
-                sys.stderr.write("fleet · 入口连不上（%s），按 %s 里的机器\n" % (e, ssh_config_snippet_path()))
+                sys.stderr.write("fleet · 入口连不上（%s%s），按 %s 里的机器\n" % (e, tls_hint(e), ssh_config_snippet_path()))
         except OSError:
             die("hub: %s" % e, 1)
     machines = info.get("machines") or []
@@ -1015,7 +1030,7 @@ def enter(want, hub, token, verbose, retest, print_only, ssh_args, ssh_opts=(), 
                 return pick_named(cache.get("last") or "", hub, token) if cache.get("last") else pick_json(None, None, "hub: %s" % e)
             return connect(None, hub, token, verbose, retest, print_only, ssh_args, ssh_opts=ssh_opts)
         except (OSError, ValueError) as e:
-            sys.stderr.write("fleet · 入口连不上（%s），按上次的记录直连\n" % e)
+            sys.stderr.write("fleet · 入口连不上（%s%s），按上次的记录直连\n" % (e, tls_hint(e)))
             if pick_only:
                 return pick_named(cache.get("last") or "", hub, token) if cache.get("last") else pick_json(None, None, "hub: %s" % e)
             return connect(None, hub, token, verbose, retest, print_only, ssh_args, ssh_opts=ssh_opts)
@@ -1085,7 +1100,7 @@ def cert_check(hub, timeout=6):
     except Refused as e:
         return "FAIL", "%s · %s" % (what, e)
     except (OSError, ValueError, subprocess.CalledProcessError) as e:
-        return "WARN", "%s · 入口连不上，未验证（%s）" % (what, e)
+        return "WARN", "%s · 入口连不上，未验证（%s%s）" % (what, e, tls_hint(e))
     return "PASS", "%s · 入口接受" % what
 
 
@@ -1114,6 +1129,8 @@ def main(argv):
                     help="certificate + the hub's machine pick as one JSON line; no measuring, no ssh (the shell)")
     ap.add_argument("--cert-check", action="store_true",
                     help="the doctor's cert row: principals, validity, and whether the hub accepts it")
+    ap.add_argument("--tls-check", action="store_true",
+                    help="the doctor's tls row: can THIS python verify the hub's certificate (claude-fleet#2878)")
     ap.add_argument("--principal-hint", action="store_true",
                     help="a hub refusal on stdin → the person's words for a principal mismatch (exit 1: not one)")
     a = ap.parse_args(argv)
@@ -1136,6 +1153,13 @@ def main(argv):
         if r is None:
             return 3
         print("%s\t%s" % r)
+        return 0
+    if a.tls_check:
+        # no hub here, or no fleet_tls beside (an older mixed install): no row
+        if not hub.startswith("https://") or not fleet_tls:
+            return 3
+        ok, text = fleet_tls.check(hub)
+        print("%s\t%s" % ({True: "PASS", False: "FAIL", None: "WARN"}[ok], text))
         return 0
     if a.proxy:
         if not hub:

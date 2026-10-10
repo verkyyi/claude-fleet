@@ -72,6 +72,9 @@ bin/fleet-hub-admin.py
 bin/fleet-node-sleepwatch.sh
 bin/fleet-peer-cert.sh
 bin/fleet-connect.py
+# the ONE TLS context every hub-facing python imports (#2878): a python3 with
+# no CA store still verifies the hub (certifi · macOS system roots · OpenSSL)
+bin/fleet_tls.py
 bin/fleet-client-lib.sh
 # keeps up with stable by itself (#1722, #1805): newer client + the team's
 # defaults; `fleet update` says where this computer stands

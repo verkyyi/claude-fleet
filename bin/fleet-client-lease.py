@@ -82,6 +82,12 @@ import time
 import urllib.error
 import urllib.request
 
+try:  # the ONE TLS context for the hub: every CA source this computer has (claude-fleet#2878)
+    import fleet_tls
+    fleet_tls.install()
+except ImportError:
+    fleet_tls = None
+
 PATH = "/v1/fleet/client"
 NAMESPACE = "fleet-client@claude-fleet"
 HERE = os.path.dirname(os.path.realpath(__file__))

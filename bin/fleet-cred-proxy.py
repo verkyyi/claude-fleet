@@ -141,6 +141,12 @@ import resource, shutil, signal, socket, ssl, sys, threading, time, urllib.error
 from urllib.parse import urlsplit
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+try:  # the ONE TLS context for the hub: every CA source this computer has (claude-fleet#2878)
+    import fleet_tls
+    fleet_tls.install()
+except ImportError:
+    fleet_tls = None
+
 SECRET_HEADERS = {"authorization", "x-api-key", "cookie", "set-cookie",
                   "chatgpt-account-id", "proxy-authorization", "x-fleet-relay"}
 HOP = {"connection", "keep-alive", "proxy-connection", "transfer-encoding",
@@ -1139,7 +1145,7 @@ class Proxy(BaseHTTPRequestHandler):
             conn = http.client.HTTPConnection(u.hostname, u.port or 80, timeout=self.cfg.timeout)
         else:
             conn = http.client.HTTPSConnection(u.hostname, u.port or 443, timeout=self.cfg.timeout,
-                                               context=ssl.create_default_context())
+                                               context=ssl._create_default_https_context())  # fleet_tls's when it loaded
         try:
             conn.connect()
         except OSError as e:
