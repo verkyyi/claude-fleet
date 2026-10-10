@@ -152,6 +152,9 @@ try: d = json.load(sys.stdin)
 except Exception: d = {}
 print("%s %s %s" % (d.get("source") or "-", d.get("state") or "-", d.get("via") or "-"))' 2>/dev/null)
   case "$cw_src" in
+    # a thin client (issue #3005, EPIC #2999 C8): its home machine holds the lease
+    # and runs no action loop — the escape goes to the 看台's terminal, below
+    "hub active thin"|"local active thin") ;;
     "hub active "*)
       # fleet-open-addr.py's payload as it is: forward → rport/path/scheme, url → url
       res=$("$PY" "${FLEET_OPEN_ACTIONS_BIN:-$BIN/fleet-client-actions.py}" send --kind open_url \
@@ -230,7 +233,8 @@ RV_DIR="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/remote-views"
 if [ -z "$client" ] && [ -d "$RV_DIR" ]; then
   _newest=$(fc_clients '#{client_activity}	#{client_tty}' \
     | sort -t '	' -k1,1nr | head -n 1 | cut -f2)
-  _view=$(awk -F '\t' -v t="$_newest" -v s="$FC_SESS" '$1 == t && $2 == s { n = FILENAME; sub(/.*\//, "", n); print n; exit }' \
+  # a thin 看台 (kind thin, issue #3005) has no spool: its terminal is written directly
+  _view=$(awk -F '\t' -v t="$_newest" -v s="$FC_SESS" '$1 == t && $2 == s && $3 != "thin" { n = FILENAME; sub(/.*\//, "", n); print n; exit }' \
     "$RV_DIR"/* 2>/dev/null)
   if [ -n "$_newest" ] && [ -n "$_view" ] && [ -d "$RV_DIR/$_view.d" ]; then
     _rq="$RV_DIR/$_view.d/$(date +%s)-$$"
@@ -244,6 +248,17 @@ if [ -z "$client" ] && [ -d "$RV_DIR" ]; then
   fi
 fi
 
+# Another home's window onto this machine (EPIC #2999 C4: a thin 看台 `<id>-via-<home>`,
+# its client the home's ssh pane): the escape crosses the home's tmux as passthrough,
+# and that client's terminal word is the home's tmux, never the person's — named here.
+PT=0
+if [ -z "$client" ] && [ -d "$RV_DIR" ]; then
+  _newest=$(fc_clients '#{client_activity}	#{client_tty}' | sort -t '	' -k1,1nr | head -n 1 | cut -f2)
+  if [ -n "$_newest" ] && awk -F '\t' -v t="$_newest" '$1 == t && $3 == "thin" && FILENAME ~ /-via-[^\/]*$/ { f = 1 } END { exit !f }' \
+       "$RV_DIR"/* 2>/dev/null; then
+    client="$_newest"; PT=1
+  fi
+fi
 fc_pick "$client" "$TERM_RE" || fallback "$FC_WHY"
 fc_lock || fallback "$FC_WHY"
 job=$(mktemp -d "${TMPDIR:-/tmp}/fleet-show.XXXXXX") || { fc_unlock; fallback 'mktemp failed'; }
@@ -257,8 +272,11 @@ status="$job/status"; : > "$status"
 import base64, sys
 secret = open(sys.argv[1]).read().strip()
 payload = base64.b64encode(sys.argv[3].encode()).decode()
-open(sys.argv[2], "wb").write(f"\033]1337;Custom=id={secret}:{payload}\a".encode())
-' "$SECRET" "$job/escape" "$json"
+esc = f"\033]1337;Custom=id={secret}:{payload}\a"
+if sys.argv[4] == "1":   # through one more tmux: its passthrough, every ESC doubled
+    esc = "\033Ptmux;" + esc.replace("\033", "\033\033") + "\033\\"
+open(sys.argv[2], "wb").write(esc.encode())
+' "$SECRET" "$job/escape" "$json" "$PT"
 ) || fallback 'cannot build the escape'
 
 cmd="exec $(fc_sq "$PY") $(fc_sq "$BIN/fleet-show-send.py") --raw --out $(fc_sq "${FLEET_SHOW_OUT:-/dev/tty}") --status $(fc_sq "$status") $(fc_sq "$job/escape")"

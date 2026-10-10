@@ -309,7 +309,11 @@ func (t *clientLeaseTable) fill(l *ClientLease, req ClientLeaseRequest) {
 // clientVias and clientCaps are the words a client may report (C6, #1716;
 // node-hosted: the client on a managed machine, #2720).
 var (
-	clientVias = map[string]bool{"local": true, "tailnet": true, "lan": true, "public": true, "node-hosted": true}
+	// thin: the client is a thin 看台 on its home machine, and the home machine
+	// holds the lease for it (claude-fleet#3005, EPIC #2999 C8) — the device's
+	// terminal is reached through that machine's tmux, never an action loop.
+	clientVias = map[string]bool{"local": true, "tailnet": true, "lan": true, "public": true, "node-hosted": true,
+		"thin": true}
 	clientCaps = map[string]bool{"open_url": true, "show_file": true, "notify": true, "link": true, "iterm2": true}
 )
 
@@ -744,10 +748,16 @@ func (s *Server) clientIdentity(w http.ResponseWriter, r *http.Request, cert, si
 // operator's) — so a session running on any machine can say which device and
 // terminal that person is using. Authenticated by the node's enrollment token;
 // state none when nobody holds a lease.
+//
+// POST (claude-fleet#3005, EPIC #2999 C8): the home machine of a thin client
+// holds the lease FOR it — acquire / renew / input / release on the owner's
+// behalf, with the node token, exactly as the client itself would (the same
+// table, the same limit, the same primary rule). No action key is handed out:
+// a thin 看台 has no action loop — its machine writes to its terminal itself.
 func (s *Server) handleNodeClient(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		w.Header().Set("Allow", "GET")
-		httpError(w, http.StatusMethodNotAllowed, "GET")
+	if r.Method != http.MethodGet && r.Method != http.MethodPost {
+		w.Header().Set("Allow", "GET, POST")
+		httpError(w, http.StatusMethodNotAllowed, "GET or POST")
 		return
 	}
 	ep, ok := s.nodeEndpoint(w, r)
@@ -761,12 +771,69 @@ func (s *Server) handleNodeClient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now()
+	if r.Method == http.MethodPost {
+		s.nodeClientAct(w, r, owner, host+"/"+user, now)
+		return
+	}
 	out := ClientLeaseResponse{State: "none"}
 	if l, ok := s.ClientLeaseOf(owner, now); ok {
 		// the primary as the lease (what a reader of one lease always read),
 		// every client beside it (#1932)
 		out = ClientLeaseResponse{State: "active", Lease: &l}
 		out.Clients, out.Primary = s.ClientLeasesOf(owner, now)
+	}
+	out.RenewSecs, out.TTLSecs = int(ClientLeaseRenew/time.Second), int(ClientLeaseTTL/time.Second)
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, out)
+}
+
+// nodeClientAct is POST /v1/node/client: a node holds a client lease for its
+// owner (a thin 看台's, claude-fleet#3005). Only the lease's own actions —
+// acquire, renew, input, release — and only the person's slot: a session's
+// request (X-Fleet-Worker) is refused, as at the client's own door.
+func (s *Server) nodeClientAct(w http.ResponseWriter, r *http.Request, owner, actor string, now time.Time) {
+	var req ClientLeaseRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil {
+		httpError(w, http.StatusBadRequest, "the body must be one JSON object")
+		return
+	}
+	if strings.TrimSpace(r.Header.Get(workerAssertHeader)) != "" {
+		httpError(w, http.StatusForbidden, "a session may not hold the person's client lease")
+		return
+	}
+	if id := strings.TrimSpace(req.Identity); id != "" && id != "person" {
+		httpError(w, http.StatusBadRequest, "a node holds the person's lease only")
+		return
+	}
+	key := clientLeaseKey(sshRelayIdentity{Operator: owner == "", Principal: owner})
+	var out ClientLeaseResponse
+	switch req.Action {
+	case "acquire":
+		out = s.clientLeases.acquire(key, req, now)
+		outcome := "OK"
+		if out.Evicted != nil {
+			outcome = "EVICT " + out.Evicted.Device
+		}
+		if s.Store != nil && out.Lease != nil {
+			if err := s.Store.FleetAudit("node:"+actor, "client_acquire_node", out.Lease.Device, outcome, out.Lease.ID, now); err != nil {
+				log.Printf("fleet audit: %v", err)
+			}
+		}
+	case "renew", "input":
+		if req.Lease == "" {
+			httpError(w, http.StatusBadRequest, req.Action+" needs the lease id")
+			return
+		}
+		out = s.clientLeases.renew(key, req, now, req.Action == "input")
+	case "release":
+		if req.Lease == "" {
+			httpError(w, http.StatusBadRequest, "release needs the lease id")
+			return
+		}
+		out = s.clientLeases.release(key, req.Lease)
+	default:
+		httpError(w, http.StatusBadRequest, "action must be acquire, renew, input or release")
+		return
 	}
 	out.RenewSecs, out.TTLSecs = int(ClientLeaseRenew/time.Second), int(ClientLeaseTTL/time.Second)
 	w.Header().Set("Cache-Control", "no-store")

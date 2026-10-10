@@ -244,6 +244,33 @@ EOF
   fi
 fi
 
+# `notify-jump <socket> <session>` (issue #3005, EPIC #2999 C8) — run by the
+# server's client-focus-in[79] hook, only in a session marked `@view_thin`: a
+# notification fleet_thin_lease.py sent to this 看台's terminal armed
+# `@notify_jump "<epoch> wid:<worker id>"` on it while the terminal was not in
+# front; the click brings the terminal back, the focus-in lands here and the
+# 看台 goes to that session — through `fleet-view-go` once C2 has written it,
+# else straight to this machine's window that holds it. Older than
+# FLEET_NOTIFY_JUMP_SECS (60 s): dropped. Before the lib: it runs on every focus-in.
+if [ "${1:-}" = notify-jump ]; then
+  command -v tmux >/dev/null 2>&1 || PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+  _s="${3:-}"; case "$_s" in *@view-*) ;; *) exit 0 ;; esac
+  _val=$(tmux -S "$2" show-options -qv -t "=$_s:" @notify_jump 2>/dev/null)
+  [ -n "$_val" ] || exit 0
+  tmux -S "$2" set-option -u -t "=$_s:" @notify_jump 2>/dev/null
+  _at=${_val%% *}; _key=${_val#* }; _wid=${_key#wid:}
+  case "$_at" in ''|*[!0-9]*) exit 0 ;; esac
+  [ $(( $(date +%s) - _at )) -le "${FLEET_NOTIFY_JUMP_SECS:-60}" ] || exit 0
+  [ -n "$_wid" ] && [ "$_wid" != "$_val" ] || exit 0
+  for _go in "$BIN/fleet-view-go" "$BIN/fleet-view-go.sh"; do
+    [ -x "$_go" ] && exec "$_go" "$_s" "$_wid"
+  done
+  _w=$(tmux -S "$2" list-windows -t "=$_s" -F '#{window_id}|#{@fleet_id}|#{@peer_cur}' 2>/dev/null \
+    | awk -F '|' -v c="$_wid" -v f="${_wid##*/}" '$2 != "" && $2 == f || $3 == c || $3 == "wid:" c { print $1; exit }')
+  [ -n "$_w" ] && tmux -S "$2" select-window -t "=$_s:$_w" 2>/dev/null
+  exit 0
+fi
+
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 # shellcheck source=/dev/null
 . "$BIN/fleet-lib.sh"
@@ -759,6 +786,10 @@ rv_thin_dress() {
   # the `cur=` hook: global, but it acts only in a session marked @view_thin
   T set-hook -g 'session-window-changed[78]' \
     "if -F '#{@view_thin}' { run-shell -b \"bash '$BIN/fleet-remote-view.sh' cur '$VIEWS' '#{socket_path}' '#{hook_session_name}' >/dev/null 2>&1 || :\" }" 2>/dev/null
+  # a notification's click (issue #3005): the terminal back in front takes the
+  # jump armed on this 看台 — global too, acting only in a @view_thin session
+  T set-hook -g 'client-focus-in[79]' \
+    "if -F '#{@view_thin}' { run-shell -b \"bash '$BIN/fleet-remote-view.sh' notify-jump '#{socket_path}' '#{client_session}' >/dev/null 2>&1 || :\" }" 2>/dev/null
   return 0
 }
 rv_attach_thin() {

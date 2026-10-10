@@ -22,7 +22,10 @@
 #   hub    the person's client lease (#1715) — a node asks with its own token
 #          (GET /v1/node/client: its owner's client), a client machine with its
 #          connection certificate (fleet-client-lease.py where)
-#   local  no hub (no URL, or a hub without the lease, or one out of reach): the
+#   local  no hub (no URL, or a hub without the lease, or one out of reach): a
+#          thin client's 看台 here with a client attached (issue #3005, EPIC #2999
+#          C8 — fleet_thin_lease.py where: the device its row says, via thin);
+#          else (the old client, until C11) the
 #          fleet-shell client attached on THIS machine — its saved where
 #          (<cache>/tmp/client.where.json, written by fleet-shell.sh when a
 #          client becomes the one in use), else the first attached client's
@@ -80,6 +83,15 @@ if [ -f "$BIN/fleet-lib.sh" ] && [ -z "${FLEET_CLIENT_WHERE_CMD:-}" ]; then
   fi
 fi
 
+# A thin client's 看台 here (issue #3005): the lease's own words when there is
+# no hub to hold it — read only when the hub could not answer.
+THINW=''
+[ "$hrc" = 0 ] && case "$HUBREAD" in *'"state": "nohub"'*|*'"state":"nohub"'*) hrc=nohub ;; esac
+if [ "$hrc" != 0 ]; then
+  THINW=$(${FLEET_CLIENT_WHERE_THIN_CMD:-python3 "$BIN/fleet_thin_lease.py" where} 2>/dev/null) || THINW=''
+  [ "$hrc" = nohub ] && hrc=0
+fi
+
 SESS="${FLEET_SHELL_SESSION:-fleet-shell}"
 case "$SESS" in ''|*[!A-Za-z0-9._-]*) SESS=fleet-shell ;; esac
 CL_DIR="${FLEET_SHELL_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/claude-fleet/shell}/tmp"
@@ -89,7 +101,7 @@ if tmux -L "$SESS" has-session -t "=$SESS" 2>/dev/null; then
   CLIENTS=$(tmux -L "$SESS" list-clients -t "=$SESS" -F '#{client_name}	#{client_termname}' 2>/dev/null)
 fi
 
-HUBREAD=$HUBREAD HRC=$hrc LOCAL_UP=$LOCAL_UP CLIENTS=$CLIENTS CL_DIR=$CL_DIR JSON=$json \
+HUBREAD=$HUBREAD HRC=$hrc THINW=$THINW LOCAL_UP=$LOCAL_UP CLIENTS=$CLIENTS CL_DIR=$CL_DIR JSON=$json \
 exec python3 - <<'PY'
 import datetime, json, os, sys
 
@@ -144,6 +156,12 @@ def from_hub():
 
 
 def from_local():
+    try:
+        t = json.loads(os.environ.get("THINW") or "null")
+    except ValueError:
+        t = None
+    if isinstance(t, dict) and t.get("device"):
+        return "active", t                    # a thin client's 看台 here (#3005)
     if os.environ.get("LOCAL_UP") != "1":
         return "none", {}
     cl = os.environ["CL_DIR"]
@@ -195,7 +213,9 @@ if state != "active":
     print("此刻没有客户端连着")
     sys.exit(3)
 line = " · ".join(x for x in (out["device"] or "未知设备", out["os"], out["terminal"]) if x)
-if out["via"] and out["via"] != "local" and out["host"]:
+if out["via"] == "thin" and out["host"]:
+    line += "（经 %s）" % out["host"]          # its home machine draws its screen (#3005)
+elif out["via"] and out["via"] != "local" and out["host"]:
     line += "（客户端在 %s 上运行）" % out["host"]
 caps = [CAPS.get(c, c) for c in out["caps"]]
 if caps:

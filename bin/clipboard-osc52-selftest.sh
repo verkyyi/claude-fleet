@@ -43,6 +43,12 @@
 #   I. own    the program in the node's pane copies by itself (Claude Code's own
 #             copy): an OSC 52 it writes — raw, or as tmux passthrough (the node
 #             conf's allow-passthrough) — reaches the outer terminal too.
+#   K. thin   (issue #3005, EPIC #2999 C8) the thin path's two layers: another
+#             machine's fleet server in a pane of the HOME machine's, the person's
+#             terminal its client — both at the node conf's values: a selection
+#             copied there, and a program's own (passthrough) OSC 52, reach the
+#             terminal; a TERM tmux has no clipboard for still does (the node
+#             conf's Ms row, leg E).
 #   H. iTerm2 fleet-iterm-profile.py write turns AllowClipboardAccess on once (it is
 #             app-wide: iTerm2 has no per-profile key) and records that it did; a
 #             person who turns it off afterwards keeps it off; FLEET_ITERM_KEYS=0
@@ -97,9 +103,9 @@ MS_SHELL=$(msrow "$REPO/conf/tmux-shell.conf")
 MS_STAGE=$(msrow "$REPO/conf/tmux-shell-stage.conf")
 case "$MS_SHELL" in '*:Ms=\E]52;%p1%s;%p2%s\007') ok "E conf/tmux-shell.conf: every terminal has Ms" ;; *) bad "E conf/tmux-shell.conf Ms row: '$MS_SHELL'" ;; esac
 case "$MS_STAGE" in '*:Ms=\E]52;%p1%s;%p2%s\007') ok "E conf/tmux-shell-stage.conf: every terminal has Ms" ;; *) bad "E conf/tmux-shell-stage.conf Ms row: '$MS_STAGE'" ;; esac
-grep -q 'terminal-overrides.*Ms=' "$REPO/conf/tmux-attention.conf" \
-  && bad "E conf/tmux-attention.conf grew an Ms row (the node's terminal is the stage — its own conf says it)" \
-  || ok "E the node conf adds no Ms row"
+# A thin client's terminal is the node's own client (issue #3005): the node says Ms too.
+MS_NODE=$(msrow "$REPO/conf/tmux-attention.conf")
+case "$MS_NODE" in '*:Ms=\E]52;%p1%s;%p2%s\007') ok "E conf/tmux-attention.conf: every terminal has Ms (a thin client's terminal is its client)" ;; *) bad "E conf/tmux-attention.conf Ms row: '$MS_NODE'" ;; esac
 
 # --- G. the shell's copy-mode binds; none on the node --------------------------
 for tbl in copy-mode copy-mode-vi; do
@@ -184,7 +190,7 @@ def T(sock, *a):
 # Wait until every hop has a client: shell (us), stage (in shell's pane), node (in stage's).
 for _ in range(100):
     pump(0.1)
-    if T("stage", "list-clients").strip() and T("node", "list-clients").strip() \
+    if (os.environ.get("CLIP_LAYERS") == "2" or T("stage", "list-clients").strip()) and T("node", "list-clients").strip() \
        and payload in T("node", "capture-pane", "-p"):
         break
 pump(0.5)
@@ -247,6 +253,26 @@ chain() {  # <shell value> [outer TERM] [copy|drag] [ms|noms] → the pty's JSON
   python3 "$WORK/term.py" "$TMUX_BIN" "$WORK" "$PAYLOAD" "${2:-xterm-256color}" "${3:-copy}"
 }
 
+# chain_thin <outer TERM> [copy|pane-pt] — the thin path (issue #3005, EPIC #2999
+# C8): the person's terminal ← the HOME machine's fleet server ← its pane, another
+# machine's fleet server (a C4 window). Two servers, both with the node conf's own
+# values (set-clipboard, allow-passthrough, the Ms row) — nothing else between.
+chain_thin() {
+  local s conf="$WORK/base.conf"
+  for s in shell stage node; do "$TMUX_BIN" -S "$WORK/$s" kill-server 2>/dev/null; done
+  printf 'set -g default-terminal "tmux-256color"\nset -g status off\nset -g escape-time 0\nset -g mode-keys emacs\nset -g mouse on\n' > "$conf"
+  "$TMUX_BIN" -S "$WORK/node" -f "$conf" new-session -d -s node -x 96 -y 24 \
+    "printf '%s\n' '$PAYLOAD'; exec sleep 600"
+  "$TMUX_BIN" -S "$WORK/shell" -f "$conf" new-session -d -s shell -x 100 -y 28 \
+    "TMUX= exec $TMUX_BIN -S $WORK/node attach -t node"
+  for s in node shell; do
+    "$TMUX_BIN" -S "$WORK/$s" set -g set-clipboard "$NODE_V"
+    "$TMUX_BIN" -S "$WORK/$s" set -g allow-passthrough "$NODE_PT"
+    "$TMUX_BIN" -S "$WORK/$s" set -s 'terminal-overrides[92]' "$MS_NODE"
+  done
+  CLIP_LAYERS=2 python3 "$WORK/term.py" "$TMUX_BIN" "$WORK" "$PAYLOAD" "${1:-xterm-256color}" "${2:-copy}"
+}
+
 field() { python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print(eval(sys.argv[2]))' "$1" "$2" 2>/dev/null; }
 
 J=$(chain "$SHELL_V")
@@ -289,6 +315,19 @@ for m in pane pane-pt; do
   got=$(field "$J" 'd["osc52"][-1]["text"] if d["osc52"] else ""')
   [ "$got" = "$PAYLOAD" ] && ok "I a program's own copy ($m) crosses the three hops: '$got'" \
     || bad "I $m: OSC 52 decoded '$got', want '$PAYLOAD'"
+done
+
+# --- K. the thin path: another machine → the home machine → the terminal -------
+# (issue #3005) a copy made in another machine's session, and a program's own OSC
+# 52 there, cross the home machine's server to the person's terminal — a phone's
+# terminal tmux knows no clipboard for included (the node conf's Ms row).
+for m in "xterm-256color copy" "screen-256color copy" "xterm-256color pane-pt"; do
+  # shellcheck disable=SC2086
+  J=$(chain_thin $m)
+  printf 'K thin: other machine → home → terminal (%s) → terminal received: %s\n' "$m" "$J"
+  got=$(field "$J" 'd["osc52"][-1]["text"] if d["osc52"] else ""')
+  [ "$got" = "$PAYLOAD" ] && ok "K thin ($m): the copy crosses two fleet servers to the terminal: '$got'" \
+    || bad "K thin ($m): OSC 52 decoded '$got', want '$PAYLOAD'"
 done
 
 printf 'clipboard-osc52 selftest: %d check(s), %d failure(s)\n' "$CHECKS" "$FAIL"

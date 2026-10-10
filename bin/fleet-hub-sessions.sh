@@ -1074,6 +1074,17 @@ if client:
         fleet_notify.beat(rows, gdir, client)
     except Exception as e:
         sys.stderr.write("fleet-hub-sessions: notify: %s\n" % e)
+# The thin client's home (issue #3005, EPIC #2999 C8): every row of this
+# machine's caches, told to the terminal of the 看台 here that holds the person's
+# lease (fleet_thin_lease.py keeps it). Only once a thin 看台 has had a lease
+# here — never one, no book, nothing.
+elif os.path.exists(os.path.join(os.path.dirname(os.path.dirname(wpath)), "thin-lease.json")):
+    try:
+        import fleet_notify
+        os.environ["FLEET_CONF_DIR"] = os.path.dirname(os.path.dirname(wpath))
+        fleet_notify.beat(rows, gdir, "", sender=[sys.executable, os.path.join(bindir, "fleet_thin_lease.py"), "notify"])
+    except Exception as e:
+        sys.stderr.write("fleet-hub-sessions: notify: %s\n" % e)
 PY
 }
 
@@ -1546,6 +1557,8 @@ loop() {
       sleep "$EVERY"; continue
     fi
     refresh_all 2>/dev/null
+    # A thin client's 看台 here (issue #3005): its lease is this machine's to keep.
+    thin_lease_beat
     # A long-polled answer paces itself (issue #1526): a 200 (a change) or a
     # 304 the hub held is asked again at once; an immediate 304 or a failure —
     # an older hub that ignores `wait`, or none — keeps the 2 s cadence.
@@ -1557,6 +1570,17 @@ loop() {
   done
   read -r p < "$PIDF" 2>/dev/null && [ "$p" = "$$" ] && rm -f "$PIDF"
   return 0
+}
+
+# thin_lease_beat — the person's client lease for each thin 看台 with a client
+# attached here (fleet_thin_lease.py beat, issue #3005, EPIC #2999 C8): a node
+# only, and only while a thin row is registered or its book is still open.
+thin_lease_beat() {
+  [ -z "$CLIENT" ] || return 0
+  [ -f "$FLEET_CONF_DIR/thin-lease.json" ] \
+    || awk -F '\t' '$3 == "thin" { f = 1; exit } END { exit !f }' "$FLEET_CONF_DIR"/remote-views/* 2>/dev/null \
+    || return 0
+  FLEET_CONF_DIR="$FLEET_CONF_DIR" python3 "$BIN/fleet_thin_lease.py" beat >/dev/null 2>&1 || :
 }
 
 # The lock (issue #2630): $G/hubsess.lock, an flock held by a small python
