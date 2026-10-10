@@ -246,7 +246,7 @@ BREAK-IT `managed-login-own-copy`）。跟不上的记进 `update.json` 的 `fol
 
 - 没有 `update.json` 的机器：体检没有 `update` 行，`--machine` 只说「不是托管机器」。
 - 旧守护没有 `update` 任务、不认 `update-restart.json`：新守护第一次由 C1 / C8 装上后才开始自己更新。
-- 开号缓存的 git 镜像一半（`claude-fleet.git`）仍由开号时的 `refresh --from` 填。
+- 开号缓存的 git 镜像一半（`claude-fleet.git`）退役（#2775）：新登录第一次装走 `fleet-login-install.sh`——托管机器上直接 `link-tree` 到 `<root>/current`（不取任何东西），`fleet-login-new.sh` 第 8 步改为 `account adopt`（不再给托管机器上的新登录渲染逐登录的 LaunchDaemon）；没有运行时才找入口的签名 stable，都没有（开发者机器）才 `git clone`。`refresh --from` 照收不用（一版），旧镜像留在盘上没人读；Claude Code 那一半照旧。
 - 托管账号自己的 `~/.claude/fleet`（守护替它跑的每个账号任务都是 `__HOME__/.claude/fleet/bin/…`）**是**更新器搬的（#2774）：一棵链接到 `<root>/<sha>/` 的目录树，随机器一起换、一起退。第一次换到带 #2774 的版本时，切换由旧更新器做（它还不链接登录），新代码在下一拍验证提交后把每个登录链接过去；在那之前登录仍是 #2688 / #2714 留下的那份自己的 worktree，`install` 行 WARN「its own copy, not linked to the runtime」。登录自己的 install-sync 在托管登录上答 `off · managed · 跟随 <root>/current`；`<root>/current` 还没有时答 `off · managed — … names none yet`。当场跟上：`sudo python3 <root>/current/bin/fleet-node-update.py follow <login>`。旧会话手上的绝对路径（`fleet.versions/<old>/…`）在 7 天保留期内仍在；链接树里文件的 `realpath` 落在 `<root>/<sha>/`（只读、共用），所以写东西的脚本一律经 `$BIN/..`（真目录）走。
 
 ## 8. 一条命令装成托管机器（C1，#2330）

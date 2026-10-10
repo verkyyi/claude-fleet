@@ -607,21 +607,23 @@ def i_preview(it, a):
 
 # ---------------------------------------------------------------- ④ ---------
 def i_bootstrap(it, a):
-    mirror = os.path.join(CACHE, "claude-fleet.git")
-    have_git = os.path.isfile(os.path.join(mirror, "HEAD")) and (
-        os.path.exists(os.path.join(mirror, "refs", "tags", "stable"))
-        or run(["git", "--git-dir", mirror, "rev-parse", "-q", "--verify", "refs/tags/stable"], timeout=20)[0] == 0)
-    if not have_git:
-        it.hit("缓存里没有 claude-fleet（%s）：开号要连 github.com" % mirror)
+    # claude-fleet: a new login's install is the machine's runtime or the hub's
+    # signed stable (fleet-login-install.sh, issue #2775) — the cache's old
+    # claude-fleet.git mirror is retired and no longer counted; what counts is
+    # where THIS login's install came from
+    linked = os.path.join(os.path.realpath(FLEET), ".fleet-linked")
+    rc, log = run(["git", "-C", FLEET, "reflog", "--format=%gs"], timeout=20)
+    first = (log.strip().splitlines() or [""])[-1]
+    if os.path.isfile(linked):
+        it.note("fleet 链接本机运行时（不经网络）")
+    elif rc == 0 and first.startswith("clone: from") and "://" in first:
+        it.hit("本账号的 %s 是从网上克隆的（%s）" % (FLEET, re.sub(r"//[^/@]*@", "//", first)))
+    elif run(["git", "-C", FLEET, "log", "-1", "--format=%s"], timeout=20)[1].startswith("fleet-release: "):
+        it.note("fleet 来自入口验过章的发布包")
+    elif rc == 0 and first.startswith("clone: from"):
+        it.note("fleet 从本机克隆")
     else:
-        rc, log = run(["git", "-C", FLEET, "reflog", "--format=%gs"], timeout=20)
-        first = (log.strip().splitlines() or [""])[-1]
-        if rc == 0 and first.startswith("clone: from") and "://" in first:
-            it.hit("本账号的 %s 是从网上克隆的（%s）" % (FLEET, re.sub(r"//[^/@]*@", "//", first)))
-        elif rc == 0 and first.startswith("clone: from"):
-            it.note("fleet 从本机缓存克隆")
-        else:
-            it.note("缓存里有 claude-fleet")
+        it.note("fleet 不是从网上克隆的")
     try:
         ver = open(os.path.join(CACHE, "claude", "current"), encoding="utf-8").read().strip()
     except OSError:

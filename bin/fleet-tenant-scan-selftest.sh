@@ -19,7 +19,9 @@
 #   9  shared        another login's file in the shared dir readable → ③
 #  10  preview       an anonymous http.server → ③ (doc-preview's server.py stays 404;
 #                    tailscaled's PeerAPI greeting is named, not counted)
-#  11  bootstrap     no cache → 2 × ④; a login cloned from the network → ④
+#  11  bootstrap     no Claude Code in the cache → ④; a login cloned from the
+#                    network → ④; the retired claude-fleet mirror is not asked
+#                    for (#2775); a login linked to the runtime → no hit
 #  12  usage         unknown item → exit 2; --json carries the same verdict
 #
 # Root (whom no chmod refuses) or no python3 → SKIP. TENANT_SCAN_LIB=1 sources
@@ -65,7 +67,7 @@ PY
   printf '0 1791445150\n' > "$d/shared/sessions/alice"
   printf '{"role":"user","content":"secret plan"}\n' > "$d/shared/other/t.jsonl"
   printf 'x\n' > "$d/Users/alice/notes"
-  # ④ the bootstrap cache, and this login's checkout cloned from it
+  # ④ the Claude Code cache, and this login's checkout cloned from a local repo
   git init -q --bare "$d/ro/cache/claude-fleet.git"
   git init -q "$d/seed" && git -C "$d/seed" -c user.email=t@t -c user.name=t commit -q --allow-empty -m seed \
     && git -C "$d/seed" push -q "$d/ro/cache/claude-fleet.git" HEAD:refs/heads/master \
@@ -265,9 +267,19 @@ expect bootstrap HIT "11: no Claude Code in the cache → HIT"
 [ "$(ts_metric 4)" = 1 ] && ok "11: ④ = 1" || bad "11: ④ = $(ts_metric 4)"
 rw mv "$D/ro/cache/claude-fleet.git" "$D/ro/cache/claude-fleet.off"
 ts_scan "$D" --only bootstrap
-[ "$(ts_metric 4)" = 2 ] && ok "11: no cache at all → ④ = 2 (github.com + claude.ai)" || bad "11: ④ = $(ts_metric 4)"
+[ "$(ts_metric 4)" = 1 ] && ok "11: no claude-fleet mirror is no reach any more (#2775) → ④ = 1" || bad "11: ④ = $(ts_metric 4)"
 rw mv "$D/ro/cache/claude.off" "$D/ro/cache/claude"
 rw mv "$D/ro/cache/claude-fleet.off" "$D/ro/cache/claude-fleet.git"
+# a login linked to the machine's runtime (#2774/#2775): no reach, said so
+mv "$D/Users/me/.claude/fleet" "$D/Users/me/.claude/fleet.co"
+mkdir -p "$D/Users/me/.claude/fleet.versions/v1"
+printf '{"sha": "%040d", "root": "/r"}\n' 0 > "$D/Users/me/.claude/fleet.versions/v1/.fleet-linked"
+ln -s "$D/Users/me/.claude/fleet.versions/v1" "$D/Users/me/.claude/fleet"
+ts_scan "$D" --only bootstrap
+expect bootstrap PASS "11: a login linked to the runtime → no hit"
+printf '%s' "$(ts_row bootstrap)" | grep -q '链接本机运行时' && ok "11: …and said so" || bad "11: linked not said: $(ts_row bootstrap)"
+rm -f "$D/Users/me/.claude/fleet"; rm -rf "$D/Users/me/.claude/fleet.versions"
+mv "$D/Users/me/.claude/fleet.co" "$D/Users/me/.claude/fleet"
 LOGF="$D/Users/me/.claude/fleet/.git/logs/HEAD"
 cp "$LOGF" "$WORK/HEAD.log"
 sed 's#clone: from .*#clone: from https://github.com/verkyyi/claude-fleet.git#' "$WORK/HEAD.log" > "$LOGF"

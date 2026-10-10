@@ -59,7 +59,7 @@ lib="$here/fleet-client-lib.sh"
 rlib="$here/fleet-release-lib.sh"
 [ -f "$rlib" ] || rlib="$ROOT/bin/fleet-release-lib.sh"
 # shellcheck source=fleet-release-lib.sh
-if [ -f "$rlib" ]; then . "$rlib"; else fleet_rel_hub_url() { :; }; fi
+if [ -f "$rlib" ]; then . "$rlib"; else fleet_rel_first_checkout() { return 3; }; fi
 # shellcheck disable=SC2034  # FC_LOG / FC_SUDO are read by the lib just sourced
 FC_LOG="$LOG"
 # shellcheck disable=SC2034
@@ -84,24 +84,19 @@ echo "✓ git $gv  ✓ tmux $FC_TMUX_V"
 # that keeps none (404): `git clone` of stable, as before.
 # hub_checkout <dir> — rc 0 made · 3 the hub keeps no releases · 1 failed (says why)
 hub_checkout() {
-  local hub tmo=30 pub ccq stg m c
-  hub=$(fleet_rel_hub_url)
-  # shellcheck disable=SC2034,SC1091  # FLEET_SHELL=1 picks fleet.conf's [client] section
-  [ -n "$hub" ] || hub=$(FLEET_SHELL=1; [ -f "$CONF/fleet.conf" ] && . "$CONF/fleet.conf" >/dev/null 2>&1; fleet_rel_hub_url)
-  [ -n "$hub" ] || return 3
-  fleet_rel_stable "$hub" "$tmo"; case $? in 0) ;; 3) return 3 ;; *) echo "✗ 入口不可达（${hub}）：${REL_ERR} — 什么都没动；再跑一次即可"; return 1 ;; esac
-  pub=$(fleet_rel_pubkey "$CONF" "$hub" "$tmo" 2>>"$LOG") || { echo "✗ 入口没给发布签名钥匙（${REL_ERR}）— 什么都没动"; return 1; }
-  ccq=$(fleet_rel_ccquota) || ccq=$(fleet_rel_ccquota_get "$hub" "$CONF/release-tools" "$tmo") \
-    || { echo "✗ 没有 ccquota 来验入口的章（${REL_ERR}）— 什么都没动"; return 1; }
-  stg="$1.rel"; rm -rf "$stg" "$stg.partial"
-  fleet_rel_fetch "$ccq" "$hub" "$pub" "$REL_SHA" "$stg" \
-    || { echo "✗ 入口的 stable 没验过章或没取到（${REL_ERR}）— 什么都没动"; return 1; }
-  m=$(fleet_rel_manifest "$stg")
-  git init -q "$1" >>"$LOG" 2>&1 && c=$(fleet_rel_import "$1" "$stg" '' "${m%% *}" "$(printf '%s' "$m" | awk '{print $2}')") \
-    && git -C "$1" reset -q --hard "$c" >>"$LOG" 2>&1 </dev/null \
-    || { rm -rf "$stg"; echo "✗ 入口的 stable 验过了，但放不进 $1 — 什么都没动"; return 1; }
-  rm -rf "$stg"
-  echo "  · 从入口取 stable $(printf '%.7s' "${m%% *}")（验过章 $(fleet_rel_fp "$pub")，不经 GitHub）"
+  fleet_rel_first_checkout "$1" "$CONF" 30 "$LOG"
+  case $? in
+    0) echo "  · 从入口取 stable $(printf '%.7s' "$REL_SHA")（验过章 ${REL_FPR}，不经 GitHub）" ;;
+    3) return 3 ;;
+    *) case "$REL_STAGE" in
+         unreachable) echo "✗ 入口不可达（${REL_HUB}）：${REL_ERR} — 什么都没动；再跑一次即可" ;;
+         key)         echo "✗ 入口没给发布签名钥匙（${REL_ERR}）— 什么都没动" ;;
+         ccquota)     echo "✗ 没有 ccquota 来验入口的章（${REL_ERR}）— 什么都没动" ;;
+         fetch)       echo "✗ 入口的 stable 没验过章或没取到（${REL_ERR}）— 什么都没动" ;;
+         *)           echo "✗ 入口的 stable 验过了，但放不进 $1 — 什么都没动" ;;
+       esac
+       return 1 ;;
+  esac
 }
 if [ -d "$ROOT/.git" ]; then
   echo "✓ $ROOT 已是完整安装（跟 stable），不重装"

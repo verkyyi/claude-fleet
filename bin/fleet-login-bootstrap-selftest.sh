@@ -32,13 +32,21 @@
 #      script's); a login's own line is kept, not doubled.
 #   I. first-run Claude UI state and wizard permissions: seed missing keys, keep
 #      existing values/rules, and cover every shell command in the wizard.
-#   J. (#2297) this machine's cache (fleet-bootstrap-cache.sh refresh from a
-#      versioned worktree at stable — the live install's shape — + a claude), GitHub and the claude installer both pointed
-#      at addresses that fail: rc 0, install at stable from the cache with origin
-#      re-pointed at GitHub, master tracking origin/master, claude laid out as
-#      versions/<ver> + ~/.local/bin/claude and runnable, the installer never
-#      called, the starter repo cloned from the cache. An empty cache dir → today's road (GitHub + the
-#      installer), unchanged; FLEET_BOOTSTRAP_CACHE=off (every other leg) too.
+#   J. (#2297) this machine's Claude Code cache (fleet-bootstrap-cache.sh refresh
+#      --claude): claude laid out as versions/<ver> + ~/.local/bin/claude and
+#      runnable, the claude.ai installer never called. (#2775) refresh writes no
+#      claude-fleet mirror any more — `--from` is accepted and ignored — and the
+#      install is the developer road here (no runtime, no hub). An empty cache
+#      dir → the installer; FLEET_BOOTSTRAP_CACHE=off (every other leg) too.
+#   K. (#2775, EPIC #2770 C5) the install step is bin/fleet-login-install.sh; a managed machine (FLEET_NODE_ROOT/current → a
+#      release of stable), `git` a stub that FAILS on `clone`: rc 0, never a clone;
+#      ~/.claude/fleet a tree linked to the runtime (fleet-node-update.py
+#      link-tree), apply --tree-from an empty dir --tree-to it; the starter repo
+#      a checkout of the runtime's tree as one commit, origin naming GitHub,
+#      nothing fetched; `install: ok — from the runtime`; bootstrap.timing names
+#      source=runtime and every step. A runs the developer road (no runtime, no
+#      hub): its timing says source=git. The hub road is dist-no-github's
+#      `bootstrap-hub` leg (a fake hub on loopback).
 # Every step past the clone is a stub in the fixture repo's bin/ that logs its
 # argv — the real scripts have their own selftests.
 set -uo pipefail
@@ -65,6 +73,10 @@ unset TMUX TMUX_PANE FLEET_INSTALL_ROOT FLEET_SEED_REPO FLEET_INSTALL_LAUNCHCTL 
 # no machine cache unless leg J builds one (the operator's /Library/Application
 # Support/claude-fleet/cache may be real — issue #2297)
 export FLEET_BOOTSTRAP_CACHE=off
+# no machine runtime and no hub unless leg K builds one (the operator's Mac may be
+# a managed machine with a real /Library/Application Support/claude-fleet/current)
+export FLEET_NODE_ROOT="$WORK/no-runtime"
+unset FLEET_HUB_URL CCQUOTA_HUB_URL FLEET_DIST_SOURCE
 CALLS="$WORK/calls"; export CALLS
 # No `claude` anywhere on PATH — the runner's own ~/.local/bin included — so the
 # fixture login looks like one that has none (issue #1191); the "installer" is a
@@ -147,6 +159,14 @@ eq "A fleet-up quiet + no attach" "$(grep '^fleet-up.sh ' "$CALLS")" \
   "fleet-up.sh verkyyi/claude-fleet $HOME/projects/claude-fleet --seed --no-attach"
 eq "A seed checkout cloned" "$(git -C "$HOME/projects/claude-fleet" rev-parse --is-inside-work-tree 2>/dev/null)" true
 has "A doctor passed through" "$out" "    PASS doctor-stub all green"
+has "A install line names the source" "$out" "install: ok — from the git:"
+case "$(cat "$FLEET_CONF_DIR/global/bootstrap.timing" 2>/dev/null)" in
+  *" source=git total="*" install="*" claude="*" tmux="*" apply="*" zshrc="*" onboard="*" fleet="*" doctor="*) ;;
+  *) fail "A bootstrap.timing: [$(cat "$FLEET_CONF_DIR/global/bootstrap.timing" 2>/dev/null)]" ;;
+esac
+has "A timing printed" "$out" "timing: "
+eq "A seed origin = GitHub, cloned from the install" "$(git -C "$HOME/projects/claude-fleet" remote get-url origin 2>/dev/null)" "$GB/verkyyi/claude-fleet.git"
+eq "A seed at the install's HEAD" "$(git -C "$HOME/projects/claude-fleet" rev-parse HEAD 2>/dev/null)" "$STABLE"
 [ -s "$FLEET_CONF_DIR/global/bootstrapped" ] || fail "A: no global/bootstrapped"
 python3 - "$HOME" <<'PY' || fail 'A first-run Claude defaults absent'
 import json, pathlib, sys
@@ -359,44 +379,75 @@ print(f'PASS wizard allow rules cover {len(commands)} shell lines from fleet-onb
 PY
 leg "I Claude first-run state preserves values; wizard commands are allowed"
 
-# ---- J. the machine's cache: no github.com, no claude.ai (#2297) ----
+# ---- J. the machine's Claude Code cache: no claude.ai (#2297); no mirror (#2775) ----
 CC="$WORK/cache"
 mkdir -p "$WORK/j-claude"
 printf '#!/bin/sh\necho "9.9.9 (Claude Code)"\n' > "$WORK/j-claude/claude"; chmod +x "$WORK/j-claude/claude"
-# the source the way the admin's live install is: a versioned worktree (a .git
-# FILE) checked out at stable, behind its repo's master
-git -C "$FX" worktree add -q --detach "$WORK/fx-live" stable
-out=$(FLEET_BOOTSTRAP_CACHE="$CC" "$BASH_BIN" "$BIN/fleet-bootstrap-cache.sh" refresh --from "$WORK/fx-live" --claude "$WORK/j-claude/claude" 2>&1)
-eq "J refresh rc" "$?" 0
-has "J refresh: stable" "$out" "claude-fleet: stable"
+out=$(FLEET_BOOTSTRAP_CACHE="$CC" "$BASH_BIN" "$BIN/fleet-bootstrap-cache.sh" refresh --from "$FX" --claude "$WORK/j-claude/claude" 2>&1)
+eq "J refresh rc (--from accepted, ignored)" "$?" 0
 has "J refresh: claude" "$out" "claude: 9.9.9"
-eq "J mirror at stable" "$(git -C "$CC/claude-fleet.git" rev-parse stable)" "$STABLE"
-eq "J mirror master = the repo's master" "$(git -C "$CC/claude-fleet.git" rev-parse master)" "$(git -C "$FX" rev-parse master)"
+hasnt "J refresh: no claude-fleet half" "$out" "claude-fleet:"
+[ -e "$CC/claude-fleet.git" ] && fail "J: refresh still writes the retired claude-fleet mirror"
 eq "J claude current" "$(cat "$CC/claude/current")" 9.9.9
 newhome "$WORK/j"
-out=$(FLEET_BOOTSTRAP_CACHE="$CC" FLEET_BOOTSTRAP_GIT_BASE="$WORK/abroad-unreachable" FLEET_CLAUDE_INSTALL_CMD='exit 9' boot); rc=$?
+out=$(FLEET_BOOTSTRAP_CACHE="$CC" FLEET_CLAUDE_INSTALL_CMD='exit 9' boot); rc=$?
 [ -n "${FLEET_SELFTEST_SHOW:-}" ] && printf '%s\n' "$out"
 eq "J rc" "$rc" 0
 R="$HOME/.claude/fleet"
 eq "J install at stable" "$(git -C "$R" rev-parse HEAD)" "$STABLE"
-eq "J install on master" "$(git -C "$R" symbolic-ref --short HEAD 2>/dev/null)" master
-eq "J master tracks origin/master" "$(git -C "$R" rev-parse --abbrev-ref 'master@{upstream}' 2>/dev/null)" origin/master
-eq "J origin re-pointed upstream" "$(git -C "$R" remote get-url origin)" "$WORK/abroad-unreachable/verkyyi/claude-fleet.git"
-has "J says cache" "$out" "from this machine's cache ($CC)"
 eq "J claude symlink" "$(readlink "$HOME/.local/bin/claude")" "$HOME/.local/share/claude/versions/9.9.9"
 eq "J claude runs" "$("$HOME/.local/bin/claude" --version)" "9.9.9 (Claude Code)"
 has "J claude line" "$out" "claude: installed 9.9.9 from $CC"
 grep -q '^claude-install' "$CALLS" && fail "J: the claude.ai installer ran"
-eq "J seed from cache" "$(git -C "$HOME/projects/claude-fleet" remote get-url origin 2>/dev/null)" "$WORK/abroad-unreachable/verkyyi/claude-fleet.git"
-eq "J fleet-up once" "$(grep -c '^fleet-up.sh ' "$CALLS")" 1
 [ -s "$FLEET_CONF_DIR/global/bootstrapped" ] || fail "J: not marked done"
-# an empty cache dir: today's road, untouched
+# an empty cache dir: the installer, untouched
 mkdir -p "$WORK/cache-empty"; newhome "$WORK/j2"
 out=$(FLEET_BOOTSTRAP_CACHE="$WORK/cache-empty" boot); eq "J2 rc" "$?" 0
-eq "J2 origin = GitHub" "$(git -C "$HOME/.claude/fleet" remote get-url origin)" "$GB/verkyyi/claude-fleet.git"
 eq "J2 installer ran once" "$(grep -c '^claude-install' "$CALLS")" 1
-hasnt "J2 no cache line" "$out" "this machine's cache"
-leg "J the machine's cache: no GitHub, no claude.ai; an empty cache → today's road"
+hasnt "J2 no cache line" "$out" "from $WORK/cache-empty"
+leg "J the machine's Claude Code cache: no claude.ai; no claude-fleet mirror"
+
+# ---- K. a managed machine: the runtime, never a clone (#2775) ----
+NR="$WORK/node-root"; mkdir -p "$NR/$STABLE/.release"
+git -C "$FX" archive stable | tar -x -C "$NR/$STABLE"
+printf '{"schema": 1, "sha": "%s", "prev": "", "seq": 7, "artifacts": []}\n' "$STABLE" > "$NR/$STABLE/.release/manifest.json"
+ln -s "$NR/$STABLE" "$NR/current"
+REALGIT=$(command -v git)
+mkdir -p "$WORK/k-bin"
+cat > "$WORK/k-bin/git" <<STUB
+#!/bin/bash
+for a in "\$@"; do [ "\$a" = clone ] && { echo "git \$*" >> "$WORK/k-clone.log"; echo "k: no clone on a managed machine" >&2; exit 128; }; done
+exec "$REALGIT" "\$@"
+STUB
+chmod +x "$WORK/k-bin/git"; : > "$WORK/k-clone.log"
+newhome "$WORK/k"
+out=$(PATH="$WORK/k-bin:$PATH" FLEET_NODE_ROOT="$NR" FLEET_BOOTSTRAP_GIT_BASE="$WORK/abroad-unreachable" boot); rc=$?
+[ -n "${FLEET_SELFTEST_SHOW:-}" ] && printf '%s\n' "$out"
+eq "K rc" "$rc" 0
+eq "K never a git clone" "$(cat "$WORK/k-clone.log")" ""
+R="$HOME/.claude/fleet"
+[ -L "$R" ] || fail "K: ~/.claude/fleet is not the linked version (a link to fleet.versions/<sha>)"
+case "$(cat "$R/.fleet-linked" 2>/dev/null)" in *"\"sha\": \"$STABLE\""*) ;; *) fail "K .fleet-linked: $(cat "$R/.fleet-linked" 2>&1)" ;; esac
+[ -d "$R/.git" ] && fail "K: the linked install has a .git"
+has "K install line" "$out" "install: ok — from the runtime: linked to this machine's runtime $NR/$STABLE"
+ap=$(grep '^fleet-install-apply.sh ' "$CALLS")
+has "K apply --tree-from" "$ap" "--tree-from $FLEET_CONF_DIR/global/.empty-tree"
+has "K apply --tree-to the linked tree" "$ap" "--tree-to $(cd "$R" && pwd -P) --root $R --from none --to $STABLE"
+eq "K applied stamp" "$(cat "$FLEET_CONF_DIR/global/bootstrap.applied" 2>/dev/null)" "$STABLE"
+S="$HOME/projects/claude-fleet"
+eq "K seed is one commit of the runtime's tree" "$(git -C "$S" log --format=%s 2>/dev/null)" "fleet-release: $STABLE (this machine's runtime)"
+eq "K seed on master" "$(git -C "$S" symbolic-ref --short HEAD 2>/dev/null)" master
+eq "K seed clean" "$(git -C "$S" status --porcelain 2>/dev/null)" ""
+[ -L "$S/bin/fleet-up.sh" ] && fail "K: the seed's files are links into the runtime"
+eq "K seed tree = stable's tree" "$(git -C "$S" rev-parse 'HEAD^{tree}')" "$(git -C "$FX" rev-parse 'stable^{tree}')"
+eq "K seed origin names GitHub" "$(git -C "$S" remote get-url origin)" "$WORK/abroad-unreachable/verkyyi/claude-fleet.git"
+eq "K fleet-up once" "$(grep -c '^fleet-up.sh ' "$CALLS")" 1
+case "$(cat "$FLEET_CONF_DIR/global/bootstrap.timing" 2>/dev/null)" in
+  *" source=runtime total="*" install="*" doctor="*) ;;
+  *) fail "K bootstrap.timing: [$(cat "$FLEET_CONF_DIR/global/bootstrap.timing" 2>/dev/null)]" ;;
+esac
+[ -s "$FLEET_CONF_DIR/global/bootstrapped" ] || fail "K: not marked done"
+leg "K a managed machine: linked to the runtime, no clone anywhere, timed"
 
 [ "$FAILS" = 0 ] || { printf 'selftest FAIL: %s failure(s)\n' "$FAILS"; exit 1; }
 printf 'selftest PASS: a new login sets itself up once, and only once — Claude Code included, the tools even without daemons (issues #1165, #1191, #1214) — bash %s\n' "$("$BASH_BIN" -c 'echo $BASH_VERSION')"

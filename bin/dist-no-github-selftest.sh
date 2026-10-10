@@ -23,7 +23,10 @@
 #                 is GitHub (as on every machine today), FLEET_HUB_URL set
 #   client        bin/fleet-client-update.sh stage, a client at A, hub = the fake
 #   bootstrap     bin/fleet-login-bootstrap.sh in a fresh HOME on a managed
-#                 machine (FLEET_NODE_ROOT/current = B), no bootstrap cache
+#                 machine (FLEET_NODE_ROOT/current = B), no bootstrap cache —
+#                 the starter repo (claude-fleet itself) included (issue #2775)
+#   bootstrap-hub the same on a machine with NO runtime: the hub's signed
+#                 stable, imported as one commit, the key pinned (issue #2775)
 #   node-follow   bin/fleet-node-update.py follow <login> (FLEET_NODE_TEST=1):
 #                 a managed login at A linked to the runtime's B (link-tree,
 #                 issue #2774 — no fetch at all)
@@ -48,7 +51,7 @@
 set -uo pipefail
 
 # leg:member — the leg is red until that member merges; remove the entry then.
-DIST_AWAIT="bootstrap:C5#2775"
+DIST_AWAIT=""
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$BIN/.." && pwd)"
@@ -59,11 +62,11 @@ STRICT=0 LEGS=''
 for a in "$@"; do
   case "$a" in
     --strict) STRICT=1 ;;
-    install-sync|client|bootstrap|node-follow|bad-signature) LEGS="$LEGS $a" ;;
+    install-sync|client|bootstrap|bootstrap-hub|node-follow|bad-signature) LEGS="$LEGS $a" ;;
     *) printf 'dist-no-github: unknown arg %s\n' "$a" >&2; exit 2 ;;
   esac
 done
-[ -n "$LEGS" ] || LEGS="install-sync client bootstrap node-follow"
+[ -n "$LEGS" ] || LEGS="install-sync client bootstrap bootstrap-hub node-follow"
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/dist-nogh.XXXXXX")" || exit 2
 WORK="$(cd "$WORK" && pwd -P)"
@@ -319,6 +322,24 @@ leg_bootstrap() {
     FLEET_BOOTSTRAP_CACHE=off FLEET_CLAUDE_INSTALL_CMD=true FLEET_INSTALL_PLATFORM=none \
     GIT_TERMINAL_PROMPT=0 bash "$BIN/fleet-login-bootstrap.sh" 2>&1 | grep -E 'install|FAIL' | tail -3)
   [ "$(mark_of "$h/.claude/fleet")" = B ] || WHY="the new login's install reads [$(mark_of "$h/.claude/fleet")]: $(printf '%s' "$OUT" | grep -m1 'install')"
+}
+
+leg_bootstrap_hub() {
+  local h="$WORK/bsh" conf
+  blackhole "$h"; conf="$h/.config/claude-fleet"
+  mkdir -p "$WORK/fakebin-bs"
+  printf '#!/bin/sh\necho "2.1.1 (Claude Code)"\n' > "$WORK/fakebin-bs/claude"; chmod +x "$WORK/fakebin-bs/claude"
+  OUT=$(HOME="$h" FLEET_CONF_DIR="$conf" TMPDIR="$WORK" PATH="$WORK/fakebin-bs:$WORK/fakebin:$PATH" \
+    FLEET_HUB_URL="$HUB" FLEET_SKIP_GLOBAL_CONF=1 FLEET_NODE_ROOT="$WORK/no-runtime" FLEET_CCQUOTA="$WORK/fakebin/ccquota" \
+    FLEET_BOOTSTRAP_CACHE=off FLEET_CLAUDE_INSTALL_CMD=true FLEET_INSTALL_PLATFORM=none \
+    GIT_TERMINAL_PROMPT=0 bash "$BIN/fleet-login-bootstrap.sh" 2>&1 | grep -E 'install|FAIL' | tail -3)
+  if [ "$(mark_of "$h/.claude/fleet")" != B ]; then
+    WHY="the new login's install reads [$(mark_of "$h/.claude/fleet")]: $(printf '%s' "$OUT" | grep -m1 'install')"
+  elif ! git -C "$h/.claude/fleet" log -1 --format=%s 2>/dev/null | grep -q "^fleet-release: $B "; then
+    WHY="the install is not the hub's release imported as one commit: $(git -C "$h/.claude/fleet" log -1 --format=%s 2>&1)"
+  elif [ ! -s "$conf/release.pub" ]; then
+    WHY="the hub's release key was not pinned ($conf/release.pub)"
+  fi
 }
 
 leg_node_follow() {

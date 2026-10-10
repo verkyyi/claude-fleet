@@ -51,15 +51,17 @@
 #      nothing else (issue #2702): no login banner, no client opened on an SSH
 #      login, no cw.zsh. A fleet machine is no one's client; the person runs
 #      `fleet` on their own device. Step 8b sets the login up instead.
-#   7. ~<login>/.claude/fleet ← claude-fleet cloned at `stable`, AS <login>
-#      (sudo -u), so the daemons of step 8 have their scripts from the moment
-#      they load, and the first-login bootstrap finds its install already there.
-#      From this machine's cache (issue #2297): root first refreshes it from
-#      this install's checkout + the admin's own `claude`
-#      (fleet-bootstrap-cache.sh refresh), the clone reads that mirror and only
-#      then points origin at GitHub — so neither this step nor the login's
-#      first-run Claude install reaches github.com / claude.ai. Nothing cached →
-#      the clone from GitHub, as before.
+#   7. ~<login>/.claude/fleet, AS <login> (sudo -u), so the daemons of step 8
+#      have their scripts from the moment they load, and the first-login
+#      bootstrap finds its install already there — bin/fleet-login-install.sh,
+#      the ONE install road of a login's first minute (issue #2775, EPIC #2770
+#      C5), staged where the login can read it: this machine's runtime when it
+#      is managed (a tree of links into <root>/current, no fetch), else the
+#      hub's signed stable (FLEET_LOGIN_HUB, else this install's FLEET_HUB_URL),
+#      else a clone of stable from GitHub (a developer's machine). Root first
+#      refreshes the machine's Claude Code cache (fleet-bootstrap-cache.sh, issue
+#      #2297) so the login's first-run Claude install reaches no claude.ai; its
+#      claude-fleet mirror is retired (#2775).
 #   7b. its subscription out of its reach (issue #2294, EPIC #2293 C1) — after
 #      the clone, BEFORE its background services and its first session (先代理、
 #      后搬凭据、再开会话): ~<login>/.config/claude-fleet/fleet.conf gets
@@ -76,6 +78,14 @@
 #      a status that is not separated FAILS the run (exit 1). --no-credsep skips
 #      7b (and prints `credsep: off`): the old layout, for a machine whose fleet
 #      predates credsep.
+#   8. on a MANAGED machine (step 7 linked the install to <root>/current):
+#      `sudo python3 <root>/current/bin/fleet-node-supervisor.py account adopt
+#      <login>` instead — the machine daemon runs a managed login's account tasks
+#      itself and moves its install with every switch of the runtime (issue
+#      #2775; an unadopted login linked to the runtime would never move, and
+#      install-sync cannot follow a tree with no git). --no-daemons leaves it
+#      unadopted, with a WARN naming the command.
+#      Elsewhere:
 #   8. the login's background services, as an admin: every launchd/*.plist.tmpl
 #      of that clone rendered in SYSTEM shape (fleet-install-apply.sh
 #      --render-system: Label com.claude-fleet.<login>.<unit>, UserName <login>,
@@ -164,11 +174,11 @@
 #      FLEET_INSTALL_DAEMON_DIR (/Library/LaunchDaemons) · FLEET_BOOTSTRAP_GIT_BASE
 #      (https://github.com) · FLEET_INSTALL_BREW_PREFIX (as fleet-install-apply.sh) ·
 #      FLEET_BOOTSTRAP_CACHE (fleet-bootstrap-cache.sh's; `off` = no cache) ·
-#      FLEET_BOOTSTRAP_CACHE_SRC (the checkout the cache is filled from; this one).
+#      FLEET_NODE_ROOT (the machine runtime, fleet-login-install.sh's) ·
+#      FLEET_HUB_URL / FLEET_DIST_SOURCE (passed to the login's install).
 set -u
 
 PROG=fleet-login-new
-FLEET_REPO_SELF=verkyyi/claude-fleet
 usage() {
   sed -n '2,5p' "$0" | sed 's/^# \{0,1\}//' >&2
   exit 2
@@ -252,12 +262,21 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 # the launchd label rule for a login's system daemons (issue #1495) — the lib's, not a copy
 # shellcheck source=/dev/null
 . "$BIN/fleet-daemon-lib.sh"
-GITURL="${FLEET_BOOTSTRAP_GIT_BASE:-https://github.com}/$FLEET_REPO_SELF.git"
-# the machine's cache a new login installs from (issue #2297) — and what fills it:
-# this install's own checkout (FLEET_BOOTSTRAP_CACHE_SRC is a test seam)
+# the machine's Claude Code cache a new login installs from (issue #2297)
 CACHE_SH="$BIN/fleet-bootstrap-cache.sh"
 CDIR=$(bash "$CACHE_SH" dir)
-CSRC=$(cd "${FLEET_BOOTSTRAP_CACHE_SRC:-$BIN/..}" 2>/dev/null && pwd -P) || CSRC="$BIN/.."
+# A managed machine (issue #2775): the runtime's release, which step 7 links the
+# login's install to and step 8 hands to the machine daemon (account adopt)
+NROOT="${FLEET_NODE_ROOT:-/Library/Application Support/claude-fleet}"; NROOT=${NROOT%/}
+MSHA=$(readlink "$NROOT/current" 2>/dev/null); MSHA=${MSHA%/}; MSHA=${MSHA##*/}
+case "$MSHA" in *[!0-9a-f]*) MSHA='' ;; esac
+[ "${#MSHA}" = 40 ] && [ -d "$NROOT/$MSHA/bin" ] || MSHA=''
+# the hub the login's install asks for a signed stable: the hub opening this
+# login (7a), else this install's own
+HUBU=${FLEET_LOGIN_HUB:-${FLEET_HUB_URL:-}}
+if [ -z "$HUBU" ] && [ -z "${FLEET_HUB_URL+set}" ] && [ -f "$BIN/fleet-hook-conf.sh" ]; then
+  HUBU=$(bash "$BIN/fleet-hook-conf.sh" FLEET_HUB_URL 2>/dev/null | sed -n 1p) || HUBU=''
+fi
 
 # Every path this script was handed, made absolute against the directory the
 # admin typed it in — then run from / (issue #1216). Every `sudo -u <login>`
@@ -381,7 +400,8 @@ if [ "$APPLY" = 1 ]; then
   for t in $NEED; do
     command -v "$t" >/dev/null 2>&1 || { printf '%s: %s not found — nothing was changed\n' "$PROG" "$t" >&2; exit 1; }
   done
-  if [ "$DAEMONS" = 1 ] && ! command -v plutil >/dev/null 2>&1; then
+  # a managed machine adopts the login at step 8 instead (issue #2775): no plist to render
+  if [ "$DAEMONS" = 1 ] && [ -z "$MSHA" ] && ! command -v plutil >/dev/null 2>&1; then
     printf '%s: plutil not found — cannot render LaunchDaemons (--no-daemons to skip step 8); nothing was changed\n' "$PROG" >&2; exit 1
   fi
   if [ "$TMPKEY" = 1 ] && ! command -v ssh-keygen >/dev/null 2>&1; then
@@ -594,35 +614,47 @@ if [ "$DONLY" = 0 ]; then
   run sudo chown "$LOGIN:staff" "$H/.zshrc"
   run sudo chmod 644 "$H/.zshrc"
 
-  # 7. the clone, as the login — its daemons (8) reference ~<login>/.claude/fleet/bin
-  step "install claude-fleet for $LOGIN (clone at stable → $ROOT, as $LOGIN — the services below run its scripts)"
+  # 7. the install, as the login — its daemons (8) reference ~<login>/.claude/fleet/bin
+  if [ -n "$MSHA" ]; then
+    step "install claude-fleet for $LOGIN ($ROOT → this machine's runtime $NROOT/$(printf '%.7s' "$MSHA"), as $LOGIN — the services below run its scripts)"
+  else
+    step "install claude-fleet for $LOGIN (the hub's signed stable, else a clone of stable → $ROOT, as $LOGIN — the services below run its scripts)"
+  fi
   run sudo -u "$LOGIN" -H mkdir -p "$H/.claude"
-  # This machine's cache first (issue #2297): stable + the admin's own Claude
-  # Code, copied by root where every login can read them, so neither this clone
-  # nor the login's first-run Claude install reaches github.com / claude.ai.
-  # The refresh is a note, never a failure — no cache is today's road.
+  # The machine's Claude Code cache first (issue #2297): the admin's own binary,
+  # copied by root where every login can read it, so the login's first-run Claude
+  # install reaches no claude.ai. A note, never a failure.
   if [ "$CDIR" != off ]; then
     CL=$(command -v claude 2>/dev/null) || CL=''
     [ -n "$CL" ] || { [ -x "$HOME/.local/bin/claude" ] && CL="$HOME/.local/bin/claude"; }
-    show sudo env FLEET_BOOTSTRAP_CACHE="$CDIR" bash "$CACHE_SH" refresh --from "$CSRC" ${CL:+--claude "$CL"}
+    show sudo env FLEET_BOOTSTRAP_CACHE="$CDIR" bash "$CACHE_SH" refresh ${CL:+--claude "$CL"}
     if [ "$APPLY" = 1 ]; then
-      sudo env FLEET_BOOTSTRAP_CACHE="$CDIR" bash "$CACHE_SH" refresh --from "$CSRC" ${CL:+--claude "$CL"} 2>&1 | sed 's/^/    /'
+      sudo env FLEET_BOOTSTRAP_CACHE="$CDIR" bash "$CACHE_SH" refresh ${CL:+--claude "$CL"} 2>&1 | sed 's/^/    /'
     fi
   fi
-  CM="$CDIR/claude-fleet.git"
-  if [ "$CDIR" != off ] && { [ "$APPLY" = 0 ] || [ -d "$CM/objects" ]; }; then
-    cclone=(sudo -u "$LOGIN" -H git -c "safe.directory=$CM" -c advice.detachedHead=false clone -q --no-local -b stable "$CM" "$ROOT")
-    show "${cclone[@]}"
-    if [ "$APPLY" = 1 ] && ! "${cclone[@]}"; then
-      say "  (the cached clone failed — the same clone from $GITURL)"
-      sudo -u "$LOGIN" -H rm -rf "$ROOT"
-      run sudo -u "$LOGIN" -H git -c advice.detachedHead=false clone -q -b stable "$GITURL" "$ROOT"
+  # fleet-login-install.sh (issue #2775), staged world-readable: this install
+  # lives in the admin's home, which the login cannot read (#1213)
+  ISTG="$BIN"
+  if [ "$APPLY" = 1 ]; then
+    ISTG=$(mktemp -d "${TMPDIR:-/tmp}/fleet-login-install.XXXXXX") && chmod 755 "$ISTG" \
+      && cp "$BIN/fleet-login-install.sh" "$BIN/fleet-release-lib.sh" "$BIN/fleet-daemon-lib.sh" \
+            "$BIN/fleet-node-update.py" "$BIN/fleet-node-supervisor.py" "$ISTG/" \
+      && chmod 644 "$ISTG"/* \
+      || { printf '%s: cannot stage fleet-login-install.sh for %s\n' "$PROG" "$LOGIN" >&2; fail; }
+  fi
+  INS=(sudo -u "$LOGIN" -H env HOME="$H" FLEET_CONF_DIR="$H/.config/claude-fleet" FLEET_NODE_ROOT="$NROOT")
+  [ -z "$HUBU" ] || INS+=(FLEET_HUB_URL="$HUBU")
+  [ -z "${FLEET_DIST_SOURCE:-}" ] || INS+=(FLEET_DIST_SOURCE="$FLEET_DIST_SOURCE")
+  [ -z "${FLEET_BOOTSTRAP_GIT_BASE:-}" ] || INS+=(FLEET_BOOTSTRAP_GIT_BASE="$FLEET_BOOTSTRAP_GIT_BASE")
+  INS+=(bash "$ISTG/fleet-login-install.sh" "$ROOT")
+  show "${INS[@]}"
+  if [ "$APPLY" = 1 ]; then
+    if iline=$("${INS[@]}"); then
+      rm -rf "$ISTG"
+      say "  install: ${iline%% *} — ${iline#* * }"
     else
-      run sudo -u "$LOGIN" -H git -C "$ROOT" remote set-url origin "$GITURL"
+      rm -rf "$ISTG"; fail
     fi
-    [ "$APPLY" = 1 ] || say "  (nothing cached at $CDIR at --apply time → the same clone from $GITURL)"
-  else
-    run sudo -u "$LOGIN" -H git -c advice.detachedHead=false clone -q -b stable "$GITURL" "$ROOT"
   fi
   run sudo -u "$LOGIN" -H mkdir -p "$ROOT/logs"
 
@@ -662,8 +694,22 @@ if [ "$DONLY" = 0 ]; then
   fi
 fi
 
+# 8. on a managed machine: the machine daemon takes the login (issue #2775) —
+# account adopt, which runs its account tasks as it and moves its linked install
+# with every switch of the runtime. No per-login LaunchDaemon is rendered.
+ADOPTED=0
+if [ -n "$MSHA" ] && [ "$DAEMONS" = 1 ]; then
+  SUP="$NROOT/current/bin/fleet-node-supervisor.py"
+  step "hand $LOGIN to this machine's daemon (account adopt: it runs $LOGIN's background services itself and moves its install with the runtime — no per-login LaunchDaemon)"
+  run sudo python3 "$SUP" account adopt "$LOGIN"
+  ADOPTED=1
+elif [ -n "$MSHA" ]; then
+  say ""
+  say "  WARN: --no-daemons on a managed machine: $LOGIN's install is linked to the runtime but not adopted — it does not move with the machine until an admin runs: sudo python3 '$NROOT/current/bin/fleet-node-supervisor.py' account adopt $LOGIN"
+fi
+
 # 8. the background services, system shape, as the admin
-if [ "$DAEMONS" = 1 ]; then
+if [ "$DAEMONS" = 1 ] && [ "$ADOPTED" = 0 ]; then
   # Under --apply the clone exists — inside the login's home, which macOS made
   # 700, so the admin's own process can neither list nor read it (issue #1213;
   # #1210 ①). Everything in it is read AS THE LOGIN: `sudo -u <login> -H ls`

@@ -237,3 +237,39 @@ for a in d.get("artifacts") or []:
   chmod 0755 "$2/ccquota.part" && mv -f "$2/ccquota.part" "$2/ccquota" || { REL_ERR="cannot write $2/ccquota"; return 1; }
   printf '%s\n' "$2/ccquota"
 }
+
+# fleet_rel_first_checkout <dir> <conf dir> <timeout> [<log>] — a NEW install at
+# <dir> (it must not exist): the hub's signed stable — the key pinned now, the
+# tree verified by ccquota (the hub's own, by its release's sha256, when this
+# computer has none yet), imported as one local commit; no remote, never GitHub.
+# The one first checkout of fleet-host-install.sh and fleet-login-install.sh
+# (issue #2775). The hub: fleet_rel_hub_url, else <conf dir>/fleet.conf's.
+# rc 0 made — REL_SHA (the upstream sha) · REL_SEQ · REL_FPR (the key's
+#      fingerprint) · REL_HUB
+# rc 3 no hub, or one that keeps no releases (404) — nothing made
+# rc 1 failed — REL_STAGE (unreachable · key · ccquota · fetch · place) +
+#      REL_ERR; <dir> may hold a half-made repository: the caller removes it
+# shellcheck disable=SC2034  # every REL_* it sets is the caller's (fleet-host-install.sh, fleet-login-install.sh)
+fleet_rel_first_checkout() {
+  local dir="$1" conf="$2" tmo="$3" log="${4:-/dev/null}" hub pub ccq stg m c
+  REL_STAGE='' REL_FPR='' REL_HUB=''
+  hub=$(fleet_rel_hub_url)
+  # shellcheck disable=SC2034,SC1091  # FLEET_SHELL=1 picks fleet.conf's [client] section
+  [ -n "$hub" ] || hub=$(FLEET_SHELL=1; [ -f "$conf/fleet.conf" ] && . "$conf/fleet.conf" >/dev/null 2>&1; fleet_rel_hub_url)
+  [ -n "$hub" ] || return 3
+  REL_HUB=$hub
+  fleet_rel_stable "$hub" "$tmo"; case $? in 0) ;; 3) return 3 ;; *) REL_STAGE=unreachable; return 1 ;; esac
+  pub=$(fleet_rel_pubkey "$conf" "$hub" "$tmo" 2>>"$log") || { REL_STAGE=key; return 1; }
+  ccq=$(fleet_rel_ccquota) || ccq=$(fleet_rel_ccquota_get "$hub" "$conf/release-tools" "$tmo") \
+    || { REL_STAGE=ccquota; return 1; }
+  stg="$dir.rel"; rm -rf "$stg" "$stg.partial"
+  fleet_rel_fetch "$ccq" "$hub" "$pub" "$REL_SHA" "$stg" || { REL_STAGE=fetch; return 1; }
+  m=$(fleet_rel_manifest "$stg")
+  REL_SEQ=$(printf '%s' "$m" | awk '{print $2}')
+  if ! { git init -q "$dir" >>"$log" 2>&1 && c=$(fleet_rel_import "$dir" "$stg" '' "${m%% *}" "$REL_SEQ") \
+         && git -C "$dir" reset -q --hard "$c" >>"$log" 2>&1 </dev/null; }; then
+    rm -rf "$stg"; REL_STAGE=place; REL_ERR="cannot place it in $dir"; return 1
+  fi
+  rm -rf "$stg"
+  REL_SHA=${m%% *} REL_FPR=$(fleet_rel_fp "$pub")
+}
