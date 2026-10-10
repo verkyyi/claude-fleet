@@ -15,7 +15,15 @@ launcher asks it, so what the file says is what the session runs.
       a model this login's active account is walled on gives way to
       FLEET_MODEL_FALLBACK (the orchestrator's launcher, as it always did).
   get <role> <field>      one frontmatter field (a list joins with `,`)
-  body <role>             the body — what skills/*/role.md is generated from
+  body <role>             the definition's body
+  prompt <role>           what the system prompt carries: the body, then the rules
+                          of the table that apply to the role (orchestrator,
+                          steward) — what skills/*/role.md is generated from
+  rules [--role R] [--json] [--version V] [--mark N]
+                          the merged rule table (bin/fleet_rules.py, issue #2786):
+                          --role only its rows, --version a kept older version (a
+                          ticket's v=), --mark the line a ticket dispatched by rule
+                          N ends with
   sha <role>              the definition's content address (@fleet_role_file)
   list                    the roles
 
@@ -23,7 +31,8 @@ How a field lands (Claude / Codex):
   model           --model <m> / Codex model names are not Claude aliases: only the
                   launcher's old FLEET_*_CODEX_MODEL becomes -m
   effort          --effort <e> / -c model_reasoning_effort="<e>"
-  body            --append-system-prompt-file <a content-addressed copy> — for the
+  body            --append-system-prompt-file <a content-addressed copy of the
+                  body + the role's rows of the rule table> — for the
                   roles whose launcher put a role in the system prompt before this
                   (orchestrator, steward); a worker's and a driver's body is read
                   by their seed skill and injected nowhere, so their launch stays
@@ -56,6 +65,9 @@ import os
 import subprocess
 import sys
 import time
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import fleet_rules  # noqa: E402  the rule table's one reader (issue #2786)
 
 BIN = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(BIN)
@@ -200,9 +212,20 @@ def _capped(model):
     return fb if till.isdigit() and int(till) > time.time() else model
 
 
+def prompt(d):
+    """The body as the system prompt carries it: the definition's body, then the
+    rule table's rows for this role (issue #2786). A table that cannot be read
+    adds nothing — the role still opens, on its body alone."""
+    try:
+        return d['body'] + fleet_rules.section(fleet_rules.load(), d['role'])
+    except fleet_rules.RulesError as e:
+        print('fleet-role: %s — the rule table is left out' % e, file=sys.stderr)
+        return d['body']
+
+
 def body_file(d):
-    """The body's content-addressed copy: written once, atomically."""
-    body = d['body']
+    """The prompt's content-addressed copy: written once, atomically."""
+    body = prompt(d)
     sha = hashlib.sha256(body.encode('utf-8')).hexdigest()[:16]
     dst = os.path.join(conf_dir(), 'roles', '%s-%s.md' % (d['role'], sha))
     if not os.path.isfile(dst):
@@ -311,6 +334,51 @@ def _render(role, agent, cap):
     return out
 
 
+def rules_cmd(rest):
+    role = version = mark = None
+    fmt, i = 'md', 0
+    while i < len(rest):
+        a = rest[i]
+        if a in ('--role', '--version', '--mark') and i + 1 < len(rest):
+            if a == '--role':
+                role = rest[i + 1]
+            elif a == '--version':
+                version = rest[i + 1]
+            else:
+                mark = rest[i + 1]
+            i += 1
+        elif a == '--json':
+            fmt = 'json'
+        else:
+            raise RoleError('rules: unknown option %s' % a)
+        i += 1
+    if role is not None and role not in ROLES:
+        raise RoleError('no such role: %s' % role)
+    try:
+        if version:
+            table = fleet_rules.find(version)
+            if table is None:
+                raise RoleError('rules: no kept version %s' % version)
+        else:
+            table = fleet_rules.load()
+            fleet_rules.save(table)
+        if mark is not None:
+            if not mark.isdigit():
+                raise RoleError('rules --mark: a rule number, not %s' % mark)
+            print(fleet_rules.mark(mark, table))
+            return 0
+    except fleet_rules.RulesError as e:
+        raise RoleError(str(e))
+    for p in table['problems']:
+        print('fleet-role: %s' % p, file=sys.stderr)
+    if fmt == 'json':
+        out = dict(table, rows=[r for r in table['rows'] if role in (None, r['role'])])
+        print(json.dumps(out, ensure_ascii=False, indent=1))
+    else:
+        sys.stdout.write('# 规则表 v=%s\n\n' % table['version'] + fleet_rules.markdown(table, role))
+    return 0
+
+
 def main(argv):
     if not argv or argv[0] in ('-h', '--help'):
         print(__doc__.strip())
@@ -320,6 +388,8 @@ def main(argv):
         if cmd == 'list':
             print('\n'.join(ROLES))
             return 0
+        if cmd == 'rules':
+            return rules_cmd(rest)
         if not rest:
             raise RoleError('%s: which role?' % cmd)
         role = rest[0]
@@ -364,6 +434,8 @@ def main(argv):
             print(','.join(_listval(v)) if isinstance(v, list) else v)
         elif cmd == 'body':
             sys.stdout.write(d['body'])
+        elif cmd == 'prompt':
+            sys.stdout.write(prompt(d))
         elif cmd == 'sha':
             print(d['sha'])
         else:

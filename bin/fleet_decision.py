@@ -70,7 +70,9 @@ CLASSES = ("rule", "money", "publish")
 
 # The keyword backstop (EPIC #2668 共同约定 3): any hit makes the row `never`,
 # whatever the caller declared. A false hit only sends a question to a person —
-# the safe direction — so these lean wide.
+# the safe direction — so these lean wide. The words are the rule table's `ask`
+# rows (conf/role-rules.default.md + the person's layer, bin/fleet_rules.py —
+# issue #2786); this list is only the backstop for a table that cannot be read.
 NEVER_WORDS = {
     "rule": ("claude.md", "agents.md", "break-it", "铁律", "改约定", "删约定"),
     "money": ("付费", "花钱", "云机器", "购买", "充值", "账单", "预算", "billing", "purchase", "paid plan"),
@@ -163,14 +165,32 @@ def due_at(asked, given=None):
 
 # ---- kind ----------------------------------------------------------------------
 
+_WORDS = None
+
+
+def never_words():
+    """{class: keywords} off the merged rule table, read once a process; the
+    code's NEVER_WORDS when the table cannot be read or names no class at all."""
+    global _WORDS
+    if _WORDS is None:
+        try:
+            import fleet_rules
+            got = fleet_rules.never_words(fleet_rules.load())
+            _WORDS = got if any(got.values()) else NEVER_WORDS
+        except Exception:    # any failure: the backstop, never no words
+            _WORDS = NEVER_WORDS
+    return _WORDS
+
+
 def classify(declared, *texts):
     """`never:<class>` when the caller declared one OR a keyword hits; else normal.
     A declared `normal` never beats a keyword (BREAK-IT decision-never-defaulted)."""
     if declared and declared.startswith("never:") and declared[6:] in CLASSES:
         return declared
     hay = " ".join(t for t in texts if t).lower()
+    words = never_words()
     for cls in CLASSES:
-        if any(w in hay for w in NEVER_WORDS[cls]):
+        if any(w in hay for w in words.get(cls, ())):
             return "never:" + cls
     return "normal"
 

@@ -912,6 +912,8 @@ def tool_file_issue(args):
         argv.append("--no-breakage")
     if "breakage_key" in args:
         argv += ["--breakage-key", args["breakage_key"]]
+    if "rule" in args:
+        argv += ["--rule", str(args["rule"])]
     return script(argv, FILE_TIMEOUT_S)
 
 
@@ -1184,7 +1186,9 @@ TOOLS = {
                        "nothing filed or spawned — wait for that issue (await), never file a second (issue #2078). "
                        "Left out, it is AUTOMATIC: a title/body that says the base branch is red, or names the red "
                        "check, while it IS red is filed as breakage all the same; breakage: false files it plain "
-                       "(issue #2175). "
+                       "(issue #2175). rule: the rule-table row this dispatch follows (fleet-role.py rules) — the "
+                       "body ends 「按规则 N 派发」 + its fleet:rule marker; from the orchestrator a filing with none "
+                       "gets 「未注明规则」 (issue #2786). "
                        "Prints the issue URL. Exit 0 ok · 2 usage · 3 unknown label · 4 spawn with no live parent · "
                        "5 the breakage already has an open issue (URL printed) · 1 failure.",
         "inputSchema": {"type": "object", "properties": {
@@ -1200,6 +1204,8 @@ TOOLS = {
                          "Omitted = auto (the text names the red base / check); false = never."},
             "breakage_key": {"type": "string", "pattern": "^[A-Za-z0-9._-]{1,80}$",
                              "description": "A fingerprint already computed (fleet_breakage_key) instead of probing."},
+            "rule": {"type": "integer", "minimum": 1,
+                     "description": "The rule-table number this dispatch follows (fleet-role.py rules)."},
             "repo": REPO},
             "required": ["title"], "additionalProperties": False}}),
     "gh": (tool_gh, {

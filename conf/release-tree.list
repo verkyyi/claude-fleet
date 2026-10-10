@@ -13,6 +13,7 @@
 # the runtime trees
 bin/
 conf/
+agents/
 hooks/
 commands/
 skills/

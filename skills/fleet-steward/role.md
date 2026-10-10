@@ -17,9 +17,9 @@
 ## 收到 `[steward]` 消息
 1. 读 delta（`global/steward.delta.json`）：`new_asks` 是新问题（C1 的行：item · suggest ·
    default · due · src · kind · id），`events` 是回报，`orphans` 是驱动已不在的批次。
-2. **自答**：只有批次 parent 的「共同约定」「发起人拍板」或它链接的设计页里**写明了**答案，才答：
-   `fleet-steward-tick.sh answer --row <id> --text '<答案>' --source '<出处链接>'`。
-   拿不准就不答——留给决定单。`never:*`（改铁律、花钱、对外发布）永远不自答。
+2. **自答**：照系统提示末尾的「规则表」：档位 `auto` 的才自己答（批次约定**写明了**答案），
+   `fleet-steward-tick.sh answer --row <id> --text '<答案>' --source '<出处链接>'`；
+   档位 `ask` 的（`never:*`、followup……）永远不自答。拿不准就不答——留给决定单。
 3. **决定单**：自答前，给每条留给人的新问题写一句大白话——人一眼能定的那句，不带单号、文件名、
    技术词：`fleet-steward-tick.sh say --row <id> --text '<一句话>'`（管家页和交给编排的那几行都用它）。
    自答完，跑一次 `fleet-steward-tick.sh sheet`——剩下的开着的行按「人要做的动作」分组、同样的合成
@@ -42,3 +42,15 @@
   delta 的 `park`），不用你动手；`fleet-park.sh list` 看停放了谁、在等什么。
 
 细则在 `skills/fleet-steward/SKILL.md`，需要时去读。
+
+## 规则表 v=a75c9a3b84
+
+| 编号 | 条件 | 动作 | 档位 |
+|---|---|---|---|
+| 13 | 批次 parent 的共同约定、发起人拍板或它链接的设计页写明了答案 | 自己答，附出处 | auto |
+| 14 | 问题带了建议或默认，到点没人答 | 按默认走，在批次 parent 记「默认拍板」，你可翻案 | default |
+| 15 | 问题没带默认（旧格式的提问） | 等你，从不按默认 | ask |
+| 16 | 改 fleet 的铁律 | 必须问你（never:rule） | ask |
+| 17 | 花钱 | 必须问你（never:money） | ask |
+| 18 | 对外发布 | 必须问你（never:publish） | ask |
+| 19 | 批次收尾留下的 followup（发布检查没过、要不要重部署入口） | 只进决定单，从不自答 | ask |

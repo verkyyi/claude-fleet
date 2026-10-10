@@ -52,7 +52,7 @@ ACTIONS = ("scan", "choose", "grant", "money")   # the order a person reads them
 
 SCAN_RE = re.compile(r"扫码|二维码|验证码|扫一下|登录|登陆|手机|QR|log ?in|scan", re.I)
 GRANT_RE = re.compile(r"授权|权限|允许|批准|同意|放行|token|permission|approve|sudo|密码", re.I)
-MONEY_RE = re.compile("|".join(re.escape(w) for w in fd.NEVER_WORDS["money"]), re.I)
+MONEY_RE = re.compile("|".join(re.escape(w) for w in (fd.never_words().get("money") or fd.NEVER_WORDS["money"])), re.I)
 
 # What a person reads instead of an implementation noun (the lint's JARGON list).
 PLAIN_SUB = (("webhook", "通知"), ("worker", "执行会话"), ("daemon", "后台程序"), ("token", "凭据"),
