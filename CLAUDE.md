@@ -368,6 +368,14 @@ Do not install from memory: read the doc and work from it.
   doctor's `roles` row: 入口 vN · 本机 vM · 拉到 … (`status --roles`,
   `person-sync.json`), WARN past a day. No person ⇒ no file, no row, no message
   (`TestPersonRolesOffAddsNothing`); BREAK-IT `person-hub-down`.
+  **A person changes it by saying so** (issue #2785, C4): the `fleet-config` skill
+  turns a sentence into ONE `fleet-role.py set|unset|rule-set|rule-unset|undo` —
+  GET the person bundle (fleet-config.py's client) → the smallest change to
+  `roles` / `rules` → 改前 → 改后 on the merged definition (exit 4, nothing sent)
+  → `--yes` PUTs with `base` (409: redone once) and writes the hub's answer into
+  person-bundle.json at once. A worker's window (`@fleet_role worker`) exits 3; a
+  credential-shaped value is refused before sending. Never hand-edit the layer
+  files for it; `fleet-role-write-selftest.sh`.
 - **How the orchestrator dispatches and what the steward may answer is ONE rule
   table** (issue #2786, EPIC #2781 C5): `conf/role-rules.default.md` (编号 · 角色 ·
   条件 · 动作 · 档位 auto|default|ask|off · 关键词) < the person's layer

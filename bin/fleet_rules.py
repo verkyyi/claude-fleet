@@ -135,8 +135,9 @@ def _person_layer():
     raise RulesError('person-bundle rules is neither a table nor a list')
 
 
-def _layers():
-    """[(name, source label, loader)] low → high."""
+def _layers(person=None):
+    """[(name, source label, loader)] low → high. `person` (a callable) stands in
+    for the cached person layer — a preview of a change not yet written (#2785)."""
     def default():
         with open(default_path(), encoding='utf-8') as f:
             return parse(f.read()), '自带'
@@ -147,7 +148,7 @@ def _layers():
             return None
         with open(p, encoding='utf-8') as f:
             return parse(f.read()), '本机'
-    return [('default', default), ('person', _person_layer), ('local', local)]
+    return [('default', default), ('person', person or _person_layer), ('local', local)]
 
 
 def version_of(rows):
@@ -156,11 +157,11 @@ def version_of(rows):
     return hashlib.sha256(canon.encode('utf-8')).hexdigest()[:10]
 
 
-def load():
+def load(person=None):
     """The merged table: {version, rows, layers, problems}. Raises RulesError
-    only when the fleet's own table cannot be read."""
+    only when the fleet's own table cannot be read. `person`: see _layers."""
     merged, layers, problems = {}, [], []
-    for name, loader in _layers():
+    for name, loader in _layers(person):
         try:
             got = loader()
         except (OSError, RulesError, ValueError) as e:

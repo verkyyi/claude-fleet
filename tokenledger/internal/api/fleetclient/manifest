@@ -171,6 +171,7 @@ skills/doc-preview/server.py
 skills/doc-preview/share.sh
 skills/epic-page/SKILL.md
 skills/epic-page/template.html
+skills/fleet-config/SKILL.md
 skills/fleet-open/SKILL.md
 skills/fleet-orchestrate/SKILL.md
 skills/fleet-orchestrate/role.md
