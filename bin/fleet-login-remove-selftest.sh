@@ -240,7 +240,11 @@ exit 1
 EOF
 chmod +x "$WORK/shim/"* "$WORK/shim-tar-fails/"* "$WORK/shim-tar-warns/"*
 
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
+fail() {
+  printf 'selftest FAIL: %s\n' "$1" >&2
+  [ ! -s "$WORK/out" ] || { printf -- '--- last run (exit %s), its tail:\n' "${RC:-?}" >&2; tail -12 "$WORK/out" >&2; }
+  exit 1
+}
 has() { grep -Fq -- "$2" "$1" || fail "$3"; }
 not_has() { grep -Fq -- "$2" "$1" && fail "$3"; :; }
 run() { : > "$FLEET_TEST_LOG"; bash "$S" "$@" > "$WORK/out" 2>&1; RC=$?; }
