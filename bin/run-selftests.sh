@@ -259,6 +259,8 @@ done
 #      side, so a removed function still selects its callers' tests);
 #   d) it is in SELFTEST_ALWAYS — the lint-type tests that scan the whole tree, so
 #      no filename rule could ever pick them.
+#   e) it is a PART of a selected test — a line `# selftest-part-of: <test>` —
+#      running a slice of that test's checks (issue #2955).
 # A change to the harness itself (SELFTEST_HARNESS) — or a base that does not
 # resolve — falls back to the FULL suite: never trust a selector to vet its own
 # edit. The diff is base...HEAD (from the merge base), committed changes only.
@@ -369,6 +371,14 @@ if [ -n "$changed_base" ]; then
     done
     for a in $SELFTEST_ALWAYS; do
       [ -f "$a-selftest.sh" ] && picks="$picks$a-selftest.sh${tab}always (lint group)$nl"
+    done
+    # A part file (`# selftest-part-of: <test>`) runs a slice of another test's
+    # checks under its own name and ceiling (issue #2955): it goes wherever that
+    # test goes, since the files it exercises are named only there.
+    for t in $(printf '%s' "$picks" | cut -f1 | sort -u); do
+      for p in $(grep -lx -- "# selftest-part-of: $t" *-selftest.sh 2>/dev/null); do
+        picks="$picks$p${tab}part of $t$nl"
+      done
     done
     picks=$(printf '%s' "$picks" | awk -F '\t' 'NF && !seen[$1]++' | sort)
     if [ -z "$picks" ]; then

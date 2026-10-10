@@ -90,11 +90,12 @@
 0.1 fleet-base-branch-selftest.sh
 2.4 fleet-base-sync-selftest.sh
 0.7 fleet-bind-selftest.sh
+137.0 fleet-break-it-2-selftest.sh
 24.0 fleet-break-it-cred-selftest.sh
 5.0 fleet-break-it-cred-sep-selftest.sh
 11.3 fleet-break-it-cred-shared-selftest.sh
 22.5 fleet-break-it-node-selftest.sh
-203.8 fleet-break-it-selftest.sh
+106.0 fleet-break-it-selftest.sh
 2.7 fleet-break-it-tenant-selftest.sh
 0.0 fleet-charter-selftest.sh
 6.7 fleet-children-flush-selftest.sh
