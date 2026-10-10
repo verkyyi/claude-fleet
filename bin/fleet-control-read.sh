@@ -389,7 +389,11 @@ case "$mode" in
     # gh is asked of a login that hosts a repo only (issue #2953): a login the
     # hub just opened for a newcomer hosts none and has no GitHub credential —
     # its first session is a HOME one — and «not ready: gh» kept every session
-    # off it. `gh` still says what gh is; `missing` names what holds it.
+    # off it. `gh` still says what gh is; `missing` names what holds it. Nor does
+    # the login's STARTER repo count (issue #2973): fleet-login-bootstrap.sh puts
+    # every new login up on verkyyi/claude-fleet with --seed (FLEET_SEED=1, issue
+    # #1167) — it only LOOKS (no autofill, no bridge, no write access), so a
+    # newcomer with no GitHub credential is ready on it all the same.
     missing=''
     gh_ok=false
     if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then gh_ok=true; fi
@@ -414,7 +418,7 @@ case "$mode" in
       [ -n "$s" ] || continue
       while IFS= read -r r; do
         [ -n "$r" ] || continue
-        nrepos=$((nrepos + 1))
+        fleet_repo_is_seed "$s" "$r" || nrepos=$((nrepos + 1))
         m=$( fleet_load_conf "$s" >/dev/null 2>&1; fleet_load_repo_conf "$s" "$r" >/dev/null 2>&1; printf '%s' "${FLEET_MAIN:-}" )
         [ -n "$m" ] && [ -d "$m" ] || { checkouts=false; missing="$missing checkout:$s/${r##*/}"; }
       done < <(fleet_repos "$s" 2>/dev/null)

@@ -1889,6 +1889,7 @@ if [ -f "$_nsup" ] && command -v python3 >/dev/null 2>&1; then
   case "$nrc" in
     0) pass node "machine daemon com.claude-fleet.node: $nline" ;;
     3) warn node "machine daemon com.claude-fleet.node: $nline — the hub refuses that login's lane on the machine's node program (its token was reissued away or retired; issue #2501): \`sudo fleet-node-supervisor.py account adopt <login> --rejoin\`, or an admin: \`fleet hub accounts relogin\`; detail: \`fleet-node-supervisor.py status\`" ;;
+    4) warn node "machine daemon com.claude-fleet.node: $nline (issue #2973; detail: \`fleet-node-supervisor.py status --json\` → fda)" ;;
     1) warn node "machine daemon com.claude-fleet.node is installed but not running — $nline. launchd's KeepAlive should bring it back within seconds; if it does not: \`sudo launchctl kickstart -k system/com.claude-fleet.node\`, log /var/log/fleet-node/supervisor.log, \`fleet-node-supervisor.py status\`" ;;
   esac
   # A taken-over login is a TENANT: no admin, no sudo (issue #2842). What a session

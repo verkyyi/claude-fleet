@@ -92,6 +92,8 @@ Usage:
                                                running (stale heartbeat) · 2 not installed ·
                                                3 running, but the hub refuses a login's lane
                                                (令牌失效 · 需要 relogin, issue #2501)
+                                               · 4 running, but without Full Disk Access
+                                               (the hub's account removes are refused, #2973)
   fleet-node-supervisor.py tenants [--json] [--check]
                                                the taken-over logins' abilities (issue #2842):
                                                admin group · sudo rules · sudoers. --check: exit
@@ -237,6 +239,21 @@ def write_json(path, obj, mode=0o644):
         f.write("\n")
     os.chmod(tmp, mode)
     os.rename(tmp, path)
+
+
+def update_verify_due(paths, t, since):
+    """True when the updater (fleet-node-update.py) switched a release and its
+    settle has passed, so its verify need not wait for the task's next slot."""
+    settle = env_num("FLEET_NODE_UPDATE_SETTLE", 30)
+    if since < settle:
+        return False
+    u = read_json(os.path.join(paths.state, "update.json"), None)
+    if not isinstance(u, dict) or u.get("phase") != "switched":
+        return False
+    try:
+        return t - float(u.get("switched_at") or 0) >= settle
+    except (TypeError, ValueError):
+        return False
 
 
 def read_json(path, default):
@@ -602,6 +619,32 @@ def tenants_reading(paths):
         if why:
             bad[login] = why
     return {"at": now(), "complete": complete, "bad": bad, "logins": logins}
+
+
+def fda_reading():
+    """Does THIS process hold macOS Full Disk Access (issue #2973)? The TCC
+    database is unreadable without it, even to root. True · False · None (no
+    such file: not macOS, or nothing to tell). `program` is what a person grants
+    it to — the interpreter launchd runs this daemon with, which every child (the
+    node program and the account ops it runs) inherits as its responsible one."""
+    db = env("FLEET_NODE_TCC_DB", "/Library/Application Support/com.apple.TCC/TCC.db")
+    try:
+        with open(db, "rb") as f:
+            f.read(1)
+        ok = True
+    except (PermissionError, OSError) as e:
+        ok = None if isinstance(e, FileNotFoundError) else False
+    return {"ok": ok, "at": now(), "program": os.path.realpath(sys.executable)}
+
+
+def fda_line(state):
+    """The words for a daemon without Full Disk Access, or "" (issue #2973)."""
+    f = state.get("fda") or {}
+    if f.get("ok") is not False:
+        return ""
+    return ("没有完全磁盘访问：入口下发的删号会被 macOS 拒（dscl eDSPermissionError），入口一直 removing — "
+            "系统设置 › 隐私与安全性 › 完全磁盘访问 里加上 %s，再 sudo launchctl kickstart -k system/%s"
+            % (f.get("program") or "python3", LABEL))
 
 
 def tenants_now(paths, state):
@@ -1443,7 +1486,13 @@ class Supervisor(object):
     # -- tasks
     def task_due(self, tk, t):
         ts = self.state["tasks"].get(tk["name"]) or {}
-        return t - (ts.get("last_start") or 0) >= float(tk.get("every", 60))
+        since = t - (ts.get("last_start") or 0)
+        if since >= float(tk.get("every", 60)):
+            return True
+        # A switched release is verified FLEET_NODE_UPDATE_SETTLE (30 s) after the
+        # switch, not on the next 5-minute tick (issue #2973): until then the hub
+        # tells every refused newcomer the machine is 「正在更新（switched）」.
+        return tk["name"] == "update" and update_verify_due(self.p, t, since)
 
     def task_runnable(self, tk):
         if tk.get("account"):
@@ -1726,6 +1775,23 @@ class Supervisor(object):
         self.state["tenants"] = cur
         self.dirty = True
 
+    # -- Full Disk Access (issue #2973)
+    def tend_fda(self, t):
+        """Every FLEET_NODE_TENANT_EVERY (300 s), as root only: can this daemon's
+        process chain delete a login (TCC lets nothing without Full Disk Access
+        delete a user record)? Into state.json for every login's doctor."""
+        if os.geteuid() != 0:   # a non-root reader is kept out of TCC.db anyway
+            return
+        last = self.state.get("fda") or {}
+        if t - (last.get("at") or 0) < env_num("FLEET_NODE_TENANT_EVERY", 300):
+            return
+        cur = fda_reading()
+        if cur["ok"] is False and last.get("ok") is not False:
+            self.log("no Full Disk Access for %s: the hub's account removes will be refused (issue #2973)"
+                     % cur["program"])
+        self.state["fda"] = cur
+        self.dirty = True
+
     # -- sweep
     def sweep_due(self, t):
         return t - (self.state["sweep"].get("last") or 0) >= env_num("FLEET_NODE_SWEEP_EVERY", 3600)
@@ -1780,6 +1846,10 @@ class Supervisor(object):
                 self.tend_tenants(t)
             except Exception as e:  # a check must never take the daemon down
                 self.log("tenants: %s" % e)
+            try:
+                self.tend_fda(t)
+            except Exception as e:  # a check must never take the daemon down
+                self.log("fda: %s" % e)
             if self.sweep_due(t):
                 try:
                     self.do_sweep()
@@ -1840,6 +1910,7 @@ class Supervisor(object):
         self.reap_tasks(wait=True)
         self.do_sweep()
         self.tend_tenants(t)
+        self.tend_fda(t)
         self.dirty = True
         write_json(self.p.state_file, self.state)
         return 0
@@ -3425,6 +3496,10 @@ def main(argv):
             if refused:
                 print("%s · 令牌失效 · 需要 relogin: %s" % (lines[0], " ".join(refused)))
                 return 3
+            fda = fda_line(state) if code == 0 else ""
+            if fda:
+                print("%s · %s" % (lines[0], fda))
+                return 4
             print(lines[0])
         else:
             print("\n".join(lines))

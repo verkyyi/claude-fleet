@@ -100,6 +100,9 @@
 #   login-remove-no-fda                             bin/fleet-login-remove.sh (a failed deleteUser is checked, not
 #                                                   the end; leftover home moved aside) + agent accountWhy
 #   account-remove-tenant-held                      tokenledger/internal/agent runas.go (holdLogin; go test)
+#   newcomer-login-hosts-repo                       bin/fleet-control-read.sh ready (a seed repo needs no gh)
+#   login-remove-dscl-denied                        bin/fleet-node-supervisor.py (fda reading, status --check 4)
+#                                                   + bin/fleet-login-remove.sh (says Full Disk Access)
 #   drill-login-handed-silently                     tokenledger/internal/api fleet_drill.go (closeDrillLogins
 #                                                   handed) + store DeleteDrill (keeps the handed rows)
 #   machine-lane-reissued                           tokenledger/internal/api fleet_login_node.go (deviceNode, machineServing)
@@ -5141,6 +5144,47 @@ drill_account_remove_tenant_held() {
     || { WHY="runAccountScript no longer holds the login it removes"; return 1; }
   _drill_go_tests 'TestHoldLoginRefusesItsCommands' "$ROOT/tokenledger/internal/agent/runas_unix_test.go" \
     '删号跑着时节点程序不以该登录起命令、别的登录照常、删完放开（go test）' ./internal/agent || return 1
+  SECS=$(since "$t0")
+}
+
+# ---- newcomer-login-hosts-repo (#2973): the hub's new login comes up on the
+# starter repo (fleet-up --seed, #1167), so ready counted a hosted repo and wanted
+# gh again. A seed repo only looks: it needs no gh.
+drill_newcomer_login_hosts_repo() {
+  CAP=30; local t0 w got
+  t0=$(now)
+  w=$(mktemp -d "${TMPDIR:-/tmp}/brk-seed.XXXXXX")
+  mkdir -p "$w/bin" "$w/home/.claude" "$w/c/fleets/fleet/repos" "$w/main"
+  printf '#!/bin/sh\nexit 1\n' > "$w/bin/gh"; printf '#!/bin/sh\nexit 1\n' > "$w/bin/security"
+  chmod +x "$w/bin/gh" "$w/bin/security"; printf '{}' > "$w/home/.claude/.credentials.json"
+  printf 'FLEET_SESSION=fleet\n' > "$w/c/fleets/fleet/conf"
+  printf 'FLEET_REPO=verkyyi/claude-fleet\nFLEET_MAIN=%s/main\nFLEET_SEED=1\n' "$w" > "$w/c/fleets/fleet/repos/verkyyi-claude-fleet.conf"
+  got=$(HOME="$w/home" FLEET_CONF_DIR="$w/c" PATH="$w/bin:$PATH" bash "$ROOT/bin/fleet-control-read.sh" ready 2>/dev/null)
+  case "$got" in *'"ready":true'*) ;; *) rm -rf "$w"; WHY="a login on the seed repo only, no gh, reads not ready: $got"; return 1 ;; esac
+  printf 'FLEET_REPO=acme/app\nFLEET_MAIN=%s/main\n' "$w" > "$w/c/fleets/fleet/repos/acme-app.conf"
+  got=$(HOME="$w/home" FLEET_CONF_DIR="$w/c" PATH="$w/bin:$PATH" bash "$ROOT/bin/fleet-control-read.sh" ready 2>/dev/null)
+  rm -rf "$w"
+  case "$got" in *'"ready":false'*'"gh"'*) ;; *) WHY="a login with a repo of its own and no gh reads ready: $got"; return 1 ;; esac
+  WHAT='只托管起步仓库（--seed）的新登录缺 gh → ready；再加自己的仓库 → not ready: gh（真跑就绪检查）'
+  SECS=$(since "$t0")
+}
+
+# ---- login-remove-dscl-denied (#2973): with no Full Disk Access in the node
+# program's chain, even root's dscl . -delete is refused (eDSPermissionError) and
+# the hub's remove stays removing. Now the daemon reads its FDA and the status line
+# / doctor name what to grant; the script's last words say Full Disk Access.
+drill_login_remove_dscl_denied() {
+  CAP=60; local t0 got
+  t0=$(now)
+  got=$(cd "$ROOT/bin" && python3 -c 'import importlib.util, sys
+s = importlib.util.spec_from_file_location("fns", "fleet-node-supervisor.py"); m = importlib.util.module_from_spec(s); s.loader.exec_module(m)
+print(m.fda_line({"fda": {"ok": False, "program": "/x/Python"}}))' 2>&1)
+  case "$got" in *完全磁盘访问*/x/Python*) ;; *) WHY="the daemon no longer names what to grant Full Disk Access to: $got"; return 1 ;; esac
+  grep -q '4) warn node' "$ROOT/bin/fleet-doctor.sh" \
+    || { WHY="the doctor's node row ignores status --check 4 (no Full Disk Access)"; return 1; }
+  _login_remove_selftest \
+    || { WHY="fleet-login-remove-selftest.sh is red (its Full Disk Access leg): $(printf '%s\n' "$LOGIN_REMOVE_ST_OUT" | grep -m1 'selftest FAIL')"; return 1; }
+  WHAT='守护读出自己没有完全磁盘访问 → status --check 4、医生 node 行 WARN 点名要授权的程序；dscl 被拒时删号脚本最后一行说清（真跑 shim 化的 remove）'
   SECS=$(since "$t0")
 }
 

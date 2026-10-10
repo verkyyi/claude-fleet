@@ -1322,6 +1322,15 @@ mkdir -p "$WORK/conf-norepo/fleets/solo$$"; printf 'FLEET_SESSION=solo%s\n' "$$"
 rm -f "$WORK/gh-ok"; printf '{}' > "$HOME/.claude/.credentials.json"   # the pool above lives in the other conf dir
 eq "R: no repo hosted, no gh login: ready all the same" "True|False|True|True|" "$(FLEET_CONF_DIR="$WORK/conf-norepo" rdy)"
 eq "R: a repo hosted, no gh login: not ready, gh named" "False|False|True|True|gh" "$(rdy)"
+# the same newcomer once fleet-login-bootstrap.sh put it up on its STARTER
+# (fleet-up --seed: FLEET_SEED=1 in the repo's overlay, #1167) — a repo it only
+# looks at needs no GitHub credential (#2973): ready, nothing missing
+mkdir -p "$WORK/conf-seed/fleets/solo$$/repos" "$WORK/seedmain"
+printf 'FLEET_SESSION=solo%s\n' "$$" > "$WORK/conf-seed/fleets/solo$$/conf"
+printf 'FLEET_REPO=verkyyi/claude-fleet\nFLEET_MAIN=%s\nFLEET_SEED=1\n' "$WORK/seedmain" > "$WORK/conf-seed/fleets/solo$$/repos/verkyyi-claude-fleet.conf"
+eq "R: only the seed repo hosted, no gh login: ready all the same" "True|False|True|True|" "$(FLEET_CONF_DIR="$WORK/conf-seed" rdy)"
+printf 'FLEET_REPO=o/own\nFLEET_MAIN=%s\n' "$WORK/seedmain" > "$WORK/conf-seed/fleets/solo$$/repos/o-own.conf"
+eq "R: the seed plus a repo of its own, no gh login: not ready, gh named" "False|False|True|True|gh" "$(FLEET_CONF_DIR="$WORK/conf-seed" rdy)"
 touch "$WORK/gh-ok"; rm -f "$HOME/.claude/.credentials.json"
 HOME="$(cd ~ && pwd)"; export HOME
 
