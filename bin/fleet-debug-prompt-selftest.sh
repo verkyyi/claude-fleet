@@ -161,7 +161,7 @@ unset FLEET_CLIENT_LOG_DIR
 
 # --- G: the reconnect page's 「按 d」 ---------------------------------------------------
 IFS=: read -r -a pdirs <<< "$PATH"
-for d in "${pdirs[@]}"; do
+for d in ${pdirs[@]+"${pdirs[@]}"}; do
   case $d in *tmux-shim*) continue ;; esac
   [ -x "$d/tmux" ] && { REAL_TMUX="$d/tmux"; break; }
 done
