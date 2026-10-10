@@ -435,7 +435,6 @@ row() {  # row <看到> <按了> <要人帮>
 }
 armed() { printf '%s %s\n' "$1" "$2" >> "$OUT/armed"; }
 on_signal() {
-
   printf '\n%s: %s — restoring what was armed\n' "$PROG" "$1" >&2
   restore_armed "$OUT" >&2
   printf 'ABORTED (%s) — no reading; steps so far in %s\n' "$1" "$STEPS"
