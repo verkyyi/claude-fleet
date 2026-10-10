@@ -34,7 +34,7 @@ func TestPersonRolesValidation(t *testing.T) {
 	if code != 200 || out.Version != 1 || !strings.Contains(string(out.Bundle), `"steward":"---\nmodel: sonnet\n---\n"`) || !strings.Contains(string(out.Bundle), `| 101 | steward |`) {
 		t.Fatalf("a valid roles + rules layer: HTTP %d %s", code, raw)
 	}
-	if code, _, raw, _ := teamCall(t, h, http.MethodPut, asOperator, personRolesV1, ""); code != http.StatusUnprocessableEntity || !strings.Contains(raw, "roles") {
+	if code, _, raw, _ := teamCall(t, h, http.MethodPut, asOperator, personRolesV1, ""); code != http.StatusUnprocessableEntity || !strings.Contains(raw, "is not something a team hands out") {
 		t.Fatalf("team PUT with roles: HTTP %d %s, want 422", code, raw)
 	}
 	for name, b := range map[string]map[string]any{
