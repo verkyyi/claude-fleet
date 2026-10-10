@@ -463,6 +463,31 @@ func TestPublishRefusesMissingPinned(t *testing.T) {
 	}
 }
 
+// claude-fleet#2930: a commit whose Go source is not the hub image's is a 422
+// (ccquota:) and stable stays; a commit that changes no Go goes through.
+func TestPublishRefusesStaleCCQuota(t *testing.T) {
+	p := newPublishRig(t)
+	tok := p.oidc.token(nil)
+	a := p.repo.commit("A", map[string]string{"tokenledger/internal/x/x.go": "package x\n"})
+	if code, body := p.publish(tok, a, "", nil, nil); code != 422 || !strings.Contains(body, "ccquota:") || !strings.Contains(body, "redeploy") {
+		t.Fatalf("a new tokenledger/ over an old image: %d %s", code, body)
+	}
+	if p.rs.stable().SHA != "" {
+		t.Fatal("stable moved onto a release carrying another commit's ccquota")
+	}
+	p.rs.DistSrc = release.SourceDigest(map[string][]byte{"tokenledger/go.mod": []byte("module x\n"), "tokenledger/internal/x/x.go": []byte("package x\n")})
+	if code, body := p.publish(tok, a, "", nil, nil); code != 200 {
+		t.Fatalf("once the image is A's: %d %s", code, body)
+	}
+	b := p.repo.commit("B", map[string]string{"conf/x.conf": "x=1\n"})
+	if code, body := p.publish(tok, b, a, nil, nil); code != 200 {
+		t.Fatalf("a commit with the same Go: %d %s", code, body)
+	}
+	if m := p.stable(t); m.SHA != b || m.CCQuotaSrc != p.rs.DistSrc {
+		t.Fatalf("stable %s ccquota_src %q", m.SHA, m.CCQuotaSrc)
+	}
+}
+
 // Off adds nothing: no release store (no signing key) or no publisher → the
 // route is a 404 and the hub is as before.
 func TestPublishOffAddsNothing(t *testing.T) {

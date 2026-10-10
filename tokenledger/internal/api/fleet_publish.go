@@ -542,6 +542,11 @@ func (rs *ReleaseStore) Accept(ctx context.Context, f *publishForm) (map[string]
 	if len(missing) > 0 {
 		return nil, publishErr(http.StatusUnprocessableEntity, "release.json pins %s, which CCQUOTA_FLEET_RELEASE_ARTIFACTS does not hold — put it there", strings.Join(missing, ", "))
 	}
+	if err := rs.distSrcCheck(release.SourceDigest(all), rs.artifacts()); err != nil {
+		// a new runtime with an old ccquota is how #2928 reran a login's
+		// creation (claude-fleet#2930): stable waits for the hub image
+		return nil, publishErr(http.StatusUnprocessableEntity, "ccquota: %v", err)
+	}
 	// verified and ours: from here on GitHub is never asked — marked before the
 	// build, so not even the build's own prune looks there
 	if err := rs.markPublished(f.sha); err != nil {

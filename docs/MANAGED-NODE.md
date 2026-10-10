@@ -151,6 +151,15 @@ PUT 的请求体就是上面可写的字段，外加可选的 `if_version`（读
 ## 7. 整机一个更新器（C6，#2334）
 
 你移一次 stable，每台托管机器上的**所有部件**换到这一版；新版体检不过就整体退回上一版。
+
+**发布版里的 ccquota 是该提交的 Go**（#2930）。发布版的 `ccquota-<os>-<arch>` 取自入口镜像自带的那份，所以入口镜像
+构建时给每个 ccquota 盖上它编译的 Go 源摘要（`cmd/ccquota-srcdigest` → `-X main.SrcDigest`；`ccquota version` 第二行
+`src <摘要>`）。摘要只算 `tokenledger/` 的构建输入（`go.mod` · `go.sum` · `cmd/` `internal/` 下的文件，去掉测试、
+`testdata/`、`.md`、客户端清单和 pack；`release.SourceDigest`，git 一侧是 `bin/fleet-src-digest.py`）。入口建发布版时按该提交
+算同一摘要：不等就不建（发布 422 `ccquota:`，等入口镜像重新部署），等了就签进清单的 `ccquota_src`；补建沿用原包的 ccquota。
+所以 **Go 改了的提交要先重新部署入口镜像，stable 才挪得过去**：`fleet-stable.sh move` 第 8 道门先比入口
+`/v1/fleet/release/artifacts` 的 `ccquota_src` 与目标提交的摘要（`ccquota:`；入口不报 `ccquota_src` 时退回 #2927 按 `/version` 查提交的那条）。机器上 `fleet doctor --machine` 的 `ccquota`
+行：清单记了源、二进制的 `src` 不是它 → FAIL（整机退回）；旧发布版没记源、构建提交又不是 runtime → WARN。
 更新器是 `bin/fleet-node-update.py`，守护（C3）的 `update` 任务（每 5 分钟一次，`FLEET_NODE_UPDATE_EVERY`），
 root 运行。**托管登录的 `~/.claude/fleet` 就是机器运行时那一份**（#2774，EPIC #2770 C4）：
 `~/.claude/fleet.versions/<sha>/` 仍是登录自己的**真目录**，但里面每个文件都是指向 `<root>/<sha>/<同一路径>` 的链接

@@ -316,7 +316,7 @@ func loadFleetReleases(srv *api.Server) error {
 		repo = "verkyyi/claude-fleet"
 	}
 	srv.Releases = &api.ReleaseStore{Dir: dir, Key: key, Repo: repo, Source: srv.Stable,
-		DistDir: srv.FleetDistDir, ArtifactsDir: os.Getenv("CCQUOTA_FLEET_RELEASE_ARTIFACTS"),
+		DistDir: srv.FleetDistDir, DistSrc: SrcDigest, ArtifactsDir: os.Getenv("CCQUOTA_FLEET_RELEASE_ARTIFACTS"),
 		Platforms:     strings.Fields(os.Getenv("CCQUOTA_FLEET_RELEASE_PLATFORMS")),
 		NPMRegistries: strings.Fields(os.Getenv("CCQUOTA_FLEET_RELEASE_NPM"))}
 	srv.Stable.OnStable = srv.Releases.OnStable

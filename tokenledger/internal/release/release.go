@@ -76,11 +76,16 @@ type Manifest struct {
 	// publish number — rising by one per stable move, so a machine's
 	// «only forward» gate reads one signed integer, never git ancestry. Both
 	// are under the signature; a release never made stable has neither.
-	Prev      string `json:"prev,omitempty"`
-	Seq       int64  `json:"seq,omitempty"`
-	Tree      Blob   `json:"tree"`
-	Files     []File `json:"files"`
-	Artifacts []Blob `json:"artifacts"`
+	Prev string `json:"prev,omitempty"`
+	Seq  int64  `json:"seq,omitempty"`
+	// CCQuotaSrc is the digest of the commit's Go source (SourceDigest) its
+	// ccquota-* artifacts were checked against (claude-fleet#2930): the node
+	// doctor holds `ccquota version`'s src line to it. "" = not checked (a
+	// release from before, or one carrying no ccquota).
+	CCQuotaSrc string `json:"ccquota_src,omitempty"`
+	Tree       Blob   `json:"tree"`
+	Files      []File `json:"files"`
+	Artifacts  []Blob `json:"artifacts"`
 }
 
 var (
@@ -188,6 +193,7 @@ func fileMode(p string, b []byte) int64 {
 type Seal struct {
 	Prev string
 	Seq  int64
+	Src  string // Manifest.CCQuotaSrc, signed in beside the chain (claude-fleet#2930)
 }
 
 // Build writes a signed release for sha into dir (which must not exist yet):
@@ -211,7 +217,7 @@ func BuildSealed(dir, repo, sha string, files map[string][]byte, artifacts map[s
 		return nil, err
 	}
 	m := Manifest{Schema: Schema, Repo: repo, SHA: sha, Created: now.UTC().Truncate(time.Second),
-		Key: KeyID(key.Public().(ed25519.PublicKey)), Prev: seal.Prev, Seq: seal.Seq, Files: []File{}, Artifacts: []Blob{}}
+		Key: KeyID(key.Public().(ed25519.PublicKey)), Prev: seal.Prev, Seq: seal.Seq, CCQuotaSrc: seal.Src, Files: []File{}, Artifacts: []Blob{}}
 
 	names := make([]string, 0, len(files))
 	for p := range files {

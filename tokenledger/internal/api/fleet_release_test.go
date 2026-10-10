@@ -40,6 +40,10 @@ type releaseRig struct {
 	fetch *release.Fetcher
 }
 
+// rigSrc: the Go source digest of every rig commit's tokenledger/ (go.mod
+// "module x"), so the rig's dist binaries are that commit's (claude-fleet#2930).
+var rigSrc = release.SourceDigest(map[string][]byte{"tokenledger/go.mod": []byte("module x\n")})
+
 func newReleaseRig(t *testing.T) *releaseRig {
 	t.Helper()
 	r := &releaseRig{}
@@ -69,7 +73,7 @@ func newReleaseRig(t *testing.T) *releaseRig {
 	must(t, os.WriteFile(filepath.Join(r.inst, "claude-code-2.1.0-darwin-arm64"), []byte("CLAUDE"), 0o644))
 	must(t, os.WriteFile(filepath.Join(r.inst, "codex-0.50.0-darwin-arm64.tar.gz"), []byte("CODEX"), 0o644))
 	src := &StableSource{Repo: "o/r", APIBase: r.gh.URL, RawBase: r.gh.URL}
-	r.rs = &ReleaseStore{Dir: r.dir, Key: r.key, Repo: "o/r", Source: src, DistDir: r.dist, ArtifactsDir: r.inst}
+	r.rs = &ReleaseStore{Dir: r.dir, Key: r.key, Repo: "o/r", Source: src, DistDir: r.dist, DistSrc: rigSrc, ArtifactsDir: r.inst}
 	r.npm = newFakeNPM(t)
 	r.rs.NPMRegistries = []string{r.npm.srv.URL} // never the real npm
 	r.hub = releaseHub(t, r.rs)
@@ -332,7 +336,7 @@ func TestReleasePathOK(t *testing.T) {
 func TestReleaseTwoReplicasOneVolume(t *testing.T) {
 	r := newReleaseRig(t)
 	must(t, r.rs.Source.Refresh(context.Background()))
-	other := &ReleaseStore{Dir: r.dir, Key: r.key, Repo: "o/r", Source: r.rs.Source, DistDir: r.dist, ArtifactsDir: r.inst}
+	other := &ReleaseStore{Dir: r.dir, Key: r.key, Repo: "o/r", Source: r.rs.Source, DistDir: r.dist, DistSrc: rigSrc, ArtifactsDir: r.inst}
 	files := map[string][]byte{StableManifestPath: []byte("bin/fleet\n"), "bin/fleet": []byte("#!/bin/sh\necho A\n")}
 	errs := make(chan error, 2)
 	for i, s := range []*ReleaseStore{r.rs, other} {
@@ -720,5 +724,68 @@ func TestReleaseHealsLackingPinned(t *testing.T) {
 	carries()
 	if r.npm.hits["/@anthropic-ai%2fclaude-code-darwin-arm64/9.9.9"] != before {
 		t.Error("a whole release was rebuilt again")
+	}
+}
+
+// claude-fleet#2930: a release's ccquota is its commit's. The hub image's dist
+// binaries built from other Go source are refused like a missing pin (never
+// baked — a release is built once), /artifacts says what source they are, and
+// once the image matches the same request builds it, the source signed in.
+// A rebuild (heal) keeps the build's own ccquota, never today's image's.
+func TestReleaseRefusesStaleCCQuota(t *testing.T) {
+	r := newReleaseRig(t)
+	stale := release.SourceDigest(map[string][]byte{"tokenledger/go.mod": []byte("module old\n")})
+	r.rs.DistSrc = stale
+	must(t, r.rs.Source.Refresh(context.Background()))
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	err := r.rs.Ensure(ctx, shaA)
+	if err == nil || !strings.Contains(err.Error(), stale[:12]) || !strings.Contains(err.Error(), rigSrc[:12]) || !strings.Contains(err.Error(), "redeploy") {
+		t.Fatalf("Ensure with a stale ccquota = %v, want a refusal naming both sources", err)
+	}
+	if r.rs.Has(shaA) {
+		t.Fatal("a release with another commit's ccquota was kept")
+	}
+	resp, body := getBody(t, r.hub.URL+release.Path+"artifacts")
+	var v struct {
+		Src string `json:"ccquota_src"`
+	}
+	must(t, json.Unmarshal([]byte(body), &v))
+	if resp.StatusCode != 200 || v.Src != stale {
+		t.Fatalf("GET artifacts: %d ccquota_src %q, want %s", resp.StatusCode, v.Src, stale)
+	}
+	// an unstamped image cannot vouch for its binaries either
+	r.rs.DistSrc = ""
+	if err := r.rs.Ensure(ctx, shaA); err == nil || !strings.Contains(err.Error(), "no Go source") {
+		t.Fatalf("Ensure with an unstamped ccquota = %v", err)
+	}
+	// the image catches up: the same request builds it whole
+	r.rs.DistSrc = rigSrc
+	resp, body = getBody(t, r.hub.URL+release.Path+"stable")
+	if resp.StatusCode != 200 {
+		t.Fatalf("GET stable once the image matches: %d %s", resp.StatusCode, body)
+	}
+	var m release.Manifest
+	must(t, json.Unmarshal([]byte(body), &m))
+	if m.CCQuotaSrc != rigSrc {
+		t.Fatalf("manifest ccquota_src %q, want %s", m.CCQuotaSrc, rigSrc)
+	}
+	// a heal after the image moved on keeps the checked binary and its source
+	must(t, os.WriteFile(filepath.Join(r.dist, "ccquota-darwin-arm64"), []byte("\x7fBIN newer"), 0o755))
+	r.rs.DistSrc = stale
+	must(t, r.rs.ensure(ctx, shaA, true, nil))
+	resp, body = getBody(t, r.hub.URL+release.Path+"stable")
+	must(t, json.Unmarshal([]byte(body), &m))
+	if resp.StatusCode != 200 || m.CCQuotaSrc != rigSrc {
+		t.Fatalf("after a heal: %d ccquota_src %q", resp.StatusCode, m.CCQuotaSrc)
+	}
+	dest := filepath.Join(t.TempDir(), "rt")
+	if _, err := r.fetch.Fetch(ctx, "stable", dest, true); err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	b, err := os.ReadFile(filepath.Join(dest, ".release/artifacts/ccquota-darwin-arm64"))
+	if err != nil || string(b) != "\x7fBIN darwin" {
+		t.Fatalf("the healed release carries %q, not the checked binary", b)
 	}
 }

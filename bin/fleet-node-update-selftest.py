@@ -114,7 +114,7 @@ def wj(path, obj):
 
 
 def make_release(rel, sha, claude="2.1.1", codex="0.154.0", tmux="3.7c", broken=(), drop=(), drill_fail=False,
-                 sessions_log=None, sync_log=None, sync_fail=False, apply_log=None):
+                 sessions_log=None, sync_log=None, sync_fail=False, apply_log=None, ccquota_src=None, ccquota_says=None):
     """A release dir as `ccquota release fetch --artifacts` leaves it, under <rel>/<sha>."""
     d = os.path.join(rel, sha)
     os.makedirs(os.path.join(d, ".release", "artifacts"))
@@ -168,7 +168,7 @@ def make_release(rel, sha, claude="2.1.1", codex="0.154.0", tmux="3.7c", broken=
     if drill_fail:
         open(os.path.join(d, "conf", "drill-fail"), "w").close()
     arts = {
-        "ccquota-darwin-arm64": 'echo "ccquota prod-%s"' % sha[:7],
+        "ccquota-darwin-arm64": ccquota_says or 'echo "ccquota prod-%s"' % sha[:7],
         "claude-%s-darwin-arm64" % claude: 'echo "%s (Claude Code)"' % claude,
         "codex-%s-darwin-arm64" % codex: 'echo "codex-cli %s"' % codex,
         "tmux-%s-darwin-arm64" % tmux: 'echo "tmux %s"' % tmux,
@@ -184,7 +184,10 @@ def make_release(rel, sha, claude="2.1.1", codex="0.154.0", tmux="3.7c", broken=
             f.write(b)
         os.chmod(os.path.join(d, ".release", "artifacts", n), 0o755)
         man.append({"name": n, "sha256": sh256(b), "size": len(b)})
-    wj(os.path.join(d, ".release", "manifest.json"), {"schema": 1, "sha": sha, "artifacts": man})
+    m = {"schema": 1, "sha": sha, "artifacts": man}
+    if ccquota_src:
+        m["ccquota_src"] = ccquota_src  # the commit's Go source, checked by the hub (issue #2930)
+    wj(os.path.join(d, ".release", "manifest.json"), m)
     return d
 
 
@@ -383,6 +386,33 @@ class C_DaemonAndCommit(Sandbox):
         self.assertIn("drill", st["reason"])
         self.assertEqual(self.current(), V1)
         self.assertNotIn("drill", self.cmd("doctor").stdout)
+
+    def test_ccquota_not_the_releases_is_rolled_back(self):
+        # issue #2930: a release whose ccquota was built from other Go source
+        # than its commit's (the hub image's of the day) fails its own doctor
+        src = "a" * 64
+        self.release(V1, ccquota_src=src, ccquota_says='echo "ccquota prod-%s"; echo "src %s"' % (V1[:7], src))
+        self.tick(V1)
+        self.daemon_on(V1)
+        self.assertEqual(self.tick(V1)["result"], "committed")
+        self.assertRegex(self.cmd("doctor").stdout, r"PASS\s+ccquota\b.*Go source aaaaaaaaaaaa")
+        self.release(V2, ccquota_src="b" * 64, ccquota_says='echo "ccquota prod-old1234"; echo "src %s"' % src)
+        self.tick(V2)
+        self.daemon_on(V2)
+        st = self.tick(V2)
+        self.assertEqual(st["result"], "rolled-back", st)
+        self.assertIn("ccquota", st["reason"])
+        self.assertEqual(self.current(), V1)
+
+    def test_ccquota_of_another_commit_warns_on_an_old_release(self):
+        # a release from before #2930 names no source: another commit's build is
+        # a WARN (its Go may be the same), never a rollback
+        self.release(V1, ccquota_says='echo "ccquota prod-343c92b"')
+        self.tick(V1)
+        self.daemon_on(V1)
+        self.assertEqual(self.tick(V1)["result"], "committed")
+        out = self.cmd("doctor").stdout
+        self.assertRegex(out, r"WARN\s+ccquota\b.*prod-343c92b.*%s" % V1[:12])
 
     def test_daemon_not_restarted_is_rolled_back(self):
         self.install(V1)

@@ -70,15 +70,18 @@
 #               --force moves anyway and logs. No hub address here
 #               (CCQUOTA_HUB_URL / FLEET_HUB_URL / fleet.conf / hub.json), or a
 #               hub with no such list (releases off, an older hub): said, passes.
-#            8. the ccquota the release would ship is the hub's own build (its
-#               /version `prod-<sha>`, the image's dist binaries), not the
-#               target's: every tokenledger/ commit the target has (tests and
-#               *.md aside) must already be in that sha (issue #2927 — stable
-#               003e89bb shipped prod-343c92b, #2922's supervisor half without
-#               its node-program half). One missing REFUSES (reason `ccquota:`,
-#               listing them) — deploy the hub first; --force moves anyway and
-#               logs. No hub address, a /version with no prod-<sha>, or a sha
-#               this checkout cannot find: said, passes.
+#            8. the hub's ccquota binaries are the target's (issue #2930): the
+#               ccquota_src its /v1/fleet/release/artifacts names — the Go source
+#               its image was built from — equals the target's tokenledger/
+#               digest (bin/fleet-src-digest.py). A release takes the hub image's
+#               ccquota, so before this a new runtime went out with an old one
+#               (003e89bb with prod-343c92b, #2928). Different REFUSES (reason
+#               `ccquota:` — redeploy the hub image first); --force moves and
+#               logs. A hub that names no ccquota_src (older than #2930, or releases
+#               off) falls back to #2927's check: its /version `prod-<sha>` must
+#               already carry every tokenledger/ commit the target has (tests and
+#               *.md aside), else REFUSED `ccquota:` listing them. No hub
+#               address, or a target with no Go source / no updater: said, passes.
 #          Then pushes <sha>:refs/tags/stable with --force-with-lease pinned to
 #          the value it read, so two concurrent moves cannot both win — the
 #          loser's push is rejected and nothing is overwritten.
@@ -99,7 +102,7 @@
 #   move  0 moved (or already there, or dry-run passed) · 2 usage / read error
 #         3 refused (not on trunk / backward / CI not green / oldcfg red / macos not
 #           green / release.json missing or invalid / a pinned artifact not on
-#           the hub / the hub's ccquota behind the target's tokenledger/) · 4 push failed
+#           the hub / the hub's ccquota not the target's or behind it) · 4 push failed
 #           (lease lost to a concurrent move, or no push rights)
 set -u
 
@@ -296,12 +299,10 @@ print(" ".join(json.load(open(sys.argv[1])).get("fetchable") or []))' "$_tmp" 2>
 # #2927): stable 003e89bb shipped prod-343c92b, the supervisor's half of #2922
 # landed without the node program's half, nothing held, and a create ran twice.
 # So the hub's build must already carry every tokenledger/ commit the target
-# has (tests and docs aside).
-ccquota_gate() {   # ccquota_gate <old> <new>
-  git -C "$dir" cat-file -e "$2:bin/fleet-node-update.py" 2>/dev/null || return 0
-  git -C "$dir" cat-file -e "$2:tokenledger" 2>/dev/null || return 0
-  _hub=$(hub_url)
-  [ -n "$_hub" ] || { printf 'ccquota: no hub address here — the ccquota a release ships not checked\n'; return 0; }
+# has (tests and docs aside). Since #2930 it is the fallback for a hub that
+# names no ccquota_src (ccquota_gate below).
+ccquota_behind_check() {   # ccquota_behind_check <old> <new> <hub>
+  _hub=$3
   _hv=$(curl -sS -m "$timeout" "$_hub/version" 2>/dev/null | python3 -c 'import json,sys
 try: print(json.load(sys.stdin).get("version") or "")
 except Exception: pass' 2>/dev/null)
@@ -323,6 +324,45 @@ except Exception: pass' 2>/dev/null)
   _why="the hub runs $_hv, so $(short "$2")'s release would ship that ccquota — $(printf '%s\n' "$_behind" | wc -l | tr -d ' ') tokenledger/ commit(s) of the target are not in it, and a machine would run the tree's half of a change without the node program's"
   if [ "$force" -eq 1 ]; then force_log "$1" "$2" ccquota "$_why" "a hub build behind the tree"; return 0; fi
   refuse "ccquota: $_why — deploy the hub at $(short "$2") or later first, or --force to move anyway (logged)"
+}
+
+# 8. The release's ccquota is the target's (issue #2930): the hub puts its OWN
+# image's ccquota-* in every release it builds, and since #2930 refuses a commit
+# whose Go source is not the one they were built from — stable would move and
+# no machine follow. So the move asks first: the hub's /artifacts ccquota_src
+# against the target's tokenledger/ (bin/fleet-src-digest.py, the same digest).
+ccquota_gate() {   # ccquota_gate <old> <new>
+  git -C "$dir" cat-file -e "$2:bin/fleet-node-update.py" 2>/dev/null || return 0
+  _want=$(python3 "$BIN_DIR/fleet-src-digest.py" "$dir" "$2" 2>/dev/null) || _want=""
+  [ -n "$_want" ] || return 0   # no Go source in the target: no ccquota to hold to it
+  _hub=$(hub_url)
+  [ -n "$_hub" ] || { printf 'ccquota: no hub address here — the hub image'"'"'s ccquota not checked against %s\n' "$(short "$2")"; return 0; }
+  _tmp=$(mktemp "${TMPDIR:-/tmp}/fleet-stable-cq.XXXXXX") || die "mktemp failed"
+  _code=$(curl -sS -m "$timeout" -o "$_tmp" -w '%{http_code}' "$_hub/v1/fleet/release/artifacts" 2>/dev/null); _rc=$?
+  _have=""
+  if [ "$_rc" -ne 0 ] || { [ "$_code" != 200 ] && [ "$_code" != 000 ]; } \
+     || ! _have=$(python3 -c 'import json,sys
+d = json.load(open(sys.argv[1]))
+cq = [n for n in d.get("artifacts") or [] if n.startswith("ccquota-")]
+print(("%s" % (d.get("ccquota_src") or "-")) if cq else "none")' "$_tmp" 2>/dev/null); then
+    # no list to read (releases off, an older hub, unreachable — gate 7 says
+    # which): #2927's check against its /version
+    rm -f "$_tmp"; ccquota_behind_check "$1" "$2" "$_hub"; return
+  else
+    _ver=$(curl -sS -m "$timeout" "$_hub/version" 2>/dev/null | python3 -c 'import json,sys
+print(json.load(sys.stdin).get("version") or "")' 2>/dev/null)
+    rm -f "$_tmp"
+    case "$_have" in
+      none) printf 'ccquota: %s carries no ccquota binaries — nothing to check\n' "$_hub"; return 0 ;;
+      -)    ccquota_behind_check "$1" "$2" "$_hub"; return ;;   # an older hub: #2927's check
+    esac
+    if [ "$_have" = "$_want" ]; then
+      printf 'ccquota: the hub'"'"'s ccquota %sis %s'"'"'s Go source (%s)\n' "${_ver:+$_ver }" "$(short "$2")" "$(printf '%.12s' "$_want")"; return 0
+    fi
+    _why="the hub's ccquota ${_ver:+$_ver }was built from Go source $(printf '%.12s' "$_have"), $(short "$2")'s tokenledger/ is $(printf '%.12s' "$_want") — the hub would refuse the release (or a machine would run new scripts on an old ccquota, #2928)"
+  fi
+  if [ "$force" -eq 1 ]; then force_log "$1" "$2" ccquota "$_why" "the hub's ccquota"; return 0; fi
+  refuse "ccquota: $_why — redeploy the hub image from $(short "$2") first (bin/fleet-hub-image.sh), or --force to move anyway (logged)"
 }
 
 # 4. An old session of the current stable, run on the target (issue #2075): the

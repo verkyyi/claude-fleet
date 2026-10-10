@@ -81,6 +81,7 @@ type ReleaseStore struct {
 	Repo          string             // owner/name, written into the manifest
 	Source        *StableSource      // where a commit's files come from
 	DistDir       string             // ccquota-<os>-<arch> binaries (FleetDistDir)
+	DistSrc       string             // the Go source digest DistDir's binaries were built from (main.SrcDigest; claude-fleet#2930)
 	ArtifactsDir  string             // pinned installers (Claude Code, Codex …)
 	Platforms     []string           // <os>-<arch> a release must carry release.json's pins for (default release.DefaultPlatforms)
 	NPMRegistries []string           // where a missing Claude Code is fetched from (default DefaultNPMRegistries)
@@ -226,6 +227,32 @@ func (rs *ReleaseStore) artifacts() map[string]string {
 	return out
 }
 
+// distSrcCheck: may a release whose commit's Go source digests to src carry
+// arts' ccquota binaries? Only when they were built from that very source
+// (claude-fleet#2930): a release used to take whatever ccquota the hub image
+// had, so a new runtime went out with an old ccquota — and a release is built
+// once, never again. Refused like a missing pin, the next request after the
+// image catches up builds it whole. No ccquota in arts, or a commit with no Go
+// source (src ""), is nothing to check.
+func (rs *ReleaseStore) distSrcCheck(src string, arts map[string]string) error {
+	if src == "" {
+		return nil
+	}
+	carries := false
+	for n := range arts {
+		if distArtifactRe.MatchString(n) {
+			carries = true
+		}
+	}
+	switch {
+	case !carries || rs.DistSrc == src:
+		return nil
+	case rs.DistSrc == "":
+		return fmt.Errorf("the hub's ccquota binaries name no Go source (an image built without the Dockerfile's src stamp) — cannot vouch they are this commit's (Go source %s); redeploy the hub image", src[:12])
+	}
+	return fmt.Errorf("the hub's ccquota binaries were built from Go source %s, this commit's tokenledger/ is %s — redeploy the hub image from this commit (or a later one with the same tokenledger/) first", rs.DistSrc[:min(12, len(rs.DistSrc))], src[:12])
+}
+
 // Ensure builds <sha> unless it is on disk; concurrent callers share one build.
 func (rs *ReleaseStore) Ensure(ctx context.Context, sha string) error {
 	return rs.ensure(ctx, sha, false, nil)
@@ -275,14 +302,18 @@ func (rs *ReleaseStore) ensure(ctx context.Context, sha string, rebuild bool, al
 
 func (rs *ReleaseStore) build(ctx context.Context, sha string, all map[string][]byte) error {
 	var err error
+	seal := rs.sealFor(sha)
+	rebuilt := ""
 	switch base := rs.dir(sha); {
 	case all != nil:
 	case base != "":
 		// a rebuild (heal) takes the commit's files from the build it replaces:
-		// the same bytes, no network (claude-fleet#2772)
+		// the same bytes, no network (claude-fleet#2772) — and its ccquota too:
+		// the tree carries no Go source to hold another one to (#2930)
 		if all, err = treeFiles(filepath.Join(base, release.TreeName)); err != nil {
 			return err
 		}
+		rebuilt = base
 	case rs.Source == nil:
 		return errors.New("no stable source")
 	default:
@@ -290,19 +321,27 @@ func (rs *ReleaseStore) build(ctx context.Context, sha string, all map[string][]
 			return err
 		}
 	}
+	if rebuilt == "" {
+		seal.Src = release.SourceDigest(all)
+	}
 	files, err := releaseTree(all)
 	if err != nil {
 		return err
 	}
-	arts := rs.artifacts()
+	arts := rs.buildArtifacts(rebuilt)
 	missing, err := rs.missingPinned(files, arts)
 	if err != nil {
 		return err
 	}
 	if len(missing) > 0 && len(rs.fillPinned(ctx, missing)) < len(missing) {
 		// the hub fetched some (claude-fleet#2631): read the dir again
-		arts = rs.artifacts()
+		arts = rs.buildArtifacts(rebuilt)
 		if missing, err = rs.missingPinned(files, arts); err != nil {
+			return err
+		}
+	}
+	if rebuilt == "" {
+		if err := rs.distSrcCheck(seal.Src, arts); err != nil {
 			return err
 		}
 	}
@@ -313,7 +352,40 @@ func (rs *ReleaseStore) build(ctx context.Context, sha string, all map[string][]
 		// builds the whole one.
 		return fmt.Errorf("release.json pins %s, which CCQUOTA_FLEET_RELEASE_ARTIFACTS does not hold — put it there", strings.Join(missing, ", "))
 	}
-	return rs.publish(sha, files, arts, time.Now(), rs.sealFor(sha))
+	return rs.publish(sha, files, arts, time.Now(), seal)
+}
+
+// buildArtifacts: rs.artifacts(), but a rebuild of the build in base keeps
+// that build's ccquota-* (claude-fleet#2930) — the binaries checked against
+// its commit, never the image's of today.
+func (rs *ReleaseStore) buildArtifacts(base string) map[string]string {
+	arts := rs.artifacts()
+	if base == "" {
+		return arts
+	}
+	for n := range arts {
+		if distArtifactRe.MatchString(n) {
+			delete(arts, n)
+		}
+	}
+	for n, p := range builtArtifacts(base) {
+		if distArtifactRe.MatchString(n) {
+			arts[n] = p
+		}
+	}
+	return arts
+}
+
+// builtArtifacts: name → file of the artifacts a build carries.
+func builtArtifacts(base string) map[string]string {
+	arts := map[string]string{}
+	ents, _ := os.ReadDir(filepath.Join(base, release.ArtifactDir))
+	for _, e := range ents {
+		if release.ValidArtifact(e.Name()) && e.Type().IsRegular() {
+			arts[e.Name()] = filepath.Join(base, release.ArtifactDir, e.Name())
+		}
+	}
+	return arts
 }
 
 // sealFor: the seal a new build of sha carries — the one promote is waiting
@@ -327,7 +399,7 @@ func (rs *ReleaseStore) sealFor(sha string) release.Seal {
 		return seal
 	}
 	if m := rs.manifest(sha); m != nil {
-		return release.Seal{Prev: m.Prev, Seq: m.Seq}
+		return release.Seal{Prev: m.Prev, Seq: m.Seq, Src: m.CCQuotaSrc}
 	}
 	return release.Seal{}
 }
@@ -511,17 +583,13 @@ func (rs *ReleaseStore) reseal(sha string, seal release.Seal) error {
 	if err != nil {
 		return err
 	}
-	arts := map[string]string{}
-	ents, err := os.ReadDir(filepath.Join(base, release.ArtifactDir))
-	if err != nil && !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(base, release.ArtifactDir)); err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	for _, e := range ents {
-		if release.ValidArtifact(e.Name()) && e.Type().IsRegular() {
-			arts[e.Name()] = filepath.Join(base, release.ArtifactDir, e.Name())
-		}
+	if m := rs.manifest(sha); m != nil {
+		seal.Src = m.CCQuotaSrc // the same artifacts, the same check
 	}
-	return rs.publish(sha, files, arts, time.Now(), seal)
+	return rs.publish(sha, files, builtArtifacts(base), time.Now(), seal)
 }
 
 // prune keeps the newest Keep releases (by their manifest's time) and never
@@ -685,8 +753,10 @@ func (s *Server) handleRelease(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "no-store")
+		// ccquota_src: the Go source the ccquota-* were built from — fleet-stable.sh
+		// move holds the target commit to it (claude-fleet#2930)
 		_ = json.NewEncoder(w).Encode(map[string]any{"artifacts": names, "platforms": rs.platforms(),
-			"fetchable": rs.fetchable(r.Context(), have, want)})
+			"fetchable": rs.fetchable(r.Context(), have, want), "ccquota_src": rs.DistSrc})
 		return
 	}
 	sha, sub, _ := strings.Cut(rest, "/")
