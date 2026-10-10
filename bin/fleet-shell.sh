@@ -111,7 +111,8 @@
 # never read here. shell.conf is its predecessor, still read for one version:
 # ~/.config/claude-fleet/shell.conf (optional, sourced): CCQUOTA_HUB_URL (else
 # hub.json's url, what `fleet login` remembered), FLEET_NODE_ALIASES (else derived
-# from the hub's route list: `<hostname>=<alias>`), FLEET_SHELL_PREFIX (C-b),
+# from the hub's route list: `<hostname>=<alias>`), FLEET_SHELL_PREFIX (C-]; C-b
+# under FLEET_KEYS_PARITY=0, issue #2760),
 # FLEET_SHELL_SESSION (fleet-shell), FLEET_SHELL_CACHE (~/.cache/claude-fleet/shell),
 # FLEET_SHELL_WIDTH (the list's width, 30), FLEET_UI_LANG, and any FLEET_HUB_* /
 # FLEET_REMOTE_* knob fleet-hub-sessions.sh and fleet-remote-view.sh read.
@@ -177,7 +178,13 @@ fi
 SESS="${FLEET_SHELL_SESSION:-fleet-shell}"
 case "$SESS" in ''|*[!A-Za-z0-9._-]*) SESS=fleet-shell ;; esac
 CACHE="${FLEET_SHELL_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/claude-fleet/shell}"
-PREFIX="${FLEET_SHELL_PREFIX:-C-b}"
+# The keys of a local Claude (issue #2760, EPIC #2756 C4; docs/CLIENT.md «和本地
+# Claude 的键»): FLEET_KEYS_PARITY on (the default) = extended keys on the shell's
+# and the stage's servers (the confs' __PARITY__) and the prefix ⌃], so ⌃B reaches
+# the session from iTerm2 (conf/tmux-shell.conf says how, per terminal); 0 = both as
+# before, prefix ⌃B. A FLEET_SHELL_PREFIX of one's own wins either way.
+PARITY=1; [ "${FLEET_KEYS_PARITY:-1}" = 0 ] && PARITY=0
+if [ "$PARITY" = 1 ]; then PREFIX="${FLEET_SHELL_PREFIX:-C-]}"; else PREFIX="${FLEET_SHELL_PREFIX:-C-b}"; fi
 STAGE="$SESS-stage"                      # the proxies' server (issue #1759): label = session
 
 note() { printf 'fleet: %s\n' "$*" >&2; }
@@ -676,7 +683,7 @@ write_conf() {
     [ -f "$tpl" ] || fail_start "缺 $tpl"
     out="$CACHE/tmux.conf"; [ "$name" = tmux-shell ] || out="$CACHE/tmux-stage.conf"
     {
-      sed -e "s|__BIN__|$SHADOW|g" -e "s|__PREFIX__|$PREFIX|g" -e "s|__STAGE__|$STAGE|g" -e "s|__SESS__|$SESS|g" \
+      sed -e "s|__BIN__|$SHADOW|g" -e "s|__PREFIX__|$PREFIX|g" -e "s|__STAGE__|$STAGE|g" -e "s|__SESS__|$SESS|g" -e "s|__PARITY__|$PARITY|g" \
           -e "$(paste_sed)" "$tpl"
       while IFS= read -r line; do
         [ -n "$line" ] || continue
@@ -1808,6 +1815,15 @@ bind -n 'C-\\' if -F '#{@solo_shell}' { last-window } { run-shell -b "bash $(sq 
 set -g prefix $PREFIX
 unbind -a -T prefix
 bind d detach-client
+EOF
+  # ⌃B (issue #2760): from iTerm2 the session's, elsewhere the prefix — as the
+  # client's conf (conf/tmux-shell.conf) does it; only with the prefix ⌃]
+  [ "$PREFIX" = 'C-]' ] && cat <<'EOF'
+bind -n C-b if -F '#{m:*iTerm2*,#{client_termtype}}' { send-keys C-b } { switch-client -T prefix }
+bind C-b send-keys C-b
+bind 'C-]' send-prefix
+EOF
+  cat <<EOF
 bind '\\' if -F '#{@solo_shell}' { last-window } { run-shell -b "bash $(sq "$SB/fleet-remote-view.sh") shell-open $SESS >/dev/null 2>&1 || :" }
 bind '!' run-shell -b "bash $(sq "$SB/fleet-remote-view.sh") shell-open --local >/dev/null 2>&1 || :"
 EOF

@@ -1555,6 +1555,14 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # @label=Paste pictures and drop files into sessions @group=status @tier=internal @scope=global @edit=bool
 #FLEET_CLIENT_PASTE=1
 
+# The keys of a local Claude, the same in the client (issue #2760; the table is
+# docs/CLIENT.md «和本地 Claude 的键»): extended keys on the client's tmux servers
+# (⇧↵ is a newline, not ↵), the prefix ⌃] so ⌃B reaches the session from iTerm2
+# (from any other terminal ⌃B stays the prefix), and the iTerm2 profile's left ⌥
+# as Esc+ (⌥← ⌥→ by word). 0 = all three as before: prefix ⌃B, no extended keys.
+# @label=Keys as in a local Claude @group=status @tier=internal @scope=global @edit=bool
+#FLEET_KEYS_PARITY=1
+
 # Closing the task you are on (reap, exit, kill) lands on its NEIGHBOUR in the
 # task sidebar — the next row, or the previous one when it was the last — instead
 # of tmux's pick, which is usually the hub (issue #900). A sleeping task is

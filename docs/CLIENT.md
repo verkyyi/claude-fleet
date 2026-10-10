@@ -179,6 +179,65 @@ copy-mode copy, a real mouse drag typed into the outer terminal, a program's own
 OSC 52 (raw and passthrough) and an outer terminal with no `Ms` of its own all
 arrive as OSC 52; the iTerm2 permission's once-only rule; the doctor row.
 
+## 和本地 Claude 的键 — the keys of a local Claude, the same here (issue #2760)
+
+A key you press in a session does what it does in Claude Code run straight in
+your terminal (EPIC #2756's yardstick: the same Claude Code version in iTerm2 on
+your Mac). The few that do something else on purpose say so below.
+
+- **Extended keys.** Each tmux on the way — the client (`conf/tmux-shell.conf`),
+  the stage (`conf/tmux-shell-stage.conf`), the machine's fleet session
+  (`conf/tmux-attention.conf`) — says `extended-keys on`,
+  `extended-keys-format csi-u` and `terminal-features … extkeys`: it asks the
+  terminal for keys WITH their modifiers and hands them on, in the CSI u form a
+  local Claude reads, to the pane that asks (Claude Code does; a shell and the
+  list do not, and get the old bytes). Before, ⇧↵ arrived as a bare ↵ and sent
+  half a sentence.
+- **⌃B and the prefix.** The client's prefix is **⌃]**. ⌃B — a local Claude's
+  「放到后台」 — goes on to the session when you type it in **iTerm2** (tmux's
+  `client_termtype`: there every switch has its ⌘ chord); from any other terminal
+  (an iPad's Blink, a phone) ⌃B is still the prefix, as it always was, and ⌃]
+  works there too. `prefix ⌃B` / `prefix ⌃]` send that key itself. Wherever this
+  page says `prefix`, that is ⌃] in iTerm2.
+- **⌥← ⌥→.** The client's iTerm2 profile (`fleet-iterm-profile.py`) makes the
+  LEFT ⌥ send Esc+, so ⌥← ⌥→ (and ⌥b ⌥f) move by word as in a local Claude; the
+  right ⌥ is the profile's own (typing special characters).
+- **Off.** `FLEET_KEYS_PARITY=0` (fleet.conf `[client]`) is everything as before
+  #2760: no extended keys on the client's servers, the prefix ⌃B, the left ⌥ the
+  parent profile's. A `FLEET_SHELL_PREFIX` of your own wins either way (and then
+  ⌃B is plain tmux again). A server already running takes the change at
+  `fleet quit` + `fleet`; extended keys are asked of a terminal when it attaches.
+
+The table is the contract: `bin/fleet-keys-selftest.sh` leg 12 reads it — every
+row whose bytes column has a value is typed into an outer terminal (a pty) in
+front of three tmux servers on isolated sockets with the three real confs, and
+the session's pane must receive the SAME key (its modifiers decoded, whichever
+encoding tmux chose); 「有意不同」 rows are checked for what this table says they
+do. A `+` in the bytes is a second press a moment later; `·` separates encodings
+of one key (a terminal's legacy bytes, CSI u, xterm's modifyOtherKeys).
+
+| 键 | 本地 Claude | fleet | 说明 | 终端送的字节 |
+|---|---|---|---|---|
+| ⌃C | 打断 / 清空输入 | 一样 | | `03` |
+| Esc | 打断正在做的 | 一样 | | `1b` |
+| Esc Esc | 回到之前的一句 | 一样 | | `1b+1b` |
+| ⇧↵ | 换行不发送 | 一样 | 扩展键（#2760 之前变成「发送」） | `1b5b31333b3275` · `1b5b32373b323b31337e` · `0a` |
+| ⌥↵ / ⌃J | 换行不发送 | 一样 | | `1b0d` · `0a` |
+| ⇧⇥ | 切换自动接受 / 计划模式 | 一样 | | `1b5b5a` · `1b5b393b3275` |
+| ⌃R | 翻历史 | 一样 | | `12` |
+| ⌃L | 清屏重画 | 一样 | | `0c` |
+| ↑ ↓ | 上一句 / 下一句 | 一样 | | `1b5b41` · `1b5b42` |
+| ⌥← ⌥→ | 按词移动光标 | 一样 | 左 ⌥ 当 Esc+（fleet 的 iTerm2 配置） | `1b1b5b44` · `1b1b5b43` · `1b62` · `1b66` · `1b5b313b3344` · `1b5b313b3343` |
+| ⇥ | 补全路径 / 命令 | 一样 | | `09` |
+| ⌃B | 把正在跑的命令放到后台 | 一样 | iTerm2 里前缀是 ⌃]，⌃B 原样给会话；别的终端 ⌃B 仍是前缀 | `02` |
+| ⌃V | 贴图 | 一样 | 客户端先把图送到会话那台机器（#2757，`fleet-client-upload-selftest.sh`） | |
+| ⌘V 多行 | 粘贴多行文字 | 一样 | 括号粘贴原样到会话 | `1b5b3230307e6f6e650d74776f1b5b3230317e` |
+| 拖文件 | 得到文件路径 | 一样 | 客户端先把文件送过去（#2757） | |
+| 选中 / ⌘C | 复制到本机 | 一样 | 见上一节「复制」（#2758，`clipboard-osc52-selftest.sh`） | |
+| ⌃D | 空输入时退出 | 有意不同 | 单会话视图（`fleet claude`）里是「放到后台」，会话照跑；别的布局原样给会话 | `04` |
+| ⌃\ | （本地没有用途） | 有意不同 | 单会话视图里切到会话所在机器的 shell（#2744）；别的布局原样给会话 | `1c` |
+| ⌘K | iTerm2 清屏 | 有意不同 | fleet 里是「切换」（⌘K / prefix s） | |
+
 ## Where the state lives
 
 Per client computer, under `$XDG_STATE_HOME/claude-fleet`
