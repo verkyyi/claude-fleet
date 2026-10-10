@@ -13,6 +13,10 @@ metadata:
     nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
     nginx.ingress.kubernetes.io/limit-rps: "20"
+    # POST /v1/fleet/release/publish carries the whole commit (~8 MB gzip, issue
+    # #2772); nginx's default 1m would answer 413 before the hub saw it. Every
+    # route still caps its own body in the hub.
+    nginx.ingress.kubernetes.io/proxy-body-size: "64m"
     # While the hub has no ready pod (the Recreate seconds of a release) the
     # 「正在更新」 page answers instead of ingress-nginx's bare 503 — a browser
     # gets the bilingual page, the API / MCP / node channel a 503 + Retry-After

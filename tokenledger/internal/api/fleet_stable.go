@@ -77,6 +77,12 @@ type StableSource struct {
 	// a commit other than the last one — the release store builds it then
 	// (claude-fleet#2335). Set before the first lookup.
 	OnStable func(sha string)
+	// Local is the release store once stable is pushed to it (claude-fleet#2772):
+	// a store that has taken a publish answers Commit, Seen and File, and GitHub
+	// is never asked again. Offline never asks GitHub at all
+	// (CCQUOTA_FLEET_STABLE_REPO=off): only what Local holds is served.
+	Local   StableLocal
+	Offline bool
 
 	mu         sync.Mutex
 	sha        string
@@ -88,6 +94,13 @@ type StableSource struct {
 	whole      map[string]bool      // sha → its tarball is in files (a path not there is not in the commit)
 	tarFail    map[string]time.Time // sha → when its tarball last failed (retried after a TTL)
 	tarLock    sync.Mutex           // one tarball download at a time
+}
+
+// StableLocal is what the release store answers for a stable it was handed.
+type StableLocal interface {
+	PublishedStable() (string, bool) // the stable, and whether a publish has landed
+	PublishedSeen(sha string) bool   // a stable release the store holds
+	PublishedTree(sha string) (map[string][]byte, error)
 }
 
 const (
@@ -148,6 +161,14 @@ func (s *StableSource) ttl() time.Duration {
 // answered). It never blocks on GitHub: a stale answer starts one lookup in the
 // background and is returned meanwhile.
 func (s *StableSource) Commit() string {
+	if s.Local != nil {
+		if sha, on := s.Local.PublishedStable(); on {
+			return sha
+		}
+	}
+	if s.Offline {
+		return ""
+	}
 	s.mu.Lock()
 	sha, stale := s.sha, time.Since(s.at) > s.ttl()
 	if stale && !s.refreshing {
@@ -216,6 +237,9 @@ func (s *StableSource) touch() {
 
 // Seen says stable has named sha (one of the last few).
 func (s *StableSource) Seen(sha string) bool {
+	if s.Local != nil && s.Local.PublishedSeen(sha) {
+		return true
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return containsStr(s.seen, sha)
@@ -228,6 +252,15 @@ func (s *StableSource) File(ctx context.Context, sha, path string) ([]byte, erro
 	if b, ok, whole := s.cached(key, sha); ok {
 		return b, nil
 	} else if whole {
+		return nil, errStableNotFound
+	}
+	if s.loadLocal(sha) {
+		if b, ok, _ := s.cached(key, sha); ok {
+			return b, nil
+		}
+		return nil, errStableNotFound
+	}
+	if s.Offline {
 		return nil, errStableNotFound
 	}
 	if s.loadTarball(ctx, sha) {
@@ -282,6 +315,36 @@ func (s *StableSource) storeLocked(key string, b []byte) {
 	s.size += len(b)
 }
 
+// loadLocal fills the cache with every client path of a release the store
+// was handed (claude-fleet#2772); true when sha is loaded whole.
+func (s *StableSource) loadLocal(sha string) bool {
+	if s.Local == nil || !s.Local.PublishedSeen(sha) {
+		return false
+	}
+	s.tarLock.Lock()
+	defer s.tarLock.Unlock()
+	if _, _, whole := s.cached("", sha); whole {
+		return true
+	}
+	files, err := s.Local.PublishedTree(sha)
+	if err != nil {
+		log.Printf("fleet: stable %s from the release store: %v", sha[:7], err)
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for p, b := range files {
+		if stablePathOK(p) {
+			s.storeLocked(sha+"/"+p, b)
+		}
+	}
+	if s.whole == nil {
+		s.whole = map[string]bool{}
+	}
+	s.whole[sha] = true
+	return true
+}
+
 // loadTarball fills the cache with every client path of sha from codeload's
 // tarball, once; true when sha is loaded whole. A failure is remembered for one
 // TTL (the caller falls back to the raw host meanwhile).
@@ -330,6 +393,9 @@ func (s *StableSource) fetchTarball(ctx context.Context, sha string) (map[string
 func (s *StableSource) Tree(ctx context.Context, sha string, keep func(string) bool) (map[string][]byte, error) {
 	if !shaRe.MatchString(sha) {
 		return nil, fmt.Errorf("bad sha %q", sha)
+	}
+	if s.Offline {
+		return nil, fmt.Errorf("%s: GitHub is off here (CCQUOTA_FLEET_STABLE_REPO=off) — publish it", sha[:7])
 	}
 	return s.tarballFiles(ctx, sha, keep)
 }

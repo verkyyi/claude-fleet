@@ -74,6 +74,8 @@
 #          the value it read, so two concurrent moves cannot both win — the
 #          loser's push is rejected and nothing is overwritten.
 #          --dry-run runs every check and prints the push, without pushing.
+#          After the push, outside CI, dispatches stable-publish.yml for the
+#          target (issue #2772): the hub takes stable only from that publish.
 #
 # The tag is lightweight. The source of truth is the REMOTE ref (read with
 # `git ls-remote`, https, no credentials); no local `stable` tag is written, so
@@ -347,6 +349,24 @@ macos_gate() {   # macos_gate <old> <new> <slug>
   refuse "macos: the newest macOS run on $(short "$2") is $_concl (run $_id, $_ev: https://github.com/$3/actions/runs/$_id) — fix it (its breakage issue), or --force to move anyway (logged)"
 }
 
+# After a move, hand the hub the new stable (issue #2772, EPIC #2770 C2): the hub
+# no longer looks on GitHub for it. stable-publish.yml cuts the commit (git
+# archive + its first-parent chain from the hub's stable) and POSTs it to
+# /v1/fleet/release/publish under the workflow's own OIDC identity. Inside CI
+# (stable-auto.yml) the job publishes in its own next step, so nothing is
+# dispatched there; a tree without the workflow has nothing to dispatch. A failed
+# dispatch is said, never undoes the move — the workflow can be run again by hand.
+PUBLISH_WF=${FLEET_STABLE_PUBLISH_WORKFLOW:-stable-publish.yml}
+publish_dispatch() {   # publish_dispatch <new> <slug>
+  [ "${GITHUB_ACTIONS:-}" = true ] && return 0
+  git -C "$dir" cat-file -e "$1:.github/workflows/$PUBLISH_WF" 2>/dev/null || return 0
+  if gh workflow run "$PUBLISH_WF" --repo "$2" --ref "$branch" -f "sha=$1" >/dev/null 2>&1; then
+    printf 'publish: dispatched %s for %s — the hub takes the new stable from it\n' "$PUBLISH_WF" "$(short "$1")"
+  else
+    printf 'fleet-stable: publish NOT dispatched (gh workflow run %s --repo %s -f sha=%s) — stable moved, the hub has not; run it by hand\n' "$PUBLISH_WF" "$2" "$1" >&2
+  fi
+}
+
 do_move() {
   old=$(remote_stable) || die "could not read refs/tags/$TAG from $remote — not moving blind"
   fetch_trunk || die "could not fetch $remote/$branch"
@@ -408,6 +428,7 @@ do_move() {
     exit 4
   fi
   printf 'moved: refs/tags/%s = %s\n' "$TAG" "$(short "$new")"
+  publish_dispatch "$new" "$slug"
 }
 
 case "$cmd" in

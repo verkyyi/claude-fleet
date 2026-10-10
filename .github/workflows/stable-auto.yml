@@ -19,7 +19,12 @@
 # Off switch: repository variable STABLE_AUTO_MOVE=off. The tag is pushed with
 # the workflow's own GITHUB_TOKEN (contents: write; no tag ruleset on this repo);
 # a tag pushed that way triggers no other workflow, and nothing here needs one —
-# the hub follows `stable` by polling GitHub.
+# the job's last step hands the new stable to the hub itself (issue #2772): the
+# whole commit, POSTed to /v1/fleet/release/publish under this run's OIDC
+# identity (id-token: write — no stored secret), checked there byte for byte
+# against the commit. The hub no longer looks on GitHub for stable. A red publish
+# leaves the tag moved and the hub on the old one: re-run the job (a publish is
+# idempotent) or dispatch stable-publish.yml with the sha.
 name: stable auto-move
 
 on:
@@ -32,6 +37,7 @@ permissions:
   contents: write
   actions: read
   checks: read
+  id-token: write   # the publish step's OIDC token (audience ccquota-fleet-release)
 
 concurrency:
   group: stable-auto-move
@@ -100,6 +106,24 @@ jobs:
             echo "### stable auto-move → \`${SHA:0:7}\`"
             echo '```'
             cat out.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit $rc
+
+      - name: publish to the hub
+        # issue #2772: the hub's stable comes from here only; already there = 200
+        env:
+          SHA: ${{ steps.target.outputs.sha }}
+          FLEET_HUB_URL: https://claudefleet.24haowan.com
+        run: |
+          set +e
+          bash bin/fleet-release-publish.sh "$SHA" --dir . > pub.txt 2>&1
+          rc=$?
+          cat pub.txt
+          {
+            echo "### publish → hub"
+            echo '```'
+            cat pub.txt
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
           exit $rc

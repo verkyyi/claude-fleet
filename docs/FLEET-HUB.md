@@ -613,7 +613,8 @@ path in the repo, no copy committed). `TestFleetClientMatchesBin` and
 `fleet-shell.sh` starts its server from the install root's `bin/` and `conf/`;
 no tmux → the one hint and `fleet-connect.py`. The hub image is deployed by
 hand — but a client does NOT wait for it (issue #1805): every computer follows
-`refs/tags/stable`. The hub looks up what stable names on GitHub (every 5
+`refs/tags/stable`. The hub learns what stable names from the CI's publish
+(issue #2772, below); before the first one it looks it up on GitHub (every 5
 minutes, `CCQUOTA_FLEET_STABLE_REPO`, default `verkyyi/claude-fleet`; `off` turns
 it off) and reports it on `/version` as `client_version` + `stable` +
 `client_url` (`<hub>/install/stable/<sha>`, the repo's client files at that
@@ -667,6 +668,36 @@ installed (exit 1, no `dest`, no `.partial`); `ccquota release verify` re-checks
 the hub's copy or (`--dir`) an installed one. GitHub is the hub's business only —
 a restarted hub that cannot reach it still serves what it stored. No key ⇒ every
 release route 404s, the hub as before. BREAK-IT row `release-tampered`.
+
+**Stable is pushed to the hub, never fetched** (issue #2772, EPIC #2770 C2). The
+CI that moves stable hands the hub the commit itself: `stable-auto.yml`'s last
+step (and `stable-publish.yml`, which `fleet-stable.sh move` by hand dispatches
+with the sha it moved to) runs `bin/fleet-release-publish.sh <sha>` — `POST
+/v1/fleet/release/publish`, multipart: `sha`, `prev` (the hub's own stable, read
+from `/v1/fleet/release/stable`), `commits` (`git rev-list --first-parent
+prev..sha | git cat-file --batch`), `tree` (`git archive --format=tar sha`, the
+whole commit, gzip). The hub trusts none of the road: it hashes the archive file
+by file into git's tree (`internal/release` `TreeFromArchive`), which must be the
+tree `sha`'s commit object names; every commit object must hash to the sha it is
+listed under, their first parents running from `sha` back to its own stable. Only
+then does it build the release from those bytes and move its pointer. **Who**: the
+run's GitHub Actions OIDC token (`id-token: write`, audience
+`ccquota-fleet-release` / `CCQUOTA_FLEET_PUBLISH_AUDIENCE`) — `repository` this
+repo, `ref` `refs/heads/master`, `workflow_ref` one of the two workflows; the
+issuer's keys are kept in `<release dir>/.publish-jwks.json`, so a hub that lost
+GitHub still takes tokens signed by the keys it has (`CCQUOTA_FLEET_PUBLISH_JWKS_URL`
+overrides where they come from). The fallback is a publish-only bearer,
+`CCQUOTA_FLEET_PUBLISH_TOKEN` (its own Secret; CI's `FLEET_PUBLISH_TOKEN`).
+Answers: 200 stored (`published`, or `already` — the same sha again is a no-op) ·
+400 the bytes are not that commit · 401 not the release CI · 409 not forward of
+the hub's stable (its stable named) · 422 a pinned artifact the hub cannot supply.
+Each lands one log line and one `fleet_audit` row (`release_publish`, the run).
+The first publish marks the store (`<release dir>/published`): from then on
+`/version`, `/install/stable/<sha>/`, the bundle and every release route read the
+store, and the five-minute GitHub lookup is never made again (`StableSource.Local`;
+a lookup in flight is ignored). `CCQUOTA_FLEET_STABLE_REPO=off` with a release
+store never asks GitHub at all — it serves what was published; without a store it
+is the image's client, as before. BREAK-IT row `dist-publish-tampered`.
 
 **…and steps into them** (issue #1424, EPIC #1419 C5). Enter on a remote row (the
 dash's `dash-enter.sh`, the sidebar's `jump`) runs `bin/fleet-remote-view.sh open`:

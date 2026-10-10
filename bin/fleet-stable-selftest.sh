@@ -259,4 +259,21 @@ eq "L: another pending run still refuses" 3 "$RC"; contains "L: names the other 
 case "$OUT" in *"not green: in_progress null move stable"*) fail "L: the ignored job was counted" ;; esac
 eq "L: tag still C15" "$C15" "$(tag)"
 
+# --- M. publish (issue #2772) ------------------------------------------------------------
+# A moved stable is handed to the hub: outside CI the move dispatches stable-publish.yml
+# for exactly the target; inside CI (GITHUB_ACTIONS=true — stable-auto.yml publishes in
+# its own step) and for a tree without that workflow, nothing is dispatched.
+green; rm -f "$WORK/dispatched"; : > "$WORK/dispatch_to"   # the shim answers 0
+mkdir -p "$SEED/.github/workflows"; printf 'name: stable publish\n' > "$SEED/.github/workflows/stable-publish.yml"
+git -C "$SEED" add -A; git -C "$SEED" commit -qm 'publish workflow'; C17=$(git -C "$SEED" rev-parse HEAD); push
+macos_green "$C17" 26
+OUT=$(GITHUB_ACTIONS=true sh "$ST" move "$C17" --dir "$CO" --repo o/r 2>&1); RC=$?
+eq "M: a move inside CI exits 0" 0 "$RC"; eq "M: tag at C17" "$C17" "$(tag)"
+eq "M: inside CI nothing dispatched" no "$([ -f "$WORK/dispatched" ] && echo yes || echo no)"
+C18=$(commit eighteen); push; macos_green "$C18" 27
+OUT=$(env -u GITHUB_ACTIONS sh "$ST" move "$C18" --dir "$CO" --repo o/r 2>&1); RC=$?
+eq "M: a move by hand exits 0" 0 "$RC"; eq "M: tag at C18" "$C18" "$(tag)"
+contains "M: dispatched stable-publish.yml for the target" "$(cat "$WORK/dispatched" 2>/dev/null)" "workflow run stable-publish.yml --repo o/r --ref master -f sha=$C18"
+contains "M: says so" "$OUT" "publish: dispatched stable-publish.yml"
+
 printf 'fleet-stable-selftest OK (%d checks)\n' "$CHECKS"

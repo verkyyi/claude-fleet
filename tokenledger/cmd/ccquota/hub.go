@@ -243,14 +243,24 @@ func loadFleetCerts(srv *api.Server) error {
 	srv.FleetPublicURL = os.Getenv("CCQUOTA_FLEET_PUBLIC_URL")
 	srv.FleetDistDir = os.Getenv("CCQUOTA_FLEET_DIST_DIR")
 	srv.FleetJoinScriptURL = os.Getenv("CCQUOTA_FLEET_JOIN_SCRIPT_URL")
-	// The client follows GitHub's stable through this hub (claude-fleet#1805);
-	// "off" hands out the image's packed client only.
-	if repo := os.Getenv("CCQUOTA_FLEET_STABLE_REPO"); repo != "off" {
-		srv.Stable = &api.StableSource{Repo: repo}
-		if err := loadFleetReleases(srv); err != nil {
-			return err
-		}
-		srv.Stable.Commit() // the first lookup, in the background
+	// The client follows stable through this hub (claude-fleet#1805): pushed
+	// to the release store by the CI (claude-fleet#2772), else — one version's
+	// fallback — looked up on GitHub. "off" never asks GitHub: with a release
+	// store it serves what was published, without one the image's packed
+	// client only, as before.
+	repo := os.Getenv("CCQUOTA_FLEET_STABLE_REPO")
+	srv.Stable = &api.StableSource{Repo: repo, Offline: repo == "off"}
+	if repo == "off" {
+		srv.Stable.Repo = ""
+	}
+	if err := loadFleetReleases(srv); err != nil {
+		return err
+	}
+	switch {
+	case srv.Stable.Offline && srv.Releases == nil:
+		srv.Stable = nil
+	case !srv.Stable.Offline:
+		srv.Stable.Commit() // the first lookup (none once a publish landed), in the background
 	}
 	path := os.Getenv("CCQUOTA_FLEET_SSH_CA_KEY")
 	if path == "" {
@@ -307,6 +317,15 @@ func loadFleetReleases(srv *api.Server) error {
 		Platforms:     strings.Fields(os.Getenv("CCQUOTA_FLEET_RELEASE_PLATFORMS")),
 		NPMRegistries: strings.Fields(os.Getenv("CCQUOTA_FLEET_RELEASE_NPM"))}
 	srv.Stable.OnStable = srv.Releases.OnStable
+	srv.Stable.Local = srv.Releases
+	// who may push a stable (claude-fleet#2772): the release workflows' GitHub
+	// OIDC token, or a publish-only bearer (its own k8s Secret) as the fallback
+	srv.Releases.Publish = &api.PublishAuth{
+		Audience:  os.Getenv("CCQUOTA_FLEET_PUBLISH_AUDIENCE"),
+		JWKSURL:   os.Getenv("CCQUOTA_FLEET_PUBLISH_JWKS_URL"),
+		Token:     strings.TrimSpace(os.Getenv("CCQUOTA_FLEET_PUBLISH_TOKEN")),
+		CacheFile: filepath.Join(dir, ".publish-jwks.json"),
+	}
 	log.Printf("fleet: node releases in %s, signed by %s", dir, release.KeyID(key.Public().(ed25519.PublicKey)))
 	return nil
 }
