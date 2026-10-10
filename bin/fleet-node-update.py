@@ -878,7 +878,7 @@ class Updater(object):
                 continue
             if uid == 0 or (os.geteuid() != 0 and uid != os.geteuid()):
                 continue
-            if linked_sha(path, self.p.root) == sha:
+            if linked_sha(path, self.p.root) == sha and not _copy_escapes(os.path.realpath(path)):
                 tried.pop(login, None)
                 continue
             t = tried.get(login) or {}
@@ -1550,6 +1550,11 @@ LINKED = ".fleet-linked"
 # the tool artifacts current/tools/bin carries) and never a version's
 TREE_SKIP_TOP = (".release", "tools")
 TREE_SKIP = ("__pycache__", ".DS_Store", LINKED)
+# what is COPIED, not linked (issue #2964): Claude Code resolves a plugin's files
+# to their real path and refuses one outside --plugin-dir ("Path escapes plugin
+# directory"), so the mod (fleet_mod_dir = ~/.claude/fleet/mod/fleet) holds its
+# own bytes in every login tree — a few hundred KB
+TREE_COPY_TOP = ("mod",)
 
 
 def linked_mark(d):
@@ -1621,6 +1626,7 @@ def _build_tree(src, dst, link=True):
     os.makedirs(dst)
     for d, dirs, files in os.walk(src):
         rel = os.path.relpath(d, src)
+        copy = not link or rel.split(os.sep)[0] in TREE_COPY_TOP
         dirs[:] = sorted(n for n in dirs if n not in TREE_SKIP and not (rel == "." and n in TREE_SKIP_TOP))
         for n in dirs:
             p = os.path.join(d, n)
@@ -1636,13 +1642,52 @@ def _build_tree(src, dst, link=True):
             q = os.path.normpath(os.path.join(dst, rel, n))
             if os.path.islink(p):
                 os.symlink(os.readlink(p), q)
-            elif link:
+            elif not copy:
                 os.symlink(p, q)
             else:
                 shutil.copy2(p, q)
     for d, dirs, _ in os.walk(dst):
         dirs[:] = [n for n in dirs if not os.path.islink(os.path.join(d, n))]
         os.chmod(d, 0o755)
+
+
+def _copy_escapes(tree):
+    """True when a TREE_COPY_TOP file of linked tree <tree> is still a link into
+    the runtime (built before issue #2964): `link-tree` heals it."""
+    for top in TREE_COPY_TOP:
+        for d, dirs, files in os.walk(os.path.join(tree, top)):
+            dirs[:] = [x for x in dirs if not os.path.islink(os.path.join(d, x))]
+            for f in files:
+                q = os.path.join(d, f)
+                if os.path.islink(q) and os.path.isabs(os.readlink(q)):
+                    return True
+    return False
+
+
+def _copy_heal(tree):
+    """A linked tree built before issue #2964 linked its TREE_COPY_TOP files too:
+    each such link into the runtime becomes a copy of its bytes, in place (one
+    rename a file — a running session's next mod reload finds real files). -> how
+    many were healed."""
+    n = 0
+    for top in TREE_COPY_TOP:
+        for d, dirs, files in os.walk(os.path.join(tree, top)):
+            dirs[:] = [x for x in dirs if not os.path.islink(os.path.join(d, x))]
+            for f in files:
+                q = os.path.join(d, f)
+                if not (os.path.islink(q) and os.path.isabs(os.readlink(q))):
+                    continue
+                tmp = q + ".heal.%d" % os.getpid()
+                try:
+                    shutil.copy2(os.path.realpath(q), tmp)
+                    os.rename(tmp, q)
+                    n += 1
+                except OSError:
+                    try:
+                        os.remove(tmp)
+                    except OSError:
+                        pass
+    return n
 
 
 def _retire(vers, key, when=None):
@@ -1718,6 +1763,7 @@ def link_tree(sha, apply=True):
         print("link-tree: no release %s under %s" % (sha[:12], root), file=sys.stderr)
         return 1
     if linked_sha(live, root) == sha:
+        _copy_heal(os.path.realpath(live))
         _share(vers, os.path.realpath(live))
         print("at %s — ~/.claude/fleet is linked to %s" % (sha[:12], src))
         return 0
@@ -1749,6 +1795,7 @@ def link_tree(sha, apply=True):
             shutil.rmtree(tmp, ignore_errors=True)
             print("link-tree: building %s: %s" % (new, e), file=sys.stderr)
             return 1
+    _copy_heal(new)
     was = os.path.realpath(live) if os.path.lexists(live) else None
     if was and os.path.isdir(was) and was != os.path.realpath(new) and os.path.islink(live):
         _share(vers, was)       # its logs/ … into .shared first, then the switch

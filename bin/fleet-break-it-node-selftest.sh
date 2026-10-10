@@ -68,6 +68,9 @@
 #                         install-sync still answers off · managed
 #   managed-login-own-copy  bin/fleet-node-update.py link-tree + follow_installs
 #                         (#2774): a managed login pointed back at an own old copy
+#   managed-login-mod-escapes  bin/fleet-node-update.py _build_tree / _copy_heal +
+#                         follow_installs (#2964): the mod's files were links into the
+#                         runtime, Claude Code refused it (Path escapes plugin directory)
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT are read by the sourced runner
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -849,6 +852,20 @@ drill_managed_login_own_copy() {
     || { WHY="a login pointed at an own copy was not linked back: $(printf '%s' "$out" | grep -E 'Error|FAIL' | head -3 | tr '\n' ' ')"; return 1; }
   SECS=$(since "$t0")
   WHAT="托管登录被手动指回一份独立旧副本：fleet doctor --machine 的 install 行 WARN（不 FAIL、不回退整机），下一拍更新器把它重新链接到发布版；有活的批次在跑时先等（同 2 小时封顶）；换版一次两个登录一起链接、体检 FAIL 一起退回、每个登录目录 < 1 MB"
+}
+
+# managed-login-mod-escapes (#2964): link-tree made every file of a managed
+# login's tree a link into <root>/<sha>, the mod's too; Claude Code resolves a
+# plugin file's real path and refused every one outside --plugin-dir. mod/ is
+# copied now, and a tree built before is healed by the next tick at the release.
+drill_managed_login_mod_escapes() {
+  CAP=60
+  local t0 out
+  t0=$(now)
+  out=$(python3 -W ignore::ResourceWarning "$BIN/fleet-node-update-selftest.py" --drill-login-mod 2>&1) \
+    || { WHY="a login tree's mod still links out of the tree: $(printf '%s' "$out" | grep -E 'Error|FAIL' | head -3 | tr '\n' ' ')"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="托管登录版本树里 mod/ 的文件是指向运行时的链接，Claude Code 报 Path escapes plugin directory、mod 不加载：link-tree 对 mod/ 真拷贝，旧树由在发布版的下一拍原地补成拷贝，补好后不再动"
 }
 
 # shift-enter-sends (issue #2760): ⇧↵ typed into the client went through three tmux

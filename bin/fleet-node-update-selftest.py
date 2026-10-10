@@ -159,6 +159,13 @@ def make_release(rel, sha, claude="2.1.1", codex="0.154.0", tmux="3.7c", broken=
     os.makedirs(os.path.join(d, "conf", "agent-defaults"))
     with open(os.path.join(d, "conf", "agent-defaults", "MARK"), "w") as f:
         f.write(sha + "\n")
+    # the mod (issue #2964): a login tree must hold its own bytes, never links out
+    os.makedirs(os.path.join(d, "mod", "fleet", ".claude-plugin"))
+    os.makedirs(os.path.join(d, "mod", "fleet", "hooks"))
+    with open(os.path.join(d, "mod", "fleet", ".claude-plugin", "plugin.json"), "w") as f:
+        f.write('{"name": "fleet"}\n')
+    with open(os.path.join(d, "mod", "fleet", "hooks", "register.ts"), "w") as f:
+        f.write("// %s\n" % sha)
     if apply_log:
         # issue #2774: the version's fleet-install-apply.sh, recording how it was run
         ap = os.path.join(d, "bin", "fleet-install-apply.sh")
@@ -1143,12 +1150,53 @@ class M_FollowInstall(Sandbox):
         self.assertEqual(os.path.realpath(os.path.join(live, "bin", "..")), real)
         with open(os.path.join(live, "conf", "agent-defaults", "MARK")) as fh:
             self.assertEqual(fh.read().strip(), sha)
+        self.assert_mod_real(real, sha)
         self.assertFalse(os.path.lexists(os.path.join(real, ".release")))
         self.assertFalse(os.path.lexists(os.path.join(real, "tools")))
         size = 0
         for d, _, fs in os.walk(real):
             size += sum(os.lstat(os.path.join(d, n)).st_size for n in fs)
         self.assertLess(size, 1 << 20)
+
+    def assert_mod_real(self, real, sha):
+        """issue #2964: nothing under mod/ resolves outside the login's tree —
+        Claude Code refuses a plugin file that does ("Path escapes plugin directory")."""
+        mod = os.path.join(real, "mod")
+        seen = 0
+        for d, _, fs in os.walk(mod):
+            for n in fs:
+                q = os.path.join(d, n)
+                self.assertTrue(os.path.realpath(q).startswith(os.path.realpath(real) + os.sep),
+                                "%s escapes the tree → %s" % (q, os.path.realpath(q)))
+                seen += 1
+        self.assertGreater(seen, 0)
+        with open(os.path.join(mod, "fleet", "hooks", "register.ts")) as fh:
+            self.assertEqual(fh.read().strip(), "// " + sha)
+
+    def test_mod_is_copied_and_healed(self):
+        """BREAK-IT managed-login-mod-escapes (issue #2964): a new tree copies mod/;
+        a tree built before (its mod/ files links into the runtime) is healed in
+        place by the next link-tree — the next tick at the release, or `follow`."""
+        self.release(V1)
+        self.tick(V1)
+        real = os.path.realpath(self.live("alice"))
+        self.assert_mod_real(real, V1)
+        self.assertTrue(os.path.islink(os.path.join(real, "bin", "fleet-node-update.py")))
+        # the pre-#2964 shape: every mod file a link into <root>/<sha>
+        for rel in (("mod", "fleet", "hooks", "register.ts"), ("mod", "fleet", ".claude-plugin", "plugin.json")):
+            q = os.path.join(real, *rel)
+            os.remove(q)
+            os.symlink(os.path.join(self.root, V1, *rel), q)
+        self.daemon_on(V1)
+        self.tick(V1)
+        self.assertEqual(os.path.realpath(self.live("alice")), real)
+        self.assert_mod_real(real, V1)
+        self.assertRegex(open(os.path.join(self.env["FLEET_NODE_LOG"], "update.log")).read(),
+                         r"install alice: %s → %s · rc 0 · at %s" % (V1[:12], V1[:12], V1[:12]))
+        # healed: the next tick runs nothing for it
+        n = open(os.path.join(self.env["FLEET_NODE_LOG"], "update.log")).read().count("install alice:")
+        self.tick(V1)
+        self.assertEqual(open(os.path.join(self.env["FLEET_NODE_LOG"], "update.log")).read().count("install alice:"), n)
 
     def test_switch_links_every_login(self):
         self.release(V1, apply_log=self.A)
@@ -1401,6 +1449,10 @@ if __name__ == "__main__":
         unittest.main(argv=[sys.argv[0], "M_FollowInstall.test_own_copy_is_reclaimed",
                             "M_FollowInstall.test_switch_links_every_login",
                             "M_FollowInstall.test_rollback_moves_logins_back"], verbosity=1)
+    if len(sys.argv) > 1 and sys.argv[1] == "--drill-login-mod":
+        # BREAK-IT managed-login-mod-escapes (issue #2964): the mod is copied, an old tree healed
+        unittest.main(argv=[sys.argv[0], "M_FollowInstall.test_mod_is_copied_and_healed",
+                            "M_FollowInstall.test_switch_links_every_login"], verbosity=1)
     if len(sys.argv) > 1 and sys.argv[1] == "--drill-login-follow":
         # BREAK-IT managed-login-install-predates: the updater moves a login whose
         # own install-sync cannot (issue #2714)
