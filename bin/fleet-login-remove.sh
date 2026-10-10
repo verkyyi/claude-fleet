@@ -120,6 +120,71 @@ LEFT=0
 run_post() { show "$@"; [ "$APPLY" = 1 ] || return 0; "$@" || { printf '%s: failed after the login was deleted; finish by hand:\n' "$PROG" >&2; show "$@" >&2; LEFT=1; }; }
 step() { printf '\n[%s] %s\n' "$1" "$2"; }
 
+# quiesce: no process of the login, and none coming back (issue #2866). launchd's
+# per-user domain relaunches what `pkill -U` takes — /usr/sbin/distnoted came
+# back seconds after the kill (drill10092046, drill10100326 on macmini), and
+# sysadminctl -deleteUser then hung for minutes a try. So the login's domains
+# go first: `bootout user/<uid>`, and `gui/<uid>` when it has one; then TERM,
+# KILL, and a watch of FLEET_LOGIN_REMOVE_SETTLE seconds that nothing returns.
+# Something did: boot out and kill again, three rounds; still there ⇒ exit 1,
+# the login not deleted.
+SETTLE=${FLEET_LOGIN_REMOVE_SETTLE:-3}
+quiesce() {
+  show sudo launchctl bootout "user/$UID_TARGET"
+  show sudo launchctl bootout "gui/$UID_TARGET"
+  show sudo pkill -TERM -U "$UID_TARGET"
+  [ "$APPLY" = 1 ] || return 0
+  local round s back
+  for round in 1 2 3; do
+    sudo launchctl bootout "user/$UID_TARGET" >/dev/null 2>&1 || :   # none is normal
+    if sudo launchctl print "gui/$UID_TARGET" >/dev/null 2>&1; then
+      sudo launchctl bootout "gui/$UID_TARGET" >/dev/null 2>&1 || :
+    fi
+    sudo pkill -TERM -U "$UID_TARGET" 2>/dev/null || : # no processes is normal
+    if pgrep -U "$UID_TARGET" >/dev/null 2>&1; then
+      sleep 1
+      if pgrep -U "$UID_TARGET" >/dev/null 2>&1; then
+        show sudo pkill -KILL -U "$UID_TARGET"
+        sudo pkill -KILL -U "$UID_TARGET" 2>/dev/null || :
+        sleep 1
+      fi
+    fi
+    back=0 s=0
+    while [ "$s" -lt "$SETTLE" ]; do
+      pgrep -U "$UID_TARGET" >/dev/null 2>&1 && { back=1; break; }
+      sleep 1; s=$((s + 1))
+    done
+    [ "$back" = 1 ] || pgrep -U "$UID_TARGET" >/dev/null 2>&1 || return 0
+    printf '%s: WARN a process of uid %s came back (round %s): %s\n' "$PROG" "$UID_TARGET" "$round" \
+      "$(ps -o comm= -U "$UID_TARGET" 2>/dev/null | head -3 | tr '\n' ' ')" >&2
+  done
+  printf '%s: processes still run as uid %s after three rounds of bootout + kill; stopped before deleting login\n' "$PROG" "$UID_TARGET" >&2
+  exit 1
+}
+
+# with_limit <secs> <cmd…>: the command, killed past <secs> — exit 124 then. A
+# deleteUser that hangs must not eat the node's 15 minutes (issue #2866). sudo
+# is the admin's own process, so it can be signalled; it passes TERM on, and
+# what is still left past 3 s is KILLed, its children with it.
+with_limit() {
+  local secs=$1 pid n=0; shift
+  "$@" & pid=$!
+  while kill -0 "$pid" 2>/dev/null; do
+    if [ "$n" -ge $((secs * 5)) ]; then
+      kill -TERM "$pid" 2>/dev/null; n=0
+      while [ "$n" -lt 15 ] && kill -0 "$pid" 2>/dev/null; do sleep 0.2; n=$((n + 1)); done
+      if kill -0 "$pid" 2>/dev/null; then
+        sudo pkill -KILL -P "$pid" 2>/dev/null; kill -KILL "$pid" 2>/dev/null
+      fi
+      wait "$pid" 2>/dev/null
+      return 124
+    fi
+    sleep 0.2; n=$((n + 1))   # fifths of a second
+  done
+  wait "$pid"
+}
+DELETE_SECS=${FLEET_LOGIN_REMOVE_DELETE_SECS:-120}
+
 # The login's entries in the machine daemon's register (issue #2528, EPIC #2524
 # C4): root's 0700 dirs, read directly where they can be (a sandbox, root), else
 # through sudo — `-n` in a dry run, which only WARNs when it cannot ask.
@@ -248,19 +313,7 @@ step 3 'remove the copied Claude account pool'
 run sudo rm -rf "$ACCOUNTS"
 
 step 4 'stop remaining processes owned by the login'
-show sudo pkill -TERM -U "$UID_TARGET"
-if [ "$APPLY" = 1 ]; then
-  sudo pkill -TERM -U "$UID_TARGET" 2>/dev/null || : # no processes is normal
-  sleep 1
-  if pgrep -U "$UID_TARGET" >/dev/null 2>&1; then
-    show sudo pkill -KILL -U "$UID_TARGET"
-    sudo pkill -KILL -U "$UID_TARGET" 2>/dev/null || :
-    sleep 1
-  fi
-  pgrep -U "$UID_TARGET" >/dev/null 2>&1 && {
-    printf '%s: processes still run as uid %s; stopped before deleting login\n' "$PROG" "$UID_TARGET" >&2; exit 1;
-  }
-fi
+quiesce
 
 # The home is quiet now (pool removed, processes gone): archive it as root — the
 # admin cannot read a 0700 home — into a dir only the admin can enter, then hand
@@ -296,7 +349,17 @@ else
 fi
 
 step 6 'delete the OS login (and its home)'
-run sudo sysadminctl -deleteUser "$LOGIN"
+quiesce   # again: the archive took its time, and launchd may have relaunched one
+show sudo sysadminctl -deleteUser "$LOGIN"
+if [ "$APPLY" = 1 ]; then
+  with_limit "$DELETE_SECS" sudo sysadminctl -deleteUser "$LOGIN"; rc=$?
+  if [ "$rc" = 124 ]; then
+    # Killed past its limit: what it did is read below, as for an exit 0.
+    printf '%s: WARN sysadminctl -deleteUser %s timed out after %ss (FLEET_LOGIN_REMOVE_DELETE_SECS) and was killed\n' "$PROG" "$LOGIN" "$DELETE_SECS" >&2
+  elif [ "$rc" != 0 ]; then
+    printf '%s: failed; stopped before deleting the login\n' "$PROG" >&2; exit 1
+  fi
+fi
 # sysadminctl can take the home and leave the record, exiting 0 all the same
 # (drill10092046 on macmini, issue #2728): a "done" here made the hub read
 # removed and the OS login nobody's. Read the record again; delete it with

@@ -31,7 +31,8 @@ S="$WORK/bin/fleet-login-remove.sh"
 ARCH="$WORK/offboarded"
 export FLEET_LOGIN_HOMES="$WORK/homes" FLEET_INSTALL_DAEMON_DIR="$WORK/LaunchDaemons" FLEET_OFFBOARD_ARCHIVE_DIR="$ARCH"
 export FLEET_CONF_DIR="$WORK/homes/alice/.config/claude-fleet" FLEET_SKIP_GLOBAL_CONF=1
-export FLEET_TEST_LOG="$WORK/calls.log" FLEET_TEST_LIVE="$WORK/live" FLEET_TEST_DS="$WORK/ds"
+export FLEET_TEST_LOG="$WORK/calls.log" FLEET_TEST_LIVE="$WORK/live" FLEET_TEST_DS="$WORK/ds" FLEET_TEST_PROCS="$WORK/procs"
+export FLEET_LOGIN_REMOVE_SETTLE=0   # no settle watch but in the respawn leg (#2866)
 export HOME="$WORK/admin" PATH="$WORK/shim:$PATH"
 # the machine daemon's register (issue #2528): absent unless a leg writes one
 export FLEET_NODE_STATE="$WORK/node" FLEET_NODE_SUPERVISOR="$WORK/rt/fleet-node-supervisor.py"
@@ -72,7 +73,9 @@ cs_fixture own
 # groups — alice sits in access_ssh by name and GUID, not in access_screensharing,
 # access_disabled has no member list at all, and staff is not an access group.
 reset_fixture() {
-  rm -rf "${WORK:?}/homes/alice" "${WORK:?}/ds/groups" "${WORK:?}/ds/alice.gone"
+  rm -rf "${WORK:?}/homes/alice" "${WORK:?}/ds/groups" "${WORK:?}/ds/alice.gone" "${WORK:?}"/procs*
+  # an archive is named to the second: two quick legs must not meet the last one's
+  rm -f "${ARCH:?}"/alice-*.tar.gz
   mkdir -p "$FLEET_CONF_DIR/fleets/alice-fleet" "$WORK/homes/alice/Library/LaunchAgents" "$FLEET_CONF_DIR/accounts" "$WORK/ds/groups"
   printf 'FLEET_REPO=example/repo\n' > "$FLEET_CONF_DIR/fleets/alice-fleet/conf"
   printf 'alive\n' > "$FLEET_TEST_LIVE"
@@ -129,9 +132,16 @@ case "$*" in
   *) exit 0 ;;
 esac
 EOF
+# The login's per-user domains (#2866): `bootout user/602` / `gui/602` leave a
+# mark in $FLEET_TEST_PROCS, so the respawning distnoted below stays dead;
+# `print gui/602` answers only with FAKE_GUI=1 (a logged-in console session).
 cat > "$WORK/shim/launchctl" <<'EOF'
 #!/bin/sh
 printf 'launchctl %s\n' "$*" >> "$FLEET_TEST_LOG"
+case "$#:$1 $2" in
+  '2:bootout user/602'|'2:bootout gui/602') : > "$FLEET_TEST_PROCS.booted"; exit 0 ;;
+  '2:print gui/602') [ "${FAKE_GUI:-0}" = 1 ]; exit ;;
+esac
 case "$1" in
   bootout) [ "${FAKE_BOOTOUT_FAIL:-0}" = 1 ] && exit 1 ;;
   print) [ "${FAKE_LOADED:-0}" = 1 ] && exit 0; exit 1 ;;
@@ -145,6 +155,11 @@ cat > "$WORK/shim/sysadminctl" <<'EOF'
 printf 'sysadminctl %s\n' "$*" >> "$FLEET_TEST_LOG"
 case " $* " in *' -keepHome '*) echo "'-keepHome' options is not available on this system" >&2; exit 1 ;; esac
 if [ "$1" = -deleteUser ] && [ "${FAKE_HOME_STAYS:-0}" = 0 ]; then rm -rf "${FLEET_LOGIN_HOMES:?}/${2:?}"; fi
+# A process of the login still alive (the respawned distnoted, #2866), or
+# FAKE_DELETE_HANGS=1: deleteUser hangs — a real one retried for minutes.
+if [ "$1" = -deleteUser ] && { [ -e "$FLEET_TEST_PROCS" ] || [ "${FAKE_DELETE_HANGS:-0}" = 1 ]; }; then
+  echo 'sysadminctl: hanging on a live process' >&2; exec sleep 30
+fi
 # FAKE_RECORD_STAYS=1: the home goes, the record does not — exit 0 anyway (#2728)
 if [ "$1" = -deleteUser ] && [ "${FAKE_RECORD_STAYS:-0}" = 0 ]; then : > "$FLEET_TEST_DS/${2:?}.gone"; fi
 exit 0
@@ -191,15 +206,22 @@ cat > "$WORK/shim/chown" <<'EOF'
 printf 'chown %s\n' "$*" >> "$FLEET_TEST_LOG"
 exit 0
 EOF
+# The login's processes: none, unless a leg writes $FLEET_TEST_PROCS (a live
+# distnoted). pkill takes it; with FAKE_RESPAWN=1 launchd brings it back on the
+# next look unless the login's domain was booted out first (#2866).
 cat > "$WORK/shim/pkill" <<'EOF'
 #!/bin/sh
 printf 'pkill %s\n' "$*" >> "$FLEET_TEST_LOG"
-exit 1
+[ -e "$FLEET_TEST_PROCS" ] || exit 1
+rm -f "$FLEET_TEST_PROCS"; : > "$FLEET_TEST_PROCS.killed"
 EOF
 cat > "$WORK/shim/pgrep" <<'EOF'
 #!/bin/sh
 printf 'pgrep %s\n' "$*" >> "$FLEET_TEST_LOG"
-exit 1
+if [ ! -e "$FLEET_TEST_PROCS" ] && [ "${FAKE_RESPAWN:-0}" = 1 ] && [ -e "$FLEET_TEST_PROCS.killed" ] && [ ! -e "$FLEET_TEST_PROCS.booted" ]; then
+  if [ -e "$FLEET_TEST_PROCS.looked" ]; then echo 'respawned /usr/sbin/distnoted agent' > "$FLEET_TEST_PROCS"; else : > "$FLEET_TEST_PROCS.looked"; fi
+fi
+[ -e "$FLEET_TEST_PROCS" ]
 EOF
 cat > "$WORK/shim-tar-fails/tar" <<'EOF'
 #!/bin/sh
@@ -220,7 +242,11 @@ exit 1
 EOF
 chmod +x "$WORK/shim/"* "$WORK/shim-tar-fails/"* "$WORK/shim-tar-warns/"*
 
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
+fail() {
+  printf 'selftest FAIL: %s\n' "$1" >&2
+  [ ! -s "$WORK/out" ] || { printf -- '--- last run (exit %s), its tail:\n' "${RC:-?}" >&2; tail -12 "$WORK/out" >&2; }
+  exit 1
+}
 has() { grep -Fq -- "$2" "$1" || fail "$3"; }
 not_has() { grep -Fq -- "$2" "$1" && fail "$3"; :; }
 run() { : > "$FLEET_TEST_LOG"; bash "$S" "$@" > "$WORK/out" 2>&1; RC=$?; }
@@ -333,7 +359,7 @@ has "$WORK/out" 'home-policy=delete' 'delete-home policy line'
 has "$WORK/out" '(skipped: --delete-home)' 'delete-home did not say the archive is skipped'
 not_has "$FLEET_TEST_LOG" 'tar' 'delete-home archived the home'
 not_has "$FLEET_TEST_LOG" 'install -d' 'delete-home prepared an archive dir'
-[ "$(archives)" = 1 ] || fail 'delete-home wrote an archive'
+[ "$(archives)" = 0 ] || fail 'delete-home wrote an archive'
 has "$FLEET_TEST_LOG" 'sysadminctl -deleteUser alice' 'delete-home did not delete the account'
 not_has "$FLEET_TEST_LOG" 'keepHome' 'delete-home passed -keepHome'
 not_has "$WORK/out" 'archive=' 'delete-home printed an archive path'
@@ -361,6 +387,47 @@ FAKE_RECORD_STAYS=1 FAKE_USER_DELETE_FAILS=1 run alice --delete-home --apply
 [ "$RC" = 1 ] || { cat "$WORK/out" >&2; fail "record that survives dscl: exit $RC (want 1)"; }
 has "$WORK/out" 'is still on this machine' 'a login left on the machine was not said'
 not_has "$WORK/out" 'fleet-login-remove: done' 'a login left on the machine read done'
+
+# launchd's per-user domain brings distnoted back after the pkill (drill10100326
+# on macmini, #2866): user/<uid> (and gui/<uid> when there is one) is booted
+# out BEFORE the kill — at step 4 and again before deleteUser — nothing comes
+# back, and deleteUser does not hang.
+reset_fixture
+echo '/usr/sbin/distnoted agent' > "$WORK/procs"
+t0=$(date +%s)
+FAKE_GUI=1 FAKE_RESPAWN=1 FLEET_LOGIN_REMOVE_SETTLE=1 FLEET_LOGIN_REMOVE_DELETE_SECS=20 run alice --delete-home --apply
+el=$(( $(date +%s) - t0 ))
+[ "$RC" = 0 ] || { cat "$WORK/out" >&2; fail "respawn apply: exit $RC (want 0)"; }
+has "$FLEET_TEST_LOG" 'launchctl bootout user/602' "the login's user domain was not booted out"
+grep -qx 'launchctl bootout gui/602' "$FLEET_TEST_LOG" || fail "the login's gui domain was not booted out"
+[ ! -e "$WORK/procs" ] || fail 'distnoted came back and is still running'
+not_has "$WORK/out" 'timed out' 'deleteUser hung on a respawned process'
+[ "$el" -lt 15 ] || fail "respawn apply took ${el}s"
+python3 - "$FLEET_TEST_LOG" <<'PY2' || fail 'bootout user/<uid> is not before every kill and before deleteUser'
+import pathlib, sys
+lines = pathlib.Path(sys.argv[1]).read_text().splitlines()
+boots = [i for i, l in enumerate(lines) if 'launchctl bootout user/602' in l]
+kills = [i for i, l in enumerate(lines) if l.startswith('pkill ')]
+dele = next(i for i, l in enumerate(lines) if 'sysadminctl -deleteUser' in l)
+assert boots and kills and boots[0] < kills[0], (boots, kills)
+assert len(boots) >= 2 and kills[0] < boots[-1] < dele, (boots, kills, dele)
+PY2
+# no gui domain (nobody at the console): only user/<uid>
+reset_fixture
+run alice --delete-home --apply
+[ "$RC" = 0 ] || { cat "$WORK/out" >&2; fail "no-gui apply: exit $RC"; }
+has "$FLEET_TEST_LOG" 'launchctl bootout user/602' 'user domain not booted out without a gui one'
+grep -qx 'launchctl bootout gui/602' "$FLEET_TEST_LOG" && fail 'an absent gui domain was booted out'
+# deleteUser hangs anyway: it is killed at its time limit, said loudly, and the
+# record check of step 6 decides (here dscl takes the record: done).
+reset_fixture
+t0=$(date +%s)
+FAKE_DELETE_HANGS=1 FAKE_RECORD_STAYS=1 FLEET_LOGIN_REMOVE_DELETE_SECS=1 run alice --delete-home --apply
+el=$(( $(date +%s) - t0 ))
+[ "$el" -lt 15 ] || fail "a hanging deleteUser was not cut off at its limit (${el}s)"
+has "$WORK/out" 'sysadminctl -deleteUser alice timed out after 1s' 'the deleteUser time limit was not said'
+has "$FLEET_TEST_LOG" 'dscl . -delete /Users/alice' 'after a timed-out deleteUser the record was not deleted with dscl'
+[ "$RC" = 0 ] || { cat "$WORK/out" >&2; fail "timed-out deleteUser, record then deleted: exit $RC (want 0)"; }
 
 # --archive-dir picks the archive location; a login in no access group says so.
 reset_fixture

@@ -318,6 +318,8 @@ FLEET_LEDGER_WATCH_LEASE_TTL       knob: internal pacing/limit, safe in-code def
 FLEET_LIVE_DIR                     path: the live install checkout (default ~/.claude/fleet) — fleet-install-version.sh, fleet-doctor.sh, and the hub refresh loop's stable mark (its local refs/tags/stable judges every machine's version, #644)
 FLEET_LIVE_ROOT                    path: state/log location override (fleet-daemon-lib.sh)
 FLEET_LOGIN_HOMES                  seam: an injectable command/path for tests (fleet-login-new.sh)
+FLEET_LOGIN_REMOVE_DELETE_SECS     knob: time limit (s) on sysadminctl -deleteUser before it is killed, default 120 (fleet-login-remove.sh, #2866)
+FLEET_LOGIN_REMOVE_SETTLE          knob: seconds watched for a respawned process after bootout + kill, default 3 (fleet-login-remove.sh, #2866)
 FLEET_LOGIN_CREDSEP_WAIT           knob: seconds fleet-login-new.sh step 7b waits for `credsep check` to pass while the new proxy starts (15; #2294)
 FLEET_LOGIN_HUB                    handoff: the hub the admin agent hands fleet-login-new.sh with a create's join code (#2652)
 FLEET_LOGIN_JOIN_CODE              handoff: a create's one-time join code, admin agent → fleet-login-new.sh, env only (#2652)
