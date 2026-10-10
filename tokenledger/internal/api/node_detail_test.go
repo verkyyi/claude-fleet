@@ -39,7 +39,10 @@ func detailRig(t *testing.T) *harness {
 	for _, l := range logins {
 		svcs = append(svcs, control.ServiceStatus{Name: l + "-svc", Kind: "service", Login: l, State: "running", StartedAt: &started})
 	}
-	n.beat("", control.Heartbeat{Hostname: "m4", OSUser: "root", NCPU: 10, Load1: 5, ObservedAt: time.Now(), Services: svcs})
+	// The machine link reads the same kernel as its logins: the same load and
+	// memory. foldSys takes the newest row whole, so a link row without memory
+	// would blank it whenever its beat lands last (claude-fleet#2824).
+	n.beat("", control.Heartbeat{Hostname: "m4", OSUser: "root", NCPU: 10, Load1: 5, MemTotalBytes: 16 << 30, MemFreeBytes: 4 << 30, ObservedAt: time.Now(), Services: svcs})
 	if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: pAlice, Hostname: "m4", Login: "alpha"}); code != 200 {
 		t.Fatalf("adopt alice: HTTP %d", code)
 	}
