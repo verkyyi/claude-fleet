@@ -148,7 +148,7 @@ nr=$(DBG_RC=4 step wins-orch 5000); next=$(cat "$FLEET_CONF_DIR/global/debug-fee
 # --- E no hub --------------------------------------------------------------
 unset FLEET_DEBUG_DESK_HUB_CMD
 rm -rf "$FLEET_CONF_DIR/global"
-FLEET_HUB_URL= CCQUOTA_HUB_URL= D feed >/dev/null 2>&1; rc=$?
+FLEET_HUB_URL='' CCQUOTA_HUB_URL='' D feed >/dev/null 2>&1; rc=$?
 [ "$rc" = 3 ] && [ ! -e "$FLEET_CONF_DIR/global/debug-feed.json" ] && ok "E no hub here: exit 3, nothing written" \
   || bad "E no hub: rc=$rc"
 
