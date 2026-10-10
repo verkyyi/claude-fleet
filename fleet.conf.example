@@ -1219,6 +1219,10 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 #FLEET_COLLECT_SNAPSHOT_BUDGET=30
 # @label=Collector hubsess budget @group=cache @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_COLLECT_HUBSESS_BUDGET=10
+# The views phase (issue #2763): only while a thin client's 看台 is registered —
+# `fleet-remote-view.sh prune` takes one kept past FLEET_VIEW_KEEP_SECS.
+# @label=Collector views budget @group=cache @tier=internal @scope=global @edit=int @unit=sec
+#FLEET_COLLECT_VIEWS_BUDGET=10
 
 # Collector STALENESS threshold (issue #636) — when the dash starts saying so.
 # The dash draws every number out of the collector's caches, so a collector that

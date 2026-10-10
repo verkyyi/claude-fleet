@@ -378,6 +378,11 @@ PHASE_LIST=(guide sessmap issues git ctx usage scrape banner escalate agentcfg s
 # conf's own line wins over the environment); off everywhere, the list — and so the
 # heartbeat's phases= line — is exactly what it was.
 fleet_hub_any && PHASE_LIST+=(hubsess)
+# views (issue #2763) exists only while a thin client's 看台 is registered here
+# (fleet-remote-view.sh attach --thin): it outlives its client for
+# FLEET_VIEW_KEEP_SECS, and with no new attach nothing else would take it after.
+awk -F '\t' '$3 == "thin" { f = 1; exit } END { exit !f }' "$FLEET_CONF_DIR"/remote-views/* 2>/dev/null \
+  && PHASE_LIST+=(views)
 
 # phase_budget NAME — seconds. Each has its own knob so one slow phase can be given
 # room without loosening the others; the tick budget is the backstop over all of them.
@@ -397,6 +402,7 @@ phase_budget() {
     agentcfg)   printf '%s' "${FLEET_COLLECT_AGENTCFG_BUDGET:-20}" ;;
     snapshot)   printf '%s' "${FLEET_COLLECT_SNAPSHOT_BUDGET:-30}" ;;
     hubsess)    printf '%s' "${FLEET_COLLECT_HUBSESS_BUDGET:-10}" ;;
+    views)      printf '%s' "${FLEET_COLLECT_VIEWS_BUDGET:-10}" ;;
     *)          printf '30' ;;
   esac
 }
@@ -1295,6 +1301,10 @@ ph_snapshot() {
 # running (one at a time, ~70s each): no daemon of its own, never on a render path,
 # and in the PHASE_LIST only when CCQUOTA_FLEET=1 for some fleet (fleet_hub_any).
 ph_hubsess() { bash "$BIN/fleet-hub-sessions.sh" --ensure >/dev/null 2>&1 || true; }
+
+# --- a thin client's 看台, kept past its client (issue #2763) -----------------------
+# rv_prune takes a row + 看台 session FLEET_VIEW_KEEP_SECS after its client left.
+ph_views() { bash "$BIN/fleet-remote-view.sh" prune >/dev/null 2>&1 || true; }
 
 # --- run the phases: rotate, budget, truncate (issue #653) -----------------------
 # Start where the last tick was truncated and wrap round, so truncation costs a
