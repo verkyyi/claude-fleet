@@ -85,9 +85,14 @@ drill_bootstrap_abroad() {
   ts_build "$d"
   chmod -R u+w "$d/ro"
   tenant_round "$d" bootstrap mv "$d/ro/cache" "$d/ro/cache.off" -- mv "$d/ro/cache.off" "$d/ro/cache" || return 1
-  printf '%s' "$HITROW" | grep -q 'github.com' && printf '%s' "$HITROW" | grep -q 'claude.ai' \
-    || { WHY="red without naming both addresses: $HITROW"; return 1; }
-  WHAT="本机没有开号缓存：bootstrap 项变红、记 github.com 与 claude.ai 两处；缓存放回后变绿"
+  # the cache holds Claude Code only since #2775 (claude-fleet comes from the
+  # runtime or the hub): its absence is one address, claude.ai — and github.com
+  # is no longer asked of it
+  printf '%s' "$HITROW" | grep -q 'claude.ai' \
+    || { WHY="red without naming claude.ai: $HITROW"; return 1; }
+  printf '%s' "$HITROW" | grep -q 'github.com' \
+    && { WHY="still asks the retired claude-fleet mirror (github.com): $HITROW"; return 1; }
+  WHAT="本机没有开号缓存：bootstrap 项变红、记 claude.ai（claude-fleet 不再从缓存取，#2775）；缓存放回后变绿"
 }
 
 cred_run_drills "$0"

@@ -400,7 +400,8 @@ if [ "$APPLY" = 1 ]; then
   for t in $NEED; do
     command -v "$t" >/dev/null 2>&1 || { printf '%s: %s not found — nothing was changed\n' "$PROG" "$t" >&2; exit 1; }
   done
-  if [ "$DAEMONS" = 1 ] && ! command -v plutil >/dev/null 2>&1; then
+  # a managed machine adopts the login at step 8 instead (issue #2775): no plist to render
+  if [ "$DAEMONS" = 1 ] && [ -z "$MSHA" ] && ! command -v plutil >/dev/null 2>&1; then
     printf '%s: plutil not found — cannot render LaunchDaemons (--no-daemons to skip step 8); nothing was changed\n' "$PROG" >&2; exit 1
   fi
   if [ "$TMPKEY" = 1 ] && ! command -v ssh-keygen >/dev/null 2>&1; then
