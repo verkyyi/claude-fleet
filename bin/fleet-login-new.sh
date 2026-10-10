@@ -168,6 +168,10 @@
 #       (or its home) already exists · 4 --daemons-only: no such login (or
 #       no home)
 #
+# Env: FLEET_LOGIN_OP_ID — the admin agent's op_id (issue #2928): written to
+#      ~/<login>-onboard/op before step 1, its result appended on success, so
+#      the same op arriving twice is answered from it (the agent reads it).
+#
 # Conf: FLEET_SSH_PUBLIC_HOST / FLEET_SSH_PUBLIC_PORT (global; fleet.conf.example)
 #      — the public SSH entry the welcome letter names.
 # Env: FLEET_LOGIN_CREDSEP_WAIT (15) — seconds 7b waits for `check` to pass
@@ -225,6 +229,15 @@ if [ -n "$JCODE" ] && [ -n "$JHUB" ]; then
   printf '%s' "$JCODE" | grep -Eq '^fj_[a-z2-7]{26}$' || die2 'FLEET_LOGIN_JOIN_CODE is not a join code (fj_…)'
   JHUB=${JHUB%/}; OPENED=1
 fi
+# The op that runs this (issue #2928): the admin agent's op_id, from its
+# environment. Under --apply it is written to ~/<login>-onboard/op before step 1
+# (op= · pid= · started=) and, when the run ends well, its result lines after
+# (done= · line=…): the agent reads that file when the SAME op reaches it again
+# with the login already there — finished = its result, never 「already exists」;
+# still running = waited for; neither = rolled back. Hex, at most 64.
+OPID=${FLEET_LOGIN_OP_ID:-}
+unset FLEET_LOGIN_OP_ID
+[ -z "$OPID" ] || printf '%s' "$OPID" | grep -Eq '^[0-9a-f]{1,64}$' || die2 'FLEET_LOGIN_OP_ID is not an op id (hex)'
 if [ "$DONLY" = 1 ]; then
   # --daemons-only (issue #1223): step 8 for a login that already exists — the
   # options of steps 1–7 and 9 have nothing to act on, so they are refused, not
@@ -519,6 +532,14 @@ fi
 
 # Steps 1–7 open the login; --daemons-only (issue #1223) skips straight to 8.
 ROOT="$H/.claude/fleet"
+OPMARK="$ONBOARD/op"
+if [ "$DONLY" = 0 ] && [ "$APPLY" = 1 ] && [ -n "$OPID" ]; then
+  # before anything is made: a login this op makes is known as this op's, even
+  # when the run is cut off half way (issue #2928)
+  ( umask 077 && mkdir -p "$ONBOARD" \
+    && printf 'op=%s\npid=%s\nstarted=%s\n' "$OPID" "$$" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$OPMARK" ) \
+    || { printf '%s: cannot write %s — nothing was changed\n' "$PROG" "$OPMARK" >&2; exit 1; }
+fi
 if [ "$DONLY" = 0 ]; then
   if [ "$PWGEN" = 1 ]; then
     step "create the OS login (password: random, written to $PWFILE — mode 600, never printed)"
@@ -1086,4 +1107,11 @@ fi
 [ -z "$FLEET_LINE" ] || say "$FLEET_LINE"
 # last, so the hub's detail (the output's tail) always carries it
 say "$CREDSEP_LINE"
+if [ "$APPLY" = 1 ] && [ -n "$OPID" ]; then
+  # this op's result, for the same op arriving again (issue #2928): the lines
+  # the hub reads off the output's tail, credsep last
+  { printf 'done=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    for l in "$NODE_LINE" "$FLEET_LINE" "$CREDSEP_LINE"; do [ -z "$l" ] || printf 'line=%s\n' "$l"; done
+  } >> "$OPMARK" 2>/dev/null || say "  WARN: cannot record the result in $OPMARK"
+fi
 exit 0

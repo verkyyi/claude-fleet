@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"os/exec"
@@ -15,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
@@ -104,14 +106,29 @@ func accountArgv(home string, op control.AccountOp) (string, []string) {
 }
 
 // accountEnv is the create's join code and this hub's address, handed to
-// fleet-login-new.sh in its environment, never its argv (claude-fleet#2652):
-// a script that predates them ignores both. nil = the agent's own environment.
-func accountEnv(hub string, op control.AccountOp) []string {
-	if op.Op != control.AccountCreate || op.JoinCode == "" || hub == "" {
+// fleet-login-new.sh in its environment, never its argv (claude-fleet#2652),
+// and its op_id (claude-fleet#2928: the script marks the login it makes as this
+// op's): a script that predates them ignores them. nil = the agent's own
+// environment.
+func accountEnv(hub, opID string, op control.AccountOp) []string {
+	if op.Op != control.AccountCreate {
 		return nil
 	}
-	return append(os.Environ(), "FLEET_LOGIN_JOIN_CODE="+op.JoinCode, "FLEET_LOGIN_HUB="+hub)
+	var env []string
+	if op.JoinCode != "" && hub != "" {
+		env = append(env, "FLEET_LOGIN_JOIN_CODE="+op.JoinCode, "FLEET_LOGIN_HUB="+hub)
+	}
+	if opIDRE.MatchString(opID) {
+		env = append(env, "FLEET_LOGIN_OP_ID="+opID)
+	}
+	if env == nil {
+		return nil
+	}
+	return append(os.Environ(), env...)
 }
+
+// opIDRE is an op_id the script takes (control.NewOpID's hex).
+var opIDRE = regexp.MustCompile(`^[0-9a-f]{1,64}$`)
 
 // accountOpsFile is the book's name under the agent's StateDir. Its
 // "inflight" key is what bin/fleet-node-supervisor.py reads (#2918): keep it.
@@ -142,7 +159,10 @@ var accountLoginExists = func(login string) bool {
 type accountOps struct {
 	mu sync.Mutex
 	// path is the book on disk; "" keeps it in memory only.
-	path     string
+	path string
+	// home is the admin login's home, where fleet-login-new.sh leaves
+	// ~/<login>-onboard/op (claude-fleet#2928); "" reads no mark.
+	home     string
 	inflight map[string]accountInflight
 	// seen is every op_id ever accepted, so a duplicate send never runs the
 	// script twice (bounded: oldest forgotten past seenMax).
@@ -150,6 +170,10 @@ type accountOps struct {
 	order []string
 	// outbox holds results the hub has not acked yet, by op_id.
 	outbox map[string]control.Message
+	// resume is the creates a restart cut off whose login the op's own run
+	// made (claude-fleet#2928): settled from its mark (resumeAccountOps), not
+	// answered as cut off.
+	resume map[string]accountInflight
 	// send writes on the current connection; nil between connections.
 	send func(control.Message) error
 
@@ -287,7 +311,27 @@ func (o *accountOps) load(path string) {
 		if _, done := o.outbox[id]; done {
 			continue
 		}
-		res := cutOffResult(f, accountLoginExists(f.Login))
+		exists := accountLoginExists(f.Login)
+		if f.Op == control.AccountCreate && exists && o.home != "" {
+			if mk, ok := readOpMark(o.home, f.Login); ok && mk.op == id {
+				// its own run made the login: finished, still running or
+				// stopped — the mark says which (claude-fleet#2928)
+				if o.resume == nil {
+					o.resume = map[string]accountInflight{}
+				}
+				f.PID = os.Getpid() // this process settles it now: the supervisor holds for it
+				o.inflight[id] = f
+				o.resume[id] = f
+				if !o.seen[id] {
+					o.seen[id] = true
+					o.order = append(o.order, id)
+				}
+				log.Printf("account ops: %s %s (op %s) was cut off by a restart; its own run made the login — settling it from %s",
+					f.Op, f.Login, id, opMarkPath(o.home, f.Login))
+				continue
+			}
+		}
+		res := cutOffResult(f, exists)
 		m, err := control.New(control.TypeAccountResult, res)
 		if err != nil {
 			continue
@@ -348,7 +392,7 @@ func (a *Agent) handleAccountOp(ctx context.Context, conn nodeLink, m control.Me
 		return // already running or done; its result is (or will be) in the outbox
 	}
 	go func() {
-		res := a.runAccountOp(op)
+		res := a.runAccountOp(m.OpID, op)
 		out, err := control.New(control.TypeAccountResult, res)
 		if err != nil {
 			return
@@ -390,19 +434,40 @@ func validateAccountOp(op control.AccountOp, self string) error {
 }
 
 // runAccountOp runs the script. Its exit status is the answer; exit 3 from
-// fleet-login-new.sh is "already exists", reported as such and never as OK.
-func (a *Agent) runAccountOp(op control.AccountOp) control.AccountResult {
+// fleet-login-new.sh is "already exists", reported as such and never as OK —
+// unless the login is this very op's (claude-fleet#2928): the same op_id
+// arriving again (a re-ask, a restart that lost the book) is answered from
+// the mark its first run left, never by running the script a second time. A
+// create that fails after its run made the login takes the login back
+// (rollbackOwnCreate), so a failed op never leaves a live login behind.
+func (a *Agent) runAccountOp(opID string, op control.AccountOp) control.AccountResult {
 	a.acct.run.Lock()
 	defer a.acct.run.Unlock()
-	res := control.AccountResult{Op: op.Op, Login: op.Login, Exit: -1}
-	script, args := accountArgv(a.cfg.Home, op)
 	ctx, cancel := context.WithTimeout(a.bgCtx(), accountOpTimeout)
 	defer cancel()
+	if op.Op == control.AccountCreate {
+		if res, ok := a.settleOwnCreate(ctx, opID, op.Login); ok {
+			return res
+		}
+	}
+	res := a.runAccountScript(ctx, opID, op)
+	if op.Op == control.AccountCreate && !res.OK && !res.Exists && accountLoginExists(op.Login) {
+		if mk, ok := readOpMark(a.cfg.Home, op.Login); ok && mk.op == opID {
+			res = a.rollbackOwnCreate(ctx, op.Login, res)
+		}
+	}
+	return res
+}
+
+// runAccountScript runs op's script once and reads its exit.
+func (a *Agent) runAccountScript(ctx context.Context, opID string, op control.AccountOp) control.AccountResult {
+	res := control.AccountResult{Op: op.Op, Login: op.Login, Exit: -1}
+	script, args := accountArgv(a.cfg.Home, op)
 	cmd := accountCommand(ctx, script, args...)
 	// The scripts cd to / themselves; starting there too means a sudo -u in
 	// them never inherits a cwd the new login cannot read.
 	cmd.Dir = "/"
-	cmd.Env = accountEnv(a.cfg.HubURL, op)
+	cmd.Env = accountEnv(a.cfg.HubURL, opID, op)
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out
 	err := prepCmd(ctx, cmd)
@@ -424,6 +489,142 @@ func (a *Agent) runAccountOp(op control.AccountOp) control.AccountResult {
 		res.Detail = tail(err.Error()+"\n"+res.Detail, accountDetailMax)
 	}
 	return res
+}
+
+// opMark is ~<admin>/<login>-onboard/op, as fleet-login-new.sh writes it
+// (claude-fleet#2928): op= pid= started= before step 1, done= and the result's
+// line= rows (credsep last) when the run ended well.
+type opMark struct {
+	op, started, done string
+	pid               int
+	lines             []string
+}
+
+func opMarkPath(home, login string) string {
+	return filepath.Join(home, login+"-onboard", "op")
+}
+
+// readOpMark reads login's mark; false when there is none.
+func readOpMark(home, login string) (opMark, bool) {
+	var mk opMark
+	data, err := os.ReadFile(opMarkPath(home, login))
+	if err != nil {
+		return mk, false
+	}
+	for _, l := range strings.Split(string(data), "\n") {
+		k, v, ok := strings.Cut(l, "=")
+		if !ok {
+			continue
+		}
+		switch k {
+		case "op":
+			mk.op = v
+		case "pid":
+			mk.pid, _ = strconv.Atoi(v)
+		case "started":
+			mk.started = v
+		case "done":
+			mk.done = v
+		case "line":
+			mk.lines = append(mk.lines, v)
+		}
+	}
+	return mk, mk.op != ""
+}
+
+// accountPIDAlive says whether the run that wrote a mark still runs; a test seam.
+var accountPIDAlive = func(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	p, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	err = p.Signal(syscall.Signal(0))
+	return err == nil || errors.Is(err, syscall.EPERM)
+}
+
+// accountMarkPoll is how often a run still going is looked at again.
+var accountMarkPoll = 2 * time.Second
+
+// settleOwnCreate answers a create whose login exists and whose mark names
+// opID — this op's own run made it: finished ⇒ its result; still running ⇒
+// waited for (up to ctx); stopped half way ⇒ rolled back. false when the login
+// is not this op's (none there, no mark, another op's): the script decides.
+func (a *Agent) settleOwnCreate(ctx context.Context, opID, login string) (control.AccountResult, bool) {
+	if a.cfg.Home == "" || !accountLoginExists(login) {
+		return control.AccountResult{}, false
+	}
+	mk, ok := readOpMark(a.cfg.Home, login)
+	if !ok || mk.op != opID {
+		return control.AccountResult{}, false
+	}
+	res := control.AccountResult{Op: control.AccountCreate, Login: login, Exit: -1}
+	for mk.done == "" && accountPIDAlive(mk.pid) {
+		select {
+		case <-ctx.Done():
+			res.Detail = fmt.Sprintf("this op's own run (pid %d, started %s) is still opening %s after %s; ask again later",
+				mk.pid, mk.started, login, accountOpTimeout)
+			return res, true
+		case <-time.After(accountMarkPoll):
+		}
+		if mk, ok = readOpMark(a.cfg.Home, login); !ok || mk.op != opID {
+			return control.AccountResult{}, false
+		}
+	}
+	if mk.done != "" {
+		res.OK, res.Exit = true, 0
+		res.Detail = tail(fmt.Sprintf("login %s was opened by this op's own run (started %s, finished %s); answering its result\n%s",
+			login, mk.started, mk.done, strings.Join(mk.lines, "\n")), accountDetailMax)
+		res.Credsep = credsepResult(res.Detail)
+		log.Printf("account ops: create %s (op %s) arrived again: answered from its first run, not run twice", login, opID)
+		return res, true
+	}
+	res.Detail = fmt.Sprintf("this op's own run (pid %d, started %s) made login %s and stopped before the end", mk.pid, mk.started, login)
+	return a.rollbackOwnCreate(ctx, login, res), true
+}
+
+// rollbackOwnCreate takes back a login this op made and failed to finish
+// (claude-fleet#2928): a failed create never leaves a live login with running
+// services behind. Its home is kept (archived by fleet-login-remove.sh). The
+// result stays a failure, saying what was done.
+func (a *Agent) rollbackOwnCreate(ctx context.Context, login string, res control.AccountResult) control.AccountResult {
+	rm := a.runAccountScript(ctx, "", control.AccountOp{Op: control.AccountRemove, Login: login})
+	verdict := "rolled back: login " + login + " removed (home kept)"
+	if !rm.OK && rm.Exit != control.RemoveExitNoLogin {
+		verdict = fmt.Sprintf("rollback FAILED (fleet-login-remove exit %d): login %s is still on this machine — remove it: %s",
+			rm.Exit, login, lastLine(rm.Detail))
+	}
+	log.Printf("account ops: create %s failed after making the login: %s", login, verdict)
+	res.OK, res.Exists, res.Credsep = false, false, ""
+	res.Detail = tail(res.Detail+"\n"+verdict, accountDetailMax)
+	return res
+}
+
+// resumeAccountOps settles the creates load() kept for it (claude-fleet#2928).
+func (a *Agent) resumeAccountOps() {
+	a.acct.mu.Lock()
+	todo := a.acct.resume
+	a.acct.resume = nil
+	a.acct.mu.Unlock()
+	for id, f := range todo {
+		a.acct.run.Lock()
+		ctx, cancel := context.WithTimeout(a.bgCtx(), accountOpTimeout)
+		res, ok := a.settleOwnCreate(ctx, id, f.Login)
+		cancel()
+		a.acct.run.Unlock()
+		if !ok {
+			res = cutOffResult(f, accountLoginExists(f.Login))
+		}
+		out, err := control.New(control.TypeAccountResult, res)
+		if err != nil {
+			continue
+		}
+		out.OpID = id
+		log.Printf("account ops: %s %s (op %s) settled after the restart: ok=%v exit=%d", f.Op, f.Login, id, res.OK, res.Exit)
+		a.acct.deliver(out)
+	}
 }
 
 func tail(s string, n int) string {

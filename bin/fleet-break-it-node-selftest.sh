@@ -39,6 +39,11 @@
 #                         tokenledger/internal/agent/node_accounts.go's book
 #                         (account-ops.json): logins/*.env changes while the machine's
 #                         agent runs the very create that wrote it
+#   account-op-rerun-exists  tokenledger/internal/agent/node_accounts.go's settleOwnCreate
+#                         + bin/fleet-login-new.sh's op mark (#2928): the same create
+#                         reaches the agent twice (a re-ask, a restart that lost the
+#                         book) after its first run made the login (go test, when a
+#                         toolchain is here)
 #   node-update-half      bin/fleet-node-update.py (#2334): an update killed half way,
 #                         and a release whose new part fails the doctor
 #   node-update-stale-fail  bin/fleet-node-update.py key_row + skip_retry (#2906): one
@@ -607,6 +612,36 @@ NA
   SECS=$(since "$t0")
   kill "$pid2" 2>/dev/null
   WHAT="开号写下 logins/alice.env 时节点程序正在跑这次开号：守护记一行 held、等操作结束（同一 pid 报完结果）才重启换租户；节点程序重启后按账本补答、入口按同一 op_id 再问由 go test（TestAdminAgentAnswersAnOpCutOffByARestart、TestFleetFirstSignInProvisionsAutoAssigned）钉住"
+}
+
+drill_account_op_rerun_exists() {
+  CAP=120; local t0 out rc tests f
+  tests='TestCreateArrivingTwiceIsAnsweredFromItsFirstRun TestCreateCutOffHalfWayIsRolledBack TestCreateStillRunningIsWaitedFor TestCreateFailingAfterMakingTheLoginIsRolledBack TestRestartSettlesItsOwnCreateFromTheMark TestCreateOfSomeoneElsesLoginStillExists'
+  f="$ROOT/tokenledger/internal/agent/node_accounts_rerun_test.go"
+  for out in $tests; do
+    grep -q "^func $out(" "$f" 2>/dev/null || { WHY="the agent half's test $out is not in ${f#$ROOT/}"; return 1; }
+  done
+  # the script half: the op's mark is written before step 1 and its result at the end
+  grep -q 'FLEET_LOGIN_OP_ID' "$BIN/fleet-login-new.sh" && grep -q "printf 'done=%s" "$BIN/fleet-login-new.sh" \
+    || { WHY="fleet-login-new.sh no longer marks the login as its op's (~/<login>-onboard/op)"; return 1; }
+  grep -q '"FLEET_LOGIN_OP_ID="+opID' "$ROOT/tokenledger/internal/agent/node_accounts.go" \
+    || { WHY="the agent no longer hands the script its op_id"; return 1; }
+  t0=$(now)
+  WHAT='同一个开号第二次到达（入口再问、重启丢了账本）：脚本留下的 ~/<login>-onboard/op 记着这次 op——跑完了就按它的结果答成功、不再跑脚本、不报「已存在」；还在跑就等；半路停了就收回登录（remove，家目录保留）再报失败；别的 op 的登录照旧「已存在」'
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/agent 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the agent half's Go tests are not there (go test ran none)"; return 1 ;;
+      0:*) WHAT="${WHAT}（go test 六条）" ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
+        WHAT="${WHAT}；Go 测试这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们" ;;
+      *) WHY="the agent half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  else
+    WHAT="${WHAT}；没有 go：六条测试按名核对在，Go 门（tokenledger.yml）跑它们"
+  fi
+  SECS=$(since "$t0")
 }
 
 drill_node_update_half() {

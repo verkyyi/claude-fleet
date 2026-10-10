@@ -414,7 +414,13 @@ func New(cfg Config) (*Agent, error) {
 		// Account ops outlive this process (claude-fleet#2918): results the
 		// hub has not acked go out again, and one a restart cut off is
 		// settled with what the machine shows now.
+		a.acct.home = cfg.Home
 		a.acct.load(filepath.Join(cfg.StateDir, accountOpsFile))
+		if len(a.acct.resume) > 0 {
+			// cut-off creates whose own run made the login: settled from
+			// its mark, in the background (claude-fleet#2928)
+			go a.resumeAccountOps()
+		}
 	}
 	for _, source := range sources {
 		switch source {
