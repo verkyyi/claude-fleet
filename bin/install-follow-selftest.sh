@@ -74,10 +74,12 @@ NOW=$(date +%s)
 STATE="$CONF/global/install-sync.state"
 
 # mk_state <conf-dir> <result> <reason> [deferred_since|-] [last_check]
+# last_check defaults to the moment of writing, not $NOW: a slow macOS runner
+# reaches J's last doctor read over a minute after the top (issue #2975).
 mk_state() {
   mkdir -p "$1/global"
   cat > "$1/global/install-sync.state" <<EOF
-last_check: ${5:-$NOW}
+last_check: ${5:-$(date +%s)}
 last_check_iso: 2026-09-24T00:00:00Z
 result: $2
 head: $HEADSHA
@@ -326,6 +328,7 @@ contains "J: doctor names the fix" "$D" "fleet-sync-logins.sh --logins <login>"
 contains "J: doctor says off is never warned" "$D" "FLEET_INSTALL_SYNC=0) reads \`off\`"
 # no stuck other → INFO, not WARN
 rm -rf "$HOMES/carol" "$HOMES/dave"
+mk_state "$HOMES/alice/.config/claude-fleet" current "install at stable $S7"   # fresh tick: `<1m`
 D=$(doc_sync)
 contains "J: no stuck other → INFO" "$D" "INFO  install  other logins on this machine: alice on/current <1m · bob off"
 not_contains "J: no stuck other → no WARN about others" "$D" "other login(s) on this machine NOT"
