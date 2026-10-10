@@ -1319,10 +1319,10 @@ eq "R: fleet_control.py's ready method hands the verdict on, no fleet identity n
 # `gh` still says false, nothing is missing, it is ready. With a repo,
 # the same login is not.
 mkdir -p "$WORK/conf-norepo/fleets/solo$$"; printf 'FLEET_SESSION=solo%s\n' "$$" > "$WORK/conf-norepo/fleets/solo$$/conf"
-rm -f "$WORK/gh-ok"
+rm -f "$WORK/gh-ok"; printf '{}' > "$HOME/.claude/.credentials.json"   # the pool above lives in the other conf dir
 eq "R: no repo hosted, no gh login: ready all the same" "True|False|True|True|" "$(FLEET_CONF_DIR="$WORK/conf-norepo" rdy)"
 eq "R: a repo hosted, no gh login: not ready, gh named" "False|False|True|True|gh" "$(rdy)"
-touch "$WORK/gh-ok"
+touch "$WORK/gh-ok"; rm -f "$HOME/.claude/.credentials.json"
 HOME="$(cd ~ && pwd)"; export HOME
 
 printf 'dash-remote-rows selftest: PASS (%d checks)\n' "$CHECKS"
