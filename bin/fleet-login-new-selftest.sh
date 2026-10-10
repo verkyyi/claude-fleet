@@ -860,7 +860,7 @@ contains "P linked to the release" "$(cat "$PH/.claude/fleet/.fleet-linked" 2>/d
 contains "P step 8 is account adopt" "$OUT" "sudo python3 $PNR/current/bin/fleet-node-supervisor.py account adopt pru"
 eq "P adopted once" "account adopt pru" "$(cat "$WORK/adopt.log")"
 not_contains "P no per-login LaunchDaemon" "$CALLS" "launchctl bootstrap system"
-[ -n "$(ls "$FLEET_INSTALL_DAEMON_DIR" 2>/dev/null | grep 'com.claude-fleet.pru\.')" ] && fail "P a per-login plist was written"
+for f in "$FLEET_INSTALL_DAEMON_DIR"/com.claude-fleet.pru.*; do [ -e "$f" ] && fail "P a per-login plist was written: $f"; done
 not_contains "P bash32" "$OUT" "unbound variable"
 # --no-daemons: linked, not adopted, a WARN naming the command
 : > "$WORK/adopt.log"

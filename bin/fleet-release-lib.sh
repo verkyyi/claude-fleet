@@ -249,6 +249,7 @@ for a in d.get("artifacts") or []:
 # rc 3 no hub, or one that keeps no releases (404) — nothing made
 # rc 1 failed — REL_STAGE (unreachable · key · ccquota · fetch · place) +
 #      REL_ERR; <dir> may hold a half-made repository: the caller removes it
+# shellcheck disable=SC2034  # every REL_* it sets is the caller's (fleet-host-install.sh, fleet-login-install.sh)
 fleet_rel_first_checkout() {
   local dir="$1" conf="$2" tmo="$3" log="${4:-/dev/null}" hub pub ccq stg m c
   REL_STAGE='' REL_FPR='' REL_HUB=''
@@ -264,7 +265,6 @@ fleet_rel_first_checkout() {
   stg="$dir.rel"; rm -rf "$stg" "$stg.partial"
   fleet_rel_fetch "$ccq" "$hub" "$pub" "$REL_SHA" "$stg" || { REL_STAGE=fetch; return 1; }
   m=$(fleet_rel_manifest "$stg")
-  # shellcheck disable=SC2034  # REL_SEQ is read by the caller
   REL_SEQ=$(printf '%s' "$m" | awk '{print $2}')
   if ! { git init -q "$dir" >>"$log" 2>&1 && c=$(fleet_rel_import "$dir" "$stg" '' "${m%% *}" "$REL_SEQ") \
          && git -C "$dir" reset -q --hard "$c" >>"$log" 2>&1 </dev/null; }; then
