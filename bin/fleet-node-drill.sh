@@ -55,7 +55,7 @@ HOSTS="${FLEET_DRILL_HOSTS:-/etc/hosts}"
 WAIT="${FLEET_DRILL_WAIT:-1800}"
 POLL="${FLEET_DRILL_POLL:-10}"
 MARK="# fleet-node-drill github block"
-GH_HOSTS="github.com api.github.com codeload.github.com objects.githubusercontent.com raw.githubusercontent.com"
+GH_HOSTS="github.com api.github.com codeload.github.com objects.githubusercontent.com raw.githubusercontent.com"  # dist-ok: the drill's own black-hole host list
 export FLEET_NODE_STATE="$STATE" FLEET_NODE_ROOT="$ROOT" FLEET_NODE_DAEMON_DIR="$DDIR" \
   FLEET_NODE_USERS="$UDIR" FLEET_NODE_RUNTIME="$ROOT/current"
 

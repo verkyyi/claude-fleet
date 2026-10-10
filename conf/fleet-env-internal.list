@@ -91,6 +91,7 @@ FLEET_CLOCK_POLL                   knob: how often fleet-onboard-clock.sh reads 
 FLEET_CLOCK_SSH_SHIM               seam: a dir put first on the clock sandbox's PATH — a fake node's ssh / hostname (newcomer-e2e clock step, #2267)
 FLEET_CLOCK_STEP_SECS              knob: fleet-onboard-clock.sh's deadline per wait (180 s; a run gets 3×, #2267)
 FLEET_COMPOSE_LOG                  path: the writing area's usage log, logs/compose.ndjson (issue #1955)
+FLEET_DIST_SOURCE                  knob: `github` = the one-version fallback to fetching versions from GitHub (EPIC #2770 C3); fleet doctor's dist row WARNs on it (fleet-dist-source.sh, #2776)
 FLEET_ORPHAN_ALL_USERS             handoff: fleet-node-supervisor.py sets it on its root orphan watchdog task (every login's orphans, #2331)
 FLEET_DRILL_INSTALL_INVITE         handoff: an invite code for the clock's /i/<code> line, never an argv (fleet-onboard-clock.sh, #2267)
 FLEET_PLACE_TIMING                 handoff: where fleet-client-place.sh writes a done start's node timing points, set by fleet-compose.py (issue #2238)

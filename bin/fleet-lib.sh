@@ -1801,7 +1801,7 @@ fleet_repo_checkout() {
     echo "$tag: cloning $repo → $dir"
     mkdir -p "$(dirname "$dir")"
     if command -v gh >/dev/null 2>&1; then gh repo clone "$repo" "$dir" || { echo "$tag: clone failed" >&2; return 5; }
-    else git clone "https://github.com/$repo.git" "$dir" || { echo "$tag: clone failed" >&2; return 5; }; fi
+    else git clone "https://github.com/$repo.git" "$dir" || { echo "$tag: clone failed" >&2; return 5; }; fi  # dist-ok: the session's own business repo, not the fleet
   fi
   return 0
 }

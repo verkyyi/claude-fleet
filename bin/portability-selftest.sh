@@ -406,5 +406,10 @@ iso2epoch() {
 SH
 ok; want split-fallback.sh gnu-opt
 
+# The fleet's versions come from the hub only (issue #2776, EPIC #2770): a new
+# GitHub fetch in bin/ rides this always-run lint group (dist-source-selftest.sh).
+ok; dist_out=$(bash "$BIN/dist-source-selftest.sh" 2>&1) || fail "dist-source:
+$dist_out"
+
 printf 'portability-selftest: OK (%d checks, %d file(s) scanned)\n' \
   "$CHECKS" "$(printf '%s\n' "$files" | wc -l | tr -d ' ')"
