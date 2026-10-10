@@ -96,6 +96,8 @@
 #                               MCP · mod (#1725)
 #   fleet doctor --bundle <dir> everything a diagnosis needs from this computer,
 #                               credentials taken out, in one directory (#2890)
+#   fleet debug report          send that bundle to the hub and print a short
+#                               link — fleet-debug, which needs none of fleet (#2892)
 #
 # The client is the ONLY way in (issue #1628): there is no fallback to ssh-ing
 # into a machine's own list. It needs tmux ≥ 3.2 and a terminal; without either
@@ -261,6 +263,11 @@ if [ "$cmd" = doctor ] && [ ! -x "$here/fleet-doctor.sh" ] \
     python3 "$here/fleet-agent-bundle.py" doctor --root "$here/.." "$@" || rc=1
   fi
   exit $rc
+fi
+# `fleet debug …` (issue #2892): the stand-alone sender, by its file's name
+if [ "$cmd" = debug ]; then
+  shift
+  exec sh "$here/fleet-debug" "$@"
 fi
 # `fleet claude` / `fleet codex` (issue #2264): a session in one command — never
 # the node's own launchers of the same name (fleet-claude.sh / fleet-codex.sh)

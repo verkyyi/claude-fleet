@@ -103,6 +103,7 @@
 #                                                   bin/fleet-client-actions.py notify
 #   debug-bundle-leaks-secret                       bin/fleet-doctor-bundle.sh, bin/fleet_redact.py, bin/fleet-redact.awk,
 #                                                   conf/secret-shapes.list, conf/debug-collect.list
+#   debug-upload-no-python-ca                       bin/fleet-debug (report: C1's bundle, /usr/bin/curl upload)
 #   status-agent-not-up / status-perm-overwritten / status-migrated-looping / status-question-lost
 #                                                   bin/set-claude-state.sh (the primary-source rule),
 #                                                   fleet-status-7501.py pipe, classify-sessions.sh (skip:7501),
@@ -5455,6 +5456,56 @@ drill_debug_bundle_leaks_secret() {
   SECS=$(since "$t0")
   [ -z "$left" ] || { WHY="credentials left in the bundle:$left"; return 1; }
   WHAT="十二类假凭据 + 白名单外三个文件：两种去密码实现打出的包里一处不剩"
+}
+
+# debug-upload-no-python-ca (issue #2892, EPIC #2889 C3): the sender runs on a
+# computer whose only python3 dies on `import ssl` (#2878's python.org Python with
+# no CA store, at its worst) and whose fleet never installed — the copy GET /debug
+# serves, from stdin. It must still pack, upload over curl and print the short
+# link; a sender that leans on Python anywhere on that road turns this red.
+drill_debug_upload_no_python_ca() {
+  CAP=60; local d="$WORK/dnp" t0 f n py out rc
+  py=$(command -v python3) || { WHY="the fake hub needs a python3"; return 1; }
+  [ -f "$BIN/fleet-debug" ] || { WHY="no bin/fleet-debug"; return 1; }
+  mkdir -p "$d/nopy" "$d/home/conf" "$d/home/.cache/claude-fleet/shell/logs"
+  for f in /bin/* /usr/bin/* /usr/sbin/* /sbin/*; do
+    n=${f##*/}; case $n in python*|pydoc*) continue ;; esac
+    [ -e "$d/nopy/$n" ] || ln -s "$f" "$d/nopy/$n" 2>/dev/null
+  done
+  printf '#!/bin/sh\necho "No module named _ssl" >&2\nexit 1\n' > "$d/nopy/python3"; chmod +x "$d/nopy/python3"
+  printf 'fdt1.eyJpZCI6ImRucCJ9.c2ln\n' > "$d/home/conf/debug-ticket"
+  printf 'relay-end\tm5\tclosed by hub\n' > "$d/home/.cache/claude-fleet/shell/logs/connect.log"
+  cat > "$d/hub.py" <<'PY'
+import http.server, json, os, sys
+d = sys.argv[1]
+class H(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def do_POST(self):
+        b = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        ok = self.path == "/v1/fleet/debug/bundle" and self.headers.get("Authorization", "").startswith("FleetDebug ") \
+             and b'name="bundle"' in b
+        out = json.dumps({"id": "dnp2345a", "url": "http://hub.test/s/dnp2345a"}).encode() if ok else b"bad\n"
+        self.send_response(200 if ok else 400); self.send_header("Content-Length", str(len(out))); self.end_headers()
+        self.wfile.write(out)
+s = http.server.HTTPServer(("127.0.0.1", 0), H)
+open(os.path.join(d, "port.tmp"), "w").write(str(s.server_address[1])); os.rename(os.path.join(d, "port.tmp"), os.path.join(d, "port"))
+s.serve_forever()
+PY
+  "$py" "$d/hub.py" "$d" & local hub=$!
+  for n in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do [ -s "$d/port" ] && break; sleep 0.2; done
+  [ -s "$d/port" ] || { kill "$hub" 2>/dev/null; WHY="the fake hub did not start"; return 1; }
+  # the copy GET /debug serves: the kit spliced in (fleet_debug_script.go)
+  awk -v root="$BIN/.." -v hub="http://127.0.0.1:$(cat "$d/port")" '
+    index($0, "__FLEET_DEBUG_EMB__ ") == 1 { f = root "/" substr($0, 21); while ((getline l < f) > 0) print l; close(f); next }
+    { gsub(/__FLEET_HUB_URL__/, hub); print }' "$BIN/fleet-debug" > "$d/served.sh"
+  t0=$(now)
+  out=$(env -i HOME="$d/home" PATH="$d/nopy" TMPDIR="$WORK" FLEET_CONF_DIR="$d/home/conf" \
+          FLEET_DEBUG_HWID=drill-hw FLEET_DEBUG_CACHE="$d/pkgs" FLEET_BUNDLE_NET=0 sh -s report < "$d/served.sh" 2>&1); rc=$?
+  SECS=$(since "$t0")
+  kill "$hub" 2>/dev/null; wait "$hub" 2>/dev/null
+  [ "$rc" = 0 ] || { WHY="fleet-debug report exited $rc: $(printf '%s\n' "$out" | tail -n 2 | tr '\n' ' ')"; return 1; }
+  printf '%s\n' "$out" | grep -q 'http://hub.test/s/dnp2345a' || { WHY="no short link printed: $(printf '%s\n' "$out" | tail -n 1)"; return 1; }
+  WHAT="唯一的 python3 连 import ssl 都失败、没装 fleet：curl … | sh -s report 照样打包、用 curl 送上、打出短链接"
 }
 
 # ================================================================ run ===========

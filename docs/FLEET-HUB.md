@@ -1656,6 +1656,37 @@ then the person's.
   `/install` fills `__FLEET_DEBUG__` with nothing, so the installer asks for no
   ticket (`TestDebugOffAddsNothing`). BREAK-IT `debug-ticket-replayed`.
 
+### fleet-debug — sending it when fleet itself is broken (#2892)
+
+`fleet-debug report [--dry-run] [--again] [--note <一句话>]` (`bin/fleet-debug`,
+POSIX sh; `fleet debug …` forwards) needs none of fleet: no sign-in, no
+connection, no Python. It packs C1's bundle (`fleet-doctor-bundle.sh`; with no
+doctor here the same script without one — the minimal collection), scans every
+file once more against `conf/secret-shapes.list` and for the ticket itself,
+`tar czf`s it and `/usr/bin/curl`s it — the system's TLS and keychain, never a
+Python's CA store (#2878) — to `POST /v1/fleet/debug/bundle` as multipart
+(`bundle` = the `.tar.gz`, `note`), with `Authorization: FleetDebug <ticket>` +
+`X-Fleet-FP` (the installer's fingerprint). The hub answers `{id, url, open_url,
+again}`; it prints `已上传` and `url`, and opens `open_url` on a terminal.
+`fleet-debug ticket <ticket>` keeps an admin's re-issue (0600).
+
+Exit: 0 uploaded · 2 usage · 3 a credential survived (here, or the hub's 400
+「… 里还有 …」) · 4 no ticket / 401 · 5 429 · 6 the hub did not take it. On 4, 5
+and 6 the package stays in `~/Library/Caches/fleet-debug/` (Linux
+`~/.cache/fleet-debug/`, 0600, the newest five) and its path is printed — send
+that file to the group; `report --again` sends it later.
+
+A computer with no fleet runs `curl -fsSL <hub>/debug | sh -s report`. `GET
+/debug` (`fleet_debug_script.go`) is `bin/fleet-debug` with the hub's URL, its
+version in the header line, and the four files its bundle needs —
+`bin/fleet-doctor-bundle.sh`, `bin/fleet-redact.awk`, `conf/secret-shapes.list`,
+`conf/debug-collect.list` — spliced in at its `__FLEET_DEBUG_EMB__ <path>` lines
+(one quoted heredoc each), all from stable's commit when the hub hands stable
+out, else the image's client: one version, no second copy of the table. `GET
+/debug.sha256` is the SHA-256 of exactly those bytes. Off — no
+`CCQUOTA_FLEET_DEBUG_DIR` — neither route exists. BREAK-IT
+`debug-upload-no-python-ca`; `fleet-debug-selftest.sh`.
+
 ## Validation and next increments
 
 Run the hermetic regression suite through the normal shadow-root gate:

@@ -352,6 +352,23 @@ func TestDebugOffAddsNothing(t *testing.T) {
 			t.Fatalf("%s off = %d %q, an unknown path = %d %q", p, code, body, ucode, ubody)
 		}
 	}
+	// the stand-alone fleet-debug (claude-fleet#2892) is not served either
+	for _, p := range []string{DebugScriptPath, DebugScriptSumPath} {
+		get := func(u string) (int, string) {
+			resp, err := http.Get(u)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			b, _ := io.ReadAll(resp.Body)
+			return resp.StatusCode, string(b)
+		}
+		code, body := get(h.http.URL + p)
+		ucode, ubody := get(h.http.URL + "/no-such-route")
+		if code == 200 || code != ucode || body != ubody {
+			t.Fatalf("%s off = %d %q, an unknown path = %d %q", p, code, body, ucode, ubody)
+		}
+	}
 	rows, err := h.srv.Store.DebugTickets(time.Time{}, 0)
 	if err != nil || len(rows) != 0 {
 		t.Fatalf("tickets off = %v %v", rows, err)

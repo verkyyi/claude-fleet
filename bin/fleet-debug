@@ -1,0 +1,355 @@
+#!/bin/sh
+# fleet-debug-version: __FLEET_DEBUG_VERSION__
+# fleet-debug — send this computer's diagnosis to the hub when fleet itself is
+# what broke (issue #2892, EPIC #2889 C3). Needs nothing of fleet's: no sign-in,
+# no connection, no Python — only sh, curl, tar, gzip, awk, sed.
+#
+#   fleet-debug report [--dry-run] [--again] [--note <一句话>]
+#   fleet-debug ticket <ticket>     keep the ticket an admin re-issued
+#                                   (`fleet hub debug-ticket <login>` prints the line)
+#   fleet-debug version
+#
+# Also `fleet debug …` (bin/fleet forwards), and with nothing installed:
+#
+#   curl -fsSL <hub>/debug | sh -s report
+#
+# report: the bundle is C1's — `fleet doctor --bundle` (bin/fleet-doctor-bundle.sh:
+# conf/debug-collect.list, conf/secret-shapes.list, the whole bundle scanned
+# again); when the doctor cannot run here, the same script with no doctor (the
+# minimal collection: system · tools · route · ssh -v · the client's logs). Those
+# four files are read beside this script (a checkout, an install), or — the copy
+# GET /debug serves — out of this script itself, where the hub splices them in
+# (tokenledger/internal/api/fleet_debug_script.go); never a second copy of the
+# table or the list. Then: tar czf, every file scanned once more (and for the
+# ticket itself), and `/usr/bin/curl` — the system's TLS and keychain, never a
+# Python's CA store (#2878) — POSTs it to /v1/fleet/debug/bundle with the
+# ticket (C2) and this computer's install fingerprint. The hub answers the
+# short link.
+#
+# Exit: 0 uploaded (--dry-run: packed) · 2 usage · 3 a credential survived the
+# scrub · 4 no ticket / the ticket is refused · 5 today's uploads are spent ·
+# 6 the hub did not take it — the package is kept in the cache
+# (~/Library/Caches/fleet-debug, ~/.cache/fleet-debug on Linux): send that file
+# to the group instead.
+#
+# Seams (tests): FLEET_DEBUG_CURL (the curl to upload with; default
+# /usr/bin/curl when it is there) · FLEET_DEBUG_CACHE · FLEET_DEBUG_HWID (as
+# fleet-install.sh) · FLEET_DEBUG_OPEN=0 (no browser) · FLEET_BUNDLE_* pass
+# through to the bundle.
+set -u
+
+FLEET_DEBUG_VERSION='__FLEET_DEBUG_VERSION__'
+HUB_BAKED='__FLEET_HUB_URL__'
+PROG=fleet-debug
+
+say() { printf '%s\n' "$*"; }
+err() { printf '%s\n' "$*" >&2; }
+usage() {
+  err "用法: fleet-debug report [--dry-run] [--again] [--note <一句话>] · fleet-debug ticket <票> · fleet-debug version"
+  exit 2
+}
+
+# where this script is — empty when it came on stdin (curl … | sh -s)
+here=''
+case $0 in
+  */fleet-debug) [ -f "$0" ] && here=$(cd "$(dirname "$0")" && pwd) ;;
+esac
+CONF="${FLEET_CONF_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/claude-fleet}"
+# the install root fleet-install.sh fingerprints (KEEP IN SYNC: its ROOT)
+IROOT="${FLEET_INSTALL_HOME:-${FLEET_INSTALL_ROOT:-$HOME/.claude/fleet}}"
+IROOT="${IROOT%/}"
+TICKET_FILE="$CONF/debug-ticket"
+
+# --- the files GET /debug splices in -------------------------------------------
+# emb <path> <dest>: the file written to <dest>, rc 1 when this copy carries
+# none. The hub replaces each `__FLEET_DEBUG_EMB__ <path>` line with the file
+# (stable's copy — the same version as this script); a checkout's copy keeps
+# the marker, and reads the files beside itself instead. Written straight to
+# the file, never through $(…): bash 3.2 misreads a heredoc inside one.
+emb() {
+  case $1 in
+    bin/fleet-doctor-bundle.sh) cat > "$2" <<'FLEET_DEBUG_EMB_EOF_1'
+__FLEET_DEBUG_EMB__ bin/fleet-doctor-bundle.sh
+FLEET_DEBUG_EMB_EOF_1
+      ;;
+    bin/fleet-redact.awk) cat > "$2" <<'FLEET_DEBUG_EMB_EOF_2'
+__FLEET_DEBUG_EMB__ bin/fleet-redact.awk
+FLEET_DEBUG_EMB_EOF_2
+      ;;
+    conf/secret-shapes.list) cat > "$2" <<'FLEET_DEBUG_EMB_EOF_3'
+__FLEET_DEBUG_EMB__ conf/secret-shapes.list
+FLEET_DEBUG_EMB_EOF_3
+      ;;
+    conf/debug-collect.list) cat > "$2" <<'FLEET_DEBUG_EMB_EOF_4'
+__FLEET_DEBUG_EMB__ conf/debug-collect.list
+FLEET_DEBUG_EMB_EOF_4
+      ;;
+    *) return 1 ;;
+  esac
+  case $(head -n 1 "$2") in '__FLEET_DEBUG_EMB__ '*) return 1 ;; esac
+}
+KIT_FILES='bin/fleet-doctor-bundle.sh bin/fleet-redact.awk conf/secret-shapes.list conf/debug-collect.list'
+
+# kit_ok <root>: every file the bundle needs is under it
+kit_ok() {
+  for f in $KIT_FILES; do [ -f "$1/$f" ] || return 1; done
+}
+
+version() {
+  v=$FLEET_DEBUG_VERSION
+  case $v in __FLEET_DEBUG*|'') v='' ;; esac
+  if [ -z "$v" ] && [ -n "$here" ]; then
+    [ -f "$here/../.client-version" ] && v=$(sed -n 's/^version=//p' "$here/../.client-version" | head -n 1)
+    [ -n "$v" ] || v=$(git -C "$here/.." rev-parse --short HEAD 2>/dev/null)
+  fi
+  printf '%s\n' "${v:-?}"
+}
+
+# the hub: this shell's, this computer's fleet.conf / hub.json, else the one
+# that served this copy
+hub_url() {
+  h=${FLEET_HUB_URL:-}
+  if [ -z "$h" ] && [ -f "$CONF/fleet.conf" ]; then
+    h=$(sed -n 's/^[[:space:]]*\(export[[:space:]]*\)\{0,1\}FLEET_HUB_URL=//p' "$CONF/fleet.conf" | tail -n 1 | sed 's/ #.*//; s/^["'\'']//; s/["'\'']$//')
+  fi
+  if [ -z "$h" ] && [ -f "$CONF/hub.json" ]; then
+    h=$(sed -n 's/.*"url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$CONF/hub.json" | head -n 1)
+  fi
+  if [ -z "$h" ]; then
+    case $HUB_BAKED in http://*|https://*) h=$HUB_BAKED ;; esac
+  fi
+  printf '%s\n' "${h%/}"
+}
+
+# this computer's install fingerprint — fleet-install.sh's debug_fp (KEEP IN SYNC)
+debug_fp() {
+  _hw="${FLEET_DEBUG_HWID:-}"
+  if [ -z "$_hw" ]; then
+    case "$(uname -s)" in
+      Darwin) _hw=$(ioreg -rd1 -c IOPlatformExpertDevice 2>/dev/null | awk -F'"' '/IOPlatformUUID/ { print $4; exit }') ;;
+      *) _hw=$(cat /etc/machine-id 2>/dev/null || cat /var/lib/dbus/machine-id 2>/dev/null) ;;
+    esac
+  fi
+  [ -n "$_hw" ] || return 1
+  printf '%s|%s|%s' "$_hw" "$(id -un)" "$IROOT" | { shasum -a 256 2>/dev/null || sha256sum; } | awk '{ print $1 }'
+}
+
+sha256_of() { { shasum -a 256 "$1" 2>/dev/null || sha256sum "$1"; } | awk '{ print $1 }'; }
+
+cache_dir() {
+  if [ -n "${FLEET_DEBUG_CACHE:-}" ]; then printf '%s\n' "$FLEET_DEBUG_CACHE"
+  elif [ "$(uname -s)" = Darwin ]; then printf '%s\n' "$HOME/Library/Caches/fleet-debug"
+  else printf '%s\n' "${XDG_CACHE_HOME:-$HOME/.cache}/fleet-debug"; fi
+}
+
+# --- ticket <code> ---------------------------------------------------------------
+cmd_ticket() {
+  [ $# -ge 1 ] || usage
+  # the admin's whole line pasted as one argument works too
+  t=$(printf '%s\n' "$*" | sed 's/^.*fleet-debug ticket //; s/^ *//; s/ .*$//')
+  case $t in fdt1.*) ;; *) err "$PROG ticket · 这不是调试票（应以 fdt1. 开头）"; exit 2 ;; esac
+  case $t in *[!A-Za-z0-9_.-]*) err "$PROG ticket · 这不是调试票（有不该有的字符）"; exit 2 ;; esac
+  mkdir -p "$CONF" || exit 2
+  ( umask 077; printf '%s\n' "$t" > "$TICKET_FILE.tmp" ) && mv -f "$TICKET_FILE.tmp" "$TICKET_FILE" || exit 2
+  say "调试票: 已存好（${TICKET_FILE}）— 现在可以 fleet-debug report"
+}
+
+# --- report ------------------------------------------------------------------------
+kept_msg() {  # kept_msg <package>
+  say "  包留在本机：$1"
+  say "  可直接把这个文件发群里，我们照样能看；入口恢复后 fleet-debug report --again 再送一次。"
+}
+
+cmd_report() {
+  dry=0 again=0 note=''
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --dry-run) dry=1 ;;
+      --again) again=1 ;;
+      --note) [ $# -ge 2 ] || usage; note=$2; shift ;;
+      --note=*) note=${1#--note=} ;;
+      -h|--help) usage ;;
+      *) err "$PROG report · 不认识的参数 $1"; usage ;;
+    esac
+    shift
+  done
+  cache=$(cache_dir)
+  mkdir -p "$cache" && chmod 700 "$cache" 2>/dev/null
+  work=$(mktemp -d "${TMPDIR:-/tmp}/fleet-debug.XXXXXX") || { err "$PROG · mktemp 失败"; exit 2; }
+  chmod 700 "$work"
+  trap 'rm -rf "$work"' EXIT
+  trap 'exit 130' INT TERM
+
+  if [ "$again" = 1 ]; then
+    pkg=$(ls -t "$cache"/*.tar.gz 2>/dev/null | head -n 1)
+    [ -n "$pkg" ] || { err "$PROG report --again · $cache 里没有留下的包 — 直接 fleet-debug report"; exit 2; }
+    say "fleet-debug · 再送一次留下的包：$pkg"
+  else
+    collect || exit $?
+  fi
+
+  if [ "$dry" = 1 ]; then
+    say "fleet-debug · 只打包，不上传（--dry-run）：$pkg"
+    say "  包内文件："
+    tar tzf "$pkg" | grep -v '/$' | sed 's/^/    /'
+    say "  去掉了 ${redactions:-?} 处密码或令牌 · $(wc -c < "$pkg" | tr -d ' ') 字节"
+    exit 0
+  fi
+  upload
+}
+
+# collect: the bundle into $work/bundle, packed to $cache/<id>.tar.gz → $pkg
+collect() {
+  kit=''
+  for r in ${here:+"$here/.."} "$IROOT" "${XDG_DATA_HOME:-$HOME/.local/share}/claude-fleet"; do
+    if kit_ok "$r"; then kit=$(cd "$r" && pwd); break; fi
+  done
+  spliced=0
+  if [ -z "$kit" ]; then
+    kit="$work/kit"
+    for f in $KIT_FILES; do
+      mkdir -p "$kit/$(dirname "$f")"
+      emb "$f" "$kit/$f" || {
+        h=$(hub_url)
+        err "$PROG · 这份 fleet-debug 没带打包与去密码的文件（也没找到装好的 fleet）。"
+        err "  用入口给的那份：curl -fsSL ${h:-<入口>}/debug | sh -s report"
+        exit 2
+      }
+    done
+    spliced=1
+  fi
+  hub=$(hub_url)
+  # the doctor runs when fleet is here; else — and when the bundle with the doctor
+  # fails — the minimal collection: the same script, no doctor
+  if [ "$spliced" = 0 ] && { [ -f "$kit/bin/fleet-doctor.sh" ] || [ -f "$kit/bin/fleet" ]; }; then
+    say "fleet-debug · 收集中：体检、系统、工具、去入口的路线、连接记录（约 30 秒）"
+    FLEET_HUB_URL=$hub sh "$kit/bin/fleet-doctor-bundle.sh" --bundle "$work/bundle" > "$work/bundle.out"; brc=$?
+    if [ "$brc" != 0 ] && [ "$brc" != 3 ]; then
+      say "fleet-debug · 带体检的收集没成（退出码 ${brc}），改走最小采集"
+      rm -rf "$work/bundle"
+      minimal "体检没跑成：fleet doctor --bundle 退出码 $brc"; brc=$?
+    fi
+  else
+    say "fleet-debug · 收集中（最小采集）：系统、工具、去入口的路线、连接记录（约 30 秒）"
+    minimal "这台电脑上没有装好的 fleet，体检没跑（最小采集）"; brc=$?
+  fi
+  if [ "$brc" = 3 ]; then
+    err "$PROG · 脱敏后仍有命中，不出包（上面说了是哪个文件）— 把这一屏截图发群里，别发包"
+    exit 3
+  fi
+  [ "$brc" = 0 ] && [ -f "$work/bundle/manifest.json" ] || {
+    err "$PROG · 没收成（退出码 ${brc}）："; sed 's/^/  /' "$work/bundle.out" >&2; exit 2
+  }
+  redactions=$(sed -n 's/.*"redactions": {"total": \([0-9]*\).*/\1/p' "$work/bundle/manifest.json" | head -n 1)
+  # the whole bundle once more, our own pass: the shape table, then the ticket
+  # itself (a value, not a shape)
+  hits=$(cd "$work/bundle" && find . -type f | sed 's#^\./##' | sort | while IFS= read -r f; do
+    LC_ALL=C awk -v table="$kit/conf/secret-shapes.list" -v mode=check -f "$kit/bin/fleet-redact.awk" "$f"
+  done)
+  if [ -s "$TICKET_FILE" ]; then
+    tk=$(head -n 1 "$TICKET_FILE")
+    [ -n "$tk" ] && hits="$hits$(cd "$work/bundle" && grep -rlF -- "$tk" . 2>/dev/null | sed 's#^\./##; s/$/	调试票/')"
+  fi
+  if [ -n "$hits" ]; then
+    err "$PROG · 脱敏后仍有命中，不出包："
+    printf '%s\n' "$hits" | sed 's/^/  /' >&2
+    exit 3
+  fi
+  stamp=$(date -u +%Y%m%d-%H%M%S)
+  (cd "$work" && tar czf "$work/pkg.tar.gz" bundle) || { err "$PROG · 打包失败"; exit 2; }
+  pkg="$cache/fleet-debug-$stamp-$(sha256_of "$work/pkg.tar.gz" | cut -c1-8).tar.gz"
+  mv -f "$work/pkg.tar.gz" "$pkg" || exit 2
+  chmod 600 "$pkg" 2>/dev/null
+  # keep the newest five
+  ls -t "$cache"/*.tar.gz 2>/dev/null | sed 1,5d | while IFS= read -r old; do rm -f "$old"; done
+  grep -E '^  (收了|去掉了|没有的)' "$work/bundle.out"
+  return 0
+}
+
+# minimal <why>: C1's bundle with the doctor replaced by one line saying why
+minimal() {
+  FLEET_HUB_URL=$hub FLEET_BUNDLE_DOCTOR_CMD="echo '$1'; exit 1" \
+    sh "$kit/bin/fleet-doctor-bundle.sh" --bundle "$work/bundle" > "$work/bundle.out"
+}
+
+upload() {
+  hub=$(hub_url)
+  size=$(wc -c < "$pkg" | tr -d ' ')
+  if [ -z "$hub" ]; then
+    say "fleet-debug · 入口连不上：不知道入口地址（没有 FLEET_HUB_URL）"; kept_msg "$pkg"; exit 6
+  fi
+  tk=''
+  [ -s "$TICKET_FILE" ] && tk=$(head -n 1 "$TICKET_FILE")
+  if [ -z "$tk" ]; then
+    say "fleet-debug · 票无效：这台电脑上没有调试票（${TICKET_FILE}）。"
+    say "  重装一次（同一条安装命令）会自动领一张；或请管理员运行 fleet hub debug-ticket <你的 GitHub 名>，把它打出的那一行粘贴运行。"
+    kept_msg "$pkg"; exit 4
+  fi
+  fp=$(debug_fp) || fp=''
+  if [ -z "$fp" ]; then
+    say "fleet-debug · 票无效：算不出这台电脑的安装指纹（读不到硬件编号）"; kept_msg "$pkg"; exit 4
+  fi
+  curl=${FLEET_DEBUG_CURL:-}
+  if [ -z "$curl" ]; then
+    if [ -x /usr/bin/curl ]; then curl=/usr/bin/curl; else curl=curl; fi
+  fi
+  say "fleet-debug · 上传中：$size 字节 → $hub"
+  code=$("$curl" -sS --connect-timeout 15 --max-time 120 -o "$work/resp" -w '%{http_code}' \
+    -H "Authorization: FleetDebug $tk" -H "X-Fleet-FP: $fp" \
+    -H "X-Fleet-Debug-Version: $(version)" \
+    -F "bundle=@$pkg;type=application/gzip" --form-string "note=$note" \
+    "$hub/v1/fleet/debug/bundle" 2>"$work/curl.err")
+  crc=$?
+  body=$(head -c 400 "$work/resp" 2>/dev/null | tr -d '\r')
+  case $code in
+    200|201)
+      url=$(sed -n 's/.*[{,][[:space:]]*"url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$work/resp" | head -n 1)
+      open_url=$(sed -n 's/.*"open_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$work/resp" | head -n 1)
+      if [ -z "$url" ]; then
+        say "fleet-debug · 入口连不上：入口收了但没给链接（${body}）"; kept_msg "$pkg"; exit 6
+      fi
+      if grep -q '"again"[[:space:]]*:[[:space:]]*true' "$work/resp"; then
+        say "fleet-debug · 已上传（同一个包送过，还是同一页）"
+      else
+        say "fleet-debug · 已上传"
+      fi
+      say ""
+      say "  $url"
+      say ""
+      say "  把这条链接贴回群里；远端看完，页面上会写「是什么问题、你做哪几步」。"
+      rm -f "$pkg"
+      if [ -n "$open_url" ] && [ "${FLEET_DEBUG_OPEN:-1}" != 0 ] && [ -t 1 ]; then
+        if [ "$(uname -s)" = Darwin ]; then open "$open_url" >/dev/null 2>&1 || :
+        elif command -v xdg-open >/dev/null 2>&1; then xdg-open "$open_url" >/dev/null 2>&1 || :; fi
+      fi
+      exit 0 ;;
+    401)
+      say "fleet-debug · 票过期或票无效：${body:-入口不认这张调试票}"
+      say "  请管理员补发：fleet hub debug-ticket <你的 GitHub 名>，把它打出的那一行粘贴运行（或 fleet-debug ticket <票>）；再 fleet-debug report --again。"
+      kept_msg "$pkg"; exit 4 ;;
+    429)
+      say "fleet-debug · 今天次数用完：${body:-这张调试票今天的上传次数用完了}"
+      kept_msg "$pkg"; exit 5 ;;
+    400)
+      case $body in
+        *里还有*)
+          say "fleet-debug · 脱敏后仍有命中（入口查出）：$body — 别把这个包发群里"
+          exit 3 ;;
+      esac
+      say "fleet-debug · 入口连不上：入口没收下（400 ${body}）" ;;
+    404) say "fleet-debug · 入口连不上：这个入口没开远端调试（404）" ;;
+    413) say "fleet-debug · 入口连不上：包太大，入口不收（413）" ;;
+    000|'') say "fleet-debug · 入口连不上：$(tail -n 1 "$work/curl.err" 2>/dev/null)（curl 退出码 ${crc}）" ;;
+    *) say "fleet-debug · 入口连不上：入口回答 $code ${body}" ;;
+  esac
+  kept_msg "$pkg"
+  exit 6
+}
+
+case ${1:-} in
+  report) shift; cmd_report "$@" ;;
+  ticket) shift; cmd_ticket "$@" ;;
+  version|--version) say "fleet-debug $(version)" ;;
+  ''|-h|--help|help) usage ;;
+  *) err "$PROG · 不认识的命令 $1"; usage ;;
+esac
