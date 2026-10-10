@@ -21,7 +21,7 @@ pass=0
 ok()   { pass=$((pass + 1)); }
 fail() { printf 'fleet-debug-drill-selftest FAIL: %s\n' "$1" >&2; exit 1; }
 
-# fake_hub <mode none|all>: prints the port
+# fake_hub <mode none|all>: sets port (never in a $(…): the parent must hold its pid)
 fake_hub() {
   [ -n "$HUBPID" ] && kill "$HUBPID" 2>/dev/null
   rm -f "$T/port"
@@ -61,7 +61,7 @@ PY
   HUBPID=$!
   for _ in $(seq 1 50); do [ -s "$T/port" ] && break; sleep 0.1; done
   [ -s "$T/port" ] || fail 'the fake hub did not start'
-  cat "$T/port"
+  port=$(cat "$T/port")
 }
 
 # --- A usage ------------------------------------------------------------------------
@@ -74,7 +74,7 @@ printf '%s' "$out" | grep -q -- '--yes' || fail "A: run without --yes does not s
 [ ! -e "$T/A" ] || fail 'A: run without --yes wrote its out dir'; ok
 
 # --- B check, nothing there: red, each member named -----------------------------------
-port=$(fake_hub none)
+fake_hub none
 mkdir -p "$T/root/agents"
 out=$(FLEET_DEBUG_DRILL_ROOT="$T/root" bash "$D" check --hub "http://127.0.0.1:$port" 2>&1); rc=$?
 [ "$rc" = 1 ] || fail "B: check on an empty hub exit $rc: $out"; ok
@@ -85,7 +85,7 @@ printf '%s\n' "$out" | grep -q '^RED' || fail "B: no RED line: $out"; ok
 printf '%s\n' "$out" | grep -Eq 'PASS +C' && fail "B: a member reads PASS on an empty hub: $out"; ok
 
 # --- C check, everything there: each member PASS ------------------------------------------
-port=$(fake_hub all)
+fake_hub all
 : > "$T/root/agents/debugger.md"
 out=$(FLEET_DEBUG_DRILL_ROOT="$T/root" bash "$D" check --hub "http://127.0.0.1:$port" 2>&1)
 for m in C1 C2 C3 C4 C5 C7; do
@@ -122,7 +122,7 @@ cmds=$(bash "$D" --section '请你做' code < "$T/tls.html")
 mkdir -p "$T/E/home" "$T/E/b1" "$T/E/b2" "$T/E/stage"
 bash "$D" --plant "$T/E/home" "$T/E/planted" || fail 'E: --plant failed'
 [ "$(wc -l < "$T/E/planted" | tr -d ' ')" -ge 7 ] || fail 'E: fewer than seven planted shapes'; ok
-[ "$(stat -f %Lp "$T/E/planted" 2>/dev/null || stat -c %a "$T/E/planted")" = 600 ] || fail 'E: the planted list is not 0600'; ok  # portable-ok: both-ways
+[ "$(python3 -c 'import os,sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777)[2:])' "$T/E/planted")" = 600 ] || fail 'E: the planted list is not 0600'; ok
 echo 'system: macOS 15' > "$T/E/stage/system.txt"
 tar czf "$T/E/b1/clean.tar.gz" -C "$T/E/stage" system.txt
 [ "$(bash "$D" --leaks "$T/E/b1" "$T/E/planted" 2>/dev/null)" = 0 ] || fail 'E: a clean bundle counted a leak'; ok
@@ -148,7 +148,7 @@ printf '%s\n' "$r" | grep -q '| 群里来回（最多的一次） | 2 |' || fail
 printf '%s\n' "$r" | grep -q '| conn | PASS · PASS · FAIL · PASS | — |' || fail "F: an unconcluded row: $r"; ok
 
 # --- G teardown ---------------------------------------------------------------------------
-port=$(fake_hub all)
+fake_hub all
 mkdir -p "$T/G" "$T/G/sb"
 sleep 300 & SPID=$!; disown "$SPID" 2>/dev/null
 { printf 'sandbox %s\n' "$T/G/sb"; printf 'cap %s\n' "$T/G/machine.env"; printf 'proxy %s\n' "$SPID"; } > "$T/G/armed"
