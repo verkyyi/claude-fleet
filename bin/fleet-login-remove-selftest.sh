@@ -74,6 +74,8 @@ cs_fixture own
 # access_disabled has no member list at all, and staff is not an access group.
 reset_fixture() {
   rm -rf "${WORK:?}/homes/alice" "${WORK:?}/ds/groups" "${WORK:?}/ds/alice.gone" "${WORK:?}"/procs*
+  # an archive is named to the second: two quick legs must not meet the last one's
+  rm -f "${ARCH:?}"/alice-*.tar.gz
   mkdir -p "$FLEET_CONF_DIR/fleets/alice-fleet" "$WORK/homes/alice/Library/LaunchAgents" "$FLEET_CONF_DIR/accounts" "$WORK/ds/groups"
   printf 'FLEET_REPO=example/repo\n' > "$FLEET_CONF_DIR/fleets/alice-fleet/conf"
   printf 'alive\n' > "$FLEET_TEST_LIVE"
@@ -357,7 +359,7 @@ has "$WORK/out" 'home-policy=delete' 'delete-home policy line'
 has "$WORK/out" '(skipped: --delete-home)' 'delete-home did not say the archive is skipped'
 not_has "$FLEET_TEST_LOG" 'tar' 'delete-home archived the home'
 not_has "$FLEET_TEST_LOG" 'install -d' 'delete-home prepared an archive dir'
-[ "$(archives)" = 1 ] || fail 'delete-home wrote an archive'
+[ "$(archives)" = 0 ] || fail 'delete-home wrote an archive'
 has "$FLEET_TEST_LOG" 'sysadminctl -deleteUser alice' 'delete-home did not delete the account'
 not_has "$FLEET_TEST_LOG" 'keepHome' 'delete-home passed -keepHome'
 not_has "$WORK/out" 'archive=' 'delete-home printed an archive path'
