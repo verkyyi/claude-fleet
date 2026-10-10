@@ -131,7 +131,9 @@ var routeAccess = map[string]string{
 	"/v1/sessions": accessUser, "/v1/sessions/": accessUser,
 	"/v1/live": accessUser, "/v1/live/stream": accessUser,
 	"/v1/user": accessUser, "/mcp": accessUser,
-	"/sessions": accessUser, "/v1/fleet/me": accessUser, "/v1/fleet/": accessUser,
+	// The app's push channel (claude-fleet#2794): each topic cut like its route.
+	"/v1/fleet/stream": accessUser,
+	"/sessions":        accessUser, "/v1/fleet/me": accessUser, "/v1/fleet/": accessUser,
 	// The roster, cut by FleetScope to the machines where their login runs
 	// (claude-fleet#1411); maintenance, SPOT and join codes stay an admin's.
 	"/v1/nodes": accessUser,

@@ -7,7 +7,7 @@
 //   export default Shell.mount('sessions', async (ctx) => { ctx.el.innerHTML = '…'; });
 //
 // ctx is { me, admin, el, api, toast, drawer, modal, confirm, close, refresh,
-// navigate, every, after, on }. The page draws into ctx.el; refresh() runs it
+// navigate, every, after, on, subscribe }. The page draws into ctx.el; refresh() runs it
 // again. The shell is the same for the admin pages (#1990) — they mount the
 // same way.
 //
@@ -19,9 +19,17 @@
 // just seen draws at once and then reads again. Shell.mount is both the
 // registration and, opened by its own old .html, the start.
 //
+// Data moves by itself (claude-fleet#2794): one push channel per tab
+// (lib/stream.js) carries nodes, sessions and usage; a page takes a topic
+// with ctx.subscribe(topic, fn[, {min}]) and loses it when it is left. The
+// top bar says how fresh it all is (「N 秒前更新」, yellow while it reconnects,
+// 轮询 on the fallback) and every block's [data-fresh-at] is repainted each
+// second (lib/shell.js freshTag).
+//
 // Fails closed: no /v1/me, no menu — the page says it could not tell who you
 // are and offers to sign in again, rather than drawing a menu that guesses.
-import { esc, ic, ICONS, PAGES, navFor, pageAllowed, titleOf, isAdmin, viewer, liveLine, otherView } from './lib/shell.js';
+import { esc, ic, ICONS, PAGES, navFor, pageAllowed, titleOf, isAdmin, viewer, liveLine, otherView, freshness, streamLine } from './lib/shell.js';
+import { createStream } from './lib/stream.js';
 import { routeFor, intercept, timerBag, readCache, isRead, CACHE_TTL } from './lib/router.js';
 import { t, locale, chooseLocale } from './lib/i18n.js';
 
@@ -106,7 +114,7 @@ function frame(me, page) {
     <aside class="side" id="side"><a class="logo" href="/"><span class="logo-mark"><svg viewBox="0 0 24 24">${ICONS.fleet}</svg></span>claudefleet</a>
       <div class="fleet-sw"><b>${esc(t('ui.fleet', { name: v ? v.name : '' }))}</b><span>${esc(location.host)}</span></div>
       <nav class="nav" aria-label="${esc(t('ui.nav.label'))}">${nav}</nav>${foot}</aside>
-    <div class="main"><header class="top"><button class="btn ghost sm menu-btn" data-shell="menu" aria-label="${esc(t('ui.nav.menu'))}">${ic('menu')}</button><h1>${esc(titleOf(page))}</h1><span class="spacer"></span><span id="viewslot">${viewSwitch(me, page)}</span><span class="live" id="live" hidden><span class="dot ok pulse"></span><span class="txt"></span></span></header>
+    <div class="main"><header class="top"><button class="btn ghost sm menu-btn" data-shell="menu" aria-label="${esc(t('ui.nav.menu'))}">${ic('menu')}</button><h1>${esc(titleOf(page))}</h1><span class="spacer"></span><span id="viewslot">${viewSwitch(me, page)}</span><span class="live" id="live" hidden><span class="dot ok pulse"></span><span class="txt"></span></span><span class="live" id="streamst" hidden><span class="fresh"></span></span></header>
       <div class="content" id="content" aria-live="polite"><div class="ghostrow">${esc(t('ui.loading'))}</div></div></div>
     <div class="scrim nav-scrim" data-shell="menu" hidden style="z-index:44"></div>
   </div>`;
@@ -146,6 +154,33 @@ export function setLive(text) {
   l.hidden = !text; l.querySelector('.txt').textContent = text || '';
 }
 
+// paintStream writes the push channel's word into the top bar.
+function paintStream() {
+  const box = $('#streamst');
+  if (!box || !R.stream) return;
+  const st = R.stream.status();
+  const l = streamLine(st);
+  box.hidden = !l.text;
+  box.dataset.mode = st.mode;
+  const dot = 'dot' + (l.cls === '' ? (st.mode === 'live' ? ' ok pulse' : ' ok') : l.cls === 'warn' ? ' warn' : '');
+  // 「实时 · N 个会话」's dot is only as live as the channel behind it.
+  const ld = $('#live .dot'); if (ld) ld.className = dot;
+  const f = box.querySelector('.fresh');
+  f.className = 'fresh ' + l.cls;
+  f.textContent = l.text;
+}
+
+// paintFresh repaints every block's age (lib/shell.js freshTag).
+function paintFresh() {
+  const now = Date.now();
+  for (const el of document.querySelectorAll('[data-fresh-at]')) {
+    const v = el.dataset.freshAt;
+    const f = freshness(/^\d+$/.test(v) ? Number(v) : v, now);
+    el.className = 'fresh ' + f.cls;
+    el.textContent = f.text;
+  }
+}
+
 /** setCount writes a menu item's count. */
 export function setCount(id, n) {
   const c = document.querySelector(`[data-cnt="${id}"]`);
@@ -153,7 +188,7 @@ export function setCount(id, n) {
 }
 
 // The app, once per document: who is looking, the frame, the page shown.
-const R = { started: null, me: null, err: null, cur: null, seq: 0, pages: new Map(), cache: readCache(), fleetP: null, fleetAt: 0, perf: false };
+const R = { started: null, me: null, err: null, cur: null, seq: 0, pages: new Map(), cache: readCache(), fleetP: null, fleetAt: 0, perf: false, stream: null };
 
 // The fleet's session list, shared by every page and the top bar's live line;
 // a read younger than the cache's 30 s answers a page's first draw.
@@ -188,6 +223,7 @@ function start(fallback) {
     } catch { R.perf = false; }
     document.body.innerHTML = '';
     try { R.me = await api('/v1/me'); } catch (e) { R.err = e; }
+    if (R.me) R.stream = createStream({ fetchJSON: (u) => api(u), onStatus: paintStream });
     const first = routeFor(location.pathname);
     const id = first ? first.id : (fallback || 'overview');
     if (!first && !fallback) history.replaceState(null, '', '/' + location.search + location.hash);
@@ -198,9 +234,17 @@ function start(fallback) {
     await show(id);
     if (R.me) prefetch(R.me);
     if (R.me) {
-      const live = (fresh) => fleet(fresh).then((fs) => { setLive(liveLine(fs)); setCount('sessions', (fs.sessions || []).length); }, () => setLive(''));
-      live();
-      setInterval(() => { if (!document.hidden) live(true); }, 30000);
+      const live = (fs) => { setLive(liveLine(fs)); setCount('sessions', (fs.sessions || []).length); };
+      fleet().then(live, () => setLive(''));
+      // The session list moves by itself (claude-fleet#2794): every answer the
+      // channel brings is the shared read and the top bar's line.
+      R.stream.subscribe('sessions', (e) => {
+        if (!e.body) return;
+        R.fleetP = Promise.resolve(e.body); R.fleetAt = Date.now();
+        live(e.body);
+      });
+      R.stream.start();
+      setInterval(() => { if (!document.hidden) { paintStream(); paintFresh(); } }, 1000);
     }
   })();
   return R.started;
@@ -287,7 +331,7 @@ async function show(id) {
     return;
   }
   const timers = timerBag();
-  const cur = { id, el, timers, page: null };
+  const cur = { id, el, timers, page: null, t0: Date.now() };
   R.cur = cur;
   let pg = R.pages.get(id);
   if (!pg) {
@@ -317,7 +361,29 @@ async function show(id) {
   const ctx = {
     me, admin: isAdmin(me), el, api: capi, toast, drawer, modal, confirm, close, copy: copyText, setLive, setCount,
     fleet: (fresh) => { if (!fresh && warm && R.fleetP) hit = true; return fleet(fresh || !warm); },
-    navigate, every: timers.every, after: timers.after, on: timers.on,
+    navigate, every: timers.every, after: timers.after, on: timers.on, perf: R.perf,
+  };
+  // subscribe hands fn each answer of a push topic while the page is shown;
+  // {min} lets one through at most every min ms (the last one waits). An
+  // answer that came while the page was loading is handed over at once.
+  ctx.subscribe = (topic, fn, opts = {}) => {
+    if (!R.stream || timers.dead) return;
+    const min = opts.min || 0;
+    let ran = 0, pending = null;
+    const run = (e) => {
+      if (timers.dead) return;
+      const wait = ran + min - Date.now();
+      if (min && wait > 0) {
+        const had = pending; pending = e;
+        if (!had) timers.after(wait, () => { const x = pending; pending = null; if (x) run(x); });
+        return;
+      }
+      ran = Date.now();
+      try { fn(e); } catch { /* the next answer tries again */ }
+    };
+    timers.hold(R.stream.subscribe(topic, run));
+    const l = R.stream.latest(topic);
+    if (l && l.at >= cur.t0) timers.after(0, () => run(l));
   };
   ctx.refresh = async () => {
     if (timers.dead) return;

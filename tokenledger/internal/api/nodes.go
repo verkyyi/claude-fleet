@@ -506,6 +506,8 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 			if !hasString(hb.SysUnread, "load") {
 				s.loadHist.add(hb.Hostname, hb.Load1, hb.NCPU, now)
 			}
+			// The push channel's nodes topic reads again (claude-fleet#2794).
+			s.nodesChanged.fire()
 			// The Fleet Hub registry (claude-fleet#1409): this login's
 			// fleets, re-derived and checked before they are registered.
 			s.nodeBack(*ep, now)
@@ -1139,20 +1141,10 @@ func nodeView(n store.Node, now time.Time) NodeView {
 // handleNodes serves the roster — narrowed, for a signed-in person, to the
 // logins that are theirs (claude-fleet#1411).
 func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
-	visible, err := s.FleetScope(r)
+	snap, err := s.nodesFor(r, time.Now())
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
-	}
-	now := time.Now()
-	snap, err := s.nodesWhere(now, visible)
-	if err != nil {
-		httpError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	snap.Account = s.accountStateOf(principalOf(r.Context()), now)
-	if visible == nil {
-		s.stampSpares(&snap)
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, snap)

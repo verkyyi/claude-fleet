@@ -6,14 +6,17 @@
 //
 // Rows are fleet_sessions (/v1/fleet/fleet_sessions, or /v1/admin/sessions);
 // context %, model and the subscription are joined from /v1/live by worktree.
-// Re-read every 15 s while the tab is visible and the page shown (the poll is
-// the page's: leaving it stops it, claude-fleet#2793); the filter, search and
-// an open drawer survive it.
-import { esc, ic, ctxBar, relTime } from './shell.js';
+// It moves by itself (claude-fleet#2794): the push channel's `sessions` and
+// `usage` answers redraw the rows the moment they come (the admin half, whose
+// list is /v1/admin/sessions, re-reads on a `sessions` answer, at most every
+// 5 s); the page head says how old the list is. The filter, search and an open
+// drawer survive it; leaving the page drops the subscription (claude-fleet#2793).
+import { esc, ic, ctxBar, relTime, freshTag } from './shell.js';
+import { observedOf } from './stream.js';
 import { sessionRows, counts, filterRows, stateOf, FILTERS, hhmm, askLine } from './pages.js';
 import { t, punct } from './i18n.js';
 
-const S = { filter: 'all', query: '', rows: [], open: '', all: false };
+const S = { filter: 'all', query: '', rows: [], open: '', all: false, at: null };
 
 const dot = (st) => `<span class="dot ${stateOf(st).dot}"></span>`;
 
@@ -34,8 +37,8 @@ function draw(ctx) {
   const seg = FILTERS.map(([f, label]) => `<button data-f="${f}" aria-pressed="${S.filter === f}">${esc(t(label))} <span class="n">${c[f]}</span></button>`).join('');
   const a = S.all;
   const box = ctx.el.querySelector('#sq');
-  if (box) { ctx.el.querySelector('#seg').innerHTML = seg; ctx.el.querySelector('#rows').innerHTML = table(ctx); return; }
-  ctx.el.innerHTML = `<div class="pagehead"><div><p>${esc(t(a ? 'ui.ses.subAdmin' : 'ui.ses.subUser'))}${punct().gap}${t('ui.ses.history', { cmd: '<code>/fleet-history</code>' })}</p></div></div>` +
+  if (box) { ctx.el.querySelector('#seg').innerHTML = seg; ctx.el.querySelector('#rows').innerHTML = table(ctx); ctx.el.querySelector('#sfresh').innerHTML = freshTag(S.at); return; }
+  ctx.el.innerHTML = `<div class="pagehead"><div><p>${esc(t(a ? 'ui.ses.subAdmin' : 'ui.ses.subUser'))}${punct().gap}${t('ui.ses.history', { cmd: '<code>/fleet-history</code>' })}</p></div><span id="sfresh">${freshTag(S.at)}</span></div>` +
     `<div class="panel"><div class="panel-h"><div class="toolbar"><div class="seg" id="seg" role="group" aria-label="${esc(t('ui.ses.filter'))}">${seg}</div></div><label class="search">${ic('search')}<input class="input" id="sq" placeholder="${esc(t('ui.ses.search'))}" aria-label="${esc(t('ui.ses.search'))}"></label></div>` +
     `<div class="tw"><table class="t"><thead><tr><th>${esc(t('ui.col.session'))}</th><th>${esc(t('ui.col.repo'))}</th><th>${esc(t('ui.col.state'))}</th><th>${esc(t('ui.col.machine'))}</th>${a ? `<th>${esc(t('ui.col.person'))}</th><th>${esc(t('ui.col.subscription'))}</th>` : ''}<th>${esc(t('ui.col.context'))}</th><th class="r">${esc(t('ui.col.started'))}</th></tr></thead><tbody id="rows">${table(ctx)}</tbody></table></div></div>`;
   ctx.el.querySelector('#sq').value = S.query;
@@ -77,14 +80,26 @@ export function sessionsPage({ all = false } = {}) {
   return async (ctx) => {
     S.all = all;
     const id = all ? 'all-sessions' : 'sessions';
-    const load = async (fresh) => {
-      const fleet = all ? ctx.api('/v1/admin/sessions') : ctx.fleet(fresh);
-      const [fs, live] = await Promise.all([fleet, ctx.api('/v1/live').catch(() => null)]);
+    let fs = null, live = null;
+    const seen = new Set();
+    const show = () => {
       S.rows = sessionRows(fs, live);
+      S.at = observedOf('sessions', fs);
       draw(ctx);
       ctx.setCount(id, S.rows.length);
+      // ?perf=1: when each session's row first shows (EPIC #2792's
+      // machine-to-page reading, by session key).
+      if (ctx.perf) {
+        for (const r of S.rows) if (!seen.has(r.key)) { seen.add(r.key); console.info(`[perf] session-row ${r.key} ${new Date().toISOString()}`); }
+      }
+    };
+    const load = async (fresh) => {
+      [fs, live] = await Promise.all([all ? ctx.api('/v1/admin/sessions') : ctx.fleet(fresh), ctx.api('/v1/live').catch(() => null)]);
+      show();
     };
     await load(false);
-    ctx.every(15000, () => { if (!document.hidden) load(true).catch(() => {}); });
+    if (all) ctx.subscribe('sessions', () => { load(true).catch(() => {}); }, { min: 5000 });
+    else ctx.subscribe('sessions', (e) => { if (e.body) { fs = e.body; show(); } });
+    ctx.subscribe('usage', (e) => { if (e.body) { live = e.body; show(); } }, { min: 2000 });
   };
 }

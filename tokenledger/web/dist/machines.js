@@ -11,10 +11,12 @@
 // click, or j/k to pick and ↵.
 //
 // Reads /v1/nodes (cut to the viewer's logins by the hub) and /v1/me.logins;
-// writes nothing. Re-read every 30 s while the tab is visible and the page
-// shown (the poll is the page's: leaving it stops it, claude-fleet#2793).
+// writes nothing. It moves by itself (claude-fleet#2794): every `nodes` answer
+// of the push channel — the same roster, cut the same way — redraws it, and
+// the head says how old it is (leaving the page drops it, claude-fleet#2793).
 import { Shell } from './app-shell.js';
-import { esc, ic } from './lib/shell.js';
+import { esc, ic, freshTag } from './lib/shell.js';
+import { observedOf } from './lib/stream.js';
 import { myMachines } from './lib/pages.js';
 import { serviceRows, servicesSection, svcClick } from './lib/services.js';
 import { machineHref, listNav } from './lib/machine-view.js';
@@ -35,24 +37,28 @@ function row(r) {
     `<td class="mono">${esc(r.login)}</td><td>${takes}</td><td class="mono">${esc(load)}</td><td class="mono r">${esc(ses)}</td></tr>`;
 }
 
-function draw(ctx, rows, svcs) {
+function draw(ctx, rows, svcs, at) {
   const body = rows.length ? rows.map(row).join('')
     : `<tr><td colspan="5"><div class="empty">${ic('server')}<b>${esc(t('ui.my.none'))}</b><span>${esc(t('ui.my.noneSub'))}</span><a class="btn" href="/connect">${esc(t('ui.nav.devices'))}</a></div></td></tr>`;
-  ctx.el.innerHTML = `<div class="pagehead"><div><p>${esc(t('ui.my.sub'))}</p></div></div>` +
+  ctx.el.innerHTML = `<div class="pagehead"><div><p>${esc(t('ui.my.sub'))}</p></div>${freshTag(at)}</div>` +
     `<div class="panel"><div class="tw"><table class="t" id="mymachines"><thead><tr><th>${esc(t('ui.col.machine'))}</th><th>${esc(t('ui.my.colLogin'))}</th><th>${esc(t('ui.my.colTakes'))}</th><th>${esc(t('ui.my.colLoad'))}</th><th class="r">${esc(t('ui.my.colSessions'))}</th></tr></thead><tbody>${body}</tbody></table></div></div>` +
     servicesSection(svcs);
 }
 
 export default Shell.mount('mymachines', async (ctx) => {
-  const load = async () => {
-    const snap = await ctx.api('/v1/nodes');
+  const show = (snap, at) => {
     const rows = myMachines(snap, ctx.me);
     S.svcs = serviceRows(snap);
-    draw(ctx, rows, S.svcs);
+    // A pushed redraw keeps the row j/k picked (claude-fleet#2794).
+    const a = document.activeElement;
+    const picked = a && ctx.el.contains(a) && a.dataset ? a.dataset.m : '';
+    draw(ctx, rows, S.svcs, at);
+    if (picked) { const r = [...ctx.el.querySelectorAll('#mymachines tr[data-m]')].find((x) => x.dataset.m === picked); if (r) r.focus(); }
     ctx.setCount('mymachines', rows.length);
   };
   ctx.el.onclick = (e) => { svcClick(ctx, e, S.svcs); };
   listNav(ctx, '#mymachines tr[data-href]');
-  await load();
-  ctx.every(30000, () => { if (!document.hidden) load().catch(() => {}); });
+  const snap = await ctx.api('/v1/nodes');
+  show(snap, observedOf('nodes', snap));
+  ctx.subscribe('nodes', (e) => { if (e.body) show(e.body, e.observedAt); });
 });
