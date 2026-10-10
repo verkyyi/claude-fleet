@@ -107,6 +107,11 @@ here=$(cd "$(dirname "$0")" && pwd -P)
 _fv="${XDG_DATA_HOME:-$HOME/.local/share}/claude-fleet-vendor/bin"
 if [ -x "$_fv/tmux" ]; then case ":$PATH:" in *":$_fv:"*) ;; *) PATH="$_fv:$PATH"; export PATH ;; esac; fi
 unset _fv
+# the python the install line recorded (#2878: Apple's on macOS, which verifies
+# the hub against the system keychain) — first on PATH for every python3 below
+_fp="${FLEET_CONF_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/claude-fleet}/pybin"
+if [ -x "$_fp/python3" ]; then case ":$PATH:" in *":$_fp:"*) ;; *) PATH="$_fp:$PATH"; export PATH ;; esac; fi
+unset _fp
 # node_hosted — a managed machine (issue #2702) runs sessions and services, and an
 # ssh login there opens nothing. But a person away from their own device (a
 # phone's Termius, someone else's computer, an ssh-only place) may still TYPE
@@ -227,6 +232,12 @@ if [ "$cmd" = doctor ] && [ ! -x "$here/fleet-doctor.sh" ] \
     tab=$(printf '\t')
     printf '  %-4s  %-8s %s\n' "${r%%"$tab"*}" cert "${r#*"$tab"}"
     case $r in PASS*) ;; *) rc=1 ;; esac
+  fi
+  # tls (issue #2878): can the python fleet runs on verify the hub's certificate
+  if [ -f "$here/fleet-connect.py" ] && r=$(python3 "$here/fleet-connect.py" --tls-check 2>/dev/null) && [ -n "$r" ]; then
+    tab=$(printf '\t')
+    printf '  %-4s  %-8s %s\n' "${r%%"$tab"*}" tls "${r#*"$tab"}"
+    case $r in FAIL*) rc=1 ;; esac
   fi
   if [ -f "$here/fleet-agent-bundle.py" ]; then
     python3 "$here/fleet-agent-bundle.py" doctor --root "$here/.." "$@" || rc=1

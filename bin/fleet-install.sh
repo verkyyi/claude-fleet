@@ -541,6 +541,24 @@ if [ "$(cd "$BIN" && pwd -P)" != "$(cd "$ROOT/bin" && pwd -P)" ]; then
   done
 fi
 
+# ── the python fleet runs on (#2878) ──────────────────────────────────────
+# macOS: Apple's /usr/bin/python3 verifies TLS against the system keychain; a
+# python.org / Homebrew / pyenv python3 first on PATH reads none, and with no
+# (or an old) certifi `fleet login` died CERTIFICATE_VERIFY_FAILED on a hub curl
+# had just reached. So Apple's is recorded ($CONF/python) and linked as
+# $CONF/pybin/python3, which `fleet` puts first on PATH — the launcher, the
+# keeper and every `#!/usr/bin/env python3` under it then run on it. Only when
+# the developer tools are there (else /usr/bin/python3 is a stub that pops an
+# install dialog). bin/fleet_tls.py covers any python anyway (its own CA union).
+if [ "$(uname -s)" = Darwin ] && [ "${FLEET_INSTALL_PYTHON:-/usr/bin/python3}" != none ]; then
+  _py=${FLEET_INSTALL_PYTHON:-/usr/bin/python3}
+  if { [ "$_py" != /usr/bin/python3 ] || xcode-select -p >/dev/null 2>&1; } \
+     && "$_py" -c 'import ssl' >/dev/null 2>&1; then
+    mkdir -p "$CONF/pybin" && ln -sfn "$_py" "$CONF/pybin/python3" && printf '%s\n' "$_py" > "$CONF/python"
+  fi
+  unset _py
+fi
+
 # ── 2 — the hub address: the machine's ONE config file (#1623) ─────────────
 if [ "$HUB_ANS" = 1 ]; then
   if fconf migrate --quiet >/dev/null 2>&1 && fconf set-hub "$HUBURL"; then

@@ -35,6 +35,12 @@ import sys
 import urllib.error
 import urllib.request
 
+try:  # the ONE TLS context for the hub: every CA source this computer has (claude-fleet#2878)
+    import fleet_tls
+    fleet_tls.install()
+except ImportError:
+    fleet_tls = None
+
 CONF = os.environ.get("FLEET_CONF_DIR") or os.path.join(
     os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "claude-fleet")
 SHAPED = re.compile(

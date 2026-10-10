@@ -91,6 +91,12 @@ import time
 import urllib.error
 import urllib.request
 
+try:  # the ONE TLS context for the hub: every CA source this computer has (claude-fleet#2878)
+    import fleet_tls
+    fleet_tls.install()
+except ImportError:
+    fleet_tls = None
+
 HOME = os.path.expanduser("~")
 SSH_DIR = os.path.join(HOME, ".ssh")
 KEY = os.path.join(SSH_DIR, "fleet-cert")
@@ -167,6 +173,12 @@ def show(*a):
     lines — goes to stderr: `fleet --pick` (fleet-shell.sh) captures stdout
     for its one JSON line, and a scan printed there vanished (claude-fleet#2090)."""
     print(*a, file=sys.stderr, flush=True)
+
+
+def tls_hint(e):
+    """' — <why + fix>' when e is a certificate verify failure (claude-fleet#2878), else ''."""
+    h = fleet_tls.hint(e) if fleet_tls else ""
+    return (" — " + h) if h else ""
 
 
 def die(msg, code=2):
@@ -548,7 +560,7 @@ def renew(hub, quiet=False, include=True):
     try:
         code, res = post(hub + RENEW_PATH, {"public_key": pub, "ts": ts, "sig": sig, "device_name": device_name()})
     except (urllib.error.URLError, OSError) as e:
-        say("hub unreachable (%s)" % getattr(e, "reason", e))
+        say("hub unreachable (%s)%s" % (getattr(e, "reason", e), tls_hint(e)))
         return 1
     if code == 200:
         added = write_cert(res, include)
@@ -601,7 +613,7 @@ def node_pass(hub, out, quiet=False):
         code, res = post(hub + LOGIN_NODE_PATH, {"public_key": pub, "ts": ts, "sig": sig,
                                                  "hostname": device_name(), "os_user": getpass.getuser()}, headers=hdr)
     except (urllib.error.URLError, OSError) as e:
-        say("hub unreachable (%s)" % getattr(e, "reason", e))
+        say("hub unreachable (%s)%s" % (getattr(e, "reason", e), tls_hint(e)))
         return 1
     if code == 200 and res.get("token"):
         # compact, as the hub writes it: fleet-node-join.sh reads it with sed
@@ -858,8 +870,9 @@ def scan(hub, invert, purpose="", qr=False):
         code, st = post(hub + "/v1/fleet/login/start", body)
     except (urllib.error.URLError, OSError) as e:
         # a newcomer's first contact: one line, not a traceback (claude-fleet#2096)
-        die("入口 %s 连不上（%s）— 查网络，或地址对不对：fleet login --hub <入口地址>"
-            % (hub, getattr(e, "reason", e)), 1)
+        h = tls_hint(e)
+        die("入口 %s 连不上（%s）%s" % (hub, getattr(e, "reason", e),
+                                    h or "— 查网络，或地址对不对：fleet login --hub <入口地址>"), 1)
     if code == 503 and st.get("error") == "updating":
         # the release's 「正在更新」 backend (claude-fleet#2052) answers for the hub
         die("入口正在更新，一分钟内回来 — 稍后再敲一次", 1)
