@@ -30,6 +30,10 @@
 #   account-adopt-agent-left  bin/fleet-node-supervisor.py `account adopt|release` (#2387):
 #                         the login's own node agent (com.ccquota.agent.<login>) moves
 #                         with it — logins/<login>.env written, the old one in the attic
+#   account-op-reload-cut bin/fleet-node-supervisor.py's node-agent `hold` (#2918) +
+#                         tokenledger/internal/agent/node_accounts.go's book
+#                         (account-ops.json): logins/*.env changes while the machine's
+#                         agent runs the very create that wrote it
 #   node-update-half      bin/fleet-node-update.py (#2334): an update killed half way,
 #                         and a release whose new part fails the doctor
 #   node-update-stale-fail  bin/fleet-node-update.py key_row + skip_retry (#2906): one
@@ -465,6 +469,53 @@ LC
     || { WHY="release did not put the old agent back and loaded"; return 1; }
   SECS=$(since "$t0")
   WHAT="adopt 连账号自己的节点程序一起迁：旧 agent 卸不掉就全部放回、不写 logins/alice.env；卸得掉则写 600 的 env（含令牌、不打印）、旧 agent 进 attic；release 删 env、放回旧 agent"
+}
+
+drill_account_op_reload_cut() {
+  CAP=12   # a 2 s "create" held through, then the restart on the next tick
+  local sb lg na t0 pid1 pid2 st
+  sb="$WORK/opcut"; lg="$sb/db/logins"; mkdir -p "$lg" "$sb/db/agent/verky" "$sb/LaunchDaemons"
+  # the default table holds the node agent on its tenants' books — the file the agent writes
+  grep -q '"hold": os.path.join(paths.state, "agent", "\*", "account-ops.json")' "$BIN/fleet-node-supervisor.py" \
+    || { WHY="the node-agent child has no hold on account-ops.json"; return 1; }
+  grep -q 'accountOpsFile = "account-ops.json"' "$BIN/../tokenledger/internal/agent/node_accounts.go" \
+    || { WHY="the agent no longer writes account-ops.json"; return 1; }
+  printf 'CCQUOTA_TOKEN=x\n' > "$lg/verky.env"
+  # the node agent, played: its first run opens "alice" (2 s), marking the op in its
+  # book with its own pid, and says done with that pid; a later run just serves
+  na="$sb/na.sh"
+  cat > "$na" <<'NA'
+#!/bin/bash
+b="$1/agent/verky/account-ops.json"
+[ -e "$1/done" ] && exec sleep 300
+printf '{"inflight":{"op-1":{"op":"create","login":"alice","pid":%s}}}\n' "$$" > "$b.tmp" && mv "$b.tmp" "$b"
+: > "$1/started"; sleep 2
+printf '%s\n' "$$" > "$1/done"
+printf '{"outbox":{"op-1":{"type":"account_result","op_id":"op-1"}}}\n' > "$b.tmp" && mv "$b.tmp" "$b"
+exec sleep 300
+NA
+  chmod +x "$na"
+  python3 -c 'import json, sys; d = sys.argv[1]; json.dump({"children": [{"name": "node-agent", "cmd": ["/bin/bash", sys.argv[2], d + "/db"],
+    "requires": [d + "/db/logins/*.env"], "reload": d + "/db/logins/*.env", "hold": d + "/db/agent/*/account-ops.json"}]}, open(d + "/table.json", "w"))' "$sb" "$na"
+  st() { python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["children"]["node-agent"].get(sys.argv[2]) or "")' "$sb/db/state.json" "$1" 2>/dev/null; }
+  FLEET_NODE_STATE="$sb/db" FLEET_NODE_LOG="$sb/log" FLEET_NODE_RUNTIME="$sb/rt" FLEET_NODE_DAEMON_DIR="$sb/LaunchDaemons" \
+    FLEET_NODE_USERS="$sb/Users" FLEET_NODE_TABLE="$sb/table.json" FLEET_NODE_TICK=0.2 FLEET_NODE_LAUNCHCTL='' FLEET_NODE_TEST=1 \
+    python3 -I "$BIN/fleet-node-supervisor.py" run >"$sb/sup.log" 2>&1 &
+  printf '%s\n' "$!" >> "$WORK/cred-pids"
+  until_ok 10 test -e "$sb/db/started" || { WHY="the node agent never started its op: $(tail -2 "$sb/sup.log" | tr '\n' ' ')"; return 1; }
+  pid1=$(st pid)
+  # the create writes the new login's .env half way through
+  printf 'CCQUOTA_TOKEN=y\n' > "$lg/alice.env"; t0=$(now)
+  until_ok 10 test -e "$sb/db/done" || { WHY="the op never finished"; return 1; }
+  [ "$(cat "$sb/db/done")" = "$pid1" ] || { WHY="the op was cut off: the node agent (pid $pid1) was restarted mid-create — $(grep node-agent "$sb/sup.log" | tail -2 | tr '\n' ' ')"; return 1; }
+  grep -q 'held while account create alice' "$sb/sup.log" || { WHY="no held line in the supervisor log"; return 1; }
+  moved() { local p; p=$(st pid); [ -n "$p" ] && [ "$p" != "$pid1" ]; }
+  until_ok 5 moved
+  pid2=$(st pid)
+  [ -n "$pid2" ] && [ "$pid2" != "$pid1" ] || { WHY="the op ended and the node agent kept its old tenants"; return 1; }
+  SECS=$(since "$t0")
+  kill "$pid2" 2>/dev/null
+  WHAT="开号写下 logins/alice.env 时节点程序正在跑这次开号：守护记一行 held、等操作结束（同一 pid 报完结果）才重启换租户；节点程序重启后按账本补答、入口按同一 op_id 再问由 go test（TestAdminAgentAnswersAnOpCutOffByARestart、TestFleetFirstSignInProvisionsAutoAssigned）钉住"
 }
 
 drill_node_update_half() {

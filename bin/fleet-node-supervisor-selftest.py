@@ -952,6 +952,70 @@ class H_Accounts(Sandbox):
         self.assertTrue(pid2, "logins/ changed and the node agent kept its old tenants")
         self.assertTrue(until(3, lambda: not fns.pid_alive(pid)), "the old node agent is still running")
 
+    def test_node_agent_reload_waits_for_an_account_op(self):
+        # #2918: opening a login writes its logins/<login>.env half way through
+        # the create the node agent runs — the restart cut that very create off.
+        # While a tenant's book names an op running (by a live pid) the reload
+        # waits; once it is done the agent starts again on the new logins/.
+        lg = os.path.join(self.d, "db", "logins")
+        ag = os.path.join(self.d, "db", "agent", "verky")
+        os.makedirs(lg)
+        os.makedirs(ag)
+        with open(os.path.join(lg, "verky.env"), "w") as f:
+            f.write("CCQUOTA_TOKEN=x\n")
+        book = os.path.join(ag, "account-ops.json")
+        holder = subprocess.Popen(["/bin/sleep", "300"])
+        self.addCleanup(holder.kill)
+        with open(book, "w") as f:
+            json.dump({"inflight": {"op-1": {"op": "create", "login": "alice", "pid": holder.pid}}}, f)
+        self.table(children=[{"name": "node-agent", "cmd": [self.script("na.sh", "exec sleep 300\n")],
+                              "requires": [os.path.join(lg, "*.env")], "reload": os.path.join(lg, "*.env"),
+                              "hold": os.path.join(self.d, "db", "agent", "*", "account-ops.json")}])
+        self.start()
+        pid = until(10, lambda: self.child("node-agent").get("pid"))
+        self.assertTrue(pid)
+        with open(os.path.join(lg, "alice.env"), "w") as f:
+            f.write("CCQUOTA_TOKEN=y\n")
+        self.assertTrue(until(10, lambda: self.child("node-agent").get("reload_held_since")),
+                        "the reload was not held by the op running")
+        time.sleep(0.6)
+        self.assertEqual(self.child("node-agent")["pid"], pid, "restarted mid account op")
+        self.assertTrue(fns.pid_alive(pid))
+        with open(book, "w") as f:
+            json.dump({"outbox": {"op-1": {"type": "account_result", "op_id": "op-1"}}}, f)
+        pid2 = until(10, lambda: (self.child("node-agent").get("pid") or pid) != pid and self.child("node-agent")["pid"])
+        self.assertTrue(pid2, "the op ended and the node agent kept its old tenants")
+        self.assertFalse(self.child("node-agent").get("reload_held_since"))
+
+    def test_node_agent_reload_hold_has_a_cap(self):
+        # a book from a dead process holds nothing; a live one at most
+        # FLEET_NODE_RELOAD_HOLD seconds
+        lg = os.path.join(self.d, "db", "logins")
+        ag = os.path.join(self.d, "db", "agent", "verky")
+        os.makedirs(lg)
+        os.makedirs(ag)
+        with open(os.path.join(lg, "verky.env"), "w") as f:
+            f.write("CCQUOTA_TOKEN=x\n")
+        holder = subprocess.Popen(["/bin/sleep", "300"])
+        self.addCleanup(holder.kill)
+        with open(os.path.join(ag, "account-ops.json"), "w") as f:
+            json.dump({"inflight": {"op-1": {"op": "create", "login": "alice", "pid": holder.pid}}}, f)
+        self.table(children=[{"name": "node-agent", "cmd": [self.script("na.sh", "exec sleep 300\n")],
+                              "requires": [os.path.join(lg, "*.env")], "reload": os.path.join(lg, "*.env"),
+                              "hold": os.path.join(self.d, "db", "agent", "*", "account-ops.json")}])
+        self.start(FLEET_NODE_RELOAD_HOLD="1")
+        pid = until(10, lambda: self.child("node-agent").get("pid"))
+        with open(os.path.join(lg, "alice.env"), "w") as f:
+            f.write("CCQUOTA_TOKEN=y\n")
+        pid2 = until(10, lambda: (self.child("node-agent").get("pid") or pid) != pid and self.child("node-agent")["pid"])
+        self.assertTrue(pid2, "a hold past its cap kept the old tenants")
+        holder.kill()
+        holder.wait()
+        with open(os.path.join(lg, "bob.env"), "w") as f:
+            f.write("CCQUOTA_TOKEN=z\n")
+        pid3 = until(10, lambda: (self.child("node-agent").get("pid") or pid2) != pid2 and self.child("node-agent")["pid"])
+        self.assertTrue(pid3, "a dead process's book held the reload")
+
     def test_node_agent_waits_for_a_login(self):
         # #2421: an empty logins/ made ccquota exit 1 once a minute (restarts 47);
         # the daemon waits until one <login>.env is in it, and stops it again

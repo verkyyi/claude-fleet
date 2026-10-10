@@ -541,8 +541,17 @@ func TestDrillUnknownCreateIsWaitedThenHanded(t *testing.T) {
 	if code != http.StatusAccepted || !strings.Contains(string(body), inv.Login+"@m4") {
 		t.Fatalf("self-delete with a create unanswered: %d %s; want 202 naming %s@m4 (wait for the node)", code, body, inv.Login)
 	}
-	if got, ok := readMsg(nodes["m4"].tnode, 300*time.Millisecond); ok && got.Type == control.TypeAccountOp {
-		t.Fatalf("an unanswered create was removed on a guess: %+v", got)
+	// the hub may ask the node about the create again (claude-fleet#2918) —
+	// never remove it on a guess
+	for {
+		got, ok := readMsg(nodes["m4"].tnode, 300*time.Millisecond)
+		if !ok {
+			break
+		}
+		var op control.AccountOp
+		if got.Type == control.TypeAccountOp && (json.Unmarshal(got.Payload, &op) != nil || op.Op != control.AccountCreate) {
+			t.Fatalf("an unanswered create was removed on a guess: %+v", got)
+		}
 	}
 
 	old := drillCloseGiveUp
