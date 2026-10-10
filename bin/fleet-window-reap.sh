@@ -34,7 +34,8 @@ RERUN="$DIR/window-reap.rerun"
 # fleet-client-upload.py sweep drops every inbox no live window's @fleet_id owns.
 inbox_sweep() {   # $1 = kill|dry
   [ -d "$HOME/.cache/claude-fleet/inbox" ] || return 0
-  local out; out="$(python3 "$BIN/fleet-client-upload.py" sweep $([ "$1" = dry ] && printf '%s' --dry) 2>/dev/null)"
+  local out dryopt=''; [ "$1" = dry ] && dryopt=--dry
+  out="$(python3 "$BIN/fleet-client-upload.py" sweep ${dryopt:+"$dryopt"} 2>/dev/null)"
   [ -n "$out" ] || return 0
   printf '%s\n' "$out" | sed 's/^/inbox /'
   [ "$1" = kill ] || return 0

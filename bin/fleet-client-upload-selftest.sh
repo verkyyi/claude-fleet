@@ -53,6 +53,7 @@ unset TMUX TMUX_PANE FLEET_SHELL_SESSION FLEET_SHELL_STAGE FLEET_CLIENT_PASTE
 FID=11111111-2222-3333-4444-555555555555
 WID="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/$FID"
 INBOX="$W/node/.cache/claude-fleet/inbox"
+has() { [ -e "$1" ]; }   # a glob that matched
 
 # ---------------------------------------------------------------- A put
 printf 'shot' > "$W/mac/a shot.png"
@@ -64,7 +65,7 @@ case "$p" in "$INBOX/$FID/"*-a_shot.png) ok "A put prints the node's path" ;; *)
 p2=$(python3 "$UP" put "m9:$WID" "$W/mac/a shot.png")
 [ "$p2" = "$p" ] && [ "$(ls "$INBOX/$FID" | wc -l | tr -d ' ')" = 1 ] && ok "A the same bytes land once" \
   || fail "A a second put of the same bytes made [$p2] ($(ls "$INBOX/$FID" | tr '\n' ' '))"
-printf 'x' | python3 "$UP" put "m9:$WID" - --name 'clip.png' >/dev/null && ls "$INBOX/$FID" | grep -q -- '-clip.png$' \
+printf 'x' | python3 "$UP" put "m9:$WID" - --name 'clip.png' >/dev/null && has "$INBOX/$FID"/*-clip.png \
   && ok "A put - takes stdin" || fail "A put - did not land"
 python3 -c 'import sys; open(sys.argv[1], "wb").write(b"\0" * (10 * 1048576 + 1))' "$W/mac/big.png"
 n0=$(wc -l < "$W/ssh.calls")
@@ -78,8 +79,8 @@ python3 "$UP" put "m9:$WID" "$W/mac/big.log" >/dev/null && ok "A a 10 MB non-ima
 FLEET_INBOX_CAP_MB=1 python3 "$UP" put "m9:$WID" "$W/mac/a shot.png" --name other.png >/dev/null
 sleep 1; printf 'y' > "$W/mac/y.txt"
 FLEET_INBOX_CAP_MB=1 python3 "$UP" put "m9:$WID" "$W/mac/y.txt" >/dev/null
-ls "$INBOX/$FID" | grep -q 'big.log' && fail "A the cap did not drop the oldest" || ok "A past the cap the oldest goes"
-ls "$INBOX/$FID" | grep -q 'y.txt' && ok "A the new file stays under the cap" || fail "A the cap dropped the new file"
+has "$INBOX/$FID"/*big.log && fail "A the cap did not drop the oldest" || ok "A past the cap the oldest goes"
+has "$INBOX/$FID"/*y.txt && ok "A the new file stays under the cap" || fail "A the cap dropped the new file"
 
 # ---------------------------------------------------------------- B filter
 rw() {   # python: feed chunks to a Rewriter, print what goes on
