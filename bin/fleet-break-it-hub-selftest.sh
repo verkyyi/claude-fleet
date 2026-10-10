@@ -70,6 +70,9 @@
 #                                                   node read, one follow per service, masking; go test, when a toolchain
 #                                                   is here) + internal/agent node_service_log.go (the register's path only)
 #                                                   + web/dist/lib/svc-log.js (403 is a word; node --test, when node is here)
+#   debug-ticket-replayed                           tokenledger/internal/api fleet_debug_ticket.go (debugTicketAuth: the
+#                                                   fingerprint, the HMAC, expiry, the superseded row; go test, when a
+#                                                   toolchain is here) + bin/fleet-install.sh (debug_fp: only the hash sent)
 #   dist-publish-tampered                           tokenledger/internal/api fleet_publish.go (POST …/publish: the archive
 #                                                   hashed into the commit's tree, OIDC, forward only; go test, when a
 #                                                   toolchain is here) + bin/fleet-release-publish.sh (what CI sends)
@@ -1254,6 +1257,39 @@ drill_service_log_cross_login() {
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
       0:*) WHAT="${WHAT}；go test：403、一份节点流、打码、只读登记的文件" ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
+      *) WHY="the Go half is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  fi
+  SECS=$(since "$t0")
+}
+
+# ---- debug-ticket-replayed (#2891, EPIC #2889 C2): the ticket a computer took
+# at install, copied to another computer, a byte changed, used past its expiry,
+# or kept after a re-issue. The hub refuses all four with 401 and one line on
+# how to get a new one; a re-issue retires the old ticket; off adds nothing.
+# The installer sends the fingerprint's hash, never the hardware id. Go tests by
+# name (and run with a toolchain).
+drill_debug_ticket_replayed() {
+  CAP=120; local t0 out rc t f="$ROOT/tokenledger/internal/api/fleet_debug_ticket.go"
+  local tests='TestDebugTicketBindsExpiresAndRefusesTampering TestDebugTicketReissueRetiresTheOld TestDebugTicketUploadQuota TestDebugOffAddsNothing'
+  t0=$(now)
+  grep -q 'case p.FP != "" && p.FP != fp, p.FP == "" && row.FP != "" && row.FP != fp:' "$f" 2>/dev/null \
+    || { WHY="debugTicketAuth no longer refuses a ticket used from another computer's fingerprint"; return 1; }
+  grep -q 'if !row.RevokedAt.IsZero() {' "$f" || { WHY="debugTicketAuth no longer refuses a superseded ticket"; return 1; }
+  grep -q "printf '%s|%s|%s' \"\$_hw\" \"\$(id -un)\" \"\$ROOT\" | { shasum -a 256" "$ROOT/bin/fleet-install.sh" \
+    || { WHY="the installer no longer sends only the hash of hwid|login|root"; return 1; }
+  for t in $tests; do
+    grep -q "^func $t(" "$ROOT/tokenledger/internal/api/fleet_debug_ticket_test.go" 2>/dev/null \
+      || { WHY="the hub half's test $t is not in tokenledger/internal/api/fleet_debug_ticket_test.go"; return 1; }
+  done
+  WHAT='拷到别的电脑 / 改一字节 / 过期 / 已被补发替换的调试票 → 401 并说怎么补；安装只送指纹哈希（测试按名核对在，Go 门跑它们）'
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/api 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
+      0:*) WHAT='拷到别的电脑 / 改一字节 / 过期 / 已被补发替换的调试票 → 401 并说怎么补，第 6 次上传 → 429，关掉 ⇒ 路由不存在（go test）；安装只送指纹哈希' ;;
       *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
       *) WHY="the Go half is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
     esac

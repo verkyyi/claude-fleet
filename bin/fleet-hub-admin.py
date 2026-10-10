@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""fleet hub set|get|unset|settings|users|accounts|invite|machines — the hub's settings, people list, login records, invites and machines (claude-fleet#1986).
+"""fleet hub set|get|unset|settings|users|accounts|invite|machines|debug-ticket — the hub's settings, people list, login records, invites, machines and debug tickets (claude-fleet#1986).
 
     fleet hub settings                   every hub setting: what applies, from where
     fleet hub get <key>                  one setting's value
@@ -21,6 +21,11 @@
                                          (7 days, used once; only that GitHub user if named)
     fleet hub invite --list              every invite and its state
     fleet hub invite --revoke <id>       stop an unused one
+    fleet hub debug-ticket <github login> [--hours 24]
+                                         a new debug ticket for them (claude-fleet#2891):
+                                         prints the one line they paste; their old one stops
+    fleet hub debug-ticket --list        every ticket of the last 7 days: id, state, owner,
+                                         by, expiry, today's uses
     fleet hub machines                   every machine: status, sessions, load, and its logins:
                                          备用 N · 已用 M / 上限 K (fleet.spares, claude-fleet#2263)
 
@@ -57,6 +62,7 @@ USERS_PATH = "/v1/fleet/users"
 ACCOUNTS_PATH = "/v1/fleet/accounts"
 INVITES_PATH = "/v1/fleet/invites"
 NODES_PATH = "/v1/nodes"
+DEBUG_TICKETS_PATH = "/v1/fleet/debug/tickets"
 MIGRATED = "hub.legacy_migrated."
 
 
@@ -264,6 +270,38 @@ def invite_main(a):
     print("撤销：fleet hub invite --revoke %s" % resp.get("id", ""))
 
 
+# --- debug tickets (claude-fleet#2891) -----------------------------------------
+
+def debug_ticket_main(a):
+    if a.list:
+        resp = call(a, "GET", DEBUG_TICKETS_PATH)
+        if a.json:
+            print(json.dumps(resp, indent=2, ensure_ascii=False))
+            return
+        fmt = "%-15s %-8s %-14s %-28s %-17s %s"
+        print(fmt % ("id", "state", "owner", "by", "expires (UTC)", "today"))
+        for t in resp.get("tickets") or []:
+            uses = t.get("uses_today") or {}
+            today = " ".join("%s %d" % (k, uses[k]) for k in sorted(uses)) or "-"
+            print(fmt % (t.get("id", ""), t.get("state", ""), t.get("owner") or "-", t.get("by", ""),
+                         (t.get("expires_at") or "").replace("T", " ")[:16], today))
+        return
+    if not a.login:
+        die("whose: fleet hub debug-ticket <github login> [--hours 24] (or --list)", 2)
+    body = {"github_login": a.login.lstrip("@")}
+    if a.hours:
+        body["hours"] = a.hours
+    resp = call(a, "POST", DEBUG_TICKETS_PATH, body)
+    if a.json:
+        print(json.dumps(resp, indent=2, ensure_ascii=False))
+        return
+    # The ticket is in this answer and nowhere else: print it once, to the
+    # admin's own terminal, for them to send.
+    print("把这一行发给 %s，在他的电脑上粘贴运行（%s UTC 前有效；第一台用它的电脑绑定，旧票即作废）：\n\n  %s\n"
+          % (resp.get("owner", a.login), (resp.get("expires_at") or "").replace("T", " ")[:16], resp.get("command", "")))
+    print("票号 %s · 查看：fleet hub debug-ticket --list" % resp.get("id", ""))
+
+
 # --- machines (claude-fleet#2263) ----------------------------------------------
 
 def machines_main(a):
@@ -396,6 +434,10 @@ def main(argv):
     iv.add_argument("--list", action="store_true", help="every invite and its state")
     iv.add_argument("--revoke", metavar="ID", help="stop an unused invite")
     sub.add_parser("machines", parents=[common], help="every machine, with its spare logins")
+    dt = sub.add_parser("debug-ticket", parents=[common], help="a new debug ticket for someone, or the list")
+    dt.add_argument("login", nargs="?", help="their GitHub username")
+    dt.add_argument("--hours", type=float, help="how long it is good for (default 24, at most 72)")
+    dt.add_argument("--list", action="store_true", help="every ticket of the last 7 days")
     a = ap.parse_args(argv)
     if a.cmd in (None, "settings"):
         settings_list(a)
@@ -411,6 +453,8 @@ def main(argv):
         invite_main(a)
     elif a.cmd == "machines":
         machines_main(a)
+    elif a.cmd == "debug-ticket":
+        debug_ticket_main(a)
     else:
         if a.action == "rm":
             a.action = "remove"

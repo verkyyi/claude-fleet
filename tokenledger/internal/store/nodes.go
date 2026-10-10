@@ -77,6 +77,10 @@ func (s *Store) EnsureNodes() error {
 	if err := s.ensureFleetTicketIndex(); err != nil {
 		return err
 	}
+	// Debug tickets (claude-fleet#2891).
+	if err := s.ensureFleetDebugTickets(); err != nil {
+		return err
+	}
 	// The team configuration layer (claude-fleet#1726).
 	if err := s.ensureFleetTeamBundles(); err != nil {
 		return err
