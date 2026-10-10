@@ -318,18 +318,31 @@ hub_body() { case "$1" in *$'\n'*) printf '%s' "${1%$'\n'*}" ;; esac; }
 
 # --- 1 open ------------------------------------------------------------------------
 step_open() {
-  local pw t key="$RUN/id_ed25519"
+  local pw t out key="$RUN/id_ed25519"
   ssh-keygen -q -t ed25519 -N '' -C "$PROG-$LOGIN" -f "$key" || { failstep open 'ssh-keygen failed'; return 1; }
-  pw=$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 24)
+  # the password: 24 random letters and digits, ending in one of each — the
+  # machine's policy wants both (macmini: minLength12 · hasLetter · hasDigit),
+  # and a draw with no digit made sysadminctl refuse it, 5402 (C9 run 11)
+  pw="$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 22)a7"
   # every login before this run: a login the hub opens for the drill person
   # (its session's machine, when that is this one) must be gone at the residue
   dscl . -list /Users 2>/dev/null | sort > "$RUN/users-before.txt"
   t=$SECONDS
-  if ! ( cd / && sudo -n sysadminctl -addUser "$LOGIN" -fullName "Onboard Drill ($LOGIN)" -password "$pw" ) > "$RUN/open.log" 2>&1; then
-    failstep open "sysadminctl -addUser $LOGIN: $(tail -n 1 "$RUN/open.log")"
+  # No password on any argv (#2396): created shell-less, the password goes in
+  # on dscl's stdin, then the shell is given back — fleet-login-new.sh's road
+  ( cd / && sudo -n sysadminctl -addUser "$LOGIN" -fullName "Onboard Drill ($LOGIN)" -shell /usr/bin/false ) > "$RUN/open.log" 2>&1
+  # sysadminctl's exit says nothing about whether the login exists (#2210)
+  if ! id "$LOGIN" >/dev/null 2>&1; then
+    failstep open "sysadminctl -addUser $LOGIN made no login: $(grep -v '^-*$' "$RUN/open.log" | grep -v -- '-----' | tail -n 1)"
     return 1
   fi
+  out=$(printf 'passwd /Users/%s %s\n' "$LOGIN" "$pw" | ( cd / && sudo -n dscl . ) 2>&1)
   pw=''
+  if printf '%s' "$out" | grep -qi 'error'; then
+    failstep open "dscl passwd $LOGIN: $(printf '%s' "$out" | tail -n 1)"
+    return 1
+  fi
+  ( cd / && sudo -n dscl . -create "/Users/$LOGIN" UserShell /bin/zsh ) >> "$RUN/open.log" 2>&1
   # how long addUser itself took here — the hub's create of the drill
   # person's login takes ~5 min in it on macmini (#2908); this is the
   # comparison from an admin's shell
