@@ -15,7 +15,9 @@ it comes from its parent — the profile the window was in when it was written
 ($ITERM_PROFILE), else iTerm2's default — and its Keyboard Map is the parent's
 own map (read from iTerm2's preferences, when they can be read) with the fleet
 rows on top. The rows come from `dash-keymap.sh --panel switch list`, the one
-table: a ⌘ chord → «Send Escape Sequence» `[<code>~`. One more, not a table row
+table: a ⌘ chord → «Send Escape Sequence» `[<code>~`. Its left ⌥ sends Esc+ (issue
+#2760: ⌥← ⌥→ move by word, as in a local Claude; FLEET_KEYS_PARITY=0 leaves the
+parent's). One more, not a table row
 (issue #1953): ⇧↵ → «Send Hex Code» 0x0a, the newline byte (⌃j) — the writing
 area's line break, and the one Claude Code and Codex already read as one; a bare
 ↵ stays the carriage return that sends.
@@ -58,6 +60,12 @@ ACTION_ESCAPE = 10
 ACTION_HEX = 11
 SHIFT_RETURN = "0xd-0x20000"
 TEXT_KEYS = {SHIFT_RETURN: {"Action": ACTION_HEX, "Text": "0x0a"}}
+# ⌥← ⌥→ by word, as a local Claude does (issue #2760, EPIC #2756 C4): the LEFT ⌥
+# sends Esc+ (iTerm2's «Option Key Sends» 2) — ⌥← reaches the session as a
+# meta arrow, ⌥b / ⌥f as meta letters. The right ⌥ keeps the parent's (typing
+# special characters). FLEET_KEYS_PARITY=0 leaves it to the parent, as before.
+LEFT_OPTION = "Option Key Sends"
+OPTION_ESC = 2
 
 
 def iterm_home():
@@ -133,6 +141,8 @@ def build(existing=None):
     base.update(TEXT_KEYS)
     profile = {"Name": NAME, "Guid": GUID, "Keyboard Map": base,
                "Tags": ["claude-fleet"]}
+    if os.environ.get("FLEET_KEYS_PARITY") != "0":
+        profile[LEFT_OPTION] = OPTION_ESC
     if parent:
         profile["Dynamic Profile Parent Name"] = parent
     return {"Profiles": [profile]}

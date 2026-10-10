@@ -28,6 +28,12 @@
 #  10. The switch keys (issue #1903): dash-keymap.sh --panel switch ⇄ the conf's
 #      user-keys + User<code> binds + prefix keys ⇄ the sheet ⇄ the iTerm2 profile.
 #
+#  12. The keys of a local Claude (issue #2760, EPIC #2756 C4): docs/CLIENT.md's
+#      table «和本地 Claude 的键» ⇄ the three confs (conf/tmux-shell.conf,
+#      conf/tmux-shell-stage.conf, conf/tmux-attention.conf) ⇄ fleet-shell.sh's
+#      prefix ⇄ fleet-iterm-profile.py — every key typed through three real tmux
+#      servers arrives as the same key; FLEET_KEYS_PARITY=0 is as before.
+#
 #   9. The recovery page's keys (bin/fleet-session-page.py, issue #1862): ↵ / r / q
 #      always, and p (reopen without the personal layer) only when the login has
 #      one — the keys row and choice() agree, and with no personal layer the row
@@ -598,6 +604,319 @@ grep -q 'fleet-keys.sh' "$BIN/fleet-shell.sh" && fail "11: fleet-shell.sh still 
 grep -qx 'bin/fleet-keys.sh' "$ROOT/tokenledger/internal/api/fleetclient/manifest" && fail "11: the client still ships fleet-keys.sh"
 # ⌘P draws opaque (issue #2362): no DECSLRM margins on the client's server
 grep -qxF 'set -s terminal-overrides[90] "*:Cmg@:Clmg@"' "$CONF" || fail "11: the client conf does not keep the terminal's left/right margins off"
+
+# --- 12. the keys of a local Claude, the same through three servers (issue #2760) --
+# docs/CLIENT.md «和本地 Claude 的键» is the table (EPIC #2756 C4). Lint: the three
+# confs ask for extended keys (the client's two under __PARITY__), the prefix is ⌃]
+# with the iTerm2-only ⌃B road, the iTerm2 profile's left ⌥ is Esc+ — each gone
+# under FLEET_KEYS_PARITY=0. Then for real, on isolated sockets with the three
+# real confs (hooks stripped, HOME a scratch dir): an outer terminal (a pty that
+# answers tmux's queries as iTerm2 does) types every key of the table into the
+# client, and the pane of the machine's session — a recorder asking for keys the
+# way Claude Code does (modifyOtherKeys 2, kitty flags, bracketed paste) — must
+# receive the SAME key, its modifiers decoded whichever encoding tmux chose;
+# 「有意不同」 rows hold what the table says; another terminal keeps ⌃B as the
+# prefix; and with parity off ⇧↵ arrives as ↵ and ⌃B is the prefix, as before.
+grep -qF 'PARITY=1; [ "${FLEET_KEYS_PARITY:-1}" = 0 ] && PARITY=0' "$BIN/fleet-shell.sh" \
+  || fail "12: fleet-shell.sh does not read FLEET_KEYS_PARITY"
+grep -qF 'PREFIX="${FLEET_SHELL_PREFIX:-C-]}"' "$BIN/fleet-shell.sh" || fail "12: the client's prefix is not ⌃] by default"
+grep -qF 's|__PARITY__|$PARITY|g' "$BIN/fleet-shell.sh" || fail "12: fleet-shell.sh does not fill __PARITY__"
+for c in "$CONF" "$ROOT/conf/tmux-shell-stage.conf" "$NODE"; do
+  grep -Eq '^set -sq? extended-keys on$' "$c" || fail "12: $(basename "$c") does not turn extended keys on"
+  grep -Fq "terminal-features[95] 'tmux*:extkeys'" "$c" || fail "12: $(basename "$c") does not give a nested tmux extkeys"
+done
+grep -A1 -F '%if "#{==:__PREFIX__,C-]}"' "$CONF" | grep -qF "bind -n C-b if -F '#{m:*iTerm2*,#{client_termtype}}' { send-keys C-b } { switch-client -T prefix }" \
+  || fail "12: the client conf has no iTerm2-only ⌃B under the ⌃] prefix"
+grep -qF "bind -n C-b if -F '#{m:*iTerm2*,#{client_termtype}}'" "$BIN/fleet-shell.sh" || fail "12: the one-session view has no iTerm2-only ⌃B"
+KPP=$(mktemp -d "${TMPDIR:-/tmp}/fkeys-iterm.XXXXXX") || fail "12: mktemp"
+FLEET_ITERM_DIR="$KPP" FLEET_ITERM_PREFS=/dev/null ITERM_PROFILE='' python3 "$BIN/fleet-iterm-profile.py" json \
+  | python3 -c 'import json,sys; p=json.load(sys.stdin)["Profiles"][0]; assert p.get("Option Key Sends") == 2, p' \
+  || fail "12: the iTerm2 profile's left ⌥ is not Esc+"
+FLEET_KEYS_PARITY=0 FLEET_ITERM_DIR="$KPP" FLEET_ITERM_PREFS=/dev/null ITERM_PROFILE='' python3 "$BIN/fleet-iterm-profile.py" json \
+  | python3 -c 'import json,sys; p=json.load(sys.stdin)["Profiles"][0]; assert "Option Key Sends" not in p, p' \
+  || fail "12: FLEET_KEYS_PARITY=0 still sets the profile's left ⌥"
+rm -rf "$KPP"
+tmv=$(tmux -V 2>/dev/null | sed -n 's/^tmux \([0-9]*\)\.\([0-9]*\).*/\1 \2/p')
+if [ -n "$tmv" ] && [ "${tmv% *}" -ge 3 ] && { [ "${tmv% *}" -gt 3 ] || [ "${tmv#* }" -ge 5 ]; }; then
+  # sockets under a SHORT dir: a long $TMPDIR overflows AF_UNIX's 104 bytes
+  KP=$(mktemp -d /tmp/fkp.XXXXXX) || fail "12: mktemp"
+  mkdir -p "$KP/conf"
+  cat > "$KP/rec.py" <<'PY'
+import os, sys, tty
+tty.setraw(0)
+os.write(1, b"\x1b[>4;2m\x1b[>5u\x1b[?2004h")   # what Claude Code asks for
+os.write(1, b"READY\r\n")
+with open(sys.argv[1], "ab", buffering=0) as f:
+    while True:
+        d = os.read(0, 1024)
+        if not d:
+            break
+        f.write(d.hex().encode() + b"\n")
+PY
+  cat > "$KP/parity.py" <<'PY'
+"""leg 12 driver: the keys of a local Claude through shell → stage → node.
+
+    parity.py <tmux> <work> <table.md> <mode>
+
+<work>/conf holds the three rendered confs (hooks stripped); mode `on` checks
+every table row, `off` checks the degenerate (FLEET_KEYS_PARITY=0). Prints one
+line per check (`ok …` / `FAIL …`), exit 1 on any FAIL.
+"""
+import fcntl, os, pty, re, select, struct, subprocess, sys, termios, time
+
+TMUX, WORK, TABLE, MODE = sys.argv[1:5]
+CONF = WORK + "/conf"
+FAILS = []
+
+
+def say(ok, msg):
+    print(("ok   " if ok else "FAIL ") + msg)
+    if not ok:
+        FAILS.append(msg)
+
+
+def T(sock, *a):
+    return subprocess.run([TMUX, "-S", WORK + "/" + sock, *a], capture_output=True, text=True,
+                          env=dict(os.environ, HOME=WORK)).stdout
+
+
+# --- the key a byte string means: (key, modifiers) per press -------------------
+SHIFT, ALT, CTRL = 1, 2, 4
+ARROWS = {"A": "up", "B": "down", "C": "right", "D": "left"}
+
+
+def keys(b):
+    out, i = [], 0
+    while i < len(b):
+        if b.startswith(b"\x1b[200~", i):
+            j = b.find(b"\x1b[201~", i)
+            j = len(b) if j < 0 else j
+            out.append(("paste", b[i + 6:j].replace(b"\r\n", b"\r").replace(b"\n", b"\r")))
+            i = j + 6
+            continue
+        m = re.compile(rb"\x1b\[(\d+);(\d+)u").match(b, i)
+        if m:
+            out.append((int(m.group(1)), int(m.group(2)) - 1)); i = m.end(); continue
+        m = re.compile(rb"\x1b\[27;(\d+);(\d+)~").match(b, i)
+        if m:
+            out.append((int(m.group(2)), int(m.group(1)) - 1)); i = m.end(); continue
+        m = re.compile(rb"\x1b\[(\d+)u").match(b, i)
+        if m:
+            out.append((int(m.group(1)), 0)); i = m.end(); continue
+        m = re.compile(rb"\x1b\[(?:1;(\d+))?([ABCD])").match(b, i)
+        if m:
+            out.append((ARROWS[m.group(2).decode()], int(m.group(1) or 1) - 1)); i = m.end(); continue
+        if b.startswith(b"\x1b[Z", i):
+            out.append((9, SHIFT)); i += 3; continue
+        if b[i] == 0x1b and i + 1 < len(b):
+            # ESC + a key = that key with ⌥ (ESC ESC = ⌥Esc)
+            sub = keys(b[i + 1:])
+            k, mods = sub[0]
+            rest = keys_len(b[i + 1:])
+            out.append((k, mods | ALT)); i += 1 + rest; continue
+        c = b[i]
+        if c in (0x09, 0x0d, 0x1b, 0x7f):
+            out.append((c, 0))
+        elif c == 0:
+            out.append((0x20, CTRL))
+        elif c < 0x1b:
+            out.append((c + 0x60, CTRL))
+        elif c < 0x20:
+            out.append((c + 0x40, CTRL))
+        else:
+            out.append((c, 0))
+        i += 1
+    return out
+
+
+def keys_len(b):
+    """bytes the FIRST key of b takes"""
+    for pat in (rb"\x1b\[\d+;\d+u", rb"\x1b\[27;\d+;\d+~", rb"\x1b\[\d+u", rb"\x1b\[(?:1;\d+)?[ABCD]", rb"\x1b\[Z"):
+        m = re.compile(pat).match(b)
+        if m:
+            return m.end()
+    return 1
+
+
+# --- the three servers + the outer terminal ------------------------------------
+def start():
+    for s in ("s", "st", "n"):
+        T(s, "kill-server")
+    env = dict(os.environ, HOME=WORK)
+    tm = [TMUX]
+    subprocess.run(tm + ["-S", WORK + "/n", "-f", CONF + "/tmux-attention.conf", "new-session", "-d", "-s", "node",
+                         "-x", "96", "-y", "24", "python3 %s/rec.py %s/rec.out" % (WORK, WORK)], env=env)
+    subprocess.run(tm + ["-S", WORK + "/st", "-f", CONF + "/tmux-shell-stage.conf", "new-session", "-d", "-s", "stage",
+                         "-x", "98", "-y", "26", "TMUX= exec %s -S %s/n attach -t node" % (TMUX, WORK)], env=env)
+    subprocess.run(tm + ["-S", WORK + "/s", "-f", CONF + "/tmux-shell.conf", "new-session", "-d", "-s", "shell",
+                         "-x", "100", "-y", "28", "TMUX= exec %s -S %s/st attach -t stage" % (TMUX, WORK)], env=env)
+    for s in ("s", "st", "n"):
+        T(s, "set", "-g", "status", "off")
+    # the view session a client looks through has its prefix off for good
+    # (fleet-remote-view.sh): only the client's prefix acts
+    T("n", "set", "-t", "node", "prefix", "None")
+    T("n", "set", "-t", "node", "prefix2", "None")
+
+
+class Term:
+    """an outer terminal (a pty) attached to the shell's server; `termtype`
+    answers tmux's XTVERSION query the way that terminal does (None: no answer)"""
+
+    def __init__(self, termtype):
+        self.termtype = termtype
+        self.pid, self.fd = pty.fork()
+        if self.pid == 0:
+            os.environ["TERM"] = "xterm-256color"
+            os.environ["HOME"] = WORK
+            os.environ.pop("TMUX", None)
+            os.execvp(TMUX, [TMUX, "-S", WORK + "/s", "attach", "-t", "shell"])
+        fcntl.ioctl(self.fd, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
+        self.seen = b""
+
+    def pump(self, secs):
+        end = time.time() + secs
+        while time.time() < end:
+            r, _, _ = select.select([self.fd], [], [], 0.03)
+            if not r:
+                continue
+            try:
+                d = os.read(self.fd, 65536)
+            except OSError:
+                return
+            self.seen += d
+            # answer what a terminal answers — tmux holds a lone ESC while a
+            # query of its own is still unanswered (it could start the reply)
+            for q, a in ((rb"\x1b\[>0?q", b"\x1bP>|" + self.termtype.encode() + b"\x1b\\"),
+                         (rb"\x1b\[>0?c", b"\x1b[>0;95;0c"), (rb"\x1b\[0?c", b"\x1b[?62;22c"),
+                         (rb"\x1b\[\?996n", b"\x1b[?997;1n"),
+                         (rb"\x1b\]10;\?", b"\x1b]10;rgb:c0c0/caca/f5f5\x1b\\"),
+                         (rb"\x1b\]11;\?", b"\x1b]11;rgb:1a1a/1b1b/2626\x1b\\")):
+                if re.search(q, d):
+                    os.write(self.fd, a)
+
+    def ready(self):
+        for _ in range(150):
+            self.pump(0.1)
+            if T("st", "list-clients").strip() and T("n", "list-clients").strip() \
+               and "READY" in T("n", "capture-pane", "-p", "-t", "node"):
+                break
+        self.pump(0.8)
+
+    def press(self, spec, expect=True):
+        """spec: hex, `+` = a second press once the first has arrived → what the
+        node's pane got. A lone ESC can take a while through three servers (each
+        waits out escape-time, longer while a query of its own is open), so each
+        press waits for its bytes — up to 4 s — rather than a fixed beat."""
+        rec = WORK + "/rec.out"
+        open(rec, "w").close()
+        for part in spec.split("+"):
+            have = os.path.getsize(rec)
+            os.write(self.fd, bytes.fromhex(part))
+            end = time.time() + (4 if expect else 1)
+            while time.time() < end:
+                self.pump(0.02)
+                if expect and os.path.getsize(rec) > have:
+                    break
+        self.pump(0.3)
+        with open(rec) as f:
+            return bytes.fromhex("".join(f.read().split()))
+
+    def close(self):
+        try:
+            os.kill(self.pid, 9)
+            os.waitpid(self.pid, 0)
+        except OSError:
+            pass
+
+
+def rows():
+    """the table in docs/CLIENT.md «和本地 Claude 的键»: (key, fleet, [encodings])"""
+    text = open(TABLE, encoding="utf-8").read()
+    sec = text.split("## 和本地 Claude 的键", 1)[1].split("\n## ", 1)[0]
+    out = []
+    for line in sec.splitlines():
+        if not line.startswith("| ") or line.startswith("| 键") or line.startswith("|---"):
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) != 5:
+            continue
+        out.append((cells[0], cells[2], re.findall(r"`([0-9a-f+]+)`", cells[4])))
+    return out
+
+
+def show(b):
+    return b.hex() or "(nothing)"
+
+
+def main():
+    table = rows()
+    start()
+    if MODE == "on":
+        say(len(table) == 19, "the table has the 19 keys of the prototype (%d)" % len(table))
+        say(all(f in ("一样", "有意不同") for _, f, _ in table),
+            "every row is 一样 or 有意不同 — 不通 0: %s" % [k for k, f, _ in table if f not in ("一样", "有意不同")])
+        term = Term("iTerm2 3.6.6")
+        term.ready()
+        say(bool(re.search(rb"\x1b\[>4;[12]m", term.seen)), "the shell asks the terminal for extended keys")
+        for key, fleet, encs in table:
+            for enc in encs:
+                got = term.press(enc)
+                want = keys(bytes.fromhex(enc.replace("+", "")))
+                say(keys(got) == want, "%s %s → the session got %s %s" % (key, enc, show(got), keys(got)))
+        # ⌃] is the prefix: prefix ⌃] sends ⌃] on, prefix ⌃B sends ⌃B on
+        got = term.press("1d+1d")
+        say(keys(got) == [(0x5d, CTRL)], "prefix ⌃] ⌃] → one ⌃] to the session: %s" % show(got))
+        term.close()
+        # any other terminal (no XTVERSION iTerm2): ⌃B is still the prefix
+        term = Term("Blink 17.4")
+        term.ready()
+        got = term.press("02", expect=False)
+        say(got == b"", "Blink & co: ⌃B is the prefix, the session gets nothing: %s" % show(got))
+        got = term.press("02")   # the second ⌃B of prefix ⌃B
+        say(keys(got) == [(0x62, CTRL)], "Blink & co: prefix ⌃B → one ⌃B to the session: %s" % show(got))
+        term.close()
+        # 有意不同: the one-session view's ⌃D / ⌃\ (the rows above: any other layout passes them on)
+        lk = T("s", "list-keys", "-T", "root")
+        cd = [l for l in lk.splitlines() if re.search(r"\sC-d\s", l)]
+        say(bool(cd) and "solo" in cd[0] and "detach-client" in cd[0], "⌃D in the one-session view is 放到后台")
+        cb = [l for l in lk.splitlines() if len(l.split()) > 3 and l.split()[3] == "C-\\\\"]
+        say(bool(cb) and "solo" in cb[0] and "shell-open" in cb[0], "⌃\\ in the one-session view is the session's shell")
+    else:
+        term = Term("iTerm2 3.6.6")
+        term.ready()
+        say(not re.search(rb"\x1b\[>4;[12]m", term.seen), "off: the shell asks the terminal for no extended keys")
+        got = term.press("1b5b31333b3275")
+        say(got == b"\r", "off: ⇧↵ reaches the session as ↵, as before #2760: %s" % show(got))
+        got = term.press("02", expect=False)
+        say(got == b"", "off: ⌃B is the prefix even in iTerm2, as before: %s" % show(got))
+        term.press("02")
+        term.close()
+    for s in ("s", "st", "n"):
+        T(s, "kill-server")
+    sys.exit(1 if FAILS else 0)
+
+
+main()
+PY
+  kp_render() {  # <parity> <prefix> — the confs as fleet-shell.sh fills them, hooks stripped
+    local f
+    for f in "$ROOT"/conf/*.conf; do
+      sed -e "s#__BIN__#$BIN#g" -e "s#__PREFIX__#$2#g" -e "s#__PARITY__#$1#g" -e 's#__STAGE__#kst#g' \
+          -e 's#__SESS__#ks#g' -e 's#__PASTE__#0#g' -e '/^set-hook -g /d' -e '/^run-shell /d' "$f" > "$KP/conf/${f##*/}"
+    done
+  }
+  kp_render 1 'C-]'
+  kp_out=$(python3 "$KP/parity.py" "$(command -v tmux)" "$KP" "$ROOT/docs/CLIENT.md" on 2>&1); kp_rc=$?
+  printf '%s\n' "$kp_out" | sed 's/^/  12 /'
+  [ "$kp_rc" = 0 ] || { rm -rf "$KP"; fail "12: a key of the table does not reach the session as it would locally (above)"; }
+  kp_render 0 C-b
+  kp_out=$(python3 "$KP/parity.py" "$(command -v tmux)" "$KP" "$ROOT/docs/CLIENT.md" off 2>&1); kp_rc=$?
+  printf '%s\n' "$kp_out" | sed 's/^/  12 /'
+  [ "$kp_rc" = 0 ] || { rm -rf "$KP"; fail "12: FLEET_KEYS_PARITY=0 is not as before (above)"; }
+  rm -rf "$KP"
+else
+  printf '  12 SKIP the three-server run: tmux ≥ 3.5 needed (have: %s)\n' "$(tmux -V 2>/dev/null || echo none)"
+fi
 
 # 9 — the recovery page's keys (issue #1862)
 page_out=$(python3 - "$BIN" <<'PY'
