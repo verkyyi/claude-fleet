@@ -8,6 +8,12 @@ C2). Run as bin/fleet-steward-tick.sh; bin/fleet-steward.sh opens the window.
     fleet-steward-tick.sh sheet  [--session S] [--now ISO]
     fleet-steward-tick.sh card   [--session S]
     fleet-steward-tick.sh followups [--watch owner/name#N …] [--json]
+    fleet-steward-tick.sh breakage [--session S]
+
+`breakage` spawns the fixer of a red base branch a WORKER filed (issue #2960: a
+worker files, never spawns): fleet-issue-file.sh queues it under the fleet's
+state dir (`breakage-spawn/`) and drains at once; the diskguard tick drains the
+rest every minute, whatever FLEET_STEWARD says. Parent: the steward, else the hub.
 
 `beat` is the diskguard tick's (home_watch, every minute): it returns at once
 until the next beat is due — FLEET_STEWARD_EVERY (1200 s), 600 s after a beat
@@ -804,6 +810,66 @@ def debug_step(sess, now_s):
     return len(lines)
 
 
+def breakage_dir(sess):
+    return conf_dir() / "fleets" / sess / "breakage-spawn"
+
+
+def cmd_breakage(a):
+    """A red base branch a WORKER filed (issue #2960): a worker files, never spawns,
+    so its fixer is spawned here — one level deep, parented to the steward when its
+    window is up, else to the hub. fleet-issue-file.sh queues `<slug>-<N>` (repo ·
+    number · title · agent) under the fleet's state dir and drains at once; the
+    diskguard tick drains again whatever the steward's mode. Spawned or already
+    claimed ⇒ off the queue; no room ⇒ the next tick; a day old ⇒ dropped (logged)."""
+    sess = session(a.session)
+    if not sess:
+        sys.stderr.write("fleet-steward-tick: no fleet session\n")
+        return 2
+    q = breakage_dir(sess)
+    items = sorted(f for f in q.glob("*") if not f.name.startswith(".")) if q.is_dir() else []
+    if not items:
+        return 0
+    lk = open(q / ".lock", "a")
+    try:
+        fcntl.flock(lk, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return 0                     # another drain holds it
+    origin = "steward" if any(w["role"] == "steward" for w in windows(sess)) else "hub"
+    env = {k: v for k, v in os.environ.items() if k not in ("TMUX", "TMUX_PANE")}
+    log = gdir() / "breakage-spawn.log"
+    for f in items:
+        try:
+            repo, n, title, agent = (f.read_text().rstrip("\n").split("\t") + [""] * 4)[:4]
+        except OSError:
+            continue
+        if not n.isdigit() or "/" not in repo:
+            f.unlink()
+            continue
+        rc = 1
+        for o in [origin, "hub"] if origin != "hub" else ["hub"]:
+            argv = [n, sess, "--repo", repo, "--origin", o] + (["--title", title] if title else []) \
+                + (["--agent", agent] if agent in ("claude", "codex") else [])
+            r = _seam("FLEET_STEWARD_SPAWN_CMD", argv, env=env)
+            if r is None:
+                r = subprocess.run(["bash", str(BIN / "dash-issue-session.sh")] + argv, stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE, universal_newlines=True, timeout=300, env=env)
+            rc = r.returncode
+            if rc != 4:             # 4 = that parent is gone: the hub takes it
+                break
+        old = time.time() - f.stat().st_mtime > 86400
+        if rc in (0, 3) or old:
+            f.unlink()
+        line = "%s\t%s\t%s#%s\torigin=%s\trc=%d%s" % (fd.iso(fd.now_local(None)), sess, repo, n, o, rc,
+                                                     "\tdropped" if old and rc not in (0, 3) else "")
+        print(line)
+        try:
+            with open(log, "a") as fh:
+                fh.write(line + "\n")
+        except OSError:
+            pass
+    return 0
+
+
 def cmd_beat(a):
     sess = session(a.session)
     if not sess:
@@ -1151,6 +1217,8 @@ def main(argv=None):
         if name == "page":
             p.add_argument("--print", action="store_true")
             p.add_argument("--demo", action="store_true")
+    p = sub.add_parser("breakage")
+    p.add_argument("--session")
     p = sub.add_parser("say")
     p.add_argument("--row", required=True)
     p.add_argument("--text", required=True)
@@ -1172,7 +1240,7 @@ def main(argv=None):
     a = ap.parse_args(argv)
     fn = {"beat": cmd_beat, "delta": cmd_delta, "answer": cmd_answer, "sheet": cmd_sheet, "card": cmd_card,
           "followups": cmd_followups, "page": cmd_page, "say": cmd_say,
-          "todo-done": cmd_todo_done}.get(a.cmd)
+          "todo-done": cmd_todo_done, "breakage": cmd_breakage}.get(a.cmd)
     if not fn:
         ap.print_help(sys.stderr)
         return 2

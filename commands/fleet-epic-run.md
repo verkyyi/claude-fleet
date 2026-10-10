@@ -363,6 +363,18 @@ treatment:
   refill its slot with the next member. One batch of 待决 answered at breakfast
   beats a decision made at 03:00 by a loop.
 
+- **A member reports `BLOCKED` on an issue it filed** (issue #2960) — the
+  report's summary or the member's thread names a new `#M` filed with `parent:
+  <member>`. A worker files but never spawns, so the batch's second level is
+  yours: when `#M` sits inside the charter's scope, it is a **batch member** —
+  add it to the charter's Core list (`- [ ] **C<next>** #M — <title> (from
+  C<k>)`, an edit of the parent body), spawn it in step c like any member
+  (`--origin "<PKEY>"`, so it reports HERE, never to the blocked member), and
+  when it lands tell the blocked member to go on:
+  `~/.claude/fleet/bin/fleet-peer-send.sh issue:<N> '#M merged — continue'`. The
+  blocked member keeps its slot meanwhile (it is parked, not failed). Outside
+  the charter's scope → the parent's 待决, like a question.
+
 - **A failed worker** (PR red, conflicted, or the window died) → **retry once**,
   seeding the new worker with what went wrong. Second failure: label the member
   `blocked` (`gh issue edit <N> --repo "$MREPO" --add-label blocked`), write the
@@ -376,7 +388,8 @@ to the member's diff, say so on the parent and re-run the check rather than
 burning the one retry on a flake. And if the base branch itself is red (the same
 check fails on `master`'s head), it is ONE breakage for every member and every
 loop: file it once through `~/.claude/fleet/bin/fleet-issue-file.sh --title …
---breakage --spawn --repo "$MREPO"` (issue #2078) — exit 5 + a URL means someone
+--breakage --spawn --repo "$MREPO"` (issue #2078; a member files it without
+`--spawn` and the steward spawns the fixer — issue #2960) — exit 5 + a URL means someone
 already did, and a 「同一故障」 comment was left there — then wait for that issue
 before retrying any member. Three issues and three conflicting fixes for one
 duplicate route (2026-10-07, #2039 #2040 #2041) is what this replaces.

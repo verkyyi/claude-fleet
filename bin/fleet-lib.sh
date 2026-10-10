@@ -581,6 +581,30 @@ fleet_pane_fmt() {
 # the operator's current pane. A daemon (no $TMUX at all) is not this.
 fleet_pane_lost() { [ -n "${TMUX:-}" ] && [ -z "${TMUX_PANE:-}" ]; }
 
+# fleet_spawn_refused — rc 0 when the CALLER is a worker pane, which may file an
+# issue but never spawn a session (issue #2960): one level of delegation. Only the
+# orchestrator, the steward and an EPIC driver (@fleet_role_def epic-driver) spawn;
+# so does anything outside a fleet pane (a daemon, the operator's own shell, an
+# unstamped window) and the onboarding guide (the pinned `guide` scratch,
+# fleet_guide_respawn's identity). Ten workers once spawned their own: the driver
+# could not count the grandchildren and their reports went to parked parents.
+# FLEET_ALLOW_WORKER_SPAWN=1 is the operator's hatch. The filer, the `spawn` tool
+# and fleet-await.sh's spawn ask here; FLEET_SPAWN_REFUSAL is what they say.
+# shellcheck disable=SC2034  # read by the filer, fleet-await.sh and fleet-mcp.py
+FLEET_SPAWN_REFUSAL='a worker does not spawn sessions (issue #2960) — fix it in place when it blocks your own done condition and is small, local and yours; else file it without spawning: with --parent <your issue> and report blocked to your parent when it blocks you, bare when it does not; a red base branch: file it --breakage and the steward spawns its fixer'
+fleet_spawn_refused() {
+  [ "${FLEET_ALLOW_WORKER_SPAWN:-0}" = 1 ] && return 1
+  local r role def wname pin
+  r=$(fleet_pane_fmt '#{@fleet_role}|#{@fleet_role_def}|#{@pin}|#{window_name}') || return 1
+  IFS='|' read -r role def pin wname <<EOF
+$r
+EOF
+  [ "$role" = worker ] || return 1
+  [ "$def" = epic-driver ] && return 1
+  [ "$wname" = guide ] && [ "$pin" = 1 ] && return 1
+  return 0
+}
+
 # The tmux session the caller is running in (pane-targeted, client fallback).
 fleet_current_session() {
   local s

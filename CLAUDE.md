@@ -55,6 +55,20 @@ Do not install from memory: read the doc and work from it.
   `Explore` / `Plan` / `claude-code-guide`, and never `isolation: worktree`
   (a fork worktree is edit-blocked by the base guard). `FLEET_ALLOW_SUBAGENT=1`
   is the operator's escape hatch.
+- **Only a coordinator spawns; a worker files** (issue #2960) — one level of
+  delegation, like the subagent rule. The orchestrator, the steward and an EPIC
+  driver (`@fleet_role_def epic-driver`, stamped by `dash-raw-session.sh --role`)
+  spawn; a `@fleet_role worker` pane is refused by ONE rule, `fleet_spawn_refused`
+  (`bin/fleet-lib.sh`) — the filer's `--spawn` exits 6 with nothing filed, the
+  `spawn` tool refuses, `fleet-await.sh` waits but answers NO-WORKER rather than
+  start one. No pane / an unstamped window / the pinned `guide` pass;
+  `FLEET_ALLOW_WORKER_SPAWN=1` is the operator's hatch. A worker fixes in place,
+  files with `--parent` and reports `blocked` (its driver or the orchestrator
+  spawns it), or files bare; a red base a worker files is queued under the fleet's
+  `breakage-spawn/` and spawned by `fleet-steward-tick.sh breakage` (the filer at
+  once, the diskguard tick after, any steward mode) with the steward — else the
+  hub — as parent. `fleet-issue-file-selftest.sh` W, `fleet-await-selftest.sh`
+  SEAT, `fleet-mcp-selftest.sh` P, `fleet-steward-selftest.sh` W.
 - **A fleet hosts zero or more GitHub repos** (issue #788, switched on in #795),
   **every one put the same way** (issue #1937): `fleets/<sess>/repos/<slug>.conf`,
   ordered by `repos/.order` — `fleet-up.sh` and `bin/fleet-repo.sh add` both go

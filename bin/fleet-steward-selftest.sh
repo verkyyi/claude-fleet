@@ -20,6 +20,9 @@
 #   E  a write storm: past FLEET_STEWARD_WRITES the answers wait a beat — the card
 #      says 延后 N, the next beat posts them, never more than the budget a beat
 #   F  not due: the every-minute caller returns 4 with no lock and no read
+#   W  a red base a worker filed (issue #2960): `breakage` spawns its fixer with
+#      --origin steward (no steward window: hub), whatever FLEET_STEWARD says; spawned
+#      or claimed ⇒ off the queue, no room ⇒ kept for the next tick
 #   G  the switch: FLEET_STEWARD=0 ⇒ ensure rc 3, no window, no @attention_log,
 #      the beat rc 3 and no state file; unset + FLEET_HOST=1 ⇒ `count`: the
 #      attention flag on, no window
@@ -501,6 +504,31 @@ assert f(["w", "n", "online", "done", "", "", "", "decide=2"]) == 2
 assert f(["w", "n", "online", "done", "", "", "3"]) == 0
 assert f(None) == 0
 EOF
+
+# W — a red base a WORKER filed (issue #2960): the drain spawns its fixer under the
+# steward when its window is up, else the hub; claimed ⇒ off the queue, no room ⇒ kept
+BQ="$FLEET_CONF_DIR/fleets/st/breakage-spawn"; mkdir -p "$BQ"
+printf 'o/r\t71\tmaster 红\t\n' > "$BQ/o-r-71"
+printf 'o/r\t72\t又红\tcodex\n' > "$BQ/o-r-72"
+cat > "$WORK/bin/bkspawn" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$ST_GH/bkspawn.log"
+case " $* " in *" 72 "*) exit "${BK_RC72:-0}" ;; esac
+exit 0
+EOF
+chmod +x "$WORK/bin/bkspawn"
+printf '@9\tsteward\tidle\t\t\t\t\t\n' > "$ST_WINS"
+BK_RC72=2 FLEET_STEWARD=0 FLEET_STEWARD_SPAWN_CMD="$WORK/bin/bkspawn" TICK breakage >/dev/null 2>&1
+grep -qx '71 st --repo o/r --origin steward --title master 红' "$ST_GH/bkspawn.log" \
+  && grep -qx '72 st --repo o/r --origin steward --title 又红 --agent codex' "$ST_GH/bkspawn.log" \
+  && [ ! -f "$BQ/o-r-71" ] && [ -f "$BQ/o-r-72" ] \
+  && ok "W: a worker's breakage — spawned under the steward (steward off or not); no room stays queued" \
+  || bad "W: drain $(cat "$ST_GH/bkspawn.log" 2>&1) · left $(ls "$BQ")"
+: > "$ST_WINS"; : > "$ST_GH/bkspawn.log"
+FLEET_STEWARD_SPAWN_CMD="$WORK/bin/bkspawn" TICK breakage >/dev/null 2>&1
+grep -qx '72 st --repo o/r --origin hub --title 又红 --agent codex' "$ST_GH/bkspawn.log" && [ ! -f "$BQ/o-r-72" ] \
+  && ok "W2: no steward window ⇒ the hub is the fixer's parent; spawned ⇒ off the queue" \
+  || bad "W2: drain $(cat "$ST_GH/bkspawn.log" 2>&1) · left $(ls "$BQ")"
 
 [ "$fails" = 0 ] && { echo "fleet-steward selftest PASS"; exit 0; }
 echo "fleet-steward selftest: $fails FAILED"; exit 1

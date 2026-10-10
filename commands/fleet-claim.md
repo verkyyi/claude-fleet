@@ -9,8 +9,8 @@ then implement under a **standing contract** that ends by **opening a PR, landin
 it yourself once the gate is green, and reporting the outcome back to whoever
 spawned you** — and signals a blocker loudly rather than stalling. Mutates the bound issue on this fleet's `$FLEET_REPO` (an assignee
 at claim time; issue comments as you go) — and, for adjacent work it spots, MAY
-file a *new* tracked issue through the one filer channel, and spawn a worker for
-it — then, at ship, pushes your branch, opens a PR, and merges it when the checks
+file a *new* tracked issue through the one filer channel (never spawning a
+session for it: a worker files, its parent spawns — issue #2960) — then, at ship, pushes your branch, opens a PR, and merges it when the checks
 go green. It never touches the base checkout.
 
 **You are a full agent, not a deckhand** (issue #441). The rails below are safety
@@ -107,13 +107,12 @@ Three habits buy most of it back:
   runs outside every fleet rail — invisible to the dash, no state, killed
   mid-edit when the quota migration moves the *window*, several writing one
   worktree, no one-worker-one-PR, no history row, no handoff — so work that
-  writes code is a WORKER: `mcp__fleet__file_issue` with `parent` + `spawn` below,
-  and its `[child-report]` is how the result comes back — and
-  `mcp__fleet__children` is where you read all of them at once.
-  Need the result BEFORE you can go on, the way a subagent would hand it back?
-  `mcp__fleet__await` (`issue: N`) spawns #N's worker if none is live and blocks
-  until it lands, blocks or is reaped, then prints the verdict + PR + summary
-  (issue #812); `TIMEOUT` (exit 3) means still running — call it again.
+  writes code is a WORKER's, and a worker is never yours to start (issue #2960):
+  fix it in place or file it — the three moves below. Waiting on an issue someone
+  else's worker holds? `mcp__fleet__await` (`issue: N`) blocks until it lands,
+  blocks or is reaped, then prints the verdict + PR + summary (issue #812);
+  `TIMEOUT` (exit 3) means still running — call it again. From your pane it only
+  waits: with no live worker it answers `NO-WORKER`, it never spawns one.
 - **Don't dump a whole file to answer a narrow question.** A `grep -n` for the
   symbol plus a targeted `sed -n '<a>,<b>p'` range costs a fraction of a full
   `cat -n` — read the function, not the file that contains it.
@@ -192,10 +191,27 @@ override them):
   `mcp__fleet__comment` with `close: true` — never a bare
   `gh issue close --comment`: that posts an UNMARKED comment the bridge relays
   straight back into your own pane as a turn (issue #486).
-- **Spot adjacent work? File it — and spawn it if it's worth doing now.** File
-  through the ONE filer channel (issue #332), so a follow-up you notice lands on
-  the backlog instead of scope-creeping this PR — and the base checkout stays
-  untouched: `mcp__fleet__file_issue` (`title`, `body`?, `spawn`?).
+- **Spot something else? Three moves — and spawning is none of them** (issue
+  #2960). One level of delegation: the orchestrator, the steward and an EPIC
+  driver spawn sessions; a worker fixes in place or files. (Ten workers once
+  spawned their own: the batch driver could not count the grandchildren, and
+  their reports went to parents already parked or reaped.) `spawn` from your
+  pane is refused — the filer exits 6 with nothing filed, the `spawn` tool
+  refuses, `await` will not start one.
+
+  | Move | When | How |
+  |---|---|---|
+  | **Fix in place** | ALL hold: it blocks YOUR done condition · same repo and same deploy path (ships in this PR — no hub deploy, stable move or human step) · small and local (reads as part of the job, roughly tens of lines with a test) · nobody else owns it (no open issue, no live worker) · touches no shared contract (hub API, client/node protocol, DB schema, release/deploy path, credentials) | fix it here; ONE line in the PR body names the in-passing fix |
+  | **File and ask the parent** | it blocks you but fails any of the above | `mcp__fleet__file_issue` with `parent: <your issue>`, no `spawn`; then the blocked outcome (`mcp__fleet__ask` + `mcp__fleet__report` `state: blocked`, below) naming the new issue — a driver spawns it as a batch member, for a plain task the orchestrator decides |
+  | **File bare** | it does not block you | `mcp__fleet__file_issue`, no `spawn`, no report |
+
+  Worked examples: the drill's generated password lacked a digit (#2950) — in
+  place; the hub answered «no login there» (#2941) — file and ask the parent; the
+  base branch is red — a breakage (the red-base paragraph in step 5 below).
+
+  Every filing goes through the ONE filer channel (issue #332), so a follow-up
+  lands on the backlog instead of scope-creeping this PR — and the base checkout
+  stays untouched: `mcp__fleet__file_issue` (`title`, `body`?).
   **Related to your current issue N → add `parent: N`** — it files a GitHub
   *sub-issue* linked under N; **unrelated → file top-level** (omit `parent`).
   A sub-issue is an ordinary issue — its own number, `@issue`, and `issue-<num>`
@@ -206,18 +222,8 @@ override them):
   session (dash ⌃s) that has talked its way to a clear requirement — filing with
   `bind: true` makes *that* session the new issue's worker in place, rather than
   spawning one that must re-ground from zero.
-  **`spawn` is yours to use** (issue #441): it hands the new number to the same
-  spawn choke point the hub uses, so the session caps + cross-machine pre-spawn
-  dedup still apply and a cap refusal just leaves the issue filed. Spawn when the
-  follow-up is genuinely independent and worth a worker *now*; otherwise file it
-  bare and let it sit on the backlog. What stays fixed either way: **don't chase
-  it in THIS worktree** — one worktree, one issue, one PR. A spawned worker
-  claims and ships it on its own, and **pushes a `[child-report]` back to you**
-  when it does (issue #574) — so don't poll for it. Every report is also written
-  to your **children ledger** (issue #937), so the whole picture is one call
-  away: `mcp__fleet__children` returns one row per child — its ledger outcome, live window state and PR — plus a
-  `3/5 ✓ · 1!` summary. See the acknowledge-don't-take-over rule below for what to
-  do when one arrives.
+  Outside the in-place row: **don't chase it in THIS worktree** — one worktree,
+  one issue, one PR.
 - **Hand off before you run out of context.** When the window fills, run
   `/fleet-handoff` — it writes a durable handoff and cycles the pane. You can't
   see your own context meter (Claude Code shows it to the human, not the model),
@@ -306,11 +312,12 @@ override them):
        is one breakage for the whole fleet, and on 2026-10-07 three workers filed
        three issues and three fixes for one duplicate route inside 16 seconds.
        Don't fix it in this worktree and don't file it by hand — file it ONCE
-       through `mcp__fleet__file_issue` with `breakage: true` (and `spawn: true`,
-       so the first sighting gets its one fixer): the filer fingerprints the
-       breakage (the commit it started at · the first failed check · its first
-       error line) and dedups on it — exit 0 = you were first, the fixer is
-       spawned; **exit 5 = someone already filed it**: the URL printed is that
+       through `mcp__fleet__file_issue` with `breakage: true` and **no `spawn`**
+       (issue #2960): the filer fingerprints the breakage (the commit it started
+       at · the first failed check · its first error line) and dedups on it —
+       exit 0 = you were first, and the issue is queued for the STEWARD, which
+       spawns its one fixer within the minute (its parent, not you);
+       **exit 5 = someone already filed it**: the URL printed is that
        issue, a 「同一故障，来自 …」 comment was left on it for you, nothing was
        filed. Either way the next step is the same: **wait for that issue** —
        `mcp__fleet__await` with its number — then re-read your own verdict. Never
@@ -343,8 +350,8 @@ override them):
      and records the resume ledger after the merged grace (default 10 minutes)
      and liveness checks; the dash marks pending cleanup with `rNm`.
      Don't start new work in a
-     landed worktree; a follow-up gets its own issue (and, if it's worth one now,
-     its own worker via `--spawn` above). And don't make your merge *live*: no
+     landed worktree; a follow-up gets its own issue (filed, never spawned —
+     the three moves above). And don't make your merge *live*: no
      `/fleet-sync-install` from a worker — next bullet.
 - **Merged is not live, and making it live is not yours** (issue #953). Never run
   `/fleet-sync-install` — nor `bin/fleet-install-apply.sh` or
@@ -426,9 +433,10 @@ override them):
   `summary: '<why>'` — and `pr` when a PR exists.
   — a session that spawned you and is waiting on the result should not learn it
   by watching the dash go red.
-- **A `[child-report]` arriving in YOUR pane: acknowledge, don't take over.** A
-  worker you spawned (`--spawn`) pushes its outcome to you when it lands, blocks,
-  or is reaped. It is four lines and it ends `no reply needed` — that is literal.
+- **A `[child-report]` arriving in YOUR pane: acknowledge, don't take over.** You
+  spawn no one now (issue #2960), but a worker started for you before that rule —
+  or one `await` adopted — pushes its outcome to you when it lands, blocks, or is
+  reaped. It is four lines and it ends `no reply needed` — that is literal.
   **Do not reply to it, do not open its PR, do not adopt its follow-up work.**
   Note it, and go straight back to your own issue. **Want to check it? ONE read,
   not an investigation:** `mcp__fleet__children` answers "did it

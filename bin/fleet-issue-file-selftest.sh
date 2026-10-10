@@ -53,6 +53,10 @@
 #      v=… -->` 5/5; one with no rule files all the same with 「未注明规则」 and a
 #      logs/rules.log line; a rule the table lacks is refused (exit 2, no create);
 #      a filing from anywhere else gets no rule line at all (byte for byte).
+#   W. a worker files, never spawns (issue #2960): --spawn from a worker pane exits
+#      6 with nothing filed; a driver / the orchestrator / the steward / the guide /
+#      no pane / FLEET_ALLOW_WORKER_SPAWN=1 spawn; a breakage a worker files is
+#      filed with no spawn and queued under breakage-spawn/ for the steward.
 #
 # Exit 0 = pass; non-zero = fail (prints the failing assertion + captured output).
 set -uo pipefail
@@ -589,5 +593,37 @@ run_fif --title "别处" --body "y"
 grep -q '未注明规则\|fleet:rule' "$BODY" && fail "V5 a non-orchestrator filing gets no rule line" "$(cat "$BODY")"
 ok "V rules: 5/5 orchestrator shapes marked; no rule ⇒ 「未注明规则」 + log; unknown rule refused; elsewhere untouched"
 
-printf '\nselftest OK: %s assertions passed (channel: validate · provenance · create · milestone · parent · spawn · bind · breakage)\n' "$pass"
+# --- W. a worker files, never spawns (issue #2960) --------------------------------
+# The fake tmux answers the whole `role|role_def|pin|name` read with FAKE_FLEET_ROLE.
+FAKE_FLEET_ROLE='worker|||issue-5' TMUX_PANE=%9 run_fif --title "旁支活" --spawn
+[ "$RC" -eq 6 ] && ! grep -q 'issue create' "$GH_LOG" && [ ! -s "$SPAWN_LOG" ] && grep -q 'issue #2960' "$WORK/err" \
+  || fail "W1 --spawn from a worker pane: exit 6, nothing filed or spawned (got $RC)" "$(cat "$WORK/err")"
+FAKE_FLEET_ROLE='worker|||issue-5' TMUX_PANE=%9 run_fif --title "旁支活" --parent 5
+[ "$RC" -eq 0 ] && grep -q 'issue create' "$GH_LOG" && [ ! -s "$SPAWN_LOG" ] \
+  || fail "W2 a worker files without --spawn as before" "$(cat "$WORK/err")"
+for who in 'worker|epic-driver||issue-9' 'orchestrator|||orchestrator' 'steward|||steward' 'worker||1|guide' 'home|||home' '' ; do
+  FAKE_FLEET_ROLE="$who" TMUX_PANE=%9 run_fif --title "派" --spawn
+  [ "$RC" -eq 0 ] && grep -q '^777' "$SPAWN_LOG" || fail "W3 [$who] may spawn (got $RC)" "$(cat "$WORK/err")"
+done
+run_fif --title "派" --spawn
+[ "$RC" -eq 0 ] && grep -q '^777' "$SPAWN_LOG" || fail "W3 no pane (a daemon, the operator's shell) may spawn" "$(cat "$WORK/err")"
+FLEET_ALLOW_WORKER_SPAWN=1 FAKE_FLEET_ROLE='worker|||issue-5' TMUX_PANE=%9 run_fif --title "派" --spawn
+[ "$RC" -eq 0 ] && grep -q '^777' "$SPAWN_LOG" || fail "W3 FLEET_ALLOW_WORKER_SPAWN=1 is the operator's hatch" "$(cat "$WORK/err")"
+ok "W1-3 spawn: a worker pane refused (6, nothing filed), files plain; driver / orchestrator / steward / guide / no pane / hatch spawn"
+# A breakage a worker files: filed, its --spawn dropped, queued for the steward.
+: > "$SPAWN_LOG"
+FAKE_FLEET_ROLE='worker|||issue-5' TMUX_PANE=%9 run_brk w4 --title "master 又红" --breakage-key k-worker --spawn
+nw=$(cat "$WORK/out-w4"); nw=${nw##*/}
+q="$WORK/conf/fleets/fifsess/breakage-spawn/acme-widgets-$nw"
+[ "$(cat "$WORK/rc-w4")" = 0 ] && [ ! -s "$SPAWN_LOG" ] && [ -f "$q" ] \
+  && [ "$(cut -f1,2 "$q")" = "acme/widgets	$nw" ] && grep -q 'the steward spawns' "$WORK/err-w4" \
+  || fail "W4 a worker's breakage: filed, not spawned, queued for the steward" "$(cat "$WORK/err-w4"; ls -R "$WORK/conf/fleets" 2>&1)"
+: > "$SPAWN_LOG"
+FAKE_FLEET_ROLE='orchestrator|||orchestrator' TMUX_PANE=%9 run_brk w5 --title "另一处红" --breakage-key k-orch --spawn
+nw=$(cat "$WORK/out-w5"); nw=${nw##*/}
+[ "$(cat "$WORK/rc-w5")" = 0 ] && grep -q "^$nw" "$SPAWN_LOG" && [ ! -f "$WORK/conf/fleets/fifsess/breakage-spawn/acme-widgets-$nw" ] \
+  || fail "W5 the orchestrator's breakage spawns its fixer itself, nothing queued" "$(cat "$WORK/err-w5")"
+ok "W4-5 breakage: a worker's is queued for the steward (no spawn); the orchestrator's spawns as before"
+
+printf '\nselftest OK: %s assertions passed (channel: validate · provenance · create · milestone · parent · spawn · bind · breakage · worker seat)\n' "$pass"
 exit 0

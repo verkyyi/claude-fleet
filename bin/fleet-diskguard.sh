@@ -800,6 +800,13 @@ home_watch() {
       fi
       ( bash "$BIN/fleet-steward-tick.sh" beat --session "$s" >/dev/null 2>&1 & ) 2>/dev/null
     fi
+    # A red base a WORKER filed waits here for its fixer (issue #2960: a worker
+    # never spawns) — drained every tick, whatever the steward's mode; an empty
+    # queue costs one directory read.
+    for bq in "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/fleets/$s/breakage-spawn"/*; do
+      [ -e "$bq" ] && { ( bash "$BIN/fleet-steward-tick.sh" breakage --session "$s" >/dev/null 2>&1 & ) 2>/dev/null; }
+      break
+    done
     out="$(fleet_home_heal "$s" "$s")"
     [ -n "$out" ] || continue
     mkdir -p "$GDIR" 2>/dev/null

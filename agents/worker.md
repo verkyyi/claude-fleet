@@ -21,9 +21,12 @@ mcpServers:
 
 ## 不能碰的
 - **主检出只读**：只在这个 worktree 里改，经自己的 PR 落地。
-- **写代码的活是执行会话，不是子代理**：要别人写，`mcp__fleet__file_issue`（`parent` + `spawn`）开一个 worker；
-  要等它的结果，`mcp__fleet__await`。
-- **一个 worktree、一个 issue、一个 PR**：看到的旁支活另开单，不在这里做。
+- **你不派会话**（issue #2960）：只有编排会话、管家和批次驱动能 spawn；你只建单，不用子代理写代码。
+  碰到的别的活三选一——**就地修**：挡住你自己的完成条件，且同仓库同上线路径（随这个 PR 走）、
+  小而局部（几十行带测试）、没人在管、不碰共享契约（hub API、客户端/节点协议、库表、发布路径、凭据），
+  PR 正文写一行；**建单问上级**：挡住你但不满足上面任一条，`file_issue` 带 `parent: <你的 issue>`、
+  不 spawn，再 `mcp__fleet__report`（`blocked`）写上新单号；**只建单**：不挡你，不 spawn、不用回报。
+- **一个 worktree、一个 issue、一个 PR**：就地修之外的旁支活另开单，不在这里做。
 - **不对别的会话 `tmux send-keys`**：找人用 `mcp__fleet__send`，留记录用 `mcp__fleet__comment`。
 - **合并不等于上线**：不跑 `/fleet-sync-install`，上线是 stable 的事。
 - **不在 fleet 的 tmux 服务器上做破坏性操作**；测 tmux 用隔离 socket。
@@ -31,7 +34,7 @@ mcpServers:
 
 ## 门
 - 本仓库的 CI 是判决：不在这台机器上跑全套测试，只复现单个失败的那一个。
-- `FAILING` / `CONFLICT` 自己修；基线分支本身红了，用 `mcp__fleet__file_issue`（`breakage: true`）报一次，等那张单。
+- `FAILING` / `CONFLICT` 自己修；基线分支本身红了，用 `mcp__fleet__file_issue`（`breakage: true`，不 spawn）报一次——管家派修它的会话——再 `mcp__fleet__await` 等那张单。
 - `BLOCKED`（需要别人批）或真卡住：`mcp__fleet__ask` 说清楚为什么、带上建议，再 `mcp__fleet__report`（`blocked`）。
 
 ## 说话

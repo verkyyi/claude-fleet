@@ -49,6 +49,8 @@
 #      holds (via=cred), nothing of the handover leaks to a script or $TMPDIR; a new
 #      version that fails its --probe is refused and the old one keeps serving; a
 #      quiet client is reloaded on the poll; FLEET_MCP_RELOAD=0 never reloads
+#   P  spawn from a worker's seat is refused before anything runs (issue #2960,
+#      fleet_spawn_refused); any other seat runs dash-issue-session.sh as before
 #   N  the mod's fallback road (issue #2057): `--spec status spawn await` prints
 #      exactly the tools/list entries; `--call <tool> <json>` is one tools/call
 #      from a command line — the same argv to the script, the byte-identical text
@@ -1013,5 +1015,25 @@ assert b.startswith("⛔ blocked: which repo owns this?\n\n- 不答按：等你\
 PY
 rm -f "$WORK/bin/fleet_decision.py" "$WORK/bin/fleet_iso.py" "$WORK/bin/fleet-ui-lang.sh"
 ok "O ask: a field ⇒ 建议/不答按/截止 + fleet:ask marker; steward off + no field ⇒ today's body; steward on ⇒ 等你 row"
+
+# --- P: a worker files, never spawns (issue #2960) ---------------------------
+cat >> "$WORK/bin/fleet-lib.sh" <<'SH'
+FLEET_SPAWN_REFUSAL='a worker does not spawn sessions (issue #2960) — file it instead'
+fleet_spawn_refused() { [ -n "${FAKE_WORKER_SEAT:-}" ]; }
+SH
+: > "$LOG"
+call 130 spawn '{"issue":5}' | FAKE_WORKER_SEAT=1 serve "$WORK/p1"
+call 131 spawn '{"issue":5}' | serve "$WORK/p2"
+python3 - "$WORK/p1" "$WORK/p2" <<'PY' || fail "P: spawn from a worker seat" "$(cat "$WORK/p1" "$WORK/p2")"
+import json, sys
+r1 = [json.loads(l) for l in open(sys.argv[1]) if l.strip()][0]["result"]
+assert r1.get("isError") is True, r1
+t = r1["content"][0]["text"]
+assert "issue #2960" in t and "Nothing ran." in t, t
+r2 = [json.loads(l) for l in open(sys.argv[2]) if l.strip()][0]["result"]
+assert not r2.get("isError") and r2["structuredContent"]["command"] == "dash-issue-session.sh", r2
+PY
+[ "$(grep -c '^dash-issue-session.sh' "$LOG")" = 1 ] || fail "P: a refused spawn ran its script" "$(cat "$LOG")"
+ok "P spawn: refused from a worker seat (fleet_spawn_refused, nothing ran); any other seat runs it"
 
 printf 'fleet-mcp-selftest: %d passed\n' "$pass"

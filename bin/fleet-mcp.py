@@ -707,7 +707,16 @@ def tool_repos(_args):
             "stdout": listed.stdout, "stderr": listed.stderr}
 
 
+def spawn_gate():
+    """A worker files but never spawns (issue #2960): fleet_spawn_refused, the
+    filer's and fleet-await.sh's own rule — refused before anything runs."""
+    r = lib('fleet_spawn_refused && printf %s "$FLEET_SPAWN_REFUSAL"', check=False)
+    if r.returncode == 0:
+        raise Refused(r.stdout.strip() or "a worker does not spawn sessions (issue #2960)")
+
+
 def tool_spawn(args):
+    spawn_gate()
     repo = check_repo(args)
     reap = ["--reap", args["reap"]] if args.get("reap") else []   # issue #1902
     return script([str(BIN / "dash-issue-session.sh"), str(args["issue"])] + repo + reap, SPAWN_TIMEOUT_S,
@@ -1074,7 +1083,9 @@ TOOLS = {
         "description": "Start a fleet worker session on a GitHub issue (its own worktree + window; it claims, "
                        "implements and lands the issue itself). Runs bin/dash-issue-session.sh, so the session "
                        "caps and the claim dedup apply. Exit 0 spawned (or the window already exists), 2 at "
-                       "capacity, 3 already claimed, 1 infrastructure. Returns at once — await waits for it.",
+                       "capacity, 3 already claimed, 1 infrastructure. Returns at once — await waits for it. "
+                       "Refused from a worker's pane (issue #2960): the orchestrator, the steward and an EPIC "
+                       "driver spawn; a worker files.",
         "inputSchema": {"type": "object", "properties": {
             "issue": ISSUE, "repo": REPO,
             "reap": dict(REAP_POLICY, description="When the fleet may close it on its own (default merged: "
@@ -1093,7 +1104,8 @@ TOOLS = {
         "description": "Hand an issue to a worker (spawning one if none is live) and BLOCK until it lands, "
                        "blocks or is reaped; prints the verdict (MERGED / BLOCKED / FAILED / TIMEOUT / REAPED / "
                        "NO-WORKER), PR and summary. Runs bin/fleet-await.sh. TIMEOUT (exit 3) means still "
-                       "running — call again to keep waiting (nothing spawns twice).",
+                       "running — call again to keep waiting (nothing spawns twice). From a worker's pane it "
+                       "only waits on a live worker — no spawn (issue #2960).",
         "inputSchema": {"type": "object", "properties": {
             "issue": ISSUE, "repo": REPO,
             "timeout": {"type": "integer", "minimum": 1, "maximum": AWAIT_MAX_S,
@@ -1256,14 +1268,16 @@ TOOLS = {
                        "body ends 「按规则 N 派发」 + its fleet:rule marker; from the orchestrator a filing with none "
                        "gets 「未注明规则」 (issue #2786). "
                        "Prints the issue URL. Exit 0 ok · 2 usage · 3 unknown label · 4 spawn with no live parent · "
-                       "5 the breakage already has an open issue (URL printed) · 1 failure.",
+                       "5 the breakage already has an open issue (URL printed) · 6 spawn from a worker's pane, "
+                       "nothing filed (issue #2960: a worker files, the orchestrator / steward / an EPIC driver "
+                       "spawn; a breakage a worker files is spawned by the steward) · 1 failure.",
         "inputSchema": {"type": "object", "properties": {
             "title": {"type": "string"},
             "body": {"type": "string", "description": "The issue body, Markdown."},
             "labels": {"type": "string", "description": "Comma-separated labels (the fleet's fixed taxonomy)."},
             "priority": {"type": "string", "enum": ["p0", "p1", "p2", "p3"]},
             "parent": dict(ISSUE, description="File it as a sub-issue of this issue."),
-            "spawn": {"type": "boolean", "description": "Start a worker on it now."},
+            "spawn": {"type": "boolean", "description": "Start a worker on it now (not from a worker's pane — issue #2960; exit 6)."},
             "bind": {"type": "boolean", "description": "Scratch only: become its worker in place."},
             "breakage": {"type": "boolean", "description": "The base branch is red and this issue is its fix: "
                          "fingerprint it and file one issue per breakage (exit 5 + the URL when one is open). "
