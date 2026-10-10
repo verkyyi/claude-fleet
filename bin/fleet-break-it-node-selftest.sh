@@ -58,6 +58,8 @@
 #   credsep-stale-after-switch  bin/fleet-node-update.py + fleet-credsep.py `machine
 #                         refresh` + the supervisor's cred-proxy-shared `reload` (#2435):
 #                         a switch / rollback left the shared credential proxy on old code
+#   codex-helper-missing  bin/fleet-node-update.py helpers (#3017): codex without its
+#                         codex-code-mode-host beside it runs no shell command
 #   shift-enter-sends     conf/tmux-shell.conf, conf/tmux-shell-stage.conf, conf/tmux-attention.conf
 #                         (extended keys, #2760): ⇧↵ through the client's three tmux servers
 #   release-fetch-slow    tokenledger/internal/release fetch.go (Fetcher: Cache, Platforms,
@@ -761,6 +763,19 @@ drill_node_update_stale_fail() {
     || { WHY="a past failure still rolls back / pins the machine: $(printf '%s' "$out" | grep -E 'Error|FAIL' | head -3 | tr '\n' ' ')"; return 1; }
   SECS=$(since "$t0")
   WHAT="一条之后已有签名取包成功的 torn read：体检 key 行 PASS、新版提交不回退；仍是当下的 torn read 只 WARN；被回退的版本原因消失就重试、否则按 6h 起翻倍再试"
+}
+
+# codex-helper-missing (#3017): the release carried codex alone, and codex 0.154
+# runs every shell command through codex-code-mode-host found beside the path it
+# was started from (~/.local/bin) — no session started from the release ran `ls`.
+drill_codex_helper_missing() {
+  CAP=60
+  local t0 out
+  t0=$(now)
+  out=$(python3 -W ignore::ResourceWarning "$BIN/fleet-node-update-selftest.py" --drill-helpers 2>&1) \
+    || { WHY="codex's helper is not beside it: $(printf '%s' "$out" | grep -E 'Error|FAIL' | head -3 | tr '\n' ' ')"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="发布版钉的 codex-code-mode-host 装进工具缓存、链在 current/tools/bin 和账号 ~/.local/bin 的 codex 旁；手放的副本换成链接；旧更新器装的版本下一轮补上（有制品就地装，没有再取）"
 }
 
 # credsep-stale-after-switch (#2435): the updater moved `current` but credsep's

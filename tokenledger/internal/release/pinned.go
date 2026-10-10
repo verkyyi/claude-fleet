@@ -23,6 +23,9 @@ func Pinned(releaseJSON []byte, platforms []string) ([]string, error) {
 		Components map[string]struct {
 			Version  string `json:"version"`
 			Artifact string `json:"artifact"`
+			// files the tool needs beside it, name → artifact template
+			// (claude-fleet#3017: codex's codex-code-mode-host)
+			Helpers map[string]string `json:"helpers"`
 		} `json:"components"`
 	}
 	if err := json.Unmarshal(releaseJSON, &spec); err != nil {
@@ -35,14 +38,21 @@ func Pinned(releaseJSON []byte, platforms []string) ([]string, error) {
 			return nil, fmt.Errorf("platform %q: want <os>-<arch>", p)
 		}
 		for _, c := range spec.Components {
-			if c.Artifact == "" {
-				continue
+			r := strings.NewReplacer("{version}", c.Version, "{os}", osn, "{arch}", arch)
+			tmpls := make([]string, 0, 1+len(c.Helpers))
+			if c.Artifact != "" {
+				tmpls = append(tmpls, c.Artifact)
 			}
-			n := strings.NewReplacer("{version}", c.Version, "{os}", osn, "{arch}", arch).Replace(c.Artifact)
-			if !ValidArtifact(n) {
-				return nil, fmt.Errorf("%s: bad artifact name %q", ReleaseJSON, n)
+			for _, h := range c.Helpers {
+				tmpls = append(tmpls, h)
 			}
-			seen[n] = true
+			for _, t := range tmpls {
+				n := r.Replace(t)
+				if !ValidArtifact(n) {
+					return nil, fmt.Errorf("%s: bad artifact name %q", ReleaseJSON, n)
+				}
+				seen[n] = true
+			}
 		}
 	}
 	out := make([]string, 0, len(seen))

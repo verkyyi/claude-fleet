@@ -174,6 +174,7 @@ ACCOUNT_LINKS = {
     "codex": ".local/bin/codex",
     "tmux": ".local/share/claude-fleet-vendor/bin/tmux",
 }
+HELPER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 CREDSEP_CODE = ("fleet-cred-proxy.py", "fleet-credsep-launch.py")   # what machine refresh copies to LIB
 RELEASE_FILE = "release.json"
 STAGED = ".release/staged.json"
@@ -213,6 +214,14 @@ def check_release(spec):
             raise ValueError("components.%s.version: missing or not a version" % name)
         if not ART_RE.match(str(c.get("artifact", ""))):
             raise ValueError("components.%s.artifact: a name like %s-{version}-{os}-{arch}" % (name, name))
+        hp = c.get("helpers", {})
+        if not isinstance(hp, dict):
+            raise ValueError("components.%s.helpers: {name: artifact}" % name)
+        for h, a in hp.items():
+            if not HELPER_RE.match(str(h)) or h in TOOLS or h == "ccquota":
+                raise ValueError("components.%s.helpers: %r is not a helper's file name" % (name, h))
+            if not ART_RE.match(str(a)):
+                raise ValueError("components.%s.helpers.%s: a name like %s-{version}-{os}-{arch}" % (name, h, h))
     if out["tmux"].get("lock") is not None and not str(out["tmux"]["lock"]).startswith("conf/"):
         raise ValueError("components.tmux.lock: a conf/ path")
     if out["supervisor"].get("script") != "bin/fleet-node-supervisor.py":
@@ -233,6 +242,18 @@ def platform_id():
     return [osn, arch]
 
 
+def helpers(comps, tool):
+    """[(file name, artifact template)] of the files <tool> needs beside it (issue
+    #3017: codex runs every shell command through codex-code-mode-host, found
+    next to the path codex was started from, never next to its link's target)."""
+    return sorted((comps[tool].get("helpers") or {}).items())
+
+
+def account_helper(tool, name):
+    """Where a managed account finds <tool>'s helper <name>: beside its link."""
+    return os.path.join(os.path.dirname(ACCOUNT_LINKS[tool]), name)
+
+
 def artifact_name(tmpl, version="", plat=None):
     osn, arch = plat or platform_id()
     return tmpl.replace("{version}", version).replace("{os}", osn).replace("{arch}", arch)
@@ -249,6 +270,7 @@ def pinned_artifacts(spec, plats):
         out.append(artifact_name(c["ccquota"]["artifact"], "", plat))
         for t in TOOLS:
             out.append(artifact_name(c[t]["artifact"], c[t]["version"], plat))
+            out += [artifact_name(a, c[t]["version"], plat) for _, a in helpers(c, t)]
     return sorted(set(out))
 
 
@@ -311,6 +333,15 @@ def swap_link(path, target):
         pass
     os.symlink(target, tmp)
     os.rename(tmp, path)
+
+
+def install_bin(src, dst, h):
+    """<src> → <dst> (0755, one rename) unless <dst> already holds digest <h>."""
+    if os.path.exists(dst) and sha256_file(dst) == h:
+        return
+    shutil.copyfile(src, dst + ".tmp")
+    os.chmod(dst + ".tmp", 0o755)
+    os.rename(dst + ".tmp", dst)
 
 
 def sha256_file(path):
@@ -677,16 +708,9 @@ class Updater(object):
             self.log("hold note on %s#%s as %s: %s" % (repo, n, login, "posted" if rc == 0 else
                      "rc %d %s — released anyway" % (rc, ((err or out).splitlines() or [""])[-1][:120])))
 
-    # -- staging: fetch, check, install the pinned tools; `staged.json` = whole
-    def stage(self, sha):
-        d = self.p.rel(sha)
-        mark = os.path.join(d, STAGED)
-        if os.path.exists(mark):
-            return read_json(mark, {})
-        if os.path.lexists(d):
-            self.log("staged dir %s has no %s — a stage was cut short; fetching again" % (sha[:12], STAGED))
-            shutil.rmtree(d, ignore_errors=True)
-        shutil.rmtree(d + ".partial", ignore_errors=True)
+    def fetch(self, sha, d):
+        """`ccquota release fetch` <sha> into <d> (a dir that does not exist yet),
+        or StageError (.resumable: a cut fetch that left bytes to resume)."""
         cq = ccquota_bin(self.p)
         hub = hub_url(self.p)
         if not cq:
@@ -718,6 +742,18 @@ class Updater(object):
         if resumable:
             # every artifact now lives (hard-linked) in the release itself
             shutil.rmtree(self.p.fetch_cache, ignore_errors=True)
+
+    # -- staging: fetch, check, install the pinned tools; `staged.json` = whole
+    def stage(self, sha):
+        d = self.p.rel(sha)
+        mark = os.path.join(d, STAGED)
+        if os.path.exists(mark):
+            return read_json(mark, {})
+        if os.path.lexists(d):
+            self.log("staged dir %s has no %s — a stage was cut short; fetching again" % (sha[:12], STAGED))
+            shutil.rmtree(d, ignore_errors=True)
+        shutil.rmtree(d + ".partial", ignore_errors=True)
+        self.fetch(sha, d)
         try:
             try:
                 spec = check_release(read_json(os.path.join(d, RELEASE_FILE), None))
@@ -753,6 +789,10 @@ class Updater(object):
                     os.chmod(tbin + ".tmp", 0o755)
                     os.rename(tbin + ".tmp", tbin)
                 swap_link(os.path.join(bind, tool), tbin)
+                for hname, htmpl in helpers(comps, tool):
+                    hart = artifact_name(htmpl, comps[tool]["version"])
+                    install_bin(self.art(d, arts, hart), os.path.join(tdir, hname), arts[hart]["sha256"])
+                    swap_link(os.path.join(bind, hname), os.path.join(tdir, hname))
                 got[tool] = comps[tool]["version"]
             got["at"] = now()
             write_json(mark, got)
@@ -797,7 +837,7 @@ class Updater(object):
 
     # -- the parts outside `current`: the bootstrap cache + account links
     def sync_outside(self):
-        notes = []
+        notes = self.ensure_helpers()
         spec = read_json(os.path.join(self.p.current, RELEASE_FILE), None)
         try:
             spec = check_release(spec)
@@ -828,6 +868,58 @@ class Updater(object):
             except OSError as e:
                 notes.append("cache: %s" % e)
         return notes + self.link_accounts()
+
+    def ensure_helpers(self):
+        """A helper release.json pins that current/tools/bin lacks is put there
+        (issue #3017) — a release staged by an updater from before helpers
+        (it read only each tool's own artifact) is completed on the next tick:
+        from the release's own artifacts when its fetch brought the helper, else
+        fetched again (the cache seeded, so only what is missing travels), at
+        most once per FLEET_NODE_UPDATE_RETRY. -> notes."""
+        cur = link_sha(self.p.current)
+        try:
+            comps = check_release(read_json(os.path.join(self.p.current, RELEASE_FILE), None))["components"]
+        except ValueError:
+            return []
+        bind = os.path.join(self.p.current, "tools", "bin")
+        todo = [(t, h, artifact_name(a, comps[t]["version"])) for t in TOOLS for h, a in helpers(comps, t)
+                if not os.path.exists(os.path.join(bind, h))]
+        if not cur or not todo:
+            self.st.pop("helpers", None)
+            return []
+        base = self.p.rel(cur)
+        arts = {a.get("name"): a for a in (read_json(os.path.join(base, ".release", "manifest.json"), {}) or {})
+                .get("artifacts") or [] if isinstance(a, dict)}
+        tmp = None
+        if not all(n in arts and os.path.exists(os.path.join(base, ".release", "artifacts", n)) for _, _, n in todo):
+            t = self.st.get("helpers") or {}
+            if t.get("sha") == cur and now() - (t.get("at") or 0) < env_num("FLEET_NODE_UPDATE_RETRY", 3600):
+                return ["helpers: %s missing under %s (%s)" % (", ".join(h for _, h, _ in todo), cur[:12], t.get("said", ""))]
+            self.st["helpers"] = {"sha": cur, "at": now(), "said": "fetching"}
+            tmp = os.path.join(self.p.root, ".helpers-%s" % cur[:12])
+            shutil.rmtree(tmp, ignore_errors=True)
+        try:
+            if tmp:
+                self.fetch(cur, tmp)
+                man = read_json(os.path.join(tmp, ".release", "manifest.json"), {}) or {}
+                if man.get("sha") != cur:
+                    raise StageError("the fetched manifest is %s, not %s" % (man.get("sha"), cur))
+                base, arts = tmp, {a["name"]: a for a in man.get("artifacts") or []}
+            for tool, h, n in todo:
+                src = self.art(base, arts, n)
+                tdir = os.path.dirname(os.path.realpath(os.path.join(bind, tool)))
+                install_bin(src, os.path.join(tdir, h), arts[n]["sha256"])
+                swap_link(os.path.join(bind, h), os.path.join(tdir, h))
+                self.log("helper %s put beside %s in %s" % (h, tool, cur[:12]))
+            self.st.pop("helpers", None)
+            return []
+        except (StageError, OSError, KeyError) as e:
+            self.st["helpers"] = {"sha": cur, "at": now(), "said": str(e)[:200]}
+            self.log("helpers: %s" % e)
+            return ["helpers: %s" % e]
+        finally:
+            if tmp:
+                shutil.rmtree(tmp, ignore_errors=True)
 
     def link_accounts(self, only=None):
         notes = []
@@ -1227,6 +1319,13 @@ def doctor_rows(p):
             rows.append(("PASS", tool, "%s (release.json %s)" % (v, want)))
         else:
             rows.append(("FAIL", tool, "release.json pins %s, %s answers rc %d %s" % (want, tb, rc, v)))
+        # a helper missing is drift, not a broken release (issue #3017): a release
+        # staged before helpers existed lacks it until ensure_helpers' next tick
+        miss = [h for h, _ in helpers(spec["components"], tool)
+                if not os.access(os.path.join(p.current, "tools", "bin", h), os.X_OK)]
+        if miss:
+            rows.append(("WARN", "helper", "%s without its helper %s under current/tools/bin (put there on the next tick)"
+                         % (tool, ", ".join(miss))))
     st = read_json(p.sup.state_file, {}) or {}
     code, word = fns.health(p.sup, st)
     if code == 2:
@@ -1258,6 +1357,10 @@ def doctor_rows(p):
             continue
         drift = [t for t, rel in sorted(ACCOUNT_LINKS.items())
                  if os.path.realpath(os.path.join(ident[2], rel)) != os.path.realpath(os.path.join(p.current, "tools", "bin", t))]
+        # each helper beside its tool's link (issue #3017), when the tool there is the release's
+        drift += [h for t in sorted(ACCOUNT_LINKS) if t not in drift for h, _ in helpers(spec["components"], t)
+                  if os.path.realpath(os.path.join(ident[2], account_helper(t, h)))
+                  != os.path.realpath(os.path.join(p.current, "tools", "bin", h))]
         rows.append(("PASS", "account", "%s: claude · codex · tmux from the release" % login) if not drift
                     else ("WARN", "account", "%s: %s not the release's (re-linked on the next tick)" % (login, ", ".join(drift))))
         ir = install_row(p, cur, login, ident)
@@ -1483,19 +1586,38 @@ def link_account(login):
     root = env("FLEET_NODE_ROOT", "/Library/Application Support/claude-fleet")
     home = os.environ.get("HOME") or os.path.expanduser("~")
     bad = []
+    try:
+        comps = check_release(read_json(os.path.join(root, "current", RELEASE_FILE), None))["components"]
+    except ValueError:
+        comps = None
     for tool, rel in sorted(ACCOUNT_LINKS.items()):
         dst = os.path.join(home, rel)
         want = os.path.join(root, "current", "tools", "bin", tool)
         if os.path.lexists(dst) and not os.path.islink(dst):
             bad.append("%s is a file (its own install), left" % rel)
             continue
-        if os.path.islink(dst) and os.readlink(dst) == want:
-            continue
-        try:
-            os.makedirs(os.path.dirname(dst), exist_ok=True)
-            swap_link(dst, want)
-        except OSError as e:
-            bad.append("%s: %s" % (rel, e))
+        if not (os.path.islink(dst) and os.readlink(dst) == want):
+            try:
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                swap_link(dst, want)
+            except OSError as e:
+                bad.append("%s: %s" % (rel, e))
+                continue
+        # the tool's helpers beside its link (issue #3017) — the tool looks next
+        # to the path it was started from. The tool is the release's here, so
+        # whatever sits at a helper's place (a copy put there by hand) is
+        # replaced: a helper of another version beside it is broken anyway
+        for h, _ in helpers(comps, tool) if comps else []:
+            hw = os.path.join(root, "current", "tools", "bin", h)
+            hd = os.path.join(home, account_helper(tool, h))
+            if not os.path.exists(hw) or (os.path.islink(hd) and os.readlink(hd) == hw):
+                continue
+            try:
+                if os.path.isdir(hd) and not os.path.islink(hd):
+                    raise OSError("a directory, left")
+                swap_link(hd, hw)
+            except OSError as e:
+                bad.append("%s: %s" % (account_helper(tool, h), e))
     bad += follow_shell_mirror(home)
     if bad:
         print("; ".join(bad), file=sys.stderr)
