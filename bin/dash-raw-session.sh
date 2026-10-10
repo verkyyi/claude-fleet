@@ -730,6 +730,10 @@ fi
 fid=$(fleet_window_fid "$SESS" "$win" "$SOCK" 2>/dev/null) || fid=''
 fleet_window_born "$SESS" "$win" "$SOCK" >/dev/null 2>&1 || :   # its place on the list (#1750)
 fleet_win_role_stamp "$win" worker "$SOCK"   # what it IS, whatever it is renamed to (#1844)
+# The role definition it runs, before its agent starts (fleet-claude.sh stamps it
+# again once rendered): an epic-driver is a worker that MAY spawn (issue #2960 —
+# fleet_spawn_refused reads it), whichever agent runs it.
+[ -n "$ROLE" ] && TM set-window-option -t "$win" @fleet_role_def "$ROLE" 2>/dev/null
 # Every repo scratch carries its repo (issue #789), warm or cold.
 [ -n "$REPO_ARG" ] && TM set-window-option -t "$win" @repo "$REPO_ARG" 2>/dev/null
 [ "$PIN" = 1 ] && TM set-window-option -t "$win" @pin 1 2>/dev/null

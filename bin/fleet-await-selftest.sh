@@ -14,6 +14,8 @@
 #   ADOPT     a live worker with no parent gets the waiter's @origin.
 #   WAKE      a report mid-interval is answered within 2s, not at the next read
 #             (issue #1272: the ledger file is watched, the full read is not hurried).
+#   SEAT      from a worker's pane (@fleet_role worker) no spawn: NO-WORKER (5)
+#             naming issue #2960; an EPIC driver's pane spawns (fleet_spawn_refused).
 #
 # Runs on a DEDICATED tmux server on its own -L label (never the live server,
 # issue #159), from a sandbox bin/ whose dash-issue-session.sh is a stub; reports
@@ -178,5 +180,24 @@ echo 2 > "$STUB_RC"
 bash "$AW" 106 -L "$LBL" --parent scratch-7 --interval 1 --timeout 5 > "$WORK/out" 2>&1
 eq "a cap refusal exits 5" 5 "$?"
 has "…and says capacity" 'at capacity' "$(cat "$WORK/out")"
+
+
+# WORKER SEAT (issue #2960): from a worker's pane it waits but never spawns —
+# NO-WORKER (5), the rule said, the choke point untouched; an EPIC driver spawns.
+rm -f "$STUB_RC"
+n=$(wc -l < "$STUB_LOG" | tr -d ' ')
+SOCKP=$(TM display-message -p '#{socket_path}')
+PP=$(TM display-message -p -t "$P" '#{pane_id}')
+TM set-window-option -t "$P" @fleet_role worker
+TMUX="$SOCKP,1,0" TMUX_PANE="$PP" bash "$AW" 191 -L "$LBL" --parent scratch-7 --interval 1 --timeout 5 > "$WORK/out" 2>&1
+rc=$?; eq "a worker's await of an issue with no worker exits 5" 5 "$rc"
+has "…and names the rule" 'issue #2960' "$(cat "$WORK/out")"
+eq "…spawning nothing" "$n" "$(wc -l < "$STUB_LOG" | tr -d ' ')"
+TM set-window-option -t "$P" @fleet_role_def epic-driver
+await_drv() { TMUX="$SOCKP,1,0" TMUX_PANE="$PP" bash "$AW" "$@" -L "$LBL" --parent scratch-7 --interval 1 > "$WORK/out" 2> "$WORK/err" & AWAIT_PID=$!; }
+await_drv 192 --timeout 30
+W=$(until_win 192); [ -n "$W" ] || fail "an EPIC driver's await must spawn" "$(cat "$WORK/err")"
+TM kill-window -t "$W"; collect
+eq "…once" $((n + 1)) "$(wc -l < "$STUB_LOG" | tr -d ' ')"
 
 printf 'fleet-await selftest: OK (%d checks)\n' "$CHECKS"

@@ -224,7 +224,7 @@ lines += [
     "- worktree %s · branch %s → base %s · PR: %s"
         % (e("REFOCUS_CWD"), e("REFOCUS_BRANCH"), e("REFOCUS_BASE"), e("REFOCUS_PR")),
     "- One issue, one worktree, one PR: work ONLY on #%s here. Adjacent work → "
-    "fleet-issue-file.sh --parent %s [--spawn], never in this worktree." % (n, n),
+    "fleet-issue-file.sh --parent %s (no --spawn: a worker files, issue #2960), never in this worktree." % (n, n),
     "- Base checkout %s is read-only; talk on the issue via fleet-comment.sh." % e("REFOCUS_MAIN"),
     "- Done = verify → push → PR with `Closes #%s` → fleet-pr-verdict.sh <PR> "
     "(--wait in background) → on READY `gh pr merge --%s --delete-branch` → "

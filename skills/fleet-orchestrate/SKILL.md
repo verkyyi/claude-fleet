@@ -84,6 +84,13 @@ over a worker's issue. A worker's outcome comes back to you as a `[child-report]
 it, tell the person what landed in one line if they are here, and do not reply to the
 report. `mcp__fleet__children` is the one place to read them all.
 
+A worker never spawns (issue #2960) — the second level is yours. A `BLOCKED` report that
+names an issue the worker filed under its own (`parent: <its issue>`) is a question for
+you: worth it now → spawn that issue yourself (`mcp__fleet__spawn`, it reports here) and,
+once it lands, tell the blocked worker to go on (`mcp__fleet__send` `issue:<N>`); not now
+→ the queue, and tell the worker so. A red base a worker files is the steward's: it spawns
+the fixer on its own.
+
 ### 派给谁 — Claude or Codex (issue #2562; rules 6–8)
 
 Every issue runs in ONE agent, start to finish — never mix them on one issue. Default
