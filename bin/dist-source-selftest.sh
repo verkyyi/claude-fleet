@@ -29,10 +29,7 @@ set -uo pipefail
 
 # <file> <reaches> <member who takes them away>
 DIST_PENDING='
-fleet-bootstrap-cache.sh 1 C5#2775
-fleet-login-bootstrap.sh 1 C5#2775
-fleet-login-new.sh       1 C5#2775
-fleet-node-join.sh       2 C5#2775
+fleet-node-join.sh       2 #2862
 '
 DIST_RE='api\.github\.com|raw\.githubusercontent\.com|codeload\.github\.com|objects\.githubusercontent\.com|https://github\.com\}|github\.com[:/][^ "'"'"')]*\.git([^A-Za-z0-9_]|$)|go install github\.com'
 

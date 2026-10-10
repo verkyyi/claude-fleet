@@ -60,6 +60,8 @@
 #                                                   client stage, login bootstrap, the updater's follow → the new version)
 #   dist-bad-signature                              bin/dist-no-github-selftest.sh bad-signature (the hub's release
 #                                                   refused by ccquota → fetch-failed, still the old version, no GitHub)
+#   bootstrap-reaches-github                        bin/dist-no-github-selftest.sh --strict bootstrap bootstrap-hub
+#                                                   (a new login on a managed machine / with only a hub: no GitHub, #2775)
 #   health-silent-pass                              bin/fleet_steward_health.py (the steward's beat), fleet-doctor.sh --json
 #   hub-stream-silent                               tokenledger/web/dist/lib/stream.js (watchdog, backoff, poll fallback;
 #                                                   node --test stream.test.mjs, when node is here) + internal/api
@@ -1204,6 +1206,18 @@ drill_dist_bad_signature() {
   out=$(bash "$BIN/dist-no-github-selftest.sh" bad-signature 2>&1) || { WHY="$(printf '%s\n' "$out" | grep -m 2 -E '^(RED|FAIL)' | cut -c1-220 | tr '\n' '|')"; return 1; }
   SECS=$(since "$t0")
   WHAT="入口发来的包验不过章：install-sync 记 fetch-failed、不切、不留半成品、不找 GitHub"
+}
+
+# ---- bootstrap-reaches-github (#2775, EPIC #2770 C5): a new login's first install
+# on a managed machine (FLEET_NODE_ROOT/current = the stable) and on a machine with
+# only a hub that keeps releases — GitHub a black hole in both. GREEN = the login
+# reads the new version and nothing asked GitHub, the starter repo included.
+drill_bootstrap_reaches_github() {
+  CAP=120; local t0 out
+  t0=$(now)
+  out=$(bash "$BIN/dist-no-github-selftest.sh" --strict bootstrap bootstrap-hub 2>&1) || { WHY="$(printf '%s\n' "$out" | grep -m 2 -E '^(RED|FAIL)' | cut -c1-220 | tr '\n' '|')"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="新登录第一次装：托管机器链接运行时、只有入口时取验过章的 stable，种子仓从装好的那份做——GitHub 黑洞下两条路都没碰 GitHub"
 }
 
 # ---- service-log-cross-login (#2797, EPIC #2792 C5): a person spells another

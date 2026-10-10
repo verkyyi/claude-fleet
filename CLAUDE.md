@@ -773,7 +773,12 @@ Do not install from memory: read the doc and work from it.
   its own install-sync answers `off · managed · 跟随 <root>/current`, the
   doctor's `install` row PASSes only when linked to `current`, `account release`
   makes it an own copy again (BREAK-IT `managed-login-own-copy`,
-  `managed-login-install-stale`); `fleet doctor --installs`
+  `managed-login-install-stale`). A NEW login's first install takes the same
+  road — `bin/fleet-login-install.sh` (bootstrap's install step and
+  `fleet-login-new.sh` step 7): the runtime (link-tree; step 8 is `account adopt`,
+  no per-login plist), else the hub's signed stable, else a git clone (a
+  developer's machine); the cache's claude-fleet mirror is retired, the timing in
+  `global/bootstrap.timing` (issue #2775, BREAK-IT `bootstrap-reaches-github`); `fleet doctor --installs`
   (`bin/fleet-installs.sh`, issue #2692) lists the runtime, every login install
   and every client shell against stable. `fleet-stable.sh move` refuses an updater tree without a valid
   release.json (`release:`), or one pinning an artifact the hub's

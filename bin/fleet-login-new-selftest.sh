@@ -73,11 +73,16 @@
 #                 `installed N/N`; a rerun leaves every unit alone; one missing
 #                 unit → only it; no clone → exit 1 naming it; no such login / no
 #                 home → exit 4, nothing run; another step's option → exit 2
-#   L. cache      (#2297) FLEET_BOOTSTRAP_CACHE on, GitHub unreachable: --apply
-#                 refreshes the cache as root (stable + the admin's claude), clones
-#                 the login's install from it (safe.directory, --no-local), points
-#                 origin back at GitHub — exit 0, HEAD at stable; a dry run shows
-#                 the refresh + the cached clone and says what happens with none
+#   L. cache      (#2297) FLEET_BOOTSTRAP_CACHE on: --apply refreshes the cache
+#                 as root with the admin's claude only — no `--from`, no
+#                 claude-fleet mirror (retired, #2775) — exit 0, the install at
+#                 stable by the one install road; a dry run shows the refresh
+#   P. managed    (#2775) FLEET_NODE_ROOT/current → a release of stable: step 7
+#                 runs fleet-login-install.sh as the login and its install is a
+#                 tree LINKED to the runtime (no clone); step 8 is `sudo python3
+#                 <root>/current/bin/fleet-node-supervisor.py account adopt
+#                 <login>` — no per-login LaunchDaemon rendered or bootstrapped;
+#                 --no-daemons: linked, not adopted, one WARN naming the command
 #   N. full name  (#2210) a full name another login carries → `<name> (<login>)`
 #                 passed to sysadminctl, a note on stderr; that one taken too →
 #                 exit 3, nothing run; sysadminctl "succeeding" without making
@@ -185,7 +190,7 @@ export FLEET_CREDSEP_ROOT_BASE="$WORK/credsep/db" FLEET_CREDSEP_RUN_BASE="$SRUN"
        FLEET_CREDSEP_PW="$WORK/credsep/pw" FLEET_LOGIN_CREDSEP_WAIT=0
 unset FLEET_CRED_SEPARATE FLEET_CRED_PROXY
 mkdir -p "$WORK/credsep/daemons"
-for l in victor victor2 pam dora eve fay gus hal ian jo kai kim lee lou max ned nohome oda oli pat pia quin uma vee wen lena 24haowan; do
+for l in victor victor2 pam dora eve fay gus hal ian jo kai kim lee lou max ned nohome oda oli pat pia quin pru pry uma vee wen lena 24haowan; do
   printf '%s:%s:%s:%s\n' "$l" "$(/usr/bin/id -u)" "$(/usr/bin/id -g)" "$FLEET_LOGIN_HOMES/$l"
 done > "$FLEET_CREDSEP_PW"
 # the admin's HOME (the password file lands there) + the daemons dir (#1192)
@@ -228,6 +233,11 @@ GB="$WORK/gh"; mkdir -p "$GB/verkyyi"; git clone -q --bare "$FX" "$GB/verkyyi/cl
 export FLEET_BOOTSTRAP_GIT_BASE="$GB"
 # no machine cache unless leg L builds one (issue #2297) — the operator's may be real
 export FLEET_BOOTSTRAP_CACHE=off
+# no machine runtime and no hub unless leg O builds one (issue #2775) — the
+# operator's Mac may be managed, with a real <root>/current
+export FLEET_NODE_ROOT="$WORK/no-runtime"
+unset CCQUOTA_HUB_URL FLEET_LOGIN_HUB FLEET_DIST_SOURCE
+export FLEET_HUB_URL=''   # set-but-empty: the script asks no conf for one either
 # no plutil (Linux CI): the daemons step cannot render — run those legs with --no-daemons
 DAEMONS=''; command -v plutil >/dev/null 2>&1 || DAEMONS=--no-daemons
 
@@ -291,7 +301,7 @@ contains "A manual gh" "$OUT" "2. as victor: gh auth login"
 contains "A manual enroll" "$OUT" "3. on the hub: ccquota enroll --name mini-victor"
 contains "A zshrc" "$OUT" "sudo chown victor:staff $FLEET_LOGIN_HOMES/victor/.zshrc"
 contains "A installs it (8b, #2702)" "$OUT" "bring victor's fleet up now, as victor (fleet-login-bootstrap.sh"
-contains "A clone as the login" "$OUT" "sudo -u victor -H git -c advice.detachedHead=false clone -q -b stable $GB/verkyyi/claude-fleet.git $FLEET_LOGIN_HOMES/victor/.claude/fleet"
+contains "A install as the login (one road, #2775)" "$OUT" "sudo -u victor -H env HOME=$FLEET_LOGIN_HOMES/victor FLEET_CONF_DIR=$FLEET_LOGIN_HOMES/victor/.config/claude-fleet FLEET_NODE_ROOT=$FLEET_NODE_ROOT FLEET_BOOTSTRAP_GIT_BASE=$GB bash $BIN/fleet-login-install.sh $FLEET_LOGIN_HOMES/victor/.claude/fleet"
 contains "A daemons step" "$OUT" "[8] install victor's $NTMPL background services as system LaunchDaemons (com.claude-fleet.victor.*, UserName victor — no GUI sign-in needed)"
 contains "A daemon install" "$OUT" "sudo install -m 644 <com.claude-fleet.victor.spinner.plist, rendered from launchd/com.claude-fleet.spinner.plist.tmpl> $FLEET_INSTALL_DAEMON_DIR/com.claude-fleet.victor.spinner.plist"
 contains "A daemon bootstrap" "$OUT" "sudo launchctl bootstrap system $FLEET_INSTALL_DAEMON_DIR/com.claude-fleet.victor.spinner.plist"
@@ -567,7 +577,7 @@ eq "H apply from the closed cwd: exit 0" 0 "$RC"
 not_contains "H no getcwd death" "$OUT" "Unable to read current working directory"
 not_contains "H no failed step" "$OUT" "FAILED at step"
 HH="$FLEET_LOGIN_HOMES/hal"
-contains "H the clone ran as the login" "$CALLS" "sudo git"
+contains "H the install ran as the login (sudo -u … env … fleet-login-install.sh)" "$CALLS" "sudo env"
 eq "H clone at stable" "$(git -C "$FX" rev-parse stable)" "$(git -C "$HH/.claude/fleet" rev-parse HEAD 2>/dev/null)"
 eq "H relative --pubkey found" "$(cat "$KEY")" "$(cat "$HH/.ssh/authorized_keys")"
 eq "H relative --pool-src found" "alpha alpha.conf beta beta.conf" "$(ls -A "$HH/.config/claude-fleet/accounts" | tr '\n' ' ' | sed 's/ $//')"
@@ -810,26 +820,56 @@ for args in "kai --daemons-only --no-daemons" "kai --daemons-only --share-pool -
   eq "K usage nothing run ($args)" 0 "$(mutations)"
 done
 not_contains "K bash32" "$OUT" "unbound variable"
-# --- L. the machine's cache (#2297): no github.com for the clone -------------
+# --- L. the machine's Claude Code cache (#2297); no claude-fleet mirror (#2775) --
 CC="$WORK/cache"; mkdir -p "$WORK/l-bin"
 printf '#!/bin/sh\necho "9.9.9 (Claude Code)"\n' > "$WORK/l-bin/claude"; chmod +x "$WORK/l-bin/claude"
-export FLEET_BOOTSTRAP_CACHE="$CC" FLEET_BOOTSTRAP_CACHE_SRC="$FX" FLEET_BOOTSTRAP_GIT_BASE="$WORK/abroad-unreachable"
+export FLEET_BOOTSTRAP_CACHE="$CC"
 PATH="$WORK/l-bin:$PATH" run lena --full-name 'Lena L' --pubkey "$KEY" --no-daemons
 eq "L dry run exit" 0 "$RC"
-contains "L dry: refresh" "$OUT" "sudo env FLEET_BOOTSTRAP_CACHE=$CC bash $BIN/fleet-bootstrap-cache.sh refresh --from $FX --claude $WORK/l-bin/claude"
-contains "L dry: cached clone" "$OUT" "sudo -u lena -H git -c safe.directory=$CC/claude-fleet.git -c advice.detachedHead=false clone -q --no-local -b stable $CC/claude-fleet.git $FLEET_LOGIN_HOMES/lena/.claude/fleet"
-contains "L dry: the fallback named" "$OUT" "nothing cached at $CC at --apply time"
+contains "L dry: refresh, Claude Code only" "$OUT" "sudo env FLEET_BOOTSTRAP_CACHE=$CC bash $BIN/fleet-bootstrap-cache.sh refresh --claude $WORK/l-bin/claude"
+not_contains "L dry: no cached clone" "$OUT" "claude-fleet.git clone"
 [ -e "$CC" ] && fail "L dry run made the cache"
 PATH="$WORK/l-bin:$PATH" run lena --full-name 'Lena L' --pubkey "$KEY" --no-daemons --apply
 eq "L apply exit" 0 "$RC"
 unlock_homes
 LH="$FLEET_LOGIN_HOMES/lena"
-eq "L clone at stable" "$(git -C "$FX" rev-parse stable)" "$(git -C "$LH/.claude/fleet" rev-parse HEAD 2>/dev/null)"
-eq "L origin = GitHub" "$WORK/abroad-unreachable/verkyyi/claude-fleet.git" "$(git -C "$LH/.claude/fleet" remote get-url origin)"
+eq "L install at stable" "$(git -C "$FX" rev-parse stable)" "$(git -C "$LH/.claude/fleet" rev-parse HEAD 2>/dev/null)"
 eq "L claude cached" 9.9.9 "$(cat "$CC/claude/current")"
-not_contains "L no fallback" "$OUT" "the cached clone failed"
+[ -e "$CC/claude-fleet.git" ] && fail "L the retired claude-fleet mirror was written"
 not_contains "L bash32" "$OUT" "unbound variable"
-export FLEET_BOOTSTRAP_CACHE=off FLEET_BOOTSTRAP_GIT_BASE="$GB"; unset FLEET_BOOTSTRAP_CACHE_SRC
+export FLEET_BOOTSTRAP_CACHE=off FLEET_BOOTSTRAP_GIT_BASE="$GB"
+# --- P. a managed machine: the runtime, then account adopt (#2775) -------------
+PNR="$WORK/node-root"; PSHA=$(git -C "$FX" rev-parse stable)
+mkdir -p "$PNR/$PSHA"; git -C "$FX" archive stable | tar -x -C "$PNR/$PSHA"
+cat > "$PNR/$PSHA/bin/fleet-node-supervisor.py" <<PYSUP
+import sys
+open("$WORK/adopt.log", "a").write(" ".join(sys.argv[1:]) + "\\n")
+print("adopted %s: 0 service(s) booted out" % sys.argv[-1])
+PYSUP
+ln -s "$PNR/$PSHA" "$PNR/current"
+: > "$WORK/adopt.log"; : > "$LOG"
+OUT=$(FLEET_NODE_ROOT="$PNR" "$BASH_BIN" "$S" pru --full-name Pru --pubkey "$KEY" --apply 2>&1); RC=$?; CALLS=$(cat "$LOG")
+unlock_homes
+PH="$FLEET_LOGIN_HOMES/pru"
+[ "$RC" = 0 ] || printf "%s\n" "$OUT" | tail -n 8 >&2; eq "P exit" 0 "$RC"
+contains "P step 7 names the runtime" "$OUT" "this machine's runtime $PNR/$(printf '%.7s' "$PSHA")"
+contains "P install line" "$OUT" "install: runtime — linked to this machine's runtime $PNR/$PSHA"
+[ -L "$PH/.claude/fleet" ] || fail "P ~/.claude/fleet is not linked (got $(ls -ld "$PH/.claude/fleet" 2>&1))"
+contains "P linked to the release" "$(cat "$PH/.claude/fleet/.fleet-linked" 2>/dev/null)" "\"sha\": \"$PSHA\""
+[ -d "$PH/.claude/fleet/.git" ] && fail "P the linked install is a checkout"
+contains "P step 8 is account adopt" "$OUT" "sudo python3 $PNR/current/bin/fleet-node-supervisor.py account adopt pru"
+eq "P adopted once" "account adopt pru" "$(cat "$WORK/adopt.log")"
+not_contains "P no per-login LaunchDaemon" "$CALLS" "launchctl bootstrap system"
+[ -n "$(ls "$FLEET_INSTALL_DAEMON_DIR" 2>/dev/null | grep 'com.claude-fleet.pru\.')" ] && fail "P a per-login plist was written"
+not_contains "P bash32" "$OUT" "unbound variable"
+# --no-daemons: linked, not adopted, a WARN naming the command
+: > "$WORK/adopt.log"
+OUT=$(FLEET_NODE_ROOT="$PNR" "$BASH_BIN" "$S" pry --full-name Pry --pubkey "$KEY" --no-daemons --apply 2>&1); RC=$?
+unlock_homes
+eq "P no-daemons exit" 0 "$RC"
+eq "P no-daemons: not adopted" "" "$(cat "$WORK/adopt.log")"
+contains "P no-daemons WARN" "$OUT" "linked to the runtime but not adopted"
+
 # --- N. a full name already taken (issue #2210) --------------------------------
 : > "$LOG"; OUT=$(FAKE_REALNAMES='verkyyi=verkyyi;root=System Administrator' "$BASH_BIN" "$S" pia --full-name verkyyi --pubkey "$KEY" $DAEMONS 2>&1); RC=$?; CALLS=$(cat "$LOG")
 eq "N dry exit" 0 "$RC"
@@ -867,6 +907,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 W = sys.argv[1]
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
+    def do_GET(self):
+        # a hub that keeps no releases (no CCQUOTA_FLEET_RELEASE_KEY): every
+        # release route 404s, so the login's install takes the git road (#2775)
+        open(W + "/hub.log", "a").write("GET %s\n" % self.path)
+        self.send_response(404); self.send_header("content-length", "0"); self.end_headers()
     def do_POST(self):
         b = json.loads(self.rfile.read(int(self.headers.get("content-length") or 0)) or b"{}")
         open(W + "/hub.log", "a").write("%s %s %s\n" % (self.path, b.get("code"), b.get("os_user")))
@@ -887,6 +932,7 @@ unlock_homes
 OH="$FLEET_LOGIN_HOMES/oli"
 eq "O exit" 0 "$RC"
 contains "O the code redeemed for the login" "$(cat "$WORK/hub.log" 2>/dev/null)" "/v1/node/join $JC oli"
+contains "O the install asked the hub that opened it for its stable (#2775)" "$(cat "$WORK/hub.log" 2>/dev/null)" "GET /v1/fleet/release/stable"
 not_contains "O the code never on a shim's argv" "$CALLS" "$JC"
 not_contains "O the code never in the output" "$OUT" "$JC"
 not_contains "O the node token never in the output" "$OUT" "ntok-secret"
