@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -301,8 +302,9 @@ func TestFleetAssignGoesToAdminNodeOnly(t *testing.T) {
 
 // The success criterion's path: a person's first GitHub sign-in queues their
 // login on the auto-assigned machine and the admin node gets it at once. A link
-// that drops mid-op leaves it unknown (never re-sent), and the node's late
-// answer on its next connection settles it.
+// that drops mid-op leaves it unknown; when the node is back the hub asks it
+// again under the SAME op_id (claude-fleet#2918 — the node answers from its
+// book, never running it twice), and the node's answer settles it.
 func TestFleetFirstSignInProvisionsAutoAssigned(t *testing.T) {
 	h := newFleetHarness(t)
 	const pZhang = "gh:2001" // their login is their GitHub username, user2001 (claude-fleet#2069)
@@ -325,13 +327,18 @@ func TestFleetFirstSignInProvisionsAutoAssigned(t *testing.T) {
 		t.Fatalf("unknown row lost its op_id: %+v", a)
 	}
 
-	// Back: nothing is re-sent on its own...
+	// Back: the hub asks again, once, under the same op_id...
 	c := dialAdmin(t, h, admin.token, true)
 	beat(t, c.c, control.Proto, control.Heartbeat{Hostname: "m4", OSUser: "verkyyi"})
-	if got, ok := readMsg(c, 300*time.Millisecond); ok {
-		t.Fatalf("an unknown op was replayed: %+v", got)
+	m2, op2 := expectAccountOp(t, c)
+	if m2.OpID != m.OpID || op2.Op != control.AccountCreate || op2.Login != op.Login {
+		t.Fatalf("asked again with %s %+v; want op %s, the same create", m2.OpID, op2, m.OpID)
 	}
-	// ...and the node's late answer settles it.
+	beat(t, c.c, control.Proto, control.Heartbeat{Hostname: "m4", OSUser: "verkyyi"})
+	if got, ok := readMsg(c, 300*time.Millisecond); ok && got.Type == control.TypeAccountOp {
+		t.Fatalf("asked again on every beat: %+v", got)
+	}
+	// ...and the node's answer settles it.
 	sendResult(t, c.c, m.OpID, control.AccountResult{Op: control.AccountCreate, Login: op.Login, OK: true})
 	waitState(t, h, pZhang, "m4", store.AccountActive)
 
@@ -339,6 +346,32 @@ func TestFleetFirstSignInProvisionsAutoAssigned(t *testing.T) {
 	enter()
 	if got, ok := readMsg(c, 300*time.Millisecond); ok && got.Type == control.TypeAccountOp {
 		t.Fatalf("a second sign-in re-provisioned: %+v", got)
+	}
+}
+
+// An op unknown past accountUnknownGiveUp is failed, saying why — never
+// unknown for good, the newcomer's 「正在为你开机器」 climbing with no end
+// (claude-fleet#2918).
+func TestFleetUnknownOpFailsAfterGiveUp(t *testing.T) {
+	h := newFleetHarness(t)
+	const pZhang = "gh:2001"
+	enablePeople(t, h, pZhang)
+	h.srv.FleetAdmins = []string{"verkyyi"}
+	setHubSetting(t, h.srv, AutoAssignKey, "m4")
+	admin := connectNode(t, h, "m4-op", "m4", "verkyyi", true)
+	h.srv.onPrincipalSignIn(pZhang, "zhangsan")
+	expectAccountOp(t, admin.tnode)
+	a := waitState(t, h, pZhang, "m4", store.AccountCreating)
+	if err := h.srv.Store.LoseAccountOps(a.EndpointID, time.Now().Add(-accountUnknownGiveUp-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	h.srv.dispatchAccounts()
+	a = waitState(t, h, pZhang, "m4", store.AccountFailed)
+	if !strings.Contains(a.Detail, "no answer from m4 in 30 min") || !strings.Contains(a.Detail, "control channel closed") {
+		t.Fatalf("detail = %q; want why it failed", a.Detail)
+	}
+	if got, ok := readMsg(admin.tnode, 300*time.Millisecond); ok && got.Type == control.TypeAccountOp {
+		t.Fatalf("an op given up on was asked again: %+v", got)
 	}
 }
 

@@ -8,9 +8,11 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -36,7 +38,12 @@ import (
 //
 // The result is kept until the hub acks it and re-sent on every new
 // connection, so a link that drops while sysadminctl runs loses nothing: the
-// hub marked the op unknown, and this answer settles it.
+// hub marked the op unknown, and this answer settles it. The book — every
+// op_id seen, the op running, the results not acked — is also on disk
+// (<StateDir>/account-ops.json, claude-fleet#2918), so a RESTART loses nothing
+// either: the results go out again, and an op the restart cut off is answered
+// with what the machine shows now. The node supervisor reads the same file and
+// holds a tenant reload while an op is running.
 
 // accountOpTimeout bounds one onboarding/offboarding script run. Opening a
 // login clones claude-fleet and installs its daemons; ten minutes is generous.
@@ -106,9 +113,37 @@ func accountEnv(hub string, op control.AccountOp) []string {
 	return append(os.Environ(), "FLEET_LOGIN_JOIN_CODE="+op.JoinCode, "FLEET_LOGIN_HUB="+hub)
 }
 
+// accountOpsFile is the book's name under the agent's StateDir. Its
+// "inflight" key is what bin/fleet-node-supervisor.py reads (#2918): keep it.
+const accountOpsFile = "account-ops.json"
+
+// accountInflight is one op running now: what it is, never its join code.
+type accountInflight struct {
+	Op      string `json:"op"`
+	Login   string `json:"login"`
+	Started string `json:"started"`
+	PID     int    `json:"pid"`
+}
+
+// accountBook is the file's shape.
+type accountBook struct {
+	Seen     []string                   `json:"seen,omitempty"`
+	Inflight map[string]accountInflight `json:"inflight,omitempty"`
+	Outbox   map[string]control.Message `json:"outbox,omitempty"`
+}
+
+// accountLoginExists is how a cut-off op reads the machine; a test seam.
+var accountLoginExists = func(login string) bool {
+	_, err := user.Lookup(login)
+	return err == nil
+}
+
 // accountOps is the admin agent's state across connections.
 type accountOps struct {
 	mu sync.Mutex
+	// path is the book on disk; "" keeps it in memory only.
+	path     string
+	inflight map[string]accountInflight
 	// seen is every op_id ever accepted, so a duplicate send never runs the
 	// script twice (bounded: oldest forgotten past seenMax).
 	seen  map[string]bool
@@ -148,17 +183,27 @@ func (o *accountOps) detach() {
 
 func (o *accountOps) acked(opID string) {
 	o.mu.Lock()
-	delete(o.outbox, opID)
+	if _, ok := o.outbox[opID]; ok {
+		delete(o.outbox, opID)
+		o.saveLocked()
+	}
 	o.mu.Unlock()
 }
 
-// claim records opID; false when it was already accepted once.
-func (o *accountOps) claim(opID string) bool {
-	o.mu.Lock()
-	defer o.mu.Unlock()
+func (o *accountOps) initLocked() {
 	if o.seen == nil {
 		o.seen, o.outbox = map[string]bool{}, map[string]control.Message{}
 	}
+	if o.inflight == nil {
+		o.inflight = map[string]accountInflight{}
+	}
+}
+
+// claim records opID as running op; false when it was already accepted once.
+func (o *accountOps) claim(opID string, op control.AccountOp) bool {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.initLocked()
 	if o.seen[opID] {
 		return false
 	}
@@ -168,17 +213,110 @@ func (o *accountOps) claim(opID string) bool {
 		delete(o.seen, o.order[0])
 		o.order = o.order[1:]
 	}
+	o.inflight[opID] = accountInflight{Op: op.Op, Login: op.Login,
+		Started: time.Now().UTC().Format(time.RFC3339), PID: os.Getpid()}
+	o.saveLocked()
 	return true
 }
 
 func (o *accountOps) deliver(m control.Message) {
 	o.mu.Lock()
+	o.initLocked()
 	o.outbox[m.OpID] = m
+	delete(o.inflight, m.OpID)
+	o.saveLocked()
 	send := o.send
 	o.mu.Unlock()
 	if send != nil {
 		_ = send(m) // on failure it stays in the outbox for the next session
 	}
+}
+
+// saveLocked writes the book whole by one rename (root 0600: it names
+// logins). A failed write keeps the memory copy; the next change tries again.
+func (o *accountOps) saveLocked() {
+	if o.path == "" {
+		return
+	}
+	b := accountBook{Seen: o.order, Inflight: o.inflight, Outbox: o.outbox}
+	data, err := json.Marshal(b)
+	if err != nil {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(o.path), 0o700); err != nil {
+		log.Printf("account ops: %v", err)
+		return
+	}
+	tmp := o.path + ".tmp"
+	if err := os.WriteFile(tmp, append(data, '\n'), 0o600); err != nil {
+		log.Printf("account ops: %v", err)
+		return
+	}
+	if err := os.Rename(tmp, o.path); err != nil {
+		log.Printf("account ops: %v", err)
+	}
+}
+
+// load reads the book at path and keeps writing it there. An op still marked
+// running was cut off — this process is new, so whatever ran it is gone — and
+// is answered now with what the machine shows (claude-fleet#2918): a remove
+// whose login is gone is done; anything else failed, saying whether the login
+// exists, so the hub never waits on it.
+func (o *accountOps) load(path string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.initLocked()
+	o.path = path
+	var b accountBook
+	if data, err := os.ReadFile(path); err == nil {
+		if err := json.Unmarshal(data, &b); err != nil {
+			log.Printf("account ops: %s: %v (starting a new book)", path, err)
+			b = accountBook{}
+		}
+	}
+	for _, id := range b.Seen {
+		if !o.seen[id] {
+			o.seen[id] = true
+			o.order = append(o.order, id)
+		}
+	}
+	for id, m := range b.Outbox {
+		o.outbox[id] = m
+	}
+	for id, f := range b.Inflight {
+		if _, done := o.outbox[id]; done {
+			continue
+		}
+		res := cutOffResult(f, accountLoginExists(f.Login))
+		m, err := control.New(control.TypeAccountResult, res)
+		if err != nil {
+			continue
+		}
+		m.OpID = id
+		if !o.seen[id] {
+			o.seen[id] = true
+			o.order = append(o.order, id)
+		}
+		o.outbox[id] = m
+		log.Printf("account ops: %s %s (op %s) was cut off by a restart; answering exit=%d", f.Op, f.Login, id, res.Exit)
+	}
+	o.saveLocked()
+}
+
+// cutOffResult is the answer to an op the agent's restart cut off.
+func cutOffResult(f accountInflight, exists bool) control.AccountResult {
+	res := control.AccountResult{Op: f.Op, Login: f.Login, Exit: -1}
+	why := "the node agent (pid " + strconv.Itoa(f.PID) + ") stopped while this op ran (started " + f.Started + "); "
+	switch {
+	case f.Op == control.AccountRemove && !exists:
+		res.Exit = control.RemoveExitNoLogin
+		res.Detail = why + "the login is gone from this machine"
+	case exists:
+		res.Detail = why + "the login exists on this machine but may be half made — check it, then adopt, retry or remove it"
+	default:
+		res.Detail = why + "no such login on this machine: nothing was made"
+	}
+	return res
 }
 
 // handleAccountOp answers one TypeAccountOp. It returns at once; the script
@@ -206,7 +344,7 @@ func (a *Agent) handleAccountOp(ctx context.Context, conn nodeLink, m control.Me
 		refuse(control.CodeBadArgs, err.Error())
 		return
 	}
-	if !a.acct.claim(m.OpID) {
+	if !a.acct.claim(m.OpID, op) {
 		return // already running or done; its result is (or will be) in the outbox
 	}
 	go func() {

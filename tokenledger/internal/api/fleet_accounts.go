@@ -524,6 +524,7 @@ func (s *Server) dispatchAccounts() {
 	}
 	s.accountsMu.Lock()
 	defer s.accountsMu.Unlock()
+	s.reaskAccounts(time.Now())
 	rows, err := s.Store.FleetAccountsInState(store.AccountPending, store.AccountRemovePending)
 	if err != nil {
 		log.Printf("fleet: read queued account ops: %v", err)
@@ -534,25 +535,13 @@ func (s *Server) dispatchAccounts() {
 		if !ok {
 			continue
 		}
-		op := control.AccountOp{Op: control.AccountCreate, Login: a.Login}
 		from, to := store.AccountPending, store.AccountCreating
 		if a.State == store.AccountRemovePending {
-			op.Op, from, to = control.AccountRemove, store.AccountRemovePending, store.AccountRemoving
-			// A drill person's login is throwaway: no archive (#2652).
-			if d, err := s.Store.Drill(a.PrincipalID); err == nil && d != nil && !d.OwnComputer(a) {
-				op.DropHome = true
-			}
-		} else {
-			p, err := s.Store.Principal(a.PrincipalID)
-			if err != nil {
-				log.Printf("fleet: principal %q for %s: %v", a.PrincipalID, a.Hostname, err)
-				continue
-			}
-			op.FullName = fullNameFor(p)
-			if !control.ValidLogin(a.Login) {
-				op.Existing = s.loginHeldElsewhere(a.PrincipalID, a.Login, a.Hostname)
-			}
-			op.JoinCode = s.loginJoinCode(a, time.Now())
+			from, to = store.AccountRemovePending, store.AccountRemoving
+		}
+		op, err := s.accountOpFor(a, a.State == store.AccountRemovePending)
+		if err != nil {
+			continue
 		}
 		msg, err := control.New(control.TypeAccountOp, op)
 		if err != nil {
@@ -573,6 +562,95 @@ func (s *Server) dispatchAccounts() {
 			_ = s.Store.RevertAccountSent(msg.OpID, from, "not sent: "+err.Error(), time.Now())
 		default:
 			_, _ = s.Store.FinishAccountOp(msg.OpID, epID, store.AccountUnknown, "send failed: "+err.Error(), time.Now())
+		}
+	}
+}
+
+// accountOpFor is the op a row sends: its remove, else its create (with a
+// fresh join code).
+func (s *Server) accountOpFor(a store.FleetAccount, remove bool) (control.AccountOp, error) {
+	op := control.AccountOp{Op: control.AccountCreate, Login: a.Login}
+	if remove {
+		op.Op = control.AccountRemove
+		// A drill person's login is throwaway: no archive (#2652).
+		if d, err := s.Store.Drill(a.PrincipalID); err == nil && d != nil && !d.OwnComputer(a) {
+			op.DropHome = true
+		}
+		return op, nil
+	}
+	p, err := s.Store.Principal(a.PrincipalID)
+	if err != nil {
+		log.Printf("fleet: principal %q for %s: %v", a.PrincipalID, a.Hostname, err)
+		return op, err
+	}
+	op.FullName = fullNameFor(p)
+	if !control.ValidLogin(a.Login) {
+		op.Existing = s.loginHeldElsewhere(a.PrincipalID, a.Login, a.Hostname)
+	}
+	op.JoinCode = s.loginJoinCode(a, time.Now())
+	return op, nil
+}
+
+// An op whose link dropped before the node answered is unknown — and the
+// node may still know (claude-fleet#2918: the machine's agent was restarted by
+// the very create it ran). The hub asks it again: the same op under the same
+// op_id, at most once per accountReaskEvery, only on the link it was sent on.
+// A node that ran it answers from its book without running it twice (one that
+// never got it runs it now); one silent past accountUnknownGiveUp is failed,
+// saying why, so nobody waits on it for good.
+const (
+	accountReaskEvery    = 5 * time.Minute
+	accountUnknownGiveUp = 30 * time.Minute
+)
+
+// reaskAccounts runs under accountsMu.
+func (s *Server) reaskAccounts(now time.Time) {
+	rows, err := s.Store.FleetAccountsInState(store.AccountUnknown)
+	if err != nil {
+		log.Printf("fleet: read unknown account ops: %v", err)
+		return
+	}
+	if s.accountAsked == nil {
+		s.accountAsked = map[string]time.Time{}
+	}
+	live := map[string]bool{}
+	for _, a := range rows {
+		if a.OpID == "" || a.EndpointID == "" {
+			continue
+		}
+		if now.Sub(a.UpdatedAt) > accountUnknownGiveUp {
+			detail := fmt.Sprintf("no answer from %s in %d min after the link dropped (%s): check the login there, then retry or remove it",
+				a.Hostname, int(accountUnknownGiveUp.Minutes()), a.Detail)
+			if ok, err := s.Store.FinishAccountOp(a.OpID, a.EndpointID, store.AccountFailed, truncate(detail, 4000), now); err == nil && ok {
+				log.Printf("fleet: %s %s on %s (op %s): unknown past %s, failed", a.Op, a.Login, a.Hostname, a.OpID, accountUnknownGiveUp)
+			}
+			continue
+		}
+		live[a.OpID] = true
+		if epID, ok := s.nodes.adminFor(a.Hostname); !ok || epID != a.EndpointID {
+			continue
+		}
+		if at, ok := s.accountAsked[a.OpID]; ok && now.Sub(at) < accountReaskEvery {
+			continue
+		}
+		op, err := s.accountOpFor(a, a.Op == "remove")
+		if err != nil {
+			continue
+		}
+		msg, err := control.New(control.TypeAccountOp, op)
+		if err != nil {
+			continue
+		}
+		msg.OpID = a.OpID
+		s.accountAsked[a.OpID] = now
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		err = s.SendNodeWrite(ctx, a.EndpointID, msg)
+		cancel()
+		log.Printf("fleet: asked %s again about %s %s (op %s): err=%v", a.Hostname, op.Op, a.Login, a.OpID, err)
+	}
+	for id := range s.accountAsked {
+		if !live[id] {
+			delete(s.accountAsked, id)
 		}
 	}
 }

@@ -128,6 +128,10 @@ func adminAgent(t *testing.T, hub string, admin bool) *Agent {
 	a := nodeTestAgent(t, hub, true)
 	a.cfg.FleetAdmin = admin
 	a.cfg.LiveInterval = time.Hour // keep heartbeats out of the way
+	if admin {
+		// what New does for an agent started as its machine's admin
+		a.acct.load(filepath.Join(a.cfg.StateDir, accountOpsFile))
+	}
 	return a
 }
 

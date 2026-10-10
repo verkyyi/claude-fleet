@@ -410,6 +410,12 @@ func New(cfg Config) (*Agent, error) {
 		limits:  limits.New(),
 		http:    &http.Client{Timeout: 60 * time.Second},
 	}
+	if cfg.FleetAdmin && cfg.StateDir != "" {
+		// Account ops outlive this process (claude-fleet#2918): results the
+		// hub has not acked go out again, and one a restart cut off is
+		// settled with what the machine shows now.
+		a.acct.load(filepath.Join(cfg.StateDir, accountOpsFile))
+	}
 	for _, source := range sources {
 		switch source {
 		case model.SourceClaude:

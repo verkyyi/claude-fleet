@@ -258,8 +258,10 @@ type Server struct {
 	sshCAStatus map[string]string
 
 	// accountsMu serialises account dispatch, so one queued op is never sent
-	// twice by two triggers racing.
-	accountsMu sync.Mutex
+	// twice by two triggers racing. accountAsked (under it) is when each
+	// unknown op was last asked again (claude-fleet#2918).
+	accountsMu   sync.Mutex
+	accountAsked map[string]time.Time
 
 	// spareMu / spareScanAt pace the spare-login refill (claude-fleet#2263):
 	// one scan per spareScanEvery, whichever beat comes first.

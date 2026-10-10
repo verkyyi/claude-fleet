@@ -33,7 +33,10 @@ machine's work ONCE, however many logins the machine carries:
                 (a separated login's from the credsep store) — land in
                 <state>/logins/<login>.env (root 0600), where the machine's one
                 node program (C5) serves it from; that child restarts whenever
-                logins/ changes. `account release <login>` is the way back, one
+                logins/ changes — held while an account op it runs is in its
+                book (<state>/agent/<login>/account-ops.json, #2918: opening a
+                login writes that .env mid-op), at most FLEET_NODE_RELOAD_HOLD
+                (960 s). `account release <login>` is the way back, one
                 command: the env goes first, then the old services come back.
                 expected.json's `accounts` (C2), when present, narrows who runs.
   * services  — the login-level register (issue #2525, EPIC #2524 C1): a program a
@@ -307,6 +310,21 @@ def trusted(path, as_root=None):
         p = parent
 
 
+def reload_held(c):
+    """What holds a child's reload (#2918): the first op its `hold` books
+    (a glob of JSON files) name as running, by a live pid — "account create
+    alice (op …)" — else "". A book left by a dead process holds nothing."""
+    if not c.get("hold"):
+        return ""
+    for f in sorted(glob.glob(c["hold"])):
+        book = read_json(f, {})
+        running = book.get("inflight") if isinstance(book, dict) else None
+        for op_id, x in sorted((running or {}).items()):
+            if isinstance(x, dict) and pid_alive(x.get("pid")):
+                return "account %s %s (op %s)" % (x.get("op"), x.get("login"), op_id)
+    return ""
+
+
 # --------------------------------------------------------------- the table -----
 def default_table(paths):
     rt_bin = os.path.join(paths.runtime, "bin")
@@ -338,6 +356,11 @@ def default_table(paths):
              # changes them, and the daemon starts it again on them — the
              # <login>.env files only: a login's services/ (#2525) is not a tenant
              "reload": os.path.join(paths.state, "logins", "*.env"),
+             # …but never under an account op it is running (#2918): opening a
+             # login writes that login's .env half way through, and the restart
+             # cut off the very create that wrote it. Each tenant's book names
+             # the op running; the restart waits for it (reload_held)
+             "hold": os.path.join(paths.state, "agent", "*", "account-ops.json"),
              "note": "C5 #2333"},
         ],
         "tasks": [
@@ -1267,9 +1290,19 @@ class Supervisor(object):
                 continue
             if c.get("reload") and (name in self.procs or name in self.adopted) \
                     and cs.get("reload_sig") != dir_sig(c["reload"]):
-                self.stop_one(name, "%s changed — starting it again" % c["reload"])
-                self.start_child(c, cs, t)
-                continue
+                held, since = reload_held(c), cs.get("reload_held_since")
+                if held and (since is None or t - since < env_num("FLEET_NODE_RELOAD_HOLD", 960)):
+                    if since is None:
+                        cs["reload_held_since"] = t
+                        self.dirty = True
+                        self.log("child %s: %s changed — held while %s runs" % (name, c["reload"], held))
+                else:
+                    why = "%s changed — starting it again" % c["reload"]
+                    if since is not None:
+                        why += " (held %ds%s)" % (t - since, ", past the cap: %s still runs" % held if held else "")
+                    self.stop_one(name, why)
+                    self.start_child(c, cs, t)
+                    continue
             p = self.procs.get(name)
             if p is not None:
                 rc = p.poll()
@@ -1330,6 +1363,7 @@ class Supervisor(object):
         cs.update(pid=p.pid, started=t, cmd=pid_cmd(p.pid) or " ".join(c["cmd"]))
         if c.get("reload"):
             cs["reload_sig"] = dir_sig(c["reload"])
+        cs.pop("reload_held_since", None)
         self.dirty = True
         self.log("child %s started pid %d" % (c["name"], p.pid))
 
