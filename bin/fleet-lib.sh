@@ -9029,13 +9029,16 @@ fleet_role_render() {
   local role="${1:-}" agent="${2:-claude}" bin v
   shift 2 2>/dev/null || shift $#
   bin="${_FLEET_LIB_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)}"
-  local envs=()
-  for v in FLEET_ORCH_MODEL FLEET_ORCH_EFFORT FLEET_ORCH_CODEX_MODEL \
-           FLEET_STEWARD_MODEL FLEET_STEWARD_EFFORT FLEET_STEWARD_CODEX_MODEL \
-           FLEET_MODEL FLEET_MODEL_FALLBACK; do
-    eval "[ -n \"\${$v+x}\" ] && envs+=(\"$v=\${$v}\")"
-  done
-  env ${envs[@]+"${envs[@]}"} python3 "$bin/fleet-role.py" render "$role" --agent "$agent" --kv "$@"
+  # A subshell exporting the set ones, not an env-array: this lib is sourced by
+  # POSIX sh too (dash parses the whole file — a `x=()` is a syntax error there, #2818).
+  (
+    for v in FLEET_ORCH_MODEL FLEET_ORCH_EFFORT FLEET_ORCH_CODEX_MODEL \
+             FLEET_STEWARD_MODEL FLEET_STEWARD_EFFORT FLEET_STEWARD_CODEX_MODEL \
+             FLEET_MODEL FLEET_MODEL_FALLBACK; do
+      eval "[ -n \"\${$v+x}\" ]" && export "$v"
+    done
+    exec python3 "$bin/fleet-role.py" render "$role" --agent "$agent" --kv "$@"
+  )
 }
 
 # fleet_role_renew_due <session> <win> — the `ensure` half of #2733: judge <win>

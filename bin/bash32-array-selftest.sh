@@ -238,6 +238,16 @@ ok; [ -z "$(lint_file "$WORK/opted-out.sh")" ]   || fail "lint ignored the '# ba
 out=$(bash "$BIN/zsh-local-selftest.sh" 2>&1) || fail "zsh-local-selftest.sh: $out"
 ok
 
+# --- the POSIX sh sibling (issue #2818) -------------------------------------------
+# fleet-lib.sh is also sourced by `sh` (fleet-view-session-selftest D's pane; ubuntu's
+# sh is dash), and sh PARSES the whole file at source time: one bash-only construct
+# anywhere (`local a=()`, `a+=(…)`) kills every function in it. Source it under dash.
+if command -v dash >/dev/null 2>&1; then
+  out=$(dash -c '. "$1" >/dev/null 2>&1 || exit 1; command -v fleet_current_session >/dev/null && echo sourced' sh "$BIN/fleet-lib.sh" 2>&1)
+  [ "$out" = sourced ] || fail "fleet-lib.sh does not source under dash: $(dash -n "$BIN/fleet-lib.sh" 2>&1 | head -3)"
+  ok
+fi
+
 # --- the python 3.9 sibling (issue #2024) -----------------------------------------
 # macOS's own /usr/bin/python3 is 3.9, whose fromisoformat cannot read the hub's
 # nanosecond `…Z`: iso-time-selftest.sh lints bin/ for a bare fromisoformat( and runs
