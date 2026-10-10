@@ -1975,6 +1975,51 @@ def machine_status(a):
     return 0 if rec else 3
 
 
+def machine_pooldup(a):
+    """Root: one token held twice (issue #2849) — a tenant's own copy (its
+    accounts/<label>.hub, its codex/<label>) whose fingerprint the shared pool
+    also holds. The fingerprint is the proxy's pool_key; never a token printed.
+    One doctor line: pooldup: OK|WARN|INFO — … ; exit 0 OK/INFO, 1 WARN."""
+    import hashlib
+    if not shared_rec():
+        print("pooldup: INFO — no shared proxy on this machine")
+        return 0
+    files = {"claude": ".credentials.json", "codex": "auth.json"}
+    dups = []
+    for m in shared_tenants():
+        R = os.path.join(ROOT_BASE, m["login"])
+        own = []
+        acc = os.path.join(R, "accounts")
+        for d in sorted(os.listdir(acc)) if os.path.isdir(acc) else []:
+            if d.endswith(".hub") and SAFE.match(d[:-4]):
+                own.append(("claude", d[:-4], os.path.join(acc, d, files["claude"])))
+        cx = os.path.join(R, "codex")
+        for d in sorted(os.listdir(cx)) if os.path.isdir(cx) else []:
+            if SAFE.match(d):
+                own.append(("codex", d, os.path.join(cx, d, files["codex"])))
+        for kind, label, f in own:
+            try:
+                o = json.load(open(f))
+                tok = o["claudeAiOauth"]["accessToken"] if kind == "claude" else o["tokens"]["access_token"]
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
+            if not tok:
+                continue
+            key = hashlib.sha256(("%s\0%s" % (kind, tok)).encode()).hexdigest()[:32]
+            if os.path.isfile(os.path.join(SHARED_DIR, "pool", kind, key, files[kind])):
+                dups.append({"login": m["login"], "kind": kind, "label": label, "key": key[:12]})
+    if a.json:
+        print(json.dumps({"dups": dups}))
+    elif dups:
+        print("pooldup: WARN — %d token(s) held twice, the pool's and a login's own: %s — the shared proxy folds "
+              "each into the pool at its next lease or request (a stuck one: sudo bash %s/fleet-credsep.sh machine refresh)"
+              % (len(dups), ", ".join("%s:%s%s (%s)" % (d["login"], "" if d["kind"] == "claude" else "codex/", d["label"], d["key"])
+                                      for d in dups), HERE))
+    else:
+        print("pooldup: OK — every pooled token held once")
+    return 1 if dups else 0
+
+
 # ---- every login on the machine -----------------------------------------------------
 def fleet_logins():
     """-> [(login, home, its fleet-credsep.sh)] of every login with a fleet
@@ -2473,7 +2518,7 @@ def main():
     sub.add_parser("role")      # the role account alone (fleet-node-install.sh, #2330)
     pl = sub.add_parser("plan"); pl.add_argument("--bin", default=HERE)
     mc = sub.add_parser("machine")
-    mc.add_argument("verb", choices=("install", "uninstall", "refresh", "status", "join", "leave"))
+    mc.add_argument("verb", choices=("install", "uninstall", "refresh", "status", "join", "leave", "pooldup"))
     mc.add_argument("--logins", default="all")
     mc.add_argument("--dry-run", action="store_true")
     mc.add_argument("--force", action="store_true")
@@ -2520,7 +2565,7 @@ def main():
         if os.geteuid() != 0 and not TEST and not DRY:
             die("machine %s needs root (bin/fleet-credsep.sh machine runs it through sudo)" % a.verb, 2)
         return {"install": machine_install, "uninstall": machine_uninstall, "refresh": machine_refresh,
-                "join": machine_join, "leave": machine_leave}[a.verb](a)
+                "join": machine_join, "leave": machine_leave, "pooldup": machine_pooldup}[a.verb](a)
     if a.cmd in ("install", "uninstall"):
         DRY = a.dry_run
         if not re.match(r"^[a-z0-9_][a-z0-9_.-]{0,31}$", a.login):

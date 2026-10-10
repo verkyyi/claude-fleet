@@ -937,6 +937,9 @@ def doctor_rows(p):
     cr = credsep_row(p)
     if cr:
         rows.append(cr)
+        pr = credpool_row(p)
+        if pr:
+            rows.append(pr)
     rows.append(shell_row(p, st))
     # the drill's deliberate failure (issue #2336): a release carrying this marker
     # fails its own doctor, so the updater must roll it back. On trunk, so a
@@ -1048,6 +1051,20 @@ def credsep_row(p):
         return ("FAIL", "credsep", "the shared proxy is not running (pid %s, last version %s)" % (pid or "-", live[0]))
     return ("FAIL", "credsep", "the shared proxy runs %s, the release's copy is %s — it did not restart on the new code"
             % (live[0], want))
+
+
+def credpool_row(p):
+    """One token held twice on the shared proxy (issue #2849): the pool's copy
+    and a login's own accounts/<label>.hub — `fleet-credsep.py machine pooldup`,
+    a WARN (never a FAIL: no rollback for it). None when it cannot tell."""
+    cs = os.path.join(p.current, "bin", "fleet-credsep.py")
+    if not os.path.exists(cs):
+        return None
+    rc, out, _ = run([sys.executable, "-I", cs, "machine", "pooldup"], timeout=60)
+    m = re.match(r"^pooldup: (OK|WARN) — (.*)$", (out.splitlines() or [""])[-1])
+    if not m or rc not in (0, 1):
+        return None
+    return ("PASS" if m.group(1) == "OK" else "WARN", "credpool", m.group(2))
 
 
 _VER_RE = re.compile(r"\d+(?:\.\d+)+[0-9A-Za-z.+-]*")
