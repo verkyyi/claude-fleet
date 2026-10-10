@@ -62,6 +62,9 @@
 #   dist-publish-tampered                           tokenledger/internal/api fleet_publish.go (POST …/publish: the archive
 #                                                   hashed into the commit's tree, OIDC, forward only; go test, when a
 #                                                   toolchain is here) + bin/fleet-release-publish.sh (what CI sends)
+#   hub-stream-silent                               tokenledger/web/dist/lib/stream.js (watchdog, backoff, poll fallback;
+#                                                   node --test stream.test.mjs, when node is here) + internal/api
+#                                                   fleet_stream.go (ping, scope; go test, when a toolchain is here)
 #
 # Each prints `PASS <id> <secs>s ≤<cap>s <what came back>` like its parent.
 # BREAK_KEEP=1 keeps the work dir; BREAK_ONLY narrows to those ids.
@@ -1131,6 +1134,31 @@ drill_dist_publish_tampered() {
   out=$(bash "$BIN/fleet-release-publish-selftest.sh" 2>&1) \
     || { WHY="the CI half: $(printf '%s' "$out" | grep -m 3 FAIL | cut -c1-200 | tr '\n' '|')"; return 1; }
   WHAT='CI 送的是整个提交 + 从入口 stable 起的提交链，令牌不上命令行'
+# ---- hub-stream-silent (#2794, EPIC #2792 C2): the push channel held open by a
+# proxy that neither sends nor closes — the page must not believe it is live.
+# The page half for real (node --test on lib/stream.js under a virtual clock: a
+# silent stream is down at 30 s and reconnects, the reconnect is the catch-up, a
+# stream that cannot be built polls every 10 s); the hub half's ping and scope by
+# name (and go test with a toolchain).
+drill_hub_stream_silent() {
+  CAP=120; local t0 out rc js="$ROOT/tokenledger/web/dist/lib/stream.js" tests f
+  tests='TestFleetStreamPing TestFleetStreamScoped TestFleetStreamOnlyOnChange'
+  f="$ROOT/tokenledger/internal/api/fleet_stream_test.go"
+  t0=$(now)
+  grep -q 'export const WATCHDOG_MS = 30000;' "$js" || { WHY="lib/stream.js no longer gives up on a silent stream at 30 s"; return 1; }
+  grep -q 'var fleetStreamPing = 20 \* time.Second' "$ROOT/tokenledger/internal/api/fleet_stream.go" \
+    || { WHY="the hub no longer pings an idle stream every 20 s"; return 1; }
+  for out in $tests; do
+    grep -q "^func $out(" "$f" 2>/dev/null || { WHY="the hub half's test $out is not in ${f#$ROOT/}"; return 1; }
+  done
+  if command -v node >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger/web" && node --test test/stream.test.mjs 2>&1); rc=$?
+    [ "$rc" = 0 ] || { WHY="the page half is red: $(printf '%s\n' "$out" | grep -m 4 -E 'not ok|Error|expected|actual' | tr '\n' ' ')"; return 1; }
+    printf '%s\n' "$out" | grep -q 'hub-stream-silent' || { WHY="the hub-stream-silent test did not run"; return 1; }
+    WHAT='代理挂住的推送 30 s 标黄并重连、重连即补一份；建不起来退回 10 s 轮询（node --test，虚拟时钟）'
+  else
+    WHAT='没有 node：页面一半按名核对在，web 门（tokenledger.yml 的 npm test）跑它'
+  fi
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
     out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/api 2>&1); rc=$?
@@ -1143,6 +1171,10 @@ drill_dist_publish_tampered() {
     esac
   else
     WHAT="${WHAT}；没有 go：四条测试按名核对在，Go 门（tokenledger.yml）跑它们"
+      0:*) WHAT="${WHAT}；入口每 20 s ping、只发本人的、没变不发（go test）" ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
+      *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
   fi
   SECS=$(since "$t0")
 }
