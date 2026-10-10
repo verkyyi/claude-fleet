@@ -32,6 +32,18 @@ launcher asks it, so what the file says is what the session runs.
                           on the first line
   doctor                  fleet-doctor's `roles` row: a WARN line when a role has a
                           local layer or a layer was not used, else nothing
+  set <role> <field> <value…> [--replace] [--yes]
+  unset <role> [<field> [<name…>]] [--yes]
+  rule-set <N|new> [--role R] [--cond C] [--action A] [--tier T] [--keywords K] [--yes]
+  rule-unset <N> [--yes]
+  undo [<version>] [--yes]
+                          change the PERSON's layer on the hub (issue #2785 —
+                          the fleet-config skill's one road; see «writing the
+                          person's layer» below): prints 改哪一项：改前 → 改后
+                          on the merged definition, writes only with --yes.
+                          Exit 0 written / nothing to change · 4 preview only ·
+                          3 a worker's window (or no hub) · 2 refused here ·
+                          1 the hub refused / did not answer
   merge <base.md> <overlay.md…> | merge --vector <file.json>
                           the pure merge, as JSON {fields, body, sources, locked}
   list                    the roles
@@ -67,7 +79,8 @@ Before `render`, a personal layer read longer ago than FLEET_ROLE_STALE (600 s)
 is read again from the hub (`fleet-agent-team.py person`, at most
 FLEET_ROLE_FETCH_SECS = 3 s; issue #2784) — the hub away, the cache stands.
 
-Reads the definition and the environment; the only writes are under
+Reads the definition and the environment; the writes (set · unset · rule-set ·
+rule-unset · undo aside — those PUT the hub and refresh person-bundle.json) are under
 $FLEET_CONF_DIR/roles/: the body's content-addressed copy (made once, never
 changed — a session resumed after a release still finds the file it started
 with) and `<role>.<agent>.last.json`, the last good launch, which stands in for a
@@ -89,6 +102,7 @@ ROOT = os.path.dirname(BIN)
 ROLES = ('orchestrator', 'steward', 'worker', 'epic-driver')
 FIELDS = ('name', 'description', 'model', 'effort', 'tools', 'disallowedTools',
           'mcpServers', 'skills', 'hooks', 'permissionMode', 'memory')
+WRITES = ('set', 'unset', 'rule-set', 'rule-unset', 'undo')
 SUBAGENT_ONLY = ('maxTurns', 'background', 'isolation', 'color', 'initialPrompt')
 # The roles whose body rides the system prompt (see the docstring).
 INJECT_BODY = ('orchestrator', 'steward')
@@ -877,6 +891,528 @@ def show(role, sources=False):
     return d, text
 
 
+# --- writing the person's layer (issue #2785, EPIC #2781 C4) ------------------
+# `fleet role set|unset|rule-set|rule-unset|undo` — what the fleet-config skill
+# runs when a person says «让管家别自动答金额相关的问题». Each one reads the
+# person's layer FROM THE HUB (bin/fleet-config.py's client: the node token, else
+# the connection certificate; its FLEET_PERSON_HUB_CMD seam), makes the smallest
+# change to `roles.<role>` / `rules`, prints what it changes on the MERGED
+# definition one line an item (改哪一项：改前 → 改后), and — only with --yes —
+# PUTs it back with base = the version read (a 409 re-reads and redoes it once,
+# a second conflict goes to the person), then writes the hub's answer into this
+# computer's cache at once (the launch reads it; no wait for the next sync).
+# A worker's window (@fleet_role worker — a batch driver's too) only reads:
+# every write exits 3 there. A credential-shaped value is refused before
+# anything is sent: a key goes in a wrapper script that reads it at start
+# (bin/mcp-github.sh), the configuration names the server, its command and the
+# environment variable's name.
+SAY_ROLE = {'orchestrator': '编排会话', 'steward': '管家', 'worker': '执行会话', 'epic-driver': '批次驱动'}
+SAY_FIELD = {'model': '模型', 'effort': '思考档位', 'permissionMode': '权限模式', 'memory': '记忆',
+             'description': '描述', 'tools': '工具', 'disallowedTools': '禁用工具', 'skills': '技能',
+             'mcpServers': '外接工具', 'hooks': '钩子', 'body': '说明'}
+SAY_TIER = {'auto': '自己定', 'default': '到点按默认走', 'ask': '必须问你', 'off': '不用'}
+RULE_CELLS = ('role', 'cond', 'action', 'tier', 'keywords')
+SAY_CELL = {'role': '角色', 'cond': '条件', 'action': '动作', 'tier': '档位', 'keywords': '关键词'}
+
+
+class Refused(Exception):
+    """A write that is not this session's to make, or not sent (exit `code`)."""
+    def __init__(self, msg, code=2):
+        Exception.__init__(self, msg)
+        self.code = code
+
+
+def window_role():
+    """THIS pane's @fleet_role ('' outside a fleet window). Never the empty
+    target: inside tmux with no TMUX_PANE (a popup) the answer is ''."""
+    pane = os.environ.get('TMUX_PANE') or ''
+    if not os.environ.get('TMUX') or not pane:
+        return ''
+    try:
+        return subprocess.run(['tmux', 'display-message', '-p', '-t', pane, '#{@fleet_role}'],
+                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+                              timeout=5).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return ''
+
+
+def _guard():
+    if window_role() == 'worker':
+        raise Refused('执行会话里只能看不能改（fleet role show / rules 照常）——'
+                      '到编排会话、草稿会话或你自己的终端里说', 3)
+
+
+def _config():
+    """bin/fleet-config.py as a module: its hub client is the one this uses."""
+    import importlib.util
+    import types
+    spec = importlib.util.spec_from_file_location('fleet_config', os.path.join(BIN, 'fleet-config.py'))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    a = types.SimpleNamespace(action='role', person='', hub='', timeout=float(
+        os.environ.get('FLEET_TEAM_TIMEOUT') or 8))
+    return mod, a
+
+
+def _get(cfg, a, query=''):
+    code, cur = cfg.person_call(a, 'GET', None, query)
+    if code != 200:
+        cfg.hub_err(code, cur)
+    return cur
+
+
+def _say_val(v):
+    if v in (None, '', [], {}):
+        return '（无）'
+    if isinstance(v, list):
+        return '、'.join(x if isinstance(x, str) else '%s（内联）' % next(iter(x)) if isinstance(x, dict) and len(x) == 1
+                        else json.dumps(x, ensure_ascii=False) for x in v)
+    if isinstance(v, dict):
+        return json.dumps(v, ensure_ascii=False, sort_keys=True)
+    v = ' '.join(str(v).split())
+    return '「%s」' % (v if len(v) <= 80 else v[:77] + '…') if ' ' in v or len(v) > 24 else v
+
+
+def _overlay(bundle, role):
+    """(front, body) of the person's overlay for `role` in a bundle; ({}, '') none."""
+    ov = (bundle.get('roles') or {}).get(role) if isinstance(bundle.get('roles'), dict) else None
+    if ov in (None, '', {}):
+        return {}, ''
+    return overlay_of(ov)
+
+
+def _merged(role, front, body):
+    """merge() of the built-in with this overlay (and this computer's own layer)."""
+    d = load(role)
+    layers = []
+    if front or body.strip():
+        layers.append(('person:new', 'person', front, body))
+    layers += [l for l in layers_for(role)[0] if l[1] == 'local']
+    return merge(d['front'], d['body'], layers, role_locks(role))
+
+
+def role_diff(role, before, after):
+    """[line] — every item of the merged definition that moves between two
+    overlays, as 「<角色> · <项>：改前 → 改后」."""
+    try:
+        m0 = _merged(role, *before)
+    except RoleError:
+        m0 = _merged(role, {}, '')
+    m1 = _merged(role, *after)
+    out = []
+    keys = [k for k in FIELDS if k in m0['fields'] or k in m1['fields']]
+    keys += [k for k in list(m0['fields']) + list(m1['fields']) if k not in keys and k not in FIELDS]
+    for k in keys:
+        v0, v1 = m0['fields'].get(k), m1['fields'].get(k)
+        if v0 != v1:
+            out.append('%s · %s：%s → %s' % (SAY_ROLE[role], SAY_FIELD.get(k, k), _say_val(v0), _say_val(v1)))
+    if m0['body'] != m1['body']:
+        b0, b1 = before[1].strip(), after[1].strip()
+        if after[0].get('body') == 'replace' or before[0].get('body') == 'replace':
+            out.append('%s · 说明：%s → %s' % (SAY_ROLE[role], '整段换掉' if before[0].get('body') == 'replace'
+                                                else '自带', '整段换成 ' + _say_val(b1) if after[0].get('body') == 'replace'
+                                                else '自带' + ('＋' + _say_val(b1) if b1 else '')))
+        else:
+            out.append('%s · 说明（你加的）：%s → %s' % (SAY_ROLE[role], _say_val(b0), _say_val(b1)))
+    return out
+
+
+def _person_rows(bundle):
+    """The person layer's rule rows (dicts, any numbers) out of a bundle."""
+    r = bundle.get('rules')
+    if r in (None, '', []):
+        return []
+    rows = fleet_rules.parse(r) if isinstance(r, str) else [fleet_rules._row(x) for x in r]
+    return [{k: x[k] for k in ('n',) + RULE_CELLS} for x in rows]
+
+
+def _rules_with(rows):
+    """The merged table with `rows` as the person's layer (None = none)."""
+    return fleet_rules.load(person=lambda: ([fleet_rules._row(r) for r in rows], '你的') if rows else None)
+
+
+def rules_diff(before_rows, after_rows):
+    t0, t1 = _rules_with(before_rows), _rules_with(after_rows)
+    bad = [p for p in t1['problems'] if p.startswith('person')]
+    if bad:
+        raise Refused('规则改不成：%s' % bad[0])
+    r0, r1 = {r['n']: r for r in t0['rows']}, {r['n']: r for r in t1['rows']}
+    out = []
+    for n in sorted(set(r0) | set(r1)):
+        a, b = r0.get(n), r1.get(n)
+        if a == b or (a and b and all(a[c] == b[c] for c in RULE_CELLS)):
+            continue
+        row = b or a
+        who = SAY_ROLE.get(row['role'], row['role'])
+        if not a:
+            out.append('%s · 规则 %d（新）：%s → %s · %s' % (who, n, row['cond'], row['action'], SAY_TIER[row['tier']]))
+        elif not b:
+            out.append('%s · 规则 %d：%s → 删掉' % (who, n, a['cond']))
+        else:
+            for c in RULE_CELLS:
+                if a[c] != b[c]:
+                    if c == 'tier':
+                        out.append('%s · 规则 %d：%s → %s' % (who, n, a['cond'], SAY_TIER[b['tier']])
+                                   if a['cond'] == b['cond'] else
+                                   '%s · 规则 %d · 档位：%s → %s' % (who, n, SAY_TIER[a['tier']], SAY_TIER[b['tier']]))
+                    else:
+                        out.append('%s · 规则 %d · %s：%s → %s' % (who, n, SAY_CELL[c], _say_val(a[c]), _say_val(b[c])))
+    return out
+
+
+def _secret_refusal(why):
+    return ('拒收，什么都没写：%s。密钥从不进配置——写一个包装脚本在启动时读它（同 bin/mcp-github.sh 从 '
+            '`gh auth token` 读），配置里只写外接工具的名字、启动命令和要读的环境变量名（如 "${WECOM_TOKEN}"）'
+            % why)
+
+
+def _check_bundle(cfg, bundle):
+    why = cfg.validate(bundle)
+    if why:
+        if 'credential' in why:
+            raise Refused(_secret_refusal(why))
+        raise Refused('拒收，什么都没写：%s' % why)
+
+
+def _write_cache(cfg, resp):
+    """The hub's answer is the person's layer now: this computer's cache takes it
+    at once (what a launch and the rule table read) — fleet-agent-team.py's own
+    files, the shape its fetch writes."""
+    T = cfg.T
+    body = {'version': resp.get('version'), 'prev': resp.get('prev'), 'created': resp.get('created'),
+            'actor': resp.get('actor'), 'bundle': resp.get('bundle') or {}, 'fetched': int(time.time()),
+            'etag': None}
+    try:
+        T.write_json_atomic(T.PERSON_CACHE, body)
+        T.write_json_atomic(T.PERSON_GOOD, body)
+        T.record_person(0, 'written here (#2785)', None)
+    except OSError as e:
+        print('fleet-role: 本机缓存没写上（%s）——下次同步带上' % e, file=sys.stderr)
+
+
+def _effect(roles):
+    roles = [r for r in ROLES if r in roles]
+    names = '、'.join(SAY_ROLE[r] for r in roles)
+    if roles == ['worker'] or roles == ['epic-driver']:
+        return '下次开的%s生效（已经开着的不变）。' % names
+    return '下次开%s生效；要现在生效说「重开%s」。' % (names, names)
+
+
+def write(change, note, yes):
+    """GET → change(bundle) → [(role…), lines] → PUT base (409: once more).
+    change returns (touched roles, the lines) or raises Refused."""
+    _guard()
+    cfg, a = _config()
+    for attempt in (1, 2):
+        cur = _get(cfg, a)
+        bundle = json.loads(json.dumps(cur.get('bundle') or {}))
+        base = int(cur.get('version') or 0)
+        roles, lines = change(bundle)
+        if not lines:
+            print('合起来没有变化——什么都没写（入口 v%d）' % base)
+            return 0
+        _check_bundle(cfg, bundle)
+        if not yes:
+            for ln in lines:
+                print('改 %s' % ln)
+            print('还没写——人说好了，同一条命令加 --yes')
+            return 4
+        code, resp = cfg.person_call(a, 'PUT', {'bundle': bundle, 'base': base, 'note': note})
+        if code == 409 and attempt == 1:
+            continue
+        if code == 409:
+            raise Refused('入口上的个人配置刚被别处改过两次——重读一遍（fleet role show），再说一次', 1)
+        if code != 200:
+            cfg.hub_err(code, resp)
+        _write_cache(cfg, resp)
+        for ln in lines:
+            print('已改 %s（入口 v%s）' % (ln, resp.get('version')))
+        print(_effect(roles))
+        return 0
+    return 1
+
+
+def _put_overlay(bundle, role, front, body):
+    roles = bundle.setdefault('roles', {})
+    if front or body.strip():
+        roles[role] = {'front': front, 'body': body}
+    else:
+        roles.pop(role, None)
+    if not roles:
+        bundle.pop('roles', None)
+
+
+def _mcp_overlay(v):
+    """An overlay's mcpServers as {name: config | name (the login's own) | None (remove)}."""
+    if isinstance(v, dict):
+        return dict(v)
+    out = {}
+    for x in (v if isinstance(v, list) else []):
+        if isinstance(x, dict):
+            out.update(x)
+        elif str(x).startswith('-'):
+            out[x[1:]] = None
+        else:
+            out[str(x).lstrip('+')] = str(x).lstrip('+')
+    return out
+
+
+def set_change(role, field, values, replace=False):
+    if role not in ROLES:
+        raise Refused('没有这个角色：%s（%s）' % (role, ' '.join(ROLES)))
+
+    def change(bundle):
+        f0, b0 = _overlay(bundle, role)
+        front, body = dict(f0), b0
+        if field == 'body':
+            text = ' '.join(values).strip()
+            if not text:
+                raise Refused('说明要一段话')
+            if replace:
+                front['body'], body = 'replace', text + '\n'
+            else:
+                body = ('%s\n\n%s\n' % (body.rstrip('\n'), text)) if body.strip() else text + '\n'
+        elif field in SCALARS:
+            if len(values) != 1:
+                raise Refused('%s 只有一个值' % field)
+            front[field] = values[0]
+        elif field in LISTS:
+            items = items_of(front.get(field))
+            for v in values:
+                op, name = (v[0], v[1:]) if v[:1] in '+-' else ('+', v)
+                if items[:1] == [REPLACE]:
+                    items = [x for x in items if x != name]
+                    if op == '+':
+                        items.append(name)
+                else:
+                    items = [x for x in items if x.lstrip('+-') != name] + [op + name]
+            front[field] = items
+        elif field in DICTS:
+            cur = _mcp_overlay(front.get(field)) if field == 'mcpServers' else dict(front.get(field) or {})
+            i = 0
+            while i < len(values):
+                v = values[i]
+                if v.startswith('{'):
+                    try:
+                        obj = json.loads(v)
+                    except ValueError:
+                        raise Refused('%s 的值读不懂（要 JSON）：%s' % (field, v))
+                    cur.update(obj)
+                elif v[:1] == '-':
+                    cur[v[1:]] = None
+                elif i + 1 < len(values) and values[i + 1].startswith('{'):
+                    try:
+                        cur[v.lstrip('+')] = json.loads(values[i + 1])
+                    except ValueError:
+                        raise Refused('%s.%s 的配置读不懂（要 JSON）' % (field, v))
+                    i += 1
+                elif field == 'mcpServers':
+                    cur[v.lstrip('+')] = v.lstrip('+')
+                else:
+                    raise Refused('%s 要 JSON：{"<事件>": [...]}' % field)
+                i += 1
+            front[field] = cur
+        else:
+            raise Refused('%s 不是能改的项（%s · body）' % (field, ' '.join(OVERRIDABLE)))
+        why = check_overlay(role, front, body)
+        if why:
+            raise Refused(_secret_refusal(why) if 'credential' in why else '这样改不成：%s' % why)
+        _put_overlay(bundle, role, front, body)
+        return [role], role_diff(role, (f0, b0), (front, body))
+    return change
+
+
+def unset_change(role, field=None, items=()):
+    if role not in ROLES:
+        raise Refused('没有这个角色：%s（%s）' % (role, ' '.join(ROLES)))
+
+    def change(bundle):
+        f0, b0 = _overlay(bundle, role)
+        front, body = dict(f0), b0
+        if field is None:
+            front, body = {}, ''
+        elif field == 'body':
+            front.pop('body', None)
+            body = ''
+        elif field not in front:
+            return [role], []
+        elif items and field in LISTS:
+            front[field] = [x for x in items_of(front[field]) if x.lstrip('+-') not in items or x == REPLACE]
+            if front[field] in ([], [REPLACE]):
+                front.pop(field)
+        elif items and field in DICTS:
+            cur = _mcp_overlay(front[field]) if field == 'mcpServers' else dict(front[field])
+            for n in items:
+                cur.pop(n, None)
+            front[field] = cur
+            if not cur:
+                front.pop(field)
+        else:
+            front.pop(field)
+        _put_overlay(bundle, role, front, body)
+        return [role], role_diff(role, (f0, b0), (front, body))
+    return change
+
+
+def _used_numbers(person_rows):
+    """Every rule number any layer here holds or held (a number is never reused)."""
+    nums = {r['n'] for r in person_rows}
+    try:
+        with open(fleet_rules.default_path(), encoding='utf-8') as f:
+            nums |= {r['n'] for r in fleet_rules.parse(f.read())}
+    except (OSError, fleet_rules.RulesError):
+        pass
+    try:
+        with open(os.path.join(conf_dir(), 'roles', 'rules.md'), encoding='utf-8') as f:
+            nums |= {r['n'] for r in fleet_rules.parse(f.read())}
+    except (OSError, fleet_rules.RulesError):
+        pass
+    return nums
+
+
+def rule_change(n, cells):
+    """rule-set: row `n` ('new' = the next free number from 100) in the person's
+    layer, every cell not given kept from the merged row."""
+    if 'tier' in cells and cells['tier'] not in fleet_rules.TIERS:
+        raise Refused('档位是 %s 之一，不是 %s' % (' '.join(fleet_rules.TIERS), cells['tier']))
+    if 'role' in cells and cells['role'] not in ROLES:
+        raise Refused('没有这个角色：%s' % cells['role'])
+
+    def change(bundle):
+        mine = _person_rows(bundle)
+        cur = _rules_with(mine)
+        if n == 'new':
+            num = max([fleet_rules.NEW_FROM - 1] + list(_used_numbers(mine))) + 1
+            row = {'n': num, 'role': '', 'cond': '', 'action': '', 'tier': '', 'keywords': []}
+            miss = [SAY_CELL[c] for c in ('role', 'cond', 'action', 'tier') if not cells.get(c)]
+            if miss:
+                raise Refused('新规则要写全：%s' % '、'.join(miss))
+        else:
+            if not str(n).isdigit():
+                raise Refused('规则编号是数字，或 new')
+            num = int(n)
+            have = next((r for r in cur['rows'] if r['n'] == num), None) \
+                or next((r for r in mine if r['n'] == num), None)
+            if have is None:
+                raise Refused('规则表里没有 %d——新规则用 rule-set new（从 %d 起编，编号不复用）'
+                              % (num, fleet_rules.NEW_FROM))
+            row = {k: have[k] for k in ('n',) + RULE_CELLS}
+        for c, v in cells.items():
+            row[c] = fleet_rules._words(v) if c == 'keywords' else v
+        rows = [r for r in mine if r['n'] != num] + [row]
+        rows.sort(key=lambda r: r['n'])
+        lines = rules_diff(mine, rows)
+        bundle['rules'] = [dict(r, keywords=', '.join(r['keywords'])) for r in rows]
+        return [row['role']] + ([have['role']] if n != 'new' and have['role'] != row['role'] else []), lines
+    return change
+
+
+def rule_unset_change(n):
+    def change(bundle):
+        mine = _person_rows(bundle)
+        if not str(n).isdigit() or int(n) not in {r['n'] for r in mine}:
+            return [], []
+        gone = next(r for r in mine if r['n'] == int(n))
+        rows = [r for r in mine if r['n'] != int(n)]
+        lines = rules_diff(mine, rows)
+        if rows:
+            bundle['rules'] = [dict(r, keywords=', '.join(r['keywords'])) for r in rows]
+        else:
+            bundle.pop('rules', None)
+        return [gone['role']], lines
+    return change
+
+
+def undo(yes, to=None):
+    """Back to the version before this one (or `to`): the hub's restore — that
+    version's body as a NEW version, so an undo is itself undoable."""
+    _guard()
+    cfg, a = _config()
+    for attempt in (1, 2):
+        cur = _get(cfg, a)
+        v = int(cur.get('version') or 0)
+        back = int(to) if to else int(cur.get('prev') or (v - 1 if v > 1 else 0))
+        if back < 1 or back == v:
+            raise Refused('没有上一版可回（入口 v%d）' % v)
+        old = _get(cfg, a, 'version=%d' % back)
+        b0, b1 = cur.get('bundle') or {}, old.get('bundle') or {}
+        lines, roles = [], []
+        for r in ROLES:
+            got = role_diff(r, _overlay(b0, r), _overlay(b1, r))
+            if got:
+                lines += got
+                roles.append(r)
+        try:
+            got = rules_diff(_person_rows(b0), _person_rows(b1))
+        except Refused:
+            got = ['规则表回到 v%d 的样子' % back]
+        lines += got
+        roles += [ln.split(' · ')[0] for ln in got]
+        roles = [r for r in ROLES if r in roles or SAY_ROLE[r] in roles]
+        others = sorted(k for k in set(b0) | set(b1) if k not in ('roles', 'rules') and b0.get(k) != b1.get(k))
+        if others:
+            lines.append('个人配置的其它部分（%s）也回到 v%d' % ('、'.join(others), back))
+        if not yes:
+            for ln in lines or ['角色和规则合起来没有变化']:
+                print('撤回 %s' % ln)
+            print('还没写——回到 v%d；人说好了，同一条命令加 --yes' % back)
+            return 4
+        code, resp = cfg.person_call(a, 'PUT', {'restore': back, 'base': v, 'note': 'undo → v%d' % back})
+        if code == 409 and attempt == 1:
+            continue
+        if code == 409:
+            raise Refused('入口上的个人配置刚被别处改过两次——重读一遍，再说一次', 1)
+        if code != 200:
+            cfg.hub_err(code, resp)
+        _write_cache(cfg, resp)
+        for ln in lines or ['角色和规则合起来没有变化']:
+            print('已撤回 %s（入口 v%s = v%d 的内容）' % (ln, resp.get('version'), back))
+        if roles:
+            print(_effect(roles))
+        return 0
+    return 1
+
+
+def write_cmd(cmd, rest):
+    """Parse a write command's words; returns its exit."""
+    yes, replace, note, cells, pos, i = False, False, '', {}, [], 0
+    while i < len(rest):
+        x = rest[i]
+        if x == '--yes':
+            yes = True
+        elif x == '--replace':
+            replace = True
+        elif x in ('--note',) + tuple('--' + c for c in RULE_CELLS) and i + 1 < len(rest):
+            if x == '--note':
+                note = rest[i + 1]
+            else:
+                cells[x[2:]] = rest[i + 1]
+            i += 1
+        else:
+            pos.append(x)
+        i += 1
+    if cmd == 'undo':
+        return undo(yes, pos[0] if pos else None)
+    if cmd == 'set':
+        if len(pos) < 3:
+            raise Refused('用法：set <role> <项> <值…> [--replace] [--yes]')
+        return write(set_change(pos[0], pos[1], pos[2:], replace), note or 'set %s.%s' % (pos[0], pos[1]), yes)
+    if cmd == 'unset':
+        if not pos:
+            raise Refused('用法：unset <role> [<项> [<名字…>]] [--yes]')
+        return write(unset_change(pos[0], pos[1] if len(pos) > 1 else None, pos[2:]),
+                     note or 'unset %s' % '.'.join(pos[:2]), yes)
+    if cmd == 'rule-set':
+        if len(pos) != 1 or not cells:
+            raise Refused('用法：rule-set <N|new> [--role R] [--cond C] [--action A] [--tier T] [--keywords K] [--yes]')
+        return write(rule_change(pos[0], cells), note or 'rule %s' % pos[0], yes)
+    if cmd == 'rule-unset':
+        if len(pos) != 1:
+            raise Refused('用法：rule-unset <N> [--yes]')
+        return write(rule_unset_change(pos[0]), note or 'rule-unset %s' % pos[0], yes)
+    raise Refused('unknown command %s' % cmd)
+
+
 def _vector(path):
     """One test vector (tests/role-merge/*.json): {base: {front, body}, layers:
     [{label, kind, front, body} | {label, kind, text}], locks} → merge's answer."""
@@ -908,6 +1444,12 @@ def main(argv):
             return 0
         if cmd == 'rules':
             return rules_cmd(rest)
+        if cmd in WRITES:
+            try:
+                return write_cmd(cmd, rest)
+            except Refused as e:
+                print('fleet-role: %s' % e, file=sys.stderr)
+                return e.code
         if not rest and cmd == 'doctor':
             rest = ['-']
         if not rest:

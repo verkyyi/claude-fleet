@@ -34,6 +34,9 @@
 #                               worker · epic-driver) with your layers merged
 #                               in; --sources says where each field came from:
 #                               自带 · 你的 vN · 本机 · 🔒 (#2783)
+#   fleet role set|unset|rule-set|rule-unset|undo …
+#                               change your own layer on the hub, one item at a
+#                               time: 改前 → 改后 first, --yes writes (#2785)
 #   fleet --test-identity [m4]  the client as the TEST identity (#1931): its
 #                               own lease beside yours — takes nothing over,
 #                               never where you are; the default inside a

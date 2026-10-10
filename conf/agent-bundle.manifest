@@ -59,6 +59,12 @@ bin/fleet-hooks-merge.py            tool
 bin/fleet-agent-defaults.py         tool
 bin/fleet-agent-team.py             tool
 bin/fleet-config.py                 tool
+# the roles' definitions + the rule table, and their one reader / writer: the
+# fleet-config skill (#2785) runs `fleet role …` on a client-only computer too
+bin/fleet-role.py                   tool
+bin/fleet_rules.py                  tool
+agents/                             tool
+conf/role-rules.default.md          tool
 bin/fleet-daemon-lib.sh             tool
 
 # the credential proxy every session reaches its subscription through (#1970):
