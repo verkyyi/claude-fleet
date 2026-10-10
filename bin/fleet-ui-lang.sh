@@ -525,6 +525,8 @@ fleet_ui_t() {
     en:hint_backlog)            printf '↵ work · [＋ new] · ? keys · [✕ close]' ;;
     zh:toast_url_copied_fmt)    printf 'fleet: 链接已复制到剪贴板 — %s' "${1:-}" ;;
     en:toast_url_copied_fmt)    printf 'fleet: link copied to your clipboard — %s' "${1:-}" ;;
+    zh:clip_hint)               printf 'fleet: 这个终端可能收不到会话里的复制 — Mac 上按住 ⌥ 拖选、iPad / 手机上长按选字，用终端自己的复制' ;;
+    en:clip_hint)               printf 'fleet: this terminal may not receive a copy made in a session — hold ⌥ and drag on a Mac, long-press on an iPad / phone, to use the terminal'"'"'s own copy' ;;
     # --- toasts a tmux bind shows (issue #1535: no hardcoded English left)
     zh:toast_sidebar_home)      printf '任务栏：输入名称 ↵ 新会话 · ↑↓ 切换 · ↵/Esc 回任务 · 再按 ☰/F9 去 hub' ;;
     en:toast_sidebar_home)      printf 'Tasks: type a name ↵ = new session · ↑↓ switch · ↵/Esc worker · ☰/F9 again → hub' ;;
