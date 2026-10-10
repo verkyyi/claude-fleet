@@ -49,6 +49,7 @@ together (refused, nothing ran): `evidence before|after` takes exactly one of
 |---|---|---|---|
 | `report` 报 | `state` (`merged` · `blocked` · `failed` · `stopped` · `waiting`), `pr`?, `summary`?, `dry_run`? | `fleet-report-parent.sh --state S [--pr N] [--summary T] [--dry-run]` | 0 reported / no parent · 3 queued (delivered later — don't resend) · 1 refused; `merged` is checked against the PR's real state |
 | `ask` 问 | `question`, `kind`? (`question` · `permission`), `suggest`? `default`? `due`? `class`? (`normal` · `never:rule\|money\|publish` — issue #2669, docs/DECISIONS.md), `issue`? (default the window's `@issue`; none → refused) | `fleet-comment.sh <issue> --note --body-file -` with `⛔ blocked: <question>` (`⛔ blocked — needs authorization: …` for `permission`; with any of the new fields, or the steward on, the body `bin/fleet_decision.py ask-body` writes: 建议 / 不答按 / 截止 + the `fleet:ask v=1` marker), **then** `set-claude-state.sh blocked` — stamped even if the comment failed | the comment's; `structuredContent.state` is the stamp's. The answer arrives as the next turn by the existing channels (issue-bridge, a prompt) |
+| `answer_dialog` 答 | `window` (`@<id>` / `%<pane>`), `fp` (the dialog's fingerprint), `picks` (labels verbatim; `N=<label>` with several questions), `by`? (`person` · `steward` · `default`), `basis`?, `issue`? (where the trail goes) | `fleet-dialog-answer.sh <window> --fp F --pick L … [--by B] [--basis T] [--issue R#N]` — reads the open AskUserQuestion off that window's transcript, refuses unless it is the one named (fingerprint + labels), refuses over a person typing / a draft, presses once through `fleet-answer.sh` and confirms in the transcript, leaves one line in `decision-<day>.md` + a record-only comment (issue #2958) | 0 answered · 1 no window / transcript · 2 usage · 3 refused, nothing sent · 4 pressed, unconfirmed (never pressed again) · 5 a person is typing |
 | `comment` 记 | `issue`, `body`, `mode`? (`note` default · `to-worker`), `close`?, `repo`? | `fleet-comment.sh <issue> --note\|--to-worker [--close] [--repo R] --body-file -` | the script's. `note` is RECORD-ONLY |
 | `evidence` 记 | `action` (`line` · `before` · `after` · `post`), `file` \| `text` \| `pane`, `name`?, `note`?, `mv`?, `issue`? | `fleet-evidence.sh <action> [--issue M] [--note …] [--name F] [--mv] [--pane T] [<file> \| -]` (`text` on stdin as `-`) | 0 ok · 1 none / failure · 2 usage · 4 no issue |
 | `handoff` 记 | `action` (`path` · `find` · `repo` · `check`), `slug`?, `doc`?, `issue`? | `fleet-handoff-file.sh <action> [--slug S]` · `check - [--issue N]` (doc on stdin) | 0 · 1 none · 3 check findings (advice) · 4 ambiguous |
@@ -336,6 +337,7 @@ for you (#2068 B).
 | `fleet-evidence.sh` · `fleet-handoff-file.sh` | `evidence` · `handoff` |
 | `fleet-pr-verdict.sh` · `fleet-pr-merge.sh` | `pr_verdict` · `pr_merge` |
 | `fleet-claim-brief.sh` · `fleet-issue-file.sh` · `fleet-gh.sh` | `brief` · `file_issue` · `gh` |
+| `fleet-dialog-answer.sh` | `answer_dialog` |
 
 `FLEET_DIRECT_SCRIPTS` (env, or `fleet.conf`) picks what happens:
 

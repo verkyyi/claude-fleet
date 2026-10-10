@@ -1038,6 +1038,7 @@ _DIRECT_TOOLS = {
     "fleet-issue-file.sh": ("file_issue", None),
     "fleet-gh.sh": ("gh", None),
     "fleet-reap-policy.sh": ("set_reap", ("set",)),
+    "fleet-dialog-answer.sh": ("answer_dialog", None),
 }
 # The mod's tools, by the name Claude shows them under (the fallback since #2057).
 _RETIRED_TOOLS = {

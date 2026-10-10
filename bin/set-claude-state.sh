@@ -205,8 +205,8 @@ case "${1:-}" in
     # overwrites @claude_state — the nudge must not hijack a pane that stopped in
     # a needs-attention state (an open operator question). Only the Stop hook
     # passes 'done', so this one extra read never touches the per-tool hot path.
-    handoff_prev=$(tmux display-message -p -t "$TMUX_PANE" '#{@claude_state}|#{@claude_wait}' 2>/dev/null)
-    wprev=${handoff_prev#*|}; handoff_prev=${handoff_prev%%|*}
+    handoff_prev=$(tmux display-message -p -t "$TMUX_PANE" '#{@claude_state}|#{@claude_needs}|#{@claude_state_src}|#{@cc_session_id}|#{@claude_wait}' 2>/dev/null)
+    wprev=${handoff_prev##*|}; _dlg=${handoff_prev#*|}; _dlg=${_dlg%|*}; handoff_prev=${handoff_prev%%|*}
     # A turn that ended while the window is still WAITING on something: the pane is
     # idle but NOT finished, so it is stamped `looping` (↻) instead of `done` (✓) —
     # the dash's k/N stops counting it and the reapers retain it. @claude_wait says
@@ -227,9 +227,32 @@ case "${1:-}" in
     _lbin=$(cd "$(dirname "$0")" && pwd)
     _tp=$(printf '%s' "$_stop_payload" \
       | sed -n 's/.*"transcript_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | sed -n 1p)
-    wwait=$(bash -c '. "$1/fleet-lib.sh"; fleet_stop_wait "$2" "$3"' stop-wait \
-              "$_lbin" "$TMUX_PANE" "$_tp" 2>/dev/null </dev/null) || wwait=''
-    [ -n "$wwait" ] && wstate=looping
+    # A dialog still open is not the end of anything (issue #2958). An
+    # AskUserQuestion — or a permission prompt — the hooks said is open
+    # (needs/ask · needs/perm) stays `needs` through a Stop (or the mod's
+    # turn.complete) that arrives while the transcript still holds it unanswered:
+    # a driver asking from inside a /loop wake used to read `looping` here for
+    # seven hours, and nobody went to answer it. Its answer's PostToolUse writes
+    # `working`, the next Stop the `looping`/`done` it is. The agent's own word
+    # (7501) is not second-guessed; an unreadable transcript changes nothing.
+    case "$handoff_prev/$_dlg" in
+      needs/ask\|hook\|*|needs/ask\|\|*|needs/perm\|hook\|*|needs/perm\|\|*)
+        _dsid=${_dlg##*|}; _dtp=$_tp
+        if [ -z "$_dtp" ] && [ -n "$_dsid" ]; then
+          for _f in "$HOME/.claude/projects"/*/"$_dsid".jsonl; do [ -f "$_f" ] && { _dtp=$_f; break; }; done
+        fi
+        if [ -n "$_dtp" ] && [ -f "$_dtp" ] && [ -f "$_lbin/fleet-pending-tool.sh" ]; then
+          _dpend=$(sh "$_lbin/fleet-pending-tool.sh" "$_dtp" 2>/dev/null)
+          case "${_dlg%%|*}/$_dpend" in
+            ask/AskUserQuestion|perm/?*) sem="leave"; set -- leave ;;
+          esac
+        fi ;;
+    esac
+    if [ "$sem" = done ]; then
+      wwait=$(bash -c '. "$1/fleet-lib.sh"; fleet_stop_wait "$2" "$3"' stop-wait \
+                "$_lbin" "$TMUX_PANE" "$_tp" 2>/dev/null </dev/null) || wwait=''
+      [ -n "$wwait" ] && wstate=looping
+    fi
     ;;
   busy)
     # PreToolUse heartbeat = working, EXCEPT the AskUserQuestion tool: it opens a

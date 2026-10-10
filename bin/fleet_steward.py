@@ -24,7 +24,13 @@ the person's clock (fleet_decision.zone). A due beat:
   3. answers each due row by its default (fleet_decision.apply_due) — within the
      beat's write budget;
   4. asks fleet-epic-backstop.sh about the open PRs of a batch whose driver is
-     gone (its mark stale), so the model never merges under a busy worker;
+     gone (its mark stale), so the model never merges under a busy worker; a
+     stale mark whose driver window is still HERE (issue #2958) is a row too —
+     `dialog-<fp>` while it waits on its person (the open choice dialog's
+     question + options off its transcript, answered from the sheet through
+     bin/fleet_dialog_answer.py, the option marked (Recommended) its default),
+     `stalled-…` + the page's 「没在走」 line when it waits on no one a TTL past
+     the stale mark; either closes by itself once its cause is gone;
   4b. watches the fleet's own health (bin/fleet_steward_health.py, issue #2674):
      a doctor row newly WARN / FAIL, or idle sessions nothing has slept or
      reaped for two hours, files ONE issue per fingerprint — within the budget;
@@ -68,7 +74,9 @@ one past it waits for the next beat, and the card says 「延后 N 条」.
 Seams (selftest): FLEET_STEWARD_WINDOWS_CMD (prints `wid TAB role TAB state TAB
 issue TAB repo TAB epic TAB key`), FLEET_STEWARD_CHILDREN_CMD (argv + key --json
 --since N), FLEET_STEWARD_SEND_CMD (argv + target, text on stdin),
-FLEET_STEWARD_BACKSTOP_CMD (argv + key --pr N --parent P), FLEET_STEWARD_STAMP_CMD
+FLEET_STEWARD_BACKSTOP_CMD (argv + key --pr N --parent P), FLEET_STEWARD_DIALOG_CMD
+(argv run instead of fleet_dialog_answer.py), FLEET_DIALOG_PROJECTS (the
+transcripts' root), FLEET_STEWARD_STAMP_CMD
 (argv + N: the decide count), FLEET_STEWARD_DEBUG_CMD (argv + feed --json: the
 debug reports' feed, issue #2893; FLEET_STEWARD_DEBUG=0 skips it), and
 fleet_decision.py's own three.
@@ -77,6 +85,7 @@ import argparse
 import base64
 import datetime as dt
 import fcntl
+import hashlib
 import json
 import os
 import re
@@ -87,6 +96,7 @@ import uuid
 from pathlib import Path
 
 import fleet_decision as fd
+import fleet_needs_detail as nd
 import fleet_followup as fu
 import fleet_park
 import fleet_sample as samp
@@ -174,19 +184,22 @@ def _seam(name, argv, **kw):
 
 
 def windows(sess):
-    """[{wid, role, state, issue, repo, epic, key, sheet}] of this fleet's windows
-    (`sheet`: the window's @sheet_pane — 1 while the mod's decision sheet is up)."""
+    """[{wid, role, state, issue, repo, epic, key, sheet, needs, sid, name}] of this
+    fleet's windows (`sheet`: the window's @sheet_pane — 1 while the mod's decision
+    sheet is up; `needs` / `sid` / `name`: what a driver waits on, its conversation
+    and its name, for a batch whose heartbeat stopped — issue #2958)."""
     r = _seam("FLEET_STEWARD_WINDOWS_CMD", [sess])
     if r is None:
         fmt = "\t".join(("#{window_id}", "#{@fleet_role}",
                          "#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}",
-                         "#{@issue}", "#{@repo}", "#{@epic}", "", "#{@sheet_pane}"))
+                         "#{@issue}", "#{@repo}", "#{@epic}", "", "#{@sheet_pane}",
+                         "#{@claude_needs}", "#{@cc_session_id}", "#{window_name}"))
         r = subprocess.run(["tmux", "-L", socket(sess), "list-windows", "-t", "=" + sess, "-F", fmt],
                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, universal_newlines=True, timeout=30)
     out = []
     for line in (r.stdout or "").splitlines():
-        p = (line.split("\t") + [""] * 8)[:8]
-        w = dict(zip(("wid", "role", "state", "issue", "repo", "epic", "key", "sheet"), p))
+        p = (line.split("\t") + [""] * 11)[:11]
+        w = dict(zip(("wid", "role", "state", "issue", "repo", "epic", "key", "sheet", "needs", "sid", "name"), p))
         if w["epic"] and not w["key"] and os.environ.get("FLEET_STEWARD_WINDOWS_CMD") is None:
             w["key"] = sh_lib('fleet_window_okey "$1" "$2"', sess, w["wid"])
         out.append(w)
@@ -300,8 +313,9 @@ def epic_marks(now):
         ep, ttl = kv.get("epoch", ""), kv.get("ttl", "2700")
         if not ep.isdigit() or not kv.get("epic"):
             continue
-        out.append({"epic": kv["epic"], "repo": kv.get("repo", "-"),
-                    "fresh": int(ep) + (int(ttl) if ttl.isdigit() else 2700) >= now})
+        ttl = int(ttl) if ttl.isdigit() else 2700
+        out.append({"epic": kv["epic"], "repo": kv.get("repo", "-"), "epoch": int(ep), "ttl": ttl,
+                    "fresh": int(ep) + ttl >= now})
     return out
 
 
@@ -437,6 +451,98 @@ def issue_of_key(key, slugs):
     return (repo, m.group(2)) if repo else None
 
 
+# ---- a driver that is here but not moving (issue #2958) --------------------------
+
+def dialog_of(w):
+    """The open choice dialog in a window's conversation (fleet_needs_detail's
+    read, the one the answer channel checks against), or None."""
+    root = os.environ.get("FLEET_DIALOG_PROJECTS") or str(Path.home() / ".claude" / "projects")
+    if not w.get("sid"):
+        return None
+    for f in sorted(Path(root).glob("*/%s.jsonl" % w["sid"])):
+        d = nd.pending_dialog(str(f))
+        if d is not None:
+            d["fp"] = nd.dialog_fp(d)
+        return d
+    return None
+
+
+RECOMMENDED_RE = re.compile(r"[(（]\s*(?:recommended|推荐|建议)\s*[)）]", re.I)
+
+
+def stuck_driver_row(m, ref, w, now_t):
+    """The decision row for a batch whose heartbeat is stale while its driver's
+    window is still here: it waits on its person (a choice dialog: the question,
+    its options, where to answer — the option marked (Recommended) is the
+    suggestion and, past the usual deadline, the default) — or, a TTL past the
+    stale mark, it is simply not moving. None while neither."""
+    epic = "#" + m["epic"]
+    where = w.get("name") or w["wid"]
+    asked = fd.iso(now_t)
+    base = {"asked": asked, "src": "gh:" + ref,
+            "url": "", "state": "open", "epic": ref, "wid": w["wid"], "window": where, "v": str(fd.V)}
+    if w["state"] == "needs":
+        d = dialog_of(w) if w.get("needs") == "ask" else None
+        if d is not None:
+            qs = d["questions"]
+            q = " / ".join(x["question"] for x in qs)
+            opts = " / ".join("、".join(x["options"]) for x in qs)
+            rec = [o for o in qs[0]["options"] if RECOMMENDED_RE.search(o)] if len(qs) == 1 else []
+            row = dict(base, id="dialog-" + d["fp"], local="dialog", kind=fd.classify(None, q),
+                       item=tr("steward_dialog_item_fmt", epic, q, opts, where),
+                       say=tr("steward_dialog_say_fmt", epic, q), suggest=rec[0] if rec else "",
+                       default=rec[0] if rec else "", due=fd.iso(fd.due_at(now_t)) if rec else "",
+                       fp=d["fp"], question=q, options=[x["options"] for x in qs],
+                       multi=[x["multiSelect"] for x in qs])
+            return row
+        # waiting on something that is no choice dialog (a permission, a declared
+        # blocker): the person goes to the window; nothing to answer from here
+        q = w.get("needs") or "needs"
+        return dict(base, id="dialog-" + hashlib.sha1(("%s|%s|%s" % (ref, w["wid"], q)).encode()).hexdigest()[:16],
+                    local="dialog", kind="normal", item=tr("steward_dialog_item_fmt", epic, q, "—", where),
+                    say=tr("steward_dialog_say_fmt", epic, q), suggest="", default="", due="")
+    late = int(now_t.timestamp()) - (m["epoch"] + m["ttl"])
+    if late <= m["ttl"]:
+        return None
+    mins = (int(now_t.timestamp()) - m["epoch"]) // 60
+    return dict(base, id="stalled-" + hashlib.sha1(("%s|%s" % (ref, m["epoch"])).encode()).hexdigest()[:16],
+                local="stalled", kind="normal", mins=mins, item=tr("steward_stalled_item_fmt", epic, mins, where),
+                say=tr("steward_stalled_item_fmt", epic, mins, where), suggest="", default="", due="")
+
+
+def close_local(st, row, state, by, answer, now_t, delta):
+    row["state"] = state
+    row["by"] = by
+    row["answer"] = answer
+    row["closed_at"] = fd.iso(now_t)
+    delta["closed"].append({"id": row["id"], "src": row["src"], "state": state})
+
+
+def dialog_answer(sess, row, picks, by, basis):
+    """Press `picks` (labels) into the dialog the row names, through the one
+    guarded road (bin/fleet_dialog_answer.py) → (rc, its words)."""
+    argv = (os.environ["FLEET_STEWARD_DIALOG_CMD"].split() if os.environ.get("FLEET_STEWARD_DIALOG_CMD")
+            else ["python3", str(BIN / "fleet_dialog_answer.py")])
+    argv += [row["wid"], "--fp", row["fp"], "--by", by, "--basis", basis, "--session", sess]
+    if row.get("epic"):
+        argv += ["--issue", row["epic"]]
+    for p in picks:
+        argv += ["--pick", p]
+    r = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=180)
+    return r.returncode, (r.stdout.strip() or r.stderr.strip())
+
+
+def dialog_picks(row, text):
+    """The person's / the steward's answer text → one `[N=]label` per pick: the
+    questions split on ` | `, a multiSelect's labels on ` + `."""
+    parts = [p.strip() for p in text.split(" | ")] if len(row.get("options") or []) > 1 else [text.strip()]
+    multi, picks = row.get("multi") or [], []
+    for qi, part in enumerate(parts, 1):
+        labels = [x.strip() for x in part.split(" + ")] if qi <= len(multi) and multi[qi - 1] else [part]
+        picks += [label if len(parts) == 1 else "%d=%s" % (qi, label) for label in labels]
+    return picks
+
+
 def collect(sess, st, now_t, apply=True):
     delta = {"v": V, "session": sess, "at": fd.iso(now_t), "events": [], "new_asks": [], "closed": [],
              "defaulted": [], "orphans": [], "deferred": 0, "followups": {"new": [], "done": [], "refused": []},
@@ -480,7 +586,7 @@ def collect(sess, st, now_t, apply=True):
         if (w["role"] in ("", "worker")) and w["state"] == "needs" and w["issue"].isdigit() and w["repo"]:
             waiting.add((w["repo"], w["issue"]))
     for row in st.d["rows"].values():
-        if row.get("state") == "open" and not row.get("followup"):
+        if row.get("state") == "open" and not row.get("followup") and not row.get("local"):
             try:
                 waiting.add(fd.split_src(row["src"]))
             except ValueError:
@@ -503,6 +609,15 @@ def collect(sess, st, now_t, apply=True):
     for row in list(st.d["rows"].values()):
         if not apply or not fd.is_due(row, now_t):
             continue
+        if row.get("local"):
+            if row.get("local") == "dialog" and st.budget_left() >= 1:
+                rc, _ = dialog_answer(sess, row, [fd.row_default(row)], "default", tr("steward_dialog_basis_default"))
+                st.spend(1)
+                if rc == 0:
+                    close_local(st, row, "defaulted", "default", fd.row_default(row), now_t, delta)
+                    tally(st, "default")
+                    delta["defaulted"].append({"id": row["id"], "src": row["src"], "default": row.get("default", "")})
+            continue
         if st.budget_left() < 2:
             delta["deferred"] += 1
             continue
@@ -522,9 +637,21 @@ def collect(sess, st, now_t, apply=True):
     # 4. batches whose driver is gone: what the backstop says about their open PRs
     orphans = {}
     marks = epic_marks(int(now_t.timestamp()))
+    live = set()
     for m in marks:
         ref = "%s#%s" % (m["repo"], m["epic"])
-        if m["fresh"] or any(w["epic"] in (ref, "#" + m["epic"]) for w in wins):
+        if m["fresh"]:
+            continue
+        drv_w = [w for w in wins if w["epic"] in (ref, "#" + m["epic"])]
+        if drv_w:
+            # the driver's window is here but its heartbeat stopped (issue #2958):
+            # it waits on its person, or it is not moving — either way a row
+            row = stuck_driver_row(m, ref, drv_w[0], now_t)
+            if row is not None:
+                live.add(row["id"])
+                if row["id"] not in st.d["rows"]:
+                    st.d["rows"][row["id"]] = row
+                    delta["new_asks"].append(row)
             continue
         drv = st.d["drivers"].get(ref) or st.d["drivers"].get("#" + m["epic"]) or ""
         members = []
@@ -537,6 +664,13 @@ def collect(sess, st, now_t, apply=True):
     if orphans != st.d["orphans"]:
         delta["orphans"] = list(orphans.values())
     st.d["orphans"] = orphans
+    # a stuck-driver row whose cause went away (answered, moving again, gone) closes
+    for row in list(st.d["rows"].values()):
+        if row.get("local") and row.get("state") == "open" and row["id"] not in live:
+            close_local(st, row, "answered" if row["local"] == "dialog" else "gone", "", "", now_t, delta)
+    st.d["stalled"] = {r["src"]: {"epic": r["epic"], "mins": r["mins"], "window": r["window"], "wid": r["wid"]}
+                       for r in st.d["rows"].values()
+                       if r.get("local") == "stalled" and r.get("state") == "open"}
     # 5b. what the finished batches leave for a person (issue #2672)
     if apply:
         try:
@@ -774,6 +908,28 @@ def cmd_answer(a):
         sys.stderr.write("fleet-steward-tick: %s is never-default (%s) — it goes on the sheet\n"
                          % (a.row, row.get("kind")))
         return 1
+    if row.get("local") == "stalled" or (row.get("local") == "dialog" and not row.get("fp")):
+        sys.stderr.write("fleet-steward-tick: %s is answered in its window (%s), not from here\n"
+                         % (a.row, row.get("window")))
+        return 1
+    if row.get("local") == "dialog":
+        # a choice dialog in the driver's own window (issue #2958): pressed in
+        # through the one guarded road, which leaves the trail itself
+        basis = a.source or (tr("steward_dialog_basis_person") if a.by == "person" else "")
+        rc, words = dialog_answer(session(a.session), row, dialog_picks(row, a.text), a.by, basis)
+        if rc != 0:
+            sys.stderr.write("fleet-steward-tick: %s\n" % words)
+            st.save()
+            return rc
+        close_local(st, row, "answered", a.by, a.text, fd.now_local(), {"closed": []})
+        tally(st, a.by)
+        wins = windows(session(a.session))
+        st.d["decide"] = len(sheet_open(st))
+        stamp_decide(session(a.session), st.d["decide"], wins)
+        page_step(session(a.session), st, fd.now_local(), wins)
+        st.save()
+        print("answered %s" % a.row)
+        return 0
     rc = do_answer(st, row, a.text, a.by, a.source)
     if rc == 0:
         log_answer(session(a.session), st, row, a.text, a.by, fd.now_local(getattr(a, "now", None)))

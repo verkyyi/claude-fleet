@@ -15,6 +15,7 @@ without opening the session. ONE rule for both agents:
 
     fleet_needs_detail.py payload          a hook's JSON on stdin → the detail
     fleet_needs_detail.py transcript <f>   the newest tool_use without a result → the detail
+    fleet_needs_detail.py dialog <f>       the open AskUserQuestion as JSON + its `fp` (issue #2958)
 
 Prints one line (nothing when there is nothing to say), always exits 0: a
 missing detail never costs the state it describes.
@@ -106,12 +107,75 @@ def from_transcript(path):
     return detail(*uses[tuid]) if tuid is not None else ""
 
 
+# ---- the open dialog itself (issue #2958) ---------------------------------------
+# The steward's decision row and the guarded answer channel
+# (bin/fleet_dialog_answer.py) read the SAME thing: the newest AskUserQuestion with
+# no result — its tool_use_id, every question with its options' labels — and name
+# it by a fingerprint, so an answer is only ever pressed into the dialog the row
+# was written about. fleet-answer.sh's pending gate is the same rule.
+
+def pending_dialog(path):
+    """{tool_use_id, questions: [{question, header, multiSelect, options: [label]}]}
+    of the open AskUserQuestion in the transcript at `path`, or None."""
+    uses, done, order = {}, set(), []
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if "AskUserQuestion" not in line and "tool_result" not in line:
+                    continue
+                try:
+                    o = json.loads(line)
+                except ValueError:
+                    continue
+                m = o.get("message") if isinstance(o, dict) else None
+                content = m.get("content") if isinstance(m, dict) else None
+                if not isinstance(content, list):
+                    continue
+                for c in content:
+                    if not isinstance(c, dict):
+                        continue
+                    if c.get("type") == "tool_use" and c.get("name") == "AskUserQuestion":
+                        uses[c.get("id")] = c.get("input") or {}
+                        order.append(c.get("id"))
+                    elif c.get("type") == "tool_result":
+                        done.add(c.get("tool_use_id"))
+    except OSError:
+        return None
+    tuid = next((i for i in reversed(order) if i not in done and i is not None), None)
+    if tuid is None:
+        return None
+    qs = []
+    for q in (uses[tuid].get("questions") or []):
+        if not isinstance(q, dict):
+            return None
+        opts = [o.get("label") for o in (q.get("options") or []) if isinstance(o, dict)]
+        if not opts or not all(isinstance(x, str) for x in opts):
+            return None
+        qs.append({"question": str(q.get("question") or ""), "header": str(q.get("header") or ""),
+                   "multiSelect": bool(q.get("multiSelect")), "options": opts})
+    return {"tool_use_id": tuid, "questions": qs} if qs else None
+
+
+def dialog_fp(d):
+    """The dialog's name: its tool_use_id + every question and label, verbatim."""
+    import hashlib
+    body = json.dumps([d.get("tool_use_id"), [[q["question"], q["options"]] for q in d.get("questions") or []]],
+                      ensure_ascii=False, sort_keys=True)
+    return hashlib.sha1(body.encode("utf-8")).hexdigest()[:16]
+
+
 def main(argv):
     try:
         if argv[:1] == ["payload"]:
             out = from_payload(sys.stdin.read())
         elif argv[:1] == ["transcript"] and len(argv) > 1:
             out = from_transcript(argv[1])
+        elif argv[:1] == ["dialog"] and len(argv) > 1:
+            d = pending_dialog(argv[1])
+            if d is None:
+                return 1
+            d["fp"] = dialog_fp(d)
+            out = json.dumps(d, ensure_ascii=False)
         else:
             print(__doc__.strip(), file=sys.stderr)
             return 0
