@@ -301,7 +301,7 @@ waitfor 20 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -q 'AT=.*wt-de
 pass "S  ⌃\\: the session's shell in its worktree (here; m4 over the link's shell-here), ⌃\\ back and forth, one a session, gone with the session; nothing in a direct attach; ⌘P's ⌃\\ on a session off screen — where its agent is (@agent_cwd, else its pane's bin/, else @worktree), ↵ back from its shell, exit closes the shell alone (#3183)"
 
 # --- P: ⌘P's command rows (issue #3180) ------------------------------------------------------
-vp() { TMUX="$IN,0,0" python3 "$BIN/fleet-quickopen.py" view-panel --view fl@view-v1 "$@"; }
+vp() { TMUX="$IN,0,0" python3 "$BIN/fleet-quickopen.py" view-panel --view fl@view-v1; }
 ti select-window -t "=fl@view-v1:$W3"; sleep 0.3
 vp > "$W/panel.txt" || fail "P: view-panel exited non-zero"
 [ "$(sed -n 1p "$W/panel.txt")" = "cmd${T}new${T}新任务…" ] || fail "P: the first line is not 「新任务…」: $(cat "$W/panel.txt")"
