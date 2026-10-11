@@ -5368,7 +5368,8 @@ drill_idle_timeout_starves_merged() {
   : > "$d/tmp/.claude-dash/fleets/acme-app/prmap.ts"
   nt -f /dev/null new-session -d -s itm -n home 'exec sleep 600' || { WHY="cannot start the isolated tmux server"; return 1; }
   f=$(nt new-window -d -P -F '#{window_id}' -t itm -c "$d/app-issue-12" 'exec sleep 600')
-  nt set-option -w -t "$f" @issue 12; nt set-option -w -t "$f" @claude_state done
+  nt set-option -w -t "$f" @issue 12
+  nt set-option -w -t "$f" @claude_state "done"
   t0=$(now)
   out=$( cd "$d" && env -u TMUX -u TMUX_PANE PATH="$d/fake:$WORK/tbin:$PATH" HOME="$WORK/home" TMPDIR="$d/tmp" \
            FLEET_CONF_DIR="$d/conf" FLEET_SKIP_GLOBAL_CONF=1 FLEET_DISPATCH_LEASE_DIR="$d/leases" \
