@@ -691,5 +691,13 @@ PR 永远不上自家机器。没有 `/var/db/fleet-node/ci.env` = 什么都不�
 - **看**：`sudo fleet-node-supervisor.py status` 的 `ci-runner` 行；`fleet doctor` 的 `ci-runner` 行
   （idle / busy / paused PASS，error / 循环没在跑 WARN）；入口 `GET /v1/fleet/ci-runners`（管理员）列每台
   机器的状态、是否在线、空闲几台（C6 据此决定上自家机器还是回 GitHub 的机器）。
+- **列车怎么挑**（C6，#3145）：每趟车的 `board` 用 `bin/fleet-train-macos.sh pick` 问入口
+  `GET /v1/fleet/ci-runners`（仓库密钥 `FLEET_HUB_VIEWER_TOKEN` = 入口的 viewer 令牌；不用 GitHub 管理员令牌）：
+  在线且 idle / busy 的有 n 台 ⇒ macOS 段排 `[self-hosted, macOS, fleet-ci]`，min(n, 2) 片、每片 25 分钟上限，
+  分片按 `bin/selftest-durations-fleet-ci.txt`（自家机器自己的耗时）；一台没有、入口不通、没设密钥 ⇒
+  `macos-latest` 2 片，车照开。`macos-wait`（`… watch`）把每片的机器名和排队时间写进这趟的摘要；
+  排给自家机器 20 分钟没开的，写「自家测试机没接」、这趟红并取消。设密钥：
+  `gh secret set FLEET_HUB_VIEWER_TOKEN --repo verkyyi/claude-fleet`（粘贴，不进命令行）。
+  BREAK-IT：`train-own-runners-gone` · `train-own-runner-silent`。
 - BREAK-IT：`ci-runner-hogs` · `ci-runner-pr-code`（`bin/fleet-break-it-ci-selftest.sh`，沙箱里的假 GitHub、
   假测试机包、假测试账号）。

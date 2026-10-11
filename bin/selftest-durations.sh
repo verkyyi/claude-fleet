@@ -19,25 +19,31 @@
 #     new selftest needs no row to be scheduled — the table only has to be roughly
 #     right, and it is refreshed when a shard's predicted load says so.
 #
-# Usage: selftest-durations.sh [--table FILE] [--run RUN_ID ...] [LOG ...]
+# Usage: selftest-durations.sh [--table FILE] [--job TEXT] [--run RUN_ID ...] [LOG ...]
 #   LOG          a file of runner output (`-` or none = stdin, unless --run is given)
 #   --run ID     fetch a GitHub Actions run's log (`gh run view ID --log`, every
 #                attempt) — the ubuntu `selftests` workflow is the one to use: the
 #                table is in ubuntu-runner seconds, which is the bound that matters
 #   --table FILE the table to rewrite (default: bin/selftest-durations.txt beside this)
+#   --job TEXT   read only the log lines that contain TEXT — a run log's lines start
+#                with their job's name. Our own Macs keep their own table (issue
+#                #3145): `--table bin/selftest-durations-fleet-ci.txt --job 'macOS /
+#                shard' --run <a release train run on fleet-ci>`
 # Prints one line: how many rows were updated, kept, added and dropped.
 set -u
 unset CDPATH
 here=$(cd -- "$(dirname -- "$0")" && pwd)
 table="$here/selftest-durations.txt"
-runs=''
+runs='' job=''
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --table) [ "$#" -ge 2 ] || { echo "selftest-durations: --table needs a file" >&2; exit 2; }
              table=$2; shift 2 ;;
+    --job)   [ "$#" -ge 2 ] || { echo "selftest-durations: --job needs a text" >&2; exit 2; }
+             job=$2; shift 2 ;;
     --run)   [ "$#" -ge 2 ] || { echo "selftest-durations: --run needs a run id" >&2; exit 2; }
              runs="$runs $2"; shift 2 ;;
-    -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,34p' "$0"; exit 0 ;;
     --) shift; break ;;
     -?*) echo "selftest-durations: unknown option $1" >&2; exit 2 ;;
     *) break ;;
@@ -70,7 +76,8 @@ present=$(cd "$here" && ls ./*-selftest.sh 2>/dev/null | sed 's|^\./||')
 
 # Observations: `PASS  name  12.3s`, `FAIL  name  4.0s (exit 1)`, `TIMEOUT name 240.0s
 # (limit 240s)` — anywhere on the line, so a CI log's job/step/timestamp prefix is fine.
-grep -oE '(PASS|FAIL|TIMEOUT) +[A-Za-z0-9_.+-]+-selftest\.sh +[0-9]+(\.[0-9]+)?s' "$tmp" \
+{ if [ -n "$job" ]; then grep -F -- "$job" "$tmp"; else cat "$tmp"; fi; } \
+  | grep -oE '(PASS|FAIL|TIMEOUT) +[A-Za-z0-9_.+-]+-selftest\.sh +[0-9]+(\.[0-9]+)?s' \
   | awk '{ v = $3; sub(/s$/, "", v); print $2, v }' > "$tmp.new"
 
 [ -f "$table" ] || : > "$table"

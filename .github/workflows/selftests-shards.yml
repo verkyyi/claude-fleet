@@ -26,7 +26,7 @@ on:
         required: false
         default: ''
       runs_on:
-        description: 'the runner label (ubuntu-latest, macos-latest, …)'
+        description: 'the runner label (ubuntu-latest, macos-latest, …), or a JSON list of labels (["self-hosted","macOS","fleet-ci"] — our own Macs, issue #3145)'
         type: string
         required: false
         default: ubuntu-latest
@@ -39,7 +39,8 @@ on:
 jobs:
   shard:
     name: shard ${{ matrix.shard }}
-    runs-on: ${{ inputs.runs_on }}
+    # A JSON list is labels (the train's pick, issue #3145); anything else one label.
+    runs-on: ${{ startsWith(inputs.runs_on, '[') && fromJSON(inputs.runs_on) || inputs.runs_on }}
     strategy:
       # Never cancel the siblings on a red: one shard failing must not hide
       # whether the others were green. A partial picture is what makes people
@@ -51,8 +52,10 @@ jobs:
         # refuses loudly.
         shard: ${{ fromJSON(inputs.shards) }}
     # Backstop only — the real bound is on the run step, so a hung test is named.
-    # macOS: a noisier runner and a ~2.3x slower suite (issues #2638, #2659).
-    timeout-minutes: ${{ startsWith(inputs.runs_on, 'macos') && 60 || 15 }}
+    # macOS: a noisier runner and a ~2.3x slower suite (issues #2638, #2659); our
+    # own Macs (fleet-ci): 25 (issue #3145). contains() ignores case, so the
+    # fleet-ci test comes first ("macOS" is among its labels).
+    timeout-minutes: ${{ contains(inputs.runs_on, 'fleet-ci') && 25 || contains(inputs.runs_on, 'macos') && 60 || 15 }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -81,16 +84,25 @@ jobs:
 
       - name: Install tmux
         # ~40 selftests drive tmux on their own isolated socket; the macOS image
-        # does not guarantee it.
+        # does not guarantee it. Our own Mac (fleet-ci) installs nothing: its
+        # runner's PATH has /opt/homebrew/bin, and a missing tmux is the machine's
+        # to fix, not the test login's (issue #3145).
         if: runner.os == 'macOS'
+        env:
+          OURS: ${{ contains(inputs.runs_on, 'fleet-ci') }}
         run: |
-          command -v tmux >/dev/null 2>&1 || brew install tmux
+          if [ "$OURS" = true ]; then
+            command -v tmux >/dev/null 2>&1 || { echo "::error::no tmux on this fleet-ci machine ($(hostname -s)) — install it with Homebrew as an admin"; exit 1; }
+          else
+            command -v tmux >/dev/null 2>&1 || brew install tmux
+          fi
           tmux -V
 
       - name: Skip http.server's lookup of its own address
         # issue #2319: on the hosted macOS image the first reverse lookup of
-        # 127.0.0.1 takes 35 s, and every python fake server paid it.
-        if: runner.os == 'macOS'
+        # 127.0.0.1 takes 35 s, and every python fake server paid it. Hosted only:
+        # on our own Mac it would write into the machine's python (issue #3145).
+        if: runner.os == 'macOS' && !contains(inputs.runs_on, 'fleet-ci')
         run: |
           sc=$(python3 -c 'import sitecustomize; print(sitecustomize.__file__)' 2>/dev/null) \
             || sc="$(python3 -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')/sitecustomize.py"
@@ -105,17 +117,21 @@ jobs:
           python3 -I -c 'import sys, time, http.server as h; t = time.time(); h.ThreadingHTTPServer(("127.0.0.1", 0), h.BaseHTTPRequestHandler); d = time.time() - t; print("bind %.2fs" % d); sys.exit(d > 5)'
 
       - name: Run this shard's selftests
-        # ubuntu: ~1-2 min a shard, 8 min only catches a HUNG test; macOS: ~2.3x.
-        timeout-minutes: ${{ startsWith(inputs.runs_on, 'macos') && 50 || 8 }}
+        # ubuntu: ~1-2 min a shard, 8 min only catches a HUNG test; macOS: ~2.3x;
+        # our own Macs: inside the job's 25 (issue #3145).
+        timeout-minutes: ${{ contains(inputs.runs_on, 'fleet-ci') && 22 || contains(inputs.runs_on, 'macos') && 50 || 8 }}
         env:
           # Per-test ceiling (issue #1150): ~3x the slowest ubuntu test; macOS keeps
           # the runner default (600 s — empty reads as the default).
-          FLEET_SELFTEST_TEST_TIMEOUT: ${{ !startsWith(inputs.runs_on, 'macos') && '240' || '' }}
+          FLEET_SELFTEST_TEST_TIMEOUT: ${{ !contains(inputs.runs_on, 'macos') && '240' || '' }}
           # An unresolvable base (an all-zero `before`) falls back to the full suite.
           CHANGED_BASE: ${{ inputs.base }}
+          # Our own Macs pack their shards by their OWN measured costs (issue #3145).
+          OURS: ${{ contains(inputs.runs_on, 'fleet-ci') }}
         run: |
           set -o pipefail
           set -- --shard "${{ matrix.shard }}/${{ strategy.job-total }}"
+          [ "$OURS" != true ] || set -- --durations selftest-durations-fleet-ci.txt "$@"
           [ -z "$CHANGED_BASE" ] || set -- --changed "$CHANGED_BASE" "$@"
           bash bin/run-selftests.sh "$@" 2>&1 | tee selftests.log
 
