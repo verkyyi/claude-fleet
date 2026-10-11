@@ -44,6 +44,8 @@ FLEET_NODE_* seams; nothing touches /Library, /var or a real login.
      taken over is no row (2); `account adopt` refuses such a login (5) with nothing
      moved; the daemon's tick writes the reading into state.json and a non-root
      reader's check carries it
+  P  the watchdog (#3079): a loop wedged in a blocking open() is ended within
+     FLEET_NODE_WATCHDOG_SECS, its stack in the log; a loop coming round stays up
 """
 import importlib.util
 import json
@@ -1971,6 +1973,34 @@ class N_FullDiskAccess(Sandbox):
         self.assertIn("完全磁盘访问", line)
         self.assertIn("/x/Python", line)
         self.assertIn("kickstart -k system/com.claude-fleet.node", line)
+
+
+class P_Watchdog(Sandbox):
+    """A loop that stops coming round (issue #3079: mini2's wedged at 21:57 for good,
+    every account task with it) dumps its stacks and exits, for launchd to restart."""
+
+    def test_wedged_loop_exits_with_its_stack(self):
+        sh = self.script("w.sh", "exit 0\n")
+        self.table(tasks=[{"name": "w", "every": 0.1, "cmd": ["/bin/bash", sh]}])
+        os.makedirs(os.path.join(self.d, "log", "tasks"))
+        os.mkfifo(os.path.join(self.d, "log", "tasks", "w.log"))   # its log: an open() that never returns
+        p = self.start(FLEET_NODE_WATCHDOG_SECS="1")
+        try:
+            rc = p.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            self.fail("a wedged loop was never ended by the watchdog")
+        self.assertNotEqual(rc, 0, "the watchdog's exit must read as a failure (launchd's KeepAlive restarts it)")
+        err = open(os.path.join(self.d, "sup.err")).read()
+        self.assertIn("start_task", err, "no stack of where the loop stuck:\n" + err[-2000:])
+        self.assertIn("logfile", err)
+
+    def test_off_and_healthy_loop_stay_up(self):
+        sh = self.script("ok.sh", "exit 0\n")
+        self.table(tasks=[{"name": "ok", "every": 0.1, "cmd": ["/bin/bash", sh]}])
+        p = self.start(FLEET_NODE_WATCHDOG_SECS="1")
+        self.assertTrue(until(10, lambda: (self.task("ok").get("runs") or 0) >= 3), "the task never ran")
+        time.sleep(1.5)
+        self.assertIsNone(p.poll(), "a loop coming round every tick was ended by the watchdog")
 
 
 if __name__ == "__main__":

@@ -87,6 +87,9 @@ case "${1:-}" in
   --hook)
     # A view session's windows are still the fleet's: its going is no close.
     fleet_is_view_session "${2:-}" && exit 0
+    # Every close ends here — dash-reap, the idle reaper, a window that died by
+    # itself — so the hub hears it at once, not at the next 5 s beat (issue #3079).
+    fleet_hub_nudge
     # tmux's run-shell -b already detaches us; nohup + & keeps a direct caller's
     # shell from waiting on the schedule either.
     if [ "${FLEET_WINDOW_REAP_FG:-0}" = 1 ]; then hook

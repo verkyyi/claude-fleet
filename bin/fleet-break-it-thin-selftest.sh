@@ -13,6 +13,9 @@
 #                          (issue #3058): the 看台's popup binds say --freeze, and
 #                          through the real dash-popup.sh not one of the pane's wide
 #                          glyphs reaches the terminal while the popup is up
+#   view-far-reaped        bin/fleet_view.py hub_fresh + bin/fleet-hub-sessions.sh
+#                          (issue #3079): a worker reaped on another machine while
+#                          this one's copy of the hub's list had stopped
 #
 # One isolated tmux server (-S under a short /tmp dir), the person's terminals
 # python ptys that answer DA / XTVERSION as iTerm2 and record every byte, the hub a
@@ -208,6 +211,15 @@ PY
   sleep 0.5; [ "$(grep -ao '龘' "$B/out" | wc -l)" -gt "$n1" ] || { WHY="the session never drew again after the popup closed"; th_done; return 1; }
   th_done
   WHAT="会话背后一直在刷折行的中文：看台的弹窗键都带 --freeze，弹窗 ${SECS}s 内画出来，开着的 1.9s 里背后的面板一个宽字也没送到终端；关掉后面板退出 copy-mode、接着刷"
+}
+
+drill_view_far_reaped() {
+  CAP=10   # the issue's bound: the next ⌘P after the far reap
+  local t0 out
+  t0=$(now)
+  out=$(bash "$BIN/fleet-view-hub-fresh-selftest.sh" B 2>&1) || { WHY=$(printf '%s\n' "$out" | grep -m1 FAIL); return 1; }
+  SECS=$(since "$t0")
+  WHAT="家机器的远端缓存停在 16 分钟前（采集器停了、没有刷新循环），另一台机器收掉的会话：下一次打开 ⌘P 先刷一次入口的清单再列，它不在了，刷新循环也起来了"
 }
 
 th_cleanup() {
