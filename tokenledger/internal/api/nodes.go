@@ -95,6 +95,9 @@ type nodeConn struct {
 	// canCredsep is an admin hello's CapCredsep (claude-fleet#2263/#2294):
 	// the logins it opens are credential-separated, so spares may go there.
 	canCredsep bool
+	// canLoginJoin is an admin hello's CapLoginJoin (claude-fleet#3032): its
+	// create hands the login its join code. Set once, before publish.
+	canLoginJoin bool
 	// canSSHRelay is the hello's CapSSHRelay: this node splices relays onto its
 	// sshd (claude-fleet#1413). Set once, before the conn is published.
 	canSSHRelay bool
@@ -224,8 +227,23 @@ func (n *nodeConns) each(fn func(id string, c *nodeConn)) {
 	}
 }
 
-// adminFor returns the open, write-compatible admin connection on hostname.
+// adminFor returns the open, write-compatible admin connection on hostname —
+// one that hands a new login its join code (openerFor) when there is one.
 func (n *nodeConns) adminFor(hostname string) (endpointID string, ok bool) {
+	if id, ok := n.openerFor(hostname); ok {
+		return id, true
+	}
+	return n.pickAdmin(hostname, false)
+}
+
+// openerFor returns the admin connection on hostname a create may go to: one
+// whose hello listed CapLoginJoin (claude-fleet#3032). An older admin opens
+// a login whose own node never connects, so it is never sent a create.
+func (n *nodeConns) openerFor(hostname string) (endpointID string, ok bool) {
+	return n.pickAdmin(hostname, true)
+}
+
+func (n *nodeConns) pickAdmin(hostname string, join bool) (string, bool) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	ids := make([]string, 0, len(n.conns))
@@ -236,17 +254,45 @@ func (n *nodeConns) adminFor(hostname string) (endpointID string, ok bool) {
 	sort.Strings(ids)
 	for _, id := range ids {
 		c := n.conns[id]
-		if c.admin && c.hostname() == hostname && control.Compatible(int(c.proto.Load())) {
+		if c.admin && c.hostname() == hostname && control.Compatible(int(c.proto.Load())) && (!join || c.canLoginJoin) {
 			return id, true
 		}
 	}
 	return "", false
 }
 
-// credsepAdminFor says hostname's account-op node (adminFor's pick) opens
+// adminLink says endpointID is a connected, write-compatible admin on hostname.
+func (n *nodeConns) adminLink(endpointID, hostname string) bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	c := n.conns[endpointID]
+	return c != nil && c.admin && c.hostname() == hostname && control.Compatible(int(c.proto.Load()))
+}
+
+// staleAdmins names hostname's connected admin nodes that cannot open a login
+// (no CapLoginJoin) as "<login> (ccquota <version>)", for the words that say
+// why nothing opens there (claude-fleet#3032).
+func (n *nodeConns) staleAdmins(hostname string) []string {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	var out []string
+	for _, c := range n.conns {
+		if c.admin && !c.canLoginJoin && c.hostname() == hostname {
+			v := c.agentVersion
+			if v == "" {
+				v = "unknown"
+			}
+			out = append(out, c.user()+" (ccquota "+v+")")
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// credsepAdminFor says hostname's account-op node (openerFor's pick) opens
 // credential-separated logins (CapCredsep).
 func (n *nodeConns) credsepAdminFor(hostname string) bool {
-	id, ok := n.adminFor(hostname)
+	id, ok := n.openerFor(hostname)
 	if !ok {
 		return false
 	}
@@ -399,6 +445,7 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 		canTeam: hp.HasCap(control.CapTeam), canPerson: hp.HasCap(control.CapPerson), canAttach: hp.HasCap(control.CapAttach),
 		canTest:       hp.HasCap(control.CapTestIdentity),
 		canCredsep:    hp.HasCap(control.CapCredsep),
+		canLoginJoin:  hp.HasCap(control.CapLoginJoin),
 		canServiceLog: hp.HasCap(control.CapServiceLog),
 		computeOff:    !control.ComputeOn(hp.Compute), computeForce: hp.ComputeForce, probe: hp.Probe,
 		personal: hp.Personal, machineLink: hp.HasCap(control.CapMachine),
@@ -626,6 +673,10 @@ type NodeView struct {
 	AgentVersion  string     `json:"agent_version,omitempty"`
 	// Admin is a connected node the hub will send account ops to.
 	Admin bool `json:"admin,omitempty"`
+	// LoginJoin is an admin node that hands a login it opens its join code
+	// (CapLoginJoin, claude-fleet#3032): the only kind a create goes to. An
+	// admin without it is too old to open one — update its ccquota.
+	LoginJoin bool `json:"login_join,omitempty"`
 	// MachineLink is a machine's own node program (claude-fleet#2333): the
 	// one link that carries its logins — not a login itself. Via, on a login,
 	// is the machine link's endpoint that carries it right now; absent on a
@@ -950,6 +1001,7 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 		v.Desired = s.desiredView(n.EndpointID, hb.Desired)
 		if c := s.nodes.get(n.EndpointID); c != nil {
 			v.Connected, v.Admin = true, c.admin
+			v.LoginJoin = c.admin && c.canLoginJoin
 			v.MachineLink, v.Via = c.machineLink, c.wire.machine()
 			if v.MachineLink {
 				v.Via = ""
@@ -961,6 +1013,7 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 			// Held by another replica (claude-fleet#2124): connected all
 			// the same. The CA answer is that replica's to keep.
 			v.Connected, v.Admin = true, pc.Admin
+			v.LoginJoin = pc.Admin && pc.HasCap(control.CapLoginJoin)
 		}
 		out.Nodes = append(out.Nodes, v)
 

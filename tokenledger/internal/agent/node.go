@@ -209,6 +209,10 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 		// A service's log, live (claude-fleet#2797).
 		caps = append(caps, control.CapServiceLog)
 	}
+	if a.cfg.FleetAdmin {
+		// Its create hands the join code to the script (claude-fleet#3032).
+		caps = append(caps, control.CapLoginJoin)
+	}
 	if a.cfg.FleetAdmin && credsepCapable(a.cfg.Home) {
 		// Every login this node's create op opens is separated (claude-fleet#2294).
 		caps = append(caps, control.CapCredsep)

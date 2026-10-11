@@ -56,13 +56,29 @@ func dialAdmin(t *testing.T, h *harness, tok string, admin bool) *tnode {
 	return dialAdminCaps(t, h, tok, admin)
 }
 
-// dialAdminCaps is dialAdmin with the hello listing caps.
+// dialAdminCaps is dialAdmin with the hello listing caps. An admin lists
+// CapLoginJoin as every current agent does (claude-fleet#3032);
+// dialStaleAdmin is one that predates it.
 func dialAdminCaps(t *testing.T, h *harness, tok string, admin bool, caps ...string) *tnode {
+	t.Helper()
+	if admin {
+		caps = append(caps, control.CapLoginJoin)
+	}
+	return dialHello(t, h, tok, control.Hello{HeartbeatMS: 5000, Admin: admin, Capabilities: caps})
+}
+
+// dialStaleAdmin is an admin agent built before #2652: no CapLoginJoin.
+func dialStaleAdmin(t *testing.T, h *harness, tok, version string) *tnode {
+	t.Helper()
+	return dialHello(t, h, tok, control.Hello{HeartbeatMS: 5000, Admin: true, AgentVersion: version})
+}
+
+func dialHello(t *testing.T, h *harness, tok string, hello control.Hello) *tnode {
 	t.Helper()
 	c := dialNode(t, h, tok)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	m, _ := control.New(control.TypeHello, control.Hello{HeartbeatMS: 5000, Admin: admin, Capabilities: caps})
+	m, _ := control.New(control.TypeHello, hello)
 	if err := wsjson.Write(ctx, c, m); err != nil {
 		t.Fatal(err)
 	}
