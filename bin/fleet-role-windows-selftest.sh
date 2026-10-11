@@ -13,6 +13,8 @@
 #   E  a pinned window → reap keep once; a policy set after that is never undone
 #   F  re-run: nothing left to change ("0 window(s) changed"), the stopper not called
 #   G  a child (@origin orchestrator) and an ordinary window are not touched
+#   H  a live install whose diskguard still reopens a seat (FLEET_INSTALL_ROOT):
+#      the seats are left as they are, said in one line each; the rest proceeds
 # tmux absent → SKIP. Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -28,6 +30,7 @@ HELD="$FLEET_CONF_DIR/global/roles.held"
 STOPLOG="$WORK/stop.log"
 printf '#!/bin/sh\necho "$@" >> %s\n' "$STOPLOG" > "$WORK/stop.sh"; chmod +x "$WORK/stop.sh"
 export FLEET_ROLE_WINDOWS_STOP="$WORK/stop.sh"
+export FLEET_INSTALL_ROOT="$WORK/live"; mkdir -p "$FLEET_INSTALL_ROOT/bin"   # a post-#3118 install: no revive
 
 FAIL=0; CHECKS=0
 fail() { FAIL=$((FAIL + 1)); printf 'FAIL: %s\n' "$1" >&2; [ $# -gt 1 ] && printf '      got: %s\n' "$2" >&2; }
@@ -105,6 +108,18 @@ ok; [ "$(opt "$pinned" @reap_policy)" = done:1h ] || fail "E: a policy set after
 ok; [ "$(opt "$child" @reap_policy)" = merged ] && [ "$(opt "$child" @origin)" = orchestrator ] && [ -z "$(opt "$child" @agent_def)" ] \
   || fail "G: the child is untouched"
 ok; [ -z "$(opt "$plain" @reap_policy)$(opt "$plain" @fleet_role_def)$(opt "$plain" @agent_def)" ] || fail "G: an ordinary window is untouched"
+
+# H an old live install still reopening seats
+printf 'w="$(bash "$BIN/fleet-orchestrator.sh" ensure "$s" 2>/dev/null)"\n' > "$FLEET_INSTALL_ROOT/bin/fleet-diskguard.sh"
+o2=$(win Orchestrator2 @fleet_role orchestrator @fleet_id 33333333-3333-4333-8333-333333333333)
+s2=$(win steward2 @fleet_role steward @fleet_id 44444444-4444-4444-8444-444444444444)
+p2=$(win 常用2 @pin 1)
+: > "$STOPLOG"
+r=$(run); rc=$?
+ok; [ "$rc" = 0 ] && [ "$(opt "$o2" @fleet_role)" = orchestrator ] && [ "$(opt "$s2" @fleet_role)" = steward ] && [ ! -s "$STOPLOG" ] \
+  || fail "H: an old live install → the seats are left as they are" "$rc:$r:$(cat "$STOPLOG")"
+ok; [ "$(printf '%s\n' "$r" | grep -c 'still reopens a closed seat')" = 2 ] || fail "H: …said once per seat" "$r"
+ok; [ "$(opt "$p2" @reap_policy)" = keep ] || fail "H: …and the rest proceeds" "$(opt "$p2" @reap_policy)"
 
 if [ "$FAIL" -gt 0 ]; then echo "fleet-role-windows selftest: $FAIL of $CHECKS checks FAILED"; exit 1; fi
 echo "fleet-role-windows selftest: PASS ($CHECKS checks)"

@@ -1276,7 +1276,7 @@ fi
 # each change is one line.
 if [ -f "$ROOT/bin/fleet-role-windows.sh" ] && [ "$BUNDLE" != 1 ]; then
   rwa=(); [ "$DRY" = 1 ] && rwa=(--dry-run)
-  out=$(bash "$ROOT/bin/fleet-role-windows.sh" ${rwa[@]+"${rwa[@]}"} 2>&1); rc=$?
+  out=$(FLEET_INSTALL_ROOT="$ROOT" bash "$ROOT/bin/fleet-role-windows.sh" ${rwa[@]+"${rwa[@]}"} 2>&1); rc=$?
   printf '%s\n' "$out" | sed '$d' | sed 's/^/roles-windows:   /'
   if [ "$rc" = 0 ]; then say "$(printf '%s\n' "$out" | tail -1)"
   else fail roles-windows "$(printf '%s\n' "$out" | tail -1 | sed 's/^roles-windows: //')"; fi

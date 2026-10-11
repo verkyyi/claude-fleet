@@ -20,6 +20,11 @@
 #   · `@pin 1` → `@reap_policy keep`, ONCE per window (`@reap_pin_kept 1` remembers
 #     it, so a policy the person sets afterwards is never overwritten): a pin
 #     orders the list and no longer holds off the reaper (EPIC #3111 decision 3).
+# The seats are left alone while the LIVE install (FLEET_INSTALL_ROOT, else
+# ~/.claude/fleet — what the daemons run) still reopens them: its diskguard tick's
+# home_watch would open a fresh seat seconds after this one became a row (issue
+# #3121's first run did exactly that). install-apply runs this step on the new tree,
+# so there it always proceeds; by hand before the switch it says so and skips them.
 # It kills no process tree, touches no child session, changes no issue. Each
 # change prints one line `<fleet> <window id> <name>: <what>`; the last line is
 # the count. Exit 0 · 1 a change failed (the lines say which) · 2 usage.
@@ -42,6 +47,9 @@ done
 [ -n "$SOCKS" ] || SOCKS=$(fleet_sockets 2>/dev/null)
 
 STOP=${FLEET_ROLE_WINDOWS_STOP:-$BIN/fleet-worker-stop.sh}   # selftest seam
+LIVE="${FLEET_INSTALL_ROOT:-$HOME/.claude/fleet}"
+SEATS=1
+grep -qE 'fleet-(orchestrator|steward)\.sh" ensure' "$LIVE/bin/fleet-diskguard.sh" 2>/dev/null && SEATS=0
 HELD=$(fleet_roles_held_file)
 n=0 bad=0
 KIND="the kind's rule"
@@ -64,6 +72,10 @@ for s in $SOCKS; do
   while IFS='|' read -r wid role def adef pin reap kept fid name; do
     [ -n "$wid" ] || continue
     tag="$s $wid $name"
+    case "$SEATS:$role" in 0:orchestrator|0:steward)
+      say "$tag: old $role seat left as it is — the live install ($LIVE) still reopens a closed seat; the step runs again after its switch"
+      continue ;;
+    esac
     case "$role" in
       orchestrator)
         holder=$(fleet_role_holder orchestrator "$s" 2>/dev/null) || holder=''
