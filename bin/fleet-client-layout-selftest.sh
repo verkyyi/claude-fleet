@@ -180,6 +180,28 @@ eq("full: 最近 numbered, the one in view left out",
 eq("full: 全部 is every row", [r["key"] for k, _, r, num in items if k == "row"][-4:], ["@1", "@2", "@3", "@4"])
 eq("full: `?` → the waiting rows only", [r["key"] for k, _, r, _ in q.full_items(R, "?", [], "") if k == "row"], ["@2"])
 eq("full: a query ranks", [r["key"] for k, _, r, _ in q.full_items(R, "thr", [], "")], ["@3"])
+# the line's words are fleet-ui-lang.sh's (issue #3324): English under FLEET_UI_LANG=en,
+# and no CJK literal left in fleet-topbar.py outside its comments and docstrings
+import ast, re
+os.environ["FLEET_UI_LANG"] = "en"
+tb._WORDS.clear(); tb.FV._WORDS.clear()
+t, _ = tb.fit(dict(rec, state="done", pr="merged"), 140, now=1060)
+has("en: done", t, " ✓ done · #1894"); has("en: PR merged", t, "PR merged · 62% left · Opus 5.5 · high")
+has("en: PR closed", tb.fit(dict(rec, pr="closed"), 140, now=1060)[0], "PR closed")
+has("en: unreachable", tb.fit(rec, 80, down="1", now=1060, pin="direct", tries="3")[0], "m5 unreachable · retry 3")
+has("en: via relay", tb.fit(rec, 80, route="relay", now=1060)[0], "m5 via relay")
+has("en: N min ago", "".join(p[0] for p in tb.ctx_parts(rec, 140, 1420)), " · 7 min ago")
+src = open(os.path.join(sys.argv[1], "fleet-topbar.py"), encoding="utf-8").read()
+tree = ast.parse(src)
+docs = {id(b.body[0].value) for b in ast.walk(tree)
+        if isinstance(b, (ast.Module, ast.FunctionDef, ast.ClassDef)) and b.body
+        and isinstance(b.body[0], ast.Expr) and isinstance(b.body[0].value, ast.Constant)}
+cjk = [(c.lineno, ast.get_source_segment(src, c)) for c in ast.walk(tree)
+       if isinstance(c, ast.Constant) and isinstance(c.value, str) and id(c) not in docs
+       and re.search("[\u3000-\u303f\u4e00-\u9fff\uff00-\uffef]", ast.get_source_segment(src, c) or "")]
+eq("fleet-topbar.py: no CJK literal outside comments (fleet-ui-lang.sh is the table)", cjk, [])
+os.environ["FLEET_UI_LANG"] = "zh"
+tb._WORDS.clear(); tb.FV._WORDS.clear()
 if errs:
     print("FAIL A:\n  " + "\n  ".join(errs)); sys.exit(1)
 print("A: top line + record + layout rule + switcher groups: %d checks" % n[0])

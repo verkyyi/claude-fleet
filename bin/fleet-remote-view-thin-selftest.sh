@@ -45,6 +45,7 @@ RS="tvR$$"; TL="tvT$$"
 export TMPDIR="$WORK/tmp"; mkdir -p "$TMPDIR"
 export FLEET_CONF_DIR="$WORK/conf"; mkdir -p "$FLEET_CONF_DIR/control" "$FLEET_CONF_DIR/fleets/$RS"
 export FLEET_SIDEBAR_HOST=nodebox FLEET_NODE_ALIASES='nodebox=m9'
+export FLEET_UI_LANG=zh   # the line's words are the table's (issue #3324)
 unset TMUX TMUX_PANE CCQUOTA_FLEET FLEET_SESSION FLEET_VIEW_KEEP_SECS
 
 FAIL=0; CHECKS=0
