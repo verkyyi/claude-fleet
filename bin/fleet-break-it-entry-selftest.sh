@@ -492,6 +492,8 @@ PY
   sys_same || { edown; return 1; }
   edown
   WHAT="地址可解析但没人应、或应的是别的钥匙：不进 reachable（只剩真入口 sshd 那一个）；体检 public 行 WARN「外面连不上：… 超时 · 在路由器上把 TCP 端口转发到 192.168.1.249」；入口照常进；$gohalf"
+}
+
 drill_entry_forward_out() {
   CAP=20   # the listener + four forwards + one drop
   local t0 dst lp fwd out wid got; local -a eopts
