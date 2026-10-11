@@ -156,6 +156,8 @@ while [ $# -gt 0 ]; do
     --attach-state) attach_state; exit 0 ;;                         # selftest seam: screen on stdin
     --opening-eta) opening_eta; exit 0 ;;                           # selftest seam: screen on stdin
     --eta-rises) eta_rises; exit 0 ;;                               # selftest seam: ETAs on stdin
+    --thin-first) thin_first_state; exit 0 ;;                       # selftest seam: thin.log on stdin
+    --thin-first-says) grep -Eq -- "$THIN_FIRST|$THIN_FIRST_FAILED"; exit $? ;;   # selftest seam: a screen on stdin
     --ls-row)   [ $# -ge 2 ] || usage; ls_row "$2"; exit ;;            # selftest seam: fleet ls --json on stdin
     --png)      [ $# -ge 2 ] || usage; drill_png "$2"; exit ;;         # selftest seam: the test image
     -h|--help)  sed -n '2,/^set -u/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 0 ;;
@@ -479,11 +481,12 @@ step_client() {
   local k
   # the list is up once its 「新任务」 row is (the list's border has no label
   # since issue #2167)
-  k=$(wait_for "$STEP_SECS" "$CLIENT_UP" 'open terminal failed|not a terminal' "$LOGIN@[^ ]+ [^ ]* ?[%\$#] *\$")
+  k=$(wait_for "$STEP_SECS" "$CLIENT_UP" 'open terminal failed|not a terminal' "$THIN_FIRST|$THIN_FIRST_FAILED" "$LOGIN@[^ ]+ [^ ]* ?[%\$#] *\$")
   shot client
   case "$k" in
     1) row "客户端：左边任务列表、右边主页" "—（装完自己打开）" 否
        pass client "the installer opened the client: the task list is up · $(elapsed)" ;;
+    3) client_thin ;;
     2) row "客户端没打开：$(pane | grep -E 'open terminal failed|not a terminal' | tail -n 1)" "再敲 fleet" "是 — 装完没进客户端"
        failstep client "the installer's own 'fleet' did not open:"; tail_pane 4
        keys -l fleet; keys Enter
@@ -493,6 +496,34 @@ step_client() {
        failstep client "back at the prompt, no client"; keys -l fleet; keys Enter
        wait_for "$STEP_SECS" "$CLIENT_UP" >/dev/null || return 1
        shot client-again ;;
+  esac
+}
+
+# client_thin: the thin client is on its first-session road (#3054) — opening
+# the newcomer's first login, waiting for its fleet (#3062), placing the session.
+# Not 「back at the prompt」: wait for it, up to OPENING_CAP, by its own book
+# (thin.log: placed, then a connection that drew the view) — the screen is
+# cleared once the view is up, so the log is what says it landed.
+client_thin() {
+  local deadline st log="$H/.cache/claude-fleet/thin.log"
+  deadline=$((SECONDS + OPENING_CAP))
+  while :; do
+    keep_sudo
+    st=$( ( cd / && sudo -n cat "$log" ) 2>/dev/null | thin_first_state)
+    case "$st" in landed|failed) break ;; esac
+    pane | grep -Eq -- "$THIN_FIRST_FAILED" && { st=failed; break; }
+    pane | grep -Eq -- "$CLIENT_UP" && { st=landed; break; }
+    [ "$SECONDS" -lt "$deadline" ] || break
+    sleep "$POLL"
+  done
+  shot client-thin
+  case "$st" in
+    landed) row "瘦客户端：开出第一个会话并连上" "—（装完自己打开）" 否
+            pass client "the thin client opened the first session and drew it · $(elapsed)" ;;
+    failed) row "瘦客户端：第一个会话没开出来" "—" "是 — 首会话没开出来"
+            failstep client "the thin client's first session did not open:"; tail_pane 6; return 1 ;;
+    *)      row "瘦客户端：${OPENING_CAP}s 内没开出第一个会话" "—" "是 — 首会话没开出来"
+            failstep client "the thin client's first session was not up within ${OPENING_CAP}s:"; tail_pane 6; return 1 ;;
   esac
 }
 

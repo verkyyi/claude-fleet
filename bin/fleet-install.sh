@@ -656,6 +656,9 @@ path_note=""
 case ":$PATH:" in
   *":$BIN:"*) ;;
   *)
+    # this terminal's shell reads the rc line only when it starts again: the
+    # client says how to get `fleet` here on its way out (fleet-thin.py, #3062)
+    FLEET_INSTALL_PATH_NEW=$BIN; export FLEET_INSTALL_PATH_NEW
     if [ -f "$RC" ] && grep -Fq "$MARK" "$RC"; then
       :
     elif [ -f "$RC" ] && grep -q '\.local/bin' "$RC" && [ "$BIN" = "$HOME/.local/bin" ]; then

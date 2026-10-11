@@ -206,6 +206,27 @@ out=$(env PATH="$T/shim:$PATH" FLEET_CONF_DIR="$T/conf" FLEET_LOGIN_HOMES="$T/ho
 if [ "$rc" = 143 ] && printf '%s\n' "$out" | grep -q 'ABORTED (interrupted by SIGTERM)' \
    && ! printf '%s\n' "$out" | grep -q ': PASS '; then ok 'a SIGTERM mid-run reads ABORTED, exit 143, no PASS'
 else bad "SIGTERM mid-run: exit $rc: $(printf '%s' "$out" | tail -n 4)"; fi
+# --- the client step on the thin client's first-session road (issue #3062) -------
+# its progress is the client starting, not 「back at the prompt」 (run 17 typed
+# `fleet` over 「opening a machine for you」)
+for say in 'fleet · opening a machine for you (mini2), about 45s — your first session opens once it is ready' \
+           'fleet · 机器 mini2 上的登录开好了，等它的 fleet 报上来（最多再等 590 秒）' \
+           'fleet · your first session did not open'; do
+  printf '%s\n' "$say" | bash "$DRILL" --thin-first-says && ok "client: the thin road's line counts: ${say#fleet · }" \
+    || bad "client: not recognised: $say"
+done
+printf '%s\n' 'drill@m5 ~ % ' | bash "$DRILL" --thin-first-says && bad 'client: a bare prompt read as the thin road' \
+  || ok 'client: a bare prompt is not the thin road'
+# its outcome, off the newcomer's thin.log: placed + a connection that drew the view
+tl() { printf '%s\t%s\t%s\t\t\t\t%s\t%s\t%s\n' "2026-10-11T03:45:50Z" "$@"; }
+st=$( { tl first m5 '' '' 'no fleet session is live on m5'; tl first mini2 '' 0 'REMOTE mini2'; tl connect mini2 120 '' ''; } | bash "$DRILL" --thin-first)
+[ "$st" = landed ] && ok 'client: placed + drawn = landed' || bad "client: landed read as '$st'"
+st=$( { tl first m5 '' '' x; tl first mini2 '' 0 'REMOTE mini2'; } | bash "$DRILL" --thin-first)
+[ "$st" = placed ] && ok 'client: placed, not drawn yet' || bad "client: placed read as '$st'"
+st=$( { tl first m5 '' '' x; tl first - '' 1 'No fleet on any of your machines'; tl quit m5 '' 1 'no first session'; } | bash "$DRILL" --thin-first)
+[ "$st" = failed ] && ok 'client: no first session = failed' || bad "client: failed read as '$st'"
+st=$(tl first m5 '' '' 'no fleet session is live on m5' | bash "$DRILL" --thin-first)
+[ "$st" = wait ] && ok 'client: still on the road = wait' || bad "client: wait read as '$st'"
 # --- the scratch step's wait while the hub opens the login (issue #2908) -----------
 # the ETA on the visible screen: the smallest of the pane's and the bar's, none
 # when the screen says no opening

@@ -966,8 +966,14 @@ fleet_ui_t() {
     en:thin_first_next_fmt)     printf 'next: %s' "${1:-}" ;;
     zh:thin_first_ask_fmt)      printf '找入口管理员 %s' "${1:-}" ;;
     en:thin_first_ask_fmt)      printf 'ask the hub admin (%s)' "${1:-}" ;;
-    zh:thin_first_next)         printf '稍后再敲 fleet；还不行就 fleet debug report，把这台电脑的情况交给入口看' ;;
-    en:thin_first_next)         printf 'type fleet again later; if it still fails, run fleet debug report to hand this computer'"'"'s state to the hub' ;;
+    zh:thin_first_next)         printf '稍后再敲 %s；还不行就 %s debug report，把这台电脑的情况交给入口看' "${1:-fleet}" "${1:-fleet}" ;;
+    en:thin_first_next)         printf 'type %s again later; if it still fails, run %s debug report to hand this computer'"'"'s state to the hub' "${1:-fleet}" "${1:-fleet}" ;;
+    zh:thin_first_settle_fmt)   printf '机器 %s 上的登录开好了，等它的 fleet 报上来（最多再等 %s 秒）' "${1:-}" "${2:-}" ;;
+    en:thin_first_settle_fmt)   printf 'your login on %s is ready, waiting for its fleet to report (up to %ss more)' "${1:-}" "${2:-}" ;;
+    zh:thin_first_settle_timeout_fmt) printf '%s 上的登录开好后等了 %s 分钟，它的 fleet 还没报上来（%s）' "${1:-}" "${2:-}" "${3:-}" ;;
+    en:thin_first_settle_timeout_fmt) printf 'the login on %s was opened, but its fleet did not report within %s minutes (%s)' "${1:-}" "${2:-}" "${3:-}" ;;
+    zh:thin_path_hint_fmt)      printf '这个终端还找不到 fleet 命令：先敲 exec %s（或开一个新终端），或直接敲 %s' "${1:-zsh}" "${2:-fleet}" ;;
+    en:thin_path_hint_fmt)      printf 'this terminal cannot find fleet yet: type exec %s (or open a new terminal), or type %s' "${1:-zsh}" "${2:-fleet}" ;;
     zh:thin_first_no_lease_fmt) printf '入口没给这台电脑客户端租约（%s）' "${1:-}" ;;
     en:thin_first_no_lease_fmt) printf 'the hub gave this computer no client lease (%s)' "${1:-}" ;;
     zh:thin_first_timeout_fmt)  printf '等了 %s 分钟，机器还没开好' "${1:-}" ;;
