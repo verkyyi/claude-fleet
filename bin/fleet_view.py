@@ -18,11 +18,12 @@ fleet-quickopen.py (this module is its node half — the client never loads it):
                                               them; ↵ goes there
     fleet-quickopen.py do next|prev|back|fwd --view <view>
                                               ⌘↓ ⌘↑ (the list's order) · ⌘[ ⌘] (history)
-    fleet-quickopen.py do new|quit|shell --view <view>
+    fleet-quickopen.py do new|quit|shell --view <view> [--target <session>]
                                               C7 (issue #3004): ⌘N a new session (a
                                               no-repo one on this machine, #3119) ·
                                               ⌘Q OSC 7502 quit + detach · ⌃\ the
-                                              session's shell
+                                              session's shell (--target: any
+                                              session's, on screen or not — #3183)
     fleet-quickopen.py view-shell here|far|home <machine> <login> <target> --view <view>
                                               (the ⌃\ window's program)
     fleet-quickopen.py view-order --view <view>
@@ -931,14 +932,15 @@ def go(qo, vid, target, how="go", client="", meta=None, record=True):
     return rc
 
 
-def do(qo, verb, vid, client=""):
-    """⌘↓ ⌘↑ ⌘[ ⌘] in a 看台 — and C7's ⌘N (new) · ⌘Q (quit) · ⌃\\ (shell)."""
+def do(qo, verb, vid, client="", target=None):
+    """⌘↓ ⌘↑ ⌘[ ⌘] in a 看台 — and C7's ⌘N (new) · ⌘Q (quit) · ⌃\\ (shell;
+    `--target <row>`: that session's, issue #3183)."""
     if verb == "new":
         return go_new(qo, vid, client)
     if verb == "quit":
         return quit_view(vid, client)
     if verb == "shell":
-        return open_shell(qo, vid, client)
+        return open_shell(qo, vid, client, target or None)
     row = view_row(vid)
     fleet = view_fleet(vid, row)
     if not fleet:
@@ -1048,35 +1050,59 @@ def far_name(fleet, wid):
     return wid.rsplit("/", 1)[-1]
 
 
-def open_shell(qo, vid, client=""):
-    """⌃\ (#2744's meaning, in a 看台): THIS SESSION's shell — a login shell on
-    the machine it runs on, as its login, in its working directory (`@worktree`,
-    else its pane's) — a window of the 看台's group marked `@view_shell
-    <machine>@<login>:<worker id>` + `@peer_view <view>` (rv_peer_sweep takes it
-    with the 看台), one a session: the next ⌃\ in it is back on the session, in
-    the session it selects the open one. Another machine's rides C5's standing
-    link (`ssh -S <link> -tt … fleet-remote-view.sh shell-here <wid>`); a session
-    reaped takes its shell along. No session in view: this machine's shell in $HOME."""
+def open_shell(qo, vid, client="", target=None, meta=None):
+    """⌃\ (#2744's meaning, in a 看台): a SESSION's shell — a login shell on
+    the machine it runs on, as its login, in the directory its agent is in right
+    now (the agent pane's, else `@worktree`, else $HOME — issue #3183) — a window
+    of the 看台's group marked `@view_shell <machine>@<login>:<worker id>` +
+    `@peer_view <view>` (rv_peer_sweep takes it with the 看台), one a session.
+    `target` (the panel's lit row, issue #3183): that session, on screen or not —
+    `@<window>`, a worker id (`wid:` optional) or a bare `@fleet_id`; `meta` its
+    machine / login when the row knows them. None: the session in view, and in
+    its shell the next ⌃\ is back on the session. Another machine's rides C5's
+    standing link (`ssh -S <link> -tt … fleet-remote-view.sh shell-here <wid>`);
+    a session reaped takes its shell along, never the other way. No session in
+    view: this machine's shell in $HOME. rc 0 · 3 that session is gone (a line on
+    the client)."""
     row = view_row(vid)
     fleet = view_fleet(vid, row)
     if not fleet:
         return 2
     g = "%s@view-%s" % (fleet, vid)
-    rc, out = tm("display-message", "-p", "-t", "=%s:" % g,
-                 "#{window_id}|#{@fleet_id}|#{@peer_node}|#{@peer_login}|#{@peer_cur}|#{@view_shell}|#{window_name}")
-    if rc != 0 or not out:
-        return 2
-    w, fid, pnode, plogin, pcur, vsh, wname = (out.split("|") + [""] * 7)[:7]
-    if vsh:
-        code, _ = tm("last-window", "-t", "=" + g)
-        return 0 if code == 0 else 1
     here, me = here_label(row), getpass.getuser()
-    if pcur.startswith("wid:") and pnode:
-        m, l, wid, name, prog = pnode, plogin or me, pcur[4:], far_name(fleet, pcur[4:]), "far"
-    elif fid:
-        m, l, wid, name, prog = here, me, w, TAG_RE.sub("", wname).strip() or w, "here"
+    if target:
+        t = target[4:] if target.startswith("wid:") else target
+        if not t.startswith("@") and "/" not in t:
+            # a bare @fleet_id: this fleet's window carrying it
+            t = next((w for w, v in windows(fleet).items() if v[0] == t), "")
+        w, far = resolve(vid, t, row, fleet) if t else ("", False)
+        if far:
+            m, l = far_where(t, meta, fleet)
+            if not m:
+                toast(client, say("view_gone"))
+                return 3
+            m, l, wid, name, prog = m, l or me, t, far_name(fleet, t), "far"
+        else:
+            rc, wname = tm("display-message", "-p", "-t", w, "#{window_name}") if w else (1, "")
+            if rc != 0 or w not in windows(fleet):
+                toast(client, say("view_gone"))
+                return 3
+            m, l, wid, name, prog = here, me, w, TAG_RE.sub("", wname).strip() or w, "here"
     else:
-        m, l, wid, name, prog = here, me, "", "", "home"
+        rc, out = tm("display-message", "-p", "-t", "=%s:" % g,
+                     "#{window_id}|#{@fleet_id}|#{@peer_node}|#{@peer_login}|#{@peer_cur}|#{@view_shell}|#{window_name}")
+        if rc != 0 or not out:
+            return 2
+        w, fid, pnode, plogin, pcur, vsh, wname = (out.split("|") + [""] * 7)[:7]
+        if vsh:
+            code, _ = tm("last-window", "-t", "=" + g)
+            return 0 if code == 0 else 1
+        if pcur.startswith("wid:") and pnode:
+            m, l, wid, name, prog = pnode, plogin or me, pcur[4:], far_name(fleet, pcur[4:]), "far"
+        elif fid:
+            m, l, wid, name, prog = here, me, w, TAG_RE.sub("", wname).strip() or w, "here"
+        else:
+            m, l, wid, name, prog = here, me, "", "", "home"
     key = "%s@%s:%s" % (m, l, wid) if wid else "local"
     _, lst = tm("list-windows", "-t", "=" + fleet, "-F", "#{window_id}|#{@view_shell}|#{@peer_view}")
     for line in lst.splitlines():
@@ -1128,6 +1154,20 @@ def login_shell():
     return sh or "/bin/sh"
 
 
+def agent_dir(w):
+    """Where a session's agent is right now (issue #3183): its pane's
+    `pane_current_path` — the pane the wrapper started, else the window's first,
+    never a shell beside it — else the window's `@worktree`; "" when neither is a
+    directory. fleet-remote-view.sh shell-here keeps the same order."""
+    _, out = tm("list-panes", "-t", w, "-F", "#{pane_current_path}\t#{pane_start_command}")
+    panes = [(ln.split("\t") + [""])[:2] for ln in out.splitlines() if ln]
+    pick = next((p for p in panes if "fleet-session-wrap" in p[1]), panes[0] if panes else ["", ""])
+    if pick[0] and os.path.isdir(pick[0]):
+        return pick[0]
+    _, wt = tm("display-message", "-p", "-t", w, "#{@worktree}")
+    return wt if wt and os.path.isdir(wt) else ""
+
+
 def shell_pane(vid, prog, m, l, wid):
     """`view-shell` — the ⌃\ window's program. here: the session's window (wid)
     in this fleet; its directory, a login shell there, HUP'd when that window goes.
@@ -1160,9 +1200,7 @@ def shell_pane(vid, prog, m, l, wid):
         return 0
     d = os.path.expanduser("~")
     if prog == "here":
-        _, out = tm("display-message", "-p", "-t", wid, "#{@worktree}|#{pane_current_path}")
-        wt, pcp = (out.split("|") + [""])[:2]
-        d = wt if wt and os.path.isdir(wt) else pcp if pcp and os.path.isdir(pcp) else d
+        d = agent_dir(wid) or d
     sh = login_shell()
     pid = os.fork()
     if pid == 0:
@@ -1308,6 +1346,8 @@ def view_keys(me, if_stale=False):
 # --- the popup -------------------------------------------------------------------------
 
 def popup(screen, qo, vid, client):
+    # raw: ⌃\ is a key here (a shell beside the lit row), never SIGQUIT
+    curses.raw()
     curses.curs_set(0)
     styles = {"bold": curses.A_BOLD, "lit": curses.A_REVERSE | curses.A_BOLD}
     try:
@@ -1333,6 +1373,10 @@ def popup(screen, qo, vid, client):
     items = entries(vid)
     order_save(vid, items)
     cur = current(vid)
+    # opened in a session's shell (⌃\): its session is the lit row — ↵ is back on it
+    _, vsh = tm("display-message", "-p", "-t", "=%s@view-%s:" % (view_fleet(vid), vid), "#{@view_shell}")
+    if ":" in vsh:
+        cur = vsh.split(":", 1)[1]
     query, opened, msg, show_legend = "", set(), "", False
     shown = visible(items, query, opened)
     at = next((i for i, e in enumerate(shown) if e.get("target") == cur and pickable(e)), 0)
@@ -1404,6 +1448,17 @@ def popup(screen, qo, vid, client):
                 return 0
             msg = say("view_far_fmt", e.get("machine") or "?") if rc == 3 else say("view_gone")
             continue
+        if ch == "\x1c":
+            # ⌃\ (issue #3183): a shell beside the lit session, on screen or not —
+            # a new window of the 看台, in the directory its agent is in
+            e = shown[at] if 0 <= at < len(shown) else {}
+            if e.get("kind") != "sess" or not e.get("target"):
+                continue
+            rc = open_shell(qo, vid, client, e["target"], e)
+            if rc == 0:
+                return 0
+            msg = say("view_gone") if rc == 3 else say("view_shell_failed_fmt", e.get("machine") or "?")
+            continue
         if ch == "?" and not query:
             # an empty query: `?` is the legend, not a letter (with text it is one)
             show_legend = not show_legend
@@ -1445,7 +1500,7 @@ def main(argv, qo):
         return 2
     client = opt(argv, "--client")
     if argv[:1] == ["do"] and len(argv) >= 2:
-        return do(qo, argv[1], vid, client)
+        return do(qo, argv[1], vid, client, opt(argv, "--target"))
     if argv[:1] == ["view-peers"]:
         if opt(argv, "--socket"):
             _SOCK[0] = opt(argv, "--socket")
