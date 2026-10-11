@@ -229,6 +229,7 @@ func (s *Server) serveLanding(w http.ResponseWriter, r *http.Request) bool {
 	if err := tmpl.Execute(&body, landingPage{
 		pageView: newPageView(r, loc),
 		Hosted:   i18n.Interpolate(pageT(loc, "landing.foot.hosted"), map[string]string{"host": r.Host}),
+		Domain:   s.setting(EntryDomainKey),
 	}); err != nil {
 		log.Printf("landing.html: %v", err)
 		return false
@@ -250,4 +251,5 @@ func (s *Server) serveLanding(w http.ResponseWriter, r *http.Request) bool {
 type landingPage struct {
 	pageView
 	Hosted string // "Hosted at <host>", until the script repeats it from location
+	Domain string // fleet.entry_domain: a phone's address is <name>.<Domain>; "" when unset
 }

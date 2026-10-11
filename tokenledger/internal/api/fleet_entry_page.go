@@ -664,6 +664,30 @@ a.st{color:var(--ink-2)}
 ol.do{margin:6px 0 0;padding-left:1.3em}ol.do li{margin:6px 0}
 .tap{display:inline-block;font:600 13.5px var(--f-ui);padding:0 7px;border-radius:6px;border:1px solid var(--line);background:var(--bg);white-space:nowrap}
 .shot{display:block;width:100%;max-width:320px;margin:12px auto 2px;border:1px solid var(--line);border-radius:12px}
+.mock{max-width:300px;margin:14px auto 2px;border-radius:18px;padding:7px;background:#0b0c10;box-shadow:0 14px 30px -18px rgba(0,0,0,.6)}
+.mock .in{border-radius:12px;overflow:hidden;background:#1a1b26;color:#a9b1d6;font:12px/1.55 ui-monospace,Menlo,monospace;position:relative}
+.mock .hd{display:flex;justify-content:space-between;align-items:center;padding:9px 12px;background:#24283b;color:#c0caf5;font:600 13px var(--f-ui)}
+.mock .hd span{color:#787c99;font-weight:400}
+.mock .li{display:flex;justify-content:space-between;gap:8px;padding:8px 12px;border-top:1px solid #2a2e42;font-family:var(--f-ui);font-size:12.5px}
+.mock .li i{font-style:normal;color:#787c99;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mock .li b{font-weight:500;color:#c0caf5;white-space:nowrap}
+.mock .hit{box-shadow:0 0 0 2px #f7768e;border-radius:6px}
+.mock .bt{display:inline-block;padding:3px 10px;border-radius:7px;background:#7aa2f7;color:#16161e;font:600 12.5px var(--f-ui)}
+.mock .bt.dim{background:#3b4261;color:#c0caf5}
+.mock .hd .bt{color:#16161e}
+.mock .pad{padding:12px}
+.mock .tl{display:flex;gap:6px;padding:3px 9px;background:#1f2335;border-bottom:1px solid #2a2e42;white-space:nowrap;overflow:hidden}
+.mock .tl .tt{color:#c0caf5;overflow:hidden;text-overflow:ellipsis}
+.mock .tl .sp{flex:1}
+.mock .dm{color:#565f89}.mock .hl{color:#7aa2f7}.mock .ok{color:#9ece6a}.mock .ask{color:#f7768e}
+.mock .qp{margin:8px;border:1px solid #3b4261;border-radius:8px;background:#16161e;padding:5px 0}
+.mock .qp p{padding:0 10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mock .qp .lit{background:#283457}
+.mock .kb{display:flex;gap:4px;padding:6px;background:#24283b}
+.mock .kb span{flex:1;text-align:center;font:500 11px var(--f-ui);color:#c0caf5;background:#3b4261;border-radius:5px;padding:5px 0}
+.mock .kb span.hit{background:#7aa2f7;color:#16161e}
+.mock .dlg{margin:28px 14px;padding:12px;border-radius:12px;background:#24283b;font-family:var(--f-ui);font-size:12.5px;color:#c0caf5}
+.mock .dlg .two{display:flex;justify-content:flex-end;gap:8px;margin-top:10px}
 .nav2{display:flex;gap:10px;margin-top:14px}.nav2>*{flex:1}
 .state{display:flex;gap:10px;align-items:flex-start;border-radius:10px;padding:10px 12px;margin:10px 0;font-size:14px}
 .state.ok{background:var(--line-2);color:var(--brand)}
@@ -720,7 +744,7 @@ ol.do{margin:6px 0 0;padding-left:1.3em}ol.do li{margin:6px 0}
 {{end}}{{end}}
 </div>
 {{if eq .Step 0}}<div class="card now" id="done"><h2><span class="no">✓</span>都好了</h2>
-<p>以后在 Termius 里点这台主机就进看台。记住两个键：<span class="tap">ctrl</span> 再 <span class="tap">]</span>，然后 <span class="tap">p</span> 是会话列表。</p>
+<p>以后在 Termius 里点这台主机就进看台。记住一个键：<span class="tap">ctrl</span> 再点 <span class="tap">空格</span> 是会话面板（也可以 ctrl ] 再 p）。</p>
 {{template "state" .}}
 <div class="row"><span class="k">地址</span>{{if .Address}}<span class="v">{{.Address}}</span>{{else}}<span class="v miss">地址还没配好</span>{{end}}</div>
 <div class="row"><span class="k">端口</span><span class="v">{{.Port}}</span></div>
@@ -767,8 +791,38 @@ func entryStepOf(p entryPageData, st entryStep) entryStepView {
 }
 
 // entryStepTmpl is the open step: what to tap in Termius, where, by its name
-// on the screen; its picture when the repo has one (entryshots/).
-const entryStepTmpl = `{{define "state"}}{{if eq .State "nokey"}}<p class="state info">加上第一把钥匙后，家机器会打开入口。</p>
+// on the screen; its picture when the repo has one (entryshots/), else a
+// drawing of that Termius screen (claude-fleet#3307) — HTML, the same look as
+// the front page's mockups, with the place to tap ringed.
+const entryStepTmpl = `{{define "mock"}}<div class="mock" role="img" aria-label="Termius 里第 {{.S.N}} 步的样子，要点的地方圈了出来"><div class="in" aria-hidden="true">
+{{if eq .S.N 1}}<div class="hd">App Store<span>搜索</span></div>
+<div class="li" style="border:0;align-items:center"><span style="display:flex;gap:10px;align-items:center"><span style="width:42px;height:42px;border-radius:10px;background:#000;color:#9ece6a;display:grid;place-items:center;font:600 15px ui-monospace,Menlo,monospace">&gt;_</span><span><b>Termius</b><br><i>SSH 客户端</i></span></span><span class="bt hit">获取</span></div>
+<div class="li"><i>免费 · 不用买</i><i>4.7 ★</i></div>
+{{else if eq .S.N 2}}<div class="hd">Keychain<span class="hl hit" style="padding:0 6px;font-size:16px">+</span></div>
+<div class="li"><b class="hit" style="padding:0 4px">Generate Key</b><i>生成钥匙</i></div>
+<div class="li"><i>Label</i><b>iPhone</b></div>
+<div class="li"><i>Type</i><b class="hit" style="padding:0 4px">ED25519</b></div>
+<div class="li"><i></i><span class="bt">Save</span></div>
+{{else if eq .S.N 3}}<div class="hd">‹ Keychain<span>iPhone</span></div>
+<div class="li"><i>Type</i><b>ED25519</b></div>
+<div class="li"><i>Public key</i><i>ssh-ed25519 AAAAC3Nz…</i></div>
+<div class="li"><b class="hit" style="padding:0 4px;color:#7aa2f7">Copy Public Key</b><i></i></div>
+<div class="li"><i>私钥留在手机上，不要复制它</i><i></i></div>
+{{else if eq .S.N 4}}<div class="hd">New Host<span class="bt hit">Save</span></div>
+<div class="li"><i>Hostname</i><b>{{if .Address}}{{.Address}}{{else}}你的地址{{end}}</b></div>
+<div class="li"><i>Port</i><b>{{.Port}}</b></div>
+<div class="li"><i>Username</i><b>{{if .Home}}{{.Home.Login}}{{else}}你的登录{{end}}</b></div>
+<div class="li"><i>Key</i><b>iPhone</b></div>
+<div class="li"><i>Password</i><i>不填</i></div>
+{{else if eq .S.N 5}}<div class="hd">Hosts<span>+</span></div>
+<div class="dlg"><b>New host key</b><p style="margin-top:6px;color:#a9b1d6">第一次连这台主机，要信任它的钥匙吗？</p><p style="margin-top:4px;color:#565f89;font:11px ui-monospace,Menlo,monospace">ED25519 · SHA256:q3Vt…9xKc</p>
+<div class="two"><span class="bt dim">Cancel</span><span class="bt hit">Accept</span></div></div>
+{{else if eq .S.N 6}}<div class="tl"><span class="ok">»</span><span class="hl">#12</span><span class="tt">每周销售周报</span><span class="sp"></span><span class="dm">62%</span></div>
+<div class="qp"><p class="dm">打字筛选</p><p class="hl">⚡ 派一件事…</p><p class="dm">等你 1</p><p><span class="ask">!</span> 修好报名表</p><p class="dm">在干活 2</p><p class="lit"><span class="ok">»</span> 每周销售周报</p><p><span class="ok">»</span> 写本期简报</p></div>
+<div class="pad dm" style="padding-top:0">点 ctrl，再点空格</div>
+<div class="kb"><span>esc</span><span class="hit">ctrl</span><span>alt</span><span>tab</span><span>↑</span><span>↓</span></div>
+{{end}}</div></div>{{end}}
+{{define "state"}}{{if eq .State "nokey"}}<p class="state info">加上第一把钥匙后，家机器会打开入口。</p>
 {{else if eq .State "opening"}}<p class="state wait" role="status">正在为你打开入口，约 1 分钟。这一页会自己刷新。</p>
 {{else if eq .State "ok"}}<p class="state ok">入口开着，外面连得上。</p>
 {{else if eq .State "down"}}<p class="state bad">家机器 <b>{{.Home.Display}}</b> {{.HomeDown}}连不上（关机、睡着或断网），你的地址也就连不上。它回来就好；要换一台当家，见页底。</p>
@@ -815,11 +869,10 @@ const entryStepTmpl = `{{define "state"}}{{if eq .State "nokey"}}<p class="state
 <li>第一次会问要不要信任这台主机的钥匙（<i>new host key</i>）：点 <span class="tap">Accept</span>（或 <span class="tap">Continue</span>）。以后不再问；换家后会再问一次。</li></ol>
 {{template "state" .P}}
 <p class="hint">连不进去？说 <i>Permission denied</i> 是钥匙没选对：回第 4 步看 Key 那一项。说 <i>timed out</i> 看上面那一行。</p>
-{{else if eq .S.N 6}}<p>连上后你就在<b>看台</b>：你正在用的那个会话。</p>
+{{else if eq .S.N 6}}<p>连上后你就在<b>看台</b>：你正在用的那个会话，整屏显示。</p>
 <ol class="do"><li>Termius 键盘上方那一排有 <span class="tap">ctrl</span>：点一下它。</li>
-<li>再按 <span class="tap">]</span>（键盘上切到符号那一页）。</li>
-<li>松开后按 <span class="tap">p</span>：会话列表就出来了，点一个就进去。</li></ol>
-<p class="hint">ctrl ] 之后还有：<b>n</b> 下一个、<b>b</b> 上一个、<b>c</b> 新会话、<b>q</b> 退出看台。</p>{{end}}
-{{if .S.Shot}}<img class="shot" src="{{.S.Shot}}" alt="Termius 里第 {{.S.N}} 步要点的地方" loading="lazy">{{end}}
+<li>再点 <span class="tap">空格</span>：会话面板就出来了——你所有的会话，等你回答的排在前面，点一个就进去。</li></ol>
+<p class="hint">空格不灵？也可以 <b>ctrl</b> 再 <b>]</b>，然后 <b>p</b>。ctrl ] 之后还有：<b>n</b> 下一个、<b>b</b> 上一个、<b>c</b> 新会话、<b>q</b> 退出看台。</p>{{end}}
+{{if .S.Shot}}<img class="shot" src="{{.S.Shot}}" alt="Termius 里第 {{.S.N}} 步要点的地方" loading="lazy">{{else if not (and (eq .S.N 4) .NeedName)}}{{template "mock" .}}{{end}}
 <div class="nav2">{{if gt .S.N 1}}<a class="btn" href="?step={{dec .S.N}}">上一步</a>{{end}}{{if and (eq .S.N 3) (not .Keys)}}{{else if lt .S.N 6}}<a class="btn go" href="?step={{inc .S.N}}#now">下一步</a>{{else}}<a class="btn go" href="?step=done">做完了</a>{{end}}</div>
 </div>{{end}}`

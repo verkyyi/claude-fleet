@@ -19,7 +19,6 @@
 :root {
   --bg: #f4f6f5; --panel: #ffffff; --ink: #15201d; --ink-2: #3c4945; --muted: #6a7773; --line: #e0e6e3; --line-2: #ecf0ee;
   --brand: #0e6e5e; --brand-ink: #ffffff; --brand-soft: #e1f1ec;
-  --term: #0d1513; --term-ink: #cfe3dd;
   --f-display: "Bricolage Grotesque", "Avenir Next", "Segoe UI", system-ui, sans-serif;
   --f-ui: "IBM Plex Sans", "Segoe UI", system-ui, -apple-system, sans-serif;
   --f-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
@@ -27,10 +26,10 @@
 }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
   --bg: #0e1412; --panel: #151d1b; --ink: #e5ece9; --ink-2: #c1ccc8; --muted: #8b9894; --line: #26302d; --line-2: #1e2725;
-  --brand: #3fc2a6; --brand-ink: #062019; --brand-soft: #16302a; --term: #080c0b; --term-ink: #cfe3dd; color-scheme: dark; } }
+  --brand: #3fc2a6; --brand-ink: #062019; --brand-soft: #16302a; color-scheme: dark; } }
 :root[data-theme="dark"] {
   --bg: #0e1412; --panel: #151d1b; --ink: #e5ece9; --ink-2: #c1ccc8; --muted: #8b9894; --line: #26302d; --line-2: #1e2725;
-  --brand: #3fc2a6; --brand-ink: #062019; --brand-soft: #16302a; --term: #080c0b; --term-ink: #cfe3dd; color-scheme: dark; }
+  --brand: #3fc2a6; --brand-ink: #062019; --brand-soft: #16302a; color-scheme: dark; }
 
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
@@ -61,24 +60,71 @@ svg.i { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-widt
 .logo-mark svg { width: 16px; height: 16px; stroke: var(--brand-ink); stroke-width: 2.2; fill: none; stroke-linecap: round; }
 .pub-links { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
 .pub-main { max-width: 1180px; width: 100%; margin: 0 auto; padding: 24px clamp(16px, 4vw, 48px) 72px; display: grid; gap: 88px; min-width: 0; }
-.hero { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: 48px; align-items: center; padding-top: 24px; }
+.hero { display: grid; grid-template-columns: minmax(0, 1fr); gap: 44px; padding-top: 24px; }
+.hero-text { max-width: 46rem; min-width: 0; }
 .hero h1 { font: 800 clamp(2.3rem, 5.2vw, 3.7rem)/1.02 var(--f-display); letter-spacing: -.035em; }
 .hero h1 em { font-style: normal; color: var(--brand); }
-.hero .sub { font-size: 1.12rem; color: var(--ink-2); max-width: 34rem; margin-top: 18px; line-height: 1.55; }
+.hero .sub { font-size: 1.12rem; color: var(--ink-2); max-width: 40rem; margin-top: 18px; line-height: 1.55; }
 .hero .ctas { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 28px; }
-.installline { margin-top: 18px; display: flex; align-items: center; gap: 8px; font: 12.5px var(--f-mono); color: var(--ink-2); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 8px 8px 12px; max-width: 34rem; }
+.installwrap { margin-top: 22px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; max-width: 34rem; }
+.installwrap > small { color: var(--muted); font-size: 12.5px; }
+.installline { display: flex; align-items: center; gap: 8px; font: 12.5px var(--f-mono); color: var(--ink-2); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 8px 8px 12px; }
 .installline span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.term { background: var(--term); color: var(--term-ink); border-radius: 12px; box-shadow: 0 30px 60px -30px rgba(0,0,0,.55); overflow: hidden; font: 12.5px/1.7 var(--f-mono); min-width: 0; }
-.term-bar { display: flex; gap: 6px; padding: 10px 12px; background: rgba(255,255,255,.04); align-items: center; }
-.term-bar i { width: 10px; height: 10px; border-radius: 50%; background: rgba(255,255,255,.14); display: block; }
-.term-bar span { margin-left: 8px; color: #7d918b; font-size: 11.5px; }
-.term-body { padding: 14px 16px 18px; display: grid; gap: 1px; overflow-x: auto; }
-.term-row { display: grid; grid-template-columns: 1.2rem 7.6rem minmax(0,1fr) 3.4rem; gap: 8px; white-space: nowrap; }
-.term-row .k { color: #e7f2ee; }
-.term-row .m { color: #7d918b; overflow: hidden; text-overflow: ellipsis; }
-.t-ok { color: #6fd394; } .t-warn { color: #e8b85a; } .t-dim { color: #55665f; } .t-brand { color: #3fc2a6; }
-.term-head { color: #7d918b; display: flex; justify-content: space-between; margin-bottom: 6px; }
-.term-line { white-space: nowrap; }
+/* The two mockups (claude-fleet#3307): a computer (iTerm2) and a phone
+   (Termius), drawn here in HTML so the page loads nothing from anywhere. The
+   glyphs, colours and words are the client's own — fleet-topbar.py's top line
+   (#3194) and fleet_view.py's ⌘P panel (! » ✓ ∙, 等你 · 在干活 · 刚落地). */
+.devices { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 22px; align-items: end; min-width: 0; }
+.dev { margin: 0; display: grid; gap: 10px; justify-items: center; min-width: 0; }
+.dev figcaption { font: 500 12.5px var(--f-ui); color: var(--muted); }
+.scr { --s-bg: #1a1b26; --s-fg: #a9b1d6; --s-dim: #565f89; --s-hl: #7aa2f7; --s-ok: #9ece6a; --s-bad: #f7768e; --s-blue: #7dcfff; --s-line: #2a2e42;
+  background: var(--s-bg); color: var(--s-fg); font: 11.5px/1.6 var(--f-mono); position: relative; overflow: hidden; text-align: left; }
+.mac { width: 100%; }
+.mac .scr { width: 100%; border-radius: 11px; box-shadow: 0 30px 60px -30px rgba(0,0,0,.55); min-height: 336px; }
+.mac-bar { display: flex; gap: 6px; padding: 9px 12px; background: #24283b; align-items: center; }
+.mac-bar i { width: 10px; height: 10px; border-radius: 50%; display: block; background: #414868; }
+.mac-bar i:nth-child(1) { background: #ff5f57; } .mac-bar i:nth-child(2) { background: #febc2e; } .mac-bar i:nth-child(3) { background: #28c840; }
+.mac-bar span { margin: 0 auto; color: #787c99; font: 11px var(--f-ui); padding-right: 46px; }
+.tl { display: flex; gap: 6px; padding: 3px 10px; background: #1f2335; border-bottom: 1px solid var(--s-line); white-space: nowrap; overflow: hidden; }
+.tl .tt { color: #c0caf5; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.tl .sp { flex: 1; }
+.tl .dm { color: var(--s-dim); }
+.tl .hl { color: var(--s-hl); }
+.g-ask { color: var(--s-bad); } .g-work { color: var(--s-ok); } .g-done { color: var(--s-blue); } .g-idle { color: var(--s-dim); }
+.sess { padding: 10px 12px 14px; display: grid; gap: 2px; }
+.sess p { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sess .you { color: #c0caf5; }
+.sess .you::before { content: "> "; color: var(--s-dim); }
+.sess .tool::before { content: "● "; color: var(--s-ok); }
+.sess .tool { color: var(--s-dim); }
+.sess .say { color: var(--s-fg); white-space: normal; }
+.qp { position: absolute; left: 50%; top: 58px; transform: translateX(-50%); width: min(86%, 400px); background: #16161e; border: 1px solid #3b4261; border-radius: 9px; box-shadow: 0 18px 40px rgba(0,0,0,.5); padding: 8px 0 6px; }
+.qp p { padding: 0 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qp .q { color: #c0caf5; border-bottom: 1px solid var(--s-line); padding-bottom: 6px; margin-bottom: 4px; }
+.qp .q b { color: var(--s-hl); font-weight: 400; }
+.qp .q i { display: inline-block; width: 6px; height: 12px; background: #c0caf5; vertical-align: -2px; margin-left: 2px; }
+.qp .q em { color: var(--s-dim); font-style: normal; margin-left: 6px; }
+.qp .act { color: var(--s-hl); }
+.qp .gh { color: var(--s-dim); margin-top: 4px; font-size: 10.5px; }
+.qp .row { display: flex; gap: 8px; }
+.qp .row .n { color: #c0caf5; overflow: hidden; text-overflow: ellipsis; }
+.qp .row .tag { color: var(--s-dim); margin-left: auto; overflow: hidden; text-overflow: ellipsis; }
+.qp .row.lit { background: #283457; }
+.qp .keys { color: var(--s-dim); border-top: 1px solid var(--s-line); margin-top: 5px; padding-top: 5px; font-size: 10.5px; }
+.phone { width: 232px; }
+.ph { width: 232px; border-radius: 30px; padding: 9px; background: #0b0c10; box-shadow: 0 30px 60px -30px rgba(0,0,0,.6), inset 0 0 0 1.5px #2b2f3a; }
+.ph .scr { border-radius: 22px; height: 410px; display: flex; flex-direction: column; font-size: 10.5px; }
+.ph-top { display: flex; justify-content: center; padding: 7px 0 4px; }
+.ph-top i { width: 64px; height: 16px; border-radius: 10px; background: #000; display: block; }
+.ph-head { display: flex; justify-content: space-between; padding: 2px 12px 6px; color: #787c99; font: 10.5px var(--f-ui); }
+.ph-head b { color: #c0caf5; font-weight: 600; }
+.ph .tl { padding: 2px 8px; }
+.ph .sess { padding: 8px 10px; flex: 1; }
+.ph .qp { top: 78px; width: 92%; }
+.ph-keys { display: flex; gap: 4px; padding: 6px 6px 10px; background: #24283b; justify-content: space-between; }
+.ph-keys span { flex: 1; text-align: center; font: 500 10px var(--f-ui); color: #c0caf5; background: #3b4261; border-radius: 5px; padding: 5px 0; }
+.ph-keys span.on { background: var(--s-hl); color: #16161e; }
+.ph-cap { position: absolute; bottom: 44px; left: 50%; transform: translateX(-50%); white-space: nowrap; font: 600 10.5px var(--f-ui); color: #16161e; background: var(--s-hl); border-radius: 99px; padding: 2px 9px; }
 .meterband { display: grid; grid-template-columns: auto 1fr; gap: 10px 28px; align-items: end; padding: 28px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); min-width: 0; }
 .meterband b { font: 500 clamp(1.7rem, 6vw, 3.6rem)/1 var(--f-mono); letter-spacing: -.03em; color: var(--ink); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .meterband p { color: var(--muted); max-width: 28rem; }
@@ -89,18 +135,28 @@ svg.i { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-widt
 .feature { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 22px; display: grid; gap: 10px; align-content: start; }
 .feature .ic { width: 36px; height: 36px; border-radius: 9px; background: var(--brand-soft); color: var(--brand); display: grid; place-items: center; }
 .feature .ic svg { width: 19px; height: 19px; }
-.feature h3, .steps3 h3 { font: 600 1.05rem var(--f-ui); }
-.feature p, .steps3 p { color: var(--ink-2); }
-.steps3 { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 0; counter-reset: s; border-top: 1px solid var(--line); }
-.steps3 > div { padding: 22px 22px 0 0; display: grid; gap: 8px; align-content: start; }
-.steps3 > div::before { counter-increment: s; content: "0" counter(s); font: 500 13px var(--f-mono); color: var(--brand); }
-.steps3 code { background: var(--line-2); padding: 1px 5px; border-radius: 4px; }
+.feature h3 { font: 600 1.05rem var(--f-ui); }
+.feature p { color: var(--ink-2); }
+.how2 { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 20px; }
+.how2 > div { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 22px; min-width: 0; }
+.how2 h3 { display: flex; align-items: center; gap: 9px; font: 600 1.05rem var(--f-ui); margin-bottom: 6px; }
+.how2 h3 .ic { width: 30px; height: 30px; border-radius: 8px; background: var(--brand-soft); color: var(--brand); display: grid; place-items: center; }
+.how2 ol { list-style: none; margin: 0; padding: 0; counter-reset: s; }
+.how2 li { display: grid; grid-template-columns: 2.2rem minmax(0,1fr); gap: 2px 6px; padding: 12px 0; border-top: 1px solid var(--line-2); }
+.how2 li:first-child { border-top: 0; }
+.how2 li::before { counter-increment: s; content: "0" counter(s); font: 500 13px/1.6 var(--f-mono); color: var(--brand); grid-row: span 2; }
+.how2 li b { font-weight: 600; }
+.how2 li p { color: var(--ink-2); overflow-wrap: anywhere; }
+.how2 code { background: var(--line-2); padding: 1px 5px; border-radius: 4px; }
 .pub-foot { border-top: 1px solid var(--line); }
 .pub-foot > div { max-width: 1180px; margin: 0 auto; padding: 22px clamp(16px, 4vw, 48px); display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; color: var(--muted); font-size: 13px; }
 @media (max-width: 900px) {
   .hero { grid-template-columns: minmax(0,1fr); }
-  .features, .steps3 { grid-template-columns: minmax(0,1fr); }
+  .features, .how2 { grid-template-columns: minmax(0,1fr); }
   .pub-main { gap: 64px; }
+}
+@media (max-width: 760px) {
+  .devices { grid-template-columns: minmax(0,1fr); justify-items: center; }
 }
 @media (max-width: 520px) {
   .meterband { grid-template-columns: minmax(0,1fr); }
@@ -134,27 +190,68 @@ html:lang(zh) body { line-height: 1.75; }
   </nav>
   <main class="pub-main" id="landing">
     <section class="hero">
-      <div>
+      <div class="hero-text">
         <h1>{{t "landing.h1.pre"}}<em>{{t "landing.h1.em"}}</em>{{t "landing.h1.post"}}</h1>
         <p class="sub">{{t "landing.sub"}}</p>
         <div class="ctas">
           <a class="btn primary lg" href="/signin"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="8" r="2.5"/><path d="M6 8.5v7M18 10.5c0 4-6 3-10 6"/></svg>{{t "landing.cta.signin"}}</a>
-          <a class="btn lg" href="#how">{{t "landing.cta.how"}} <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a>
+          <a class="btn lg" href="/fleet/keys"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M11 18.5h2"/></svg>{{t "landing.cta.phone"}}</a>
         </div>
-        <div class="installline" id="install"><span id="installcmd">curl -fsSL https://claudefleet.24haowan.com/install | sh</span><button class="btn sm" type="button" id="copy"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 00-2-2H6a2 2 0 00-2 2v8a2 2 0 002 2h2"/></svg><span id="copylabel">{{t "landing.copy"}}</span></button></div>
+        <div class="installwrap" id="install"><small>{{t "landing.install.label"}}</small>
+        <div class="installline"><span id="installcmd">curl -fsSL https://claudefleet.24haowan.com/install | sh</span><button class="btn sm" type="button" id="copy"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 00-2-2H6a2 2 0 00-2 2v8a2 2 0 002 2h2"/></svg><span id="copylabel">{{t "landing.copy"}}</span></button></div></div>
       </div>
-      <div class="term" aria-label="{{t "landing.term.aria"}}">
-        <div class="term-bar"><i></i><i></i><i></i><span>{{t "landing.term.bar"}}</span></div>
-        <div class="term-body">
-          <div class="term-head"><span>{{t "landing.term.session"}}</span><span>{{t "landing.term.machine"}}</span></div>
-          <div class="term-row"><span class="t-ok">●</span><span class="k">issue-1950</span><span class="m">{{t "landing.term.r1"}}</span><span class="t-dim">mini2</span></div>
-          <div class="term-row"><span class="t-ok">●</span><span class="k">issue-1939</span><span class="m">{{t "landing.term.r2"}}</span><span class="t-dim">m4</span></div>
-          <div class="term-row"><span class="t-warn">?</span><span class="k">issue-1953</span><span class="m">{{t "landing.term.r3"}}</span><span class="t-dim">mini2</span></div>
-          <div class="term-row"><span class="t-ok">●</span><span class="k">issue-1961</span><span class="m">{{t "landing.term.r4"}}</span><span class="t-dim">spot</span></div>
-          <div class="term-row"><span class="t-dim">·</span><span class="k">scratch-6</span><span class="m">{{t "landing.term.r5"}}</span><span class="t-dim">m4</span></div>
-          <div class="term-line t-dim" style="margin-top:10px">{{t "landing.term.pool"}}</div>
-          <div class="term-line"><span class="t-brand">❯</span> fleet spawn 1961<span class="t-dim">  → issue-1961 on m4 · Max 20× · B</span></div>
-        </div>
+
+      <div class="devices" role="img" aria-label="{{t "landing.mock.aria"}}">
+        <figure class="dev mac">
+          <div class="scr" aria-hidden="true">
+            <div class="mac-bar"><i></i><i></i><i></i><span>iTerm2 — fleet</span></div>
+            <div class="tl"><span class="g-work">»</span><span>{{t "landing.mock.working"}}</span><span class="dm">·</span><span class="hl">#12</span><span class="tt">{{t "landing.mock.s1"}}</span><span class="sp"></span><span class="dm">{{t "landing.mock.left"}} · Opus 5.5 · high</span><span class="dm">·</span><span class="hl">⌘P</span></div>
+            <div class="sess">
+              <p class="you">{{t "landing.mock.you"}}</p>
+              <p class="tool">{{t "landing.mock.c1"}}</p>
+              <p class="tool">{{t "landing.mock.c2"}}</p>
+              <p class="say">{{t "landing.mock.c3"}}</p>
+            </div>
+            <div class="qp">
+              <p class="q"><b>⌘P</b> <i></i><em>{{t "landing.mock.filter"}}</em></p>
+              <p class="act">{{t "landing.mock.dispatch"}}</p>
+              <p class="act">{{t "landing.mock.new"}}</p>
+              <p class="gh">{{t "landing.mock.g.ask"}}</p>
+              <p class="row"><span class="g-ask">!</span><span class="n">{{t "landing.mock.s2"}}</span><span class="tag">{{t "landing.mock.ask"}}</span></p>
+              <p class="gh">{{t "landing.mock.g.work"}}</p>
+              <p class="row lit"><span class="g-work">»</span><span class="n">{{t "landing.mock.s1"}}</span><span class="tag">mac-mini</span></p>
+              <p class="row"><span class="g-work">»</span><span class="n">{{t "landing.mock.s3"}}</span><span class="tag">linux-1</span></p>
+              <p class="gh">{{t "landing.mock.g.landed"}}</p>
+              <p class="row"><span class="g-done">✓</span><span class="n">{{t "landing.mock.s4"}}</span></p>
+              <p class="keys">{{t "landing.mock.keys"}}</p>
+            </div>
+          </div>
+          <figcaption>{{t "landing.mock.cap.mac"}}</figcaption>
+        </figure>
+        <figure class="dev phone">
+          <div class="ph" aria-hidden="true"><div class="scr">
+            <div class="ph-top"><i></i></div>
+            <div class="ph-head"><span>‹ Hosts</span><b>{{if .Domain}}alice.{{.Domain}}{{else}}{{t "landing.mock.home"}}{{end}}</b><span>⋯</span></div>
+            <div class="tl"><span class="g-work">»</span><span class="hl">#12</span><span class="tt">{{t "landing.mock.s1"}}</span><span class="sp"></span><span class="dm">62%</span></div>
+            <div class="sess">
+              <p class="you">{{t "landing.mock.you"}}</p>
+              <p class="tool">{{t "landing.mock.c1"}}</p>
+              <p class="say">{{t "landing.mock.c3"}}</p>
+            </div>
+            <div class="qp">
+              <p class="q"><i></i><em>{{t "landing.mock.filter"}}</em></p>
+              <p class="act">{{t "landing.mock.dispatch"}}</p>
+              <p class="gh">{{t "landing.mock.g.ask"}}</p>
+              <p class="row"><span class="g-ask">!</span><span class="n">{{t "landing.mock.s2"}}</span></p>
+              <p class="gh">{{t "landing.mock.g.work"}}</p>
+              <p class="row lit"><span class="g-work">»</span><span class="n">{{t "landing.mock.s1"}}</span></p>
+              <p class="row"><span class="g-work">»</span><span class="n">{{t "landing.mock.s3"}}</span></p>
+            </div>
+            <span class="ph-cap">{{t "landing.mock.phonekey"}}</span>
+            <div class="ph-keys"><span>esc</span><span class="on">ctrl</span><span>alt</span><span>tab</span><span>↑</span><span>↓</span></div>
+          </div></div>
+          <figcaption>{{t "landing.mock.cap.phone"}}</figcaption>
+        </figure>
       </div>
     </section>
 
@@ -166,18 +263,32 @@ html:lang(zh) body { line-height: 1.75; }
     <section>
       <div class="sec-head"><span class="eyebrow">{{t "landing.what.eyebrow"}}</span><h2>{{t "landing.what.h2"}}</h2></div>
       <div class="features">
-        <div class="feature"><div class="ic"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="8" r="2.5"/><path d="M6 8.5v7M18 10.5c0 4-6 3-10 6"/></svg></div><h3>{{t "landing.f1.h"}}</h3><p>{{t "landing.f1.p"}}</p></div>
-        <div class="feature"><div class="ic"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 17c2 0 2-1.5 4.5-1.5S10 17 12 17s2.5-1.5 4.5-1.5S19 17 21 17"/><path d="M3 12c2 0 2-1.5 4.5-1.5S10 12 12 12s2.5-1.5 4.5-1.5S19 12 21 12"/><path d="M7 7l5-4 5 4"/></svg></div><h3>{{t "landing.f2.h"}}</h3><p>{{t "landing.f2.p"}}</p></div>
-        <div class="feature"><div class="ic"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="7" rx="1.5"/><rect x="3" y="13" width="18" height="7" rx="1.5"/><path d="M7 7.5h.01M7 16.5h.01"/></svg></div><h3>{{t "landing.f3.h"}}</h3><p>{{t "landing.f3.p"}}</p></div>
+        <div class="feature"><div class="ic"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 10h.01M11 10h.01M15 10h.01M8 14h8"/></svg></div><h3>{{t "landing.f1.h"}}</h3><p>{{t "landing.f1.p"}}</p></div>
+        <div class="feature"><div class="ic"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="4" width="14" height="10" rx="1.5"/><path d="M5 18h8"/><rect x="17" y="8" width="5" height="12" rx="1.2"/></svg></div><h3>{{t "landing.f2.h"}}</h3><p>{{t "landing.f2.p"}}</p></div>
+        <div class="feature"><div class="ic"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/><path d="M10 20v-5h4v5"/></svg></div><h3>{{t "landing.f3.h"}}</h3><p>{{t "landing.f3.p"}}</p></div>
       </div>
     </section>
 
     <section id="how">
       <div class="sec-head"><span class="eyebrow">{{t "landing.how.eyebrow"}}</span><h2>{{t "landing.how.h2"}}</h2></div>
-      <div class="steps3">
-        <div><h3>{{t "landing.s1.h"}}</h3><p>{{t "landing.s1.pre"}}<code>curl … /install | sh</code>{{t "landing.s1.post"}}</p></div>
-        <div><h3>{{t "landing.s2.h"}}</h3><p><code>fleet login</code>{{t "landing.s2.post"}}</p></div>
-        <div><h3>{{t "landing.s3.h"}}</h3><p><code>fleet spawn 1961</code>{{t "landing.s3.post"}}</p></div>
+      <div class="how2">
+        <div>
+          <h3><span class="ic"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="1.5"/><path d="M8 20h8M12 16v4"/></svg></span>{{t "landing.how.computer"}}</h3>
+          <ol>
+            <li><b>{{t "landing.c1.h"}}</b><p>{{t "landing.c1.pre"}}<code id="installcmd2">curl -fsSL …/install | sh</code>{{t "landing.c1.post"}}</p></li>
+            <li><b>{{t "landing.c2.h"}}</b><p><code>fleet</code>{{t "landing.c2.post"}}</p></li>
+            <li><b>{{t "landing.c3.h"}}</b><p>{{t "landing.c3.p"}}</p></li>
+          </ol>
+        </div>
+        <div>
+          <h3><span class="ic"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M11 18.5h2"/></svg></span>{{t "landing.how.phone"}}</h3>
+          <ol>
+            <li><b>{{t "landing.m1.h"}}</b><p>{{t "landing.m1.p"}}</p></li>
+            <li><b>{{t "landing.m2.h"}}</b><p>{{t "landing.m2.pre"}}<a href="/fleet/keys">/fleet/keys</a>{{t "landing.m2.post"}}</p></li>
+            <li><b>{{t "landing.m3.h"}}</b><p>{{t "landing.m3.pre"}}{{if .Domain}}<code>&lt;name&gt;.{{.Domain}}</code>{{else}}{{t "landing.m3.addr"}}{{end}}{{t "landing.m3.post"}}</p></li>
+            <li><b>{{t "landing.m4.h"}}</b><p>{{t "landing.m4.p"}}</p></li>
+          </ol>
+        </div>
       </div>
     </section>
   </main>
@@ -191,6 +302,7 @@ html:lang(zh) body { line-height: 1.75; }
   // The install line names THIS hub, whatever it is called.
   var cmd = 'curl -fsSL ' + location.origin + '/install | sh';
   document.getElementById('installcmd').textContent = cmd;
+  document.getElementById('installcmd2').textContent = cmd;
   document.getElementById('hosted').textContent = L.hosted.replace('{host}', location.host);
   document.getElementById('copy').addEventListener('click', function () {
     var label = document.getElementById('copylabel');

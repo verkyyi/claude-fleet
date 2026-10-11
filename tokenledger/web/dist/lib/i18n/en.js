@@ -151,7 +151,7 @@ export const en = {
   'ui.hello.afternoon': 'Good afternoon, {name}',
   'ui.hello.evening': 'Good evening, {name}',
   'ui.ov.subUser': 'Your sessions and usage over the last 14 days.',
-  'ui.ov.phone': 'Connect from a phone',
+  'ui.ov.phone': 'Open on your phone',
   'ui.ov.scope': 'Counts only your logins: {list}.',
   'ui.ov.scopeAdmin': 'Usage of the whole hub is under Admin · By person.',
   'ui.ov.tokensToday': 'Tokens today',

@@ -10,8 +10,10 @@ One picture of Termius on an iPhone per wizard step, served at
 | `step3.png`   | 3 复制公钥 — the key's Copy Public Key      | Copy Public Key                    |
 | `step4.png`   | 4 新建主机 — New Host with its four fields  | Hostname · Port · Username · Key   |
 | `step5.png`   | 5 连接 — the new host key question         | Accept / Continue                  |
-| `step6.png`   | 6 看台 — the keyboard's ctrl key            | ctrl                               |
+| `step6.png`   | 6 看台 — ctrl, then space opens the panel   | ctrl                               |
 
 Take them on the current Termius iOS, 1170 px wide or less, mark the place to
 tap (a red circle), crop the status bar, PNG or JPEG. A file named here that is
-missing just draws no picture; any other file is never served.
+missing draws the page's own drawing of that Termius screen instead (the
+`mock` template in `fleet_entry_page.go`, claude-fleet#3307); any other file is
+never served.
