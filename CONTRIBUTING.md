@@ -1,5 +1,10 @@
 # Contributing to claude-fleet
 
+## 产品方向与设计原则
+
+后续产品设计以 [Fleet 产品方向与设计原则](docs/PRODUCT-DIRECTION.md)为依据。
+提出新设计时，请逐项回答文档中的「设计判断标准」，说明与产品定位、设计原则及演进边界的关系。
+
 ## Issue titles：从用户视角起（issue #2545）
 
 An issue title is one sentence of what is wrong or wanted, **as the person sees it** —
