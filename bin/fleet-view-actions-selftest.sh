@@ -189,7 +189,7 @@ to -f /dev/null new-session -d -s o -x 120 -y 30 \
   "env TMUX='$IN,0,0' ESCDELAY=25 python3 '$BIN/fleet-quickopen.py' --view fl@view-v1; echo POPUP-CLOSED; sleep 600" \
   || fail "D: outer tmux"
 screen() { to capture-pane -p -t o; }
-waitfor() { local i; for i in $(seq 1 40); do screen | grep -qF -- "$1" && return 0; sleep 0.1; done; return 1; }
+waitfor() { local _i; for _i in $(seq 1 40); do screen | grep -qF -- "$1" && return 0; sleep 0.1; done; return 1; }
 waitfor 'Tab 操作' || fail "D: the list did not open: $(screen)"
 to send-keys -t o Tab
 waitfor '回收…' || fail "D: Tab opened no menu: $(screen)"
