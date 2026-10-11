@@ -24,6 +24,7 @@
 #   no-claude-on-path                               bin/fleet-claude.sh, fleet_find_tool
 #   window-renamed                                  fleet_win_role (fleet-lib.sh), fleet-restore.sh
 #   role-auto-reopen-off                            nothing reopens a seat: fleet-up.sh, fleet-diskguard.sh
+#   role-seat-migrate-early                         fleet-role-windows.sh (seats left while the live install revives)
 #                                                   home_watch, bin/fleet-orchestrator.sh / fleet-steward.sh shells
 #   break-pane                                      bin/fleet-window-carry.sh (conf/tmux-attention.conf hook)
 #   install-sync-killed                             bin/fleet-install-sync.sh (the tick lock)
@@ -6368,6 +6369,41 @@ drill_role_taken_twice() {
   rtake "$b" --steal >/dev/null && [ -z "$(o "$a" @fleet_role_def)" ] && [ "$(o "$b" @fleet_role_def)" = orchestrator ] \
     || { WHY="--steal did not move the role in one step"; return 1; }
   WHAT="第二个会话接手编排被告知是谁在编排（exit 4、不打标），绑单窗口不能接手（exit 3）；orchestrator 只解析到唯一持有者；只有 --steal 转手"
+}
+
+# role-seat-migrate-early (issue #3121, EPIC #3111 C10): the old seats move onto the
+# new marks (fleet-role-windows.sh). Run by hand while the LIVE install still revives a
+# closed seat, the first real run made the seat a plain row and stopped the steward —
+# and the old diskguard tick reopened BOTH within seconds, the new orchestrator on the
+# old one's conversation. Now the step reads the live install first: one whose
+# diskguard still `ensure`s a seat leaves the seats alone (one line each); a new one
+# moves them.
+drill_role_seat_migrate_early() {
+  CAP=10; BREAK_SOCK="$WORK/sock-rs"; local t0 a st r rc c="$WORK/rsconf" rt live="$WORK/rslive"
+  rt=$(PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -v tmux-shim | paste -sd: -) command -v tmux)
+  mkdir -p "$WORK/rsbin" "$live/bin"; printf '#!/bin/sh\nexec "%s" -S "%s" "$@"\n' "$rt" "$BREAK_SOCK" > "$WORK/rsbin/tmux"; chmod +x "$WORK/rsbin/tmux"
+  printf '#!/bin/sh\necho "$@" >> %s/rs.stop\n' "$WORK" > "$WORK/rsbin/stop"; chmod +x "$WORK/rsbin/stop"
+  nt -f /dev/null new-session -d -s rs -n home -x 100 -y 30 'exec sleep 600' || { WHY="cannot start the isolated tmux server"; return 1; }
+  a=$(nt new-window -d -P -F '#{window_id}' -t rs: -n Orchestrator 'exec sleep 600')
+  nt set-option -wq -t "$a" @fleet_role orchestrator; nt set-option -wq -t "$a" @fleet_id 55555555-5555-4555-8555-555555555555
+  st=$(nt new-window -d -P -F '#{window_id}' -t rs: -n steward 'exec sleep 600')
+  nt set-option -wq -t "$st" @fleet_role steward; nt set-option -wq -t "$st" @fleet_id 66666666-6666-4666-8666-666666666666
+  # the break: the live install is the old one — its tick still reopens a seat
+  printf 'w="$(bash "$BIN/fleet-orchestrator.sh" ensure "$s" 2>/dev/null)"\n' > "$live/bin/fleet-diskguard.sh"
+  rmig() { env PATH="$WORK/rsbin:$PATH" FLEET_CONF_DIR="$c" FLEET_SKIP_GLOBAL_CONF=1 FLEET_INSTALL_ROOT="$live" \
+             FLEET_ROLE_WINDOWS_STOP="$WORK/rsbin/stop" bash "$BIN/fleet-role-windows.sh" --socket rs 2>&1; }
+  t0=$(now)
+  r=$(rmig); rc=$?
+  SECS=$(since "$t0")
+  [ "$rc" = 0 ] || { WHY="the step failed under an old live install (exit $rc): $r"; return 1; }
+  [ "$(o "$a" @fleet_role)" = orchestrator ] && [ "$(o "$st" @fleet_role)" = steward ] && [ ! -s "$WORK/rs.stop" ] \
+    || { WHY="the seats were moved while the live install still reopens them: $r"; return 1; }
+  [ "$(printf '%s\n' "$r" | grep -c 'still reopens')" = 2 ] || { WHY="the skipped seats are not named: $r"; return 1; }
+  : > "$live/bin/fleet-diskguard.sh"                      # the switch: no revive any more
+  r=$(rmig)
+  [ "$(o "$a" @fleet_role)" = worker ] && [ "$(o "$a" @fleet_role_def)" = orchestrator ] && grep -q 'fid:66666666' "$WORK/rs.stop" \
+    || { WHY="after the switch the seats did not move: $r"; return 1; }
+  WHAT="旧安装还会重开座位时 roles-windows 不碰两个座位、各说一行；换到新版后同一步把编排变成普通行（持有角色）、收掉管家"
 }
 
 # ================================================================ run ====}
