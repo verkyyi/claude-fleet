@@ -306,6 +306,17 @@ bash ~/.claude/fleet/bin/fleet-epic-floor.sh record <EPIC> <N> --repo "$FLEET_RE
 `--repo` is the PARENT's repo (the batch's book), `<N>` the member. It never
 blocks and never fails the spawn; a batch spanning versions is fine.
 
+…and give the member its read-only hub task record (issue #3330) — the member
+stays an issue (`fleet_sub_issues` reads the batch as before); the record is its
+row on the hub's 任务 page, `await` takes its `T<n>`, and the window is stamped
+`@task` so its child report carries `task`:
+
+```sh
+bash ~/.claude/fleet/bin/fleet-task-record.sh epic-member <EPIC> "$MREPO" <N> "<the issue's own title>"
+```
+
+Exit 3 = no hub here: nothing was written — carry on, the batch is the same.
+
 **Which agent** (issue #2562): the member's own charter row wins — a row ending
 `(codex)` / `(claude)` (`- [ ] **C3** #N — 标题 (codex)`) — then the charter's
 `<!-- fleet:epic … agent=codex -->`, then nothing: with no `--agent` the spawn

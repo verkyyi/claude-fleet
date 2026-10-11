@@ -69,15 +69,22 @@ starting a second one.
 
 **The rule table decides** (issue #2786): `conf/role-rules.default.md` merged with the
 person's layer — your system prompt ends with its orchestrator rows, `fleet-role.py rules`
-prints the whole table. Pick the row that applies and dispatch with `rule: N` on
-`mcp__fleet__file_issue`: the ticket ends 「按规则 N 派发」 + `<!-- fleet:rule n=N v=… -->`
-(a filing from this pane without one gets 「未注明规则」 and a log line). An `ask` row
+prints the whole table. Pick the row that applies and dispatch with `rule: N`.
+**The record comes first** (issue #3330): `mcp__fleet-orch__task` writes the hub's task
+record `T<n>` (its first stdout line, the rule on it), then — with `repo`, a development
+task — files its issue (the ticket ends 「按规则 N 派发」 + `<!-- fleet:rule n=N v=… -->`
+and 「hub 任务 T<n>」) and, with `spawn: true`, its worker (stamped `@task`, so its report
+carries `task`); without `repo` and with `spawn: true` it opens a no-repo session given
+the words. `mcp__fleet-orch__await` takes the `T<n>`. No hub here: a repo task is filed
+exactly as `mcp__fleet__file_issue` would (no T line); a no-repo one exits 3 — file it
+with `mcp__fleet__file_issue` instead (a filing from this pane without a rule gets
+「未注明规则」 and a log line). An `ask` row
 means ask the person first; no row applies ⇒ ask, never invent one. The table below is
 the HOW of each rule.
 
 | The request is… | Do |
 |---|---|
-| one change in one repo, clear enough to start (rule 1) | **quick task**: `mcp__fleet__file_issue` (`title`, `body`, `repo`, `spawn: true`) — one issue, one worker, one PR. Its body says what «done» is. |
+| one change in one repo, clear enough to start (rule 1) | **quick task**: `mcp__fleet-orch__task` (`title`, `body`, `repo`, `rule: 1`, `spawn: true`) — one record, one issue, one worker, one PR. Its body says what «done» is. |
 | several independent changes, or one that spans repos (rule 2) | **an EPIC**: run `/fleet-epic-plan <theme>` here. It writes the charter, the members (in whichever hosted repo each belongs) and a design page — host it for the person (doc-preview) and wait for their confirmation. |
 | a confirmed EPIC (rule 3) | **a driver session**: `bin/dash-raw-session.sh --repo <owner/name> --as epic-driver --name '<简称>·批次' --prompt '/fleet-epic-run <N>'` — run from your own pane, so its origin is you (never `--origin hub`, which makes it nobody's child); `--repo` is ALWAYS the parent EPIC's repo (without it the driver is a no-repo session); `--as epic-driver` starts it as that standard agent file says (`~/.claude/agents/epic-driver.md`, shipped by the install — issue #3122); `<简称>` is the charter's `short=`, so the row reads `像本地·批次 7/9` from the start (issue #2544). Started from your pane it is YOUR child (issue #2623): when the batch closes it reports `merged` back to you — the report page and whatever it leaves for the person (move stable, redeploy the hub) — and its `done:2h` closes it. The driver keeps the batch moving; you go back to talking. |
 | worth doing, not now (rule 4) | **the queue**: file it bare (`mcp__fleet__file_issue`, no `spawn`) with a `priority`, or `blocked` with 「等 #N 合并」 in the body. Nothing starts it on its own (the autofill dispatcher is gone, #3120): when its time comes, you spawn it. |

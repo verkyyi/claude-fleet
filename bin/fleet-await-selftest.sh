@@ -14,6 +14,9 @@
 #   ADOPT     a live worker with no parent gets the waiter's @origin.
 #   WAKE      a report mid-interval is answered within 2s, not at the next read
 #             (issue #1272: the ledger file is watched, the full read is not hurried).
+#   TASK      (issue #3330) `T<n>`: the hub record's issue is awaited (the spawn
+#             carries --task + the repo, the verdict `task: T<n>`); a record with
+#             no issue, or no hub, is NO-WORKER (5).
 #   SEAT      from a worker's pane (@fleet_role worker) no spawn: NO-WORKER (5)
 #             naming issue #2960; an EPIC driver's pane spawns (fleet_spawn_refused).
 #
@@ -48,10 +51,11 @@ cat > "$SB/dash-issue-session.sh" <<'STUB'
 printf '%s\n' "$*" >> "$STUB_LOG"
 rc=$(cat "$STUB_RC" 2>/dev/null || echo 0)
 [ "$rc" = 0 ] || { printf 'dash-issue-session: at capacity (stub)\n' >&2; exit "$rc"; }
-num=$1 sess=$2 origin=''
-while [ "$#" -gt 0 ]; do [ "$1" = --origin ] && origin=$2; shift; done
+num=$1 sess=$2 origin='' repo=''
+while [ "$#" -gt 0 ]; do [ "$1" = --origin ] && origin=$2; [ "$1" = --repo ] && repo=$2; shift; done
 w=$(tmux -L "$sess" new-window -d -P -F '#{window_id}' -t "$sess" -n "issue-$num" "sleep 600")
 tmux -L "$sess" set-window-option -t "$w" @issue "$num"
+[ -n "$repo" ] && tmux -L "$sess" set-window-option -t "$w" @repo "$repo"
 tmux -L "$sess" set-window-option -t "$w" @origin "$origin"
 tmux -L "$sess" set-window-option -t "$w" @claude_state working
 STUB
@@ -199,5 +203,37 @@ await_drv 192 --timeout 30
 W=$(until_win 192); [ -n "$W" ] || fail "an EPIC driver's await must spawn" "$(cat "$WORK/err")"
 TM kill-window -t "$W"; collect
 eq "…once" $((n + 1)) "$(wc -l < "$STUB_LOG" | tr -d ' ')"
+
+# TASK (issue #3330): a hub task record T<n> is waited on through its issue — the
+# spawn carries --task and the record's repo, the verdict says `task: T<n>`; a
+# record with no issue is NO-WORKER naming its session; no hub here ⇒ NO-WORKER.
+rm -f "$STUB_RC"
+# the record names its repo: this fleet hosts it from here on (a one-repo fleet)
+mkdir -p "$FLEET_CONF_DIR/fleets/$LBL"; printf 'FLEET_REPO=acme/app\n' > "$FLEET_CONF_DIR/fleets/$LBL/conf"
+rm -f "$SB/fleet-task-record.sh"
+cat > "$SB/fleet-task-record.sh" <<'STUB'
+#!/bin/bash
+[ "$1" = get ] || exit 2
+case "$2" in
+  T9)  printf '{"task":{"id":"T9","issue":"acme/app#407","session_key":""}}\n' ;;
+  T10) printf '{"task":{"id":"T10","issue":"","session_key":"scratch-12"}}\n' ;;
+  *)   exit 3 ;;
+esac
+STUB
+chmod +x "$SB/fleet-task-record.sh"
+await T9 --timeout 30
+W=$(until_win 407); [ -n "$W" ] || fail "no window spawned for T9's #407" "$(cat "$WORK/err")"
+sleep 1.5
+report --win "$W" --state merged --summary 'landed T9'   # no --pr: a known repo's PR is asked of GitHub (#1247)
+collect
+eq "T<n> → its issue's worker, MERGED exits 0" "0 MERGED" "$RC $(printf '%s\n' "$OUT" | head -1)"
+has "…the verdict names the record" 'task: T9' "$OUT"
+has "…the spawn carries the record and its repo" "407 $LBL --origin acme-app:scratch-7 --task T9 --repo acme/app" "$(cat "$STUB_LOG")"
+bash "$AW" T10 -L "$LBL" --parent scratch-7 --interval 1 --timeout 5 > "$WORK/out" 2>&1
+eq "a record with no issue exits 5" 5 "$?"
+has "…naming its session" 'scratch-12' "$(cat "$WORK/out")"
+bash "$AW" T11 -L "$LBL" --parent scratch-7 --interval 1 --timeout 5 > "$WORK/out" 2>&1
+eq "no hub here: exits 5" 5 "$?"
+has "…saying so" 'no hub here' "$(cat "$WORK/out")"
 
 printf 'fleet-await selftest: OK (%d checks)\n' "$CHECKS"

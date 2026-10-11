@@ -80,7 +80,13 @@
 # Usage:
 #   fleet-issue-file.sh --title T [--body B] [--label L,...]… [--priority pN] \
 #                       [--parent N] [--from ROLE] [--milestone M] [--rule N] \
-#                       [--repo R] [--spawn | --bind] [--breakage | --breakage-key K | --no-breakage]
+#                       [--repo R] [--spawn | --bind] [--breakage | --breakage-key K | --no-breakage] \
+#                       [--task T<n>]
+#   --task T<n> (issue #3330): the hub's task record this issue is filed FOR — the
+#      orchestrator's `task` tool opened it first; a development task then files
+#      its issue here. The body says 「hub 任务 T<n>」, the issue is hung on the
+#      record (bin/fleet-task-record.sh set --issue) and a --spawn carries --task to
+#      the worker (stamped @task). No --task ⇒ byte for byte as before.
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -88,7 +94,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/fleet-lib.sh"
 . "$BIN/fleet-gh-lib.sh"   # fleet_gh_write: every write below is queued (issue #1264)
 
-title='' body='' priority='' parent='' from='' milestone='' repo='' spawn=0 bind=0 rule=''
+title='' body='' priority='' parent='' from='' milestone='' repo='' spawn=0 bind=0 rule='' task=''
 breakage='' bk_auto=0 breakage_key='' bk_sha='' bk_check='' bk_line='' bk_lock='' bk_held=0
 labels=()
 while [ "$#" -gt 0 ]; do
@@ -107,13 +113,14 @@ while [ "$#" -gt 0 ]; do
     --from)      shift; from="${1:-}" ;;
     --milestone) shift; milestone="${1:-}" ;;
     --rule)      shift; rule="${1:-}" ;;
+    --task)      shift; task="${1:-}" ;;
     --repo)      shift; repo="${1:-}" ;;
     --spawn)     spawn=1 ;;
     --bind)      bind=1 ;;
     --breakage)  breakage=1 ;;
     --no-breakage) breakage=0 ;;
     --breakage-key) shift; breakage_key="${1:-}" ;;
-    -h|--help)   sed -n '2,83p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)   sed -n '2,89p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     --*)         printf 'fleet-issue-file: unknown flag %s\n' "$1" >&2; exit 2 ;;
     *)           printf 'fleet-issue-file: unexpected argument %s\n' "$1" >&2; exit 2 ;;
   esac
@@ -121,6 +128,10 @@ while [ "$#" -gt 0 ]; do
 done
 
 [ -z "$title" ] && { printf 'fleet-issue-file: --title is required\n' >&2; exit 2; }
+if [ -n "$task" ]; then
+  case "$task" in T[1-9]*) case "${task#T}" in *[!0-9]*) task=bad ;; esac ;; *) task=bad ;; esac
+  [ "$task" = bad ] && { printf 'fleet-issue-file: --task must be a hub record T<n>\n' >&2; exit 2; }
+fi
 # A key is a lock directory's name and a marker token: one safe word.
 case "$breakage_key" in
   ''|*[!A-Za-z0-9._-]*) [ -n "$breakage_key" ] && { printf 'fleet-issue-file: --breakage-key must be [A-Za-z0-9._-]+ (got %s)\n' "$breakage_key" >&2; exit 2; } ;;
@@ -333,6 +344,9 @@ fi
 if [ -n "$_rule_add" ]; then
   if [ -n "$body" ]; then body="$body"$'\n\n'"$_rule_add"; else body="$_rule_add"; fi
 fi
+if [ -n "$task" ]; then   # the hub's record it was filed for (issue #3330)
+  if [ -n "$body" ]; then body="$body"$'\n\n'"hub 任务 $task"; else body="hub 任务 $task"; fi
+fi
 if [ -n "$body" ]; then
   body="$body"$'\n\n'"$marker"
 else
@@ -421,6 +435,17 @@ if [ -n "$parent" ] && [ -n "$num" ]; then
   fi
 fi
 
+# --- 4b. --task: hang the issue on the hub's record (issue #3330) ---------------
+# Best-effort: a hub that is down loses the link, never the filed issue.
+if [ -n "$task" ] && [ -n "$num" ]; then
+  bash "$BIN/fleet-task-record.sh" set "$task" --issue "$repo#$num" >/dev/null 2>&1; _trc=$?
+  case "$_trc" in
+    0) printf 'fleet-issue-file: #%s hung on hub record %s\n' "$num" "$task" >&2 ;;
+    3) ;;
+    *) printf 'fleet-issue-file: could not hang #%s on hub record %s\n' "$num" "$task" >&2 ;;
+  esac
+fi
+
 # --- 5. --spawn: hand to the unchanged spawn choke point -----------------------
 # dash-issue-session.sh owns the caps + cross-machine pre-spawn dedup and reports
 # its own refusal (toast + a stderr reason, issue #683 — that line passes through
@@ -430,7 +455,7 @@ fi
 # that only reads the URL on stdout still learns no worker took it.
 if [ "$spawn" = 1 ] && [ -n "$num" ]; then
   # The spawn always names the repo the issue was filed in (issues #789, #1943).
-  bash "$BIN/dash-issue-session.sh" "$num" --title "$title" --repo "$repo" ${spawn_agent:+--agent "$spawn_agent"}; _rc=$?
+  bash "$BIN/dash-issue-session.sh" "$num" --title "$title" --repo "$repo" ${spawn_agent:+--agent "$spawn_agent"} ${task:+--task "$task"}; _rc=$?
   if [ "$_rc" -ne 0 ]; then
     printf 'fleet-issue-file: filed #%s but the spawn was refused — it is on the backlog\n' "$num" >&2
     # 4 = no live parent (issue #1355): not a backlog-and-move-on refusal — the

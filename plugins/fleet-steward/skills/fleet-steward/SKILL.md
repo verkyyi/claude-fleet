@@ -66,6 +66,12 @@ themselves on the next second, and nothing runs after that.
 | `fleet-steward-tick.sh todo-done --id <id>` | tick one 待你动手 item as the person's (issue #2913) |
 | `fleet-steward-tick.sh breakage` | spawn the fixer of a red base a worker filed (you are its parent); the beat does this too |
 
+**The hub's task record** (issue #3330): a session that carries one (`@task T<n>`) has
+what it asked and its park on the record too — 「问过你」 (`ask` writes it; with no issue
+the record is the ONLY place) and 「停放」 (a park mirrors 「停放：等 …」 there and its wake
+clears it). The decision sheet is unchanged; the health issues and a red base's breakage
+issue stay issues. No hub ⇒ nothing is written to a record.
+
 `answer` refuses a `never:*` row for you. Past the beat's write budget (`FLEET_STEWARD_WRITES`,
 20) an answer is kept and posted first thing next beat — the card says 「延后 N 条」.
 

@@ -30,7 +30,7 @@ The same script serves two servers. Every session mounts the **core**, `fleet`
 `brief` · `gh` · `comment` · `file_issue` · `ask` · `report` · `pr_verdict` ·
 `pr_merge` · `evidence` · `handoff` · `context` · `transfer` · `where` · `open` ·
 `show` · `set_reap` · `whats_new` · the debugger's `debug_*`. The **dispatch group** —
-`spawn` · `await` · `children` · `answer_dialog` · `send` · `take_role` — is
+`spawn` · `await` · `children` · `answer_dialog` · `send` · `take_role` · `task` — is
 listed only by `fleet-mcp.py --group orch`, the server **`fleet-orch`**
 (`conf/mcp-orch.json`, byte for byte `plugins/fleet-orchestrate/.mcp.json`), which
 only the fleet-orchestrate plugin registers: `/plugin install
@@ -56,7 +56,7 @@ Codex shows them on its `fleet-orch` server).
 - **Old sessions keep their tools (#2068, one version — `# compat-1v`).** `fleet`
   still ANSWERS every dispatch-group call under its old name; the call log marks it
   `road=legacy`. A server that takes over from a pre-group version (#1898's exec —
-  the handover carries no `list`) keeps listing all 28 tools and passes that on, so
+  the handover carries no `list`) keeps listing all 30 tools and passes that on, so
   Claude Code's re-list after `tools/list_changed` takes nothing away mid-session.
   `fleet-oldcfg-replay` counts a tool the new server no longer lists but still
   answers (its `--probe`) as kept.
@@ -77,7 +77,8 @@ are the dispatch group's — listed by `fleet-orch`, answered by `fleet` as lega
 | `agents` | — | `tmux list-windows` of this fleet, `fleet-children.sh --json`, `fleet_origin_key` | read-only; each row `key · issue · agent · state · is_self/is_parent/is_child` |
 | `spawn` | `issue` (int ≥ 1), `repo`?, `reap`? | `dash-issue-session.sh <issue> [--repo R] [--reap P]` | 0 spawned / window exists · 2 at capacity · 3 already claimed · 1 infrastructure |
 | `set_reap` | `policy` (`merged[:<dur>]` · `done[:<dur>]` · `loop-end` · `at:<HH:MM\|ISO>` · `keep`) | `fleet-reap-policy.sh set <policy>` — this window's `@reap_policy` (issue #1902) | 0 set · 2 not a policy · 1 no window |
-| `await` | `issue`, `repo`?, `timeout`? (1–570 s, default 540) | `fleet-await.sh <issue> --timeout T [--repo R]` | 0 MERGED · 3 TIMEOUT (call again) · others per the script |
+| `await` | `issue` or `task` (`T<n>`, issue #3330), `repo`?, `timeout`? (1–570 s, default 540) | `fleet-await.sh <issue\|T<n>> --timeout T [--repo R]` — a task record waits on its issue's worker; one with no issue answers NO-WORKER naming its session | 0 MERGED · 3 TIMEOUT (call again) · others per the script |
+| `task` 派 | `title`, `body`?, `repo`?, `rule`?, `spawn`?, `reap`?, `agent`? | `fleet-task-record.sh dispatch --title T --body-file - [--repo R] [--rule N] [--spawn] [--reap P] [--agent A]` — the hub's task record FIRST (`T<n>`, `POST /v1/node/tasks` with the node token, issue #3330), then a repo task's issue (`fleet-issue-file.sh --task T<n>`, + its worker) or a no-repo session given the words (`dash-raw-session.sh --no-repo --task T<n>`). No hub: a repo task files exactly as `file_issue`; a no-repo one exits 3 | 0 · 1 the hub refused · 2 usage · 3 no hub (no-repo) · the filer's / spawner's own |
 | `send` | `to` (`issue:<N>` · `scratch-<N>` · `orchestrator` · `parent`), `text` | `fleet-peer-send.sh <target> -` (text on stdin) | `{delivered}` · `{queued}` (exit 3) · `{ended}` (exit 2 + stdout) |
 
 ### 报 问 记 合 (issue #1808, EPIC #1813 C6)
@@ -111,7 +112,7 @@ lints it): a script path appears only under a heading marked `运营者` or `排
 | tool | arguments | runs | exit codes |
 |---|---|---|---|
 | `brief` | `kind`? (`claim` default · `resume`), `issue`?, `repo`?, `no_comments`? (claim only) | `fleet-claim-brief.sh [--issue N] [--repo R] [--no-comments]` · `fleet-compact-resume.sh --brief` | claim: 0 go · 2 not in a fleet · 3 wrong seat · 4 no issue · 5 the read failed |
-| `file_issue` | `title`, `body`?, `labels`? (comma list), `priority`? (`p0`–`p3`), `parent`?, `spawn`? \| `bind`?, `breakage`? \| `breakage_key`?, `rule`?, `repo`? | `fleet-issue-file.sh --title T [--body B] [--label L]… [--priority P] [--parent N] [--rule N] [--repo R] [--spawn\|--bind] [--breakage\|--breakage-key K\|--no-breakage]` — `breakage: false` → `--no-breakage`; left out = auto (a red base branch the text names is filed as breakage, issue #2175); `rule` → `--rule N`: the body ends 「按规则 N 派发」 + `<!-- fleet:rule n=N v=… -->` (an orchestrator filing with none gets 「未注明规则」, issue #2786) | 0 · 2 usage · 3 unknown label · 4 spawn with no live parent · 5 the breakage already has an open issue (its URL on stdout, a 「同一故障」 comment left on it; issue #2078) · 1 failure |
+| `file_issue` | `title`, `body`?, `labels`? (comma list), `priority`? (`p0`–`p3`), `parent`?, `spawn`? \| `bind`?, `breakage`? \| `breakage_key`?, `rule`?, `task`? (`T<n>`, issue #3330), `repo`? | `fleet-issue-file.sh --title T [--body B] [--label L]… [--priority P] [--parent N] [--rule N] [--task T<n>] [--repo R] [--spawn\|--bind] [--breakage\|--breakage-key K\|--no-breakage]` — `breakage: false` → `--no-breakage`; left out = auto (a red base branch the text names is filed as breakage, issue #2175); `rule` → `--rule N`: the body ends 「按规则 N 派发」 + `<!-- fleet:rule n=N v=… -->` (an orchestrator filing with none gets 「未注明规则」, issue #2786) | 0 · 2 usage · 3 unknown label · 4 spawn with no live parent · 5 the breakage already has an open issue (its URL on stdout, a 「同一故障」 comment left on it; issue #2078) · 1 failure |
 | `gh` | `kind` (`issue` · `pr` · `checks`), `number`, `fields`?, `max_age`? (≥ 0), `repo`? | `fleet-gh.sh issue view\|pr view\|pr checks <N> [--repo R] [--json F] [--max-age S]` | the script's |
 | `context` | `json`? | `fleet-context.sh [--json]` | 0 OK · 1 another verdict · 2 nothing to read |
 | `transfer` | `action` (`check` · `arm` · `export_loop`); `to` (`claude` · `codex`) for check/arm; `handoff` + `loop`? for arm; `transcript` + `output` for export_loop | `fleet-transfer.sh --session S --window $TMUX_PANE --to T --dry-run` · `… --handoff DOC [--loop L] --after-turn` · `fleet-loop.py from-claude --transcript F --output F` | the script's |
@@ -384,6 +385,7 @@ for you (#2068 B).
 | `fleet-claim-brief.sh` · `fleet-issue-file.sh` · `fleet-gh.sh` | `brief` · `file_issue` · `gh` |
 | `fleet-dialog-answer.sh` | `answer_dialog` |
 | `fleet-role-take.sh` | `take_role` |
+| `fleet-task-record.sh dispatch` | `task` |
 
 `FLEET_DIRECT_SCRIPTS` (env, or `fleet.conf`) picks what happens:
 

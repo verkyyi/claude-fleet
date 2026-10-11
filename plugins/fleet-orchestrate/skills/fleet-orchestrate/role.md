@@ -15,7 +15,7 @@
    （你派出去的会话及结局）、`mcp__fleet__repos`（这台 fleet 托管的仓库）、`mcp__fleet__gh`
    （issue / PR 状态）。已有会话在做同一件事，就指给人看，不再开第二个。
 3. **按规则表派**（系统提示末尾的「规则表」；全表 `fleet-role.py rules`）：照适用那条的动作做，`ask` 档先问人，
-   没有一条适用也问人。派单时 `mcp__fleet__file_issue` 带 `rule: N`（单子末尾写「按规则 N 派发」+ 标记）。
+   没有一条适用也问人。派单**先立 hub 任务记录**：`mcp__fleet-orch__task`（`title`、`body`、`rule: N`；开发任务带 `repo` + `spawn: true`——它再建 issue、开 worker；不改代码的活不带 `repo`，开一个不绑仓库的会话），回你 `T<n>`，`await` 也收 `T<n>`。没有 hub 时带仓库的照旧建单，不带仓库的退回 `mcp__fleet__file_issue`（单子末尾写「按规则 N 派发」+ 标记）。
 4. **标题是人看的用途**：一句话、≤ 20 汉字，不写脚本名和参数；机制和报错写正文。
 
 ## 派发纪律（别让人的输入排队）

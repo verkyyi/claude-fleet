@@ -58,7 +58,7 @@
 #      on stdout, exit 0 answered (the script's exit is in the text) / 1 refused
 #      (the reason on stdout, nothing ran) / 2 usage; the call log says road=call
 #   Q  two groups (issue #3113, EPIC #3111 C2): `--group orch` is the server
-#      `fleet-orch` listing exactly spawn · await · children · answer_dialog · send · take_role;
+#      `fleet-orch` listing exactly spawn · await · children · answer_dialog · send · take_role · task;
 #      `--list` prints each server's list; `fleet` still answers a dispatch-group
 #      call (an old session's, road=legacy in the call log); a server that took over
 #      from a pre-group version keeps listing all 28 and hands that on; file_issue
@@ -116,6 +116,7 @@ fake set-claude-state.sh 'exit 0'
 fakein fleet-evidence.sh 'echo "/ev/$1"'
 fakein fleet-handoff-file.sh 'echo "/h/$1"; [ "$1" = check ] && exit 3; exit 0'
 fake fleet-pr-verdict.sh 'echo PENDING; exit 1'
+fakein fleet-task-record.sh 'echo T7'
 fake fleet-pr-merge.sh 'echo MERGED'
 # the rest of a worker skill (issue #1811)
 fake fleet-claim-brief.sh 'echo "===== fleet ====="'
@@ -137,7 +138,8 @@ if [ "$1" = display-message ]; then
     *session_name*) printf 'tf\n' ;;
     *'window #{window_name}'*) printf 'window issue-1807 · issue=1807 repo=acme/app state=working lifecycle= origin=issue-77\n' ;;
     *'#{@origin}'*) printf 'issue-77\n' ;;
-    *'#{@issue}'*) printf '1807\n' ;;
+    *'#{@issue}'*) [ -n "${FAKE_NOISSUE:-}" ] || printf '1807\n' ;;
+    *'#{@task}'*) printf '%s\n' "${FAKE_TASK:-}" ;;
   esac
   exit 0
 fi
@@ -1032,6 +1034,53 @@ PY
 rm -f "$WORK/bin/fleet_decision.py" "$WORK/bin/fleet_iso.py" "$WORK/bin/fleet-ui-lang.sh"
 ok "O ask: a field ⇒ 建议/不答按/截止 + fleet:ask marker; steward off + no field ⇒ today's body; steward on ⇒ 等你 row"
 
+# --- R: the hub task record (issue #3330) -------------------------------------
+# ask in a window with no issue but a record ⇒ the question on the RECORD only (no
+# comment), red all the same; with both ⇒ the comment, then the record mirrors it;
+# neither ⇒ refused as before. task ⇒ fleet-task-record.sh dispatch, the words on
+# stdin; await takes a T<n> instead of an issue (exactly one); file_issue --task.
+: > "$LOG"
+{ call 130 ask '{"question":"which one?"}'; } | FAKE_NOISSUE=1 FAKE_TASK=T7 serve "$WORK/r1"
+{ call 131 ask '{"question":"push?"}'; } | FAKE_TASK=T7 serve "$WORK/r2"
+{ call 132 ask '{"question":"nobody?"}'; } | FAKE_NOISSUE=1 serve "$WORK/r3"
+{
+  call 133 task '{"title":"看看风扇","body":"为什么一直转","rule":1,"spawn":true}'
+  call 134 await '{"task":"T7","timeout":30}'
+  call 135 await '{"issue":3,"task":"T7"}'
+  call 136 await '{}'
+  call 137 file_issue '{"title":"x","task":"T7","repo":"acme/app"}'
+} | serve "$WORK/r4"
+python3 - "$WORK/r1" "$WORK/r2" "$WORK/r3" "$WORK/r4" <<'PY' || fail "R: the task record's tools" "$(cat "$WORK/r1" "$WORK/r2" "$WORK/r3" "$WORK/r4")"
+import json, sys
+rows = {}
+for f in sys.argv[1:]:
+    rows.update({r["id"]: r["result"] for r in (json.loads(l) for l in open(f) if l.strip())})
+sc = lambda i: rows[i]["structuredContent"]
+assert (sc(130)["command"], sc(130)["task"], sc(130)["body"]) == ("fleet-task-record.sh", "T7", "⛔ blocked: which one?"), sc(130)
+assert sc(130)["state"]["command"] == "set-claude-state.sh" and "issue" not in sc(130), sc(130)
+assert sc(131)["issue"] == 1807 and sc(131)["task"] == "T7" and sc(131)["record"]["exit"] == 0, sc(131)
+assert rows[132].get("isError") and "no bound issue" in rows[132]["content"][0]["text"], rows[132]
+assert sc(133)["stdout"] == "T7\n", sc(133)
+assert sc(134)["command"] == "fleet-await.sh", sc(134)
+for i in (135, 136):
+    assert rows[i].get("isError") and "exactly one" in rows[i]["content"][0]["text"], rows[i]
+PY
+cat > "$WORK/r.want" <<'EOF'
+fleet-task-record.sh set T7 --asked ⛔ blocked: which one?
+set-claude-state.sh blocked
+fleet-comment.sh 1807 --note --body-file -
+<<<⛔ blocked: push?>
+set-claude-state.sh blocked
+fleet-task-record.sh set T7 --asked ⛔ blocked: push?
+fleet-task-record.sh dispatch --title 看看风扇 --body-file - --rule 1 --spawn
+<<<为什么一直转>
+fleet-await.sh T7 --timeout 30
+fleet-repo.sh list
+fleet-issue-file.sh --title x --repo acme/app --task T7
+EOF
+diff "$WORK/r.want" "$LOG" > "$WORK/r.diff" || fail "R: the task record's tools ran the wrong argv" "$(cat "$WORK/r.diff")"
+ok "R ask → the record (no issue) / mirrored (issue); task → dispatch, words on stdin; await by T<n>; file_issue --task"
+
 # --- P: a worker files, never spawns (issue #2960) ---------------------------
 cat >> "$WORK/bin/fleet-lib.sh" <<'SH'
 FLEET_SPAWN_REFUSAL='a worker does not spawn sessions (issue #2960) — file it instead'
@@ -1060,7 +1109,9 @@ import json, sys
 rows = {r["id"]: r["result"] for r in (json.loads(l) for l in open(sys.argv[1]) if l.strip())}
 assert rows[1]["serverInfo"]["name"] == "fleet-orch", rows[1]
 tools = {t["name"]: t for t in rows[2]["tools"]}
-assert sorted(tools) == ["answer_dialog", "await", "children", "send", "spawn", "take_role"], sorted(tools)
+assert sorted(tools) == ["answer_dialog", "await", "children", "send", "spawn", "take_role", "task"], sorted(tools)
+assert tools["task"]["inputSchema"]["required"] == ["title"]   # issue #3330
+assert "required" not in tools["await"]["inputSchema"]          # issue or task (#3330)
 assert tools["take_role"]["inputSchema"]["required"] == ["role"]
 assert tools["spawn"]["inputSchema"]["required"] == ["issue"]
 assert tools["send"]["inputSchema"]["required"] == ["to", "text"]
@@ -1068,8 +1119,8 @@ for t in tools.values():
     assert t["inputSchema"]["additionalProperties"] is False, t
 PY
 cli "$WORK/q.l0" --list && cli "$WORK/q.l1" --group orch --list || fail "Q: --list exited non-zero" "$(cat "$WORK/q.l0.err" "$WORK/q.l1.err")"
-[ "$(wc -l < "$WORK/q.l0" | tr -d ' ')" = 23 ] && ! grep -Eqx 'spawn|await|children|answer_dialog|send|take_role' "$WORK/q.l0" \
-  && [ "$(sort "$WORK/q.l1" | tr '\n' ' ')" = "answer_dialog await children send spawn take_role " ] \
+[ "$(wc -l < "$WORK/q.l0" | tr -d ' ')" = 23 ] && ! grep -Eqx 'spawn|await|children|answer_dialog|send|take_role|task' "$WORK/q.l0" \
+  && [ "$(sort "$WORK/q.l1" | tr '\n' ' ')" = "answer_dialog await children send spawn take_role task " ] \
   || fail "Q: --list is not each server's list" "$(cat "$WORK/q.l0"; echo ---; cat "$WORK/q.l1")"
 cli "$WORK/q.bad" --group zz --list && fail "Q: --group zz was accepted"
 # An old session (its list had spawn) calls it on `fleet`: answered, logged road=legacy.
@@ -1100,7 +1151,7 @@ done
 python3 - "$WORK/q4" <<'PY' || fail "Q: a takeover from a pre-group server dropped tools from its session's list" "$(cat "$WORK/q4")"
 import json, sys
 lists = [r["result"]["tools"] for r in (json.loads(l) for l in open(sys.argv[1]) if l.strip()) if "id" in r]
-assert [len(x) for x in lists] == [29, 23, 29], [len(x) for x in lists]
+assert [len(x) for x in lists] == [30, 23, 30]   # + task (#3330), [len(x) for x in lists]
 assert "spawn" in {t["name"] for t in lists[0]}
 PY
 grep -q '"list": "all" if SERVING\["list_all"\]' "$WORK/bin/fleet-mcp.py" \
