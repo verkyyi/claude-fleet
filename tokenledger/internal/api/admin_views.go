@@ -49,12 +49,16 @@ type AdminOverview struct {
 	People []AdminPerson `json:"people"`
 	Pool   []AdminSub    `json:"pool"`
 	Totals struct {
-		Tokens         int64 `json:"tokens"`
-		TokensToday    int64 `json:"tokens_today"`
-		Sessions       int   `json:"sessions"`
-		Running        int   `json:"running"`
-		Machines       int   `json:"machines"`
-		MachinesOnline int   `json:"machines_online"`
+		Tokens      int64 `json:"tokens"`
+		TokensToday int64 `json:"tokens_today"`
+		// TokensUnattributed is the part of Tokens no person owns: a row whose
+		// (endpoint, login) is no one's account, or two people's. It is in no
+		// person's row, and counted here rather than dropped (claude-fleet#3406).
+		TokensUnattributed int64 `json:"tokens_unattributed"`
+		Sessions           int   `json:"sessions"`
+		Running            int   `json:"running"`
+		Machines           int   `json:"machines"`
+		MachinesOnline     int   `json:"machines_online"`
 	} `json:"totals"`
 	// Nodes are fleet_sessions' machines, for the lost / maintenance list.
 	Nodes []FleetNode `json:"nodes"`
@@ -67,10 +71,12 @@ type AdminOverview struct {
 var runningStates = map[string]bool{"working": true, "waiting": true, "blocked": true}
 
 // handleAdminOverview serves GET AdminOverviewPath[?since=7d]: every person's
-// pool tokens over the range and today (UTC), their open sessions and logins,
-// and the subscription pool with who is on each — the By person page, with
-// the hub's totals. Only pool usage counts (EPIC #3225 共同约定 3): the
-// per-machine scan (usage_events) is no person's number.
+// tokens over the range and today (UTC), their open sessions and logins, and
+// the subscription pool with who is on each — the By person page, with the
+// hub's totals. The tokens are the transcript scan (usage_events, through
+// usage_hourly) filed under a person by endpoint → login → principal
+// (claude-fleet#3406), the same rows 我的用量 reads: pool_usage started empty
+// and misses whatever no proxy saw, so it is only the budget's.
 func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		w.Header().Set("Allow", "GET")
@@ -116,7 +122,7 @@ func (s *Server) adminByPerson(w http.ResponseWriter, r *http.Request, out *Admi
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return false
 	}
-	usage, err := s.Store.PoolUsageFor("", from, time.Time{}) // to now, this second included
+	usage, err := s.Store.EventUsageSince(nil, from)
 	if err != nil {
 		return fail(err)
 	}
@@ -124,13 +130,22 @@ func (s *Server) adminByPerson(w http.ResponseWriter, r *http.Request, out *Admi
 	if settings, err := s.Store.FleetSettings(); err == nil {
 		in.Budgets = personBudgets(settings)
 	}
-	if ps, err := s.Store.Principals(); err == nil {
-		for _, p := range ps {
-			in.Names[p.ID] = p.DisplayName
-			if in.Names[p.ID] == "" {
-				in.Names[p.ID] = p.Login
-			}
+	ps, err := s.Store.Principals()
+	if err != nil {
+		return fail(err)
+	}
+	for _, p := range ps {
+		in.Names[p.ID] = p.DisplayName
+		if in.Names[p.ID] == "" {
+			in.Names[p.ID] = p.Login
 		}
+	}
+	whose, err := s.eventOwners(ps)
+	if err != nil {
+		return fail(err)
+	}
+	for i := range usage {
+		usage[i].Principal = whose[store.EndpointLogin{EndpointID: usage[i].EndpointID, OSUser: usage[i].Login}]
 	}
 	creds, err := s.Store.Credentials("")
 	if err != nil {
@@ -172,6 +187,9 @@ func (s *Server) adminByPerson(w http.ResponseWriter, r *http.Request, out *Admi
 	for _, u := range usage {
 		if !u.At.Before(start) {
 			out.Totals.Tokens += u.Tokens()
+			if u.Principal == "" {
+				out.Totals.TokensUnattributed += u.Tokens()
+			}
 		}
 		if !u.At.Before(day) {
 			out.Totals.TokensToday += u.Tokens()
@@ -188,4 +206,35 @@ func (s *Server) adminByPerson(w http.ResponseWriter, r *http.Request, out *Admi
 		return labels[uuid], snap
 	}, func(c store.Credential) string { return s.credAtLimit(c, now) })
 	return true
+}
+
+// eventOwners is whose each (endpoint, login) is: every person's own cut
+// (loginPairsOf → OwnerOf), inverted. One claimed by two people is nobody's
+// — never a guess between them; it is counted as unattributed.
+func (s *Server) eventOwners(ps []store.Principal) (map[store.EndpointLogin]string, error) {
+	out := map[store.EndpointLogin]string{}
+	both := map[store.EndpointLogin]bool{}
+	for _, p := range ps {
+		pairs, err := s.loginPairsOf(p.ID)
+		if err != nil {
+			return nil, err
+		}
+		if len(pairs) == 0 {
+			continue
+		}
+		o, err := s.Store.OwnerOf(pairs)
+		if err != nil {
+			return nil, err
+		}
+		for _, l := range o.Logins {
+			if who, ok := out[l]; ok && who != p.ID {
+				both[l] = true
+			}
+			out[l] = p.ID
+		}
+	}
+	for l := range both {
+		delete(out, l)
+	}
+	return out, nil
 }
