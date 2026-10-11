@@ -838,11 +838,15 @@ func (hb Heartbeat) Paused() (bool, string) {
 }
 
 // NodeRoute is one way into a machine's sshd: a name people see ("tailnet",
-// "public"), a host and a port (0 = 22).
+// "public", "lan"), a host and a port (0 = 22). Prefix is the prefix length of
+// the network a "lan" route's address sits on (claude-fleet#3074): a client
+// tests that route only when one of its own interfaces is on the same network.
+// 0 = not said (every other route, and an agent older than #3074).
 type NodeRoute struct {
-	Name string `json:"name"`
-	Host string `json:"host"`
-	Port int    `json:"port,omitempty"`
+	Name   string `json:"name"`
+	Host   string `json:"host"`
+	Port   int    `json:"port,omitempty"`
+	Prefix int    `json:"prefix,omitempty"`
 }
 
 // Fleet is one fleet's snapshot. Workers is relayed as fleet-control.py

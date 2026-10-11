@@ -60,7 +60,7 @@ Tabs and newlines inside a field become spaces. The reason is passed through
 |---|---|---|---|
 | `home` | the hub's machine pick (`fleet`) did not give one | the hub's code (`no_machine_online`, `opening`, `device_revoked`, …) or `unreachable` | the hub's words (+ the TLS hint, #2878) |
 | `pick` | the routes were measured | `ok` · `fail` | every route: `<name> <answered>/<probes>` and its last error or skip |
-| `pick` (route column `direct`) | a reconnect's remembered line was not the tailnet and the tailnet answered (#2987) | `ok` | `tailnet <name> over remembered <name>` |
+| `pick` (route column `direct`) | a reconnect's remembered line had a better class of line beside it and that one answered — a same-network LAN line (#3074), or the tailnet under `FLEET_CONNECT_PREFER_TAILNET=1` (#2987) | `ok` | `<name> over remembered <name>` · `tailnet <name> over remembered <name>` |
 | `switch` | `fleet-remote-view.sh open` — a click on a session row (#2987); ms = the whole `open` | `ok` | route column = how: `chan` (the serve channel, one round trip) · `select` (a one-shot over the window's master) · `readopt` (its control socket was gone; the warm master did it and the window took it) · `respawn` (a full reconnect — the reason says why: `down` · `chan no answer` · `ctl gone: <path>` · `select failed`) · `new` (a new proxy window) |
 | `stray-end` | a proxy `run` loop that found its pane not its own ended (#2987) | `ok` | `pid N` |
 | `ssh-start` | ssh is started | — | `<route name> <host>:<port> login=<login>` |
@@ -69,10 +69,17 @@ Tabs and newlines inside a field become spaces. The reason is passed through
 | `relay-end` | the relay's stream ended (ms = ready → the first end) | **who ended it**: `hub` · `client` · `net` | `ws close <code>: <reason>` (hub) · `ssh closed the stream (stdin EOF)` (client) · `the hub's socket closed with no close frame` (net) |
 
 A slow switch reads off `switch` lines: one that is not `chan` / `select` names
-why it was not. The ranking (`pick`) puts the tailnet first among routes that
-answered every handshake — on one LAN the public gateway and the tailnet answer
-within noise, and the one picked is kept for every reconnect;
-`FLEET_CONNECT_PREFER_TAILNET=0` ranks by latency alone, as before.
+why it was not. The ranking (`pick`, #3074, EPIC #3067 共同约定 8) takes the
+routes that answered the most handshakes, then by class — `lan` (the machine's
+own private addresses) < `entry` < `tailnet` < any other direct line < `relay` —
+then by latency. A `lan` route is only measured when one of this computer's
+interfaces is on its network (`skip 不在这台机器的局域网` otherwise), the tailnet
+only when this computer has a Tailscale address (`skip 这台电脑没有 Tailscale`).
+The remembered route is filed by network (default gateway + its network: the
+`; net=<key>` at the end of a `pick` reason), so the line picked at home is not
+the first one tried elsewhere. `FLEET_CONNECT_PREFER_TAILNET=1` is #2987's order
+for one version (the tailnet first, one remembered route, nothing skipped);
+`=0` ranks by latency alone.
 
 `relay-end` is the line to put beside the hub's `/v1/fleet/ssh-relays` row for
 the same minute: the hub records its own view of the same stream (direction,
@@ -90,14 +97,14 @@ it is long).
 ### thin.log — `bin/fleet-thin.py` (the thin client, #3003)
 
 `${XDG_CACHE_HOME:-~/.cache}/claude-fleet/thin.log` (`FLEET_THIN_LOG`), the one
-file the thin client writes; rotated and redacted as the others. Its own nine
+file the thin client writes; rotated and redacted as the others. Its own ten
 fields, only ever added at the end:
 
-    time  event  home  route  pick_ms  ssh_ms  first_ms  rc  reason
+    time  event  home  route  pick_ms  ssh_ms  first_ms  rc  reason  net
 
 | event | when | fields |
 |---|---|---|
-| `connect` | each connection, when it ends | `pick_ms` = `fleet-connect.py --argv` (certificate · machine · route); `ssh_ms` = ssh spawned → the first byte back (handshake + the far end starting); `first_ms` = spawned → the home's first valid `cur` (the view drawn); `rc` = ssh's exit; reason `up` · `never up` · `quit` |
+| `connect` | each connection, when it ends | `pick_ms` = `fleet-connect.py --argv` (certificate · machine · route); `ssh_ms` = ssh spawned → the first byte back (handshake + the far end starting); `first_ms` = spawned → the home's first valid `cur` (the view drawn); `rc` = ssh's exit; reason `up` · `never up` · `quit`; `net` = `net=<default gateway>@<its network>` — the network this computer was on when the route was picked (#3074; empty under `FLEET_CONNECT_PREFER_TAILNET`) |
 | `rehome` | three connections in a row never came up — a new home asked for (`--avoid`), or the machine named changed | reason: from / other than which |
 | `first` | the home had no fleet session of yours (rc 3) or the hub is opening your first login — the first-session road (#3054): a start line, then rc 0 + the place line (opened there) or rc 1 + why it did not open | `home` (the machine it opened on, once placed); reason |
 | `offline` | three connections failed and the hub did not answer either — this computer's own line is down, so no 换家: the home and the view are kept (#3007) | `home`; reason |

@@ -113,7 +113,11 @@ func (s *Server) fleetMachinesRaw() []FleetMachine {
 				continue
 			}
 			have[r.Name] = true
-			out[i].Routes = append(out[i].Routes, FleetRoute{Name: r.Name, Host: r.Host, Port: r.Port})
+			fr := FleetRoute{Name: r.Name, Host: r.Host, Port: r.Port}
+			if r.Prefix > 0 && r.Prefix <= 128 {
+				fr.Prefix = r.Prefix
+			}
+			out[i].Routes = append(out[i].Routes, fr)
 		}
 	}
 	return withHostKeys(out, keys)
