@@ -173,12 +173,18 @@ Service is the door, `fleet-linux-entry`, carrying only the entry port 22022
 python3 extras/managed-node/render.py \
   --image registry.cn-shenzhen.aliyuncs.com/24haowan/fleet-managed-node@sha256:IMAGE_DIGEST \
   --hub https://YOUR-HUB --storage-class YOUR_ENCRYPTED_ESSD_CLASS \
+  --pull-secret PULL_SECRET_NAME \
   [--entry-host LB_ADDRESS] > /tmp/fleet-linux.json
 kubectl apply --dry-run=server -f /tmp/fleet-linux.json
 ```
 
-Provision the namespace and its `acr-pull` image-pull Secret through your normal
-registry credential workflow. Put the two newly issued join codes into a Secret
+Name the namespace's image-pull Secret with `--pull-secret` (repeatable; the
+default `acr-pull` is only right where you created one by that name). On ACK
+with the password-free ACR plugin the Secret is the plugin's own,
+`acr-credential-<hash>` — find it with
+`kubectl -n fleet-workers get secret | grep acr-credential`; a wrong name leaves
+the pod in `ImagePullBackOff` (issue #3290). Elsewhere, provision it through your
+normal registry credential workflow. Put the two newly issued join codes into a Secret
 from private files, then apply the reviewed resources:
 
 ```sh

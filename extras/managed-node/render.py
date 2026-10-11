@@ -93,7 +93,7 @@ def entry_annotations(spec):
 
 
 def resources(image, hub, storage_class, namespace='fleet-workers', size='100Gi',
-              entry_host='', entry_spec='slb.s1.small', egress=None):
+              entry_host='', entry_spec='slb.s1.small', egress=None, pull_secrets=('acr-pull',)):
     if not re.fullmatch(r'[^\s]+@sha256:[a-f0-9]{64}', image):
         raise ValueError('pin the deployed image by sha256 digest')
     if not hub.startswith('https://'):
@@ -104,6 +104,10 @@ def resources(image, hub, storage_class, namespace='fleet-workers', size='100Gi'
         raise ValueError('--entry-host is the load balancer address (an IP or a DNS name)')
     if entry_spec != 'clcu' and not re.fullmatch(r'slb\.s[0-9]\.[a-z0-9]+', entry_spec):
         raise ValueError('--entry-lb-spec is a CLB spec (slb.s1.small) or clcu')
+    # ACK's password-free ACR plugin names its own Secret (acr-credential-<hash>, #3290)
+    for name in pull_secrets:
+        if not re.fullmatch(r'[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?', name):
+            raise ValueError('--pull-secret is a Secret name in the namespace, not %r' % name)
     eg = dict(EGRESS, **(egress or {}))
     try:
         dns = str(ipaddress.IPv4Address(eg['dns']))
@@ -168,7 +172,7 @@ def resources(image, hub, storage_class, namespace='fleet-workers', size='100Gi'
                   'persistentVolumeClaimRetentionPolicy': {'whenDeleted': 'Retain', 'whenScaled': 'Retain'},
                   'template': {'metadata': {'labels': labels}, 'spec': {
                       'automountServiceAccountToken': False, 'terminationGracePeriodSeconds': 120,
-                      'imagePullSecrets': [{'name': 'acr-pull'}],
+                      'imagePullSecrets': [{'name': n} for n in pull_secrets],
                       'initContainers': [egress_guard(image, dns, blocked, metadata)],
                       'containers': [container],
                       'volumes': [{'name': 'join', 'secret': {'secretName': 'fleet-linux-join',
@@ -189,6 +193,9 @@ if __name__ == '__main__':
     p.add_argument('--entry-host', default='',
                    help="the door's load balancer address (kubectl get svc fleet-linux-entry); "
                         'empty until the CLB exists')
+    p.add_argument('--pull-secret', action='append', dest='pull_secrets',
+                   help='image-pull Secret in the namespace (repeatable; default acr-pull). On ACK: '
+                        'kubectl -n fleet-workers get secret | grep acr-credential')
     p.add_argument('--entry-lb-spec', default='slb.s1.small', help='CLB spec, or clcu (pay by use)')
     # the egress guard's ranges (#3281; docs/MANAGED-LINUX.md «Egress guard»)
     p.add_argument('--egress-dns', default=EGRESS['dns'], help='kube-dns ClusterIP: the one private address allowed (53)')
@@ -203,7 +210,8 @@ if __name__ == '__main__':
               'private': [c.strip() for c in args.egress_private.split(',') if c.strip()]}
     try:
         items = resources(args.image, args.hub, args.storage_class, args.namespace,
-                          entry_host=args.entry_host, entry_spec=args.entry_lb_spec, egress=egress)
+                          entry_host=args.entry_host, entry_spec=args.entry_lb_spec, egress=egress,
+                          pull_secrets=args.pull_secrets or ['acr-pull'])
     except ValueError as e:
         p.error(str(e))
     print(json.dumps({'apiVersion': 'v1', 'kind': 'List', 'items': items}, indent=2))
