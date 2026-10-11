@@ -276,6 +276,9 @@ type Agent struct {
 	// already carried to the hub (claude-fleet#2007), so a waiting lease loop
 	// renews early once per refusal, not every poll. The lease loop's own.
 	credReported map[string]bool
+	// credSummary is the last lease's account count line, logged only when it
+	// changes (claude-fleet#3440: a 200 lease with no account said nothing).
+	credSummary string
 
 	// lastSessions is the newest beat's session count, -1 unknown — what a
 	// sleeping personal machine tells its person (claude-fleet#1721).

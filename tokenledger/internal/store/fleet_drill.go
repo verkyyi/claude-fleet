@@ -14,7 +14,8 @@ import (
 // back a one-time approve code that confirms ONE device login as that person.
 // It is an ordinary principal (fleet_principals + one adopted account on the
 // drill machine, so a certificate can be signed for it) plus this row, which
-// is what makes it a drill: no credentials, no session passes, and it can
+// is what makes it a drill: it leases as a newcomer would, under its
+// creator's subscription allowlist (claude-fleet#3155, #3440), and it can
 // delete itself. When the row expires the sweep deletes the person, its
 // devices and its nodes — a drill never leaves anyone behind on the hub.
 const fleetDrillSchema = `
