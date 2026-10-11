@@ -114,7 +114,7 @@ fleet.conf `[common]`) keeps `new quit landed` (the 刚落地 group first) and
 LANGUAGE (issue #3329, EPIC #3178 D7, L1–L3): the 「◐ 语言 / Language」 row sits
 under ⚡, above ⏻, both scripts on it so a person who cannot read the one in use
 still knows it; typing 语言 · lang · english · 中文 finds it (and lights it when no
-session is hit). ↵ flips 中文 ⇄ English, Tab adds 跟系统走 (the choice cleared) —
+session is hit). ↵ flips between 中文 and English, Tab adds 跟系统走 (the choice cleared) —
 `fleet-config.py lang`, kept on the hub under the person and re-read here at
 once; the popup redraws in it and says so on its footer for 3 s. Which language
 is in use is fleet-ui-lang.sh's (the person's choice > the 看台's FLEET_VIEW_LANG >

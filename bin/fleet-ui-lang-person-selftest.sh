@@ -32,9 +32,9 @@ L() { sh "$BIN/fleet-ui-lang.sh" lang; }
 H() { sh "$BIN/fleet-ui-lang.sh" first-hint "$1"; }
 
 # --- A. none said ⇒ Chinese ----------------------------------------------------------
-eq "A: no LANG brought ⇒ 中文" zh "$(FLEET_VIEW_LANG= L)"
+eq "A: no LANG brought ⇒ 中文" zh "$(FLEET_VIEW_LANG='' L)"
 eq "A: … C / POSIX the same" zh "$(FLEET_VIEW_LANG=C L)$(FLEET_VIEW_LANG=POSIX L | sed 's/zh//')"
-eq "A: … no one-time line" "" "$(FLEET_VIEW_LANG= H devA)"
+eq "A: … no one-time line" "" "$(FLEET_VIEW_LANG='' H devA)"
 eq "A: zh_CN brought ⇒ 中文" zh "$(FLEET_VIEW_LANG=zh_CN.UTF-8 L)"
 eq "A: outside a 看台 the login's locale, as before" en "$(L)"
 
@@ -51,10 +51,10 @@ printf '{"version": 2, "bundle": {"roles": {}, "ui_lang": "zh"}}' > "$FLEET_CONF
 eq "C: set zh, en_US comes ⇒ still 中文" zh "$(FLEET_VIEW_LANG=en_US.UTF-8 L)"
 eq "C: … and never the one-time line" "" "$(FLEET_VIEW_LANG=en_US.UTF-8 H devC)"
 printf '{"version":3,"bundle":{"ui_lang":"en"}}' > "$FLEET_CONF_DIR/person-bundle.json"
-eq "C: set en (one-line JSON), no LANG ⇒ English" en "$(FLEET_VIEW_LANG= L)"
+eq "C: set en (one-line JSON), no LANG ⇒ English" en "$(FLEET_VIEW_LANG='' L)"
 eq "C: … outside a 看台 too" en "$(LANG=zh_CN.UTF-8 L)"
 printf '{"version":4,"bundle":{"roles":{"worker":"---\\nx: \\"ui_lang\\": \\"en\\"\\n---\\n"}}}' > "$FLEET_CONF_DIR/person-bundle.json"
-eq "C: a role overlay quoting ui_lang is not a choice" zh "$(FLEET_VIEW_LANG= L)"
+eq "C: a role overlay quoting ui_lang is not a choice" zh "$(FLEET_VIEW_LANG='' L)"
 
 # --- D. fleet-config.py lang: the hub (a seam), then this computer's copy -------------
 printf '{"version":1,"bundle":{"roles":{}}}' > "$WORK/hub.json"
@@ -83,7 +83,7 @@ C auto >/dev/null 2>"$WORK/err" || fail "D: lang auto failed" "$(cat "$WORK/err"
 eq "D: 跟系统走 ⇒ no ui_lang on the hub" None "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["bundle"].get("ui_lang"))' "$WORK/hub.json")"
 eq "D: … here" auto "$(C)"
 eq "D: … detection again: en_US ⇒ English" en "$(FLEET_VIEW_LANG=en_US.UTF-8 L)"
-eq "D: … none said ⇒ 中文" zh "$(FLEET_VIEW_LANG= L)"
+eq "D: … none said ⇒ 中文" zh "$(FLEET_VIEW_LANG='' L)"
 C fr >/dev/null 2>&1; eq "D: lang fr refused (exit 2)" 2 "$?"
 unset FLEET_PERSON_HUB_CMD FLEET_PERSON_BUNDLE_CMD
 
