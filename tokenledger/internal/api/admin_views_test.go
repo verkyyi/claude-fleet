@@ -111,23 +111,48 @@ func TestAdminViews_DailyOwnAdminAll(t *testing.T) {
 	if code, _ := rolesGet(t, h, admin, "/v1/usage?by=account"+rng); code != http.StatusForbidden {
 		t.Errorf("admin /v1/usage by account on the daily route = %d; want 403 (subscriptions are the admin area's)", code)
 	}
+	// By person: one row a person, from pool usage (claude-fleet#3228).
+	st, now := h.srv.Store, time.Now()
+	adminPID, alicePID := githubPrincipal(ghAdmin.ID), githubPrincipal(ghAlice.ID)
+	ap, err := st.Principal(alicePID)
+	if err != nil {
+		ap, err = st.AdoptPrincipal(alicePID, aliceLogin, aliceLogin, now)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.RecordLoginAccount(ap, "alicebox", aliceLogin, "ep_alicebox", "test", now); err != nil {
+		t.Fatal(err)
+	}
+	for _, u := range []store.PoolUsage{
+		{Principal: adminPID, Provider: "claude", In: 150, At: now},
+		{Principal: adminPID, Provider: "claude", Out: 50, At: now},
+		{Principal: alicePID, Provider: "claude", In: 100, At: now},
+	} {
+		if err := st.AddPoolUsage(u); err != nil {
+			t.Fatal(err)
+		}
+	}
 	var ov AdminOverview
 	if code := getJSON(t, h, admin, AdminOverviewPath+"?since=2026-08-31T00:00:00Z", &ov); code != http.StatusOK {
 		t.Fatalf("admin %s = %d", AdminOverviewPath, code)
 	}
-	byLogin := map[string]AdminPerson{}
+	byPID := map[string]AdminPerson{}
 	for _, p := range ov.People {
-		byLogin[p.Login] = p
+		byPID[p.Principal] = p
 	}
-	if len(byLogin) != 2 || byLogin["verkyyi"].Tokens != 200 || byLogin[aliceLogin].Tokens != 100 {
-		t.Errorf("admin overview people = %+v; want verkyyi 200 and %s 100", ov.People, aliceLogin)
+	if len(ov.People) != 2 || byPID[adminPID].Week != 200 || byPID[alicePID].Week != 100 {
+		t.Errorf("admin overview people = %+v; want %s 200 and %s 100", ov.People, adminPID, alicePID)
 	}
-	if v := byLogin["verkyyi"]; v.Sessions != 1 || v.Running != 1 || len(v.Machines) != 1 || v.Machines[0] != "mini" ||
-		len(v.People) != 1 || v.People[0] != ghAdmin.Login {
-		t.Errorf("admin overview verkyyi = %+v; want 1 running session on mini, held by %s", v, ghAdmin.Login)
+	if v := byPID[adminPID]; v.Sessions != 1 || v.Running != 1 || len(v.Logins) != 1 || v.Logins[0] != [2]string{"mini", "verkyyi"} ||
+		v.Name != ghAdmin.Login || v.Limit != nil {
+		t.Errorf("admin overview %s = %+v; want 1 running session on mini/verkyyi, named %s, 不限额", adminPID, v, ghAdmin.Login)
 	}
 	if ov.Totals.Sessions != 2 || ov.Totals.Running != 2 || ov.Totals.Tokens != 300 || ov.Totals.Machines != 2 {
 		t.Errorf("admin overview totals = %+v", ov.Totals)
+	}
+	if ov.Pool == nil {
+		t.Error("admin overview pool = null; want a list")
 	}
 
 	// Sessions.
