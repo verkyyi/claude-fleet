@@ -93,18 +93,23 @@ is special (issue #3119): the one holding the orchestrator or the steward is a r
 like any other — no session is behind 「新任务」 below. All of it through
 fleet-ui-lang.sh (`view_*`).
 
-COMMANDS (issue #3180, EPIC #3178 C2): command rows above the list — 「新任务…」
-(typed words no session hits light 「新任务：<字> ↵ 直接派」; ↵ is ⌘T's send with
-that title, no second dialog — fleet-quick-dispatch.py send, to `pick`'s repo, the
-footer asking 「派到哪个仓库」 when two are named and none was last) and 「在 #N
-「…」 的目录开 shell」 (the `shell` action on the session in view; in a session's
-shell window it is 「回到 #N …」 — `enter` on that session — first and lit) — and
-「更多」 below: 开一个空白新会话 (go_new, ⌘N's) · 退出 fleet (quit_view, ⌘Q's).
-Each is an ACTIONS entry (the row-less ones `rowless`, never in a Tab menu).
-FLEET_PANEL_COMMANDS (the environment, else fleet.conf `[common]`; default `new
-shell`) names the rows on top in order — new · shell · newsess · quit · landed
-(the 刚落地 group first); `none` takes them all away. panel_rows() builds it;
-`view-panel` prints it.
+COMMANDS (issue #3180, EPIC #3178 C2; ONE ENTRY, issue #3327 ④ — 方案 B): the
+search line is the panel's only input (「搜会话，或直接写一件新任务」). Under the
+sessions sits ONE ⚡ row, always: 「⚡ 新会话（空白）」 on no words, 「⚡ 新任务：<字>」
+on words, its cells under it — 仓库 ‹…› (不绑仓库 is one; no words: 不绑仓库, words:
+the last send's repo — ⌘T's `pick`) · Agent ‹…› (the fleet's default; one this
+machine lacks grey, with why — ⌘T's rule, fleet-quick-dispatch.py grid). Opened,
+the lit row is the session in view (⌘P ↵ = back to it; in a session's shell, that
+session), ↑ from the top goes round to ⚡; typed words light the first session
+they hit (title or issue number only — never a machine's name), none hit ⇒ ⚡ is
+lit. On ⚡ Tab walks 仓库 → Agent and ←→ changes the cell (a session row's Tab is
+its actions, 在它的目录开 shell among them). ↵ on ⚡ runs detached, the row its
+progress (esc closes the panel, the run still says how it ended): words + a repo ⇒
+⌘T's send (fleet-quick-dispatch.py send --toast); otherwise ⌘N's new session on
+this machine (`do new`: the repo or none, the words its first turn). Below it ⏻
+退出 fleet (quit_view, ⌘Q's). FLEET_PANEL_COMMANDS (the environment, else
+fleet.conf `[common]`) keeps `new quit landed` (the 刚落地 group first) and
+`none` (no ⚡, no ⏻); panel_rows() builds it, `view-panel` prints it.
 
 STALE (issue #3184, EPIC #3178 C6): 失联 is judged off ONE time, global/hub_ok —
 the file the producer's `m4!` reads. A lost row is grey end to end and tagged
@@ -807,16 +812,16 @@ def fuzzy(token, text):
 
 
 def score_token(token, e):
-    """The row's name (substring, a word start better) > any other field > the
-    name's letters in order."""
+    """The row's title (substring, a word start better) > its window name or issue
+    number > the title's letters in order. Only those (issue #3327): a machine's,
+    a login's or a repo's name never hits — typing `m4` lights no row, the ⚡ row
+    takes it."""
     name = e.get("text") or ""
     i = name.lower().find(token)
     if i >= 0:
         return 3000 - i + (200 if word_start(name, i) else 0)
     issue = (e.get("issue") or "").lstrip("#")
-    hay = " ".join(str(x) for x in (e.get("name"), "#" + issue if issue else "", e.get("word"),
-                                    e.get("machine"), e.get("login"), e.get("repo"), e.get("ask"),
-                                    " ".join(e.get("tags") or ())) if x).lower()
+    hay = " ".join(str(x) for x in (e.get("name"), "#" + issue if issue else "") if x).lower()
     i = hay.find(token)
     if i >= 0:
         return 2000 - i
@@ -883,6 +888,17 @@ def paint(shown, at, width, cells, clip):
             continue
         if e["kind"] == "cmd":
             lines.append([(clip(("▶ " if lit else "  ") + e["text"], width), ("lit", "bold") if lit else ())])
+            continue
+        if e["kind"] == "grid":
+            # the ⚡ row's cells (issue #3327): the one Tab is on lit, the rest plain
+            segs = [("    ", ())]
+            for n, (text, on) in enumerate(e.get("cells") or []):
+                segs += ([("  ·  ", ("dim",))] if n else []) + [(text, ("lit", "bold") if on else ())]
+            if not e.get("cells"):
+                segs.append((e.get("text") or "", ("dim",)))
+            if e.get("note"):
+                segs.append(("  " + e["note"], ("dim",)))
+            lines.append(segs)
             continue
         indent = "  " * (e.get("depth") or 0)
         if e["kind"] == "ask":
@@ -1199,11 +1215,12 @@ def go(qo, vid, target, how="go", client="", meta=None, record=True):
     return rc
 
 
-def do(qo, verb, vid, client="", target=None):
+def do(qo, verb, vid, client="", target=None, new=None):
     """⌘↓ ⌘↑ ⌘[ ⌘] in a 看台 — and C7's ⌘N (new) · ⌘Q (quit) · ⌃\\ (shell;
-    `--target <row>`: that session's, issue #3183)."""
+    `--target <row>`: that session's, issue #3183). `new`: go_new's repo / agent /
+    prompt (⌘P's ⚡ row, issue #3327)."""
     if verb == "new":
-        return go_new(qo, vid, client)
+        return go_new(qo, vid, client, **(new or {}))
     if verb == "quit":
         return quit_view(vid, client)
     if verb == "shell":
@@ -1255,12 +1272,15 @@ def do(qo, verb, vid, client="", target=None):
 
 # --- ⌘N ⌘Q ⌃\ (issue #3004, EPIC #2999 C7) ----------------------------------------------
 
-def go_new(qo, vid, client=""):
+def go_new(qo, vid, client="", repo="", agent="", prompt=""):
     """⌘N (issue #3119): a NEW session — a no-repo one on this machine, in $HOME
     (dash-raw-session.sh --no-repo, the hub's own origin; the warm pool's HOME
     entry when one is ready, issue #3311), then go() onto it: the
     pane is the agent's input. No session is special, so nothing here names an
-    orchestrator. rc as go(); 3 when none opened (one line on the client)."""
+    orchestrator. rc as go(); 3 when none opened (one line on the client).
+    ⌘P's ⚡ row (issue #3327) names its cells: `repo` (--repo, else --no-repo),
+    `agent` (--agent, only when not the fleet's default) and `prompt` (the typed
+    words with no repo: the session's first turn)."""
     fleet = view_fleet(vid)
     if not fleet:
         return 2
@@ -1269,12 +1289,16 @@ def go_new(qo, vid, client=""):
     # the HOME slot of the warm pool first (issue #3311): a claimed window is an agent
     # already at its prompt (~0.3 s, against 5-20 s cold on a busy machine); exit 3 =
     # none ready ⇒ the cold open, as a hub start does (fleet-control-read.sh).
-    # FLEET_START_WARM=0 = cold only.
-    tries = [["--warm-only"], []] if os.environ.get("FLEET_START_WARM", "1") != "0" else [[]]
+    # FLEET_START_WARM=0 = cold only. A ⚡ open that names a repo, an agent or words
+    # (issue #3327) is no HOME slot's: cold, with them.
+    named = ["--repo", repo] if repo else ["--no-repo"]
+    named += (["--agent", agent] if agent else []) + (["--prompt", prompt] if prompt else [])
+    warm = os.environ.get("FLEET_START_WARM", "1") != "0" and named == ["--no-repo"]
+    tries = [["--warm-only"], []] if warm else [[]]
     rc, w = 1, ""
     for extra in tries:
         try:
-            p = subprocess.run(argv + ["--origin", "hub", "--no-repo", "--no-desk"] + extra + ["--print", fleet],
+            p = subprocess.run(argv + ["--origin", "hub"] + named + ["--no-desk"] + extra + ["--print", fleet],
                                stdin=subprocess.DEVNULL, capture_output=True, text=True,
                                timeout=fenv("FLEET_VIEW_NEW_SECS", 60))
             rc, w = p.returncode, ((p.stdout.strip().splitlines() or [""])[-1].split("\t") + [""])[0].strip()
@@ -1851,11 +1875,10 @@ ACTIONS = [
      "local": lambda r, a, f: sh("dash-reap.sh", r["target"], "--yes"), "far": far("reap"), "ask": "key",
      "prompt": lambda r: say("view_ask_reap_fmt", r.get("text") or r.get("name") or r["target"]), "keys": "yYnN",
      "yes": True, "slow": True},
-    # row-less (issue #3180, C2): the panel's command rows, never a Tab menu's
-    {"id": "new", "label": lambda r: say("view_cmd_new"), "when": lambda r: True, "rowless": True,
-     "local": lambda r, a, f: "dispatch", "far": None, "ask": "text", "prompt": lambda r: say("view_cmd_new")},
-    {"id": "newsess", "label": lambda r: say("view_cmd_newsess"), "when": lambda r: True, "rowless": True,
-     "local": lambda r, a, f: "newsess", "far": None, "ask": None},
+    # row-less (issue #3180, C2; #3327): the panel's ⚡ and ⏻ rows, never a Tab menu's
+    # — the ⚡ row's ↵ is the popup's own (its cells, its progress: bolt_job)
+    {"id": "new", "label": lambda r: say("view_cmd_blank"), "when": lambda r: True, "rowless": True,
+     "local": lambda r, a, f: "new", "far": None, "ask": None},
     {"id": "quit", "label": lambda r: say("view_cmd_quit"), "when": lambda r: True, "rowless": True,
      "local": lambda r, a, f: "quit", "far": None, "ask": None},
 ]
@@ -1924,18 +1947,9 @@ def act_run(qo, vid, fleet, a, r, ans, client="", wait=True):
         rc = open_shell(qo, vid, client, r["target"], r)
         return rc, "" if rc == 0 else (say("view_gone") if rc == 3 else
                                        say("view_shell_failed_fmt", r.get("machine") or "?")), rc == 0
-    if argv == "newsess":
-        rc = go_new(qo, vid, client)
-        return rc, "" if rc == 0 else say("view_new_failed"), rc == 0
     if argv == "quit":
         rc = quit_view(vid, client)
         return rc, "", rc == 0
-    if argv == "dispatch":
-        repo, have = repo_pick()
-        if not repo:
-            return 2, say("view_new_norepo") if not have else ask_line({"repos": have, "i": -1}), False
-        rc, said = dispatch(None, vid, client, ans, repo)
-        return rc, said, False
     if argv == "restore":
         # a gone row (issue #3286): the sidebar's ⌃t restore, the same script. A
         # `landed:issue:` row may have to ask first (a CLOSED-unmerged PR, #543):
@@ -2048,17 +2062,17 @@ def cli_act(qo, vid, target, aid, text=None, yes=False, client=""):
     return rc
 
 
-# --- the panel's command rows (issue #3180, EPIC #3178 C2) ------------------------------
+# --- the panel's ⚡ and ⏻ rows (issue #3180, EPIC #3178 C2; issue #3327 ④) ---------------
 
-PANEL_WORDS = ("new", "shell", "newsess", "quit", "landed")
+PANEL_WORDS = ("new", "quit", "landed")
 
 
 def panel_commands():
     """FLEET_PANEL_COMMANDS (the environment, else fleet.conf's line; default
-    `new shell`): the words that sit ABOVE the list, in that order — new (「新任务」)
-    · shell (「在 <会话> 的目录开 shell」) · newsess · quit · landed (the 刚落地 group
-    first). newsess / quit not named go to 「更多」 below the list; `none` takes
-    every command row away. (top, bottom)."""
+    `new quit`): new (the ⚡ row and its cells) and quit (⏻) are always there —
+    the words are accepted, in any order —, landed moves the 刚落地 group first,
+    `none` takes ⚡ and ⏻ away. The old `shell` / `newsess` are read and dropped
+    (issue #3327: the shell is the row's Tab, a blank session is ⚡ on no words)."""
     raw = os.environ.get("FLEET_PANEL_COMMANDS")
     if raw is None:
         try:
@@ -2068,22 +2082,19 @@ def panel_commands():
             line = ""
         m = re.search(r"FLEET_PANEL_COMMANDS=(['\"]?)([^'\"\n]*)\1", line.strip().splitlines()[-1] if line.strip() else "")
         raw = m.group(2) if m else ""
-    words = raw.replace(",", " ").split() or ["new", "shell"]
+    words = raw.replace(",", " ").split()
     if "none" in words:
-        return [], []
-    top = []
-    for w in words:
-        if w in PANEL_WORDS and w not in top:
-            top.append(w)
-    return top, [w for w in ("newsess", "quit") if w not in top]
+        return []
+    return ["new", "quit"] + (["landed"] if "landed" in words else [])
 
 
-def sess_label(e):
-    """A session as a command row names it: #N 「标题前 12 字…」."""
-    title = (e or {}).get("text") or (e or {}).get("name") or ""
-    title = title[:12] + "…" if len(title) > 12 else title
+def label_of(e):
+    """A session as the keys line names it: #N, else its title's first 12 cells."""
     issue = ((e or {}).get("issue") or "").lstrip("#")
-    return say("view_sess_issue_fmt", issue, title) if issue else say("view_sess_fmt", title)
+    if issue:
+        return "#" + issue
+    title = (e or {}).get("text") or (e or {}).get("name") or ""
+    return title[:12] + "…" if len(title) > 12 else title
 
 
 def landed_first(items):
@@ -2095,91 +2106,148 @@ def landed_first(items):
     return items[i:j] + items[:i] + items[j:]
 
 
-def panel_rows(items, query, opened, cur="", shell_of="", cmds=None):
-    """What the popup lists: the command rows above (FLEET_PANEL_COMMANDS' top),
-    the sessions (visible()), then 「更多」 — 开一个空白新会话 · 退出 fleet. `cur` the
-    session in view (the shell row's), `shell_of` the session whose shell the
-    panel was opened in: its 「回到 …」 row comes first, in the shell row's place.
-    With a query the 「新任务」 row says the words (↵ sends them as the title) and
-    the other command rows stay only where their words hit."""
-    top, bottom = panel_commands() if cmds is None else cmds
-    if "landed" in top:
-        items = landed_first(items)
-    sess = {e.get("target"): e for e in items if e["kind"] == "sess"}
-    q = query.strip()
-    hit = lambda e: not q or all(w in e["text"].lower() for w in q.lower().split())
-
-    # each row names its ACTIONS entry (`act`) and the session it acts on (`row`)
-    def row(w):
-        if w == "new":
-            return {"kind": "cmd", "cmd": "new", "act": "new", "row": {},
-                    "text": say("view_cmd_new_fmt", q) if q else say("view_cmd_new"), "foot": say("view_cmd_new_foot")}
-        if w == "shell":
-            if shell_of:
-                return {"kind": "cmd", "cmd": "back", "act": "enter", "row": sess.get(shell_of) or {"target": shell_of},
-                        "text": say("view_cmd_back_fmt", sess_label(sess.get(shell_of)))}
-            e = sess.get(cur)
-            if e:
-                return {"kind": "cmd", "cmd": "shell", "act": "shell", "row": e,
-                        "text": say("view_cmd_shell_fmt", sess_label(e))}
-            return {"kind": "cmd", "cmd": "shell", "act": "shell", "row": {"target": ""},
-                    "text": say("view_cmd_shell_home")}
-        if w in ("newsess", "quit"):
-            return {"kind": "cmd", "cmd": w, "act": w, "row": {}, "text": ACTION[w]["label"]({})}
-        return None
-    head = [r for r in (row(w) for w in top) if r]
-    # in a session's shell, 「回到」 is the first line
-    head.sort(key=lambda r: r["cmd"] != "back")
-    tail = [r for r in (row(w) for w in bottom) if r]
-    if q:
-        head = [r for r in head if r["cmd"] == "new" or hit(r)]
-        tail = [r for r in tail if hit(r)]
-    more = [{"kind": "hdr", "group": "more", "text": say("view_grp_more")}] + tail if tail else []
-    return head + visible(items, query, opened) + more
+AGENTS = ("claude", "codex")
 
 
-def repo_pick():
-    """(the repo 「新任务」 sends to — '' = ask, every repo the hub names):
-    fleet-quick-dispatch.py pick, ⌘T's own rule (the last send's, else the only one)."""
+def grid_read(vid):
+    """The ⚡ row's cells as fleet-quick-dispatch.py grid reads them — ⌘T's own
+    rules: {repos (every repo the hub names), last (the last send's, else the only
+    one), agent (the fleet's default), missing ({agent: why} this machine lacks)}."""
+    g = {"repos": [], "last": "", "agent": "claude", "missing": {}}
+    argv = [sys.executable, str(Path(__file__).absolute().parent / "fleet-quick-dispatch.py"), "grid",
+            "--view", "%s@view-%s" % (view_fleet(vid), vid)]
     try:
-        out = subprocess.run([sys.executable, str(Path(__file__).absolute().parent / "fleet-quick-dispatch.py"), "pick"],
-                             stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=10).stdout
-    except (OSError, subprocess.TimeoutExpired):
-        out = ""
-    lines = out.split("\n")
-    return lines[0].strip(), [l.strip() for l in lines[1:] if l.strip()]
-
-
-def ask_line(asking):
-    return say("view_ask_repo_fmt", "  ".join(("[%s]" if i == asking["i"] else "%s") % r
-                                              for i, r in enumerate(asking["repos"])))
-
-
-def dispatch(screen, vid, client, title, repo):
-    """「新任务」's ↵: ⌘T's send, no second dialog — fleet-quick-dispatch.py send
-    --title <the words, as typed> --repo <repo> --view <the 看台> (it opens the
-    session here and moves the 看台 onto it). (rc, words for the footer)."""
-    try:
-        if screen is not None:     # the popup says 「派单中」 meanwhile; view-act has none
-            h, w = screen.getmaxyx()
-            screen.addnstr(h - 2, 0, say("view_new_sending_fmt", title)[:max(1, w - 1)], max(1, w - 1))
-            screen.clrtoeol()
-            screen.refresh()
-    except curses.error:
+        out = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=10).stdout
+        got = json.loads((out.strip().splitlines() or ["{}"])[-1])
+        if isinstance(got, dict):
+            g.update({k: v for k, v in got.items() if k in g and v is not None})
+    except (OSError, subprocess.TimeoutExpired, ValueError):
         pass
-    g = "%s@view-%s" % (view_fleet(vid), vid)
-    argv = [sys.executable, str(Path(__file__).absolute().parent / "fleet-quick-dispatch.py"), "send",
-            "--title", title, "--repo", repo, "--view", g] + (["--client", client] if client else [])
-    try:
-        p = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True,
-                           timeout=fenv("FLEET_VIEW_NEW_SECS", 60))
-        rc, said = p.returncode, (p.stdout.strip() or p.stderr.strip()).splitlines()
-    except (OSError, subprocess.TimeoutExpired) as error:
-        rc, said = 1, [str(error)]
-    said = said[-1] if said else ""
-    if rc == 0 and said:
-        toast(client, said)
-    return (0 if rc == 0 else 1), said
+    return g
+
+
+def bolt_new(g=None):
+    """The ⚡ row's state: the cells read (`g`), what the person changed — `repo`
+    None follows the words (none: 不绑仓库; words: the last send's repo), `agent`
+    None is the fleet's default — and the cell Tab is on ('' · repo · agent).
+    No `g` yet (the popup reads it off its thread): not `ready` — the repo cell
+    says …, and a ↵ waits for the read rather than guess 不绑仓库."""
+    return {"g": g or {"repos": [], "last": "", "agent": "claude", "missing": {}},
+            "repo": None, "agent": None, "focus": "", "ready": g is not None}
+
+
+def bolt_repo(st, query):
+    if st["repo"] is not None:
+        return st["repo"]
+    return (st["g"].get("last") or "") if query.strip() else ""
+
+
+def bolt_dflt(st):
+    a = st["g"].get("agent") or "claude"
+    return a if a in AGENTS else "claude"
+
+
+def bolt_usable(st):
+    miss = st["g"].get("missing") or {}
+    return [a for a in AGENTS if a not in miss] or [bolt_dflt(st)]
+
+
+def bolt_agent(st):
+    a = st["agent"] or bolt_dflt(st)
+    use = bolt_usable(st)
+    return a if a in use else use[0]
+
+
+def bolt_step(st, query, d):
+    """←→ on the cell Tab is on: the next repo (不绑仓库 is one) / usable agent."""
+    if not st.get("ready", True):
+        return      # the cells are not read yet: nothing to step through
+    if st["focus"] == "repo":
+        opts = [""] + [r for r in st["g"].get("repos") or [] if r]
+        cur = bolt_repo(st, query)
+        i = opts.index(cur) if cur in opts else 0
+        st["repo"] = opts[(i + d) % len(opts)]
+    elif st["focus"] == "agent":
+        use = bolt_usable(st)
+        cur = bolt_agent(st)
+        i = use.index(cur) if cur in use else 0
+        st["agent"] = use[(i + d) % len(use)]
+
+
+def bolt_cells(st, query):
+    """([(text, focused)], note): 仓库 ‹…› · Agent ‹…›, and why an agent is grey."""
+    repo = bolt_repo(st, query) if st.get("ready", True) or st["repo"] is not None else "…"
+    cells = [("%s ‹%s›" % (say("view_grid_repo"), repo or say("view_grid_norepo")), st["focus"] == "repo"),
+             ("%s ‹%s›" % (say("view_grid_agent"), bolt_agent(st).capitalize()), st["focus"] == "agent")]
+    note = " · ".join(str(why) for why in (st["g"].get("missing") or {}).values())
+    return cells, note
+
+
+def panel_rows(items, query, opened, cmds=None, bolt=None, busy=None):
+    """What the popup lists (issue #3327, 方案 B): the sessions (visible()), then
+    the ⚡ row — 「⚡ 新会话（空白）」 on no words, 「⚡ 新任务：<字>」 on words —
+    with its cells under it (仓库 · Agent), then ⏻ 退出. `busy` (a ↵ under way):
+    the ⚡ row is its progress. Typed words that hit no session say so as its foot."""
+    words = panel_commands() if cmds is None else cmds
+    if "landed" in words:
+        items = landed_first(items)
+    q = query.strip()
+    out = visible(items, query, opened)
+    if "new" in words:
+        st = bolt or bolt_new()
+        if busy:
+            out.append({"kind": "cmd", "cmd": "new", "act": "new", "row": {}, "busy": True,
+                        "text": say("view_task_starting_fmt", busy["title"]) if busy["title"] else say("view_task_opening")})
+            out.append({"kind": "grid", "cells": [], "note": "", "text": say("view_task_step_fmt", busy["where"])})
+        else:
+            hit = any(e["kind"] == "sess" for e in out)
+            out.append({"kind": "cmd", "cmd": "new", "act": "new", "row": {},
+                        "text": say("view_cmd_task_fmt", q) if q else say("view_cmd_blank"),
+                        "foot": say("view_nomatch") if q and not hit else ""})
+            cells, note = bolt_cells(st, query)
+            out.append({"kind": "grid", "cells": cells, "note": note,
+                        "text": "  ·  ".join(t for t, _ in cells) + (("  " + note) if note else "")})
+    if "quit" in words:
+        out.append({"kind": "cmd", "cmd": "quit", "act": "quit", "row": {}, "text": say("view_cmd_quit")})
+    return out
+
+
+def bolt_argv(qo, vid, client, st, query):
+    """What ↵ on the ⚡ row runs: (argv, title, where). Words and a repo: ⌘T's send
+    (fleet-quick-dispatch.py send --toast — it opens the session, moves the 看台
+    and says how it ended); otherwise a session on this machine (`do new`: ⌘N's
+    dash-raw-session.sh, the repo or none, the words as its first turn). The agent
+    rides only when it is not the fleet's default."""
+    repo, agent = bolt_repo(st, query), bolt_agent(st)
+    extra = ["--agent", agent] if agent != bolt_dflt(st) else []
+    cl = ["--client", client] if client else []
+    title = query.strip()
+    if title and repo:
+        argv = [sys.executable, str(Path(__file__).absolute().parent / "fleet-quick-dispatch.py"), "send",
+                "--title", title, "--repo", repo, "--view", "%s@view-%s" % (view_fleet(vid), vid), "--toast"] + extra + cl
+    else:
+        argv = [sys.executable, qo.__file__, "do", "new", "--view", vid] + cl + (["--repo", repo] if repo else []) \
+            + extra + (["--prompt", title] if title else [])
+    return argv, title, " · ".join((repo or say("view_grid_norepo"), agent.capitalize()))
+
+
+def bolt_run(argv, done):
+    """Run it in its own session (esc closes the popup; the job goes on and says
+    how it ended itself) and hand (rc, its last line) to `done`. Its output goes
+    to an unlinked file, never a pipe a closed popup would break."""
+    def run():
+        import tempfile
+        try:
+            with tempfile.TemporaryFile() as out:
+                p = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT,
+                                     start_new_session=True)
+                rc = p.wait(timeout=fenv("FLEET_VIEW_NEW_SECS", 60) + 30)
+                out.seek(0)
+                lines = out.read().decode("utf-8", "replace").strip().splitlines()
+            done.append((rc, lines[-1] if lines else ""))
+        except (OSError, subprocess.TimeoutExpired) as error:
+            done.append((1, str(error)))
+    threading.Thread(target=run, daemon=True).start()
 
 
 class Line:
@@ -2235,25 +2303,34 @@ def popup(screen, qo, vid, client):
     items = entries(vid, hub=not bg)
     order_save(vid, items)
     cur = current(vid)
-    # opened in a session's shell (⌃\): its session is the lit row — ↵ is back on it;
-    # with the command rows on, 「回到 …」 is the first line and lit (issue #3180)
+    # opened in a session's shell (⌃\): its session is the lit row — ↵ is back on it
     _, vsh = tm("display-message", "-p", "-t", "=%s@view-%s:" % (view_fleet(vid), vid), "#{@view_shell}")
-    shell_of = ""
     if ":" in vsh:
-        cur = shell_of = vsh.split(":", 1)[1]
+        cur = vsh.split(":", 1)[1]
     fleet = view_fleet(vid)
     cmds = panel_commands()
     query, opened, msg, show_legend = "", set(), "", False
-    asking = None      # 「派到哪个仓库」: {"title", "repos", "i"} while the footer asks
+    # the ⚡ row (issue #3327): its cells, read off the screen's thread (⌘T's rules);
+    # `busy` while a ↵ runs, its outcome landing in `job`
+    bolt, busy, job = bolt_new(), None, []
+
+    def grid_load():
+        bolt["g"] = grid_read(vid)
+        bolt["ready"] = True
+    loader = threading.Thread(target=grid_load, daemon=True)
+    loader.start()
 
     def listing():
-        return panel_rows(items, query, opened, cur, shell_of, cmds)
+        return panel_rows(items, query, opened, cmds, bolt, busy)
 
     def key_of(e):
         return (e.get("kind"), e.get("cmd") or e.get("target") or e.get("sec"))
+
+    def bolt_at():
+        return next((i for i, e in enumerate(shown) if e.get("cmd") == "new"), -1)
     shown = listing()
-    at = next((i for i, e in enumerate(shown) if e.get("cmd") == "back"),
-              next((i for i, e in enumerate(shown) if e.get("target") == cur and e["kind"] == "sess"),
+    at = next((i for i, e in enumerate(shown) if e.get("target") == cur and e["kind"] == "sess"),
+              next((i for i, e in enumerate(shown) if e["kind"] == "sess"),
                    next((i for i, e in enumerate(shown) if pickable(e)), 0)))
     top = 0
     heal = qo.Heal()
@@ -2326,7 +2403,15 @@ def popup(screen, qo, vid, client):
         if landed:
             msg = landed.pop(0)
             items = entries(vid)
-            shown = visible(items, query, opened)
+            shown = listing()
+        if job:
+            # the ⚡ row's ↵ ended: opened ⇒ the 看台 is on it, the popup closes
+            rc, said = job.pop(0)
+            busy = None
+            if rc == 0:
+                return 0
+            msg = said or say("view_new_failed")
+            shown = listing()
         new = fresh.poll()
         if new is not None:
             # the list read again: the lit row stays the lit row (by its key)
@@ -2383,6 +2468,8 @@ def popup(screen, qo, vid, client):
         if at + 1 < len(shown) and shown[at + 1]["kind"] == "ask" and at + 1 >= top + body:
             top += 1
         screen.addnstr(0, 0, qo.clip("› " + query, width - 1), width - 1)
+        if not query and width > 4:
+            screen.addnstr(0, 2, qo.clip(say("view_search_ph"), width - 3), width - 3, attr(("dim",)))
         if ban:
             try:
                 screen.addnstr(1, 0, qo.clip(ban, width - 1), width - 1, attr(("red",)) or curses.A_BOLD)
@@ -2431,47 +2518,59 @@ def popup(screen, qo, vid, client):
             else:
                 line.key(ch)
             continue
-        foot = msg or (ask_line(asking) if asking else legend() if show_legend
-                       else shown[at].get("foot", "") if 0 <= at < len(shown) else "")
+        lit_e = shown[at] if 0 <= at < len(shown) else {}
+        if lit_e.get("cmd") != "new":
+            bolt["focus"] = ""
+        foot = msg or (legend() if show_legend else lit_e.get("foot", ""))
         screen.addnstr(height - 2, 0, qo.clip(foot, width - 1), width - 1, attr(("dim",)) if show_legend and not msg
                        else (curses.color_pair(3) if color_on() else 0))
-        screen.addnstr(height - 1, 0, qo.clip(say("view_keys"), width - 1), width - 1, attr(("dim",)))
+        # the keys line says what ↵ does on the lit row (issue #3327)
+        if busy:
+            keys = say("view_keys_sending")
+        elif lit_e.get("cmd") == "new":
+            keys = say("view_keys_grid") if bolt["focus"] else say("view_keys_task" if query.strip() else "view_keys_blank")
+        elif query.strip() and lit_e.get("kind") == "sess":
+            keys = say("view_keys_match_fmt", label_of(lit_e), query.strip())
+        else:
+            keys = say("view_keys")
+        if qo.cells(keys) > width - 1:
+            # a phone (≤ 60 columns): the short line, ↑ 到 ⚡ kept on it
+            keys = say("view_keys_task_short") if lit_e.get("cmd") == "new" and not busy and not bolt["focus"] \
+                else keys if busy or bolt["focus"] else say("view_keys_short")
+        screen.addnstr(height - 1, 0, qo.clip(keys, width - 1), width - 1, attr(("dim",)))
         screen.refresh()
-        screen.timeout(min(heal.timeout(False) or 1000, fresh.wait_ms()))
+        screen.timeout(min(heal.timeout(False) or 1000, fresh.wait_ms(), 200 if busy or not bolt["ready"] else 1000))
         try:
             ch = screen.get_wch()
         except curses.error:
             continue
         msg = ""
-        if asking:
-            # the footer asks 「派到哪个仓库」: ←→ (↑↓ Tab) pick, ↵ sends, esc leaves it
-            if ch in ("\x1b", "\x03"):
-                asking = None
-            elif ch in (curses.KEY_LEFT, curses.KEY_UP, curses.KEY_BTAB):
-                asking["i"] = (asking["i"] - 1) % len(asking["repos"])
-            elif ch in (curses.KEY_RIGHT, curses.KEY_DOWN, "\t"):
-                asking["i"] = (asking["i"] + 1) % len(asking["repos"])
-            elif ch in ("\n", "\r", curses.KEY_ENTER):
-                repo, title = asking["repos"][asking["i"]], asking["title"]
-                asking = None
-                rc, msg = dispatch(screen, vid, client, title, repo)
-                if rc == 0:
-                    return 0
-            elif ch == curses.KEY_RESIZE:
-                heal.resized(screen)
-            continue
         if ch in ("\x1b",) or ch == "\x03":
-            return 0
+            return 0     # a ↵ under way goes on: it says how it ended on the client
         if ch == curses.KEY_RESIZE:
             heal.resized(screen)
             continue
+        if busy:
+            continue
+        sel = [i for i, e in enumerate(shown) if pickable(e)]
         if ch in (curses.KEY_UP, "\x10"):
-            sel = [i for i, e in enumerate(shown) if pickable(e) and i < at]
-            at = sel[-1] if sel else at
+            # from the top it goes round to ⚡ (issue #3327: ⌘P ↑ ↵ = a new session)
+            up = [i for i in sel if i < at]
+            at = up[-1] if up else (bolt_at() if bolt_at() >= 0 else (sel[-1] if sel else at))
             continue
         if ch in (curses.KEY_DOWN, "\x0e"):
-            sel = [i for i, e in enumerate(shown) if pickable(e) and i > at]
-            at = sel[0] if sel else at
+            down = [i for i in sel if i > at]
+            at = down[0] if down else (sel[0] if sel else at)
+            continue
+        if lit_e.get("cmd") == "new" and ch in ("\t", curses.KEY_BTAB):
+            # on ⚡, Tab walks its cells — 仓库 → Agent — not a session's actions
+            order = ["repo", "agent"] if ch == "\t" else ["agent", "repo"]
+            bolt["focus"] = order[1] if bolt["focus"] == order[0] else order[0]
+            shown = listing()
+            continue
+        if lit_e.get("cmd") == "new" and bolt["focus"] and ch in (curses.KEY_LEFT, curses.KEY_RIGHT):
+            bolt_step(bolt, query, -1 if ch == curses.KEY_LEFT else 1)
+            shown = listing()
             continue
         if ch == "\t":
             if 0 <= at < len(shown) and shown[at]["kind"] == "sess":
@@ -2491,22 +2590,14 @@ def popup(screen, qo, vid, client):
                 shown = listing()
                 continue
             if e["kind"] == "cmd":
-                # a command row (issue #3180): its ACTIONS entry; 「新任务」 sends the words
+                # ⚡ (issue #3327): words ⇒ a task, none ⇒ a blank session — off the
+                # screen's thread, the row its progress until it opens
                 if e["act"] == "new":
-                    title = query.strip()
-                    if not title:
-                        msg = say("view_new_empty")
-                        continue
-                    repo, have = repo_pick()
-                    if not repo and len(have) >= 2:
-                        asking = {"title": title, "repos": have, "i": 0}
-                        continue
-                    if not repo:
-                        msg = say("view_new_norepo")
-                        continue
-                    rc, msg = dispatch(screen, vid, client, title, repo)
-                    if rc == 0:
-                        return 0
+                    loader.join(12)     # the cells as read, never the placeholder's 不绑仓库
+                    argv, title, where = bolt_argv(qo, vid, client, bolt, query)
+                    busy, bolt["focus"] = {"title": title, "where": where}, ""
+                    bolt_run(argv, job)
+                    shown = listing()
                     continue
                 rc, msg, went = act_run(qo, vid, fleet, ACTION[e["act"]], e["row"], "", client)
                 if went:
@@ -2552,13 +2643,12 @@ def popup(screen, qo, vid, client):
         show_legend = False
         lit = shown[at].get("target") if 0 <= at < len(shown) else None
         shown = listing()
-        # typed words: the best session hit is lit; none hit — 「新任务」 is
+        # typed words: the best session hit is lit; none hit — ⚡ is
         at = next((i for i, e in enumerate(shown) if e["kind"] == "sess"),
                   next((i for i, e in enumerate(shown) if e.get("cmd") == "new"),
                        next((i for i, e in enumerate(shown) if pickable(e)), 0)))
         if not query:
-            at = next((i for i, e in enumerate(shown) if e.get("cmd") == "back"),
-                      next((i for i, e in enumerate(shown) if e["kind"] == "sess" and e.get("target") in (lit, cur)), at))
+            at = next((i for i, e in enumerate(shown) if e["kind"] == "sess" and e.get("target") in (lit, cur)), at)
         top = 0
 
 
@@ -2584,7 +2674,8 @@ def main(argv, qo):
         return 2
     client = opt(argv, "--client")
     if argv[:1] == ["do"] and len(argv) >= 2:
-        return do(qo, argv[1], vid, client, opt(argv, "--target"))
+        return do(qo, argv[1], vid, client, opt(argv, "--target"),
+                  {k: opt(argv, "--" + k) for k in ("repo", "agent", "prompt")})
     if argv[:1] == ["view-peers"]:
         if opt(argv, "--socket"):
             _SOCK[0] = opt(argv, "--socket")
@@ -2606,11 +2697,11 @@ def main(argv, qo):
         return cli_act(qo, vid, rest[0], rest[1], opt(argv, "--text") if "--text" in argv[:-1] else None,
                        "--yes" in argv, client)
     if argv[:1] == ["view-panel"]:
-        # the popup's lines with its command rows (issue #3180): kind · cmd · text
+        # the popup's lines with its ⚡ / ⏻ rows (issues #3180, #3327): kind · cmd · text
         q = " ".join(a for i, a in enumerate(argv[1:], 1) if a not in ("--view", "--client")
                      and argv[i - 1] not in ("--view", "--client"))
-        for e in panel_rows(entries(vid), q, {"ended"}, current(vid)):
-            print("\t".join((e["kind"], e.get("cmd") or e.get("target") or e.get("group") or "", e.get("text") or "")))
+        for e in panel_rows(entries(vid), q, {"ended"}, bolt=bolt_new(grid_read(vid))):
+            print("\t".join((e["kind"], e.get("cmd") or e.get("target") or e.get("group") or e["kind"], e.get("text") or "")))
         return 0
     if argv[:1] == ["view-gone"]:
         # read the 已回收 list now and wait (the selftest, a person's evidence)

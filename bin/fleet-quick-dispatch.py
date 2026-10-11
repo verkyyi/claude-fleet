@@ -20,6 +20,14 @@ Codex), a bare shell, a session on another machine.
                                           through it — no second dialog)
     fleet-quick-dispatch.py pick          the repo ⌘P's 「新任务」 sends to: line 1
                                           the pick (empty = ask), then every repo
+    fleet-quick-dispatch.py grid [--view V]
+                                          ⌘P's ⚡ row's two cells (issue #3327), one
+                                          JSON line: repos · last (the pick) · agent
+                                          (the fleet's default) · missing {agent: why}
+    … send … --toast                      the outcome also goes on the client as a
+                                          message (⌘P's ⚡ runs send detached: esc
+                                          closes the panel, the send still says how
+                                          it ended)
 
 The popup: 标题 (one line), 仓库 (every repo the hub says this person's machines
 host — the one the last send went to first; ←→ picks, shown only when there is
@@ -357,6 +365,12 @@ def main(argv):
         for r in repos():
             print(r)
         return 0
+    if argv[:1] == ["grid"]:
+        view = opts(argv[1:])["--view"]
+        have = repos()
+        print(json.dumps({"repos": have, "last": repo_pick(have), "agent": agent_default(fleet_of(view) if view else ""),
+                          "missing": agent_missing(view)}, ensure_ascii=False))
+        return 0
     o = opts(argv[1:] if argv[:1] in (["payload"], ["send"]) else argv)
     if argv[:1] in (["payload"], ["send"]):
         agent = o["--agent"] if o["--agent"] in AGENTS else None
@@ -372,6 +386,8 @@ def main(argv):
             return 2
         ok, said = send(data, o["--view"], o["--client"])
         print(said)
+        if o.get("--toast") and said:
+            quick.tmux("display-message", *(["-c", o["--client"]] if o["--client"] else []), said)
         return 0 if ok else 1
     os.environ.setdefault("ESCDELAY", "25")
     try:

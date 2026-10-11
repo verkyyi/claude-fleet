@@ -32,15 +32,19 @@
 #      shell lights its session (↵ back), a second ⌃\ selects the one open, and
 #      `exit` closes the shell window alone — the session's window, its
 #      @claude_state and its process unchanged
-#   P  ⌘P's command rows (issue #3180, EPIC #3178 C2): 「新任务…」 first,
-#      「在 #N 「…」 的目录开 shell」 second, 「更多」 (开一个空白新会话 · 退出 fleet)
-#      last; FLEET_PANEL_COMMANDS reorders them and `none` takes them away
-#      (`view-panel`). Typed words no session hits light 「新任务：<字>」 — ↵ is ONE
-#      `fleet-quick-dispatch.py send` (FLEET_DISPATCH_SEND_CMD), the title as typed,
-#      to the last send's repo; no last repo of two ⇒ the footer asks 「派到哪个仓库」.
-#      The shell row opens the session's @view_shell window; ⌘P there lights
-#      「回到 …」 first, ↵ back on the session; 开一个空白新会话 = ⌘N's argv,
-#      退出 fleet = ⌘Q's OSC 7502 + detach
+#   P  ⌘P's one entry (issue #3327, EPIC #3178 ④ — 方案 B; #3180 before it): the
+#      search line is the only input; under the sessions ONE ⚡ row (「⚡ 新会话（空白）」
+#      on no words, 「⚡ 新任务：<字>」 on words) with its cells 仓库 ‹…› · Agent ‹…›
+#      (codex grey with why), then ⏻ 退出 — no other command row; FLEET_PANEL_COMMANDS
+#      `none` takes them away, the retired `shell` / `newsess` make none (`view-panel`).
+#      Opened: the session in view lit, ↑ 到 ⚡ in the keys. Words that hit light the
+#      session (keys 「↵ 切到 #N  ↓ 到 ⚡ 派「…」」), ↓ is ⚡, Tab walks 仓库 → Agent, ←→
+#      changes them, ↵ sends to the repo picked. Words that hit nothing light ⚡ with
+#      「没有会话叫这句话」; ↵ is ONE `fleet-quick-dispatch.py send`
+#      (FLEET_DISPATCH_SEND_CMD) of the words to the last repo, the row its progress
+#      (开工中… · 派单中，esc 可以先关) — esc closes the panel and the send still lands.
+#      No words: ↑ goes round to ⚡, ↵ = ⌘N's argv, the 看台 on it; words with 不绑仓库
+#      = a session here, `--prompt <the words>`; ⏻ = ⌘Q's OSC 7502 + detach
 #   Q  ⌘Q: `ESC ] 7502 ; quit ; token=<the row's> BEL` on the client's tty, then
 #      the client detached; a direct attach stays
 #   L  `fleet ls` with no client tmux: one ssh to the home (fleet-thin.py --run:
@@ -102,6 +106,7 @@ EOF
 # ⌘T's send: the payload kept, one filed line back
 cat > "$W/send.sh" <<EOF
 #!/bin/sh
+[ -e '$W/slow' ] && sleep 3
 cp "\$1" '$W/sent.json'
 echo x >> '$W/send.calls'
 echo 'REMOTE m4 start done $MU/new9	filed: #77'
@@ -322,80 +327,116 @@ waitfor 20 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -q 'AT=.*wt-de
   || fail "S: delta's agent directory gone, the shell is not in its @worktree: $(to capture-pane -p -t o:view | grep -v '^$'; ti list-windows -t fl -F '#{window_id} #{@view_shell} mode=#{pane_in_mode} cmd=#{pane_current_command}')"
 pass "S  ⌃\\: the session's shell in its worktree (here; m4 over the link's shell-here), ⌃\\ back and forth, one a session, gone with the session; nothing in a direct attach; ⌘P's ⌃\\ on a session off screen — where its agent is (@agent_cwd, else its pane's bin/, else @worktree), ↵ back from its shell, exit closes the shell alone (#3183)"
 
-# --- P: ⌘P's command rows (issue #3180) ------------------------------------------------------
-vp() { TMUX="$IN,0,0" python3 "$BIN/fleet-quickopen.py" view-panel --view fl@view-v1; }
+# --- P: ⌘P's one entry (issues #3180, #3327 — 方案 B) ------------------------------------------
+vp() { TMUX="$IN,0,0" python3 "$BIN/fleet-quickopen.py" view-panel --view fl@view-v1 "$@"; }
 ti select-window -t "=fl@view-v1:$W3"; sleep 0.3
 vp > "$W/panel.txt" || fail "P: view-panel exited non-zero"
-[ "$(sed -n 1p "$W/panel.txt")" = "cmd${T}new${T}新任务…" ] || fail "P: the first line is not 「新任务…」: $(cat "$W/panel.txt")"
-[ "$(sed -n 2p "$W/panel.txt")" = "cmd${T}shell${T}在 #33 「Gamma task」 的目录开 shell" ] || fail "P: the second line is not gamma's shell: $(cat "$W/panel.txt")"
-[ "$(tail -3 "$W/panel.txt" | cut -f1,2 | tr '\t\n' ': ')" = "hdr:more cmd:newsess cmd:quit " ] || fail "P: 「更多」 is not last: $(cat "$W/panel.txt")"
+# 1 the empty panel: the sessions, then ⚡ 新会话（空白） with its cells (不绑仓库 · the
+# fleet's agent, codex grey with why), then ⏻ — nothing else is a command row
+[ "$(grep -c '^cmd' "$W/panel.txt")" = 2 ] || fail "P: not exactly ⚡ and ⏻ as command rows: $(cat "$W/panel.txt")"
+[ "$(tail -3 "$W/panel.txt" | cut -f1,2 | tr '\t\n' ': ')" = "cmd:new grid:grid cmd:quit " ] || fail "P: ⚡ · its cells · ⏻ are not last: $(cat "$W/panel.txt")"
+grep -qx "cmd${T}new${T}⚡ 新会话（空白）" "$W/panel.txt" || fail "P: no words, ⚡ is not 「新会话（空白）」: $(cat "$W/panel.txt")"
+grep -q "^grid${T}grid${T}仓库 ‹不绑仓库›  ·  Agent ‹Claude›  .*这台没装 codex" "$W/panel.txt" || fail "P: the cells: $(grep ^grid "$W/panel.txt")"
+grep -qx "cmd${T}quit${T}⏻ 退出 fleet（会话在后台继续）" "$W/panel.txt" || fail "P: no ⏻ row: $(cat "$W/panel.txt")"
+for gone in '新任务…' '开 shell' '回到' '开一个空白新会话' '更多' '派一件事'; do
+  grep -qF "$gone" "$W/panel.txt" && fail "P: the panel still says 「${gone}」: $(cat "$W/panel.txt")"
+done
+# 2 words that hit: the session first, ⚡ 新任务：<字> with the last send's repo
+vp Gamma > "$W/panel-hit.txt"
+[ "$(sed -n 1p "$W/panel-hit.txt" | cut -f1,2)" = "sess${T}$W3" ] || fail "P: 「Gamma」 does not list gamma first: $(cat "$W/panel-hit.txt")"
+grep -qx "cmd${T}new${T}⚡ 新任务：Gamma" "$W/panel-hit.txt" || fail "P: ⚡ does not carry the words: $(cat "$W/panel-hit.txt")"
+grep -q "^grid${T}grid${T}仓库 ‹acme/web›" "$W/panel-hit.txt" || fail "P: words, the cells are not the last send's repo: $(grep ^grid "$W/panel-hit.txt")"
 FLEET_PANEL_COMMANDS=none vp | grep -q '^cmd' && fail "P: FLEET_PANEL_COMMANDS=none still lists a command row: $(FLEET_PANEL_COMMANDS=none vp)"
-[ "$(FLEET_PANEL_COMMANDS='quit new' vp | grep '^cmd' | cut -f2 | tr '\n' ' ')" = "quit new newsess " ] \
-  || fail "P: FLEET_PANEL_COMMANDS='quit new' did not reorder: $(FLEET_PANEL_COMMANDS='quit new' vp)"
-# typed words, no session hit: 「新任务：<字>」 lit, ↵ is one send, the title as typed
-: > "$W/send.calls"; rm -f "$W/sent.json"
+[ "$(FLEET_PANEL_COMMANDS='new shell newsess' vp | grep '^cmd' | cut -f2 | tr '\n' ' ')" = "new quit " ] \
+  || fail "P: the retired words still make rows: $(FLEET_PANEL_COMMANDS='new shell newsess' vp)"
+# the popup: the session in view lit, the search line's hint, ↑ 到 ⚡ in the keys
 to send-keys -t o:view -H 1b 5b 39 32 37 7e
 waitfor 20 listed || fail "P: ⌘P listed nothing"
+sleep 0.3; to capture-pane -p -t o:view > "$W/panel-open.txt"
+grep -q '▶ .*Gamma task' "$W/panel-open.txt" || fail "P: the session in view is not lit: $(grep -v '^$' "$W/panel-open.txt")"
+grep -q '搜会话，或直接写一件新任务' "$W/panel-open.txt" || fail "P: no hint on the search line: $(head -2 "$W/panel-open.txt")"
+grep -q '↑ 到 ⚡' "$W/panel-open.txt" || fail "P: the keys line does not say ↑ 到 ⚡: $(tail -2 "$W/panel-open.txt")"
+[ -n "${FLEET_VIEW_PANEL_EVIDENCE:-}" ] && cp "$W/panel-open.txt" "$FLEET_VIEW_PANEL_EVIDENCE.open"
+# 3 words no session hits: ⚡ lit, 「没有会话叫这句话」, ↵ is one send of the words to
+# the last repo — slow here, so the row shows its progress, and esc leaves it running
+: > "$W/send.calls"; rm -f "$W/sent.json"; : > "$W/slow"
 to send-keys -t o:view -l '修 3164 的列表'; sleep 0.5
 to capture-pane -p -t o:view > "$W/panel-typed.txt"
-grep -q '▶ 新任务：修 3164 的列表' "$W/panel-typed.txt" || fail "P: typed words did not light 「新任务：…」: $(grep -v '^$' "$W/panel-typed.txt")"
+grep -q '▶ ⚡ 新任务：修 3164 的列表' "$W/panel-typed.txt" || fail "P: no hit did not light ⚡: $(grep -v '^$' "$W/panel-typed.txt")"
+grep -q '没有会话叫这句话' "$W/panel-typed.txt" || fail "P: no 「没有会话叫这句话」: $(grep -v '^$' "$W/panel-typed.txt")"
+grep -q '↵ 直接派' "$W/panel-typed.txt" || fail "P: the keys line does not say ↵ 直接派: $(tail -1 "$W/panel-typed.txt")"
 [ -n "${FLEET_VIEW_PANEL_EVIDENCE:-}" ] && cp "$W/panel-typed.txt" "$FLEET_VIEW_PANEL_EVIDENCE"
 to send-keys -t o:view Enter
-waitfor 20 test -s "$W/sent.json" || fail "P: ↵ on 「新任务」 sent nothing: $(to capture-pane -p -t o:view | grep -v '^$')"
+waitfor 12 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -q '开工中… 修 3164 的列表'" || fail "P: ↵ shows no progress: $(to capture-pane -p -t o:view | grep -v '^$')"
+to capture-pane -p -t o:view | grep -q '派单中，esc 可以先关' || fail "P: the keys line under way: $(to capture-pane -p -t o:view | tail -1)"
+to send-keys -t o:view Escape
+waitfor 12 sh -c "! tmux -S '$OUT' capture-pane -p -t o:view | grep -q '开工中'" || fail "P: esc did not close the panel under way"
+rm -f "$W/slow"
+waitfor 40 test -s "$W/sent.json" || fail "P: the send closed with the panel"
 sleep 0.5
-[ "$(grep -c . "$W/send.calls")" = 1 ] || fail "P: 「新任务」 ↵ sent $(grep -c . "$W/send.calls") times"
+[ "$(grep -c . "$W/send.calls")" = 1 ] || fail "P: ⚡ ↵ sent $(grep -c . "$W/send.calls") times"
 python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["title"]=="修 3164 的列表" and d["via"]=="dispatch" and d["repo"]=="acme/web", d' "$W/sent.json" \
   || fail "P: the payload: $(cat "$W/sent.json")"
-waitfor 12 sh -c "! tmux -S '$OUT' capture-pane -p -t o:view | grep -q '新任务'" || fail "P: the panel stayed after the send"
-# no last repo, two named: the footer asks
-: > "$W/send.calls"; rm -f "$W/sent.json" "$W/state/compose-state.json"
-to send-keys -t o:view -H 1b 5b 39 32 37 7e
-waitfor 20 listed || fail "P: ⌘P (ask) listed nothing"
-to send-keys -t o:view -l '看日志二'; sleep 0.4; to send-keys -t o:view Enter
-waitfor 12 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -q '派到哪个仓库'" || fail "P: no 「派到哪个仓库」 with two repos and no last: $(to capture-pane -p -t o:view | grep -v '^$')"
-[ -s "$W/sent.json" ] && fail "P: it sent before the repo was picked"
-to send-keys -t o:view Right; sleep 0.2; to send-keys -t o:view Enter
-waitfor 20 test -s "$W/sent.json" || fail "P: the asked send sent nothing"
-python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["title"]=="看日志二" and d["repo"]=="acme/web", d' "$W/sent.json" \
-  || fail "P: the asked send: $(cat "$W/sent.json")"
-# the shell row: gamma's shell window; ⌘P there: 「回到」 first and lit, ↵ back
-waitfor 12 sh -c "! tmux -S '$OUT' capture-pane -p -t o:view | grep -q '新任务'"
+# 2 + 4 words that hit: ↵ would go to it, ↓ to ⚡, Tab walks 仓库 → Agent, ←→ changes
+# them (codex grey: Agent stays Claude), ↵ sends to the repo picked
+: > "$W/send.calls"; rm -f "$W/sent.json"
 ti select-window -t "=fl@view-v1:$W3"; sleep 0.3
 to send-keys -t o:view -H 1b 5b 39 32 37 7e
-waitfor 20 listed || fail "P: ⌘P (shell) listed nothing"
-to send-keys -t o:view Up; sleep 0.3
-to capture-pane -p -t o:view | grep -q '▶ 在 #33 「Gamma task」 的目录开 shell' || fail "P: ↑ from gamma is not its shell row: $(to capture-pane -p -t o:view | grep -v '^$')"
+waitfor 20 listed || fail "P: ⌘P (hit) listed nothing"
+to send-keys -t o:view -l 'Gamma'; sleep 0.5
+to capture-pane -p -t o:view > "$W/panel-hit-s.txt"
+grep -q '▶ .*Gamma task' "$W/panel-hit-s.txt" || fail "P: the hit is not lit: $(grep -v '^$' "$W/panel-hit-s.txt")"
+grep -q '↵ 切到 #33  ↓ 到 ⚡ 派「Gamma」' "$W/panel-hit-s.txt" || fail "P: the keys line with a hit: $(tail -1 "$W/panel-hit-s.txt")"
+to send-keys -t o:view Down; sleep 0.3
+to capture-pane -p -t o:view | grep -q '▶ ⚡ 新任务：Gamma' || fail "P: ↓ from the hit is not ⚡: $(to capture-pane -p -t o:view | grep -v '^$')"
+to send-keys -t o:view Tab; sleep 0.2; to send-keys -t o:view Left; sleep 0.2
+to send-keys -t o:view Tab; sleep 0.2; to send-keys -t o:view Right; sleep 0.3
+to capture-pane -p -t o:view > "$W/panel-grid.txt"
+grep -q '仓库 ‹acme/app›  ·  Agent ‹Claude›' "$W/panel-grid.txt" || fail "P: Tab / ←→ on the cells: $(grep -v '^$' "$W/panel-grid.txt")"
+grep -q 'Tab 下一格  ←→ 换' "$W/panel-grid.txt" || fail "P: the keys line on a cell: $(tail -1 "$W/panel-grid.txt")"
+[ -n "${FLEET_VIEW_PANEL_EVIDENCE:-}" ] && cp "$W/panel-grid.txt" "$FLEET_VIEW_PANEL_EVIDENCE.grid"
 to send-keys -t o:view Enter
-waitfor 20 sh -c "tmux -S '$IN' list-windows -t fl -F '#{@view_shell}' | grep -qx 'nodeA@$ME:$W3'" || fail "P: the shell row made no shell for gamma"
-SP=$(ti list-windows -t fl -F "#{window_id} #{@view_shell}" | awk -v k="nodeA@$ME:$W3" '$2 == k { print $1 }')
-waitfor 12 sh -c "[ \"\$(tmux -S '$IN' display-message -p -t 'fl@view-v1:' '#{window_id}')\" = '$SP' ]" || fail "P: the 看台 is not on gamma's shell ($(cur))"
-sleep 0.5
+waitfor 20 test -s "$W/sent.json" || fail "P: ↵ on ⚡ with a hit sent nothing: $(to capture-pane -p -t o:view | grep -v '^$')"
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["title"]=="Gamma" and d["repo"]=="acme/app" and not d.get("agent"), d' "$W/sent.json" \
+  || fail "P: the picked repo's send: $(cat "$W/sent.json")"
+waitfor 12 sh -c "! tmux -S '$OUT' capture-pane -p -t o:view | grep -q '⚡'" || fail "P: the panel stayed after the send"
+# 6 no words: ↑ goes round to ⚡ 新会话（空白）, ↵ = ⌘N's no-repo session, the 看台 on it
+ti select-window -t "=fl@view-v1:$W3"; sleep 0.3
 to send-keys -t o:view -H 1b 5b 39 32 37 7e
-waitfor 20 listed || fail "P: ⌘P in the shell listed nothing"
-sleep 0.3
-to capture-pane -p -t o:view | grep -q '▶ 回到 #33 「Gamma task」' || fail "P: ⌘P in gamma's shell does not light 「回到」: $(to capture-pane -p -t o:view | grep -v '^$')"
+waitfor 20 listed || fail "P: ⌘P (blank) listed nothing"
+for _ in 1 2 3 4 5 6 7 8; do
+  to capture-pane -p -t o:view | grep -q '▶ ⚡ 新会话（空白）' && break
+  to send-keys -t o:view Up; sleep 0.2
+done
+to capture-pane -p -t o:view | grep -q '▶ ⚡ 新会话（空白）' || fail "P: ↑ never went round to ⚡: $(to capture-pane -p -t o:view | grep -v '^$')"
+to capture-pane -p -t o:view | grep -q '↵ 在本机开空白会话' || fail "P: the keys line on blank ⚡: $(to capture-pane -p -t o:view | tail -1)"
 to send-keys -t o:view Enter
-waitfor 12 sh -c "[ \"\$(tmux -S '$IN' display-message -p -t 'fl@view-v1:' '#{window_id}')\" = '$W3' ]" || fail "P: 「回到」 is not back on gamma ($(cur))"
-ti kill-window -t "$SP"
-# 开一个空白新会话 = ⌘N
-to send-keys -t o:view -H 1b 5b 39 32 37 7e
-waitfor 20 listed || fail "P: ⌘P (newsess) listed nothing"
-to send-keys -t o:view -l '空白'; sleep 0.4; to send-keys -t o:view Down; sleep 0.2; to send-keys -t o:view Enter
-waitfor 20 sh -c "tmux -S '$IN' list-windows -t fl -F '#{window_name}' | grep -qx new3" || fail "P: 开一个空白新会话 opened no session: $(to capture-pane -p -t o:view | grep -v '^$')"
-[ "$(sed -n 3p "$W/new.argv")" = "--origin hub --no-repo --no-desk --print fl" ] || fail "P: 开一个空白新会话 is not ⌘N's: $(sed -n 3p "$W/new.argv")"
+waitfor 20 sh -c "tmux -S '$IN' list-windows -t fl -F '#{window_name}' | grep -qx new3" || fail "P: blank ⚡ opened no session: $(to capture-pane -p -t o:view | grep -v '^$')"
+[ "$(sed -n 3p "$W/new.argv")" = "--origin hub --no-repo --no-desk --print fl" ] || fail "P: blank ⚡ is not ⌘N's: $(sed -n 3p "$W/new.argv")"
 N3=$(ti list-windows -t fl -F '#{window_id} #{window_name}' | awk '$2 == "new3" { print $1 }')
 waitfor 16 sh -c "[ \"\$(tmux -S '$IN' display-message -p -t 'fl@view-v1:' '#{window_id}')\" = '$N3' ]" || fail "P: the 看台 is not on new3 ($(cur))"
-# 退出 fleet = ⌘Q
+# words with 不绑仓库: a session here whose first turn is the words
+to send-keys -t o:view -H 1b 5b 39 32 37 7e
+waitfor 20 listed || fail "P: ⌘P (no repo) listed nothing"
+to send-keys -t o:view -l '看看日志'; sleep 0.4
+to send-keys -t o:view Tab; sleep 0.2; to send-keys -t o:view Left; sleep 0.3   # acme/app (the last send's) → 不绑仓库
+to capture-pane -p -t o:view | grep -q '仓库 ‹不绑仓库›' || fail "P: ← from the last repo is not 不绑仓库: $(to capture-pane -p -t o:view | grep -v '^$')"
+to send-keys -t o:view Enter
+waitfor 20 sh -c "tmux -S '$IN' list-windows -t fl -F '#{window_name}' | grep -qx new4" || fail "P: words with no repo opened no session"
+[ "$(sed -n 4p "$W/new.argv")" = "--origin hub --no-repo --prompt 看看日志 --no-desk --print fl" ] || fail "P: words with no repo: $(sed -n 4p "$W/new.argv")"
+# ⏻ 退出 fleet = ⌘Q
 to pipe-pane -o -t o:view "cat > '$W/client-p.bytes'"; sleep 0.3
 to send-keys -t o:view -H 1b 5b 39 32 37 7e
 waitfor 20 listed || fail "P: ⌘P (quit) listed nothing"
-to send-keys -t o:view -l '退出'; sleep 0.4; to send-keys -t o:view Down; sleep 0.2; to send-keys -t o:view Enter
-waitfor 20 sh -c "! tmux -S '$IN' list-clients -F '#{session_name}' | grep -q 'view-v1'" || fail "P: 退出 fleet did not detach the 看台's client"
+to send-keys -t o:view -l 'zzz'; sleep 0.4; to send-keys -t o:view Down; sleep 0.2
+to capture-pane -p -t o:view | grep -q '▶ ⏻ 退出 fleet' || fail "P: ↓ from ⚡ is not ⏻: $(to capture-pane -p -t o:view | grep -v '^$')"
+to send-keys -t o:view Enter
+waitfor 20 sh -c "! tmux -S '$IN' list-clients -F '#{session_name}' | grep -q 'view-v1'" || fail "P: ⏻ did not detach the 看台's client"
 sleep 0.3
 python3 -c 'import sys; sys.exit(0 if b"\x1b]7502;quit;token=tok7\x07" in open(sys.argv[1],"rb").read() else 1)' "$W/client-p.bytes" \
-  || fail "P: 退出 fleet sent no OSC 7502 quit: $(od -c "$W/client-p.bytes" | tail -5)"
+  || fail "P: ⏻ sent no OSC 7502 quit: $(od -c "$W/client-p.bytes" | tail -5)"
 to new-window -d -t o -n view "TMUX= tmux -S '$IN' attach -t 'fl@view-v1'"; sleep 1
-pass "P  ⌘P's command rows: 新任务 / shell first, 更多 last, FLEET_PANEL_COMMANDS orders them (none: gone); typed words ↵ = one send, title as typed (asks the repo of two); shell row → gamma's shell, 「回到」 lit there; 新会话 = ⌘N, 退出 = ⌘Q (#3180)"
+pass "P  ⌘P's one entry (方案 B): sessions then ⚡ (cells 仓库 · Agent) then ⏻; empty ↵ = the session in view lit; a hit lit, ↓ to ⚡; no hit ⇒ ⚡, ↵ one send (progress, esc keeps it going); Tab / ←→ cells; ↑ round to blank ⚡ = ⌘N; words + 不绑仓库 = a seeded session; ⏻ = ⌘Q (#3180, #3327)"
 
 # --- Q: ⌘Q -----------------------------------------------------------------------------------
 to pipe-pane -o -t o:view "cat > '$W/client.bytes'"; sleep 0.3
