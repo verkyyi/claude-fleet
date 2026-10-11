@@ -520,7 +520,11 @@ Do not install from memory: read the doc and work from it.
   orchestrator|steward` is never written again; a window still wearing it (an old
   seat) is an ordinary row for restore / migrate / move, and only the readers keep
   it one version (`fleet_role_holder`'s ③, the idle reaper leaves such a window for
-  its person) — EPIC #3111 C10 hands macmini's over. BREAK-IT `role-auto-reopen-off`.
+  its person). install-apply's `roles-windows:` step (`bin/fleet-role-windows.sh`,
+  issue #3121, re-runnable) moves such a window over in place: an old orchestrator
+  seat → `@fleet_role worker` + the taken mark + its roles.held line (the
+  conversation runs on), an old steward seat stopped and retired, an old driver
+  `@agent_def epic-driver`, a pinned window `@reap_policy keep` once. BREAK-IT `role-auto-reopen-off`.
   What the fleet-steward plugin does once a session holds the role is unchanged and
   lives in its skill: the beat with no model (`fleet-steward-tick.sh beat --holder`,
   refusing rc 3 for nobody / a bare beat / another window; nobody holds it ⇒ nothing

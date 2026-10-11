@@ -366,6 +366,23 @@ ok 'G reeval ran each fleet' "grep -q '^fleet-wait-reeval.sh --quiet -- f1' '$LO
 STUB_SOCKS='f1 f2' run_ap --from "$C7" --to "$C8" --dry-run
 contains 'G reeval dry-run' "$OUT" 'reeval: would re-ask idle windows on 2 live fleet(s)'
 rm -f "$R/bin/fleet-wait-reeval.sh"
+# roles-windows (issue #3121): fleet-role-windows.sh once; its change lines relayed, its
+# last line the step's; --dry-run passed on; a failure FAILs the step
+contains 'G roles-windows absent → skip' "$OUT" 'roles-windows: skip — no fleet-role-windows.sh in this version'
+cat > "$R/bin/fleet-role-windows.sh" <<EOF
+echo "fleet-role-windows.sh \$*" >> "$LOG"
+echo 'f1 @3 steward: old steward seat stopped (retired; state files kept)'
+case "\${1:-}" in --dry-run) echo 'roles-windows: would change 1 window(s)' ;; *) echo 'roles-windows: 1 window(s) changed' ;; esac
+EOF
+run_ap --from "$C7" --to "$C8"
+contains 'G roles-windows relays a change' "$OUT" 'roles-windows:   f1 @3 steward: old steward seat stopped'
+contains 'G roles-windows count' "$OUT" 'roles-windows: 1 window(s) changed'
+run_ap --from "$C7" --to "$C8" --dry-run
+ok 'G roles-windows dry-run passed on' "grep -q '^fleet-role-windows.sh --dry-run' '$LOG'"
+printf 'echo "roles-windows: 0 change(s), 1 failed"; exit 1\n' > "$R/bin/fleet-role-windows.sh"
+run_ap --from "$C7" --to "$C8"
+contains 'G roles-windows failure FAILs' "$OUT" 'roles-windows: FAIL 0 change(s), 1 failed'
+rm -f "$R/bin/fleet-role-windows.sh"
 # oldcfg (issue #2076): the sessions this version BREAKS and the looping stale ones,
 # named with window · repo · issue · state, never reopened; the idle stale ones not listed
 contains 'G oldcfg absent → skip' "$OUT" 'oldcfg: skip — no fleet-oldcfg-check.sh in this version'
