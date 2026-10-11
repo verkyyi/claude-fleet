@@ -23,6 +23,8 @@
 #   dash-keymap.sh --panel dash|backlog|config|switch <command>  # default panel: dash
 #   dash-keymap.sh --panel switch list|actions   # the ⌘ / prefix switch keys (#1903):
 #                                   #   action ⌘glyph iterm-key code prefix-key
+#   dash-keymap.sh --panel switch full|default   # + the default-bound column (#3185) ·
+#                                   #   the actions bound by default (quickopen)
 #   dash-keymap.sh --panel switch view   # the 看台's ⌃] letters (#3006): action letter
 #                                   # env names stay DASH_KEY_* within each panel
 #   dash-keymap.sh env              # shell assignments, one fork for the table —
@@ -121,9 +123,9 @@ preview ctrl-p alt-p' ;;
 # `fold` (issue #2167): ⌘. opens or shuts the sub-tasks of the session in view
 # (on a sub-task: shuts its parent) — the list's caret, from wherever the
 # keyboard is; prefix . elsewhere (tmux's move-window prompt, no use here).
-# `switcher` (issue #2266, EPIC #2259 C7): ⌘K — since issue #2365 it opens ⌘P's
-# one panel of sessions and actions (the switcher's new session and layout flip
-# are its `>` commands); prefix s elsewhere, tmux's own choose-tree key.
+# `switcher` (⌘K / prefix s, code 930 — issue #2266) went with issue #3185: it
+# opened ⌘P's panel since #2365, and ⌘K is iTerm2's clear-buffer. 930 is retired
+# like 924 / 926 — never reuse it: a profile written before still sends it.
 # `quit` (issue #2349): ⌘Q, 退出 fleet — the client's every process here goes,
 # the sessions run on (fleet-shell.sh quit); prefix Q elsewhere, unbound in tmux.
 # `dispatch` (issue #2753): ⌘T, 派一件事 — a title, a repo, ↵ files it and opens
@@ -133,38 +135,45 @@ preview ctrl-p alt-p' ;;
 # with issue #2362: the bar's 「! N 等你」 is still a tap to the one waiting, the
 # keys live in docs/CLIENT.md. Their codes stay retired — never reuse 924 / 926:
 # an iTerm2 profile written before still sends them (the conf swallows both).
-switch) TABLE='next ⌘↓ 0xf701-0x300000 920 n
-prev ⌘↑ 0xf700-0x300000 921 p
-back ⌘[ 0x5b-0x100000 922 h
-fwd ⌘] 0x5d-0x100000 923 l
-zoom ⌘↩ 0xd-0x100000 925 F9
-quickopen ⌘P 0x70-0x100000 927 /
-new ⌘N 0x6e-0x100000 928 c
-fold ⌘. 0x2e-0x100000 929 .
-switcher ⌘K 0x6b-0x100000 930 s
-quit ⌘Q 0x71-0x100000 931 Q
-dispatch ⌘T 0x74-0x100000 932 t'
+# The LAST column (issue #3185, EPIC #3178 C7): `1` = bound by default — only
+# quickopen (⌘P, the panel); every other row is bound only when the person names
+# it (fleet.conf [client] FLEET_KEYS_EXTRA, bin/fleet_keys.py). `list` prints the
+# first five columns as it always did; `full` all six; `default` the default actions.
+switch) TABLE='next ⌘↓ 0xf701-0x300000 920 n -
+prev ⌘↑ 0xf700-0x300000 921 p -
+back ⌘[ 0x5b-0x100000 922 h -
+fwd ⌘] 0x5d-0x100000 923 l -
+zoom ⌘↩ 0xd-0x100000 925 F9 -
+quickopen ⌘P 0x70-0x100000 927 / 1
+new ⌘N 0x6e-0x100000 928 c -
+fold ⌘. 0x2e-0x100000 929 . -
+quit ⌘Q 0x71-0x100000 931 Q -
+dispatch ⌘T 0x74-0x100000 932 t -'
 # The 看台's ⌃] letters (issue #3006, EPIC #2999 C9): a terminal with no ⌘ — a
 # phone's Termius, an iPad's Blink — reaches a 看台's actions with ⌃] then ONE
 # letter (fleet_view.py's `fleet-view-pfx` table). Not the prefix column above:
 # that is the old client's tmux prefix row, where p is ⌘↑ and Q is shifted; a
 # thumb wants p the list, n / b next and back up the list, q quit. Only the
 # actions a 看台 binds get a letter; every one is a row of the table above.
+# Since issue #3185 only `p` is bound by default (fleet.conf FLEET_KEY_PHONE's
+# `ctrl+]p`); the rest are the letters FLEET_KEYS_PHONE_EXTRA's example spells
+# (`ctrl+]n=next …`), bound only when the person writes them.
 VIEW='quickopen p
 next n
 prev b
 back h
 fwd l
-switcher s
 new c
 dispatch t
 quit q'
   cmd="${1:-list}"
   case "$cmd" in
-    list)    printf '%s\n' "$TABLE" ;;
+    list)    printf '%s\n' "$TABLE" | awk '{print $1, $2, $3, $4, $5}' ;;
+    full)    printf '%s\n' "$TABLE" ;;
+    default) printf '%s\n' "$TABLE" | awk '$6 == 1 {print $1}' ;;
     actions) printf '%s\n' "$TABLE" | awk '{print $1}' ;;
     view)    printf '%s\n' "$VIEW" ;;
-    *) echo "usage: dash-keymap.sh --panel switch list|actions|view" >&2; exit 2 ;;
+    *) echo "usage: dash-keymap.sh --panel switch list|full|default|actions|view" >&2; exit 2 ;;
   esac
   exit 0 ;;
 *) echo "dash-keymap.sh: unknown panel '$PANEL' (dash|backlog|config|switch)" >&2; exit 2 ;;

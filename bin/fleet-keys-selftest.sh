@@ -42,8 +42,9 @@
 #   8. The node binds none of them (issue #1714, EPIC #1710 C4): a server that
 #      sources conf/tmux-attention.conf lists EXACTLY tmux's stock keys in root
 #      and prefix — its only keys of its own live in the 看台's tables (issue
-#      #3000: fleet-view = root copied + ⌘↓ ⌘↑ ⌘[ ⌘] ⌘P ⌘K ⌘N ⌘T ⌘Q ⌃\ (#3004),
-#      fleet-view-pfx) — and one
+#      #3000: fleet-view = root copied + by default ONE action, the panel —
+#      User927 (⌘P) and the phone keys ⌃空格 · F12 · ⌃] p (issue #3185); a
+#      FLEET_KEYS_EXTRA adds its codes, FLEET_KEY_PHONE narrows the phone's) — and one
 #      that sources the client's conf has every sheet key — on an isolated socket.
 #      Its bar says ⌘N 新会话 (issue #3119), ⌘N 新任务 only with @fleet_compose
 #      (issue #2616); ⌘N, prefix c and the bar's cell are one road (fleet-shell.sh
@@ -414,14 +415,36 @@ if command -v tmux >/dev/null 2>&1; then
   [ -z "$ndiff" ] || { ktm stock kill-server; ktm node kill-server; ktm shell kill-server; fail "8: the node binds keys of its own (beyond the human layer it must list exactly tmux's stock keys):
 $ndiff"; }
   # fleet-view = the node's root, copied (the 看台's mouse: tmux does not fall back
-  # to root for a key a session's key-table lacks), + the 看台's ⌘ keys, ⌃] and
-  # ⌃\ (the session's shell, issue #3004).
-  fv_copy=$(awk '$3 == "fleet-view" && $4 !~ /^User9[0-9][0-9]$/ && $4 != "C-]" && $4 != "C-\\\\" { $3 = "root"; $1 = $1; print }' "$KW/node.keys")
-  [ "$fv_copy" = "$(awk '$3 == "root" { $1 = $1; print }' "$KW/node.keys")" ] \
+  # to root for a key a session's key-table lacks), + the 看台's keys — by default
+  # ONE action, the panel (issue #3185, EPIC #3178 C7): User927 (⌘P), the phone
+  # keys ⌃空格 and F12, ⌃] p; ⌃] itself.
+  fv_ours='$4 ~ /^User9[0-9][0-9]$/ || $4 == "C-]" || $4 == "C-\\\\" || $4 == "C-Space" || $4 == "F12"'
+  fv_copy=$(awk '$3 == "fleet-view" && !('"$fv_ours"') { $3 = "root"; $1 = $1; print }' "$KW/node.keys")
+  [ "$fv_copy" = "$(awk '$3 == "root" && !('"$fv_ours"') { $1 = $1; print }' "$KW/node.keys")" ] \
     || fail "8: the 看台's fleet-view is not a copy of the node's root: $(diff <(printf '%s\n' "$fv_copy") <(awk '$3 == "root" { $1 = $1; print }' "$KW/node.keys") | head -5)"
-  for c in 920 921 922 923 927 928 930 931 932; do
-    awk -v k="User$c" '$3 == "fleet-view" && $4 == k' "$KW/node.keys" | grep -q . || fail "8: the 看台 does not bind User$c"
+  fv_user=$(awk '$3 == "fleet-view" && $4 ~ /^User/ { print $4 }' "$KW/node.keys" | tr '\n' ' ')
+  [ "$fv_user" = "User927 " ] || fail "8: by default the 看台 binds one fleet code, User927 (⌘P) — got: $fv_user"
+  for k in C-Space F12; do
+    awk -v k="$k" '$3 == "fleet-view" && $4 == k' "$KW/node.keys" | grep -q 'dash-popup.sh' || fail "8: the phone key $k does not open the panel"
   done
+  awk '$3 == "fleet-view" && $4 == "C-\\\\"' "$KW/node.keys" | grep -q . && fail "8: ⌃\\ is bound by default (it is FLEET_KEYS_EXTRA's shell=ctrl+\\)"
+  fv_pfx=$(awk '$3 == "fleet-view-pfx" { print $4 }' "$KW/node.keys" | sort | tr '\n' ' ')
+  [ "$fv_pfx" = "C-] p " ] || fail "8: by default ⌃] takes p and ⌃] only — got: $fv_pfx"
+  # a person's extra (the client's FLEET_KEYS_EXTRA, carried by the attach): one more code
+  FLEET_KEYS_EXTRA="next=cmd+down" TMUX="$KW/node,0,0" HOME="$KW" python3 "$BIN/fleet-quickopen.py" view-keys \
+    || fail "8: view-keys with FLEET_KEYS_EXTRA exited non-zero"
+  fv_user=$(ktm node list-keys -T fleet-view | awk '$4 ~ /^User/ { print $4 }' | sort | tr '\n' ' ')
+  [ "$fv_user" = "User920 User927 " ] || fail "8: FLEET_KEYS_EXTRA=next=cmd+down does not add User920 — got: $fv_user"
+  # the phone keys are this machine's: FLEET_KEY_PHONE=f12 leaves F12 alone (and the extra stays: kept on the server)
+  FLEET_KEY_PHONE=f12 TMUX="$KW/node,0,0" HOME="$KW" python3 "$BIN/fleet-quickopen.py" view-keys \
+    || fail "8: view-keys with FLEET_KEY_PHONE exited non-zero"
+  ktm node list-keys -T fleet-view | awk '$4 == "F12"' | grep -q . || fail "8: FLEET_KEY_PHONE=f12 dropped F12"
+  ktm node list-keys -T fleet-view | awk '$4 == "C-Space"' | grep -q . && fail "8: FLEET_KEY_PHONE=f12 still binds ⌃空格"
+  # (the whole list, filtered: tmux 3.7 prints nothing for `list-keys -T <t>` when C-] is its only key)
+  [ "$(ktm node list-keys | awk '$3 == "fleet-view-pfx" { print $4 }' | tr '\n' ' ')" = "C-] " ] \
+    || fail "8: FLEET_KEY_PHONE=f12 still binds ⌃] p: $(ktm node list-keys | awk '$3 == "fleet-view-pfx"')"
+  ktm node list-keys -T fleet-view | awk '$4 == "User920"' | grep -q . || fail "8: a later build dropped the kept FLEET_KEYS_EXTRA (User920)"
+  ktm node list-keys > "$KW/node.keys"
   awk '($3 == "fleet-view" && ($4 ~ /^User/ || $4 == "C-]" || $4 == "C-\\\\")) || $3 == "fleet-view-pfx"' "$KW/node.keys" \
     | grep -Eq 'kill-(pane|window|session|server)|respawn-(pane|window)|rename-session' && fail "8: a 看台 key deletes, respawns or renames"
   awk '$3 == "root" || $3 == "prefix"' "$KW/node.keys" | grep -q 'fleet-quickopen' && fail "8: a 看台 key leaked into root / prefix"
@@ -501,13 +524,16 @@ fi
 sw_table="$(bash "$KEYMAP" --panel switch list)" || fail "10: dash-keymap.sh --panel switch list exited non-zero"
 # `new` (⌘N / prefix c, issue #1953 → #3119): a new session — private code 928.
 # `fold` (⌘. / prefix ., issue #2167): the session in view's sub-tasks — 929.
-# `switcher` (⌘K / prefix s, issue #2266): ⌘P's panel since #2365 — 930.
+# `switcher` (⌘K / prefix s, code 930) went with issue #3185: ⌘K is iTerm2's again.
 # `needs` (⌘J · 924 · prefix k) and `help` (⌘/ · 926 · prefix ?) went with issue #2362.
 # `quit` (⌘Q / prefix Q, issue #2349): 退出 fleet — 931.
 # `dispatch` (⌘T / prefix t, issue #2753): 派一件事 — 932.
-[ "$(printf '%s\n' "$sw_table" | grep -c .)" = 11 ] || fail "10: the switch table is not #1903's 6 (less needs / help, #2362) + #1953's new + #2167's fold + #2266's switcher + #2349's quit + #2753's dispatch: $sw_table"
-[ "$(printf '%s\n' "$sw_table" | awk '{print $1}' | tr '\n' ' ')" = "next prev back fwd zoom quickopen new fold switcher quit dispatch " ] \
-  || fail "10: the switch actions are not next prev back fwd zoom quickopen new fold switcher quit dispatch"
+[ "$(printf '%s\n' "$sw_table" | grep -c .)" = 10 ] || fail "10: the switch table is not #1903's 6 (less needs / help, #2362) + #1953's new + #2167's fold + #2349's quit + #2753's dispatch (less #2266's switcher, #3185): $sw_table"
+[ "$(printf '%s\n' "$sw_table" | awk '{print $1}' | tr '\n' ' ')" = "next prev back fwd zoom quickopen new fold quit dispatch " ] \
+  || fail "10: the switch actions are not next prev back fwd zoom quickopen new fold quit dispatch"
+# one action is bound by default (issue #3185): the panel
+[ "$(bash "$KEYMAP" --panel switch default | tr '\n' ' ')" = "quickopen " ] || fail "10: the default-bound column names more than quickopen"
+[ "$(bash "$KEYMAP" --panel switch full | awk '{ print $1, $2, $3, $4, $5 }')" = "$sw_table" ] || fail "10: full's first five columns are not list"
 printf '%s\n' "$sw_table" | awk '$1 == "dispatch" && $2 == "⌘T" && $3 == "0x74-0x100000" && $4 == 932 && $5 == "t"' | grep -q . \
   || fail "10: dispatch is not ⌘T · 0x74-0x100000 · code 932 · prefix t"
 grep -E '^bind -n User932 ' "$CONF" | grep -q 'fleet-quick-dispatch.py' || fail "10: ⌘T does not open the dispatch popup (fleet-quick-dispatch.py)"
@@ -518,12 +544,8 @@ printf '%s\n' "$sw_table" | awk '$1 == "quit" && $2 == "⌘Q" && $3 == "0x71-0x1
   || fail "10: quit is not ⌘Q · 0x71-0x100000 · code 931 · prefix Q"
 grep -E '^bind -n User931 ' "$CONF" | grep -q 'fleet-shell.sh quit' || fail "10: ⌘Q does not quit the client (fleet-shell.sh quit)"
 grep -F '@fleet_hint_session ' "$CONF" | grep -q 'key-User931]' || fail "10: the bar's ⌘Q is not the quit key (User931)"
-printf '%s\n' "$sw_table" | awk '$1 == "switcher" && $2 == "⌘K" && $3 == "0x6b-0x100000" && $4 == 930 && $5 == "s"' | grep -q . \
-  || fail "10: switcher is not ⌘K · 0x6b-0x100000 · code 930 · prefix s"
-# ⌘K is ⌘P's panel since issue #2365 (one panel of sessions and actions): the same body
-[ "$(grep -E '^bind -n User930 ' "$CONF" | sed 's/^bind -n User930 //')" = "$(grep -E '^bind -n User927 ' "$CONF" | sed 's/^bind -n User927 //')" ] \
-  || fail "10: ⌘K does not open ⌘P's panel (issue #2365)"
-grep -E '^bind -n User930 ' "$CONF" | grep -q -- '--switch' && fail "10: ⌘K still opens the old switcher"
+printf '%s\n' "$sw_table" | awk '$4 == 930 || $2 == "⌘K"' | grep -q . \
+  && fail "10: ⌘K / code 930 is back in the switch table (retired with issue #3185)"
 printf '%s\n' "$sw_table" | awk '$1 == "new" && $2 == "⌘N" && $4 == 928 && $5 == "c"' | grep -q . \
   || fail "10: new is not ⌘N · code 928 · prefix c"
 printf '%s\n' "$sw_table" | awk '$1 == "fold" && $2 == "⌘." && $3 == "0x2e-0x100000" && $4 == 929 && $5 == "."' | grep -q . \
@@ -536,8 +558,9 @@ body_of() {   # the body of the conf's bind for key $2 in table $1 (root / prefi
     t == "prefix" && $1 == "bind" && $2 == k             { sub(/^bind [^ ]+ /, ""); print; exit }' "$CONF"
 }
 SW_PROF=$(mktemp -d "${TMPDIR:-/tmp}/fkeys-iterm.XXXXXX") || fail "10: mktemp"
-FLEET_ITERM_DIR="$SW_PROF" FLEET_ITERM_PREFS=/dev/null ITERM_PROFILE='' python3 "$BIN/fleet-iterm-profile.py" write \
-  || fail "10: fleet-iterm-profile.py write exited non-zero"
+# --all: the old client's profile, every row at its own chord (fleet-shell.sh)
+FLEET_ITERM_DIR="$SW_PROF" FLEET_ITERM_PREFS=/dev/null ITERM_PROFILE='' python3 "$BIN/fleet-iterm-profile.py" write --all \
+  || fail "10: fleet-iterm-profile.py write --all exited non-zero"
 [ -f "$SW_PROF/fleet.json" ] || fail "10: fleet-iterm-profile.py wrote no fleet.json"
 while read -r sa sg sk sc sp; do
   [ -n "$sa" ] || continue
@@ -568,13 +591,25 @@ PY
 done <<EOF
 $sw_table
 EOF
-# the table's 11 + ⇧↵ → 0x0a (the writing area's newline, issue #1953); no ⌘J / ⌘/
-[ "$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["Profiles"][0]["Keyboard Map"]))' "$SW_PROF/fleet.json")" = 12 ] \
+# the table's 10 + ⇧↵ → 0x0a (the writing area's newline, issue #1953); no ⌘J / ⌘/
+[ "$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["Profiles"][0]["Keyboard Map"]))' "$SW_PROF/fleet.json")" = 11 ] \
   || fail "10: the profile maps keys beyond the table + ⇧↵ (no parent map to keep here)"
 python3 -c 'import json,sys; m=json.load(open(sys.argv[1]))["Profiles"][0]["Keyboard Map"]; assert m["0xd-0x20000"] == {"Action": 11, "Text": "0x0a"}, m' "$SW_PROF/fleet.json" \
   || fail "10: the profile does not send 0x0a for ⇧↵"
 python3 -c 'import json,sys; m=json.load(open(sys.argv[1]))["Profiles"][0]["Keyboard Map"]; assert "0x6a-0x100000" not in m and "0x2f-0x100000" not in m, m' "$SW_PROF/fleet.json" \
   || fail "10: the profile still maps ⌘J or ⌘/ (issue #2362)"
+# the new client's profile (issue #3185, EPIC #3178 C7): ONE ⌘ chord, ⌘P, + ⇧↵;
+# FLEET_KEY_PANEL=off none; FLEET_KEYS_EXTRA adds exactly what it names
+sw_map() { FLEET_ITERM_DIR="$SW_PROF" FLEET_ITERM_PREFS=/dev/null ITERM_PROFILE='' FLEET_CONF_DIR="$SW_PROF/conf" "$@" python3 "$BIN/fleet-iterm-profile.py" json \
+  | python3 -c 'import json,sys; m=json.load(sys.stdin)["Profiles"][0]["Keyboard Map"]; print(" ".join("%s=%s" % (k, m[k].get("Text")) for k in sorted(m)))'; }
+[ "$(sw_map env)" = "0x70-0x100000=[927~ 0xd-0x20000=0x0a" ] || fail "10: the default profile maps more than ⌘P + ⇧↵: $(sw_map env)"
+[ "$(sw_map env FLEET_KEY_PANEL=off)" = "0xd-0x20000=0x0a" ] || fail "10: FLEET_KEY_PANEL=off still maps a ⌘ key: $(sw_map env FLEET_KEY_PANEL=off)"
+[ "$(sw_map env "FLEET_KEY_PANEL=cmd+'" 'FLEET_KEYS_EXTRA=next=cmd+down shell=ctrl+\ bogus=cmd+z')" = "0x27-0x100000=[927~ 0xd-0x20000=0x0a 0xf701-0x300000=[920~" ] \
+  || fail "10: FLEET_KEY_PANEL=cmd+' + FLEET_KEYS_EXTRA=next=cmd+down is not ⌘' + ⌘↓: $(sw_map env "FLEET_KEY_PANEL=cmd+'" 'FLEET_KEYS_EXTRA=next=cmd+down shell=ctrl+\ bogus=cmd+z')"
+# read from fleet.conf's [client] section when the environment has none
+mkdir -p "$SW_PROF/conf"
+printf '[ "${FLEET_SHELL:-0}" = 1 ] && FLEET_KEYS_EXTRA="new=cmd+n"\n' > "$SW_PROF/conf/fleet.conf"
+[ "$(sw_map env -u FLEET_KEYS_EXTRA)" = "0x6e-0x100000=[928~ 0x70-0x100000=[927~ 0xd-0x20000=0x0a" ] || fail "10: FLEET_KEYS_EXTRA in fleet.conf [client] is not read: $(sw_map env -u FLEET_KEYS_EXTRA)"
 FLEET_ITERM_DIR="$SW_PROF" FLEET_ITERM_KEYS=0 python3 "$BIN/fleet-iterm-profile.py" write
 [ -f "$SW_PROF/fleet.json" ] && fail "10: FLEET_ITERM_KEYS=0 left the profile in place"
 rm -rf "$SW_PROF"
@@ -594,7 +629,7 @@ $sw_table
 EOF
   # the retired codes (issue #2362): still caught — an older profile sends them,
   # and an unknown code would reach the session as raw bytes — and bound to nothing
-  for sc in 924 926; do
+  for sc in 924 926 930; do
     grep -Fq "user-keys[$sc] \\033[$sc~" <<< "$uk" || fail "10: the retired code $sc is not caught any more: $uk"
     awk -v k="User$sc" '$4 == k' <<< "$rk" | grep -q . && fail "10: the retired code $sc is still bound: $(awk -v k="User$sc" '$4 == k' <<< "$rk")"
   done

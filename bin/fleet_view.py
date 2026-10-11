@@ -995,9 +995,36 @@ def rc_wait(pid):
 ROOT_RE = re.compile(r"^(bind-key(?:\s+-r)?)\s+-T\s+root\s")
 
 
-def key_lines(me):
+def key_extra(store=True):
+    """The client keys this server binds (issue #3185): the union of every attach's
+    FLEET_KEYS_EXTRA (fleet_keys.carried, in the attach's environment) — kept as the
+    server option `@fleet_view_keys_extra`, so a conf re-source (no attach, no env)
+    binds them again, and a phone attaching with none leaves the Mac's in place. A
+    code no client's profile sends is bound to nothing that arrives."""
+    _, have = tm("show-options", "-gqv", "@fleet_view_keys_extra")
+    words = have.split()
+    for w in (os.environ.get("FLEET_KEYS_EXTRA") or "").split():
+        if w not in words:
+            words.append(w)
+    if store and " ".join(words) != have.strip():
+        tm("set-option", "-g", "@fleet_view_keys_extra", " ".join(words))
+    return " ".join(words)
+
+
+def tkey(key):
+    """A tmux key name as a bind-key argument."""
+    return "'%s'" % key if not re.match(r"^[A-Za-z0-9-]+$", key) else key
+
+
+def key_lines(me, extra=None):
     """The commands that rebuild both tables: root copied into fleet-view, then the
-    看台's keys off dash-keymap.sh's switch table (its code and prefix letter)."""
+    看台's keys (issue #3185, EPIC #3178 C7) — by default ONE action, the panel:
+    its ⌘ code (User927, ⌘P on the client) and the phone keys FLEET_KEY_PHONE
+    (⌃空格 · F12 in fleet-view, ⌃] p); then what the person added — the clients'
+    FLEET_KEYS_EXTRA (key_extra: a ⌘ chord → its action's code, any other chord →
+    that tmux key) and this machine's FLEET_KEYS_PHONE_EXTRA (`ctrl+]n=next` → ⌃] n);
+    ⌃] ⌃] always sends one ⌃] on."""
+    import fleet_keys
     rc, root = tm("list-keys", "-T", "root")
     lines = ["unbind-key -q -a -T fleet-view", "unbind-key -q -a -T fleet-view-pfx"]
     for line in root.splitlines() if rc == 0 else []:
@@ -1007,50 +1034,77 @@ def key_lines(me):
                                          capture_output=True, text=True, timeout=5).stdout
     try:
         table = keymap("list")
-        # ⌃] + a letter (issue #3006, C9): the 看台's own letters, a thumb's — p the list,
-        # n / b down / up it, q quit; an action with none keeps its prefix-column letter
-        letters = dict(t.split()[:2] for t in keymap("view").splitlines() if len(t.split()) >= 2)
+        defaults = keymap("default").split()
     except (OSError, subprocess.TimeoutExpired):
-        table, letters = "", {}
-    # the codes too (conf/tmux-view.conf sets the same, idempotent)
-    codes = sorted({t.split()[3] for t in table.splitlines() if len(t.split()) >= 5} | {"924", "926"})
-    lines += ['set-option -s user-keys[%s] "\\e[%s~"' % (c, c) for c in codes if c.isdigit()]
+        table, defaults = "", ["quickopen"]
+    codes = {t.split()[0]: t.split()[3] for t in table.splitlines() if len(t.split()) >= 5}
+    # the codes too (conf/tmux-view.conf sets the same, idempotent); 924 926 930 retired
+    lines += ['set-option -s user-keys[%s] "\\e[%s~"' % (c, c)
+              for c in sorted(set(codes.values()) | {"924", "926", "930"}) if c.isdigit()]
     size = lambda pc: "#{?#{e|<:#{client_width},%d},100%%,%d%%}" % (NARROW, pc)
     popup = str(Path(me).parent / "dash-popup.sh")
-    for t in table.splitlines():
-        f = t.split()
-        if len(f) < 5 or f[0] not in VIEW_ACTIONS:
-            continue
-        action, code, letter = f[0], f[3], letters.get(f[0], f[4])
-        verb = VIEW_ACTIONS[action]
+
+    def cmd_of(action):
+        verb = "do shell" if action == "shell" else VIEW_ACTIONS.get(action)
         if verb == "popup":
             # through the one popup door (dash-popup.sh, issue #3044), from a
             # run-shell, which expands the formats — the old client's road too.
             # Narrower than NARROW columns (a phone, C9): the whole screen.
             # --freeze: the session behind holds still while the list is up — tmux
             # 3.7c bleeds a pane's wrapped CJK through any popup (issue #3058)
-            cmd = ("run-shell -b \"bash '%s' --client '#{client_name}' --no-inline --freeze -w %s -h %s --title view_title "
-                   "-- python3 '%s' --view '#{session_name}' --client '#{client_name}' "  # view-ok: the key's own session IS the 看台
-                   ">/dev/null 2>&1 || :\"") % (popup, size(90), size(80), me)
-        elif verb == "dispatch":
+            return ("run-shell -b \"bash '%s' --client '#{client_name}' --no-inline --freeze -w %s -h %s --title view_title "
+                    "-- python3 '%s' --view '#{session_name}' --client '#{client_name}' "  # view-ok: the key's own session IS the 看台
+                    ">/dev/null 2>&1 || :\"") % (popup, size(90), size(80), me)
+        if verb == "dispatch":
             # ⌘T (C7): the old client's 派一件事 popup, run HERE with --view — the
             # repos the hub names, the agent picked per this one send (#1834)
-            cmd = ("run-shell -b \"bash '%s' --client '#{client_name}' --no-inline --freeze -w %s -h 12 --title view_dispatch_title "
-                   "-- python3 '%s' --view '#{session_name}' --client '#{client_name}' "  # view-ok: the 看台
-                   ">/dev/null 2>&1 || :\"") % (popup, size(80), str(Path(me).parent / "fleet-quick-dispatch.py"))
+            return ("run-shell -b \"bash '%s' --client '#{client_name}' --no-inline --freeze -w %s -h 12 --title view_dispatch_title "
+                    "-- python3 '%s' --view '#{session_name}' --client '#{client_name}' "  # view-ok: the 看台
+                    ">/dev/null 2>&1 || :\"") % (popup, size(80), str(Path(me).parent / "fleet-quick-dispatch.py"))
+        if verb:
+            return ("run-shell -b \"python3 '%s' %s --view '#{session_name}' --client '#{client_name}' "  # view-ok: the 看台
+                    ">/dev/null 2>&1 || :\"") % (me, verb)
+        return ""
+
+    binds = {}      # (table, key) → command; a later layer wins a key it names again
+
+    def bind(table, key, action):
+        c = cmd_of(action)
+        if c and key:
+            binds[(table, key)] = c
+
+    def bind_chord(chord, action):
+        if fleet_keys.is_cmd(chord):
+            bind("fleet-view", "User%s" % codes[action] if action in codes else "", action)
         else:
-            cmd = ("run-shell -b \"python3 '%s' %s --view '#{session_name}' --client '#{client_name}' "  # view-ok: the 看台
-                   ">/dev/null 2>&1 || :\"") % (me, verb)
-        lines.append("bind-key -T fleet-view User%s %s" % (code, cmd))
-        if len(letter) == 1:
-            lines.append("bind-key -T fleet-view-pfx %s %s" % ("'%s'" % letter if not letter.isalnum() else letter, cmd))
-    shell = ("run-shell -b \"python3 '%s' do shell --view '#{session_name}' --client '#{client_name}' "  # view-ok: the 看台
-             ">/dev/null 2>&1 || :\"") % me
-    lines.append("bind-key -T fleet-view '%s' %s" % (SHELL_KEY, shell))
-    lines.append("bind-key -T fleet-view-pfx '%s' %s" % (SHELL_LETTER, shell))
+            tk = fleet_keys.tmux_key(chord)
+            if tk and tk != ("fleet-view", PFX_KEY) and tk != ("fleet-view-pfx", PFX_KEY):
+                bind(tk[0], tk[1], action)
+
+    known = set(VIEW_ACTIONS) | set(fleet_keys.CODELESS)
+    for action in defaults:                                   # ⌘P: User927, whatever chord the client picked
+        if action in VIEW_ACTIONS and action in codes:
+            bind("fleet-view", "User%s" % codes[action], action)
+    for chord in fleet_keys.phone():                          # ⌃空格 · F12 · ⌃] p
+        bind_chord(chord, "quickopen")
+    for action, chord in fleet_keys.pairs(key_extra() if extra is None else extra, known):
+        bind_chord(chord, action)
+    for action, chord in fleet_keys.pairs(fleet_keys.phone_extra(), known):
+        bind_chord(chord, action)
+    _OURS[0] = {tk for tk in binds if tk[0] == "fleet-view"}
+    for (table, key), c in binds.items():
+        lines.append("bind-key -T %s %s %s" % (table, tkey(key), c))
     lines.append("bind-key -T fleet-view %s switch-client -T fleet-view-pfx" % PFX_KEY)
     lines.append("bind-key -T fleet-view-pfx %s send-keys %s" % (PFX_KEY, PFX_KEY))
     return lines
+
+
+def our_keys(lines):
+    """The fleet-view keys a build binds beyond its root copy (the copy check skips them)."""
+    return {k for t, k in _OURS[0]} if _OURS[0] is not None else set()
+
+
+_OURS = [None]
 
 
 def keys_sig(lines):
@@ -1070,15 +1124,21 @@ def view_keys(me, if_stale=False):
     if if_stale:
         rc, fv = tm("list-keys", "-T", "fleet-view")
         _, root = tm("list-keys", "-T", "root")
-        norm = lambda line: " ".join(line.split())
-        copy = sorted(norm(ROOT_RE.sub(r"\1 -T root ", l.replace(" -T fleet-view ", " -T root ", 1)))
-                      for l in fv.splitlines() if not re.search(r" -T fleet-view +(User9\d\d|C-\]|C-\\\\) ", l))
         if rc != 0 or not fv:
             return 0          # never loaded here: attach --thin adds no table (C1's rule)
         lines = key_lines(me)
         sig = keys_sig(lines)
+        ours = our_keys(lines) | {"C-]"}
+        norm = lambda line: " ".join(line.split())
+        def key_of(line):
+            f = line.split()
+            i = f.index("-T") + 2 if "-T" in f else len(f)
+            return f[i].replace("\\\\", "\\") if i < len(f) else ""
+        copy = sorted(norm(ROOT_RE.sub(r"\1 -T root ", l.replace(" -T fleet-view ", " -T root ", 1)))
+                      for l in fv.splitlines() if key_of(l) not in ours)
+        want = sorted(norm(l) for l in root.splitlines() if key_of(l) not in ours)
         _, have = tm("show-options", "-gqv", "@fleet_view_keys_sig")
-        if have.strip() == sig and copy == sorted(norm(l) for l in root.splitlines()):
+        if have.strip() == sig and copy == want:
             return 0
     else:
         lines = key_lines(me)

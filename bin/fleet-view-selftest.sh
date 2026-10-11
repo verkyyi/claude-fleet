@@ -9,7 +9,7 @@
 # pane is what the person sees (the popup included).
 #
 #   A  conf/tmux-view.conf: user-keys 920..932; root and prefix exactly tmux's;
-#      fleet-view = root copied (the mouse) + ⌘↓ ⌘↑ ⌘[ ⌘] ⌘P ⌘K (+ C7's ⌘N ⌘Q ⌘T
+#      fleet-view = root copied (the mouse) + ⌘↓ ⌘↑ ⌘[ ⌘] ⌘P (+ C7's ⌘N ⌘Q ⌘T
 #      ⌃\, fleet-view-c7-selftest.sh) off the switch
 #      table (dash-keymap.sh); fleet-view-pfx = ⌃] then the 看台's letter (view);
 #      sourcing twice leaves the same tables
@@ -49,6 +49,10 @@ cleanup() {
 trap cleanup EXIT INT TERM
 mkdir -p "$W/conf/remote-views/v1.d" "$W/g" "$W/home"
 export HOME="$W/home" FLEET_CONF_DIR="$W/conf" FLEET_STATUS_G="$W/g" FLEET_UI_LANG=zh LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
+# Every key a person can add (issue #3185: by default only the panel is bound) —
+# the client's extras (carried by the attach) and the phone's ⌃] letters
+export FLEET_KEYS_EXTRA='next=cmd+down prev=cmd+up back=cmd+[ fwd=cmd+] new=cmd+n dispatch=cmd+t quit=cmd+q shell=ctrl+\\'
+export FLEET_KEYS_PHONE_EXTRA='ctrl+]n=next ctrl+]b=prev ctrl+]h=back ctrl+]l=fwd ctrl+]c=new ctrl+]t=dispatch ctrl+]q=quit ctrl+]\\=shell'
 unset TMUX TMUX_PANE
 ME=$(id -un)
 US=$'\037'
@@ -77,8 +81,8 @@ diff -q "$W/root.now" "$W/root.stock" >/dev/null || fail "A: root differs from t
 ti list-keys -T prefix | norm > "$W/pfx.now"; grep -- ' -T prefix ' "$W/stock.keys" | norm > "$W/pfx.stock"
 diff -q "$W/pfx.now" "$W/pfx.stock" >/dev/null || fail "A: prefix differs from tmux's"
 ti list-keys -T fleet-view | norm > "$W/fv.1"
-copy=$(grep -v -E ' User9[0-9][0-9] | C-\] | C-\\\\ ' "$W/fv.1" | sed 's/ -T fleet-view / -T root /')
-[ "$copy" = "$(cat "$W/root.now")" ] || fail "A: fleet-view's copy is not root: $(diff <(printf '%s\n' "$copy") "$W/root.now" | head -5)"
+copy=$(grep -v -E ' User9[0-9][0-9] | C-\] | C-\\\\ | C-Space | F12 ' "$W/fv.1" | sed 's/ -T fleet-view / -T root /')
+[ "$copy" = "$(grep -v -E ' C-Space | F12 ' "$W/root.now")" ] || fail "A: fleet-view's copy is not root: $(diff <(printf '%s\n' "$copy") "$W/root.now" | head -5)"
 table=$(bash "$BIN/dash-keymap.sh" --panel switch list)
 vtable=$(bash "$BIN/dash-keymap.sh" --panel switch view)
 [ "$(awk '{ print $2 }' <<< "$vtable" | sort | uniq -d)" = '' ] || fail "A: two 看台 actions share a ⌃] letter: $vtable"
@@ -88,7 +92,7 @@ done
 for p in 'quickopen p' 'next n' 'prev b' 'new c' 'dispatch t' 'quit q'; do
   grep -qx "$p" <<< "$vtable" || fail "A: the phone's ⌃] $p is not in the 看台's letters: $vtable"
 done
-for a in next prev back fwd quickopen switcher new quit dispatch; do
+for a in next prev back fwd quickopen new quit dispatch; do
   code=$(awk -v a="$a" '$1 == a { print $4 }' <<< "$table"); letter=$(awk -v a="$a" '$1 == a { print $2 }' <<< "$vtable")
   grep -q " -T fleet-view User$code " "$W/fv.1" || fail "A: $a (User$code) is not bound in fleet-view"
   ti list-keys -T fleet-view-pfx | norm | grep -q -- "-T fleet-view-pfx \\\\\?$letter " || fail "A: ⌃] $letter ($a) is not bound in fleet-view-pfx"

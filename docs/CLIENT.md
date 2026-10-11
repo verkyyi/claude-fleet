@@ -1,23 +1,61 @@
 # The client — keys for switching sessions
 
-`fleet` on your own computer is the **client**: a task list on the left, the
-session you picked on the right (`bin/fleet-shell.sh`, `conf/tmux-shell.conf`).
+`fleet` on your own computer is the **client** (`bin/fleet-thin.py`; the old one,
+`fleet --old`: a task list on the left, the session you picked on the right,
+`bin/fleet-shell.sh`, `conf/tmux-shell.conf`).
 This page is the contract for moving between sessions from the keyboard
 (issue #1903, EPIC #1906 C10) — from anywhere, without first putting the
 keyboard on the list.
 
-## The keys
+## One key + the panel (issue #3185, EPIC #3178 C7)
+
+A new install takes **one key**: **⌘P** on a Mac (iTerm2), and on a phone or any
+terminal with no ⌘ **⌃空格** (two taps on Termius: Ctrl, space), **F12** (one, once
+you put it on Termius' key row) or **⌃] p**. It opens the panel: every session,
+and every action (a new task, a new session, quit fleet …). Every other ⌘ key is
+iTerm2's own again — ⌘K clears, ⌘T opens a tab, ⌘N a window, ⌘Q quits iTerm2.
+
+Want an old key back, or a different one? One line in `fleet.conf`
+(`~/.config/claude-fleet/fleet.conf`; `bin/fleet_keys.py` reads it):
+
+```
+[client]                         # this computer's keys
+FLEET_KEY_PANEL=cmd+p            # the panel's chord: cmd+' … · off = none
+FLEET_KEYS_EXTRA="next=cmd+down prev=cmd+up back=cmd+[ fwd=cmd+] new=cmd+n dispatch=cmd+t quit=cmd+q shell=ctrl+\\"
+[common]                         # the machine's keys for a phone
+FLEET_KEY_PHONE="ctrl+space f12 ctrl+]p"
+FLEET_KEYS_PHONE_EXTRA="ctrl+]n=next ctrl+]b=prev ctrl+]c=new ctrl+]t=dispatch ctrl+]q=quit"
+```
+
+An extra is `action=chord` (`chord=action` works too); actions are the switch
+table's (next prev back fwd new dispatch quit) and `shell`, the session's shell.
+A chord is `+`-joined `cmd` · `ctrl` · `alt` · `shift` and one key (a character,
+`down` `up` `left` `right`, `space`, `tab`, `return`, `esc`, `f1`…`f20`);
+`ctrl+]x` is ⌃] then x. A ⌘ chord becomes a row of iTerm2's `fleet` profile
+(written by the client at every start); any other chord is bound on the machine
+as it is. The client hands its `FLEET_KEYS_EXTRA` to the machine at each attach
+(the remote command's environment — an older machine ignores it), and the
+machine keeps the union (`@fleet_view_keys_extra`), so a phone attaching with no
+extras takes nothing from the Mac's. ⌃] ⌃] always sends one ⌃] on.
+
+- ⌃空格 in a session's shell is readline's set-mark — if you use it, drop
+  `ctrl+space` from `FLEET_KEY_PHONE`.
+- Not iTerm2 (Ghostty, Terminal.app): a ⌘ chord never reaches the fleet — use
+  ⌃] p (or ⌃空格 / F12).
+- The old client (`fleet --old`) keeps every key below; its profile is written
+  with all of them (`fleet-iterm-profile.py write --all`).
+
+## The keys (the old client, `fleet --old`)
 
 | Action | iTerm2 on a Mac | Any other terminal | |
 |---|---|---|---|
 | next / previous session, the right pane follows at once | ⌘↓ ⌘↑ | prefix n / p | no wrap at either end |
 | back / forward through the sessions you were on | ⌘[ ⌘] | prefix h / l | a closed session is stepped over |
 | zoom the right pane | ⌘↩ | F9 | again to restore |
-| sessions and actions (also ⌘K / prefix s, issue #2365) | ⌘P | prefix / | type a few letters, ↵ — below |
+| sessions and actions (issue #2365) | ⌘P | prefix / | type a few letters, ↵ — below |
 | 派一件事: one line + a repo, ↵ files it and starts its worker, from any window (issue #2753) | ⌘T | prefix t | below |
 | a new session: no repo, on your home machine, the cursor in its input (issue #3119) | ⌘N | prefix c | `FLEET_COMPOSE=1`: the writing area on the right, below |
 | open / shut the sub-tasks of the session in view (issue #2167) | ⌘. | prefix . | on a sub-task: shuts its parent |
-| the switcher: every session, a new one, the layout (issue #2266) | ⌘K | prefix s | |
 | quit fleet: the client's processes here go, the sessions run on (issue #2349) | ⌘Q | prefix Q | below |
 
 This table is the one list of the client's keys: the client opens no key page
@@ -103,9 +141,9 @@ A terminal sends nothing for ⌘ — macOS keeps it. So the client installs an
 
     ESC [ <code> ~        code 920 next · 921 prev · 922 back · 923 fwd ·
                                925 zoom · 927 quickopen · 928 new · 929 fold ·
-                               930 switcher · 931 quit
+                               931 quit · 932 dispatch
 
-924 (⌘J) and 926 (⌘/) are retired (issue #2362) and never reused: a profile
+924 (⌘J), 926 (⌘/) and 930 (⌘K, issue #3185) are retired (issue #2362) and never reused: a profile
 written before the update still sends them, and the conf catches both and does
 nothing with them until the next start rewrites the profile without them.
 
@@ -122,7 +160,9 @@ default — and its Keyboard Map is the parent's own with the table's rows on to
 attach, the profile it came from after the detach), so outside the client
 iTerm2 behaves as it always did.
 
-- **Written** at every client start and reload (`fleet-shell.sh iterm_keys`) —
+- **Written** at every start of the client (`fleet-thin.py`: the panel + your
+  extras) and every start and reload of the old one (`fleet-shell.sh iterm_keys`,
+  `--all`) —
   so the install line and every update leave it current. Nothing is written off
   a Mac, or on a Mac with no iTerm2.
 - **Removed** with `python3 ~/.claude/fleet/bin/fleet-iterm-profile.py remove`;
@@ -244,7 +284,7 @@ of one key (a terminal's legacy bytes, CSI u, xterm's modifyOtherKeys).
 | 选中 / ⌘C | 复制到本机 | 一样 | 见上一节「复制」（#2758，`clipboard-osc52-selftest.sh`） | |
 | ⌃D | 空输入时退出 | 有意不同 | 单会话视图（`fleet claude`）里是「放到后台」，会话照跑；别的布局原样给会话 | `04` |
 | ⌃\ | （本地没有用途） | 有意不同 | 单会话视图里切到会话所在机器的 shell（#2744）；别的布局原样给会话 | `1c` |
-| ⌘K | iTerm2 清屏 | 有意不同 | fleet 里是「切换」（⌘K / prefix s） | |
+| ⌘K | iTerm2 清屏 | 一样 | #3185 起还给 iTerm2（默认只绑 ⌘P） | |
 
 ## Where the state lives
 
@@ -321,20 +361,21 @@ home on the page changes the port when the new home sits behind the same router
 (Termius: edit the port once) and Termius says the host key changed once —
 `docs/MULTI-MACHINE-OPS.md` «从外面连进来».
 
-**The keys: ⌃] then one letter.** A phone has no ⌘, so every ⌘ key of the 看台
-has a letter after ⌃] (the `fleet-view-pfx` table; `bin/dash-keymap.sh --panel
-switch view` is the one list):
+**The keys: one, to open the panel** (issue #3185). A phone has no ⌘; the 看台
+opens the panel on **⌃空格** (Ctrl, space — two taps), **F12** (one tap, once it
+is on Termius' key row) and **⌃] p** — `FLEET_KEY_PHONE`, above. ⌃] ⌃] sends a
+literal ⌃] to the session. Want a key per action? `FLEET_KEYS_PHONE_EXTRA` binds
+the letters below (`bin/dash-keymap.sh --panel switch view` spells them):
 
 | ⌃] then | Does | On the Mac |
 |---|---|---|
-| `p` | the list of every session — all machines, every login of yours | ⌘P |
+| `p` | the list of every session — all machines, every login of yours (default) | ⌘P |
 | `n` / `b` | the next / the previous session in that list (other machines' too) | ⌘↓ / ⌘↑ |
 | `h` / `l` | back / forward in where you have been | ⌘[ / ⌘] |
-| `s` | the list (its actions) | ⌘K |
 | `c` | a new session | ⌘N |
 | `t` | 派单 | ⌘T |
 | `q` | 退出 fleet | ⌘Q |
-| `⌃]` | a literal ⌃] to the session | — |
+| `⌃]` | a literal ⌃] to the session (always) | — |
 
 Narrower than 100 columns the list opens on **the whole screen**, and the top
 line drops 剩余 · 模型 · effort (the session's key, its title and its machine

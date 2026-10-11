@@ -606,7 +606,9 @@ portal_trace() {
 # nothing at all off a Mac with iTerm2 (bin/fleet-iterm-profile.py).
 iterm_keys() {
   [ "${FLEET_NODE_HOSTED:-0}" = 1 ] && return 0   # not this machine's person's terminal (#2720)
-  python3 "$SHADOW/fleet-iterm-profile.py" write >/dev/null 2>&1 || :
+  # --all: the old client keeps every ⌘ key it had (issue #3185 — only the thin
+  # client's profile is the one-key default)
+  python3 "$SHADOW/fleet-iterm-profile.py" write --all >/dev/null 2>&1 || :
 }
 # attach_client — the attach, exec'd as always; in an iTerm2 window, with the
 # profile there, the window wears it while attached and goes back to the profile
