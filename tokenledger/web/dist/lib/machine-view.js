@@ -95,8 +95,9 @@ export function detailModel(d, now = Date.now()) {
 }
 
 /** clientRedirect is where a client device's page goes instead (C3: only a
- *  host has a page): 我的设备, or the admin's 全部设备. */
-export const clientRedirect = (admin) => (admin ? '/admin/devices' : '/connect');
+ *  host has a page): 我的客户端, or the admin's 服务节点与客户端 at its
+ *  客户端 tab (claude-fleet#3232). */
+export const clientRedirect = (admin) => (admin ? '/nodes?tab=clients' : '/connect');
 
 /** nextIndex is the row j/k moves to from i over n rows (-1 = none yet). */
 export function nextIndex(i, n, key) {

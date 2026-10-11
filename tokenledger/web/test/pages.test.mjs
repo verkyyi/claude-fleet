@@ -245,7 +245,7 @@ test('no page asks the hub for someone else\'s rows', () => {
     assert.doesNotMatch(src, /\/v1\/admin\//, `${f} reads the admin area`);
     assert.doesNotMatch(src, /admin \? (q|api|ctx\.api)\(/, `${f} widens its read for an admin`);
   }
-  const want = { 'admin/sessions.js': /sessionsPage\(\{ all: true \}\)/, 'admin/overview.js': /\/v1\/admin\/overview/, 'admin/devices.js': /\/v1\/admin\/devices/ };
+  const want = { 'admin/sessions.js': /sessionsPage\(\{ all: true \}\)/, 'admin/overview.js': /\/v1\/admin\/overview/, 'admin/nodes.js': /\/v1\/admin\/devices/ };
   for (const [f, re] of Object.entries(want)) {
     assert.match(readFileSync(new URL('../dist/' + f, import.meta.url), 'utf8'), re, `${f} reads the whole hub`);
   }

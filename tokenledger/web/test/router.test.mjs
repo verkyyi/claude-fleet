@@ -5,7 +5,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { PAGES } from '../dist/lib/shell.js';
-import { routeFor, pathParam, intercept, timerBag, readCache, isRead, CACHE_TTL } from '../dist/lib/router.js';
+import { routeFor, movedTo, MOVED, pathParam, intercept, timerBag, readCache, isRead, CACHE_TTL } from '../dist/lib/router.js';
 
 // A prefix page's path is one name under its href (/machines/<host>, claude-fleet#2796).
 const pathOf = (p) => (p.prefix ? p.href + 'm4' : p.href);
@@ -34,6 +34,21 @@ test('从手机连 is the hub\'s page: in the menu, never opened in place (claud
   const c = PAGES.find((x) => x.id === 'connection');
   assert.ok(c.href === '/fleet/connection' && !c.module && !c.group);
   assert.equal(intercept(click(), anchor(ORIGIN + '/fleet/connection'), ORIGIN), null);
+});
+
+test('an old address opens where it moved, never nothing (claude-fleet#3232)', () => {
+  assert.equal(movedTo('/admin/devices'), '/nodes?tab=clients');
+  assert.equal(movedTo('/admin/devices/'), '/nodes?tab=clients', 'a trailing slash too');
+  assert.equal(movedTo('/admin/devices', '?tab=nodes&x=1', '#h'), '/nodes?tab=clients&x=1#h', 'the new tab wins, the rest is kept');
+  assert.equal(movedTo('/nodes'), '');
+  assert.equal(movedTo('/sessions'), '');
+  for (const [from, to] of Object.entries(MOVED)) {
+    assert.equal(routeFor(from), null, `${from} is no page of its own`);
+    assert.ok(routeFor(new URL(to, ORIGIN).pathname), `${to} is a page`);
+  }
+  const hit = intercept(click(), anchor(ORIGIN + '/admin/devices'), ORIGIN);
+  assert.equal(hit.page.id, 'machines');
+  assert.equal(hit.url, '/nodes?tab=clients');
 });
 
 test('one machine is a page under /machines/; the bare path stays the list (claude-fleet#2796)', () => {
