@@ -361,7 +361,8 @@ def cache_record(session, current, rows, ids):
     (issue #2739): `remote_<session>` keeps every session's line
     (fleet-hub-sessions.sh). Columns:
     1 wid · 2 node · 3 online|lost · 4 issue · 5 repo · 6 state · 8 name ·
-    10 needs · 17 title · 21-25 the measurement bus. None when it is not there."""
+    10 needs · 17 title · 21-25 the measurement bus · 29 the pool tokens today
+    (issue #3377). None when it is not there."""
     if not current.startswith("wid:"):
         return None
     try:
@@ -384,14 +385,15 @@ def cache_record(session, current, rows, ids):
         "lost": p[2] == "lost", "direct": False,
         "ask": sum(1 for r in rows if r[0] != "hdr" and r[1] in FOLD_KEEP),
         "wid": current[4:],
-        **ctx_of("|".join(p[20:25])),
+        **ctx_of("|".join(p[20:25] + p[28:29])),
     }
 
 
 def ctx_of(field):
-    """Field 19 `left|band|ts|model|effort` → the record's ctx_left (int) ·
-    ctx_band · ctx_ts (int) · model · effort, each only when valid; {} for none."""
-    part = (field.split("|") + [""] * 5)[:5]
+    """Field 19 `left|band|ts|model|effort[|tokens]` → the record's ctx_left (int) ·
+    ctx_band · ctx_ts (int) · model · effort · tokens_today (int, the session's
+    pool tokens today — issue #3377), each only when valid; {} for none."""
+    part = (field.split("|") + [""] * 6)[:6]
     out = {}
     if part[0].isdigit() and int(part[0]) <= 100:
         out["ctx_left"] = int(part[0])
@@ -403,6 +405,8 @@ def ctx_of(field):
         out["model"] = part[3]
     if re.fullmatch(r"[a-z]{1,16}", part[4]):
         out["effort"] = part[4]
+    if part[5].isdigit() and int(part[5]) > 0:
+        out["tokens_today"] = int(part[5])
     return out
 
 

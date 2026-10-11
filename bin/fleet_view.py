@@ -287,6 +287,33 @@ def say(key, *args):
         return text
 
 
+def tokens_short(n):
+    """A token count short, as the hub page's fmtCompact prints it (issue #3377):
+    zh 3.4 万 · 1.2 亿, en 34k · 1.2M · 2.1B; three significant digits, never
+    an exponent. The style is the language table's (view_tok_style)."""
+    n = int(n)
+
+    def trim0(t):
+        return t.rstrip("0").rstrip(".") if "." in t else t
+
+    def sig3(v):
+        return str(int(round(v))) if v >= 100 else "%.3g" % v   # v ≥ 1 here: never an exponent
+
+    if say("view_tok_style") == "zh":
+        if n >= 10 ** 8:
+            return sig3(n / 1e8) + " 亿"
+        if n >= 10 ** 4:
+            return sig3(n / 1e4) + " 万"
+        return str(n)
+    if n >= 10 ** 9:
+        return trim0("%.2f" % (n / 1e9)) + "B"
+    if n >= 10 ** 6:
+        return trim0("%.1f" % (n / 1e6)) + "M"
+    if n >= 10 ** 3:
+        return trim0("%.1f" % (n / 1e3)) + "k"
+    return str(n)
+
+
 def dur(secs):
     """`45 分钟` · `3 小时` · `2 天` (the 「多久前」 of a row's end)."""
     secs = max(0, int(secs))
@@ -642,7 +669,8 @@ def entries(vid, now=None, hub=True):
     text  the line's words · word (the state, written out on the lit row) · sym
           (its glyph class) · group · ask · tags (lost / direct machine, ✗ broken
           configuration, ∅ no issue, k/N, repo when 2+) · right (the issue) · foot
-          (the lit row's line) · target (what go() takes) · far (another
+          (the lit row's line; it says 「今天 N token」 when the hub recorded any —
+          issue #3377) · today (that phrase alone) · target (what go() takes) · far (another
           machine/login)"""
     now = time.time() if now is None else now
     row = view_row(vid)
@@ -705,6 +733,10 @@ def entries(vid, now=None, hub=True):
             # another machine's: the measurement bus's reading time is its last word
             ts = (f[18].split("|") + ["", "", ""])[2]
             act = int(ts) if ts.isdigit() else 0
+        # the session's pool tokens today (issue #3377): the bus's sixth part, a
+        # remote row's off the hub; none recorded ⇒ nothing said, never 0
+        tok = (f[18].split("|") + [""] * 6)[5]
+        today = say("view_today_fmt", tokens_short(tok)) if tok.isdigit() and int(tok) > 0 else ""
         landed = state in ("done", "landed") and f[10].strip() in MERGED_PR and \
             (not act or now - act <= landed_secs)
         grp = group_of(state, section == "pin", landed, section == "ended")
@@ -733,8 +765,9 @@ def entries(vid, now=None, hub=True):
              "detail": detail,
              "group": grp, "sym": sym_of(state, lost), "lost": lost, "lost_secs": lost_secs, "ask": ask, "tags": tags, "repo": repo,
              "word": state_words(state, detail if state == "needs" else ""),
+             "today": today,
              "foot": " · ".join(x for x in (title or name, reap_words(f[14]),
-                                            detail if detail and detail != state else "",
+                                            detail if detail and detail != state else "", today,
                                             " · ".join(x for x in (machine, login) if x)) if x)}
         if grp == "ended":
             why = say("view_ended_merged") if f[10].strip() == "merged" else \

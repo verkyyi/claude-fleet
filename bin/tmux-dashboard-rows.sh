@@ -89,6 +89,8 @@ R="${E}0m"; US=$'\x1f'
 # bash 3.2 keeps the backslash of a `${v:+\}}` inside double quotes (issue #2601).
 # Last (issue #2717): the measurement bus #2431 stamps — `left|band|ts|model|effort`,
 # empty with no @ctx_pct — the sidebar's field 19, read by the client's top line.
+# A remote row adds a sixth part, `|tokens`, its pool tokens today off the hub
+# cache's field 29 (issue #3377); a window here has none.
 _WTEST='#{?@test_identity,,'; _WTEND='}'
 [ "${FLEET_ROWS_TEST:-0}" = 1 ] && { _WTEST=''; _WTEND=''; }
 WFMT="#{session_name}${US}#{window_index}${US}#{?#{||:#{@remote},#{@solo_shell}},,${_WTEST}#{window_name}${_WTEND}}${US}#{pane_current_path}${US}#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{?#{==:#{@claude_state},looping},#{@claude_wait},#{@claude_needs}}${US}#{@expand}${US}#{@pin}${US}#{?@degenerate_ts,degen=#{@degenerate_ts}:,}#{?@mem_killed,mem:,}#{?@claude_mem_warn,fat=#{@claude_mem_warn}:,}#{?@ctx_warn,ctxw:,}#{?@quota_stuck,stuck:,}#{@quota_failover}${US}#{@reap_due}${US}#{@reap_seen}${US}#{@reap_state_ts}${US}#{@repo}${US}#{@norepo}${US}#{@sleep_since}#{?@sleep_wake_deferred,:#{@sleep_wake_deferred},}${US}#{@repo_fold}${US}#{@loop}${US}#{@title_info}${US}#{?@born,#{@born},#{window_created}}${US}#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}${US}#{@task_line}${US}#{@reap_policy}${US}#{@epic}${US}#{?#{==:#{@backfill},failed},failed,}${US}${US}#{?#{==:#{@claude_state},needs},#{@claude_needs_detail},}${US}#{?@ctx_pct,#{?@ctx_left,#{@ctx_left},#{e|-:100,#{@ctx_pct}}}|#{@ctx_band}|#{@ctx_ts}|#{?@model,#{@model},#{?#{==:#{@cc_agent},codex},#{@cc_model},}}|#{@effort},}${US}#{?@name_manual,#{?#{==:#{window_name},#{@name_manual}},#{@name_manual},},}"
@@ -512,7 +514,7 @@ if [ -n "${FLEET_SESSION:-}" ] && fleet_hub_on "$FLEET_SESSION" && [ -s "$G/remo
   # `local` and `wid` (fields 11/12, #1480) are named so a new cache's needs field
   # stays its own; a cache older than #1480 leaves them empty. `via` (field 13,
   # #1488: hub | node) the same — empty reads as hub.
-  while IFS=$US read -r r_wid r_node r_av r_iss r_repo r_state r_agent r_name r_orig r_needs r_local r_lwid r_via _r_busy r_born r_cfg r_ttl r_reap r_epic r_bf r_cl r_cb r_ct r_cm r_ce r_test r_akind r_atext _; do
+  while IFS=$US read -r r_wid r_node r_av r_iss r_repo r_state r_agent r_name r_orig r_needs r_local r_lwid r_via _r_busy r_born r_cfg r_ttl r_reap r_epic r_bf r_cl r_cb r_ct r_cm r_ce r_test r_akind r_atext r_tok _; do
     # field 26 (issue #2505): a test identity's session — after the five
     # measurement fields, so the sixth of the rest; hidden but for `fleet ls`
     [ "$r_test" = 1 ] && { [ "${FLEET_ROWS_TEST:-0}" = 1 ] || continue; }
@@ -545,6 +547,10 @@ if [ -n "${FLEET_SESSION:-}" ] && fleet_hub_on "$FLEET_SESSION" && [ -s "$G/remo
     fi
     # fields 21-25 (issue #2431) → one `left|band|ts|model|effort` (issue #2717)
     r_ctx="$r_cl|$r_cb|$r_ct|$r_cm|$r_ce"; [ "$r_ctx" = '||||' ] && r_ctx=''
+    # field 29 (issue #3377): the session's pool tokens today rides the same
+    # field as a sixth part — only when the hub recorded any, so a row without
+    # is byte for byte as before
+    case "$r_tok" in ''|*[!0-9]*) ;; *) r_ctx="${r_ctx:-||||}|$r_tok" ;; esac
     _rrows+=("$r_wid$US$r_node$US$r_iss$US$r_repo$US$r_state$US$r_agent$US$r_name$US$r_orig$US$r_needs$US$r_born$US$r_cfg$US$r_ttl$US$r_reap$US$r_epic$US$r_bf$US$r_akind$US$r_atext$US$r_ctx")
   done < "$G/remote_$FLEET_SESSION"
   for _rr in ${_rrows[@]+"${_rrows[@]}"}; do

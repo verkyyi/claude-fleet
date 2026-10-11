@@ -359,6 +359,10 @@ type FleetSession struct {
 	// lost machine's rows can say how old they are (claude-fleet#1429).
 	ObservedAt time.Time `json:"observed_at"`
 	AgeSec     float64   `json:"age_sec"`
+	// TokensToday is the session's pool tokens since this UTC midnight
+	// (pool_usage by worker_id, claude-fleet#3377) — what the session page,
+	// the ⌘P list and the top line show. Absent = none recorded, never 0.
+	TokensToday int64 `json:"tokens_today,omitempty"`
 }
 
 // FleetNode is one machine in a fleet_sessions answer (claude-fleet#1475):
@@ -475,9 +479,15 @@ func (s *Server) FleetSessions(req *http.Request) (map[string]any, error) {
 	// wins the timestamp, any online fleet makes the machine online, and the
 	// session count is this answer's rows on it.
 	nodes := map[string]*FleetNode{}
-	// The validator's inputs (claude-fleet#1481).
+	// The validator's inputs (claude-fleet#1481); the tokens moved too
+	// (claude-fleet#3377), so a session's count is never held behind a 304.
 	var latest time.Time
 	lost := 0
+	var tokens int64
+	used, err := s.Store.PoolUsageByWorker(now.UTC().Truncate(24 * time.Hour))
+	if err != nil {
+		used = nil // the list stands without its counts
+	}
 	for i, r := range rows {
 		n := nodes[r.Hostname]
 		if n == nil {
@@ -520,9 +530,14 @@ func (s *Server) FleetSessions(req *http.Request) (map[string]any, error) {
 			if v, ok := w["worker_id"].(string); ok && v != "" {
 				id = &v
 			}
-			out = append(out, FleetSession{WorkerID: id, MachineName: r.Hostname, OSUser: r.OSUser,
+			fs := FleetSession{WorkerID: id, MachineName: r.Hostname, OSUser: r.OSUser,
 				FleetID: r.FleetID, FleetName: r.Name, Availability: views[i].Availability, Worker: w,
-				ObservedAt: r.ObservedAt, AgeSec: now.Sub(r.ObservedAt).Seconds()})
+				ObservedAt: r.ObservedAt, AgeSec: now.Sub(r.ObservedAt).Seconds()}
+			if id != nil {
+				fs.TokensToday = used[*id]
+				tokens += fs.TokensToday
+			}
+			out = append(out, fs)
 			if n.Sessions != nil {
 				*n.Sessions++
 			}
@@ -539,15 +554,19 @@ func (s *Server) FleetSessions(req *http.Request) (map[string]any, error) {
 	}
 	sort.Slice(nodeList, func(a, b int) bool { return nodeList[a].MachineName < nodeList[b].MachineName })
 	return map[string]any{"machines": hosts, "count": len(out), "sessions": out, "nodes": nodeList,
-		"etag": fleetSessionsETag(latest, len(out), lost)}, nil
+		"etag": fleetSessionsETag(latest, len(out), lost, tokens)}, nil
 }
 
 // fleetSessionsETag is the validator of one fleet_sessions answer
-// (claude-fleet#1481): the newest heartbeat behind it, the row count and how
-// many rows are on a lost machine. Any heartbeat moves it, so a poller that
+// (claude-fleet#1481): the newest heartbeat behind it, the row count, how
+// many rows are on a lost machine and, when any, the rows' pool tokens today
+// (claude-fleet#3377 — none ⇒ the tag as before). Any heartbeat moves it, so a poller that
 // sends it back as If-None-Match gets 304 exactly while no node has reported
 // since — the sidebar can ask every 2 s without pulling the list each time.
-func fleetSessionsETag(latest time.Time, rows, lost int) string {
+func fleetSessionsETag(latest time.Time, rows, lost int, tokens int64) string {
+	if tokens > 0 {
+		return fmt.Sprintf("\"%d-%d-%d-%d\"", latest.UnixMilli(), rows, lost, tokens)
+	}
 	return fmt.Sprintf("\"%d-%d-%d\"", latest.UnixMilli(), rows, lost)
 }
 

@@ -5,7 +5,8 @@
 // drawer — the admin half only adds the two columns.
 //
 // Rows are fleet_sessions (/v1/fleet/fleet_sessions, or /v1/admin/sessions);
-// context %, model and the subscription are joined from /v1/live by worktree.
+// context %, model and the subscription are joined from /v1/live by worktree;
+// 「今天 N token」 is the row's own tokens_today (claude-fleet#3377).
 // It moves by itself (claude-fleet#2794): the push channel's `sessions` and
 // `usage` answers redraw the rows the moment they come (the admin half, whose
 // list is /v1/admin/sessions, re-reads on a `sessions` answer, at most every
@@ -14,9 +15,13 @@
 import { esc, ic, ctxBar, relTime, freshTag } from './shell.js';
 import { observedOf } from './stream.js';
 import { sessionRows, counts, filterRows, stateOf, FILTERS, hhmm, askLine } from './pages.js';
-import { t, punct } from './i18n.js';
+import { t, punct, fmtCompact } from './i18n.js';
 
 const S = { filter: 'all', query: '', rows: [], open: '', all: false, at: null };
+
+// 「今天 N token」 (claude-fleet#3377): the session's pool tokens today, off its
+// fleet_sessions row; none recorded ⇒ nothing, never 0
+const today = (r) => (r.tokens ? t('ui.ses.today', { n: fmtCompact(r.tokens) }) : '');
 
 const dot = (st) => `<span class="dot ${stateOf(st).dot}"></span>`;
 
@@ -26,7 +31,7 @@ function table(ctx) {
   const cols = a ? 8 : 6;
   if (!S.rows.length) return `<tr><td colspan="${cols}"><div class="empty">${ic('list')}<b>${esc(t('ui.ses.none'))}</b><span>${esc(t(a ? 'ui.ses.noneAdmin' : 'ui.ses.noneUser'))}</span></div></td></tr>`;
   if (!rows.length) return `<tr><td colspan="${cols}"><div class="empty">${ic('search')}<b>${esc(t('ui.ses.noMatch'))}</b><span>${esc(t('ui.ses.noMatchSub'))}</span></div></td></tr>`;
-  return rows.map((r) => `<tr class="click" data-id="${esc(r.id)}" tabindex="0"><td><div class="status">${dot(r.state)}<span><span class="sname">${esc(r.key)}</span><br><span class="repo">${esc(r.title || '—')}</span></span></div></td>` +
+  return rows.map((r) => `<tr class="click" data-id="${esc(r.id)}" tabindex="0"><td><div class="status">${dot(r.state)}<span><span class="sname">${esc(r.key)}</span><br><span class="repo">${esc(r.title || '—')}</span>${today(r) ? `<br><span class="repo">${esc(today(r))}</span>` : ''}</span></div></td>` +
     `<td class="repo mono">${esc(r.repo || '—')}</td><td>${esc(stateOf(r.state).label)}${r.ask && r.ask.msg ? `<br><span class="repo" title="${esc(r.ask.msg)}">${esc(askLine(r.ask, 60))}</span>` : ''}</td><td class="mono">${esc(r.machine)}${r.availability !== 'online' ? ` <span class="chip ${r.availability === 'lost' ? 'bad' : 'warn'}">${esc(t('ui.avail.' + (r.availability === 'lost' ? 'lost' : 'maintenance')))}</span>` : ''}</td>` +
     (a ? `<td>${esc(r.person || '—')}</td><td>${esc(r.account || '—')}</td>` : '') +
     `<td>${ctxBar(r.ctx)}</td><td class="mono r">${esc(hhmm(r.born))}</td></tr>`).join('');
@@ -68,7 +73,7 @@ function detail(ctx) {
       `<p style="font-size:12.5px;color:var(--muted);margin:8px 0 6px">${esc(t('ui.ses.answer'))}</p><div class="cmdbox"><span>${esc(answer)}</span><button class="btn sm" data-shell="copy" data-text="${esc(answer)}" aria-label="${esc(t('ui.copy'))}">${ic('copy')}</button></div></div>` : '') +
     `<dl class="kv"><dt>${esc(t('ui.col.machine'))}</dt><dd class="mono">${esc(r.machine)}</dd><dt>${esc(t('ui.ses.agent'))}</dt><dd>${esc(r.agent || '—')}${r.model ? ` · <span class="mono">${esc(r.model)}</span>` : ''}</dd>` +
     (S.all ? `<dt>${esc(t('ui.col.person'))}</dt><dd>${esc(r.person || '—')}</dd><dt>${esc(t('ui.col.subscription'))}</dt><dd>${esc(r.account || '—')}</dd>` : '') +
-    `<dt>${esc(t('ui.col.context'))}</dt><dd>${ctxBar(r.ctx)}</dd><dt>${esc(t('ui.col.started'))}</dt><dd class="mono">${esc(hhmm(r.born))}</dd>${r.worktree ? `<dt>${esc(t('ui.ses.worktree'))}</dt><dd class="mono">${esc(r.worktree)}</dd>` : ''}</dl>` +
+    `<dt>${esc(t('ui.col.context'))}</dt><dd>${ctxBar(r.ctx)}</dd>${r.tokens ? `<dt>${esc(t('ui.ses.todayLabel'))}</dt><dd>${esc(t('ui.ses.tokens', { n: fmtCompact(r.tokens) }))}</dd>` : ''}<dt>${esc(t('ui.col.started'))}</dt><dd class="mono">${esc(hhmm(r.born))}</dd>${r.worktree ? `<dt>${esc(t('ui.ses.worktree'))}</dt><dd class="mono">${esc(r.worktree)}</dd>` : ''}</dl>` +
     `<div><h4 style="font:600 13px var(--f-ui);margin-bottom:10px">${esc(t('ui.ses.attach'))}</h4><div class="cmdbox"><span>${esc(cmd)}</span><button class="btn sm" data-shell="copy" data-text="${esc(cmd)}" aria-label="${esc(t('ui.copy'))}">${ic('copy')}</button></div><p style="font-size:12.5px;color:var(--muted);margin-top:8px">${t('ui.ses.attachHint', { m: esc(r.machine), key: `<span class="mono">${esc(r.key)}</span>` })}</p></div>` +
     `<div><h4 style="font:600 13px var(--f-ui);margin-bottom:10px">${esc(t('ui.ses.timeline'))}</h4><div class="timeline">${tl.map(([t, w]) => `<div>${esc(t)}<span>${esc(w)}</span></div>`).join('')}</div></div></div>`);
 }

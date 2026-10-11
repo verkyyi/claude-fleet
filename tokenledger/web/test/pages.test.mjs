@@ -114,6 +114,15 @@ test('a worker that waits on you says what it asks, in its own words (claude-fle
   try { useLocale('zh-CN'); assert.equal(askLine(by('issue-2').ask), '问题：放在 m5 还是 m4？'); } finally { useLocale('en'); }
 });
 
+test('a row carries its session\'s pool tokens today, none recorded is 0 (claude-fleet#3377)', () => {
+  const rows = sessionRows({ sessions: [
+    { machine_name: 'm5', tokens_today: 1234567, worker: { worker_id: 'a', key: 'issue-1', born: 2 } },
+    { machine_name: 'm5', worker: { worker_id: 'b', key: 'issue-2', born: 1 } },
+  ] }, null);
+  assert.equal(rows.find((r) => r.key === 'issue-1').tokens, 1234567);
+  assert.equal(rows.find((r) => r.key === 'issue-2').tokens, 0);
+});
+
 test('an empty or failed list is no rows, not a crash', () => {
   assert.deepEqual(sessionRows(null, null), []);
   assert.deepEqual(sessionRows({ sessions: [] }, undefined), []);

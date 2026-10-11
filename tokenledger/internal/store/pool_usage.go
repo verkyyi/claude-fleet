@@ -169,3 +169,25 @@ func (s *Store) LeaseForWorker(workerID string, at time.Time) (repo string, issu
 	}
 	return best.Repo, best.Issue, ok, nil
 }
+
+// PoolUsageByWorker sums every row since `since` by its session (worker_id),
+// anyone's — what each session has used (claude-fleet#3377). Rows on no
+// session are left out; a caller cuts the answer to the sessions it may show.
+func (s *Store) PoolUsageByWorker(since time.Time) (map[string]int64, error) {
+	rows, err := s.write.Query(`SELECT worker_id, SUM(tokens_in + cache_write + tokens_out) FROM pool_usage
+		WHERE at_unix >= ? AND worker_id != '' GROUP BY worker_id`, since.Unix())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int64{}
+	for rows.Next() {
+		var wid string
+		var n int64
+		if err := rows.Scan(&wid, &n); err != nil {
+			return nil, err
+		}
+		out[wid] = n
+	}
+	return out, rows.Err()
+}
