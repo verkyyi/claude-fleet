@@ -355,6 +355,29 @@ func (s *Store) RecentCreates(hostname string, n int) ([]FleetAccount, error) {
 	return scanFleetAccounts(rows)
 }
 
+// HostOpenRecord is what the hub knows of opening logins on hostname
+// (claude-fleet#3294): opened — a login it opened there ever went up (one is
+// active, or one was closed after it came up); lastFailed — the newest create
+// it sent there ended failed or unknown. A machine that never opened one, or
+// whose last try rolled back, is not where a newcomer's first minute goes
+// while another machine has proven it can.
+func (s *Store) HostOpenRecord(hostname string) (opened, lastFailed bool, err error) {
+	var n int
+	if err := s.read.QueryRow(`SELECT COUNT(*) FROM fleet_accounts WHERE hostname = ?
+		AND (state = ? OR (op = 'remove' AND state = ?))`, hostname, AccountActive, AccountRemoved).Scan(&n); err != nil {
+		return false, false, err
+	}
+	var state string
+	switch err := s.read.QueryRow(`SELECT state FROM fleet_accounts WHERE hostname = ? AND op = 'create'
+		AND state IN (?, ?, ?) ORDER BY updated_at DESC LIMIT 1`,
+		hostname, AccountActive, AccountFailed, AccountUnknown).Scan(&state); {
+	case errors.Is(err, sql.ErrNoRows):
+	case err != nil:
+		return false, false, err
+	}
+	return n > 0, state == AccountFailed || state == AccountUnknown, nil
+}
+
 // RequestAccount queues the creation of p's login on hostname. A row that
 // already exists is left alone unless retry is set and it ended badly
 // (failed / unknown / removed) — so a second assignment never re-runs a

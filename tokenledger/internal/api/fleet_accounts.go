@@ -253,10 +253,17 @@ func (s *Server) preferredLogin(principal, displayName string) string {
 // (claude-fleet#2069): among the machines the roster hears right now —
 // online (not 维护中, not lost), not only-coordinating, not a person's own
 // computer, not a SPOT node, with a connected admin node to open the login
-// and a session count it can read — the one with the fewest sessions; a
-// machine whose fleets already host a repo first (a newcomer's first session
-// opens in one), then the lower load per core, then the name. "" when none
-// is fit. A machine skip names is never picked (a drill's own computer).
+// and a session count it can read, and — a machine's own node program
+// opening it (a Linux machine) — one the relay trusts, since its create ends
+// by fetching the login's relay credential (claude-fleet#3294) — the one that
+// can finish the opening first: a ready spare, then an opener whose link has
+// stayed up openerSettle, then a machine that has opened a login before, then
+// one whose last create did not fail. Then a machine whose fleets already host
+// a repo (a newcomer's first session opens in one), then placement's own
+// score (loadScore: the tighter of CPU and memory room, so a loaded 4-core
+// machine never wins over an idle Mac), then the fewest sessions, then the
+// name. "" when none is fit. A machine skip names is never picked (a drill's
+// own computer).
 func (s *Server) leastBusyMachine(now time.Time, skip ...string) string {
 	snap, err := s.Nodes(now)
 	if err != nil {
@@ -264,43 +271,79 @@ func (s *Server) leastBusyMachine(now time.Time, skip ...string) string {
 		return ""
 	}
 	admin := adminNodesOnline(snap)
-	var fit []MachineView
+	settings, err := s.trustSettings(now)
+	if err != nil {
+		log.Printf("fleet: least-busy: trust: %v", err)
+		settings = map[string]string{}
+	}
+	type cand struct {
+		m                                  MachineView
+		settled, opened, lastFailed, spare bool
+		score                              float64
+	}
+	spare := s.spareReadyHosts()
+	var fit []cand
 	for _, m := range snap.Machines {
 		if m.Status != "online" || m.ComputeOff || m.Personal || m.Kind == store.NodeKindEphemeral ||
 			m.Sessions == nil || !admin[strings.ToLower(m.Hostname)] || hasFold(skip, m.Hostname) {
 			continue
 		}
-		fit = append(fit, m)
+		c := cand{m: m, spare: spare[strings.ToLower(m.Hostname)] > 0, settled: true}
+		if since, machine, ok := s.nodes.openerInfo(m.Hostname); ok {
+			if machine && !s.machineTrusted(strings.ToLower(firstLabel(m.Hostname)), settings) {
+				log.Printf("fleet: least-busy: %s skipped: its node program opens logins, and the relay does not trust it", m.Hostname)
+				continue
+			}
+			c.settled = now.Sub(since) >= openerSettle
+		}
+		if c.opened, c.lastFailed, err = s.Store.HostOpenRecord(m.Hostname); err != nil {
+			log.Printf("fleet: least-busy: %s: %v", m.Hostname, err)
+		}
+		var perCore *float64
+		if m.NCPU > 0 {
+			v := m.Load1 / float64(m.NCPU)
+			perCore = &v
+		}
+		c.score = loadScore(perCore, m.MemFree, m.MemTotal)
+		fit = append(fit, c)
 	}
 	if len(fit) == 0 {
 		return ""
 	}
-	perCore := func(m MachineView) float64 {
-		if m.NCPU <= 0 {
-			return m.Load1
-		}
-		return m.Load1 / float64(m.NCPU)
-	}
-	spare := s.spareReadyHosts()
 	sort.SliceStable(fit, func(a, b int) bool {
 		fa, fb := fit[a], fit[b]
 		// A ready spare first (claude-fleet#2263): the newcomer is in at once.
-		if sa, sb := spare[strings.ToLower(fa.Hostname)] > 0, spare[strings.ToLower(fb.Hostname)] > 0; sa != sb {
-			return sa
+		if fa.spare != fb.spare {
+			return fa.spare
 		}
-		if ra, rb := len(fa.Repos) > 0, len(fb.Repos) > 0; ra != rb {
+		if fa.settled != fb.settled {
+			return fa.settled
+		}
+		if fa.opened != fb.opened {
+			return fa.opened
+		}
+		if fa.lastFailed != fb.lastFailed {
+			return fb.lastFailed
+		}
+		if ra, rb := len(fa.m.Repos) > 0, len(fb.m.Repos) > 0; ra != rb {
 			return ra
 		}
-		if *fa.Sessions != *fb.Sessions {
-			return *fa.Sessions < *fb.Sessions
+		if fa.score != fb.score {
+			return fa.score > fb.score
 		}
-		if la, lb := perCore(fa), perCore(fb); la != lb {
-			return la < lb
+		if *fa.m.Sessions != *fb.m.Sessions {
+			return *fa.m.Sessions < *fb.m.Sessions
 		}
-		return fa.Hostname < fb.Hostname
+		return fa.m.Hostname < fb.m.Hostname
 	})
-	return fit[0].Hostname
+	return fit[0].m.Hostname
 }
+
+// openerSettle is how long a machine's login opener must have stayed
+// connected before a create prefers it (claude-fleet#3294): a node program
+// that restarted a minute ago — four times in 13 minutes in C9's 23rd drill —
+// is not where a newcomer's first minute should go while a steady one can.
+const openerSettle = 10 * time.Minute
 
 // adminNodesOnline is every machine (lower-cased) with an admin node the
 // roster hears right now that can open a login there — one that hands the

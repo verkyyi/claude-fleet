@@ -282,6 +282,24 @@ func (n *nodeConns) pickAdmin(hostname string, join bool) (string, bool) {
 	return "", false
 }
 
+// openerInfo is hostname's account-op node (openerFor's pick): since when its
+// link has been up, and whether it is a machine's own node program rather than
+// an admin login (claude-fleet#3294) — a create chooses among machines whose
+// opener has stayed up, and a Linux machine's opener needs the relay.
+func (n *nodeConns) openerInfo(hostname string) (since time.Time, machine, ok bool) {
+	id, ok := n.openerFor(hostname)
+	if !ok {
+		return time.Time{}, false, false
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	c := n.conns[id]
+	if c == nil {
+		return time.Time{}, false, false
+	}
+	return c.helloAt, c.machineOpener, true
+}
+
 // adminLink says endpointID is a connected, write-compatible admin on hostname.
 func (n *nodeConns) adminLink(endpointID, hostname string) bool {
 	n.mu.Lock()
