@@ -23,6 +23,7 @@ import (
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/api"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/credvault"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/dns"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/leader"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/mcp"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/pricing"
@@ -818,6 +819,13 @@ func runHub(args []string) error {
 		// Debug reports (claude-fleet#2893): no page in 15 minutes ⇒ unfinished,
 		// seven days ⇒ deleted. Off (srv.Debug nil): returns at once.
 		go srv.RunDebug(ctx)
+		// Address records (claude-fleet#3073): no CCQUOTA_DNS_* ⇒ off,
+		// no call at all.
+		if c, ok := dns.FromEnv(); ok {
+			srv.EntryDNS = api.NewEntryDNS(dns.NewDNSPod(c), c.Subdomain)
+			log.Printf("fleet: address records under %s.%s are the hub's (DNSPod)", c.Subdomain, c.Domain)
+		}
+		go srv.RunEntryDNS(ctx)
 	}
 	// Pin each CCQUOTA_GITHUB_ADMINS name to its GitHub ID (claude-fleet#1984).
 	// In the background: GitHub being slow must not hold the hub's start.
