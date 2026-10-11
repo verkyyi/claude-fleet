@@ -1069,14 +1069,16 @@ def key_lines(me):
         if verb == "popup":
             # through the one popup door (dash-popup.sh, issue #3044), from a
             # run-shell, which expands the formats — the old client's road too.
-            # Narrower than NARROW columns (a phone, C9): the whole screen
-            cmd = ("run-shell -b \"bash '%s' --client '#{client_name}' --no-inline -w %s -h %s --title view_title "
+            # Narrower than NARROW columns (a phone, C9): the whole screen.
+            # --freeze: the session behind holds still while the list is up — tmux
+            # 3.7c bleeds a pane's wrapped CJK through any popup (issue #3058)
+            cmd = ("run-shell -b \"bash '%s' --client '#{client_name}' --no-inline --freeze -w %s -h %s --title view_title "
                    "-- python3 '%s' --view '#{session_name}' --client '#{client_name}' "  # view-ok: the key's own session IS the 看台
                    ">/dev/null 2>&1 || :\"") % (popup, size(90), size(80), me)
         elif verb == "dispatch":
             # ⌘T (C7): the old client's 派一件事 popup, run HERE with --view — the
             # repos the hub names, the agent picked per this one send (#1834)
-            cmd = ("run-shell -b \"bash '%s' --client '#{client_name}' --no-inline -w %s -h 12 --title view_dispatch_title "
+            cmd = ("run-shell -b \"bash '%s' --client '#{client_name}' --no-inline --freeze -w %s -h 12 --title view_dispatch_title "
                    "-- python3 '%s' --view '#{session_name}' --client '#{client_name}' "  # view-ok: the 看台
                    ">/dev/null 2>&1 || :\"") % (popup, size(80), str(Path(me).parent / "fleet-quick-dispatch.py"))
         else:

@@ -19,6 +19,21 @@
 #       a WHOLE-SCREEN state, not a dialog: no frame, no title, 100% × 100% on
 #       <client> of the server `-L <socket-label>` (none = the current one).
 #       Blocks until it closes. The shell's standby screen (fleet-shell.sh, #1715).
+#   fleet_popup_freeze <client>   → $FPOP_FROZEN: every pane of <client>'s window
+#       that is in no mode is put in copy-mode (its indicator hidden) for the
+#       popup's life; fleet_popup_thaw takes them out again (issue #3058). tmux
+#       3.7c draws a WIDE character a pane writes under a popup through the wrong
+#       cells (tty_cmd_cell's partly-covered path reads s->cx/s->cy, the cursor
+#       AFTER the write), so a session streaming wrapped CJK behind the popup
+#       paints whole glyphs and blanks over its frame and rows — at any size,
+#       100% × 100% too. A pane in copy-mode writes nothing to the terminal (its
+#       output goes on into the grid) and leaving the mode redraws it through the
+#       clipped path. Only for a popup that types into no pane — keys sent to a
+#       pane in copy-mode are copy-mode's (dash-popup.sh --freeze is opt-in).
+#       tmux master (next-3.9) has the bug fixed; drop this with the pin past it.
+#   fleet_popup_thaw              the panes fleet_popup_freeze froze, still in
+#       copy-mode, back out (`send-keys -X cancel`); a pane already in a mode
+#       before the popup is never touched.
 #   fleet_popup_title <text>      → $FPOP_TITLE, the -T format: centred, # → ##
 #   fleet_popup_geom <width> <w> <h> → $FPOP_W $FPOP_H. A client 80 columns or
 #       narrower (the iPad's 54) gets 96% × 90% whatever was asked, so the border
@@ -60,6 +75,32 @@ fleet_popup() {
 
 fleet_popup_screen() {
   tmux ${1:+-L "$1"} display-popup -c "$2" -E -w 100% -h 100% "$3"
+}
+
+fleet_popup_freeze() {
+  FPOP_FROZEN=''
+  local p m wid
+  # the client's own window — its panes are the ones under its popup; no window
+  # read ⇒ nothing frozen (an empty -t would be "the current window", a guess)
+  wid=$(tmux display-message -p -c "$1" '#{window_id}' 2>/dev/null)
+  case "$wid" in @[0-9]*) ;; *) return 0 ;; esac
+  while read -r p m; do
+    [ "$m" = 0 ] || continue
+    tmux copy-mode -H -t "$p" 2>/dev/null && FPOP_FROZEN="$FPOP_FROZEN $p"
+  done <<EOF_FZ
+$(tmux list-panes -t "$wid" -F '#{pane_id} #{pane_in_mode}' 2>/dev/null)
+EOF_FZ
+  return 0
+}
+
+fleet_popup_thaw() {
+  local p
+  for p in ${FPOP_FROZEN:-}; do
+    [ "$(tmux display-message -p -t "$p" '#{pane_mode}' 2>/dev/null)" = copy-mode ] \
+      && tmux send-keys -X -t "$p" cancel 2>/dev/null
+  done
+  FPOP_FROZEN=''
+  return 0
 }
 
 fleet_popup_title() {
