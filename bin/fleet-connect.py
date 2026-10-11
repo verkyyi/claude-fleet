@@ -39,7 +39,9 @@ entry < tailnet < another direct line < relay — EPIC #3067 共同约定 8), lo
 median latency next. A `lan` route is measured only when one of this
 computer's interfaces is on its network, the tailnet only when this computer
 has a Tailscale address (100.64/10); FLEET_CONNECT_PREFER_TAILNET=1 is #2987's
-order for one version (compat-1v), =0 latency alone. The interactive login on the far side opens the fleet client
+order for one version (compat-1v), =0 latency alone. The `entry` route is the home's entry port at your
+address (claude-fleet#3075): ssh offers this computer's own key there — the hub put it on your door's keys
+at `fleet login` — never the certificate. The interactive login on the far side opens the fleet client
 there (shell/fleet-login.zsh, claude-fleet#1711).
 
 The choice is remembered for FLEET_CONNECT_CACHE_SECS (600), filed by the
@@ -775,13 +777,20 @@ def is_lan(r):
     return (r or {}).get("kind", "direct") == "direct" and (n == "lan" or re.match(r"^lan-[0-9]+$", n) is not None)
 
 
+def is_entry(r):
+    """The home's entry port at the person's address (`entry`, `entry-2`, … —
+    claude-fleet#3075): its node's `entry=`, else where the hub reached it."""
+    n = (r or {}).get("name") or ""
+    return (r or {}).get("kind", "direct") == "direct" and (n == "entry" or re.match(r"^entry-[0-9]+$", n) is not None)
+
+
 def route_class(r):
     """0 lan · 1 entry · 2 tailnet · 3 another direct line · 4 relay."""
     if (r or {}).get("kind") == "relay":
         return 4
     if is_lan(r):
         return 0
-    if (r or {}).get("name") == "entry":
+    if is_entry(r):
         return 1
     return 2 if is_tailnet(r) else 3
 
@@ -1077,6 +1086,8 @@ def route_label(kind, name):
         return "局域网" + ("" if name == "lan" else " " + name)
     if "tail" in (name or ""):
         return "Tailscale"
+    if is_entry({"name": name}):
+        return "入口直连" + ("" if name == "entry" else " " + name)
     if name and (re.search(r"[.:]", name) or name[:1].isdigit()):
         return name  # an address the person pinned
     return "直连" + ((" " + name) if name and name not in ("public", "direct") else "")
@@ -1084,7 +1095,7 @@ def route_label(kind, name):
 
 def pin_label(pin):
     return {"relay": "中转", "tailscale": "Tailscale", "tailnet": "Tailscale", "direct": "直连",
-            "lan": "局域网"}.get(pin, pin)
+            "lan": "局域网", "entry": "入口直连"}.get(pin, pin)
 
 
 def addr(r, hub):
@@ -1184,7 +1195,13 @@ def ssh_command(machine, route, login, hub, ssh_opts=(), known_hosts=False):
         mine = os.environ.get("FLEET_KNOWN_HOSTS") or "~/.ssh/fleet-known-hosts"
         cmd += ["-o", "UserKnownHostsFile=%s ~/.ssh/known_hosts" % mine]
     key, cert = cert_paths()
-    if os.path.exists(key) and os.path.exists(cert):
+    if is_entry(route):
+        # The home's entry port (claude-fleet#3075, EPIC #3067 C9) takes the keys
+        # the hub registered, never a certificate: this computer's device key
+        # alone, and no agent key spending one of its three tries.
+        if os.path.exists(key):
+            cmd += ["-i", key, "-o", "IdentitiesOnly=yes"]
+    elif os.path.exists(key) and os.path.exists(cert):
         cmd += ["-i", key, "-o", "CertificateFile=" + cert]
     if login:
         cmd += ["-l", login]

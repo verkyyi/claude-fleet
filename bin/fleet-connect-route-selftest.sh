@@ -183,6 +183,65 @@ EOF2
 [ "$(sed -n 7p <<<"$out")" = "None None 局域网 局域网 lan-2" ] && ok "loopback / a name never skipped; lan reads 局域网" \
   || bad "skip edges: got $(sed -n 7p <<<"$out")"
 
+# ── 1c — out without Tailscale: the entry route (issue #3075) ──────────────
+# EPIC #3067 C9 + amendment 3: the home's entry port at the person's address
+# (`entry=<host>:<port>`, a node route) is taken before the relay — and before
+# the old `public` (the system sshd), which stays as the fallback after it; ssh
+# offers the device key alone there (the hub registered it), never the
+# certificate; `fleet route <m> entry` pins it.
+out=$(FLEET_CERT="$WORK/c1c/fleet-cert" python3 - "$BIN/fleet-connect.py" "$WORK/c1c" <<'EOF3'
+import importlib.util, os, sys
+spec = importlib.util.spec_from_file_location("fc", sys.argv[1]); fc = importlib.util.module_from_spec(spec); spec.loader.exec_module(fc)
+os.makedirs(sys.argv[2], exist_ok=True)
+for f in ("fleet-cert", "fleet-cert-cert.pub"):
+    open(os.path.join(sys.argv[2], f), "w").close()
+os.environ["FLEET_CONNECT_LOCAL_ADDRS"] = "172.20.10.3/28"; os.environ["FLEET_CONNECT_NET_KEY"] = "hotspot"; fc._HERE.clear()
+m = {"hostname": "macmini", "alias": "macmini", "relay": True, "routes": [
+    {"name": "tailnet", "host": "macmini.tail435588.ts.net"},
+    {"name": "lan", "host": "192.168.1.79", "prefix": 24},
+    {"name": "public", "host": "ssh.minihaowan.com", "port": 22022},
+    {"name": "entry", "host": "ssh.minihaowan.com", "port": 22122}]}
+def ranked(ms):
+    rows = fc.route_rows(m, "https://hub")
+    for r in rows:
+        r["ms"] = list(ms.get(r["name"], []))
+    live = [r for r in rows if not r.get("skip")]
+    return ",".join(r["name"] for r in fc.rank_routes(live)), ",".join(sorted(r["name"] for r in rows if r.get("skip")))
+# 1 tailnet off, lan another network: entry, not the relay — and not public, though public is quicker
+print(*ranked({"entry": [40, 41, 42], "public": [30, 31, 30], "relay": [90, 91, 92]}))
+# 2 the entry dark: the old public is the fallback, then the relay
+print(ranked({"public": [30, 31, 30], "relay": [90, 91, 92]})[0])
+rows = fc.route_rows(m, "https://hub")
+e = fc.pinned_row(rows, "entry")
+pub = fc.pinned_row(rows, "public")
+ce = fc.ssh_command(m, e, "verky", "https://hub")
+cp = fc.ssh_command(m, pub, "verky", "https://hub")
+# 3 the entry route: the device key alone, identities only, the entry's port, the home login
+print(" ".join(ce[ce.index("-i"):]).replace(sys.argv[2], "K"))
+print(any(x.startswith("CertificateFile=") for x in ce), any(x.startswith("CertificateFile=") for x in cp))
+# 4 the pin and the words
+print(e["name"], e["port"], fc.PIN_RE.match("entry") is not None, fc.route_label("direct", "entry"), fc.pin_label("entry"))
+# 5 an address the hub reached (C6's reachable): entry-2, an IPv6 literal — the same class, the same key
+m2 = {"hostname": "m5", "alias": "m5", "routes": [{"name": "public", "host": "203.0.113.5", "port": 22022},
+      {"name": "entry-2", "host": "2001:db8::5", "port": 22122}]}
+r2 = fc.pinned_row(fc.route_rows(m2, ""), "entry-2")
+c2 = fc.ssh_command(m2, r2, "verky", "")
+print(fc.route_class(r2), "IdentitiesOnly=yes" in c2, any(x.startswith("CertificateFile=") for x in c2), c2[-1], fc.route_label("direct", "entry-2"))
+EOF3
+)
+[ "$(sed -n 1p <<<"$out")" = "entry,public,relay lan,tailnet" ] && ok "route-entry (#3075): no Tailscale, another network ⇒ entry, before the old public (quicker) and the relay" \
+  || bad "entry rank: got $(sed -n 1p <<<"$out")"
+[ "$(sed -n 2p <<<"$out")" = "public,relay,entry" ] && ok "the entry dark ⇒ public (the system sshd) is the fallback, then the relay; a dark route last" \
+  || bad "entry fallback: got $(sed -n 2p <<<"$out")"
+[ "$(sed -n 3p <<<"$out")" = "-i K/fleet-cert -o IdentitiesOnly=yes -l verky -p 22122 ssh.minihaowan.com" ] && ok "entry ssh: the device key alone (IdentitiesOnly), port 22122, the home login" \
+  || bad "entry argv: got $(sed -n 3p <<<"$out")"
+[ "$(sed -n 4p <<<"$out")" = "False True" ] && ok "entry offers no certificate; public still does" \
+  || bad "entry cert: got $(sed -n 4p <<<"$out")"
+[ "$(sed -n 5p <<<"$out")" = "entry 22122 True 入口直连 入口直连" ] && ok "fleet route <m> entry pins it; it reads 入口直连" \
+  || bad "entry pin: got $(sed -n 5p <<<"$out")"
+[ "$(sed -n 6p <<<"$out")" = "1 True False 2001:db8::5 入口直连 entry-2" ] && ok "entry-2 (an address the hub reached, IPv6): the entry class, the device key, no certificate" \
+  || bad "entry-2: got $(sed -n 6p <<<"$out")"
+
 # ── the fake hub + fake sshd ────────────────────────────────────────────────
 # $WORK/state (JSON, re-read on every request): tailnet_up, relay_ok, down.
 cat > "$WORK/hub.py" <<'EOF'

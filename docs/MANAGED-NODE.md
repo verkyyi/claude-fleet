@@ -580,14 +580,21 @@ BREAK-IT 行 `service-handwritten`。只点名接管过的登录（`logins/<登�
   同一把钥匙回到上次的会话——那一份记在 `$FLEET_CONF_DIR/entry/<view>.cur`；没有就是编排会话；设备名按
   `ExposeAuthInfo` 的指纹从 `state.json` 的 `names` 查，名单里钥匙带 `name`）；有命令 ⇒ `exec "$SHELL" -c`，与 22 端口一样
   （`Subsystem sftp` 是本机真的 sftp-server，ForceCommand 下 internal-sftp 跑不了）；无命令无终端 ⇒ 登录 shell。
-  不设 `DisableForwarding`。
+  不设 `DisableForwarding`，但转发只到本机（#3075，C9）：`AllowTcpForwarding local` + `PermitOpen localhost:* 127.0.0.1:* [::1]:*`
+  （`fleet open` 的 `-L`、瘦客户端照常），`-R`、unix socket、agent、X11、隧道都关。
+- **电脑也走它**（#3075，C9）：`fleet login` 登记的设备钥匙（`~/.ssh/fleet-cert` 那把）在入口开着时同时登记成这个人的
+  一把普通钥匙（钥匙页上「<设备名> · fleet」；开入口前登记的设备在下一次续期时补上；人在钥匙页撤掉的，续期不补、
+  重新扫码才回来），设备被吊销时一起撤。节点路线 `entry=<host>:<port>`（`CCQUOTA_FLEET_NODE_ROUTES`，公网端口在路由器上）
+  就是 `fleet connect` 的 `entry` 路线（没写 `entry=` 的机器，用 C6 的 reachable(machine)——入口真敲开过的地址 + 端口，
+  `entry`、`entry-2` …；没敲开过就没有）：排在 Tailscale 和旧的 `public`（系统 sshd）前、中转前，ssh 只出示设备钥匙
+  （`IdentitiesOnly`，不出示证书）；主机钥匙是入口自己的那把，随心跳的 host keys 下发（`fleet route <机器> entry` 钉住）。
 - **审计**（共同约定 11）：每次进门登录处一行 `$FLEET_CONF_DIR/logs/entry.ndjson`（去了哪：view · exec · sftp · shell）；
   守护每拍读入口 sshd 的 `entry.log`（接受 · 钥匙被拒 · 没这个登录 · 不在入口上），一行一条写 `<log>/entry.ndjson`
   （时间 · 人 · 登录 · 指纹 · 机器 · 来源 IP · 结果，不含钥匙正文），并排进 `<state>/entry/audit-pending.ndjson`
   送 `POST /v1/node/entry-audit`（每条自己的 id，重发无害；入口不在就攒着，最多 5000 条）。
 - **Linux 托管节点**同一份规则：容器的环境里给 `FLEET_ENTRY=1`，守护照样起它（`fleet-node-linux.py` 已建 `/run/sshd`）。
 - BREAK-IT：`entry-password` · `entry-other-login` · `entry-revoked-key` · `entry-self-added-key` · `entry-admin-login` ·
-  `entry-keys-tampered` · `entry-hub-down` · `entry-no-command-lands`（`bin/fleet-break-it-entry-selftest.sh`，真 sshd、
+  `entry-keys-tampered` · `entry-hub-down` · `entry-no-command-lands` · `entry-forward-out`（`bin/fleet-break-it-entry-selftest.sh`，真 sshd、
   沙箱端口、沙箱状态目录）。
 
 ### 外面能不能连上它（EPIC #3067 C6，#3072）
