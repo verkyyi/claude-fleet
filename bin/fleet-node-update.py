@@ -395,16 +395,20 @@ def install_bin(src, dst, h):
 
 
 def same_bytes(a, b):
-    """Do <a> and <b> hold the same bytes? (size + mtime first: a copy2 keeps both)"""
+    """Do <a> and <b> hold the same bytes? (never by mtime: two releases staged in
+    one second carry equal-sized binaries with equal mtimes)"""
     try:
-        sa, sb = os.stat(a), os.stat(b)
+        if os.path.getsize(a) != os.path.getsize(b):
+            return False
+        with open(a, "rb") as fa, open(b, "rb") as fb:
+            while True:
+                x, y = fa.read(1 << 20), fb.read(1 << 20)
+                if x != y:
+                    return False
+                if not x:
+                    return True
     except OSError:
         return False
-    if sa.st_size != sb.st_size:
-        return False
-    if int(sa.st_mtime) == int(sb.st_mtime):
-        return True
-    return sha256_file(a) == sha256_file(b)
 
 
 def identity(p):
