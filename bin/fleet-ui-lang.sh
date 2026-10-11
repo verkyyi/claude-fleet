@@ -657,6 +657,22 @@ fleet_ui_t() {
     en:door_welcome) printf 'Welcome back. ⌃Space opens the panel.' ;;
     zh:view_door_welcome) printf '欢迎回来。⌃空格 打开面板。' ;;
     en:view_door_welcome) printf 'Welcome back. ⌃Space opens the panel.' ;;
+    # the onboarding guide's fixed lines (issue #3332, EPIC #3178 C20): a newcomer
+    # who never wrote code — one key, one thing done; only `dev` names code / a PR
+    zh:onboard_hello) printf '你好！我是这台电脑上的向导。两三分钟：教你一个键，再帮你把一件事当场做完。' ;;
+    en:onboard_hello) printf "Hi! I'm the guide on this computer. Two or three minutes: one key to learn, then one thing done for you, right now." ;;
+    zh:onboard_key) printf '只要记住一个键：电脑上 ⌘P，手机上 ⌃空格。它打开一个面板，你所有的会话都在里面；最底下带 ⚡ 的那一行，用来交代一件新的事。' ;;
+    en:onboard_key) printf 'There is one key to remember: ⌘P on a computer, ⌃Space on a phone. It opens a panel with all your sessions; the ⚡ row at the bottom is where you hand over something new.' ;;
+    zh:onboard_try) printf '现在试一下：按 ⌘P（手机 ⌃空格），直接写一件你想做的事——比如「帮我写一封请假邮件」——然后回车。' ;;
+    en:onboard_try) printf 'Try it now: press ⌘P (phone: ⌃Space), write one thing you would like done — say, "draft an email asking for Friday off" — and press Enter.' ;;
+    zh:onboard_sent) printf '收到，它已经在一个新会话里开工了。面板里它那一行是 » 就是在干活，变成 ✓ 就是做完了；按 ⌘P，选它，回车，就能过去看。' ;;
+    en:onboard_sent) printf 'Got it — a new session has started on it. In the panel, » on its row means working and ✓ means done; press ⌘P, pick it, Enter, to watch.' ;;
+    zh:onboard_done) printf '做完了！以后就这样：⌘P，写一句，回车。' ;;
+    en:onboard_done) printf "Done! That is all there is from now on: ⌘P, write one line, Enter." ;;
+    zh:onboard_more) printf '想再交代一件，随时 ⌘P；想回来找我，在 ⌘P 里选 guide 这一行。' ;;
+    en:onboard_more) printf 'Anything else, any time: ⌘P. To come back to me, pick the guide row in ⌘P.' ;;
+    zh:onboard_dev) printf '要改代码、出 PR？说一声「开发流程」，我带你走。' ;;
+    en:onboard_dev) printf 'Want to change code and ship a PR? Say "developer walk" and I will take you through it.' ;;
     zh:view_cmd_quit) printf '⏻ 退出 fleet（会话在后台继续）' ;;
     en:view_cmd_quit) printf '⏻ Quit fleet (sessions keep running)' ;;
     # issue #3327 (EPIC #3178 ④): the ⚡ row's keys line, its no-hit note, its progress

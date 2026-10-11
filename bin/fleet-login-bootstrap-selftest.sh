@@ -371,7 +371,7 @@ for line in md.read_text().splitlines():
     for command in re.findall(r'`([^`]+)`', line):
         if command.startswith(('~/.claude/fleet/bin/', 'gh repo ', 'gh pr ')):
             commands.append(command)
-assert len(commands) >= 20, f'only {len(commands)} wizard commands extracted'
+assert len(commands) >= 12, f'only {len(commands)} wizard commands extracted'
 for command in commands:
     if not any(fnmatch.fnmatchcase(command, rule[5:-1]) for rule in allow if rule.startswith('Bash(')):
         raise AssertionError(f'no allow rule for wizard command: {command}')

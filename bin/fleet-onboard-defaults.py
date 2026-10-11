@@ -32,23 +32,19 @@ import tempfile
 # blocks from that file and checks every executable line against these rules.
 ALLOW = [
     "Bash(~/.claude/fleet/bin/fleet-onboard.sh brief)",
+    "Bash(~/.claude/fleet/bin/fleet-onboard.sh brief --dev)",
+    "Bash(~/.claude/fleet/bin/fleet-onboard.sh look)",
+    "Bash(~/.claude/fleet/bin/fleet-onboard.sh look --mark)",
     "Bash(~/.claude/fleet/bin/fleet-onboard.sh reset)",
     "Bash(~/.claude/fleet/bin/fleet-onboard.sh set *)",
     "Bash(~/.claude/fleet/bin/fleet-repo.sh add *)",
     "Bash(~/.claude/fleet/bin/fleet-repo.sh remove *)",
-    "Bash(~/.claude/fleet/bin/fleet-issue-file.sh --repo *)",
-    "Bash(~/.claude/fleet/bin/fleet-keys.sh --context sidebar --plain)",
-    "Bash(~/.claude/fleet/bin/fleet-keys.sh --plain)",
     "Bash(~/.claude/fleet/bin/fleet-pr-verdict.sh *)",
-    "Bash(~/.claude/fleet/bin/fleet-peer-send.sh issue:*)",
     "Bash(gh repo list *)",
     "Bash(gh repo create *)",
-    "Bash(gh repo view *)",
     "Bash(gh pr list *)",
     "Bash(gh pr view *)",
     "Bash(gh pr diff *)",
-    "Bash(gh pr merge *)",
-    "Bash(tmux list-windows *)",
 ]
 
 
