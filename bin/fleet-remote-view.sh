@@ -773,6 +773,12 @@ rv_thin_dress() {
   # A home machine's far 看台 (`<id>-via-<home>`, C4): its client is a pane of that
   # home's 看台, which draws the top line and holds the keys — bare here (status
   # off, no key table), only the `cur=` hook and the keep rule.
+  # A 看台 rings only for the window it shows (issue #3090): the node's global
+  # `bell-action any` passed every worker's BEL — a turn's end, a question — to the
+  # person's terminal, and a far 看台's through its peer window. Another session
+  # wanting you reaches them as fleet_notify's OSC 9 (fleet_thin_lease.py notify).
+  # A session option: the fleet session and an old client's view keep `any`.
+  T set-option -t "$gid" bell-action current 2>/dev/null
   case "$v" in *-via-*)
     T set-option -t "$gid" status off \; set-option -t "$gid" destroy-unattached off \; \
       set-option -t "$gid" @view_thin "$v" 2>/dev/null
