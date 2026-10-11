@@ -306,6 +306,7 @@ FLEET_PROBE_BATTERY_DIR            seam: where fleet-node-probe.sh looks for a L
 FLEET_PROBE_CURL                   seam: the curl fleet-node-probe.sh measures the egress + the two APIs with (a stub in the selftests; #1720)
 FLEET_PROBE_OS                     seam: fleet-node-probe.sh's uname -s (Darwin → pmset, else BAT*; #1720)
 FLEET_PROBE_PMSET                  seam: the pmset fleet-node-probe.sh reads the battery + sleep setting with (#1720)
+FLEET_PROBE_RELAY_CMD              seam: the relay road fleet-node-probe.sh measures (default fleet-cred-proxy.sh relay-probe; #3364)
 FLEET_PROBE_UNSUPPORTED            knob: the egress regions fleet-node-probe.sh calls unsupported_region (default CN HK MO RU BY IR KP SY CU; #1720)
 FLEET_PERSONAL                     handoff: 0 = this window runs without the personal layer (the recovery page's p, fleet-session-wrap.sh → fleet-hook-personal.sh, fleet-agent-team.py session; issue #1862)
 FLEET_PERSONAL_HOOK_STRIKES        knob: a personal hook failing this many times in a row in one launch is off for the rest of it (fleet-hook-personal.sh, 3)
