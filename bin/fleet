@@ -65,6 +65,9 @@
 #                               move stable → the hub, every machine and this one
 #                               follow, each checked; stops at the first that
 #                               does not, `--rollback` moves stable back (#2483)
+#   fleet release stats [--days N] [--json]
+#                               the release ledger (#3140): merge → every machine,
+#                               releases an hour, macOS queue (the operator's)
 #   fleet claude|codex [--node m4] [a first sentence…]
 #                               a new session in your home directory on a
 #                               fleet machine, the client onto it (#2264)
@@ -255,7 +258,7 @@ fi
 cmd=${1-}
 case $cmd in
   -h|--help|help)
-    sed -n '2,113p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,116p' "$0" | sed 's/^# \{0,1\}//'
     exit 0 ;;
   '')
     client ;;
@@ -339,6 +342,12 @@ if [ "$cmd" = login ] && [ "${FLEET_DEBUG_PROMPT:-1}" != 0 ] && [ -x "$here/flee
   "$here/fleet-login.py" "$@"; rc=$?
   sh "$here/fleet-debug-prompt.sh" after login "$rc"
   exit "$rc"
+fi
+# `fleet release stats` (issue #3140): the release ledger's numbers, on a client
+# too — `fleet release` itself is the node's fleet-release.sh
+if [ "$cmd" = release ] && [ "${2:-}" = stats ] && [ -f "$here/fleet-release-stats.py" ]; then
+  shift 2
+  exec python3 "$here/fleet-release-stats.py" "$@"
 fi
 # `fleet claude` / `fleet codex` (issue #2264): a session in one command — never
 # the node's own launchers of the same name (fleet-claude.sh / fleet-codex.sh)

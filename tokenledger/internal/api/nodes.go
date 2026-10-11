@@ -577,6 +577,10 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 			s.nodeBack(*ep, now)
 			if nc.machineLink {
 				s.serviceAlerts(hb.Hostname, hb.Services, now)
+				// The release ledger (claude-fleet#3140): the first beat on a train's sha.
+				if hb.Versions != nil {
+					s.noteReleaseReach(hb.Hostname, hb.Versions.Runtime, now)
+				}
 			}
 			s.recordFleets(*ep, hb, nc.canRead, first, now)
 			first = false

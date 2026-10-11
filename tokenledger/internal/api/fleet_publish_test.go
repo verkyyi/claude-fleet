@@ -219,6 +219,12 @@ func newPublishRig(t *testing.T) *publishRig {
 // publish POSTs one stable: tree and commits cut from the repo unless given.
 func (p *publishRig) publish(tok, sha, prev string, tree, commits []byte) (int, string) {
 	p.t().Helper()
+	return p.publishParts(tok, sha, prev, tree, commits, nil)
+}
+
+// publishParts is publish with more form fields (the train, claude-fleet#3140).
+func (p *publishRig) publishParts(tok, sha, prev string, tree, commits []byte, extra map[string]string) (int, string) {
+	p.t().Helper()
 	if tree == nil {
 		tree = p.repo.archive(sha)
 	}
@@ -230,6 +236,9 @@ func (p *publishRig) publish(tok, sha, prev string, tree, commits []byte) (int, 
 	_ = mw.WriteField("sha", sha)
 	_ = mw.WriteField("prev", prev)
 	_ = mw.WriteField("run", "https://github.com/o/r/actions/runs/4242")
+	for k, v := range extra {
+		_ = mw.WriteField(k, v)
+	}
 	fw, _ := mw.CreateFormFile("commits", "commits")
 	_, _ = fw.Write(commits)
 	fw, _ = mw.CreateFormFile("tree", "tree.tar.gz")

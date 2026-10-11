@@ -717,6 +717,23 @@ a lookup in flight is ignored). `CCQUOTA_FLEET_STABLE_REPO=off` with a release
 store never asks GitHub at all — it serves what was published; without a store it
 is the image's client, as before. BREAK-IT row `dist-publish-tampered`.
 
+**Every release train keeps a ledger** (issue #3140, EPIC #3139 C1). The publish
+may carry one more part, `train` — `{run_id, prev_sha, merges: [{sha, merged_at}],
+stages: [{name, started_at, ended_at}], macos_queue_secs: […]}` — and once the
+publish succeeds the hub writes it to `fleet_release_trains` together with the
+machines it must reach: every machine whose machine link is heard and not 维护中 at
+that moment (lost / 维护中 are not waited for). A machine link's beat whose
+`Versions.Runtime` first names a train's sha writes `fleet_release_reach`; a
+machine that skips a train reaches it with the first later one it runs. The train
+is bookkeeping, never a gate: a malformed one answers `"train": "refused: …"` and
+the release stands; no `train` part adds no row and no answer field
+(`TestReleaseTrainOffAddsNothing`). `GET /v1/fleet/release/stats?days=N` (the
+operator's) folds the window into merge → all machines (median / p90, nearest
+rank), releases per hour master moved (a merge that hour or the one before),
+the macOS queue's median / p90, each stage and the last trains; `fleet release
+stats [--days N] [--json]` (`bin/fleet-release-stats.py`, on the client manifest)
+prints it.
+
 **…and steps into them** (issue #1424, EPIC #1419 C5). Enter on a remote row (the
 dash's `dash-enter.sh`, the sidebar's `jump`) runs `bin/fleet-remote-view.sh open`:
 a **proxy window** `m4 <name>` (its pane header carries the same `m4`, so a

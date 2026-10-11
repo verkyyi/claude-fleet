@@ -70,6 +70,9 @@ bin/fleet-release-verify.py
 bin/fleet-users.py
 bin/fleet-hub.py
 bin/fleet-hub-admin.py
+# `fleet release stats` (#3140): the release ledger's numbers, through
+# fleet-hub-admin.py's hub and credential
+bin/fleet-release-stats.py
 # bin/fleet-node-sleepwatch.sh: a personal computer's agent runs it from here
 # to say when it sleeps and wakes (#1721).
 bin/fleet-node-sleepwatch.sh
