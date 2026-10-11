@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs';
 import {
   pct, level, fmtIn, windowsOf, subscriptions, subState, credState, headroom, leaseRows, switchRows,
   addSubCommands, arrived, LABEL_RE, machineCards, joined, countdown, cleanLogin, GH_LOGIN_RE,
-  userRows, settingValue, SETTING_GROUPS, AUDIT_KINDS, auditDays, auditWho,
+  userRows, loginOwners, loginPairs, loginPairText, pairsCell, settingValue, SETTING_GROUPS, AUDIT_KINDS, auditDays, auditWho,
 } from '../dist/lib/admin.js';
 import { useLocale } from '../dist/lib/i18n.js';
 import { en } from '../dist/lib/i18n/en.js';
@@ -386,4 +386,45 @@ test('machines: trust and its source, 期望 / 实际 for a managed machine (cla
 test('user deletion lives on the user detail page and still requires confirmation', () => {
  const src=readFileSync(new URL('../dist/admin/user.js',import.meta.url),'utf8');
  assert.match(src,/ctx\.confirm\(/);assert.match(src,/method:'DELETE'/);
+});
+
+// claude-fleet#3302: a person holds several logins with different names on
+// different machines; the pages list every pair, never one "account name".
+const ARVIN = { login: 'cjilyy', machine_login: 'arvin', logins: [
+  { hostname: 'fleet-linux-0', login: '24haowan', state: 'active', home: true, kind: 'node' },
+  { hostname: 'macmini', login: '24haowan', state: 'active', kind: 'node' },
+  { hostname: 'myMac', login: 'arvincao', state: 'pending', kind: 'client' },
+] };
+const VERKY = { login: 'verkyyi', logins: [
+  { hostname: 'macmini', login: 'verky', state: 'active', kind: 'node' },
+  { hostname: 'Verkys-Mac', login: 'verkyyi', state: 'active', kind: 'client' },
+] };
+
+test('every machine·login pair of a person, with state, home and kind', () => {
+  useLocale('zh-CN');
+  const ps = loginPairs(ARVIN);
+  assert.deepEqual(ps.map((p) => [p.machine, p.login, p.home, p.kind]),
+    [['fleet-linux-0', '24haowan', true, 'node'], ['macmini', '24haowan', false, 'node'], ['myMac', 'arvincao', false, 'client']]);
+  assert.equal(loginPairText(ps[0]), 'fleet-linux-0 · 24haowan (在用, 家, 服务节点)');
+  assert.equal(loginPairText(ps[2]), 'myMac · arvincao (排队开号, 客户端)');
+  const cell = pairsCell(ARVIN);
+  for (const w of ['fleet-linux-0 · 24haowan', 'macmini · 24haowan', 'myMac · arvincao', '家', '客户端']) assert.ok(cell.includes(w), w);
+  assert.ok(!cell.includes('arvin<'), 'machine_login is not shown as the account name');
+  assert.ok(pairsCell({ login: 'x', logins: [] }).includes('还没有哪台机器上有登录名'));
+  useLocale('en');
+  assert.equal(loginPairText(loginPairs(VERKY)[0]), 'macmini · verky (active, service node)');
+});
+
+test('a session finds its person by machine and login, not by one mapped name', () => {
+  const who = loginOwners({ users: [ARVIN, VERKY] });
+  assert.equal(who('myMac.local', 'arvincao'), 'cjilyy');
+  assert.equal(who('macmini', 'verky'), 'verkyyi');
+  assert.equal(who('', 'verkyyi'), 'verkyyi'); // one holder of the name
+  assert.equal(who('nowhere', 'nobody'), '');
+  // the same login name on one machine held by two people is told apart by machine
+  const two = loginOwners({ users: [{ login: 'a', logins: [{ hostname: 'm1', login: 'dev' }] }, { login: 'b', logins: [{ hostname: 'm2', login: 'dev' }] }] });
+  assert.equal(two('m2', 'dev'), 'b');
+  assert.equal(two('', 'dev'), '');
+  // an older hub with no logins: the machine_login map still answers
+  assert.equal(loginOwners({ users: [{ login: 'alice', machine_login: 'alice-mac' }] })('h', 'alice-mac'), 'alice');
 });

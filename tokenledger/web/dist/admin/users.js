@@ -7,7 +7,7 @@
 // (/v1/fleet/invites, claude-fleet#2261). An admin's.
 import { Shell } from '../app-shell.js';
 import { esc, ic, relTime } from '../lib/shell.js';
-import { userRows, cleanLogin, GH_LOGIN_RE } from '../lib/admin.js';
+import { userRows, cleanLogin, GH_LOGIN_RE, pairsCell } from '../lib/admin.js';
 import { t } from '../lib/i18n.js';
 
 const avatar = (login) => `<span class="av" style="background:var(--brand)">${esc(String(login || '?').slice(0, 2).toUpperCase())}</span>`;
@@ -31,7 +31,7 @@ export default Shell.mount('people', async (ctx) => {
   const tr = (u) => `<tr><td><div class="status">${avatar(u.login)}<span><a href="/admin/users/${encodeURIComponent(u.principal || 'gh:' + u.github_id)}" style="font-weight:500">${esc(u.login)}</a><br><span class="repo">github.com/${esc(u.login)}</span></span></div></td>` +
     `<td class="mono">${esc(u.github_id || '—')}</td>` +
     `<td>${u.role === 'admin' ? `<span class="chip brand">${esc(t('ui.role.admin'))}</span>` : `<span class="chip">${esc(t('ui.role.user'))}</span>`}</td>` +
-    `<td class="mono">${esc(u.machine_login || '—')}</td>` +
+    `<td>${pairsCell(u)}</td>` +
     `<td>${u.deploy ? `<span class="envlock">${ic('lock')}${esc(t('ui.usr.deploy'))}</span>` : esc(u.added_by || '—')}</td>` +
     `<td>${u.last_seen ? esc(relTime(u.last_seen)) : esc(t('ui.usr.never'))}</td>` +
     `<td class="r"><a class="btn sm" href="/admin/users/${encodeURIComponent(u.principal || 'gh:' + u.github_id)}">${esc(t('ui.policy.details'))}</a></td></tr>`;
