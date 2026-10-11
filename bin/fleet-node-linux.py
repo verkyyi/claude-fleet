@@ -33,6 +33,7 @@ import re
 import shutil
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -559,25 +560,7 @@ def login_open(a):
     if ne.get('CCQUOTA_FLEET_CREDS') != '1':
         ne['CCQUOTA_FLEET_CREDS'] = '1'
         private_write(token_path, ''.join(k + '=' + v + '\n' for k, v in ne.items()), role.pw_uid, role.pw_gid)
-    # These are root-authored route settings; a tenant cannot redirect its token.
-    lib = Path(c.LIB)
-    lib.mkdir(parents=True, exist_ok=True)
-    route = {'FLEET_HUB_URL': hub, 'FLEET_CRED_RELAY_URL': a.relay}
-    for value in route.values():
-        if any(x in value for x in ('\n', '\r')):
-            raise ValueError('invalid route setting')
-    proxy = c.proxy_mod()
-    # Root selected these endpoints. Persist their exact hosts in the launcher
-    # allow-list too, so custom hub domains work after a container replacement.
-    route['FLEET_CRED_ALLOW_HOSTS'] = ' '.join(sorted({
-        urllib.parse.urlsplit(v).hostname or '' for v in route.values()}))
-    proxy.ALLOWED = proxy.allowed_hosts(route['FLEET_CRED_ALLOW_HOSTS'])
-    if not all(proxy.loopback_ok(route[k]) for k in ('FLEET_HUB_URL', 'FLEET_CRED_RELAY_URL')):
-        raise ValueError('hub/relay must use HTTPS to an allowed host; configure root allow-list first')
-    setting_path = lib / (login + '.conf')
-    settings = env_read(setting_path)
-    settings.update(route)
-    private_write(setting_path, ''.join(k + '=' + v + '\n' for k, v in settings.items()))
+    route_settings(c, login, hub, a.relay)
     # machine install keeps every tenant the shared proxy already serves.
     c.machine_install(argparse.Namespace(logins=login, force=False))
     # A readable token-free node.pub.env and an unreadable node.env pointer are
@@ -619,6 +602,59 @@ def login_open(a):
     word, rc = credsep_word(s, login, conf, int(os.environ.get('FLEET_LOGIN_CREDSEP_WAIT', '15')) if a.start else 0)
     print('credsep: ' + word)
     return rc
+
+
+def route_settings(c, login, hub, relay):
+    """root's <LIB>/<login>.conf route keys — hub, relay and their hosts — every
+    other line kept. These are root-authored route settings; a tenant cannot
+    redirect its token. LIB is the image's layer, so a recreated pod has none:
+    route_heal writes them again at every start (issue #3421)."""
+    lib = Path(c.LIB)
+    lib.mkdir(parents=True, exist_ok=True)
+    route = {'FLEET_HUB_URL': hub, 'FLEET_CRED_RELAY_URL': relay}
+    for value in route.values():
+        if not value or any(x in value for x in ('\n', '\r')):
+            raise ValueError('invalid route setting')
+    proxy = c.proxy_mod()
+    # Root selected these endpoints. Persist their exact hosts in the launcher
+    # allow-list too, so custom hub domains work after a container replacement.
+    route['FLEET_CRED_ALLOW_HOSTS'] = ' '.join(sorted({
+        urllib.parse.urlsplit(v).hostname or '' for v in route.values()}))
+    proxy.ALLOWED = proxy.allowed_hosts(route['FLEET_CRED_ALLOW_HOSTS'])
+    if not all(proxy.loopback_ok(route[k]) for k in ('FLEET_HUB_URL', 'FLEET_CRED_RELAY_URL')):
+        raise ValueError('hub/relay must use HTTPS to an allowed host; configure root allow-list first')
+    setting_path = lib / (login + '.conf')
+    settings = env_read(setting_path)
+    if all(settings.get(k) == v for k, v in route.items()):
+        return False
+    settings.update(route)
+    private_write(setting_path, ''.join(k + '=' + v + '\n' for k, v in settings.items()))
+    return True
+
+
+def route_heal(a):
+    """Container start, before the shared proxy: every enrolled login's route
+    settings back in the image layer (issue #3421). Only the primary login is
+    opened again at each start; one `login open` made (another person's) had
+    its relay route only from its create, so a recreated pod sent it `direct`
+    — `unsupported_region` from a CN egress, and the hub closes its compute.
+    A login never enrolled (no token in its store) is its open's to write."""
+    s = load('fleet-node-supervisor')
+    paths = s.Paths()
+    c = load('fleet-credsep')
+    hub = machine_hub(paths, a.hub)
+    done = []
+    for login in sorted(tenants(paths)):
+        ne = env_read(Path(c.ROOT_BASE) / login / 'node.env')
+        if not ne.get('CCQUOTA_TOKEN'):
+            continue
+        try:
+            if route_settings(c, login, (ne.get('CCQUOTA_HUB_URL') or hub).rstrip('/'), a.relay):
+                done.append(login)
+        except (ValueError, OSError) as e:
+            # one login's route never keeps the machine down
+            print('route %s: not written (%s)' % (login, e), file=sys.stderr)
+    print('route: %d login(s) rewritten: %s' % (len(done), ' '.join(done) or '-'))
 
 
 def credsep_word(s, login, conf, wait):
@@ -773,6 +809,36 @@ def login_cmd(rest):
     return {'open': login_open, 'remove': login_remove, 'list': login_list}[a.verb](a)
 
 
+def lib_owner_heal(lib=None):
+    """The supervisor runs the shared proxy's launcher only from a root-owned
+    path no group / other may write (trusted()). An image whose /usr/local came
+    from a tarball as root kept the archive's owner (uid 1001, issue #3421): the
+    proxy read `untrusted`, never started, and the pod never went Ready. Each
+    existing ancestor of credsep's LIB is put back to root, go-w; the image
+    build asserts it too (extras/managed-node/Dockerfile)."""
+    lib = Path(lib or load('fleet-credsep').LIB)
+    fixed = []
+    for p in [lib] + list(lib.parents):
+        try:
+            st = os.lstat(p)
+        except FileNotFoundError:
+            continue
+        if st.st_uid != 0 or st.st_gid != 0:
+            os.lchown(p, 0, 0)
+            fixed.append(str(p))
+        if st.st_mode & 0o022 and not stat.S_ISLNK(st.st_mode):
+            os.chmod(p, stat.S_IMODE(st.st_mode) & ~0o022)
+            fixed.append(str(p))
+    if fixed:
+        print('lib: made root\'s again: %s' % ' '.join(sorted(set(fixed))), file=sys.stderr)
+    return fixed
+
+
+# install-apply steps whose FAIL never keeps a machine down (issue #3421): a UI
+# refresh of a tmux server a restarted container still runs is cosmetic.
+APPLY_COSMETIC = ('ui',)
+
+
 def activate(_a):
     """Run as the tenant: reconcile an image, including a retry after failed apply.
 
@@ -791,9 +857,20 @@ def activate(_a):
     live = home / '.claude/fleet'
     marker.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='image-apply-') as empty:
-        subprocess.run(['bash', str(live / 'bin/fleet-install-apply.sh'), '--tree-from', empty,
-                        '--tree-to', str(live.resolve()), '--root', str(live), '--from', 'none',
-                        '--to', sha, '--no-daemons'], check=True)
+        cmd = ['bash', str(live / 'bin/fleet-install-apply.sh'), '--tree-from', empty,
+               '--tree-to', str(live.resolve()), '--root', str(live), '--from', 'none',
+               '--to', sha, '--no-daemons']
+        r = subprocess.run(cmd, stdout=subprocess.PIPE, text=True)
+    sys.stdout.write(r.stdout)
+    sys.stdout.flush()
+    if r.returncode:
+        failed = sorted({m.group(1) for m in re.finditer(r'^(\S+): FAIL\b', r.stdout, re.M)})
+        # A PARTIAL whose only FAILs are cosmetic is applied: one more full
+        # apply at every start would fail the same way and crash-loop the pod.
+        if not failed or not set(failed) <= set(APPLY_COSMETIC):
+            raise subprocess.CalledProcessError(r.returncode, cmd, r.stdout)
+        print('activate: apply PARTIAL on %s only — not a reason to stop the machine; stamped %s'
+              % (', '.join(failed), sha[:12]), file=sys.stderr)
     marker.write_text(sha + '\n')
     (marker.parent / 'bootstrap.applied').write_text(sha + '\n')
 
@@ -854,6 +931,10 @@ def foreground(a):
             print('devnet: not written (%s)' % e, file=sys.stderr)
         # passwd is the image's: every declared login back before anything runs as one.
         boot()
+        # The image layer is new on a recreated pod (issue #3421): what root keeps
+        # under /usr/local must be root's again before the shared proxy starts.
+        lib_owner_heal()
+        route_heal(a)
         cmd = ['bash', str(HERE / 'fleet-node-install.sh'), '--hub', a.hub, '--service', 'foreground',
                '--login', a.login, '--login-join-file', a.join_file]
         if a.machine_join_file and Path(a.machine_join_file).exists():

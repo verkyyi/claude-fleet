@@ -6,6 +6,7 @@ from pathlib import Path
 import tempfile
 import unittest
 import json
+import re
 import hashlib
 import subprocess
 import sys
@@ -107,6 +108,7 @@ class LinuxNode(unittest.TestCase):
             loop.tend.side_effect = lambda: seen.append((run / 'fleet-node-ready').exists()) or 0
             with patch.dict(os.environ, {'FLEET_NODE_STATE': str(state), 'FLEET_CREDSEP_RUN_BASE': str(run / 'cred')}), \
                     patch.object(m, 'Path', side_effect=path), patch.object(m, 'boot'), \
+                    patch.object(m, 'lib_owner_heal'), patch.object(m, 'route_heal'), \
                     patch.object(m, 'Loop', return_value=loop), patch.object(m, 'load'), \
                     patch.object(m, 'tenants', return_value=[]), \
                     patch.object(m, 'as_tenant', return_value=Mock(returncode=1)), \
@@ -164,6 +166,116 @@ class LinuxNode(unittest.TestCase):
                 self.assertEqual((live / 'logs/kept').read_text(), 'history')
                 self.assertEqual((home / 'project').read_text(), 'worktree')
                 self.assertEqual(len((home / 'applies').read_text().splitlines()), 3)
+
+    def test_restart_with_ui_fail_only_is_applied(self):
+        """BREAK-IT linux-restart-ui-crashloop (#3421): a container restart keeps
+        /tmp, so a login's tmux fleet server is still there and install-apply's UI
+        refresh FAILs on it — `apply: PARTIAL`, activate raised, the container
+        exited, CrashLoop. A PARTIAL whose only FAIL is `ui` stamps the marker;
+        any other FAIL still stops the start."""
+        m = module('fleet-node-linux')
+        with tempfile.TemporaryDirectory() as d:
+            home, root = Path(d, 'home'), Path(d, 'runtime')
+            home.mkdir()
+            b = root / ('a' * 40) / 'bin'
+            b.mkdir(parents=True)
+            (b / 'fleet-install-apply.sh').write_text(
+                '#!/bin/bash\necho "ui: FAIL fleet-ui-refresh.sh: [fleet] conf: FAILED — x"\n'
+                '[ ! -f "$HOME/fail-hooks" ] || echo "hooks: FAIL merge"\n'
+                'echo "apply: PARTIAL — 1 step(s) failed"\nexit 1\n')
+            (root / 'current').symlink_to('a' * 40)
+            marker = home / '.config/claude-fleet/global/linux-image-applied'
+            with patch.dict(os.environ, {'HOME': str(home), 'FLEET_NODE_ROOT': str(root),
+                                         'FLEET_INSTALL_PLATFORM': 'none'}):
+                (home / 'fail-hooks').touch()
+                with self.assertRaises(subprocess.CalledProcessError):
+                    m.activate(None)
+                self.assertFalse(marker.exists())
+                (home / 'fail-hooks').unlink()
+                m.activate(None)
+                self.assertEqual(marker.read_text().strip(), 'a' * 40)
+        # install-apply names the server and tmux's words, not the summary line
+        ia = (BIN / 'fleet-install-apply.sh').read_text()
+        self.assertIn("grep -m1 ': FAILED'", ia)
+
+    def test_recreate_rewrites_every_logins_route(self):
+        """BREAK-IT linux-recreate-route-lost (#3421): credsep's root settings
+        (<LIB>/<login>.conf, the image layer) were written for a `login open`
+        login only at its create; after a pod recreate it had FLEET_HUB_URL alone
+        — `route: direct`, unsupported_region from the CN egress. Every enrolled
+        login's relay route is written again at each start, other lines kept; a
+        login never enrolled is left to its open; a second start writes nothing.
+        foreground runs it (and the LIB owner heal) before the install."""
+        m = module('fleet-node-linux')
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            state, cred, lib = d / 'state', d / 'cred', d / 'lib'
+            (state / 'linux-tenants').mkdir(parents=True)
+            (state / 'machine.env').write_text('CCQUOTA_HUB_URL=https://hub.example/\n')
+            for i, login in enumerate(('fleet', '24haowan', 'fresh')):
+                (state / 'linux-tenants' / (login + '.json')).write_text(json.dumps(
+                    {'login': login, 'uid': 10002 + i, 'gid': 10002 + i}))
+            for login in ('fleet', '24haowan'):
+                (cred / login).mkdir(parents=True)
+                (cred / login / 'node.env').write_text(
+                    'CCQUOTA_HUB_URL=https://hub.example\nCCQUOTA_TOKEN=t-%s\n' % login)
+            lib.mkdir()
+            (lib / '24haowan.conf').write_text('FLEET_HUB_URL=https://hub.example\nFLEET_CRED_CENTRAL_URL=https://c.example\n')
+            s = Mock()
+            s.Paths.return_value = Mock(state=str(state))
+            c = Mock(ROOT_BASE=str(cred), LIB=str(lib))
+            c.proxy_mod.return_value.loopback_ok.return_value = True
+
+            def write(path, data, uid=0, gid=0):
+                Path(path).write_text(data)
+
+            args = Mock(hub='', relay='https://relay.example')
+            with patch.object(m, 'load', side_effect=lambda n: {'fleet-node-supervisor': s, 'fleet-credsep': c}[n]), \
+                    patch.object(m, 'private_write', side_effect=write):
+                m.route_heal(args)
+                conf = m.env_read(lib / '24haowan.conf')
+                self.assertEqual(conf['FLEET_CRED_RELAY_URL'], 'https://relay.example')
+                self.assertEqual(conf['FLEET_CRED_ALLOW_HOSTS'], 'hub.example relay.example')
+                self.assertEqual(conf['FLEET_HUB_URL'], 'https://hub.example')
+                self.assertEqual(conf['FLEET_CRED_CENTRAL_URL'], 'https://c.example')
+                self.assertEqual(m.env_read(lib / 'fleet.conf')['FLEET_CRED_RELAY_URL'], 'https://relay.example')
+                self.assertFalse((lib / 'fresh.conf').exists())
+                before = (lib / '24haowan.conf').stat().st_mtime_ns
+                with patch.object(m, 'private_write') as pw:
+                    m.route_heal(args)
+                    pw.assert_not_called()
+                self.assertEqual((lib / '24haowan.conf').stat().st_mtime_ns, before)
+        src = (BIN / 'fleet-node-linux.py').read_text()
+        fg = src[src.index('def foreground('):src.index('class Loop(')]
+        self.assertLess(fg.index('boot()'), fg.index('lib_owner_heal()'))
+        self.assertLess(fg.index('route_heal(a)'), fg.index('fleet-node-install.sh'))
+
+    def test_image_usr_local_is_roots(self):
+        """BREAK-IT linux-image-local-owner (#3421): tar as root keeps the
+        archive's owner — node's uid 1001 on /usr/local/lib made the shared
+        proxy's launcher `untrusted`, the pod never Ready. Every tar in the image
+        runs --no-same-owner, the build asserts /usr/local is root's, and the
+        start puts credsep LIB's ancestors back to root (go-w) on an older image."""
+        df = (BIN.parent / 'extras/managed-node/Dockerfile').read_text()
+        tars = [l for l in df.splitlines() if re.search(r'\btar -?[a-zA-Z-]*x', l) or 'tar --' in l]
+        self.assertGreaterEqual(len(tars), 3)
+        for l in tars:
+            self.assertIn('--no-same-owner', l)
+        self.assertIn('! -user root -o ! -group root', df)
+        self.assertIn('/usr/local/lib; do', df)
+        m = module('fleet-node-linux')
+        with tempfile.TemporaryDirectory() as d:
+            lib = Path(d, 'usr/local/lib/claude-fleet/credsep')
+            (lib.parent).mkdir(parents=True)  # LIB itself not made yet: skipped
+            os.chmod(Path(d, 'usr/local'), 0o775)
+            mine = {str(p) for p in [lib.parent] + list(lib.parent.parents) if os.lstat(p).st_uid != 0}
+            with patch.object(m.os, 'lchown') as lc:
+                fixed = m.lib_owner_heal(lib)
+            self.assertEqual({c.args[0].__fspath__() for c in lc.call_args_list}, mine)
+            self.assertTrue(all(c.args[1:] == (0, 0) for c in lc.call_args_list))
+            self.assertEqual(os.stat(Path(d, 'usr/local')).st_mode & 0o022, 0)
+            self.assertIn(str(Path(d, 'usr/local')), fixed)
+            self.assertNotIn(str(lib), fixed)
 
     def test_every_login_leases_its_credentials(self):
         """issue #3211: the node program leases a login's pool / own accounts (and

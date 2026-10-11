@@ -6106,6 +6106,46 @@ drill_linux_restore_crashloop() {
   WHAT="restore 退 1：快照改名 sessions.snapshot.failed-<UTC>、写 ready、不退出；空跳过表不再吞掉钉住的表"
 }
 
+# ---- linux-recreate-route-lost (#3421): credsep's root settings live in the image
+# layer; a recreated pod rewrote only the primary login's relay route, so a login
+# `login open` made went `route: direct` (unsupported_region from the CN egress).
+drill_linux_recreate_route_lost() {
+  CAP=15; local t0
+  t0=$(now)
+  if ! python3 "$BIN/fleet-node-linux-selftest.py" LinuxNode.test_recreate_rewrites_every_logins_route \
+       >"$WORK/linux-route.out" 2>&1; then
+    WHY="a recreated pod leaves a login without its relay route: $(tail -n 3 "$WORK/linux-route.out")"; return 1
+  fi
+  SECS=$(since "$t0")
+  WHAT="每次启动、装之前：每个已入网登录的 <LIB>/<login>.conf 写回 relay 与允许主机，其它行不动；没入网的不写；第二次一字不写"
+}
+
+# ---- linux-image-local-owner (#3421): tar as root kept node's uid 1001 on
+# /usr/local; the shared proxy's launcher read `untrusted`, the pod never Ready.
+drill_linux_image_local_owner() {
+  CAP=15; local t0
+  t0=$(now)
+  if ! python3 "$BIN/fleet-node-linux-selftest.py" LinuxNode.test_image_usr_local_is_roots \
+       >"$WORK/linux-owner.out" 2>&1; then
+    WHY="the image can leave /usr/local to a tarball's uid: $(tail -n 3 "$WORK/linux-owner.out")"; return 1
+  fi
+  SECS=$(since "$t0")
+  WHAT="镜像里每个 tar --no-same-owner，构建断言 /usr/local 是 root 的；启动把 credsep LIB 的上级收回 root、去 go-w"
+}
+
+# ---- linux-restart-ui-crashloop (#3421): a restart kept a login's tmux server;
+# install-apply's UI refresh FAILed on it, activate raised, CrashLoop.
+drill_linux_restart_ui_crashloop() {
+  CAP=15; local t0
+  t0=$(now)
+  if ! python3 "$BIN/fleet-node-linux-selftest.py" LinuxNode.test_restart_with_ui_fail_only_is_applied \
+       >"$WORK/linux-ui.out" 2>&1; then
+    WHY="a ui-only PARTIAL apply still stops the Linux node: $(tail -n 3 "$WORK/linux-ui.out")"; return 1
+  fi
+  SECS=$(since "$t0")
+  WHAT="apply PARTIAL 只坏 ui：照样打标记、机器起来；别的步骤坏照旧停；ui: FAIL 行带出失败的 server 与原话"
+}
+
 # ---- linux-stale-lane-door-down (#3333): a deleted drill login left
 # agent/<login>/lane.json (refused, WRONG_LOGIN); the readiness probe failed on
 # any refused lane, the LoadBalancer (externalTrafficPolicy: Local) dropped the

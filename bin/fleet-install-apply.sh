@@ -1204,7 +1204,8 @@ if [ "${#uiargs[@]}" -gt 0 ]; then
   if out=$(bash "$ROOT/bin/fleet-ui-refresh.sh" --all ${uiargs[@]+"${uiargs[@]}"} ${DRYFLAG:+"$DRYFLAG"} 2>&1); then
     say "ui: ok — $(printf '%s\n' "$out" | tail -1)"
   else
-    fail ui "fleet-ui-refresh.sh: $(printf '%s\n' "$out" | tail -1)"
+    # name the server and tmux's own words, not the summary line (issue #3421)
+    fail ui "fleet-ui-refresh.sh: $(printf '%s\n' "$out" | grep -m1 ': FAILED' || printf '%s\n' "$out" | tail -1)"
   fi
 else
   say 'ui: skip — dash launcher and tmux conf unchanged'
