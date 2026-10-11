@@ -50,7 +50,9 @@ jobs:
       - run: ../bin/fleet-client-pack.sh
       - run: gofmt -l . | tee /tmp/fmt && test ! -s /tmp/fmt
       - run: go vet ./...
-      - run: go test -race ./...
+      # internal/api alone runs ~570-600s under -race on a runner: go test's
+      # 10m default timed it out (claude-fleet#3146) — the pg leg's #2479 bound.
+      - run: go test -race -timeout 20m ./...
 
   # The Postgres leg (claude-fleet#2120, #2121; EPIC #2119): the same
   # internal/store AND internal/api tests — the api ones are where the fleet
