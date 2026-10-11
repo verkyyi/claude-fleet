@@ -119,6 +119,12 @@ if "list-windows" in sys.argv:
     sys.exit(0)
 sys.exit(9)
 ''')
+        # ccquota shim (issue #3097): this node has a valid Codex login, so a
+        # Codex `new` start passes fleet-control-read.sh's early check
+        self.script(self.tools / "ccquota", '''#!/bin/sh
+[ "$1 $2" = "codex list" ] || exit 1
+printf 'PROFILE DEFAULT EMAIL PLAN LOGIN REFRESH DIRECTORY\\ndefault * u@e pro valid - /h\\n'
+''')
         # GitHub shim (issue #1274): every argv logged, so "served from the local
         # copy" is checkable as ZERO gh calls.
         self.script(self.tools / "gh", '''#!/bin/bash

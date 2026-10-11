@@ -505,9 +505,9 @@ case "$mode" in
     if [ "$agent" = codex ]; then
       # dash-issue-session.sh refuses it the same way — but only after a `new`
       # has filed its issue (issue #3097: #12013 was left on the backlog), so say
-      # it here first, before anything is filed or opened. A scratch is not
-      # checked here, as dash-raw-session.sh never did.
-      if [ "${3:-}" != scratch ] && [ "${FLEET_CODEX_READY_CHECK:-1}" != 0 ] && ! fleet_codex_ready; then
+      # it here first, before anything is filed or opened. Only a `new`: an
+      # issue start's spawn says the same itself, and a scratch never checked.
+      if [ "${3:-}" = new ] && [ "${FLEET_CODEX_READY_CHECK:-1}" != 0 ] && ! fleet_codex_ready; then
         printf 'start: this login has no valid Codex login — run `ccquota codex login` first\n' >&2; exit 4
       fi
       if [ "${FLEET_CODEX_QUOTA_GATE:-0}" = 1 ]; then
