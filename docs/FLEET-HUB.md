@@ -476,7 +476,14 @@ outcome, the node's refusal verbatim), which calls **`bin/fleet-hub-write.sh
 the C5 shell. It fills in an idempotency key (`--idem` to name one; a retry is
 the same operation), posts, and `--wait` reads `operation_get` back until the
 operation is terminal. Who writes, in order: `FLEET_HUB_WRITE_CMD` (a seam),
-the viewer token (`POST /v1/fleet/<tool>` — the operator's door on a node), else
+on a NODE this login's **node token** (issue #3106: `POST /v1/fleet/write
+{tool, args_json}` with the bearer — node.env's at its hub, or a separated
+login's credential-proxy broker pair, `fleet_node_pair`; the hub reads it as the
+login's OWNER through `nodeLoginIdentity`, so `FleetScope` cuts the target to
+their own workers, admits the worker tools only (`nodeWriteTools`) and writes a
+`fleet.node_write` hub-audit row naming the machine — a node's own daemons never
+borrow a person's 12-hour certificate; a 401 / 404 falls through when one of the
+next doors is here), the viewer token (`POST /v1/fleet/<tool>` — the operator's door on a node), else
 **this device's connection certificate**: `POST /v1/fleet/write {cert, sig, ts,
 tool, args_json}` with `ssh-keygen -Y sign -n fleet-write@claude-fleet` over
 `fleet-write <ts> <tool> <sha256(args_json)>` (`handleFleetWrite`, outside the

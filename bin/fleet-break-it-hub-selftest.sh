@@ -23,6 +23,9 @@
 #                                                   the claim mounted at /data, not any PVC)
 #   hub-read-refused-silent                         bin/fleet-account.sh (quota_budget_json), fleet-lib.sh
 #                                                   (fleet_hub_auth_note), fleet-doctor.sh (hubauth)
+#   node-person-cert-expired                        bin/fleet-hub-write.sh (the node-token door), fleet-lib.sh
+#                                                   (fleet_node_pair, fleet_hub_reap), fleet-doctor.sh (personcert);
+#                                                   tokenledger/internal/api fleet_write_signed.go (go test)
 #   view-node-restart                               bin/fleet-remote-view.sh (run: exit 3 waits)
 #   node-paused-still-placed                        bin/fleet-control-read.sh capacity (admit / admit_why / room),
 #                                                   fleet_machine_admit, fleet_machine_headroom; the hub half is
@@ -380,6 +383,89 @@ PY
   ! grep -v '^/hub/' "$sc/hub.log" | grep -q 'fcpn1\.' \
     || { WHY="the broker's token still went to the hub: $(tr '\n' '|' < "$sc/hub.log")"; return 1; }
   WHAT="分离节点的 where 拿 broker 令牌问 broker（不再送去入口被 401）：答出 MacBook · iTerm2，hub up"
+}
+
+# A node's own hub writes with the person's certificate lapsed (issue #3106):
+# the steward on macmini could not reap three finished workers on mini2 — the
+# write door took only a viewer token or the person's 12-hour `fleet login`
+# certificate, and nothing on a node renews that. Here a sandbox login holds an
+# EXPIRED certificate and no viewer token; fleet_hub_reap must still land, by the
+# login's node token — node.env's at its hub, and on a separated login the
+# credential proxy's broker pair — and never send the certificate. The hub half
+# (the node token acts as the login's owner, another person's worker is 404, the
+# worker tools only) is TestFleetWriteByNodeToken, run when a toolchain is here.
+drill_node_person_cert_expired() {
+  CAP=30; local t0 d="$WORK/npce" port hp out leg sb tests='TestFleetWriteByNodeToken' rc gout
+  mkdir -p "$d/.ssh" "$d/conf" "$d/sep/conf" "$d/sb"
+  ssh-keygen -q -t ed25519 -N '' -f "$d/ca" >/dev/null 2>&1 && ssh-keygen -q -t ed25519 -N '' -f "$d/.ssh/fleet-cert" >/dev/null 2>&1 \
+    && ssh-keygen -q -s "$d/ca" -I npce -n "$(id -un)" -V 20200101:20200102 "$d/.ssh/fleet-cert.pub" >/dev/null 2>&1 \
+    || { WHY="ssh-keygen could not make the expired certificate"; return 1; }
+  cat > "$d/hub.py" <<'PY2'
+import http.server, json, os, sys
+D = sys.argv[1]
+class H(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def do_POST(self):
+        body = self.rfile.read(int(self.headers.get("Content-Length") or 0)).decode()
+        auth = self.headers.get("Authorization") or ""
+        try:
+            req = json.loads(body)
+        except ValueError:
+            req = {}
+        open(D + "/hub.log", "a").write("%s %s %s cert=%s\n" % (self.path, auth, req.get("tool"), bool(req.get("cert"))))
+        if (self.path, auth) in (("/v1/fleet/write", "Bearer node-tok"), ("/hub/v1/fleet/write", "Bearer fcpn1.BROKER")) \
+                and req.get("tool") == "worker_reap":
+            b = {"operation_id": "op1", "status": "succeeded", "result": {"token": "reaped:full"}}
+            self.send_response(200)
+        else:
+            b = {"error": "a session, a viewer token or a connection certificate is required"}
+            self.send_response(401)
+        b = json.dumps(b).encode()
+        self.send_header("Content-Type", "application/json"); self.end_headers(); self.wfile.write(b)
+s = http.server.HTTPServer(("127.0.0.1", 0), H)
+open(D + "/port.tmp", "w").write(str(s.server_address[1])); os.replace(D + "/port.tmp", D + "/port")
+s.serve_forever()
+PY2
+  python3 "$d/hub.py" "$d" 2>"$d/hub.err" & hp=$!
+  for _ in $(seq 1 100); do [ -s "$d/port" ] && break; sleep 0.1; done
+  port=$(cat "$d/port" 2>/dev/null); [ -n "$port" ] || { kill "$hp" 2>/dev/null; WHY="the fake hub did not start: $(tail -2 "$d/hub.err")"; return 1; }
+  printf 'CCQUOTA_HUB_URL=http://127.0.0.1:%s\nCCQUOTA_TOKEN=node-tok\n' "$port" > "$d/conf/node.env"; chmod 600 "$d/conf/node.env"
+  # separated: node.env is the role account's (unreadable), the proxy hands out its broker pair
+  ln -s "$BIN/fleet-lib.sh" "$d/sb/fleet-lib.sh"; ln -s "$BIN/fleet-hub-write.sh" "$d/sb/fleet-hub-write.sh"
+  printf '#!/bin/bash\n[ "$1" = node-token ] && printf "http://127.0.0.1:%s/hub\\tfcpn1.BROKER\\n"\n' "$port" > "$d/sb/fleet-cred-proxy.sh"
+  ln -sf "$d/role-only/node.env" "$d/sep/conf/node.env"
+  printf 'CCQUOTA_HUB_URL=http://127.0.0.1:%s\n' "$port" > "$d/sep/conf/node.pub.env"; printf '{}\n' > "$d/sep/conf/credsep.json"
+  t0=$(now)
+  for leg in "node.env:$d/conf:$BIN" "separated:$d/sep/conf:$d/sb"; do
+    IFS=: read -r leg conf sb <<<"$leg"
+    out=$( unset CCQUOTA_VIEWER_TOKEN CCQUOTA_TOKEN FLEET_SHELL FLEET_HUB_WRITE_CMD FLEET_HUB_WRITE_NODE_TOKEN FLEET_CERT
+           export HOME="$d" XDG_CONFIG_HOME="$d/.config" FLEET_CONF_DIR="$conf" CCQUOTA_HUB_URL="http://127.0.0.1:$port" \
+                  NO_PROXY='*' no_proxy='*'
+           bash -c '. "$1/fleet-lib.sh" && fleet_hub_reap "U/fleet:issue-3049" 5' npce "$sb" 2>&1 )
+    case "$out" in *reaped:full*) ;; *) kill "$hp" 2>/dev/null; WHY="$leg: the reap did not land with the certificate expired: [$(printf '%s' "$out" | tr '\n' ' ')]"; return 1 ;; esac
+  done
+  SECS=$(since "$t0")
+  kill "$hp" 2>/dev/null; wait "$hp" 2>/dev/null
+  grep -q '^/v1/fleet/write Bearer node-tok worker_reap cert=False$' "$d/hub.log" \
+    || { WHY="node.env's token never reached the write door: $(tr '\n' '|' < "$d/hub.log")"; return 1; }
+  grep -q '^/hub/v1/fleet/write Bearer fcpn1.BROKER worker_reap cert=False$' "$d/hub.log" \
+    || { WHY="the separated login never asked the broker: $(tr '\n' '|' < "$d/hub.log")"; return 1; }
+  ! grep -q 'cert=True' "$d/hub.log" || { WHY="a node still sent the person's certificate: $(tr '\n' '|' < "$d/hub.log")"; return 1; }
+  grep -q 'personcert' "$BIN/fleet-doctor.sh" || { WHY="the doctor has no personcert row"; return 1; }
+  WHAT='证书过期、没有 viewer 令牌：节点凭自己的节点令牌回收（node.env 直连入口 / 分离登录走凭据代理 broker），证书一次没发'
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    gout=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+           go test -count=1 -run "^($tests)\$" ./internal/api 2>&1); rc=$?
+    case "$rc:$gout" in
+      0:*'no tests to run'*) WHY="the Go test $tests is not there (go test ran none)"; return 1 ;;
+      0:*) WHAT="${WHAT}；入口只认同一主人的会话、别人的 404、只放 worker 工具（go test）" ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
+      *) WHY="the Go half is red: $(printf '%s' "$gout" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  else
+    grep -q "^func $tests(" "$ROOT/tokenledger/internal/api/fleet_write_tools_test.go" 2>/dev/null \
+      || { WHY="the hub half's test $tests is not in fleet_write_tools_test.go"; return 1; }
+  fi
 }
 
 # A machine whose own gate is holding new sessions (fleet_machine_admit: memory
