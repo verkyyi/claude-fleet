@@ -123,6 +123,7 @@ var routeAccess = map[string]string{
 	"/v1/findings": accessAdmin, "/v1/findings/mutes": accessAdmin,
 	"/v1/access": accessAdmin,
 	// The admin pages (claude-fleet#1990) and the one audit they read.
+	"/subscriptions/": accessAdmin, "/subscriptions/settings": accessAdmin, "/admin/users/": accessAdmin,
 	"/subscriptions": accessAdmin, "/nodes": accessAdmin, "/admin/users": accessAdmin,
 	"/admin/settings": accessAdmin, "/admin/audit": accessAdmin, AuditPath: accessAdmin,
 	// The whole hub an admin's daily pages used to show (claude-fleet#2515).

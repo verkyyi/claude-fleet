@@ -15,11 +15,11 @@ const creds = [
 
 test('absent, explicit deny, selected and malformed policies remain distinct', () => {
   const view = { nodes: [{ id: 'mini', allow: [] }], users: [{ id: 'gh:1', allow: [A] }] };
-  assert.equal(policyMode(policyEntry(view, 'node', 'other')), 'inherit');
+  assert.equal(policyMode(policyEntry(view, 'node', 'other')), 'deny');
   assert.equal(policyMode(policyEntry(view, 'node', 'mini')), 'deny');
   assert.equal(policyMode(policyEntry(view, 'user', 'gh:1')), 'selected');
   assert.equal(policyMode({ allow: [], error: 'bad JSON' }), 'invalid');
-  assert.deepEqual(policyPayload('node', 'mini', 'inherit', [A]), { scope: 'node', id: 'mini', allow: null });
+  assert.deepEqual(policyPayload('node', 'mini', 'all', [A]), { scope: 'node', id: 'mini', allow: null, all: true });
   assert.deepEqual(policyPayload('user', 'gh:1', 'deny', [A]).allow, []);
   assert.deepEqual(policyPayload('node', 'mini', 'selected', [C, A, A]).allow, [A, C]);
   assert.throws(() => policyPayload('node', 'mini', 'selected', []));
@@ -51,7 +51,7 @@ test('save writes only the selected scope, after checking its current policy', a
 
 test('changed policy or failed reads refuse to write; write errors remain visible', async () => {
   let writes = 0;
-  const payload = policyPayload('node', 'mini', 'inherit', []);
+  const payload = policyPayload('node', 'mini', 'all', []);
   await assert.rejects(savePolicy(async (_, opts) => {
     if (opts) writes++;
     return { nodes: [{ id: 'mini', allow: [] }] };
@@ -78,17 +78,17 @@ test('effective view uses the hub verdicts and escapes labels and denial reasons
 });
 
 
-test('default is no stored rule; switching back removes restrictions instead of enumerating subscriptions', () => {
+test('default denies; all is an explicit grant and revocation never grants by omission', () => {
   const draft = newDraft(undefined);
-  assert.equal(draft.mode, 'inherit');
+  assert.equal(draft.mode, 'deny');
   assert.equal(draftChanged(draft), false);
   draft.mode = 'selected'; draft.selected = [A];
   assert.equal(draftChanged(draft), true);
-  draft.mode = 'inherit';
+  draft.mode = 'deny';
   assert.equal(draftChanged(draft), false);
-  assert.equal(policyPayload('user', 'gh:1', draft.mode, draft.selected).allow, null);
+  assert.deepEqual(policyPayload('user', 'gh:1', draft.mode, draft.selected).allow, []);
   const restricted = newDraft({ allow: [A] });
-  restricted.mode = 'inherit';
+  restricted.mode = 'all';
   assert.equal(draftChanged(restricted), true);
   assert.equal(policyPayload('node', 'mini', restricted.mode, [A]).allow, null);
 });

@@ -8,9 +8,9 @@ export function policyEntry(view, scope, id) {
   return (view[scope === 'node' ? 'nodes' : 'users'] || []).find((x) => x.id === id);
 }
 export function policyMode(entry) {
-  return !entry ? 'inherit' : entry.error ? 'invalid' : entry.allow.length ? 'selected' : 'deny';
+  return !entry ? 'deny' : entry.error ? 'invalid' : entry.all ? 'all' : entry.allow.length ? 'selected' : 'deny';
 }
-const modeText = (mode) => ({ inherit: t('ui.policy.inherit'), selected: t('ui.policy.selected'), deny: t('ui.policy.deny'), invalid: t('ui.policy.invalid') })[mode];
+const modeText = (mode) => ({ all: t('ui.policy.all'), selected: t('ui.policy.selected'), deny: t('ui.policy.deny'), invalid: t('ui.policy.invalid') })[mode];
 const validID = (id) => /^(?:[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}|codex:account:[a-f0-9]{32})$/.test(id);
 
 // Never guess an ID from a label. Keep selected IDs even after their
@@ -34,13 +34,13 @@ export function policyChoices(credentials, entry, scope, id) {
 }
 export function policyPayload(scope, id, mode, selected) {
   if (!['node', 'user'].includes(scope) || !id) throw new Error(t('ui.policy.choose'));
-  if (!['inherit', 'deny', 'selected'].includes(mode)) throw new Error(t('ui.policy.chooseMode'));
-  const allow = mode === 'inherit' ? null : mode === 'deny' ? [] : [...new Set(selected)].sort();
+  if (!['all', 'deny', 'selected'].includes(mode)) throw new Error(t('ui.policy.chooseMode'));
+  const allow = mode === 'all' ? null : mode === 'deny' ? [] : [...new Set(selected)].sort();
   if (mode === 'selected' && !allow.length) throw new Error(t('ui.policy.chooseSubscriptions'));
   if (allow?.some((uuid) => !validID(uuid))) throw new Error(t('ui.policy.missingID'));
-  return { scope, id, allow };
+  return mode === 'all' ? { scope, id, allow, all: true } : { scope, id, allow };
 }
-const fingerprint = (entry) => JSON.stringify(entry ? { allow: [...entry.allow].sort(), error: entry.error || '' } : null);
+const fingerprint = (entry) => JSON.stringify(entry ? { all: !!entry.all, allow: [...entry.allow].sort(), error: entry.error || '' } : null);
 
 export async function savePolicy(api, before, payload) {
   const latest = await api(POLICY_PATH);
@@ -92,137 +92,104 @@ export function draftChanged(draft) {
 }
 const statusText = (entry) => policyMode(entry) === 'selected' ? t('ui.policy.count', { n: entry.allow.length }) : modeText(policyMode(entry));
 
-export async function mountPolicy(ctx, root) {
+// One object, one editor. Kept outside the machine page's polling region.
+export async function mountObjectPolicy(ctx, root, scope, id) {
   if (!ctx.admin) return;
-  root.innerHTML = `<div class="panel-h"><h3>${esc(t('ui.policy.title'))}</h3></div><p class="panel-b">${esc(t('ui.loading'))}</p>`;
+  root.innerHTML = `<p class="panel-b">${esc(t('ui.loading'))}</p>`;
   try {
-    let [view, snapshot, users, creds] = await Promise.all([
-      ctx.api(POLICY_PATH), ctx.api('/v1/nodes'), ctx.api('/v1/fleet/users'), ctx.api('/v1/fleet/credentials'),
-    ]);
+    const [view, creds] = await Promise.all([ctx.api(POLICY_PATH), ctx.api('/v1/fleet/credentials')]);
     if (!root.isConnected) return;
-    let scope = 'user', selected = '', machines = null, busy = false, renderGeneration = 0;
-    const people = userTargets(view, users), drafts = new Map();
-    let machinesPromise;
-    const loadMachines = () => machinesPromise || (machinesPromise = machineTargets(view, snapshot, ctx.api).then((rows) => (machines = rows)));
-    const key = (id) => scope + ':' + id;
-    const draftOf = (id) => {
-      if (!drafts.has(key(id))) drafts.set(key(id), newDraft(policyEntry(view, scope, id)));
-      return drafts.get(key(id));
+    const draft = newDraft(policyEntry(view, scope, id));
+    const legacyUnset = !draft.before && view.mode === 'legacy';
+    if (legacyUnset) draft.mode = 'legacy';
+    const choices = policyChoices(creds.credentials, draft.before, scope, id);
+    root.innerHTML = `<div class="panel-h"><div><h3>${esc(t('ui.policy.title'))}</h3><p class="sub">${esc(t(scope === 'user' ? 'ui.policy.userHint' : 'ui.policy.machineHint'))}</p></div><span class="chip">${esc(legacyUnset ? t('ui.policy.pending') : statusText(draft.before))}</span></div>` +
+      `<div class="panel-b">${view.mode === 'legacy' ? `<div class="notice">${esc(t('ui.policy.legacy'))} <a href="/subscriptions/settings">${esc(t('ui.policy.global'))}</a></div>` : ''}<form>` +
+      `<fieldset class="policy-modes"><legend>${esc(t('ui.policy.mode'))}</legend>` +
+      [['deny', 'denyHint'], ['selected', 'selectedHint'], ['all', 'allHint']].map(([mode,hint]) => `<label class="policy-mode"><input type="radio" name="mode" value="${mode}"${draft.mode === mode ? ' checked' : ''}><span><strong>${esc(modeText(mode))}</strong><small>${esc(t('ui.policy.' + hint))}</small></span></label>`).join('') + '</fieldset>' +
+      `<fieldset class="policy-subscriptions" data-choices><legend>${esc(t('ui.policy.subscription'))}</legend>` + choices.map((c) => `<label class="policy-subscription"><input type="checkbox" name="subscription" value="${esc(c.id)}"${draft.selected.includes(c.id) ? ' checked' : ''}${!c.id ? ' disabled' : ''}><span>${esc(c.label)}${!c.id ? `<small>${esc(t('ui.policy.missingID'))}</small>` : ''}</span></label>`).join('') + '</fieldset>' +
+      `<div class="policy-save"><span class="sub" data-dirty></span><div class="acts"><button type="button" class="btn danger" data-revoke>${esc(t('ui.policy.revoke'))}</button><button type="submit" class="btn primary">${esc(t('ui.policy.save'))}</button></div></div><p class="err" role="alert"></p></form>` +
+      `<p class="sub">${esc(t('ui.policy.defaults'))}</p><details class="policy-notes"><summary>${esc(t('ui.policy.notes'))}</summary><p>${esc(t('ui.policy.scopeNote'))}</p><p>${esc(t('ui.policy.timing'))}</p></details></div>`;
+    const form = root.querySelector('form'); let busy = false;
+    // An absent legacy rule is not a denial. Force an explicit save if chosen.
+    const changed = () => ['deny','selected','all'].includes(draft.mode) && (draftChanged(draft) || legacyUnset);
+    const update = () => {
+      const box = form.querySelector('[data-choices]'); box.hidden = draft.mode !== 'selected'; box.disabled = draft.mode !== 'selected';
+      form.querySelector('[type=submit]').disabled = busy || !changed();
+      form.querySelector('[data-dirty]').textContent = t(changed() ? 'ui.policy.unsaved' : 'ui.policy.savedState');
     };
-    const render = async () => {
-      const generation = ++renderGeneration;
-      root.innerHTML = `<div class="panel-h"><div><h3>${esc(t('ui.policy.title'))}</h3><p class="sub">${esc(t('ui.policy.defaults'))}</p></div></div>` +
-        `<div class="policy-tabs" role="group" aria-label="${esc(t('ui.policy.by'))}">` +
-        [['user', t('ui.policy.byUser')], ['node', t('ui.policy.byMachine')]].map(([value, label]) =>
-          `<button type="button" class="btn${scope === value ? ' primary' : ' ghost'}" data-policy-scope="${value}" aria-pressed="${scope === value}">${esc(label)}</button>`).join('') + '</div><div data-policy-workspace></div>';
-      root.querySelectorAll('[data-policy-scope]').forEach((button) => { button.onclick = () => {
-        if (busy || button.dataset.policyScope === scope) return;
-        scope = button.dataset.policyScope; selected = ''; render();
-      }; });
-      const workspace = root.querySelector('[data-policy-workspace]');
-      if (scope === 'node' && !machines) { workspace.innerHTML = `<p class="panel-b">${esc(t('ui.loading'))}</p>`; await loadMachines(); }
-      if (generation !== renderGeneration || !root.isConnected) return;
-      const targets = scope === 'user' ? people : machines;
-      if (!targets.some((row) => row.id === selected && !row.error)) selected = targets.find((row) => !row.error)?.id || '';
-      workspace.innerHTML = `<div class="policy-workspace"><div class="policy-targets" aria-label="${esc(scope === 'user' ? t('ui.policy.user') : t('ui.policy.node'))}">` +
-        (targets.length ? targets.map((row) => {
-          const entry = policyEntry(view, scope, row.id), mode = policyMode(entry);
-          return `<button type="button" class="policy-target" data-policy-target="${esc(row.id)}" aria-pressed="${row.id === selected}"${row.error ? ' disabled' : ''} title="${esc(row.error || row.id)}"><strong>${esc(row.label)}</strong>` +
-            `<span class="chip ${mode === 'deny' || mode === 'invalid' || row.error ? 'bad' : mode === 'inherit' ? 'ok' : 'brand'}">${esc(row.error ? t('ui.policy.unknownMachine') : statusText(entry))}</span>` +
-            `<small data-draft-label="${esc(row.id)}">${drafts.has(key(row.id)) && draftChanged(drafts.get(key(row.id))) ? esc(t('ui.policy.unsaved')) : ''}</small></button>`;
-        }).join('') : `<p class="panel-b">${esc(t('ui.policy.noTargets'))}</p>`) + '</div><div class="policy-editor" data-policy-editor></div></div>';
-      root.querySelectorAll('[data-policy-target]').forEach((button) => { button.onclick = () => {
-        if (busy) return; selected = button.dataset.policyTarget; render();
-      }; });
-      const target = targets.find((row) => row.id === selected);
-      if (target) drawEditor(target);
-      drawInspector(workspace);
+    form.onchange = () => { draft.mode = form.elements.mode.value; draft.selected = [...form.querySelectorAll('[name=subscription]:checked')].map((c) => c.value); update(); };
+    form.querySelector('[data-revoke]').onclick = () => { draft.mode = 'deny'; form.querySelector('[value=deny]').checked = true; update(); };
+    form.onsubmit = async (e) => {
+      e.preventDefault(); if (busy) return;
+      try {
+        const payload = policyPayload(scope,id,draft.mode,draft.selected); busy = true;
+        form.querySelectorAll('input,button').forEach((el) => { el.disabled = true; });
+        await savePolicy(ctx.api,draft.before,payload);
+        ctx.toast(t('ui.policy.saved')); await mountObjectPolicy(ctx,root,scope,id);
+      } catch (err) {
+        busy = false; form.querySelectorAll('input,button').forEach((el) => { el.disabled = el.name === 'subscription' && !el.value; });
+        form.querySelector('.err').textContent = err.message; update();
+      }
     };
-    const drawEditor = (target) => {
-      const editor = root.querySelector('[data-policy-editor]'), draft = draftOf(target.id);
-      const choices = policyChoices(creds.credentials, draft.before, scope, target.id);
-      editor.innerHTML = `<form data-policy-form><div class="policy-editor-head"><div><h3>${esc(target.label)}</h3><p class="sub">${esc(scope === 'user' ? t('ui.policy.userHint') : t('ui.policy.machineHint'))}</p></div>` +
-        `<button type="button" class="btn ghost sm" data-policy-reset>${esc(t('ui.policy.reset'))}</button></div>` +
-        `<fieldset class="policy-modes"><legend>${esc(t('ui.policy.mode'))}</legend>` +
-        [['inherit', t('ui.policy.allHint')], ['selected', t('ui.policy.selectedHint')], ['deny', t('ui.policy.denyHint')]].map(([mode, hint]) =>
-          `<label class="policy-mode"><input type="radio" name="mode" value="${mode}"${draft.mode === mode ? ' checked' : ''}><span><strong>${esc(modeText(mode))}</strong><small>${esc(hint)}</small></span></label>`).join('') + '</fieldset>' +
-        (draft.mode === 'invalid' ? `<p class="err">${esc(t('ui.policy.chooseMode'))}</p>` : '') +
-        `<fieldset class="policy-subscriptions" data-policy-choices><legend>${esc(t('ui.policy.subscription'))}</legend>` +
-        choices.map((choice) => `<label class="policy-subscription"><input type="checkbox" name="subscription" value="${esc(choice.id)}"${draft.selected.includes(choice.id) ? ' checked' : ''}${!choice.id ? ' disabled' : ''}><span>${esc(choice.label)}${!choice.id ? `<small>${esc(t('ui.policy.missingID'))}</small>` : ''}</span></label>`).join('') + '</fieldset>' +
-        `<div class="policy-save"><div><p data-policy-current>${esc(t('ui.policy.before', { value: statusText(draft.before) }))}</p><small data-policy-dirty></small></div><button class="btn primary" type="submit">${esc(t('ui.policy.save'))}</button></div>` +
-        `<p class="err" data-policy-error role="alert"></p><details class="policy-notes"><summary>${esc(t('ui.policy.notes'))}</summary><p>${esc(t('ui.policy.scopeNote'))}</p><p>${esc(t('ui.policy.timing'))}</p></details></form>`;
-      const form = editor.querySelector('form'), choicesBox = form.querySelector('[data-policy-choices]');
-      const update = () => {
-        choicesBox.hidden = draft.mode !== 'selected'; choicesBox.disabled = draft.mode !== 'selected';
-        form.querySelector('[type=submit]').disabled = !draftChanged(draft) || busy;
-        form.querySelector('[data-policy-reset]').disabled = draft.mode === 'inherit' || busy;
-        form.querySelector('[data-policy-dirty]').textContent = draftChanged(draft) ? t('ui.policy.unsaved') : t('ui.policy.savedState');
-        root.querySelectorAll('[data-draft-label]').forEach((el) => {
-          if (el.dataset.draftLabel === target.id) el.textContent = draftChanged(draft) ? t('ui.policy.unsaved') : '';
-        });
-      };
-      form.onchange = () => {
-        draft.mode = form.elements.mode.value;
-        draft.selected = [...form.querySelectorAll('[name=subscription]:checked')].map((c) => c.value);
-        form.querySelector('[data-policy-error]').textContent = ''; update();
-      };
-      form.querySelector('[data-policy-reset]').onclick = () => {
-        draft.mode = 'inherit'; form.querySelector('[name=mode][value=inherit]').checked = true; update();
-      };
-      form.onsubmit = async (event) => {
-        event.preventDefault(); if (busy) return;
-        const savedScope = scope;
-        try {
-          const payload = policyPayload(scope, target.id, draft.mode, draft.selected);
-          busy = true;
-          root.querySelectorAll('button,input,select').forEach((el) => { el.disabled = true; });
-          await savePolicy(ctx.api, draft.before, payload);
-          const family = savedScope === 'node' ? 'nodes' : 'users';
-          view[family] = view[family].filter((entry) => entry.id !== target.id);
-          if (payload.allow !== null) view[family].push({ id: target.id, allow: payload.allow });
-          drafts.delete(savedScope + ':' + target.id);
-          ctx.toast(t('ui.policy.saved'));
-          busy = false; await render();
-        } catch (error) {
-          busy = false;
-          await render();
-          root.querySelector('[data-policy-error]').textContent = error.message;
-        }
-      };
-      update();
-    };
-    // Inspection is optional and does not gate either editing workflow.
-    const drawInspector = (workspace) => {
-      const details = document.createElement('details'); details.className = 'policy-inspector';
-      details.innerHTML = `<summary>${esc(t('ui.policy.inspectTitle'))}</summary><div data-policy-inspect></div>`;
-      workspace.append(details);
-      details.ontoggle = async () => {
-        if (!details.open || details.dataset.loaded) return;
-        details.dataset.loaded = '1';
-        const area = details.querySelector('[data-policy-inspect]');
-        area.innerHTML = `<p>${esc(t('ui.loading'))}</p>`;
-        const rows = await loadMachines(); if (!details.isConnected) return;
-        const options = (list) => `<option value="">${esc(t('ui.policy.optional'))}</option>` + list.filter((row) => !row.error).map((row) => `<option value="${esc(row.id)}">${esc(row.label)}</option>`).join('');
-        area.innerHTML = `<p class="sub">${esc(t('ui.policy.lead'))}</p><form class="toolbar" data-policy-query><label class="f">${esc(t('ui.policy.user'))}<select class="input" name="user" required>${options(people)}</select></label>` +
-          `<label class="f">${esc(t('ui.policy.node'))}<select class="input" name="node" required>${options(rows)}</select></label><button class="btn" type="submit">${esc(t('ui.policy.inspect'))}</button></form><div data-policy-result aria-live="polite"></div>`;
-        const form = area.querySelector('form'), result = area.querySelector('[data-policy-result]');
-        let queryGeneration = 0;
-        form.onchange = () => { queryGeneration++; result.innerHTML = ''; };
-        form.onsubmit = async (event) => {
-          event.preventDefault(); const sequence = ++queryGeneration;
-          result.textContent = t('ui.loading');
-          const query = new URLSearchParams({ machine: form.elements.node.value, principal: form.elements.user.value });
-          try {
-            const answer = await ctx.api(POLICY_PATH + '?' + query);
-            if (sequence === queryGeneration && result.isConnected) result.innerHTML = effectiveHTML(answer.effective);
-          } catch (error) { if (sequence === queryGeneration && result.isConnected) result.textContent = error.message; }
-        };
-      };
-    };
-    await render();
-  } catch (error) {
+    update();
+    const inspector = document.createElement('div');root.querySelector('.panel-b').append(inspector);
+    void mountObjectInspector(ctx,inspector,scope,id);
+  } catch (err) { root.innerHTML = `<p class="panel-b err">${esc(err.message)}</p>`; }
+}
+
+export async function mountGlobalPolicy(ctx, root) {
+  const view = await ctx.api(POLICY_PATH);
+  root.innerHTML = `<div class="panel-h"><div><h3>${esc(t('ui.policy.global'))}</h3><p class="sub">${esc(t('ui.policy.defaults'))}</p></div><span class="chip ${view.mode === 'legacy' ? 'warn' : 'ok'}">${esc(t(view.mode === 'legacy' ? 'ui.policy.pending' : 'ui.policy.strict'))}</span></div><div class="panel-b" data-review></div>`;
+  const body = root.querySelector('[data-review]');
+  if (view.mode !== 'legacy') { body.innerHTML = `<p>${esc(t('ui.policy.globalHint'))}</p><div class="acts"><a class="btn" href="/admin/users">${esc(t('ui.policy.byUser'))}</a><a class="btn" href="/nodes">${esc(t('ui.policy.byMachine'))}</a></div>`; return; }
+  const review = view.migration;
+  body.innerHTML = `<p>${esc(t('ui.policy.migrateHint'))}</p><form><div class="tw"><table class="t"><thead><tr><th>${esc(t('ui.policy.object'))}</th><th>${esc(t('ui.policy.after'))}</th></tr></thead><tbody>` + review.objects.map((o) => `<tr><td><b>${esc(o.label || o.id)}</b><br><small>${esc(t(o.scope === 'user' ? 'ui.policy.user' : 'ui.policy.node'))} · ${esc(o.id)}</small></td><td><select class="input" required data-key="${esc(o.key)}"><option value="">${esc(t('ui.policy.decision'))}</option><option value="retain">${esc(t('ui.policy.retain'))}</option><option value="revoke">${esc(t('ui.policy.revoke'))}</option></select></td></tr>`).join('') + `</tbody></table></div><div class="policy-save"><p class="sub">${esc(t('ui.policy.migrateNote'))}</p><button class="btn primary" type="submit">${esc(t('ui.policy.activate'))}</button></div><p class="err" role="alert"></p></form>`;
+  const form = body.querySelector('form');
+  form.onsubmit = (e) => {
+    e.preventDefault(); const selects = [...form.querySelectorAll('select')];
+    const retain = selects.filter((el) => el.value === 'retain').map((el) => el.dataset.key);
+    ctx.confirm(t('ui.policy.activate'),esc(t('ui.policy.confirmMigration',{keep:retain.length,revoke:selects.length-retain.length})),t('ui.policy.activate'),async () => {
+      form.querySelector('button').disabled = true;
+      try { await ctx.api(POLICY_PATH,{method:'PUT',json:{action:'activate',revision:review.revision,retain}}); await mountGlobalPolicy(ctx,root); }
+      catch(err) { form.querySelector('.err').textContent = err.message; form.querySelector('button').disabled = false; }
+    });
+  };
+}
+
+export async function mountSubscriptionAccess(ctx, root, uuid) {
+  try {
+    const [view, users, snapshot] = await Promise.all([ctx.api(POLICY_PATH),ctx.api('/v1/fleet/users'),ctx.api('/v1/nodes')]);
+    const machines = await machineTargets(view,snapshot,ctx.api);
     if (!root.isConnected) return;
-    root.innerHTML = `<div class="panel-h"><h3>${esc(t('ui.policy.title'))}</h3></div><div class="panel-b"><p class="err" role="alert">${esc(t('ui.err.action', { e: error.message }))}</p><button class="btn" data-policy-retry>${esc(t('ui.err.retry'))}</button></div>`;
-    root.querySelector('[data-policy-retry]').onclick = () => mountPolicy(ctx, root);
-  }
+    const group = (label,scope,targets) => `<div><h4>${esc(label)}</h4>` + targets.map((o) => {
+      const entry = policyEntry(view,scope,o.id);
+      const allowed = !o.error && (!entry ? view.mode === 'legacy' : !entry.error && (entry.all || !!uuid && entry.allow.includes(uuid)));
+      return `<div class="access-row"><div><b>${esc(o.label)}</b><br><small class="sub">${esc(!entry && view.mode === 'legacy' ? t('ui.policy.pending') : statusText(entry))}</small></div><span class="chip ${allowed ? 'ok' : ''}">${esc(t(allowed ? 'ui.policy.allowed' : 'ui.policy.denied'))}</span>${o.error ? '' : `<a class="btn sm" href="${scope === 'user' ? '/admin/users/' : '/machines/'}${encodeURIComponent(o.id)}${scope === 'node' ? '?from=nodes' : ''}">${esc(t('ui.policy.details'))}</a>`}</div>`;
+    }).join('') + '</div>';
+    root.innerHTML = `<div class="panel-h"><div><h3>${esc(t('ui.policy.accessSources'))}</h3><p class="sub">${esc(t('ui.policy.accessHint'))}</p></div></div><div class="panel-b grid g2">${group(t('ui.policy.user'),'user',userTargets(view,users))}${group(t('ui.policy.node'),'node',machines)}</div>`;
+  } catch(err) { root.innerHTML = `<p class="panel-b err">${esc(err.message)}</p>`; }
+}
+
+async function mountObjectInspector(ctx, root, scope, id) {
+  root.innerHTML = `<details class="policy-notes"><summary>${esc(t('ui.policy.inspectTitle'))}</summary><div data-inspector></div></details>`;
+  const details = root.querySelector('details');
+  details.ontoggle = async () => {
+    if (!details.open || details.dataset.loaded) return;
+    details.dataset.loaded = '1'; const area = details.querySelector('[data-inspector]');
+    try {
+      const targets = scope === 'user' ? await machineTargets({},await ctx.api('/v1/nodes'),ctx.api) : userTargets({},await ctx.api('/v1/fleet/users'));
+      area.innerHTML = `<form class="toolbar"><label class="f">${esc(t(scope === 'user' ? 'ui.policy.node' : 'ui.policy.user'))}<select class="input" required><option value="">${esc(t('ui.policy.optional'))}</option>` + targets.filter((o)=>!o.error).map((o)=>`<option value="${esc(o.id)}">${esc(o.label)}</option>`).join('') + `</select></label><button class="btn">${esc(t('ui.policy.inspect'))}</button></form><div data-result></div>`;
+      const form = area.querySelector('form'),result = area.querySelector('[data-result]'); let sequence = 0;
+      form.onchange = () => { sequence++;result.innerHTML=''; };
+      form.onsubmit = async(e) => {
+        e.preventDefault();const gen=++sequence;
+        const other = form.querySelector('select').value;
+        const query = new URLSearchParams({machine:scope==='node'?id:other,principal:scope==='user'?id:other});
+        result.textContent = t('ui.loading');
+        try { const out = await ctx.api(POLICY_PATH+'?'+query);if(gen===sequence&&result.isConnected)result.innerHTML=effectiveHTML(out.effective); }
+        catch(err) { if(gen===sequence&&result.isConnected)result.textContent=err.message; }
+      };
+    } catch(err) { area.textContent=err.message;delete details.dataset.loaded; }
+  };
 }

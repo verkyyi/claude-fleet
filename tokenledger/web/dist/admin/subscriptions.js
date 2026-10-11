@@ -13,7 +13,7 @@ import {
   addSubCommands, arrived, LABEL_RE,
 } from '../lib/admin.js';
 import { t } from '../lib/i18n.js';
-import { mountPolicy } from '../lib/cred-policy.js';
+import { mountSubscriptionAccess } from '../lib/cred-policy.js';
 
 const failed = (e) => `<div class="ghostrow err">${ic('alert')} ${esc(e.message)}</div>`;
 const val = (r) => (r.status === 'fulfilled' ? r.value : null);
@@ -25,13 +25,13 @@ function win(name, w, skip) {
     (reset ? `<div class="win-h"><span>${esc(t('ui.sub.resets', { when: reset }))}</span></div>` : '') + '</div>';
 }
 
-function card(s, skip) {
+function card(s, skip, detail = false) {
   const st = subState(s, skip);
   const chip = st === 'paused' ? `<span class="chip">${esc(t('ui.sub.paused'))}</span>`
     : st === 'full' ? `<span class="chip warn">${esc(t('ui.sub.full'))}</span>`
       : `<span class="chip ok"><span class="dot ok"></span>${esc(t('ui.sub.active'))}</span>`;
   const cs = credState(s.cred);
-  const acts = s.cred
+  const acts = !detail && s.cred ? `<div class="sub-acts"><a class="btn" href="/subscriptions/${encodeURIComponent(s.id)}">${esc(t('ui.policy.details'))} ${ic('arrow')}</a></div>` : s.cred
     ? `<div class="sub-acts"><button class="btn sm" data-act="pause" data-id="${esc(s.id)}">${s.paused ? ic('play') + esc(t('ui.sub.resume')) : ic('pause') + esc(t('ui.sub.pause'))}</button>` +
       `<button class="btn sm danger" data-act="remove" data-id="${esc(s.id)}">${ic('trash')}${esc(t('ui.sub.remove'))}</button></div>`
     : `<div class="sub-acts"><span class="chip" title="${esc(t('ui.sub.notPoolHint'))}">${esc(t('ui.sub.notPool'))}</span></div>`;
@@ -93,7 +93,7 @@ async function poll(ctx) {
   add.timer = ctx.after(3000, () => poll(ctx));
 }
 
-export default Shell.mount('subscriptions', async (ctx) => {
+export async function renderSubscriptions(ctx) {
   const [lim, acc, cr, live, us, sw, set] = await Promise.allSettled([
     ctx.api('/v1/limits?account=all'), ctx.api('/v1/accounts'), ctx.api('/v1/fleet/credentials'),
     ctx.api('/v1/live'), ctx.api('/v1/fleet/users'), ctx.api('/v1/account-switches?limit=8'), ctx.api('/v1/fleet/settings'),
@@ -105,6 +105,9 @@ export default Shell.mount('subscriptions', async (ctx) => {
   // Only what the vault holds is the hub's to count and manage (claude-fleet#2127);
   // the rest of the reported accounts wait, collapsed, under 未纳管.
   const all = subscriptions({ limits: val(lim), accounts: val(acc), creds: val(cr), live: val(live) });
+  const detailID = location.pathname.startsWith('/subscriptions/') ? decodeURIComponent(location.pathname.slice('/subscriptions/'.length)) : '';
+  const detail = detailID ? all.find((s) => s.id === detailID && s.managed) : null;
+  if (detailID && !detail) throw new Error(t('ui.policy.notFound'));
   const cards = all.filter((c) => c.managed), other = all.filter((c) => !c.managed);
   ctx.setCount('subscriptions', cards.length);
   const nC = cards.filter((c) => c.prov === 'claude').length, nX = cards.length - nC;
@@ -138,13 +141,16 @@ export default Shell.mount('subscriptions', async (ctx) => {
     ? '<div class="attn">' + sws.map((x) => `<div><span class="ic ok">${ic('refresh')}</span><div><b>${esc(x.from)} → ${esc(x.to)}</b><span>${esc(relTime(x.at))}${x.where ? ' · ' + esc(x.where) : ''}</span></div></div>`).join('') + '</div>'
     : sw.status === 'rejected' ? failed(sw.reason) : `<div class="empty"><span>${esc(t('ui.sub.noSwitches'))}</span></div>`;
 
-  ctx.el.innerHTML = `<div class="pagehead"><div><p>${esc(t('ui.sub.lead', { skip }))}</p></div><div class="acts"><button class="btn primary" data-act="add">${ic('plus')}${esc(t('ui.sub.addOne'))}</button></div></div>` +
+  ctx.el.innerHTML = `<div class="pagehead"><div><p>${esc(t('ui.sub.lead', { skip }))}</p></div><div class="acts"><a class="btn" href="/subscriptions/settings">${esc(t('ui.policy.global'))}</a><button class="btn primary" data-act="add">${ic('plus')}${esc(t('ui.sub.addOne'))}</button></div></div>` +
     vaultNote + kpis + grid + unmanaged +
-    '<section class="panel" id="subscription-policy"></section>' +
     `<div class="grid g21"><div class="panel"><div class="panel-h"><h3>${esc(t('ui.sub.who'))}</h3><span class="sub">${esc(t('ui.sub.live'))}</span></div>${leases}</div>` +
     `<div class="panel"><div class="panel-h"><h3>${esc(t('ui.sub.switches'))}</h3></div>${switches}</div></div>`;
 
-  void mountPolicy(ctx, ctx.el.querySelector('#subscription-policy'));
+  if (detail) {
+    ctx.el.innerHTML = `<div class="pagehead"><div><a class="sub" href="/subscriptions">← ${esc(t('ui.nav.subscriptions'))}</a><h2>${esc(detail.label)}</h2><p>${esc(t('ui.policy.subscriptionHint'))}</p></div></div>` +
+      `<div class="grid g21"><div>${card(detail, skip, true)}</div><div class="panel"><div class="panel-h"><h3>${esc(t('ui.policy.identity'))}</h3></div><dl class="kv panel-b"><dt>${esc(t('ui.policy.subscription'))}</dt><dd>${esc(detail.cred.provider)}</dd><dt>ID</dt><dd class="mono" style="overflow-wrap:anywhere">${esc(detail.cred.account_uuid || '—')}</dd><dt>${esc(t('ui.sub.sessionsNow'))}</dt><dd>${detail.sessions}</dd></dl></div></div><section class="panel" id="subscription-access"></section>`;
+    void mountSubscriptionAccess(ctx,ctx.el.querySelector('#subscription-access'),detail.cred.account_uuid);
+  }
 
   const byId = new Map(cards.map((c) => [c.id, c]));
   ctx.el.onclick = (e) => {
@@ -170,7 +176,7 @@ export default Shell.mount('subscriptions', async (ctx) => {
           await ctx.api('/v1/fleet/credentials', { json: { action: 'delete', principal_id: 'pool', provider: s.cred.provider, account: s.cred.account } });
           if (s.paused) await ctx.api('/v1/fleet/settings', { method: 'PUT', json: { key: 'pool.paused.' + s.cred.account, value: '' } }).catch(() => {});
           ctx.toast(t('ui.sub.removed', { label: s.label }));
-          await ctx.refresh();
+          if (detail) await ctx.navigate('/subscriptions'); else await ctx.refresh();
         } catch (err) { ctx.toast(t('ui.err.action', { e: err.message })); }
       });
     }
@@ -193,4 +199,6 @@ export default Shell.mount('subscriptions', async (ctx) => {
       poll(ctx);
     }
   });
-}, { dispose: () => clearTimeout(add.timer) });
+}
+export const disposeSubscriptions = () => clearTimeout(add.timer);
+export default Shell.mount('subscriptions', renderSubscriptions, { dispose: disposeSubscriptions });
