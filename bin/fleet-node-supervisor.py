@@ -150,6 +150,8 @@ Seams (sandbox tests, docs/BREAK-IT.md `node-supervisor-dead`):
                         built-in table
   FLEET_NODE_TICK (1 s)  FLEET_NODE_BACKOFF_MAX (60)  FLEET_NODE_BACKOFF_RESET (60)
   FLEET_NODE_ATTIC_DAYS (7)  FLEET_NODE_SWEEP_EVERY (3600)  FLEET_NODE_HEARTBEAT_STALE (120)
+  FLEET_NODE_WATCHDOG_SECS (900)  a loop that has not come round this long dumps its
+                        stacks and exits for launchd to restart it (0 = off)
   FLEET_NODE_LAUNCHCTL  launchctl's path ('' = do not load/unload)
   FLEET_NODE_TEST=1     skip the root-ownership check on the runtime
   FLEET_NODE_PASSWD     a JSON {login: {uid, gid, home[, groups, sudo]}} read instead of
@@ -163,6 +165,7 @@ from __future__ import print_function
 
 import datetime
 import errno
+import faulthandler
 import fcntl
 import glob
 import json
@@ -1883,7 +1886,16 @@ class Supervisor(object):
         self.log("supervisor up pid %d (start #%d) on %s" % (os.getpid(), self.state["supervisor"]["starts"],
                                                             self.state["supervisor"]["runtime"] or "?"))
         tick = env_num("FLEET_NODE_TICK", 1)
+        # The watchdog (issue #3079): a loop that has not come round in
+        # FLEET_NODE_WATCHDOG_SECS (900) dumps every thread's stack to this log and
+        # exits, and launchd's KeepAlive starts it again — the children adopted, the
+        # tasks marked interrupted. On 2026-10-10 mini2's loop stopped mid-tick for
+        # good: every account task (the collector first) stopped with it and nothing
+        # said so. 0 = off.
+        wd = env_num("FLEET_NODE_WATCHDOG_SECS", 900)
         while not self.stop:
+            if wd > 0:
+                faulthandler.dump_traceback_later(wd, exit=True, file=sys.stderr)
             t = now()
             if self.restart_requested():
                 break
@@ -1909,6 +1921,7 @@ class Supervisor(object):
                     self.log("sweep failed: %s" % e)
             self.save()
             time.sleep(tick)
+        faulthandler.cancel_dump_traceback_later()
         self.log("supervisor stopping")
         self.stop_children()
         for name, (p, lf, t0, fh, tk) in list(self.running.items()):

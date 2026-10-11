@@ -265,9 +265,52 @@ def fleet_logins():
     return out
 
 
+def hub_fresh(fleet):
+    """The other machines' rows are only as new as global/remote_<fleet>, which
+    fleet-hub-sessions.sh's loop keeps — a loop the collector's tick (re)starts. A
+    collector that stopped (mini2's node supervisor wedged, 2026-10-10) froze that
+    file, and ⌘P went on listing sessions reaped since (issue #3079). So the list
+    checks it on every open: hub_ok within FLEET_VIEW_HUB_FRESH (10 s) → nothing;
+    older with no loop alive → one --refresh (at most FLEET_VIEW_HUB_REFRESH_SECS,
+    5 s) before the rows, then --ensure; a loop alive but the hub silent → the rows
+    as they are (their 失联 says so). No cache file ⇒ no hub here ⇒ nothing."""
+    g = dash_global()
+    if not fleet or not (g / ("remote_" + fleet)).is_file():
+        return
+    try:
+        ok = int((g / "hub_ok").read_text().split()[0])
+    except (OSError, ValueError, IndexError):
+        ok = 0
+    if time.time() - ok <= fenv("FLEET_VIEW_HUB_FRESH", 10):
+        return
+    hs = os.environ.get("FLEET_VIEW_HUBSESS") or str(Path(__file__).absolute().parent / "fleet-hub-sessions.sh")
+
+    def run(mode, secs):
+        try:
+            p = subprocess.Popen(["bash", hs, mode], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                 stderr=subprocess.DEVNULL, text=True, start_new_session=True)
+        except OSError:
+            return ""
+        try:
+            return p.communicate(timeout=secs)[0] or ""
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(p.pid, signal.SIGKILL)
+            except OSError:
+                pass
+            p.wait()
+            return ""
+    st = run("--status", 3)
+    if st.startswith("loop none"):
+        run("--refresh", fenv("FLEET_VIEW_HUB_REFRESH_SECS", 5))
+    if st.startswith("loop "):
+        run("--ensure", 3)
+
+
 def produce(fleet):
     """tmux-dashboard-rows.sh --sidebar, every subtree open: the rows the old list
     drew, the same producer (it reads remote_<sess>, so other machines come too)."""
+    hub_fresh(fleet)
     env = dict(os.environ, FLEET_SESSION=fleet, FLEET_ROWS_UNFOLD="1")
     seam = os.environ.get("FLEET_VIEW_ROWS_CMD")
     argv = ["sh", "-c", seam] if seam else ["bash", str(Path(__file__).absolute().parent / "tmux-dashboard-rows.sh"), "--sidebar"]

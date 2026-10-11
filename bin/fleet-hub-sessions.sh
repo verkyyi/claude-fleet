@@ -50,7 +50,10 @@
 #   --ensure    start a detached --loop unless one is alive (one per cache: the
 #               loop holds global/hubsess.lock — issue #2630; never via nohup). The collector runs this
 #               every tick (60s), so the 10s cadence needs no daemon of its own and a
-#               loop can never outlive the collector by more than one round. The loop
+#               loop can never outlive the collector by more than one round. Each call
+#               stamps global/hubsess.want, and a running loop goes on to LOOP_SECS
+#               past the newest stamp (issue #3079) — one loop for as long as the
+#               collector lives, no gap between the old loop's end and the next tick. The loop
 #               gets its own session (setsid), or launchd kills it with the tick
 #               (issue #1596) and the cache stops whenever no sidebar is drawing.
 #   --status    `loop <pid>|none · cache <age>s|none` for fleet-doctor; rc 1 = no
@@ -218,6 +221,11 @@ LAST_FETCH=1 # this round's fetch rc (0 = 200, 3 = 304)
 SCOPED=0     # 1 = this round's answer came over YOUR certificate (issue #2388)
 NSCOPED=0    # 1 = …over this login's node token: cut to its person's logins (issue #3001)
 PIDF="$G/hubsess.pid"
+# Every --ensure stamps its epoch here, and a running loop keeps going until
+# LOOP_SECS past the newest stamp (issue #3079): with a 70 s loop and a 60 s
+# collector tick, the tick's --ensure used to find the loop still alive, start
+# nothing, and leave remote_<sess> unrefreshed for up to a minute once it ended.
+WANTF="$G/hubsess.want"
 SESSIONS_NS='fleet-sessions@claude-fleet'
 SUMMARY_NS='fleet-summary@claude-fleet'   # the status bar's two summaries (#1502)
 
@@ -1529,7 +1537,7 @@ refresh_all() { local rc; refresh; rc=$?; refresh_summaries; return "$rc"; }
 loop() {
   hub_on || return 0
   mkdir -p "$G" 2>/dev/null || return 1
-  local end every t0
+  local end every t0 want
   # ONE loop per cache, by a lock its holder keeps for life (issue #2630): the
   # pid file alone let two shells' --ensure race past each other (two loops on
   # one cache for hours). Not holding it yet ⇒ re-exec under the lock; someone
@@ -1565,6 +1573,11 @@ loop() {
     if [ "$LP_SENT" = 1 ] && { [ "$LAST_FETCH" = 0 ] || [ $(( $(date +%s) - t0 )) -ge "$WATCHED_EVERY" ]; }; then
       every=0
     fi
+    # kept alive by the newest --ensure (WANTF): it never outlives the last
+    # caller by more than LOOP_SECS, and never ends while one keeps calling
+    { read -r want < "$WANTF"; } 2>/dev/null || want=0
+    case "$want" in ''|*[!0-9]*) want=0 ;; esac
+    [ $(( want + LOOP_SECS )) -gt "$end" ] && end=$(( want + LOOP_SECS ))
     [ $(( $(date +%s) + every )) -le "$end" ] || break
     [ "$every" = 0 ] || sleep "$every"
   done
@@ -1668,8 +1681,9 @@ loop_pid() {
 # that group; systemd's collect unit says KillMode=process for the same reason.
 ensure() {
   hub_on || return 0
-  [ -z "$(loop_pid)" ] || return 0
   mkdir -p "$G" 2>/dev/null || return 0
+  date +%s > "$WANTF" 2>/dev/null
+  [ -z "$(loop_pid)" ] || return 0
   ( cd / && exec python3 -c "$LOCK_PY" "$LOCKF" 1 bash "$BIN/fleet-hub-sessions.sh" --loop </dev/null >/dev/null 2>&1 & )
   return 0
 }
