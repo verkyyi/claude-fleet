@@ -594,6 +594,69 @@ class LinuxNode(unittest.TestCase):
         self.assertEqual(obj.adopted, {})
 
 
+class StaleLane(unittest.TestCase):
+    """issue #3333: a refused lane one login left behind took the whole pod
+    out of the LoadBalancer — the door died for every login on the node."""
+
+    def sandbox(self, d):
+        return patch.dict(os.environ, {'FLEET_NODE_STATE': os.path.join(d, 'db'), 'FLEET_NODE_TEST': '1',
+                                       'FLEET_NODE_LOG': os.path.join(d, 'log')})
+
+    def lane(self, d, login):
+        p = Path(d, 'db', 'agent', login, 'lane.json')
+        p.parent.mkdir(parents=True)
+        p.write_text(json.dumps({'state': 'refused', 'code': 'WRONG_LOGIN',
+                                 'why': 'unrecognised enrollment token for login %s' % login}))
+        return p
+
+    def test_refused_lane_leaves_the_pod_ready(self):
+        m = module('fleet-node-linux')
+        s = module('fleet-node-supervisor')
+        with tempfile.TemporaryDirectory() as d, self.sandbox(d):
+            Path(d, 'db').mkdir()
+            Path(d, 'db', 'accounts.json').write_text(json.dumps({'alice': {}}))
+            self.lane(d, 'alice')
+            self.assertEqual(sorted(s.lanes_now(s.Paths(), {})), ['alice'])
+            with patch.object(m, 'load', return_value=s), patch.object(s, 'health', return_value=(0, 'ok')), \
+                    patch.object(s, 'pid_alive', return_value=True), \
+                    patch.object(m.Path, 'exists', return_value=True):
+                self.assertEqual(m.probe(Mock(action='ready')), 0, 'a refused lane failed readiness')
+                self.assertEqual(m.probe(Mock(action='live')), 0)
+            with patch.object(m, 'load', return_value=s), patch.object(s, 'health', return_value=(0, 'ok')), \
+                    patch.object(s, 'pid_alive', return_value=False), \
+                    patch.object(m.Path, 'exists', return_value=True):
+                self.assertEqual(m.probe(Mock(action='ready')), 1, 'machine-wide health no longer gates')
+
+    def test_lane_of_a_login_gone_is_ignored(self):
+        s = module('fleet-node-supervisor')
+        with tempfile.TemporaryDirectory() as d, self.sandbox(d):
+            self.lane(d, 'drill10111306x')
+            self.assertEqual(s.lane_refusals(s.Paths()), {}, 'a deleted login\'s lane still counted')
+            Path(d, 'db', 'logins').mkdir()
+            Path(s.login_env_path(s.Paths(), 'drill10111306x')).write_text('CCQUOTA_TOKEN=x\n')
+            self.assertEqual(sorted(s.lane_refusals(s.Paths())), ['drill10111306x'], 'a tenant\'s lane dropped')
+
+    def test_forget_moves_the_agent_dir(self):
+        s = module('fleet-node-supervisor')
+        with tempfile.TemporaryDirectory() as d, self.sandbox(d):
+            lane = self.lane(d, 'bob')
+            Path(d, 'db', 'accounts.json').write_text(json.dumps({'bob': {}}))
+            Path(d, 'db', 'agent', 'carol').mkdir()
+            self.assertEqual(s.account_forget(s.Paths(), 'bob', force=True), 0)
+            self.assertFalse(lane.parent.exists(), 'agent/bob is still there')
+            self.assertTrue(Path(d, 'db', 'agent', 'carol').is_dir(), 'another login\'s dir went too')
+            kept = list(Path(d, 'db', 'attic').glob('agent-bob-*/lane.json'))
+            self.assertEqual(len(kept), 1, 'the lane was not kept in the attic')
+            self.assertEqual(s.lanes_now(s.Paths(), {}), {})
+            # idempotent: forgetting again moves nothing and still answers 0
+            self.assertEqual(s.account_forget(s.Paths(), 'bob', force=True), 0)
+
+    def test_login_remove_forgets_through_account_forget(self):
+        src = (BIN / 'fleet-node-linux.py').read_text()
+        body = src[src.index('def login_remove('):src.index('def login_list(')]
+        self.assertIn('s.account_forget(paths, login)', body)
+
+
 class FakeOS:
     """A passwd/group that vanishes like the image layer's, plus the calls
     login open/remove make — every write lands in a temp dir (EPIC #3208 C1)."""

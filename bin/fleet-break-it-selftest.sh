@@ -6324,6 +6324,21 @@ drill_linux_restore_crashloop() {
   WHAT="restore 退 1：快照改名 sessions.snapshot.failed-<UTC>、写 ready、不退出；空跳过表不再吞掉钉住的表"
 }
 
+# ---- linux-stale-lane-door-down (#3333): a deleted drill login left
+# agent/<login>/lane.json (refused, WRONG_LOGIN); the readiness probe failed on
+# any refused lane, the LoadBalancer (externalTrafficPolicy: Local) dropped the
+# pod and the 22022 door died for every login. Now readiness is machine-wide
+# only, a gone login's lane is ignored, and removing a login moves its agent dir.
+drill_linux_stale_lane_door_down() {
+  CAP=15; local t0
+  t0=$(now)
+  if ! python3 "$BIN/fleet-node-linux-selftest.py" StaleLane >"$WORK/linux-stale-lane.out" 2>&1; then
+    WHY="one login's refused lane still takes the Linux node's door down: $(tail -n 3 "$WORK/linux-stale-lane.out")"; return 1
+  fi
+  SECS=$(since "$t0")
+  WHAT="一个登录的 lane 被拒：pod 照样 Ready（就绪只看整机）；删掉的登录留下的 lane 不算；account forget / login remove 把 agent/<login> 挪进 attic"
+}
+
 # A child's report whose parent is gone (issue #3117, EPIC #3111 C6): a scratch spawned
 # a worker and was closed; the worker merged and its report went nowhere — a silent
 # exit 0. Now it is the person's: one row in global/orphan-reports.ndjson and one
