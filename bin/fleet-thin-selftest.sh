@@ -23,6 +23,9 @@
 #   G  a new client between connections is exec'd, view kept (--resume)
 #   H  ⌘Q (quit with our token) → exit 0 and the profile back; SIGHUP → the loop
 #      and its ssh gone, nothing left; no terminal → exit 2
+#   I  this machine is home (issue #3006): --argv for this machine + login →
+#      local (FLEET_CONNECT_SELF=ssh keeps the ssh); --local → no hub asked, the
+#      view's command the loop's only child, no ssh in the tree
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 T="$(mktemp -d "${TMPDIR:-/tmp}/fthin.XXXXXX")"; T="$(cd "$T" && pwd -P)"
@@ -327,6 +330,37 @@ awk -F '\t' '$2 == "connect" && NF >= 9 && $3 == "m1" && $4 == "lan" && $5 ~ /^[
   && ok "H: thin.log connect lines carry home · route · pick_ms · ssh_ms · first_ms" || fail "H: thin.log: $(head -3 "$T/thin.log")"
 e=$(python3 "$BIN/fleet-thin.py" </dev/null 2>&1); rc=$?
 [ "$rc" = 2 ] && ok "H: no terminal → exit 2, one line" || fail "H: no tty rc=$rc $e"
+
+# ---------------------------------------------------------------------------
+# I — this machine is home (issue #3006, C9): no ssh back to itself
+# ---------------------------------------------------------------------------
+LG=$(id -un)
+cat >> "$H/.ssh/fleet-ssh-config" <<EOF
+Host $ME fleet-$ME fleet-$ME-lan
+  HostName 127.0.0.3
+  User $LG
+EOF
+printf '%s lan\n' "$ME" >> "$H/.config/claude-fleet/routes"
+j=$(argv "$ME") || fail "I: --argv $ME exit $?"
+case $j in *'"local": true'*'"argv": []'*) ok "I: --argv for this machine and login → local, no ssh" ;; *) fail "I: --argv self: $j" ;; esac
+j=$(env FLEET_CONNECT_SELF=ssh HOME="$H" PATH="$PATH" XDG_CONFIG_HOME="$H/.config" XDG_CACHE_HOME="$H/.cache" \
+      FLEET_CLIENT_LOG=0 python3 "$BIN/fleet-connect.py" --argv "$ME")
+case $j in *'"local"'*) fail "I: FLEET_CONNECT_SELF=ssh still local: $j" ;; *'"argv": ["ssh"'*) ok "I: FLEET_CONNECT_SELF=ssh → the ssh to itself" ;; *) fail "I: self=ssh: $j" ;; esac
+mkdir -p "$T/client/.claude/fleet/bin"
+cp "$T/home/m1/.claude/fleet/bin/fleet-remote-view.sh" "$T/client/.claude/fleet/bin/"
+: > "$T/rv.log"; : > "$T/ssh.log"; : > "$T/argv.log"
+THIN_ARGS='["--local"]' drive local '[
+ ["expect", "VIEW orch ON"],
+ ["children", ""],
+ ["send", "quit\n"],
+ ["wait", 10]
+]'
+res=$(cat "$T/res.local")
+case $res in *'RC 0'*) ok "I: --local: up and ⌘Q → exit 0" ;; *) fail "I: --local: $res" ;; esac
+case $res in *"CHILDREN 1 "*"fleet-remote-view.sh attach --thin "*) case $res in *ssh*) fail "I: an ssh in the tree: $res" ;;
+  *) ok "I: --local: the view's command is the loop's only child — no ssh in the tree" ;; esac ;; *) fail "I: children: $(grep CHILDREN "$T/res.local")" ;; esac
+[ -s "$T/argv.log" ] && fail "I: --local asked fleet-connect: $(cat "$T/argv.log")" || ok "I: --local asks no hub"
+[ -s "$T/ssh.log" ] && fail "I: --local ran ssh: $(cat "$T/ssh.log")" || :
 
 echo
 [ "$FAILS" = 0 ] && { echo "fleet-thin-selftest: PASS"; exit 0; }

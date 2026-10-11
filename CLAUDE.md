@@ -209,8 +209,11 @@ Do not install from memory: read the doc and work from it.
   `conf/tmux-view.conf` (loaded last, after the human layer) sets `user-keys[920..932]`
   and rebuilds `fleet-view` — a COPY of root first (tmux does not fall back to
   root for a key a session's key-table lacks, so the 看台's mouse is root's own
-  bindings) — and `fleet-view-pfx` (⌃] + a letter) off `dash-keymap.sh`'s switch
-  table (`fleet-quickopen.py view-keys`); only a 看台 (`attach --thin`) wears
+  bindings) — and `fleet-view-pfx` (⌃] + a letter: the phone's keys, `p` list ·
+  `n`/`b` · `c` · `t` · `q`, off `dash-keymap.sh --panel switch view` — issue #3006)
+  off `dash-keymap.sh`'s switch table (`fleet-quickopen.py view-keys`); over ssh
+  plain `fleet` is the thin loop (a managed machine: `--local`, no ssh to itself),
+  and narrower than 100 columns the list is full-screen; only a 看台 (`attach --thin`) wears
   that key-table, so a direct attach sees none of it. A 看台 changes session only
   through `bin/fleet-view-go.sh` (`fleet_view.go`, `logs/view-switch.ndjson`).
   **Another machine's session is a window of the 看台 too** (issue #2751, C4): one

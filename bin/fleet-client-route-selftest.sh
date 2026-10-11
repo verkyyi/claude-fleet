@@ -16,7 +16,8 @@
 #                    `--enter`; tmux 3.1 / no tmux → the install hint, exit 1,
 #                    connect never run
 #   B. over ssh    — the iPad / iPhone way: the real fleet-shell.sh run with
-#                    SSH_CONNECTION set on a tty starts the same client on this
+#                    SSH_CONNECTION set on a tty (FLEET_CLIENT=shell: plain
+#                    `fleet` over ssh is the thin loop since #3006) starts the same client on this
 #                    machine (its own -L server) and marks `@fleet_client_remote`
 #                    = `<tty>|<machine>`; a local start on another tty leaves it,
 #                    on that tty clears it
@@ -141,7 +142,7 @@ TTYBIN="$WORK/ttybin"; mkdir -p "$TTYBIN"
 tty_is() { printf '#!/bin/sh\necho %s\n' "$1" > "$TTYBIN/tty"; chmod +x "$TTYBIN/tty"; }
 mark() { "$REAL_TMUX" -L "$FLEET_SHELL_SESSION" show-options -gqv @fleet_client_remote 2>/dev/null; }
 tty_is /dev/ttys901
-PATH="$TTYBIN:$PATH" SSH_CONNECTION='10.0.0.9 50000 10.0.0.5 22' FLEET_NODE_ALIASES="$(hostname -s | cut -d. -f1)=m5" \
+PATH="$TTYBIN:$PATH" SSH_CONNECTION='10.0.0.9 50000 10.0.0.5 22' FLEET_CLIENT=shell FLEET_NODE_ALIASES="$(hostname -s | cut -d. -f1)=m5" \
   FLEET_SHELL_NO_ATTACH=1 FLEET_REMOTE_SSH_CMD=/usr/bin/false "$SB/fleet" >/dev/null 2>"$WORK/b.err"; rc=$?
 eq 'B: over ssh the client starts here (exit 0)' 0 "$rc"
 CHECKS=$((CHECKS + 1)); "$REAL_TMUX" -L "$FLEET_SHELL_SESSION" has-session -t "=$FLEET_SHELL_SESSION" 2>/dev/null \

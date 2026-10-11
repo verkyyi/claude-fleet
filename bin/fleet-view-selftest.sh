@@ -10,7 +10,7 @@
 #
 #   A  conf/tmux-view.conf: user-keys 920..932; root and prefix exactly tmux's;
 #      fleet-view = root copied (the mouse) + ⌘↓ ⌘↑ ⌘[ ⌘] ⌘P ⌘K off the switch
-#      table (dash-keymap.sh); fleet-view-pfx = ⌃] then the table's prefix letter;
+#      table (dash-keymap.sh); fleet-view-pfx = ⌃] then the 看台's letter (view);
 #      sourcing twice leaves the same tables
 #   B  ⌘P (`ESC[927~`) in the 看台 opens the list — grouped by (machine, login),
 #      this one first, 停放 · 待你动手 · 已结束 under them, no `merged` / `done:2h` /
@@ -27,6 +27,10 @@
 #      not a 看台 keeps root (its key-table untouched)
 #   F  the old client's quickopen is untouched by --view (do <verb> alone still
 #      hands the verb to the list)
+#   G  a phone (issue #3006, C9): the ⌃] letters (dash-keymap.sh --panel switch
+#      view: p list · n / b · c · t · q, one letter each, every one a switch-table
+#      action); a 40-column client: ⌃] p opens the list on the whole screen, ⌃] n
+#      steps on to another machine's session
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$BIN/.." && pwd)"
@@ -74,8 +78,16 @@ ti list-keys -T fleet-view | norm > "$W/fv.1"
 copy=$(grep -v -E ' User9[0-9][0-9] | C-\] ' "$W/fv.1" | sed 's/ -T fleet-view / -T root /')
 [ "$copy" = "$(cat "$W/root.now")" ] || fail "A: fleet-view's copy is not root: $(diff <(printf '%s\n' "$copy") "$W/root.now" | head -5)"
 table=$(bash "$BIN/dash-keymap.sh" --panel switch list)
+vtable=$(bash "$BIN/dash-keymap.sh" --panel switch view)
+[ "$(awk '{ print $2 }' <<< "$vtable" | sort | uniq -d)" = '' ] || fail "A: two 看台 actions share a ⌃] letter: $vtable"
+for a in $(awk '{ print $1 }' <<< "$vtable"); do
+  awk -v a="$a" '$1 == a { f = 1 } END { exit !f }' <<< "$table" || fail "A: ⌃] letter for $a, which the switch table lacks"
+done
+for p in 'quickopen p' 'next n' 'prev b' 'new c' 'dispatch t' 'quit q'; do
+  grep -qx "$p" <<< "$vtable" || fail "A: the phone's ⌃] $p is not in the 看台's letters: $vtable"
+done
 for a in next prev back fwd quickopen switcher; do
-  code=$(awk -v a="$a" '$1 == a { print $4 }' <<< "$table"); letter=$(awk -v a="$a" '$1 == a { print $5 }' <<< "$table")
+  code=$(awk -v a="$a" '$1 == a { print $4 }' <<< "$table"); letter=$(awk -v a="$a" '$1 == a { print $2 }' <<< "$vtable")
   grep -q " -T fleet-view User$code " "$W/fv.1" || fail "A: $a (User$code) is not bound in fleet-view"
   ti list-keys -T fleet-view-pfx | norm | grep -q -- "-T fleet-view-pfx \\\\\?$letter " || fail "A: ⌃] $letter ($a) is not bound in fleet-view-pfx"
 done
@@ -207,6 +219,34 @@ for _ in 1 2 3 4 5 6; do sleep 0.3; [ "$(cur)" = "$W2" ] && break; done
 [ "$(ti show-options -v -t fl key-table 2>/dev/null || echo root)" != fleet-view ] || fail "E: the fleet session's key-table changed"
 [ -s "$W/pane1.in" ] && fail "E: a ⌘ key's bytes reached a pane: $(od -c "$W/pane1.in" | head -2)"
 pass "E  ⌘↓ ⌘↑ walk the list, ⌘[ ⌘] the history, ⌃] n on a phone; the fleet session keeps its keys"
+
+# --- G: a phone (issue #3006, C9): 40 columns, ⌃] p the whole screen, ⌃] n on to m4 ----------
+to resize-window -t o:view -x 40 -y 20
+sleep 0.5
+[ "$(ti display-message -p -t 'fl@view-v1:' '#{client_width}')" = 40 ] \
+  || fail "G: the client is not 40 columns: $(ti list-clients -F '#{client_width}')"
+to send-keys -t o:view C-] p
+ok=''; for _ in 1 2 3 4 5 6 7 8 9 10; do
+  sleep 0.5; to capture-pane -p -t o:view > "$W/phone.txt"; grep -q '这台' "$W/phone.txt" && { ok=1; break; }
+done
+[ -n "$ok" ] || fail "G: ⌃] p opened no list at 40 columns: $(cat "$W/phone.txt")"
+python3 - "$W/phone.txt" <<'PY' || fail "G: the list is not the whole screen at 40 columns: $(cat "$W/phone.txt")"
+import sys
+lines = open(sys.argv[1], encoding="utf-8").read().split("\n")
+# the popup's border at column 0 on the first row and the 40th column on a body row
+assert lines[0][:1] in "┌╭", lines[0]
+assert any(len(l) >= 40 and l[39] in "│┃" for l in lines[1:]), lines
+PY
+[ -n "${FLEET_VIEW_EVIDENCE_PHONE:-}" ] && cp "$W/phone.txt" "$FLEET_VIEW_EVIDENCE_PHONE"
+to send-keys -t o:view Escape; sleep 0.5
+TMUX="$IN,0,0" bash "$BIN/fleet-view-go.sh" v1 "$UU/f2" || fail "G: go to beta"
+to send-keys -t o:view C-] n                 # beta → the next in the list: m4's session
+for _ in 1 2 3 4 5 6 7 8; do sleep 0.3; case $(ti display-message -p -t 'fl@view-v1:' '#{@peer}') in m4@*) break ;; esac; done
+case $(ti display-message -p -t 'fl@view-v1:' '#{@peer}') in
+  "m4@$ME") ;; *) fail "G: ⌃] n from beta did not step on to m4's window ($(cur) @peer=$(ti display-message -p -t 'fl@view-v1:' '#{@peer}'))" ;;
+esac
+to resize-window -t o:view -x 120 -y 32
+pass "G  a phone: 40 columns, ⌃] p the list on the whole screen, ⌃] n on to another machine's session"
 
 # --- F: the old client's road ----------------------------------------------------------------
 grep -q 'if argv\[:1\] == \["do"\] and len(argv) == 2:' "$BIN/fleet-quickopen.py" || fail "F: the old do <verb> road changed"

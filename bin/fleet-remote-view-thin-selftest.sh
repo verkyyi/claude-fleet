@@ -18,7 +18,8 @@
 #   B. the line   — the client's screen's first line is the top line; for a window
 #                   of this machine its own stamps: #7 · 剩余 62% · Opus 5.5 · high ·
 #                   @<machine> · the route; for one on the refresh loop's cache its
-#                   line (title, needs kind)
+#                   line (title, needs kind); at 40 columns (a phone, #3006) no
+#                   剩余 · model · effort
 #   C. cur=       — switching windows in the 看台 moves `cur=` (the [78] hook, gated
 #                   on @view_thin: a switch in the fleet session writes nothing)
 #   D. keep       — the client gone: the 看台 and its row stay (left=), `health`
@@ -170,6 +171,12 @@ has "B: …剩余 % off its own stamps" "$L7" "剩余 62%"
 has "B: …model · effort" "$L7" "Opus 5.5 · high"
 has "B: …the machine (FLEET_NODE_ALIASES name)" "$L7" "@m9"
 has "B: …the route off the registry row" "$L7" "Tailscale·自动"
+# a phone (issue #3006, C9): narrower than 100 columns, no 剩余 · model · effort
+L7n=$(python3 "$BIN/fleet-topbar.py" render --node view=dev1 "s=$RS" "reg=$FLEET_CONF_DIR/remote-views" "g=$G" \
+  "sock=$(tn display-message -p '#{socket_path}')" cw=40 "w=$W7" | sed 's/#\[[^]]*\]//g')
+has "B: 40 columns: the key stays" "$L7n" "#7"
+hasnt "B: …no 剩余 %" "$L7n" "62%"
+hasnt "B: …no model" "$L7n" "Opus"
 L8=$(python3 "$BIN/fleet-topbar.py" render --node view=dev1 "s=$RS" "reg=$FLEET_CONF_DIR/remote-views" "g=$G" \
   "sock=$(tn display-message -p '#{socket_path}')" cw=160 "w=$W8")
 has "B: a window on the refresh loop's cache: its title" "$(printf '%s' "$L8" | sed 's/#\[[^]]*\]//g')" "修缓存"

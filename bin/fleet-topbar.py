@@ -351,6 +351,7 @@ def paint(parts, bg):
 # peerlink/state.json (C5). layout() and fit() are the client's, unchanged.
 
 US = "\x1f"
+NODE_NARROW = 100   # a 看台 narrower than this (a phone, #3006) drops 剩余 · model · effort
 NODE_FMT = "|".join(["#{@fleet_id}", "#{@peer_cur}", "#{@peer_node}", "#{@peer_login}",
                      "#{@claude_state}", "#{@claude_needs}", "#{@issue}", "#{@ctx_left}",
                      "#{@ctx_band}", "#{@ctx_ts}", "#{@model}", "#{@effort}", "#{@fleet_role}",
@@ -467,6 +468,10 @@ def node_record(kv):
 
 def render_node(kv, cols):
     rec, down, rr, via = node_record(kv)
+    if cols < NODE_NARROW:
+        # a phone (issue #3006, C9): no 剩余 · model · effort — the key, the title
+        # and the machine are what a thumb's screen has room for
+        rec = {k: v for k, v in rec.items() if k not in ("ctx_left", "model", "effort")}
     parts, bg = layout(rec, cols, down, rr, None, via)
     print(paint(parts, bg))
     return 0
