@@ -1047,8 +1047,8 @@ if [ -d "$ROOT/conf/agent-defaults/claude/agents" ] && [ -f "$ROOT/bin/fleet-age
   if out=$(CLAUDE_CONFIG_DIR="$CDIR" python3 "$ROOT/bin/fleet-agent-def.py" ship ${DRYFLAG:+--check} 2>&1); then
     w=$(printf '%s\n' "$out" | grep -E '^(wrote|would write)' | awk '{print $NF}' | paste -sd' ' -)
     k=$(printf '%s\n' "$out" | grep -E '^(theirs|deleted)' | awk '{print $2}' | paste -sd' ' -)
-    if [ -n "$w" ]; then say "agent files: $([ "$DRY" = 1 ] && echo 'would write' || echo 'wrote') $w${k:+ · the person's own: $k}"
-    else say "agent files: ok${k:+ — the person's own: $k}"; fi
+    if [ -n "$w" ]; then say "agent files: $([ "$DRY" = 1 ] && echo 'would write' || echo 'wrote') $w${k:+ · kept as theirs: $k}"
+    else say "agent files: ok${k:+ — kept as theirs: $k}"; fi
   else
     fail agentfiles "fleet-agent-def.py ship: $(printf '%s\n' "$out" | tail -1)"
   fi

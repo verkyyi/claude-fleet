@@ -122,7 +122,7 @@ case "$got" in "--model sonnet --tools=Read,Grep --disallowedTools=Edit --append
   ok "D: no --agent ⇒ --tools / --disallowedTools / --append-system-prompt-file" ;; *) bad "D: fallback launch [$got]" ;; esac
 f=$(printf '%s\n' "$got" | grep -o "$FLEET_CONF_DIR/agents/ro-[0-9a-f]*\.md")
 [ "$(cat "$f" 2>/dev/null)" = '正文 ro' ] && ok "D: …the appended file is the body" || bad "D: body copy [$(cat "$f" 2>/dev/null)]"
-eq "D: the answer is kept per binary (a second launch asks no --help)" "$(ls "$FLEET_CONF_DIR/agents/" | grep -c '^agent-flag\.')" 2
+eq "D: the answer is kept per binary (a second launch asks no --help)" "$(set -- "$FLEET_CONF_DIR"/agents/agent-flag.*; echo $#)" 2
 printf '#!/bin/sh\nif [ "$1" = --help ]; then exec sleep 60; fi\nfor a in "$@"; do printf "%%s\\n" "$a"; done\n' > "$WORK/claude-hang"; chmod +x "$WORK/claude-hang"
 t0=$(date +%s); got=$(FCBIN="$WORK/claude-hang" fc bash "$BIN/fleet-claude.sh" --as doc-only x); dt=$(( $(date +%s) - t0 ))
 [ "$got" = "--model sonnet --agent doc-only x" ] && [ "$dt" -le 10 ] \
