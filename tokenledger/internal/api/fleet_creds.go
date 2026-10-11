@@ -31,9 +31,10 @@ import (
 // person, and rides along in EVERY active principal's lease — after the same
 // no-principal and revocation checks, so a revoked person or machine loses
 // the pool too. The audit row names the person who leased it, with "pool" in
-// its detail. Which accounts are pool is the operator's `put`; there is no
-// per-principal allow-list in this phase (every active principal may lease
-// every pool row — that IS the pool, docs/SHARED-MACHINE.md 2b).
+// its detail. Which accounts are pool is the operator's `put`; which of them
+// (and of the person's own) a machine and a person may lease is the
+// subscription allowlists' (claude-fleet#3043, fleet_cred_policy.go) — none
+// set, every active principal leases every pool row, as before.
 
 // NodeCredential is one leased credential in a node's answer. Pool marks a
 // shared-pool account (not the person's own); Kind says what was issued —
@@ -83,6 +84,13 @@ type NodeCredentialsResponse struct {
 	PrincipalID string           `json:"principal_id"`
 	IssuedAt    time.Time        `json:"issued_at"`
 	Credentials []NodeCredential `json:"credentials"`
+	// Withdrawn (claude-fleet#3043): accounts this login would lease but a
+	// subscription allowlist forbids — Error says why. The node removes its
+	// copy of each (tenant-scoped on a shared proxy); no access travels.
+	Withdrawn []NodeCredential `json:"withdrawn,omitempty"`
+	// RecheckSecs: lease again within this many seconds, while any allowlist
+	// exists, so a narrowing reaches the node (0 = the agent's own schedule).
+	RecheckSecs int `json:"recheck_secs,omitempty"`
 }
 
 // Lease refusal reasons, the "error" of a non-200 answer — the agent branches
@@ -289,6 +297,33 @@ func (s *Server) handleNodeCredentials(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	creds = append(creds, pool...)
+	// Subscription allowlists (claude-fleet#3043): this machine's ∩ this
+	// person's, after every gate above. A policy that cannot be read refuses
+	// the lease rather than reading as no restriction.
+	pol, err := s.credPolicyFor(ep.ID, principal)
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	var withdrawn []NodeCredential
+	if pol.Restricted() {
+		kept := creds[:0:0]
+		for _, c := range creds {
+			uuid, why := s.credVerdict(c, pol)
+			if why == "" {
+				kept = append(kept, c)
+				continue
+			}
+			isPool := c.PrincipalID == store.PoolPrincipal
+			withdrawn = append(withdrawn, NodeCredential{Provider: c.Provider, Account: c.Account, Kind: c.Kind, Pool: isPool, Error: why})
+			if err := s.Store.AddCredAudit(store.CredAudit{Action: store.CredDeny, PrincipalID: principal, Provider: c.Provider,
+				Account: c.Account, Hostname: host, OSUser: osUser, EndpointID: ep.ID,
+				Detail: optional("pool · ", isPool) + "policy: " + why + optional(" (account_uuid="+uuid+")", uuid != "")}); err != nil {
+				log.Printf("credentials: audit policy deny for %s@%s: %v", osUser, host, err)
+			}
+		}
+		creds = kept
+	}
 	paused := map[string]bool{}
 	if settings, err := s.Store.FleetSettings(); err == nil {
 		for _, a := range pausedAccounts(settings) {
@@ -307,7 +342,10 @@ func (s *Server) handleNodeCredentials(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	resp := NodeCredentialsResponse{PrincipalID: principal, IssuedAt: time.Now().UTC(), Credentials: []NodeCredential{}}
+	resp := NodeCredentialsResponse{PrincipalID: principal, IssuedAt: time.Now().UTC(), Credentials: []NodeCredential{}, Withdrawn: withdrawn}
+	if st, err := s.Store.FleetSettings(); err == nil && anyCredPolicy(st) {
+		resp.RecheckSecs = int(credPolicyRecheck / time.Second)
+	}
 	for _, c := range creds {
 		isPool := c.PrincipalID == store.PoolPrincipal
 		nc := NodeCredential{Provider: c.Provider, Account: c.Account, Kind: c.Kind, Pool: isPool, Paused: isPool && paused[c.Account]}

@@ -87,6 +87,15 @@ type credLease struct {
 			User             string   `json:"user"`
 		} `json:"access"`
 	} `json:"credentials"`
+	// Withdrawn (claude-fleet#3043): accounts a subscription allowlist now
+	// forbids this login — its copy is removed. RecheckSecs bounds the wait
+	// to the next lease while any allowlist exists.
+	Withdrawn []struct {
+		Provider string `json:"provider"`
+		Account  string `json:"account"`
+		Error    string `json:"error"`
+	} `json:"withdrawn"`
+	RecheckSecs int `json:"recheck_secs"`
 }
 
 // errLeaseRefused is a 403 from the hub: revoked, or no fleet account.
@@ -246,10 +255,84 @@ func (a *Agent) credCycle(ctx context.Context) (time.Duration, error) {
 			}
 		}
 	}
+	for _, wd := range lease.Withdrawn {
+		if err := a.withdrawCred(wd.Provider, wd.Account); err != nil {
+			log.Printf("credentials: remove %s/%s (not allowed here: %s): %v", wd.Provider, wd.Account, wd.Error, err)
+			if credMinWait < wait {
+				wait = credMinWait
+			}
+		}
+	}
+	if lease.RecheckSecs > 0 {
+		if d := time.Duration(lease.RecheckSecs) * time.Second; d < wait {
+			wait = d
+		}
+	}
 	if wait < credMinWait {
 		wait = credMinWait
 	}
 	return wait, nil
+}
+
+// withdrawCred removes this login's copy of one account a subscription
+// allowlist no longer lets it use (claude-fleet#3043): through the proxy when
+// separated (this login's index entry only), else the files the lease wrote.
+// Only what the hub wrote is touched — a token the operator stored by hand,
+// or a Codex home the person logged in themselves, stays.
+func (a *Agent) withdrawCred(provider, account string) error {
+	if !safeLabel.MatchString(account) {
+		return fmt.Errorf("unsafe account label %q", account)
+	}
+	switch provider {
+	case "claude":
+		return removeClaudeCred(a.credAccountsDir(), account, a.credUnstore())
+	case "codex":
+		return removeCodexAuth(a.codexHomeFor(account), account, a.credUnstore())
+	}
+	return nil
+}
+
+// removeClaudeCred undoes writeClaudeCred: the credential (the proxy's copy,
+// or <dir>/<label>.hub/) and the hub's label marker.
+func removeClaudeCred(dir, label string, unstore func(kind, label string) error) error {
+	if unstore != nil {
+		if err := unstore("claude", label); err != nil {
+			return err
+		}
+	}
+	if err := os.RemoveAll(filepath.Join(dir, label+".hub")); err != nil {
+		return err
+	}
+	markerPath := filepath.Join(dir, label)
+	if cur, err := os.ReadFile(markerPath); err == nil && bytes.HasPrefix(cur, []byte(HubMarkerPrefix)) {
+		return os.Remove(markerPath)
+	}
+	return nil
+}
+
+// removeCodexAuth undoes writeCodexAuth: the proxy's copy, or auth.json when
+// it is the hub's (its refresh_token the placeholder). The home stays.
+func removeCodexAuth(home, label string, unstore func(kind, label string) error) error {
+	if unstore != nil {
+		return unstore("codex", label)
+	}
+	p := filepath.Join(home, "auth.json")
+	b, err := os.ReadFile(p)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var auth struct {
+		Tokens struct {
+			RefreshToken string `json:"refresh_token"`
+		} `json:"tokens"`
+	}
+	if json.Unmarshal(b, &auth) != nil || auth.Tokens.RefreshToken != CodexRefreshPlaceholder {
+		return nil // the person's own login, not the hub's lease
+	}
+	return os.Remove(p)
 }
 
 func (a *Agent) fetchCredLease(ctx context.Context) (*credLease, error) {

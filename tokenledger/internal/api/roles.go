@@ -108,6 +108,7 @@ var routeAccess = map[string]string{
 	"/v1/fleet/credentials": accessAdmin, "/v1/fleet/credentials/revoke": accessAdmin,
 	NodeRevokePath:                accessAdmin,
 	"/v1/fleet/credentials/audit": accessAdmin,
+	CredPolicyPath:                accessAdmin,
 	"/v1/fleet/ssh-relays":        accessAdmin,
 	"/v1/accounts":                accessAdmin, "/v1/accounts/label": accessAdmin,
 	"/v1/collectors": accessAdmin, "/v1/account-usage": accessAdmin,

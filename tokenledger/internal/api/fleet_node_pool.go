@@ -56,7 +56,8 @@ func (s *Server) handleNodePool(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusMethodNotAllowed, "GET")
 		return
 	}
-	if _, ok := s.nodeEndpoint(w, r); !ok {
+	ep, ok := s.nodeEndpoint(w, r)
+	if !ok {
 		return
 	}
 	if s.vaultOff(w) || s.vaultLocked(w) {
@@ -67,6 +68,16 @@ func (s *Server) handleNodePool(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// The machine's allowlist (claude-fleet#3043): the manifest is the
+	// machine's, so only the node scope applies — a person's narrowing is
+	// their lease's `withdrawn`, removed from their own index alone. A pool
+	// token left off here is dropped from the machine.
+	pol, err := s.credPolicyFor(ep.ID, "")
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	rows = s.credPolicyFilter(rows, pol)
 	paused := map[string]bool{}
 	if settings, err := s.Store.FleetSettings(); err == nil {
 		for _, a := range pausedAccounts(settings) {

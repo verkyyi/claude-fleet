@@ -359,3 +359,48 @@ func TestCredLeaseReportsUpstreamRevoked(t *testing.T) {
 		t.Fatalf("refusal of a replaced token still reported: %+v", rs)
 	}
 }
+
+// A lease that withdraws an account (claude-fleet#3043) removes what the hub
+// wrote for it — only that: a hand-stored Claude token and a person's own
+// Codex login stay — and leases again within recheck_secs.
+func TestCredCycleWithdrawsForbiddenAccounts(t *testing.T) {
+	home := t.TempDir()
+	acct := filepath.Join(home, ".config", "claude-fleet", "accounts")
+	mk := func(p, body string) {
+		t.Helper()
+		_ = os.MkdirAll(filepath.Dir(p), 0o700)
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mk(filepath.Join(acct, "gone.hub", ".credentials.json"), `{"claudeAiOauth":{"accessToken":"sk-ant-oat01-x"}}`)
+	mk(filepath.Join(acct, "gone"), "hub:gone\n")
+	mk(filepath.Join(acct, "mine"), "sk-ant-oat01-HANDSTORED\n")
+	hubCx := filepath.Join(home, ".codex-accounts", "work", "auth.json")
+	mk(hubCx, `{"tokens":{"access_token":"a","refresh_token":"`+CodexRefreshPlaceholder+`"}}`)
+	ownCx := filepath.Join(home, ".codex", "auth.json")
+	mk(ownCx, `{"tokens":{"access_token":"a","refresh_token":"rt-own"}}`)
+
+	body := `{"principal_id":"p","credentials":[],"recheck_secs":900,"withdrawn":[
+	 {"provider":"claude","account":"gone","error":"not in machine m4's allowlist"},
+	 {"provider":"claude","account":"mine","error":"x"},
+	 {"provider":"codex","account":"work","error":"x"},
+	 {"provider":"codex","account":"default","error":"x"},
+	 {"provider":"claude","account":"../escape","error":"x"}]}`
+	a := credAgent(fakeVaultHub(t, 200, body), home)
+	wait, err := a.credCycle(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wait > 15*time.Minute {
+		t.Fatalf("next lease in %s; recheck_secs said 15m", wait)
+	}
+	for p, want := range map[string]bool{
+		filepath.Join(acct, "gone.hub"): false, filepath.Join(acct, "gone"): false,
+		filepath.Join(acct, "mine"): true, hubCx: false, ownCx: true,
+	} {
+		if _, err := os.Stat(p); (err == nil) != want {
+			t.Errorf("%s exists=%v, want %v", p, err == nil, want)
+		}
+	}
+}

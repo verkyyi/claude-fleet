@@ -186,6 +186,58 @@ ccquota codex login personal --device-auth   # approve the device code while sig
 ccquota codex list                            # LOGIN valid
 ```
 
+### 订阅白名单 — which subscriptions a machine and a person may use (issue #3043)
+
+With a hub, every active person leases every pool account by default. The
+operator narrows that with two allowlists, both on the hub:
+
+    effective = eligible (own + pool, after revocation · trust · separation)
+                ∩ the machine's list ∩ the person's list
+
+- **Keys.** A machine is the name its endpoint *joined* as (`enrolled_host`,
+  first label) — shared by every login on it, never the hostname a heartbeat
+  reports. A person is the stable principal ID (`gh:<id>`). An OS login is not
+  a third list: it uses its hub owner's.
+- **Entries** are subscription IDs — a Claude account UUID, a Codex
+  `codex:account:<32 hex>`. Account labels never match, so a rename keeps its
+  place and a new token under an old label does not inherit it. A credential
+  imported before account UUIDs were recorded matches no list: record one with
+  `POST /v1/fleet/credentials {"action":"bind","account_uuid":…}`.
+- **Defaults.** No list = unrestricted (as before); `[]` = deny all; a list =
+  only its entries. A list that does not parse denies all in its scope; with any
+  machine list set, an endpoint whose joined name is unknown is denied. A list
+  never grants anything the existing gates refuse (another person's own
+  subscription, a revoked machine or person).
+- **Where.** One resolver in the hub: the node lease (a forbidden account is
+  answered as `withdrawn`, and the agent removes its copy — on a shared proxy
+  from that login's index only, `fleet-cred-proxy.py unstore`), the pool
+  manifest (machine list only; the machine's sweep drops what it omits), and
+  every session binding of the central proxy (first pick, a retained binding's
+  re-check, an explicit bind, the 429 rebind).
+
+```sh
+export CCQUOTA_VIEWER_TOKEN=…            # the operator's, from the environment only
+fleet-cred-policy.sh effective --machine fleet-linux-0 --principal gh:2718137   # each account: ALLOW / DENY + why, with its UUID
+fleet-cred-policy.sh set node fleet-linux-0 <uuid> <uuid> …
+fleet-cred-policy.sh set user gh:2718137 <uuid> …
+fleet-cred-policy.sh deny user gh:…      # nothing at all
+fleet-cred-policy.sh clear node fleet-linux-0   # unrestricted again
+fleet-cred-policy.sh show
+```
+
+Every write is a `policy` row in the credential audit (who, old → new); every
+lease denial is a `deny` row naming the reason. No secret is in either.
+
+**Timing, honestly.** The hub's central proxy sees a change within its ~30 s
+cache. A node's agent leases again every 15 min while any list exists and
+removes what was withdrawn; an agent that predates this, and the very first
+list ever set, wait for the agent's own renewal (≤ 6 h). With the hub
+unreachable nothing new is leased and what a node holds runs to its expiry; a
+request already in flight finishes. **A token already handed to a machine
+cannot be revoked at the provider by a list** — it lives until its own expiry
+(a Claude setup token: up to a year). To cut that short, revoke the machine or
+person (`/v1/fleet/credentials/revoke`) or rotate the subscription.
+
 ## 3. Enroll the login with the hub (admin, on the hub)
 
 One enrollment per login. Name it `<machine>-<login>` so the hub's endpoint

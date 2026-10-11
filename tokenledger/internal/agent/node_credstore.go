@@ -37,37 +37,57 @@ func (a *Agent) credSink() credSink {
 // SO_PEERCRED), so only this login — or root — can hand it a credential.
 func credStoreSink(sock, as string) credSink {
 	return func(kind, label string, data []byte) error {
-		c, err := net.DialTimeout("unix", sock, 10*time.Second)
-		if err != nil {
-			return err
-		}
-		defer c.Close()
-		_ = c.SetDeadline(time.Now().Add(30 * time.Second))
-		m := map[string]string{
+		return credStoreCall(sock, as, map[string]string{
 			"op": "store", "kind": kind, "label": label,
 			"data": base64.StdEncoding.EncodeToString(data),
-		}
-		if as != "" {
-			m["as"] = as
-		}
-		req, _ := json.Marshal(m)
-		if _, err := c.Write(append(req, '\n')); err != nil {
-			return err
-		}
-		line, err := bufio.NewReader(c).ReadBytes('\n')
-		if err != nil && len(line) == 0 {
-			return err
-		}
-		var res struct {
-			OK  bool   `json:"ok"`
-			Err string `json:"err"`
-		}
-		if err := json.Unmarshal(line, &res); err != nil {
-			return err
-		}
-		if !res.OK {
-			return errors.New("credential store: " + res.Err)
-		}
+		})
+	}
+}
+
+// credUnstore removes one account's copy from the proxy (claude-fleet#3043):
+// {"op":"unstore","kind","label"} — THIS login's index entry and own copy
+// only; a pool file another login still names stays. nil when not separated.
+func (a *Agent) credUnstore() func(kind, label string) error {
+	if a.cfg.FleetCredStore == "" {
 		return nil
 	}
+	sock, as := a.cfg.FleetCredStore, ""
+	if a.cfg.RunAs != nil {
+		as = a.cfg.RunAs.Login
+	}
+	return func(kind, label string) error {
+		return credStoreCall(sock, as, map[string]string{"op": "unstore", "kind": kind, "label": label})
+	}
+}
+
+// credStoreCall is one request on the proxy's control socket.
+func credStoreCall(sock, as string, m map[string]string) error {
+	c, err := net.DialTimeout("unix", sock, 10*time.Second)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	_ = c.SetDeadline(time.Now().Add(30 * time.Second))
+	if as != "" {
+		m["as"] = as
+	}
+	req, _ := json.Marshal(m)
+	if _, err := c.Write(append(req, '\n')); err != nil {
+		return err
+	}
+	line, err := bufio.NewReader(c).ReadBytes('\n')
+	if err != nil && len(line) == 0 {
+		return err
+	}
+	var res struct {
+		OK  bool   `json:"ok"`
+		Err string `json:"err"`
+	}
+	if err := json.Unmarshal(line, &res); err != nil {
+		return err
+	}
+	if !res.OK {
+		return errors.New("credential store: " + res.Err)
+	}
+	return nil
 }
