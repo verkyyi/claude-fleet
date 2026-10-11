@@ -377,7 +377,8 @@ Do not install from memory: read the doc and work from it.
   the fleet records nothing — `bin/fleet-plugins.py` is the one reader of `claude
   plugin list --json`. A hosting login's install-apply (`plugins` pass) only adds
   the marketplace from `~/.claude/fleet` as spelled (it follows every version
-  switch), except carry-over: a part that moved into a plugin and is still
+  switch; a managed link tree adds `<runtime>/current` instead — install copies
+  no symlink leaving the marketplace), except carry-over: a part that moved into a plugin and is still
   installed on that login installs its plugin, so a fresh login has none. A
   plugin carries no script — its hooks / MCP commands run `~/.claude/fleet/bin/…`
   — pins a semver `version`, and bumps it whenever its files change (an installed

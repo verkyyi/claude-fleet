@@ -17,7 +17,9 @@
 #   D  fleet-plugins.py ensure (a fake claude): a fresh login gets the
 #      marketplace added and NOTHING installed; a second run adds nothing; a
 #      login that still has a moved part installed gets that plugin (carry-over);
-#      a plugin behind the runtime is updated; --dry-run runs nothing
+#      a plugin behind the runtime is updated; --dry-run runs nothing; a
+#      marketplace added from elsewhere is re-pointed; a link-tree install
+#      adds it from the runtime's real tree (<runtime>/current)
 #   E  fleet-plugins.py doctor: marketplace missing → WARN; installed + behind →
 #      WARN 落后; else PASS naming each plugin's state
 #   F  install-apply runs the pass before the commands / skills passes remove the
@@ -34,6 +36,7 @@ ROOT="$(cd "$BIN/.." && pwd)"
 PL="$BIN/fleet-plugins.py"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/fleet-plugins-selftest.XXXXXX")" || exit 2
 trap 'rm -rf "$WORK"' EXIT
+WORK="$(cd "$WORK" && pwd -P)"   # realpath: market_source compares resolved paths (/var → /private/var)
 CHECKS=0
 fail() { printf 'selftest FAIL: %s\n%s\n' "$1" "${2:-}" >&2; exit 1; }
 ok() { CHECKS=$((CHECKS + 1)); }
@@ -159,7 +162,7 @@ cat > "$FK" <<'SH'
 echo "$*" >> "$FAKE_ST/calls"
 [ "$1" = plugin ] || exit 2; shift
 case "$1 ${2:-}" in
-  "marketplace list") if [ -f "$FAKE_ST/market" ]; then echo '[{"name":"claude-fleet","source":"directory"}]'; else echo '[]'; fi ;;
+  "marketplace list") if [ -f "$FAKE_ST/market" ]; then printf '[{"name":"claude-fleet","source":"directory","path":"%s"}]\n' "$(cat "$FAKE_ST/market")"; else echo '[]'; fi ;;
   "marketplace add") echo "$3" > "$FAKE_ST/market" ;;
   "list --json") cat "$FAKE_ST/installed.json" 2>/dev/null || echo '[]' ;;
   "install "*) python3 - "$FAKE_ST/installed.json" "$2" <<'PY'
@@ -196,6 +199,23 @@ grep -q '^plugin install' "$ST/calls" && fail "D a fresh login ran an install" "
 : > "$ST/calls"
 out=$(ens --gone "$WORK/gone")
 grep -q 'marketplace add' "$ST/calls" && fail "D second run re-added the marketplace" "$(cat "$ST/calls")"; ok
+
+# added from elsewhere (an older source) → re-pointed, nothing else re-run
+echo /old/place > "$ST/market"; : > "$ST/calls"
+out=$(ens --gone "$WORK/gone")
+has "added the claude-fleet marketplace from /home/x/.claude/fleet (was /old/place)" "$out" "D a marketplace added from elsewhere is re-pointed"
+
+# the source: a plain install as spelled; a managed LINK TREE (#2774) → the
+# runtime's real tree, its `current` when that is the version (install copies no
+# symlink leaving the marketplace — measured: an empty cache, version unknown)
+src() { python3 -c 'import importlib.util,sys; s=importlib.util.spec_from_file_location("p",sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); print(m.market_source(sys.argv[2]))' "$PL" "$1"; }
+RT="$WORK/runtime"; mkdir -p "$RT/abc/.claude-plugin" "$WORK/lt/.claude-plugin" "$WORK/plain/.claude-plugin"
+echo '{}' > "$RT/abc/.claude-plugin/marketplace.json"; echo '{}' > "$WORK/plain/.claude-plugin/marketplace.json"
+ln -s "$RT/abc/.claude-plugin/marketplace.json" "$WORK/lt/.claude-plugin/marketplace.json"
+[ "$(src "$WORK/plain")" = "$WORK/plain" ] && ok || fail "D source: a plain install is used as spelled" "$(src "$WORK/plain")"
+[ "$(src "$WORK/lt")" = "$RT/abc" ] && ok || fail "D source: a link tree with no current → the version dir" "$(src "$WORK/lt")"
+ln -s "$RT/abc" "$RT/current"
+[ "$(src "$WORK/lt")" = "$RT/current" ] && ok || fail "D source: a link tree → <runtime>/current" "$(src "$WORK/lt")"
 
 # carry-over: the moved parts left the install this apply, and this login has them
 printf 'skills/fleet-orchestrate/SKILL.md\nskills/fleet-orchestrate/role.md\ncommands/fleet-epic-run.md\nskills/doc-preview/old.md\n' > "$WORK/gone"

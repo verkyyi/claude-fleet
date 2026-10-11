@@ -12,9 +12,16 @@ place that asks.
 
   ensure  --root R [--source S] [--claude C] [--claude-dir D] [--gone F] [--dry-run]
           fleet-install-apply.sh's `plugins` pass on a hosting login:
-          · add the marketplace from S (default R — the literal
-            ~/.claude/fleet, never its resolved fleet.versions/<sha>, so the
-            marketplace follows every version switch) when it is not added yet;
+          · add the marketplace from S (default: market_source(R)) when it is
+            not added yet, or re-point it when it was added from elsewhere.
+            market_source: R as spelled (~/.claude/fleet, never its resolved
+            fleet.versions/<sha>, so it follows every version switch) — unless
+            R is a managed login's LINK TREE (every file a symlink into the
+            runtime, issue #2774): Claude Code's install copies no symlink
+            that leaves the marketplace (measured: an empty cache, version
+            `unknown`, the dependency not pulled), so the source is then the
+            runtime's real tree — <runtime>/current when it is that version
+            (it moves with every switch), else the version dir;
           · carry-over: F lists the paths that left the install this apply (its
             GONE list). A part that moved into a plugin — skills/<x>/… now at
             plugins/<p>/skills/<x>/, commands/<x>.md now at
@@ -93,10 +100,26 @@ def installed(claude, mname):
 
 
 def market_added(claude, mname):
+    """(the path it was added from — "" when added with none — or False, why)."""
     lst, why = jlist(claude, "marketplace", "list", "--json")
     if lst is None:
         return None, why
-    return any(isinstance(e, dict) and e.get("name") == mname for e in lst), None
+    for e in lst:
+        if isinstance(e, dict) and e.get("name") == mname:
+            return e.get("path") or e.get("installLocation") or "", None
+    return False, None
+
+
+def market_source(root):
+    """Where to add the marketplace from (see ensure in the module doc)."""
+    mj = os.path.join(root, ".claude-plugin", "marketplace.json")
+    if not os.path.islink(mj):
+        return root
+    real = os.path.dirname(os.path.dirname(os.path.realpath(mj)))
+    cur = os.path.join(os.path.dirname(real), "current")
+    if os.path.islink(cur) and os.path.realpath(cur) == real:
+        return cur
+    return real
 
 
 def carried(root, plugs, gone, cdir):
@@ -135,14 +158,16 @@ def cmd_ensure(a):
     if added is None:
         print("plugins: skip — `%s plugin marketplace list` failed: %s" % (a.claude, "; ".join(why)))
         return 0
-    src = a.source or a.root
-    if not added:
+    src = a.source or market_source(a.root)
+    if added is False or (added and added != src):
+        was = "" if added is False else " (was %s)" % added
+        added = False
         if a.dry_run:
-            print("plugins: would add the %s marketplace from %s" % (mname, src))
+            print("plugins: would add the %s marketplace from %s%s" % (mname, src, was))
         else:
             rc, out, err = run(a.claude, "marketplace", "add", src)
             if rc == 0:
-                print("plugins: added the %s marketplace from %s (nothing installed)" % (mname, src))
+                print("plugins: added the %s marketplace from %s%s (nothing installed)" % (mname, src, was))
             else:
                 print("plugins: FAIL marketplace add %s: %s" % (src, (err or out).strip().splitlines()[-1:]))
                 return 1
@@ -197,7 +222,7 @@ def cmd_doctor(a):
     added, why = market_added(a.claude, mname)
     if added is None:
         return 3
-    if not added:
+    if added is False:
         print("the %s marketplace is not added — /plugin cannot offer %s (the next sync adds it, or now: "
               "claude plugin marketplace add ~/.claude/fleet)" % (mname, " · ".join(sorted(plugs))))
         return 1
