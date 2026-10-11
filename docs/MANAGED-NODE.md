@@ -182,7 +182,11 @@ PUT 的请求体就是上面可写的字段，外加可选的 `if_version`（读
 `/v1/fleet/release/artifacts` 的 `ccquota_src` 与目标提交的摘要（`ccquota:`；入口不报 `ccquota_src` 时退回 #2927 按 `/version` 查提交的那条）。机器上 `fleet doctor --machine` 的 `ccquota`
 行：清单记了源、二进制的 `src` 不是它 → FAIL（整机退回）；旧发布版没记源、构建提交又不是 runtime → WARN。
 更新器是 `bin/fleet-node-update.py`，守护（C3）的 `update` 任务（每 5 分钟一次，`FLEET_NODE_UPDATE_EVERY`），
-root 运行。**托管登录的 `~/.claude/fleet` 就是机器运行时那一份**（#2774，EPIC #2770 C4）：
+root 运行。**新 stable 推过来就当拍跑**（#3146，EPIC #3139 C7）：入口的稳定指针一动、以及每条连接第一拍，给报了
+`CapRelease` 的连接发 `release {sha, seq}`；整机节点程序（§6）对已在 / 已过的 seq 不理，否则写 `<state>/update-now`
+（内容 = sha，root 0644，一次 rename），守护每秒看一眼，有就立刻起 `update`（照旧持锁、照旧医生验收、照旧回退），起跑时消掉；
+目标仍是更新器自己读的入口 stable，推送只是叫醒，只前进。没托管的登录由它自己的 agent 跑一次
+`fleet-install-sync.sh --now`。定时不动：推送丢了，下一次定时照样切到（BREAK-IT `release-push-lost`）。**托管登录的 `~/.claude/fleet` 就是机器运行时那一份**（#2774，EPIC #2770 C4）：
 `~/.claude/fleet.versions/<sha>/` 仍是登录自己的**真目录**，但里面每个文件都是指向 `<root>/<sha>/<同一路径>` 的链接
 （与 `bin/selftest-shadow-root.sh` 同一做法：目录是真的、文件是链接，所以 `$BIN/..` 落在登录自己的目录里——
 `logs/`、`epic-pages/`、`fleet.conf*` 照旧由 `fleet.versions/.shared/` 链入）。字节只在 `<root>/<sha>/` 存一份，
@@ -214,7 +218,7 @@ root 运行。**托管登录的 `~/.claude/fleet` 就是机器运行时那一份
   "components": {
     "ccquota":    {"artifact": "ccquota-{os}-{arch}"},
     "claude":     {"version": "2.1.295", "artifact": "claude-{version}-{os}-{arch}"},
-    "codex":      {"version": "0.154.0", "artifact": "codex-{version}-{os}-{arch}"},
+    "codex":      {"version": "0.162.1", "artifact": "codex-{version}-{os}-{arch}"},
     "tmux":       {"version": "3.7c",    "artifact": "tmux-{version}-{os}-{arch}", "lock": "conf/vendor-tmux.lock"},
     "supervisor": {"script": "bin/fleet-node-supervisor.py"}
   }
@@ -580,14 +584,21 @@ BREAK-IT 行 `service-handwritten`。只点名接管过的登录（`logins/<登�
   同一把钥匙回到上次的会话——那一份记在 `$FLEET_CONF_DIR/entry/<view>.cur`；没有就是编排会话；设备名按
   `ExposeAuthInfo` 的指纹从 `state.json` 的 `names` 查，名单里钥匙带 `name`）；有命令 ⇒ `exec "$SHELL" -c`，与 22 端口一样
   （`Subsystem sftp` 是本机真的 sftp-server，ForceCommand 下 internal-sftp 跑不了）；无命令无终端 ⇒ 登录 shell。
-  不设 `DisableForwarding`。
+  不设 `DisableForwarding`，但转发只到本机（#3075，C9）：`AllowTcpForwarding local` + `PermitOpen localhost:* 127.0.0.1:* [::1]:*`
+  （`fleet open` 的 `-L`、瘦客户端照常），`-R`、unix socket、agent、X11、隧道都关。
+- **电脑也走它**（#3075，C9）：`fleet login` 登记的设备钥匙（`~/.ssh/fleet-cert` 那把）在入口开着时同时登记成这个人的
+  一把普通钥匙（钥匙页上「<设备名> · fleet」；开入口前登记的设备在下一次续期时补上；人在钥匙页撤掉的，续期不补、
+  重新扫码才回来），设备被吊销时一起撤。节点路线 `entry=<host>:<port>`（`CCQUOTA_FLEET_NODE_ROUTES`，公网端口在路由器上）
+  就是 `fleet connect` 的 `entry` 路线（没写 `entry=` 的机器，用 C6 的 reachable(machine)——入口真敲开过的地址 + 端口，
+  `entry`、`entry-2` …；没敲开过就没有）：排在 Tailscale 和旧的 `public`（系统 sshd）前、中转前，ssh 只出示设备钥匙
+  （`IdentitiesOnly`，不出示证书）；主机钥匙是入口自己的那把，随心跳的 host keys 下发（`fleet route <机器> entry` 钉住）。
 - **审计**（共同约定 11）：每次进门登录处一行 `$FLEET_CONF_DIR/logs/entry.ndjson`（去了哪：view · exec · sftp · shell）；
   守护每拍读入口 sshd 的 `entry.log`（接受 · 钥匙被拒 · 没这个登录 · 不在入口上），一行一条写 `<log>/entry.ndjson`
   （时间 · 人 · 登录 · 指纹 · 机器 · 来源 IP · 结果，不含钥匙正文），并排进 `<state>/entry/audit-pending.ndjson`
   送 `POST /v1/node/entry-audit`（每条自己的 id，重发无害；入口不在就攒着，最多 5000 条）。
 - **Linux 托管节点**同一份规则：容器的环境里给 `FLEET_ENTRY=1`，守护照样起它（`fleet-node-linux.py` 已建 `/run/sshd`）。
 - BREAK-IT：`entry-password` · `entry-other-login` · `entry-revoked-key` · `entry-self-added-key` · `entry-admin-login` ·
-  `entry-keys-tampered` · `entry-hub-down` · `entry-no-command-lands`（`bin/fleet-break-it-entry-selftest.sh`，真 sshd、
+  `entry-keys-tampered` · `entry-hub-down` · `entry-no-command-lands` · `entry-forward-out`（`bin/fleet-break-it-entry-selftest.sh`，真 sshd、
   沙箱端口、沙箱状态目录）。
 
 ### 外面能不能连上它（EPIC #3067 C6，#3072）
@@ -615,3 +626,70 @@ BREAK-IT 行 `service-handwritten`。只点名接管过的登录（`logins/<登�
   转发到 <内网地址>:22022」，运营商级 NAT 说「这台没有公网地址」，路由器没肯自动开写原因，超过 20 分钟没新结果写「结果过期」。
   入口没开、或没人以这台为家 ⇒ 无此行。现在就查：`sudo fleet-node-supervisor.py entry reach`。
 - BREAK-IT：`entry-public-unreachable`（入口那半由 Go 测试对演练里真的入口 sshd 拨号）。
+
+### 你的地址指向你的家（EPIC #3067 C7，#3073）
+
+- **只有入口写记录**：`tokenledger/internal/dns`（provider 接口 List · Upsert · Delete、DNSPod 实现、测试用假实现）。
+  记录建在 DNSPod 上已有的 24haowan.com 里（`<名字>.cf`，A / AAAA，TTL 600），不委托、不另开 zone。
+  DNSPod 用旧版 token API（`https://dnsapi.cn/`：`Record.List` / `Record.Create` + `Record.Remark` / `Record.Modify` /
+  `Record.Remove`）；建时在备注里打 `fleet`，List 只认带它、且在 `cf` 下的——别的记录一条不碰；打不上备注的新记录当场删掉。
+- **一个循环**：入口上 `RunEntryDNS`（`internal/leader` 选主 `entry-dns`，只一个副本写）每分钟：每个在用的地址名
+  （改名后的旧名留 7 天）的目标 = 它的人的家机器的 `reachable(machine)`（上一节）；与记录现状比对，只写差异
+  （每拍至多 40 次写），每写一条记一行入口审计（kind `dns`，「A verky.cf 旧 → 新」）。家从外面连不上（或 15 分钟没新结果）
+  ⇒ 一条不改，记录留着最后的地址，钥匙页写「从外面连不上」；手动换家 ⇒ 下一拍改指新家；有人在控制台手改 ⇒ 下一拍改回，
+  审计写「有人手改」。DNSPod 报错只记日志（不带凭据），不删记录，下一拍再试。
+- **端口不进 DNS**（改约定 3）：两台家机器在同一个路由器后面时地址相同、端口不同（路由器转发到入口的外侧端口，即机器节点路线里的
+  `entry=<host>:<port>`——macmini 22122、mini2 22123，没有就是 22022；C6 敲门用的就是它，`public=` 是系统 sshd 的，不读）。钥匙页给 Termius 的「端口」= 家机器的这个端口（`entryPublicPort`：可达的那一行，IPv4 在前），不是常数 22022；
+  换家确认时端口变了就写「端口改成 N」。IPv6 在别的端口上应门（不经路由器转发）就不写 AAAA——一个名字只给 Termius 一个端口。
+- **凭据**：入口环境 `CCQUOTA_DNS_DP_ID` / `CCQUOTA_DNS_DP_KEY`（`deploy/k8s/overlays/prod/deployment-env.yaml` 从 `new-deploy/acme-dnspod`
+  的 `DP_Id` / `DP_Key` 只读引用，`optional: true`）+ `CCQUOTA_DNS_DOMAIN=24haowan.com`、`CCQUOTA_DNS_SUBDOMAIN=cf`。
+  缺一样 ⇒ 循环不起、0 次调用。⚠️ 这把 token 与 ACME DNS-01 共用、管整个 DNSPod 账号（不只这一个域名）：轮换它要同时顾到 ACME。
+- 查：`dig +short @223.5.5.5 <名字>.cf.24haowan.com`；入口审计里 kind `dns` 的行。BREAK-IT：`entry-dns-follows`。
+
+## 17. 测试机：只跑合并后的列车，机器忙时让路（EPIC #3139 C5，#3144）
+
+每台托管 Mac 最多挂一台 GitHub Actions 测试机，给列车（`release-train.yml`）的 macOS 测试用，
+PR 永远不上自家机器。没有 `/var/db/fleet-node/ci.env` = 什么都不做：没有子进程、`state.json`
+没有 `ci_runner`、`status` 没有那一行，字节不变。
+
+- **开**：在 root 名下写 `/var/db/fleet-node/ci.env`（root:wheel 0600），首选 GitHub App
+  （只装在这个仓库、只有仓库权限 Administration: read and write）：
+
+  ```sh
+  sudo install -m 600 -o root -g wheel /dev/stdin /var/db/fleet-node/ci.env <<'X'
+  FLEET_CI_REPO=verkyyi/claude-fleet
+  FLEET_CI_APP_ID=<App ID>
+  FLEET_CI_APP_INSTALLATION_ID=<安装 ID>
+  FLEET_CI_APP_KEY_FILE=/var/db/fleet-node/ci-app.pem
+  X
+  ```
+
+  私钥文件同样 root:wheel 0600。兜底：`FLEET_CI_TOKEN=<只能管这个仓库测试机的细粒度令牌>` 代替三行 App。
+  守护（`fleet-node-supervisor.py`）看到它就起 `ci-runner` 子进程（`bin/fleet-ci-runner.py loop`），
+  ci.env 一改就重起；删掉它，子进程停、测试机撤下。
+- **凭据只在 root 进程内存里**：每趟铸之前用私钥签 JWT（`openssl dgst -sha256 -sign`，RS256，
+  exp ≤ 10 分钟）→ 换 1 小时的安装令牌 → `generate-jitconfig`。私钥、JWT、安装令牌、细粒度令牌
+  都不进 argv、文件、日志、`fleet-ci` 的环境或任何会话。
+- **测试账号 `fleet-ci`**（`FLEET_CI_LOGIN`）：首次由 `sysadminctl -addUser … -shell /usr/bin/false`
+  建，非管理员、家目录 0700、隐藏；自己的 uid = 自己的 tmux socket 目录，碰不到任何 fleet 的 socket。
+  它在 `tenants` 行里照查（#2842）：一旦能 sudo / 进了 admin 组，测试机拒绝再起（`error`）。
+- **测试机本身**：`conf/ci-runner.lock` 钉版本 + 每个平台的 SHA-256（不进 release.json：已装的更新器
+  不认识新组件会拒整个发布，制品门也会挡住每次挪 stable）；从 GitHub 下、核对哈希后才解包到
+  `<root>/tools/actions-runner/<sha>/`（root 0755）。每趟一份新的拷贝在 `~fleet-ci/runner`，跑完删掉，
+  `fleet-ci` 名下剩的进程全杀。
+- **一趟**：JIT 配置（标签 `self-hosted` · `macOS` · `ARM64` · `fleet-ci`）只能接一个任务；
+  `run.sh` 降权到 `fleet-ci`、`nice 10`、环境从零搭（没有 FLEET_* / CCQUOTA_* / gh 令牌，JIT 配置走
+  `ACTIONS_RUNNER_INPUT_JITCONFIG` 不进 argv）。
+- **只接列车**：`ACTIONS_RUNNER_HOOK_JOB_STARTED` = root 名下的 `bin/fleet-ci-job-gate.sh`，在任务任何一步
+  之前核对 仓库 · 事件（push / workflow_dispatch / schedule）· `refs/heads/master` · 没有 `GITHUB_HEAD_REF` ·
+  workflow 在 `FLEET_CI_WORKFLOWS`（默认 `release-train.yml`）里，缺一项就拒。仓库设置仍保持
+  「外部贡献者的 workflow 需批准」。
+- **让路**：铸下一趟前看 内存压力（≥ warn）· 空闲内存够不够「底线（10% RAM，至少 2 GB）+ 一个会话 1.5 GB
+  + 一趟 4 GB」· 每核负载 > 0.75 · 重活槽全满或有人排队——任一项就 `paused:<为什么>`，不铸；等活的空闲
+  测试机在机器变紧时撤下、注销；跑着的那趟跑完（上限 `FLEET_CI_MAX_SECS` 3 小时）。
+  阈值都可在 ci.env 里改（见 `fleet-ci-runner.py --help`）。
+- **看**：`sudo fleet-node-supervisor.py status` 的 `ci-runner` 行；`fleet doctor` 的 `ci-runner` 行
+  （idle / busy / paused PASS，error / 循环没在跑 WARN）；入口 `GET /v1/fleet/ci-runners`（管理员）列每台
+  机器的状态、是否在线、空闲几台（C6 据此决定上自家机器还是回 GitHub 的机器）。
+- BREAK-IT：`ci-runner-hogs` · `ci-runner-pr-code`（`bin/fleet-break-it-ci-selftest.sh`，沙箱里的假 GitHub、
+  假测试机包、假测试账号）。

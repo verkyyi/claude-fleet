@@ -347,9 +347,11 @@ override them):
      #1247): report only after the confirming verdict reads `MERGED` — an armed
      auto-merge is not a landing, and the script re-files it as a silent WAITING
      (with a `NOT reporting MERGED` note on stderr) rather than send it. **A
-     hub-spawned worker needs no special case**: with no parent — or a parent that
-     has already been reaped — it exits 0 silently, so this is one unconditional
-     call on every ship path, never a decision. It cannot fail your merge.
+     hub-spawned worker needs no special case**: with no parent it exits 0
+     silently, and with a parent that has already been closed it exits 0 with
+     `orphaned → …` — the report becomes the person's reminder (issue #3117) — so
+     this is one unconditional call on every ship path, never a decision. It
+     cannot fail your merge.
      `queued → …` (exit 3, issue #1647) means the parent cannot take it right
      now — its machine is offline, it is asleep at a full fleet, its Claude is
      down — and the report waits for it and is delivered when it can be: nothing

@@ -162,7 +162,7 @@ def node_old(node):
     return False
 
 
-PIN_WORDS = {"relay": "中转", "tailscale": "Tailscale", "tailnet": "Tailscale", "direct": "直连"}
+PIN_WORDS = {"relay": "中转", "tailscale": "Tailscale", "tailnet": "Tailscale", "direct": "直连", "entry": "入口直连"}
 
 
 def machine_text(rec, down, route, now, via="", pin="", tries="", cols=100):

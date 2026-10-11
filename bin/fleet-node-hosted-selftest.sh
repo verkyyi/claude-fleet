@@ -231,6 +231,13 @@ waitfor 5 sh -c "[ \"\$(pgrep -f '$W/rt/bin/' | wc -l | tr -d ' ')\" = 0 ]"
 eq "B … no process left running from the runtime" "$(left)" 0
 [ "$(left)" = 0 ] || ps -o pid,ppid,command -p "$(pgrep -f "$W/rt/bin/" | paste -sd, -)" >&2
 hasnt "B … quit says nothing went wrong" "$qout" "unknown"
+# a late --ensure (the sidebar's, the keeper's last, in flight across the quit —
+# issue #3171) brings neither the cache nor a loop back
+env TMPDIR="$NHC/tmp" FLEET_NODE_HOSTED=1 FLEET_HUB_SESSIONS_CLIENT="$SESS" CCQUOTA_FLEET=1 FLEET_HUB_URL=https://hub.example \
+    FLEET_HUB_SESSIONS_CMD="cat $W/sessions.json" bash "$W/rt/bin/fleet-hub-sessions.sh" --ensure >/dev/null 2>&1
+sleep 1
+eq "B … a late --ensure leaves the cache removed" "$(ls -d "$NHC" 2>/dev/null)" ""
+eq "B … and starts no loop" "$(left)" 0
 
 # ---- C. the ssh gone without a word: the keeper quits it ----------------------
 echo "C. no terminal on it: the keeper quits the client"

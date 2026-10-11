@@ -12,6 +12,11 @@
 #       r  start a new one in this window
 #       q  recycle the window — the close-on-exit the SessionEnd hook used to do
 #          on every exit, now only on purpose (session-end-hook.sh --recycle)
+#     after the person's OWN exit (0 / 130, not a relaunch that failed) the line
+#     also counts down — 「10 秒后关闭 · 按任意键取消」 (issue #3170) — and at 0
+#     does what q does; any key cancels it. FLEET_EXIT_CLOSE_SECS (fleet.conf or
+#     the environment, default 10) sets it, 0 = no countdown (the line as before);
+#     a crash, a refused / failed launch and the orchestrator / steward never count.
 #   • the FLEET's own exit — sleep, migrate, move, stop, transfer stamp
 #     the window's @wrap_quiet before they type /exit — and a FIRST launch that
 #     ends within FLEET_WRAP_FAST_FAIL seconds (default 5): it returns the
@@ -165,18 +170,52 @@ read_failure() {
 }
 
 # The page could not run: the same one line and keys on a plain prompt (10/11/12),
-# so a broken page never closes the window. 1 = the pane's input is gone.
-plain_page() {
-  local k
+# so a broken page never closes the window. 1 = the pane's input is gone. With
+# $close_n > 0 it counts down like the page (issue #3170): 14 at 0, any key cancels.
+plain_line() {  # <seconds left, 0 = no countdown>
+  local c=''
   if [ "${FLEET_UI_LANG:-zh}" = en ]; then
-    printf '\nSession ended · Enter reopen · ⌘P list   r new chat · q close window'
+    [ "$1" -gt 0 ] && c="closing in ${1}s · any key cancels · "
+    printf '\r\033[KSession ended · %sEnter reopen · ⌘P list   r new chat · q close window' "$c"
   else
-    printf '\n会话已结束 · ↵ 重开 · ⌘P 回列表   r 新对话 · q 关窗口'
+    [ "$1" -gt 0 ] && c="${1} 秒后关闭 · 按任意键取消 · "
+    printf '\r\033[K会话已结束 · %s↵ 重开 · ⌘P 回列表   r 新对话 · q 关窗口' "$c"
   fi
-  while IFS= read -rsn1 k; do
+}
+plain_page() {
+  local k n=${close_n:-0} r t
+  printf '\n'; plain_line "$n"
+  while :; do
+    if [ "$n" -gt 0 ]; then
+      t=$SECONDS; IFS= read -rsn1 -t 1 k; r=$?
+      # a second went by, no key: bash 4+ says >128, 3.2 says 1 — as an EOF does,
+      # which returns at once, so the clock tells them apart
+      if [ "$r" -gt 128 ] || { [ "$r" != 0 ] && [ "$SECONDS" -gt "$t" ]; }; then
+        n=$((n - 1)); [ "$n" -gt 0 ] || return 14
+        plain_line "$n"; continue
+      fi
+      [ "$r" = 0 ] || return 1
+      n=0; plain_line 0                   # any key cancels — and still does what it says
+    else
+      IFS= read -rsn1 k || return 1
+    fi
     case "$k" in '') return 10 ;; r|R) return 11 ;; q|Q) return 12 ;; p|P) [ "$pers" = on ] && return 13 ;; esac
   done
-  return 1
+}
+
+# How long the line waits before it closes the window by itself (issue #3170):
+# FLEET_EXIT_CLOSE_SECS from the environment, else the machine's fleet.conf (the
+# install's, then the login's — fleet-claude.sh's order), else 10. 0 = never.
+close_secs() {
+  local v
+  if [ -n "${FLEET_EXIT_CLOSE_SECS+x}" ]; then v=$FLEET_EXIT_CLOSE_SECS
+  else
+    v=$( [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf" >/dev/null 2>&1
+         [ -f "$PCONF/fleet.conf" ] && . "$PCONF/fleet.conf" >/dev/null 2>&1
+         printf '%s' "${FLEET_EXIT_CLOSE_SECS-10}" )
+  fi
+  case "$v" in ''|*[!0-9]*) v=10 ;; esac
+  printf '%s' "$v"
 }
 
 PCONF="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"
@@ -287,6 +326,16 @@ while :; do
   [ "$unp" -gt 0 ] && pargs+=(--unpushed "$unp" --branch "$br")
   [ -n "$failed" ] && pargs+=(--failed "$failed" --why "$fail_why" --detail "$fail_line" --secs "$dur")
   [ "$failed" = launch ] && [ "$retry" = 1 ] && pargs+=(--retry)
+  # The countdown (issue #3170): only the person's own exit — never a crash, a
+  # failed relaunch or a refused launch (the page must stay to say why), and never
+  # the orchestrator / steward (their ensure reopens them; a close would fight it).
+  close_n=0
+  case "$rc" in 0|130)
+    if [ -z "$failed" ]; then
+      case "$(opt @fleet_role)" in orchestrator|steward) ;; *) close_n=$(close_secs) ;; esac
+    fi ;;
+  esac
+  [ "$close_n" -gt 0 ] && pargs+=(--close-in "$close_n")
   # The personal layer (#1862): absent on this login → nothing passed, the page as before.
   pers=''
   if [ -e "$PCONF/person-bundle.json" ] || [ -e "$PCONF/person-bundle.good.json" ]; then
@@ -313,7 +362,13 @@ while :; do
     "${failed:--}" "${fail_why:--}" "$unp" "$(printf '%s' "${fail_line:-}" | tr '\n' ' ' | cut -c1-200)" >> "$xlog" 2>/dev/null
   python3 "$BIN/fleet-session-page.py" ${pargs[@]+"${pargs[@]}"}
   act=$?
-  case "$act" in 10|11|12|13) ;; *) plain_page "$rc"; act=$? ;; esac
+  case "$act" in 10|11|12|13|14) ;; *) plain_page "$rc"; act=$? ;; esac
+  # 14 — the countdown ran out: what q does, logged as such (issue #3170)
+  if [ "$act" = 14 ]; then
+    [ -d "${xlog%/*}" ] && printf '%s window=%s pane=%s auto-close after=%ss\n' \
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(opt window_name | tr ' ' '_')" "$TMUX_PANE" "$close_n" >> "$xlog" 2>/dev/null
+    act=12
+  fi
   # Back from the page: a relaunch is a fresh turn as far as the list knows.
   wset -u @wrap_exit_rc
   # p — ↵ without the personal layer, for this window from now on (#1862)

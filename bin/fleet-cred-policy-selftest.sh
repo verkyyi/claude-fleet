@@ -85,9 +85,21 @@ out=$("$SUT" deny user gh:2718137); rc=$?
 ok
 reset; fake '{"ok":true,"allow":null}'
 out=$("$SUT" clear user gh:2718137); rc=$?
-[ "$rc" -eq 0 ] && [ "$out" = "cred-policy: SET user gh:2718137: unrestricted" ] \
+[ "$rc" -eq 0 ] && [ "$out" = "cred-policy: SET user gh:2718137: unconfigured (denied in strict mode; legacy default before migration)" ] \
   && grep -qF '"allow": null' "$STUB_BODY" || fail "C clear: rc=$rc $out / $(cat "$STUB_BODY")"
 ok
+
+# Explicit all does not masquerade as an absent rule.
+reset; fake '{"all":true,"allow":null}'
+out=$("$SUT" all node m4); rc=$?
+[ "$rc" -eq 0 ] && printf '%s' "$out" | grep -qF 'all subscriptions (including future additions)' && grep -qF '"all": true' "$STUB_BODY" || fail "C all: $out"
+ok
+reset; fake '{"mode":"strict","nodes":[],"users":[]}'
+out=$("$SUT" show)
+case "$out" in *"denied by default"*) ok ;; *) fail "D strict default: $out" ;; esac
+reset; fake '{"mode":"strict","nodes":[{"id":"m4","all":true,"allow":[]}],"users":[]}'
+out=$("$SUT" show)
+case "$out" in *"m4 (all subscriptions)"*) ok ;; *) fail "D all: $out" ;; esac
 
 # D. reads
 reset; fake '{"nodes":[{"id":"m4","allow":["'$U1'"]}],"users":[{"id":"gh:1","allow":[],"error":"not a JSON list"},{"id":"gh:2","allow":[]}]}'
@@ -98,7 +110,7 @@ printf '%s\n' "$out" | grep -qx "cred-policy: node m4 $U1" \
 ok
 reset; fake '{"nodes":[],"users":[]}'
 out=$("$SUT" show)
-case "$out" in *"no allowlists"*) ok ;; *) fail "D show none: $out" ;; esac
+case "$out" in *"legacy default"*) ok ;; *) fail "D show none: $out" ;; esac
 reset; fake '{"effective":{"machine":"m4","principal":"gh:1","restricted":true,"accounts":[
   {"provider":"claude","owner":"pool","account":"gmail","account_uuid":"'$U1'","allowed":true},
   {"provider":"claude","owner":"pool","account":"legacy","allowed":false,"reason":"no account UUID recorded"}]}}'

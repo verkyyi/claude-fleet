@@ -106,6 +106,15 @@ const (
 	// fleet-agent-team.py sync as for TypeTeam and retries on its next beat.
 	// No personal layer (version 0) or no person behind the login → never sent.
 	TypePerson = "person"
+	// TypeRelease is the hub's word that a new release is stable
+	// (claude-fleet#3146, EPIC #3139 C7): sent to a node that listed
+	// CapRelease the moment the hub's stable pointer moves, and on the first
+	// heartbeat of each connection. It is only a wake-up: the node starts the
+	// update it would have run on its own clock — a machine's updater, a
+	// login's install-sync — which still reads the target from the hub and
+	// still only moves forward. The node answers nothing; a push it misses is
+	// caught by its own clock (5 / 30 minutes). No stable → never sent.
+	TypeRelease = "release"
 )
 
 // CapRead is the hello capability a node lists when it answers TypeRequest.
@@ -133,6 +142,13 @@ const CapTeam = "team"
 // (claude-fleet#2784). An older agent never says it, so it is never sent one
 // and keeps reading the personal layer on install-sync's tick.
 const CapPerson = "person"
+
+// CapRelease is the hello capability a node lists when it wakes its update on
+// TypeRelease (claude-fleet#3146): a machine link whose node daemon runs the
+// updater, or a login that follows stable with fleet-install-sync.sh. The hub
+// never pushes a release to a node that did not say it, so an older agent
+// keeps following on its own clock, byte for byte.
+const CapRelease = "release"
 
 // CapMove is the hello capability a node lists when it takes a session moved
 // to it through the hub (claude-fleet#1426): before it hands a
@@ -280,6 +296,14 @@ type Team struct {
 type Person struct {
 	Principal string `json:"principal"`
 	Version   int    `json:"version"`
+}
+
+// Release is the payload of TypeRelease: the stable release and its signed
+// seq (one past the release it replaced) — a node ignores a seq it is already
+// at or past.
+type Release struct {
+	SHA string `json:"sha"`
+	Seq int64  `json:"seq"`
 }
 
 // Workers is the payload of TypeWorkers.
@@ -496,6 +520,11 @@ type Heartbeat struct {
 	// agent, an older machine agent, a machine with no daemon or an empty
 	// register.
 	Services []ServiceStatus `json:"services,omitempty"`
+	// CIRunner is the machine link's word too (claude-fleet#3144, EPIC #3139
+	// C5): the machine's test runner (fleet-node-supervisor.py's state.json
+	// `ci_runner`) — idle · busy · paused · error · off, and why. nil from a
+	// plain agent, an older one, or a machine with no test runner (no ci.env).
+	CIRunner *CIRunnerStatus `json:"ci_runner,omitempty"`
 	OSUser   string          `json:"os_user,omitempty"`
 	OS       string          `json:"os,omitempty"`
 	Arch     string          `json:"arch,omitempty"`
@@ -656,6 +685,21 @@ type UpdateState struct {
 	Phase  string     `json:"phase,omitempty"`
 	At     *time.Time `json:"at,omitempty"`
 	Reason string     `json:"reason,omitempty"`
+}
+
+// CIRunnerStates are the words a machine's test runner says (claude-fleet#3144).
+var CIRunnerStates = []string{"idle", "busy", "paused", "error", "off"}
+
+// CIRunnerStatus is a machine's test runner as its daemon last wrote it: a
+// state, why (paused: what it yields to — "load: 0.92/core > 0.75"), when the
+// daemon wrote it and since when it holds, the runs it took. Never a credential.
+type CIRunnerStatus struct {
+	State  string     `json:"state"`
+	Why    string     `json:"why,omitempty"`
+	At     *time.Time `json:"at,omitempty"`
+	Since  *time.Time `json:"since,omitempty"`
+	Runs   int        `json:"runs"`
+	Failed int        `json:"failed"`
 }
 
 // ServiceStatus is one entry of a machine's login-level register

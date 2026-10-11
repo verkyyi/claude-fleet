@@ -72,6 +72,11 @@ machine's work ONCE, however many logins the machine carries:
                 minutes): the global IPv6, the router asked to forward the port
                 (FLEET_ENTRY_PORTMAP), POSTed to the hub, which dials each address
                 and answers; <state>/entry/reach.json feeds the doctor's `public` row.
+  * ci-runner — the machine's one test runner (issue #3144, EPIC #3139 C5), only
+                while <state>/ci.env exists: bin/fleet-ci-runner.py `loop` as a
+                child (restarted on a new ci.env); its word, <state>/ci-runner.json,
+                goes into state.json `ci_runner` and the status `ci-runner` line;
+                its login (fleet-ci) is one of the tenants the doctor checks.
   * sweep     — fleet plist leftovers (`*.plist.bak*`, `.pre-move`, `.retired*`,
                 `.disabled*` …) in /Library/LaunchDaemons and every login's
                 ~/Library/LaunchAgents are MOVED to the attic
@@ -323,6 +328,40 @@ def update_verify_due(paths, t, since):
         return False
 
 
+def update_now_path(paths):
+    return os.path.join(paths.state, "update-now")
+
+
+def update_now_due(paths):
+    """True when a pushed release asked for the update now (issue #3146): the
+    machine's node program (`ccquota agent --machine`, root) wrote
+    <state>/update-now on the hub's `release {sha}`. Only a regular file root's
+    (or this daemon's own user's) counts."""
+    try:
+        st = os.lstat(update_now_path(paths))
+    except OSError:
+        return False
+    return stat.S_ISREG(st.st_mode) and st.st_uid in (0, os.geteuid())
+
+
+def update_now_take(paths):
+    """Consume update-now as the update task starts: a push that lands while it
+    runs writes a new file and wakes the next one. The sha it named, or ''."""
+    if not update_now_due(paths):
+        return ""
+    p = update_now_path(paths)
+    try:
+        with open(p) as fh:
+            sha = fh.read(64).strip()
+    except OSError:
+        sha = ""
+    try:
+        os.unlink(p)
+    except OSError:
+        pass
+    return sha if re.match(r"^[0-9a-f]{40}$", sha) else "?"
+
+
 def read_json(path, default):
     """A JSON file, or `default`. Opened O_NONBLOCK and read only when it is a
     regular file (issue #3086): a FIFO / device planted at the path answers
@@ -549,7 +588,9 @@ def default_table(paths):
             {"name": "shared-dirs", "every": 60,
              "cmd": ["/usr/bin/python3", "-I", os.path.join(rt_bin, "fleet-shared-dirs.py")]},
             # The one updater (C6, #2334): every part of the machine to the hub's
-            # release, or none. A switch ends in a restart request (below).
+            # release, or none. A switch ends in a restart request (below). A new
+            # stable the hub pushes (issue #3146: the node program writes
+            # <state>/update-now) runs it at once — task_due; the clock stays.
             {"name": "update", "every": env_num("FLEET_NODE_UPDATE_EVERY", 300), "timeout": 1800,
              "cmd": ["/usr/bin/python3", "-I", os.path.join(rt_bin, "fleet-node-update.py"), "tick"]},
         ],
@@ -724,9 +765,10 @@ def tenant_privileges(login):
 
 def tenant_logins(paths):
     """Every login this daemon took over: managed in accounts.json, or with a
-    logins/<login>.env."""
+    logins/<login>.env — and the test runner's login (#3144), which must be one too."""
+    ci = ci_login(paths)
     return sorted({k for k, v in accounts_read(paths).items() if (v or {}).get("managed")}
-                  | taken_over(paths))
+                  | taken_over(paths) | ({ci} if ci and account_ident(ci) else set()))
 
 
 def tenants_reading(paths):
@@ -1402,6 +1444,8 @@ class Supervisor(object):
     def all_children(self):
         # the entry port (#3070) only where it is switched on — off, no child at all
         entry = [entry_child(self.p)] if entry_settings(self.p)[0] else []
+        # the test runner (#3144) only where ci.env is — off, no child at all
+        entry += [ci_child(self.p)] if ci_on(self.p) else []
         return (list(self.table["children"]) + entry + [e for e in self.account_entries() if e.get("keepalive")]
                 + self.service_entries())
 
@@ -1443,6 +1487,11 @@ class Supervisor(object):
             self.state["services"] = services_summary(self.p, self.state)
         except Exception as e:  # the register must never take the heartbeat down
             self.log("services summary failed: %s" % e)
+        ci = ci_summary(self.p)
+        if ci is not None:
+            self.state["ci_runner"] = ci
+        else:
+            self.state.pop("ci_runner", None)
         write_json(self.p.state_file, self.state)
         self.dirty = False
         self.last_save = t
@@ -1704,6 +1753,10 @@ class Supervisor(object):
         since = t - (ts.get("last_start") or 0)
         if since >= float(tk.get("every", 60)):
             return True
+        # A new stable pushed by the hub (issue #3146) runs the update now; its
+        # 5-minute clock stays as the fallback for a push that never came.
+        if tk["name"] == "update" and update_now_due(self.p):
+            return True
         # A switched release is verified FLEET_NODE_UPDATE_SETTLE (30 s) after the
         # switch, not on the next 5-minute tick (issue #2973): until then the hub
         # tells every refused newcomer the machine is 「正在更新（switched）」.
@@ -1742,7 +1795,11 @@ class Supervisor(object):
             fh.write(("--- %s %s\n" % (iso(t), " ".join(tk["cmd"][6:]))).encode())
         else:
             fh = self.logfile(name, "tasks")
-            fh.write(("--- %s %s\n" % (iso(t), " ".join(tk["cmd"]))).encode())
+            woke = update_now_take(self.p) if name == "update" else ""
+            if woke:
+                ts["woken"] = {"at": t, "sha": woke}
+            fh.write(("--- %s %s%s\n" % (iso(t), " ".join(tk["cmd"]),
+                                          (" (pushed %s)" % woke[:12]) if woke else "")).encode())
         fh.flush()
         try:
             p = self.spawn(tk, fh, tk.get("env"))
@@ -3469,6 +3526,9 @@ def status_lines(paths, table, state):
     el = entry_line(paths, state)
     if el:
         out.append(el)
+    cl = ci_line(paths)
+    if cl:
+        out.append(cl)
     sw = state.get("sweep") or {}
     for h in sw.get("handwritten") or []:
         out.append("handwritten %-12s runs as %s, not in the register — fleet service|task add, then "
@@ -3484,6 +3544,76 @@ def status_lines(paths, table, state):
                   sw.get("removed", 0), sw.get("total_removed", 0), sw.get("extra", 0),
                   " · held: %s" % sw["hold"] if sw.get("hold") else "", len(read_json(paths.attic_index, []))))
     return code, out
+
+
+# --------------------------------------------------------------- ci-runner ------
+# The machine's one test runner (issue #3144, EPIC #3139 C5): a GitHub Actions
+# runner for the merged train only, under its own non-admin login. It is a child
+# of this daemon — bin/fleet-ci-runner.py `loop` — only while <state>/ci.env
+# (root 0600: a GitHub App's id + key file, or FLEET_CI_TOKEN — credentials that
+# never leave the root loop's memory) exists;
+# the loop yields to the sessions (memory, admission, load, heavy slots), mints one
+# just-in-time runner at a time, and writes its word into <state>/ci-runner.json
+# (0644, no secret), which save() copies into state.json's `ci_runner` — the node
+# program's heartbeat carries it to the hub (`GET /v1/fleet/ci-runners`).
+# No ci.env ⇒ no child, no key, no status line: byte for byte as before.
+CI_DEFAULT_LOGIN = "fleet-ci"
+CI_BOOK_STALE = 180
+
+
+def ci_env_path(paths):
+    return os.path.join(paths.state, "ci.env")
+
+
+def ci_book_path(paths):
+    return os.path.join(paths.state, "ci-runner.json")
+
+
+def ci_on(paths):
+    return os.path.exists(ci_env_path(paths))
+
+
+def ci_child(paths):
+    """The loop, as a child: started once ci.env exists, stopped when it goes,
+    restarted on a new one (a new token, a new repo)."""
+    return {"name": "ci-runner",
+            "cmd": ["/usr/bin/python3", "-I", os.path.join(paths.runtime, "bin", "fleet-ci-runner.py"), "loop"],
+            "requires": [ci_env_path(paths)], "reload": ci_env_path(paths), "note": "#3144"}
+
+
+def ci_summary(paths):
+    """{state, why, at, login, …} — the loop's word for state.json, or None while
+    there is no ci.env. A word older than CI_BOOK_STALE is no word: `off`."""
+    if not ci_on(paths):
+        return None
+    book = read_json(ci_book_path(paths), None)
+    if not isinstance(book, dict) or now() - (book.get("at") or 0) > CI_BOOK_STALE:
+        return {"state": "off", "why": "the loop is not running", "at": now()}
+    out = {k: book.get(k) for k in ("state", "why", "at", "since", "login", "runs", "last")
+           if book.get(k) is not None}
+    out.setdefault("state", "off")
+    return out
+
+
+def ci_line(paths):
+    """`ci-runner …` for status, or None when there is no ci.env."""
+    s = ci_summary(paths)
+    if s is None:
+        return None
+    runs = s.get("runs") or {}
+    last = s.get("last") or {}
+    return "ci-runner  %s%s · login %s · runs %d (%d failed) · last %s%s" % (
+        s.get("state"), (" — %s" % s["why"]) if s.get("why") else "", s.get("login") or CI_DEFAULT_LOGIN,
+        runs.get("total") or 0, runs.get("failed") or 0, iso(last.get("at")),
+        (" rc=%s %ss" % (last.get("rc"), last.get("secs"))) if last.get("at") else "")
+
+
+def ci_login(paths):
+    """The test login, while there is a ci.env (the tenants check covers it)."""
+    if not ci_on(paths):
+        return None
+    book = read_json(ci_book_path(paths), {}) or {}
+    return book.get("login") or CI_DEFAULT_LOGIN
 
 
 # --------------------------------------------------------------- entry ----------
@@ -3631,7 +3761,8 @@ def entry_dispatch(paths):
 
 def entry_config(ep, port, allow, paths=None):
     """共同约定 2, line for line — and 4: the ForceCommand that dispatches (a
-    command runs as on port 22; none on a terminal is the 看台)."""
+    command runs as on port 22; none on a terminal is the 看台) — and C9's
+    forwarding to this machine only (issue #3075)."""
     import shlex
     disp = entry_dispatch(paths) if paths is not None else None
     sftp = next((s for s in ENTRY_SFTP_SERVERS if os.access(s, os.X_OK)), None)
@@ -3664,6 +3795,15 @@ def entry_config(ep, port, allow, paths=None):
         "PermitUserRC no",
         "PermitUserEnvironment no",
         "ExposeAuthInfo yes",
+        # forwarding only to THIS machine (issue #3075): `fleet open`'s -L and the thin
+        # client pass; another address, -R, a unix socket, the agent, X11, a tunnel do not
+        "AllowTcpForwarding local",
+        "PermitOpen localhost:* 127.0.0.1:* [::1]:*",
+        "AllowStreamLocalForwarding no",
+        "AllowAgentForwarding no",
+        "X11Forwarding no",
+        "PermitTunnel no",
+        "GatewayPorts no",
         "MaxAuthTries 3",
         "LoginGraceTime 20",
         "MaxStartups 10:30:60",

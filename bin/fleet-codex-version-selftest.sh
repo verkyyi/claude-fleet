@@ -4,7 +4,7 @@
 # fleet reads a Codex worker's context% out of Codex's rollout file, a format
 # verified only on the versions in fleet-codex-runtime.py
 # (SUPPORTED_ROLLOUT_VERSIONS). Pinned here:
-#   * version-check: 0.154.0 / 0.154.7 → exit 0; 0.160.0 / 0.1540.0 → exit 1
+#   * version-check: 0.154.0 / 0.154.7 / 0.162.1 → exit 0; 0.160.0 / 0.1540.0 → exit 1
 #     (a prefix matches whole components only); garbage → exit 2; missing → 2.
 #   * doctor `codex` row: verified → PASS; unverified → WARN naming the pin
 #     command AND the silencer (EPIC #1074 rule 9); not installed → INFO;
@@ -56,8 +56,9 @@ IFS=: ; for d in $PATH; do [ -x "$d/codex" ] && continue; CLEAN="${CLEAN:+$CLEAN
 vc() { PATH="$WORK/fake:$CLEAN" python3 "$BIN/fleet-codex-runtime.py" version-check; }
 setv 'codex-cli 0.154.0';  out=$(vc); eq "$?" 0 "1a: 0.154.0 must be verified"; has "0.154.0" "$out" "1a: line names the version"
 setv 'codex-cli 0.154.7';  vc >/dev/null; eq "$?" 0 "1b: 0.154.7 matches the 0.154 prefix"
+setv 'codex-cli 0.162.1';  vc >/dev/null; eq "$?" 0 "1b2: 0.162.1, the release pin (#3157), is verified"
 setv 'codex-cli 0.160.0';  out=$(vc); eq "$?" 1 "1c: 0.160.0 must be unverified"
-has "npm i -g @openai/codex@0.154.0" "$out" "1c: the line names the pin command"
+has "npm i -g @openai/codex@0.162.1" "$out" "1c: the line names the pin command"
 has "FLEET_CODEX_VERSION_CHECK=0" "$out" "1c: the line names the silencer"
 setv 'codex-cli 0.1540.0'; vc >/dev/null; eq "$?" 1 "1d: 0.1540 is NOT 0.154 (whole components)"
 setv 'codex-cli 0.15.2';   vc >/dev/null; eq "$?" 1 "1e: 0.15 is NOT 0.154"
@@ -91,7 +92,7 @@ setv 'codex-cli 0.154.0'; l=$(row "$(doctor "$WORK/fake")")
 has PASS "$l" "2a: a verified codex must PASS"; quiet "2a: no codex noise on stderr"
 setv 'codex-cli 0.160.0'; l=$(row "$(doctor "$WORK/fake")")
 has WARN "$l" "2b: an unverified codex must WARN"
-has "npm i -g @openai/codex@0.154.0" "$l" "2b: the WARN names the pin command"
+has "npm i -g @openai/codex@0.162.1" "$l" "2b: the WARN names the pin command"
 has "FLEET_CODEX_VERSION_CHECK=0" "$l" "2b: the WARN names the silencer (EPIC rule 9)"
 quiet "2b: no codex noise on stderr"
 l=$(row "$(doctor '')"); has INFO "$l" "2c: codex not installed must be INFO"; has "not installed" "$l" "2c: says so"
@@ -122,7 +123,7 @@ setv 'codex-cli 0.160.0'; launch
 [ -f "$WORK/launched" ] || fail "3a: an unverified codex must still launch" "$(cat "$WORK/lerr")"
 CHECKS=$((CHECKS + 1))
 eq "$(grep -c 'warning: codex 0.160.0' "$WORK/lerr")" 1 "3a: exactly one stderr warning"
-has "npm i -g @openai/codex@0.154.0" "$(cat "$WORK/launch.warn")" "3a: the warning reaches the session (FLEET_CODEX_VERSION_WARNING)"
+has "npm i -g @openai/codex@0.162.1" "$(cat "$WORK/launch.warn")" "3a: the warning reaches the session (FLEET_CODEX_VERSION_WARNING)"
 setv 'codex-cli 0.154.0'; launch
 [ -f "$WORK/launched" ] || fail "3b: a verified codex must launch" "$(cat "$WORK/lerr")"
 lacks "warning: codex" "$(cat "$WORK/lerr")" "3b: a verified codex prints no warning"

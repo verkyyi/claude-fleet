@@ -19,18 +19,47 @@ already included; session cumulative usage is not current context. Missing,
 incomplete or unrecognised data stays unknown. Codex caches include fleet,
 window, launcher and root UUID, so a new session never displays Claude's cwd
 cache or a predecessor's context. The rollout format is an upstream internal
-interface; fixture tests pin the supported 0.154 shape.
+interface; fixture tests pin the supported 0.154 and 0.162 shapes.
 
 **Version pin.** The verified versions live in one constant,
 `SUPPORTED_ROLLOUT_VERSIONS` in `fleet-codex-runtime.py` (prefix match on whole
-components: `0.154` covers `0.154.x`). `fleet-codex-runtime.py version-check`
+components: `0.162` covers `0.162.x`). `fleet-codex-runtime.py version-check`
 compares `codex --version` against it — exit 0 verified, 1 unverified, 2 not
 installed or unreadable, one line of explanation. `fleet-doctor.sh` shows it as
 the `codex` row (PASS / WARN / INFO). `fleet-codex.sh` runs the same check once
 per launch: an unverified version still launches, with one stderr warning and
 `version_warning` in `@codex_identity`. Pin with
-`npm i -g @openai/codex@0.154.0`; `FLEET_CODEX_VERSION_CHECK=0` silences the
+`npm i -g @openai/codex@0.162.1`; `FLEET_CODEX_VERSION_CHECK=0` silences the
 check. Add a version to the constant only after the rollout fixtures pass on it.
+
+## Fullscreen chat (composer at the bottom)
+
+Up to 0.155 Codex's main chat is always **inline**: an inline viewport drawn
+right under the cursor, every finished message pushed into the terminal's native
+scrollback. `tui.alternate_screen` / `--no-alt-screen` only decided whether the
+OVERLAYS (diff, approval, transcript, resume picker) used the alternate screen —
+`#{alternate_on}` stayed 0 and the composer sat under the last output, mid-screen
+on a short conversation (issue #3157). Nothing in tmux or the fleet turned it
+off; there was no fullscreen to turn on. 0.156 added the fullscreen renderer,
+`tui.fullscreen_transcript` (default `true`), and the release pins 0.162.1, so
+every fleet launch — new, resume, fork — comes up on the alternate screen with
+the composer on the last rows. The fleet passes no `tui.*` setting: a person's
+own `/tui` choice («Scrollback») is theirs, and under tmux `alternate_screen =
+"auto"` means fullscreen (only Apple Terminal answering the DA probe over ssh
+switches it off — inside tmux the answer is tmux's).
+
+What changes with it:
+
+- **Looking back.** Fullscreen Codex captures the mouse (any-event, SGR), so the
+  wheel scrolls Codex's own transcript (PgUp/PgDn, `/` search too); tmux's
+  copy-mode history no longer holds the chat. Pane scrapes that read scrollback
+  (`capture-pane -S -…`: the park snapshot, limit-banner sweeps, a transfer's
+  failure dump) see one screen for a Codex window — the rollout is the history.
+- **Copying.** A drag selects in Codex; it copies on release (tmux ⇒
+  `copy_on_select` auto) through `tmux load-buffer -w`, which the node / stage /
+  shell confs forward as OSC 52 (`set-clipboard on` + `Ms`) to the person's
+  terminal. iTerm2's own selection still works with its bypass modifier (⌥-drag).
+- **⌘P and the 看台's keys** are tmux key tables, read before the pane — unchanged.
 
 `FLEET_AUTO_HANDOFF_PCT` requests a native Codex context cycle at a clean Stop.
 Write durable notes and run `fleet-transfer.sh --window PANE --to codex

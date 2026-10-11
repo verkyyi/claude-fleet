@@ -50,7 +50,9 @@ jobs:
       - run: ../bin/fleet-client-pack.sh
       - run: gofmt -l . | tee /tmp/fmt && test ! -s /tmp/fmt
       - run: go vet ./...
-      - run: go test -race ./...
+      # internal/api alone runs ~570-600s under -race on a runner: go test's
+      # 10m default timed it out (claude-fleet#3146) — the pg leg's #2479 bound.
+      - run: go test -race -timeout 20m ./...
 
   # The Postgres leg (claude-fleet#2120, #2121; EPIC #2119): the same
   # internal/store AND internal/api tests — the api ones are where the fleet
@@ -62,11 +64,13 @@ jobs:
   # the job fails if one comes back or a test calls t.Skip on this leg. The
   # server is the image's default locale on purpose: the store must sort TEXT
   # byte for byte (COLLATE "C") without help from how the database was made.
+  # postgres:16 comes from mirror.gcr.io (Google's cache of Docker Hub): an
+  # unauthenticated Docker Hub pull hit its rate limit (claude-fleet#2734).
   tokenledger-pg:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:16
+        image: mirror.gcr.io/library/postgres:16
         env:
           POSTGRES_PASSWORD: ci-only
         ports: ['5432:5432']

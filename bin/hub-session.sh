@@ -120,12 +120,8 @@ done
 # so it self-marks @dash correctly with bare tmux.
 win=$(tmux -L "$SOCK" new-window -P -F '#{window_id}' -t "$SESS:" -n plan -c "$BASE" "$DASH_CMD")
 fleet_win_role_stamp "$win" panel "$SOCK"   # a panel by role, whatever it is renamed to (#1844)
-# Re-affirm the top pane-border on this window. Since issue #267 the conf sets
-# pane-border-status top GLOBALLY (every window shows a top-of-window header), so
-# this is now a redundant safety net for a hub built before that conf is live.
-# pane-border-format (in the conf) renders the @dash pane's header EMPTY, so a
-# dash-only hub shows a bare border — the window name in the status list is the cue.
-tmux -L "$SOCK" set-window-option -t "$win" pane-border-status top 2>/dev/null
+# No pane-border here: the node conf turns the top header off for every window
+# (issue #3192) — the status line and the client's top line name the hub.
 
 # hub belongs at the lowest index (slot 1). Nothing re-sorts windows anymore,
 # so this one-time placement is what keeps the hub at slot 1.

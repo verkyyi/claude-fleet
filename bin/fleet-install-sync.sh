@@ -1,7 +1,14 @@
 #!/bin/bash
-# fleet-install-sync.sh [--dry-run] [--status] [--retry] [--root <dir>]
+# fleet-install-sync.sh [--dry-run] [--status] [--retry] [--now] [--root <dir>]
 #                       [--remote <name>] [--timeout <s>] — the INSTALL-SYNC daemon
 # (com.claude-fleet.install-sync, every 30 min; issue #1120, EPIC #1117 C3).
+#
+# PUSHED (issue #3146, EPIC #3139 C7): the hub tells this login's node agent the
+# moment stable moves (`release {sha}`), and the agent runs ONE tick with
+# `--now` — the same tick as the clock's, every gate the same, only forward; the
+# state gains `trigger: push` and each log line ends `· pushed` (a clock tick
+# writes both byte for byte as before). The 30-minute clock stays: a push that
+# never arrives is followed there.
 #
 # Every login on a machine has its own live install (~/.claude/fleet) and its own
 # daemons, and until now each one was brought forward by hand — someone had to
@@ -229,7 +236,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 
 ROOT="${FLEET_INSTALL_ROOT:-$(cd "$BIN/.." && pwd)}"
 REMOTE=origin TAG=stable TIMEOUT="${FLEET_INSTALL_SYNC_TIMEOUT:-30}"
-DRY=0 STATUS=0 RETRY=0
+DRY=0 STATUS=0 RETRY=0 NOW=0
 BUSY_STATES='working|looping|waking'
 # A Loop parked between rounds (issue #1690) is busy only when its next round is
 # this close: an apply + doctor finish well inside it.
@@ -250,12 +257,13 @@ case "$NODE_RETRY" in ''|*[!0-9]*) NODE_RETRY=21600 ;; esac
 LOGIN=$(id -un 2>/dev/null || printf '%s' "${USER:-?}")
 HOST=$(hostname -s 2>/dev/null || hostname 2>/dev/null || printf '?')
 
-usage() { sed -n '2,204p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,222p' "$0" | sed 's/^# \{0,1\}//'; }
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --dry-run|-n) DRY=1 ;;
     --status)     STATUS=1 ;;
     --retry)      RETRY=1 ;;
+    --now)        NOW=1 ;;
     --root)       shift; ROOT="${1:-}" ;;
     --remote)     shift; REMOTE="${1:-origin}" ;;
     --timeout)    shift; TIMEOUT="${1:-30}" ;;
@@ -339,14 +347,17 @@ write_state() { # $1 result $2 reason
     printf 'node_notified: %s\n' "${NODE_NOTIFIED:--}"
     printf 'team: %s\n' "${TEAM:--}"
     printf 'epic: %s\n' "${EPIC_NOTE:--}"
+    if [ "$NOW" = 1 ]; then printf 'trigger: push\n'; fi
   } > "$tmp" 2>/dev/null && mv -f "$tmp" "$STATE" 2>/dev/null
   rm -f "$tmp" 2>/dev/null
 }
 
 log_line() { # $1 result $2 reason
   [ -d "$ROOT/logs" ] || mkdir -p "$ROOT/logs" 2>/dev/null || return 0
-  printf '%s %s %s..%s %s\n' "$(utc)" "$1" "$(short "${FROM:-${HEAD_SHA:-?}}")" \
-    "$(short "${TO:-${HEAD_SHA:-?}}")" "$2" >> "$LOGF" 2>/dev/null
+  local via=''
+  [ "$NOW" = 1 ] && via=' · pushed'
+  printf '%s %s %s..%s %s%s\n' "$(utc)" "$1" "$(short "${FROM:-${HEAD_SHA:-?}}")" \
+    "$(short "${TO:-${HEAD_SHA:-?}}")" "$2" "$via" >> "$LOGF" 2>/dev/null
 }
 
 # stuck_key <result> <why> — the dedup key of a STUCK tick (login + why + the

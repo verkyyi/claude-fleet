@@ -66,6 +66,29 @@ class SessionTests(unittest.TestCase):
         self.data['home'] = str(self.root / 'another-account')
         self.assertEqual(cx.bus_fields(cx.telemetry(self.data), ''), ['model=fixture-model'])
 
+    def test_real_0162_rollout_shape(self):
+        # issue #3157: codex-cli 0.162.1's records, copied from a real rollout
+        # (base_instructions / git / rate limits trimmed) — the release pin's shape.
+        self.records = [
+            dict(type='session_meta', payload=dict(session_id=SID, id=SID, cwd=str(self.root), originator='codex_exec',
+                 cli_version='0.162.1', model_provider='fleet', context_window=258400, history_mode='full')),
+            dict(type='event_msg', payload=dict(type='task_started')),
+            dict(type='turn_context', payload=dict(model='gpt-6.1-sol', effort='high', cwd=str(self.root), summary='none',
+                 collaboration_mode=dict(mode='default', settings=dict(model='gpt-6.1-sol', reasoning_effort='high',
+                                                                      developer_instructions=None)))),
+            dict(type='token_usage_record', payload=dict()),
+            dict(type='event_msg', payload=dict(type='token_count', info=dict(
+                total_token_usage=dict(input_tokens=12646, cached_input_tokens=0, cache_write_input_tokens=0,
+                                       output_tokens=5, reasoning_output_tokens=0, total_tokens=12651),
+                last_token_usage=dict(input_tokens=12646, cached_input_tokens=0, cache_write_input_tokens=0,
+                                      output_tokens=5, reasoning_output_tokens=0, total_tokens=12651),
+                model_context_window=258400))),
+            dict(type='event_msg', payload=dict(type='task_complete'))]
+        self.write()
+        got = cx.telemetry(self.data)
+        self.assertEqual((got['pct'], got['live_tokens'], got['limit']), (4, 12651, 258400))
+        self.assertEqual((got['model'], got['effort'], got['output_tokens']), ('gpt-6.1-sol', 'high', 5))
+
     def test_wrong_hint_does_not_override_identity(self):
         wrong = self.root / 'wrong.jsonl'
         wrong.write_text(json.dumps(dict(type='session_meta', payload=dict(id=OTHER))) + '\n')

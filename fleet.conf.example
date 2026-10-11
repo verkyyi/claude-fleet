@@ -89,6 +89,14 @@ FLEET_BASE_BRANCH="main"
 # @label=Public-entry probe host @group=identity @tier=common @scope=global @edit=str
 #FLEET_SSH_PROBE_HOST=my-vps
 
+# A session's end line counts down after the person's own exit (/exit, Ctrl+D —
+# issue #3170): 「10 秒后关闭 · 按任意键取消」, then the window closes the way the
+# line's q does (worktree and unpushed commits kept, the conversation resumable).
+# Any key cancels. A crash or a failed / refused launch never counts down. 0 = no
+# countdown: the line waits for a key, as before.
+# @label=Close an exited session after @group=spawn @tier=advanced @scope=global @edit=int @unit=sec
+#FLEET_EXIT_CLOSE_SECS=10
+
 # First-fleet guide (issue #1169). The first time this login's fleet is created,
 # fleet-up opens the /fleet-onboard wizard as a `guide` scratch pinned to the top
 # of the session list, and writes $FLEET_CONF_DIR/global/onboarded only after the

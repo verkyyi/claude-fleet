@@ -29,6 +29,9 @@ import (
 // adminPageRoutes are the admin pages outside the fleet block; Machines is
 // /nodes, mounted with the roster.
 var adminPageRoutes = []struct{ path, id, file string }{
+	{"/subscriptions/settings", "subscriptions", "admin/subscription-settings.html"},
+	{"/subscriptions/", "subscriptions", "admin/subscription.html"},
+	{"/admin/users/", "people", "admin/user.html"},
 	{"/subscriptions", "subscriptions", "admin/subscriptions.html"},
 	{"/admin/users", "people", "admin/users.html"},
 	{"/admin/settings", "settings", "admin/settings.html"},

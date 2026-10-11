@@ -1,0 +1,157 @@
+name: selftests shards
+
+# The sharded selftest matrix, ONE copy (issue #3141, EPIC #3139 C2). Called by:
+#   * selftests.yml — the PR gate (and master's push run), ubuntu, --changed <PR base>;
+#   * release-train.yml — each train's Linux AND macOS half, --changed <stable>.
+# Everything about HOW a shard runs lives here; the callers say only which commit,
+# against which base, on which runner, how wide. See selftests.yml for the history
+# of the matrix (why sharded, why these bounds) and selftests-macos.yml for why a
+# BSD half exists at all.
+#
+# A called workflow's check runs are named `<caller job> / shard K` — nothing reads
+# the ubuntu shards by name (fleet-pr-verdict.sh folds every check; only a
+# `macOS shard *` one is dropped), so the prefix changes no gate.
+
+on:
+  workflow_call:
+    inputs:
+      sha:
+        description: 'the commit to test (empty = the event commit)'
+        type: string
+        required: false
+        default: ''
+      base:
+        description: 'run-selftests.sh --changed <base> (empty = the full suite)'
+        type: string
+        required: false
+        default: ''
+      runs_on:
+        description: 'the runner label (ubuntu-latest, macos-latest, …)'
+        type: string
+        required: false
+        default: ubuntu-latest
+      shards:
+        description: 'the matrix, a JSON list 1..N (N = strategy.job-total)'
+        type: string
+        required: false
+        default: '[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]'
+
+jobs:
+  shard:
+    name: shard ${{ matrix.shard }}
+    runs-on: ${{ inputs.runs_on }}
+    strategy:
+      # Never cancel the siblings on a red: one shard failing must not hide
+      # whether the others were green. A partial picture is what makes people
+      # re-run instead of read.
+      fail-fast: false
+      matrix:
+        # The list is the single source of the width: K is the entry, N is
+        # `strategy.job-total`, so a list that is not 1..N gives a K the runner
+        # refuses loudly.
+        shard: ${{ fromJSON(inputs.shards) }}
+    # Backstop only — the real bound is on the run step, so a hung test is named.
+    # macOS: a noisier runner and a ~2.3x slower suite (issues #2638, #2659).
+    timeout-minutes: ${{ startsWith(inputs.runs_on, 'macos') && 60 || 15 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha }}
+          # --changed diffs against <base>; it must be in the clone.
+          fetch-depth: 0
+
+      - name: Assert a BSD toolchain
+        # macOS only: the premise of the BSD half, checked rather than assumed
+        # (selftests-macos.yml «WHY THIS EXISTS»). GNU sed first on PATH = this
+        # runner tests nothing the half exists for — fail loudly.
+        if: runner.os == 'macOS'
+        run: |
+          set -u
+          uname -a
+          for u in sh bash sed grep awk stat date base64 readlink mktemp tmux; do
+            printf '%-10s %s\n' "$u" "$(command -v "$u" 2>/dev/null || echo '(absent)')"
+          done
+          printf 'default bash  %s\n' "$(bash --version | head -1)"
+          printf '/bin/bash     %s\n' "$(/bin/bash --version | head -1)"
+          if sed --version 2>/dev/null | head -1 | grep -q GNU; then
+            echo "::error::sed on PATH is GNU, not BSD — this runner is not testing what the BSD half exists to test"
+            exit 1
+          fi
+          echo "sed is BSD — this is a real BSD toolchain"
+
+      - name: Install tmux
+        # ~40 selftests drive tmux on their own isolated socket; the macOS image
+        # does not guarantee it.
+        if: runner.os == 'macOS'
+        run: |
+          command -v tmux >/dev/null 2>&1 || brew install tmux
+          tmux -V
+
+      - name: Skip http.server's lookup of its own address
+        # issue #2319: on the hosted macOS image the first reverse lookup of
+        # 127.0.0.1 takes 35 s, and every python fake server paid it.
+        if: runner.os == 'macOS'
+        run: |
+          sc=$(python3 -c 'import sitecustomize; print(sitecustomize.__file__)' 2>/dev/null) \
+            || sc="$(python3 -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')/sitecustomize.py"
+          echo "sitecustomize: $sc"
+          cat >> "$sc" <<'PY'
+          import http.server as _hs, socketserver as _ss
+          def _bind(self):
+              _ss.TCPServer.server_bind(self)
+              self.server_name, self.server_port = self.server_address[:2]
+          _hs.HTTPServer.server_bind = _bind
+          PY
+          python3 -I -c 'import sys, time, http.server as h; t = time.time(); h.ThreadingHTTPServer(("127.0.0.1", 0), h.BaseHTTPRequestHandler); d = time.time() - t; print("bind %.2fs" % d); sys.exit(d > 5)'
+
+      - name: Run this shard's selftests
+        # ubuntu: ~1-2 min a shard, 8 min only catches a HUNG test; macOS: ~2.3x.
+        timeout-minutes: ${{ startsWith(inputs.runs_on, 'macos') && 50 || 8 }}
+        env:
+          # Per-test ceiling (issue #1150): ~3x the slowest ubuntu test; macOS keeps
+          # the runner default (600 s — empty reads as the default).
+          FLEET_SELFTEST_TEST_TIMEOUT: ${{ !startsWith(inputs.runs_on, 'macos') && '240' || '' }}
+          # An unresolvable base (an all-zero `before`) falls back to the full suite.
+          CHANGED_BASE: ${{ inputs.base }}
+        run: |
+          set -o pipefail
+          set -- --shard "${{ matrix.shard }}/${{ strategy.job-total }}"
+          [ -z "$CHANGED_BASE" ] || set -- --changed "$CHANGED_BASE" "$@"
+          bash bin/run-selftests.sh "$@" 2>&1 | tee selftests.log
+
+      - name: Per-test timings
+        if: always()
+        # On the run's summary page (#681): a test getting slower shows on the run
+        # that made it slower. A cut-short shard names the test in flight.
+        run: |
+          {
+            echo "## selftests · ${{ runner.os }} · shard ${{ matrix.shard }}/${{ strategy.job-total }}"
+            echo
+            echo '```'
+            [ "${{ matrix.shard }}" != 1 ] || grep '^select: ' selftests.log 2>/dev/null || true
+            if grep -q '^-* slowest' selftests.log 2>/dev/null; then
+              sed -n '/^-* slowest/,$p' selftests.log
+            elif grep -Eq 'has nothing to run|^select: \(none\)' selftests.log 2>/dev/null; then
+              echo 'nothing related landed in this shard'
+            else
+              echo 'the shard was cut short — this test started and never finished:'
+              awk '/^=== /{h=$2} /^(PASS  |FAIL  |TIMEOUT )/{h=""}
+                   END{print "  " (h ? h : "(none identified — read the log)")}' \
+                selftests.log 2>/dev/null
+            fi
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Name the failures as macOS-only
+        if: failure() && runner.os == 'macOS'
+        run: |
+          {
+            echo "### ⚠️ macOS-only failure · shard ${{ matrix.shard }}/${{ strategy.job-total }}"
+            echo
+            echo "A failure HERE that the Linux half does not share is a BSD-toolchain"
+            echo "or bash-3.2 difference (issue #696) — not a broken test."
+            echo
+            echo '```'
+            grep -E '^(FAIL|failed:)' selftests.log 2>/dev/null || echo '(no FAIL line — the shard was cut short; see the timings above)'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

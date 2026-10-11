@@ -227,6 +227,12 @@ PIDF="$G/hubsess.pid"
 # collector tick, the tick's --ensure used to find the loop still alive, start
 # nothing, and leave remote_<sess> unrefreshed for up to a minute once it ended.
 WANTF="$G/hubsess.want"
+# The code the running loop loaded (its MAPCODE), written at its start: an
+# --ensure of other code replaces the loop (issue #3164). The loop is kept alive
+# by every --ensure, so before this a version switch never reached it — macmini's
+# loop ran the code from before #3107's broker for hours after the switch and
+# kept the two-hour-old list on screen.
+LOOPCODEF="$G/hubsess.loopcode"
 SESSIONS_NS='fleet-sessions@claude-fleet'
 SUMMARY_NS='fleet-summary@claude-fleet'   # the status bar's two summaries (#1502)
 
@@ -240,6 +246,13 @@ case "$CLIENT" in *[!A-Za-z0-9._-]*) CLIENT='' ;; esac
 LOCAL=0      # the shell with no hub at all (#1712): this machine answers for itself
 [ -n "$CLIENT" ] && [ "${FLEET_HUB_SESSIONS_LOCAL:-0}" = 1 ] && LOCAL=1
 hub_on() { if [ -n "$CLIENT" ]; then [ "${CCQUOTA_FLEET:-0}" = 1 ]; else fleet_hub_any; fi; }
+# client_gone — a managed machine's client (FLEET_NODE_HOSTED=1) whose temp
+# cache ($TMPDIR, the parent of $FLEET_C) no longer exists: `fleet quit` removed
+# it (issue #3171). A loop then never makes it again (mkdir -p would bring the
+# removed cache back, and with it a loop no quit is left to stop), and a running
+# one stops. Any other client's cache is made as before (a fresh box's
+# /tmp/claude-fleet-<uid> does not exist yet).
+client_gone() { [ -n "$CLIENT" ] && [ "${FLEET_NODE_HOSTED:-0}" = 1 ] && [ ! -d "${FLEET_C%/.claude-dash}" ]; }
 local_fleets() {
   if [ -n "$CLIENT" ]; then printf '%s\t-\n' "$CLIENT"; return; fi
   local s c
@@ -1547,6 +1560,7 @@ refresh_all() { local rc; refresh; rc=$?; refresh_summaries; return "$rc"; }
 
 loop() {
   hub_on || return 0
+  client_gone && return 0
   mkdir -p "$G" 2>/dev/null || return 1
   local end every t0 want
   # ONE loop per cache, by a lock its holder keeps for life (issue #2630): the
@@ -1559,10 +1573,13 @@ loop() {
   fi
   unset FLEET_HUBSESS_LOCKED FLEET_HUBSESS_GUARD
   printf '%s\n' "$$" > "$PIDF"
+  printf '%s\n' "$MAPCODE" > "$LOOPCODEF.new" 2>/dev/null && mv -f "$LOOPCODEF.new" "$LOOPCODEF"
   end=$(( $(date +%s) + LOOP_SECS ))
   while :; do
     # the lock's holder is gone (SIGKILLed): the lock went with it — stop
     if [ -n "$guard" ] && ! kill -0 "$guard" 2>/dev/null; then break; fi
+    # the client's cache is gone (`fleet quit`, issue #3171): so is the client
+    client_gone && break
     every=$EVERY; WAIT=''
     if watched; then
       every=$WATCHED_EVERY
@@ -1692,9 +1709,23 @@ loop_pid() {
 # that group; systemd's collect unit says KillMode=process for the same reason.
 ensure() {
   hub_on || return 0
+  client_gone && return 0
   mkdir -p "$G" 2>/dev/null || return 0
   date +%s > "$WANTF" 2>/dev/null
-  [ -z "$(loop_pid)" ] || return 0
+  local p code=''
+  p=$(loop_pid)
+  if [ -n "$p" ]; then
+    # a loop of other code — an older version still running after a switch, or
+    # one from before this stamp (no file) — gives way to this one (issue #3164)
+    { read -r code < "$LOOPCODEF"; } 2>/dev/null || code=''
+    [ "$code" = "$MAPCODE" ] && return 0
+    kill -TERM "$p" 2>/dev/null
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+      [ -n "$(loop_pid)" ] || break
+      sleep 0.2
+    done
+    [ -z "$(loop_pid)" ] || return 0
+  fi
   ( cd / && exec python3 -c "$LOCK_PY" "$LOCKF" 1 bash "$BIN/fleet-hub-sessions.sh" --loop </dev/null >/dev/null 2>&1 & )
   return 0
 }

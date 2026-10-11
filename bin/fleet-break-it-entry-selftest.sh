@@ -34,6 +34,11 @@
 #                         drill's real entry sshd (go test, when a toolchain is here)
 #                         and a closed one; the node half reports for real and the
 #                         doctor's `public` row says 连不上 + which port to forward
+#   entry-forward-out     entry_config (issue #3075, C9): -L / -W only to this machine
+#                         (localhost · 127.0.0.1 · ::1) — another address is
+#                         denied by the entry, -R refused — and a file the
+#                         thin client drops (fleet-client-upload.py recv) lands in
+#                         that login's inbox only
 #
 # Each prints `PASS <id> <secs>s ≤<cap>s <what came back>` like its parent.
 # No sshd / ssh / ssh-keygen here, or an sshd without PerSourcePenalties
@@ -489,4 +494,65 @@ PY
   WHAT="地址可解析但没人应、或应的是别的钥匙：不进 reachable（只剩真入口 sshd 那一个）；体检 public 行 WARN「外面连不上：… 超时 · 在路由器上把 TCP 端口转发到 192.168.1.249」；入口照常进；$gohalf"
 }
 
+drill_entry_forward_out() {
+  CAP=20   # the listener + four forwards + one drop
+  local t0 dst lp fwd out wid got; local -a eopts
+  erig fwd
+  eapply "$(elist 1 "$ME=k1")" || { WHY="entry apply failed: $(tail -2 "$E/apply.out")"; edown; return 1; }
+  t0=$(now); eup
+  until_ok 10 listening || { WHY="the entry sshd never listened"; edown; return 1; }
+  eopts=(-F /dev/null -o BatchMode=yes -o IdentitiesOnly=yes -o IdentityAgent=none -o StrictHostKeyChecking=no
+         -o UserKnownHostsFile="$E/known_hosts" -o ConnectTimeout=5 -o LogLevel=ERROR -i "$E/k1" -p "$EPORT")
+  # a service on this machine: echoes one line back
+  dst=$(free_port)
+  python3 -c '
+import socket, sys
+s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(("127.0.0.1", int(sys.argv[1]))); s.listen(4)
+while True:
+    c, _ = s.accept(); c.sendall(c.recv(64)); c.close()
+' "$dst" 2>/dev/null & printf '%s\n' "$!" >> "$WORK/cred-pids"
+  until_ok 5 python3 -c 'import socket, sys; socket.create_connection(("127.0.0.1", int(sys.argv[1])), 1).close()' "$dst" 2>/dev/null \
+    || { WHY="the echo service never listened"; edown; return 1; }
+  # 1. -W to this machine: through
+  out=$(printf 'ping-entry\n' | ssh "${eopts[@]}" -W "127.0.0.1:$dst" "$ME@127.0.0.1" 2>"$E/ssh.err")
+  [ "$out" = "ping-entry" ] || { WHY="-W 127.0.0.1:$dst gave [$out]: $(cat "$E/ssh.err")"; edown; return 1; }
+  # 2. -L to this machine (fleet open's shape): through
+  lp=$(free_port)
+  ssh "${eopts[@]}" -N -o ExitOnForwardFailure=yes -L "127.0.0.1:$lp:127.0.0.1:$dst" "$ME@127.0.0.1" 2>"$E/fwd.err" </dev/null &
+  fwd=$!; printf '%s\n' "$fwd" >> "$WORK/cred-pids"
+  until_ok 5 python3 -c 'import socket, sys; socket.create_connection(("127.0.0.1", int(sys.argv[1])), 1).close()' "$lp" 2>/dev/null \
+    || { WHY="-L never listened: $(cat "$E/fwd.err")"; kill "$fwd" 2>/dev/null; edown; return 1; }
+  out=$(python3 -c '
+import socket, sys
+c = socket.create_connection(("127.0.0.1", int(sys.argv[1])), 3); c.settimeout(3); c.sendall(b"ping-L\n"); print(c.recv(64).decode().strip())
+' "$lp" 2>&1)
+  kill "$fwd" 2>/dev/null; wait "$fwd" 2>/dev/null
+  [ "$out" = "ping-L" ] || { WHY="-L to 127.0.0.1:$dst gave [$out]"; edown; return 1; }
+  # 3. anywhere else (a LAN address, a public one): prohibited
+  for h in 192.0.2.1 10.255.255.1; do
+    ssh "${eopts[@]}" -W "$h:22" "$ME@127.0.0.1" </dev/null >/dev/null 2>"$E/ssh.err" \
+      && { WHY="-W $h:22 was let through"; edown; return 1; }
+    until_ok 3 grep -q "to connect to host $h port 22, but the request was denied" "$E/log/entry.log" \
+      || { WHY="-W $h:22 not denied by the entry: $(cat "$E/ssh.err") $(grep -i "$h" "$E/log/entry.log")"; edown; return 1; }
+  done
+  # 4. -R: refused
+  ssh "${eopts[@]}" -N -o ExitOnForwardFailure=yes -R "127.0.0.1:0:127.0.0.1:$dst" "$ME@127.0.0.1" </dev/null \
+    >/dev/null 2>"$E/ssh.err" && { WHY="-R was let through"; edown; return 1; }
+  grep -qi 'forwarding failed' "$E/ssh.err" || { WHY="-R: $(cat "$E/ssh.err")"; edown; return 1; }
+  SECS=$(since "$t0")
+  # 5. a drop over the entry (the thin client's recv): that login's inbox, nowhere else
+  mkdir -p "$E/home"; printf 'dropped\n' > "$E/drop.txt"; wid="00000000-0000-4000-8000-000000000001/fid-drop"
+  got=$(ssh "${eopts[@]}" "$ME@127.0.0.1" "HOME='$E/home' python3 '$BIN/fleet-client-upload.py' recv - - '$wid' --name drop.txt" \
+          <"$E/drop.txt" 2>"$E/ssh.err")
+  case "$got" in "$E/home/.cache/claude-fleet/inbox/fid-drop/"*-drop.txt) ;; *) WHY="recv over the entry printed [$got]: $(cat "$E/ssh.err")"; edown; return 1 ;; esac
+  cmp -s "$got" "$E/drop.txt" || { WHY="the dropped file differs"; edown; return 1; }
+  [ "$(find "$E" -name '*-drop.txt' | wc -l | tr -d ' ')" = 1 ] || { WHY="the drop landed more than once: $(find "$E" -name '*-drop.txt')"; edown; return 1; }
+  sys_same || { edown; return 1; }
+  edown
+  WHAT="入口只放到本机的转发：-W / -L 到 127.0.0.1 通，到 192.0.2.1 / 10.255.255.1 被入口拒（request was denied），-R 被拒；经入口拖进来的文件（fleet-client-upload.py recv）只落进那个登录的 inbox"
+}
+
+# bin/entry-e2e-selftest.sh (issue #3076) sources the rig above and runs its own legs
+[ -n "${BREAK_ENTRY_LIB:-}" ] && return 0
 cred_run_drills "$0"

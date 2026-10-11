@@ -171,3 +171,40 @@ func clipUTF8(s string, n int) string {
 	}
 	return strings.ToValidUTF8(s[:n], "")
 }
+
+// readCIRunner reads the machine's test runner (claude-fleet#3144) from the
+// supervisor's state file: its `ci_runner`, which the daemon writes only while
+// the machine has a ci.env; nil otherwise, and for a word it does not know.
+func readCIRunner(stateFile string) *control.CIRunnerStatus {
+	if stateFile == "" {
+		return nil
+	}
+	b, err := os.ReadFile(stateFile)
+	if err != nil {
+		return nil
+	}
+	var st struct {
+		CI *struct {
+			State string   `json:"state"`
+			Why   string   `json:"why"`
+			At    *float64 `json:"at"`
+			Since *float64 `json:"since"`
+			Runs  struct {
+				Total  int `json:"total"`
+				Failed int `json:"failed"`
+			} `json:"runs"`
+		} `json:"ci_runner"`
+	}
+	if json.Unmarshal(b, &st) != nil || st.CI == nil {
+		return nil
+	}
+	known := false
+	for _, w := range control.CIRunnerStates {
+		known = known || w == st.CI.State
+	}
+	if !known {
+		return nil
+	}
+	return &control.CIRunnerStatus{State: st.CI.State, Why: clipUTF8(st.CI.Why, control.ServiceLineMax),
+		At: epochTime(st.CI.At), Since: epochTime(st.CI.Since), Runs: st.CI.Runs.Total, Failed: st.CI.Runs.Failed}
+}
