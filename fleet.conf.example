@@ -120,6 +120,15 @@ FLEET_BASE_BRANCH="main"
 # gives it a fresh budget (issue #2424).
 # @label=Guide tries before it stops @group=spawn @tier=internal @scope=global @edit=int
 #FLEET_GUIDE_MAX_TRIES=3
+# A stop is not forever (issue #3320): this long after it was written the
+# collector lifts it and gives a fresh budget — a loaded machine or an admission
+# refusal passes. 0 = a stop holds until `fleet guide`.
+# @label=Guide stop lifts after @group=spawn @tier=internal @scope=global @edit=int @unit=sec
+#FLEET_GUIDE_STUCK_SECS=1800
+# The collector's open runs detached from its 30 s guide phase (issue #3320); the
+# next tick waits this long for it before treating it as gone.
+# @label=Guide open may take @group=spawn @tier=internal @scope=global @edit=int @unit=sec
+#FLEET_GUIDE_OPEN_SECS=300
 
 # ── Per-repo settings (issue #978) ──────────────────────────────────────────
 # A fleet hosting 2+ repos keeps each further repo's conf at
