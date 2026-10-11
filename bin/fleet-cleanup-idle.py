@@ -399,6 +399,8 @@ class Cleaner:
         only when clean with nothing that is not on the base already — dirty or
         unpushed, it stays on disk (发起人拍板 3: 不干净只关窗口)."""
         if (snap["@worker_lifecycle"] not in ("", "sleeping")
+                # an old resident seat's window (issue #3118) is left for its person to
+                # close for one version — EPIC #3111 C10 hands it over (compat-1v: 下一批删)
                 or snap["@fleet_role"] in ("home", "panel", "orchestrator", "steward")
                 or snap["window_name"] in ("dash", "plan", "backlog", "home")
                 or (snap["@claude_state"] not in ("done", "exited")
