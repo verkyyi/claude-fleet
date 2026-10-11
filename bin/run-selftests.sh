@@ -69,6 +69,11 @@
 #               printed `QUARANTINE <test> …` and not counted as a failure — the train
 #               files its issue and writes the entry (record). One red never is.
 #   --drill-red TEST    count TEST as failed after it runs (the quarantine drill only).
+#   --plan      run nothing: print ONE line `plan tests=<n> total=<s> shards=<N>
+#               heaviest=<s>` — the selection's recorded cost, and the heaviest of
+#               the N slices --shard K/N would deal (K is ignored). The release
+#               train sizes its matrix and step bound by it (issue #3241,
+#               bin/fleet-train-plan.sh). Seconds are the durations table's.
 #   NAME        run only the named tests. The `-selftest.sh` suffix is optional, and a
 #               shell glob works (`run-selftests.sh 'dash-*'`), so chasing one red test
 #               still goes through the same hermetic prelude CI uses. A NAME that
@@ -227,9 +232,10 @@ fi
 # selftest name never starts with `-`), so `run-selftests.sh --shard 1/4 'dash-*'`
 # works. Forwarded verbatim through the shadow re-exec above, so it is only ever
 # parsed here, in the inner run.
-shard_k=1 shard_n=1 changed_base='' dur_spec='' q_list='' q_prev='' drill_red=''
+shard_k=1 shard_n=1 changed_base='' dur_spec='' q_list='' q_prev='' drill_red='' plan=0
 # a relative path is the caller's, not this bin dir's
 abspath() { case "$1" in /*) printf '%s' "$1" ;; *) printf '%s/%s' "$start_dir" "$1" ;; esac; }
+
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --quarantine) [ "$#" -ge 2 ] && [ -f "$2" ] \
@@ -244,6 +250,7 @@ while [ "$#" -gt 0 ]; do
     --shard) [ "$#" -ge 2 ] || { echo "run-selftests: --shard needs K/N" >&2; exit 2; }
              shard_spec=$2; shift 2 ;;
     --shard=*) shard_spec=${1#--shard=}; shift ;;
+    --plan)  plan=1; shift; continue ;;
     --durations) [ "$#" -ge 2 ] && [ -n "$2" ] \
                    || { echo "run-selftests: --durations needs a table file" >&2; exit 2; }
                  dur_spec=$2; shift 2; continue ;;
@@ -550,6 +557,12 @@ deal=$(printf '%s' "$listed" | awk -v n="$shard_n" -v tbl="$dur_table" '
   }')
 tests=$(printf '%s\n' "$deal" | awk -v k="$shard_k" '$1 == k { printf " %s", $3 }')
 ntests=$(printf '%s\n' "$deal" | awk -v k="$shard_k" '$1 == k { n++ } END { print n + 0 }')
+if [ "$plan" = 1 ]; then
+  printf '%s\n' "$deal" | awk -v m="$discovered" -v n="$shard_n" '
+    $1 == "=" { tot += $3; if ($3 + 0 > max) max = $3 + 0 }
+    END { printf "plan tests=%d total=%.0f shards=%d heaviest=%.0f\n", m, tot, n, max }'
+  exit 0
+fi
 if [ "$discovered" -eq 0 ]; then
   echo "run-selftests: no *-selftest.sh found in $script_dir" >&2
   exit 2

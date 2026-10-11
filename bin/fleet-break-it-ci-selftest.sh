@@ -15,6 +15,9 @@
 #                       the train's board picks macos-latest, 2 shards (#3145)
 #   train-own-runner-silent  our runner said idle but never took the shard: the
 #                       train's watcher reds + cancels it at the deadline (#3145)
+#   train-shard-timeout  stable far behind, a near-full selection: the train sizes
+#                       its shards by the forecast and reruns a shard cut short
+#                       with no test red once — never one with a FAIL line (#3241)
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT are read by the sourced runner
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -110,6 +113,71 @@ G
     || { WHY="started shards: exit $rc, summary $(cat "$d/sum" 2>/dev/null)"; rm -rf "$d"; return 1; }
   SECS=$(since "$t0"); rm -rf "$d"
   WHAT="自家测试机报 idle 却不接：到点这趟红、摘要写「自家测试机没接」、整趟取消；接了就记每片的机器和排队时间"
+}
+
+# The release train's forecast and its cut-short rerun (issue #3241, EPIC #3139 C9).
+drill_train_shard_timeout() {
+  CAP=60
+  local t0 d out rc wf sh
+  [ -x "$BIN/fleet-train-plan.sh" ] && [ -x "$BIN/fleet-shard-run.sh" ] \
+    || { WHY="no bin/fleet-train-plan.sh / bin/fleet-shard-run.sh"; return 1; }
+  wf="$BIN/../.github/workflows/release-train.yml"; sh="$BIN/../.github/workflows/selftests-shards.yml"
+  grep -q 'fleet-train-plan.sh --base' "$wf" && grep -q 'shards: ${{ needs.plan.outputs.linux_shards }}' "$wf" \
+    && grep -q 'budget_secs: ${{ needs.plan.outputs.linux_budget_secs }}' "$wf" \
+    || { WHY="release-train.yml's Linux half does not take its width / budget from the plan"; return 1; }
+  grep -q 'fleet-shard-run.sh --budget "$BUDGET"' "$sh" && grep -q "inputs.step_minutes != ''" "$sh" \
+    || { WHY="selftests-shards.yml does not run a budgeted shard under fleet-shard-run.sh"; return 1; }
+  d=$(mktemp -d "${TMPDIR:-/tmp}/train-shard.XXXXXX"); t0=$(now)
+  # 1) the real runner prices a selection
+  out=$(cd "$BIN/.." && FLEET_HEAVY=0 bash bin/run-selftests.sh --plan --shard 1/3 portability bash32-array 2>/dev/null | tail -1)
+  case "$out" in 'plan tests=2 total='*' shards=3 heaviest='*) ;;
+    *) WHY="run-selftests.sh --plan did not price two tests: $out"; rm -rf "$d"; return 1 ;; esac
+  # 2) a near-full selection (the ubuntu table's 4600 s): wider than 12, a bound past 8 minutes
+  cat > "$d/rs" <<'R'
+#!/bin/bash
+n=1; while [ $# -gt 0 ]; do [ "$1" = --shard ] && n=${2#1/}; shift; done
+echo "select: * ← full suite"; echo "plan tests=470 total=4600 shards=$n heaviest=$(( 4600 / n + 120 ))"
+R
+  chmod +x "$d/rs"
+  out=$(FLEET_TRAIN_PLAN_CMD="$d/rs" GITHUB_OUTPUT="$d/out" bash "$BIN/fleet-train-plan.sh" --base x --prefix linux 2>&1)
+  case "$out" in *'linux_shards=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]'*'linux_budget_secs=710'*'linux_step_minutes=26'*) ;;
+    *) WHY="a 4600 s selection was not planned as 13 shards × 710 s (step 26): $out"; rm -rf "$d"; return 1 ;; esac
+  grep -q '^linux_job_minutes=36$' "$d/out" || { WHY="the plan wrote no job bound to GITHUB_OUTPUT"; rm -rf "$d"; return 1; }
+  # a small selection keeps the PR's floor; a forecast that cannot be made falls back
+  printf '#!/bin/bash\necho "plan tests=6 total=30 shards=1 heaviest=10"\n' > "$d/rs"
+  out=$(FLEET_TRAIN_PLAN_CMD="$d/rs" bash "$BIN/fleet-train-plan.sh" --base x --prefix p 2>&1)
+  case "$out" in *'p_shards=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]'*'p_budget_secs=480'*) ;;
+    *) WHY="a small selection did not keep 12 × 480 s: $out"; rm -rf "$d"; return 1 ;; esac
+  printf '#!/bin/bash\nexit 3\n' > "$d/rs"
+  out=$(FLEET_TRAIN_PLAN_CMD="$d/rs" bash "$BIN/fleet-train-plan.sh" --base x --prefix p 2>&1); rc=$?
+  [ "$rc" = 0 ] && case "$out" in *'p_budget_secs=480'*) true ;; *) false ;; esac \
+    || { WHY="an unpriceable selection stopped the train (exit $rc): $out"; rm -rf "$d"; return 1; }
+  # 3) cut short, no test red ⇒ the same shard once more, green
+  cat > "$d/shard" <<'S'
+#!/bin/bash
+echo "run-selftests: shard 9/12 — predicted ~300s"; echo "=== zsh-local-selftest.sh ==="; echo "PASS  zsh-local-selftest.sh"
+echo "=== multirepo-e2e-selftest.sh ==="
+[ -f "$FAKE_DIR/once" ] || { touch "$FAKE_DIR/once"; sleep 30; }
+echo "PASS  multirepo-e2e-selftest.sh"
+S
+  chmod +x "$d/shard"
+  out=$(cd "$d" && FAKE_DIR=$d GITHUB_STEP_SUMMARY="$d/sum" bash "$BIN/fleet-shard-run.sh" --budget 1 --log s.log -- ./shard 2>&1); rc=$?
+  [ "$rc" = 0 ] && [ -f "$d/s.log.cut-1" ] && grep -q 'rerunning the same shard once' "$d/sum" \
+    && grep -q 'attempt 2 — predicted ~300s' "$d/sum" \
+    || { WHY="a shard cut short with no test red: exit $rc, not rerun green: $out"; rm -rf "$d"; return 1; }
+  # a FAIL line before the cut never reruns
+  printf '#!/bin/bash\necho "FAIL  a-selftest.sh"; touch "$FAKE_DIR/ran.$$"; sleep 30\n' > "$d/shard"
+  out=$(cd "$d" && FAKE_DIR=$d bash "$BIN/fleet-shard-run.sh" --budget 1 --log f.log -- ./shard 2>&1); rc=$?
+  [ "$rc" = 124 ] && [ "$(ls "$d"/ran.* | wc -l | tr -d ' ')" = 1 ] \
+    || { WHY="a cut shard with a FAIL line: exit $rc, ran $(ls "$d"/ran.* 2>/dev/null | wc -l) time(s): $out"; rm -rf "$d"; return 1; }
+  # cut short on both attempts ⇒ red, and nothing of it left running
+  printf '#!/bin/bash\nsleep 31\n' > "$d/shard"
+  out=$(cd "$d" && bash "$BIN/fleet-shard-run.sh" --budget 1 --log h.log -- ./shard 2>&1); rc=$?
+  [ "$rc" = 124 ] && printf '%s' "$out" | grep -q 'on every attempt (2)' \
+    || { WHY="a shard cut short twice: exit $rc: $out"; rm -rf "$d"; return 1; }
+  ! pgrep -f 'sleep 31' >/dev/null || { WHY="the cut shard's process group was left running"; rm -rf "$d"; return 1; }
+  SECS=$(since "$t0"); rm -rf "$d"
+  WHAT="stable 落后、近全量 4600 s：列车排 13 片、每次上限 710 s；截断且无红 ⇒ 同一片重跑一次变绿，有 FAIL 行不重跑，两次截断才红"
 }
 
 cred_run_drills "$0"

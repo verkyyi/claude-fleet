@@ -57,6 +57,26 @@ on:
         type: boolean
         required: false
         default: false
+      # The release train's forecast (issue #3241, bin/fleet-train-plan.sh). Empty —
+      # the PR gate — keeps the fixed bounds below and runs the suite bare, byte for
+      # byte; set, one attempt of a shard gets <budget_secs> under
+      # bin/fleet-shard-run.sh (a shard cut short with no test red reruns once) and
+      # the step / job bounds become <step_minutes> / <job_minutes>.
+      budget_secs:
+        description: 'seconds one attempt of a shard may take (empty = the fixed bounds, no rerun)'
+        type: string
+        required: false
+        default: ''
+      step_minutes:
+        description: 'the run step timeout, minutes (with budget_secs)'
+        type: string
+        required: false
+        default: ''
+      job_minutes:
+        description: 'the job timeout, minutes (with budget_secs)'
+        type: string
+        required: false
+        default: ''
 
 jobs:
   shard:
@@ -77,7 +97,7 @@ jobs:
     # macOS: a noisier runner and a ~2.3x slower suite (issues #2638, #2659); our
     # own Macs (fleet-ci): 25 (issue #3145). contains() ignores case, so the
     # fleet-ci test comes first ("macOS" is among its labels).
-    timeout-minutes: ${{ contains(inputs.runs_on, 'fleet-ci') && 25 || contains(inputs.runs_on, 'macos') && 60 || 15 }}
+    timeout-minutes: ${{ inputs.job_minutes != '' && fromJSON(inputs.job_minutes) || contains(inputs.runs_on, 'fleet-ci') && 25 || contains(inputs.runs_on, 'macos') && 60 || 15 }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -140,8 +160,9 @@ jobs:
 
       - name: Run this shard's selftests
         # ubuntu: ~1-2 min a shard, 8 min only catches a HUNG test; macOS: ~2.3x;
-        # our own Macs: inside the job's 25 (issue #3145).
-        timeout-minutes: ${{ contains(inputs.runs_on, 'fleet-ci') && 22 || contains(inputs.runs_on, 'macos') && 50 || 8 }}
+        # our own Macs: inside the job's 25 (issue #3145). The train sizes it from
+        # its forecast instead (issue #3241): two attempts of budget_secs + 2 min.
+        timeout-minutes: ${{ inputs.step_minutes != '' && fromJSON(inputs.step_minutes) || contains(inputs.runs_on, 'fleet-ci') && 22 || contains(inputs.runs_on, 'macos') && 50 || 8 }}
         env:
           # Per-test ceiling (issue #1150): ~3x the slowest ubuntu test; macOS keeps
           # the runner default (600 s — empty reads as the default).
@@ -154,6 +175,8 @@ jobs:
           QUARANTINE: ${{ inputs.quarantine }}
           PREV_FAILS: ${{ inputs.prev_fails }}
           DRILL_RED: ${{ inputs.drill_red }}
+          # The train's per-attempt budget (issue #3241); empty on the PR gate.
+          BUDGET: ${{ inputs.budget_secs }}
         run: |
           set -o pipefail
           set -- --shard "${{ matrix.shard }}/${{ strategy.job-total }}"
@@ -166,7 +189,12 @@ jobs:
           fi
           [ -z "$DRILL_RED" ] || set -- --drill-red "$DRILL_RED" "$@"
           [ -z "$CHANGED_BASE" ] || set -- --changed "$CHANGED_BASE" "$@"
-          bash bin/run-selftests.sh "$@" 2>&1 | tee selftests.log
+          if [ -n "$BUDGET" ]; then
+            # cut short with no test red ⇒ the same shard once more; a FAIL line never reruns
+            bash bin/fleet-shard-run.sh --budget "$BUDGET" --log selftests.log -- bash bin/run-selftests.sh "$@"
+          else
+            bash bin/run-selftests.sh "$@" 2>&1 | tee selftests.log
+          fi
 
       - name: Per-test timings
         if: always()
@@ -178,6 +206,11 @@ jobs:
             echo
             echo '```'
             [ "${{ matrix.shard }}" != 1 ] || grep '^select: ' selftests.log 2>/dev/null || true
+            for c in selftests.log.cut-*; do
+              [ -f "$c" ] || continue
+              echo "attempt ${c##*.cut-} was cut short (no test red) and rerun — it was in:"
+              awk '/^=== /{h=$2} /^(PASS  |FAIL  |TIMEOUT )/{h=""} END{print "  " (h ? h : "(none identified)")}' "$c"
+            done
             if grep -q '^-* slowest' selftests.log 2>/dev/null; then
               sed -n '/^-* slowest/,$p' selftests.log
             elif grep -Eq 'has nothing to run|^select: \(none\)' selftests.log 2>/dev/null; then
