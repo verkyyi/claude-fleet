@@ -390,7 +390,10 @@ class P_Helpers(Sandbox):
         r = self.cmd("doctor").stdout
         self.assertRegex(r, r"PASS\s+account")
         self.assertNotRegex(r, r"WARN\s+helper")
-        self.assertIn(self.H + "-0.154.0-darwin-arm64",
+        # the repo's own release.json, at whatever codex it pins (#3157)
+        with open(os.path.join(REPO, "release.json")) as fh:
+            pinned_cx = json.load(fh)["components"]["codex"]["version"]
+        self.assertIn(self.H + "-" + pinned_cx + "-darwin-arm64",
                       self.cmd("pinned-artifacts", os.path.join(REPO, "release.json")).stdout.split())
         # a copy put there by hand is drift, and becomes the release's link
         os.remove(acct)
