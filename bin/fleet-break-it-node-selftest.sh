@@ -273,7 +273,7 @@ drill_tcc_disclaim_sigpipe() {
         ( sleep 5; kill -9 "$p" ) >/dev/null 2>&1 & w=$!
         wait "$p"; rc=$?; kill "$w" 2>/dev/null; exit "$rc"); rc=$?
   SECS=$(since "$t0")
-  [ "$rc" = 0 ] && [ "$out" = done ] \
+  [ "$rc" = 0 ] && [ "$out" = "done" ] \
     || { WHY="\`tr </dev/urandom | head -c 1\` under fleet-tcc-disclaim.py did not end (rc $rc, ${SECS}s): $out"; return 1; }
   awk -v s="$SECS" 'BEGIN { exit !(s <= 1.5) }' || { WHY="\`tr </dev/urandom | head -c 1\` under the wrapper took ${SECS}s, want ≤ 1 (+ the clock's own startup)"; return 1; }
   pw=$(sed -n 's/^gen_password() { \(.*\) }$/\1/p' "$BIN/fleet-login-new.sh")
