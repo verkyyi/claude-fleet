@@ -4490,7 +4490,10 @@ drill_release_artifact_missing() {
   hub_has() { printf '{"artifacts":[' > "$d/hub/v1/fleet/release/artifacts"
     printf '"%s",' "$@" | sed 's/,$//' >> "$d/hub/v1/fleet/release/artifacts"
     printf ']}\n' >> "$d/hub/v1/fleet/release/artifacts"; }
-  hub_has ccquota-darwin-arm64 claude-2.1.293-darwin-arm64 codex-0.154.0-darwin-arm64 codex-code-mode-host-0.154.0-darwin-arm64 tmux-3.7c-darwin-arm64
+  # codex / tmux as the repo's release.json pins them (a codex bump must not red this drill — #3157)
+  cxv=$(python3 -c 'import json,sys; c=json.load(open(sys.argv[1]))["components"]; print(c["codex"]["version"], c["tmux"]["version"])' "$ROOT/release.json")
+  txv=${cxv#* }; cxv=${cxv%% *}
+  hub_has ccquota-darwin-arm64 claude-2.1.293-darwin-arm64 "codex-$cxv-darwin-arm64" "codex-code-mode-host-$cxv-darwin-arm64" "tmux-$txv-darwin-arm64"
   t0=$(now)
   out=$(PATH="$d/shim:$PATH" FLEET_CONF_DIR="$d/conf" XDG_CONFIG_HOME="$d/conf" CCQUOTA_HUB_URL='' FLEET_HUB_URL="file://$d/hub" \
           sh "$BIN/fleet-stable.sh" move "$c2" --dir "$d/co" --repo o/r 2>&1); rc=$?
@@ -4499,7 +4502,7 @@ drill_release_artifact_missing() {
   case "$out" in *'claude-9.9.9-darwin-arm64'*) ;; *) WHY="the refusal does not name claude-9.9.9-darwin-arm64: $(printf '%s' "$out" | tr '\n' '|')"; return 1 ;; esac
   [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable)" = "$c1" ] || { WHY="stable moved onto a release the hub cannot build"; return 1; }
   # the operator drops the file in → the same move goes through
-  hub_has ccquota-darwin-arm64 claude-9.9.9-darwin-arm64 codex-0.154.0-darwin-arm64 codex-code-mode-host-0.154.0-darwin-arm64 tmux-3.7c-darwin-arm64
+  hub_has ccquota-darwin-arm64 claude-9.9.9-darwin-arm64 "codex-$cxv-darwin-arm64" "codex-code-mode-host-$cxv-darwin-arm64" "tmux-$txv-darwin-arm64"
   out=$(PATH="$d/shim:$PATH" FLEET_CONF_DIR="$d/conf" XDG_CONFIG_HOME="$d/conf" CCQUOTA_HUB_URL='' FLEET_HUB_URL="file://$d/hub" \
           sh "$BIN/fleet-stable.sh" move "$c2" --dir "$d/co" --repo o/r 2>&1) \
     || { WHY="the move after the artifact landed failed: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1; }

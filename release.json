@@ -4,7 +4,7 @@
   "components": {
     "ccquota": {"artifact": "ccquota-{os}-{arch}"},
     "claude": {"version": "2.1.295", "artifact": "claude-{version}-{os}-{arch}"},
-    "codex": {"version": "0.154.0", "artifact": "codex-{version}-{os}-{arch}",
+    "codex": {"version": "0.162.1", "artifact": "codex-{version}-{os}-{arch}",
               "helpers": {"codex-code-mode-host": "codex-code-mode-host-{version}-{os}-{arch}"}},
     "tmux": {"version": "3.7c", "artifact": "tmux-{version}-{os}-{arch}", "lock": "conf/vendor-tmux.lock"},
     "supervisor": {"script": "bin/fleet-node-supervisor.py"}
