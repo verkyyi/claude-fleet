@@ -17,6 +17,10 @@ operator's choice:
     12  q  recycle the window (the old close-on-exit, now on purpose)
     13  p  the same conversation WITHOUT the personal layer (issue #1862) —
            offered only when this login has one (--personal on)
+    14     the countdown ran out (--close-in N, issue #3170): close the window
+           the way q does. 「N 秒后关闭 · 按任意键取消」 rides the line, counting
+           down each second; ANY key cancels it — and a key the page knows
+           (↵ r q p) still does what it says. 0 = no countdown, as before.
 
 A line goes ABOVE it only for something the person must know before choosing
 (issue #1842): commits on the branch that are on no remote (「未推送：N 个提交
@@ -44,7 +48,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from fleet_sleep_park import BOLD, DIM, RED, RESET, YELLOW, SGR_MOUSE, clip, ui_lang, width  # noqa: E402
 
-RESUME, NEW, QUIT, PERSONAL = 10, 11, 12, 13
+RESUME, NEW, QUIT, PERSONAL, AUTO_CLOSE = 10, 11, 12, 13, 14
 
 TEXT = {
     'zh': {'ended': '会话已结束', 'crashed': '会话意外退出',
@@ -55,7 +59,8 @@ TEXT = {
            'hooks_off': '个人自动规则 {n} 条这次连续失败、已停用：{w}',
            'personal_off': '这个窗口已不带个人配置（FLEET_PERSONAL=0）；长期退回：fleet config restore N',
            'resume': '重开', 'resume_new': '新开对话', 'retry': '重试启动', 'list': '回列表',
-           'new': '新对话', 'quit': '关窗口', 'personal': '不带个人配置重开'},
+           'new': '新对话', 'quit': '关窗口', 'personal': '不带个人配置重开',
+           'closing': '{n} 秒后关闭 · 按任意键取消'},
     'en': {'ended': 'Session ended', 'crashed': 'Session exited unexpectedly',
            'unpushed': 'Unpushed: {n} commits (branch {b})', 'unpushed_nob': 'Unpushed: {n} commits',
            'failed_resume': 'Resuming the conversation failed', 'failed_new': 'Starting a new session failed',
@@ -65,7 +70,8 @@ TEXT = {
            'hooks_off': '{n} personal hook(s) kept failing and were switched off: {w}',
            'personal_off': 'This window runs without the personal layer (FLEET_PERSONAL=0); to roll it back: fleet config restore N',
            'resume': 'reopen', 'resume_new': 'new conversation', 'retry': 'retry the launch', 'list': 'list',
-           'new': 'new chat', 'quit': 'close window', 'personal': 'reopen without personal config'},
+           'new': 'new chat', 'quit': 'close window', 'personal': 'reopen without personal config',
+           'closing': 'closing in {n}s · any key cancels'},
 }
 
 
@@ -111,9 +117,11 @@ def render(facts, cols, rows=None):
     lines = [color + clip(text, cols - 1) + RESET for color, text in above]
     enter_new = facts.get('agent') == 'codex' and not facts.get('sid')
     keys = keys_line(words, facts.get('personal') or '', bool(facts.get('retry')), enter_new)
-    line = color + BOLD + head + RESET + ' · ' + keys
+    n = int(facts.get('close_in') or 0)
+    closing = YELLOW + words['closing'].format(n=n) + RESET + ' · ' if n > 0 else ''
+    line = color + BOLD + head + RESET + ' · ' + closing + keys
     if width(line) > cols - 1:                  # narrow: the dim tail goes first
-        line = color + BOLD + head + RESET + ' · ' + keys.split(DIM)[0]
+        line = color + BOLD + head + RESET + ' · ' + closing + keys.split(DIM)[0]
     if width(line) > cols - 1:
         line = color + BOLD + clip(head, cols - 1) + RESET
     return '\n'.join(lines + [line])
@@ -138,6 +146,15 @@ def choice(chunk, key_row, personal=False):
 
 
 CPR = re.compile(r'\x1b\[(\d+);(\d+)R')
+# what a terminal sends on its own, never a person's key: a cursor / device
+# report (CPR, DA, DSR) or a focus change — these do not cancel the countdown
+NOT_A_KEY = re.compile(r'\x1b\[[?>]?[\d;]*[Rcn]|\x1b\[[IO]')
+
+
+def is_key(chunk):
+    """Did a person press something (a key, a click, a wheel)? (issue #3170)"""
+    text = chunk.decode('utf-8', 'replace') if isinstance(chunk, bytes) else chunk
+    return bool(NOT_A_KEY.sub('', text))
 
 
 def cursor(wait=0.3):
@@ -173,11 +190,14 @@ def main():
                    help='this login has a personal layer: on = offer p, off = this window already runs without it (#1862)')
     p.add_argument('--hooks-off', type=int, default=0, help='personal hooks switched off in the run that ended')
     p.add_argument('--hooks-off-what', default='')
+    p.add_argument('--close-in', type=int, default=0,
+                   help='close the window (exit 14) after N seconds unless a key is pressed; 0 = never (#3170)')
     p.add_argument('--print', action='store_true', help='draw once at 80 columns and exit 0 (selftest)')
     a = p.parse_args()
     facts = {'rc': a.rc, 'agent': a.agent, 'sid': a.sid, 'unpushed': a.unpushed,
              'branch': a.branch, 'failed': a.failed, 'why': a.why,
-             'retry': a.retry, 'personal': a.personal, 'hooks_off': a.hooks_off, 'hooks_off_what': a.hooks_off_what}
+             'retry': a.retry, 'personal': a.personal, 'hooks_off': a.hooks_off, 'hooks_off_what': a.hooks_off_what,
+             'close_in': max(a.close_in, 0)}
     if a.print:
         sys.stdout.write(render(facts, 80) + '\n')
         return 0
@@ -211,20 +231,36 @@ def main():
             early += more
             if pos: key_row = pos[0]
         mouse(True); sys.stdout.flush()
+        redraw = lambda: (sys.stdout.write('\r\033[K' + render(facts, size()[0]).split('\n')[-1]), sys.stdout.flush())
+        # the countdown (issue #3170): a deadline, cancelled by the first key
+        deadline = time.monotonic() + facts['close_in'] if facts['close_in'] else None
+        if deadline and early and is_key(early):
+            deadline = None; facts['close_in'] = 0; redraw()
         pick = choice(early, key_row, a.personal == 'on') if early else None
         if pick: return pick
         while True:
-            try: ready = select.select([rd, 0], [], [])[0]
+            wait = None
+            if deadline is not None:
+                left = deadline - time.monotonic()
+                if left <= 0: return AUTO_CLOSE
+                wait = left - int(left) or 1.0   # to the next whole second
+            try: ready = select.select([rd, 0], [], [], wait)[0]
             except InterruptedError: ready = [rd]
+            if deadline is not None and not ready:
+                left = deadline - time.monotonic()
+                if left <= 0.05: return AUTO_CLOSE
+                facts['close_in'] = int(left + 0.95); redraw()
+                continue
             if rd in ready:
                 try:
                     while os.read(rd, 64): pass
                 except BlockingIOError: pass
-                cols = size()[0]               # a resize: the one line again, fitted
-                sys.stdout.write('\r\033[K' + render(facts, cols).split('\n')[-1]); sys.stdout.flush()
+                redraw()                       # a resize: the one line again, fitted
             if 0 in ready:
                 chunk = os.read(0, 4096)
                 if not chunk: return 1          # the pane's input went away
+                if deadline is not None and is_key(chunk):
+                    deadline = None; facts['close_in'] = 0; redraw()
                 pick = choice(chunk, key_row, a.personal == 'on')
                 if pick: return pick
     finally:
