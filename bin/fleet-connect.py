@@ -1231,10 +1231,10 @@ def route_rec(r):
 def remembered(ent):
     """The route remembered for this machine on THIS network
     ({"route", "at"}), or None. In the class order it is filed per network
-    (claude-fleet#3074) — an entry from before that has none, and is measured
-    once; in #2987's order (FLEET_CONNECT_PREFER_TAILNET) it is the one route,
-    as it was."""
-    if route_mode() != "class":
+    (claude-fleet#3074); an entry written before that (no by_net) keeps its
+    one route on any network until its next save files it. In #2987's order
+    (FLEET_CONNECT_PREFER_TAILNET) it is the one route, as it was."""
+    if route_mode() != "class" or "by_net" not in ent:
         return {"route": ent["route"], "at": ent.get("at", 0)} if isinstance(ent.get("route"), dict) else None
     by = ent.get("by_net")
     rec = by.get(net_key()) if isinstance(by, dict) else None

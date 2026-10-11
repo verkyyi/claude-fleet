@@ -144,7 +144,8 @@ away = fc.remembered(ent)
 fc.remember(ent, {"name": "tailnet", "kind": "direct", "host": "mini2.tail435588.ts.net", "port": 22}, 1001.0)
 here("192.168.1.235/24", "192.168.1.254@192.168.1.0/24")
 back = (fc.remembered(ent) or {}).get("route", {}).get("name")
-print(at_home, away, back, sorted(ent["by_net"]))
+print(at_home, away, back, sorted(ent["by_net"]),
+      (fc.remembered({"route": {"name": "public"}, "at": 7}) or {}).get("route", {}).get("name"))
 # 5 FLEET_CONNECT_PREFER_TAILNET=1: #2987's order and nothing skipped
 os.environ["FLEET_CONNECT_PREFER_TAILNET"] = "1"; here("172.20.10.3/28", "hotspot")
 rows = rows_with({"lan": [3.0, 3.1, 3.0], "tailnet": [2.5, 2.6, 2.5], "public": [1.0, 1, 1], "relay": [60, 61, 62]})
@@ -173,7 +174,7 @@ EOF2
   || bad "lan elsewhere: got $(sed -n 2p <<<"$out")"
 [ "$(sed -n 3p <<<"$out")" = "tailnet=这台电脑没有 Tailscale;lan=不在这台机器的局域网;public=-;relay=-" ] && ok "no Tailscale here ⇒ the tailnet is not measured, nothing errs" \
   || bad "no tailscale: got $(sed -n 3p <<<"$out")"
-[ "$(sed -n 4p <<<"$out")" = "lan None lan ['172.20.10.1@172.20.10.0/28', '192.168.1.254@192.168.1.0/24']" ] && ok "memory by network: home's lan not first on the hotspot, and still there back home" \
+[ "$(sed -n 4p <<<"$out")" = "lan None lan ['172.20.10.1@172.20.10.0/28', '192.168.1.254@192.168.1.0/24'] public" ] && ok "memory by network: home's lan not first on the hotspot, and still there back home; a pre-#3074 entry keeps its one route" \
   || bad "net memory: got $(sed -n 4p <<<"$out")"
 [ "$(sed -n 5p <<<"$out")" = "tailnet,public,lan,relay [] lan" ] && ok "FLEET_CONNECT_PREFER_TAILNET=1: #2987's order, nothing skipped, one remembered route" \
   || bad "prefer tailnet compat: got $(sed -n 5p <<<"$out")"
