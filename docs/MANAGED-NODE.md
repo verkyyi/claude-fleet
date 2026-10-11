@@ -165,6 +165,42 @@ pod、22022 的门对每个登录都死了）；账号已不在（OS 登录、`a
 （远程登录关着 · 钥匙没被收 · 那个开关没开 = exit 7）各说一句，然后照原路直删；节点程序有完全磁盘访问时只走原路。
 要做一次：在机器上打开「远程登录」和它的「允许远程用户完全磁盘访问」，跑删号的 admin 在远程登录的允许名单里。
 
+**管理员 agent 一个固定签名身份，授权跨版本有效**（#3433，BREAK-IT `codesign-identity-switch`）。macOS 的
+隐私保护（TCC）按签名身份记授权：不是苹果的程序，记的是它的指定要求（`identifier … and certificate leaf = H"…"`）
+加路径。发布版的 ccquota 由 Go 链接器临时签名（ad-hoc），指定要求就是它自己的 cdhash，每次换版都变；管理员
+agent 跑的又是 `<sha>/bin/ccquota`，路径也每次变——所以人手给它的「完全磁盘访问」换一次版就不算数，开号删号又
+碰到授权框、`eDSPermissionError` 或卡住（#3034 · #3167 · #3405 · #3419）。现在：
+
+- **每台机器一个身份，只生成一次**：`bin/fleet_node_codesign.py`，自签的代码签名证书（CN「claude-fleet node
+  <机器名>」，100 年），私钥在本机生成、只进 root 才能读的钥匙串 `/var/db/fleet-node/codesign/`
+  （目录 0700；钥匙串密码 `keychain.pass` 0600，和 machine.env 里的节点令牌一样只在本机，从不进仓库、配置、
+  issue 或评论；`security` 的密码经 stdin 给，不上 argv）。证书不需要设信任（TCC 比对叶证书的哈希），所以不弹
+  任何框。已有身份永不重生成：缺一块是要人看的错误，不是悄悄换身份、让所有授权失效的理由。
+- **更新器每次暂存都签，验过才切**：`<sha>/bin/ccquota` 用这个身份重签（identifier `com.claude-fleet.ccquota`），
+  签完不满足指定要求就拒掉这次暂存（`failed`，什么都不切）；#3433 之前暂存的 current 下一轮就地补签。
+- **管理员 agent 跑一个不变的路径**：`/Library/Application Support/claude-fleet/agent/ccquota` 是 current 那份
+  签好的 ccquota 的实拷贝，换版、回退时整个改名替换；credsep meta.json 的 `agent_argv[0]` 指向它（#3034 的
+  跟随照旧，只是路径换成这个）。路径 + 指定要求都不随版本变，授权就一直有效。
+- **授权了就不再绕开**：节点程序每次跑账号脚本前读一下系统 TCC 库（只有带完全磁盘访问的进程链读得到，5 秒
+  没答 = 没有）。读得到：脚本作为它自己的子进程跑，访问记在已授权的固定身份上，`sysadminctl -deleteUser` /
+  `dscl` 直接成功（完全磁盘访问覆盖 sysadminctl 要的 SystemPolicy 类权限，不会弹框）；读不到：照旧经
+  `fleet-tcc-disclaim.py`（只拒不弹，#3167）。授权被收回，下一次就又绕开。`FLEET_ACCOUNT_DISCLAIM=1` 总是绕开。
+- **体检**：`fleet doctor --machine` 的 `codesign` 行 PASS 写出身份和要求；没有身份、某份没签上就 WARN（下一轮
+  补签），从不 FAIL。不是 macOS、缺 `codesign` / `security` / `openssl`、或 `FLEET_NODE_CODESIGN=0`：什么都不做，
+  和以前一样。
+
+**要人做一次（每台机器）**——授权只能人在屏幕前点，程序拿不到：
+
+1. 看身份：`sudo python3 "/Library/Application Support/claude-fleet/current/bin/fleet-node-update.py" codesign`
+   （打印 CN、sha1 和指定要求；`codesign: no identity yet` 就等更新器下一轮，或 `… codesign ensure`）。
+2. 系统设置 › 隐私与安全性 › 完全磁盘访问 › ＋，⌘⇧G 输入
+   `/Library/Application Support/claude-fleet/agent/ccquota`，加上并打开开关。
+3. 重启管理员 agent：`sudo launchctl kickstart -k system/com.ccquota.agent.<admin 登录名>`。
+
+之后换多少次版都不用再做。只有删掉 `/var/db/fleet-node/codesign/`（换了身份）才要从第 2 步重来。机器节点程序
+（守护起的那个）的进程链归守护的解释器——苹果签名的 `python3`，身份不随我们的版本变，上面「删号要完全磁盘访问」
+那段给它的授权同样跨版本有效。
+
 **以账号身份跑**：每个账号是进程里一个租户；它启动的每条命令（`fleet-control.py`、
 开号脚本、中继、git、tailscale）降权到这个账号——uid / gid / 附属组、`HOME` / `USER` /
 `LOGNAME`、工作目录是它的家（`internal/agent/runas.go` `prepCmd`）；root 的机器程序遇到
