@@ -304,7 +304,9 @@ type usageEntry struct {
 }
 
 // split reports whether the entry carries its usage by kind.
-func (u usageEntry) split() bool { return u.In != 0 || u.CacheWrite != 0 || u.CacheRead != 0 || u.Out != 0 }
+func (u usageEntry) split() bool {
+	return u.In != 0 || u.CacheWrite != 0 || u.CacheRead != 0 || u.Out != 0
+}
 
 func (u usageEntry) valid() bool {
 	if !hasString(sessionCredProviders, u.Provider) || u.Requests < 0 || u.Requests > 1e6 ||
