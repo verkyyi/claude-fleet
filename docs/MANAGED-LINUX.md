@@ -17,6 +17,8 @@ sudo, useradd/groupadd, and the runtime tools' shared libraries. The hub must
 publish signed artifacts for this Linux architecture matching `release.json`.
 An absent artifact is an installation failure, never permission to download a
 different CLI version.
+The entry port (`FLEET_ENTRY=1`) also needs OpenSSH 9.8+ (`PerSourcePenalties`):
+Debian 12's 9.2 runs everything else, but its entry never listens — use Debian 13.
 
 Generate **two trusted join codes** using the hub's operator endpoint
 `POST /v1/fleet/nodes/join-codes`: one for the machine, one for its worker login.
@@ -59,6 +61,10 @@ docker build --platform linux/amd64 \
   /tmp/fleet-node-image
 docker push registry.cn-shenzhen.aliyuncs.com/24haowan/fleet-managed-node:RELEASE_COMMIT
 ```
+
+The image is Debian 13 (trixie, OpenSSH 10.0); its build fails unless
+`sshd -T` shows `persourcepenalties`, so an image whose entry port could not
+listen is never pushed.
 
 The build context contains the verified release and public key, no join codes
 or node credentials. Select the resulting image **digest** for deployment.
