@@ -45,12 +45,15 @@ issue #2960): no `tools` list (every tool) or a list naming it — `spawn`,
 `disallowedTools` entry taking it away. The shipped `fleet-worker` takes it away.
 
 «ship»: the core ships `fleet-worker` (the issue-bound execution session — the
-spawn's default) and, until their own plugin carries them, `epic-driver` and
-`fleet-debugger`. Each is written into ~/.claude/agents once, kept up with the
-release while it is still byte for byte what the fleet wrote, and never touched
-again once the person edits it (their override) or deletes it (then a spawn is
-a plain session given the ticket). What the fleet wrote is recorded in
-$FLEET_CONF_DIR/agents-shipped.json (name → sha).
+spawn's default) and, until its own plugin carries it, `fleet-debugger`. Each is
+written into ~/.claude/agents once, kept up with the release while it is still
+byte for byte what the fleet wrote, and never touched again once the person
+edits it (their override) or deletes it (then a spawn is a plain session given
+the ticket). What the fleet wrote is recorded in
+$FLEET_CONF_DIR/agents-shipped.json (name → sha). A file the core no longer
+ships (`epic-driver` moved into the fleet-epic plugin — issue #3116) is retired:
+removed while it is still the fleet's bytes, so the plugin's copy answers (and
+no plugin, no such agent); an edited one stays, the person's own.
 """
 import hashlib
 import json
@@ -366,6 +369,23 @@ def ship(dst_dir=None, check=False):
                 f.write(want)
             os.replace(tmp, dst)
             rec[name], changed = wsha, True
+    # retired: shipped once, no longer in the core (moved into a plugin)
+    have = set(fn[:-3] for fn in os.listdir(src) if fn.endswith('.md')) if os.path.isdir(src) else set()
+    for name in sorted(n for n in rec if n not in have):
+        dst = os.path.join(dst_dir, name + '.md')
+        cur = None
+        if os.path.isfile(dst):
+            with open(dst, 'rb') as f:
+                cur = f.read()
+        if cur is not None and hashlib.sha256(cur).hexdigest() != rec[name]:
+            lines.append('theirs   %s (edited — the person\'s own, kept; the core no longer ships it)' % name)
+            continue
+        lines.append('%s %s (the core no longer ships it)' % ('would retire' if check else 'retired ', name))
+        if not check:
+            if cur is not None:
+                os.remove(dst)
+            del rec[name]
+            changed = True
     if changed and not check:
         os.makedirs(os.path.dirname(rec_path), exist_ok=True)
         tmp = '%s.%d.tmp' % (rec_path, os.getpid())

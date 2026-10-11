@@ -1072,15 +1072,19 @@ else
   say 'agents: skip — no conf/agent-defaults in this version'
 fi
 # The agent files the core ships (issue #3122, EPIC #3111 C11): fleet-worker — the
-# issue-bound session a spawn starts as by default — and, until their own plugin
-# carries them, epic-driver and fleet-debugger, into ~/.claude/agents. Written
-# once, kept up while still the fleet's bytes, never touched once the person edits
-# (their override) or deletes one (a spawn is then a plain session).
+# issue-bound session a spawn starts as by default — and, until its own plugin
+# carries it, fleet-debugger, into ~/.claude/agents. Written once, kept up while
+# still the fleet's bytes, never touched once the person edits (their override) or
+# deletes one (a spawn is then a plain session). One the core no longer ships
+# (epic-driver rides the fleet-epic plugin — issue #3116) is retired while still
+# the fleet's bytes; the plugins pass above installed fleet-epic first on a login
+# that had it.
 if [ -d "$ROOT/conf/agent-defaults/claude/agents" ] && [ -f "$ROOT/bin/fleet-agent-def.py" ]; then
   if out=$(CLAUDE_CONFIG_DIR="$CDIR" python3 "$ROOT/bin/fleet-agent-def.py" ship ${DRYFLAG:+--check} 2>&1); then
     w=$(printf '%s\n' "$out" | grep -E '^(wrote|would write)' | awk '{print $NF}' | paste -sd' ' -)
     k=$(printf '%s\n' "$out" | grep -E '^(theirs|deleted)' | awk '{print $2}' | paste -sd' ' -)
-    if [ -n "$w" ]; then say "agent files: $([ "$DRY" = 1 ] && echo 'would write' || echo 'wrote') $w${k:+ · kept as theirs: $k}"
+    r=$(printf '%s\n' "$out" | awk '$1 == "retired" {print $2} $1 == "would" && $2 == "retire" {print $3}' | paste -sd' ' -)
+    if [ -n "$w$r" ]; then say "agent files: $([ "$DRY" = 1 ] && echo 'would write' || echo 'wrote') ${w:-none}${r:+ · $([ "$DRY" = 1 ] && echo 'would retire' || echo 'retired'): $r}${k:+ · kept as theirs: $k}"
     else say "agent files: ok${k:+ — kept as theirs: $k}"; fi
   else
     fail agentfiles "fleet-agent-def.py ship: $(printf '%s\n' "$out" | tail -1)"

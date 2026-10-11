@@ -173,7 +173,7 @@ plus the 7 skills. They follow the same proposals: **5** stay (C1–C4, merged h
 | A1 | `agents/worker.md` | Worker model / effort / disallowedTools (locked) | core | every `--role worker` launch | **keep**, slimmed — model and effort only; tool locks become the guards' job (N) |
 | A2 | `agents/orchestrator.md` | Orchestrator role, body in the system prompt | ext | yes (`FLEET_ORCHESTRATOR` follows `FLEET_HOST`) | **opt-in** (P5) |
 | A3 | `agents/steward.md` | Steward role | ext | `count` by default where the orchestrator runs (here `1`) | **opt-in** (P5) |
-| A4 | `agents/epic-driver.md` | EPIC driver | ext | when an EPIC runs | **opt-in** — with the EPIC commands |
+| A4 | `agents/epic-driver.md` | EPIC driver | ext | when an EPIC runs | **opt-in** — with the EPIC commands (now `plugins/fleet-epic/agents/`, #3116) |
 | A5 | `agents/debugger.md` | Hub debug desk | ext | debug desk only | **opt-in** (P2) |
 | A6 | `conf/role-rules.default.md` (21 rows) | How the orchestrator dispatches, what the steward may answer | ext | appended to the orch/steward prompt | **opt-in** — with A2/A3 (P5) |
 
