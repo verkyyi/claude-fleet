@@ -4573,7 +4573,7 @@ def entry_reach_check(paths):
         why = "入口看不到这台的公网地址（来源 %s），这台也没有全局 IPv6；%s" % (v.get("source") or "?", fwd)
     else:
         why = fwd
-    line = "外面连不上：%s%s · %s · %s" % (badtxt, " · " if badtxt else "", why, when)
+    line = "外面连不上：" + " · ".join(x for x in (badtxt, why, when) if x)
     if tail:
         line += " · " + " · ".join(tail)
     return 1, line

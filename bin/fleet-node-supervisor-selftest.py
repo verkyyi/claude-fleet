@@ -2369,6 +2369,7 @@ class S_EntryReach(Sandbox):
         for w in ("外面连不上", "[2408:8207:1:2::9]:22022 超时", "这台没有公网地址", "100.77.0.3",
                   "TCP 22022 转发到 192.168.1.249:22022"):
             self.assertIn(w, c.stdout)
+        self.assertNotIn("·  ·", c.stdout)
 
     def test_reachable_passes(self):
         self.answer["body"] = {"checked_at": "2026-10-10T00:00:00Z", "source": "203.0.114.7",
