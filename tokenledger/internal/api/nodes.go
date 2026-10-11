@@ -92,6 +92,11 @@ type nodeConn struct {
 	// told this connection, so a beat pushes only what it has not heard.
 	canPerson  bool
 	personSent atomic.Value
+	// canEntryKeys is the hello's CapEntryKeys (claude-fleet#3068): this
+	// machine keeps the direct door's key files. entrySent is the entry
+	// version last told this connection.
+	canEntryKeys bool
+	entrySent    atomic.Int64
 	// canCredsep is an admin hello's CapCredsep (claude-fleet#2263/#2294):
 	// the logins it opens are credential-separated, so spares may go there.
 	canCredsep bool
@@ -442,7 +447,7 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 	nc := &nodeConn{wire: wire, admin: hp.Admin && s.isFleetAdmin(ep.OSUser), canRead: hp.HasCap(control.CapRead),
 		canWrite: hp.HasCap(control.CapWrite), canRelay: hp.HasCap(control.CapRelay),
 		canMove: hp.HasCap(control.CapMove), canSSHRelay: hp.HasCap(control.CapSSHRelay),
-		canTeam: hp.HasCap(control.CapTeam), canPerson: hp.HasCap(control.CapPerson), canAttach: hp.HasCap(control.CapAttach),
+		canTeam: hp.HasCap(control.CapTeam), canPerson: hp.HasCap(control.CapPerson), canEntryKeys: hp.HasCap(control.CapEntryKeys), canAttach: hp.HasCap(control.CapAttach),
 		canTest:       hp.HasCap(control.CapTestIdentity),
 		canCredsep:    hp.HasCap(control.CapCredsep),
 		canLoginJoin:  hp.HasCap(control.CapLoginJoin),
@@ -595,6 +600,10 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 			if nc.canPerson {
 				// The person's own layer, likewise (claude-fleet#2784).
 				go s.pushPerson(ep.ID, nc, "", 0)
+			}
+			if nc.canEntryKeys {
+				// The direct door's list, likewise (claude-fleet#3068).
+				go s.pushEntry(ep.ID, nc, 0)
 			}
 			if nc.admin {
 				// Each admin beat is a chance to send what is queued for

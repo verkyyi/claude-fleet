@@ -34,6 +34,10 @@ var rekeyColumns = [][2]string{
 	{"fleet_devices", "principal_id"},
 	{"fleet_device_audit", "principal_id"},
 	{"fleet_person_bundles", "principal"},
+	{"fleet_entry_keys", "person"},
+	{"fleet_entry_names", "person"},
+	{"fleet_entry_home", "person"},
+	{"fleet_entry_audit", "person"},
 }
 
 // Setting keys that name a principal: a budget moves with the person; an old

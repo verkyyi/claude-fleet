@@ -115,6 +115,8 @@ var hubSettings = map[string]hubSetting{
 			}
 			return strings.Join(hosts, ","), ""
 		}},
+	EntryKey: {def: "off", help: "the direct door: people's keys, address names and homes, pushed to their home machines",
+		check: onOff(EntryKey, "off")},
 	SpotKey: {def: "off", help: "rented SPOT machines when no machine has room (needs CCQUOTA_FLEET_SPOT_IMAGE)",
 		check: onOff(SpotKey, "off"),
 		legacy: func(s *Server) string {

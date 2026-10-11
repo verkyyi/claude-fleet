@@ -407,6 +407,10 @@ func (s *Server) routes() *routeMux {
 		// The person's one orchestrator (claude-fleet#2117): each machine asks,
 		// with its own token, whether it is the one to hold it.
 		mux.HandleFunc("/v1/node/orchestrator", s.handleNodeOrchestrator)
+		// The direct door (claude-fleet#3068): a home machine reads its list
+		// and sends its record with the machine's token.
+		mux.HandleFunc(control.EntryKeysNodePath, s.handleNodeEntryKeys)
+		mux.HandleFunc(control.EntryAuditNodePath, s.handleNodeEntryAudit)
 		// Machine-to-machine access (claude-fleet#1626): a node asks, with its
 		// own token, for a five-minute certificate to one other machine of
 		// the same owner; the operator reads every issuance.
@@ -450,6 +454,12 @@ func (s *Server) routes() *routeMux {
 		mux.HandleFunc(control.PersonBundlePath, s.handleFleetPersonBundle)
 		// The merged roles + rule table, read-only (claude-fleet#2787).
 		mux.HandleFunc(control.PersonBundlePath+"/roles", s.handleFleetPersonBundle)
+		// Each person's keys, address name and home for the direct door
+		// (claude-fleet#3068): authenticated by the handler, off by default.
+		mux.HandleFunc(control.EntryKeysPath, s.handleEntryKeys)
+		mux.HandleFunc(control.EntryKeysPath+"/", s.handleEntryKeys)
+		mux.HandleFunc(control.EntryNamePath, s.handleEntryName)
+		mux.HandleFunc(control.EntryHomePath, s.handleEntryHome)
 		// The Fleet Hub's read tools (claude-fleet#1409), the same ones
 		// /mcp lists when the module is on.
 		mux.Handle("/v1/fleet/", s.viewerOnly(http.HandlerFunc(s.handleFleet)))

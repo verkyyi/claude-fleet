@@ -93,6 +93,10 @@ func (s *Store) EnsureNodes() error {
 	if err := s.ensureFleetPersonBundles(); err != nil {
 		return err
 	}
+	// The direct door's keys, names and homes (claude-fleet#3068).
+	if err := s.ensureFleetEntry(); err != nil {
+		return err
+	}
 	// What a worker on another machine left behind (claude-fleet#1609).
 	if err := s.ensureFleetWorkerRecords(); err != nil {
 		return err
