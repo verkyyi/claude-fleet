@@ -1,8 +1,9 @@
 # fleet-linux-0 真人演练单（EPIC #3208 C7 · issue #3214）
 
 arvin 在 fleet-linux-0 上拿到自己的登录、从电脑和手机连进来、开会话、Claude 答话；
-再开一个演练登录、删掉它，确认删干净。**C2（#3210）、C6（#3213）与 C8（#3281，出口护栏）合并、上线、
-贴出上线证据后才开练**；在那之前不碰线上这台。
+再开一个演练登录、删掉它，确认删干净。**C2（#3210）与 C6（#3213）合并、上线后就开练**（C6 的换版过了步骤 C）；
+在那之前不碰线上这台。C8（#3281，出口护栏）不挡演练：它的 apply 还要再重启一次 pod，
+所以等演练走完才上，免得断 arvin 的会话——⑤′ 在那之后补核。
 
 约定：
 
@@ -106,7 +107,7 @@ su - 24haowan -c 'ls /home/fleet; sudo -n true'      # 两个都被拒
   的一条，停下报。
 - **记**：扫描的输出。
 
-## ⑤′ 出口护栏（运维，节点上；C8 #3281）
+## ⑤′ 出口护栏（运维，节点上；C8 #3281 上线后补核，不在演练当中做）
 
 这台碰不到云元数据和集群内网——以 `24haowan` **和** `fleet` 容器里的 root 各跑一遍：
 
@@ -128,7 +129,7 @@ getent hosts registry.npmjs.org                  # DNS
 - **算过**：前四条全失败、后三条全成功；④ 的 Claude 答话本身就证明经凭据代理出去的路还在，
   ③ 的门照进得去。
 - **出事看**：`kubectl -n fleet-workers get pod fleet-linux-0 -o jsonpath='{.spec.initContainers[*].name}'`
-  有 `egress-guard`、它的日志；元数据通了就是 BREAK-IT `linux-egress-metadata`，**停下报，不往下练**。
+  有 `egress-guard`、它的日志；C8 上线后元数据还通就是 BREAK-IT `linux-egress-metadata`，停下报。演练当中（C8 还没上）它通是预期，不算出事。
 - **记**：两种身份下四条失败、三条成功的输出。
 
 ## ⑥ 派来的活照跑（运维 / 编排会话）
