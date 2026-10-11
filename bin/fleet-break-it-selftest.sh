@@ -157,6 +157,8 @@
 #                                                   write_stamp
 #   cmdn-waits-orch                                 bin/fleet-shell.sh portal (home-session --new),
 #                                                   conf/tmux-shell.conf (User928), fleet-sidebar.py with_portal
+#   report-parent-gone                              bin/fleet-report-parent.sh (orphan → global/orphan-reports.ndjson
+#                                                   + fleet-alerts.sh event child-report)
 # Cred half — cred-* rows: bin/fleet-break-it-cred-selftest.sh runs them (its own
 #   test; listed here only through the lockstep lint) — and cred-shared-down,
 #   bin/fleet-break-it-cred-shared-selftest.sh (issue #2217) — and cred-sep-by-agent /
@@ -5985,6 +5987,55 @@ drill_node_container_restart() {
   fi
   SECS=$(since "$t0")
   WHAT="新容器不接管上次的 PID；镜像负责升级时不恢复旧的切换"
+}
+
+# A child's report whose parent is gone (issue #3117, EPIC #3111 C6): a scratch spawned
+# a worker and was closed; the worker merged and its report went nowhere — a silent
+# exit 0. Now it is the person's: one row in global/orphan-reports.ndjson and one
+# alert, never twice (the reaper's --only-once backstop, a re-run), and a hub-spawned
+# child (@origin empty) still files nothing.
+drill_report_parent_gone() {
+  CAP=30; local d="$WORK/rpg" w wh t0 f n a out
+  BREAK_SOCK="$WORK/sock-rpg"
+  mkdir -p "$d/conf/fleets/rpg" "$d/shim" "$d/main"
+  printf 'FLEET_REPO=acme/app\nFLEET_MAIN=%s/main\n' "$d" > "$d/conf/fleets/rpg/conf"
+  printf '#!/bin/sh\ncase "$*" in *pulls/*) echo "true closed false" ;; esac\nexit 0\n' > "$d/shim/gh"
+  printf '#!/bin/sh\necho "$*" >> "%s/alerted"\n' "$d" > "$d/alert"
+  chmod +x "$d/shim/gh" "$d/alert"
+  nt -f /dev/null new-session -d -s rpg -n home 'exec sleep 600' || { WHY="cannot start the isolated tmux server"; return 1; }
+  # the worker the closed scratch-7 spawned; scratch-7's window is gone
+  w=$(nt new-window -d -P -F '#{window_id}' -t rpg -n kid 'exec sleep 600')
+  nt set-option -w -t "$w" @issue 41 \; set-option -w -t "$w" @repo acme/app \; \
+     set-option -w -t "$w" @origin scratch-7 \; set-option -w -t "$w" @claude_state 'done'
+  wh=$(nt new-window -d -P -F '#{window_id}' -t rpg -n hubkid 'exec sleep 600')
+  nt set-option -w -t "$wh" @issue 42 \; set-option -w -t "$wh" @repo acme/app \; set-option -w -t "$wh" @claude_state 'done'
+  rpg() { env PATH="$WORK/tbin:$d/shim:$PATH" HOME="$WORK/home" BREAK_SOCK="$BREAK_SOCK" FLEET_CONF_DIR="$d/conf" FLEET_SKIP_GLOBAL_CONF=1 \
+            FLEET_ORPHAN_ALERT_CMD="$d/alert" bash "$BIN/fleet-report-parent.sh" -L rpg "$@"; }
+  f="$d/conf/global/orphan-reports.ndjson"
+  t0=$(now)
+  out=$(rpg --win "$w" --state merged --pr 77 --summary 'landed the fix' 2>&1)
+  case "$out" in orphaned*) ;; *) WHY="a report whose parent is gone said [$out], want orphaned → …"; return 1 ;; esac
+  SECS=$(since "$t0")
+  python3 - "$f" <<'PYR' || { WHY="orphan-reports.ndjson is not one MERGED row for issue-41: $(cat "$f" 2>/dev/null)"; return 1; }
+import json, sys
+rows = [json.loads(l) for l in open(sys.argv[1])]
+assert len(rows) == 1, rows
+r = rows[0]
+assert r["child_key"].endswith("issue-41") and r["state"] == "MERGED" and r["pr"] == "77" and r["summary"] == "landed the fix", r
+assert isinstance(r["ts"], int), r
+PYR
+  a=$(grep -c 'child-report' "$d/alerted" 2>/dev/null); a=${a:-0}
+  [ "$a" = 1 ] || { WHY="the person got $a alert(s) for it, want 1"; return 1; }
+  # the reaper's backstop, then a re-run of the same report: no second row, no second alert
+  rpg --win "$w" --state reaped --verdict merged --only-once >/dev/null 2>&1
+  rpg --win "$w" --state merged --pr 77 --summary 'landed the fix' >/dev/null 2>&1
+  n=$(grep -c . "$f"); a=$(grep -c 'child-report' "$d/alerted")
+  [ "$n:$a" = 1:1 ] || { WHY="a repeat filed rows:alerts=$n:$a, want 1:1"; return 1; }
+  # hub-spawned: nobody spawned it, nothing to file
+  rpg --win "$wh" --state merged --pr 78 >/dev/null 2>&1
+  n=$(grep -c . "$f")
+  [ "$n" = 1 ] || { WHY="a hub-spawned child's report was filed for the person ($n rows)"; return 1; }
+  WHAT="派单的会话不在：报告进 orphan-reports.ndjson 一行 + 一条提醒，重报 / 回收不重复，hub 派的不写"
 }
 
 drill_db_move_policy_seed() {

@@ -220,6 +220,10 @@ type Server struct {
 	// (claude-fleet#1428); nil when CCQUOTA_FLEET_SPOT_IMAGE is unset.
 	Spot *SpotController
 
+	// EntryDNS writes every person's address record (claude-fleet#3073);
+	// nil when the hub has no DNS token (CCQUOTA_DNS_*) — no call at all.
+	EntryDNS *EntryDNS
+
 	// Elector says which replica runs each background loop when two hubs
 	// share one Postgres database (claude-fleet#2123). nil — every hub on
 	// SQLite — leads everything, exactly as before.
