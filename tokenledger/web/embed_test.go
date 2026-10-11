@@ -28,6 +28,7 @@ var appPages = []struct{ html, script, id string }{
 	{"admin/users.html", "admin/users.js", "people"},
 	{"admin/settings.html", "admin/settings.js", "settings"},
 	{"admin/audit.html", "admin/audit.js", "audit"},
+	{"admin/feedback.html", "admin/feedback.js", "feedback"},
 	// The whole hub an admin's daily pages used to show (claude-fleet#2515).
 	{"admin/sessions.html", "admin/sessions.js", "all-sessions"},
 	{"admin/overview.html", "admin/overview.js", "by-person"},
@@ -95,7 +96,7 @@ func TestAssets_MenuLinksResolve(t *testing.T) {
 		"/quota": "quota.html", "/usage": "usage.html",
 		"/subscriptions/": "admin/subscription.html", "/subscriptions/settings": "admin/subscription-settings.html", "/admin/users/": "admin/user.html",
 		"/subscriptions": "admin/subscriptions.html", "/nodes": "admin/nodes.html", "/admin/users": "admin/users.html",
-		"/admin/settings": "admin/settings.html", "/admin/audit": "admin/audit.html",
+		"/admin/settings": "admin/settings.html", "/admin/audit": "admin/audit.html", "/admin/feedback": "admin/feedback.html",
 		"/admin/sessions": "admin/sessions.html", "/admin/overview": "admin/overview.html", "/admin/devices": "admin/devices.html",
 	}
 	hrefs := regexp.MustCompile(`href: '([^']+)'`).FindAllStringSubmatch(src, -1)

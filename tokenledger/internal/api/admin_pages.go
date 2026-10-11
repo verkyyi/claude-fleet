@@ -36,6 +36,9 @@ var adminPageRoutes = []struct{ path, id, file string }{
 	{"/admin/users", "people", "admin/users.html"},
 	{"/admin/settings", "settings", "admin/settings.html"},
 	{"/admin/audit", "audit", "admin/audit.html"},
+	// 反馈 (claude-fleet#3357): mounted like every admin page; /v1/me lists
+	// it only while the hub takes feedback, and its reads exist only then.
+	{feedbackPagePath, feedbackPageID, feedbackPageFile},
 	// The whole hub an admin's daily pages used to show (claude-fleet#2515).
 	{"/admin/sessions", "all-sessions", "admin/sessions.html"},
 	{"/admin/overview", "by-person", "admin/overview.html"},

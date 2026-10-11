@@ -97,6 +97,10 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	}
 	out := Me{Via: doorOf(r.Context()), Role: roleOf(r.Context())}
 	out.Pages = pagesFor(out.Role)
+	if s.Feedback != nil && s.Fleet && out.Role != roleUser && out.Role != "" {
+		// 反馈 (claude-fleet#3357): an admin's, only with the feature on.
+		out.Pages = append(out.Pages, feedbackPageID)
+	}
 	out.Entry = s.entryOn()
 	if pid := principalOf(r.Context()); pid != "" {
 		login, err := s.machineLoginOf(pid)

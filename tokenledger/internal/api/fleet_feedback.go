@@ -76,6 +76,10 @@ type FeedbackDesk struct {
 	// GitHub files each feedback as an issue (claude-fleet#3356,
 	// fleet_feedback_github.go); nil = nothing is ever sent to GitHub.
 	GitHub *FeedbackGitHub
+	// CloseIssue comments on a feedback's GitHub issue and closes it (the
+	// admin's 「标为重复」, claude-fleet#3357); nil = the desk's GitHub client
+	// does it (C2), and with neither only the row is closed. A test seam.
+	CloseIssue func(ctx context.Context, number int64, comment string) error
 
 	kickOnce sync.Once
 	kickCh   chan struct{}

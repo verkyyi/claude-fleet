@@ -10,7 +10,7 @@ import {
   pct, level, fmtIn, windowsOf, subscriptions, subState, credState, headroom, leaseRows, switchRows,
   addSubCommands, arrived, LABEL_RE, machineCards, joined, countdown, cleanLogin, GH_LOGIN_RE,
   userRows, loginOwners, loginPairs, loginPairText, pairsCell, settingValue, SETTING_GROUPS, AUDIT_KINDS, auditDays, auditWho,
-  poolRows, poolKpis, personLimit,
+  poolRows, poolKpis, personLimit, FEEDBACK_STATES, feedbackState, feedbackKind, fmtBytes,
 } from '../dist/lib/admin.js';
 import { useLocale } from '../dist/lib/i18n.js';
 import { en } from '../dist/lib/i18n/en.js';
@@ -230,6 +230,27 @@ test('audit: grouped by day, newest first; actors without their principal', () =
   for (const k of AUDIT_KINDS) assert.ok(en['ui.aud.k.' + k] && zhCN['ui.aud.k.' + k], k);
 });
 
+// 反馈 (claude-fleet#3357): a state's chip and words, the machine type the
+// public issue may say (共同约定 5), an attachment's size.
+test('feedback rows: state chips, machine types, sizes', () => {
+  useLocale('zh-CN');
+  assert.deepEqual(feedbackState('received'), ['warn', '待转']);
+  assert.deepEqual(feedbackState('filed'), ['brand', '已进单']);
+  assert.deepEqual(feedbackState('closed'), ['ok', '已处理']);
+  assert.deepEqual(feedbackState('???'), ['warn', '未知']);
+  assert.equal(feedbackKind('managed-mac'), '托管 Mac');
+  assert.equal(feedbackKind('managed-linux'), '托管 Linux');
+  assert.equal(feedbackKind('own'), '自己的电脑');
+  assert.equal(feedbackKind('weird'), 'weird');
+  assert.equal(feedbackKind(''), '—');
+  useLocale('en');
+  assert.equal(feedbackKind('managed-mac'), 'Managed Mac');
+  assert.equal(fmtBytes(812), '812 B');
+  assert.equal(fmtBytes(4200), '4.1 KB');
+  assert.equal(fmtBytes(2.3 * 1024 * 1024), '2.3 MB');
+  for (const s of FEEDBACK_STATES.filter((x) => x !== 'all')) assert.ok(en['ui.fb.s.' + s] && zhCN['ui.fb.s.' + s], s);
+});
+
 // The pages themselves, read as source: what a DOM test would pin, without a DOM.
 const PAGES = [
   { file: 'admin/subscriptions.js', id: 'subscriptions', confirms: 2, empty: 'ui.sub.empty' },
@@ -238,6 +259,8 @@ const PAGES = [
   // Restoring the team layer (moved here from Config by claude-fleet#2515).
   { file: 'admin/settings.js', id: 'settings', confirms: 1, empty: null },
   { file: 'admin/audit.js', id: 'audit', confirms: 0, empty: 'ui.aud.empty' },
+  // 反馈 (claude-fleet#3357).
+  { file: 'admin/feedback.js', id: 'feedback', confirms: 0, empty: 'ui.fb.empty' },
   // The whole hub an admin's daily pages used to show (claude-fleet#2515);
   // the tables and their empty states are lib/sessions-view.js and
   // lib/devices-view.js.

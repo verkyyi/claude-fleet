@@ -191,6 +191,50 @@ func (s *Store) TakeFeedbackGap(key string, now time.Time, gap time.Duration) (i
 	return left, ErrFeedbackGap
 }
 
+// FeedbackPage is one page of the admin's list (claude-fleet#3357): rows
+// older than beforeID (0 = from the newest), in state ("" = any), newest first.
+func (s *Store) FeedbackPage(state string, beforeID int64, limit int) ([]Feedback, error) {
+	where, args := `WHERE 1 = 1`, []any{}
+	if state != "" {
+		where, args = where+` AND state = ?`, append(args, state)
+	}
+	if beforeID > 0 {
+		where, args = where+` AND id < ?`, append(args, beforeID)
+	}
+	return s.feedbackQuery(where, args, limit)
+}
+
+// FeedbackCounts is how many rows each state holds.
+func (s *Store) FeedbackCounts() (map[string]int, error) {
+	rows, err := s.read.Query(`SELECT state, COUNT(*) FROM fleet_feedback GROUP BY state`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int{}
+	for rows.Next() {
+		var st string
+		var n int
+		if err := rows.Scan(&st, &n); err != nil {
+			return nil, err
+		}
+		out[st] = n
+	}
+	return out, rows.Err()
+}
+
+// CloseFeedback closes a row with the reply its person is to get (C3's
+// 「标为重复」; C5 closes from GitHub). false when it was closed already.
+func (s *Store) CloseFeedback(id int64, reply string, at time.Time) (bool, error) {
+	res, err := s.write.Exec(`UPDATE fleet_feedback SET state = ?, closed_at = ?, reply = ? WHERE id = ? AND state <> ?`,
+		FeedbackClosed, at.UTC().Format(rfc), reply, id, FeedbackClosed)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n == 1, nil
+}
+
 // FeedbackToFile lists the rows not yet on GitHub (received, no issue),
 // oldest first — the filer's work (claude-fleet#3356).
 func (s *Store) FeedbackToFile(limit int) ([]Feedback, error) {

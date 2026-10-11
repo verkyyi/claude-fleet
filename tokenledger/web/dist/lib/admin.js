@@ -449,3 +449,29 @@ export function auditDays(events) {
 
 /** auditWho is the actor a row names, without the principal's "(gh:…)". */
 export const auditWho = (e) => String((e && e.actor) || '').replace(/\s*\((gh|wecom)[^)]*\)$/, '') || '—';
+
+/** FEEDBACK_STATES are 反馈's filter buttons (claude-fleet#3357), the hub's
+ *  states plus all; each is a t('ui.fb.s.<state>') key. */
+export const FEEDBACK_STATES = Object.freeze(['all', 'received', 'filed', 'closed']);
+
+/** feedbackState is a row's state as [chip class, words]: received is
+ *  待转 (no issue yet), filed 已进单, closed 已处理. */
+export function feedbackState(st) {
+  const cls = st === 'closed' ? 'ok' : st === 'filed' ? 'brand' : 'warn';
+  return [cls, t(FEEDBACK_STATES.includes(st) && st !== 'all' ? 'ui.fb.s.' + st : 'ui.st.unknown')];
+}
+
+/** feedbackKind is the machine type a session said (共同约定 5): 托管 Mac ·
+ *  托管 Linux · 自己的电脑; anything else is shown as sent. */
+export function feedbackKind(k) {
+  const key = { 'managed-mac': 'ui.fb.k.mac', 'managed-linux': 'ui.fb.k.linux', own: 'ui.fb.k.own' }[k];
+  return key ? t(key) : String(k || '—');
+}
+
+/** fmtBytes is an attachment's size: 812 B · 4.1 KB · 2.3 MB. */
+export function fmtBytes(n) {
+  const v = Number(n) || 0;
+  if (v < 1024) return v + ' B';
+  if (v < 1024 * 1024) return (v / 1024).toFixed(1) + ' KB';
+  return (v / 1024 / 1024).toFixed(1) + ' MB';
+}
