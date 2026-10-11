@@ -1106,12 +1106,12 @@ grep -q '"list": "all" if SERVING\["list_all"\]' "$WORK/bin/fleet-mcp.py" \
   || fail "Q: the handover no longer carries the list mode / the server's --group"
 # file_issue spawn:true: no dispatch group → filed without --spawn, the install hint said.
 : > "$LOG"
-call 150 file_issue '{"title":"a","spawn":true}' | FAKE_ORCH= serve "$WORK/q5"
+call 150 file_issue '{"title":"a","spawn":true}' | FAKE_ORCH='' serve "$WORK/q5"
 call 151 file_issue '{"title":"b","spawn":true}' | serve "$WORK/q6"
 printf '{"enabledPlugins":{"fleet-orchestrate@claude-fleet":true}}\n' > "$WORK/claude/settings.json"
-call 152 file_issue '{"title":"c","spawn":true}' | FAKE_ORCH= serve "$WORK/q7"
+call 152 file_issue '{"title":"c","spawn":true}' | FAKE_ORCH='' serve "$WORK/q7"
 printf '{"enabledPlugins":{"fleet-orchestrate@claude-fleet":false}}\n' > "$WORK/claude/settings.json"
-call 153 file_issue '{"title":"d","spawn":true}' | FAKE_ORCH= serve "$WORK/q8"
+call 153 file_issue '{"title":"d","spawn":true}' | FAKE_ORCH='' serve "$WORK/q8"
 rm -f "$WORK/claude/settings.json"
 grep -qx 'fleet-issue-file.sh --title a' "$LOG" && grep -qx 'fleet-issue-file.sh --title b --spawn' "$LOG" \
   && grep -qx 'fleet-issue-file.sh --title c --spawn' "$LOG" && grep -qx 'fleet-issue-file.sh --title d' "$LOG" \
