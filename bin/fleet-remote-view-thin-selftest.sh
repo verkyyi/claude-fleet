@@ -107,6 +107,12 @@ term() {
   local n="$1"; shift
   tt new-window -d -t "=$TL:" -n "$n" "env -u TMUX FLEET_CONF_DIR='$FLEET_CONF_DIR' TMPDIR='$TMPDIR' bash '$BIN/fleet-remote-view.sh' attach $*; sleep 300"
 }
+# termf: the same, with the first-screen seam recording instead of switching
+termf() {
+  local n="$1"; shift
+  tt new-window -d -t "=$TL:" -n "$n" -e "FLEET_VIEW_FIRST_CMD=echo >> $WORK/first.log" \
+    "env -u TMUX FLEET_CONF_DIR='$FLEET_CONF_DIR' TMPDIR='$TMPDIR' bash '$BIN/fleet-remote-view.sh' attach $*; sleep 300"
+}
 tt -f /dev/null new-session -d -s "$TL" -n idle -x 160 -y 40 'while :; do sleep 300; done'
 
 # ============================================================================
@@ -241,7 +247,20 @@ waitfor 5 sh -c "'$REAL_TMUX' -L '$RS' has-session -t '$V' 2>/dev/null" || fail 
 # the session exists a moment before attach --thin selects its window: wait for it
 waitfor 5 sh -c "[ \"\$('$REAL_TMUX' -L '$RS' display-message -p -t '=$(vs dev1):' '#{window_id}' 2>/dev/null)\" = '$OW' ]"
 eq "E: --resume with no cur= lands on the orchestrator" "$OW" "$(vcur dev1)"
+# no orchestrator window HERE (it runs on another machine): the attach hands the
+# first screen to ⌘N's road (`do new`), never a bare home shell (issue #3007)
+tn set-window-option -t "$OW" -u @fleet_role
 tt kill-window -t "=$TL:thin3"
+: > "$WORK/first.log"
+termf thin3b "--thin --view dev9 --device $DEV --route lan --token t9k"
+waitfor 5 sh -c "grep -q 'do new --view' '$WORK/first.log'" || fail "E: no orchestrator here → the first screen was not handed to ⌘N's road: $(cat "$WORK/first.log")"
+has "E: … for this 看台" "$(cat "$WORK/first.log")" "--view $RS@view-dev9"
+tn set-window-option -t "$OW" @fleet_role orchestrator
+tt kill-window -t "=$TL:thin3b"
+termf thin3c "--thin --view dev8 --device $DEV --route lan --token t8k"
+sleep 1
+[ "$(grep -c 'dev8' "$WORK/first.log")" = 0 ] || fail "E: an orchestrator here, yet the first screen went to ⌘N's road"
+tt kill-window -t "=$TL:thin3c"
 term thin4 "--thin --view dev2 --want $U/fid-7 --device $DEV --route lan --token t3k"
 waitfor 5 sh -c "'$REAL_TMUX' -L '$RS' has-session -t '=$(vs dev2):' 2>/dev/null" || fail "E: no 看台 for --want"
 waitfor 5 sh -c "[ \"\$('$REAL_TMUX' -L '$RS' display-message -p -t '=$(vs dev2):' '#{window_id}' 2>/dev/null)\" = '$W7' ]"
