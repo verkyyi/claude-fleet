@@ -729,7 +729,19 @@ def bootstrap(a):
     as_tenant(s, a.login, ['bash', str(HERE / 'fleet-login-bootstrap.sh')])
     restored = as_tenant(s, a.login, ['bash', str(HERE / 'fleet-sessions-snapshot.sh'), 'restore'], check=False)
     if restored.returncode not in (0, 3):  # 3 = a fresh home has no snapshot yet
-        raise RuntimeError('persisted session restore failed')
+        # Sessions lost are not a machine lost (#3289): one restore that did not
+        # bring every pinned session back once crash-looped the whole container.
+        # Set the snapshot aside as evidence so the next start does not hit the
+        # same rows; restore.map stays, so the diskguard tick's auto-restore still
+        # reopens what it can.
+        snap = Path(tenant_env(s, a.login)[1]['FLEET_CONF_DIR']) / 'global/sessions.snapshot'
+        kept = snap.with_name('sessions.snapshot.failed-' + time.strftime('%Y%m%dT%H%M%SZ', time.gmtime()))
+        try:
+            snap.rename(kept)
+        except OSError:
+            kept = snap
+        print('bootstrap %s: session restore exit %d, not all pinned sessions came back; snapshot kept as %s'
+              % (a.login, restored.returncode, kept), file=sys.stderr)
 
 
 def foreground(a):
