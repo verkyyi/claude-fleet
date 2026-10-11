@@ -431,7 +431,8 @@ def entries(vid, now=None):
             else:
                 section = ""
                 repo = re.sub(r"\s*\(\d+\)$", "", re.sub(r"^▸\s*", "", text.strip()))
-                repos.append(repo)
+                if "/" in kind:       # a hosted repo's heading (`none` / '' are 无仓库 / ?)
+                    repos.append(kind)
             continue
         if len(f) < 15 or not f[0]:
             continue

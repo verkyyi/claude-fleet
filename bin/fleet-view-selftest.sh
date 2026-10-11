@@ -318,8 +318,7 @@ def body(repos):
     r.append(row("@4", "failed", "x", "bad", " ", "", "0", "", "", "#4", "—", "·", "broken", "配置坏了的会话", "merged", "failed"))
     r.append(row("@5", "done", "✓", "landed", " ", "", "0", "", "", "#3164", "merged", "·", "ok", "修 列表冻住", "merged"))
     r.append(row("@6", "done", "✓", "oldie", " ", "", "0", "", "", "#6", "merged", "·", "ok", "很早合并的", "merged"))
-    if len(repos) > 1:
-        r.append(row("hdr", repos[1], "", "tokenledger (1)", " "))
+    r.append(row("hdr", repos[1] if len(repos) > 1 else "none", "", "tokenledger (1)" if len(repos) > 1 else "无仓库 (1)", " "))
     r.append(row("wid:MU/far1", "working", "⠹", "far", " ", "", "0", "", "m4!", "#7", "—", "·", "ok", "失联机器上的", "merged"))
     r.append(row("wid:MU/far2", "needs", "!", "far2", " ", "", "0", "", "m4", "#8", "—", "·", "ok", "m4 在问", "merged", "", "permission", "Bash: rm -rf build"))
     r.append(row("hdr", "ended", "", "▸ 已结束 (1)", " "))
