@@ -56,8 +56,8 @@ Do not install from memory: read the doc and work from it.
   (a fork worktree is edit-blocked by the base guard). `FLEET_ALLOW_SUBAGENT=1`
   is the operator's escape hatch.
 - **Only a coordinator spawns; a worker files** (issue #2960) — one level of
-  delegation, like the subagent rule. The orchestrator, the steward and an EPIC
-  driver (`@fleet_role_def epic-driver`, stamped by `dash-raw-session.sh --role`)
+  delegation, like the subagent rule. The orchestrator, the steward and a session
+  whose agent file grants `spawn` (an EPIC driver — `@agent_spawn 1`, issue #3122)
   spawn; a `@fleet_role worker` pane is refused by ONE rule, `fleet_spawn_refused`
   (`bin/fleet-lib.sh`) — the filer's `--spawn` exits 6 with nothing filed, the
   `spawn` tool refuses, `fleet-await.sh` waits but answers NO-WORKER rather than
@@ -367,62 +367,41 @@ Do not install from memory: read the doc and work from it.
   carries it as a `REAP<TAB><fleet_id><TAB><policy>` row, the inventory as
   `reap=`. **No @reap_policy = the kind's old rule, byte for byte** —
   `fleet-cleanup-idle-selftest.py` (`ReapPolicy`, `PolicyGrammar`) pins both.
-- **A role starts as its ONE definition says: `agents/<role>.md`** (issue #2782,
-  EPIC #2781 C1). orchestrator · steward · worker · epic-driver, each in Claude
-  Code's subagent file format (model · effort · tools · disallowedTools ·
-  mcpServers · permissionMode … + the body); `bin/fleet-role.py render <role>
-  [--agent claude|codex]` is the one reader. The orchestrator's and the steward's
-  launchers splice what `fleet_role_render` gives (and stamp `@fleet_role_file`
-  <sha> + `@fleet_role_body`); a worker / driver launch carries `--role
-  worker|epic-driver` (dash-issue-session.sh; `dash-raw-session.sh --role
-  epic-driver`) and fleet-claude.sh renders it — the definition's model is the
-  FLEET_MODEL default, the cap / subagent tier / @cc_model go on as before; no
-  `--role` = byte for byte as before; the wrapper's resume keeps the rendered
-  group. A worker's / driver's body is read by its seed skill, injected nowhere.
-  The old knobs (`FLEET_ORCH_*`, `FLEET_STEWARD_*`, `FLEET_MODEL`, the login's
-  `effortLevel`) still win for one version (`# compat-1v`) —
-  `fleet-conf.sh migrate`'s roles step (`fleet-role.py migrate-conf`, issue #2788)
-  moves every one that differs from the built-in into the person's layer (one PUT;
-  a field the person already set is theirs), comments its line out (.bak kept),
-  writes nothing on a second run, and the doctor's `roles` row WARNs while one is
-  left; Codex models and `FLEET_SUBAGENT_MODEL` stay the machine's
-  (docs/ROLES-ACCEPTANCE.md) — and
-  `skills/*/role.md` stay as copies of the bodies for a window opened before
-  (`fleet-role-selftest.sh` B: byte-identical). The repo root is the plugin root:
-  `plugin.json` says `"agents": []`, so the roles never register as plugin
-  subagents. A definition that cannot be read is not used: the last good launch
-  (`$FLEET_CONF_DIR/roles/<role>.<agent>.last.json`) stands — BREAK-IT
-  `role-def-broken`. Never hard-code a role's model, effort or prompt in a launcher.
-  **A person writes only what changes** (issue #2783, C2): a layer in the same
-  format — the person bundle's `roles.<role>` (`person-bundle.json`), then this
-  computer's `$FLEET_CONF_DIR/roles/<role>.md` — merged by `fleet-role.py merge`
-  (pure; scalars replace, lists `+X`/`-X` or `!replace`, dicts by key with `null`
-  deleting, the body appended unless `body: replace`), render launches the merge,
-  `fleet role show <role> --sources` names each field's 自带 · 你的 vN · 本机 · 🔒.
-  `role.<role>.<field>` in `conf/agent-locked.list` is written back after the
-  merge (never looser than the built-in). A bad layer is not used — its last good
-  copy stands (BREAK-IT `role-overlay-broken`); no layer ⇒ byte for byte C1.
-  `tests/role-merge/*.json` are the vectors the hub's Go copy (C6) runs too.
-  **The person's layer lives on the hub** (issue #2784, C3): the person bundle
-  takes `roles` (`{<role>: overlay}`, the four roles only, ≤ 16 KiB each) and
-  `rules` (C5's table text or list of rows, ≤ 32 KiB) — Go `validateBundle` and
-  `fleet-agent-team.py validate` in step, the same credential scan. A PUT pushes
-  `person` {principal, version} (`CapPerson`) to every connected login bound to
-  that person (`PrincipalForLogin`), and the agent runs `fleet-agent-team.py sync
-  --person-version N` (retried every beat, apart from the team's); `render` re-reads
-  a cache older than `FLEET_ROLE_STALE` (600 s) via `fleet-agent-team.py person`,
-  at most `FLEET_ROLE_FETCH_SECS` (3 s) — the hub away, the cache stands. The
-  doctor's `roles` row: 入口 vN · 本机 vM · 拉到 … (`status --roles`,
-  `person-sync.json`), WARN past a day. No person ⇒ no file, no row, no message
-  (`TestPersonRolesOffAddsNothing`); BREAK-IT `person-hub-down`.
-  **A person changes it by saying so** (issue #2785, C4): the `fleet-config` skill
-  turns a sentence into ONE `fleet-role.py set|unset|rule-set|rule-unset|undo` —
-  GET the person bundle (fleet-config.py's client) → the smallest change to
-  `roles` / `rules` → 改前 → 改后 on the merged definition (exit 4, nothing sent)
-  → `--yes` PUTs with `base` (409: redone once) and writes the hub's answer into
-  person-bundle.json at once. A worker's window (`@fleet_role worker`) exits 3; a
-  credential-shaped value is refused before sending. Never hand-edit the layer
-  files for it; `fleet-role-write-selftest.sh`.
+- **A custom session is ONE standard agent file** (issue #3122, EPIC #3111 C11).
+  A spawn names it — `--as <name>` on `dash-issue-session.sh` / `dash-raw-session.sh`,
+  the `spawn` tool's `agent` — and `bin/fleet-agent-def.py` (the one reader) finds
+  it the way Claude Code does: the checkout's `.claude/agents` (nearest up to the
+  repo root) > `~/.claude/agents` > an installed plugin's `agents/` (asked of
+  `claude plugin list --json`, cached per change); the frontmatter `name` matches.
+  `fleet-claude.sh` starts `claude --agent <name>` — Claude Code reads the model,
+  tools and body itself (a body REPLACES its system prompt; an empty body keeps
+  it), the file's `model` is the FLEET_MODEL default so the cap still applies — and
+  stamps `@agent_def` · `@agent_def_sha` · `@agent_spawn`. Codex reads the same
+  file: body → `-c model_instructions_file` (a content-addressed copy under
+  `$FLEET_CONF_DIR/agents/`), `fleet.codex_model` → `-m`, no tool list. A Claude
+  Code without `--agent` (`fleet_claude_has_agent_flag`, kept per binary) gets
+  --tools / --disallowedTools / --append-system-prompt-file and the doctor's
+  `agentdef` row. The fleet adds ONE frontmatter key, `fleet:` (reap · repo · agent
+  · codex_model · codex_effort), filling what the spawn left open. Named but not
+  found or unreadable ⇒ the spawn refuses before any window, naming the file
+  (BREAK-IT `agent-file-broken`). No `--as` ⇒ the shipped `fleet-worker` when it
+  is there, else a plain session given the ticket. The core ships
+  `conf/agent-defaults/claude/agents/` (fleet-worker, and until their plugins
+  carry them epic-driver and fleet-debugger) into `~/.claude/agents` through
+  install-apply's `agent files` step (`fleet-agent-def.py ship`): written once,
+  following the release while still the fleet's bytes, never touched once edited
+  (the person's override) or deleted (`agents-shipped.json` remembers). A worker
+  window may spawn ⇔ its file grants `spawn` (no `tools` list, or one naming it,
+  and no `disallowedTools` taking it away — fleet-worker takes it away) or it took
+  a role (`@fleet_role_def orchestrator|steward`); `--role worker|epic-driver|debugger`
+  and an old window's `@fleet_role_def epic-driver` are read for one version
+  (`# compat-1v`). The person's role layer, the merge, the locks and `fleet role
+  set|unset|undo` are gone; `bin/fleet-role.py` keeps only what the orchestrator's
+  and the steward's launchers (C7 deletes them) and the rule table need — their
+  model / effort from `agents/<role>.md`, the old `FLEET_ORCH_*` / `FLEET_STEWARD_*`
+  knobs, then the person's model / effort still in `person-bundle.json`
+  (compat-1v). `fleet-agent-as-selftest.sh`, `spawn-origin-gate-selftest.sh` F,
+  `fleet-role-selftest.sh`.
 - **How the orchestrator dispatches and what the steward may answer is ONE rule
   table** (issue #2786, EPIC #2781 C5): `conf/role-rules.default.md` (编号 · 角色 ·
   条件 · 动作 · 档位 auto|default|ask|off · 关键词) < the person's layer

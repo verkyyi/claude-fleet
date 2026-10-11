@@ -801,108 +801,43 @@ drill_orchestrator_cleared() {
   SECS=$(since "$t0"); WHAT="新开、续开、恢复页 ↵ 都带 role.md 进系统提示；mod 每轮加 fleet:orchestrator-role"
 }
 
-# role-def-broken (issue #2782, EPIC #2781 C1): every role starts as its
-# definition, agents/<role>.md, says — so a definition written badly (a
-# frontmatter that cannot be read, a file gone) would open the orchestrator with
-# no model, no effort and no role. A broken definition is not used at all: the
-# launch this computer last rendered for it stands (fleet-role.py render's
-# `<role>.<agent>.last.json`), with one stderr line saying so.
-drill_role_def_broken() {
-  CAP=5; BREAK_SOCK="$WORK/sock-rd"; local t0 w oa="$WORK/rd-argv" h="$WORK/rdhome" ag="$WORK/rd-agents"
-  mkdir -p "$h" "$ag"; cp "$ROOT"/agents/*.md "$ag/"; : > "$oa"
-  printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> %s\nexec sleep 600\n' "$oa" > "$WORK/rd-agent"; chmod +x "$WORK/rd-agent"
-  nt -f /dev/null new-session -d -s rd -n home -x 100 -y 30 'exec sh' || { WHY="cannot start the isolated tmux server"; return 1; }
-  rdens() { env PATH="$WORK/tbin:$PATH" HOME="$h" FLEET_CONF_DIR="$WORK/rdconf" FLEET_SKIP_GLOBAL_CONF=1 BREAK_SOCK="$BREAK_SOCK" \
-              FLEET_ROLE_AGENTS_DIR="$ag" FLEET_ORCHESTRATOR=1 FLEET_AGENT=claude FLEET_WRAP_LAUNCH="$WORK/rd-agent" \
-              bash "$BIN/fleet-orchestrator.sh" ensure rd 2>/dev/null; }
-  w=$(rdens) || { WHY="ensure did not open it"; return 1; }
-  until_ok 5 grep -q . "$oa" || { WHY="the orchestrator's agent never started"; return 1; }
-  grep -q -- '--model fable --effort high --append-system-prompt-file ' "$oa" || { WHY="not opened as agents/orchestrator.md says: $(cat "$oa")"; return 1; }
-  printf -- '---\nname: orchestrator\nthis line is no field\n---\n' > "$ag/orchestrator.md"   # the break
-  nt kill-window -t "$w"; : > "$oa"; t0=$(now)
-  rdens >/dev/null || { WHY="ensure did not reopen it"; return 1; }
-  until_ok "$CAP" grep -q . "$oa" || { WHY="the reopened orchestrator never started"; return 1; }
-  SECS=$(since "$t0")
-  grep -q -- '--model fable --effort high --append-system-prompt-file .*/roles/orchestrator-[0-9a-f]*\.md' "$oa" \
-    || { WHY="a broken definition opened it bare: $(cat "$oa")"; return 1; }
-  rm -f "$ag/orchestrator.md"
-  FLEET_CONF_DIR="$WORK/rdconf" FLEET_ROLE_AGENTS_DIR="$ag" python3 "$BIN/fleet-role.py" render orchestrator 2>"$WORK/rd-err" | grep -qx -- '--model' \
-    && grep -q 'using the last good orchestrator launch' "$WORK/rd-err" || { WHY="a deleted definition is not covered, or says nothing: $(cat "$WORK/rd-err")"; return 1; }
-  WHAT="定义写坏或删掉：整份不用，按这台机器上次好的那份开（模型、用力、角色都在），stderr 说一句"
-}
-
-# role-overlay-broken (issue #2783, EPIC #2781 C2): a person changes a role
-# with a layer over agents/<role>.md, writing only what changes. A layer written
-# badly (a key no layer carries, a value out of range) is not used at all: the
-# last good copy of that layer stands, and `fleet role show --sources` says why on
-# its first line — never a session opened on the bad value, never the person's
-# change silently gone.
-drill_role_overlay_broken() {
-  CAP=5; local t0 c="$WORK/roconf" kv sh
-  mkdir -p "$c/roles"
-  printf '{"version": 1, "bundle": {"roles": {"steward": "---\\nmodel: sonnet\\n---\\n"}}}\n' > "$c/person-bundle.json"
-  kv=$(FLEET_CONF_DIR="$c" python3 "$BIN/fleet-role.py" render steward --kv 2>/dev/null)
-  printf '%s\n' "$kv" | grep -qx 'model	sonnet' || { WHY="the person's layer is not merged at all: $kv"; return 1; }
-  printf '{"version": 2, "bundle": {"roles": {"steward": "---\\nmodel: haiku\\nmaxTurns: 3\\n---\\n"}}}\n' > "$c/person-bundle.json"   # the break
+# agent-file-broken (issue #3122, EPIC #3111 C11): a custom session is a standard
+# agent file (`--as <name>` → `claude --agent <name>`). One written badly (a
+# frontmatter that cannot be read) or not there would open a session that is not
+# what was asked for — Claude Code silently falling back to its default, or a
+# worker with no instructions. The spawn refuses instead, BEFORE any window, and
+# names the file (or where it looked); the shipped default (fleet-worker) gone is
+# not an error — a plain session given the ticket.
+drill_agent_file_broken() {
+  CAP=15; local d="$WORK/af" lbl="brkaf-$$" t0 rc wins
+  mkdir -p "$d/o.git" "$d/main" "$d/conf" "$d/tmp" "$d/fb" "$d/home/.claude/agents"
+  git init -q --bare "$d/o.git"
+  ( cd "$d/main" && git init -q -b master . && git config user.email t@t && git config user.name t \
+      && printf 'x\n' > CLAUDE.md && git add -A && git commit -qm i && git remote add origin "$d/o.git" \
+      && git push -q origin master ) || { WHY="cannot build the repo"; return 1; }
+  printf '#!/bin/sh\nexit 0\n' > "$d/fb/gh"; printf '#!/bin/sh\nexec sleep 60\n' > "$d/fb/agent"; chmod +x "$d/fb/gh" "$d/fb/agent"
+  printf -- '---\nname: doc-only\nthis line is no field\n---\n只改文档。\n' > "$d/home/.claude/agents/doc-only.md"   # the break
+  env PATH="$d/fb:$PATH" FLEET_WRAP_LAUNCH="$d/fb/agent" "$REAL_TMUX" -L "$lbl" -f /dev/null new-session -d -s "$lbl" -n home \
+    || { WHY="cannot start the isolated tmux server"; return 1; }
+  sp() { env -u TMUX -u TMUX_PANE -u CCQUOTA_FLEET -u CLAUDE_CONFIG_DIR PATH="$d/fb:$PATH" HOME="$d/home" FLEET_CONF_DIR="$d/conf" \
+           TMPDIR="$d/tmp" FLEET_AGENT_PLUGINS_CMD='echo []' FLEET_WRAP_LAUNCH="$d/fb/agent" \
+           FLEET_ORIGIN_GATE=0 FLEET_PRESPAWN_DEDUP=0 FLEET_REPO=acme/w FLEET_MAIN="$d/main" FLEET_BASE_BRANCH=master \
+           FLEET_WORKTREE_ROOT="$d/wt" bash "$BIN/dash-issue-session.sh" "$@" "$lbl" --title t --origin hub --print; }
   t0=$(now)
-  kv=$(FLEET_CONF_DIR="$c" python3 "$BIN/fleet-role.py" render steward --kv 2>/dev/null)
-  sh=$(FLEET_CONF_DIR="$c" python3 "$BIN/fleet-role.py" show steward --sources 2>/dev/null)
+  sp 5 --as doc-only > "$d/out" 2> "$d/err"; rc=$?
   SECS=$(since "$t0")
-  printf '%s\n' "$kv" | grep -qx 'model	sonnet' || { WHY="a broken layer changed the launch: $kv"; return 1; }
-  printf '%s\n' "$sh" | head -1 | grep -q '不用：maxTurns.*用上一份好的' || { WHY="show does not say why: $(printf '%s' "$sh" | head -1)"; return 1; }
-  WHAT="覆盖层写坏：整层不用，用这一层上一份好的（模型还是 sonnet），show 第一行说原因"
-}
-
-# role-unlock (issue #2788, EPIC #2781 C7): a person's layer that tries to let a
-# worker loose — a list emptied with `!replace`, a permissionMode below the
-# built-in's, the guard's own Agent tool given back — must change nothing that
-# guards: conf/agent-locked.list holds the definition's half at the built-in
-# after the merge (the show marks it 🔒), and the guard hooks never read a role
-# at all, so agent-guard.py still refuses a writing subagent. The built-in here is
-# a sandbox worker.md that carries a disallowedTools and a permissionMode, so the
-# lock has something to hold.
-drill_role_unlock() {
-  CAP=5; local t0 c="$WORK/ruconf" ag="$WORK/ru-agents" kv sh rc
-  mkdir -p "$c" "$ag"; cp "$ROOT"/agents/*.md "$ag/"
-  python3 - "$ag/worker.md" <<'PY'
-import sys
-p = sys.argv[1]; s = open(p).read()
-open(p, 'w').write(s.replace('mcpServers:', 'disallowedTools:\n  - Agent\npermissionMode: default\nmcpServers:', 1))
-PY
-  printf '{"version": 7, "fetched": %s, "bundle": {"roles": {"worker": "---\\ndisallowedTools: [\\"!replace\\"]\\npermissionMode: bypassPermissions\\ntools: [\\"+Agent\\"]\\n---\\n"}}}\n' \
-    "$(date +%s)" > "$c/person-bundle.json"   # the break
-  t0=$(now)
-  kv=$(FLEET_CONF_DIR="$c" FLEET_ROLE_AGENTS_DIR="$ag" python3 "$BIN/fleet-role.py" render worker --kv 2>/dev/null)
-  sh=$(FLEET_CONF_DIR="$c" FLEET_ROLE_AGENTS_DIR="$ag" python3 "$BIN/fleet-role.py" show worker --sources 2>/dev/null)
-  printf '{"tool_name":"Agent","tool_input":{"subagent_type":"general-purpose","prompt":"x"}}' \
-    | env -u FLEET_ALLOW_SUBAGENT FLEET_MAIN="$WORK" FLEET_CONF_DIR="$c" python3 "$ROOT/hooks/agent-guard.py" >/dev/null 2>&1; rc=$?
-  SECS=$(since "$t0")
-  printf '%s\n' "$kv" | grep -qx 'arg	--disallowedTools=Agent' || { WHY="the layer emptied the worker's disallowedTools: $kv"; return 1; }
-  printf '%s\n' "$kv" | grep -qx 'arg	bypassPermissions' && { WHY="the layer lowered the worker's permissionMode: $kv"; return 1; }
-  printf '%s\n' "$kv" | grep -qx 'arg	default' || { WHY="the built-in permissionMode is gone: $kv"; return 1; }
-  printf '%s\n' "$sh" | grep -q '^permissionMode: default .*🔒' || { WHY="show does not mark the lock: $(printf '%s' "$sh" | grep permissionMode)"; return 1; }
-  [ "$rc" = 2 ] || { WHY="agent-guard let a general-purpose subagent through beside the layer (rc=$rc)"; return 1; }
-  WHAT="覆盖层想放开执行会话（清空禁用工具、降权限、还回 Agent）：合并后锁回自带（🔒），守门钩子照拒写代码的子代理"
-}
-
-# person-hub-down (issue #2784, EPIC #2781 C3): a person's role layer is kept on
-# the hub and read again before a launch when the cache is old. With the hub
-# away the launch must neither wait on it nor drop the person's change: it waits
-# FLEET_ROLE_FETCH_SECS at most, opens on the cached copy, and the doctor's
-# `roles` row says how old that copy is.
-drill_person_hub_down() {
-  CAP=6; local t0 c="$WORK/phconf" kv row
-  mkdir -p "$c"
-  printf '{"version": 3, "fetched": %s, "bundle": {"roles": {"steward": "---\\nmodel: sonnet\\n---\\n"}}}\n' \
-    "$(( $(date +%s) - 2 * 86400 ))" > "$c/person-bundle.json"
-  t0=$(now)
-  kv=$(FLEET_CONF_DIR="$c" FLEET_ROLE_FETCH_SECS=2 FLEET_PERSON_BUNDLE_CMD='sleep 30' \
-         python3 "$BIN/fleet-role.py" render steward --kv 2>/dev/null)   # the break: the hub hangs
-  SECS=$(since "$t0")
-  printf '%s\n' "$kv" | grep -qx 'model	sonnet' || { WHY="the hub away dropped the person's change: $kv"; return 1; }
-  row=$(FLEET_CONF_DIR="$c" python3 "$BIN/fleet-agent-team.py" status --roles 2>/dev/null)
-  case "$row" in *'本机 v3'*'2 天前'*'缓存超过'*) ;; *) WHY="the doctor does not say how old the copy is: [$row]"; return 1 ;; esac
-  WHAT="入口挂住：开会话最多等 2 秒，用缓存的 v3（模型还是 sonnet）照常开；doctor 说「拉到 … 2 天前」并 WARN"
+  sp 6 --as nobody-here > "$d/out2" 2> "$d/err2"; rc2=$?
+  sp 7 > "$d/out3" 2> "$d/err3"; rc3=$?   # no --as, no fleet-worker shipped: a plain session
+  wins=$("$REAL_TMUX" -L "$lbl" list-windows -t "$lbl" -F '#{@issue}:#{@agent_def}' 2>/dev/null)
+  "$REAL_TMUX" -L "$lbl" kill-server >/dev/null 2>&1
+  [ "$rc" = 1 ] || { WHY="a broken agent file: the spawn exited $rc, want 1"; return 1; }
+  grep -q "$d/home/.claude/agents/doc-only.md" "$d/err" || { WHY="the refusal does not name the file: $(tr '\n' '|' < "$d/err")"; return 1; }
+  [ "$rc2" = 1 ] && grep -q "no agent file 'nobody-here'" "$d/err2" && grep -q "$d/home/.claude/agents" "$d/err2" \
+    || { WHY="a missing agent file: exit $rc2, $(tr '\n' '|' < "$d/err2")"; return 1; }
+  case " $(printf '%s ' $wins)" in *" 5:"*|*" 6:"*) WHY="a refused spawn left a window: $wins"; return 1 ;; esac
+  [ "$rc3" = 0 ] || { WHY="with no --as and no fleet-worker the spawn failed ($rc3): $(tr '\n' '|' < "$d/err3")"; return 1; }
+  case " $(printf '%s ' $wins)" in *" 7: "*) ;; *) WHY="the plain spawn is not a plain session: [$wins]"; return 1 ;; esac
+  WHAT="agent 文件写坏或不在：派单 exit 1、不开窗口，stderr 说是哪个文件（或在哪几处找过）；没有 --as、自带的 fleet-worker 也删了：照常开一个普通会话"
 }
 
 # orchestrator-compacted (issue #2583, EPIC #2581 C2): a compaction leaves the

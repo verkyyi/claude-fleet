@@ -16,6 +16,13 @@
 #   D  dash-raw-session.sh: no $TMUX_PANE → exit 4, no window; `--origin hub`
 #      passes the gate.
 #   E  fleet-issue-file.sh --spawn from a lost pane → exit 4 BEFORE any gh call.
+#   F  who may spawn at all (issue #2960, #3122): fleet_spawn_refused on a worker
+#      pane — refused with no agent file or one whose tools hold no `spawn`
+#      (@agent_spawn 0, the shipped fleet-worker); allowed when the file grants
+#      it (@agent_spawn 1, the shipped epic-driver), after take_role
+#      (@fleet_role_def orchestrator | steward) and on an old window's
+#      @fleet_role_def epic-driver (compat-1v); a hub pane is never refused.
+#      And the grant itself, off real files: bin/fleet-agent-def.py spawn-tools.
 # tmux absent → SKIP. Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -122,6 +129,32 @@ ok; grep -q -- "--origin='\${ORIGIN:-hub}'" "$BIN/dash-raw-session.sh" || fail "
 TMUX="$INTMUX" TMUX_PANE='' bash "$BIN/fleet-issue-file.sh" --title t --repo acme/app --spawn >/dev/null 2>"$WORK/fif.err"; rc=$?
 ok; [ "$rc" = 4 ] || fail "E: --spawn from a lost pane → exit 4" "rc=$rc $(cat "$WORK/fif.err")"
 ok; [ ! -s "$WORK/gh.log" ] || fail "E: … before filing anything" "$(cat "$WORK/gh.log")"
+
+# --- F: who may spawn (fleet_spawn_refused) -----------------------------------------
+refused() { TMUX="$INTMUX" TMUX_PANE="$1" bash -c '. "$1/fleet-lib.sh"; fleet_spawn_refused' _ "$BIN"; }
+wf=$(tf new-window -d -P -F '#{window_id}' -n issue-8 -c "$WORK" 'while :; do sleep 300; done')
+pf=$(tf display-message -p -t "$wf" '#{pane_id}')
+tf set-window-option -t "$wf" @fleet_role worker
+ok; refused "$pf" || fail "F: a worker pane with no agent file is refused"
+tf set-window-option -t "$wf" @agent_def doc-only \; set-window-option -t "$wf" @agent_spawn 0
+ok; refused "$pf" || fail "F: an agent file whose tools hold no spawn is refused"
+tf set-window-option -t "$wf" @agent_spawn 1
+ok; refused "$pf" && fail "F: an agent file that grants spawn may spawn"
+tf set-window-option -u -t "$wf" @agent_spawn; tf set-window-option -u -t "$wf" @agent_def
+for d in orchestrator steward epic-driver; do
+  tf set-window-option -t "$wf" @fleet_role_def "$d"
+  ok; refused "$pf" && fail "F: @fleet_role_def $d may spawn"
+done
+tf set-window-option -u -t "$wf" @fleet_role_def
+ok; FLEET_ALLOW_WORKER_SPAWN=1 refused "$pf" && fail "F: FLEET_ALLOW_WORKER_SPAWN=1 is the hatch"
+ok; refused "$phub" && fail "F: a hub pane is never refused"
+mkdir -p "$WORK/cc/agents"
+cp "$BIN/../conf/agent-defaults/claude/agents/"*.md "$WORK/cc/agents/"
+printf -- '---\nname: doc-only\ndescription: d\ntools: Read, Edit\n---\n只改文档。\n' > "$WORK/cc/agents/doc-only.md"
+printf -- '---\nname: dispatcher\ndescription: d\ntools:\n  - Read\n  - mcp__fleet-orch__spawn\n---\n' > "$WORK/cc/agents/dispatcher.md"
+grant() { CLAUDE_CONFIG_DIR="$WORK/cc" FLEET_AGENT_PLUGINS_CMD='echo []' python3 "$BIN/fleet-agent-def.py" spawn-tools "$1" --dir "$WORK"; }
+for a in fleet-worker doc-only fleet-debugger; do ok; grant "$a" && fail "F: $a must not grant spawn"; done
+for a in epic-driver dispatcher; do ok; grant "$a" || fail "F: $a grants spawn"; done
 
 [ "$FAIL" = 0 ] || { printf 'spawn-origin-gate selftest: %d FAILED (of %d)\n' "$FAIL" "$CHECKS" >&2; exit 1; }
 printf 'spawn-origin-gate selftest: OK (%d checks)\n' "$CHECKS"

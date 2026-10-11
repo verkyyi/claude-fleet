@@ -110,8 +110,7 @@ doctor` on a client print the version from it.
           --person-version N: the same for the person's own layer (issue #2784,
           EPIC #2781 C3) — the hub's TypePerson; recorded in person-sync.json.
   person  read the personal layer alone, no team read and no apply (issue
-          #2784): what fleet-role.py runs before a launch when the cache is older
-          than FLEET_ROLE_STALE. Records person-sync.json {checked, rc, …} —
+          #2784): the person bundle's rule rows, read on demand. Records person-sync.json {checked, rc, …} —
           only while this login HAS a personal layer.
   status  [--short]  the applied version(s) and the source counts (doctor):
           `team v<N>`. With a personal layer (EPIC #1855 C6) --short prints the
@@ -2147,9 +2146,8 @@ def refresh_expected(a):
 
 def person_only(a):
     """`person`: read the personal layer alone — no team read, no apply (issue
-    #2784). What fleet-role.py runs before a launch when its cache is older than
-    FLEET_ROLE_STALE: the roles and rules are read at launch, so nothing needs
-    composing, and the login's files wait for the next sync. Exit as fetch_person."""
+    #2784): the rules are read at launch, so nothing needs composing, and the
+    login's files wait for the next sync. Exit as fetch_person."""
     rc, v, note = fetch_person(a)
     record_person(rc, note, None)
     if rc == 0 and note != "none":

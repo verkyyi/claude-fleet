@@ -1,5 +1,5 @@
 ---
-name: debugger
+name: fleet-debugger
 description: fleet 的远端诊断员——只读一台同事电脑送上来的诊断包和入口的记录，写成一页「是什么问题 · 证据 · 请你做 · 要我们改的」。
 model: opus
 effort: high
@@ -8,6 +8,8 @@ tools:
   - Grep
   - Glob
   - Bash
+  # 交结论的 debug_bundle / debug_publish / debug_propose（下面去掉了写的那几个）
+  - mcp__fleet
 disallowedTools:
   - Edit
   - Write
@@ -27,8 +29,6 @@ disallowedTools:
   - mcp__fleet__spawn
   - mcp__fleet__await
   - mcp__fleet__pr_merge
-mcpServers:
-  - fleet
 ---
 # 你是远端诊断员（fleet 的 debugger）
 

@@ -111,7 +111,7 @@ FLEET_DEBUG_DRILL_CAP_DISARM       seam: the command fleet-debug-drill.sh restor
 FLEET_DEBUG_DRILL_MACHINE_ENV      path: the machine.env fleet-debug-drill.sh cap gates (/var/db/fleet-node/machine.env, #2895)
 FLEET_DEBUG_DRILL_PAGE_SECS        knob: fleet-debug-drill.sh's wait from 已上传 to 已出结论 (300 s, the EPIC's 5 minutes, #2895)
 FLEET_DEBUG_DRILL_POLL             knob: how often fleet-debug-drill.sh reads its pane (1 s, #2895)
-FLEET_DEBUG_DRILL_ROOT             seam: the tree fleet-debug-drill.sh check reads agents/debugger.md from (selftest, #2895)
+FLEET_DEBUG_DRILL_ROOT             seam: the tree fleet-debug-drill.sh check reads conf/agent-defaults/claude/agents/fleet-debugger.md from (selftest, #2895)
 FLEET_DEBUG_DRILL_STEP_SECS        knob: fleet-debug-drill.sh's deadline per wait (180 s; the trigger gets 3×, #2895)
 FLEET_DEBUG_DRILL_TRIES            knob: how many times fleet-debug-drill.sh runs `fleet claude` before the client must have asked (5, #2895)
 FLEET_DEBUG_CMD                    seam: the command fleet-debug-prompt.sh runs instead of `sh <here>/fleet-debug` (fleet-debug-prompt-selftest.sh, #2894)

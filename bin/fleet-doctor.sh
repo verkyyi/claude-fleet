@@ -2955,29 +2955,51 @@ if [ -f "$_at" ] && command -v python3 >/dev/null 2>&1; then
   esac
 fi
 
-# --- roles: a person's layer over a role's definition (issues #2783, #2784) ---
-# A local layer ($FLEET_CONF_DIR/roles/<role>.md) is for development and
-# emergencies — it holds this computer only — and a layer that was not used
-# (written badly) leaves its last good copy standing. Either is said here. The
-# person's layer itself is kept on the hub and read here (EPIC #2781 C3): the
-# row reads 入口 v<N> · 本机 v<M> · 拉到 <when>, and WARNs when that read is over
-# a day old (a launch with the hub away uses that copy) or the hub pushed a
-# version this login does not hold. No personal layer and no note → no row.
-if [ -f "$(dirname "$0")/fleet-role.py" ]; then
-  _rl=$(FLEET_CONF_DIR="$conf_dir" python3 "$(dirname "$0")/fleet-role.py" doctor 2>/dev/null)
-  _rp=''; _rprc=3
-  if [ -f "$(dirname "$0")/fleet-agent-team.py" ]; then
-    _rp=$(FLEET_CONF_DIR="$conf_dir" python3 "$(dirname "$0")/fleet-agent-team.py" status --roles 2>/dev/null); _rprc=$?
-  fi
-  if [ -n "$_rl" ]; then
-    warn roles "${_rp:+$_rp · }${_rl#*	}"
-  elif [ "$_rprc" = 1 ]; then
+# --- roles: the person's layer as the hub keeps it (issue #2784) ---
+# The role definitions' merge is gone (issue #3122 — a session starts as a
+# standard agent file); what the person bundle still carries (the rule table's
+# personal rows) is read here: 入口 v<N> · 本机 v<M> · 拉到 <when>, WARN when that
+# read is over a day old or the hub pushed a version this login does not hold.
+# No personal layer → no row.
+if [ -f "$(dirname "$0")/fleet-agent-team.py" ]; then
+  _rp=$(FLEET_CONF_DIR="$conf_dir" python3 "$(dirname "$0")/fleet-agent-team.py" status --roles 2>/dev/null); _rprc=$?
+  if [ "$_rprc" = 1 ]; then
     warn roles "$_rp (fix: python3 $(dirname "$0")/fleet-agent-team.py sync — the hub may be away; launches use this copy meanwhile)"
   elif [ "$_rprc" = 0 ] && [ -n "$_rp" ]; then
     pass roles "$_rp"
   fi
-  unset _rl _rp _rprc
+  unset _rp _rprc
 fi
+
+# --- agentdef: a session started AS an agent file (issue #3122) ---
+# `--as <name>` starts `claude --agent <name>`; a Claude Code without that flag
+# gets the same file through --model / --tools / --append-system-prompt-file and
+# this row says to update it. A Claude Code that knows it → no row.
+# Same answer, same cache as fleet-lib.sh's fleet_claude_has_agent_flag (this
+# /bin/sh doctor cannot source it) — KEEP IN SYNC.
+_cb=$(command -v claude 2>/dev/null) || { [ -x "$HOME/.local/bin/claude" ] && _cb="$HOME/.local/bin/claude"; } || _cb=''
+if [ -n "$_cb" ]; then
+  _mt=$(stat -f %m "$_cb" 2>/dev/null || stat -c %Y "$_cb" 2>/dev/null) || _mt=0
+  _ck=$(printf '%s %s' "$_cb" "$_mt" | cksum | awk '{print $1}')
+  _cd="$conf_dir/agents"; _ans=''
+  if [ -f "$_cd/agent-flag.$_ck.yes" ]; then _ans=yes
+  elif [ -f "$_cd/agent-flag.$_ck.no" ]; then _ans=no
+  elif mkdir -p "$_cd" 2>/dev/null; then
+    "$_cb" --help > "$_cd/agent-flag.$_ck.$$" 2>/dev/null &
+    _hp=$!; _i=0
+    while kill -0 "$_hp" 2>/dev/null && [ "$_i" -lt 10 ]; do sleep 0.5; _i=$((_i + 1)); done
+    if kill -0 "$_hp" 2>/dev/null; then kill "$_hp" 2>/dev/null
+    else
+      case "$(cat "$_cd/agent-flag.$_ck.$$" 2>/dev/null)" in *"--agent <"*) _ans=yes ;; *) _ans=no ;; esac
+      : > "$_cd/agent-flag.$_ck.$_ans" 2>/dev/null
+    fi
+    rm -f "$_cd/agent-flag.$_ck.$$"; unset _hp _i
+  fi
+  [ "$_ans" = no ] \
+    && warn agentdef "this Claude Code ($_cb) has no --agent: sessions started --as an agent file get it as an appended prompt instead (fix: claude update)"
+  unset _mt _ck _cd _ans _h
+fi
+unset _cb
 
 # --- orch: the person has ONE orchestrating session (issue #2117) ---
 # The client's refresh loop writes orch_multi_<sess> when more than one machine

@@ -106,7 +106,7 @@ printf '%s\n' "$out" | grep -Eq 'PASS +C' && fail "B: a member reads PASS on an 
 
 # --- C check, everything there: each member PASS ------------------------------------------
 fake_hub all
-: > "$T/root/agents/debugger.md"
+mkdir -p "$T/root/conf/agent-defaults/claude/agents"; : > "$T/root/conf/agent-defaults/claude/agents/fleet-debugger.md"
 out=$(FLEET_DEBUG_DRILL_ROOT="$T/root" bash "$D" check --hub "http://127.0.0.1:$port" 2>&1)
 for m in C1 C2 C3 C4 C5 C7; do
   printf '%s\n' "$out" | grep -Eq "FAIL +$m " && fail "C: $m reads red on a full hub: $out"
