@@ -362,6 +362,7 @@ def ensure_login(s, paths, login, uid=None, full_name=''):
         raise Refuse('tenant must have no admin/sudo/container-management privileges', rc=5)
     if not had:
         home = Path(t['home'])
+        home.parent.mkdir(parents=True, exist_ok=True)
         home.mkdir(mode=0o700)
         os.chown(home, t['uid'], t['gid'])
     os.chmod(t['home'], 0o700)
