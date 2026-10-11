@@ -13,6 +13,11 @@
 #   node-fda-probe-hang   bin/fleet-node-supervisor.py's FDA probe (#3086): the open() of
 #                         TCC.db never returns (tccd not answering) — a child, killed; the
 #                         loop never waits on it
+#   tcc-prompt-wedge      bin/fleet-tcc-disclaim.py + tokenledger/internal/agent/node_accounts.go
+#                         (tccDisclaimed) + bin/fleet-node-supervisor.py tcc_stuck_line (#3167):
+#                         an account script's TCC dialog nobody answers wedges sandboxd —
+#                         every user delete fails; the scripts never prompt now, and a
+#                         stuck TCC is the doctor's FAIL with the way out
 #   service-killed        bin/fleet-node-supervisor.py's login-level register (#2525):
 #                         a registered service is kill -9'd / dies at start
 #   service-login-moved   bin/fleet-node-supervisor.py `service move` + `account release`,
@@ -207,6 +212,50 @@ drill_node_fda_probe_hang() {
   SECS=$(since "$t0")
   kill "$sup" 2>/dev/null
   WHAT="完全磁盘访问探测读 TCC.db 的 open() 永不返回：探测是子进程，主循环照转，1s 后杀掉、记为「未知」（不报「没有权限」），任务一直在跑，看门狗没触发"
+}
+
+# tcc-prompt-wedge (#3167): mini2's admin agent ran fleet-login-new.sh; sysadminctl
+# asked TCC for SysAdminFiles, charged to ccquota (an ungranted identity on every
+# release), and the dialog sat on a console nobody watched. The user tccd waited
+# on it forever, sandboxd's approval queues filled behind it, and every user
+# delete on the machine failed «disallowed by sandbox» — sudo dscl too. Now the
+# agent runs every account script through fleet-tcc-disclaim.py (its own
+# responsible process: /bin/bash, never prompted for), and probe timeouts in a
+# row are the doctor's FAIL naming the way out.
+drill_tcc_prompt_wedge() {
+  CAP=30
+  local sb sup t0 out rc f
+  t0=$(now)
+  # the wrapper: runs the command, hands its exit status back, signals as 128+N
+  out=$(python3 -I "$BIN/fleet-tcc-disclaim.py" -- /bin/sh -c 'exit 7' 2>&1); rc=$?
+  [ "$rc" = 7 ] || { WHY="fleet-tcc-disclaim.py did not hand the exit status back (rc $rc: $out)"; return 1; }
+  out=$(python3 -I "$BIN/fleet-tcc-disclaim.py" -- /bin/sh -c 'kill -TERM $$' 2>&1); rc=$?
+  [ "$rc" = 143 ] || { WHY="fleet-tcc-disclaim.py: a signalled child read rc $rc, not 143"; return 1; }
+  f="$ROOT/tokenledger/internal/agent/node_accounts_test.go"
+  grep -q '^func TestAccountScriptTCCDisclaimed(' "$f" 2>/dev/null \
+    || { WHY="the agent half's test TestAccountScriptTCCDisclaimed is not in ${f#$ROOT/}"; return 1; }
+  # the supervisor: TCC.db whose open() never returns, probed every tick
+  sb="$WORK/tccwedge"; mkdir -p "$sb/LaunchDaemons" "$sb/rt/bin"
+  cp "$BIN/fleet-node-supervisor.py" "$sb/rt/bin/"
+  printf '{"children":[],"tasks":[]}\n' > "$sb/table.json"
+  mkfifo "$sb/TCC.db"
+  FLEET_NODE_STATE="$sb/db" FLEET_NODE_LOG="$sb/log" FLEET_NODE_RUNTIME="$sb/rt" \
+    FLEET_NODE_DAEMON_DIR="$sb/LaunchDaemons" FLEET_NODE_USERS="$sb/Users" FLEET_NODE_TABLE="$sb/table.json" \
+    FLEET_NODE_TICK=0.2 FLEET_NODE_LAUNCHCTL='' FLEET_NODE_TEST=1 FLEET_NODE_WATCHDOG_SECS=5 \
+    FLEET_NODE_TCC_DB="$sb/TCC.db" FLEET_NODE_FDA_TIMEOUT=1 FLEET_NODE_TENANT_EVERY=0 \
+    python3 -I "$sb/rt/bin/fleet-node-supervisor.py" run 2>>"$sb/sup.err" &
+  sup=$!; printf '%s\n' "$sup" >> "$WORK/cred-pids"
+  until_ok 15 python3 -c 'import json,sys; f=json.load(open(sys.argv[1])).get("fda") or {}; sys.exit(0 if (f.get("stuck") or 0) >= 2 else 1)' "$sb/db/state.json" 2>/dev/null \
+    || { WHY="probe timeouts in a row were not counted: $(tail -2 "$sb/sup.err" | tr '\n' ' ')"; kill "$sup"; return 1; }
+  out=$(FLEET_NODE_STATE="$sb/db" FLEET_NODE_LOG="$sb/log" FLEET_NODE_RUNTIME="$sb/rt" \
+    FLEET_NODE_DAEMON_DIR="$sb/LaunchDaemons" FLEET_NODE_TABLE="$sb/table.json" FLEET_NODE_TEST=1 \
+    python3 -I "$sb/rt/bin/fleet-node-supervisor.py" status --check 2>&1); rc=$?
+  kill "$sup" 2>/dev/null
+  [ "$rc" = 6 ] || { WHY="status --check read rc $rc on a stuck TCC, want 6: $out"; return 1; }
+  case "$out" in *'killall -9 sandboxd'*) ;; *) WHY="the check does not name the way out: $out"; return 1 ;; esac
+  grep -q 'fda.stuck' "$BIN/fleet-doctor.sh" || { WHY="the doctor's node row has no case for exit 6"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="账号脚本经 fleet-tcc-disclaim.py 起（自己是责任进程，/bin/bash 不弹框，退出码原样带回）；TCC 探针连续超时 → status --check 6、体检 node FAIL 写明点掉框 / kill tccd / killall sandboxd"
 }
 
 drill_task_fail_silent() {

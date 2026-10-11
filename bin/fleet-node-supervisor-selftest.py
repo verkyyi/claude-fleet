@@ -2149,6 +2149,24 @@ class P_Watchdog(Sandbox):
         self.assertIsNone(p.poll(), "the daemon died")
         self.assertIn("did not return in 1s", open(os.path.join(self.d, "sup.err")).read())
 
+    def test_tcc_stuck_is_a_machine_failure(self):
+        """mini2 2026-10-11 (issue #3167): an unanswered TCC dialog wedged sandboxd and
+        every user delete failed. Probe timeouts in a row count up; at
+        FLEET_NODE_TCC_STUCK the check says so (exit 6) with the way out; an answer resets it."""
+        self.table(tasks=[])
+        self.start(FLEET_NODE_WATCHDOG_SECS="5", FLEET_NODE_TCC_DB=self.fifo("TCC.db"),
+                   FLEET_NODE_FDA_TIMEOUT="1", FLEET_NODE_TENANT_EVERY="0")
+        f = until(15, lambda: (self.state().get("fda") or {}).get("stuck", 0) >= 2 and self.state()["fda"])
+        self.assertTrue(f, "consecutive probe timeouts were not counted: %r" % self.state().get("fda"))
+        self.assertIsNone(f["ok"])
+        r = self.run_sup("status", "--check")
+        self.assertEqual(r.returncode, 6, r.stdout + r.stderr)
+        self.assertIn("TCC", r.stdout)
+        self.assertIn("killall -9 sandboxd", r.stdout)
+        self.assertIn("TCC is stuck", open(os.path.join(self.d, "sup.err")).read())
+        self.assertEqual(fns.tcc_stuck_line({"fda": {"ok": None, "stuck": 1}}), "")
+        self.assertEqual(fns.tcc_stuck_line({"fda": {"ok": False}}), "")
+
     def test_fifo_task_log_does_not_block(self):
         sh = self.script("w.sh", "exit 0\n")
         self.table(tasks=[{"name": "w", "every": 0.1, "cmd": ["/bin/bash", sh]}])

@@ -58,7 +58,11 @@ const accountDetailMax = 2000
 var (
 	loginNewScript    = filepath.Join(".claude", "fleet", "bin", "fleet-login-new.sh")
 	loginRemoveScript = filepath.Join(".claude", "fleet", "bin", "fleet-login-remove.sh")
+	tccDisclaimScript = filepath.Join(".claude", "fleet", "bin", "fleet-tcc-disclaim.py")
 )
+
+// tccDisclaimPython runs fleet-tcc-disclaim.py; a test seam.
+var tccDisclaimPython = "/usr/bin/python3"
 
 // credsepMark is the line fleet-login-new.sh ends a create with when it opened
 // the login credential-separated (claude-fleet#2294, its step 7b), and
@@ -103,6 +107,25 @@ func accountArgv(home string, op control.AccountOp) (string, []string) {
 		return filepath.Join(home, loginRemoveScript), []string{op.Login, keep, "--apply"}
 	}
 	return filepath.Join(home, loginNewScript), []string{op.Login, "--full-name", op.FullName, "--share-pool", "--apply"}
+}
+
+// tccDisclaimed wraps a macOS account script so it is its OWN responsible
+// process (claude-fleet#3167): run under this agent, every protected access the
+// script tree made was charged to ccquota — a new, ungranted identity on every
+// release — so tccd put a dialog on the console that nobody answered, and the
+// stuck dialog wedged sandboxd until every user delete on the machine failed.
+// Disclaimed, the responsible process is /bin/bash, a platform binary tccd
+// never prompts for: the access is refused at once instead. A login whose
+// install predates the wrapper runs the script as before.
+func tccDisclaimed(home, script string, args []string) (string, []string) {
+	if accountGOOS != "darwin" {
+		return script, args
+	}
+	w := filepath.Join(home, tccDisclaimScript)
+	if _, err := os.Stat(w); err != nil {
+		return script, args
+	}
+	return tccDisclaimPython, append([]string{"-I", w, "--", script}, args...)
 }
 
 // accountEnv is the create's join code and this hub's address, handed to
@@ -513,6 +536,8 @@ func (a *Agent) runAccountScript(ctx context.Context, opID string, op control.Ac
 	script, args := accountArgv(a.cfg.Home, op)
 	if a.cfg.LinuxOpener != "" {
 		script, args = linuxAccountArgv(a.cfg.LinuxOpener, op)
+	} else {
+		script, args = tccDisclaimed(a.cfg.Home, script, args)
 	}
 	cmd := accountCommand(ctx, script, args...)
 	// The scripts cd to / themselves; starting there too means a sudo -u in
