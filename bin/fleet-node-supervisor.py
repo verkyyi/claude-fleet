@@ -12,7 +12,7 @@ machine's work ONCE, however many logins the machine carries:
                 While a child's OLD LaunchDaemon is still installed, launchd owns
                 it and this daemon only reports it (`legacy`) — 共同约定 5.
   * tasks     — the machine-level periodic jobs (diskguard, memguard, the orphan
-                watchdog …), each run as at most ONE copy: a task still running
+                watchdog, Spotlight off on a Mac …), each run as at most ONE copy: a task still running
                 when it is due again is skipped, and every run holds
                 `locks/<task>.lock`, so a hand-run `tick` cannot double it either.
   * accounts  — the account-level jobs (issue #2332, C4): ONE table, read from
@@ -590,6 +590,13 @@ def default_table(paths):
             # file planted under another login's name swept — each login its own.
             {"name": "shared-dirs", "every": 60,
              "cmd": ["/usr/bin/python3", "-I", os.path.join(rt_bin, "fleet-shared-dirs.py")]},
+            # Spotlight off on a managed Mac (#3402): every volume's index and each
+            # person's CoreSpotlight knowledge agents — run at the daemon's start
+            # (a new machine is off once it is up) and hourly (a macOS update
+            # turns indexing back on). <state>/spotlight.keep leaves it on.
+            *([{"name": "spotlight", "every": 3600, "timeout": 300,
+                "cmd": ["/bin/bash", os.path.join(rt_bin, "fleet-spotlight.sh"), "off", "--tick"]}]
+              if MAC else []),
             # The one updater (C6, #2334): every part of the machine to the hub's
             # release, or none. A switch ends in a restart request (below). A new
             # stable the hub pushes (issue #3146: the node program writes

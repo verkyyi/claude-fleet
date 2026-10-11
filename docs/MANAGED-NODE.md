@@ -753,3 +753,25 @@ EPIC #3354）在**托管登录**上是这条规矩的例外，理由三条：
   doctor 的 `feedback` 行：开 ⇒ PASS，托管登录被关 ⇒ 一行 INFO（不 WARN：人可以关），自己的电脑没开 ⇒ 没有这行。
   反馈进了入口却没变成 GitHub 单（状态「待转」），是入口那侧的 GitHub App 没配，不是这台机器的事。
 - 测试：`fleet-plugins-selftest.sh` J。
+
+## 19. 托管 Mac 关掉 Spotlight（#3402）
+
+托管机器是给会话干活的，不是谁的桌面：Spotlight 索引每个 worktree、git 目录和会话日志，
+白吃 CPU。2026-10-11 macmini 的 `fseventsd` 115%、负载 30；mini2 的卷早已
+`Indexing disabled`，可 console 登录的 `spotlightknowledged`（CoreSpotlight 知识代理，
+不归 `mdutil` 管）照样 99% 跑了 7 小时。所以「关」是两半：
+
+| 哪一半 | 怎么关 |
+|---|---|
+| 卷索引 | `mdutil -a -i off`；第一次关时再 `mdutil -a -E` 扔掉旧索引 |
+| 知识代理 | 每个 uid ≥ 500 的 `gui/<uid>` 与 `user/<uid>` 域里 `launchctl disable` + `bootout` `com.apple.spotlightknowledged`、`.importer`、`.updater` |
+
+- **谁来做**：`bin/fleet-spotlight.sh off`（root）。整机守护的 `spotlight` 任务在守护启动时和每小时跑一次
+  `off --tick`——新机器的守护一起来就关了（`fleet node install` 的「守护」一步），macOS 升级把索引打开了，一小时内关回去。
+  没事可做时一声不吭。
+- **体检**：`fleet doctor` 的 `spotlight` 行（`fleet-spotlight.sh status --check`，任何登录都能读）：卷在索引、
+  知识代理在跑、或 `mds*` / `mdworker*` / `spotlightknowledged` / `corespotlightd` / `fseventsd` ≥50% 持续 10 分钟 ⇒ WARN，
+  并给出 `sudo ~/.claude/fleet/bin/fleet-spotlight.sh off`。不是托管机器（没有 `/var/db/fleet-node/machine.env`）⇒ 没有这一行，
+  `off` 也拒绝——人自己的 Mac 归人自己。
+- **要留着**：`sudo touch /var/db/fleet-node/spotlight.keep`，守护不再动它，体检读 PASS「kept on」。
+- BREAK-IT `spotlight-on`；`fleet-spotlight-selftest.sh`。
