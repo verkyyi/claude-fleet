@@ -1723,9 +1723,17 @@ EOF
   #    the machine's own processes), then the temp cache
   if [ "${FLEET_NODE_HOSTED:-0}" = 1 ]; then
     case "$CACHE" in */fleet-node-client-*)
-      pkill -f "$CL_DIR/.claude-dash/global/hubsess.lock" 2>/dev/null
-      n=0; while pgrep -f "$CL_DIR/.claude-dash/global/hubsess.lock" >/dev/null 2>&1 && [ "$n" -lt 30 ]; do sleep 0.1; n=$((n + 1)); done
-      rm -rf "$CACHE" ;;
+      qsweep() {
+        pkill -f "$CL_DIR/.claude-dash/global/hubsess.lock" 2>/dev/null
+        n=0; while pgrep -f "$CL_DIR/.claude-dash/global/hubsess.lock" >/dev/null 2>&1 && [ "$n" -lt 30 ]; do sleep 0.1; n=$((n + 1)); done
+      }
+      qsweep
+      rm -rf "$CACHE"
+      # …and once more (issue #3171): an `--ensure` in flight across the reap
+      # (the sidebar's, the keeper's last) may have started a guard after the
+      # first sweep; with the cache gone a later one starts nothing
+      # (fleet-hub-sessions.sh client_gone), so this one is the last
+      qsweep ;;
     esac
   fi
   if [ -z "$qquiet" ]; then
