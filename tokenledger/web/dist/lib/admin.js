@@ -184,6 +184,59 @@ export function headroom(cards, which, now = Date.now()) {
   return { free, next: next || null };
 }
 
+/** poolRows is the subscription pool's one table (claude-fleet#3231, EPIC
+ *  #3225 C6): each pool subscription /v1/admin/overview lists, as left in each
+ *  window, its next reset, the people on it now and its state — joined to its
+ *  card by (provider, vault account) for the name, the pause and the detail
+ *  link. A personal or github credential is not the pool's: no row. */
+export function poolRows(pool, cards, now = Date.now()) {
+  const byCred = new Map((cards || []).filter((c) => c.cred).map((c) => [c.cred.provider + '/' + c.cred.account, c]));
+  return (Array.isArray(pool) ? pool : []).filter((s) => s.owner === 'pool' && s.provider !== 'github').map((s) => {
+    const card = byCred.get(s.provider + '/' + s.account) || null;
+    const used5 = pct(s.used_5h_pct), used7 = pct(s.used_7d_pct);
+    const reset = [s.resets_5h_at, s.resets_at].map(toMs).filter((ms) => Number.isFinite(ms) && ms > now).sort((a, b) => a - b)[0] || null;
+    const paused = !!(card && card.paused);
+    return {
+      key: s.provider + '/' + s.account, id: card ? card.id : '',
+      label: (card && card.label) || s.label || s.account, prov: s.provider === 'codex' ? 'codex' : 'claude',
+      used5, used7, left5: used5 == null ? null : 100 - used5, left7: used7 == null ? null : 100 - used7,
+      reset, people: Array.isArray(s.people) ? s.people : [], sessions: s.sessions || 0,
+      state: paused ? 'paused' : s.state === 'reauth' || s.state === 'limited' ? s.state : 'ok', limited: s.limited || '',
+    };
+  }).sort((a, b) => a.label.localeCompare(b.label));
+}
+
+/** poolKpis is the four numbers above that table: how many are usable, the
+ *  Claude pool's 5-hour and the Codex pool's weekly room left (the mean over
+ *  subscriptions with a reading, the soonest reset), and who is on the pool. */
+export function poolKpis(rows) {
+  const live = rows.filter((r) => r.state !== 'paused');
+  const room = (prov, k) => {
+    const ws = live.filter((r) => r.prov === prov && r['left' + k] != null);
+    if (!ws.length) return null;
+    return Math.round(ws.reduce((a, r) => a + r['left' + k], 0) / ws.length);
+  };
+  const soonest = (prov) => live.filter((r) => r.prov === prov && r.reset).map((r) => r.reset).sort((a, b) => a - b)[0] || null;
+  const people = new Set();
+  for (const r of rows) for (const n of r.people) people.add(n);
+  return {
+    subs: rows.length, ok: rows.filter((r) => r.state === 'ok').length, limited: rows.filter((r) => r.state === 'limited').length,
+    claude5: room('claude', 5), claudeNext: soonest('claude'), codex7: room('codex', 7), codexNext: soonest('codex'),
+    sessions: rows.reduce((a, r) => a + r.sessions, 0), people: people.size,
+  };
+}
+
+/** personLimit is a person's weekly budget against their week's tokens (the
+ *  page asks since=7d, the budget's own window): null = 不限额; left never
+ *  below 0. Only a 5-hour budget: { h5 } alone, no left to show. */
+export function personLimit(p) {
+  const l = p && p.limit;
+  if (!l || (!(l.week > 0) && !(l['5h'] > 0))) return null;
+  if (!(l.week > 0)) return { h5: l['5h'] };
+  const used = p.week || 0;
+  return { week: l.week, used, left: Math.max(0, l.week - used), pct: Math.round(used / l.week * 100), over: used >= l.week };
+}
+
 /** leaseRows is "who is on which subscription": one row per live session
  *  with an account, newest first; people by their machine login, named by
  *  the GitHub account /v1/fleet/users maps it to. */

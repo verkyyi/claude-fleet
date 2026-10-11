@@ -3,16 +3,20 @@
 // and weekly use with their resets, live sessions, the credential, pause /
 // remove behind a confirm), the three-step add (provider → run the commands on
 // a machine and wait for it to arrive → done), who is on which, and recent
-// switches. Reads /v1/limits, /v1/accounts, /v1/fleet/credentials, /v1/live,
-// /v1/fleet/users and /v1/account-switches; pause is the setting
-// pool.paused.<account>, remove deletes the vault's credential. An admin's.
+// switches. On top, one table of the whole pool (claude-fleet#3231, EPIC
+// #3225 C6): each subscription's room left, its next reset and the people on
+// it now, from /v1/admin/overview's pool — the cards, pause / remove and the
+// add flow stay below it. Reads /v1/limits, /v1/accounts,
+// /v1/fleet/credentials, /v1/live, /v1/fleet/users, /v1/account-switches and
+// /v1/admin/overview; pause is the setting pool.paused.<account>, remove
+// deletes the vault's credential. An admin's.
 import { Shell } from '../app-shell.js';
 import { esc, ic, relTime } from '../lib/shell.js';
 import {
   subscriptions, subState, credState, headroom, leaseRows, switchRows, level, fmtIn,
-  addSubCommands, arrived, LABEL_RE,
+  addSubCommands, arrived, LABEL_RE, poolRows, poolKpis,
 } from '../lib/admin.js';
-import { t } from '../lib/i18n.js';
+import { t, fmtDate } from '../lib/i18n.js';
 import { mountSubscriptionAccess } from '../lib/cred-policy.js';
 
 const failed = (e) => `<div class="ghostrow err">${ic('alert')} ${esc(e.message)}</div>`;
@@ -23,6 +27,30 @@ function win(name, w, skip) {
   const reset = fmtIn(w.resets);
   return `<div class="win"><div class="win-h"><span>${esc(name)}</span><b>${w.p}%</b></div><div class="track"><i class="${level(w.p, skip)}" style="width:${w.p}%"></i></div>` +
     (reset ? `<div class="win-h"><span>${esc(t('ui.sub.resets', { when: reset }))}</span></div>` : '') + '</div>';
+}
+
+// One window's cell in the pool table: what is left, over a bar of what is used.
+function left(used, skip) {
+  if (used == null) return '<td class="mono">—</td>';
+  return `<td class="mono"><div class="win"><b>${esc(t('ui.pool.left', { p: 100 - used }))}</b><div class="track"><i class="${level(used, skip)}" style="width:${used}%"></i></div></div></td>`;
+}
+
+const STATE_CHIP = { ok: ['ok', 'ui.pool.ok'], limited: ['warn', 'ui.pool.limited'], reauth: ['bad', 'ui.pool.reauth'], paused: ['', 'ui.sub.paused'] };
+
+// The pool's one table: every subscription, what it has left and who is on it.
+function poolTable(rows, skip) {
+  const muted = (s) => `<span style="color:var(--muted)">${esc(s)}</span>`;
+  const body = rows.length ? rows.map((r) => {
+    const [tone, key] = STATE_CHIP[r.state];
+    const who = r.people.length ? esc(r.people.join('、')) : muted(r.state === 'limited' ? t('ui.pool.movedOff') : '—');
+    return `<tr><td><div class="status"><span class="prov ${r.prov}" style="width:22px;height:22px;font-size:11px">${r.prov === 'codex' ? 'X' : 'C'}</span><b>${esc(r.label)}</b></div></td>` +
+      left(r.used5, skip) + left(r.used7, skip) + `<td>${r.reset ? esc(fmtDate(r.reset)) : '—'}</td><td>${who}</td><td class="mono r">${r.sessions}</td>` +
+      `<td><span class="chip ${tone}">${esc(t(key))}</span></td>` +
+      `<td class="r">${r.id ? `<a class="btn sm" href="/subscriptions/${encodeURIComponent(r.id)}">${esc(t('ui.policy.details'))} ${ic('arrow')}</a>` : ''}</td></tr>`;
+  }).join('') : `<tr><td colspan="8"><div class="empty"><span>${esc(t('ui.pool.empty'))}</span></div></td></tr>`;
+  return `<div class="panel"><div class="panel-h"><h3>${esc(t('ui.pool.title'))}</h3></div><div class="tw"><table class="t quota"><thead><tr>` +
+    `<th>${esc(t('ui.pool.th.sub'))}</th><th>${esc(t('ui.pool.th.h5'))}</th><th>${esc(t('ui.pool.th.h7'))}</th><th>${esc(t('ui.pool.th.reset'))}</th>` +
+    `<th>${esc(t('ui.pool.th.people'))}</th><th class="r">${esc(t('ui.pool.th.sessions'))}</th><th>${esc(t('ui.pool.th.state'))}</th><th></th></tr></thead><tbody>${body}</tbody></table></div></div>`;
 }
 
 function card(s, skip, detail = false) {
@@ -94,9 +122,10 @@ async function poll(ctx) {
 }
 
 export async function renderSubscriptions(ctx) {
-  const [lim, acc, cr, live, us, sw, set] = await Promise.allSettled([
+  const [lim, acc, cr, live, us, sw, set, ov] = await Promise.allSettled([
     ctx.api('/v1/limits?account=all'), ctx.api('/v1/accounts'), ctx.api('/v1/fleet/credentials'),
     ctx.api('/v1/live'), ctx.api('/v1/fleet/users'), ctx.api('/v1/account-switches?limit=8'), ctx.api('/v1/fleet/settings'),
+    ctx.api('/v1/admin/overview?since=1d'),
   ]);
   // A hub with neither usage nor a vault has nothing to draw: say why.
   if (lim.status === 'rejected' && cr.status === 'rejected') throw lim.reason;
@@ -114,12 +143,22 @@ export async function renderSubscriptions(ctx) {
   const h5 = headroom(cards, 'h5'), h7 = headroom(cards, 'h7');
   const pausedN = cards.filter((c) => c.paused).length;
   const kpi = (lbl, v, d) => `<div class="panel kpi"><span class="lbl">${esc(lbl)}</span><span class="val">${esc(v)}</span><span class="delta" style="color:var(--muted)">${esc(d)}</span></div>`;
-  const kpis = '<div class="grid g4">' +
+  // The pool table and its four numbers come from the admin overview; a hub
+  // without it (no fleet module) keeps the cards' own numbers and says why.
+  const pool = ov.status === 'fulfilled' ? poolRows(ov.value.pool, cards) : null;
+  const pk = pool && poolKpis(pool);
+  const room = (v, next) => [v == null ? '—' : t('ui.pool.left', { p: v }), next && fmtIn(next) ? t('ui.pool.nextReset', { when: fmtIn(next) }) : t('ui.sub.kpi.noReading')];
+  const kpis = pk ? '<div class="grid g4">' +
+    kpi(t('ui.pool.subs'), String(pk.subs), t('ui.pool.subsSub', { ok: pk.ok, lim: pk.limited })) +
+    kpi(t('ui.pool.claude5'), ...room(pk.claude5, pk.claudeNext)) +
+    kpi(t('ui.pool.codex7'), ...room(pk.codex7, pk.codexNext)) +
+    kpi(t('ui.pool.inUse'), t('ui.pool.inUseVal', { n: pk.sessions }), t('ui.pool.inUseSub', { n: pk.people })) + '</div>' + poolTable(pool, skip)
+    : '<div class="grid g4">' +
     kpi(t('ui.sub.kpi.subs'), String(cards.length), t('ui.sub.kpi.split', { c: nC, x: nX })) +
     kpi(t('ui.sub.kpi.h5'), h5 ? h5.free + '%' : '—', h5 && h5.next ? t('ui.sub.kpi.next', { when: fmtIn(h5.next) }) : t('ui.sub.kpi.noReading')) +
     kpi(t('ui.sub.kpi.h7'), h7 ? h7.free + '%' : '—', h7 && h7.next ? t('ui.sub.kpi.next', { when: fmtIn(h7.next) }) : t('ui.sub.kpi.noReading')) +
     kpi(t('ui.sub.kpi.vault'), String(((val(cr) && val(cr).credentials) || []).filter((c) => c.principal_id === 'pool').length),
-      pausedN ? t('ui.sub.kpi.paused', { n: pausedN }) : t('ui.sub.kpi.nonePaused')) + '</div>';
+      pausedN ? t('ui.sub.kpi.paused', { n: pausedN }) : t('ui.sub.kpi.nonePaused')) + '</div>' + failed(ov.reason);
 
   const vaultNote = cr.status === 'rejected' ? `<div class="notice">${ic('alert')}<span>${esc(t('ui.sub.vaultOff', { e: cr.reason.message }))}</span></div>` : '';
   const body = cards.length ? cards.map((c) => card(c, skip)).join('')
@@ -141,7 +180,7 @@ export async function renderSubscriptions(ctx) {
     ? '<div class="attn">' + sws.map((x) => `<div><span class="ic ok">${ic('refresh')}</span><div><b>${esc(x.from)} → ${esc(x.to)}</b><span>${esc(relTime(x.at))}${x.where ? ' · ' + esc(x.where) : ''}</span></div></div>`).join('') + '</div>'
     : sw.status === 'rejected' ? failed(sw.reason) : `<div class="empty"><span>${esc(t('ui.sub.noSwitches'))}</span></div>`;
 
-  ctx.el.innerHTML = `<div class="pagehead"><div><p>${esc(t('ui.sub.lead', { skip }))}</p></div><div class="acts"><a class="btn" href="/subscriptions/settings">${esc(t('ui.policy.global'))}</a><button class="btn primary" data-act="add">${ic('plus')}${esc(t('ui.sub.addOne'))}</button></div></div>` +
+  ctx.el.innerHTML = `<div class="pagehead"><div><p title="${esc(t('ui.sub.lead', { skip }))}">${esc(t('ui.pool.lead'))}</p></div><div class="acts"><a class="btn" href="/subscriptions/settings">${esc(t('ui.policy.global'))}</a><button class="btn primary" data-act="add">${ic('plus')}${esc(t('ui.sub.addOne'))}</button></div></div>` +
     vaultNote + kpis + grid + unmanaged +
     `<div class="grid g21"><div class="panel"><div class="panel-h"><h3>${esc(t('ui.sub.who'))}</h3><span class="sub">${esc(t('ui.sub.live'))}</span></div>${leases}</div>` +
     `<div class="panel"><div class="panel-h"><h3>${esc(t('ui.sub.switches'))}</h3></div>${switches}</div></div>`;
