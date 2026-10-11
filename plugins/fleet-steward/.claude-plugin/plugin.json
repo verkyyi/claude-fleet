@@ -1,11 +1,20 @@
 {
   "name": "fleet-steward",
-  "version": "0.1.2",
-  "description": "claude-fleet steward: /fleet-steward patrols every batch and worker, answers what a charter already says and folds the rest into one decision sheet. Needs fleet-orchestrate. Not installed by default (EPIC #3111).",
-  "author": { "name": "verkyyi", "url": "https://github.com/verkyyi" },
+  "version": "0.2.0",
+  "description": "claude-fleet steward: /fleet-steward takes the steward role in a session that holds no issue and runs its own patrol loop — answers due questions by their suggestion, spawns a red base's fixer, lands a driverless batch, parks, files health issues — and draws the decision sheet / patrol / batches panes in that window only. Nobody holds it ⇒ none of that runs. Needs fleet-orchestrate. Not installed by default (EPIC #3111).",
+  "author": {
+    "name": "verkyyi",
+    "url": "https://github.com/verkyyi"
+  },
   "homepage": "https://github.com/verkyyi/claude-fleet",
   "repository": "https://github.com/verkyyi/claude-fleet",
   "license": "MIT",
-  "keywords": ["claude-fleet", "steward"],
-  "dependencies": ["fleet-orchestrate"]
+  "keywords": [
+    "claude-fleet",
+    "steward"
+  ],
+  "dependencies": [
+    "fleet-orchestrate"
+  ],
+  "types": "./types/index.d.ts"
 }

@@ -1,9 +1,9 @@
-// The orchestrator's batches pane (issue #2833, EPIC #2831 C2): where every batch
-// stands, who is parked, what is left for the person, what waits behind the
-// turn — without asking the orchestrator. Only looks and jumps; the sidebar
-// stays the navigator (共同约定 1).
+// The batches pane (issue #2833, EPIC #2831 C2): where every batch stands, who is
+// parked, what is left for the person — without asking anyone. Only looks and
+// jumps; the sidebar stays the navigator (共同约定 1). The fleet-steward plugin's
+// since #3115 (EPIC #3111 C4), drawn in the steward holder's window only.
 //
-// Three parts, one Pane (`fleet-batches`):
+// Two parts, one Pane (`fleet-batches`):
 //   在跑的批次  a row per epic-running.d mark — `landed/members` bar, 在做 (live)
 //              · 待合 (inflight), 停着 (park.json by origin), 「心跳 HH:MM（N 分钟前）」,
 //              yellow 「心跳停了」 past its ttl; a driver the book names with no mark
@@ -11,36 +11,27 @@
 //              today: one grey line. 「到驱动」 on each row with a driver key.
 //   待你动手    the steward's open `todo.items` (kind mark · what · due), 「看」
 //              opens its source on the person's own computer (fleet-open.sh).
-//   排队        queue.ts's `fleet/queue` count, with a /qd button.
 //
-// The data is panels.ts's view (`fleet/panels`, batches-model.ts folds it), so a
-// redraw runs nothing; a process starts only on a press — 「到驱动」 runs
-// bin/fleet-panel-jump.sh <key> (fleet_win_for_key; NOTFOUND / AMBIGUOUS toast,
-// never a guess), 「看」 bin/fleet-open.sh <url>, /qd the command.
+// The data is panels.ts's view (`fleet-steward/panels`, batches-model.ts folds
+// it), so a redraw runs nothing; a process starts only on a press — 「到驱动」
+// runs bin/fleet-panel-jump.sh <key> (fleet_win_for_key; NOTFOUND / AMBIGUOUS
+// toast, never a guess), 「看」 bin/fleet-open.sh <url>.
 //
-// Opened unasked at session.start in the orchestrator's window when its panels
-// run (the engine places an unasked pane only from 144 columns); `/sheet batches`
-// opens it asked. Seated inline (the main screen) after an unasked open it draws
-// one hint line, never the whole board. No panels here ⇒ nothing opens, every
-// hook passes through.
+// Never opened unasked: `/sheet b` opens it. No holder here ⇒ nothing opens,
+// every hook passes through.
 
 import { atom, read } from 'claude-code'
 import type { EngineInterface, On } from 'claude-code'
 
-import type { OrchQueue, PanelsView } from '../types'
+import type { PanelsView } from '../types'
 import { bar, beatClock, EMPTY_BOARD, todoIcon } from './batches-model'
-import { isOpen } from './gate'
-import { isOrchestrator } from './orchestrator'
+import { BATCHES_PANE, fleetBin, isHolder, t } from './common'
 import { BATCHES_ARG, panelsOn, SHEET_COMMAND } from './panels'
-import { QD_COMMAND, t } from './qd'
-import { QUEUE_IDLE, queueText } from './queue'
-import { binDir } from './tools'
 
-export const BATCHES_PANE = 'fleet-batches'
+export { BATCHES_PANE }
 export const JUMP_TIMEOUT_MS = 10_000
 
-const panels = atom({ plugin: 'fleet', key: 'panels' } as const, null as PanelsView | null)
-const queue = atom({ plugin: 'fleet', key: 'queue' } as const, QUEUE_IDLE)
+const panels = atom({ plugin: 'fleet-steward', key: 'panels' } as const, null as PanelsView | null)
 
 // Module state: a reload is a fresh module.
 let asked = false
@@ -50,17 +41,17 @@ export function resetBatches(): void {
   asked = false
 }
 
-/** Does this window carry the batches pane? The orchestrator's, with its panels running. */
+/** Does this window carry the batches pane? The steward holder's, with its panels running. */
 export function batchesWanted(): boolean {
-  return isOpen() && isOrchestrator() && panelsOn()
+  return isHolder() && panelsOn()
 }
 
-export function jumpArgv(root: string, key: string, pane: string): string[] {
-  return ['bash', `${binDir(root)}/fleet-panel-jump.sh`, key, ...(pane !== '' ? ['--pane', pane] : [])]
+export function jumpArgv(bin: string, key: string, pane: string): string[] {
+  return ['bash', `${bin}/fleet-panel-jump.sh`, key, ...(pane !== '' ? ['--pane', pane] : [])]
 }
 
-export function openArgv(root: string, url: string): string[] {
-  return ['bash', `${binDir(root)}/fleet-open.sh`, url]
+export function openArgv(bin: string, url: string): string[] {
+  return ['bash', `${bin}/fleet-open.sh`, url]
 }
 
 /** What a jump's exit code tells the person; '' when it switched. */
@@ -73,7 +64,7 @@ export function jumpToast(code: number): string {
 
 async function jump($: EngineInterface, key: string): Promise<void> {
   const pane = (await $.env.get('TMUX_PANE')) ?? ''
-  const r = await $.process.run(jumpArgv($.plugin.root, key, pane), { timeoutMs: JUMP_TIMEOUT_MS })
+  const r = await $.process.run(jumpArgv(fleetBin(), key, pane), { timeoutMs: JUMP_TIMEOUT_MS })
   const msg = jumpToast(r.exitCode)
   if (msg !== '') $.ui.toast(msg)
 }
@@ -100,14 +91,6 @@ export function batchLine(b: PanelsView['board']['batches'][number], at: number)
 }
 
 export function registerBatches(on: On): void {
-  // Matched on isInteractive: lifecycle.ts holds the one unmatched session.start;
-  // `await next(e)` first, so the gate, the role and the panels are settled.
-  on('session.start', { isInteractive: true }, async ($, e, next) => {
-    const result = await next(e)
-    if (batchesWanted()) await openBatches($).catch(() => undefined)
-    return result
-  }).catch(($, e, next) => next(e))
-
   on('command.run', { command: SHEET_COMMAND }, async ($, e, next) => {
     if (!batchesWanted() || !BATCHES_ARG.test(e.args)) return next(e)
     asked = true
@@ -118,8 +101,7 @@ export function registerBatches(on: On): void {
   on('ui.render', { component: 'Pane', requestId: BATCHES_PANE }, async ($, e, next) => {
     // Read first: the read subscribes the pane to both states.
     const view = await read($, panels)
-    const q: OrchQueue = await read($, queue)
-    if (!isOpen()) return next(e)
+    if (!batchesWanted()) return next(e)
     const { Box, Text, Button } = $.ui.resolve(e)
     if (e.props.placement === 'inline' && !asked) {
       return (
@@ -130,7 +112,6 @@ export function registerBatches(on: On): void {
     }
     const board = view?.board ?? EMPTY_BOARD
     const at = view?.at ?? 0
-    const waiting = queueText(q)
     return (
       <Box key="fleet-batches" flexDirection="column">
         <Text key="fleet-batches-h1" bold>{t('panel_batches_running')}</Text>
@@ -181,26 +162,12 @@ export function registerBatches(on: On): void {
                 label={t('panel_batches_open')}
                 dimColor
                 onPress={() => {
-                  void $.process.run(openArgv($.plugin.root, i.url), { timeoutMs: JUMP_TIMEOUT_MS }).catch(() => undefined)
+                  void $.process.run(openArgv(fleetBin(), i.url), { timeoutMs: JUMP_TIMEOUT_MS }).catch(() => undefined)
                 }}
               />
             )}
           </Box>
         ))}
-        <Text key="fleet-batches-h3" bold>{t('panel_batches_queue')}</Text>
-        <Box key="fleet-batches-queue" flexDirection="row">
-          <Text key="fleet-batches-queue-text" color={waiting !== '' ? 'yellow' : undefined} dimColor={waiting === ''} wrap="truncate-end">
-            {waiting !== '' ? waiting : t('panel_batches_queue_none')}
-          </Text>
-          <Button
-            key="fleet-batches-qd"
-            label={t('panel_batches_qd')}
-            dimColor
-            onPress={() => {
-              void $.command.run({ command: QD_COMMAND }).catch(() => undefined)
-            }}
-          />
-        </Box>
       </Box>
     )
   }).catch(($, e, next) => next(e))

@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """fleet_steward.py — the steward's beat, with no model (issue #2670, EPIC #2668
-C2). Run as bin/fleet-steward-tick.sh; bin/fleet-steward.sh opens the window.
+C2). Run as bin/fleet-steward-tick.sh — since EPIC #3111 C4 (issue #3115) only
+from the loop of the session that took the steward role (/fleet-steward, the
+fleet-steward plugin's skill; take_role steward).
 
-    fleet-steward-tick.sh beat   [--session S] [--force] [--now ISO]
+    fleet-steward-tick.sh beat --holder [--session S] [--force] [--now ISO]
     fleet-steward-tick.sh delta  [--session S] [--now ISO]
     fleet-steward-tick.sh answer --row ID --text T [--source URL] [--by steward|person] [--session S]
     fleet-steward-tick.sh sheet  [--session S] [--now ISO]
@@ -10,13 +12,22 @@ C2). Run as bin/fleet-steward-tick.sh; bin/fleet-steward.sh opens the window.
     fleet-steward-tick.sh followups [--watch owner/name#N …] [--json]
     fleet-steward-tick.sh breakage [--session S]
 
+NOBODY HOLDS THE ROLE ⇒ NOTHING RUNS (EPIC #3111 C4): no beat, no answer at a
+deadline, no spawn, no merge, no park, no health issue, no sheet and no
+[decision] — a question waits on its session's row and its ticket for the person.
+`beat` without --holder refuses (rc 3) and so does `--holder` from a window that
+is not the holder's (fleet_role_holder, bin/fleet-lib.sh — fleet_decision.
+steward_holder is its Python door; seam FLEET_STEWARD_HOLDER_CMD).
+
 `breakage` spawns the fixer of a red base branch a WORKER filed (issue #2960: a
 worker files, never spawns): fleet-issue-file.sh queues it under the fleet's
-state dir (`breakage-spawn/`) and drains at once; the diskguard tick drains the
-rest every minute, whatever FLEET_STEWARD says. Parent: the steward, else the hub.
+state dir (`breakage-spawn/`) and drains at once; the holder's beat drains the
+rest. Parent: the steward holder. No holder ⇒ the person is told once
+(`fleet-alerts.sh event breakage`) and the issue stays queued, nobody spawned.
 
-`beat` is the diskguard tick's (home_watch, every minute): it returns at once
-until the next beat is due — FLEET_STEWARD_EVERY (1200 s), 600 s after a beat
+`beat --holder` is the holder's loop's (its skill runs it every round): it returns
+at once (rc 4, 「还没到下一拍」) until the next beat is due — FLEET_STEWARD_EVERY
+(1200 s), 600 s after a beat
 that changed something, FLEET_STEWARD_NIGHT_EVERY (3600 s) from 23:00 to 08:00 on
 the person's clock (fleet_decision.zone). A due beat:
 
@@ -58,8 +69,8 @@ the person's clock (fleet_decision.zone). A due beat:
      FLEET_STEWARD_PARK=0 leaves parking off. A pending park is advanced on every
      minute's call, due or not (its grace is 5 minutes, the beat 10-60);
   6. ONLY when there is something for the model — a new open question, a BLOCKED /
-     FAILED report, a batch with no driver — hands the steward window one turn
-     (`[steward] …`). A calm beat calls no model (共同约定 · 怎么算成功).
+     FAILED report, a batch with no driver — ends its card with the `[steward] …`
+     line, printed to the holder's own loop (never sent: it is already in turn).
 
 `todo-done --id <id>` ticks one 「待你动手」 item as the person's (issue #2913: the
 client's list, through the steward) — the next beat records it on its batches
@@ -175,10 +186,20 @@ def socket(sess):
     return sh_lib('fleet_socket "$1"', sess) or sess
 
 
-def mode(sess):
-    r = subprocess.run(["bash", str(BIN / "fleet-steward.sh"), "mode", sess], stdout=subprocess.PIPE,
-                       stderr=subprocess.DEVNULL, universal_newlines=True, timeout=30)
-    return r.stdout.strip() or "off"
+def holder(sess):
+    """The window holding the steward role — '' when nobody does (EPIC #3111 C4):
+    then nothing is answered, spawned, merged, parked, filed or written."""
+    return fd.steward_holder(socket(sess))
+
+
+def own_window():
+    """The window this process runs in ('' outside a pane)."""
+    pane = os.environ.get("TMUX_PANE") or ""
+    if not pane or not os.environ.get("TMUX"):
+        return ""
+    r = subprocess.run(["tmux", "display-message", "-p", "-t", pane, "#{window_id}"], stdout=subprocess.PIPE,
+                       stderr=subprocess.DEVNULL, universal_newlines=True, timeout=10)
+    return r.stdout.strip()
 
 
 def _seam(name, argv, **kw):
@@ -199,13 +220,15 @@ def windows(sess):
         fmt = "\t".join(("#{window_id}", "#{@fleet_role}",
                          "#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}",
                          "#{@issue}", "#{@repo}", "#{@epic}", "", "#{@sheet_pane}",
-                         "#{@claude_needs}", "#{@cc_session_id}", "#{window_name}"))
+                         "#{@claude_needs}", "#{@cc_session_id}", "#{window_name}", "#{@fleet_role_def}"))
         r = subprocess.run(["tmux", "-L", socket(sess), "list-windows", "-t", "=" + sess, "-F", fmt],
                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, universal_newlines=True, timeout=30)
     out = []
     for line in (r.stdout or "").splitlines():
-        p = (line.split("\t") + [""] * 11)[:11]
+        p = (line.split("\t") + [""] * 12)[:12]
         w = dict(zip(("wid", "role", "state", "issue", "repo", "epic", "key", "sheet", "needs", "sid", "name"), p))
+        if p[11] in ("orchestrator", "steward"):
+            w["role"] = p[11]          # a role taken with take_role (issue #3114) is the window's role here
         if w["epic"] and not w["key"] and os.environ.get("FLEET_STEWARD_WINDOWS_CMD") is None:
             w["key"] = sh_lib('fleet_window_okey "$1" "$2"', sess, w["wid"])
         out.append(w)
@@ -296,6 +319,19 @@ def park_step(sess, now_t, judge, budget):
         return None
 
 
+def tell_person(text, sess=None):
+    """One reminder to the person (the alerts' one exit, `fleet-alerts.sh event
+    breakage`). Seam: FLEET_STEWARD_ALERT_CMD (argv + kind + text)."""
+    cmd = os.environ.get("FLEET_STEWARD_ALERT_CMD")
+    argv = cmd.split() if cmd else ["bash", str(BIN / "fleet-alerts.sh")]
+    sock = socket(sess) if sess and not cmd else ""
+    try:
+        subprocess.run(argv + ["event"] + (["-L", sock] if sock else []) + ["breakage", text],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
 def backstop(key, pr, parent):
     r = _seam("FLEET_STEWARD_BACKSTOP_CMD", [key, "--pr", str(pr), "--parent", parent])
     if r is None:
@@ -330,7 +366,7 @@ def epic_marks(now):
 def write_stamp():
     """global/steward.stamp, one line `<seq> <epoch_ms>`, after every save (issue #2835).
 
-    The panels (mod/fleet/hooks/panels.ts) stat this one file every second and
+    The panels (plugins/fleet-steward/hooks/panels.ts) stat this one file every second and
     re-read the books only when it moved; a stamp that cannot be written costs
     them up to their 10 s full read, never the save."""
     p = gdir() / "steward.stamp"
@@ -815,16 +851,22 @@ def breakage_dir(sess):
 
 
 def cmd_breakage(a):
-    """A red base branch a WORKER filed (issue #2960): a worker files, never spawns,
-    so its fixer is spawned here — one level deep, parented to the steward when its
-    window is up, else to the hub. fleet-issue-file.sh queues `<slug>-<N>` (repo ·
-    number · title · agent) under the fleet's state dir and drains at once; the
-    diskguard tick drains again whatever the steward's mode. Spawned or already
-    claimed ⇒ off the queue; no room ⇒ the next tick; a day old ⇒ dropped (logged)."""
     sess = session(a.session)
     if not sess:
         sys.stderr.write("fleet-steward-tick: no fleet session\n")
         return 2
+    return drain_breakage(sess)
+
+
+def drain_breakage(sess, quiet=False):
+    """A red base branch a WORKER filed (issue #2960): a worker files, never spawns,
+    so its fixer is spawned here — one level deep, parented to the steward holder.
+    fleet-issue-file.sh queues `<slug>-<N>` (repo · number · title · agent) under the
+    fleet's state dir and drains at once; the holder's beat drains the rest. NOBODY
+    holds the steward role (EPIC #3111 C4) ⇒ nothing is spawned: the issue is filed,
+    the person is told once (`fleet-alerts.sh event breakage`), and it stays
+    queued for whoever takes the role. Spawned or already claimed ⇒ off the queue;
+    no room ⇒ the next beat; a day old ⇒ dropped (logged)."""
     q = breakage_dir(sess)
     items = sorted(f for f in q.glob("*") if not f.name.startswith(".")) if q.is_dir() else []
     if not items:
@@ -834,9 +876,28 @@ def cmd_breakage(a):
         fcntl.flock(lk, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
         return 0                     # another drain holds it
-    origin = "steward" if any(w["role"] == "steward" for w in windows(sess)) else "hub"
-    env = {k: v for k, v in os.environ.items() if k not in ("TMUX", "TMUX_PANE")}
     log = gdir() / "breakage-spawn.log"
+    if not holder(sess):
+        for f in items:
+            if (q / (".told-" + f.name)).exists():
+                continue
+            try:
+                repo, n = (f.read_text().rstrip("\n").split("\t") + [""] * 2)[:2]
+            except OSError:
+                continue
+            tell_person(tr("steward_breakage_unheld_fmt", "%s#%s" % (repo, n)), sess)
+            (q / (".told-" + f.name)).write_text(fd.iso(fd.now_local(None)) + "\n")
+            line = "%s\t%s\t%s#%s\tno-holder\ttold" % (fd.iso(fd.now_local(None)), sess, repo, n)
+            if not quiet:
+                print(line)
+            try:
+                with open(log, "a") as fh:
+                    fh.write(line + "\n")
+            except OSError:
+                pass
+        return 0
+    origin = "steward"
+    env = {k: v for k, v in os.environ.items() if k not in ("TMUX", "TMUX_PANE")}
     for f in items:
         try:
             repo, n, title, agent = (f.read_text().rstrip("\n").split("\t") + [""] * 4)[:4]
@@ -845,23 +906,25 @@ def cmd_breakage(a):
         if not n.isdigit() or "/" not in repo:
             f.unlink()
             continue
-        rc = 1
-        for o in [origin, "hub"] if origin != "hub" else ["hub"]:
-            argv = [n, sess, "--repo", repo, "--origin", o] + (["--title", title] if title else []) \
-                + (["--agent", agent] if agent in ("claude", "codex") else [])
-            r = _seam("FLEET_STEWARD_SPAWN_CMD", argv, env=env)
-            if r is None:
-                r = subprocess.run(["bash", str(BIN / "dash-issue-session.sh")] + argv, stdout=subprocess.PIPE,
-                                   stderr=subprocess.PIPE, universal_newlines=True, timeout=300, env=env)
-            rc = r.returncode
-            if rc != 4:             # 4 = that parent is gone: the hub takes it
-                break
+        o = origin                  # rc 4 = the holder went meanwhile: kept for the next one
+        argv = [n, sess, "--repo", repo, "--origin", o] + (["--title", title] if title else []) \
+            + (["--agent", agent] if agent in ("claude", "codex") else [])
+        r = _seam("FLEET_STEWARD_SPAWN_CMD", argv, env=env)
+        if r is None:
+            r = subprocess.run(["bash", str(BIN / "dash-issue-session.sh")] + argv, stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, universal_newlines=True, timeout=300, env=env)
+        rc = r.returncode
         old = time.time() - f.stat().st_mtime > 86400
         if rc in (0, 3) or old:
             f.unlink()
+            try:
+                (q / (".told-" + f.name)).unlink()
+            except OSError:
+                pass
         line = "%s\t%s\t%s#%s\torigin=%s\trc=%d%s" % (fd.iso(fd.now_local(None)), sess, repo, n, o, rc,
                                                      "\tdropped" if old and rc not in (0, 3) else "")
-        print(line)
+        if not quiet:
+            print(line)
         try:
             with open(log, "a") as fh:
                 fh.write(line + "\n")
@@ -870,12 +933,41 @@ def cmd_breakage(a):
     return 0
 
 
+def holder_gate(sess, quiet=False):
+    """(holder window, rc): rc 0 = go; 3 = nobody holds the steward role, or this
+    pane is not the one that does (a beat runs only in the holder's own loop)."""
+    hw = holder(sess)
+    if not hw:
+        if not quiet:
+            sys.stderr.write("fleet-steward-tick: nobody holds the steward role (/fleet-steward takes it) — nothing runs\n")
+        return "", 3
+    me = "" if os.environ.get("FLEET_STEWARD_HOLDER_CMD") is not None else own_window()
+    if me and me != hw:
+        if not quiet:
+            sys.stderr.write("fleet-steward-tick: the steward role is %s's, not this window's (%s)\n" % (hw, me))
+        return hw, 3
+    return hw, 0
+
+
 def cmd_beat(a):
     sess = session(a.session)
     if not sess:
         sys.stderr.write("fleet-steward-tick: no fleet session\n")
         return 2
+    if not a.holder:
+        # EPIC #3111 C4: the beat is the steward holder's loop's, never a daemon's
+        sys.stderr.write("fleet-steward-tick: the beat runs only in the steward holder's loop "
+                         "(`beat --holder`, /fleet-steward) — nothing ran\n")
+        return 3
+    hw, rc = holder_gate(sess)
+    if rc:
+        return rc
     now_t = fd.now_local(a.now)
+    # a red base a worker filed waits for a holder (issue #2960): its fixer is spawned here
+    try:
+        drain_breakage(sess, quiet=True)
+    except Exception as e:  # a spawn never stops the beat
+        sys.stderr.write("fleet-steward-tick: breakage: %s\n" % e)
     if os.environ.get("FLEET_STEWARD_DEBUG", "1") != "0":
         try:
             debug_step(sess, int(now_t.timestamp()))
@@ -885,22 +977,14 @@ def cmd_beat(a):
         # the every-minute caller's fast path: not due ⇒ no lock, no fork — but a
         # park asked for its handoff is moved on every minute (its grace is 5)
         try:
-            if now_t.timestamp() < json.loads((gdir() / "steward.state.json").read_text()).get("next_at", 0):
+            nxt0 = json.loads((gdir() / "steward.state.json").read_text()).get("next_at", 0)
+            if now_t.timestamp() < nxt0:
                 if fleet_park.peek().get("pending"):
                     park_step(sess, now_t, False, env_int("FLEET_STEWARD_WRITES", 20))
+                print(tr("steward_beat_not_due_fmt", fd.show_time(dt.datetime.fromtimestamp(nxt0, now_t.tzinfo))))
                 return 4
         except (OSError, ValueError):
             pass
-        m = mode(sess)
-        if m != "on":
-            # `count`: nothing parked, but the stuck segments are measured (the
-            # 卡住占位时长 baseline, EPIC #2668 读数口径), at most every 10 minutes
-            if m == "count" and park_on():
-                try:
-                    fleet_park.observe_only(sess, now_t.timestamp())
-                except Exception as e:  # a metric never stops the beat
-                    sys.stderr.write("fleet-steward-tick: park observe: %s\n" % e)
-            return 3
     # the doctor runs before the lock: an `answer` never waits out its ~20 s
     try:
         peek = json.loads((gdir() / "steward.state.json").read_text()).get("health") or {}
@@ -939,14 +1023,15 @@ def cmd_beat(a):
         # a finished batch's sample reaches the person on this beat, no model turn
         post_sheet(sess, st, now_t)
     calls = st.d.setdefault("model_calls", 0)
+    wake = ""
     if wants_model(delta):
         parts = tr("steward_wake_parts_fmt", len(delta["new_asks"]),
                    sum(1 for e in delta["events"] if e["state"] in WAKE_STATES), len(delta["orphans"]))
-        text = tr("steward_wake_fmt", st.d["beat"]["n"], parts, str(path))
-        if send(sess, "steward", text):
-            st.d["model_calls"] = calls + 1
+        # the holder's own loop runs this beat: the turn is printed to it, never sent
+        wake = tr("steward_wake_fmt", st.d["beat"]["n"], parts, str(path))
+        st.d["model_calls"] = calls + 1
     st.save()
-    print("\n".join(st.d["card"]))
+    print("\n".join(st.d["card"] + ([""] + [wake] if wake else [])))
     return 0 if changed else 1
 
 
@@ -1077,8 +1162,13 @@ def page_step(sess, st, now_t, wins, force=False):
 
 
 def cmd_sheet(a):
+    sess = session(a.session)
+    if not holder(sess):
+        # EPIC #3111 C4: nobody holds the role ⇒ no sheet written, no [decision] sent
+        print(tr("steward_unheld"))
+        return 3
     st = State()
-    rc, msg = post_sheet(session(a.session), st, fd.now_local(a.now), a.force)
+    rc, msg = post_sheet(sess, st, fd.now_local(a.now), a.force)
     st.save()
     print(msg)
     return rc
@@ -1128,9 +1218,10 @@ def post_sheet(sess, st, now_t, force=False):
     body += ["%s　〔row %s〕" % (page.tr("steward_page_todo_h") + " · " + page.say_of(r), r["id"]) for r in todo_rows]
     if samples:
         body += [""] + fd.render_samples(samples)
-    # the decision sheet is on the orchestrator's screen (@sheet_pane 1, issue
-    # #2832): one sentence, never the table; else the whole sheet as before
-    pane_up = any(w["role"] == "orchestrator" and w.get("sheet") == "1" for w in windows(sess))
+    # the decision sheet is on the steward holder's screen (@sheet_pane 1, issue
+    # #2832; the fleet-steward plugin's panel since #3115): one sentence to the
+    # orchestrator, never the table; else the whole sheet as before
+    pane_up = any(w["role"] == "steward" and w.get("sheet") == "1" for w in windows(sess))
     msg = "\n".join([tr("steward_decision_head_fmt", len(rows), where),
                      page.tr("steward_page_card_fmt", url or str(conf_dir() / "fleets" / sess / "steward" / "page.html")),
                      ""] + body + ["", tr("steward_decision_how"), "", "<!-- fleet:decision v=%s id=%s -->" % (fd.V, sid)])
@@ -1214,6 +1305,8 @@ def main(argv=None):
         p.add_argument("--session")
         p.add_argument("--now")
         p.add_argument("--force", action="store_true")
+        if name == "beat":
+            p.add_argument("--holder", action="store_true")
         if name == "page":
             p.add_argument("--print", action="store_true")
             p.add_argument("--demo", action="store_true")

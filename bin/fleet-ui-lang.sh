@@ -193,8 +193,14 @@ fleet_ui_t() {
     en:steward_health_again_fmt) printf 'Seen again (%s · beat %s): %s' "${1:-}" "${2:-}" "${3:-}" ;;
     zh:steward_card_none)       printf '管家还没巡过' ;;
     en:steward_card_none)       printf 'the steward has not beaten yet' ;;
-    zh:steward_wake_fmt)        printf '[steward] 第 %s 拍有事：%s。读 %s，按 /fleet-steward 处理；做完就停，不要 ScheduleWakeup。' "${1:-}" "${2:-}" "${3:-}" ;;
-    en:steward_wake_fmt)        printf '[steward] beat %s has work: %s. Read %s and handle it per /fleet-steward; stop when done, no ScheduleWakeup.' "${1:-}" "${2:-}" "${3:-}" ;;
+    zh:steward_wake_fmt)        printf '[steward] 第 %s 拍有事：%s。读 %s，按 /fleet-steward 处理；做完再排下一拍。' "${1:-}" "${2:-}" "${3:-}" ;;
+    en:steward_wake_fmt)        printf '[steward] beat %s has work: %s. Read %s and handle it per /fleet-steward; then schedule the next beat.' "${1:-}" "${2:-}" "${3:-}" ;;
+    zh:steward_beat_not_due_fmt) printf '还没到下一拍（%s）' "${1:-}" ;;
+    en:steward_beat_not_due_fmt) printf 'not due yet (next beat %s)' "${1:-}" ;;
+    zh:steward_breakage_unheld_fmt) printf 'fleet: 主干红了，已开单 %s——没人接手管家，不会自动派修复；开个会话做它，或 /fleet-steward 接手' "${1:-}" ;;
+    en:steward_breakage_unheld_fmt) printf 'fleet: the base branch is red, filed as %s — nobody holds the steward role, so no fixer is spawned; open a session on it, or take the role with /fleet-steward' "${1:-}" ;;
+    zh:steward_unheld)          printf '没人接手管家（/fleet-steward）：不写决定单、不发 [decision]，问题在执行会话那一行和它的单子上' ;;
+    en:steward_unheld)          printf 'nobody holds the steward role (/fleet-steward): no decision sheet, no [decision] — the questions stay on their sessions and tickets' ;;
     zh:steward_wake_parts_fmt)  printf '新问题 %s · 卡住的回报 %s · 驱动已不在的批次 %s' "${1:-}" "${2:-}" "${3:-}" ;;
     en:steward_wake_parts_fmt)  printf 'new questions %s · stuck reports %s · batches with no driver %s' "${1:-}" "${2:-}" "${3:-}" ;;
     zh:steward_answer_fmt)      printf '管家按批次约定答：%s' "${1:-}" ;;
@@ -1089,7 +1095,7 @@ fleet_ui_t() {
     en:panel_patrol_opened)     printf 'The patrol panel is on the right' ;;
     zh:panel_patrol_waits)      printf '巡检面板已打开，终端加宽后摆出' ;;
     en:panel_patrol_waits)      printf 'The patrol panel is open; it shows once the terminal is wider' ;;
-    # the orchestrator's batches pane (mod batches.tsx, issue #2833, EPIC #2831 C2)
+    # the batches pane (fleet-steward plugin's batches.tsx, issue #2833, EPIC #2831 C2)
     zh:panel_batches_title)     printf '批次与待你动手' ;;
     en:panel_batches_title)     printf 'Batches & your to-do' ;;
     zh:panel_batches_running)   printf '在跑的批次' ;;
@@ -1187,8 +1193,10 @@ fleet_ui_t() {
     en:panel_sheet_hint_fmt)   printf '%s decisions waiting · /sheet opens them, Esc closes' "${1:-}" ;;
     zh:panel_sheet_hint_open)  printf '打开' ;;
     en:panel_sheet_hint_open)  printf 'Open' ;;
-    zh:panel_cmd_desc)         printf '/sheet 开或收面板（编排会话：决定单；管家会话：巡检），/sheet b 批次总览，/sheet --summary 台账一行，/sheet --stats 刷新耗时与作答按键' ;;
-    en:panel_cmd_desc)         printf '/sheet opens or closes the panel (orchestrator: decisions; steward: patrol), /sheet b the batches, /sheet --summary one line of the books, /sheet --stats refresh timings and answer presses' ;;
+    zh:panel_cmd_desc)         printf '/sheet 开或收决定单，/sheet p 巡检，/sheet b 批次总览，/sheet --summary 台账一行，/sheet --stats 刷新耗时与作答按键（只在接手管家的会话里）' ;;
+    en:panel_cmd_desc)         printf '/sheet opens or closes the decision sheet, /sheet p the patrol, /sheet b the batches, /sheet --summary one line of the books, /sheet --stats refresh timings and answer presses (in the session holding the steward role only)' ;;
+    zh:panel_not_holder)       printf '这个会话没接手管家：决定单、巡检、批次面板只在接手的会话里（/fleet-steward 接手）' ;;
+    en:panel_not_holder)       printf 'This session does not hold the steward role: the decision sheet, patrol and batches panes live in the session that does (/fleet-steward takes it)' ;;
     zh:panel_patrol_closed)    printf '巡检面板已收起（/sheet 再打开）' ;;
     en:panel_patrol_closed)    printf 'The patrol panel is closed (/sheet opens it again)' ;;
     zh:panel_sheet_closed)     printf '决定单已收起（/sheet 再打开）' ;;

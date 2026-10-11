@@ -200,7 +200,7 @@ def never(row):
     return str(row.get("kind", "")).startswith("never:")
 
 
-# ---- on / off (共同约定 9) --------------------------------------------------------
+# ---- on / off: a holder (EPIC #3111 C4) ------------------------------------------
 
 def _conf_val(key):
     v = os.environ.get(key)
@@ -219,14 +219,33 @@ def _conf_val(key):
     return found
 
 
-def steward_on():
-    """FLEET_STEWARD, default FLEET_ORCHESTRATOR, default FLEET_HOST — the same
-    chain fleet-orchestrator.sh reads. Off ⇒ an ask with no new field is today's."""
-    for key in ("FLEET_STEWARD", "FLEET_ORCHESTRATOR", "FLEET_HOST"):
-        v = _conf_val(key)
-        if v not in (None, ""):
-            return v not in ("0", "off", "no", "false")
-    return False
+def steward_holder(sock=None):
+    """The window holding the steward role (take_role, issue #3114) — '' when nobody
+    holds it (EPIC #3111 C4, issue #3115). fleet_role_holder (bin/fleet-lib.sh) is
+    the one reader; `sock` names the fleet's server, none = the ambient one (a pane).
+    Seam: FLEET_STEWARD_HOLDER_CMD (argv + sock; prints the id or nothing)."""
+    cmd = os.environ.get("FLEET_STEWARD_HOLDER_CMD")
+    try:
+        if cmd is not None:
+            if not cmd.strip():
+                return ""
+            r = subprocess.run(cmd.split() + ([sock] if sock else []), stdout=subprocess.PIPE,
+                               stderr=subprocess.DEVNULL, universal_newlines=True, timeout=30)
+        else:
+            r = subprocess.run(["bash", "-c", '. "$0/fleet-lib.sh" >/dev/null 2>&1; fleet_role_holder steward "$1"',
+                                str(BIN), sock or ""], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                               universal_newlines=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    out = (r.stdout or "").split()
+    return out[0] if r.returncode == 0 and out else ""
+
+
+def steward_on(sock=None):
+    """Somebody holds the steward role (issue #3115): only then is anything answered
+    at a deadline, so only then does an ask with no new field carry the decision
+    format. Nobody ⇒ an ask with no field is today's — the question waits for you."""
+    return bool(steward_holder(sock))
 
 
 # ---- the ask comment -----------------------------------------------------------
@@ -375,7 +394,7 @@ def group(rows):
     """THE merge rule (issue #2832): the rows still open on ONE ticket (`src`) are
     one thing — the latest ask speaks for them (its item, suggestion, default,
     deadline); every other row stands alone. The sheet's text and the panel
-    (mod/fleet/hooks/sheet.tsx, which only draws what the steward keeps as
+    (the fleet-steward plugin's hooks/sheet.tsx, which only draws what the steward keeps as
     `groups`) both go through here, so they never count differently.
 
     → [{gid, ids, item, suggest, default, due, due_show, kind, never, src, url,

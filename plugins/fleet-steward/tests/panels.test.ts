@@ -1,5 +1,6 @@
-// The panels follow the books (issue #2835, EPIC #2831 C4). A mocked engine:
-// the version answers in range; `process.run` answers the window's @fleet_role;
+// The panels follow the books (issue #2835, EPIC #2831 C4; the fleet-steward
+// plugin's since #3115). A mocked engine: `process.run` answers the window read
+// (window-fixture.ts) and the strings; roles.held says who holds the steward role;
 // an in-memory file map with per-path mtime/size answers fs.stat / fs.list /
 // fs.read / fs.write, counting every stat and read; `command.register` records
 // what the plugin asked for.
@@ -7,14 +8,12 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import { INBOX_MS } from '../hooks/inbox'
-import { isRoleRun, resetRole } from '../hooks/orchestrator'
+import { holdsSteward, isStringsRun, isWindowRun, parseWindow, resetCommon } from '../hooks/common'
 import {
-  PANELS_FULL_MS, SHEET_COMMAND, panelPaths, panelsWanted, resetPanels, sessionOf, statsText, watched,
+  PANELS_FULL_MS, TICK_MS, resetWindow, SHEET_COMMAND, panelPaths, panelsWanted, resetPanels, sessionOf, statsText, watched,
 } from '../hooks/panels'
+import { HELD, VERSION, heldOf, windowOf } from './window-fixture'
 import { foldPanels, parseMark, parseMarks, parsePark, parseQueue, parseState, percentile } from '../hooks/panels-model'
-import { isStringsRun } from '../hooks/qd'
-import { SUPPORTED } from '../hooks/version'
 
 const DUMP = ['panel_summary_fmt', 'open=\u0001 live=\u0002 parked=\u0003 beat=\u0004', 'panel_empty', 'empty']
   .join('\0').replace(/\u0002|\u0003|\u0004/g, '\u0001') + '\0'
@@ -74,10 +73,11 @@ function engine(on: On, windowRole: string, env: Record<string, string> = ENV) {
   const registered: string[] = []
   let tick = 1
   const put = (path: string, text: string) => files.set(path, { text, mtimeMs: tick++ })
-  on('session.version', () => ({ value: { version: SUPPORTED.min, base: SUPPORTED.min } }))
+  if (heldOf(windowRole) !== '') put(HELD, heldOf(windowRole))
+  on('session.version', () => ({ value: VERSION }))
   on('session.model', () => ({ value: 'claude-opus-5-5' }))
   on('process.run', (_$, e) => {
-    const stdout = isRoleRun(e.argv) ? `${windowRole}\n` : isStringsRun(e.argv) ? DUMP : ''
+    const stdout = isWindowRun(e.argv) ? windowOf(windowRole) : isStringsRun(e.argv) ? DUMP : ''
     return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('fs.stat', (_$, e) => {
@@ -124,7 +124,8 @@ function seed(put: (p: string, t: string) => void): void {
 }
 
 function fresh(): void {
-  resetRole()
+  resetCommon()
+  resetWindow()
   resetPanels()
 }
 
@@ -140,9 +141,9 @@ test('panels: a worker window stats nothing and registers no /sheet (panel-wrong
   expect(registered).not.toContain(SHEET_COMMAND)
 })
 
-test('panels: FLEET_MOD_PANELS=0 — the orchestrator stats nothing, no /sheet, as today', async ($, on) => {
+test('panels: FLEET_MOD_PANELS=0 — the holder stats nothing, no /sheet, as today', async ($, on) => {
   fresh()
-  const { stats, reads, registered, put, clock } = engine(on, 'orchestrator', { ...ENV, FLEET_MOD_PANELS: '0' })
+  const { stats, reads, registered, put, clock } = engine(on, 'holder', { ...ENV, FLEET_MOD_PANELS: '0' })
   seed(put)
   await $.session.start(START)
   await clock.advance(PANELS_FULL_MS * 2)
@@ -151,55 +152,93 @@ test('panels: FLEET_MOD_PANELS=0 — the orchestrator stats nothing, no /sheet, 
   expect(registered).not.toContain(SHEET_COMMAND)
 })
 
-test('panelsWanted: orchestrator and steward only, a fleet session, not switched off', () => {
-  expect(panelsWanted('orchestrator', undefined, 'fleet')).toBe(true)
-  expect(panelsWanted('steward', '1', 'fleet')).toBe(true)
-  expect(panelsWanted('other', undefined, 'fleet')).toBe(false)
-  expect(panelsWanted('orchestrator', '0', 'fleet')).toBe(false)
-  expect(panelsWanted('orchestrator', undefined, undefined)).toBe(false)
+test('panelsWanted: a fleet window binding no issue, not switched off; holdsSteward reads roles.held', () => {
+  const free = parseWindow('@7|fid-7|')
+  expect(panelsWanted(free, undefined, 'fleet')).toBe(true)
+  expect(panelsWanted(free, '1', 'fleet')).toBe(true)
+  expect(panelsWanted(parseWindow('@7|fid-7|12'), undefined, 'fleet')).toBe(false)
+  expect(panelsWanted(free, '0', 'fleet')).toBe(false)
+  expect(panelsWanted(free, undefined, undefined)).toBe(false)
+  expect(holdsSteward(heldOf('holder'), free)).toBe(true)
+  expect(holdsSteward(heldOf('other'), free)).toBe(false)
+  expect(holdsSteward('', free)).toBe(false)
+  // the window id answers only when the line names no @fleet_id
+  expect(holdsSteward('steward\tfleet\t\t@7\t1\n', parseWindow('@7||'))).toBe(true)
+  expect(holdsSteward('steward\tfleet\tfid-8\t@7\t1\n', free)).toBe(false)
   expect(sessionOf(ENV.TMUX)).toBe('fleet')
   expect(sessionOf(undefined)).toBe(undefined)
   expect(watched(P).length).toBe(4)
+})
+
+test('panels: a window that does not hold the role stats roles.held only; /sheet says nobody here holds it', async ($, on) => {
+  fresh()
+  const { stats, reads, registered, put, clock } = engine(on, 'other')
+  seed(put)
+  await $.session.start(START)
+  await clock.advance(TICK_MS * 3)
+  expect(registered).toContain(SHEET_COMMAND)
+  expect(new Set(stats)).toEqual(new Set([HELD]))
+  expect(reads.filter(p => p !== HELD)).toEqual([])
+  expect(await summary($)).toBe('panel_not_holder')
+})
+
+test('panels: /fleet-steward taken mid-session starts them on the next tick; dropped, they stop and close their panes', async ($, on) => {
+  fresh()
+  const { put, clock, files } = engine(on, 'none')
+  const closed: string[] = []
+  on('ui.close', (_$, e) => {
+    closed.push(e.id)
+    return { value: undefined }
+  })
+  seed(put)
+  await $.session.start(START)
+  expect(await summary($)).toBe('panel_not_holder')
+  put(HELD, heldOf('holder'))
+  await clock.advance(TICK_MS)
+  expect(await summary($)).toBe('open=24 live=7 parked=2 beat=2026-10-09T19:13:06-07:00')
+  files.delete(HELD)
+  await clock.advance(TICK_MS)
+  expect(await summary($)).toBe('panel_not_holder')
+  expect(closed).toEqual(['fleet-sheet', 'fleet-patrol', 'fleet-batches'])
 })
 
 // ---- the stamp ---------------------------------------------------------------
 
 test('panels: an unchanged stamp reads nothing; a moved stamp reads once and updates the state', async ($, on) => {
   fresh()
-  // the orchestrator: in the steward's window bare /sheet opens the patrol (patrol.tsx)
-  const { stats, reads, registered, put, clock } = engine(on, 'orchestrator')
+  const { stats, reads, registered, put, clock } = engine(on, 'holder')
   seed(put)
   await $.session.start(START)
   expect(registered).toContain(SHEET_COMMAND)
   // 30 rows, every fifth answered; 7 fresh batches; 2 parked
   expect(await summary($)).toBe('open=24 live=7 parked=2 beat=2026-10-09T19:13:06-07:00')
-  // every tick stats the four paths, never more
+  // every tick stats roles.held and the four paths, never more
   const s0 = stats.length
   const r0 = reads.filter(p => p === P.state).length
-  await clock.advance(INBOX_MS * 3)
-  expect(stats.length - s0).toBe(12)
-  expect(new Set(stats.slice(s0))).toEqual(new Set(watched(P)))
+  await clock.advance(TICK_MS * 3)
+  expect(stats.length - s0).toBe(15)
+  expect(new Set(stats.slice(s0))).toEqual(new Set([HELD, ...watched(P)]))
   expect(reads.filter(p => p === P.state).length).toBe(r0)
   // the steward saves: state + stamp move; the next tick reads exactly once
   put(P.state, stateJson(3, '2001-09-09T01:46:39Z', 's2'))
   put(P.stamp, '2 2000\n')
-  await clock.advance(INBOX_MS)
+  await clock.advance(TICK_MS)
   expect(reads.filter(p => p === P.state).length).toBe(r0 + 1)
   expect(await summary($)).toContain('open=2 ')
-  await clock.advance(INBOX_MS * 2)
+  await clock.advance(TICK_MS * 2)
   expect(reads.filter(p => p === P.state).length).toBe(r0 + 1)
 })
 
 test('panels: a writer that forgets the stamp is drawn within the full read (panel-stale)', async ($, on) => {
   fresh()
-  const { put, clock, files } = engine(on, 'orchestrator')
+  const { put, clock, files } = engine(on, 'holder')
   seed(put)
   await $.session.start(START)
   // the state changes in place, the stamp and its mtime do not
   const stamp = files.get(P.stamp)
   files.set(P.state, { text: stateJson(4, '2001-09-09T01:46:35Z', 's3'), mtimeMs: 999 })
   expect(files.get(P.stamp)).toBe(stamp)
-  await clock.advance(INBOX_MS * 3)
+  await clock.advance(TICK_MS * 3)
   expect(await summary($)).toContain('open=24 ')
   await clock.advance(PANELS_FULL_MS)
   expect(await summary($)).toContain('open=3 ')
@@ -207,14 +246,14 @@ test('panels: a writer that forgets the stamp is drawn within the full read (pan
 
 test('panels: each read is timed into logs/panel.ndjson; a new sheet logs 写出→看见; /sheet --stats prints them', async ($, on) => {
   fresh()
-  const { put, clock, files } = engine(on, 'orchestrator')
+  const { put, clock, files } = engine(on, 'holder')
   seed(put)
   put(P.log, `${JSON.stringify({ kind: 'answer', ts: 1, row: 'r', how: 'suggest', presses: 1 })}\n`)
   await $.session.start(START)
   // the sheet is written 4 s before the clock; it is seen on the next tick
   put(P.state, stateJson(5, new Date(NOW - 4000).toISOString(), 's9'))
   put(P.stamp, '3 3000\n')
-  await clock.advance(INBOX_MS)
+  await clock.advance(TICK_MS)
   const log = files.get(P.log)?.text ?? ''
   const rows = log.trim().split('\n').map(l => JSON.parse(l) as { kind: string; s?: number; ms?: number })
   expect(rows[0]?.kind).toBe('answer') // another writer's row is kept

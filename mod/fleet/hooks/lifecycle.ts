@@ -38,13 +38,9 @@
 // Queue (issue #2617): in the orchestrator's window the same start stamps
 // `@orch_queue 0` (queue.ts counts from there), and a real exit unsets it.
 //
-// Decision sheet (issue #2832): sheet.tsx opens its pane and stamps @sheet_pane;
-// a real exit of the orchestrator unsets it here.
-//
-// Panels (issue #2835): in the orchestrator's and the steward's windows only,
-// the same start registers /sheet and starts the panels (panels.ts): the inbox
-// tick also stats the books' change marks and re-reads them when one moved, and
-// a PANELS_FULL_MS timer reads them whole. Any other window stats nothing.
+// Panels (issue #2835) — the decision sheet, the patrol, the batches — are the
+// fleet-steward plugin's mod module since issue #3115 (EPIC #3111 C4), drawn only
+// in the window that took the steward role; this mod starts none of them.
 //
 // Tools (issue #2057): a session the launcher gave no fleet tool service (no
 // FLEET_MCP_SERVER=1 — launched before #1828) gets the mod's three fallback tools
@@ -54,18 +50,12 @@
 import { atom, update } from 'claude-code'
 import type { EngineInterface, On, Timer, ToolSpec } from 'claude-code'
 
-import type { FleetModStatus, PanelsView } from '../types'
+import type { FleetModStatus } from '../types'
 import { isOpen, openGate } from './gate'
 import { INBOX_MS, inboxDir, pollInbox } from './inbox'
-import { bodyArgv, isOrchestrator, roleArgv, rolePath, takeRole, windowRole } from './orchestrator'
-import {
-  PANELS_FULL_MS, panelPaths, panelsOn, panelsTick, panelsWanted, sessionOf, sheetCommand, startPanels,
-  stopPanels,
-} from './panels'
-import type { PanelsIo } from './panels'
+import { bodyArgv, isOrchestrator, roleArgv, rolePath, takeRole } from './orchestrator'
 import { stringsArgv, takeStrings } from './qd'
 import { QUEUE_OPTION } from './queue'
-import { SHEET_OPTION } from './sheet'
 import type { InboxIo } from './inbox'
 import { TMUX_TIMEOUT_MS, windowOptionsArgv } from './tmux'
 import { SPEC_TIMEOUT_MS, binDir, fallbackSpecs, specArgv } from './tools'
@@ -79,15 +69,12 @@ export const HEARTBEAT_MS = 15_000
 const EXITS = new Set(['prompt_input_exit', 'logout', 'other'])
 
 const status = atom({ plugin: 'fleet', key: 'status' } as const, null as FleetModStatus | null)
-/** panels.ts's view (issue #2835): written here, where `$` is. */
-const panels = atom({ plugin: 'fleet', key: 'panels' } as const, null as PanelsView | null)
 
 // Module state: a reload is a fresh module, and session.start fires again.
 let timer: Timer | undefined
 let inboxTimer: Timer | undefined
 let modelTimer: Timer | undefined
 let whereTimer: Timer | undefined
-let panelsTimer: Timer | undefined
 let whereBusy = false
 let inboxBusy = false
 let pane: string | undefined
@@ -119,36 +106,6 @@ function inboxIo($: EngineInterface): InboxIo {
     run: async (command, args) => {
       await $.command.run({ command, args })
     },
-  }
-}
-
-// The panels' reads (panels.ts): four stats a tick, the books only when one moved.
-function panelsIo($: EngineInterface): PanelsIo {
-  return {
-    stat: async path => {
-      try {
-        const st = await $.fs.stat(path)
-        return `${st.mtimeMs}:${st.size}`
-      } catch {
-        return '-'
-      }
-    },
-    list: async dir => (await $.fs.list(dir)).filter(f => f.kind === 'file').map(f => f.name),
-    read: path => $.fs.read(path),
-    write: (path, text) => $.fs.write(path, text),
-    now: () => $.clock.now(),
-    publish: async view => {
-      await update($, panels, () => view)
-    },
-  }
-}
-
-async function tickPanels($: EngineInterface, full = false): Promise<void> {
-  if (!panelsOn()) return
-  try {
-    await panelsTick(panelsIo($), full)
-  } catch {
-    // The next tick reads again; a panel never holds up the session.
   }
 }
 
@@ -222,11 +179,11 @@ async function readRole($: EngineInterface): Promise<void> {
   takeRole(windowRole, text)
 }
 
-// The `qd_` / `panel_` strings (qd.ts), for the two windows that show them. /qd
+// The `qd_` / `orch_queue` strings (qd.ts), for the orchestrator's band. /qd
 // itself is the fleet-orchestrate plugin's (issue #3114). A read that fails
 // leaves every key showing itself, never costs the session.
 async function readStrings($: EngineInterface): Promise<void> {
-  if (!isOrchestrator() && !panelsOn()) return
+  if (!isOrchestrator()) return
   try {
     const r = await $.process.run(stringsArgv($.plugin.root), { timeoutMs: TMUX_TIMEOUT_MS })
     if (r.exitCode === 0) takeStrings(r.stdout)
@@ -297,12 +254,6 @@ async function onReady($: EngineInterface): Promise<void> {
   const home = (await $.env.get('HOME')) ?? ''
   const conf = (await $.env.get('FLEET_CONF_DIR')) || `${home}/.config/claude-fleet`
   const tmux = await $.env.get('TMUX')
-  // The panels: the orchestrator's and the steward's windows only (#2835).
-  const session = pane === undefined ? undefined : sessionOf(tmux)
-  stopPanels()
-  if (session !== undefined && panelsWanted(windowRole(), await $.env.get('FLEET_MOD_PANELS'), session)) {
-    startPanels(panelPaths(conf, session), session)
-  }
   await readStrings($)
   // What waits behind its turn starts at 0, so a counting orchestrator always says a number (#2617).
   if (isOrchestrator()) await setOptions($, { [QUEUE_OPTION]: '0' }).catch(() => undefined)
@@ -314,24 +265,9 @@ async function onReady($: EngineInterface): Promise<void> {
   })
   inbox = inboxDir(conf, tmux, pane)
   inboxTimer?.cancel()
-  inboxTimer = inbox === undefined && !panelsOn() ? undefined : $.clock.every(INBOX_MS, () => {
+  inboxTimer = inbox === undefined ? undefined : $.clock.every(INBOX_MS, () => {
     void pollOnce($)
-    void tickPanels($)
   })
-  panelsTimer?.cancel()
-  panelsTimer = undefined
-  if (panelsOn()) {
-    try {
-      await $.command.register(sheetCommand())
-    } catch {
-      // An engine without `immediate`: /sheet between turns; a refused name: none.
-      await $.command.register(sheetCommand(false)).catch(() => undefined)
-    }
-    await tickPanels($, true)
-    panelsTimer = $.clock.every(PANELS_FULL_MS, () => {
-      void tickPanels($, true)
-    })
-  }
 }
 
 export function registerLifecycle(on: On): void {
@@ -366,12 +302,9 @@ export function registerLifecycle(on: On): void {
       modelTimer = undefined
       whereTimer?.cancel()
       whereTimer = undefined
-      panelsTimer?.cancel()
-      panelsTimer = undefined
-      stopPanels()
       await setOptions($, {
         '@mod_alive': null,
-        ...(isOrchestrator() ? { [QUEUE_OPTION]: null, [SHEET_OPTION]: null } : {}),
+        ...(isOrchestrator() ? { [QUEUE_OPTION]: null } : {}),
       })
     }
     return next(e)

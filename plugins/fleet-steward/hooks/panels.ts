@@ -1,23 +1,28 @@
 // The panels follow the books (issue #2835, EPIC #2831 C4): the base the three
 // right-hand panels (the decision sheet, the batches, the steward's patrol) all
-// stand on.
+// stand on. The fleet-steward plugin's since issue #3115 (EPIC #3111 C4): no
+// plugin, no panels at all.
 //
-// Only in two windows: the orchestrator's and the steward's (windowRole(),
-// orchestrator.ts). Any other window — a worker, a scratch, a driver — never
-// starts them: no /sheet, no stat, byte for byte as before. FLEET_MOD_PANELS=0
-// keeps them off everywhere.
+// Only in ONE window: the one holding the steward role (take_role steward,
+// common.ts's isHolder). Every fleet window that binds no issue starts this
+// module's one-second tick, which stats global/roles.held (one stat, no
+// process) and reads it when it moved: the window that holds the role starts the
+// panels, a window that dropped it (or had it stolen) stops them and closes its
+// panes. A worker's window (it binds an issue) and a window outside tmux start
+// nothing. FLEET_MOD_PANELS=0 keeps them off everywhere.
 //
-// No polling of commands: lifecycle.ts's one-second inbox tick also calls
-// panelsTick, which stats FOUR paths through `$.fs` — global/steward.stamp (the
+// No polling of commands: the same one-second tick calls panelsTick, which
+// stats FOUR paths through `$.fs` — global/steward.stamp (the
 // steward writes `<seq> <epoch_ms>` after every State.save()), the
 // orchestrator's children ledger, global/epic-running.d/ and global/park.json —
 // and re-reads the books only when one of them moved (mtime/size). A full read
 // every PANELS_FULL_MS covers a writer that forgets the stamp (BREAK-IT
 // `panel-stale`). Nothing here runs a process.
 //
-// `$` is never handed across an import (gate.ts), so lifecycle.ts binds a
-// PanelsIo from its own `$` calls, and its `publish` stores the view in the
-// `fleet/panels` state — every reader redraws on its own.
+// `$` is never handed across an import (the engine follows it only within one
+// file), so this file's session.start binds a PanelsIo from its own `$` calls,
+// and its `publish` stores the view in the `fleet-steward/panels` state — every
+// reader redraws on its own.
 //
 // Each read is timed (performance.now()) into $FLEET_CONF_DIR/logs/panel.ndjson
 // (`refresh` rows, the last 200), and the first time a new sheet is drawn its
@@ -27,32 +32,37 @@
 // the next tick; `/sheet --stats` prints their median presses. Rows of another
 // kind in that file are kept as they are.
 
-import { atom, read } from 'claude-code'
-import type { CommandSpec, On } from 'claude-code'
+import { atom, read, update } from 'claude-code'
+import type { CommandSpec, EngineInterface, On, Timer } from 'claude-code'
 
-import { isOpen } from './gate'
-import { isOrchestrator } from './orchestrator'
-import type { WindowRole } from './orchestrator'
+import {
+  BATCHES_PANE, PATROL_PANE, SHEET_OPTION, SHEET_PANE, TMUX_TIMEOUT_MS, binDir, holdsSteward, isHolder, parseWindow,
+  setBin, setHeld, stringsArgv, t, takeStrings, windowArgv, windowOptionsArgv,
+} from './common'
+import type { Self } from './common'
 import { foldPanels, percentile } from './panels-model'
 import type { PanelsView } from '../types'
 import type { PanelsText } from './panels-model'
-import { t } from './qd'
 
 /** The full read that covers a missed stamp (ms). */
 export const PANELS_FULL_MS = 10_000
+/** The tick: roles.held, then the four books (ms). */
+export const TICK_MS = 1_000
 export const SHEET_COMMAND = 'sheet'
 /** `/sheet b` (batches, 批次): the batches pane's own (batches.tsx, issue #2833) — passed on here. */
 export const BATCHES_ARG = /^\s*(b|batches|批次)\s*$/
+/** `/sheet p` (patrol, 巡查): the patrol pane's own (patrol.tsx) — passed on here. */
+export const PATROL_ARG = /^\s*(p|patrol|巡查)\s*$/
 export const REFRESH_KEEP = 200
 export const SEEN_KEEP = 50
 export const ANSWER_KEEP = 100
 /** The file's own cap, every kind counted. */
 export const LOG_KEEP = 500
 
-/** The `fleet/panels` state; lifecycle.ts writes it through its own copy (the engine scans each file). */
-const panels = atom({ plugin: 'fleet', key: 'panels' } as const, null as PanelsView | null)
+/** The `fleet-steward/panels` state: written here, read by every pane. */
+const panels = atom({ plugin: 'fleet-steward', key: 'panels' } as const, null as PanelsView | null)
 
-/** The `$` calls one tick needs, bound by lifecycle.ts. */
+/** The `$` calls one tick needs, bound by this file's session.start. */
 export type PanelsIo = {
   /** `mtimeMs:size`, or '-' when missing. */
   stat: (path: string) => Promise<string>
@@ -67,6 +77,8 @@ export type PanelsIo = {
 }
 
 export type PanelPaths = {
+  /** Who holds which role (bin/fleet-role-take.sh). */
+  held: string
   stamp: string
   state: string
   delta: string
@@ -79,6 +91,7 @@ export type PanelPaths = {
 export function panelPaths(confDir: string, session: string): PanelPaths {
   const c = confDir.replace(/\/+$/, '')
   return {
+    held: `${c}/global/roles.held`,
     stamp: `${c}/global/steward.stamp`,
     state: `${c}/global/steward.state.json`,
     delta: `${c}/global/steward.delta.json`,
@@ -94,11 +107,11 @@ export function watched(p: PanelPaths): string[] {
   return [p.stamp, p.ledger, p.marks, p.park]
 }
 
-/** Do this window's panels run? Its role, the switch, and a fleet session to read. */
-export function panelsWanted(role: WindowRole, flag: string | undefined, session: string | undefined): boolean {
+/** May this window ever hold the panels? The switch, a fleet session to read, no bound issue. */
+export function panelsWanted(self: Self, flag: string | undefined, session: string | undefined): boolean {
   if (flag === '0') return false
   if (session === undefined || session === '') return false
-  return role === 'orchestrator' || role === 'steward'
+  return !/^\d+$/.test(self.issue)
 }
 
 /** `$TMUX`'s socket label — the fleet session's name (#159). */
@@ -127,7 +140,7 @@ let answerRows: string[] = []
 let lastFlush = 0
 let dirty = false
 
-/** lifecycle.ts: this window's panels run, reading these books (of this fleet session). */
+/** The holder tick: this window's panels run, reading these books (of this fleet session). */
 export function startPanels(p: PanelPaths, sess = ''): void {
   paths = p
   session = sess
@@ -318,7 +331,7 @@ export function statsText(log: string): string {
   return lines.join('\n')
 }
 
-/** `/sheet --summary` (bare `/sheet` in the steward's window): one line of what the books say. */
+/** `/sheet --summary`: one line of what the books say. */
 export function summaryText(v: PanelsView | null): string {
   if (v === null) return t('panel_empty')
   const open = v.sheet?.rows.filter(r => r.state === 'open').length ?? 0
@@ -326,9 +339,180 @@ export function summaryText(v: PanelsView | null): string {
   return t('panel_summary_fmt', String(open), String(live), String(v.patrol.parked.length), v.patrol.at || '-')
 }
 
+// ---- the window: who it is, whether it holds the role, the timers --------------
+
+let pane: string | undefined
+let self: Self = { wid: '', fid: '', issue: '' }
+let watch: PanelPaths | undefined
+let heldPrint = ''
+let tickTimer: Timer | undefined
+let fullTimer: Timer | undefined
+let ticking = false
+
+/** Tests: forget the window. */
+export function resetWindow(): void {
+  pane = undefined
+  self = { wid: '', fid: '', issue: '' }
+  watch = undefined
+  heldPrint = ''
+  tickTimer?.cancel()
+  fullTimer?.cancel()
+  tickTimer = undefined
+  fullTimer = undefined
+  ticking = false
+}
+
+function panelsIo($: EngineInterface): PanelsIo {
+  return {
+    stat: async path => {
+      try {
+        const st = await $.fs.stat(path)
+        return `${st.mtimeMs}:${st.size}`
+      } catch {
+        return '-'
+      }
+    },
+    list: async dir => (await $.fs.list(dir)).filter(f => f.kind === 'file').map(f => f.name),
+    read: path => $.fs.read(path),
+    write: (path, text) => $.fs.write(path, text),
+    now: () => $.clock.now(),
+    publish: async view => {
+      await update($, panels, () => view)
+    },
+  }
+}
+
+async function setSheetOption($: EngineInterface, value: string | null): Promise<void> {
+  if (pane === undefined) return
+  const argv = windowOptionsArgv(pane, { [SHEET_OPTION]: value })
+  if (argv !== null) await $.process.run(argv, { timeoutMs: TMUX_TIMEOUT_MS }).catch(() => undefined)
+}
+
+/** roles.held moved: read it; this window took the role ⇒ start, lost it ⇒ stop and close its panes. */
+export async function holderTick($: EngineInterface): Promise<boolean> {
+  const p = watch
+  if (p === undefined) return false
+  let print = '-'
+  try {
+    const st = await $.fs.stat(p.held)
+    print = `${st.mtimeMs}:${st.size}`
+  } catch {
+    print = '-'
+  }
+  if (print === heldPrint) return isHolder()
+  heldPrint = print
+  let text = ''
+  try {
+    text = print === '-' ? '' : await $.fs.read(p.held)
+  } catch {
+    text = ''
+  }
+  const on = holdsSteward(text, self)
+  if (on === isHolder()) return on
+  setHeld(on)
+  if (on) {
+    startPanels(p, session || sessionFromPaths(p))
+    await tickPanels($, true)
+  } else {
+    stopPanels()
+    await update($, panels, () => null)
+    for (const id of [SHEET_PANE, PATROL_PANE, BATCHES_PANE]) await $.ui.close({ id }).catch(() => undefined)
+    await setSheetOption($, null)
+  }
+  return on
+}
+
+function sessionFromPaths(p: PanelPaths): string {
+  return /\/fleets\/([^/]+)\/children\//.exec(p.ledger)?.[1] ?? ''
+}
+
+async function tickPanels($: EngineInterface, full = false): Promise<void> {
+  if (!panelsOn()) return
+  try {
+    await panelsTick(panelsIo($), full)
+  } catch {
+    // The next tick reads again; a panel never holds up the session.
+  }
+}
+
+async function tick($: EngineInterface): Promise<void> {
+  if (ticking) return
+  ticking = true
+  try {
+    if (await holderTick($)) await tickPanels($)
+  } catch {
+    // The next tick tries again.
+  } finally {
+    ticking = false
+  }
+}
+
 export function registerPanels(on: On): void {
+  // The one unmatched session.start of this plugin: one tmux read decides whether
+  // this window may ever hold the role (a fleet pane binding no issue), then the
+  // strings, /sheet, and the tick. Any failure costs the panels only.
+  on('session.start', async ($, e, next) => {
+    const result = await next(e)
+    try {
+      const id = await $.env.get('TMUX_PANE')
+      if (id === undefined || id === '') return result
+      const sess = sessionOf(await $.env.get('TMUX'))
+      const home = (await $.env.get('HOME')) ?? ''
+      const conf = (await $.env.get('FLEET_CONF_DIR')) || `${home}/.config/claude-fleet`
+      const dir = binDir(await $.env.get('FLEET_MCP_BIN'), home)
+      setBin(dir)
+      const r = await $.process.run(windowArgv(id), { timeoutMs: TMUX_TIMEOUT_MS })
+      const me = parseWindow(r.exitCode === 0 ? r.stdout : '')
+      if (r.exitCode !== 0 || !panelsWanted(me, await $.env.get('FLEET_MOD_PANELS'), sess)) return result
+      pane = id
+      self = me
+      watch = panelPaths(conf, sess as string)
+      session = sess as string
+      heldPrint = ''
+      try {
+        const s = await $.process.run(stringsArgv(dir), { timeoutMs: TMUX_TIMEOUT_MS })
+        if (s.exitCode === 0) takeStrings(s.stdout)
+      } catch {
+        // Every key shows itself.
+      }
+      try {
+        await $.command.register(sheetCommand())
+      } catch {
+        // An engine without `immediate`: /sheet between turns; a refused name: none.
+        await $.command.register(sheetCommand(false)).catch(() => undefined)
+      }
+      await tick($)
+      tickTimer?.cancel()
+      tickTimer = $.clock.every(TICK_MS, () => {
+        void tick($)
+      })
+      fullTimer?.cancel()
+      fullTimer = $.clock.every(PANELS_FULL_MS, () => {
+        if (isHolder()) void tickPanels($, true)
+      })
+    } catch {
+      // No panels in this window; the session goes on.
+    }
+    return result
+  }).catch(($, e, next) => next(e))
+
+  on('session.end', async ($, e, next) => {
+    if (e.reason !== 'reload') {
+      tickTimer?.cancel()
+      fullTimer?.cancel()
+      tickTimer = undefined
+      fullTimer = undefined
+      if (isHolder()) await setSheetOption($, null)
+      stopPanels()
+    }
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
   on('command.run', { command: SHEET_COMMAND }, async ($, e, next) => {
-    if (!isOpen() || paths === undefined || BATCHES_ARG.test(e.args)) return next(e)
+    if (watch === undefined) return next(e)
+    // Nobody here holds the steward role: say so — nothing opens, nothing answers.
+    if (!isHolder()) return { text: t('panel_not_holder') }
+    if (paths === undefined || BATCHES_ARG.test(e.args) || PATROL_ARG.test(e.args)) return next(e)
     if (/(^|\s)--stats(\s|$)/.test(e.args)) {
       let log = ''
       try {
@@ -338,9 +522,9 @@ export function registerPanels(on: On): void {
       }
       return { text: statsText(log) }
     }
-    // The orchestrator's bare /sheet opens / closes the decision sheet (sheet.tsx).
-    // `--summary` is the one line of the books, anywhere.
-    if (isOrchestrator() && !/(^|\s)--summary(\s|$)/.test(e.args)) return next(e)
+    // A bare /sheet opens / closes the decision sheet (sheet.tsx); `--summary` is
+    // the one line of the books.
+    if (!/(^|\s)--summary(\s|$)/.test(e.args)) return next(e)
     return { text: summaryText(await read($, panels)) }
   }).catch(($, e, next) => next(e))
 }

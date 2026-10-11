@@ -22,7 +22,7 @@ ok()  { printf 'PASS  %s\n' "$1"; }
 bad() { printf 'FAIL  %s\n' "$1"; fails=$((fails + 1)); }
 trap 'rm -rf "$WORK"' EXIT
 
-export FLEET_UI_LANG=zh FLEET_DECISION_TZ=UTC FLEET_SKIP_GLOBAL_CONF=1 FLEET_STEWARD=1 FLEET_STEWARD_FOLLOWUP_SYNC=1
+export FLEET_UI_LANG=zh FLEET_DECISION_TZ=UTC FLEET_SKIP_GLOBAL_CONF=1 FLEET_STEWARD_HOLDER_CMD="echo @9" FLEET_STEWARD_FOLLOWUP_SYNC=1
 mkdir -p "$WORK/bin"
 cat > "$WORK/bin/issue" <<'EOF'
 #!/usr/bin/env python3
@@ -77,10 +77,10 @@ T=$(printf '\t')
 fresh A
 printf '11%sbefore%s2026-10-08T01:00:00Z%sb.txt%s前\n11%safter%s2026-10-09T01:00:00Z%sa.txt%s卡片变绿\n12%snone%s%s%s\n' \
   "$T" "$T" "$T" "$T" "$T" "$T" "$T" "$T" "$T" "$T" "$T" "$T" > "$ST_GH/ev-100.tsv"
-TICK beat --force >/dev/null 2>&1
+TICK beat --holder --force >/dev/null 2>&1
 [ "$(sends orchestrator)" = 0 ] && ok "A: an open batch draws nothing" || bad "A: open batch sent $(sends orchestrator)"
 closed 100
-TICK beat --force >"$WORK/out" 2>&1
+TICK beat --holder --force >"$WORK/out" 2>&1
 sheet=$(ls "$FLEET_CONF_DIR"/fleets/st/steward/decision-*.md 2>/dev/null | head -1)
 [ "$(nsamp)" = 1 ] && [ "$(sends orchestrator)" = 1 ] && [ "$(sends steward)" = 0 ] \
   && grep -q '抽样 1 个批次' "$WORK/out" \
@@ -97,7 +97,7 @@ grep -q 'export --epic 100 --repo o/r --session st' "$ST_GH/evidence.log" && ok 
   || bad "A: evidence argv: $(cat "$ST_GH/evidence.log")"
 
 # B — no second draw, no second sheet; the day's sample rides a new row's sheet
-TICK beat --force >/dev/null 2>&1; TICK beat --force >/dev/null 2>&1
+TICK beat --holder --force >/dev/null 2>&1; TICK beat --holder --force >/dev/null 2>&1
 [ "$(nsamp)" = 1 ] && [ "$(sends orchestrator)" = 1 ] && [ "$(grep -c . "$ST_GH/evidence.log")" = 1 ] \
   && ok "B: two more beats — no second draw, no second sheet" \
   || bad "B: samples=$(nsamp) orch=$(sends orchestrator) exports=$(grep -c . "$ST_GH/evidence.log")"
@@ -115,7 +115,7 @@ TICK sheet >/dev/null 2>&1
 fresh C
 printf '21%sbefore%s2026-10-08T01:00:00Z%sb.txt%s前\n22%snone%s%s%s\n' "$T" "$T" "$T" "$T" "$T" "$T" "$T" "$T" > "$ST_GH/ev-200.tsv"
 closed 200
-TICK beat --force >/dev/null 2>&1
+TICK beat --holder --force >/dev/null 2>&1
 sheet=$(ls "$FLEET_CONF_DIR"/fleets/st/steward/decision-*.md 2>/dev/null | head -1)
 grep -q 'o/r#200：2 个成员里没有一个留了改动后证据' "$sheet" && ! grep -q 'b.txt' "$sheet" \
   && ok "C: no after → the sample says so; a before is never shown as one" || bad "C: sheet: $(cat "$sheet" 2>/dev/null)"
@@ -128,7 +128,7 @@ set -- $d1
 # E — an export that cannot run: retried, then given up
 fresh E
 touch "$ST_GH/ev-fail"; closed 300
-for _ in 1 2 3 4; do TICK beat --force >/dev/null 2>&1; done
+for _ in 1 2 3 4; do TICK beat --holder --force >/dev/null 2>&1; done
 st=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["samples"]["epics"]["o/r#300"]["state"])' "$STATE")
 [ "$(grep -c . "$ST_GH/evidence.log")" = 3 ] && [ "$st" = failed ] && [ "$(sends orchestrator)" = 0 ] \
   && ok "E: three tries, then given up; nothing sent" || bad "E: tries=$(grep -c . "$ST_GH/evidence.log") state=$st"

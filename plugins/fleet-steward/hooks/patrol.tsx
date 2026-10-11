@@ -3,45 +3,36 @@
 // and what went by default, the health findings it follows, when the next beat
 // is — read off the books in five seconds, without typing a word.
 //
-// The steward's window only (windowRole() === 'steward', and the panels on —
-// panels.ts): every other window draws nothing and opens nothing. The view is
-// panels.ts's `fleet/panels` state, read on the books' change stamp; drawing it
-// runs no process. Two buttons run one each, only when pressed: 「到编排会话」
-// (bin/fleet-panel-jump.sh orchestrator — the one resolver, never a guess) and
-// 「看决定单」 (the steward page, opened on the person's computer by
-// bin/fleet-open.sh; no page yet ⇒ the orchestrator's window, where the sheet is).
+// The steward holder's window only (common.ts isHolder, and the panels on —
+// panels.ts; the fleet-steward plugin's since #3115): every other window draws
+// nothing and opens nothing. The view is panels.ts's `fleet-steward/panels`
+// state, read on the books' change stamp; drawing it runs no process. Two
+// buttons, only when pressed: 「到编排会话」 (bin/fleet-panel-jump.sh orchestrator
+// — the one resolver, never a guess) and 「看决定单」 (`/sheet`: the decision
+// sheet is in this same window now).
 //
-// Opened unasked once, from the first band drawn on a fullscreen terminal (the
-// engine seats it from 144 columns); `/sheet` in this window opens it asked.
+// Never opened unasked (the decision sheet is what opens by itself in this
+// window, sheet.tsx): `/sheet p` opens it.
 
 import { atom, read } from 'claude-code'
 import type { EngineInterface, On } from 'claude-code'
 
-import { isOpen } from './gate'
-import { windowRole } from './orchestrator'
-import { panelsOn } from './panels'
+import { PATROL_PANE, TMUX_TIMEOUT_MS, fleetBin, isHolder, t } from './common'
+import { PATROL_ARG, SHEET_COMMAND, panelsOn } from './panels'
 import type { Patrol, PanelsView } from './panels-model'
-import { t } from './qd'
-import { binDir } from './tools'
-import { TMUX_TIMEOUT_MS } from './tmux'
 
-export const PATROL_PANE = 'fleet-patrol'
+export { PATROL_PANE }
 /** The steward's write budget a beat when FLEET_STEWARD_WRITES says nothing (bin/fleet_steward.py). */
 export const WRITES_DEFAULT = 20
 
-const panels = atom({ plugin: 'fleet', key: 'panels' } as const, null as PanelsView | null)
+const panels = atom({ plugin: 'fleet-steward', key: 'panels' } as const, null as PanelsView | null)
 
-// Module state: a reload is a fresh module, and opens the pane once again.
-let autoOpened = false
+/** Tests: nothing is kept between tests now (no unasked open). */
+export function resetPatrol(): void {}
 
-/** Tests: forget the unasked open. */
-export function resetPatrol(): void {
-  autoOpened = false
-}
-
-/** This window shows the patrol: the steward's, with the panels on. */
+/** This window shows the patrol: the steward holder's, with the panels on. */
 export function patrolHere(): boolean {
-  return isOpen() && panelsOn() && windowRole() === 'steward'
+  return panelsOn() && isHolder()
 }
 
 /** The UTC offset an ISO time carries, in minutes (null: none). */
@@ -122,45 +113,29 @@ async function run($: EngineInterface, argv: string[]): Promise<number> {
 
 /** 「到编排会话」: rc 1 / 2 is said, never guessed past. */
 async function jump($: EngineInterface): Promise<void> {
-  const rc = await run($, ['bash', `${binDir($.plugin.root)}/fleet-panel-jump.sh`, 'orchestrator'])
+  const rc = await run($, ['bash', `${fleetBin()}/fleet-panel-jump.sh`, 'orchestrator'])
   if (rc === 1) $.ui.toast(t('panel_patrol_jump_none'))
   else if (rc !== 0) $.ui.toast(t('panel_patrol_jump_ambiguous'))
 }
 
-/** 「看决定单」: the steward page on the person's computer; none yet ⇒ the orchestrator, where the sheet is. */
-async function sheet($: EngineInterface, page: string): Promise<void> {
-  if (page === '') return jump($)
-  if ((await run($, ['bash', `${binDir($.plugin.root)}/fleet-open.sh`, page])) !== 0) $.ui.toast(page)
-}
-
-async function openPatrol($: EngineInterface) {
-  return $.ui.open({ id: PATROL_PANE, title: t('panel_patrol_pane') })
+/** 「看决定单」: the decision sheet — in this same window (`/sheet`). */
+async function sheet($: EngineInterface): Promise<void> {
+  await $.command.run({ command: SHEET_COMMAND, args: '' }).catch(() => undefined)
 }
 
 export function registerPatrol(on: On): void {
-  // /sheet in the steward's window opens the patrol (asked: placed from 110
+  // `/sheet p` in the holder's window opens the patrol (asked: placed from 110
   // columns, focused, Esc closes it) — or closes it when it is placed (issue
-  // #2836: an open but unplaced pane is opened, never closed); `--stats` /
-  // `--summary`, and every other window, go on to panels.ts.
-  on('command.run', { command: 'sheet' }, async ($, e, next) => {
-    if (!patrolHere() || /(^|\s)--(stats|summary)(\s|$)/.test(e.args)) return next(e)
-    autoOpened = true
+  // #2836: an open but unplaced pane is opened, never closed); anything else
+  // goes on (bare /sheet is the decision sheet's, sheet.tsx).
+  on('command.run', { command: SHEET_COMMAND }, async ($, e, next) => {
+    if (!patrolHere() || !PATROL_ARG.test(e.args)) return next(e)
     if ((await $.ui.panes()).some(p => p.id === PATROL_PANE && p.isPlaced)) {
       await $.ui.close({ id: PATROL_PANE })
       return { text: t('panel_patrol_closed') }
     }
     const opened = await $.ui.open({ id: PATROL_PANE, title: t('panel_patrol_pane'), focus: true, closeOnEscape: true })
     return { text: opened.isPlaced ? t('panel_patrol_opened') : t('panel_patrol_waits') }
-  }).catch(($, e, next) => next(e))
-
-  // Unasked, once: the first band drawn on a fullscreen terminal opens it (the
-  // main screen would seat it inline above the prompt — no).
-  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    if (!autoOpened && patrolHere() && e.viewport?.isFullscreen === true) {
-      autoOpened = true
-      void openPatrol($).catch(() => undefined)
-    }
-    return next(e)
   }).catch(($, e, next) => next(e))
 
   on('ui.render', { component: 'Pane', requestId: PATROL_PANE }, async ($, e, next) => {
@@ -189,7 +164,7 @@ export function registerPatrol(on: On): void {
         ))}
         <Box key="patrol-buttons" flexDirection="row" marginTop={1}>
           <Button key="patrol-orch" label={t('panel_patrol_to_orch')} hotkey="o" onPress={() => void jump($)} />
-          <Button key="patrol-sheet" label={t('panel_patrol_to_sheet')} hotkey="s" onPress={() => void sheet($, view.patrol.page)} />
+          <Button key="patrol-sheet" label={t('panel_patrol_to_sheet')} hotkey="s" onPress={() => void sheet($)} />
         </Box>
         <Text key="patrol-foot" dimColor wrap="truncate-end">
           {m.foot}

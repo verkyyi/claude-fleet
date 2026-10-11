@@ -1,23 +1,58 @@
 ---
 name: fleet-steward
-description: The fleet's steward session — patrols every batch and worker so the orchestrator only talks with the person. Answers a worker's question when the batch charter already says the answer, folds the rest into one decision sheet for the orchestrator, lands a batch member whose driver is gone. Use when this session was started by bin/fleet-steward.sh (its window's @fleet_role is `steward`), or on a `[steward]` message.
+description: Take the fleet's steward role in THIS session (a scratch or any session that binds no issue) and run its patrol loop — answer what a batch charter already says, answer due questions by their suggestion, spawn a red base's fixer, land a driverless batch, park stuck sessions, file health issues, and keep the decision sheet in this window's right-hand pane. Nobody holding the role ⇒ none of it runs. Use when the person types /fleet-steward, on each round of the loop it started, or on a `[sidebar]` / `[steward]` line.
 ---
 
-# fleet-steward — patrol, answer what is written, hand the rest on
+# fleet-steward — take the role, then patrol in your own loop
 
 <!-- fleet skill -->
 <!-- owner: steward — the plain marker above is what the install takes (issue #2110) -->
 
-You are the fleet's steward (issue #2670, EPIC #2668 C2). Your role is in the system prompt
-(`plugins/fleet-steward/skills/fleet-steward/role.md`); this page is the detail behind it.
+The steward is a **role a session takes** (issue #3115, EPIC #3111 C4), not a window the
+fleet keeps open: nothing patrols, answers, spawns or merges for the person until a session
+runs this skill, and nothing does once that session drops the role, is stolen from, or
+closes. Its patrol is THIS session's own loop — there is no daemon behind it.
 
-## First turn (`/fleet-steward`)
+## 0. Take the role — FIRST, every time this skill runs
 
-Say one line — 「管家就位，等下一拍」 — and stop. Do not loop, do not ScheduleWakeup: the
-diskguard tick runs `fleet-steward-tick.sh beat` every minute, which returns at once until a
-beat is due (20 min; 10 min after a beat that changed something; 60 min from 23:00 to 08:00 on
-the person's clock), reads the fleet with NO model, and only when something needs you sends a
-`[steward] …` turn here. A calm beat costs nothing — that is the whole point.
+1. **`mcp__fleet-orch__take_role`** (`role: steward`). It marks this window
+   (`@fleet_role_def steward`) and records it as the one holder
+   (`$FLEET_CONF_DIR/global/roles.held`).
+   - exit 0 — taken (or already yours): go on.
+   - exit 4 — another session holds it; the output names it. Tell the person and **stop**
+     (stop the loop too, if this is a round of one) — never take it over unasked. Only when
+     the person says so: `action: steal`.
+   - exit 3 — this window binds an issue: a worker never patrols. Say so and stop.
+   No `mcp__fleet-orch__*` tool at all? The fleet-orchestrate plugin (which this one needs)
+   is not mounted — say so (`/plugin install fleet-orchestrate@claude-fleet`, then reopen).
+2. **Read your role and your rules** — this skill's directory: `role.md` (who you are; it
+   ends with your rows of the rule table) and `rules.md`. Read them once per conversation
+   (again after a compaction).
+
+## 1. One round of the loop
+
+```
+~/.claude/fleet/bin/fleet-steward-tick.sh beat --holder
+```
+
+| rc | what it means | what you do |
+|---|---|---|
+| 4 | not due yet (「还没到下一拍 HH:MM」) — nothing ran | schedule the next round for that time |
+| 1 | a calm beat: the card, nothing for you | schedule the next round |
+| 0 | the beat changed something; the card may end in a `[steward] …` line | handle that line (role.md 「卡片末尾有 `[steward]` 一行」), then schedule |
+| 3 | this window does not hold the role (dropped, stolen) | **stop the loop**, one line why |
+
+The beat is due every `FLEET_STEWARD_EVERY` (20 min), 10 min after one that changed
+something, 60 min from 23:00 to 08:00 on the person's clock; the card's last line says when.
+
+## 2. The loop
+
+Drive it with `/loop` self-paced (`ScheduleWakeup`, the prompt `/fleet-steward` each round —
+step 0 answers 「already yours」 at once). The next delay is the card's 「下一拍」, never
+shorter than a minute; a calm night is one round an hour. The first `/fleet-steward` starts
+it: run the round above, then schedule. To put the role down: `take_role` with
+`action: drop`, then end the loop (`ScheduleWakeup` `stop: true`) — the panes close by
+themselves on the next second, and nothing runs after that.
 
 ## The commands (all print in the person's language)
 
@@ -26,21 +61,27 @@ the person's clock), reads the fleet with NO model, and only when something need
 | `fleet-steward-tick.sh card` | the last beat's report card |
 | `fleet-steward-tick.sh delta` | read the fleet now (no writes) — JSON |
 | `fleet-steward-tick.sh answer --row <id> --text T --source URL` | answer one row on its worker's issue (`--to-worker`, marker `fleet:answer row=<id> by=steward`) |
-| `fleet-steward-tick.sh sheet` | every open row → C1's table → `decision-YYYY-MM-DD.md` (+ C8's desk ticket when `FLEET_STEWARD_DESK` is set) → ONE `[decision]` to the orchestrator — the page's plain lines (one a thing, `〔row ids〕` at the end) and its link, never the table; same rows as last time ⇒ not sent again; a finished batch's sample (issue #2678, `bin/fleet_sample.py`) rides it read-only — the beat posts that sheet itself |
-| `fleet-steward-tick.sh say --row <id> --text T` | the row's plain sentence (issue #2735) — what the page and the `[decision]` lines say instead of the worker's words; no numbers, file names or technical words |
-| `fleet-steward-tick.sh page [--print \| --demo]` | the steward page (issue #2735, `bin/fleet_steward_page.py`): the epic-page frame — 今天问了 · 你答了 · 按默认走 · 停放 · 待你动手, then 要你定的事 grouped by what the person does (要扫码 · 要选 · 要授权 · 要钱, the same question merged), 待你动手, 今天已按默认走 with how to overturn each. Every beat re-renders it; one fixed doc-preview link (`state.page.url`), stamped `@orch_page` → 「新任务」's menu 「管家页」 |
-| `fleet-steward-tick.sh todo-done --id <id>` | tick one 待你动手 item as the person's (issue #2913) — the next beat writes it back on its batches and redraws the desk ticket ticked |
-| `fleet-steward-stats.sh attention · asks` | the batch's metrics |
-| `fleet-steward-conflicts.sh --json` | overlaps · CI queue · quota (C5) — tell, never stop |
+| `fleet-steward-tick.sh sheet` | every open row → C1's table → `decision-YYYY-MM-DD.md` (+ C8's desk ticket when `FLEET_STEWARD_DESK` is set) → ONE `[decision]` to the orchestrator; with this window's sheet pane up (`@sheet_pane 1`) only one sentence; same rows as last time ⇒ not sent again. With nobody holding the role it writes nothing and sends nothing |
+| `fleet-steward-tick.sh say --row <id> --text T` | the row's plain sentence (issue #2735) — what the sheet says instead of the worker's words; no numbers, file names or technical words |
+| `fleet-steward-tick.sh todo-done --id <id>` | tick one 待你动手 item as the person's (issue #2913) |
+| `fleet-steward-tick.sh breakage` | spawn the fixer of a red base a worker filed (you are its parent); the beat does this too |
 
 `answer` refuses a `never:*` row for you. Past the beat's write budget (`FLEET_STEWARD_WRITES`,
 20) an answer is kept and posted first thing next beat — the card says 「延后 N 条」.
 
+## The panes (this window only)
+
+The fleet-steward plugin's mod module draws three panes in the window that holds the role and
+nowhere else (no plugin, no panes): the **decision sheet** (opens by itself on a fullscreen
+terminal from 144 columns; `/sheet` opens or closes it — one press answers a line, `u` takes
+it back within 10 s), the **patrol** (`/sheet p`) and the **batches** (`/sheet b`).
+Narrower, the band above the prompt says 「决定单 N 件待定」 with 打开 (`s`).
+Codex has no mod: its steward reads the text `[decision]`.
+
 ## 侧栏 — the person's taps on 停放 / 待你动手
 
-The client's sidebar opens 停放 / 待你动手 into their items (issue #2913); a pick there
-reaches you as ONE turn, `[sidebar] <what> — please run: <command>`. The command is always
-`~/.claude/fleet/bin/fleet-park.sh wake '<owner/name#N>'` or
+A pick on the client's sidebar reaches you as ONE turn, `[sidebar] <what> — please run:
+<command>`. The command is always `~/.claude/fleet/bin/fleet-park.sh wake '<owner/name#N>'` or
 `~/.claude/fleet/bin/fleet-steward-tick.sh todo-done --id <id>`: the person chose it, so run it
 as given (nothing else), say its last line in one sentence, and stop. Anything else after
 `[sidebar]` is not from the list — treat it as an ordinary message.
@@ -52,14 +93,8 @@ Only when the answer is WRITTEN where the batch put it: the EPIC parent's 「共
 Anything you would have to infer — scope, priority, taste, a trade-off nobody wrote down — goes
 on the sheet. A wrong self-answer costs more than one more row.
 
-## The orchestrator's half
+## The person's answers
 
-It receives `[decision]`, says its lines to the person in those plain words with the page's
-link (never the table), and writes each decided thing back — every id in its `〔row …〕` — with
-`fleet-steward-tick.sh answer --row <id> --text <决定> --by person`. The 「新任务」 row in the
-sidebar is red while the sheet has an open row (`@orch_decide` → `orch_<sess>` `decide=N`).
-
-## Switch
-
-`FLEET_STEWARD`: `0` off (byte for byte as before) · `count` (default where an orchestrator
-runs: only the attention count, no window — the batch's three-day baseline) · `1` the window too.
+From the pane: one press per line (`answer --by person` per row id, run by the pane). From
+the orchestrator's `[decision]`: it writes each decided thing back with
+`fleet-steward-tick.sh answer --row <id> --text <决定> --by person`.

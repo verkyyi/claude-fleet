@@ -7,12 +7,11 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import { isRoleRun, resetRole } from '../hooks/orchestrator'
-import { panelPaths, resetPanels } from '../hooks/panels'
+import { isStringsRun, isWindowRun, resetCommon, takeStrings } from '../hooks/common'
+import { panelPaths, resetPanels, resetWindow } from '../hooks/panels'
 import { parseState, rowBy, firstSentence } from '../hooks/panels-model'
 import { PATROL_PANE, clockOf, offsetOf, patrolModel, resetPatrol } from '../hooks/patrol'
-import { isStringsRun, takeStrings } from '../hooks/qd'
-import { SUPPORTED } from '../hooks/version'
+import { HELD, VERSION, heldOf, windowOf } from './window-fixture'
 
 const S = '\u0001'
 const ZH: Record<string, string> = {
@@ -87,6 +86,12 @@ const PANE = (surface: string) => ({
 }) as never
 
 function engine(on: On, windowRole: string, env: Record<string, string> = ENV) {
+  const commands: { command: string; args: string }[] = []
+  on('command.run', (_$, e) => {
+    if (e.command !== 'sheet' || e.args !== '') return { text: 'engine' }
+    commands.push({ command: e.command, args: e.args })
+    return { text: 'sheet' }
+  })
   const files = new Map<string, { text: string; mtimeMs: number }>()
   const opened: string[] = []
   const runs: string[][] = []
@@ -94,11 +99,12 @@ function engine(on: On, windowRole: string, env: Record<string, string> = ENV) {
   const stats: string[] = []
   let tick = 1
   const put = (path: string, text: string) => files.set(path, { text, mtimeMs: tick++ })
-  on('session.version', () => ({ value: { version: SUPPORTED.min, base: SUPPORTED.min } }))
+  if (heldOf(windowRole) !== '') put(HELD, heldOf(windowRole))
+  on('session.version', () => ({ value: VERSION }))
   on('session.model', () => ({ value: 'claude-opus-5-5' }))
   on('process.run', (_$, e) => {
     if (/\/fleet-(panel-jump|open)\.sh$/.test(e.argv[1] ?? '')) runs.push([...e.argv])
-    const stdout = isRoleRun(e.argv) ? `${windowRole}\n` : isStringsRun(e.argv) ? DUMP : ''
+    const stdout = isWindowRun(e.argv) ? windowOf(windowRole) : isStringsRun(e.argv) ? DUMP : ''
     const exitCode = (e.argv[1] ?? '').endsWith('/fleet-panel-jump.sh') ? 1 : 0
     return { value: { exitCode, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
@@ -121,7 +127,6 @@ function engine(on: On, windowRole: string, env: Record<string, string> = ENV) {
     return { value: undefined }
   })
   on('command.register', (_$, e) => ({ value: { command: e.name } }))
-  on('command.run', () => ({ text: 'engine' }))
   const up = new Set<string>()
   on('ui.open', (_$, e) => {
     opened.push(e.id)
@@ -152,17 +157,18 @@ function engine(on: On, windowRole: string, env: Record<string, string> = ENV) {
   put(P.stamp, '1 1000\n')
   put(P.state, STATE)
   put(P.delta, DELTA)
-  return { opened, runs, toasts, stats }
+  return { opened, runs, toasts, stats, commands }
 }
 
 function fresh(): void {
-  resetRole()
+  resetCommon()
+  resetWindow()
   resetPanels()
   resetPatrol()
 }
 
 async function texts($: Engine, surface: 'terminal' | 'desktop'): Promise<string[]> {
-  const ui = await $.ui.mount({ plugin: 'fleet', surface, component: 'Pane', requestId: PATROL_PANE, props: PANE(surface) })
+  const ui = await $.ui.mount({ plugin: 'fleet-steward', surface, component: 'Pane', requestId: PATROL_PANE, props: PANE(surface) })
   const out = (await ui.findAll({ type: 'Text' })).map(el => el.text ?? '')
   await ui.unmount()
   return out
@@ -204,7 +210,7 @@ test('patrol: the state file folds to beat 3 · 14:47 · calm, next 15:07, parke
 
 test('patrol: the steward draws it — terminal and desktop alike', async ($, on) => {
   fresh()
-  engine(on, 'steward')
+  engine(on, 'holder')
   await $.session.start(START)
   for (const surface of ['terminal', 'desktop'] as const) {
     expect(await texts($, surface)).toEqual([
@@ -227,8 +233,9 @@ test('patrol: the steward draws it — terminal and desktop alike', async ($, on
 
 test('patrol: a parked session says what it waits for and since when', async ($, on) => {
   fresh()
-  engine(on, 'steward')
+  engine(on, 'holder')
   await $.session.start(START)
+  takeStrings(DUMP)
   const parked = JSON.parse(STATE) as Record<string, unknown>
   const st = parseState(JSON.stringify({ ...parked, parked: [{ at: NEXT - 3600, ref: 'o/b#11899', wait: ['reply:o/b#11899'] }] })).patrol
   const m = patrolModel(st, 20)
@@ -236,11 +243,11 @@ test('patrol: a parked session says what it waits for and since when', async ($,
   expect(m.sections[1]?.lines).toEqual(['o/b#11899 · 等 reply:o/b#11899 · 从 14:07 起'])
 })
 
-test('patrol: the buttons run a process only when pressed; a missing orchestrator is said', async ($, on) => {
+test('patrol: 到编排会话 runs a process only when pressed (a missing orchestrator is said); 看决定单 runs /sheet', async ($, on) => {
   fresh()
-  const { runs, toasts } = engine(on, 'steward')
+  const { runs, toasts, commands } = engine(on, 'holder')
   await $.session.start(START)
-  const ui = await $.ui.mount({ plugin: 'fleet', surface: 'terminal', component: 'Pane', requestId: PATROL_PANE, props: PANE('terminal') })
+  const ui = await $.ui.mount({ plugin: 'fleet-steward', surface: 'terminal', component: 'Pane', requestId: PATROL_PANE, props: PANE('terminal') })
   expect(runs).toEqual([])
   await ui.press({ key: 'patrol-orch' })
   expect(runs.length).toBe(1)
@@ -248,50 +255,49 @@ test('patrol: the buttons run a process only when pressed; a missing orchestrato
   expect(runs[0]?.[2]).toBe('orchestrator')
   expect(toasts).toContain('找不到编排会话')
   await ui.press({ key: 'patrol-sheet' })
-  expect(runs[1]?.[1]).toMatch(/\/fleet-open\.sh$/)
-  expect(runs[1]?.[2]).toBe('http://page.example/d/1/')
+  expect(runs.length).toBe(1)
+  expect(commands).toEqual([{ command: 'sheet', args: '' }])
   await ui.unmount()
 })
 
-test('patrol: /sheet in the steward opens it; a fullscreen band opens it once unasked', async ($, on) => {
+test('patrol: never opened unasked (the sheet is); /sheet p in the holder opens it, again closes it', async ($, on) => {
   fresh()
-  const { opened } = engine(on, 'steward')
+  const { opened } = engine(on, 'holder')
   await $.session.start(START)
   const band = { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 200, scroll: { offset: 0, bodyRows: 10 }, view: {} }
   const mainScreen = await $.ui.mount({
-    plugin: 'fleet', surface: 'terminal', component: 'AbovePrompt', props: band as never,
+    plugin: 'fleet-steward', surface: 'terminal', component: 'AbovePrompt', props: band as never,
     viewport: { columns: 200, rows: 50, isFullscreen: false },
   } as never)
   await mainScreen.unmount()
   expect(opened).toEqual([])
   for (let i = 0; i < 2; i++) {
     const ui = await $.ui.mount({
-      plugin: 'fleet', surface: 'terminal', component: 'AbovePrompt', props: band as never,
+      plugin: 'fleet-steward', surface: 'terminal', component: 'AbovePrompt', props: band as never,
       viewport: { columns: 200, rows: 50, isFullscreen: true },
     } as never)
     await ui.unmount()
   }
-  expect(opened).toEqual([PATROL_PANE])
-  const run = () => $.command.run({ command: 'sheet', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 200 } } as never)
-  // placed: /sheet closes it (issue #2836); again: opens it
-  expect((await run()).text).toBe('panel_patrol_closed')
-  expect(opened).toEqual([PATROL_PANE])
+  expect(opened.filter(id => id === PATROL_PANE)).toEqual([])
+  const run = () => $.command.run({ command: 'sheet', args: 'p', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 200 } } as never)
+  // not placed: /sheet p opens it; placed: closes it (issue #2836)
   expect((await run()).text).toBe('巡检面板在右边')
-  expect(opened).toEqual([PATROL_PANE, PATROL_PANE])
+  expect(opened.filter(id => id === PATROL_PANE)).toEqual([PATROL_PANE])
+  expect((await run()).text).toBe('panel_patrol_closed')
+  expect(opened.filter(id => id === PATROL_PANE)).toEqual([PATROL_PANE])
 })
 
-for (const role of ['orchestrator', 'worker']) {
+for (const role of ['other', 'worker', 'none']) {
   test(`patrol: the ${role} opens no patrol and draws none`, async ($, on) => {
     fresh()
     const { opened } = engine(on, role)
     await $.session.start(START)
     const ui = await $.ui.mount({
-      plugin: 'fleet', surface: 'terminal', component: 'AbovePrompt',
+      plugin: 'fleet-steward', surface: 'terminal', component: 'AbovePrompt',
       props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 200, scroll: { offset: 0, bodyRows: 10 }, view: {} } as never,
       viewport: { columns: 200, rows: 50, isFullscreen: true },
     } as never)
     await ui.unmount()
-    // the orchestrator opens its own batches pane (issue #2833), never the patrol
     expect(opened).not.toContain(PATROL_PANE)
     expect(await texts($, 'terminal')).toEqual([])
   })
@@ -299,10 +305,10 @@ for (const role of ['orchestrator', 'worker']) {
 
 test('patrol: FLEET_MOD_PANELS=0 — the steward opens nothing, stats nothing', async ($, on) => {
   fresh()
-  const { opened, stats } = engine(on, 'steward', { ...ENV, FLEET_MOD_PANELS: '0' })
+  const { opened, stats } = engine(on, 'holder', { ...ENV, FLEET_MOD_PANELS: '0' })
   await $.session.start(START)
   const ui = await $.ui.mount({
-    plugin: 'fleet', surface: 'terminal', component: 'AbovePrompt',
+    plugin: 'fleet-steward', surface: 'terminal', component: 'AbovePrompt',
     props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 200, scroll: { offset: 0, bodyRows: 10 }, view: {} } as never,
     viewport: { columns: 200, rows: 50, isFullscreen: true },
   } as never)

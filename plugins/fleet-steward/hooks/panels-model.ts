@@ -11,7 +11,7 @@
 // A source that is missing or torn just leaves its part empty.
 
 import { foldBoard } from './batches-model'
-import { parseLedger } from './progress-model'
+import { parseLedger } from './common'
 
 export type { Batch, PanelsView, Parked, Patrol, QueueRow, Sheet, SheetGroup, SheetRow, Todo } from '../types'
 import type { Batch, PanelsView, Parked, Patrol, QueueRow, Sheet, SheetGroup, SheetRow, Todo } from '../types'

@@ -131,7 +131,7 @@ chmod +x "$WORK/bin/"*
 export ST_GH="$WORK/gh" ST_WINS="$WORK/wins.txt" \
   FLEET_DECISION_COMMENTS_CMD="$WORK/bin/gh-comments" FLEET_DECISION_POST_CMD="$WORK/bin/gh-post" \
   FLEET_STEWARD_WINDOWS_CMD="$WORK/bin/wins" FLEET_STEWARD_CHILDREN_CMD="$WORK/bin/children" \
-  FLEET_STEWARD_SEND_CMD="$WORK/bin/send" FLEET_STEWARD_STAMP_CMD="$WORK/bin/stamp" FLEET_STEWARD=1 \
+  FLEET_STEWARD_SEND_CMD="$WORK/bin/send" FLEET_STEWARD_STAMP_CMD="$WORK/bin/stamp" FLEET_STEWARD_HOLDER_CMD="echo @9" \
   FLEET_STEWARD_PAGE_SHARE=0 FLEET_STEWARD_DOCTOR_CMD="$WORK/bin/doctor" FLEET_STEWARD_IDLE_CMD="$WORK/bin/idle" \
   FLEET_STEWARD_SLEEP_LOG="$WORK/sleep.log" FLEET_STEWARD_CLEANUP_LOG="$WORK/cleanup.log" FLEET_SLEEP=observe \
   FLEET_STEWARD_PARK=0 FLEET_STEWARD_DEBUG=0 FLEET_DIALOG_PROJECTS="$WORK/home/.claude/projects" \
@@ -154,10 +154,10 @@ now=$(date +%s)
 ask toolu_B '入口谁来部署？我这边已经准备好镜像' '我来部署 (Recommended)' '等发起人' '先不部署'
 drv needs ask
 mark "$now"
-TICK beat --force >/dev/null 2>&1
+TICK beat --holder --force >/dev/null 2>&1
 [ -z "$(rows dialog-)" ] && ok "W: a fresh heartbeat with the driver asking puts no row up" || bad "W: fresh heartbeat: $(rows dialog-)"
 mark $(( now - 3000 ))
-TICK beat --force >/dev/null 2>&1
+TICK beat --holder --force >/dev/null 2>&1
 r=$(rows dialog-)
 case "$r" in
   *'#2482'*'入口谁来部署？我这边已经准备好镜像'*'我来部署 (Recommended)、等发起人、先不部署'*'批次·单会话像本地'*)
@@ -176,19 +176,19 @@ grep -q -- "@85 --fp ${rid#dialog-} --by person" "$ST_GH/channel.log" 2>/dev/nul
   || bad "W: answer: $(cat "$ST_GH/channel.log" 2>/dev/null) open=[$(rows dialog-)]"
 answered toolu_B '等发起人'
 ask toolu_C '换个问题？' '是' '否'
-TICK beat --force >/dev/null 2>&1
+TICK beat --holder --force >/dev/null 2>&1
 r=$(rows dialog-)
 case "$r" in *'换个问题？'*) [ "$(printf '%s\n' "$r" | grep -c .)" = 1 ] && ok "W: a new dialog is a new row" || bad "W: rows: $r" ;;
   *) bad "W: new dialog: [$r]" ;; esac
 answered toolu_C '是'
 drv looping ''
 mark $(( now - 3000 ))
-TICK beat --force >/dev/null 2>&1
+TICK beat --holder --force >/dev/null 2>&1
 [ -z "$(rows dialog-)" ] && [ -z "$(rows stalled-)" ] \
   && ok "W: answered, stale less than a TTL past ⇒ the dialog row closes, no 「没在走」 row" \
   || bad "W: after the answer: dialog=[$(rows dialog-)] stalled=[$(rows stalled-)]"
 mark $(( now - 6000 ))
-TICK beat --force >/dev/null 2>&1
+TICK beat --holder --force >/dev/null 2>&1
 PAGE="$FLEET_CONF_DIR/fleets/st/steward/page.html"
 r=$(rows stalled-)
 case "$r" in *'没在走'*'批次·单会话像本地'*)
@@ -196,7 +196,7 @@ case "$r" in *'没在走'*'批次·单会话像本地'*)
     || bad "W: no 没在走 on the page ($PAGE)" ;;
   *) bad "W: no stalled row: [$r]" ;; esac
 mark "$now"
-TICK beat --force >/dev/null 2>&1
+TICK beat --holder --force >/dev/null 2>&1
 [ -z "$(rows stalled-)" ] && ok "W: the heartbeat back ⇒ the 「没在走」 row closes" || bad "W: stalled still open: $(rows stalled-)"
 
 # ===================== C — the channel ========================================

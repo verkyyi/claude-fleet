@@ -1,4 +1,5 @@
-// The decision sheet, a pane on the orchestrator's right (issue #2832, EPIC #2831 C1).
+// The decision sheet, a pane on the steward holder's right (issue #2832, EPIC #2831
+// C1; the fleet-steward plugin's since #3115, EPIC #3111 C4).
 //
 // What the person has to decide, one line a thing: what · the suggestion · what
 // happens if nobody answers · the deadline — and three buttons a line: 按建议
@@ -21,7 +22,8 @@
 // file): `{kind:'answer', ts, gid, how, presses, ms}` — `/sheet --stats` prints
 // the median presses.
 //
-// Only the orchestrator's window draws it: the first band drawn on a fullscreen
+// Only the window holding the steward role draws it (common.ts isHolder — the
+// orchestrator's before #3115): the first band drawn on a fullscreen
 // terminal of AUTO_COLUMNS or more opens it unasked, once (the engine seats an
 // unasked pane only from 144 columns; the main screen would set it inline over
 // the prompt — no), bare `/sheet` (immediate: it runs while a turn does) opens
@@ -29,8 +31,8 @@
 // not placed, and closes it only when it is (issue #2836: a pane open but
 // unplaced is opened, never closed). Narrower, or on the main screen, the band
 // above the prompt says 「决定单 N 件待定」 with an 打开 button (`s`) while
-// open lines wait and the pane is not placed (sheetHint, drawn by progress.tsx
-// after the queue line). The window's
+// open lines wait and the pane is not placed (sheetHint, drawn here as the
+// band; otherwise the band is passed on). The window's
 // `@sheet_pane` says 1 while it is up — the steward then sends one sentence
 // instead of the whole table; never opened, no option, the whole sheet as
 // before. Any other window: no pane, no `/sheet` handling here.
@@ -39,15 +41,10 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, On, Timer } from 'claude-code'
 
 import type { PanelsView, SheetGroup, SheetPending, SheetUi } from '../types'
-import { isOpen } from './gate'
-import { isOrchestrator } from './orchestrator'
+import { SHEET_OPTION, SHEET_PANE, TMUX_TIMEOUT_MS, fleetBin, isHolder, t, windowOptionsArgv } from './common'
 import { SHEET_COMMAND, currentSession, noteAnswer, panelsOn } from './panels'
-import { t } from './qd'
-import { TMUX_TIMEOUT_MS, windowOptionsArgv } from './tmux'
-import { binDir } from './tools'
 
-export const SHEET_PANE = 'fleet-sheet'
-export const SHEET_OPTION = '@sheet_pane'
+export { SHEET_OPTION, SHEET_PANE }
 /** How long an answer can be taken back before it is sent. */
 export const UNDO_MS = 10_000
 /** fleet-steward-tick.sh answer posts one comment; its own timeouts are 60 s. */
@@ -58,10 +55,10 @@ export const AUTO_COLUMNS = 144
 
 export const SHEET_IDLE: SheetUi = { pending: {}, editing: '', expanded: '', sending: [], presses: {} }
 
-const panels = atom({ plugin: 'fleet', key: 'panels' } as const, null as PanelsView | null)
-const sheet = atom({ plugin: 'fleet', key: 'sheet' } as const, SHEET_IDLE)
+const panels = atom({ plugin: 'fleet-steward', key: 'panels' } as const, null as PanelsView | null)
+const sheet = atom({ plugin: 'fleet-steward', key: 'sheet' } as const, SHEET_IDLE)
 /** Bumped on every open / close, so the band's hint redraws (the truth is $.ui.panes()). */
-const sheetPane = atom({ plugin: 'fleet', key: 'sheetPane' } as const, 0)
+const sheetPane = atom({ plugin: 'fleet-steward', key: 'sheetPane' } as const, 0)
 
 // The undo timers: a module's, so a reload re-arms them from the state (session.start).
 const timers = new Map<string, Timer>()
@@ -74,8 +71,8 @@ export function resetSheet(): void {
 }
 
 /** The write road for one row: the steward's own `answer`. */
-export function answerArgv(root: string, session: string, id: string, text: string): string[] {
-  const argv = ['bash', `${binDir(root)}/fleet-steward-tick.sh`, 'answer', '--row', id, '--text', text, '--by', 'person']
+export function answerArgv(bin: string, session: string, id: string, text: string): string[] {
+  const argv = ['bash', `${bin}/fleet-steward-tick.sh`, 'answer', '--row', id, '--text', text, '--by', 'person']
   return session === '' ? argv : [...argv, '--session', session]
 }
 
@@ -84,8 +81,8 @@ export function isAnswerRun(argv: readonly string[]): boolean {
   return (argv[1] ?? '').endsWith('/fleet-steward-tick.sh') && argv[2] === 'answer'
 }
 
-export function openArgv(root: string, url: string): string[] {
-  return ['bash', `${binDir(root)}/fleet-open.sh`, url]
+export function openArgv(bin: string, url: string): string[] {
+  return ['bash', `${bin}/fleet-open.sh`, url]
 }
 
 /** `HH:MM` out of an ISO time ('' when there is none). */
@@ -173,7 +170,7 @@ async function fire($: EngineInterface, gid: string): Promise<void> {
   let why = ''
   for (const id of p.ids) {
     try {
-      const r = await $.process.run(answerArgv($.plugin.root, currentSession(), id, p.text), { timeoutMs: ANSWER_TIMEOUT_MS })
+      const r = await $.process.run(answerArgv(fleetBin(), currentSession(), id, p.text), { timeoutMs: ANSWER_TIMEOUT_MS })
       if (r.exitCode !== 0) why = (r.stderr || r.stdout).trim() || `exit ${r.exitCode}`
     } catch (err) {
       why = err instanceof Error ? err.message : String(err)
@@ -196,7 +193,7 @@ async function fire($: EngineInterface, gid: string): Promise<void> {
 
 async function thread($: EngineInterface, g: SheetGroup): Promise<void> {
   await update($, sheet, v => ({ ...v, presses: bump(v, g.gid) }))
-  const r = await $.process.run(openArgv($.plugin.root, g.url), { timeoutMs: OPEN_TIMEOUT_MS }).catch(() => null)
+  const r = await $.process.run(openArgv(fleetBin(), g.url), { timeoutMs: OPEN_TIMEOUT_MS }).catch(() => null)
   if (r === null || r.exitCode > 2) $.ui.toast(t('panel_sheet_failed_fmt', g.url))
 }
 
@@ -216,7 +213,7 @@ async function moved($: EngineInterface): Promise<void> {
 }
 
 /**
- * Bare `/sheet` (the band's 打开 runs it too) in the orchestrator: close the pane only when
+ * Bare `/sheet` (the band's 打开 runs it too) in the holder's window: close the pane only when
  * it is placed; otherwise open it — asked, focused, Esc closes it. Never
  * `holdToasts`: it stays up.
  */
@@ -237,7 +234,6 @@ export function registerSheet(on: On): void {
   // A reload is a fresh module: re-arm what was pressed and not sent yet.
   on('session.start', { isInteractive: true }, async ($, e, next) => {
     const result = await next(e)
-    if (!isOpen() || !isOrchestrator()) return result
     const s = await read($, sheet)
     const now = await $.clock.now()
     for (const [gid, p] of Object.entries(s.pending)) if (!timers.has(gid)) arm($, gid, p.at + UNDO_MS - now)
@@ -246,16 +242,20 @@ export function registerSheet(on: On): void {
 
   on('command.run', { command: SHEET_COMMAND }, async ($, e, next) => {
     // bare /sheet only: `--stats` / `--summary` are panels.ts's, `batches` batches.tsx's
-    if (!isOpen() || !isOrchestrator() || !panelsOn() || e.args.trim() !== '') return next(e)
+    if (!isHolder() || !panelsOn() || e.args.trim() !== '') return next(e)
     return { text: await toggleSheet($) }
   }).catch(($, e, next) => next(e))
 
   // Unasked, once: the first band drawn on a fullscreen terminal wide enough
   // opens it. Narrower, nothing opens (the hint says so); a widening redraws the
-  // band, and that draw opens it.
+  // band, and that draw opens it. While open lines wait and the pane is not
+  // placed, the band is the hint and its 打开 (`s`); otherwise it is passed on.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    const view = await read($, panels)
+    await read($, sheetPane)
+    if (!isHolder() || !panelsOn()) return next(e)
     const vp = e.viewport
-    if (!autoOpened && isOpen() && isOrchestrator() && panelsOn() && vp?.isFullscreen === true && vp.columns >= AUTO_COLUMNS) {
+    if (!autoOpened && vp?.isFullscreen === true && vp.columns >= AUTO_COLUMNS) {
       autoOpened = true
       void (async () => {
         const r = await $.ui.open({ id: SHEET_PANE, title: t('panel_sheet_title') })
@@ -263,13 +263,29 @@ export function registerSheet(on: On): void {
         await moved($)
       })().catch(() => undefined)
     }
-    return next(e)
+    if (e.props.hasSurvey || sheetHint(view, false) === '') return next(e)
+    const hint = sheetHint(view, await sheetPlaced($).catch(() => false))
+    if (hint === '') return next(e)
+    const { Box, Text, Button } = $.ui.resolve(e)
+    return (
+      <Box key="fleet-sheet-hint" flexDirection="row" gap={1}>
+        <Text key="fleet-sheet-hint-text" color="yellow" wrap="truncate-end">{hint}</Text>
+        <Button
+          key="fleet-sheet-hint-open"
+          label={t('panel_sheet_hint_open')}
+          hotkey="s"
+          onPress={() => {
+            void $.command.run({ command: SHEET_COMMAND, args: '' }).catch(() => undefined)
+          }}
+        />
+      </Box>
+    )
   }).catch(($, e, next) => next(e))
 
   // The person's close mark: the steward sends the whole sheet again.
   on('ui.close', { id: SHEET_PANE }, async ($, e, next) => {
     const result = await next(e)
-    if (isOpen() && e.origin.kind !== 'unload') {
+    if (isHolder() && e.origin.kind !== 'unload') {
       await setPaneOption($, false)
       await moved($)
     }
@@ -280,7 +296,7 @@ export function registerSheet(on: On): void {
     // Read first: the reads subscribe this pane to both states.
     const view = await read($, panels)
     const s = await read($, sheet)
-    if (!isOpen() || !isOrchestrator()) return next(e)
+    if (!isHolder()) return next(e)
     const ui = $.ui.resolve(e)
     const { Box, Text, Button } = ui
     const groups = view?.groups ?? []

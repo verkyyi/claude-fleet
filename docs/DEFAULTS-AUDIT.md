@@ -115,10 +115,10 @@ their own switch, `FLEET_MOD_PANELS`.
 | M8 | `exit-guard.ts` | Intercepts `/exit` and `/clear` in the orchestrator | ext | orchestrator only | no | — | **opt-in** — overrides native commands (N) |
 | M9 | `qd.tsx` | `/qd` quick dispatch | ext | orchestrator only | no | — | **opt-in** (P2) |
 | M10 | `queue.ts` | Counts queued prompts | ext | orchestrator only | no | — | **opt-in** (P2) |
-| M11 | `panels.ts` / `panels-model.ts` | Right-hand panels | ext | orch/steward | `FLEET_MOD_PANELS` | — | **opt-in** (P2) |
-| M12 | `sheet.tsx` | Decision sheet, `/sheet` | ext | orch/steward | `FLEET_MOD_PANELS` | — | **opt-in** (P2) |
-| M13 | `batches.tsx` | Batches pane | ext | orch | `FLEET_MOD_PANELS` | — | **opt-in** (P2) |
-| M14 | `patrol.tsx` | Steward patrol pane | ext | steward | `FLEET_MOD_PANELS` | — | **opt-in** (P2) |
+| M11 | `panels.ts` / `panels-model.ts` | Right-hand panels | ext | steward holder | `FLEET_MOD_PANELS` | — | **done** — fleet-steward plugin (#3115) |
+| M12 | `sheet.tsx` | Decision sheet, `/sheet` | ext | steward holder | `FLEET_MOD_PANELS` | — | **done** — fleet-steward plugin (#3115) |
+| M13 | `batches.tsx` | Batches pane | ext | steward holder | `FLEET_MOD_PANELS` | — | **done** — fleet-steward plugin (#3115) |
+| M14 | `patrol.tsx` | Steward patrol pane | ext | steward holder | `FLEET_MOD_PANELS` | — | **done** — fleet-steward plugin (#3115) |
 | M15 | `tools.ts` | Fallback `fleet_status/spawn/await` for sessions started without the MCP | ext | only without `FLEET_MCP_SERVER` | no | — | **remove** — compat for pre-#1828 sessions; one version has passed |
 
 15 features. **After the proposal:** M1–M4 stay (4); M5–M14 become opt-in (10); M15 is removed.

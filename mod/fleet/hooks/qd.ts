@@ -1,12 +1,13 @@
-// The `qd_` / `orch_queue` / `panel_` UI strings (bin/fleet-ui-lang.sh), read once
-// at session.start by lifecycle.ts and shared by the orchestrator's band, the
-// panels and the decision sheet. A key with no entry shows itself.
+// The `qd_` / `orch_queue` UI strings (bin/fleet-ui-lang.sh), read once at
+// session.start by lifecycle.ts for the orchestrator's band. A key with no entry
+// shows itself. The panels' `panel_` strings went with them into the
+// fleet-steward plugin (issue #3115).
 //
 // `/qd` itself — the quick-dispatch dialog (issue #2618) — moved into the
 // fleet-orchestrate plugin's mod module (plugins/fleet-orchestrate/hooks/qd.tsx,
 // issue #3114, EPIC #3111): installed with the plugin, registered in any fleet
-// window that binds no issue. This mod no longer registers it; the band's and the
-// batches panel's buttons still run `/qd`, which answers when the plugin is there.
+// window that binds no issue. This mod no longer registers it; the band's button
+// still runs `/qd`, which answers when the plugin is there.
 
 import { binDir } from './tools'
 
@@ -16,7 +17,7 @@ let strings: Record<string, string> = {}
 
 /** The argv that prints the `qd_` strings and queue.ts's `orch_queue` ones (KEY NUL TEXT NUL, a \001 per printf slot). */
 export function stringsArgv(root: string): string[] {
-  return ['sh', `${binDir(root)}/fleet-ui-lang.sh`, 'dump', 'qd_', 'orch_queue', 'panel_']
+  return ['sh', `${binDir(root)}/fleet-ui-lang.sh`, 'dump', 'qd_', 'orch_queue']
 }
 
 /** Take the dump; one that cannot be read leaves every key showing itself. */
