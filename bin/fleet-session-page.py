@@ -60,7 +60,7 @@ TEXT = {
            'personal_off': '这个窗口已不带个人配置（FLEET_PERSONAL=0）；长期退回：fleet config restore N',
            'resume': '重开', 'resume_new': '新开对话', 'retry': '重试启动', 'list': '回列表',
            'new': '新对话', 'quit': '关窗口', 'personal': '不带个人配置重开',
-           'closing': '{n} 秒后关闭 · 按任意键取消'},
+           'closing': '{n} 秒后关闭 · 按任意键取消', 'closing_short': '{n} 秒后关闭'},
     'en': {'ended': 'Session ended', 'crashed': 'Session exited unexpectedly',
            'unpushed': 'Unpushed: {n} commits (branch {b})', 'unpushed_nob': 'Unpushed: {n} commits',
            'failed_resume': 'Resuming the conversation failed', 'failed_new': 'Starting a new session failed',
@@ -71,7 +71,7 @@ TEXT = {
            'personal_off': 'This window runs without the personal layer (FLEET_PERSONAL=0); to roll it back: fleet config restore N',
            'resume': 'reopen', 'resume_new': 'new conversation', 'retry': 'retry the launch', 'list': 'list',
            'new': 'new chat', 'quit': 'close window', 'personal': 'reopen without personal config',
-           'closing': 'closing in {n}s · any key cancels'},
+           'closing': 'closing in {n}s · any key cancels', 'closing_short': 'closing in {n}s'},
 }
 
 
@@ -117,13 +117,21 @@ def render(facts, cols, rows=None):
     lines = [color + clip(text, cols - 1) + RESET for color, text in above]
     enter_new = facts.get('agent') == 'codex' and not facts.get('sid')
     keys = keys_line(words, facts.get('personal') or '', bool(facts.get('retry')), enter_new)
+    # the countdown (issue #3170) rides after the headline; narrow, it first
+    # shortens to 「N 秒后关闭」 — a key on the line never makes way for it
     n = int(facts.get('close_in') or 0)
-    closing = YELLOW + words['closing'].format(n=n) + RESET + ' · ' if n > 0 else ''
-    line = color + BOLD + head + RESET + ' · ' + closing + keys
-    if width(line) > cols - 1:                  # narrow: the dim tail goes first
-        line = color + BOLD + head + RESET + ' · ' + closing + keys.split(DIM)[0]
-    if width(line) > cols - 1:
+    full = YELLOW + words['closing'].format(n=n) + RESET + ' · ' if n > 0 else ''
+    short = YELLOW + words['closing_short'].format(n=n) + RESET + ' · ' if n > 0 else ''
+    lead = color + BOLD + head + RESET + ' · '
+    line = None
+    for cand in (lead + full + keys, lead + short + keys,
+                 lead + short + keys.split(DIM)[0]):  # narrow: the dim tail goes next
+        if width(cand) <= cols - 1:
+            line = cand; break
+    if line is None:
         line = color + BOLD + clip(head, cols - 1) + RESET
+        tail = ' · ' + short[:-len(' · ')] if n > 0 else ''
+        if tail and width(line + tail) <= cols - 1: line += tail
     return '\n'.join(lines + [line])
 
 
