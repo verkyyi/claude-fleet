@@ -89,6 +89,17 @@ if grep -Eq '^fleet-drill [0-9]+ invite m4 drillx1 0$' "$T/signed" 2>/dev/null; 
 else bad "signed: $(cat "$T/signed" 2>/dev/null)"; fi
 if grep -q '^HDR Authorization' "$T/curl.log"; then bad 'a live cert still sent the token'; else ok 'a live cert sends no token'; fi
 grep -q '^BODY .*"cert": "ssh-ed25519-cert-v01@openssh.com AAAA cert"' "$T/curl.log" && ok 'the cert rides the body' || bad "body: $(grep ^BODY "$T/curl.log")"
+# --home (issue #3432): the drill names the machine its login is opened on —
+# signed after the rest, in the body; none signs the old message byte for byte
+run 0 'fleet-onboard-drill.sh' 'the cert door with --home' SIGNED="$T/signed" -- invite --host m4 --login drillx1 --home fleet-linux-0
+if grep -Eq '^fleet-drill [0-9]+ invite m4 drillx1 0 fleet-linux-0$' "$T/signed" 2>/dev/null; then ok 'a home is signed after the rest'
+else bad "signed with --home: $(cat "$T/signed" 2>/dev/null)"; fi
+grep -q '^BODY .*"home": "fleet-linux-0"' "$T/curl.log" && ok 'the home rides the body' || bad "body: $(grep ^BODY "$T/curl.log")"
+run 0 'fleet-onboard-drill.sh' 'the token door with --home' CCQUOTA_VIEWER_TOKEN=tok-secret -- invite --host macmini-m4 --home mini2
+grep -q '^BODY .*"home": "mini2"' "$T/curl.log" && ok 'the token door sends the home' || bad "body: $(grep ^BODY "$T/curl.log")"
+run 2 '--home: a machine name' 'a bad --home' CCQUOTA_VIEWER_TOKEN=tok -- invite --host m4 --home 'a b'
+run 0 'fleet-onboard-drill.sh' 'no --home sends none' CCQUOTA_VIEWER_TOKEN=tok -- invite --host m4
+if grep -q '^BODY .*"home"' "$T/curl.log"; then bad 'no --home still sent a home'; else ok 'no --home: no home in the body'; fi
 
 # approve: the drill's scan — the code (from the environment) is the only
 # credential sent, even with a token and a live cert right here

@@ -323,7 +323,7 @@ func TestDrillInviteByCertificate(t *testing.T) {
 	ask := func(host, login string, ttl int, signedHost string) (int, []byte) {
 		ts := time.Now().Unix()
 		return drillReq(t, h, http.MethodPost, DrillPath, "", drillInviteRequest{Host: host, Login: login, TTLSeconds: ttl,
-			Cert: cr.Certificate, TS: ts, Sig: sshsig(t, signer, DrillSigNamespace, []byte(DrillInviteMessage(ts, signedHost, login, ttl)))})
+			Cert: cr.Certificate, TS: ts, Sig: sshsig(t, signer, DrillSigNamespace, []byte(DrillInviteMessage(ts, signedHost, login, ttl, "")))})
 	}
 	if code, body := ask("macmini-m4", "drillcert1", 600, "macmini-m4"); code != http.StatusForbidden {
 		t.Fatalf("a non-admin's certificate invited: %d %s", code, body)
@@ -588,5 +588,69 @@ func TestDrillUnknownCreateIsWaitedThenHanded(t *testing.T) {
 	}
 	if code, body := drillReq(t, h, http.MethodDelete, DrillSelfPath, "", selfDeleteRequest{ApproveCode: inv.ApproveCode}); code != http.StatusUnauthorized {
 		t.Fatalf("the drill person can still delete itself: %d %s; want 401 (gone)", code, body)
+	}
+}
+
+// A drill that names its machine (claude-fleet#3432, `fleet drill invite
+// --home`): its scan opens the login THERE — m4, the busy one — never
+// placement's pick (m5, the quiet one); its own computer (m7) is never a
+// home, and a home off the roster is refused before anything is minted.
+func TestDrillHomeOpensItsLoginThere(t *testing.T) {
+	h := newFleetHarness(t)
+	enablePeople(t, h)
+	nodes := leastBusyFleet(t, h)
+	setHubSetting(t, h.srv, AutoAssignKey, "least-busy")
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	signer, _ := ssh.NewSignerFromKey(priv)
+	h.srv.SSHCA = sshca.New(signer)
+	for _, bad := range []struct{ host, home, want string }{
+		{"m7", "m7", "own computer"},
+		{"m7", "nowhere", "roster"},
+	} {
+		code, body := drillReq(t, h, http.MethodPost, DrillPath, "viewer-secret", map[string]any{"host": bad.host, "home": bad.home})
+		if code != http.StatusBadRequest || !strings.Contains(string(body), bad.want) {
+			t.Fatalf("home %q on host %q: %d %s; want 400 naming %q", bad.home, bad.host, code, body, bad.want)
+		}
+	}
+	code, body := drillReq(t, h, http.MethodPost, DrillPath, "viewer-secret", map[string]any{"host": "m7", "home": "m4.local"})
+	if code != 200 {
+		t.Fatalf("invite: %d %s", code, body)
+	}
+	var inv DrillInviteResponse
+	json.Unmarshal(body, &inv)
+	if inv.Home != "m4" {
+		t.Fatalf("invite home = %q; want the roster's m4 (%s)", inv.Home, body)
+	}
+	key, _ := drillKey(t)
+	st := startLogin(t, h, key, nil)
+	if code, body := drillReq(t, h, http.MethodPost, LoginApprovePath, "", approveRequest{Code: st.UserCode, ApproveCode: inv.ApproveCode}); code != 200 {
+		t.Fatalf("approve: %d %s", code, body)
+	}
+	_, op := expectAccountOp(t, nodes["m4"].tnode)
+	if op.Op != control.AccountCreate || op.Login != inv.Login {
+		t.Fatalf("op = %+v; want a create of %s on its home m4", op, inv.Login)
+	}
+	for _, host := range []string{"m5", "m7"} {
+		if got, ok := readMsg(nodes[host].tnode, 300*time.Millisecond); ok && got.Type == control.TypeAccountOp {
+			t.Fatalf("%s was sent %+v; the drill named m4", host, got)
+		}
+	}
+	if st := h.srv.accountStateOf(inv.PersonID, time.Now()); st == nil || st.Machine != "m4" {
+		t.Fatalf("account = %+v; want opening on m4", st)
+	}
+	// A real newcomer never has a home: placement as before.
+	if got := h.srv.drillHome("gh:4004"); got != "" {
+		t.Fatalf("a non-drill's home = %q", got)
+	}
+}
+
+// The signed invite: with no home the message an older client signs, byte
+// for byte; a home is signed after the rest.
+func TestDrillInviteMessageHome(t *testing.T) {
+	if got := DrillInviteMessage(7, "m4", "drillx", 600, ""); got != "fleet-drill 7 invite m4 drillx 600" {
+		t.Fatalf("no home: %q", got)
+	}
+	if got := DrillInviteMessage(7, "m4", "drillx", 600, "m5"); got != "fleet-drill 7 invite m4 drillx 600 m5" {
+		t.Fatalf("home: %q", got)
 	}
 }

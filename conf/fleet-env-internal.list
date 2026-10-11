@@ -193,6 +193,9 @@ FLEET_CRED_SID                     handoff: the per-launch credential-proxy sess
 FLEET_CREDS_IMPORT_NO_HOLDER       handoff: `fleet account add` tells fleet-creds-import.sh no Codex home here holds the account, so no «stop refreshing» reminder (#2084)
 FLEET_DRILL_INVITE                 handoff: the drill's approve code, fleet-onboard-drill.sh → fleet-drill.sh approve (never an argv, #2010)
 FLEET_DRILL_LOGIN_REMOVE           seam: the login-remove script fleet-onboard-drill.sh tears down with (selftest sandbox, #2010)
+FLEET_DRILL_INVITE_SH              seam: the fleet-drill.sh fleet-onboard-drill.sh --home mints its drill person with (selftest sandbox, #3432)
+FLEET_DRILL_ONLY                   seam: fleet-onboard-drill.sh runs steps 8-10 only against a client already up on its own tmux (selftest sandbox, #3432)
+FLEET_DRILL_THIN                   seam: the login's fleet-thin.py fleet-onboard-drill.sh restarts another machine's tmux through (selftest sandbox, #3432)
 FLEET_CRED_CTL_DIR                 handoff: separated (#1971) — the run dir of the role account's proxy (ctl.sock, port); fleet-cred-proxy.sh sets it for its ctl client
 FLEET_CREDSEP_DAEMON_DIR           seam: fleet-credsep sandbox — where the proxy/agent service definitions are written (/Library/LaunchDaemons, /etc/systemd/system)
 FLEET_CREDSEP_LIB                  seam: fleet-credsep sandbox — the root-owned code copy the role account runs

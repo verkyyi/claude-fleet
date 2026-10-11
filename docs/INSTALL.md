@@ -931,7 +931,17 @@ sudo -v
 ~/.claude/fleet/bin/fleet drill invite              # a DRILL PERSON: prints its login + approve code
 ~/.claude/fleet/bin/fleet-onboard-drill.sh --login <login> --invite <code>   # the line it printed
 ~/.claude/fleet/bin/fleet-onboard-drill.sh --teardown <login> --invite <code>   # a run left up with --keep
+~/.claude/fleet/bin/fleet-onboard-drill.sh --home fleet-linux-0   # pick the machine (issue #3432)
 ```
+
+**Pick the machine the newcomer lands on** (issue #3432): `--home <machine>` mints the run's
+own drill person with `fleet drill invite --login drill<MMDDHHMM> --home <machine>`, and the
+hub opens its login THERE — no placement asked (only a drill person carries a home; a real
+newcomer is always placed). Step 8 checks the session's row is on it, and step 10 restarts
+that machine's tmux as the session's login over the login's own client (`fleet-thin.py --run
+--home <machine>`), so `--home mini2` and `--home fleet-linux-0` both run from one drill
+machine — any machine but `--home` itself (the drill's own login is there). Steps 8–10 run in a
+sandbox first: `bin/fleet-onboard-drill-steps-selftest.sh` (`FLEET_DRILL_ONLY=8-10`).
 
 **Confirm as a drill person, never as yourself** (issue #2010). Without `--invite`, whoever
 opens the QR's page confirms it — on 2026-10-06 that was the operator's own browser, so the
