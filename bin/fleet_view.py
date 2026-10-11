@@ -373,9 +373,14 @@ def entries(vid, now=None):
     # this login on this machine first, then the rest by machine, login
     order.sort(key=lambda g: (g != (here, me), g[0], g[1]))
     out = []
-    orch = [w for w, v in wins.items() if v[1] == "orchestrator"]
+    # the orchestrator: its window here, else the hub's holder on another machine
+    # (orch_<fleet>, #2117) — a home that is not the holder still lists it (#3007)
+    ot, om = orch_target(fleet, wins) if fleet else ("", {})
+    orch = [ot] if ot else []
     if orch:
-        out.append({"kind": "sess", "target": orch[0], "far": False, "machine": here, "login": me,
+        far = bool(om)
+        out.append({"kind": "sess", "target": ot, "far": far, "machine": om.get("machine") or here,
+                    "login": logins.get(ot.split("/", 1)[0], "") if far else me,
                     "state": "", "text": say("view_portal"), "word": "", "issue": "", "depth": 0,
                     "foot": say("view_portal_foot"), "pin": True})
     for g in order:

@@ -99,6 +99,7 @@ fields, only ever added at the end:
 |---|---|---|
 | `connect` | each connection, when it ends | `pick_ms` = `fleet-connect.py --argv` (certificate · machine · route); `ssh_ms` = ssh spawned → the first byte back (handshake + the far end starting); `first_ms` = spawned → the home's first valid `cur` (the view drawn); `rc` = ssh's exit; reason `up` · `never up` · `quit` |
 | `rehome` | three connections in a row never came up — a new home asked for (`--avoid`), or the machine named changed | reason: from / other than which |
+| `offline` | three connections failed and the hub did not answer either — this computer's own line is down, so no 换家: the home and the view are kept (#3007) | `home`; reason |
 | `upload` | a drop or a ⌃V picture sent through the home | `ssh_ms` = the one-shot's time; reason `<name> → <path there>` |
 | `exec` | a new client version between two connections | reason `<old> → <new>` |
 | `say` | a word for the person (a file not sent) — also an OSC 9 notification | the words |

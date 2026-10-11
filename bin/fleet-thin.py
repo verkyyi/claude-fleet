@@ -43,7 +43,9 @@ back (约定 11) and this exits 0. Anything else — the line dropped, the lid
 closed — one line 「和 <home> 的连接断了，N 秒后重连（第 k 次）」 and a reconnect
 after 1 · 2 · 4 … 30 s to the SAME view (`--resume`). Three connections in a
 row that never came up (no valid 7502 and gone within FLEET_THIN_UP_SECS):
-the hub is asked for another online machine to be home (`--avoid <home>`).
+the hub is asked for another online machine to be home (`--avoid <home>`) —
+unless the hub does not answer either (issue #3007): then it is this computer's
+own line that is down, the home is kept and the view with it.
 Between two connections a new client version (the install's .client-version,
 `fleet-client-update.sh start` → 3) is exec'd in place, view and home kept.
 
@@ -59,15 +61,16 @@ thin.log — TSV, one line per connection, fields only ever added at the end
     time(UTC)  event  home  route  pick_ms  ssh_ms  first_ms  rc  reason
 event: connect (pick_ms = fleet-connect --argv, ssh_ms = spawn → the first
 byte back, first_ms = spawn → the first valid `cur`: the view drawn) · rehome ·
-upload · exec · quit · run (`--run`: one command on the home, issue #3004 —
+upload · exec · quit · offline (no 换家: the hub did not answer either) · run (`--run`: one command on the home, issue #3004 —
 reason = its first word).
 
 Knobs: FLEET_THIN_UP_SECS (10), FLEET_THIN_BACKOFF ("1,2,4,8,16,30"),
-FLEET_THIN_REHOME_AFTER (3), FLEET_REMOTE_BIN (.claude/fleet/bin),
+FLEET_THIN_REHOME_AFTER (3), FLEET_THIN_HUB_PROBE_SECS (4), FLEET_REMOTE_BIN (.claude/fleet/bin),
 FLEET_CLIENT_PASTE=0 (drops and ⌃V byte for byte), FLEET_ITERM_KEYS=0,
 FLEET_THIN_LOG. Seams (tests): FLEET_THIN_ARGV_CMD (in place of
 `fleet-connect.py --argv`), FLEET_THIN_UPDATE_CMD (in place of
-`fleet-client-update.sh start`), FLEET_CLIENT_CLIP_CMD (the clipboard).
+`fleet-client-update.sh start`), FLEET_CLIENT_CLIP_CMD (the clipboard),
+FLEET_THIN_HUB_PROBE_CMD (in place of asking the hub's /version before 换家).
 Standard library only.
 """
 import base64
@@ -192,6 +195,40 @@ def pick(home="", avoid="", reconnect=False):
     if r.returncode != 0 or not isinstance(j, dict) or not ("argv" in j or j.get("local")):
         return None, ms(t0), "fleet-connect --argv exit %d" % r.returncode
     return j, ms(t0), ""
+
+
+def hub_answers():
+    """Does the hub answer from here? None when there is no hub to ask (不接).
+
+    换家 is for a home that is down, not for our own line (issue #3007): three
+    failed connections while the lid was closed or the Wi-Fi changed are not the
+    home's fault, and `--avoid <home>` then sent the person to another machine and
+    a fresh view — the session they were in gone from the screen. Any HTTP answer
+    (an error status too) is an answer; a timeout or no route is none.
+    FLEET_THIN_HUB_PROBE_CMD is the seam (exit 0 = answers)."""
+    seam = os.environ.get("FLEET_THIN_HUB_PROBE_CMD")
+    if seam:
+        try:
+            return subprocess.call(shlex.split(seam), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.DEVNULL, timeout=30) == 0
+        except (OSError, subprocess.SubprocessError):
+            return False
+    try:
+        fc = load("fleet-connect.py", "fleet_connect")
+        hub = os.environ.get("FLEET_HUB_URL") or fc.machine_conf_hub() or fc.load_hub_conf().get("url") or ""
+    except (Exception, SystemExit):
+        hub = ""
+    if not hub:
+        return None
+    import urllib.error
+    import urllib.request
+    try:
+        urllib.request.urlopen(hub.rstrip("/") + "/version", timeout=env_num("FLEET_THIN_HUB_PROBE_SECS", 4)).close()
+        return True
+    except urllib.error.HTTPError:
+        return True
+    except Exception:
+        return False
 
 
 def one_shot(argv):
@@ -683,6 +720,7 @@ class Thin:
         rehome = int(env_num("FLEET_THIN_REHOME_AFTER", 3))
         self.profile(True)
         k = fails = 0
+        offline = False
         try:
             while True:
                 rc, up, why = self.connect_once(k > 0)
@@ -694,6 +732,13 @@ class Thin:
                 else:
                     fails += 1
                 k += 1
+                if fails >= rehome and self.home and not self.local and hub_answers() is False:
+                    # the hub does not answer either: our own line is down, not the home —
+                    # stay, keep the view, and need one more failure with the hub back (#3007)
+                    tlog("offline", self.home, "", "", "", "", "", "the hub does not answer either: keeping %s" % self.home)
+                    fails, offline = rehome - 1, True
+                elif fails >= rehome and offline:
+                    fails, offline = rehome - 1, False   # the hub back: one more try at the home first
                 if fails >= rehome and self.home and not self.local:   # --local has no other home
                     self.avoid, self.home, fails = self.home, "", 0
                     self.resume = False   # a new home has no view of ours yet
@@ -705,7 +750,7 @@ class Thin:
                 if why:
                     msg = why + " — " + msg
                 write_out(("fleet · %s\r\n" % msg).encode())
-                if fails == rehome - 1:   # the home about to be given up: how to tell the hub why
+                if fails == rehome - 1 and not offline:   # the home about to be given up: how to tell the hub why
                     write_out(("fleet · %s\r\n" % tr("thin_debug_hint")).encode())
                 time.sleep(wait)
                 self.maybe_update()

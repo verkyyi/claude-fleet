@@ -170,6 +170,7 @@
 #   connections, bin/fleet-break-it-peerlink-selftest.sh (a fake ssh, no network).
 # Thin half — thin-* rows (issue #3005): a thin client's lease, notifications and
 #   pages kept by its home machine, bin/fleet-break-it-thin-selftest.sh.
+#   The thin loop on the person's own computer (issue #3007): bin/fleet-break-it-thin-client-selftest.sh.
 # Shell half — a sandbox fleet on -L kf (TMUX_TMPDIR under $WORK), the real wrapper:
 #   shell-kill-fleet                                bin/tmux-shim/tmux, fleet-session-wrap.sh, hooks/bash-guard.py
 #   zsh-guard-fleet-label                           shell/cw.zsh tmux()
@@ -250,7 +251,7 @@ lintfail() { LINT=$((LINT + 1)); printf 'FAIL  lint: %s\n' "$1"; }
 [ -f "$DOC" ] || lintfail "docs/BREAK-IT.md is missing"
 # The cred half lives in its own script (issue #1975: its own run, its own
 # durations row) — its drills are listed rows like any other.
-DRILLS=$(sed -n 's/^drill_\([a-z0-9_]*\)() *{.*/\1/p' "$0" "$BIN/fleet-break-it-cred-selftest.sh" "$BIN/fleet-break-it-cred-shared-selftest.sh" "$BIN/fleet-break-it-cred-sep-selftest.sh" "$BIN/fleet-break-it-node-selftest.sh" "$BIN/fleet-break-it-tenant-selftest.sh" "$BIN/fleet-break-it-hub-selftest.sh" "$BIN/fleet-break-it-peerlink-selftest.sh" "$BIN/fleet-break-it-thin-selftest.sh" | tr _ -)
+DRILLS=$(sed -n 's/^drill_\([a-z0-9_]*\)() *{.*/\1/p' "$0" "$BIN/fleet-break-it-cred-selftest.sh" "$BIN/fleet-break-it-cred-shared-selftest.sh" "$BIN/fleet-break-it-cred-sep-selftest.sh" "$BIN/fleet-break-it-node-selftest.sh" "$BIN/fleet-break-it-tenant-selftest.sh" "$BIN/fleet-break-it-hub-selftest.sh" "$BIN/fleet-break-it-peerlink-selftest.sh" "$BIN/fleet-break-it-thin-selftest.sh" "$BIN/fleet-break-it-thin-client-selftest.sh" | tr _ -)
 IDS=''
 NROWS=0
 while IFS= read -r r; do

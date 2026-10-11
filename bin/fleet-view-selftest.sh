@@ -249,6 +249,23 @@ esac
 to resize-window -t o:view -x 120 -y 32
 pass "G  a phone: 40 columns, ⌃] p the list on the whole screen, ⌃] n on to another machine's session"
 
+# --- H: the orchestrator on another machine (issue #3007): still the pinned first row ----------
+python3 - "$BIN" <<'EOF' || fail "H: the far orchestrator is not the pinned first row"
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("fv", sys.argv[1] + "/fleet_view.py")
+fv = importlib.util.module_from_spec(spec); spec.loader.exec_module(fv)
+fv.view_row = lambda vid: {}
+fv.view_fleet = lambda vid, row: "fl"
+fv.here_label = lambda row: "m4"
+fv.fleet_logins = lambda: {"UU": "verky"}
+fv.windows = lambda fleet: {"@3": ("f3", "", 0)}       # no orchestrator window on this home
+fv.produce = lambda fleet: ""
+fv.orch_line = lambda fleet: ["UU/orchfid", "macmini", "online", "looping", "", "", "0"]
+e = fv.entries("v1")[0]
+assert e.get("pin") and e["target"] == "UU/orchfid" and e["far"] and e["machine"] == "macmini" and e["login"] == "verky", e
+EOF
+pass "H  the orchestrator on another machine: still the pinned first row, a far go"
+
 # --- F: the old client's road ----------------------------------------------------------------
 grep -q 'if argv\[:1\] == \["do"\] and len(argv) == 2:' "$BIN/fleet-quickopen.py" || fail "F: the old do <verb> road changed"
 pass "F  the old client's quickopen keeps its own road"
