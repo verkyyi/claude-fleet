@@ -6239,6 +6239,19 @@ drill_linux_egress_metadata() {
   WHAT="init 容器 egress-guard（只 NET_ADMIN+NET_RAW）写 OUTPUT：lo、回包、kube-dns 53 放行，元数据 / pod / Service / 私网段 REJECT；fleet 容器无 NET_ADMIN；坏网段不渲染"
 }
 
+# ---- linux-create-relay-403 (#3213): the hub's create op opens a login whose
+# account is still `creating`; the relay pass is refused (403) and must not undo it.
+drill_linux_create_relay_403() {
+  CAP=15; local t0
+  t0=$(now)
+  if ! python3 "$BIN/fleet-node-linux-selftest.py" LinuxNode.test_relay_refused_while_account_creating_keeps_login \
+       >"$WORK/linux-relay403.out" 2>&1; then
+    WHY="a relay 403 still rolls back a new login: $(tail -n 3 "$WORK/linux-relay403.out")"; return 1
+  fi
+  SECS=$(since "$t0")
+  WHAT="开号时 relay-credential 答 403：登录照常 adopt、不写 relay.token；答 500 仍停下"
+}
+
 # A child's report whose parent is gone (issue #3117, EPIC #3111 C6): a scratch spawned
 # a worker and was closed; the worker merged and its report went nowhere — a silent
 # exit 0. Now it is the person's: one row in global/orphan-reports.ndjson and one
