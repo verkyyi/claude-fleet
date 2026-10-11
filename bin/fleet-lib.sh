@@ -10003,7 +10003,7 @@ FLEET_PLUGIN_NAME="${FLEET_PLUGIN_NAME:-fleet}"
 fleet_plugin_installed() {
   local want="${1:-}" cdir base d
   cdir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
-  base="$cdir/plugins/cache"
+  base="$cdir/plugins/cache"   # release-tree-ok: the login's Claude Code plugin cache, not the repo's plugins/
   [ -d "$base" ] || return 1
   # cache/<marketplace>/<plugin>/<version>/ — the version dir moves on every
   # update, so glob it rather than remembering one.
