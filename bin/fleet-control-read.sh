@@ -689,6 +689,16 @@ case "$mode" in
     case "$n" in ''|*[!0-9]*) exit 2 ;; esac
     exec bash "$BIN/fleet-peer-send.sh" -L "$(fleet_socket "$sess")" ${krepo:+--repo "$krepo"} "issue:$n" -
     ;;
+  # --- feedback <sess> <worker_id> (issue #3359) -------------------------------
+  # A feedback's reply from the hub: the text, on stdin, to the session the
+  # worker_id names (key or lifelong identity, any kind of session — a scratch, a
+  # no-repo one) through fleet-peer-send.sh wid:<worker_id> on THIS fleet's
+  # socket. stdout is peer-send's `sent →` line; non-zero = nothing was sent.
+  feedback)
+    fleet_load_conf "$sess"
+    case "${3:-}" in ?*/?*) ;; *) exit 2 ;; esac
+    exec bash "$BIN/fleet-peer-send.sh" -L "$(fleet_socket "$sess")" "wid:$3" -
+    ;;
   # --- GitHub through the fleet's own rails (issue #1274) ----------------------
   # gh <sess> issue|pr|checks <N> [<repo>] [<fields>] — fleet-gh.sh: the daemons'
   # local copy first, gh/REST only when it is too old. comment <sess> <N> [<repo>]

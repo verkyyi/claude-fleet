@@ -46,7 +46,9 @@ import (
 // seven days; the row stays.
 //
 // Each feedback taken becomes one GitHub issue when the hub holds the App's
-// credentials (fleet_feedback_github.go, claude-fleet#3356).
+// credentials (fleet_feedback_github.go, claude-fleet#3356); what its closing
+// says goes back to the sender's session (fleet_feedback_reply.go,
+// claude-fleet#3359).
 //
 // Off (no CCQUOTA_FLEET_FEEDBACK_DIR): none of these routes exists.
 const (
@@ -80,6 +82,9 @@ type FeedbackDesk struct {
 	// admin's 「标为重复」, claude-fleet#3357); nil = the desk's GitHub client
 	// does it (C2), and with neither only the row is closed. A test seam.
 	CloseIssue func(ctx context.Context, number int64, comment string) error
+	// ReplyWait replaces how long a reply's send waits for its node's verdict
+	// (fleet_feedback_reply.go) in tests.
+	ReplyWait time.Duration
 
 	kickOnce sync.Once
 	kickCh   chan struct{}
@@ -431,7 +436,8 @@ func (s *Server) handleFeedbackMine(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"feedback": out})
 }
 
-// RunFeedback deletes attachments past seven days, hourly, and — with the
+// RunFeedback deletes attachments past seven days, hourly, sends each closed
+// feedback's reply to its person (fleet_feedback_reply.go) and — with the
 // GitHub App configured — runs the filer (fleet_feedback_github.go). Off
 // (s.Feedback nil): returns at once.
 func (s *Server) RunFeedback(ctx context.Context) {
@@ -441,6 +447,7 @@ func (s *Server) RunFeedback(ctx context.Context) {
 	if s.Feedback.GitHub != nil {
 		go s.runFeedbackFiler(ctx)
 	}
+	go s.runFeedbackReplies(ctx)
 	t := time.NewTicker(feedbackTickEvery)
 	defer t.Stop()
 	for {
