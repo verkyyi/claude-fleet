@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """fleet_view.py — the 看台's switcher, on the home machine (issue #3000, EPIC #2999 C2).
 
 The thin client has no tmux and no list of its own: its ⌘ keys land in the 看台
@@ -91,7 +92,7 @@ like any other, and there is no 「新任务」 line. All of it through fleet-ui
 
 STALE (issue #3184, EPIC #3178 C6): 失联 is judged off ONE time, global/hub_ok —
 the file the producer's `m4!` reads. A lost row is grey end to end and tagged
-「⊘ 失联 N 分钟」; hub_ok older than FLEET_HUB_SESSIONS_STALE (60 s) puts a red
+「? 失联 N 分钟」; hub_ok older than FLEET_HUB_SESSIONS_STALE (60 s) puts a red
 banner on top naming the machines (banner()); ↵ on a lost row says 进不去 instead
 of going (lost_msg()). An open popup reads its list again every
 FLEET_VIEW_REFRESH (2 s, 0 = never) off the screen's thread (Refresh), the lit
@@ -528,7 +529,8 @@ def entries(vid, now=None):
             # own source) while it is silent, else that machine's last reading
             lost_secs = hage if hstale else (now - act if act else hage)
         if lost and lost_secs is not None:
-            tags.append(say("view_tag_lost_min_fmt", max(1, int(lost_secs) // 60)))
+            # the glyph is the table's lost one (? — never a second symbol, #3194)
+            tags.append(gl["lost"] + " " + say("view_tag_lost_min_fmt", max(1, int(lost_secs) // 60)))
         elif lost:
             tags.append(say("view_tag_lost_fmt", machine))
         elif direct:

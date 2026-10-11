@@ -537,8 +537,8 @@ fleet_ui_t() {
     en:view_grp_other_fmt) printf 'Other %s' "${1:-}" ;;
     zh:view_tag_lost_fmt) printf '%s 失联' "${1:-}" ;;
     en:view_tag_lost_fmt) printf '%s lost' "${1:-}" ;;
-    zh:view_tag_lost_min_fmt) printf '⊘ 失联 %s 分钟' "${1:-}" ;;
-    en:view_tag_lost_min_fmt) printf '⊘ lost %s min' "${1:-}" ;;
+    zh:view_tag_lost_min_fmt) printf '失联 %s 分钟' "${1:-}" ;;
+    en:view_tag_lost_min_fmt) printf 'lost %s min' "${1:-}" ;;
     zh:view_stale_banner_fmt) printf '%s 的会话 %s 分钟没更新（连不上入口）· 正在重连' "${1:-}" "${2:-}" ;;
     en:view_stale_banner_fmt) printf 'sessions on %s not updated for %s min (hub unreachable) · reconnecting' "${1:-}" "${2:-}" ;;
     zh:view_lost_go_fmt) printf '%s 失联，进不去 · 正在重连' "${1:-}" ;;
@@ -1463,14 +1463,8 @@ quit	z	quit fleet — in the client only: every process of the client on this co
     en:clients_revoked)         printf 'Disconnected' ;;
     zh:clients_revoke_failed)   printf '断开没成功：' ;;
     en:clients_revoke_failed)   printf 'Could not disconnect:' ;;
-    zh:topbar_also_fmt)         printf '也在 %s 上打开' "${1:-}" ;;
-    en:topbar_also_fmt)         printf 'also open on %s' "${1:-}" ;;
     zh:topbar_no_record)        printf '顶行无记录' ;;
     en:topbar_no_record)        printf 'no top-line record' ;;
-    zh:topbar_waiting_fmt)      printf '! %s 个在等你' "${1:-}" ;;
-    en:topbar_waiting_fmt)      printf '! %s waiting on you' "${1:-}" ;;
-    zh:topbar_cfg_broken)       printf '会坏·需重开' ;;
-    en:topbar_cfg_broken)       printf 'breaks·reopen' ;;
     zh:notify_ask)              printf '%s 在问你' "${1:-}" ;;
     en:notify_ask)              printf '%s is asking you' "${1:-}" ;;
     zh:notify_perm)             printf '%s 要你批准' "${1:-}" ;;

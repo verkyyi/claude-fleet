@@ -180,31 +180,33 @@ L7=$(render "$W7")
 has "B: a window of this machine: its key" "$L7" "#7"
 has "B: …剩余 % off its own stamps" "$L7" "剩余 62%"
 has "B: …model · effort" "$L7" "Opus 5.5 · high"
-has "B: …the machine (FLEET_NODE_ALIASES name)" "$L7" "@m9"
-has "B: …the route off the registry row" "$L7" "Tailscale·自动"
-# a phone (issue #3006, C9): narrower than 100 columns, no 剩余 · model · effort
+hasnt "B: …no machine while it is reachable (#3194)" "$L7" "m9"
+hasnt "B: …a Tailscale route is no trouble: nothing said" "$L7" "Tailscale"
+has "B: …the ⌘P hint at 160" "$L7" "⌘P"
+# a phone (issue #3194, was #3006 C9): the % stays, no model
 L7n=$(python3 "$BIN/fleet-topbar.py" render --node view=dev1 "s=$RS" "reg=$FLEET_CONF_DIR/remote-views" "g=$G" \
   "sock=$(tn display-message -p '#{socket_path}')" cw=40 "w=$W7" | sed 's/#\[[^]]*\]//g')
 has "B: 40 columns: the key stays" "$L7n" "#7"
-hasnt "B: …no 剩余 %" "$L7n" "62%"
+has "B: …the % stays on a phone (#3194)" "$L7n" "62%"
 hasnt "B: …no model" "$L7n" "Opus"
 L8=$(python3 "$BIN/fleet-topbar.py" render --node view=dev1 "s=$RS" "reg=$FLEET_CONF_DIR/remote-views" "g=$G" \
   "sock=$(tn display-message -p '#{socket_path}')" cw=160 "w=$W8")
 has "B: a window on the refresh loop's cache: its title" "$(printf '%s' "$L8" | sed 's/#\[[^]]*\]//g')" "修缓存"
 has "B: …its ctx columns" "$(printf '%s' "$L8" | sed 's/#\[[^]]*\]//g')" "40% · Sonnet 5.5 · medium"
-has "B: …a perm needs is the ⊘ word" "$(printf '%s' "$L8" | sed 's/#\[[^]]*\]//g')" "⊘ needs OK"
-hasnt "B: …and is no red line (only a question is)" "$L8" "bg=#f7768e"
+has "B: …a perm needs is the ! glyph, no word (#3194)" "$(printf '%s' "$L8" | sed 's/#\[[^]]*\]//g')" " ! #"
+has "B: …and a red line (waiting on you)" "$L8" "bg=#f7768e"
 # a login just opened (#3155): the hub's list has no line for this fleet yet —
-# ‹ i/n › counts the 看台's own session windows (orchestrator, 7, 8), not 「–/0」
+# the window's own stamps still draw it; no ‹ i/n › any more (#3194)
 mkdir -p "$TMPDIR/nocache"
 L9=$(python3 "$BIN/fleet-topbar.py" render --node view=dev1 "s=$RS" "reg=$FLEET_CONF_DIR/remote-views" "g=$TMPDIR/nocache" \
   "sock=$(tn display-message -p '#{socket_path}')" cw=160 "w=$W7" | sed 's/#\[[^]]*\]//g')
-has "B: no hub line yet: ‹ 2/3 › off the 看台's own windows (#3155)" "$L9" "‹ 2/3 ›"
+has "B: no hub line yet: its key off its own stamps" "$L9" "#7"
+hasnt "B: …no ‹ i/n › (#3194)" "$L9" "‹"
 # the screen itself: the client's first line is that top line
 tn select-window -t "$V$W7" 2>/dev/null   # no client switch: tmux redraws the 看台 anyway
 waitfor 8 sh -c "'$REAL_TMUX' -L '$TL' capture-pane -p -t '=$TL:thin1' -S 0 -E 0 | grep -q '剩余 62%'" \
   || fail "B: the client's first line is the top line" "$(tt capture-pane -p -t "=$TL:thin1" -S 0 -E 1)"
-has "B: …at the top, with the machine" "$(tt capture-pane -p -t "=$TL:thin1" -S 0 -E 0)" "@m9"
+has "B: …at the top, with its key" "$(tt capture-pane -p -t "=$TL:thin1" -S 0 -E 0)" "#7"
 
 # ============================================================================
 # C. cur= follows the window
@@ -233,13 +235,13 @@ eq "D: prune within the keep window keeps it" "$GID" "$(tn display-message -p -t
 eq "D: …and its row" "$U/fid-8" "$(rowget dev1 cur)"
 term thin2 "--thin --view dev1 --resume --device $DEV --route relay --token t1k"
 waitfor 5 sh -c "[ \"\$('$REAL_TMUX' -L '$RS' display-message -p -t '$V' '#{session_attached}')\" = 1 ]" || fail "D: --resume never attached"
-waitfor 8 sh -c "'$REAL_TMUX' -L '$TL' capture-pane -p -t '=$TL:thin2' -S 0 -E 0 | grep -q '@m9'" || fail "D: the resumed client has no top line"
+waitfor 8 sh -c "'$REAL_TMUX' -L '$TL' capture-pane -p -t '=$TL:thin2' -S 0 -E 0 | grep -q 'm9 经中转'" || fail "D: the resumed client has no top line"
 eq "D: --resume: the same 看台" "$GID" "$(tn display-message -p -t "$V" '#{session_id}')"
 eq "D: …on the same window" "$W8" "$(vcur dev1)"
 waitfor 5 sh -c "[ \"\$(tr '\t' '\n' < '$FLEET_CONF_DIR/remote-views/dev1' | sed -n 's/^token=//p')\" = t1k ]" || fail "D: the row is the new connection's"
 eq "D: …route relay" "relay" "$(rowget dev1 route)"
 eq "D: …no left= while attached" "" "$(rowget dev1 left)"
-has "D: the line says 中转 on the relay" "$(render "$W8")" "· 中转"
+has "D: the line says 经中转 on the relay — the one time the machine is named (#3194)" "$(render "$W8")" "m9 经中转"
 
 # FRVT_EVIDENCE=<file>: the 上线证据 — the client's screen and the row before / after the reconnect
 [ -n "${FRVT_EVIDENCE:-}" ] && { printf '%s\n' "$EV_BEFORE"; printf -- '--- after --resume: capture-pane -p (client) ---\n'
