@@ -103,6 +103,85 @@ want_snip="alice m4:public=gw.example.com:22023,tailnet=m4.tail.ts.net:0;m-5:lan
 [ "$(sed -n 5p <<<"$out")" = "True ''" ] && ok "principal_hint: the hub's 401 body or its error string, nothing for another refusal" \
   || bad "principal_hint: got $(sed -n 5p <<<"$out")"
 
+# ── 1b — the LAN first, by class and by network (issue #3074) ──────────────
+# EPIC #3067 共同约定 8: lan < entry < tailnet < another direct < relay among the
+# routes that answered most; a LAN route only measured from its own network, the
+# tailnet only with a Tailscale address here; the remembered route filed by
+# network; FLEET_CONNECT_PREFER_TAILNET=1 = #2987's order. Seams:
+# FLEET_CONNECT_LOCAL_ADDRS, FLEET_CONNECT_NET_KEY.
+out=$(python3 - "$BIN/fleet-connect.py" <<'EOF2'
+import importlib.util, os, sys
+spec = importlib.util.spec_from_file_location("fc", sys.argv[1]); fc = importlib.util.module_from_spec(spec); spec.loader.exec_module(fc)
+def here(addrs, net="home"):
+    os.environ["FLEET_CONNECT_LOCAL_ADDRS"] = addrs; os.environ["FLEET_CONNECT_NET_KEY"] = net; fc._HERE.clear()
+m = {"hostname": "mini2", "alias": "mini2", "relay": True, "routes": [
+    {"name": "tailnet", "host": "mini2.tail435588.ts.net"},
+    {"name": "lan", "host": "192.168.1.249", "prefix": 24},
+    {"name": "public", "host": "gw.example.com", "port": 22023}]}
+def rows_with(ms):
+    rows = fc.route_rows(m, "https://hub")
+    for r in rows:
+        r["ms"] = list(ms.get(r["name"], []))
+    return rows
+# 1 same network: lan wins although the tailnet is a millisecond quicker
+here("192.168.1.235/24,100.101.2.3/32")
+rows = rows_with({"lan": [3.0, 3.1, 3.0], "tailnet": [2.0, 2.1, 2.0], "public": [1.0, 1, 1], "relay": [60, 61, 62]})
+print(",".join(r["name"] for r in fc.rank_routes([r for r in rows if not r.get("skip")])))
+# 2 another network: lan is not measured (skipped), the tailnet is
+here("172.20.10.3/28,100.101.2.3/32", "hotspot")
+print(";".join("%s=%s" % (r["name"], r.get("skip") or "-") for r in fc.route_rows(m, "https://hub")))
+# 3 no Tailscale here: the tailnet is not measured either, and nothing fails
+here("172.20.10.3/28", "hotspot")
+rows = fc.route_rows(m, "https://hub")
+print(";".join("%s=%s" % (r["name"], r.get("skip") or "-") for r in rows))
+# 4 the remembered route is filed by network: home's lan is not the first one tried on the hotspot
+ent = {"hub": "https://hub", "routes": [fc.route_rec(r) for r in rows if r["kind"] != "relay"]}
+here("192.168.1.235/24,100.101.2.3/32", "192.168.1.254@192.168.1.0/24")
+fc.remember(ent, {"name": "lan", "kind": "direct", "host": "192.168.1.249", "port": 22, "prefix": 24}, 1000.0)
+at_home = (fc.remembered(ent) or {}).get("route", {}).get("name")
+here("172.20.10.3/28,100.101.2.3/32", "172.20.10.1@172.20.10.0/28")
+away = fc.remembered(ent)
+fc.remember(ent, {"name": "tailnet", "kind": "direct", "host": "mini2.tail435588.ts.net", "port": 22}, 1001.0)
+here("192.168.1.235/24", "192.168.1.254@192.168.1.0/24")
+back = (fc.remembered(ent) or {}).get("route", {}).get("name")
+print(at_home, away, back, sorted(ent["by_net"]))
+# 5 FLEET_CONNECT_PREFER_TAILNET=1: #2987's order and nothing skipped
+os.environ["FLEET_CONNECT_PREFER_TAILNET"] = "1"; here("172.20.10.3/28", "hotspot")
+rows = rows_with({"lan": [3.0, 3.1, 3.0], "tailnet": [2.5, 2.6, 2.5], "public": [1.0, 1, 1], "relay": [60, 61, 62]})
+print(",".join(r["name"] for r in fc.rank_routes(rows)), [r["name"] for r in rows if r.get("skip")],
+      fc.remembered({"route": {"name": "lan"}, "at": 5})["route"]["name"])
+del os.environ["FLEET_CONNECT_PREFER_TAILNET"]
+# 6 interface lists: macOS ifconfig, Linux net-tools, iproute2
+mac = """en0: flags=8863<UP,BROADCAST,SMART,RUNNING> mtu 1500
+\tinet6 fe80::1c%en0 prefixlen 64 secured scopeid 0xb
+\tinet 192.168.1.235 netmask 0xffffff00 broadcast 192.168.1.255
+utun4: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1280
+\tinet 100.101.2.3 --> 100.101.2.3 netmask 0xffffffff
+"""
+lnx = "eth0: flags=4163<UP>  mtu 1500\n        inet 10.0.0.7  netmask 255.255.255.0  broadcast 10.0.0.255\n"
+ipo = "2: eth0    inet 10.0.0.7/24 brd 10.0.0.255 scope global eth0\\       valid_lft forever\n"
+print(fc.parse_ifconfig(mac), fc.parse_ifconfig(lnx), fc.parse_ip_addr(ipo))
+# 7 an address the person pinned, or a loopback test route, is never skipped
+here("172.20.10.3/28", "hotspot")
+print(fc.route_skip({"name": "lan", "kind": "direct", "host": "127.0.0.1"}), fc.route_skip({"name": "lan", "kind": "direct", "host": "nas.local"}),
+      fc.route_label("direct", "lan"), fc.route_label("direct", "lan-2"))
+EOF2
+)
+[ "$(sed -n 1p <<<"$out")" = "lan,tailnet,public,relay" ] && ok "rank (#3074): same network ⇒ lan, though the tailnet is 1 ms quicker; then tailnet, another direct, relay" \
+  || bad "rank lan: got $(sed -n 1p <<<"$out")"
+[ "$(sed -n 2p <<<"$out")" = "tailnet=-;lan=不在这台机器的局域网;public=-;relay=-" ] && ok "route-lan-elsewhere: off the LAN, the lan route is not measured (no dark handshake to wait out)" \
+  || bad "lan elsewhere: got $(sed -n 2p <<<"$out")"
+[ "$(sed -n 3p <<<"$out")" = "tailnet=这台电脑没有 Tailscale;lan=不在这台机器的局域网;public=-;relay=-" ] && ok "no Tailscale here ⇒ the tailnet is not measured, nothing errs" \
+  || bad "no tailscale: got $(sed -n 3p <<<"$out")"
+[ "$(sed -n 4p <<<"$out")" = "lan None lan ['172.20.10.1@172.20.10.0/28', '192.168.1.254@192.168.1.0/24']" ] && ok "memory by network: home's lan not first on the hotspot, and still there back home" \
+  || bad "net memory: got $(sed -n 4p <<<"$out")"
+[ "$(sed -n 5p <<<"$out")" = "tailnet,public,lan,relay [] lan" ] && ok "FLEET_CONNECT_PREFER_TAILNET=1: #2987's order, nothing skipped, one remembered route" \
+  || bad "prefer tailnet compat: got $(sed -n 5p <<<"$out")"
+[ "$(sed -n 6p <<<"$out")" = "['fe80::1c/64', '192.168.1.235/24', '100.101.2.3/32'] ['10.0.0.7/24'] ['10.0.0.7/24']" ] && ok "interfaces: macOS ifconfig, net-tools, iproute2" \
+  || bad "ifconfig parse: got $(sed -n 6p <<<"$out")"
+[ "$(sed -n 7p <<<"$out")" = "None None 局域网 局域网 lan-2" ] && ok "loopback / a name never skipped; lan reads 局域网" \
+  || bad "skip edges: got $(sed -n 7p <<<"$out")"
+
 # ── the fake hub + fake sshd ────────────────────────────────────────────────
 # $WORK/state (JSON, re-read on every request): tailnet_up, relay_ok, down.
 cat > "$WORK/hub.py" <<'EOF'

@@ -65,9 +65,10 @@ its own (the machine's runtime moves it).
 
 thin.log — TSV, one line per connection, fields only ever added at the end
 (docs/CLIENT-LOGS.md; C10 reads it):
-    time(UTC)  event  home  route  pick_ms  ssh_ms  first_ms  rc  reason
+    time(UTC)  event  home  route  pick_ms  ssh_ms  first_ms  rc  reason  net
 event: connect (pick_ms = fleet-connect --argv, ssh_ms = spawn → the first
-byte back, first_ms = spawn → the first valid `cur`: the view drawn) · rehome ·
+byte back, first_ms = spawn → the first valid `cur`: the view drawn; net =
+`net=<gateway>@<network>`, the network the route was picked on, #3074) · rehome ·
 upload · exec · quit · first (the first-session road, #3054) · offline (no 换家: the hub did not answer either) · run (`--run`: one command on the home, issue #3004 —
 reason = its first word).
 
@@ -160,7 +161,7 @@ def log_path():
         "claude-fleet", "thin.log")
 
 
-def tlog(event, home="", route="", pick_ms="", ssh_ms="", first_ms="", rc="", reason=""):
+def tlog(event, home="", route="", pick_ms="", ssh_ms="", first_ms="", rc="", reason="", net=""):
     path = log_path()
     try:
         cl = load("fleet_clientlog.py", "fleet_clientlog")
@@ -171,7 +172,7 @@ def tlog(event, home="", route="", pick_ms="", ssh_ms="", first_ms="", rc="", re
         reason = cl.redact(cl.cut(cl.flat(reason)))
         cl.rotate(path)
     fields = [time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), event, home, route,
-              pick_ms, ssh_ms, first_ms, rc, reason]
+              pick_ms, ssh_ms, first_ms, rc, reason, ("net=" + net) if net else ""]
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "a") as f:
@@ -602,7 +603,8 @@ class Thin:
         rc, first_byte, first_view = self.pump(cmd, token, reconnect)
         up = first_view is not None or time.time() - t0 >= env_num("FLEET_THIN_UP_SECS", 10)
         tlog("connect", home, route, pick, ms(t0, first_byte) if first_byte else "",
-             ms(t0, first_view) if first_view else "", rc, "quit" if self.quit else ("up" if up else "never up"))
+             ms(t0, first_view) if first_view else "", rc, "quit" if self.quit else ("up" if up else "never up"),
+             net=str(j.get("net") or ""))
         if up:
             self.resume = True
         return rc, up, ""

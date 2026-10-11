@@ -20,7 +20,8 @@ measuring `fleet connect` has always done; a reconnect there tries the route
 remembered last first, and measures every route only when that one does not
 answer.
 
-The routes: `relay` — through the hub (入口中转); `tailscale` — the machine's
+The routes: `lan` — the machine's own private address, when you are on its
+network (#3074); `relay` — through the hub (入口中转); `tailscale` — the machine's
 tailnet name; `direct` — its first direct route that is not the tailnet, in the
 hub's order (`lan`, `public` …); any route name the hub lists; or an address,
 host[:port] (port 22 when none). The pins live in ~/.config/claude-fleet/routes,

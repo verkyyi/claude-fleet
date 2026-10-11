@@ -1280,6 +1280,7 @@ func agentFleetConfig(getenv func(string) string, nodeRoutes []control.NodeRoute
 		// Routes for `fleet connect` ride the heartbeat (#1414).
 		FleetRoutes:       nodeRoutes,
 		FleetTailnetRoute: fleet && getenv("CCQUOTA_FLEET_NODE_TAILNET") != "0",
+		FleetLANRoute:     fleet && getenv("CCQUOTA_FLEET_NODE_LAN") != "0",
 		// A SPOT node (claude-fleet#1428): the join wrote
 		// CCQUOTA_FLEET_NODE_KIND=ephemeral from the hub's answer. SIGTERM is
 		// then the cloud taking the machine, not a restart.

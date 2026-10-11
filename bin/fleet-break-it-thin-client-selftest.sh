@@ -25,6 +25,8 @@
 #                           machine (#3049): the hub's home answer names the
 #                           login with the live fleet (Go tests by name, run when
 #                           a toolchain is here), and the client enters as it
+#   route-lan-elsewhere     (issue #3074) away from home with home's LAN line
+#                           remembered: the pick never waits on that dark address
 #
 # The loop runs for real under a python pty (the terminal), with the real
 # bin/fleet-connect.py --argv (a sandbox HOME, its own fleet-ssh-config + routes,
@@ -375,6 +377,50 @@ drill_thin_home_login_no_fleet() {
     WHAT="${WHAT}；没有 go：两条测试按名核对在，Go 门（tokenledger.yml）跑它们"
   fi
   SECS=$(since "$t0")
+}
+
+drill_route_lan_elsewhere() {
+  CAP=2   # away from home: no handshake to home's dark LAN address (FLEET_CONNECT_TIMEOUT=4)
+  local D="$WORK/lan-elsewhere" t0 out port
+  mkdir -p "$D/home/.ssh" "$D/home/.cache/claude-fleet"
+  # a fake sshd for the tailnet line (loopback — always measured)
+  python3 - "$D" <<'PY' &
+import socket, sys
+s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(("127.0.0.1", 0)); s.listen(8)
+open(sys.argv[1] + "/port", "w").write(str(s.getsockname()[1]))
+s.settimeout(30)
+try:
+    while True:
+        c, _ = s.accept(); c.sendall(b"SSH-2.0-fake\r\n"); c.close()
+except Exception:
+    pass
+PY
+  until_ok 5 test -s "$D/port" || { WHY="the fake sshd never listened"; return 1; }
+  port=$(cat "$D/port")
+  # home's LAN line is a TEST-NET address nothing answers (as 192.168.1.249 is from a hotspot)
+  printf 'Host m1 fleet-m1 fleet-m1-lan\n  HostName 192.0.2.10\n  User me\nHost fleet-m1-tailnet\n  HostName 127.0.0.1\n  Port %s\n  User me\n' "$port" > "$D/home/.ssh/fleet-ssh-config"
+  # …and it is what was picked at home a minute ago
+  python3 - "$D" "$port" <<'PY'
+import json, sys, time
+d, port = sys.argv[1], int(sys.argv[2])
+lan = {"name": "lan", "kind": "direct", "host": "192.0.2.10", "port": 22}
+tl = {"name": "tailnet", "kind": "direct", "host": "127.0.0.1", "port": port}
+m = {"hostname": "", "alias": "m1", "relay": False, "routes": [lan, tl], "login": "me"}
+now = time.time() - 60
+ent = {"at": now, "hub": "", "label": "m1", "machine": m, "login": "me", "route": lan, "routes": [lan, tl],
+       "by_net": {"192.0.2.1@192.0.2.0/24": {"route": lan, "at": now}}}
+json.dump({"last": "m1", "machines": {"m1": ent}}, open(d + "/home/.cache/claude-fleet/connect.json", "w"))
+PY
+  t0=$(now)
+  out=$(env -u FLEET_HUB_URL -u FLEET_HUB_TOKEN HOME="$D/home" XDG_CACHE_HOME="$D/home/.cache" \
+        XDG_CONFIG_HOME="$D/home/.config" FLEET_CONF_DIR="$D/home/.config/claude-fleet" FLEET_CLIENT_LOG=0 \
+        FLEET_CONNECT_TIMEOUT=4 FLEET_CONNECT_PROBES=1 \
+        FLEET_CONNECT_LOCAL_ADDRS="172.20.10.3/28,100.101.2.3/32" FLEET_CONNECT_NET_KEY="172.20.10.1@172.20.10.0/28" \
+        python3 "$BIN/fleet-connect.py" m1 --print 2>"$D/err")
+  SECS=$(since "$t0")
+  case $out in *"-p $port 127.0.0.1"*) ;;
+    *) WHY="not the tailnet line: '$out' $(head -c 300 "$D/err")"; return 1 ;; esac
+  WHAT="离开家里的局域网（热点 172.20.10.0/28），记住的是家里的 lan 192.0.2.10：没对它握手，${SECS}s 选中 Tailscale"
 }
 
 tc_cleanup() {

@@ -72,6 +72,33 @@ func TestFleetMachinesMergesHeartbeatRoutes(t *testing.T) {
 	}
 }
 
+// A "lan" route's prefix length rides through to the route list
+// (claude-fleet#3074); a route without one (an older node) has none.
+func TestFleetMachinesLANPrefix(t *testing.T) {
+	h := newFleetHarness(t)
+	beatRoutes(t, h, "a", "mini2", []control.NodeRoute{
+		{Name: "lan", Host: "192.168.1.249", Prefix: 24},
+		{Name: "lan-2", Host: "fd12:3456::7", Prefix: 64},
+		{Name: "odd", Host: "10.0.0.1", Prefix: 999},
+		{Name: "tailnet", Host: "mini2.tail.ts.net"},
+	})
+	ms := h.srv.fleetMachines()
+	if len(ms) != 1 || len(ms[0].Routes) != 4 {
+		t.Fatalf("machines = %+v", ms)
+	}
+	want := []FleetRoute{{Name: "lan", Host: "192.168.1.249", Prefix: 24}, {Name: "lan-2", Host: "fd12:3456::7", Prefix: 64},
+		{Name: "odd", Host: "10.0.0.1"}, {Name: "tailnet", Host: "mini2.tail.ts.net"}}
+	for i := range want {
+		if ms[0].Routes[i] != want[i] {
+			t.Fatalf("route %d = %+v, want %+v", i, ms[0].Routes[i], want[i])
+		}
+	}
+	b, _ := json.Marshal(ms[0].Routes[3])
+	if bytes.Contains(b, []byte("prefix")) {
+		t.Fatalf("a route with no prefix says one: %s", b)
+	}
+}
+
 // fleet.machine_names is the hub's one place for the short name
 // (claude-fleet#1706): it labels a machine that only a heartbeat mentions,
 // wins over CCQUOTA_FLEET_ROUTES' alias, and rides /v1/nodes' machine rows.

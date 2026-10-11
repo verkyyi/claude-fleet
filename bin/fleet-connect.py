@@ -30,14 +30,21 @@ machine used last, the routes in ~/.ssh/fleet-ssh-config). A viewer token
 (FLEET_HUB_TOKEN / hub.json "token" — the operator's) skips step 1.
 
 With no address at all (claude-fleet#1414), `fleet connect` asks the hub which
-machines you may reach and every way into each — its tailnet name, the public
-port the gateway forwards to it, and the relay through the hub itself (#1413)
-— measures each with FLEET_CONNECT_PROBES (3) TCP + SSH-banner handshakes,
-and ssh's in over the winner: most handshakes answered first, lowest median
-latency next. The interactive login on the far side opens the fleet client
+machines you may reach and every way into each — its own private addresses
+(`lan`, with their prefix length, #3074), its tailnet name, the public port the
+gateway forwards to it, and the relay through the hub itself (#1413) —
+measures each with FLEET_CONNECT_PROBES (3) TCP + SSH-banner handshakes, and
+ssh's in over the winner: most handshakes answered first, then the class (lan <
+entry < tailnet < another direct line < relay — EPIC #3067 共同约定 8), lowest
+median latency next. A `lan` route is measured only when one of this
+computer's interfaces is on its network, the tailnet only when this computer
+has a Tailscale address (100.64/10); FLEET_CONNECT_PREFER_TAILNET=1 is #2987's
+order for one version (compat-1v), =0 latency alone. The interactive login on the far side opens the fleet client
 there (shell/fleet-login.zsh, claude-fleet#1711).
 
-The choice is remembered for FLEET_CONNECT_CACHE_SECS (600). Inside that
+The choice is remembered for FLEET_CONNECT_CACHE_SECS (600), filed by the
+network this computer is on — its default gateway + that network (#3074) — so
+the line picked at home is never the first one tried elsewhere. Inside that
 window one handshake re-checks the remembered route before it is used; if that
 route has gone dark, every route is measured again — so closing any one line
 moves the next `fleet connect` onto another, with nothing to edit.
@@ -749,32 +756,207 @@ def is_tailnet(r):
     return (r or {}).get("kind", "direct") == "direct" and "tail" in ((r or {}).get("name") or "")
 
 
+def route_mode():
+    """How routes are ordered (claude-fleet#3074, EPIC #3067 共同约定 8):
+    "class" (the default) — lan < entry < tailnet < any other direct < relay;
+    "tailnet" — FLEET_CONNECT_PREFER_TAILNET=1, #2987's order, byte for byte
+    (compat-1v); "latency" — FLEET_CONNECT_PREFER_TAILNET=0, latency alone."""
+    v = os.environ.get("FLEET_CONNECT_PREFER_TAILNET", "")
+    return {"1": "tailnet", "0": "latency"}.get(v, "class")
+
+
 def prefer_tailnet():
-    return os.environ.get("FLEET_CONNECT_PREFER_TAILNET", "1") != "0"
+    return route_mode() == "tailnet"
+
+
+def is_lan(r):
+    """A route the machine reported for its own network (`lan`, `lan-2`, …)."""
+    n = (r or {}).get("name") or ""
+    return (r or {}).get("kind", "direct") == "direct" and (n == "lan" or re.match(r"^lan-[0-9]+$", n) is not None)
+
+
+def route_class(r):
+    """0 lan · 1 entry · 2 tailnet · 3 another direct line · 4 relay."""
+    if (r or {}).get("kind") == "relay":
+        return 4
+    if is_lan(r):
+        return 0
+    if (r or {}).get("name") == "entry":
+        return 1
+    return 2 if is_tailnet(r) else 3
+
+
+# ── where this computer is (claude-fleet#3074) ──────────────────────────────
+# Its interface addresses (which LAN routes are worth a handshake, whether
+# there is a tailnet here at all) and its network's key (default gateway +
+# that network) — what the remembered route is filed under. Seams for tests:
+# FLEET_CONNECT_LOCAL_ADDRS ("192.168.1.235/24,100.101.2.3/32"),
+# FLEET_CONNECT_NET_KEY.
+
+TAILNET_NETS = ("100.64.0.0/10", "fd7a:115c:a1e0::/48")
+_HERE = {}
+
+
+def _run(cmd):
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=2).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def parse_ifconfig(text):
+    """`ifconfig -a` (BSD, macOS, Linux net-tools) → ["addr/prefixlen", …]."""
+    words = []
+    for line in text.splitlines():
+        w = line.split()
+        if len(w) >= 2 and w[0] == "inet":
+            ip, mask = w[1].replace("addr:", ""), "32"
+            for i, x in enumerate(w):
+                if x == "netmask" and i + 1 < len(w):
+                    mask = w[i + 1]
+                elif x.startswith("Mask:"):
+                    mask = x[5:]
+            if mask.startswith("0x"):
+                mask = str(bin(int(mask, 16)).count("1"))
+            elif "." in mask:
+                mask = str(sum(bin(int(o)).count("1") for o in mask.split(".") if o.isdigit()))
+            words.append("%s/%s" % (ip, mask))
+        elif len(w) >= 2 and w[0] == "inet6":
+            pl = next((w[i + 1] for i, x in enumerate(w) if x == "prefixlen" and i + 1 < len(w)), "128")
+            words.append("%s/%s" % (w[1].split("%", 1)[0], pl))
+    return words
+
+
+def parse_ip_addr(text):
+    """`ip -o addr show` (Linux without net-tools) → ["addr/prefixlen", …]."""
+    return [w[3] for w in (l.split() for l in text.splitlines()) if len(w) >= 4 and w[2] in ("inet", "inet6")]
+
+
+def local_addrs():
+    """This computer's interface addresses, as ipaddress interfaces (with
+    their networks); loopback included."""
+    import ipaddress
+    if "addrs" in _HERE:
+        return _HERE["addrs"]
+    seam = os.environ.get("FLEET_CONNECT_LOCAL_ADDRS")
+    out = []
+    if seam is not None:
+        words = [w for w in re.split(r"[,\s]+", seam) if w]
+    else:
+        text = _run(["ifconfig", "-a"])
+        words = parse_ifconfig(text) if text else parse_ip_addr(_run(["ip", "-o", "addr", "show"]))
+    for w in words:
+        try:
+            out.append(ipaddress.ip_interface(w))
+        except ValueError:
+            pass
+    _HERE["addrs"] = out
+    return out
+
+
+def has_tailnet():
+    """Tailscale is on here: an address in 100.64/10 (or its IPv6 range)."""
+    import ipaddress
+    nets = [ipaddress.ip_network(n) for n in TAILNET_NETS]
+    return any(a.ip in n for a in local_addrs() for n in nets if a.version == n.version)
+
+
+def net_key():
+    """This computer's network: "<default gateway>@<its network>" — the key the
+    remembered route is filed under, so the route picked at home is not tried
+    first on the train. "" when there is no default route."""
+    import ipaddress
+    if "net" in _HERE:
+        return _HERE["net"]
+    seam = os.environ.get("FLEET_CONNECT_NET_KEY")
+    if seam is not None:
+        _HERE["net"] = seam
+        return seam
+    gw = ""
+    m = re.search(r"gateway:\s*(\S+)", _run(["route", "-n", "get", "default"]))
+    if m:
+        gw = m.group(1)
+    else:
+        m = re.search(r"default via (\S+)", _run(["ip", "route", "show", "default"]))
+        gw = m.group(1) if m else ""
+    key = ""
+    try:
+        g = ipaddress.ip_address(gw.split("%", 1)[0])
+        net = next((a.network for a in local_addrs() if a.version == g.version and g in a.network
+                    and a.network.prefixlen < a.max_prefixlen), None)
+        key = "%s@%s" % (g, net) if net else str(g)
+    except ValueError:
+        key = gw
+    _HERE["net"] = key
+    return key
+
+
+def lan_reachable(r):
+    """A LAN route is worth a handshake only from the same network: one of this
+    computer's interfaces on the route's network (its `prefix`, else /24 for
+    IPv4, /64 for IPv6). A host that is a name, not an address, is tried."""
+    import ipaddress
+    try:
+        ip = ipaddress.ip_address((r.get("host") or "").strip("[]").split("%", 1)[0])
+    except ValueError:
+        return True
+    plen = int(r.get("prefix") or (24 if ip.version == 4 else 64))
+    net = ipaddress.ip_network("%s/%d" % (ip, min(plen, ip.max_prefixlen)), strict=False)
+    return any(a.version == ip.version and a.ip in net for a in local_addrs())
+
+
+def is_loopback_host(r):
+    import ipaddress
+    try:
+        return ipaddress.ip_address((r.get("host") or "").strip("[]")).is_loopback
+    except ValueError:
+        return (r.get("host") or "") == "localhost"
+
+
+def route_skip(r):
+    """Why this computer does not test route r at all (claude-fleet#3074), or
+    None: a LAN route off this network (a dark address waits out its whole
+    timeout), the tailnet with no Tailscale here (a name that cannot resolve).
+    Only in the class order; never for loopback."""
+    if route_mode() != "class" or r.get("kind") == "relay" or is_loopback_host(r):
+        return None
+    if is_lan(r) and not lan_reachable(r):
+        return "不在这台机器的局域网"
+    if is_tailnet(r) and not has_tailnet():
+        return "这台电脑没有 Tailscale"
+    return None
 
 
 def rank_routes(rows):
-    """Best first: most handshakes answered, then the tailnet (claude-fleet#2987),
-    then lowest median latency, then the hub's own order. A route that answered
-    none is never chosen. On one LAN the public gateway's port and the tailnet
-    answer within the same few ms and noise used to pick either — and the one
-    picked was kept for every reconnect after it; the tailnet is the line that
-    keeps working when the person leaves that LAN.
-    FLEET_CONNECT_PREFER_TAILNET=0: latency alone, as before."""
-    pt = prefer_tailnet()
+    """Best first: most handshakes answered, then the route's class — lan <
+    entry < tailnet < another direct line < relay (claude-fleet#3074) — then
+    lowest median latency, then the hub's own order. A route that answered
+    none is never chosen. A same-network LAN line wins over the tailnet even
+    when the tailnet is a millisecond quicker: it does not depend on Tailscale
+    holding a direct path, and route_skip keeps it out of the race anywhere
+    else. FLEET_CONNECT_PREFER_TAILNET=1: #2987's order (the tailnet first, then
+    latency); =0: latency alone."""
+    mode = route_mode()
 
     def key(r):
         med = median(r["ms"])
-        return (-len(r["ms"]), 0 if pt and r["ms"] and is_tailnet(r) else 1,
-                med if med is not None else float("inf"), r["order"])
+        if mode == "class":
+            cls = route_class(r) if r["ms"] else 9
+        else:
+            cls = 0 if mode == "tailnet" and r["ms"] and is_tailnet(r) else 1
+        return (-len(r["ms"]), cls, med if med is not None else float("inf"), r["order"])
     return sorted(rows, key=key)
 
 
 def route_rows(machine, hub):
     rows = []
     for i, r in enumerate(machine.get("routes") or []):
-        rows.append({"name": r["name"], "kind": "direct", "host": r["host"], "port": int(r.get("port") or 22),
-                     "order": i, "ms": [], "errors": []})
+        row = {"name": r["name"], "kind": "direct", "host": r["host"], "port": int(r.get("port") or 22),
+               "order": i, "ms": [], "errors": []}
+        if r.get("prefix"):
+            row["prefix"] = int(r["prefix"])
+        row["skip"] = route_skip(row)
+        rows.append(row)
     if hub:
         rows.append({"name": "relay", "kind": "relay", "host": machine.get("hostname") or machine.get("alias"),
                      "port": 0, "order": len(rows), "ms": [], "errors": [],
@@ -891,6 +1073,8 @@ def route_label(kind, name):
     """A route in a person's words: 中转 · Tailscale · 直连 <name>."""
     if kind == "relay":
         return "中转"
+    if is_lan({"name": name}):
+        return "局域网" + ("" if name == "lan" else " " + name)
     if "tail" in (name or ""):
         return "Tailscale"
     if name and (re.search(r"[.:]", name) or name[:1].isdigit()):
@@ -899,7 +1083,8 @@ def route_label(kind, name):
 
 
 def pin_label(pin):
-    return {"relay": "中转", "tailscale": "Tailscale", "tailnet": "Tailscale", "direct": "直连"}.get(pin, pin)
+    return {"relay": "中转", "tailscale": "Tailscale", "tailnet": "Tailscale", "direct": "直连",
+            "lan": "局域网"}.get(pin, pin)
 
 
 def addr(r, hub):
@@ -1035,6 +1220,42 @@ def ssh_verbose_log():
         return ""
 
 
+ROUTE_KEYS = ("name", "kind", "host", "port", "prefix")
+
+
+def route_rec(r):
+    """A route as the cache keeps it."""
+    return {k: r[k] for k in ROUTE_KEYS if k in r}
+
+
+def remembered(ent):
+    """The route remembered for this machine on THIS network
+    ({"route", "at"}), or None. In the class order it is filed per network
+    (claude-fleet#3074) — an entry from before that has none, and is measured
+    once; in #2987's order (FLEET_CONNECT_PREFER_TAILNET) it is the one route,
+    as it was."""
+    if route_mode() != "class":
+        return {"route": ent["route"], "at": ent.get("at", 0)} if isinstance(ent.get("route"), dict) else None
+    by = ent.get("by_net")
+    rec = by.get(net_key()) if isinstance(by, dict) else None
+    return rec if isinstance(rec, dict) and isinstance(rec.get("route"), dict) else None
+
+
+def remember(ent, r, now):
+    """File route r as this machine's choice: on this network (by_net), and as
+    the last one (route / at — `fleet route` and the pinned path read it)."""
+    rec = route_rec(r)
+    ent["route"], ent["at"] = rec, now
+    by = ent.get("by_net") if isinstance(ent.get("by_net"), dict) else {}
+    by[net_key()] = {"route": rec, "at": now}
+    ent["by_net"] = by
+
+
+def net_note():
+    """"; net=<key>" for a connect.log line in the class order, else ""."""
+    return ("; net=%s" % (net_key() or "-")) if route_mode() == "class" else ""
+
+
 def connect(want, hub, token, verbose, retest, print_only, ssh_args, info=None, ssh_opts=()):
     """info: a route list already in hand (the home answer, #1470) — the hub
     is not asked again for it."""
@@ -1066,33 +1287,49 @@ def connect(want, hub, token, verbose, retest, print_only, ssh_args, info=None, 
 
     # 1 — a remembered choice: one handshake to confirm it. Fresh (inside the
     # TTL), or — retest "last", a reconnect (claude-fleet#2886) — of any age:
-    # only when it does not answer is every route measured again.
-    if not pin and ent and retest is not True and ent.get("hub") == hub \
-            and (retest == "last" or now - float(ent.get("at", 0)) < ttl):
-        r = ent["route"]
+    # only when it does not answer is every route measured again. Filed by the
+    # network this computer is on (claude-fleet#3074): the line picked at home
+    # is never the first one tried somewhere else.
+    rem = remembered(ent) if ent else None
+    if not pin and rem and retest is not True and ent.get("hub") == hub \
+            and (retest == "last" or now - float(rem.get("at", 0)) < ttl) and not route_skip(rem["route"]):
+        r = rem["route"]
         r = dict(r, ms=[], errors=[], order=0)
-        # A remembered line that is not the tailnet while the machine has one
-        # (claude-fleet#2987): the tailnet is asked in the same breath, and taken
-        # when it answers — a line picked once (the tailnet down that minute, or a
-        # coin toss of latency) is no longer kept for every reconnect after it.
-        tl = None
-        if prefer_tailnet() and not is_tailnet(r):
-            tl = next((dict(x, kind="direct", ms=[], errors=[], order=1) for x in (ent.get("routes") or [])
-                       if isinstance(x, dict) and x.get("host") and is_tailnet(x)), None)
-        measure([r] + ([tl] if tl else []), hub, token, 1, timeout)
+        if route_mode() == "class":
+            # A better class of line the machine has, worth a handshake from
+            # here (a LAN line come back, say), is asked in the same breath and
+            # taken when it answers.
+            ups = [dict(x, kind="direct", ms=[], errors=[], order=i + 1)
+                   for i, x in enumerate(ent.get("routes") or [])
+                   if isinstance(x, dict) and x.get("host") and route_class(dict(x, kind="direct")) < route_class(r)
+                   and not route_skip(dict(x, kind="direct"))]
+            got = measure([r] + ups, hub, token, 1, timeout)
+            tl = got[0] if got and got[0] is not r and got[0]["ms"] else None
+        else:
+            # A remembered line that is not the tailnet while the machine has
+            # one (claude-fleet#2987): the tailnet is asked in the same breath,
+            # and taken when it answers — a line picked once (the tailnet down
+            # that minute, or a coin toss of latency) is no longer kept for
+            # every reconnect after it.
+            tl = None
+            if prefer_tailnet() and not is_tailnet(r):
+                tl = next((dict(x, kind="direct", ms=[], errors=[], order=1) for x in (ent.get("routes") or [])
+                           if isinstance(x, dict) and x.get("host") and is_tailnet(x)), None)
+            measure([r] + ([tl] if tl else []), hub, token, 1, timeout)
         if tl and tl["ms"]:
-            ent["route"] = {k: tl[k] for k in ("name", "kind", "host", "port")}
-            ent["at"] = now
+            remember(ent, tl, now)
             save_cache(cache)
             clog("pick", ent.get("label") or key, "direct", tl["ms"][0], "ok",
-                 "tailnet %s over remembered %s" % (tl["name"], r["name"]))
+                 ("tailnet %s over remembered %s" if is_tailnet(tl) else "%s over remembered %s")
+                 % (tl["name"], r["name"]) + net_note())
             if verbose:
-                sys.stderr.write("fleet connect · %s · Tailscale 通了，换掉记住的 %s\n" % (ent["label"], r["name"]))
+                sys.stderr.write("fleet connect · %s · %s 通了，换掉记住的 %s\n"
+                                 % (ent["label"], route_label("direct", tl["name"]), r["name"]))
             return run_ssh(ent["machine"], tl, ent.get("login", ""), hub, print_only, ssh_args, ssh_opts)
         if r["ms"]:
             if verbose:
                 sys.stderr.write("fleet connect · %s · 用 %d 秒前测出的 %s（复核 %.0fms 通过；--retest 重测）\n"
-                                 % (ent["label"], now - float(ent["at"]), r["name"], r["ms"][0]))
+                                 % (ent["label"], now - float(rem["at"]), r["name"], r["ms"][0]))
             return run_ssh(ent["machine"], r, ent.get("login", ""), hub, print_only, ssh_args, ssh_opts)
         if verbose:
             sys.stderr.write("fleet connect · 记住的线路 %s 不通了（%s），全部重测\n"
@@ -1137,9 +1374,8 @@ def connect(want, hub, token, verbose, retest, print_only, ssh_args, info=None, 
         # measured table, if any, is kept for `fleet route`'s list
         old = entries.get(name) or {}
         ent = dict(old, at=old.get("at", now), hub=hub, label=label, machine=m, login=machine_login(m, info),
-                   route=old.get("route") or {k: r[k] for k in ("name", "kind", "host", "port")},
-                   routes=[{k: x[k] for k in ("name", "kind", "host", "port")}
-                           for x in route_rows(m, hub) if x["kind"] != "relay"])
+                   route=old.get("route") or route_rec(r),
+                   routes=[route_rec(x) for x in route_rows(m, hub) if x["kind"] != "relay"])
         entries[name] = ent
         if want and want != name:
             entries[want] = ent
@@ -1157,15 +1393,19 @@ def connect(want, hub, token, verbose, retest, print_only, ssh_args, info=None, 
          "; ".join("%s %d/%d%s" % (r["name"], len(r["ms"]), probes,
                                    (" " + r["errors"][-1]) if not r["ms"] and r.get("errors") else
                                    (" skip " + str(r["skip"])) if r.get("skip") else "")
-                   for r in rows))
+                   for r in rows) + net_note())
     if best is None:
         die("%s: 没有一条线能连通" % label, 1)
     login = machine_login(m, info)
-    route = {k: best[k] for k in ("name", "kind", "host", "port")}
+    route = route_rec(best)
+    old = entries.get(name) if isinstance(entries.get(name), dict) else {}
     ent = {"at": now, "hub": hub, "label": label, "machine": m, "login": login, "route": route,
-           "routes": [{k: r[k] for k in ("name", "kind", "host", "port")} for r in rows if r["kind"] != "relay"],
+           "routes": [route_rec(r) for r in rows if r["kind"] != "relay"],
            "table": [{"name": r["name"], "ok": len(r["ms"]), "median_ms": median(r["ms"]),
                       "skip": r.get("skip")} for r in rows]}
+    if route_mode() == "class":
+        ent["by_net"] = dict(old.get("by_net") or {}) if old.get("hub") == hub else {}
+        remember(ent, best, now)
     entries[name] = ent
     if want and want != name:
         entries[want] = ent
@@ -1239,9 +1479,11 @@ def run_ssh(machine, route, login, hub, print_only, ssh_args, ssh_opts=(), pin="
     base = ssh_command(machine, route, login, hub, ssh_opts, known_hosts=kh)
     cmd = base + list(ssh_args)
     if print_only and ARGV_OUT:
-        sys.stdout.write(json.dumps({"argv": cmd, "host": len(base) - 1, "machine": alias, "login": login or "",
-                                     "route": {"kind": route["kind"], "name": route["name"]},
-                                     "pin": pin or ""}, ensure_ascii=False) + "\n")
+        out = {"argv": cmd, "host": len(base) - 1, "machine": alias, "login": login or "",
+               "route": {"kind": route["kind"], "name": route["name"]}, "pin": pin or ""}
+        if route_mode() == "class":
+            out["net"] = net_key()   # thin.log's net= (claude-fleet#3074)
+        sys.stdout.write(json.dumps(out, ensure_ascii=False) + "\n")
         sys.stdout.flush()
         return 0
     rf = os.environ.get("FLEET_CONNECT_ROUTE_FILE")
@@ -1331,7 +1573,7 @@ def probe_remembered_direct(want):
     cache = load_cache()
     entries = cache.get("machines") if isinstance(cache.get("machines"), dict) else {}
     ent = entries.get(want) or {}
-    rows = [dict(r, order=i, ms=[], errors=[]) for i, r in enumerate(ent.get("routes") or [])
+    rows = [dict(r, order=i, ms=[], errors=[], skip=route_skip(r)) for i, r in enumerate(ent.get("routes") or [])
             if isinstance(r, dict) and r.get("kind") == "direct" and r.get("host")]
     if not rows:
         return 1

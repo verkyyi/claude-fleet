@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/netip"
 	"os"
 	"os/exec"
 	"strconv"
@@ -122,17 +124,113 @@ func (t *tailnetName) get(ctx context.Context, now time.Time) string {
 	return t.name
 }
 
-// nodeRoutes is the heartbeat's Routes: the configured ones, plus the
-// tailnet name when no configured route is called "tailnet".
+// lanRoutesMax caps how many "lan" routes one machine reports: a client
+// tests only the ones on its own network, but each still rides every beat.
+const lanRoutesMax = 4
+
+// localPrefixes is the injection point for tests: this machine's interface
+// addresses with their prefix lengths, interfaces down / loopback / virtual
+// left out.
+var localPrefixes = func() []netip.Prefix {
+	ifs, err := net.Interfaces()
+	if err != nil {
+		return nil
+	}
+	var out []netip.Prefix
+	for _, ifc := range ifs {
+		if ifc.Flags&net.FlagUp == 0 || ifc.Flags&net.FlagLoopback != 0 || ifc.Flags&net.FlagPointToPoint != 0 ||
+			virtualIf(ifc.Name) {
+			continue
+		}
+		addrs, err := ifc.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, a := range addrs {
+			if n, ok := a.(*net.IPNet); ok {
+				ip, ok := netip.AddrFromSlice(n.IP)
+				ones, _ := n.Mask.Size()
+				if ok {
+					out = append(out, netip.PrefixFrom(ip.Unmap(), ones))
+				}
+			}
+		}
+	}
+	return out
+}
+
+// virtualIf: an interface that is no way in from the room this machine
+// sits in — the tunnel interfaces (Tailscale's utun / tailscale0), container
+// and VM bridges.
+func virtualIf(name string) bool {
+	for _, p := range []string{"utun", "tailscale", "tun", "wg", "docker", "veth", "br-", "bridge", "vmnet", "virbr",
+		"awdl", "llw", "anpi", "ap", "gif", "stf"} {
+		if strings.HasPrefix(name, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// cgnat is 100.64.0.0/10 — the tailnet's own addresses (and carrier NAT's),
+// never a LAN a person shares with this machine.
+var cgnat = netip.MustParsePrefix("100.64.0.0/10")
+
+// lanRoutes (claude-fleet#3074, EPIC #3067 共同约定 8): one route per private
+// address this machine has — RFC 1918 IPv4 and IPv6 ULA — with its prefix
+// length, so a client on the same network connects straight to it instead of
+// around through the tailnet or the hub. Named "lan", "lan-2", … (a route's
+// name is an ssh-config host alias on the hub, so they must differ); IPv4
+// first, at most lanRoutesMax.
+func lanRoutes(ps []netip.Prefix) []control.NodeRoute {
+	var v4, v6 []netip.Prefix
+	seen := map[netip.Addr]bool{}
+	for _, p := range ps {
+		a := p.Addr()
+		if !p.IsValid() || seen[a] || !a.IsPrivate() || cgnat.Contains(a) || a.IsLinkLocalUnicast() {
+			continue
+		}
+		seen[a] = true
+		if a.Is4() {
+			v4 = append(v4, p)
+		} else {
+			v6 = append(v6, p)
+		}
+	}
+	var out []control.NodeRoute
+	for _, p := range append(v4, v6...) {
+		if len(out) == lanRoutesMax {
+			break
+		}
+		name := "lan"
+		if len(out) > 0 {
+			name = fmt.Sprintf("lan-%d", len(out)+1)
+		}
+		out = append(out, control.NodeRoute{Name: name, Host: p.Addr().String(), Prefix: p.Bits()})
+	}
+	return out
+}
+
+// nodeRoutes is the heartbeat's Routes: the configured ones, plus this
+// machine's private addresses when no configured route is called "lan"
+// (claude-fleet#3074), plus the tailnet name when none is called "tailnet".
+// The machine-wide node program and each login's agent both beat through
+// here, so they report the same routes.
 func (a *Agent) nodeRoutes(ctx context.Context) []control.NodeRoute {
 	out := append([]control.NodeRoute(nil), a.cfg.FleetRoutes...)
-	if !a.cfg.FleetTailnetRoute {
-		return out
-	}
-	for _, r := range out {
-		if r.Name == "tailnet" {
-			return out
+	named := func(n string) bool {
+		for _, r := range out {
+			if r.Name == n {
+				return true
+			}
 		}
+		return false
+	}
+	if a.cfg.FleetLANRoute && !named("lan") {
+		out = append(out, lanRoutes(localPrefixes())...)
+	}
+	if !a.cfg.FleetTailnetRoute || named("tailnet") {
+		return out
 	}
 	if name := a.tailnet.get(ctx, time.Now()); routeToken(name) {
 		out = append(out, control.NodeRoute{Name: "tailnet", Host: name})

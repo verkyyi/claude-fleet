@@ -87,6 +87,9 @@ type FleetRoute struct {
 	Name string `json:"name"`
 	Host string `json:"host"`
 	Port int    `json:"port,omitempty"`
+	// Prefix: a "lan" route's network prefix length, as the node reported
+	// it (claude-fleet#3074) — passed on, never checked against anything.
+	Prefix int `json:"prefix,omitempty"`
 }
 
 func (m FleetMachine) alias() string {
