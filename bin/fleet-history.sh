@@ -353,6 +353,7 @@ ledger_has_session() {   # $1=ledger $2=session-id $3=transcript-dir [$4=key $5=
 history_source() {
   # Output HIST_* fields; a captured daemon identity takes precedence over a
   # live window lookup because that window may already be gone or replaced.
+  # HIST_TASK / HIST_TASK_LINE are the caller's (--task / --task-line) when set.
   HIST_AGENT="${1:-}"; HIST_HOME=''; HIST_TDIR=''; HIST_SID=''; HIST_TRANSCRIPT=''
   local win="$2" sess="$3" wt="$4" record="$5" owner="$6" raw sock
   if [ -z "$HIST_AGENT" ] && [ -n "$win" ]; then
@@ -364,6 +365,20 @@ history_source() {
     else raw=''; fi
     IFS='|' read -r HIST_AGENT owner record <<< "$raw"
   fi
+  # The hub task record the session belonged to (@task, issue #3387) and its words
+  # (@task_line): read off the window while it stands unless the caller captured
+  # them (ledger-watch, whose window is gone). None ⇒ the row as before.
+  if [ -z "${HIST_TASK:-}" ] && [ -n "$win" ]; then
+    if [ -n "$sess" ]; then
+      raw=$(tmux -L "$(fleet_socket "$sess")" display-message -p -t "$win" '#{@task}|#{@task_line}' 2>/dev/null)
+    elif [ -n "${TMUX:-}" ]; then
+      raw=$(tmux display-message -p -t "$win" '#{@task}|#{@task_line}' 2>/dev/null)
+    else raw=''; fi
+    HIST_TASK=${raw%%|*}; HIST_TASK_LINE=${raw#*|}
+    case "$raw" in *'|'*) ;; *) HIST_TASK_LINE='' ;; esac
+  fi
+  case "${HIST_TASK:-}" in T[1-9]*) case "${HIST_TASK#T}" in *[!0-9]*) HIST_TASK='' ;; esac ;; *) HIST_TASK='' ;; esac
+  [ -n "$HIST_TASK" ] || HIST_TASK_LINE=''
   [ -n "$HIST_AGENT" ] || HIST_AGENT="${FLEET_AGENT:-claude}"
   if [ "$HIST_AGENT" = codex ]; then
     [ -n "$record" ] || record='{}'
@@ -379,16 +394,40 @@ history_source() {
 history_source_suffix() {
   # Keep old Claude rows byte-compatible. Only Codex needs the extra provider,
   # account-home and full-rollout fields (12–14); no credentials are stored.
+  # Col 15 (issue #3387) is the hub task record `T<n>` the session belonged to —
+  # written only when it had one, so a Claude row with one fills 12–14 with '-';
+  # without a task record (no hub) the row is byte for byte what it was.
   if [ "$HIST_AGENT" = codex ]; then
     printf '\tcodex\t%s\t%s' "$(oneline "${HIST_HOME:--}")" "$(oneline "${HIST_TRANSCRIPT:--}")"
+  elif [ -n "${HIST_TASK:-}" ]; then
+    printf '\t-\t-\t-'
   fi
+  [ -n "${HIST_TASK:-}" ] && printf '\t%s' "$HIST_TASK"
   printf '\n'
 }
 
+# task_title <title> → the row's title: the session's own words (@task_line, issue
+# #3387) when it belonged to a task record and nothing better named it — no title,
+# or only the window's default `scratch-<N>` / `我的会话` name.
+task_title() {
+  local t="${1:-}"
+  if [ -n "${HIST_TASK_LINE:-}" ]; then
+    case "$t" in ''|-|scratch-[0-9]*|issue-[0-9]*|我的会话*) t=$HIST_TASK_LINE ;; esac
+  fi
+  printf '%s' "$t"
+}
+
+# task_mark <col 15> → `T<n> ` for a row recorded with a hub task record, else "".
+task_mark() { case "${1:-}" in T[1-9]*) printf '%s ' "$1" ;; esac; }
+
 cmd_record() {
   local repo="" main="" pr="" key="" wt="" summary="" mergedat="" sess="" title_fb="" origin="" win="" agent="" identity="" owner=""
+  HIST_TASK=''; HIST_TASK_LINE=''
   while [ $# -gt 0 ]; do
     case "$1" in
+      # the hub task record (issue #3387): the caller's capture, else the window's
+      --task) HIST_TASK="${2:-}"; shift 2;;
+      --task-line) HIST_TASK_LINE="${2:-}"; shift 2;;
       --repo) repo="${2:-}"; shift 2;;
       --main) main="${2:-}"; shift 2;;
       --pr) pr="${2:-}"; shift 2;;
@@ -441,6 +480,7 @@ cmd_record() {
   local tdir="" sid=""
   history_source "$agent" "$win" "$sess" "$wt" "$identity" "$owner"
   tdir="$HIST_TDIR"; sid="$HIST_SID"
+  title=$(task_title "$title")
 
   # summary (col 9): only an explicit --summary lands here — the dash summary
   # cache it used to fall back to retired with the summary column (issue #535).
@@ -494,8 +534,11 @@ cmd_record() {
 # transcript (nothing to index).
 cmd_record_closed() {
   local repo="" key="" wt="" sess="" title="" summary="" closedat="" sha="" origin="" win="" agent="" identity="" owner=""
+  HIST_TASK=''; HIST_TASK_LINE=''
   while [ $# -gt 0 ]; do
     case "$1" in
+      --task) HIST_TASK="${2:-}"; shift 2;;            # issue #3387 — see cmd_record
+      --task-line) HIST_TASK_LINE="${2:-}"; shift 2;;
       --repo) repo="${2:-}"; shift 2;;
       --key|--issue) key="${2:-}"; shift 2;;   # issue number | scratch-<N> (#466)
       --sha) sha="${2:-}"; shift 2;;
@@ -528,6 +571,7 @@ cmd_record_closed() {
   local tdir="" sid=""
   history_source "$agent" "$win" "$sess" "$wt" "$identity" "$owner"
   tdir="$HIST_TDIR"; sid="$HIST_SID"
+  title=$(task_title "$title")
 
   local ledger; ledger=$(ledger_path "$repo")
   if ledger_has_session "$ledger" "$sid" "$tdir" "$key" "$wt" "${pr:-}" "${sha:-}"; then
@@ -703,12 +747,13 @@ EOF
     printf 'repos: %s\n' "$lg"
   fi
   local now; now=$(date +%s 2>/dev/null)
-  printf '%s\n' "$out" | while IFS=$'\t' read -r rrepo when iss title pr sha _ _ sid smry state origin _; do
+  printf '%s\n' "$out" | while IFS=$'\t' read -r rrepo when iss title pr sha _ _ sid smry state origin _ _ _ task _; do
     [ -z "$iss" ] && continue
     local ep rel; ep=$(fleet_epoch_from_iso "$when"); fleet_reltime "$ep" "$now"; rel="${reltime_out:-$when}"
     local short="${sha:0:7}"; [ "$sha" = "-" ] && short="-"
     [ "${title:--}" = "-" ] && title="(untitled)"
     [ "${smry:--}" = "-" ] && smry=""
+    title="$(task_mark "$task")$title"            # T<n> (issue #3387)
     [ ${#title} -gt 44 ] && title="${title:0:43}…"
     [ ${#smry}  -gt 60 ] && smry="${smry:0:59}…"
     # glyph tells landed (✓) from closed-unlanded (✗); empty state == legacy landed.
@@ -792,7 +837,7 @@ cmd_rows() {
   # recur (a reopened issue, a re-landed scratch), so the FIRST row wins — newest
   # first means the newest one, the one a reader means by that number.
   local lkeytab='' lseq=0 lk_o lorg0 lrp0 lslug='' lshort=''
-  while IFS=$'\t' read -r lrp0 _ lk0 _ _ _ _ _ _ _ _ lorg0; do
+  while IFS=$'\t' read -r lrp0 _ lk0 _ _ _ _ _ _ _ _ lorg0 _; do
     [ -n "$lk0" ] || continue
     lseq=$((lseq+1))
     lk_o=$(lkey_okey "$lk0")
@@ -810,7 +855,7 @@ cmd_rows() {
   # substitutions below replace non-overlapping matches, so records sharing one
   # separator newline would count two in a row as ONE.
   local lkidtab='' lm
-  while IFS=$'\t' read -r _ _ lk0 _ _ _ _ _ _ _ lst0 lorg0; do
+  while IFS=$'\t' read -r _ _ lk0 _ _ _ _ _ _ _ lst0 lorg0 _; do
     [ -n "$lk0" ] || continue
     lorg_is_sess "${lorg0:-}" || continue
     lchain "$lorg0"
@@ -882,7 +927,7 @@ cmd_rows() {
   # pipe for the same reason: a piped `while` is a subshell and $lbuf would not
   # survive it.
   local lbuf='' lrow=0 ldepth lgrp lroot lrootseq
-  while IFS=$'\t' read -r rrepo when iss title pr sha _ _ sid smry state origin _; do
+  while IFS=$'\t' read -r rrepo when iss title pr sha _ _ sid smry state origin _ _ _ task _; do
     [ -z "$iss" ] && continue
     lrow=$((lrow + 1))
     local target fzfkey okey
@@ -931,6 +976,7 @@ cmd_rows() {
     # column stays in the ledger format unrendered.
     local dsmry="$title"
     { [ "${dsmry:--}" = "-" ] || [ -z "$dsmry" ]; } && dsmry="(untitled)"
+    dsmry="$(task_mark "$task")$dsmry"            # its hub task record, T<n> (issue #3387)
     # activity = time since the merge (mergedAt → epoch → friendly span).
     local ep act; ep=$(fleet_epoch_from_iso "$when"); fleet_reltime "$ep" "$now"; act="${reltime_out:--}"
     # PR cell — the merged number (all landed rows merged); em-dash when PR-less.
@@ -1092,7 +1138,7 @@ cmd_resume() {
   local row; row=$(find_row "$repo" "$key")
   [ -z "$row" ] && { printf 'REVIEW-ONLY\tno ledger row for %s\n' "$key"; return 0; }
   local iss pr sha wt tdir sid agent chome ctrans
-  IFS=$'\t' read -r _ iss _ pr sha wt tdir sid _ _ _ agent chome ctrans <<<"$row"
+  IFS=$'\t' read -r _ iss _ pr sha wt tdir sid _ _ _ agent chome ctrans _ <<<"$row"
   if [ "$agent" = codex ]; then
     ctrans=$(python3 "$BIN/fleet-codex-session.py" locate --session "$sid" --home "$chome" --transcript "$ctrans" 2>/dev/null) || ctrans=''
     if [ ! -d "${chome:-/nonexistent}" ] || [ -z "$ctrans" ]; then
@@ -1275,7 +1321,7 @@ cmd_fold() {
   # `@<repo>`; a target WITHOUT one (a stale render) matches the first — newest —
   # row whose bare target it is.
   local lkeytab='' lseq=0 lk0 pr0 lorg0 lk_o ltgt selfkey='' lroot lrootseq lrp0 lslug=''
-  while IFS=$'\t' read -r lrp0 _ lk0 _ pr0 _ _ _ _ _ _ lorg0; do
+  while IFS=$'\t' read -r lrp0 _ lk0 _ pr0 _ _ _ _ _ _ lorg0 _; do
     [ -n "$lk0" ] || continue
     lseq=$((lseq+1))
     case "$lk0" in scratch-*) lk_o=$lk0; ltgt="landed:scratch:$lk0" ;;

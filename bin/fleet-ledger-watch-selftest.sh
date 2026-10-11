@@ -234,5 +234,26 @@ assert args[args.index('--launcher-pid')+1]=='1234', args
 assert args[args.index('--agent-identity')+1]==sys.argv[2], args
 PYTEST
 
+# A hub task record (issue #3387): @task + @task_line ride the snapshot, so the row
+# a vanished window gets still carries T<n> and the session's words; none ⇒ no flag.
+reset_all
+windows '@1|10|0||/wk/issue-10|fix-ten|||||T41|把周报 | 做成一页' '@5|||||dash'
+run s1
+windows '@5|||||dash'
+run s1
+python3 - "$WORK/record-args" <<'PYTEST' || fail 'the task record was lost when its pane vanished'
+import pathlib, sys
+args=pathlib.Path(sys.argv[1]).read_text().splitlines()
+assert args[args.index('--task')+1]=='T41', args
+assert args[args.index('--task-line')+1]=='把周报 | 做成一页', args
+assert args[args.index('--agent')+1]=='claude', args
+PYTEST
+reset_all
+windows '@1|10|0||/wk/issue-10|fix-ten' '@5|||||dash'
+run s1
+windows '@5|||||dash'
+run s1
+grep -qx -- '--task' "$WORK/record-args" && fail 'a window with no task record grew a --task'
+
 printf 'selftest PASS: seed · vanished→record · still-live · scratch recorded · @raw-no-worktree/panel excluded · dedup-token · transient-empty · dry-run · off-switch · single-writer · disk-gate\n'
 exit 0

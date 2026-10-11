@@ -375,7 +375,14 @@ Do not install from memory: read the doc and work from it.
   `@task`); a child report carries `task`, `await` takes `T<n>`, the steward's
   `ask` and a park write 「问过你」 / 「停放」 on the record (no issue: only there),
   and an EPIC member gets a read-only record (`epic-member`). No hub ⇒ the script
-  exits 3 and every caller is byte for byte as before.
+  exits 3 and every caller is byte for byte as before. **A session with no issue
+  is parked and remembered by its record** (issue #3387): `fleet_park.py` books it
+  as `T<n>` (stop by `fid:`, no GitHub write, 「停放」 on the record alone, wait
+  `task:T<n>`; restore skips it by `fleet_parked_fid`) and wakes it through
+  `dash-raw-session.sh --resume <sid> --seed-file … --task T<n>` (its kept scratch
+  worktree via `--worktree`, else `--no-repo`); the history ledger's col 15 is the
+  `T<n>` (a Claude row fills 12–14 with `-`), its title the `@task_line` words, and
+  `list` / `rows` mark the row `T<n>` — resume stays by the session key.
 - **A session's first turn is the person's own words; the flow rides a hook**
   (issue #3331, EPIC #3178 ⑧, D2 = ①). `dash-issue-session.sh` seeds a Claude
   worker with `--words-file` (⌘P's cold `new` start hands the body, else the
