@@ -34,7 +34,7 @@ import (
 //
 //	GET    /v1/fleet/entry/keys            keys · name · home · the homes they may pick
 //	POST   /v1/fleet/entry/keys            {public_key, name?}
-//	PATCH  /v1/fleet/entry/keys/<id>       {name}       a label, nothing a machine reads
+//	PATCH  /v1/fleet/entry/keys/<id>       {name}       a label (the home sees it with its next list)
 //	DELETE /v1/fleet/entry/keys/<id>       revoke
 //	PUT    /v1/fleet/entry/name            {name}
 //	PUT    /v1/fleet/entry/home            {machine, login?}  only a login with a live fleet
@@ -785,7 +785,7 @@ func (s *Server) entryNodeList(host string) (control.EntryNodeList, error) {
 		}
 		l := control.EntryNodeLogin{Person: h.Person, Keys: []control.EntryNodeKey{}}
 		for _, k := range keys {
-			l.Keys = append(l.Keys, control.EntryNodeKey{FP: k.FP, Type: k.Type, B64: k.B64})
+			l.Keys = append(l.Keys, control.EntryNodeKey{FP: k.FP, Type: k.Type, B64: k.B64, Name: k.Name})
 		}
 		out.Logins[h.Login] = l
 	}

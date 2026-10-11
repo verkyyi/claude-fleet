@@ -38,11 +38,13 @@ const (
 )
 
 // EntryNodeKey is one key in EntryNodeList: the authorized_keys line's
-// parts, never a comment.
+// parts, never a comment. Name is the person's label for it — the device the
+// home's 看台 says it is (claude-fleet#3071); it never enters the keys file.
 type EntryNodeKey struct {
 	FP   string `json:"fp"`
 	Type string `json:"type"`
 	B64  string `json:"b64"`
+	Name string `json:"name,omitempty"`
 }
 
 // EntryNodeLogin is one login homed on the machine.
