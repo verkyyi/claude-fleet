@@ -78,7 +78,13 @@ func TestAssets_MenuLinksResolve(t *testing.T) {
 	if len(hrefs) < 4 {
 		t.Fatalf("found %d menu hrefs in lib/shell.js; the PAGES table moved", len(hrefs))
 	}
+	// The hub draws these itself (internal/api/fleet_entry_page.go,
+	// claude-fleet#3199): menu links, no embedded page.
+	hubDrawn := map[string]bool{"/fleet/keys": true, "/fleet/connection": true}
 	for _, m := range hrefs {
+		if hubDrawn[m[1]] {
+			continue
+		}
 		file, ok := route[m[1]]
 		if !ok {
 			t.Errorf("menu links %s, which no embedded page serves", m[1])
