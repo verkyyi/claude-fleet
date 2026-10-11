@@ -35,6 +35,28 @@ on:
         type: string
         required: false
         default: '[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]'
+      # The release train's quarantine (issue #3243) — ONLY release-train.yml passes
+      # these; the PR gate and the nightly never do, so they never skip a test.
+      quarantine:
+        description: 'the quarantine list in force (run-selftests.sh --quarantine) — the train only'
+        type: string
+        required: false
+        default: ''
+      prev_fails:
+        description: 'the tests red on the previous train, another sha (run-selftests.sh --prev-fails) — the train only'
+        type: string
+        required: false
+        default: ''
+      drill_red:
+        description: 'a test counted red after it runs (the quarantine drill) — the train only'
+        type: string
+        required: false
+        default: ''
+      record:
+        description: 'upload each shard FAIL / QUARANTINE lines as train-result-<os>-<K> — the train only'
+        type: boolean
+        required: false
+        default: false
 
 jobs:
   shard:
@@ -128,10 +150,21 @@ jobs:
           CHANGED_BASE: ${{ inputs.base }}
           # Our own Macs pack their shards by their OWN measured costs (issue #3145).
           OURS: ${{ contains(inputs.runs_on, 'fleet-ci') }}
+          # The train's quarantine (issue #3243): empty everywhere but the train.
+          QUARANTINE: ${{ inputs.quarantine }}
+          PREV_FAILS: ${{ inputs.prev_fails }}
+          DRILL_RED: ${{ inputs.drill_red }}
         run: |
           set -o pipefail
           set -- --shard "${{ matrix.shard }}/${{ strategy.job-total }}"
           [ "$OURS" != true ] || set -- --durations selftest-durations-fleet-ci.txt "$@"
+          if [ -n "$CHANGED_BASE" ] && [ -n "$QUARANTINE" ]; then
+            printf '%s\n' "$QUARANTINE" > "$RUNNER_TEMP/quarantine.list"; set -- --quarantine "$RUNNER_TEMP/quarantine.list" "$@"
+          fi
+          if [ -n "$CHANGED_BASE" ] && [ -n "$PREV_FAILS" ]; then
+            printf '%s\n' "$PREV_FAILS" > "$RUNNER_TEMP/prev-fails"; set -- --prev-fails "$RUNNER_TEMP/prev-fails" "$@"
+          fi
+          [ -z "$DRILL_RED" ] || set -- --drill-red "$DRILL_RED" "$@"
           [ -z "$CHANGED_BASE" ] || set -- --changed "$CHANGED_BASE" "$@"
           bash bin/run-selftests.sh "$@" 2>&1 | tee selftests.log
 
@@ -157,6 +190,20 @@ jobs:
             fi
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: This shard's verdicts for the train
+        # issue #3243: the train's record job reads every shard's FAIL / QUARANTINE
+        # lines (a cut-short shard has none — that is C9's rerun, not a red to count).
+        if: always() && inputs.record
+        run: grep -E '^(FAIL|QUARANTINE) ' selftests.log > train-result.txt 2>/dev/null || true
+      - name: Upload this shard's verdicts
+        if: always() && inputs.record
+        uses: actions/upload-artifact@v4
+        with:
+          name: train-result-${{ runner.os }}-${{ matrix.shard }}
+          path: train-result.txt
+          retention-days: 3
+          if-no-files-found: ignore
 
       - name: Name the failures as macOS-only
         if: failure() && runner.os == 'macOS'

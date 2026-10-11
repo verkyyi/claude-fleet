@@ -1,0 +1,11 @@
+# conf/selftest-quarantine.list — hand-written release-train quarantine entries
+# (issue #3243, EPIC #3139 C10). Normally EMPTY: the train quarantines a test red on
+# two trains in a row by itself and carries those entries in its `train-quarantine`
+# artifact (it never pushes master). An entry here rides along with them.
+#
+# One line per test, read only by bin/fleet-train-quarantine.sh:
+#   <test> <issue#> <expires ISO 8601 UTC> <run id> <run id>
+#   portability-selftest.sh 3250 2026-10-13T08:00:00Z 18324412 18325077
+# At most 48 hours, naming the issue that fixes it; an expired entry does not exist.
+# Only the release train skips it — a PR, the nightly full suite and a train whose
+# change touches the test (or a file it names) run it as always.

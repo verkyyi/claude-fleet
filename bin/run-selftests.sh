@@ -60,6 +60,15 @@
 #   --durations F pack by table F instead: a bare name is a file beside this script
 #               (the release train's own Macs use selftest-durations-fleet-ci.txt,
 #               issue #3145); a missing one falls back to selftest-durations.txt.
+#   --changed B run only the tests related to what changed since B (see below).
+#   --quarantine LIST   (with --changed; the RELEASE TRAIN only — issue #3243) skip a
+#               test LIST holds in force (bin/fleet-train-quarantine.sh, the one
+#               reader) unless this change touches it; prints `QUARANTINED <test> …`.
+#   --prev-fails FILE   (with --changed; the train only) the tests red on the previous
+#               train (another sha): one red again here, untouched by this change, is
+#               printed `QUARANTINE <test> …` and not counted as a failure — the train
+#               files its issue and writes the entry (record). One red never is.
+#   --drill-red TEST    count TEST as failed after it runs (the quarantine drill only).
 #   NAME        run only the named tests. The `-selftest.sh` suffix is optional, and a
 #               shell glob works (`run-selftests.sh 'dash-*'`), so chasing one red test
 #               still goes through the same hermetic prelude CI uses. A NAME that
@@ -178,6 +187,7 @@ if [ -z "${FLEET_SELFTEST_ROOT:-}" ] && [ -z "${FLEET_SELFTEST_NO_SHADOW:-}" ]; 
   exit $?
 fi
 
+start_dir=$(pwd)
 cd "$script_dir" || { echo "run-selftests: cannot cd to bin dir ($script_dir)" >&2; exit 2; }
 
 # Hermetic env (issue #399): fleet-lib.sh now sources the sibling fleet.conf on load
@@ -217,9 +227,20 @@ fi
 # selftest name never starts with `-`), so `run-selftests.sh --shard 1/4 'dash-*'`
 # works. Forwarded verbatim through the shadow re-exec above, so it is only ever
 # parsed here, in the inner run.
-shard_k=1 shard_n=1 changed_base='' dur_spec=''
+shard_k=1 shard_n=1 changed_base='' dur_spec='' q_list='' q_prev='' drill_red=''
+# a relative path is the caller's, not this bin dir's
+abspath() { case "$1" in /*) printf '%s' "$1" ;; *) printf '%s/%s' "$start_dir" "$1" ;; esac; }
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    --quarantine) [ "$#" -ge 2 ] && [ -f "$2" ] \
+                    || { echo "run-selftests: --quarantine needs a list file" >&2; exit 2; }
+                  q_list=$(abspath "$2"); shift 2; continue ;;
+    --prev-fails) [ "$#" -ge 2 ] && [ -f "$2" ] \
+                    || { echo "run-selftests: --prev-fails needs a file of test names" >&2; exit 2; }
+                  q_prev=$(abspath "$2"); shift 2; continue ;;
+    --drill-red)  [ "$#" -ge 2 ] && [ -n "$2" ] \
+                    || { echo "run-selftests: --drill-red needs a test name" >&2; exit 2; }
+                  drill_red=$2; shift 2; continue ;;
     --shard) [ "$#" -ge 2 ] || { echo "run-selftests: --shard needs K/N" >&2; exit 2; }
              shard_spec=$2; shift 2 ;;
     --shard=*) shard_spec=${1#--shard=}; shift ;;
@@ -311,6 +332,16 @@ hunk_ranges() {
     }'
 }
 
+# --quarantine / --prev-fails judge "does this change touch the test?", which only
+# --changed can answer — the train's options, never a PR's or the nightly's.
+if [ -n "$q_list$q_prev" ] && [ -z "$changed_base" ]; then
+  echo "run-selftests: --quarantine / --prev-fails need --changed <base> (the release train's run)" >&2; exit 2
+fi
+# The tests THIS change touches (rules a, b, c, e below) — the quarantine's measure
+# (issue #3243): a test the change touches, or a file it names, is never skipped and
+# never quarantined. Known only when the base resolves; the lint group (d) and the
+# full-suite fallback touch nothing by themselves.
+touched='' touch_known=0
 if [ -n "$changed_base" ]; then
   [ "$#" -eq 0 ] \
     || { echo "run-selftests: --changed picks the tests itself — drop the test names" >&2; exit 2; }
@@ -322,19 +353,9 @@ if [ -n "$changed_base" ]; then
     changed_files=$(git -C "$repo_dir" diff --no-renames --name-only "$mb" HEAD 2>/dev/null) \
       || full_reason="git diff $mb..HEAD failed"
   fi
+  picks=''   # "test<TAB>reason" lines; the first reason per test wins
   if [ -z "$full_reason" ]; then
-    for f in $changed_files; do
-      for h in $SELFTEST_HARNESS; do
-        # shellcheck disable=SC2254  # intentional: $h is a glob pattern
-        case "$f" in $h) full_reason="harness changed: $f"; break 2 ;; esac
-      done
-    done
-  fi
-  if [ -n "$full_reason" ]; then
-    printf 'select: * ← full suite (%s)\n' "$full_reason"
-    set -- *-selftest.sh
-  else
-    picks=''   # "test<TAB>reason" lines; the first reason per test wins
+    touch_known=1
     nl='
 '
     tab=$(printf '\t')
@@ -375,17 +396,34 @@ if [ -n "$changed_base" ]; then
         picks="$picks$t${tab}mentions $b$nl"
       done
     done
-    for a in $SELFTEST_ALWAYS; do
-      [ -f "$a-selftest.sh" ] && picks="$picks$a-selftest.sh${tab}always (lint group)$nl"
-    done
     # A part file (`# selftest-part-of: <test>`) runs a slice of another test's
     # checks under its own name and ceiling (issue #2955): it goes wherever that
     # test goes, since the files it exercises are named only there.
-    for t in $(printf '%s' "$picks" | cut -f1 | sort -u); do
-      for p in $(grep -lx -- "# selftest-part-of: $t" *-selftest.sh 2>/dev/null); do
-        picks="$picks$p${tab}part of $t$nl"
+    parts_of() {
+      for t in $(printf '%s' "$1" | cut -f1 | sort -u); do
+        for p in $(grep -lx -- "# selftest-part-of: $t" *-selftest.sh 2>/dev/null); do
+          printf '%s\t%s\n' "$p" "part of $t"
+        done
+      done
+    }
+    picks="$picks$(parts_of "$picks")$nl"
+    touched=$(printf '%s' "$picks" | awk -F '\t' 'NF { print $1 }' | sort -u)
+    for f in $changed_files; do
+      for h in $SELFTEST_HARNESS; do
+        # shellcheck disable=SC2254  # intentional: $h is a glob pattern
+        case "$f" in $h) full_reason="harness changed: $f"; break 2 ;; esac
       done
     done
+  fi
+  if [ -n "$full_reason" ]; then
+    printf 'select: * ← full suite (%s)\n' "$full_reason"
+    set -- *-selftest.sh
+  else
+    always=''
+    for a in $SELFTEST_ALWAYS; do
+      [ -f "$a-selftest.sh" ] && always="$always$a-selftest.sh${tab}always (lint group)$nl"
+    done
+    picks="$picks$always$(parts_of "$always")$nl"
     picks=$(printf '%s' "$picks" | awk -F '\t' 'NF && !seen[$1]++' | sort)
     if [ -z "$picks" ]; then
       echo 'select: (none) ← no change maps to a selftest'
@@ -420,6 +458,38 @@ elif [ "$#" -gt 0 ]; then
 else
   set -- *-selftest.sh
 fi
+
+# THE TRAIN'S QUARANTINE (issue #3243). A test the list holds in force is skipped —
+# unless this change touches it, then it runs like any other. Before the deal, so
+# every shard drops the same tests and the slices still partition what is left.
+in_list() { printf '%s\n' "$2" | grep -qxF -- "$1"; }
+if [ -n "$q_list" ]; then
+  if [ "$touch_known" != 1 ]; then
+    echo "quarantine: base '$changed_base' does not resolve — cannot tell what this change touches, nothing skipped"
+  else
+    q_on=$(sh "$script_dir/fleet-train-quarantine.sh" active "$q_list") \
+      || { echo "run-selftests: could not read the quarantine list $q_list" >&2; exit 2; }
+    keep=''
+    for t in "$@"; do
+      q_row=$(printf '%s\n' "$q_on" | awk -v t="$t" '$1 == t' | head -1)
+      if [ -z "$q_row" ]; then keep="$keep $t"; continue; fi
+      read -r _ q_issue q_until q_run1 q_run2 <<EOF
+$q_row
+EOF
+      if in_list "$t" "$touched"; then
+        printf 'quarantine: %s runs — this change touches it (#%s)\n' "$t" "$q_issue"
+        keep="$keep $t"
+      else
+        printf 'QUARANTINED %s skipped — #%s, until %s (red on runs %s and %s; untouched by this change)\n' "$t" "$q_issue" "$q_until" "$q_run1" "$q_run2"
+      fi
+    done
+    # shellcheck disable=SC2086  # intentional: test names carry no whitespace
+    set -- $keep
+    [ "$#" -gt 0 ] || { echo 'run-selftests: every selected test is quarantined — nothing to run'; exit 0; }
+  fi
+fi
+q_prev_names=''
+[ -z "$q_prev" ] || q_prev_names=$(awk 'NF { print $1 }' "$q_prev")
 
 # Settle the work list, then PACK the shards by recorded cost (issue #1390).
 #
@@ -602,8 +672,8 @@ trap 'tt_sweep' EXIT
 trap 'tt_sweep; exit 130' INT HUP
 trap 'tt_sweep; exit 143' TERM
 
-total=0 passed=0 failed=0
-failures='' timings=''
+total=0 passed=0 failed=0 quarantined=0
+failures='' timings='' quarantines=''
 run_start=$(now_ms)
 
 # shellcheck disable=SC2086  # intentional: $tests is a space-separated list
@@ -619,6 +689,9 @@ for t in $tests; do
   fi
   ms=$(( $(now_ms) - start_ms ))
   tt_sweep
+  if [ "$t" = "$drill_red" ] && [ "$rc" -eq 0 ]; then
+    rc=1; echo "run-selftests: drill — $t counted red (--drill-red)"
+  fi
   timings="$timings$ms $t
 "
   if [ "$rc" -eq 0 ]; then
@@ -628,6 +701,12 @@ for t in $tests; do
     printf 'TIMEOUT %-44s %6ss (limit %ss)\n' "$t" "$(secs "$ms")" "$test_timeout"
     failed=$((failed + 1))
     failures="${failures} ${t}"
+  elif [ -n "$q_prev_names" ] && [ "$touch_known" = 1 ] && in_list "$t" "$q_prev_names" && ! in_list "$t" "$touched"; then
+    # red on the previous train too (another sha), and this change touches neither
+    # it nor a file it names: the second red in a row — quarantine, not a failure
+    printf 'QUARANTINE %s %ss (exit %s) — red on the previous train too, untouched by this change\n' "$t" "$(secs "$ms")" "$rc"
+    quarantined=$((quarantined + 1))
+    quarantines="${quarantines} ${t}"
   else
     printf 'FAIL  %-46s %6ss (exit %s)\n' "$t" "$(secs "$ms")" "$rc"
     failed=$((failed + 1))
@@ -652,6 +731,7 @@ fi
 
 printf '\n================ selftest summary ================\n'
 printf '%s test(s): %s passed, %s failed\n' "$total" "$passed" "$failed"
+[ "$quarantined" -eq 0 ] || printf 'quarantined (red twice in a row, the train files and skips them):%s\n' "$quarantines"
 printf 'wall %ss\n' "$(secs "$(( $(now_ms) - run_start ))")"
 if [ "$failed" -ne 0 ]; then
   printf 'failed:%s\n' "$failures"
