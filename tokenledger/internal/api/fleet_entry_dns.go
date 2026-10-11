@@ -223,7 +223,7 @@ func (s *Server) entryDNSTargets(sub string, now time.Time) (map[string]entryDNS
 }
 
 // entryPublicPort is the port the outside reaches machine's door at: the
-// router's forwarded port C6 knocked on (its public= route — two homes
+// router's forwarded port C6 knocked on (its entry= route — two homes
 // behind one router differ by it), else the door's own. A reachable row
 // speaks first (IPv4 before IPv6, as the records), then any IPv4 row, then
 // entryPort.

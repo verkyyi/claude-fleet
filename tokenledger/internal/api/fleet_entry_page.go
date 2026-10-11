@@ -216,7 +216,7 @@ func (s *Server) fillEntryPage(r *http.Request, c entryCaller, now time.Time, pa
 	}
 	if page.Home != nil {
 		// Two homes behind one router share the address and differ by the
-		// port the router forwards (EPIC #3067 改约定 2): Termius's port is
+		// port the router forwards (EPIC #3067 改约定 3, the entry= route): Termius's port is
 		// the home's, not a constant.
 		page.Port = page.Home.Port
 	}

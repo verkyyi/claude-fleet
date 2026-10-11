@@ -283,7 +283,7 @@ func TestEntryPageHomeUnreachableFromOutside(t *testing.T) {
 	}
 }
 
-// Two homes behind one router (EPIC #3067 改约定 2): one address, the port
+// Two homes behind one router (EPIC #3067 改约定 3): one address, the port
 // the router forwards tells them apart. The page's Termius port is the
 // home's, a move to the other says the port changes, and an IPv6 the door
 // answers on another port than the A's gets no AAAA.
@@ -297,18 +297,18 @@ func TestEntryDNSPortIsTheHomes(t *testing.T) {
 	if _, err := h.srv.Store.SetEntryHome(store.EntryHome{Person: pAlice, Machine: "macmini-m4", Login: "alice", SetBy: "t", SetAt: now}); err != nil {
 		t.Fatal(err)
 	}
-	dnsReach(t, h, "macmini", now, true, "23.119.126.213:22022")
-	dnsReach(t, h, "macmini-m4", now, true, "23.119.126.213:22023", "[2001:db8::9]:22022")
+	dnsReach(t, h, "macmini", now, true, "23.119.126.213:22122")
+	dnsReach(t, h, "macmini-m4", now, true, "23.119.126.213:22123", "[2001:db8::9]:22022")
 	h.srv.EntryDNSTick(context.Background(), now)
 	if got, want := dnsZone(f), "A alice.cf 23.119.126.213"; got != want {
 		t.Fatalf("zone: %s\nwant %s (no AAAA on another port)", got, want)
 	}
 	_, body, _ := keysPage(t, h, pAlice, "", nil)
-	if !strings.Contains(body, `<span class="v">22023</span>`) {
-		t.Fatalf("home macmini-m4: the port is not 22023:\n%s", body)
+	if !strings.Contains(body, `<span class="v">22123</span>`) {
+		t.Fatalf("home macmini-m4: the port is not 22123:\n%s", body)
 	}
 	_, body, _ = keysPage(t, h, pAlice, "?move=macmini&login=alice", nil)
-	if !strings.Contains(body, "端口改成 <b>22022</b>（原来 22023）") {
+	if !strings.Contains(body, "端口改成 <b>22122</b>（原来 22123）") {
 		t.Fatalf("move sheet does not say the port changes:\n%s", body)
 	}
 }
