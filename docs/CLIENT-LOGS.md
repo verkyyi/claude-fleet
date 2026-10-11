@@ -106,13 +106,6 @@ fields, only ever added at the end:
 | `quit` / `end` | ⌘Q or a detach / a signal | `rc` |
 | `run` | `fleet-thin.py --run`: one command on the home over a one-shot ssh — `fleet ls / open / close / answer`, `fleet claude` with no client tmux (issue #3004) | `home` · `route`; reason = the command's first word |
 
-### old-client.log — `fleet --old` (#3007)
-
-`${XDG_CACHE_HOME:-~/.cache}/claude-fleet/old-client.log`: one line each time the
-old client is asked for by `fleet --old` since plain `fleet` became the thin loop
-(EPIC #2999 C10) — `time(UTC)  login  local|ssh  args`. C11 reads it before the
-old client goes.
-
 `connect.log` keeps the `home` / `pick` lines of each `--argv` run; the ssh
 itself is the thin client's child, so it has no `ssh-start` / `ssh-end` there —
 its end is the `connect` line here.
