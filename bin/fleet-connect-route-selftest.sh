@@ -576,12 +576,15 @@ FLEET_CONNECT_RETEST=1 "$BIN/fleet" connect m4 --hub "$HUB" --print >/dev/null 2
 [ "$(hits routes_hits)" = $((before + 1)) ] && ok "RETEST=1: every route measured again" || bad "RETEST=1: hits ${before}→$(hits routes_hits)"
 # a remembered line that is not the tailnet (#2987: the MacBook kept `public` for
 # every reconnect after a coin toss of latency): the tailnet is asked in the same
-# breath and taken when it answers — still without asking the hub
+# breath and taken when it answers — still without asking the hub (#3074: any
+# better class of line, the tailnet one of them)
 python3 - "$XDG_CACHE_HOME/claude-fleet/connect.json" "$SSHD_PORT" <<'PY'
 import json, sys
 p, port = sys.argv[1], int(sys.argv[2])
 d = json.load(open(p)); e = d["machines"]["m4"]
 e["route"] = {"name": "public", "kind": "direct", "host": "127.0.0.1", "port": port}
+for v in (e.get("by_net") or {}).values():   # #3074: remembered per network
+    v["route"] = dict(e["route"])
 json.dump(d, open(p, "w"))
 PY
 before=$(hits routes_hits)
