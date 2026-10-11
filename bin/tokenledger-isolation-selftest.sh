@@ -66,6 +66,11 @@ paths_of() {
 for w in selftests.yml selftests-macos.yml; do
   [ -f "$WF/$w" ] || { fail "$w missing"; continue; }
   p=$(paths_of "$WF/$w")
+  # no push / pull_request trigger at all (selftests-macos.yml since #3141: nightly
+  # + dispatch only) cannot run for a tokenledger/ change
+  if [ -z "$p" ] && ! grep -qE '^[[:space:]]*(push|pull_request):' "$WF/$w"; then
+    ok "$w is never triggered by a push or PR"; continue
+  fi
   [ -n "$p" ] || { fail "$w has no paths filter — it would run for tokenledger/**"; continue; }
   bad=''
   for g in $p; do

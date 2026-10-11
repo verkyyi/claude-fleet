@@ -78,6 +78,8 @@
 #                                                   tokenledger/internal/api pickNodeAfter (go test, when here)
 #   oldcfg-deleted-hook                             bin/fleet-stable.sh move (the oldcfg gate), fleet-oldcfg-replay.py
 #   macos-red-to-stable                             bin/fleet-macos-watch.sh (breakage filing), fleet-stable.sh move (macos gate)
+#   train-push-cancels                              .github/workflows/release-train.yml (concurrency), bin/fleet-train-board.sh,
+#                                                   selftests-macos.yml (no push trigger)
 #   release-artifact-missing                        bin/fleet-stable.sh move (the artifacts gate),
 #                                                   fleet-node-update.py pinned-artifacts, the hub's build refusal
 #   release-ccquota-behind                          bin/fleet-stable.sh move (the ccquota gate)
@@ -4379,6 +4381,77 @@ SH
   SECS=$(since "$t0")
   [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable)" = "$c2" ] || { WHY="stable did not move after the run went green"; return 1; }
   WHAT="master 上 macOS 红：开出带指纹的修复单、stable 拒挪（macos:）；同一提交跑绿后照常挪"
+}
+
+# ---- train-push-cancels (#3141, EPIC #3139 C2): every merge used to start its own
+# macOS run, and the next merge cancelled it (17 of 20 one night) — so nothing was
+# ever green long enough to release. Now ONE lane: release-train.yml, a fixed
+# concurrency group with cancel-in-progress false (GitHub keeps one running + the
+# newest waiting; a new push only replaces the WAITING one), and each train boards
+# the head of origin/master at the moment it starts, not the commit that queued it.
+# The GitHub half is its configuration, linted; the boarding is run for real on a
+# bare repo: a push lands while a train is "running" → the next train's TRAIN_SHA is
+# that later head and it carries every merge since stable; stable already at the
+# head → the train is empty (skip) within the minute.
+drill_train_push_cancels() {
+  CAP=60; local t0 d out wf c1 c2 c3 c4 v
+  wf="$ROOT/.github/workflows/release-train.yml"
+  [ -f "$wf" ] || { WHY="no .github/workflows/release-train.yml — every merge still runs its own macOS"; return 1; }
+  [ -x "$BIN/fleet-train-board.sh" ] || { WHY="no bin/fleet-train-board.sh"; return 1; }
+  # one lane: a top-level concurrency group with a fixed name, never cancelling
+  out=$(awk '/^concurrency:/{c=1; next} c && /^[^ ]/{c=0} c' "$wf")
+  printf '%s\n' "$out" | grep -Eq '^[[:space:]]+group:[[:space:]]*release-train[[:space:]]*$' \
+    || { WHY="release-train.yml has no top-level concurrency group 'release-train': $(printf '%s' "$out" | tr '\n' ' ')"; return 1; }
+  printf '%s\n' "$out" | grep -Eq '^[[:space:]]+cancel-in-progress:[[:space:]]*false[[:space:]]*$' \
+    || { WHY="the train's concurrency would cancel a running train (cancel-in-progress is not false)"; return 1; }
+  grep -nE 'cancel-in-progress:[[:space:]]*(true|\$\{\{)' "$wf" >/dev/null \
+    && { WHY="something in release-train.yml can cancel in progress: $(grep -nE 'cancel-in-progress' "$wf" | tr '\n' ' ')"; return 1; }
+  [ "$(grep -cE '^[[:space:]]*concurrency:' "$wf")" = 1 ] \
+    || { WHY="release-train.yml has a second (job-level) concurrency — it would split the lane"; return 1; }
+  for v in 'push:' 'workflow_dispatch:' 'schedule:'; do
+    awk '/^on:/{o=1; next} o && /^[^ ]/{o=0} o' "$wf" | grep -q "^[[:space:]]*$v" \
+      || { WHY="release-train.yml is not triggered by $v"; return 1; }
+  done
+  grep -q 'fleet-train-board.sh' "$wf" || { WHY="the train does not board through bin/fleet-train-board.sh"; return 1; }
+  grep -qE 'runs_on:.*macos' "$wf" || { WHY="the train runs no macOS tests of its own"; return 1; }
+  # the per-merge macOS run is gone (the nightly full suite stays)
+  awk '/^on:/{o=1; next} o && /^[^ ]/{o=0} o' "$ROOT/.github/workflows/selftests-macos.yml" | grep -q '^[[:space:]]*push:' \
+    && { WHY="selftests-macos.yml is still triggered by push — the next merge cancels it again"; return 1; }
+  d="$WORK/train"; mkdir -p "$d/seed"
+  ( export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+    export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
+    git init -q --bare -b master "$d/origin.git" && git clone -q "$d/origin.git" "$d/seed" 2>/dev/null || exit 1
+    for i in 1 2; do echo "$i" > "$d/seed/f"; git -C "$d/seed" add -A; git -C "$d/seed" commit -qm "merge $i"; git -C "$d/seed" rev-parse HEAD > "$d/c$i"; done
+    git -C "$d/seed" push -q origin HEAD:master || exit 1
+    git --git-dir="$d/origin.git" update-ref refs/tags/stable "$(cat "$d/c1")"
+    git clone -q "$d/origin.git" "$d/co" 2>/dev/null
+  ) || { WHY="could not build the rig repo"; return 1; }
+  c1=$(cat "$d/c1"); c2=$(cat "$d/c2")
+  board() { GITHUB_SHA=$c2 GITHUB_OUTPUT="$d/out.$1" bash "$BIN/fleet-train-board.sh" --dir "$d/co" >/dev/null 2>"$d/err.$1"; }
+  outv() { sed -n "s/^$2=//p" "$d/out.$1" | head -1; }
+  t0=$(now)
+  board 1 || { WHY="boarding failed: $(cat "$d/err.1")"; return 1; }
+  [ "$(outv 1 train_sha)" = "$c2" ] && [ "$(outv 1 stable_sha)" = "$c1" ] && [ "$(outv 1 skip)" = false ] \
+    || { WHY="train 1 boarded $(outv 1 train_sha) over $(outv 1 stable_sha) skip=$(outv 1 skip), want $c2 over $c1"; return 1; }
+  # while train 1 "runs", two more merges land; the waiting train (queued by the
+  # push of c2's era) starts after it and must board the head as it is THEN
+  ( export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+    export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
+    for i in 3 4; do echo "$i" > "$d/seed/f"; git -C "$d/seed" commit -qam "merge $i"; git -C "$d/seed" rev-parse HEAD > "$d/c$i"; git -C "$d/seed" push -q origin HEAD:master; done
+  ) || { WHY="could not push the later merges"; return 1; }
+  c3=$(cat "$d/c3"); c4=$(cat "$d/c4")
+  board 2 || { WHY="boarding train 2 failed: $(cat "$d/err.2")"; return 1; }
+  [ "$(outv 2 train_sha)" = "$c4" ] \
+    || { WHY="train 2 boarded $(outv 2 train_sha), want the head at its start $c4 (not the commit that queued it, $c2)"; return 1; }
+  v=$(outv 2 merges_json)
+  for c in "$c2" "$c3" "$c4"; do case "$v" in *"$c"*) ;; *) WHY="train 2 does not carry merge ${c%"${c#???????}"}: $v"; return 1 ;; esac; done
+  case "$v" in *"$c1"*) WHY="train 2 carries stable's own commit: $v"; return 1 ;; esac
+  # stable reaches the head: the next train has nothing to carry
+  git --git-dir="$d/origin.git" update-ref refs/tags/stable "$c4"
+  board 3 || { WHY="boarding train 3 failed: $(cat "$d/err.3")"; return 1; }
+  SECS=$(since "$t0")
+  [ "$(outv 3 skip)" = true ] || { WHY="stable at the head, the train still runs (skip=$(outv 3 skip))"; return 1; }
+  WHAT="一条车道：正在跑的不取消、只留最新一趟排着；第二趟上车的是开车时的头（带上中间 3 个合并），stable 已是头就空跑"
 }
 
 # ---- release-artifact-missing (#2631): release.json pins a Claude Code version

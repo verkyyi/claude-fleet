@@ -652,10 +652,12 @@ Do not install from memory: read the doc and work from it.
   `selftest-shadow-root.sh`, `.github/workflows/selftests*.yml`) or an
   unresolvable base falls back to the full suite. `selftests.yml` runs it on
   `pull_request` and on `push` to **master only** (the branch push duplicated
-  the PR run). **The BSD half is not on the PR** (issue #2286): `selftests-macos.yml`
-  runs `--changed <the previous master>` on every `push` to master (2 shards — 5
-  macOS jobs per free account; a newer push cancels the older run) and stays FULL
-  nightly; the merge gate is the ubuntu checks alone (`fleet-pr-verdict.sh` drops
+  the PR run). **The BSD half is not on the PR** (issue #2286): since #3141 it
+  rides the release train (`release-train.yml`: ONE concurrency lane, a push never
+  cancels a running train; each train boards origin/master's head as `TRAIN_SHA`
+  via `bin/fleet-train-board.sh` and runs the shared matrix `selftests-shards.yml`
+  `--changed <stable>` on Linux and macOS, then `fleet-stable.sh move --precheck`),
+  and `selftests-macos.yml` stays FULL nightly / on dispatch; the merge gate is the ubuntu checks alone (`fleet-pr-verdict.sh` drops
   any `macOS shard *` an older PR still carries). It gates RELEASING instead:
   `fleet-stable.sh move` refuses (`macos:`) a target whose newest macOS run is not
   green and dispatches the full suite on a target with none, and a red master run
@@ -711,8 +713,10 @@ Do not install from memory: read the doc and work from it.
     `# portable-ok: <why>` (see `fleet_epoch_from_iso`).
   - `.github/workflows/selftests-macos.yml` — the full 10-shard suite on
     `macos-latest`, nightly (18:17 UTC = 02:17 CST), plus `workflow_dispatch`
-    (input `sha`: the full suite on that commit, named `… @ <sha>`); on every
-    push to master it runs `--changed` against the previous master. **Since
+    (input `sha`: the full suite on that commit, named `… @ <sha>`); the per-merge
+    `--changed` run moved into the release train (#3141, BREAK-IT
+    `train-push-cancels` — the next push used to cancel it, 17 of 20 one night),
+    which leaves `release train: macOS` on its `TRAIN_SHA` for gate 5. **Since
     #2286 it runs AFTER the merge, not on the PR**: the queue for 5 macOS slots
     had made the merge gate wait a median 21 minutes (worst 56) on a check that
     guards releasing, not merging — master reaches a machine only when `stable`
