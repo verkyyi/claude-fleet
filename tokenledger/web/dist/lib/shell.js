@@ -59,6 +59,9 @@ export const ic = (name, cls) => `<svg class="i ${cls || ''}" viewBox="0 0 24 24
 export const PAGES = Object.freeze([
   { id: 'overview', label: 'ui.nav.overview', icon: 'home', href: '/', module: '/overview.js' },
   { id: 'sessions', label: 'ui.nav.sessions', icon: 'list', href: '/sessions', module: '/sessions-page.js' },
+  // 任务 (claude-fleet#3325): the viewer's task records, T<n> — what they asked
+  // for, beside the sessions that do it.
+  { id: 'tasks', label: 'ui.nav.tasks', icon: 'scroll', href: '/tasks', module: '/tasks.js' },
   // 我的机器 (claude-fleet#2518): a user's own machines.
   { id: 'mymachines', label: 'ui.nav.mymachines', icon: 'server', href: '/machines', module: '/machines.js' },
   // One machine (claude-fleet#2796): /machines/<host>, opened from either

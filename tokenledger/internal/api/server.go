@@ -472,6 +472,10 @@ func (s *Server) routes() *routeMux {
 		mux.Handle("/machines/", s.viewerOnly(http.HandlerFunc(s.serveMachinesPage)))
 		// 我的会话 (claude-fleet#1429): the phone view of fleet_sessions.
 		mux.Handle("/sessions", s.viewerOnly(http.HandlerFunc(s.serveSessionsPage)))
+		// 任务 (claude-fleet#3325): the viewer's task records, T<n>.
+		mux.Handle(TasksPagePath, s.viewerOnly(http.HandlerFunc(s.serveTasksPage)))
+		mux.Handle(FleetTasksPath, s.viewerOnly(http.HandlerFunc(s.handleFleetTasks)))
+		mux.Handle(FleetTasksPath+"/", s.viewerOnly(http.HandlerFunc(s.handleFleetTasks)))
 		mux.Handle("/v1/fleet/me", s.viewerOnly(http.HandlerFunc(s.handleFleetMe)))
 		mux.Handle("/v1/fleet/accounts", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetAccounts))))
 		// Per-person node caps (claude-fleet#1410), the operator's.

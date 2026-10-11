@@ -197,6 +197,15 @@ L7n=$(python3 "$BIN/fleet-topbar.py" render --node view=dev1 "s=$RS" "reg=$FLEET
 has "B: 40 columns: the key stays" "$L7n" "#7"
 has "B: …the % stays on a phone (#3194)" "$L7n" "62%"
 hasnt "B: …no model" "$L7n" "Opus"
+# no issue, the hub's task record (issue #3325): the bar's number is T<n>
+W7t=$(tn new-window -d -P -F '#{window_id}' -t "$RS:" -n task7 'while :; do sleep 300; done')
+tn set-window-option -t "$W7t" @task T218 \; set-window-option -t "$W7t" @norepo 1
+has "B: no issue, a task record: its T number" "$(render "$W7t")" "T218"
+tn set-window-option -t "$W7t" @issue 3312
+L7t=$(render "$W7t")
+has "B: …an issue wins over the task number" "$L7t" "#3312"
+hasnt "B: …and the T number goes" "$L7t" "T218"
+tn kill-window -t "$W7t"
 L8=$(python3 "$BIN/fleet-topbar.py" render --node view=dev1 "s=$RS" "reg=$FLEET_CONF_DIR/remote-views" "g=$G" \
   "sock=$(tn display-message -p '#{socket_path}')" cw=160 "w=$W8")
 has "B: a window on the refresh loop's cache: its title" "$(printf '%s' "$L8" | sed 's/#\[[^]]*\]//g')" "修缓存"

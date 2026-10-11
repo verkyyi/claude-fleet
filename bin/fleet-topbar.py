@@ -316,7 +316,16 @@ US = "\x1f"
 NODE_FMT = "|".join(["#{@fleet_id}", "#{@peer_cur}", "#{@peer_node}", "#{@peer_login}",
                      "#{@claude_state}", "#{@claude_needs}", "#{@issue}", "#{@ctx_left}",
                      "#{@ctx_band}", "#{@ctx_ts}", "#{@model}", "#{@effort}", "#{@fleet_role}",
-                     "#{window_name}"])
+                     "#{window_name}", "#{@task}"])
+TASK_RE = re.compile(r"T[1-9][0-9]{0,17}")
+
+
+def ticket(issue, task):
+    """The number in the bar (issue #3325): the issue's #N when there is one,
+    else the hub's task record T<n> (@task), else nothing."""
+    if issue.isdigit():
+        return "#" + issue
+    return task if TASK_RE.fullmatch(task or "") else ""
 
 
 def reg_row(path):
@@ -401,8 +410,11 @@ def node_record(kv):
     sock, win, sess = kv.get("sock") or "", kv.get("w") or "", kv.get("s") or ""
     out = subprocess.run(["tmux", "-S", sock, "display-message", "-p", "-t", win, NODE_FMT],
                          capture_output=True, text=True, stdin=subprocess.DEVNULL).stdout if sock and win else ""
-    p = out.rstrip("\n").split("|", 13)
+    # the name may hold a `|`: it is cut off the front, @task (the last) off the end
+    head, _, task = out.rstrip("\n").rpartition("|") if out.count("|") >= 14 else (out.rstrip("\n"), "", "")
+    p = head.split("|", 13)
     p += [""] * (14 - len(p))
+    p.append(task)
     fid, peer, pnode, plogin = p[0], p[1][4:] if p[1].startswith("wid:") else p[1], p[2], p[3]
     wid = peer or ("%s/%s" % (row["fuid"], fid) if row.get("fuid") and fid else "")
     lines = cache_lines(kv.get("g") or "", sess)
@@ -420,14 +432,14 @@ def node_record(kv):
         rec = {"state": state,
                "kind": ("perm" if q[9].startswith("perm") else "ask") if state == "needs" else "",
                "q": FV.one_line(q[27]) if state == "needs" else "",
-               "key": "#" + q[3] if q[3].isdigit() else "", "title": (q[16] or q[7]).strip(),
+               "key": ticket(q[3], "" if peer else p[14]), "title": (q[16] or q[7]).strip(),
                "node": q[1].strip() or pnode or here, "lost": q[2] == "lost", "wid": q[0][4:]}
         rec.update(line_ctx(q))
     else:
         state = p[4] or "idle"
         rec = {"state": state,
                "kind": ("perm" if p[5].startswith("perm") else "ask") if state == "needs" else "",
-               "key": "#" + p[6] if p[6].isdigit() else "", "title": p[13].strip(),
+               "key": ticket(p[6], p[14]), "title": p[13].strip(),
                "node": pnode or here, "lost": False, "wid": wid}
     if not peer:
         rec.update(stamp_ctx(p))   # this machine's own window: its stamps are the freshest reading

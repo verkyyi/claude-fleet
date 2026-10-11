@@ -90,6 +90,10 @@ func (s *Store) EnsureNodes() error {
 	if err := s.ensureFleetTicketIndex(); err != nil {
 		return err
 	}
+	// The task record (claude-fleet#3325).
+	if err := s.ensureFleetTasks(); err != nil {
+		return err
+	}
 	// Debug tickets (claude-fleet#2891).
 	if err := s.ensureFleetDebugTickets(); err != nil {
 		return err

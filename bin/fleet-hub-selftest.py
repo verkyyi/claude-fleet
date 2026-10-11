@@ -25,7 +25,7 @@ sys.path.insert(0, str(BIN))
 import fleet_control as control
 import fleet_hub as hub_module
 from fleet_config_write import revision, write
-from fleet_hub_common import Fault, PROTOCOL, canonical, now, parse_worker_id, validate_write
+from fleet_hub_common import Fault, PROTOCOL, SCOPE_OF, canonical, now, parse_worker_id, validate_write
 
 try:
     HAS_MCP_SDK = version("mcp") == "2.2.0"
@@ -1076,6 +1076,50 @@ class HubTests(HubFixture):
         self.assertEqual((got["status"], got["result"]["error"]["code"]), ("failed", "INVALID_STATE"), got)
         self.assertIn("没有编排", got["result"]["error"]["message"])
         self.assertNotIn("orch", calls)
+
+    def test_task_record_on_a_start_and_task_issue(self):
+        # issue #3325: the hub's task record T<n> rides a new / scratch start
+        # (FLEET_CONTROL_TASK to the adapter, never an argv word), and task_issue
+        # files a record's issue here — the URL first, the session's address beside.
+        validate_write("worker_start", {"kind": "scratch", "no_repo": True, "task": "T218"})
+        validate_write("worker_start", {"kind": "new", "title": "加一个 /healthz", "repo": "acme/web", "task": "T9"})
+        for bad in ({"kind": "scratch", "task": "218"}, {"kind": "scratch", "task": "T0"},
+                    {"kind": "scratch", "task": "T1; rm -rf ~"}, {"issue": 3, "task": "T1"}):
+            with self.assertRaises(Fault):
+                validate_write("worker_start", bad)
+        wid = self.fleet + "/" + str(uuid.uuid4())
+        validate_write("task_issue", {"repo": "acme/web", "task": "T218", "title": "整理账单", "worker_id": wid})
+        for bad in ({"repo": "web", "task": "T1", "title": "x"}, {"repo": "acme/web", "task": "1", "title": "x"},
+                    {"repo": "acme/web", "task": "T1", "title": "a\nb"}, {"repo": "acme/web", "task": "T1"},
+                    {"repo": "acme/web", "task": "T1", "title": "x", "worker_id": "issue-7; rm"}):
+            with self.assertRaises(Fault):
+                validate_write("task_issue", bad)
+        self.assertEqual(SCOPE_OF["task_issue"], "gh:comment")
+        real_popen, real_adapter = control.subprocess.Popen, self.node.controller.adapter
+
+        def no_executor(argv, *args, **kwargs):
+            return MagicMock() if "execute" in argv else real_popen(argv, *args, **kwargs)
+
+        calls = []
+
+        def adapter(mode, *a, **k):
+            if mode != "taskissue":
+                return real_adapter(mode, *a, **k)
+            calls.append((mode, *a, k.get("payload")))
+            return 0, b"https://github.com/acme/web/issues/3312\n", b""
+        op_id = str(uuid.uuid4())
+        with patch.object(control.subprocess, "Popen", side_effect=no_executor):
+            self.node.rpc("submit", {"operation_id": op_id, "fleet_id": self.fleet, "action": "task_issue",
+                                     "params": {"repo": "acme/web", "task": "T218", "title": "整理账单",
+                                                "body": "整理账单\n\nhub 任务 T218 补建的单。", "worker_id": wid},
+                                     "actor": "operator"})
+        with patch.object(self.node.controller, "adapter", side_effect=adapter):
+            self.node.controller.execute(op_id)
+        got = self.node.rpc("operation_get", {"operation_id": op_id})
+        self.assertEqual((got["status"], got["result"].get("issue_url")),
+                         ("succeeded", "https://github.com/acme/web/issues/3312"), got)
+        self.assertEqual(calls, [("taskissue", "demo", "acme/web", "T218", wid.split("/", 1)[1], "整理账单",
+                                  "整理账单\n\nhub 任务 T218 补建的单。".encode())])
 
     def test_start_names_the_repo_in_a_multi_repo_fleet(self):
         # issue #984: two repos can both have an issue-123, so the spawn needs --repo.

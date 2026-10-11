@@ -100,12 +100,27 @@ for f in "$BIN"/*; do ln -sf "$f" "$QB/"; done
 rm -f "$QB/fleet-client-place.sh"
 cat > "$QB/fleet-client-place.sh" <<'EOF'
 #!/bin/bash
+printf '%s\n' "$*" >> "$Q_ARGS"
 printf '{"key": "acme-web:issue-42", "filed": "https://github.com/acme/web/issues/42"}' > "$FLEET_PLACE_RESULT"
 printf 'REMOTE m5 start done U/f42\t\n'
 EOF
 chmod +x "$QB/fleet-client-place.sh"
 printf '{"title":"看日志","body":"看日志","repo":"acme/web","via":"dispatch"}\n' > "$WORK/e.json"
+export Q_ARGS="$WORK/q.args"; : > "$Q_ARGS"
 python3 "$QB/fleet-compose.py" --send "$WORK/e.json" >"$WORK/e.out" 2>"$WORK/e.err" || fail "E: --send exited non-zero" "$(cat "$WORK/e.err")"
+# ⌘P's words are a person's task (issue #3325): the hub writes the record first
+has 'E: a dispatch is a task' "$(cat "$Q_ARGS")" 'acme/web new --title 看日志 --body-file '
+has 'E: …asked as a task from ⌘P' "$(cat "$Q_ARGS")" ' --node auto --task --via ⌘P'
+: > "$Q_ARGS"
+printf '{"title":"看看风扇","body":"看看风扇","repo":null,"via":"dispatch"}\n' > "$WORK/e2.json"
+python3 "$QB/fleet-compose.py" --send "$WORK/e2.json" >/dev/null 2>&1 || fail "E: a no-repo --send exited non-zero"
+has 'E: a no-repo dispatch is a task too' "$(cat "$Q_ARGS")" '- scratch --name 看看风扇 --body-file '
+has 'E: …the record alone' "$(cat "$Q_ARGS")" ' --task --via ⌘P'
+: > "$Q_ARGS"
+printf '{"title":"看日志","body":"看日志","repo":"acme/web"}\n' > "$WORK/e3.json"
+python3 "$QB/fleet-compose.py" --send "$WORK/e3.json" >/dev/null 2>&1 || fail "E: a writing-area --send exited non-zero"
+case "$(cat "$Q_ARGS")" in *--task*) fail "E: the writing area (not ⌘P) asked for a task" "$(cat "$Q_ARGS")" ;; esac
+CHECKS=$((CHECKS + 1))
 has 'E: stderr says the issue filed' "$(cat "$WORK/e.err")" 'filed: #42'
 eq 'E: stdout stays the place'"'"'s one line' 'REMOTE m5 start done U/f42' "$(tr -d '\t' < "$WORK/e.out")"
 # the list's word for it (fleet-sidebar.py compose_told)

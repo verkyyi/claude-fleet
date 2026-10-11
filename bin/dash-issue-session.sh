@@ -46,14 +46,14 @@ set -uo pipefail
 # GATE (cap / dedup / claim) still runs + refuses in the foreground; only its slow
 # tail is backgrounded. Opt-in, interactive-only (a headless TARGET_SESS caller
 # that needs the window id back stays synchronous).
-num=""; TARGET_SESS=""; WIN_TITLE=""; ORIGIN=""; AGENT=""; REPO_ARG=""; NODE_ARG=""; ORIGIN_WID=""; ACCOUNT_ARG=""; REAP=""; AS_ARG=""; RESUME_SID=""; SEED_FILE=""; FORCE_FLAG=0; ASYNC_FLAG=0; PRINT_FLAG=0; _pos=0; _want=""
+num=""; TARGET_SESS=""; WIN_TITLE=""; ORIGIN=""; AGENT=""; REPO_ARG=""; NODE_ARG=""; ORIGIN_WID=""; ACCOUNT_ARG=""; REAP=""; TASK_REF=""; AS_ARG=""; RESUME_SID=""; SEED_FILE=""; FORCE_FLAG=0; ASYNC_FLAG=0; PRINT_FLAG=0; _pos=0; _want=""
 for _a in "$@"; do
   # A value-taking flag (--title <t>) consumes the NEXT arg: _want carries that
   # expectation across one loop turn so the value isn't mistaken for a positional.
   if [ -n "$_want" ]; then
     case "$_want" in title) WIN_TITLE="$_a" ;; origin) ORIGIN="$_a" ;; agent) AGENT="$_a" ;; repo) REPO_ARG="$_a" ;;
       node) NODE_ARG="$_a" ;; origin-wid) ORIGIN_WID="$_a" ;; account) ACCOUNT_ARG="$_a" ;; reap) REAP="$_a" ;;
-      resume) RESUME_SID="$_a" ;; seed-file) SEED_FILE="$_a" ;; as) AS_ARG="$_a" ;; esac
+      resume) RESUME_SID="$_a" ;; seed-file) SEED_FILE="$_a" ;; as) AS_ARG="$_a" ;; task) TASK_REF="$_a" ;; esac
     _want=""; continue
   fi
   # A FUSED "--flag value" (issue #1543) is --flag=value: zsh — Claude's Bash tool —
@@ -61,7 +61,7 @@ for _a in "$@"; do
   # us ONE arg, which fell to the unknown-flag branch and let the hub place a pinned
   # spawn on another machine.
   case "$_a" in
-    '--title '*|'--origin '*|'--agent '*|'--repo '*|'--node '*|'--origin-wid '*|'--account '*|'--reap '*|'--resume '*|'--seed-file '*|'--as '*)
+    '--title '*|'--origin '*|'--agent '*|'--repo '*|'--node '*|'--origin-wid '*|'--account '*|'--reap '*|'--resume '*|'--seed-file '*|'--as '*|'--task '*)
       _v=${_a#* }; _v=${_v#"${_v%%[! ]*}"}; _a="${_a%% *}=$_v" ;;
   esac
   case "$_a" in
@@ -113,6 +113,10 @@ for _a in "$@"; do
     # the historic rule (PR merged + the fleet's grace). Stamped as @reap_policy.
     --reap) _want=reap ;;
     --reap=*) REAP="${_a#--reap=}" ;;
+    # --task T<n> (issue #3325): the hub's task record this worker belongs to (a
+    # task that chose a repo) — stamped @task beside @issue.
+    --task) _want=task ;;
+    --task=*) TASK_REF="${_a#--task=}" ;;
     # --as <name> (issue #3122, EPIC #3111 C11): the standard agent file this
     # session starts as — `claude --agent <name>`, found the way Claude Code finds
     # it (the repo's .claude/agents > ~/.claude/agents > a plugin). None = the
@@ -798,7 +802,7 @@ if [ "$ASYNC_FLAG" = 1 ] && [ "$TAIL_ONLY" != 1 ] && [ -z "$TARGET_SESS" ]; then
   # this redirect drops, and the tail has no caller left to read it — the
   # interactive --async path is toast-only by construction).
   _bg="$_bg FLEET_SPAWN_WNAME=$(shq "$wname")"
-  _bg="$_bg exec $(shq "$SELF") $(shq "$num") --title $(shq "$title") --origin $(shq "$ORIGIN")${AGENT:+ --agent $AGENT}${REPO_ARG:+ --repo $(shq "$REPO_ARG")}${ORIGIN_WID:+ --origin-wid $(shq "$ORIGIN_WID")}${ACCOUNT_ARG:+ --account $ACCOUNT_ARG}${REAP:+ --reap $REAP}${AS_ARG:+ --as $AS_ARG} >/dev/null 2>&1"
+  _bg="$_bg exec $(shq "$SELF") $(shq "$num") --title $(shq "$title") --origin $(shq "$ORIGIN")${AGENT:+ --agent $AGENT}${REPO_ARG:+ --repo $(shq "$REPO_ARG")}${ORIGIN_WID:+ --origin-wid $(shq "$ORIGIN_WID")}${ACCOUNT_ARG:+ --account $ACCOUNT_ARG}${REAP:+ --reap $REAP}${AS_ARG:+ --as $AS_ARG}${TASK_REF:+ --task $(shq "$TASK_REF")} >/dev/null 2>&1"
   TM run-shell -b "$_bg" 2>/dev/null \
     || { refuse "spawn failed for #$num: dispatch"; exit "$RC_INFRA"; }
   exit 0
@@ -944,6 +948,7 @@ _fid=$(fleet_fid_mint 2>/dev/null) && fleet_is_fid "$_fid" || _fid=''
 _sw=(set-window-option -t "$win" @issue "$num")
 _sw+=(\; set-window-option -t "$win" @born "$(date +%s)")
 _sw+=(\; set-window-option -t "$win" @reap_policy "${REAP:-merged}")
+case "$TASK_REF" in T[1-9]*) case "${TASK_REF#T}" in *[!0-9]*) ;; *) _sw+=(\; set-window-option -t "$win" @task "$TASK_REF") ;; esac ;; esac
 [ -n "$REPO" ] && _sw+=(\; set-window-option -t "$win" @repo "$REPO")
 _sw+=(\; set-window-option -t "$win" @worktree "$wt")
 [ -n "$ORIGIN" ] && _sw+=(\; set-window-option -t "$win" @origin "$ORIGIN")

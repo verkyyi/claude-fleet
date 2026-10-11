@@ -34,7 +34,10 @@ SCOPE_OF = {"worker_start": "worker:start", "config_set": "config:write",
             "worker_reap_policy": "worker:reap",
             # orch_ensure (issue #2616): an older client's ⌘N, answered 「没有编排」
             # since issue #3118 — compat-1v: 下一批删
-            "orch_ensure": "worker:start"}
+            "orch_ensure": "worker:start",
+            # task_issue (issue #3325): a hub task record's 「建 GitHub 单」 —
+            # filing an issue is a GitHub write of a comment's weight.
+            "task_issue": "gh:comment"}
 # The tools that name a WORKER (a worker_id), not a fleet. worker_answer and
 # worker_reap (issue #1487, EPIC #1479 C8) are what a sidebar on another machine
 # runs on a row here: answer the pane's open prompt (fleet-answer.sh /
@@ -492,12 +495,13 @@ def validate_gh_read(params):
 
 
 DEBUG_ID_RE = re.compile(r"[a-z2-7]{8}")
+TASK_REF_RE = re.compile(r"T[1-9][0-9]{0,17}")
 
 
 def validate_write(action, params):
     if action == "worker_start":
         fields(params, (), ("issue", "kind", "name", "title", "body", "agent", "repo", "no_repo", "origin_wid",
-                            "account_class", "reap", "attachments", "test", "debug"))
+                            "account_class", "reap", "attachments", "test", "debug", "task"))
         # kind (issue #1541): "issue" (the default — a worker on an issue, `issue`
         # required) or "scratch" (a raw scratch session: no issue, an optional
         # name — dash-raw-session.sh opens it). Held to the hub's own rule
@@ -555,6 +559,14 @@ def validate_write(action, params):
             raise Fault("INVALID_ARGUMENT", "kind must be issue, scratch or new")
         if params.get("agent", "") not in ("", "claude", "codex"):
             raise Fault("INVALID_ARGUMENT", "agent must be claude or codex")
+        # task (issue #3325): the hub's task record this start belongs to — T<n>,
+        # a new or scratch start only; stamped @task, and a no-repo one files no
+        # desk ticket (the record is its ticket).
+        if "task" in params:
+            if not (isinstance(params["task"], str) and TASK_REF_RE.fullmatch(params["task"])):
+                raise Fault("INVALID_ARGUMENT", "task is a task record's number (T<n>)")
+            if kind not in ("new", "scratch"):
+                raise Fault("INVALID_ARGUMENT", "task belongs to a new or scratch start")
         if "attachments" in params:
             # issue #2393: the writing area's files, downloaded by this node's
             # agent before the start — held to the hub's checkAttachList.
@@ -609,6 +621,20 @@ def validate_write(action, params):
             check_answer(params["answer"])
     elif action == "orch_ensure":
         fields(params, (), ())   # issue #2616: nothing to name — the fleet is the session
+    elif action == "task_issue":
+        # issue #3325: file a hub task record's issue here (fleet-issue-file.sh),
+        # binding the task's session when it is this fleet's and has none.
+        fields(params, ("repo", "task", "title"), ("body", "worker_id"))
+        check_repo(params)
+        if "/" not in params["repo"]:
+            raise Fault("INVALID_ARGUMENT", "repo must be owner/name")
+        if not (isinstance(params["task"], str) and TASK_REF_RE.fullmatch(params["task"])):
+            raise Fault("INVALID_ARGUMENT", "task is a task record's number (T<n>)")
+        check_issue_title(params["title"])
+        if params.get("body", "") != "":
+            check_text(params["body"], "body")
+        if "worker_id" in params:
+            parse_worker_id(params["worker_id"])
     elif action == "config_set":
         fields(params, ("key", "value", "expected_revision"))
         key, value = params["key"], params["value"]

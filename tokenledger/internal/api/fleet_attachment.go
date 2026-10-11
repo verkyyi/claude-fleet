@@ -146,6 +146,18 @@ func (s *Server) canTestIdentity(ctx context.Context, endpointID string) bool {
 	return false
 }
 
+// canTask reports whether the node behind endpointID takes the hub's task
+// record on a start (claude-fleet#3325).
+func (s *Server) canTask(ctx context.Context, endpointID string) bool {
+	if c := s.nodes.get(endpointID); c != nil {
+		return c.canTask
+	}
+	if peer, ok := s.peerOf(ctx, endpointID); ok {
+		return peer.HasCap(control.CapTask)
+	}
+	return false
+}
+
 // attachArgs binds held to endpointID and is the start's `attachments`.
 func (s *Server) attachArgs(held []heldAttachment, endpointID string) ([]any, error) {
 	var out []any
