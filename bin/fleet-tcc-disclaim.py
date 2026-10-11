@@ -37,6 +37,14 @@ def main(argv):
     if not argv:
         sys.stderr.write("usage: fleet-tcc-disclaim.py [--] <command> [args…]\n")
         return 2
+    # Python starts with SIGPIPE (and SIGXFSZ) ignored; subprocess restores them
+    # for its children, a bare posix_spawn / execvp does not. An ignored
+    # disposition is inherited by the script and every child it starts, so a
+    # `tr … </dev/urandom | head -c 22` never dies on EPIPE and spins forever
+    # (#3419: an account create hung 9 minutes on gen_password).
+    for name in ("SIGPIPE", "SIGXFSZ"):
+        if hasattr(signal, name):
+            signal.signal(getattr(signal, name), signal.SIG_DFL)
     libc = None
     if sys.platform == "darwin":
         try:
