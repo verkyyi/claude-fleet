@@ -30,6 +30,11 @@
       "name": "fleet-browser",
       "source": "./plugins/fleet-browser",
       "description": "Web pages a session opens show on your computer; an OAuth callback to localhost is forwarded back over your ssh (MCP authorization, /login). Off unless installed."
+    },
+    {
+      "name": "fleet-feedback",
+      "source": "./plugins/fleet-feedback",
+      "description": "/fleet-feedback 一句话: tell the fleet's maintainers something from any session — preview first, logs and screen only if you say so, a feedback number back."
     }
   ]
 }

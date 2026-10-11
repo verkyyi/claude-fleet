@@ -879,6 +879,22 @@ batch_green_watch() {
   return 0
 }
 
+# feedback_watch — send what /fleet-feedback kept while the hub was away (issue
+# #3358, EPIC #3354 C4): bin/fleet-feedback.sh outbox posts each kept entry once and
+# tells its session the F number. Nothing kept ⇒ no process. Detached: a post is
+# network; the outbox's own lock keeps two ticks from sending one entry twice.
+feedback_watch() {
+  [ "${FLEET_FEEDBACK_TICK:-1}" = 0 ] && return 0
+  [ -f "$BIN/fleet-feedback.sh" ] || return 0
+  local d="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/feedback-outbox" e
+  for e in "$d"/*; do
+    [ -d "$e" ] || continue
+    ( bash "$BIN/fleet-feedback.sh" outbox >/dev/null 2>&1 & ) 2>/dev/null
+    return 0
+  done
+  return 0
+}
+
 # mem_watch — the --watch tick's share: one notice per edge, per kind.
 mem_watch() {
   local rows mem lvl av co sw top u m w word kind
@@ -1006,6 +1022,7 @@ EOF2
     pool_watch                                    # warm-pool slots topped back up (#2233)
     macos_watch                                   # red macOS on master: file + alert, no spawn (#3120)
     batch_green_watch                             # a driverless batch's green PRs: say how many (#3369)
+    feedback_watch                                # /fleet-feedback's outbox: send what waited (#3358)
     free=$(free_gb)
     [ -z "$free" ] && exit 0                      # measurement failed — stay quiet
     [ "$free" -ge "$WARN_GB" ] && exit 0          # healthy

@@ -78,6 +78,10 @@
 #   hub-stream-silent                               tokenledger/web/dist/lib/stream.js (watchdog, backoff, poll fallback;
 #                                                   node --test stream.test.mjs, when node is here) + internal/api
 #                                                   fleet_stream.go (ping, scope; go test, when a toolchain is here)
+#   feedback-secret-in-text                         bin/fleet-feedback.sh (fleet_redact.py over the words, the
+#                                                   whole-set recheck; a fake hub records the bytes)
+#   feedback-secret-in-attach                       bin/fleet-feedback.sh --attach (conf/debug-collect.list's fresh
+#                                                   rows + the screen, each through conf/secret-shapes.list)
 #   service-log-cross-login                         tokenledger/internal/api fleet_service_log.go (FleetScope before any
 #                                                   node read, one follow per service, masking; go test, when a toolchain
 #                                                   is here) + internal/agent node_service_log.go (the register's path only)
@@ -1655,6 +1659,69 @@ drill_feedback_github_down() {
     esac
   fi
   SECS=$(since "$t0")
+}
+
+# ---- feedback-secret-in-text / feedback-secret-in-attach (#3358, EPIC #3354 C4):
+# a person pastes a token into /fleet-feedback, or the log / screen they agree to
+# attach holds one. bin/fleet-feedback.sh runs for real against a fake hub (a curl
+# that writes down every byte of every part): no sample of the shape table may be
+# in what leaves the machine, nor in what the outbox keeps when the hub is away.
+_fb_drill() {  # _fb_drill <dir> <words> <log line> <screen line> <attach yes|no>
+  local d="$1" a=''
+  mkdir -p "$d/home" "$d/conf" "$d/tmp" "$d/cache/claude-fleet/shell/logs"
+  printf 'CCQUOTA_HUB_URL=https://hub.example\nCCQUOTA_TOKEN=FAKEnode\n' > "$d/conf/node.env"
+  printf '%s\n' "$3" > "$d/cache/claude-fleet/shell/logs/connect.log"
+  cat > "$d/curl" <<SH
+#!/bin/bash
+prev=''
+for a in "\$@"; do
+  if [ "\$prev" = -F ]; then v=\${a#*=}; v=\${v%%;*}; case "\$v" in '<'*|'@'*) cat "\${v#?}" ;; *) printf '%s' "\$v" ;; esac; fi
+  prev=\$a
+done >> "$d/sent"
+[ -f "$d/away" ] && exit 7
+printf '{"id":"F1","state":"received"}\n200'
+SH
+  chmod +x "$d/curl"
+  [ "$5" = yes ] && a=--attach
+  for mode in up away; do
+    [ "$mode" = away ] && : > "$d/away"
+    ( unset CCQUOTA_TOKEN CCQUOTA_HUB_URL FLEET_HUB_URL TMUX TMUX_PANE
+      export HOME="$d/home" FLEET_CONF_DIR="$d/conf" XDG_CACHE_HOME="$d/cache" TMPDIR="$d/tmp" \
+             FLEET_HUB_CURL="$d/curl" FLEET_FEEDBACK_MACHINE_KIND=managed-linux \
+             FLEET_FEEDBACK_SCREEN_CMD="printf '%s\n' '$4'"
+      printf '%s\n' "$2" | bash "$BIN/fleet-feedback.sh" send ${a:+"$a"} - >/dev/null 2>&1 ) || :
+  done
+}
+drill_feedback_secret_in_text() {
+  CAP=30; local d="$WORK/fbt" t0 v left=''
+  set -- ghp_FAKEfbaaaaaaaaaaaaaaa github_pat_11FAKEfbbbbbbbbbbbb sk-ant-api03-FAKEfbcccccc glpat-FAKEfbdddddd \
+         xoxb-FAKEfbeeeeee AKIAFAKEFBFFFFFFFFFF eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJmYiJ9.FAKEsig
+  t0=$(now)
+  _fb_drill "$d" "⌘P 慢，顺手贴了 $* 和 DB_PASSWORD=FAKEfbpass" 'nothing here' 'nothing here' no
+  [ -s "$d/sent" ] || { WHY="fleet-feedback.sh sent nothing at all"; return 1; }
+  [ -n "$(ls "$d/conf/feedback-outbox" 2>/dev/null)" ] || { WHY="an unreachable hub kept nothing in the outbox"; return 1; }
+  for v in "$@" FAKEfbpass; do
+    grep -qF -e "$v" "$d/sent" && left="$left sent:$v"
+    grep -rqF -e "$v" "$d/conf/feedback-outbox" && left="$left outbox:$v"
+  done
+  SECS=$(since "$t0")
+  [ -z "$left" ] || { WHY="credentials left in the feedback:$left"; return 1; }
+  grep -q '<redacted:github>' "$d/sent" || { WHY="the words went out without their mask"; return 1; }
+  WHAT='原话里贴了七类假凭据 + 一个密码：发出的字节和入口不在时本机存下的都一处不剩'
+}
+drill_feedback_secret_in_attach() {
+  CAP=30; local d="$WORK/fba" t0 v left='' L=sk-ant-api03-FAKEfblogaaaa S=ghp_FAKEfbscreenbbbbbbbb
+  t0=$(now)
+  _fb_drill "$d" '附上日志和屏幕' "relay token Authorization: Bearer FAKEfbbearer $L" "prompt> export GH=$S" yes
+  grep -q 'prompt> export' "$d/sent" || { WHY="the screen was not attached"; return 1; }
+  grep -q 'relay token' "$d/sent" || { WHY="the log was not attached"; return 1; }
+  for v in "$L" "$S" FAKEfbbearer; do
+    grep -qF -e "$v" "$d/sent" && left="$left sent:$v"
+    grep -rqF -e "$v" "$d/conf/feedback-outbox" && left="$left outbox:$v"
+  done
+  SECS=$(since "$t0")
+  [ -z "$left" ] || { WHY="credentials left in the attachments:$left"; return 1; }
+  WHAT='附上的日志和屏幕各塞假凭据：发出的附件和本机存下待补发的一处不剩'
 }
 
 cred_run_drills "$0"
