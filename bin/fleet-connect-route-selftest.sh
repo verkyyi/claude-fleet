@@ -221,6 +221,12 @@ print(" ".join(ce[ce.index("-i"):]).replace(sys.argv[2], "K"))
 print(any(x.startswith("CertificateFile=") for x in ce), any(x.startswith("CertificateFile=") for x in cp))
 # 4 the pin and the words
 print(e["name"], e["port"], fc.PIN_RE.match("entry") is not None, fc.route_label("direct", "entry"), fc.pin_label("entry"))
+# 5 an address the hub reached (C6's reachable): entry-2, an IPv6 literal — the same class, the same key
+m2 = {"hostname": "m5", "alias": "m5", "routes": [{"name": "public", "host": "203.0.113.5", "port": 22022},
+      {"name": "entry-2", "host": "2001:db8::5", "port": 22122}]}
+r2 = fc.pinned_row(fc.route_rows(m2, ""), "entry-2")
+c2 = fc.ssh_command(m2, r2, "verky", "")
+print(fc.route_class(r2), "IdentitiesOnly=yes" in c2, any(x.startswith("CertificateFile=") for x in c2), c2[-1], fc.route_label("direct", "entry-2"))
 EOF3
 )
 [ "$(sed -n 1p <<<"$out")" = "entry,public,relay lan,tailnet" ] && ok "route-entry (#3075): no Tailscale, another network ⇒ entry, before the old public (quicker) and the relay" \
@@ -233,6 +239,8 @@ EOF3
   || bad "entry cert: got $(sed -n 4p <<<"$out")"
 [ "$(sed -n 5p <<<"$out")" = "entry 22122 True 入口直连 入口直连" ] && ok "fleet route <m> entry pins it; it reads 入口直连" \
   || bad "entry pin: got $(sed -n 5p <<<"$out")"
+[ "$(sed -n 6p <<<"$out")" = "1 True False 2001:db8::5 入口直连 entry-2" ] && ok "entry-2 (an address the hub reached, IPv6): the entry class, the device key, no certificate" \
+  || bad "entry-2: got $(sed -n 6p <<<"$out")"
 
 # ── the fake hub + fake sshd ────────────────────────────────────────────────
 # $WORK/state (JSON, re-read on every request): tailnet_up, relay_ok, down.

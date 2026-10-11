@@ -2,6 +2,9 @@ package api
 
 import (
 	"log"
+	"net/netip"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -71,4 +74,46 @@ func (s *Server) entryDeviceRevoke(pid, fp, actor string, now time.Time) {
 			log.Printf("entry: revoke device key %s of %s: %v", fp, pid, err)
 		}
 	}
+}
+
+// withEntryReach adds the entry port as `entry` routes to a machine in the
+// route list from reachable(machine) (C6, EntryReachable): the addresses the
+// hub actually reached it at, on the port the node reported — `entry`, then
+// `entry-2` … A machine whose node already names an `entry` route (its
+// `entry=<host>:<port>`, amendment 3) keeps that one alone; one never
+// reached gets none. The door off ⇒ the machine as it was.
+func (s *Server) withEntryReach(m FleetMachine, now time.Time) FleetMachine {
+	if s.Store == nil || !s.entryOn() {
+		return m
+	}
+	for _, r := range m.Routes {
+		if r.Name == "entry" {
+			return m
+		}
+	}
+	addrs, err := s.EntryReachable(m.Hostname, now)
+	if err != nil || len(addrs) == 0 {
+		return m
+	}
+	routes := append([]FleetRoute(nil), m.Routes...)
+	for i, a := range addrs {
+		name := "entry"
+		if i > 0 {
+			name = "entry-" + strconv.Itoa(i+1)
+		}
+		host := strings.Trim(a.Addr, "[]")
+		if !sshToken(host) && !entryReachIPv6Token(host) {
+			continue
+		}
+		routes = append(routes, FleetRoute{Name: name, Host: host, Port: a.Port})
+	}
+	m.Routes = routes
+	return m
+}
+
+// entryReachIPv6Token: an IPv6 literal — what sshToken (letters, digits, . - _)
+// leaves out, and still safe in an ssh config / argv.
+func entryReachIPv6Token(h string) bool {
+	ip, err := netip.ParseAddr(h)
+	return err == nil && ip.Is6() && !ip.Is4In6() && ip.Zone() == ""
 }

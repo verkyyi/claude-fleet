@@ -3,9 +3,14 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
 // A computer's key on its person's door list (claude-fleet#3075, EPIC #3067
@@ -95,5 +100,84 @@ func TestEntryDeviceKey(t *testing.T) {
 	}
 	if n != 1 {
 		t.Fatalf("the door's record has %d operator revocations of the device key, want 1: %+v", n, audit)
+	}
+}
+
+// reachable(machine) (C6) feeds the route list: a machine the hub reached at
+// its entry port gets `entry` routes on those addresses — IPv4 first, IPv6 a
+// literal — one never reached (or reached too long ago) gets none, and a
+// machine whose node names its own `entry=` keeps that one alone.
+func TestEntryRoutesFromReach(t *testing.T) {
+	h, _, _, _, _ := homeHarness(t)
+	setRoutes := func(js string) {
+		t.Helper()
+		routes, err := ParseFleetRoutes(js)
+		if err != nil {
+			t.Fatal(err)
+		}
+		h.srv.FleetRoutes = routes
+	}
+	setRoutes(`[{"hostname":"m5","routes":[{"name":"public","host":"203.0.113.5","port":22022}]},
+	  {"hostname":"m4","routes":[{"name":"public","host":"203.0.113.4","port":22023}]}]`)
+	if err := h.srv.Store.SetFleetSetting(EntryKey, "on", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	for m, rows := range map[string][]store.EntryReach{
+		"m5": {{Addr: "2001:db8::5", Port: 22122, Family: "ipv6", Reachable: true, CheckedAt: now},
+			{Addr: "203.0.113.5", Port: 22122, Family: "ipv4", Reachable: true, CheckedAt: now}},
+		"m4": {{Addr: "203.0.113.4", Port: 22123, Family: "ipv4", Reachable: false, Reason: "timeout", CheckedAt: now},
+			{Addr: "198.51.100.4", Port: 22123, Family: "ipv4", Reachable: true, CheckedAt: now.Add(-time.Hour)}},
+	} {
+		if _, err := h.srv.Store.SetEntryReach(m, rows); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a := newDevice(t)
+	a.scan(t, h, pAlice, "MacBook")
+	list := func() map[string]string {
+		t.Helper()
+		ts := time.Now().Unix()
+		code, body := postJSON(t, h, control.RoutesPath, map[string]any{"cert": a.cert, "ts": ts,
+			"sig": sshsig(t, a.signer, control.RoutesSigNamespace, []byte(control.RoutesSigMessage(ts)))})
+		if code != 200 {
+			t.Fatalf("routes: %d %s", code, body)
+		}
+		var out RoutesResponse
+		if err := json.Unmarshal(body, &out); err != nil {
+			t.Fatal(err)
+		}
+		got := map[string]string{}
+		for _, m := range out.Machines {
+			var rs []string
+			for _, r := range m.Routes {
+				rs = append(rs, fmt.Sprintf("%s=%s:%d", r.Name, r.Host, r.Port))
+			}
+			got[m.Hostname] = strings.Join(rs, ",")
+		}
+		return got
+	}
+	want := map[string]string{
+		"m5": "public=203.0.113.5:22022,entry=203.0.113.5:22122,entry-2=2001:db8::5:22122",
+		"m4": "public=203.0.113.4:22023", // unreachable, and a reach an hour old
+	}
+	got := list()
+	for m, w := range want {
+		if got[m] != w {
+			t.Fatalf("%s: %s, want %s", m, got[m], w)
+		}
+	}
+	// The node names its own entry=: that one alone.
+	setRoutes(`[{"hostname":"m5","routes":[{"name":"public","host":"203.0.113.5","port":22022},{"name":"entry","host":"ssh.example.com","port":22122}]}]`)
+	if g := list()["m5"]; g != "public=203.0.113.5:22022,entry=ssh.example.com:22122" {
+		t.Fatalf("m5 with entry=: %s", g)
+	}
+	// The door off: as before.
+	if err := h.srv.Store.SetFleetSetting(EntryKey, "off", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	setRoutes(`[{"hostname":"m5","routes":[{"name":"public","host":"203.0.113.5","port":22022}]}]`)
+	if g := list()["m5"]; g != "public=203.0.113.5:22022" {
+		t.Fatalf("door off: %s", g)
 	}
 }

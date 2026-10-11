@@ -777,13 +777,20 @@ def is_lan(r):
     return (r or {}).get("kind", "direct") == "direct" and (n == "lan" or re.match(r"^lan-[0-9]+$", n) is not None)
 
 
+def is_entry(r):
+    """The home's entry port at the person's address (`entry`, `entry-2`, … —
+    claude-fleet#3075): its node's `entry=`, else where the hub reached it."""
+    n = (r or {}).get("name") or ""
+    return (r or {}).get("kind", "direct") == "direct" and (n == "entry" or re.match(r"^entry-[0-9]+$", n) is not None)
+
+
 def route_class(r):
     """0 lan · 1 entry · 2 tailnet · 3 another direct line · 4 relay."""
     if (r or {}).get("kind") == "relay":
         return 4
     if is_lan(r):
         return 0
-    if (r or {}).get("name") == "entry":
+    if is_entry(r):
         return 1
     return 2 if is_tailnet(r) else 3
 
@@ -1079,8 +1086,8 @@ def route_label(kind, name):
         return "局域网" + ("" if name == "lan" else " " + name)
     if "tail" in (name or ""):
         return "Tailscale"
-    if name == "entry":
-        return "入口直连"
+    if is_entry({"name": name}):
+        return "入口直连" + ("" if name == "entry" else " " + name)
     if name and (re.search(r"[.:]", name) or name[:1].isdigit()):
         return name  # an address the person pinned
     return "直连" + ((" " + name) if name and name not in ("public", "direct") else "")
@@ -1188,7 +1195,7 @@ def ssh_command(machine, route, login, hub, ssh_opts=(), known_hosts=False):
         mine = os.environ.get("FLEET_KNOWN_HOSTS") or "~/.ssh/fleet-known-hosts"
         cmd += ["-o", "UserKnownHostsFile=%s ~/.ssh/known_hosts" % mine]
     key, cert = cert_paths()
-    if route.get("kind") == "direct" and route.get("name") == "entry":
+    if is_entry(route):
         # The home's entry port (claude-fleet#3075, EPIC #3067 C9) takes the keys
         # the hub registered, never a certificate: this computer's device key
         # alone, and no agent key spending one of its three tries.

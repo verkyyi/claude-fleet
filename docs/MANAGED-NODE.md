@@ -585,7 +585,8 @@ BREAK-IT 行 `service-handwritten`。只点名接管过的登录（`logins/<登�
 - **电脑也走它**（#3075，C9）：`fleet login` 登记的设备钥匙（`~/.ssh/fleet-cert` 那把）在入口开着时同时登记成这个人的
   一把普通钥匙（钥匙页上「<设备名> · fleet」；开入口前登记的设备在下一次续期时补上；人在钥匙页撤掉的，续期不补、
   重新扫码才回来），设备被吊销时一起撤。节点路线 `entry=<host>:<port>`（`CCQUOTA_FLEET_NODE_ROUTES`，公网端口在路由器上）
-  就是 `fleet connect` 的 `entry` 路线：排在 Tailscale 和旧的 `public`（系统 sshd）前、中转前，ssh 只出示设备钥匙
+  就是 `fleet connect` 的 `entry` 路线（没写 `entry=` 的机器，用 C6 的 reachable(machine)——入口真敲开过的地址 + 端口，
+  `entry`、`entry-2` …；没敲开过就没有）：排在 Tailscale 和旧的 `public`（系统 sshd）前、中转前，ssh 只出示设备钥匙
   （`IdentitiesOnly`，不出示证书）；主机钥匙是入口自己的那把，随心跳的 host keys 下发（`fleet route <机器> entry` 钉住）。
 - **审计**（共同约定 11）：每次进门登录处一行 `$FLEET_CONF_DIR/logs/entry.ndjson`（去了哪：view · exec · sftp · shell）；
   守护每拍读入口 sshd 的 `entry.log`（接受 · 钥匙被拒 · 没这个登录 · 不在入口上），一行一条写 `<log>/entry.ndjson`
