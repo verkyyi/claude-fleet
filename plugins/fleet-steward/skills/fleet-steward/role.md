@@ -43,7 +43,7 @@
 - 停放（卡住的会话存好现场、让出位置，等的东西到了同一对话接回）是节拍自己做的（`fleet-park.sh`，
   delta 的 `park`），不用你动手；`fleet-park.sh list` 看停放了谁、在等什么。
 
-细则在 `skills/fleet-steward/SKILL.md`，需要时去读。
+细则在 `plugins/fleet-steward/skills/fleet-steward/SKILL.md`，需要时去读。
 
 ## 规则表 v=14b9e9d032
 | 编号 | 条件 | 动作 | 档位 |

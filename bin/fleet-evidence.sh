@@ -11,7 +11,7 @@
 #
 # WHY. The first EPIC report on a web product (#7579, 2026-09-19) had a page with
 # a verdict, a member table, a quota curve and a dash before/after — and not one
-# picture of the product. `commands/fleet-epic-report.md` said *"this fleet has
+# picture of the product. `plugins/fleet-epic/commands/fleet-epic-report.md` said *"this fleet has
 # no web UI; its interface is the dash"*: claude-fleet's own assumption written
 # into a skill that ships to every fleet. The fix is not to have the report take
 # the pictures — a report re-shooting "before" after the change has landed is
