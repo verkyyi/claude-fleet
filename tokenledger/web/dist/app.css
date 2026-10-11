@@ -402,3 +402,42 @@ button.chip { border: 0; cursor: pointer; font: inherit; font-size: 11.5px; }
   .rules th:nth-child(2), .rules td:nth-child(2) { display: none; }
   .rules td:last-child { white-space: normal; }
 }
+
+/* Subscription policy: choose a person or machine, then edit that one rule. */
+.policy-tabs { display:flex; gap:6px; padding:16px 20px; border-bottom:1px solid var(--line-2); }
+.policy-workspace { display:grid; grid-template-columns:240px minmax(0,1fr); min-height:360px; }
+.policy-targets { border-right:1px solid var(--line-2); padding:12px; display:flex; flex-direction:column; gap:6px; }
+.policy-target { text-align:left; display:grid; gap:7px; padding:12px; border:1px solid transparent; border-radius:8px; background:transparent; cursor:pointer; overflow-wrap:anywhere; }
+.policy-target:hover { background:var(--panel-2); }
+.policy-target[aria-pressed=true] { background:var(--brand-soft); border-color:var(--brand); }
+.policy-target .chip { justify-self:start; }
+.policy-target small { color:var(--warn); }
+.policy-target small:empty { display:none; }
+.policy-editor { min-width:0; padding:24px; overflow-wrap:anywhere; }
+.policy-editor-head { display:flex; gap:12px; justify-content:space-between; align-items:start; margin-bottom:22px; }
+.policy-editor-head h3 { font-size:17px; margin-bottom:4px; }
+.policy-editor .sub { color:var(--muted); font-size:13px; }
+.policy-modes, .policy-subscriptions { border:0; padding:0; margin:0; min-width:0; }
+.policy-modes legend, .policy-subscriptions legend { font-size:12px; color:var(--muted); margin-bottom:10px; }
+.policy-mode { display:flex; gap:10px; align-items:start; padding:12px 14px; border:1px solid var(--line); border-radius:8px; margin-bottom:8px; cursor:pointer; }
+.policy-mode:has(input:checked) { background:var(--brand-soft); border-color:var(--brand); }
+.policy-mode input, .policy-subscription input { accent-color:var(--brand); margin-top:4px; flex:none; }
+.policy-mode span { display:grid; gap:3px; }
+.policy-mode small, .policy-subscription small { color:var(--muted); font-size:12px; display:block; }
+.policy-subscriptions { margin:16px 0; }
+.policy-subscription { display:flex; gap:10px; align-items:start; padding:10px 12px; border-bottom:1px solid var(--line-2); cursor:pointer; }
+.policy-save { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-top:20px; padding-top:18px; border-top:1px solid var(--line-2); }
+.policy-save p, .policy-save small { color:var(--muted); font-size:12px; }
+.policy-notes { margin-top:18px; font-size:12px; color:var(--muted); }
+.policy-notes summary, .policy-inspector summary { cursor:pointer; }
+.policy-notes p { margin-top:8px; }
+.policy-inspector { padding:16px 20px; border-top:1px solid var(--line-2); }
+.policy-inspector [data-policy-inspect] { margin-top:16px; }
+.policy-inspector .toolbar { margin:12px 0; }
+@media (max-width:700px) {
+ .policy-workspace { grid-template-columns:1fr; }
+ .policy-targets { flex-direction:row; overflow:auto; border-right:0; border-bottom:1px solid var(--line-2); }
+ .policy-target { min-width:180px; flex:none; }
+ .policy-editor { padding:18px; }
+ .policy-editor-head { flex-wrap:wrap; }
+}

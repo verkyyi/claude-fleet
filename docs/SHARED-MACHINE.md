@@ -226,13 +226,21 @@ fleet-cred-policy.sh show
 ```
 
 Administrators can also open **Subscriptions → Subscription permissions** at
-`/subscriptions`. Select a node and/or user, inspect the hub's effective view,
-then edit either allowlist. The editor distinguishes existing permissions,
-selected subscriptions and deny-all; it previews the change before saving
-through the same audited API. Nodes are resolved by their enrolled endpoint
-identity, and users by their hub principal, including pinned administrators.
-Credentials without a subscription ID are shown but cannot be selected until
-bound with the existing credentials API. Previously selected IDs remain in the
+`/subscriptions`. Choose **By user** or **By machine**, then select the person
+or machine in the list and edit its rule directly. No rule means **Allow all
+(default)** within existing eligibility; newly added subscriptions need no
+extra configuration. Selected subscriptions and deny-all are explicit options.
+**Restore default**, then **Save rule**, removes the scope's restriction (`null`)
+rather than saving a list of today's subscriptions. Opening the page writes
+nothing. Unsaved edits are retained when switching users, machines or views.
+An optional collapsed inspector checks a user on a machine; it is not a
+prerequisite for editing. If both scopes restrict access, both must allow it.
+
+Machine logins are grouped by the enrolled identity resolved by the hub,
+never the reported hostname; users use their hub principal, including pinned
+administrators. A failed machine identity lookup cannot become an editable
+machine. Credentials without a subscription ID cannot be selected until bound
+with the existing credentials API. Previously selected IDs remain in the
 editor even when their credential is no longer available. A pre-save read
 catches intervening policy changes; the API does not provide atomic revision
 checks for simultaneous writes. The displayed verdict is the hub's policy and
