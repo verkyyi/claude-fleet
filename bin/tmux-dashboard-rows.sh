@@ -91,7 +91,7 @@ R="${E}0m"; US=$'\x1f'
 # empty with no @ctx_pct — the sidebar's field 19, read by the client's top line.
 _WTEST='#{?@test_identity,,'; _WTEND='}'
 [ "${FLEET_ROWS_TEST:-0}" = 1 ] && { _WTEST=''; _WTEND=''; }
-WFMT="#{session_name}${US}#{window_index}${US}#{?#{||:#{@remote},#{@solo_shell}},,${_WTEST}#{window_name}${_WTEND}}${US}#{pane_current_path}${US}#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{?#{==:#{@claude_state},looping},#{@claude_wait},#{@claude_needs}}${US}#{@expand}${US}#{@pin}${US}#{?@degenerate_ts,degen=#{@degenerate_ts}:,}#{?@mem_killed,mem:,}#{?@claude_mem_warn,fat=#{@claude_mem_warn}:,}#{?@ctx_warn,ctxw:,}#{?@quota_stuck,stuck:,}#{@quota_failover}${US}#{@reap_due}${US}#{@reap_seen}${US}#{@reap_state_ts}${US}#{@repo}${US}#{@norepo}${US}#{@sleep_since}#{?@sleep_wake_deferred,:#{@sleep_wake_deferred},}${US}#{@repo_fold}${US}#{@loop}${US}#{@title_info}${US}#{?@born,#{@born},#{window_created}}${US}#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}${US}#{@task_line}${US}#{@reap_policy}${US}#{@epic}${US}#{?#{==:#{@backfill},failed},failed,}${US}${US}#{?#{==:#{@claude_state},needs},#{@claude_needs_detail},}${US}#{?@ctx_pct,#{?@ctx_left,#{@ctx_left},#{e|-:100,#{@ctx_pct}}}|#{@ctx_band}|#{@ctx_ts}|#{?@model,#{@model},#{?#{==:#{@cc_agent},codex},#{@cc_model},}}|#{@effort},}"
+WFMT="#{session_name}${US}#{window_index}${US}#{?#{||:#{@remote},#{@solo_shell}},,${_WTEST}#{window_name}${_WTEND}}${US}#{pane_current_path}${US}#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{?#{==:#{@claude_state},looping},#{@claude_wait},#{@claude_needs}}${US}#{@expand}${US}#{@pin}${US}#{?@degenerate_ts,degen=#{@degenerate_ts}:,}#{?@mem_killed,mem:,}#{?@claude_mem_warn,fat=#{@claude_mem_warn}:,}#{?@ctx_warn,ctxw:,}#{?@quota_stuck,stuck:,}#{@quota_failover}${US}#{@reap_due}${US}#{@reap_seen}${US}#{@reap_state_ts}${US}#{@repo}${US}#{@norepo}${US}#{@sleep_since}#{?@sleep_wake_deferred,:#{@sleep_wake_deferred},}${US}#{@repo_fold}${US}#{@loop}${US}#{@title_info}${US}#{?@born,#{@born},#{window_created}}${US}#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}${US}#{@task_line}${US}#{@reap_policy}${US}#{@epic}${US}#{?#{==:#{@backfill},failed},failed,}${US}${US}#{?#{==:#{@claude_state},needs},#{@claude_needs_detail},}${US}#{?@ctx_pct,#{?@ctx_left,#{@ctx_left},#{e|-:100,#{@ctx_pct}}}|#{@ctx_band}|#{@ctx_ts}|#{?@model,#{@model},#{?#{==:#{@cc_agent},codex},#{@cc_model},}}|#{@effort},}${US}#{?@name_manual,#{?#{==:#{window_name},#{@name_manual}},#{@name_manual},},}"
 
 # pad/truncate a plaintext string to N DISPLAY chars (locale-aware ${#}) → $fld_out
 fld() { local w="$1" s="$2" n=${#2}
@@ -890,7 +890,7 @@ buf=""
 # frame — every row below is a compare against it, no fork.
 fleet_cfg_expected_load; fleet_cfg_broken_load
 CFG_STALE_T='' CFG_RENEW_T='' CFG_BROKEN_T=''
-while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent hnd nsub exp pin qwait reap_due reap_seen reap_stamp wrepo wnorepo slept _ wloop wtitle wborn wcfg wittl wreap wepic wbf wakind wask wctx; do
+while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent hnd nsub exp pin qwait reap_due reap_seen reap_stamp wrepo wnorepo slept _ wloop wtitle wborn wcfg wittl wreap wepic wbf wakind wask wctx wman; do
   [ -z "$name" ] && continue
   # A local window's title slot is its @task_line (issue #2359): the first
   # sentence of a session bound to no issue, the title's fallback below.
@@ -926,7 +926,12 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
            fi ;;
          esac
          # bound to nothing (issue #2359): its first sentence is what it is about
-         [ -z "$wittl" ] && [ -z "$iss" ] && [ -z "$en" ] && wittl=$wtl ;;
+         [ -z "$wittl" ] && [ -z "$iss" ] && [ -z "$en" ] && wittl=$wtl
+         # a name the person gave it (issue #3317): @name_manual, WFMT's last
+         # field only while the window still wears it — it beats the issue title
+         # in every list that reads this cell (the 看台's ⌘P, the top line). A
+         # batch driver keeps its EPIC's title (its theme is read off it).
+         [ -n "$wman" ] && [ -z "$en" ] && wittl=${wman//[[:cntrl:]]/} ;;
     esac
     [ -z "$wittl" ] || cfgf="$US${cfgf#"$US"}$US$wittl"
     # field 15 (issue #1902): the session's @reap_policy, the view words it

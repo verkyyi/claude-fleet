@@ -623,6 +623,8 @@ class HubTests(HubFixture):
             self.assertEqual(call[call.index("rename-window"):call.index("rename-window") + 5],
                              ["rename-window", "-t", "@12", "--", want])
             self.assertIn("automatic-rename", call)
+            # the person's name beats the issue title on every list (issue #3317)
+            self.assertEqual(call[call.index("@name_manual"):call.index("@name_manual") + 2], ["@name_manual", want])
         # the worker_id is untouched: the same identity still finds the window
         self.assertEqual(self.lifecycle("worker_rename", ident, idem="again", name="x")["status"], "succeeded")
         n = len(self.node.calls("rename"))

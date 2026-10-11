@@ -132,7 +132,8 @@ elif [ -f "$flag" ]; then                         # rename mode
   t=$(cat "$flag"); rm -f "$flag"
   # `--` ends the flag list: without it a name starting with `-` is parsed as a
   # tmux flag ("unknown flag -d") and the rename silently fails.
-  if [ -n "$q" ]; then tmux rename-window -t "$t" -- "$q" 2>/dev/null
+  # @name_manual (issue #3317): a name the person chose beats the issue title
+  if [ -n "$q" ]; then tmux rename-window -t "$t" -- "$q" \; set-option -w -t "$t" @name_manual "$q" 2>/dev/null
     echo "rebind(?)+change-prompt($PROMPT)+clear-query+reload(bash $ROWS)"
   else echo "rebind(?)+change-prompt($PROMPT)+clear-query"; fi
 else                                              # jump (empty query)

@@ -29,7 +29,9 @@
 #      the outcome names the machine; the hub's refusal comes back verbatim with a
 #      non-zero exit; a lost row (`!`) runs nothing and says 失联，做不了; every
 #      write is followed by one hub cache --refresh; in the popup, Tab → 停 on a
-#      far row says how it went on the bottom line
+#      far row says how it went on the bottom line; a far 改名 shows its new
+#      name at once (issue #3317), held until the hub's row says it or
+#      FLEET_VIEW_NAME_HOLD_SECS passes
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 fail() { echo "FAIL: $*" >&2; exit 1; }
@@ -287,6 +289,20 @@ far() {   # <id> <action> <tool> <json fragment> [view-act args…]
 }
 far far1 message worker_message '"text":"你好 hi"' --text '你好 hi'
 far far1 rename worker_rename '"name":"新名"' --text '新名'
+# the new name shows at once (issue #3317), before far1's machine has sent its
+# next inventory round the hub — and the hold goes once the hub's row says it
+vtext() { qo view-rows --view fl@view-v1 | awk -F '\t' -v t="$1" '$1 == "sess" && $2 == t { print $4 }'; }
+[ "$(vtext "$MU/far1")" = '新名' ] || fail "E: a far rename does not show at once: $(vtext "$MU/far1")"
+[ -s "$G/view-names.fl" ] || fail "E: no hold written for the far rename"
+FLEET_VIEW_NAME_HOLD_SECS=0 qo view-rows --view fl@view-v1 >/dev/null
+[ ! -s "$G/view-names.fl" ] || fail "E: a hold past FLEET_VIEW_NAME_HOLD_SECS was kept: $(cat "$G/view-names.fl")"
+[ "$(vtext "$MU/far1")" = 'Far 在 m4' ] || fail "E: an expired hold still names the row: $(vtext "$MU/far1")"
+qo view-act --view fl@view-v1 "$MU/far1" rename --text '新名' >/dev/null 2>&1 || fail "E: the second far rename failed"
+cp "$W/rows.txt" "$W/rows.bak"
+sed "s/Far 在 m4/新名/" "$W/rows.bak" > "$W/rows.txt"
+[ "$(vtext "$MU/far1")" = '新名' ] || fail "E: the hub's own new name is not shown"
+[ ! -s "$G/view-names.fl" ] || fail "E: the hold outlived the hub saying the name: $(cat "$G/view-names.fl")"
+mv "$W/rows.bak" "$W/rows.txt"
 far far1 reappol worker_reap_policy '"policy":"done:2h"' --text done:2h
 far far1 stop worker_stop ''
 far far4 resume worker_resume ''

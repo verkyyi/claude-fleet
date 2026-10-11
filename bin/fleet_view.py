@@ -430,6 +430,52 @@ def windows(fleet):
     return res
 
 
+# A rename of another machine's row (issue #3317) reaches this list only when that
+# machine's next inventory has gone through the hub — up to a heartbeat. Until
+# then the popup shows the name it just sent: `$G/view-names.<fleet>`, {target:
+# [name, ts]}, written by the rename, read by entries(), each entry dropped once
+# the hub's row says it or past FLEET_VIEW_NAME_HOLD_SECS (180 s).
+def names_file(fleet):
+    return dash_global() / ("view-names." + (fleet or "-"))
+
+
+def names_raw(fleet):
+    try:
+        d = json.loads(names_file(fleet).read_text())
+    except (OSError, ValueError):
+        return {}
+    return d if isinstance(d, dict) else {}
+
+
+def names_live(d, now=None):
+    now = time.time() if now is None else now
+    hold = fenv("FLEET_VIEW_NAME_HOLD_SECS", 180)
+    return {k: v for k, v in d.items() if isinstance(v, list) and len(v) == 2
+            and isinstance(v[1], (int, float)) and now - v[1] < hold}
+
+
+def names_save(fleet, d):
+    p = names_file(fleet)
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        if not d:
+            if p.exists():
+                p.unlink()
+            return
+        tmp = p.with_name(p.name + ".%d" % os.getpid())
+        tmp.write_text(json.dumps(d, ensure_ascii=False))
+        os.replace(str(tmp), str(p))
+    except OSError:
+        pass
+
+
+def name_hold(fleet, target, name):
+    """A rename of a far row went out: show `name` on it until the hub agrees."""
+    d = names_live(names_raw(fleet))
+    d[target] = [name, time.time()]
+    names_save(fleet, d)
+
+
 # What a row is, in one cell (issue #3179, EPIC #3178 C1): a shape that reads
 # without colour (16 colours, black and white, a reader who cannot tell red from
 # green), every one an East-Asian-narrow character so it is one cell in a CJK
@@ -588,6 +634,8 @@ def entries(vid, now=None):
     here, me = here_label(row), getpass.getuser()
     logins = fleet_logins()
     wins = windows(fleet) if fleet else {}
+    held0 = names_raw(fleet) if fleet else {}
+    held = names_live(held0, now)
     landed_secs = fenv("FLEET_VIEW_LANDED_SECS", 86400)
     gl = glyphs()
     hage = hub_age(now)
@@ -622,6 +670,14 @@ def entries(vid, now=None):
         login = me if local else logins.get(target.split("/", 1)[0], "")
         name = TAG_RE.sub("", f[3]).strip()
         title = (f[13] or "").strip()
+        # a name the person gave it (issue #3317) is already the title cell — the
+        # producer's for a window here, its node's title= for a far one; until a
+        # far rename has gone round the hub, the name this client just sent
+        if target in held:
+            if held[target][0] in (title, name):
+                held.pop(target)
+            else:
+                title = held[target][0]
         detail = (f[7] or "").strip()
         issue = f[9].strip() if f[9].strip() not in ("—", "·", "-") else ""
         depth = int(f[6]) if f[6].isdigit() else 0
@@ -693,6 +749,8 @@ def entries(vid, now=None):
                       "tags": [], "repo": grepo.rpartition("/")[2], "word": word, "right": act,
                       "foot": " · ".join(x for x in (title or name, label, say("view_pr_fmt", pr) if pr.startswith("#") else "",
                                                      word, say("view_gone_hint")) if x)})
+    if held != held0:
+        names_save(fleet, held)
     multi = len(set(repos)) >= 2
     out = []
     for g in GROUPS:
@@ -1961,6 +2019,8 @@ def act_run(qo, vid, fleet, a, r, ans, client="", wait=True):
         except (OSError, subprocess.TimeoutExpired):
             return 1, say("view_act_failed_fmt", label, ""), False
         said = ((p.stdout.strip() or p.stderr.strip()).splitlines() or [""])[-1]
+        if p.returncode == 0 and a["id"] == "rename" and ans.strip():
+            name_hold(fleet, r["target"], ans.strip())
         hub_reread(fleet)
         if p.returncode != 0:
             return p.returncode, "✗ " + one_line(said or label, 160), False

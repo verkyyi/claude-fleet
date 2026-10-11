@@ -181,6 +181,7 @@ case "$mode" in
     # A window bound to no issue and driving no EPIC sends its @task_line there
     # instead (issue #2359): the first sentence its person typed, so a
     # `我的会话` / `scratch-N` row says what it is about on every machine.
+    # A name the person gave the window (@name_manual, issue #3317) beats both.
     # Column 19 (issue #1951): `detail=<question>` — what a session in `needs`
     # asks, in its own words (@claude_needs_detail, ≤120 characters), so the
     # client's bar and its notification can say it; empty when it waits on nothing.
@@ -258,7 +259,7 @@ case "$mode" in
           print ENVIRON["FR"] "\t" substr($2, 2) "\t" t }' "$_f" 2>/dev/null)$'\n'
     done < <(fleet_repos "$sess" 2>/dev/null)
     [ "$_nr" = 1 ] || drepo=''   # a window with no repo column falls to the fleet's ONLY repo
-    cwds=$(tmux -u -L "$sock" list-windows -t "=$sess" ${lwf[@]+"${lwf[@]}"} -F $'#{window_id}\t#{pane_current_path}\t#{@norepo}\t#{@cc_agent}\t#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}\t#{?@born,#{@born},#{window_created}}\t#{@reap_policy}\t#{?#{==:#{@claude_state},needs},#{@claude_needs_detail},}\t#{?#{||:#{==:#{@fleet_role},orchestrator},#{==:#{@fleet_role},steward}},#{@fleet_role},}\t#{@epic}\t#{?#{==:#{@backfill},failed},failed,}\t#{?#{==:#{@test_identity},1},1,}\t#{@task_line}' 2>/dev/null) || cwds=''
+    cwds=$(tmux -u -L "$sock" list-windows -t "=$sess" ${lwf[@]+"${lwf[@]}"} -F $'#{window_id}\t#{pane_current_path}\t#{@norepo}\t#{@cc_agent}\t#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}\t#{?@born,#{@born},#{window_created}}\t#{@reap_policy}\t#{?#{==:#{@claude_state},needs},#{@claude_needs_detail},}\t#{?#{||:#{==:#{@fleet_role},orchestrator},#{==:#{@fleet_role},steward}},#{@fleet_role},}\t#{@epic}\t#{?#{==:#{@backfill},failed},failed,}\t#{?#{==:#{@test_identity},1},1,}\t#{@task_line}\t#{?@name_manual,#{?#{==:#{window_name},#{@name_manual}},#{@name_manual},},}' 2>/dev/null) || cwds=''
     fleet_cfg_expected_load; fleet_cfg_broken_load     # broken (#2076): judged here too
     estale=''
     while IFS=$'\t' read -r _sr _sn _sa _st; do
@@ -271,7 +272,9 @@ case "$mode" in
       c2=${rest%%$'\t'*}; rest=${rest#*$'\t'}
       c3=${rest%%$'\t'*}; rest=${rest#*$'\t'}
       wt=${rest%%$'\t'*}; rest=${rest#*$'\t'}
-      wrow=$(printf '%s\n' "$cwds" | awk -F'\t' -v w="$wid" '$1 == w { print $2 "\t" $3 "\t" $4 "\t" $5 "\t" $6 "\t" $7 "\t" $8 "\t" $9 "\t" $10 "\t" $11 "\t" $12 "\t" $13; exit }')
+      wrow=$(printf '%s\n' "$cwds" | awk -F'\t' -v w="$wid" '$1 == w { print $2 "\t" $3 "\t" $4 "\t" $5 "\t" $6 "\t" $7 "\t" $8 "\t" $9 "\t" $10 "\t" $11 "\t" $12 "\t" $13 "\t" $14; exit }')
+      wman=${wrow##*$'\t'}; wrow=${wrow%$'\t'*}
+      wman=${wman//$'\r'/ }
       wtl=${wrow##*$'\t'}; wrow=${wrow%$'\t'*}
       wtl=${wtl//$'\r'/ }
       wtest=${wrow##*$'\t'}; wrow=${wrow%$'\t'*}
@@ -330,6 +333,11 @@ case "$mode" in
       # bound to nothing, driving nothing (issue #2359): the session's first
       # sentence (@task_line, set-claude-state.sh — tab-free, ≤40 characters)
       [ -z "$t" ] && [ -z "$c2" ] && [ -z "$wepic" ] && t=$wtl
+      # a name the person gave it (issue #3317, @name_manual — set by every rename
+      # road, sent only while the window still wears it) beats the issue title and
+      # the first sentence: what every other machine's list shows. A batch
+      # driver's title stays its EPIC's (the batch row's theme is read off it).
+      [ -n "$wman" ] && [ -z "$wepic" ] && t=$wman
       row=$wid$'\t'$c2$'\t'$c3$'\t'$wt$'\t'$rest
       b=''; [ -z "$busy" ] || b=$(printf '%s\n' "$busy" | awk -v w="$wid" '$1 == w { print $2; exit }')
       cl='' cb='' cts='' cm='' ce='' cas='' cq='' cdec='' ctodo='' cpark='' cpage='' cparkl='' ctodol=''
@@ -801,7 +809,11 @@ case "$mode" in
     if [ -n "$fid" ] && [ "$have" != "$fid" ]; then
       printf 'rename: window %s is no longer that session\n' "$win" >&2; exit 5
     fi
+    nm=${nm//$'\t'/ }
+    # @name_manual (issue #3317): the person's name beats the issue title — this
+    # machine's inventory sends it as the row's title= while the window wears it
     tmux -u -L "$sock" rename-window -t "$win" -- "$nm" \; set-option -w -t "$win" automatic-rename off \
+      \; set-option -w -t "$win" @name_manual "$nm" \
       || { printf 'rename: tmux refused\n' >&2; exit 1; }
     printf 'renamed\n'
     ;;
