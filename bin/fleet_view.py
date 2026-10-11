@@ -22,21 +22,39 @@ fleet-quickopen.py (this module is its node half — the client never loads it):
     fleet-quickopen.py view-rows --view <view> [<query>]
                                               the popup's lines, plain (the selftest)
     fleet-quickopen.py go <view> <target>     THE way a 看台 changes session (= bin/fleet-view-go.sh)
+    fleet-quickopen.py view-peers --view <view> [--socket <label>]
+                                              (attach --thin, in the background) one
+                                              window per other (machine, login) — C4
 
 `<view>` is the 看台's id or its session's name (`fleet@view-<id>`, what a key's
 `#{session_name}` says). `<target>` is a window here (`@12`) or a worker id
 (`<fleet UUID>/<fleet_id>`, or its `<fleet UUID>/<key>` alias).
 
 GO (共同约定 8): the one entry every 看台 switch takes — the popup's ↵, ⌘↑↓, ⌘[ ],
-and later C4's other machines and C7's keys. A session of THIS login on this
-machine is a window of the 看台's own group: `select-window` on the 看台, nothing
-else (no client switch, no redraw of our own). Another machine's — or another
-login's here — is C4's: until a `@peer_node` window for it exists in the 看台,
-it says 「这台还没接上」 and changes nothing. Every go appends one line to
-`$FLEET_CONF_DIR/logs/view-switch.ndjson` — ts · view · from · to · machine ·
-login · method (`select-window` | `far-none` | `gone`) · ms (the decision and the
-tmux call, until select-window returned) · how (popup | next | back …) — C10's
-reading. The history (⌘[ ⌘]) lives beside the 看台's registry row,
+C4's other machines and C7's keys. A session of THIS login on this machine is a
+window of the 看台's own group: `select-window` on the 看台, nothing else (no
+client switch, no redraw of our own).
+
+Another machine's — or another login's here — is a PEER WINDOW's (issue #2751,
+EPIC #2999 C4): one window per (machine, login) in the 看台's group, made when the
+看台 attaches (`view-peers`, so the first visit is warm too) or by the first go
+that needs it — `@fleet_role panel` (no list, no restore, no cap), `@peer
+<machine>@<login>` (+ `@peer_node` / `@peer_login`, C1's top line), `@peer_view
+<view>`, its pane `fleet-peerlink.py pane`, an ssh
+on C5's standing link attached to the far machine's 看台 `<view>-via-<home>` (bare:
+no top line, no key table — this machine draws both). Going there is the window's
+`select-window`, after — only when the far 看台 shows another session than
+`@peer_cur` — ONE channel on the link running the far end's `fleet-remote-view.sh
+select` (its pre-lib fast path: three tmux calls). The link down (no socket C5
+calls up) → `@peer_want` on the window, the window selected (it says 「正在连」),
+rc 3; its pane lands there when the link is back. The windows go with their 看台
+(rv_prune's peer sweep).
+
+Every go appends one line to `$FLEET_CONF_DIR/logs/view-switch.ndjson` — ts ·
+view · from · to · machine · login · method (`select-window` | `peer-window` (the
+far 看台 already there) | `peer-select` (+ `peer_ms`, the channel) | `peer-wait` |
+`far-none` (no machine known) | `gone`) · ms (the decision and every call, until
+select-window returned) · how (popup | next | back …) — C10's reading. The history (⌘[ ⌘]) lives beside the 看台's registry row,
 `$FLEET_CONF_DIR/remote-views/<id>.d/history.json` (rv_prune takes it with the
 row), in fleet-quickopen.py's own stack / at / mru shape; beside it `order.json`,
 the list's session order as last drawn — ⌘↓ ⌘↑ read it (a press never waits
@@ -50,6 +68,8 @@ orchestrator is 「新任务（编排）」. All of it through fleet-ui-lang.sh 
 """
 import curses
 import getpass
+import importlib.util
+import shlex
 import json
 import os
 import re
@@ -514,9 +534,166 @@ def toast(client, text):
     tm("display-message", *(["-c", client] if client else []), text)
 
 
+# --- peer windows: the other machines, inside the 看台 (issue #2751, EPIC #2999 C4) -----
+
+_PL = []
+
+
+def peerlink():
+    """bin/fleet-peerlink.py as a module (C5: the one owner of the links)."""
+    if not _PL:
+        path = Path(__file__).absolute().parent / "fleet-peerlink.py"
+        spec = importlib.util.spec_from_file_location("fleet_peerlink", str(path))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _PL.append(mod)
+    return _PL[0]
+
+
+def peer_windows(fleet, vid):
+    """{"<machine>@<login>": (window id, @peer_cur)} of the 看台's peer windows."""
+    rc, out = tm("list-windows", "-t", "=" + fleet, "-F", "#{window_id}|#{@peer}|#{@peer_view}|#{@peer_cur}")
+    res = {}
+    for line in out.splitlines() if rc == 0 else []:
+        w, peer, pv, pc = (line.split("|") + ["", "", ""])[:4]
+        if peer and pv == vid:
+            res.setdefault(peer, (w, pc))
+    return res
+
+
+def peer_make(fleet, vid, machine, login, want=""):
+    """The 看台's window onto (machine, login): made hidden (-d), its pane the C5
+    pane program (`want`: a worker id its first connect lands on). Its window id,
+    "" when tmux said no."""
+    me = getpass.getuser()
+    pane = "exec python3 %s pane %s %s %s" % (
+        shlex.quote(str(Path(__file__).absolute().parent / "fleet-peerlink.py")),
+        shlex.quote(machine), shlex.quote(login), shlex.quote(vid))
+    name = "@" + machine + ("" if login == me else "·" + login)
+    rc, w = tm("new-window", "-d", "-P", "-F", "#{window_id}", "-t", "=%s@view-%s:" % (fleet, vid), "-n", name, pane)
+    if rc != 0 or not w.startswith("@"):
+        return ""
+    tm("set-option", "-w", "-t", w, "@fleet_role", "panel", ";",
+       "set-option", "-w", "-t", w, "@peer", "%s@%s" % (machine, login), ";",
+       "set-option", "-w", "-t", w, "@peer_view", vid, ";",
+       "set-option", "-w", "-t", w, "@peer_node", machine, ";",
+       "set-option", "-w", "-t", w, "@peer_login", login, ";",
+       "set-option", "-w", "-t", w, "automatic-rename", "off", ";",
+       "set-option", "-w", "-t", w, "pane-border-status", "off",
+       *([";", "set-option", "-w", "-t", w, "@peer_want", "wid:" + want] if want else []))
+    return w
+
+
+def peer_targets():
+    """[(machine, login)] the 看台 should hold a window for: C5's own wanted set."""
+    try:
+        return sorted(peerlink().wanted_targets())
+    except Exception:  # noqa: BLE001 — a broken peerlink makes no windows, never a crash
+        return []
+
+
+def view_peers(vid):
+    """`view-peers`: a window for every (machine, login) your sessions are on."""
+    row = view_row(vid)
+    fleet = view_fleet(vid, row)
+    if not fleet or "-via-" in vid:
+        return 2
+    have = peer_windows(fleet, vid)
+    for m, l in peer_targets():
+        if "%s@%s" % (m, l) not in have:
+            peer_make(fleet, vid, m, l)
+    return 0
+
+
+def far_where(target, meta, fleet):
+    """(machine, login) of a far worker id: the go's meta (the list's), else the
+    hub's row for it (global/remote_<fleet>)."""
+    m, l = (meta or {}).get("machine") or "", (meta or {}).get("login") or ""
+    if not m and fleet:
+        try:
+            for line in (dash_global() / ("remote_" + fleet)).read_text().splitlines():
+                f = line.split(US)
+                if f[0] == "wid:" + target and len(f) > 1:
+                    m = f[1].rstrip("!~")
+                    break
+        except OSError:
+            pass
+    if m and not l:
+        l = fleet_logins().get(target.split("/", 1)[0], "") or getpass.getuser()
+    return m, l
+
+
+def peer_select(machine, login, sock, target, vid):
+    """ONE channel on the link: the far 看台 shows `target`. The far end's rc (0 ·
+    3 not live there · 5 no such 看台 there yet), 255 the channel failed."""
+    pl = peerlink()
+    cmd = "bash %s/fleet-remote-view.sh select %s %s" % (pl.remote_bin(), shlex.quote(target),
+                                                         shlex.quote(pl.via_view(vid)))
+    try:
+        return subprocess.run(pl.ssh_cmd() + ["-S", sock, "-o", "ControlMaster=no", "-l", login,
+                                              pl.ssh_host(machine), cmd],
+                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                              timeout=fenv("FLEET_VIEW_PEER_SECS", 3)).returncode
+    except (OSError, subprocess.TimeoutExpired):
+        return 255
+
+
+def fenv(k, d):
+    try:
+        return float(os.environ.get(k) or d)
+    except ValueError:
+        return float(d)
+
+
+def go_far(vid, fleet, g, target, meta, client):
+    """go()'s other-machine half: (method, rc, machine, login, extra)."""
+    m, l = far_where(target, meta, fleet)
+    if not m:
+        toast(client, say("view_far_fmt", "?"))
+        return "far-none", 3, m, l, {}
+    key = "%s@%s" % (m, l)
+    w, pcur = peer_windows(fleet, vid).get(key, ("", ""))
+    made = not w
+    if made:
+        w = peer_make(fleet, vid, m, l, target)
+        if not w:
+            toast(client, say("view_far_fmt", m))
+            return "far-none", 3, m, l, {}
+    if not made and pcur == "wid:" + target:
+        code, _ = tm("select-window", "-t", "=%s:%s" % (g, w))
+        return ("peer-window", 0) + (m, l, {}) if code == 0 else ("gone", 4, m, l, {})
+    sock = "" if made else peerlink().up_sock(m, l)
+    extra = {}
+    if sock:
+        t1 = time.monotonic()
+        prc = peer_select(m, l, sock, target, vid)
+        # 5: the far 看台 is not there yet — the window's pane is attaching right
+        # now (a fresh 看台, a line just back); it is, within moments
+        for _ in range(int(fenv("FLEET_VIEW_PEER_RETRIES", 8))):
+            if prc != 5:
+                break
+            time.sleep(0.15)
+            prc = peer_select(m, l, sock, target, vid)
+        extra["peer_ms"] = round((time.monotonic() - t1) * 1000, 1)
+        if prc == 0:
+            code, _ = tm("select-window", "-t", "=%s:%s" % (g, w), ";",
+                         "set-option", "-w", "-t", w, "@peer_cur", "wid:" + target, ";",
+                         "set-option", "-w", "-u", "-t", w, "@peer_want")
+            return ("peer-select", 0, m, l, extra) if code == 0 else ("gone", 4, m, l, extra)
+        if prc == 3:
+            toast(client, say("view_gone"))
+            return "gone", 4, m, l, extra
+    # the link not up (or the far 看台 not there yet): the window waits and lands there
+    tm("set-option", "-w", "-t", w, "@peer_want", "wid:" + target)
+    tm("select-window", "-t", "=%s:%s" % (g, w))
+    toast(client, say("view_peer_wait_fmt", m))
+    return "peer-wait", 3, m, l, extra
+
+
 def go(qo, vid, target, how="go", client="", meta=None, record=True):
-    """Switch the 看台 to `target`. rc 0 switched · 3 not reachable from here yet
-    (another machine / login: C4) · 4 gone · 2 no such 看台."""
+    """Switch the 看台 to `target`. rc 0 switched · 3 another machine / login whose
+    link is not up yet (C4: its window shown, waiting to land there) · 4 gone ·
+    2 no such 看台."""
     t0 = time.monotonic()
     row = view_row(vid)
     fleet = view_fleet(vid, row)
@@ -529,9 +706,10 @@ def go(qo, vid, target, how="go", client="", meta=None, record=True):
     if far and not meta.get("machine"):
         cached = order_load(vid)
         meta = (cached[1].get(target) if cached else None) or meta
+    extra = {}
     if far:
-        method, rc = "far-none", 3
-        toast(client, say("view_far_fmt", meta.get("machine") or "?"))
+        method, rc, fm, fl, extra = go_far(vid, fleet, g, target, meta, client)
+        meta = dict(meta, machine=fm or meta.get("machine") or "", login=fl or meta.get("login") or "")
     elif not w:
         method, rc = "gone", 4
         toast(client, say("view_gone"))
@@ -539,10 +717,12 @@ def go(qo, vid, target, how="go", client="", meta=None, record=True):
         code, _ = tm("select-window", "-t", "=%s:%s" % (g, w))
         method, rc = ("select-window", 0) if code == 0 else ("gone", 4)
     ms = round((time.monotonic() - t0) * 1000, 1)
-    log_switch({"ts": round(time.time(), 3), "view": vid, "from": before, "to": target,
-                "machine": meta.get("machine") or ("" if far else row.get("node") or ""),
-                "login": meta.get("login") or ("" if far else getpass.getuser()),
-                "method": method, "ms": ms, "how": how})
+    rec = {"ts": round(time.time(), 3), "view": vid, "from": before, "to": target,
+           "machine": meta.get("machine") or ("" if far else row.get("node") or ""),
+           "login": meta.get("login") or ("" if far else getpass.getuser()),
+           "method": method, "ms": ms, "how": how}
+    rec.update(extra)
+    log_switch(rec)
     if rc == 0 and record:
         hist_save(qo, vid, qo.visit(hist_load(qo, vid), target if not target.startswith("@") else w))
     return rc
@@ -814,6 +994,11 @@ def main(argv, qo):
     client = opt(argv, "--client")
     if argv[:1] == ["do"] and len(argv) >= 2:
         return do(qo, argv[1], vid, client)
+    if argv[:1] == ["view-peers"]:
+        if opt(argv, "--socket"):
+            _SOCK[0] = opt(argv, "--socket")
+            os.environ.pop("TMUX", None)
+        return view_peers(vid)
     if argv[:1] == ["view-order"]:
         order_save(vid, entries(vid))
         return 0

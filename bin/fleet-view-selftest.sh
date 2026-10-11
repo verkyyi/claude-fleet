@@ -19,8 +19,10 @@
 #   C  ↵ on a row here: the 看台's current window changes (select-window), with no
 #      whole-screen clear on the client; one view-switch.ndjson line (method ·
 #      ms); the 看台's mouse table equals root's
-#   D  go to another machine's / login's session: rc 3, 「这台还没接上」, nothing
-#      changed, logged far-none
+#   D  go to another machine's / login's session (C4, issue #2751): its link not
+#      up → a peer window for that (machine, login) is made in the 看台 (panel
+#      role, @peer, @peer_view, @peer_want = the session) and shown, rc 3, logged
+#      peer-wait; a second go reuses it; another login here gets its own window
 #   E  ⌘↓ / ⌘↑ walk the list's order, ⌘[ / ⌘] the history; a session that is
 #      not a 看台 keeps root (its key-table untouched)
 #   F  the old client's quickopen is untouched by --view (do <verb> alone still
@@ -164,16 +166,23 @@ assert r["to"] == sys.argv[2], r
 PY
 pass "C  ↵ here: select-window on the 看台, no whole-screen clear, logged ($(python3 -c 'import json,sys; print(json.loads(open(sys.argv[1]).read().splitlines()[-1])["ms"])' "$log") ms)"
 
-# --- D: another machine --------------------------------------------------------------------
+# --- D: another machine (C4) ---------------------------------------------------------------
 before=$(ti display-message -p -t 'fl@view-v1:' '#{window_id}')
 TMUX="$IN,0,0" python3 "$BIN/fleet-quickopen.py" go 'fl@view-v1' "$MU/far1"; rc=$?
-[ "$rc" = 3 ] || fail "D: go to m4's session answered $rc, not 3"
-[ "$(ti display-message -p -t 'fl@view-v1:' '#{window_id}')" = "$before" ] || fail "D: a far go changed the 看台"
-tail -1 "$log" | grep -q '"method":"far-none"' || fail "D: not logged far-none: $(tail -1 "$log")"
-TMUX="$IN,0,0" bash "$BIN/fleet-view-go.sh" v1 "$OU/oth1"; [ $? = 3 ] || fail "D: another login's session here is not C4's (rc 3)"
+[ "$rc" = 3 ] || fail "D: go to m4's session with no link answered $rc, not 3"
+PW=$(ti display-message -p -t 'fl@view-v1:' '#{window_id}')
+[ "$PW" != "$before" ] || fail "D: a far go did not show the machine's window"
+[ "$(ti display-message -p -t "$PW" '#{@peer}|#{@peer_view}|#{@fleet_role}|#{@peer_want}')" = "m4@$ME|v1|panel|wid:$MU/far1" ] \
+  || fail "D: the peer window: $(ti display-message -p -t "$PW" '#{@peer}|#{@peer_view}|#{@fleet_role}|#{@peer_want}')"
+tail -1 "$log" | grep -q '"method":"peer-wait"' || fail "D: not logged peer-wait: $(tail -1 "$log")"
+tail -1 "$log" | grep -q '"machine":"m4"' || fail "D: the far machine is not logged: $(tail -1 "$log")"
+TMUX="$IN,0,0" bash "$BIN/fleet-view-go.sh" v1 "$MU/far1"; [ $? = 3 ] || fail "D: a second far go is not rc 3"
+[ "$(ti list-windows -t fl -F '#{@peer}' | grep -c "^m4@$ME\$")" = 1 ] || fail "D: a second go made a second m4 window"
+TMUX="$IN,0,0" bash "$BIN/fleet-view-go.sh" v1 "$OU/oth1"; [ $? = 3 ] || fail "D: another login's session here is not a peer go (rc 3)"
+ti list-windows -t fl -F '#{@peer}' | grep -qx 'nodeA@other' || fail "D: another login here got no window of its own: $(ti list-windows -t fl -F '#{@peer}')"
 TMUX="$IN,0,0" bash "$BIN/fleet-view-go.sh" v1 "@99999"; [ $? = 4 ] || fail "D: a gone window is not rc 4"
 TMUX="$IN,0,0" bash "$BIN/fleet-view-go.sh" nosuch "$UU/f1"; [ $? = 2 ] || fail "D: no such 看台 is not rc 2"
-pass "D  another machine / login: 这台还没接上 (rc 3), nothing moved; gone 4; no 看台 2"
+pass "D  another machine / login: its peer window, shown waiting (rc 3, peer-wait), one per (machine, login); gone 4; no 看台 2"
 
 # --- E: ⌘↓ ⌘↑ ⌘[ ⌘] ------------------------------------------------------------------------
 cur() { ti display-message -p -t 'fl@view-v1:' '#{window_id}'; }

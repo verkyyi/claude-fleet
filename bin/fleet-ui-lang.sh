@@ -598,6 +598,8 @@ fleet_ui_t() {
     en:view_far_fmt) printf '%s is not connected yet' "${1:-}" ;;
     zh:view_gone) printf '这个会话已经不在了' ;;
     en:view_gone) printf 'that session is gone' ;;
+    zh:view_peer_wait_fmt) printf '正在连 %s…' "${1:-}" ;;
+    en:view_peer_wait_fmt) printf 'connecting to %s…' "${1:-}" ;;
     zh:view_waking_fmt) printf '正在唤醒 %s' "${1:-}" ;;
     en:view_waking_fmt) printf 'waking %s' "${1:-}" ;;
     zh:panel_quit)              printf '退出 fleet（会话在后台继续）' ;;
