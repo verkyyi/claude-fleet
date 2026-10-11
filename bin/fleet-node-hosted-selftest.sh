@@ -233,7 +233,7 @@ eq "B … no process left running from the runtime" "$(left)" 0
 hasnt "B … quit says nothing went wrong" "$qout" "unknown"
 # a late --ensure (the sidebar's, the keeper's last, in flight across the quit —
 # issue #3171) brings neither the cache nor a loop back
-env TMPDIR="$NHC/tmp" FLEET_HUB_SESSIONS_CLIENT="$SESS" CCQUOTA_FLEET=1 FLEET_HUB_URL=https://hub.example \
+env TMPDIR="$NHC/tmp" FLEET_NODE_HOSTED=1 FLEET_HUB_SESSIONS_CLIENT="$SESS" CCQUOTA_FLEET=1 FLEET_HUB_URL=https://hub.example \
     FLEET_HUB_SESSIONS_CMD="cat $W/sessions.json" bash "$W/rt/bin/fleet-hub-sessions.sh" --ensure >/dev/null 2>&1
 sleep 1
 eq "B … a late --ensure leaves the cache removed" "$(ls -d "$NHC" 2>/dev/null)" ""

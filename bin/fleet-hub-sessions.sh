@@ -240,11 +240,13 @@ case "$CLIENT" in *[!A-Za-z0-9._-]*) CLIENT='' ;; esac
 LOCAL=0      # the shell with no hub at all (#1712): this machine answers for itself
 [ -n "$CLIENT" ] && [ "${FLEET_HUB_SESSIONS_LOCAL:-0}" = 1 ] && LOCAL=1
 hub_on() { if [ -n "$CLIENT" ]; then [ "${CCQUOTA_FLEET:-0}" = 1 ]; else fleet_hub_any; fi; }
-# client_gone — a client's cache ($TMPDIR, the parent of $FLEET_C) no longer
-# exists: `fleet quit` on a managed machine removed it (issue #3171). A loop
-# then never makes it again (mkdir -p would bring the removed cache back, and
-# with it a loop no quit is left to stop), and a running one stops.
-client_gone() { [ -n "$CLIENT" ] && [ ! -d "${FLEET_C%/.claude-dash}" ]; }
+# client_gone — a managed machine's client (FLEET_NODE_HOSTED=1) whose temp
+# cache ($TMPDIR, the parent of $FLEET_C) no longer exists: `fleet quit` removed
+# it (issue #3171). A loop then never makes it again (mkdir -p would bring the
+# removed cache back, and with it a loop no quit is left to stop), and a running
+# one stops. Any other client's cache is made as before (a fresh box's
+# /tmp/claude-fleet-<uid> does not exist yet).
+client_gone() { [ -n "$CLIENT" ] && [ "${FLEET_NODE_HOSTED:-0}" = 1 ] && [ ! -d "${FLEET_C%/.claude-dash}" ]; }
 local_fleets() {
   if [ -n "$CLIENT" ]; then printf '%s\t-\n' "$CLIENT"; return; fi
   local s c
