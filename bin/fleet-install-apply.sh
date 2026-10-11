@@ -1275,7 +1275,8 @@ fi
 # driver gets @agent_def epic-driver, a pinned window reap keep once. Re-runnable;
 # each change is one line.
 if [ -f "$ROOT/bin/fleet-role-windows.sh" ] && [ "$BUNDLE" != 1 ]; then
-  out=$(bash "$ROOT/bin/fleet-role-windows.sh" $([ "$DRY" = 1 ] && echo --dry-run) 2>&1); rc=$?
+  rwa=(); [ "$DRY" = 1 ] && rwa=(--dry-run)
+  out=$(bash "$ROOT/bin/fleet-role-windows.sh" ${rwa[@]+"${rwa[@]}"} 2>&1); rc=$?
   printf '%s\n' "$out" | sed '$d' | sed 's/^/roles-windows:   /'
   if [ "$rc" = 0 ]; then say "$(printf '%s\n' "$out" | tail -1)"
   else fail roles-windows "$(printf '%s\n' "$out" | tail -1 | sed 's/^roles-windows: //')"; fi
