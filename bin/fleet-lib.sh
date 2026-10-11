@@ -9405,8 +9405,7 @@ fleet_window_human() {
 
 # fleet_human_hold_note <session> <win> <what> <why> — one line in
 # logs/attention.ndjson that an automatic <what> (handoff · reopen · sleep · park)
-# was put off because <win> waits on a person (issue #2869). `hold` lines carry no
-# `role`, so the attention count (fleet-steward-stats.sh) never reads one as a look.
+# was put off because <win> waits on a person (issue #2869).
 # Once per window per <what> in 10 minutes (@human_hold_<what>): a tick re-asks.
 fleet_human_hold_note() {
   local sess="${1:-}" win="${2:-}" what="${3:-}" why="${4:-}" d now last

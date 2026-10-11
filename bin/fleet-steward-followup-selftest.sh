@@ -2,9 +2,8 @@
 # fleet-steward-followup-selftest.sh — the 「待你动手」 list (issue #2672, EPIC
 # #2668 C4): bin/fleet_followup.py (the marker, the harvest, the runs, the desk
 # ticket) on the steward's beat (bin/fleet_steward.py → fleet-steward-tick.sh),
-# fleet-steward-stats.sh followups, fleet-ticket.sh edit, and the open count's
-# road to the client (fleet-control-read.sh `orchtodo=` → fleet_hub_common
-# inventory_row → fleet-hub-sessions.sh `todo=N` → fleet-sidebar.py).
+# and fleet-ticket.sh edit. The followups metric (fleet-steward-stats.sh) and the
+# open count's road to the client went with the resident seat (issue #3118).
 #
 # GitHub, fleet-stable.sh, the desk ticket and the epic hold are seams: GitHub is
 # a directory of JSON files, the move a counter that exits as told.
@@ -22,10 +21,6 @@
 #   O  a batch holds the install: the move waits; released ⇒ it runs
 #   P  nothing met: a beat writes no todo, files no ticket, stamps nothing
 #   Q  the person ticks a human row on the desk ticket ⇒ done, written back
-#   R  fleet-steward-stats.sh followups: done-not-live 0 for listed / run batches,
-#      1 for a closed batch the steward never met (--epics)
-#   S  the open count travels: orchtodo=N → orch_todo → `todo=N`; none ⇒ the
-#      inventory row byte for byte
 #   T  fleet_followup.py mark / parse round-trip; fleet-ticket.sh edit replaces a
 #      body through fleet_gh_write
 set -uo pipefail
@@ -236,50 +231,6 @@ TICK beat --holder --force >/dev/null 2>&1
   && [ "$(cat "$ST_GH/todo")" = 0 ] \
   && ok "Q: ticked on the ticket → done by the person, written back, open count 0" \
   || bad "Q: state=$(item fu-1 state) by=$(item fu-1 by)"
-
-# R — the metric
-FLEET_CONF_DIR="$WORK/K/conf" ST_GH="$WORK/K/gh" bash "$BIN/fleet-steward-stats.sh" followups >"$WORK/out" 2>&1
-grep -q '^done-not-live	0' "$WORK/out" && grep -q '^o/r#202	yes	1	1	0' "$WORK/out" \
-  && ok "R: followups — the three run batches, done-not-live 0" || bad "R: $(cat "$WORK/out")"
-mkdir -p "$WORK/R/bin"
-printf '#!/bin/sh\ncat "%s/R/issue.json"\n' "$WORK" > "$WORK/R/bin/fleet-gh.sh"
-cat > "$WORK/R/issue.json" <<'JSON'
-{"state":"CLOSED","comments":[{"body":"挪稳定版到 abc：`fleet-stable.sh move abcdef1`","url":"u"}]}
-JSON
-# the stats script reads fleet-gh.sh beside it: a sandbox bin with the real script + the fake reader
-cp "$BIN/fleet-steward-stats.sh" "$BIN/fleet_followup.py" "$WORK/R/bin/"
-FLEET_CONF_DIR="$WORK/K/conf" bash "$WORK/R/bin/fleet-steward-stats.sh" followups --epics o/r#999 >"$WORK/out" 2>&1
-grep -q '^done-not-live	1' "$WORK/out" && grep -q '^o/r#999	yes	1	0	0' "$WORK/out" \
-  && ok "R: --epics: a closed batch the steward never met, with a followup → done-not-live 1" || bad "R: $(cat "$WORK/out")"
-
-# S — the open count's road to the client
-if [ -n "$REAL_TMUX" ]; then
-  jt="$WORK/jt"; js="stf$$"; mkdir -p "$jt" "$WORK/jconf/fleets/$js"
-  printf 'FLEET_REPO=o/r\n' > "$WORK/jconf/fleets/$js/conf"
-  jq() { TMUX_TMPDIR="$jt" "$REAL_TMUX" -L "$js" "$@"; }
-  jq -f /dev/null new-session -d -s "$js" -n home 'sleep 600'
-  jq new-window -d -t "=$js:" -n orchestrator 'sleep 600'
-  jq set-option -w -t "=$js:orchestrator" @fleet_role orchestrator
-  jq set-option -w -t "=$js:orchestrator" @norepo 1
-  jinv() { env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$jt" TMPDIR="$WORK" FLEET_CONF_DIR="$WORK/jconf" \
-             bash "$BIN/fleet-control-read.sh" workers "$js" 2>/dev/null | awk -F'\t' '$10 == "orchestrator"'; }
-  plain=$(jinv)
-  jq set-option -w -t "=$js:orchestrator" @orch_todo 3
-  only=$(jinv)
-  jq set-option -w -t "=$js:orchestrator" @orch_decide 2
-  both=$(jinv)
-  jq kill-server 2>/dev/null
-  rd() { printf '%s' "$1" | python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); from fleet_hub_common import inventory_row; r = inventory_row(sys.stdin.read().rstrip("\n").split("\t")); r = r[1] if r else {}; print("%s/%s" % (r.get("orch_decide", ""), r.get("orch_todo", "")))' "$BIN"; }
-  case "$plain" in *orchtodo=*) bad "S: no list, yet the inventory carries orchtodo: [$plain]" ;; *)
-    [ -n "$plain" ] && [ "$only" = "$plain"$'\t'"orchtodo=3" ] && [ "$both" = "$plain"$'\t'"orchdec=2"$'\t'"orchtodo=3" ] \
-      && [ "$(rd "$only")" = /3 ] && [ "$(rd "$both")" = 2/3 ] \
-      && ok "S: @orch_todo 3 → orchtodo=3 (after orchdec=) → orch_todo 3; none ⇒ the row byte for byte" \
-      || bad "S: inventory [$only] / [$both] (plain [$plain]) → $(rd "$only") $(rd "$both")" ;; esac
-else
-  echo "SKIP  S: no tmux"
-fi
-grep -q '"todo=" + r\["todo"\]' "$BIN/fleet-hub-sessions.sh" && ! grep -q 'sidebar_steward_todo_fmt' "$BIN/fleet-sidebar.py" \
-  && ok "S: todo=N rides orch_<sess>; the sidebar draws no 待你动手 row (issue #3119)" || bad "S: hub-sessions / sidebar on todo"
 
 # T — the marker, and fleet-ticket.sh edit
 m=$(mk --kind human --what 'a --> b   c' --due 2026-10-12)

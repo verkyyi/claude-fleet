@@ -1321,9 +1321,6 @@ fleet_ui_t() {
     en:qd_done_fmt)             printf 'filed #%s and started its worker' "${1:-}" ;;
     zh:qd_failed_fmt)           printf '没派出去：%s' "${1:-}" ;;
     en:qd_failed_fmt)           printf 'not dispatched: %s' "${1:-}" ;;
-    # what waits behind a busy orchestrator (issue #2617): the band above its
-    # prompt (mod queue.ts — n, what it is busy with, seconds: dump fills three),
-    # the 「新任务」 row's end (fleet-sidebar.py), the bar when it cannot count
     zh:compose_sent_fmt)        printf '已发出：%s · 开工中…' "${1:-}" ;;
     en:compose_sent_fmt)        printf 'sent: %s · starting…' "${1:-}" ;;
     zh:compose_empty)           printf '先写一行再 ↵' ;;

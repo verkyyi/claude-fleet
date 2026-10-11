@@ -1,10 +1,8 @@
 #!/bin/bash
 # fleet-steward-selftest.sh — the steward (issue #2670, EPIC #2668 C2):
-# bin/fleet-steward.sh (the window), bin/fleet-steward-tick.sh → bin/fleet_steward.py
-# (the beat with no model), bin/fleet-steward-stats.sh (the count), and the
-# decide count's road to the client (fleet-control-read.sh `orchdec=` →
-# fleet_hub_common.inventory_row → fleet-hub-sessions.sh `decide=N`; since
-# issue #3119 the sidebar draws nothing off it — no session is special).
+# bin/fleet-steward-tick.sh → bin/fleet_steward.py (the beat with no model). The
+# resident window (bin/fleet-steward.sh), its attention count and the decide
+# count's road to the client went with the seat (issue #3118).
 #
 # GitHub is a directory of comment files (fleet_decision.py's seams), the fleet's
 # windows / ledgers / peer channel are seams too; the window legs run an isolated
@@ -29,18 +27,8 @@
 #   O  nobody holds the steward role (EPIC #3111 C4, issue #3115): a due row is not
 #      answered, no backstop / merge, no sheet, page, [decision] or state
 #   G  the beat is the holder's: `beat --holder` with no holder and a bare `beat`
-#      even with one are rc 3, no state file; the window's switch: FLEET_STEWARD=0
-#      ⇒ ensure rc 3, no window, no @attention_log; unset + FLEET_HOST=1 ⇒
-#      `count`: the attention flag on, no window
-#   H  the window: opens (@fleet_role steward, @norepo 1, on /fleet-steward with
-#      the role file); killed ⇒ the next ensure opens it on the SAME conversation
-#      with the resume seed; `fleet_win_for_key steward` answers it
-#   I  the attention count: `note` logs a client's move once, `attention` counts
-#      a worker window once a day
-#   J  the decide count travels: orchdec=2 → orch_decide 2 → `decide=2` (the
-#      holder's row says role=worker, issue #3119; no 「新任务」 to turn red);
-#      the park count beside it (issue #2671): @orch_park → orchpark= (the last
-#      tag) → orch_park → `park=N`
+#      even with one are rc 3, no state file; bin/fleet-steward.sh is a quiet shell
+#   J  no steward count rides the inventory or the client cache (issue #3118)
 #   M  who closed a row (issue #2834): rows[id].by is steward · person · default,
 #      today's counts carry the default too; a state file written before the field
 #      (no `by` on any row) still beats
@@ -115,7 +103,7 @@ export ST_GH="$WORK/gh" ST_WINS="$WORK/wins.txt" \
   FLEET_DECISION_COMMENTS_CMD="$WORK/bin/gh-comments" FLEET_DECISION_POST_CMD="$WORK/bin/gh-post" \
   FLEET_DECISION_PARENT_CMD="$WORK/bin/gh-parent" FLEET_STEWARD_WINDOWS_CMD="$WORK/bin/wins" \
   FLEET_STEWARD_CHILDREN_CMD="$WORK/bin/children" FLEET_STEWARD_SEND_CMD="$WORK/bin/send" \
-  FLEET_STEWARD_STAMP_CMD="$WORK/bin/stamp" FLEET_STEWARD_HOLDER_CMD="$WORK/bin/holder" FLEET_STEWARD_PAGE_SHARE=0 \
+  FLEET_STEWARD_STAMP_CMD="$WORK/bin/stamp" FLEET_STEWARD_HOLDER_CMD="$WORK/bin/holder" \
   FLEET_STEWARD_ALERT_CMD="$WORK/bin/alert" \
   FLEET_STEWARD_DOCTOR_CMD="$WORK/bin/doctor" FLEET_STEWARD_IDLE_CMD="$WORK/bin/idle" \
   FLEET_STEWARD_SLEEP_LOG="$WORK/sleep.log" FLEET_STEWARD_CLEANUP_LOG="$WORK/cleanup.log" FLEET_SLEEP=observe
@@ -169,11 +157,11 @@ grep -q "fleet:answer row=$r11 by=steward" "$ST_GH/o-r-11.json" && grep -q 'o/r#
   || bad "B: the self-answer was not posted as expected: $(cat "$ST_GH/posts.log")"
 TICK sheet >"$WORK/out" 2>&1
 n=$(grep -c '^>>> orchestrator' "$ST_GH/sends.log")
-# the person's words, one line a thing (issue #2735): no table, the page's link
+# the person's words, one line a thing (issue #2735): no table, no page link (#3118)
 msg=$(awk '/^>>> orchestrator/{f=1;next} /^>>> /{f=0} f' "$ST_GH/sends.log")
 rows=$(printf '%s\n' "$msg" | grep -c '〔row [A-Za-z0-9]')
 [ "$n" = 1 ] && [ "$rows" = 2 ] && ! printf '%s\n' "$msg" | grep -q '^| ' \
-  && printf '%s\n' "$msg" | grep -q 'steward/page.html' && [ "$(cat "$ST_GH/decide")" = 2 ] && grep -q '\[decision\]' "$ST_GH/sends.log" \
+  && ! printf '%s\n' "$msg" | grep -q 'page.html' && [ "$(cat "$ST_GH/decide")" = 2 ] && grep -q '\[decision\]' "$ST_GH/sends.log" \
   && ok "B: sheet → ONE [decision] of 2 rows to the orchestrator, decide=2 stamped" \
   || bad "B: sheet sends=$n rows=$rows decide=$(cat "$ST_GH/decide" 2>/dev/null): $(cat "$WORK/out")"
 ls "$FLEET_CONF_DIR/fleets/st/steward/"decision-*.md >/dev/null 2>&1 && ok "B: the sheet is kept as decision-<date>.md" \
@@ -394,125 +382,24 @@ FLEET_STEWARD_HEALTH_CONFIRM=2 HT >/dev/null 2>&1
   || bad "K: confirm: after the hiccup $n1, after two runs $(hn)"
 : > "$WORK/cleanup.log"; : > "$ST_IDLE"
 
-# G/H/I need a tmux
-if [ -z "$REAL_TMUX" ]; then
-  echo "SKIP  G/H/I: no tmux"
-else
-  mkdir -p "$WORK/tbin" "$WORK/home"
-  cat > "$WORK/tbin/tmux" <<EOF
-#!/bin/sh
-exec "$REAL_TMUX" -S "$WORK/t.sock" "\$@"
-EOF
-  printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s/args"\nexec sleep 600\n' "$WORK" > "$WORK/agent"
-  chmod +x "$WORK/tbin/tmux" "$WORK/agent"
-  "$REAL_TMUX" -S "$WORK/t.sock" -f /dev/null new-session -d -s st -n home -x 100 -y 30 'exec sh'
-  TT() { "$REAL_TMUX" -S "$WORK/t.sock" "$@"; }
-  ens() {
-    env -u FLEET_STEWARD PATH="$WORK/tbin:$PATH" HOME="$WORK/home" FLEET_AGENT=claude FLEET_STEWARD_MODEL='' \
-      FLEET_WRAP_LAUNCH="$WORK/agent" "$@" bash "$BIN/fleet-steward.sh" ensure st 2>/dev/null
-    printf 'rc=%s\n' "$?"
-  }
-  count() { TT list-windows -t st -F '#{@fleet_role}' | grep -cx steward; }
-  # G — off and count
-  o=$(ens FLEET_STEWARD=0)
-  [ "${o##*rc=}" = 3 ] && [ "$(count)" = 0 ] && [ -z "$(TT show-option -gqv @attention_log)" ] \
-    && ok "G: FLEET_STEWARD=0 — rc 3, no window, no attention flag" || bad "G: off: $o"
-  rm -f "$STATE"
-  touch "$ST_GH/noholder"
-  TICK beat --holder >/dev/null 2>&1; rc=$?
-  python3 "$BIN/fleet_steward.py" beat --session st >/dev/null 2>&1; rc2=$?
-  rm -f "$ST_GH/noholder"
-  python3 "$BIN/fleet_steward.py" beat --session st >/dev/null 2>&1; rc3=$?
-  [ "$rc" = 3 ] && [ "$rc2" = 3 ] && [ "$rc3" = 3 ] && [ ! -e "$STATE" ] \
-    && ok "G: no holder ⇒ beat --holder is a no-op; a bare beat refuses even with one (rc 3, no state written)" \
-    || bad "G: unheld beat rc=$rc, bare rc=$rc2/$rc3"
-  o=$(ens FLEET_HOST=1)
-  [ "${o##*rc=}" = 3 ] && [ "$(count)" = 0 ] && [ "$(TT show-option -gqv @attention_log)" = 1 ] \
-    && ok "G: unset + 承载 ⇒ count — the attention flag on, no window" || bad "G: count: $o"
-  # H — the window, and back on the same conversation
-  : > "$WORK/args"
-  o=$(ens FLEET_STEWARD=1); w=${o%%$'\n'*}
-  i=0; while [ ! -s "$WORK/args" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
-  sid=$(cat "$FLEET_CONF_DIR/fleets/st/steward.sid" 2>/dev/null)
-  [ "$(TT display-message -p -t "$w" '#{@fleet_role}|#{@norepo}')" = 'steward|1' ] \
-    && grep -q -- "--session-id $sid" "$WORK/args" && grep -q -- '--append-system-prompt-file .*/roles/steward-[0-9a-f]*\.md' "$WORK/args" && grep -q '/fleet-steward' "$WORK/args" \
-    && ok "H: the window opens — @fleet_role steward, @norepo 1, its role file, /fleet-steward" \
-    || bad "H: open: $o / $(cat "$WORK/args")"
-  k=$(PATH="$WORK/tbin:$PATH" bash -c '. "$1/fleet-lib.sh"; fleet_win_for_key steward' _ "$BIN" 2>/dev/null)
-  [ "$k" = "$w" ] && ok "H: fleet_win_for_key steward answers it" || bad "H: resolver said '$k' (want $w)"
-  proj="$WORK/home/.claude/projects/$(printf '%s' "$WORK/home" | LC_ALL=C tr -c 'A-Za-z0-9' '-')"
-  mkdir -p "$proj"; : > "$proj/$sid.jsonl"
-  TT kill-window -t "$w"
-  : > "$WORK/args"
-  o=$(ens FLEET_STEWARD=1)
-  i=0; while [ ! -s "$WORK/args" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
-  [ "$(count)" = 1 ] && grep -q -- "--resume $sid" "$WORK/args" && grep -q '会话刚被 fleet 接回' "$WORK/args" \
-    && ok "H: killed — the next ensure brings it back on the same conversation" || bad "H: back: $o / $(cat "$WORK/args")"
-  # I — the attention count
-  TT new-window -d -t st -n issue-7 'exec sleep 600'
-  TT set-option -wq -t st:issue-7 @issue 7
-  TT set-option -wq -t st:issue-7 @repo o/r
-  rm -f "$FLEET_CONF_DIR/logs/attention.ndjson" "$FLEET_CONF_DIR/logs/attention.last"
-  # a client, as the hooks see one: list-clients' answer is the seam
-  mkdir -p "$WORK/cbin"
-  cat > "$WORK/cbin/tmux" <<EOF
-#!/bin/sh
-[ "\$1" = list-clients ] && { cat "$WORK/clients"; exit 0; }
-exec "$REAL_TMUX" -S "$WORK/t.sock" "\$@"
-EOF
-  chmod +x "$WORK/cbin/tmux"
-  printf '/dev/ttys9\t0\tst\t@77\t\t7\to/r\tissue-7\n' > "$WORK/clients"
-  PATH="$WORK/cbin:$PATH" bash "$BIN/fleet-steward-stats.sh" note
-  PATH="$WORK/cbin:$PATH" bash "$BIN/fleet-steward-stats.sh" note
-  printf '/dev/ttys9\t0\tst\t@1\thome\t\t\thome\n' > "$WORK/clients"
-  PATH="$WORK/cbin:$PATH" bash "$BIN/fleet-steward-stats.sh" note
-  printf '/dev/ttys9\t0\tst\t@77\t\t7\to/r\tissue-7\n' > "$WORK/clients"
-  PATH="$WORK/cbin:$PATH" bash "$BIN/fleet-steward-stats.sh" note
-  nl=$(grep -c . "$FLEET_CONF_DIR/logs/attention.ndjson")
-  cnt=$(bash "$BIN/fleet-steward-stats.sh" attention --days 1 | awk -F'\t' 'NR==1 { print $2 }')
-  [ "$nl" = 3 ] && [ "$cnt" = 1 ] && ok "I: note logs each move once (3 lines); attention counts the worker window once a day" \
-    || bad "I: lines=$nl count=$cnt"
-  grep -q 'set-hook -g session-window-changed\[76\].*@attention_log.*fleet-steward-stats.sh note' "$BIN/../conf/tmux-attention.conf" \
-    && ok "I: the node conf's [76] hooks run note only under @attention_log" || bad "I: no [76] hook in tmux-attention.conf"
-fi
+# G — the beat is the holder's; the old seat's launcher is a quiet shell (issue #3118)
+rm -f "$STATE"
+touch "$ST_GH/noholder"
+TICK beat --holder >/dev/null 2>&1; rc=$?
+python3 "$BIN/fleet_steward.py" beat --session st >/dev/null 2>&1; rc2=$?
+rm -f "$ST_GH/noholder"
+python3 "$BIN/fleet_steward.py" beat --session st >/dev/null 2>&1; rc3=$?
+[ "$rc" = 3 ] && [ "$rc2" = 3 ] && [ "$rc3" = 3 ] && [ ! -e "$STATE" ] \
+  && ok "G: no holder ⇒ beat --holder is a no-op; a bare beat refuses even with one (rc 3, no state written)" \
+  || bad "G: unheld beat rc=$rc, bare rc=$rc2/$rc3"
+o=$(FLEET_STEWARD=1 bash "$BIN/fleet-steward.sh" ensure st 2>&1); rc=$?
+[ "$rc" = 0 ] && [ -z "$o" ] && ok "G: fleet-steward.sh ensure is a quiet shell — nothing printed, rc 0, no window (issue #3118)" \
+  || bad "G: the retired launcher said [$o] rc=$rc"
 
-# J — the decide count's road to the client: the node's inventory (a real
-# fleet-control-read.sh over an isolated server) → inventory_row → orch_<sess>
-if [ -n "$REAL_TMUX" ]; then
-  jt="$WORK/jt"; js="stj$$"; mkdir -p "$jt" "$WORK/jconf/fleets/$js"
-  printf 'FLEET_REPO=o/r\n' > "$WORK/jconf/fleets/$js/conf"
-  jq() { TMUX_TMPDIR="$jt" "$REAL_TMUX" -L "$js" "$@"; }
-  jq -f /dev/null new-session -d -s "$js" -n home 'sleep 600'
-  jq new-window -d -t "=$js:" -n orchestrator 'sleep 600'
-  jq set-option -w -t "=$js:orchestrator" @fleet_role orchestrator
-  jq set-option -w -t "=$js:orchestrator" @norepo 1
-  jinv() { env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$jt" TMPDIR="$WORK" FLEET_CONF_DIR="$WORK/jconf" \
-             bash "$BIN/fleet-control-read.sh" workers "$js" 2>/dev/null | awk -F'\t' '$10 == "orchestrator"'; }
-  plain=$(jinv)
-  jq set-option -w -t "=$js:orchestrator" @orch_decide 2
-  out=$(jinv)
-  jq set-option -w -t "=$js:orchestrator" @orch_park 1
-  both=$(jinv)
-  jq set-option -w -u -t "=$js:orchestrator" @orch_decide
-  parkonly=$(jinv)
-  jq kill-server 2>/dev/null
-  d=$(printf '%s' "$out" | python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); from fleet_hub_common import inventory_row; r = inventory_row(sys.stdin.read().rstrip("\n").split("\t")); print((r[1] if r else {}).get("orch_decide", ""))' "$BIN")
-  case "$plain" in *orchdec=*) bad "J: no sheet, yet the inventory carries orchdec: [$plain]" ;; *)
-    [ -n "$plain" ] && [ "$out" = "$plain"$'\t'"orchdec=2" ] && [ "$d" = 2 ] \
-      && ok "J: @orch_decide 2 → the inventory's orchdec=2 → orch_decide 2; none ⇒ the row byte for byte" \
-      || bad "J: inventory [$out] (plain [$plain]) → orch_decide [$d]" ;; esac
-  jrow() { printf '%s' "$1" | python3 -c 'import sys, json; sys.path.insert(0, sys.argv[1]); from fleet_hub_common import inventory_row; r = inventory_row(sys.stdin.read().rstrip("\n").split("\t")); r = r[1] if r else {}; print(r.get("orch_decide", "-"), r.get("orch_park", "-"))' "$BIN"; }
-  [ "$both" = "$plain"$'\t'"orchdec=2"$'\t'"orchpark=1" ] && [ "$(jrow "$both")" = "2 1" ] \
-    && [ "$parkonly" = "$plain"$'\t'"orchpark=1" ] && [ "$(jrow "$parkonly")" = "- 1" ] \
-    && ok "J: @orch_park 1 → orchpark=1 (the last tag, alone or after orchdec=) → orch_park 1" \
-    || bad "J: park road: both [$both] → $(jrow "$both"); park only [$parkonly] → $(jrow "$parkonly")"
-fi
-grep -q '"park=" + r\["park"\]' "$BIN/fleet-hub-sessions.sh" && ok "J: park=N rides orch_<sess> (the sidebar's 停放 N)" \
-  || bad "J: hub-sessions does not carry park"
-grep -q 'decide=" + r\["decide"\]' "$BIN/fleet-hub-sessions.sh" && ! grep -q 'orch_decide' "$BIN/fleet-sidebar.py" \
-  && ok "J: decide=N rides orch_<sess>; the sidebar draws nothing off it (issue #3119)" || bad "J: hub-sessions / sidebar on decide"
-case "${plain:-role=worker}" in *$'\t'role=worker$'\t'*|role=worker) ok "J: the holder's inventory row says role=worker (issue #3119)" ;;
-  *) bad "J: the holder's inventory row does not say role=worker: [$plain]" ;; esac
+# J — no steward column rides the inventory (issue #3118): columns 31-37 are gone
+grep -v '^ *#' "$BIN/fleet-control-read.sh" "$BIN/fleet-hub-sessions.sh" | grep -q 'orch_decide\|orch_park\|orchdec=\|orchpark=' \
+  && bad "J: the node inventory / the client cache still carries a steward count" \
+  || ok "J: no orchdec= / orchpark= on the inventory, no decide= / park= in the client cache (issue #3118)"
 
 # W — a red base a WORKER filed (issue #2960): the drain spawns its fixer under the
 # steward HOLDER; claimed ⇒ off the queue, no room ⇒ kept. Nobody holds the role

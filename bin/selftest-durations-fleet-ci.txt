@@ -183,7 +183,6 @@
 6.1 fleet-doctor-mcp-selftest.sh
 25.9 fleet-doctor-node-selftest.sh
 2.6 fleet-doctor-onboard-selftest.sh
-10.7 fleet-doctor-orchestrate-selftest.sh
 11.1 fleet-doctor-quota-selftest.sh
 5.6 fleet-doctor-repos-selftest.sh
 4.6 fleet-doctor-webhook-selftest.sh
@@ -276,7 +275,6 @@
 23.7 fleet-one-per-login-selftest.sh
 13.2 fleet-open-laptop-selftest.sh
 11.0 fleet-open-selftest.sh
-3.8 fleet-orchestrator-selftest.sh
 1.6 fleet-orchestrator-state-selftest.sh
 2.3 fleet-palette-selftest.sh
 0.5 fleet-panel-jump-selftest.sh
@@ -340,7 +338,6 @@
 2.1 fleet-statusline-selftest.sh
 1.7 fleet-steward-conflicts-selftest.sh
 12.9 fleet-steward-followup-selftest.sh
-1.2 fleet-steward-page-selftest.sh
 2.6 fleet-steward-sample-selftest.sh
 18.3 fleet-steward-selftest.sh
 13.8 fleet-switch-selftest.sh
@@ -445,7 +442,6 @@
 0.2 sidebar-machine-tag-selftest.sh
 0.1 sidebar-sleep-selftest.sh
 0.7 sidebar-slot-selftest.sh
-1.7 sidebar-steward-open-selftest.sh
 0.3 skill-tools-selftest.sh
 1.2 spawn-origin-gate-selftest.sh
 23.2 spinner-rate-selftest.sh
