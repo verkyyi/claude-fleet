@@ -278,8 +278,8 @@ if [ -n "$REAL_TMUX" ]; then
 else
   echo "SKIP  S: no tmux"
 fi
-grep -q '"todo=" + r\["todo"\]' "$BIN/fleet-hub-sessions.sh" && grep -q '("todo", "☐", "sidebar_steward_todo_fmt")' "$BIN/fleet-sidebar.py" \
-  && ok "S: todo=N rides orch_<sess>; the sidebar draws 待你动手 N from it" || bad "S: hub-sessions / sidebar do not carry todo"
+grep -q '"todo=" + r\["todo"\]' "$BIN/fleet-hub-sessions.sh" && ! grep -q 'sidebar_steward_todo_fmt' "$BIN/fleet-sidebar.py" \
+  && ok "S: todo=N rides orch_<sess>; the sidebar draws no 待你动手 row (issue #3119)" || bad "S: hub-sessions / sidebar on todo"
 
 # T — the marker, and fleet-ticket.sh edit
 m=$(mk --kind human --what 'a --> b   c' --due 2026-10-12)

@@ -34,6 +34,12 @@
 #      `--new` new=true; a RESUME answer is printed as it is, exit 0, and
 #      FLEET_PLACE_RESULT holds {worker_id, machine, resume, also_open}; --new
 #      on anything but home is exit 2
+#   I. no hub, a fleet here (issue #3097 — a 看台's ⌘T): the node's own adapter
+#      (fleet-control-read.sh, faked) opens it — `LOCAL <host>` + its first line —
+#      and FLEET_PLACE_RESULT names the window it opened (a cold spawn's last
+#      `@N`, a warm start's receipt) with the issue filed and this machine, so
+#      the 看台 goes to it; a declined start writes none and keeps the
+#      adapter's last stderr line (the spawn's own reason) on the line
 # python3 absent → SKIP (exit 0). Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -356,6 +362,42 @@ run "$P" verkyyi/claude-fleet new --title 'old hub' --attach "$WORK/shot 1.png"
 eq "G: older hub exit" 0 "$RC"
 has "G: an older hub's start says the file did not go" "$OUT" "附件没带过去：shot 1.png（入口还不收附件"
 run "$P" verkyyi/claude-fleet 7 --attach "$WORK/shot 1.png";  eq "G: --attach on an issue start" 2 "$RC"
+
+# --- I. no hub, a fleet here: the local road names its window (issue #3097) ----------
+IB="$WORK/i-bin"; mkdir -p "$IB" "$FLEET_CONF_DIR/fleets/tf"
+for f in "$BIN"/*; do ln -sf "$f" "$IB/"; done
+rm -f "$IB/fleet-control-read.sh"
+cat > "$IB/fleet-control-read.sh" <<'SH'
+#!/bin/bash
+printf '%s\n' "$*" > "$WORK/i-args"
+case "${I_MODE:-cold}" in
+  cold) printf 'https://github.com/acme/web/issues/42\n@17\n' ;;
+  warm) printf 'warm\t@18\tacme-web·x\t/w\tF1\t1\t2\t3\n' ;;
+  no)   printf 'dash-issue-session: #42 should run in Codex, but …\n' >&2
+        printf 'start: filed #42 but its session did not open (no Codex login) — it is on the backlog\n' >&2; exit 1 ;;
+esac
+SH
+chmod +x "$IB/fleet-control-read.sh"
+printf 'FLEET_REPO=acme/web\n' > "$FLEET_CONF_DIR/fleets/tf/conf"
+H=$(hostname -s 2>/dev/null); H=${H%%.*}
+mv "$FLEET_CLIENT_DIR/client.lease" "$WORK/lease.kept" 2>/dev/null
+FLEET_PLACE_RESULT="$WORK/i.json" run "$IB/fleet-client-place.sh" acme/web new --title 'x' --agent codex
+eq "I: cold local start exit" 0 "$RC"
+has "I: the LOCAL line" "$OUT" "LOCAL $H"
+has "I: the adapter was asked for codex" "$(cat "$WORK/i-args")" "start tf new codex acme/web"
+eq "I: the window it opened" '@17' "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("window_id"))' "$WORK/i.json")"
+eq "I: the issue filed" 'https://github.com/acme/web/issues/42' "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("filed"))' "$WORK/i.json")"
+eq "I: this machine" "$H" "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("machine"))' "$WORK/i.json")"
+rm -f "$WORK/i.json"
+I_MODE=warm FLEET_PLACE_RESULT="$WORK/i.json" run "$IB/fleet-client-place.sh" acme/web new --title 'x'
+eq "I: a warm start's window" '@18' "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("window_id"))' "$WORK/i.json")"
+rm -f "$WORK/i.json"
+I_MODE=no FLEET_PLACE_RESULT="$WORK/i.json" run "$IB/fleet-client-place.sh" acme/web new --title 'x' --agent codex
+eq "I: a declined start" 5 "$RC"
+has "I: …keeps the spawn's reason on its line" "$OUT" "no Codex login"
+CHECKS=$((CHECKS + 1)); [ -s "$WORK/i.json" ] && fail "I: a declined start named a window" "$(cat "$WORK/i.json")"
+rm -rf "$FLEET_CONF_DIR/fleets"
+mv "$WORK/lease.kept" "$FLEET_CLIENT_DIR/client.lease" 2>/dev/null
 
 # --- E. usage -----------------------------------------------------------------------------
 run "$P" verkyyi/claude-fleet bogus;  eq "E: bad kind" 2 "$RC"

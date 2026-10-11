@@ -184,11 +184,11 @@ case "$mode" in
     # Column 19 (issue #1951): `detail=<question>` — what a session in `needs`
     # asks, in its own words (@claude_needs_detail, ≤120 characters), so the
     # client's bar and its notification can say it; empty when it waits on nothing.
-    # Column 20 (issue #1957): `role=orchestrator` on the fleet's one orchestrating
-    # session (@fleet_role, bin/fleet-orchestrator.sh) — its key is `orchestrator`
-    # (fleet_control.py) and the client wears it on 「新任务」 instead of a row;
-    # `role=steward` on its steward (issue #2670, bin/fleet-steward.sh) — no row
-    # at all; empty on every other window.
+    # Column 20 (issue #1957): `role=` — since issue #3119 no session is special:
+    # the window holding the orchestrator or the steward (@fleet_role) says
+    # `role=worker`, so every machine's list draws it as an ordinary row (an
+    # older node's `role=orchestrator|steward` is read by the hub for one more
+    # version); empty on every other window.
     # Column 21 (issue #1958): `epic=<owner/name>#<N>[:<landed>/<members>]` on the
     # window that drives a running EPIC (@epic, stamped by fleet-epic-heartbeat.sh),
     # the counts off THIS machine's mark for that batch (epic-running.d); its
@@ -362,7 +362,10 @@ case "$mode" in
       [ -n "$cpage" ] && od="$od"$'\t'"orchpage=$cpage"
       [ -n "$cparkl" ] && od="$od"$'\t'"orchparkl=$cparkl"
       [ -n "$ctodol" ] && od="$od"$'\t'"orchtodol=$ctodol"
-      printf '%s\tbusy=%s\tborn=%s\tcfg=%s\ttitle=%s\treap=%s\tdetail=%s\trole=%s\tepic=%s\tepicstale=%s\tbackfill=%s\tctxleft=%s\tctxband=%s\tctxts=%s\tmodel=%s\teffort=%s\tagentstatus=%s\ttest=%s\torchq=%s%s\n' "$row" "$b" "$born" "$FCFG_STATE" "$t" "$wreap" "$wdet" "$wrole" "$wepic" "$estale" "$wbf" "$cl" "$cb" "$cts" "$cm" "$ce" "$cas" "$wtest" "$cq" "$od"
+      # the holder is an ordinary row (issue #3119): `role=worker`; its steward
+      # columns (31-37, gated on the real @fleet_role above) ride on until C7
+      orole=''; [ -n "$wrole" ] && orole=worker
+      printf '%s\tbusy=%s\tborn=%s\tcfg=%s\ttitle=%s\treap=%s\tdetail=%s\trole=%s\tepic=%s\tepicstale=%s\tbackfill=%s\tctxleft=%s\tctxband=%s\tctxts=%s\tmodel=%s\teffort=%s\tagentstatus=%s\ttest=%s\torchq=%s%s\n' "$row" "$b" "$born" "$FCFG_STATE" "$t" "$wreap" "$wdet" "$orole" "$wepic" "$estale" "$wbf" "$cl" "$cb" "$cts" "$cm" "$ce" "$cas" "$wtest" "$cq" "$od"
     done <<<"$rows"
     ;;
   # --- wstate <sess> <@win> (issue #2238) --------------------------------------
@@ -468,7 +471,8 @@ case "$mode" in
     ;;
   config)
     fleet_load_conf "$sess"
-    printf '%s\0' "${FLEET_MAX_SESSIONS:-0}" "${FLEET_AUTOFILL:-0}" "${FLEET_AUTOFILL_MAX_PER_TICK:-1}"
+    # one value per fleet_hub_common.CONFIG_KEYS, in its order (autofill's two left, #3120)
+    printf '%s\0' "${FLEET_MAX_SESSIONS:-0}"
     ;;
   start)
     fleet_load_conf "$sess"
@@ -503,6 +507,13 @@ case "$mode" in
     fi
     bash "$BIN/fleet-diskguard.sh" --gate >&2 || exit 4
     if [ "$agent" = codex ]; then
+      # dash-issue-session.sh refuses it the same way — but only after a `new`
+      # has filed its issue (issue #3097: #12013 was left on the backlog), so say
+      # it here first, before anything is filed or opened. Only a `new`: an
+      # issue start's spawn says the same itself, and a scratch never checked.
+      if [ "${3:-}" = new ] && [ "${FLEET_CODEX_READY_CHECK:-1}" != 0 ] && ! fleet_codex_ready; then
+        printf 'start: this login has no valid Codex login — run `ccquota codex login` first\n' >&2; exit 4
+      fi
       if [ "${FLEET_CODEX_QUOTA_GATE:-0}" = 1 ]; then
         bash "$BIN/fleet-codex-account.sh" gate --session "$sess" >&2 || exit 4
       fi
@@ -624,9 +635,18 @@ case "$mode" in
       printf '%s\n' "$url"
       num="${url##*/}"; num="${num//[^0-9]/}"
       [ -n "$num" ] || { printf 'start: the filed issue has no number: %s\n' "$url" >&2; exit 1; }
-      bash "$BIN/dash-issue-session.sh" "$num" "$sess" --print --agent "$agent" --origin hub ${srepo:+--repo "$srepo"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} ${acls:+--account "$acls"} ${9:+--reap "$9"}
+      # its stderr is kept too (issue #3097): a caller reads only our LAST line,
+      # so a refusal's own reason rides in it rather than vanish above it
+      serr=$(mktemp "${TMPDIR:-/tmp}/fcr-spawn.XXXXXX" 2>/dev/null) || serr=/dev/null
+      bash "$BIN/dash-issue-session.sh" "$num" "$sess" --print --agent "$agent" --origin hub ${srepo:+--repo "$srepo"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} ${acls:+--account "$acls"} ${9:+--reap "$9"} 2>"$serr"
       rc=$?
-      [ "$rc" = 0 ] || printf 'start: filed #%s but its session did not open — it is on the backlog\n' "$num" >&2
+      cat "$serr" >&2 2>/dev/null
+      if [ "$rc" != 0 ]; then
+        swhy=$(awk 'NF { l = $0 } END { print l }' "$serr" 2>/dev/null | tr '\t' ' ')
+        swhy=${swhy#dash-issue-session: }
+        printf 'start: filed #%s but its session did not open%s — it is on the backlog\n' "$num" "${swhy:+ ($swhy)}" >&2
+      fi
+      [ "$serr" = /dev/null ] || rm -f "$serr"
       exit "$rc"
     fi
     # --print (issue #2237): the window it opened, last on stdout — the controller

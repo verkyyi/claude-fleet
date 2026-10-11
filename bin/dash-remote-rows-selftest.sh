@@ -33,7 +33,8 @@
 #   O. orchestrator — issue #1957: a worker the hub marks `role: orchestrator` keeps
 #                   its line in the cache (fleet-remote-view.sh open finds it there)
 #                   and is named in orch_<sess> (worker_id · machine · online · state ·
-#                   needs · question), but the sidebar draws NO row for it
+#                   needs · question); since issue #3119 the sidebar draws it as an
+#                   ordinary row — byte for byte the row of the same worker unmarked
 #   Q. one EPIC, one row — issue #1958: the window that drives a running EPIC
 #                   (@epic, in a 2-repo fleet) is ONE row named `#<N> <the EPIC's
 #                   title>`, badged landed/members off its heartbeat mark; its three
@@ -729,7 +730,7 @@ has  "X: …the other rows are all there" "$(side)" "侧边栏"
 hasnt "X: …nor does the hub list" "$(hub)" "test-norepo"
 has  "X: FLEET_ROWS_TEST=1 (fleet ls) lists it" "$(FLEET_ROWS_TEST=1 side)" "test-norepo"
 PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null
-# O. orchestrator (issue #1957): in the cache and orch_<sess>, never a sidebar row
+# O. orchestrator (issue #1957): in the cache and orch_<sess>; a row like any other (#3119)
 python3 - "$WORK/sessions.json" "$WORK/sessions-orch.json" "$F" <<'PY'
 import json, sys
 src, dst, f = sys.argv[1:4]
@@ -749,12 +750,22 @@ eq   "O: the orchestrator keeps its line in the cache (open finds it there)" "m4
 eq   "O: orch_<sess> names it: worker_id, machine, online, state, needs, its question" \
      "$F/$OID${US}m4${US}online${US}needs${US}ask${US}开一个 EPIC 还是三个快任务？" "$(cat "$G/orch_$S" 2>/dev/null)"
 s=$(side)
-hasnt "O: the sidebar draws no row for it" "$s" "编排"
+has  "O: the sidebar draws its row (issue #3119: no session is special)" "$s" "编排"
 has  "O: …the other rows are all there" "$s" "侧边栏"
-hasnt "O: …nor does the hub list" "$(hub)" "编排"
+has  "O: …so does the hub list" "$(hub)" "编排"
+orow=$(printf '%s\n' "$s" | grep "编排")
+python3 - "$WORK/sessions-orch.json" "$WORK/sessions-plain.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+d["sessions"][-1]["worker"].pop("role")
+json.dump(d, open(sys.argv[2], "w"), ensure_ascii=False)
+PY
+FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-plain.json'" PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null || fail "O: --refresh (unmarked) failed"
+eq   "O: …byte for byte the row of the same worker with no role" "$(side | grep "编排")" "$orow"
+FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-orch.json'" PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null || fail "O: --refresh (orchestrator) failed"
 # O2. two machines still answer with one (issue #2117): orch_<sess> keeps ONE line —
 # the online one on the home machine (connect.json's last), else online first —
-# orch_multi_<sess> names both for the doctor, the rows skip both.
+# orch_multi_<sess> names both for the doctor; both are rows (#3119).
 python3 - "$WORK/sessions-orch.json" "$WORK/sessions-orch2.json" "$F" <<'PY'
 import json, sys
 src, dst, f = sys.argv[1:4]
@@ -771,7 +782,7 @@ FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-orch2.json'" XDG_CACHE_HOME="$WORK/x
 eq   "O2: two answer — orch_<sess> keeps one line" "1" "$(grep -c . "$G/orch_$S" 2>/dev/null)"
 eq   "O2: …orch_multi_<sess> names both for the doctor" "2" "$(grep -c . "$G/orch_multi_$S" 2>/dev/null)"
 eq   "O2: …orch_all_<sess> carries both worker_ids" "2" "$(grep -c . "$G/orch_all_$S" 2>/dev/null)"
-hasnt "O2: …the sidebar draws neither" "$(side)" "编排"
+eq "O2: …the sidebar draws both, as rows (#3119)" "2" "$(side | grep -c "编排")"
 printf '{"last":"zz9"}' > "$WORK/xdgc/claude-fleet/connect.json"
 FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-orch2.json'" XDG_CACHE_HOME="$WORK/xdgc" PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null
 eq   "O2: …the line is the home machine's (fleet connect's last)" "$F/$OID2" "$(cut -d"$US" -f1 "$G/orch_$S" 2>/dev/null)"

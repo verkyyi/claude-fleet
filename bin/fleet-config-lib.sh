@@ -207,7 +207,6 @@ fcfg_group_i18n() {
     status)   printf '界面' ;;
     cache)    printf '缓存' ;;
     caps)     printf '上限' ;;
-    autofill) printf '自动填充' ;;
     backlog)  printf 'Backlog' ;;
     bridge)   printf '桥接' ;;
     handoff)  printf '交接' ;;
@@ -272,8 +271,6 @@ fcfg_label_i18n() {
     FLEET_MOD) printf '会话内 fleet 扩展' ;;
     FLEET_STATUS_7501) printf '读程序自报的状态（OSC 7501）' ;;
     FLEET_STATUS_REPLAY_DEPTH) printf '你的终端也看得到：tmux 层数' ;;
-    FLEET_AUTOFILL) printf '从带标签 backlog 自动填充空位' ;;
-    FLEET_AUTOFILL_MAX_PER_TICK) printf '自动填充批量大小' ;;
     FLEET_CHILD_REPORT) printf '子任务向父任务报告结果' ;;
     FLEET_CHILD_REPORT_BATCH_SECS) printf '子报告摘要最大等待' ;;
     FLEET_DEFAULT_MILESTONE) printf '新建 issue 默认里程碑' ;;
@@ -409,7 +406,7 @@ fcfg_label_i18n() {
     FLEET_ESCALATE_AFTER) printf '无人处理后升级提醒' ;;
     FLEET_ALLOW_AUTO_DENY) printf '允许自动拒绝权限提示' ;;
     FLEET_DISK_FLOOR_GB) printf '磁盘低于 GB 时停止启动' ;;
-    FLEET_QUOTA_GATE) printf '接近配额上限时停止 autofill' ;;
+    FLEET_QUOTA_GATE) printf '接近配额上限时停止远程开会话' ;;
     FLEET_QUOTA_CEILING) printf '配额上限' ;;
     FLEET_QUOTA_ACCOUNT) printf '用于判断的订阅' ;;
     FLEET_QUOTA_BIN) printf 'ccquota 路径' ;;

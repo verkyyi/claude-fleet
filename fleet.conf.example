@@ -56,10 +56,10 @@ FLEET_BASE_BRANCH="main"
 
 # The login's SEED repo (issue #1167): `fleet-up.sh --seed` brings a new login's
 # fleet up on a starter repo (claude-fleet itself) so it works at once — and that
-# repo only LOOKS. 1 = the dispatcher never autofills it and the issue-bridge never
-# relays its comments, whatever FLEET_AUTOFILL / FLEET_ISSUE_BRIDGE say. Marks the
-# fleet conf's OWN repo only: a repo added later is never the seed. fleet-up writes
-# it (with FLEET_AUTOFILL=0 + FLEET_ISSUE_BRIDGE=0); readers ask fleet_repo_is_seed.
+# repo only LOOKS. 1 = the issue-bridge never relays its comments, whatever
+# FLEET_ISSUE_BRIDGE says. Marks the fleet conf's OWN repo only: a repo added later
+# is never the seed. fleet-up writes it (with FLEET_ISSUE_BRIDGE=0); readers ask
+# fleet_repo_is_seed.
 # Once the login hosts a repo of its own, `fleet-repo.sh remove <seed>` takes the
 # starter out: that repo is promoted into this slot and the seed keys go (#1172).
 # @label=Seed repo (look only) @group=identity @tier=advanced @scope=identity @edit=no
@@ -121,7 +121,7 @@ FLEET_BASE_BRANCH="main"
 # FLEET_AGENT / FLEET_MCP_CONFIG), these keys are honored PER REPO — set one in a
 # repo's overlay and that repo's windows, worktrees and daemons passes use it; leave
 # it unset there and the repo gets the fleet conf's value (then this file's):
-#   per-repo: FLEET_WORKTREE_SETUP FLEET_WORKTREE_SETUP_TIMEOUT FLEET_BASE_DEPS FLEET_SLEEP_MCP_RESTARTABLE FLEET_SCRATCH_POOL FLEET_ISSUE_BRIDGE FLEET_CLEANUP FLEET_AUTOFILL FLEET_WEBHOOK
+#   per-repo: FLEET_WORKTREE_SETUP FLEET_WORKTREE_SETUP_TIMEOUT FLEET_BASE_DEPS FLEET_SLEEP_MCP_RESTARTABLE FLEET_SCRATCH_POOL FLEET_ISSUE_BRIDGE FLEET_CLEANUP FLEET_WEBHOOK
 # (That line is kept in lockstep with _FLEET_REPO_OVERRIDABLE in bin/fleet-lib.sh
 # by bin/repo-settings-selftest.sh.) Setting one to "" in an overlay switches it
 # off for that repo. `fleet-repo.sh get <KEY> <owner/repo>` prints what a repo sees.
@@ -410,7 +410,7 @@ FLEET_CTX_WINDOW=200000
 # account with the same cap). It records the (account, model) cap until the
 # banner's reset, relaunches the walled sessions on THIS model (close + `--resume
 # --model`, same transcript), and every new session on that account launches on
-# it until the cap resets — autofill, hand spawns, restores alike; subagents
+# it until the cap resets — hand spawns, restores alike; subagents
 # follow. Set empty to disable (a model cap then behaves like a subscription
 # wall: bench + rotate). Machine-wide policy: one value for every fleet.
 # @label=Model-cap fallback @group=spawn @tier=common @scope=global @edit=enum
@@ -500,7 +500,7 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 #FLEET_MCP=1
 
 # Which agent CLI a spawned session runs (issue #547). Every spawn path — the
-# backlog Enter / `▸ issue`, the dash ⌃s / prompt-line scratch, autofill, the
+# backlog Enter / `▸ issue`, the dash ⌃s / prompt-line scratch, the
 # issue-bridge revive — funnels through bin/fleet-claude.sh, which branches here:
 #   claude   (default) Claude Code, exactly as before — the default fleet's spawn
 #            argv is byte-for-byte unchanged.
@@ -581,7 +581,7 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # Fresh launches pick the most headroom; explicit/pinned/recovery homes win.
 # @label=Codex account pool @group=spawn @tier=advanced @scope=fleet @edit=str
 #FLEET_CODEX_ACCOUNTS=""
-# Hold fresh launches/autofill only when every configured home is known low.
+# Hold fresh launches only when every configured home is known low.
 # @label=Codex quota gate @group=spawn @tier=advanced @scope=fleet @edit=bool
 #FLEET_CODEX_QUOTA_GATE=0
 # @label=Codex quota floor percent @group=spawn @tier=advanced @scope=fleet @edit=int
@@ -620,7 +620,7 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # process saving at the same instant), never a --dangerously-* flag. 0 turns it
 # off; then trust the base once by hand (`claude` in $FLEET_MAIN → 1/Yes) or run
 # `sh bin/fleet-trust.sh grant --main $FLEET_MAIN`. fleet-doctor.sh's `trust` line
-# and fleet-up warn on an untrusted base; the dispatcher marks a parked pane `needs`.
+# and fleet-up warn on an untrusted base.
 # On a TRUSTED NODE (issue #2282 — `sh bin/fleet-trust.sh node`: the credential
 # proxy's cached hub word, cred-proxy/trust.json, no older than a day, or the
 # environment's FLEET_PRETRUST_NODE_MAX_AGE seconds) the launcher also pre-trusts every repo
@@ -691,39 +691,12 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # @label=Stale reopens per fleet per tick @group=spawn @tier=internal @scope=global @edit=int
 #FLEET_CFG_RESTART_MAX=1
 
-# --- Autofill dispatcher (bin/fleet-dispatch.sh, com.claude-fleet.dispatch) -----
-# OFF by default. When enabled for a fleet, the dispatch daemon (~60s) keeps that
-# fleet's worker slots filled FROM ITS BACKLOG, BY PRIORITY, whenever both caps
-# above have headroom — auto-spawning the highest-priority ELIGIBLE issue so you
-# don't hand-spawn every one.
+# --- (Autofill dispatcher — retired, issue #3120) -----------------------------
+# FLEET_AUTOFILL / FLEET_AUTOFILL_MAX_PER_TICK / FLEET_AUTOFILL_NODE and the
+# com.claude-fleet.dispatch daemon are gone: nothing starts a session on its own.
+# A session starts when you, or a session you asked to orchestrate, opens one.
+# `fleet-conf.sh migrate` comments out a line still setting one of them.
 #
-# OPT-IN PER ISSUE (issue #421): an issue is only auto-spawned if it carries the
-# canonical `autofill` label — you tag exactly the issues that may fill
-# idle slots hands-off (like `autoland` opts a PR into hands-off land). So it is a
-# TWO-key gate: this fleet armed (FLEET_AUTOFILL=1) AND the issue labelled. Full
-# eligibility = open, unassigned, carries `autofill`, no live window bound, not
-# labelled `blocked`. Priority = a `priority:p0|p1|p2` label tier
-# (p0 first), then FIFO by issue number; unlabeled issues go last.
-#
-# COST: each auto-spawn launches a real Claude session that spends LLM tokens and
-# opens a PR — it is aggressive, so it is opt-in per fleet. Set to 1 to enable
-# (best per-fleet in $FLEET_CONF_DIR/<session>.conf). A fleet hosting several repos
-# reads it PER REPO (issue #799): a repo's overlay may set 0 to opt that repo out,
-# or 1 to arm just that repo; unset, the repo follows the fleet's value. The caps
-# and FLEET_AUTOFILL_MAX_PER_TICK stay per fleet.
-# @label=Auto-fill idle slots from labelled backlog @group=autofill @tier=common @scope=fleet @edit=bool
-#FLEET_AUTOFILL=0
-# Max issues auto-spawned per fleet per tick (rate-limit against a thundering
-# herd; the ~60s interval is the cooldown between ticks). Default 1.
-# @label=Auto-fill batch size @group=autofill @tier=internal @scope=fleet @edit=int @unit=per tick
-#FLEET_AUTOFILL_MAX_PER_TICK=1
-# Which machine auto-fill opens sessions on (issue #1425). Unset: the spawn's own
-# default — FLEET_SPAWN_NODE (below; `auto` when the hub module is on,
-# CCQUOTA_FLEET=1: the hub picks the least busy of your machines that host the
-# repo), else this machine. `local` pins auto-fill here; a machine name pins it
-# there.
-# @label=Auto-fill machine @group=autofill @tier=internal @scope=fleet @edit=str
-#FLEET_AUTOFILL_NODE=local
 # The cross-machine hub, per fleet (issue #1539; docs/LOCAL-AND-HUB.md). `1`:
 # this fleet's spawns take a hub lease and placement, its sidebar shows your
 # sessions on the other machines, its status bar may switch to the hub layout,
@@ -735,8 +708,7 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # @label=Cross-machine hub @group=accounts @tier=advanced @scope=fleet @edit=bool
 #CCQUOTA_FLEET=0
 # Where EVERY new issue session in this fleet opens when nothing names a machine
-# (issue #1475; a `--node` on the command, or FLEET_AUTOFILL_NODE for auto-fill,
-# still wins). Only read with the hub module on (CCQUOTA_FLEET=1). `auto`: the hub
+# (issue #1475; a `--node` on the command still wins). Only read with the hub module on (CCQUOTA_FLEET=1). `auto`: the hub
 # picks among your machines that host the repo — and never one that is not READY
 # (no gh login, no usable Claude/Codex credential, a checkout missing: its
 # heartbeat says so); `local`: always this machine, the hub is not asked; a
@@ -2171,10 +2143,11 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # @label=Stop spawning below disk GB @group=disk @tier=advanced @scope=global @edit=int @unit=GB
 #FLEET_DISK_FLOOR_GB=12       # gate refusal threshold
 
-# --- Quota guard (autofill only; OFF by default) -----------------------------
-# Autofill spends the subscription its spawned sessions run on. Without this the
-# dispatcher keeps filling slots while a weekly window closes, and the operator
-# finds out when their OWN session is refused.
+# --- Quota guard (remote starts; OFF by default) ------------------------------
+# A start or resume the hub sends (fleet-control-read.sh) spends the subscription
+# its session runs on. Without this a remote start keeps opening sessions while a
+# weekly window closes, and the operator finds out when their OWN session is
+# refused. (The autofill dispatcher it was first written for is gone, #3120.)
 #
 # Needs ccquota — the binary from TokenLedger
 # (https://github.com/verkyyi/claude-fleet/tree/master/tokenledger); see docs/INSTALL.md step 6 for how to
@@ -2185,7 +2158,7 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # unreadable limit proceeds and says why, like the disk guard.
 #
 #   bin/fleet-quotaguard.sh --status    # what it would decide right now
-# @label=Stop autofill near the quota ceiling @group=quota @tier=advanced @scope=global @edit=bool
+# @label=Stop remote starts near the quota ceiling @group=quota @tier=advanced @scope=global @edit=bool
 #FLEET_QUOTA_GATE=0           # 1 to arm (default 0 = report only, never blocks)
 # @label=Quota ceiling @group=quota @tier=advanced @scope=global @edit=int @unit=%
 #FLEET_QUOTA_CEILING=90       # hold at/above this utilization %
@@ -2371,7 +2344,7 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 #FLEET_CLAUDE_RSS_WARN_MB=4096     # 0 = off
 
 # Machine admission (issue #1090, EPIC #1291 C4): every path that opens a NEW
-# session (dash, backlog Enter, dispatch/autofill, bridge, /fleet-epic-run, the
+# session (dash, backlog Enter, bridge, /fleet-epic-run, the
 # scratch pool) asks fleet_session_cap_ok, which now also asks whether the
 # MACHINE has room — not just whether the session count does. Memory pressure at
 # or above FLEET_ADMIT_PRESSURE, avail% under FLEET_ADMIT_MEM_FREE_PCT, or 1-min

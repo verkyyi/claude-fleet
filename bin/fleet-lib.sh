@@ -1031,13 +1031,13 @@ fleet_load_repo_conf() {
 #   identity/deploy (_FLEET_REPO_SCOPED)  FLEET_REPO FLEET_MAIN FLEET_BASE_BRANCH
 #                                         FLEET_DEPLOY_REF FLEET_DEPLOY_CHECK FLEET_REPO_SHORT
 #   launch                                FLEET_MODEL FLEET_AGENT FLEET_MCP_CONFIG
-#   setup + switches (#978)   (+ autofill #799, webhook #800)  $_FLEET_REPO_OVERRIDABLE
+#   setup + switches (#978)   (+ webhook #800)  $_FLEET_REPO_OVERRIDABLE
 # An in-pane reader gets its window's repo for free (fleet_load_conf is window-
 # aware); a reader OUTSIDE the window (daemon, spawner, sleep/failover) resolves the
 # repo first — fleet_window_repo / fleet_worktree_repo — then asks
 # fleet_repo_conf_get, or loads fleet_load_repo_conf itself. A fleet with no
 # repos/ overlay answers with the fleet conf's value, byte for byte.
-_FLEET_REPO_OVERRIDABLE="FLEET_WORKTREE_SETUP FLEET_WORKTREE_SETUP_TIMEOUT FLEET_BASE_DEPS FLEET_SLEEP_MCP_RESTARTABLE FLEET_SCRATCH_POOL FLEET_ISSUE_BRIDGE FLEET_CLEANUP FLEET_AUTOFILL FLEET_WEBHOOK"
+_FLEET_REPO_OVERRIDABLE="FLEET_WORKTREE_SETUP FLEET_WORKTREE_SETUP_TIMEOUT FLEET_BASE_DEPS FLEET_SLEEP_MCP_RESTARTABLE FLEET_SCRATCH_POOL FLEET_ISSUE_BRIDGE FLEET_CLEANUP FLEET_WEBHOOK"
 
 # The per-repo keys as they stood when this lib was sourced (global fleet.conf +
 # the caller's environment): the baseline _fleet_repo_keys_reset restores. A key set
@@ -1070,8 +1070,8 @@ fleet_repo_conf_get() {
 # the fleet works from its first minute; the login has no write access there, and
 # the operator's own fleet watches the same backlog. So the seed repo only LOOKS:
 # FLEET_SEED=1 in the fleet conf marks the conf's OWN repo (it is repo-scoped above,
-# so a repo added later never inherits it), and the dispatcher + issue-bridge skip
-# it whatever FLEET_AUTOFILL / FLEET_ISSUE_BRIDGE say. The one marker every consumer
+# so a repo added later never inherits it), and the issue-bridge skips it whatever
+# FLEET_ISSUE_BRIDGE says (the autofill dispatcher that skipped it too is gone, #3120). The one marker every consumer
 # reads — the onboarding wizard included — through fleet_repo_is_seed.
 
 # fleet_repo_is_seed <sess> <repo> → 0 iff <repo> is <sess>'s seed repo.
@@ -1764,7 +1764,7 @@ fleet_resolve_base_branch() {
 # Write a fleet's per-session conf, PRESERVING everything the operator added
 # (issue #170). fleet-up.sh regenerates this conf on every restore; a naive
 # truncating `cat >` silently drops FLEET_ISSUE_BRIDGE / FLEET_CLEANUP /
-# FLEET_MAX_SESSIONS / FLEET_AUTOFILL / … — anything outside
+# FLEET_MAX_SESSIONS / … — anything outside
 # the derived three. Here we rewrite ONLY the three derived keys (repo/main/base)
 # and re-emit every OTHER line from the existing conf verbatim — not just custom
 # FLEET_* keys but comments, `source` includes, and plain vars too (dropping any
@@ -1923,7 +1923,7 @@ fleet_repo_register() {
       # The seed only looks (issue #1167): marked in the same write, so no daemon
       # tick ever reads it unmarked; its switches are its own, never the fleet's.
       if [ "$seed" = 1 ]; then
-        printf 'FLEET_SEED="1"\nFLEET_AUTOFILL="0"\nFLEET_ISSUE_BRIDGE="0"\n'
+        printf 'FLEET_SEED="1"\nFLEET_ISSUE_BRIDGE="0"\n'
       fi
     } > "$f.tmp.$$" || ! mv -f "$f.tmp.$$" "$f"; then
     rm -f "$f.tmp.$$"; echo "fleet-repo: failed to write $f" >&2; echo "failed:write"; return 1
@@ -1931,7 +1931,7 @@ fleet_repo_register() {
   fleet_repo_order_put "$sess" "$repo" \
     || echo "fleet-repo: WARNING — could not record $repo in $(dirname "$f")/.order (it lists after the others)" >&2
   echo "fleet-repo: $sess now hosts $repo (main=$dir base=$base) — $f" >&2
-  [ "$seed" = 1 ] && echo "fleet-repo: $repo is this fleet's seed repo — no autofill, no issue-bridge (FLEET_SEED=1)" >&2
+  [ "$seed" = 1 ] && echo "fleet-repo: $repo is this fleet's seed repo — no issue-bridge (FLEET_SEED=1)" >&2
   # --- the follow-through ---
   fleet_repo_trust_warn "$dir" fleet-repo
   bin="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
@@ -5830,6 +5830,28 @@ _fleet_node_broker() {
   case "$out" in http://127.0.0.1:*"	"fcpn1.*) printf '%s\n' "$out" ;; *) return 1 ;; esac
 }
 
+# fleet_node_pair [<hub url>] → `<url>TAB<token>`: where this login's NODE token
+# is good, and the token (issue #3106; #2665: a token is good only at the address
+# it came with). node.env readable → its CCQUOTA_TOKEN at its CCQUOTA_HUB_URL
+# (else <hub url>); separated (issue #1971) → the credential proxy's hub broker
+# pair, whose fcpn1. the proxy swaps for the node token on the way out. rc 1 =
+# no node token here. Keep the answer in a shell variable — never export it,
+# never put the token on an argv (curl -K - takes the header on stdin).
+fleet_node_pair() {
+  local f t u
+  f=$(fleet_node_env_file)
+  if [ -r "$f" ]; then
+    t=$(sed -n 's/^CCQUOTA_TOKEN=//p' "$f" | head -n 1); t=${t#[\"\']}; t=${t%[\"\']}
+    u=$(sed -n 's/^CCQUOTA_HUB_URL=//p' "$f" | head -n 1); u=${u#[\"\']}; u=${u%[\"\']}
+    u=${u:-${1:-}}
+    [ -n "$t" ] && [ -n "$u" ] || return 1
+    printf '%s\t%s\n' "${u%/}" "$t"
+    return 0
+  fi
+  _fleet_node_separated || return 1
+  _fleet_node_broker
+}
+
 # fleet_spawn_node_default → what a spawn follows when neither --node nor
 # FLEET_SPAWN_NODE names a machine (issue #1721, EPIC #1718 C3): `local` on a
 # person's own computer (node.env CCQUOTA_FLEET_PERSONAL=1 while compute is on —
@@ -7441,8 +7463,16 @@ fleet_epic_agent() {
 # reads the same column); with no ccquota on this login, a plain `codex login`'s
 # non-empty $CODEX_HOME/auth.json. rc 1 = neither — say `ccquota codex login`.
 # FLEET_CODEX_READY_CMD replaces the ccquota read (a test seam).
+# A SEPARATED login (credsep.json, issue #1971) is ready (issue #3097): its Codex
+# auth.json lives in the role account's store and every launch reaches it through
+# the credential proxy (fleet-codex.sh mint), so the login cannot read it —
+# `ccquota codex list` says no_credentials there for a login that runs Codex fine.
 fleet_codex_ready() {
   local rows
+  if [ -f "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/credsep.json" ] \
+     && grep -q '"separated": *true' "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/credsep.json" 2>/dev/null; then
+    return 0
+  fi
   if [ -n "${FLEET_CODEX_READY_CMD:-}" ]; then rows=$(eval "$FLEET_CODEX_READY_CMD" 2>/dev/null) || return 1
   elif command -v ccquota >/dev/null 2>&1; then
     rows=$(ccquota codex list 2>/dev/null) || return 1

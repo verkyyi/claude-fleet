@@ -365,7 +365,7 @@ fi
 # server at THIS install's bin/; FLEET_MCP_SERVER=1 tells the mod not to register
 # its own three fallback tools under the same `fleet` name. FLEET_MCP=0, a
 # caller's own MCP flags, or no file beside bin/ adds nothing (byte for byte).
-unset FLEET_MCP_SERVER                                     # never inherit a parent's mount
+unset FLEET_MCP_SERVER FLEET_MCP_ORCH                      # never inherit a parent's mount
 _fc_mw="$BIN/../conf/mcp-worker.json"
 if [ "${FLEET_MCP:-1}" != 0 ] && [ -f "$_fc_mw" ] && [ -f "$BIN/fleet-mcp.py" ]; then
   case " $* " in
@@ -384,6 +384,15 @@ if [ "${FLEET_MCP:-1}" != 0 ] && [ -f "$_fc_mw" ] && [ -f "$BIN/fleet-mcp.py" ];
         *) mcp_flag+=("--mcp-config=$_fc_mw") ;;               # the =form (#476, above)
       esac
       unset _fc_mwin
+      # The dispatch group (issue #3113, EPIC #3111 C2) is the server `fleet-orch`,
+      # which only the fleet-orchestrate plugin registers — except on a seat the
+      # fleet still opens itself (orchestrator · steward · EPIC driver:
+      # `fleet-mcp.py --bridge-seat`), which keeps spawn / await / children /
+      # answer_dialog / send until EPIC #3111 C7 retires those seats.
+      # FLEET_MCP_ORCH=1 tells the core server's file_issue the group is here.
+      if [ -f "$BIN/../conf/mcp-orch.json" ] && python3 "$BIN/fleet-mcp.py" --bridge-seat "$_fc_role" 2>/dev/null; then
+        mcp_flag+=("--mcp-config=$BIN/../conf/mcp-orch.json"); export FLEET_MCP_ORCH=1
+      fi
       ;;
   esac
 fi

@@ -45,6 +45,8 @@ with no lease opens it through this machine's own adapter) and the result goes o
 the 看台's client as a message.
 
 FLEET_DISPATCH_SEND_CMD (tests): replaces `fleet-compose.py --send <payload>`.
+FLEET_DISPATCH_GO_CMD (tests): replaces `fleet-view-go.sh` — a 看台's send that
+opened a window here goes to it (`window: @N` from fleet-compose.py --send).
 FLEET_DISPATCH_AGENTS_HERE (tests): the agents installed here, comma-separated,
 in place of looking (FLEET_CLAUDE_BIN / PATH / FLEET_TOOL_DIRS, fleet_find_tool's rule).
 """
@@ -156,10 +158,12 @@ def payload(title, repo, codex=False, agent=None):
     return data
 
 
-def send(data, view=""):
+def send(data, view="", client=""):
     """Write it, hand it on. (ok, words): handed to the list → 「已发出：…」 and
     the list takes it from there; no list (or a 看台, which has none) → --send
-    here, and how it ended."""
+    here, and how it ended — a 看台 then goes to the window it opened (issue
+    #3097, fleet-view-go.sh). A send that did not open is logged (`dispatch_failed`
+    in logs/compose.ndjson) as well as said, never only said."""
     path = compose.send_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     if not compose.write_atomic(path, json.dumps(data, ensure_ascii=False) + "\n"):
@@ -173,12 +177,27 @@ def send(data, view=""):
     try:
         out = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True)
     except OSError as error:
+        failed(data, view, str(error))
         return False, tr("compose_failed_fmt", str(error))
     if out.returncode == 0:
+        win = next((l.split(" ", 1)[1].strip() for l in (out.stderr or "").splitlines() if l.startswith("window: @")), "")
+        if view and win:
+            go = os.environ.get("FLEET_DISPATCH_GO_CMD")
+            subprocess.run((go.split() if go else ["bash", str(BIN / "fleet-view-go.sh")])
+                           + [view, win, "--how", "dispatch"] + (["--client", client] if client else []),
+                           stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return True, tr("compose_result_fmt", compose.place_why(out.stdout or out.stderr))
     compose.keep_failed(path)
-    return False, tr("compose_failed_fmt", compose.place_why((out.stdout or "") + "\n" + (out.stderr or ""))
-                     or tr("compose_failed_unknown"))
+    why = compose.place_why((out.stdout or "") + "\n" + (out.stderr or ""))
+    failed(data, view, why or "rc=%d" % out.returncode)
+    return False, tr("compose_failed_fmt", why or tr("compose_failed_unknown"))
+
+
+def failed(data, view, why):
+    """A ⌘T send that did not open, in logs/compose.ndjson (issue #3097): the popup
+    runs under `>/dev/null 2>&1`, so the words on its screen are not a record."""
+    compose.compose_log("dispatch_failed", id=data.get("id"), repo=data.get("repo"), agent=data.get("agent"),
+                        view=view, why=why)
 
 
 def ui(screen, session="", view="", client=""):
@@ -270,7 +289,7 @@ def ui(screen, session="", view="", client=""):
             note = tr("dispatch_sending")
             line(note, curses.color_pair(1))
             screen.refresh()
-            ok, said = send(payload(title, repo, agent=None if agent == dflt else agent), view)
+            ok, said = send(payload(title, repo, agent=None if agent == dflt else agent), view, client)
             if ok:
                 quick.tmux("display-message", *(["-c", client] if client else []), said)
                 return 0
@@ -331,11 +350,19 @@ def main(argv):
         if not data["repo"]:
             print(tr("dispatch_norepo"), file=sys.stderr)
             return 2
-        ok, said = send(data, o["--view"])
+        ok, said = send(data, o["--view"], o["--client"])
         print(said)
         return 0 if ok else 1
     os.environ.setdefault("ESCDELAY", "25")
-    return curses.wrapper(ui, o["--session"], o["--view"], o["--client"])
+    try:
+        return curses.wrapper(ui, o["--session"], o["--view"], o["--client"])
+    except Exception as error:  # noqa: BLE001 — the popup's crash is said, never swallowed (issue #3097)
+        import traceback
+        compose.compose_log("dispatch_failed", view=o["--view"], why="crash: %r" % error,
+                            trace=traceback.format_exc()[-2000:])
+        quick.tmux("display-message", *(["-c", o["--client"]] if o["--client"] else []),
+                   tr("compose_failed_fmt", "%s: %s" % (type(error).__name__, error)))
+        return 1
 
 
 if __name__ == "__main__":

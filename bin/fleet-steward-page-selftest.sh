@@ -18,8 +18,8 @@
 #   E  the link's road to the client: @orch_page on the orchestrator → the
 #      inventory's orchpage=<url> (last tag; a bad link dropped) → orch_page →
 #      orch_<sess>'s page=<url>; none ⇒ the row byte for byte
-#   F  「新任务」's menu: 进管家会话 when steward_all_<sess> names one, 管家页 when
-#      orch_<sess> carries page=<url> (fleet-open.sh); neither ⇒ the menu as before
+#   F  the row-less menu offers no 进管家会话 / 管家页 (issue #3119), whatever
+#      steward_all_<sess> / orch_<sess>'s page=<url> say
 #   G  the [decision] message: the page's plain lines, 〔row ids〕, the link — no table
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -161,13 +161,11 @@ before=$(pmenu)
 printf 'U/orch\x1fm4\x1fonline\x1fdone\x1f\x1f\x1f\x1fdecide=2\x1fpage=https://mini.tail.ts.net/d/abc123/\n' > "$G/orch_fsp"
 printf 'U/stew\n' > "$G/steward_all_fsp"
 after=$(pmenu)
-printf '%s\n' "$after" | grep -q $'^u\t进管家会话\t.*fleet-compose.py.*--steward.*fsp' \
-  && printf '%s\n' "$after" | grep -q $'^j\t管家页\t.*fleet-open.sh.*https://mini.tail.ts.net/d/abc123/' \
-  && ok "F: 「新任务」's menu: 进管家会话 (--steward) and 管家页 (fleet-open.sh <url>)" || bad "F: menu: $after"
-printf '%s\n' "$before" | grep -Eq $'^(u|j)\t' && bad "F: steward items with no steward: $before" \
-  || ok "F: no steward, no page ⇒ neither item"
-grep -q '("steward", "enter")' "$BIN/fleet-quickopen.py" && grep -q '("stewardpage", "enter")' "$BIN/fleet-quickopen.py" \
-  && ok "F: both are in the command table (⌘P >)" || bad "F: not in fleet-quickopen.py COMMANDS"
+# no session is special (issue #3119): no 进管家会话 / 管家页 item, steward or not
+printf '%s\n' "$after" "$before" | grep -Eq $'^(u|j)\t|管家' && bad "F: the menu still offers the steward: $after" \
+  || ok "F: no 进管家会话 / 管家页 in the menu, a steward and its page or not (issue #3119)"
+grep -q '("steward", "enter")\|("stewardpage", "enter")' "$BIN/fleet-quickopen.py" \
+  && bad "F: still in fleet-quickopen.py COMMANDS" || ok "F: neither is in the command table (⌘P >)"
 
 [ "$fails" = 0 ] && { echo "fleet-steward-page selftest PASS"; exit 0; }
 echo "fleet-steward-page selftest: $fails FAILED"; exit 1

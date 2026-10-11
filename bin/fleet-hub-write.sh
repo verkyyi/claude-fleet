@@ -37,6 +37,18 @@
 # WHO WRITES — the first that exists:
 #   1. FLEET_HUB_WRITE_CMD   a seam for tests: `bash -c "$FLEET_HUB_WRITE_CMD" fleet-hub-write
 #                            <tool> <json>` prints the operation record itself.
+#   1b. on a NODE (not the shell, FLEET_SHELL=1), this login's node token (issue
+#                            #3106) — node.env's, else the credential proxy's broker
+#                            pair on a separated login (fleet_node_pair): POST
+#                            /v1/fleet/write {tool, args_json} with the bearer on
+#                            curl's stdin config, never its argv. The hub acts as the
+#                            login's OWNER — only their workers, the worker tools only
+#                            — and audits the machine. A machine's own daemons (the
+#                            steward, the idle reaper) never borrow a person's
+#                            12-hour certificate. A hub older than that door (401),
+#                            or a worker not the owner's (404) while a viewer token /
+#                            a valid certificate is here, falls through to 2 / 3.
+#                            FLEET_HUB_WRITE_NODE_TOKEN=0 skips it.
 #   2. the viewer token      CCQUOTA_VIEWER_TOKEN, else ~/.ccquota/viewer-token — on a
 #                            NODE this is the operator's door: POST /v1/fleet/<tool>
 #                            with the bearer, journalled as `operator`.
@@ -63,7 +75,6 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 _fcd="${FLEET_CONF_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/claude-fleet}"
 # shellcheck source=/dev/null
 [ -f "$_fcd/fleet.conf" ] && . "$_fcd/fleet.conf"
-unset _fcd
 
 WRITE_NS="fleet-write@claude-fleet"
 WRITE_TOOLS=" worker_message worker_stop worker_resume worker_answer worker_reap worker_switch worker_rename worker_reap_policy worker_start gh_comment config_set service_control orch_ensure "
@@ -119,6 +130,7 @@ for line in sys.stdin:
 print(state, until)
 ' 2>/dev/null || printf 'missing\n'
 }
+cert_ok() { case "$(cert_state)" in ok\ *) return 0 ;; esac; return 1; }
 token_source() {
   TOK="${CCQUOTA_VIEWER_TOKEN:-}"
   if [ -n "$TOK" ]; then printf 'env\n'; return 0; fi
@@ -126,9 +138,30 @@ token_source() {
   [ -n "$TOK" ] || return 1
   printf 'file\n'
 }
+# node_door → rc 0 when this login would write by its node token (no network:
+# the broker pair is minted only by node_pair, at send time).
+node_door() {
+  [ "${FLEET_SHELL:-}" != 1 ] && [ "${FLEET_HUB_WRITE_NODE_TOKEN:-1}" != 0 ] || return 1
+  local f="$_fcd/node.env"
+  if [ -r "$f" ]; then grep -q '^CCQUOTA_TOKEN=.' "$f" 2>/dev/null; return; fi
+  [ -f "$_fcd/credsep.json" ]
+}
+# node_pair → NURL / NTOK (shell variables only), from fleet-lib's fleet_node_pair
+node_pair() {
+  local p
+  NURL=''; NTOK=''
+  p=$(FLEET_CONF_DIR="$_fcd" bash -c '. "$1/fleet-lib.sh" 2>/dev/null && fleet_node_pair "$2"' fleet-hub-write "$BIN" "$(hub_url 2>/dev/null)") || return 1
+  NURL=${p%%$'\t'*}; NTOK=${p#*$'\t'}
+  [ -n "$NURL" ] && [ -n "$NTOK" ] && [ "$NURL" != "$p" ]
+}
 identity() {
   local st src
   if [ -n "${FLEET_HUB_WRITE_CMD:-}" ]; then printf 'cmd FLEET_HUB_WRITE_CMD\n'; return 0; fi
+  if node_door; then
+    if [ -r "$_fcd/node.env" ]; then printf 'node %s\n' "$_fcd/node.env"
+    else printf 'node the credential proxy broker (separated)\n'; fi
+    return 0
+  fi
   if src=$(token_source); then
     case "$src" in env) printf 'token CCQUOTA_VIEWER_TOKEN\n' ;; *) printf 'token ~/.ccquota/viewer-token\n' ;; esac
     return 0
@@ -143,7 +176,7 @@ identity() {
 }
 
 # ---- arguments ---------------------------------------------------------------
-QUIET=0; WAIT=''; IDEM=''
+QUIET=0; WAIT=''; IDEM=''; NURL=''; NTOK=''
 TOOL="${1:-}"; [ -n "$TOOL" ] || usage
 case "$TOOL" in
   --identity) identity; exit $? ;;
@@ -207,6 +240,17 @@ post_token() {
   cat "$out"; rm -f "$out"
   case "$code" in 2??) return 0 ;; '') note "the hub did not answer ($url)"; return 1 ;; *) HTTP="$code"; return 1 ;; esac
 }
+# post_node <tool> <args> → by this login's node token (door 1b), at NURL; the
+# bearer travels on curl's stdin config, never its argv.
+# The answer goes to <out> and HTTP is set HERE (never run it in $(…)).
+post_node() {
+  local tool="$1" body="$2" out="$3" req code
+  req=$(python3 -c 'import json, sys; print(json.dumps({"tool": sys.argv[1], "args_json": sys.argv[2]}))' "$tool" "$body") || return 1
+  code=$(printf 'header = "Authorization: Bearer %s"\n' "$NTOK" |
+         curl -K - -sS -m 40 -o "$out" -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+              --data-binary "$req" "$NURL/v1/fleet/write" 2>/dev/null)
+  case "$code" in 2??) return 0 ;; '') note "the hub did not answer ($NURL)"; return 1 ;; *) HTTP="$code"; return 1 ;; esac
+}
 # post_cert <url> <tool> <args> → signed by this device's certificate (door 3)
 post_cert() {
   local url="$1" tool="$2" body="$3" ts sig cert digest req out code
@@ -228,13 +272,32 @@ post_cert() {
 }
 # send <tool> <args> → the record on stdout, rc 0/1
 send() {
-  local tool="$1" body="$2" url
+  local tool="$1" body="$2" url rc
   HTTP=''
   if [ -n "${FLEET_HUB_WRITE_CMD:-}" ]; then
     bash -c "$FLEET_HUB_WRITE_CMD" fleet-hub-write "$tool" "$body" </dev/null; return
   fi
   url=$(hub_url) || { note "no hub URL (CCQUOTA_HUB_URL / FLEET_HUB_URL / hub.json) — nothing sent"; return 1; }
   command -v curl >/dev/null 2>&1 || { note "needs curl"; return 1; }
+  if node_door && { [ -n "$NTOK" ] || node_pair; }; then
+    local nrec nf
+    nf=$(mktemp "${TMPDIR:-/tmp}/fhw.XXXXXX") || return 1
+    post_node "$tool" "$body" "$nf"; rc=$?
+    nrec=$(cat "$nf" 2>/dev/null); rm -f "$nf"
+    [ "$rc" = 0 ] && { printf '%s\n' "$nrec"; return 0; }
+    # 401: a hub older than the node write door, or a login no person holds;
+    # 404: not the owner's worker — another door here may still reach it.
+    case "${HTTP:-}" in
+      401|404) if token_source >/dev/null || cert_ok; then
+                 note "the hub refused this login's node token (HTTP $HTTP) — trying the viewer token / certificate"
+                 HTTP=''
+               else
+                 [ "$HTTP" = 401 ] && note "the hub refused this login's node token (HTTP 401) — a hub older than the node write door (#3106; redeploy it), or a login no person holds"
+                 printf '%s\n' "$nrec"; return 1
+               fi ;;
+      *) printf '%s\n' "$nrec"; return 1 ;;
+    esac
+  fi
   if token_source >/dev/null; then post_token "$url" "$tool" "$body"; return; fi
   case "$(cert_state)" in ok\ *) post_cert "$url" "$tool" "$body"; return ;; esac
   note "$(identity | sed 's/^none //') — nothing sent"
@@ -270,6 +333,8 @@ print("%d\t%s%s  op=%s" % (0 if ok else 1, st, tail, o.get("operation_id", "?"))
   return "$rc"
 }
 
+# mint the node pair once here: send runs in $(…), and --wait polls it
+[ -z "${FLEET_HUB_WRITE_CMD:-}" ] && node_door && node_pair >/dev/null 2>&1
 rec=$(send "$TOOL" "$ARGS") || {
   [ -n "${HTTP:-}" ] && note "HTTP $HTTP from the hub: $(printf '%s' "$rec" | head -c 300)"
   [ -n "$rec" ] && printf '%s\n' "$rec"

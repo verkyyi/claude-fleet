@@ -1,7 +1,7 @@
 #!/bin/bash
 # fleet-compose-selftest.sh — ⌘N writes a new task on the right (issue #1953,
 # EPIC #1949 C4): bin/fleet-compose.py, the stage's `@fleet_role portal` window
-# fleet-shell.sh portal opens, the list's 「新任务」 / 「开工中…」 rows
+# fleet-shell.sh portal opens (FLEET_COMPOSE=1), the list's 「开工中…」 row
 # (fleet-sidebar.py), and the way out (fleet-compose.py --send →
 # fleet-client-place.sh <repo> new).
 #
@@ -14,12 +14,12 @@
 # hub (logs its argv and the body it was handed, «opens» issue 43 two seconds
 # later by adding its row) and fleet-remote-view.sh logs the row a switch steps to.
 #   A. ESC[928~ (⌘N) on the client: the stage gets ONE window, @fleet_role portal /
-#      @remote new, running fleet-compose.py; the list paints 「新任务」 on top with
-#      ▶ on it, a rule under it
+#      @remote new, running fleet-compose.py; the list paints no 「新任务」 row
+#      (issue #3119)
 #   B. two lines typed (⌃j between them) and ↵: fleet-client-place.sh is called
 #      ONCE — `acme/web new --title <line 1> --body-file … --node auto` (the repo
 #      of the row in view before ⌘N: 「自动」), the body both lines; 「开工中…」
-#      under 「新任务」 at once; then the new row is selected and switched to
+#      on top at once; then the new row is selected and switched to
 #   C. ⌘N again: the same window (never a second); a line, esc: the draft file
 #      holds it, and the list is asked back to the row before (`jump=`)
 #   D. (issue #2231) none of 记成 issue / 发法 / 多个仓库 / 编排 on the area; the
@@ -45,8 +45,8 @@
 # a stage window @remote m4:U/orch whose program logs what it is sent:
 #   J. free: the area says nothing of it; ↵ starts the work (acme/web new …); ⇧⇥
 #      carries nothing anywhere
-#   K. working: 「新任务」 wears the spinner
-#   L. waiting on you: 「新任务」 turns red `!`
+#   K. working, or waiting on you: the list draws no 「新任务」 row for it — no
+#      session is special (issue #3119)
 # A client update (issue #2113):
 #   M. a portal window an older client made (@portal_ver) is respawned on ⌘N — same
 #      window, new process, draft kept; the same version is left alone; a SIGHUP
@@ -64,10 +64,8 @@
 #      a named --node / --agent beats the payload's; an agent other than claude /
 #      codex is refused (2) before anything is placed
 # The direct key (issue #2146):
-#   P. ⌘N ON the writing area with an orchestrator: the list's jump to wid:U/orch,
-#      the stage on it, nothing pasted; ⌘N again: back to the writing area. No
-#      orch_fcs: ⌘N on the writing area changes nothing. 「新任务」's right-click
-#      menu: 进编排会话 on the same road (greyed, saying why, with none)
+#   P. ⌘N ON the writing area with an orchestrator running: nothing moves — no
+#      jump to it (issue #3119); the row-less menu has no 进编排会话
 # The switch (issue #2236, EPIC #2230 C6):
 #   R. the hub answers done naming the worker_id while the list does not carry
 #      its row yet: the stage is on it within 0.5 s of the answer (`switched`
@@ -80,18 +78,12 @@
 #      says 「没发出去：入口连不上… · 字还在，改好再 ↵」 until the next key, the
 #      draft and compose-failed.json hold the text, nothing switched; the direct
 #      road's reason is the place's message (place_why)
-# ⌘N with the writing area off (issue #2616, EPIC #2615 C1 — FLEET_COMPOSE unset):
-#   T. ⌘N → the stage on the orchestrator's window, stamped @fleet_role
-#      orchestrator, no portal window made; no orch_fcs: the hub is asked
-#      (fleet-hub-write.sh orch_ensure) and the stage goes once orch_fcs shows;
-#      the bar says 「正在叫起编排会话…」 meanwhile, and why when it never came
-#      (the write's refusal, else 「等了 N 秒还没出现」); the window's @cc_agent is
-#      the cache row's agent (issue #2619: a Codex orchestrator reads codex)
-#   U. (issue #2721) the orchestrator's window already on the stage: ⌘N
-#      (fleet-shell.sh portal) selects it in bash — no python3 started, under
-#      300 ms (best of 3), `FLEET_TRACE=1` prints each segment; the list's
-#      「新任务」 tap starts portal without waiting on it (it hands its jump back
-#      to that same list, which a wait would hold for the full 3 s)
+# ⌘N with the writing area off (FLEET_COMPOSE unset — issue #3119):
+#   T. ⌘N → a NEW session (fleet-shell.sh portal → home-session claude --new,
+#      FLEET_PORTAL_NEW_CMD here), whether an orchestrator runs or not: no
+#      orch_ensure, no stage onto it, no writing area made
+#   U. the list's tap on the writing area's key starts portal without waiting on
+#      it (it hands its jump back to that same list, which a wait would hold)
 # tmux / python3 absent → SKIP (exit 0). Exit 0 = pass. FCS_KEEP=1 keeps the work dir.
 set -uo pipefail
 # Every session its own row (issue #2675): the batch view folds a flat list into
@@ -300,10 +292,8 @@ eq 'A: …and the stage shows it' "$pw" "$(st_ display-message -p -t fcs-stage: 
 compose() { st_ capture-pane -p -t "$pw" 2>/dev/null; }
 CHECKS=$((CHECKS + 1)); waitfor 6 '写下要做的事' compose || fail 'A: the writing area painted' "$(compose)"
 has 'A: 「仓库」 is the repo of the row before' "$(compose)" '仓库  web ▾'
-CHECKS=$((CHECKS + 1)); waitfor 4 '▶ +   新任务' || fail 'A: the list paints 「新任务」 in view' "$(screen)"
-first=$(screen | grep -v '^ *$' | head -2)
-has 'A: 「新任务」 is the first row' "$(printf '%s' "$first" | head -1)" '新任务'
-has 'A: a rule under it' "$(printf '%s' "$first" | tail -1)" '───'
+sleep .5
+hasnt 'A: the list paints no 「新任务」 row (issue #3119)' "$(screen)" '新任务'
 
 # B. two lines, ↵
 st_ send-keys -t "$pw" -l '侧栏里 FLEET SKILLS 的名字太长被截了'
@@ -312,7 +302,7 @@ st_ send-keys -t "$pw" -l '附上截图。'
 sleep .3
 has 'B: both lines in the box' "$(compose)" '附上截图。'
 st_ send-keys -t "$pw" Enter
-CHECKS=$((CHECKS + 1)); waitfor 4 '开工中… 侧栏里' || fail 'B: 「开工中…」 under 「新任务」 at once' "$(screen)"
+CHECKS=$((CHECKS + 1)); waitfor 4 '开工中… 侧栏里' || fail 'B: 「开工中…」 on top at once' "$(screen)"
 CHECKS=$((CHECKS + 1)); waitfor 8 'forty-three' || fail 'B: the new session row arrived' "$(screen)"
 CHECKS=$((CHECKS + 1)); n=0; while ! grep -qx 'wid:U/issue-43' "$VIEW" && [ $n -lt 40 ]; do sleep .1; n=$((n + 1)); done
 grep -qx 'wid:U/issue-43' "$VIEW" || fail 'B: the switch stepped into the new row' "$(cat "$VIEW")"
@@ -469,7 +459,6 @@ CHECKS=$((CHECKS + 1)); waitfor 4 '仓库  web ▾' compose || fail 'I: ⌘N: th
 
 # --- the orchestrator (issue #1957): its row, not the area ---------------------------
 orch() { printf 'U/orch%sm4%sonline%s%s%s%s%s%s\n' "$US" "$US" "$US" "$1" "$US" "${2:-}" "$US" "${3:-}" > "$FLEET_STATUS_G/orch_fcs"; }
-newtask() { screen | grep -F '新任务' | head -1; }
 has 'N: H'"'"'s is no repo' "$(clog ev how | grep 'ev=sent')" 'ev=sent how=norepo'
 hasnt 'N: nothing is a scratch of a repo any more' "$(clog ev how | grep 'ev=sent')" 'how=scratch'
 
@@ -490,18 +479,14 @@ line=$(placed_n $((nlog + 1)))
 has 'J: ↵ starts the work itself' "$line" 'acme/web new --title 活页里加一张 fleet 状态卡 --body-file '
 eq 'J: nothing pasted to it' '' "$(cat "$WORK/orch-in" 2>/dev/null)"
 
-# K. working: 「新任务」 wears the spinner
+# K. working, then waiting on you: no 「新任务」 row wears it (issue #3119)
 settled
 orch working '' '跑 #1935 的批'
-spun() { newtask | grep -q '[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]'; }
-CHECKS=$((CHECKS + 1)); n=0; while ! spun && [ $n -lt 40 ]; do sleep .1; n=$((n + 1)); done
-spun || fail 'K: 「新任务」 wears the spinner' "$(newtask)"
-
-# L. waiting on you: 「新任务」 turns red
+sleep 1.5
+hasnt 'K: working → no 「新任务」 row' "$(screen)" '新任务'
 orch needs ask '开一个 EPIC 还是三个快任务？'
-red() { newtask | grep -q '!'; }
-CHECKS=$((CHECKS + 1)); n=0; while ! red && [ $n -lt 40 ]; do sleep .1; n=$((n + 1)); done
-red || fail 'L: 「新任务」 turns red !' "$(newtask)"
+sleep 1.5
+hasnt 'K: waiting on you → no 「新任务」 row, no red' "$(screen)" '新任务'
 
 # M. a client update under a running writing area (issue #2113): the window made
 # by an older client (@portal_ver not this code's) is respawned on ⌘N — same
@@ -561,7 +546,7 @@ eq 'O: yesterday — the recycled number'"'"'s earlier generation, dated by its 
   "$yday	drafts=1	sends=0	started=0	start_median=-" "$(printf '%s\n' "$out" | sed -n 2p)"
 has 'O: --json' "$(FLEET_CONF_DIR="$DC" FLEET_COMPOSE_LOG="$DC/compose.ndjson" bash "$BIN/fleet-history.sh" drafts --days 1 --json)" '"drafts": 1, "sends": 3'
 
-# P. ⌘N twice (issue #2146): the writing area ⇄ the orchestrator, no draft carried
+# P. ⌘N on the writing area with an orchestrator running: nothing moves (issue #3119)
 settled
 orch 'done'
 st_ select-window -t "$pw"
@@ -570,30 +555,13 @@ st_ send-keys -t "$pw" -l '留在写作区的半句'
 sleep .3
 : > "$VIEW"; : > "$WORK/orch-in"
 type_ '\033[928~'
-CHECKS=$((CHECKS + 1)); n=0; while ! grep -qx 'wid:U/orch' "$VIEW" && [ $n -lt 40 ]; do sleep .1; n=$((n + 1)); done
-grep -qx 'wid:U/orch' "$VIEW" || fail 'P: ⌘N on the writing area asked the list to jump to the orchestrator' "$(cat "$VIEW")"
-CHECKS=$((CHECKS + 1)); n=0; while [ "$(st_ display-message -p -t fcs-stage: '#{@remote}')" != m4:U/orch ] && [ $n -lt 40 ]; do sleep .1; n=$((n + 1)); done
-eq 'P: the stage shows the orchestrator' m4:U/orch "$(st_ display-message -p -t fcs-stage: '#{@remote}')"
-sleep .5
-eq 'P: …pasting nothing' '' "$(cat "$WORK/orch-in")"
-type_ '\033[928~'
-CHECKS=$((CHECKS + 1)); n=0; while [ "$(st_ display-message -p -t fcs-stage: '#{window_id}')" != "$pw" ] && [ $n -lt 40 ]; do sleep .1; n=$((n + 1)); done
-eq 'P: ⌘N again: back to the writing area' "$pw" "$(st_ display-message -p -t fcs-stage: '#{window_id}')"
+sleep 1
+eq 'P: ⌘N on the writing area stays there, no jump to the orchestrator' "$pw|" "$(st_ display-message -p -t fcs-stage: '#{window_id}')|$(cat "$VIEW")"
 has 'P: …the draft still there' "$(compose)" '留在写作区的半句'
-# …and 「新任务」's right-click menu (fleet-sidebar-menu.sh `menu <s> new`): 进编排会话
-# first, on the same road; none → greyed, with the reason
 pmenu() { FLEET_SHELL=1 bash -c 'BIN=$1; sess=$2; verb=menu; set -- menu "$2" new --print
   . "$BIN/fleet-lib.sh"; . "$BIN/fleet-ui-lang.sh"; . "$BIN/fleet-sidebar-menu.sh"' _ "$BIN" fcs 2>/dev/null; }
-m=$(pmenu)
-eq 'P: 「新任务」 has a menu, titled with its name' $'title\t新任务' "$(printf '%s\n' "$m" | head -1)"
-has 'P: …its first item goes to the orchestrator' "$(printf '%s\n' "$m" | sed -n 2p | cut -f1,2)" $'b\t进编排会话'
-has 'P: …by fleet-compose.py --orch' "$(printf '%s\n' "$m" | sed -n 2p | tr -d "'\\\\")" 'fleet-compose.py --orch fcs'
+hasnt 'P: the row-less menu has no 进编排会话 / 进管家会话' "$(pmenu)" '编排'
 rm -f "$FLEET_STATUS_G/orch_fcs"
-: > "$VIEW"
-type_ '\033[928~'
-sleep 1
-eq 'P: no orchestrator → ⌘N on the writing area changes nothing' "$pw|" "$(st_ display-message -p -t fcs-stage: '#{window_id}')|$(cat "$VIEW")"
-has 'P: none → greyed, saying why' "$(pmenu | sed -n 2p | cut -f1,2)" $'b\t-进编排会话 · 这台机器没有编排会话'
 
 # R. (issue #2236) the hub names the new session: the stage is on it within 0.5 s
 # of the answer, the 「开工中…」 row stands in for it; the list's next round
@@ -657,93 +625,38 @@ print(c.place_why("fleet-client-place: https://hub.invalid: HTTP 503 Service Una
 print(c.place_why("REFUSED NO_CAPACITY\t没有机器有空\tafter m4:op1:5"))' 2>&1)
 eq 'S: the reason off the place: the last line, or the line'"'"'s message' \
   $'fleet-client-place: https://hub.invalid: HTTP 503 Service Unavailable\n没有机器有空' "$out"
-# T. (issue #2616) FLEET_COMPOSE off on the shell's server: ⌘N is the orchestrator
+# T. (issue #3119) FLEET_COMPOSE off on the shell's server: ⌘N is a new session
 sh_ set-environment -g FLEET_COMPOSE 0
+printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s"\n' "$WORK/new.log" > "$WORK/new.sh"; chmod +x "$WORK/new.sh"
+cat > "$WORK/write-ok.sh" <<EOF
+printf '%s\n' "\$*" >> "$WORK/write.log"
+printf '{"operation_id": "op-o", "action": "%s", "status": "accepted"}\n' "\$1"
+EOF
+sh_ set-environment -g FLEET_PORTAL_NEW_CMD "sh $WORK/new.sh home-session claude --new"
+sh_ set-environment -g FLEET_HUB_WRITE_CMD "bash '$WORK/write-ok.sh' \"\$@\""
+: > "$WORK/new.log"; : > "$WORK/write.log"
 settled; orch 'done'
 st0=$(st_ list-windows -t fcs-stage -F '#{window_id} #{@fleet_role} #{@remote}' | awk '$2 != "portal" && $3 != "m4:U/orch" { print $1; exit }')
 st_ select-window -t "$st0"
 np=$(portal | grep -c .)
-: > "$VIEW"
-# its agent too (issue #2619): the list's cache row (remote_fcs, field 7) says codex
-printf 'wid:U/orch%sm4%sonline%s%s%sworking%scodex%sorch%s%s%s0%s%s%s%s%s\n' "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" > "$FLEET_STATUS_G/remote_fcs"
 type_ '\033[928~'
-CHECKS=$((CHECKS + 1)); n=0; while [ "$(st_ display-message -p -t fcs-stage: '#{@remote}')" != m4:U/orch ] && [ $n -lt 50 ]; do sleep .1; n=$((n + 1)); done
-eq 'T: ⌘N → the stage on the orchestrator' m4:U/orch "$(st_ display-message -p -t fcs-stage: '#{@remote}')"
-CHECKS=$((CHECKS + 1)); n=0; while [ "$(st_ display-message -p -t fcs-stage: '#{@fleet_role}')" != orchestrator ] && [ $n -lt 40 ]; do sleep .1; n=$((n + 1)); done
-eq 'T: …its window told by @fleet_role orchestrator' orchestrator "$(st_ display-message -p -t fcs-stage: '#{@fleet_role}')"
-eq 'T: …no writing area made or shown' "$np" "$(portal | grep -c .)"
-CHECKS=$((CHECKS + 1)); n=0; while [ "$(st_ display-message -p -t fcs-stage: '#{@cc_agent}')" != codex ] && [ $n -lt 30 ]; do sleep .1; n=$((n + 1)); done
-eq 'T: …and its @cc_agent the cache'"'"'s (a Codex orchestrator)' codex "$(st_ display-message -p -t fcs-stage: '#{@cc_agent}')"
-rm -f "$FLEET_STATUS_G/remote_fcs"
-# none running: the hub is asked, the stage goes once orch_fcs shows
+CHECKS=$((CHECKS + 1)); n=0; while ! grep -q . "$WORK/new.log" && [ $n -lt 50 ]; do sleep .1; n=$((n + 1)); done
+eq 'T: ⌘N with an orchestrator running → one new session' 'home-session claude --new' "$(cat "$WORK/new.log")"
 rm -f "$FLEET_STATUS_G/orch_fcs"
-st_ select-window -t "$st0"
-cat > "$WORK/write-ok.sh" <<EOF
-printf '%s\n' "\$*" >> "$WORK/write.log"
-( sleep 1; printf 'U/orch${US}m4${US}online${US}done${US}${US}\n' > "$FLEET_STATUS_G/orch_fcs" ) </dev/null >/dev/null 2>&1 &
-printf '{"operation_id": "op-o", "action": "%s", "status": "accepted"}\n' "\$1"
-EOF
-sh_ set-environment -g FLEET_HUB_WRITE_CMD "bash '$WORK/write-ok.sh' \"\$@\""
-: > "$WORK/write.log"
 type_ '\033[928~'
-CHECKS=$((CHECKS + 1)); n=0; while ! grep -q . "$WORK/write.log" && [ $n -lt 40 ]; do sleep .1; n=$((n + 1)); done
-has 'T: no orchestrator → the hub is asked to open it' "$(head -1 "$WORK/write.log")" 'orch_ensure {"idempotency_key":'
-eq 'T: …once' 1 "$(grep -c . "$WORK/write.log")"
-eq 'T: …the stage stays put meanwhile' "$st0" "$(st_ display-message -p -t fcs-stage: '#{window_id}')"
-CHECKS=$((CHECKS + 1)); n=0; while [ "$(st_ display-message -p -t fcs-stage: '#{@remote}')" != m4:U/orch ] && [ $n -lt 60 ]; do sleep .1; n=$((n + 1)); done
-eq 'T: …and goes once orch_fcs shows' m4:U/orch "$(st_ display-message -p -t fcs-stage: '#{@remote}')"
+CHECKS=$((CHECKS + 1)); n=0; while [ "$(grep -c . "$WORK/new.log")" -lt 2 ] && [ $n -lt 50 ]; do sleep .1; n=$((n + 1)); done
+eq 'T: …and with none: another, nothing to wake' 2 "$(grep -c . "$WORK/new.log")"
+eq 'T: …the hub never asked to open an orchestrator' '' "$(cat "$WORK/write.log")"
+case "$(st_ display-message -p -t fcs-stage: '#{@remote}')" in *U/orch) fail 'T: the stage went to the orchestrator' ;; esac
+eq 'T: …no writing area made' "$np" "$(portal | grep -c .)"
+grep -q 'home-session claude --new' "$SB/fleet-shell.sh" || fail 'T: portal'"'"'s own road is not home-session claude --new'
+sh_ set-environment -gu FLEET_PORTAL_NEW_CMD
 sh_ set-environment -gu FLEET_HUB_WRITE_CMD
-# what the bar says (the client line: display-message on the shell's server, a
-# tmux shim on PATH logs it): 「正在叫起…」 while waiting, the reason at the end
-rm -f "$FLEET_STATUS_G/orch_fcs"
-mkdir -p "$WORK/shim"
-printf '#!/bin/sh\ncase " $* " in *" display-message "*) printf "%%s\\n" "$*" >> "%s";; esac\nexec %s "$@"\n' "$WORK/said" "$REAL_TMUX" > "$WORK/shim/tmux"
-chmod +x "$WORK/shim/tmux"
-: > "$WORK/said"
-out=$(cd "$SB" && PATH="$WORK/shim:$PATH" FLEET_ORCH_BOOT_SECS=2 \
-  FLEET_HUB_WRITE_CMD="printf '{\"action\": \"orch_ensure\", \"status\": \"failed\", \"result\": {\"error\": {\"code\": \"INVALID_ARGUMENT\", \"message\": \"Unsupported operation\"}}}\\n'" \
-  python3 fleet-compose.py --orch fcs --boot); rc=$?
-has 'T: the bar says it is starting it' "$(cat "$WORK/said")" '正在叫起编排会话…'
-eq 'T: never came → rc 1' 1 "$rc"
-has 'T: …saying why: the write'"'"'s refusal' "$out" '编排会话没起来：'
-has 'T: …in the node'"'"'s words' "$out" 'Unsupported operation'
-has 'T: …on the bar too' "$(tail -1 "$WORK/said")" '编排会话没起来'
-out=$(cd "$SB" && FLEET_ORCH_BOOT_SECS=1 FLEET_HUB_WRITE_CMD="printf '{\"status\": \"accepted\"}\\n'" \
-  python3 fleet-compose.py --orch fcs --boot)
-eq 'T: accepted but nothing came → how long it waited' '编排会话没起来：等了 1 秒还没出现' "$out"
-# U. (issue #2721) the hot path: the orchestrator's window is on the stage
-printf 'U/orch%sm4%sonline%sdone%s%s\n' "$US" "$US" "$US" "$US" "$US" > "$FLEET_STATUS_G/orch_fcs"
-ow=$(st_ list-windows -t fcs-stage -F '#{window_id} #{@remote}' | awk '$2 == "m4:U/orch" { print $1; exit }')
-[ -n "$ow" ] || fail 'U: T left the orchestrator'"'"'s window on the stage' "$(st_ list-windows -t fcs-stage -F '#{window_id} #{@remote}')"
-mkdir -p "$WORK/pyshim"
-printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s"\nexit 0\n' "$WORK/py.log" > "$WORK/pyshim/python3"
-chmod +x "$WORK/pyshim/python3"
-: > "$WORK/py.log"; best=99999; trace=''
-for _ in 1 2 3; do
-  st_ select-window -t "$st0"
-  ms=$(python3 -c '
-import subprocess, sys, time
-t = time.monotonic(); p = subprocess.run(sys.argv[1:], capture_output=True, text=True)
-sys.stderr.write(p.stderr); print(int((time.monotonic() - t) * 1000))' \
-    env PATH="$WORK/pyshim:$PATH" FLEET_COMPOSE=0 FLEET_TRACE=1 bash "$SB/fleet-shell.sh" portal fcs 2>"$WORK/trace")
-  [ "$ms" -lt "$best" ] && best=$ms
-  trace=$(cat "$WORK/trace")
-done
-eq 'U: ⌘N → the stage on the orchestrator'"'"'s window' "$ow" "$(st_ display-message -p -t fcs-stage: '#{window_id}')"
-eq 'U: …with no python3 started' '' "$(cat "$WORK/py.log")"
-CHECKS=$((CHECKS + 1)); [ "$best" -lt 300 ] || fail "U: …under 300 ms (best of 3: ${best} ms)" "$trace"
-has 'U: FLEET_TRACE=1 says each segment' "$trace" 'portal: stage_up +'
-has 'U: …and the select' "$trace" 'portal: select +'
-# not on the stage (another orchestrator): python's road, as before
-printf 'U/orch2%sm4%sonline%sdone%s%s\n' "$US" "$US" "$US" "$US" "$US" > "$FLEET_STATUS_G/orch_fcs"
-: > "$WORK/py.log"
-env PATH="$WORK/pyshim:$PATH" FLEET_COMPOSE=0 bash "$SB/fleet-shell.sh" portal fcs >/dev/null 2>&1
-has 'U: no such window → fleet-compose.py --orch' "$(cat "$WORK/py.log")" 'fleet-compose.py --orch fcs --boot'
-rm -f "$FLEET_STATUS_G/orch_fcs"
-# the tap: never waited on (Popen), or the list holds its own jump
-op=$(awk '/^def open_portal/,/^ORCH_SPIN/' "$SB/fleet-sidebar.py")
-has 'U: the 「新任务」 tap starts portal in the background' "$op" 'subprocess.Popen(["bash", str(BIN / "fleet-shell.sh"), "portal"'
+# U. the tap: never waited on (Popen), or the list holds its own jump
+op=$(awk '/^def open_portal/,/^PLACING_SPIN/' "$SB/fleet-sidebar.py")
+has 'U: the writing area'"'"'s tap starts portal in the background' "$op" 'subprocess.Popen(["bash", str(BIN / "fleet-shell.sh"), "portal"'
 hasnt 'U: …never run() (waited on)' "$op" 'run(["bash"'
+sh_ set-environment -g FLEET_COMPOSE 1
 sh_ set-environment -g FLEET_COMPOSE 1
 
 # Q. (pure) the machine and the agent (issue #2232): a sandbox bin/ whose

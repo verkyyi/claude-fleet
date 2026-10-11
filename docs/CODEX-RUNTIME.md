@@ -143,7 +143,7 @@ to a native bucket. `normalModelSlug` describes alias presentation and is not
 proof that a bucket meters all uses of that normal model.
 
 `FLEET_CODEX_QUOTA_FLOOR` defaults to 5 percent remaining.
-`FLEET_CODEX_QUOTA_GATE=1` holds fresh launches/autofill when every configured
+`FLEET_CODEX_QUOTA_GATE=1` holds fresh launches when every configured
 account is below that floor; without the gate, a fully depleted pool still lets
 an operator launch. This gate is independent of Claude's ccquota gate. Warm
 claims use the same selected home. Quotas are included-usage headroom; Fleet

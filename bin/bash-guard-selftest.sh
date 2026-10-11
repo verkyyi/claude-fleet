@@ -498,7 +498,7 @@ logged "nothing above is logged" 0 'script='
 # session that HAS the service (FLEET_MCP_SERVER=1).
 : > "$DLOG"
 DIRECT_ENV=FLEET_MCP_SERVER=1 direct 0 "mcp: fleet_spawn, log mode"  "$(mcp_json mcp__fleet__fleet_spawn)"
-logged "mcp: logged against its new tool" 1 $'\tlogged\tissue=1812\tscript=mcp__fleet__fleet_spawn\ttool=mcp__fleet__spawn'
+logged "mcp: logged against its new tool" 1 $'\tlogged\tissue=1812\tscript=mcp__fleet__fleet_spawn\ttool=mcp__fleet-orch__spawn'
 DIRECT_ENV=FLEET_MCP_SERVER=1 direct 2 "mcp: fleet_await, block mode" "$(mcp_json mcp__fleet__fleet_await)" block
 DIRECT_ENV=FLEET_MCP_SERVER=1 direct 2 "mcp: fleet_status, block mode" "$(mcp_json mcp__fleet__fleet_status)" block
 DIRECT_ENV=FLEET_MCP_SERVER=1 STUB_SEAT='' direct 0 "mcp: operator seat passes" "$(mcp_json mcp__fleet__fleet_spawn)" block

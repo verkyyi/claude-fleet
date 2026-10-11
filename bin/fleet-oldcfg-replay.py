@@ -608,6 +608,20 @@ class Replay:
                 return sorted(t.get("name", "") for t in msg.get("result", {}).get("tools", [])), ""
         return None, "no tools/list answer (exit %s): %s" % (rc, self.head(err) or self.head(out) or "nothing printed")
 
+    def mcp_handlers(self):
+        """The tool names the NEW tree's fleet-mcp.py still answers (`--probe`), or an
+        empty set when it cannot say — then a dropped tool stays a finding."""
+        script = os.path.join(self.new, "bin", "fleet-mcp.py")
+        if not os.path.isfile(script):
+            return set()
+        try:
+            r = subprocess.run([sys.executable, script, "--probe"], stdin=subprocess.DEVNULL, capture_output=True,
+                               text=True, timeout=MCP_LIST_TIMEOUT_S, cwd=self.sb.work, env=self.sb.env_for(False))
+            tools = json.loads(r.stdout).get("tools") if r.returncode == 0 else None
+        except (OSError, ValueError, AttributeError, subprocess.TimeoutExpired):
+            return set()
+        return set(t for t in tools if isinstance(t, str)) if isinstance(tools, list) else set()
+
     def mcp(self):
         text = read_text(self.old, MCP_CONF)
         if text is None:
@@ -638,14 +652,23 @@ class Replay:
                 self.item("mcp", "ERROR", name, "the NEW server does not answer tools/list: %s" % why)
                 continue
             gone = [t for t in old_tools if t not in new_tools]
+            # Unlisted but still ANSWERED (issue #3113: the dispatch group moved to its own
+            # server, `fleet` keeps its handlers one version) — the new script's --probe
+            # names every handler it serves; an old session calling it gets an answer.
+            kept = self.mcp_handlers() if gone else set()
             for t in gone:
+                if t in kept:
+                    self.item("mcp", "ok", "%s.%s" % (name, t), "no longer listed, still answered — the new "
+                              "fleet-mcp.py keeps its handler (--probe), so an old session's call is served")
+                    continue
                 self.item("mcp", "MISSING", "%s.%s" % (name, t), "the new server does not list it — a Codex session "
                           "keeps the old list and calls it (#2068 rule 4: keep the name, forward it or refuse with "
                           "what to do)")
             added = [t for t in new_tools if t not in old_tools]
-            if not gone:
-                self.item("mcp", "ok", name, "%d tool(s) of the old server still listed by the new%s"
-                          % (len(old_tools), (" (+ new: %s)" % ", ".join(added)) if added else ""))
+            if not [t for t in gone if t not in kept]:
+                self.item("mcp", "ok", name, "%d tool(s) of the old server still listed by the new%s%s"
+                          % (len(old_tools) - len(gone), (" (+ new: %s)" % ", ".join(added)) if added else "",
+                             (" (%d unlisted, still answered)" % len(gone)) if gone else ""))
 
     def run(self):
         self.hooks()

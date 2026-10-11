@@ -623,6 +623,19 @@ class E_Status(Sandbox):
         r = self.run_sup("status", "--check")
         self.assertEqual(r.returncode, 1)
         self.assertIn("DOWN", r.stdout)
+        # issue #3100: launchd restarted it, the new one never wrote a heartbeat —
+        # alive and silent is WEDGED, not DOWN (another root's daemon is not ours)
+        ps = os.path.join(self.d, "ps.txt")
+        with open(ps, "w") as f:
+            f.write("4242 1 /usr/bin/python3 -I /elsewhere/current/bin/fleet-node-supervisor.py run\n")
+        seam = {"FLEET_NODE_PS_CMD": ps, "FLEET_NODE_HEARTBEAT_STALE": "0"}
+        self.assertEqual(self.run_sup("status", "--check", env=seam).returncode, 1)
+        with open(ps, "a") as f:
+            f.write("4343 1 /usr/bin/python3 -I %s/bin/fleet-node-supervisor.py run\n" % self.env["FLEET_NODE_RUNTIME"])
+            f.write("4444 4343 /usr/bin/python3 -I %s/bin/fleet-node-supervisor.py run\n" % self.env["FLEET_NODE_RUNTIME"])
+        r = self.run_sup("status", "--check", env=seam)
+        self.assertEqual(r.returncode, 5, r.stdout)
+        self.assertIn("WEDGED — pid 4343 alive but it never wrote a heartbeat", r.stdout)
 
 
 class F_Trust(Sandbox):
@@ -778,7 +791,10 @@ class H_Accounts(Sandbox):
         tmpl = set(os.path.basename(x)[len("com.claude-fleet."):-len(".plist.tmpl")]
                    for x in g.glob(os.path.join(os.path.dirname(BIN), "launchd", "*.plist.tmpl")))
         self.assertEqual(set(units), tmpl - {"memguard"}, "every template but the machine's is an account unit")
-        for need in ("dispatch", "issue-bridge", "pr-refresh", "ledger-watch", "quotawatch", "sleep", "cleanup",
+        # the autofill dispatcher's template is gone (issue #3120): no account
+        # runs it, and nothing keeps a unit the runtime no longer carries
+        self.assertNotIn("dispatch", units)
+        for need in ("issue-bridge", "pr-refresh", "ledger-watch", "quotawatch", "sleep", "cleanup",
                      "worktree-autoclean", "spinner", "webhook", "collect", "install-sync", "base-sync"):
             self.assertIn(need, units)
         self.assertTrue(units["spinner"].get("keepalive") and units["webhook"].get("keepalive"))
@@ -787,12 +803,12 @@ class H_Accounts(Sandbox):
         self.assertEqual(units["worktree-autoclean"]["every"], 3600)
         self.assertEqual(units["spinner"]["env"].get("SPIN_INTERVAL"), "0.12")
         self.assertEqual(units["diskguard"]["env"]["FLEET_ORPHAN_CPU_PCT"], "0", "orphans would run twice")
-        e = fns.account_entry(units["dispatch"], "alice", (501, 20, "/Users/alice"), "/opt/homebrew")
-        self.assertEqual(e["script"], "/Users/alice/.claude/fleet/bin/fleet-dispatch.sh")
+        e = fns.account_entry(units["base-sync"], "alice", (501, 20, "/Users/alice"), "/opt/homebrew")
+        self.assertEqual(e["script"], "/Users/alice/.claude/fleet/bin/fleet-base-sync.sh")
         self.assertTrue(e["env"]["PATH"].startswith("/Users/alice/.local/bin:/opt/homebrew/bin"))
         self.assertEqual(e["env"]["FLEET_CONF_DIR"], "/Users/alice/.config/claude-fleet")
         self.assertEqual(e["cmd"][4], "/dev/null")
-        self.assertEqual(e["cmd"][5], "/Users/alice/.claude/fleet/logs/dispatch.launchd.log")
+        self.assertEqual(e["cmd"][5], "/Users/alice/.claude/fleet/logs/base-sync.launchd.log")
         self.assertNotIn("__HOME__", json.dumps(e))
 
     def test_runs_as_account_and_isolated(self):
@@ -1239,6 +1255,33 @@ class H_Accounts(Sandbox):
         pid2 = until(10, lambda: (self.child("node-agent").get("pid") or pid) != pid and self.child("node-agent")["pid"])
         self.assertTrue(pid2, "logins/ changed and the node agent kept its old tenants")
         self.assertTrue(until(3, lambda: not fns.pid_alive(pid)), "the old node agent is still running")
+
+    def test_node_agent_adopted_still_reloads_on_a_new_login(self):
+        # #3136: the supervisor restarted (an update) and adopted the live node
+        # agent; a live adopted child skipped the reload check, so the login
+        # opened that same second never got its node — until the agent exited.
+        lg = os.path.join(self.d, "db", "logins")
+        os.makedirs(lg)
+        with open(os.path.join(lg, "verky.env"), "w") as f:
+            f.write("CCQUOTA_TOKEN=x\n")
+        # a plain argv: adopt matches the live process's command line to the one recorded
+        self.table(children=[{"name": "node-agent", "cmd": ["/bin/sleep", "300"],
+                              "requires": [os.path.join(lg, "*.env")], "reload": os.path.join(lg, "*.env")}])
+        p = self.start()
+        pid = until(10, lambda: self.child("node-agent").get("pid"))
+        self.assertTrue(pid)
+        p.kill()
+        p.wait()
+        self.assertTrue(fns.pid_alive(pid), "the node agent died with the supervisor")
+        self.start()
+        self.assertTrue(until(10, lambda: (self.state().get("supervisor") or {}).get("starts") == 2))
+        time.sleep(0.5)
+        self.assertEqual(self.child("node-agent")["pid"], pid, "the live node agent was not adopted")
+        with open(os.path.join(lg, "drill.env"), "w") as f:
+            f.write("CCQUOTA_TOKEN=y\n")
+        pid2 = until(10, lambda: (self.child("node-agent").get("pid") or pid) != pid and self.child("node-agent")["pid"])
+        self.assertTrue(pid2, "an adopted node agent kept its old tenants after a new login")
+        self.assertTrue(until(3, lambda: not fns.pid_alive(pid)), "the adopted node agent is still running")
 
     def test_node_agent_reload_waits_for_an_account_op(self):
         # #2918: opening a login writes its logins/<login>.env half way through
@@ -2207,6 +2250,54 @@ class R_Entry(Sandbox):
             self.assertIn(line + "\n", cfg)
         self.assertNotIn(".ssh", "".join(l for l in cfg.splitlines(True) if not l.startswith("#")))
         self.assertNotIn("PerSourcePenalties", cfg, "the system default, never weakened here")
+
+    def test_dispatch_once_the_runtime_carries_it(self):
+        # issue #3071 (C5): the ForceCommand is the runtime's fleet-entry.sh, only
+        # once the runtime has it — before that the config is #3070's, byte for byte
+        old = dict(os.environ)
+        try:
+            rt = os.path.join(self.d, "rt")
+            os.makedirs(os.path.join(rt, "bin"))
+            os.environ.update(FLEET_NODE_RUNTIME=rt, FLEET_NODE_STATE=os.path.join(self.d, "db"))
+            os.environ.pop("FLEET_NODE_TEST", None)
+            paths = fns.Paths()
+            ep = fns.EntryPaths(paths)
+            bare = fns.entry_config(ep, 22022, ["alice"], paths)
+            self.assertNotIn("ForceCommand", bare)
+            self.assertNotIn("SetEnv", bare)
+            self.assertIn("Subsystem sftp internal-sftp\n", bare)
+            self.assertEqual(bare, fns.entry_config(ep, 22022, ["alice"]))
+            open(os.path.join(rt, "bin", "fleet-entry.sh"), "w").close()
+            os.environ["FLEET_ENTRY_TEST_SETENV"] = "FLEET_ENTRY_VIEW=/x"   # not a test run: ignored
+            cfg = fns.entry_config(ep, 22022, ["alice"], paths)
+            self.assertIn("ForceCommand /bin/bash %s\n" % os.path.join(rt, "bin", "fleet-entry.sh"), cfg)
+            self.assertIn("SetEnv FLEET_ENTRY_BOOK=%s\n" % ep.book, cfg)
+            self.assertEqual(len([l for l in cfg.splitlines() if l.startswith("SetEnv")]), 1)
+            sftp = [l for l in cfg.splitlines() if l.startswith("Subsystem sftp ")][0]
+            if any(os.access(x, os.X_OK) for x in fns.ENTRY_SFTP_SERVERS):
+                self.assertTrue(sftp.endswith("/sftp-server"), sftp)
+            self.assertNotIn("DisableForwarding", cfg)
+        finally:
+            os.environ.clear()
+            os.environ.update(old)
+
+    def test_audit_lines(self):
+        # issue #3071 (共同约定 11): what the listener logged, one line each, no key text
+        book = {"logins": {"alice": {"person": "gh:1"}}}
+        text = ("Connection from 1.2.3.4 port 5 on 0.0.0.0 port 22022\n"
+                "Accepted publickey for alice from 1.2.3.4 port 5 ssh2: ED25519 SHA256:abc\n"
+                "Failed publickey for alice from 6.6.6.6 port 7 ssh2: ED25519 SHA256:bad\n"
+                "Invalid user mallory from 6.6.6.6 port 8\n"
+                "User bob from 6.6.6.6 not allowed because not listed in AllowUsers\n")
+        out = fns.entry_audit_lines(text, book, "mini2", 100, 0)
+        self.assertEqual([(d["login"], d["source_ip"], d["fp"], d["result"]) for d in out], [
+            ("alice", "1.2.3.4", "SHA256:abc", "ok"), ("alice", "6.6.6.6", "SHA256:bad", "denied: key"),
+            ("mallory", "6.6.6.6", "", "denied: no such login"), ("bob", "6.6.6.6", "", "denied: not on the entry")])
+        self.assertEqual(out[0]["person"], "gh:1")
+        self.assertEqual(out[0]["machine"], "mini2")
+        ids = [d["id"] for d in out]
+        self.assertEqual(len(set(ids)), 4, "each line its own id (its byte offset)")
+        self.assertEqual(ids[0], str(100 + len(text.splitlines(True)[0])))
 
 
 if __name__ == "__main__":

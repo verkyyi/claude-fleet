@@ -538,6 +538,47 @@ class C_DaemonAndCommit(Sandbox):
         self.assertEqual(len(tools), 2, tools)   # V2's and V3's, not V1's
 
 
+class R_Prune(Sandbox):
+    """issue #3100: the root keeps current, .prev and what is in use — every
+    tick, after an hour, never a week (mini2 held 56 releases, 18 GB)."""
+
+    def test_prune_rule(self):
+        V4, V5 = "4" * 40, "5" * 40
+        for sha in (V1, V2, V3):
+            self.install(sha)
+        # a dir the record never named (an older updater, a skipped stage) and one
+        # a running session still names by path
+        for sha in (V4, V5):
+            os.makedirs(os.path.join(self.root, sha, "bin"))
+        ps = os.path.join(self.d, "ps.txt")
+        with open(ps, "w") as f:
+            f.write("/bin/bash %s/%s/bin/fleet-session-wrap.sh\n" % (self.root, V5))
+        # default grace: V1 (retired by the V3 switch) and V4 start their clock, nothing goes
+        st = self.tick(V3, FLEET_NODE_PS_CMD=ps)
+        self.assertIn(V4, st["retired"])
+        for sha in (V1, V2, V3, V4, V5):
+            self.assertTrue(os.path.isdir(os.path.join(self.root, sha)), sha[:4])
+        # past the grace: V1 and V4 go; current (V3), .prev (V2) and V5 (in use) stay
+        st = self.tick(V3, FLEET_NODE_PS_CMD=ps, FLEET_NODE_UPDATE_KEEP_SECS="0")
+        self.assertEqual(st["result"], "current", st)
+        self.assertFalse(os.path.exists(os.path.join(self.root, V1)))
+        self.assertFalse(os.path.exists(os.path.join(self.root, V4)))
+        for sha in (V2, V3, V5):
+            self.assertTrue(os.path.isdir(os.path.join(self.root, sha)), sha[:4])
+        self.assertNotIn(V1, st["retired"])
+        # the session ended: V5 goes too; the daemon's own runtime is never taken
+        self.daemon_on(V2)
+        os.remove(os.path.join(self.root, ".prev"))
+        st = self.tick(V3, FLEET_NODE_UPDATE_KEEP_SECS="0", FLEET_NODE_PS_CMD=os.devnull)
+        self.assertFalse(os.path.exists(os.path.join(self.root, V5)))
+        self.assertTrue(os.path.isdir(os.path.join(self.root, V2)), "the daemon's runtime was pruned")
+        self.assertEqual(sorted(e for e in os.listdir(self.root) if len(e) == 40), [V2, V3])
+        # the doctor counts them
+        r = subprocess.run([sys.executable, UPD, "doctor"], env=dict(self.env, FLEET_NODE_VERSIONS_WARN="1"),
+                           capture_output=True, text=True, timeout=60)
+        self.assertRegex(r.stdout, r"WARN\s+versions\s+2 release\(s\) under .* GB")
+
+
 class D_KilledHalfWay(Sandbox):
     def test_stage_cut_short_is_fetched_again(self):
         self.install(V1)

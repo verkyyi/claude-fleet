@@ -1369,11 +1369,10 @@ func fleetToolSpecs() []toolSpec {
 		{
 			Name:  "config_set",
 			Title: "Set one fleet setting",
-			Description: "Compare-and-set one of FLEET_MAX_SESSIONS (0–256), FLEET_AUTOFILL (0|1), " +
-				"FLEET_AUTOFILL_MAX_PER_TICK (1–16); expected_revision comes from config_get. Needs " +
-				"config:write and that key in the caller's grant." + fleetWriteCaveat,
+			Description: "Compare-and-set FLEET_MAX_SESSIONS (0–256); expected_revision comes from " +
+				"config_get. Needs config:write and that key in the caller's grant." + fleetWriteCaveat,
 			InputSchema: obj(map[string]any{"fleet_id": fleetIDProp,
-				"key":               map[string]any{"type": "string", "enum": []string{"FLEET_MAX_SESSIONS", "FLEET_AUTOFILL", "FLEET_AUTOFILL_MAX_PER_TICK"}},
+				"key":               map[string]any{"type": "string", "enum": []string{"FLEET_MAX_SESSIONS"}},
 				"value":             map[string]any{"type": "integer"},
 				"expected_revision": map[string]any{"type": "string"},
 				"idempotency_key":   idemProp},

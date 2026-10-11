@@ -93,7 +93,6 @@ fleet_daemon_units() {
     'quotawatch 60 tick' \
     'cleanup 60 tick' \
     'sleep 60 tick' \
-    'dispatch 60 tick' \
     'base-sync 60 tick' \
     'install-sync 1800 tick' \
     'diskguard 60 tick' \

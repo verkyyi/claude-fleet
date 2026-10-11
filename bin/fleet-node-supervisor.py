@@ -184,6 +184,7 @@ Seams (sandbox tests, docs/BREAK-IT.md `node-supervisor-dead`):
   FLEET_ENTRY_SSHD (/usr/sbin/sshd)  FLEET_ENTRY_KEYGEN (/usr/bin/ssh-keygen)  FLEET_ENTRY_EVERY (60)
   FLEET_ENTRY_LSOF  FLEET_ENTRY_DSEDITGROUP (/usr/sbin/dseditgroup on macOS; '' = leave
                         com.apple.access_ssh alone)  FLEET_ENTRY_PULL_SECS (10)
+  FLEET_ENTRY_TEST_SETENV  (FLEET_NODE_TEST only) more `K=V …` for the entry's SetEnv
   FLEET_NODE_BREW_PREFIX  __BREW_PREFIX__ in the templates (default /opt/homebrew, or
                         /usr/local when that is where brew is)
 """
@@ -1551,10 +1552,10 @@ class Supervisor(object):
                     cs.update(fails=0, next_start=None)
                     self.dirty = True
                 continue
-            # an adopted pid: we cannot wait() on it, so poll
-            if name in self.adopted:
-                if pid_alive(self.adopted[name]):
-                    continue
+            # an adopted pid: we cannot wait() on it, so poll — a live one still
+            # gets the reload check below (#3136: a supervisor restart adopted the
+            # node agent and no later logins/*.env ever reloaded it)
+            if name in self.adopted and not pid_alive(self.adopted[name]):
                 del self.adopted[name]
                 self.died(name, cs, None, t)
                 continue
@@ -1585,6 +1586,8 @@ class Supervisor(object):
                     self.stop_one(name, why)
                     self.start_child(c, cs, t)
                     continue
+            if name in self.adopted:
+                continue
             p = self.procs.get(name)
             if p is not None:
                 rc = p.poll()
@@ -1627,6 +1630,19 @@ class Supervisor(object):
                         os.killpg(pid, signal.SIGKILL)
                     except OSError:
                         pass
+            else:
+                # an adopted pid is not ours to wait() on: poll it out, so a
+                # reload's start never runs beside the old one (#3136)
+                end = time.time() + 5
+                while pid_alive(pid) and time.time() < end:
+                    time.sleep(0.05)
+                if pid_alive(pid):
+                    for kill in (os.killpg, os.kill):
+                        try:
+                            kill(pid, signal.SIGKILL)
+                            break
+                        except OSError:
+                            pass
         cs = self.state["children"].get(name)
         if cs is not None:
             cs.update(pid=None, status="stopped")
@@ -1988,6 +2004,10 @@ class Supervisor(object):
             self.log("entry: %s" % b["error"])
         self.state["entry_error"] = b.get("error") or ""
         self.dirty = True
+        try:
+            entry_audit(self.p)
+        except Exception as e:  # the record must never take the entry pass down
+            self.log("entry audit: %s" % e)
 
     # -- Full Disk Access (issue #2973)
     def tend_fda(self, t):
@@ -3290,6 +3310,29 @@ def account_forget(paths, login, force=False):
 
 
 # --------------------------------------------------------------- status ---------
+def live_daemons(paths):
+    """Pids of this root's daemon main process (`<root>/…/fleet-node-supervisor.py
+    run`) that launchd started (ppid 1) — one `ps`. FLEET_NODE_PS_CMD is the
+    selftests' seam (a file of `pid ppid command` lines)."""
+    seam = os.environ.get("FLEET_NODE_PS_CMD")
+    try:
+        if seam:
+            with open(seam) as f:
+                out = f.read()
+        else:
+            out = subprocess.check_output(["ps", "-axww", "-o", "pid=,ppid=,command="],
+                                          stderr=subprocess.DEVNULL, universal_newlines=True)
+    except Exception:
+        return []
+    pids, root = [], os.path.dirname(paths.runtime.rstrip("/")) + "/"
+    for line in out.splitlines():
+        f = line.split(None, 2)
+        if len(f) == 3 and f[0].isdigit() and f[1] == "1" and root in f[2] \
+                and re.search(r"fleet-node-supervisor\.py run(\s|$)", f[2]):
+            pids.append(int(f[0]))
+    return pids
+
+
 def installed(paths):
     return os.path.exists(paths.plist) or os.path.exists(paths.state_file)
 
@@ -3304,6 +3347,16 @@ def health(paths, state):
     stale = env_num("FLEET_NODE_HEARTBEAT_STALE", 120)
     hb = sv.get("heartbeat") or 0
     if not pid_alive(sv.get("pid")):
+        # a daemon launchd restarted that never wrote state.json is not DOWN: it
+        # is alive and silent (issue #3100 — mini2 read «DOWN» 78 min while
+        # pid 28277 ran no task)
+        live = [q for q in live_daemons(paths) if q != os.getpid()]
+        if live and now() - hb > env_num("FLEET_NODE_HEARTBEAT_STALE", 120):
+            return 5, ("WEDGED — pid %s alive but it never wrote a heartbeat (the last, pid %s's, %s ago): "
+                       "no task, sweep or check runs (now: sudo launchctl kickstart -k system/%s; "
+                       "its stack: sudo kill -USR1 %s, then %s)"
+                       % (live[0], sv.get("pid") or "-", ago(hb), LABEL, live[0],
+                          os.path.join(paths.log, "supervisor.log")))
         return 1, "DOWN (pid %s gone, heartbeat %s ago)" % (sv.get("pid") or "-", ago(hb))
     if now() - hb > stale:
         return 5, ("WEDGED — pid %s alive but its main loop stopped %s ago: no task, sweep or check runs "
@@ -3560,8 +3613,32 @@ def entry_eligible(paths, logins):
     return out
 
 
-def entry_config(ep, port, allow):
-    """共同约定 2, line for line."""
+ENTRY_SFTP_SERVERS = ("/usr/libexec/sftp-server", "/usr/lib/openssh/sftp-server",
+                      "/usr/libexec/openssh/sftp-server", "/usr/lib/ssh/sftp-server")
+
+
+def entry_dispatch(paths):
+    """The ForceCommand (issue #3071, 共同约定 4): the runtime's bin/fleet-entry.sh
+    through the `current` link, so a release switch moves it — only once the
+    runtime carries it (before that: a plain login, as #3070 shipped)."""
+    script = os.path.join(paths.runtime, "bin", "fleet-entry.sh")
+    return script if os.path.isfile(script) else None
+
+
+def entry_config(ep, port, allow, paths=None):
+    """共同约定 2, line for line — and 4: the ForceCommand that dispatches (a
+    command runs as on port 22; none on a terminal is the 看台)."""
+    import shlex
+    disp = entry_dispatch(paths) if paths is not None else None
+    sftp = next((s for s in ENTRY_SFTP_SERVERS if os.access(s, os.X_OK)), None)
+    extra = []
+    if disp:
+        # the book (0644) names each key the hub registered — the 看台's device; the
+        # drill's seam (FLEET_NODE_TEST only) adds its 看台 stand-in and conf dir.
+        # ONE SetEnv line: sshd keeps only the first.
+        more = env("FLEET_ENTRY_TEST_SETENV", "") if env("FLEET_NODE_TEST", "") == "1" else ""
+        extra += ["ForceCommand /bin/bash %s" % shlex.quote(disp),
+                  "SetEnv FLEET_ENTRY_BOOK=%s%s" % (ep.book, (" " + more) if more else "")]
     return "".join(l + "\n" for l in [
         "# claude-fleet entry port (issue #3070) — written by fleet-node-supervisor.py; every",
         "# change passes `sshd -t` first. The system's sshd and ~/.ssh/authorized_keys are not read.",
@@ -3587,8 +3664,10 @@ def entry_config(ep, port, allow):
         "LoginGraceTime 20",
         "MaxStartups 10:30:60",
         "LogLevel VERBOSE",
-        "Subsystem sftp internal-sftp",
-    ])
+        # under a ForceCommand sftp arrives as SSH_ORIGINAL_COMMAND: a real server
+        # the login's shell can run (internal-sftp is sshd's own — fleet-entry.sh finds one)
+        "Subsystem sftp %s" % (sftp if disp and sftp else "internal-sftp"),
+    ] + extra)
 
 
 def _entry_sshd_check(text, ep):
@@ -3851,7 +3930,7 @@ def _entry_converge(paths, ep, port, lst, force):
         ent = lst["logins"][login] if isinstance(lst["logins"][login], dict) else {}
         if verdict.get(login):
             continue
-        lines, fps = [], []
+        lines, fps, names = [], [], {}
         for k in ent.get("keys") or []:
             line = entry_key_line(k)
             if line is None:
@@ -3860,10 +3939,16 @@ def _entry_converge(paths, ep, port, lst, force):
             if line not in lines:
                 lines.append(line)
                 fps.append(str(k.get("fp")))
+                # the person's label for it (the 看台's device, #3071) — never a key's text
+                nm = re.sub(r"[\x00-\x1f\x7f]", "", str(k.get("name") or ""))[:64].strip()
+                if nm:
+                    names[str(k.get("fp"))] = nm
         if not lines:
             continue
         want[login] = "".join(lines)
         logins_book[login] = {"person": str(ent.get("person") or ""), "fps": fps, "keys": len(lines)}
+        if names:
+            logins_book[login]["names"] = names
     # the keys files: exactly <want>, each root 0644; what was there and is not
     # wanted any more is a removed key — its connections are cut below
     removed, healed = set(), []
@@ -3909,7 +3994,7 @@ def _entry_converge(paths, ep, port, lst, force):
             except OSError:
                 pass
     else:
-        text = entry_config(ep, port, allow)
+        text = entry_config(ep, port, allow, paths)
         if _entry_read(ep.cfg) != text:
             ok, why, missing = _entry_sshd_check(text, ep)
             book["missing"] = missing
@@ -3974,6 +4059,133 @@ def entry_pull(paths, version=None):
     print("entry v%s · %d login(s) on the port%s" % (b.get("version"), len(b.get("allow") or []),
                                                      " · " + b["error"] if b.get("error") else ""))
     return 0 if not b.get("error") else 1
+
+
+# The door's record (issue #3071, 共同约定 11): every arrival the listener logs
+# (LogLevel VERBOSE: accepted, a key refused, a login not on it) is ONE line of
+# <log>/entry.ndjson — time · person · login · key fp · machine · source IP ·
+# result, never a key's text — read off its own child log, entry.log, so nothing a
+# login runs can write or skip it. Each line also queues for the hub
+# (POST /v1/node/entry-audit, its own id, so a resend is harmless) in
+# <state>/entry/audit-pending.ndjson; the hub away, they wait for the next pass.
+ENTRY_AUDIT_PATS = (
+    (re.compile(r"Accepted publickey for (\S+) from (\S+) port \d+ ssh2: \S+ (SHA256:\S+)"), "ok"),
+    (re.compile(r"Failed publickey for (?:invalid user )?(\S+) from (\S+) port \d+ ssh2: \S+ (SHA256:\S+)"),
+     "denied: key"),
+    (re.compile(r"Invalid user (\S*) from (\S+) port \d+"), "denied: no such login"),
+    (re.compile(r"User (\S+) from (\S+) not allowed because"), "denied: not on the entry"),
+)
+ENTRY_AUDIT_KEEP = 5000
+
+
+def entry_audit_lines(text, book, host, base, at):
+    """[(id, line dict)] of <text> (the log from byte <base> on)."""
+    out, off = [], base
+    logins = (book or {}).get("logins") or {}
+    for raw in text.splitlines(True):
+        here, off = off, off + len(raw.encode("utf-8", "replace"))
+        for pat, result in ENTRY_AUDIT_PATS:
+            m = pat.search(raw)
+            if not m:
+                continue
+            login, ip = m.group(1), m.group(2)
+            fp = m.group(3) if pat.groups >= 3 else ""
+            out.append({"id": "%d" % here, "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(at)),
+                        "kind": "enter", "person": str((logins.get(login) or {}).get("person") or ""),
+                        "login": login[:64], "fp": fp[:120], "machine": host, "source_ip": ip[:64],
+                        "result": result})
+            break
+    return out
+
+
+def entry_audit(paths):
+    """One pass over what the listener logged since the last: <log>/entry.ndjson
+    and the hub's queue. Returns how many lines were new."""
+    ep = EntryPaths(paths)
+    mark = os.path.join(ep.dir, "audit.json")
+    pend = os.path.join(ep.dir, "audit-pending.ndjson")
+    st = read_json(mark, {}) or {}
+    logf = os.path.join(paths.log, "entry.log")
+    try:
+        cur = os.stat(logf)
+    except OSError:
+        return 0
+    chunks = []
+    if st.get("ino") and st["ino"] != cur.st_ino:
+        # rotated: the rest of the old file first, when it is still entry.log.1
+        try:
+            old = os.stat(logf + ".1")
+            if old.st_ino == st["ino"]:
+                chunks.append((logf + ".1", int(st.get("off") or 0), old.st_ino))
+        except OSError:
+            pass
+        chunks.append((logf, 0, cur.st_ino))
+    else:
+        off = int(st.get("off") or 0)
+        chunks.append((logf, off if off <= cur.st_size else 0, cur.st_ino))
+    book = read_json(ep.book, {}) or {}
+    host = os.uname()[1].split(".")[0]
+    new = []
+    for f, off, ino in chunks:
+        try:
+            with open(f, "rb") as fh:
+                fh.seek(off)
+                data = fh.read(4 << 20)
+        except (IOError, OSError):
+            continue
+        # a half-written last line waits for the next pass
+        cut = data.rfind(b"\n") + 1
+        for d in entry_audit_lines(data[:cut].decode("utf-8", "replace"), book, host, off, now()):
+            d["id"] = "%d-%s" % (ino, d["id"])
+            new.append(d)
+        st = {"ino": ino, "off": off + cut}
+    write_json(mark, st, 0o600)
+    if new:
+        body = "".join(json.dumps(d, sort_keys=True, ensure_ascii=False) + "\n" for d in new)
+        for f, mode in ((os.path.join(paths.log, "entry.ndjson"), 0o644), (pend, 0o600)):
+            try:
+                fd = os.open(f, os.O_WRONLY | os.O_CREAT | os.O_APPEND, mode)
+                with os.fdopen(fd, "a") as fh:
+                    fh.write(body)
+            except OSError:
+                pass
+    entry_audit_send(paths, pend)
+    return len(new)
+
+
+def entry_audit_send(paths, pend):
+    """The queue to the hub, ≤ 500 lines a request (the hub's bound); what it
+    took leaves the queue, the rest waits. No hub / no token ⇒ it just waits
+    (at most ENTRY_AUDIT_KEEP lines, the oldest go first)."""
+    lines = [l for l in ((_entry_read(pend) or "").splitlines()) if l.strip()]
+    if not lines:
+        return
+    if len(lines) > ENTRY_AUDIT_KEEP:
+        lines = lines[-ENTRY_AUDIT_KEEP:]
+    _on, _port, me = entry_settings(paths)
+    hub, token = (me.get("CCQUOTA_HUB_URL") or "").rstrip("/"), me.get("CCQUOTA_TOKEN") or ""
+    sent = 0
+    if hub and token:
+        from urllib.request import Request, urlopen
+        while sent < len(lines):
+            batch = []
+            for l in lines[sent:sent + 500]:
+                try:
+                    d = json.loads(l)
+                except ValueError:
+                    continue
+                d.pop("machine", None)        # the hub names the machine itself
+                batch.append(d)
+            try:
+                req = Request(hub + "/v1/node/entry-audit", data=json.dumps({"lines": batch}).encode(),
+                              headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"})
+                with urlopen(req, timeout=env_num("FLEET_ENTRY_PULL_SECS", 10)) as r:
+                    r.read()
+            except Exception:  # urllib raises many kinds; the queue simply waits
+                break
+            sent += min(500, len(lines) - sent)
+    rest = lines[sent:]
+    _entry_put(pend, "".join(l + "\n" for l in rest), 0o600)
 
 
 def entry_on_for_reader(paths, book):

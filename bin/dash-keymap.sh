@@ -113,9 +113,11 @@ preview ctrl-p alt-p' ;;
 # + 0x200000 for an arrow), private code, prefix key. A tmux prefix never
 # collides with a ⌘ chord, so nothing here remaps; `list` prints the table as is.
 # bin/fleet-keys-selftest.sh holds it in lockstep with the conf, the sheet and
-# the profile. `new` (issue #1953, EPIC #1949 C4): ⌘N opens the writing area on
-# the right (bin/fleet-compose.py, the stage's `@fleet_role portal` window) —
-# prefix c elsewhere, tmux's own new-window key, which the client has no use for.
+# the profile. `new` (issue #1953 → #3119): ⌘N opens a NEW session — a no-repo
+# one on the home machine, its input the keyboard's (fleet-shell.sh portal; a
+# 看台's fleet_view.go_new); with FLEET_COMPOSE=1 the writing area on the right
+# (bin/fleet-compose.py) — prefix c elsewhere, tmux's own new-window key, which
+# the client has no use for.
 # `fold` (issue #2167): ⌘. opens or shuts the sub-tasks of the session in view
 # (on a sub-task: shuts its parent) — the list's caret, from wherever the
 # keyboard is; prefix . elsewhere (tmux's move-window prompt, no use here).

@@ -110,7 +110,6 @@ curl -fsSL <入口>/install | sh
 |---|---|---|---|---|---|
 | **`CCQUOTA_FLEET`** 联机总开关 | — | 默认值（`export CCQUOTA_FLEET=1`；ccquota 节点程序也读这一个） | **这个 fleet 的值，赢过登录的**（#1539） | — | — |
 | **`FLEET_SPAWN_NODE`** 新会话开在哪台机器 | — | 默认值 | **这个 fleet 的值，赢过登录的**（#1539，以前只能全局设） | — | `--node <m>`（`dash-issue-session.sh` / `dash-raw-session.sh`，#1541：两种会话同义） |
-| `FLEET_AUTOFILL_NODE` 自动补位开在哪台 | — | — | 有 | — | — |
 | `FLEET_SIDEBAR_SOURCE` 列表从哪来 | — | — | `local` / `hub` | — | — |
 | `FLEET_NODE_ALIASES` 机器标签 | 每台一份 | 有（全局） | — | — | — |
 | `FLEET_ACCOUNTS` 订阅账号 | — | 有（全局） | — | — | — |

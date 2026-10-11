@@ -15,6 +15,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/sshca"
 )
 
@@ -375,4 +376,97 @@ func TestFleetWriteOrchEnsure(t *testing.T) {
 	}
 	postFleet(t, h, "orch_ensure", map[string]any{"session": "x", "idempotency_key": "bad"}, 400)
 	postFleet(t, h, "orch_ensure", map[string]any{}, 400)
+}
+
+// A node acts for its owner by its OWN token (claude-fleet#3106): the steward
+// on m5 reaps alice's finished worker on m4 with no connection certificate —
+// m5's login and m4's are both alice's — and the same request against bob's
+// worker is NOT_FOUND, never sent. A node token writes the worker tools only;
+// a login that belongs to no person is refused; the hub audit names the machine.
+func TestFleetWriteByNodeToken(t *testing.T) {
+	h := newFleetHarness(t)
+	t5, t4a, t4b := h.enroll(t, "m5-alice"), h.enroll(t, "m4-alice"), h.enroll(t, "m4-bob")
+	for label, hu := range map[string][2]string{"m5-alice": {"m5", "alice"}, "m4-alice": {"m4", "alice"}, "m4-bob": {"m4", "bob"}} {
+		ident := model.Identity{AccountUUID: "acct-" + label, Hostname: hu[0], OSUser: hu[1]}
+		if err := h.srv.Store.UpsertAccount(ident, "max", ""); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := h.srv.Store.TouchEndpoint("ep_"+label, ident, "test", true, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m5 := connectWriteNodeTok(t, h, t5)
+	m4a := connectWriteNodeTok(t, h, t4a)
+	m4b := connectWriteNodeTok(t, h, t4b)
+	f5 := fakeFleet(t, machineA, "alice-fleet", writeRepo, "/u/alice/claude-fleet", 1)
+	f4a := fakeFleet(t, machineC, "alice-fleet", writeRepo, "/u/alice/claude-fleet", 3)
+	f4b := fakeFleet(t, machineB, "bob-fleet", writeRepo, "/u/bob/claude-fleet", 7)
+	m5.beatLoad("m5", "alice", machineA, 1, 1, f5)
+	m4a.beatLoad("m4", "alice", machineC, 1, 1, f4a)
+	m4b.beatLoad("m4", "bob", machineB, 1, 1, f4b)
+	waitFor(t, 3*time.Second, "three fleets registered", func() bool {
+		return len(getFleet(t, h, "/v1/fleet/fleet_list", 200)["fleets"].([]any)) == 3
+	})
+	now := time.Now()
+	p, _ := h.srv.Store.AdoptPrincipal("wx-alice", "alice", "Alice", now)
+	h.srv.Store.AdoptAccount(p, "m5", now)
+	h.srv.Store.AdoptAccount(p, "m4", now)
+
+	post := func(tool, args, tok string) (int, map[string]any) {
+		b, _ := json.Marshal(WriteRequest{Tool: tool, ArgsJSON: args})
+		req, _ := http.NewRequest(http.MethodPost, h.http.URL+control.WritePath, bytes.NewReader(b))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+tok)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var out map[string]any
+		_ = json.NewDecoder(resp.Body).Decode(&out)
+		return resp.StatusCode, out
+	}
+	mine := `{"worker_id":"` + f4a.FleetID + `/issue-3","idempotency_key":"n1"}`
+	bobs := `{"worker_id":"` + f4b.FleetID + `/issue-7","idempotency_key":"n2"}`
+
+	code, out := post("worker_reap", mine, t5)
+	if code != 200 || out["status"] != "accepted" {
+		t.Fatalf("m5's node token reaps alice's worker on m4: HTTP %d %v", code, out)
+	}
+	waitFor(t, 2*time.Second, "m4 (alice) took the reap", func() bool { return m4a.count() == 1 })
+	if m4a.writes[0]["actor"] != "wx-alice" || m4a.writes[0]["action"] != "worker_reap" {
+		t.Fatalf("m4 was sent %v; want worker_reap journalled as alice", m4a.writes[0])
+	}
+	get := `{"operation_id":"` + out["operation_id"].(string) + `"}`
+	if code, got := post("operation_get", get, t5); code != 200 || got["operation_id"] != out["operation_id"] {
+		t.Fatalf("operation_get by node token: HTTP %d %v", code, got)
+	}
+	if code, got := post("worker_reap", bobs, t5); code != 404 {
+		t.Fatalf("alice's node reaps bob's worker: HTTP %d %v; want 404", code, got)
+	}
+	for _, tool := range []string{"worker_start", "config_set", "gh_comment", "service_control", "orch_ensure"} {
+		if code, got := post(tool, `{"idempotency_key":"x"}`, t5); code != 403 {
+			t.Fatalf("%s by node token: HTTP %d %v; want 403", tool, code, got)
+		}
+	}
+	// bob's login belongs to no person: no owner to act for.
+	if code, got := post("worker_reap", bobs, t4b); code != 401 {
+		t.Fatalf("a login no person holds: HTTP %d %v; want 401", code, got)
+	}
+	if code, got := post("worker_reap", bobs, "not-a-node-token"); code != 401 {
+		t.Fatalf("garbage bearer: HTTP %d %v; want 401", code, got)
+	}
+	if m4b.count() != 0 || m5.count() != 0 {
+		t.Fatalf("a refused node write reached a node (m4 bob=%d m5=%d)", m4b.count(), m5.count())
+	}
+	log, _ := h.srv.Store.HubAuditLog(20)
+	var saw []string
+	for _, e := range log {
+		if e.Action == "fleet.node_write" {
+			saw = append(saw, e.Actor+" "+e.Target+" "+e.Outcome)
+		}
+	}
+	if len(saw) != 2 || !strings.HasPrefix(saw[0], "node:m5/alice ") && !strings.HasPrefix(saw[1], "node:m5/alice ") {
+		t.Fatalf("hub audit of the node writes = %v; want two rows by node:m5/alice (the reap, the refused one)", saw)
+	}
 }

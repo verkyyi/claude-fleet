@@ -81,6 +81,7 @@ import json
 import os
 import re
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -451,6 +452,10 @@ def send(path, repo="", node="", reap="", mode="", agent=""):
         re.search(r"(?:^|:)issue-(\d+)$", opened.get("key") or "")
     if out.returncode == 0 and num:
         print("filed: #%s" % next(g for g in num.groups() if g), file=sys.stderr)
+    # …and the window it opened on THIS machine (issue #3097 — a 看台's ⌘T goes to it)
+    if out.returncode == 0 and re.fullmatch(r"@\d+", opened.get("window_id") or "") \
+            and opened.get("machine") == socket.gethostname().split(".")[0]:
+        print("window: %s" % opened["window_id"], file=sys.stderr)
     line = next((l for l in reversed(out.stdout.splitlines()) if l.split(" ", 1)[0] in PLACE_WORDS), "")
     words = line.partition("\t")[0].split()
     remote = words[:1] == ["REMOTE"]

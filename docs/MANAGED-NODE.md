@@ -565,7 +565,7 @@ BREAK-IT 行 `service-handwritten`。只点名接管过的登录（`logins/<登�
   （`AuthorizedKeysFile …/keys/%u`），不读 `~/.ssh/authorized_keys`、不信用户 CA、不跑 `AuthorizedKeysCommand`。
   只由这里写：入口推 `entry_keys {version}`（`CapEntryKeys`，整机链路），整机节点程序跑
   `fleet-node-supervisor.py entry pull --version N`——用机器 token `GET /v1/node/entry-keys`，形状
-  `{version, logins:{<login>:{person, keys:[{fp,type,b64}]}}}`；version 只进不退。最后一份好名单存在
+  `{version, logins:{<login>:{person, keys:[{fp,type,b64,name}]}}}`；version 只进不退。最后一份好名单存在
   `<state>/entry/list.json`（root 0600），守护每 `FLEET_ENTRY_EVERY`（60 秒）比对一次，有人改过就放回。
   入口不在时最后一份一直有效。
 - **谁能进**：`AllowUsers` = 名单里**守护接管了、没有管理员能力**（与 §15 同一个判断）的登录；管理员登录、root
@@ -575,6 +575,17 @@ BREAK-IT 行 `service-handwritten`。只点名接管过的登录（`logins/<登�
   `$SSH_USER_AUTH`，macOS（看不到别的进程的环境）按入口日志里该指纹的来源端口对上连接（`lsof`）。tmux 会话不受影响。
 - **体检**：`fleet doctor` 的 `entry` 行（`entry status --check`）：入口 vN · 本机 vM · 拉到 …；落后一小时、配置被拒、
   名单有人却没在监听 ⇒ WARN。`fleet-node-supervisor.py status` 多一行 `entry`。
+- **进门去哪**（#3071，C5）：`ForceCommand /bin/bash <runtime>/bin/fleet-entry.sh`（运行时带它之后才写；之前是普通登录），
+  只分发、以那人的登录运行：无命令有终端 ⇒ `fleet-remote-view.sh attach --thin --resume`（视图 id = 钥匙名 + 指纹 6 位，
+  同一把钥匙回到上次的会话——那一份记在 `$FLEET_CONF_DIR/entry/<view>.cur`；没有就是编排会话；设备名按
+  `ExposeAuthInfo` 的指纹从 `state.json` 的 `names` 查，名单里钥匙带 `name`）；有命令 ⇒ `exec "$SHELL" -c`，与 22 端口一样
+  （`Subsystem sftp` 是本机真的 sftp-server，ForceCommand 下 internal-sftp 跑不了）；无命令无终端 ⇒ 登录 shell。
+  不设 `DisableForwarding`。
+- **审计**（共同约定 11）：每次进门登录处一行 `$FLEET_CONF_DIR/logs/entry.ndjson`（去了哪：view · exec · sftp · shell）；
+  守护每拍读入口 sshd 的 `entry.log`（接受 · 钥匙被拒 · 没这个登录 · 不在入口上），一行一条写 `<log>/entry.ndjson`
+  （时间 · 人 · 登录 · 指纹 · 机器 · 来源 IP · 结果，不含钥匙正文），并排进 `<state>/entry/audit-pending.ndjson`
+  送 `POST /v1/node/entry-audit`（每条自己的 id，重发无害；入口不在就攒着，最多 5000 条）。
 - **Linux 托管节点**同一份规则：容器的环境里给 `FLEET_ENTRY=1`，守护照样起它（`fleet-node-linux.py` 已建 `/run/sshd`）。
 - BREAK-IT：`entry-password` · `entry-other-login` · `entry-revoked-key` · `entry-self-added-key` · `entry-admin-login` ·
-  `entry-keys-tampered` · `entry-hub-down`（`bin/fleet-break-it-entry-selftest.sh`，真 sshd、沙箱端口、沙箱状态目录）。
+  `entry-keys-tampered` · `entry-hub-down` · `entry-no-command-lands`（`bin/fleet-break-it-entry-selftest.sh`，真 sshd、
+  沙箱端口、沙箱状态目录）。

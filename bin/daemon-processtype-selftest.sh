@@ -39,8 +39,6 @@ ok()   { CHECKS=$((CHECKS + 1)); }
 #   diskguard                     `du -shx` tree walks under an 8s timebox
 #   base-sync                     `git pull --ff-only` rewrites the base tree
 #                                 while holding the shared land lease
-#   dispatch                      autofill spawns `git worktree add` (a full
-#                                 checkout) synchronously as a CHILD process
 #   sleep                         transcript inspection and native resume on
 #                                 the user's entry/message path
 #   install-sync                  `git merge --ff-only` rewrites the live
@@ -70,7 +68,7 @@ ok()   { CHECKS=$((CHECKS + 1)); }
 #                                 machine streams through them, and its 2 s beat
 #                                 is the rebuild bound
 # POLL: gh / tmux / network polling only — Background is correct and stays.
-IO_UNITS='cleanup worktree-autoclean diskguard base-sync dispatch sleep install-sync'
+IO_UNITS='cleanup worktree-autoclean diskguard base-sync sleep install-sync'
 CADENCE_UNITS='collect memguard cred-proxy peerlink'
 POLL_UNITS='pr-refresh spinner quotawatch issue-bridge ledger-watch webhook'
 

@@ -6,12 +6,16 @@
 #   B  fleet_epic_charter_agent: the member's own row `(codex)` > the charter's
 #      `<!-- fleet:epic … agent= -->` > nothing; a member in another repo is
 #      matched by (repo, N), never by its bare number.
-#   C  fleet_codex_ready: a `valid` LOGIN row → ready; anything else → not.
+#   C  fleet_codex_ready: a `valid` LOGIN row → ready; anything else → not; a
+#      SEPARATED login (credsep.json, issue #3097) is ready whatever ccquota says —
+#      its Codex credential is the store's, reached through the proxy.
 #   D  the label leg — bin/dash-issue-session.sh (git/gh/tmux faked): an issue
 #      labelled agent:codex opens with `--agent codex`; no label → no --agent
 #      (FLEET_AGENT's launcher default, byte for byte); an explicit --agent beats
 #      the label; both labels are refused; Codex with no valid login is refused
-#      and opens nothing — never a quiet Claude.
+#      and opens nothing — never a quiet Claude. Issue #3097 (⌘T in a 看台): from
+#      a run-shell's context ($TMUX set, no $TMUX_PANE) on a separated login with
+#      no_credentials, a Codex spawn opens Codex and a Claude spawn opens Claude.
 #   E  bin/fleet-issue-file.sh --spawn --label agent:codex hands the spawn
 #      `--agent codex` (no read of the brand-new issue); both labels exit 2 and
 #      file nothing.
@@ -61,12 +65,20 @@ NOAG=$(printf '<!-- fleet:epic repo=o/a short=测试 -->\n- [ ] **C1** #12 — f
 ok "B member row > charter agent= > nothing; members matched by (repo, N)"
 
 # ===== C: Codex readiness ===================================================
+mkdir -p "$WORK/c-conf"; export FLEET_CONF_DIR="$WORK/c-conf"   # never this login's own credsep.json
 FLEET_CODEX_READY_CMD="printf 'PROFILE DEFAULT EMAIL PLAN LOGIN DIRECTORY\npersonal * u@e pro valid /h\n'" fleet_codex_ready \
   || fail "C a valid LOGIN row is ready"
 FLEET_CODEX_READY_CMD="printf 'PROFILE DEFAULT EMAIL PLAN LOGIN DIRECTORY\ndefault * - - no_credentials /h\n'" fleet_codex_ready \
   && fail "C no_credentials is not ready"
 FLEET_CODEX_READY_CMD="false" fleet_codex_ready && fail "C a failed read is not ready"
-ok "C fleet_codex_ready reads the LOGIN column"
+mkdir -p "$WORK/sep" "$WORK/notsep"
+printf '{\n "separated": true,\n "root": "/var/db/fleet-cred/x"\n}\n' > "$WORK/sep/credsep.json"
+printf '{\n "separated": false\n}\n' > "$WORK/notsep/credsep.json"
+FLEET_CONF_DIR="$WORK/sep" FLEET_CODEX_READY_CMD="printf 'H\ndefault * - - no_credentials /h\n'" fleet_codex_ready \
+  || fail "C a separated login is ready though ccquota says no_credentials (issue #3097)"
+FLEET_CONF_DIR="$WORK/notsep" FLEET_CODEX_READY_CMD="printf 'H\ndefault * - - no_credentials /h\n'" fleet_codex_ready \
+  && fail "C a credsep.json that says separated: false changes nothing"
+ok "C fleet_codex_ready reads the LOGIN column; a separated login is ready"
 
 # ===== D: the spawn routes by label =========================================
 mkdir -p "$WORK/main/.git" "$WORK/fakebin" "$WORK/conf" "$WORK/dash"
@@ -109,6 +121,17 @@ run_spawn() { # GH_LABELS / CODEX_CMD from env; $@ = spawn args
   FLEET_PRESPAWN_DEDUP=0 NEWWIN_LOG="$WORK/newwin" FLEET_CODEX_READY_CMD="${CODEX_CMD:-$READY}" \
     "$SPAWN" 77 --origin hub "$@" >"$WORK/spawn.out" 2>"$WORK/spawn.err"
 }
+# ⌘T in a 看台 (issue #3097): the popup runs under `tmux run-shell` — $TMUX set,
+# no $TMUX_PANE — on a credential-separated login whose ccquota sees no Codex login
+run_shell_spawn() {
+  rm -rf "$WORK/dash/.claude-dash/fleets"; : > "$WORK/newwin"
+  mkdir -p "$WORK/sepconf"; printf '{\n "separated": true\n}\n' > "$WORK/sepconf/credsep.json"
+  ( unset TMUX_PANE
+    PATH="$WORK/fakebin:$PATH" TMPDIR="$WORK/dash" FLEET_CONF_DIR="$WORK/sepconf" TMUX="$WORK/tt-sock,1,0" \
+    FLEET_REPO="acme/widgets" FLEET_MAIN="$WORK/main" FLEET_BASE_BRANCH="master" \
+    FLEET_PRESPAWN_DEDUP=0 NEWWIN_LOG="$WORK/newwin" FLEET_CODEX_READY_CMD="$NOLOGIN" GH_LABELS='[]' \
+      "$SPAWN" 77 --origin hub --print "$@" >"$WORK/spawn.out" 2>"$WORK/spawn.err" )
+}
 
 GH_LABELS='[{"name":"bug"},{"name":"agent:codex"}]' run_spawn; rc=$?
 [ "$rc" = 0 ] || fail "D the agent:codex spawn exited $rc" "$(cat "$WORK/spawn.err")"
@@ -148,7 +171,15 @@ run_title
 grep -qF -- "fleet-session-wrap.sh' --agent codex" "$WORK/newwin" \
   || fail "D --title: the cached agent:codex label routes to Codex" "$(cat "$WORK/newwin") $(cat "$WORK/spawn.err")"
 grep -q 'issue view' "$WORK/gh.log" && fail "D --title must make no gh issue view (#216)" "$(cat "$WORK/gh.log")"
-ok "D agent:codex opens Codex; no label = fleet default; --agent wins; both / no login refused; --title reads the cache only"
+run_shell_spawn --agent codex; rc=$?
+[ "$rc" = 0 ] || fail "D #3097: a Codex spawn from run-shell on a separated login exited $rc" "$(cat "$WORK/spawn.err")"
+grep -qF -- "fleet-session-wrap.sh' --agent codex" "$WORK/newwin" \
+  || fail "D #3097: …it must open Codex" "$(cat "$WORK/newwin") $(cat "$WORK/spawn.err")"
+run_shell_spawn --agent claude; rc=$?
+[ "$rc" = 0 ] || fail "D #3097: a Claude spawn from run-shell exited $rc" "$(cat "$WORK/spawn.err")"
+grep -qF -- "fleet-session-wrap.sh' --agent claude" "$WORK/newwin" \
+  || fail "D #3097: …it must open Claude" "$(cat "$WORK/newwin") $(cat "$WORK/spawn.err")"
+ok "D agent:codex opens Codex; no label = fleet default; --agent wins; both / no login refused; --title reads the cache only; run-shell + separated opens both agents"
 
 # ===== E: the filer hands the label to the spawn =============================
 SB="$WORK/sb"; mkdir -p "$SB"

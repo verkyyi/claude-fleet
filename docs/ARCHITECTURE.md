@@ -746,8 +746,7 @@ number keys on the pair, however many repos the fleet hosts (issue #1939):
 `fleet_issue_key` / `fleet_window_key` spell it `<owner/name>#<N>`, and
 `fleet_bound_windows` lists a fleet's bound windows by that key. A window whose
 repo is unknown gets `#<N>` — equal to no real key, so no join picks it by
-guesswork (autofill dedup matches it on purpose: a skipped spawn retries, a
-double spawn costs twice). The joins: autofill dedup, the backlog's bound map,
+guesswork. The joins: the backlog's bound map,
 the issue bridge's target window, ledger-watch (snapshot keyed by the pair, the
 row written to its own repo's ledger), the destructive reap target (a bare `#12`
 that matches two windows is refused; `<repo>#12` names one), the dash's grouping
@@ -875,12 +874,10 @@ so a claude process saving its own state at the same instant loses nothing); it
 leaves an unparseable file alone and creates a missing one `0600`. It is
 per-directory trust kept per-directory — never a `--dangerously-*` blanket.
 `fleet-doctor.sh` (`trust` line) and `fleet-up.sh` warn on an untrusted base for
-installs that predate this; the autofill dispatcher sweeps its fleets for a pane
-still showing the dialog (issue-bound, `@claude_state` empty — no hook ever fired)
-and stamps it `needs` once, with the fix in its log. `FLEET_PRETRUST=0` opts a
+installs that predate this (the autofill dispatcher's sweep for a pane parked on
+the dialog left with it, #3120). `FLEET_PRETRUST=0` opts a
 fleet out. Selftests: `bin/fleet-trust-selftest.sh` (scope, losslessness under a
-concurrent writer, atomicity), plus the call contract in `fleet-claude-selftest.sh`
-and the sweep in `fleet-dispatch-selftest.sh`.
+concurrent writer, atomicity), plus the call contract in `fleet-claude-selftest.sh`.
 
 ### Hooks read the conf; the launcher does not export (issue #561)
 

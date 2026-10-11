@@ -149,8 +149,10 @@ func TestEntryKeysPushToHomeOnly(t *testing.T) {
 		len(list.Logins["alice"].Keys) != 1 || list.Logins["alice"].Keys[0].FP != k.FP || !strings.Contains(line, list.Logins["alice"].Keys[0].B64) {
 		t.Fatalf("macmini's list: HTTP %d %s", code, raw)
 	}
-	if strings.Contains(raw, "alice-phone") {
-		t.Fatalf("the node's list carries the key's label: %s", raw)
+	// The label rides along (claude-fleet#3071: the home's 看台 names the device
+	// by it); the key's comment never does.
+	if list.Logins["alice"].Keys[0].Name != "alice-phone" {
+		t.Fatalf("the node's list lacks the key's label: %s", raw)
 	}
 	if code, _, raw := nodeList(t, h, h.tokens["macmini-alice"]); code != http.StatusForbidden {
 		t.Fatalf("a login's token reads the list: HTTP %d %s, want 403", code, raw)
