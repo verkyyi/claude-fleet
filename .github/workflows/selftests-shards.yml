@@ -176,7 +176,9 @@ jobs:
           PREV_FAILS: ${{ inputs.prev_fails }}
           DRILL_RED: ${{ inputs.drill_red }}
           # The train's per-attempt budget (issue #3241); empty on the PR gate.
-          BUDGET: ${{ inputs.budget_secs }}
+          # Never a bare BUDGET: the step's env is every test's env, and a test
+          # whose knob reads ${BUDGET:-5} got the shard's 519 s (issue #3371).
+          SHARD_BUDGET_SECS: ${{ inputs.budget_secs }}
         run: |
           set -o pipefail
           set -- --shard "${{ matrix.shard }}/${{ strategy.job-total }}"
@@ -189,9 +191,9 @@ jobs:
           fi
           [ -z "$DRILL_RED" ] || set -- --drill-red "$DRILL_RED" "$@"
           [ -z "$CHANGED_BASE" ] || set -- --changed "$CHANGED_BASE" "$@"
-          if [ -n "$BUDGET" ]; then
+          if [ -n "$SHARD_BUDGET_SECS" ]; then
             # cut short with no test red ⇒ the same shard once more; a FAIL line never reruns
-            bash bin/fleet-shard-run.sh --budget "$BUDGET" --log selftests.log -- bash bin/run-selftests.sh "$@"
+            bash bin/fleet-shard-run.sh --budget "$SHARD_BUDGET_SECS" --log selftests.log -- bash bin/run-selftests.sh "$@"
           else
             bash bin/run-selftests.sh "$@" 2>&1 | tee selftests.log
           fi

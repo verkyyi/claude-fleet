@@ -9,6 +9,10 @@ HANGMARK="collect-issues-hang-$$"
 cleanup() { pkill -9 -f "$HANGMARK" 2>/dev/null || :; rm -rf "$WORK"; }
 trap cleanup EXIT
 trap 'exit 130' INT TERM HUP
+# run()'s knobs are this file's own: one inherited from the caller (the release
+# train's step exported BUDGET=519) turned the 5 s issues budget into the tick's
+# 120 s, and the hung gh was never killed (issue #3371).
+unset BUDGET TTL HANG REPOS
 mkdir -p "$WORK/bin" "$WORK/fakepath" "$WORK/conf" "$WORK/home"
 for f in tmux-dash-collect.sh fleet-lib.sh usage-lib.sh; do cp "$BIN/$f" "$WORK/bin/"; done
 printf '#!/bin/sh\nexit 0\n' > "$WORK/bin/fleet-restore.sh"

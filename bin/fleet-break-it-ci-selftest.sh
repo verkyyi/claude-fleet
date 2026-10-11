@@ -134,7 +134,7 @@ drill_train_shard_timeout() {
   grep -q 'fleet-train-plan.sh --base' "$wf" && grep -q 'shards: ${{ needs.plan.outputs.linux_shards }}' "$wf" \
     && grep -q 'budget_secs: ${{ needs.plan.outputs.linux_budget_secs }}' "$wf" \
     || { WHY="release-train.yml's Linux half does not take its width / budget from the plan"; return 1; }
-  grep -q 'fleet-shard-run.sh --budget "$BUDGET"' "$sh" && grep -q "inputs.step_minutes != ''" "$sh" \
+  grep -q 'fleet-shard-run.sh --budget "$SHARD_BUDGET_SECS"' "$sh" && grep -q "inputs.step_minutes != ''" "$sh" \
     || { WHY="selftests-shards.yml does not run a budgeted shard under fleet-shard-run.sh"; return 1; }
   d=$(mktemp -d "${TMPDIR:-/tmp}/train-shard.XXXXXX"); t0=$(now)
   # 1) the real runner prices a selection
