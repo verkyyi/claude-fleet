@@ -301,7 +301,7 @@ SHIM="$WORK/shim"; mkdir -p "$SHIM"
 SC=$(mktemp -d /tmp/nce2e-c.XXXXXX) || die 'no short cache dir'
 nenv() {
   env -i PATH="$SHIM:$CH/.local/bin:$PATH" HOME="$CH" SHELL=/bin/zsh TERM=xterm-256color LANG=zh_CN.UTF-8 \
-    PYTHONUNBUFFERED=1 "$@"
+    PYTHONUNBUFFERED=1 FLEET_CLIENT=shell "$@"
 }
 
 # =============================================================================
@@ -373,7 +373,7 @@ chmod +x "$SHIM/ssh"
 # must not take itself for that machine (it would run the node's side here).
 printf '#!/bin/sh\necho newcomer-laptop\n' > "$SHIM/hostname"; chmod +x "$SHIM/hostname"
 fenv() {
-  nenv FLEET_SHELL_SESSION="$SESS" FLEET_SHELL_CACHE="$SC" FLEET_SHELL_NO_ATTACH=1 FLEET_SHELL_WARM=0 \
+  nenv FLEET_CLIENT=shell FLEET_SHELL_SESSION="$SESS" FLEET_SHELL_CACHE="$SC" FLEET_SHELL_NO_ATTACH=1 FLEET_SHELL_WARM=0 \
     FLEET_HUB_SESSIONS_EVERY=1 FLEET_HUB_SESSIONS_LOOP_SECS=8 "$@"
 }
 before=$(ssh-keygen -L -f "$CERT" | awk '/Serial:/{print $2}')
