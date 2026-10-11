@@ -18,6 +18,7 @@ import (
 var appPages = []struct{ html, script, id string }{
 	{"index.html", "overview.js", "overview"},
 	{"sessions.html", "sessions-page.js", "sessions"},
+	{"tasks.html", "tasks.js", "tasks"},
 	{"machines.html", "machines.js", "mymachines"},
 	{"connect.html", "connect.js", "devices"},
 	{"quota.html", "quota.js", "quota"},
@@ -84,7 +85,7 @@ func TestAssets_MenuLinksResolve(t *testing.T) {
 	assets := Assets()
 	src := string(mustRead(t, assets, "lib/shell.js"))
 	route := map[string]string{
-		"/": "index.html", "/sessions": "sessions.html", "/machines": "machines.html", "/machines/": "machines.html", "/connect": "connect.html", "/config": "config.html",
+		"/": "index.html", "/sessions": "sessions.html", "/tasks": "tasks.html", "/machines": "machines.html", "/machines/": "machines.html", "/connect": "connect.html", "/config": "config.html",
 		"/quota": "quota.html", "/usage": "usage.html",
 		"/subscriptions/": "admin/subscription.html", "/subscriptions/settings": "admin/subscription-settings.html", "/admin/users/": "admin/user.html",
 		"/subscriptions": "admin/subscriptions.html", "/nodes": "admin/nodes.html", "/admin/users": "admin/users.html",
