@@ -8,8 +8,6 @@ right-click to this view, and no key table ever routes the keyboard here — a
 question it asks opens on one line under the session (bin/fleet-ask.py), and
 what it has to say goes on the bar (`say`, tmux display-message).
 """
-import base64
-import binascii
 import curses
 import errno
 import fcntl
@@ -29,7 +27,7 @@ import unicodedata
 
 BIN = Path(__file__).absolute().parent  # preserve the selftest shadow root
 US = "\x1f"
-VIEW_VERSION = "31"  # #2675: the batch view — batches, 单独的活 groups, 停放 / 待你动手 · #2146: @fleet_orch for the bar · #1957: 「新任务」 wears the orchestrator · #1953: 「新任务」 on top + `compose` · #1950: sessions only, no keys — questions under the session (fleet-ask.py)
+VIEW_VERSION = "32"  # #3119: no 「新任务」 row, no steward rows, the orchestrator's holder an ordinary row · #2675: the batch view — batches, 单独的活 groups, 停放 / 待你动手 · #2146: @fleet_orch for the bar · #1957: 「新任务」 wears the orchestrator · #1953: 「新任务」 on top + `compose` · #1950: sessions only, no keys — questions under the session (fleet-ask.py)
 # What a drawn list runs, by CONTENT (issue #2345): VIEW_VERSION is bumped by
 # hand, so a client update that changed this file without bumping it kept the
 # old process drawing — sync reuses a view whose @sidebar_version matches. The
@@ -98,8 +96,7 @@ def load_text():
     locale exactly as every other fleet surface does, and a printf argument
     comes back as a \\001 slot for tr() to fill."""
     try:
-        out = subprocess.run(["sh", str(BIN / "fleet-ui-lang.sh"), "dump", "sidebar_", "no_repo", "needs_",
-                              "orch_queue_row", "orch_busy"],
+        out = subprocess.run(["sh", str(BIN / "fleet-ui-lang.sh"), "dump", "sidebar_", "no_repo", "needs_"],
                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10).stdout
     except (OSError, subprocess.SubprocessError):
         out = b""
@@ -144,11 +141,11 @@ SHELL = os.environ.get("FLEET_SHELL") == "1"
 # or a shell started before the stage): everything below is as it was.
 STAGE = os.environ.get("FLEET_SHELL_STAGE", "") if SHELL else ""
 
-# The writing area (issue #1953, EPIC #1949 C4): with a stage, the list's first
-# row is 「新任务」 — the stage's `@fleet_role portal` window, whose `@remote` is
-# this key — then a rule. A tap (or ⌘N, prefix c) opens it (fleet-shell.sh
-# portal); its ↵ queues `compose` here, and while the new session is on its way
-# a 「开工中…」 row stands under it. Neither row is a session: no history entry,
+# The writing area (issue #1953, EPIC #1949 C4): the stage's `@fleet_role portal`
+# window (FLEET_COMPOSE=1 only), whose `@remote` is this key. It has no row any
+# more (issue #3119: no 「新任务」 — ⌘N opens a new session); its ↵ queues
+# `compose` here, and while the new session is on its way a 「开工中…」 row stands
+# at the list's top, a rule under it. That row is no session: no history entry,
 # no ⌘↓ stop, never a place's answer.
 PORTAL_KEY = "new"
 PLACING_KEY = "placing"
@@ -273,7 +270,7 @@ def switch_target(verbs, rows, current, live, session=""):
     that row (⌘P's pick — it may sit in a folded subtree). Each verb steps from
     where the one before it landed. "" = stay. A history entry the list does not
     paint is looked up once among every session (folded ones too) before it is
-    stepped over as closed. The 「新任务」 row is no stop (issue #1953)."""
+    stepped over as closed. The 「开工中…」 row is no stop (issue #1953)."""
     ids = [key for key in selectable(rows) if acts(key) and key != PORTAL_KEY]
     live = set(live)
     unfolded = []
@@ -312,9 +309,9 @@ def bar_record(rows, current, session=""):
     the rows this list paints — so the line and the list never disagree: its
     place among the session rows (‹ i/n ›), state, needs kind, key, title, PR,
     repo (only in a fleet showing more than one), machine and whether it is lost,
-    and how many rows wait on you. A session in view that is no row — the
-    orchestrator behind 「新任务」, the steward, a row the batch view folded away
-    (issue #2739) — is read off the refresh loop's cache instead (cache_record).
+    and how many rows wait on you. A session in view that is no row — a row the
+    batch view folded away (issue #2739) — is read off the refresh loop's cache
+    instead (cache_record).
     None when it is neither — a machine's bare window — or is the writing area
     (issue #1953): the top line is then its window's name."""
     if current == PORTAL_KEY:
@@ -359,8 +356,8 @@ def bar_record(rows, current, session=""):
 
 def cache_record(session, current, rows, ids):
     """bar_record for a session on the refresh loop's cache but not on the list
-    (issue #2739): `remote_<session>` keeps every session's line, the
-    orchestrator's included (fleet-hub-sessions.sh — the rows skip it). Columns:
+    (issue #2739): `remote_<session>` keeps every session's line
+    (fleet-hub-sessions.sh). Columns:
     1 wid · 2 node · 3 online|lost · 4 issue · 5 repo · 6 state · 8 name ·
     10 needs · 17 title · 21-25 the measurement bus. None when it is not there."""
     if not current.startswith("wid:"):
@@ -848,9 +845,8 @@ def jump(session, window, pane, lock, node="", name=""):
     LOCK_WAIT — the caller paints what was pressed and retries. `node` / `name`
     (issue #2236): another machine's session the list does not carry yet — just
     opened there — is stepped into on that machine, under that name."""
-    if window == PORTAL_KEY or window.startswith(STEWARD):
-        # 「新任务」 (issue #1953): the stage's writing-area window, made once —
-        # and 停放 / 待你动手 (issue #2675), whose cards are the orchestrator's.
+    if window == PORTAL_KEY:
+        # the stage's writing-area window (issue #1953, FLEET_COMPOSE=1), made once
         open_portal(session)
         return True
     # Another machine's row (`wid:<worker_id>`, #1423): step in through a proxy
@@ -889,9 +885,9 @@ def jump(session, window, pane, lock, node="", name=""):
 
 
 def open_portal(session):
-    """「新任务」's tap: fleet-shell.sh portal — the same door ⌘N and prefix c take:
-    the orchestrating session (issue #2616), the writing area on the right
-    (issue #1953) only with the client's FLEET_COMPOSE=1.
+    """fleet-shell.sh portal — the same door ⌘N and prefix c take: a new session
+    (issue #3119), the writing area on the right (issue #1953) only with the
+    client's FLEET_COMPOSE=1.
     Not waited on (issue #2721): portal hands its jump back to THIS list (F12 +
     @sidebar_do) and then waits for the window that jump makes — waited on, the
     list could take neither, and every tap stalled the full 3 s of that wait."""
@@ -899,171 +895,7 @@ def open_portal(session):
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
 
 
-ORCH_SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-
-
-def orch_line(session):
-    """The first line of fleet-hub-sessions.sh's orch_<session> (online first),
-    split on US — `wid·node·av·state·needs·detail[·queue[·decide=N]]` — or None when no
-    machine runs one."""
-    try:
-        with open(os.path.join(status_dir(), "orch_" + (session or "")), encoding="utf-8") as f:
-            for line in f:
-                p = line.rstrip("\n").split("\x1f")
-                if len(p) >= 4 and "/" in p[0]:
-                    return p
-    except OSError:
-        pass
-    return None
-
-
-def orch_state(session):
-    """The orchestrating session's state (issue #1957) — "" when no machine
-    runs one. The orchestrator is no row of the list: 「新任务」 wears it."""
-    p = orch_line(session)
-    return p[3] if p else ""
-
-
-ORCH_BUSY = ("working", "preparing", "waking")
-
-
-def orch_queue(p):
-    """What waits behind its running turn (issue #2617): the line's 7th column as
-    an int, None when the line has none — an orchestrator that cannot count
-    (Codex, no mod) or an older node."""
-    q = p[6].strip() if p and len(p) >= 7 else ""
-    return int(q) if q.isdigit() else None
-
-
-# 停放 / 待你动手 (issue #2675, EPIC #2668 C7): with the steward on, orch_<sess>
-# carries tagged columns past the 7th — `park=N` (sessions parked, waiting on
-# something) and `todo=N` (the 待你动手 list), written by the steward's members
-# (C2-C4) beside its `decide=N`. Each count > 0 is one row at the list's foot;
-# a tap opens the orchestrator, where the card is. No such column (no steward,
-# an older node) ⇒ no row. FLEET_SIDEBAR_FOLD=off draws neither.
-# Each row OPENS (issue #2913) when the line also carries its list — `parkl=` /
-# `todol=` (fleet_steward.py list_cell, the node's @orch_park_list /
-# @orch_todo_list): a tap then folds it like a 单独的活 group (its bit in the same
-# solo_fold_<session> file, folded by default), and open it shows one row a thing
-# (`stewitem:park:<ref>` — who, on what, since when; `stewitem:todo:<id>` — the
-# item, its batch, its due day), each a tap to its menu (fleet-sidebar-steward.sh:
-# wake now / open the issue / tick it off). No list (an older node) ⇒ the tap
-# opens the orchestrator, as before.
-STEWARD = "steward:"
-STEWARD_ITEM = "stewitem:"
-STEWARD_ROWS = (("park", "⏸", "sidebar_steward_park_fmt"), ("todo", "☐", "sidebar_steward_todo_fmt"))
-STEWARD_LIST = {"park": "parkl", "todo": "todol"}
-
-
-def orch_counts(p):
-    """The tagged `name=N` columns of an orch_<sess> line past the 7th, as ints."""
-    out = {}
-    for cell in (p or [])[7:]:
-        name, eq, num = cell.strip().partition("=")
-        if eq and num.isdigit():
-            out[name] = int(num)
-    return out
-
-
-def orch_list(p, name):
-    """The `<name>=<cell>` list of an orch_<sess> line past the 7th, decoded
-    (issue #2913) — {} when it has none or it does not read."""
-    for cell in (p or [])[7:]:
-        k, eq, v = cell.strip().partition("=")
-        if not eq or k != name or not re.fullmatch(r"[-A-Za-z0-9_]{1,4000}", v):
-            continue
-        try:
-            d = json.loads(base64.urlsafe_b64decode(v + "=" * (-len(v) % 4)).decode("utf-8"))
-        except (ValueError, binascii.Error, UnicodeDecodeError):
-            return {}
-        return d if isinstance(d, dict) and isinstance(d.get("i"), list) else {}
-    return {}
-
-
-def short_age(secs):
-    """`45m` · `3h` · `2d` — how long ago, in the list's few cells."""
-    secs = max(0, int(secs))
-    if secs < 3600:
-        return "%dm" % max(1, secs // 60)
-    return "%dh" % (secs // 3600) if secs < 2 * 86400 else "%dd" % (secs // 86400)
-
-
-def short_ref(text):
-    """`owner/name#12` → `#12` inside a wait condition or a source: the row is narrow."""
-    return re.sub(r"[A-Za-z0-9._-]+/[A-Za-z0-9._-]+#", "#", text or "")
-
-
-def steward_items(name, payload, now=None):
-    """The rows an open 停放 / 待你动手 row shows (above): name = the short line,
-    field 13 = the whole one the bar says."""
-    now = time.time() if now is None else now
-    out = []
-    for e in payload.get("i") or []:
-        if not isinstance(e, dict):
-            continue
-        if name == "park":
-            ref = str(e.get("r") or "")
-            if not ref:
-                continue
-            at = e.get("a") if isinstance(e.get("a"), int) else 0
-            age = short_age(now - at) if at else "?"
-            wait = str(e.get("w") or "")
-            who = str(e.get("k") or "") or short_ref(ref)
-            label, whole, key = (tr("sidebar_steward_park_item_fmt", who, short_ref(wait), age),
-                                 tr("sidebar_steward_park_item_fmt", ref, wait, age), "park:" + ref)
-        else:
-            iid = str(e.get("id") or "")
-            if not iid:
-                continue
-            what, src, due = str(e.get("w") or ""), str(e.get("s") or ""), str(e.get("d") or "")
-            label = what + ((" · " + tr("sidebar_steward_todo_due_fmt", due)) if due else "")
-            whole = tr("sidebar_steward_todo_item_fmt", what, src) + \
-                ((" · " + tr("sidebar_steward_todo_due_fmt", due)) if due else "")
-            key = "todo:" + iid
-        row = [STEWARD_ITEM + key, "steward", "·", label, "└", "", "1"] + [""] * (ROW_FIELDS - 7)
-        row[13] = whole
-        out.append(row)
-    return out
-
-
-def steward_rows(line, opened=frozenset(), now=None):
-    """The 停放 / 待你动手 rows an orch_<sess> line asks for (above) — and, for an
-    open one whose list the line carries, its items under it."""
-    if not batch_fold():
-        return []
-    counts = orch_counts(line)
-    out = []
-    for name, glyph, key in STEWARD_ROWS:
-        n = counts.get(name, 0)
-        if n <= 0:
-            continue
-        payload = orch_list(line, STEWARD_LIST[name])
-        is_open = STEWARD + name in opened
-        caret = (" ▾" if is_open else " ▸") if payload else " "
-        out.append([STEWARD + name, "steward", glyph, tr(key, n), caret, "", "0"] + [""] * (ROW_FIELDS - 7))
-        if payload and is_open:
-            kids = steward_items(name, payload, now)
-            out.extend(kids)
-            if n > len(kids):
-                more = [STEWARD_ITEM + "more:" + name, "steward", "…", tr("sidebar_steward_more_fmt", n - len(kids)),
-                        "└", "", "1"] + [""] * (ROW_FIELDS - 7)
-                out.append(more)
-    return out
-
-
-def steward_folds(row):
-    """A 停放 / 待你动手 row that opens (its line carries the list): its caret."""
-    return bool(row) and row[0].startswith(STEWARD) and row[4].endswith(("▾", "▸"))
-
-
-def orch_decide(p):
-    """The steward's decision sheet rows still open (issue #2670, EPIC #2668 C2):
-    the line's `decide=<n>` column as an int, 0 when it has none — no steward, an
-    older node, or a sheet with nothing left."""
-    for v in (p or [])[6:]:
-        if v.startswith("decide=") and v[7:].strip().isdigit():
-            return int(v[7:])
-    return 0
+PLACING_SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 
 def remote_name(session, wid):
@@ -1082,49 +914,27 @@ def remote_name(session, wid):
 
 
 def with_portal(rows, placing, session=""):
-    """The rows as painted in the shell (issue #1953): 「新任务」, the 「开工中…」 row
-    of a task ↵ just sent, a rule — then the list. Built again every frame from
-    the list without them, so a fresh producer frame and a place ending both
-    show at once. 「新任务」 is where the orchestrator lives (issue #1957): its
-    glyph is the orchestrator's state — a red `!` while it waits on you, the
-    working spinner while it works, `+` while it is free (or there is none)."""
+    """The rows as painted in the shell (issue #1953): the 「开工中…」 row of a task
+    ↵ just sent and a rule over the list — built again every frame from the list
+    without them, so a fresh producer frame and a place ending both show at once.
+    There is no 「新任务」 row (issue #3119): no session is special, ⌘N opens a
+    new one. Nothing placing ⇒ the list as it came."""
     if not STAGE:
         return rows
     body = [row for row in rows if row[0] not in (PORTAL_KEY, PLACING_KEY) and
-            not row[0].startswith((STEWARD, STEWARD_ITEM)) and
             not (row[0] == "hdr" and row[1] == "" and row[2] == "─")]
-    pad = [""] * (ROW_FIELDS - 9)
-    state, glyph = "portal", "+"
-    line = orch_line(session) if session else None
-    ost = line[3] if line else ""
-    # A decision sheet with rows still open (issue #2670) is the one other way it
-    # turns red: the steward found something only you can decide.
-    if ost in ("needs", "failed") or orch_decide(line) > 0:
-        state, glyph = "needs", "!"
-    elif ost in ORCH_BUSY:
-        state, glyph = "working", ORCH_SPIN[int(time.time() * 4) % len(ORCH_SPIN)]
-    # What waits behind its turn (issue #2617): 「排队 N」 at the row's end, where a
-    # session row has its #N (row_num) — only while something waits.
-    queued = orch_queue(line)
-    if queued:
-        pad = [tr("orch_queue_row_fmt", str(queued))] + pad[1:]
-    elif orch_counts(line).get("renew"):
-        # on an older fleet version than its machine has (issue #2733): renewed
-        # at its next quiet moment, the word gone with the next frame after
-        pad = [tr("sidebar_cfg_renew")] + pad[1:]
-    top = [[PORTAL_KEY, state, glyph, tr("sidebar_portal"), " ", "", "0", "", ""] + pad]
-    if placing is not None and placing.get("verb") == "compose" and \
-            placing.get("state") in ("placing", "opened", "await"):
-        # Also the new session's stand-in (issue #2236): switched to as the place
-        # answered, it is this row until the list carries the real one.
-        title = placing.get("title", "")
-        if cells_of(title) > PLACING_TITLE:   # never the row that widens the list
-            title = clip(title, PLACING_TITLE - 1) + "…"
-        top.append([PLACING_KEY, "working", ORCH_SPIN[int(time.time() * 4) % len(ORCH_SPIN)],
-                    tr("sidebar_portal_placing_fmt", title),
-                    " ", "", "0", "", ""] + pad)
-    top.append(["hdr", "", "─", "─" * 120] + [""] * (ROW_FIELDS - 4))
-    return top + body + steward_rows(line, steward_opened(session))
+    if placing is None or placing.get("verb") != "compose" or \
+            placing.get("state") not in ("placing", "opened", "await"):
+        return body
+    # The new session's stand-in (issue #2236): switched to as the place
+    # answered, it is this row until the list carries the real one.
+    title = placing.get("title", "")
+    if cells_of(title) > PLACING_TITLE:   # never the row that widens the list
+        title = clip(title, PLACING_TITLE - 1) + "…"
+    top = [[PLACING_KEY, "working", PLACING_SPIN[int(time.time() * 4) % len(PLACING_SPIN)],
+            tr("sidebar_portal_placing_fmt", title), " ", "", "0", "", ""] + [""] * (ROW_FIELDS - 9),
+           ["hdr", "", "─", "─" * 120] + [""] * (ROW_FIELDS - 4)]
+    return top + body
 
 
 def clip(text, width):
@@ -1769,21 +1579,10 @@ def open_menu(session, wid, env):
     this view keeps painting meanwhile."""
     # A row on another machine (`wid:…`) has one too (issue #1475): its title
     # names the machine (`<name> · 在 m4`), as the row's own @ mark does (#1780).
-    # 「新任务」 (the writing area's row) has one as well (issue #2146): 进编排会话
-    # and the row-less items — its tap stays the writing area.
-    if wid.startswith("@") or (wid.startswith("wid:") and "/" in wid) or wid == PORTAL_KEY:
+    if wid.startswith("@") or (wid.startswith("wid:") and "/" in wid):
         subprocess.Popen(["bash", str(BIN / "fleet-sidebar.sh"), "menu", session, wid],
                          env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                          stderr=subprocess.DEVNULL)
-
-
-def open_steward_menu(session, key, env):
-    """A 停放 / 待你动手 item's menu (issue #2913): fleet-sidebar-steward.sh reads
-    the item off orch_<session> again and owns every command in it. Not waited on,
-    as open_menu."""
-    subprocess.Popen(["bash", str(BIN / "fleet-sidebar-steward.sh"), "menu", session, key],
-                     env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                     stderr=subprocess.DEVNULL)
 
 
 def cells(char):
@@ -1856,11 +1655,8 @@ def row_right(badge, num=""):
 
 
 def row_num(row):
-    """The issue number a row ends in: field 9 when it is `#<digits>`, else "".
-    「新任务」's field 9 is what waits behind the orchestrator (「排队 N」, #2617)."""
+    """The issue number a row ends in: field 9 when it is `#<digits>`, else ""."""
     num = (row[9] if len(row) > 9 else "").strip()
-    if row and row[0] == PORTAL_KEY:
-        return num
     return num if re.fullmatch(r"#\d+", num) else ""
 
 
@@ -2063,28 +1859,18 @@ def detail_line(row):
     return " · ".join(p.strip() for p in parts if p and p.strip() not in ("", "—", "·"))
 
 
-def bar_hint(rows, selected, current, width, orch=False, busy=""):
+def bar_hint(rows, selected, current, width):
     """What the client's bar reads off the list (issue #1951, EPIC #1949 C2), as
-    (view, name, orch): view `portal` while the writing area (「新任务」, issue
-    #1953) is in the right pane — the bar then says ITS keys — else ""; name =
-    the highlighted session row's `detail_line` (issue #2305 — the row itself is
+    (view, name, orch, busy): view `portal` while the writing area (issue #1953)
+    is in the right pane — the bar then says ITS keys — else ""; name = the
+    highlighted session row's `detail_line` (issue #2305 — the row itself is
     state · name · N/N), "" on a heading. A literal for tmux: `#` doubled.
-    The third, `1` while a machine runs the orchestrating session (issue #2146):
-    the writing area's bar then names ⌘N 编排 and ⇧⇥ — else "". The fourth
-    (issue #2617): `busy` — orch_busy_hint while an orchestrator that cannot
-    count (no 7th column: Codex, no mod) is busy — else ""."""
+    orch / busy are always "" (issue #3119: no session is special) — kept so a
+    value an older list wrote is unset."""
     view = "portal" if current == PORTAL_KEY else ""
     row = next((r for r in rows if r and r[0] != "hdr" and r[0] == selected), None)
-    name = detail_line(row) if row is not None and row[0] != PORTAL_KEY else ""
-    return view, name.replace("#", "##"), "1" if orch else "", busy.replace("#", "##")
-
-
-def orch_busy(session):
-    """The bar's busy line (issue #2617): orch_busy_hint while the orchestrator is
-    busy and its line carries no count — an orchestrator with the mod counts, and
-    its band says it in the window; else ""."""
-    p = orch_line(session)
-    return tr("orch_busy_hint") if p and p[3] in ("working", "preparing") and orch_queue(p) is None else ""
+    name = detail_line(row) if row is not None else ""
+    return view, name.replace("#", "##"), "", ""
 
 
 def publish_hint(window, hint, last):
@@ -2222,7 +2008,7 @@ def is_attn_summary(row):
 def sessions(rows):
     """The window ids alone — what a close lands on (#900), never a heading, nor
     a batch nobody drives (issue #1916: it has no window)."""
-    return [row[0] for row in rows if row[0] != "hdr" and not row[0].startswith((EPIC_STALE, SOLO, STEWARD, STEWARD_ITEM))]
+    return [row[0] for row in rows if row[0] != "hdr" and not row[0].startswith((EPIC_STALE, SOLO))]
 
 
 # A batch NOBODY drives (issue #1916): the producer's grey row for a stale EPIC
@@ -2316,18 +2102,12 @@ def tap(hit, highlighted):
     headings never sees `select` or `new`, so it taps exactly as before."""
     if not hit or hit == "hdr" or hit == PLACING_KEY:
         return None
-    if hit == PORTAL_KEY:
-        return "jump"   # 「新任务」 (issue #1953): every tap opens the writing area
     if hit in FOLD_HEADINGS:
         return "select"  # a fold stop only (issues #1170, #2565): no repo to open a session in
     if hit.startswith("hdr:"):
         return "new" if hit == highlighted else "select"
     if hit.startswith(EPIC_STALE):
         return "epic" if hit == highlighted else "select"   # no window to jump to (#1916)
-    if hit.startswith(STEWARD):
-        return "jump"   # 停放 / 待你动手 (issue #2675): the orchestrator, as 「新任务」
-    if hit.startswith(STEWARD_ITEM):
-        return "item"   # one parked session / 待你动手 item (issue #2913): its menu
     if hit.startswith(SOLO):
         return "select"   # 单独的活 (issue #2675): no window; the caret path folds it
     return "menu" if hit == highlighted else "jump"
@@ -2338,7 +2118,7 @@ def acts(key):
     a heading (`hdr:…`) is none — jump, menu, tap all stay no-ops on it (EPIC #994)
     — and so is a landed row (`landed:…`, issue #1532): its one action is ↵,
     restore, which the landed view handles itself."""
-    return "" if key.startswith(("hdr", "landed:", EPIC_STALE, SOLO, STEWARD, STEWARD_ITEM)) or key == PLACING_KEY else key
+    return "" if key.startswith(("hdr", "landed:", EPIC_STALE, SOLO)) or key == PLACING_KEY else key
 
 
 def folds(key):
@@ -2348,7 +2128,7 @@ def folds(key):
     empty-state hint), a batch nobody drives (issue #1916) or no row at all:
     nothing to fold."""
     return key if key and key != "hdr" and key not in (PORTAL_KEY, PLACING_KEY) \
-        and not key.startswith((EPIC_STALE, STEWARD, STEWARD_ITEM)) else ""
+        and not key.startswith(EPIC_STALE) else ""
 
 
 # ←/→ fold AT ONCE (issue #1530): the view applies the fold to the rows it has
@@ -2526,7 +2306,7 @@ def fold_key(rows, current):
 # with no batch above them become ONE row, 「单独的活 · N」 (`solo:<owner/name>`):
 # no window behind it, a tap opens / shuts it, its bit kept in this machine's
 # solo_fold_<session> (the producer's remote_fold beside it). What still turns
-# red for you is 「新任务」 alone. The 置顶 and 已结束 groups stay as they are.
+# red for you is a session's own row. The 置顶 and 已结束 groups stay as they are.
 # FLEET_SIDEBAR_FOLD=off: the producer's rows untouched, byte for byte.
 SOLO = "solo:"
 SOLO_GLYPH = "≡"
@@ -2541,11 +2321,10 @@ def solo_path(session):
 
 
 def fold_keys(session):
-    """Every key the solo_fold_<session> file holds open: the `solo:` groups and
-    the 停放 / 待你动手 rows (`steward:`, issue #2913)."""
+    """Every key the solo_fold_<session> file holds open: the `solo:` groups."""
     try:
         with open(solo_path(session), encoding="utf-8") as f:
-            return {line.strip() for line in f if line.strip().startswith((SOLO, STEWARD))}
+            return {line.strip() for line in f if line.strip().startswith(SOLO)}
     except OSError:
         return set()
 
@@ -2555,14 +2334,8 @@ def solo_opened(session):
     return {k for k in fold_keys(session) if k.startswith(SOLO)}
 
 
-def steward_opened(session):
-    """The 停放 / 待你动手 rows opened on this machine (folded is the default)."""
-    return frozenset(k for k in fold_keys(session) if k.startswith(STEWARD)) if session else frozenset()
-
-
 def solo_write(session, key, opened):
-    """Remember one `solo:` group (or 停放 / 待你动手 row) open or shut — a
-    whole-file rename."""
+    """Remember one `solo:` group open or shut — a whole-file rename."""
     keys = fold_keys(session)
     (keys.add if opened else keys.discard)(key)
     path = solo_path(session)
@@ -2958,7 +2731,8 @@ def shown_row(window, remote):
     """The row the current window stands for: itself — or, in a proxy window onto
     another machine's session (`@remote=<node>:<worker_id>`, issue #1475), that
     machine's row `wid:<worker_id>`, so the ▶ and the cursor land on it. The
-    stage's writing area (`@remote new`, issue #1953) stands for 「新任务」."""
+    stage's writing area (`@remote new`, issue #1953) stands for its key, which
+    no row carries (issue #3119)."""
     if STAGE and remote == PORTAL_KEY:
         return PORTAL_KEY
     return "wid:" + remote.split(":", 1)[1] if ":" in remote else window
@@ -3580,7 +3354,7 @@ def ui(screen, session, worker, lock):
         # whole repo group (`folds`, issue #1037). `where` is the selection's
         # place in the PAINTED list, which the scroll offset is measured in.
         if view == "live":
-            rows = with_portal(rows, placing, session)   # 「新任务」 on top (issue #1953)
+            rows = with_portal(rows, placing, session)   # 「开工中…」 on top (issue #1953)
         ids = selectable(rows)
         # Rows still in flight for a window just jumped to may not hold it yet (a
         # folded child shows only as the current row): keep the selection until
@@ -3608,9 +3382,7 @@ def ui(screen, session, worker, lock):
         # view is in the right pane, and the highlighted row's whole name when
         # the list clipped it — written only when it changes.
         if view == "live":
-            hint_last = publish_hint(window, bar_hint(rows, selected, current_row, width,
-                                                          bool(STAGE and orch_state(session)),
-                                                          orch_busy(session) if STAGE else ""), hint_last)
+            hint_last = publish_hint(window, bar_hint(rows, selected, current_row, width), hint_last)
         if where < offset:
             offset = where
         elif where >= offset + page:
@@ -3643,8 +3415,6 @@ def ui(screen, session, worker, lock):
             lost = (node.endswith("!") or state == "epicstale") and not raised
             if lost:
                 attr = dim_attr  # a lost machine's row (issue #1475); a batch nobody drives (#1916)
-            if wid == PORTAL_KEY:
-                attr |= curses.A_BOLD   # 「新任务」 (issue #1953)
             pair = STATE_PAIR.get(state)
             glyph_attr = curses.color_pair(pair + SEL_GLYPH if raised else pair) if pair else attr
             if lost:
@@ -3843,9 +3613,6 @@ def ui(screen, session, worker, lock):
                 follow_at, armed = None, None
                 if hit and acts(hit) and view == "live":
                     open_menu(session, hit, env)
-                elif hit and hit.startswith(STEWARD_ITEM) and view == "live":
-                    selected = hit   # a parked session / 待你动手 item (issue #2913)
-                    open_steward_menu(session, hit, env)
                 elif hit and hit.startswith(EPIC_STALE):
                     selected = hit   # a batch nobody drives (#1916): its one question
                     ask_now(ask_epic(hit, hit_row))
@@ -3860,24 +3627,7 @@ def ui(screen, session, worker, lock):
             elif buttons & (curses.BUTTON1_PRESSED | curses.BUTTON1_CLICKED | MULTI_CLICK):
                 refresh_at = 0
                 armed = None
-                if view == "live" and steward_folds(hit_row):
-                    # 停放 / 待你动手 with its list (issue #2913): a tap anywhere
-                    # opens / shuts it — the bit written now, painted this frame
-                    # (with_portal rebuilds the foot from it every frame)
-                    if caret_tap[0] == hit and _when - caret_tap[1] < CARET_REPEAT_SECS:
-                        continue
-                    caret_tap = (hit, time.monotonic(), True)
-                    selected = hit
-                    solo_write(session, hit, not hit_row[4].endswith("▾"))
-                elif view == "live" and action == "item":
-                    # one parked session / 待你动手 item: highlighted, its menu on
-                    # the release (a menu opened on the press closes on it)
-                    selected = hit
-                    if buttons & curses.BUTTON1_CLICKED:
-                        open_steward_menu(session, hit, env)
-                    else:
-                        armed = hit
-                elif view == "live" and fold_tap(hit_row, hit, x):
+                if view == "live" and fold_tap(hit_row, hit, x):
                     # A tap on a row's caret (▸ / ▾ and the tree left of the name,
                     # or a heading's first cells) folds or opens its block (issue
                     # #1950: ←/→ went with the keyboard). Painted at once
@@ -3952,9 +3702,6 @@ def ui(screen, session, worker, lock):
                     refresh_at = 0
                 elif armed is not None and hit == armed and armed.startswith(EPIC_STALE):
                     ask_now(ask_epic(armed, hit_row))
-                    refresh_at = 0
-                elif armed is not None and hit == armed and armed.startswith(STEWARD_ITEM):
-                    open_steward_menu(session, armed, env)
                     refresh_at = 0
                 elif armed is not None and hit == armed:
                     nxt = open_tap(session, "new" if armed.startswith("hdr:") else "menu", armed, env)

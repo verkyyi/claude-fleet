@@ -45,9 +45,9 @@
 #      #3000: fleet-view = root copied + ⌘↓ ⌘↑ ⌘[ ⌘] ⌘P ⌘K ⌘N ⌘T ⌘Q ⌃\ (#3004),
 #      fleet-view-pfx) — and one
 #      that sources the client's conf has every sheet key — on an isolated socket.
-#      Its bar says ⌘N 编排, ⌘N 新任务 only with @fleet_compose (issue #2616);
-#      ⌘N, prefix c and the bar's cell are one road (fleet-shell.sh portal), solo
-#      ⌃\ still the local shell (issue #2619).
+#      Its bar says ⌘N 新会话 (issue #3119), ⌘N 新任务 only with @fleet_compose
+#      (issue #2616); ⌘N, prefix c and the bar's cell are one road (fleet-shell.sh
+#      portal), solo ⌃\ still the local shell (issue #2619).
 #
 # Exit 0 = pass. Non-zero = fail (prints what diverged). No network.
 set -uo pipefail
@@ -280,8 +280,8 @@ grep -qE '⌃|↑|prefix E|打字' <<< "$SSHEET" && fail "the sidebar sheet stil
 grep -Eq '^(task sidebar|row menu|tmux prefix|dashboard|backlog|config modal) ' <<< "$SSHEET" \
   && fail "the sidebar sheet shows a full-sheet group"
 menu_keys="$(bash "$BIN/fleet-sidebar-menu.sh" --keys)" || fail "fleet-sidebar-menu.sh --keys exited non-zero"
-[ "$(printf '%s\n' "$menu_keys" | cut -f1 | tr -d '\n')" = rtpaswklvxn1-9ogemqcbuj ] \
-  || fail "the row menu's key table is not r t p a s w k l v x n 1-9 o g e m q c b u j (i 详情列 left with #2305; b: 进编排会话, #2146; u j: 进管家会话 · 管家页, #2735): $(printf '%s' "$menu_keys" | cut -f1 | tr '\n' ' ')"
+[ "$(printf '%s\n' "$menu_keys" | cut -f1 | tr -d '\n')" = rtpaswklvxn1-9ogemqc ] \
+  || fail "the row menu's key table is not r t p a s w k l v x n 1-9 o g e m q c (i 详情列 left with #2305; b u j — 进编排会话 · 进管家会话 · 管家页 — left with #3119): $(printf '%s' "$menu_keys" | cut -f1 | tr '\n' ' ')"
 while IFS='	' read -r mk _; do
   [ -n "$mk" ] || continue
   grep -Eq "^  $mk +" <<< "$SSHEET" && fail "the sidebar sheet lists the row menu letter '$mk'"
@@ -453,33 +453,34 @@ $sheet_prefix_keys
 EOF
   ktm shell list-keys -T root | awk '$4 == "F9"' | grep -q 'resize-pane' || fail "8: the client does not bind F9"
   ktm shell list-keys -T fleet-sidebar 2>/dev/null | grep -q . && fail "8: the client still has a fleet-sidebar key table — the list takes no keys (#1950)"
-  # ⌘N on the bar (issue #2616): 「⌘N 编排」 — it goes to the orchestrating session —
-  # and 「⌘N 新任务」 only while FLEET_COMPOSE=1 brings the writing area back
-  # (@fleet_compose, fleet-shell.sh stamp_ver); prefix c's hint the same.
+  # ⌘N on the bar (issue #3119): 「⌘N 新会话」 — it opens a new session; no word
+  # of an orchestrator anywhere on it — and 「⌘N 新任务」 only while
+  # FLEET_COMPOSE=1 brings the writing area back (@fleet_compose, fleet-shell.sh
+  # stamp_ver); prefix c's hint the same.
   bar=$(ktm shell display-message -p '#{E:@fleet_hint_session}' 2>/dev/null | sed 's/#\[[^]]*\]//g')
-  case "$bar" in *"⌘N 编排"*) ;; *) fail "8: the bar does not say ⌘N 编排: $bar" ;; esac
+  case "$bar" in *"⌘N 新会话"*) ;; *) fail "8: the bar does not say ⌘N 新会话: $bar" ;; esac
+  case "$bar" in *"编排"*) fail "8: the bar still names the orchestrator: $bar" ;; esac
   case "$(ktm shell display-message -p '#{E:@fleet_hint_prefix}' 2>/dev/null | sed 's/#\[[^]]*\]//g')" in
-    *"c 编排"*) ;; *) fail "8: prefix c's hint does not say 编排" ;; esac
+    *"c 新会话"*) ;; *) fail "8: prefix c's hint does not say 新会话" ;; esac
   ktm shell set-option -g @fleet_compose 1
   bar=$(ktm shell display-message -p '#{E:@fleet_hint_session}' 2>/dev/null | sed 's/#\[[^]]*\]//g')
   case "$bar" in *"⌘N 新任务"*) ;; *) fail "8: with FLEET_COMPOSE=1 the bar does not say ⌘N 新任务: $bar" ;; esac
-  # An orchestrator that cannot count is busy (issue #2617): the list sets
-  # @fleet_orch_busy to the ui-lang line and the bar says it; unset, nothing.
-  case "$bar" in *"编排在忙"*) fail "8: the bar says 编排在忙 with no @fleet_orch_busy: $bar" ;; esac
+  # No session is special (issue #3119): @fleet_orch_busy, which an older list
+  # may still hold, puts nothing on the bar.
   ktm shell set-option -g @fleet_orch_busy '编排在忙 · 你说的会排到它这一步做完'
   bar=$(ktm shell display-message -p '#{E:@fleet_hint_session}' 2>/dev/null | sed 's/#\[[^]]*\]//g')
-  case "$bar" in *"⌘Q 退出 fleet  编排在忙 · 你说的会排到它这一步做完"*) ;; *) fail "8: @fleet_orch_busy is not on the bar: $bar" ;; esac
-  # User928's new meaning (issue #2619, EPIC #2615 C4): ⌘N, prefix c and the bar's
-  # 「⌘N 编排」 cell (a tap on an iPad: range=user|key-User928) all run ONE road —
-  # fleet-shell.sh portal, which goes to the orchestrating session (woken first)
-  # unless FLEET_COMPOSE=1 — and the one-session layout's ⌃\ (and prefix \) is
-  # the session's shell, prefix ! this computer's (#2744).
+  case "$bar" in *"编排在忙"*) fail "8: the bar says @fleet_orch_busy: $bar" ;; esac
+  # User928's meaning (issue #3119): ⌘N, prefix c and the bar's 「⌘N 新会话」 cell
+  # (a tap on an iPad: range=user|key-User928) all run ONE road — fleet-shell.sh
+  # portal, which opens a new session unless FLEET_COMPOSE=1 — and the
+  # one-session layout's ⌃\ (and prefix \) is the session's shell, prefix !
+  # this computer's (#2744).
   nk=$(ktm shell list-keys -T root 2>/dev/null | awk '$4 == "User928"')
   case "$nk" in *"fleet-shell.sh portal "*) ;; *) fail "8: ⌘N (User928) does not run fleet-shell.sh portal: $nk" ;; esac
   ck=$(ktm shell list-keys -T prefix 2>/dev/null | awk '$4 == "c"' | sed 's/^.* c  *//')
   [ -n "$ck" ] && [ "$ck" = "$(printf '%s\n' "$nk" | sed 's/^.* User928  *//')" ] || fail "8: prefix c is not ⌘N's road: [$ck] vs [$nk]"
   case "$(ktm shell show-options -gv @fleet_hint_session 2>/dev/null)" in
-    *'#[range=user|key-User928]'*'⌘N'*'编排'*) ;; *) fail "8: the bar's ⌘N cell is not a User928 range reading 编排" ;; esac
+    *'#[range=user|key-User928]'*'⌘N'*'新会话'*) ;; *) fail "8: the bar's ⌘N cell is not a User928 range reading 新会话" ;; esac
   ktm shell list-keys -T root 2>/dev/null | awk '$4 == "C-\\\\"' | grep -q '@fleet_layout},solo}.*@solo_shell.*fleet-remote-view.sh shell-open ' \
     || fail "8: solo ⌃\\ is no longer the session's shell (shell-open, #2744): $(ktm shell list-keys -T root | awk '$4 == "C-\\\\"')"
   ktm shell list-keys -T prefix 2>/dev/null | awk '$4 == "\\\\"' | grep -q '@fleet_layout},solo}.*fleet-remote-view.sh shell-open ' \
@@ -498,7 +499,7 @@ fi
 # glyph; the profile fleet-iterm-profile.py writes sends exactly `ESC [<code>~` for
 # the ⌘ chord. On the client server of leg 8's kind the codes are live.
 sw_table="$(bash "$KEYMAP" --panel switch list)" || fail "10: dash-keymap.sh --panel switch list exited non-zero"
-# `new` (⌘N / prefix c, issue #1953): the writing area — private code 928.
+# `new` (⌘N / prefix c, issue #1953 → #3119): a new session — private code 928.
 # `fold` (⌘. / prefix ., issue #2167): the session in view's sub-tasks — 929.
 # `switcher` (⌘K / prefix s, issue #2266): ⌘P's panel since #2365 — 930.
 # `needs` (⌘J · 924 · prefix k) and `help` (⌘/ · 926 · prefix ?) went with issue #2362.

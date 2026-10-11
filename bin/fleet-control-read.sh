@@ -184,11 +184,11 @@ case "$mode" in
     # Column 19 (issue #1951): `detail=<question>` — what a session in `needs`
     # asks, in its own words (@claude_needs_detail, ≤120 characters), so the
     # client's bar and its notification can say it; empty when it waits on nothing.
-    # Column 20 (issue #1957): `role=orchestrator` on the fleet's one orchestrating
-    # session (@fleet_role, bin/fleet-orchestrator.sh) — its key is `orchestrator`
-    # (fleet_control.py) and the client wears it on 「新任务」 instead of a row;
-    # `role=steward` on its steward (issue #2670, bin/fleet-steward.sh) — no row
-    # at all; empty on every other window.
+    # Column 20 (issue #1957): `role=` — since issue #3119 no session is special:
+    # the window holding the orchestrator or the steward (@fleet_role) says
+    # `role=worker`, so every machine's list draws it as an ordinary row (an
+    # older node's `role=orchestrator|steward` is read by the hub for one more
+    # version); empty on every other window.
     # Column 21 (issue #1958): `epic=<owner/name>#<N>[:<landed>/<members>]` on the
     # window that drives a running EPIC (@epic, stamped by fleet-epic-heartbeat.sh),
     # the counts off THIS machine's mark for that batch (epic-running.d); its
@@ -362,7 +362,10 @@ case "$mode" in
       [ -n "$cpage" ] && od="$od"$'\t'"orchpage=$cpage"
       [ -n "$cparkl" ] && od="$od"$'\t'"orchparkl=$cparkl"
       [ -n "$ctodol" ] && od="$od"$'\t'"orchtodol=$ctodol"
-      printf '%s\tbusy=%s\tborn=%s\tcfg=%s\ttitle=%s\treap=%s\tdetail=%s\trole=%s\tepic=%s\tepicstale=%s\tbackfill=%s\tctxleft=%s\tctxband=%s\tctxts=%s\tmodel=%s\teffort=%s\tagentstatus=%s\ttest=%s\torchq=%s%s\n' "$row" "$b" "$born" "$FCFG_STATE" "$t" "$wreap" "$wdet" "$wrole" "$wepic" "$estale" "$wbf" "$cl" "$cb" "$cts" "$cm" "$ce" "$cas" "$wtest" "$cq" "$od"
+      # the holder is an ordinary row (issue #3119): `role=worker`; its steward
+      # columns (31-37, gated on the real @fleet_role above) ride on until C7
+      orole=''; [ -n "$wrole" ] && orole=worker
+      printf '%s\tbusy=%s\tborn=%s\tcfg=%s\ttitle=%s\treap=%s\tdetail=%s\trole=%s\tepic=%s\tepicstale=%s\tbackfill=%s\tctxleft=%s\tctxband=%s\tctxts=%s\tmodel=%s\teffort=%s\tagentstatus=%s\ttest=%s\torchq=%s%s\n' "$row" "$b" "$born" "$FCFG_STATE" "$t" "$wreap" "$wdet" "$orole" "$wepic" "$estale" "$wbf" "$cl" "$cb" "$cts" "$cm" "$ce" "$cas" "$wtest" "$cq" "$od"
     done <<<"$rows"
     ;;
   # --- wstate <sess> <@win> (issue #2238) --------------------------------------

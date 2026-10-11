@@ -9,10 +9,12 @@
 # client, and capture-pane of the outer pane is what the person sees. A second
 # outer pane attaches to `fl` DIRECTLY: every key there must do nothing of ours.
 #
-#   N  ⌘N (fleet-quickopen.py do new / fleet_view.go_orch): the orchestrator's
-#      window here; another machine's (orch_<fleet> names it) through its C4
-#      window (peer-select, logged how=new); none anywhere → fleet-orchestrator.sh
-#      ensure (FLEET_VIEW_ORCH_CMD), then there; a direct attach: nothing
+#   N  ⌘N (fleet-quickopen.py do new / fleet_view.go_new, issue #3119): a NEW
+#      session every press — dash-raw-session.sh --origin hub --no-repo --no-desk
+#      --print <fleet> (FLEET_VIEW_NEW_CMD), the 看台 onto the window it printed
+#      (logged how=new) — never the window holding the orchestrator, even with
+#      orch_<fleet> naming one, and no orchestrator script run at all
+#      (FLEET_VIEW_ORCH_CMD would leave a mark); a direct attach: nothing
 #   T  ⌘T: the 派一件事 popup in the 看台 — 用哪个 Coding Agent, the fleet's default
 #      first, an agent this machine lacks grey with why; ↵ sends with no --agent
 #      (the default), `send --agent codex` carries it; a direct attach: no popup
@@ -57,13 +59,20 @@ waitfor() {   # <secs*4> <cmd…> — until the command succeeds
 }
 
 # --- the seams the home machine's keys run through ------------------------------
-# ⌘N with no orchestrator anywhere: `ensure` opens one (a window with the role)
+# ⌘N: dash-raw-session.sh's stand-in — its argv kept, a window opened, the
+# --print receipt (`<window_id>\t<name>\t<worktree>\t<fleet_id>`) back
+cat > "$W/newsess.sh" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> '$W/new.argv'
+n=\$(wc -l < '$W/new.argv' | tr -d ' ')
+w=\$(tmux -S '$IN' new-window -d -P -F '#{window_id}' -t fl -n "new\$n" 'sleep 600') || exit 1
+printf '%s\tnew%s\t\tfid%s\n' "\$w" "\$n" "\$n"
+EOF
+# an orchestrator script, should anything still call one: it leaves a mark
 cat > "$W/ensure.sh" <<EOF
 #!/bin/sh
-[ "\$1" = ensure ] || exit 2
-w=\$(tmux -S '$IN' new-window -d -P -F '#{window_id}' -t fl -n orch2 'sleep 600') || exit 1
-tmux -S '$IN' set-option -w -t "\$w" @fleet_role orchestrator
-echo "\$w"
+: > '$W/orch.called'
+exit 1
 EOF
 # ⌘T's send: the payload kept, one filed line back
 cat > "$W/send.sh" <<EOF
@@ -79,14 +88,14 @@ for a in "\$@"; do case "\$a" in *'fleet-remote-view.sh select'*) exit 0 ;; esac
 printf '%s\n' "\$@" > '$W/ssh.argv'
 cd '$W/farwt' && exec /bin/sh -i
 EOF
-chmod +x "$W/ensure.sh" "$W/send.sh" "$W/fakessh.sh"
+chmod +x "$W/ensure.sh" "$W/newsess.sh" "$W/send.sh" "$W/fakessh.sh"
 : > "$W/conf/peerlink/m4.sock"
 printf '{"links":[{"machine":"m4","login":"%s","phase":"up","sock":"%s","host":"m4"}]}\n' "$ME" "$W/conf/peerlink/m4.sock" \
   > "$W/conf/peerlink/state.json"
 printf 'acme/app\nacme/web\n' > "$W/g/hub_repos"
 
 export HOME="$W/home" FLEET_CONF_DIR="$W/conf" FLEET_STATUS_G="$W/g" FLEET_UI_LANG=zh LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 \
-  FLEET_VIEW_ORCH_CMD="sh $W/ensure.sh" FLEET_DISPATCH_SEND_CMD="sh $W/send.sh" FLEET_DISPATCH_AGENTS_HERE=claude \
+  FLEET_VIEW_ORCH_CMD="sh $W/ensure.sh" FLEET_VIEW_NEW_CMD="sh $W/newsess.sh" FLEET_DISPATCH_SEND_CMD="sh $W/send.sh" FLEET_DISPATCH_AGENTS_HERE=claude \
   FLEET_SWITCH_STATE="$W/state" FLEET_AGENT=claude FLEET_SESSION_SHELL_WATCH=1 FLEET_PEERLINK_SSH="$W/fakessh.sh" \
   SHELL=/bin/sh FLEET_VIEW_ROWS_CMD="true"
 unset TMUX TMUX_PANE FLEET_SHELL FLEET_SESSION FLEET_CLIENT
@@ -120,31 +129,32 @@ sleep 1
 [ "$(nwin)" = "$before" ] && [ "$(ti display-message -p -t 'fl:' '#{window_id}')" = "$fcur" ] \
   || fail "N: ⌘N did something in a session attached directly"
 [ -s "$W/pane0.in" ] && fail "N: ⌘N's bytes reached a pane in a direct attach: $(od -c "$W/pane0.in" | head -2)"
+# the orchestrator's holder here and orch_<fleet> naming another machine's: ⌘N
+# goes to neither — a new session, every press
+printf '%s\n' "$MU/orch4${US}m4${US}online${US}working${US}${US}" > "$W/g/orch_fl"
 to send-keys -t o:view -H 1b 5b 39 32 38 7e
-waitfor 16 sh -c "[ \"\$(tmux -S '$IN' display-message -p -t 'fl@view-v1:' '#{window_id}')\" = '$W0' ]" \
-  || fail "N: ⌘N in the 看台 did not land on the orchestrator here (now $(cur))"
+waitfor 20 sh -c "tmux -S '$IN' list-windows -t fl -F '#{window_name}' | grep -qx new1" || fail "N: ⌘N in the 看台 opened no new session"
+N1=$(ti list-windows -t fl -F '#{window_id} #{window_name}' | awk '$2 == "new1" { print $1 }')
+waitfor 16 sh -c "[ \"\$(tmux -S '$IN' display-message -p -t 'fl@view-v1:' '#{window_id}')\" = '$N1' ]" \
+  || fail "N: ⌘N did not land the 看台 on the new session (now $(cur), it is $N1)"
+[ "$(cur)" != "$W0" ] || fail "N: ⌘N landed on the orchestrator's holder"
+[ "$(head -1 "$W/new.argv")" = "--origin hub --no-repo --no-desk --print fl" ] \
+  || fail "N: the new session was not asked as a no-repo one of this fleet: $(head -1 "$W/new.argv")"
 log="$W/conf/logs/view-switch.ndjson"
 tail -1 "$log" | grep -q '"how":"new"' || fail "N: the switch is not logged how=new: $(tail -1 "$log")"
-# another machine holds it: orch_<fleet> names it; its C4 window (made here, link up)
+to send-keys -t o:view -H 1b 5b 39 32 38 7e
+waitfor 20 sh -c "tmux -S '$IN' list-windows -t fl -F '#{window_name}' | grep -qx new2" || fail "N: a second ⌘N opened no second session"
+N2=$(ti list-windows -t fl -F '#{window_id} #{window_name}' | awk '$2 == "new2" { print $1 }')
+waitfor 16 sh -c "[ \"\$(tmux -S '$IN' display-message -p -t 'fl@view-v1:' '#{window_id}')\" = '$N2' ]" \
+  || fail "N: the second ⌘N did not land on its new session (now $(cur), it is $N2)"
+[ -e "$W/orch.called" ] && fail "N: ⌘N ran an orchestrator script"
+rm -f "$W/g/orch_fl"
+# another machine's C4 window (made here, link up) — the S and Q legs use it
 PW=$(ti new-window -d -P -F '#{window_id}' -t fl -n @m4 'sleep 600')
 for o in "@fleet_role panel" "@peer m4@$ME" "@peer_view v1" "@peer_node m4" "@peer_login $ME" "@peer_cur wid:$MU/far1"; do
   ti set-option -w -t "$PW" ${o%% *} "${o#* }"
 done
-ti set-option -w -u -t "$W0" @fleet_role
-printf '%s\n' "$MU/orch4${US}m4${US}online${US}working${US}${US}" > "$W/g/orch_fl"
-to send-keys -t o:view -H 1b 5b 39 32 38 7e
-waitfor 16 sh -c "[ \"\$(tmux -S '$IN' display-message -p -t 'fl@view-v1:' '#{window_id}')\" = '$PW' ]" \
-  || fail "N: ⌘N with the orchestrator on m4 did not show m4's window (now $(cur))"
-[ "$(ti display-message -p -t "$PW" '#{@peer_cur}')" = "wid:$MU/orch4" ] || fail "N: m4's window is not on its orchestrator: $(ti display-message -p -t "$PW" '#{@peer_cur}')"
-tail -1 "$log" | grep -q '"method":"peer-select"' || fail "N: not one peer-select: $(tail -1 "$log")"
-# none anywhere: ensure, then there
-rm -f "$W/g/orch_fl"
-to send-keys -t o:view -H 1b 5b 39 32 38 7e
-waitfor 20 sh -c "tmux -S '$IN' list-windows -t fl -F '#{window_name}' | grep -qx orch2" || fail "N: no orchestrator anywhere → ensure was not run"
-O2=$(ti list-windows -t fl -F '#{window_id} #{window_name}' | awk '$2 == "orch2" { print $1 }')
-waitfor 16 sh -c "[ \"\$(tmux -S '$IN' display-message -p -t 'fl@view-v1:' '#{window_id}')\" = '$O2' ]" \
-  || fail "N: after ensure the 看台 is not on the new orchestrator (now $(cur), it is $O2)"
-pass "N  ⌘N: the orchestrator here · on m4 through its window (peer-select) · none → ensure, then there; a direct attach: nothing"
+pass "N  ⌘N: a new no-repo session every press, the 看台 on it — never the orchestrator's holder, no orchestrator script; a direct attach: nothing"
 
 # --- T: ⌘T ----------------------------------------------------------------------------------
 to send-keys -t o:direct -H 1b 5b 39 33 32 7e

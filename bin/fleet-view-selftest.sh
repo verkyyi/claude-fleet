@@ -14,8 +14,9 @@
 #      table (dash-keymap.sh); fleet-view-pfx = ⌃] then the 看台's letter (view);
 #      sourcing twice leaves the same tables
 #   B  ⌘P (`ESC[927~`) in the 看台 opens the list — grouped by (machine, login),
-#      this one first, 停放 · 待你动手 · 已结束 under them, no `merged` / `done:2h` /
-#      `⇢cla` / bare `!` — and in a session attached directly it does nothing
+#      this one first, 已结束 under them, no 「新任务」 / 停放 / 待你动手 (issue
+#      #3119), no `merged` / `done:2h` / `⇢cla` / bare `!` — and in a session
+#      attached directly it does nothing
 #      (no popup, no byte reaches the pane)
 #   C  ↵ on a row here: the 看台's current window changes (select-window), with no
 #      whole-screen clear on the client; one view-switch.ndjson line (method ·
@@ -144,10 +145,11 @@ ok=''; for _ in 1 2 3 4 5 6 7 8 9 10; do
   sleep 0.5; to capture-pane -p -t o:view > "$W/popup.txt"; grep -q "nodeA · ${ME}（这台）" "$W/popup.txt" && { ok=1; break; }
 done
 [ -n "$ok" ] || fail "B: ⌘P in the 看台 opened no list: $(cat "$W/popup.txt")"
-for want in '新任务（编排）' "nodeA · ${ME}（这台）" '─ m4 ' "nodeA · other" 'Alpha 的完整标题很长很长' '在问你' '在干活' '停放 1 个' '已结束 1 个'; do
+for want in "nodeA · ${ME}（这台）" '─ m4 ' "nodeA · other" 'Alpha 的完整标题很长很长' '在问你' '在干活' '已结束 1 个'; do
   grep -qF "$want" "$W/popup.txt" || fail "B: the list lacks 「${want}」: $(cat "$W/popup.txt")"
 done
-for bad in 'merged' 'done:2h' '⇢' ' ! '; do
+# no session is special (issue #3119): no 「新任务」 line, no 停放 / 待你动手 section
+for bad in 'merged' 'done:2h' '⇢' ' ! ' '新任务' '编排' '停放' '待你动手'; do
   grep -qF -- "$bad" "$W/popup.txt" && fail "B: the list still says 「${bad}」: $(grep -F -- "$bad" "$W/popup.txt")"
 done
 here=$(grep -n "（这台）" "$W/popup.txt" | head -1 | cut -d: -f1); far=$(grep -n '─ m4 ' "$W/popup.txt" | head -1 | cut -d: -f1)
@@ -251,22 +253,25 @@ esac
 to resize-window -t o:view -x 120 -y 32
 pass "G  a phone: 40 columns, ⌃] p the list on the whole screen, ⌃] n on to another machine's session"
 
-# --- H: the orchestrator on another machine (issue #3007): still the pinned first row ----------
-python3 - "$BIN" <<'EOF' || fail "H: the far orchestrator is not the pinned first row"
-import importlib.util, sys
+# --- H: no session is special (issue #3119): the orchestrator gets no line of its own ----------
+python3 - "$BIN" <<'EOF' || fail "H: the orchestrator still gets a line of its own"
+import importlib.util, sys, tempfile
+from pathlib import Path
 spec = importlib.util.spec_from_file_location("fv", sys.argv[1] + "/fleet_view.py")
 fv = importlib.util.module_from_spec(spec); spec.loader.exec_module(fv)
+g = Path(tempfile.mkdtemp())
+(g / "orch_fl").write_text("\x1f".join(["UU/orchfid", "macmini", "online", "looping", "", "", "0", "park=1", "todo=2"]) + "\n")
+fv.dash_global = lambda: g
 fv.view_row = lambda vid: {}
-fv.view_fleet = lambda vid, row: "fl"
+fv.view_fleet = lambda vid, row=None: "fl"
 fv.here_label = lambda row: "m4"
 fv.fleet_logins = lambda: {"UU": "verky"}
-fv.windows = lambda fleet: {"@3": ("f3", "", 0)}       # no orchestrator window on this home
+fv.windows = lambda fleet: {"@3": ("f3", "orchestrator", 0)}   # the holder here, too
 fv.produce = lambda fleet: ""
-fv.orch_line = lambda fleet: ["UU/orchfid", "macmini", "online", "looping", "", "", "0"]
-e = fv.entries("v1")[0]
-assert e.get("pin") and e["target"] == "UU/orchfid" and e["far"] and e["machine"] == "macmini" and e["login"] == "verky", e
+assert fv.entries("v1") == [], fv.entries("v1")
+assert not hasattr(fv, "go_orch") and not hasattr(fv, "orch_target"), "the orchestrator readers are gone"
 EOF
-pass "H  the orchestrator on another machine: still the pinned first row, a far go"
+pass "H  no session is special: orch_<fleet> and a holder window add no line (issue #3119)"
 
 # --- F: the old client's road ----------------------------------------------------------------
 grep -q 'if argv\[:1\] == \["do"\] and len(argv) == 2:' "$BIN/fleet-quickopen.py" || fail "F: the old do <verb> road changed"
