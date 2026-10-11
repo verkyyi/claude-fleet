@@ -388,7 +388,8 @@ def login_open(a):
     if a.full_name and not valid_full_name(a.full_name):
         raise Refuse('full name: 1-64 characters, no control characters, no : or ,, not starting with -')
     code = None
-    if a.join_file:
+    # A restart after the one-time Secret is gone has no file: read only when given.
+    if a.join_file and os.path.exists(a.join_file):
         try:
             code = Path(a.join_file).read_text().strip()
         except OSError:
