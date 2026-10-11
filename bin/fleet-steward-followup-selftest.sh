@@ -29,8 +29,6 @@ WORK=$(mktemp -d "${TMPDIR:-/tmp}/followup-st.XXXXXX")
 fails=0
 ok()  { printf 'PASS  %s\n' "$1"; }
 bad() { printf 'FAIL  %s\n' "$1"; fails=$((fails + 1)); }
-REAL_TMUX=''
-for t in $(type -ap tmux); do case "$t" in */tmux-shim/*) ;; *) REAL_TMUX=$t; break ;; esac; done
 trap 'rm -rf "$WORK"' EXIT
 
 export FLEET_UI_LANG=zh FLEET_DECISION_TZ=UTC FLEET_SKIP_GLOBAL_CONF=1 FLEET_STEWARD_HOLDER_CMD="echo @9" FLEET_STEWARD_FOLLOWUP_SYNC=1
