@@ -105,6 +105,10 @@
 #   feedback-github-down                            tokenledger/internal/api fleet_feedback_github.go (feedbackFile: 待转,
 #                                                   1 min doubling to 1 h, the marker adopts the issue a 500 created;
 #                                                   go test, when a toolchain is here)
+#   feedback-reply-lost                             tokenledger/internal/api fleet_feedback_reply.go (a close read
+#                                                   once, sent until a node says succeeded, the next session when
+#                                                   the first is gone, 30 days; go test, when a toolchain is here)
+#                                                   + bin/fleet_control.py (the prefix to any session's inbox)
 #   dist-publish-tampered                           tokenledger/internal/api fleet_publish.go (POST …/publish: the archive
 #                                                   hashed into the commit's tree, OIDC, forward only; go test, when a
 #                                                   toolchain is here) + bin/fleet-release-publish.sh (what CI sends)
@@ -1698,6 +1702,39 @@ drill_feedback_github_down() {
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
       0:*) WHAT='假 GitHub 先「建成却回 500」、再超时：反馈一直待转，59 秒内不重试、2 分钟内不再试；恢复后认领已建的那张，仓库里只有 1 张；退避封顶 1 小时（go test）' ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
+      *) WHY="the Go half is red: $(printf '%s' "$out" | grep -v '^ok' | grep -v '^20' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  fi
+  SECS=$(since "$t0")
+}
+
+# ---- feedback-reply-lost (#3359, EPIC #3354 C5): a feedback's issue is closed
+# and what the closing said never reaches the person — the session they sent it
+# from is gone, their machine is down — or reaches them twice. The hub closes a
+# row once, sends until a node says succeeded (then never again), tries the
+# person's other live sessions when the first is gone, keeps it 30 days; the
+# node delivers the desk's prefix to any session's inbox, never the bridge.
+drill_feedback_reply_lost() {
+  CAP=120; local t0 out rc f="$ROOT/tokenledger/internal/api/fleet_feedback_reply.go"
+  local tests='TestFeedbackReplyClosedSendsOnce|TestFeedbackReplyWaitsForNextSession|TestFeedbackReplyFailedSessionTriesNext|TestFeedbackReplyExpiresAfter30Days|TestFeedbackReplyPrefixIsTheDesks'
+  t0=$(now)
+  grep -q 'if ok, err := s.Store.SetFeedbackReplied(f.ID, now); err != nil' "$f" 2>/dev/null \
+    || { WHY="a reply no longer writes replied_at when its node says succeeded"; return 1; }
+  grep -q 'feedbackReplyKeep      = 30 \* 24 \* time.Hour' "$f" || { WHY="a waiting reply is no longer kept 30 days"; return 1; }
+  grep -q 'if action == "worker_message" and actor == FEEDBACK_ACTOR and params\["text"\].startswith(FEEDBACK_PREFIX):' \
+    "$BIN/fleet_control.py" || { WHY="the node no longer hands the desk's reply to any session's inbox"; return 1; }
+  local tn; for tn in $(printf '%s' "$tests" | tr '|' ' '); do
+    grep -q "^func $tn(" "$ROOT/tokenledger/internal/api/fleet_feedback_reply_test.go" 2>/dev/null \
+      || { WHY="the hub half's test $tn is not in tokenledger/internal/api/fleet_feedback_reply_test.go"; return 1; }
+  done
+  WHAT='关单 ⇒ 送一次；会话已关 ⇒ 存着，他下一个会话上线时送一次；30 天过期不送；重复关单不重复送（测试按名核对在，Go 门跑它们）'
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run "^($tests)\$" ./internal/api 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
+      0:*) WHAT='假 GitHub 关单、假节点收信：关单送一次、重开再关不再送；原会话不在 ⇒ 存着，他另一台机器上的会话上线后送一次；原会话拒收 ⇒ 换下一个；30 天前关的不送；别人冒用前缀 403（go test）' ;;
       *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
       *) WHY="the Go half is red: $(printf '%s' "$out" | grep -v '^ok' | grep -v '^20' | head -6 | tr '\n' ' ')"; return 1 ;;
     esac

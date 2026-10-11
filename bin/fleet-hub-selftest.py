@@ -751,6 +751,39 @@ class HubTests(HubFixture):
         lost = self.lifecycle("worker_message", idem="msg-lost", text="anyone?")
         self.assertEqual((lost["status"], lost["result"]["error"]["code"]), ("unknown", "UNKNOWN_OUTCOME"))
 
+    def test_feedback_reply_goes_to_any_session_inbox(self):
+        # issue #3359: the hub's feedback desk (actor `feedback`) sends a reply
+        # prefixed [fleet-feedback] — delivered to the session's inbox by its
+        # worker_id, a no-repo / scratch session too, never through the issue
+        # bridge; no such session ⇒ a clean NOT_FOUND, nothing sent.
+        ident = str(uuid.uuid4())
+        self.node.windows(("@12", 123, False, "/fixture/issue-123"), ("@4", None, True, "/fixture/project-scratch-4", "", "", ident))
+        fleet = self.node.controller.fleet(self.fleet)
+        text = "[fleet-feedback] 你的反馈 F12 有回音了（o/r#9000）：修好了"
+        msg = lambda wid, actor="feedback": self.node.controller.execute_worker(
+            fleet, "worker_message", {"worker_id": wid, "text": text}, actor)
+        done = msg(self.fleet + "/" + ident)
+        self.assertEqual(done["channel"], "direct")
+        self.assertEqual(self.node.calls("peer")[-1].split(" ")[-2:], ["wid:" + self.fleet + "/" + ident, "-"])
+        self.assertEqual((self.node.conf / "peer.body").read_text(), text)
+        self.assertEqual(self.node.calls("comment"), [])
+        # an issue session with the bridge on: still the inbox, never a comment
+        msg(self.worker())
+        self.assertEqual(self.node.calls("comment"), [])
+        self.assertEqual(len(self.node.calls("peer")), 2)
+        with self.assertRaises(Fault) as gone:
+            msg(self.fleet + "/" + str(uuid.uuid4()))
+        self.assertEqual(gone.exception.code, "NOT_FOUND")
+        (self.node.conf / "peer-down").touch()
+        with self.assertRaises(Fault) as down:
+            msg(self.fleet + "/" + ident)
+        self.assertEqual(down.exception.code, "EXECUTION_FAILED")
+        (self.node.conf / "peer-down").unlink()
+        # the prefix from anyone else is an ordinary message: a scratch is refused
+        with self.assertRaises(Fault) as other:
+            msg(self.worker("scratch-4"), actor="operator")
+        self.assertEqual(other.exception.code, "INVALID_ARGUMENT")
+
     def gh_grant(self, *scopes):
         return self.hub.grant("ipad", [self.fleet], ["fleet:read", *scopes])["token"]
 

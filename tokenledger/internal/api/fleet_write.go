@@ -839,6 +839,12 @@ func (s *Server) submitWrite(ctx context.Context, p fleetPrincipal, tool string,
 	if err := s.authorize(p, fleetScopeOf[tool], w.configKey); err != nil {
 		return nil, err
 	}
+	if t, _ := w.params["text"].(string); tool == "worker_message" && strings.HasPrefix(t, FeedbackReplyPrefix) &&
+		(p.Person != "" || p.Actor != feedbackActor) {
+		// claude-fleet#3359: the node delivers this prefix to any session's
+		// inbox; only the feedback desk's reply may carry it.
+		return nil, fault("FORBIDDEN", "text must not start with "+FeedbackReplyPrefix)
+	}
 	if o, err := s.Store.FleetOperationByIdem(p.Actor, idem); err == nil {
 		return replayed(o, w)
 	} else if !errors.Is(err, sql.ErrNoRows) {

@@ -11,6 +11,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -39,8 +40,10 @@ type fakeIssuesGitHub struct {
 	pub *rsa.PublicKey
 	mu  sync.Mutex
 	// what was asked, in order: "METHOD path"
-	calls         []string
-	issues        []map[string]any
+	calls  []string
+	issues []map[string]any
+	// comments by issue number (claude-fleet#3359)
+	comments      map[int64][]map[string]any
 	fail500       bool
 	createThen500 bool
 	hang          bool
@@ -65,12 +68,25 @@ func (f *fakeIssuesGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case auth != fakeInstTok:
 		http.Error(w, `{"message":"Bad credentials"}`, http.StatusUnauthorized)
 	case r.Method == http.MethodGet && r.URL.Path == "/repos/o/r/issues":
-		if r.URL.Query().Get("labels") != "feedback" || r.URL.Query().Get("state") != "all" {
+		state := r.URL.Query().Get("state")
+		if r.URL.Query().Get("labels") != "feedback" || (state != "all" && state != "closed") {
 			http.Error(w, `{"message":"unexpected list"}`, http.StatusBadRequest)
 			return
 		}
 		f.mu.Lock()
-		out := append([]map[string]any{}, f.issues...)
+		out := []map[string]any{}
+		for _, is := range f.issues {
+			if state == "all" || is["state"] == state {
+				out = append(out, is)
+			}
+		}
+		f.mu.Unlock()
+		writeJSON(w, http.StatusOK, out)
+	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/repos/o/r/issues/") && strings.HasSuffix(r.URL.Path, "/comments"):
+		var n int64
+		_, _ = fmt.Sscanf(strings.TrimPrefix(r.URL.Path, "/repos/o/r/issues/"), "%d", &n)
+		f.mu.Lock()
+		out := append([]map[string]any{}, f.comments[n]...)
 		f.mu.Unlock()
 		writeJSON(w, http.StatusOK, out)
 	case r.Method == http.MethodPost && r.URL.Path == "/repos/o/r/issues":

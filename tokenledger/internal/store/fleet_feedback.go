@@ -265,3 +265,50 @@ func (s *Store) SetFeedbackFiled(id, number int64, at time.Time) error {
 		FeedbackFiled, number, at.UTC().Format(rfc), id, FeedbackReceived)
 	return err
 }
+
+// FeedbackFiledOpen lists the rows on GitHub whose issue has not been seen
+// closed yet, oldest first — the reply poller's work (claude-fleet#3359).
+func (s *Store) FeedbackFiledOpen(limit int) ([]Feedback, error) {
+	return s.feedbackOldest(`state = ? AND gh_number <> 0`, []any{FeedbackFiled}, limit)
+}
+
+// FeedbackToReply lists the closed rows whose reply has not reached the person
+// yet and that were closed at or after since (30 days: older is never sent),
+// oldest first.
+func (s *Store) FeedbackToReply(since time.Time, limit int) ([]Feedback, error) {
+	return s.feedbackOldest(`state = ? AND reply <> '' AND replied_at = '' AND closed_at >= ?`,
+		[]any{FeedbackClosed, since.UTC().Format(rfc)}, limit)
+}
+
+// SetFeedbackReplied records that a row's reply reached the person — once:
+// true only for the call that wrote it.
+func (s *Store) SetFeedbackReplied(id int64, at time.Time) (bool, error) {
+	res, err := s.write.Exec(`UPDATE fleet_feedback SET replied_at = ? WHERE id = ? AND replied_at = ''`,
+		at.UTC().Format(rfc), id)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n == 1, nil
+}
+
+func (s *Store) feedbackOldest(where string, args []any, limit int) ([]Feedback, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := s.read.Query(`SELECT `+feedbackCols+` FROM fleet_feedback WHERE `+where+` ORDER BY id ASC LIMIT ?`,
+		append(args, limit)...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Feedback{}
+	for rows.Next() {
+		f, err := scanFeedback(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *f)
+	}
+	return out, rows.Err()
+}
