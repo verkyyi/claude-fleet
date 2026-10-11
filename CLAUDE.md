@@ -786,6 +786,10 @@ Do not install from memory: read the doc and work from it.
   run on a commit (a failed publish / move / train / hub-deploy) is not counted by
   `fleet-stable.sh`'s CI gate (`FLEET_STABLE_DERIVED_RE`, matched through the run's
   check suite; `--ignore-check` repeats) — BREAK-IT `train-derived-red`;
+  a train that stable overtook mid-run (moved by hand, or by a later train) ends
+  green saying `superseded: stable is at X, already ahead` — asked before the
+  publish and again on a 409 / a refused move, `bin/fleet-train-superseded.sh`,
+  BREAK-IT `train-superseded-red`;
   and `selftests-macos.yml` stays FULL nightly / on dispatch; the merge gate is the ubuntu checks alone (`fleet-pr-verdict.sh` drops
   any `macOS shard *` an older PR still carries). It gates RELEASING instead:
   `fleet-stable.sh move` refuses (`macos:`) a target whose newest macOS run is not

@@ -533,7 +533,16 @@ jobs:
           ref: ${{ needs.board.outputs.train_sha }}
           fetch-depth: 0
 
+      # A late train is not a red one (issue #3143, BREAK-IT train-superseded-red):
+      # stable already at / past TRAIN_SHA (moved by hand, or by a later train) ⇒
+      # nothing left to ship — the job ends green, saying so. Asked before the
+      # publish, and again on a 409 not-forward or a move that no longer descends.
+      - name: superseded?
+        id: sup
+        run: bash bin/fleet-train-superseded.sh "$TRAIN_SHA" --dir . --hub "$FLEET_HUB_URL" || true
+
       - name: the hub is TRAIN_SHA's
+        if: steps.sup.outputs.superseded != 'true'
         run: |
           v=$(curl -fsS -m 30 "$FLEET_HUB_URL/version") || { echo "::error::cannot read $FLEET_HUB_URL/version"; exit 1; }
           echo "$v"
@@ -547,6 +556,7 @@ jobs:
           echo "### 入口 \`$img\`$( [ "$DEPLOYED" = success ] && echo '（本趟部署）' || echo '（与本趟同源，未重出镜像；挪动前 ccquota 门再核对）')" >> "$GITHUB_STEP_SUMMARY"
 
       - name: the train's ledger (#3140)
+        if: steps.sup.outputs.superseded != 'true'
         env:
           MERGES: ${{ needs.board.outputs.merges_json }}
         run: |
@@ -581,6 +591,8 @@ jobs:
           [ ! -s train.json ] || python3 -c 'import json; d=json.load(open("train.json")); print("ledger: %d merge(s), stages %s" % (len(d["merges"]), ", ".join(s["name"] for s in d["stages"])))'
 
       - name: publish TRAIN_SHA to the hub
+        id: pub
+        if: steps.sup.outputs.superseded != 'true'
         run: |
           set +e
           train=''; [ ! -s train.json ] || train='--train train.json'
@@ -589,9 +601,14 @@ jobs:
           rc=$?
           cat pub.txt
           { echo "### publish \`${TRAIN_SHA:0:7}\` → hub"; echo '```'; cat pub.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$rc" != 0 ] && grep -q '409' pub.txt; then
+            bash bin/fleet-train-superseded.sh "$TRAIN_SHA" --dir . --hub "$FLEET_HUB_URL" && exit 0
+          fi
+          echo "superseded=false" >> "$GITHUB_OUTPUT"
           exit $rc
 
       - name: move stable to TRAIN_SHA
+        if: steps.sup.outputs.superseded != 'true' && steps.pub.outputs.superseded != 'true'
         run: |
           set +e
           sh bin/fleet-stable.sh move "$TRAIN_SHA" --train "$GITHUB_RUN_ID" --ignore-check release \
@@ -599,4 +616,7 @@ jobs:
           rc=$?
           cat out.txt
           { echo "### stable → \`${TRAIN_SHA:0:7}\`"; echo '```'; cat out.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$rc" = 3 ] && grep -q 'does not descend from the current stable' out.txt; then
+            bash bin/fleet-train-superseded.sh "$TRAIN_SHA" --dir . --hub "$FLEET_HUB_URL" && exit 0
+          fi
           exit $rc

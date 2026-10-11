@@ -23,6 +23,8 @@
 #   train-derived-red       a failed publish run and a failed move run on the
 #                       commit: the next train moves stable anyway, no hand
 #                       --ignore-check; the old auto roads are gone (#3143)
+#   train-superseded-red    stable moved past TRAIN_SHA mid-run: the train's release
+#                       ends green saying superseded, not red on the 409 (#3143)
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT are read by the sourced runner
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -278,6 +280,45 @@ SH
   [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable)" = "$c3" ] || { WHY="stable did not move past the derived reds"; rm -rf "$d"; return 1; }
   SECS=$(since "$t0"); rm -rf "$d"
   WHAT="提交上留着一次失败的发布和一次失败的挪动：下一趟列车照常挪 stable，手挪也不再要逐个 --ignore-check；旧的自动三条路已退"
+}
+
+# A late train is not a red one (issue #3143): run 38139898013 went red on the
+# hub's 409 because stable had been moved past its TRAIN_SHA by hand mid-run.
+drill_train_superseded_red() {
+  CAP=30
+  local t0 d out rc wf c1 c2 c3
+  wf="$BIN/../.github/workflows/release-train.yml"
+  grep -q 'fleet-train-superseded.sh "$TRAIN_SHA"' "$wf" || { WHY="release-train.yml never asks fleet-train-superseded.sh"; return 1; }
+  [ "$(grep -c 'fleet-train-superseded.sh' "$wf")" -ge 3 ] || { WHY="release-train.yml asks before publishing but not again on a 409 / a refused move"; return 1; }
+  d=$(mktemp -d "${TMPDIR:-/tmp}/train-sup.XXXXXX")
+  ( export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+    export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
+    git init -q --bare -b master "$d/origin.git" && git clone -q "$d/origin.git" "$d/seed" 2>/dev/null || exit 1
+    for i in 1 2 3; do echo "$i" >> "$d/seed/f"; git -C "$d/seed" add -A && git -C "$d/seed" commit -qm "c$i" || exit 1
+      git -C "$d/seed" rev-parse HEAD > "$d/c$i"; done
+    git -C "$d/seed" push -q origin HEAD:master && git clone -q "$d/origin.git" "$d/co" 2>/dev/null
+  ) || { WHY="could not build the rig repo"; rm -rf "$d"; return 1; }
+  c1=$(cat "$d/c1"); c2=$(cat "$d/c2"); c3=$(cat "$d/c3"); t0=$(now)
+  sup() { env -u FLEET_HUB_URL GITHUB_OUTPUT="$d/out" GITHUB_STEP_SUMMARY="$d/sum" bash "$BIN/fleet-train-superseded.sh" "$@" --dir "$d/co" 2>&1; }
+  # stable behind the train: not superseded — the train ships
+  git --git-dir="$d/origin.git" update-ref refs/tags/stable "$c1"
+  out=$(sup "$c2"); rc=$?
+  [ "$rc" = 1 ] && grep -q '^superseded=false$' "$d/out" || { WHY="stable behind TRAIN_SHA was called superseded: $rc $out"; rm -rf "$d"; return 1; }
+  # moved by hand past it (the 409 case), or exactly onto it: superseded, green
+  for s in "$c3" "$c2"; do
+    git --git-dir="$d/origin.git" update-ref refs/tags/stable "$s"; : > "$d/out"
+    out=$(sup "$c2"); rc=$?
+    [ "$rc" = 0 ] && grep -q '^superseded=true$' "$d/out" && case "$out" in "superseded: stable is at ${s:0:7}, already ahead"*) true ;; *) false ;; esac \
+      || { WHY="stable at ${s:0:7} (≥ TRAIN_SHA) was not superseded: $rc $out"; rm -rf "$d"; return 1; }
+  done
+  grep -q 'superseded: stable is at' "$d/sum" || { WHY="the summary does not say superseded"; rm -rf "$d"; return 1; }
+  # the hub's stable ahead while the tag lags (a publish landed, the tag push did not)
+  git --git-dir="$d/origin.git" update-ref refs/tags/stable "$c1"
+  mkdir -p "$d/hub/v1/fleet/release"; printf '{"sha": "%s"}\n' "$c3" > "$d/hub/v1/fleet/release/stable"
+  out=$(sup "$c2" --hub "file://$d/hub"); rc=$?
+  [ "$rc" = 0 ] && case "$out" in *"the hub's stable"*) true ;; *) false ;; esac || { WHY="the hub's stable ahead was not superseded: $rc $out"; rm -rf "$d"; return 1; }
+  SECS=$(since "$t0"); rm -rf "$d"
+  WHAT="stable 被手动挪过了 TRAIN_SHA（或入口 stable 已在前面）：release 写 superseded、以成功收场，不再被 409 打红；stable 落后则照常发"
 }
 
 cred_run_drills "$0"
