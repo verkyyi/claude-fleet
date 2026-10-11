@@ -30,13 +30,31 @@ EGRESS = {
 EGRESS6_BLOCK = ['fc00::/7']
 
 
-def egress_rules(dns, blocked):
-    """iptables-restore input: loopback, replies, DNS to kube-dns, then REJECT each range."""
+# The dev network (#3348): GitHub's git transport through the Singapore relay
+# (extras/gh-relay), a repo the in-cluster CI mirror carries fetched from it, CN
+# package mirrors. fleet-node-linux.py turns these into /etc/gitconfig and
+# /etc/fleet-devnet.env for every login at each start.
+GH_PROXY_RE = r'http://[A-Za-z0-9.-]+:[0-9]{1,5}'
+GIT_MIRROR_RE = r'(git|https?)://[A-Za-z0-9.-]+(:[0-9]{1,5})?/[A-Za-z0-9._/-]+=https://github\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+\.git'
+
+
+def egress_allow(value):
+    """'IP[/n]:PORT' -> (cidr, port): one in-cluster destination the guard lets through."""
+    net, _, port = value.rpartition(':')
+    if not port.isdigit() or not 0 < int(port) < 65536:
+        raise ValueError('--egress-allow is IP[/n]:PORT, not %r' % value)
+    return _net(net if '/' in net else net + '/32', '--egress-allow'), int(port)
+
+
+def egress_rules(dns, blocked, allow=()):
+    """iptables-restore input: loopback, replies, DNS to kube-dns, each allowed
+    in-cluster destination (tcp), then REJECT each range."""
     v4 = ['*filter', ':INPUT ACCEPT [0:0]', ':FORWARD ACCEPT [0:0]', ':OUTPUT ACCEPT [0:0]',
           '-A OUTPUT -o lo -j ACCEPT',
           '-A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT',
           '-A OUTPUT -d %s/32 -p udp -m udp --dport 53 -j ACCEPT' % dns,
           '-A OUTPUT -d %s/32 -p tcp -m tcp --dport 53 -j ACCEPT' % dns]
+    v4 += ['-A OUTPUT -d %s -p tcp -m tcp --dport %d -j ACCEPT' % a for a in allow]
     v4 += ['-A OUTPUT -d %s -j REJECT' % c for c in blocked] + ['COMMIT']
     v6 = ['*filter', ':INPUT ACCEPT [0:0]', ':FORWARD ACCEPT [0:0]', ':OUTPUT ACCEPT [0:0]',
           '-A OUTPUT -o lo -j ACCEPT',
@@ -45,8 +63,8 @@ def egress_rules(dns, blocked):
     return '\n'.join(v4), '\n'.join(v6)
 
 
-def egress_guard(image, dns, blocked, metadata):
-    v4, v6 = egress_rules(dns, blocked)
+def egress_guard(image, dns, blocked, metadata, allow=()):
+    v4, v6 = egress_rules(dns, blocked, allow)
     # nft first (Debian's default), legacy when the node's kernel has no nf_tables
     # for us; no backend that writes AND shows the metadata cut = the pod never
     # starts (fail closed). No IPv6 here is not a failure.
@@ -93,7 +111,8 @@ def entry_annotations(spec):
 
 
 def resources(image, hub, storage_class, namespace='fleet-workers', size='100Gi',
-              entry_host='', entry_spec='slb.s1.small', egress=None, pull_secrets=('acr-pull',)):
+              entry_host='', entry_spec='slb.s1.small', egress=None, pull_secrets=('acr-pull',),
+              github_proxy='', git_mirrors=(), cn_mirrors=False):
     if not re.fullmatch(r'[^\s]+@sha256:[a-f0-9]{64}', image):
         raise ValueError('pin the deployed image by sha256 digest')
     if not hub.startswith('https://'):
@@ -117,6 +136,12 @@ def resources(image, hub, storage_class, namespace='fleet-workers', size='100Gi'
     blocked = [metadata, _net(eg['pod_cidr'], '--egress-pod-cidr'),
                _net(eg['service_cidr'], '--egress-service-cidr')]
     blocked += [_net(c, '--egress-private') for c in eg['private']]
+    allow = [egress_allow(v) for v in eg.get('allow', ())]
+    if github_proxy and not re.fullmatch(GH_PROXY_RE, github_proxy):
+        raise ValueError('--github-proxy is http://HOST:PORT (extras/gh-relay), not %r' % github_proxy)
+    for m in git_mirrors:
+        if not re.fullmatch(GIT_MIRROR_RE, m):
+            raise ValueError('--git-mirror is MIRROR_URL=https://github.com/OWNER/REPO.git, not %r' % m)
     labels = {'app.kubernetes.io/name': 'fleet-managed-node'}
     volumes = [('node', '/var/db/fleet-node'), ('credentials', '/var/db/fleet-cred'),
                ('homes', '/home'), ('logs', '/var/log/fleet-node')]
@@ -127,6 +152,12 @@ def resources(image, hub, storage_class, namespace='fleet-workers', size='100Gi'
            # the entry port's sshd (keys from the hub's list only, #3070)
            {'name': 'FLEET_ENTRY', 'value': '1'},
            {'name': 'FLEET_ENTRY_PORT', 'value': str(ENTRY_PORT)}]
+    if github_proxy:
+        env.append({'name': 'FLEET_GITHUB_PROXY', 'value': github_proxy})
+    if git_mirrors:
+        env.append({'name': 'FLEET_GIT_MIRRORS', 'value': ' '.join(git_mirrors)})
+    if cn_mirrors:
+        env.append({'name': 'FLEET_CN_MIRRORS', 'value': '1'})
     if entry_host:
         # the door's address: on ACK the egress the hub sees is the NAT's, so the
         # entry reach report must name the load balancer (fleet_entry_reach.go)
@@ -173,7 +204,7 @@ def resources(image, hub, storage_class, namespace='fleet-workers', size='100Gi'
                   'template': {'metadata': {'labels': labels}, 'spec': {
                       'automountServiceAccountToken': False, 'terminationGracePeriodSeconds': 120,
                       'imagePullSecrets': [{'name': n} for n in pull_secrets],
-                      'initContainers': [egress_guard(image, dns, blocked, metadata)],
+                      'initContainers': [egress_guard(image, dns, blocked, metadata, allow)],
                       'containers': [container],
                       'volumes': [{'name': 'join', 'secret': {'secretName': 'fleet-linux-join',
                                                            'optional': True, 'defaultMode': 256}},
@@ -204,14 +235,24 @@ if __name__ == '__main__':
     p.add_argument('--egress-service-cidr', default=EGRESS['service_cidr'], help="the cluster's service range, cut")
     p.add_argument('--egress-private', default=','.join(EGRESS['private']),
                    help='comma-separated VPC / private ranges, cut')
+    p.add_argument('--egress-allow', action='append', default=[], metavar='IP[/n]:PORT',
+                   help='an in-cluster destination the guard lets through, tcp (repeatable) - e.g. the '
+                        "git-mirror Service's ClusterIP:9418")
+    # the dev network (#3348; docs/MANAGED-LINUX.md «Dev network»)
+    p.add_argument('--github-proxy', default='', help="git's and gh's road to GitHub: http://RELAY:3128 (extras/gh-relay)")
+    p.add_argument('--git-mirror', action='append', default=[], metavar='MIRROR=UPSTREAM',
+                   help='fetch UPSTREAM (https://github.com/OWNER/REPO.git) from MIRROR; pushes stay on GitHub (repeatable)')
+    p.add_argument('--cn-mirrors', action='store_true', help='npmmirror / goproxy.cn / node dist mirror for every login')
     args = p.parse_args()
     egress = {'dns': args.egress_dns, 'metadata': args.egress_metadata, 'pod_cidr': args.egress_pod_cidr,
               'service_cidr': args.egress_service_cidr,
-              'private': [c.strip() for c in args.egress_private.split(',') if c.strip()]}
+              'private': [c.strip() for c in args.egress_private.split(',') if c.strip()],
+              'allow': args.egress_allow}
     try:
         items = resources(args.image, args.hub, args.storage_class, args.namespace,
                           entry_host=args.entry_host, entry_spec=args.entry_lb_spec, egress=egress,
-                          pull_secrets=args.pull_secrets or ['acr-pull'])
+                          pull_secrets=args.pull_secrets or ['acr-pull'], github_proxy=args.github_proxy,
+                          git_mirrors=args.git_mirror, cn_mirrors=args.cn_mirrors)
     except ValueError as e:
         p.error(str(e))
     print(json.dumps({'apiVersion': 'v1', 'kind': 'List', 'items': items}, indent=2))

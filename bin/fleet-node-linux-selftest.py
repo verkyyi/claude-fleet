@@ -368,6 +368,87 @@ class LinuxNode(unittest.TestCase):
         df = (BIN.parent / 'extras/managed-node/Dockerfile').read_text()
         self.assertRegex(df, r'\biptables\b')
 
+    def test_dev_network_github_relay_mirror_and_toolchain(self):
+        """BREAK-IT linux-github-unreachable (#3348): the CN egress cannot reach
+        github.com's git transport, so the pod names the Singapore relay
+        (extras/gh-relay, CONNECT to GitHub hosts :443 from the cluster egress
+        only) and the in-cluster mirror; the node writes /etc/gitconfig (git's
+        github.com traffic through the relay, a mirrored repo fetched from the
+        mirror, pushes still to GitHub) and /etc/fleet-devnet.env (CN mirrors,
+        the relay for the gh wrapper) for every login at each start. The guard
+        lets exactly the named in-cluster destination through; the image carries
+        the toolchain."""
+        render = BIN.parent / 'extras/managed-node/render.py'
+        mirror = ('git://git-mirror.arc-runners.svc.cluster.local/mono.git='
+                  'https://github.com/Org/mono.git')
+        base = [sys.executable, str(render), '--image', 'example/image@sha256:' + 'a' * 64,
+                '--hub', 'https://hub.example', '--storage-class', 'essd']
+        plain = json.loads(subprocess.check_output(base))['items'][-1]['spec']['template']['spec']
+        self.assertFalse([e for e in plain['containers'][0]['env'] if e['name'].startswith(('FLEET_GIT', 'FLEET_CN'))])
+        pod = json.loads(subprocess.check_output(base + [
+            '--github-proxy', 'http://47.131.114.67:3128', '--git-mirror', mirror, '--cn-mirrors',
+            '--egress-allow', '172.21.5.6:9418']))['items'][-1]['spec']['template']['spec']
+        env = {e['name']: e['value'] for e in pod['containers'][0]['env']}
+        self.assertEqual(env['FLEET_GITHUB_PROXY'], 'http://47.131.114.67:3128')
+        self.assertEqual(env['FLEET_GIT_MIRRORS'], mirror)
+        self.assertEqual(env['FLEET_CN_MIRRORS'], '1')
+        v4 = [l for l in pod['initContainers'][0]['command'][-1].splitlines() if l.startswith('-A OUTPUT')]
+        allow = v4.index('-A OUTPUT -d 172.21.5.6/32 -p tcp -m tcp --dport 9418 -j ACCEPT')
+        self.assertLess(allow, v4.index('-A OUTPUT -d 172.21.0.0/20 -j REJECT'))  # before the cut
+        for bad in (['--egress-allow', '172.21.5.6'], ['--egress-allow', "172.21.5.6:9418'; iptables -F #"],
+                    ['--github-proxy', 'socks5://x:1'], ['--github-proxy', 'http://x:1 -c core.sshCommand=sh'],
+                    ['--git-mirror', 'git://m/x.git=https://example.com/a/b.git'],
+                    ['--git-mirror', 'git://m/x.git=https://github.com/a/b']):
+            r = subprocess.run(base + bad, capture_output=True)
+            self.assertNotEqual(r.returncode, 0, bad)
+
+        n = module('fleet-node-linux')
+        with tempfile.TemporaryDirectory() as d:
+            gc, ef = os.path.join(d, 'gitconfig'), os.path.join(d, 'devnet.env')
+            n.devnet(env, gc, ef)
+            git = {'GIT_CONFIG_SYSTEM': gc, 'GIT_CONFIG_GLOBAL': os.devnull, 'HOME': d,
+                   'PATH': os.environ.get('PATH', '')}
+
+            def cfg(*args):
+                return subprocess.check_output(['git'] + list(args), env=git, cwd=d, text=True).strip()
+            self.assertEqual(cfg('config', '--system', 'http.https://github.com/.proxy'), 'http://47.131.114.67:3128')
+            subprocess.check_call(['git', 'init', '-q', 'r'], env=git, cwd=d)
+            d2 = os.path.join(d, 'r')
+            subprocess.check_call(['git', 'remote', 'add', 'origin', 'https://github.com/Org/mono.git'], env=git, cwd=d2)
+            subprocess.check_call(['git', 'remote', 'add', 'other', 'https://github.com/Org/other.git'], env=git, cwd=d2)
+            get = lambda *a: subprocess.check_output(['git', 'remote', 'get-url'] + list(a), env=git, cwd=d2, text=True).strip()
+            self.assertEqual(get('origin'), 'git://git-mirror.arc-runners.svc.cluster.local/mono.git')
+            self.assertEqual(get('--push', 'origin'), 'https://github.com/Org/mono.git')
+            self.assertEqual(get('other'), 'https://github.com/Org/other.git')
+            shell = Path(ef).read_text()
+            for line in ('FLEET_GITHUB_PROXY=http://47.131.114.67:3128', 'npm_config_registry=https://registry.npmmirror.com',
+                         'GOPROXY=https://goproxy.cn,direct', 'FNM_NODE_DIST_MIRROR=https://npmmirror.com/mirrors/node'):
+                self.assertIn(line + '\n', shell)
+            # what every shell sees, and a login's own value still wins
+            prof = (BIN.parent / 'extras/managed-node/devnet/profile.sh').read_text().replace('/etc/fleet-devnet.env', ef)
+            pf = os.path.join(d, 'profile.sh')
+            Path(pf).write_text(prof)
+            out = subprocess.check_output(['sh', '-c', '. "$1"; echo "$GOPROXY|$npm_config_registry"', 'sh', pf],
+                                          env={'PATH': os.environ.get('PATH', ''), 'npm_config_registry': 'mine'}, text=True)
+            self.assertEqual(out.strip(), 'https://goproxy.cn,direct|mine')
+            # nothing set: the node's files go, a hand-made one stays
+            n.devnet({}, gc, ef)
+            self.assertFalse(os.path.exists(gc) or os.path.exists(ef))
+            Path(gc).write_text('[user]\n\tname = hand\n')
+            n.devnet({}, gc, ef)
+            self.assertTrue(os.path.exists(gc))
+            with self.assertRaises(ValueError):
+                n.devnet_settings({'FLEET_GIT_MIRRORS': 'git://m/x.git=https://github.com/a/b'})
+        # the relay refuses everything but GitHub :443 from the cluster egress
+        r = subprocess.run([sys.executable, '-I', str(BIN.parent / 'extras/gh-relay/gh-relay.py'), '--selftest'],
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        df = (BIN.parent / 'extras/managed-node/Dockerfile').read_text()
+        for tool in ('NODE_SHA256', 'GO_SHA256', 'KUBECTL_SHA256', 'FNM_SHA256', 'ALIYUN_SHA256', 'corepack enable',
+                     'sha256sum -c', '/usr/local/bin/gh', 'fleet-devnet.sh'):
+            self.assertIn(tool, df)
+        self.assertIn('devnet', (BIN.parent / 'extras/managed-node/prepare-image.sh').read_text())
+
     def test_entry_door_is_the_entry_port_only(self):
         """BREAK-IT linux-entry-weak-door (#3213): the public Service carries 22022
         alone (Local), the system sshd's 22 stays on the headless one; the pod turns
