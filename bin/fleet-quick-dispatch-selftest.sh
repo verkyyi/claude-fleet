@@ -14,6 +14,12 @@
 #      stderr) so the list can say 「已建 #N 并开工」; stdout stays the place's line
 #   F. the key: ⌘T / prefix t open it (conf/tmux-shell.conf, dash-keymap.sh), the
 #      bar says 「⌘T 派单」, ⌘P's first line is 「⚡ 派一件事…」 (fleet-quickopen.py)
+#   G. a 看台's ⌘T (issue #3097), as its key runs it — under run-shell: $TMUX set,
+#      no $TMUX_PANE — for BOTH agents: the send goes out with that agent
+#      (fleet-compose.py --send → fleet-client-place.sh, faked), fleet-compose
+#      says the window opened here (`window: @N`) and the 看台 goes to it
+#      (FLEET_DISPATCH_GO_CMD = fleet-view-go.sh); one that does not open is said
+#      AND logged (`dispatch_failed` in logs/compose.ndjson, with the reason)
 set -u
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$BIN/.."
@@ -104,6 +110,45 @@ eq 'E: stdout stays the place'"'"'s one line' 'REMOTE m5 start done U/f42' "$(tr
 # the list's word for it (fleet-sidebar.py compose_told)
 has 'E: the list says 「已建 #N 并开工」 for a ⌘T send' "$(sed -n '/^def compose_told/,/^def placed/p' "$BIN/fleet-sidebar.py")" 'sidebar_dispatch_done_fmt'
 eq 'E: the words' '已建 #42 并开工' "$(sh "$BIN/fleet-ui-lang.sh" t sidebar_dispatch_done_fmt 42)"
+
+# --- G. a 看台's ⌘T under run-shell, both agents (issue #3097) ------------------------
+GB="$WORK/g-bin"; mkdir -p "$GB"
+for f in "$BIN"/*; do ln -sf "$f" "$GB/"; done
+rm -f "$GB/fleet-client-place.sh"
+cat > "$GB/fleet-client-place.sh" <<'EOF'
+#!/bin/bash
+printf '%s\n' "$*" > "$G_ARGS"
+case " $* " in *" --agent codex "*) w=@21 ;; *) w=@22 ;; esac
+if [ "${G_FAIL:-}" = 1 ]; then
+  printf 'DECLINED mini - 1\tstart: filed #9 but its session did not open (no Codex login) — it is on the backlog\n'; exit 5
+fi
+h=$(hostname -s); h=${h%%.*}
+printf '{"window_id": "%s", "filed": "https://github.com/acme/web/issues/9", "machine": "%s"}' "$w" "$h" > "$FLEET_PLACE_RESULT"
+printf 'LOCAL %s\thttps://github.com/acme/web/issues/9\n' "$h"
+EOF
+chmod +x "$GB/fleet-client-place.sh"
+cat > "$WORK/go.sh" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> "$WORK/go.log"
+EOF
+chmod +x "$WORK/go.sh"
+: > "$WORK/go.log"
+for ag in codex claude; do
+  out=$(unset TMUX_PANE; TMUX="$WORK/tt/default,1,0" G_ARGS="$WORK/g-args" FLEET_DISPATCH_GO_CMD="$WORK/go.sh" \
+        python3 "$GB/fleet-quick-dispatch.py" send --view 'fleet@view-t1' --client /dev/ttys009 --title "用 $ag 修" \
+        --repo acme/web --agent "$ag" 2>&1) || fail "G: the 看台's $ag send under run-shell exited non-zero" "$out"
+  has "G: $ag: the send went out with its agent" "$(cat "$WORK/g-args")" "--agent $ag"
+done
+eq 'G: the 看台 went to each window it opened' \
+  "$(printf 'fleet@view-t1 @21 --how dispatch --client /dev/ttys009\nfleet@view-t1 @22 --how dispatch --client /dev/ttys009')" \
+  "$(cat "$WORK/go.log")"
+: > "$WORK/go.log"; : > "$WORK/compose.ndjson"
+out=$(unset TMUX_PANE; TMUX="$WORK/tt/default,1,0" G_ARGS="$WORK/g-args" G_FAIL=1 FLEET_DISPATCH_GO_CMD="$WORK/go.sh" \
+      python3 "$GB/fleet-quick-dispatch.py" send --view 'fleet@view-t1' --title '用 codex 修' --repo acme/web --agent codex 2>&1) \
+  && fail "G: a send that did not open exited 0" "$out"
+has 'G: a failure is said, with its reason' "$out" 'no Codex login'
+has 'G: …and logged' "$(grep dispatch_failed "$WORK/compose.ndjson")" 'no Codex login'
+eq 'G: …and the 看台 stays where it is' '' "$(cat "$WORK/go.log")"
 
 # --- F. the key, the bar, ⌘P ---------------------------------------------------------
 CONF="$ROOT/conf/tmux-shell.conf"
