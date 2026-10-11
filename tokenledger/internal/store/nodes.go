@@ -149,6 +149,10 @@ func (s *Store) EnsureNodes() error {
 	if err := s.ensureFleetPersonUsage(); err != nil {
 		return err
 	}
+	// Every subscription-pool request, filed under its person (claude-fleet#3226).
+	if err := s.ensurePoolUsage(); err != nil {
+		return err
+	}
 	// The vault's KMS-wrapped data key (claude-fleet#1417).
 	if err := s.ensureFleetCredKey(); err != nil {
 		return err

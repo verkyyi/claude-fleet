@@ -1631,8 +1631,18 @@ reads are left out — and report it under the person: a login's local proxy
 tokens, requests}]}` with the node token (the person is the login's ACTIVE
 fleet account — `PrincipalForLogin`; a login with none is counted against
 nobody), the cluster proxy per answer as `POST /v1/fleet/credproxy/usage
-{principal, usage}` with its own token. Both answer the person's standing.
-Rows live in `fleet_person_usage` (ten-minute buckets, eight days kept). The
+{cred, principal, worker_id, provider, owner, account, model, in, cache_write,
+cache_read, out}` with its own token — `cred` is the session pass the request
+rode on, and the hub files the row under THAT pass's principal and worker_id
+(claude-fleet#3226): no pass, one that does not verify, or a body naming
+another principal / session is refused 403 `pool_usage_refused` and writes
+nothing; a pass that expired or was revoked after the request went out still
+counts. Both answer the person's standing. Rows live in `pool_usage`, one per
+request (one per report from a local proxy), with `repo` / `issue` read from
+the session's lease (`fleet_leases`, by worker_id) when written — empty = on no
+task — and the store refuses a row with no principal; the budget sums the same
+rows in ten-minute buckets (`fleet_person_usage`, the old bucket table, is no
+longer written). The
 operator sets `fleet.person_budget.<principal>` = `5h=<tokens>,week=<tokens>`
 (either half may be left out; `200k`, `2M`; `""` = no limit) through
 `PUT /v1/fleet/settings` — `fleet config budget <person> 5h=200k week=2M`.

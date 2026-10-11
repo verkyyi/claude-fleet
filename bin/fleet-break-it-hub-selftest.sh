@@ -53,6 +53,9 @@
 #                                                   + internal/agent node_machine.go / runas.go (go test, when a toolchain is here)
 #   usage-unattributed                              tokenledger/internal/agent (the claude:local pool) + internal/api
 #                                                   fleet_usage_silent.go (usage_silent; go test, when a toolchain is here)
+#   pool-usage-unattributed                         tokenledger/internal/api fleet_person_budget.go (handleCredProxyUsage,
+#                                                   poolUsagePass) + internal/store pool_usage.go + internal/credproxy
+#                                                   usage.go (go test, when a toolchain is here)
 #   place-server-down                               fleet_server_down (fleet-lib.sh), fleet-control-read.sh start
 #                                                   (exit 8), fleet_control.py (UNAVAILABLE); the hub half is
 #                                                   tokenledger/internal/api pickNodeAfter (go test, when here)
@@ -1496,6 +1499,52 @@ drill_usage_unattributed() {
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
       0:*) WHAT='没 /login 的登录的 Claude 用量进 claude:local 池（来源 session、不动登录账号）；没对话目录不造池；working 超阈值没用量 → usage_silent，用量到 / 不工作即清（go test）' ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
+      *) WHY="the Go half is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  fi
+  SECS=$(since "$t0")
+}
+
+# ---- pool-usage-unattributed (#3226, EPIC #3225 C1): a subscription-pool
+# request whose usage lands under nobody, or under whoever the report names.
+# The cluster proxy reported {principal, tokens} and the hub took the principal
+# from the body: a wrong or empty one filed the tokens elsewhere, and nothing
+# said which task they were for. Now the proxy reports each request with the
+# pass it rode on; the hub files ONE pool_usage row under that pass's person and
+# session (a report with no pass / a forged one / another principal is refused
+# 403 pool_usage_refused, nothing written), repo / issue frozen from the
+# session's lease, and an ownerless row is refused by the store itself.
+# Go tests by name (run with a toolchain).
+drill_pool_usage_unattributed() {
+  CAP=120; local t0 out rc t
+  local api_tests='TestPoolUsageRefusedWithoutItsPass TestPoolUsageOneRowPerRequestWithItsLease TestPoolUsageOrchestratorToLoginOwner TestPoolUsageNodeReportAndNoOwnerless'
+  local store_tests='TestPersonUsageSinceMatchesTheOldBuckets TestPoolUsageForAndLease'
+  local tl="$ROOT/tokenledger/internal"
+  t0=$(now)
+  grep -q 'c, why := s.poolUsagePass(rep.Cred, rep.Provider' "$tl/api/fleet_person_budget.go" 2>/dev/null \
+    || { WHY="the hub no longer takes a usage report's person from the pass it rode on"; return 1; }
+  grep -q 'u := store.PoolUsage{Principal: c.Principal, WorkerID: c.WorkerID' "$tl/api/fleet_person_budget.go" \
+    || { WHY="the hub files a cluster report under something other than the pass's principal / session"; return 1; }
+  grep -q 'return ErrPoolUsageNoPrincipal' "$tl/store/pool_usage.go" 2>/dev/null \
+    || { WHY="the store no longer refuses an ownerless pool_usage row"; return 1; }
+  grep -q 'u.Cred, u.Principal, u.WorkerID' "$tl/credproxy/credproxy.go" \
+    || { WHY="the cluster proxy no longer reports each request with its pass"; return 1; }
+  for t in $api_tests; do
+    grep -q "^func $t(" "$tl/api/pool_usage_test.go" 2>/dev/null \
+      || { WHY="the hub half's test $t is not in tokenledger/internal/api/pool_usage_test.go"; return 1; }
+  done
+  for t in $store_tests; do
+    grep -q "^func $t(" "$tl/store/pool_usage_test.go" 2>/dev/null \
+      || { WHY="the store half's test $t is not in tokenledger/internal/store/pool_usage_test.go"; return 1; }
+  done
+  WHAT='池子用量一笔一行记在通行证的人名下：无通行证 / 伪造 / 自报别人的上报被拒且不写；repo/issue 取自租约；无主行存不进去（测试按名核对在，Go 门跑它们）'
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run "^($(printf '%s %s' "$api_tests" "$store_tests" | tr ' ' '|'))\$" ./internal/api ./internal/store 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
+      0:*) WHAT='池子用量一笔一行：只认通行证的人与会话（无 / 伪造 / 自报不符 → 403 不写），repo/issue 取自租约，编排记给登录主人，个人上限读同一张表且与旧桶口径相等（go test）' ;;
       *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
       *) WHY="the Go half is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
     esac

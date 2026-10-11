@@ -21,20 +21,40 @@ const PersonBudgetExceeded = "person_budget_exceeded"
 // UsagePath is the hub route the proxy reports to (api.CredProxyUsagePath).
 const UsagePath = "/v1/fleet/credproxy/usage"
 
+// Usage is one forwarded request's report (claude-fleet#3226): the pass it
+// rode on — the hub files the row under that pass's person, never under the
+// principal named here, which it only checks — and the response's own usage,
+// by kind. In excludes the cached part an OpenAI-shaped input counts.
+type Usage struct {
+	Cred       string `json:"cred"`
+	Principal  string `json:"principal,omitempty"`
+	WorkerID   string `json:"worker_id,omitempty"`
+	Provider   string `json:"provider"`
+	Owner      string `json:"owner,omitempty"`
+	Account    string `json:"account,omitempty"`
+	Model      string `json:"model,omitempty"`
+	In         int64  `json:"in"`
+	CacheWrite int64  `json:"cache_write"`
+	CacheRead  int64  `json:"cache_read"`
+	Out        int64  `json:"out"`
+}
+
+// Tokens is what a budget counts: input + cache writes + output.
+func (u Usage) Tokens() int64 { return u.In + u.CacheWrite + u.Out }
+
 // UsageReporter is a Resolver that also takes usage reports. over = the
 // person is now over budget (the proxy drops their cached answers).
 type UsageReporter interface {
-	ReportUsage(ctx context.Context, principal, provider string, tokens int64) (over bool, err error)
+	ReportUsage(ctx context.Context, u Usage) (over bool, err error)
 }
 
-// ReportUsage posts one response's tokens to the hub.
-func (h *HubResolver) ReportUsage(ctx context.Context, principal, provider string, tokens int64) (bool, error) {
+// ReportUsage posts one request's usage to the hub.
+func (h *HubResolver) ReportUsage(ctx context.Context, u Usage) (bool, error) {
 	c := h.Client
 	if c == nil {
 		c = &http.Client{Timeout: 5 * time.Second}
 	}
-	body, _ := json.Marshal(map[string]any{"principal": principal,
-		"usage": []map[string]any{{"provider": provider, "tokens": tokens, "requests": 1}}})
+	body, _ := json.Marshal(u)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(h.URL, "/")+UsagePath, bytes.NewReader(body))
 	if err != nil {
 		return false, err
@@ -66,6 +86,7 @@ type meter struct {
 	whole []byte // a non-SSE body, up to maxWhole
 	sse   bool
 	f     map[string]int64
+	model string // the first model the answer names
 }
 
 const maxWhole = 8 << 20
@@ -105,6 +126,14 @@ func (m *meter) onLine(l []byte) {
 }
 
 func (m *meter) take(v map[string]any) {
+	if m.model == "" {
+		for _, x := range []any{v["model"], dig(v, "message", "model"), dig(v, "response", "model")} {
+			if s, ok := x.(string); ok && s != "" {
+				m.model = s
+				break
+			}
+		}
+	}
 	for _, u := range []any{v["usage"], dig(v, "message", "usage"), dig(v, "response", "usage")} {
 		um, ok := u.(map[string]any)
 		if !ok {
@@ -133,9 +162,9 @@ func dig(v map[string]any, keys ...string) any {
 	return cur
 }
 
-// Tokens is input + cache writes + output; cache reads are left out (an
-// OpenAI-shaped input counts its cached part, which is subtracted).
-func (m *meter) Tokens() int64 {
+// usage is what the answer said it used, by kind. An OpenAI-shaped input
+// counts its cached part, which moves from In to CacheRead.
+func (m *meter) usage() Usage {
 	if !m.sse && len(m.whole) > 0 {
 		var v map[string]any
 		if json.Unmarshal(m.whole, &v) == nil {
@@ -147,26 +176,32 @@ func (m *meter) Tokens() int64 {
 	if in < 0 {
 		in = 0
 	}
-	return in + m.f["cache_creation_input_tokens"] + m.f["output_tokens"] + m.f["prompt_tokens"] + m.f["completion_tokens"]
+	return Usage{Model: m.model, In: in + m.f["prompt_tokens"], CacheWrite: m.f["cache_creation_input_tokens"],
+		CacheRead: m.f["cache_read_input_tokens"] + m.f["cached_tokens"], Out: m.f["output_tokens"] + m.f["completion_tokens"]}
 }
 
-// report sends a response's tokens without holding up the client, and drops
-// the person's cached answers once the hub says they are over.
-func (p *Proxy) report(principal, provider string, tokens int64) {
+// Tokens is input + cache writes + output; cache reads are left out (an
+// OpenAI-shaped input counts its cached part, which is subtracted).
+func (m *meter) Tokens() int64 { return m.usage().Tokens() }
+
+// report sends a request's usage without holding up the client, and drops
+// the person's cached answers once the hub says they are over. A report the
+// hub refuses is audited and dropped: the hub files usage only under a pass.
+func (p *Proxy) report(u Usage) {
 	ur, ok := p.cfg.Resolver.(UsageReporter)
-	if !ok || principal == "" || tokens <= 0 {
+	if !ok || u.Cred == "" || u.Tokens() <= 0 {
 		return
 	}
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		over, err := ur.ReportUsage(ctx, principal, provider, tokens)
+		over, err := ur.ReportUsage(ctx, u)
 		if err != nil {
-			p.cfg.Audit(fmt.Sprintf(`{"ev":"credproxy_usage","principal":%q,"err":%q}`, principal, errClass(err)))
+			p.cfg.Audit(fmt.Sprintf(`{"ev":"credproxy_usage","principal":%q,"worker_id":%q,"err":%q}`, u.Principal, u.WorkerID, errClass(err)))
 			return
 		}
 		if over {
-			p.forget(principal)
+			p.forget(u.Principal)
 		}
 	}()
 }
