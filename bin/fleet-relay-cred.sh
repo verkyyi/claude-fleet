@@ -119,6 +119,9 @@ except Exception: d={}
 print((d.get("message") or d.get("error") or "")[:300])' 2>/dev/null; }
 
 if [ "$ACTION" = fetch ] || [ "$ACTION" = check ]; then
+  # the switch: the environment, else what this login's node.env says — a Linux
+  # tenant's launcher has it only there (node.pub.env when separated, #3423)
+  [ -n "${CCQUOTA_FLEET:-}" ] || CCQUOTA_FLEET=$(_fleet_node_env_val CCQUOTA_FLEET 2>/dev/null)
   if [ "${CCQUOTA_FLEET:-0}" != 1 ]; then
     printf 'fleet-relay-cred: the hub module is off (CCQUOTA_FLEET≠1) — no hub, nothing asked\n' >&2
     exit 10
