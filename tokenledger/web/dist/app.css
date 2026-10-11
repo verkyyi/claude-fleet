@@ -362,9 +362,6 @@ tr[data-svc][aria-selected="true"] td { background: var(--line-2); }
 }
 @media (max-width: 520px) { .g4 { grid-template-columns: minmax(0,1fr); } .kv { grid-template-columns: minmax(0,1fr); } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
-/* 我的额度 (claude-fleet#2517): a window's percent over its bar, in a table cell. */
-table.quota .win { min-width: 110px; gap: 4px; }
-table.quota .win b { font: 500 12.5px var(--f-mono); }
 /* 角色与规则 on /config (claude-fleet#2787): four role cards, the selected role's merged fields, the rule table. Yours = amber, built-in = grey, locked = lock. */
 .chip.you, .rules tr.you td.n { background: var(--warn-soft); color: var(--warn); }
 .chip.gone { text-decoration: line-through; opacity: .6; }

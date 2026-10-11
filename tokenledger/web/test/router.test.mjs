@@ -40,6 +40,10 @@ test('an old address opens where it moved, never nothing (claude-fleet#3232)', (
   assert.equal(movedTo('/admin/devices'), '/nodes?tab=clients');
   assert.equal(movedTo('/admin/devices/'), '/nodes?tab=clients', 'a trailing slash too');
   assert.equal(movedTo('/admin/devices', '?tab=nodes&x=1', '#h'), '/nodes?tab=clients&x=1#h', 'the new tab wins, the rest is kept');
+  // 我的额度 is 我的用量 now (claude-fleet#3229).
+  assert.equal(movedTo('/quota'), '/usage');
+  assert.equal(movedTo('/quota/', '?range=30d'), '/usage?range=30d');
+  assert.equal(routeFor('/quota'), null, 'no page draws /quota itself');
   assert.equal(movedTo('/nodes'), '');
   assert.equal(movedTo('/sessions'), '');
   for (const [from, to] of Object.entries(MOVED)) {

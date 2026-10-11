@@ -21,7 +21,6 @@ var appPages = []struct{ html, script, id string }{
 	{"tasks.html", "tasks.js", "tasks"},
 	{"machines.html", "machines.js", "mymachines"},
 	{"connect.html", "connect.js", "devices"},
-	{"quota.html", "quota.js", "quota"},
 	{"usage.html", "usage.js", "usage"},
 	{"config.html", "config.js", "config"},
 	{"admin/subscriptions.html", "admin/subscriptions.js", "subscriptions"},
@@ -39,7 +38,7 @@ func TestAssets_AppPagesAreEmbedded(t *testing.T) {
 	if assets == nil {
 		t.Fatal("no dashboard embedded: web/dist/index.html is missing from this checkout")
 	}
-	for _, name := range []string{"app.css", "app-shell.js", "app.html", "app-start.js", "lib/router.js", "lib/stream.js", "lib/shell.js", "lib/pages.js", "lib/admin.js", "lib/sessions-view.js", "lib/devices-view.js"} {
+	for _, name := range []string{"app.css", "app-shell.js", "app.html", "app-start.js", "lib/router.js", "lib/stream.js", "lib/shell.js", "lib/pages.js", "lib/admin.js", "lib/sessions-view.js", "lib/devices-view.js", "lib/usage-view.js"} {
 		if _, err := fs.Stat(assets, name); err != nil {
 			t.Fatalf("%s is not embedded: %v", name, err)
 		}
@@ -61,21 +60,28 @@ func TestAssets_AppPagesAreEmbedded(t *testing.T) {
 	}
 }
 
-// All devices moved into 服务节点与客户端's 客户端 tab (claude-fleet#3232): its
-// old document stays, so /admin/devices still loads, and its script only
-// starts the shell — which moves the address to /nodes?tab=clients.
-func TestAssets_MovedAllDevicesStillStarts(t *testing.T) {
+// An old page whose address moved (lib/router.js MOVED) keeps its document,
+// so the old path still loads, and its script only starts the shell — which
+// moves the address. All devices is 服务节点与客户端's 客户端 tab
+// (claude-fleet#3232); 我的额度 is 我的用量 (claude-fleet#3229).
+func TestAssets_MovedPagesStillStart(t *testing.T) {
 	assets := Assets()
-	html := string(mustRead(t, assets, "admin/devices.html"))
-	if !strings.Contains(html, `<script type="module" src="/admin/devices.js"`) {
-		t.Errorf("admin/devices.html no longer loads its script: %q", html)
-	}
-	js := string(mustRead(t, assets, "admin/devices.js"))
-	if !strings.Contains(js, "Shell.start()") || strings.Contains(js, "Shell.mount(") {
-		t.Errorf("admin/devices.js should only start the shell: %q", js)
-	}
-	if !strings.Contains(string(mustRead(t, assets, "lib/router.js")), `'/admin/devices': '/nodes?tab=clients'`) {
-		t.Error("lib/router.js no longer moves /admin/devices to /nodes?tab=clients")
+	router := string(mustRead(t, assets, "lib/router.js"))
+	for _, m := range []struct{ html, script, move string }{
+		{"admin/devices.html", "admin/devices.js", `'/admin/devices': '/nodes?tab=clients'`},
+		{"quota.html", "quota.js", `'/quota': '/usage'`},
+	} {
+		html := string(mustRead(t, assets, m.html))
+		if !strings.Contains(html, `<script type="module" src="/`+m.script+`"`) {
+			t.Errorf("%s no longer loads its script: %q", m.html, html)
+		}
+		js := string(mustRead(t, assets, m.script))
+		if !strings.Contains(js, "Shell.start()") || strings.Contains(js, "Shell.mount(") {
+			t.Errorf("%s should only start the shell: %q", m.script, js)
+		}
+		if !strings.Contains(router, m.move) {
+			t.Errorf("lib/router.js no longer moves %s", m.move)
+		}
 	}
 }
 
