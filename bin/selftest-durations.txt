@@ -386,7 +386,7 @@
 6.8 issue-lease-selftest.sh
 1.5 landed-fold-selftest.sh
 5.9 mod-state-selftest.sh
-38.2 multirepo-e2e-selftest.sh
+200.0 multirepo-e2e-selftest.sh
 5.4 multirepo-identity-selftest.sh
 1.5 needs-notify-selftest.sh
 1.1 needs-reason-selftest.sh
