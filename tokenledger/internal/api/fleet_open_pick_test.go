@@ -157,3 +157,73 @@ func TestNewLoginComputeReadsTheNewestProbe(t *testing.T) {
 		t.Fatalf("other (no probe): %+v, want open", cv)
 	}
 }
+
+// claude-fleet#3426: C9's 27th drill. /v1/nodes then: fleet-linux-0's old
+// logins egress SG via the relay (local CN), load 39–44 on 4 cores, no admit
+// verdict; mini2 US, 2.4 on 10 cores, admit=true. The hub opened the newcomer
+// on fleet-linux-0 — settled, opened before — and its login probed CN.
+func TestOpenPickDrill27SnapshotPicksMini2(t *testing.T) {
+	h, lin := openPickRig(t)
+	setHubSetting(t, h.srv, trustKey("fleet-linux-0"), TrustTrusted)
+	relay := &control.NodeProbe{Loc: "SG", Route: "relay", LocLocal: "CN", Anthropic: control.ProbeOK, Verdict: control.ProbeOK, TS: time.Now()}
+	lin.beat("", control.Heartbeat{OS: "linux", Hostname: "fleet-linux-0", OSUser: "root", NCPU: 4, Load1: 39, ObservedAt: time.Now()})
+	lin.beat("fleet", control.Heartbeat{OS: "linux", Hostname: "fleet-linux-0", OSUser: "fleet", NCPU: 4, Load1: 44, Probe: relay, ObservedAt: time.Now()})
+	// The tiers that won it then: its opener has stayed up, it opened one.
+	id, _ := h.srv.nodes.openerFor("fleet-linux-0")
+	h.srv.nodes.mu.Lock()
+	h.srv.nodes.conns[id].helloAt = time.Now().Add(-openerSettle - time.Minute)
+	h.srv.nodes.mu.Unlock()
+	p, err := h.srv.Store.EnsurePrincipal("gh:3426", "Old", control.MaxLoginLen, control.ValidLogin, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.srv.Store.AdoptAccount(p, "fleet-linux-0", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	mac := connectNode(t, h, "mini2-op", "mini2", "verkyyi", true)
+	beat(t, mac.c, control.Proto, control.Heartbeat{Hostname: "mini2", OSUser: "verkyyi", Sessions: 3, NCPU: 10, Load1: 2.4,
+		Admit: boolp(true), Probe: &control.NodeProbe{Loc: "US", Verdict: control.ProbeOK, TS: time.Now()}})
+	waitFor(t, 3*time.Second, "mini2 picked over fleet-linux-0", func() bool {
+		return h.srv.leastBusyMachine(time.Now()) == "mini2"
+	})
+	if got := h.srv.leastBusyMachine(time.Now(), "mini2"); got != "" {
+		t.Fatalf("with mini2 skipped the pick is %q, want none (a new login there egresses CN)", got)
+	}
+}
+
+// The score's inputs count on their own: a machine past placement's CPU
+// ceiling ranks behind one with room, however settled or experienced it is.
+func TestOpenPickLoadOutranksTheOpenerTiers(t *testing.T) {
+	h, lin := openPickRig(t)
+	setHubSetting(t, h.srv, trustKey("fleet-linux-0"), TrustTrusted)
+	lin.beat("", control.Heartbeat{OS: "linux", Hostname: "fleet-linux-0", OSUser: "root", NCPU: 4, Load1: 39, ObservedAt: time.Now()})
+	id, _ := h.srv.nodes.openerFor("fleet-linux-0")
+	h.srv.nodes.mu.Lock()
+	h.srv.nodes.conns[id].helloAt = time.Now().Add(-openerSettle - time.Minute)
+	h.srv.nodes.mu.Unlock()
+	mac := connectNode(t, h, "mini2-op", "mini2", "verkyyi", true)
+	beat(t, mac.c, control.Proto, control.Heartbeat{Hostname: "mini2", OSUser: "verkyyi", NCPU: 10, Load1: 2.4})
+	waitFor(t, 3*time.Second, "the unsettled but idle mini2 picked", func() bool {
+		return h.srv.leastBusyMachine(time.Now()) == "mini2"
+	})
+	// mini2's login holding new sessions takes its room away.
+	beat(t, mac.c, control.Proto, control.Heartbeat{Hostname: "mini2", OSUser: "verkyyi", NCPU: 10, Load1: 2.4, Admit: boolp(false), AdmitWhy: "paused"})
+	waitFor(t, 3*time.Second, "the settled Linux back once mini2 holds new sessions", func() bool {
+		return h.srv.leastBusyMachine(time.Now()) == "fleet-linux-0"
+	})
+}
+
+func TestDirectProbeDropsTheRelayRoad(t *testing.T) {
+	now := time.Now()
+	snap := NodesSnapshot{Nodes: []NodeView{
+		{Hostname: "box", Status: "online", Probe: &control.NodeProbe{Loc: "SG", Route: "relay", LocLocal: "CN", Verdict: control.ProbeOK, TS: now}},
+		{Hostname: "us", Status: "online", Probe: &control.NodeProbe{Loc: "US", Verdict: control.ProbeOK, TS: now}},
+	}}
+	cv := newLoginCompute(snap, "box", nil, now)
+	if !cv.Off || cv.Probe == nil || cv.Probe.Loc != "CN" {
+		t.Fatalf("box: %+v, want off for a new login's own CN egress", cv)
+	}
+	if cv := newLoginCompute(snap, "us", nil, now); cv.Off {
+		t.Fatalf("us: %+v, want open", cv)
+	}
+}
