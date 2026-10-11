@@ -25,8 +25,9 @@ name: selftests
 #     full suite; so does a base that cannot be resolved.
 #   - the selection is usually smaller than the matrix: a spare shard passes
 #     having run nothing.
-# The BSD half of the per-PR gate is selftests-macos.yml (same --changed); the
-# nightly macOS run there stays FULL, as the backstop for what a selector misses.
+# The BSD half runs on master only, inside each release train (release-train.yml,
+# --changed <stable>, issue #3141); the nightly macOS run in selftests-macos.yml
+# stays FULL, as the backstop for what a selector misses.
 
 on:
   push:
@@ -62,6 +63,7 @@ on:
       - 'mod/**'
       - 'fleet.conf.example'
       - '.github/workflows/selftests.yml'
+      - '.github/workflows/selftests-shards.yml'
   pull_request:
     paths:
       - 'bin/**'
@@ -77,6 +79,7 @@ on:
       - 'mod/**'
       - 'fleet.conf.example'
       - '.github/workflows/selftests.yml'
+      - '.github/workflows/selftests-shards.yml'
 
 # A re-push to a PR makes its in-flight run stale; master runs always finish.
 concurrency:
@@ -101,95 +104,24 @@ jobs:
     # gives away. Sharded, every test still runs ALONE on its own box, under the
     # conditions it was written for, so this cannot make the gate flakier.
     #
-    # To change the width, edit `shard:` below and nothing else. K comes from the
+    # To change the width, edit `shards:` below and nothing else. K comes from the
     # list entry, N from `strategy.job-total` (the matrix's own size), so the list
     # is the single source of truth — and a list that is not 1..N (a dropped entry,
     # a typo) produces a K outside 1..N, which the runner refuses loudly instead of
     # quietly running the wrong slice.
-    name: shard ${{ matrix.shard }}
-    runs-on: ubuntu-latest
-    strategy:
-      # Never cancel the siblings on a red: one shard failing must not hide
-      # whether the other three were green. A partial picture is what makes
-      # people re-run instead of read.
-      fail-fast: false
-      matrix:
-        # 12 since issue #2659: the refreshed table sums ~3800s, so 8 wide put
-        # ~475s in a shard against the 400s WARN (480s step bound); at 10 (~380s
-        # predicted) shard 6 of PR #2691's run went past 480s — runner variance of
-        # ~1.3x. 12 wide predicts ~317s, which leaves that variance room.
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
-    # Backstop only. The real bound is on the run STEP below, deliberately: a
-    # JOB-level timeout cancels the whole job, so the step that would tell you
-    # WHICH test hung never runs. This one just keeps a wedged runner off
-    # GitHub's 6h default.
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          # --changed diffs against the PR's base branch / the pre-push commit, so
-          # both must be in the clone; a shallow one would fall back to full.
-          fetch-depth: 0
-
-      - name: Run this shard's selftests
-        # Measured: ~1-2 min per shard at this width. The bound stays several
-        # times clear of that, so it only ever catches a HUNG test; a test merely
-        # getting SLOWER is caught by the timings step below, long before it
-        # reaches here. And because the suite now grows sideways, adding a
-        # selftest never needs this number touched.
-        #
-        # The width is 6, not 4, because of measured RUNNER VARIANCE rather than
-        # suite size: at 4 the same shard took 2m36s in one run and 4m2s in its
-        # sibling run on the identical commit, and 4m2s against this bound is only
-        # 50% margin — the floor this issue set, with nothing left for the growth
-        # that prompted it (8+ tests landed in a single day). At 6 the worst
-        # sample maps to ~2m45s, so the suite can roughly double before the margin
-        # comes back into question.
-        timeout-minutes: 8
-        # Per-test ceiling (issue #1150): a hung test is killed, named TIMEOUT with
-        # its stuck process tree, and the shard RUNS ON — so the job bound above is
-        # never what catches it. ~3x the slowest test (fleet-model-switch, ~75s), and
-        # well inside the 8 minutes. macOS keeps the runner default (600s): its
-        # slowest test there is ~370s.
-        env:
-          FLEET_SELFTEST_TEST_TIMEOUT: 240
-          # The base --changed diffs against (issue #1374): the PR's target branch,
-          # or on a master push the commit before it. An all-zero `before` (a new
-          # branch) does not resolve, and the runner falls back to the full suite.
-          CHANGED_BASE: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.before }}
-        run: |
-          set -o pipefail
-          bash bin/run-selftests.sh --changed "$CHANGED_BASE" \
-            --shard "${{ matrix.shard }}/${{ strategy.job-total }}" \
-            2>&1 | tee selftests.log
-
-      - name: Per-test timings
-        if: always()
-        # Timings belong on the run's summary page, not only in a 4000-line log
-        # (issue #681, same reasoning as `over=` in #653): the point of measuring
-        # them is that someone notices a test getting slower BEFORE it eats the
-        # budget, and nobody opens a green run's log. Every matrix job appends
-        # here, so the four slices stack up on one page.
-        #
-        # If the run never reached its summary it was killed mid-shard, so name
-        # what was in flight instead: the last `=== NAME ===` header with no
-        # PASS/FAIL after it is the test that hung. That is what makes a timeout
-        # red diagnose itself rather than look like a real failure.
-        run: |
-          {
-            echo "## selftests · shard ${{ matrix.shard }}/${{ strategy.job-total }}"
-            echo
-            echo '```'
-            [ "${{ matrix.shard }}" != 1 ] || grep '^select: ' selftests.log 2>/dev/null || true
-            if grep -q '^-* slowest' selftests.log 2>/dev/null; then
-              sed -n '/^-* slowest/,$p' selftests.log
-            elif grep -Eq 'has nothing to run|^select: \(none\)' selftests.log 2>/dev/null; then
-              echo 'nothing related landed in this shard'
-            else
-              echo 'the shard was cut short — this test started and never finished:'
-              awk '/^=== /{h=$2} /^(PASS  |FAIL  |TIMEOUT )/{h=""}
-                   END{print "  " (h ? h : "(none identified — read the log)")}' \
-                selftests.log 2>/dev/null
-            fi
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+    #
+    # The matrix itself lives in selftests-shards.yml since issue #3141, so the
+    # release train runs the very same shards (Linux and macOS) on its TRAIN_SHA.
+    #
+    # The 12-wide list: since issue #2659 the refreshed table sums ~3800s, so 8
+    # wide put ~475s in a shard against the 400s WARN (480s step bound); at 10
+    # (~380s predicted) shard 6 of PR #2691's run went past 480s — runner variance
+    # of ~1.3x. 12 wide predicts ~317s, which leaves that variance room.
+    uses: ./.github/workflows/selftests-shards.yml
+    with:
+      # The base --changed diffs against (issue #1374): the PR's target branch,
+      # or on a master push the commit before it. An all-zero `before` (a new
+      # branch) does not resolve, and the runner falls back to the full suite.
+      base: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.before }}
+      runs_on: ubuntu-latest
+      shards: '[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]'

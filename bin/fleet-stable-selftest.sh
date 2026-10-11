@@ -30,6 +30,13 @@
 #                         and logs `macos=`
 #   L. --ignore-check     the caller's own pending CI job (exact name) is passed
 #                         over; any other pending run still refuses
+#   N. the release train  (issue #3141) --precheck runs trunk / forward / oldcfg /
+#                         release.json / artifacts only — red or pending CI and no
+#                         macOS run pass, nothing is pushed or dispatched; backward
+#                         and a bad release.json still refuse. A green
+#                         `release train: macOS` status on the target is its BSD
+#                         half (a red one refuses `macos:`), and the shared
+#                         matrix's `macOS / shard K` checks are gate 5's, not CI's
 #
 # Exit 0 = pass.
 set -uo pipefail
@@ -65,6 +72,7 @@ cat > "$WORK/shim/gh" <<SH
 #!/bin/sh
 case "\$*" in
   *actions/workflows/*) cat "$WORK/macos" 2>/dev/null ;;
+  */statuses*) cat "$WORK/statuses" 2>/dev/null ;;
   'workflow run'*) echo "\$*" >> "$WORK/dispatched"; cat "$WORK/dispatch_to" >> "$WORK/macos" 2>/dev/null ;;
   *) cat "$WORK/checks" ;;
 esac
@@ -275,5 +283,36 @@ OUT=$(env -u GITHUB_ACTIONS sh "$ST" move "$C18" --dir "$CO" --repo o/r 2>&1); R
 eq "M: a move by hand exits 0" 0 "$RC"; eq "M: tag at C18" "$C18" "$(tag)"
 contains "M: dispatched stable-publish.yml for the target" "$(cat "$WORK/dispatched" 2>/dev/null)" "workflow run stable-publish.yml --repo o/r --ref master -f sha=$C18"
 contains "M: says so" "$OUT" "publish: dispatched stable-publish.yml"
+
+# --- N. the release train (issue #3141) ----------------------------------------------------
+# --precheck: the train's own jobs are its CI and its BSD half, so neither is read —
+# a pending check and no macOS run pass; nothing is pushed, dispatched or waited for.
+C19=$(commit nineteen); push; : > "$WORK/macos"; rm -f "$WORK/dispatched"
+printf 'completed success shard 1\nin_progress null train / precheck\ncompleted failure deploy hub\n' > "$WORK/checks"
+run move "$C19" --precheck
+eq "N: precheck passes past red CI and no macOS run" 0 "$RC"; contains "N: says no tag pushed" "$OUT" "no tag pushed"
+eq "N: precheck moved nothing" "$C18" "$(tag)"
+eq "N: precheck dispatched nothing" no "$([ -f "$WORK/dispatched" ] && echo yes || echo no)"
+run move "$C17" --precheck
+eq "N: precheck still refuses backward" 3 "$RC"; contains "N: says forward" "$OUT" "only moves FORWARD"
+printf '{"schema": 2}\n' > "$SEED/release.json"
+git -C "$SEED" add -A; git -C "$SEED" commit -qm 'bad release.json again'; C20=$(git -C "$SEED" rev-parse HEAD); push
+run move "$C20" --precheck
+eq "N: precheck refuses a bad release.json" 3 "$RC"; contains "N: reason release:" "$OUT" "REFUSED — release:"
+cp "$BIN/../release.json" "$SEED/release.json"
+git -C "$SEED" add -A; git -C "$SEED" commit -qm 'release.json back'; C21=$(git -C "$SEED" rev-parse HEAD); push
+run move "$C21" --precheck
+eq "N: precheck passes once fixed" 0 "$RC"
+# A green train on the target is its BSD half; its `macOS / shard K` checks are not CI's.
+printf 'completed success shard 1\nin_progress null macOS / shard 2\n' > "$WORK/checks"; : > "$WORK/macos"
+printf 'failure\n' > "$WORK/statuses"
+run move "$C21"
+eq "N: a red train macOS refuses" 3 "$RC"; contains "N: reason macos: + the status" "$OUT" 'release train: macOS'
+case "$OUT" in *"not green: in_progress null macOS / shard 2"*) fail "N: the generic gate counted a train macOS shard" ;; esac
+printf 'success\nfailure\n' > "$WORK/statuses"; rm -f "$WORK/dispatched"
+run move "$C21"
+eq "N: a green train is the BSD half" 0 "$RC"; eq "N: tag at C21" "$C21" "$(tag)"
+contains "N: says a train boarded it" "$OUT" "a release train boarded it"
+case "$(cat "$WORK/dispatched" 2>/dev/null)" in *selftests-macos*) fail "N: dispatched a full macOS run past a green train" ;; esac
 
 printf 'fleet-stable-selftest OK (%d checks)\n' "$CHECKS"

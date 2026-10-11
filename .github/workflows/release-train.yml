@@ -1,0 +1,179 @@
+name: release train
+
+# ONE lane for releasing (issue #3141, EPIC #3139 C2).
+#
+# Every merge to master used to start its own macOS run (selftests-macos.yml) and
+# its own auto-move (stable-auto.yml); the next merge cancelled the macOS run, so
+# on a busy night 17 of 20 were cancelled, the auto-move skipped 6 times in a row,
+# and the more often master moved the less often anything shipped.
+#
+# Now a merge only boards the NEXT train:
+#   * concurrency `release-train`, cancel-in-progress false — GitHub keeps one train
+#     running and ONE waiting; a newer push replaces the waiting one (shown
+#     cancelled, never started), never the running one. That is the whole train
+#     scheduler (EPIC #3139 发起人拍板 1); three pushes during a train add one train.
+#   * `board` fetches origin/master the moment the train starts and boards THAT head
+#     as TRAIN_SHA (bin/fleet-train-board.sh) — never github.sha, which a waiting or
+#     re-run train got long ago. stable already at the head ⇒ `skip`, the train is
+#     empty and ends within the minute.
+#   * the tests are the shared matrix (selftests-shards.yml), `--changed <stable>`:
+#     Linux and macOS on TRAIN_SHA (发起人拍板 2 — the full suite stays nightly).
+#   * the gate is `fleet-stable.sh move TRAIN_SHA --precheck`: trunk / forward /
+#     oldcfg / release.json / artifacts, no tag pushed. Any red ⇒ this train is
+#     red and ships nothing; the next merge starts the next one (拍板 7).
+#   * `train` leaves the macOS verdict on TRAIN_SHA as the commit status
+#     `release train: macOS` — `fleet-stable.sh move` reads a green one as the BSD
+#     half on that commit (stable-auto.yml moves stable off a green train until the
+#     train moves it itself, C3).
+#
+# Outputs of `board` (C1 / C3 hang off them): train_sha · stable_sha · skip ·
+# merges (count) · merges_json (first-parent stable..TRAIN_SHA, newest first,
+# {sha, subject, committed}).
+run-name: release train
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+  schedule:
+    # hourly backstop (a push lost, a train red on a flake): off the top of the hour
+    - cron: '41 * * * *'
+
+concurrency:
+  group: release-train
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  statuses: write   # `train` leaves `release train: macOS` on TRAIN_SHA
+
+jobs:
+  board:
+    name: board
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      train_sha: ${{ steps.board.outputs.train_sha }}
+      stable_sha: ${{ steps.board.outputs.stable_sha }}
+      skip: ${{ steps.board.outputs.skip }}
+      merges: ${{ steps.board.outputs.merges }}
+      merges_json: ${{ steps.board.outputs.merges_json }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+      - name: board the head of master
+        id: board
+        run: |
+          set -o pipefail
+          bash bin/fleet-train-board.sh --dir . 2> board.err | grep -v '^merges_json=' || true
+          cat board.err
+          grep -q '^train_sha=' "$GITHUB_OUTPUT" || exit 1
+          # shellcheck disable=SC2016  # the backticks are Markdown, inside python
+          {
+            echo "### 🚂 $(cat board.err)"
+            echo
+            sed -n 's/^merges_json=//p' "$GITHUB_OUTPUT" | python3 -c '
+          import json, sys
+          for m in json.load(sys.stdin):
+              print("- `%s` %s · %s" % (m["sha"][:7], m["committed"], m["subject"]))'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  linux:
+    name: Linux
+    needs: board
+    if: needs.board.outputs.skip == 'false'
+    uses: ./.github/workflows/selftests-shards.yml
+    with:
+      sha: ${{ needs.board.outputs.train_sha }}
+      base: ${{ needs.board.outputs.stable_sha }}
+      runs_on: ubuntu-latest
+      shards: '[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]'
+
+  macos:
+    # GitHub's macOS runners until C6 puts the train on our own Macs. 2 wide: a free
+    # account runs at most 5 macOS jobs, and the nightly full suite needs the rest.
+    name: macOS
+    needs: board
+    if: needs.board.outputs.skip == 'false'
+    uses: ./.github/workflows/selftests-shards.yml
+    with:
+      sha: ${{ needs.board.outputs.train_sha }}
+      base: ${{ needs.board.outputs.stable_sha }}
+      runs_on: macos-latest
+      shards: '[1, 2]'
+
+  gate:
+    name: precheck
+    needs: board
+    if: needs.board.outputs.skip == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.board.outputs.train_sha }}
+          fetch-depth: 0
+      - name: fleet-stable.sh move --precheck
+        env:
+          SHA: ${{ needs.board.outputs.train_sha }}
+          # gate 7 (issue #2631): release.json's pins must be on the hub
+          FLEET_HUB_URL: https://claudefleet.24haowan.com
+        run: |
+          set +e
+          sh bin/fleet-stable.sh move "$SHA" --precheck --dir . --repo "$GITHUB_REPOSITORY" > out.txt 2>&1
+          rc=$?
+          cat out.txt
+          {
+            echo "### precheck → \`${SHA:0:7}\`"
+            echo '```'
+            cat out.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit $rc
+
+  train:
+    # The train's verdict: green only when every stage is. It also pins the macOS
+    # half's verdict to TRAIN_SHA (a commit status — a check run belongs to the
+    # commit that queued the run, which may not be TRAIN_SHA).
+    name: train
+    needs: [board, linux, macos, gate]
+    if: always() && needs.board.outputs.skip == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: verdict
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ needs.board.outputs.train_sha }}
+          BOARD: ${{ needs.board.result }}
+          LINUX: ${{ needs.linux.result }}
+          MACOS: ${{ needs.macos.result }}
+          GATE: ${{ needs.gate.result }}
+          URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          case "$MACOS" in
+            success) st=success ;;
+            failure) st=failure ;;
+            *)       st='' ;;      # cancelled / skipped: no verdict on the BSD half
+          esac
+          if [ -n "$SHA" ] && [ -n "$st" ]; then
+            gh api "repos/$GITHUB_REPOSITORY/statuses/$SHA" -f state="$st" \
+              -f context='release train: macOS' -f target_url="$URL" \
+              -f description="the release train's macOS selftests: $MACOS" >/dev/null \
+              || echo "::warning::could not leave the 'release train: macOS' status on $SHA"
+          fi
+          {
+            echo "### 🚂 train \`${SHA:0:7}\`"
+            echo "| stage | result |"
+            echo "|---|---|"
+            echo "| board | $BOARD |"
+            echo "| Linux | $LINUX |"
+            echo "| macOS | $MACOS |"
+            echo "| precheck | $GATE |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          for r in "$BOARD" "$LINUX" "$MACOS" "$GATE"; do
+            [ "$r" = success ] || { echo "::error::this train is red (board $BOARD · Linux $LINUX · macOS $MACOS · precheck $GATE) — it ships nothing; the next merge starts the next train"; exit 1; }
+          done
+          echo "train ${SHA:0:7} is green"

@@ -1,5 +1,5 @@
 #!/bin/sh
-# fleet-stable.sh show | move [<sha>] [--dry-run] [--allow-no-checks] [--force]
+# fleet-stable.sh show | move [<sha>] [--dry-run] [--precheck] [--allow-no-checks] [--force]
 #                 [--dir <checkout>] [--remote <name>] [--branch <trunk>]
 #                 [--repo <owner/name>] [--timeout <s>] [--macos-timeout <s>]
 #                 [--ignore-check <name>]
@@ -22,7 +22,8 @@
 #               success / neutral / skipped. Pending = not green. ZERO check runs
 #               is refused too — push CI is path-filtered, so a docs-only commit
 #               has none; `--allow-no-checks` accepts that deliberately. The
-#               `macOS shard *` runs are not counted here: gate 5 owns them, and
+#               `macOS shard *` runs (and the train's / the nightly's
+#               `macOS / shard *`) are not counted here: gate 5 owns them, and
 #               neither is the one run `--ignore-check <name>` names exactly —
 #               the caller's own job, when the caller is CI (stable-auto.yml): it
 #               runs on the commit it moves to and is never finished yet;
@@ -50,7 +51,10 @@
 #               that does not finish in time refuses. --dry-run never dispatches or waits:
 #               no green run = refused. --force moves past it and logs one line,
 #               like gate 4. A target whose tree has no such workflow has no BSD
-#               half to wait for and passes.
+#               half to wait for and passes. A green release train on the target
+#               (issue #3141: release-train.yml runs the BSD half now, and leaves
+#               the commit status `release train: macOS` on the commit it boarded)
+#               counts as its BSD half when no macOS workflow run is about it.
 #            6. a tree that ships the machine updater (bin/fleet-node-update.py,
 #               issue #2334) carries a release.json its one validator accepts
 #               (`fleet-node-update.py check-release`): what every managed machine
@@ -86,6 +90,11 @@
 #          the value it read, so two concurrent moves cannot both win — the
 #          loser's push is rejected and nothing is overwritten.
 #          --dry-run runs every check and prints the push, without pushing.
+#          --precheck (issue #3141, the release train's gate step) runs only the
+#          gates a train cannot get from its own jobs — 1 on trunk, 2 forward only,
+#          4 oldcfg, 6 release.json, 7 artifacts — and never pushes, dispatches or
+#          waits: the train's own Linux / macOS jobs are its CI, and the hub it
+#          deploys (C3) is its ccquota. 0 = every one passed (or nothing to move).
 #          After the push, outside CI, dispatches stable-publish.yml for the
 #          target (issue #2772): the hub takes stable only from that publish.
 #
@@ -108,7 +117,7 @@ set -u
 
 BIN_DIR=$(cd "$(dirname "$0")" && pwd)
 dir="$(cd "$BIN_DIR/.." && pwd)"
-remote=origin branch=master repo="" timeout=15 dry=0 allow_nochecks=0 force=0 macos_timeout=5400 ignore_check=""
+remote=origin branch=master repo="" timeout=15 dry=0 precheck=0 allow_nochecks=0 force=0 macos_timeout=5400 ignore_check=""
 cmd="" target=""
 TAG=stable
 
@@ -120,6 +129,7 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     show|move)         [ -z "$cmd" ] || die "one subcommand only"; cmd="$1" ;;
     --dry-run|-n)      dry=1 ;;
+    --precheck)        precheck=1 ;;
     --allow-no-checks) allow_nochecks=1 ;;
     --force)           force=1 ;;
     --dir)             shift; dir="${1:-}" ;;
@@ -397,12 +407,25 @@ macos_row() {   # macos_row <slug> <sha>
     NF < 5 || $4 ~ /^pull_request/ || $3 == "cancelled" { next }
     $1 == sha || $6 ~ ("@ " sha "$") { print $2 "\t" $3 "\t" $4 "\t" $5; exit }'
 }
+# A release train's verdict on <sha> (issue #3141): the commit status it leaves on
+# the commit it boarded, "release train: macOS" — the newest one wins. Prints a
+# macos_row-shaped "completed<TAB>success|failure<TAB>train<TAB>-" or nothing.
+TRAIN_MACOS_CONTEXT="release train: macOS"
+train_row() {   # train_row <slug> <sha>
+  _st=$(gh api "repos/$1/commits/$2/statuses?per_page=100" \
+    --jq ".[] | select(.context == \"$TRAIN_MACOS_CONTEXT\") | .state" 2>/dev/null | head -n 1)
+  case "$_st" in
+    success)       printf 'completed\tsuccess\ttrain\t-\n' ;;
+    failure|error) printf 'completed\tfailure\ttrain\t-\n' ;;
+  esac
+}
 macos_pace() { _p="${FLEET_STABLE_MACOS_POLL:-30}"; case "$_p" in ''|*[!0-9]*|0) _p=30 ;; esac; printf '%s' "$_p"; }
 macos_gate() {   # macos_gate <old> <new> <slug>
   if ! git -C "$dir" cat-file -e "$2:.github/workflows/$MACOS_WF" 2>/dev/null; then
     printf 'macos: %s carries no .github/workflows/%s — no BSD half to wait for\n' "$(short "$2")" "$MACOS_WF"; return 0
   fi
   _row=$(macos_row "$3" "$2") || die "could not read the $MACOS_WF runs on $3 (gh auth?)"
+  [ -n "$_row" ] || _row=$(train_row "$3" "$2")
   if [ -z "$_row" ]; then
     if [ "$force" -eq 1 ]; then force_log "$1" "$2" macos "no macOS run on the target" "the BSD half (no run)"; return 0; fi
     [ "$dry" -eq 0 ] || refuse "macos: no green macOS run on $(short "$2") yet — a real move dispatches the full suite on it and waits; --dry-run does neither"
@@ -426,9 +449,11 @@ macos_gate() {   # macos_gate <old> <new> <slug>
   done
   _concl=$(printf '%s' "$_row" | cut -f2) _ev=$(printf '%s' "$_row" | cut -f3) _id=$(printf '%s' "$_row" | cut -f4)
   if [ "$_concl" = success ]; then
+    if [ "$_ev" = train ]; then printf 'macos: green on %s (a release train boarded it)\n' "$(short "$2")"; return 0; fi
     printf 'macos: green on %s (run %s, %s)\n' "$(short "$2")" "$_id" "$_ev"; return 0
   fi
   [ "$force" -eq 0 ] || { force_log "$1" "$2" macos "run $_id $_concl" "the BSD half ($_concl)"; return 0; }
+  [ "$_ev" != train ] || refuse "macos: the release train's macOS half on $(short "$2") is $_concl (status \"$TRAIN_MACOS_CONTEXT\") — fix it (its breakage issue), or --force to move anyway (logged)"
   refuse "macos: the newest macOS run on $(short "$2") is $_concl (run $_id, $_ev: https://github.com/$3/actions/runs/$_id) — fix it (its breakage issue), or --force to move anyway (logged)"
 }
 
@@ -471,13 +496,22 @@ do_move() {
       refuse "$(short "$new") does not descend from the current stable $(short "$old") — stable only moves FORWARD"
   fi
 
+  if [ "$precheck" -eq 1 ]; then
+    release_gate "$old" "$new"
+    artifacts_gate "$old" "$new"
+    [ -z "$old" ] || oldcfg_gate "$old" "$new"
+    if [ -n "$old" ]; then from=$(short "$old"); else from=none; fi
+    printf 'precheck: %s -> %s passes on trunk / forward / oldcfg / release.json / artifacts — no tag pushed\n' "$from" "$(short "$new")"
+    exit 0
+  fi
   slug=$(repo_slug); [ -n "$slug" ] || die "cannot tell the GitHub repo from $remote — pass --repo owner/name"
   runs=$(check_runs "$slug" "$new") || die "could not read check runs for $(short "$new") on $slug (gh auth?)"
-  # The macOS shards are gate 5's (issue #2286): a push run a later push cancelled
+  # The macOS shards (`macOS shard K`, and the shared matrix's `macOS / shard K` —
+  # issue #3141) are gate 5's (issue #2286): a push run a later push cancelled
   # is no verdict, and a running one is waited for there, not refused here.
   # So is the one run --ignore-check names (the CI job running this move).
   runs=$(printf '%s\n' "$runs" | awk -v ign="$ignore_check" '
-    NF && !($3 == "macOS" && $4 == "shard") {
+    NF && !($3 == "macOS" && ($4 == "shard" || ($4 == "/" && $5 == "shard"))) {
       n = $0; sub(/^[^ ]+ [^ ]+ /, "", n)
       if (ign != "" && n == ign) next
       print
