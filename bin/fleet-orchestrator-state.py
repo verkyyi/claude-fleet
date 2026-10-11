@@ -7,8 +7,8 @@ Usage: fleet-orchestrator-state.py hook                 (stdin: a Claude Code ho
        fleet-orchestrator-state.py brief [--source S] [--no-mark]
        fleet-orchestrator-state.py path
 
-THE GAP. The orchestrating session (bin/fleet-orchestrator.sh, `@fleet_role
-orchestrator`) keeps its working state only in its conversation: which EPIC batches
+THE GAP. The orchestrating session (the window that took the role, `@fleet_role_def
+orchestrator` — issue #3114) keeps its working state only in its conversation: which EPIC batches
 it follows, which children it waits on, which `[child-report]`s came in, and the
 Loop it re-arms with ScheduleWakeup. C1 (#2582) put its ROLE in the system prompt;
 a compaction still leaves a summary that is free to drop the rest — and a Loop lives
@@ -39,8 +39,7 @@ WHAT IT DOES. ONE file, `$FLEET_CONF_DIR/global/orchestrator.state.json` (EPIC
            is marked 只当参考 — check the children first. Reading it marks the reports
            read (`seen_seq`). On `resume` / `startup` (an exit, a killed process, a
            restart — no SessionEnd may have run) the batches and the Loop are read
-           again first (issue #2585); fleet-orchestrator.sh hands that resumed
-           conversation its first turn, so it re-arms with nobody typing.
+           again first (issue #2585).
            After a MANUAL compaction the REPL sits idle and additionalContext only
            rides a turn something else starts, so it also starts that turn: stamps
            @compact_stage restored + @compact_restored_ts and hands the pane to

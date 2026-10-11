@@ -626,8 +626,8 @@ fleet_roles_held_file() { printf '%s/global/roles.held' "${FLEET_CONF_DIR:-$HOME
 #   ① the roles.held line, while its window lives (by @fleet_id, else its id) and
 #     still carries the mark — a line whose window went is nobody's;
 #   ② a window carrying the mark with no line (a restored window, a hand stamp);
-#   ③ the old seat's `@fleet_role <role>` (bin/fleet-orchestrator.sh, EPIC #3111 C7
-#     removes it — # compat-1v: 下一批删).
+#   ③ an old resident seat's `@fleet_role <role>` (the seat is gone, issue #3118;
+#     never written again — # compat-1v: 下一批删).
 fleet_role_holder() {
   local role="${1:-}" sock="${2:-}" rows f line fid wid hits n
   case " $FLEET_ROLES_TAKEN " in *" $role "*) : ;; *) return 1 ;; esac

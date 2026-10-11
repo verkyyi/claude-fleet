@@ -267,8 +267,8 @@ def inventory_row(parts):
     its kind's default) — the other machines' sidebars draw 常驻 etc. off it.
     Column 19 (issue #1951): `detail=<question>`, what a session in `needs` asks
     (@claude_needs_detail) — the client's bar and notification say it; empty = none.
-    Column 20 (issue #1957): `role=orchestrator` — the fleet's one orchestrating
-    session (bin/fleet-orchestrator.sh). Since issue #3119 a node writes
+    Column 20 (issue #1957): `role=orchestrator` — the old resident orchestrating
+    session (gone, issue #3118). Since issue #3119 a node writes
     `role=worker` for it (no session is special: an ordinary row everywhere);
     an older node's `orchestrator` / `steward` is still read — compat-1v: 下一批删.
     Column 21 (issue #1958): `epic=<owner/name>#<N>[:<landed>/<members>]` — the

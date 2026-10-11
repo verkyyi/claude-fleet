@@ -77,9 +77,10 @@ if [ -n "$REAL_TMUX" ]; then
   # column 22 is epicstale= — the login's batches nobody drives (issue #1916), empty with none
   # column 23 is backfill=failed on a warm start whose issue was never filed (issue #2235)
   # columns 24-28 are the measurement bus (issue #2431), 29 agentstatus= (#2536),
-  # 30 test= (#2505), 31 orchq= (#2617) — NF - 12 keeps the count of the 19
-  eq "A: column 17, the reap column 18, the detail column 19, the role column 20, the epic column 21, the epicstale column 22, the backfill column 23 (NF counts through column 31, #2617); 16 before it as they were" "19 reap= detail= role= epic= epicstale= backfill= test= orchq=" \
-     "$(printf '%s\n' "$out" | awk -F'\t' '$10 == "fix-sidebar-slug" { print NF - 12, $18, $19, $20, $21, $22, $23, $30, $31 }')"
+  # 30 test= (#2505) — the last since columns 31-37 went (issue #3118); NF - 11
+  # keeps the count of the 19
+  eq "A: column 17, the reap column 18, the detail column 19, the role column 20, the epic column 21, the epicstale column 22, the backfill column 23 (NF counts through column 30, #3118); 16 before it as they were" "19 reap= detail= role= epic= epicstale= backfill= test=" \
+     "$(printf '%s\n' "$out" | awk -F'\t' '$10 == "fix-sidebar-slug" { print NF - 11, $18, $19, $20, $21, $22, $23, $30 }')"
   T set-option -w -t "=$S:draft" @backfill failed
   T set-option -w -t "=$S:uncached" @backfill filing
   out2=$(bash "$CREAD" workers "$S" 2>"$WORK/err") || fail "A: workers failed" "$(cat "$WORK/err")"
@@ -111,18 +112,12 @@ if [ -n "$REAL_TMUX" ]; then
   eq "A: @agent_status → column 29; a malformed one dropped" 'agentstatus={"state":"blocked","kind":"permission","msg":"Bash: git push","app":"claude-code","ts":1800000000}|agentstatus=' \
      "$(printf '%s\n' "$out4" | awk -F'\t' '$10 == "draft" { d = $29 } $10 == "uncached" { u = $29 } END { print d "|" u }')"
   T set-option -wu -t "=$S:draft" @agent_status; T set-option -wu -t "=$S:uncached" @agent_status
-  # column 31 (issue #2617): orchq= — @orch_queue, the mod's count, on the
-  # orchestrator's window only; a non-number dropped
-  T set-option -w -t "=$S:draft" @orch_queue 3; T set-option -w -t "=$S:uncached" @orch_queue 2
+  # no column 31 (issue #3118): an old seat's @orch_queue rides nowhere
+  T set-option -w -t "=$S:draft" @fleet_role orchestrator; T set-option -w -t "=$S:draft" @orch_queue 3
   oq=$(bash "$CREAD" workers "$S" 2>"$WORK/err") || fail "A: workers failed" "$(cat "$WORK/err")"
-  eq "A: @orch_queue on a window that is not the orchestrator → column 31 empty" "orchq=|orchq=" \
-     "$(printf '%s\n' "$oq" | awk -F'\t' '$10 == "draft" { d = $31 } $10 == "uncached" { u = $31 } END { print d "|" u }')"
-  T set-option -w -t "=$S:draft" @fleet_role orchestrator; T set-option -w -t "=$S:uncached" @fleet_role orchestrator
-  T set-option -w -t "=$S:uncached" @orch_queue 'x'
-  oq=$(bash "$CREAD" workers "$S" 2>"$WORK/err") || fail "A: workers failed" "$(cat "$WORK/err")"
-  eq "A: the orchestrator's @orch_queue → column 31; a malformed one dropped" "orchq=3|orchq=" \
-     "$(printf '%s\n' "$oq" | awk -F'\t' '$10 == "draft" { d = $31 } $10 == "uncached" { u = $31 } END { print d "|" u }')"
-  for o in @orch_queue @fleet_role; do T set-option -wu -t "=$S:draft" "$o"; T set-option -wu -t "=$S:uncached" "$o"; done
+  eq "A: an old seat's @orch_queue → no column 31, the row ends at test= (issue #3118)" "30|test=" \
+     "$(printf '%s\n' "$oq" | awk -F'\t' '$10 == "draft" { print NF "|" $NF }')"
+  for o in @orch_queue @fleet_role; do T set-option -wu -t "=$S:draft" "$o"; done
   for o in @ctx_pct @ctx_left @ctx_band @ctx_ts @model @effort @cc_agent @cc_model; do
     T set-option -wu -t "=$S:draft" "$o"; T set-option -wu -t "=$S:uncached" "$o"
   done
@@ -149,7 +144,7 @@ if [ -n "$REAL_TMUX" ]; then
   eq "A: a no-repo session → its @task_line as title= (#2359)" "title=帮我看下 mini2 的日志" "$(col17 "$out5" '我的会话')"
   eq "A: a scratch → its @task_line as title=" "title=试一下新的侧栏" "$(col17 "$out5" draft)"
   eq "A: an issue window keeps its issue's title" "title=修复侧栏：显示 issue 标题" "$(col17 "$out5" fix-sidebar-slug)"
-  eq "A: …and the line moves no other column (31 columns, #2617)" "20 reap= detail= role= epic=" \
+  eq "A: …and the line moves no other column (30 columns, #3118)" "19 reap= detail= role= epic=" \
      "$(printf '%s\n' "$out5" | awk -F'\t' '$10 == "draft" { print NF - 11, $18, $19, $20, $21 }')"
   T kill-server 2>/dev/null
 else
@@ -200,13 +195,11 @@ p, x = inventory_row(full + bus + ["agentstatus=nope"])
 assert "status_kind" not in x and x["model"] == "Opus 5.5", x
 p, x = inventory_row(full + bus + ["agentstatus="])
 assert "status_msg" not in x and x["ctx_band"] == "ok", x
-# column 31 (issue #2617): orchq= → orch_queue (an int), after test=
+# an older node's columns 31-37 (issue #3118) are dropped unread, the row as before
 p, x = inventory_row(full + bus + ["agentstatus=", "test=", "orchq=2"])
-assert (x["orch_queue"], x["ctx_band"], x["title"]) == (2, "ok", "t") and "test" not in x, x
-p, x = inventory_row(full + bus + ["agentstatus=", "test=1", "orchq="])
-assert "orch_queue" not in x and x["test"] is True, x
-p, x = inventory_row(full + bus + ["agentstatus=", "test=", "orchq=x"])
-assert "orch_queue" not in x and x["model"] == "Opus 5.5", x
+assert "orch_queue" not in x and (x["ctx_band"], x["title"]) == ("ok", "t") and "test" not in x, x
+p, x = inventory_row(full + bus + ["agentstatus=", "test=1", "orchq=", "orchdec=2", "orchpark=1", "orchpage=https://p/d/"])
+assert not any(k.startswith("orch_") for k in x) and x["test"] is True and x["model"] == "Opus 5.5", x
 # issue #2538: no report, a needs row's subtype + detail fill the pair; a report wins
 ask = base[:11] + ["perm"] + base[12:]
 p, x = inventory_row(ask + tail + ["title=t", "reap=", "detail=Bash: rm -rf build"])
