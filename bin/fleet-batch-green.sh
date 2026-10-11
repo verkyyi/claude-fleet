@@ -58,7 +58,7 @@ driven() {
   fi
   local s
   for s in $(fleet_sockets 2>/dev/null); do
-    tmux -L "$s" list-windows -a -F '#{@epic}' 2>/dev/null
+    fleet_lw '#{@epic}' tmux -L "$s"
   done
 }
 DRIVEN=" $(driven | awk 'NF { sub(/:.*/, ""); printf "%s ", $1 }') "

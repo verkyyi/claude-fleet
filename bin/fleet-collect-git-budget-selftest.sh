@@ -109,6 +109,7 @@ chmod +x "$WORK/fakepath/"*
 
 GIT_LOG="$WORK/git.log"
 export FAKE_GIT_HANG='' FAKE_GIT_SLOW='' FAKE_GIT_SLOW_SECS=2
+unset BUDGET SLOW   # run_collector's knobs: never the caller's (issue #3371)
 run_collector() {
   : > "$GIT_LOG"
   PATH="$WORK/fakepath:$PATH" TMPDIR="$WORK" HOME="$WORK" FLEET_SKIP_GLOBAL_CONF=1 GH_TTL=999999 \
