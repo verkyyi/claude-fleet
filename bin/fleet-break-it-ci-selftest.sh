@@ -25,6 +25,8 @@
 #                       --ignore-check; the old auto roads are gone (#3143)
 #   train-superseded-red    stable moved past TRAIN_SHA mid-run: the train's release
 #                       ends green saying superseded, not red on the 409 (#3143)
+#   train-hub-backwards     the hub was deployed by hand past TRAIN_SHA: the train's
+#                       hub plan skips the deploy (superseded), never rolls it back (#3319)
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT are read by the sourced runner
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -319,6 +321,57 @@ drill_train_superseded_red() {
   [ "$rc" = 0 ] && case "$out" in *"the hub's stable"*) true ;; *) false ;; esac || { WHY="the hub's stable ahead was not superseded: $rc $out"; rm -rf "$d"; return 1; }
   SECS=$(since "$t0"); rm -rf "$d"
   WHAT="stable 被手动挪过了 TRAIN_SHA（或入口 stable 已在前面）：release 写 superseded、以成功收场，不再被 409 打红；stable 落后则照常发"
+}
+
+# The hub deploy only moves forward (issue #3319): run 38139898013 (5e11587) rolled
+# the hub back from a hand-deployed prod-15d87a1 to prod-5e11587, and #3297 fell
+# off it. fleet-train-hub.sh reads the hub's /version `commit` first: TRAIN_SHA ⇒
+# skip · a descendant or not an ancestor ⇒ skip, "hub superseded" · an ancestor ⇒
+# deploy as before · unreadable / unknown ⇒ red, no blind deploy.
+drill_train_hub_backwards() {
+  CAP=30
+  local t0 d out rc wf c1 c2 c3 s1
+  wf="$BIN/../.github/workflows/release-train.yml"
+  grep -q 'bin/fleet-train-hub.sh "$SHA"' "$wf" || { WHY="release-train.yml's hub plan does not run fleet-train-hub.sh"; return 1; }
+  d=$(mktemp -d "${TMPDIR:-/tmp}/train-hubb.XXXXXX")
+  ( export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+    export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
+    git init -q --bare -b master "$d/origin.git" && git clone -q "$d/origin.git" "$d/seed" 2>/dev/null || exit 1
+    mkdir -p "$d/seed/tokenledger/internal/x" "$d/seed/deploy/k8s"
+    printf 'module x\n' > "$d/seed/tokenledger/go.mod"; printf 'a: 1\n' > "$d/seed/deploy/k8s/k.yaml"
+    for i in 1 2 3; do printf 'package x\n\nconst Y = %s\n' "$i" > "$d/seed/tokenledger/internal/x/x.go"
+      git -C "$d/seed" add -A && git -C "$d/seed" commit -qm "c$i" || exit 1
+      git -C "$d/seed" rev-parse HEAD > "$d/c$i"
+      [ "$i" != 1 ] || { git -C "$d/seed" branch side
+        git -C "$d/seed" checkout -q side && printf 'package x\n\nconst Y = 9\n' > "$d/seed/tokenledger/internal/x/x.go" \
+          && git -C "$d/seed" commit -qam side && git -C "$d/seed" rev-parse HEAD > "$d/s1" && git -C "$d/seed" push -q origin side \
+          && git -C "$d/seed" checkout -q master || exit 1; }
+    done
+    git -C "$d/seed" push -q origin HEAD:master && git clone -q "$d/origin.git" "$d/co" 2>/dev/null
+  ) || { WHY="could not build the rig repo"; rm -rf "$d"; return 1; }
+  c1=$(cat "$d/c1"); c2=$(cat "$d/c2"); c3=$(cat "$d/c3"); s1=$(cat "$d/s1"); mkdir -p "$d/hub"; t0=$(now)
+  live() { printf '{"commit":"%.7s","version":"prod-%.7s"}\n' "$1" "$1" > "$d/hub/version"; }
+  plan() { out=$(env -u RELEASE_TRAIN_HUB GITHUB_OUTPUT="$d/out" bash "$BIN/fleet-train-hub.sh" "$c2" --dir "$d/co" --hub "file://$d/hub" --timeout 5 2>&1); rc=$?; : > "$d/out"; }
+  dep() { printf '%s\n' "$out" | sed -n 's/^deploy=//p' | head -1; }
+  # the hub already runs TRAIN_SHA: skip
+  live "$c2"; plan
+  [ "$rc" = 0 ] && [ "$(dep)" = false ] || { WHY="a hub already on TRAIN_SHA was not skipped: $rc $(printf '%s' "$out" | tr '\n' '|')"; rm -rf "$d"; return 1; }
+  # deployed by hand past it, or onto a fork: never rolled back, the step stays green
+  for s in "$c3" "$s1"; do
+    live "$s"; plan
+    [ "$rc" = 0 ] && [ "$(dep)" = false ] && printf '%s' "$out" | grep -q "hub superseded: live is ${s:0:7}" \
+      || { WHY="a hub on ${s:0:7} (not behind TRAIN_SHA) would be redeployed backwards: $rc $(printf '%s' "$out" | tr '\n' '|')"; rm -rf "$d"; return 1; }
+  done
+  # behind TRAIN_SHA (its ancestor, Go changed since): deployed as before
+  live "$c1"; plan
+  [ "$rc" = 0 ] && [ "$(dep)" = true ] || { WHY="a hub behind TRAIN_SHA was not deployed: $rc $(printf '%s' "$out" | tr '\n' '|')"; rm -rf "$d"; return 1; }
+  # /version unreadable, or a commit nobody here knows: red, no blind deploy
+  rm -f "$d/hub/version"; plan
+  [ "$rc" != 0 ] && [ "$(dep)" != true ] || { WHY="an unreadable /version still decided ($rc): $(printf '%s' "$out" | tr '\n' '|')"; rm -rf "$d"; return 1; }
+  printf '{"commit":"abcdef1","version":"prod-abcdef1"}\n' > "$d/hub/version"; plan
+  [ "$rc" != 0 ] && [ "$(dep)" != true ] || { WHY="a hub commit the checkout cannot place still decided ($rc): $(printf '%s' "$out" | tr '\n' '|')"; rm -rf "$d"; return 1; }
+  SECS=$(since "$t0"); rm -rf "$d"
+  WHAT="入口已在 TRAIN_SHA 跳过；入口被手动部署到它之后或分叉的提交：不部署、写 hub superseded、这步绿；入口落后照常部署；读不到 /version 或认不出提交：红，不盲部署"
 }
 
 cred_run_drills "$0"

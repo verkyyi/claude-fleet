@@ -774,7 +774,7 @@ Do not install from memory: read the doc and work from it.
   `--changed <stable>` on Linux and macOS, then `fleet-stable.sh move --precheck`;
   then ONE commit goes out (#3142) — the hub via `hub-deploy.yml`'s own job called
   with `sha=TRAIN_SHA` (skipped when `bin/fleet-train-hub.sh` finds the hub already
-  TRAIN_SHA's Go source and `deploy/k8s/`), `fleet-release-publish.sh TRAIN_SHA`,
+  TRAIN_SHA's Go source and `deploy/k8s/`, and never backwards: a hub on a later or forked commit is left as `hub superseded`, an unreadable `/version` is red — #3319, BREAK-IT `train-hub-backwards`), `fleet-release-publish.sh TRAIN_SHA`,
   `fleet-stable.sh move TRAIN_SHA --train <run>` (gates 3 / 5 read the run's jobs) —
   so the hub and stable never come from two commits; the doctor's `hub-image` row
   WARNs 不同源 when a hand rollback splits them, BREAK-IT `train-hub-stable-split`;

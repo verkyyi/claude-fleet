@@ -477,6 +477,7 @@ jobs:
     outputs:
       deploy: ${{ steps.plan.outputs.deploy }}
       live: ${{ steps.plan.outputs.live }}
+      why: ${{ steps.plan.outputs.why }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -488,6 +489,8 @@ jobs:
           SHA: ${{ needs.board.outputs.train_sha }}
           RELEASE_TRAIN_HUB: ${{ vars.RELEASE_TRAIN_HUB }}
         run: |
+          # only forward (#3319): a hub on TRAIN_SHA or past it / on a fork is never
+          # redeployed (deploy=false, "hub superseded"); an unreadable /version is red
           bash bin/fleet-train-hub.sh "$SHA" --dir . --hub https://claudefleet.24haowan.com || exit 1
           echo "### 入口 → \`${SHA:0:7}\`: $(sed -n 's/^why=//p' "$GITHUB_OUTPUT" | tail -1)" >> "$GITHUB_STEP_SUMMARY"
 
@@ -524,6 +527,7 @@ jobs:
       TRAIN_SHA: ${{ needs.board.outputs.train_sha }}
       STABLE_SHA: ${{ needs.board.outputs.stable_sha }}
       PLANNED: ${{ needs.hub-plan.outputs.deploy }}
+      HUB_WHY: ${{ needs.hub-plan.outputs.why }}
       DEPLOYED: ${{ needs.hub.outputs.deployed }}
       FLEET_HUB_URL: https://claudefleet.24haowan.com
       GH_TOKEN: ${{ github.token }}
@@ -553,7 +557,12 @@ jobs:
           if [ "$DEPLOYED" = success ] && [ "$img" != "prod-${TRAIN_SHA:0:7}" ]; then
             echo "::error::this train deployed prod-${TRAIN_SHA:0:7} but the hub answers $img — another deploy overtook it; the next train starts over"; exit 1
           fi
-          echo "### 入口 \`$img\`$( [ "$DEPLOYED" = success ] && echo '（本趟部署）' || echo '（与本趟同源，未重出镜像；挪动前 ccquota 门再核对）')" >> "$GITHUB_STEP_SUMMARY"
+          case "$DEPLOYED:$HUB_WHY" in
+            (success:*)              note='（本趟部署）' ;;
+            (*:'hub superseded'*)    note='（入口已在本趟之后或分叉，未部署——只前进；发布由只前进门判断）' ;;
+            (*)                      note='（与本趟同源，未重出镜像；挪动前 ccquota 门再核对）' ;;
+          esac
+          echo "### 入口 \`$img\`$note" >> "$GITHUB_STEP_SUMMARY"
 
       - name: the train's ledger (#3140)
         if: steps.sup.outputs.superseded != 'true'
