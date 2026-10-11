@@ -86,6 +86,13 @@ type MachineConfig struct {
 	// EntryReachEvery is how often `entry reach` runs (claude-fleet#3072);
 	// 0 = every 5 minutes.
 	EntryReachEvery time.Duration
+	// UpdateNow is the node daemon's <state>/update-now (claude-fleet#3146):
+	// a pushed release writes it and the daemon runs its update at once. ""
+	// = the hello lists no CapRelease, nothing is written.
+	UpdateNow string
+	// CurrentRelease is the runtime's <root>/current: a pushed release it is
+	// already at (sha) or past (seq) writes nothing.
+	CurrentRelease string
 	// Tenants is one Config per login served: its own Token (that login's
 	// node token), Home, StateDir and RunAs. Fleet is forced on.
 	Tenants []Config
@@ -271,6 +278,10 @@ func (ml *machineLink) session(ctx context.Context) (bool, error) {
 		// The entry port's keys follow the hub's push (claude-fleet#3070).
 		caps = append(caps, control.CapEntryKeys)
 	}
+	if ml.cfg.UpdateNow != "" {
+		// A new stable starts the machine's update at once (claude-fleet#3146).
+		caps = append(caps, control.CapRelease)
+	}
 	hello, err := control.New(control.TypeHello, control.Hello{
 		HeartbeatMS:  int(ml.cfg.LiveInterval / time.Millisecond),
 		AgentVersion: ml.cfg.Version,
@@ -367,9 +378,13 @@ func (ml *machineLink) session(ctx context.Context) (bool, error) {
 func (ml *machineLink) demux(ctx context.Context, conn *websocket.Conn, m control.Message) {
 	if m.Login == "" {
 		// The machine's own half: nothing is ever asked of it but the entry
-		// port's keys (claude-fleet#3070).
+		// port's keys (claude-fleet#3070) and a new stable (claude-fleet#3146).
 		if m.Type == control.TypeEntryKeys {
 			ml.handleEntryKeys(ctx, m)
+			return
+		}
+		if m.Type == control.TypeRelease {
+			ml.handleRelease(m)
 			return
 		}
 		if m.Type == control.TypeError && m.Error != nil {

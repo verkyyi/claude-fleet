@@ -320,6 +320,8 @@ func loadFleetReleases(srv *api.Server) error {
 		Platforms:     strings.Fields(os.Getenv("CCQUOTA_FLEET_RELEASE_PLATFORMS")),
 		NPMRegistries: strings.Fields(os.Getenv("CCQUOTA_FLEET_RELEASE_NPM"))}
 	srv.Stable.OnStable = srv.Releases.OnStable
+	// each new stable told to every node at once (claude-fleet#3146)
+	srv.Releases.OnPromote = srv.BroadcastRelease
 	srv.Stable.Local = srv.Releases
 	// who may push a stable (claude-fleet#2772): the release workflows' GitHub
 	// OIDC token, or a publish-only bearer (its own k8s Secret) as the fallback

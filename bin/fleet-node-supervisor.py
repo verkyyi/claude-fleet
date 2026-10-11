@@ -323,6 +323,40 @@ def update_verify_due(paths, t, since):
         return False
 
 
+def update_now_path(paths):
+    return os.path.join(paths.state, "update-now")
+
+
+def update_now_due(paths):
+    """True when a pushed release asked for the update now (issue #3146): the
+    machine's node program (`ccquota agent --machine`, root) wrote
+    <state>/update-now on the hub's `release {sha}`. Only a regular file root's
+    (or this daemon's own user's) counts."""
+    try:
+        st = os.lstat(update_now_path(paths))
+    except OSError:
+        return False
+    return stat.S_ISREG(st.st_mode) and st.st_uid in (0, os.geteuid())
+
+
+def update_now_take(paths):
+    """Consume update-now as the update task starts: a push that lands while it
+    runs writes a new file and wakes the next one. The sha it named, or ''."""
+    if not update_now_due(paths):
+        return ""
+    p = update_now_path(paths)
+    try:
+        with open(p) as fh:
+            sha = fh.read(64).strip()
+    except OSError:
+        sha = ""
+    try:
+        os.unlink(p)
+    except OSError:
+        pass
+    return sha if re.match(r"^[0-9a-f]{40}$", sha) else "?"
+
+
 def read_json(path, default):
     """A JSON file, or `default`. Opened O_NONBLOCK and read only when it is a
     regular file (issue #3086): a FIFO / device planted at the path answers
@@ -549,7 +583,9 @@ def default_table(paths):
             {"name": "shared-dirs", "every": 60,
              "cmd": ["/usr/bin/python3", "-I", os.path.join(rt_bin, "fleet-shared-dirs.py")]},
             # The one updater (C6, #2334): every part of the machine to the hub's
-            # release, or none. A switch ends in a restart request (below).
+            # release, or none. A switch ends in a restart request (below). A new
+            # stable the hub pushes (issue #3146: the node program writes
+            # <state>/update-now) runs it at once — task_due; the clock stays.
             {"name": "update", "every": env_num("FLEET_NODE_UPDATE_EVERY", 300), "timeout": 1800,
              "cmd": ["/usr/bin/python3", "-I", os.path.join(rt_bin, "fleet-node-update.py"), "tick"]},
         ],
@@ -1704,6 +1740,10 @@ class Supervisor(object):
         since = t - (ts.get("last_start") or 0)
         if since >= float(tk.get("every", 60)):
             return True
+        # A new stable pushed by the hub (issue #3146) runs the update now; its
+        # 5-minute clock stays as the fallback for a push that never came.
+        if tk["name"] == "update" and update_now_due(self.p):
+            return True
         # A switched release is verified FLEET_NODE_UPDATE_SETTLE (30 s) after the
         # switch, not on the next 5-minute tick (issue #2973): until then the hub
         # tells every refused newcomer the machine is 「正在更新（switched）」.
@@ -1742,7 +1782,11 @@ class Supervisor(object):
             fh.write(("--- %s %s\n" % (iso(t), " ".join(tk["cmd"][6:]))).encode())
         else:
             fh = self.logfile(name, "tasks")
-            fh.write(("--- %s %s\n" % (iso(t), " ".join(tk["cmd"]))).encode())
+            woke = update_now_take(self.p) if name == "update" else ""
+            if woke:
+                ts["woken"] = {"at": t, "sha": woke}
+            fh.write(("--- %s %s%s\n" % (iso(t), " ".join(tk["cmd"]),
+                                          (" (pushed %s)" % woke[:12]) if woke else "")).encode())
         fh.flush()
         try:
             p = self.spawn(tk, fh, tk.get("env"))
