@@ -52,6 +52,12 @@ def load(name):
     return m
 
 
+class HubHTTPError(RuntimeError):
+    def __init__(self, path, code):
+        RuntimeError.__init__(self, 'hub %s returned HTTP %d' % (path, code))
+        self.code = code
+
+
 def request(hub, path, token=None, body=None):
     url = urllib.parse.urlsplit(hub)
     if url.scheme != 'https' and not (url.scheme == 'http' and url.hostname in ('127.0.0.1', 'localhost', '::1')):
@@ -65,7 +71,7 @@ def request(hub, path, token=None, body=None):
         with urllib.request.urlopen(req, timeout=20) as r:
             return json.load(r)
     except urllib.error.HTTPError as e:
-        raise RuntimeError('hub %s returned HTTP %d' % (path, e.code)) from None
+        raise HubHTTPError(path, e.code) from None
 
 
 def private_write(path, data, uid=0, gid=0):
@@ -501,11 +507,24 @@ def login_open(a):
         '(p/"node.pub.env").write_text(sys.argv[2]); '
         'f=p/"node.env"; f.unlink(missing_ok=True); f.symlink_to(sys.argv[3])',
         str(conf), ''.join(k + '=' + v + '\n' for k, v in public.items()), str(token_path)])
-    relay = request(hub, '/v1/node/relay-credential', ne['CCQUOTA_TOKEN'], {})
+    # The relay pass is the proxy's second road, never a reason to undo a login
+    # (#3213): the hub mints it only for a login whose account is ACTIVE, and a
+    # login the hub's create op is making is still `creating` here — so a 403 is
+    # expected on every create. The login's fleet-cred-proxy.sh mints it later
+    # (relay_fetch, as on a Mac); until then the relay road is simply off.
+    try:
+        relay = request(hub, '/v1/node/relay-credential', ne['CCQUOTA_TOKEN'], {})
+    except HubHTTPError as e:
+        if e.code != 403:
+            raise
+        relay = {}
+        print('relay pass: refused for now (HTTP 403) — the login\'s proxy mints it once its account is active',
+              file=sys.stderr)
     relay_token = relay.get('token') or relay.get('credential')
-    if not isinstance(relay_token, str) or not relay_token:
+    if relay and (not isinstance(relay_token, str) or not relay_token):
         raise ValueError('hub returned no relay pass; verify tenant trust')
-    private_write(store / 'cred-proxy/relay.token', relay_token + '\n', role.pw_uid, role.pw_gid)
+    if relay_token:
+        private_write(store / 'cred-proxy/relay.token', relay_token + '\n', role.pw_uid, role.pw_gid)
     machine_env = dict(ne, FLEET_CONF_DIR=str(conf), CCQUOTA_FLEET_CRED_STORE=str(Path(c.SHARED_RUN) / 'ctl.sock'))
     s.write_login_env(paths, login, machine_env)
     os.environ['FLEET_NODE_ADOPT_FOLLOW'] = '0'

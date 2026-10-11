@@ -175,6 +175,48 @@ class LinuxNode(unittest.TestCase):
                 m.prepare(args)
                 self.assertEqual(store.stat().st_mtime_ns, before)
 
+    def test_relay_refused_while_account_creating_keeps_login(self):
+        """#3213: the hub's create op opens a login whose account is still
+        `creating`, so /v1/node/relay-credential answers 403 no_principal — the
+        open goes on (adopted, no relay.token, the proxy mints it later); any
+        other failure still stops it."""
+        m = module('fleet-node-linux')
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            (d / 'state').mkdir()
+            (d / 'state/machine.env').write_text('fixture')
+            code = d / 'join'
+            code.write_text('fj_' + 'a' * 26)
+            s = Mock()
+            s.Paths.return_value = Mock(state=str(d / 'state'))
+            s.account_adopt.return_value = 0
+            c = Mock(ROOT_BASE=str(d / 'cred'), LIB=str(d / 'lib'), SHARED_RUN=str(d / 'run/.shared'), ROLE='fleetcred')
+            c.proxy_mod.return_value.loopback_ok.return_value = True
+            relay_code = [403]
+
+            def hub(_hub, path, token=None, body=None):
+                if path == '/v1/node/relay-credential':
+                    raise m.HubHTTPError(path, relay_code[0])
+                return {'/v1/node/join': {'token': 'tenant-tok'}}.get(path, {})
+
+            def write(path, data, uid=0, gid=0):
+                Path(path).parent.mkdir(parents=True, exist_ok=True)
+                Path(path).write_text(data)
+
+            me = Mock(pw_uid=os.getuid(), pw_gid=os.getgid(), pw_dir=str(d / 'home'))
+            args = Mock(login='arvin2', uid=10003, hub='https://hub.example', join_file=str(code),
+                        relay='https://relay.example')
+            with patch.object(m, 'load', side_effect=lambda n: {'fleet-node-supervisor': s, 'fleet-credsep': c}[n]), \
+                    patch.object(m, 'ensure_login', return_value=me), patch.object(m, 'as_tenant'), \
+                    patch.object(m, 'request', side_effect=hub), patch.object(m, 'private_write', side_effect=write), \
+                    patch.object(m.pwd, 'getpwnam', return_value=me), patch.object(m.os, 'chown'):
+                m.prepare(args)
+                s.account_adopt.assert_called_once()
+                self.assertFalse((d / 'cred/arvin2/cred-proxy/relay.token').exists())
+                relay_code[0] = 500
+                with self.assertRaises(m.HubHTTPError):
+                    m.prepare(args)
+
     def test_privileged_linux_groups_refused_without_sudo_binary(self):
         s = module('fleet-node-supervisor')
         with patch.object(s, 'MAC', False), patch.object(s.os, 'geteuid', return_value=0), \
