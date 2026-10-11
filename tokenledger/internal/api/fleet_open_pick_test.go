@@ -186,9 +186,10 @@ func TestOpenPickDrill27SnapshotPicksMini2(t *testing.T) {
 	waitFor(t, 3*time.Second, "mini2 picked over fleet-linux-0", func() bool {
 		return h.srv.leastBusyMachine(time.Now()) == "mini2"
 	})
-	if got := h.srv.leastBusyMachine(time.Now(), "mini2"); got != "" {
-		t.Fatalf("with mini2 skipped the pick is %q, want none (a new login there egresses CN)", got)
-	}
+	// The relay probe rides the login's beat: wait for it to land.
+	waitFor(t, 3*time.Second, "no pick with mini2 skipped (a new login on fleet-linux-0 egresses CN)", func() bool {
+		return h.srv.leastBusyMachine(time.Now(), "mini2") == ""
+	})
 }
 
 // The score's inputs count on their own: a machine past placement's CPU
