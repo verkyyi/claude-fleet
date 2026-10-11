@@ -111,6 +111,9 @@
 #                               link — fleet-debug, which needs none of fleet (#2892);
 #                               a third failed login / session / connection in
 #                               half an hour offers it (#2894, FLEET_DEBUG_PROMPT=0 off)
+#   fleet feedback on|off|status  /fleet-feedback for this login (#3360): on by
+#                               default on a managed login (once — off stays off),
+#                               off on your own computer until you say on
 #   手机连 fleet               <入口>/fleet/keys in a phone's browser (#3069):
 #                               your address name, the four things Termius asks
 #                               for, add or revoke a key, move your home
@@ -372,6 +375,11 @@ case $cmd in
   # and `fleet show <file>` still go to fleet-open.sh / fleet-show.sh from there
   ls|show|open|rename|close|reap|answer)
     exec python3 "$here/fleet-session-cli.py" "$@" ;;
+  # /fleet-feedback's switch (issue #3360); every other word is the sender's
+  feedback)
+    case ${2:-} in
+      on|off|status|enabled) [ -f "$here/fleet-feedback-switch.sh" ] && { shift; exec bash "$here/fleet-feedback-switch.sh" "$@"; } ;;
+    esac ;;
   # a background service / scheduled task, on whichever machine holds it — the
   # hub's service_control (issue #2527); add · rm · ls · logs · cred stay the
   # machine's own fleet-service.sh / fleet-task.sh

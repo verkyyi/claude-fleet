@@ -728,3 +728,28 @@ PR 永远不上自家机器。没有 `/var/db/fleet-node/ci.env` = 什么都不�
   BREAK-IT：`train-own-runners-gone` · `train-own-runner-silent`。
 - BREAK-IT：`ci-runner-hogs` · `ci-runner-pr-code`（`bin/fleet-break-it-ci-selftest.sh`，沙箱里的假 GitHub、
   假测试机包、假测试账号）。
+
+## 18. 托管登录默认开的插件：/fleet-feedback（EPIC #3354 C6，#3360）
+
+新功能在人自己的电脑上默认关、要他自己打开——这是规矩。`fleet-feedback`（`/fleet-feedback 一句话`，
+EPIC #3354）在**托管登录**上是这条规矩的例外，理由三条：
+
+1. **托管机器是我们装、我们升级、我们负责体验的机器。** 上面的人不维护它，也不会去 `/plugin` 里找一个
+   他不知道存在的东西——在这里默认关，等于没有。
+2. **默认开只是「命令存在」。** 发什么永远要他亲手打 `/fleet-feedback` 并看过预览（哪些会公开写在预览里），
+   日志和屏幕每次单独问；没有任何静默上报。
+3. **一句话能关，关了不再开。** `fleet feedback off`；之后每次升级都不会再打开它。
+
+人自己的电脑不满足 ①，所以照规矩：什么都不装，`fleet feedback on` 打开。
+
+- **怎么装上**：install-apply 的 `plugins` 一步，`fleet_node_manages "$LOGIN"` 为真 ⇒
+  `fleet-plugins.py ensure --default fleet-feedback`：没装过 ⇒ `claude plugin install` + `enable`，
+  名字写进 `$FLEET_CONF_DIR/plugins-defaulted.json`；记过 ⇒ 再也不动（他 disable / uninstall 了就尊重）；
+  他早已自己装着 ⇒ 只记下，不改他的开关。
+- **`plugins-defaulted.json` 只增不减**，是「这个登录默认装过一次」的唯一记录；开没开只看 Claude Code 的
+  `enabledPlugins`（同 fleet-browser）。以后别的「托管默认开」照这条路加一个 `--default <名字>`，不另造。
+- **`account release`（§6）不卸它**：这时它已经是他的选择，留给他。
+- **开关**：`fleet feedback on|off|status`（`bin/fleet-feedback-switch.sh`，包一层 `claude plugin`）；
+  doctor 的 `feedback` 行：开 ⇒ PASS，托管登录被关 ⇒ 一行 INFO（不 WARN：人可以关），自己的电脑没开 ⇒ 没有这行。
+  反馈进了入口却没变成 GitHub 单（状态「待转」），是入口那侧的 GitHub App 没配，不是这台机器的事。
+- 测试：`fleet-plugins-selftest.sh` J。
