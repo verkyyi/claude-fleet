@@ -75,6 +75,7 @@ var routeAccess = map[string]string{
 	"/v1/node/credentials": accessSelf,
 	// The direct door (claude-fleet#3068): a machine's own list and record.
 	control.EntryKeysNodePath: accessSelf, control.EntryAuditNodePath: accessSelf,
+	control.EntryReachNodePath: accessSelf,
 	// … and a person's own keys, name and home; the handler scopes them.
 	control.EntryKeysPath: accessUser, control.EntryKeysPath + "/": accessUser,
 	control.EntryNamePath: accessUser, control.EntryHomePath: accessUser,
