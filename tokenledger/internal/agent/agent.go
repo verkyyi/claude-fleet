@@ -322,6 +322,8 @@ type Agent struct {
 	// The pushed person's version (claude-fleet#2784, node_team.go).
 	personState *teamFollow
 	personOnce  sync.Once
+	// The pushed stable release (claude-fleet#3146, node_release.go).
+	rel releaseFollow
 	// moveIn is where a moved-in session's transcript bundle is downloaded
 	// (claude-fleet#1426): claude-fleet's `fleet-hub-node.sh paths` movein
 	// line, set per connection before its reader starts; "" = no CapMove.

@@ -97,6 +97,11 @@ type nodeConn struct {
 	// version last told this connection.
 	canEntryKeys bool
 	entrySent    atomic.Int64
+	// canRelease is the hello's CapRelease (claude-fleet#3146): this node
+	// wakes its update on a pushed release. releaseSent is the stable seq
+	// last told this connection.
+	canRelease  bool
+	releaseSent atomic.Int64
 	// canCredsep is an admin hello's CapCredsep (claude-fleet#2263/#2294):
 	// the logins it opens are credential-separated, so spares may go there.
 	canCredsep bool
@@ -447,7 +452,7 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 	nc := &nodeConn{wire: wire, admin: hp.Admin && s.isFleetAdmin(ep.OSUser), canRead: hp.HasCap(control.CapRead),
 		canWrite: hp.HasCap(control.CapWrite), canRelay: hp.HasCap(control.CapRelay),
 		canMove: hp.HasCap(control.CapMove), canSSHRelay: hp.HasCap(control.CapSSHRelay),
-		canTeam: hp.HasCap(control.CapTeam), canPerson: hp.HasCap(control.CapPerson), canEntryKeys: hp.HasCap(control.CapEntryKeys), canAttach: hp.HasCap(control.CapAttach),
+		canTeam: hp.HasCap(control.CapTeam), canPerson: hp.HasCap(control.CapPerson), canEntryKeys: hp.HasCap(control.CapEntryKeys), canRelease: hp.HasCap(control.CapRelease), canAttach: hp.HasCap(control.CapAttach),
 		canTest:       hp.HasCap(control.CapTestIdentity),
 		canCredsep:    hp.HasCap(control.CapCredsep),
 		canLoginJoin:  hp.HasCap(control.CapLoginJoin),
@@ -605,6 +610,10 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 			if nc.canEntryKeys {
 				// The direct door's list, likewise (claude-fleet#3068).
 				go s.pushEntry(ep.ID, nc, 0)
+			}
+			if nc.canRelease {
+				// The stable this link has not heard yet (claude-fleet#3146).
+				go s.pushRelease(ep.ID, nc, stablePointer{})
 			}
 			if nc.admin {
 				// Each admin beat is a chance to send what is queued for

@@ -182,7 +182,11 @@ PUT 的请求体就是上面可写的字段，外加可选的 `if_version`（读
 `/v1/fleet/release/artifacts` 的 `ccquota_src` 与目标提交的摘要（`ccquota:`；入口不报 `ccquota_src` 时退回 #2927 按 `/version` 查提交的那条）。机器上 `fleet doctor --machine` 的 `ccquota`
 行：清单记了源、二进制的 `src` 不是它 → FAIL（整机退回）；旧发布版没记源、构建提交又不是 runtime → WARN。
 更新器是 `bin/fleet-node-update.py`，守护（C3）的 `update` 任务（每 5 分钟一次，`FLEET_NODE_UPDATE_EVERY`），
-root 运行。**托管登录的 `~/.claude/fleet` 就是机器运行时那一份**（#2774，EPIC #2770 C4）：
+root 运行。**新 stable 推过来就当拍跑**（#3146，EPIC #3139 C7）：入口的稳定指针一动、以及每条连接第一拍，给报了
+`CapRelease` 的连接发 `release {sha, seq}`；整机节点程序（§6）对已在 / 已过的 seq 不理，否则写 `<state>/update-now`
+（内容 = sha，root 0644，一次 rename），守护每秒看一眼，有就立刻起 `update`（照旧持锁、照旧医生验收、照旧回退），起跑时消掉；
+目标仍是更新器自己读的入口 stable，推送只是叫醒，只前进。没托管的登录由它自己的 agent 跑一次
+`fleet-install-sync.sh --now`。定时不动：推送丢了，下一次定时照样切到（BREAK-IT `release-push-lost`）。**托管登录的 `~/.claude/fleet` 就是机器运行时那一份**（#2774，EPIC #2770 C4）：
 `~/.claude/fleet.versions/<sha>/` 仍是登录自己的**真目录**，但里面每个文件都是指向 `<root>/<sha>/<同一路径>` 的链接
 （与 `bin/selftest-shadow-root.sh` 同一做法：目录是真的、文件是链接，所以 `$BIN/..` 落在登录自己的目录里——
 `logs/`、`epic-pages/`、`fleet.conf*` 照旧由 `fleet.versions/.shared/` 链入）。字节只在 `<root>/<sha>/` 存一份，

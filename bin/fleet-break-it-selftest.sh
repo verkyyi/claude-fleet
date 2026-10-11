@@ -185,6 +185,9 @@
 #                                                   bin/fleet-brew-perms.sh, shell/cw.zsh brew()
 #   nothing-starts-by-itself                        bin/fleet-dispatch.sh (the retired shell),
 #                                                   bin/fleet-diskguard.sh macos_watch, fleet-macos-watch.sh
+#   release-push-lost                               bin/fleet-node-supervisor.py (task_due: update-now + the
+#                                                   update clock), fleet-install-sync.sh --now; the Go half is
+#                                                   tokenledger/internal/{api,agent} *release_push / node_release
 #
 # tmux / python3 absent → SKIP (exit 0). BREAK_KEEP=1 keeps the work dir.
 # BREAK_ONLY="<id> <id>" runs only those drills (the lockstep lint always runs);
@@ -6182,8 +6185,47 @@ SH
   WHAT="③ 自动填充：没有 dispatch 守护、壳脚本什么都不开；④ 红主干：diskguard 节拍开单 + 提醒，0 个会话自己开出来"
 }
 
-# ================================================================ run ====}
+# ---- release-push-lost (#3146, EPIC #3139 C7): the hub now tells every machine
+# the moment stable moves (`release {sha}` → the node program's update-now, a
+# login's install-sync --now). A push that is dropped — the link was down, the
+# write failed, an older agent never listed CapRelease — must cost no more than
+# the old wait: the machine's update clock (FLEET_NODE_UPDATE_EVERY, 300 s)
+# still runs the update, and a pushed update-now runs it at once and is consumed.
+drill_release_push_lost() {
+  CAP=120; local t0 sb got
+  t0=$(now)
+  sb="$WORK/rpl"; mkdir -p "$sb/state"
+  got=$(cd "$ROOT/bin" && FLEET_NODE_STATE="$sb/state" python3 -c 'import importlib.util, os
+s = importlib.util.spec_from_file_location("fns", "fleet-node-supervisor.py"); m = importlib.util.module_from_spec(s); s.loader.exec_module(m)
+d = object.__new__(m.Supervisor); d.p = m.Paths(); d.state = {"tasks": {"update": {"last_start": 1000.0}}}
+tk = [t for t in m.default_table(d.p)["tasks"] if t["name"] == "update"][0]
+out = []
+out.append("lost-early=%s" % d.task_due(tk, 1000.0 + 60))            # a push lost: not yet …
+out.append("lost-clock=%s" % d.task_due(tk, 1000.0 + tk["every"]))   # … the clock runs it
+open(os.path.join(d.p.state, "update-now"), "w").write("a" * 40 + "\n")
+out.append("pushed=%s" % d.task_due(tk, 1000.0 + 1))                  # a push: at once
+out.append("took=%s" % m.update_now_take(d.p)[:7])
+out.append("left=%s" % os.path.exists(os.path.join(d.p.state, "update-now")))
+out.append("every=%s" % tk["every"])
+print(" ".join(out))' 2>&1)
+  case "$got" in
+    *'lost-early=False lost-clock=True pushed=True took=aaaaaaa left=False every=300'*) ;;
+    *) WHY="the update task's clock / update-now: $got"; return 1 ;;
+  esac
+  grep -q '<integer>1800</integer>' "$ROOT/launchd/com.claude-fleet.install-sync.plist.tmpl" \
+    || { WHY="install-sync's 30-minute clock is gone — a lost push to a login would never be followed"; return 1; }
+  bash "$BIN/fleet-install-sync.sh" --now --status >/dev/null 2>&1; [ $? -le 1 ] \
+    || { WHY="fleet-install-sync.sh does not take --now"; return 1; }
+  _drill_go_tests 'TestReleasePushOnPromoteBeatAndReconnect TestReleasePushOffAddsNothing TestReleasePromoteCallsOnPromote' \
+    "$ROOT/tokenledger/internal/api/fleet_release_push_test.go" \
+    '推送丢了：机器的 update 定时（300 秒）照样切到；推送到了：update-now 当拍就跑、跑时消掉；入口在发布、每条连接第一拍发 release，重复 / 旧的 seq 不发，不带能力的节点什么都不收（go test）' || return 1
+  local what=$WHAT
+  _drill_go_tests 'TestReleasePushWritesUpdateNow TestReleaseMachineHelloCapability TestReleasePushRunsInstallSync' \
+    "$ROOT/tokenledger/internal/agent/node_release_test.go" "$what" ./internal/agent || return 1
+  SECS=$(since "$t0")
+}
 
+# ================================================================ run ====}
 FAILS=$LINT; PASSES=0
 printf 'fleet-break-it: %d rows in docs/BREAK-IT.md\n' "$NROWS"
 # BREAK_PART → the ids of this slice (" id id … "); empty = every drill

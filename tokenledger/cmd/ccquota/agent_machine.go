@@ -109,7 +109,21 @@ func runAgentMachine(args []string) error {
 		// …and, where the entry port is on (claude-fleet#3070), the daemon's
 		// script again for its `entry pull`.
 		EntryCtl: entryCtl(entryOn),
+		// …and a pushed release wakes the daemon's update through its
+		// <state>/update-now (claude-fleet#3146) — only where the updater is.
+		UpdateNow:      updateNow(filepath.Dir(filepath.Clean(*state))),
+		CurrentRelease: filepath.Join(envOr("FLEET_NODE_ROOT", "/Library/Application Support/claude-fleet"), "current"),
 	})
+}
+
+// updateNow is the daemon's update-now beside the agent's state directory, or
+// "" where this machine has no updater (an image-managed one: Kubernetes owns
+// the runtime) — then the hello lists no CapRelease.
+func updateNow(stateDir string) string {
+	if os.Getenv("FLEET_NODE_UPDATE_OWNER") == "image" || machineScript("fleet-node-update.py") == "" && os.Getenv("CCQUOTA_MACHINE_UPDATER") == "" {
+		return ""
+	}
+	return envOr("CCQUOTA_MACHINE_UPDATE_NOW", filepath.Join(stateDir, "update-now"))
 }
 
 // machineTenants reads the logins directory into one agent Config per login.
