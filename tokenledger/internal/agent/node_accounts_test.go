@@ -439,3 +439,65 @@ func TestCredsepCapableNeedsTheScript(t *testing.T) {
 		t.Fatal("credsepResult reads the wrong line")
 	}
 }
+
+// On macOS an account script runs through fleet-tcc-disclaim.py when the login's
+// install carries it, so no TCC dialog can be charged to this agent and left on
+// an unwatched console (claude-fleet#3167); without the wrapper, or off macOS,
+// the script runs exactly as before.
+func TestAccountScriptTCCDisclaimed(t *testing.T) {
+	oldGOOS, oldPy := accountGOOS, tccDisclaimPython
+	t.Cleanup(func() { accountGOOS, tccDisclaimPython = oldGOOS, oldPy })
+	for name, c := range map[string]struct {
+		goos    string
+		wrapper bool
+		want    bool
+	}{
+		"darwin with wrapper":    {"darwin", true, true},
+		"darwin without wrapper": {"darwin", false, false},
+		"linux with wrapper":     {"linux", true, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			accountGOOS = c.goos
+			shrinkBackoff(t)
+			hub := newAccountHub(t, control.AccountOp{Op: control.AccountCreate, Login: "alice", FullName: "Alice"})
+			a := adminAgent(t, hub.srv.URL, true)
+			newLog, _ := fakeLoginScripts(t, a.cfg.Home, "0")
+			w := filepath.Join(a.cfg.Home, tccDisclaimScript)
+			if c.wrapper {
+				if err := os.WriteFile(w, []byte("# wrapper\n"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			pyLog := filepath.Join(t.TempDir(), "py.log")
+			py := filepath.Join(t.TempDir(), "python3")
+			// the fake interpreter records its argv, then runs what follows "--"
+			body := "#!/bin/sh\nprintf '[%s]' \"$@\" >> " + pyLog + "\necho >> " + pyLog +
+				"\nwhile [ \"$1\" != -- ]; do shift; done; shift; exec \"$@\"\n"
+			if err := os.WriteFile(py, []byte(body), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			tccDisclaimPython = py
+			runAgentUntil(t, a, 5*time.Second, func() bool { r, _, _ := hub.snapshot(); return len(r) > 0 })
+			results, errs, _ := hub.snapshot()
+			if len(errs) != 0 || len(results) != 1 {
+				t.Fatalf("results=%+v errors=%v", results, errs)
+			}
+			got, _ := os.ReadFile(newLog)
+			if want := "[alice][--full-name][Alice][--share-pool][--apply]\n"; string(got) != want {
+				t.Fatalf("fleet-login-new.sh argv = %q, want %q", got, want)
+			}
+			pg, _ := os.ReadFile(pyLog)
+			if !c.want {
+				if len(pg) != 0 {
+					t.Fatalf("wrapper ran: %q", pg)
+				}
+				return
+			}
+			want := "[-I][" + w + "][--][" + filepath.Join(a.cfg.Home, loginNewScript) +
+				"][alice][--full-name][Alice][--share-pool][--apply]\n"
+			if string(pg) != want {
+				t.Fatalf("wrapper argv = %q, want %q", pg, want)
+			}
+		})
+	}
+}

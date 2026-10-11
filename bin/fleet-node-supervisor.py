@@ -129,6 +129,10 @@ Usage:
                                                · 4 running, but without Full Disk Access
                                                (the hub's account removes are refused, #2973)
                                                · 5 WEDGED: alive, its main loop stopped (#3086)
+                                               · 6 the machine's TCC is stuck: the FDA probe
+                                               timed out FLEET_NODE_TCC_STUCK times running —
+                                               every user delete fails until sandboxd is
+                                               restarted (issue #3167)
   fleet-node-supervisor.py tenants [--json] [--check]
                                                the taken-over logins' abilities (issue #2842):
                                                admin group · sudo rules · sudoers. --check: exit
@@ -182,6 +186,8 @@ Seams (sandbox tests, docs/BREAK-IT.md `node-supervisor-dead`):
   SIGUSR1               `sudo kill -USR1 <pid>` writes every thread's Python stack into
                         supervisor.log and the loop goes on (#3084)
   FLEET_NODE_FDA_TIMEOUT (20)  the Full Disk Access probe (a child) is killed past this
+  FLEET_NODE_TCC_STUCK (2)  that many probe timeouts in a row = the machine's TCC is
+                        stuck (status --check exit 6, the doctor's FAIL — #3167)
   FLEET_NODE_TEST_HANG <phase>:<fifo>  (FLEET_NODE_TEST=1 only) that phase blocks in an
                         open() of the FIFO — the watchdog drills' wedge
   FLEET_NODE_LAUNCHCTL  launchctl's path ('' = do not load/unload)
@@ -843,6 +849,24 @@ def fda_probe_result(rc):
     if rc is None:
         r["timeout"] = fda_timeout()
     return r
+
+
+def tcc_stuck_line(state):
+    """The words for a machine whose TCC stopped answering, or "" (issue #3167).
+    The FDA probe is a plain open() of TCC.db; it times out only when sandboxd /
+    tccd do not answer. On mini2 that was an authorization dialog nobody was
+    there to click — the user tccd waiting on it forever, sandboxd's synchronous
+    approval queues full behind it — and every user delete on the machine then
+    failed «disallowed by sandbox», even sudo dscl. One timeout can be a slow
+    moment; FLEET_NODE_TCC_STUCK (2) in a row is the wedge."""
+    f = state.get("fda") or {}
+    n = f.get("stuck") or 0
+    if n < env_num("FLEET_NODE_TCC_STUCK", 2):
+        return ""
+    return ("macOS 隐私检查（TCC）卡住了：FDA 探针连续 %d 次 %ss 没有回应——本机删不掉任何用户（dscl -14120 "
+            "「disallowed by sandbox」），入口发的删号都会失败。多半是控制台上有一个没人点的授权框。处置：屏幕前点掉它；"
+            "或 sudo kill -9 $(pgrep -f 'TCC.framework/Support/tccd$')（各登录的用户级 tccd），"
+            "sandboxd 还卡着就 sudo killall -9 sandboxd（launchd 会拉起）" % (n, f.get("timeout") or fda_timeout()))
 
 
 def fda_line(state):
@@ -2094,6 +2118,10 @@ class Supervisor(object):
                 self.log("fda: the TCC database's open() did not return in %ds — probe pid %d killed, "
                          "reading «unknown» (tccd not answering? issue #3086)" % (fda_timeout(), p.pid))
                 cur = fda_probe_result(None)
+                cur["stuck"] = (last.get("stuck") or 0) + 1
+                if cur["stuck"] == env_num("FLEET_NODE_TCC_STUCK", 2):
+                    self.log("tcc: the FDA probe timed out %d times running — this machine's TCC is stuck, "
+                             "every user delete will fail until it is cleared (issue #3167)" % cur["stuck"])
             elif rc is None:
                 return   # still asking — or killed and not yet gone: never a second probe beside it
             else:
@@ -5725,6 +5753,10 @@ def main(argv):
             if refused:
                 print("%s · 令牌失效 · 需要 relogin: %s" % (lines[0], " ".join(refused)))
                 return 3
+            tcc = tcc_stuck_line(state) if code == 0 else ""
+            if tcc:
+                print("%s · %s" % (lines[0], tcc))
+                return 6
             fda = fda_line(state) if code == 0 else ""
             if fda:
                 print("%s · %s" % (lines[0], fda))
