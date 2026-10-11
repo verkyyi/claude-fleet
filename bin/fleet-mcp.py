@@ -1180,7 +1180,7 @@ TOOLS = {
     "set_reap": (tool_set_reap, {
         "description": "When the fleet may close THIS session on its own (bin/fleet-reap-policy.sh set; issue "
                        "#1902): merged (after its PR merged + the fleet's grace) · merged:48h (keep it 48 hours "
-                       "after the merge, e.g. to wait for a read-back) · done:2h (its turn over and idle 2 hours) "
+                       "after the merge, e.g. to wait for a read-back) · done:15m (its turn over and idle 15 minutes) "
                        "· loop-end (once its /loop stops) · at:18:00 or at:<ISO time> · keep (never; it may still "
                        "sleep). Every automatic close records history first and keeps unpushed work. Exit 0 set, "
                        "2 not a policy, 1 no window.",

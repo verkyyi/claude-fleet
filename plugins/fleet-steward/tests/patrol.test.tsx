@@ -28,6 +28,7 @@ const ZH: Record<string, string> = {
   panel_patrol_answers: '自答 / 默认拍板',
   panel_patrol_answers_fmt: `今天自答 ${S} · 按默认 ${S} · 交给你 ${S} 件`,
   panel_patrol_health_fmt: `健康 ${S}`,
+  panel_patrol_reap_fmt: `该回收没回收 ${S} · 卡住超 30 分钟 ${S}`,
   panel_patrol_next_fmt: `下一拍 ${S}`,
   panel_patrol_night: '夜里一小时一拍',
   panel_patrol_foot_fmt: `这一拍写单 ${S}/${S} · 叫模型 ${S} 次 · 延后 ${S}`,
@@ -229,6 +230,22 @@ test('patrol: the steward draws it — terminal and desktop alike', async ($, on
       '这一拍写单 0/20 · 叫模型 8 次 · 延后 0',
     ])
   }
+})
+
+test('patrol: sessions past their reap policy read under health (issue #3352)', () => {
+  takeStrings(DUMP)
+  const base = JSON.parse(STATE) as Record<string, unknown>
+  const st = parseState(JSON.stringify({ ...base, reap_overdue: { n: 2, stuck: 1, top: 'issue-3214 · PR #3283 merged · 65m · cleanup daemon: idle cleanup deferred (rc=124)' } })).patrol
+  expect([st.overdue, st.overdueStuck]).toEqual([2, 1])
+  const m = patrolModel(st, 20)
+  expect(m.sections[3]?.lines).toEqual([
+    '✖ 2 alarm(s).',
+    '该回收没回收 2 · 卡住超 30 分钟 1',
+    'issue-3214 · PR #3283 merged · 65m · cleanup daemon: idle cleanup deferred (rc=124)',
+  ])
+  // none overdue: the health section exactly as before
+  expect(patrolModel(parseState(JSON.stringify({ ...base, reap_overdue: { n: 0, stuck: 0, top: '' } })).patrol, 20).sections[3]?.lines)
+    .toEqual(['✖ 2 alarm(s).'])
 })
 
 test('patrol: a parked session says what it waits for and since when', async ($, on) => {

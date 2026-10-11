@@ -323,19 +323,37 @@ grep -qxF 108 "$CLEAN_LOG" && fail "#108 must be excluded — a CLOSED non-issue
 grep -qxF 109 "$CLEAN_LOG" && fail "#109 must be excluded — its head has no worktree"
 grep -qxF 110 "$CLEAN_LOG" && fail "#110 must be excluded — no live window sits in its worktree (fail closed)"
 
-# Idle raw policy runs before PR-cache detection and shares the tick cap.
+# The PR pass runs FIRST (issue #3352) and the idle pass gets what is left of
+# the tick cap; an idle pass that times out never takes the PR pass with it.
 cat > "$WORK/bin/fleet-cleanup-idle.sh" <<FAKE
 #!/bin/bash
 printf '%s\n' "\$*" >> "$WORK/idle-calls"
 [ -f "$WORK/idle-rate" ] && exit 75
+[ -f "$WORK/idle-timeout" ] && exit 124
 case " \$* " in *' --dry-run '*) exit 0 ;; esac
 printf 'reaped-idle:@77\n'
 FAKE
 reset
+conf 'FLEET_CLEANUP_MAX_PER_TICK=4'
+run s1
+[ "$(reaped_list)" = "101 102 105" ] || fail 'the PR pass must run first, ahead of the idle pass'
+grep -q 's1 --limit 1' "$WORK/idle-calls" || fail 'idle pass receives session and what is left of the cap'
+: > "$WORK/idle-calls"
+reset
 conf 'FLEET_CLEANUP_MAX_PER_TICK=2'
 run s1
-[ "$(reaped_list)" = 101 ] || fail 'idle close must consume one of the two slots'
-grep -q 's1 --limit 2' "$WORK/idle-calls" || fail 'idle pass receives session and cap'
+[ "$(reaped_list)" = "101 102" ] || fail 'the PR pass takes the cap first'
+[ ! -s "$WORK/idle-calls" ] || fail 'no slot left: the idle pass must not run'
+# issue #3352: macmini's idle pass timed out (rc=124) every tick and the tick
+# ended there — not one merged worker was reaped for over half an hour.
+touch "$WORK/idle-timeout"
+reset
+conf
+run s1
+rm -f "$WORK/idle-timeout"
+[ "$(reaped_list)" = "101 102 105" ] || fail 'an idle-pass timeout must not stop the merged-PR pass' "$(cat "$WORK/log")"
+grep -q 'idle cleanup deferred (rc=124)' "$WORK/log" || fail 'the idle timeout must still be logged'
+: > "$WORK/idle-calls"
 reset
 conf
 run s1 --dry-run
@@ -360,9 +378,9 @@ touch "$WORK/idle-rate"
 : > "$WORK/idle-calls"
 cp "$WORK/conf/s1.conf" "$WORK/conf/s2.conf"
 run s1 s2
-[ ! -s "$CLEAN_LOG" ] || fail 'rate limit must stop remaining PR cleanup'
+[ "$(reaped_list)" = "101 102 105" ] || fail 'rate limit: the first fleet PR pass runs before its idle pass'
 grep -q 'rc=75' "$WORK/log" || fail 'rate limit stop must be visible'
 [ "$(wc -l < "$WORK/idle-calls" | tr -d ' ')" = 1 ] || fail 'rate limit must stop before the second fleet'
 
-printf 'selftest PASS: reaps final+live · skips open+clean · cap · off-switch · disk-gate · dry-run · single-writer · candidate-timeout · trash-sweep · scratch-heads off/armed\n'
+printf 'selftest PASS: reaps final+live · skips open+clean · cap · off-switch · disk-gate · dry-run · single-writer · candidate-timeout · trash-sweep · scratch-heads off/armed · PR pass before idle\n'
 exit 0

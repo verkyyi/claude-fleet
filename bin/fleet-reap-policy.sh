@@ -108,11 +108,11 @@ case "$sub" in
         ;;
     esac
     margs=(); n=0
-    for p in merged done:2h loop-end at keep; do
+    for p in merged done:15m loop-end at keep; do
       n=$((n + 1))
       case "$p" in   # literal keys: fleet-ui-lang-selftest reads them off the code
         merged) lbl=$(fleet_ui_t reap_menu_merged) ;;
-        done:2h) lbl=$(fleet_ui_t reap_menu_done_2h) ;;
+        done:15m) lbl=$(fleet_ui_t reap_menu_done_15m) ;;
         loop-end) lbl=$(fleet_ui_t reap_menu_loop_end) ;;
         at) lbl=$(fleet_ui_t reap_menu_at) ;;
         *) lbl=$(fleet_ui_t reap_menu_keep) ;;

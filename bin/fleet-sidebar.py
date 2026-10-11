@@ -1345,7 +1345,7 @@ def place_answer(ask, value):
                        hint=tr("sidebar_place_reap_bad")), "", False
         # The kind's default is not sent (the opening machine stamps it the same),
         # so a hub from before #1902 sees exactly the request it always did.
-        dflt = "merged" if plan["what"] != "scratch" else "done:2h"
+        dflt = "merged" if plan["what"] != "scratch" else "done:15m"
         plan["reap"] = "" if value == dflt else value
         return None, "", True
     if ask.kind == "place-reap-at":
@@ -1361,8 +1361,8 @@ def place_answer(ask, value):
 
 
 # 「什么时候回收？」(issue #1902): the five reap policies, the kind's default
-# highlighted so ↵ takes it — merged for an issue, done:2h for a scratch.
-REAP_CHOICES = (("merged", "sidebar_place_reap_merged"), ("done:2h", "sidebar_place_reap_done"),
+# highlighted so ↵ takes it — merged for an issue, done:15m for a scratch.
+REAP_CHOICES = (("merged", "sidebar_place_reap_merged"), ("done:15m", "sidebar_place_reap_done"),
                 ("loop-end", "sidebar_place_reap_loop_end"), ("at", "sidebar_place_reap_at"),
                 ("keep", "sidebar_place_reap_keep"))
 
@@ -1370,7 +1370,7 @@ REAP_CHOICES = (("merged", "sidebar_place_reap_merged"), ("done:2h", "sidebar_pl
 def place_reap(plan):
     """The last question of a new session: when may the fleet close it?"""
     short = plan["repo"].rsplit("/", 1)[-1]
-    dflt = "merged" if plan["what"] != "scratch" else "done:2h"
+    dflt = "merged" if plan["what"] != "scratch" else "done:15m"
     menu = []
     for value, key in REAP_CHOICES:
         label, _, note = tr(key).partition("\t")

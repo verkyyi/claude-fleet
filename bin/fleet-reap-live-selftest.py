@@ -235,6 +235,32 @@ class LiveTests(unittest.TestCase):
         for text, seconds in (("01:23", 83), ("02:03:04", 7384), ("1-02:03:04", 93784), ("?", 0)):
             self.assertEqual(live.age_seconds(text), seconds)
 
+    def test_worktree_probe_skips_the_reaped_window(self):
+        # Issue #3352: a view session groups the fleet's windows, so list-windows -a
+        # names @1 once per session; the window being reaped is its caller's to
+        # check, and only ANOTHER live window in the worktree refuses — named.
+        wt = tempfile.mkdtemp(prefix="reap-live-wt-")
+        try:
+            def fake_read(*args):
+                if "list-windows" in args:
+                    return "@1\n@1\n@1\n@2\n"
+                if "display-message" in args:
+                    return wt if args[-2] == "@1" else ""
+                return wt + "\n" if args[-3] == "@1" else "/elsewhere\n"
+            asked = []
+            def fake_live(window, *rest):
+                asked.append(window)
+                return "young-agent:claude:10s<300s"
+            with patch.object(live, "read", side_effect=fake_read), \
+                 patch.object(live, "live_reason", side_effect=fake_live):
+                self.assertEqual(live.worktree_reason(wt, 300, ["fleet"]), "@1 young-agent:claude:10s<300s")
+                self.assertEqual(asked, ["@1"])
+                asked.clear()
+                self.assertIsNone(live.worktree_reason(wt, 300, ["fleet"], exclude="@1"))
+                self.assertEqual(asked, [])
+        finally:
+            os.rmdir(wt)
+
     def test_probe_failure_is_closed(self):
         with patch.object(sys, "argv", ["probe", "@1"]), patch.object(live, "read", side_effect=OSError):
             self.assertEqual(live.main(), 1)

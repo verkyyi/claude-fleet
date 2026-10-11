@@ -114,6 +114,11 @@ export type Patrol = {
   deferred: number
   /** The steward page's URL ('' when none). */
   page: string
+  /** Sessions past their reap policy and still open (issue #3352, bin/fleet-reap-overdue.py);
+   *  how many of those are stuck > 30 min, and the longest-stuck one's line. */
+  overdue: number
+  overdueStuck: number
+  overdueTop: string
 }
 
 export type Todo = { open: number; desk: string }

@@ -508,7 +508,7 @@ restore() {
     # the hub REBUILD and still reconcile the work windows below,
     # reopening any mapped WIN whose window isn't currently present.
     local sock; sock=$(fleet_socket "$sess")   # this fleet's own socket (== session, issue #159)
-    local live=0 livewins="" livewt="" livefid="" healed
+    local live=0 livewins="" livewt="" livefid="" livebound="" healed
     # A socket left by a dying server (issue #1729): clear it, and log that the
     # server died, before has-session reads it as down and fleet-up trips on it.
     if [ -z "$dry" ] && healed=$(fleet_socket_heal "$sock"); then say "$healed"; log "$healed"; fi
@@ -517,6 +517,7 @@ restore() {
       livewins=$(tmux -L "$sock" list-windows -t "$sess" -F '#{window_name}' 2>/dev/null)
       livewt=$(tmux -L "$sock" list-windows -t "$sess" -F '#{window_name}|#{?@worktree,#{@worktree},#{pane_current_path}}' 2>/dev/null)
       livefid=$(tmux -L "$sock" list-windows -t "$sess" -F '#{@fleet_id}' 2>/dev/null | grep .)
+      livebound=$(tmux -L "$sock" list-windows -t "$sess" -F '#{@worktree}' 2>/dev/null | grep .)
       say "▸ reconciling fleet $sess ($repo) — already up, checking for missing work windows"
     else
       say "▸ restoring fleet $sess ($repo)"
@@ -577,12 +578,25 @@ restore() {
       # A name is not an identity (issue #789) — A#12 and B#12 are both `issue-12` —
       # so a live window counts only when it also sits in this row's worktree.
       [ -n "$livewins" ] && printf '%s\n' "$livewt" | grep -qxF "$wname|$wpath" && continue
+      # One worktree, one session window (issue #3352): a live window BOUND to this
+      # row's worktree (@worktree — never a helper shell's cwd) is that session,
+      # whatever its name or identity says; and two map rows naming one worktree
+      # reopen once. $HOME (a no-repo session) and the base checkout are shared.
+      case "$wpath" in "$HOME"|"$main"|'') ;; *)
+        if printf '%s\n' "$livebound" | grep -qxF "$wpath"; then
+          say "    · $wname: a live window already works in $wpath — not reopened"
+          log "skip $sess/$wname worktree-live $wpath"
+          continue
+        fi ;;
+      esac
       if [ ! -d "$wpath" ]; then
         say "    ⚠ $wname: worktree gone ($wpath) — skipped"
         log "skip $sess/$wname worktree-missing $wpath"
         continue
       fi
       reopened=1
+      livebound="${livebound:+$livebound
+}$wpath"
       # Never resume a HELPER's transcript (issue #1296). A map written before the
       # snapshot learned to skip them can name one — on 2026-10-03 four windows came
       # back on the status classifier's `claude -p` run, the newest file in their

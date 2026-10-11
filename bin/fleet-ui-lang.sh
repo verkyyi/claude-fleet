@@ -1121,6 +1121,8 @@ fleet_ui_t() {
     en:panel_patrol_answers_fmt) printf 'today: answered %s · by default %s · handed to you %s' "${1:-}" "${2:-}" "${3:-}" ;;
     zh:panel_patrol_health_fmt) printf '健康 %s' "${1:-}" ;;
     en:panel_patrol_health_fmt) printf 'Health %s' "${1:-}" ;;
+    zh:panel_patrol_reap_fmt)   printf '该回收没回收 %s · 卡住超 30 分钟 %s' "${1:-}" "${2:-}" ;;
+    en:panel_patrol_reap_fmt)   printf 'past their reap policy %s · stuck > 30 min %s' "${1:-}" "${2:-}" ;;
     zh:panel_patrol_next_fmt)   printf '下一拍 %s' "${1:-}" ;;
     en:panel_patrol_next_fmt)   printf 'Next beat %s' "${1:-}" ;;
     zh:panel_patrol_night)      printf '白天 20 分钟一拍（有变化 10 分钟），23:00–08:00 一小时一拍' ;;
@@ -1501,8 +1503,8 @@ quit	z	quit fleet — in the client only: every process of the client on this co
     en:reap_menu_title)         printf 'When to reap' ;;
     zh:reap_menu_merged)        printf '合并后回收 — PR 合并 10 分钟后' ;;
     en:reap_menu_merged)        printf 'After merge — 10 min after the PR merges' ;;
-    zh:reap_menu_done_2h)       printf '做完就回收 — 闲满 2 小时' ;;
-    en:reap_menu_done_2h)       printf 'When done — idle 2 hours' ;;
+    zh:reap_menu_done_15m)      printf '做完就回收 — 闲满 15 分钟' ;;
+    en:reap_menu_done_15m)      printf 'When done — idle 15 minutes' ;;
     zh:reap_menu_loop_end)      printf '循环停了回收 — /loop 停了以后' ;;
     en:reap_menu_loop_end)      printf 'After the loop — once /loop stops' ;;
     zh:reap_menu_at)            printf '到点回收…' ;;
@@ -1529,8 +1531,8 @@ quit	z	quit fleet — in the client only: every process of the client on this co
     # the five choices of 「什么时候回收？」 (issue #1902): `label<TAB>note`
     zh:sidebar_place_reap_merged) printf '合并后回收\tPR 合并 10 分钟后' ;;
     en:sidebar_place_reap_merged) printf 'After merge\t10 min after the PR merges' ;;
-    zh:sidebar_place_reap_done) printf '做完就回收\t闲满 2 小时' ;;
-    en:sidebar_place_reap_done) printf 'When done\tidle 2 hours' ;;
+    zh:sidebar_place_reap_done) printf '做完就回收\t闲满 15 分钟' ;;
+    en:sidebar_place_reap_done) printf 'When done\tidle 15 minutes' ;;
     zh:sidebar_place_reap_loop_end) printf '循环停了回收\t/loop 停了以后' ;;
     en:sidebar_place_reap_loop_end) printf 'After the loop\tonce /loop stops' ;;
     zh:sidebar_place_reap_at)   printf '到点回收\t下一步写时间' ;;

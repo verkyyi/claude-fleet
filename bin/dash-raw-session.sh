@@ -190,7 +190,7 @@ while [ "$#" -gt 0 ]; do
     --warm-only)   WARM_ONLY=1; shift ;;
     # --reap <policy> (issue #1902): when the fleet may close this session on its
     # own — merged[:<dur>] | done[:<dur>] | loop-end | at:<time> | keep. None =
-    # the kind's default, stamped below: done:2h, or loop-end for a /loop seed.
+    # the kind's default, stamped below: done:15m, or loop-end for a /loop seed.
     --reap)        REAP="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
     --reap=*)      REAP="${1#--reap=}"; shift ;;
     # --test-identity (issue #2505): a session the TEST identity's client placed
@@ -789,12 +789,12 @@ fleet_win_role_stamp "$win" worker "$SOCK"   # what it IS, whatever it is rename
 [ "$PIN" = 1 ] && TM set-window-option -t "$win" @pin 1 2>/dev/null
 # When the fleet may close it on its own (issue #1902): the one asked for, else the
 # kind's default — a /loop seed until its loop stops, any other scratch once done
-# and idle 2 hours. A no-repo (home) session takes `done:2h` too (issue #2565) —
-# fleet-cleanup-idle.py reads it for such a session as "two hours after its agent
+# and idle 15 minutes (issue #3352; 2 hours before). A no-repo (home) session takes `done:15m` too (issue #2565) —
+# fleet-cleanup-idle.py reads it for such a session as "15 minutes after its agent
 # EXITED": a turn that merely ended is the session waiting for you, not over.
 [ "$TEST_ID" = 1 ] && { TM set-window-option -t "$win" @test_identity 1 2>/dev/null; [ -n "$REAP" ] || REAP=done:10m; }
 if [ -z "$REAP" ]; then
-  case "$PROMPT" in /loop|/loop[[:space:]]*) REAP=loop-end ;; *) REAP=done:2h ;; esac
+  case "$PROMPT" in /loop|/loop[[:space:]]*) REAP=loop-end ;; *) REAP=done:15m ;; esac
 fi
 [ -n "$REAP" ] && TM set-window-option -t "$win" @reap_policy "$REAP" 2>/dev/null
 # Spawn provenance (issue #503) — stamped on the WARM path too: a pool window was

@@ -299,6 +299,8 @@ def main():
     parser.add_argument("--socket-name", help="fleet socket label for callers outside tmux")
     parser.add_argument("--worktree", help="check bound windows/pane paths across registered fleets")
     parser.add_argument("--socket-names", default="", help="newline-separated registered socket labels")
+    parser.add_argument("--exclude-window", default="",
+                        help="with --worktree: the window being reaped, already checked by its caller (#3352)")
     parser.add_argument("--state", action="store_true",
                         help="print the state a reaper judges the target by (issue #2540) and exit 0")
     parser.add_argument("--merged-at", help="PR merge epoch: waive the age gate for an agent alive at the merge (#1329)")
@@ -321,7 +323,8 @@ def main():
     try:
         if args.worktree:
             reason = worktree_reason(args.worktree, minimum, args.socket_names.splitlines(),
-                                     merged_at, int(time.time()) if merged_at is not None else None)
+                                     merged_at, int(time.time()) if merged_at is not None else None,
+                                     args.exclude_window)
         elif args.target:
             reason = live_reason(args.target, minimum, args.socket_name, merged_at, waived,
                                  int(time.time()) if merged_at is not None else None)
@@ -338,14 +341,23 @@ def main():
     return 0
 
 
-def worktree_reason(worktree, minimum, sockets, merged_at=None, now=None):
+def worktree_reason(worktree, minimum, sockets, merged_at=None, now=None, exclude=""):
+    """The first OTHER window that works in this worktree and is live, as
+    `<window> <reason>`, else None (issue #3352). A view session groups the
+    fleet's windows (#1489), so `list-windows -a` names one window once per
+    session — seen once here. `exclude` is the window being reaped: its caller
+    checked it already, and its own panes are never «another live window»."""
     target = Path(worktree).resolve()
     for socket in sockets:
         prefix = ("tmux", "-L", socket)
         windows = read(*prefix, "list-windows", "-a", "-F", "#{window_id}").split()
+        seen = set()
         for window in windows:
             if not re.fullmatch(r"@\d+", window):
                 return "unknown:window-list"
+            if window in seen or window == exclude:
+                continue
+            seen.add(window)
             bound = read(*prefix, "display-message", "-p", "-t", window, "#{@worktree}").strip()
             paths = read(*prefix, "list-panes", "-t", window, "-F", "#{pane_current_path}").splitlines()
             if bound:
@@ -357,7 +369,7 @@ def worktree_reason(worktree, minimum, sockets, merged_at=None, now=None):
                 if target == resolved or target in resolved.parents:
                     reason = live_reason(window, minimum, socket, merged_at, None, now)
                     if reason:
-                        return reason
+                        return window + " " + reason
                     break
     return None
 

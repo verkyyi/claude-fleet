@@ -5341,6 +5341,44 @@ $(run 2>&1)"
   WHAT='issue 已关、无 PR、策略 merged 的 done 会话：满 2 小时先记账再关（cleaned:done-no-pr），1 小时的留着并说 skip:done-recent'
 }
 
+# The cleanup daemon's idle pass times out (issue #3352): on 2026-10-11 macmini's
+# `fleet-cleanup-idle.sh` hit its 120 s box every tick and the daemon ended the
+# tick there — ahead of the merged-PR pass, so #3302 / #3143 / #3321 sat merged
+# and open for over half an hour, said nowhere. The real daemon on an isolated
+# server: an idle pass that overruns its box, a merged issue-12 with its window
+# and worktree. The merged PR must still be handed to the janitor that tick, and
+# the timeout said.
+drill_idle_timeout_starves_merged() {
+  CAP=30; BREAK_SOCK="$WORK/sock-itm"; local d="$WORK/itm" t0 out f
+  mkdir -p "$d/conf" "$d/fake" "$d/bin" "$d/leases" "$d/tmp/.claude-dash/fleets/acme-app"
+  git init -q -b master "$d/main" 2>/dev/null || git init -q "$d/main"
+  ( cd "$d/main" && git config user.email t@t && git config user.name t && git commit -qm i --allow-empty ) \
+    || { WHY="cannot build the repo"; return 1; }
+  git -C "$d/main" worktree add -qb issue-12 "$d/app-issue-12" 2>/dev/null || { WHY="cannot add the worktree"; return 1; }
+  for f in "$BIN"/*; do ln -s "$f" "$d/bin/" 2>/dev/null; done
+  rm -f "$d/bin/fleet-cleanup.sh" "$d/bin/fleet-cleanup-idle.sh" "$d/bin/fleet-diskguard.sh"
+  printf '#!/bin/bash\nprintf "%%s\\n" "$1" >> %q\necho cleaned:fake\n' "$d/janitor" > "$d/bin/fleet-cleanup.sh"
+  printf '#!/bin/bash\nexec sleep 30\n' > "$d/bin/fleet-cleanup-idle.sh"
+  printf '#!/bin/bash\nexit 0\n' > "$d/bin/fleet-diskguard.sh"
+  printf '#!/bin/sh\nexit 0\n' > "$d/fake/gh"
+  chmod +x "$d/bin/fleet-cleanup.sh" "$d/bin/fleet-cleanup-idle.sh" "$d/bin/fleet-diskguard.sh" "$d/fake/gh"
+  printf 'FLEET_REPO=acme/app\nFLEET_MAIN=%s\nFLEET_CLEANUP_CANDIDATE_TIMEOUT=2\n' "$d/main" > "$d/conf/itm.conf"
+  printf 'issue-12\t#40\tMERGED\t✓\tready\n' > "$d/tmp/.claude-dash/fleets/acme-app/prmap"
+  : > "$d/tmp/.claude-dash/fleets/acme-app/prmap.ts"
+  nt -f /dev/null new-session -d -s itm -n home 'exec sleep 600' || { WHY="cannot start the isolated tmux server"; return 1; }
+  f=$(nt new-window -d -P -F '#{window_id}' -t itm -c "$d/app-issue-12" 'exec sleep 600')
+  nt set-option -w -t "$f" @issue 12; nt set-option -w -t "$f" @claude_state done
+  t0=$(now)
+  out=$( cd "$d" && env -u TMUX -u TMUX_PANE PATH="$d/fake:$WORK/tbin:$PATH" HOME="$WORK/home" TMPDIR="$d/tmp" \
+           FLEET_CONF_DIR="$d/conf" FLEET_SKIP_GLOBAL_CONF=1 FLEET_DISPATCH_LEASE_DIR="$d/leases" \
+           FLEET_TRASH_SWEEP_BUDGET=0 BREAK_SOCK="$BREAK_SOCK" bash "$d/bin/fleet-cleanup-daemon.sh" itm 2>&1 )
+  SECS=$(since "$t0")
+  grep -qx 40 "$d/janitor" 2>/dev/null \
+    || { WHY="the merged PR never reached the janitor: [$(printf '%s' "$out" | tail -4 | tr '\n' ' ')]"; return 1; }
+  case "$out" in *'idle cleanup deferred (rc=124)'*) ;; *) WHY="the idle timeout was not said: [$(printf '%s' "$out" | tail -4 | tr '\n' ' ')]"; return 1 ;; esac
+  WHAT='闲置那一遍超时（rc=124）：同一拍里合并 PR 那一遍照样先跑、交给清理，超时照记一行'
+}
+
 # An auto send one machine declines (2026-10-08: mini2's `fleet discover:
 # fork/exec … invalid argument`, three times) was a failure, and an unknown one
 # left a GitHub claim with no session that only --force got past (issue #1610).
