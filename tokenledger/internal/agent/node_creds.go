@@ -69,6 +69,13 @@ const (
 	// so the wait doubles from here up to credRefusedWait instead of starting
 	// there, and a new login has credentials within a minute, not fifteen.
 	credNoPrincipalMin = 30 * time.Second
+	// credNoPrincipalHold is how many no_principal refusals in a row are
+	// retried at credNoPrincipalMin before the doubling starts
+	// (claude-fleet#3434): a login asks from inside its own create, which on
+	// a Mac runs for minutes (install, adopt), and a doubling started then
+	// left it waiting 4–8 minutes after the hub made it active. 60 × 30 s
+	// holds the half-minute clock through the first half hour.
+	credNoPrincipalHold = 60
 	// leaseNoPrincipal is the hub's LeaseNoPrincipal reason.
 	leaseNoPrincipal = "no_principal"
 	// credRejectPoll is how often a waiting lease loop looks for an upstream
@@ -170,15 +177,16 @@ func (a *Agent) runCredLeases(ctx context.Context) {
 }
 
 // credRefusedRetry is the wait after the hub refused a lease for reason, the
-// n+1-th no_principal in a row being n: no_principal doubles from
-// credNoPrincipalMin up to credRefusedWait (claude-fleet#3397); any other
-// refusal (revoked, …) waits credRefusedWait at once.
+// n+1-th no_principal in a row being n: no_principal is retried every
+// credNoPrincipalMin for the first credNoPrincipalHold times (claude-fleet#3434),
+// then doubles up to credRefusedWait (claude-fleet#3397); any other refusal
+// (revoked, …) waits credRefusedWait at once.
 func credRefusedRetry(reason string, n int) time.Duration {
 	if reason != leaseNoPrincipal {
 		return credRefusedWait
 	}
 	w := credNoPrincipalMin
-	for i := 0; i < n && w < credRefusedWait; i++ {
+	for i := credNoPrincipalHold; i < n && w < credRefusedWait; i++ {
 		w *= 2
 	}
 	if w > credRefusedWait {

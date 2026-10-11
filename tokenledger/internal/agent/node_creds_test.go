@@ -409,8 +409,17 @@ func TestCredCycleWithdrawsForbiddenAccounts(t *testing.T) {
 // login's no_principal is retried in seconds, doubling to the old 15-minute
 // wait; any other refusal waits the 15 minutes at once.
 func TestCredRefusedRetryNoPrincipal(t *testing.T) {
+	// claude-fleet#3434: the first half hour stays on the 30-second clock — a
+	// login asks from inside its own create, and the hub's word may come any
+	// minute of it — then the doubling of #3397.
+	for n := 0; n < credNoPrincipalHold; n++ {
+		if got := credRefusedRetry("no_principal", n); got != 30*time.Second {
+			t.Fatalf("no_principal #%d: wait %v, want 30s", n, got)
+		}
+	}
 	want := []time.Duration{30 * time.Second, time.Minute, 2 * time.Minute, 4 * time.Minute, 8 * time.Minute, 15 * time.Minute, 15 * time.Minute}
-	for n, w := range want {
+	for i, w := range want {
+		n := credNoPrincipalHold + i
 		if got := credRefusedRetry("no_principal", n); got != w {
 			t.Errorf("no_principal #%d: wait %v, want %v", n, got, w)
 		}

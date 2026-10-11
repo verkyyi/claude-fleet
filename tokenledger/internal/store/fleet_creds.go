@@ -459,3 +459,33 @@ func (s *Store) PrincipalForLogin(hostname, login string) (string, error) {
 	}
 	return id, err
 }
+
+// PrincipalCreatingLogin resolves the person whose fleet account login on
+// hostname is being CREATED right now (state creating: the op went to the
+// machine, no answer yet). Only the relay pass reads it (claude-fleet#3434):
+// the login's own node asks for its pass from inside that create, before the
+// hub has the answer that makes the account active. Exactly one such row, or
+// ErrNoPrincipal.
+func (s *Store) PrincipalCreatingLogin(hostname, login string) (string, error) {
+	rows, err := s.write.Query(`SELECT principal_id FROM fleet_accounts WHERE hostname = ? AND login = ? AND state = ? LIMIT 2`,
+		hostname, login, AccountCreating)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return "", err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	if len(ids) != 1 {
+		return "", ErrNoPrincipal
+	}
+	return ids[0], nil
+}
