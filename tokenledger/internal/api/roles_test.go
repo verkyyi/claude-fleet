@@ -213,8 +213,10 @@ func TestRoleScope_UserSeesOwnRows(t *testing.T) {
 	var ov AdminOverview
 	_, b = rolesGet(t, h, admin, AdminOverviewPath+"?since="+rolesSince)
 	_ = json.Unmarshal(b, &ov)
-	if len(ov.People) != 2 {
-		t.Errorf("admin %s = %s; want both logins", AdminOverviewPath, b)
+	// one row a person (claude-fleet#3228): alice, who holds a login; the
+	// per-machine scan's logins are nobody's row
+	if len(ov.People) != 1 || ov.People[0].Principal != githubPrincipal(ghAlice.ID) {
+		t.Errorf("admin %s = %s; want alice's row only", AdminOverviewPath, b)
 	}
 	if code, _ := rolesGet(t, h, user, "/v1/usage?by=account"+rng); code != http.StatusForbidden {
 		t.Errorf("user /v1/usage by account = %d; want 403", code)

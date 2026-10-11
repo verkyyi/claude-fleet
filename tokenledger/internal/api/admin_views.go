@@ -2,10 +2,10 @@ package api
 
 import (
 	"net/http"
-	"sort"
 	"strconv"
 	"time"
 
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
@@ -39,26 +39,15 @@ func (s *Server) handleAdminSessions(w http.ResponseWriter, r *http.Request) {
 	writeFleetResult(w, r, out, err)
 }
 
-// AdminPerson is one login's row on the By person page.
-type AdminPerson struct {
-	// Login is the machine login the usage and the sessions report as.
-	Login string `json:"login"`
-	// People are the signed-in people who hold this login on some machine
-	// (a login name is not a person: the same name on two machines can be
-	// two people, claude-fleet#2514). Empty when the hub has none on record.
-	People      []string `json:"people"`
-	Machines    []string `json:"machines"`
-	Sessions    int      `json:"sessions"`
-	Running     int      `json:"running"`
-	Tokens      int64    `json:"tokens"`
-	TokensToday int64    `json:"tokens_today"`
-}
-
-// AdminOverview is AdminOverviewPath's answer.
+// AdminOverview is AdminOverviewPath's answer. People is one row per person
+// (claude-fleet#3228, EPIC #3225 C3): their pool usage, their sessions and the
+// (服务节点, 登录) pairs they hold, never a login's row; Pool is every
+// subscription in the vault with who is on it right now.
 type AdminOverview struct {
 	Since  time.Time     `json:"since"`
 	Until  time.Time     `json:"until"`
 	People []AdminPerson `json:"people"`
+	Pool   []AdminSub    `json:"pool"`
 	Totals struct {
 		Tokens         int64 `json:"tokens"`
 		TokensToday    int64 `json:"tokens_today"`
@@ -69,16 +58,19 @@ type AdminOverview struct {
 	} `json:"totals"`
 	// Nodes are fleet_sessions' machines, for the lost / maintenance list.
 	Nodes []FleetNode `json:"nodes"`
-	// Fleet is false on a hub without the fleet module: tokens only.
+	// Fleet is false on a hub without the fleet module: nothing but zeros
+	// (pool usage is the fleet module's).
 	Fleet bool `json:"fleet"`
 }
 
 // runningStates are the worker states the pages count as running.
 var runningStates = map[string]bool{"working": true, "waiting": true, "blocked": true}
 
-// handleAdminOverview serves GET AdminOverviewPath[?since=7d]: every login's
-// tokens over the range and today (UTC), and its open sessions — the By
-// person panel an admin's Overview used to carry, with the hub's totals.
+// handleAdminOverview serves GET AdminOverviewPath[?since=7d]: every person's
+// pool tokens over the range and today (UTC), their open sessions and logins,
+// and the subscription pool with who is on each — the By person page, with
+// the hub's totals. Only pool usage counts (EPIC #3225 共同约定 3): the
+// per-machine scan (usage_events) is no person's number.
 func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		w.Header().Set("Allow", "GET")
@@ -99,120 +91,101 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 		}
 		start = t
 	}
-	rng := store.Filter{Account: store.AllAccounts, Start: start, End: now}.AlignHours()
-	day := store.Filter{Account: store.AllAccounts, Start: now.Truncate(24 * time.Hour), End: now}.AlignHours()
-	byRange, err := s.Store.UsageByFiltered(rng, store.ByUser, 500)
-	if err != nil {
-		httpError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	byDay, err := s.Store.UsageByFiltered(day, store.ByUser, 500)
-	if err != nil {
-		httpError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	out := AdminOverview{Since: rng.Start, Until: rng.End, Nodes: []FleetNode{}, Fleet: s.Fleet}
-	rows := map[string]*AdminPerson{}
-	row := func(login string) *AdminPerson {
-		p := rows[login]
-		if p == nil {
-			p = &AdminPerson{Login: login, People: []string{}, Machines: []string{}}
-			rows[login] = p
-		}
-		return p
-	}
-	for _, b := range byRange {
-		row(b.Key).Tokens += b.Tokens
-		out.Totals.Tokens += b.Tokens
-	}
-	for _, b := range byDay {
-		row(b.Key).TokensToday += b.Tokens
-		out.Totals.TokensToday += b.Tokens
-	}
-
+	out := AdminOverview{Since: start, Until: now, People: []AdminPerson{}, Pool: []AdminSub{}, Nodes: []FleetNode{}, Fleet: s.Fleet}
+	// Pool usage, passes and logins are the fleet module's tables: a hub
+	// without it has no person's number to show.
 	if s.Fleet {
-		fs, err := s.FleetSessions(r) // no ownView here: every person's
-		if err != nil {
-			writeFleetResult(w, r, nil, err)
+		if !s.adminByPerson(w, r, &out, now) {
 			return
 		}
-		sessions, _ := fs["sessions"].([]FleetSession)
-		nodes, _ := fs["nodes"].([]FleetNode)
-		machines := map[string]map[string]bool{}
-		for _, fsn := range sessions {
-			p := row(fsn.OSUser)
-			p.Sessions++
-			out.Totals.Sessions++
-			if st, _ := fsn.Worker["state"].(string); runningStates[st] {
-				p.Running++
-				out.Totals.Running++
-			}
-			if machines[fsn.OSUser] == nil {
-				machines[fsn.OSUser] = map[string]bool{}
-			}
-			machines[fsn.OSUser][fsn.MachineName] = true
-		}
-		for login, ms := range machines {
-			for m := range ms {
-				rows[login].Machines = append(rows[login].Machines, m)
-			}
-			sort.Strings(rows[login].Machines)
-		}
-		if nodes != nil {
-			out.Nodes = nodes
-		}
-		out.Totals.Machines = len(out.Nodes)
-		for _, n := range out.Nodes {
-			if n.Availability == "online" {
-				out.Totals.MachinesOnline++
-			}
-		}
-		// Who holds each login: the ACTIVE (machine, login) accounts.
-		accts, err := s.Store.FleetAccounts("")
-		if err != nil {
-			httpError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		names := map[string]string{}
-		if ps, err := s.Store.Principals(); err == nil {
-			for _, p := range ps {
-				names[p.ID] = p.DisplayName
-				if names[p.ID] == "" {
-					names[p.ID] = p.Login
-				}
-			}
-		}
-		seen := map[[2]string]bool{}
-		for _, a := range accts {
-			p := rows[a.Login]
-			if p == nil || a.State != store.AccountActive || seen[[2]string{a.Login, a.PrincipalID}] {
-				continue
-			}
-			seen[[2]string{a.Login, a.PrincipalID}] = true
-			name := names[a.PrincipalID]
-			if name == "" {
-				name = a.PrincipalID
-			}
-			p.People = append(p.People, name)
-		}
 	}
-
-	out.People = make([]AdminPerson, 0, len(rows))
-	for _, p := range rows {
-		sort.Strings(p.People)
-		out.People = append(out.People, *p)
-	}
-	sort.Slice(out.People, func(i, j int) bool {
-		a, b := out.People[i], out.People[j]
-		if a.Tokens != b.Tokens {
-			return a.Tokens > b.Tokens
-		}
-		if a.Sessions != b.Sessions {
-			return a.Sessions > b.Sessions
-		}
-		return a.Login < b.Login
-	})
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, out)
+}
+
+// adminByPerson fills out's people, pool and totals; false = it answered an
+// error.
+func (s *Server) adminByPerson(w http.ResponseWriter, r *http.Request, out *AdminOverview, now time.Time) bool {
+	start := out.Since
+	day := now.Truncate(24 * time.Hour)
+	from := start
+	if day.Before(from) {
+		from = day
+	}
+	fail := func(err error) bool {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return false
+	}
+	usage, err := s.Store.PoolUsageFor("", from, time.Time{}) // to now, this second included
+	if err != nil {
+		return fail(err)
+	}
+	in := adminPeopleIn{Usage: usage, Since: start, Today: day, Names: map[string]string{}}
+	if settings, err := s.Store.FleetSettings(); err == nil {
+		in.Budgets = personBudgets(settings)
+	}
+	if ps, err := s.Store.Principals(); err == nil {
+		for _, p := range ps {
+			in.Names[p.ID] = p.DisplayName
+			if in.Names[p.ID] == "" {
+				in.Names[p.ID] = p.Login
+			}
+		}
+	}
+	creds, err := s.Store.Credentials("")
+	if err != nil {
+		return fail(err)
+	}
+	passes, err := s.livePasses(now)
+	if err != nil {
+		return fail(err)
+	}
+	in.Subs = passSubs(passes)
+	if in.Accounts, err = s.Store.FleetAccounts(""); err != nil {
+		return fail(err)
+	}
+
+	fs, err := s.FleetSessions(r) // no ownView here: every person's
+	if err != nil {
+		writeFleetResult(w, r, nil, err)
+		return false
+	}
+	sessions, _ := fs["sessions"].([]FleetSession)
+	nodes, _ := fs["nodes"].([]FleetNode)
+	for _, fsn := range sessions {
+		st, _ := fsn.Worker["state"].(string)
+		in.Sessions = append(in.Sessions, adminSession{Host: fsn.MachineName, Login: fsn.OSUser, Running: runningStates[st]})
+		out.Totals.Sessions++
+		if runningStates[st] {
+			out.Totals.Running++
+		}
+	}
+	if nodes != nil {
+		out.Nodes = nodes
+	}
+	out.Totals.Machines = len(out.Nodes)
+	for _, n := range out.Nodes {
+		if n.Availability == "online" {
+			out.Totals.MachinesOnline++
+		}
+	}
+	for _, u := range usage {
+		if !u.At.Before(start) {
+			out.Totals.Tokens += u.Tokens()
+		}
+		if !u.At.Before(day) {
+			out.Totals.TokensToday += u.Tokens()
+		}
+	}
+	out.People = adminPeople(in)
+	labels := s.accountLabels()
+	out.Pool = adminPool(creds, passes, in.Names, func(c store.Credential) (string, *model.LimitsSnapshot) {
+		uuid, err := s.Store.ResolveCredentialLabel(c.Provider, c.Account)
+		if err != nil || uuid == "" {
+			return "", nil
+		}
+		snap, _ := s.Store.LatestLimits(uuid)
+		return labels[uuid], snap
+	}, func(c store.Credential) string { return s.credAtLimit(c, now) })
+	return true
 }

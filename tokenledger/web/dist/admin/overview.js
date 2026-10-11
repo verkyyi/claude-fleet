@@ -1,7 +1,7 @@
 // web/dist/admin/overview.js — By person, at /admin/overview
-// (claude-fleet#2515): the hub by login — the four numbers, the machines
-// that need an admin, and every login's tokens and open sessions. What
-// Overview showed an admin before their own page became their own, from
+// (claude-fleet#2515): the four numbers, the machines that need an admin,
+// and one row a person (claude-fleet#3228) — their pool tokens, open
+// sessions and the (服务节点 · 登录) pairs they hold — from
 // /v1/admin/overview (admin_views.go).
 import { Shell } from '../app-shell.js';
 import { esc, ic, fmtTokens } from '../lib/shell.js';
@@ -26,13 +26,13 @@ export default Shell.mount('by-person', async (ctx) => {
     : `<div class="empty">${ic('check')}<b>${esc(t('ui.ov.nothing'))}</b><span>${esc(t('ui.bp.attentionSub'))}</span></div>`;
 
   const rows = people.length
-    ? people.map((p) => `<tr><td>${esc((p.people || []).join(', ') || '—')}</td><td class="mono">${esc(p.login || '—')}</td><td class="mono">${esc((p.machines || []).join(', ') || '—')}</td>` +
-      `<td>${esc(p.sessions ? t('ui.bp.running', { n: p.sessions, r: p.running || 0 }) : '—')}</td><td class="mono r">${esc(fmtTokens(p.tokens_today || 0))}</td><td class="mono r">${esc(fmtTokens(p.tokens || 0))}</td></tr>`).join('')
-    : `<tr><td colspan="6"><div class="empty">${ic('users')}<b>${esc(t('ui.bp.none'))}</b></div></td></tr>`;
+    ? people.map((p) => `<tr><td>${esc(p.name || p.principal || '—')}</td><td class="mono">${esc((p.logins || []).map((l) => l.join(' · ')).join(', ') || '—')}</td>` +
+      `<td>${esc(p.sessions ? t('ui.bp.running', { n: p.sessions, r: p.running || 0 }) : '—')}</td><td class="mono r">${esc(fmtTokens(p.today || 0))}</td><td class="mono r">${esc(fmtTokens(p.week || 0))}</td></tr>`).join('')
+    : `<tr><td colspan="5"><div class="empty">${ic('users')}<b>${esc(t('ui.bp.none'))}</b></div></td></tr>`;
   const table = `<div class="panel"><div class="panel-h"><h3>${esc(t('ui.bp.people'))}</h3><span class="sub">${esc(t('ui.ov.days7'))}</span></div>` +
-    `<div class="tw"><table class="t"><thead><tr><th>${esc(t('ui.col.person'))}</th><th>${esc(t('ui.bp.login'))}</th><th>${esc(t('ui.col.machine'))}</th><th>${esc(t('ui.bp.sessions'))}</th><th class="r">${esc(t('ui.bp.today'))}</th><th class="r">${esc(t('ui.bp.week'))}</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+    `<div class="tw"><table class="t"><thead><tr><th>${esc(t('ui.col.person'))}</th><th>${esc(t('ui.bp.login'))}</th><th>${esc(t('ui.bp.sessions'))}</th><th class="r">${esc(t('ui.bp.today'))}</th><th class="r">${esc(t('ui.bp.week'))}</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
 
-  const bars = people.filter((p) => p.tokens > 0).map((p) => [p.login, p.tokens]);
+  const bars = people.filter((p) => p.week > 0).map((p) => [p.name || p.principal, p.week]);
   ctx.el.innerHTML = `<div class="pagehead"><div><p>${esc(t('ui.bp.sub'))}</p></div>` +
     // The keys page is everyone's, the admin's too (claude-fleet#3199).
     `<div class="acts"><a class="btn" href="/fleet/keys">${ic('phone')}${esc(t('ui.ov.phone'))}</a></div></div>` +
