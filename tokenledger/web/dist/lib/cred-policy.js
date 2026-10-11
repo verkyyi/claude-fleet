@@ -1,6 +1,6 @@
 // Subscription permissions: the hub owns identity resolution and verdicts.
 // This editor only writes one scope through the audited administrator API.
-import { esc } from './shell.js';
+import { esc, ic } from './shell.js';
 import { t } from './i18n.js';
 
 export const POLICY_PATH = '/v1/fleet/cred-policy';
@@ -162,12 +162,21 @@ export async function mountSubscriptionAccess(ctx, root, uuid) {
     const [view, users, snapshot] = await Promise.all([ctx.api(POLICY_PATH),ctx.api('/v1/fleet/users'),ctx.api('/v1/nodes')]);
     const machines = await machineTargets(view,snapshot,ctx.api);
     if (!root.isConnected) return;
-    const group = (label,scope,targets) => `<div><h4>${esc(label)}</h4>` + targets.map((o) => {
-      const entry = policyEntry(view,scope,o.id);
-      const allowed = !o.error && (!entry ? view.mode === 'legacy' : !entry.error && (entry.all || !!uuid && entry.allow.includes(uuid)));
-      return `<div class="access-row"><div><b>${esc(o.label)}</b><br><small class="sub">${esc(!entry && view.mode === 'legacy' ? t('ui.policy.pending') : statusText(entry))}</small></div><span class="chip ${allowed ? 'ok' : ''}">${esc(t(allowed ? 'ui.policy.allowed' : 'ui.policy.denied'))}</span>${o.error ? '' : `<a class="btn sm" href="${scope === 'user' ? '/admin/users/' : '/machines/'}${encodeURIComponent(o.id)}${scope === 'node' ? '?from=nodes' : ''}">${esc(t('ui.policy.details'))}</a>`}</div>`;
-    }).join('') + '</div>';
-    root.innerHTML = `<div class="panel-h"><div><h3>${esc(t('ui.policy.accessSources'))}</h3><p class="sub">${esc(t('ui.policy.accessHint'))}</p></div></div><div class="panel-b grid g2">${group(t('ui.policy.user'),'user',userTargets(view,users))}${group(t('ui.policy.node'),'node',machines)}</div>`;
+    const group = (scope,targets) => {
+      const rows = targets.map((o) => {
+        const entry = policyEntry(view,scope,o.id);
+        const allowed = !o.error && (!entry ? view.mode === 'legacy' : !entry.error && (entry.all || !!uuid && entry.allow.includes(uuid)));
+        const reason = o.error ? 'identityUnknown' : entry?.error ? 'ruleInvalid' : !entry ? (view.mode === 'legacy' ? 'legacyGrant' : 'notConfigured') : entry.all ? 'viaAll' : allowed ? 'viaSelected' : entry.allow.length ? 'notIncluded' : 'accessRevoked';
+        return {...o, allowed, reason};
+      });
+      const allowed = rows.filter((o) => o.allowed), others = rows.filter((o) => !o.allowed);
+      const row = (o) => `<div class="grant-row"><span class="grant-avatar${o.allowed ? ' granted' : ''}" aria-hidden="true">${ic(scope === 'user' ? 'users' : 'server')}</span><div class="grant-identity"><b>${esc(o.label)}</b><span>${esc(t('ui.policy.' + o.reason))}</span></div>` +
+        (o.error ? `<span class="chip warn">${esc(t('ui.policy.needsReview'))}</span>` : `<a class="grant-edit" href="${scope === 'user' ? '/admin/users/' : '/machines/'}${encodeURIComponent(o.id)}${scope === 'node' ? '?from=nodes' : ''}" aria-label="${esc(t('ui.policy.manageObject', {name:o.label}))}">${esc(t('ui.policy.manageGrant'))}<span aria-hidden="true">↗</span></a>`) + '</div>';
+      return `<section class="grant-group" aria-label="${esc(t(scope === 'user' ? 'ui.policy.grantedUsers' : 'ui.policy.grantedMachines'))}"><div class="grant-group-head"><h4>${esc(t(scope === 'user' ? 'ui.policy.grantedUsers' : 'ui.policy.grantedMachines'))}<span class="grant-count">${allowed.length}</span></h4><span class="grant-total">${esc(t('ui.policy.totalObjects',{n:rows.length}))}</span></div>` +
+        `<div class="grant-list">${allowed.length ? allowed.map(row).join('') : `<div class="grant-empty">${esc(t(scope === 'user' ? 'ui.policy.noGrantedUsers' : 'ui.policy.noGrantedMachines'))}</div>`}</div>` +
+        (others.length ? `<details class="grant-others"${!allowed.length ? ' open' : ''}><summary>${esc(t(others.some((o) => o.error) ? 'ui.policy.otherGrantCount' : 'ui.policy.notGrantedCount',{n:others.length}))}</summary><div>${others.map(row).join('')}</div></details>` : '') + '</section>';
+    };
+    root.innerHTML = `<div class="panel-h"><div><h3>${esc(t('ui.policy.accessSources'))}</h3><p class="grant-lead">${esc(t('ui.policy.accessLead'))}</p></div></div><div class="grant-groups">${group('user',userTargets(view,users))}${group('node',machines)}</div><div class="grant-footnote">${ic('shield')}<p>${esc(t('ui.policy.accessHint'))}</p></div>`;
   } catch(err) { root.innerHTML = `<p class="panel-b err">${esc(err.message)}</p>`; }
 }
 

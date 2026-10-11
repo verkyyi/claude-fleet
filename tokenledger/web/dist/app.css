@@ -419,9 +419,36 @@ button.chip { border: 0; cursor: pointer; font: inherit; font-size: 11.5px; }
 .policy-notes summary { cursor:pointer; }
 .policy-notes p { margin-top:8px; }
 /* Object authorization belongs to the detail page and survives live refresh. */
-.access-row{display:flex;gap:12px;align-items:center;padding:16px 0;border-bottom:1px solid var(--line)}
-.access-row>div{flex:1;min-width:0;overflow-wrap:anywhere}
 .policy-modes{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
 .policy-mode:has(input:checked){border-color:var(--brand);background:var(--brand-soft,#f0f8f5)}
 #user-policy,#machine-policy{margin-top:20px}
-@media(max-width:760px){.policy-modes{grid-template-columns:1fr}.access-row{flex-wrap:wrap}.policy-save{flex-wrap:wrap}}
+@media(max-width:760px){.policy-modes{grid-template-columns:1fr}.policy-save{flex-wrap:wrap}}
+
+/* Subscription detail: show each scope's grant for this subscription. */
+.grant-groups{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px;padding:4px 20px 20px}
+.grant-group{min-width:0;border:1px solid var(--line);border-radius:10px;overflow:hidden;align-self:start}
+.grant-group-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:16px 18px;background:var(--panel-2);border-bottom:1px solid var(--line-2)}
+.grant-group-head h4{display:flex;align-items:center;gap:9px;font-size:13px;margin:0}
+.grant-group-head>.grant-total{font-size:12px;color:var(--muted)}
+.grant-count{font-size:12px;line-height:22px;min-width:22px;padding:0 5px;text-align:center;border-radius:6px;background:var(--brand-soft);color:var(--brand)}
+.grant-row{display:flex;gap:12px;align-items:center;padding:17px 18px}
+.grant-row+.grant-row{border-top:1px solid var(--line-2)}
+.grant-avatar{display:grid;place-items:center;width:34px;height:34px;flex:none;border-radius:9px;background:var(--panel-2);color:var(--muted)}
+.grant-avatar.granted{background:var(--brand-soft);color:var(--brand)}
+.grant-avatar svg{width:16px;height:16px}
+.grant-identity{flex:1;min-width:0;display:grid;gap:5px;overflow-wrap:anywhere}
+.grant-identity b{font-size:13px;font-weight:550}
+.grant-identity span{font-size:12px;line-height:1.6;color:var(--muted)}
+.grant-edit{display:inline-flex;align-items:center;gap:5px;flex:none;font-size:12px;padding:7px 0;color:var(--brand);white-space:nowrap}
+.grant-edit:hover{text-decoration:underline}
+.grant-others{border-top:1px solid var(--line-2);background:var(--panel-2)}
+.grant-others summary{cursor:pointer;font-size:12px;color:var(--muted);padding:13px 18px}
+.grant-others .grant-row{padding-top:12px;padding-bottom:12px}
+.grant-empty{font-size:12px;color:var(--muted);padding:24px 18px}
+.grant-footnote{display:flex;align-items:flex-start;gap:8px;padding:14px 20px;border-top:1px solid var(--line-2);color:var(--muted);font-size:12px;line-height:1.7}
+.grant-footnote>svg{width:15px;height:15px;flex:none;margin-top:3px}
+.grant-footnote p{margin:0}
+@media(max-width:1000px){.grant-groups{grid-template-columns:1fr}}
+@media(max-width:480px){.grant-groups{padding:0 12px 16px;gap:12px}.grant-row{padding:14px 12px;gap:9px}.grant-group-head{padding:14px 12px}.grant-avatar{width:28px;height:28px}.grant-footnote{padding:12px}.grant-edit{font-size:11px}}
+
+.grant-lead{margin:5px 0 0;font-size:12px;line-height:1.7;color:var(--muted)}
