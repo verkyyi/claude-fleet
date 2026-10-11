@@ -66,6 +66,30 @@ a.st{color:var(--ink-2)}
 ol.do{margin:6px 0 0;padding-left:1.3em}ol.do li{margin:6px 0}
 .tap{display:inline-block;font:600 13.5px var(--f-ui);padding:0 7px;border-radius:6px;border:1px solid var(--line);background:var(--bg);white-space:nowrap}
 .shot{display:block;width:100%;max-width:320px;margin:12px auto 2px;border:1px solid var(--line);border-radius:12px}
+.mock{max-width:300px;margin:14px auto 2px;border-radius:18px;padding:7px;background:#0b0c10;box-shadow:0 14px 30px -18px rgba(0,0,0,.6)}
+.mock .in{border-radius:12px;overflow:hidden;background:#1a1b26;color:#a9b1d6;font:12px/1.55 ui-monospace,Menlo,monospace;position:relative}
+.mock .hd{display:flex;justify-content:space-between;align-items:center;padding:9px 12px;background:#24283b;color:#c0caf5;font:600 13px var(--f-ui)}
+.mock .hd span{color:#787c99;font-weight:400}
+.mock .li{display:flex;justify-content:space-between;gap:8px;padding:8px 12px;border-top:1px solid #2a2e42;font-family:var(--f-ui);font-size:12.5px}
+.mock .li i{font-style:normal;color:#787c99;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mock .li b{font-weight:500;color:#c0caf5;white-space:nowrap}
+.mock .hit{box-shadow:0 0 0 2px #f7768e;border-radius:6px}
+.mock .bt{display:inline-block;padding:3px 10px;border-radius:7px;background:#7aa2f7;color:#16161e;font:600 12.5px var(--f-ui)}
+.mock .bt.dim{background:#3b4261;color:#c0caf5}
+.mock .hd .bt{color:#16161e}
+.mock .pad{padding:12px}
+.mock .tl{display:flex;gap:6px;padding:3px 9px;background:#1f2335;border-bottom:1px solid #2a2e42;white-space:nowrap;overflow:hidden}
+.mock .tl .tt{color:#c0caf5;overflow:hidden;text-overflow:ellipsis}
+.mock .tl .sp{flex:1}
+.mock .dm{color:#565f89}.mock .hl{color:#7aa2f7}.mock .ok{color:#9ece6a}.mock .ask{color:#f7768e}
+.mock .qp{margin:8px;border:1px solid #3b4261;border-radius:8px;background:#16161e;padding:5px 0}
+.mock .qp p{padding:0 10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mock .qp .lit{background:#283457}
+.mock .kb{display:flex;gap:4px;padding:6px;background:#24283b}
+.mock .kb span{flex:1;text-align:center;font:500 11px var(--f-ui);color:#c0caf5;background:#3b4261;border-radius:5px;padding:5px 0}
+.mock .kb span.hit{background:#7aa2f7;color:#16161e}
+.mock .dlg{margin:28px 14px;padding:12px;border-radius:12px;background:#24283b;font-family:var(--f-ui);font-size:12.5px;color:#c0caf5}
+.mock .dlg .two{display:flex;justify-content:flex-end;gap:8px;margin-top:10px}
 .nav2{display:flex;gap:10px;margin-top:14px}.nav2>*{flex:1}
 .state{display:flex;gap:10px;align-items:flex-start;border-radius:10px;padding:10px 12px;margin:10px 0;font-size:14px}
 .state.ok{background:var(--line-2);color:var(--brand)}
@@ -97,7 +121,14 @@ ol.do{margin:6px 0 0;padding-left:1.3em}ol.do li{margin:6px 0}
 <p class="state wait" role="status">正在为你打开入口，约 1 分钟。这一页会自己刷新。</p>
 
 
-
+<div class="mock" role="img" aria-label="Termius 里第 4 步的样子，要点的地方圈了出来"><div class="in" aria-hidden="true">
+<div class="hd">New Host<span class="bt hit">Save</span></div>
+<div class="li"><i>Hostname</i><b>alice.cf.example.com</b></div>
+<div class="li"><i>Port</i><b>22022</b></div>
+<div class="li"><i>Username</i><b>alice</b></div>
+<div class="li"><i>Key</i><b>iPhone</b></div>
+<div class="li"><i>Password</i><i>不填</i></div>
+</div></div>
 <div class="nav2"><a class="btn" href="?step=3">上一步</a><a class="btn go" href="?step=5#now">下一步</a></div>
 </div><a class="st" href="?step=5"><span class="no">5</span>连接，信任主机钥匙</a>
 <a class="st" href="?step=6"><span class="no">6</span>进到看台，打开会话列表</a>
