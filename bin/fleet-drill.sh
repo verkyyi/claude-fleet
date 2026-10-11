@@ -1,5 +1,5 @@
 #!/bin/bash
-# fleet drill invite [--ttl <2h|90m|7200>] [--login drill<x>] [--host <machine>] [--json]
+# fleet drill invite [--ttl <2h|90m|7200>] [--login drill<x>] [--host <machine>] [--home <machine>] [--json]
 # fleet drill approve <USER-CODE>       (the approve code in FLEET_DRILL_INVITE)
 #   — mint a DRILL PERSON on the hub for one onboarding drill (claude-fleet#2010,
 #     EPIC #1906 C16): the stand-in colleague bin/fleet-onboard-drill.sh confirms
@@ -19,7 +19,10 @@
 # any invited newcomer, its scan has the hub open the same login on the
 # least-busy OTHER machine for its sessions (the client says 「正在为你开机器」),
 # and its self-delete / expiry removes that login before the person goes
-# (claude-fleet#2549).
+# (claude-fleet#2549). --home <machine> (claude-fleet#3432) names that machine
+# instead — a drill run on mini2 or fleet-linux-0, no placement asked; only a
+# drill person can, a real newcomer is always placed. It must be on the hub's
+# roster and not --host (the login there IS the drill's own).
 #
 # `approve` is the drill's scan (bin/fleet-onboard-drill.sh --invite): it
 # confirms the pending login under USER-CODE (the 验证码 on the QR screen) as
@@ -45,7 +48,7 @@ case "$SUB" in
   -h|--help) sed -n '2,/^set -u/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 0 ;;
   *) usage ;;
 esac
-TTL='' LOGIN='' HOST='' JSON=0 UCODE=''
+TTL='' LOGIN='' HOST='' HOME_M='' JSON=0 UCODE=''
 if [ "$SUB" = approve ]; then
   [ $# = 1 ] || usage
   UCODE=$(printf '%s' "$1" | tr 'a-z' 'A-Z'); set --
@@ -58,6 +61,7 @@ while [ $# -gt 0 ]; do
     --ttl)   [ $# -ge 2 ] || usage; TTL=$2; shift 2 ;;
     --login) [ $# -ge 2 ] || usage; LOGIN=$2; shift 2 ;;
     --host)  [ $# -ge 2 ] || usage; HOST=$2; shift 2 ;;
+    --home)  [ $# -ge 2 ] || usage; HOME_M=$2; shift 2 ;;
     --json)  JSON=1; shift ;;
     *)       note "unknown argument: $1"; usage ;;
   esac
@@ -78,6 +82,9 @@ if [ -n "$LOGIN" ] && ! printf '%s' "$LOGIN" | grep -Eq '^drill[a-z0-9]{1,11}$';
   note "--login: drill + 1-11 lowercase letters or digits (got '$LOGIN')"; exit 2
 fi
 [ -n "$HOST" ] || HOST=$(hostname -s 2>/dev/null || hostname)
+if [ -n "$HOME_M" ] && ! printf '%s' "$HOME_M" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$'; then
+  note "--home: a machine name (got '$HOME_M')"; exit 2
+fi
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
 # the one hub-address reader (issue #2024): env, fleet.conf's every section, the old files
@@ -110,18 +117,22 @@ if [ "$SUB" = approve ]; then
 fi
 if cert_live; then
   ts=$(date +%s)
-  sig=$(printf 'fleet-drill %s invite %s %s %s' "$ts" "$HOST" "$LOGIN" "$TTLS" \
+  sig=$(printf 'fleet-drill %s invite %s %s %s%s' "$ts" "$HOST" "$LOGIN" "$TTLS" "${HOME_M:+ $HOME_M}" \
         | ssh-keygen -Y sign -f "$CERT_KEY" -n fleet-drill@claude-fleet 2>/dev/null) \
     || { note "ssh-keygen -Y sign failed with $CERT_KEY"; exit 1; }
-  body=$(python3 -c 'import json,sys; print(json.dumps({"host":sys.argv[1],"login":sys.argv[2],"ttl_seconds":int(sys.argv[3]),"cert":open(sys.argv[4]).readline().strip(),"sig":sys.argv[5],"ts":int(sys.argv[6])}))' \
-         "$HOST" "$LOGIN" "$TTLS" "$CERT_PUB" "$sig" "$ts") || exit 1
+  body=$(python3 -c 'import json,sys; d={"host":sys.argv[1],"login":sys.argv[2],"ttl_seconds":int(sys.argv[3]),"cert":open(sys.argv[4]).readline().strip(),"sig":sys.argv[5],"ts":int(sys.argv[6])}
+if sys.argv[7]: d["home"]=sys.argv[7]
+print(json.dumps(d))' \
+         "$HOST" "$LOGIN" "$TTLS" "$CERT_PUB" "$sig" "$ts" "$HOME_M") || exit 1
   code=$(printf '%s' "$body" | curl -sS -m 30 -o "$OUT" -w '%{http_code}' -X POST \
          -H 'Content-Type: application/json' --data-binary @- "$HUB/v1/admin/drill" 2>/dev/null)
 else
   TOK="${CCQUOTA_VIEWER_TOKEN:-}"
   [ -n "$TOK" ] || { [ -r "$HOME/.ccquota/viewer-token" ] && read -r TOK < "$HOME/.ccquota/viewer-token"; } || TOK=''
   [ -n "$TOK" ] || { note "no live connection certificate ($CERT_PUB — run fleet login) and no operator token — nothing sent"; exit 2; }
-  body=$(python3 -c 'import json,sys; print(json.dumps({"host":sys.argv[1],"login":sys.argv[2],"ttl_seconds":int(sys.argv[3])}))' "$HOST" "$LOGIN" "$TTLS") || exit 1
+  body=$(python3 -c 'import json,sys; d={"host":sys.argv[1],"login":sys.argv[2],"ttl_seconds":int(sys.argv[3])}
+if sys.argv[4]: d["home"]=sys.argv[4]
+print(json.dumps(d))' "$HOST" "$LOGIN" "$TTLS" "$HOME_M") || exit 1
   # the token rides a header read from stdin's sibling: never an argv
   code=$(printf 'Authorization: Bearer %s\n' "$TOK" | curl -sS -m 30 -o "$OUT" -w '%{http_code}' -X POST \
          -H @- -H 'Content-Type: application/json' --data-binary "$body" "$HUB/v1/admin/drill" 2>/dev/null)
@@ -141,6 +152,8 @@ import json, sys
 d = json.load(open(sys.argv[1]))
 print("确认码    %s  （只能用一次）" % d["approve_code"], flush=True)
 print("演练同事  %s（kind=%s）· 登录名 %s @ %s" % (d.get("person_id"), d.get("kind"), d.get("login"), d.get("host")))
+if d.get("home"):
+    print("开在      %s（--home：入口在这台开它的登录，不问放置）" % d["home"])
 raw = str(d.get("expires_at") or "")
 try:
     sys.path.insert(0, sys.argv[2])

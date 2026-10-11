@@ -1,7 +1,7 @@
 #!/bin/bash
-# fleet-onboard-drill.sh [--login <name>] [--invite <code>] [--hub <url>] [--scan-cmd <cmd>]
-#                        [--keep] [--timeout <secs>] [--ssh-host <h>] [--ssh-port <p>]
-#                        [--name <scratch>] | --teardown <login> [--invite <code>]
+# fleet-onboard-drill.sh [--login <name>] [--invite <code>] [--home <machine>] [--hub <url>]
+#                        [--scan-cmd <cmd>] [--keep] [--timeout <secs>] [--ssh-host <h>]
+#                        [--ssh-port <p>] [--name <scratch>] | --teardown <login> [--invite <code>]
 #   — a new colleague's first time, from nothing, as ONE command (issue #1901,
 #     EPIC #1906 C8): a throwaway OS login gets only the hub's install line,
 #     answers what it asks with Enter, joins, opens the client and starts a
@@ -11,6 +11,19 @@
 # Each step prints PASS / FAIL / SKIP and adds a row to steps.md — 看到什么 ·
 # 按了什么 · 用时 · 要人帮吗 — the table docs/INSTALL.md's 「新同事第一次」 is
 # copied from. Every screen lands as screen-NN-<step>.txt in the run's dir.
+#
+# --home <machine> (issue #3432): the newcomer's login is opened on THAT
+# machine — mini2, fleet-linux-0 — not where placement would put it. With no
+# --invite the drill mints its own drill person for it (`fleet drill invite
+# --login <login> --home <machine>`, an admin's certificate or token; the login
+# is then drill<MMDDHHMM> unless --login names a drill<x>); with --invite the
+# invite already carries its home and --home is the machine the run expects.
+# Either way step 8 checks the session's row is on it (`fleet ls --json`), and
+# step 10 restarts tmux THERE: here through sudo, on another machine through the
+# login's own client (`fleet-thin.py --run --home <machine>`, the line every
+# connection takes — the restart runs as that login, nothing else is reached).
+# Only a drill person can carry a home: a real newcomer is always placed. Run
+# the drill on another machine than --home (its own login there is the drill's).
 #
 #   1 open      a bare login: sysadminctl -addUser, createhomedir, Remote Login
 #               (com.apple.access_ssh), a temporary key — NO fleet clone, no
@@ -65,8 +78,8 @@
 #               @fleet_id, `fleet ls --json`), `fleet-sessions-snapshot.sh save`,
 #               kill-server, `restore` — which must say `back`; the client must
 #               come back on the same row and key, its text shown again. A
-#               session on another machine is a FAIL that says so: run the
-#               drill on the machine the hub places on.
+#               session on another machine is restarted there, as its login,
+#               over the login's own client (fleet-thin.py --run --home, #3432).
 #  11 offboard  stop the login's processes, revoke its device on the hub
 #               (POST /v1/fleet/devices/revoke, viewer token from the
 #               environment), then fleet-login-remove.sh <login> --delete-home
@@ -133,7 +146,7 @@ die2() { printf '%s: %s\n' "$PROG" "$1" >&2; exit 2; }
 # checked; no OS login is made. That is bin/fleet-onboard-clock.sh, whole.
 for a in "$@"; do [ "$a" = --runs ] && exec bash "$BIN/fleet-onboard-clock.sh" "$@"; done
 
-LOGIN='' HUB='' SCAN_CMD='' KEEP=0 TEARDOWN=0 NAME=first INVITE='' INVITE_SET=0 ROW_ONLY='' QR_ONLY=0
+LOGIN='' HUB='' SCAN_CMD='' KEEP=0 HOME_M='' TEARDOWN=0 NAME=first INVITE='' INVITE_SET=0 ROW_ONLY='' QR_ONLY=0
 DRILL_NS=fleet-drill@claude-fleet
 HOST=127.0.0.1 PORT=22
 TIMEOUT=${FLEET_DRILL_TIMEOUT:-900} SCAN_SECS=${FLEET_DRILL_SCAN_SECS:-600}
@@ -150,6 +163,7 @@ while [ $# -gt 0 ]; do
     --name)     [ $# -ge 2 ] || usage; NAME=$2; shift 2 ;;
     --teardown) [ $# -ge 2 ] || usage; LOGIN=$2; TEARDOWN=1; shift 2 ;;
     --invite)   [ $# -ge 2 ] || usage; INVITE=$2; INVITE_SET=1; shift 2 ;;
+    --home)     [ $# -ge 2 ] || usage; HOME_M=$2; shift 2 ;;
     --keep)     KEEP=1; shift ;;
     --row-named) [ $# -ge 2 ] || usage; ROW_ONLY=$2; shift 2 ;;   # selftest seam: screen on stdin
     --qr-state) QR_ONLY=1; shift ;;                                 # selftest seam: screen on stdin
@@ -174,6 +188,16 @@ if [ -n "$INVITE" ]; then
   # the drill person's certificate names ITS login: the OS login must be it
   [ -n "$LOGIN" ] || die2 "--invite needs --login <the login fleet drill invite printed>"
 fi
+if [ -n "$HOME_M" ]; then
+  printf '%s' "$HOME_M" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$' || die2 "--home: a machine name (got '$HOME_M')"
+  [ "$TEARDOWN" = 0 ] || die2 '--home is for a run, not a --teardown'
+  # the drill mints its own drill person for the home: a drill login's name
+  if [ -z "$INVITE" ]; then
+    [ -n "$LOGIN" ] || LOGIN="drill$(date +%m%d%H%M)"
+    printf '%s' "$LOGIN" | grep -Eq '^drill[a-z0-9]{1,11}$' \
+      || die2 "--home without --invite mints a drill person: --login must be drill + 1-11 lowercase letters or digits (got '$LOGIN')"
+  fi
+fi
 [ -n "$LOGIN" ] || LOGIN="drill-$(date +%m%d%H%M)"
 printf '%s' "$LOGIN" | grep -Eq '^[a-z_][a-z0-9_-]{0,31}$' \
   || die2 "bad login name '$LOGIN' (lowercase letters, digits, _ and -; at most 32)"
@@ -195,6 +219,12 @@ H="$HOMES/$LOGIN"
 SOCK="fleet-drill-$LOGIN"        # this run's own tmux server (label), never a fleet's
 TSESS=drill
 RM_SH="${FLEET_DRILL_LOGIN_REMOVE:-$BIN/fleet-login-remove.sh}"   # the env is the selftest's seam
+INVITE_SH="${FLEET_DRILL_INVITE_SH:-$BIN/fleet-drill.sh}"          # the env is the selftest's seam
+# FLEET_DRILL_ONLY=8-10 (selftest seam, issue #3432): steps 8–10 against a client
+# already up on this run's own tmux server (-L fleet-drill-<login>, session
+# drill) — no login is opened and none is removed, the run's tmux is the test's
+ONLY=${FLEET_DRILL_ONLY:-}
+case "$ONLY" in ''|8-10) ;; *) die2 "FLEET_DRILL_ONLY: only 8-10 (got '$ONLY')" ;; esac
 TMUXB=$(command -v tmux 2>/dev/null || :)
 [ -n "$TMUXB" ] || for t in /opt/homebrew/bin/tmux /usr/local/bin/tmux; do [ -x "$t" ] && TMUXB=$t && break; done
 
@@ -205,7 +235,9 @@ done
 [ -n "$TMUXB" ] || die2 'tmux not found — nothing was changed'
 [ -f "$RM_SH" ] || die2 "fleet-login-remove.sh not found beside $0"
 sudo -n true >/dev/null 2>&1 || die2 "需要管理员登录（有 sudo）— no sudo ticket for $(id -un): run it as an admin login; run 'sudo -v' first (this script never prompts)"
-if [ "$TEARDOWN" = 0 ]; then
+if [ -n "$ONLY" ]; then
+  :   # the seam's login is the test's stand-in: it need not (and may) exist
+elif [ "$TEARDOWN" = 0 ]; then
   if id "$LOGIN" >/dev/null 2>&1; then
     printf '%s: login %s already exists — refusing (another --login, or clean it: %s --teardown %s)\n' "$PROG" "$LOGIN" "$0" "$LOGIN" >&2
     exit 3
@@ -215,10 +247,29 @@ else
   id "$LOGIN" >/dev/null 2>&1 || [ -e "$H" ] || die2 "--teardown: no login $LOGIN and no $H — nothing to clean"
 fi
 
+# --home with no --invite: this run's own drill person, its login opened on the
+# home (issue #3432) — minted before anything is changed, so a refusal is exit 2
+if [ -n "$HOME_M" ] && [ -z "$INVITE" ]; then
+  inv=$(bash "$INVITE_SH" invite --login "$LOGIN" --home "$HOME_M" --json 2>&1) \
+    || die2 "--home: the hub did not mint a drill person for $HOME_M: $(printf '%s' "$inv" | tail -n 1)"
+  INVITE=$(printf '%s' "$inv" | python3 -c '
+import json, sys
+try:
+    d = json.loads(sys.stdin.read().strip().splitlines()[-1])
+except (ValueError, IndexError):
+    sys.exit(1)
+if d.get("login") != sys.argv[1]:
+    sys.exit(1)
+print(d.get("approve_code", ""))' "$LOGIN") || INVITE=''
+  printf '%s' "$INVITE" | grep -Eq '^fd_[a-z2-7]{26}$' \
+    || die2 "--home: the hub's answer carried no approve code for $LOGIN"
+  printf '%s: drill person for %s minted, its login opened on %s\n' "$PROG" "$LOGIN" "$HOME_M"
+fi
+
 RUN=$(mktemp -d "${TMPDIR:-/tmp}/fleet-onboard-drill.$LOGIN.XXXXXX") || die2 'mktemp failed'
 chmod 700 "$RUN"
-printf '%s: login=%s  hub=%s  ssh=%s:%s  confirm=%s  log dir %s\n' "$PROG" "$LOGIN" "$HUB" "$HOST" "$PORT" \
-  "$([ -n "$INVITE" ] && echo 'drill person (--invite)' || echo 'a person scans')" "$RUN"
+printf '%s: login=%s  hub=%s  ssh=%s:%s  confirm=%s%s  log dir %s\n' "$PROG" "$LOGIN" "$HUB" "$HOST" "$PORT" \
+  "$([ -n "$INVITE" ] && echo 'drill person (--invite)' || echo 'a person scans')" "${HOME_M:+  home=$HOME_M}" "$RUN"
 
 # --- bookkeeping -----------------------------------------------------------------
 T0=$SECONDS TS=$SECONDS
@@ -654,8 +705,36 @@ step_scratch() {
   [ "$answered" = 0 ] || row "问题（选仓库 / 开在哪）×$answered" "回车（默认，自动）" 否
   shot scratch
   r=$(row_named "$NAME")
-  row "列表里新的一行 ${NAME}，右边切到它" "等" 否
-  pass scratch "the new session's row: $r · $(elapsed)"
+  home_check "$NAME" || return 1
+  row "列表里新的一行 ${NAME}，右边切到它${HOME_M:+（开在 ${HOME_M}）}" "等" 否
+  pass scratch "the new session's row: $r${HOME_M:+ · on $HOME_M} · $(elapsed)"
+}
+# same_machine <a> <b>: one machine, spelled either way (macmini-m4 · macmini-m4.local)
+same_machine() {
+  [ -n "$1" ] && [ -n "$2" ] || return 1
+  [ "$(printf '%s' "${1%%.*}" | tr 'A-Z' 'a-z')" = "$(printf '%s' "${2%%.*}" | tr 'A-Z' 'a-z')" ]
+}
+# home_check <row name>: with --home (issue #3432) the session must be ON it —
+# the client's own list says where (`fleet ls --json`'s node). Placed elsewhere
+# is a FAIL naming both: the drill asked for a machine and did not get it.
+home_check() {
+  local r node deadline
+  [ -n "$HOME_M" ] || return 0
+  deadline=$((SECONDS + STEP_SECS)); r=''
+  while [ -z "$r" ] && [ "$SECONDS" -lt "$deadline" ]; do
+    r=$(as_login "$H/.local/bin/fleet" ls --json 2>"$RUN/ls.err" | tee "$RUN/ls-home.json" | ls_row "$1")
+    [ -n "$r" ] || sleep "$POLL"
+  done
+  node=$(printf '%s' "$r" | cut -f1)
+  if [ -z "$r" ]; then
+    row "列表里有 $1，但 fleet ls 里没有" "等" "是 — 看不出会话开在哪台"
+    failstep scratch "--home $HOME_M: no row $1 in \`fleet ls --json\` ($(head -c 160 "$RUN/ls.err")) — cannot tell where it runs"; return 1
+  fi
+  if ! same_machine "$node" "$HOME_M"; then
+    row "会话开在 ${node}，不是 --home $HOME_M" "等" "是 — 演练指定的机器没用上"
+    failstep scratch "--home $HOME_M: the session $1 runs on $node"; return 1
+  fi
+  return 0
 }
 
 # --- 9 attach-attachment ---------------------------------------------------------------
@@ -724,7 +803,7 @@ step_attach() {
 # `fleet ls` still has its key, and the right pane shows its text again. Only
 # a session on THIS machine can be restarted from here — elsewhere is a FAIL
 # that says so (the drill runs on the machine the hub places on, m4).
-SL='' SLH='' SFLEET='' SKEY=''
+SL='' SLH='' SFLEET='' SKEY='' SNODE='' SFID=''
 # as_sess <cmd…>: run as the session's login, its own HOME / conf dir / TMPDIR
 as_sess() {
   ( cd / && sudo -n -u "$SL" -H env -i HOME="$SLH" USER="$SL" LOGNAME="$SL" LANG=en_US.UTF-8 \
@@ -752,24 +831,74 @@ locate() {
     done
   done
   SL='' SLH=''
+  # another machine's (issue #3432 — --home mini2 / fleet-linux-0): restarted
+  # there, as the session's own login, over that login's client
+  SNODE=$(printf '%s' "$r" | cut -f1) SFID=$fid
+  if [ "$SNODE" != - ] && ! same_machine "$SNODE" "$(hostname -s 2>/dev/null || hostname)"; then
+    return 0
+  fi
+  SNODE=''
   printf '%s (@fleet_id %s) runs on %s — no login of this machine has it' "$1" "$fid" "$(printf '%s' "$r" | cut -f1)"
   return 1
 }
+# The restart on another machine, as the session's login there (issue #3432):
+# ONE line in that login's shell over its own client's ssh (fleet-thin.py --run
+# --home <machine>), never an admin's. `save <fid>`: the fleet holding the window
+# with that @fleet_id, its pin (fleet-sessions-snapshot.sh save), then its tmux
+# server killed — the update's own order; `restore <fleet>`: the pinned sessions
+# back. FLEET_ALLOW_TMUX_DESTROY: this kill-server is the drill's deliberate one.
+REMOTE_RESTART='op=$1 arg=$2
+export FLEET_ALLOW_TMUX_DESTROY=1
+PATH="$HOME/.claude/fleet/tools/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"; export PATH
+B="$HOME/.claude/fleet/bin" C="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"
+[ -f "$B/fleet-sessions-snapshot.sh" ] || { echo "no fleet-sessions-snapshot.sh in $B"; exit 4; }
+case $op in
+  save)
+    S=
+    for d in "$C"/fleets/*/; do
+      s=$(basename "$d")
+      tmux -L "$s" list-windows -a -F "#{@fleet_id}" 2>/dev/null | grep -qxF -- "$arg" && { S=$s; break; }
+    done
+    [ -n "$S" ] || { echo "no fleet of $(id -un) has @fleet_id $arg"; exit 4; }
+    printf "fleet\t%s\n" "$S"
+    bash "$B/fleet-sessions-snapshot.sh" save 2>&1 || exit 5
+    tmux -L "$S" kill-server >/dev/null 2>&1; exit 0 ;;
+  restore) exec bash "$B/fleet-sessions-snapshot.sh" restore 2>&1 ;;
+esac
+echo "unknown op $op"; exit 2'
+THIN="${FLEET_DRILL_THIN:-$H/.local/share/claude-fleet/bin/fleet-thin.py}"   # the env is the selftest's seam
+# remote <op> <arg>: REMOTE_RESTART on $SNODE as the login, its output
+remote() { as_login python3 "$THIN" --run --home "$SNODE" -- sh -c "$REMOTE_RESTART" fleet-drill-restart "$1" "$2" 2>&1; }
 RESTART_DOWN='机器在重启|稍等|restarting|connection lost|连接断了|没有活着的'
 step_restart() {
   local why bin out deadline k back
   [ -n "$RESUME_NAME" ] || RESUME_NAME=$NAME
-  why=$(locate "$RESUME_NAME") || { failstep node-restart-resume "$why"; return 1; }
-  bin="${FLEET_DRILL_NODE_BIN:-$SLH/.claude/fleet/bin}"
-  ( cd / && sudo -n test -x "$bin/fleet-sessions-snapshot.sh" ) 2>/dev/null \
-    || { failstep node-restart-resume "no fleet-sessions-snapshot.sh in $bin ($SL's runtime)"; return 1; }
-  out=$(as_sess /bin/bash "$bin/fleet-sessions-snapshot.sh" save 2>&1); printf '%s\n' "$out" > "$RUN/restart-save.txt"
-  case "$out" in saved*) note "$SL: $(printf '%s' "$out" | tail -n 1)" ;;
-    *) failstep node-restart-resume "snapshot save as $SL: $(printf '%s' "$out" | tail -n 1)"; return 1 ;; esac
-  as_sess "$TMUXB" -L "$SFLEET" kill-server > "$RUN/restart-kill.txt" 2>&1 || :
+  # locate's answer is its variables, so it runs here, its words captured apart
+  locate "$RESUME_NAME" > "$RUN/locate.txt" || { failstep node-restart-resume "$(cat "$RUN/locate.txt")"; return 1; }
+  if [ -n "$SNODE" ]; then
+    # another machine (issue #3432): save + kill there, as the session's login
+    SL=$LOGIN
+    out=$(remote save "$SFID"); printf '%s\n' "$out" > "$RUN/restart-save.txt"
+    SFLEET=$(printf '%s\n' "$out" | awk -F'\t' '$1 == "fleet" {print $2; exit}')
+    out=$(printf '%s\n' "$out" | awk -F'\t' '$1 != "fleet"')
+    printf '%s\n' "$out" | grep -q '^saved ' \
+      || { failstep node-restart-resume "snapshot save as $SL on $SNODE: $(printf '%s' "$out" | tail -n 1)"; return 1; }
+    note "$SL@$SNODE ($SFLEET): $(printf '%s\n' "$out" | grep '^saved ' | tail -n 1)"
+  else
+    bin="${FLEET_DRILL_NODE_BIN:-$SLH/.claude/fleet/bin}"
+    ( cd / && sudo -n test -x "$bin/fleet-sessions-snapshot.sh" ) 2>/dev/null \
+      || { failstep node-restart-resume "no fleet-sessions-snapshot.sh in $bin ($SL's runtime)"; return 1; }
+    out=$(as_sess /bin/bash "$bin/fleet-sessions-snapshot.sh" save 2>&1); printf '%s\n' "$out" > "$RUN/restart-save.txt"
+    printf '%s\n' "$out" | grep -q '^saved ' \
+      || { failstep node-restart-resume "snapshot save as $SL: $(printf '%s' "$out" | tail -n 1)"; return 1; }
+    note "$SL: $(printf '%s\n' "$out" | grep '^saved ' | tail -n 1)"
+    as_sess "$TMUXB" -L "$SFLEET" kill-server > "$RUN/restart-kill.txt" 2>&1 || :
+  fi
   # the client sees it go (fleet-remote-view.sh run says the machine is restarting)
   wait_for 30 "$RESTART_DOWN" >/dev/null; shot restart-down
-  out=$(as_sess /bin/bash "$bin/fleet-sessions-snapshot.sh" restore 2>&1); printf '%s\n' "$out" > "$RUN/restart-restore.txt"
+  if [ -n "$SNODE" ]; then out=$(remote restore -)
+  else out=$(as_sess /bin/bash "$bin/fleet-sessions-snapshot.sh" restore 2>&1); fi
+  printf '%s\n' "$out" > "$RUN/restart-restore.txt"
   back=$(printf '%s\n' "$out" | awk -F'\t' -v s="$SFLEET" '$1 == "back" && $2 == s' | grep -c .)
   if [ "$back" = 0 ] || printf '%s\n' "$out" | awk -F'\t' -v s="$SFLEET" '$2 == s && $1 != "back"' | grep -q .; then
     shot restart-restore
@@ -792,8 +921,8 @@ step_restart() {
     row "机器 tmux 重启后：列表里 $RESUME_NAME 换了一个" "等" "是 — 回来的不是同一个会话"
     failstep node-restart-resume "$RESUME_NAME came back under another key (was $SKEY)"; return 1
   fi
-  row "会话那台机器 tmux 重启（save · kill-server · restore）：右边回到 ${RESUME_NAME}，还是同一个会话" "等" 否
-  pass node-restart-resume "$SL's tmux restarted: $back session(s) back, the client on $RESUME_NAME ($SKEY) again · $(elapsed)"
+  row "会话那台机器${SNODE:+ $SNODE} tmux 重启（save · kill-server · restore）：右边回到 ${RESUME_NAME}，还是同一个会话" "等" 否
+  pass node-restart-resume "$SL's tmux${SNODE:+ on $SNODE} restarted: $back session(s) back, the client on $RESUME_NAME ($SKEY) again · $(elapsed)"
 }
 
 # --- 11 offboard ---------------------------------------------------------------------
@@ -1003,6 +1132,15 @@ if [ "$TEARDOWN" = 1 ]; then
   UIDN=$(id -u "$LOGIN" 2>/dev/null || :)
   GUID=$(dscl . -read "/Users/$LOGIN" GeneratedUID 2>/dev/null | awk '$1=="GeneratedUID:" {print $2; exit}')
   finish
+fi
+if [ -n "$ONLY" ]; then
+  # the seam (FLEET_DRILL_ONLY=8-10): the client is up on the test's tmux server
+  TMUX_UP=0 SUMMARISED=1
+  step_scratch && { step_attach || :; step_restart || :; }
+  printf '\n%s: %s  %d passed · %d failed · steps 8-10 only (FLEET_DRILL_ONLY) · log %s\n' "$PROG" \
+    "$([ "$NFAIL" = 0 ] && echo PASS || echo FAIL)" "$NPASS" "$NFAIL" "$RUN"
+  sed 's/^/  /' "$STEPS"
+  [ "$NFAIL" = 0 ]; exit
 fi
 step_open || finish
 step_ssh || finish

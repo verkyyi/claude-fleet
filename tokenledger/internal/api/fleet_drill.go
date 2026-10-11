@@ -47,8 +47,13 @@ const (
 	DrillSigNamespace = "fleet-drill@claude-fleet"
 )
 
-// DrillInviteMessage is what `fleet drill invite` signs.
-func DrillInviteMessage(ts int64, host, login string, ttlSecs int) string {
+// DrillInviteMessage is what `fleet drill invite` signs. A home
+// (claude-fleet#3432) is signed too, after the rest; none signs the message
+// an older client signs, byte for byte.
+func DrillInviteMessage(ts int64, host, login string, ttlSecs int, home string) string {
+	if home != "" {
+		return fmt.Sprintf("fleet-drill %d invite %s %s %d %s", ts, host, login, ttlSecs, home)
+	}
 	return fmt.Sprintf("fleet-drill %d invite %s %s %d", ts, host, login, ttlSecs)
 }
 
@@ -73,6 +78,7 @@ type drillInviteRequest struct {
 	Host       string `json:"host"`
 	Login      string `json:"login,omitempty"`
 	TTLSeconds int    `json:"ttl_seconds,omitempty"`
+	Home       string `json:"home,omitempty"`
 	Cert       string `json:"cert,omitempty"`
 	Sig        string `json:"sig,omitempty"`
 	TS         int64  `json:"ts,omitempty"`
@@ -85,6 +91,7 @@ type DrillInviteResponse struct {
 	Kind        string    `json:"kind"`
 	Login       string    `json:"login"`
 	Host        string    `json:"host"`
+	Home        string    `json:"home,omitempty"`
 	ApproveCode string    `json:"approve_code"`
 	ExpiresAt   time.Time `json:"expires_at"`
 }
@@ -126,7 +133,7 @@ func (s *Server) handleAdminDrill(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusUnauthorized, "the signed timestamp is too far from the hub's clock — check this computer's time")
 		return
 	}
-	id, err := s.verifySSHRelayCert(req.Cert, req.Sig, DrillInviteMessage(req.TS, req.Host, req.Login, req.TTLSeconds), DrillSigNamespace, now)
+	id, err := s.verifySSHRelayCert(req.Cert, req.Sig, DrillInviteMessage(req.TS, req.Host, req.Login, req.TTLSeconds, req.Home), DrillSigNamespace, now)
 	if err != nil {
 		var re *sshRelayError
 		if errors.As(err, &re) {
@@ -174,6 +181,22 @@ func (s *Server) createDrill(w http.ResponseWriter, r *http.Request, req drillIn
 		httpError(w, http.StatusBadRequest, "host must be a machine on the hub's roster (got "+fmt.Sprintf("%q", req.Host)+")")
 		return
 	}
+	home := ""
+	if strings.TrimSpace(req.Home) != "" {
+		// Where its login is opened (claude-fleet#3432): a machine on the
+		// roster, never the drill's own computer — the login there IS the
+		// drill's, the same name, so opening it again would meet it.
+		h, ok := s.drillHost(req.Home)
+		if !ok {
+			httpError(w, http.StatusBadRequest, "home must be a machine on the hub's roster (got "+fmt.Sprintf("%q", req.Home)+")")
+			return
+		}
+		if strings.EqualFold(h, host) {
+			httpError(w, http.StatusBadRequest, "home "+h+" is the drill's own computer (host) — its login is already there; run the drill on another machine")
+			return
+		}
+		home = h
+	}
 	login := req.Login
 	if login == "" {
 		login = "drill" + now.UTC().Format("01021504")
@@ -194,14 +217,18 @@ func (s *Server) createDrill(w http.ResponseWriter, r *http.Request, req drillIn
 	}
 	pid := "drill-" + fmt.Sprintf("%x", rnd[:])
 	d := store.DrillPerson{PrincipalID: pid, Login: login, Hostname: host, CodeHash: HashToken(code),
-		CreatedBy: actor, CreatedAt: now, ExpiresAt: now.Add(ttl)}
+		CreatedBy: actor, CreatedAt: now, ExpiresAt: now.Add(ttl), Home: home}
 	if err := s.Store.CreateDrill(d); err != nil {
 		httpError(w, http.StatusConflict, err.Error())
 		return
 	}
-	log.Printf("fleet: %s invited drill person %s (login %s on %s) until %s", actor, pid, login, host, d.ExpiresAt.UTC().Format(time.RFC3339))
+	where := ""
+	if home != "" {
+		where = ", its login opened on " + home
+	}
+	log.Printf("fleet: %s invited drill person %s (login %s on %s%s) until %s", actor, pid, login, host, where, d.ExpiresAt.UTC().Format(time.RFC3339))
 	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, http.StatusOK, DrillInviteResponse{PersonID: pid, Kind: store.DrillKind, Login: login, Host: host,
+	writeJSON(w, http.StatusOK, DrillInviteResponse{PersonID: pid, Kind: store.DrillKind, Login: login, Host: host, Home: home,
 		ApproveCode: code, ExpiresAt: d.ExpiresAt.UTC()})
 }
 

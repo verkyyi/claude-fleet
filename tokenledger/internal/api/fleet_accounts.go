@@ -146,7 +146,15 @@ func (s *Server) placePrincipal(principal, displayName, actor string) *store.Rek
 		return moved
 	}
 	own := s.drillComputer(principal) // never where a drill's login is opened (#2549)
-	hosts := s.autoAssign()
+	var hosts []string
+	if home := s.drillHome(principal); home != "" {
+		// A drill that named its machine (claude-fleet#3432): opened there,
+		// placement is not asked. Only a drill person carries a home — a
+		// real newcomer always goes through placement below.
+		hosts = []string{home}
+	} else {
+		hosts = s.autoAssign()
+	}
 	for _, h := range own {
 		hosts = dropHost(hosts, h)
 	}
@@ -414,6 +422,16 @@ func (s *Server) drillComputer(principal string) []string {
 		}
 	}
 	return nil
+}
+
+// drillHome is the machine drill person principal named for its login
+// (claude-fleet#3432, `fleet drill invite --home`); "" for anyone else.
+func (s *Server) drillHome(principal string) string {
+	d, err := s.Store.Drill(principal)
+	if err != nil || d == nil {
+		return ""
+	}
+	return d.Home
 }
 
 func hasFold(list []string, v string) bool {

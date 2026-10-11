@@ -45,6 +45,11 @@ type DrillPerson struct {
 	CreatedAt   time.Time `json:"created_at"`
 	ExpiresAt   time.Time `json:"expires_at"`
 	UsedAt      time.Time `json:"used_at,omitempty"`
+
+	// Home is the machine the hub opens its login on (claude-fleet#3432): the
+	// drill names where, placement is not asked. Empty = placement's pick,
+	// as for any invited newcomer. Only a drill person ever has one.
+	Home string `json:"home,omitempty"`
 }
 
 // DrillDeleted is what DeleteDrill took off the hub.
@@ -65,7 +70,7 @@ func (s *Store) ensureFleetDrill() error {
 	if _, err := s.write.Exec(s.d.ddl(fleetDrillSchema)); err != nil {
 		return fmt.Errorf("create fleet_drill_people table: %w", err)
 	}
-	return nil
+	return s.addColumn("fleet_drill_people", "home", "TEXT NOT NULL DEFAULT ''")
 }
 
 // CreateDrill records the person, its one account (login on hostname, active
@@ -98,9 +103,9 @@ func (s *Store) CreateDrill(d DrillPerson) error {
 		}
 		return err
 	}
-	if _, err := tx.Exec(`INSERT INTO fleet_drill_people (principal_id, login, hostname, code_hash, created_by, created_at, expires_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`, d.PrincipalID, d.Login, d.Hostname, d.CodeHash, d.CreatedBy,
-		d.CreatedAt.Unix(), d.ExpiresAt.Unix()); err != nil {
+	if _, err := tx.Exec(`INSERT INTO fleet_drill_people (principal_id, login, hostname, code_hash, created_by, created_at, expires_at, home)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, d.PrincipalID, d.Login, d.Hostname, d.CodeHash, d.CreatedBy,
+		d.CreatedAt.Unix(), d.ExpiresAt.Unix(), d.Home); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -114,12 +119,12 @@ func (d *DrillPerson) OwnComputer(a FleetAccount) bool {
 	return d != nil && a.Op == AccountOpAdopt && strings.EqualFold(a.Hostname, d.Hostname) && a.Login == d.Login
 }
 
-const drillCols = `principal_id, login, hostname, code_hash, created_by, created_at, expires_at, used_at`
+const drillCols = `principal_id, login, hostname, code_hash, created_by, created_at, expires_at, used_at, home`
 
 func scanDrill(row interface{ Scan(...any) error }) (*DrillPerson, error) {
 	var d DrillPerson
 	var c, e, u int64
-	if err := row.Scan(&d.PrincipalID, &d.Login, &d.Hostname, &d.CodeHash, &d.CreatedBy, &c, &e, &u); err != nil {
+	if err := row.Scan(&d.PrincipalID, &d.Login, &d.Hostname, &d.CodeHash, &d.CreatedBy, &c, &e, &u, &d.Home); err != nil {
 		return nil, err
 	}
 	d.CreatedAt, d.ExpiresAt = time.Unix(c, 0).UTC(), time.Unix(e, 0).UTC()
