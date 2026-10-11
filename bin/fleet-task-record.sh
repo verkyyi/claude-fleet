@@ -160,8 +160,9 @@ if [ "$cmd" = dispatch ]; then
     die 3 "no hub here: a task with no repo has nowhere to be recorded — file an issue instead (file_issue)"
   fi
   if [ -n "$repo" ]; then   # a development task: its issue, hung on the record
+    sp=''; [ "$spawn" = 1 ] && sp=--spawn
     exec bash "$BIN/fleet-issue-file.sh" --title "$title" ${body:+--body "$body"} --repo "$repo" \
-      ${rule:+--rule "$rule"} ${t:+--task "$t"} $([ "$spawn" = 1 ] && printf -- --spawn)
+      ${rule:+--rule "$rule"} ${t:+--task "$t"} ${sp:+"$sp"}
   fi
   [ "$spawn" = 1 ] || exit 0
   pf=$(mktemp "${TMPDIR:-/tmp}/fleet-task-prompt.XXXXXX") || die 1 "no temp file"
