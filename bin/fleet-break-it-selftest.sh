@@ -6094,6 +6094,20 @@ drill_node_container_restart() {
   WHAT="新容器不接管上次的 PID；镜像负责升级时不恢复旧的切换"
 }
 
+# A Linux managed login whose env never asked for a lease (issue #3211): the pool
+# synced into the shared proxy, yet no accounts/hub:<label> marker, `ready` creds
+# false, the hub's placement «not ready: creds» on every dispatch. prepare writes
+# CCQUOTA_FLEET_CREDS=1 for a new login and adds it to an older store.
+drill_linux_login_no_lease() {
+  CAP=15; local t0
+  t0=$(now)
+  if ! python3 "$BIN/fleet-node-linux-selftest.py" LinuxNode.test_every_login_leases_its_credentials >"$WORK/linux-lease.out" 2>&1; then
+    WHY="a Linux login's env carries no CCQUOTA_FLEET_CREDS=1: $(tail -n 2 "$WORK/linux-lease.out")"; return 1
+  fi
+  SECS=$(since "$t0")
+  WHAT="新登录和旧存储的登录都带 CCQUOTA_FLEET_CREDS=1，令牌不动"
+}
+
 # A child's report whose parent is gone (issue #3117, EPIC #3111 C6): a scratch spawned
 # a worker and was closed; the worker merged and its report went nowhere — a silent
 # exit 0. Now it is the person's: one row in global/orphan-reports.ndjson and one

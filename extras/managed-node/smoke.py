@@ -191,6 +191,9 @@ def main():
             env_path = state / 'logins' / (login + '.env')
             assert env_path.stat().st_mode & 0o777 == 0o600
             assert 'CCQUOTA_FLEET_CRED_STORE=' in env_path.read_text()
+            # issue #3211: the node program leases this login's accounts only on this line.
+            assert 'CCQUOTA_FLEET_CREDS=1' in env_path.read_text().splitlines()
+            assert 'CCQUOTA_FLEET_CREDS=1' in token_path.read_text().splitlines()
             launch_log = open(d / 'proxy.log', 'w')
             proc = subprocess.Popen([sys.executable, '-I', str(d / 'lib/fleet-credsep-launch.py'), 'shared'],
                                     stdout=launch_log, stderr=subprocess.STDOUT)
