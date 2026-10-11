@@ -120,7 +120,7 @@ export function sessionOf(tmux: string | undefined): string | undefined {
   return sock === '' ? undefined : sock
 }
 
-/** `immediate`: it runs while a turn does, like /qd (issue #2836). */
+/** `immediate`: it runs while a turn does (issue #2836). */
 export function sheetCommand(immediate = true): CommandSpec {
   const spec: CommandSpec = { name: SHEET_COMMAND, description: t('panel_cmd_desc') }
   return immediate ? { ...spec, immediate: true } : spec

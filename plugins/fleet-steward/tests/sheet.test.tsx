@@ -337,7 +337,7 @@ test('narrow (#2836): the band\'s 打开 runs /sheet', async ($, on) => {
   const ui = await mountBand($, true, 120)
   await ui.press({ key: 'fleet-sheet-hint-open' })
   await ui.unmount()
-  // as /qd's band button (queue.test.tsx): the press runs /sheet; the command's own test is above
+  // the band's button: the press runs /sheet; the command's own test is above
   expect(m.commands).toEqual([SHEET_COMMAND])
 })
 

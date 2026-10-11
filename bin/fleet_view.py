@@ -163,11 +163,13 @@ from pathlib import Path
 US = "\x1f"
 VIEW_RE = re.compile(r"^[A-Za-z0-9-]{1,64}$")
 # The 看台's actions off dash-keymap.sh --panel switch: the verb each one runs.
-# ⌘N ⌘T ⌘Q are C7's (issue #3004); zoom / fold stay caught by user-keys, bound to
-# nothing (a 看台 has one pane a window, and no list to fold).
+# ⌘N ⌘Q are C7's (issue #3004), bound only when the person names them (#3185);
+# zoom / fold stay caught by user-keys, bound to nothing (a 看台 has one pane a
+# window, and no list to fold). ⌘T's 派一件事 popup has no entry since issue #3328:
+# `dispatch` is the panel lit on its ⚡ row — the same send, one entry.
 VIEW_ACTIONS = {"next": "do next", "prev": "do prev", "back": "do back", "fwd": "do fwd",
                 "quickopen": "popup", "switcher": "popup",
-                "new": "do new", "quit": "do quit", "dispatch": "dispatch"}
+                "new": "do new", "quit": "do quit", "dispatch": "forward"}
 PFX_KEY = "C-]"
 NARROW = 100      # a client narrower than this (a phone) gets the switcher full-screen (#3006)
 # ⌃\ (issue #3004, #2744's meaning): no ⌘ chord, so no row of the switch table —
@@ -1653,8 +1655,12 @@ def key_lines(me, extra=None):
     size = lambda pc: "#{?#{e|<:#{client_width},%d},100%%,%d%%}" % (NARROW, pc)
     popup = str(Path(me).parent / "dash-popup.sh")
 
-    def cmd_of(action):
+    def cmd_of(action, forward=""):
         verb = "do shell" if action == "shell" else VIEW_ACTIONS.get(action)
+        if verb == "forward":
+            forward = forward or action
+        if forward:
+            verb = "popup"
         if verb == "popup":
             # through the one popup door (dash-popup.sh, issue #3044), from a
             # run-shell, which expands the formats — the old client's road too.
@@ -1662,14 +1668,9 @@ def key_lines(me, extra=None):
             # --freeze: the session behind holds still while the list is up — tmux
             # 3.7c bleeds a pane's wrapped CJK through any popup (issue #3058)
             return ("run-shell -b \"bash '%s' --client '#{client_name}' --no-inline --freeze -w %s -h %s --title view_title "
-                    "-- python3 '%s' --view '#{session_name}' --client '#{client_name}' "  # view-ok: the key's own session IS the 看台
-                    ">/dev/null 2>&1 || :\"") % (popup, size(90), size(80), me)
-        if verb == "dispatch":
-            # ⌘T (C7): the old client's 派一件事 popup, run HERE with --view — the
-            # repos the hub names, the agent picked per this one send (#1834)
-            return ("run-shell -b \"bash '%s' --client '#{client_name}' --no-inline --freeze -w %s -h 12 --title view_dispatch_title "
-                    "-- python3 '%s' --view '#{session_name}' --client '#{client_name}' "  # view-ok: the 看台
-                    ">/dev/null 2>&1 || :\"") % (popup, size(80), str(Path(me).parent / "fleet-quick-dispatch.py"))
+                    "-- python3 '%s' --view '#{session_name}' --client '#{client_name}'%s "  # view-ok: the key's own session IS the 看台
+                    ">/dev/null 2>&1 || :\"") % (popup, size(90), size(80), me,
+                                                  " --forward %s" % forward if forward else "")
         if verb:
             return ("run-shell -b \"python3 '%s' %s --view '#{session_name}' --client '#{client_name}' "  # view-ok: the 看台
                     ">/dev/null 2>&1 || :\"") % (me, verb)
@@ -1677,8 +1678,8 @@ def key_lines(me, extra=None):
 
     binds = {}      # (table, key) → command; a later layer wins a key it names again
 
-    def bind(table, key, action):
-        c = cmd_of(action)
+    def bind(table, key, action, forward=""):
+        c = cmd_of(action, forward)
         if c and key:
             binds[(table, key)] = c
 
@@ -1696,7 +1697,17 @@ def key_lines(me, extra=None):
             bind("fleet-view", "User%s" % codes[action], action)
     for chord in fleet_keys.phone():                          # ⌃空格 · F12 · ⌃] p
         bind_chord(chord, "quickopen")
-    for action, chord in fleet_keys.pairs(key_extra() if extra is None else extra, known):
+    carried = key_extra() if extra is None else extra
+    # the keys issue #3328 took away, one version long: the panel + a one-time hint,
+    # unless the person bound that chord (an extra below wins it). compat-1v: 下一批删
+    for action, chord, _, code in fleet_keys.forwards(carried):
+        if fleet_keys.is_cmd(chord):
+            bind("fleet-view", "User%s" % code if code else "", "quickopen", action)
+        else:
+            tk = fleet_keys.tmux_key(chord)
+            if tk and tk[0] == "fleet-view":
+                bind(tk[0], tk[1], "quickopen", action)
+    for action, chord in fleet_keys.pairs(carried, known):
         bind_chord(chord, action)
     for action, chord in fleet_keys.pairs(fleet_keys.phone_extra(), known):
         bind_chord(chord, action)
@@ -2327,7 +2338,75 @@ class Line:
 
 # --- the popup -------------------------------------------------------------------------
 
-def popup(screen, qo, vid, client):
+# --- the keys issue #3328 took away (EPIC #3178 ⑤) — compat-1v: 下一批删 ----------------------
+# One version long, ⌘↓ ⌘↑ ⌘[ ⌘] ⌘N ⌘T ⌘Q ⌘K ⌃\ open the panel instead (fleet_keys.FORWARD,
+# key_lines): ⌘N ⌘T lit on ⚡, and each says 「⌘T 已并进 ⌘P」 the first time — one
+# mark per key per login. Every press is a line of view-switch.ndjson, how=old:<action>,
+# which the doctor's `oldkeys` row counts.
+FORWARD_BOLT = ("new", "dispatch")
+
+
+def forward_marks():
+    return conf_dir() / "keys-forwarded.json"
+
+
+def forward_note(vid, action):
+    """Log the press; the hint the first time this login pressed that key, else ''."""
+    glyph = next((f[2] for f in _keys().FORWARD if f[0] == action), "")
+    log_switch({"ts": round(time.time(), 3), "view": vid, "from": "", "to": "", "machine": "", "login": getpass.getuser(),
+                "method": "forward", "ms": 0, "how": "old:" + action, "key": glyph})
+    if not glyph:
+        return ""
+    path = forward_marks()
+    try:
+        seen = json.loads(path.read_text())
+    except (OSError, ValueError):
+        seen = {}
+    if not isinstance(seen, dict) or action in seen:
+        return ""
+    seen[action] = round(time.time())
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp%d" % os.getpid())
+        tmp.write_text(json.dumps(seen) + "\n")
+        os.replace(str(tmp), str(path))
+    except OSError:
+        return ""
+    return say("view_forward_fmt", glyph)
+
+
+def keys_notice(vid, client=""):
+    """The one message after the update that took the keys away (issue #3328): on
+    this 看台's client, once per login — 翻会话改用 ⌘P, the biggest change of habit."""
+    path = conf_dir() / "keys-notice-3328"
+    if path.exists():
+        return 0
+    fleet = view_fleet(vid)
+    if not fleet:
+        return 2
+    if client:
+        clients = [client]
+    else:
+        _, out = tm("list-clients", "-t", "=%s@view-%s" % (fleet, vid), "-F", "#{client_name}")
+        clients = [c for c in out.splitlines() if c]
+    if not clients:
+        return 1
+    for c in clients:
+        tm("display-message", "-d", "8000", "-c", c, say("view_keys_moved"))
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("%d\n" % time.time())
+    except OSError:
+        pass
+    return 0
+
+
+def _keys():
+    import fleet_keys
+    return fleet_keys
+
+
+def popup(screen, qo, vid, client, forward=""):
     # raw: ⌃\ is a key here (a shell beside the lit row), never SIGQUIT
     curses.raw()
     curses.curs_set(0)
@@ -2392,6 +2471,11 @@ def popup(screen, qo, vid, client):
     at = next((i for i, e in enumerate(shown) if e.get("target") == cur and e["kind"] == "sess"),
               next((i for i, e in enumerate(shown) if e["kind"] == "sess"),
                    next((i for i, e in enumerate(shown) if pickable(e)), 0)))
+    # a key issue #3328 took away (compat-1v): ⌘N ⌘T open on ⚡, every one says so once
+    if forward:
+        if forward in FORWARD_BOLT and bolt_at() >= 0:
+            at = bolt_at()
+        msg = forward_note(vid, forward)
     top = 0
     heal = qo.Heal()
     fresh = Refresh(vid, first=0 if bg else None)
@@ -2776,5 +2860,14 @@ def main(argv, qo):
                              gl.get(e.get("sym") or "", "") if e["kind"] == "sess" else "",
                              e.get("group") or "", " ".join(e.get("tags") or ()))))
         return 0
+    if argv[:1] == ["view-forward"] and len(argv) >= 2:
+        # what a forwarded key says when the panel opens (the selftest's view, #3328)
+        print(forward_note(vid, argv[1]))
+        return 0
+    if argv[:1] == ["view-notice"]:
+        if opt(argv, "--socket"):
+            _SOCK[0] = opt(argv, "--socket")
+            os.environ.pop("TMUX", None)
+        return keys_notice(vid, client)
     os.environ.setdefault("ESCDELAY", "25")
-    return curses.wrapper(popup, qo, vid, client)
+    return curses.wrapper(popup, qo, vid, client, opt(argv, "--forward"))

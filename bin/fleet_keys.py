@@ -2,7 +2,8 @@
 """fleet_keys.py — which keys a person's fleet binds (issue #3185, EPIC #3178 C7).
 
 A new install takes ONE key on a Mac, ⌘P (the panel), and three on a phone or a
-terminal with no ⌘ (⌃空格 · F12 · ⌃] p); everything else is the person's to add:
+terminal with no ⌘ (⌃空格 · F12 · ⌃] p); everything else is the person's to add
+(issue #3328 took the rest away — FORWARD keeps them one version as the panel):
 
     [client]  FLEET_KEY_PANEL=cmd+p           the panel; another chord, or `off`
               FLEET_KEYS_EXTRA="next=cmd+down new=cmd+n shell=ctrl+\\"
@@ -33,6 +34,18 @@ DEFAULT_PANEL = "cmd+p"
 DEFAULT_PHONE = "ctrl+space f12 ctrl+]p"
 # the actions with no switch-table code: bound only as a chord the terminal sends
 CODELESS = ("shell",)
+# The keys issue #3328 (EPIC #3178 ⑤, D3 · D4) took away — one key, ⌘P. For ONE
+# version each still reaches the 看台 and opens the panel (⌘N ⌘T lit on its ⚡ row)
+# with a one-time 「⌘T 已并进 ⌘P」 (fleet_view.forward_note): (action, chord, glyph,
+# code) — the code the iTerm2 row sends; ⌘K's is the retired 930 (an old profile
+# sent it for the same panel), ⌃\ has none (the terminal sends it). A chord the
+# person names in FLEET_KEYS_EXTRA / FLEET_KEY_PANEL is theirs, never a forward.
+# compat-1v: 下一批删
+FORWARD = (("next", "cmd+down", "⌘↓", "920"), ("prev", "cmd+up", "⌘↑", "921"),
+           ("back", "cmd+[", "⌘[", "922"), ("fwd", "cmd+]", "⌘]", "923"),
+           ("new", "cmd+n", "⌘N", "928"), ("dispatch", "cmd+t", "⌘T", "932"),
+           ("quit", "cmd+q", "⌘Q", "931"), ("switcher", "cmd+k", "⌘K", "930"),
+           ("shell", "ctrl+\\", "⌃\\", ""))
 
 MODS = {"cmd": 0x100000, "command": 0x100000, "ctrl": 0x40000, "control": 0x40000,
         "alt": 0x80000, "opt": 0x80000, "option": 0x80000, "shift": 0x20000}
@@ -179,9 +192,47 @@ def carried():
     return " ".join(words)
 
 
+def forwards(extra=None):
+    """FORWARD less every chord the person bound themselves (the panel, an extra):
+    [(action, chord, glyph, code)]. `extra`: the FLEET_KEYS_EXTRA text to read
+    (the machine passes what the client carried), else this computer's."""
+    if not panel():
+        return []       # FLEET_KEY_PANEL=off: no panel to forward to
+
+    def ident(c):
+        return iterm_key(c) or tmux_key(c)
+    words = re.findall(r"[a-z]+", " ".join(f[0] for f in FORWARD) + " quickopen zoom fold")
+    taken = {ident(c) for _, c in pairs(client_extra() if extra is None else extra, set(words))}
+    if panel():
+        taken.add(ident(panel()))
+    return [f for f in FORWARD if ident(f[1]) not in taken]
+
+
 def phone():
     return setting("FLEET_KEY_PHONE", default=DEFAULT_PHONE).split()
 
 
 def phone_extra():
     return setting("FLEET_KEYS_PHONE_EXTRA", default="")
+
+
+def old_presses(log, days=7):
+    """`<n> <key> <k> · …` — how often in the last `days` the keys issue #3328 took
+    away were pressed (their forwards' how=old:<action> lines in view-switch.ndjson),
+    most pressed first; `0 ` for none. The doctor's oldkeys row. compat-1v: 下一批删"""
+    import json
+    import time
+    since, by = time.time() - days * 86400, {}
+    try:
+        lines = open(log, encoding="utf-8").read().splitlines()
+    except OSError:
+        lines = []
+    for line in lines:
+        try:
+            r = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(r, dict) and str(r.get("how", "")).startswith("old:") and float(r.get("ts") or 0) >= since:
+            k = r.get("key") or r["how"][4:]
+            by[k] = by.get(k, 0) + 1
+    return "%d %s" % (sum(by.values()), " · ".join("%s %d" % kv for kv in sorted(by.items(), key=lambda kv: -kv[1])))

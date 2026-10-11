@@ -86,14 +86,15 @@ shell_code() { grep -v '^[[:space:]]*#' "$SHELLC"; }
 # issue #1904 F1, the full-screen switcher of the one-pane layout (quick open --full);
 # issue #2112 a tap on the bar's 「请重新扫码」 (`rescan`, the scan in a popup);
 # issue #2266 ⌘K / prefix s (the switcher) — gone with issue #3185;
-# issue #2753 ⌘T / prefix t (派一件事, fleet-quick-dispatch.py).
+# issue #2753 ⌘T / prefix t (派一件事, fleet-quick-dispatch.py) — since issue #3328
+# (compat-1v) they open ⌘P's panel instead: quick open ×5.
 npop=$(shell_code | grep -c 'dash-popup\.sh')
 [ "$npop" -eq 6 ] || fail "expected 6 dash-popup.sh binds in the client conf (⌘P, prefix /, F1, the rescan tap, ⌘T, prefix t), found $npop"
-[ "$(shell_code | grep 'dash-popup\.sh' | grep -c 'title popup_dispatch -- python3 [^ ]*fleet-quick-dispatch\.py')" -eq 2 ] \
-  || fail "the client conf's dispatch popup is not exactly ⌘T + prefix t (#2753)"
+[ "$(shell_code | grep 'dash-popup\.sh' | grep -c 'fleet-quick-dispatch\.py')" -eq 0 ] \
+  || fail "a client conf key still opens the 派一件事 popup (gone into ⌘P with #3328)"
 [ "$(shell_code | grep -c 'fleet-keys\.sh')" -eq 0 ] \
-  && [ "$(shell_code | grep 'dash-popup\.sh' | grep -c 'title popup_quickopen -- python3 [^ ]*fleet-quickopen\.py')" -eq 3 ] \
-  || fail "the client conf's popups are not exactly quick open ×3 (⌘P, prefix /, F1) with no key sheet (#2362)"
+  && [ "$(shell_code | grep 'dash-popup\.sh' | grep -c 'title popup_quickopen -- python3 [^ ]*fleet-quickopen\.py')" -eq 5 ] \
+  || fail "the client conf's popups are not exactly quick open ×5 (⌘P, prefix /, F1, ⌘T + prefix t forwarded — #3328) with no key sheet (#2362)"
 cat "$CONF" "$SHELLC" | grep -v '^[[:space:]]*#' | grep -q 'display-popup' \
   && fail "a conf calls display-popup directly — every popup goes through dash-popup.sh (issue #1535)"
 [ "$(shell_code | grep -c 'dash-popup\.sh')" -eq "$(shell_code | grep 'dash-popup\.sh' | grep -c 'run-shell -b ')" ] \

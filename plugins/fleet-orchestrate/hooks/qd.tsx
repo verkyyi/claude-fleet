@@ -1,18 +1,17 @@
-// Quick dispatch: `/qd` (issue #2618; the fleet-orchestrate plugin's since #3114).
+// Quick dispatch: `/qd` (issue #2618; the fleet-orchestrate plugin's since #3114) —
+// RETIRED by issue #3328 (EPIC #3178 ⑤): one entry, ⌘P (its ⚡ row; ⌃空格 on a
+// phone). For ONE version a session that still has /qd keeps it, forwarded: the
+// dialog says 「/qd 已并进 ⌘P」 and its Enter runs exactly what ⌘P's ⚡ row runs on
+// words + a repo — `fleet-quick-dispatch.py send --title T --repo R` — never a
+// second road. compat-1v: 下一批删 (the module, its hooks.json line, its strings).
 //
-// An orchestrating session can be busy for a while on one step, and whatever the
-// person types waits behind it. `/qd` is the one road to a new worker that does
-// not pass through it: registered `immediate`, so Enter runs it mid-turn; it opens
-// a small dialog — a title, a repo (the fleet's hosted ones, the last one used
-// first) — and Enter files the issue through the SAME road a dispatch takes
-// (`fleet-mcp.py --call file_issue {title, repo, spawn: true}`), so the spawn's
-// origin is this window and the worker's [child-report] comes back to it. Nothing
-// reaches the model; a failure (the spawn gate refuses a window that holds no
-// role, a cap, a repo not hosted) stays in the dialog with the title kept.
+// Registered `immediate`, so Enter runs it mid-turn; a title, a repo (the fleet's
+// hosted ones, the last one used first). Nothing reaches the model; a failure
+// stays in the dialog with the title kept.
 //
 // Off by default, a prefix does the same without the dialog: with
 // FLEET_ORCH_QD_PREFIX=1, a prompt typed while a turn runs that opens with `派：`
-// is dropped (never queued) and dispatched to the last repo.
+// is dropped (never queued) and sent the same way, to the last repo.
 //
 // Only a fleet window that binds NO issue registers the command (one tmux read at
 // session.start): a worker's window has no /qd. Installed only with the plugin —
@@ -26,8 +25,8 @@ import type { QdState } from '../types'
 
 export const QD_COMMAND = 'qd'
 export const QD_PANE = 'fleet-qd'
-/** fleet-mcp.py's FILE_TIMEOUT_S (180) plus headroom: its own «did not answer» wins. */
-export const FILE_TIMEOUT_MS = 190_000
+/** A send opens the session before it answers (fleet-compose.py --send → place). */
+export const SEND_TIMEOUT_MS = 190_000
 export const REPOS_TIMEOUT_MS = 40_000
 export const READ_TIMEOUT_MS = 5_000
 /** `$.store` key: the repo the last dispatch went to. */
@@ -48,6 +47,11 @@ export function binDir(fleetBin: string | undefined, home: string | undefined): 
 /** The argv that makes one fleet tool call — the arguments travel as one JSON word. */
 export function callArgv(bin: string, tool: string, args: Record<string, unknown>): string[] {
   return ['python3', `${bin}/fleet-mcp.py`, '--call', tool, JSON.stringify(args)]
+}
+
+/** ⌘P's ⚡ row on words + a repo (issue #3327): the one send /qd forwards to. */
+export function sendArgv(bin: string, title: string, repo: string): string[] {
+  return ['python3', `${bin}/fleet-quick-dispatch.py`, 'send', '--title', title, ...(repo !== '' ? ['--repo', repo] : [])]
 }
 
 /** The argv that prints the `qd_` strings (KEY NUL TEXT NUL, a \001 per printf slot). */
@@ -115,16 +119,6 @@ export function parseRepos(text: string): string[] {
   return out
 }
 
-/** The issue number from the filer's URL, if it printed one. */
-export function issueNumber(stdout: string): string | undefined {
-  return /\/issues\/(\d+)/.exec(stdout)?.[1]
-}
-
-/** fleet-issue-file.sh's `hint:` lines, as it wrote them. */
-export function hints(stderr: string): string[] {
-  return stderr.split('\n').filter(l => /\bhint:/.test(l)).map(l => l.trim())
-}
-
 /** The repo to start on: the last one used while it is still hosted, else the first. */
 export function pickRepo(repos: readonly string[], last: unknown): string {
   return typeof last === 'string' && repos.includes(last) ? last : (repos[0] ?? '')
@@ -136,28 +130,16 @@ async function bin($: EngineInterface): Promise<string> {
 
 type Outcome = { ok: true; text: string } | { ok: false; text: string }
 
-/** One dispatch: `fleet-mcp.py --call file_issue`, its answer folded to one line or a reason. */
-async function fileIssue($: EngineInterface, title: string, repo: string): Promise<Outcome> {
-  const args: Record<string, unknown> = { title, spawn: true }
-  if (repo !== '') args.repo = repo
-  let text: string
-  let exitCode: number
+/** One dispatch: ⌘P's own send — its first line is what it says, exit 0 = it went. */
+async function dispatch($: EngineInterface, title: string, repo: string): Promise<Outcome> {
   try {
-    const r = await $.process.run(callArgv(await bin($), 'file_issue', args), { timeoutMs: FILE_TIMEOUT_MS })
-    text = `${r.stdout}${r.stdout && r.stderr ? '\n' : ''}${r.stderr}`
-    exitCode = r.exitCode
+    const r = await $.process.run(sendArgv(await bin($), title, repo), { timeoutMs: SEND_TIMEOUT_MS })
+    const said = (r.stdout.trim() || r.stderr.trim()).split('\n')[0] ?? ''
+    if (r.exitCode === 0) return { ok: true, text: said || t('qd_moved') }
+    return { ok: false, text: t('qd_failed_fmt', said || `exit ${r.exitCode}`) }
   } catch (err) {
     return { ok: false, text: t('qd_failed_fmt', err instanceof Error ? err.message : String(err)) }
   }
-  const rep = parseReport(text)
-  const num = issueNumber(rep.stdout)
-  if (exitCode === 0 && rep.exit === 0 && num !== undefined) {
-    return { ok: true, text: [t('qd_done_fmt', num), ...hints(rep.stderr)].join('\n') }
-  }
-  // A refusal (exit 1 + its reason), a script that failed, a filed issue whose spawn did not go.
-  const why = [num !== undefined ? rep.stdout : '', rep.stderr || (rep.exit === null ? text.trim() : rep.stdout)]
-    .filter(s => s !== '').join('\n')
-  return { ok: false, text: t('qd_failed_fmt', why || `exit ${rep.exit ?? exitCode}`) }
 }
 
 async function loadRepos($: EngineInterface): Promise<string[]> {
@@ -183,7 +165,7 @@ async function submit($: EngineInterface, typed: string): Promise<void> {
     return
   }
   await update($, qd, v => ({ ...v, title: typed, busy: true, error: '' }))
-  const out = await fileIssue($, title, s.repo)
+  const out = await dispatch($, title, s.repo)
   if (!out.ok) {
     await update($, qd, v => ({ ...v, busy: false, error: out.text }))
     return
@@ -247,7 +229,7 @@ export const register: Register = on => {
     if (!on_) return next(e)
     const ui = $.ui.resolve(e)
     const { Box, Text } = ui
-    if (!('Input' in ui) || !('Select' in ui)) return <Text>{t('qd_hint')}</Text>
+    if (!('Input' in ui) || !('Select' in ui)) return <Text>{t('qd_moved')}</Text>
     const { Input, Select } = ui
     return (
       <Box flexDirection="column">
@@ -270,6 +252,7 @@ export const register: Register = on => {
             onSelect={value => update($, qd, v => ({ ...v, repo: value }))}
           />
         )}
+        <Text color="yellow">{t('qd_moved')}</Text>
         {s.busy && <Text dimColor>{t('qd_sending')}</Text>}
         {s.error !== '' && <Text color="red">{s.error}</Text>}
         <Text dimColor>{t('qd_hint')}</Text>
@@ -285,7 +268,7 @@ export const register: Register = on => {
     const title = e.text.replace(PREFIX_RE, '').trim()
     if (title === '') return next(e)
     const repo = pickRepo(await loadRepos($), await $.store.get(LAST_REPO).catch(() => undefined))
-    const out = await fileIssue($, title, repo)
+    const out = await dispatch($, title, repo)
     $.ui.toast(out.text)
     // Not dispatched: the words are not thrown away — they wait in the queue as typed.
     if (!out.ok) return next(e)

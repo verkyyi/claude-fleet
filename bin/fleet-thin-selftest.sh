@@ -281,10 +281,12 @@ case $out in *$'\e]1337;SetProfile=Default\a') ok "H: the iTerm2 profile back la
 rm -f "$T/clip.on"
 
 # K — the keys (issue #3185, EPIC #3178 C7): each start writes iTerm2's `fleet`
-# profile with ONE ⌘ chord (⌘P) + ⇧↵; a FLEET_KEYS_EXTRA adds its ⌘ chords there and
-# rides the remote command's environment to the home, which binds them
+# profile with ONE ⌘ chord (⌘P) + ⇧↵ — and, one version long (issue #3328,
+# compat-1v), the ⌘ keys that went, at their old codes (the home turns them into the
+# panel); a FLEET_KEYS_EXTRA's ⌘ chords are there and it rides the remote command's
+# environment to the home, which binds them
 kmap() { python3 -c 'import json,sys; print(" ".join(sorted(json.load(open(sys.argv[1]))["Profiles"][0]["Keyboard Map"])))' "$T/iterm/fleet.json" 2>/dev/null; }
-[ "$(kmap)" = "0x70-0x100000 0xd-0x20000" ] && ok "K: the start wrote the profile — ⌘P + ⇧↵, nothing else" || fail "K: profile keys: $(kmap)"
+[ "$(kmap)" = "0x5b-0x100000 0x5d-0x100000 0x6b-0x100000 0x6e-0x100000 0x70-0x100000 0x71-0x100000 0x74-0x100000 0xd-0x20000 0xf700-0x300000 0xf701-0x300000" ] && ok "K: the start wrote the profile — ⌘P + ⇧↵ + #3328's forwards, nothing else" || fail "K: profile keys: $(kmap)"
 grep -q 'FLEET_KEYS_EXTRA' "$T/ssh.log" && fail "K: no extras, yet the remote command names FLEET_KEYS_EXTRA" || ok "K: no extras → the remote command as before"
 : > "$T/ssh.log"
 FLEET_KEYS_EXTRA='next=cmd+down shell=ctrl+\\' THIN_ARGS='[]' drive keys '[
@@ -292,7 +294,7 @@ FLEET_KEYS_EXTRA='next=cmd+down shell=ctrl+\\' THIN_ARGS='[]' drive keys '[
  ["send", "quit\n"],
  ["wait", 10]
 ]'
-[ "$(kmap)" = "0x70-0x100000 0xd-0x20000 0xf701-0x300000" ] && ok "K: FLEET_KEYS_EXTRA=next=cmd+down → ⌘↓ in the profile (⌃\\ is the terminal's own)" || fail "K: profile keys with extras: $(kmap)"
+[ "$(kmap)" = "0x5b-0x100000 0x5d-0x100000 0x6b-0x100000 0x6e-0x100000 0x70-0x100000 0x71-0x100000 0x74-0x100000 0xd-0x20000 0xf700-0x300000 0xf701-0x300000" ] && ok "K: FLEET_KEYS_EXTRA=next=cmd+down → ⌘↓ in the profile (⌃\\ is the terminal's own)" || fail "K: profile keys with extras: $(kmap)"
 case $(sed -n 1p "$T/ssh.log") in *" m1 FLEET_KEYS_EXTRA='next=cmd+down shell=ctrl+"*"' bash .claude/fleet/bin/fleet-remote-view.sh attach --thin "*)
   ok "K: the extras ride the remote command's environment" ;; *) fail "K: remote command: $(sed -n 1p "$T/ssh.log")" ;; esac
 

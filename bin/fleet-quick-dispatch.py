@@ -9,7 +9,8 @@ Codex), a bare shell, a session on another machine.
     fleet-quick-dispatch.py --view V [--client C]
                                           the same popup in a thin client's 看台, on
                                           its home machine (issue #3004, EPIC #2999
-                                          C7: conf/tmux-view.conf's ⌘T, ⌃] t)
+                                          C7) — no key opens it since issue #3328:
+                                          ⌘P's ⚡ row runs `send` / `grid` / `pick`
     fleet-quick-dispatch.py payload --title T [--repo R] [--codex | --agent A]
                                           the payload a ↵ would write, as JSON
                                           (the selftest's view)
@@ -48,8 +49,8 @@ fleet-client-place.sh <repo> new (the machine that takes it files the issue
 through fleet-issue-file.sh and opens its worker), switches to the new session's
 row when it appears, and — the payload says `via: dispatch` — says
 「已建 #N 并开工」. Nothing on the way calls a model or waits behind the
-orchestrator's turn; `/qd` in the orchestrator's window files through the same
-fleet-issue-file.sh, from the inside. No list on screen: --send runs from here
+orchestrator's turn; an old session's /qd (compat-1v, issue #3328) runs `send`
+itself. No list on screen: --send runs from here
 and the popup says how it ended.
 
 In a 看台 there is no list to hand it to: --send runs here (fleet-client-place.sh

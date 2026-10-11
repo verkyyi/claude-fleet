@@ -878,6 +878,11 @@ rv_attach_thin() {
   case "$view" in *-via-*) ;; *)
     ( python3 "$BIN/fleet-quickopen.py" view-peers --view "$s@view-$view" --socket "$sock" </dev/null >/dev/null 2>&1 & ) ;;
   esac
+  # the one message after issue #3328 took the keys away: 快捷键只剩 ⌘P, once per
+  # login, on this 看台's client once it is attached (compat-1v: 下一批删)
+  case "$view" in *-via-*) ;; *)
+    ( { sleep 1.5; TMUX='' python3 "$BIN/fleet-quickopen.py" view-notice --view "$s@view-$view" --socket "$sock"; } </dev/null >/dev/null 2>&1 & ) ;;
+  esac
   # --want naming another machine's session (`fleet claude` placed there, #3004):
   # the 看台's one switch road takes it there once attached — its C4 window
   case "$wfar:$view" in ?*:*-via-*|:*) ;; *)

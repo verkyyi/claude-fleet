@@ -20,7 +20,7 @@ device). Read `os`, `terminal`, `caps`, `via`, and `clients` when there are seve
 | They are on | Tell it as |
 |---|---|
 | `os` iOS / iPadOS / Android, or `terminal` Termius / Blink, or `caps` only `link` | the **phone**: Termius taps — ⌃ is the Ctrl key on the extra-key row, then `]`, then a letter; a page is a link to tap |
-| `os` macOS with `terminal` iTerm2 (`caps` has `iterm2`) | the **Mac**: ⌘ keys (⌘P, ⌘N, ⌘T …); a page you can open for them with `mcp__fleet__open` |
+| `os` macOS with `terminal` iTerm2 (`caps` has `iterm2`) | the **Mac**: one key, ⌘P (everything else is a row in it); a page you can open for them with `mcp__fleet__open` |
 | another terminal (Terminal.app, ssh from elsewhere) | **prefix keys** (prefix /, prefix n …) — `docs/CLIENT.md` «The keys», right-hand column |
 | exit 3 (nobody connected) or the question names another device («用手机怎么…») | ask which device in one short question, or take the one they named |
 

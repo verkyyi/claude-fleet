@@ -130,7 +130,10 @@ preview ctrl-p alt-p' ;;
 # the sessions run on (fleet-shell.sh quit); prefix Q elsewhere, unbound in tmux.
 # `dispatch` (issue #2753): ⌘T, 派一件事 — a title, a repo, ↵ files it and opens
 # its worker (bin/fleet-quick-dispatch.py, the writing area's own payload and road);
-# prefix t elsewhere (tmux's clock, no use here).
+# prefix t elsewhere (tmux's clock, no use here). Issue #3328 folded it into ⌘P's
+# ⚡ row: the row stays (its code is never reused) and a 看台 binds it to the panel
+# lit on ⚡; with next prev back fwd new quit it is a one-version forward by default
+# (bin/fleet_keys.py FORWARD, compat-1v).
 # `needs` (⌘J / prefix k, code 924) and `help` (⌘/ / prefix ?, code 926) went
 # with issue #2362: the bar's 「! N 等你」 is still a tap to the one waiting, the
 # keys live in docs/CLIENT.md. Their codes stay retired — never reuse 924 / 926:
