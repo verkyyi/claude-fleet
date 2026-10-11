@@ -18,6 +18,9 @@ sudo /opt/claude-fleet/current/bin/fleet-node-linux.py login list
 sudo /opt/claude-fleet/current/bin/fleet-node-linux.py login remove drill2 --keep-home
 ```
 
+(Inside the ACK container the runtime is on the volume:
+`/var/db/fleet-node/runtime/current/bin/…` — see «Upgrade and recovery».)
+
 - `open`: OS user → home (0700) → install → the login's own node identity
   (join code) → credential separation as a tenant of the shared proxy →
   `account adopt` → its fleet started. A name is 2–16 of `a-z0-9` with at least
