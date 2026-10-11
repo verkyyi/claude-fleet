@@ -151,7 +151,9 @@ if [ -f "$FLEET_CONF_DIR/spawn-full" ]; then
   echo "tmux: toast" >&2
   exit 2
 fi
-printf '%s\\n' "$*" >> "$FLEET_CONF_DIR/spawn.calls"
+# --words-file (issue #3331): its CONTENT is logged, <in brackets> — the path is a temp file
+_log=''; _prev=''; for a in "$@"; do _v=$a; [ "$_prev" = --words-file ] && _v="<$(cat "$a" 2>/dev/null)>"; _log="$_log${_log:+ }$_v"; _prev=$a; done
+printf '%s\\n' "$_log" >> "$FLEET_CONF_DIR/spawn.calls"
 # the agent it was asked for stamped on the window (@cc_agent, issue #2403), as the real one does
 repo=''; agent=claude; prev=''; for a in "$@"; do [ "$prev" = --repo ] && repo=$a; [ "$prev" = --agent ] && agent=$a; prev=$a; done
 printf '@12\\t%s\\t0\\t/fixture/issue-%s\\tdone\\t%s\\ta1\\t\\t%s\\n' "$1" "$1" "$agent" "$repo" >> "$FLEET_CONF_DIR/workers.tsv"
@@ -1291,13 +1293,14 @@ echo "https://github.com/example/project/issues/128"
         self.assertEqual((self.node.conf / "file.calls").read_text(),
                          "--repo example/project --from hub --title 侧栏的名字太长 --body 两行\n正文\n")
         self.assertEqual((self.node.conf / "spawn.calls").read_text(),
-                         "128 demo --print --agent claude --origin hub --repo example/project\n")
+                         "128 demo --print --agent claude --origin hub --repo example/project"
+                         " --words-file <两行\n正文>\n")
         # a filing that fails opens nothing
         (self.node.conf / "file-fail").touch()
         failed = self.node.wait(self.call("worker_start", dict(fleet_id=self.fleet, idempotency_key="new-2",
                                                                params={"kind": "new", "title": "y"}))["operation_id"])
         self.assertEqual((failed["status"], failed["result"]["error"]["exit"]), ("failed", 7))
-        self.assertEqual(len((self.node.conf / "spawn.calls").read_text().splitlines()), 1)
+        self.assertEqual((self.node.conf / "spawn.calls").read_text().count(" --print "), 1)
 
     def test_new_issue_start_names_its_attachments_here(self):
         # issue #2393: the writing area's files — the agent downloaded each to
@@ -1353,7 +1356,8 @@ echo "https://github.com/example/project/issues/131"
             self.assertEqual(op["status"], "succeeded", key)
         self.assertEqual((self.node.conf / "spawn.calls").read_text(),
                          "130 demo --print --agent codex --origin hub --repo example/project\n"
-                         "131 demo --print --agent codex --origin hub --repo example/project\n"
+                         "131 demo --print --agent codex --origin hub --repo example/project"
+                         " --words-file <在 m4 上用 codex>\n"
                          "132 demo --print --agent claude --origin hub --repo example/project\n")
         self.assertEqual((self.node.conf / "scratch.calls").read_text(),
                          "demo --origin hub --print --agent codex --repo example/project --name codex 试试\n")
