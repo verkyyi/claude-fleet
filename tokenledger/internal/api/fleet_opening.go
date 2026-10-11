@@ -181,7 +181,7 @@ func (s *Server) accountStateOf(pid string, now time.Time) *AccountState {
 	if snap, err := s.Nodes(now); err == nil && len(adminNodesOnline(snap)) == 0 {
 		// Nothing is coming because no machine can open a login
 		// (claude-fleet#2997): say so, never a bare none.
-		none.Why = noLoginOpener
+		none.Why = noLoginOpenerWhy(snap)
 	}
 	return none
 }
@@ -214,7 +214,13 @@ func (s *Server) openingStuck(a store.FleetAccount, now time.Time) string {
 			a.Hostname, int(took.Minutes()), (est+59)/60, a.State)
 	}
 	if a.State == store.AccountPending && took > openingNoAdmin {
-		if _, ok := s.nodes.adminFor(a.Hostname); !ok {
+		if _, ok := s.nodes.openerFor(a.Hostname); !ok {
+			if stale := s.nodes.staleAdmins(a.Hostname); len(stale) > 0 {
+				// An admin is there but too old to hand the login its join
+				// code: its fleet would never come up (claude-fleet#3032).
+				return "the admin node of " + a.Hostname + " is too old to open a login that comes up: " +
+					strings.Join(stale, ", ") + " — update its ccquota to the release's"
+			}
 			return "no admin node of " + a.Hostname + " is connected to open it"
 		}
 	}

@@ -92,6 +92,8 @@
 #   opening-eta-climbs                              tokenledger/internal/api fleet_opening.go (openingETALeft)
 #   opened-login-fleet-silent                       tokenledger/internal/api fleet_opening.go (settling, settleWhy,
 #                                                   openingNotes, openingOver; go test) + bin/fleet-shell.sh first_home
+#   stale-admin-opens-login                         tokenledger/internal/api nodes.go (openerFor, CapLoginJoin) +
+#                                                   fleet_accounts.go (dispatchAccounts, noLoginOpenerWhy); go test
 #   heartbeat-sys-blocked                           tokenledger/internal/agent beat_parts.go (sysSampler, asyncReading,
 #                                                   fleetBeatBudget) + internal/api nodes.go (foldSys); go test
 #   login-remove-record-left                        bin/fleet-login-remove.sh (step 6 checks the record is gone)
@@ -5104,6 +5106,27 @@ drill_opened_login_fleet_silent() {
   _drill_go_tests 'TestOpenedLoginWithoutFleetIsNotDone TestOpeningPastItsOwnETAFails' \
     "$ROOT/tokenledger/internal/api/fleet_opening_test.go" \
     '开好的登录要等它的 fleet 报上来才算好：之前 opening(stage fleet)，10 分钟后 failed 说缺哪步；放置点名；超过预计 ×3 failed（go test）' || return 1
+  SECS=$(since "$t0")
+}
+
+# ---- stale-admin-opens-login (#3032): mini2's only admin node was an old
+# standalone agent (prod-e715029, before #2652) restored from the attic; the
+# hub sent it the create, it dropped the join code, and the login it opened
+# never came up. Now an admin says CapLoginJoin when its create hands the code
+# on; a create goes only to one that said it, placement skips a machine
+# without one, and the words name the stale admin.
+drill_stale_admin_opens_login() {
+  CAP=120; local t0 a="$ROOT/tokenledger/internal/api"
+  t0=$(now)
+  grep -q 'c.canLoginJoin' "$a/nodes.go" \
+    || { WHY="openerFor no longer needs the admin's CapLoginJoin"; return 1; }
+  grep -q 's.nodes.openerFor(a.Hostname)' "$a/fleet_accounts.go" \
+    || { WHY="dispatchAccounts sends a create to any admin again"; return 1; }
+  grep -q 'caps = append(caps, control.CapLoginJoin)' "$ROOT/tokenledger/internal/agent/node.go" \
+    || { WHY="the admin agent no longer says CapLoginJoin in its hello"; return 1; }
+  _drill_go_tests 'TestStaleAdminIsNeverSentACreate TestLeastBusySkipsAMachineWithOnlyAStaleAdmin' \
+    "$a/fleet_stale_admin_test.go" \
+    '比发布旧的管理员 agent（hello 没有 login_join）收不到 create，放置不挑它的机器，入口原话点名它；新管理员一连上就接走排队的开号（go test）' || return 1
   SECS=$(since "$t0")
 }
 

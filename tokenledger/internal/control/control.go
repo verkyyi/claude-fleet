@@ -163,6 +163,15 @@ const CapTestIdentity = "test_identity"
 // said AccountResult.Credsep "separated".
 const CapCredsep = "credsep"
 
+// CapLoginJoin is the hello capability an admin node lists when its create
+// op hands AccountOp.JoinCode to the create script (claude-fleet#2652), so the
+// login it opens enrolls as its own node and brings its fleet up. An admin
+// built before that ignores the code: the login opens and its fleet never
+// reports (claude-fleet#3032, a stale admin agent restored from the attic).
+// The hub sends a create only to an admin that lists it, and places a
+// newcomer only on a machine that has one.
+const CapLoginJoin = "login_join"
+
 // CapMachine is the hello capability of a MACHINE link (claude-fleet#2333,
 // EPIC #2329 C5): one connection, dialled by `ccquota agent --machine` with
 // the machine's own node token, that carries every login of the machine. Each

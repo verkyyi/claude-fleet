@@ -303,14 +303,16 @@ func (s *Server) leastBusyMachine(now time.Time, skip ...string) string {
 }
 
 // adminNodesOnline is every machine (lower-cased) with an admin node the
-// roster hears right now — the one that opens a login there. A machine with
-// none cannot open one (claude-fleet#2997: the sweep had booted the admin
-// login's own agent out on both machines, and the newcomer heard only
-// 「No fleet」).
+// roster hears right now that can open a login there — one that hands the
+// login its join code (LoginJoin, claude-fleet#3032). A machine with none
+// cannot open one (claude-fleet#2997: the sweep had booted the admin login's
+// own agent out on both machines, and the newcomer heard only 「No fleet」;
+// #3032: the only admin left was an old agent restored from the attic, and
+// the login it opened never came up).
 func adminNodesOnline(snap NodesSnapshot) map[string]bool {
 	admin := map[string]bool{}
 	for _, n := range snap.Nodes {
-		if n.Admin && n.Connected && n.Status == "online" {
+		if n.Admin && n.LoginJoin && n.Connected && n.Status == "online" {
 			admin[strings.ToLower(n.Hostname)] = true
 		}
 	}
@@ -320,6 +322,27 @@ func adminNodesOnline(snap NodesSnapshot) map[string]bool {
 // noLoginOpener is the newcomer's word when no machine can open a login:
 // none has an admin node online (claude-fleet#2997).
 const noLoginOpener = "没有能开号的机器：没有一台机器的管理员节点在线"
+
+// noLoginOpenerWhy is noLoginOpener, or — when admin nodes are online but
+// every one is too old to hand a login its join code — which ones, so the
+// admin knows what to update (claude-fleet#3032).
+func noLoginOpenerWhy(snap NodesSnapshot) string {
+	var stale []string
+	for _, n := range snap.Nodes {
+		if n.Admin && !n.LoginJoin && n.Connected && n.Status == "online" {
+			v := n.AgentVersion
+			if v == "" {
+				v = "unknown"
+			}
+			stale = append(stale, n.OSUser+"@"+n.Hostname+" (ccquota "+v+")")
+		}
+	}
+	if len(stale) == 0 {
+		return noLoginOpener
+	}
+	sort.Strings(stale)
+	return noLoginOpener + "（管理员节点太旧，开的登录拿不到加入码：" + strings.Join(stale, "、") + " —— 把它的 ccquota 换成发布版）"
+}
 
 // drillComputer is the machine a drill person's own computer is on — the
 // bare login `fleet drill invite --host` named (claude-fleet#2549) — while its
@@ -545,7 +568,12 @@ func (s *Server) dispatchAccounts() {
 		return
 	}
 	for _, a := range rows {
-		epID, ok := s.nodes.adminFor(a.Hostname)
+		// A create goes only to an admin that hands the login its join code
+		// (claude-fleet#3032); a remove to any admin of the machine.
+		epID, ok := s.nodes.openerFor(a.Hostname)
+		if a.State == store.AccountRemovePending {
+			epID, ok = s.nodes.adminFor(a.Hostname)
+		}
 		if !ok {
 			continue
 		}
@@ -641,7 +669,7 @@ func (s *Server) reaskAccounts(now time.Time) {
 			continue
 		}
 		live[a.OpID] = true
-		if epID, ok := s.nodes.adminFor(a.Hostname); !ok || epID != a.EndpointID {
+		if !s.nodes.adminLink(a.EndpointID, a.Hostname) {
 			continue
 		}
 		if at, ok := s.accountAsked[a.OpID]; ok && now.Sub(at) < accountReaskEvery {

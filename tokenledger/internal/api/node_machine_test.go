@@ -126,6 +126,9 @@ func (n *machNode) send(login string, m control.Message) {
 // login says one login's hello on the link and returns the hub's answer.
 func (n *machNode) login(login, token string, admin bool, caps ...string) control.Message {
 	n.t.Helper()
+	if admin {
+		caps = append(caps, control.CapLoginJoin) // a current admin (claude-fleet#3032)
+	}
 	m, _ := control.New(control.TypeHello, control.Hello{HeartbeatMS: 60000, AgentVersion: "test",
 		Admin: admin, Capabilities: caps, LoginToken: token})
 	n.send(login, m)

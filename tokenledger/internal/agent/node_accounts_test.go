@@ -415,8 +415,12 @@ func TestAdminAgentSaysCredsep(t *testing.T) {
 		hub.mu.Lock()
 		caps := strings.Join(hub.hellos[0].Capabilities, ",")
 		hub.mu.Unlock()
-		if !strings.Contains(","+caps+",", ","+control.CapCredsep+",") {
-			t.Fatalf("hello capabilities %s lack %s", caps, control.CapCredsep)
+		for _, want := range []string{control.CapCredsep, control.CapLoginJoin} {
+			// CapLoginJoin: this agent hands a create's join code to the
+			// script, so the hub may send it creates (claude-fleet#3032).
+			if !strings.Contains(","+caps+",", ","+want+",") {
+				t.Fatalf("hello capabilities %s lack %s", caps, want)
+			}
 		}
 	}
 }

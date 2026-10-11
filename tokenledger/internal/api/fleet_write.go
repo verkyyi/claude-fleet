@@ -1482,7 +1482,7 @@ func (s *Server) pickNodeAfter(p fleetPrincipal, repo, node string, now time.Tim
 				if more != "" {
 					more = "；" + strings.TrimPrefix(more, " — ")
 				}
-				more = " — " + noLoginOpener + more
+				more = " — " + noLoginOpenerWhy(snap) + more
 			}
 		}
 		if repo == "" {
