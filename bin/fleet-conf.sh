@@ -712,6 +712,30 @@ EOF
   return 0
 }
 
+# ---- retired keys are commented out (issue #3120) --------------------------------
+# The autofill dispatcher is gone (EPIC #3111 C9), and with it FLEET_AUTOFILL,
+# FLEET_AUTOFILL_MAX_PER_TICK and FLEET_AUTOFILL_NODE. A line still setting one — in
+# fleet.conf, a fleet conf or a repo overlay — reads nothing now, so it is kept as
+# a comment saying so (`# retired #3120: <the line>`), never deleted. Idempotent:
+# no active line, nothing written.
+RETIRED_KEYS='FLEET_AUTOFILL|FLEET_AUTOFILL_MAX_PER_TICK|FLEET_AUTOFILL_NODE'
+migrate_retired() {
+  local DRY="$1" QUIET="$2" f done_='' re
+  re="^[[:space:]]*(export[[:space:]]+)?($RETIRED_KEYS)[[:space:]]*="
+  for f in "$MC" "$CD"/fleets/*/conf "$CD"/fleets/*/repos/*.conf "$CD"/*.conf; do
+    [ -f "$f" ] && grep -Eq "$re" "$f" || continue
+    if [ "$DRY" = 1 ]; then
+      printf 'fleet-conf: would comment out the retired autofill keys in %s\n' "${f#$CD/}"; continue
+    fi
+    awk -v re="$re" '$0 ~ re { print "# retired #3120: " $0; next } { print }' "$f" > "$f.tmp.$$" \
+      && cat "$f.tmp.$$" > "$f" && rm -f "$f.tmp.$$" \
+      || { rm -f "$f.tmp.$$"; die "cannot rewrite $f"; }
+    done_="$done_ ${f#$CD/}"
+  done
+  [ -n "$done_" ] && [ "$QUIET" = 0 ] && echo "fleet-conf: retired autofill keys commented out in:$done_"
+  return 0
+}
+
 # ---- dispatch ------------------------------------------------------------------
 cmd="${1:-}"; [ -n "$cmd" ] || usage; shift
 case "$cmd" in
@@ -741,7 +765,8 @@ case "$cmd" in
     migrate "$DRY" "$QUIET"
     rescue_stranded "$DRY" "$QUIET"
     hub_fill "$DRY" "$QUIET"
-    migrate_repos "$DRY" "$QUIET" ;;
+    migrate_repos "$DRY" "$QUIET"
+    migrate_retired "$DRY" "$QUIET" ;;
   add-role)
     case "${1:-}" in client|node) add_role "$1" ;; *) usage ;; esac ;;
   set-hub)

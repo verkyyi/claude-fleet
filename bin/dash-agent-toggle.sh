@@ -9,8 +9,8 @@
 # verbatim; never a sed over the file), then emits the fzf actions that relabel
 # the prompt line at once (bin/dash-agent-prompt.sh actions) and toasts one line
 # (`fleet: new sessions → codex`). Because it is the REAL conf that changed, every
-# spawn path follows — the dash prompt line, ⌃s, dash-issue-session.sh, autofill /
-# dispatch, other sessions' scripts — and the dash shows the truth. This key,
+# spawn path follows — the dash prompt line, ⌃s, dash-issue-session.sh, other
+# sessions' scripts — and the dash shows the truth. This key,
 # prefix+c and the conf are the ONLY ways to pick the agent (issue #559 retired the
 # `codex:` / `claude:` prompt-line prefix); `--agent` on the CLI spawners stays for
 # scripts.

@@ -173,7 +173,6 @@
 2.4 fleet-degenerate-selftest.sh
 7.6 fleet-deps-link-selftest.sh
 4.5 fleet-diskguard-selftest.sh
-1.9 fleet-dispatch-selftest.sh
 2.3 fleet-doctor-conf-dir-selftest.sh
 44.0 fleet-doctor-host-selftest.sh
 37.6 fleet-doctor-ingress-selftest.sh

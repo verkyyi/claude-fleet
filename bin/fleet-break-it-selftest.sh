@@ -179,6 +179,8 @@
 # Machine half — a sandbox Homebrew prefix under a world-traversable tmp dir:
 #   brew-keg-700                                    bin/fleet-diskguard.sh --brew-watch,
 #                                                   bin/fleet-brew-perms.sh, shell/cw.zsh brew()
+#   nothing-starts-by-itself                        bin/fleet-dispatch.sh (the retired shell),
+#                                                   bin/fleet-diskguard.sh macos_watch, fleet-macos-watch.sh
 #
 # tmux / python3 absent → SKIP (exit 0). BREAK_KEEP=1 keeps the work dir.
 # BREAK_ONLY="<id> <id>" runs only those drills (the lockstep lint always runs);
@@ -5949,6 +5951,65 @@ drill_node_container_restart() {
   fi
   SECS=$(since "$t0")
   WHAT="新容器不接管上次的 PID；镜像负责升级时不恢复旧的切换"
+}
+
+# Nothing starts a session by itself (issue #3120, EPIC #3111 C9): the autofill
+# dispatcher ran every minute and spawned `autofill`-labelled issues by priority
+# (③), and its red-master macOS watcher spawned a fixer for the breakage it filed
+# (④). The rest of the list (① ② ⑤) is the other members' to drill.
+drill_nothing_starts_by_itself() {
+  CAP=30; local sb t0 i n
+  sb="$WORK/nsbi"; mkdir -p "$sb/bin" "$sb/shim" "$sb/conf" "$sb/mainA/.github/workflows" "$sb/mainA/bin" "$sb/dg"
+  for f in "$BIN"/* "$BIN"/.*.py; do [ -e "$f" ] && ln -s "$f" "$sb/bin/${f##*/}"; done
+  # every spawner a session could start through counts instead of opening
+  for f in dash-issue-session.sh dash-raw-session.sh; do
+    rm -f "$sb/bin/$f"; printf '#!/bin/sh\necho "$0 $*" >> "%s/spawned"\n' "$sb" > "$sb/bin/$f"; chmod +x "$sb/bin/$f"
+  done
+  : > "$sb/mainA/.github/workflows/selftests-macos.yml"; : > "$sb/mainA/bin/fleet-stable.sh"
+  # a backlog of autofill-labelled issues, and master's macOS run red
+  cat > "$sb/shim/gh" <<SH
+#!/bin/sh
+case "\$*" in
+  *actions/workflows/*) printf '30\t3333333ccc\tfailure\tpush\n29\t1111111aaa\tsuccess\tpush\n' ;;
+  *actions/runs/*/jobs*) printf '901\tmacOS shard 2\n' ;;
+  'issue list'*) echo '[{"number":12,"labels":[{"name":"autofill"},{"name":"priority:p0"}],"assignees":[]}]' ;;
+esac
+SH
+  printf '#!/bin/sh\necho "$*" >> "%s/filed"\necho https://github.com/o/a/issues/4242\n' "$sb" > "$sb/filer"
+  printf '#!/bin/sh\necho "$*" >> "%s/alerted"\n' "$sb" > "$sb/alert"
+  chmod +x "$sb/shim/gh" "$sb/filer" "$sb/alert"
+  t0=$(now)
+  # ③ the old daemon's command and its tick: no template to schedule it, and the
+  #    script a stale plist would still run does nothing
+  for i in "$ROOT"/launchd/*dispatch* "$ROOT"/systemd/*dispatch*; do
+    [ -e "$i" ] && { WHY="a dispatch daemon template is still installed by default: ${i##*/}"; return 1; }
+  done
+  ( . "$BIN/fleet-daemon-lib.sh"; fleet_daemon_unit_names ) | grep -qx dispatch \
+    && { WHY="the daemon registry still lists dispatch"; return 1; }
+  PATH="$sb/shim:$PATH" FLEET_CONF_DIR="$sb/conf" FLEET_AUTOFILL=1 bash "$sb/bin/fleet-dispatch.sh" >/dev/null 2>&1
+  PATH="$sb/shim:$PATH" FLEET_CONF_DIR="$sb/conf" FLEET_AUTOFILL=1 bash "$sb/bin/fleet-dispatch.sh" fleet >/dev/null 2>&1
+  # ④ the diskguard tick reads master's red macOS run: files + alerts, spawns nobody
+  cat > "$sb/dg.sh" <<SH
+FLEET_DISKGUARD_SOURCE=1 . "$sb/bin/fleet-diskguard.sh"
+BIN="$sb/bin" GDIR="$sb/dg"
+fleet_sockets() { echo fleet; }
+fleet_conf_file() { echo "$sb/fleet.conf"; }
+fleet_load_conf() { :; }
+fleet_repos() { echo o/a; }
+fleet_load_repo_conf() { FLEET_MAIN="$sb/mainA"; }
+macos_watch
+SH
+  : > "$sb/fleet.conf"
+  env PATH="$sb/shim:$PATH" FLEET_CONF_DIR="$sb/conf" FLEET_MACOS_FILE_CMD="$sb/filer" \
+    FLEET_MACOS_ALERT_CMD="$sb/alert" bash "$sb/dg.sh" >/dev/null 2>&1
+  until_ok 15 grep -q 'filed' "$sb/dg/macos-watch.log" 2>/dev/null \
+    || { WHY="the diskguard tick never filed the red master run"; return 1; }
+  SECS=$(since "$t0")
+  grep -q -- '--breakage' "$sb/filed" 2>/dev/null || { WHY="the red master was not filed as a breakage"; return 1; }
+  grep -q 'breakage' "$sb/alerted" 2>/dev/null || { WHY="nobody was told about the red master"; return 1; }
+  n=0; [ -f "$sb/spawned" ] && n=$(wc -l < "$sb/spawned" | tr -d ' ')
+  [ "$n" = 0 ] || { WHY="$n session(s) started by themselves: $(head -2 "$sb/spawned" | tr '\n' ' ')"; return 1; }
+  WHAT="③ 自动填充：没有 dispatch 守护、壳脚本什么都不开；④ 红主干：diskguard 节拍开单 + 提醒，0 个会话自己开出来"
 }
 
 # ================================================================ run ===========

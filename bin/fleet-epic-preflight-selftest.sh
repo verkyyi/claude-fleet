@@ -159,16 +159,17 @@ GH_LABELS='bug enhancement' clean_env run_pf
 [ "$RC" -eq 1 ] || fail "B missing labels must be FIXABLE (exit 1, got $RC)" "$OUT"
 printf '%s' "$OUT" | grep -q 'FIXABLE'       || fail "B must say FIXABLE" "$OUT"
 printf '%s' "$OUT" | grep -qE 'FIX .*labels' || fail "B the labels row must be FIX" "$OUT"
-for l in epic autofill blocked; do
+for l in epic blocked; do
   printf '%s' "$OUT" | grep -q "$l" || fail "B must name the missing label $l" "$OUT"
 done
+printf '%s' "$OUT" | grep -q autofill && fail "B autofill is retired (#3120) — never asked for" "$OUT"
 [ -s "$SEED_LOG" ] && fail "B DEFAULT IS READ-ONLY — no --fix, no seeding" "$(cat "$SEED_LOG")"
 ok "B missing labels are FIXABLE (exit 1) and nothing is seeded without --fix"
 
 # ============================ B2: only `epic` missing is still FIXABLE =====
 # The new label (#678) alone must be enough to hold the gate — a repo seeded
 # before epic existed is exactly the case this catches.
-GH_LABELS='autofill blocked bug' clean_env run_pf
+GH_LABELS='blocked bug' clean_env run_pf
 [ "$RC" -eq 1 ]                                || fail "B2 a repo missing only epic must be FIXABLE (got $RC)" "$OUT"
 printf '%s' "$OUT" | grep -qE 'FIX .*labels.*epic' || fail "B2 must name epic as the gap" "$OUT"
 ok "B2 a repo seeded before \`epic\` existed is caught as FIXABLE"
@@ -442,7 +443,7 @@ ok "L the EPIC trio's spawn / preflight / evidence calls all name the resolved r
 # fleet_labels_canonical lists. If those two drift, --fix promises a fix it cannot
 # deliver — so pin the join here, against the REAL lib.
 allowed=$(. "$WORK/bin/fleet-lib.sh"; fleet_labels_allowed)
-for l in epic autofill blocked; do
+for l in epic blocked; do
   printf '%s\n' "$allowed" | grep -qxF -- "$l" \
     || fail "I $l must be in fleet_labels_canonical or --fix can never seed it" "$allowed"
 done
@@ -450,7 +451,7 @@ done
 epicrow=$(. "$WORK/bin/fleet-lib.sh"; fleet_labels_canonical | grep '^epic|')
 printf '%s' "$epicrow" | grep -qE '^epic\|[0-9A-Fa-f]{6}\|.{20,}' \
   || fail "I the epic row needs a 6-hex color and a self-explaining description" "$epicrow"
-ok "I epic/autofill/blocked are all in the canonical taxonomy --fix seeds from"
+ok "I epic/blocked are both in the canonical taxonomy --fix seeds from"
 
 # ============================ M: a GraphQL limit is a WARN, not BLOCKED (#989)
 # The fake gh refuses every GraphQL subcommand the way gh does under a spent

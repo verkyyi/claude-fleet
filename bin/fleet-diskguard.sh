@@ -868,6 +868,35 @@ pool_watch() {
   return 0
 }
 
+# macos_watch — the BSD half on master (issues #2286, #3120): a red macOS run
+# there blocks every `fleet-stable.sh move`, so bin/fleet-macos-watch.sh files it
+# ONCE as a breakage (one issue per fingerprint, fleet-wide) and raises one alert —
+# it spawns nobody. Only a repo whose base checkout carries BOTH the macOS workflow
+# and bin/fleet-stable.sh is read (business repos never are); throttled inside the
+# watcher (FLEET_MACOS_WATCH_SECS); FLEET_MACOS_WATCH=0 turns it off. Each fleet
+# in a subshell, so one conf never colours the next; detached, a read is network.
+macos_watch() {
+  [ "${FLEET_MACOS_WATCH:-1}" = 0 ] && return 0
+  [ -f "$BIN/fleet-macos-watch.sh" ] || return 0
+  type fleet_load_conf >/dev/null 2>&1 || return 0
+  local s
+  for s in $(fleet_sockets 2>/dev/null); do
+    [ -f "$(fleet_conf_file "$s")" ] || continue
+    ( ( fleet_load_conf "$s" >/dev/null 2>&1
+      [ "${FLEET_MACOS_WATCH:-1}" = 0 ] && exit 0
+      fleet_repos "$s" | while IFS= read -r r; do
+        [ -n "$r" ] || continue
+        ( fleet_load_repo_conf "$s" "$r" >/dev/null 2>&1
+          main="${FLEET_MAIN:-}"
+          [ -n "$main" ] && [ -f "$main/.github/workflows/selftests-macos.yml" ] && [ -f "$main/bin/fleet-stable.sh" ] || exit 0
+          out=$(bash "$BIN/fleet-macos-watch.sh" --repo "$r" --session "$s" 2>&1)
+          [ -z "$out" ] || { mkdir -p "$GDIR" 2>/dev/null
+            printf '%s %s %s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$s" "$r" "${out//$'\n'/ | }" >> "$GDIR/macos-watch.log" 2>/dev/null; } )
+      done ) & ) 2>/dev/null
+  done
+  return 0
+}
+
 # mem_watch — the --watch tick's share: one notice per edge, per kind.
 mem_watch() {
   local rows mem lvl av co sw top u m w word kind
@@ -993,6 +1022,7 @@ EOF2
     restore_watch                                 # a fleet that went down: pull it back up (#1784)
     brew_watch                                    # a keg other logins cannot read: repair it (#2283)
     pool_watch                                    # warm-pool slots topped back up (#2233)
+    macos_watch                                   # red macOS on master: file + alert, no spawn (#3120)
     free=$(free_gb)
     [ -z "$free" ] && exit 0                      # measurement failed — stay quiet
     [ "$free" -ge "$WARN_GB" ] && exit 0          # healthy

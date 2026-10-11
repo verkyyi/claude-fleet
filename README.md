@@ -103,7 +103,7 @@ demo repo data.</sub>
   where new sessions start, and move existing sessions with their transcripts
   when an account needs a break. With [TokenLedger](https://github.com/verkyyi/claude-fleet/tree/master/tokenledger)
   (`ccquota`), use account-wide 5h/7d readings to warn before a limit, rotate
-  early, stagger window starts, and optionally pause autofill. See
+  early, stagger window starts, and optionally pause remote starts. See
   [subscription and quota management](#subscription-accounts-and-quota-management).
 
 - **Worktree lifecycle**: `cw <branch>` spawns a worktree + Claude window;
@@ -483,7 +483,7 @@ is the product name; its executable and settings are still `ccquota` and
 | Quota-aware account selection | Rank eligible accounts using `5h headroom × 2 + 7d headroom`, with hysteresis to avoid needless switching. Both windows must be below the account ceiling. | Pool + ccquota hub readings |
 | Early warning and rotation | At 70% utilization, warn sessions; at 85%, bench the account and migrate its sessions to a readable account below the ceiling. Thresholds use the higher of 5h and 7d usage and are configurable. | Pool + ccquota hub readings |
 | 5-hour window staggering | Plan when idle accounts first open their next window, so windows need not all reset together. Automatic replanning is opt-in. | Pool + ccquota hub readings |
-| Autofill quota gate | Optionally stop automatic task dispatch near the selected subscription's ceiling (90% by default). Manual spawns and running sessions are unaffected by this gate. | ccquota hub; `FLEET_QUOTA_GATE=1` |
+| Remote-start quota gate | Optionally stop sessions the hub starts or resumes near the selected subscription's ceiling (90% by default). Hand spawns and running sessions are unaffected by this gate. | ccquota hub; `FLEET_QUOTA_GATE=1` |
 | Quota-watch health | Surface stale readings and repeated empty fetches in the status bar and doctor, so missing data is visible. | Configured pool + ccquota hub |
 
 ### Register accounts and see which one a session uses
@@ -564,7 +564,7 @@ reset clock or hold an account already mid-window. A phase hold is relaxed when
 needed to keep an account available for a spawn. Set `FLEET_ACCOUNT_PHASE_AUTO=1`
 to replan automatically, or `FLEET_ACCOUNT_PHASE=0` to ignore a written plan.
 
-The **autofill gate is separate from account rotation** and off by default:
+The **remote-start quota gate is separate from account rotation** and off by default:
 
 ```sh
 # In fleet.conf; choose the subscription the gate should judge.
@@ -573,7 +573,8 @@ FLEET_QUOTA_CEILING=90
 # FLEET_QUOTA_ACCOUNT="<subscription-uuid>"  # or "all"; unset uses ccquota's default
 ```
 
-It gates only the dispatcher's automatic spawns. Missing ccquota, an unreachable
+It gates only the starts and resumes the hub sends (the autofill dispatcher it
+was first written for is gone, #3120). Missing ccquota, an unreachable
 hub or an unreadable limit leaves the gate open; it is not a hard spending cap.
 
 ### Model caps and operational checks
@@ -814,7 +815,7 @@ watching.
 
 - **A fleet hosts one or more repos, all on one tmux server.** Each window's repo
   is `@repo`; PR/issue state is fetched per hosted repo. The warm scratch pool
-  keeps one pool per hosted repo (#797). The issue bridge, webhooks and autofill
+  keeps one pool per hosted repo (#797). The issue bridge and webhooks
   cover the fleet conf's own repo only for now (EPIC #787 reserve).
 - Windows named `dash`, `plan`, or `backlog` are treated as panels, not
   Claude sessions.

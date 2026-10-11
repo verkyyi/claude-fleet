@@ -119,9 +119,8 @@ IDENTITY_RE = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 # A worker_id is `<fleet UUID>/<fleet_id>` (issue #1646 — the session's lifelong
 # identity, its window's @fleet_id) or, for one version, the old `<fleet UUID>/<key>`.
 WORKER_ID_RE = re.compile(r"(" + IDENTITY_RE + r")/(" + WORKER_KEY_RE + r"|" + IDENTITY_RE + r")")
-CONFIG_KEYS = {"FLEET_MAX_SESSIONS": (0, 256),
-               "FLEET_AUTOFILL": (0, 1),
-               "FLEET_AUTOFILL_MAX_PER_TICK": (1, 16)}
+# FLEET_AUTOFILL / FLEET_AUTOFILL_MAX_PER_TICK left with the dispatcher (issue #3120).
+CONFIG_KEYS = {"FLEET_MAX_SESSIONS": (0, 256)}
 
 
 class Fault(Exception):

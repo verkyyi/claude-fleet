@@ -336,7 +336,7 @@ fleet ran 17 minutes (the git scan alone took 551s) — so the recovery trickled
 out for the better part of an hour. Detection now rides the 60s quotawatch tick
 and the recovery is a keystroke.
 
-and every **new** session on that account — autofill, a hand spawn, a restore, a
+and every **new** session on that account — a hand spawn, a restore, a
 migrate — goes through `fleet-claude.sh`, which asks `model-limited-until` for
 its FLEET_MODEL and launches on **`FLEET_MODEL_FALLBACK`** (default `opus`)
 while the cap holds; subagents follow (`CLAUDE_CODE_SUBAGENT_MODEL`), and the

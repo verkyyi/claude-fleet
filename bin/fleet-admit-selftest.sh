@@ -14,8 +14,8 @@
 #      unchanged and still first).
 #   C. dash-issue-session.sh under a tight stub → exit RC_CAP (2), the reason on
 #      stderr, NO window; FLEET_ADMIT=0 on the same stub spawns.
-#   D. retry: the same spawn after the reading drops succeeds (what dispatch's
-#      next tick does — it already treats rc 2 as "stop this tick, retry").
+#   D. retry: the same spawn after the reading drops succeeds (a refused caller
+#      tries again later; rc 2 says "not now", never "not this issue").
 #   E. continuation paths never pass the gate: crash restore, handoff.
 #   F. admission is the only gate by default (issue #1831): the per-session cost
 #      (median agent RSS × growth, floored, or pinned), the room it leaves above
@@ -144,9 +144,7 @@ ok "C FLEET_ADMIT=0 spawns on the same tight reading"
 
 run_spawn 'echo 1 66 5 6'; rc=$?
 [ "$rc" = 0 ] && [ -s "$NEWWIN_LOG" ] || fail "D once the reading drops the retried spawn must go through (rc=$rc)" "$(cat "$WORK/spawn.err")"
-grep -q 'rc" = 3' "$BIN/fleet-dispatch.sh" && grep -q 'stop this tick' "$BIN/fleet-dispatch.sh" \
-  || fail "D dispatch must still treat a non-claim refusal as 'stop this tick, retry next'"
-ok "D the next attempt after the reading drops spawns (dispatch retries rc 2 on its next tick)"
+ok "D the next attempt after the reading drops spawns"
 
 # ===== F: admission is the only gate by default (issue #1831) ==================
 hr() { rm -rf "$WORK/t"; mkdir -p "$WORK/t"; env "$@" TMPDIR="$WORK/t" bash -c 'source "$1/fleet-lib.sh"; fleet_machine_headroom' _ "$BIN"; }

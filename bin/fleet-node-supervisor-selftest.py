@@ -791,7 +791,10 @@ class H_Accounts(Sandbox):
         tmpl = set(os.path.basename(x)[len("com.claude-fleet."):-len(".plist.tmpl")]
                    for x in g.glob(os.path.join(os.path.dirname(BIN), "launchd", "*.plist.tmpl")))
         self.assertEqual(set(units), tmpl - {"memguard"}, "every template but the machine's is an account unit")
-        for need in ("dispatch", "issue-bridge", "pr-refresh", "ledger-watch", "quotawatch", "sleep", "cleanup",
+        # the autofill dispatcher's template is gone (issue #3120): no account
+        # runs it, and nothing keeps a unit the runtime no longer carries
+        self.assertNotIn("dispatch", units)
+        for need in ("issue-bridge", "pr-refresh", "ledger-watch", "quotawatch", "sleep", "cleanup",
                      "worktree-autoclean", "spinner", "webhook", "collect", "install-sync", "base-sync"):
             self.assertIn(need, units)
         self.assertTrue(units["spinner"].get("keepalive") and units["webhook"].get("keepalive"))
@@ -800,12 +803,12 @@ class H_Accounts(Sandbox):
         self.assertEqual(units["worktree-autoclean"]["every"], 3600)
         self.assertEqual(units["spinner"]["env"].get("SPIN_INTERVAL"), "0.12")
         self.assertEqual(units["diskguard"]["env"]["FLEET_ORPHAN_CPU_PCT"], "0", "orphans would run twice")
-        e = fns.account_entry(units["dispatch"], "alice", (501, 20, "/Users/alice"), "/opt/homebrew")
-        self.assertEqual(e["script"], "/Users/alice/.claude/fleet/bin/fleet-dispatch.sh")
+        e = fns.account_entry(units["base-sync"], "alice", (501, 20, "/Users/alice"), "/opt/homebrew")
+        self.assertEqual(e["script"], "/Users/alice/.claude/fleet/bin/fleet-base-sync.sh")
         self.assertTrue(e["env"]["PATH"].startswith("/Users/alice/.local/bin:/opt/homebrew/bin"))
         self.assertEqual(e["env"]["FLEET_CONF_DIR"], "/Users/alice/.config/claude-fleet")
         self.assertEqual(e["cmd"][4], "/dev/null")
-        self.assertEqual(e["cmd"][5], "/Users/alice/.claude/fleet/logs/dispatch.launchd.log")
+        self.assertEqual(e["cmd"][5], "/Users/alice/.claude/fleet/logs/base-sync.launchd.log")
         self.assertNotIn("__HOME__", json.dumps(e))
 
     def test_runs_as_account_and_isolated(self):
@@ -1252,6 +1255,33 @@ class H_Accounts(Sandbox):
         pid2 = until(10, lambda: (self.child("node-agent").get("pid") or pid) != pid and self.child("node-agent")["pid"])
         self.assertTrue(pid2, "logins/ changed and the node agent kept its old tenants")
         self.assertTrue(until(3, lambda: not fns.pid_alive(pid)), "the old node agent is still running")
+
+    def test_node_agent_adopted_still_reloads_on_a_new_login(self):
+        # #3136: the supervisor restarted (an update) and adopted the live node
+        # agent; a live adopted child skipped the reload check, so the login
+        # opened that same second never got its node — until the agent exited.
+        lg = os.path.join(self.d, "db", "logins")
+        os.makedirs(lg)
+        with open(os.path.join(lg, "verky.env"), "w") as f:
+            f.write("CCQUOTA_TOKEN=x\n")
+        # a plain argv: adopt matches the live process's command line to the one recorded
+        self.table(children=[{"name": "node-agent", "cmd": ["/bin/sleep", "300"],
+                              "requires": [os.path.join(lg, "*.env")], "reload": os.path.join(lg, "*.env")}])
+        p = self.start()
+        pid = until(10, lambda: self.child("node-agent").get("pid"))
+        self.assertTrue(pid)
+        p.kill()
+        p.wait()
+        self.assertTrue(fns.pid_alive(pid), "the node agent died with the supervisor")
+        self.start()
+        self.assertTrue(until(10, lambda: (self.state().get("supervisor") or {}).get("starts") == 2))
+        time.sleep(0.5)
+        self.assertEqual(self.child("node-agent")["pid"], pid, "the live node agent was not adopted")
+        with open(os.path.join(lg, "drill.env"), "w") as f:
+            f.write("CCQUOTA_TOKEN=y\n")
+        pid2 = until(10, lambda: (self.child("node-agent").get("pid") or pid) != pid and self.child("node-agent")["pid"])
+        self.assertTrue(pid2, "an adopted node agent kept its old tenants after a new login")
+        self.assertTrue(until(3, lambda: not fns.pid_alive(pid)), "the adopted node agent is still running")
 
     def test_node_agent_reload_waits_for_an_account_op(self):
         # #2918: opening a login writes its logins/<login>.env half way through

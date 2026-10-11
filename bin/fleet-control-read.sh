@@ -468,7 +468,8 @@ case "$mode" in
     ;;
   config)
     fleet_load_conf "$sess"
-    printf '%s\0' "${FLEET_MAX_SESSIONS:-0}" "${FLEET_AUTOFILL:-0}" "${FLEET_AUTOFILL_MAX_PER_TICK:-1}"
+    # one value per fleet_hub_common.CONFIG_KEYS, in its order (autofill's two left, #3120)
+    printf '%s\0' "${FLEET_MAX_SESSIONS:-0}"
     ;;
   start)
     fleet_load_conf "$sess"

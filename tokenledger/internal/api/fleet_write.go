@@ -93,16 +93,15 @@ var FleetScopes = []string{"fleet:read", "worker:start", "worker:message", "work
 // DefaultPersonScopes is what a person signed in with GitHub may do on
 // their OWN logins when the hub sets nothing (CCQUOTA_FLEET_PERSON_SCOPES):
 // run their workers and read/comment on GitHub. config:write is the
-// operator's — a fleet's caps and autofill are not a colleague's to move.
+// operator's — a fleet's caps are not a colleague's to move.
 var DefaultPersonScopes = []string{"fleet:read", "worker:start", "worker:message", "worker:stop",
 	"worker:resume", "worker:answer", "worker:reap", "gh:read", "gh:comment", "service:control"}
 
 // fleetConfigKeys is the remotely writable configuration, as fleet-control.py
-// allows it: key → inclusive integer range.
+// allows it: key → inclusive integer range. FLEET_AUTOFILL and
+// FLEET_AUTOFILL_MAX_PER_TICK left with the autofill dispatcher (claude-fleet#3120).
 var fleetConfigKeys = map[string][2]int{
-	"FLEET_MAX_SESSIONS":          {0, 256},
-	"FLEET_AUTOFILL":              {0, 1},
-	"FLEET_AUTOFILL_MAX_PER_TICK": {1, 16},
+	"FLEET_MAX_SESSIONS": {0, 256},
 }
 
 // fleetWriteTools are the journalled tools; fleetGHReads the synchronous

@@ -4,17 +4,15 @@
 # is put one way since issue #1937 — repos/<slug>.conf, the seed too:
 #   1. `fleet-up o/a` WITHOUT --seed: the fleet conf holds the header and no repo;
 #      o/a is repos/o-a.conf (identity only) and first in repos/.order; no seed.
-#   2. `fleet-up o/a --seed` puts FLEET_SEED=1 + FLEET_AUTOFILL=0 +
-#      FLEET_ISSUE_BRIDGE=0 in o/a's OVERLAY, none in the fleet conf; a re-run is
+#   2. `fleet-up o/a --seed` puts FLEET_SEED=1 + FLEET_ISSUE_BRIDGE=0 in o/a's
+#      OVERLAY (no FLEET_AUTOFILL: retired, #3120), none in the fleet conf; a re-run is
 #      idempotent (no duplicate keys), and with --no-attach (issue #1165) never
 #      tries to attach.
-#   3. one dispatch tick on the seed fleet is a no-op — even with FLEET_AUTOFILL=1
-#      flipped on afterwards (the seed check wins); the same overlay minus
-#      FLEET_SEED goes on past the gate (control).
+#   3. (retired with the autofill dispatcher, issue #3120)
 #   4. one issue-bridge tick on the seed fleet is a no-op — even with
 #      FLEET_ISSUE_BRIDGE=1; the same overlay minus FLEET_SEED is queued (control).
 #   5. repo-scoped: a repo ADDED to the seed fleet is not the seed
-#      (fleet_repo_is_seed), and its overlay's FLEET_AUTOFILL=1 passes the seed check.
+#      (fleet_repo_is_seed).
 #   6. `--seed` for a repo the fleet would add beside another is refused, nothing written.
 #   7. fleet-settings.sh merge leaves FLEET_SEED in the seed's overlay, so it can
 #      never become a login-wide setting.
@@ -124,29 +122,16 @@ out=$(up o/a "$WORK/src/a" --seed); eq "2 rc" "$?" 0
 [ -n "${FLEET_SELFTEST_SHOW:-}" ] && printf '$ fleet-up o/a --seed\n%s\n' "$out"
 has "2 says so" "$out" "o/a is this fleet's seed repo"
 eq "2 seed" "$(val "$(OV a)" FLEET_SEED)" 1
-eq "2 autofill" "$(val "$(OV a)" FLEET_AUTOFILL)" 0
+eq "2 no autofill key (#3120)" "$(grep -c '^FLEET_AUTOFILL=' "$(OV a)")" 0
 eq "2 bridge" "$(val "$(OV a)" FLEET_ISSUE_BRIDGE)" 0
 eq "2 none of them in the fleet conf" "$(grep -cE '^FLEET_(SEED|AUTOFILL|ISSUE_BRIDGE)=' "$C")" 0
 lib 'fleet_repo_is_seed fleet o/a' || fail "2: o/a is not read as the seed"
 out=$(up o/a "$WORK/src/a" --seed --no-attach); eq "2 re-run rc" "$?" 0
 has "2 --no-attach stops short (#1165)" "$out" "not attaching (--no-attach)"
 hasnt "2 --no-attach never tries" "$out" "attach:  tmux"
-eq "2 no dup keys" "$(grep -cE '^FLEET_(SEED|AUTOFILL|ISSUE_BRIDGE)=' "$(OV a)")" 3
+eq "2 no dup keys" "$(grep -cE '^FLEET_(SEED|AUTOFILL|ISSUE_BRIDGE)=' "$(OV a)")" 2
 [ -e "$C.tmp.$$" ] && fail "2: temp file left behind"
-leg "2 --seed writes SEED=1 AUTOFILL=0 ISSUE_BRIDGE=0 into the seed's overlay"
-
-# ---- 3. one dispatch tick: a no-op, even with autofill flipped on ----
-lib "fleet_conf_set '$(OV a)' FLEET_AUTOFILL 1"
-out=$(bash "$SB/fleet-dispatch.sh" --dry-run fleet 2>&1)
-[ -n "${FLEET_SELFTEST_SHOW:-}" ] && printf '$ fleet-dispatch --dry-run fleet (seed)\n%s\n' "$out"
-has "3 seed skip" "$out" "seed repo (FLEET_SEED=1) — never autofills, skip"
-hasnt "3 no spawn" "$out" "would spawn"
-cp "$(OV a)" "$WORK/seedconf"; grep -v '^FLEET_SEED=' "$WORK/seedconf" > "$(OV a)"
-out=$(bash "$SB/fleet-dispatch.sh" --dry-run fleet 2>&1)
-hasnt "3 control passes the seed check" "$out" "seed repo"
-hasnt "3 control passes the autofill gate" "$out" "autofill off"
-cp "$WORK/seedconf" "$(OV a)"
-leg "3 dispatch tick on the seed repo is a no-op"
+leg "2 --seed writes SEED=1 ISSUE_BRIDGE=0 into the seed's overlay"
 
 # ---- 4. one issue-bridge tick: a no-op, even with the bridge flipped on ----
 lib "fleet_conf_set '$(OV a)' FLEET_ISSUE_BRIDGE 1"
@@ -165,12 +150,6 @@ has "5 added" "$out" "added o/b to fleet 'fleet'"
 lib 'fleet_repo_is_seed fleet o/b' && fail "5: the added o/b inherited FLEET_SEED"
 lib 'fleet_repo_is_seed fleet o/a' || fail "5: o/a lost its seed mark once o/b was added"
 eq "5 order" "$(lib 'fleet_repos fleet' | tr '\n' ' ')" "o/a o/b "
-lib "fleet_conf_set \"\$(fleet_repo_conf_file fleet o/b)\" FLEET_AUTOFILL 1"
-out=$(bash "$SB/fleet-dispatch.sh" --dry-run fleet 2>&1)
-[ -n "${FLEET_SELFTEST_SHOW:-}" ] && printf '$ fleet-dispatch --dry-run fleet (o/a seed + o/b)\n%s\n' "$out"
-has "5 seed skipped" "$out" "fleet: o/a: seed repo (FLEET_SEED=1)"
-hasnt "5 o/b not seed" "$out" "fleet: o/b: seed repo"
-hasnt "5 o/b armed" "$out" "fleet: o/b: autofill off"
 leg "5 FLEET_SEED is the seed's alone"
 
 # ---- 6. --seed for a repo the fleet would add beside another: refused ----
@@ -224,8 +203,6 @@ eq "9 fleet_repos" "$(lib 'fleet_repos fleet')" o/b
 eq "9 FLEET_REPO now resolves to o/b" "$(lib 'fleet_load_conf fleet; printf %s "$FLEET_REPO"')" o/b
 lib 'fleet_repo_is_seed fleet o/b' && fail "9: o/b became the seed"
 tmux -L fleet list-windows -t fleet -F '#{window_name}' | grep -qx guide || fail "9: the guide window was killed"
-out=$(bash "$SB/fleet-dispatch.sh" --dry-run fleet 2>&1)
-hasnt "9 dispatch sees no seed" "$out" "seed repo"
 out=$(sh "$SB/fleet-doctor.sh" 2>&1)
 hasnt "9 doctor prints no seed line" "$out" "起步仓库"
 out=$(bash "$SB/fleet-onboard.sh" brief --session fleet --no-gh 2>&1)
@@ -283,4 +260,4 @@ down
 leg "11 a fleet with no repo comes up, and takes one later the same way"
 
 [ "$FAILS" = 0 ] || { printf 'selftest FAIL: %d assertion(s)\n' "$FAILS" >&2; exit 1; }
-printf 'selftest PASS: the seed repo only looks — no autofill, no bridge, repo-scoped (issue #1167) — and goes like any repo (issues #1172, #1937)\n'
+printf 'selftest PASS: the seed repo only looks — no bridge, repo-scoped (issue #1167) — and goes like any repo (issues #1172, #1937)\n'
