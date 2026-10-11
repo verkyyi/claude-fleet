@@ -54,6 +54,16 @@ type PeerCertResponse struct {
 	Target      string    `json:"target"` // the roster's hostname
 	ValidBefore time.Time `json:"valid_before"`
 	TTLSec      int       `json:"ttl_sec"`
+
+	// Alias and HostKeys are the target's (claude-fleet#3050): its sshd host
+	// keys as FleetMachine.HostKeys lists them, and the short name they are
+	// filed under (fleet-<alias>). fleet-peer-cert.sh writes them into
+	// peer/known_hosts and points ssh at them (HostKeyAlias, UserKnownHostsFile),
+	// so the source machine checks the target against the hub's word — a node's
+	// own known_hosts never heard of the other machine, and BatchMode refuses
+	// an unknown host. No keys listed ⇒ both omitted, ssh checks as before.
+	Alias    string   `json:"alias,omitempty"`
+	HostKeys []string `json:"host_keys,omitempty"`
 }
 
 // errPeer carries an HTTP status with the refusal.
@@ -228,10 +238,28 @@ func (s *Server) issuePeerCert(ep *store.Endpoint, target, purpose string, key s
 	}
 	log.Printf("fleet: issued peer certificate %s %s, key %s, until %s",
 		serial, iss.KeyID, iss.KeyFingerprint, iss.ValidBefore.UTC().Format(time.RFC3339))
-	return &PeerCertResponse{
+	resp := &PeerCertResponse{
 		Certificate: iss.Line + "\n", Serial: serial, KeyID: iss.KeyID, Login: hit.OSUser,
 		Target: tHost, ValidBefore: iss.ValidBefore, TTLSec: int(iss.ValidBefore.Sub(now).Seconds()),
-	}, nil
+	}
+	resp.Alias, resp.HostKeys = s.peerHostKeys(tHost)
+	return resp, nil
+}
+
+// peerHostKeys is the target's host keys as the machine list carries them
+// (claude-fleet#2983) and the alias they go under; ("", nil) when none.
+func (s *Server) peerHostKeys(host string) (string, []string) {
+	for _, m := range s.fleetMachines() {
+		if !strings.EqualFold(m.Hostname, host) || len(m.HostKeys) == 0 {
+			continue
+		}
+		alias := m.alias()
+		if !sshToken(alias) {
+			alias = firstLabel(host)
+		}
+		return alias, m.HostKeys
+	}
+	return "", nil
 }
 
 // handleFleetPeerCerts lists the issuances — the operator's audit view.

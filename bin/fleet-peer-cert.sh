@@ -21,7 +21,19 @@
 #
 # stdout on success (exit 0): the ssh options, ONE PER LINE, for the caller to
 # read into an array (bash 3.2: `while IFS= read -r o; do a+=("$o"); done`):
-#   -i  <key>  -o  CertificateFile=<cert>  -o  IdentitiesOnly=yes  -l  <login>
+#   -i  <key>  -o  CertificateFile=<cert>  -o  IdentitiesOnly=yes
+#   [-o  HostKeyAlias=fleet-<alias>  -o  UserKnownHostsFile=<peer/known_hosts>]
+#   -l  <login>
+#
+# The host key (issue #3050): this login's own ~/.ssh/known_hosts never heard of
+# the other machine, and a caller's BatchMode ssh turns «unknown host» into
+# «Host key verification failed». The hub's answer carries the target's sshd
+# host keys (FleetMachine.HostKeys, #2983) and its alias; they are written into
+# $FLEET_CONF_DIR/peer/known_hosts under fleet-<alias> (that machine's lines
+# replaced, the others kept — as fleet-connect.py write_known_hosts does) and
+# the two options point ssh at them and only them: the hub's word, no TOFU, no
+# accept-new, and a key the hub does not list is refused. A hub that lists no
+# keys for the target adds neither option — ssh checks as it always did.
 #
 # Exit status (issue #683's convention):
 #   0   certificate issued — options on stdout
@@ -105,15 +117,29 @@ CERT="$DIR/$MACHINE.$PURPOSE-cert.pub"
 # login's peer key, $MACHINE, $PURPOSE — reused until FLEET_PEER_CERT_MARGIN (30)
 # seconds before it expires, so a reconnect loop or a move's several ssh steps
 # ask the hub once per five minutes, not once per connection. <cert>.meta holds
-# `<valid-before epoch> <login> <key's public half, as one word>`: a regenerated
-# key, a cert written by an older script (no .meta) or one past the margin is a
-# miss, asked afresh.
+# `<valid-before epoch> <login> <key's public half, as one word> <host alias|->`:
+# a regenerated key, a cert written by an older script (no .meta, or no 4th
+# field — it predates the host keys, #3050), one whose host alias has no line
+# left in peer/known_hosts, or one past the margin is a miss, asked afresh.
+KH="$DIR/known_hosts"
+# emit <login> <alias|-> — the options, one per line
+emit() {
+  printf '%s\n' -i "$KEY" -o "CertificateFile=$CERT" -o IdentitiesOnly=yes
+  if [ "$2" != - ]; then
+    case "$KH" in
+      *[[:space:]]*) printf '%s\n' -o "HostKeyAlias=fleet-$2" -o "UserKnownHostsFile=\"$KH\"" ;;
+      *) printf '%s\n' -o "HostKeyAlias=fleet-$2" -o "UserKnownHostsFile=$KH" ;;
+    esac
+  fi
+  printf '%s\n' -l "$1"
+}
 keypub=$(awk '{ print $2; exit }' "$KEY.pub" 2>/dev/null)
-if [ -s "$CERT" ] && [ -n "$keypub" ] && read -r m_until m_login m_key 2>/dev/null < "$CERT.meta"; then
+if [ -s "$CERT" ] && [ -n "$keypub" ] && read -r m_until m_login m_key m_alias 2>/dev/null < "$CERT.meta"; then
   case "$m_until" in ''|*[!0-9]*) m_until=0 ;; esac
-  if [ "$m_key" = "$keypub" ] && [ -n "$m_login" ] \
+  if [ "$m_key" = "$keypub" ] && [ -n "$m_login" ] && [ -n "$m_alias" ] \
+     && { [ "$m_alias" = - ] || awk -v a="fleet-$m_alias" '$1 == a { f = 1 } END { exit !f }' "$KH" 2>/dev/null; } \
      && [ "$(date +%s)" -lt $(( m_until - ${FLEET_PEER_CERT_MARGIN:-30} )) ]; then
-    printf '%s\n' -i "$KEY" -o "CertificateFile=$CERT" -o IdentitiesOnly=yes -l "$m_login"
+    emit "$m_login" "$m_alias"
     exit 0
   fi
 fi
@@ -141,7 +167,7 @@ try: print(json.load(sys.stdin).get("error",""))
 except Exception: print("")' 2>/dev/null | head -c 300)" ;;
 esac
 
-login=$(printf '%s' "$json" | FLEET_ISO_BIN="$BIN" python3 -c '
+got=$(printf '%s' "$json" | FLEET_ISO_BIN="$BIN" python3 -c '
 import json, os, re, sys, time
 d = json.load(sys.stdin)
 cert, login = d.get("certificate", ""), d.get("login", "")
@@ -152,6 +178,30 @@ with open(tmp, "w") as f:
     f.write(cert)
 os.chmod(tmp, 0o600)
 os.rename(tmp, sys.argv[1])
+# the host keys of the target (issue #3050) into peer/known_hosts under
+# fleet-<alias>: every key held to "<type> <base64>" (it goes into a file ssh
+# trusts), the old lines of this alias replaced, those of other machines kept
+key_re = re.compile(r"^(ssh-ed25519|ecdsa-sha2-nistp(256|384|521)|ssh-rsa) [A-Za-z0-9+/]+={0,3}$")
+alias = d.get("alias") or ""
+keys = d.get("host_keys") if isinstance(d.get("host_keys"), list) else []
+keys = [" ".join(k.split()[:2]) for k in keys if isinstance(k, str) and len(k.split()) >= 2 and not set(k) & set("\r\n\0")]
+keys = [k for k in keys if key_re.match(k)]
+if not re.match(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,200}$", alias):
+    keys = []
+if keys:
+    kh, name = sys.argv[4], "fleet-" + alias
+    try:
+        with open(kh) as f:
+            keep = [l for l in f.read().splitlines() if l.strip() and l.split()[0] != name]
+    except OSError:
+        keep = []
+    tmp = kh + ".tmp.%d" % os.getpid()
+    with open(tmp, "w") as f:
+        f.write("\n".join(keep + ["%s %s" % (name, k) for k in keys]) + "\n")
+    os.chmod(tmp, 0o644)
+    os.rename(tmp, kh)
+else:
+    alias = "-"
 # when it stops working: valid_before, else now + ttl_sec, else now + what was asked
 until = 0
 try:
@@ -170,14 +220,14 @@ if until <= 0:
 meta = sys.argv[1] + ".meta"
 if until > 0 and sys.argv[2]:
     with open(meta + ".tmp", "w") as f:
-        f.write("%d %s %s\n" % (until, login, sys.argv[2]))
+        f.write("%d %s %s %s\n" % (until, login, sys.argv[2], alias))
     os.rename(meta + ".tmp", meta)
 else:
     try:
         os.unlink(meta)
     except OSError:
         pass
-print(login)
-' "$CERT" "$keypub" "${FLEET_PEER_CERT_SECS:-300}") || die 1 "the hub's answer carries no certificate"
+print(login, alias)
+' "$CERT" "$keypub" "${FLEET_PEER_CERT_SECS:-300}" "$KH") || die 1 "the hub's answer carries no certificate"
 
-printf '%s\n' -i "$KEY" -o "CertificateFile=$CERT" -o IdentitiesOnly=yes -l "$login"
+emit "${got% *}" "${got##* }"

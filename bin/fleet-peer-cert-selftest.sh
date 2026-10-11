@@ -42,6 +42,13 @@
 #                   hub's valid_before is honoured; inside the margin, a
 #                   regenerated peer key, or no .meta (an older script's cert)
 #                   asks afresh; a refusal is not cached
+#   K. host keys    (issue #3050) the hub's host_keys + alias for the target go
+#                   into peer/known_hosts under fleet-<alias> (bad lines dropped,
+#                   that alias's old lines replaced, other machines' kept) and the
+#                   options gain HostKeyAlias=fleet-<alias> + UserKnownHostsFile=
+#                   that file, before -l; the cache keeps them; an older .meta
+#                   (no alias field) or an alias whose lines are gone is a miss;
+#                   no keys / a bad alias → no such option, as before
 #   I. lint         every ssh fleet-move.sh / fleet-node-upgrade.sh /
 #                   fleet-remote-view.sh opens to another machine carries the
 #                   peer options; fleet-doctor.sh reads fleet-peer-trust.sh
@@ -308,6 +315,45 @@ rm -f "$FLEET_CONF_DIR/peer/m4.view-cert.pub.meta"
 rm -f "$STUB_COUNT"; export FAKE_CODE=403 FAKE_BODY='{"error":"no"}'
 "$SUT" m9 view >/dev/null 2>&1; "$SUT" m9 view >/dev/null 2>&1
 [ "$(cnt)" = 2 ] || fail "J: a refusal was cached (count $(cnt))"
+unset STUB_COUNT; reset
+ok
+
+# K. host keys (issue #3050)
+cnt() { [ -f "$STUB_COUNT" ] && wc -l < "$STUB_COUNT" | tr -d ' ' || echo 0; }
+export STUB_COUNT="$WORK/count"; rm -f "$STUB_COUNT" "$FLEET_CONF_DIR"/peer/*.meta
+KH="$FLEET_CONF_DIR/peer/known_hosts"
+HK1='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOne'; HK2='ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTY='
+printf 'fleet-m9 ssh-ed25519 AAAAkeep\nfleet-m4 ssh-ed25519 AAAAstale\n' > "$KH"
+export FAKE_BODY='{"certificate":"ssh-ed25519-cert-v01@openssh.com AAAAfake\n","login":"verk","target":"mini2","ttl_sec":300,"alias":"m4","host_keys":["'"$HK1"' root@m4","garbage","'"$HK2"'","ssh-ed25519 AAAA\nfleet-m9 ssh-ed25519 AAAAevil"]}'
+out=$("$SUT" m4 view 2>"$WORK/err") || fail "K: exit $?: $(cat "$WORK/err")"
+cert="$FLEET_CONF_DIR/peer/m4.view-cert.pub"
+want=$(printf '%s\n' -i "$HOME/.ssh/fleet-peer" -o "CertificateFile=$cert" -o IdentitiesOnly=yes \
+  -o HostKeyAlias=fleet-m4 -o "UserKnownHostsFile=$KH" -l verk)
+[ "$out" = "$want" ] || fail "K: options:
+$out
+want:
+$want"
+want=$(printf 'fleet-m9 ssh-ed25519 AAAAkeep\nfleet-m4 %s\nfleet-m4 %s' "$HK1" "$HK2")
+[ "$(cat "$KH")" = "$want" ] || fail "K: known_hosts:
+$(cat "$KH")
+want:
+$want"
+# the cache keeps the options, without asking
+[ "$("$SUT" m4 view 2>/dev/null)" = "$out" ] && [ "$(cnt)" = 1 ] || fail "K: the cached certificate lost its host-key options (asked $(cnt))"
+# m4's lines gone (the file cleaned by hand) → asked afresh
+sed -i.bak '/^fleet-m4 /d' "$KH"; rm -f "$KH.bak"
+"$SUT" m4 view >/dev/null 2>&1; [ "$(cnt)" = 2 ] || fail "K: a cache whose host keys are gone was reused"
+grep -q "^fleet-m4 $HK1\$" "$KH" || fail "K: the re-ask did not write m4's key back"
+# an older script's .meta (three fields, before #3050) → asked afresh
+read -r a b c _ < "$cert.meta"; printf '%s %s %s\n' "$a" "$b" "$c" > "$cert.meta"
+"$SUT" m4 view >/dev/null 2>&1; [ "$(cnt)" = 3 ] || fail "K: a .meta with no host alias was reused"
+# no keys / a bad alias → no host-key option; the cache remembers «none» (-)
+rm -f "$FLEET_CONF_DIR"/peer/*.meta
+export FAKE_BODY='{"certificate":"ssh-ed25519-cert-v01@openssh.com AAAAfake\n","login":"verk","target":"mini2","ttl_sec":300,"alias":"../m4","host_keys":["'"$HK1"'"]}'
+out=$("$SUT" m4 view 2>/dev/null) || fail "K: bad alias: exit $?"
+case "$out" in *HostKey*|*KnownHosts*) fail "K: a bad alias put host-key options on: $out" ;; esac
+grep -q '^fleet-\.\./' "$KH" && fail "K: a bad alias reached known_hosts"
+[ "$("$SUT" m4 view 2>/dev/null)" = "$out" ] && [ "$(cnt)" = 4 ] || fail "K: a «no keys» certificate was not cached (asked $(cnt))"
 unset STUB_COUNT; reset
 ok
 
