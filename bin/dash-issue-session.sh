@@ -46,14 +46,14 @@ set -uo pipefail
 # GATE (cap / dedup / claim) still runs + refuses in the foreground; only its slow
 # tail is backgrounded. Opt-in, interactive-only (a headless TARGET_SESS caller
 # that needs the window id back stays synchronous).
-num=""; TARGET_SESS=""; WIN_TITLE=""; ORIGIN=""; AGENT=""; REPO_ARG=""; NODE_ARG=""; ORIGIN_WID=""; ACCOUNT_ARG=""; REAP=""; RESUME_SID=""; SEED_FILE=""; FORCE_FLAG=0; ASYNC_FLAG=0; PRINT_FLAG=0; _pos=0; _want=""
+num=""; TARGET_SESS=""; WIN_TITLE=""; ORIGIN=""; AGENT=""; REPO_ARG=""; NODE_ARG=""; ORIGIN_WID=""; ACCOUNT_ARG=""; REAP=""; AS_ARG=""; RESUME_SID=""; SEED_FILE=""; FORCE_FLAG=0; ASYNC_FLAG=0; PRINT_FLAG=0; _pos=0; _want=""
 for _a in "$@"; do
   # A value-taking flag (--title <t>) consumes the NEXT arg: _want carries that
   # expectation across one loop turn so the value isn't mistaken for a positional.
   if [ -n "$_want" ]; then
     case "$_want" in title) WIN_TITLE="$_a" ;; origin) ORIGIN="$_a" ;; agent) AGENT="$_a" ;; repo) REPO_ARG="$_a" ;;
       node) NODE_ARG="$_a" ;; origin-wid) ORIGIN_WID="$_a" ;; account) ACCOUNT_ARG="$_a" ;; reap) REAP="$_a" ;;
-      resume) RESUME_SID="$_a" ;; seed-file) SEED_FILE="$_a" ;; esac
+      resume) RESUME_SID="$_a" ;; seed-file) SEED_FILE="$_a" ;; as) AS_ARG="$_a" ;; esac
     _want=""; continue
   fi
   # A FUSED "--flag value" (issue #1543) is --flag=value: zsh — Claude's Bash tool —
@@ -61,7 +61,7 @@ for _a in "$@"; do
   # us ONE arg, which fell to the unknown-flag branch and let the hub place a pinned
   # spawn on another machine.
   case "$_a" in
-    '--title '*|'--origin '*|'--agent '*|'--repo '*|'--node '*|'--origin-wid '*|'--account '*|'--reap '*|'--resume '*|'--seed-file '*)
+    '--title '*|'--origin '*|'--agent '*|'--repo '*|'--node '*|'--origin-wid '*|'--account '*|'--reap '*|'--resume '*|'--seed-file '*|'--as '*)
       _v=${_a#* }; _v=${_v#"${_v%%[! ]*}"}; _a="${_a%% *}=$_v" ;;
   esac
   case "$_a" in
@@ -113,6 +113,15 @@ for _a in "$@"; do
     # the historic rule (PR merged + the fleet's grace). Stamped as @reap_policy.
     --reap) _want=reap ;;
     --reap=*) REAP="${_a#--reap=}" ;;
+    # --as <name> (issue #3122, EPIC #3111 C11): the standard agent file this
+    # session starts as — `claude --agent <name>`, found the way Claude Code finds
+    # it (the repo's .claude/agents > ~/.claude/agents > a plugin). None = the
+    # shipped `fleet-worker` when it is there, else a plain session given the
+    # ticket. Named but not found ⇒ refused, naming where it looked. Its `fleet:`
+    # key fills --reap / --repo / --agent when the spawn names none. Opens on THIS
+    # machine (the file is here): no hub placement.
+    --as) _want=as ;;
+    --as=*) AS_ARG="${_a#--as=}" ;;
     # --resume <sid> + --seed-file <f> (issue #2671, EPIC #2668 C3): a PARKED
     # session coming back (bin/fleet_park.py's wake). The window opens on the same
     # conversation (`--resume <sid>`, Claude only, and only while its transcript is
@@ -135,6 +144,11 @@ done
 num="${num//[^0-9]/}"; [ -z "$num" ] && exit 0
 RESUME_SID=$(printf '%s' "$RESUME_SID" | LC_ALL=C tr -cd '0-9a-f-')
 [ -n "$RESUME_SID" ] && [ -z "$NODE_ARG" ] && NODE_ARG=local   # its worktree + transcript are here
+case "$AS_ARG" in
+  '') ;;
+  *[!A-Za-z0-9_.:-]*|[!A-Za-z0-9]*) printf 'dash-issue-session: not an agent name: %s\n' "$AS_ARG" >&2; exit 1 ;;
+  *) [ -z "$NODE_ARG" ] && NODE_ARG=local ;;   # the agent file is on this machine
+esac
 case "$AGENT" in
   ''|claude|codex) : ;;
   *) printf 'dash-issue-session: unknown --agent %s (claude|codex) — using the fleet default\n' "$AGENT" >&2
@@ -223,6 +237,11 @@ refuse() {  # <reason> — stderr line + sticky red toast; the CALLER exits with
 # nothing about the issue being spawned (so the rule is asked with no pane). ONE
 # rule, however many repos the fleet hosts (issue #1943): --repo, which must be
 # hosted; else the fleet's only repo; several ⇒ refuse, the caller asks.
+# A named agent file's `fleet: repo` is the repo when the spawn names none (#3122).
+if [ -n "$AS_ARG" ] && [ -z "$REPO_ARG" ]; then
+  REPO_ARG=$(python3 "$BIN/fleet-agent-def.py" launch "$AS_ARG" --dir "${FLEET_MAIN:-$PWD}" 2>/dev/null \
+    | awk -F'\t' '$1 == "repo" { print $2; exit }')
+fi
 _rc=0; _r=$(unset TMUX_PANE; fleet_target_repo "$SESS" "$REPO_ARG") || _rc=$?
 case "$_rc" in
   0) REPO_ARG=$_r
@@ -241,6 +260,31 @@ case "$_rc" in
      REPO_ARG='' ;;
 esac
 unset _r _rc
+
+# The agent file it starts as (issue #3122): named ⇒ it must be there; none ⇒ the
+# shipped fleet-worker when it is (deleted = a plain session). Looked for from the
+# repo's checkout — where the worktree's .claude/agents comes from. Its `fleet:`
+# key fills what the spawn left open.
+AS_KV=''
+if [ -n "$AS_ARG" ]; then
+  if [ -n "$NODE_ARG" ] && ! fleet_node_is_self "$NODE_ARG"; then
+    refuse "#$num: --as $AS_ARG opens on this machine (the agent file is here), not on $NODE_ARG"; exit "$RC_INFRA"
+  fi
+  AS_KV=$(python3 "$BIN/fleet-agent-def.py" launch "$AS_ARG" --dir "${FLEET_MAIN:-$PWD}" 2>&1) \
+    || { refuse "#$num: ${AS_KV##*fleet-agent-def: }"; exit "$RC_INFRA"; }
+elif AS_KV=$(python3 "$BIN/fleet-agent-def.py" launch fleet-worker --dir "${FLEET_MAIN:-$PWD}" 2>/dev/null); then
+  AS_ARG=fleet-worker
+else
+  AS_KV=''
+fi
+as_kv() { printf '%s\n' "$AS_KV" | awk -F'\t' -v k="$1" '$1 == k { print substr($0, length(k) + 2); exit }'; }
+if [ -n "$AS_KV" ]; then
+  if [ -z "$REAP" ] && [ -n "$(as_kv reap)" ]; then
+    REAP=$(python3 "$BIN/fleet_reap_policy.py" norm "$(as_kv reap)") \
+      || { refuse "#$num: $(as_kv file): fleet.reap is not a reap policy"; exit "$RC_INFRA"; }
+  fi
+  [ -z "$AGENT" ] && case "$(as_kv agent)" in claude|codex) AGENT=$(as_kv agent) ;; esac
+fi
 
 slug="issue-$num"
 
@@ -754,7 +798,7 @@ if [ "$ASYNC_FLAG" = 1 ] && [ "$TAIL_ONLY" != 1 ] && [ -z "$TARGET_SESS" ]; then
   # this redirect drops, and the tail has no caller left to read it — the
   # interactive --async path is toast-only by construction).
   _bg="$_bg FLEET_SPAWN_WNAME=$(shq "$wname")"
-  _bg="$_bg exec $(shq "$SELF") $(shq "$num") --title $(shq "$title") --origin $(shq "$ORIGIN")${AGENT:+ --agent $AGENT}${REPO_ARG:+ --repo $(shq "$REPO_ARG")}${ORIGIN_WID:+ --origin-wid $(shq "$ORIGIN_WID")}${ACCOUNT_ARG:+ --account $ACCOUNT_ARG}${REAP:+ --reap $REAP} >/dev/null 2>&1"
+  _bg="$_bg exec $(shq "$SELF") $(shq "$num") --title $(shq "$title") --origin $(shq "$ORIGIN")${AGENT:+ --agent $AGENT}${REPO_ARG:+ --repo $(shq "$REPO_ARG")}${ORIGIN_WID:+ --origin-wid $(shq "$ORIGIN_WID")}${ACCOUNT_ARG:+ --account $ACCOUNT_ARG}${REAP:+ --reap $REAP}${AS_ARG:+ --as $AS_ARG} >/dev/null 2>&1"
   TM run-shell -b "$_bg" 2>/dev/null \
     || { refuse "spawn failed for #$num: dispatch"; exit "$RC_INFRA"; }
   exit 0
@@ -871,7 +915,7 @@ stamp=''; [ -n "$REPO" ] && stamp=$(fleet_win_stamp_cmd @repo "$REPO" @worktree 
 # default changed later does not move a running session.
 [ -n "$ACCOUNT" ] && stamp="$stamp$(fleet_win_stamp_cmd @account_class "$ACCOUNT")"
 pend=''; [ -n "$FILL_MARK" ] && pend="FLEET_WT_PENDING=$(shq "$FILL_MARK") "
-win=$(TM new-window ${detach[@]+"${detach[@]}"} -P -F '#{window_id}' -t "$SESS:" -n "$wname" -c "$wt" "$stamp$pend'$BIN/fleet-session-wrap.sh'${AGENT:+ --agent $AGENT} --role worker$RESUME_ARG \"\$(cat '$tf')\"; exec \$SHELL") \
+win=$(TM new-window ${detach[@]+"${detach[@]}"} -P -F '#{window_id}' -t "$SESS:" -n "$wname" -c "$wt" "$stamp$pend'$BIN/fleet-session-wrap.sh'${AGENT:+ --agent $AGENT}${AS_ARG:+ --as $AS_ARG}$RESUME_ARG \"\$(cat '$tf')\"; exec \$SHELL") \
   || { [ -n "$FILL_PID" ] && { wait "$FILL_PID" 2>/dev/null; rm -f "$FILL_MARK"; }
        _why=''; _down=$(fleet_server_down "$SESS") && _why=" — $_down"  # issue #2477
        fleet_socket_wedged "$SOCK" && _why=" — this fleet's tmux server is gone: its socket $(fleet_socket_path "$SOCK") is held by a dying server that drops every client (tmux says \"server exited unexpectedly\"); fleet-up.sh clears it and brings the fleet back"  # issue #1729
@@ -907,6 +951,14 @@ _sw+=(\; set-window-option -t "$win" @worktree "$wt")
 # - @cc_agent: the agent asked for (issue #2403), before the node's start reads the
 #   window back to check it — the launcher's own stamp comes later, from the pane
 [ -n "$AGENT" ] && _sw+=(\; set-window-option -t "$win" @cc_agent "$AGENT")
+# - @agent_def / @agent_spawn (issue #3122): the agent file it starts as and whether
+#   that file grants `spawn` (fleet_spawn_refused reads it) — before the agent
+#   starts; fleet-claude.sh stamps the same off the file it launched
+if [ -n "$AS_KV" ]; then
+  _sw+=(\; set-window-option -t "$win" @agent_def "$AS_ARG")
+  _sw+=(\; set-window-option -t "$win" @agent_def_sha "$(as_kv sha)")
+  _sw+=(\; set-window-option -t "$win" @agent_spawn "$(as_kv spawn)")
+fi
 # Last, and -o: an identity something minted first is kept (-o refuses to
 # overwrite; a refusal stops only the rest of the list, which is nothing).
 [ -n "$_fid" ] && _sw+=(\; set-window-option -o -t "$win" @fleet_id "$_fid")

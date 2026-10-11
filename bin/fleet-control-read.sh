@@ -586,7 +586,7 @@ case "$mode" in
           fi
         fi
       fi
-      exec bash "$BIN/dash-raw-session.sh" "$sess" --origin hub --print --agent "$agent" ${srepo:+--repo "$srepo"} ${nrarg:+"$nrarg"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} ${sname:+--name "$sname"} ${9:+--reap "$9"} $tiarg ${dbgarg:+--role debugger --desk} ${seedf:+"--prompt-file=$seedf"}
+      exec bash "$BIN/dash-raw-session.sh" "$sess" --origin hub --print --agent "$agent" ${srepo:+--repo "$srepo"} ${nrarg:+"$nrarg"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} ${sname:+--name "$sname"} ${9:+--reap "$9"} $tiarg ${dbgarg:+--as fleet-debugger --desk} ${seedf:+"--prompt-file=$seedf"}
     fi
     num="${3:-}"
     if [ "$num" = new ]; then

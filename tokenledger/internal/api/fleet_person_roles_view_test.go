@@ -5,9 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -60,87 +58,6 @@ var personRolesEdit = map[string]any{"bundle": map[string]any{
 		map[string]any{"n": 101, "role": "steward", "cond": "问的是金额", "action": "必须问你（never:money）", "tier": "ask", "keywords": []string{"报价", "金额"}},
 	},
 }}
-
-// The completion criterion: the page's merged view of a layer is what
-// `fleet role show <role> --json` and `fleet role rules --json` print on a
-// machine holding that layer and no local one.
-func TestPersonRolesViewMatchesCommand(t *testing.T) {
-	h := newFleetHarness(t)
-	enablePeople(t, h, pAlice)
-	h.srv.Store.AdoptPrincipal(pAlice, "alice", "Alice", time.Now())
-	h.srv.roleTreeFn = repoRoleTree(t)
-
-	code, out, raw := rolesCall(t, h, http.MethodGet, asSession(pAlice))
-	if code != 200 || out.Version != 0 || out.Stable == "" || len(out.Roles) != 4 || len(out.Rules.Rows) < 10 {
-		t.Fatalf("an empty layer: HTTP %d %s", code, raw)
-	}
-	if w := out.Roles["worker"]; w.Changed != 0 || w.Layer != nil || w.Base == nil {
-		t.Fatalf("worker with no layer: %+v", w)
-	}
-	if c, _, raw, _ := personCall(t, h, http.MethodPut, asSession(pAlice), personRolesEdit, ""); c != 200 {
-		t.Fatalf("PUT: HTTP %d %s", c, raw)
-	}
-	code, out, raw = rolesCall(t, h, http.MethodGet, asSession(pAlice))
-	if code != 200 || out.Version != 1 {
-		t.Fatalf("after PUT: HTTP %d %s", code, raw)
-	}
-	st := out.Roles["steward"]
-	if m, _ := st.Fields.Get("model"); m != "sonnet" || st.Changed != 1 {
-		t.Fatalf("steward: %s", raw)
-	}
-	w := out.Roles["worker"]
-	if !strings.Contains(strings.Join(w.Locked, " "), "permissionMode") {
-		t.Fatalf("worker's lock: %s", raw)
-	}
-	if w.Changed != 4 || !strings.Contains(w.Body, "## （你加的）") {
-		t.Fatalf("worker: %s", raw)
-	}
-	if r := out.Rules.Rows[0]; r.N != 1 || r.Tier != "ask" || r.Source != "你的 v1" {
-		t.Fatalf("rule 1: %+v", r)
-	}
-
-	py, err := exec.LookPath("python3")
-	if err != nil {
-		t.Skip("no python3")
-	}
-	_, stored, _, _ := personCall(t, h, http.MethodGet, asSession(pAlice), nil, "")
-	conf := t.TempDir()
-	cache, _ := json.Marshal(map[string]any{"version": stored.Version, "bundle": stored.Bundle})
-	if err := os.WriteFile(filepath.Join(conf, "person-bundle.json"), cache, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	bin := filepath.Join("..", "..", "..", "bin", "fleet-role.py")
-	runPy := func(args ...string) any {
-		cmd := exec.Command(py, append([]string{bin}, args...)...)
-		cmd.Env = append(os.Environ(), "FLEET_CONF_DIR="+conf, "FLEET_ROLE_STALE=999999999")
-		b, err := cmd.Output()
-		if err != nil {
-			t.Fatalf("fleet-role.py %v: %v", args, err)
-		}
-		d, err := rolemerge.Decode(b)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return d
-	}
-	for _, role := range rolemerge.Roles {
-		d := runPy("show", role, "--json").(*rolemerge.OMap)
-		pr := out.Roles[role]
-		for k, got := range map[string]any{"front": pr.Fields, "body": pr.Body, "sources": pr.Sources, "locked": pr.Locked} {
-			want, _ := d.Get(k)
-			if g, w := canonOf(t, got), rolemerge.Canonical(want); g != w {
-				t.Errorf("%s %s:\n page    %s\n command %s", role, k, g, w)
-			}
-		}
-	}
-	d := runPy("rules", "--json").(*rolemerge.OMap)
-	for k, got := range map[string]any{"version": out.Rules.Version, "rows": out.Rules.Rows} {
-		want, _ := d.Get(k)
-		if g, w := canonOf(t, got), rolemerge.Canonical(want); g != w {
-			t.Errorf("rules %s:\n page    %s\n command %s", k, g, w)
-		}
-	}
-}
 
 func canonOf(t *testing.T, v any) string {
 	b, err := json.Marshal(v)

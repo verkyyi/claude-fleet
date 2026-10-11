@@ -1071,6 +1071,21 @@ if [ -d "$ROOT/conf/agent-defaults" ] && [ -f "$ROOT/bin/fleet-agent-defaults.py
 else
   say 'agents: skip — no conf/agent-defaults in this version'
 fi
+# The agent files the core ships (issue #3122, EPIC #3111 C11): fleet-worker — the
+# issue-bound session a spawn starts as by default — and, until their own plugin
+# carries them, epic-driver and fleet-debugger, into ~/.claude/agents. Written
+# once, kept up while still the fleet's bytes, never touched once the person edits
+# (their override) or deletes one (a spawn is then a plain session).
+if [ -d "$ROOT/conf/agent-defaults/claude/agents" ] && [ -f "$ROOT/bin/fleet-agent-def.py" ]; then
+  if out=$(CLAUDE_CONFIG_DIR="$CDIR" python3 "$ROOT/bin/fleet-agent-def.py" ship ${DRYFLAG:+--check} 2>&1); then
+    w=$(printf '%s\n' "$out" | grep -E '^(wrote|would write)' | awk '{print $NF}' | paste -sd' ' -)
+    k=$(printf '%s\n' "$out" | grep -E '^(theirs|deleted)' | awk '{print $2}' | paste -sd' ' -)
+    if [ -n "$w" ]; then say "agent files: $([ "$DRY" = 1 ] && echo 'would write' || echo 'wrote') $w${k:+ · kept as theirs: $k}"
+    else say "agent files: ok${k:+ — kept as theirs: $k}"; fi
+  else
+    fail agentfiles "fleet-agent-def.py ship: $(printf '%s\n' "$out" | tail -1)"
+  fi
+fi
 
 # --- team (issue #1726, EPIC #1718 C8) ----------------------------------------------
 # The hub's team layer over what the agents pass just filled — fleet default <

@@ -83,8 +83,8 @@ esac
 # The launch POLICY a resume / new session keeps: its Codex home and the whole
 # group a role's definition rendered (issue #2782, `fleet-role.py render`): model,
 # effort, an appended system prompt — the orchestrator's role (issue #2582) —,
-# tools, permission mode, and a worker's `--role` (fleet-claude.sh renders it
-# again). The agent is the one that just ran, @cc_agent. The rest — a seed
+# tools, permission mode, and the agent file a session started as (`--as`, issue
+# #3122 — fleet-claude.sh finds it again; `--role` is its old spelling). The agent is the one that just ran, @cc_agent. The rest — a seed
 # prompt, a --resume + nudge, a --session-id — belonged to the first launch only.
 policy=(); want=''
 for a in "$@"; do
@@ -97,8 +97,8 @@ for a in "$@"; do
     want=''; continue
   fi
   case "$a" in
-    --agent|--codex-home|--model|-m|--effort|-c|--append-system-prompt-file|--permission-mode|--role) want=$a ;;
-    --model=*|--effort=*|--append-system-prompt-file=*|--permission-mode=*|--tools=*|--disallowedTools=*|--role=*) policy+=("$a") ;;
+    --agent|--codex-home|--model|-m|--effort|-c|--append-system-prompt-file|--permission-mode|--as|--role) want=$a ;;
+    --model=*|--effort=*|--append-system-prompt-file=*|--permission-mode=*|--tools=*|--disallowedTools=*|--as=*|--role=*) policy+=("$a") ;;
   esac
 done
 

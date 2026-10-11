@@ -346,8 +346,8 @@ run_check() {
   elif [ "$off" = 1 ] && [ -f "$ROOT/bin/fleet-debug" ]; then chk GAP C3 "GET /debug answers $c — remote debugging off (see C2)"
   else chk FAIL C3 "GET /debug answers $c — no stand-alone fleet-debug (#2892)"; fi
   # C4: the page and its debugger — the role ships with the node
-  if [ -f "$ROOT/agents/debugger.md" ]; then chk PASS C4 'agents/debugger.md (the debugger role)'
-  else chk FAIL C4 "no agents/debugger.md in $ROOT (#2893)"; fi
+  if [ -f "$ROOT/conf/agent-defaults/claude/agents/fleet-debugger.md" ]; then chk PASS C4 'fleet-debugger.md (the debugger agent file, #3122)'
+  else chk FAIL C4 "no conf/agent-defaults/claude/agents/fleet-debugger.md in $ROOT (#2893)"; fi
   # a hub without the route answers its generic 「viewer token」 401; C4's says how to get a ticket
   c=$(hub_code "$tmp/status" -H 'Authorization: FleetDebug drill-check' "$HUB/v1/fleet/debug/drillchk")
   case "$c" in

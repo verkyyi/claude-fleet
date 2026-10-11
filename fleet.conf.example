@@ -290,10 +290,8 @@ FLEET_CTX_WINDOW=200000
 # The prefix+c config modal edits this as an fzf picker of the CLI's latest-of-tier
 # aliases — opus, sonnet, haiku, fable, opusplan, default — plus a custom claude-*
 # entry, so you choose instead of type.
-# ⚠ Read for ONE more version (issue #2788): a worker's / batch driver's model is
-# its role's (agents/worker.md, your layer: `fleet role set worker model <m>`);
-# `fleet-conf.sh migrate` moves this line there and comments it out. A repo conf's
-# FLEET_MODEL (per-repo) stays.
+# A worker's default model is its agent file's (`model:` in ~/.claude/agents/
+# fleet-worker.md — edit your copy, issue #3122); this line still wins over it.
 # @label=Worker model @group=spawn @tier=common @scope=fleet @edit=enum
 #FLEET_MODEL="opus"
 

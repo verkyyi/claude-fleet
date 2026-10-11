@@ -13,7 +13,7 @@
 |---|---|---|---|---|---|
 | 1 | orchestrator | 一个仓库里的一处改动，已经清楚 | 建单并 spawn：一单一 worker 一 PR，正文写清怎么算做完 | auto | |
 | 2 | orchestrator | 几处独立改动，或跨仓库 | 跑 /fleet-epic-plan 出设计页，托管给人看，等确认 | auto | |
-| 3 | orchestrator | 已确认的 EPIC | 开驱动会话跑 /fleet-epic-run（--role epic-driver，--repo 是 EPIC 的仓库） | auto | |
+| 3 | orchestrator | 已确认的 EPIC | 开驱动会话跑 /fleet-epic-run（--as epic-driver，--repo 是 EPIC 的仓库） | auto | |
 | 4 | orchestrator | 值得做但不是现在 | 只建单不 spawn，带 priority；等别的单加 blocked | auto | |
 | 5 | orchestrator | 只是个问题，不是活 | 直接回答，不建单 | auto | |
 | 6 | orchestrator | 以 Go/TS 为主且有明确测试，或机械性改动（批量改名、补测试、修 lint） | 派给 Codex：加标签 agent:codex | auto | agent:codex |

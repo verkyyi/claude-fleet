@@ -741,7 +741,8 @@ def tool_spawn(args):
     spawn_gate()
     repo = check_repo(args)
     reap = ["--reap", args["reap"]] if args.get("reap") else []   # issue #1902
-    return script([str(BIN / "dash-issue-session.sh"), str(args["issue"])] + repo + reap, SPAWN_TIMEOUT_S,
+    as_ = ["--as", args["agent"]] if args.get("agent") else []    # issue #3122
+    return script([str(BIN / "dash-issue-session.sh"), str(args["issue"])] + repo + reap + as_, SPAWN_TIMEOUT_S,
                   env=hub_env(ASSERT_TTL_S))
 
 
@@ -1167,7 +1168,12 @@ TOOLS = {
         "inputSchema": {"type": "object", "properties": {
             "issue": ISSUE, "repo": REPO,
             "reap": dict(REAP_POLICY, description="When the fleet may close it on its own (default merged: "
-                                                  "after its PR merged) — see set_reap.")},
+                                                  "after its PR merged) — see set_reap."),
+            "agent": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$",
+                      "description": "The agent file it starts as (issue #3122): a standard Claude Code agent "
+                                     "— the repo's .claude/agents > ~/.claude/agents > a plugin; its model, "
+                                     "tools and body. Default: fleet-worker when it is there. Not found = "
+                                     "refused, naming where it looked."}},
             "required": ["issue"], "additionalProperties": False}}),
     "set_reap": (tool_set_reap, {
         "description": "When the fleet may close THIS session on its own (bin/fleet-reap-policy.sh set; issue "

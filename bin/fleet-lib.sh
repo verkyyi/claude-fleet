@@ -582,27 +582,62 @@ fleet_pane_fmt() {
 fleet_pane_lost() { [ -n "${TMUX:-}" ] && [ -z "${TMUX_PANE:-}" ]; }
 
 # fleet_spawn_refused — rc 0 when the CALLER is a worker pane, which may file an
-# issue but never spawn a session (issue #2960): one level of delegation. Only the
-# orchestrator, the steward and an EPIC driver (@fleet_role_def epic-driver) spawn;
-# so does anything outside a fleet pane (a daemon, the operator's own shell, an
-# unstamped window) and the onboarding guide (the pinned `guide` scratch,
-# fleet_guide_respawn's identity). Ten workers once spawned their own: the driver
-# could not count the grandchildren and their reports went to parked parents.
+# issue but never spawn a session (issue #2960): one level of delegation. A worker
+# window spawns only when the agent file it started as grants the `spawn` tool
+# (@agent_spawn 1, stamped by fleet-claude.sh off bin/fleet-agent-def.py — EPIC
+# #3111 共同约定 5, issue #3122: the shipped epic-driver does, fleet-worker does
+# not) or it took over orchestrating / stewarding (@fleet_role_def orchestrator |
+# steward, C3's take_role). An old window's @fleet_role_def epic-driver still
+# passes for one version (# compat-1v: 下一批删). Anything outside a fleet pane
+# spawns too (a daemon, the operator's own shell, an unstamped window), and so
+# does the onboarding guide (the pinned `guide` scratch, fleet_guide_respawn's
+# identity). Ten workers once spawned their own: the driver could not count the
+# grandchildren and their reports went to parked parents.
 # FLEET_ALLOW_WORKER_SPAWN=1 is the operator's hatch. The filer, the `spawn` tool
 # and fleet-await.sh's spawn ask here; FLEET_SPAWN_REFUSAL is what they say.
 # shellcheck disable=SC2034  # read by the filer, fleet-await.sh and fleet-mcp.py
 FLEET_SPAWN_REFUSAL='a worker does not spawn sessions (issue #2960) — fix it in place when it blocks your own done condition and is small, local and yours; else file it without spawning: with --parent <your issue> and report blocked to your parent when it blocks you, bare when it does not; a red base branch: file it --breakage and the steward spawns its fixer'
 fleet_spawn_refused() {
   [ "${FLEET_ALLOW_WORKER_SPAWN:-0}" = 1 ] && return 1
-  local r role def wname pin
-  r=$(fleet_pane_fmt '#{@fleet_role}|#{@fleet_role_def}|#{@pin}|#{window_name}') || return 1
-  IFS='|' read -r role def pin wname <<EOF
+  local r role def wname pin grant
+  r=$(fleet_pane_fmt '#{@fleet_role}|#{@fleet_role_def}|#{@pin}|#{window_name}|#{@agent_spawn}') || return 1
+  IFS='|' read -r role def pin wname grant <<EOF
 $r
 EOF
   [ "$role" = worker ] || return 1
-  [ "$def" = epic-driver ] && return 1
+  [ "$grant" = 1 ] && return 1
+  case "$def" in orchestrator|steward|epic-driver) return 1 ;; esac
   [ "$wname" = guide ] && [ "$pin" = 1 ] && return 1
   return 0
+}
+
+# fleet_claude_has_agent_flag <claude binary> — rc 0 when that Claude Code knows
+# `--agent` (issue #3122): asked once per binary (path + mtime), the answer kept
+# under $FLEET_CONF_DIR/agents/. A binary that cannot be asked counts as knowing
+# it (the launch is then exactly what the agent file says).
+fleet_claude_has_agent_flag() {
+  local bin="${1:-claude}" pth mt key dir
+  pth=$(command -v "$bin" 2>/dev/null) || return 0
+  mt=$(stat -c %Y "$pth" 2>/dev/null || stat -f %m "$pth" 2>/dev/null) || mt=0
+  key=$(printf '%s %s' "$pth" "$mt" | cksum | awk '{print $1}')
+  dir="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/agents"
+  [ -f "$dir/agent-flag.$key.yes" ] && return 0
+  [ -f "$dir/agent-flag.$key.no" ] && return 1
+  # at most ~5 s: a binary that hangs on --help must not hang the launch with it
+  local help hf hp i=0
+  mkdir -p "$dir" 2>/dev/null || return 0
+  hf="$dir/agent-flag.$key.$$"
+  "$pth" --help > "$hf" 2>/dev/null &
+  hp=$!
+  while kill -0 "$hp" 2>/dev/null; do
+    [ "$i" -ge 10 ] && { kill "$hp" 2>/dev/null; rm -f "$hf"; return 0; }
+    sleep 0.5; i=$((i + 1))
+  done
+  help=$(cat "$hf" 2>/dev/null); rm -f "$hf"
+  case "$help" in
+    *"--agent <"*) : > "$dir/agent-flag.$key.yes" 2>/dev/null; return 0 ;;
+    *) : > "$dir/agent-flag.$key.no" 2>/dev/null; return 1 ;;
+  esac
 }
 
 # The tmux session the caller is running in (pane-targeted, client fallback).
@@ -9974,7 +10009,7 @@ FLEET_PLUGIN_NAME="${FLEET_PLUGIN_NAME:-fleet}"
 fleet_plugin_installed() {
   local want="${1:-}" cdir base d
   cdir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
-  base="$cdir/plugins/cache"
+  base="$cdir/plugins/cache"   # release-tree-ok: the login's Claude Code plugin cache, not the repo's plugins/
   [ -d "$base" ] || return 1
   # cache/<marketplace>/<plugin>/<version>/ — the version dir moves on every
   # update, so glob it rather than remembering one.

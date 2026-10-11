@@ -712,26 +712,6 @@ EOF
   return 0
 }
 
-# ---- the role knobs move into the person's layer (issue #2788) -------------------
-# FLEET_ORCH_MODEL / _EFFORT, FLEET_STEWARD_MODEL / _EFFORT and FLEET_MODEL were
-# each a launcher's own knob; a role's definition (agents/<role>.md) and the
-# person's layer over it now say the same, and while fleet.conf still sets one it
-# wins over both (compat-1v). fleet-role.py migrate-conf moves every value that
-# differs from the built-in into the person's layer (one PUT, note 「从 <机器> 的
-# fleet.conf 迁入」) and comments the lines out (fleet.conf.bak-<time> kept);
-# the switches (FLEET_ORCHESTRATOR / FLEET_STEWARD), beats, caps and park
-# thresholds are this machine's and stay. Idempotent: no active line, nothing
-# done. The hub away leaves the lines that need it — they still win, as before.
-migrate_roles() {
-  local DRY="$1" dr='' out
-  [ -f "$MC" ] || return 0
-  [ "$DRY" = 1 ] && dr=--dry-run
-  grep -Eq '^[[:space:]]*(export[[:space:]]+)?(FLEET_ORCH_MODEL|FLEET_ORCH_EFFORT|FLEET_STEWARD_MODEL|FLEET_STEWARD_EFFORT|FLEET_MODEL)=' "$MC" || return 0
-  out=$(python3 "$BIN/fleet-role.py" migrate-conf "$MC" $dr)
-  [ -n "$out" ] && printf '%s\n' "$out"
-  return 0
-}
-
 # ---- retired keys are commented out (issue #3120) --------------------------------
 # The autofill dispatcher is gone (EPIC #3111 C9), and with it FLEET_AUTOFILL,
 # FLEET_AUTOFILL_MAX_PER_TICK and FLEET_AUTOFILL_NODE. A line still setting one — in
@@ -786,7 +766,6 @@ case "$cmd" in
     rescue_stranded "$DRY" "$QUIET"
     hub_fill "$DRY" "$QUIET"
     migrate_repos "$DRY" "$QUIET"
-    migrate_roles "$DRY" "$QUIET"
     migrate_retired "$DRY" "$QUIET" ;;
   add-role)
     case "${1:-}" in client|node) add_role "$1" ;; *) usage ;; esac ;;

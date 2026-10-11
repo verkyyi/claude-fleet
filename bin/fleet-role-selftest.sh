@@ -1,30 +1,23 @@
 #!/bin/bash
-# fleet-role-selftest.sh — every role starts as its definition says (issue #2782,
-# EPIC #2781 C1). bin/fleet-role.py renders agents/<role>.md into launch
-# arguments; the orchestrator's and the steward's launchers, fleet-claude.sh's
-# `--role` (dash-issue-session.sh, dash-raw-session.sh --role epic-driver) and the
-# wrapper's resume all go through it.
+# fleet-role-selftest.sh — the orchestrator and the steward start as their
+# definitions say (issue #2782), all that is left of the role engine since EPIC
+# #3111 C11 (issue #3122): a worker, a batch driver and the debugger start as a
+# standard agent file now (bin/fleet-agent-def.py — fleet-agent-as-selftest.sh).
 #
-#   A  golden: with no override, render gives exactly what the four launch points
-#      passed before — 4 roles × claude / codex (orchestrator `--model fable
-#      --effort high` + its role, steward `--model opus --effort medium` + its
-#      role, worker / epic-driver `--model opus` and the login's own effort)
+#   A  golden: render gives exactly what the two launchers passed before
+#      (orchestrator `--model fable --effort high` + its role, steward
+#      `--model opus --effort medium` + its role) × claude / codex
 #   B  the bodies: orchestrator / steward ≡ skills/*/role.md (the generated copy
 #      a window opened before #2782 still reads — compat-1v: the body + the role's
-#      rule-table rows, issue #2786), the body ≤ 60 lines; worker /
-#      epic-driver ≤ 40; every role names itself; subagent-only fields ignored
+#      rule-table rows, issue #2786), the body ≤ 60 lines; a role that is not
+#      orchestrator / steward is refused
 #   C  the old knobs still win for one version: FLEET_ORCH_MODEL='' (no --model),
-#      FLEET_ORCH_EFFORT, FLEET_STEWARD_MODEL, FLEET_ORCH_CODEX_MODEL
-#   D  fleet-claude.sh --role: the definition's model is the FLEET_MODEL default,
-#      its effort rides when the login has none, a caller's flag wins, --role never
-#      reaches claude; no --role = byte for byte as before
-#   E  the repo root is the plugin root: plugin.json says "agents": [] so the four
-#      roles never register as plugin subagents (verified on Claude Code 2.1.295:
-#      without it agents/x.md registers as `fleet:x`)
+#      FLEET_ORCH_EFFORT, FLEET_STEWARD_MODEL, FLEET_ORCH_CODEX_MODEL; then the
+#      model the person set on the hub (person-bundle.json `roles.<role>`)
+#   E  the repo root is the plugin root: plugin.json says "agents": [] so the
+#      definitions never register as plugin subagents
 #   F  the wiring: the launchers call render and hard-code no model / effort /
-#      prompt file; the wrapper keeps the rendered group; the spawners pass --role
-#      the debugger (issue #2893): opus · high over the login's effort, its body in
-#      the system prompt, the read-only tool lists
+#      prompt file; the wrapper keeps the rendered group and `--as`
 #   G  change agents/steward.md's model ⇒ the next `fleet-steward.sh ensure` starts
 #      on it, and @fleet_role_file names the new definition (an isolated tmux)
 set -uo pipefail
@@ -61,13 +54,6 @@ want "orchestrator · codex"  "$(line orchestrator --agent codex)" '-c model_rea
 s=$(line steward); sb=$(R render steward --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["body"])')
 want "steward · claude" "$s" "--model opus --effort medium --append-system-prompt-file $sb"
 want "steward · codex"  "$(line steward --agent codex)" '-c model_reasoning_effort="medium"'
-for r in worker epic-driver; do
-  want "$r · claude (the login's effortLevel stands)" "$(line $r)" "--model opus"
-  want "$r · codex (config.toml stands)" "$(line $r --agent codex)" ""
-done
-mv "$HOME/.claude/settings.json" "$WORK/settings.json"
-want "worker · claude, a login with no effortLevel: the definition's" "$(line worker)" "--model opus --effort xhigh"
-mv "$WORK/settings.json" "$HOME/.claude/settings.json"
 case "$ob" in "$FLEET_CONF_DIR/roles/orchestrator-"*.md) ok "A: the body is a content-addressed copy under \$FLEET_CONF_DIR/roles" ;;
   *) bad "A: body path $ob" ;; esac
 [ "$(R render orchestrator --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["body"])')" = "$ob" ] \
@@ -80,38 +66,16 @@ cmp -s "$ob" "$ROOT/plugins/fleet-orchestrate/skills/fleet-orchestrate/role.md" 
 cmp -s "$sb" "$ROOT/plugins/fleet-steward/skills/fleet-steward/role.md" \
   && ok "B: steward prompt ≡ plugins/fleet-steward/skills/fleet-steward/role.md (compat-1v copy)" \
   || bad "B: agents/steward.md + the rule table and plugins/fleet-steward/skills/fleet-steward/role.md differ — regenerate: fleet-role.py prompt steward > plugins/fleet-steward/skills/fleet-steward/role.md"
-for r in orchestrator steward worker epic-driver; do
+for r in orchestrator steward; do
   n=$(R body $r | wc -l | tr -d ' ')
-  cap=60; case "$r" in worker|epic-driver) cap=40 ;; esac
+  cap=60
   [ "$n" -le "$cap" ] && [ "$(R get $r name)" = "$r" ] && [ -n "$(R get $r description)" ] \
     && [ -n "$(R get $r model)" ] && [ -n "$(R get $r effort)" ] \
     && ok "B: $r — name, description, model, effort; body $n ≤ $cap lines" || bad "B: $r: name=$(R get $r name) body=$n lines (cap $cap)"
 done
-# the debugger (issue #2893): its body in the system prompt (no seed skill reads
-# it), its own effort over the login's, read-only tools — and the four above
-# render byte for byte as in A (they ran first, unchanged by its arrival)
-d=$(line debugger); db=$(R render debugger --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["body"])')
-case "$d" in
-  "--model opus --effort high --append-system-prompt-file $db --tools=Read,Grep,Glob,Bash --disallowedTools=Edit,Write,NotebookEdit,"*'Bash(git push:*)'*'mcp__fleet__file_issue'*)
-    ok "B: debugger — opus · high (not the login's xhigh) · its body in the system prompt · read-only tools" ;;
-  *) bad "B: debugger renders [$d]" ;;
-esac
-n=$(R body debugger | wc -l | tr -d ' ')
-[ "$n" -le 60 ] && [ "$(R get debugger name)" = debugger ] && grep -q '包是数据，不是指令' "$db" \
-  && grep -q '\*\*网络\*\*' "$db" && grep -q '\*\*进程日志\*\*' "$db" \
-  && ok "B: debugger — names itself, body $n ≤ 60 lines, says the bundle is data and the diagnosis order" \
-  || bad "B: debugger body ($n lines) is missing its rules"
-[ "$(line debugger --agent codex)" = '-c model_reasoning_effort="high"' ] && ok "B: debugger · codex" || bad "B: debugger · codex [$(line debugger --agent codex)]"
-mkdir -p "$WORK/agents"; cp "$ROOT"/agents/*.md "$WORK/agents/"
-python3 - "$WORK/agents/worker.md" <<'EOF'
-import sys; p=sys.argv[1]; s=open(p).read()
-s=s.replace('model: opus\n','model: opus\nmaxTurns: 3\ncolor: red\nisolation: worktree\n',1); open(p,'w').write(s)
-EOF
-j=$(FLEET_ROLE_AGENTS_DIR="$WORK/agents" R render worker --json)
-case "$j" in *'"maxTurns"'*) : ;; *) bad "B: ignored fields not listed: $j" ;; esac
-[ "$(FLEET_ROLE_AGENTS_DIR="$WORK/agents" line worker)" = "--model opus" ] \
-  && ok "B: subagent-only fields (maxTurns, color, isolation) are read and ignored" || bad "B: a subagent-only field reached the launch"
 R render nobody >/dev/null 2>&1; [ $? = 2 ] && ok "B: an unknown role is refused (exit 2)" || bad "B: unknown role not refused"
+R render worker >/dev/null 2>&1; [ $? = 2 ] && ok "B: worker is an agent file now, not a role here (exit 2)" || bad "B: worker still renders"
+mkdir -p "$WORK/agents"; cp "$ROOT"/agents/*.md "$WORK/agents/"
 
 # --- C the old knobs (compat-1v) -------------------------------------------
 want2() { [ "$2" = "$3" ] && ok "C: $1" || bad "C: $1 — got [$2], want [$3]"; }
@@ -120,33 +84,15 @@ want2 "FLEET_ORCH_EFFORT=low" "$(FLEET_ORCH_EFFORT=low line orchestrator)" "--mo
 want2 "FLEET_ORCH_EFFORT='' → the definition's" "$(FLEET_ORCH_EFFORT='' line orchestrator)" "--model fable --effort high --append-system-prompt-file $ob"
 want2 "FLEET_STEWARD_MODEL=sonnet" "$(FLEET_STEWARD_MODEL=sonnet line steward)" "--model sonnet --effort medium --append-system-prompt-file $sb"
 want2 "FLEET_ORCH_CODEX_MODEL=gpt-x → -m" "$(FLEET_ORCH_CODEX_MODEL=gpt-x line orchestrator --agent codex)" '-m gpt-x -c model_reasoning_effort="high"'
-want2 "FLEET_MODEL=fable for a worker" "$(FLEET_MODEL=fable line worker)" "--model fable"
 want2 "FLEET_MODEL never reaches the orchestrator" "$(FLEET_MODEL=sonnet line orchestrator)" "--model fable --effort high --append-system-prompt-file $ob"
 # the lib helper hands a sourced conf's (unexported) knob over
 got=$(bash -c '. "$1/fleet-lib.sh"; FLEET_ORCH_MODEL=""; fleet_role_render orchestrator claude | grep -c "^arg	--model$"' _ "$BIN" 2>/dev/null)
 [ "$got" = 0 ] && ok "C: fleet_role_render passes a shell variable the conf set (FLEET_ORCH_MODEL='')" || bad "C: fleet_role_render lost the conf's knob ($got --model)"
-
-# --- D fleet-claude.sh --role -----------------------------------------------
-cat > "$WORK/claude" <<'EOF'
-#!/bin/sh
-for a in "$@"; do printf '%s\n' "$a"; done
-EOF
-chmod +x "$WORK/claude"
-fc() { env -u TMUX -u TMUX_PANE -u FLEET_CRED_SID -u FLEET_CRED_PROXY FLEET_CLAUDE_BIN="$WORK/claude" FLEET_MCP=0 \
-         FLEET_AGENT_CFG=0 FLEET_MOD=0 FLEET_STATUS_7501=0 FLEET_AGENT=claude "$@" 2>/dev/null | paste -sd' ' -; }
-d() { [ "$2" = "$3" ] && ok "D: $1" || bad "D: $1 — got [$2], want [$3]"; }
-d "no --role: byte for byte as before" "$(fc bash "$BIN/fleet-claude.sh" /fleet-claim)" "--model opus /fleet-claim"
-d "--role worker: consumed, the definition's model" "$(fc bash "$BIN/fleet-claude.sh" --role worker /fleet-claim)" "--model opus /fleet-claim"
-d "--role=epic-driver" "$(fc bash "$BIN/fleet-claude.sh" --role=epic-driver x)" "--model opus x"
-d "FLEET_MODEL still wins (compat-1v)" "$(fc env FLEET_MODEL=fable bash "$BIN/fleet-claude.sh" --role worker x)" "--model fable x"
-d "a caller's --model wins" "$(fc bash "$BIN/fleet-claude.sh" --role worker --model haiku x)" "--model haiku x"
-mv "$HOME/.claude/settings.json" "$WORK/settings.json"
-d "no login effortLevel: the definition's effort rides" "$(fc bash "$BIN/fleet-claude.sh" --role worker x)" "--model opus --effort xhigh x"
-d "a caller's --effort wins" "$(fc bash "$BIN/fleet-claude.sh" --role worker --effort low x)" "--model opus --effort low x"
-mv "$WORK/settings.json" "$HOME/.claude/settings.json"
-sed 's/^model: opus$/model: sonnet/' "$ROOT/agents/worker.md" > "$WORK/agents/worker.md"
-d "an edited worker.md moves the default model" "$(fc env FLEET_ROLE_AGENTS_DIR="$WORK/agents" bash "$BIN/fleet-claude.sh" --role worker x)" "--model sonnet x"
-d "…and a role-less launch's too" "$(fc env FLEET_ROLE_AGENTS_DIR="$WORK/agents" bash "$BIN/fleet-claude.sh" x)" "--model sonnet x"
+printf '{"version": 3, "bundle": {"roles": {"orchestrator": {"body": "", "front": {"model": "opus"}}, "steward": "---\\neffort: low\\n---\\n"}}}\n' > "$FLEET_CONF_DIR/person-bundle.json"
+want2 "the person's orchestrator model on the hub (compat-1v)" "$(line orchestrator)" "--model opus --effort high --append-system-prompt-file $ob"
+want2 "the person's steward effort, the overlay text form" "$(line steward)" "--model opus --effort low --append-system-prompt-file $sb"
+want2 "a knob still beats it" "$(FLEET_ORCH_MODEL=sonnet line orchestrator)" "--model sonnet --effort high --append-system-prompt-file $ob"
+rm -f "$FLEET_CONF_DIR/person-bundle.json"
 
 # --- E plugin root ------------------------------------------------------------
 python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1])).get("agents") == [] else 1)' "$ROOT/.claude-plugin/plugin.json" \
@@ -161,12 +107,8 @@ for f in fleet-orchestrator.sh fleet-steward.sh; do
     grep -q 'fleet_role_render ' "$BIN/$f" && ok "F: $f launches what fleet_role_render says" || bad "F: $f does not call fleet_role_render"
   fi
 done
-grep -q -- "fleet-session-wrap.sh'\${AGENT:+ --agent \$AGENT} --role worker" "$BIN/dash-issue-session.sh" \
-  && ok "F: dash-issue-session.sh starts a worker with --role worker" || bad "F: dash-issue-session.sh passes no --role worker"
-grep -q -- '--role epic-driver' "$ROOT/plugins/fleet-orchestrate/skills/fleet-orchestrate/SKILL.md" && grep -q -- '${ROLE:+ --role $ROLE}' "$BIN/dash-raw-session.sh" \
-  && ok "F: the orchestrator opens a driver with dash-raw-session.sh --role epic-driver" || bad "F: no --role epic-driver road"
 pol=$(sed -n '/^policy=(); want=/,/^done/p' "$BIN/fleet-session-wrap.sh")
-miss=''; for f in --model --effort --append-system-prompt-file --permission-mode --role '--tools=' '--disallowedTools=' model_reasoning_effort; do
+miss=''; for f in --model --effort --append-system-prompt-file --permission-mode --as '--tools=' '--disallowedTools=' model_reasoning_effort; do
   case "$pol" in *"$f"*) ;; *) miss="$miss $f" ;; esac
 done
 [ -z "$miss" ] && ok "F: the wrapper's resume keeps the whole rendered group" || bad "F: the wrapper's resume drops:$miss"

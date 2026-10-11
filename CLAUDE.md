@@ -56,8 +56,8 @@ Do not install from memory: read the doc and work from it.
   (a fork worktree is edit-blocked by the base guard). `FLEET_ALLOW_SUBAGENT=1`
   is the operator's escape hatch.
 - **Only a coordinator spawns; a worker files** (issue #2960) — one level of
-  delegation, like the subagent rule. The orchestrator, the steward and an EPIC
-  driver (`@fleet_role_def epic-driver`, stamped by `dash-raw-session.sh --role`)
+  delegation, like the subagent rule. The orchestrator, the steward and a session
+  whose agent file grants `spawn` (an EPIC driver — `@agent_spawn 1`, issue #3122)
   spawn; a `@fleet_role worker` pane is refused by ONE rule, `fleet_spawn_refused`
   (`bin/fleet-lib.sh`) — the filer's `--spawn` exits 6 with nothing filed, the
   `spawn` tool refuses, `fleet-await.sh` waits but answers NO-WORKER rather than
@@ -367,6 +367,41 @@ Do not install from memory: read the doc and work from it.
   carries it as a `REAP<TAB><fleet_id><TAB><policy>` row, the inventory as
   `reap=`. **No @reap_policy = the kind's old rule, byte for byte** —
   `fleet-cleanup-idle-selftest.py` (`ReapPolicy`, `PolicyGrammar`) pins both.
+- **A custom session is ONE standard agent file** (issue #3122, EPIC #3111 C11).
+  A spawn names it — `--as <name>` on `dash-issue-session.sh` / `dash-raw-session.sh`,
+  the `spawn` tool's `agent` — and `bin/fleet-agent-def.py` (the one reader) finds
+  it the way Claude Code does: the checkout's `.claude/agents` (nearest up to the
+  repo root) > `~/.claude/agents` > an installed plugin's `agents/` (asked of
+  `claude plugin list --json`, cached per change); the frontmatter `name` matches.
+  `fleet-claude.sh` starts `claude --agent <name>` — Claude Code reads the model,
+  tools and body itself (a body REPLACES its system prompt; an empty body keeps
+  it), the file's `model` is the FLEET_MODEL default so the cap still applies — and
+  stamps `@agent_def` · `@agent_def_sha` · `@agent_spawn`. Codex reads the same
+  file: body → `-c model_instructions_file` (a content-addressed copy under
+  `$FLEET_CONF_DIR/agents/`), `fleet.codex_model` → `-m`, no tool list. A Claude
+  Code without `--agent` (`fleet_claude_has_agent_flag`, kept per binary) gets
+  --tools / --disallowedTools / --append-system-prompt-file and the doctor's
+  `agentdef` row. The fleet adds ONE frontmatter key, `fleet:` (reap · repo · agent
+  · codex_model · codex_effort), filling what the spawn left open. Named but not
+  found or unreadable ⇒ the spawn refuses before any window, naming the file
+  (BREAK-IT `agent-file-broken`). No `--as` ⇒ the shipped `fleet-worker` when it
+  is there, else a plain session given the ticket. The core ships
+  `conf/agent-defaults/claude/agents/` (fleet-worker, and until their plugins
+  carry them epic-driver and fleet-debugger) into `~/.claude/agents` through
+  install-apply's `agent files` step (`fleet-agent-def.py ship`): written once,
+  following the release while still the fleet's bytes, never touched once edited
+  (the person's override) or deleted (`agents-shipped.json` remembers). A worker
+  window may spawn ⇔ its file grants `spawn` (no `tools` list, or one naming it,
+  and no `disallowedTools` taking it away — fleet-worker takes it away) or it took
+  a role (`@fleet_role_def orchestrator|steward`); `--role worker|epic-driver|debugger`
+  and an old window's `@fleet_role_def epic-driver` are read for one version
+  (`# compat-1v`). The person's role layer, the merge, the locks and `fleet role
+  set|unset|undo` are gone; `bin/fleet-role.py` keeps only what the orchestrator's
+  and the steward's launchers (C7 deletes them) and the rule table need — their
+  model / effort from `agents/<role>.md`, the old `FLEET_ORCH_*` / `FLEET_STEWARD_*`
+  knobs, then the person's model / effort still in `person-bundle.json`
+  (compat-1v). `fleet-agent-as-selftest.sh`, `spawn-origin-gate-selftest.sh` F,
+  `fleet-role-selftest.sh`.
 - **This repo is a plugin marketplace; orchestration, the steward and EPIC
   batches are its optional plugins** (issue #3112, EPIC #3111 C1).
   `.claude-plugin/marketplace.json` lists the core `fleet` (source `./`) and

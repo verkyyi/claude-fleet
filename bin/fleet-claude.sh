@@ -85,21 +85,27 @@ unset _fc_cls
 # fallback) — a fleet that flipped to codex must still bring its earlier Claude
 # sessions back, and a Claude model alias must never reach `codex -m`.
 #
-# `--role <r>` (issue #2782) is OURS too: the role whose definition,
-# agents/<r>.md, this launch runs (worker | epic-driver — the spawners say it;
-# the orchestrator's and the steward's launchers render theirs). Consumed here,
-# handed on through a failover re-entry, never to Codex (its worker launch
-# renders to nothing: model and effort are the login's own config.toml).
-_fc_agent="${FLEET_AGENT:-}"; _fc_explicit=0; _fc_role=''
+# `--as <name>` (issue #3122, EPIC #3111 C11) is OURS too: the standard agent
+# file this session starts as — `claude --agent <name>` (bin/fleet-agent-def.py
+# finds it the way Claude Code does: project .claude/agents > ~/.claude/agents >
+# a plugin). Consumed here, handed on through a failover re-entry; a Codex launch
+# reads the same file (body → its instructions, `fleet.codex_model` → -m).
+# `--role worker|epic-driver|debugger` is the old spelling, read for one version
+# as --as fleet-worker|epic-driver|fleet-debugger (# compat-1v: 下一批删).
+_fc_role_as() { case "$1" in worker) echo fleet-worker ;; epic-driver) echo epic-driver ;; debugger) echo fleet-debugger ;; esac; }
+_fc_agent="${FLEET_AGENT:-}"; _fc_explicit=0; _fc_as=''
 _fc_args=(); _fc_want=''
 for _fc_a in "$@"; do
   if [ "$_fc_want" = agent ]; then _fc_agent="$_fc_a"; _fc_explicit=1; _fc_want=''; continue; fi
-  if [ "$_fc_want" = role ]; then _fc_role="$_fc_a"; _fc_want=''; continue; fi
+  if [ "$_fc_want" = as ]; then _fc_as="$_fc_a"; _fc_want=''; continue; fi
+  if [ "$_fc_want" = role ]; then _fc_as=$(_fc_role_as "$_fc_a"); _fc_want=''; continue; fi
   case "$_fc_a" in
     --agent)   _fc_want=agent ;;
     --agent=*) _fc_agent="${_fc_a#--agent=}"; _fc_explicit=1 ;;
+    --as)      _fc_want=as ;;
+    --as=*)    _fc_as="${_fc_a#--as=}" ;;
     --role)    _fc_want=role ;;
-    --role=*)  _fc_role="${_fc_a#--role=}" ;;
+    --role=*)  _fc_as=$(_fc_role_as "${_fc_a#--role=}") ;;
     *)         _fc_args+=("$_fc_a") ;;
   esac
 done
@@ -122,57 +128,51 @@ if [ "${FLEET_FAILOVER:-0}" = 1 ] && [ "${FLEET_ACCOUNT_SELECTED:-0}" != 1 ] \
   case " $* " in
     *" --resume "*|*" --continue "*|*" --from-pr "*|*" --fork-session "*|*" resume "*|*" fork "*|*" --codex-home "*|*" --codex-profile "*) : ;;
     *) export FLEET_FAILOVER FLEET_FAILOVER_AGENTS FLEET_MODEL
-       exec bash "$BIN/fleet-account.sh" launch --agent "${_fc_agent:-claude}" -- ${_fc_role:+--role "$_fc_role"} "$@" ;;
+       exec bash "$BIN/fleet-account.sh" launch --agent "${_fc_agent:-claude}" -- ${_fc_as:+--as "$_fc_as"} "$@" ;;
   esac
 fi
+# The agent file's launch (`fleet-agent-def.py launch`, key TAB value): its sha,
+# model and spawn grant, and the argv words it adds. A file gone since the spawn
+# looked opens a plain session and says so — never no session at all.
+_fc_as_sha=''; _fc_as_model=''; _fc_as_spawn=0; as_flag=()
+fleet_as_resolve() {   # <claude|codex> [--no-agent-flag]
+  _fc_as_sha=''; _fc_as_model=''; _fc_as_spawn=0; as_flag=()
+  [ -n "$_fc_as" ] || return 0
+  local k v out
+  out=$(python3 "$BIN/fleet-agent-def.py" launch "$_fc_as" --agent "$@" 2>&1) || {
+    printf 'fleet-claude: %s — starting a plain session\n' "${out##*fleet-agent-def: }" >&2; return 1; }
+  while IFS=$'\t' read -r k v; do
+    case "$k" in
+      sha) _fc_as_sha="$v" ;; model) _fc_as_model="$v" ;; spawn) _fc_as_spawn="$v" ;;
+      arg) as_flag+=("$v") ;;
+    esac
+  done <<EOF
+$out
+EOF
+}
+fleet_as_stamp() {
+  [ -n "$_fc_as_sha" ] && [ -n "${TMUX_PANE:-}" ] || return 0
+  tmux set-option -w -t "$TMUX_PANE" @agent_def "$_fc_as" \; \
+    set-option -w -t "$TMUX_PANE" @agent_def_sha "$_fc_as_sha" \; \
+    set-option -w -t "$TMUX_PANE" @agent_spawn "$_fc_as_spawn" 2>/dev/null || true
+}
 case "$_fc_agent" in
-  codex)     exec "$BIN/fleet-codex.sh" "$@" ;;
+  codex)     fleet_as_resolve codex; fleet_as_stamp
+             exec "$BIN/fleet-codex.sh" ${as_flag[@]+"${as_flag[@]}"} "$@" ;;
   ''|claude) : ;;
   *) printf 'fleet-claude: unknown agent %s (FLEET_AGENT / --agent must be claude|codex) — launching claude\n' "$_fc_agent" >&2 ;;
 esac
 unset _fc_agent _fc_explicit _fc_args _fc_want _fc_a
 
-# The role's definition (issue #2782, `fleet-role.py render <role>`): its model is
-# this launch's FLEET_MODEL default — the per-model cap, the subagent tier and
-# @cc_model below go on as they always did, and a fleet's FLEET_MODEL still wins
-# (compat-1v) — and every other argument it renders (effort, tools, permission
-# mode, …) rides along unless the caller already chose that flag. No --role: the
-# worker definition's model is the default, nothing else (byte for byte as before).
-role_flag=(); _fc_rsha=''
-if [ -n "$_fc_role" ]; then
-  _fc_rmodel=''; _fc_rskip=0
-  while IFS=$'\t' read -r _fc_k _fc_v; do
-    case "$_fc_k" in
-      sha)   _fc_rsha="$_fc_v" ;;
-      model) _fc_rmodel="$_fc_v" ;;
-      arg)
-        if [ "$_fc_rskip" = 1 ]; then _fc_rskip=0; continue; fi
-        case "$_fc_v" in --model) _fc_rskip=1; continue ;; esac
-        role_flag+=("$_fc_v") ;;
-    esac
-  done < <(env -u FLEET_MODEL python3 "$BIN/fleet-role.py" render "$_fc_role" --agent claude --kv 2>/dev/null)
-  [ -n "$_fc_rsha" ] || printf 'fleet-claude: role %s did not render — launching without it\n' "$_fc_role" >&2
-  [ -n "$_fc_rsha" ] && [ -z "${FLEET_MODEL+x}" ] && FLEET_MODEL="$_fc_rmodel"
-  # a flag the caller already passed is the caller's (its value follows it)
-  _fc_rf=(); _fc_rdrop=0
-  for _fc_v in ${role_flag[@]+"${role_flag[@]}"}; do
-    if [ "$_fc_rdrop" = 1 ]; then _fc_rdrop=0; continue; fi
-    case "$_fc_v" in
-      --*=*) case " $* " in *" ${_fc_v%%=*}="*|*" ${_fc_v%%=*} "*) continue ;; esac ;;
-      --*)   case " $* " in *" $_fc_v "*|*" $_fc_v="*) _fc_rdrop=1; continue ;; esac ;;
-    esac
-    _fc_rf+=("$_fc_v")
-  done
-  role_flag=(${_fc_rf[@]+"${_fc_rf[@]}"})
-  unset _fc_rmodel _fc_rskip _fc_rf _fc_rdrop _fc_k _fc_v
-elif [ -z "${FLEET_MODEL+x}" ]; then
-  FLEET_MODEL=$(python3 "$BIN/fleet-role.py" get worker model 2>/dev/null) || FLEET_MODEL=''
-  [ -n "$FLEET_MODEL" ] || FLEET_MODEL="opus"
+# The agent file's model is this launch's FLEET_MODEL default (issue #3122) — the
+# per-model cap, the subagent tier and @cc_model below go on as they always did,
+# and a fleet's FLEET_MODEL still wins; Claude Code reads the rest (tools, body)
+# off the file itself. No --as: opus, byte for byte as before.
+fleet_as_resolve claude
+if [ -z "${FLEET_MODEL+x}" ]; then
+  FLEET_MODEL="${_fc_as_model:-opus}"
 fi
-if [ -n "$_fc_rsha" ] && [ -n "${TMUX_PANE:-}" ]; then
-  tmux set-option -w -t "$TMUX_PANE" @fleet_role_file "$_fc_rsha" \; \
-    set-option -w -t "$TMUX_PANE" @fleet_role_def "$_fc_role" 2>/dev/null || true
-fi
+fleet_as_stamp
 
 # --- project trust: pre-answer "trust this folder?" for THIS fleet's checkout ---
 # (issue #563). Claude Code keys trust on the resolved project root — a linked
@@ -390,7 +390,10 @@ if [ "${FLEET_MCP:-1}" != 0 ] && [ -f "$_fc_mw" ] && [ -f "$BIN/fleet-mcp.py" ];
       # `fleet-mcp.py --bridge-seat`), which keeps spawn / await / children /
       # answer_dialog / send until EPIC #3111 C7 retires those seats.
       # FLEET_MCP_ORCH=1 tells the core server's file_issue the group is here.
-      if [ -f "$BIN/../conf/mcp-orch.json" ] && python3 "$BIN/fleet-mcp.py" --bridge-seat "$_fc_role" 2>/dev/null; then
+      # An agent file that grants `spawn` (issue #3122 — the shipped epic-driver)
+      # is such a seat too: it was started to dispatch.
+      if [ -f "$BIN/../conf/mcp-orch.json" ] && { [ "${_fc_as_spawn:-0}" = 1 ] \
+           || python3 "$BIN/fleet-mcp.py" --bridge-seat "$_fc_as" 2>/dev/null; }; then
         mcp_flag+=("--mcp-config=$BIN/../conf/mcp-orch.json"); export FLEET_MCP_ORCH=1
       fi
       ;;
@@ -553,8 +556,15 @@ _fc_claude=claude
 if command -v fleet_find_tool >/dev/null 2>&1; then
   _fc_claude=$(fleet_find_tool claude) || exit 127
 fi
+# A Claude Code with no `--agent` (EPIC #3111's risk list): the same file rides
+# --model / --tools / --disallowedTools / --append-system-prompt-file instead, and
+# the doctor's `agents` row says to update it.
+if [ ${#as_flag[@]} -gt 0 ] && [ "${as_flag[0]}" = --agent ] \
+   && command -v fleet_claude_has_agent_flag >/dev/null 2>&1 && ! fleet_claude_has_agent_flag "$_fc_claude"; then
+  fleet_as_resolve claude --no-agent-flag
+fi
 if [ -n "${FLEET_LOOP_SPEC:-}" ] && [ "${FLEET_LOOP_AGENT:-}" = claude ]; then
-  exec python3 "$BIN/fleet-loop.py" bridge -- "$_fc_claude" ${model_flag[@]+"${model_flag[@]}"} ${role_flag[@]+"${role_flag[@]}"} ${mcp_flag[@]+"${mcp_flag[@]}"} ${mod_flag[@]+"${mod_flag[@]}"} ${cfg_flag[@]+"${cfg_flag[@]}"} "$@"
+  exec python3 "$BIN/fleet-loop.py" bridge -- "$_fc_claude" ${model_flag[@]+"${model_flag[@]}"} ${as_flag[@]+"${as_flag[@]}"} ${mcp_flag[@]+"${mcp_flag[@]}"} ${mod_flag[@]+"${mod_flag[@]}"} ${cfg_flag[@]+"${cfg_flag[@]}"} "$@"
 fi
 # The agent's own report (issue #2536, EPIC #2535 C1): Claude Code ≥ 2.1.295 says
 # working / blocked / done as OSC 7501, but only to a terminal that answers its
@@ -569,4 +579,4 @@ if [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ] && [ "${FLEET_STATUS_7501:-1}" 
   # up to FLEET_STATUS_REPLAY_DEPTH tmux on the way (0 = keep it on this machine).
   _fc_relay=(python3 "$BIN/fleet-status-7501.py" relay --replay "${FLEET_STATUS_REPLAY_DEPTH:-3}" --)
 fi
-exec ${_fc_relay[@]+"${_fc_relay[@]}"} "$_fc_claude" ${model_flag[@]+"${model_flag[@]}"} ${role_flag[@]+"${role_flag[@]}"} ${mcp_flag[@]+"${mcp_flag[@]}"} ${mod_flag[@]+"${mod_flag[@]}"} ${cfg_flag[@]+"${cfg_flag[@]}"} "$@"
+exec ${_fc_relay[@]+"${_fc_relay[@]}"} "$_fc_claude" ${model_flag[@]+"${model_flag[@]}"} ${as_flag[@]+"${as_flag[@]}"} ${mcp_flag[@]+"${mcp_flag[@]}"} ${mod_flag[@]+"${mod_flag[@]}"} ${cfg_flag[@]+"${cfg_flag[@]}"} "$@"
