@@ -92,7 +92,8 @@ any greeting.
    ```
 
    stdout is one token: `added:<slug>` (or `refused:hosted` — already there,
-   fine) → go on (a `not trusted … pre-#563 launcher` WARNING on stderr is about
+   fine) → tell them in one line where it is: **「你的代码在 `~/projects/`」**
+   (`~/projects/<name>` — every repo they add lands there), then go on (a `not trusted … pre-#563 launcher` WARNING on stderr is about
    old launchers — don't mention it). Any other `refused:` / `failed:` → read its stderr to them in
    plain words and help fix it (usually a typo, or no access). Then:
 

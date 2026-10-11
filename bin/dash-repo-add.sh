@@ -19,8 +19,20 @@
 # issue #346). A wrong shape re-asks instead of failing; esc anywhere cancels.
 #
 # With <owner/name> on the command line nothing is asked and nothing waits — the
-# scriptable form (tests, a one-liner). --session names the fleet; default
-# $FLEET_SESSION (both popup openers export it), else the pane's own fleet.
+# scriptable form (tests, a one-liner, and what a Claude session runs when told
+# 「把 xxx 仓库拉下来」 — skills/fleet-add-repo, issue #3375). ⌘P's 「添加仓库…」 opens
+# the interactive form (fleet-quickopen.py's `repo-add`).
+#
+# Every sentence is fleet-ui-lang.sh's (repo_add_*, zh/en — issue #3375); a token is
+# never shown bare. failed:clone is read off the clone's own output into one of
+# 拉不到 GitHub（网络） · GitHub 上找不到 · 没登录 (clone_reason). Two seams print
+# without adding anything: `--shape <text>` (the owner/name it normalises to, rc 1
+# when none) and `--explain <token> <owner/name> [<clone output file>]` (the
+# sentence that token gets) — the selftest's, and anyone's who wants the words.
+#
+# --session names the fleet; default $FLEET_SESSION (both popup openers export
+# it), else the pane's own fleet; a name that is no fleet falls to the login's one
+# fleet when it has exactly one.
 #
 # stdout is ONE result token — the set fleet-repo.sh add prints (added:<slug> ·
 # refused:hosted · refused:origin-mismatch · refused:not-a-checkout ·
@@ -36,6 +48,74 @@ export LANG="${LANG:-en_US.UTF-8}" LC_ALL="${LC_ALL:-en_US.UTF-8}"
 BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/fleet-lib.sh"
 
+. "$BIN/fleet-ui-lang.sh"
+t() { fleet_ui_t "$@"; }
+
+# shape <text> → the normalised owner/name on stdout; rc 1 when it is not one. The
+# same rule fleet_repo_register applies, checked here first so a typo re-asks in
+# the popup instead of burning a fleet-repo.sh run on it. A pasted link may carry
+# a tail (/tree/main, ?tab=…, #readme) — only owner/name is kept.
+shape() {
+  local r; r=$(printf '%s' "$1" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+  case "$r" in
+    http://*|https://*|ssh://*|github.com/*|www.github.com/*)
+      r="${r#*://}"; r="${r%%[?#]*}"
+      r=$(printf '%s' "$r" | awk -F/ '{ print $2 "/" $3 }') ;;
+  esac
+  r=$(fleet_norm_repo "$r")
+  case "$r" in
+    *[!A-Za-z0-9_./-]* | */*/* | /* | */) return 1 ;;
+    ?*/?*) printf '%s' "$r"; return 0 ;;
+  esac
+  return 1
+}
+
+# clone_reason <file> → net | notfound | auth | "" — why a clone failed, read off
+# what gh / git said. Not-found first: gh's 「Could not resolve to a Repository」
+# must not read as DNS's 「Could not resolve host」.
+clone_reason() {
+  local f="${1:-}" low
+  [ -n "$f" ] && [ -f "$f" ] || return 0
+  low=$(tr '[:upper:]' '[:lower:]' < "$f")
+  case "$low" in
+    *"could not resolve to a repository"*|*"repository not found"*|*"returned error: 404"*|*"http 404"*|*"not found (http"*)
+      echo notfound ;;
+    *"gh auth login"*|*"authentication failed"*|*"permission denied (publickey)"*|*"could not read username"*|*"bad credentials"*|*"http 401"*|*"returned error: 403"*)
+      echo auth ;;
+    *"could not resolve host"*|*"resolve host"*|*"failed to connect"*|*"timed out"*|*"connection refused"*|*"network is unreachable"*|*"no route to host"*|*"connection reset"*|*"error connecting to"*|*"dial tcp"*|*"tls handshake"*|*"ssl"*|*"name resolution"*|*"no such host"*|*"unable to access"*)
+      echo net ;;
+  esac
+}
+
+# verdict <token> <owner/name> <dir> [<clone output file>] → the sentence (stdout)
+verdict() {
+  local tok="$1" repo="$2" dir="$3" f="${4:-}"
+  case "$tok" in
+    added:*)                 t repo_add_added_fmt "$repo" "$dir" ;;
+    refused:hosted)          t repo_add_hosted_fmt "$repo" "$dir" ;;
+    refused:origin-mismatch) t repo_add_mismatch_fmt "$dir" "$repo" ;;
+    refused:not-a-checkout)  t repo_add_notcheckout_fmt "$dir" ;;
+    refused:invalid-repo)    t repo_add_invalid_fmt "$repo" ;;
+    refused:no-fleet)        t repo_add_nofleet ;;
+    failed:clone)
+      case "$(clone_reason "$f")" in
+        net)      t repo_add_net ;;
+        notfound) t repo_add_notfound_fmt "$repo" ;;
+        auth)     t repo_add_auth ;;
+        *)        t repo_add_clone ;;
+      esac ;;
+    failed:write)            t repo_add_write ;;
+    failed:no-result|'')     t repo_add_noresult ;;
+    *)                       t repo_add_other ;;
+  esac
+}
+
+case "${1:-}" in
+  --shape)   [ $# -eq 2 ] || exit 2; shape "$2"; rc=$?; [ "$rc" = 0 ] && echo; exit "$rc" ;;
+  --explain) [ $# -ge 3 ] && [ $# -le 4 ] || exit 2
+             verdict "$2" "$3" "$HOME/projects/$(basename "$3")" "${4:-}"; echo; exit 0 ;;
+esac
+
 SESS=""; REPO=""
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -50,8 +130,15 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$SESS" ] || SESS="${FLEET_SESSION:-}"
 [ -n "$SESS" ] || SESS=$(fleet_current_session 2>/dev/null)
+# Not a fleet (⌘P on a shell session of this machine, issue #3375) but the login
+# has exactly one — one fleet per login — that one is meant.
+if [ -z "$SESS" ] || [ ! -f "$(fleet_conf_file "$SESS")" ]; then
+  only=$(fleet_each_conf 2>/dev/null | cut -f1)
+  case "$only" in ?*) [ "$(printf '%s\n' "$only" | grep -c .)" = 1 ] && SESS="$only" ;; esac
+fi
 if [ -z "$SESS" ] || [ ! -f "$(fleet_conf_file "$SESS")" ]; then
   echo "dash-repo-add: not inside a fleet — pass --session <sess>" >&2
+  t repo_add_nofleet >&2; echo >&2
   echo "refused:no-fleet"; exit 1
 fi
 
@@ -64,18 +151,6 @@ if [ -z "$REPO" ]; then
     || { echo "dash-repo-add: fzf not found — from a shell: bin/fleet-repo.sh add <owner/name>" >&2; exit 2; }
   INTERACTIVE=1
 fi
-
-# shape <text> → the normalised owner/name on stdout; rc 1 when it is not one. The
-# same rule fleet_repo_register applies, checked here first so a typo re-asks in
-# the popup instead of burning a fleet-repo.sh run on it.
-shape() {
-  local r; r=$(fleet_norm_repo "$1")
-  case "$r" in
-    *[!A-Za-z0-9_./-]* | */*/* | /* | */) return 1 ;;
-    ?*/?*) printf '%s' "$r"; return 0 ;;
-  esac
-  return 1
-}
 
 # `[✕ close]` header token + click-header bind: an iPad/Termius tap-to-dismiss
 # where Escape is a reach (issue #346); bracketed as a button (issue #381), so the
@@ -92,8 +167,8 @@ if [ "$INTERACTIVE" = 1 ]; then
   # a fleet popup.
   note=""
   while :; do
-    hdr="加仓库到 ${SESS}  ·  输入 owner/name（GitHub 网址也行）  ·  ↵ 加入 · esc 取消 · [✕ close]"
-    hdr="$hdr"$'\n'"已托管：${hosted:-（无）}"
+    hdr=$(t repo_add_header_fmt "$SESS")
+    hdr="$hdr"$'\n'"$(t repo_add_hosted_list_fmt "${hosted:-$(t repo_add_none)}")"
     [ -n "$note" ] && hdr="$hdr"$'\n'"$note"
     raw=$(fzf --print-query --no-multi --layout=reverse --no-info --no-separator \
               --height=100% --border=none --prompt='owner/name ▸ ' --header="$hdr" \
@@ -103,12 +178,14 @@ if [ "$INTERACTIVE" = 1 ]; then
     raw=$(printf '%s' "$raw" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
     [ -n "$raw" ] || { echo cancelled; exit 130; }
     if REPO=$(shape "$raw"); then break; fi
-    note="✗ 不是 owner/name 形状：${raw} — 再试一次"
+    note=$(t repo_add_retry_fmt "$raw")
   done
 else
   raw="$REPO"
   REPO=$(shape "$raw") || {
-    echo "dash-repo-add: '$raw' is not owner/name" >&2; echo "refused:invalid-repo"; exit 1; }
+    echo "dash-repo-add: '$raw' is not owner/name" >&2
+    verdict refused:invalid-repo "$raw" "" >&2; echo >&2
+    echo "refused:invalid-repo"; exit 1; }
 fi
 
 name=$(basename "$REPO"); dir="$HOME/projects/$name"
@@ -117,7 +194,7 @@ errf=$(mktemp "${TMPDIR:-/tmp}/dash-repo-add.XXXXXX") || { rm -f "$tokf"; exit 2
 trap 'rm -f "$tokf" "$errf"' EXIT
 {
   echo "→ fleet-repo.sh add --session $SESS $REPO"
-  echo "  目录 ${dir} —— 已是这个仓库就复用，没有就克隆（可能要几十秒）"
+  echo "  $(t repo_add_running_fmt "$dir")"
   echo
 } >&2
 # stdout (the token) to a file; stderr (the clone's progress, the human lines)
@@ -127,17 +204,15 @@ bash "$BIN/fleet-repo.sh" add --session "$SESS" "$REPO" 2>&1 >"$tokf" | tee "$er
 token=$(grep -E '^(added|refused|failed):' "$tokf" | tail -n 1)
 
 case "$token" in
-  added:*)                 v="✓ 已加入 ${REPO} —— 目录 ${dir}；仪表盘下一帧出现「${name}」分组，后台已开始采集它"; rc=0 ;;
-  refused:hosted)          v="已在本 fleet：${REPO}（什么都没改）"; rc=1 ;;
-  refused:origin-mismatch) v="✗ 目录 ${dir} 已存在，但它的 origin 不是 ${REPO} —— 换个目录要用命令行：bin/fleet-repo.sh add ${REPO} <目录>"; rc=1 ;;
-  refused:not-a-checkout)  v="✗ 目录 ${dir} 已存在，但不是 git 仓库 —— 挪开它，或用命令行指定别的目录"; rc=1 ;;
-  refused:invalid-repo)    v="✗ 不是 owner/name 形状：${REPO}"; rc=1 ;;
-  failed:clone)            v="✗ 克隆失败 —— 看上面 git 的输出（仓库名对吗？gh 登录了吗？有权限吗？）"; rc=1 ;;
-  failed:write)            v="✗ 登记文件写不进去 —— 看上面的路径"; rc=1 ;;
-  refused:*)               v="✗ 拒绝：${token#refused:}"; rc=1 ;;
-  failed:*)                v="✗ 失败：${token#failed:}"; rc=1 ;;
-  *)                       v="✗ fleet-repo.sh 没给出结果 —— 看上面的输出"; token="failed:no-result"; rc=1 ;;
+  added:*) rc=0 ;;
+  refused:*|failed:*) rc=1 ;;
+  *) token="failed:no-result"; rc=1 ;;
 esac
+# refused:hosted: say where the code already is — the repo's own checkout
+[ "$token" = refused:hosted ] && {
+  have=$(bash "$BIN/fleet-repo.sh" get --session "$SESS" FLEET_MAIN "$REPO" 2>/dev/null)
+  [ -n "$have" ] && dir="$have"; }
+v=$(verdict "$token" "$REPO" "$dir" "$errf")
 printf '\n%s\n' "$v" >&2
 printf '%s\n' "$token"
 
@@ -149,6 +224,6 @@ if [ "$INTERACTIVE" = 1 ]; then
   rows="$v"$'\n'"$(tr '\r' '\n' < "$errf" | grep -v '^[[:space:]]*$' | tail -n 8 | sed 's/^/    /')"
   printf '%s\n' "$rows" | fzf --no-sort --layout=reverse-list --info=hidden --no-separator \
       --border=none --height=100% --no-input \
-      --header="[✕ close]  ·  ↵ / esc 关闭" --bind "$CLOSE_BIND" >/dev/null 2>&1 || :
+      --header="$(t repo_add_close)" --bind "$CLOSE_BIND" >/dev/null 2>&1 || :
 fi
 exit "$rc"
