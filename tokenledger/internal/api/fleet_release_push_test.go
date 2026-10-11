@@ -88,18 +88,19 @@ func TestReleasePushOnPromoteBeatAndReconnect(t *testing.T) {
 
 // TestReleasePushOffAddsNothing: no node lists CapRelease → a promote and a
 // first beat send nothing at all, byte for byte as before; a hub with no
-// release store sends nothing to a node that does list it.
+// stable yet sends nothing to a node that does list it.
 func TestReleasePushOffAddsNothing(t *testing.T) {
 	h := newFleetHarness(t)
+	// The store is set before any link is up: a first beat reads it.
+	h.srv.Releases = &ReleaseStore{Dir: t.TempDir()}
 	tokA, tokB := h.enroll(t, "a"), h.enroll(t, "b")
 	hb := func(host string) control.Heartbeat { return control.Heartbeat{Hostname: host, OSUser: "op"} }
 
-	// No store at all, a node that would follow: nothing.
+	// No stable pointer yet, a node that would follow: nothing.
 	b := teamNode(t, h, tokB, control.CapRelease)
 	beat(t, b, control.Proto, hb("m4"))
-	silent(t, b, "no release store")
+	silent(t, b, "no stable")
 
-	h.srv.Releases = &ReleaseStore{Dir: t.TempDir()}
 	setStable(t, h.srv.Releases, shaA, 1)
 	a := teamNode(t, h, tokA, control.CapRead, control.CapTeam)
 	beat(t, a, control.Proto, hb("m5"))
