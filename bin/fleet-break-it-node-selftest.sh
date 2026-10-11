@@ -49,6 +49,10 @@
 #                         tokenledger/internal/agent/node_accounts.go's book
 #                         (account-ops.json): logins/*.env changes while the machine's
 #                         agent runs the very create that wrote it
+#   node-agent-adopted-no-reload  bin/fleet-node-supervisor.py tend_children (#3136):
+#                         the daemon restarted and adopted the live node agent; a new
+#                         logins/<login>.env never reloaded it (the new login's node
+#                         never came online)
 #   account-op-rerun-exists  tokenledger/internal/agent/node_accounts.go's settleOwnCreate
 #                         + bin/fleet-login-new.sh's op mark (#2928): the same create
 #                         reaches the agent twice (a re-ask, a restart that lost the
@@ -748,6 +752,41 @@ NA
   SECS=$(since "$t0")
   kill "$pid2" 2>/dev/null
   WHAT="开号写下 logins/alice.env 时节点程序正在跑这次开号：守护记一行 held、等操作结束（同一 pid 报完结果）才重启换租户；节点程序重启后按账本补答、入口按同一 op_id 再问由 go test（TestAdminAgentAnswersAnOpCutOffByARestart、TestFleetFirstSignInProvisionsAutoAssigned）钉住"
+}
+
+drill_node_agent_adopted_no_reload() {
+  CAP=10   # the second daemon's adopt + the next tick's reload (stop + start)
+  local sb lg sup1 sup2 pid1 pid2 t0 st
+  sb="$WORK/adoptreload"; lg="$sb/db/logins"; mkdir -p "$lg" "$sb/LaunchDaemons"
+  printf 'CCQUOTA_TOKEN=x\n' > "$lg/verky.env"
+  # a plain argv: adopt matches the live process's command line to the one recorded
+  python3 -c 'import json, sys; d = sys.argv[1]; json.dump({"children": [{"name": "node-agent", "cmd": ["/bin/sleep", "300"],
+    "requires": [d + "/db/logins/*.env"], "reload": d + "/db/logins/*.env"}]}, open(d + "/table.json", "w"))' "$sb"
+  st() { python3 -c 'import json, sys; s = json.load(open(sys.argv[1])); print(eval(sys.argv[2]) or "")' "$sb/db/state.json" "$1" 2>/dev/null; }
+  run() {
+    FLEET_NODE_STATE="$sb/db" FLEET_NODE_LOG="$sb/log" FLEET_NODE_RUNTIME="$sb/rt" FLEET_NODE_DAEMON_DIR="$sb/LaunchDaemons" \
+      FLEET_NODE_USERS="$sb/Users" FLEET_NODE_TABLE="$sb/table.json" FLEET_NODE_TICK=0.2 FLEET_NODE_LAUNCHCTL='' FLEET_NODE_TEST=1 \
+      exec python3 -I "$BIN/fleet-node-supervisor.py" run >>"$sb/sup.log" 2>&1
+  }
+  run & sup1=$!; printf '%s\n' "$sup1" >> "$WORK/cred-pids"
+  until_ok 10 sh -c '[ -n "$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))[\"children\"][\"node-agent\"].get(\"pid\") or \"\")" "$1" 2>/dev/null)" ]' _ "$sb/db/state.json" \
+    || { WHY="the node agent never started: $(tail -2 "$sb/sup.log" | tr '\n' ' ')"; return 1; }
+  pid1=$(st 's["children"]["node-agent"]["pid"]')
+  # an update restarts the daemon: kill -9, a new one adopts the live node agent
+  kill -9 "$sup1"; wait "$sup1" 2>/dev/null
+  run & sup2=$!; printf '%s\n' "$sup2" >> "$WORK/cred-pids"
+  until_ok 10 grep -q "adopted child node-agent pid $pid1" "$sb/sup.log" \
+    || { WHY="the second daemon did not adopt the node agent: $(tail -3 "$sb/sup.log" | tr '\n' ' ')"; return 1; }
+  # a login opened that same moment
+  printf 'CCQUOTA_TOKEN=y\n' > "$lg/drill.env"; t0=$(now)
+  moved() { local p; p=$(st 's["children"]["node-agent"]["pid"]'); [ -n "$p" ] && [ "$p" != "$pid1" ]; }
+  until_ok 8 moved || { WHY="the adopted node agent (pid $pid1) was never reloaded on logins/drill.env — $(grep node-agent "$sb/sup.log" | tail -2 | tr '\n' ' ')"; return 1; }
+  pid2=$(st 's["children"]["node-agent"]["pid"]')
+  SECS=$(since "$t0")
+  grep -q 'node-agent.*changed — starting it again' "$sb/sup.log" || { WHY="no reload line in the daemon log"; return 1; }
+  until_ok 3 sh -c '! kill -0 "$1" 2>/dev/null' _ "$pid1" || { WHY="the old node agent (pid $pid1) still runs beside the new one"; return 1; }
+  kill "$sup2" 2>/dev/null; wait "$sup2" 2>/dev/null; kill "$pid2" 2>/dev/null
+  WHAT="守护重启（kill -9 后新守护认领活着的节点程序 pid ${pid1}）同一刻来了新登录 logins/drill.env：下一拍照样比签名、记「changed — starting it again」，旧进程等它退了才起新的（pid ${pid2}）"
 }
 
 drill_account_op_rerun_exists() {

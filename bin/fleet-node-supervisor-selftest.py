@@ -1253,6 +1253,33 @@ class H_Accounts(Sandbox):
         self.assertTrue(pid2, "logins/ changed and the node agent kept its old tenants")
         self.assertTrue(until(3, lambda: not fns.pid_alive(pid)), "the old node agent is still running")
 
+    def test_node_agent_adopted_still_reloads_on_a_new_login(self):
+        # #3136: the supervisor restarted (an update) and adopted the live node
+        # agent; a live adopted child skipped the reload check, so the login
+        # opened that same second never got its node — until the agent exited.
+        lg = os.path.join(self.d, "db", "logins")
+        os.makedirs(lg)
+        with open(os.path.join(lg, "verky.env"), "w") as f:
+            f.write("CCQUOTA_TOKEN=x\n")
+        # a plain argv: adopt matches the live process's command line to the one recorded
+        self.table(children=[{"name": "node-agent", "cmd": ["/bin/sleep", "300"],
+                              "requires": [os.path.join(lg, "*.env")], "reload": os.path.join(lg, "*.env")}])
+        p = self.start()
+        pid = until(10, lambda: self.child("node-agent").get("pid"))
+        self.assertTrue(pid)
+        p.kill()
+        p.wait()
+        self.assertTrue(fns.pid_alive(pid), "the node agent died with the supervisor")
+        self.start()
+        self.assertTrue(until(10, lambda: (self.state().get("supervisor") or {}).get("starts") == 2))
+        time.sleep(0.5)
+        self.assertEqual(self.child("node-agent")["pid"], pid, "the live node agent was not adopted")
+        with open(os.path.join(lg, "drill.env"), "w") as f:
+            f.write("CCQUOTA_TOKEN=y\n")
+        pid2 = until(10, lambda: (self.child("node-agent").get("pid") or pid) != pid and self.child("node-agent")["pid"])
+        self.assertTrue(pid2, "an adopted node agent kept its old tenants after a new login")
+        self.assertTrue(until(3, lambda: not fns.pid_alive(pid)), "the adopted node agent is still running")
+
     def test_node_agent_reload_waits_for_an_account_op(self):
         # #2918: opening a login writes its logins/<login>.env half way through
         # the create the node agent runs — the restart cut that very create off.

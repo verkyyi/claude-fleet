@@ -1552,10 +1552,10 @@ class Supervisor(object):
                     cs.update(fails=0, next_start=None)
                     self.dirty = True
                 continue
-            # an adopted pid: we cannot wait() on it, so poll
-            if name in self.adopted:
-                if pid_alive(self.adopted[name]):
-                    continue
+            # an adopted pid: we cannot wait() on it, so poll — a live one still
+            # gets the reload check below (#3136: a supervisor restart adopted the
+            # node agent and no later logins/*.env ever reloaded it)
+            if name in self.adopted and not pid_alive(self.adopted[name]):
                 del self.adopted[name]
                 self.died(name, cs, None, t)
                 continue
@@ -1586,6 +1586,8 @@ class Supervisor(object):
                     self.stop_one(name, why)
                     self.start_child(c, cs, t)
                     continue
+            if name in self.adopted:
+                continue
             p = self.procs.get(name)
             if p is not None:
                 rc = p.poll()
@@ -1628,6 +1630,19 @@ class Supervisor(object):
                         os.killpg(pid, signal.SIGKILL)
                     except OSError:
                         pass
+            else:
+                # an adopted pid is not ours to wait() on: poll it out, so a
+                # reload's start never runs beside the old one (#3136)
+                end = time.time() + 5
+                while pid_alive(pid) and time.time() < end:
+                    time.sleep(0.05)
+                if pid_alive(pid):
+                    for kill in (os.killpg, os.kill):
+                        try:
+                            kill(pid, signal.SIGKILL)
+                            break
+                        except OSError:
+                            pass
         cs = self.state["children"].get(name)
         if cs is not None:
             cs.update(pid=None, status="stopped")
