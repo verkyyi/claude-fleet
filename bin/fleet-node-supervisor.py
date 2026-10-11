@@ -110,6 +110,7 @@ Usage:
                                                (令牌失效 · 需要 relogin, issue #2501)
                                                · 4 running, but without Full Disk Access
                                                (the hub's account removes are refused, #2973)
+                                               · 5 WEDGED: alive, its main loop stopped (#3086)
   fleet-node-supervisor.py tenants [--json] [--check]
                                                the taken-over logins' abilities (issue #2842):
                                                admin group · sudo rules · sudoers. --check: exit
@@ -150,8 +151,13 @@ Seams (sandbox tests, docs/BREAK-IT.md `node-supervisor-dead`):
                         built-in table
   FLEET_NODE_TICK (1 s)  FLEET_NODE_BACKOFF_MAX (60)  FLEET_NODE_BACKOFF_RESET (60)
   FLEET_NODE_ATTIC_DAYS (7)  FLEET_NODE_SWEEP_EVERY (3600)  FLEET_NODE_HEARTBEAT_STALE (120)
-  FLEET_NODE_WATCHDOG_SECS (900)  a loop that has not come round this long dumps its
-                        stacks and exits for launchd to restart it (0 = off)
+  FLEET_NODE_WATCHDOG_SECS (300)  a loop that has not come round this long logs the
+                        phase it is stuck in, dumps its stacks and exits 70 for launchd
+                        to restart it (0 = off); FLEET_NODE_WATCHDOG_SWEEP_SECS (900)
+                        for a pass that sweeps (#3079, #3086)
+  FLEET_NODE_FDA_TIMEOUT (20)  the Full Disk Access probe (a child) is killed past this
+  FLEET_NODE_TEST_HANG <phase>:<fifo>  (FLEET_NODE_TEST=1 only) that phase blocks in an
+                        open() of the FIFO — the watchdog drills' wedge
   FLEET_NODE_LAUNCHCTL  launchctl's path ('' = do not load/unload)
   FLEET_NODE_TEST=1     skip the root-ownership check on the runtime
   FLEET_NODE_PASSWD     a JSON {login: {uid, gid, home[, groups, sudo]}} read instead of
@@ -175,7 +181,9 @@ import pwd
 import re
 import shutil
 import signal
+import stat
 import subprocess
+import threading
 import sys
 import tempfile
 import time
@@ -291,8 +299,18 @@ def update_verify_due(paths, t, since):
 
 
 def read_json(path, default):
+    """A JSON file, or `default`. Opened O_NONBLOCK and read only when it is a
+    regular file (issue #3086): a FIFO / device planted at the path answers
+    `default` at once instead of holding the main loop in open()."""
     try:
-        with open(path) as f:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+    except OSError:
+        return default
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            os.close(fd)
+            return default
+        with os.fdopen(fd) as f:
             return json.load(f)
     except (IOError, OSError, ValueError):
         return default
@@ -676,14 +694,57 @@ def fda_reading():
     such file: not macOS, or nothing to tell). `program` is what a person grants
     it to — the interpreter launchd runs this daemon with, which every child (the
     node program and the account ops it runs) inherits as its responsible one."""
-    db = env("FLEET_NODE_TCC_DB", "/Library/Application Support/com.apple.TCC/TCC.db")
+    p = fda_probe_start()
     try:
-        with open(db, "rb") as f:
-            f.read(1)
-        ok = True
-    except (PermissionError, OSError) as e:
-        ok = None if isinstance(e, FileNotFoundError) else False
-    return {"ok": ok, "at": now(), "program": os.path.realpath(sys.executable)}
+        rc = p.wait(timeout=fda_timeout())
+    except subprocess.TimeoutExpired:
+        fda_probe_kill(p)
+        rc = None
+    return fda_probe_result(rc)
+
+
+# The probe runs in a CHILD (issue #3086): on mini2 2026-10-11 tccd stopped
+# answering — even `ls` of the TCC directory came back EINTR — and the daemon's
+# own open() of TCC.db never returned: its main loop stopped for good, every task
+# with it, and every restart wedged again (the probe is due at once). A child
+# inherits the daemon's responsible process, so its answer is the daemon's; the
+# loop polls it and never waits, and one that does not answer in
+# FLEET_NODE_FDA_TIMEOUT (20 s) is killed and read as «unknown».
+FDA_PROBE = ("import errno, sys\n"
+             "try:\n"
+             "    f = open(sys.argv[1], 'rb'); f.read(1); f.close(); sys.exit(0)\n"
+             "except FileNotFoundError:\n"
+             "    sys.exit(3)\n"
+             "except OSError:\n"
+             "    sys.exit(1)\n")
+
+
+def fda_timeout():
+    return env_num("FLEET_NODE_FDA_TIMEOUT", 20)
+
+
+def fda_probe_start():
+    db = env("FLEET_NODE_TCC_DB", "/Library/Application Support/com.apple.TCC/TCC.db")
+    return subprocess.Popen([sys.executable, "-I", "-c", FDA_PROBE, db], stdin=subprocess.DEVNULL,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                            start_new_session=True, close_fds=True)
+
+
+def fda_probe_kill(p):
+    try:
+        os.killpg(p.pid, signal.SIGKILL)
+    except OSError:
+        pass
+
+
+def fda_probe_result(rc):
+    """rc 0 → True · 3 (no such file) → None · other → False · None (no answer
+    in time) → None with `timeout` set: nothing known, nothing to tell a person."""
+    r = {"ok": True if rc == 0 else None if rc in (3, None) else False, "at": now(),
+         "program": os.path.realpath(sys.executable)}
+    if rc is None:
+        r["timeout"] = fda_timeout()
+    return r
 
 
 def fda_line(state):
@@ -1237,6 +1298,10 @@ class Supervisor(object):
         self.running = {}     # task name -> (Popen, lock fd, t0, log fh)
         self.agent_running = {}  # "login/name" -> (Popen, t0, entry) of an agent task's attempt (#2529)
         self.notifies = []
+        self.fda_probe = None  # (Popen, t0, killed) of the Full Disk Access probe (#3086)
+        self.phase = "start"   # what the main loop is doing now, for the watchdog (#3086)
+        self.phase_at = now()
+        self.deadline = None   # the loop must come round before this, or the watchdog ends it
         self.dirty = True
         self.stop = False
         self.backoff_max = env_num("FLEET_NODE_BACKOFF_MAX", 60)
@@ -1342,7 +1407,24 @@ class Supervisor(object):
                 os.rename(path, path + ".1")
         except OSError:
             pass
-        return open(path, "ab")
+        # O_NONBLOCK, and only ever a regular file (issue #3086): a FIFO planted at
+        # the path would hold this open() — and the whole loop — until a reader came.
+        flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NONBLOCK
+        for _ in (0, 1):
+            try:
+                fd = os.open(path, flags, 0o644)
+            except OSError as e:
+                if e.errno != errno.ENXIO:   # ENXIO: a FIFO with no reader
+                    raise
+                fd = None
+            if fd is not None and stat.S_ISREG(os.fstat(fd).st_mode):
+                fcntl.fcntl(fd, fcntl.F_SETFL, fcntl.fcntl(fd, fcntl.F_GETFL) & ~os.O_NONBLOCK)
+                return os.fdopen(fd, "ab")
+            if fd is not None:
+                os.close(fd)
+            self.log("log %s is not a regular file — moved aside to %s.not-a-file" % (path, path))
+            os.rename(path, path + ".not-a-file")
+        raise OSError(errno.EIO, "log %s: not a regular file" % path)
 
     def child_env(self, extra):
         e = {
@@ -1832,12 +1914,36 @@ class Supervisor(object):
         """Every FLEET_NODE_TENANT_EVERY (300 s), as root only: can this daemon's
         process chain delete a login (TCC lets nothing without Full Disk Access
         delete a user record)? Into state.json for every login's doctor."""
-        if os.geteuid() != 0:   # a non-root reader is kept out of TCC.db anyway
-            return
+        if os.geteuid() != 0 and not os.environ.get("FLEET_NODE_TCC_DB"):
+            return   # a non-root reader is kept out of TCC.db anyway (the seam is a sandbox's)
         last = self.state.get("fda") or {}
-        if t - (last.get("at") or 0) < env_num("FLEET_NODE_TENANT_EVERY", 300):
+        probe = self.fda_probe
+        if probe is not None:
+            p, t0, killed = probe
+            rc = p.poll()
+            if rc is None and not killed and t - t0 > fda_timeout():
+                fda_probe_kill(p)
+                self.fda_probe = (p, t0, True)
+                self.log("fda: the TCC database's open() did not return in %ds — probe pid %d killed, "
+                         "reading «unknown» (tccd not answering? issue #3086)" % (fda_timeout(), p.pid))
+                cur = fda_probe_result(None)
+            elif rc is None:
+                return   # still asking — or killed and not yet gone: never a second probe beside it
+            else:
+                self.fda_probe = None
+                if killed:
+                    return   # its reading was taken at the kill
+                cur = fda_probe_result(rc)
+        else:
+            if t - (last.get("at") or 0) < env_num("FLEET_NODE_TENANT_EVERY", 300):
+                return
+            try:
+                self.fda_probe = (fda_probe_start(), t, False)
+            except (OSError, subprocess.SubprocessError) as e:
+                self.log("fda: probe could not start: %s" % e)
+                self.state["fda"] = dict(fda_probe_result(None), error=str(e))
+                self.dirty = True
             return
-        cur = fda_reading()
         if cur["ok"] is False and last.get("ok") is not False:
             self.log("no Full Disk Access for %s: the hub's account removes will be refused (issue #2973)"
                      % cur["program"])
@@ -1892,35 +1998,60 @@ class Supervisor(object):
         # tasks marked interrupted. On 2026-10-10 mini2's loop stopped mid-tick for
         # good: every account task (the collector first) stopped with it and nothing
         # said so. 0 = off.
-        wd = env_num("FLEET_NODE_WATCHDOG_SECS", 900)
+        #
+        # Issue #3086 made it say so and come back sooner: every phase of a pass
+        # stamps what it is doing (`self.at`), and a watchdog THREAD — it runs while
+        # the main thread sits in a system call — ends a pass that has not come round
+        # in FLEET_NODE_WATCHDOG_SECS (300; a sweep, which may wait on launchctl, gets
+        # FLEET_NODE_WATCHDOG_SWEEP_SECS, 900): one log line naming the phase, every
+        # thread's stack, `supervisor.wedged` into state.json for `status`, exit 70.
+        # faulthandler stays as the backstop for a main thread that holds the GIL.
+        wd = env_num("FLEET_NODE_WATCHDOG_SECS", 300)
+        wd_sweep = max(wd, env_num("FLEET_NODE_WATCHDOG_SWEEP_SECS", 900))
+        if wd > 0:
+            threading.Thread(target=self.watchdog, name="watchdog", daemon=True).start()
         while not self.stop:
             if wd > 0:
-                faulthandler.dump_traceback_later(wd, exit=True, file=sys.stderr)
+                faulthandler.dump_traceback_later(wd_sweep + 60, exit=True, file=sys.stderr)
+                self.deadline = now() + wd
             t = now()
+            self.at("restart-request")
             if self.restart_requested():
                 break
+            self.at("children")
             self.tend_children()
+            self.at("tasks")
             self.tend_tasks(t)
+            self.at("agent-tasks")
             try:
                 self.tend_agent_tasks()
             except Exception as e:  # one bad entry must never take the daemon down
                 self.log("agent tasks: %s" % e)
+            self.at("lanes")
             self.tend_lanes()
+            self.at("tenants")
             try:
                 self.tend_tenants(t)
             except Exception as e:  # a check must never take the daemon down
                 self.log("tenants: %s" % e)
+            self.at("fda")
             try:
                 self.tend_fda(t)
             except Exception as e:  # a check must never take the daemon down
                 self.log("fda: %s" % e)
             if self.sweep_due(t):
+                self.at("sweep")
+                if wd > 0:
+                    self.deadline = now() + wd_sweep
                 try:
                     self.do_sweep()
                 except Exception as e:  # a sweep must never take the daemon down
                     self.log("sweep failed: %s" % e)
+            self.at("save")
             self.save()
+            self.at("sleep")
             time.sleep(tick)
+        self.deadline = None
         faulthandler.cancel_dump_traceback_later()
         self.log("supervisor stopping")
         self.stop_children()
@@ -1937,6 +2068,37 @@ class Supervisor(object):
 
     def on_signal(self, signum, frame):
         self.stop = True
+
+    def at(self, phase):
+        self.phase, self.phase_at = phase, now()
+        hang = env("FLEET_NODE_TEST_HANG", "") if env("FLEET_NODE_TEST", "") == "1" else ""
+        if hang and hang.split(":", 1)[0] == phase and os.path.exists(hang.split(":", 1)[1]):
+            # The drills' seam (issue #3086): this phase blocks in an open() that
+            # never returns — a FIFO nobody writes — as mini2's TCC.db open did.
+            os.close(os.open(hang.split(":", 1)[1], os.O_RDONLY))
+
+    def watchdog(self):
+        """The thread that ends a wedged loop (issue #3086); see run()."""
+        while True:
+            time.sleep(min(5.0, max(0.05, env_num("FLEET_NODE_WATCHDOG_SECS", 300) / 4.0)))
+            dl = self.deadline
+            if dl is None or now() <= dl:
+                continue
+            stuck = now() - self.phase_at
+            self.log("watchdog: the main loop has not come round — stuck %ds in «%s»; dumping stacks and "
+                     "exiting for launchd to restart it (issue #3086)" % (stuck, self.phase))
+            faulthandler.dump_traceback(file=sys.stderr, all_threads=True)
+            try:
+                sv = self.state.get("supervisor") or {}
+                w = {"at": now(), "phase": self.phase, "stuck": round(stuck),
+                     "count": ((sv.get("wedged") or {}).get("count") or 0) + 1}
+                st = read_json(self.p.state_file, {}) or {}
+                st.setdefault("supervisor", {})["wedged"] = w
+                write_json(self.p.state_file, st)
+            except Exception as e:  # the exit below matters more than the record
+                self.log("watchdog: could not record it: %s" % e)
+            sys.stderr.flush()
+            os._exit(70)
 
     def restart_requested(self):
         """The updater switched `current` (C6, #2334): this process runs the old
@@ -1977,7 +2139,8 @@ class Supervisor(object):
         self.reap_tasks(wait=True)
         self.do_sweep()
         self.tend_tenants(t)
-        self.tend_fda(t)
+        if os.geteuid() == 0 or os.environ.get("FLEET_NODE_TCC_DB"):
+            self.state["fda"] = fda_reading()   # bounded: a child, killed past FLEET_NODE_FDA_TIMEOUT
         self.dirty = True
         write_json(self.p.state_file, self.state)
         return 0
@@ -3043,7 +3206,9 @@ def installed(paths):
 
 
 def health(paths, state):
-    """(code, word): 0 ok · 1 installed but not running · 2 not installed."""
+    """(code, word): 0 ok · 1 installed but not running · 2 not installed ·
+    5 WEDGED: the process is alive but its main loop stopped (issue #3086) —
+    no task, no sweep, no check runs until the watchdog or a person restarts it."""
     if not installed(paths):
         return 2, "not installed"
     sv = state.get("supervisor") or {}
@@ -3052,8 +3217,20 @@ def health(paths, state):
     if not pid_alive(sv.get("pid")):
         return 1, "DOWN (pid %s gone, heartbeat %s ago)" % (sv.get("pid") or "-", ago(hb))
     if now() - hb > stale:
-        return 1, "STALE (heartbeat %s ago)" % ago(hb)
+        return 5, ("WEDGED — pid %s alive but its main loop stopped %s ago: no task, sweep or check runs "
+                   "(the watchdog restarts it past FLEET_NODE_WATCHDOG_SECS; now: "
+                   "sudo launchctl kickstart -k system/%s, its stack in %s)"
+                   % (sv.get("pid"), ago(hb), LABEL, os.path.join(paths.log, "supervisor.log")))
     return 0, "ok"
+
+
+def wedged_line(state):
+    """The last restart the watchdog made, while it is recent (a day), or ""."""
+    w = (state.get("supervisor") or {}).get("wedged") or {}
+    if not w.get("at") or now() - w["at"] > 86400:
+        return ""
+    return ("watchdog    restarted it %s ago — the loop was stuck %ss in «%s» (%s time(s); stack in the log)"
+            % (ago(w["at"]), w.get("stuck", "?"), w.get("phase", "?"), w.get("count", 1)))
 
 
 def lanes_now(paths, state):
@@ -3068,6 +3245,8 @@ def status_lines(paths, table, state):
     out = ["supervisor  %s · pid %s · up %s · heartbeat %s ago · starts %s"
            % (word, sv.get("pid") or "-", ago(sv.get("started")), ago(sv.get("heartbeat")),
               sv.get("starts") or 0)]
+    if wedged_line(state):
+        out.append(wedged_line(state))
     sup = Supervisor.__new__(Supervisor)
     sup.p = paths
     for c in table["children"]:

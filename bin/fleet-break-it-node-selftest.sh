@@ -7,9 +7,12 @@
 #   node-supervisor-dead  bin/fleet-node-supervisor.py (install's KeepAlive +
 #                         ThrottleInterval, run's adopt + state.json, status --check),
 #                         bin/fleet-doctor.sh's `node` row
-#   node-supervisor-wedged bin/fleet-node-supervisor.py's watchdog (#3079): the loop
-#                         stops coming round (a blocking open()) — it dumps its stack
-#                         and exits, launchd brings it back
+#   node-supervisor-wedged bin/fleet-node-supervisor.py's watchdog (#3079, #3086): the
+#                         loop stops coming round (a blocking open()) — it names the
+#                         phase, dumps its stack, records it and exits; launchd brings it back
+#   node-fda-probe-hang   bin/fleet-node-supervisor.py's FDA probe (#3086): the open() of
+#                         TCC.db never returns (tccd not answering) — a child, killed; the
+#                         loop never waits on it
 #   service-killed        bin/fleet-node-supervisor.py's login-level register (#2525):
 #                         a registered service is kill -9'd / dies at start
 #   service-login-moved   bin/fleet-node-supervisor.py `service move` + `account release`,
@@ -128,18 +131,21 @@ drill_node_supervisor_dead() {
 }
 
 drill_node_supervisor_wedged() {
-  CAP=15   # the watchdog's 2 s + launchd's ThrottleInterval + a python start + the first pass
-  local sb thr sup t0
-  sb="$WORK/wedge"; mkdir -p "$sb/LaunchDaemons" "$sb/rt/bin" "$sb/log/tasks"
+  CAP=20   # the watchdog's 2 s + launchd's ThrottleInterval + a python start + the first passes
+  local sb thr sup t0 st
+  sb="$WORK/wedge"; mkdir -p "$sb/LaunchDaemons" "$sb/rt/bin"
   cp "$BIN/fleet-node-supervisor.py" "$sb/rt/bin/"
   printf '#!/bin/bash\nexit 0\n' > "$sb/ok.sh"
-  printf '{"children":[],"tasks":[{"name":"t","every":0.5,"cmd":["/bin/bash","%s"]}]}\n' "$sb/ok.sh" > "$sb/table.json"
-  # the task's log a FIFO nobody reads: the loop's open() of it never returns —
-  # the shape of mini2's 2026-10-10 hang (the loop stopped mid-tick, for good)
-  mkfifo "$sb/log/tasks/t.log"
+  printf '{"children":[],"tasks":[{"name":"t","every":0.5,"cmd":["/bin/bash","%s"]},{"name":"u","every":0.5,"cmd":["/bin/bash","%s"]}]}\n' \
+    "$sb/ok.sh" "$sb/ok.sh" > "$sb/table.json"
+  # the fda phase blocks in an open() of a FIFO nobody writes — mini2's 2026-10-11
+  # hang (its open() of TCC.db never returned: the loop stopped for good, and every
+  # restart stopped again, the probe due at once)
+  mkfifo "$sb/hang"
   export FLEET_NODE_STATE="$sb/db" FLEET_NODE_LOG="$sb/log" FLEET_NODE_RUNTIME="$sb/rt" \
     FLEET_NODE_DAEMON_DIR="$sb/LaunchDaemons" FLEET_NODE_USERS="$sb/Users" FLEET_NODE_TABLE="$sb/table.json" \
-    FLEET_NODE_TICK=0.2 FLEET_NODE_LAUNCHCTL='' FLEET_NODE_TEST=1 FLEET_NODE_WATCHDOG_SECS=2
+    FLEET_NODE_TICK=0.2 FLEET_NODE_LAUNCHCTL='' FLEET_NODE_TEST=1 FLEET_NODE_WATCHDOG_SECS=2 \
+    FLEET_NODE_TEST_HANG="fda:$sb/hang"
   python3 "$sb/rt/bin/fleet-node-supervisor.py" install >"$sb/install.out" 2>&1 \
     || { WHY="install failed: $(tail -2 "$sb/install.out" | tr '\n' ' ')"; return 1; }
   thr=$(python3 -c 'import plistlib, sys; d = plistlib.load(open(sys.argv[1], "rb")); assert d["KeepAlive"] is True; print(d["ThrottleInterval"])' \
@@ -148,18 +154,49 @@ drill_node_supervisor_wedged() {
   t0=$(now)
   ( while :; do python3 -I "$sb/rt/bin/fleet-node-supervisor.py" run 2>>"$sb/sup.err"; sleep "$thr"; done ) 2>/dev/null &
   sup=$!; printf '%s\n' "$sup" >> "$WORK/cred-pids"
-  until_ok 10 grep -q 'in logfile' "$sb/sup.err" \
-    || { WHY="the wedged loop was never ended (no stack in its log): $(tail -3 "$sb/sup.err" | tr '\n' ' ')"; kill "$sup"; return 1; }
-  rm -f "$sb/log/tasks/t.log"   # what wedged it is gone; the restarted loop runs on
-  # (the wedged loop never got past the log's open(), so a run is the restarted one's)
-  until_ok 20 sh -c '[ "$(python3 -c "import json,sys; s=json.load(open(sys.argv[1])); print(s[\"tasks\"][\"t\"].get(\"runs\",0))" "$1" 2>/dev/null || echo 0)" -ge 1 ]' _ "$sb/db/state.json" \
-    || { WHY="the supervisor was not brought back to run its task: $(tail -2 "$sb/sup.err" | tr '\n' ' ')"; kill "$sup"; return 1; }
+  until_ok 10 grep -q 'stuck .* in «fda»' "$sb/sup.err" \
+    || { WHY="the wedged loop was never ended (no watchdog line): $(tail -3 "$sb/sup.err" | tr '\n' ' ')"; kill "$sup"; return 1; }
+  grep -q 'in at' "$sb/sup.err" || { WHY="no stack of where it stuck"; kill "$sup"; return 1; }
+  st=$(python3 "$sb/rt/bin/fleet-node-supervisor.py" status) || true
+  case "$st" in *"watchdog    restarted it"*"«fda»"*) ;; *) WHY="status does not say the watchdog restarted it: $st"; kill "$sup"; return 1 ;; esac
+  rm -f "$sb/hang"   # what wedged it is gone; the restarted loop runs on
+  # both tasks run on in the restarted loop (the first pass spawned them before the wedge;
+  # a finished run is counted only by a loop that came round)
+  until_ok 20 sh -c 'python3 -c "import json,sys; t=json.load(open(sys.argv[1]))[\"tasks\"]; sys.exit(0 if t[\"t\"].get(\"runs\",0) >= 2 and t[\"u\"].get(\"runs\",0) >= 2 else 1)" "$1" 2>/dev/null' _ "$sb/db/state.json" \
+    || { WHY="the supervisor was not brought back to run its tasks: $(tail -2 "$sb/sup.err" | tr '\n' ' ')"; kill "$sup"; return 1; }
   SECS=$(since "$t0")
   kill "$sup" 2>/dev/null
   pkill -f "$sb/rt/bin/fleet-node-supervisor.py" 2>/dev/null
   unset FLEET_NODE_STATE FLEET_NODE_LOG FLEET_NODE_RUNTIME FLEET_NODE_DAEMON_DIR FLEET_NODE_USERS FLEET_NODE_TABLE \
-    FLEET_NODE_TICK FLEET_NODE_LAUNCHCTL FLEET_NODE_TEST FLEET_NODE_WATCHDOG_SECS
-  WHAT="整机守护的主循环卡在一个不返回的 open() 上：看门狗 2s 后把各线程的栈写进日志并退出，KeepAlive 按 ${thr}s 拉起，任务接着跑"
+    FLEET_NODE_TICK FLEET_NODE_LAUNCHCTL FLEET_NODE_TEST FLEET_NODE_WATCHDOG_SECS FLEET_NODE_TEST_HANG
+  WHAT="整机守护的主循环卡在一个不返回的 open() 上：看门狗 2s 后写一行「卡在 «fda»」+ 各线程的栈、记进 state.json 并退出，KeepAlive 按 ${thr}s 拉起，status 写明看门狗重启过，两项任务接着跑"
+}
+
+drill_node_fda_probe_hang() {
+  CAP=15   # the probe's 1 s timeout + a few passes
+  local sb sup t0 n
+  sb="$WORK/fdahang"; mkdir -p "$sb/LaunchDaemons" "$sb/rt/bin"
+  cp "$BIN/fleet-node-supervisor.py" "$sb/rt/bin/"
+  printf '#!/bin/bash\nexit 0\n' > "$sb/ok.sh"
+  printf '{"children":[],"tasks":[{"name":"t","every":0.3,"cmd":["/bin/bash","%s"]}]}\n' "$sb/ok.sh" > "$sb/table.json"
+  mkfifo "$sb/TCC.db"   # an open() of it never returns — tccd not answering (mini2, 2026-10-11)
+  t0=$(now)
+  FLEET_NODE_STATE="$sb/db" FLEET_NODE_LOG="$sb/log" FLEET_NODE_RUNTIME="$sb/rt" \
+    FLEET_NODE_DAEMON_DIR="$sb/LaunchDaemons" FLEET_NODE_USERS="$sb/Users" FLEET_NODE_TABLE="$sb/table.json" \
+    FLEET_NODE_TICK=0.2 FLEET_NODE_LAUNCHCTL='' FLEET_NODE_TEST=1 FLEET_NODE_WATCHDOG_SECS=3 \
+    FLEET_NODE_TCC_DB="$sb/TCC.db" FLEET_NODE_FDA_TIMEOUT=1 \
+    python3 -I "$sb/rt/bin/fleet-node-supervisor.py" run 2>>"$sb/sup.err" &
+  sup=$!; printf '%s\n' "$sup" >> "$WORK/cred-pids"
+  until_ok 10 python3 -c 'import json,sys; f=json.load(open(sys.argv[1])).get("fda") or {}; sys.exit(0 if f.get("timeout") and f.get("ok") is None else 1)' "$sb/db/state.json" 2>/dev/null \
+    || { WHY="no «unknown» reading from the hung probe: $(tail -2 "$sb/sup.err" | tr '\n' ' ')"; kill "$sup"; return 1; }
+  n=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["tasks"]["t"].get("runs",0))' "$sb/db/state.json")
+  until_ok 5 python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1]))["tasks"]["t"].get("runs",0) > int(sys.argv[2]) + 3 else 1)' "$sb/db/state.json" "$n" \
+    || { WHY="the loop stopped after the probe hung"; kill "$sup"; return 1; }
+  kill -0 "$sup" 2>/dev/null || { WHY="the daemon exited (the watchdog fired: the loop was held)"; return 1; }
+  grep -q 'watchdog: the main loop' "$sb/sup.err" && { WHY="the watchdog fired: the probe held the loop"; kill "$sup"; return 1; }
+  SECS=$(since "$t0")
+  kill "$sup" 2>/dev/null
+  WHAT="完全磁盘访问探测读 TCC.db 的 open() 永不返回：探测是子进程，主循环照转，1s 后杀掉、记为「未知」（不报「没有权限」），任务一直在跑，看门狗没触发"
 }
 
 drill_task_fail_silent() {
