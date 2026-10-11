@@ -58,6 +58,9 @@
 #   credsep-stale-after-switch  bin/fleet-node-update.py + fleet-credsep.py `machine
 #                         refresh` + the supervisor's cred-proxy-shared `reload` (#2435):
 #                         a switch / rollback left the shared credential proxy on old code
+#   admin-agent-stale     bin/fleet-node-update.py follow_admin_agents (#3034): an admin
+#                         login's own ccquota agent ran ~/.local/bin/ccquota, no release
+#                         moved it, so it never learned login_join and opened no login
 #   codex-helper-missing  bin/fleet-node-update.py helpers (#3017): codex without its
 #                         codex-code-mode-host beside it runs no shell command
 #   shift-enter-sends     conf/tmux-shell.conf, conf/tmux-shell-stage.conf, conf/tmux-attention.conf
@@ -788,6 +791,19 @@ drill_credsep_stale_after_switch() {
     || { WHY="the proxy did not follow the release: $(printf '%s' "$out" | grep -E 'Error|FAIL' | head -3 | tr '\n' ' ')"; return 1; }
   SECS=$(since "$t0")
   WHAT="换版两次再回退一次：每次 credsep 副本的 sha = 发布版，守护的共享代理子进程用新副本重启（pid 换了），回退时副本和代理一起回旧版，不另写 plist"
+}
+
+# admin-agent-stale (#3034): the admin login's agent (com.ccquota.agent.<admin>,
+# never taken over) ran its own ~/.local/bin/ccquota; the updater moved
+# `current` and the managed logins, never it.
+drill_admin_agent_stale() {
+  CAP=60
+  local t0 out
+  t0=$(now)
+  out=$(python3 -W ignore::ResourceWarning "$BIN/fleet-node-update-selftest.py" --drill-admin-agent 2>&1) \
+    || { WHY="the admin agent did not follow the release: $(printf '%s' "$out" | grep -E 'Error|FAIL' | head -3 | tr '\n' ' ')"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="管理员登录的 agent：credsep meta.json 的 agent_argv 指向 current/bin/ccquota，换版、回退各重启一次（同一版不重复）；托管登录不动；手放回旧二进制 → 体检 admin-agent WARN，下一轮再指回、重启"
 }
 
 # ---- release-fetch-slow (#2701): a new managed machine's release fetch at ~1 MB/s.

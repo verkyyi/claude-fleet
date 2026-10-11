@@ -34,6 +34,10 @@ the way `ccquota release fetch --artifacts` lays one out (C7). Nothing touches
   P  a tool's helpers (issue #3017): staged beside it, linked beside every
      account's link (a hand-placed copy replaced), a release staged without
      them completed on the next tick — from its artifacts, else fetched again
+  Q  an admin login's own ccquota agent (issue #3034): credsep's meta.json points
+     it at <current>/bin/ccquota, it is kickstarted on the switch and the
+     rollback (once a release), a tenant's record is untouched; the doctor's
+     `admin-agent` row WARNs on an own older binary, never FAILs
   O  a stale fail (issue #2906): a torn read a later signed fetch outlived is
      no FAIL and rolls nothing back; a current one is a WARN; a rolled-back
      release is retried once its cause is gone, else after a doubling wait
@@ -1548,6 +1552,103 @@ class L_ResumableFetch(Sandbox):
         self.assertFalse(os.path.exists(os.path.join(self.root, ".fetch")))
 
 
+class Q_AdminAgent(Sandbox):
+    """issue #3034: a login NOT taken over (an admin — its agent is the machine's
+    admin node, the one that opens new logins) whose ccquota agent the credential
+    launcher starts runs the RELEASE's ccquota: its credsep meta.json's
+    agent_argv[0] → <current>/bin/ccquota and the agent kickstarted on every
+    switch and rollback (once per release, never per tick); a taken-over login's
+    record is left alone; the doctor's `admin-agent` row WARNs while it runs an
+    own older binary or was not restarted, PASSes after, and is never a FAIL."""
+
+    def setUp(self):
+        Sandbox.setUp(self)
+        self.lc = os.path.join(self.d, "launchctl.log")
+        fake = os.path.join(self.d, "launchctl")
+        with open(fake, "w") as f:
+            f.write('#!/bin/sh\necho "$*" >> %s\n' % self.lc)
+        os.chmod(fake, 0o755)
+        self.env["FLEET_NODE_LAUNCHCTL"] = fake
+        self.own = os.path.join(self.d, "Users", "verky", ".local", "bin", "ccquota")
+        os.makedirs(os.path.dirname(self.own))
+        with open(self.own, "w") as f:
+            f.write("#!/bin/sh\necho ccquota prod-e715029\n")
+        os.chmod(self.own, 0o755)
+        self.meta("verky", self.own)
+        self.meta("alice", self.own)     # taken over: the machine program's tenant
+
+    def meta(self, login, prog):
+        d = os.path.join(self.env["FLEET_CREDSEP_ROOT_BASE"], login)
+        if not os.path.isdir(d):
+            os.makedirs(d)
+        mp = os.path.join(d, "meta.json")
+        self.wj(mp, {"login": login, "agent": {"kind": "launchd-system", "path": "/x.plist",
+                                               "label": "com.ccquota.agent.%s" % login},
+                     "agent_argv": [prog, "agent", "--state", "/s"], "path": "/usr/bin:/bin"})
+        os.chmod(mp, 0o600)
+
+    def argv0(self, login):
+        return self.rj(os.path.join(self.env["FLEET_CREDSEP_ROOT_BASE"], login, "meta.json"))["agent_argv"][0]
+
+    def kicks(self):
+        try:
+            return [l.strip() for l in open(self.lc) if "kickstart" in l]
+        except IOError:
+            return []
+
+    def rows(self):
+        r = self.cmd("doctor")
+        return [l for l in r.stdout.splitlines() if "admin-agent" in l]
+
+    def test_follows_switch_and_rollback(self):
+        cq = os.path.join(self.root, "current", "bin", "ccquota")
+        self.install(V1)
+        self.assertEqual(self.argv0("verky"), cq)
+        self.assertEqual(self.argv0("alice"), self.own)            # a tenant is never touched
+        self.assertEqual(self.kicks(), ["kickstart -k system/com.ccquota.agent.verky"])
+        self.assertEqual(oct(os.stat(os.path.join(self.env["FLEET_CREDSEP_ROOT_BASE"], "verky", "meta.json")).st_mode
+                             & 0o777), "0o600")
+        rows = self.rows()
+        self.assertEqual(len(rows), 1, rows)
+        self.assertIn("PASS", rows[0])
+        self.assertIn(V1[:12], rows[0])
+        self.tick(V1)                                              # at the release: no second restart
+        self.assertEqual(len(self.kicks()), 1)
+        # a new release: the agent restarts onto it with the switch
+        self.release(V2)
+        self.assertEqual(self.tick(V2)["phase"], "switched")
+        self.assertEqual(len(self.kicks()), 2)
+        self.assertEqual(self.state()["admin_agents"]["verky"]["sha"], V2)
+        # a release whose claude fails the doctor rolls back — the agent with it
+        V3 = "3" * 40
+        self.daemon_on(V2)
+        self.assertEqual(self.tick(V2)["result"], "committed")
+        self.release(V3, claude="2.1.9", broken=("claude-",))
+        self.tick(V3)
+        self.daemon_on(V3)
+        self.assertEqual(self.tick(V3)["result"], "rolled-back")
+        self.assertEqual(self.current(), V2)
+        self.assertEqual(len(self.kicks()), 4)                     # onto V3, back onto V2
+        self.assertEqual(self.state()["admin_agents"]["verky"]["sha"], V2)
+
+    def test_own_old_binary_is_warned_then_repointed(self):
+        self.install(V1)
+        self.meta("verky", self.own)                               # credsep install / a hand put it back
+        rows = self.rows()
+        self.assertTrue(rows and "WARN" in rows[0] and "prod-e715029" in rows[0], rows)
+        self.assertFalse(any("FAIL" in l and "admin-agent" in l for l in self.cmd("doctor").stdout.splitlines()))
+        self.tick(V1)
+        self.assertEqual(self.argv0("verky"), os.path.join(self.root, "current", "bin", "ccquota"))
+        self.assertEqual(len(self.kicks()), 2)
+        self.assertIn("PASS", self.rows()[0])
+
+    def test_no_admin_agent_no_row(self):
+        shutil.rmtree(os.path.join(self.env["FLEET_CREDSEP_ROOT_BASE"], "verky"))
+        self.install(V1)
+        self.assertEqual(self.kicks(), [])
+        self.assertEqual(self.rows(), [])
+
+
 if __name__ == "__main__":
     # the BREAK-IT drill (node-update-half) builds its fixtures with the same code
     if len(sys.argv) > 1 and sys.argv[1] == "--fake-ccquota":
@@ -1571,6 +1672,9 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--drill-credsep":
         # BREAK-IT credsep-stale-after-switch: the supervised case, switch + rollback
         unittest.main(argv=[sys.argv[0], "I_Credsep.test_supervised_proxy_follows_switch_and_rollback"], verbosity=1)
+    if len(sys.argv) > 1 and sys.argv[1] == "--drill-admin-agent":
+        # BREAK-IT admin-agent-stale (issue #3034): an admin's own agent follows the release
+        unittest.main(argv=[sys.argv[0], "Q_AdminAgent"], verbosity=1)
     if len(sys.argv) > 1 and sys.argv[1] == "--drill-fetch":
         # BREAK-IT release-fetch-slow: the updater half
         unittest.main(argv=[sys.argv[0], "L_ResumableFetch"], verbosity=1)
