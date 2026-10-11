@@ -22,6 +22,17 @@ func usageSilentBeat(t *testing.T, st *store.Store, state string, at time.Time) 
 	}
 }
 
+// usageSilentStore is a store with the fleet tables (they ride the fleet
+// switch, EnsureNodes).
+func usageSilentStore(t *testing.T) *store.Store {
+	t.Helper()
+	st := openTestStore(t)
+	if err := st.EnsureNodes(); err != nil {
+		t.Fatal(err)
+	}
+	return st
+}
+
 func usageSilentOpen(t *testing.T, st *store.Store) []string {
 	t.Helper()
 	subs, err := st.OpenFleetAlertSubjects(store.AlertUsageSilent, "")
@@ -32,7 +43,7 @@ func usageSilentOpen(t *testing.T, st *store.Store) []string {
 }
 
 func TestUsageSilentRaisedWhenWorkingLoginSendsNothing(t *testing.T) {
-	st := openTestStore(t)
+	st := usageSilentStore(t)
 	srv := &Server{Store: st, UsageSilentAfter: 30 * time.Minute}
 	t0 := time.Now().UTC().Truncate(time.Second)
 
@@ -72,7 +83,7 @@ func TestUsageSilentRaisedWhenWorkingLoginSendsNothing(t *testing.T) {
 // Usage that keeps flowing never raises; a looping or waiting session never
 // counts as working.
 func TestUsageSilentQuietWhenUsageFlowsOrNothingWorks(t *testing.T) {
-	st := openTestStore(t)
+	st := usageSilentStore(t)
 	srv := &Server{Store: st, UsageSilentAfter: 30 * time.Minute}
 	t0 := time.Now().UTC().Truncate(time.Second)
 	for i := 0; i <= 4; i++ {
@@ -90,7 +101,7 @@ func TestUsageSilentQuietWhenUsageFlowsOrNothingWorks(t *testing.T) {
 		t.Fatalf("raised while usage was flowing: %v", subs)
 	}
 
-	srv2 := &Server{Store: openTestStore(t), UsageSilentAfter: 30 * time.Minute}
+	srv2 := &Server{Store: usageSilentStore(t), UsageSilentAfter: 30 * time.Minute}
 	for i := 0; i <= 4; i++ {
 		at := t0.Add(time.Duration(i) * 15 * time.Minute)
 		usageSilentBeat(t, srv2.Store, "done", at)
