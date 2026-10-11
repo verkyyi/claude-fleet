@@ -89,6 +89,12 @@
 #                                                   minutes ⇒ unfinished, to the admin; seven days ⇒ gone; the upload
 #                                                   re-checked against the shape table; go test, when a toolchain is
 #                                                   here) + bin/fleet_steward.py debug_step (the orchestrator's line)
+#   feedback-identity-public                        tokenledger/internal/api fleet_feedback_github.go (feedbackIssueBody:
+#                                                   the ONE public template; App token never logged; go test, when a
+#                                                   toolchain is here)
+#   feedback-github-down                            tokenledger/internal/api fleet_feedback_github.go (feedbackFile: 待转,
+#                                                   1 min doubling to 1 h, the marker adopts the issue a 500 created;
+#                                                   go test, when a toolchain is here)
 #   dist-publish-tampered                           tokenledger/internal/api fleet_publish.go (POST …/publish: the archive
 #                                                   hashed into the commit's tree, OIDC, forward only; go test, when a
 #                                                   toolchain is here) + bin/fleet-release-publish.sh (what CI sends)
@@ -1584,6 +1590,68 @@ drill_pool_usage_unattributed() {
       0:*) WHAT='池子用量一笔一行：只认通行证的人与会话（无 / 伪造 / 自报不符 → 403 不写），repo/issue 取自租约，编排记给登录主人，个人上限读同一张表且与旧桶口径相等（go test）' ;;
       *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
       *) WHY="the Go half is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  fi
+  SECS=$(since "$t0")
+}
+
+# ---- feedback-identity-public (#3356, EPIC #3354 C2): a feedback filed into
+# the PUBLIC repo carries who sent it — a login, a person, a machine's name, a
+# session. The hub writes the issue itself, and its body has ONE definition,
+# feedbackIssueBody: the words, the version (a sha or 未知), the kind of machine
+# (a known word or 未知, never echoed), Claude/Codex, the F number and its
+# marker. The App's token and key never reach a log line. Go tests by name.
+drill_feedback_identity_public() {
+  CAP=120; local t0 out rc t f="$ROOT/tokenledger/internal/api/fleet_feedback_github.go"
+  local tests='TestFeedbackFiledPublicFieldsOnly TestFeedbackFilingOffSendsNothing'
+  t0=$(now)
+  grep -q '"title": feedbackIssueTitle(f.Text), "body": feedbackIssueBody(f), "labels": \[\]string{feedbackGHLabel}}' "$f" 2>/dev/null \
+    || { WHY="the filer no longer writes the issue only from feedbackIssueTitle / feedbackIssueBody"; return 1; }
+  grep -q 'ver, feedbackPublicKind(ctx\["machine_kind"\]), feedbackPublicAgent(ctx\["agent"\]), num, feedbackMarker(num))' "$f" \
+    || { WHY="feedbackIssueBody no longer holds to the four public fields + the F number"; return 1; }
+  for t in $tests; do
+    grep -q "^func $t(" "$ROOT/tokenledger/internal/api/fleet_feedback_github_test.go" 2>/dev/null \
+      || { WHY="the hub half's test $t is not in tokenledger/internal/api/fleet_feedback_github_test.go"; return 1; }
+  done
+  WHAT='公开单子只有原话 · 版本 · 机器类型 · Claude/Codex · F 号；登录名、人、机器名、会话、窗口不进；令牌不进日志（测试按名核对在，Go 门跑它们）'
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/api 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
+      0:*) WHAT='假 GitHub 收到的单子正文只有原话 · 版本 · 托管 Linux · Claude · F1 + 标记，登录名 / 机器名 / 会话 / 窗口一个不在；认不出的机器类型写「未知」；令牌、私钥不在任何日志行；没配 App ⇒ 一个请求不发（go test）' ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
+      *) WHY="the Go half is red: $(printf '%s' "$out" | grep -v '^ok' | grep -v '^20' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  fi
+  SECS=$(since "$t0")
+}
+
+# ---- feedback-github-down (#3356, EPIC #3354 C2): GitHub answers 500 or times
+# out while the hub files a feedback — or the 500 came after the issue WAS
+# created. The feedback must stay 待转 and be tried again (1 minute, doubling,
+# at most an hour), and once GitHub is back it is ONE issue: each pass first
+# lists the repo's feedback issues and adopts the one ending in its marker.
+drill_feedback_github_down() {
+  CAP=120; local t0 out rc f="$ROOT/tokenledger/internal/api/fleet_feedback_github.go"
+  local tests='TestFeedbackGitHubDownQueuesThenFilesOnce'
+  t0=$(now)
+  grep -q 'filed, err := g.feedbackFiled(ctx, auth)' "$f" 2>/dev/null \
+    || { WHY="a filing pass no longer looks for the issue a feedback already has before creating one"; return 1; }
+  grep -q 'd = min(r.delay\*2, feedbackRetryMax)' "$f" || { WHY="a failed filing no longer backs off doubling"; return 1; }
+  grep -q 'feedbackRetryFirst   = time.Minute' "$f" && grep -q 'feedbackRetryMax     = time.Hour' "$f" \
+    || { WHY="the filing backoff is no longer 1 minute to 1 hour"; return 1; }
+  grep -q "^func $tests(" "$ROOT/tokenledger/internal/api/fleet_feedback_github_test.go" 2>/dev/null \
+    || { WHY="the hub half's test $tests is not in tokenledger/internal/api/fleet_feedback_github_test.go"; return 1; }
+  WHAT='GitHub 500 / 超时 ⇒ 待转，1 分钟起翻倍到 1 小时再试；恢复后只建一张（测试按名核对在，Go 门跑它们）'
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run "^($tests)\$" ./internal/api 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
+      0:*) WHAT='假 GitHub 先「建成却回 500」、再超时：反馈一直待转，59 秒内不重试、2 分钟内不再试；恢复后认领已建的那张，仓库里只有 1 张；退避封顶 1 小时（go test）' ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
+      *) WHY="the Go half is red: $(printf '%s' "$out" | grep -v '^ok' | grep -v '^20' | head -6 | tr '\n' ' ')"; return 1 ;;
     esac
   fi
   SECS=$(since "$t0")

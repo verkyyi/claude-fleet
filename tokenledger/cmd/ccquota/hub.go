@@ -412,6 +412,21 @@ func loadFleetFeedback(srv *api.Server) {
 	}
 	srv.Feedback = &api.FeedbackDesk{Dir: dir}
 	log.Printf("fleet: feedback on, attachments in %s", dir)
+	// Filing each one as a GitHub issue (claude-fleet#3356): the App's
+	// credentials from the mounted Secret (app-id · installation-id ·
+	// private-key). Missing ⇒ feedback is taken and listed, nothing goes to
+	// GitHub; a key that will not parse ⇒ the same, said once.
+	ghDir := os.Getenv("CCQUOTA_FLEET_FEEDBACK_GH_DIR")
+	gh, err := api.LoadFeedbackGitHub(ghDir, os.Getenv("CCQUOTA_FLEET_FEEDBACK_REPO"))
+	switch {
+	case err != nil:
+		log.Printf("fleet: feedback filing off — %v", err)
+	case gh == nil:
+		log.Printf("fleet: feedback filing off — no GitHub App credentials in CCQUOTA_FLEET_FEEDBACK_GH_DIR (%s)", orNone(ghDir))
+	default:
+		srv.Feedback.GitHub = gh
+		log.Printf("fleet: feedback filed as issues in %s (GitHub App %s)", gh.Repo, gh.AppID)
+	}
 }
 
 func orNone(s string) string {

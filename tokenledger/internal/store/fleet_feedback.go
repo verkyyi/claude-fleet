@@ -190,3 +190,34 @@ func (s *Store) TakeFeedbackGap(key string, now time.Time, gap time.Duration) (i
 	}
 	return left, ErrFeedbackGap
 }
+
+// FeedbackToFile lists the rows not yet on GitHub (received, no issue),
+// oldest first — the filer's work (claude-fleet#3356).
+func (s *Store) FeedbackToFile(limit int) ([]Feedback, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := s.read.Query(`SELECT `+feedbackCols+` FROM fleet_feedback WHERE state = ? AND gh_number = 0 ORDER BY id ASC LIMIT ?`,
+		FeedbackReceived, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Feedback{}
+	for rows.Next() {
+		f, err := scanFeedback(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *f)
+	}
+	return out, rows.Err()
+}
+
+// SetFeedbackFiled writes the GitHub issue a received row became; a row
+// already filed (or closed) is left as it is.
+func (s *Store) SetFeedbackFiled(id, number int64, at time.Time) error {
+	_, err := s.write.Exec(`UPDATE fleet_feedback SET state = ?, gh_number = ?, filed_at = ? WHERE id = ? AND state = ?`,
+		FeedbackFiled, number, at.UTC().Format(rfc), id, FeedbackReceived)
+	return err
+}
