@@ -119,10 +119,14 @@ func TestClientTakesAnEndorsedKey(t *testing.T) {
 	newPub, newKey, _ := ed25519.GenerateKey(rand.Reader)
 
 	// the hub re-signs with the new key; no endorsement yet → refused, pin kept
-	fresh := &ReleaseStore{Dir: t.TempDir(), Key: newKey, Repo: "o/r", Source: r.rs.Source,
-		DistDir: r.dist, DistSrc: rigSrc, ArtifactsDir: r.inst, NPMRegistries: r.rs.NPMRegistries}
-	must(t, fresh.Ensure(context.Background(), shaA))
-	hub := releaseHub(t, fresh)
+	dir := t.TempDir()
+	// one store per PrevKey: a running hub's store is never mutated (go test -race)
+	store := func(prev ed25519.PrivateKey) *ReleaseStore {
+		return &ReleaseStore{Dir: dir, Key: newKey, PrevKey: prev, Repo: "o/r", Source: r.rs.Source,
+			DistDir: r.dist, DistSrc: rigSrc, ArtifactsDir: r.inst, NPMRegistries: r.rs.NPMRegistries}
+	}
+	must(t, store(nil).Ensure(context.Background(), shaA))
+	hub := releaseHub(t, store(nil))
 	if resp, _ := getBody(t, hub.URL+release.Path+release.EndorsementRel); resp.StatusCode != 404 {
 		t.Fatalf("key-endorsement with no previous key: %d, want 404", resp.StatusCode)
 	}
@@ -135,13 +139,13 @@ func TestClientTakesAnEndorsedKey(t *testing.T) {
 
 	// a stranger's endorsement: refused
 	_, stranger, _ := ed25519.GenerateKey(rand.Reader)
-	fresh.PrevKey = stranger
+	hub = releaseHub(t, store(stranger))
 	if out, err := clientFetch(t, hub.URL, pub, shaA, filepath.Join(t.TempDir(), "rt")); err == nil {
 		t.Fatalf("a key vouched for by a stranger was taken: %s", out)
 	}
 
 	// the old key vouches → taken, re-pinned, the old kept
-	fresh.PrevKey = oldKey
+	hub = releaseHub(t, store(oldKey))
 	dest := filepath.Join(t.TempDir(), "rt")
 	out, err := clientFetch(t, hub.URL, pub, shaA, dest)
 	if err != nil || !strings.Contains(out, "re-pinned") {
