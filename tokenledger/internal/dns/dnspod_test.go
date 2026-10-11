@@ -141,6 +141,19 @@ func TestDNSPodProvider(t *testing.T) {
 	if got, _ := p.List(ctx); len(got) != 0 {
 		t.Fatalf("delete: %+v", got)
 	}
+	// The unclaimed-name guard (claude-fleet#3337): the marked TXT on *.cf
+	// is listed, quotes or none; an unmarked one, or a TXT anywhere else, not.
+	f.with(func() {
+		f.recs = append(f.recs,
+			map[string]string{"id": "20", "name": "*.cf", "type": "TXT", "value": `"not claimed"`, "ttl": "600", "remark": Marker},
+			map[string]string{"id": "21", "name": "*.cf", "type": "TXT", "value": "theirs", "ttl": "600", "remark": ""},
+			map[string]string{"id": "22", "name": "alice.cf", "type": "TXT", "value": "x", "ttl": "600", "remark": Marker})
+	})
+	if got, _ := p.List(ctx); len(got) != 1 || got[0].Name != "*.cf" || got[0].Type != "TXT" || got[0].Value != "not claimed" {
+		t.Fatalf("guard: %+v", got)
+	}
+	f.with(func() { f.recs = f.recs[:len(f.recs)-3] })
+
 	// Outside the subdomain: refused before any call.
 	var n, m int
 	f.with(func() { n = len(f.calls) })

@@ -21,10 +21,13 @@ const Marker = "fleet"
 
 // TTL is every address record's time to live: DNSPod's free plan minimum
 // (EPIC #3067 decision 2) — a changed address answers within ten minutes.
+// It is the floor: claude-fleet#3337 asked for a few minutes, and 600 s is
+// as low as the plan goes.
 const TTL = 600
 
 // Record is one address record. Name is the host relative to the zone
-// ("verky.cf" under 24haowan.com); Type is A or AAAA.
+// ("verky.cf" under 24haowan.com); Type is A or AAAA — or TXT on "*.cf",
+// the unclaimed-name guard (claude-fleet#3337).
 type Record struct {
 	ID    string `json:"id,omitempty"`
 	Name  string `json:"name"`

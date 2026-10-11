@@ -36,6 +36,8 @@
 #                                                   CrossLock, the three gated loops (go test, when a toolchain is here)
 #   entry-dns-follows                               tokenledger/internal/api fleet_entry_dns.go + internal/dns
 #                                                   (DNSPod; go test, when a toolchain is here), deploy/k8s/overlays/prod
+#   entry-name-unclaimed                            tokenledger/internal/api fleet_entry.go (entryEnsureName) +
+#                                                   fleet_entry_dns.go (the *.cf guard); go test, when a toolchain is here
 #   invite-expired                                  tokenledger/internal/api fleet_invites.go + github_auth.go
 #                                                   (admitInvite, denyText; go test, when a toolchain is here)
 #   drill-person-no-machine                         tokenledger/internal/api fleet_opening.go + fleet_drill.go
@@ -668,6 +670,40 @@ drill_entry_dns_follows() {
     esac
   else
     WHAT="${WHAT}；没有 go：五条测试按名核对在，Go 门（tokenledger.yml）跑它们"
+  fi
+  SECS=$(since "$t0")
+}
+
+# ---- entry-name-unclaimed (#3337): a person homed with no address name, and the
+# name they were offered resolving through the zone's wildcard to the hub's own
+# address — Termius reached the hub's port, EOF. Now the suggested name is claimed
+# with the home (and on the next tick for one homed before), and the loop keeps a
+# TXT-only *.cf so an unclaimed name has no address at all. Without go the tests
+# must exist by name.
+drill_entry_name_unclaimed() {
+  CAP=120; local t0 out rc tests='TestEntryAutoNameWithHome TestEntryDNSUnclaimedNameResolvesNowhere'
+  local f="$ROOT/tokenledger/internal/api/fleet_entry_autoname_test.go" tl
+  t0=$(now)
+  for tl in $tests; do
+    grep -q "^func $tl(" "$f" 2>/dev/null || { WHY="the hub test $tl is not in ${f#$ROOT/}"; return 1; }
+  done
+  grep -q 's.entryEnsureNames(now)' "$ROOT/tokenledger/internal/api/fleet_entry_dns.go" \
+    || { WHY="the address-record loop no longer claims the names of people homed before #3337"; return 1; }
+  grep -q 'entryDNSGuard(sub)' "$ROOT/tokenledger/internal/api/fleet_entry_dns.go" \
+    || { WHY="the address-record loop no longer keeps the *.cf guard"; return 1; }
+  WHAT='有家没名 ⇒ 设家（自动或手动）时领下建议名、审计一行，老的下一拍补上；名已在不动、建议名被占不强领；运维仍不能替人起任意名；没领的名不在计划里，*.cf 只有一条 TXT、没有 A/AAAA，被手删下一拍补回'
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/api 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
+      0:*) WHAT="${WHAT}（go test 两条）" ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
+        WHAT="${WHAT}；Go 测试这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们" ;;
+      *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  else
+    WHAT="${WHAT}；没有 go：两条测试按名核对在，Go 门（tokenledger.yml）跑它们"
   fi
   SECS=$(since "$t0")
 }

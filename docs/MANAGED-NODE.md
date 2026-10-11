@@ -651,13 +651,19 @@ BREAK-IT 行 `service-handwritten`。只点名接管过的登录（`logins/<登�
   （每拍至多 40 次写），每写一条记一行入口审计（kind `dns`，「A verky.cf 旧 → 新」）。家从外面连不上（或 15 分钟没新结果）
   ⇒ 一条不改，记录留着最后的地址，钥匙页写「从外面连不上」；手动换家 ⇒ 下一拍改指新家；有人在控制台手改 ⇒ 下一拍改回，
   审计写「有人手改」。DNSPod 报错只记日志（不带凭据），不删记录，下一拍再试。
+- **有家就有名**（#3337，人拍板）：人有了家而还没起地址名时，入口替他领下建议名（GitHub 登录名，`entrySuggestedName`；
+  被别人占着就换下一个候选，都不行就不领、钥匙页照旧问）——自动设家、手动换家时和家一起领（同一次推送），以前就有家没名的人
+  由上面的循环下一拍补上；审计 `name_set`、操作者 `hub`。人之后照样在钥匙页改。运维仍不能替人起任意名（`PUT name` 403）。
+- **没领的名字不指向任何地方**（#3337）：24haowan.com 自己有通配 `*.24haowan.com` → 入口（TTL 3600），没人领的
+  `<名字>.cf` 原先落进它、手机连到入口报 EOF。循环再维护一条自己的 `*.cf`：只有一条 TXT（`EntryDNSUnclaimed`，说这个名字没人领），
+  没有 A / AAAA——`cf` 下没领的名字查地址得 NODATA；被手删下一拍补回。领了的名字自己的记录照常胜过它。TTL 都是 600（DNSPod 免费版下限）。
 - **端口不进 DNS**（改约定 3）：两台家机器在同一个路由器后面时地址相同、端口不同（路由器转发到入口的外侧端口，即机器节点路线里的
   `entry=<host>:<port>`——macmini 22122、mini2 22123，没有就是 22022；C6 敲门用的就是它，`public=` 是系统 sshd 的，不读）。钥匙页给 Termius 的「端口」= 家机器的这个端口（`entryPublicPort`：可达的那一行，IPv4 在前），不是常数 22022；
   换家确认时端口变了就写「端口改成 N」。IPv6 在别的端口上应门（不经路由器转发）就不写 AAAA——一个名字只给 Termius 一个端口。
 - **凭据**：入口环境 `CCQUOTA_DNS_DP_ID` / `CCQUOTA_DNS_DP_KEY`（`deploy/k8s/overlays/prod/deployment-env.yaml` 从 `new-deploy/acme-dnspod`
   的 `DP_Id` / `DP_Key` 只读引用，`optional: true`）+ `CCQUOTA_DNS_DOMAIN=24haowan.com`、`CCQUOTA_DNS_SUBDOMAIN=cf`。
   缺一样 ⇒ 循环不起、0 次调用。⚠️ 这把 token 与 ACME DNS-01 共用、管整个 DNSPod 账号（不只这一个域名）：轮换它要同时顾到 ACME。
-- 查：`dig +short @223.5.5.5 <名字>.cf.24haowan.com`；入口审计里 kind `dns` 的行。BREAK-IT：`entry-dns-follows`。
+- 查：`dig +short @223.5.5.5 <名字>.cf.24haowan.com`（没领的名字：空；`dig TXT` 见那句话）；入口审计里 kind `dns` 的行。BREAK-IT：`entry-dns-follows` · `entry-name-unclaimed`。
 
 ## 17. 测试机：只跑合并后的列车，机器忙时让路（EPIC #3139 C5，#3144）
 

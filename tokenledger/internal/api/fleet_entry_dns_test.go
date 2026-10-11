@@ -36,9 +36,13 @@ func dnsReach(t *testing.T, h *harness, machine string, now time.Time, ok bool, 
 	}
 }
 
+// dnsZone is the zone but the unclaimed-name guard (dnsGuard's).
 func dnsZone(f *dns.Fake) string {
 	var b []string
 	for _, r := range f.Records() {
+		if r.Name == "*.cf" && r.Type == "TXT" {
+			continue
+		}
 		b = append(b, r.Type+" "+r.Name+" "+r.Value)
 	}
 	return strings.Join(b, " | ")
@@ -84,8 +88,8 @@ func TestEntryDNSFollowsTheHome(t *testing.T) {
 	}
 	dnsReach(t, h, "macmini", now, true, "23.119.126.213", "2001:db8::5")
 
-	if n := h.srv.EntryDNSTick(ctx, now); n != 2 {
-		t.Fatalf("first tick: %d writes, want 2 (%s)", n, dnsZone(f))
+	if n := h.srv.EntryDNSTick(ctx, now); n != 3 {
+		t.Fatalf("first tick: %d writes, want 3 — alice's two and the guard (%s)", n, dnsZone(f))
 	}
 	want := "A alice.cf 23.119.126.213 | AAAA alice.cf 2001:db8::5 | A www 47.107.245.170"
 	if got := dnsZone(f); got != want {
