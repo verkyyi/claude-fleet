@@ -69,9 +69,53 @@ class LinuxNode(unittest.TestCase):
             self.assertEqual(commands[0][-1], 'activate')
             self.assertTrue(commands[1][-1].endswith('fleet-login-bootstrap.sh'))
             self.assertEqual(commands[2][-1], 'restore')
-            run.return_value.returncode = 1
-            with self.assertRaisesRegex(RuntimeError, 'restore failed'):
+
+    def test_failed_restore_keeps_the_machine_ready(self):
+        """BREAK-IT linux-restore-crashloop (#3289): restore exit 1 once raised out of
+        bootstrap and foreground exited — the container crash-looped on the same
+        snapshot. Now bootstrap sets the snapshot aside and foreground writes ready."""
+        m = module('fleet-node-linux')
+        with tempfile.TemporaryDirectory() as d:
+            conf = Path(d, 'conf')
+            (conf / 'global').mkdir(parents=True)
+            snap = conf / 'global/sessions.snapshot'
+            snap.write_text('# fleet-sessions-snapshot v1\nfleet\twork\t/home/fleet\n')
+            env = {'FLEET_CONF_DIR': str(conf)}
+            with patch.object(m, 'load'), patch.object(m.Path, 'exists', return_value=True), \
+                    patch.object(m, 'tenant_env', return_value=(None, env)), \
+                    patch.object(m, 'as_tenant', return_value=Mock(returncode=1)):
                 m.bootstrap(Mock(login='fleet'))
+            self.assertFalse(snap.exists())
+            kept = list((conf / 'global').glob('sessions.snapshot.failed-*'))
+            self.assertEqual(len(kept), 1)
+            self.assertIn('work', kept[0].read_text())
+
+            # foreground: a failed restore on the container's own login still reaches ready
+            state, run = Path(d, 'state'), Path(d, 'run')
+            run.mkdir()
+            seen = []
+            real = m.Path
+
+            def path(*parts):
+                p = real(*parts)
+                return run / p.name if str(p).startswith('/run/') or str(p).startswith('/etc/ssh') else p
+
+            (run / 'cred/.shared').mkdir(parents=True)
+            (run / 'cred/.shared/ctl.sock').write_text('')
+            loop = Mock()
+            loop.bin.return_value = Path(d)
+            loop.tend.side_effect = lambda: seen.append((run / 'fleet-node-ready').exists()) or 0
+            with patch.dict(os.environ, {'FLEET_NODE_STATE': str(state), 'FLEET_CREDSEP_RUN_BASE': str(run / 'cred')}), \
+                    patch.object(m, 'Path', side_effect=path), patch.object(m, 'boot'), \
+                    patch.object(m, 'Loop', return_value=loop), patch.object(m, 'load'), \
+                    patch.object(m, 'tenants', return_value=[]), \
+                    patch.object(m, 'as_tenant', return_value=Mock(returncode=1)), \
+                    patch.object(m, 'tenant_env', return_value=(None, env)), \
+                    patch.object(m.subprocess, 'run'), patch.object(m.signal, 'signal'):
+                (state / 'ssh').mkdir(parents=True)
+                (state / 'ssh/ssh_host_ed25519_key').write_text('k')
+                m.foreground(Mock(login='fleet', hub='h', join_file='j', machine_join_file=''))
+            self.assertEqual(seen, [True])  # ready was written, the loop ran
 
     def test_image_replacement_and_rollback_keep_home_and_retry_failed_apply(self):
         m = module('fleet-node-linux')

@@ -13,6 +13,7 @@
 #   C  restore again → nothing duplicated
 #   D  a worktree deleted while the server was down is never woken (`gone`)
 #   E  a fleet fleet-down took down on purpose stays down (`down`)
+#   G  nothing skipped → still restored (issue #3289)
 #   F  no snapshot → exit 3
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -132,9 +133,23 @@ printf '%s\n' "$out" | grep -q "^down	oc	issue-1	" || fail "E: issue-1 not repor
 nt has-session -t oc 2>/dev/null && fail "E: a fleet-down fleet was brought back"
 rm -f "$WORK/conf/fleets/oc/restore.down"
 
+# ---- G. nothing to skip: every pinned session still comes back (issue #3289) ---------
+# B–E each carry a closed / gone / down row; with none the skip list is empty, and
+# restore once read the whole map as that list — all `missing`, exit 1.
+ss save >/dev/null
+nt kill-server 2>/dev/null
+M="$WORK/conf/global/sessions.snapshot.d/oc.map"
+awk -F'\t' 'NR == 1 || $2 == "issue-1"' "$SNAP" > "$SNAP.g" && mv -f "$SNAP.g" "$SNAP"
+awk -F'\t' '$1 == "FLEET" { print; next } $1 == "REAP" || $1 == "FID" { p = p $0 "\n"; next }
+  $1 == "WIN" { if ($2 == "issue-1") printf "%s%s\n", p, $0; p = ""; next }' "$M" > "$M.g" && mv -f "$M.g" "$M"
+[ "$(grep -vc '^#' "$SNAP")" = 1 ] || fail "G: want one pinned session ($(cat "$SNAP"))"
+out=$(ss restore); rc=$?
+[ "$rc" = 0 ] || fail "G: restore with nothing skipped exit $rc ($out)"
+printf '%s\n' "$out" | grep -q "^back	oc	issue-1	" || fail "G: issue-1 not back ($out)"
+
 # ---- F. no snapshot ---------------------------------------------------------------
 rm -f "$SNAP"
 ss restore >/dev/null 2>&1; rc=$?
 [ "$rc" = 3 ] || fail "F: restore with no snapshot exit $rc, want 3"
 
-echo "selftest PASS: fleet-sessions-snapshot — save pins unfinished sessions; kill-server → restore brings each back (same name, cwd, transcript, reap policy); closed / gone / down stay closed; idempotent"
+echo "selftest PASS: fleet-sessions-snapshot — save pins unfinished sessions; kill-server → restore brings each back (same name, cwd, transcript, reap policy); closed / gone / down stay closed; nothing skipped still restores; idempotent"

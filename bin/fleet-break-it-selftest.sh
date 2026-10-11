@@ -6252,6 +6252,23 @@ drill_linux_create_relay_403() {
   WHAT="开号时 relay-credential 答 403：登录照常 adopt、不写 relay.token；答 500 仍停下"
 }
 
+# ---- linux-restore-crashloop (#3289): a session restore that did not bring every
+# pinned session back raised out of bootstrap and the container exited — CrashLoop
+# on the same snapshot. Now the snapshot is set aside and the machine goes ready;
+# and an empty skip list no longer swallows the pinned map (the root cause).
+drill_linux_restore_crashloop() {
+  CAP=15; local t0
+  t0=$(now)
+  if ! python3 "$BIN/fleet-node-linux-selftest.py" LinuxNode.test_failed_restore_keeps_the_machine_ready \
+       >"$WORK/linux-restore.out" 2>&1; then
+    WHY="a failed session restore still takes the Linux node down: $(tail -n 3 "$WORK/linux-restore.out")"; return 1
+  fi
+  grep -q 'FILENAME == skipf' "$BIN/fleet-sessions-snapshot.sh" \
+    || { WHY="sessions-snapshot restore reads its skip list by NR == FNR again (an empty one swallows the map)"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="restore 退 1：快照改名 sessions.snapshot.failed-<UTC>、写 ready、不退出；空跳过表不再吞掉钉住的表"
+}
+
 # A child's report whose parent is gone (issue #3117, EPIC #3111 C6): a scratch spawned
 # a worker and was closed; the worker merged and its report went nowhere — a silent
 # exit 0. Now it is the person's: one row in global/orphan-reports.ndjson and one

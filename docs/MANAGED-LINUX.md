@@ -376,7 +376,11 @@ retry.
 
 On SIGTERM, the entrypoint saves every login's Fleet session snapshot before stopping the
 supervisor. On startup it restores snapshots through the existing restore
-script. Abrupt node loss can recover only previously persisted snapshots and
+script. A restore that does not bring every pinned session back is not fatal
+(#3289): the snapshot is renamed `sessions.snapshot.failed-<UTC>` as evidence,
+one line goes to the container log, and the machine still goes ready —
+`restore.map` stays, so the diskguard tick's auto-restore reopens what it can
+(BREAK-IT `linux-restore-crashloop`). Abrupt node loss can recover only previously persisted snapshots and
 conversation history; memory and running processes do not survive. Every
 container start has a new boot ID, preventing adoption of persisted PIDs that
 now identify unrelated processes.

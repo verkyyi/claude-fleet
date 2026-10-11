@@ -162,7 +162,10 @@ restore() {
     [ -f "$mf" ] || continue
     sess=${mf##*/}; sess=${sess%.map}
     tmp="$SDIR/.$sess.restore.$$"
-    awk -F'\t' -v sess="$sess" 'NR == FNR { if ($1 == sess) drop[$2] = 1; next }
+    # The skip list is named, never told by NR == FNR: with nothing skipped it is
+    # empty, and NR == FNR would then swallow the whole map — every pinned session
+    # read `missing` and the Linux node crash-looped on it (issue #3289).
+    awk -F'\t' -v sess="$sess" -v skipf="$skip" 'FILENAME == skipf { if ($1 == sess) drop[$2] = 1; next }
       $1 == "FLEET" { print; next }
       $1 == "REAP" || $1 == "FID" { pend = pend $0 "\n"; next }
       $1 == "WIN" { if (!($2 in drop)) printf "%s%s\n", pend, $0; pend = ""; next }' "$skip" "$mf" > "$tmp"
