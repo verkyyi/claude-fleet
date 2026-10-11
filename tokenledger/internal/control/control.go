@@ -496,6 +496,11 @@ type Heartbeat struct {
 	// agent, an older machine agent, a machine with no daemon or an empty
 	// register.
 	Services []ServiceStatus `json:"services,omitempty"`
+	// CIRunner is the machine link's word too (claude-fleet#3144, EPIC #3139
+	// C5): the machine's test runner (fleet-node-supervisor.py's state.json
+	// `ci_runner`) — idle · busy · paused · error · off, and why. nil from a
+	// plain agent, an older one, or a machine with no test runner (no ci.env).
+	CIRunner *CIRunnerStatus `json:"ci_runner,omitempty"`
 	OSUser   string          `json:"os_user,omitempty"`
 	OS       string          `json:"os,omitempty"`
 	Arch     string          `json:"arch,omitempty"`
@@ -656,6 +661,21 @@ type UpdateState struct {
 	Phase  string     `json:"phase,omitempty"`
 	At     *time.Time `json:"at,omitempty"`
 	Reason string     `json:"reason,omitempty"`
+}
+
+// CIRunnerStates are the words a machine's test runner says (claude-fleet#3144).
+var CIRunnerStates = []string{"idle", "busy", "paused", "error", "off"}
+
+// CIRunnerStatus is a machine's test runner as its daemon last wrote it: a
+// state, why (paused: what it yields to — "load: 0.92/core > 0.75"), when the
+// daemon wrote it and since when it holds, the runs it took. Never a credential.
+type CIRunnerStatus struct {
+	State  string     `json:"state"`
+	Why    string     `json:"why,omitempty"`
+	At     *time.Time `json:"at,omitempty"`
+	Since  *time.Time `json:"since,omitempty"`
+	Runs   int        `json:"runs"`
+	Failed int        `json:"failed"`
 }
 
 // ServiceStatus is one entry of a machine's login-level register

@@ -1,0 +1,21 @@
+# ci-runner.lock — the GitHub Actions runner a managed machine's test runner uses
+# (claude-fleet#3144, EPIC #3139 C5).
+#
+# bin/fleet-ci-runner.py (the machine daemon's `ci-runner` child, only where
+# /var/db/fleet-node/ci.env exists) downloads the archive for its platform from
+# the URL here, checks its SHA-256 before unpacking a byte, and keeps it in the
+# root runtime's tools cache: <root>/tools/actions-runner/<sha256>/ (root, 0755).
+# Each run is a fresh copy of that tree in the test login's home.
+#
+# Why here and not in release.json: an installed updater refuses a release.json
+# naming a component it does not know (check_release), and a pinned artifact
+# must sit on the hub before stable may move — both would stop every machine's
+# update for a part only a machine with ci.env uses. The runner reaches GitHub
+# to work at all, so it fetches from GitHub; the hash is the pin.
+# Bumping the runner = new lines here, nothing else.
+#
+# <platform>      <sha256 of the archive>                                          <url>
+darwin-arm64  df4cebda25c86a886ed204e49fee63f5c2e7cec5f447b5c98440a826bbdf9df2  https://github.com/actions/runner/releases/download/v2.338.0/actions-runner-osx-arm64-2.338.0.tar.gz
+darwin-amd64  dea7a58796ce215fc424a8b27c0fdd9b813fa5fc03d109a4a1d38131d6bfa1a3  https://github.com/actions/runner/releases/download/v2.338.0/actions-runner-osx-x64-2.338.0.tar.gz
+linux-amd64   af4b794c1bc41d73d40535e3fe092a39f9679cd8d965954c2aca25a05ca41d32  https://github.com/actions/runner/releases/download/v2.338.0/actions-runner-linux-x64-2.338.0.tar.gz
+linux-arm64   628b4a7258487b80c1d3c221095a7ded349f5ae0175fd3dfab708d07428f041b  https://github.com/actions/runner/releases/download/v2.338.0/actions-runner-linux-arm64-2.338.0.tar.gz

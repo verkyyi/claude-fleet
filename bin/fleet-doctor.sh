@@ -1900,6 +1900,17 @@ if [ -f "$_nsup" ] && command -v python3 >/dev/null 2>&1; then
     0) pass public "$pline" ;;
     1) warn public "$pline — check again now: \`sudo fleet-node-supervisor.py entry reach\` (result in /var/db/fleet-node/entry/reach.json)" ;;
   esac
+  # The machine's test runner (issue #3144, EPIC #3139 C5): idle / busy / paused
+  # (it gave way to the sessions — the reason said) PASS; error or a loop that is
+  # not running WARN. No /var/db/fleet-node/ci.env ⇒ no row.
+  _nci="$(dirname "$0")/fleet-ci-runner.py"
+  if [ -f "$_nci" ]; then
+    cline=$(python3 "$_nci" status --check 2>/dev/null); crc=$?
+    case "$crc" in
+      0) pass ci-runner "$cline" ;;
+      1) warn ci-runner "$cline — detail: \`fleet-node-supervisor.py status\` (ci-runner line), log /var/log/fleet-node/ci-runner.log" ;;
+    esac
+  fi
 fi
 # The home machine's standing connections to the other machines (issue #3002,
 # EPIC #2999 C5): one line per link (machine@login · route · age · round trip ·

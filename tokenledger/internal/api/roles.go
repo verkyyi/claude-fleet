@@ -110,6 +110,7 @@ var routeAccess = map[string]string{
 	// audits, settings, the operator's own analytics.
 	"/v1/fleet/join-codes": accessAdmin, "/v1/fleet/peer-certs": accessAdmin,
 	FleetNodesPrefix: accessAdmin, "/v1/node/desired": accessSelf, // claude-fleet#2214
+	CIRunnersPath:        accessAdmin, // claude-fleet#3144
 	"/v1/fleet/spot":     accessAdmin,
 	"/v1/fleet/accounts": accessAdmin, "/v1/fleet/settings": accessAdmin, "/v1/fleet/users": accessAdmin, "/v1/fleet/invites": accessAdmin,
 	"/v1/fleet/credentials": accessAdmin, "/v1/fleet/credentials/revoke": accessAdmin,

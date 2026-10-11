@@ -394,6 +394,9 @@ func (s *Server) routes() *routeMux {
 		// machine's desired state are the operator's; the node reads its own.
 		// The exact /v1/fleet/nodes/revoke and /retire routes still win.
 		mux.Handle(FleetNodesPrefix, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetNodes))))
+		// Every machine's test runner (claude-fleet#3144): the machine links'
+		// word, an admin's (the train's macOS job holds the viewer token).
+		mux.Handle(CIRunnersPath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleCIRunners))))
 		mux.HandleFunc("/v1/node/desired", s.handleNodeDesired)
 		// SPOT nodes (claude-fleet#1428): the node's own reclaim notice
 		// authenticates with its token; starting and releasing are the

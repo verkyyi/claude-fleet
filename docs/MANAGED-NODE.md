@@ -615,3 +615,51 @@ BREAK-IT 行 `service-handwritten`。只点名接管过的登录（`logins/<登�
   转发到 <内网地址>:22022」，运营商级 NAT 说「这台没有公网地址」，路由器没肯自动开写原因，超过 20 分钟没新结果写「结果过期」。
   入口没开、或没人以这台为家 ⇒ 无此行。现在就查：`sudo fleet-node-supervisor.py entry reach`。
 - BREAK-IT：`entry-public-unreachable`（入口那半由 Go 测试对演练里真的入口 sshd 拨号）。
+
+## 17. 测试机：只跑合并后的列车，机器忙时让路（EPIC #3139 C5，#3144）
+
+每台托管 Mac 最多挂一台 GitHub Actions 测试机，给列车（`release-train.yml`）的 macOS 测试用，
+PR 永远不上自家机器。没有 `/var/db/fleet-node/ci.env` = 什么都不做：没有子进程、`state.json`
+没有 `ci_runner`、`status` 没有那一行，字节不变。
+
+- **开**：在 root 名下写 `/var/db/fleet-node/ci.env`（root:wheel 0600），首选 GitHub App
+  （只装在这个仓库、只有仓库权限 Administration: read and write）：
+
+  ```sh
+  sudo install -m 600 -o root -g wheel /dev/stdin /var/db/fleet-node/ci.env <<'X'
+  FLEET_CI_REPO=verkyyi/claude-fleet
+  FLEET_CI_APP_ID=<App ID>
+  FLEET_CI_APP_INSTALLATION_ID=<安装 ID>
+  FLEET_CI_APP_KEY_FILE=/var/db/fleet-node/ci-app.pem
+  X
+  ```
+
+  私钥文件同样 root:wheel 0600。兜底：`FLEET_CI_TOKEN=<只能管这个仓库测试机的细粒度令牌>` 代替三行 App。
+  守护（`fleet-node-supervisor.py`）看到它就起 `ci-runner` 子进程（`bin/fleet-ci-runner.py loop`），
+  ci.env 一改就重起；删掉它，子进程停、测试机撤下。
+- **凭据只在 root 进程内存里**：每趟铸之前用私钥签 JWT（`openssl dgst -sha256 -sign`，RS256，
+  exp ≤ 10 分钟）→ 换 1 小时的安装令牌 → `generate-jitconfig`。私钥、JWT、安装令牌、细粒度令牌
+  都不进 argv、文件、日志、`fleet-ci` 的环境或任何会话。
+- **测试账号 `fleet-ci`**（`FLEET_CI_LOGIN`）：首次由 `sysadminctl -addUser … -shell /usr/bin/false`
+  建，非管理员、家目录 0700、隐藏；自己的 uid = 自己的 tmux socket 目录，碰不到任何 fleet 的 socket。
+  它在 `tenants` 行里照查（#2842）：一旦能 sudo / 进了 admin 组，测试机拒绝再起（`error`）。
+- **测试机本身**：`conf/ci-runner.lock` 钉版本 + 每个平台的 SHA-256（不进 release.json：已装的更新器
+  不认识新组件会拒整个发布，制品门也会挡住每次挪 stable）；从 GitHub 下、核对哈希后才解包到
+  `<root>/tools/actions-runner/<sha>/`（root 0755）。每趟一份新的拷贝在 `~fleet-ci/runner`，跑完删掉，
+  `fleet-ci` 名下剩的进程全杀。
+- **一趟**：JIT 配置（标签 `self-hosted` · `macOS` · `ARM64` · `fleet-ci`）只能接一个任务；
+  `run.sh` 降权到 `fleet-ci`、`nice 10`、环境从零搭（没有 FLEET_* / CCQUOTA_* / gh 令牌，JIT 配置走
+  `ACTIONS_RUNNER_INPUT_JITCONFIG` 不进 argv）。
+- **只接列车**：`ACTIONS_RUNNER_HOOK_JOB_STARTED` = root 名下的 `bin/fleet-ci-job-gate.sh`，在任务任何一步
+  之前核对 仓库 · 事件（push / workflow_dispatch / schedule）· `refs/heads/master` · 没有 `GITHUB_HEAD_REF` ·
+  workflow 在 `FLEET_CI_WORKFLOWS`（默认 `release-train.yml`）里，缺一项就拒。仓库设置仍保持
+  「外部贡献者的 workflow 需批准」。
+- **让路**：铸下一趟前看 内存压力（≥ warn）· 空闲内存够不够「底线（10% RAM，至少 2 GB）+ 一个会话 1.5 GB
+  + 一趟 4 GB」· 每核负载 > 0.75 · 重活槽全满或有人排队——任一项就 `paused:<为什么>`，不铸；等活的空闲
+  测试机在机器变紧时撤下、注销；跑着的那趟跑完（上限 `FLEET_CI_MAX_SECS` 3 小时）。
+  阈值都可在 ci.env 里改（见 `fleet-ci-runner.py --help`）。
+- **看**：`sudo fleet-node-supervisor.py status` 的 `ci-runner` 行；`fleet doctor` 的 `ci-runner` 行
+  （idle / busy / paused PASS，error / 循环没在跑 WARN）；入口 `GET /v1/fleet/ci-runners`（管理员）列每台
+  机器的状态、是否在线、空闲几台（C6 据此决定上自家机器还是回 GitHub 的机器）。
+- BREAK-IT：`ci-runner-hogs` · `ci-runner-pr-code`（`bin/fleet-break-it-ci-selftest.sh`，沙箱里的假 GitHub、
+  假测试机包、假测试账号）。
