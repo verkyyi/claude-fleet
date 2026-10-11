@@ -2920,6 +2920,25 @@ if [ -f "$_plg" ] && command -v python3 >/dev/null 2>&1 && command -v "${FLEET_I
   esac
 fi
 
+# --- feedback: /fleet-feedback on this login (issue #3360, EPIC #3354 C6) ---
+# On by default on a MANAGED login (install-apply installs + enables it once,
+# plugins-defaulted.json), off on anyone's own computer. Never a WARN: a person
+# may turn it off. On ⇒ PASS; a managed login with it off ⇒ one INFO line; own
+# computer with it off ⇒ no row (byte for byte as before). Whether the hub turns
+# a feedback into a GitHub issue is the hub's side (its GitHub App) — not read here.
+_fbs="$(dirname "$0")/fleet-feedback-switch.sh"
+if [ -f "$_fbs" ] && command -v python3 >/dev/null 2>&1; then
+  if bash "$_fbs" enabled >/dev/null 2>&1; then
+    pass feedback "开 · /fleet-feedback 可用$(fleet_node_manages 2>/dev/null && echo '（托管默认开）')"
+  elif fleet_node_manages 2>/dev/null; then
+    if grep -q '"fleet-feedback"' "$conf_dir/plugins-defaulted.json" 2>/dev/null; then
+      info feedback "关 · 托管登录默认开，这里被关掉了（人的选择，升级不会再开；要用：fleet feedback on）"
+    else
+      info feedback "关 · 托管登录默认开，还没装过：下次同步（install-apply 的 plugins 一步）装上并打开"
+    fi
+  fi
+fi
+
 # --- team: the hub's team version vs this login's (issue #1899) ---
 # The node agent runs fleet-agent-team.py sync on the hub's push and records it;
 # the row reads 入口 v<N> · 本机 v<M> · 拉到 <when>. WARN when the hub pushed a

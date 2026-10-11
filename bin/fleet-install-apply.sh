@@ -30,7 +30,9 @@
 #             install NOTHING, except carry-over: a part that moved into a
 #             plugin and is still installed here (its GONE path) installs that
 #             plugin; update an installed one behind the runtime
-#             (bin/fleet-plugins.py ensure). Before the passes that remove the
+#             (bin/fleet-plugins.py ensure); a managed login also gets
+#             fleet-feedback installed + enabled once (issue #3360,
+#             plugins-defaulted.json). Before the passes that remove the
 #             moved copies. claude.plugins in the override file = skip.
 #   hooks     settings-hooks.json changed -> fleet-hooks-merge.py merge
 #   settings  every apply that moved -> fleet-hooks-merge.py defaults (issue
@@ -801,8 +803,13 @@ if [ "$BUNDLE" = 0 ] && [ -f "$ROOT/.claude-plugin/marketplace.json" ] && [ -f "
   else
     gonef=$(mktemp "${TMPDIR:-/tmp}/fleet-plugins-gone.XXXXXX")
     printf '%s\n' "$GONE" > "$gonef"
+    # a managed login (the machine daemon runs it) gets /fleet-feedback on by
+    # default, ONCE — plugins-defaulted.json remembers, a person's off stays off
+    # (issue #3360; docs/MANAGED-NODE.md §18). Anyone else's computer: nothing.
+    pdef=()
+    fleet_node_manages "$LOGIN" && pdef=(--default fleet-feedback)
     if out=$(python3 "$ROOT/bin/fleet-plugins.py" ensure --root "$ROOT" --claude "$CLAUDE" \
-               --claude-dir "$CDIR" --gone "$gonef" ${DRYFLAG:+"$DRYFLAG"} 2>&1); then
+               --claude-dir "$CDIR" --gone "$gonef" ${pdef[@]+"${pdef[@]}"} ${DRYFLAG:+"$DRYFLAG"} 2>&1); then
       printf '%s\n' "$out"
     else
       printf '%s\n' "$out" | grep -v ': FAIL ' || true
