@@ -136,7 +136,7 @@ eq "A … its own tmux server, never the resident client's fleet-shell (#2904)" 
 fa FLEET_CLIENT=shell --
 "$REAL_TMUX" -L fleet-shell kill-server 2>/dev/null
 has "A … an old resident client's server running: the retire command (#2904)" "$out" "fleet-node-shell-retire.sh --login"
-fa FLEET_NODE_HOSTED_CACHE="$W/elsewhere" --
+fa FLEET_CLIENT=shell FLEET_NODE_HOSTED_CACHE="$W/elsewhere" --
 has "A FLEET_NODE_HOSTED_CACHE moves the temp cache" "$calls" "cache=$W/elsewhere"
 fa FLEET_CLIENT=shell FLEET_NODE_CLIENT=1 --
 eq "A the hatch: the install's own client, as before" "$calls" "inst fleet-client-update.sh start|hosted=|cache=
@@ -200,7 +200,7 @@ cenv() {
       FLEET_SHELL_NO_ATTACH=1 FLEET_SHELL_NO_FIRST=1 FLEET_SIDEBAR_HOST=selftest-host \
       SSH_CONNECTION='203.0.113.9 50000 10.0.0.3 22' FLEET_CLIENT=shell "$@"
 }
-up() { cenv FLEET_NODE_HOSTED_IDLE="${1:-600}" sh "$W/inst/bin/fleet" </dev/null >"$W/up.out" 2>&1; }
+up() { cenv FLEET_CLIENT=shell FLEET_NODE_HOSTED_IDLE="${1:-600}" sh "$W/inst/bin/fleet" </dev/null >"$W/up.out" 2>&1; }
 gone() { ! T has-session 2>/dev/null && ! TS has-session 2>/dev/null; }
 left() { pgrep -f "$W/rt/bin/" 2>/dev/null | grep -v "^$$\$" | wc -l | tr -d ' '; }
 cp "$BIN/fleet" "$W/inst/bin/fleet"; rm -f "$W/inst/bin/fleet-shell.sh"   # the runtime's must be what runs

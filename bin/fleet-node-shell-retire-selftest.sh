@@ -17,6 +17,9 @@
 #      with the client running: rc 3, nothing changed; once nothing runs: rc 0.
 #   C. another login without root → rc 2, nothing touched; no --login → rc 2.
 set -uo pipefail
+# plain `fleet` is the thin loop since #3007 (EPIC #2999 C10): what runs here is the
+# OLD client's road, kept until C11 deletes it — so it asks for it by name
+export FLEET_CLIENT=shell
 here="$(cd "$(dirname "$0")" && pwd)"
 FLEET="$here/fleet"
 RETIRE="$here/fleet-node-shell-retire.sh"

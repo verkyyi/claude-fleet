@@ -73,6 +73,9 @@
 #                    address in fleet.conf the env is the hub one, unchanged
 # tmux / python3 absent → SKIP (exit 0). Exit 0 = pass.
 set -uo pipefail
+# plain `fleet` is the thin loop since #3007 (EPIC #2999 C10): what runs here is the
+# OLD client's road, kept until C11 deletes it — so it asks for it by name
+export FLEET_CLIENT=shell
 BIN="$(cd "$(dirname "$0")" && pwd)"
 REAL_TMUX=$(command -v tmux) || { printf 'fleet-shell selftest: tmux absent — SKIP\n'; exit 0; }
 command -v python3 >/dev/null 2>&1 || { printf 'fleet-shell selftest: python3 absent — SKIP\n'; exit 0; }

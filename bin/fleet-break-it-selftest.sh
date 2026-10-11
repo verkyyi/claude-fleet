@@ -189,6 +189,9 @@
 # across each other beyond lazy, idempotent rigs (client_setup, drive), so any
 # slice runs on its own.
 set -uo pipefail
+# plain `fleet` is the thin loop since #3007 (EPIC #2999 C10): what runs here is the
+# OLD client's road, kept until C11 deletes it — so it asks for it by name
+export FLEET_CLIENT=shell
 # Every session its own row (issue #2675): the batch view folds a flat list into
 # 「单独的活」 — sidebar-batch-view-selftest.sh pins it; these rows are the old ones.
 export FLEET_SIDEBAR_FOLD=off

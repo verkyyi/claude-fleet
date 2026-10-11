@@ -43,6 +43,9 @@
 # the deps step on). Exit 0 = every step green; 1 = a step failed (its name and
 # the logs are printed); 2 = usage.
 set -uo pipefail
+# plain `fleet` is the thin loop since #3007 (EPIC #2999 C10): what runs here is the
+# OLD client's road, kept until C11 deletes it — so it asks for it by name
+export FLEET_CLIENT=shell
 
 CCQ=''
 while [ $# -gt 0 ]; do
