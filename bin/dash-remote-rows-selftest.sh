@@ -1034,6 +1034,11 @@ p = ["@5", "", "1", "/w/app-scratch-7", "looping", "claude", "a1", "", "acme/app
 print(h.inventory_row(p + ["epic=acme/app#1949:1/3"])[1].get("epic"), h.inventory_row(p + ["epic=#7"])[1].get("epic"),
       h.inventory_row(p + ["epic=x;y"])[1].get("epic"), h.inventory_row(p)[1].get("epic"), h.inventory_row(p)[1].get("title"))' 2>&1)
 eq "Q: inventory column 21 — a cell, a bare #N, junk dropped, absent on a 20-column row" "acme/app#1949:1/3 #7 None None 侧栏改版" "$got"
+got=$(cd "$BIN" && python3 -c 'import fleet_hub_common as h
+p = ["@5", "", "1", "/w/x", "idle", "claude", "a1", "", "", "test-norepo", "", "", "", "busy=", "born=", "cfg=", "title=", "reap=", "detail="]
+x = lambda r: (lambda e: (e.get("role"), e.get("coordinator")))(h.inventory_row(p + ["role=" + r])[1])
+print(x("worker"), x("orchestrator"), x(""))' 2>&1)
+eq "Q: column 20 role=worker is the coordinator flag (#3227), an old role= kept" "(None, True) ('orchestrator', None) (None, None)" "$got"
 rm -f "$G/remote_$QS" "$G/remote_fold_$QS" "$G/hub_ok" "$MARK"; rm -rf "$WORK/conf/fleets/$QS"
 PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null   # leave leg E's cache as it was
 cp "$WORK/wlist.q" "$WLIST_FILE"

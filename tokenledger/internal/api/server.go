@@ -174,6 +174,9 @@ type Server struct {
 	leaseNow func() time.Time
 	// budgetNow replaces the per-person budget clock in tests (claude-fleet#1977).
 	budgetNow func() time.Time
+	// IssueMeta names a task's title and its batch (the issue's parent) on
+	// 我的用量 (claude-fleet#3227); nil = numbers only, no title, no batch.
+	IssueMeta IssueMetaSource
 
 	// NodeLostAfter is how long a node may be silent before the hub records a
 	// node_lost alert (FLEET_NODE_LOST_ALERT_SECS, claude-fleet#1630); zero =
@@ -618,6 +621,9 @@ func (s *Server) routes() *routeMux {
 		mux.HandleFunc(CredProxyUsagePath, s.handleCredProxyUsage)
 		mux.HandleFunc("/v1/node/usage", s.handleNodeUsage)
 		mux.Handle("/v1/fleet/person-usage", s.viewerOnly(http.HandlerFunc(s.handleFleetPersonUsage)))
+		// 我的用量 in one answer (claude-fleet#3227): the viewer's own limit,
+		// days, models and where it went — off pool_usage, never the pool.
+		mux.Handle("/v1/me/usage", s.viewerOnly(http.HandlerFunc(s.handleMeUsage)))
 		// 我的用量 (claude-fleet#2519): a person's own usage and budget.
 		mux.Handle("/usage", s.viewerOnly(http.HandlerFunc(s.serveUsagePage)))
 		// The relay (claude-fleet#1413). Both halves authenticate
@@ -674,8 +680,10 @@ func (s *Server) routes() *routeMux {
 	// Who the gate admitted, for the shared page header (claude-fleet#1467).
 	// Unconditional: the header is on every hub's dashboard, fleet module or not.
 	mux.Handle("/v1/me", s.viewerOnly(http.HandlerFunc(s.handleMe)))
-	// 我的额度 (claude-fleet#2517): the API and its page.
-	mux.Handle("/v1/me/quota", s.viewerOnly(http.HandlerFunc(s.handleMeQuota)))
+	// 我的额度 (claude-fleet#2517): the API and its page. The subscriptions'
+	// windows are the pool's, an admin's only since claude-fleet#3227 — a
+	// person reads their own limit on /v1/me/usage.
+	mux.Handle("/v1/me/quota", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleMeQuota))))
 	mux.Handle("/quota", s.viewerOnly(http.HandlerFunc(s.serveQuotaPage)))
 	mux.Handle("/v1/collectors", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleCollectors))))
 	mux.Handle("/v1/account-usage", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleAccountUsage))))
