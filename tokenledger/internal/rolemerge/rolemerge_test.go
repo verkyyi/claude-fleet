@@ -133,33 +133,6 @@ func TestVectors(t *testing.T) {
 	}
 }
 
-// TestBuiltinRoles: the four shipped definitions parse, and with no layer the
-// merge is the definition itself.
-func TestBuiltinRoles(t *testing.T) {
-	t.Skip("worker / epic-driver are standard agent files since claude-fleet#3122 and the role locks are gone; the merge goes in #3130")
-	list, _ := os.ReadFile(filepath.Join(repo, "conf", "agent-locked.list"))
-	for _, role := range Roles {
-		raw, err := os.ReadFile(filepath.Join(repo, "agents", role+".md"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		f, b, err := Parse(string(raw))
-		if err != nil {
-			t.Fatalf("%s: %v", role, err)
-		}
-		if n, _ := f.Get("name"); n != role {
-			t.Errorf("%s: name %v", role, n)
-		}
-		m := Merge(f, b, nil, RoleLocks(role, string(list)))
-		if Canonical(m.Fields) != Canonical(f) || m.Body != b {
-			t.Errorf("%s: no layer changed the definition", role)
-		}
-	}
-	if l := RoleLocks("worker", string(list)); !in("permissionMode", l) {
-		t.Errorf("worker locks: %v", l)
-	}
-}
-
 // TestRulesMatchPython: the built-in table, alone and under a person layer,
 // merges to the rows and version bin/fleet_rules.py gives.
 func TestRulesMatchPython(t *testing.T) {
