@@ -5536,7 +5536,8 @@ fleet_identity_triplet() {
 # first call computes it — uuid5(<machine id>, canonical JSON of
 # fleet_identity_triplet), byte-for-byte what fleet_control.py's inventory used to
 # mint from the fleet conf's OWN repo and checkout (issues #1491, #1498) — and
-# writes it to fleets/<sess>/identity (fleet_identity_file, 0600, one line); every
+# writes it to fleets/<sess>/identity (fleet_identity_file, 0600: the UUID, then the
+# triplet it hashed — issue #3397); every
 # later call reads only that file. So a fleet's identity depends on NO repo: a
 # FLEET_REPO / FLEET_MAIN that moves or leaves the conf changes nothing, and the
 # hub's sessions, leases and records keep their fleet. fleet-install-apply.sh's
@@ -5567,17 +5568,21 @@ try:
         sys.exit(1)
     con = sqlite3.connect("file:%s?mode=ro" % quote(sys.argv[1]), uri=True)
     row = con.execute("SELECT value FROM metadata WHERE key='"'"'machine_id'"'"'").fetchone()
-    print(uuid.uuid5(uuid.UUID(row[0]), json.dumps(parts[:3], ensure_ascii=False,
-                                                   sort_keys=True, separators=(",", ":"))))
+    name = json.dumps(parts[:3], ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    print(uuid.uuid5(uuid.UUID(row[0]), name))
+    print(name)
 except Exception:
     sys.exit(1)
 ' "$db" 2>/dev/null) && [ -n "$u" ] || return 1
   [ -f "$(fleet_conf_file "$sess")" ] && _fleet_identity_write "$idf" "$u"
-  printf '%s\n' "$u"
+  printf '%s\n' "${u%%$'\n'*}"
 }
 
-# _fleet_identity_write <file> <uuid> — atomic (temp + rename), 0600. Two first
-# calls racing compute the same value, so whichever rename lands last is the same.
+# _fleet_identity_write <file> <uuid>[\n<triplet JSON>] — atomic (temp + rename),
+# 0600. Two first calls racing compute the same value, so whichever rename lands
+# last is the same. Line 2 is the triplet the UUID was minted from (issue #3397):
+# the inventory reports THAT repo + checkout beside the frozen UUID, so the hub's
+# re-derivation adds up whatever the fleet's repos did since.
 _fleet_identity_write() {
   local f="$1" tmp
   mkdir -p "${f%/*}" 2>/dev/null || return 0

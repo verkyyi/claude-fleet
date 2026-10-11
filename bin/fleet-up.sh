@@ -224,14 +224,18 @@ if [ ! -f "$CONF" ] && [ -f "$legacy" ]; then
   migrate_conf_repo
   if [ -n "$ADD_REPO" ] && fleet_repo_hosted "$NAME" "$ADD_REPO"; then ADD_REPO=""; fi
 fi
+# The repo goes in before the session exists, so the hub's first paint has it;
+# register does the checkout (reuse or clone), the base branch (#603), the trust
+# warning (#563), and wakes the daemons. And before the CONF exists (issue
+# #3397): a conf is what makes a fleet, and the first reader that sees one —
+# the node agent's inventory, already beating on a fresh login — freezes its
+# identity from the repo it hosts at that moment; with the conf first, a new
+# login's fleet froze repo-less and its starter came a second later.
+add_repo
+mark_seed
 fleet_write_conf "$CONF" "$NAME" "" "" "" "$(date '+%Y-%m-%d %H:%M:%S')" \
   || die "failed to write $CONF"
 echo "fleet-up: wrote $CONF"
-# The repo goes in before the session exists, so the hub's first paint has it;
-# register does the checkout (reuse or clone), the base branch (#603), the trust
-# warning (#563), and wakes the daemons.
-add_repo
-mark_seed
 
 # Where the hub opens: $HOME (or HUB_CWD), however many repos the fleet hosts —
 # a fleet has no main checkout (#795, #1937, #1941).

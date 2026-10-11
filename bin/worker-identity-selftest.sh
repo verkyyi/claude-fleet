@@ -36,6 +36,11 @@
 #      fleet_uuid, nor the inventory's fleet_id, nor fleet_uuid_home; a name with
 #      no conf writes nothing; a damaged file is rewritten; install-apply's conf
 #      pass freezes before fleet-conf.sh migrate.
+#   H  what the inventory reports derives the frozen UUID (issue #3397): a fleet
+#      frozen repo-less whose starter came a moment later, a one-line file of the
+#      same, a fleet whose first repo was replaced — each reports the (repo,
+#      checkout) its UUID was minted from, so the hub's re-derivation adds up; an
+#      unmoved fleet is reported as before; fleet-up adds its repo before its conf.
 # tmux / python3 / perl absent → SKIP. Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -257,7 +262,7 @@ OLD=$(old_alg "$G" acme/first "$WORK/first")
 ok; [ ! -e "$GD/identity" ] || fail "G: a new fleet starts with no identity file"
 GU=$(lib fleet_uuid "$G")
 ok; is_uuid "$GU" && [ "$GU" = "$OLD" ] || fail "G: the first fleet_uuid = the old algorithm's value" "got=$GU old=$OLD"
-ok; [ "$(cat "$GD/identity" 2>/dev/null)" = "$OLD" ] || fail "G: the first call writes fleets/<sess>/identity" "$(cat "$GD/identity" 2>&1)"
+ok; [ "$(head -1 "$GD/identity" 2>/dev/null)" = "$OLD" ] || fail "G: the first call writes fleets/<sess>/identity" "$(cat "$GD/identity" 2>&1)"
 ok; [ "$(ls -l "$GD/identity" 2>/dev/null | cut -c1-10)" = '-rw-------' ] || fail "G: the identity file is 0600" "$(ls -l "$GD/identity")"
 ok; [ "$(inv_id "$G")" = "$OLD" ] || fail "G: the inventory's fleet_id = the frozen value" "$(inv_id "$G")"
 printf 'FLEET_REPO=acme/second\nFLEET_MAIN=%s/second\n' "$WORK" > "$GD/conf"
@@ -268,15 +273,64 @@ ok; [ "$(old_alg "$G" acme/second "$WORK/second")" != "$OLD" ] || fail "G: (cont
 printf 'FLEET_BASE_BRANCH=main\n' > "$GD/conf"
 ok; [ "$(lib fleet_uuid "$G")" = "$OLD" ] && [ "$(inv_id "$G")" = "$OLD" ] \
   || fail "G: no FLEET_REPO at all → the same identity" "$(lib fleet_uuid "$G") $(inv_id "$G")"
-ok; [ "$(lib fleet_uuid "$L")" = "${U:-x}" ] && [ "$(cat "$FLEET_CONF_DIR/fleets/$L/identity" 2>/dev/null)" = "${U:-y}" ] \
+ok; [ "$(lib fleet_uuid "$L")" = "${U:-x}" ] && [ "$(head -1 "$FLEET_CONF_DIR/fleets/$L/identity" 2>/dev/null)" = "${U:-y}" ] \
   || fail "G: the D fleet's value froze as it was minted"
 NC="nocf1936$$"
 ok; is_uuid "$(lib fleet_uuid "$NC")" && [ ! -e "$FLEET_CONF_DIR/fleets/$NC" ] || fail "G: a name with no conf answers but writes nothing"
 printf 'garbage\n' > "$GD/identity"
 printf 'FLEET_REPO=acme/first\nFLEET_MAIN=%s/first\n' "$WORK" > "$GD/conf"
-ok; [ "$(lib fleet_uuid "$G")" = "$OLD" ] && [ "$(cat "$GD/identity")" = "$OLD" ] || fail "G: a damaged file is recomputed and rewritten" "$(cat "$GD/identity")"
+ok; [ "$(lib fleet_uuid "$G")" = "$OLD" ] && [ "$(head -1 "$GD/identity")" = "$OLD" ] || fail "G: a damaged file is recomputed and rewritten" "$(cat "$GD/identity")"
 ok; awk '/fleet_uuid "\$s"/ { f = NR } /fleet-conf.sh" migrate/ { m = NR } END { exit !(f && m && f < m) }' "$BIN/fleet-install-apply.sh" \
   || fail "G: install-apply's conf pass freezes every fleet before fleet-conf.sh migrate"
+
+# --- H: what the inventory reports still derives the frozen UUID (issue #3397) --------
+# The hub re-derives every fleet UUID from the (repo, checkout) a heartbeat reports
+# and drops one that does not add up. A UUID frozen from another triplet than the
+# fleet's current one — a fresh login's fleet frozen in the moment between its conf
+# and its starter repo, a repo added to a no-repo fleet, the first one removed —
+# must still be reported with the triplet it was minted from.
+derives() { (cd "$BIN" && python3 - "$FLEET_CONF_DIR" "$1" <<'PY' 2>&1
+import json, sqlite3, sys, uuid, fleet_control as c
+f = [x for x in c.Control(sys.argv[1]).inventory() if x["name"] == sys.argv[2]][0]
+m = sqlite3.connect(sys.argv[1] + "/control/state.sqlite3").execute("SELECT value FROM metadata WHERE key='machine_id'").fetchone()[0]
+want = str(uuid.uuid5(uuid.UUID(m), json.dumps([f["name"], f["repo"], f["checkout"]], ensure_ascii=False, sort_keys=True, separators=(",", ":"))))
+print("ok" if want == f["fleet_id"] else "MISMATCH", f["fleet_id"], f["repo"] or "-", f["checkout"] or "-", ",".join(f["repos"]) or "-")
+PY
+); }
+put_repo() {  # <fleet> <owner/name> <checkout> — what fleet_repo_register writes, sans clone
+  local f; f=$(lib fleet_repo_conf_file "$1" "$2"); mkdir -p "${f%/*}"
+  printf 'FLEET_REPO="%s"\nFLEET_MAIN="%s"\nFLEET_BASE_BRANCH="main"\n' "$2" "$3" > "$f"
+  lib fleet_repo_order_put "$1" "$2"
+}
+# H1: the fresh-login race — conf first, frozen repo-less, the starter a beat later.
+H="hrace3397$$"; HD="$FLEET_CONF_DIR/fleets/$H"; mkdir -p "$HD"; mkdir -p "$WORK/starter"
+printf 'FLEET_MAX_SESSIONS=4\n' > "$HD/conf"
+HU=$(lib fleet_uuid "$H")
+ok; [ "$HU" = "$(old_alg "$H" "" "")" ] || fail "H1: a conf with no repo yet freezes the repo-less triplet" "$HU"
+ok; [ "$(sed -n 2p "$HD/identity")" = "[\"$H\",\"\",\"\"]" ] || fail "H1: the identity file's 2nd line is the triplet it hashed" "$(cat "$HD/identity")"
+put_repo "$H" acme/starter "$WORK/starter"
+R=$(derives "$H")
+ok; case "$R" in "ok $HU - - acme/starter") ;; *) false ;; esac \
+  || fail "H1: the starter added after the freeze → the inventory reports the minted triplet (derives) and still lists the repo" "$R"
+# H2: a file older than its 2nd line (frozen repo-less by an earlier version).
+printf '%s\n' "$HU" > "$HD/identity"
+R=$(derives "$H")
+ok; case "$R" in "ok $HU "*) ;; *) false ;; esac || fail "H2: a one-line file frozen repo-less still derives" "$R"
+# H3: frozen WITH a repo, which then left (removed / moved): the 2nd line is the answer.
+H3="hmove3397$$"; H3D="$FLEET_CONF_DIR/fleets/$H3"; mkdir -p "$H3D" "$WORK/one" "$WORK/two"
+printf 'FLEET_MAX_SESSIONS=4\n' > "$H3D/conf"; put_repo "$H3" acme/one "$WORK/one"
+H3U=$(lib fleet_uuid "$H3")
+ok; [ "$H3U" = "$(old_alg "$H3" acme/one "$WORK/one")" ] || fail "H3: frozen from its first repo" "$H3U"
+rm -rf "$H3D/repos"; put_repo "$H3" acme/two "$WORK/two"
+R=$(derives "$H3")
+ok; case "$R" in "ok $H3U acme/one $WORK/one acme/two") ;; *) false ;; esac \
+  || fail "H3: the first repo replaced → the minted repo + checkout reported, the hosted list current" "$R"
+# H4: an unchanged fleet reports what it always did, byte for byte.
+R=$(derives "$G")
+ok; case "$R" in "ok $OLD acme/first $WORK/first acme/first") ;; *) false ;; esac || fail "H4: an unmoved fleet is reported as before" "$R"
+# H5: fleet-up registers the repo BEFORE the conf exists.
+ok; awk '/^add_repo$/ && !a { a = NR } /^fleet_write_conf "\$CONF"/ { w = NR } END { exit !(a && w && a < w) }' "$BIN/fleet-up.sh" \
+  || fail "H5: fleet-up.sh runs add_repo before fleet_write_conf"
 
 if [ "$FAIL" -gt 0 ]; then
   printf 'worker-identity selftest: %d of %d checks FAILED\n' "$FAIL" "$CHECKS" >&2

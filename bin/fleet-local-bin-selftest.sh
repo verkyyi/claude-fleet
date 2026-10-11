@@ -98,12 +98,12 @@ _wait() { local _; for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; 
 winpath()    { rm -f "$WORK/win.path"; tmux -L fleet run-shell -t fleet: "$WORK/spawn.sh"; _wait; }
 clientpath() { rm -f "$WORK/win.path"; "$WORK/spawn.sh"; _wait; }
 # fleet-up's output on this sandbox (the byte-for-byte leg; the repo goes in through
-# fleet_repo_register since issue #1937)
+# fleet_repo_register since issue #1937, before the conf is written since #3397)
 want=$(printf '%s\n' \
-  "fleet-up: wrote $FLEET_CONF_DIR/fleets/fleet/conf" \
   "fleet-repo: reusing existing checkout $WORK/src/a" \
   "fleet-repo: fleet now hosts o/a (main=$WORK/src/a base=master) — $FLEET_CONF_DIR/fleets/fleet/repos/o-a.conf" \
   "fleet-up: added o/a to fleet 'fleet'" \
+  "fleet-up: wrote $FLEET_CONF_DIR/fleets/fleet/conf" \
   "fleet-up: fleet 'fleet' is up (1 repo(s): o/a)" \
   "fleet-up: not attaching (--no-attach) — later: fleet")
 

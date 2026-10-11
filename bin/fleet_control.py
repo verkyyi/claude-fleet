@@ -118,24 +118,55 @@ class Control:
         for i in range(0, len(parts), 6):
             session, repo, checkout, agent, config, hosted = parts[i:i + 6]
             name(session)
-            fleet_id = self.frozen_identity(session) \
-                or str(uuid.uuid5(uuid.UUID(self.machine_id), canonical([session, repo, checkout])))
             # repos (issue #1512): every repo the fleet hosts, for the hub's
             # placement — its own repo alone in a one-repo fleet.
             repos = [r for r in hosted.split("\n") if r] or ([repo] if repo else [])
+            minted = self.mint(session, repo, checkout)
+            fleet_id, frozen_from = self.frozen_identity(session)
+            if not fleet_id:
+                fleet_id = minted
+            elif fleet_id != minted:
+                # The UUID was frozen from another triplet (issue #3397): fleet-up's
+                # conf existed a moment before its first repo, a repo was added to a
+                # no-repo fleet, the first one was removed. The hub re-derives the
+                # UUID from the repo + checkout reported here, so report the ones it
+                # was minted from — the identity file's own line, else (for a file
+                # older than that line) the empty triplet a repo-less fleet mints.
+                for r, c in (frozen_from, ("", "")):
+                    if r is not None and self.mint(session, r, c) == fleet_id:
+                        repo, checkout = r, c
+                        break
             fleets.append(dict(fleet_id=fleet_id, machine_id=self.machine_id, name=session,
                                repo=repo, repos=repos, checkout=checkout, agent=agent, config_path=config))
         return fleets
 
+    def mint(self, session, repo, checkout):
+        """uuid5(machine id, canonical triplet) — what fleet_uuid computes and the hub re-derives."""
+        return str(uuid.uuid5(uuid.UUID(self.machine_id), canonical([session, repo, checkout])))
+
     def frozen_identity(self, session):
         """The fleet's UUID as fleet_uuid froze it (issue #1936): fleets/<sess>/identity,
-        written once from the same uuid5 the line above computes, then never derived
-        from a repo again. None when absent or damaged — the caller mints it."""
+        written once from the same uuid5 mint() computes, then never derived from a repo
+        again — and, on its second line (issue #3397), the [session, repo, checkout] it
+        was minted from. (uuid, (repo, checkout)); (uuid, (None, None)) for a file with
+        no such line; (None, (None, None)) when absent or damaged — the caller mints it."""
+        none = (None, None)
         try:
-            value = (self.conf_dir / "fleets" / session / "identity").read_text().split()[0]
-            return str(uuid.UUID(value)) if len(value) == 36 else None
+            lines = (self.conf_dir / "fleets" / session / "identity").read_text().split("\n")
+            value = lines[0].strip()
+            if len(value) != 36:
+                return None, none
+            value = str(uuid.UUID(value))
         except (OSError, IndexError, ValueError):
-            return None
+            return None, none
+        try:
+            triplet = json.loads(lines[1])
+            if isinstance(triplet, list) and len(triplet) == 3 and triplet[0] == session \
+                    and all(isinstance(x, str) for x in triplet):
+                return value, (triplet[1], triplet[2])
+        except (IndexError, ValueError):
+            pass
+        return value, none
 
     def ready(self):
         """Can this login take a NEW session (issue #1475)? The adapter's `ready`

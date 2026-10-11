@@ -404,3 +404,18 @@ func TestCredCycleWithdrawsForbiddenAccounts(t *testing.T) {
 		}
 	}
 }
+
+// TestCredRefusedRetryNoPrincipal (claude-fleet#3397): a freshly opened
+// login's no_principal is retried in seconds, doubling to the old 15-minute
+// wait; any other refusal waits the 15 minutes at once.
+func TestCredRefusedRetryNoPrincipal(t *testing.T) {
+	want := []time.Duration{30 * time.Second, time.Minute, 2 * time.Minute, 4 * time.Minute, 8 * time.Minute, 15 * time.Minute, 15 * time.Minute}
+	for n, w := range want {
+		if got := credRefusedRetry("no_principal", n); got != w {
+			t.Errorf("no_principal #%d: wait %v, want %v", n, got, w)
+		}
+	}
+	if got := credRefusedRetry("revoked", 0); got != credRefusedWait {
+		t.Errorf("revoked: wait %v, want %v", got, credRefusedWait)
+	}
+}
