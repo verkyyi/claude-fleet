@@ -282,11 +282,10 @@ def stamp_decide(sess, n, wins, opt="@orch_decide"):
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
 
 
-# The lists the client's 停放 / 待你动手 rows open into (issue #2913): what is
-# parked, on what, since when, and the open 待你动手 items — at most LIST_MAX, each
-# string clipped, as compact JSON in base64url without padding: one token of
-# [-A-Za-z0-9_], so it rides a tmux option, the inventory's tag and orch_<sess>'s
-# column untouched. Empty ⇒ the option unset, no tag — byte for byte as before.
+# The parked / 待你动手 lists (issue #2913): what is parked, on what, since when,
+# and the open 待你动手 items — at most LIST_MAX, each string clipped, as compact
+# JSON in base64url without padding (one [-A-Za-z0-9_] token in a tmux option).
+# No reader past the window since the inventory's columns 31-37 went (issue #3118).
 LIST_MAX = 12
 
 
