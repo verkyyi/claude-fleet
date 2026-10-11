@@ -25,6 +25,11 @@
       "name": "fleet-epic",
       "source": "./plugins/fleet-epic",
       "description": "EPIC batches: plan, run and report (/fleet-epic-plan · /fleet-epic-run · /fleet-epic-report). Needs fleet-orchestrate."
+    },
+    {
+      "name": "fleet-browser",
+      "source": "./plugins/fleet-browser",
+      "description": "Web pages a session opens show on your computer; an OAuth callback to localhost is forwarded back over your ssh (MCP authorization, /login). Off unless installed."
     }
   ]
 }

@@ -401,6 +401,14 @@ if [ "${FLEET_MCP:-1}" != 0 ] && [ -f "$_fc_mw" ] && [ -f "$BIN/fleet-mcp.py" ];
 fi
 unset _fc_mw
 
+# The agent's browser (issue #3236): with the fleet-browser plugin installed and
+# enabled for this login (the person's switch; off by default), the agent runs
+# `$BROWSER <url>` for an MCP authorization, /login or a page — fleet-browser.sh
+# hands it to the person's own computer and forwards an OAuth callback port back.
+# A plugin cannot set its agent's own environment, so the launcher does; off =
+# no BROWSER touched, byte for byte as before.
+if bash "$BIN/fleet-browser.sh" enabled 2>/dev/null; then export BROWSER="$BIN/fleet-browser.sh"; fi
+
 # Through this login's credential proxy (issue #1972, EPIC #1967 C5): the wrapper
 # handed this launch a FLEET_CRED_SID because FLEET_CRED_PROXY=1. The proxy mints a
 # SESSION credential for it (fcp1. bound to $label; on an untrusted machine an

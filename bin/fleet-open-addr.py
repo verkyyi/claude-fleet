@@ -24,6 +24,14 @@ Payload fields (the contract #1380's laptop side reads): v=1, kind, rport, path,
 scheme (forward) | url (url), host = FLEET_OPEN_SSH_HOST (this machine's ssh alias
 hint, may be empty), ts = epoch seconds.
 
+cport (issue #3236): only with FLEET_OPEN_CALLBACK=1 (fleet-open.sh --browser, i.e.
+an agent's own browser opener while fleet-browser is on). A `url` whose query
+carries `redirect_uri` (or `redirect_url`) on a loopback host with a port — an
+OAuth authorize page whose callback server listens HERE — gets `"cport": <that
+port>`: the person's side forwards exactly that port back to this machine before
+it opens the page, so the browser's redirect lands on the session. Without the
+variable nothing is read, byte for byte as before.
+
 The fallback url is what open-url.sh gets when no iTerm2 is there to take the
 escape: the original tailnet URL for a tailnet page (the operator's machine may be
 on the tailnet), else http://127.0.0.1:<rport><path>.
@@ -34,7 +42,7 @@ import re
 import subprocess
 import sys
 import time
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 LOCAL = {"localhost", "127.0.0.1", "::1", "0.0.0.0"}
 DEFAULT_PORT = {"http": 80, "https": 443}
@@ -202,7 +210,32 @@ def main():
         print(f"fleet-open: {host}:{port} is this machine on the tailnet, but no loopback "
               "port serves it (tailscale serve / doc-preview) — sending the URL as is",
               file=sys.stderr)
-    return emit({"v": 1, "kind": "url", "url": raw, "host": host_hint, "ts": ts}, raw)
+    return emit(plain_url(raw, u, host_hint, ts), raw)
+
+
+def callback_port(u):
+    """The loopback port an OAuth redirect_uri in this URL's query names, or 0."""
+    if os.environ.get("FLEET_OPEN_CALLBACK") != "1" or not u.query:
+        return 0
+    q = parse_qs(u.query)
+    for key in ("redirect_uri", "redirect_url"):
+        for v in q.get(key, []):
+            try:
+                r = urlsplit(v)
+                if (r.scheme or "").lower() in ("http", "https") and (r.hostname or "").lower() in LOCAL \
+                        and r.port and 0 < r.port < 65536:
+                    return r.port
+            except ValueError:
+                continue
+    return 0
+
+
+def plain_url(raw, u, host_hint, ts):
+    pay = {"v": 1, "kind": "url", "url": raw, "host": host_hint, "ts": ts}
+    cport = callback_port(u)
+    if cport:
+        pay["cport"] = cport
+    return pay
 
 
 def loopback_link(pay):

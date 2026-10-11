@@ -5,6 +5,7 @@
   fleet-client-actions.py send --kind open_url (--url U | --rport P [--path /x]
                                [--scheme http] | --from-addr <fleet-open-addr.py
                                payload>) [--tailnet-link L] [--hub-link L] [--wait S]
+                               [--cport P --who W]
   fleet-client-actions.py send --kind show_file --file /abs/path [--inline]
   fleet-client-actions.py send --kind notify [--title T] [--body B]
         a session (on a node) hands one action to its person's CURRENT client,
@@ -61,6 +62,13 @@
              the tailnet, the hub's for one that is not (via public), the URL
              itself for a page anywhere else — or, with none of those,
              「回到电脑上再看」 and the link kept in links.pending.
+             An OAuth page with `cport` (issue #3236 — fleet-browser on, the
+             session's callback server listening on that machine's port P):
+             localhost:P HERE forwarded to 127.0.0.1:P THERE before it opens
+             (P busy here ⇒ refused), one line at the bottom naming the port,
+             the session (`who`) and when it closes; it closes once that
+             server is gone or after FLEET_OPEN_CALLBACK_SECS (600) —
+             bin/fleet_open_fwd.py, <cache>/tmp/forwards.log.
   show_file  fetched from that machine (`cat` over the master) — into
              ~/Downloads and opened (show_file); through fleet-show.sh (iterm2,
              --inline kept); the client on a managed machine (via node-hosted,
@@ -160,11 +168,15 @@ def send(a):
             a.rport, a.path, a.scheme = int(p["rport"]), p.get("path") or "/", p.get("scheme") or "http"
         elif p.get("kind") == "url" and p.get("url"):
             a.url = p["url"]
+            if str(p.get("cport", "")).isdigit():
+                a.cport = int(p["cport"])
     if a.kind == "open_url":
         if a.rport:
             body.update(rport=a.rport, path=a.path or "/", scheme=a.scheme or "http")
         else:
             body["url"] = a.url
+            if a.cport:
+                body.update(cport=a.cport, who=(a.who or "")[:80])
         body["links"] = {k: v for k, v in (("tailnet", a.tailnet_link), ("hub", a.hub_link)) if v}
     elif a.kind == "show_file":
         f = os.path.realpath(a.file)
@@ -212,6 +224,7 @@ class Client:
         self.log = os.path.join(self.dir, "actions.log")
         self.seen = []
         self.fl = None
+        self.fwd = None
 
     # -- state ---------------------------------------------------------------
     def read(self, name):
@@ -380,6 +393,45 @@ class Client:
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) != 0:
             return "", "forward to %s:%d failed" % (a.get("machine"), rport)
         return "%s://127.0.0.1:%d%s" % (scheme, lport, path), ""
+
+    def forwards(self):
+        """The callback forwards this loop holds (issue #3236), ticked by a thread."""
+        if self.fwd is None:
+            spec = importlib.util.spec_from_file_location("fleet_open_fwd", os.path.join(BIN, "fleet_open_fwd.py"))
+            m = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(m)
+            self.fwd = m.Forwards(os.path.join(self.dir, "forwards.log"), say=self.bottom_line)
+            self.fwd.mod = m
+            self.fwd.start()
+        return self.fwd
+
+    def callback(self, a):
+        """'' when the OAuth callback port `cport` now reaches the session's machine
+        (forwarded as itself over the master), else why not."""
+        port = int(a.get("cport") or 0)
+        machine, who = a.get("machine") or "", a.get("who") or "?"
+        if not port or self.this_machine(machine):
+            return ""
+        fw = self.forwards()
+        if fw.held(port):
+            return ""
+        if not fw.mod.free(port):
+            fw.fail(port, machine, who, "busy")
+            return "port %d is busy on this computer" % port
+        sock = self.master(machine)
+        if not sock:
+            fw.fail(port, machine, who, "no master")
+            return "no connection to %s" % machine
+        spec = "127.0.0.1:%d:127.0.0.1:%d" % (port, port)
+        host = self.ssh_host(machine)
+        if subprocess.call(self.sshc() + ["-S", sock, "-O", "forward", "-L", spec, host],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) != 0:
+            fw.fail(port, machine, who, "forward failed")
+            return "forward to %s:%d failed" % (machine, port)
+        close = lambda: subprocess.call(self.sshc() + ["-S", sock, "-O", "cancel", "-L", spec, host],
+                                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        fw.add(port, machine, who, close, callback=True)
+        return ""
 
     def opener(self, target):
         seam = os.environ.get("FLEET_CLIENT_OPEN_CMD")
@@ -609,6 +661,10 @@ class Client:
         caps, via = w.get("caps") or [], w.get("via") or ""
         kind = a.get("kind")
         if kind == "open_url":
+            if a.get("cport") and "open_url" in caps:
+                why = self.callback(a)
+                if why:
+                    return False, why
             if "open_url" in caps:
                 url, why = self.local_url(a)
                 if not url:
@@ -755,6 +811,8 @@ def main(argv):
     s.add_argument("--title", default="")
     s.add_argument("--body", default="")
     s.add_argument("--wait", type=int, default=0)
+    s.add_argument("--cport", type=int, default=0)
+    s.add_argument("--who", default="")
     n = sub.add_parser("notify")
     n.add_argument("--title", required=True)
     n.add_argument("--body", default="")

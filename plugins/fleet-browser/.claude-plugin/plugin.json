@@ -1,0 +1,10 @@
+{
+  "name": "fleet-browser",
+  "version": "0.1.0",
+  "description": "claude-fleet: a session's web pages open on YOUR computer, and an OAuth callback to localhost:<port> (MCP authorization, /login, a dev server) is forwarded back to the session over your own ssh — one port, said on your screen, closed when done. Off unless installed (issue #3236).",
+  "author": { "name": "verkyyi", "url": "https://github.com/verkyyi" },
+  "homepage": "https://github.com/verkyyi/claude-fleet",
+  "repository": "https://github.com/verkyyi/claude-fleet",
+  "license": "MIT",
+  "keywords": ["claude-fleet", "oauth", "browser", "ssh"]
+}

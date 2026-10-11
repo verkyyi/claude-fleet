@@ -1,6 +1,6 @@
 #!/bin/bash
-# fleet-open.sh <url | :port[/path] | file> [--client <tty>] [--print] — open a link
-# or a page served HERE on the operator's OWN computer (issue #1379).
+# fleet-open.sh <url | :port[/path] | file> [--client <tty>] [--print] [--browser] — open
+# a link or a page served HERE on the operator's OWN computer (issue #1379).
 #
 # An agent that wants the operator to look at a page used to run `open <url>` —
 # which opens it on this Mac mini's screen, where nobody is sitting — or
@@ -44,6 +44,15 @@
 # `sent:client`. No hub and the one client here is on this computer's own screen
 # → `open` here, `sent:local`. Nobody connected → the roads above, unchanged.
 #
+# THE AGENT'S BROWSER (issue #3236): `--browser` is how bin/fleet-browser.sh — the
+# BROWSER a session gets while the person turned fleet-browser on — calls this. It
+# reads an OAuth page's loopback redirect_uri port into the payload (`cport`,
+# fleet-open-addr.py) so the person's side forwards exactly that port back here
+# before it opens the page. While fleet-browser is on, a thin 看台 on THIS machine
+# (the person's `fleet` over ssh, issue #3003) is told directly — OSC 7502 `open`
+# with its connection's token on the 看台's own tty — and its loop forwards and
+# opens (`sent:client`) instead of an escape no one forwards for. Off: neither.
+#
 # Prints ONE result line:
 #   sent:client      handed to the person's client through the hub  exit 0
 #   sent:local       opened here: the client runs on this screen    exit 0
@@ -75,14 +84,16 @@ usage() {
   sed -n '2,3p' "$0" | sed 's/^# \{0,1\}//'
   printf '  --client <tty> send to this tmux client (skips the iTerm2 match)\n'
   printf '  --print        print the payload JSON and stop (sends nothing)\n'
+  printf '  --browser      called as the agent'"'"'s browser (fleet-browser.sh): forward an OAuth callback port\n'
 }
 
-target=""; client=""; print=0
+target=""; client=""; print=0; browser=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --client) client="${2:-}"; shift ;;
     --client=*) client="${1#--client=}" ;;
     --print) print=1 ;;
+    --browser) browser=1; export FLEET_OPEN_CALLBACK=1 ;;
     -h|--help) usage; exit 0 ;;
     --) shift; target="${1:-}"; break ;;
     -*) printf 'fleet-open: unknown option %s\n' "$1" >&2; usage >&2; exit 1 ;;
@@ -137,6 +148,58 @@ fallback_url="${rest%%	*}"; tailnet_link=''; [ "$rest" = "$fallback_url" ] || ta
 [ "$print" = 1 ] && { printf '%s\n' "$json"; exit 0; }
 
 # ---- the person's client first (issue #1717) -----------------------------------------
+# ---- the agent's browser (issue #3236) ---------------------------------------
+cport=$(printf '%s' "$json" | "$PY" -c 'import json,sys
+try: print(json.load(sys.stdin).get("cport") or "")
+except Exception: print("")' 2>/dev/null)
+RV_DIR="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/remote-views"
+browser_on() {  # fleet-browser on: called as the browser, or the switch itself
+  [ "$browser" = 1 ] && return 0
+  bash "$BIN/fleet-browser.sh" enabled 2>/dev/null
+}
+who_am_i() {  # the session asking, as the person reads it on their screen
+  local w=''
+  [ -n "${TMUX_PANE:-}" ] && w=$(tmux display-message -p -t "$TMUX_PANE" '#{window_name}' 2>/dev/null)
+  printf '%s' "${w:-?}"
+}
+# thin_open — OSC 7502 `open` on the tty of the thin 看台 the person is at, with
+# its connection's token (约定 10: a 7502 without it does nothing): its loop
+# forwards (a loopback page; an OAuth `cport`) over its own line and opens.
+# rc 1 = no such 看台 here (one from another home: `-via-`) — the roads below.
+thin_open() {
+  [ -d "$RV_DIR" ] || return 1
+  # shellcheck source=/dev/null
+  . "$BIN/fleet-client-lib.sh" && fc_session || return 1
+  local newest rows row ttyp tok
+  rows=$(awk -F '\t' -v s="$FC_SESS" '$2 == s && $3 == "thin" && FILENAME !~ /-via-[^\/]*$/ { print }' "$RV_DIR"/* 2>/dev/null)
+  [ -n "$rows" ] || return 1
+  newest=$(fc_clients '#{client_activity}	#{client_tty}' | sort -t '	' -k1,1nr | cut -f2)
+  for ttyp in $newest; do
+    row=$(printf '%s\n' "$rows" | awk -F '\t' -v t="$ttyp" '$1 == t { print; exit }')
+    [ -n "$row" ] && break
+  done
+  [ -n "$row" ] || return 1
+  tok=$(printf '%s\n' "$row" | tr '\t' '\n' | sed -n 's/^token=//p' | head -n 1)
+  THIN_DEV=$(printf '%s\n' "$row" | tr '\t' '\n' | sed -n 's/^device=//p' | head -n 1)
+  THIN_DEV=$(printf '%s' "$THIN_DEV" | "$PY" -c 'import base64,json,sys
+try: print(json.loads(base64.urlsafe_b64decode(sys.stdin.read().strip().replace("+", "-").replace("/", "_") + "==")).get("device") or "")
+except Exception: print("")' 2>/dev/null)
+  case "$tok" in ''|*[!A-Za-z0-9._:-]*) return 1 ;; esac
+  case "$ttyp" in /dev/*) ;; *) return 1 ;; esac
+  "$PY" - "${FLEET_THIN_OPEN_OUT:-$ttyp}" "$tok" "$json" "$(who_am_i)" "${FLEET_OPEN_CALLBACK_SECS:-600}" <<'PY'
+import base64, json, os, sys
+out, tok, js, who, ttl = sys.argv[1:6]
+d = json.loads(js)
+d["who"], d["ttl"] = who[:80], int(ttl or 600)
+b = base64.b64encode(json.dumps(d, separators=(",", ":"), ensure_ascii=False).encode()).decode()
+fd = os.open(out, os.O_WRONLY | os.O_NOCTTY | os.O_APPEND | (os.O_CREAT if not out.startswith("/dev/") else 0), 0o600)
+try:
+    os.write(fd, ("\x1b]7502;open;token=%s;j=%s\x07" % (tok, b)).encode())
+finally:
+    os.close(fd)
+PY
+}
+
 # Where the person is comes from fleet-client-where.sh alone (EPIC #1710 rule 7).
 # A client holding the hub's lease → the action goes to IT, through the hub, and it
 # opens the page on the device in their hands (a loopback page forwarded over its
@@ -153,12 +216,19 @@ except Exception: d = {}
 print("%s %s %s" % (d.get("source") or "-", d.get("state") or "-", d.get("via") or "-"))' 2>/dev/null)
   case "$cw_src" in
     # a thin client (issue #3005, EPIC #2999 C8): its home machine holds the lease
-    # and runs no action loop — the escape goes to the 看台's terminal, below
-    "hub active thin"|"local active thin") ;;
+    # and runs no action loop — the escape goes to the 看台's terminal, below;
+    # with fleet-browser on, its loop is told directly (issue #3236)
+    "hub active thin"|"local active thin")
+      if browser_on && thin_open; then
+        printf 'fleet-open: %s → 客户端 %s（瘦客户端%s）\n' "$kind" "${THIN_DEV:-?}" "${cport:+，转发回调端口 $cport}" >&2
+        record sent:client "$kind"
+        echo 'sent:client'
+        exit 0
+      fi ;;
     "hub active "*)
       # fleet-open-addr.py's payload as it is: forward → rport/path/scheme, url → url
       res=$("$PY" "${FLEET_OPEN_ACTIONS_BIN:-$BIN/fleet-client-actions.py}" send --kind open_url \
-              --from-addr "$json" --url "$fallback_url" --tailnet-link "$tailnet_link" \
+              --from-addr "$json" --url "$fallback_url" --tailnet-link "$tailnet_link" ${cport:+--who "$(who_am_i)"} \
               --wait "${FLEET_OPEN_CLIENT_WAIT:-5}" 2>/dev/null) || res=''
       st=$(printf '%s' "$res" | "$PY" -c 'import json,sys
 try: d = json.load(sys.stdin)

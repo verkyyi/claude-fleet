@@ -37,6 +37,14 @@ Each connection:
      `ESC ] 7502 ; cur ; token=… ; m= ; l= ; w= BEL`; `… ; quit ; token=… BEL`
      is ⌘Q. Every OSC 7502 is swallowed — one with another token (a program
      inside a session pretending to be the home) does nothing at all (约定 10).
+     `… ; open ; token=… ; j=<base64 JSON> BEL` (issue #3236, fleet-browser on:
+     fleet-open.sh on the home) opens a page HERE — fleet-open-addr.py's payload
+     + who + ttl: an OAuth page's callback port `cport` forwarded AS ITSELF over
+     a second ssh to the home first (busy here ⇒ said, not opened), a loopback
+     page's `rport` forwarded to the same port (else any free one). Each forward
+     is one notification line (the port, the session, when it closes) + a line
+     of forwards.log beside thin.log, and closes once the home's server is gone
+     or at its deadline (bin/fleet_open_fwd.py); none outlive this loop.
 
 When it ends: ⌘Q (quit) or ssh exit 0 (a detach) — the iTerm2 profile goes
 back (约定 11) and this exits 0. Anything else — the line dropped, the lid
@@ -97,6 +105,7 @@ import signal
 import subprocess
 import sys
 import termios
+import threading
 import time
 import tty
 
@@ -494,6 +503,9 @@ class Thin:
         self.clip = None
         self.saying = False     # a first-session line is being written over (#3054)
         self.firsts = 0         # first-session roads taken (FLEET_THIN_FIRST_ROUNDS)
+        self.fwd = None         # the forwards `open` made (issue #3236)
+        self.said = []          # lines a forward's thread queued for the terminal
+        self.said_lock = threading.Lock()
 
     # -- the argv ---------------------------------------------------------
     def argv(self, reconnect):
@@ -557,6 +569,112 @@ class Thin:
         """No bar of ours to write on: the log, and a terminal notification."""
         tlog("say", self.home, "", "", "", "", "", text)
         write_out(b"\x1b]9;" + text.replace("\x07", " ").encode("utf-8", "replace") + b"\x07")
+
+    # -- open: a page here, a port forwarded (issue #3236) -----------------
+    def queue_say(self, text):
+        """From a thread: the terminal is the main loop's, so the line waits for it."""
+        with self.said_lock:
+            self.said.append(text)
+
+    def drain_said(self):
+        with self.said_lock:
+            lines, self.said = self.said, []
+        for t in lines:
+            self.say(t)
+
+    def forwards(self):
+        if self.fwd is None:
+            m = load("fleet_open_fwd.py", "fleet_open_fwd")
+            self.fwd = m.Forwards(os.path.join(os.path.dirname(log_path()), "forwards.log"), say=self.queue_say)
+            self.fwd.mod = m
+            self.fwd.start()
+        return self.fwd
+
+    def opener(self, target):
+        seam = os.environ.get("FLEET_THIN_OPEN_CMD")
+        cmd = shlex.split(seam) if seam else (["open"] if sys.platform == "darwin" else ["xdg-open"])
+        try:
+            return subprocess.call(cmd + [target], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.DEVNULL, timeout=20) == 0
+        except (OSError, subprocess.SubprocessError):
+            return False
+
+    def forward(self, lport, rport):
+        """A second ssh to the home holding -L 127.0.0.1:lport → 127.0.0.1:rport, up;
+        (close function, '') or (None, why)."""
+        seam = os.environ.get("FLEET_THIN_FWD_CMD")
+        if seam:
+            cmd = shlex.split(seam) + [str(lport), str(rport)]
+        else:
+            j = self.base or {}
+            if not j.get("argv"):
+                return None, "no line to the home"
+            a, h = list(j["argv"]), int(j["host"])
+            cmd = a[:h] + ["-N", "-T", "-o", "ControlMaster=no", "-o", "ControlPath=none",
+                           "-o", "ExitOnForwardFailure=yes", "-o", "ServerAliveInterval=15",
+                           "-L", "127.0.0.1:%d:127.0.0.1:%d" % (lport, rport)] + [a[h]]
+        try:
+            p = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL, start_new_session=True)
+        except OSError as e:
+            return None, str(e)
+
+        def close():
+            if p.poll() is None:
+                p.terminate()
+                try:
+                    p.wait(5)
+                except subprocess.TimeoutExpired:
+                    p.kill()
+        if not self.fwd.mod.up(lport, alive=lambda: p.poll() is None):
+            close()
+            return None, "the forward did not come up"
+        return close, ""
+
+    def open_req(self, kv):
+        """`open` from the home: forward what needs it, then open it here."""
+        try:
+            d = json.loads(base64.b64decode(kv.get("j", "") + "==="))
+        except (ValueError, TypeError):
+            return
+        if not isinstance(d, dict):
+            return
+        fw = self.forwards()
+        who, home = str(d.get("who") or "?")[:80], self.home or "?"
+        ttl = d.get("ttl") if isinstance(d.get("ttl"), int) and d.get("ttl") > 0 else None
+        cport = d.get("cport") if isinstance(d.get("cport"), int) and 0 < d.get("cport") < 65536 else 0
+        rport = d.get("rport") if isinstance(d.get("rport"), int) and 0 < d.get("rport") < 65536 else 0
+        url = d.get("url") if isinstance(d.get("url"), str) else ""
+        local = bool((self.base or {}).get("local"))
+        if rport:
+            path = d.get("path") if isinstance(d.get("path"), str) and d.get("path").startswith("/") else "/"
+            scheme = "https" if d.get("scheme") == "https" else "http"
+            lport = rport
+            if not local:
+                lport = rport if fw.mod.free(rport) else fw.mod.any_port()
+                close, why = self.forward(lport, rport)
+                if not close:
+                    fw.fail(rport, home, who, why)
+                    self.queue_say("fleet · 没能转发 %s:%d（%s）" % (home, rport, why))
+                    return
+                fw.add(rport, home, who, close, callback=False, lport=lport)
+            url = "%s://127.0.0.1:%d%s" % (scheme, lport, path)
+        elif cport and not local and not fw.held(cport):
+            if not fw.mod.free(cport):
+                fw.fail(cport, home, who, "busy")
+                self.queue_say("fleet · 本机端口 %d 被占用，%s 的授权回调到不了会话，没有打开" % (cport, who))
+                return
+            close, why = self.forward(cport, cport)
+            if not close:
+                fw.fail(cport, home, who, why)
+                self.queue_say("fleet · 没能转发授权回调端口 %d（%s）" % (cport, why))
+                return
+            fw.add(cport, home, who, close, callback=True, ttl=ttl)
+        if not url.startswith(("http://", "https://")):
+            return
+        ok = self.opener(url)
+        tlog("open", self.home, "", "", "", "", 0 if ok else 1,
+             "cport=%d" % cport if cport else ("rport=%d" % rport if rport else "url"))
 
     def ctrl_v(self):
         """⌃V: a picture on the clipboard → its path on the session's machine,
@@ -709,6 +827,10 @@ class Thin:
                                      ms(t0, now), "", "")
                         elif kind == "quit":
                             self.quit = True
+                        elif kind == "open":
+                            threading.Thread(target=self.open_req, args=(kv,), daemon=True).start()
+                if self.said:
+                    self.drain_said()
                 if 0 in r:
                     try:
                         data = os.read(0, 65536)
@@ -775,6 +897,8 @@ class Thin:
                 os.waitpid(self.child, 0)
             except OSError:
                 pass
+        if self.fwd:
+            self.fwd.close_all()
         self.restore_tty()
         tlog("end", self.home, "", "", "", "", 128 + n, "signal %d" % n)
         if n != signal.SIGHUP:
@@ -812,6 +936,8 @@ class Thin:
         if self.want and not self.resume:
             args.append(self.want)
         os.environ["FLEET_CLIENT_UPDATED"] = "1"
+        if self.fwd:
+            self.fwd.close_all("新版本客户端")
         self.profile(False)
         self.restore_tty()   # echo back first: the new client reads these attrs as the terminal's own
         os.execv(args[0], args)
@@ -1005,6 +1131,8 @@ class Thin:
             tlog("quit", self.home, "", "", "", "", 130, "^C between connections")
             return 130
         finally:
+            if self.fwd:
+                self.fwd.close_all()
             self.restore_tty()   # echo back, if it ended between two connections (mute)
             self.profile(False)
             path_hint()

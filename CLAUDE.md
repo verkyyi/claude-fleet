@@ -439,6 +439,19 @@ Do not install from memory: read the doc and work from it.
   `fleet-plugin-*` it made; none installed ⇒ nothing written. What Codex cannot
   carry — mod modules, PreCompact, an agent file's `tools`, /plugin — ends the
   doctor's `plugins` row. `fleet-codex-plugins-selftest.sh`.
+- **A remote session's browser is the person's, by opt-in: the `fleet-browser`
+  plugin** (issue #3236). Off unless installed + enabled on the login that runs
+  the sessions (`bin/fleet-browser.sh on|off|status` wraps `claude plugin`;
+  Claude Code's `enabledPlugins` is the one record). On: the launchers export
+  `BROWSER=bin/fleet-browser.sh` (a plugin cannot set its agent's env — the one
+  exception), its SessionStart hook puts the same into `CLAUDE_ENV_FILE`, and
+  `fleet-open.sh --browser` reads an OAuth page's loopback `redirect_uri` port
+  (`cport`, fleet-open-addr.py) — a thin 看台 here gets OSC 7502 `open` with its
+  token, a leased client the hub action's `cport`; either forwards THAT port as
+  itself over its own ssh, says one line, logs `forwards.log` and closes when the
+  callback server is gone or at `FLEET_OPEN_CALLBACK_SECS` (`bin/fleet_open_fwd.py`,
+  the one bookkeeping). Off = no BROWSER, no cport, byte for byte.
+  `fleet-browser-selftest.sh`.
 - **A role starts as its ONE definition says: `agents/<role>.md`** (issue #2782,
   EPIC #2781 C1). orchestrator · steward · worker · epic-driver, each in Claude
   Code's subagent file format (model · effort · tools · disallowedTools ·
