@@ -37,6 +37,10 @@
 #                         `release train: macOS` status on the target is its BSD
 #                         half (a red one refuses `macos:`), and the shared
 #                         matrix's `macOS / shard K` checks are gate 5's, not CI's
+#   O. --train <run>      (issue #3142) gates 3 and 5 read THAT run's jobs, never the
+#                         commit's check runs: a red / unfinished job refuses (CI),
+#                         a red or missing macOS job refuses `macos:`, the job
+#                         --ignore-check names is passed over, all green moves
 #
 # Exit 0 = pass.
 set -uo pipefail
@@ -72,6 +76,7 @@ cat > "$WORK/shim/gh" <<SH
 #!/bin/sh
 case "\$*" in
   *actions/workflows/*) cat "$WORK/macos" 2>/dev/null ;;
+  *actions/runs/*/jobs*) cat "$WORK/jobs" 2>/dev/null ;;
   */statuses*) cat "$WORK/statuses" 2>/dev/null ;;
   'workflow run'*) echo "\$*" >> "$WORK/dispatched"; cat "$WORK/dispatch_to" >> "$WORK/macos" 2>/dev/null ;;
   *) cat "$WORK/checks" ;;
@@ -314,5 +319,28 @@ run move "$C21"
 eq "N: a green train is the BSD half" 0 "$RC"; eq "N: tag at C21" "$C21" "$(tag)"
 contains "N: says a train boarded it" "$OUT" "a release train boarded it"
 case "$(cat "$WORK/dispatched" 2>/dev/null)" in *selftests-macos*) fail "N: dispatched a full macOS run past a green train" ;; esac
+
+# --- O. --train: this run's jobs are the CI and the BSD half (issue #3142) -----------------------
+C22=$(commit twentytwo); push; : > "$WORK/macos"; : > "$WORK/statuses"; rm -f "$WORK/dispatched"
+printf 'completed failure some derived run\n' > "$WORK/checks"   # never read with --train
+printf 'completed success board\ncompleted success Linux / shard 1\nin_progress null hub / deploy\ncompleted success macOS / shard 1\nin_progress null release\n' > "$WORK/jobs"
+run move "$C22" --train 77 --ignore-check release
+eq "O: an unfinished job refuses" 3 "$RC"; contains "O: names it" "$OUT" "not green: in_progress null hub / deploy"
+printf 'completed success board\ncompleted success Linux / shard 1\ncompleted success hub / deploy\ncompleted failure macOS / shard 1\nin_progress null release\n' > "$WORK/jobs"
+run move "$C22" --train 77 --ignore-check release
+eq "O: a red macOS job refuses" 3 "$RC"; contains "O: reason macos:" "$OUT" "REFUSED — macos: train run 77"
+printf 'completed success board\ncompleted success Linux / shard 1\nin_progress null release\n' > "$WORK/jobs"
+run move "$C22" --train 77 --ignore-check release
+eq "O: no macOS job refuses" 3 "$RC"; contains "O: says so" "$OUT" "ran no macOS job"
+printf 'in_progress null release\n' > "$WORK/jobs"
+run move "$C22" --train 77 --ignore-check release
+eq "O: nothing finished refuses" 3 "$RC"; contains "O: says no finished job" "$OUT" "no finished job"
+printf 'completed success board\ncompleted success Linux / shard 1\ncompleted skipped hub\ncompleted success macOS / shard 1\ncompleted success macOS / shard 2\nin_progress null release\n' > "$WORK/jobs"
+run move "$C22" --train 77 --ignore-check release
+eq "O: an all-green train moves" 0 "$RC"; eq "O: tag at C22" "$C22" "$(tag)"
+contains "O: says the run" "$OUT" "job(s) of train run 77 green"; contains "O: macOS jobs counted" "$OUT" "2 macOS job(s) of train run 77"
+case "$(cat "$WORK/dispatched" 2>/dev/null)" in *selftests-macos*) fail "O: dispatched a macOS run past a green train run" ;; esac
+run move --train abc
+eq "O: --train takes a run id" 2 "$RC"
 
 printf 'fleet-stable-selftest OK (%d checks)\n' "$CHECKS"

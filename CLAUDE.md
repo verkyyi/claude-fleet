@@ -674,7 +674,14 @@ Do not install from memory: read the doc and work from it.
   rides the release train (`release-train.yml`: ONE concurrency lane, a push never
   cancels a running train; each train boards origin/master's head as `TRAIN_SHA`
   via `bin/fleet-train-board.sh` and runs the shared matrix `selftests-shards.yml`
-  `--changed <stable>` on Linux and macOS, then `fleet-stable.sh move --precheck`),
+  `--changed <stable>` on Linux and macOS, then `fleet-stable.sh move --precheck`;
+  then ONE commit goes out (#3142) — the hub via `hub-deploy.yml`'s own job called
+  with `sha=TRAIN_SHA` (skipped when `bin/fleet-train-hub.sh` finds the hub already
+  TRAIN_SHA's Go source and `deploy/k8s/`), `fleet-release-publish.sh TRAIN_SHA`,
+  `fleet-stable.sh move TRAIN_SHA --train <run>` (gates 3 / 5 read the run's jobs) —
+  so the hub and stable never come from two commits; a push-triggered hub-deploy
+  stands down unless `RELEASE_TRAIN_HUB=off`, and the doctor's `hub-image` row WARNs
+  不同源 when a hand rollback splits them, BREAK-IT `train-hub-stable-split`),
   and `selftests-macos.yml` stays FULL nightly / on dispatch; the merge gate is the ubuntu checks alone (`fleet-pr-verdict.sh` drops
   any `macOS shard *` an older PR still carries). It gates RELEASING instead:
   `fleet-stable.sh move` refuses (`macos:`) a target whose newest macOS run is not

@@ -1,8 +1,7 @@
 # Move `stable` by itself once the BSD half is green — the operator no longer has
 # to run `fleet-stable.sh move` by hand after every merge.
 #
-# A finished, successful run of selftests (macOS) or of the release train on master
-# is the trigger: its
+# A finished, successful run of selftests (macOS) on master is the trigger: its
 # commit (head_sha; a dispatch's `@ <sha>` title names the commit it ran on) is
 # the target. The job first waits for that commit's OTHER check runs to finish
 # (a hub-deploy still waiting out its quiet window, a late shard), then runs the
@@ -30,11 +29,10 @@ name: stable auto-move
 
 on:
   workflow_run:
-    # A green release train (issue #3141) too: since it took the per-merge macOS run
-    # over, the only per-merge BSD verdict is the train's (`release train: macOS`
-    # on its TRAIN_SHA, which gate 5 reads). Until the train moves stable itself
-    # (EPIC #3139 C3) and this file retires (C4).
-    workflows: ['selftests (macOS)', 'release train']
+    # Not the release train any more (issue #3142): it publishes and moves stable
+    # to its own TRAIN_SHA. A green nightly full macOS run still moves stable here
+    # until this file retires (EPIC #3139 C4).
+    workflows: ['selftests (macOS)']
     types: [completed]
     branches: [master]
 

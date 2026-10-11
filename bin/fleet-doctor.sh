@@ -1310,6 +1310,11 @@ if [ -f "$_hi" ]; then
     NOHUB|'') ;;
     *)        info hub-image "入口镜像的 commit 未知（不是「最新」）: $(_hif note)" ;;
   esac
+  # issue #3142: the hub image's Go source vs its stable release's (a rollback by
+  # hand, or a train that deployed and could not publish) — only when both say.
+  case "$(_hif source)" in
+    SPLIT) warn hub-image "入口镜像与 stable 不同源：$(_hif srcnote)" ;;
+  esac
 fi
 
 # --- sshtrust (issue #1626): no standing key from another fleet machine ----------

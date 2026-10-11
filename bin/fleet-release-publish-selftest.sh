@@ -14,7 +14,10 @@
 #      curl's argv; in Actions the runtime's OIDC token (audience
 #      ccquota-fleet-release) is fetched and sent instead; neither → exit 2;
 #   D. the hub's answer: 409 → exit 1 with its words, 200 → exit 0; the same sha
-#      as the hub's stable sends an empty chain; --dry-run POSTs nothing.
+#      as the hub's stable sends an empty chain; --dry-run POSTs nothing;
+#   E. --train <file> (issue #3142): the release train's ledger goes as the
+#      `train` part, byte for byte; no --train sends no such part; a missing
+#      file is refused before anything is sent.
 # Hermetic: a sandbox repo, a loopback hub. Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -140,6 +143,17 @@ eq "D: already stable → exit 0" 0 "$RC"; eq "D: an empty chain" "" "$(part com
 before=$(posts)
 run env FLEET_PUBLISH_TOKEN=x "$PUB" "$C" --hub "$HUB" --dir "$REPO" --dry-run
 eq "D: dry-run exit 0" 0 "$RC"; eq "D: dry-run POSTs nothing" "$before" "$(posts)"
+
+# --- E. the train's ledger -----------------------------------------------------------------
+rm -f "$WORK/stable"
+run env FLEET_PUBLISH_TOKEN=x "$PUB" "$C" --hub "$HUB" --dir "$REPO"
+eq "E: no --train, no train part" "" "$(part train)"
+printf '{"run_id":"77","merges":[]}' > "$WORK/train.json"
+run env FLEET_PUBLISH_TOKEN=x "$PUB" "$C" --hub "$HUB" --dir "$REPO" --train "$WORK/train.json"
+eq "E: exit 0" 0 "$RC"; eq "E: the ledger rides as part train" '{"run_id":"77","merges":[]}' "$(part train)"
+before=$(posts)
+run env FLEET_PUBLISH_TOKEN=x "$PUB" "$C" --hub "$HUB" --dir "$REPO" --train "$WORK/nope.json"
+eq "E: a missing ledger → exit 2" 2 "$RC"; eq "E: nothing POSTed" "$before" "$(posts)"
 
 printf 'fleet-release-publish-selftest: %d checks, %d failed\n' "$N" "$BAD"
 [ "$BAD" -eq 0 ]

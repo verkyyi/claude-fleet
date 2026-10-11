@@ -39,6 +39,18 @@ name: hub-deploy
 # The `check` job runs on every PR that touches any of it and needs no
 # credential: the actions' selftests, the overlay renders, the base names no
 # environment.
+#
+# The release train calls it (issue #3142, EPIC #3139 C3): `workflow_call` with
+# `sha` = the train's TRAIN_SHA, after the train's tests and precheck are green —
+# no quiet-master hold (the train's lane is the batching), the image is
+# `prod-<TRAIN_SHA>` built from that commit, and every step below runs as on any
+# release (snapshot / check on a copy / rollout / health on /version / rollback).
+# The train then publishes the same commit and moves stable to it, so the hub
+# and stable never come from two commits. While the train deploys, a push here
+# only stands down (已由列车接手) in a lane of its own, so it can never replace
+# the train's deploy waiting in `prod`; repo variable RELEASE_TRAIN_HUB=off hands
+# the hub back to this push trigger (and the train stops deploying it). A
+# workflow_dispatch with an old `tag` is still the rollback.
 
 on:
   push:
@@ -51,6 +63,16 @@ on:
       - 'deploy/k8s/**'
       - '.github/actions/hub-*/**'
       - '.github/workflows/hub-deploy.yml'
+  workflow_call:
+    inputs:
+      sha:
+        description: "The release train's TRAIN_SHA — build, deploy and health-check exactly this commit"
+        type: string
+        required: true
+    outputs:
+      deployed:
+        description: "success = the hub runs prod-<sha> and answers healthy; empty = nothing deployed (paused: HUB_DEPLOY_PAUSED=1)"
+        value: ${{ jobs.deploy.outputs.deployed }}
   workflow_dispatch:
     inputs:
       tag:
@@ -76,9 +98,11 @@ on:
 
 # One deploy at a time, never cancelled half-way (a cancelled Recreate rollout
 # leaves the hub down until the next one): a newer run waits, and replaces any
-# run that is still only waiting.
+# run that is still only waiting. The train's call (inputs.sha) and a dispatch
+# share `prod`; a push that only stands down for the train (issue #3142) waits in
+# `push`, so it never replaces the train's deploy that is waiting in `prod`.
 concurrency:
-  group: hub-deploy-${{ github.event_name == 'pull_request' && github.ref || 'prod' }}
+  group: hub-deploy-${{ github.event_name == 'pull_request' && github.ref || (github.event_name == 'push' && !inputs.sha && vars.RELEASE_TRAIN_HUB != 'off') && 'push' || 'prod' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -102,6 +126,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha }}   # the train's TRAIN_SHA; empty = the event's commit
       - uses: actions/setup-node@v4
         with: { node-version: '20' }
       - run: node .github/actions/hub-kubeconfig/oidc.js --selftest
@@ -185,33 +211,53 @@ jobs:
       contents: read
       deployments: read   # when the last release went out
     outputs:
-      go: ${{ steps.pause.outputs.paused != 'true' && (github.event_name != 'push' || steps.hold.outputs.verdict == 'go') }}
+      go: ${{ steps.train.outputs.standdown != 'true' && steps.pause.outputs.paused != 'true' && (github.event_name != 'push' || inputs.sha != '' || steps.hold.outputs.verdict == 'go') }}
     steps:
+      # Issue #3142: the release train deploys the hub from the commit it tested
+      # and then publishes; a push of its own would be a second deployer on
+      # another clock (BREAK-IT train-hub-stable-split). RELEASE_TRAIN_HUB=off
+      # gives the hub back to this trigger.
+      - name: The release train deploys the hub
+        id: train
+        if: github.event_name == 'push' && inputs.sha == '' && vars.RELEASE_TRAIN_HUB != 'off'
+        run: |
+          echo "standdown=true" >> "$GITHUB_OUTPUT"
+          { echo "## hub-deploy · 🚂 已由列车接手"
+            echo
+            echo "这次 push（\`${GITHUB_SHA:0:7}\`）不单独发布入口：发布列车（release-train.yml）测完同一个提交后出入口镜像、发布、挪 stable。"
+            echo "要让这里重新自己发：仓库变量 \`RELEASE_TRAIN_HUB=off\`；要现在手动发 / 回退：Actions → hub-deploy → Run workflow。"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::notice::the release train deploys the hub (RELEASE_TRAIN_HUB != off) — nothing deployed here"
+
       - name: Paused?
         id: pause
+        if: steps.train.outputs.standdown != 'true'
         env:
           PAUSED: ${{ vars.HUB_DEPLOY_PAUSED }}
+          INPUT_SHA: ${{ inputs.sha }}
         run: |
-          if [ "$PAUSED" = 1 ] && [ "$GITHUB_EVENT_NAME" = push ]; then
+          # automatic releases pause: a push, and the release train's call (any event)
+          if [ "$PAUSED" = 1 ] && { [ "$GITHUB_EVENT_NAME" = push ] || [ -n "$INPUT_SHA" ]; }; then
             echo "paused=true" >> "$GITHUB_OUTPUT"
             { echo "## hub-deploy · ⏸ 已暂停"
               echo
               echo "仓库变量 \`HUB_DEPLOY_PAUSED=1\`：这次 push（\`${GITHUB_SHA:0:7}\`）没有部署。"
               echo "恢复自动发布：删掉这个变量（或改成别的值）；要现在发这一版：Actions → hub-deploy → Run workflow。"
             } >> "$GITHUB_STEP_SUMMARY"
-            echo "::notice::hub-deploy paused (HUB_DEPLOY_PAUSED=1) — nothing deployed"
+            echo "::notice::hub-deploy paused (HUB_DEPLOY_PAUSED=1) — nothing deployed${INPUT_SHA:+ (also the release train call)}"
           else
             echo "paused=false" >> "$GITHUB_OUTPUT"
           fi
 
       - uses: actions/checkout@v4
-        if: steps.pause.outputs.paused != 'true' && github.event_name == 'push'
+        if: steps.train.outputs.standdown != 'true' && steps.pause.outputs.paused != 'true' && github.event_name == 'push' && inputs.sha == ''
         with:
           fetch-depth: 0
 
+      # Not for the train (inputs.sha): its one lane is the batching.
       - name: Hold for a quiet master (${{ env.QUIET_MINUTES }} min) and the release gap (${{ env.MIN_GAP_MINUTES }} min)
         id: hold
-        if: steps.pause.outputs.paused != 'true' && github.event_name == 'push'
+        if: steps.train.outputs.standdown != 'true' && steps.pause.outputs.paused != 'true' && github.event_name == 'push' && inputs.sha == ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -237,20 +283,28 @@ jobs:
       contents: read
       id-token: write
       issues: write   # the release notice on $HUB_DEPLOY_NOTIFY_ISSUE, nothing else
+    outputs:
+      deployed: ${{ steps.health.outcome }}   # the release train reads it (workflow_call output)
     env:
       HUB_DEPLOY_SIMULATE_UNHEALTHY: ${{ github.event.inputs.simulate_unhealthy || 'false' }}
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.sha }}   # the train's TRAIN_SHA; empty = the event's commit
           fetch-depth: 0   # the summary's commit list runs from the live commit to this one
 
       - name: Which image
         id: tag
         env:
           INPUT_TAG: ${{ github.event.inputs.tag }}
+          TRAIN_SHA: ${{ inputs.sha }}
         run: |
           set -euo pipefail
-          if [ -n "$INPUT_TAG" ]; then
+          if [ -n "$TRAIN_SHA" ]; then
+            [[ "$TRAIN_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::the train's sha must be a full commit sha, got '$TRAIN_SHA'"; exit 1; }
+            [ "$(git rev-parse HEAD)" = "$TRAIN_SHA" ] || { echo "::error::checked out $(git rev-parse HEAD), not the train's $TRAIN_SHA"; exit 1; }
+            tag="prod-${TRAIN_SHA:0:7}" build=true
+          elif [ -n "$INPUT_TAG" ]; then
             [[ "$INPUT_TAG" =~ ^prod-[0-9a-f]{7,40}$ ]] || { echo "::error::tag must look like prod-<sha7>, got '$INPUT_TAG'"; exit 1; }
             tag=$INPUT_TAG build=false
           else
@@ -719,10 +773,11 @@ jobs:
           HEAD: ${{ steps.summary.outputs.head }}
           PREV_TAG: ${{ steps.live.outputs.tag }}
           NEW_TAG: ${{ steps.tag.outputs.tag }}
+          TRAIN: ${{ inputs.sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           gh issue comment "$ISSUE" --repo "$GITHUB_REPOSITORY" --body "**hub-deploy** · $HEAD
 
-          \`${PREV_TAG:-（无）}\` → \`$NEW_TAG\` · 触发：$GITHUB_EVENT_NAME by @$GITHUB_ACTOR
+          \`${PREV_TAG:-（无）}\` → \`$NEW_TAG\` · 触发：$GITHUB_EVENT_NAME${TRAIN:+（发布列车）} by @$GITHUB_ACTOR
           摘要（提交列表、migration、环境变量、快照）：$RUN_URL" \
             || echo "::warning::could not comment on issue #$ISSUE"

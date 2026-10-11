@@ -420,6 +420,19 @@ func TestPublishIdentityRefused(t *testing.T) {
 	}
 }
 
+// The release train publishes the commit it deployed the hub from (issue #3142):
+// its OIDC token names release-train.yml — the hub takes it, on master only.
+func TestPublishAcceptsReleaseTrain(t *testing.T) {
+	p := newPublishRig(t)
+	a := p.repo.commit("A", nil)
+	if code, body := p.publish(p.oidc.token(map[string]any{"ref": "refs/heads/pr", "workflow_ref": "o/r/.github/workflows/release-train.yml@refs/heads/pr"}), a, "", nil, nil); code != 401 {
+		t.Fatalf("release-train.yml off master: %d %s", code, body)
+	}
+	if code, body := p.publish(p.oidc.token(map[string]any{"workflow_ref": "o/r/.github/workflows/release-train.yml@refs/heads/master"}), a, "", nil, nil); code != 200 {
+		t.Fatalf("release-train.yml: %d %s", code, body)
+	}
+}
+
 func TestPublishOnlyForward(t *testing.T) {
 	p := newPublishRig(t)
 	a := p.repo.commit("A", nil)
