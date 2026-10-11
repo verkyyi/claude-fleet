@@ -9,7 +9,8 @@
 # pane is what the person sees (the popup included).
 #
 #   A  conf/tmux-view.conf: user-keys 920..932; root and prefix exactly tmux's;
-#      fleet-view = root copied (the mouse) + ⌘↓ ⌘↑ ⌘[ ⌘] ⌘P ⌘K off the switch
+#      fleet-view = root copied (the mouse) + ⌘↓ ⌘↑ ⌘[ ⌘] ⌘P ⌘K (+ C7's ⌘N ⌘Q ⌘T
+#      ⌃\, fleet-view-c7-selftest.sh) off the switch
 #      table (dash-keymap.sh); fleet-view-pfx = ⌃] then the 看台's letter (view);
 #      sourcing twice leaves the same tables
 #   B  ⌘P (`ESC[927~`) in the 看台 opens the list — grouped by (machine, login),
@@ -75,7 +76,7 @@ diff -q "$W/root.now" "$W/root.stock" >/dev/null || fail "A: root differs from t
 ti list-keys -T prefix | norm > "$W/pfx.now"; grep -- ' -T prefix ' "$W/stock.keys" | norm > "$W/pfx.stock"
 diff -q "$W/pfx.now" "$W/pfx.stock" >/dev/null || fail "A: prefix differs from tmux's"
 ti list-keys -T fleet-view | norm > "$W/fv.1"
-copy=$(grep -v -E ' User9[0-9][0-9] | C-\] ' "$W/fv.1" | sed 's/ -T fleet-view / -T root /')
+copy=$(grep -v -E ' User9[0-9][0-9] | C-\] | C-\\\\ ' "$W/fv.1" | sed 's/ -T fleet-view / -T root /')
 [ "$copy" = "$(cat "$W/root.now")" ] || fail "A: fleet-view's copy is not root: $(diff <(printf '%s\n' "$copy") "$W/root.now" | head -5)"
 table=$(bash "$BIN/dash-keymap.sh" --panel switch list)
 vtable=$(bash "$BIN/dash-keymap.sh" --panel switch view)
@@ -86,17 +87,17 @@ done
 for p in 'quickopen p' 'next n' 'prev b' 'new c' 'dispatch t' 'quit q'; do
   grep -qx "$p" <<< "$vtable" || fail "A: the phone's ⌃] $p is not in the 看台's letters: $vtable"
 done
-for a in next prev back fwd quickopen switcher; do
+for a in next prev back fwd quickopen switcher new quit dispatch; do
   code=$(awk -v a="$a" '$1 == a { print $4 }' <<< "$table"); letter=$(awk -v a="$a" '$1 == a { print $2 }' <<< "$vtable")
   grep -q " -T fleet-view User$code " "$W/fv.1" || fail "A: $a (User$code) is not bound in fleet-view"
   ti list-keys -T fleet-view-pfx | norm | grep -q -- "-T fleet-view-pfx \\\\\?$letter " || fail "A: ⌃] $letter ($a) is not bound in fleet-view-pfx"
 done
-for a in zoom new fold quit dispatch; do
+for a in zoom fold; do
   code=$(awk -v a="$a" '$1 == a { print $4 }' <<< "$table")
-  grep -q " -T fleet-view User$code " "$W/fv.1" && fail "A: $a (User$code) is bound — it is C7's"
+  grep -q " -T fleet-view User$code " "$W/fv.1" && fail "A: $a (User$code) is bound — a 看台 has none"
 done
 grep -q ' -T fleet-view C-\] switch-client -T fleet-view-pfx' "$W/fv.1" || fail "A: ⌃] does not enter fleet-view-pfx"
-grep -E ' User9[0-9][0-9] | C-\] ' "$W/fv.1" | grep -Eq 'kill-|respawn-|rename-session' \
+grep -E ' User9[0-9][0-9] | C-\] | C-\\\\ ' "$W/fv.1" | grep -Eq 'kill-|respawn-|rename-session' \
   && fail "A: a 看台 key deletes, respawns or renames something"
 ti source-file "$ROOT/conf/tmux-view.conf" || fail "A: second source"
 ti list-keys -T fleet-view | norm > "$W/fv.2"

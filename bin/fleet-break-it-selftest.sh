@@ -1748,7 +1748,7 @@ drill_node_prefix_keys() {
 drill_view_mouse_stale() {
   CAP=10; local t0
   hnode vm || return 1
-  vmcopy() { nt list-keys -T fleet-view | awk '$4 !~ /^User9[0-9][0-9]$/ && $4 != "C-]" { $3 = "root"; $1 = $1; print }' | sort; }
+  vmcopy() { nt list-keys -T fleet-view | awk '$4 !~ /^User9[0-9][0-9]$/ && $4 != "C-]" && $4 != "C-\\\\" { $3 = "root"; $1 = $1; print }' | sort; }
   vmroot() { nt list-keys -T root | awk '{ $1 = $1; print }' | sort; }
   [ "$(vmcopy)" = "$(vmroot)" ] || { WHY="right after start the 看台's fleet-view is not root's copy"; return 1; }
   grep -q 'view-keys --if-stale' "$BIN/fleet-remote-view.sh" || { WHY="attach --thin does not rebuild a stale fleet-view (view-keys --if-stale)"; return 1; }

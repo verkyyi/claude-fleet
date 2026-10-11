@@ -254,9 +254,13 @@ PY
 )"
 
 # --- H. through bin/fleet and the client server's environment ---------------------------
-err=$(FLEET_SHELL_SESSION="$L" bash "$BIN/fleet" ls 2>&1 >/dev/null); rc=$?
+err=$(FLEET_SESSION_CLI_ROAD=client FLEET_SHELL_SESSION="$L" bash "$BIN/fleet" ls 2>&1 >/dev/null); rc=$?
 eq "H no client running → exit 1" 1 "$rc"
 has "H …and why" "客户端没在运行" "$err"
+# no client, no fleet here (issue #3004): the home over fleet-thin.py --run — none reachable says so
+err=$(FLEET_SESSION_CLI_ROAD=home FLEET_THIN_ARGV_CMD=false FLEET_THIN_LOG="$W/thin.log" bash "$BIN/fleet" ls 2>&1 >/dev/null); rc=$?
+eq "H no client, no home reachable → exit 1" 1 "$rc"
+has "H …and why" "连不上家机器" "$err"
 if command -v tmux >/dev/null 2>&1; then
   tmux -L "$L" -f /dev/null new-session -d -s "$L" 'cat'
   tmux -L "$L" set-environment -g FLEET_SESSION_CLI_ROWS "$W/rows.tsv"

@@ -103,6 +103,7 @@ fields, only ever added at the end:
 | `exec` | a new client version between two connections | reason `<old> → <new>` |
 | `say` | a word for the person (a file not sent) — also an OSC 9 notification | the words |
 | `quit` / `end` | ⌘Q or a detach / a signal | `rc` |
+| `run` | `fleet-thin.py --run`: one command on the home over a one-shot ssh — `fleet ls / open / close / answer`, `fleet claude` with no client tmux (issue #3004) | `home` · `route`; reason = the command's first word |
 
 `connect.log` keeps the `home` / `pick` lines of each `--argv` run; the ssh
 itself is the thin client's child, so it has no `ssh-start` / `ssh-end` there —

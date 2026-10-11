@@ -797,7 +797,7 @@ rv_thin_dress() {
   return 0
 }
 rv_attach_thin() {
-  local view='' want='' resume='' device='' route='' token='' s w='' g gid='' tty f p fu cur rc kept
+  local view='' want='' resume='' device='' route='' token='' s w='' g gid='' tty f p fu cur rc kept wfar
   while [ $# -gt 0 ]; do
     case "$1" in
       --view) view="${2:-}"; shift 2 ;;
@@ -829,9 +829,13 @@ rv_attach_thin() {
     T detach-client -s "=$g" 2>/dev/null
     [ -n "$resume" ] || [ -n "$want" ] || [ -f "$f" ] || T kill-session -t "=$g" 2>/dev/null
   fi
+  wfar=''
   if [ -n "$want" ]; then
     w=$(rv_thin_window "$s" "$want")
-    [ -n "$w" ] || note "attach --thin: ${want#*/} is not live on $(hostname -s) — landing elsewhere"
+    if [ -z "$w" ]; then
+      case "$want" in */*) wfar=${want#wid:} ;; esac
+      note "attach --thin: ${want#*/} is not live on $(hostname -s) — landing elsewhere${wfar:+, then there}"
+    fi
   fi
   kept=''
   T has-session -t "=$g" 2>/dev/null && gid=$(T display-message -p -t "=$g:" '#{session_id}' 2>/dev/null) && kept=1
@@ -848,6 +852,11 @@ rv_attach_thin() {
   # the attach's path — so the first visit to another machine is already warm
   case "$view" in *-via-*) ;; *)
     ( python3 "$BIN/fleet-quickopen.py" view-peers --view "$s@view-$view" --socket "$sock" </dev/null >/dev/null 2>&1 & ) ;;
+  esac
+  # --want naming another machine's session (`fleet claude` placed there, #3004):
+  # the 看台's one switch road takes it there once attached — its C4 window
+  case "$wfar:$view" in ?*:*-via-*|:*) ;; *)
+    ( sleep 0.3; TMUX='' python3 "$BIN/fleet-quickopen.py" go "$s@view-$view" "$wfar" --how want </dev/null >/dev/null 2>&1 & ) ;;
   esac
   rv_hide_borders "$s"
   tty=$(tty 2>/dev/null) || tty=-

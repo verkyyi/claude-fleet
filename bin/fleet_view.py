@@ -17,6 +17,12 @@ fleet-quickopen.py (this module is its node half — the client never loads it):
                                               under them; ↵ goes there
     fleet-quickopen.py do next|prev|back|fwd --view <view>
                                               ⌘↓ ⌘↑ (the list's order) · ⌘[ ⌘] (history)
+    fleet-quickopen.py do new|quit|shell --view <view>
+                                              C7 (issue #3004): ⌘N the orchestrator
+                                              (wherever it runs) · ⌘Q OSC 7502 quit +
+                                              detach · ⌃\ the session's shell
+    fleet-quickopen.py view-shell here|far|home <machine> <login> <target> --view <view>
+                                              (the ⌃\ window's program)
     fleet-quickopen.py view-order --view <view>
                                               rewrite the order ⌘↓ ⌘↑ walk (below)
     fleet-quickopen.py view-rows --view <view> [<query>]
@@ -73,6 +79,7 @@ import shlex
 import json
 import os
 import re
+import signal
 import socket
 import subprocess
 import sys
@@ -82,12 +89,16 @@ from pathlib import Path
 US = "\x1f"
 VIEW_RE = re.compile(r"^[A-Za-z0-9-]{1,64}$")
 # The 看台's actions off dash-keymap.sh --panel switch: the verb each one runs.
-# zoom / new / fold / quit / dispatch are C7's (EPIC #2999) — caught by user-keys,
-# bound to nothing here yet.
+# ⌘N ⌘T ⌘Q are C7's (issue #3004); zoom / fold stay caught by user-keys, bound to
+# nothing (a 看台 has one pane a window, and no list to fold).
 VIEW_ACTIONS = {"next": "do next", "prev": "do prev", "back": "do back", "fwd": "do fwd",
-                "quickopen": "popup", "switcher": "popup"}
+                "quickopen": "popup", "switcher": "popup",
+                "new": "do new", "quit": "do quit", "dispatch": "dispatch"}
 PFX_KEY = "C-]"
 NARROW = 100      # a client narrower than this (a phone) gets the switcher full-screen (#3006)
+# ⌃\ (issue #3004, #2744's meaning): no ⌘ chord, so no row of the switch table —
+# the terminal sends the byte itself; ⌃] \ is the same on a keyboard with no ⌃\.
+SHELL_KEY, SHELL_LETTER = "C-\\", "\\"
 HERE, ME = "here", "me"
 
 
@@ -730,7 +741,13 @@ def go(qo, vid, target, how="go", client="", meta=None, record=True):
 
 
 def do(qo, verb, vid, client=""):
-    """⌘↓ ⌘↑ ⌘[ ⌘] in a 看台."""
+    """⌘↓ ⌘↑ ⌘[ ⌘] in a 看台 — and C7's ⌘N (new) · ⌘Q (quit) · ⌃\\ (shell)."""
+    if verb == "new":
+        return go_orch(qo, vid, client)
+    if verb == "quit":
+        return quit_view(vid, client)
+    if verb == "shell":
+        return open_shell(qo, vid, client)
     row = view_row(vid)
     fleet = view_fleet(vid, row)
     if not fleet:
@@ -776,6 +793,241 @@ def do(qo, verb, vid, client=""):
     return 2
 
 
+# --- ⌘N ⌘Q ⌃\ (issue #3004, EPIC #2999 C7) ----------------------------------------------
+
+def orch_target(fleet, wins=None):
+    """(target, meta) of the orchestrator: its window here, else the session
+    orch_<fleet> names on another machine (the hub's holder, #2117) — ("", {})
+    when there is none."""
+    wins = windows(fleet) if wins is None else wins
+    here = [w for w, v in wins.items() if v[1] == "orchestrator"]
+    if here:
+        return here[0], {}
+    p = orch_line(fleet)
+    if len(p) >= 2 and "/" in p[0] and p[1].strip():
+        return p[0], {"machine": p[1].strip().rstrip("!~")}
+    return "", {}
+
+
+def go_orch(qo, vid, client=""):
+    """⌘N: the orchestrator, wherever it runs — one go when it is known (here, or
+    another machine's through its C4 window), so the press is instant; none
+    anywhere → `fleet-orchestrator.sh ensure`, then there. rc as go()."""
+    fleet = view_fleet(vid)
+    if not fleet:
+        return 2
+    target, meta = orch_target(fleet)
+    if target:
+        return go(qo, vid, target, "new", client, meta)
+    toast(client, say("view_orch_waking"))
+    seam = os.environ.get("FLEET_VIEW_ORCH_CMD")
+    argv = shlex.split(seam) if seam else ["bash", str(Path(__file__).absolute().parent / "fleet-orchestrator.sh")]
+    try:
+        p = subprocess.run(argv + ["ensure", fleet], stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                           timeout=fenv("FLEET_VIEW_ORCH_SECS", 90))
+        rc, w = p.returncode, (p.stdout.strip().splitlines() or [""])[-1].strip()
+    except (OSError, subprocess.TimeoutExpired):
+        rc, w = 1, ""
+    if rc == 0 and w.startswith("@"):
+        return go(qo, vid, w, "new", client)
+    # rc 5: another machine holds it — there, once the hub's rows say where
+    target, meta = orch_target(fleet)
+    if target:
+        return go(qo, vid, target, "new", client, meta)
+    toast(client, say("view_orch_elsewhere") if rc == 5 else say("view_orch_off") if rc == 3 else say("view_orch_none"))
+    return 3
+
+
+def quit_view(vid, client=""):
+    """⌘Q: tell the thin loop on the person's computer this connection is over
+    (`ESC ] 7502 ; quit ; token=… BEL` on the client's own tty, the token its
+    attach registered — 约定 10), then detach: ssh ends 0 and the loop exits."""
+    row = view_row(vid)
+    fleet = view_fleet(vid, row)
+    if not fleet:
+        return 2
+    g = "%s@view-%s" % (fleet, vid)
+    if client:
+        _, tty = tm("display-message", "-p", "-c", client, "#{client_tty}")
+    else:
+        _, out = tm("list-clients", "-t", "=" + g, "-F", "#{client_tty}")
+        tty = (out.splitlines() or [""])[0]
+    token = row.get("token") or ""
+    if token and re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", token) and tty.startswith("/dev/"):
+        try:
+            fd = os.open(tty, os.O_WRONLY | os.O_NOCTTY)
+            try:
+                os.write(fd, ("\x1b]7502;quit;token=%s\x07" % token).encode())
+            finally:
+                os.close(fd)
+        except OSError:
+            pass
+    rc, _ = tm("detach-client", *(["-t", client] if client else ["-s", "=" + g]))
+    return 0 if rc == 0 else 1
+
+
+def far_name(fleet, wid):
+    """A far session's name as the hub's rows say it (global/remote_<fleet>, field 8)."""
+    try:
+        for line in (dash_global() / ("remote_" + fleet)).read_text().splitlines():
+            f = line.split(US)
+            if f[0] == "wid:" + wid and len(f) > 7 and f[7].strip():
+                return f[7].strip()
+    except OSError:
+        pass
+    return wid.rsplit("/", 1)[-1]
+
+
+def open_shell(qo, vid, client=""):
+    """⌃\ (#2744's meaning, in a 看台): THIS SESSION's shell — a login shell on
+    the machine it runs on, as its login, in its working directory (`@worktree`,
+    else its pane's) — a window of the 看台's group marked `@view_shell
+    <machine>@<login>:<worker id>` + `@peer_view <view>` (rv_peer_sweep takes it
+    with the 看台), one a session: the next ⌃\ in it is back on the session, in
+    the session it selects the open one. Another machine's rides C5's standing
+    link (`ssh -S <link> -tt … fleet-remote-view.sh shell-here <wid>`); a session
+    reaped takes its shell along. No session in view: this machine's shell in $HOME."""
+    row = view_row(vid)
+    fleet = view_fleet(vid, row)
+    if not fleet:
+        return 2
+    g = "%s@view-%s" % (fleet, vid)
+    rc, out = tm("display-message", "-p", "-t", "=%s:" % g,
+                 "#{window_id}|#{@fleet_id}|#{@peer_node}|#{@peer_login}|#{@peer_cur}|#{@view_shell}|#{window_name}")
+    if rc != 0 or not out:
+        return 2
+    w, fid, pnode, plogin, pcur, vsh, wname = (out.split("|") + [""] * 7)[:7]
+    if vsh:
+        code, _ = tm("last-window", "-t", "=" + g)
+        return 0 if code == 0 else 1
+    here, me = here_label(row), getpass.getuser()
+    if pcur.startswith("wid:") and pnode:
+        m, l, wid, name, prog = pnode, plogin or me, pcur[4:], far_name(fleet, pcur[4:]), "far"
+    elif fid:
+        m, l, wid, name, prog = here, me, w, TAG_RE.sub("", wname).strip() or w, "here"
+    else:
+        m, l, wid, name, prog = here, me, "", "", "home"
+    key = "%s@%s:%s" % (m, l, wid) if wid else "local"
+    _, lst = tm("list-windows", "-t", "=" + fleet, "-F", "#{window_id}|#{@view_shell}|#{@peer_view}")
+    for line in lst.splitlines():
+        sw, sk, sv = (line.split("|") + ["", ""])[:3]
+        if sk == key and sv == vid:
+            tm("select-window", "-t", "=%s:%s" % (g, sw))
+            return 0
+    pane = "exec python3 %s view-shell %s %s %s %s --view %s" % (
+        shlex.quote(os.path.abspath(qo.__file__)), prog, shlex.quote(m), shlex.quote(l), shlex.quote(wid or "-"), shlex.quote(vid))
+    title = say("view_shell_title_fmt", name, m) if wid else say("view_shell_home_fmt", m)
+    rc, sw = tm("new-window", "-P", "-F", "#{window_id}", "-t", "=%s:" % g, "-c", os.path.expanduser("~"),
+                "-n", title[:60], pane)
+    if rc != 0 or not sw.startswith("@"):
+        toast(client, say("view_shell_failed_fmt", m))
+        return 1
+    tm("set-option", "-w", "-t", sw, "@fleet_role", "panel", ";",
+       "set-option", "-w", "-t", sw, "@view_shell", key, ";",
+       "set-option", "-w", "-t", sw, "@peer_view", vid, ";",
+       "set-option", "-w", "-t", sw, "automatic-rename", "off", ";",
+       "set-option", "-w", "-t", sw, "allow-rename", "off", ";",
+       "set-option", "-w", "-t", sw, "pane-border-status", "off")
+    return 0
+
+
+def wait_key(text):
+    sys.stdout.write("\r\n" + text + "\r\n")
+    sys.stdout.flush()
+    try:
+        import termios
+        import tty
+        old = termios.tcgetattr(0)
+        tty.setraw(0)
+        try:
+            os.read(0, 1)
+        finally:
+            termios.tcsetattr(0, termios.TCSADRAIN, old)
+    except Exception:  # noqa: BLE001 — no terminal: just end
+        pass
+
+
+def login_shell():
+    import pwd
+    sh = os.environ.get("SHELL") or ""
+    if not os.access(sh, os.X_OK):
+        try:
+            sh = pwd.getpwuid(os.getuid()).pw_shell
+        except KeyError:
+            sh = "/bin/sh"
+    return sh or "/bin/sh"
+
+
+def shell_pane(vid, prog, m, l, wid):
+    """`view-shell` — the ⌃\ window's program. here: the session's window (wid)
+    in this fleet; its directory, a login shell there, HUP'd when that window goes.
+    far: a channel on C5's link into the far machine's `shell-here`. home: $HOME."""
+    bin_dir = str(Path(__file__).absolute().parent)
+    path = os.path.expanduser("~/.local/bin") + ":" + bin_dir + ":" + os.environ.get("PATH", "")
+    env = {k: v for k, v in os.environ.items() if k != "FLEET_WORKER_CRED"}
+    env["PATH"] = path
+    if prog == "far":
+        pl = peerlink()
+        sock, waited = "", 0.0
+        while not sock and waited <= fenv("FLEET_VIEW_SHELL_WAIT", 10):
+            sock = pl.up_sock(m, l)
+            if not sock:
+                if waited == 0:
+                    sys.stdout.write(say("view_peer_wait_fmt", m) + "\r\n")
+                    sys.stdout.flush()
+                time.sleep(0.5)
+                waited += 0.5
+        if not sock:
+            wait_key(say("view_shell_nolink_fmt", m))
+            return 1
+        cmd = "bash %s/fleet-remote-view.sh shell-here %s" % (pl.remote_bin(), shlex.quote(wid))
+        rc = subprocess.call(pl.ssh_cmd() + ["-S", sock, "-o", "ControlMaster=no", "-tt", "-l", l,
+                                             pl.ssh_host(m), cmd], env=env)
+        if rc == 3:
+            wait_key(say("view_shell_gone_fmt", m))
+        elif rc == 255:
+            wait_key(say("view_shell_nolink_fmt", m))
+        return 0
+    d = os.path.expanduser("~")
+    if prog == "here":
+        _, out = tm("display-message", "-p", "-t", wid, "#{@worktree}|#{pane_current_path}")
+        wt, pcp = (out.split("|") + [""])[:2]
+        d = wt if wt and os.path.isdir(wt) else pcp if pcp and os.path.isdir(pcp) else d
+    sh = login_shell()
+    pid = os.fork()
+    if pid == 0:
+        try:
+            os.chdir(d)
+        except OSError:
+            pass
+        env["PWD"] = d
+        os.execve(sh, [sh, "-l"], env)
+    if prog != "here":
+        return rc_wait(pid)
+    # the session's window gone (reaped, moved): its shell goes with it
+    every = fenv("FLEET_SESSION_SHELL_WATCH", 5)
+    while True:
+        done, st = os.waitpid(pid, os.WNOHANG)
+        if done:
+            return 0
+        time.sleep(every)
+        rc, out = tm("list-windows", "-a", "-F", "#{window_id}")
+        if rc == 0 and wid not in out.split():
+            try:
+                os.kill(pid, signal.SIGHUP)
+            except OSError:
+                pass
+            return rc_wait(pid)
+
+
+def rc_wait(pid):
+    try:
+        os.waitpid(pid, 0)
+    except OSError:
+        pass
+    return 0
+
+
 # --- the key tables (conf/tmux-view.conf) ------------------------------------------------
 
 ROOT_RE = re.compile(r"^(bind-key(?:\s+-r)?)\s+-T\s+root\s")
@@ -801,6 +1053,7 @@ def key_lines(me):
     # the codes too (conf/tmux-view.conf sets the same, idempotent)
     codes = sorted({t.split()[3] for t in table.splitlines() if len(t.split()) >= 5} | {"924", "926"})
     lines += ['set-option -s user-keys[%s] "\\e[%s~"' % (c, c) for c in codes if c.isdigit()]
+    size = lambda pc: "#{?#{e|<:#{client_width},%d},100%%,%d%%}" % (NARROW, pc)
     for t in table.splitlines():
         f = t.split()
         if len(f) < 5 or f[0] not in VIEW_ACTIONS:
@@ -811,16 +1064,26 @@ def key_lines(me):
             # display-popup expands no format in its command (nor in -e), so the
             # popup opens from a run-shell, which does — the old client's road too.
             # Narrower than NARROW columns (a phone, C9): the whole screen
-            size = lambda pc: "#{?#{e|<:#{client_width},%d},100%%,%d%%}" % (NARROW, pc)
             cmd = ("run-shell -b \"tmux display-popup -c '#{client_name}' -E -w %s -h %s -T ' %s ' "
                    "\\\"python3 '%s' --view '#{session_name}' --client '#{client_name}'\\\" "  # view-ok: the key's own session IS the 看台
                    ">/dev/null 2>&1 || :\"") % (size(90), size(80), say("view_title"), me)
+        elif verb == "dispatch":
+            # ⌘T (C7): the old client's 派一件事 popup, run HERE with --view — the
+            # repos the hub names, the agent picked per this one send (#1834)
+            cmd = ("run-shell -b \"tmux display-popup -c '#{client_name}' -E -w %s -h 12 -T ' %s ' "
+                   "\\\"python3 '%s' --view '#{session_name}' --client '#{client_name}'\\\" "  # view-ok: the 看台
+                   ">/dev/null 2>&1 || :\"") % (size(80), say("view_dispatch_title"),
+                                                str(Path(me).parent / "fleet-quick-dispatch.py"))
         else:
             cmd = ("run-shell -b \"python3 '%s' %s --view '#{session_name}' --client '#{client_name}' "  # view-ok: the 看台
                    ">/dev/null 2>&1 || :\"") % (me, verb)
         lines.append("bind-key -T fleet-view User%s %s" % (code, cmd))
         if len(letter) == 1:
             lines.append("bind-key -T fleet-view-pfx %s %s" % ("'%s'" % letter if not letter.isalnum() else letter, cmd))
+    shell = ("run-shell -b \"python3 '%s' do shell --view '#{session_name}' --client '#{client_name}' "  # view-ok: the 看台
+             ">/dev/null 2>&1 || :\"") % me
+    lines.append("bind-key -T fleet-view '%s' %s" % (SHELL_KEY, shell))
+    lines.append("bind-key -T fleet-view-pfx '%s' %s" % (SHELL_LETTER, shell))
     lines.append("bind-key -T fleet-view %s switch-client -T fleet-view-pfx" % PFX_KEY)
     lines.append("bind-key -T fleet-view-pfx %s send-keys %s" % (PFX_KEY, PFX_KEY))
     return lines
@@ -835,7 +1098,7 @@ def view_keys(me, if_stale=False):
         _, root = tm("list-keys", "-T", "root")
         norm = lambda line: " ".join(line.split())
         copy = sorted(norm(ROOT_RE.sub(r"\1 -T root ", l.replace(" -T fleet-view ", " -T root ", 1)))
-                      for l in fv.splitlines() if not re.search(r" -T fleet-view +(User9\d\d|C-\]) ", l))
+                      for l in fv.splitlines() if not re.search(r" -T fleet-view +(User9\d\d|C-\]|C-\\\\) ", l))
         if rc != 0 or not fv:
             return 0          # never loaded here: attach --thin adds no table (C1's rule)
         if copy == sorted(norm(l) for l in root.splitlines()):
@@ -1006,6 +1269,9 @@ def main(argv, qo):
             _SOCK[0] = opt(argv, "--socket")
             os.environ.pop("TMUX", None)
         return view_peers(vid)
+    if argv[:1] == ["view-shell"] and len(argv) >= 5 and argv[1] in ("here", "far", "home"):
+        rest = [a for i, a in enumerate(argv) if a != "--view" and argv[i - 1] != "--view"]
+        return shell_pane(vid, *rest[1:5])
     if argv[:1] == ["view-order"]:
         order_save(vid, entries(vid))
         return 0

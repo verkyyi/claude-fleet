@@ -3,6 +3,10 @@
 machine (issue #3003, EPIC #2999 C6; the EPIC's 约定 3, 4, 6, 10, 11).
 
     fleet --thin [<session>]          (FLEET_CLIENT=thin: plain `fleet`)
+    fleet-thin.py --run [--tty] [--home <m>] -- <word>…
+                                      ONE command on the home machine over a
+                                      one-shot ssh (`fleet ls / open / answer /
+                                      claude` with no client tmux — issue #3004)
 
 What runs on this computer while you look at your sessions: this loop, and the
 ssh it holds open to your HOME machine (+ the relay's ProxyCommand when the
@@ -55,7 +59,8 @@ thin.log — TSV, one line per connection, fields only ever added at the end
     time(UTC)  event  home  route  pick_ms  ssh_ms  first_ms  rc  reason
 event: connect (pick_ms = fleet-connect --argv, ssh_ms = spawn → the first
 byte back, first_ms = spawn → the first valid `cur`: the view drawn) · rehome ·
-upload · exec · quit.
+upload · exec · quit · run (`--run`: one command on the home, issue #3004 —
+reason = its first word).
 
 Knobs: FLEET_THIN_UP_SECS (10), FLEET_THIN_BACKOFF ("1,2,4,8,16,30"),
 FLEET_THIN_REHOME_AFTER (3), FLEET_REMOTE_BIN (.claude/fleet/bin),
@@ -156,6 +161,74 @@ def tlog(event, home="", route="", pick_ms="", ssh_ms="", first_ms="", rc="", re
 
 def ms(t0, t1=None):
     return "%d" % (((t1 or time.time()) - t0) * 1000)
+
+
+# ---------------------------------------------------------------------------
+# the home and the line — fleet-connect.py --argv (约定 4)
+# ---------------------------------------------------------------------------
+
+def pick(home="", avoid="", reconnect=False):
+    """(fleet-connect --argv's JSON, pick_ms, why) — the certificate renewed, the
+    home asked, the line picked; (None, ms, why) when there is none."""
+    seam = os.environ.get("FLEET_THIN_ARGV_CMD")
+    cmd = shlex.split(seam) if seam else [sys.executable or "python3", os.path.join(BIN, "fleet-connect.py"), "--argv"]
+    if home:
+        cmd.append(home)
+    if avoid:
+        cmd += ["--avoid", avoid]
+    env = dict(os.environ)
+    if reconnect:
+        env["FLEET_CONNECT_RETEST"] = "last"   # the remembered line first (#2886)
+    t0 = time.time()
+    try:
+        # stderr stays the terminal's: a scan or a renewal speaks there
+        r = subprocess.run(cmd, stdout=subprocess.PIPE, env=env, timeout=300)
+    except (OSError, subprocess.SubprocessError) as e:
+        return None, ms(t0), str(e)
+    try:
+        j = json.loads(r.stdout.decode("utf-8", "replace").strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        j = None
+    if r.returncode != 0 or not isinstance(j, dict) or not ("argv" in j or j.get("local")):
+        return None, ms(t0), "fleet-connect --argv exit %d" % r.returncode
+    return j, ms(t0), ""
+
+
+def one_shot(argv):
+    """`fleet-thin.py --run [--tty] [--home <m>] -- <word>…` (issue #3004, EPIC #2999
+    C7): ONE command on the home machine, over a one-shot ssh of the same line a
+    connection takes — no ControlMaster, nothing left behind — its exit code
+    ours. `fleet ls / open / close / answer` and `fleet claude` ride it when this
+    computer has no client tmux. --tty: a terminal there (a question to answer)."""
+    tty_, home = False, ""
+    while argv and argv[0] != "--":
+        if argv[0] == "--tty":
+            tty_, argv = True, argv[1:]
+        elif argv[0] == "--home" and len(argv) > 1:
+            home, argv = argv[1], argv[2:]
+        else:
+            sys.stderr.write("usage: fleet-thin.py --run [--tty] [--home <m>] -- <word>…\n")
+            return 2
+    words = argv[1:]
+    if not words:
+        sys.stderr.write("usage: fleet-thin.py --run [--tty] [--home <m>] -- <word>…\n")
+        return 2
+    j, _, why = pick(home)
+    if j is None:
+        sys.stderr.write("fleet · %s\n" % tr("thin_no_home_fmt", why))
+        return 1
+    remote = " ".join(shlex.quote(w) for w in words)
+    if j.get("local"):
+        cmd = ["sh", "-c", 'cd && exec sh -c "$1"', "fleet-thin", remote]
+    else:
+        a, h = list(j["argv"]), int(j["host"])
+        cmd = a[:h] + ["-o", "ControlMaster=no", "-o", "ControlPath=none", "-tt" if tty_ else "-T"] + [a[h], remote]
+    tlog("run", home or str(j.get("home") or ""), str(j.get("route") or ""), "", "", "", "", words[0][-40:])
+    try:
+        os.execvp(cmd[0], cmd)
+    except OSError as e:
+        sys.stderr.write("fleet · %s\n" % e)
+        return 1
 
 
 # ---------------------------------------------------------------------------
@@ -322,29 +395,7 @@ class Thin:
             # right here — the remote command runs as a child, never an ssh to itself
             m = load("fleet-connect.py", "fleet_connect").local_machine()
             return {"local": True, "machine": m["alias"], "argv": []}, "0", ""
-        seam = os.environ.get("FLEET_THIN_ARGV_CMD")
-        cmd = shlex.split(seam) if seam else [sys.executable or "python3", os.path.join(BIN, "fleet-connect.py"),
-                                              "--argv"]
-        if self.home:
-            cmd.append(self.home)
-        if self.avoid:
-            cmd += ["--avoid", self.avoid]
-        env = dict(os.environ)
-        if reconnect:
-            env["FLEET_CONNECT_RETEST"] = "last"   # the remembered line first (#2886)
-        t0 = time.time()
-        try:
-            # stderr stays the terminal's: a scan or a renewal speaks there
-            r = subprocess.run(cmd, stdout=subprocess.PIPE, env=env, timeout=300)
-        except (OSError, subprocess.SubprocessError) as e:
-            return None, ms(t0), str(e)
-        try:
-            j = json.loads(r.stdout.decode("utf-8", "replace").strip().splitlines()[-1])
-        except (ValueError, IndexError):
-            j = None
-        if r.returncode != 0 or not isinstance(j, dict) or not ("argv" in j or j.get("local")):
-            return None, ms(t0), "fleet-connect --argv exit %d" % r.returncode
-        return j, ms(t0), ""
+        return pick(self.home, self.avoid, reconnect)
 
     def remote(self, token, route):
         rbin = os.environ.get("FLEET_REMOTE_BIN") or ".claude/fleet/bin"
@@ -685,6 +736,8 @@ def rc_of(st):
 
 
 def main(argv):
+    if argv[:1] == ["--run"]:
+        return one_shot(argv[1:])
     import argparse
     ap = argparse.ArgumentParser(prog="fleet --thin", description=__doc__.split("\n\n")[0])
     ap.add_argument("session", nargs="?", default="", help="the session to open first (default: the last one)")
