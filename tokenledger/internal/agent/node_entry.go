@@ -117,8 +117,9 @@ func (ml *machineLink) entryPull(ctx context.Context, v int) (bool, string) {
 // the doctor's `public` row reads. Off the beat, in its own goroutine: a
 // router that never answers or a hub that is away never holds a heartbeat up.
 
-// entryReachEvery is how often the machine reports (a var for tests).
-var entryReachEvery = 5 * time.Minute
+// entryReachEvery is how often the machine reports (MachineConfig's
+// EntryReachEvery overrides it).
+const entryReachEvery = 5 * time.Minute
 
 // entryReachTimeout bounds one report: the router asked, the hub's dials.
 const entryReachTimeout = 2 * time.Minute
@@ -134,8 +135,12 @@ type entryReachClock struct {
 // is running. The beat calls it every tick.
 func (ml *machineLink) reachKick(ctx context.Context) {
 	st := &ml.reach
+	every := ml.cfg.EntryReachEvery
+	if every <= 0 {
+		every = entryReachEvery
+	}
 	st.mu.Lock()
-	if ml.cfg.EntryCtl == "" || st.running || (!st.last.IsZero() && time.Since(st.last) < entryReachEvery) {
+	if ml.cfg.EntryCtl == "" || st.running || (!st.last.IsZero() && time.Since(st.last) < every) {
 		st.mu.Unlock()
 		return
 	}
@@ -148,7 +153,7 @@ func (ml *machineLink) reachKick(ctx context.Context) {
 		st.running = false
 		if note != st.lastLog {
 			if note != "" {
-				log.Printf("entry reach: %s (again in %s)", note, entryReachEvery)
+				log.Printf("entry reach: %s (again in %s)", note, every)
 			}
 			st.lastLog = note
 		}

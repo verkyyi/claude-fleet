@@ -83,6 +83,9 @@ type MachineConfig struct {
 	// on (FLEET_ENTRY=1), and then the machine hello lists CapEntryKeys; ""
 	// = no entry, nothing listed, nothing pulled.
 	EntryCtl string
+	// EntryReachEvery is how often `entry reach` runs (claude-fleet#3072);
+	// 0 = every 5 minutes.
+	EntryReachEvery time.Duration
 	// Tenants is one Config per login served: its own Token (that login's
 	// node token), Home, StateDir and RunAs. Fleet is forced on.
 	Tenants []Config

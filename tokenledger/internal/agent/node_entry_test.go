@@ -124,9 +124,6 @@ func TestEntryPushPullsAndRetries(t *testing.T) {
 // single heartbeat up; it runs once per entryReachEvery, never twice at once;
 // with the entry off it never runs.
 func TestEntryReachNeverHoldsTheBeat(t *testing.T) {
-	old := entryReachEvery
-	entryReachEvery = 300 * time.Millisecond
-	t.Cleanup(func() { entryReachEvery = old })
 	dir := t.TempDir()
 	calls := filepath.Join(dir, "calls")
 	script := filepath.Join(dir, "sup")
@@ -158,7 +155,8 @@ func TestEntryReachNeverHoldsTheBeat(t *testing.T) {
 	defer srv.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go newMachineLink(MachineConfig{HubURL: srv.URL, Token: "m", LiveInterval: 100 * time.Millisecond, EntryCtl: script}).run(ctx)
+	go newMachineLink(MachineConfig{HubURL: srv.URL, Token: "m", LiveInterval: 100 * time.Millisecond, EntryCtl: script,
+		EntryReachEvery: 300 * time.Millisecond}).run(ctx)
 	deadline := time.After(2500 * time.Millisecond)
 	n := 0
 	prev := time.Time{}
