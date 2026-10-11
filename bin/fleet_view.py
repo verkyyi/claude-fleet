@@ -1139,10 +1139,20 @@ def key_lines(me):
     return lines
 
 
+def keys_sig(lines):
+    """What a build of the tables says it is: a hash of its commands, stamped as
+    the server's `@fleet_view_keys_sig` (issue #3085)."""
+    import hashlib
+    return hashlib.sha1("\n".join(lines).encode("utf-8")).hexdigest()[:16]
+
+
 def view_keys(me, if_stale=False):
     """Rebuild both tables. --if-stale (attach --thin, every attach): only when
-    fleet-view exists and its copy of root no longer IS root — a personal conf
-    re-sourced after the fleet's moved root, and the 看台's mouse with it."""
+    fleet-view exists and either its copy of root no longer IS root — a personal
+    conf re-sourced after the fleet's moved root, and the 看台's mouse with it — or
+    it was built by another version's key_lines (its `@fleet_view_keys_sig` is not
+    this build's): a release that changed a bind (#3058's --freeze) reached a
+    server whose conf it never re-sourced, and ⌘P kept the old popup (issue #3085)."""
     if if_stale:
         rc, fv = tm("list-keys", "-T", "fleet-view")
         _, root = tm("list-keys", "-T", "root")
@@ -1151,13 +1161,19 @@ def view_keys(me, if_stale=False):
                       for l in fv.splitlines() if not re.search(r" -T fleet-view +(User9\d\d|C-\]|C-\\\\) ", l))
         if rc != 0 or not fv:
             return 0          # never loaded here: attach --thin adds no table (C1's rule)
-        if copy == sorted(norm(l) for l in root.splitlines()):
+        lines = key_lines(me)
+        sig = keys_sig(lines)
+        _, have = tm("show-options", "-gqv", "@fleet_view_keys_sig")
+        if have.strip() == sig and copy == sorted(norm(l) for l in root.splitlines()):
             return 0
+    else:
+        lines = key_lines(me)
+        sig = keys_sig(lines)
     import tempfile
     fd, tmp = tempfile.mkstemp(prefix="fleet-view-keys.", suffix=".conf")
     try:
         with os.fdopen(fd, "w") as out:
-            out.write("\n".join(key_lines(me)) + "\n")
+            out.write("\n".join(lines + ["set-option -g @fleet_view_keys_sig %s" % sig]) + "\n")
         rc, _ = tm("source-file", tmp)
         return rc
     finally:
