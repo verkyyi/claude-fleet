@@ -2252,7 +2252,7 @@ class R_Entry(Sandbox):
         for line in ("Port 22022", "AllowUsers alice bob", "AuthenticationMethods publickey",
                      "PasswordAuthentication no", "KbdInteractiveAuthentication no", "PermitRootLogin no",
                      "AuthorizedKeysFile %s/%%u" % ep.keys, "PermitUserRC no", "PermitUserEnvironment no",
-                     "ExposeAuthInfo yes", "MaxAuthTries 3", "LoginGraceTime 20", "MaxStartups 10:30:60",
+                     "ExposeAuthInfo yes", "AcceptEnv LANG LC_*", "MaxAuthTries 3", "LoginGraceTime 20", "MaxStartups 10:30:60",
                      "HostKey %s" % ep.hostkey):
             self.assertIn(line + "\n", cfg)
         self.assertNotIn(".ssh", "".join(l for l in cfg.splitlines(True) if not l.startswith("#")))

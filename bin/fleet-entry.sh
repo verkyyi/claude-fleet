@@ -23,6 +23,11 @@
 # ExposeAuthInfo ($SSH_USER_AUTH); its name from the entry's book
 # ($FLEET_ENTRY_BOOK, root's 0644 state.json — the hub's label for it).
 #
+# The locale (issue #3196): the client's own LANG / LC_* win (the entry sshd's
+# AcceptEnv); arriving with none — or a non-UTF-8 one — every path gets a UTF-8
+# one before it is dispatched, or tmux takes the terminal for ASCII and the 看台
+# draws Chinese as `_`. Port 22 gets the same from the system's AcceptEnv.
+#
 # Each arrival is ONE line in $FLEET_CONF_DIR/logs/entry.ndjson — time, login,
 # key fp, source, where it went (view · exec · sftp · shell), never the command's
 # text. The door's own record (accepted / refused, by the listener's log) is the
@@ -33,6 +38,20 @@ SH="${SHELL:-/bin/sh}"
 CMD="${SSH_ORIGINAL_COMMAND-}"
 C="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"
 SRC="${SSH_CONNECTION%% *}"
+
+# a UTF-8 locale unless the client brought one (LC_ALL > LC_CTYPE > LANG, as setlocale reads them)
+entry_locale() {
+  local eff u
+  eff="${LC_ALL:-${LC_CTYPE:-${LANG:-}}}"
+  case "$eff" in *[Uu][Tt][Ff]-8*|*[Uu][Tt][Ff]8*) return 0 ;; esac
+  u=en_US.UTF-8
+  [ "$(uname -s 2>/dev/null)" = Linux ] && u=C.UTF-8
+  export LANG="$u"
+  [ -n "${LC_CTYPE:-}" ] && export LC_CTYPE="$u"
+  [ -n "${LC_ALL:-}" ] && export LC_ALL="$u"
+  return 0
+}
+entry_locale
 
 # the key this connection logged in with: ExposeAuthInfo's file, `publickey <type> <b64>`
 entry_fp() {

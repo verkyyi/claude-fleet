@@ -28,6 +28,10 @@
 #                         its argv), a command / sftp / scp / rsync runs as on port 22,
 #                         no command and no terminal is the login shell; each arrival
 #                         is a line in entry.ndjson (the login's and the door's)
+#   entry-no-lang         bin/fleet-entry.sh + entry_config's AcceptEnv (issue #3196):
+#                         a phone that sends no LANG still reaches the 看台 in UTF-8 —
+#                         a real tmux client draws Chinese to its terminal — and a
+#                         locale the client does send wins
 #   entry-public-unreachable  entry_reach + the hub's handleNodeEntryReach (#3072): an
 #                         address that resolves but nothing answers at is never in
 #                         reachable(machine) — the hub half's Go test dials THIS
@@ -412,6 +416,62 @@ SH
   sys_same || { edown; return 1; }
   edown
   WHAT="入口不带命令有终端 ⇒ 看台（--resume，第二次带回上次的会话；设备名是钥匙在入口上的名字）；带命令 / sftp / scp / rsync 与 22 端口一样；无命令无终端 ⇒ 登录 shell；每次进门登录处一行、入口 sshd 日志里的那把钥匙一行（logs/entry.ndjson，不含钥匙正文）"
+}
+
+drill_entry_no_lang() {
+  CAP=25   # the listener + three arrivals, one with a real tmux on its own socket
+  local t0 cf out row; local -a eopts
+  erig lang
+  mkdir -p "$E/rt/bin" "$E/conf"; ln -s "$BIN/fleet-entry.sh" "$E/rt/bin/fleet-entry.sh"
+  cf="$E/conf"
+  # the 看台 stand-in: the locale it was handed, then a REAL tmux client (own socket)
+  # showing Chinese for a moment — what reaches the terminal is what a phone draws
+  cat > "$E/view.sh" <<'SH'
+#!/bin/bash
+printf 'LANG=%s LC_CTYPE=%s LC_ALL=%s charmap=%s\n' "${LANG-}" "${LC_CTYPE-}" "${LC_ALL-}" \
+  "$(locale charmap 2>/dev/null)" >> "$(dirname "$0")/view.args"
+command -v tmux >/dev/null 2>&1 || { echo NO-TMUX; exit 0; }
+L="drill-lang-$$"
+tmux -L "$L" -f /dev/null new-session -d -s v -x 40 -y 4 "printf '看台中文\n'; sleep 30" || exit 0
+tmux -L "$L" set-option -g status off \; run-shell -b 'sleep 1.5; tmux -L '"$L"' detach-client -s v' >/dev/null 2>&1
+tmux -L "$L" attach-session -t v
+tmux -L "$L" kill-server 2>/dev/null
+exit 0
+SH
+  chmod +x "$E/view.sh"
+  export FLEET_ENTRY_TEST_SETENV="FLEET_ENTRY_VIEW=$E/view.sh FLEET_CONF_DIR=$cf"
+  eapply "$(elist 1 "$ME=k1")" || { WHY="entry apply failed: $(tail -2 "$E/apply.out")"; edown; return 1; }
+  grep -q '^AcceptEnv LANG LC_\*$' "$E/db/entry/sshd_config" \
+    || { WHY="the entry config takes no client locale: $(grep -i env "$E/db/entry/sshd_config")"; edown; return 1; }
+  t0=$(now); eup
+  until_ok 10 listening || { WHY="the entry sshd never listened"; edown; return 1; }
+  eopts=(-F /dev/null -o BatchMode=yes -o IdentitiesOnly=yes -o IdentityAgent=none -o StrictHostKeyChecking=no
+         -o UserKnownHostsFile="$E/known_hosts" -o ConnectTimeout=5 -o LogLevel=ERROR -i "$E/k1")
+  # 1. a phone that sends no LANG (-F /dev/null sends none; the client's own unset too)
+  out=$(env -u LANG -u LC_ALL -u LC_CTYPE TERM=xterm-256color \
+        ssh "${eopts[@]}" -tt -p "$EPORT" "$ME@127.0.0.1" </dev/null 2>"$E/ssh.err")
+  row=$(sed -n 1p "$E/view.args")
+  case "$row" in *charmap=UTF-8) ;; *) WHY="no LANG in ⇒ the 看台 got [$row]"; edown; return 1 ;; esac
+  case "$out" in
+    *NO-TMUX*) ;;
+    *看台中文*) ;;
+    *) WHY="no LANG in ⇒ tmux drew [$(printf '%s' "$out" | tr -d '\033' | tr -s '\r\n' ' ' | head -c 200)] $(cat "$E/ssh.err")"
+       edown; return 1 ;;
+  esac
+  # 2. the client's own locale wins (AcceptEnv)
+  env -u LC_ALL -u LC_CTYPE LANG=fr_FR.UTF-8 TERM=xterm-256color \
+    ssh "${eopts[@]}" -o SendEnv=LANG -tt -p "$EPORT" "$ME@127.0.0.1" </dev/null >/dev/null 2>&1
+  row=$(sed -n 2p "$E/view.args")
+  case "$row" in "LANG=fr_FR.UTF-8 LC_CTYPE= LC_ALL= "*) ;; *) WHY="LANG=fr_FR.UTF-8 sent ⇒ the 看台 got [$row]"; edown; return 1 ;; esac
+  # 3. a client that brings a non-UTF-8 one (LC_ALL=C) still gets UTF-8
+  env -u LANG -u LC_CTYPE LC_ALL=C TERM=xterm-256color \
+    ssh "${eopts[@]}" -o SendEnv=LC_ALL -tt -p "$EPORT" "$ME@127.0.0.1" </dev/null >/dev/null 2>&1
+  row=$(sed -n 3p "$E/view.args")
+  case "$row" in *charmap=UTF-8) ;; *) WHY="LC_ALL=C sent ⇒ the 看台 got [$row]"; edown; return 1 ;; esac
+  SECS=$(since "$t0")
+  sys_same || { edown; return 1; }
+  edown
+  WHAT="入口不带 LANG 进来 ⇒ 看台拿到 UTF-8（$(sed -n 1p "$E/view.args" | awk '{ print $1 }')），真 tmux 客户端把「看台中文」原样画到终端；客户端带的 LANG 优先（AcceptEnv LANG LC_*），带 LC_ALL=C 也换成 UTF-8"
 }
 
 drill_entry_public_unreachable() {
