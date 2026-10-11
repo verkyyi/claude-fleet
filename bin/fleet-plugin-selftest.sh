@@ -201,8 +201,8 @@ errs = man.get("errors") or []
 if errs or not r.get("success"):
     print(json.dumps(errs or r, indent=2)); sys.exit(1)
 # The one expected warning is the deliberate missing version (see the header) —
-# plus, under the gate's shadow root (every top-level entry a symlink), the
-# optional plugins' ./plugins/* sources "traverse a symlink" and go unread;
+# plus, under the shadow root of the gate (every top-level entry a symlink), the
+# ./plugins/* sources of the optional plugins "traverse a symlink" and go unread;
 # fleet-plugins-selftest.sh validates each plugin itself (issue #3112).
 unexpected = [w for w in (man.get("warnings") or []) if "version" not in (w.get("path") or "")
               and not ("symlink" in (w.get("message") or "") and "./plugins/" in (w.get("message") or ""))]
