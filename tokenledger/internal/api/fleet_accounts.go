@@ -266,8 +266,11 @@ func (s *Server) preferredLogin(principal, displayName string) string {
 // by fetching the login's relay credential (claude-fleet#3294) — and one where
 // a new login could run at all: newLoginCompute, placement's own rule, so an
 // egress region the providers do not serve is never picked
-// (claude-fleet#3312) — the one that
-// can finish the opening first: a ready spare, then an opener whose link has
+// (claude-fleet#3312), judged as a NEW login's egress (directProbe,
+// claude-fleet#3426) — first one with room for the newcomer's sessions
+// (placement's CPU gate, and its logins not all holding new sessions —
+// claude-fleet#3426), then the one that can finish the opening first: a
+// ready spare, then an opener whose link has
 // stayed up openerSettle, then a machine that has opened a login before, then
 // one whose last create did not fail. Then a machine whose fleets already host
 // a repo (a newcomer's first session opens in one), then placement's own
@@ -288,9 +291,9 @@ func (s *Server) leastBusyMachine(now time.Time, skip ...string) string {
 		settings = map[string]string{}
 	}
 	type cand struct {
-		m                                  MachineView
-		settled, opened, lastFailed, spare bool
-		score                              float64
+		m                                        MachineView
+		room, settled, opened, lastFailed, spare bool
+		score                                    float64
 	}
 	spare := s.spareReadyHosts()
 	var fit []cand
@@ -319,7 +322,13 @@ func (s *Server) leastBusyMachine(now time.Time, skip ...string) string {
 			v := m.Load1 / float64(m.NCPU)
 			perCore = &v
 		}
-		c.score = loadScore(perCore, m.MemFree, m.MemTotal)
+		// Placement's own CPU gate and its admission verdict rank first
+		// (claude-fleet#3426): C9's 27th drill opened the newcomer on
+		// fleet-linux-0 at load 39 on 4 cores over mini2 at 2.4 on 10 with
+		// admit=true, the tiers above the score having decided it.
+		excluded, eq := cpuVerdict(m.CPUBusy, m.MaxCPUBusy, perCore)
+		c.room = excluded == "" && hostAdmits(snap, m.Hostname)
+		c.score = loadScore(eq, m.MemFree, m.MemTotal)
 		fit = append(fit, c)
 	}
 	if len(fit) == 0 {
@@ -327,6 +336,11 @@ func (s *Server) leastBusyMachine(now time.Time, skip ...string) string {
 	}
 	sort.SliceStable(fit, func(a, b int) bool {
 		fa, fb := fit[a], fit[b]
+		// A machine that can take the newcomer's sessions at all first: under
+		// placement's CPU ceiling and not holding new sessions.
+		if fa.room != fb.room {
+			return fa.room
+		}
 		// A ready spare first (claude-fleet#2263): the newcomer is in at once.
 		if fa.spare != fb.spare {
 			return fa.spare
@@ -352,6 +366,21 @@ func (s *Server) leastBusyMachine(now time.Time, skip ...string) string {
 		return fa.m.Hostname < fb.m.Hostname
 	})
 	return fit[0].m.Hostname
+}
+
+// hostAdmits is false when the machine's logins that state an admission
+// verdict (claude-fleet#1836) all say they are holding new sessions; a
+// machine whose logins say nothing admits, as placement reads it.
+func hostAdmits(snap NodesSnapshot, host string) bool {
+	said, yes := false, false
+	for _, n := range snap.Nodes {
+		if n.Admit == nil || n.Status == "lost" || !strings.EqualFold(n.Hostname, host) {
+			continue
+		}
+		said = true
+		yes = yes || *n.Admit
+	}
+	return !said || yes
 }
 
 // openerSettle is how long a machine's login opener must have stayed

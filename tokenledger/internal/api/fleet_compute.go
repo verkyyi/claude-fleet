@@ -228,9 +228,10 @@ func (s *Server) computeAutoAudit(value string, now time.Time) {
 // newLoginCompute is the verdict a login opened on host now would get
 // (claude-fleet#3312): decideCompute for a login that asks to run, unforced,
 // against the machine's newest probe from any of its heard links — its own
-// node program's included. The egress region is the machine's, so a login
-// opened where it is unsupported is closed at its first lease, and a create
-// never picks such a machine. No probe there ⇒ open, exactly as placement.
+// node program's included — as a NEW login would see it (directProbe). The
+// egress region is the machine's, so a login opened where it is unsupported
+// is closed at its first lease, and a create never picks such a machine. No
+// probe there ⇒ open, exactly as placement.
 func newLoginCompute(snap NodesSnapshot, host string, settings map[string]string, now time.Time) computeVerdict {
 	var newest *control.NodeProbe
 	for _, n := range snap.Nodes {
@@ -241,5 +242,21 @@ func newLoginCompute(snap NodesSnapshot, host string, settings map[string]string
 			newest = n.Probe
 		}
 	}
-	return decideCompute(true, false, newest, computeAutoOn(settings), now)
+	return decideCompute(true, false, directProbe(newest), computeAutoOn(settings), now)
+}
+
+// directProbe is p as a login opened today would read it (claude-fleet#3426):
+// a relay probe (claude-fleet#3364) is an existing login whose credential
+// proxy goes through the relay BECAUSE this machine's own egress is not
+// served — a new login is not given that road (EPIC #3208), so it sees the
+// machine's own region, unsupported. C9's 27th drill: fleet-linux-0's old
+// logins said SG via relay, the hub opened the newcomer there, and its login
+// probed CN. A direct probe is returned as it is.
+func directProbe(p *control.NodeProbe) *control.NodeProbe {
+	if p == nil || p.Route != "relay" {
+		return p
+	}
+	return &control.NodeProbe{Loc: p.LocLocal, Anthropic: control.ProbeUnsupportedRegion,
+		Verdict: control.ProbeUnsupportedRegion, Laptop: p.Laptop, TS: p.TS,
+		Reason: "a new login does not take the relay road its machine's logins take"}
 }

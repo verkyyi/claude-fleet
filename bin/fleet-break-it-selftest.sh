@@ -154,6 +154,8 @@
 #                                                   conf/tmux-shell.conf (User928), fleet-sidebar.py with_portal
 #   report-parent-gone                              bin/fleet-report-parent.sh (orphan → global/orphan-reports.ndjson
 #                                                   + fleet-alerts.sh event child-report)
+#   report-parent-remote                            bin/fleet-report-parent.sh (rail 1 → the hub outbox by
+#                                                   @origin_wid), fleet-lib.sh fleet_origin_canon
 #   batch-green-unsaid                              bin/fleet-batch-green.sh (diskguard batch_green_watch)
 #   orphan-report-unseen                            bin/fleet-orphan-reports.py, fleet-control-read.sh column 31,
 #                                                   fleet_hub_common.py orphan_rep_cell
@@ -6210,6 +6212,42 @@ PYR
   n=$(grep -c . "$f")
   [ "$n" = 1 ] || { WHY="a hub-spawned child's report was filed for the person ($n rows)"; return 1; }
   WHAT="派单的会话不在：报告进 orphan-reports.ndjson 一行 + 一条提醒，重报 / 回收不重复，hub 派的不写"
+}
+
+drill_report_parent_remote() {
+  CAP=60; local d="$WORK/rpr" w wl t0 out rc f U F=11111111-2222-3333-4444-555555555555 PF=0dbf19b9-aaaa-4bbb-8ccc-0123456789ab
+  BREAK_SOCK="$WORK/sock-rpr"
+  mkdir -p "$d/conf/fleets/rpr" "$d/conf/control" "$d/main"
+  printf 'FLEET_REPO=acme/app\nFLEET_MAIN=%s/main\n' "$d" > "$d/conf/fleets/rpr/conf"
+  nt -f /dev/null new-session -d -s rpr -n home 'exec sleep 600' || { WHY="cannot start the isolated tmux server"; return 1; }
+  rpr() { env PATH="$WORK/tbin:$PATH" HOME="$WORK/home" BREAK_SOCK="$BREAK_SOCK" FLEET_CONF_DIR="$d/conf" FLEET_SKIP_GLOBAL_CONF=1 \
+            CCQUOTA_FLEET=1 FLEET_HUB_RECEIPT_WAIT=0 FLEET_ORPHAN_ALERT_CMD=true "$@"; }
+  # this machine's fleet UUID (the control db mints it), as on any hub node
+  (cd "$BIN" && rpr python3 -c 'import sys, fleet_control as c; c.Control(sys.argv[1]).inventory()' "$d/conf") >/dev/null 2>&1
+  U=$(rpr bash -c '. "$1/fleet-lib.sh"; fleet_uuid rpr' _ "$BIN")
+  [ -n "$U" ] || { WHY="no fleet UUID could be minted"; return 1; }
+  # the child the hub placed here: what dash-issue-session stamps from --origin-wid
+  w=$(nt new-window -d -P -F '#{window_id}' -t rpr -n kid 'exec sleep 600')
+  out=$(rpr bash -c '. "$1/fleet-lib.sh"; fleet_origin_canon "$2" "" "" ""' _ "$BIN" "$PF")
+  [ "$out" = "$PF" ] || { WHY="the parent's identity was stamped as [$out], want it whole"; return 1; }
+  nt set-option -w -t "$w" @issue 41 \; set-option -w -t "$w" @repo acme/app \; set-option -w -t "$w" @origin "$out" \; \
+     set-option -w -t "$w" @origin_wid "$F/$PF" \; set-option -w -t "$w" @origin_fid "$PF" \; set-option -w -t "$w" @claude_state 'done'
+  printf '%s/%s\tm4\t\n' "$F" "$PF" > "$d/conf/control/hub-workers.tsv"
+  t0=$(now)
+  out=$(rpr bash "$BIN/fleet-report-parent.sh" -L rpr --win "$w" --state blocked --summary 'need a decision' 2>&1); rc=$?
+  SECS=$(since "$t0")
+  [ "$rc" = 3 ] || { WHY="a report to a parent on another machine exited $rc [$out], want 3 (queued at the hub)"; return 1; }
+  f=$(ls "$d/conf/control/hub-outbox/"*.json 2>/dev/null | head -1)
+  python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); sys.exit(0 if r["to"]==sys.argv[2] and r["kind"]=="child_report" else 1)' "$f" "$F/$PF" 2>/dev/null \
+    || { WHY="no child_report relay to $F/$PF in the outbox: $(cat "$f" 2>/dev/null)"; return 1; }
+  # a window whose address is lost (cut identity, no @origin_wid) is never a silent success
+  wl=$(nt new-window -d -P -F '#{window_id}' -t rpr -n lost 'exec sleep 600')
+  nt set-option -w -t "$wl" @issue 42 \; set-option -w -t "$wl" @repo acme/app \; \
+     set-option -w -t "$wl" @origin "$(printf '%s' "$PF" | cut -c1-32)" \; set-option -w -t "$wl" @claude_state 'done'
+  out=$(rpr bash "$BIN/fleet-report-parent.sh" -L rpr --win "$wl" --state blocked --summary 'stuck' 2>/dev/null); rc=$?
+  [ "$rc" = 1 ] && case "$out" in "undelivered → "*) true ;; *) false ;; esac \
+    || { WHY="a report with a lost parent address said [$out] rc=$rc, want undelivered → … exit 1"; return 1; }
+  WHAT="另一台的父会话：报告按 @origin_wid 进 hub 发件箱（queued，exit 3）；地址丢了说 undelivered、exit 1，不再静默 exit 0"
 }
 
 drill_cred_migration_client() {

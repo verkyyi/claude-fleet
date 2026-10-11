@@ -864,6 +864,8 @@ fi
 # machine (a hub-placed start, #1541), else derived from the key; a parent on
 # another machine has no generation here (#1538).
 if [ -n "$ORIGIN_WID" ]; then TM set-window-option -t "$win" @origin_wid "$ORIGIN_WID" 2>/dev/null
+  # the parent's identity, when the worker_id carries one (issue #3439)
+  fleet_is_fid "${ORIGIN_WID#*/}" && TM set-window-option -t "$win" @origin_fid "${ORIGIN_WID#*/}" 2>/dev/null
 elif [ -n "$ORIGIN" ]; then fleet_stamp_origin_wid "$SESS" "$win" "$ORIGIN" "$SOCK"; fi
 [ -n "$ORIGIN" ] && [ -z "$ORIGIN_WID" ] && fleet_stamp_origin_gen "$SESS" "$win" "$ORIGIN" "$SOCK"
 # --warm-only's seed (issue #2234): the claimed window is an agent at rest past its

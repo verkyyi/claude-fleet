@@ -275,6 +275,12 @@ snapshot() {
     # @desk @repo back from it. No desk window ⇒ no row, the map byte for byte.
     tmux -L "$sock" list-windows -t "$sess" -F '#{@desk}|#{@fleet_id}|#{@repo}' 2>/dev/null \
       | awk -F'|' '$1 == "1" && $2 != "" && $3 ~ /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/ { printf "DESK\t%s\t%s\n", $2, $3 }' >> "$tmp"
+    # A child's parent on ANOTHER machine (issue #3439): `OWID<TAB><fleet_id><TAB>
+    # <@origin_wid>` rows, appended like DESK. Without one a restored child kept
+    # only @origin — a key, or an identity, no machine here answers to — and its
+    # report reached nobody. No such window ⇒ no row, the map byte for byte.
+    tmux -L "$sock" list-windows -t "$sess" -F '#{@fleet_id}|#{@origin_wid}' 2>/dev/null \
+      | awk -F'|' '$1 != "" && $2 ~ /^[A-Za-z0-9._:-]+\/[A-Za-z0-9._:-]+$/ { printf "OWID\t%s\t%s\n", $1, $2 }' >> "$tmp"
     # Destructive-shrink guard (issue #160): a fleet caught MID-RESTORE is
     # hub-only — fleet-up has rebuilt its panels but restore hasn't reopened the
     # work windows yet — so a snapshot taken in that window has FEWER WIN rows
@@ -469,7 +475,7 @@ pullback_run() {
       printf 'FID\t%s\n%s\n' "$fid" "WIN${line#WIN:"$fid"}" >> "$keep"
       n=$((n + 1))
     done < <(fleet_restore_wins "$pb")
-    awk -F'\t' '$1 == "DESK"' "$mf" >> "$keep" 2>/dev/null   # desk tickets ride along (#2676)
+    awk -F'\t' '$1 == "DESK" || $1 == "OWID"' "$mf" >> "$keep" 2>/dev/null   # desk tickets (#2676) and remote parents (#3439) ride along
     rm -f "$pb"
     if [ "$n" = 0 ]; then rm -f "$keep"; continue; fi
     log "pullback: $sess — reopening $n killed session window(s)"
@@ -760,6 +766,17 @@ restore() {
           _dr=$(awk -F'\t' -v f="${wtag#WIN:}" '$1 == "DESK" && $2 == f { print $3; exit }' "$mf" 2>/dev/null)
           case "$_dr" in ?*/?*) tmux -L "$sock" set-window-option -t "$nw" @desk 1 2>/dev/null
                                 tmux -L "$sock" set-window-option -t "$nw" @repo "$_dr" 2>/dev/null ;; esac ;;
+        esac
+        # Its parent's worker_id (issue #3439): the map's OWID row, by identity —
+        # and the parent's identity beside it when the worker_id carries one.
+        case "$wtag" in WIN:?*)
+          _ow=$(awk -F'\t' -v f="${wtag#WIN:}" '$1 == "OWID" && $2 == f { print $3; exit }' "$mf" 2>/dev/null)
+          case "$_ow" in ?*/?*)
+            case "$_ow" in *[!A-Za-z0-9._:/-]*) ;; *)
+              tmux -L "$sock" set-window-option -t "$nw" @origin_wid "$_ow" 2>/dev/null
+              fleet_is_fid "${_ow#*/}" && tmux -L "$sock" set-window-option -t "$nw" @origin_fid "${_ow#*/}" 2>/dev/null ;;
+            esac ;;
+          esac ;;
         esac
         fleet_win_role_stamp "$nw" worker "$sock"   # by role, not name (#1844)
         # Re-stamp the spawn provenance too (issue #503) so a crash-restored

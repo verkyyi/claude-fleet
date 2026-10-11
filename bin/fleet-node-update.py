@@ -9,7 +9,11 @@ names — or leaves every part where it was:
              the hub signed (C7, `ccquota release fetch --artifacts`, the pinned
              key in <state>/release.pub, the hub only — never GitHub)
   ccquota    <sha>/bin/ccquota — the release's ccquota-<os>-<arch> artifact; the
-             node program (C5) runs it from `current`
+             node program (C5) runs it from `current`. On macOS it is re-signed at
+             stage with the machine's ONE fixed identity (fleet_node_codesign.py,
+             issue #3433) and the stage refused unless the signature checks; the
+             admin agent runs its copy at <root>/agent/ccquota — a path and an
+             identity no release changes, so a TCC grant survives the switch
   claude · codex · tmux
              the versions release.json pins, each the release's artifact,
              installed once into the root cache <root>/tools/<name>/<sha256>/ and
@@ -101,6 +105,9 @@ Usage:
                                             signature failure · 2 not set up
   fleet-node-update.py doctor               the machine doctor: PASS/WARN/FAIL rows,
                                             exit = the FAIL count (`fleet doctor --machine`)
+  fleet-node-update.py codesign [status [--json] | ensure | check <file>]
+                                            the machine's fixed signing identity (issue #3433):
+                                            the requirement a TCC grant to <root>/agent/ccquota records
   fleet-node-update.py versions [--json]    one line: every part's version vs release.json;
                                             --json: the machine link's 版本与更新 (issue #2798)
   fleet-node-update.py check-release <file|->  validate a release.json (fleet-stable.sh move)
@@ -160,6 +167,14 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 _spec = importlib.util.spec_from_file_location("fleet_node_supervisor", os.path.join(HERE, "fleet-node-supervisor.py"))
 fns = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(fns)
+
+# the machine's fixed signing identity (issue #3433); a copy of this file staged
+# without its sibling (an older tree, a selftest's bin) signs nothing
+codesign = None
+if os.path.exists(os.path.join(HERE, "fleet_node_codesign.py")):
+    _cspec = importlib.util.spec_from_file_location("fleet_node_codesign", os.path.join(HERE, "fleet_node_codesign.py"))
+    codesign = importlib.util.module_from_spec(_cspec)
+    _cspec.loader.exec_module(codesign)
 
 env = fns.env
 env_num = fns.env_num
@@ -294,6 +309,9 @@ class P(object):
         self.current = os.path.join(self.root, "current")
         self.prev = os.path.join(self.root, ".prev")
         self.tools = os.path.join(self.root, "tools")
+        # the admin agent's ccquota at ONE path for every release (issue #3433):
+        # a real file, the signed copy of current's, renamed over at each switch
+        self.agent_cq = os.path.join(self.root, "agent", "ccquota")
         cache = env("FLEET_BOOTSTRAP_CACHE", os.path.join(self.root, "cache"))
         self.cache = None if cache == "off" else cache
         self.file = os.path.join(self.state, "update.json")
@@ -374,6 +392,35 @@ def install_bin(src, dst, h):
     shutil.copyfile(src, dst + ".tmp")
     os.chmod(dst + ".tmp", 0o755)
     os.rename(dst + ".tmp", dst)
+
+
+def same_bytes(a, b):
+    """Do <a> and <b> hold the same bytes? (never by mtime: two releases staged in
+    one second carry equal-sized binaries with equal mtimes)"""
+    try:
+        if os.path.getsize(a) != os.path.getsize(b):
+            return False
+        with open(a, "rb") as fa, open(b, "rb") as fb:
+            while True:
+                x, y = fa.read(1 << 20), fb.read(1 << 20)
+                if x != y:
+                    return False
+                if not x:
+                    return True
+    except OSError:
+        return False
+
+
+def identity(p):
+    """The machine's fixed signing identity (issue #3433) — None where signing is off."""
+    return codesign.Identity(p.state) if codesign and codesign.enabled() else None
+
+
+def agent_ccquota(p):
+    """The ccquota an admin agent runs: the stable copy when it holds current's
+    bytes (issue #3433), else <current>/bin/ccquota (an updater from before)."""
+    cq = os.path.join(p.current, "bin", "ccquota")
+    return p.agent_cq if same_bytes(p.agent_cq, cq) else cq
 
 
 def sha256_file(path):
@@ -806,6 +853,9 @@ class Updater(object):
             os.chmod(dst + ".tmp", 0o755)
             os.rename(dst + ".tmp", dst)
             got["ccquota"] = arts[name]["sha256"]
+            sig = self.sign_ccquota(dst)
+            if sig:
+                got["codesign"] = sig
             # claude / codex / tmux: the root cache, content-addressed; the release links it
             bind = os.path.join(d, "tools", "bin")
             os.makedirs(bind, exist_ok=True)
@@ -835,6 +885,60 @@ class Updater(object):
         except (OSError, KeyError) as e:
             shutil.rmtree(d, ignore_errors=True)
             raise StageError("stage: %s" % e)
+
+    # -- the machine's fixed signing identity (issue #3433)
+    def sign_ccquota(self, path):
+        """Sign a staged ccquota with the machine's ONE identity and check it —
+        so the TCC grant a person gave the admin agent survives the switch. The
+        identity is made on the first stage that needs it. -> its sha1, or None
+        (signing off / no identity can be made: staged ad-hoc as before, the
+        doctor's `codesign` row says why). A signature that does not satisfy the
+        identity's requirement refuses the stage — nothing switches."""
+        ident = identity(self.p)
+        if not ident:
+            return None
+        try:
+            info = ident.ensure()
+        except (codesign.CodesignError, OSError) as e:
+            self.st["codesign"] = {"at": now(), "error": str(e)[:300]}
+            self.log("codesign: no identity — %s; ccquota staged ad-hoc (its TCC grant will not survive)" % e)
+            return None
+        self.st.pop("codesign", None)
+        try:
+            ident.sign(path, info)
+        except (codesign.CodesignError, OSError) as e:
+            raise StageError("codesign: %s" % e)
+        return info["sha1"]
+
+    def sync_agent_ccquota(self):
+        """<root>/agent/ccquota := <current>/bin/ccquota, byte for byte, signed
+        (issue #3433). A current staged before #3433 (ad-hoc) is signed in place
+        first. The path never changes, so a grant keyed on path + requirement
+        holds across releases. -> notes."""
+        cq = os.path.join(self.p.current, "bin", "ccquota")
+        if not os.path.isfile(cq):
+            return []
+        notes = []
+        ident = identity(self.p)
+        if ident and ident.info() and not ident.satisfies(cq)[0]:
+            try:
+                ident.sign(cq)
+                self.log("codesign: signed %s (staged before #3433)" % os.path.realpath(cq))
+            except (codesign.CodesignError, OSError) as e:
+                notes.append("codesign: %s: %s" % (cq, e))
+        if same_bytes(self.p.agent_cq, cq):
+            return notes
+        try:
+            d = os.path.dirname(self.p.agent_cq)
+            os.makedirs(d, exist_ok=True)
+            os.chmod(d, 0o755)
+            shutil.copy2(cq, self.p.agent_cq + ".tmp")
+            os.chmod(self.p.agent_cq + ".tmp", 0o755)
+            os.rename(self.p.agent_cq + ".tmp", self.p.agent_cq)
+            self.log("agent ccquota: %s ← %s" % (self.p.agent_cq, os.path.realpath(cq)))
+        except OSError as e:
+            notes.append("agent ccquota: %s" % e)
+        return notes
 
     def seed_fetch_cache(self):
         """Put what this machine already holds into the fetch cache under its
@@ -899,21 +1003,23 @@ class Updater(object):
                     os.chmod(dd, 0o755)
             except OSError as e:
                 notes.append("cache: %s" % e)
-        return notes + self.link_accounts() + self.follow_admin_agents()
+        return notes + self.sync_agent_ccquota() + self.link_accounts() + self.follow_admin_agents()
 
     # -- an admin login's own ccquota agent follows the release (issue #3034)
     def follow_admin_agents(self):
         """Every login NOT taken over whose ccquota agent the credential
         launcher starts (an admin — never adopted, #2842 — whose agent is the
         machine's admin node and opens every new login) runs the release's
-        ccquota: its credsep meta.json's agent_argv[0] → <current>/bin/ccquota
-        (root's file; nothing in the login's home is written), and the agent is
+        ccquota: its credsep meta.json's agent_argv[0] → <root>/agent/ccquota, the
+        signed copy of <current>/bin/ccquota at a path no release changes (issue
+        #3433 — its TCC grant survives the switch; <current>/bin/ccquota when
+        there is no copy) (root's file; nothing in the login's home is written), and the agent is
         kickstarted whenever the release under it moved — the switch, the
         rollback, the first tick that re-pointed it. Before this it ran its own
         ~/.local/bin/ccquota, which no release touched (mini2 prod-e715029:
         it never said login_join, so no login was ever opened there). -> notes."""
         cur = link_sha(self.p.current)
-        cq = os.path.join(self.p.current, "bin", "ccquota")
+        cq = agent_ccquota(self.p)
         if not cur or not os.access(cq, os.X_OK):
             return []
         managed = fns.managed_accounts(self.p.sup)
@@ -1565,6 +1671,7 @@ def doctor_rows(p):
         if ir:
             rows.append(ir)
     rows += admin_agent_rows(p, cur)
+    rows += codesign_rows(p)
     rows += login_tree_rows(p)
     cr = credsep_row(p)
     if cr:
@@ -1623,6 +1730,33 @@ def login_tree_rows(p):
     return rows
 
 
+def codesign_rows(p):
+    """The `codesign` row (issue #3433): the machine's fixed signing identity and
+    whether the admin agent's ccquota carries it — PASS naming the requirement a
+    TCC grant records, WARN when there is no identity or a copy is not signed
+    with it (its grant will not survive the next switch). Never a FAIL: the
+    rollback gate does not read it. Signing off (not macOS …) ⇒ no row."""
+    ident = identity(p)
+    if not ident:
+        return []
+    info = ident.info()
+    if not info:
+        err = ((read_json(p.file, {}) or {}).get("codesign") or {}).get("error")
+        return [("WARN", "codesign", "没有固定签名身份（%s）——ccquota 每次换版是新身份，TCC 授权不跨版本（#3433）"
+                 % (err or "更新器下一次暂存时生成 %s" % ident.dir))]
+    bad = []
+    for path in (os.path.join(p.current, "bin", "ccquota"), p.agent_cq):
+        if os.path.exists(path):
+            ok, why = ident.satisfies(path, info)
+            if not ok:
+                bad.append("%s: %s" % (path, why))
+        elif path == p.agent_cq:
+            bad.append("%s 不存在" % path)
+    if bad:
+        return [("WARN", "codesign", "没签固定身份（下一轮补签）：%s" % "; ".join(bad))]
+    return [("PASS", "codesign", "%s · %s · TCC 授权给 %s 跨版本有效" % (info.get("cn"), ident.requirement(info), p.agent_cq))]
+
+
 def admin_agent_rows(p, cur):
     """One `admin-agent` row per login not taken over whose ccquota agent the
     credential launcher starts (issue #3034): PASS when it runs the release's
@@ -1630,7 +1764,7 @@ def admin_agent_rows(p, cur):
     FAIL (an admin's agent is no part of the release; the rollback gate does not
     read it). As root it reads credsep's meta.json; another reader only the
     updater's record in update.json. Neither ⇒ no row."""
-    cq = os.path.join(p.current, "bin", "ccquota")
+    cq = agent_ccquota(p)
     managed = fns.managed_accounts(p.sup)
     rec = (read_json(p.file, {}) or {}).get("admin_agents") or {}
     rows, seen = [], set()
@@ -1643,8 +1777,8 @@ def admin_agent_rows(p, cur):
             rc, v = tool_version(path, ["version"])
             rc2, want = tool_version(cq, ["version"])
             rows.append(("WARN", "admin-agent", "%s: 管理员 agent 跑 %s（%s），比发布版 %s（%s）旧——更新器下一轮把它指向 "
-                         "current/bin/ccquota 并重启（#3034）" % (login, path, v if rc == 0 else "rc %d" % rc,
-                                                                cur[:12], want if rc2 == 0 else "?")))
+                         "%s 并重启（#3034）" % (login, path, v if rc == 0 else "rc %d" % rc,
+                                                                cur[:12], want if rc2 == 0 else "?", cq)))
         elif (rec.get(login) or {}).get("sha") != cur:
             rows.append(("WARN", "admin-agent", "%s: 管理员 agent 指向发布版的 ccquota，但还没在 %s 上重启（下一轮重启）"
                          % (login, cur[:12])))
@@ -2390,6 +2524,11 @@ def main(argv):
         for line in (out + "\n" + err).strip().splitlines():
             print(line, file=sys.stderr if rc else sys.stdout)
         return rc
+    if cmd == "codesign":
+        if not codesign:
+            sys.stderr.write("fleet_node_codesign.py is not beside this updater\n")
+            return 2
+        return codesign.main(["fleet_node_codesign.py"] + (rest or ["status"]))
     if cmd == "doctor":
         rows = doctor_rows(p)
         for lvl, row, msg in rows:

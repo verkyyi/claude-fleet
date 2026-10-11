@@ -234,6 +234,7 @@ class Sandbox(unittest.TestCase):
             "FLEET_NODE_PASSWD": os.path.join(self.d, "passwd.json"),
             "FLEET_NODE_TEST": "1",
             "FLEET_NODE_LAUNCHCTL": "",
+            "FLEET_NODE_CODESIGN": "0",   # a real keychain only in T_Codesign (issue #3433)
             "FLEET_NODE_CCQUOTA": cq,
             "FLEET_NODE_UPDATE_PLATFORM": "darwin-arm64",
             "FLEET_NODE_UPDATE_SETTLE": "0",
@@ -1601,7 +1602,8 @@ class Q_AdminAgent(Sandbox):
     """issue #3034: a login NOT taken over (an admin — its agent is the machine's
     admin node, the one that opens new logins) whose ccquota agent the credential
     launcher starts runs the RELEASE's ccquota: its credsep meta.json's
-    agent_argv[0] → <current>/bin/ccquota and the agent kickstarted on every
+    agent_argv[0] → <root>/agent/ccquota (the copy of <current>/bin/ccquota at a
+    path no release changes, issue #3433) and the agent kickstarted on every
     switch and rollback (once per release, never per tick); a taken-over login's
     record is left alone; the doctor's `admin-agent` row WARNs while it runs an
     own older binary or was not restarted, PASSes after, and is never a FAIL."""
@@ -1645,10 +1647,15 @@ class Q_AdminAgent(Sandbox):
         r = self.cmd("doctor")
         return [l for l in r.stdout.splitlines() if "admin-agent" in l]
 
+    def agent_bytes(self):
+        with open(os.path.join(self.root, "agent", "ccquota"), "rb") as f:
+            return f.read()
+
     def test_follows_switch_and_rollback(self):
-        cq = os.path.join(self.root, "current", "bin", "ccquota")
+        cq = os.path.join(self.root, "agent", "ccquota")
         self.install(V1)
         self.assertEqual(self.argv0("verky"), cq)
+        self.assertIn(V1[:7].encode(), self.agent_bytes())          # the release's bytes at one path
         self.assertEqual(self.argv0("alice"), self.own)            # a tenant is never touched
         self.assertEqual(self.kicks(), ["kickstart -k system/com.ccquota.agent.verky"])
         self.assertEqual(oct(os.stat(os.path.join(self.env["FLEET_CREDSEP_ROOT_BASE"], "verky", "meta.json")).st_mode
@@ -1664,6 +1671,8 @@ class Q_AdminAgent(Sandbox):
         self.assertEqual(self.tick(V2)["phase"], "switched")
         self.assertEqual(len(self.kicks()), 2)
         self.assertEqual(self.state()["admin_agents"]["verky"]["sha"], V2)
+        self.assertEqual(self.argv0("verky"), cq)                  # the path stays
+        self.assertIn(V2[:7].encode(), self.agent_bytes())
         # a release whose claude fails the doctor rolls back — the agent with it
         V3 = "3" * 40
         self.daemon_on(V2)
@@ -1675,6 +1684,7 @@ class Q_AdminAgent(Sandbox):
         self.assertEqual(self.current(), V2)
         self.assertEqual(len(self.kicks()), 4)                     # onto V3, back onto V2
         self.assertEqual(self.state()["admin_agents"]["verky"]["sha"], V2)
+        self.assertIn(V2[:7].encode(), self.agent_bytes())          # the copy went back too
 
     def test_own_old_binary_is_warned_then_repointed(self):
         self.install(V1)
@@ -1683,7 +1693,7 @@ class Q_AdminAgent(Sandbox):
         self.assertTrue(rows and "WARN" in rows[0] and "prod-e715029" in rows[0], rows)
         self.assertFalse(any("FAIL" in l and "admin-agent" in l for l in self.cmd("doctor").stdout.splitlines()))
         self.tick(V1)
-        self.assertEqual(self.argv0("verky"), os.path.join(self.root, "current", "bin", "ccquota"))
+        self.assertEqual(self.argv0("verky"), os.path.join(self.root, "agent", "ccquota"))
         self.assertEqual(len(self.kicks()), 2)
         self.assertIn("PASS", self.rows()[0])
 
@@ -1778,6 +1788,126 @@ class S_AdminTree(Sandbox):
         self.assertTrue(any(re.search(r"FAIL\s+login-tree\s+verky: .*which is gone", l) for l in self.rows()))
 
 
+def _codesign_ready():
+    return (sys.platform == "darwin" and
+            all(os.access(t, os.X_OK) for t in ("/usr/bin/codesign", "/usr/bin/security", "/usr/bin/openssl")))
+
+
+@unittest.skipUnless(_codesign_ready(), "macOS codesign · security · openssl (issue #3433 signs only there)")
+class T_Codesign(Sandbox):
+    """issue #3433: the admin agent's ccquota has ONE signing identity for every
+    release. The first stage makes the machine's self-signed identity (its key in
+    a root-only keychain under <state>/codesign/), every staged ccquota is signed
+    with it and the stage is refused when the signature does not check, and the
+    admin agent runs its copy at <root>/agent/ccquota — after a switch the path
+    is the same and the requirement a TCC grant recorded before still holds. A
+    current staged before #3433 (ad-hoc) is signed on the next tick."""
+
+    def setUp(self):
+        Sandbox.setUp(self)
+        self.env["FLEET_NODE_CODESIGN"] = "1"
+        lc = os.path.join(self.d, "launchctl")
+        with open(lc, "w") as f:
+            f.write("#!/bin/sh\nexit 0\n")
+        os.chmod(lc, 0o755)
+        self.env["FLEET_NODE_LAUNCHCTL"] = lc
+        d = os.path.join(self.env["FLEET_CREDSEP_ROOT_BASE"], "verky")
+        os.makedirs(d)
+        self.wj(os.path.join(d, "meta.json"), {
+            "login": "verky", "agent": {"kind": "launchd-system", "path": "/x.plist", "label": "com.ccquota.agent.verky"},
+            "agent_argv": ["/Users/verky/.local/bin/ccquota", "agent", "--state", "/s"], "path": "/usr/bin:/bin"})
+        self.agent = os.path.join(self.root, "agent", "ccquota")
+
+    def release_macho(self, sha, prog):
+        """A release whose ccquota is a real Mach-O (a signature is embedded in
+        one; a script's lives in xattrs a copy drops)."""
+        d = self.release(sha)
+        art = os.path.join(d, ".release", "artifacts", "ccquota-darwin-arm64")
+        shutil.copyfile(prog, art)
+        os.chmod(art, 0o755)
+        mp = os.path.join(d, ".release", "manifest.json")
+        m = self.rj(mp)
+        with open(art, "rb") as f:
+            b = f.read()
+        for a in m["artifacts"]:
+            if a["name"] == "ccquota-darwin-arm64":
+                a["sha256"], a["size"] = sh256(b), len(b)
+        self.wj(mp, m)
+
+    def commit(self, sha):
+        """install() for a release already made."""
+        st = self.tick(sha)
+        self.assertEqual(st["phase"], "switched", st)
+        self.daemon_on(sha)
+        st = self.tick(sha)
+        self.assertEqual(st["result"], "committed", st)
+
+    def cs(self, *args):
+        return subprocess.run(["/usr/bin/codesign"] + list(args), capture_output=True, text=True, timeout=60)
+
+    def requirement(self):
+        r = self.cmd("codesign", "status", "--json")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return json.loads(r.stdout)["requirement"]
+
+    def test_identity_survives_the_switch(self):
+        self.release_macho(V1, "/usr/bin/true")
+        self.commit(V1)
+        req = self.requirement()
+        self.assertTrue(req and "com.claude-fleet.ccquota" in req, req)
+        kc = os.path.join(self.d, "db", "codesign")
+        self.assertEqual(oct(os.stat(kc).st_mode & 0o777), "0o700")
+        self.assertEqual(oct(os.stat(os.path.join(kc, "keychain.pass")).st_mode & 0o777), "0o600")
+        # the grant a person gives now: path + requirement, as TCC records it
+        self.assertEqual(self.rj(os.path.join(self.env["FLEET_CREDSEP_ROOT_BASE"], "verky", "meta.json"))
+                         ["agent_argv"][0], self.agent)
+        self.assertEqual(self.cs("--verify", "--strict", "-R=" + req, self.agent).returncode, 0)
+        before = sh256(open(self.agent, "rb").read())
+        # a new release, different bytes: same path, same identity, the old grant still holds
+        self.release_macho(V2, "/bin/echo")
+        self.assertEqual(self.tick(V2)["phase"], "switched")
+        self.daemon_on(V2)
+        self.assertEqual(self.tick(V2)["result"], "committed")
+        self.assertNotEqual(sha256_of(self.agent), before)
+        self.assertEqual(self.requirement(), req)
+        self.assertEqual(self.cs("--verify", "--strict", "-R=" + req, self.agent).returncode, 0)
+        self.assertEqual(self.cs("--verify", "--strict", "-R=" + req,
+                                 os.path.join(self.root, "current", "bin", "ccquota")).returncode, 0)
+        self.assertTrue(any("PASS" in l and "codesign" in l for l in self.cmd("doctor").stdout.splitlines()))
+
+    def test_bad_signature_refuses_the_stage(self):
+        self.release_macho(V1, "/usr/bin/true")
+        self.commit(V1)
+        # a codesign that claims success and signs nothing: the check refuses the stage
+        fake = os.path.join(self.d, "codesign")
+        with open(fake, "w") as f:
+            f.write('#!/bin/sh\ncase "$1" in --force) exit 0 ;; esac\nexec /usr/bin/codesign "$@"\n')
+        os.chmod(fake, 0o755)
+        self.release_macho(V2, "/bin/echo")
+        st = self.tick(V2, FLEET_NODE_CODESIGN_CODESIGN=fake)
+        self.assertEqual(st["result"], "failed", st)
+        self.assertIn("codesign", st["reason"])
+        self.assertEqual(self.current(), V1)
+
+    def test_unsigned_current_is_signed_next_tick(self):
+        self.release_macho(V1, "/usr/bin/true")
+        self.env["FLEET_NODE_CODESIGN"] = "0"
+        self.commit(V1)                       # staged ad-hoc, as before #3433
+        self.env["FLEET_NODE_CODESIGN"] = "1"
+        self.cmd("codesign", "ensure")
+        req = self.requirement()
+        self.assertNotEqual(self.cs("--verify", "-R=" + req, self.agent).returncode, 0)
+        self.tick(V1)
+        self.assertEqual(self.cs("--verify", "--strict", "-R=" + req, self.agent).returncode, 0)
+        self.assertEqual(self.cs("--verify", "--strict", "-R=" + req,
+                                 os.path.join(self.root, "current", "bin", "ccquota")).returncode, 0)
+
+
+def sha256_of(path):
+    with open(path, "rb") as f:
+        return sh256(f.read())
+
+
 if __name__ == "__main__":
     # the BREAK-IT drill (node-update-half) builds its fixtures with the same code
     if len(sys.argv) > 1 and sys.argv[1] == "--fake-ccquota":
@@ -1804,6 +1934,9 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--drill-admin-agent":
         # BREAK-IT admin-agent-stale (issue #3034): an admin's own agent follows the release
         unittest.main(argv=[sys.argv[0], "Q_AdminAgent"], verbosity=1)
+    if len(sys.argv) > 1 and sys.argv[1] == "--drill-codesign":
+        # BREAK-IT codesign-identity-switch (issue #3433): the identity survives a version switch
+        unittest.main(argv=[sys.argv[0], "T_Codesign"], verbosity=1)
     if len(sys.argv) > 1 and sys.argv[1] == "--drill-admin-tree":
         # BREAK-IT runtime-gc-admin-tree (issue #3248): kept, followed, FAILed when pruned anyway
         unittest.main(argv=[sys.argv[0], "S_AdminTree"], verbosity=1)

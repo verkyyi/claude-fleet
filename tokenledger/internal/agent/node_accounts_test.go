@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -443,21 +444,49 @@ func TestCredsepCapableNeedsTheScript(t *testing.T) {
 // On macOS an account script runs through fleet-tcc-disclaim.py when the login's
 // install carries it, so no TCC dialog can be charged to this agent and left on
 // an unwatched console (claude-fleet#3167); without the wrapper, or off macOS,
-// the script runs exactly as before.
+// the script runs exactly as before. Once this agent holds Full Disk Access
+// (claude-fleet#3433: it can read the system TCC database) the script runs as
+// its own child — charged to the granted, fixed identity; a probe tccd never
+// answers is «not granted».
 func TestAccountScriptTCCDisclaimed(t *testing.T) {
-	oldGOOS, oldPy := accountGOOS, tccDisclaimPython
-	t.Cleanup(func() { accountGOOS, tccDisclaimPython = oldGOOS, oldPy })
+	oldGOOS, oldPy, oldProbe, oldTmo := accountGOOS, tccDisclaimPython, tccProbePath, tccProbeTimeout
+	t.Cleanup(func() {
+		accountGOOS, tccDisclaimPython, tccProbePath, tccProbeTimeout = oldGOOS, oldPy, oldProbe, oldTmo
+	})
+	t.Setenv("FLEET_ACCOUNT_DISCLAIM", "")
 	for name, c := range map[string]struct {
 		goos    string
 		wrapper bool
+		fda     string // "" no grant (unreadable) · "yes" readable · "stuck" open() never returns
 		want    bool
 	}{
-		"darwin with wrapper":    {"darwin", true, true},
-		"darwin without wrapper": {"darwin", false, false},
-		"linux with wrapper":     {"linux", true, false},
+		"darwin with wrapper":        {"darwin", true, "", true},
+		"darwin without wrapper":     {"darwin", false, "", false},
+		"linux with wrapper":         {"linux", true, "", false},
+		"darwin granted":             {"darwin", true, "yes", false},
+		"darwin granted, tccd stuck": {"darwin", true, "stuck", true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			accountGOOS = c.goos
+			probe := filepath.Join(t.TempDir(), "TCC.db")
+			tccProbeTimeout = 300 * time.Millisecond
+			switch c.fda {
+			case "yes":
+				if err := os.WriteFile(probe, []byte("SQLite format 3\x00..."), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			case "stuck":
+				if err := syscall.Mkfifo(probe, 0o644); err != nil {
+					t.Fatal(err)
+				}
+				// let the stuck open() end once the case is over
+				t.Cleanup(func() {
+					if f, err := os.OpenFile(probe, os.O_WRONLY|syscall.O_NONBLOCK, 0); err == nil {
+						f.Close()
+					}
+				})
+			}
+			tccProbePath = probe
 			shrinkBackoff(t)
 			hub := newAccountHub(t, control.AccountOp{Op: control.AccountCreate, Login: "alice", FullName: "Alice"})
 			a := adminAgent(t, hub.srv.URL, true)

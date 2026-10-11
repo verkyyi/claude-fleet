@@ -76,7 +76,12 @@
 # parent's worker_id as `@origin_wid`. On THIS machine (or none) all runs as before.
 # On another machine's fleet the report goes to the hub's OUTBOX (CCQUOTA_FLEET=1),
 # and the parent's machine ledgers + delivers it (bin/fleet-hub-node.sh) — never a
-# local window that merely carries the same key. No hub: ledgered here, not sent.
+# local window that merely carries the same key. No hub: ledgered here, not sent —
+# `undelivered → …` exit 1 (issue #3439). The parent is named by IDENTITY since
+# #1646 (`<fleet UUID>/<fleet_id>`, @origin its fleet_id, @origin_fid beside it):
+# rail 1 takes that as an address, never as a daemon's label. A parent whose address
+# is lost (an identity cut short by a spawn before #3439, no @origin_wid) is
+# `undelivered` exit 1 too, and the person's reminder (orphan, below).
 # The hub routes on the parent's fleet UUID, so a stale map (no node for it) still
 # hands it over; the hub holds it until the parent's machine lists it live.
 #
@@ -258,12 +263,35 @@ RETIRED_GEN=''
 if [ -z "$worigin" ] && [ -z "$ORIGIN" ] && [ -n "$wretired" ]; then
   worigin=${wretired%#*}; RETIRED_GEN=${wretired##*#}; owid=''
 fi
+# A parent named by IDENTITY (issue #3439): a hub-placed start hands over the
+# parent's worker_id `<fleet UUID>/<fleet_id>`, and the spawn kept its tail as
+# @origin. Before, rail 1 read that as "not a window key" and quit with exit 0 and
+# nothing printed — every child on another machine reported to nobody. The
+# identity is an address: the parent's machine is found by @origin_wid below.
+if [ -z "$RETIRED_GEN" ] && [ -n "$owid" ] && fleet_is_fid "${owid#*/}"; then
+  [ -n "$ofid" ] || ofid=${owid#*/}
+  case "$worigin" in
+    issue-*|scratch-*|?*:issue-*|?*:scratch-*|orchestrator|steward) ;;
+    *) worigin=${owid#*/} ;;
+  esac
+fi
+LOSTADDR=''
 case "$worigin" in
   issue-*|scratch-*) ;;
   ?*:issue-*|?*:scratch-*) ;;    # repo-qualified (issue #789) — a fleet hosting 2+ repos
   orchestrator|steward) ;;       # the fleet's orchestrating session (#2129), its steward (#2670)
   '') quiet 'hub-spawned (@origin empty)' ;;
-  *)  quiet "@origin '$worigin' is not a window key (daemon / cross-fleet parent)" ;;
+  *)  if fleet_is_fid "$worigin"; then
+        [ -n "$ofid" ] || ofid=$worigin
+      elif printf '%s' "$worigin" | grep -Eqx '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{0,12}'; then
+        # A parent identity cut to 32 characters by a spawn before #3439, with no
+        # @origin_wid beside it (a restore before #3439 dropped it): somebody spawned
+        # this session and nothing can address them. Not a silent success —
+        # undelivered, and the person's reminder (below, once the tier is known).
+        LOSTADDR=1
+      else
+        quiet "@origin '$worigin' is not a window key (daemon / cross-fleet parent)"
+      fi ;;
 esac
 # A bare @origin (stamped before issue #1939) is the fleet's one repo's: booked and
 # sent under the key's one spelling, `<slug>:<key>`.
@@ -281,8 +309,10 @@ PFOUND=''
 if [ -z "$RETIRED_GEN" ] && fleet_is_fid "$ofid"; then
   if _pw=$(fleet_win_for_fid "$ofid" "$SOCK" 2>/dev/null) && [ -n "$_pw" ]; then
     _pk=$(fleet_window_okey "$sess" "$_pw" 2>/dev/null)
+    # A parent with no key of its own (a session that took a role, issue #3439) is
+    # still found by its identity; only a key moves @origin.
+    PFOUND=$_pw
     if [ -n "$_pk" ]; then
-      PFOUND=$_pw
       if [ "$_pk" != "$worigin" ]; then
         [ "$DRY" = 1 ] || TM set-window-option -t "$selfwin" @origin "$_pk" 2>/dev/null
         worigin=$_pk; wogen=''
@@ -494,9 +524,21 @@ print("new")
   fi
   # Stamped like a delivered one: the reaper's --only-once backstop must not file a second.
   TM set-window-option -t "$selfwin" @reported 1 2>/dev/null
+  if [ "${ORPHAN_RC:-0}" != 0 ]; then
+    printf 'undelivered → 你的提醒 (%s): %s — %s\n' "$f" "$UST${prn:+ (PR #$prn)}" "$1"
+    exit "$ORPHAN_RC"
+  fi
   printf 'orphaned → 你的提醒 (%s): %s — %s\n' "$f" "$UST${prn:+ (PR #$prn)}" "$1"
   exit 0
 }
+
+# The parent's address was lost (rail 1, issue #3439): never a silent success. The
+# person takes the report (orphan's book + alert) and the caller hears it was not
+# delivered — exit 1.
+if [ -n "$LOSTADDR" ]; then
+  [ "$TIER" = silent ] && quiet "parent address '$worigin' lost (tier=silent · $UST — not sent)"
+  ORPHAN_RC=1 orphan "parent '$worigin' cannot be addressed (its identity was cut short and no @origin_wid names its machine)"
+fi
 
 # --- the envelope: FIXED shape, 4 lines typical, 6 at its widest ---------------
 # envelope → $msg + $st. A function (issue #1421): a parent on another machine gets
@@ -607,10 +649,12 @@ if [ -z "$PFOUND" ] && [ -n "$owid" ] && ! fleet_wid_home "$owid" "$sess" >/dev/
   fi
   _how='ledgered, not sent'; [ "$DRY" = 1 ] && _how='not sent (dry run)'
   printf 'fleet-report-parent: parent %s %s; %s\n' "$owid" "$_why" "$_how" >&2
-  # With the hub on, reaching here is a refusal (no worker_id of our own, the
-  # outbox unwritable): exit 1, never success. Hub off: exit 0, as it always was.
-  [ "${CCQUOTA_FLEET:-0}" = 1 ] && [ "$DRY" != 1 ] && exit 1
-  exit 0
+  # Reaching here nothing reached the parent and nothing waits for it (no worker_id
+  # of our own, the outbox unwritable, no hub to carry it): exit 1 and say so on
+  # stdout — never exit 0 with nothing printed (issue #3439).
+  [ "$DRY" = 1 ] && exit 0
+  printf 'undelivered → %s: %s — %s\n' "${owid#*/}" "${UST}${PR:+ (PR #${PR//[^0-9]/})}" "$_why"
+  exit 1
 fi
 
 # --- an earlier generation's child (issue #1538) ----------------------------------

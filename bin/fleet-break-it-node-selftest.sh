@@ -76,6 +76,10 @@
 #   credsep-stale-after-switch  bin/fleet-node-update.py + fleet-credsep.py `machine
 #                         refresh` + the supervisor's cred-proxy-shared `reload` (#2435):
 #                         a switch / rollback left the shared credential proxy on old code
+#   codesign-identity-switch  bin/fleet_node_codesign.py + bin/fleet-node-update.py
+#                         sign_ccquota / sync_agent_ccquota + tokenledger/internal/agent/
+#                         node_accounts.go tccGranted (#3433): a version switch changed the
+#                         admin agent's signing identity and path, so its TCC grant lapsed
 #   admin-agent-stale     bin/fleet-node-update.py follow_admin_agents (#3034): an admin
 #                         login's own ccquota agent ran ~/.local/bin/ccquota, no release
 #                         moved it, so it never learned login_join and opened no login
@@ -1000,6 +1004,34 @@ drill_admin_agent_stale() {
     || { WHY="the admin agent did not follow the release: $(printf '%s' "$out" | grep -E 'Error|FAIL' | head -3 | tr '\n' ' ')"; return 1; }
   SECS=$(since "$t0")
   WHAT="管理员登录的 agent：credsep meta.json 的 agent_argv 指向 current/bin/ccquota，换版、回退各重启一次（同一版不重复）；托管登录不动；手放回旧二进制 → 体检 admin-agent WARN，下一轮再指回、重启"
+}
+
+# codesign-identity-switch (#3433): ccquota was ad-hoc signed and run from
+# <sha>/bin/ccquota, so every version switch gave the admin agent a new identity
+# and a new path — the Full Disk Access a person granted lapsed, and account ops
+# met a prompt / eDSPermissionError / hang. On macOS the drill runs the updater's
+# T_Codesign for real (a sandbox keychain, real codesign): one identity, signed
+# at stage, refused when the signature does not check, the same path and the same
+# requirement after a switch. Elsewhere signing is off by design — the drill
+# checks it says so and that the agent half's test is there.
+drill_codesign_identity_switch() {
+  CAP=60
+  local t0 out f
+  t0=$(now)
+  f="$ROOT/tokenledger/internal/agent/node_accounts_test.go"
+  grep -q '"darwin granted"' "$f" 2>/dev/null \
+    || { WHY="the agent half (a granted agent runs the script undisclaimed) has no case in ${f#$ROOT/}"; return 1; }
+  if [ "$(uname -s)" = Darwin ] && [ -x /usr/bin/codesign ] && [ -x /usr/bin/security ] && [ -x /usr/bin/openssl ]; then
+    out=$(python3 -W ignore::ResourceWarning "$BIN/fleet-node-update-selftest.py" --drill-codesign 2>&1) \
+      || { WHY="the identity did not survive the switch: $(printf '%s' "$out" | grep -E 'Error|FAIL' | head -3 | tr '\n' ' ')"; return 1; }
+    case "$out" in *skipped*) WHY="T_Codesign skipped on a Mac with the tools: $out"; return 1 ;; esac
+    WHAT="一个机器身份（本机钥匙串，只生成一次）：暂存时签 ccquota、签不上就拒暂存；换版后 <root>/agent/ccquota 路径不变、换版前记下的指定要求仍满足（TCC 授权照旧有效）；旧版暂存的 current 下一轮补签"
+  else
+    out=$(FLEET_NODE_STATE="$WORK/cs-db" python3 -I "$BIN/fleet_node_codesign.py" status 2>&1)
+    case "$out" in *'codesign: off'*) ;; *) WHY="off macOS signing is not off: $out"; return 1 ;; esac
+    WHAT="非 macOS：签名关着（status 说 off），什么都不签；节点程序那半的用例在（授权了就不绕开）"
+  fi
+  SECS=$(since "$t0")
 }
 
 # runtime-gc-admin-tree (#3248): mini2's admin verkyyi (never taken over) had a

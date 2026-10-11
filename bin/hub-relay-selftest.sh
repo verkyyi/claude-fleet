@@ -162,9 +162,46 @@ ok; [ "$(tf show-options -wqv -t "$wc" @reported)" = 1 ] || fail "D: @reported s
 rm -f "$OUTBOX"/*.json
 unset CCQUOTA_FLEET
 run bash "$BIN/fleet-report-parent.sh" -L "$L" --win "$wc" --state failed --summary 'x'
-ok; [ "$rc" = 0 ] && [ -z "$(ls "$OUTBOX"/*.json 2>/dev/null)" ] && case "$err" in *"not sent"*) true ;; *) false ;; esac \
-  || fail "D: hub off ⇒ C1's answer (not sent), no relay" "rc=$rc err=$err"
+ok; [ "$rc" = 1 ] && [ -z "$(ls "$OUTBOX"/*.json 2>/dev/null)" ] && case "$err" in *"not sent"*) true ;; *) false ;; esac \
+  && case "$out" in "undelivered → issue-7"*) true ;; *) false ;; esac \
+  || fail "D: hub off ⇒ not sent, no relay — said as undelivered, exit 1 (issue #3439)" "rc=$rc out=$out err=$err"
 export CCQUOTA_FLEET=1
+
+# --- D2: a parent named by its IDENTITY on another machine (issue #3439) -----------------
+# A hub-placed start hands over `<fleet UUID>/<fleet_id>`; the spawn keeps the tail
+# whole as @origin (fleet_origin_canon) and the identity as @origin_fid. Its report
+# goes to the hub like a keyed one — before, rail 1 quit with exit 0 and nothing said.
+PF=0dbf19b9-aaaa-4bbb-8ccc-0123456789ab
+ok; [ "$(lib fleet_origin_canon "$PF" '' '' '')" = "$PF" ] || fail "D2: canon keeps a parent identity whole" "$(lib fleet_origin_canon "$PF" '' '' '')"
+wi=$(tf new-window -d -P -F '#{window_id}' -n issue-21 'while :; do sleep 300; done')
+tf set-window-option -t "$wi" @issue 21 \; set-window-option -t "$wi" @origin "$PF" \; \
+   set-window-option -t "$wi" @origin_wid "$F/$PF" \; set-window-option -t "$wi" @origin_fid "$PF"
+printf '%s/%s\tm4\t\n' "$F" "$PF" > "$CACHE"
+rm -f "$OUTBOX"/*.json
+run bash "$BIN/fleet-report-parent.sh" -L "$L" --win "$wi" --state blocked --summary 'need a decision'
+f=$(ls "$OUTBOX"/*.json 2>/dev/null | head -1)
+ok; [ "$rc" = 3 ] && [ -n "$f" ] && case "$out" in "queued → $PF on m4"*) true ;; *) false ;; esac \
+  && python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); sys.exit(0 if r["to"]==sys.argv[2] and r["kind"]=="child_report" and r["payload"]["state"]=="BLOCKED" else 1)' "$f" "$F/$PF" \
+  || fail "D2: an identity parent elsewhere ⇒ one relay to its worker_id, queued, exit 3" "rc=$rc out=$out err=$err $(cat "$f" 2>/dev/null)"
+# the window a spawn before #3439 left: @origin cut to 32 characters, @origin_wid whole
+wl=$(tf new-window -d -P -F '#{window_id}' -n issue-22 'while :; do sleep 300; done')
+tf set-window-option -t "$wl" @issue 22 \; set-window-option -t "$wl" @origin "$(printf '%s' "$PF" | cut -c1-32)" \; \
+   set-window-option -t "$wl" @origin_wid "$F/$PF"
+rm -f "$OUTBOX"/*.json
+run bash "$BIN/fleet-report-parent.sh" -L "$L" --win "$wl" --state merged --summary 'done'
+f=$(ls "$OUTBOX"/*.json 2>/dev/null | head -1)
+ok; [ "$rc" = 3 ] && [ -n "$f" ] && python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); sys.exit(0 if r["to"]==sys.argv[2] else 1)' "$f" "$F/$PF" \
+  || fail "D2: a cut @origin with a whole @origin_wid still reaches the hub" "rc=$rc out=$out err=$err"
+# …and one with no @origin_wid left (a restore before #3439): undelivered, the person's
+wn=$(tf new-window -d -P -F '#{window_id}' -n issue-23 'while :; do sleep 300; done')
+tf set-window-option -t "$wn" @issue 23 \; set-window-option -t "$wn" @origin "$(printf '%s' "$PF" | cut -c1-32)"
+rm -f "$OUTBOX"/*.json
+run env FLEET_ORPHAN_ALERT_CMD=true bash "$BIN/fleet-report-parent.sh" -L "$L" --win "$wn" --state blocked --summary 'stuck'
+ok; [ "$rc" = 1 ] && case "$out" in "undelivered → "*) true ;; *) false ;; esac \
+  && grep -q 'issue-23' "$FLEET_CONF_DIR/global/orphan-reports.ndjson" 2>/dev/null \
+  || fail "D2: an unaddressable parent ⇒ undelivered, exit 1, the person's reminder" "rc=$rc out=$out err=$err"
+rm -f "$OUTBOX"/*.json
+printf '%s/issue-7\tm4\t\n' "$F" > "$CACHE"   # E reads D's map
 
 # --- E: peer-send to a worker elsewhere ---------------------------------------------------
 sockpath=$(tf display-message -p '#{socket_path}')
