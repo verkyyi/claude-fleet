@@ -54,7 +54,7 @@
 #      logs/rules.log line; a rule the table lacks is refused (exit 2, no create);
 #      a filing from anywhere else gets no rule line at all (byte for byte).
 #   W. a worker files, never spawns (issue #2960): --spawn from a worker pane exits
-#      6 with nothing filed; a driver / the orchestrator / the steward / the guide /
+#      6 with nothing filed; a driver / the orchestrator / the steward / a take_role holder /
 #      no pane / FLEET_ALLOW_WORKER_SPAWN=1 spawn; a breakage a worker files is
 #      filed with no spawn and queued under breakage-spawn/ for the steward.
 #   X. autofill is retired (issue #3120): a filing that still asks for the
@@ -597,16 +597,16 @@ grep -q '未注明规则\|fleet:rule' "$BODY" && fail "V5 a non-orchestrator fil
 ok "V rules: 5/5 orchestrator shapes marked; no rule ⇒ 「未注明规则」 + log; unknown rule refused; elsewhere untouched"
 
 # --- W. a worker files, never spawns (issue #2960) --------------------------------
-# The fake tmux answers the whole `role|role_def|pin|name|agent_spawn` read with FAKE_FLEET_ROLE.
+# The fake tmux answers the whole `role|role_def|agent_spawn` read with FAKE_FLEET_ROLE.
 FAKE_FLEET_ROLE='worker|||issue-5' TMUX_PANE=%9 run_fif --title "旁支活" --spawn
 [ "$RC" -eq 6 ] && ! grep -q 'issue create' "$GH_LOG" && [ ! -s "$SPAWN_LOG" ] && grep -q 'issue #2960' "$WORK/err" \
   || fail "W1 --spawn from a worker pane: exit 6, nothing filed or spawned (got $RC)" "$(cat "$WORK/err")"
-FAKE_FLEET_ROLE='worker|||issue-5|0' TMUX_PANE=%9 run_fif --title "旁支活" --spawn
+FAKE_FLEET_ROLE='worker||0' TMUX_PANE=%9 run_fif --title "旁支活" --spawn
 [ "$RC" -eq 6 ] && [ ! -s "$SPAWN_LOG" ] || fail "W1 an agent file that holds no spawn (@agent_spawn 0) is refused too (got $RC)" "$(cat "$WORK/err")"
 FAKE_FLEET_ROLE='worker|||issue-5' TMUX_PANE=%9 run_fif --title "旁支活" --parent 5
 [ "$RC" -eq 0 ] && grep -q 'issue create' "$GH_LOG" && [ ! -s "$SPAWN_LOG" ] \
   || fail "W2 a worker files without --spawn as before" "$(cat "$WORK/err")"
-for who in 'worker|epic-driver||issue-9' 'worker|||issue-9|1' 'orchestrator|||orchestrator' 'steward|||steward' 'worker||1|guide' 'home|||home' '' ; do
+for who in 'worker|epic-driver|' 'worker||1' 'worker|orchestrator|' 'worker|steward|' 'orchestrator||' 'steward||' 'home||' '' ; do
   FAKE_FLEET_ROLE="$who" TMUX_PANE=%9 run_fif --title "派" --spawn
   [ "$RC" -eq 0 ] && grep -q '^777' "$SPAWN_LOG" || fail "W3 [$who] may spawn (got $RC)" "$(cat "$WORK/err")"
 done
@@ -614,7 +614,11 @@ run_fif --title "派" --spawn
 [ "$RC" -eq 0 ] && grep -q '^777' "$SPAWN_LOG" || fail "W3 no pane (a daemon, the operator's shell) may spawn" "$(cat "$WORK/err")"
 FLEET_ALLOW_WORKER_SPAWN=1 FAKE_FLEET_ROLE='worker|||issue-5' TMUX_PANE=%9 run_fif --title "派" --spawn
 [ "$RC" -eq 0 ] && grep -q '^777' "$SPAWN_LOG" || fail "W3 FLEET_ALLOW_WORKER_SPAWN=1 is the operator's hatch" "$(cat "$WORK/err")"
-ok "W1-3 spawn: a worker pane refused (6, nothing filed), files plain; driver / orchestrator / steward / guide / no pane / hatch spawn"
+# A pin grants nothing (issue #3114): the onboarding guide is a worker window until it takes a role.
+: > "$SPAWN_LOG"
+FAKE_FLEET_ROLE='worker||' TMUX_PANE=%9 run_fif --title "派" --spawn
+[ "$RC" -eq 6 ] && [ ! -s "$SPAWN_LOG" ] || fail "W3 a pinned guide that took no role is refused like any worker (got $RC)" "$(cat "$WORK/err")"
+ok "W1-3 spawn: a worker pane refused (6, nothing filed), files plain; driver / a take_role holder / orchestrator / steward / no pane / hatch spawn; a pin grants nothing"
 # A breakage a worker files: filed, its --spawn dropped, queued for the steward.
 : > "$SPAWN_LOG"
 FAKE_FLEET_ROLE='worker|||issue-5' TMUX_PANE=%9 run_brk w4 --title "master 又红" --breakage-key k-worker --spawn

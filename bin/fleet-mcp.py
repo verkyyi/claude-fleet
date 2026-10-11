@@ -766,6 +766,12 @@ def tool_send(args):
     return send_message(args.get("to"), args.get("text"))
 
 
+def tool_take_role(args):
+    """Take / steal / drop / ask about a role in THIS session (issue #3114)."""
+    flag = {"take": [], "steal": ["--steal"], "drop": ["--drop"], "who": ["--who"]}[args.get("action", "take")]
+    return script([str(BIN / "fleet-role-take.sh"), args["role"]] + flag, STATUS_TIMEOUT_S)
+
+
 # --- 报 问 记 合 (issue #1808, EPIC #1813 C6) ------------------------------------
 
 def stdin_script(argv, text, timeout):
@@ -1263,6 +1269,19 @@ TOOLS = {
             "issue": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[0-9]+$",
                       "description": "Where the trail goes (default: the window's @epic, else its issue)."}},
             "required": ["window", "fp", "picks"], "additionalProperties": False}}),
+    "take_role": (tool_take_role, {
+        "description": "Take a role in THIS session (bin/fleet-role-take.sh; issue #3114): marks this window "
+                       "`@fleet_role_def <role>` and records it as the role's one holder "
+                       "($FLEET_CONF_DIR/global/roles.held) — a child's report and a peer's send to "
+                       "`orchestrator` find it, and it may spawn. Only a session that binds no issue. action "
+                       "take (default) · steal (take it from the holder) · drop (give it back) · who. Exit 0 "
+                       "taken / dropped / already held here · 3 this window cannot (it binds an issue) · 4 "
+                       "another window holds it (named) · 1 --who: nobody.",
+        "inputSchema": {"type": "object", "properties": {
+            "role": {"type": "string", "enum": ["orchestrator", "steward"]},
+            "action": {"type": "string", "enum": ["take", "steal", "drop", "who"],
+                       "description": "take (default) · steal · drop · who."}},
+            "required": ["role"], "additionalProperties": False}}),
     "comment": (tool_comment, {
         "description": "记 — comment on an issue through bin/fleet-comment.sh (the marker + sender footer). "
                        "mode note (the DEFAULT) is RECORD-ONLY: the issue's worker never sees it. mode to-worker "
@@ -1476,9 +1495,9 @@ LEGACY = {
 
 # Two groups (issue #3113). TOOLS stays every handler: `fleet` answers all of them
 # (a dispatch-group call there is road=legacy, one version — # compat-1v: 下一批删)
-# but LISTS only CORE; `fleet-orch` lists and answers ORCH. C3 adds take_role here.
+# but LISTS only CORE; `fleet-orch` lists and answers ORCH — take_role among them (#3114).
 ORCH_SERVER = "fleet-orch"
-ORCH_GROUP = ("spawn", "await", "children", "answer_dialog", "send")
+ORCH_GROUP = ("spawn", "await", "children", "answer_dialog", "send", "take_role")
 CORE = {n: e for n, e in TOOLS.items() if n not in ORCH_GROUP}
 ORCH = {n: TOOLS[n] for n in ORCH_GROUP}
 # What `fleet` lists: CORE, unless this process took over (#1898) from a server of a

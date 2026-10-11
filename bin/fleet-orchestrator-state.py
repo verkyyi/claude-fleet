@@ -50,10 +50,17 @@ WHAT IT DOES. ONE file, `$FLEET_CONF_DIR/global/orchestrator.state.json` (EPIC
            `compacting` at PreCompact) already gets that turn from refocus-hook.sh;
            an auto compaction runs mid-turn and carries on.
 
-WHO. Only a Claude orchestrator window: `@fleet_role orchestrator`, not `@cc_agent
-codex` (convention 5 — hooks/codex-map.json drops this command for Codex too), in
-tmux, CLAUDE_CODE_ENTRYPOINT cli. Every other pane: zero output, nothing written,
-one tmux read.
+WHO. Only the Claude window that HOLDS the orchestrator role (issue #3114, EPIC #3111
+C3): `@fleet_role_def orchestrator` from take_role and named by
+`global/roles.held` (fleet_role_holder's rule — is_holder), or the old seat's
+`@fleet_role orchestrator` while no line names another (# compat-1v: 下一批删); not
+`@cc_agent codex` (convention 5), in tmux, CLAUDE_CODE_ENTRYPOINT cli. Every other
+pane: zero output, nothing written, one tmux read. Registered ONLY by the
+fleet-orchestrate plugin (plugins/fleet-orchestrate/hooks/hooks.json, `hook
+--skill-dir ${CLAUDE_PLUGIN_ROOT}/skills/fleet-orchestrate`): no plugin, no hook at
+all. With the skill dir, SessionStart also gives the role back — the skill's
+role.md + rules.md ahead of the state — so a compaction or a resume leaves the
+holder the orchestrator.
 
 Selftest: bin/fleet-orchestrator-state-selftest.sh; BREAK-IT row `orchestrator-compacted`.
 Kill switch: FLEET_ORCH_STATE=0 (fleet.conf / the fleet overlay, read through
@@ -117,17 +124,64 @@ def pane():
 
 
 def window(p):
-    """(role, agent, compact_stage) of the pane's window — ONE tmux read."""
-    v = tmux('display-message', '-p', '-t', p, '#{@fleet_role}|#{@cc_agent}|#{@compact_stage}')
-    parts = (v.split('|') + ['', '', ''])[:3]
-    return parts[0], parts[1], parts[2]
+    """(role, role_def, agent, compact_stage, window id, fleet id) of the pane's
+    window — ONE tmux read."""
+    v = tmux('display-message', '-p', '-t', p,
+             '#{@fleet_role}|#{@fleet_role_def}|#{@cc_agent}|#{@compact_stage}|#{window_id}|#{@fleet_id}')
+    return tuple((v.split('|') + [''] * 6)[:6])
+
+
+def held_line(role='orchestrator'):
+    """The role's line in global/roles.held (bin/fleet-role-take.sh): (fid, wid), or None."""
+    try:
+        with open(os.path.join(conf_dir(), 'global', 'roles.held'), encoding='utf-8') as fh:
+            rows = [ln.rstrip('\n').split('\t') for ln in fh]
+    except OSError:
+        return None
+    got = None
+    for r in rows:
+        if len(r) >= 4 and r[0] == role:
+            got = (r[2], r[3])
+    return got
+
+
+def is_holder(role, rdef, wid, fid):
+    """Does this window HOLD the orchestrator role (issue #3114)? fleet_role_holder's
+    rule, for this one window: the roles.held line names it (its @fleet_id, else its
+    id) and it carries the mark; a mark with no line holds it too; the old seat's
+    @fleet_role orchestrator holds it while no line names another window
+    (# compat-1v: 下一批删). Anyone else is not the holder — it writes nothing."""
+    if 'orchestrator' not in (rdef, role):
+        return False
+    line = held_line()
+    return line is None or (fid != '' and line[0] == fid) or line[1] == wid
 
 
 def is_orchestrator(p):
     if not p or os.environ.get('CLAUDE_CODE_ENTRYPOINT', 'cli') != 'cli':
         return False, ''
-    role, agent, stage = window(p)
-    return role == 'orchestrator' and agent != 'codex', stage
+    role, rdef, agent, stage, wid, fid = window(p)
+    return agent != 'codex' and is_holder(role, rdef, wid, fid), stage
+
+
+def role_text(skill_dir):
+    """The role's own words, given back on SessionStart (issue #3114): the skill's
+    role.md + rules.md, as the plugin ships them. '' when there is no skill dir."""
+    out = []
+    for name in ('role.md', 'rules.md'):
+        try:
+            with open(os.path.join(skill_dir, name), encoding='utf-8') as fh:
+                text = fh.read().strip()
+        except (OSError, TypeError):
+            continue
+        # role.md is fleet-role.py's prompt (the body + its rule rows, the old
+        # seat's system prompt — # compat-1v): the rows are not given twice
+        if name == 'rules.md' and out and '## 规则表' in out[0]:
+            continue
+        out.append(text)
+    if not out:
+        return ''
+    return '\n\n'.join(['[fleet orchestrator role] 你接手了这台 fleet 的编排（/fleet-orchestrate）；角色说明和派单规则：'] + out)
 
 
 def switched_off():
@@ -195,7 +249,9 @@ def children(since):
     """fleet-children.sh orchestrator --json [--since]; None when it cannot answer."""
     # FLEET_ORCH_CHILDREN_CMD: the selftest's seam (a command line, args appended).
     seam = os.environ.get('FLEET_ORCH_CHILDREN_CMD', '').split()
-    cmd = (seam or ['bash', os.path.join(BIN, 'fleet-children.sh')]) + ['orchestrator', '--json']
+    # the holder's own key (fleet_origin_key — a scratch that took the role is
+    # `<slug>:scratch-N`, the old seat `orchestrator`); no pane: the old seat's key
+    cmd = (seam or ['bash', os.path.join(BIN, 'fleet-children.sh')]) + ([] if pane() else ['orchestrator']) + ['--json']
     if since:
         cmd += ['--since', str(since)]
     try:
@@ -465,7 +521,7 @@ def detach(*args):
         pass
 
 
-def hook():
+def hook(skill_dir=''):
     try:
         payload = json.loads(sys.stdin.read() or '{}')
     except ValueError:
@@ -502,9 +558,15 @@ def hook():
             refresh(d, tr)
         ho = handoff_rec(_session(), payload.get('session_id') or '') if src in ('startup', 'clear') else None
         text = brief(d, src, handoff=ho)
+        # the plugin's hook names its skill dir: the role and the rules ride every
+        # compact / resume / startup, so the holder stays the orchestrator (#3114)
+        role = role_text(skill_dir or os.environ.get('FLEET_ORCH_SKILL_DIR', ''))
+        if role:
+            text = role + ('\n\n' + text if text else '')
         if not text:
             return 0
-        mark_read(d)
+        if d:
+            mark_read(d)
         print(json.dumps({'hookSpecificOutput': {'hookEventName': 'SessionStart',
                                                  'additionalContext': text}}, ensure_ascii=False))
         if (src == 'compact' and d.get('trigger') == 'manual' and not d.get('fleet_compaction')
@@ -521,7 +583,8 @@ def now_ok(d):
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     sub = ap.add_subparsers(dest='cmd', required=True)
-    sub.add_parser('hook')
+    h = sub.add_parser('hook')
+    h.add_argument('--skill-dir', default='')
     s = sub.add_parser('save')
     s.add_argument('--transcript', default='')
     s.add_argument('--reason', default='save')
@@ -533,7 +596,7 @@ def main():
     a = ap.parse_args()
     if a.cmd == 'hook':
         try:
-            return hook()
+            return hook(a.skill_dir)
         except Exception:                # a hook never costs the session its turn
             return 0
     if a.cmd == 'path':

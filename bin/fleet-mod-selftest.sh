@@ -165,7 +165,11 @@ else
   case "$t" in *'fallback tools (#2057)'*) : ;; *) fail "D: the fallback-tools lifecycle test (#2057) did not run" "$t" ;; esac
   case "$t" in *'forwards to fleet-mcp.py --call'*) : ;; *) fail "D: the fallback-tools forwarding tests (tests/tools.test.ts, #2057) did not run" "$t" ;; esac
   case "$t" in *'the first /exit is a hint'*) : ;; *) fail "D: the orchestrator exit-guard tests (tests/exit-guard.test.ts, #2584) did not run" "$t" ;; esac
-  case "$t" in *'Enter files exactly once with spawn'*) : ;; *) fail "D: the quick-dispatch tests (tests/qd.test.tsx, #2618) did not run" "$t" ;; esac
+  # /qd lives in the fleet-orchestrate plugin (issue #3114): its own validate + tests
+  PO="$BIN/../plugins/fleet-orchestrate"
+  v=$(claude plugin validate "$PO" 2>&1) || fail "D: claude plugin validate plugins/fleet-orchestrate failed" "$v"
+  q=$(cd "$PO" && claude plugin test . 2>&1) || fail "D: claude plugin test plugins/fleet-orchestrate failed" "$q"
+  case "$q" in *'Enter files exactly once with spawn'*) : ;; *) fail "D: the quick-dispatch tests (plugins/fleet-orchestrate/tests/qd.test.tsx, #2618 · #3114) did not run" "$q" ;; esac
   case "$t" in *'the next step folds them in'*) : ;; *) fail "D: the orchestrator queue tests (tests/queue.test.tsx, #2617) did not run" "$t" ;; esac
   case "$t" in *'a moved stamp reads once'*) : ;; *) fail "D: the panels tests (tests/panels.test.ts, #2835) did not run" "$t" ;; esac
   case "$t" in *'narrow (#2836): 120 columns opens nothing unasked'*) : ;; *) fail "D: the narrow-screen /sheet tests (tests/sheet.test.tsx, #2836) did not run" "$t" ;; esac
@@ -197,9 +201,13 @@ assert set(rows[1]["inputSchema"]["required"]) == {"issue"} and "reap" in rows[1
 ' || fail "E: --spec did not print the three closed schemas" "$spec"
 python3 "$BIN/fleet-mcp.py" --spec status nope >/dev/null 2>&1; rc=$?
 [ "$rc" = 2 ] || fail "E: --spec of an unknown tool exited $rc, want 2"
-for f in Lifecycle Usage State Progress Compose Tools ExitGuard QuickDispatch Queue Panels; do
+for f in Lifecycle Usage State Progress Compose Tools ExitGuard Queue Panels; do
   grep -q "^  register$f(on)\$" "$MOD/hooks/register.ts" || fail "E: register.ts no longer wires register$f"
 done
+# /qd is the fleet-orchestrate plugin's (issue #3114): this mod registers no command for it
+grep -q 'QuickDispatch\|qdCommand' "$MOD/hooks/register.ts" "$MOD/hooks/lifecycle.ts" \
+  && fail "E: mod/fleet still registers /qd — it is plugins/fleet-orchestrate/hooks/qd.tsx's"
+grep -q '"\./qd.tsx"' "$BIN/../plugins/fleet-orchestrate/hooks/hooks.json" || fail "E: the fleet-orchestrate plugin does not load hooks/qd.tsx"
 ok "E fallback tools: registered only without the service, from --spec; every call forwarded to --call; no second copy of a schema, a check or a script"
 
 printf 'fleet-mod-selftest: %d passed\n' "$pass"

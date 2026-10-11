@@ -587,28 +587,75 @@ fleet_pane_lost() { [ -n "${TMUX:-}" ] && [ -z "${TMUX_PANE:-}" ]; }
 # (@agent_spawn 1, stamped by fleet-claude.sh off bin/fleet-agent-def.py — EPIC
 # #3111 共同约定 5, issue #3122: the shipped epic-driver does, fleet-worker does
 # not) or it took over orchestrating / stewarding (@fleet_role_def orchestrator |
-# steward, C3's take_role). An old window's @fleet_role_def epic-driver still
-# passes for one version (# compat-1v: 下一批删). Anything outside a fleet pane
-# spawns too (a daemon, the operator's own shell, an unstamped window), and so
-# does the onboarding guide (the pinned `guide` scratch, fleet_guide_respawn's
-# identity). Ten workers once spawned their own: the driver could not count the
-# grandchildren and their reports went to parked parents.
+# steward, stamped only by take_role — bin/fleet-role-take.sh, issue #3114). An old
+# window's @fleet_role_def epic-driver still passes for one version (# compat-1v:
+# 下一批删). Anything outside a fleet pane spawns too (a daemon, the operator's own
+# shell, an unstamped window). A pin grants nothing (EPIC #3111 rule 5): the
+# onboarding guide that used to pass as a pinned `guide` window takes the role
+# like any other session. Ten workers once spawned their own: the driver could not
+# count the grandchildren and their reports went to parked parents.
 # FLEET_ALLOW_WORKER_SPAWN=1 is the operator's hatch. The filer, the `spawn` tool
 # and fleet-await.sh's spawn ask here; FLEET_SPAWN_REFUSAL is what they say.
 # shellcheck disable=SC2034  # read by the filer, fleet-await.sh and fleet-mcp.py
 FLEET_SPAWN_REFUSAL='a worker does not spawn sessions (issue #2960) — fix it in place when it blocks your own done condition and is small, local and yours; else file it without spawning: with --parent <your issue> and report blocked to your parent when it blocks you, bare when it does not; a red base branch: file it --breakage and the steward spawns its fixer'
 fleet_spawn_refused() {
   [ "${FLEET_ALLOW_WORKER_SPAWN:-0}" = 1 ] && return 1
-  local r role def wname pin grant
-  r=$(fleet_pane_fmt '#{@fleet_role}|#{@fleet_role_def}|#{@pin}|#{window_name}|#{@agent_spawn}') || return 1
-  IFS='|' read -r role def pin wname grant <<EOF
+  local r role def grant
+  r=$(fleet_pane_fmt '#{@fleet_role}|#{@fleet_role_def}|#{@agent_spawn}') || return 1
+  IFS='|' read -r role def grant <<EOF
 $r
 EOF
   [ "$role" = worker ] || return 1
   [ "$grant" = 1 ] && return 1
   case "$def" in orchestrator|steward|epic-driver) return 1 ;; esac
-  [ "$wname" = guide ] && [ "$pin" = 1 ] && return 1
   return 0
+}
+
+# --- who holds a role (issue #3114, EPIC #3111 rule 4) ------------------------------
+# A role is a MARK on an ordinary window, never a kind of window: take_role
+# (bin/fleet-role-take.sh, the dispatch group's `take_role` tool) stamps
+# `@fleet_role_def orchestrator|steward` on a window that binds no issue and writes
+# ONE line per role into `$FLEET_CONF_DIR/global/roles.held` — the only record of
+# who holds it:  <role> TAB <fleet session> TAB <@fleet_id> TAB <window id> TAB <epoch>
+# fleet_role_holder is the only reader; fleet_win_for_key orchestrator|steward asks it.
+FLEET_ROLES_TAKEN='orchestrator steward'
+fleet_roles_held_file() { printf '%s/global/roles.held' "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"; }
+
+# fleet_role_holder <role> [<sock>] → the window id holding <role> on this fleet's
+# server. rc 0 + the id · rc 1 nobody · rc 2 ambiguous (one stderr line). In order:
+#   ① the roles.held line, while its window lives (by @fleet_id, else its id) and
+#     still carries the mark — a line whose window went is nobody's;
+#   ② a window carrying the mark with no line (a restored window, a hand stamp);
+#   ③ the old seat's `@fleet_role <role>` (bin/fleet-orchestrator.sh, EPIC #3111 C7
+#     removes it — # compat-1v: 下一批删).
+fleet_role_holder() {
+  local role="${1:-}" sock="${2:-}" rows f line fid wid hits n
+  case " $FLEET_ROLES_TAKEN " in *" $role "*) : ;; *) return 1 ;; esac
+  if [ -n "$sock" ]; then
+    rows=$(fleet_lw '#{window_id}|#{@fleet_role}|#{@fleet_role_def}|#{@fleet_id}' tmux -L "$sock")
+  else
+    rows=$(fleet_lw '#{window_id}|#{@fleet_role}|#{@fleet_role_def}|#{@fleet_id}')
+  fi
+  f=$(fleet_roles_held_file)
+  if [ -f "$f" ]; then
+    line=$(awk -F'\t' -v r="$role" '$1 == r { l = $0 } END { print l }' "$f" 2>/dev/null)
+    if [ -n "$line" ]; then
+      fid=$(printf '%s' "$line" | cut -f3); wid=$(printf '%s' "$line" | cut -f4)
+      hits=$(printf '%s\n' "$rows" | awk -F'|' -v r="$role" -v f="$fid" -v w="$wid" '
+        $3 != r { next } f != "" && $4 == f { print $1; exit } $1 == w { c = $1 } END { if (c != "") print c }' | head -1)
+      [ -n "$hits" ] && { printf '%s' "$hits"; return 0; }
+    fi
+  fi
+  hits=$(printf '%s\n' "$rows" | awk -F'|' -v r="$role" '
+    $3 == r { d = d $1 "\n" } $2 == r { o = o $1 "\n" }
+    END { printf "%s", (d != "" ? d : o) }')
+  n=$(printf '%s' "$hits" | grep -c .)
+  case "$n" in
+    0) return 1 ;;
+    1) printf '%s' "$hits"; return 0 ;;
+  esac
+  printf 'fleet: %s is ambiguous — %s windows hold the role %s\n' "$role" "$n" "$role" >&2
+  return 2
 }
 
 # fleet_claude_has_agent_flag <claude binary> — rc 0 when that Claude Code knows
@@ -5248,22 +5295,10 @@ fleet_win_for_key() {
       # rule 4): an ordinary window that took the role carries `@fleet_role_def <role>`
       # (C3's take_role); only when none does is the old seat's @fleet_role read
       # (# compat-1v: 下一批删) — so a report finds whoever holds the role now.
+      # fleet_role_holder is the one reader (issue #3114): the roles.held record.
       [ -z "$pre" ] || return 1
-      if [ -n "$sock" ]; then
-        hits=$(fleet_lw '#{window_id}|#{@fleet_role}|#{@fleet_role_def}' tmux -L "$sock")
-      else
-        hits=$(fleet_lw '#{window_id}|#{@fleet_role}|#{@fleet_role_def}')
-      fi
-      hits=$(printf '%s\n' "$hits" | awk -F'|' -v r="$key" '
-        $3 == r { d = d $1 "\n" } $2 == r { o = o $1 "\n" }
-        END { printf "%s", (d != "" ? d : o) }')
-      n=$(printf '%s' "$hits" | grep -c .)
-      case "$n" in
-        0) return 1 ;;
-        1) printf '%s' "$hits"; return 0 ;;
-      esac
-      printf 'fleet: %s is ambiguous — %s windows hold the role %s\n' "$key" "$n" "$key" >&2
-      return 2 ;;
+      fleet_role_holder "$key" "$sock"
+      return $? ;;
     *) return 1 ;;
   esac
   fleet="$sock"; [ -n "$fleet" ] || fleet=$(fleet_current_session 2>/dev/null)

@@ -25,6 +25,10 @@
 #      still renders (body alone)
 #   H  the words live in the table only: docs/DECISIONS.md lists no keywords, the
 #      orchestrator's body no longer spells the shapes
+#   I  the built-in rows live in the skill dirs (issue #3114): the orchestrate
+#      plugin's rules.md holds only orchestrator rows, the steward's only steward
+#      rows, the loader reads those two, and conf/role-rules.default.md (kept one
+#      version for the hub's view) is exactly their union — same version
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$BIN/.." && pwd)"
@@ -142,6 +146,20 @@ grep -q '付费 · 花钱' "$ROOT/docs/DECISIONS.md" && bad "H: docs/DECISIONS.m
   || { grep -q 'role-rules.default.md' "$ROOT/docs/DECISIONS.md" && ok "H: docs/DECISIONS.md points at the rule table" || bad "H: DECISIONS.md names no table"; }
 R body orchestrator | grep -q '几处独立改动或跨仓库' && bad "H: the orchestrator's body still spells the shapes" \
   || ok "H: the orchestrator's body says 按规则表派, the shapes are the table's"
+
+# --- I the rows beside the skills (issue #3114) -----------------------------------------
+OR="$ROOT/plugins/fleet-orchestrate/skills/fleet-orchestrate/rules.md"
+SR="$ROOT/plugins/fleet-steward/skills/fleet-steward/rules.md"
+PY 'import fleet_rules as r, sys
+o = r.parse(open(sys.argv[1]).read()); s = r.parse(open(sys.argv[2]).read())
+assert o and all(x["role"] == "orchestrator" for x in o), "orchestrate rules.md"
+assert s and all(x["role"] == "steward" for x in s), "steward rules.md"
+assert [p.split("/")[-1] for p in r.default_paths()] == ["rules.md", "rules.md"], r.default_paths()
+c = r.parse(open(sys.argv[3]).read())
+assert r.version_of(sorted(o + s, key=lambda x: x["n"])) == r.version_of(sorted(c, key=lambda x: x["n"])), "conf copy drifted"
+' "$OR" "$SR" "$ROOT/conf/role-rules.default.md" \
+  && ok "I: the built-in rows are the skills' rules.md (orchestrator · steward), the conf copy their union" \
+  || bad "I: the skill dirs' rules.md and conf/role-rules.default.md disagree (or the loader reads neither)"
 
 [ "$fails" = 0 ] && { echo "fleet-rules selftest: all green"; exit 0; }
 echo "fleet-rules selftest: $fails FAILED"; exit 1

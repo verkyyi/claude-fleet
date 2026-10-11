@@ -1,0 +1,60 @@
+{
+  "description": "fleet-orchestrate: the orchestrator's working state across a compaction, and its role given back (issue #3114). Only the session that holds the role (take_role) writes or reads anything.",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "ScheduleWakeup|CronCreate|CronDelete",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/fleet/bin/fleet-orchestrator-state.py hook --skill-dir \"${CLAUDE_PLUGIN_ROOT}/skills/fleet-orchestrate\""
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/fleet/bin/fleet-orchestrator-state.py hook --skill-dir \"${CLAUDE_PLUGIN_ROOT}/skills/fleet-orchestrate\""
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "compact|resume|startup|clear",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/fleet/bin/fleet-orchestrator-state.py hook --skill-dir \"${CLAUDE_PLUGIN_ROOT}/skills/fleet-orchestrate\""
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/fleet/bin/fleet-orchestrator-state.py hook --skill-dir \"${CLAUDE_PLUGIN_ROOT}/skills/fleet-orchestrate\""
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/fleet/bin/fleet-orchestrator-state.py hook --skill-dir \"${CLAUDE_PLUGIN_ROOT}/skills/fleet-orchestrate\""
+          }
+        ]
+      }
+    ]
+  },
+  "modules": [
+    "./qd.tsx"
+  ]
+}

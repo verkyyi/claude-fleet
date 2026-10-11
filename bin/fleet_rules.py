@@ -6,7 +6,12 @@ just an answer, when Codex, what a subagent may do) and what the steward may
 answer on its own, by default, or never (auto / default / ask) are ONE numbered
 table. Three layers, low → high, merged by number:
 
-  自带   conf/role-rules.default.md           (the fleet's; ships with the tree)
+  自带   the plugins' skill dirs: plugins/fleet-orchestrate/skills/fleet-orchestrate/
+         rules.md (the orchestrator's rows) + plugins/fleet-steward/skills/
+         fleet-steward/rules.md (the steward's) — issue #3114: the rows live beside
+         the skill that reads them. conf/role-rules.default.md is their union, kept
+         one version for the hub's roles view (# compat-1v: 下一批删);
+         fleet-rules-selftest.sh holds the two in step.
   你的   $FLEET_CONF_DIR/person-bundle.json `rules`   (the person's layer, C3
          fetches it; a Markdown table in the same format, or a list of rows)
   本机   $FLEET_CONF_DIR/roles/rules.md        (this computer: development, an
@@ -49,6 +54,28 @@ class RulesError(Exception):
 def conf_dir():
     return os.environ.get('FLEET_CONF_DIR') or os.path.join(
         os.path.expanduser('~'), '.config', 'claude-fleet')
+
+
+SKILL_RULES = ('plugins/fleet-orchestrate/skills/fleet-orchestrate/rules.md',
+               'plugins/fleet-steward/skills/fleet-steward/rules.md')
+
+
+def _roots():
+    """The tree beside this bin/, else the one a symlinked bin/ points at (a
+    selftest's shadow root)."""
+    return (os.path.dirname(BIN), os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
+
+
+def default_paths():
+    """The built-in layer's files: FLEET_RULES_DEFAULT (one file — a test, the hub's
+    copy), else the skill dirs' rules.md (issue #3114), else conf/role-rules.default.md."""
+    if os.environ.get('FLEET_RULES_DEFAULT'):
+        return [os.environ['FLEET_RULES_DEFAULT']]
+    for root in _roots():
+        got = [os.path.join(root, f) for f in SKILL_RULES]
+        if all(os.path.isfile(p) for p in got):
+            return got
+    return [default_path()]
 
 
 def default_path():
@@ -139,8 +166,11 @@ def _layers(person=None):
     """[(name, source label, loader)] low → high. `person` (a callable) stands in
     for the cached person layer — a preview of a change not yet written (#2785)."""
     def default():
-        with open(default_path(), encoding='utf-8') as f:
-            return parse(f.read()), '自带'
+        rows = []
+        for p in default_paths():
+            with open(p, encoding='utf-8') as f:
+                rows += parse(f.read())
+        return rows, '自带'
 
     def local():
         p = os.path.join(conf_dir(), 'roles', 'rules.md')
