@@ -246,3 +246,31 @@ func connectWriteNodeHello(t *testing.T, h *harness, label string, hello control
 	go n.serve()
 	return n
 }
+
+// TestComputeRelayRoute (claude-fleet#3364): a login whose sessions go through
+// the relay is judged by the probe's relay verdict — this machine's CN egress
+// does not close it; a relay in an unsupported region does, and says the route.
+// A direct probe reads exactly as before.
+func TestComputeRelayRoute(t *testing.T) {
+	now := time.Now()
+	relayOK := &control.NodeProbe{Loc: "SG", LocLocal: "CN", Route: "relay", Verdict: control.ProbeOK, TS: now}
+	if v := decideCompute(true, false, relayOK, false, now); v.Off || v.Closed {
+		t.Fatalf("relay ok, local CN: closed: %+v", v)
+	}
+	relayHK := &control.NodeProbe{Loc: "HK", LocLocal: "CN", Route: "relay", Verdict: control.ProbeUnsupportedRegion, TS: now}
+	v := decideCompute(true, false, relayHK, false, now)
+	if !v.Off || !v.Closed || v.Why != "compute off (出口地区 HK via relay (local CN) 不在 Claude / OpenAI 支持范围)" {
+		t.Fatalf("relay HK: %+v", v)
+	}
+	if got := probeLoc(relayHK); got != "HK via relay (local CN)" {
+		t.Fatalf("finding loc: %q", got)
+	}
+	direct := &control.NodeProbe{Loc: "CN", Route: "direct", Verdict: control.ProbeUnsupportedRegion, TS: now}
+	if v := decideCompute(true, false, direct, false, now); v.Why != "compute off (出口地区 CN 不在 Claude / OpenAI 支持范围)" || probeLoc(direct) != "CN" {
+		t.Fatalf("direct: %+v %q", v, probeLoc(direct))
+	}
+	old := &control.NodeProbe{Verdict: control.ProbeUnsupportedRegion, TS: now}
+	if v := decideCompute(true, false, old, false, now); v.Why != "compute off (出口地区 未知 不在 Claude / OpenAI 支持范围)" || probeLoc(old) != "" {
+		t.Fatalf("no route, no loc: %+v", v)
+	}
+}

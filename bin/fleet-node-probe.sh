@@ -13,11 +13,21 @@
 #   anthropic  api.anthropic.com and api.openai.com, one request each with NO
 #   openai     credential: an auth error = reachable; a 403 = the provider
 #              refuses this region (unsupported_region); no answer = unreachable;
+#   route      the road this login's sessions actually take (issue #3364):
+#              direct — judged by this machine's egress, as above; relay — this
+#              machine's verdict is not ok and its credential proxy has the relay
+#              road (`fleet-cred-proxy.sh relay-probe`: the pass, no credential,
+#              one request per provider through the relay), so the region is the
+#              relay's egress (the address it answered from → ipinfo) and the
+#              APIs' answers are the relay's; `loc_local` keeps this machine's.
+#              A relay in an unsupported region, or refused there, closes all the same;
 #   laptop     a battery (pmset -g batt / /sys/class/power_supply/BAT*) — and the
 #              sleep setting. A laptop is a NOTE, never a refusal (EPIC #1718
 #              decision 3: a lid that closes stops its sessions).
 #
-#   {"loc","anthropic","openai","laptop","sleep_min","ts","verdict","reason"}
+#   {"loc","anthropic","openai","laptop","sleep_min","route",["loc_local","relay_anthropic",
+#    "relay_openai"],"ts","verdict","reason"}  — anthropic/openai stay THIS machine's
+#   answers (the proxy's router reads them); loc and verdict are the route's
 #   verdict: ok | unsupported_region | unreachable
 #
 # What the verdict does is the hub's (tokenledger/internal/api/fleet_compute.go):
@@ -34,10 +44,13 @@
 #
 # Env (test seams): FLEET_PROBE_CURL (curl) · FLEET_PROBE_PMSET (pmset) ·
 #   FLEET_PROBE_OS (uname -s) · FLEET_PROBE_BATTERY_DIR (/sys/class/power_supply) ·
-#   FLEET_PROBE_UNSUPPORTED (the region list, ISO-3166 alpha-2, space separated).
+#   FLEET_PROBE_UNSUPPORTED (the region list, ISO-3166 alpha-2, space separated) ·
+#   FLEET_PROBE_RELAY_CMD (the relay road's measurement; default
+#   `fleet-cred-proxy.sh relay-probe` beside this script).
 # Exit: 0 ok · 1 not suitable (unsupported_region / unreachable) · 2 usage
 set -uo pipefail
 
+DIR="$(cd "$(dirname "$0")" && pwd)"
 CONF="${FLEET_CONF_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/claude-fleet}"
 OUT="$CONF/node-probe.json"
 ENVF="$CONF/node.env"
@@ -125,17 +138,51 @@ if [ "$reuse" = 0 ]; then
   else
     verdict=ok
   fi
+  # the road the sessions take (issue #3364): a login whose own egress is not
+  # ok but whose proxy has the relay goes through the relay — judge that road
+  route=direct loc_local="" ra="" ro=""
+  if [ "$verdict" != ok ]; then
+    if [ -n "${FLEET_PROBE_RELAY_CMD:-}" ]; then rp=$(sh -c "$FLEET_PROBE_RELAY_CMD" 2>/dev/null </dev/null)
+    else rp=$(bash "$DIR/fleet-cred-proxy.sh" relay-probe 2>/dev/null </dev/null); fi || rp=""
+    rl=$(printf '%s' "$rp" | python3 -c 'import json, sys
+try:
+    d = json.load(sys.stdin)
+except ValueError:
+    d = {}
+if d.get("relay") is True:
+    print(" ".join(str(d.get(k) or "-") for k in ("anthropic", "anthropic_code", "openai", "openai_code", "peer")))' 2>/dev/null)
+    if [ -n "$rl" ]; then
+      set -- $rl
+      ra="$1" rac="$2" ro="$3" roc="$4" peer="$5"
+      [ "$peer" = - ] && peer=""
+      rloc=""
+      [ -z "$peer" ] || rloc=$("$CURL" -fsS --max-time 8 "https://ipinfo.io/$peer/country" 2>/dev/null | head -n 1 | up)
+      case "$rloc" in ??) ;; *) rloc="" ;; esac
+      route=relay loc_local="$loc" loc="$rloc"
+      reason="route relay — local: $reason; relay egress ${rloc:-unknown} (${peer:-?}); anthropic via relay $ra ($rac); openai via relay $ro ($roc)"
+      case " $UNSUPPORTED " in *" ${rloc:-none} "*) bad_rloc=1 ;; *) bad_rloc="" ;; esac
+      if [ -n "$bad_rloc" ] || [ "$ra" = unsupported_region ] || [ "$ro" = unsupported_region ]; then
+        verdict=unsupported_region
+      elif [ "$ra" != reachable ] || [ "$ro" != reachable ]; then
+        verdict=unreachable
+      else
+        verdict=ok
+      fi
+    fi
+  fi
   reason=$(printf '%s' "$reason" | tr -d '"\\')
   mkdir -p "$CONF" || exit 1
   {
     printf '{"loc":"%s","anthropic":"%s","openai":"%s","laptop":%s,' "$loc" "$anthropic" "$openai" "$laptop"
     [ -z "$sleep_min" ] || printf '"sleep_min":%s,' "$sleep_min"
+    printf '"route":"%s",' "$route"
+    [ "$route" != relay ] || printf '"loc_local":"%s","relay_anthropic":"%s","relay_openai":"%s",' "$loc_local" "$ra" "$ro"
     printf '"ts":"%s","verdict":"%s","reason":"%s"}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$verdict" "$reason"
   } > "$OUT.tmp" && mv "$OUT.tmp" "$OUT" || { echo "fleet-node-probe: cannot write $OUT" >&2; exit 1; }
   # separated (issue #1971): the credential proxy runs as another account and
   # cannot read this file — hand it the fresh verdict over its socket
   if [ -f "$CONF/credsep.json" ]; then
-    bash "$(cd "$(dirname "$0")" && pwd)/fleet-cred-proxy.sh" probe "$OUT" >/dev/null 2>&1 || true
+    bash "$DIR/fleet-cred-proxy.sh" probe "$OUT" >/dev/null 2>&1 || true
   fi
 fi
 
@@ -147,17 +194,30 @@ if [ "$JSON" = 1 ]; then cat "$OUT"; exit "$rc"; fi
 # ── say it ──────────────────────────────────────────────────────────────────
 loc=$(jget loc "$OUT") laptop=$(jget laptop "$OUT") sleep_min=$(jget sleep_min "$OUT")
 anthropic=$(jget anthropic "$OUT") openai=$(jget openai "$OUT")
+route=$(jget route "$OUT") loc_local=$(jget loc_local "$OUT")
+if [ "$route" = relay ]; then   # the sessions' road is the relay: say its answers
+  anthropic=$(jget relay_anthropic "$OUT") openai=$(jget relay_openai "$OUT")
+fi
 word() { case "$1" in reachable) echo 能直连 ;; unsupported_region) echo 拒绝本地区 ;; *) echo 连不上 ;; esac; }
 note=""
 if [ "$laptop" = true ]; then
   note="；笔记本：合盖或睡眠时会话会停下"
   [ "${sleep_min:-0}" -gt 0 ] 2>/dev/null && note="${note}（睡眠设置 ${sleep_min} 分钟）"
 fi
+if [ "$route" = relay ]; then
+  via="本机出口 ${loc_local:-未知}，会话经新加坡转发"
+  case "$verdict" in
+    ok) echo "本机判断：合适 — ${via}（转发出口 ${loc:-未知}），Anthropic / OpenAI 经转发都能连${note}" ;;
+    unsupported_region) echo "本机判断：不合适 — ${via}，转发出口 ${loc:-未知} 不在 Claude / OpenAI 支持范围（经转发 Anthropic $(word "$anthropic")，OpenAI $(word "$openai")）；不在本机跑会话${note}" ;;
+    *) echo "本机判断：暂不合适 — ${via}（转发出口 ${loc:-未知}）：经转发 Anthropic $(word "$anthropic")，OpenAI $(word "$openai")（转发恢复后再测：fleet-node-probe.sh）${note}" ;;
+  esac
+else
 case "$verdict" in
   ok) echo "本机判断：合适 — 出口 ${loc:-未知}，Anthropic / OpenAI 都能直连${note}" ;;
   unsupported_region) echo "本机判断：不合适 — 出口 ${loc:-未知} 不在 Claude / OpenAI 支持范围（Anthropic $(word "$anthropic")，OpenAI $(word "$openai")）；不在本机跑会话，账号用本机自己的${note}" ;;
   *) echo "本机判断：暂不合适 — 出口 ${loc:-未知}：Anthropic $(word "$anthropic")，OpenAI $(word "$openai")（网络恢复后再测：fleet-node-probe.sh）${note}" ;;
 esac
+fi
 # The one hint (EPIC #1718 decision 2): suitable, a node, compute off.
 if [ "$verdict" = ok ] && [ -f "$ENVF" ] && grep -qx 'CCQUOTA_FLEET_COMPUTE=0' "$ENVF"; then
   echo "可以打开：fleet host on"

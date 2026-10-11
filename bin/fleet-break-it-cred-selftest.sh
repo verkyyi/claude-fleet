@@ -10,6 +10,8 @@
 #   cred-proxy-dead                                 bin/fleet-cred-proxy.sh run (the daemon's entry)
 #   cred-relay-down / cred-central-down / cred-probe-wrong
 #                                                   bin/fleet-cred-proxy.py (Router, send: route_switch)
+#   probe-ignores-relay                             bin/fleet-node-probe.sh + bin/fleet-cred-proxy.py
+#                                                   (relay-probe, Router: route relay) — issue #3364
 #   cred-session-expire                             bin/fleet-cred-proxy.py (hub pass renewal, live fcp1),
 #                                                   bin/fleet-session-cred.sh (--wrap)
 #   cred-pass-lapsed                                bin/fleet-cred-proxy.py (HubPasses: a lapsed pass renewed
@@ -351,6 +353,59 @@ drill_cred_probe_wrong() {
   [ "$code" = 200 ] && ! grep -q '^direct-' "$CD/hits" \
     || { WHY="the next request went back to direct ($code; hits: $(tr '\n' ' ' < "$CD/hits"))"; return 1; }
   WHAT="探测说能直连、上游按地区拒 → 同一请求切 relay 成功，之后的请求不再先试 direct"
+}
+
+# A login whose sessions go through the relay, on a machine whose own egress the
+# providers do not serve (issue #3364): the probe judges the road the sessions
+# take — the relay's egress, the providers' answers through it — not this
+# machine's. A login with no relay is closed exactly as before.
+probe_curl_stub() {   # <dir> — curl for bin/fleet-node-probe.sh: the local egress is CN, the APIs 403
+  cat > "$1/curl" <<'EOF2'
+#!/bin/sh
+out="" url=""
+while [ $# -gt 0 ]; do
+  case "$1" in -o) out="$2"; shift ;; -w|--max-time|-X|-H|-d) shift ;; http*://*) url="$1" ;; esac
+  shift
+done
+case "$url" in
+  *cdn-cgi/trace) printf 'ip=192.0.2.1\nloc=CN\n' ;;
+  *ipinfo.io/country) echo CN ;;
+  *ipinfo.io/*/country) echo "${FAKE_RLOC:-SG}" ;;
+  *anthropic*|*openai*) [ -n "$out" ] && echo '{"error":{"type":"forbidden","message":"Request not allowed"}}' > "$out"; printf 403 ;;
+esac
+exit 0
+EOF2
+  chmod 755 "$1/curl"
+}
+probe_run() {   # [env…] — the probe in the rig's conf dir, with the stub; rc in PRC
+  ( cred_env; env FLEET_PROBE_CURL="$CD/curl" FLEET_PROBE_OS=Linux FLEET_PROBE_BATTERY_DIR="$CD/nobat" \
+      FLEET_PROBE_RELAY_CMD="python3 -I $BIN/fleet-cred-proxy.py relay-probe" "$@" \
+      bash "$BIN/fleet-node-probe.sh" --quiet ) >"$CD/probe.out" 2>&1
+  PRC=$?
+}
+pj() { python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get(sys.argv[2], ""))' "$CD/node-probe.json" "$1" 2>/dev/null; }
+drill_probe_ignores_relay() {
+  CAP=15
+  cred_rig pir trusted unsupported_region || return 1
+  mkdir -p "$CD/nobat"; probe_curl_stub "$CD"
+  cred_serve || return 1
+  local t0 r
+  t0=$(now)
+  probe_run
+  SECS=$(since "$t0")
+  [ "$PRC" = 0 ] && [ "$(pj verdict)" = ok ] && [ "$(pj route)" = relay ] && [ "$(pj loc)" = SG ] && [ "$(pj loc_local)" = CN ] \
+    || { WHY="relay login, local egress CN: wanted rc 0 verdict ok route relay loc SG loc_local CN, got rc $PRC $(cat "$CD/node-probe.json" 2>/dev/null) $(tail -2 "$CD/probe.out")"; return 1; }
+  r=$(cred_ctl route --provider claude --json 2>/dev/null)
+  case "$r" in *'"route": "relay"'*) ;; *) WHY="probe said route relay, the proxy routes: $r"; return 1 ;; esac
+  # the relay itself in an unsupported region: closed all the same
+  probe_run FAKE_RLOC=HK
+  [ "$PRC" = 1 ] && [ "$(pj verdict)" = unsupported_region ] && [ "$(pj route)" = relay ] && [ "$(pj loc)" = HK ] \
+    || { WHY="relay egress HK: wanted unsupported_region route relay loc HK, got rc $PRC $(cat "$CD/node-probe.json")"; return 1; }
+  # a direct login (no proxy answers): judged by this machine's egress, as before
+  probe_run FLEET_PROBE_RELAY_CMD="python3 -I $BIN/fleet-cred-proxy.py --state $CD/nostate relay-probe"
+  [ "$PRC" = 1 ] && [ "$(pj verdict)" = unsupported_region ] && [ "$(pj route)" = direct ] && [ "$(pj loc)" = CN ] && [ -z "$(pj loc_local)" ] \
+    || { WHY="direct login, egress CN: wanted unsupported_region route direct loc CN, got rc $PRC $(cat "$CD/node-probe.json")"; return 1; }
+  WHAT="本机出口 CN、会话走 relay → 按 relay 出口 SG 判 ok（route relay，代理先走 relay）；relay 在 HK 照关；直连登录照旧关"
 }
 
 drill_cred_session_expire() {

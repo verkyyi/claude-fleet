@@ -464,6 +464,30 @@ type NodeProbe struct {
 	TS        time.Time `json:"ts"`
 	Verdict   string    `json:"verdict"` // ok | unsupported_region | unreachable
 	Reason    string    `json:"reason,omitempty"`
+
+	// Route is the road the login's sessions take (claude-fleet#3364): relay
+	// = this machine's egress is not served and its credential proxy goes
+	// through the relay, so Loc and Verdict are the relay's and LocLocal is
+	// this machine's. "" / direct = judged by this machine, as before.
+	Route    string `json:"route,omitempty"`
+	LocLocal string `json:"loc_local,omitempty"`
+}
+
+// Where is the probe's egress as a sentence fragment: `CN`, or for a relay
+// login `SG via relay (local CN)` (claude-fleet#3364).
+func (p *NodeProbe) Where() string {
+	loc := p.Loc
+	if loc == "" {
+		loc = "未知"
+	}
+	if p.Route != "relay" {
+		return loc
+	}
+	local := p.LocLocal
+	if local == "" {
+		local = "未知"
+	}
+	return loc + " via relay (local " + local + ")"
 }
 
 // Probe verdicts (claude-fleet#1720).
