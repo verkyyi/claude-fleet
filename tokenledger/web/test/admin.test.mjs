@@ -10,6 +10,7 @@ import {
   pct, level, fmtIn, windowsOf, subscriptions, subState, credState, headroom, leaseRows, switchRows,
   addSubCommands, arrived, LABEL_RE, machineCards, joined, countdown, cleanLogin, GH_LOGIN_RE,
   userRows, loginOwners, loginPairs, loginPairText, pairsCell, settingValue, SETTING_GROUPS, AUDIT_KINDS, auditDays, auditWho,
+  poolRows, poolKpis, personLimit,
 } from '../dist/lib/admin.js';
 import { useLocale } from '../dist/lib/i18n.js';
 import { en } from '../dist/lib/i18n/en.js';
@@ -427,4 +428,42 @@ test('a session finds its person by machine and login, not by one mapped name', 
   assert.equal(two('', 'dev'), '');
   // an older hub with no logins: the machine_login map still answers
   assert.equal(loginOwners({ users: [{ login: 'alice', machine_login: 'alice-mac' }] })('h', 'alice-mac'), 'alice');
+});
+
+test('the pool table: one row per pool subscription, room left, soonest reset, who is on it (claude-fleet#3231)', () => {
+  const pool = [
+    { account: 'max-a', label: 'a@example.com', provider: 'claude', owner: 'pool', used_5h_pct: 64, used_7d_pct: 41, resets_5h_at: iso(NOW + 3600000), resets_at: iso(NOW + 3 * 86400000), people: ['verkyyi', '小周'], sessions: 6, state: 'in_use' },
+    { account: 'max-b', label: '', provider: 'claude', owner: 'pool', used_5h_pct: 100, used_7d_pct: 78, resets_5h_at: iso(NOW - 60000), resets_at: iso(NOW + 86400000), people: [], sessions: 0, state: 'limited', limited: '5h' },
+    { account: 'default', label: 'x@example.com', provider: 'codex', owner: 'pool', used_5h_pct: 20, used_7d_pct: 29, people: ['verkyyi'], sessions: 3, state: 'in_use' },
+    { account: 'old', provider: 'claude', owner: 'pool', used_5h_pct: null, used_7d_pct: null, people: [], sessions: 0, state: 'idle' },
+    { account: 'mine', provider: 'claude', owner: 'gh:9', people: [], sessions: 0, state: 'idle' },
+    { account: 'tok', provider: 'github', owner: 'pool', people: [], sessions: 0, state: 'idle' },
+  ];
+  const cards = [
+    { id: 'u-a', label: 'Claude Max · A', cred: { provider: 'claude', account: 'max-a' }, paused: false },
+    { id: 'u-old', label: 'Claude Pro · 旧', cred: { provider: 'claude', account: 'old' }, paused: true },
+  ];
+  const rows = poolRows(pool, cards, NOW);
+  assert.deepEqual(rows.map((r) => r.label), ['Claude Max · A', 'Claude Pro · 旧', 'max-b', 'x@example.com'], 'pool only, by name; a card names it');
+  const a = rows[0];
+  assert.equal(a.id, 'u-a');
+  assert.deepEqual([a.left5, a.left7, a.used5, a.state, a.reset], [36, 59, 64, 'ok', NOW + 3600000]);
+  assert.deepEqual(a.people, ['verkyyi', '小周']);
+  const b = rows.find((r) => r.label === 'max-b');
+  assert.deepEqual([b.state, b.reset, b.id], ['limited', NOW + 86400000, ''], 'a past reset is skipped; no card, no link');
+  assert.equal(rows[1].state, 'paused', 'a paused card wins over the hub state');
+  assert.equal(rows[1].left5, null);
+  assert.equal(rows[3].prov, 'codex');
+  const k = poolKpis(rows);
+  assert.deepEqual([k.subs, k.ok, k.limited, k.claude5, k.codex7, k.sessions, k.people], [4, 2, 1, 18, 71, 9, 2]);
+  assert.equal(k.claudeNext, NOW + 3600000);
+  assert.deepEqual(poolRows(undefined, undefined, NOW), []);
+});
+
+test("a person's limit: none is 不限额, a week budget is left = limit − 7 days, never below 0 (claude-fleet#3231)", () => {
+  assert.equal(personLimit({ week: 5, limit: null }), null);
+  assert.equal(personLimit({ week: 5, limit: {} }), null);
+  assert.deepEqual(personLimit({ week: 5100000, limit: { week: 20000000 } }), { week: 20000000, used: 5100000, left: 14900000, pct: 26, over: false });
+  assert.deepEqual(personLimit({ week: 30, limit: { week: 20, '5h': 5 } }), { week: 20, used: 30, left: 0, pct: 150, over: true });
+  assert.deepEqual(personLimit({ week: 30, limit: { '5h': 5 } }), { h5: 5 });
 });
