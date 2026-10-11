@@ -1913,6 +1913,17 @@ if [ -f "$_nsup" ] && command -v python3 >/dev/null 2>&1; then
     0) pass entry "$eline" ;;
     1) warn entry "$eline — detail: \`fleet-node-supervisor.py status\` (entry line), log /var/log/fleet-node/entry.log; pull again: \`sudo fleet-node-supervisor.py entry pull\`" ;;
   esac
+  # Can the outside reach that port? (issue #3072, EPIC #3067 C6): the node program
+  # reports every 5 minutes, the hub dials each address from outside and counts it
+  # only when the entry's own host key answers. PASS names the reachable ones; WARN
+  # says why not (超时 · 被拒 · 钥匙不符), carrier NAT as 「这台没有公网地址」, and
+  # which port to forward on the router to which LAN address. Entry off, or nobody's
+  # home here (nothing listens) ⇒ no row.
+  pline=$(python3 "$_nsup" entry reach --check 2>/dev/null); prc=$?
+  case "$prc" in
+    0) pass public "$pline" ;;
+    1) warn public "$pline — check again now: \`sudo fleet-node-supervisor.py entry reach\` (result in /var/db/fleet-node/entry/reach.json)" ;;
+  esac
 fi
 # The home machine's standing connections to the other machines (issue #3002,
 # EPIC #2999 C5): one line per link (machine@login · route · age · round trip ·

@@ -589,3 +589,25 @@ BREAK-IT 行 `service-handwritten`。只点名接管过的登录（`logins/<登�
 - BREAK-IT：`entry-password` · `entry-other-login` · `entry-revoked-key` · `entry-self-added-key` · `entry-admin-login` ·
   `entry-keys-tampered` · `entry-hub-down` · `entry-no-command-lands`（`bin/fleet-break-it-entry-selftest.sh`，真 sshd、
   沙箱端口、沙箱状态目录）。
+
+### 外面能不能连上它（EPIC #3067 C6，#3072）
+
+- **每 5 分钟报一次**：整机节点程序（`ccquota agent --machine`）在心跳之外、自己的 goroutine 里跑
+  `fleet-node-supervisor.py entry reach`——一次报不上、路由器不回答，都不耽误一拍心跳。它读入口有没有在听、入口端口的
+  主机公钥、本机的全局 IPv6（不报隧道 / 网桥上的、临时的、废弃的）和私网 IPv4（只用来写「转发到哪个内网地址」），
+  `FLEET_ENTRY_PORTMAP=auto`（默认，machine.env 或环境）时先用 NAT-PMP、不行再用 UPnP 请路由器把入口端口转出去
+  （租期 2 小时，每次报时续上；UPnP 只取应答路由器自己私网地址上的描述）；`off` 不碰路由器。没人以这台为家（没在听）就不请路由器。
+- **入口从外面敲门**：机器 token `POST /v1/node/entry-reach`。公网 IPv4 不由机器说——是入口看到这次报告从哪来
+  （入口前面的 ingress 写进 `X-Forwarded-For` 的那个）；路由器给了映射就用映射的外侧端口。入口对每个地址拨 TCP、
+  读到 `SSH-` 横幅、完成密钥交换看到的主机钥匙**就是**入口端口那把才算可达（不登录、不试钥匙，入口 sshd 不记失败）；
+  只拨公网单播地址（私网、回环、链路本地、100.64/10、文档段一律不拨——报告不能让入口去扫它自己的网络）；同一台一分钟内只敲一次。
+  结果记 `fleet_entry_reach`（地址 · 族 · 端口 · 可达 · 上次成功 · 原因 `timeout` / `refused` / `hostkey` / `not_ssh` / `unreachable`）。
+- **`reachable(machine)`**（hub 的 `EntryReachable`）：可达且 15 分钟内查过的地址，IPv4 在前——C7 的地址记录、C9 的选路只读它；
+  地址只解析、没人应门或应门的是别的机器，一律不在里面。
+- **疑似运营商级 NAT**：路由器外侧地址在 100.64/10 或私网、或与入口看到的出口地址不一致、或经 ingress 看到的来源就在 100.64/10
+  ⇒ 回答里 `no_public: cgnat`，体检直说「这台没有公网地址」。
+- **体检**：`public` 行（`entry reach --check`，读 `<state>/entry/reach.json`，0644，只有地址与原因）：
+  PASS「外面连得上：<地址:端口>（IPv4 / IPv6）」；WARN「外面连不上：<地址> 超时 / 被拒 / 钥匙不符 · 在路由器上把 TCP 22022
+  转发到 <内网地址>:22022」，运营商级 NAT 说「这台没有公网地址」，路由器没肯自动开写原因，超过 20 分钟没新结果写「结果过期」。
+  入口没开、或没人以这台为家 ⇒ 无此行。现在就查：`sudo fleet-node-supervisor.py entry reach`。
+- BREAK-IT：`entry-public-unreachable`（入口那半由 Go 测试对演练里真的入口 sshd 拨号）。

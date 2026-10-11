@@ -128,7 +128,7 @@ func (s *Store) ensureFleetEntry() error {
 	if _, err := s.write.Exec(s.d.ddl(fleetEntrySchema)); err != nil {
 		return fmt.Errorf("create fleet_entry tables: %w", err)
 	}
-	return nil
+	return s.ensureFleetEntryReach()
 }
 
 func parseOptTime(v string) *time.Time {

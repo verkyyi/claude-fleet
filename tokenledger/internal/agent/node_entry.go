@@ -108,3 +108,71 @@ func (ml *machineLink) entryPull(ctx context.Context, v int) (bool, string) {
 	}
 	return false, last
 }
+
+// How the outside could reach the entry port (claude-fleet#3072, EPIC #3067
+// C6): every entryReachEvery the machine runs the daemon's own
+// `fleet-node-supervisor.py entry reach` — its global IPv6 addresses, its
+// router asked to forward the port (NAT-PMP / UPnP, FLEET_ENTRY_PORTMAP),
+// the report POSTed to the hub, which dials each address and answers what
+// the doctor's `public` row reads. Off the beat, in its own goroutine: a
+// router that never answers or a hub that is away never holds a heartbeat up.
+
+// entryReachEvery is how often the machine reports (a var for tests).
+var entryReachEvery = 5 * time.Minute
+
+// entryReachTimeout bounds one report: the router asked, the hub's dials.
+const entryReachTimeout = 2 * time.Minute
+
+type entryReachClock struct {
+	mu      sync.Mutex
+	running bool
+	last    time.Time
+	lastLog string
+}
+
+// reachKick starts a report when the last one is entryReachEvery old and none
+// is running. The beat calls it every tick.
+func (ml *machineLink) reachKick(ctx context.Context) {
+	st := &ml.reach
+	st.mu.Lock()
+	if ml.cfg.EntryCtl == "" || st.running || (!st.last.IsZero() && time.Since(st.last) < entryReachEvery) {
+		st.mu.Unlock()
+		return
+	}
+	st.running, st.last = true, time.Now()
+	st.mu.Unlock()
+	go func() {
+		note := ml.entryReach(ctx)
+		st.mu.Lock()
+		defer st.mu.Unlock()
+		st.running = false
+		if note != st.lastLog {
+			if note != "" {
+				log.Printf("entry reach: %s (again in %s)", note, entryReachEvery)
+			}
+			st.lastLog = note
+		}
+	}()
+}
+
+// entryReach runs `<supervisor> entry reach`: "" when it ran (exit 0, or 3 —
+// the entry is off here), else its last line.
+func (ml *machineLink) entryReach(ctx context.Context) string {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), entryReachTimeout)
+	defer cancel()
+	cmd := entryCommand(ctx, ml.cfg.EntryCtl, "entry", "reach")
+	var out bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &out
+	err := cmd.Run()
+	if err == nil || (cmd.ProcessState != nil && cmd.ProcessState.ExitCode() == 3) {
+		return ""
+	}
+	last := strings.TrimSpace(out.String())
+	if i := strings.LastIndexByte(last, '\n'); i >= 0 {
+		last = last[i+1:]
+	}
+	if last == "" {
+		last = err.Error()
+	}
+	return last
+}

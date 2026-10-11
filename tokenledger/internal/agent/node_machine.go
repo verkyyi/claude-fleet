@@ -104,6 +104,8 @@ type machineLink struct {
 	vers asyncReading[control.Versions]
 	// entry follows the hub's entry_keys version (claude-fleet#3070).
 	entry entryFollow
+	// reach is the entry port's reachability report clock (claude-fleet#3072).
+	reach entryReachClock
 }
 
 // setRefused records (why != "") or clears a login's refused hello.
@@ -334,6 +336,7 @@ func (ml *machineLink) session(ctx context.Context) (bool, error) {
 	if err := beat(); err != nil {
 		return true, err
 	}
+	ml.reachKick(ctx)
 	every := ml.cfg.LiveInterval
 	if every <= 0 {
 		every = DefaultLiveInterval
@@ -352,6 +355,7 @@ func (ml *machineLink) session(ctx context.Context) (bool, error) {
 				return true, err
 			}
 			ml.entryKick(ctx)
+			ml.reachKick(ctx)
 		}
 	}
 }

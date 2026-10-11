@@ -28,6 +28,12 @@
 #                         its argv), a command / sftp / scp / rsync runs as on port 22,
 #                         no command and no terminal is the login shell; each arrival
 #                         is a line in entry.ndjson (the login's and the door's)
+#   entry-public-unreachable  entry_reach + the hub's handleNodeEntryReach (#3072): an
+#                         address that resolves but nothing answers at is never in
+#                         reachable(machine) — the hub half's Go test dials THIS
+#                         drill's real entry sshd (go test, when a toolchain is here)
+#                         and a closed one; the node half reports for real and the
+#                         doctor's `public` row says 连不上 + which port to forward
 #
 # Each prints `PASS <id> <secs>s ≤<cap>s <what came back>` like its parent.
 # No sshd / ssh / ssh-keygen here, or an sshd without PerSourcePenalties
@@ -401,6 +407,86 @@ SH
   sys_same || { edown; return 1; }
   edown
   WHAT="入口不带命令有终端 ⇒ 看台（--resume，第二次带回上次的会话；设备名是钥匙在入口上的名字）；带命令 / sftp / scp / rsync 与 22 端口一样；无命令无终端 ⇒ 登录 shell；每次进门登录处一行、入口 sshd 日志里的那把钥匙一行（logs/entry.ndjson，不含钥匙正文）"
+}
+
+drill_entry_public_unreachable() {
+  CAP=150   # the listener + one report + the hub half's go test
+  local t0 hp hpid gohalf out rc
+  erig reach
+  eapply "$(elist 2 "$ME=k1")" || { WHY="entry apply failed: $(tail -2 "$E/apply.out")"; edown; return 1; }
+  eup
+  until_ok 10 listening || { WHY="the entry sshd never listened"; edown; return 1; }
+  t0=$(now)
+  # The hub half, for real: the handler dials this drill's entry sshd (its own host
+  # key — the only address that counts) and an address that resolves but where
+  # nothing listens; reachable(machine) holds the first alone, and drops it once
+  # the host key no longer matches or the check goes stale.
+  gohalf="hub half: no go toolchain here — the Go gate (tokenledger.yml) runs TestEntryReachUnreachableNotRecorded"
+  grep -q '^func TestEntryReachUnreachableNotRecorded(' "$ROOT/tokenledger/internal/api/fleet_entry_reach_test.go" 2>/dev/null \
+    || { WHY="the hub half's test TestEntryReachUnreachableNotRecorded is gone"; edown; return 1; }
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && FLEET_DRILL_ENTRY="$EPORT $E/db/entry/ssh_host_ed25519_key.pub" \
+          GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run '^TestEntryReachUnreachableNotRecorded$' ./internal/api 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the hub half's Go test did not run"; edown; return 1 ;;
+      0:*) gohalf="hub half: go test against this entry sshd ok" ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
+      *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | grep -v '^20' | head -6 | tr '\n' ' ')"
+         edown; return 1 ;;
+    esac
+  fi
+  # The node half, for real: `entry reach` reads the listener, the host key and the
+  # addresses and posts them; the hub (a stub giving the hub's answer for a home whose
+  # address resolves but where nothing answers) says unreachable, and the doctor says so.
+  hp=$(free_port)
+  python3 - "$hp" "$E/posted.json" <<'PY' &
+import http.server, json, sys
+port, out = int(sys.argv[1]), sys.argv[2]
+class H(http.server.BaseHTTPRequestHandler):
+    def do_POST(self):
+        body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        open(out, "wb").write(body)
+        rep = json.loads(body)
+        ans = json.dumps({"checked_at": "2026-10-10T00:00:00Z", "source": "203.0.114.7", "addrs": [
+            {"addr": "203.0.114.7", "family": "ipv4", "port": rep["port"], "via": "source",
+             "reachable": False, "reason": "timeout"}]}).encode()
+        self.send_response(200); self.send_header("Content-Length", str(len(ans))); self.end_headers()
+        self.wfile.write(ans)
+        H.done = True
+    def log_message(self, *a): pass
+H.done = False
+srv = http.server.HTTPServer(("127.0.0.1", port), H)
+srv.timeout = 60
+while not H.done:
+    srv.handle_request()
+PY
+  hpid=$!; printf '%s\n' "$hpid" >> "$WORK/cred-pids"
+  until_ok 5 python3 -c 'import socket,sys; socket.create_connection(("127.0.0.1", int(sys.argv[1])), 1).close()' "$hp" 2>/dev/null \
+    || { WHY="the stub hub never listened"; edown; return 1; }
+  printf 'CCQUOTA_HUB_URL=http://127.0.0.1:%s\nCCQUOTA_TOKEN=tok-drill\nFLEET_ENTRY_PORTMAP=off\n' "$hp" > "$E/db/machine.env"
+  chmod 600 "$E/db/machine.env"
+  printf 'en0 192.168.1.249/24\nutun4 100.101.2.3/32\n' > "$E/ifaddrs"
+  FLEET_ENTRY_IFADDRS="$E/ifaddrs" python3 "$SUP" entry reach >"$E/reach.out" 2>&1
+  [ $? = 0 ] || { WHY="entry reach: $(cat "$E/reach.out")"; kill "$hpid" 2>/dev/null; edown; return 1; }
+  wait "$hpid" 2>/dev/null
+  python3 - "$E/posted.json" "$EPORT" "$E/db/entry/ssh_host_ed25519_key.pub" <<'PY' || { WHY="the report: $(cat "$E/posted.json")"; edown; return 1; }
+import json, sys
+r = json.load(open(sys.argv[1]))
+key = " ".join(open(sys.argv[3]).read().split()[:2])
+assert r["listening"] is True and r["port"] == int(sys.argv[2]) and r["host_key"] == key, r
+assert r["lan"] == ["192.168.1.249"] and r["v6"] == [] and "portmap" not in r, r
+PY
+  python3 "$SUP" entry reach --check > "$E/check.out"
+  [ $? = 1 ] && grep -q "外面连不上：203.0.114.7:$EPORT 超时" "$E/check.out" \
+    && grep -q "TCP $EPORT 转发到 192.168.1.249:$EPORT" "$E/check.out" \
+    || { WHY="the doctor's public row: $(cat "$E/check.out")"; edown; return 1; }
+  grep -q 'entry reach --check' "$BIN/fleet-doctor.sh" || { WHY="fleet-doctor.sh has no public row"; edown; return 1; }
+  etry k1 || { WHY="the entry stopped taking its key after a reach check: $(cat "$E/ssh.err")"; edown; return 1; }
+  SECS=$(since "$t0")
+  sys_same || { edown; return 1; }
+  edown
+  WHAT="地址可解析但没人应、或应的是别的钥匙：不进 reachable（只剩真入口 sshd 那一个）；体检 public 行 WARN「外面连不上：… 超时 · 在路由器上把 TCP 端口转发到 192.168.1.249」；入口照常进；$gohalf"
 }
 
 cred_run_drills "$0"

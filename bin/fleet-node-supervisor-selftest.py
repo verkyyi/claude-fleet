@@ -54,6 +54,12 @@ FLEET_NODE_* seams; nothing touches /Library, /var or a real login.
   R  the entry port (#3070): off adds nothing (no child, no status line, no
      directory); the switch from the environment or machine.env; only a plain
      public key becomes a keys-file line; the config is 共同约定 2 line for line
+  S  can the outside reach the entry port (#3072): `entry reach` posts the port, its
+     host key, the global IPv6 (never a tunnel's, a temporary one) and the router's
+     answer to the hub, writes reach.json 0644; the doctor's `public` row says
+     连得上 / 连不上 + why (carrier NAT, the port to forward to which LAN address); a
+     router that never answers or refuses costs seconds, never the report; the hub
+     away keeps the last verdict; off / nobody's home = no row
 """
 import importlib.util
 import json
@@ -2255,6 +2261,181 @@ class R_Entry(Sandbox):
         ids = [d["id"] for d in out]
         self.assertEqual(len(set(ids)), 4, "each line its own id (its byte offset)")
         self.assertEqual(ids[0], str(100 + len(text.splitlines(True)[0])))
+
+
+class S_EntryReach(Sandbox):
+    """Can the outside reach the entry port (#3072, EPIC #3067 C6)."""
+
+    def setUp(self):
+        super(S_EntryReach, self).setUp()
+        import http.server
+        import socketserver
+        import threading
+        for k in list(self.env):
+            if k.startswith("FLEET_ENTRY"):
+                del self.env[k]
+        db = os.path.join(self.d, "db")
+        os.makedirs(os.path.join(db, "entry"))
+        self.posts, self.answer = [], {"code": 200, "body": {}}
+        t = self
+
+        class Hub(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                n = int(self.headers.get("Content-Length") or 0)
+                t.posts.append({"path": self.path, "auth": self.headers.get("Authorization"),
+                                "body": json.loads(self.rfile.read(n).decode())})
+                b = json.dumps(t.answer["body"]).encode()
+                self.send_response(t.answer["code"])
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(b)))
+                self.end_headers()
+                self.wfile.write(b)
+
+            def log_message(self, *a):
+                pass
+        self.hub = socketserver.TCPServer(("127.0.0.1", 0), Hub)
+        threading.Thread(target=self.hub.serve_forever, daemon=True).start()
+        self.hub_port = self.hub.server_address[1]
+        self.write_env()
+        with open(os.path.join(db, "entry", "ssh_host_ed25519_key.pub"), "w") as f:
+            f.write("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk root@mini2\n")
+        fns.write_json(os.path.join(db, "entry", "state.json"), {"on": True, "allow": ["verky"], "version": 3})
+        self.sshd = subprocess.Popen(["/bin/sleep", "300"])     # stands in for the entry sshd
+        self.procs.append(self.sshd)
+        fns.write_json(os.path.join(db, "state.json"), {"children": {"entry": {"pid": self.sshd.pid}}})
+        ifs = os.path.join(self.d, "ifaddrs")
+        with open(ifs, "w") as f:
+            f.write("en0 192.168.1.249/24\nen0 2408:8207:1:2::9/64 autoconf secured\n"
+                    "en0 2408:8207:1:2:abcd::1/64 autoconf temporary\nen0 fe80::1/64\n"
+                    "utun3 100.101.1.2/32\nutun3 fd7a:115c::1/48\nlo0 127.0.0.1/8\n")
+        # a router that answers NAT-PMP from 127.0.0.1
+        import socket
+        import struct
+        self.router = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.router.bind(("127.0.0.1", 0))
+        self.router_ext = "100.77.0.3"
+
+        def serve():
+            while True:
+                try:
+                    data, src = self.router.recvfrom(64)
+                except OSError:
+                    return
+                if data[:2] == b"\x00\x00":
+                    self.router.sendto(struct.pack("!BBHI", 0, 128, 0, 1) + socket.inet_aton(self.router_ext), src)
+                elif len(data) >= 12 and data[1] == 2:
+                    ip_ = struct.unpack("!H", data[4:6])[0]
+                    self.router.sendto(struct.pack("!BBHIHHI", 0, 130, 0, 1, ip_, ip_, 7200), src)
+        threading.Thread(target=serve, daemon=True).start()
+        self.env.update(FLEET_ENTRY_IFADDRS=ifs, FLEET_ENTRY_GATEWAY="127.0.0.1",
+                        FLEET_ENTRY_NATPMP_PORT=str(self.router.getsockname()[1]), FLEET_ENTRY_SSDP="off")
+
+    def tearDown(self):
+        self.hub.shutdown()
+        self.hub.server_close()
+        self.router.close()
+        super(S_EntryReach, self).tearDown()
+
+    def write_env(self, extra=""):
+        with open(os.path.join(self.d, "db", "machine.env"), "w") as f:
+            f.write("CCQUOTA_HUB_URL=http://127.0.0.1:%d\nCCQUOTA_TOKEN=tok-m\nFLEET_ENTRY=1\n%s"
+                    % (self.hub_port, extra))
+
+    def reach_json(self):
+        return fns.read_json(os.path.join(self.d, "db", "entry", "reach.json"), None)
+
+    def test_unreachable_says_why_and_where_to_forward(self):
+        self.answer["body"] = {"checked_at": "2026-10-10T00:00:00Z", "source": "100.77.0.3", "no_public": "cgnat",
+                               "addrs": [{"addr": "2408:8207:1:2::9", "family": "ipv6", "port": 22022, "via": "ipv6",
+                                          "reachable": False, "reason": "timeout"}]}
+        r = self.run_sup("entry", "reach")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(len(self.posts), 1)
+        p = self.posts[0]
+        self.assertEqual(p["path"], "/v1/node/entry-reach")
+        self.assertEqual(p["auth"], "Bearer tok-m")
+        b = p["body"]
+        self.assertEqual((b["port"], b["listening"]), (22022, True))
+        self.assertTrue(b["host_key"].startswith("ssh-ed25519 AAAA") and "root@" not in b["host_key"], b["host_key"])
+        self.assertEqual(b["v6"], ["2408:8207:1:2::9"], "a tunnel's, a temporary or a link-local IPv6 was reported")
+        self.assertEqual(b["lan"], ["192.168.1.249"])
+        self.assertEqual(b["portmap"], {"method": "natpmp", "external_ip": "100.77.0.3", "external_port": 22022})
+        f = os.path.join(self.d, "db", "entry", "reach.json")
+        self.assertEqual(os.stat(f).st_mode & 0o777, 0o644)
+        with open(f) as fh:
+            self.assertNotIn("tok-m", fh.read())
+        c = self.run_sup("entry", "reach", "--check")
+        self.assertEqual(c.returncode, 1, c.stdout)
+        for w in ("外面连不上", "[2408:8207:1:2::9]:22022 超时", "这台没有公网地址", "100.77.0.3",
+                  "TCP 22022 转发到 192.168.1.249:22022"):
+            self.assertIn(w, c.stdout)
+
+    def test_reachable_passes(self):
+        self.answer["body"] = {"checked_at": "2026-10-10T00:00:00Z", "source": "203.0.114.7",
+                               "addrs": [{"addr": "203.0.114.7", "family": "ipv4", "port": 22022, "via": "source",
+                                          "reachable": True},
+                                         {"addr": "2408:8207:1:2::9", "family": "ipv6", "port": 22022,
+                                          "via": "ipv6", "reachable": False, "reason": "hostkey"}]}
+        self.router_ext = "203.0.114.7"
+        self.assertEqual(self.run_sup("entry", "reach").returncode, 0)
+        c = self.run_sup("entry", "reach", "--check")
+        self.assertEqual(c.returncode, 0, c.stdout)
+        for w in ("外面连得上：203.0.114.7:22022（IPv4）", "连不上：[2408:8207:1:2::9]:22022 钥匙不符",
+                  "路由器已开端口（NATPMP → 22022）"):
+            self.assertIn(w, c.stdout)
+
+    def test_router_silent_or_refusing_never_stops_the_report(self):
+        self.router.close()             # nothing answers NAT-PMP any more
+        self.answer["body"] = {"checked_at": "x", "addrs": []}
+        t0 = time.time()
+        r = self.run_sup("entry", "reach")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertLess(time.time() - t0, 10, "a silent router held the report")
+        self.assertEqual(len(self.posts), 1, "the report was not sent")
+        pm = self.posts[0]["body"]["portmap"]
+        self.assertTrue(pm.get("error") and "external_ip" not in pm, pm)
+        c = self.run_sup("entry", "reach", "--check")
+        self.assertEqual(c.returncode, 1)
+        self.assertIn("路由器没自动开端口", c.stdout)
+
+    def test_hub_away_keeps_the_last_verdict(self):
+        self.answer["body"] = {"checked_at": "x", "addrs": [{"addr": "203.0.114.7", "family": "ipv4",
+                                                             "port": 22022, "reachable": True}]}
+        self.assertEqual(self.run_sup("entry", "reach").returncode, 0)
+        self.answer["code"] = 503
+        r = self.run_sup("entry", "reach")
+        self.assertEqual(r.returncode, 1)
+        j = self.reach_json()
+        self.assertTrue(j["error"].startswith("the hub: 503"), j)
+        self.assertEqual(j["verdict"]["addrs"][0]["addr"], "203.0.114.7")
+        c = self.run_sup("entry", "reach", "--check")
+        self.assertEqual(c.returncode, 0, c.stdout)
+        self.assertIn("这次没报上：the hub: 503", c.stdout)
+        # twenty minutes on with no new answer: stale is a WARN
+        j["verdict_at"] = time.time() - 1300
+        fns.write_json(os.path.join(self.d, "db", "entry", "reach.json"), j)
+        c = self.run_sup("entry", "reach", "--check")
+        self.assertEqual(c.returncode, 1)
+        self.assertIn("结果过期", c.stdout)
+
+    def test_portmap_off_asks_no_router(self):
+        self.write_env("FLEET_ENTRY_PORTMAP=off\n")
+        self.answer["body"] = {"checked_at": "x", "addrs": []}
+        self.assertEqual(self.run_sup("entry", "reach").returncode, 0)
+        self.assertNotIn("portmap", self.posts[0]["body"])
+
+    def test_off_or_nobody_home_is_no_row(self):
+        fns.write_json(os.path.join(self.d, "db", "entry", "state.json"), {"on": True, "allow": []})
+        self.answer["body"] = {"checked_at": "x", "addrs": []}
+        self.assertEqual(self.run_sup("entry", "reach").returncode, 0)
+        b = self.posts[0]["body"]
+        self.assertFalse(b["listening"])
+        self.assertNotIn("portmap", b, "nothing listens, yet the router was asked to forward")
+        self.assertEqual(self.run_sup("entry", "reach", "--check").returncode, 2)
+        with open(os.path.join(self.d, "db", "machine.env"), "w") as f:
+            f.write("CCQUOTA_TOKEN=t\n")
+        self.assertEqual(self.run_sup("entry", "reach").returncode, 3)
+        self.assertEqual(self.run_sup("entry", "reach", "--check").returncode, 2)
 
 
 if __name__ == "__main__":
