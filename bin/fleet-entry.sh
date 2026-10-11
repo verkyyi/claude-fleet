@@ -27,6 +27,12 @@
 # AcceptEnv); arriving with none — or a non-UTF-8 one — every path gets a UTF-8
 # one before it is dispatched, or tmux takes the terminal for ASCII and the 看台
 # draws Chinese as `_`. Port 22 gets the same from the system's AcceptEnv.
+# What the client brought is kept FIRST (issue #3326, EPIC #3178): a filled-in
+# locale is the door's, not the person's — `FLEET_CLIENT_LANG` = LC_ALL >
+# LC_MESSAGES > LANG as they arrived, empty for none / C / POSIX (no language
+# said: the hub's preference decides). The 看台 records it as its own `@view_lang`
+# (exported, so a viewer older than `attach --thin --lang` still comes up), each
+# client its own; entry.ndjson's `client_lang`.
 #
 # Each arrival is ONE line in $FLEET_CONF_DIR/logs/entry.ndjson — time, login,
 # key fp, source, where it went (view · exec · sftp · shell), never the command's
@@ -38,6 +44,15 @@ SH="${SHELL:-/bin/sh}"
 CMD="${SSH_ORIGINAL_COMMAND-}"
 C="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"
 SRC="${SSH_CONNECTION%% *}"
+
+# the client's own language, before entry_locale fills anything in
+client_lang() {
+  local v="${LC_ALL:-${LC_MESSAGES:-${LANG:-}}}"
+  case "$v" in C|C.*|POSIX|POSIX.*|*[!A-Za-z0-9._@-]*) v='' ;; esac
+  printf '%s' "$v"
+}
+FLEET_CLIENT_LANG="$(client_lang)"
+export FLEET_CLIENT_LANG
 
 # a UTF-8 locale unless the client brought one (LC_ALL > LC_CTYPE > LANG, as setlocale reads them)
 entry_locale() {
@@ -65,8 +80,8 @@ FP="$(entry_fp)"
 
 entry_log() {   # <how>
   mkdir -p "$C/logs" 2>/dev/null || return 0
-  printf '{"ts":%s,"login":"%s","fp":"%s","src":"%s","how":"%s"}\n' \
-    "$(date +%s)" "$(id -un 2>/dev/null)" "$FP" "$SRC" "$1" >> "$C/logs/entry.ndjson" 2>/dev/null || :
+  printf '{"ts":%s,"login":"%s","fp":"%s","src":"%s","how":"%s","client_lang":"%s"}\n' \
+    "$(date +%s)" "$(id -un 2>/dev/null)" "$FP" "$SRC" "$1" "$FLEET_CLIENT_LANG" >> "$C/logs/entry.ndjson" 2>/dev/null || :
 }
 
 login_shell() {

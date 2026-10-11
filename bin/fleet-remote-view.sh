@@ -45,7 +45,7 @@
 #                           A registered client attaches to a VIEW SESSION of its
 #                           own (issue #1489, below), a plain one to the fleet's.
 #   attach --thin --view <id> [--want <worker_id>|--resume] --device <b64>
-#          --route <name> --token <nonce>   (ON <node>, the thin client's home —
+#          --route <name> --token <nonce> [--lang <locale>]   (ON <node>, the thin client's home —
 #                           issue #2763, EPIC #2999 C1) — the client's 看台: a view
 #                           session that wears the top line itself and outlives its
 #                           client for FLEET_VIEW_KEEP_SECS; see rv_attach_thin.
@@ -700,7 +700,7 @@ rv_within() {
 
 # --- the thin client's 看台 (issue #2763, EPIC #2999 C1, 共同约定 6) ---------------
 # `attach --thin --view <id> [--want <worker_id>|--resume] --device <b64 json>
-#  --route <name> --token <nonce>` — what the thin client (C6) runs on its home
+#  --route <name> --token <nonce> [--lang <locale>]` — what the thin client (C6) runs on its home
 # machine. Like a view client it gets a grouped session of its own,
 # `<fleet>@view-<id>`, but the 看台 is the client's whole screen now — it has no
 # tmux of its own — so the session wears the top line itself: `status on`, at the
@@ -807,7 +807,7 @@ rv_thin_dress() {
   return 0
 }
 rv_attach_thin() {
-  local view='' want='' resume='' device='' route='' token='' s w='' g gid='' tty f p fu cur rc kept wfar orchfar
+  local view='' want='' resume='' device='' route='' token='' lang='' setlang='' s w='' g gid='' tty f p fu cur rc kept wfar orchfar
   while [ $# -gt 0 ]; do
     case "$1" in
       --view) view="${2:-}"; shift 2 ;;
@@ -816,12 +816,16 @@ rv_attach_thin() {
       --device) device="${2:-}"; shift 2 ;;
       --route) route="${2:-}"; shift 2 ;;
       --token) token="${2:-}"; shift 2 ;;
+      --lang) lang="${2:-}"; setlang=1; shift 2 ;;
       *) note "attach --thin: unknown option $1"; return 2 ;;
     esac
   done
+  # the entry door hands it in its environment (fleet-entry.sh, issue #3326)
+  [ -n "$setlang" ] || [ -z "${FLEET_CLIENT_LANG+x}" ] || { lang=$FLEET_CLIENT_LANG; setlang=1; }
   case "$view" in ''|*[!A-Za-z0-9-]*) note "attach --thin: bad or missing --view"; return 2 ;; esac
   case "$route$token" in *[!A-Za-z0-9._:-]*) note "attach --thin: bad --route / --token"; return 2 ;; esac
   case "$device" in *[!A-Za-z0-9+/=_-]*) note "attach --thin: --device is not base64"; return 2 ;; esac
+  case "$lang" in *[!A-Za-z0-9._@-]*) note "attach --thin: --lang is not a locale name — recorded as none"; lang='' ;; esac
   s=$(fleet_sockets | head -n 1)
   [ -n "$s" ] || { note "no fleet session is live on $(hostname -s)"; return 3; }
   sock=$(fleet_socket "$s")
@@ -865,6 +869,10 @@ rv_attach_thin() {
   fi
   [ -z "$w" ] || T select-window -t "$gid:$w" 2>/dev/null
   rv_thin_dress "$gid" "$view" "$s"
+  # the language this connection's client brought (issue #3326): per 看台, never the
+  # server's environment (started before, `update-environment` has no LANG); only
+  # recorded here — empty = it said none
+  [ -z "$setlang" ] || T set-option -t "$gid" @view_lang "$lang" 2>/dev/null
   # C4: a window per other (machine, login) your sessions are on, made now — off
   # the attach's path — so the first visit to another machine is already warm
   case "$view" in *-via-*) ;; *)

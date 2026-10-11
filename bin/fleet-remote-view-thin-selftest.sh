@@ -28,6 +28,10 @@
 #   E. reap       — past FLEET_VIEW_KEEP_SECS `prune` takes row and session; a
 #                   `--resume` then lands home (no cur= left); `--want` lands on
 #                   the worker it names
+#   G. language   — `--lang <locale>` (or the entry door's FLEET_CLIENT_LANG in the
+#                   environment) is recorded as the 看台's own @view_lang (issue
+#                   #3326); each 看台 its own; a resume re-records it (empty too);
+#                   no word given leaves it alone; a bad name is recorded as none
 #   K. key table  — `key-table fleet-view` only once that table exists (C2)
 #   R. bell       — a 看台 rings only for the window it shows (issue #3090): with the
 #                   node's `bell-action any`, a BEL in another window reaches neither
@@ -46,7 +50,7 @@ export TMPDIR="$WORK/tmp"; mkdir -p "$TMPDIR"
 export FLEET_CONF_DIR="$WORK/conf"; mkdir -p "$FLEET_CONF_DIR/control" "$FLEET_CONF_DIR/fleets/$RS"
 export FLEET_SIDEBAR_HOST=nodebox FLEET_NODE_ALIASES='nodebox=m9'
 export FLEET_UI_LANG=zh   # the line's words are the table's (issue #3324)
-unset TMUX TMUX_PANE CCQUOTA_FLEET FLEET_SESSION FLEET_VIEW_KEEP_SECS
+unset TMUX TMUX_PANE CCQUOTA_FLEET FLEET_SESSION FLEET_VIEW_KEEP_SECS FLEET_CLIENT_LANG
 
 FAIL=0; CHECKS=0
 fail() { FAIL=$((FAIL + 1)); printf 'FAIL: %s\n' "$1" >&2; [ $# -gt 1 ] && printf '      got: %s\n' "$2" >&2; }
@@ -280,6 +284,33 @@ waitfor 5 sh -c "'$REAL_TMUX' -L '$RS' has-session -t '=$(vs dev2):' 2>/dev/null
 waitfor 5 sh -c "[ \"\$('$REAL_TMUX' -L '$RS' display-message -p -t '=$(vs dev2):' '#{window_id}' 2>/dev/null)\" = '$W7' ]"
 eq "E: --want lands on the worker it names" "$W7" "$(vcur dev2)"
 tt kill-window -t "=$TL:thin4"
+
+# ============================================================================
+# G. the client's language, per 看台 (issue #3326)
+# ============================================================================
+vlang() { tn show-options -qv -t "=$(vs "$1"):" @view_lang 2>/dev/null; }
+vlset() { tn show-options -t "=$(vs "$1"):" 2>/dev/null | grep -c '^@view_lang'; }
+term lang1 "--thin --view devl1 --device $DEV --route entry --token tl1 --lang en_US.UTF-8"
+tt new-window -d -t "=$TL:" -n lang2 "env -u TMUX FLEET_CLIENT_LANG=fr_FR.UTF-8 FLEET_CONF_DIR='$FLEET_CONF_DIR' TMPDIR='$TMPDIR' bash '$BIN/fleet-remote-view.sh' attach --thin --view devl2 --device $DEV --route entry --token tl2; sleep 300"
+waitfor 5 sh -c "[ -n \"\$('$REAL_TMUX' -L '$RS' show-options -qv -t '=$(vs devl1):' @view_lang 2>/dev/null)\" ]" || fail "G: no @view_lang on devl1"
+waitfor 5 sh -c "[ -n \"\$('$REAL_TMUX' -L '$RS' show-options -qv -t '=$(vs devl2):' @view_lang 2>/dev/null)\" ]" || fail "G: no @view_lang on devl2"
+eq "G: --lang is the 看台's @view_lang" "en_US.UTF-8" "$(vlang devl1)"
+eq "G: … the entry door's FLEET_CLIENT_LANG, each 看台 its own" "fr_FR.UTF-8" "$(vlang devl2)"
+eq "G: … a session option of the 看台, never the fleet session's" "" "$(tn show-options -qv -t "=$RS:" @view_lang)"
+hasnt "G: … never the server's environment" "$(tn show-environment -g 2>/dev/null)" "fr_FR"
+tt kill-window -t "=$TL:lang1"
+tt new-window -d -t "=$TL:" -n lang1b "env -u TMUX FLEET_CLIENT_LANG= FLEET_CONF_DIR='$FLEET_CONF_DIR' TMPDIR='$TMPDIR' bash '$BIN/fleet-remote-view.sh' attach --thin --view devl1 --resume --device $DEV --route entry --token tl3; sleep 300"
+waitfor 5 sh -c "[ -z \"\$('$REAL_TMUX' -L '$RS' show-options -qv -t '=$(vs devl1):' @view_lang 2>/dev/null)\" ]"
+eq "G: a resume that brought none records none (not the last one's)" "" "$(vlang devl1)"
+eq "G: … recorded as empty, still set" "1" "$(vlset devl1)"
+eq "G: the other 看台 untouched" "fr_FR.UTF-8" "$(vlang devl2)"
+tt kill-window -t "=$TL:lang1b"
+term lang3 "--thin --view devl3 --device $DEV --route lan --token tl4"
+term lang4 "--thin --view devl4 --device $DEV --route lan --token tl5 --lang 'x;y'"
+waitfor 5 sh -c "'$REAL_TMUX' -L '$RS' has-session -t '=$(vs devl4)' 2>/dev/null && [ -s '$FLEET_CONF_DIR/remote-views/devl4' ] && [ -s '$FLEET_CONF_DIR/remote-views/devl3' ]" || fail "G: no 看台 devl3 / devl4"
+eq "G: no word given (a thin client's attach) leaves no @view_lang" "0" "$(vlset devl3)"
+eq "G: a bad name is recorded as none" "" "$(vlang devl4)"
+for w in lang2 lang3 lang4; do tt kill-window -t "=$TL:$w" 2>/dev/null; done
 
 # ============================================================================
 # K. C2's key table, once it exists
