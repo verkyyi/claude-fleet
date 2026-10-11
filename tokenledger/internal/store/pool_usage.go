@@ -59,6 +59,14 @@ type PoolUsage struct {
 	At         time.Time `json:"at"`
 	Repo       string    `json:"repo,omitempty"`
 	Issue      int       `json:"issue,omitempty"`
+
+	// Read off the scan only (EventUsageSince, claude-fleet#3406): the
+	// endpoint and login that reported it, the machine it ran on, and the
+	// fleet key its branch names. Never written to pool_usage.
+	EndpointID string `json:"-"`
+	Login      string `json:"-"`
+	Node       string `json:"-"`
+	Session    string `json:"-"`
 }
 
 // Tokens is what a budget counts: input + cache writes + output.

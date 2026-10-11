@@ -111,7 +111,9 @@ func TestAdminViews_DailyOwnAdminAll(t *testing.T) {
 	if code, _ := rolesGet(t, h, admin, "/v1/usage?by=account"+rng); code != http.StatusForbidden {
 		t.Errorf("admin /v1/usage by account on the daily route = %d; want 403 (subscriptions are the admin area's)", code)
 	}
-	// By person: one row a person, from pool usage (claude-fleet#3228).
+	// By person: one row a person, from the scan filed by endpoint → login
+	// (claude-fleet#3228, #3406): the harness's events, admin 200 on mini,
+	// alice 100 on alicebox.
 	st, now := h.srv.Store, time.Now()
 	adminPID, alicePID := githubPrincipal(ghAdmin.ID), githubPrincipal(ghAlice.ID)
 	ap, err := st.Principal(alicePID)
@@ -123,15 +125,6 @@ func TestAdminViews_DailyOwnAdminAll(t *testing.T) {
 	}
 	if _, err := st.RecordLoginAccount(ap, "alicebox", aliceLogin, "ep_alicebox", "test", now); err != nil {
 		t.Fatal(err)
-	}
-	for _, u := range []store.PoolUsage{
-		{Principal: adminPID, Provider: "claude", In: 150, At: now},
-		{Principal: adminPID, Provider: "claude", Out: 50, At: now},
-		{Principal: alicePID, Provider: "claude", In: 100, At: now},
-	} {
-		if err := st.AddPoolUsage(u); err != nil {
-			t.Fatal(err)
-		}
 	}
 	var ov AdminOverview
 	if code := getJSON(t, h, admin, AdminOverviewPath+"?since=2026-08-31T00:00:00Z", &ov); code != http.StatusOK {
@@ -148,7 +141,7 @@ func TestAdminViews_DailyOwnAdminAll(t *testing.T) {
 		v.Name != ghAdmin.Login || v.Limit != nil {
 		t.Errorf("admin overview %s = %+v; want 1 running session on mini/verkyyi, named %s, 不限额", adminPID, v, ghAdmin.Login)
 	}
-	if ov.Totals.Sessions != 2 || ov.Totals.Running != 2 || ov.Totals.Tokens != 300 || ov.Totals.Machines != 2 {
+	if ov.Totals.Sessions != 2 || ov.Totals.Running != 2 || ov.Totals.Tokens != 300 || ov.Totals.TokensUnattributed != 0 || ov.Totals.Machines != 2 {
 		t.Errorf("admin overview totals = %+v", ov.Totals)
 	}
 	if ov.Pool == nil {

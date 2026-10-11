@@ -1,13 +1,16 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
@@ -54,24 +57,91 @@ func meUsageHarness(t *testing.T) (h *ghHarness, bob, carol, admin *http.Cookie,
 		Name: "fleet", Repo: "o/app", Checkout: "/c", WorkerCount: 3, WorkersJSON: string(w)}}, now); err != nil {
 		t.Fatal(err)
 	}
-	add := func(who fakeGHUser, wid, provider, model string, in, out int64, at time.Time, repo string, issue int) {
+	// What the proxies reported: the budget's rows (pool_usage), and nothing
+	// the page reads — the same requests are in the scan below, so the page
+	// counting both would show each twice (claude-fleet#3406).
+	pool := func(who fakeGHUser, wid, provider, mdl string, in, out int64, at time.Time, repo string, issue int) {
 		t.Helper()
 		if err := st.AddPoolUsage(store.PoolUsage{Principal: githubPrincipal(who.ID), WorkerID: wid, Account: "acct-pool",
-			Provider: provider, Model: model, In: in, Out: out, CacheRead: 999, At: at, Repo: repo, Issue: issue}); err != nil {
+			Provider: provider, Model: mdl, In: in, Out: out, CacheRead: 999, At: at, Repo: repo, Issue: issue}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	add(ghBob, meWIss, "claude", "claude-opus-5-5", 1000, 200, now.Add(-time.Hour), "o/app", 12) // today, a batch member
-	add(ghBob, meWIss, "claude", "claude-haiku-5-5-20260101", 100, 0, now.Add(-2*time.Hour), "o/app", 12)
-	add(ghBob, "", "codex", "gpt-5.4-codex", 500, 0, now.Add(-26*time.Hour), "o/app", 13)        // yesterday
-	add(ghBob, meWOrch, "claude", "claude-opus-5-5", 300, 0, now.Add(-3*time.Hour), "", 0)       // the orchestrator
-	add(ghBob, meWScr, "claude", "claude-sonnet-5-5", 40, 0, now.Add(-4*time.Hour), "", 0)       // a scratch: no task
-	add(ghBob, "", "claude", "claude-opus-5-5", 7000, 0, now.Add(-10*24*time.Hour), "o/app", 12) // last week only
-	add(ghCarol, "", "claude", "claude-opus-5-5", 9999, 0, now.Add(-time.Hour), "o/secret", 99)  // never bob's
+	pool(ghBob, meWIss, "claude", "claude-opus-5-5", 1000, 200, now.Add(-time.Hour), "o/app", 12)
+	pool(ghBob, meWIss, "claude", "claude-haiku-5-5-20260101", 100, 0, now.Add(-2*time.Hour), "o/app", 12)
+	pool(ghBob, "", "codex", "gpt-5.4-codex", 500, 0, now.Add(-26*time.Hour), "o/app", 13)
+	pool(ghBob, meWOrch, "claude", "claude-opus-5-5", 300, 0, now.Add(-3*time.Hour), "", 0)
+	pool(ghBob, meWScr, "claude", "claude-sonnet-5-5", 40, 0, now.Add(-4*time.Hour), "", 0)
+	pool(ghBob, "", "claude", "claude-opus-5-5", 7000, 0, now.Add(-10*24*time.Hour), "o/app", 12)
+	pool(ghCarol, "", "claude", "claude-opus-5-5", 9999, 0, now.Add(-time.Hour), "o/secret", 99)
+
+	// What the page reads: the scan, filed under a person by endpoint → login.
+	bobEP := meEndpoint(t, h, "ep_bob", "macmini")
+	carolEP := meEndpoint(t, h, "ep_carol", "carolbox")
+	bobEP("claude", "bob",
+		meEvent("claude-opus-5-5", 1000, 200, now.Add(-time.Hour), "issue-12", "o/app"), // today, a batch member
+		meEvent("claude-haiku-5-5-20260101", 100, 0, now.Add(-2*time.Hour), "issue-12", "o/app"),
+		meEvent("claude-opus-5-5", 300, 0, now.Add(-3*time.Hour), "", ""),                   // the orchestrator's window: no task
+		meEvent("claude-sonnet-5-5", 40, 0, now.Add(-4*time.Hour), "scratch-7", ""),         // a scratch: no task
+		meEvent("claude-opus-5-5", 7000, 0, now.Add(-10*24*time.Hour), "issue-12", "o/app")) // last week only
+	bobEP("codex", "bob", meEvent("gpt-5.4-codex", 500, 0, now.Add(-26*time.Hour), "issue-13", "o/app"))         // yesterday
+	carolEP("claude", "carol", meEvent("claude-opus-5-5", 9999, 0, now.Add(-time.Hour), "issue-99", "o/secret")) // never bob's
+	for who, l := range map[fakeGHUser][3]string{ghBob: {"macmini", "bob", "ep_bob"}, ghCarol: {"carolbox", "carol", "ep_carol"}} {
+		p, err := st.Principal(githubPrincipal(who.ID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st.RecordLoginAccount(p, l[0], l[1], l[2], "test", now); err != nil {
+			t.Fatal(err)
+		}
+	}
 	_, bob = h.signIn(t, ghBob)
 	_, carol = h.signIn(t, ghCarol)
 	_, admin = h.signIn(t, ghAdmin)
 	return
+}
+
+var meEventSeq int
+
+// meEvent is one scanned turn: cache reads are never counted, so 999 of them
+// rides along to prove it.
+func meEvent(mdl string, in, out int64, at time.Time, branch, repo string) model.UsageEvent {
+	meEventSeq++
+	return model.UsageEvent{MessageUUID: fmt.Sprintf("me-%d", meEventSeq), SessionID: "s-" + branch, TS: at, Model: mdl,
+		InputTokens: in, OutputTokens: out, CacheRead: 999, GitBranch: branch, GitRepo: repo, CWD: "/c/" + branch}
+}
+
+// meEndpoint enrolls endpoint id on host and returns its push: one batch of
+// one source's events, run as osUser, through /v1/ingest as an agent sends it.
+func meEndpoint(t *testing.T, h *ghHarness, id, host string) func(source, osUser string, evs ...model.UsageEvent) {
+	t.Helper()
+	tok, err := MintToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.srv.Store.Enroll(id, host, HashToken(tok)); err != nil {
+		t.Fatal(err)
+	}
+	return func(source, osUser string, evs ...model.UsageEvent) {
+		t.Helper()
+		acct := "acct-" + source + "-" + id
+		for i := range evs {
+			evs[i].AccountUUID, evs[i].EndpointID, evs[i].OSUser, evs[i].Source = acct, id, osUser, source
+		}
+		body, _ := json.Marshal(model.Batch{Identity: model.Identity{AccountUUID: acct, Email: acct + "@example.com",
+			Hostname: host, OS: "darwin", Arch: "arm64", SubscriptionType: "max", OSUser: osUser, Source: source},
+			AccountOrigin: model.OriginLogin, Events: evs})
+		req, _ := http.NewRequest(http.MethodPost, h.http.URL+"/v1/ingest", bytes.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+tok)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("push %s %s: HTTP %d", id, source, resp.StatusCode)
+		}
+	}
 }
 
 func readMeUsage(t *testing.T, h *ghHarness, c *http.Cookie, q string) (MeUsage, string) {
@@ -147,7 +217,7 @@ func TestMeUsage_BySession(t *testing.T) {
 	for _, it := range u.BySession {
 		today += it.Today
 		week += it.Week
-		k := it.WorkerID
+		k := it.Key
 		if it.Kind == workNone {
 			k = workNone
 		}
@@ -156,38 +226,37 @@ func TestMeUsage_BySession(t *testing.T) {
 	if today != u.Today || week != u.Week {
 		t.Errorf("by_session sums to %d / %d; want today %d / week %d: %s", today, week, u.Today, u.Week, raw)
 	}
-	if it := got[meWIss]; it.Key != "issue-12" || it.Today != 1300 || it.Week != 1300 || it.Repo != "o/app" || it.Issue != 12 {
+	// A transcript names no worker: its session is the key its branch names.
+	if it := got["issue-12"]; it.Today != 1300 || it.Week != 1300 || it.Repo != "o/app" || it.Issue != 12 {
 		t.Errorf("the issue worker = %+v; want issue-12, 1300 / 1300 on o/app#12", it)
 	}
-	if it := got[meWScr]; it.Key != "scratch-7" || it.Today != 40 {
+	if it := got["issue-13"]; it.Today != 0 || it.Week != 500 {
+		t.Errorf("yesterday's codex = %+v; want issue-13 at 500 this week", it)
+	}
+	if it := got["scratch-7"]; it.Today != 40 {
 		t.Errorf("the scratch = %+v; want scratch-7 at 40", it)
 	}
-	if it := got[meWOrch]; it.Today != 300 || it.Key == "" {
-		t.Errorf("the orchestrator's window = %+v; want 300 and a name", it)
+	if it := got[workNone]; it.Today != 300 || it.Week != 300 {
+		t.Errorf("no session = %+v; want the branchless 300", it)
 	}
-	if it := got[workNone]; it.Today != 0 || it.Week != 500 {
-		t.Errorf("no session = %+v; want 0 today, yesterday's 500 this week", it)
-	}
-	if len(u.BySession) != 4 || u.BySession[len(u.BySession)-1].Kind != workNone || u.BySession[0].WorkerID != meWIss {
+	if len(u.BySession) != 4 || u.BySession[len(u.BySession)-1].Kind != workNone || u.BySession[0].Key != "issue-12" {
 		t.Errorf("by_session order = %+v; want largest first, none last", u.BySession)
 	}
 	c, raw := readMeUsage(t, h, carol, "")
-	for _, it := range c.BySession {
-		if it.WorkerID != "" || it.Kind != workNone {
-			t.Errorf("carol's by_session names a session: %+v (%s)", it, raw)
-		}
+	if len(c.BySession) != 2 || c.BySession[0].Key != "issue-99" || c.BySession[0].Today != 9999 || c.BySession[1].Kind != workNone {
+		t.Errorf("carol's by_session = %+v; want her issue-99 at 9999, then none", c.BySession)
 	}
-	if len(c.BySession) != 1 || c.BySession[0].Today != 9999 {
-		t.Errorf("carol's by_session = %+v; want only none at 9999", c.BySession)
+	if strings.Contains(raw, "issue-12") || strings.Contains(raw, "scratch-7") {
+		t.Errorf("carol's answer names bob's sessions: %s", raw)
 	}
 }
 
-// since_first is when the hub's first pool row was written, anyone's — a
-// previous window that starts before it was not fully recorded and the page
-// shows no percent off it (claude-fleet#3230). Nothing recorded = absent.
+// since_first is the hour of the scan's oldest row, anyone's — a previous
+// window that starts before it was not fully recorded and the page shows no
+// percent off it (claude-fleet#3230, #3406). Nothing recorded = absent.
 func TestMeUsage_SinceFirst(t *testing.T) {
 	h, bob, carol, _, now := meUsageHarness(t)
-	want := now.Add(-10 * 24 * time.Hour).Truncate(time.Second)
+	want := now.Add(-10 * 24 * time.Hour).Truncate(time.Hour)
 	for _, c := range []*http.Cookie{bob, carol} {
 		if u, raw := readMeUsage(t, h, c, ""); u.SinceFirst == nil || !u.SinceFirst.Equal(want) {
 			t.Errorf("since_first = %v; want %v (the oldest row, anyone's): %s", u.SinceFirst, want, raw)
@@ -209,7 +278,7 @@ func TestMeUsage_OwnOnly(t *testing.T) {
 		t.Errorf("carol reads %s; want her own 9999 and nothing of bob's", raw)
 	}
 	if u, raw := readMeUsage(t, h, admin, ""); u.Total != 0 || u.Week != 0 {
-		t.Errorf("an admin with no pool rows reads %s; want 0", raw)
+		t.Errorf("an admin with no login of theirs reads %s; want 0", raw)
 	}
 }
 
@@ -291,14 +360,16 @@ func TestMeUsage_WhereItWent(t *testing.T) {
 	if it := by["issue:o/app#13"]; it.Tokens != 500 || it.Epic != "" || it.Sessions[0] != "issue-13" {
 		t.Errorf("task #13 = %+v", it)
 	}
-	if it := by["orch:#0"]; it.Tokens != 300 {
-		t.Errorf("the orchestrator's row = %+v; want 300 (%s)", it, raw)
+	// A transcript names no worker, so the orchestrator's window is just a
+	// row on no task: the none row, beside the scratch.
+	if _, ok := by["orch:#0"]; ok {
+		t.Errorf("an orch row off the scan, which names no worker: %s", raw)
 	}
-	if it := by["none:#0"]; it.Tokens != 40 || len(it.Sessions) != 1 || it.Sessions[0] != "scratch-7" {
-		t.Errorf("the none row = %+v; want the scratch's 40", it)
+	if it := by["none:#0"]; it.Tokens != 340 || len(it.Sessions) != 1 || it.Sessions[0] != "scratch-7" || it.Node != "macmini" {
+		t.Errorf("the none row = %+v; want 340 with the scratch named, on macmini", it)
 	}
-	if u.Work.Issue[0].Issue != 12 || u.Work.Issue[len(u.Work.Issue)-2].Kind != workOrch {
-		t.Errorf("order: tasks largest first, then orch, then none: %+v", u.Work.Issue)
+	if u.Work.Issue[0].Issue != 12 || u.Work.Issue[len(u.Work.Issue)-1].Kind != workNone {
+		t.Errorf("order: tasks largest first, then none: %+v", u.Work.Issue)
 	}
 	repo := map[string]int64{}
 	for _, it := range u.Work.Repo {
@@ -364,5 +435,79 @@ func TestModelHumanName(t *testing.T) {
 		if got := modelHumanName(in); got != want {
 			t.Errorf("modelHumanName(%q) = %q; want %q", in, got, want)
 		}
+	}
+}
+
+// claude-fleet#3406: 我的用量 and the overview read the scan, filed under a
+// person by endpoint → login → principal. bob has two logins on two machines
+// and nothing in pool_usage: his week is both machines' sum. A login on his
+// machine that is no one's, and his login NAME on a machine that is not his,
+// are nobody's — counted as unattributed on the overview, in no person's row.
+func TestMeUsage_FromScan_TwoLogins(t *testing.T) {
+	h := newGitHubHarnessWith(t, fullServer, "verkyyi")
+	now := time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)
+	h.srv.budgetNow = func() time.Time { return now }
+	st := h.srv.Store
+	for _, u := range []fakeGHUser{ghBob, ghCarol} {
+		h.addUser(t, u)
+		if _, err := st.AdoptPrincipal(githubPrincipal(u.ID), u.Login, u.Login, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mini, box := meEndpoint(t, h, "ep_mini", "mini"), meEndpoint(t, h, "ep_box", "box")
+	stray, cbox := meEndpoint(t, h, "ep_stray", "stray"), meEndpoint(t, h, "ep_cbox", "cbox")
+	mini("claude", "bob", meEvent("claude-opus-5-5", 100, 10, now.Add(-2*time.Hour), "issue-1", "o/app"),
+		meEvent("claude-opus-5-5", 5, 0, now.Add(-3*24*time.Hour), "", ""))
+	box("codex", "bobby", meEvent("gpt-5.4-codex", 1000, 0, now.Add(-24*time.Hour), "", ""))
+	box("claude", "nobody", meEvent("claude-opus-5-5", 50000, 0, now.Add(-time.Hour), "", ""))
+	stray("claude", "bob", meEvent("claude-opus-5-5", 70000, 0, now.Add(-time.Hour), "", ""))
+	cbox("claude", "carol", meEvent("claude-opus-5-5", 9000, 0, now.Add(-time.Hour), "", ""))
+	for _, a := range []struct {
+		who               fakeGHUser
+		host, login, epID string
+	}{{ghBob, "mini", "bob", "ep_mini"}, {ghBob, "box", "bobby", "ep_box"}, {ghCarol, "cbox", "carol", "ep_cbox"}} {
+		p, err := st.Principal(githubPrincipal(a.who.ID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st.RecordLoginAccount(p, a.host, a.login, a.epID, "test", now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if rows, err := st.PoolUsageFor("", time.Time{}, time.Time{}); err != nil || len(rows) != 0 {
+		t.Fatalf("pool_usage = %v, %v; want empty", rows, err)
+	}
+
+	_, bob := h.signIn(t, ghBob)
+	u, raw := readMeUsage(t, h, bob, "?range=7d")
+	if u.Total != 110+5+1000 || u.Week != 1115 || u.Today != 110 || u.TodayPrev != 1000 {
+		t.Errorf("bob's 7d = total %d week %d today %d / prev %d; want 1115 / 1115 / 110 / 1000: %s",
+			u.Total, u.Week, u.Today, u.TodayPrev, raw)
+	}
+	if d := u.Days[5]; d.Codex != 1000 || d.Claude != 0 {
+		t.Errorf("yesterday = %+v; want box's codex 1000", d)
+	}
+	if u.SinceFirst == nil || !u.SinceFirst.Equal(now.Add(-3*24*time.Hour)) {
+		t.Errorf("since_first = %v; want the scan's oldest hour", u.SinceFirst)
+	}
+	_, carol := h.signIn(t, ghCarol)
+	if c, raw := readMeUsage(t, h, carol, "?range=7d"); c.Total != 9000 {
+		t.Errorf("carol's 7d = %d; want her own 9000: %s", c.Total, raw)
+	}
+
+	_, admin := h.signIn(t, ghAdmin)
+	var ov AdminOverview
+	if code := getJSON(t, h, admin, AdminOverviewPath+"?since=2026-10-01T00:00:00Z", &ov); code != http.StatusOK {
+		t.Fatalf("admin %s = %d", AdminOverviewPath, code)
+	}
+	week := map[string]int64{}
+	for _, p := range ov.People {
+		week[p.Principal] = p.Week
+	}
+	if week[githubPrincipal(ghBob.ID)] != 1115 || week[githubPrincipal(ghCarol.ID)] != 9000 || len(week) != 2 {
+		t.Errorf("overview people = %+v; want bob 1115, carol 9000, no one else", ov.People)
+	}
+	if ov.Totals.Tokens != 1115+9000+50000+70000 || ov.Totals.TokensUnattributed != 120000 {
+		t.Errorf("overview totals = %+v; want 130115 with 120000 unattributed", ov.Totals)
 	}
 }

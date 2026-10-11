@@ -19,14 +19,19 @@ import (
 // gives the viewer what their page draws — their own limit (never the pool's
 // windows: those are an admin's, /v1/me/quota), today and this week against
 // the period before, each day split Claude / Codex, the models by name, and
-// where it went: by task, by repo, by batch. Every number is the viewer's
-// pool_usage rows (C1) and nothing else, so a limit and the page that shows
-// it cannot disagree.
+// where it went: by task, by repo, by batch. Every number but the limit is
+// the transcript scan (usage_events, through usage_hourly) filed under the
+// viewer by endpoint → login → principal (claude-fleet#3406, store
+// EventUsageSince): pool_usage starts empty and misses whatever no proxy saw.
+// The limit alone reads pool_usage — what the proxies hold a person to — so
+// no request is counted twice on the page.
 //
 // Where it went:
-//   - a task is the (repo, issue) the row was frozen under when it was written;
+//   - a task is the (repo, issue) the row was spent in (git_repo + the
+//     issue-N branch);
 //   - a row on no task whose session holds the orchestrator or the steward
-//     (the worker's @fleet_role) is one row, kind "orch";
+//     (the worker's @fleet_role) is one row, kind "orch" — only a row that
+//     names its worker_id can say so, and a transcript names none;
 //   - every other row is the one kind "none" row, which is always there —
 //     so each breakdown sums to the range's total;
 //   - a batch is the task's parent issue (IssueMeta); unknown = not in one.
@@ -64,10 +69,10 @@ type MeUsage struct {
 	// sums to Today / Week. Largest week first, "none" last.
 	BySession []MeUsageSession `json:"by_session"`
 
-	// SinceFirst is when the hub recorded its first pool row (anyone's): a
+	// SinceFirst is the hour of the scan's oldest surviving row (anyone's): a
 	// previous window starting before it was not fully recorded, so the page
-	// says so instead of a percent off a near-empty base (claude-fleet#3230).
-	// Absent = nothing recorded yet.
+	// says so instead of a percent off a near-empty base (claude-fleet#3230,
+	// #3406). Absent = nothing recorded yet.
 	SinceFirst *time.Time `json:"since_first,omitempty"`
 }
 
@@ -185,7 +190,7 @@ func (s *Server) meUsage(ctx context.Context, principal, rng string, now time.Ti
 			}
 		}
 		var err error
-		if rows, err = s.Store.PoolUsageFor(principal, from, time.Time{}); err != nil {
+		if rows, err = s.personEventUsage(principal, from); err != nil {
 			return out, err
 		}
 		if out.Limit, err = s.meUsageLimit(principal, now); err != nil {
@@ -195,7 +200,7 @@ func (s *Server) meUsage(ctx context.Context, principal, rng string, now time.Ti
 		out.Limit = MeUsageLimit{}
 	}
 
-	if first, ok, err := s.Store.PoolUsageFirst(); err != nil {
+	if first, ok, err := s.Store.EventUsageFirst(); err != nil {
 		return out, err
 	} else if ok {
 		out.SinceFirst = &first
@@ -238,6 +243,25 @@ func (s *Server) meUsage(ctx context.Context, principal, rng string, now time.Ti
 	return out, nil
 }
 
+// personEventUsage is principal's scan rows from `from` on: every row an
+// (endpoint, login) of theirs reported (loginPairsOf → OwnerOf, the cut the
+// daily pages use). No login of theirs = nothing, never everyone's.
+func (s *Server) personEventUsage(principal string, from time.Time) ([]store.PoolUsage, error) {
+	pairs, err := s.loginPairsOf(principal)
+	if err != nil {
+		return nil, err
+	}
+	owner, err := s.Store.OwnerOf(pairs)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.Store.EventUsageSince(owner, from)
+	for i := range rows {
+		rows[i].Principal = principal
+	}
+	return rows, err
+}
+
 // meUsageSessions sums rows by session: today (since this UTC midnight) and
 // this week (since weekCut), as MeUsage.Today and .Week count them. A session
 // with nothing in the week is left out; the "none" item is always there.
@@ -251,10 +275,16 @@ func (s *Server) meUsageSessions(rows []store.PoolUsage, today, weekCut time.Tim
 			continue
 		}
 		it := none
-		if u.WorkerID != "" {
-			if it = by[u.WorkerID]; it == nil {
+		if k := u.WorkerID; k != "" || u.Session != "" {
+			if k == "" {
+				k = "key\x01" + u.Node + "\x01" + u.Session // a transcript's: its branch names it
+			}
+			if it = by[k]; it == nil {
 				it = &MeUsageSession{WorkerID: u.WorkerID, Key: sess[u.WorkerID].key}
-				by[u.WorkerID] = it
+				if it.Key == "" {
+					it.Key = u.Session
+				}
+				by[k] = it
 			}
 			if it.Repo == "" && u.Repo != "" && u.Issue > 0 {
 				it.Repo, it.Issue = u.Repo, u.Issue
@@ -273,7 +303,7 @@ func (s *Server) meUsageSessions(rows []store.PoolUsage, today, weekCut time.Tim
 		if it.Key == "" && it.Issue > 0 {
 			it.Key = fmt.Sprintf("issue-%d", it.Issue)
 		}
-		if it.Key == "" {
+		if it.Key == "" && it.WorkerID != "" {
 			if _, k, err := fleetid.ParseWorkerID(it.WorkerID); err == nil {
 				it.Key = k
 			}
@@ -284,7 +314,10 @@ func (s *Server) meUsageSessions(rows []store.PoolUsage, today, weekCut time.Tim
 		if out[i].Week != out[j].Week {
 			return out[i].Week > out[j].Week
 		}
-		return out[i].WorkerID < out[j].WorkerID
+		if out[i].WorkerID != out[j].WorkerID {
+			return out[i].WorkerID < out[j].WorkerID
+		}
+		return out[i].Key < out[j].Key
 	})
 	return append(out, *none)
 }
@@ -479,6 +512,12 @@ func (s *Server) meUsageWork(ctx context.Context, rows []store.PoolUsage) MeUsag
 	get(workNone, MeUsageItem{Kind: workNone})
 	for _, u := range rows {
 		n, se := u.Tokens(), sess[u.WorkerID]
+		if se.key == "" {
+			se.key = u.Session
+		}
+		if se.node == "" {
+			se.node, se.login = u.Node, u.Login
+		}
 		var a *acc
 		switch {
 		case u.Repo != "" && u.Issue > 0:
