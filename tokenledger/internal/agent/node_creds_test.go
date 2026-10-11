@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -10,6 +11,7 @@ import (
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/codex"
 	"io"
 	"io/fs"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -417,5 +419,30 @@ func TestCredRefusedRetryNoPrincipal(t *testing.T) {
 	}
 	if got := credRefusedRetry("revoked", 0); got != credRefusedWait {
 		t.Errorf("revoked: wait %v, want %v", got, credRefusedWait)
+	}
+}
+
+// claude-fleet#3440: a 200 lease with no subscription said nothing on the
+// node — the count is logged (never a token), once per change.
+func TestCredSummaryCountsAndLogsOnChange(t *testing.T) {
+	if got := credSummary(map[string]int{"claude": 2, "github": 1}, 0, 0); got != "leased claude=2 codex=0 github=1" {
+		t.Fatalf("summary: %q", got)
+	}
+	none := credSummary(map[string]int{}, 1, 3)
+	if !strings.HasPrefix(none, "leased claude=0 codex=0 github=0 failed=1 withdrawn=3") || !strings.Contains(none, "not ready") {
+		t.Fatalf("no-subscription summary: %q", none)
+	}
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+	a := &Agent{}
+	a.logCredSummary(none)
+	a.logCredSummary(none)
+	if n := strings.Count(buf.String(), "credentials: leased"); n != 1 {
+		t.Fatalf("logged %d times, want once:\n%s", n, buf.String())
+	}
+	a.logCredSummary("leased claude=1 codex=0 github=0")
+	if n := strings.Count(buf.String(), "credentials: leased"); n != 2 {
+		t.Fatalf("a change is logged again:\n%s", buf.String())
 	}
 }

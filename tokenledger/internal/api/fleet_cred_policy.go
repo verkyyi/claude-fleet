@@ -248,7 +248,39 @@ func (s *Server) credPolicyFor(endpointID, principal string) (credPolicy, error)
 	if endpointID != "" {
 		machine = s.policyMachine(endpointID)
 	}
-	return credPolicyOf(settings, machine, principal), nil
+	pol := credPolicyOf(settings, machine, principal)
+	if err := s.drillUserAllow(settings, &pol); err != nil {
+		return credPolicy{}, err
+	}
+	return pol, nil
+}
+
+// drillUserAllow gives a drill person (claude-fleet#2010) with no list of its
+// own its CREATOR's person allowance (claude-fleet#3440): its ID is minted
+// fresh for every drill, so no operator can list it ahead of time, and in
+// strict mode «no list» denied every subscription — a 200 lease with no
+// account, the new login «not ready: creds». It never gets more than the admin
+// who minted it; one minted with the operator's own token (created_by
+// "operator") is the operator's stand-in and reads as all. The machine's list
+// still applies. A list written for the drill itself wins.
+func (s *Server) drillUserAllow(settings map[string]string, p *credPolicy) error {
+	if p.Principal == "" || !p.User.Set || p.User.All {
+		return nil
+	}
+	if _, own := settings[credUserKey(p.Principal)]; own {
+		return nil
+	}
+	d, err := s.Store.Drill(p.Principal)
+	if err != nil || d == nil {
+		return err
+	}
+	switch c := d.CreatedBy; {
+	case c == "operator":
+		p.User = credAllow{Set: true, All: true}
+	case c != "" && !s.Store.IsDrill(c):
+		p.User = credAllowOf(settings, credUserKey(c))
+	}
+	return nil
 }
 
 // credVerdict judges one vault row: its subscription ID ("" when unrestricted
@@ -387,6 +419,10 @@ func (s *Server) credPolicyGet(w http.ResponseWriter, r *http.Request) {
 	byEndpoint := q.Get("endpoint_id") != ""
 	if machine != "" || principal != "" || byEndpoint {
 		pol := credPolicyOf(settings, strings.ToLower(firstLabel(machine)), principal)
+		if err := s.drillUserAllow(settings, &pol); err != nil {
+			httpError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 		if byEndpoint && principal == "" {
 			pol.User = credAllow{Set: true, Bad: "no active owner"}
 		}

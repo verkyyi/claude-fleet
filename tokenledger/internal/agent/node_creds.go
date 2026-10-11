@@ -265,8 +265,11 @@ func (a *Agent) credCycle(ctx context.Context) (time.Duration, error) {
 	now := time.Now()
 	wait := credMaxWait
 	claude := 0
+	written := map[string]int{}
+	failed := 0
 	for _, c := range lease.Credentials {
 		if c.Error != "" || c.Access == nil {
+			failed++
 			log.Printf("credentials: hub could not lease %s/%s: %s", c.Provider, c.Account, c.Error)
 			if credMinWait < wait {
 				wait = credMinWait
@@ -288,6 +291,7 @@ func (a *Agent) credCycle(ctx context.Context) (time.Duration, error) {
 			log.Printf("credentials: write %s/%s: %v", c.Provider, c.Account, werr)
 			continue
 		}
+		written[c.Provider]++
 		if c.Provider == "claude" {
 			claude++
 		}
@@ -314,7 +318,33 @@ func (a *Agent) credCycle(ctx context.Context) (time.Duration, error) {
 		wait = credMinWait
 	}
 	a.credVerdict("ok", "", "", claude)
+	a.logCredSummary(credSummary(written, failed, len(lease.Withdrawn)))
 	return wait, nil
+}
+
+// credSummary is one lease's account count — never a token or a label: what
+// this login can now use, and what the hub withheld (claude-fleet#3440).
+func credSummary(written map[string]int, failed, withdrawn int) string {
+	out := fmt.Sprintf("leased claude=%d codex=%d github=%d", written["claude"], written["codex"], written["github"])
+	if failed > 0 {
+		out += fmt.Sprintf(" failed=%d", failed)
+	}
+	if withdrawn > 0 {
+		out += fmt.Sprintf(" withdrawn=%d", withdrawn)
+	}
+	if written["claude"] == 0 && written["codex"] == 0 {
+		out += " — no subscription: this login is not ready for a session (the hub's lease audit says why)"
+	}
+	return out
+}
+
+// logCredSummary logs a lease's account count when it differs from the last.
+func (a *Agent) logCredSummary(line string) {
+	if line == a.credSummary {
+		return
+	}
+	a.credSummary = line
+	log.Printf("credentials: %s", line)
 }
 
 // credVerdict tells the credential proxy how this login's last lease went

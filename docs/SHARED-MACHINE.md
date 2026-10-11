@@ -211,6 +211,11 @@ an administrator reviews and activates the migration. Both grants live on the hu
   behavior only until migration is explicitly activated. A grant
   never grants anything the existing gates refuse (another person's own
   subscription, a revoked machine or person).
+- **A drill person** (`drill-<hex>`, minted fresh per drill, so nobody can
+  list it ahead) with no list of its own uses its **creator's** person list —
+  never more than the admin who minted it; minted with the operator's own token
+  = all. The machine's list still applies; a list written for the drill wins
+  (issue #3440).
 - **Where.** One resolver in the hub: the node lease (a forbidden account is
   answered as `withdrawn`, and the agent removes its copy — on a shared proxy
   from that login's index only, `fleet-cred-proxy.py unstore`), the pool
