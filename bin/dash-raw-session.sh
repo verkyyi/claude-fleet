@@ -660,7 +660,7 @@ while printf '%s\n' "$existing" | grep -qxF "$name"; do name="$base-$n"; n=$((n 
 # `@norepo 1`: no workspace, $HOME as before. The bridge matches a window by its
 # own @repo + @issue, so a comment on the ticket becomes its next turn. Filed
 # before the window, cold path only — a failed open closes it again (not planned).
-# Off (fleet_desk_repo: FLEET_DESK → FLEET_STEWARD → FLEET_ORCHESTRATOR →
+# Off (fleet_desk_repo: FLEET_DESK →
 # FLEET_HOST, and the desk repo hosted here), --no-desk, a test identity, or no
 # seed ⇒ nothing filed, byte for byte as before.
 DESK_REPO=''; DESK_ID=''; DESK_N=''

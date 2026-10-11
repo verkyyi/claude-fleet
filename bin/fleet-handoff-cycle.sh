@@ -268,25 +268,6 @@ ladder_fail() {
   return 0
 }
 
-# The orchestrator and the steward are reopened by their own `ensure`, which
-# resumes a conversation id it keeps (issue #2937). Record which one this cycle
-# hands off — $FLEET_CONF_DIR/fleets/<sess>/<role>.handoff — so that one is never
-# resumed again (fleet_role_handoff_sid): won race or lost, the next conversation
-# is a new one whose first turn is $PICKUP. The /clear's SessionStart appends
-# `next=<sid>` (handoff-latch-reset-hook.sh).
-ROLE_V="$(TM display-message -p -t "$PANE" '#{@fleet_role}|#{@cc_session_id}|#{?#{session_group},#{session_group},#{session_name}}' 2>/dev/null)"
-ROLE=${ROLE_V%%|*}; ROLE_V=${ROLE_V#*|}; ROLE_SID=${ROLE_V%%|*}; ROLE_SESS=${ROLE_V#*|}
-case "$ROLE" in orchestrator|steward)
-  if [ -n "$ROLE_SID" ] && [ -n "$ROLE_SESS" ]; then
-    _rd="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/fleets/$ROLE_SESS"
-    mkdir -p "$_rd" 2>/dev/null
-    printf 'sid=%s\nstore=%s\npickup=%s\nat=%s\nctx=%s\n' "$ROLE_SID" "$STORE" "$PICKUP" \
-      "$(date +%s 2>/dev/null || echo 0)" "${LADDER_AT%%|*}" > "$_rd/$ROLE.handoff.tmp" 2>/dev/null \
-      && mv -f "$_rd/$ROLE.handoff.tmp" "$_rd/$ROLE.handoff" 2>/dev/null
-    log "role $ROLE: handing off conversation $ROLE_SID (never resumed again)"
-  fi ;;
-esac
-
 # ============================ 2. WAIT-IDLE =====================================
 # The arming turn is still running (this was its last tool call). Wait until the
 # Stop hook flips @claude_state off `working` (turn ended). `done` is the normal

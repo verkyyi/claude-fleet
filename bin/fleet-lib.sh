@@ -64,7 +64,7 @@ FLEET_CONF_DIR="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"
 # global-scoped key into a per-fleet conf (bin/dash-config-edit.sh). Keep this list
 # in step with the @scope=global tags in fleet.conf.example — tmux-config-selftest.sh
 # cross-checks the two so they can't drift.
-_FLEET_GLOBAL_ONLY="FLEET_GLOBAL_MAX_SESSIONS FLEET_ISSUE_BRIDGE_SECRET FLEET_ISSUE_TTL FLEET_GH_TTL FLEET_GH_SHARE FLEET_PR_REFRESH_INTERVAL FLEET_STUCK_WORKING_SECS FLEET_STATE_IDLE_SECS FLEET_DEGENERATE_SECS FLEET_DEGENERATE_LINES FLEET_DEGENERATE_COOLDOWN_SECS FLEET_DEGENERATE_MARK_SECS FLEET_ACCOUNTS FLEET_ACCOUNT_LIMIT_TTL FLEET_ACCOUNT_CEILING FLEET_ACCOUNT_WARN_PCT FLEET_ACCOUNT_PAUSED FLEET_ACCOUNT_QUOTA_TTL FLEET_ACCOUNT_QUOTA_STALE FLEET_QUOTA_RL_TTL FLEET_ACCOUNT_QUOTA_BLIND_STREAK FLEET_QUOTA_STALE_OK FLEET_QUOTA_REFUSED_ALARM FLEET_ACCOUNT_QUOTA_VIA_BANNER_SECS FLEET_ACCOUNT_VERDICT_REFETCH FLEET_ACCOUNT_PICK FLEET_ACCOUNT_PICK_HYST FLEET_ACCOUNT_PACE_LEAD FLEET_ACCOUNT_PACE_HOLD FLEET_ACCOUNT_PACE_MARGIN FLEET_ACCOUNT_PACE_REBALANCE FLEET_ACCOUNT_PACE_COOLDOWN FLEET_ACCOUNT_PACE_SPREAD_WARN FLEET_ACCOUNT_PHASE FLEET_ACCOUNT_PHASE_AUTO FLEET_COLLECT_DEADLINE FLEET_COLLECT_GIT_BUDGET FLEET_COLLECT_GIT_SLOW FLEET_COLLECT_TICK_BUDGET FLEET_COLLECT_QUOTAWATCH_BUDGET FLEET_COLLECT_SOCKETS_BUDGET FLEET_COLLECT_SESSMAP_BUDGET FLEET_COLLECT_ISSUES_BUDGET FLEET_COLLECT_CTX_BUDGET FLEET_COLLECT_USAGE_BUDGET FLEET_COLLECT_SCRAPE_BUDGET FLEET_COLLECT_BANNER_BUDGET FLEET_COLLECT_BANNER_PER_WINDOW_MS FLEET_COLLECT_ESCALATE_BUDGET FLEET_COLLECT_AGENTCFG_BUDGET FLEET_COLLECT_SNAPSHOT_BUDGET FLEET_COLLECT_HUBSESS_BUDGET FLEET_COLLECT_VIEWS_BUDGET FLEET_NODE_ALIASES FLEET_COLLECT_STALE FLEET_COLLECT_KICK FLEET_COLLECT_KICK_COOLDOWN FLEET_COLLECT_KICK_TRACE FLEET_DAEMON_STALE_MULT FLEET_DAEMON_STALE_FLOOR FLEET_DAEMON_KICK FLEET_DAEMON_KICK_COOLDOWN FLEET_DAEMON_KICK_COOLDOWN_MULT FLEET_DAEMON_KICK_COOLDOWN_FLOOR FLEET_DAEMON_KICK_TRACE FLEET_DAEMON_RELOAD_AFTER FLEET_DAEMON_RELOAD_COOLDOWN FLEET_DAEMON_DOMAIN_MIN FLEET_DAEMON_DOMAIN_KICK_WINDOW FLEET_DAEMON_IDLE_AFTER FLEET_POLL_MAX_BACKOFF FLEET_LAUNCHD_PROBE FLEET_LAUNCHD_PROBE_WINDOW FLEET_LAUNCHD_PROBE_INTERVAL FLEET_LAUNCHD_PROBE_TTL FLEET_MODEL_FALLBACK FLEET_MODEL_LIMIT_TTL FLEET_MODEL_CAP_PCT FLEET_CLOSE_ON_EXIT FLEET_NOTIFY_CMD FLEET_ESCALATE_AFTER FLEET_STATUS_CONTAINER FLEET_STATUS_QUOTA_PCT FLEET_STATUS_CACHE_SECS FLEET_DISK_FLOOR_GB FLEET_DISK_WARN_GB FLEET_QUOTA_GATE FLEET_QUOTA_CEILING FLEET_QUOTA_ACCOUNT FLEET_QUOTA_BIN FLEET_RUNAWAY_CPU_PCT FLEET_RUNAWAY_CPU_SECS FLEET_RUNAWAY_CPU_ACTION FLEET_ORPHAN_CPU_PCT FLEET_ORPHAN_CPU_SECS FLEET_ORPHAN_CPU_ACTION FLEET_ORPHAN_EXTRA_RE FLEET_ORPHAN_LISTEN_SECS FLEET_ORPHAN_LISTEN_ACTION FLEET_ORPHAN_LISTEN_EVERY FLEET_SELFTEST_REAP FLEET_DOCTOR_TESTTMUX_LIVE FLEET_DOCTOR_TESTTMUX_DEAD FLEET_LISTEN_EXEMPT_RE FLEET_LOAD_WARN_PER_CORE FLEET_FSEVENTSD_WARN_MB FLEET_DOCTOR_SPOTLIGHT FLEET_CODEX_VERSION_CHECK FLEET_DOCTOR_SLEEP FLEET_DOCTOR_SIRI FLEET_DOCTOR_ICLOUD FLEET_DOCTOR_NETWORK FLEET_DOCTOR_MCP FLEET_LOADGEN_MAX_PROCS FLEET_LOADGEN_MAX_SECS FLEET_LOADGEN_LOAD_PER_CORE FLEET_LOADGEN_CORE_PCT FLEET_USAGE_WARN_PCT FLEET_USAGE_CRIT_PCT FLEET_RATELIMIT_TTL FLEET_WEBHOOK_PORT FLEET_WEBHOOK_SECRET FLEET_OPEN_LAPTOP FLEET_REAP_KEPT_PROCS FLEET_REAP_KEPT_MINAGE FLEET_ROTATE_LEASE_TTL FLEET_HELPER_NO_MCP FLEET_SPAWN_GUARD_MS FLEET_INFLIGHT_TTL FLEET_INSTALL_SYNC FLEET_INSTALL_SYNC_TIMEOUT FLEET_INSTALL_LOOP_MARGIN_SECS FLEET_KEEP_AGENTS_KEY FLEET_INSTALL_FOLLOW_STUCK_SECS FLEET_INSTALL_VERSIONS_KEEP_SECS FLEET_NODE_FOLLOW FLEET_NODE_FOLLOW_RETRY_SECS FLEET_ONBOARD FLEET_GUIDE_WAIT_SECS FLEET_GUIDE_COOLDOWN FLEET_GUIDE_SPEAK_SECS FLEET_GUIDE_MAX_TRIES FLEET_EXIT_CLOSE_SECS FLEET_COLLECT_GUIDE_BUDGET FLEET_SSH_PUBLIC_HOST FLEET_SSH_PUBLIC_PORT FLEET_SSH_PROBE_HOST FLEET_DOCTOR_INGRESS FLEET_INGRESS_TTL FLEET_INGRESS_TIMEOUT FLEET_HEAVY FLEET_HEAVY_SLOTS FLEET_HEAVY_WAIT FLEET_HEAVY_RE FLEET_HEAVY_LIGHT_RE FLEET_MEMGUARD FLEET_MEM_SPIKE_GROW_MB FLEET_MEM_SPIKE_WINDOW FLEET_MEM_SPIKE_ACTION FLEET_MEM_PROC_HARD_PCT FLEET_MEM_EXEMPT_RE FLEET_MEM_ORPHAN_MB FLEET_MEM_ORPHAN_SECS FLEET_MEM_ORPHAN_ACTION FLEET_CRED_PROXY FLEET_CRED_PROXY_IDLE_SECS FLEET_CRED_RELAY_URL FLEET_CRED_CENTRAL_URL FLEET_CRED_BUDGET FLEET_CRED_BUDGET_SECS FLEET_CRED_SEPARATE FLEET_CLAUDE_RSS_WARN_MB FLEET_ADMIT FLEET_ADMIT_MEM_FREE_PCT FLEET_ADMIT_PRESSURE FLEET_ADMIT_LOAD_PER_CORE FLEET_ADMIT_RESERVE_MB FLEET_ADMIT_HYST_MB FLEET_ADMIT_SESSION_MB FLEET_ADMIT_SESSION_MB_MIN FLEET_ADMIT_SESSION_GROWTH FLEET_ADMIT_SETTLE_SECS FLEET_FILES_WARN_PCT FLEET_PTY_WARN_PCT FLEET_MEM_NOTIFY_COOLDOWN FLEET_TRANSCRIPT_KEEP_DAYS FLEET_TRANSCRIPT_HELPER_KEEP_HOURS FLEET_TRANSCRIPT_ARCHIVE FLEET_TRANSCRIPT_ARCHIVE_EVERY FLEET_TRANSCRIPT_ARCHIVE_BUDGET FLEET_BREW_PERMS FLEET_BREW_PERMS_EVERY FLEET_MACHINE_MAX_SESSIONS FLEET_MACHINE_SESSIONS_STALE FLEET_MOD FLEET_STATUS_7501 FLEET_STATUS_REPLAY_DEPTH FLEET_AGENT_CFG FLEET_AGENT_LOCK FLEET_CFG_RESTART FLEET_CFG_RESTART_IDLE FLEET_CFG_RESTART_MAX FLEET_SIDEBAR_WIDTH_MAX FLEET_SIDEBAR_FOLD FLEET_NOTIFY FLEET_NOTIFY_JUMP_SECS FLEET_NOTIFY_DONE FLEET_NOTIFY_QUIET FLEET_CLIENT_PASTE FLEET_KEYS_PARITY FLEET_DASH_ORDER FLEET_COMPOSE FLEET_ORCH_BOOT_SECS FLEET_KEY_PANEL FLEET_KEYS_EXTRA FLEET_KEY_PHONE FLEET_KEYS_PHONE_EXTRA"
+_FLEET_GLOBAL_ONLY="FLEET_GLOBAL_MAX_SESSIONS FLEET_ISSUE_BRIDGE_SECRET FLEET_ISSUE_TTL FLEET_GH_TTL FLEET_GH_SHARE FLEET_PR_REFRESH_INTERVAL FLEET_STUCK_WORKING_SECS FLEET_STATE_IDLE_SECS FLEET_DEGENERATE_SECS FLEET_DEGENERATE_LINES FLEET_DEGENERATE_COOLDOWN_SECS FLEET_DEGENERATE_MARK_SECS FLEET_ACCOUNTS FLEET_ACCOUNT_LIMIT_TTL FLEET_ACCOUNT_CEILING FLEET_ACCOUNT_WARN_PCT FLEET_ACCOUNT_PAUSED FLEET_ACCOUNT_QUOTA_TTL FLEET_ACCOUNT_QUOTA_STALE FLEET_QUOTA_RL_TTL FLEET_ACCOUNT_QUOTA_BLIND_STREAK FLEET_QUOTA_STALE_OK FLEET_QUOTA_REFUSED_ALARM FLEET_ACCOUNT_QUOTA_VIA_BANNER_SECS FLEET_ACCOUNT_VERDICT_REFETCH FLEET_ACCOUNT_PICK FLEET_ACCOUNT_PICK_HYST FLEET_ACCOUNT_PACE_LEAD FLEET_ACCOUNT_PACE_HOLD FLEET_ACCOUNT_PACE_MARGIN FLEET_ACCOUNT_PACE_REBALANCE FLEET_ACCOUNT_PACE_COOLDOWN FLEET_ACCOUNT_PACE_SPREAD_WARN FLEET_ACCOUNT_PHASE FLEET_ACCOUNT_PHASE_AUTO FLEET_COLLECT_DEADLINE FLEET_COLLECT_GIT_BUDGET FLEET_COLLECT_GIT_SLOW FLEET_COLLECT_TICK_BUDGET FLEET_COLLECT_QUOTAWATCH_BUDGET FLEET_COLLECT_SOCKETS_BUDGET FLEET_COLLECT_SESSMAP_BUDGET FLEET_COLLECT_ISSUES_BUDGET FLEET_COLLECT_CTX_BUDGET FLEET_COLLECT_USAGE_BUDGET FLEET_COLLECT_SCRAPE_BUDGET FLEET_COLLECT_BANNER_BUDGET FLEET_COLLECT_BANNER_PER_WINDOW_MS FLEET_COLLECT_ESCALATE_BUDGET FLEET_COLLECT_AGENTCFG_BUDGET FLEET_COLLECT_SNAPSHOT_BUDGET FLEET_COLLECT_HUBSESS_BUDGET FLEET_COLLECT_VIEWS_BUDGET FLEET_NODE_ALIASES FLEET_COLLECT_STALE FLEET_COLLECT_KICK FLEET_COLLECT_KICK_COOLDOWN FLEET_COLLECT_KICK_TRACE FLEET_DAEMON_STALE_MULT FLEET_DAEMON_STALE_FLOOR FLEET_DAEMON_KICK FLEET_DAEMON_KICK_COOLDOWN FLEET_DAEMON_KICK_COOLDOWN_MULT FLEET_DAEMON_KICK_COOLDOWN_FLOOR FLEET_DAEMON_KICK_TRACE FLEET_DAEMON_RELOAD_AFTER FLEET_DAEMON_RELOAD_COOLDOWN FLEET_DAEMON_DOMAIN_MIN FLEET_DAEMON_DOMAIN_KICK_WINDOW FLEET_DAEMON_IDLE_AFTER FLEET_POLL_MAX_BACKOFF FLEET_LAUNCHD_PROBE FLEET_LAUNCHD_PROBE_WINDOW FLEET_LAUNCHD_PROBE_INTERVAL FLEET_LAUNCHD_PROBE_TTL FLEET_MODEL_FALLBACK FLEET_MODEL_LIMIT_TTL FLEET_MODEL_CAP_PCT FLEET_CLOSE_ON_EXIT FLEET_NOTIFY_CMD FLEET_ESCALATE_AFTER FLEET_STATUS_CONTAINER FLEET_STATUS_QUOTA_PCT FLEET_STATUS_CACHE_SECS FLEET_DISK_FLOOR_GB FLEET_DISK_WARN_GB FLEET_QUOTA_GATE FLEET_QUOTA_CEILING FLEET_QUOTA_ACCOUNT FLEET_QUOTA_BIN FLEET_RUNAWAY_CPU_PCT FLEET_RUNAWAY_CPU_SECS FLEET_RUNAWAY_CPU_ACTION FLEET_ORPHAN_CPU_PCT FLEET_ORPHAN_CPU_SECS FLEET_ORPHAN_CPU_ACTION FLEET_ORPHAN_EXTRA_RE FLEET_ORPHAN_LISTEN_SECS FLEET_ORPHAN_LISTEN_ACTION FLEET_ORPHAN_LISTEN_EVERY FLEET_SELFTEST_REAP FLEET_DOCTOR_TESTTMUX_LIVE FLEET_DOCTOR_TESTTMUX_DEAD FLEET_LISTEN_EXEMPT_RE FLEET_LOAD_WARN_PER_CORE FLEET_FSEVENTSD_WARN_MB FLEET_DOCTOR_SPOTLIGHT FLEET_CODEX_VERSION_CHECK FLEET_DOCTOR_SLEEP FLEET_DOCTOR_SIRI FLEET_DOCTOR_ICLOUD FLEET_DOCTOR_NETWORK FLEET_DOCTOR_MCP FLEET_LOADGEN_MAX_PROCS FLEET_LOADGEN_MAX_SECS FLEET_LOADGEN_LOAD_PER_CORE FLEET_LOADGEN_CORE_PCT FLEET_USAGE_WARN_PCT FLEET_USAGE_CRIT_PCT FLEET_RATELIMIT_TTL FLEET_WEBHOOK_PORT FLEET_WEBHOOK_SECRET FLEET_OPEN_LAPTOP FLEET_REAP_KEPT_PROCS FLEET_REAP_KEPT_MINAGE FLEET_ROTATE_LEASE_TTL FLEET_HELPER_NO_MCP FLEET_SPAWN_GUARD_MS FLEET_INFLIGHT_TTL FLEET_INSTALL_SYNC FLEET_INSTALL_SYNC_TIMEOUT FLEET_INSTALL_LOOP_MARGIN_SECS FLEET_KEEP_AGENTS_KEY FLEET_INSTALL_FOLLOW_STUCK_SECS FLEET_INSTALL_VERSIONS_KEEP_SECS FLEET_NODE_FOLLOW FLEET_NODE_FOLLOW_RETRY_SECS FLEET_ONBOARD FLEET_GUIDE_WAIT_SECS FLEET_GUIDE_COOLDOWN FLEET_GUIDE_SPEAK_SECS FLEET_GUIDE_MAX_TRIES FLEET_EXIT_CLOSE_SECS FLEET_COLLECT_GUIDE_BUDGET FLEET_SSH_PUBLIC_HOST FLEET_SSH_PUBLIC_PORT FLEET_SSH_PROBE_HOST FLEET_DOCTOR_INGRESS FLEET_INGRESS_TTL FLEET_INGRESS_TIMEOUT FLEET_HEAVY FLEET_HEAVY_SLOTS FLEET_HEAVY_WAIT FLEET_HEAVY_RE FLEET_HEAVY_LIGHT_RE FLEET_MEMGUARD FLEET_MEM_SPIKE_GROW_MB FLEET_MEM_SPIKE_WINDOW FLEET_MEM_SPIKE_ACTION FLEET_MEM_PROC_HARD_PCT FLEET_MEM_EXEMPT_RE FLEET_MEM_ORPHAN_MB FLEET_MEM_ORPHAN_SECS FLEET_MEM_ORPHAN_ACTION FLEET_CRED_PROXY FLEET_CRED_PROXY_IDLE_SECS FLEET_CRED_RELAY_URL FLEET_CRED_CENTRAL_URL FLEET_CRED_BUDGET FLEET_CRED_BUDGET_SECS FLEET_CRED_SEPARATE FLEET_CLAUDE_RSS_WARN_MB FLEET_ADMIT FLEET_ADMIT_MEM_FREE_PCT FLEET_ADMIT_PRESSURE FLEET_ADMIT_LOAD_PER_CORE FLEET_ADMIT_RESERVE_MB FLEET_ADMIT_HYST_MB FLEET_ADMIT_SESSION_MB FLEET_ADMIT_SESSION_MB_MIN FLEET_ADMIT_SESSION_GROWTH FLEET_ADMIT_SETTLE_SECS FLEET_FILES_WARN_PCT FLEET_PTY_WARN_PCT FLEET_MEM_NOTIFY_COOLDOWN FLEET_TRANSCRIPT_KEEP_DAYS FLEET_TRANSCRIPT_HELPER_KEEP_HOURS FLEET_TRANSCRIPT_ARCHIVE FLEET_TRANSCRIPT_ARCHIVE_EVERY FLEET_TRANSCRIPT_ARCHIVE_BUDGET FLEET_BREW_PERMS FLEET_BREW_PERMS_EVERY FLEET_MACHINE_MAX_SESSIONS FLEET_MACHINE_SESSIONS_STALE FLEET_MOD FLEET_STATUS_7501 FLEET_STATUS_REPLAY_DEPTH FLEET_AGENT_CFG FLEET_AGENT_LOCK FLEET_CFG_RESTART FLEET_CFG_RESTART_IDLE FLEET_CFG_RESTART_MAX FLEET_SIDEBAR_WIDTH_MAX FLEET_SIDEBAR_FOLD FLEET_NOTIFY FLEET_NOTIFY_JUMP_SECS FLEET_NOTIFY_DONE FLEET_NOTIFY_QUIET FLEET_CLIENT_PASTE FLEET_KEYS_PARITY FLEET_DASH_ORDER FLEET_COMPOSE FLEET_KEY_PANEL FLEET_KEYS_EXTRA FLEET_KEY_PHONE FLEET_KEYS_PHONE_EXTRA"
 
 # Source the GLOBAL fleet.conf on load + EXPORT the global-only keys (issue #399).
 # ---------------------------------------------------------------------------------
@@ -7294,14 +7294,14 @@ EOF
 # as for any worker.
 
 # fleet_desk_repo [<sess>] → the desk repo, when the desk is on AND this fleet
-# hosts it; nothing (rc 1) otherwise. On follows FLEET_DESK, else FLEET_STEWARD,
-# else FLEET_ORCHESTRATOR, else FLEET_HOST (EPIC #2668 共同约定 9: off ⇒ byte for
-# byte as before). The repo is FLEET_DESK_REPO (default verkyyi/claude-fleet) —
+# hosts it; nothing (rc 1) otherwise. On follows FLEET_DESK, else FLEET_HOST
+# (the old seat's FLEET_STEWARD / FLEET_ORCHESTRATOR left with it, issue #3118).
+# The repo is FLEET_DESK_REPO (default verkyyi/claude-fleet) —
 # a fleet that does not host it has no desk, never a ticket in a stranger's repo.
 fleet_desk_repo() {
   local r
-  case "${FLEET_DESK:-${FLEET_STEWARD:-${FLEET_ORCHESTRATOR:-${FLEET_HOST:-0}}}}" in
-    1|on|yes|true|count) ;;   # count: the steward counting its baseline (#2670)
+  case "${FLEET_DESK:-${FLEET_HOST:-0}}" in
+    1|on|yes|true) ;;
     *) return 1 ;;
   esac
   r=$(fleet_norm_repo "${FLEET_DESK_REPO:-verkyyi/claude-fleet}")
@@ -9113,109 +9113,12 @@ fleet_cfg_restart_why() {
   return 0
 }
 
-# fleet_role_renew_why <session> <win> — may the orchestrator / steward window
-# <win> be reopened onto the installed fleet version NOW (issue #2733)? Exit 0 =
-# yes. Else exit 1 and ONE word on stdout: gone · unknown · ok (nothing to renew)
-# · codex · state:<s> · recent · handoff · typing · loop-due · bg · tool (renew pending, not
-# a quiet moment). fleet_cfg_restart_why's sibling for the two sessions it never
-# reopens (fleet-migrate.sh skips them: they stay on their machine and come back
-# through their own `ensure`). Pending = fleet_cfg_state stale / renew / broken —
-# the window was launched from an older ~/.claude/fleet than the one installed.
-# A quiet moment, all of: @claude_state done or looping (never needs/blocked: a
-# question pending is the person's) for FLEET_ORCH_RENEW_QUIET (60 s); no client
-# whose current window it is pressed a key in those seconds; its Loop's next round
-# (@loop, else the transcript's) is ≥ FLEET_ORCH_RENEW_LOOP_GAP (120 s) away; no
-# Bash-tool job and no fleet tool call in flight. A Codex window is pending but
-# never reopened here (its recovery page and seed stay, convention 5).
-fleet_role_renew_why() {
-  local sess="${1:-}" win="${2:-}" o ag fp av st ts lp now quiet gap bin sock=''
-  quiet=${FLEET_ORCH_RENEW_QUIET:-60}; gap=${FLEET_ORCH_RENEW_LOOP_GAP:-120}
-  case "$quiet" in ''|*[!0-9]*) quiet=60 ;; esac
-  case "$gap" in ''|*[!0-9]*) gap=120 ;; esac
-  o=$(_fleet_tmux "$sess" display-message -p -t "$win" \
-        '#{@cc_agent}|#{@agent_cfg}|#{@agent_ver}|#{@claude_state}|#{@claude_state_ts}|#{@loop}' 2>/dev/null) \
-    && [ -n "$o" ] || { echo gone; return 1; }
-  ag=${o%%|*}; o=${o#*|}; fp=${o%%|*}; o=${o#*|}; av=${o%%|*}; o=${o#*|}; st=${o%%|*}; o=${o#*|}
-  ts=${o%%|*}; lp=${o#*|}
-  fleet_cfg_expected_load; fleet_cfg_broken_load; fleet_cfg_state "$ag" "$fp" "$av" "$sess" "$win"
-  case "$FCFG_STATE" in stale|renew|broken) ;; *) echo "$FCFG_STATE"; return 1 ;; esac
-  case "$ag" in codex|codex:*) echo codex; return 1 ;; esac
-  case "$st" in done|looping) ;; *) echo "state:${st:-none}"; return 1 ;; esac
-  now=$(date +%s)
-  case "$ts" in ''|*[!0-9]*) ts=0 ;; esac
-  [ $(( now - ts )) -ge "$quiet" ] || { echo recent; return 1; }
-  # A /fleet-handoff cycle is about to /clear it (issue #2937): a renew now resumes
-  # the very conversation being handed off, and the cycle never sees its clear.
-  fleet_handoff_cycle_live "$sess" "$win" && { echo handoff; return 1; }
-  if [ "$quiet" -gt 0 ] && _fleet_tmux "$sess" list-clients -F '#{client_activity} #{window_id}' 2>/dev/null \
-       | awk -v w="$win" -v now="$now" -v ds="$quiet" \
-           '$2 == w && $1 ~ /^[0-9]+$/ && (now - $1) < ds { f = 1 } END { exit !f }'; then
-    echo typing; return 1
-  fi
-  bin="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
-  if [ -f "$bin/fleet_loop_mark.py" ]; then
-    if [ -z "$lp" ]; then
-      # a ScheduleWakeup the hook never saw lives only in the transcript (#2189)
-      [ -n "${TMUX:-}" ] || sock=$(fleet_socket "$sess")
-      python3 "$bin/fleet_loop_mark.py" backfill "$win" ${sock:+--socket-name "$sock"} >/dev/null 2>&1
-      lp=$(_fleet_tmux "$sess" display-message -p -t "$win" '#{@loop}' 2>/dev/null)
-    fi
-    if [ -n "$lp" ] && python3 "$bin/fleet_loop_mark.py" due --value "$lp" --within "$gap" >/dev/null 2>&1; then
-      echo loop-due; return 1
-    fi
-  fi
-  fleet_window_bg_busy "$sess" "$win" 1 && { echo bg; return 1; }
-  fleet_window_tool_busy "$sess" "$win" && { echo tool; return 1; }
-  return 0
-}
-
-# fleet_role_render <role> <claude|codex> [--cap] — a role's launch arguments from
-# its definition, agents/<role>.md (issue #2782): bin/fleet-role.py render --kv,
-# `sha`/`model`/`effort`/`body`/`arg` TAB value. The launcher's old knobs a sourced
-# conf left as shell variables (FLEET_ORCH_* / FLEET_STEWARD_* / FLEET_MODEL —
-# compat-1v) are handed over explicitly; set-but-empty stays a choice.
-fleet_role_render() {
-  local role="${1:-}" agent="${2:-claude}" bin v
-  shift 2 2>/dev/null || shift $#
-  bin="${_FLEET_LIB_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)}"
-  # A subshell exporting the set ones, not an env-array: this lib is sourced by
-  # POSIX sh too (dash parses the whole file — a `x=()` is a syntax error there, #2818).
-  (
-    for v in FLEET_ORCH_MODEL FLEET_ORCH_EFFORT FLEET_ORCH_CODEX_MODEL \
-             FLEET_STEWARD_MODEL FLEET_STEWARD_EFFORT FLEET_STEWARD_CODEX_MODEL \
-             FLEET_MODEL FLEET_MODEL_FALLBACK; do
-      eval "[ -n \"\${$v+x}\" ] && export $v"
-    done
-    exec python3 "$bin/fleet-role.py" render "$role" --agent "$agent" --kv "$@"
-  )
-}
-
-# fleet_role_renew_due <session> <win> — the `ensure` half of #2733: judge <win>
-# with fleet_role_renew_why and keep its pending mark. A pending window carries
-# @renew_since (the epoch it was first seen on an older version; the doctor's
-# `orch` row WARNs past FLEET_ORCH_RESTART_WAIT, 2 h — never a forced switch); a
-# current one has it cleared. Exit 0 = reopen it now (the reason on stdout is
-# empty); exit 1 = not now, the word printed.
-fleet_role_renew_due() {
-  local sess="${1:-}" win="${2:-}" why rc
-  why=$(fleet_role_renew_why "$sess" "$win"); rc=$?
-  case "$why" in
-    gone) ;;
-    ok|unknown) [ -z "$(_fleet_tmux "$sess" show-options -wqv -t "$win" @renew_since 2>/dev/null)" ] \
-                  || _fleet_tmux "$sess" set-window-option -u -t "$win" @renew_since 2>/dev/null ;;
-    *) [ -n "$(_fleet_tmux "$sess" show-options -wqv -t "$win" @renew_since 2>/dev/null)" ] \
-         || _fleet_tmux "$sess" set-window-option -t "$win" @renew_since "$(date +%s)" 2>/dev/null ;;
-  esac
-  [ -n "$why" ] && printf '%s\n' "$why"
-  return "$rc"
-}
-
 # fleet_handoff_cycle_live <session> <win> — is a fleet-handoff-cycle.sh pending on
 # <win> (issue #2937)? The cycle stamps @handoff_cycle <epoch>:<pid> once armed and
 # unsets it on exit; exit 0 = its pid is alive and the stamp younger than the
 # cycle's own hard timeout (+60 s), so a stamp a SIGKILLed cycle left never holds a
-# window forever. Every reopener of a live window asks it first — ensure's renew
-# (fleet_role_renew_why) and the cfg-restart (fleet_cfg_restart_why): a reopen
+# window forever. Every reopener of a live window asks it first — the cfg-restart
+# (fleet_cfg_restart_why): a reopen
 # mid-cycle resumes the conversation being handed off and the /clear never lands.
 fleet_handoff_cycle_live() {
   local sess="${1:-}" win="${2:-}" v ts pid hard
@@ -9228,28 +9131,6 @@ fleet_handoff_cycle_live() {
   case "$hard" in ''|*[!0-9]*) hard=300 ;; esac
   [ $(( $(date +%s) - ts )) -le $(( hard + 60 )) ] || return 1
   kill -0 "$pid" 2>/dev/null
-}
-
-# fleet_role_handoff_sid <state dir> <role> — the conversation the role's last
-# /fleet-handoff handed off (issue #2937): `sid` from $DIR/<role>.handoff, which
-# fleet-handoff-cycle.sh writes when it arms in an orchestrator / steward window.
-# A handed-off conversation is never resumed again — ensure starts a new one with
-# the pickup as its first turn instead (fleet_role_handoff_pickup). rc 1 = none.
-fleet_role_handoff_sid() {
-  local f="${1:-}/${2:-}.handoff" v
-  [ -f "$f" ] || return 1
-  v=$(sed -n 's/^sid=//p' "$f" 2>/dev/null | head -n 1 | LC_ALL=C tr -cd '0-9a-f-')
-  [ -n "$v" ] || return 1
-  printf '%s\n' "$v"
-}
-# fleet_role_handoff_pickup <state dir> <role> — that handoff's pickup command
-# (`/fleet-handoff pickup <doc>`); rc 1 = none recorded.
-fleet_role_handoff_pickup() {
-  local f="${1:-}/${2:-}.handoff" v
-  [ -f "$f" ] || return 1
-  v=$(sed -n 's/^pickup=//p' "$f" 2>/dev/null | head -n 1)
-  [ -n "$v" ] || return 1
-  printf '%s\n' "$v"
 }
 
 # fleet_window_bg_busy <session> <win> [quick] — does <win>'s agent still own a
