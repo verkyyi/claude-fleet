@@ -58,11 +58,13 @@ bin/fleet-host.sh
 # into the full install in place — the install line's 「2 承载」 (#1804).
 bin/fleet-host-install.sh
 # the hub's signed release (#2773): fleet-host-install.sh takes stable from it,
-# `fleet host trust-release-key` is the one way to accept a new signing key;
-# fleet-release-verify.py lets the pinned key vouch for the release's own
-# ccquota when this computer's is too old to check one (#3047)
+# `fleet host trust-release-key` is the one way to accept a new signing key by
+# hand; fleet-release-fetch.py takes a release with python3 + `ssh-keygen -Y
+# verify` — a client needs no ccquota (#3162) — and fleet-release-verify.py
+# checks an older hub's plain ed25519 signature for it
 bin/fleet-release-lib.sh
 bin/fleet-release-key.sh
+bin/fleet-release-fetch.py
 bin/fleet-release-verify.py
 # the admin's two commands (#1986): `fleet users list|add|remove` and
 # `fleet hub set|get|unset|settings` — the people list and the hub's settings,

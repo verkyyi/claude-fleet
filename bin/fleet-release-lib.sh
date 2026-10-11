@@ -7,10 +7,12 @@
 # TRUST. The hub's release key is pinned ONCE per login — $FLEET_CONF_DIR/
 # release.pub (0644), taken from GET /v1/fleet/release/key the first time this
 # login meets a hub that keeps releases — and from then on only that key counts:
-# every release is `ccquota release fetch --pubkey`'d against it (the manifest's
-# ed25519 signature, every file's sha256) before anything is unpacked or
-# switched. A new key is a person's to accept: fleet-release-key.sh --trust
-# prints both fingerprints and asks.
+# every release is checked against it by fleet-release-fetch.py (the manifest's
+# SSHSIG via `ssh-keygen -Y verify`, every file's sha256 — no ccquota, #3162)
+# before anything is unpacked or switched. A new key is taken by itself only
+# when the pinned one vouches for it (the hub's key-endorsement); otherwise it
+# is a person's to accept: fleet-release-key.sh --trust prints both
+# fingerprints and asks.
 #
 # STORAGE. The verified tree is imported into the install's own repository as
 # ONE local commit — a temporary index, `add -A -f`, write-tree, commit-tree on
@@ -119,93 +121,21 @@ fleet_rel_pubkey() {
   printf '%s\n' "$pk"
 }
 
-# fleet_rel_ccquota — the ccquota that checks a release: FLEET_CCQUOTA, else
-# PATH, else ~/.local/bin (a launchd tick's PATH may lack it). rc 1: none.
-fleet_rel_ccquota() {
-  local c
-  for c in "${FLEET_CCQUOTA:-}" "$(command -v ccquota 2>/dev/null)" "$HOME/.local/bin/ccquota"; do
-    [ -n "$c" ] && [ -x "$c" ] && { printf '%s\n' "$c"; return 0; }
-  done
-  return 1
-}
-
-# fleet_rel_fetch <ccquota> <hub> <pubkey> <sha|stable> <dest> — the release,
-# verified, at <dest> (the tree + .release/manifest.json). rc 1 + REL_ERR;
-# REL_STALE=1 when <ccquota> has no `release` command at all (older than the
-# hub's releases, #3047 — its answer is the usage text, whose last line «Run any
-# subcommand with -h for its flags.» is no reason a person can act on).
+# fleet_rel_fetch <hub> <pubkey> <sha|stable> <dest> [<timeout>] — the release,
+# verified, at <dest> (the tree + .release/manifest.json). No ccquota (issue
+# #3162): bin/fleet-release-fetch.py checks it with python3 and the system's
+# `ssh-keygen -Y verify` against the pinned key (an older hub's plain ed25519
+# signature in python), every file by its sha256. rc 1 + REL_ERR (its last line).
 fleet_rel_fetch() {
-  local out v
-  REL_ERR='' REL_STALE=0
-  out=$("$1" release fetch --hub "$2" --pubkey "$3" "$4" "$5" 2>&1 </dev/null) && [ -f "$5/.release/manifest.json" ] && return 0
-  case "$out" in
-    *'unknown command "release"'*)
-      REL_STALE=1
-      v=$("$1" version 2>/dev/null </dev/null | awk 'NR == 1 { print $2 }')
-      REL_ERR="$1 (${v:-?}) has no \`ccquota release\` — it is older than the hub's releases" ;;
-    *) REL_ERR=$(printf '%s\n' "$out" | sed '/^[[:space:]]*$/d' | tail -n 1) ;;
-  esac
-  [ -n "$REL_ERR" ] || REL_ERR='ccquota release fetch left no .release/manifest.json'
-  rm -rf "$5"
-  return 1
-}
-
-# fleet_rel_ccquota_signed <hub> <pubkey> <sha> <dir> <timeout> — the
-# ccquota-<os>-<arch> release <sha> carries, at <dir>/ccquota (REL_CCQ), taken
-# only when release <sha>'s manifest verifies against the PINNED key
-# (fleet-release-verify.py — no ccquota needed) and the binary matches the
-# sha256 that signed manifest names. So a login whose ccquota is too old to
-# check a release (#3047) gets one the key it already trusts vouches for: no
-# re-pin, no unsigned download. A copy already at <dir> with that sha256 is
-# kept. rc 1 + REL_ERR. Call it in THIS shell, never in $( ): REL_* are its answer.
-fleet_rel_ccquota_signed() {
-  local hub="$1" pub="$2" sha="$3" dir="$4" tmo="$5" os arch name m h code sig out want got rc
-  os=$(uname -s 2>/dev/null | tr 'A-Z' 'a-z')
-  case "$(uname -m 2>/dev/null)" in arm64|aarch64) arch=arm64 ;; x86_64|amd64) arch=amd64 ;; *) arch=unknown ;; esac
-  name="ccquota-$os-$arch"
-  mkdir -p "$dir" 2>/dev/null || { REL_ERR="cannot make $dir"; return 1; }
-  m="$dir/.manifest.$$" h="$dir/.headers.$$"
+  local out
   REL_ERR=''
-  code=$(curl -sS --max-time "$tmo" -D "$h" -o "$m" -w '%{http_code}' "$hub/v1/fleet/release/$sha" 2>/dev/null) || :
-  [ "$code" = 200 ] || { REL_ERR="HTTP ${code:-000} from /v1/fleet/release/${sha:0:7}"; rm -f "$m" "$h"; return 1; }
-  # the signature of THESE bytes (a healed release is re-signed — #2631), else manifest.sig
-  sig=$(awk 'tolower($1) == "x-ccquota-release-signature:" { print $2; exit }' "$h" | tr -d '\r')
-  rm -f "$h"
-  if [ -z "$sig" ]; then
-    code=$(fleet_rel_http "$hub/v1/fleet/release/$sha/manifest.sig" "$m.sig" "$tmo")
-    [ "$code" = 200 ] && sig=$(tr -d '\r\n' < "$m.sig")
-    rm -f "$m.sig"
-  fi
-  [ -n "$sig" ] || { REL_ERR="the hub sent release ${sha:0:7} with no signature"; rm -f "$m"; return 1; }
-  out=$(python3 "$(dirname "${BASH_SOURCE[0]}")/fleet-release-verify.py" "$pub" "$m" "$sig" "$name" 2>&1)
-  rc=$?; rm -f "$m"
-  [ "$rc" = 0 ] || { REL_ERR=$(printf '%s\n' "$out" | tail -n 1); return 1; }
-  want=$(printf '%s\n' "$out" | sed -n 2p)
-  if [ -x "$dir/ccquota" ]; then
-    got=$({ shasum -a 256 2>/dev/null || sha256sum; } < "$dir/ccquota" | awk '{print $1}')
-    [ "$got" = "$want" ] && { REL_CCQ="$dir/ccquota"; return 0; }
-  fi
-  code=$(fleet_rel_http "$hub/v1/fleet/release/$sha/artifacts/$name" "$dir/ccquota.part" "$tmo")
-  [ "$code" = 200 ] || { REL_ERR="HTTP $code fetching $name${REL_ERR:+ ($REL_ERR)}"; rm -f "$dir/ccquota.part"; return 1; }
-  got=$({ shasum -a 256 2>/dev/null || sha256sum; } < "$dir/ccquota.part" | awk '{print $1}')
-  [ "$got" = "$want" ] || { REL_ERR="$name does not match the sha256 its signed release names"; rm -f "$dir/ccquota.part"; return 1; }
-  chmod 0755 "$dir/ccquota.part" && mv -f "$dir/ccquota.part" "$dir/ccquota" || { REL_ERR="cannot write $dir/ccquota"; return 1; }
-  REL_CCQ="$dir/ccquota"
-}
-
-# fleet_rel_fetch_any <ccquota> <hub> <pubkey> <sha> <dest> <tools dir> <timeout>
-# — fleet_rel_fetch, and when <ccquota> is too old to know `release`, once more
-# with the ccquota release <sha> itself carries (fleet_rel_ccquota_signed into
-# <tools dir>). REL_CCQ: the ccquota that fetched it. rc 1 + REL_ERR.
-fleet_rel_fetch_any() {
-  local why
-  REL_CCQ=$1
-  fleet_rel_fetch "$1" "$2" "$3" "$4" "$5" && return 0
-  [ "${REL_STALE:-0}" = 1 ] || return 1
-  why=$REL_ERR
-  fleet_rel_ccquota_signed "$2" "$3" "$4" "$6" "$7" \
-    || { REL_ERR="$why; its own ccquota could not be taken either: $REL_ERR"; return 1; }
-  fleet_rel_fetch "$REL_CCQ" "$2" "$3" "$4" "$5" || { REL_ERR="$why; with the release's own ccquota: $REL_ERR"; return 1; }
+  out=$(python3 "$(dirname "${BASH_SOURCE[0]}")/fleet-release-fetch.py" --hub "$1" --pubkey "$2" \
+          --timeout "${5:-60}" "$3" "$4" 2>&1 </dev/null) && [ -f "$4/.release/manifest.json" ] \
+    && { printf '%s\n' "$out" | grep '^fleet-release: ' >&2; return 0; }
+  REL_ERR=$(printf '%s\n' "$out" | sed '/^[[:space:]]*$/d' | tail -n 1)
+  [ -n "$REL_ERR" ] || REL_ERR='fleet-release-fetch.py left no .release/manifest.json'
+  rm -rf "$4"
+  return 1
 }
 
 # fleet_rel_manifest <dir> — `<sha> <seq> <prev>` of <dir>/.release/manifest.json
@@ -286,51 +216,20 @@ fleet_rel_restore_origin() {
     && printf 'fleet-release: put the %s remote back (%s) — this tick follows stable over git\n' "$2" "$u" >&2
 }
 
-# fleet_rel_ccquota_get <hub> <dir> <timeout> — a computer with no ccquota yet
-# (a first 承载 install, before `fleet node join` brings one): the hub's own
-# ccquota-<os>-<arch> from its stable release, checked against the sha256 that
-# release names, at <dir>/ccquota (printed). The same trust as the key pinned in
-# that first contact; every release after is checked BY it against that key.
-# rc 1 + REL_ERR.
-fleet_rel_ccquota_get() {
-  local os arch f code name want got
-  os=$(uname -s 2>/dev/null | tr 'A-Z' 'a-z')
-  case "$(uname -m 2>/dev/null)" in arm64|aarch64) arch=arm64 ;; x86_64|amd64) arch=amd64 ;; *) arch=unknown ;; esac
-  name="ccquota-$os-$arch"
-  mkdir -p "$2" 2>/dev/null || { REL_ERR="cannot make $2"; return 1; }
-  f="$2/.stable.json"
-  code=$(fleet_rel_http "$1/v1/fleet/release/stable" "$f" "$3")
-  [ "$code" = 200 ] || { REL_ERR="HTTP $code from /v1/fleet/release/stable${REL_ERR:+ ($REL_ERR)}"; rm -f "$f"; return 1; }
-  set -- "$1" "$2" "$3" "$(python3 -c 'import json, sys
-d = json.load(open(sys.argv[1]))
-for a in d.get("artifacts") or []:
-    if a.get("name") == sys.argv[2]:
-        print(d.get("sha", ""), a.get("sha256", ""))' "$f" "$name" 2>/dev/null)"
-  rm -f "$f"
-  want=${4#* }
-  [ -n "$4" ] && [ -n "$want" ] || { REL_ERR="the hub's stable release carries no $name"; return 1; }
-  code=$(fleet_rel_http "$1/v1/fleet/release/${4%% *}/artifacts/$name" "$2/ccquota.part" "$3")
-  [ "$code" = 200 ] || { REL_ERR="HTTP $code fetching $name${REL_ERR:+ ($REL_ERR)}"; rm -f "$2/ccquota.part"; return 1; }
-  got=$({ shasum -a 256 2>/dev/null || sha256sum; } < "$2/ccquota.part" | awk '{print $1}')
-  [ "$got" = "$want" ] || { REL_ERR="$name does not match the sha256 its release names"; rm -f "$2/ccquota.part"; return 1; }
-  chmod 0755 "$2/ccquota.part" && mv -f "$2/ccquota.part" "$2/ccquota" || { REL_ERR="cannot write $2/ccquota"; return 1; }
-  printf '%s\n' "$2/ccquota"
-}
-
 # fleet_rel_first_checkout <dir> <conf dir> <timeout> [<log>] — a NEW install at
 # <dir> (it must not exist): the hub's signed stable — the key pinned now, the
-# tree verified by ccquota (the hub's own, by its release's sha256, when this
-# computer has none yet), imported as one local commit; no remote, never GitHub.
+# tree verified (fleet_rel_fetch: no ccquota, #3162), imported as one local
+# commit; no remote, never GitHub.
 # The one first checkout of fleet-host-install.sh and fleet-login-install.sh
 # (issue #2775). The hub: fleet_rel_hub_url, else <conf dir>/fleet.conf's.
 # rc 0 made — REL_SHA (the upstream sha) · REL_SEQ · REL_FPR (the key's
 #      fingerprint) · REL_HUB
 # rc 3 no hub, or one that keeps no releases (404) — nothing made
-# rc 1 failed — REL_STAGE (unreachable · key · ccquota · fetch · place) +
+# rc 1 failed — REL_STAGE (unreachable · key · fetch · place) +
 #      REL_ERR; <dir> may hold a half-made repository: the caller removes it
 # shellcheck disable=SC2034  # every REL_* it sets is the caller's (fleet-host-install.sh, fleet-login-install.sh)
 fleet_rel_first_checkout() {
-  local dir="$1" conf="$2" tmo="$3" log="${4:-/dev/null}" hub pub ccq stg m c
+  local dir="$1" conf="$2" tmo="$3" log="${4:-/dev/null}" hub pub stg m c
   REL_STAGE='' REL_FPR='' REL_HUB=''
   hub=$(fleet_rel_hub_url)
   # shellcheck disable=SC2034,SC1091  # FLEET_SHELL=1 picks fleet.conf's [client] section
@@ -339,10 +238,8 @@ fleet_rel_first_checkout() {
   REL_HUB=$hub
   fleet_rel_stable "$hub" "$tmo"; case $? in 0) ;; 3) return 3 ;; *) REL_STAGE=unreachable; return 1 ;; esac
   pub=$(fleet_rel_pubkey "$conf" "$hub" "$tmo" 2>>"$log") || { REL_STAGE=key; return 1; }
-  ccq=$(fleet_rel_ccquota) || ccq=$(fleet_rel_ccquota_get "$hub" "$conf/release-tools" "$tmo") \
-    || { REL_STAGE=ccquota; return 1; }
   stg="$dir.rel"; rm -rf "$stg" "$stg.partial"
-  fleet_rel_fetch_any "$ccq" "$hub" "$pub" "$REL_SHA" "$stg" "$conf/release-tools" "$tmo" || { REL_STAGE=fetch; return 1; }
+  fleet_rel_fetch "$hub" "$pub" "$REL_SHA" "$stg" "$tmo" 2>>"$log" || { REL_STAGE=fetch; return 1; }
   m=$(fleet_rel_manifest "$stg")
   REL_SEQ=$(printf '%s' "$m" | awk '{print $2}')
   if ! { git init -q "$dir" >>"$log" 2>&1 && c=$(fleet_rel_import "$dir" "$stg" '' "${m%% *}" "$REL_SEQ") \

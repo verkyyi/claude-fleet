@@ -884,64 +884,21 @@ contains "S: doctor since the switch: an older cache is a WARN" "$dout" "WARN hu
 not_contains "S: doctor since the switch: no FAIL" "$dout" "FAIL"
 
 # --- U. from the hub (issue #2773, EPIC #2770 C3) ---------------------------------------------
-# A sandbox hub on 127.0.0.1 keeps releases as `ccquota release fetch` leaves
-# them (<sha>/ = the tree + .release/manifest.json with sha/prev/seq); a fake
-# ccquota copies one out — or, with $UW/badsig, refuses it the way a bad
-# signature is refused. Its own HOME, conf dir and install: an install at C5
-# whose origin is the bare repo.
+# A sandbox hub on 127.0.0.1 that really signs (bin/fleet-release-hub-fixture.py,
+# issue #3162): <sha>/ = the tree + .release/manifest.json with prev/seq; the
+# install checks it with python3 + ssh-keygen, no ccquota — with $UW/badsig the
+# fixture signs with another key, the way a bad signature is refused.
+# Its own HOME, conf dir and install: an install at C5 whose origin is the bare repo.
 UW="$WORK/hub" CO2="$WORK/install2" CONF2="$WORK/conf2"
-mkdir -p "$UW/rel" "$UW/bin" "$CONF2/fleets/f1"
+mkdir -p "$UW/rel" "$CONF2/fleets/f1"
 printf 'FLEET_REPO=o/r\n' > "$CONF2/fleets/f1/conf"
-printf 'ed25519 AAAAhubreleasekey0001\n' > "$UW/key"
 rel() { # <commit> <seq> <prev> — the hub keeps that release
   rm -rf "$UW/rel/$1"; mkdir -p "$UW/rel/$1/.release"
   git -C "$SEED" archive "$1" | tar -x -C "$UW/rel/$1"
   printf '{"schema": 1, "sha": "%s", "prev": "%s", "seq": %s, "artifacts": []}\n' "$1" "$3" "$2" > "$UW/rel/$1/.release/manifest.json"
 }
 hubstable() { printf '%s\n' "$1" > "$UW/rel/stable"; }
-cat > "$UW/bin/ccquota" <<EOF
-#!/bin/bash
-printf '%s\n' "\$*" >> "$UW/ccquota.log"
-[ "\$1 \$2" = "release fetch" ] || exit 2
-shift 2; ref='' dir='' pub=''
-while [ \$# -gt 0 ]; do
-  case "\$1" in --pubkey) pub=\$2; shift 2 ;; --hub) shift 2 ;; --*) shift ;; *) if [ -z "\$ref" ]; then ref=\$1; else dir=\$1; fi; shift ;; esac
-done
-[ -f "\$pub" ] || { echo "--pubkey \$pub: no such file" >&2; exit 1; }
-[ -f "$UW/badsig" ] && { echo "release \$ref: manifest signature does not verify against key \$(cut -c9-16 "\$pub")" >&2; exit 1; }
-[ "\$ref" = stable ] && ref=\$(cat "$UW/rel/stable")
-[ -d "$UW/rel/\$ref" ] || { echo "release \$ref: 404" >&2; exit 1; }
-mkdir -p "\$dir" && cp -R "$UW/rel/\$ref/." "\$dir/"
-EOF
-chmod +x "$UW/bin/ccquota"
-cat > "$UW/srv.py" <<'PY2'
-import os, sys, threading
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-w = sys.argv[1]
-class H(BaseHTTPRequestHandler):
-    def do_GET(self):
-        with open(os.path.join(w, "hub.log"), "a") as f:
-            f.write(self.path + "\n")
-        body, code = b"", 404
-        if not os.path.exists(os.path.join(w, "nostore")):
-            if self.path == "/v1/fleet/release/key":
-                body, code = open(os.path.join(w, "key"), "rb").read(), 200
-            elif self.path == "/v1/fleet/release/stable":
-                st = open(os.path.join(w, "rel", "stable")).read().strip()
-                body, code = open(os.path.join(w, "rel", st, ".release", "manifest.json"), "rb").read(), 200
-        self.send_response(code)
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-    def log_message(self, *a):
-        pass
-s = ThreadingHTTPServer(("127.0.0.1", 0), H)
-threading.Thread(target=s.serve_forever, daemon=True).start()
-open(os.path.join(w, "port.tmp"), "w").write(str(s.server_address[1]))
-os.rename(os.path.join(w, "port.tmp"), os.path.join(w, "port"))
-threading.Event().wait()
-PY2
-python3 "$UW/srv.py" "$UW" 2>"$UW/srv.err" &
+python3 "$BIN/fleet-release-hub-fixture.py" "$UW" 2>"$UW/srv.err" &
 UPID=$!
 for _ in $(seq 1 100); do [ -s "$UW/port" ] && break; sleep 0.05; done
 [ -s "$UW/port" ] || fail "U: the sandbox hub did not start: $(cat "$UW/srv.err")"
@@ -951,7 +908,7 @@ trap 'kill "$UPID" 2>/dev/null; cleanup; exit 130' INT TERM HUP
 git clone -q "$BARE" "$CO2" 2>/dev/null; git -C "$CO2" reset -q --hard "$C5"
 V2="$CO2.versions"
 run2() { OUT=$(env -u FLEET_NOTIFY_CMD -u FLEET_DIST_SOURCE FLEET_CONF_DIR="$CONF2" FLEET_HUB_URL="$HUBU" \
-  FLEET_CCQUOTA="$UW/bin/ccquota" FLEET_NODE_STATE="$WORK/no-node" FLEET_NODE_FOLLOW=0 "$@" bash "$IS" --root "$CO2" 2>&1); RC=$?; }
+  FLEET_NODE_STATE="$WORK/no-node" FLEET_NODE_FOLLOW=0 "$@" bash "$IS" --root "$CO2" 2>&1); RC=$?; }
 st2() { sed -n "s/^$1: //p" "$CONF2/global/install-sync.state" | head -1; }
 up2() { git -C "$CO2" log -1 --format=%s; }
 : > "$LOG"
@@ -973,21 +930,23 @@ I1=$(git -C "$CO2" rev-parse HEAD)
 eq "U: apply only the two versions' difference" "apply --from $C5 --to $I1 --root $CO2" "$(grep '^apply ' "$LOG" | tail -1)"
 eq "U: …which is the upstream diff" "f" "$(git -C "$CO2" diff --name-only "$C5" "$I1")"
 eq "U: the key was pinned from the hub" "$(cat "$UW/key")" "$(cat "$CONF2/release.pub")"
-contains "U: ccquota checked it against the pinned key" "$(tail -1 "$UW/ccquota.log")" "--pubkey $CONF2/release.pub $C6"
+contains "U: checked with ssh-keygen against the pinned key, no ccquota" "$OUT" "verified (sshsig)"
+contains "U: …the release's tree was fetched" "$(cat "$UW/hub.log")" "/v1/fleet/release/$C6/tree.tar.gz"
 not_contains "U: no git fetch: no remote was asked" "$OUT" "could not read refs/tags"
 # current — no download
-n=$(wc -l < "$UW/ccquota.log" | tr -d " "); run2
+n=$(grep -c 'tree.tar.gz' "$UW/hub.log"); run2
 eq "U: current" current "$(st2 result)"
 contains "U: …from hub" "$(st2 reason)" "from hub"
-eq "U: …nothing downloaded" "$n" "$(wc -l < "$UW/ccquota.log" | tr -d ' ')"
+eq "U: …nothing downloaded" "$n" "$(grep -c 'tree.tar.gz' "$UW/hub.log")"
 # a release that does not verify: fetch-failed, nothing switched, the pin kept
+PIN0=$(cat "$CONF2/release.pub")
 printf 'ed25519 AAAAsomeoneelse000000\n' > "$UW/key"
 rel "$C7" 6 "$C6"; hubstable "$C7"; touch "$UW/badsig"; run2
 eq "U: a bad signature is fetch-failed" fetch-failed "$(st2 result)"
 contains "U: …says it did not verify" "$(st2 reason)" "did not arrive or did not verify"
 eq "U: …nothing switched" "$I1" "$(git -C "$CO2" rev-parse HEAD)"
 eq "U: …no half version left" "" "$(for p in "$V2"/.incoming*; do [ -e "$p" ] && printf '%s' "$p"; done)"
-eq "U: a new hub key is never taken by itself" "ed25519 AAAAhubreleasekey0001" "$(cat "$CONF2/release.pub")"
+eq "U: a new hub key is never taken by itself" "$PIN0" "$(cat "$CONF2/release.pub")"
 rm -f "$UW/badsig"; : > "$LOG"; run2
 eq "U: the next stable verified → switched" switched "$(st2 result)"
 I2=$(git -C "$CO2" rev-parse HEAD)

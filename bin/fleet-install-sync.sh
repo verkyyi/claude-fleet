@@ -62,7 +62,8 @@
 #              #2770 C3) the fetch above is not run: the hub's
 #              /v1/fleet/release/stable names stable (sha + seq, a hint), and only
 #              past every gate below is that release fetched and verified —
-#              `ccquota release fetch --hub … --pubkey <FLEET_CONF_DIR>/release.pub`
+#              fleet-release-fetch.py --hub … --pubkey <FLEET_CONF_DIR>/release.pub
+#              (python3 + `ssh-keygen -Y verify`, no ccquota — #3162)
 #              (the key pinned the first time, fleet-release-lib.sh) — then
 #              imported into the install's repository as ONE local commit
 #              (`fleet-release: <upstream sha> seq=<n>`, refs/fleet/rel/<sha>) on
@@ -72,7 +73,8 @@
 #              version). «Only forward» is the signed seq, not ancestry: a seq not
 #              past this install's is `refused`, a hand commit on top of a release
 #              too. The hub not answering is `fetch-failed` (入口不可达), a release
-#              that does not verify too (nothing switched, no alarm); a hub that
+#              that does not verify too (nothing switched; an alarm once a seen
+#              stable has gone untaken past FETCH_ALARM, #3162); a hub that
 #              keeps no releases (404) is followed over git, as before. No hub
 #              or FLEET_DIST_SOURCE=github (one version's way back, origin
 #              restored): the git fetch above, byte for byte. A managed login
@@ -174,12 +176,15 @@
 # channel quotawatch / diskguard / the collector use (nothing when it is unset).
 # Stuck is what the doctor calls STUCK: `refused`, `rolled-back` (and the
 # `skipped` ticks that follow it — the same episode), `failed`, or `deferred`
-# (the disk gate) longer than FLEET_INSTALL_FOLLOW_STUCK_SECS (24h).
+# (the disk gate) longer than FLEET_INSTALL_FOLLOW_STUCK_SECS (24h), or
+# `fetch-failed` on a seen stable longer than FETCH_ALARM (2h, #3162).
 # Dedup key = login + why + stable (`notified:` in the state): the same stuck
 # tick again is silent; a tick that is NOT stuck (`current`, `switched`, `off`, a
 # short `deferred`) clears the key, so a login that followed and then stuck
-# again — even for the same reason — is announced again. `fetch-failed` / `none`
-# say nothing about the login and leave the key as it was. A send that fails is
+# again — even for the same reason — is announced again. `none` and a
+# `fetch-failed` say nothing about the login and leave the key as it was —
+# except a stable the hub NAMED and this login has not taken for
+# FLEET_INSTALL_SYNC_FETCH_ALARM_SECS (2h): that is stuck (issue #3162). A send that fails is
 # not recorded, so the next tick retries; the message names the login, the
 # reason and how to silence it (FLEET_INSTALL_SYNC=0). Never under --dry-run
 # (it prints `notify: would send` instead).
@@ -246,6 +251,11 @@ LOCK_TTL=3600   # an apply + two doctor runs take well under a minute; older = a
 # A deferral this long is STUCK (the doctor's own threshold, C7) — and the alarm's.
 STUCK_SECS="${FLEET_INSTALL_FOLLOW_STUCK_SECS:-86400}"
 case "$STUCK_SECS" in ''|*[!0-9]*) STUCK_SECS=86400 ;; esac
+# a stable the hub named but this login could not take (fetch-failed) for this
+# long is stuck too (issue #3162): one notification, and the doctor's install
+# row FAILs (fleet-install-follow.sh reads the same knob)
+FETCH_ALARM="${FLEET_INSTALL_SYNC_FETCH_ALARM_SECS:-7200}"
+case "$FETCH_ALARM" in ''|*[!0-9]*) FETCH_ALARM=7200 ;; esac
 NOTIFY_BUDGET=30   # a notifier that hangs must not hold the tick lock
 # One EPIC mark holds the same stable at most this long (issue #2247); 0, the
 # default since issue #2934, = no hold at all.
@@ -375,9 +385,23 @@ stuck_key() {
     skipped)     why=rolled-back ;;
     failed)      why=failed ;;
     deferred)    [ -n "$DEFERRED_SINCE" ] && [ $(( $(now) - DEFERRED_SINCE )) -ge "$STUCK_SECS" ] && why=deferred ;;
+    fetch-failed) fetch_stuck && why=fetch-failed ;;
   esac
   [ -n "$why" ] || return 0
   printf '%s %s %s\n' "$LOGIN" "$why" "${STABLE_SHA:-?}"
+}
+
+# fetch_stuck — rc 0 when this tick's stable was SEEN (the hub named it, it is
+# not HEAD) and has gone untaken since stable_since for FETCH_ALARM or longer
+# (issue #3162: the MacBook's fetch-failed from 07:20, told nobody). A hub that
+# named nothing (入口不可达, offline) is never stuck here.
+fetch_stuck() {
+  local ss
+  [ -n "${STABLE_SHA:-}" ] && [ "$STABLE_SHA" != "${HEAD_SHA:-}" ] || return 1
+  [ "$(state_get stable)" = "$STABLE_SHA" ] || return 1
+  ss=$(state_get stable_since)
+  case "$ss" in ''|*[!0-9]*) return 1 ;; esac
+  [ $(( $(now) - ss )) -ge "$FETCH_ALARM" ]
 }
 
 # notify_stuck <result> <reason> — ONE FLEET_NOTIFY_CMD per stuck episode
@@ -387,8 +411,10 @@ stuck_key() {
 # recorded, so the next tick tries again. Never exits, never fails the tick.
 notify_stuck() {
   local key hint msg rc cmd
-  case "$1" in fetch-failed|none) return 0 ;; esac
+  case "$1" in none) return 0 ;; esac
   key=$(stuck_key "$1" "${3:-}")
+  # a fetch-failed short of the alarm says nothing about the login: the key stays
+  [ "$1" = fetch-failed ] && [ -z "$key" ] && return 0
   if [ -z "$key" ]; then NOTIFIED=''; NOTIFIED_AT=''; return 0; fi
   [ "$key" = "$NOTIFIED" ] && return 0                    # this episode was announced
   if [ "$DRY" = 1 ]; then printf 'notify: would send (%s)\n' "$key"; return 0; fi
@@ -402,6 +428,7 @@ notify_stuck() {
         "EPIC batch running"*) hint="Waited $(( ($(now) - DEFERRED_SINCE) / 3600 ))h so far (since $(iso_of "$DEFERRED_SINCE")) — a batch marked running this long is usually a loop that died without its closing tick: \`fleet-epic-heartbeat.sh --status\` names it; a mark expires 45 min after its last tick, or \`--clear <N>\` it by hand." ;;
         *) hint="Waited $(( ($(now) - DEFERRED_SINCE) / 3600 ))h so far (since $(iso_of "$DEFERRED_SINCE")) — a session busy this long is usually a stuck one: check \`fleet-doctor.sh\`, or its dash." ;;
       esac ;;
+    fetch-failed) hint="Stable has been named by the hub for $(( ($(now) - $(state_get stable_since)) / 3600 ))h and this login has not taken it — the reason above says why (a release that does not verify, a hub that does not hand it over). \`fleet-install-sync.sh --status\` has the whole record; \`fleet doctor\`'s install row is red until it follows." ;;
     skipped)  hint="It rolled back after the doctor failed on this version; nothing is retried until stable moves (\`fleet-stable.sh move\`), or \`fleet-install-sync.sh --retry\` tries it again now." ;;
     *)        hint="The reason above says what to do; \`fleet-install-sync.sh --status\` has the whole record." ;;
   esac
@@ -1135,22 +1162,19 @@ main() {
   fi
 
   # --- take the hub's release (issue #2773) ------------------------------------------------
-  # Fetched and verified against the key pinned at install (ccquota release
-  # fetch: the manifest's signature, every file's sha256) — a release that does
-  # not verify is fetch-failed, nothing switched, no alarm — then its signed seq
-  # judged again, then imported as one local commit for the switch below.
+  # Fetched and verified against the key pinned at install — fleet_rel_fetch:
+  # the manifest's signature (ssh-keygen -Y verify, no ccquota — #3162), every
+  # file's sha256. A release that does not verify is fetch-failed, nothing
+  # switched (an alarm only once stable has gone untaken past FETCH_ALARM) —
+  # then its signed seq judged again, then imported as one local commit.
   STABLE_C="$STABLE_SHA"
   if [ "$DIST" = hub ]; then
-    local ccq pub stage msha mseq mprev
-    ccq=$(fleet_rel_ccquota) \
-      || finish fetch-failed "no ccquota on this login (PATH, ~/.local/bin, FLEET_CCQUOTA) — the hub's release cannot be checked, so it is not taken; still at $(short "$HEAD_SHA")"
+    local pub stage msha mseq mprev
     pub=$(fleet_rel_pubkey "$CONF_DIR" "$HUB" "$TIMEOUT") \
       || finish fetch-failed "入口不可达（${HUB}）: no release key to pin — $REL_ERR; still at $(short "$HEAD_SHA")"
     mkdir -p "$VERS" 2>/dev/null
     stage="$VERS/.incoming.$$"; rm -rf "$stage" "$stage.partial"
-    # a ccquota too old to know `release` takes the one this release carries,
-    # vouched for by the pinned key (#3047) — else no release could ever fix it
-    if ! fleet_rel_fetch_any "$ccq" "$HUB" "$pub" "$STABLE_SHA" "$stage" "$CONF_DIR/release-tools" "$TIMEOUT"; then
+    if ! fleet_rel_fetch "$HUB" "$pub" "$STABLE_SHA" "$stage" "$TIMEOUT"; then
       rm -rf "$stage" "$stage.partial"
       finish fetch-failed "the hub's release $(short "$STABLE_SHA") did not arrive or did not verify against $pub ($(fleet_rel_fp "$pub")): $REL_ERR — nothing switched, still at $(short "$HEAD_SHA")"
     fi
@@ -1172,7 +1196,6 @@ MAN
       finish failed "the hub's release $(short "$STABLE_SHA") verified but could not be imported into $ROOT's repository — still at $(short "$HEAD_SHA")"
     fi
     rm -rf "$stage"
-    [ "$REL_CCQ" = "$ccq" ] || say "$ccq has no \`ccquota release\` — checked with the release's own ccquota ($REL_CCQ, vouched for by $(fleet_rel_fp "$pub"))"
     say "hub release $(short "$STABLE_SHA") seq $mseq verified ($(fleet_rel_fp "$pub")) and imported as $(short "$STABLE_C")"
   fi
 

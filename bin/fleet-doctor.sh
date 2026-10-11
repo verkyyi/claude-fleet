@@ -819,7 +819,8 @@ if [ -f "$iv" ] && [ -d "$live_dir" ]; then
   # C7)? The install-sync daemon (#1120) moves each login on its own, and when it
   # stops — refused, rolled back, deferred for a day, never ticked — nothing said
   # so. bin/fleet-install-follow.sh is the one reader of its state file: OK is a
-  # PASS, STUCK a WARN (with the opt-out named, the documented way to silence it),
+  # PASS, STUCK a WARN (with the opt-out named, the documented way to silence it)
+  # — a FAIL when it carries `alarm: 1` (a seen stable untaken for 2h, #3162),
   # OFF / UNSEEN an INFO. Other logins are read as their owner (sudo -n); without
   # passwordless sudo they read `?`, never a WARN. Nothing counts a FAIL here: the
   # daemon's own post-update doctor compares FAIL lines, and a fresh install
@@ -832,9 +833,15 @@ if [ -f "$iv" ] && [ -d "$live_dir" ]; then
     case "$(_flf verdict)" in
       OK)     pass install "install-sync on — $(_flf why) (last tick $(_flf checked))" ;;
       STUCK)  fl_retry=''
+              # issue #3162: a seen stable not taken past the fetch alarm (2h) is red — a
+              # client that cannot update says so loudly, never silently
+              if [ "$(_flf alarm)" = 1 ]; then
+                fail install "this login has not taken stable for hours: $(_flf why) (last tick $(_flf checked)); \`bash $(dirname "$0")/fleet-install-sync.sh --status\` has the record"
+              else
               # issue #2655: a rolled-back version is skipped until stable moves — or retried now
               case "$(_flf result)" in rolled-back|skipped) fl_retry="; try it again now: \`bash $(dirname "$0")/fleet-install-sync.sh --retry\`" ;; esac
-              warn install "install-sync on but this login is NOT following stable: $(_flf why) (last tick $(_flf checked))$fl_retry; $fl_off" ;;
+              warn install "install-sync on but this login is NOT following stable: $(_flf why) (last tick $(_flf checked))$fl_retry; $fl_off"
+              fi ;;
       OFF)    info install "install-sync off — $(_flf why)" ;;
       UNSEEN) info install "install-sync on — stable not seen at the last tick ($(_flf checked)): $(_flf why)" ;;
       *)      warn install "install-sync state unreadable — $(_flf why); $fl_off" ;;

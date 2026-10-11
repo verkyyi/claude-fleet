@@ -13,7 +13,7 @@
 #            that is not is named on stderr.
 #   hub      a hub that keeps releases (FLEET_HUB_URL / CCQUOTA_HUB_URL, or the
 #            login's fleet.conf): its signed stable — the key pinned now
-#            ($FLEET_CONF_DIR/release.pub), the tree verified by ccquota, imported
+#            ($FLEET_CONF_DIR/release.pub), the tree verified (no ccquota, #3162), imported
 #            as ONE local commit on master (fleet-release-lib.sh, issue #2773); no
 #            remote. FLEET_DIST_SOURCE=github skips it.
 #   git      neither — a developer's machine with no hub (EPIC #2770 共同约定 7):

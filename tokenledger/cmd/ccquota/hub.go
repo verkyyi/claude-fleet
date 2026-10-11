@@ -288,7 +288,8 @@ func loadFleetCerts(srv *api.Server) error {
 // <os>-<arch> list a release must carry release.json's pins for (default
 // darwin-arm64 — a build missing one is refused, claude-fleet#2631);
 // CCQUOTA_FLEET_RELEASE_NPM the registries a missing Claude Code is fetched
-// from (default npm, then npmmirror). No key: no releases. A key that
+// from (default npm, then npmmirror); CCQUOTA_FLEET_RELEASE_PREV_KEY the key
+// the signing key replaced (it vouches for the new one). No key: no releases. A key that
 // cannot be read, or one without a dir: the hub refuses to start.
 func loadFleetReleases(srv *api.Server) error {
 	path := os.Getenv("CCQUOTA_FLEET_RELEASE_KEY")
@@ -320,6 +321,18 @@ func loadFleetReleases(srv *api.Server) error {
 		DistDir: srv.FleetDistDir, DistSrc: SrcDigest, ArtifactsDir: os.Getenv("CCQUOTA_FLEET_RELEASE_ARTIFACTS"),
 		Platforms:     strings.Fields(os.Getenv("CCQUOTA_FLEET_RELEASE_PLATFORMS")),
 		NPMRegistries: strings.Fields(os.Getenv("CCQUOTA_FLEET_RELEASE_NPM"))}
+	// CCQUOTA_FLEET_RELEASE_PREV_KEY: the key this one replaced, kept for the
+	// overlap — it vouches for the new one at key-endorsement, and every
+	// client that pinned it takes the new key by itself (claude-fleet#3162)
+	if pp := os.Getenv("CCQUOTA_FLEET_RELEASE_PREV_KEY"); pp != "" {
+		pb, err := os.ReadFile(pp)
+		if err != nil {
+			return fmt.Errorf("CCQUOTA_FLEET_RELEASE_PREV_KEY: %w", err)
+		}
+		if srv.Releases.PrevKey, err = release.LoadPrivateKey(pb); err != nil {
+			return fmt.Errorf("CCQUOTA_FLEET_RELEASE_PREV_KEY: %w", err)
+		}
+	}
 	srv.Stable.OnStable = srv.Releases.OnStable
 	// each new stable told to every node at once (claude-fleet#3146)
 	srv.Releases.OnPromote = srv.BroadcastRelease

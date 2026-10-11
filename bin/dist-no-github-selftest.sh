@@ -13,8 +13,9 @@
 # a line naming a github host is one GitHub reach (`hits`). A fake hub on
 # 127.0.0.1 is the only source that answers: /version, /v1/fleet/release/stable
 # (+ /key), /install and /install/stable/<sha>/<path> (the real installer and the
-# client manifest's files from this checkout); a fake `ccquota release fetch`
-# hands out the hub's signed release (verifying is ccquota's, Go-tested).
+# client manifest's files from this checkout); its release routes are
+# bin/fleet-release-hub-fixture.py's — really signed (ssh-keygen -Y sign), so
+# the install checks them the way a client does, with no ccquota (#3162).
 #
 # The fixture fleet: a repo whose bin/ is this checkout's bin/ by symlink, with
 # stubs for apply / doctor / diskguard / fleet-up, and a DIST-MARK file — A, B.
@@ -70,9 +71,10 @@ done
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/dist-nogh.XXXXXX")" || exit 2
 WORK="$(cd "$WORK" && pwd -P)"
-SRV_PID=''
+SRV_PID='' RELHUB_PID=''
 cleanup() {
   [ -n "$SRV_PID" ] && kill "$SRV_PID" 2>/dev/null
+  [ -n "$RELHUB_PID" ] && kill "$RELHUB_PID" 2>/dev/null
   [ -n "${DIST_KEEP:-}" ] && { printf 'kept %s\n' "$WORK" >&2; return; }
   rm -rf "$WORK"
 }
@@ -116,6 +118,13 @@ printf '{"schema": 1, "sha": "%s", "prev": "", "seq": 1, "artifacts": []}\n' "$A
 printf '{"schema": 1, "sha": "%s", "prev": "%s", "seq": 2, "artifacts": []}\n' "$B" "$A" > "$WORK/rel/$B/.release/manifest.json"
 printf '%s\n' "$B" > "$WORK/rel/stable"
 
+# the signing hub behind the fake one's /v1/fleet/release/ (issue #3162)
+mkdir -p "$WORK/relhub"; ln -s "$WORK/rel" "$WORK/relhub/rel"
+python3 "$BIN/fleet-release-hub-fixture.py" "$WORK/relhub" 2>"$WORK/relhub.err" &
+RELHUB_PID=$!
+for _ in $(seq 1 100); do [ -s "$WORK/relhub/port" ] && break; sleep 0.05; done
+[ -s "$WORK/relhub/port" ] || { printf 'dist-no-github: the signing hub did not start: %s\n' "$(tail -2 "$WORK/relhub.err")" >&2; exit 1; }
+# the node-follow leg's runtime still carries a ccquota (a node's, not a client's)
 # ccquota release fetch --hub H --pubkey P [--artifacts] [--platform X] <ref> <dir>
 cat > "$WORK/fakebin/ccquota" <<EOF
 #!/bin/bash
@@ -138,7 +147,7 @@ chmod +x "$WORK/fakebin/ccquota"
 
 # ------------------------------------------------- the recorder + the fake hub
 cat > "$WORK/srv.py" <<'PY'
-import hashlib, json, os, sys, threading
+import hashlib, json, os, sys, threading, urllib.error, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 work, repo = sys.argv[1:3]
@@ -184,10 +193,20 @@ class Hub(BaseHTTPRequestHandler):
                 "commit": "hub-image", "stable": stable, "client_version": stable,
                 "client_compat": 1, "min_client_compat": 0,
                 "client_url": "%s/install/stable/%s" % (host, stable)}))
-        if p == "/v1/fleet/release/stable":
-            return self.send(200, open(os.path.join(work, "rel", stable, ".release", "manifest.json")).read())
-        if p == "/v1/fleet/release/key":
-            return self.send(200, "ed25519 AAAA-dist-fixture\n", "text/plain")
+        if p.startswith("/v1/fleet/release/"):
+            # the signing hub's answer, headers (the SSHSIG) and all
+            port = open(os.path.join(work, "relhub", "port")).read().strip()
+            try:
+                r = urllib.request.urlopen("http://127.0.0.1:%s%s" % (port, p), timeout=20)
+                code, body, hdrs = r.status, r.read(), r.headers
+            except urllib.error.HTTPError as e:
+                code, body, hdrs = e.code, b"", {}
+            self.send_response(code)
+            if hdrs.get("X-Ccquota-Release-Sshsig"):
+                self.send_header("X-Ccquota-Release-Sshsig", hdrs.get("X-Ccquota-Release-Sshsig"))
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            return self.wfile.write(body)
         if p == "/install":
             return self.send(200, open(os.path.join(repo, "bin", "fleet-install.sh")).read(), "text/plain")
         pre = "/install/stable/%s/" % stable
@@ -266,7 +285,7 @@ leg_install_sync() {
   blackhole "$h"; conf="$h/.config/claude-fleet"
   mkdir -p "$conf/fleets/f1" "$h/.claude"
   printf 'FLEET_REPO=o/r\n' > "$conf/fleets/f1/conf"
-  printf 'ed25519 AAAA-dist-fixture\n' > "$conf/release.pub"
+  cp "$WORK/relhub/key" "$conf/release.pub"
   co="$h/.claude/fleet"
   git clone -q "$SEED" "$co" && git -C "$co" reset -q --hard "$A" \
     && git -C "$co" remote set-url origin https://github.com/verkyyi/claude-fleet.git \
@@ -280,9 +299,9 @@ leg_install_sync() {
 
 leg_bad_signature() {
   local co st p
-  touch "$WORK/badsig.flag"
+  touch "$WORK/badsig.flag" "$WORK/relhub/badsig"
   leg_install_sync badsig
-  rm -f "$WORK/badsig.flag"
+  rm -f "$WORK/badsig.flag" "$WORK/relhub/badsig"
   co="$WORK/badsig/.claude/fleet"
   st=$(sed -n 's/^result: //p;s/^reason: //p' "$WORK/badsig/.config/claude-fleet/global/install-sync.state" 2>/dev/null | tr '\n' ' ')
   WHY=''
@@ -330,7 +349,7 @@ leg_bootstrap_hub() {
   mkdir -p "$WORK/fakebin-bs"
   printf '#!/bin/sh\necho "2.1.1 (Claude Code)"\n' > "$WORK/fakebin-bs/claude"; chmod +x "$WORK/fakebin-bs/claude"
   OUT=$(HOME="$h" FLEET_CONF_DIR="$conf" TMPDIR="$WORK" PATH="$WORK/fakebin-bs:$WORK/fakebin:$PATH" \
-    FLEET_HUB_URL="$HUB" FLEET_SKIP_GLOBAL_CONF=1 FLEET_NODE_ROOT="$WORK/no-runtime" FLEET_CCQUOTA="$WORK/fakebin/ccquota" \
+    FLEET_HUB_URL="$HUB" FLEET_SKIP_GLOBAL_CONF=1 FLEET_NODE_ROOT="$WORK/no-runtime" \
     FLEET_BOOTSTRAP_CACHE=off FLEET_CLAUDE_INSTALL_CMD=true FLEET_INSTALL_PLATFORM=none \
     GIT_TERMINAL_PROMPT=0 bash "$BIN/fleet-login-bootstrap.sh" 2>&1 | grep -E 'install|FAIL' | tail -3)
   if [ "$(mark_of "$h/.claude/fleet")" != B ]; then
