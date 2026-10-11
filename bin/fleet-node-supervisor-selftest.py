@@ -44,8 +44,11 @@ FLEET_NODE_* seams; nothing touches /Library, /var or a real login.
      taken over is no row (2); `account adopt` refuses such a login (5) with nothing
      moved; the daemon's tick writes the reading into state.json and a non-root
      reader's check carries it
-  P  the watchdog (#3079): a loop wedged in a blocking open() is ended within
-     FLEET_NODE_WATCHDOG_SECS, its stack in the log; a loop coming round stays up
+  P  the watchdog (#3079, #3086): a loop wedged in a blocking open() is ended
+     within FLEET_NODE_WATCHDOG_SECS — the phase named, its stack in the log,
+     `supervisor.wedged` for status, exit 70; status --check reads WEDGED (5)
+     while it is stopped; a loop coming round stays up; a TCC.db open() that never
+     returns (the FDA probe, a child) and a FIFO task log / state file stall nothing
 """
 import importlib.util
 import json
@@ -1976,23 +1979,45 @@ class N_FullDiskAccess(Sandbox):
 
 
 class P_Watchdog(Sandbox):
-    """A loop that stops coming round (issue #3079: mini2's wedged at 21:57 for good,
-    every account task with it) dumps its stacks and exits, for launchd to restart."""
+    """A loop that stops coming round (issues #3079, #3086: mini2's wedged in an
+    open() of TCC.db, every task with it) says where, records it, and exits for
+    launchd to restart; status reads WEDGED meanwhile; a blocking path is gone."""
 
-    def test_wedged_loop_exits_with_its_stack(self):
+    def fifo(self, name):
+        f = os.path.join(self.d, name)
+        os.mkfifo(f)
+        return f
+
+    def test_wedged_loop_exits_naming_its_phase(self):
         sh = self.script("w.sh", "exit 0\n")
         self.table(tasks=[{"name": "w", "every": 0.1, "cmd": ["/bin/bash", sh]}])
-        os.makedirs(os.path.join(self.d, "log", "tasks"))
-        os.mkfifo(os.path.join(self.d, "log", "tasks", "w.log"))   # its log: an open() that never returns
-        p = self.start(FLEET_NODE_WATCHDOG_SECS="1")
+        p = self.start(FLEET_NODE_WATCHDOG_SECS="1", FLEET_NODE_TEST_HANG="fda:" + self.fifo("hang"))
         try:
             rc = p.wait(timeout=15)
         except subprocess.TimeoutExpired:
             self.fail("a wedged loop was never ended by the watchdog")
-        self.assertNotEqual(rc, 0, "the watchdog's exit must read as a failure (launchd's KeepAlive restarts it)")
+        self.assertEqual(rc, 70, "the watchdog's exit must read as a failure (launchd's KeepAlive restarts it)")
         err = open(os.path.join(self.d, "sup.err")).read()
-        self.assertIn("start_task", err, "no stack of where the loop stuck:\n" + err[-2000:])
-        self.assertIn("logfile", err)
+        self.assertIn("watchdog: the main loop has not come round", err)
+        self.assertIn("«fda»", err)
+        self.assertIn("in at", err, "no stack of where the loop stuck:\n" + err[-2000:])
+        w = self.state()["supervisor"]["wedged"]
+        self.assertEqual(w["phase"], "fda")
+        out = self.run_sup("status").stdout
+        self.assertIn("watchdog    restarted it", out)
+        self.assertIn("«fda»", out)
+
+    def test_status_reads_wedged_while_the_loop_is_stopped(self):
+        sh = self.script("w.sh", "exit 0\n")
+        self.table(tasks=[{"name": "w", "every": 0.1, "cmd": ["/bin/bash", sh]}])
+        # the first pass saves, then its sleep never returns
+        self.start(FLEET_NODE_WATCHDOG_SECS="0", FLEET_NODE_TEST_HANG="sleep:" + self.fifo("hang"))
+        self.assertTrue(until(10, lambda: (self.state().get("supervisor") or {}).get("heartbeat")))
+        time.sleep(1.5)
+        r = self.run_sup("status", "--check", env={"FLEET_NODE_HEARTBEAT_STALE": "1"})
+        self.assertEqual(r.returncode, 5, r.stdout + r.stderr)
+        self.assertIn("WEDGED", r.stdout)
+        self.assertIn("kickstart -k system/com.claude-fleet.node", r.stdout)
 
     def test_off_and_healthy_loop_stay_up(self):
         sh = self.script("ok.sh", "exit 0\n")
@@ -2001,6 +2026,40 @@ class P_Watchdog(Sandbox):
         self.assertTrue(until(10, lambda: (self.task("ok").get("runs") or 0) >= 3), "the task never ran")
         time.sleep(1.5)
         self.assertIsNone(p.poll(), "a loop coming round every tick was ended by the watchdog")
+
+    def test_tcc_open_that_never_returns_stalls_nothing(self):
+        """mini2 2026-10-11: the TCC database's open() never returned. The probe
+        is a child now: the loop runs on, the probe is killed and reads unknown."""
+        sh = self.script("ok.sh", "exit 0\n")
+        self.table(tasks=[{"name": "ok", "every": 0.1, "cmd": ["/bin/bash", sh]}])
+        p = self.start(FLEET_NODE_WATCHDOG_SECS="2", FLEET_NODE_TCC_DB=self.fifo("TCC.db"),
+                       FLEET_NODE_FDA_TIMEOUT="1")
+        self.assertTrue(until(10, lambda: (self.task("ok").get("runs") or 0) >= 3), "the task never ran")
+        f = until(10, lambda: self.state().get("fda"))
+        self.assertTrue(f, "no FDA reading recorded")
+        self.assertIsNone(f["ok"], "an unanswered probe is «unknown», never «no access»")
+        self.assertEqual(f.get("timeout"), 1)
+        n = self.task("ok")["runs"]
+        self.assertTrue(until(5, lambda: self.task("ok")["runs"] > n + 3), "the loop stopped after the probe")
+        self.assertIsNone(p.poll(), "the daemon died")
+        self.assertIn("did not return in 1s", open(os.path.join(self.d, "sup.err")).read())
+
+    def test_fifo_task_log_does_not_block(self):
+        sh = self.script("w.sh", "exit 0\n")
+        self.table(tasks=[{"name": "w", "every": 0.1, "cmd": ["/bin/bash", sh]}])
+        os.makedirs(os.path.join(self.d, "log", "tasks"))
+        os.mkfifo(os.path.join(self.d, "log", "tasks", "w.log"))   # an open() that would never return
+        p = self.start(FLEET_NODE_WATCHDOG_SECS="2")
+        self.assertTrue(until(10, lambda: (self.task("w").get("runs") or 0) >= 2), "the task never ran")
+        self.assertIsNone(p.poll())
+        self.assertTrue(os.path.isfile(os.path.join(self.d, "log", "tasks", "w.log")))
+        self.assertTrue(os.path.exists(os.path.join(self.d, "log", "tasks", "w.log.not-a-file")))
+
+    def test_read_json_of_a_fifo_is_the_default(self):
+        f = self.fifo("x.json")
+        t0 = time.time()
+        self.assertEqual(fns.read_json(f, {"d": 1}), {"d": 1})
+        self.assertLess(time.time() - t0, 1)
 
 
 if __name__ == "__main__":
