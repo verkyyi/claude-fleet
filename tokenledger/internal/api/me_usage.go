@@ -57,6 +57,12 @@ type MeUsage struct {
 	Days      []MeUsageDay   `json:"days"`
 	Models    []MeUsageModel `json:"models"`
 	Work      MeUsageWork    `json:"work"`
+
+	// SinceFirst is when the hub recorded its first pool row (anyone's): a
+	// previous window starting before it was not fully recorded, so the page
+	// says so instead of a percent off a near-empty base (claude-fleet#3230).
+	// Absent = nothing recorded yet.
+	SinceFirst *time.Time `json:"since_first,omitempty"`
 }
 
 // MeUsageLimit is the viewer's own limit (fleet.person_budget). Set false =
@@ -167,6 +173,12 @@ func (s *Server) meUsage(ctx context.Context, principal, rng string, now time.Ti
 		}
 	} else {
 		out.Limit = MeUsageLimit{}
+	}
+
+	if first, ok, err := s.Store.PoolUsageFirst(); err != nil {
+		return out, err
+	} else if ok {
+		out.SinceFirst = &first
 	}
 
 	weekCut, prevCut := now.Add(-budgetWindowWeek), now.Add(-2*budgetWindowWeek)

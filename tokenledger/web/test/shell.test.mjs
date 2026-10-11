@@ -86,7 +86,7 @@ test('spark and ctx bar survive empty input', () => {
 test('the live line counts sessions and online machines', () => {
   assert.equal(liveLine(null), '');
   assert.equal(liveLine({ sessions: [{}], nodes: [] }), 'Live · 1 session');
-  assert.equal(liveLine({ sessions: [{}, {}], nodes: [{ availability: 'online' }, { availability: 'lost' }] }), 'Live · 2 sessions · 1 of 2 machines online');
+  assert.equal(liveLine({ sessions: [{}, {}], nodes: [{ availability: 'online' }, { availability: 'lost' }] }), 'Live · 2 sessions · 1 of 2 service nodes online');
 });
 
 test('esc escapes markup', () => {
@@ -117,7 +117,7 @@ test('the menu and the viewer line speak Chinese too', () => {
     useLocale('zh-CN');
     assert.deepEqual(navFor(['overview', 'devices']).map((x) => x.label), ['概览', '我的客户端']);
     assert.equal(viewer({ via: 'github', role: 'user', name: 'alice' }).sub, '使用者 · GitHub');
-    assert.equal(liveLine({ sessions: [{}, {}], nodes: [{ availability: 'online' }, { availability: 'lost' }] }), '实时 · 2 个会话 · 2 台机器 1 台在线');
+    assert.equal(liveLine({ sessions: [{}, {}], nodes: [{ availability: 'online' }, { availability: 'lost' }] }), '实时 · 2 个会话 · 2 个服务节点 1 个在线');
     assert.equal(titleOf('config'), '配置');
   } finally { useLocale('en'); }
 });
