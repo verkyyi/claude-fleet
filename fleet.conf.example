@@ -351,7 +351,7 @@ FLEET_CTX_WINDOW=200000
 # ctrl+\\ … (bin/fleet_keys.py). A ⌘ chord reaches the fleet only through
 # iTerm2's `fleet` profile (fleet-iterm-profile.py, rewritten at each start); every
 # ⌘ key not named here is iTerm2's own (⌘K clear, ⌘T tab …). Example:
-#   FLEET_KEYS_EXTRA="next=cmd+down prev=cmd+up back=cmd+[ fwd=cmd+] new=cmd+n dispatch=cmd+t quit=cmd+q shell=ctrl+\\"
+#   e.g. FLEET_KEYS_EXTRA="next=cmd+down prev=cmd+up back=cmd+[ fwd=cmd+] new=cmd+n dispatch=cmd+t quit=cmd+q shell=ctrl+\\"
 # @label=Panel key @group=status @tier=internal @scope=global @edit=str
 #FLEET_KEY_PANEL=cmd+p
 # @label=Extra client keys @group=status @tier=internal @scope=global @edit=str
@@ -360,7 +360,7 @@ FLEET_CTX_WINDOW=200000
 # panel with — ctrl+space (two taps on Termius: Ctrl, space), f12 (one, once put on
 # its key row), ctrl+]p (⌃] then p); drop ctrl+space if you use readline's
 # set-mark in a session's shell. FLEET_KEYS_PHONE_EXTRA binds more, `chord=action`:
-#   FLEET_KEYS_PHONE_EXTRA="ctrl+]n=next ctrl+]b=prev ctrl+]c=new ctrl+]t=dispatch ctrl+]q=quit"
+#   e.g. FLEET_KEYS_PHONE_EXTRA="ctrl+]n=next ctrl+]b=prev ctrl+]c=new ctrl+]t=dispatch ctrl+]q=quit"
 # ⌃] ⌃] always sends one ⌃] on to the session.
 # @label=Phone panel keys @group=status @tier=internal @scope=global @edit=str
 #FLEET_KEY_PHONE="ctrl+space f12 ctrl+]p"
