@@ -31,8 +31,9 @@
 // orchestrator.ts
 // puts it in every request, so a /clear leaves the session its role.
 //
-// Quick dispatch (issue #2618): in the orchestrator's window the same start reads
-// the `qd_` strings and registers `/qd` (qd.tsx); any other window has no /qd.
+// Strings (qd.ts): in the orchestrator's window the same start reads the `qd_`
+// strings its band shows. `/qd` itself moved into the fleet-orchestrate plugin
+// (issue #3114) — this mod registers no command for it.
 //
 // Queue (issue #2617): in the orchestrator's window the same start stamps
 // `@orch_queue 0` (queue.ts counts from there), and a real exit unsets it.
@@ -62,7 +63,7 @@ import {
   stopPanels,
 } from './panels'
 import type { PanelsIo } from './panels'
-import { qdCommand, stringsArgv, takeStrings } from './qd'
+import { stringsArgv, takeStrings } from './qd'
 import { QUEUE_OPTION } from './queue'
 import { SHEET_OPTION } from './sheet'
 import type { InboxIo } from './inbox'
@@ -197,7 +198,7 @@ async function readRole($: EngineInterface): Promise<void> {
     return
   }
   // A role file that cannot be read drops the section, never the window's role
-  // (exit-guard.ts and /qd ask isOrchestrator with or without it).
+  // (exit-guard.ts asks isOrchestrator with or without it).
   // The launcher's rendered body first (@fleet_role_body, #2782), else the copy
   // beside the skill — a window opened before the stamp existed.
   let text: string | undefined
@@ -221,9 +222,9 @@ async function readRole($: EngineInterface): Promise<void> {
   takeRole(windowRole, text)
 }
 
-// Quick dispatch (qd.tsx): the orchestrator's window only — its strings, then the
-// command. A read or a register that fails costs /qd, never the session.
-// The `qd_` / `panel_` strings, for the two windows that show them.
+// The `qd_` / `panel_` strings (qd.ts), for the two windows that show them. /qd
+// itself is the fleet-orchestrate plugin's (issue #3114). A read that fails
+// leaves every key showing itself, never costs the session.
 async function readStrings($: EngineInterface): Promise<void> {
   if (!isOrchestrator() && !panelsOn()) return
   try {
@@ -231,15 +232,6 @@ async function readStrings($: EngineInterface): Promise<void> {
     if (r.exitCode === 0) takeStrings(r.stdout)
   } catch {
     // Every key shows itself; the command still works.
-  }
-}
-
-async function registerQuickDispatchCommand($: EngineInterface): Promise<void> {
-  if (!isOrchestrator()) return
-  try {
-    await $.command.register(qdCommand())
-  } catch {
-    // An engine without `immediate`, or a refused name: no /qd.
   }
 }
 
@@ -312,8 +304,6 @@ async function onReady($: EngineInterface): Promise<void> {
     startPanels(panelPaths(conf, session), session)
   }
   await readStrings($)
-  // /qd, the orchestrator's quick dispatch (#2618).
-  await registerQuickDispatchCommand($)
   // What waits behind its turn starts at 0, so a counting orchestrator always says a number (#2617).
   if (isOrchestrator()) await setOptions($, { [QUEUE_OPTION]: '0' }).catch(() => undefined)
   // Where the person is, in the context from the first request (#1716).

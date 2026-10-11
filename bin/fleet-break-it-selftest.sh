@@ -861,8 +861,8 @@ drill_agent_file_broken() {
 drill_orchestrator_compacted() {
   CAP=10; BREAK_SOCK="$WORK/sock-oc"; local t0 w p out c="$WORK/occonf" tr="$WORK/oc-tr.jsonl" ts
   [ -f "$BIN/fleet-orchestrator-state.py" ] || { WHY="no bin/fleet-orchestrator-state.py — nothing carries the state across"; return 1; }
-  grep -q 'fleet-orchestrator-state.py hook' "$ROOT/hooks/settings-hooks.json" \
-    || { WHY="the hook table never runs the state relay"; return 1; }
+  grep -q 'fleet-orchestrator-state.py hook' "$ROOT/plugins/fleet-orchestrate/hooks/hooks.json" \
+    || { WHY="the fleet-orchestrate plugin's hooks never run the state relay"; return 1; }
   nt -f /dev/null new-session -d -s oc -n home -x 100 -y 30 'exec sleep 600' || { WHY="cannot start the isolated tmux server"; return 1; }
   w=$(nt new-window -d -P -F '#{window_id}' -t oc: -n orchestrator 'exec sleep 600')
   p=$(nt display-message -p -t "$w" '#{pane_id}')
@@ -6411,6 +6411,41 @@ drill_client_update_silent_fail() {
   sh "$BIN/fleet-install-follow.sh" --self --dir "$d/install" --conf-dir "$d/conf" > "$d/follow.out" 2>&1
   grep -q '^alarm: *1' "$d/follow.out" || { WHY="the doctor's install row stays quiet: $(tr '\n' '|' < "$d/follow.out")"; return 1; }
   WHAT="入口发布版 3 小时验不过（停在 fetch-failed）：一拍发一次通知（同一回只一次），install-follow 标 alarm → doctor 的 install 行 FAIL"
+}
+
+# role-taken-twice (issue #3114, EPIC #3111 C3): orchestrating is a role any
+# session without an issue takes (/fleet-orchestrate → take_role). Two scratch
+# sessions both type it: before, nothing kept one holder — each would mark itself,
+# a child's report and a peer's send to `orchestrator` hit an ambiguous key, and
+# neither knew the other dispatched. Now the second is told who holds it (exit 4)
+# and changes nothing; an issue window cannot take it (exit 3); the key answers
+# the one holder; only --steal moves it.
+drill_role_taken_twice() {
+  CAP=10; BREAK_SOCK="$WORK/sock-rt"; local t0 a b i r rc c="$WORK/rtconf" rt
+  # its own shim on the tmux binary itself: a bare `tmux` here must not re-enter
+  # the fleet's tmux-shim, which would find this shim again on PATH
+  rt=$(PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -v tmux-shim | paste -sd: -) command -v tmux)
+  mkdir -p "$WORK/rtbin"; printf '#!/bin/sh\nexec "%s" -S "%s" "$@"\n' "$rt" "$BREAK_SOCK" > "$WORK/rtbin/tmux"; chmod +x "$WORK/rtbin/tmux"
+  nt -f /dev/null new-session -d -s rt -n home -x 100 -y 30 'exec sleep 600' || { WHY="cannot start the isolated tmux server"; return 1; }
+  a=$(nt new-window -d -P -F '#{window_id}' -t rt: -n scratch-1 'exec sleep 600'); nt set-option -wq -t "$a" @fleet_role worker
+  b=$(nt new-window -d -P -F '#{window_id}' -t rt: -n scratch-2 'exec sleep 600'); nt set-option -wq -t "$b" @fleet_role worker
+  i=$(nt new-window -d -P -F '#{window_id}' -t rt: -n issue-5 'exec sleep 600'); nt set-option -wq -t "$i" @fleet_role worker; nt set-option -wq -t "$i" @issue 5
+  rtake() { env PATH="$WORK/rtbin:$PATH" FLEET_CONF_DIR="$c" FLEET_SKIP_GLOBAL_CONF=1 BREAK_SOCK="$BREAK_SOCK" \
+              TMUX="$BREAK_SOCK,1,0" TMUX_PANE="$(o "$1" pane_id)" bash "$BIN/fleet-role-take.sh" orchestrator ${2:+"$2"} 2>&1; }
+  t0=$(now)
+  rtake "$a" >/dev/null || { WHY="the first scratch could not take the role"; return 1; }
+  r=$(rtake "$b"); rc=$?                                      # the break: a second taker
+  SECS=$(since "$t0")
+  [ "$rc" = 4 ] || { WHY="a second session took the role too (exit $rc): $r"; return 1; }
+  case "$r" in *"$a"*) ;; *) WHY="the second taker is not told who holds it: $r"; return 1 ;; esac
+  [ -z "$(o "$b" @fleet_role_def)" ] || { WHY="the refused taker was marked anyway"; return 1; }
+  rtake "$i" >/dev/null; [ $? = 3 ] || { WHY="a window bound to an issue took the role"; return 1; }
+  r=$(env PATH="$WORK/rtbin:$PATH" FLEET_CONF_DIR="$c" BREAK_SOCK="$BREAK_SOCK" TMUX="$BREAK_SOCK,1,0" \
+        bash -c '. "$1/fleet-lib.sh"; fleet_win_for_key orchestrator' _ "$BIN" 2>&1)
+  [ "$r" = "$a" ] || { WHY="the orchestrator key does not answer the one holder: $r"; return 1; }
+  rtake "$b" --steal >/dev/null && [ -z "$(o "$a" @fleet_role_def)" ] && [ "$(o "$b" @fleet_role_def)" = orchestrator ] \
+    || { WHY="--steal did not move the role in one step"; return 1; }
+  WHAT="第二个会话接手编排被告知是谁在编排（exit 4、不打标），绑单窗口不能接手（exit 3）；orchestrator 只解析到唯一持有者；只有 --steal 转手"
 }
 
 # ================================================================ run ====}

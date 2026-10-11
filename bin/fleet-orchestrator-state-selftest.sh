@@ -16,7 +16,14 @@
 #   E. PostToolUse ScheduleWakeup updates the loop in place, stop:true clears it;
 #      a UserPromptSubmit without a [child-report] touches nothing;
 #   F. fleet-compact-resume.sh --brief in the orchestrator window prints the state;
-#   G. the hook table wires every event, and the Codex emit drops the command;
+#   G. the fleet-orchestrate plugin's hooks/hooks.json wires every event (with its
+#      skill dir); the DEFAULT hook table wires none — no plugin, no hook at all —
+#      and the Codex emit carries no command;
+#   H. the holder (issue #3114): a scratch that took the role (take_role:
+#      @fleet_role_def + global/roles.held) writes the state; another window marked
+#      but not named by the line writes nothing and gets nothing; with the plugin's
+#      --skill-dir, SessionStart hands back role.md + rules.md ahead of the state —
+#      and gives the role even with no state saved yet;
 #   B also: SessionStart(clear) — a /fleet-handoff's new conversation (#2937) — gets
 #      the picture plus the handoff doc, until another conversation picked it up.
 set -uo pipefail
@@ -178,18 +185,20 @@ has "F: compact-resume brief is the orchestrator's" "$out" '[fleet compact-resum
 has "F: compact-resume brief carries the state" "$out" '在跟的批次'
 
 # --- G. wiring ----------------------------------------------------------------
-python3 - "$ROOT/hooks/settings-hooks.json" <<'PY' || fail "G: the hook table does not wire every event"
+python3 - "$ROOT/plugins/fleet-orchestrate/hooks/hooks.json" "$ROOT/hooks/settings-hooks.json" <<'PY' \
+  || fail "G: the plugin's hooks do not wire every event (or the default table still does)"
 import json, sys
 h = json.load(open(sys.argv[1]))['hooks']
-cmd = 'fleet-orchestrator-state.py hook'
+cmd = 'fleet-orchestrator-state.py hook --skill-dir "${CLAUDE_PLUGIN_ROOT}/skills/fleet-orchestrate"'
 def wired(ev, matcher=None):
-    return any(cmd in x.get('command', '') for g in h[ev] if matcher is None or g.get('matcher') == matcher
+    return any(cmd in x.get('command', '') for g in h.get(ev, []) if matcher is None or g.get('matcher') == matcher
                for x in g.get('hooks', []))
-assert wired('PreCompact') and not [g for g in h['PreCompact'] if any(cmd in x['command'] for x in g['hooks']) and g.get('matcher')], 'PreCompact: every trigger'
-assert wired('SessionStart', 'compact|resume|startup'), 'SessionStart'
+assert wired('PreCompact') and not [g for g in h['PreCompact'] if g.get('matcher')], 'PreCompact: every trigger'
+assert wired('SessionStart', 'compact|resume|startup|clear'), 'SessionStart'
 assert wired('SessionEnd'), 'SessionEnd'
 assert wired('PostToolUse', 'ScheduleWakeup|CronCreate|CronDelete'), 'PostToolUse'
 assert wired('UserPromptSubmit'), 'UserPromptSubmit'
+assert 'fleet-orchestrator-state.py' not in open(sys.argv[2]).read(), 'the default table still runs it'
 PY
 ok
 if [ -f "$BIN/fleet-hooks-emit.sh" ]; then
@@ -197,5 +206,38 @@ if [ -f "$BIN/fleet-hooks-emit.sh" ]; then
   [ -n "$em" ] || fail "G: the codex emit printed nothing"
   hasnt "G: Codex gets no orchestrator state hook" "$em" 'fleet-orchestrator-state.py'
 fi
+
+# --- H. the holder (take_role, issue #3114) -----------------------------------
+SK="$ROOT/plugins/fleet-orchestrate/skills/fleet-orchestrate"
+nt set-option -wqu -t "$OW" @fleet_role               # the old seat is gone
+SW=$(nt new-window -d -P -F '#{window_id}' -t fl: -n scratch-3 'exec sleep 600')
+SP=$(nt display-message -p -t "$SW" '#{pane_id}')
+nt set-option -wq -t "$SW" @fleet_role worker; nt set-option -wq -t "$SW" @fleet_role_def orchestrator
+nt set-option -wq -t "$SW" @fleet_id 11111111-2222-4333-8444-555555555555
+XW=$(nt new-window -d -P -F '#{window_id}' -t fl: -n scratch-4 'exec sleep 600')
+XP=$(nt display-message -p -t "$XW" '#{pane_id}')
+nt set-option -wq -t "$XW" @fleet_role worker; nt set-option -wq -t "$XW" @fleet_role_def orchestrator
+printf 'orchestrator\tfl\t11111111-2222-4333-8444-555555555555\t%s\t%s\n' "$SW" "$(date +%s)" > "$T/conf/global/roles.held"
+runk() {   # run, the way the plugin's hook runs it (its skill dir)
+  local p="$1" j="$2"; shift 2
+  printf '%s' "$j" | env PATH="$T/tbin:$PATH" HOME="$T/home" FLEET_CONF_DIR="$T/conf" TMUX="$SOCK,1,0" TMUX_PANE="$p" \
+    CLAUDE_CODE_ENTRYPOINT=cli FLEET_ORCH_CHILDREN_CMD="$T/children" FLEET_COMPACT_RESUME=0 "$@" python3 "$S" hook --skill-dir "$SK"
+}
+ctxof() { printf '%s' "$1" | python3 -c 'import json,sys; print(json.load(sys.stdin)["hookSpecificOutput"]["additionalContext"])'; }
+rm -f "$STATE"
+runk "$XP" "{\"hook_event_name\":\"PreCompact\",\"trigger\":\"auto\",\"transcript_path\":\"$TR\"}" >/dev/null
+out=$(runk "$XP" '{"hook_event_name":"SessionStart","source":"compact"}')
+[ ! -e "$STATE" ] && [ -z "$out" ] || fail "H: a marked window the record does not name wrote or got the state" "$out"; ok
+out=$(runk "$SP" '{"hook_event_name":"SessionStart","source":"startup"}')
+ctx=$(ctxof "$out") || fail "H: no state yet — the holder still gets its role on SessionStart" "$out"
+has "H: the role with no state" "$ctx" '[fleet orchestrator role]'
+runk "$SP" "{\"hook_event_name\":\"PreCompact\",\"trigger\":\"auto\",\"transcript_path\":\"$TR\"}" >/dev/null
+[ -s "$STATE" ] || fail "H: the holder wrote no state"; ok
+[ "$(field "d['loop']['prompt']")" = '/fleet-epic-watch 2581' ] || fail "H: the holder's state lacks the loop" "$(cat "$STATE")"; ok
+out=$(runk "$SP" '{"hook_event_name":"SessionStart","source":"compact"}')
+ctx=$(ctxof "$out") || fail "H: SessionStart(compact) printed no hook JSON for the holder" "$out"
+has "H: role.md rides the compaction" "$ctx" "$(grep -m1 -v '^[[:space:]]*$' "$SK/role.md" | cut -c1-20)"
+has "H: the dispatch rules ride it too" "$ctx" '| 1 | 一个仓库里的一处改动'
+has "H: …with the state" "$ctx" 'EPIC #2581'
 
 printf 'fleet-orchestrator-state-selftest: PASS (%d checks)\n' "$CHECKS"
