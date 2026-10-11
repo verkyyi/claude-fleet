@@ -69,7 +69,7 @@ never committed) — `panel` · `menus` · `rows` are the macmini 看台's own
 | 7 | 点一行出菜单：回答 · 发消息 · 改名 · 停 · 继续 · 唤醒 · 改回收方式 · 回收 · 换账号 · 换 Claude/Codex · 打开它的改动 | 选中按 Tab，同一份菜单（`ACTIONS`；`SIDEBAR_ACTIONS` 一一对照）；别的机器的行有 回答 · 发消息 · 改名 · 改回收方式 · 停 · 回收 · 恢复 | `menus` · `fleet-view-actions-selftest.sh` | 🖥 Tab 回收一个 · 在别的机器上做一个 |
 | 8 | 改名、发消息、回答时在那一行下面问一句 | 面板底部问一句（↵ 交 · Esc 退），答完回到列表 | `fleet-view-actions-selftest.sh` | 🖥 |
 | 9 | 配置坏了「会坏·需重开」 | 那一行的 `✗ 会坏·需重开` 标签 | `fleet-view-selftest.sh`（cfg broken） | ✅ |
-| 10 | 已落地的列表、点一下恢复 | 「已结束」只列**窗口还开着**的；窗口已回收的（侧栏 ⌃t，`fleet-history.sh rows`）面板里没有 → #3286；在此之前任一会话里 `/fleet-history` | — | 🔴 #3286 |
+| 10 | 已落地的列表、点一下恢复 | 「已结束」组：还开着的之后列出窗口已回收的会话（同 ⌃t 那份账，标「window reaped · ↵ restore」），↵ 或 Tab →「恢复」（#3286） | `rows-after` · `menu-reaped`（Restore） | ✅ |
 | 11 | 新会话时问「开在哪台」「什么时候回收」 | 默认不问（家里那台、合并后回收）；事后 Tab →「改回收方式」；每次都问 = R4 有空再做 | 点头 · `menus`（Reap policy） | ✅ |
 | 12 | 批次视图、「#N 没人在跑」重开 | EPIC 那一行行尾 k/N；重开 = R3 有空再做；没人在跑照样来通知 | 点头 · `rows`（21/22 · 9/12 …） | ✅ |
 | 13 | 铃声、系统通知 | 照旧（`fleet_notify.py`，不靠侧栏） | 不随侧栏删 | ✅ |
