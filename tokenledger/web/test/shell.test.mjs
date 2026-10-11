@@ -22,8 +22,11 @@ test('an admin also sees the Admin group: the whole hub, then the five admin pag
   // An admin's own pages are a user's, same order, same links.
   assert.deepEqual(nav.slice(0, i), navFor(USER));
   const admin = nav.slice(i + 1);
-  assert.deepEqual(admin.map((x) => x.id), ['all-sessions', 'by-person', 'all-devices', 'subscriptions', 'machines', 'people', 'settings', 'audit']);
-  assert.deepEqual(admin.map((x) => x.href), ['/admin/sessions', '/admin/overview', '/admin/devices', '/subscriptions', '/nodes', '/admin/users', '/admin/settings', '/admin/audit']);
+  // All devices is the 客户端 tab of 服务节点与客户端 now (claude-fleet#3232):
+  // the hub may still list 'all-devices', the menu has no item for it.
+  assert.deepEqual(admin.map((x) => x.id), ['all-sessions', 'by-person', 'subscriptions', 'machines', 'people', 'settings', 'audit']);
+  assert.deepEqual(admin.map((x) => x.href), ['/admin/sessions', '/admin/overview', '/subscriptions', '/nodes', '/admin/users', '/admin/settings', '/admin/audit']);
+  assert.equal(admin.find((x) => x.id === 'machines').label, 'Service nodes & clients');
   // The old admin pages are gone from the menu, not hidden.
   assert.deepEqual(navFor([...ADMIN, 'credentials', 'access']).length, nav.length);
   assert.ok(nav.every((x) => x.heading || x.href), 'every item links somewhere');
@@ -60,7 +63,7 @@ test('the viewer line: name, role · door, sign-out only with a cookie', () => {
 
 test('every page has a title', () => {
   for (const p of PAGES) assert.ok(titleOf(p.id));
-  assert.equal(titleOf('devices'), 'Devices & SSH');
+  assert.equal(titleOf('devices'), 'My clients');
 });
 
 test('token counts read like the tiles', () => {
@@ -112,7 +115,7 @@ test('numbers and times follow the reader: 2.12 亿 · 10月6日 18:20 · 6 分�
 test('the menu and the viewer line speak Chinese too', () => {
   try {
     useLocale('zh-CN');
-    assert.deepEqual(navFor(['overview', 'devices']).map((x) => x.label), ['概览', '设备与 SSH']);
+    assert.deepEqual(navFor(['overview', 'devices']).map((x) => x.label), ['概览', '我的客户端']);
     assert.equal(viewer({ via: 'github', role: 'user', name: 'alice' }).sub, '使用者 · GitHub');
     assert.equal(liveLine({ sessions: [{}, {}], nodes: [{ availability: 'online' }, { availability: 'lost' }] }), '实时 · 2 个会话 · 2 台机器 1 台在线');
     assert.equal(titleOf('config'), '配置');
@@ -123,12 +126,14 @@ test('the menu and the viewer line speak Chinese too', () => {
 // whole-hub half and back; a user has none.
 test('an admin switches between their own view and the admin view; a user cannot', () => {
   const admin = { role: 'admin', pages: ADMIN };
-  assert.deepEqual(['overview', 'sessions', 'devices', 'config'].map((p) => otherView(admin, p).href),
-    ['/admin/overview', '/admin/sessions', '/admin/devices', '/admin/settings']);
-  assert.ok(['overview', 'sessions', 'devices', 'config'].every((p) => otherView(admin, p).admin));
-  assert.deepEqual(['by-person', 'all-sessions', 'all-devices', 'settings'].map((p) => otherView(admin, p).href),
-    ['/', '/sessions', '/connect', '/config']);
-  assert.ok(['by-person', 'all-sessions', 'all-devices'].every((p) => !otherView(admin, p).admin));
+  assert.deepEqual(['overview', 'sessions', 'config'].map((p) => otherView(admin, p).href),
+    ['/admin/overview', '/admin/sessions', '/admin/settings']);
+  assert.ok(['overview', 'sessions', 'config'].every((p) => otherView(admin, p).admin));
+  assert.deepEqual(['by-person', 'all-sessions', 'settings'].map((p) => otherView(admin, p).href),
+    ['/', '/sessions', '/config']);
+  assert.ok(['by-person', 'all-sessions'].every((p) => !otherView(admin, p).admin));
+  // 我的客户端 has no admin half any more (claude-fleet#3232).
+  assert.equal(otherView(admin, 'devices'), null);
   assert.equal(otherView(admin, 'audit'), null);
   const user = { role: 'user', pages: USER };
   for (const p of USER) assert.equal(otherView(user, p), null, p);

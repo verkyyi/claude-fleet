@@ -11,6 +11,21 @@ import { PAGES } from './shell.js';
 /** CACHE_TTL is how long a page's reads are good for a revisit (ms). */
 export const CACHE_TTL = 30000;
 
+/** MOVED are the old paths that now open another page's address — a link
+ *  or a bookmark never lands on nothing (EPIC #3225 共同约定 8). */
+export const MOVED = Object.freeze({ '/admin/devices': '/nodes?tab=clients' });
+
+/** movedTo is the address an old path opens (keeping a query of its own
+ *  the new one does not set, and the hash), or '' when the path has not moved. */
+export function movedTo(pathname, search = '', hash = '') {
+  const p = String(pathname || '/').replace(/\/+$/, '') || '/';
+  const to = MOVED[p];
+  if (!to) return '';
+  const u = new URL(to, 'http://x');
+  for (const [k, v] of new URLSearchParams(search || '')) if (!u.searchParams.has(k)) u.searchParams.set(k, v);
+  return u.pathname + u.search + (hash || '');
+}
+
 /** routeFor is the page a path draws, or null when the app has none there.
  *  A `prefix` page draws one name under its href (/machines/<host>,
  *  claude-fleet#2796) — the bare href is the list's. */
@@ -39,6 +54,8 @@ export function intercept(ev, a, origin) {
   let u;
   try { u = new URL(a.href, origin); } catch { return null; }
   if (u.origin !== origin) return null;
+  const moved = movedTo(u.pathname, u.search, u.hash);
+  if (moved) u = new URL(moved, origin);
   const page = routeFor(u.pathname);
   return page ? { page, url: u.pathname + u.search + u.hash } : null;
 }

@@ -82,11 +82,12 @@ export const PAGES = Object.freeze([
   // above used to show an admin (claude-fleet#2515), then the hub's own.
   { id: 'all-sessions', label: 'ui.nav.allSessions', icon: 'list', group: 'admin', href: '/admin/sessions', module: '/admin/sessions.js' },
   { id: 'by-person', label: 'ui.nav.byPerson', icon: 'users', group: 'admin', href: '/admin/overview', module: '/admin/overview.js' },
-  { id: 'all-devices', label: 'ui.nav.allDevices', icon: 'key', group: 'admin', href: '/admin/devices', module: '/admin/devices.js' },
   { id: 'subscription-settings', label: 'ui.policy.global', icon: 'settings', group: 'admin', href: '/subscriptions/settings', within: ['subscriptions'], module: '/admin/subscription-settings.js' },
   { id: 'subscription', label: 'ui.policy.subscription', icon: 'card', group: 'admin', href: '/subscriptions/', prefix: true, within: ['subscriptions'], module: '/admin/subscription.js' },
   { id: 'person', label: 'ui.policy.user', icon: 'users', group: 'admin', href: '/admin/users/', prefix: true, within: ['people'], module: '/admin/user.js' },
   { id: 'subscriptions', label: 'ui.nav.subscriptions', icon: 'card', group: 'admin', href: '/subscriptions', module: '/admin/subscriptions.js' },
+  // 服务节点与客户端 (claude-fleet#3232): one page, two tabs — the old All
+  // devices (/admin/devices) is its ?tab=clients (lib/router.js MOVED).
   { id: 'machines', label: 'ui.nav.machines', icon: 'server', group: 'admin', href: '/nodes', module: '/admin/nodes.js' },
   { id: 'people', label: 'ui.nav.people', icon: 'users', group: 'admin', href: '/admin/users', module: '/admin/users.js' },
   { id: 'settings', label: 'ui.nav.settings', icon: 'gear', group: 'admin', href: '/admin/settings', module: '/admin/settings.js' },
@@ -107,7 +108,7 @@ export function navFor(pages) {
 /** VIEW_PAIRS joins each daily page to the admin page with the whole hub's
  *  version of it (claude-fleet#2515): an admin's daily pages show their own,
  *  and the top bar offers the other half. */
-export const VIEW_PAIRS = Object.freeze([['overview', 'by-person'], ['sessions', 'all-sessions'], ['devices', 'all-devices'], ['config', 'settings']]);
+export const VIEW_PAIRS = Object.freeze([['overview', 'by-person'], ['sessions', 'all-sessions'], ['config', 'settings']]);
 
 /** otherView is the top bar's switch on page `id`: {href, label} to the admin
  *  view of a daily page or back from one, null when the viewer's menu has no
