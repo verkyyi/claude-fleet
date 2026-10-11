@@ -3290,6 +3290,29 @@ def account_forget(paths, login, force=False):
 
 
 # --------------------------------------------------------------- status ---------
+def live_daemons(paths):
+    """Pids of this root's daemon main process (`<root>/…/fleet-node-supervisor.py
+    run`) that launchd started (ppid 1) — one `ps`. FLEET_NODE_PS_CMD is the
+    selftests' seam (a file of `pid ppid command` lines)."""
+    seam = os.environ.get("FLEET_NODE_PS_CMD")
+    try:
+        if seam:
+            with open(seam) as f:
+                out = f.read()
+        else:
+            out = subprocess.check_output(["ps", "-axww", "-o", "pid=,ppid=,command="],
+                                          stderr=subprocess.DEVNULL, universal_newlines=True)
+    except Exception:
+        return []
+    pids, root = [], os.path.dirname(paths.runtime.rstrip("/")) + "/"
+    for line in out.splitlines():
+        f = line.split(None, 2)
+        if len(f) == 3 and f[0].isdigit() and f[1] == "1" and root in f[2] \
+                and re.search(r"fleet-node-supervisor\.py run(\s|$)", f[2]):
+            pids.append(int(f[0]))
+    return pids
+
+
 def installed(paths):
     return os.path.exists(paths.plist) or os.path.exists(paths.state_file)
 
@@ -3304,6 +3327,16 @@ def health(paths, state):
     stale = env_num("FLEET_NODE_HEARTBEAT_STALE", 120)
     hb = sv.get("heartbeat") or 0
     if not pid_alive(sv.get("pid")):
+        # a daemon launchd restarted that never wrote state.json is not DOWN: it
+        # is alive and silent (issue #3100 — mini2 read «DOWN» 78 min while
+        # pid 28277 ran no task)
+        live = [q for q in live_daemons(paths) if q != os.getpid()]
+        if live and now() - hb > env_num("FLEET_NODE_HEARTBEAT_STALE", 120):
+            return 5, ("WEDGED — pid %s alive but it never wrote a heartbeat (the last, pid %s's, %s ago): "
+                       "no task, sweep or check runs (now: sudo launchctl kickstart -k system/%s; "
+                       "its stack: sudo kill -USR1 %s, then %s)"
+                       % (live[0], sv.get("pid") or "-", ago(hb), LABEL, live[0],
+                          os.path.join(paths.log, "supervisor.log")))
         return 1, "DOWN (pid %s gone, heartbeat %s ago)" % (sv.get("pid") or "-", ago(hb))
     if now() - hb > stale:
         return 5, ("WEDGED — pid %s alive but its main loop stopped %s ago: no task, sweep or check runs "
