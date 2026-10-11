@@ -45,6 +45,11 @@
 #      it refuses — with a WARN inside 30 days and `machine status`'s sync time; a
 #      token the hub revokes is gone in one sync (every index entry, the file); a
 #      hub that does not answer leaves the pool alone and says so
+#   U  a subscription allowlist narrows ONE login (issue #3043): `unstore` drops
+#      that login's index entry only — a pool file another login still names
+#      stays and still serves it; the narrowed login is not served it; a session
+#      the proxy had picked onto the withdrawn account moves to one still held;
+#      the file nobody names any more is gone; no token in the log
 #   I  machine install whose agent bootstrap fails AND whose way back fails too:
 #      exit 5, the credentials back anyway, the store kept as <login>.rolledback-*,
 #      the steps to do by hand printed (the clean rollback is BREAK-IT
@@ -340,6 +345,40 @@ st=$(bash "$BIN/fleet-credsep.sh" machine status 2>&1)
   && pass "S hub down: the pool left alone, the last sync time kept, status says failing" \
   || fail "S hub down rc=$rc: $out / $st"
 rm -rf "$SB/node" "$SB/db/.pool-sync.json"
+
+# ── U: one login's allowlist narrows, the other's does not (issue #3043) ────────────
+P0=$(pool_n claude)
+unstore() { # <login conf> <peer uid|-> <kind> <label>
+  if [ "$2" = - ]; then FLEET_CONF_DIR="$1" bash "$BIN/fleet-cred-proxy.sh" unstore --kind "$3" --label "$4"
+  else FLEET_CRED_TEST_PEER_UID=$2 FLEET_CONF_DIR="$1" bash "$BIN/fleet-cred-proxy.sh" unstore --kind "$3" --label "$4"; fi
+}
+unstore "$CB" "$BUID" claude pool1 >/dev/null 2>&1; rc=$?
+TBP=$(FLEET_CRED_TEST_PEER_UID=$BUID FLEET_CONF_DIR="$CB" bash "$BIN/fleet-cred-proxy.sh" mint --account pool1 --sid b3 2>&1)
+[ "$rc" = 0 ] && [ "$(pool_n claude)" = "$P0" ] && ! grep -qs '"claude:pool1"' "$SB/db/beta/cred-proxy/pool.json" \
+  && grep -qs '"claude:pool1"' "$SB/db/alpha/cred-proxy/pool.json" \
+  && case "$(call "$PORT" "$TP")" in *sk-ant-oat01-pool-v2*) true ;; *) false ;; esac \
+  && case "$(call "$PORT" "$TBP")" in *sk-ant-oat01-pool-v2*) false ;; *) true ;; esac \
+  && pass "U beta's pool1 withdrawn: beta not served it, alpha still is, the shared file stays" \
+  || fail "U beta unstore rc=$rc pool=$(pool_n claude): $(cat "$SB/db/beta/cred-proxy/pool.json" 2>/dev/null)"
+out=$(FLEET_CONF_DIR="$CA" FLEET_CRED_PROXY=1 FLEET_SESSION_WRAP=$$ bash "$BIN/fleet-session-cred.sh" mint --provider claude --sid u1 2>&1)
+TU=$(printf '%s' "$out" | cut -f3); r1=$(call "$PORT" "$TU")
+case "$r1" in *sk-ant-oat01-alpha*) X=main XT=sk-ant-oat01-alpha ;; *sk-ant-oat01-pool-v2*) X=pool1 XT=sk-ant-oat01-pool-v2 ;; *) X='' ;; esac
+unstore "$CA" - claude "${X:-none}" >/dev/null 2>&1; rc=$?
+r2=$(call "$PORT" "$TU")
+[ -n "$X" ] && [ "$rc" = 0 ] && case "$r2" in *"$XT"*) false ;; *sk-ant-oat01-*) true ;; *) false ;; esac \
+  && [ "$(pool_n claude)" = $((P0 - 1)) ] && ! pool_has "$XT" \
+  && pass "U alpha's picked account ($X) withdrawn: the session moves to one alpha still holds, the file nobody names is gone" \
+  || fail "U alpha unstore $X rc=$rc pool=$(pool_n claude): $r1 → $r2"
+grep -q '"ev": "unstore"' "$SB/log/alpha.log" && grep -q '"ev": "unstore"' "$SB/log/beta.log" \
+  && ! grep -q 'sk-ant-' "$SB/log/alpha.log" "$SB/log/beta.log" "$SB/log/shared.log" 2>/dev/null \
+  && pass "U each withdrawal in its own login's log, no token" || fail "U logs"
+out=$(FLEET_CONF_DIR="$CA" bash "$BIN/fleet-cred-proxy.sh" unstore --kind claude --label ../x 2>&1); rc=$?
+[ "$rc" != 0 ] && pass "U an unsafe label: refused" || fail "U unsafe label rc=$rc: $out"
+# put them back for D–G: the same bytes the store had
+store "$CA" - claude "$X" "$XT" >/dev/null 2>&1
+store "$CB" "$BUID" claude pool1 sk-ant-oat01-pool-v2 >/dev/null 2>&1
+FLEET_CONF_DIR="$CA" bash "$BIN/fleet-session-cred.sh" revoke --sid u1 >/dev/null 2>&1
+[ "$(pool_n claude)" = "$P0" ] && pass "U restored for the legs after" || fail "U restore: $(pool_n claude)"
 
 # ── D: no login reaches another's ────────────────────────────────────────────────
 out=$(FLEET_CRED_AS=beta FLEET_CONF_DIR="$CA" bash "$BIN/fleet-cred-proxy.sh" mint --account main --sid x 2>&1); rc=$?

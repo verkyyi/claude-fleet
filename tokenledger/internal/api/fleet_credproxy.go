@@ -115,7 +115,7 @@ func (s *Server) handleCredProxyResolve(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusOK, out)
 		return
 	}
-	b, err := s.sessionBind(c.WorkerID, c.Principal, req.Provider, now)
+	b, err := s.sessionBind(c.WorkerID, c.Principal, s.passEndpoint(c.ID, now), req.Provider, now)
 	if err != nil {
 		out.Valid, out.Error, out.Reason = false, "no_credential", err.Error()
 		writeJSON(w, http.StatusOK, out)
@@ -136,9 +136,31 @@ func (s *Server) handleCredProxyResolve(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, out)
 }
 
-// sessionBindChoices are the accounts a person's session may be bound to for
-// one provider: their own first, then the shared pool's, each by name.
-func (s *Server) sessionBindChoices(principal, provider string) ([]store.Credential, error) {
+// passEndpoint is the endpoint pass id was issued to — the machine whose
+// subscription allowlist binds its session (claude-fleet#3043); "" when its
+// record cannot be read, which machine allowlists then refuse.
+func (s *Server) passEndpoint(id string, now time.Time) string {
+	if e, ok := s.sessCred.get(id, now); ok {
+		return e.row.EndpointID
+	}
+	row, err := s.Store.SessionCredByID(id)
+	if err != nil {
+		return ""
+	}
+	return row.EndpointID
+}
+
+// sessionBindChoices are the accounts a person's session on endpointID may be
+// bound to for one provider: their own first, then the shared pool's, each by
+// name — only those the machine's and the person's subscription allowlists
+// leave (claude-fleet#3043). Every road to a binding chooses from here:
+// resolve's first pick and its re-check of a retained binding, an explicit
+// bind, the 429 rebind. A policy that cannot be read is an error, never "all".
+func (s *Server) sessionBindChoices(principal, endpointID, provider string) ([]store.Credential, error) {
+	pol, err := s.credPolicyFor(endpointID, principal)
+	if err != nil {
+		return nil, err
+	}
 	var out []store.Credential
 	for _, who := range []string{principal, store.PoolPrincipal} {
 		rows, err := s.Store.Credentials(who)
@@ -160,14 +182,14 @@ func (s *Server) sessionBindChoices(principal, provider string) ([]store.Credent
 		})
 		out = append(out, mine...)
 	}
-	return out, nil
+	return s.credPolicyFilter(out, pol), nil
 }
 
 // sessionBind is the session's binding for provider, picked (and kept) on
 // first use. A binding whose account is no longer the person's to use — the
 // row was deleted, or it is another person's — is picked again.
-func (s *Server) sessionBind(workerID, principal, provider string, now time.Time) (store.SessionBind, error) {
-	choices, err := s.sessionBindChoices(principal, provider)
+func (s *Server) sessionBind(workerID, principal, endpointID, provider string, now time.Time) (store.SessionBind, error) {
+	choices, err := s.sessionBindChoices(principal, endpointID, provider)
 	if err != nil {
 		return store.SessionBind{}, err
 	}
@@ -187,7 +209,7 @@ func (s *Server) sessionBind(workerID, principal, provider string, now time.Time
 		return b, err
 	}
 	if len(choices) == 0 {
-		return b, errors.New("no " + provider + " account in the vault for " + principal + " (nor a shared-pool one)")
+		return b, errors.New("no " + provider + " account in the vault for " + principal + " (nor a shared-pool one) that this machine's and this person's subscription allowlists permit")
 	}
 	choices = s.byHeadroom(choices, now) // one at its limit last (claude-fleet#2115)
 	pick := store.SessionBind{WorkerID: workerID, Provider: provider, Owner: choices[0].PrincipalID,
@@ -253,7 +275,7 @@ func (s *Server) handleSessionBind(w http.ResponseWriter, r *http.Request, ep *s
 		return
 	}
 	principal := live[0].PrincipalID
-	choices, err := s.sessionBindChoices(principal, req.Provider)
+	choices, err := s.sessionBindChoices(principal, live[0].EndpointID, req.Provider)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -267,7 +289,7 @@ func (s *Server) handleSessionBind(w http.ResponseWriter, r *http.Request, ep *s
 	}
 	if pick == nil {
 		sessionCredRefuse(w, http.StatusNotFound, "not_found", "no "+req.Provider+" account "+req.Account+
-			" that "+principal+" may use (their own, or the shared pool's)")
+			" that "+principal+" may use on this machine (their own, or the shared pool's, within the subscription allowlists)")
 		return
 	}
 	b, err := s.Store.SetSessionBind(store.SessionBind{WorkerID: req.WorkerID, Provider: req.Provider,

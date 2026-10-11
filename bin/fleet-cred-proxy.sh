@@ -134,7 +134,7 @@ if [ -n "$SEP_RUN" ]; then
     ensure|port)
       live_pid >/dev/null || { echo "fleet-cred-proxy: separated, and its service is not running ($SEP_RUN)" >&2; exit 1; }
       cat "$SEP_RUN/port"; exit 0 ;;
-    node-token|node-hash|store|accounts)
+    node-token|node-hash|store|unstore|accounts)
       exec python3 -I "$PY" --state "$STATE" "$cmd" "$@" ;;
     relay)   # the minted relay pass on stdin → the proxy's own state (#1974)
       exec python3 -I "$PY" --state "$STATE" relay ;;
@@ -149,7 +149,7 @@ fi
 # tick still pulls
 export FLEET_CRED_QUOTA_PUSH="${FLEET_CRED_QUOTA_PUSH-$BIN/fleet-proxy-quota.sh}"
 case "$cmd" in
-  node-token|node-hash|probe|store|relay)
+  node-token|node-hash|probe|store|unstore|relay)
     echo "fleet-cred-proxy: $cmd: not separated (bin/fleet-credsep.sh)" >&2; exit 3 ;;
   run)
     child=''; on_now=0; seen=-1; nap=''

@@ -177,10 +177,11 @@ func (s *Server) handleCredProxyRebind(w http.ResponseWriter, r *http.Request) {
 	}
 	s.limits.mark(req.Provider, owner, req.Account, until)
 
-	b, err := s.sessionBind(c.WorkerID, c.Principal, req.Provider, now)
+	epID := s.passEndpoint(c.ID, now)
+	b, err := s.sessionBind(c.WorkerID, c.Principal, epID, req.Provider, now)
 	if err == nil && b.Owner == owner && b.Account == req.Account {
 		var choices []store.Credential
-		if choices, err = s.sessionBindChoices(c.Principal, req.Provider); err == nil {
+		if choices, err = s.sessionBindChoices(c.Principal, epID, req.Provider); err == nil {
 			for _, ch := range choices {
 				if (ch.PrincipalID == b.Owner && ch.Account == b.Account) || s.credAtLimit(ch, now) != "" {
 					continue

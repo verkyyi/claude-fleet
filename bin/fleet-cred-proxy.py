@@ -18,6 +18,10 @@ request on, with the real credential put in on the way out (or none, centrally).
                                  (issue #1978 — bin/fleet-proxy-quota.sh stamps it)
     store   --kind claude|codex --label LABEL   (the file's bytes on STDIN — the
                                  node agent's lease, separated mode only)
+    unstore --kind claude|codex --label LABEL   (the node agent's withdrawal,
+                                 issue #3043: a subscription allowlist forbids
+                                 this login the account — its index entry, own
+                                 copy, pins and picks go; another login's stay)
     probe                       (node-probe.json on STDIN — separated mode only)
     node-token                  → a short-lived fcpn1.<…> for the hub broker
     node-hash                   → sha256 hex of the node token (the fleet-mcp
@@ -772,9 +776,14 @@ class Tenant:
         now = time.time()
         with Proxy.lock:
             cur = self.picks.get((provider, sid))
+        mine = self.held(provider)
+        if cur and cur not in mine:
+            cur = ""        # withdrawn since (issue #3043): never served again
+            with Proxy.lock:
+                self.picks.pop((provider, sid), None)
         if cur and cur not in avoid and self.usable(provider, cur, now):
             return cur
-        held = [a for a in self.held(provider) if a not in avoid]
+        held = [a for a in mine if a not in avoid]
         if not held:
             return cur or ""
         with Proxy.lock:
@@ -1660,6 +1669,44 @@ def ctl_handle(req, t):
         write_private(own_path(cfg, kind, label), data)
         t.log(ev="store", kind=kind, acct=label, bytes=len(data))
         return {"ok": True}
+    if op == "unstore":
+        # the node agent's withdrawal (issue #3043): a subscription allowlist no
+        # longer lets THIS login use <kind>:<label>. Only this tenant's index
+        # entry and own copy go — a pool file another login still names stays
+        # (pool_gc counts references), so one person's narrowing never takes a
+        # token from another login it is still allowed to. Its pins and picks
+        # naming the label go too, so no session keeps running on it.
+        if not cfg.store:
+            return {"ok": False, "err": "unstore: not separated (FLEET_CRED_STORE unset)"}
+        kind, label = req.get("kind") or "", req.get("label") or ""
+        if kind not in POOL_FILE or not SAFE_LABEL(label):
+            return {"ok": False, "err": "unstore: kind claude|codex and a safe label"}
+        with POOL_LOCK:
+            idx = pool_index(cfg)
+            had = idx.pop("%s:%s" % (kind, label), None)
+            if had:
+                write_json(os.path.join(cfg.state, "pool.json"), idx)
+            own = own_path(cfg, kind, label)
+            if os.path.lexists(own):
+                os.unlink(own)
+                try:
+                    os.rmdir(os.path.dirname(own))
+                except OSError:
+                    pass
+            if getattr(cfg, "pool", ""):
+                pool_gc(cfg.pool, [x.cfg for x in Proxy.tenants.values()] or [cfg])
+        with Proxy.lock:
+            for k in [k for k, a in t.picks.items() if k[0] == kind and a == label]:
+                del t.picks[k]
+            bp = os.path.join(cfg.state, "bind.json")
+            b = read_json(bp, {})
+            pinned = [sid for sid, a in (b.items() if isinstance(b, dict) else []) if a == label]
+            for sid in pinned:
+                del b[sid]
+            if pinned:
+                write_json(bp, b)
+        t.log(ev="unstore", kind=kind, acct=label, pool=(had or "-")[:12], unpinned=len(pinned))
+        return {"ok": True}
     if op == "pool-drop":
         # the node's pool sweep (issue #2850): a token the hub no longer lists
         # leaves the machine — every tenant's index entry naming it, then its
@@ -2199,6 +2246,8 @@ def main():
     sub.add_parser("machine")
     o = sub.add_parser("store")
     o.add_argument("--kind", required=True, choices=("claude", "codex")); o.add_argument("--label", required=True)
+    o = sub.add_parser("unstore")
+    o.add_argument("--kind", required=True, choices=("claude", "codex")); o.add_argument("--label", required=True)
     sub.add_parser("accounts")
     sub.add_parser("probe")
     sub.add_parser("relay")
@@ -2230,6 +2279,8 @@ def main():
     elif a.cmd == "store":
         ctl_call(a.state, {"op": "store", "kind": a.kind, "label": a.label,
                            "data": base64.b64encode(sys.stdin.buffer.read(65537)).decode()})
+    elif a.cmd == "unstore":
+        ctl_call(a.state, {"op": "unstore", "kind": a.kind, "label": a.label})
     elif a.cmd == "accounts":
         print(json.dumps(ctl_call(a.state, {"op": "accounts"}).get("claude") or {}, sort_keys=True))
     elif a.cmd == "probe":
