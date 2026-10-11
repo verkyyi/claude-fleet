@@ -295,6 +295,10 @@ has 'A: 「仓库」 is the repo of the row before' "$(compose)" '仓库  web �
 sleep .5
 hasnt 'A: the list paints no 「新任务」 row (issue #3119)' "$(screen)" '新任务'
 
+# settled — the 「开工中…」 stand-in gone: the frame that first reads the new
+# row still paints it, the next one (≤1 s) drops it (issue #3171)
+settled() { n=0; while screen | grep -qF '开工中' && [ $n -lt 80 ]; do sleep .1; n=$((n + 1)); done; }
+
 # B. two lines, ↵
 st_ send-keys -t "$pw" -l '侧栏里 FLEET SKILLS 的名字太长被截了'
 st_ send-keys -t "$pw" C-j
@@ -310,6 +314,7 @@ eq 'B: the place ran once' 1 "$(grep -c . "$LOG")"
 has 'B: …acme/web new, the title, --node auto' "$(head -1 "$LOG")" 'acme/web new --title 侧栏里 FLEET SKILLS 的名字太长被截了 --body-file '
 has 'B: …--node auto' "$(head -1 "$LOG")" ' --node auto'
 eq 'B: the body is both lines' $'侧栏里 FLEET SKILLS 的名字太长被截了\n附上截图。' "$(cat "$BODY" 2>/dev/null)"
+settled
 hasnt 'B: 「开工中…」 gone once the row is there' "$(screen)" '开工中'
 eq 'B: the payload files are cleaned up' '' "$(find "$FLEET_SWITCH_STATE" -name 'compose-send*')"
 # N. the send's three lines, one id (issue #1955)
@@ -393,7 +398,6 @@ CHECKS=$((CHECKS + 1)); waitfor 3 '节点  m4 ▾' compose || fail 'D: the machi
 has 'D: …the agent too' "$(compose)" 'Agent  codex ▾'
 
 # The 「仓库」 option. Each send waits for the one before it to land.
-settled() { n=0; while screen | grep -qF '开工中' && [ $n -lt 80 ]; do sleep .1; n=$((n + 1)); done; }
 placed_n() { n=0; while [ "$(grep -c . "$LOG")" -lt "$1" ] && [ $n -lt 60 ]; do sleep .1; n=$((n + 1)); done; sed -n "$1p" "$LOG"; }
 # G. a repo, picked from the menu
 settled
