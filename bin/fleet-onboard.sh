@@ -204,7 +204,7 @@ EOF
   if [ -s "$(state_file)" ]; then
     state_dump
     step=$(state_get step 2>/dev/null)
-    valid_step "${step:-key}" || step=done   # an older walk's handoff (#3332)
+    valid_step "${step:-key}" || step="done"   # an older walk's handoff (#3332)
     echo "resume: ${step:-key}"
   else
     echo "(none — a fresh start)"
