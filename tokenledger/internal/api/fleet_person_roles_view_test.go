@@ -65,6 +65,7 @@ var personRolesEdit = map[string]any{"bundle": map[string]any{
 // `fleet role show <role> --json` and `fleet role rules --json` print on a
 // machine holding that layer and no local one.
 func TestPersonRolesViewMatchesCommand(t *testing.T) {
+	t.Skip("the node's role layer retired in claude-fleet#3122 (no agents/worker.md, no `fleet role show`); this view goes in #3130")
 	h := newFleetHarness(t)
 	enablePeople(t, h, pAlice)
 	h.srv.Store.AdoptPrincipal(pAlice, "alice", "Alice", time.Now())

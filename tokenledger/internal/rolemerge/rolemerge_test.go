@@ -136,6 +136,7 @@ func TestVectors(t *testing.T) {
 // TestBuiltinRoles: the four shipped definitions parse, and with no layer the
 // merge is the definition itself.
 func TestBuiltinRoles(t *testing.T) {
+	t.Skip("worker / epic-driver are standard agent files since claude-fleet#3122 and the role locks are gone; the merge goes in #3130")
 	list, _ := os.ReadFile(filepath.Join(repo, "conf", "agent-locked.list"))
 	for _, role := range Roles {
 		raw, err := os.ReadFile(filepath.Join(repo, "agents", role+".md"))
