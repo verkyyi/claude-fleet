@@ -272,7 +272,7 @@ ti list-windows -t fl -F '#{window_id}' | grep -qx "$W3" || fail "S: exit in the
 [ -s "$W/pane3.in" ] && fail "S: the shell sent keys to gamma's pane: $(od -c "$W/pane3.in" | head -2)"
 # the cwd its last Bash call left (@agent_cwd) outranks the pane's; `do shell --target`
 mkdir -p "$W/wt-gamma/lib"; ti set-option -w -t "$W3" @agent_cwd "$W/wt-gamma/lib"
-TMUX="$IN,0,0" python3 "$BIN/fleet-quickopen.py" do shell --view fl@view-v1 --target "$W3" || fail "S: do shell --target $W3 exited non-zero"
+TMUX="$IN,0,0" python3 "$BIN/fleet-quickopen.py" 'do' shell --view fl@view-v1 --target "$W3" || fail "S: do shell --target $W3 exited non-zero"
 waitfor 20 sh -c "tmux -S '$IN' list-windows -t fl -F '#{@view_shell}' | grep -qx 'nodeA@$ME:$W3'" || fail "S: --target $W3 made no shell for gamma"
 sleep 1; to send-keys -t o:view -l 'echo "AT=$(pwd)=="'; to send-keys -t o:view Enter
 waitfor 20 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -q 'AT=.*wt-gamma/lib=='" \
@@ -282,7 +282,7 @@ to send-keys -t o:view -l 'exit'; to send-keys -t o:view Enter
 W4=$(ti new-window -d -P -F '#{window_id}' -t fl -n delta "cd '$W/wt-delta/gone' && exec cat > /dev/null")
 ti set-option -w -t "$W4" @fleet_id f4; ti set-option -w -t "$W4" @worktree "$W/wt-delta"; ti set-option -w -t "$W4" @agent_cwd "$W/nope"
 sleep 0.3; rmdir "$W/wt-delta/gone"
-TMUX="$IN,0,0" python3 "$BIN/fleet-quickopen.py" do shell --view fl@view-v1 --target f4 || fail "S: do shell --target f4 exited non-zero"
+TMUX="$IN,0,0" python3 "$BIN/fleet-quickopen.py" 'do' shell --view fl@view-v1 --target f4 || fail "S: do shell --target f4 exited non-zero"
 waitfor 20 sh -c "tmux -S '$IN' list-windows -t fl -F '#{@view_shell}' | grep -qx 'nodeA@$ME:$W4'" || fail "S: --target f4 made no shell for delta"
 sleep 1; to send-keys -t o:view -l 'echo "AT=$(pwd)=="'; to send-keys -t o:view Enter
 waitfor 20 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -q 'AT=.*wt-delta=='" \
