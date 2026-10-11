@@ -253,11 +253,18 @@ def layout(rec, cols, down="", route="", now=None, via="", pin="", tries=""):
     scol = (BAD if glyph in ("?", "✖") else WARN if glyph in ("⊘", "↻") else
             OK if glyph == "✓" else HL if glyph == "●" else DIM)
     i, n = rec.get("i") or 0, rec.get("n") or 0
-    left = [(" ‹ ", DIM, "prev"), ("%s/%s" % (i or "–", n), DIM, ""), (" ›", DIM, "next"), ("  ", None, "")]
+    left = []
+    if rec.get("waiting"):
+        # the 看台's line (issue #3184): how many sessions ask you, ahead of the record
+        left += [(" " + (say("topbar_waiting_fmt", str(rec["waiting"])) or "! %d" % rec["waiting"]), BAD, "title"),
+                 (" ", None, "")]
+    left += [(" ‹ ", DIM, "prev"), ("%s/%s" % (i or "–", n), DIM, ""), (" ›", DIM, "next"), ("  ", None, "")]
     left.append((glyph + (" " + word if cols >= WORD_MIN else ""), scol, ""))
     left.append(("  ", None, ""))
     if rec.get("key"):
         left += [(rec["key"], HL, "key"), (" ", None, "")]
+    if rec.get("cfg_broken"):
+        left += [(say("topbar_cfg_broken") or "会坏·需重开", BAD, ""), (" ", None, "")]
     right = []
     if rec.get("also") and cols >= REPO_MIN:
         right.append((rec["also"], WARN, ""))
@@ -348,7 +355,10 @@ def paint(parts, bg):
 # for another machine's window, C4, the far session's `@peer_cur`), else the
 # window's own stamps (the measurement bus, the same ones `fleet ls` reads). The
 # route comes from the 看台's registry row, another machine's link state from
-# peerlink/state.json (C5). layout() and fit() are the client's, unchanged.
+# peerlink/state.json (C5). layout() and fit() are the client's; the 看台's record
+# alone adds `waiting` — 「! N 个在等你」 ahead of ‹ i/n ›, the needs rows of the same
+# lines (a lost one not counted), 0 draws nothing — and `cfg_broken` (会坏·需重开:
+# the window on global/agent-cfg.broken, or its cache line's cfg) — issue #3184.
 
 US = "\x1f"
 NODE_NARROW = 100   # a 看台 narrower than this (a phone, #3006) drops 剩余 · model · effort
@@ -418,20 +428,32 @@ def line_ctx(p):
     return stamp_ctx([""] * 7 + p[20:25])
 
 
-def view_rows(sock, win):
+def view_rows(sock, win, states=None):
     """The 看台's own session windows, in order (window ids) — what ‹ i/n ›
     counts while the hub's list has no line for this fleet yet (a login just
     opened: 「‹ –/0 ›」 beside two windows, #3155). A home / panel / steward
-    window is no session row."""
+    window is no session row. `states`, a dict, gets each one's @claude_state."""
     out = subprocess.run(["tmux", "-S", sock, "list-windows", "-t", win, "-F",
-                          "#{window_id}|#{@fleet_id}|#{@fleet_role}"],
+                          "#{window_id}|#{@fleet_id}|#{@fleet_role}|#{@claude_state}"],
                          capture_output=True, text=True, stdin=subprocess.DEVNULL).stdout if sock and win else ""
     rows = []
     for line in out.splitlines():
-        wid, fid, role = (line.split("|") + ["", ""])[:3]
+        wid, fid, role, st = (line.split("|") + ["", "", ""])[:4]
         if fid and role not in ("home", "panel", "steward"):
             rows.append(wid)
+            if states is not None:
+                states[wid] = st
     return rows
+
+
+def cfg_broken(conf_dir, sess, win):
+    """Whether global/agent-cfg.broken — the ONE list fleet_cfg_state consults
+    (fleet-oldcfg-check.sh --sweep writes it) — names this window."""
+    try:
+        with open(os.path.join(conf_dir, "global", "agent-cfg.broken"), encoding="utf-8", errors="replace") as f:
+            return any(l.split("\t")[:2] == [sess, win] for l in f)
+    except OSError:
+        return False
 
 
 def node_record(kv):
@@ -470,10 +492,19 @@ def node_record(kv):
                "node": pnode or here, "lost": False, "wid": wid}
     if not peer:
         rec.update(stamp_ctx(p))   # this machine's own window: its stamps are the freshest reading
+    # 「! N 个在等你」 off the same rows ‹ i/n › counts: every needs row but a lost
+    # one (what a lost row last said is no longer known)
+    waiting = sum(1 for l in lines if (l + [""] * 6)[5] == "needs" and (l + [""] * 3)[2] != "lost")
     if not lines:
-        own = view_rows(sock, win)
+        states = {}
+        own = view_rows(sock, win, states)
         rec["n"] = len(own)
         rec["i"] = own.index(win) + 1 if win in own else 0
+        waiting = sum(1 for w in own if states.get(w) == "needs")
+    rec["waiting"] = waiting
+    conf = str(reg.parent) if kv.get("reg") else os.environ.get("FLEET_CONF_DIR", "")
+    rec["cfg_broken"] = bool(hit and (hit[1] + [""] * 16)[15] == "broken") or \
+        (not peer and bool(conf) and cfg_broken(conf, sess, win))
     if p[12] == "orchestrator" and not rec.get("title"):
         rec["title"] = say("sidebar_portal") or "新任务"
     down = ""

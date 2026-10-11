@@ -221,5 +221,42 @@ chmod 755 "$WORK/ro"
 eq "D: no row, no record, no writable dir" "ok" "$out"
 CHECKS=$((CHECKS + 10))
 
+# ============================================================================
+# E. the 看台's line (issue #3184): 「! N 个在等你」 off the same rows, 0 draws
+#    nothing; a window on agent-cfg.broken says 会坏·需重开
+# ============================================================================
+mkdir -p "$WORK/cfgc/remote-views" "$WORK/cfgc/global"
+# fleet-hub-sessions.sh's columns: 1 wid · 2 node · 3 online|lost · 4 issue · 5 repo · 6 state
+row() { printf 'wid:%s/%s\037m5\037%s\037\037\037%s\037claude\n' "$F" "$1" "$2" "$3"; }
+{ row issue-1 online needs; row issue-2 online needs; row issue-3 lost needs; row issue-4 online working; } > "$G/remote_$S-wait"
+row issue-4 online working > "$G/remote_$S-calm"
+printf '%s\t@7\tabc\thook gone\n' "$S-calm" > "$WORK/cfgc/global/agent-cfg.broken"
+out=$(FLEET_UI_LANG=zh python3 - "$BIN" "$G" "$S" "$WORK/cfgc/remote-views" <<'PY2'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("tb", sys.argv[1] + "/fleet-topbar.py")
+tb = importlib.util.module_from_spec(spec); spec.loader.exec_module(tb)
+g, s, reg = sys.argv[2:5]
+bad = []
+def chk(what, got, want):
+    if got != want:
+        bad.append("%s: %r, want %r" % (what, got, want))
+def line(sess, w="@9"):
+    rec, down, rr, via = tb.node_record({"g": g, "s": sess, "w": w, "reg": reg})
+    return rec, tb.fit(rec, 150, down, rr)[0]
+rec, text = line(s + "-wait")
+chk("2 needs (a lost one not counted)", rec.get("waiting"), 2)
+chk("「! 2 个在等你」 drawn", "! 2 个在等你" in text, True)
+chk("it leads the line", text.lstrip().startswith("! 2 个在等你"), True)
+rec, text = line(s + "-calm")
+chk("0 needs: nothing drawn", ("在等你" in text, rec.get("waiting")), (False, 0))
+chk("not on the broken list: no word", "会坏·需重开" in text, False)
+rec, text = line(s + "-calm", "@7")
+chk("on the broken list: 会坏·需重开", "会坏·需重开" in text, True)
+print("\n".join(bad) or "ok")
+PY2
+)
+eq "E: the 看台's line counts what waits on you, says a broken configuration" "ok" "$out"
+CHECKS=$((CHECKS + 6))
+
 printf 'selftest PASS: topbar-ctx — 剩余 · 模型 · effort on the client top line (%s checks, #2717)\n' "$CHECKS"
 exit 0

@@ -81,6 +81,14 @@ beside it, and `?` on an empty query shows the legend. Machine, login and repo
 is special (issue #3119): the one holding the orchestrator or the steward is a row
 like any other, and there is no 「新任务」 line. All of it through fleet-ui-lang.sh
 (`view_*`).
+
+STALE (issue #3184, EPIC #3178 C6): 失联 is judged off ONE time, global/hub_ok —
+the file the producer's `m4!` reads. A lost row is grey end to end and tagged
+「⊘ 失联 N 分钟」; hub_ok older than FLEET_HUB_SESSIONS_STALE (60 s) puts a red
+banner on top naming the machines (banner()); ↵ on a lost row says 进不去 instead
+of going (lost_msg()). An open popup reads its list again every
+FLEET_VIEW_REFRESH (2 s, 0 = never) off the screen's thread (Refresh), the lit
+row kept by its key — and each read runs hub_fresh, so a silent hub is retried.
 """
 import curses
 import getpass
@@ -93,6 +101,7 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -275,6 +284,23 @@ def fleet_logins():
     return out
 
 
+def hub_age(now=None):
+    """Seconds since global/hub_ok — the ONE time the list judges 失联 by (the
+    producer's `!` reads the same file, fleet_status_hub_lost). None when there is
+    no hub_ok: no hub here, or a loop older than #1483 — nothing to say."""
+    try:
+        ok = int((dash_global() / "hub_ok").read_text().split()[0])
+    except (OSError, ValueError, IndexError):
+        return None
+    return max(0, (time.time() if now is None else now) - ok)
+
+
+def hub_stale(now=None):
+    """hub_ok older than FLEET_HUB_SESSIONS_STALE (60 s) — the bar's 入口连不上."""
+    age = hub_age(now)
+    return age is not None and age > fenv("FLEET_HUB_SESSIONS_STALE", 60)
+
+
 def hub_fresh(fleet):
     """The other machines' rows are only as new as global/remote_<fleet>, which
     fleet-hub-sessions.sh's loop keeps — a loop the collector's tick (re)starts. A
@@ -416,6 +442,8 @@ def entries(vid, now=None):
     wins = windows(fleet) if fleet else {}
     landed_secs = fenv("FLEET_VIEW_LANDED_SECS", 86400)
     gl = glyphs()
+    hage = hub_age(now)
+    hstale = hage is not None and hage > fenv("FLEET_HUB_SESSIONS_STALE", 60)
     groups = {g: [] for g in GROUPS}
     ended, repos, anc = [], [], {}
     section, repo = "", ""
@@ -460,7 +488,14 @@ def entries(vid, now=None):
         grp = group_of(state, section == "pin", landed, section == "ended")
         ask = one_line(f[17]) if state == "needs" else ""
         tags = []
+        lost_secs = None
         if lost:
+            # how long nothing new came: the hub's silence (hub_ok, the producer's
+            # own source) while it is silent, else that machine's last reading
+            lost_secs = hage if hstale else (now - act if act else hage)
+        if lost and lost_secs is not None:
+            tags.append(say("view_tag_lost_min_fmt", max(1, int(lost_secs) // 60)))
+        elif lost:
             tags.append(say("view_tag_lost_fmt", machine))
         elif direct:
             tags.append(say("view_tag_direct_fmt", machine))
@@ -472,7 +507,7 @@ def entries(vid, now=None):
             tags.append(f[5].strip())
         e = {"kind": "sess", "target": target, "far": not local, "machine": machine, "login": login,
              "state": state, "text": title or name, "name": name, "issue": issue, "depth": depth,
-             "group": grp, "sym": sym_of(state, lost), "lost": lost, "ask": ask, "tags": tags, "repo": repo,
+             "group": grp, "sym": sym_of(state, lost), "lost": lost, "lost_secs": lost_secs, "ask": ask, "tags": tags, "repo": repo,
              "word": state_words(state, detail if state == "needs" else ""),
              "foot": " · ".join(x for x in (title or name, reap_words(f[14]),
                                             detail if detail and detail != state else "",
@@ -511,6 +546,64 @@ def entries(vid, now=None):
                 e["tags"].append(e["repo"])
             out.append(e)
     return out
+
+
+def banner(items, now=None):
+    """The red line on top of the popup (issue #3184, EPIC #3178 C6): hub_ok older
+    than FLEET_HUB_SESSIONS_STALE and another machine's rows on the list ⇒ 「<机器们>
+    的会话 N 分钟没更新（连不上入口）· 正在重连」 — the list's own refresh calls
+    hub_fresh's --ensure meanwhile. Nothing else is judged here: the hub fresh, or
+    no hub_ok at all ⇒ no line."""
+    age = hub_age(now)
+    if age is None or age <= fenv("FLEET_HUB_SESSIONS_STALE", 60):
+        return ""
+    names = []
+    for e in items:
+        if e["kind"] == "sess" and e.get("lost") and e.get("machine") and e["machine"] not in names:
+            names.append(e["machine"])
+    if not names:
+        return ""
+    return say("view_stale_banner_fmt", "、".join(names), max(1, int(age) // 60))
+
+
+def lost_msg(e):
+    """↵ on a lost row: nothing to go to — say so instead of trying (None = go)."""
+    if e.get("kind") == "sess" and e.get("lost"):
+        return say("view_lost_go_fmt", e.get("machine") or "?")
+    return None
+
+
+class Refresh:
+    """The open popup's list, read again every FLEET_VIEW_REFRESH (2 s) off the
+    screen's thread (entries() runs the producer and hub_fresh, up to seconds when
+    the hub is silent): `poll()` hands back a new list once one is read, else None."""
+
+    def __init__(self, vid, every=None):
+        self.vid, self.every = vid, fenv("FLEET_VIEW_REFRESH", 2) if every is None else every
+        self.due, self.res, self.busy = time.monotonic() + self.every, None, False
+        self.lock = threading.Lock()
+
+    def _run(self):
+        try:
+            res = entries(self.vid)
+        except Exception:
+            res = None
+        with self.lock:
+            self.res, self.busy = res, False
+            self.due = time.monotonic() + self.every
+
+    def poll(self):
+        with self.lock:
+            res, self.res = self.res, None
+            start = self.every > 0 and not self.busy and time.monotonic() >= self.due
+            if start:
+                self.busy = True
+        if start:
+            threading.Thread(target=self._run, daemon=True).start()
+        return res
+
+    def wait_ms(self):
+        return max(50, int((self.due - time.monotonic()) * 1000)) if self.every > 0 else 1000
 
 
 # --- the filter: every word must hit, best first (the old ⌘P's scoring, #3179) ---------
@@ -623,7 +716,8 @@ def paint(shown, at, width, cells, clip):
             continue
         base = ("lit", "bold") if lit else (("dim",) if e.get("far") or e.get("sec") else ())
         sym = e.get("sym") or "idle"
-        gstyle = base + (("c%d" % GLYPH_COLORS[sym],) if col else ())
+        # a lost row is grey end to end, its glyph too: what it says is no longer known
+        gstyle = base + (("c%d" % GLYPH_COLORS[sym],) if col and not e.get("lost") else ())
         head = ("▶ " if lit else "  ")
         word = (" " + e["word"]) if lit and e.get("word") else ""
         right = " ".join(list(e.get("tags") or ()) + [e.get("right") or (
@@ -1317,6 +1411,8 @@ def popup(screen, qo, vid, client):
         if color_on():
             curses.init_pair(2, grey, -1)
             curses.init_pair(3, curses.COLOR_CYAN, -1)
+            curses.init_pair(4, curses.COLOR_RED, -1)
+            styles["red"] = curses.color_pair(4) | curses.A_BOLD
             styles["dim"] = curses.color_pair(2)
             for n in sorted(set(GLYPH_COLORS.values())):
                 c = n if n < curses.COLORS else (curses.COLOR_WHITE if n == 8 else n % 8)
@@ -1338,11 +1434,22 @@ def popup(screen, qo, vid, client):
     at = next((i for i, e in enumerate(shown) if e.get("target") == cur and pickable(e)), 0)
     top = 0
     heal = qo.Heal()
+    fresh = Refresh(vid)
     while True:
+        new = fresh.poll()
+        if new is not None:
+            # the list read again: the lit row stays the lit row (by its key)
+            lit = shown[at].get("target") if 0 <= at < len(shown) else None
+            items = new
+            shown = visible(items, query, opened)
+            at = next((i for i, e in enumerate(shown) if pickable(e) and lit and e.get("target") == lit),
+                      min(at, max(0, len(shown) - 1)))
         heal.tick(screen)
         height, width = screen.getmaxyx()
         screen.erase()
-        body = max(1, height - 3)
+        ban = banner(items)
+        off = 2 if ban else 1
+        body = max(1, height - 2 - off)
         sel = [i for i, e in enumerate(shown) if pickable(e)]
         if sel and at not in sel:
             at = min(sel, key=lambda i: abs(i - at))
@@ -1354,7 +1461,12 @@ def popup(screen, qo, vid, client):
         if at + 1 < len(shown) and shown[at + 1]["kind"] == "ask" and at + 1 >= top + body:
             top += 1
         screen.addnstr(0, 0, qo.clip("› " + query, width - 1), width - 1)
-        for y, segs in enumerate(paint(shown[top:top + body], at - top, width - 1, qo.cells, qo.clip), 1):
+        if ban:
+            try:
+                screen.addnstr(1, 0, qo.clip(ban, width - 1), width - 1, attr(("red",)) or curses.A_BOLD)
+            except curses.error:
+                pass
+        for y, segs in enumerate(paint(shown[top:top + body], at - top, width - 1, qo.cells, qo.clip), off):
             x = 0
             for text, style in segs:
                 if x >= width - 1:
@@ -1369,7 +1481,7 @@ def popup(screen, qo, vid, client):
                        else (curses.color_pair(3) if color_on() else 0))
         screen.addnstr(height - 1, 0, qo.clip(say("view_keys"), width - 1), width - 1, attr(("dim",)))
         screen.refresh()
-        screen.timeout(heal.timeout(False) or 1000)
+        screen.timeout(min(heal.timeout(False) or 1000, fresh.wait_ms()))
         try:
             ch = screen.get_wch()
         except curses.error:
@@ -1398,6 +1510,9 @@ def popup(screen, qo, vid, client):
                 continue
             target = e.get("target") or ""
             if not target:
+                continue
+            msg = lost_msg(e) or ""
+            if msg:
                 continue
             rc = go(qo, vid, target, "popup", client, e)
             if rc == 0:
