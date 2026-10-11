@@ -88,14 +88,66 @@ fi
 # this login's minted pass alive (#1974): KEPT while the hub accepts it, a new
 # one when it does not. Best effort and quiet — an untrusted machine is refused
 # (it routes central anyway), a hub that is down leaves the old pass in place.
-RELAY_AT=0
-relay_fetch() {
-  [ -n "${FLEET_CRED_RELAY_URL:-}" ] && [ -z "${FLEET_CRED_RELAY_TOKEN:-}" ] || return 0
-  [ "${CCQUOTA_FLEET:-0}" = 1 ] || return 0
-  "$BIN/fleet-relay-cred.sh" fetch >/dev/null 2>&1
-  RELAY_AT=$(date +%s)
+#
+# Held: re-checked every FLEET_CRED_RELAY_RECHECK_SECS (1800). Not held — a
+# login opened while its account is still `creating` gets 403 (#3213) — asked
+# again on a short clock, FLEET_CRED_RELAY_RETRY_SECS (60) doubling to
+# FLEET_CRED_RELAY_RETRY_MAX_SECS (120): the pass arrives within that bound (+
+# the launcher's own $IDLE) of the account turning active — ≤ 3 minutes, with
+# no hand step (#3423). A NEW pass re-probes at once (FLEET_CRED_REPROBE_CMD,
+# default fleet-node-probe.sh --quiet): the probe taken before it said `direct`
+# from a CN egress, and that verdict is what closes compute.
+RELAY_AT=0 RELAY_HELD=1 RELAY_WAIT=0
+# relay_configured → rc 0 when this login's proxy has a relay road. Separated
+# (credsep), the URL is root's <LIB>/<login>.conf, which only the proxy reads —
+# a Linux tenant's own fleet.conf never names it (#3423) — so ask the proxy.
+# rc 2 = the proxy did not answer (not up yet): ask again on the short clock.
+relay_configured() {
+  local st
+  [ -n "${FLEET_CRED_RELAY_URL:-}" ] && return 0
+  [ -n "$SEP_RUN" ] || return 1
+  st=$(python3 -I "$PY" --state "$STATE" status --json 2>/dev/null) || return 2
+  printf '%s' "$st" | python3 -I -c 'import json,sys
+try: sys.exit(0 if json.load(sys.stdin).get("relay") else 1)
+except Exception: sys.exit(2)'
 }
-relay_due() { [ $(( $(date +%s) - RELAY_AT )) -ge "${FLEET_CRED_RELAY_RECHECK_SECS:-1800}" ]; }
+relay_retry() { # not held: the next ask on the doubling short clock
+  RELAY_HELD=0
+  if [ "$RELAY_WAIT" = 0 ]; then RELAY_WAIT=${FLEET_CRED_RELAY_RETRY_SECS:-60}
+  else RELAY_WAIT=$((RELAY_WAIT * 2)); fi
+  [ "$RELAY_WAIT" -le "${FLEET_CRED_RELAY_RETRY_MAX_SECS:-120}" ] || RELAY_WAIT=${FLEET_CRED_RELAY_RETRY_MAX_SECS:-120}
+}
+relay_fetch() {
+  local out rc
+  [ -z "${FLEET_CRED_RELAY_TOKEN:-}" ] || return 0
+  RELAY_AT=$(date +%s)
+  relay_configured; rc=$?
+  case "$rc" in
+    0) ;;
+    2) relay_retry; return 0 ;;
+    *) RELAY_HELD=1 RELAY_WAIT=0; return 0 ;;
+  esac
+  out=$("$BIN/fleet-relay-cred.sh" fetch 2>/dev/null); rc=$?
+  case "$rc" in
+    0|10) RELAY_HELD=1 RELAY_WAIT=0 ;;   # held, or the hub module is off here: nothing to chase
+    *) relay_retry ;;
+  esac
+  case "$out" in
+    'relay: ISSUED'*)
+      # in the background: a probe measures for up to minutes, the launcher's watch is seconds
+      if [ -n "${FLEET_CRED_REPROBE_CMD:-}" ]; then
+        ( eval "$FLEET_CRED_REPROBE_CMD" </dev/null >/dev/null 2>&1 & )
+      else
+        ( "$BIN/fleet-node-probe.sh" --quiet </dev/null >/dev/null 2>&1 & )
+      fi ;;
+  esac
+  return 0
+}
+relay_due() {
+  local every=${FLEET_CRED_RELAY_RECHECK_SECS:-1800}
+  [ "$RELAY_HELD" = 1 ] || every=$RELAY_WAIT
+  [ $(( $(date +%s) - RELAY_AT )) -ge "$every" ]
+}
 
 switch_now() { # → 1 / 0, read fresh in a subshell (the conf may have changed under us)
   ( unset FLEET_CRED_PROXY; [ -n "${_FCP_ENV_SWITCH:-}" ] && FLEET_CRED_PROXY="$_FCP_ENV_SWITCH"; load_conf; printf '%s' "${FLEET_CRED_PROXY:-0}" )
