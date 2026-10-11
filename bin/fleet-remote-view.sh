@@ -224,6 +224,10 @@ if [ "${1:-}" = select ] && [ -n "${3:-}" ]; then
     _s=${_row#*	}; _s=${_s%%	*}
     case "$_row" in *"	fuid="*) _u=${_row#*	fuid=}; _u=${_u%%	*} ;; esac ;;
   esac
+  # a far 看台 with no thin row yet is attaching right now: 5, judged on THIS read —
+  # falling through let the row land before `select)`'s own check, and rv_select
+  # then answered 3 for a worker that is live here (issue #3037)
+  case "$_v" in *-via-*) [ -n "$_s" ] || exit 5 ;; esac
   _t=${2#wid:}
   if [ -n "$_s" ] && [ -n "$_u" ] && [ "${_t%%/*}" = "$_u" ]; then
     command -v tmux >/dev/null 2>&1 || PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
