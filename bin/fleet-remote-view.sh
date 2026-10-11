@@ -249,8 +249,8 @@ fi
 # notification fleet_thin_lease.py sent to this 看台's terminal armed
 # `@notify_jump "<epoch> wid:<worker id>"` on it while the terminal was not in
 # front; the click brings the terminal back, the focus-in lands here and the
-# 看台 goes to that session — through `fleet-view-go` once C2 has written it,
-# else straight to this machine's window that holds it. Older than
+# 看台 goes to that session — through C2's `fleet-view-go.sh`, else (it said
+# no) straight to this machine's window that holds it. Older than
 # FLEET_NOTIFY_JUMP_SECS (60 s): dropped. Before the lib: it runs on every focus-in.
 if [ "${1:-}" = notify-jump ]; then
   command -v tmux >/dev/null 2>&1 || PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
@@ -262,9 +262,9 @@ if [ "${1:-}" = notify-jump ]; then
   case "$_at" in ''|*[!0-9]*) exit 0 ;; esac
   [ $(( $(date +%s) - _at )) -le "${FLEET_NOTIFY_JUMP_SECS:-60}" ] || exit 0
   [ -n "$_wid" ] && [ "$_wid" != "$_val" ] || exit 0
-  for _go in "$BIN/fleet-view-go" "$BIN/fleet-view-go.sh"; do
-    [ -x "$_go" ] && exec "$_go" "$_s" "$_wid"
-  done
+  # C2's one way a 看台 changes session; it says no (another machine not yet
+  # connected, gone) ⇒ this machine's own window, if it has one
+  [ -f "$BIN/fleet-view-go.sh" ] && bash "$BIN/fleet-view-go.sh" "$_s" "$_wid" --how notify >/dev/null 2>&1 && exit 0
   _w=$(tmux -S "$2" list-windows -t "=$_s" -F '#{window_id}|#{@fleet_id}|#{@peer_cur}' 2>/dev/null \
     | awk -F '|' -v c="$_wid" -v f="${_wid##*/}" '$2 != "" && $2 == f || $3 == c || $3 == "wid:" c { print $1; exit }')
   [ -n "$_w" ] && tmux -S "$2" select-window -t "=$_s:$_w" 2>/dev/null

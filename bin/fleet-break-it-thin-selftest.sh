@@ -136,7 +136,8 @@ drill_thin_open_no_loop() {
     || { WHY="no OSC 1337 on 看台 a's terminal ($r: $(cat "$B/open.err"))"; th_done; return 1; }
   SECS=$(since "$t0")
   [ -f "$B/actions.called" ] && { WHY="the page went to the hub's action queue (nobody polls it for a thin client)"; th_done; return 1; }
-  for d in "$B"/conf/remote-views/*.d; do [ -d "$d" ] && { WHY="a spool nobody reads was made"; th_done; return 1; }; done
+  # a spool request: <view>.d/<epoch>-<pid>.json (C2 keeps the 看台's history in that dir too)
+  for d in "$B"/conf/remote-views/*.d/[0-9]*-[0-9]*.json; do [ -f "$d" ] && { WHY="a spool nobody reads was made"; th_done; return 1; }; done
   th_done
   WHAT="租约 via=thin：fleet open 不进入口的动作队列、不建 spool，OSC 1337 直接到看台客户端的终端（${r}）"
 }

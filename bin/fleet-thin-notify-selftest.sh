@@ -121,7 +121,8 @@ TTY_B=$(T list-clients -F '#{client_session} #{client_tty}' | awk '$1 == "fl@vie
 TTY_X=$(T list-clients -F '#{client_session} #{client_tty}' | awk '$1 == "fl@view-x-via-home" { print $2 }')
 [ -n "$TTY_A" ] && [ -n "$TTY_B" ] && [ -n "$TTY_X" ] || { bad "the three 看台 clients did not attach"; exit 1; }
 
-spool_made() { local d; for d in "$1"/*.d; do [ -d "$d" ] && return 0; done; return 1; }
+# a spool request is `<view>.d/<epoch>-<pid>.json` (C2 keeps the 看台's history in that dir too)
+spool_made() { local f; for f in "$1"/*.d/[0-9]*-[0-9]*.json; do [ -f "$f" ] && return 0; done; return 1; }
 dev() { printf '{"device":"%s","os":"macOS","terminal":"iTerm2 3.6.1","via":"local","caps":["open_url"]}' "$1" | base64 | tr -d '\n'; }
 row() {  # <view> <tty> <pid> <device>
   printf '%s\tfl\tthin\t%s\t%s\tcur=u/f-one\troute=-\tdevice=%s\ttoken=t\tfuid=u\tnode=home1\n' "$2" "$(date +%s)" "$3" "$(dev "$4")" \
