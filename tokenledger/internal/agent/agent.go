@@ -280,6 +280,9 @@ type Agent struct {
 	// loop, so a fast scan cadence does not hammer the usage endpoint.
 	lastLimitsPoll   time.Time
 	lastClaudeReport time.Time
+	// claudePoolSaid: the "no Claude login, using the pool" line was logged
+	// once (claude-fleet#3204) — a cycle every minute must not repeat it.
+	claudePoolSaid bool
 
 	// serverInterval is the poll interval the hub asked for, if any. It lets a
 	// noisy fleet be backed off centrally without editing every machine.
@@ -669,6 +672,14 @@ func jitter(d time.Duration) time.Duration {
 	return d + time.Duration(rand.Float64()*2*spread-spread)
 }
 
+// hasClaudeTranscripts reports whether Claude Code has written a transcript
+// directory under this home — the line between a Codex-only login, which has
+// no Claude usage to file, and one that runs Claude without a /login.
+func (a *Agent) hasClaudeTranscripts() bool {
+	fi, err := os.Stat(identity.ProjectsDir(a.cfg.Home))
+	return err == nil && fi.IsDir()
+}
+
 // cycle does one scan, one conditional limits poll, and drains the spool.
 func (a *Agent) cycle(ctx context.Context) error {
 	var claudeErr, codexErr error
@@ -676,6 +687,16 @@ func (a *Agent) cycle(ctx context.Context) error {
 		// A Codex-only installation has no Claude login. It must still work
 		// with the default source selection.
 		id, err := identity.Detect(a.cfg.Home)
+		if err != nil && (errors.Is(err, os.ErrNotExist) || errors.Is(err, identity.ErrNoAccount)) && a.hasClaudeTranscripts() {
+			// No /login, but Claude Code runs here (claude-fleet#3204): its
+			// turns go to the unassigned pool instead of nowhere.
+			if !a.claudePoolSaid {
+				log.Printf("no Claude login in %s/.claude.json (%v); filing this login's Claude usage under %s",
+					a.cfg.Home, err, identity.ClaudePoolAccount)
+				a.claudePoolSaid = true
+			}
+			id, err = identity.ClaudePool(a.cfg.Home), nil
+		}
 		if err == nil {
 			claudeErr = a.cycleClaude(ctx, id)
 		} else if a.codex == nil || (!errors.Is(err, os.ErrNotExist) && !errors.Is(err, identity.ErrNoAccount)) {
@@ -712,7 +733,15 @@ func (a *Agent) cycleClaude(ctx context.Context, id *model.Identity) error {
 
 	// Credentials give the account tier as well as the token, so read them even
 	// when it is not yet time to poll.
-	creds, credErr := identity.LoadCredentials(a.cfg.Home)
+	// The pool is no subscription (claude-fleet#3204): no tier to read, no
+	// account to poll limits for, and its turns must not move the endpoint's
+	// login account.
+	pool := id.AccountUUID == identity.ClaudePoolAccount
+	var creds *identity.Credentials
+	var credErr error
+	if !pool {
+		creds, credErr = identity.LoadCredentials(a.cfg.Home)
+	}
 	if creds != nil {
 		id.SubscriptionType = creds.SubscriptionType
 		id.RateLimitTier = creds.RateLimitTier
@@ -720,7 +749,7 @@ func (a *Agent) cycleClaude(ctx context.Context, id *model.Identity) error {
 
 	var snap *model.LimitsSnapshot
 	var unavailable string
-	if a.shouldPollLimits() {
+	if !pool && a.shouldPollLimits() {
 		snap, unavailable = a.pollLimits(ctx, creds, credErr)
 		a.lastLimitsPoll = time.Now()
 	}
@@ -810,6 +839,9 @@ func (a *Agent) cycleClaude(ctx context.Context, id *model.Identity) error {
 			// these batches are allowed to move the endpoint's account, so
 			// only a change here counts as a real logout/login.
 			AccountOrigin: model.OriginLogin,
+		}
+		if pool {
+			batch.AccountOrigin = model.OriginSession
 		}
 		if i == 0 {
 			batch.Collector = &status
