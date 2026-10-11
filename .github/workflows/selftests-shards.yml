@@ -227,10 +227,11 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: This shard's verdicts for the train
-        # issue #3243: the train's record job reads every shard's FAIL / QUARANTINE
-        # lines (a cut-short shard has none — that is C9's rerun, not a red to count).
+        # issue #3243: the train's record job reads every shard's FAIL / TIMEOUT /
+        # QUARANTINE lines (a cut-short shard has none — that is C9's rerun, not a red
+        # to count). A TIMEOUT is a red test by name (issue #3412).
         if: always() && inputs.record
-        run: grep -E '^(FAIL|QUARANTINE) ' selftests.log > train-result.txt 2>/dev/null || true
+        run: grep -E '^(FAIL|TIMEOUT|QUARANTINE) ' selftests.log > train-result.txt 2>/dev/null || true
       - name: Upload this shard's verdicts
         if: always() && inputs.record
         uses: actions/upload-artifact@v4
@@ -250,6 +251,6 @@ jobs:
             echo "or bash-3.2 difference (issue #696) — not a broken test."
             echo
             echo '```'
-            grep -E '^(FAIL|failed:)' selftests.log 2>/dev/null || echo '(no FAIL line — the shard was cut short; see the timings above)'
+            grep -E '^(FAIL|TIMEOUT|failed:)' selftests.log 2>/dev/null || echo '(no FAIL line — the shard was cut short; see the timings above)'
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"

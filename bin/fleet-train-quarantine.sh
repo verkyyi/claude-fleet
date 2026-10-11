@@ -155,9 +155,9 @@ case "$cmd" in
     hours=${FLEET_TQ_HOURS:-48}
     case "$hours" in ''|*[!0-9]*) hours=48 ;; esac
     [ "$hours" -le 48 ] || hours=48
-    # This train's verdicts, from every shard's result file (FAIL / QUARANTINE lines).
+    # This train's verdicts, from every shard's result file (FAIL / TIMEOUT / QUARANTINE lines).
     res=$(cat "$results"/*/train-result.txt "$results"/train-result*.txt 2>/dev/null)
-    printf '%s\n' "$res" | awk '$1 == "FAIL" || $1 == "QUARANTINE" { print $2 }' | sort -u > "$out/fails"
+    printf '%s\n' "$res" | awk '$1 == "FAIL" || $1 == "TIMEOUT" || $1 == "QUARANTINE" { print $2 }' | sort -u > "$out/fails"
     newq=$(printf '%s\n' "$res" | awk '$1 == "QUARANTINE" { print $2 }' | sort -u)
     entries "$now" active "$list" > "$out/list"
     rc=0

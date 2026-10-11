@@ -210,9 +210,10 @@ jobs:
     # the train tests everything changed since stable, close to the whole suite when
     # stable is behind, so it prices that selection off the durations table first
     # (bin/fleet-train-plan.sh) instead of wearing the PR's 12 × 8 minutes. Linux
-    # picks its own width (≤ 6 minutes a shard, 12..20); macOS keeps board's width
-    # (the runners are the limit) and gets the bound — GitHub's Macs at ×2.3, ours
-    # by their own table. A shard cut short with no test red reruns once
+    # picks its own width (≤ 6 minutes a shard, 12..20); our Macs keep board's width
+    # (one shard a machine) at their own table; GitHub's Macs price at ×2.3 and pick
+    # 2..4 shards of ≤ 40 minutes (issue #3412: a near-full selection on 2 ran ~90
+    # minutes a shard and was cancelled as "hung" while it was still moving). A shard cut short with no test red reruns once
     # (bin/fleet-shard-run.sh); a forecast that cannot be made falls back, never stops.
     name: plan
     needs: board
@@ -224,6 +225,7 @@ jobs:
       linux_budget_secs: ${{ steps.plan.outputs.linux_budget_secs }}
       linux_step_minutes: ${{ steps.plan.outputs.linux_step_minutes }}
       linux_job_minutes: ${{ steps.plan.outputs.linux_job_minutes }}
+      macos_shards: ${{ steps.plan.outputs.macos_shards }}
       macos_budget_secs: ${{ steps.plan.outputs.macos_budget_secs }}
       macos_step_minutes: ${{ steps.plan.outputs.macos_step_minutes }}
       macos_job_minutes: ${{ steps.plan.outputs.macos_job_minutes }}
@@ -250,7 +252,9 @@ jobs:
             bash bin/fleet-train-plan.sh --base "$STABLE" --prefix macos --shards "$n" \
               --durations selftest-durations-fleet-ci.txt --floor 1320
           else
-            bash bin/fleet-train-plan.sh --base "$STABLE" --prefix macos --shards "$n" --scale 2.3 --floor 3000
+            # a free account runs 5 macOS jobs at once: 4 at most, one left for the nightly
+            bash bin/fleet-train-plan.sh --base "$STABLE" --prefix macos --min "$n" --max 4 --target 2400 \
+              --scale 2.3 --floor 3000
           fi
 
   linux:
@@ -272,9 +276,9 @@ jobs:
       record: true
 
   macos:
-    # Our Macs (fleet-ci, one shard each, ≤ 2) or GitHub's (2 wide: a free account
-    # runs at most 5 macOS jobs, and the nightly full suite needs the rest) — as
-    # `board` picked (issue #3145).
+    # Our Macs (fleet-ci, one shard each, ≤ 2) or GitHub's — as `board` picked
+    # (issue #3145); GitHub's width is the plan's, 2..4 (a free account runs at most
+    # 5 macOS jobs, and the nightly full suite needs the rest — issue #3412).
     name: macOS
     needs: [board, quarantine, plan]
     if: needs.board.outputs.skip == 'false' && needs.board.outputs.drill != 'true'
@@ -283,7 +287,7 @@ jobs:
       sha: ${{ needs.board.outputs.train_sha }}
       base: ${{ needs.board.outputs.stable_sha }}
       runs_on: ${{ needs.board.outputs.macos_runs_on }}
-      shards: ${{ needs.board.outputs.macos_shards }}
+      shards: ${{ needs.plan.outputs.macos_shards || needs.board.outputs.macos_shards }}
       budget_secs: ${{ needs.plan.outputs.macos_budget_secs }}
       step_minutes: ${{ needs.plan.outputs.macos_step_minutes }}
       job_minutes: ${{ needs.plan.outputs.macos_job_minutes }}

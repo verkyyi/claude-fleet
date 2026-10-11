@@ -189,6 +189,46 @@ S
   WHAT="stable 落后、近全量 4600 s：列车排 13 片、每次上限 710 s；截断且无红 ⇒ 同一片重跑一次变绿，有 FAIL 行不重跑，两次截断才红"
 }
 
+# A near-full selection on GitHub's 2 Macs is slow, not hung (issue #3412): runs
+# 38155516543 / 38159508733 ran 505 tests on 2 macOS shards, ~90 minutes each, and
+# were cancelled as "hung" while every test was still finishing. GitHub's Macs now
+# take the plan's width (2..4, ≤ 40 minutes a shard), and a test that does hang is a
+# TIMEOUT line by name that the train records as red.
+drill_train_macos_slow_not_hung() {
+  CAP=30
+  local t0 d out wf sh
+  wf="$BIN/../.github/workflows/release-train.yml"; sh="$BIN/../.github/workflows/selftests-shards.yml"
+  grep -q -- '--prefix macos --min "$n" --max 4 --target 2400' "$wf" \
+    && grep -q 'shards: ${{ needs.plan.outputs.macos_shards || needs.board.outputs.macos_shards }}' "$wf" \
+    || { WHY="release-train.yml's GitHub Macs do not take their width from the plan"; return 1; }
+  grep -q "grep -E '^(FAIL|TIMEOUT|QUARANTINE) ' selftests.log > train-result.txt" "$sh" \
+    || { WHY="selftests-shards.yml does not record a TIMEOUT line for the train"; return 1; }
+  d=$(mktemp -d "${TMPDIR:-/tmp}/train-macos.XXXXXX"); t0=$(now)
+  cat > "$d/rs" <<'R'
+#!/bin/bash
+n=1; while [ $# -gt 0 ]; do [ "$1" = --shard ] && n=${2#1/}; shift; done
+echo "select: * ← full suite"; echo "plan tests=505 total=${TOTAL:-4900} shards=$n heaviest=$(( ${TOTAL:-4900} / n + 120 ))"
+R
+  chmod +x "$d/rs"
+  # the full suite (the ubuntu table's 4900 s, ×2.3): 4 shards, not 2
+  out=$(FLEET_TRAIN_PLAN_CMD="$d/rs" bash "$BIN/fleet-train-plan.sh" --base x --prefix macos --min 2 --max 4 --target 2400 --scale 2.3 --floor 3000 2>&1)
+  case "$out" in *'macos_shards=[1, 2, 3, 4]'*'macos_budget_secs=4641'*) ;;
+    *) WHY="a full-suite selection on GitHub's Macs was not planned 4 wide: $out"; rm -rf "$d"; return 1 ;; esac
+  # a small selection keeps board's 2
+  out=$(TOTAL=300 FLEET_TRAIN_PLAN_CMD="$d/rs" bash "$BIN/fleet-train-plan.sh" --base x --prefix macos --min 2 --max 4 --target 2400 --scale 2.3 --floor 3000 2>&1)
+  case "$out" in *'macos_shards=[1, 2]'*'macos_budget_secs=3000'*) ;;
+    *) WHY="a small selection did not keep 2 × 3000 s: $out"; rm -rf "$d"; return 1 ;; esac
+  # a hung test is a TIMEOUT line by name; the train's record counts it red
+  printf 'PASS  a-selftest.sh  1s\nTIMEOUT hung-selftest.sh  600.0s (limit 600s)\n' > "$d/selftests.log"
+  (cd "$d" && grep -E '^(FAIL|TIMEOUT|QUARANTINE) ' selftests.log > train-result.txt)
+  mkdir -p "$d/res/train-result-macOS-1" && mv "$d/train-result.txt" "$d/res/train-result-macOS-1/"
+  grep -q '^TIMEOUT hung-selftest.sh' "$d/res/train-result-macOS-1/train-result.txt" \
+    && grep -q 'awk .$1 == "FAIL" || $1 == "TIMEOUT"' "$BIN/fleet-train-quarantine.sh" \
+    || { WHY="a TIMEOUT line does not reach the train's record"; rm -rf "$d"; return 1; }
+  SECS=$(since "$t0"); rm -rf "$d"
+  WHAT="近全量 505 个测试在 GitHub 的 Mac 上：排 4 片（每片 ≤ 40 分钟），不是 2 片 × 90 分钟；小选择照旧 2 片；单条挂住的测试是带名字的 TIMEOUT 行，列车记成红"
+}
+
 # The release train gives its lane back the moment it cannot ship (issue #3143):
 # run 38126091475 went red on a Linux shard and held the lane while macOS ran on.
 drill_train_red_holds_lane() {
