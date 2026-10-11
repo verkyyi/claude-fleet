@@ -198,7 +198,14 @@ def prepare(a):
         if not isinstance(token, str) or not token or '\n' in token:
             raise ValueError('hub returned no tenant token')
         ne = {'CCQUOTA_HUB_URL': a.hub.rstrip('/'), 'CCQUOTA_TOKEN': token,
-              'CCQUOTA_FLEET': '1', 'CCQUOTA_FLEET_COMPUTE': '1'}
+              'CCQUOTA_FLEET': '1', 'CCQUOTA_FLEET_COMPUTE': '1', 'CCQUOTA_FLEET_CREDS': '1'}
+        private_write(token_path, ''.join(k + '=' + v + '\n' for k, v in ne.items()), role.pw_uid, role.pw_gid)
+    # The pool reaches a login only through its own lease (issue #3211): the node
+    # program leases — into the shared proxy, the label marker into accounts/ —
+    # only for a login whose env says CCQUOTA_FLEET_CREDS=1, as a Mac login's
+    # does. A store written before this has none: add it, every other line kept.
+    if ne.get('CCQUOTA_FLEET_CREDS') != '1':
+        ne['CCQUOTA_FLEET_CREDS'] = '1'
         private_write(token_path, ''.join(k + '=' + v + '\n' for k, v in ne.items()), role.pw_uid, role.pw_gid)
     # These are root-authored route settings; a tenant cannot redirect its token.
     lib = Path(c.LIB)

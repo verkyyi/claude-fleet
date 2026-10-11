@@ -128,6 +128,14 @@ selects `relay` when direct provider access is unavailable; configuring a relay
 URL alone does not force the route. Use the existing proxy route diagnostics to
 verify the actual path before accepting the node.
 
+Claude accounts come from the hub as on a Mac login: the login's settings
+(`logins/<login>.env` and the store's `node.env`) carry `CCQUOTA_FLEET_CREDS=1`,
+so the machine's node program leases the pool ∩ allowlists for it, files each
+token in the shared proxy and writes only the `hub:<label>` marker into the
+login's `accounts/` (issue #3211). Every container start re-runs `prepare`,
+which adds the line to a store written before it, token untouched. Check it with
+`fleet-control-read.sh ready` as the login: `creds` reads `true`.
+
 ## Upgrade and recovery
 
 Kubernetes owns the ACK runtime version. The supervisor omits its updater task,
