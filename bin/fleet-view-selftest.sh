@@ -36,6 +36,12 @@
 #      on the lit row only, the question under an asking row, tags, the repo only
 #      with 2+ repos, every query word must hit; `?` on an empty query (in B) is
 #      the legend, after text a letter
+#   J  issue #3286: 已结束 lists, after the open ended rows, the sessions whose
+#      windows were reaped — fleet-history.sh rows (the sidebar's ⌃t ledger),
+#      one row a key, one an open row shows left out; its menu is 恢复 alone,
+#      which runs fleet-restore-pick.sh --select (a #543 question: exit 4, then
+#      --answer); ⌘↓ never walks onto one; the read is cached, single-flight,
+#      in the background (view-gone waits for it)
 #   G  a phone (issue #3006, C9): the ⌃] letters (dash-keymap.sh --panel switch
 #      view: p list · n / b · c · t · q, one letter each, every one a switch-table
 #      action); a 40-column client: ⌃] p opens the list on the whole screen, ⌃] n
@@ -78,6 +84,9 @@ cat > "$W/rows.sh" <<'EOF'
 cat "$FLEET_VIEW_ROWS_FILE"
 EOF
 export FLEET_VIEW_ROWS_CMD="sh '$W/rows.sh'" FLEET_VIEW_ROWS_FILE="$W/rows.txt"
+# the 已回收 list's read (issue #3286): an empty ledger unless a leg says otherwise
+: > "$W/gone.txt"
+export FLEET_VIEW_LANDED_CMD="cat '$W/gone.txt'"
 ti -f /dev/null new-session -d -s fl -x 120 -y 30 -n orch "sh -c 'echo ORCH; exec cat > \"$W/pane0.in\"'" || fail "A: inner tmux"
 ti source-file "$ROOT/conf/tmux-view.conf" 2>"$W/src.err" || fail "A: tmux-view.conf did not source: $(cat "$W/src.err")"
 for c in 920 921 922 923 924 925 926 927 928 929 930 931 932; do
@@ -337,6 +346,7 @@ fv.here_label = lambda row: "nodeA"
 fv.fleet_logins = lambda: {"MU": "verky"}
 fv.windows = lambda fleet: {"@5": ("", "worker", now - 600), "@6": ("", "worker", now - 3 * 86400), "@9": ("", "worker", now - 60)}
 os.environ["FLEET_UI_LANG"] = "zh"
+fv.gone_text = lambda fleet: ""
 def run(repos):
     fv.produce = lambda fleet: body(repos)
     return fv.entries("v1")
@@ -389,6 +399,129 @@ assert not any(st.startswith("c") for segs in lines for _, sty in segs for st in
 PYI
 ( unset NO_COLOR FLEET_COLOR FLEET_GLYPHS; python3 "$W/leg-i.py" "$BIN" ) || fail "I: the grouped list"
 pass "I  ⌘P grouped: 置顶 · 等你 · 在干活 · 刚落地 · 其他 · 已结束; six one-cell glyphs (ascii, NO_COLOR); the question under its row; tags; 「修 3164」"
+
+# --- J: the reaped sessions (issue #3286) -------------------------------------------------------
+mkdir -p "$W/jstub"
+cat > "$W/jstub/fleet-restore-pick.sh" <<'EOF'
+#!/bin/bash
+printf 'fleet-restore-pick.sh|%s\n' "$*" >> "$JLOG"
+case "$*" in *landed:issue:7*--ask*) echo '#7 的 PR #70 已关闭（未合并），静默 15 分钟会被回收'; exit 4 ;; esac
+exit 0
+EOF
+cat > "$W/leg-j.py" <<'PYJ'
+import importlib.util, os, sys, time
+from pathlib import Path
+B, W = sys.argv[1], sys.argv[2]
+spec = importlib.util.spec_from_file_location("fv", B + "/fleet_view.py")
+fv = importlib.util.module_from_spec(spec); spec.loader.exec_module(fv)
+US, E = "\x1f", "\x1b["
+TX, GY, R = E + "38;2;169;177;214m", E + "38;2;86;95;137m", E + "0m"
+def led(target, glyph, iss, win, title, act, pr):
+    # fleet-history.sh cmd_rows' shape: glyph · issue (5) · tree · window (26) · title · act (8) · PR (7) · dep (4)
+    return target + US + "key" + US + glyph + " " + iss.ljust(5) + " " + GY + "  " + R + " " + TX + win.ljust(26) + R + " " + \
+        TX + title + R + "   " + GY + act.ljust(8) + R + " " + pr.ljust(7) + " " + "·".ljust(4)
+gone = "\n".join([
+    "hdr" + US + "hdr" + US + "  issue    window   title",
+    led("landed:3278@o/claude-fleet", "✓", "#3276", "mac-新登录", "Mac 新登录租凭据 + 演练认看台", "32 mins", "#3278"),
+    led("landed:3278@o/claude-fleet", "✓", "#3276", "mac-新登录", "（同一个键，旧一行）", "3 days", "#3278"),
+    led("landed:scratch:scratch-23@o/claude-fleet", "✗", "~23", "写设计页", "写设计页（个人 MCP 统一", "47 mins", "—"),
+    led("landed:issue:7@o/claude-fleet", "✗", "#7", "seven", "PR 关了没合的", "2 hours", "—"),
+    led("landed:5011@o/claude-fleet", "✓", "#11", "alpha", "已经又开着的 #11", "1 day", "#5011"),
+]) + "\n"
+US_ = US
+def row(*f): return US_.join(f)
+open_rows = "\n".join([
+    row("hdr", "o/claude-fleet", "", "claude-fleet (1)", " "),
+    row("@1", "working", "⠹", "alpha", " ", "", "0", "", "", "#11", "—", "50%", "ok", "Alpha", "merged"),
+    row("hdr", "ended", "", "▸ 已结束 (1)", " "),
+    row("@9", "done", "✓", "ended", " ", "", "0", "", "", "#9", "merged", "·", "ok", "结束的", "merged"),
+]) + "\n"
+fv.view_row = lambda vid: {}
+fv.view_fleet = lambda vid, row=None: "fl"
+fv.here_label = lambda row: "nodeA"
+fv.fleet_logins = lambda: {}
+fv.windows = lambda fleet: {"@9": ("", "worker", int(time.time()) - 3 * 86400)}   # merged days ago: 已结束
+fv.produce = lambda fleet: open_rows
+fv.gone_text = lambda fleet: gone
+it = fv.entries("v1")
+sec = [e for e in it if e["kind"] == "sec"]
+assert len(sec) == 1 and sec[0]["n"] == 4, sec
+ended = [e for e in it if e.get("sec") == "ended" and e["kind"] == "sess"]
+assert [e["target"] for e in ended] == ["@9", "landed:3278@o/claude-fleet", "landed:scratch:scratch-23@o/claude-fleet",
+                                        "landed:issue:7@o/claude-fleet"], [e["target"] for e in ended]
+g = ended[1]
+assert g["gone"] and g["text"] == "Mac 新登录租凭据 + 演练认看台" and g["issue"] == "#3276" and g["right"] == "32 mins", g
+assert g["sym"] == "done" and ended[2]["sym"] == "fail" and g["word"] == "已合并 · 窗口已回收", g
+assert "PR #3278" in g["foot"] and "↵ 恢复" in g["foot"], g["foot"]
+# folded: none of them shows; opened: all four, after the open one
+v = fv.visible(it, "", set())
+assert not any(e.get("gone") for e in v), v
+v = fv.visible(it, "", {"ended"})
+assert [e["target"] for e in v if e.get("sec") == "ended" and e["kind"] == "sess"][1:] == [e["target"] for e in ended[1:]]
+# a query finds one
+assert [e["target"] for e in fv.visible(it, "演练认看台", set())] == ["landed:3278@o/claude-fleet"]
+# ⌘↓ ⌘↑ never walk onto a reaped one
+assert fv.session_order(it) == ["@1", "@9"], fv.session_order(it)
+# Tab: 恢复, alone
+r = fv.act_row("fl", g)
+m = [(a["id"], label) for a, label in fv.menu_of(r)]
+assert m == [("resume", "恢复")], m
+# 恢复 runs the sidebar's ⌃t script, the same argv
+log = Path(os.environ["JLOG"])
+rc, said, went = fv.act_run(None, "v1", "fl", fv.ACTION["resume"], r, "", wait=True)
+calls = log.read_text().splitlines()
+assert rc == 0 and calls == ["fleet-restore-pick.sh|--select landed:3278@o/claude-fleet --session fl --ask"], (rc, said, calls)
+# a #543 row: the question (exit 4), then the answer
+r7 = fv.act_row("fl", ended[3])
+rc, said, _ = fv.act_run(None, "v1", "fl", fv.ACTION["resume"], r7, "", wait=False)
+assert rc == 4 and "已关闭" in said, (rc, said)
+rc, said, _ = fv.act_run(None, "v1", "fl", fv.ACTION["resume"], r7, "R", wait=False)
+assert rc == 0 and log.read_text().splitlines()[-1] == \
+    "fleet-restore-pick.sh|--select landed:issue:7@o/claude-fleet --session fl --answer r", log.read_text()
+# not in the background for a plain row when the popup does not wait: one call, started
+n = len(log.read_text().splitlines())
+rc, said, _ = fv.act_run(None, "v1", "fl", fv.ACTION["resume"], fv.act_row("fl", ended[2]), "", wait=False)
+for _ in range(50):
+    if len(log.read_text().splitlines()) > n: break
+    time.sleep(0.1)
+assert rc == 0 and log.read_text().splitlines()[-1].endswith("--select landed:scratch:scratch-23@o/claude-fleet --session fl"), \
+    log.read_text()
+PYJ
+( JLOG="$W/j.log" FLEET_VIEW_ACT_BIN="$W/jstub" python3 "$W/leg-j.py" "$BIN" "$W" ) || fail "J: the reaped sessions in 已结束"
+# the read: cached, single-flight, in the background; view-gone waits for it
+printf 'landed:1@o/r\037k\037x\n' > "$W/gone.txt"
+G="$W/g/view-gone.fl"; rm -f "$G"
+python3 - "$BIN" <<'PYK' || fail "J: the 已回收 read"
+import importlib.util, os, sys, time
+spec = importlib.util.spec_from_file_location("fv", sys.argv[1] + "/fleet_view.py")
+fv = importlib.util.module_from_spec(spec); spec.loader.exec_module(fv)
+p = fv.gone_file("fl")
+assert fv.gone_text("fl") == ""                      # no copy yet: nothing, a read started
+for _ in range(50):
+    if p.exists(): break
+    time.sleep(0.1)
+assert p.read_text().startswith("landed:1@o/r"), "the background read wrote nothing"
+lock = p.parent / (p.name + ".lock")
+for _ in range(50):
+    if not lock.exists(): break
+    time.sleep(0.1)
+lock.mkdir()
+assert fv.gone_read("fl") is False                   # one read at a time
+lock.rmdir()
+os.utime(str(p), (time.time() - 3600,) * 2)
+mt = p.stat().st_mtime
+assert fv.gone_text("fl").startswith("landed:1@o/r")  # the old copy shows; a new read starts
+for _ in range(50):
+    if p.stat().st_mtime > mt: break
+    time.sleep(0.1)
+assert p.stat().st_mtime > mt, "a stale copy was not read again"
+PYK
+rm -f "$G"
+printf 'landed:2@o/r\037k\037y\n' > "$W/gone.txt"
+python3 "$BIN/fleet-quickopen.py" view-gone --view v1 || fail "J: view-gone"
+grep -q '^landed:2@o/r' "$G" || fail "J: view-gone did not read: $(cat "$G" 2>&1)"
+: > "$W/gone.txt"
+pass "J  已结束 lists the reaped sessions (fleet-history.sh rows) after the open ones; Tab/↵ → 恢复 = fleet-restore-pick.sh --select; read cached in the background"
 
 # --- F: the old client's road ----------------------------------------------------------------
 grep -q 'if argv\[:1\] == \["do"\] and len(argv) == 2:' "$BIN/fleet-quickopen.py" || fail "F: the old do <verb> road changed"
