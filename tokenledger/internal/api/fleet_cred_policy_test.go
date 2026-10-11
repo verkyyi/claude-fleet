@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -489,5 +490,59 @@ func TestCredPolicyStrictSessionChoices(t *testing.T) {
 	setPolicy(t, h, "node", "m4", nil)
 	if choices, err := h.srv.sessionBindChoices(pAlice, ep.ID, credvault.Claude); err != nil || len(choices) != 0 {
 		t.Fatalf("missing machine: %v %v", choices, err)
+	}
+}
+
+// Upgrading an old schema must preserve both unrestricted and limited leases.
+func TestCredPolicyLegacyUpgradePreservesLeases(t *testing.T) {
+	for _, restricted := range []bool{false, true} {
+		name := "unconfigured"
+		if restricted {
+			name = "configured"
+		}
+		t.Run(name, func(t *testing.T) {
+			h, alice, bob := policyRig(t)
+			if restricted {
+				setPolicy(t, h, "node", "m4", []string{uuidGmail, uuidCodex, uuidOwn})
+				setPolicy(t, h, "user", pAlice, []string{uuidCodex})
+			}
+			type result struct {
+				allowed, withdrawn []string
+				recheck            int
+			}
+			capture := func(tok string) result {
+				a, w, r := leased(t, h, tok)
+				return result{a, w, r.RecheckSecs}
+			}
+			a, b := capture(alice), capture(bob)
+			if err := h.srv.Store.SetFleetSetting(CredPolicyModeKey, "", time.Now()); err != nil {
+				t.Fatal(err)
+			}
+			before, err := h.srv.Store.FleetSettings()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = h.srv.Store.EnsureNodes(); err != nil {
+				t.Fatal(err)
+			}
+			if err = h.srv.Store.EnsureNodes(); err != nil {
+				t.Fatal(err)
+			} // second replica / restart
+			after, err := h.srv.Store.FleetSettings()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if after[CredPolicyModeKey] != "legacy" {
+				t.Fatal("upgrade activated strict mode")
+			}
+			delete(after, CredPolicyModeKey)
+			if !reflect.DeepEqual(before, after) {
+				t.Fatalf("upgrade changed existing settings: before=%v after=%v", before, after)
+			}
+			aa, bb := capture(alice), capture(bob)
+			if !reflect.DeepEqual(a, aa) || !reflect.DeepEqual(b, bb) {
+				t.Fatalf("upgrade changed leases: alice %v -> %v; bob %v -> %v", a, aa, b, bb)
+			}
+		})
 	}
 }

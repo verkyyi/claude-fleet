@@ -6016,6 +6016,15 @@ drill_node_container_restart() {
   WHAT="新容器不接管上次的 PID；镜像负责升级时不恢复旧的切换"
 }
 
+drill_db_move_policy_seed() {
+  CAP=120; local t0
+  t0=$(now)
+  _drill_go_tests 'TestMoveDatabasePolicySeed' "$ROOT/tokenledger/internal/store/dbmove_test.go" \
+    'Postgres 门验证新库可迁移、已有授权拒绝覆盖、源库 legacy 模式保留' ./internal/store || return 1
+  [ -n "${CCQUOTA_DB_URL:-}" ] || WHAT='没有测试 Postgres：按名核对搬迁回归测试在，tokenledger-pg 门执行'
+  SECS=$(since "$t0")
+}
+
 # ================================================================ run ===========
 FAILS=$LINT; PASSES=0
 printf 'fleet-break-it: %d rows in docs/BREAK-IT.md\n' "$NROWS"
