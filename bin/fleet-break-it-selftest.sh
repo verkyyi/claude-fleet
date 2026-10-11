@@ -6106,6 +6106,36 @@ drill_linux_login_no_lease() {
   fi
   SECS=$(since "$t0")
   WHAT="新登录和旧存储的登录都带 CCQUOTA_FLEET_CREDS=1，令牌不动"
+# Several logins on one Linux machine (EPIC #3208 C1, issue #3209): the image's
+# passwd is gone at every start, so the volume's declarations are the truth.
+# Each drill runs bin/fleet-node-linux-selftest.py's LinuxTenants leg on a fake
+# passwd in a temp dir; the root smoke (extras/managed-node/smoke.py) does it for real.
+linux_tenant_leg() {
+  python3 "$BIN/fleet-node-linux-selftest.py" "LinuxTenants.$1" >"$WORK/$1.out" 2>&1
+}
+
+drill_linux_uid_reuse() {
+  CAP=15; local t0
+  t0=$(now)
+  linux_tenant_leg test_uid_reuse || { WHY="a login changed number, a retired number came back, or a foreign-owned home was chowned: $(tail -n 3 "$WORK/test_uid_reuse.out")"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="开 24haowan 与 drill2 → 清空 passwd 再 boot：号码不变；删 drill2 再开 drill3 / drill2：拿新号码，不给 10003；家属主不对 boot 停下、不 chown"
+}
+
+drill_linux_removed_login_lingers() {
+  CAP=15; local t0
+  t0=$(now)
+  linux_tenant_leg test_removed_login_lingers || { WHY="something of a removed login stayed: $(tail -n 3 "$WORK/test_removed_login_lingers.out")"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="login remove：node leave、account forget、credsep purge、杀进程、家进 attic（600）、userdel / groupdel、声明删掉、号码进 .retired；再删一次答 4"
+}
+
+drill_linux_tenant_cross_read() {
+  CAP=15; local t0
+  t0=$(now)
+  linux_tenant_leg test_tenant_cross_read || { WHY="a home stayed readable or was handed to another login: $(tail -n 3 "$WORK/test_tenant_cross_read.out")"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="放宽成 0755 的家 boot 后回到 0700；新登录落在别人号码的家目录上被拒、不 chown"
 }
 
 # A child's report whose parent is gone (issue #3117, EPIC #3111 C6): a scratch spawned

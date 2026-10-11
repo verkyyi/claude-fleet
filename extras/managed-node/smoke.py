@@ -63,6 +63,70 @@ class Hub(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
+def multi_login(d, state, runtime, hub, first, s, made):
+    """EPIC #3208 C1 for real: open · restart · remove · open again."""
+    for name in ('24haowan', 'drill2', 'drill3'):
+        try:
+            pwd.getpwnam(name)
+            raise SystemExit('fixture login %s already exists' % name)
+        except KeyError:
+            pass
+    tool = [sys.executable, '-I', str(runtime / 'bin/fleet-node-linux.py')]
+
+    def login(*argv, rc=0):
+        r = subprocess.run(tool + ['login'] + list(argv), capture_output=True, text=True)
+        assert r.returncode == rc, 'login %s: rc %d (want %d)\n%s%s' % (argv, r.returncode, rc, r.stdout, r.stderr)
+        return r.stdout
+
+    def opened(name):
+        code = d / ('join-' + name)
+        code.write_text('fj_' + 'b' * 26)
+        code.chmod(0o600)
+        out = login('open', name, '--no-start', '--hub', hub, '--join-file', str(code))
+        made.append(name)
+        assert out.strip().splitlines()[-1].startswith('credsep: '), out
+        return pwd.getpwnam(name)
+
+    assert json.loads((state / 'linux-tenants' / (first + '.json')).read_text())['uid'] == 31022, 'legacy not migrated'
+    assert (state / 'linux-tenant.json.bak').is_file() and not (state / 'linux-tenant.json').exists()
+    login('open', '1234', rc=3)
+    a, b = opened('24haowan'), opened('drill2')
+    assert len({a.pw_uid, b.pw_uid, 31022}) == 3, 'two logins share a number'
+    before = {n: (pwd.getpwnam(n).pw_uid, os.stat(pwd.getpwnam(n).pw_dir).st_uid) for n in (first, '24haowan', 'drill2')}
+    # Another login cannot enter a home.
+    denied = subprocess.run(['ls', b.pw_dir], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                            preexec_fn=s.demote('24haowan', a.pw_uid, a.pw_gid, a.pw_dir))
+    assert denied.returncode != 0, '24haowan can list drill2\'s home'
+    # A container restart: the image's passwd comes back without them.
+    for n in before:
+        subprocess.run(['userdel', n], check=True)
+        subprocess.run(['groupdel', n], check=False)
+    subprocess.run(tool + ['boot'], check=True)
+    after = {n: (pwd.getpwnam(n).pw_uid, os.stat(pwd.getpwnam(n).pw_dir).st_uid) for n in before}
+    assert after == before, 'restart changed a number or a home owner: %r → %r' % (before, after)
+    print(login('list'), end='')
+    print(subprocess.run(['id', '24haowan'], capture_output=True, text=True).stdout, end='')
+    # A running process of drill2's is gone with it.
+    sleeper = subprocess.Popen(['sleep', '300'], preexec_fn=s.demote('drill2', b.pw_uid, b.pw_gid, b.pw_dir))
+    out = login('remove', 'drill2', '--keep-home')
+    assert out.strip().splitlines()[-1] == 'credsep: purged', out
+    sleeper.wait(timeout=10)
+    made.remove('drill2')
+    try:
+        pwd.getpwnam('drill2')
+        raise AssertionError('drill2 still in passwd')
+    except KeyError:
+        pass
+    assert not Path(b.pw_dir).exists(), 'drill2 home left behind'
+    assert list((d / 'homes/.attic').glob('drill2-*.tar.gz')), 'drill2 home not archived'
+    assert not (d / 'cred/drill2').exists() and not (d / 'lib/drill2.conf').exists(), 'drill2 credsep left behind'
+    assert not (state / 'logins/drill2.env').exists(), 'drill2 still in the machine daemon'
+    assert subprocess.run(['pgrep', '-U', str(b.pw_uid)], capture_output=True).returncode != 0
+    login('remove', 'drill2', '--keep-home', rc=4)
+    c = opened('drill3')
+    assert c.pw_uid != b.pw_uid and c.pw_uid not in (31022, a.pw_uid), 'drill3 got a used number'
+
+
 def main():
     if os.geteuid() != 0 or not sys.platform.startswith('linux') or os.environ.get('CI') != 'true':
         raise SystemExit('only run as root on an ephemeral Linux CI machine (CI=true)')
@@ -73,6 +137,7 @@ def main():
         raise SystemExit('fixture login already exists')
     except KeyError:
         pass
+    made = []
     hub = ThreadingHTTPServer(('127.0.0.1', 0), Hub)
     threading.Thread(target=hub.serve_forever, daemon=True).start()
     proc = None
@@ -149,6 +214,9 @@ def main():
             pass
         else:
             raise AssertionError('root token read followed a symlink')
+        # A volume from before EPIC #3208 C1: the single-login declaration.
+        (state / 'linux-tenant.json').write_text(json.dumps(
+            {'login': login, 'uid': 31022, 'gid': 31022, 'home': str(d / 'homes' / login)}))
         args = argparse.Namespace(login=login, uid=31022, hub='http://127.0.0.1:%d' % hub.server_port,
                                   join_file=str(code), relay='https://fleet-relay.24hw.cn')
         try:
@@ -224,11 +292,16 @@ def main():
             else:
                 raise AssertionError('changed tenant UID accepted on existing PVC')
             print('PASS Linux installer/SSH CA; one machine + one tenant join across retry; fixed UID; separated store; shared proxy; mint')
+            multi_login(d, state, runtime, args.hub, login, s, made)
+            print('PASS several logins: legacy declaration migrated; 24haowan + drill2 opened; numbers and homes '
+                  'kept across a passwd wipe; drill2 removed whole; drill3 got a fresh number')
         finally:
             if proc:
                 proc.terminate()
                 proc.wait(timeout=10)
-            subprocess.run(['userdel', login], check=False)
+            for name in [login] + made:
+                subprocess.run(['userdel', name], check=False)
+                subprocess.run(['groupdel', name], check=False)
             hub.shutdown()
             hub.server_close()
 

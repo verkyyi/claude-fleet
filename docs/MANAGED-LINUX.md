@@ -1,14 +1,51 @@
 # Managed Linux nodes and Aliyun ACK
 
-The first Linux deployment is one managed machine, one non-sudo worker login,
-and one persistent volume. The existing hub issues the machine and login
-identities; the existing Singapore relay forwards Anthropic requests. macOS
-continues to use its existing installer and launchd services.
+A managed Linux machine hosts several non-sudo logins on one persistent volume
+(EPIC #3208). The existing hub issues the machine and each login's identity;
+the existing Singapore relay forwards Anthropic requests. macOS continues to
+use its existing installer and launchd services.
 
-The Linux bootstrap creates its first login. The macOS account-opening/removal
-scripts are not used for Linux: do not enable remote admin account operations
-on this first-version node. Adding tenants through the hub is outside this
-single-login deployment.
+The Linux bootstrap opens the first login. Every later login is opened and
+removed on the machine by ONE road, `fleet-node-linux.py login` (root) — the
+Linux twin of `fleet-login-new.sh` / `fleet-login-remove.sh`, with the same
+steps, exit codes and last line; nothing else on the machine runs `useradd` /
+`userdel`:
+
+```sh
+sudo /opt/claude-fleet/current/bin/fleet-node-linux.py login open 24haowan \
+  --full-name 'Arvin' --join-file /private/login-code
+sudo /opt/claude-fleet/current/bin/fleet-node-linux.py login list
+sudo /opt/claude-fleet/current/bin/fleet-node-linux.py login remove drill2 --keep-home
+```
+
+- `open`: OS user → home (0700) → install → the login's own node identity
+  (join code) → credential separation as a tenant of the shared proxy →
+  `account adopt` → its fleet started. A name is 2–16 of `a-z0-9` with at least
+  one letter (`control.ValidCreateLogin`); a digit may lead (`24haowan` — only
+  here is `useradd` given its bad-name flag).
+- `remove`: stop its fleet → `node leave` on the hub → `account forget` →
+  `fleet-credsep.py purge` → kill its processes → archive the home to
+  `/home/.attic/<login>-<UTC>.tar.gz` (root 600, dropped after 30 days;
+  `--delete-home` skips it) → `userdel` / `groupdel`.
+- `list`: one line per login, `<login> <uid> <home> <state>` (`ok` · `missing`
+  · `mismatch` · `no-home`).
+
+Exit 0 done · 3 bad argument (or a name already taken outside this road) ·
+4 no such login (remove) · 5 the name is already an administrator / has sudo;
+open's last line is `credsep: separated|pending — …|not separated`, remove's
+`credsep: purged`.
+
+**Numbers never move and are never reused.** Each login is declared on the
+volume, `/var/db/fleet-node/linux-tenants/<login>.json` (`{login, uid, gid,
+home, since}`, root 0600). UIDs start at 10002 and only grow (`.next-uid`); a
+removed login's number goes to `.retired` and is never handed out again — the
+same name opened again is a new person with a new number. `/etc/passwd` lives
+in the image layer and is gone on every container start, so the entrypoint's
+first step is `fleet-node-linux.py boot`: every declared group and user back
+with its number, home and shell, before the supervisor starts. A home owned by
+any other number stops the boot with an error; it is never chowned. A volume
+from the single-login version has its `linux-tenant.json` moved to
+`linux-tenants/<login>.json` (the old file kept as `.bak`).
 
 ## Native Linux
 
@@ -35,9 +72,10 @@ sudo systemctl status claude-fleet-node.service
 sudo /opt/claude-fleet/current/bin/fleet-node-supervisor.py status --check
 ```
 
-Use a fresh login name. Its default UID/GID is 10002; `FLEET_NODE_UID` selects
-another before the first install. The persisted `linux-tenant.json` refuses a
-different UID or login on subsequent runs. The worker receives no sudo rule.
+The installer's `--login` opens the first login through `login open`. Its
+UID/GID comes from the allocator (10002 on a fresh volume); `FLEET_NODE_UID`
+pins it on the first install, and its declaration refuses a different UID on
+subsequent runs. No login receives a sudo rule.
 Root and the dedicated `fleetcred` account retain credentials outside HOME.
 
 The supervisor owns the shared credential proxy and machine agent. It reads
@@ -68,8 +106,8 @@ listen is never pushed.
 
 The build context contains the verified release and public key, no join codes
 or node credentials. Select the resulting image **digest** for deployment.
-The image provides a fixed UID/GID 499 for `fleetcred`; the worker's UID/GID
-are recreated consistently from their persisted declaration.
+The image provides a fixed UID/GID 499 for `fleetcred`; every login's UID/GID
+is recreated at each start from its declaration on the volume (`boot`).
 
 ## ACK resources
 
@@ -150,11 +188,11 @@ and a manual updater tick refuses to resume even an old persisted switch while
 digest, arrange a suitable restart, and delete the pod normally. Roll back by
 restoring the previous image digest and restarting again. The PVC stays.
 Credential pool synchronization continues independently of runtime updates.
-Each image activation relinks the tenant's runtime and reapplies its hooks and
+Each image activation relinks every login's runtime and reapplies its hooks and
 settings before restoring sessions. A failed apply remains pending for retry;
 the previous image's files do not need to exist on the replacement container.
 
-On SIGTERM, the entrypoint saves Fleet's session snapshot before stopping the
+On SIGTERM, the entrypoint saves every login's Fleet session snapshot before stopping the
 supervisor. On startup it restores snapshots through the existing restore
 script. Abrupt node loss can recover only previously persisted snapshots and
 conversation history; memory and running processes do not survive. Every
