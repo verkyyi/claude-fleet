@@ -56,6 +56,18 @@ d). Started outside it (no FLEET_SHELL), this re-runs itself through
 by the session's worker_id (fleet-hub-write.sh, the one write client): this
 computer never acts on a window it does not have.
 
+WITH NO CLIENT TMUX (issue #3004, EPIC #2999 C7 — the thin client, `fleet
+--thin`, has none): the same verbs run ON THE HOME MACHINE — `fleet-thin.py
+--run -- python3 <bin>/fleet-session-cli.py --home <verb> …`, one ssh over the
+line a connection takes. `--home` (also what a person on a fleet machine gets
+when no client runs there) reads this machine's fleet: its session (the first
+live one), the fleet server's environment, the same row producer — so the rows
+are every machine's, as the hub's cache has them. `open` there switches the
+newest thin 看台 with a client attached (fleet_view.go — the one switch road).
+The road, in order: FLEET_SHELL=1 → here as before; the old client running (and
+FLEET_CLIENT is not `thin`) → through it, byte for byte; a fleet live on this
+machine → --home here; else → the home over --run.
+
 Exit: 0 done · 1 the action failed, or no client running · 2 usage · 3 no such
 session · 4 more than one session matches.
 剩余 · 模型 · Effort (issue #2431) are each session's measurement bus as its own
@@ -439,6 +451,8 @@ def cmd_open(args):
     if row is None:
         return rc
     qo = lib("fleet_quickopen", "fleet-quickopen.py")
+    if HOME[0]:
+        return home_open(qo, row)
     if not qo.hand(qo.list_pane(), "jump=" + row["key"]):
         say("客户端的列表不在屏幕上，切不过去（先敲 fleet 打开客户端）")
         return 1
@@ -593,6 +607,132 @@ def usage():
     return 2
 
 
+# --- with no client tmux (issue #3004) -----------------------------------------------
+
+HOME = [False]
+
+
+def sh_lib(snippet):
+    """One line out of fleet-lib.sh (the fleet's conf first, as its scripts do)."""
+    try:
+        return subprocess.run(["bash", "-c", '[ -f "$1/../fleet.conf" ] && . "$1/../fleet.conf"; . "$1/fleet-lib.sh" && ' + snippet,
+                               "fleet-session-cli", str(BIN)], stdin=subprocess.DEVNULL, capture_output=True,
+                              text=True, timeout=15).stdout.strip().split("\n")[0].strip()
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def fleet_here():
+    """The first fleet live on this machine (fleet_sockets), "" on a client-only computer."""
+    if not (BIN / "fleet-lib.sh").exists():
+        return ""
+    return sh_lib("fleet_sockets 2>/dev/null")
+
+
+def client_running():
+    if os.environ.get("FLEET_CLIENT") == "thin" or not (BIN / "fleet-shell.sh").exists():
+        return False
+    try:
+        return subprocess.run(["bash", str(BIN / "fleet-shell.sh"), "running"], stdin=subprocess.DEVNULL,
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def road():
+    """client (the old one's environment) · here (--home on this machine) · home (over --run)."""
+    seam = os.environ.get("FLEET_SESSION_CLI_ROAD")
+    if seam in ("client", "here", "home"):
+        return seam
+    if client_running():
+        return "client"
+    return "here" if fleet_here() else "home"
+
+
+def home_setup():
+    """--home: this machine's fleet — FLEET_SESSION, the fleet server's environment
+    (its TMPDIR is where the hub's cache lives) and TMUX at its socket."""
+    HOME[0] = True
+    if os.environ.get("FLEET_SESSION_CLI_ROWS"):
+        return True
+    sess = os.environ.get("FLEET_SESSION") or fleet_here()
+    if not sess:
+        say("这台机器上没有在跑的 fleet")
+        return False
+    os.environ["FLEET_SESSION"] = sess
+    try:
+        envs = subprocess.run(["tmux", "-L", sess, "show-environment", "-g"], stdin=subprocess.DEVNULL,
+                              capture_output=True, text=True, timeout=5).stdout
+        sock = subprocess.run(["tmux", "-L", sess, "display-message", "-p", "#{socket_path}"], stdin=subprocess.DEVNULL,
+                              capture_output=True, text=True, timeout=5).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        envs, sock = "", ""
+    for line in envs.splitlines():
+        k, eq, v = line.partition("=")
+        if eq and re.match(r"^(FLEET_|CCQUOTA_|TMPDIR$|XDG_)", k) and k not in ("FLEET_SESSION", "FLEET_SHELL"):
+            os.environ[k] = v
+    if sock:
+        os.environ["TMUX"] = sock + ",0,0"
+    return True
+
+
+def views_newest():
+    """The newest thin 看台 here with a client attached: kind thin, its attach alive,
+    no left= (fleet-remote-view.sh attach --thin's registry row)."""
+    d = Path(os.environ.get("FLEET_CONF_DIR") or os.path.expanduser("~/.config/claude-fleet")) / "remote-views"
+    best, since = "", -1
+    try:
+        names = os.listdir(str(d))
+    except OSError:
+        return ""
+    for n in names:
+        if "-via-" in n or n.startswith(".") or not (d / n).is_file():
+            continue
+        try:
+            f = (d / n).read_text().split("\n", 1)[0].split("\t")
+        except OSError:
+            continue
+        if len(f) < 5 or f[2] != "thin" or any(c.startswith("left=") for c in f[5:]):
+            continue
+        try:
+            os.kill(int(f[4]), 0)
+            t = int(f[3])
+        except (ValueError, OSError):
+            continue
+        if t > since:
+            best, since = n, t
+    return best
+
+
+def home_open(qo, row):
+    """`fleet open` on the home: the person's newest thin 看台 goes there."""
+    vid = views_newest()
+    if not vid:
+        say("没有连着的 fleet --thin：先敲 fleet --thin，再 fleet open")
+        return 1
+    fv = lib("fleet_view", "fleet_view.py")
+    target = worker_id(row) or row["key"]
+    rc = fv.go(qo, vid, target, "cli", "", {"machine": row.get("node") or ""})
+    if rc == 0:
+        print("→ %s" % row["name"])
+        return 0
+    if rc == 3:
+        print("→ %s（%s 正在连）" % (row["name"], row.get("node") or "?"))
+        return 0
+    say("切不过去（%s）" % ("会话已不在" if rc == 4 else "看台不在了"))
+    return 1
+
+
+def over_home(verb, args):
+    """No client tmux here and no fleet: the verb on the home machine."""
+    rbin = os.environ.get("FLEET_REMOTE_BIN") or ".claude/fleet/bin"
+    tty = sys.stdin.isatty() and sys.stdout.isatty() and (
+        (verb == "answer" and len(args) < 2) or (verb == "close" and "--yes" not in args))
+    argv = [sys.executable or "python3", str(BIN / "fleet-thin.py"), "--run"] + (["--tty"] if tty else []) + \
+        ["--", "python3", rbin + "/fleet-session-cli.py", "--home", verb] + list(args)
+    os.execv(argv[0], argv)
+
+
 # --- background services and scheduled tasks (issue #2527) ----------------------------
 
 SVC_ACTIONS = {"stop": "stop", "start": "start", "restart": "restart", "run": "run_now", "schedule": "set_schedule"}
@@ -681,6 +821,8 @@ def passthrough(verb, args):
 
 
 def main(argv):
+    home = argv[:1] == ["--home"]
+    argv = argv[1:] if home else argv
     if not argv or argv[0] not in VERBS:
         return usage()
     verb, args = argv[0], argv[1:]
@@ -693,9 +835,19 @@ def main(argv):
     # outside the client's environment: through fleet-shell.sh, which imports it
     # and runs this again (FLEET_SHELL=1 then) — the seam reads a file instead
     # (`ls --services` reads a cache file, never the client: no re-run)
-    if os.environ.get("FLEET_SHELL") != "1" and not os.environ.get("FLEET_SESSION_CLI_ROWS") \
+    if home:
+        if not home_setup():
+            return 1
+    elif os.environ.get("FLEET_SHELL") != "1" and not os.environ.get("FLEET_SESSION_CLI_ROWS") \
             and not (verb == "ls" and "--services" in args) and verb not in ("service", "task"):
-        os.execv("/bin/bash", ["bash", str(BIN / "fleet-shell.sh"), "cli", verb] + args)
+        # the old client, byte for byte; else this machine's fleet; else the home (#3004)
+        how = road()
+        if how == "client":
+            os.execv("/bin/bash", ["bash", str(BIN / "fleet-shell.sh"), "cli", verb] + args)
+        if how == "home":
+            return over_home(verb, args)
+        if not home_setup():
+            return 1
     # every verb sees the test identity's sessions the list hides (issue #2505)
     os.environ["FLEET_ROWS_TEST"] = "1"
     return {"ls": cmd_ls, "show": cmd_show, "open": cmd_open, "rename": cmd_rename, "close": cmd_close,

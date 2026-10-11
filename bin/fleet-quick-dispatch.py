@@ -6,17 +6,26 @@ Codex), a bare shell, a session on another machine.
     fleet-quick-dispatch.py [--session S]       the popup (conf/tmux-shell.conf's ⌘T /
                                           prefix t, and ⌘P's first line 「⚡ 派一件事…」,
                                           open it through the one popup door)
-    fleet-quick-dispatch.py payload --title T [--repo R] [--codex]
+    fleet-quick-dispatch.py --view V [--client C]
+                                          the same popup in a thin client's 看台, on
+                                          its home machine (issue #3004, EPIC #2999
+                                          C7: conf/tmux-view.conf's ⌘T, ⌃] t)
+    fleet-quick-dispatch.py payload --title T [--repo R] [--codex | --agent A]
                                           the payload a ↵ would write, as JSON
                                           (the selftest's view)
-    fleet-quick-dispatch.py send --title T [--repo R] [--codex]
+    fleet-quick-dispatch.py send --title T [--repo R] [--codex | --agent A] [--view V]
                                           the ↵ without the screen: write it, hand
                                           it on; prints 「已发出：…」 or why not
 
 The popup: 标题 (one line), 仓库 (every repo the hub says this person's machines
 host — the one the last send went to first; ←→ picks, shown only when there is
-more than one) and 交给 Codex (⌃X flips it; off = the fleet's own agent). ↵
-sends, esc closes, Tab walks between the three.
+more than one) and 用哪个 Coding Agent (issue #1834: ←→ / ⌃X picks; the default
+is the fleet's effective FLEET_AGENT — dash-agent-prompt.sh `agent`, the one
+resolution — and ↵ on it sends with no --agent at all; another one rides the
+send as `--agent` for this one session only). In a 看台 (--view) the session
+opens on this machine, so an agent it has not installed is grey with why
+(「macmini 这台没装 codex」) and cannot be picked; the old client cannot know
+where the hub will place it and greys nothing. ↵ sends, esc closes, Tab walks.
 
 There is no second road (EPIC #2230 共同约定 1, issue #2618's rule): a ↵ writes
 the SAME payload the writing area writes — fleet-compose.py payload(), its
@@ -31,13 +40,21 @@ orchestrator's turn; `/qd` in the orchestrator's window files through the same
 fleet-issue-file.sh, from the inside. No list on screen: --send runs from here
 and the popup says how it ended.
 
+In a 看台 there is no list to hand it to: --send runs here (fleet-client-place.sh
+with no lease opens it through this machine's own adapter) and the result goes on
+the 看台's client as a message.
+
 FLEET_DISPATCH_SEND_CMD (tests): replaces `fleet-compose.py --send <payload>`.
+FLEET_DISPATCH_AGENTS_HERE (tests): the agents installed here, comma-separated,
+in place of looking (FLEET_CLAUDE_BIN / PATH / FLEET_TOOL_DIRS, fleet_find_tool's rule).
 """
 import curses
 import importlib.util
 import json
 import locale
 import os
+import shutil
+import socket
 import subprocess
 import sys
 import time
@@ -90,25 +107,66 @@ def repo_default(have=None, last=None):
     return last if last in have else have[0]
 
 
-def payload(title, repo, codex=False):
+AGENTS = ("claude", "codex")
+
+
+def agent_default(session=""):
+    """The fleet's effective agent — dash-agent-prompt.sh `agent`, the one
+    resolution (the fleet's conf when a session is named)."""
+    env = dict(os.environ, **({"FLEET_SESSION": session} if session else {}))
+    try:
+        out = subprocess.run(["bash", str(BIN / "dash-agent-prompt.sh"), "agent"], env=env, stdin=subprocess.DEVNULL,
+                             capture_output=True, text=True, timeout=10).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        out = ""
+    return out if out in AGENTS else "claude"
+
+
+def agent_here(agent):
+    """Is `agent` installed on this machine (fleet_find_tool's rule)?"""
+    seam = os.environ.get("FLEET_DISPATCH_AGENTS_HERE")
+    if seam is not None:
+        return agent in seam.split(",")
+    pin = os.environ.get("FLEET_CLAUDE_BIN") if agent == "claude" else ""
+    if pin and os.access(pin, os.X_OK):
+        return True
+    if shutil.which(agent):
+        return True
+    dirs = (os.environ.get("FLEET_TOOL_DIRS") or "%s/.local/bin /opt/homebrew/bin /usr/local/bin"
+            % os.path.expanduser("~")).split()
+    return any(os.access(os.path.join(d, agent), os.X_OK) for d in dirs)
+
+
+def agent_missing(view):
+    """{agent: why} of the agents a ↵ cannot use: in a 看台, the ones this machine
+    lacks; the old client cannot know the machine, so none."""
+    if not view:
+        return {}
+    host = socket.gethostname().split(".")[0]
+    return {a: tr("dispatch_agent_missing_fmt", host, a) for a in AGENTS if not agent_here(a)}
+
+
+def payload(title, repo, codex=False, agent=None):
     """The writing area's payload for one line (fleet-compose.py payload), marked
-    `via: dispatch` so the list says the number it filed. {} = nothing to send."""
-    data = compose.payload(title, "", repo, None, "codex" if codex else None)
+    `via: dispatch` so the list says the number it filed. {} = nothing to send.
+    `agent` None = the fleet's default (no --agent on the way)."""
+    data = compose.payload(title, "", repo, None, agent or ("codex" if codex else None))
     if data:
         data["via"] = "dispatch"
     return data
 
 
-def send(data):
+def send(data, view=""):
     """Write it, hand it on. (ok, words): handed to the list → 「已发出：…」 and
-    the list takes it from there; no list → --send here, and how it ended."""
+    the list takes it from there; no list (or a 看台, which has none) → --send
+    here, and how it ended."""
     path = compose.send_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     if not compose.write_atomic(path, json.dumps(data, ensure_ascii=False) + "\n"):
         return False, "✗ " + str(path)
     if data.get("repo"):
         compose.write_atomic(compose.state_path(), json.dumps({"repo": data["repo"]}) + "\n")
-    if quick.hand(quick.list_pane(), "compose"):
+    if not view and quick.hand(quick.list_pane(), "compose"):
         return True, tr("compose_sent_fmt", data["title"])
     seam = os.environ.get("FLEET_DISPATCH_SEND_CMD")
     argv = (seam.split() if seam else [sys.executable, str(BIN / "fleet-compose.py"), "--send"]) + [str(path)]
@@ -123,7 +181,7 @@ def send(data):
                      or tr("compose_failed_unknown"))
 
 
-def ui(screen, session=""):
+def ui(screen, session="", view="", client=""):
     curses.use_default_colors()
     curses.raw()
     try:
@@ -136,8 +194,12 @@ def ui(screen, session=""):
     screen.keypad(True)
     have = repos()
     repo = repo_default(have)
-    title, codex, focus, note, bad = "", False, "title", "", False
-    fields = ["title"] + (["repo"] if len(have) > 1 else []) + ["codex"]
+    dflt = agent_default(fleet_of(view) if view else session)
+    missing = agent_missing(view)
+    usable = [a for a in AGENTS if a not in missing] or [dflt]
+    agent = dflt if dflt in usable else usable[0]
+    title, focus, note, bad = "", "title", "", False
+    fields = ["title"] + (["repo"] if len(have) > 1 else []) + ["agent"]
     heal = quick.Heal()
     while True:
         screen.timeout(heal.timeout(False))
@@ -167,8 +229,11 @@ def ui(screen, session=""):
                  sel=focus == "repo")
         elif repo:
             line("  %s  %s" % (tr("dispatch_field_repo"), repo), curses.A_DIM)
-        line("%s %s  %s" % ("›" if focus == "codex" else " ", "[x]" if codex else "[ ]", tr("dispatch_field_codex")),
-             sel=focus == "codex")
+        line("%s %s  ‹ %s%s ›" % ("›" if focus == "agent" else " ", tr("dispatch_field_agent"), agent,
+                                  tr("dispatch_agent_default") if agent == dflt else ""), sel=focus == "agent")
+        for a in AGENTS:
+            if a in missing:
+                line("    %s — %s" % (a, missing[a]), curses.A_DIM)
         if note:
             line("")
             line(note, (curses.color_pair(3) if bad else curses.color_pair(1)) | curses.A_BOLD)
@@ -205,9 +270,9 @@ def ui(screen, session=""):
             note = tr("dispatch_sending")
             line(note, curses.color_pair(1))
             screen.refresh()
-            ok, said = send(payload(title, repo, codex))
+            ok, said = send(payload(title, repo, agent=None if agent == dflt else agent), view)
             if ok:
-                quick.tmux("display-message", said)
+                quick.tmux("display-message", *(["-c", client] if client else []), said)
                 return 0
             note, bad = said, True
             continue
@@ -215,8 +280,9 @@ def ui(screen, session=""):
             focus = fields[(fields.index(focus) + 1) % len(fields)]
         elif key in (curses.KEY_BTAB, curses.KEY_UP):
             focus = fields[(fields.index(focus) - 1) % len(fields)]
-        elif key == "\x18" or (focus == "codex" and key == " "):
-            codex = not codex
+        elif key == "\x18" or (focus == "agent" and key in (curses.KEY_LEFT, curses.KEY_RIGHT, " ")):
+            at = usable.index(agent) if agent in usable else 0
+            agent = usable[(at + (-1 if key == curses.KEY_LEFT else 1)) % len(usable)]
         elif focus == "repo" and key in (curses.KEY_LEFT, curses.KEY_RIGHT, " ") and have:
             at = have.index(repo) if repo in have else 0
             repo = have[(at + (-1 if key == curses.KEY_LEFT else 1)) % len(have)]
@@ -228,8 +294,14 @@ def ui(screen, session=""):
             focus, title = "title", title + key
 
 
+def fleet_of(view):
+    """The fleet session a 看台 (`<fleet>@view-<id>`) is grouped onto."""
+    fleet, sep, _ = (view or "").rpartition("@view-")
+    return fleet if sep else ""
+
+
 def opts(argv):
-    out = {"--title": "", "--repo": "", "--session": ""}
+    out = {"--title": "", "--repo": "", "--session": "", "--view": "", "--client": "", "--agent": ""}
     i = 0
     while i < len(argv):
         if argv[i] in out and i + 1 < len(argv):
@@ -248,7 +320,8 @@ def main(argv):
     compose.TEXT = TEXT
     o = opts(argv[1:] if argv[:1] in (["payload"], ["send"]) else argv)
     if argv[:1] in (["payload"], ["send"]):
-        data = payload(o["--title"], o["--repo"] or repo_default(), bool(o.get("--codex")))
+        agent = o["--agent"] if o["--agent"] in AGENTS else None
+        data = payload(o["--title"], o["--repo"] or repo_default(), bool(o.get("--codex")), agent)
         if not data:
             print(tr("compose_empty"), file=sys.stderr)
             return 2
@@ -258,11 +331,11 @@ def main(argv):
         if not data["repo"]:
             print(tr("dispatch_norepo"), file=sys.stderr)
             return 2
-        ok, said = send(data)
+        ok, said = send(data, o["--view"])
         print(said)
         return 0 if ok else 1
     os.environ.setdefault("ESCDELAY", "25")
-    return curses.wrapper(ui, o["--session"])
+    return curses.wrapper(ui, o["--session"], o["--view"], o["--client"])
 
 
 if __name__ == "__main__":

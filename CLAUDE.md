@@ -216,6 +216,13 @@ Do not install from memory: read the doc and work from it.
   and narrower than 100 columns the list is full-screen; only a 看台 (`attach --thin`) wears
   that key-table, so a direct attach sees none of it. A 看台 changes session only
   through `bin/fleet-view-go.sh` (`fleet_view.go`, `logs/view-switch.ndjson`).
+  C7's keys (issue #3004) are the same table's: ⌘N = `go` to the orchestrator
+  (here, or `orch_<sess>`'s machine; none → `fleet-orchestrator.sh ensure`), ⌘T =
+  `fleet-quick-dispatch.py --view` (the agent step, #1834), ⌘Q = OSC 7502 `quit`
+  with the row's token on the client's tty + detach, ⌃\ (no ⌘ chord, bound by
+  name) = the session's shell, a `@view_shell` window of the 看台. With no client
+  tmux, `fleet ls / open / close / answer` and `fleet claude` run on the home over
+  `fleet-thin.py --run` (`fleet-session-cli.py --home`); `fleet-view-c7-selftest.sh`.
   **Another machine's session is a window of the 看台 too** (issue #2751, C4): one
   per (machine, login) — `@fleet_role panel`, `@peer`, `@peer_view`, made at the
   attach (`view-peers`) or by the first go, its pane `fleet-peerlink.py pane` on

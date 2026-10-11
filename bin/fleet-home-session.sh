@@ -100,6 +100,35 @@ if [ "${FLEET_SHELL_NO_ATTACH:-0}" != 1 ] && { [ ! -t 0 ] || [ ! -t 1 ]; }; then
   exit 2
 fi
 
+# THE THIN CLIENT (issue #3004, EPIC #2999 C7; FLEET_CLIENT=thin): no client here
+# to sign an ask — the HOME machine opens it (fleet-client-place.sh `- home` run
+# there over fleet-thin.py --run: with no lease of its own it opens through that
+# machine's adapter, or answers RESUME for your current one), then the thin
+# client onto it — the 看台 lands there (a window id here, a worker id another
+# machine's). FLEET_HOME_THIN_CMD (tests) replaces that last step.
+if [ "${FLEET_CLIENT:-}" = thin ] && [ "${FLEET_SHELL_NO_ATTACH:-0}" != 1 ]; then
+  rbin="${FLEET_REMOTE_BIN:-.claude/fleet/bin}"
+  # the first sentence rides as an argument and becomes the body file there
+  hline=$(python3 "$BIN/fleet-thin.py" --run -- sh -c \
+    'f=; if [ -n "$1" ]; then f=$(mktemp "${TMPDIR:-/tmp}/fleet-home-body.XXXXXX") && printf %s "$1" > "$f"; fi; shift
+     bash "$@" ${f:+--body-file "$f"}; rc=$?; [ -z "$f" ] || rm -f "$f"; exit $rc' \
+    fleet-home "$text" "$rbin/fleet-client-place.sh" - home --agent "$agent" ${node:+--node "$node"} ${fresh:+--new} \
+    | tail -n 1); rc=$?
+  debug_after place "$rc"
+  [ "$rc" = 0 ] || { [ -z "$hline" ] || printf '%s\n' "${hline#*$'\t'}" >&2; exit "$rc"; }
+  head=${hline%%$'\t'*}; why=''; case "$hline" in *$'\t'*) why=${hline#*$'\t'} ;; esac
+  case "$head" in
+    RESUME\ *) want=$(printf '%s' "$head" | awk '{ print $3 }') ;;
+    REMOTE\ *) want=$(printf '%s' "$head" | awk '{ print $5 }') ;;
+    # this machine's own adapter: dash-raw-session.sh --print's receipt, its window first
+    LOCAL\ *)  want=$(printf '%s' "$why" | awk '{ print ($1 == "warm" ? $2 : $1) }') ;;
+    *) want='' ;;
+  esac
+  case "$want" in @[0-9]*|*/*) ;; *) want='' ;; esac
+  [ -n "${FLEET_HOME_THIN_CMD:-}" ] && exec sh -c "$FLEET_HOME_THIN_CMD" fleet-home ${want:+"$want"}
+  exec bash "$BIN/fleet" --thin ${want:+"$want"}
+fi
+
 # whether the client was already running (issue #2349): one this command starts
 # for its ask goes again with the view — `fleet claude` leaves nothing behind
 was_up=1
