@@ -71,6 +71,9 @@
 #   admin-agent-stale     bin/fleet-node-update.py follow_admin_agents (#3034): an admin
 #                         login's own ccquota agent ran ~/.local/bin/ccquota, no release
 #                         moved it, so it never learned login_join and opened no login
+#   runtime-gc-admin-tree bin/fleet-node-update.py keep_set / follow_installs / login_tree_rows
+#                         (#3248): the runtime pruned a release an admin's (not taken over)
+#                         linked ~/.claude/fleet still stood on — every script its agent ran gone
 #   codex-helper-missing  bin/fleet-node-update.py helpers (#3017): codex without its
 #                         codex-code-mode-host beside it runs no shell command
 #   shift-enter-sends     conf/tmux-shell.conf, conf/tmux-shell-stage.conf, conf/tmux-attention.conf
@@ -918,6 +921,22 @@ drill_admin_agent_stale() {
     || { WHY="the admin agent did not follow the release: $(printf '%s' "$out" | grep -E 'Error|FAIL' | head -3 | tr '\n' ' ')"; return 1; }
   SECS=$(since "$t0")
   WHAT="管理员登录的 agent：credsep meta.json 的 agent_argv 指向 current/bin/ccquota，换版、回退各重启一次（同一版不重复）；托管登录不动；手放回旧二进制 → 体检 admin-agent WARN，下一轮再指回、重启"
+}
+
+# runtime-gc-admin-tree (#3248): mini2's admin verkyyi (never taken over) had a
+# ~/.claude/fleet linked into <root>/fc6b100…; the updater only counted managed
+# logins' trees, pruned fc6b100, and the admin agent's fork/exec of
+# bin/fleet-login-new.sh failed — no login opened, none removed. Now any login's
+# linked tree keeps its release, moves with the machine, and a pruned one FAILs
+# the machine doctor's login-tree row until the next tick re-links it.
+drill_runtime_gc_admin_tree() {
+  CAP=60
+  local t0 out
+  t0=$(now)
+  out=$(python3 -W ignore::ResourceWarning "$BIN/fleet-node-update-selftest.py" --drill-admin-tree 2>&1) \
+    || { WHY="an admin's linked tree lost its release: $(printf '%s' "$out" | grep -E 'Error|FAIL' | head -3 | tr '\n' ' ')"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="非托管管理员的 ~/.claude/fleet 是链向运行时的树：它链着的版本不被清；更新器随整机换版把它一起重链；版本已被清掉 → 机器体检 login-tree FAIL，下一拍重链到 current；登录自己的副本不动"
 }
 
 # ---- release-fetch-slow (#2701): a new managed machine's release fetch at ~1 MB/s.

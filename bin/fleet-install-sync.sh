@@ -969,8 +969,15 @@ main() {
   # machine — so this tick has nothing left to do here and says so, naming what
   # the install follows. Its own git road for a managed login is gone (the
   # objects came from GitHub).
+  # A login NOT taken over whose install is a tree linked into the runtime (an
+  # admin bootstrapped by link-tree) is the updater's too (issue #3248): its git
+  # road could only refuse — the tree is no checkout — and it sat on a release
+  # the runtime later pruned. The updater re-links it with the machine now.
   MANAGED_SHA='' MARKW=stable
-  if command -v fleet_node_manages >/dev/null 2>&1 && fleet_node_manages; then
+  local linked_root
+  linked_root=$(cat "$(cd "$ROOT" 2>/dev/null && pwd -P)/.fleet-linked" 2>/dev/null | sed -n 's/.*"root": *"\([^"]*\)".*/\1/p')
+  if { command -v fleet_node_manages >/dev/null 2>&1 && fleet_node_manages; } \
+     || { [ -n "$linked_root" ] && [ "$(cd "$linked_root" 2>/dev/null && pwd -P)" = "$(cd "$NODE_ROOT" 2>/dev/null && pwd -P)" ]; }; then
     MANAGED_SHA=$(managed_release)
     DEFERRED_SINCE=''
     if [ -z "$MANAGED_SHA" ]; then
