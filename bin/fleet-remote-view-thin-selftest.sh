@@ -237,6 +237,7 @@ eq "E: --resume with no cur= lands on the orchestrator" "$OW" "$(vcur dev1)"
 tt kill-window -t "=$TL:thin3"
 term thin4 "--thin --view dev2 --want $U/fid-7 --device $DEV --route lan --token t3k"
 waitfor 5 sh -c "'$REAL_TMUX' -L '$RS' has-session -t '=$(vs dev2):' 2>/dev/null" || fail "E: no 看台 for --want"
+waitfor 5 sh -c "[ \"\$('$REAL_TMUX' -L '$RS' display-message -p -t '=$(vs dev2):' '#{window_id}' 2>/dev/null)\" = '$W7' ]"
 eq "E: --want lands on the worker it names" "$W7" "$(vcur dev2)"
 tt kill-window -t "=$TL:thin4"
 

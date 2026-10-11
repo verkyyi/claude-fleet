@@ -213,6 +213,13 @@ Do not install from memory: read the doc and work from it.
   table (`fleet-quickopen.py view-keys`); only a 看台 (`attach --thin`) wears
   that key-table, so a direct attach sees none of it. A 看台 changes session only
   through `bin/fleet-view-go.sh` (`fleet_view.go`, `logs/view-switch.ndjson`).
+  **Another machine's session is a window of the 看台 too** (issue #2751, C4): one
+  per (machine, login) — `@fleet_role panel`, `@peer`, `@peer_view`, made at the
+  attach (`view-peers`) or by the first go, its pane `fleet-peerlink.py pane` on
+  C5's link into that machine's bare 看台 `<id>-via-<home>`; a go there is ONE
+  channel (`fleet-remote-view.sh select`'s pre-lib fast path) + `select-window`,
+  and the windows go with their 看台 (`rv_peer_sweep`). Never open a second ssh
+  for it; `fleet-view-peer-selftest.sh`, BREAK-IT `peer-window-*`.
   The one exception only TAKES AWAY (issue #1840): `conf/tmux-node-human.conf`
   (fleet-human), loaded at the end of the node conf and again AFTER the person's
   `~/.tmux.conf`, unbinds prefix x & $ < > and swaps the pane's right-click for a

@@ -29,7 +29,8 @@ to a standing key; the links already up go on (`peerlink-hub-down`).
     sock <machine> <login>    the control socket of a HEALTHY link (rc 0), else rc 1 —
                               C4 gets a socket only through this, never by a path it builds
     pane <machine> <login> <view>   the pane program of a view's window onto that machine
-                              (C4): rides the link, waits for it while it is down
+                              (C4): rides the link, waits for it while it is down, and
+                              lands each (re)connect on the window's @peer_want / @peer_cur
     status [--check|--json]   the doctor's `peerlink` row (rc 0 ok · 1 WARN · 2 no row)
 
 What to connect, every beat (FLEET_PEERLINK_TICK, 2 s): while this machine has a
@@ -187,7 +188,9 @@ def live_thin_views():
                 cols = f.readline().rstrip("\n").split("\t")
         except OSError:
             continue
-        if len(cols) < 5 or cols[2] != "thin":
+        # a 看台 a home machine opened HERE for its own client (`<id>-via-<home>`,
+        # C4) is that home's link, not a client of ours: it wants no links of its own
+        if len(cols) < 5 or cols[2] != "thin" or "-via-" in n:
             continue
         try:
             pid = int(cols[4])
@@ -708,16 +711,57 @@ def cmd_sock(args):
     return 0
 
 
+def up_sock(machine, login):
+    """The link's control socket while state.json says it is up and its file is
+    there — no `-O check` (C4's switch path: the channel it opens IS the check, and
+    a failed one falls back to the window's own wait). "" otherwise."""
+    for l in read_json(STATE, {}).get("links") or []:
+        if l.get("machine") == machine and l.get("login") == login and l.get("phase") == "up":
+            s = l.get("sock") or ""
+            if s and os.path.exists(s):
+                return s
+    return ""
+
+
+def remote_bin():
+    return env("FLEET_REMOTE_BIN", ".claude/fleet/bin")
+
+
+def via_view(view):
+    """The id of the 看台 this machine keeps on the far one for `view` (共同约定 1)."""
+    return "%s-via-%s" % (view, home_label())
+
+
+def pane_opt(name, value=None):
+    """Read (value None) or set ("" unsets) an option of this pane's own window."""
+    pane = env("TMUX_PANE")
+    if not pane or not env("TMUX"):
+        return ""
+    if value is None:
+        try:
+            return subprocess.run(["tmux", "display-message", "-p", "-t", pane, "#{%s}" % name],
+                                  capture_output=True, text=True, timeout=3).stdout.strip()
+        except (OSError, subprocess.TimeoutExpired):
+            return ""
+    args = ["set-option", "-w", "-t", pane] + (["-u", name] if value == "" else [name, value])
+    try:
+        subprocess.run(["tmux"] + args, capture_output=True, timeout=3)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    return value
+
+
 def cmd_pane(args):
-    """C4's pane program: the view onto <machine> as <login>, riding the link."""
+    """C4's pane program: the view onto <machine> as <login>, riding the link.
+    Each (re)connect lands on what the window asks for: `@peer_want` (a go that
+    found the link down), else `@peer_cur` (what it showed), else the far 看台's
+    own cur= (`--resume`)."""
     if len(args) != 3 or not all(safe(a) for a in args):
         sys.stderr.write("usage: fleet-peerlink.py pane <machine> <login> <view>\n")
         return 2
     machine, login, view = args
-    rbin = env("FLEET_REMOTE_BIN", ".claude/fleet/bin")
-    remote = "bash %s/fleet-remote-view.sh attach --thin --view %s --resume" % (
-        rbin, shlex.quote("%s-via-%s" % (view, home_label())))
-    said = False
+    base = "bash %s/fleet-remote-view.sh attach --thin --view %s" % (remote_bin(), shlex.quote(via_view(view)))
+    said, pause = False, 0.5
     while True:
         s = healthy_sock(machine, login)
         if not s:
@@ -728,13 +772,23 @@ def cmd_pane(args):
             time.sleep(1)
             continue
         said = False
+        want = pane_opt("@peer_want")
+        land = want or pane_opt("@peer_cur")
+        tgt = land[4:] if land.startswith("wid:") else ""
+        remote = base + (" --want %s" % shlex.quote(tgt) if tgt else " --resume")
+        if want:
+            pane_opt("@peer_cur", want)
+            pane_opt("@peer_want", "")
+        t0 = time.time()
         rc = subprocess.call(ssh_cmd() + ["-S", s, "-o", "ControlMaster=no", "-tt", "-l", login,
                                           ssh_host(machine), remote])
         if rc == 0:
             return 0
         sys.stdout.write("\r\n到 %s 的连接断了，等它回来…\r\n" % machine)
         sys.stdout.flush()
-        time.sleep(1)
+        # a far end that keeps refusing at once (no fleet there) is not asked every second
+        pause = 0.5 if time.time() - t0 > 30 else min(pause * 2, 15.0)
+        time.sleep(pause)
 
 
 def keepers():

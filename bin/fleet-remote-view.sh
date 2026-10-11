@@ -49,13 +49,17 @@
 #                           issue #2763, EPIC #2999 C1) — the client's 看台: a view
 #                           session that wears the top line itself and outlives its
 #                           client for FLEET_VIEW_KEEP_SECS; see rv_attach_thin.
+#   attach --thin --view <id>-via-<home> …   (ON another machine, from a home
+#                           machine's peer window — EPIC #2999 C4) — the same 看台,
+#                           bare: no top line, no key table (the home draws both).
 #   select <worker_id> [<view>]  (runs ON <node>, over the proxy's own ssh
 #                           connection, issue #1484) — select the worker's window
 #                           in the proxy's view session (its <view> id; the fleet
 #                           session when none is named or live), which that proxy
 #                           then shows: how `open` moves an open proxy window to
 #                           another row of the SAME machine, with no reconnect.
-#                           Exit 3 when the worker is not live here.
+#                           Exit 3 when the worker is not live here; 5 when
+#                           <view> is a home's far 看台 (`*-via-*`, C4) not here yet.
 #   watch <view>            (runs ON <node>, over the same ssh connection) — the
 #                           fleet-open back channel, below.
 #   live                    (ON <node>, issue #2219) — exit 0 when this login has a
@@ -202,6 +206,42 @@ EOF
   elif [ -n "${_fid:-}" ] && [ -n "$_fu" ]; then _c="$_fu/$_fid"; fi
   [ "$(rv_row_get "$_f" cur)" = "$_c" ] || rv_row_set "$_f" cur "$_c"
   exit 0
+fi
+
+# `select <worker_id> <view>` for a home machine's peer window (issue #2751, EPIC
+# #2999 C4): the far 看台 `<id>-via-<home>` a thin client's home keeps here shows
+# that worker. It rides ONE channel of the home's standing link on every switch to
+# another session of this machine, so it runs before the lib: the 看台's row names
+# its fleet session (the socket label) and fleet UUID, and three tmux calls do the
+# rest — the 看台's own client switches (its window takes this viewer's size,
+# #1933). Exit 3 not live here, 5 no such far 看台 here yet; anything else it
+# cannot judge (no such row, another fleet's UUID) falls through to rv_select below.
+if [ "${1:-}" = select ] && [ -n "${3:-}" ]; then
+  _v=$3; _f="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/remote-views/$_v"; _row=''
+  case "$_v" in *[!A-Za-z0-9-]*) ;; *) [ -f "$_f" ] && IFS= read -r _row < "$_f" ;; esac
+  _s=''; _u=''; _k=''
+  case "$_row" in *"	thin	"*)
+    _s=${_row#*	}; _s=${_s%%	*}
+    case "$_row" in *"	fuid="*) _u=${_row#*	fuid=}; _u=${_u%%	*} ;; esac ;;
+  esac
+  _t=${2#wid:}
+  if [ -n "$_s" ] && [ -n "$_u" ] && [ "${_t%%/*}" = "$_u" ]; then
+    command -v tmux >/dev/null 2>&1 || PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+    _g="$_s@view-$_v"; _w=''; _c=''
+    # one tmux call for both: the fleet's windows, then the 看台's client
+    while IFS=' ' read -r _k _a _b; do
+      case "$_k" in
+        W) [ -z "$_w" ] && [ "$_b" = "${_t#*/}" ] && _w=$_a ;;
+        C) [ -z "$_c" ] && _c=$_a ;;
+      esac
+    done <<EOF
+$(tmux -L "$_s" list-windows -t "=$_s" -F 'W #{window_id} #{@fleet_id}' \; list-clients -t "=$_g" -F 'C #{client_tty}' 2>/dev/null)
+EOF
+    [ -n "$_w" ] || exit 3
+    { [ -n "$_c" ] && tmux -L "$_s" switch-client -c "$_c" -t "=$_g:$_w" 2>/dev/null; } \
+      || tmux -L "$_s" select-window -t "=$_g:$_w" 2>/dev/null || exit 5
+    exit 0
+  fi
 fi
 
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
@@ -352,7 +392,20 @@ rv_prune() {
     case "$v" in *-x*) [ -f "$VIEWS/${v%-x*}" ] && kill -0 "$(cut -f5 "$VIEWS/${v%-x*}" 2>/dev/null)" 2>/dev/null && continue ;; esac
     T kill-session -t "=$g" 2>/dev/null
   done
+  rv_peer_sweep
   rv_reap_orphans
+}
+# rv_peer_sweep — a 看台's peer windows (C4, `@peer_view <id>`) go with it: a window
+# whose 看台 session is gone is closed, and its pane's ssh with it (#1298 reaps any
+# straggler). A window of a 看台 still here — kept or attached — stays.
+rv_peer_sweep() {
+  local w v live
+  live=$(T list-sessions -F '#{session_name}' 2>/dev/null)
+  fleet_lw '#{window_id} #{@peer_view}' T | while read -r w v; do
+    case "$v" in ''|*[!A-Za-z0-9-]*) continue ;; esac
+    printf '%s\n' "$live" | grep -q "@view-$v\$" && continue
+    T kill-window -t "$w" 2>/dev/null
+  done
 }
 # --- orphaned attaches (issue #1907) ---------------------------------------------
 # An attach whose line died without sshd noticing keeps its tmux client process —
@@ -567,6 +620,9 @@ $wid $w $s $fid"
       [ -n "$g" ] && tgt="$g"
     fi ;;
   esac
+  # A home machine's far 看台 (C4) not attached yet: never the fleet session's own
+  # window — 5, and the home's peer window lands there when it attaches
+  case "$view" in *-via-*) [ "$tgt" = "$s" ] && return 5 ;; esac
   # A view's own client switches (issue #1933): `switch-client -c` makes it the
   # window's latest client, so the window takes THIS viewer's size (the node runs
   # `window-size latest`); a bare select-window comes from no client and leaves
@@ -679,6 +735,16 @@ rv_node_label() {
 # rv_thin_dress <session id> <view id> <fleet session> — the 看台's own options.
 rv_thin_dress() {
   local gid="$1" v="$2" s="$3" bar
+  # A home machine's far 看台 (`<id>-via-<home>`, C4): its client is a pane of that
+  # home's 看台, which draws the top line and holds the keys — bare here (status
+  # off, no key table), only the `cur=` hook and the keep rule.
+  case "$v" in *-via-*)
+    T set-option -t "$gid" status off \; set-option -t "$gid" destroy-unattached off \; \
+      set-option -t "$gid" @view_thin "$v" 2>/dev/null
+    T set-hook -g 'session-window-changed[78]' \
+      "if -F '#{@view_thin}' { run-shell -b \"bash '$BIN/fleet-remote-view.sh' cur '$VIEWS' '#{socket_path}' '#{hook_session_name}' >/dev/null 2>&1 || :\" }" 2>/dev/null
+    return 0 ;;
+  esac
   bar="#(python3 '$BIN/fleet-topbar.py' render --node view=$v s=$s reg='$VIEWS' g='$FLEET_C/global'"
   bar="$bar sock=#{q:socket_path} cw=#{client_width} w=#{window_id} pc=#{q:@peer_cur} pd=#{pane_dead})"
   T set-option -t "$gid" status on \; set-option -t "$gid" status-position top \; \
@@ -743,6 +809,11 @@ rv_attach_thin() {
   [ -n "$w" ] || { [ -n "$resume" ] && [ -n "$kept" ]; } || w=$(rv_thin_home "$s")
   [ -z "$w" ] || T select-window -t "$gid:$w" 2>/dev/null
   rv_thin_dress "$gid" "$view" "$s"
+  # C4: a window per other (machine, login) your sessions are on, made now — off
+  # the attach's path — so the first visit to another machine is already warm
+  case "$view" in *-via-*) ;; *)
+    ( python3 "$BIN/fleet-quickopen.py" view-peers --view "$s@view-$view" --socket "$sock" </dev/null >/dev/null 2>&1 & ) ;;
+  esac
   rv_hide_borders "$s"
   tty=$(tty 2>/dev/null) || tty=-
   fu=$(fleet_uuid "$s" 2>/dev/null) || fu=''
@@ -1463,6 +1534,8 @@ select)
   # named (an older `open`) or live. Not live here → 3, and `open` reconnects.
   # The one-shot form: `open` uses it when the proxy's `serve` channel (below) is
   # not up. A window spawned since the attach loses its header too (#1549).
+  # a home's far 看台 (C4) not attached here yet: 5 — its window lands there when it is
+  case "${2:-}" in *-via-*) [ "$(cut -f3 "$VIEWS/$2" 2>/dev/null)" = thin ] || exit 5 ;; esac
   rv_select "${1:-}" "${2:-}"; exit $?
   ;;
 

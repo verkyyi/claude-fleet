@@ -16,11 +16,17 @@
 #                          certificate: two certificate lives pass under a live link
 #   peerlink-hub-down      bin/fleet-peerlink.py start: the hub is down — the links up
 #                          stay, a new one is not opened and says why
+#   peer-window-ssh-killed bin/fleet-peerlink.py pane (C4, issue #2751): the ssh under a
+#                          看台's window onto another machine dies with its link
+#   peer-window-left-behind bin/fleet-remote-view.sh rv_peer_sweep (C4): a 看台 reaped
+#                          while its windows onto other machines still run
 #
 # No network and no sshd: bin/fleet-peerlink-fake-ssh.py plays ssh (a master is a
 # process serving its -S socket), a shell script plays fleet-peer-cert.sh (its
-# certificate an epoch the fake master checks at the handshake only).
-# shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT are read by the sourced runner
+# certificate an epoch the fake master checks at the handshake only). The
+# peer-window-* drills build three machines on isolated tmux sockets
+# (bin/fleet-view-peer-rig.sh) on the same fake ssh.
+# shellcheck disable=SC2034,SC2154  # CAP / SECS / WHY / WHAT are read by the sourced runner; PR_* come from the sourced rig
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=fleet-break-it-cred-selftest.sh
@@ -198,6 +204,67 @@ drill_peerlink_hub_down() {
   python3 "$PL" status --check >/dev/null || { WHY="still WARN after the hub came back: $(python3 "$PL" status --check)"; pl_stop; return 1; }
   pl_stop
   WHAT="入口不在：已有的 m4 照用（同一 pid），新来的 m5 不开、不退回长期钥匙，doctor 写明 入口不在；入口回来后退避内开好 m5"
+}
+
+# --- C4's windows onto the other machines (issue #2751) ------------------------------
+# pw_rig <tag> — home + far1 + far2 (bin/fleet-view-peer-rig.sh), the 看台 v1
+# attached, far1's window drawn and showing far1/a.
+pw_rig() {
+  REAL_TMUX=$(command -v tmux) || { WHY="no tmux"; return 1; }
+  # a short root: a control socket's path must fit AF_UNIX's 104 bytes (macOS $TMPDIR does not)
+  PR_TAG="$1$$"; PR_KEEP=1; PR_WORK=$(mktemp -d /tmp/pw.XXXXXX) || { WHY="no /tmp dir"; return 1; }
+  # shellcheck source=fleet-view-peer-rig.sh
+  . "$BIN/fleet-view-peer-rig.sh"
+  pr_up || { WHY="the rig did not come up"; return 1; }
+  printf '%s\n' "$PR_KP" >> "$WORK/cred-pids"
+  pr_attach
+  until_ok 10 eval '[ -n "$(pr_peer far1)" ]' || { WHY="no window onto far1"; pw_end; return 1; }
+  P1=$(pr_peer far1)
+  until_ok 10 pr_up_link far1 || { WHY="far1's link never came up: $(tail -2 "$PR_WORK/keeper.err")"; pw_end; return 1; }
+  pr_go "$PR_U_far1/fid-a" || { WHY="go to far1/a: $(tail -1 "$PR_WORK/m/home/conf/logs/view-switch.ndjson")"; pw_end; return 1; }
+  until_ok 10 pw_shows "$P1" SCREEN-far1-a || { WHY="far1's window never drew far1/a"; pw_end; return 1; }
+}
+pw_end() { pr_down; rm -rf "$PR_WORK"; }
+pw_shows() { "$REAL_TMUX" -L "$PR_HS" capture-pane -p -t "$1" 2>/dev/null | grep -Eq "$2"; }
+
+drill_peer_window_ssh_killed() {
+  CAP=8   # a keeper beat to rebuild the link + the pane's back-off (0.5 s, doubling)
+  local t0 pp mp
+  pw_rig sk || return 1
+  pp=$(pr_t home display-message -p -t "$P1" '#{pane_pid}')
+  mp=$(python3 -c 'import json, sys; print([l["pid"] for l in json.load(open(sys.argv[1]))["links"] if l["machine"] == "far1"][0])' "$PR_WORK/m/home/conf/peerlink/state.json")
+  # the line goes: the master dies, and so does the session it carried (sshd HUPs it)
+  t0=$(now)
+  kill "$mp" 2>/dev/null
+  for k in $(pgrep -P "$pp"); do pr_tree "$k"; done | xargs kill -HUP 2>/dev/null
+  until_ok 5 pw_shows "$P1" '连接断了|正在连' || { WHY="the window does not say the line is down"; pw_end; return 1; }
+  until_ok 15 pw_shows "$P1" SCREEN-far1-a || { WHY="not back on far1/a: $(pr_t home capture-pane -p -t "$P1" | tr -s '\n' | tail -2 | tr '\n' ' ')"; pw_end; return 1; }
+  SECS=$(since "$t0")
+  [ "$(pr_t home display-message -p -t "$P1" '#{pane_pid}')" = "$pp" ] || { WHY="the window was replaced, not recovered"; pw_end; return 1; }
+  pr_go "$PR_U_far1/fid-b" && until_ok 5 pw_shows "$P1" SCREEN-far1-b || { WHY="no switch on the rebuilt line"; pw_end; return 1; }
+  pw_end
+  WHAT="别机窗口下的 ssh 断了（主连接被杀、会话被 HUP）：窗格写「连接断了 / 正在连」，常开连接一拍重建后同一窗格回到原来那个会话（far1/a），之后照样换会话"
+}
+
+drill_peer_window_left_behind() {
+  CAP=3
+  local t0 pids
+  pw_rig lb || return 1
+  until_ok 10 eval '[ -n "$(pr_peer far2)" ]' || { WHY="no window onto far2"; pw_end; return 1; }
+  pids=$(for w in "$P1" "$(pr_peer far2)"; do pr_tree "$(pr_t home display-message -p -t "$w" '#{pane_pid}')"; done)
+  # the client goes and the 看台 outlives its keep window (PR_KEEP=1)
+  "$REAL_TMUX" -L "$PR_TL" kill-window -t "=$PR_TL:view"
+  sleep 2
+  t0=$(now)
+  pr_in home bash "$BIN/fleet-remote-view.sh" prune >/dev/null 2>&1
+  pr_t home has-session -t "=$(pr_view)" 2>/dev/null && { WHY="the 看台 outlived its keep window"; pw_end; return 1; }
+  until_ok 3 sh -c 'for p in $1; do kill -0 "$p" 2>/dev/null && exit 1; done; exit 0' _ "$pids" \
+    || { WHY="left running: $(for p in $pids; do ps -o pid=,command= -p "$p"; done | tr '\n' ';')"; pw_end; return 1; }
+  [ -z "$(pr_peer far1)$(pr_peer far2)" ] || { WHY="its windows onto far1/far2 are still there"; pw_end; return 1; }
+  SECS=$(since "$t0")
+  pr_t home list-windows -t "=$PR_HS" -F '#{window_name}' | grep -qx l1 || { WHY="the fleet's own windows went too"; pw_end; return 1; }
+  pw_end
+  WHAT="看台过了保留期被收：它的两个别机窗口一起关，窗格里的 python / ssh / 远端 attach 全部退出，fleet 自己的窗口不动"
 }
 
 cred_run_drills "$0"
