@@ -411,7 +411,7 @@ test('every machine·login pair of a person, with state, home and kind', () => {
   const cell = pairsCell(ARVIN);
   for (const w of ['fleet-linux-0 · 24haowan', 'macmini · 24haowan', 'myMac · arvincao', '家', '客户端']) assert.ok(cell.includes(w), w);
   assert.ok(!cell.includes('arvin<'), 'machine_login is not shown as the account name');
-  assert.ok(pairsCell({ login: 'x', logins: [] }).includes('还没有哪台机器上有登录名'));
+  assert.ok(pairsCell({ login: 'x', logins: [] }).includes('还没有哪个服务节点上有登录名'));
   useLocale('en');
   assert.equal(loginPairText(loginPairs(VERKY)[0]), 'macmini · verky (active, service node)');
 });

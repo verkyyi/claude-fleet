@@ -8,7 +8,7 @@
 // their own machine login (claude-fleet#1985), and these functions only
 // group, sort and label them.
 
-import { esc, ic, fmtTokens, spark, isAdmin } from './shell.js';
+import { esc, ic, fmtTokens, spark } from './shell.js';
 import { t, fmtDate } from './i18n.js';
 
 const DAY = 86400000;
@@ -447,19 +447,30 @@ export function myMachines(snap, me) {
   return rows.sort((a, b) => (a.takes === 'coord') - (b.takes === 'coord') || a.label.localeCompare(b.label) || a.login.localeCompare(b.login));
 }
 
-/** scopeOf is the overview's 口径 (claude-fleet#2680): which (machine,
- *  login) pairs its numbers count — /v1/me.logins, the same pairs the hub cut
- *  them to (#2514) — so a total that moved can be read against what it
- *  counts. '' when /v1/me lists none. */
-export function scopeOf(me) {
-  const ls = me && Array.isArray(me.logins) ? me.logins : [];
-  if (!ls.length) return '';
-  return t('ui.ov.scope', { list: ls.map((l) => `${l.machine}·${l.login}`).join('、') }) + (isAdmin(me) ? t('ui.ov.scopeAdmin') : '');
-}
-
 /** kpi is one number tile: a label, the value, a trend line and a delta. */
 export function kpi(label, val, trend, d) {
   return `<div class="panel kpi"><span class="lbl">${esc(label)}</span><span class="val">${esc(val)}</span>${trend && trend.length ? spark(trend, 'var(--brand)', true) : ''}<span class="delta${d && d.down ? ' down' : ''}"${d && d.muted ? ' style="color:var(--muted)"' : ''}>${esc((d && d.text) || ' ')}</span></div>`;
+}
+
+/** limitKpi is the overview's first tile (claude-fleet#3230): the viewer's
+ *  own limit off /v1/me/usage's `limit` — 不限额 when none is set, else what is
+ *  left of the week (the 5-hour window when only that one is set), its bar
+ *  and when it resets. Remaining is limit − used, never the pool's. */
+export function limitKpi(l) {
+  const lim = l || {};
+  const week = Number(lim.limit_week) > 0;
+  const limit = Number(week ? lim.limit_week : lim.limit_5h) || 0;
+  if (!lim.set || !limit) {
+    return `<div class="panel kpi"><span class="lbl">${esc(t('ui.ov.limit'))}</span><span class="val">${esc(t('ui.ov.noLimit'))}</span><span class="delta" style="color:var(--muted)">${esc(t('ui.ov.noLimitSub'))}</span></div>`;
+  }
+  const used = Number(week ? lim.used_week : lim.used_5h) || 0;
+  const left = Math.max(0, limit - used);
+  const reset = week ? lim.reset_week : lim.reset_5h;
+  const p = Math.round(used / limit * 100);
+  const line = t(reset ? 'ui.ov.limitLineAt' : 'ui.ov.limitLine', { limit: fmtTokens(limit), used: fmtTokens(used), at: reset ? fmtDate(reset) : '' });
+  return `<div class="panel kpi"><span class="lbl">${esc(t(week ? 'ui.ov.leftWeek' : 'ui.ov.left5h'))}</span><span class="val">${esc(t('ui.ov.leftVal', { n: fmtTokens(left) }))}</span>` +
+    `<div class="win"><div class="track"><i class="${qLevel(p)}" style="width:${Math.min(100, p)}%"></i></div></div>` +
+    `<span class="delta${left ? '' : ' down'}"${left ? ' style="color:var(--muted)"' : ''}>${esc(line)}</span></div>`;
 }
 
 /** hb draws [label, tokens] rows (bars()) as horizontal bars. */
