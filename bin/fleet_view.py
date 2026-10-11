@@ -81,7 +81,7 @@ row), in fleet-quickopen.py's own stack / at / mru shape; beside it `order.json`
 the list's session order as last drawn — ⌘↓ ⌘↑ read it (a press never waits
 ~0.2 s for the row producer) and refresh it in the background after the switch.
 
-WORDS (#2752): no row says `merged` or `done:2h` — the reap policy is
+WORDS (#2752): no row says `merged` or `done:15m` — the reap policy is
 「合并后关」 / 「空闲 2 小时关」, and only on the lit row's line at the foot;
 names are the issue's title as wide as the popup is (the producer's 12-cell name
 when there is none) with no `⇢cla` tag. A state is ONE glyph (#3179: ! needs ·
@@ -110,6 +110,15 @@ this machine (`do new`: the repo or none, the words its first turn). Below it �
 退出 fleet (quit_view, ⌘Q's). FLEET_PANEL_COMMANDS (the environment, else
 fleet.conf `[common]`) keeps `new quit landed` (the 刚落地 group first) and
 `none` (no ⚡, no ⏻); panel_rows() builds it, `view-panel` prints it.
+
+LANGUAGE (issue #3329, EPIC #3178 D7, L1–L3): the 「◐ 语言 / Language」 row sits
+under ⚡, above ⏻, both scripts on it so a person who cannot read the one in use
+still knows it; typing 语言 · lang · english · 中文 finds it (and lights it when no
+session is hit). ↵ flips between 中文 and English, Tab adds 跟系统走 (the choice cleared) —
+`fleet-config.py lang`, kept on the hub under the person and re-read here at
+once; the popup redraws in it and says so on its footer for 3 s. Which language
+is in use is fleet-ui-lang.sh's (the person's choice > the 看台's FLEET_VIEW_LANG >
+Chinese), never decided here.
 
 STALE (issue #3184, EPIC #3178 C6): 失联 is judged off ONE time, global/hub_ok —
 the file the producer's `m4!` reads. A lost row is grey end to end and tagged
@@ -276,6 +285,33 @@ def say(key, *args):
         return text % args if args else text
     except (TypeError, ValueError):
         return text
+
+
+def tokens_short(n):
+    """A token count short, as the hub page's fmtCompact prints it (issue #3377):
+    zh 3.4 万 · 1.2 亿, en 34k · 1.2M · 2.1B; three significant digits, never
+    an exponent. The style is the language table's (view_tok_style)."""
+    n = int(n)
+
+    def trim0(t):
+        return t.rstrip("0").rstrip(".") if "." in t else t
+
+    def sig3(v):
+        return str(int(round(v))) if v >= 100 else "%.3g" % v   # v ≥ 1 here: never an exponent
+
+    if say("view_tok_style") == "zh":
+        if n >= 10 ** 8:
+            return sig3(n / 1e8) + " 亿"
+        if n >= 10 ** 4:
+            return sig3(n / 1e4) + " 万"
+        return str(n)
+    if n >= 10 ** 9:
+        return trim0("%.2f" % (n / 1e9)) + "B"
+    if n >= 10 ** 6:
+        return trim0("%.1f" % (n / 1e6)) + "M"
+    if n >= 10 ** 3:
+        return trim0("%.1f" % (n / 1e3)) + "k"
+    return str(n)
 
 
 def dur(secs):
@@ -633,7 +669,8 @@ def entries(vid, now=None, hub=True):
     text  the line's words · word (the state, written out on the lit row) · sym
           (its glyph class) · group · ask · tags (lost / direct machine, ✗ broken
           configuration, ∅ no issue, k/N, repo when 2+) · right (the issue) · foot
-          (the lit row's line) · target (what go() takes) · far (another
+          (the lit row's line; it says 「今天 N token」 when the hub recorded any —
+          issue #3377) · today (that phrase alone) · target (what go() takes) · far (another
           machine/login)"""
     now = time.time() if now is None else now
     row = view_row(vid)
@@ -696,6 +733,10 @@ def entries(vid, now=None, hub=True):
             # another machine's: the measurement bus's reading time is its last word
             ts = (f[18].split("|") + ["", "", ""])[2]
             act = int(ts) if ts.isdigit() else 0
+        # the session's pool tokens today (issue #3377): the bus's sixth part, a
+        # remote row's off the hub; none recorded ⇒ nothing said, never 0
+        tok = (f[18].split("|") + [""] * 6)[5]
+        today = say("view_today_fmt", tokens_short(tok)) if tok.isdigit() and int(tok) > 0 else ""
         landed = state in ("done", "landed") and f[10].strip() in MERGED_PR and \
             (not act or now - act <= landed_secs)
         grp = group_of(state, section == "pin", landed, section == "ended")
@@ -724,8 +765,9 @@ def entries(vid, now=None, hub=True):
              "detail": detail,
              "group": grp, "sym": sym_of(state, lost), "lost": lost, "lost_secs": lost_secs, "ask": ask, "tags": tags, "repo": repo,
              "word": state_words(state, detail if state == "needs" else ""),
+             "today": today,
              "foot": " · ".join(x for x in (title or name, reap_words(f[14]),
-                                            detail if detail and detail != state else "",
+                                            detail if detail and detail != state else "", today,
                                             " · ".join(x for x in (machine, login) if x)) if x)}
         if grp == "ended":
             why = say("view_ended_merged") if f[10].strip() == "merged" else \
@@ -1837,7 +1879,7 @@ def other_agent(r):
     return "Claude" if r.get("agent") == "codex" else "Codex"
 
 
-REAP_CHOICES = (("merged", "reap_menu_merged"), ("done:2h", "reap_menu_done_2h"), ("loop-end", "reap_menu_loop_end"),
+REAP_CHOICES = (("merged", "reap_menu_merged"), ("done:15m", "reap_menu_done_15m"), ("loop-end", "reap_menu_loop_end"),
                 ("at", "reap_menu_at"), ("keep", "reap_menu_keep"))
 
 
@@ -1950,6 +1992,10 @@ ACTIONS = [
      "local": lambda r, a, f: "new", "far": None, "ask": None},
     {"id": "quit", "label": lambda r: say("view_cmd_quit"), "when": lambda r: True, "rowless": True,
      "local": lambda r, a, f: "quit", "far": None, "ask": None},
+    # the interface language (issue #3329): ↵ flips it, Tab offers 跟系统走 too
+    {"id": "lang", "label": lambda r: say("view_lang_row"), "when": lambda r: True, "rowless": True,
+     "local": lambda r, a, f: "lang", "far": None, "ask": None,
+     "choices": lambda r, f: [("zh", "中文"), ("en", "English"), ("auto", say("view_lang_auto"))]},
 ]
 ACTION = {a["id"]: a for a in ACTIONS}
 # The sidebar menu's letters (fleet-ui-lang.sh menu_keys) → the action here; the
@@ -1958,7 +2004,7 @@ ACTION = {a["id"]: a for a in ACTIONS}
 SIDEBAR_ACTIONS = {"rename": "rename", "pin": "pin", "pr": "pr", "answer": "answer", "sub": "sub", "wake": "wake",
                    "awake": "awake", "reappol": "reappol", "agent": "agent", "reap": "reap", "open": "enter",
                    "message": "message", "stop": "stop", "resume": "resume", "restore": "resume"}
-ROWLESS = {"new": "C2", "newto": "C2", "repo": "C2", "clients": "C7", "quit": "C7"}
+ROWLESS = {"new": "C2", "newto": "C2", "repo": "C2", "clients": "C7", "quit": "C7", "lang": "#3329"}
 
 
 def act_env(fleet):
@@ -2019,6 +2065,9 @@ def act_run(qo, vid, fleet, a, r, ans, client="", wait=True):
     if argv == "quit":
         rc = quit_view(vid, client)
         return rc, "", rc == 0
+    if argv == "lang":
+        rc, said = lang_set(fleet, ans)
+        return rc, said, False
     if argv == "restore":
         # a gone row (issue #3286): the sidebar's ⌃t restore, the same script. A
         # `landed:issue:` row may have to ask first (a CLOSED-unmerged PR, #543):
@@ -2131,6 +2180,80 @@ def cli_act(qo, vid, target, aid, text=None, yes=False, client=""):
     if said:
         print(said)
     return rc
+
+
+# --- the interface language (issue #3329, EPIC #3178 D7) ------------------------------
+
+def ui_lang():
+    """zh | en — the language fleet-ui-lang.sh draws in right now."""
+    try:
+        out = subprocess.run(["sh", str(Path(__file__).absolute().parent / "fleet-ui-lang.sh"), "lang"],
+                             capture_output=True, text=True, timeout=5).stdout.strip()
+    except (OSError, subprocess.TimeoutExpired):
+        out = ""
+    return out if out in ("zh", "en") else "zh"
+
+
+_LANG_NONE = []
+
+
+def lang_said_none():
+    """The 看台's client brought no language (D6/D9: the door kept none) and the
+    person never chose one — what the row's footer explains how to fix. Asked
+    once per popup (lang_set asks again)."""
+    if _LANG_NONE:
+        return _LANG_NONE[0]
+    none = False
+    if os.environ.get("FLEET_VIEW_LANG", "-") in ("", "C", "POSIX"):
+        try:
+            none = subprocess.run(["sh", "-c", '. "$1"; fleet_ui_person_lang >/dev/null', "-",
+                                   str(Path(__file__).absolute().parent / "fleet-ui-lang.sh")],
+                                  capture_output=True, timeout=5).returncode != 0
+        except (OSError, subprocess.TimeoutExpired):
+            none = False
+    _LANG_NONE.append(none)
+    return none
+
+
+def lang_set(fleet, want=""):
+    """(rc, line): `want` zh · en · auto (跟系统走), "" flips the one in use. Kept
+    on the hub under the person — fleet-config.py lang, which re-reads this
+    computer's copy at once — and every word after it is drawn in the new one."""
+    want = want or ("en" if ui_lang() == "zh" else "zh")
+    try:
+        p = subprocess.run([sys.executable, str(Path(__file__).absolute().parent / "fleet-config.py"), "lang", want],
+                           capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=60)
+        rc, why = p.returncode, ((p.stderr.strip() or p.stdout.strip()).splitlines() or [""])[-1]
+    except (OSError, subprocess.TimeoutExpired) as error:
+        rc, why = 1, str(error)
+    if rc != 0:
+        return 1, say("view_lang_failed_fmt", one_line(why.replace("fleet config · ", ""), 120))
+    _WORDS.clear()
+    del _LANG_NONE[:]
+    return 0, say("view_lang_auto_saved" if want == "auto" else "view_lang_saved")
+
+
+def view_lang_env(vid):
+    """The 看台's client language into this process's environment when the popup
+    was not handed it (fleet-remote-view.sh puts FLEET_VIEW_LANG in the 看台
+    session's environment; `@view_lang_set` says the door recorded one)."""
+    if "FLEET_VIEW_LANG" in os.environ:
+        return
+    rc, out = tm("display-message", "-p", "-t", "=%s@view-%s:" % (view_fleet(vid), vid),
+                 "#{@view_lang_set}|#{@view_lang}")
+    said, _, lang = (out or "").partition("|")
+    if rc == 0 and said == "1":
+        os.environ["FLEET_VIEW_LANG"] = lang
+
+
+def lang_row(query):
+    """「◐ 语言 / Language」 (issue #3329) — when there are no words, or they name it."""
+    text = "◐ " + say("view_lang_row")
+    q = query.strip().lower()
+    if q and not all(w in text.lower() for w in q.split()):
+        return None
+    return {"kind": "cmd", "cmd": "lang", "act": "lang", "row": {}, "text": text,
+            "foot": say("view_lang_nolang_fmt", here_label({})) if lang_said_none() else say("view_lang_foot")}
 
 
 # --- the panel's ⚡ and ⏻ rows (issue #3180, EPIC #3178 C2; issue #3327 ④) ---------------
@@ -2278,6 +2401,9 @@ def panel_rows(items, query, opened, cmds=None, bolt=None, busy=None):
             cells, note = bolt_cells(st, query)
             out.append({"kind": "grid", "cells": cells, "note": note,
                         "text": "  ·  ".join(t for t, _ in cells) + (("  " + note) if note else "")})
+    lr = lang_row(query) if words else None
+    if lr:
+        out.append(lr)      # under ⚡, above ⏻ (issue #3329)
     if "quit" in words:
         out.append({"kind": "cmd", "cmd": "quit", "act": "quit", "row": {}, "text": say("view_cmd_quit")})
     return out
@@ -2447,8 +2573,10 @@ def popup(screen, qo, vid, client, forward=""):
     if ":" in vsh:
         cur = vsh.split(":", 1)[1]
     fleet = view_fleet(vid)
+    view_lang_env(vid)
     cmds = panel_commands()
     query, opened, msg, show_legend = "", set(), "", False
+    msg_until = 0      # a line that goes by itself (the language row's, 3 s — L3)
     # the ⚡ row (issue #3327): its cells, read off the screen's thread (⌘T's rules);
     # `busy` while a ↵ runs, its outcome landing in `job`
     bolt, busy, job = bolt_new(), None, []
@@ -2493,7 +2621,7 @@ def popup(screen, qo, vid, client, forward=""):
     def run(a, r, ans):
         """Do it, say how it went, read the list again (a pin, a rename, a reap
         shows at once); back on the list."""
-        nonlocal items, shown, msg, mode, pend, line
+        nonlocal items, shown, msg, mode, pend, line, msg_until
         if r.get("far") and not r.get("lost") and a["id"] not in ("enter", "shell"):
             def far_run():
                 landed.append(act_run(qo, vid, fleet, a, r, ans, client)[1])
@@ -2502,6 +2630,7 @@ def popup(screen, qo, vid, client, forward=""):
             msg = say("view_act_sent_fmt", a["label"](r).rstrip("…"))
             return False
         rc, said, went = act_run(qo, vid, fleet, a, r, ans, client, wait=False)
+        msg_until = time.time() + 3 if a["id"] == "lang" and rc == 0 else 0
         back()
         if rc == 4 and r.get("gone") and not ans:
             # a restore that asks first (#543): its question on the bottom line,
@@ -2544,6 +2673,8 @@ def popup(screen, qo, vid, client, forward=""):
         return False
 
     while True:
+        if msg_until and time.time() > msg_until:
+            msg, msg_until = "", 0
         if landed:
             msg = landed.pop(0)
             items = entries(vid)
@@ -2683,7 +2814,8 @@ def popup(screen, qo, vid, client, forward=""):
                 else keys if busy or bolt["focus"] else say("view_keys_short")
         screen.addnstr(height - 1, 0, qo.clip(keys, width - 1), width - 1, attr(("dim",)))
         screen.refresh()
-        screen.timeout(min(heal.timeout(False) or 1000, fresh.wait_ms(), 200 if busy or not bolt["ready"] else 1000))
+        screen.timeout(min(heal.timeout(False) or 1000, fresh.wait_ms(), 200 if busy or not bolt["ready"] else 1000,
+                           max(50, int((msg_until - time.time()) * 1000)) if msg_until else 1000))
         try:
             ch = screen.get_wch()
         except curses.error:
@@ -2717,6 +2849,12 @@ def popup(screen, qo, vid, client, forward=""):
             shown = listing()
             continue
         if ch == "\t":
+            if lit_e.get("cmd") == "lang":
+                # the language row's options (issue #3329): 中文 · English · 跟系统走
+                a = ACTION["lang"]
+                mitems = [(v, label, a) for v, label in a["choices"]({}, fleet)]
+                mode, mat, mtitle, pend = "choice", 0, a["label"]({}), (a, {})
+                continue
             if 0 <= at < len(shown) and shown[at]["kind"] == "sess":
                 mrow = act_row(fleet, shown[at])
                 mitems = [(a["id"], label, a) for a, label in menu_of(mrow)]
@@ -2742,6 +2880,9 @@ def popup(screen, qo, vid, client, forward=""):
                     busy, bolt["focus"] = {"title": title, "where": where}, ""
                     bolt_run(argv, job)
                     shown = listing()
+                    continue
+                if e["act"] == "lang":
+                    run(ACTION["lang"], {}, "")     # flips it; the list redraws in it
                     continue
                 rc, msg, went = act_run(qo, vid, fleet, ACTION[e["act"]], e["row"], "", client)
                 if went:
@@ -2787,10 +2928,12 @@ def popup(screen, qo, vid, client, forward=""):
         show_legend = False
         lit = shown[at].get("target") if 0 <= at < len(shown) else None
         shown = listing()
-        # typed words: the best session hit is lit; none hit — ⚡ is
+        # typed words: the best session hit is lit; none hit — the language row
+        # when they name it (语言 · lang …, issue #3329), else ⚡
         at = next((i for i, e in enumerate(shown) if e["kind"] == "sess"),
-                  next((i for i, e in enumerate(shown) if e.get("cmd") == "new"),
-                       next((i for i, e in enumerate(shown) if pickable(e)), 0)))
+                  next((i for i, e in enumerate(shown) if query and e.get("cmd") == "lang"),
+                       next((i for i, e in enumerate(shown) if e.get("cmd") == "new"),
+                            next((i for i, e in enumerate(shown) if pickable(e)), 0))))
         if not query:
             at = next((i for i, e in enumerate(shown) if e["kind"] == "sess" and e.get("target") in (lit, cur)), at)
         top = 0

@@ -78,6 +78,10 @@
 #   hub-stream-silent                               tokenledger/web/dist/lib/stream.js (watchdog, backoff, poll fallback;
 #                                                   node --test stream.test.mjs, when node is here) + internal/api
 #                                                   fleet_stream.go (ping, scope; go test, when a toolchain is here)
+#   feedback-secret-in-text                         bin/fleet-feedback.sh (fleet_redact.py over the words, the
+#                                                   whole-set recheck; a fake hub records the bytes)
+#   feedback-secret-in-attach                       bin/fleet-feedback.sh --attach (conf/debug-collect.list's fresh
+#                                                   rows + the screen, each through conf/secret-shapes.list)
 #   service-log-cross-login                         tokenledger/internal/api fleet_service_log.go (FleetScope before any
 #                                                   node read, one follow per service, masking; go test, when a toolchain
 #                                                   is here) + internal/agent node_service_log.go (the register's path only)
@@ -89,6 +93,12 @@
 #                                                   minutes ⇒ unfinished, to the admin; seven days ⇒ gone; the upload
 #                                                   re-checked against the shape table; go test, when a toolchain is
 #                                                   here) + bin/fleet_steward.py debug_step (the orchestrator's line)
+#   feedback-identity-public                        tokenledger/internal/api fleet_feedback_github.go (feedbackIssueBody:
+#                                                   the ONE public template; App token never logged; go test, when a
+#                                                   toolchain is here)
+#   feedback-github-down                            tokenledger/internal/api fleet_feedback_github.go (feedbackFile: 待转,
+#                                                   1 min doubling to 1 h, the marker adopts the issue a 500 created;
+#                                                   go test, when a toolchain is here)
 #   dist-publish-tampered                           tokenledger/internal/api fleet_publish.go (POST …/publish: the archive
 #                                                   hashed into the commit's tree, OIDC, forward only; go test, when a
 #                                                   toolchain is here) + bin/fleet-release-publish.sh (what CI sends)
@@ -1587,6 +1597,131 @@ drill_pool_usage_unattributed() {
     esac
   fi
   SECS=$(since "$t0")
+}
+
+# ---- feedback-identity-public (#3356, EPIC #3354 C2): a feedback filed into
+# the PUBLIC repo carries who sent it — a login, a person, a machine's name, a
+# session. The hub writes the issue itself, and its body has ONE definition,
+# feedbackIssueBody: the words, the version (a sha or 未知), the kind of machine
+# (a known word or 未知, never echoed), Claude/Codex, the F number and its
+# marker. The App's token and key never reach a log line. Go tests by name.
+drill_feedback_identity_public() {
+  CAP=120; local t0 out rc t f="$ROOT/tokenledger/internal/api/fleet_feedback_github.go"
+  local tests='TestFeedbackFiledPublicFieldsOnly TestFeedbackFilingOffSendsNothing'
+  t0=$(now)
+  grep -q '"title": feedbackIssueTitle(f.Text), "body": feedbackIssueBody(f), "labels": \[\]string{feedbackGHLabel}}' "$f" 2>/dev/null \
+    || { WHY="the filer no longer writes the issue only from feedbackIssueTitle / feedbackIssueBody"; return 1; }
+  grep -q 'ver, feedbackPublicKind(ctx\["machine_kind"\]), feedbackPublicAgent(ctx\["agent"\]), num, feedbackMarker(num))' "$f" \
+    || { WHY="feedbackIssueBody no longer holds to the four public fields + the F number"; return 1; }
+  for t in $tests; do
+    grep -q "^func $t(" "$ROOT/tokenledger/internal/api/fleet_feedback_github_test.go" 2>/dev/null \
+      || { WHY="the hub half's test $t is not in tokenledger/internal/api/fleet_feedback_github_test.go"; return 1; }
+  done
+  WHAT='公开单子只有原话 · 版本 · 机器类型 · Claude/Codex · F 号；登录名、人、机器名、会话、窗口不进；令牌不进日志（测试按名核对在，Go 门跑它们）'
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/api 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
+      0:*) WHAT='假 GitHub 收到的单子正文只有原话 · 版本 · 托管 Linux · Claude · F1 + 标记，登录名 / 机器名 / 会话 / 窗口一个不在；认不出的机器类型写「未知」；令牌、私钥不在任何日志行；没配 App ⇒ 一个请求不发（go test）' ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
+      *) WHY="the Go half is red: $(printf '%s' "$out" | grep -v '^ok' | grep -v '^20' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  fi
+  SECS=$(since "$t0")
+}
+
+# ---- feedback-github-down (#3356, EPIC #3354 C2): GitHub answers 500 or times
+# out while the hub files a feedback — or the 500 came after the issue WAS
+# created. The feedback must stay 待转 and be tried again (1 minute, doubling,
+# at most an hour), and once GitHub is back it is ONE issue: each pass first
+# lists the repo's feedback issues and adopts the one ending in its marker.
+drill_feedback_github_down() {
+  CAP=120; local t0 out rc f="$ROOT/tokenledger/internal/api/fleet_feedback_github.go"
+  local tests='TestFeedbackGitHubDownQueuesThenFilesOnce'
+  t0=$(now)
+  grep -q 'filed, err := g.feedbackFiled(ctx, auth)' "$f" 2>/dev/null \
+    || { WHY="a filing pass no longer looks for the issue a feedback already has before creating one"; return 1; }
+  grep -q 'd = min(r.delay\*2, feedbackRetryMax)' "$f" || { WHY="a failed filing no longer backs off doubling"; return 1; }
+  grep -q 'feedbackRetryFirst   = time.Minute' "$f" && grep -q 'feedbackRetryMax     = time.Hour' "$f" \
+    || { WHY="the filing backoff is no longer 1 minute to 1 hour"; return 1; }
+  grep -q "^func $tests(" "$ROOT/tokenledger/internal/api/fleet_feedback_github_test.go" 2>/dev/null \
+    || { WHY="the hub half's test $tests is not in tokenledger/internal/api/fleet_feedback_github_test.go"; return 1; }
+  WHAT='GitHub 500 / 超时 ⇒ 待转，1 分钟起翻倍到 1 小时再试；恢复后只建一张（测试按名核对在，Go 门跑它们）'
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run "^($tests)\$" ./internal/api 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
+      0:*) WHAT='假 GitHub 先「建成却回 500」、再超时：反馈一直待转，59 秒内不重试、2 分钟内不再试；恢复后认领已建的那张，仓库里只有 1 张；退避封顶 1 小时（go test）' ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
+      *) WHY="the Go half is red: $(printf '%s' "$out" | grep -v '^ok' | grep -v '^20' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  fi
+  SECS=$(since "$t0")
+}
+
+# ---- feedback-secret-in-text / feedback-secret-in-attach (#3358, EPIC #3354 C4):
+# a person pastes a token into /fleet-feedback, or the log / screen they agree to
+# attach holds one. bin/fleet-feedback.sh runs for real against a fake hub (a curl
+# that writes down every byte of every part): no sample of the shape table may be
+# in what leaves the machine, nor in what the outbox keeps when the hub is away.
+_fb_drill() {  # _fb_drill <dir> <words> <log line> <screen line> <attach yes|no>
+  local d="$1" a=''
+  mkdir -p "$d/home" "$d/conf" "$d/tmp" "$d/cache/claude-fleet/shell/logs"
+  printf 'CCQUOTA_HUB_URL=https://hub.example\nCCQUOTA_TOKEN=FAKEnode\n' > "$d/conf/node.env"
+  printf '%s\n' "$3" > "$d/cache/claude-fleet/shell/logs/connect.log"
+  cat > "$d/curl" <<SH
+#!/bin/bash
+prev=''
+for a in "\$@"; do
+  if [ "\$prev" = -F ]; then v=\${a#*=}; v=\${v%%;*}; case "\$v" in '<'*|'@'*) cat "\${v#?}" ;; *) printf '%s' "\$v" ;; esac; fi
+  prev=\$a
+done >> "$d/sent"
+[ -f "$d/away" ] && exit 7
+printf '{"id":"F1","state":"received"}\n200'
+SH
+  chmod +x "$d/curl"
+  [ "$5" = yes ] && a=--attach
+  for mode in up away; do
+    [ "$mode" = away ] && : > "$d/away"
+    ( unset CCQUOTA_TOKEN CCQUOTA_HUB_URL FLEET_HUB_URL TMUX TMUX_PANE
+      export HOME="$d/home" FLEET_CONF_DIR="$d/conf" XDG_CACHE_HOME="$d/cache" TMPDIR="$d/tmp" \
+             FLEET_HUB_CURL="$d/curl" FLEET_FEEDBACK_MACHINE_KIND=managed-linux \
+             FLEET_FEEDBACK_SCREEN_CMD="printf '%s\n' '$4'"
+      printf '%s\n' "$2" | bash "$BIN/fleet-feedback.sh" send ${a:+"$a"} - >/dev/null 2>&1 ) || :
+  done
+}
+drill_feedback_secret_in_text() {
+  CAP=30; local d="$WORK/fbt" t0 v left=''
+  set -- ghp_FAKEfbaaaaaaaaaaaaaaa github_pat_11FAKEfbbbbbbbbbbbb sk-ant-api03-FAKEfbcccccc glpat-FAKEfbdddddd \
+         xoxb-FAKEfbeeeeee AKIAFAKEFBFFFFFFFFFF eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJmYiJ9.FAKEsig
+  t0=$(now)
+  _fb_drill "$d" "⌘P 慢，顺手贴了 $* 和 DB_PASSWORD=FAKEfbpass" 'nothing here' 'nothing here' no
+  [ -s "$d/sent" ] || { WHY="fleet-feedback.sh sent nothing at all"; return 1; }
+  [ -n "$(ls "$d/conf/feedback-outbox" 2>/dev/null)" ] || { WHY="an unreachable hub kept nothing in the outbox"; return 1; }
+  for v in "$@" FAKEfbpass; do
+    grep -qF -e "$v" "$d/sent" && left="$left sent:$v"
+    grep -rqF -e "$v" "$d/conf/feedback-outbox" && left="$left outbox:$v"
+  done
+  SECS=$(since "$t0")
+  [ -z "$left" ] || { WHY="credentials left in the feedback:$left"; return 1; }
+  grep -q '<redacted:github>' "$d/sent" || { WHY="the words went out without their mask"; return 1; }
+  WHAT='原话里贴了七类假凭据 + 一个密码：发出的字节和入口不在时本机存下的都一处不剩'
+}
+drill_feedback_secret_in_attach() {
+  CAP=30; local d="$WORK/fba" t0 v left='' L=sk-ant-api03-FAKEfblogaaaa S=ghp_FAKEfbscreenbbbbbbbb
+  t0=$(now)
+  _fb_drill "$d" '附上日志和屏幕' "relay token Authorization: Bearer FAKEfbbearer $L" "prompt> export GH=$S" yes
+  grep -q 'prompt> export' "$d/sent" || { WHY="the screen was not attached"; return 1; }
+  grep -q 'relay token' "$d/sent" || { WHY="the log was not attached"; return 1; }
+  for v in "$L" "$S" FAKEfbbearer; do
+    grep -qF -e "$v" "$d/sent" && left="$left sent:$v"
+    grep -rqF -e "$v" "$d/conf/feedback-outbox" && left="$left outbox:$v"
+  done
+  SECS=$(since "$t0")
+  [ -z "$left" ] || { WHY="credentials left in the attachments:$left"; return 1; }
+  WHAT='附上的日志和屏幕各塞假凭据：发出的附件和本机存下待补发的一处不剩'
 }
 
 cred_run_drills "$0"

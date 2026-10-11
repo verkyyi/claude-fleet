@@ -192,6 +192,10 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 			// The test identity's scratch, marked (claude-fleet#2505).
 			caps = append(caps, control.CapTestIdentity)
 		}
+		if rp.task {
+			// The hub's task record on a start (claude-fleet#3325).
+			caps = append(caps, control.CapTask)
+		}
 	}
 	if a.cfg.FleetSSHRelay {
 		caps = append(caps, control.CapSSHRelay)

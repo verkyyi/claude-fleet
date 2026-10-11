@@ -93,6 +93,7 @@ answer to **Alone?** is *no* for every row. They can only be turned off as one b
 | H15 | `fleet-history.sh resumed` (SessionStart resume) | Resume ledger | core | yes | no | `/fleet-history` misses a resume | **keep** — resuming is core (P1) |
 | H16 | `precompact-hook.sh` (PreCompact auto) | Auto-handoff before compaction | ext | yes | no | Native compaction runs instead | **opt-in** — overrides native compaction (N, P2) |
 | H17 | `session-end-hook.sh` (SessionEnd) | Writes the close row and ledger | core | yes | no | History misses a close | **keep** (P1) |
+| H18 | `fleet-worker-start-hook.sh` (SessionStart startup) | A repo worker's first turn is the person's words; this carries the flow — a grey line + the run-the-claim-skill instruction (issue #3331) | core | only on a window stamped `@seed_words` | no | A worker would read the words and never claim | **keep** — the worker lifecycle's one road in (P1) |
 
 **After the proposal:** 7 scripts / 12 entries — H1 ×5, H2 (Bash only, once M15 is gone), H3, H6,
 H13 ×2, H15, H17. 8 scripts become opt-in, 2 are removed. The `claude.hooks` lock becomes

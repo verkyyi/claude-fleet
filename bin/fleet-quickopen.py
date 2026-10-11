@@ -13,7 +13,7 @@ session (issue #1903, EPIC #1906 C10) — and the switch history ⌘[ / ⌘] wal
                                               「打开多会话视图」 (in the one-session
                                               view) / 「收起侧栏」 (anywhere else)
     fleet-quickopen.py switch [<query>]       ⌘K's lines, plain (the selftest's view)
-    fleet-quickopen.py switch-run <key|new|layout:multi|layout:solo|quit|route> [<session>]
+    fleet-quickopen.py switch-run <key|new|layout:multi|layout:solo|quit|route|repo-add> [<session>]
                                               ↵ on that line
     fleet-quickopen.py rank [--all] [<query>] the ranked rows, one per line
                                               (`key<TAB>name`) — the selftest's view;
@@ -523,7 +523,8 @@ def switch_act(action, session=""):
     (fleet-conf.sh set-client) and switched live (fleet-shell.sh layout).
     `quit`: 退出 fleet (fleet-shell.sh quit, issue #2349), detached — it stops
     the server this popup runs on. `route`: 连接路线… (claude-fleet#2886), the
-    `fleet route --pick` popup.
+    `fleet route --pick` popup. `repo-add`: 添加仓库… (claude-fleet#3375), the
+    dash-repo-add.sh popup.
     FLEET_SWITCH_NEW_CMD / FLEET_SWITCH_LAYOUT_CMD / FLEET_SWITCH_QUIT_CMD are
     the selftest's seams."""
     env = dict(os.environ)
@@ -543,6 +544,14 @@ def switch_act(action, session=""):
         detach(seam.split() if seam else
                ["bash", str(BIN / "dash-popup.sh"), "--no-inline", "--size", "S", "--title", "popup_route", "--",
                 sys.executable, str(BIN / "fleet-route.py"), "--pick"], env)
+        return True
+    if action == "repo-add":
+        # ⌘P's 添加仓库… (claude-fleet#3375): dash-repo-add.sh's prompt in a popup —
+        # owner/name or a GitHub link, fleet-repo.sh add, one sentence back
+        seam = os.environ.get("FLEET_SWITCH_REPO_ADD_CMD")
+        detach((seam.split() if seam else
+                ["bash", str(BIN / "dash-popup.sh"), "--no-inline", "--size", "S", "--title", "popup_repo_add", "--",
+                 "bash", str(BIN / "dash-repo-add.sh")]) + (["--session", session] if session else []), env)
         return True
     if action == "quit":
         seam = os.environ.get("FLEET_SWITCH_QUIT_CMD")
@@ -782,6 +791,8 @@ def panel_cmds(layout, session, current, say=None):
     # claude-fleet#2886: pin the route to a machine (`fleet route`); 「/route」 in
     # its name is what a narrow screen types to find it
     out.append(("route", w("panel_route", "连接路线…（/route）"), "", "!route"))
+    # claude-fleet#3375: clone a repo to ~/projects/<name> and host it here
+    out.append(("repo-add", w("panel_repo_add", "添加仓库…"), "", "!repo-add"))
     return out
 
 
@@ -919,6 +930,7 @@ def popup(screen, pane, session="", target="", switch=False):
                          "quickopen_cmd_loading", "switch_new", "switch_multi", "switch_solo", "panel_quit",
                          "panel_new_fmt", "panel_multi", "panel_solo", "panel_rename_current",
                          "panel_no_action_fmt", "panel_no_waiting", "switch_quit", "panel_dispatch",
+                         "panel_route", "panel_repo_add",
                          "quickopen_stale_fmt", "quickopen_lost"))
         fetched.append(full_rows(session))
     reader = threading.Thread(target=fetch, daemon=True)
@@ -1311,7 +1323,7 @@ def main(argv):
     if argv[:1] == ["switch-run"] and len(argv) in (2, 3):
         # ↵ on a ⌘K line: a session key jumps (as ↵ on it does), else the action
         session = argv[2] if len(argv) == 3 else os.environ.get("FLEET_SESSION", "")
-        if argv[1] in ("new", "quit", "dispatch", "route") or argv[1].startswith(("new:", "layout:")):
+        if argv[1] in ("new", "quit", "dispatch", "route", "repo-add") or argv[1].startswith(("new:", "layout:")):
             return 0 if switch_act(argv[1], session) else 1
         return 0 if hand(list_pane(), "jump=" + argv[1]) else 1
     if argv[:1] == ["panel-cmds"]:

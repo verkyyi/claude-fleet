@@ -89,6 +89,8 @@
 # stamped `@desk 1` `@issue N` `@repo <desk>` beside `@norepo 1` — still no
 # worktree — so a comment on it reaches the session. --desk[=<owner/name>] asks for
 # one from any caller (in that repo), --no-desk never files one.
+# A session the hub's task record owns (`--task T<n>`, issue #3325 — the hub's
+# start passes it) files none: the record is its ticket, stamped `@task T<n>`.
 #
 # The dash's ⌃s is a ONE-KEYSTROKE spawn (issue #444): no name popup, no confirm —
 # press it and the scratch window is on its way. Naming was a prompt nobody filled
@@ -115,7 +117,7 @@ set -uo pipefail
 # and input draft; --prompt <t> / --prompt=<t> is the optional submitted seed;
 # --bg backgrounds the slow half of the spawn (the dash ⌃s / typed-↵ path — see
 # below); the lone positional is the headless <fleet-session>.
-NAME=""; PROMPT=""; TARGET_SESS=""; BG=0; PIN=0; ORIGIN=""; AGENT=""; REPO_ARG=""; NOREPO=0; SEL=""; NODE_ARG=""; ORIGIN_WID=""; PRINT_WIN=0; REAP=""; WARM_ONLY=0; TEST_ID=0; DESK_ARG=""; ROLE=""; AS_ARG=""; AS_SOFT=0
+NAME=""; PROMPT=""; TARGET_SESS=""; BG=0; PIN=0; ORIGIN=""; AGENT=""; REPO_ARG=""; NOREPO=0; SEL=""; NODE_ARG=""; ORIGIN_WID=""; PRINT_WIN=0; REAP=""; WARM_ONLY=0; TEST_ID=0; DESK_ARG=""; TASK_REF=""; ROLE=""; AS_ARG=""; AS_SOFT=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --name)        NAME="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
@@ -190,7 +192,7 @@ while [ "$#" -gt 0 ]; do
     --warm-only)   WARM_ONLY=1; shift ;;
     # --reap <policy> (issue #1902): when the fleet may close this session on its
     # own — merged[:<dur>] | done[:<dur>] | loop-end | at:<time> | keep. None =
-    # the kind's default, stamped below: done:2h, or loop-end for a /loop seed.
+    # the kind's default, stamped below: done:15m, or loop-end for a /loop seed.
     --reap)        REAP="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
     --reap=*)      REAP="${1#--reap=}"; shift ;;
     # --test-identity (issue #2505): a session the TEST identity's client placed
@@ -206,10 +208,17 @@ while [ "$#" -gt 0 ]; do
     --desk)        DESK_ARG=on; shift ;;
     --desk=*)      DESK_ARG="${1#--desk=}"; shift ;;
     --no-desk)     DESK_ARG=off; shift ;;
+    # --task T<n> (issue #3325): the hub's task record this session belongs to —
+    # stamped @task (the top bar's number when there is no issue); the record is
+    # its ticket, so no desk ticket is filed (unless --desk asks for one).
+    --task)        TASK_REF="${2:-}"; shift 2 ;;
+    --task=*)      TASK_REF="${1#--task=}"; shift ;;
     *)             TARGET_SESS="$1"; shift ;;
   esac
 done
 case "$ORIGIN_WID" in ''|*[!A-Za-z0-9/:._-]*) ORIGIN_WID='' ;; esac
+case "$TASK_REF" in T[1-9]*) case "${TASK_REF#T}" in *[!0-9]*) TASK_REF='' ;; esac ;; *) TASK_REF='' ;; esac
+[ -n "$TASK_REF" ] && [ -z "$DESK_ARG" ] && DESK_ARG=off
 case "$DESK_ARG" in ''|on|off) ;; */*/*|*[!A-Za-z0-9/._-]*|/*|*/) DESK_ARG=on ;; */*) ;; *) DESK_ARG=on ;; esac
 # Trim the seed; a whitespace-only prompt is no prompt (plain scratch).
 PROMPT="${PROMPT#"${PROMPT%%[![:space:]]*}"}"; PROMPT="${PROMPT%"${PROMPT##*[![:space:]]}"}"
@@ -431,6 +440,7 @@ if [ "$BG" = 1 ]; then
   # canonical (checked above): no quote or space can be in it
   [ -n "$REAP" ] && owarg="$owarg --reap=$REAP"
   [ "$TEST_ID" = 1 ] && owarg="$owarg --test-identity"
+  [ -n "$TASK_REF" ] && owarg="$owarg --task=$TASK_REF"   # T<n>, checked above
   case "$DESK_ARG" in
     '') ;; on) owarg="$owarg --desk" ;; off) owarg="$owarg --no-desk" ;;
     *) owarg="$owarg --desk='$DESK_ARG'" ;;   # sanitized to owner/name below
@@ -789,12 +799,13 @@ fleet_win_role_stamp "$win" worker "$SOCK"   # what it IS, whatever it is rename
 [ "$PIN" = 1 ] && TM set-window-option -t "$win" @pin 1 2>/dev/null
 # When the fleet may close it on its own (issue #1902): the one asked for, else the
 # kind's default — a /loop seed until its loop stops, any other scratch once done
-# and idle 2 hours. A no-repo (home) session takes `done:2h` too (issue #2565) —
-# fleet-cleanup-idle.py reads it for such a session as "two hours after its agent
+# and idle 15 minutes (issue #3352; 2 hours before). A no-repo (home) session takes `done:15m` too (issue #2565) —
+# fleet-cleanup-idle.py reads it for such a session as "15 minutes after its agent
 # EXITED": a turn that merely ended is the session waiting for you, not over.
 [ "$TEST_ID" = 1 ] && { TM set-window-option -t "$win" @test_identity 1 2>/dev/null; [ -n "$REAP" ] || REAP=done:10m; }
+[ -n "$TASK_REF" ] && TM set-window-option -t "$win" @task "$TASK_REF" 2>/dev/null   # the hub's record (#3325)
 if [ -z "$REAP" ]; then
-  case "$PROMPT" in /loop|/loop[[:space:]]*) REAP=loop-end ;; *) REAP=done:2h ;; esac
+  case "$PROMPT" in /loop|/loop[[:space:]]*) REAP=loop-end ;; *) REAP=done:15m ;; esac
 fi
 [ -n "$REAP" ] && TM set-window-option -t "$win" @reap_policy "$REAP" 2>/dev/null
 # Spawn provenance (issue #503) — stamped on the WARM path too: a pool window was

@@ -124,8 +124,8 @@ is the second candidate source: every finished window (done, exited, or its agen
 gone) of this repo that is an issue session with no policy or `merged`, or a
 spawned (non-raw) scratch with no policy. It is closed once its issue is CLOSED
 (read from the collector's copy first, `fleet-gh.sh`), its branch has no PR, and
-it has been done `FLEET_REAP_DONE_NO_PR_SECS` (default 7200 — the same two hours
-as `done:2h`). Every gate of the idle pass still applies: working / looping /
+it has been done `FLEET_REAP_DONE_NO_PR_SECS` (default 7200 — two hours; a
+scratch's own default, `done`, is 15 minutes since issue #3352). Every gate of the idle pass still applies: working / looping /
 background job / child task / transfer or rotation lease / pinned / no-repo are
 kept. History is written (and, with the worktree present, verified resumable)
 before the window closes. The worktree is dropped (`fleet_worktree_drop`, to the

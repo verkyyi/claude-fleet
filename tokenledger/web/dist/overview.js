@@ -11,7 +11,7 @@
 import { Shell } from './app-shell.js';
 import { esc, ic, fmtTokens, greeting } from './lib/shell.js';
 import { t } from './lib/i18n.js';
-import { dayKeys, stack, delta, fullFrom, areaChart, sessionRows, running, attention, kpi, limitKpi } from './lib/pages.js';
+import { dayKeys, stack, delta, fullFrom, areaChart, sessionRows, running, attention, orphanAttention, kpi, limitKpi } from './lib/pages.js';
 
 const failed = (r) => `<div class="ghostrow err">${ic('alert')} ${esc(r.reason ? r.reason.message : t('ui.unavailable'))}</div>`;
 
@@ -39,7 +39,7 @@ export default Shell.mount('overview', async (ctx) => {
     : daily.some((x) => x) ? areaChart(stack(claude, codex), keys) + `<p style="margin-top:10px;font-size:13px"><a href="/usage">${esc(t('ui.ov.whereTo'))}</a></p>`
       : `<div class="empty">${ic('list')}<b>${esc(t('ui.ov.noTokens'))}</b><span>${esc(t('ui.ov.noTokensSub'))}</span></div>`;
 
-  const att = fleet.status === 'fulfilled' ? attention(rows, [], false) : null;
+  const att = fleet.status === 'fulfilled' ? attention(rows, [], false).concat(orphanAttention(fleet.value)) : null;
   const attHTML = att == null ? failed(fleet)
     : att.length ? '<div class="attn">' + att.map((a) => `<div><span class="ic ${a.tone}">${ic(a.icon)}</span><div><b>${esc(a.title)}</b><span>${esc(a.sub)}</span></div></div>`).join('') + '</div>'
       : `<div class="empty">${ic('check')}<b>${esc(t('ui.ov.nothing'))}</b><span>${esc(t('ui.ov.nothingSub'))}</span></div>`;

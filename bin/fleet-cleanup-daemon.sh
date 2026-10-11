@@ -333,30 +333,10 @@ cleanup_fleet() { (
   # reap — each repo's lease is taken inside cleanup_repo.
 
   # Detection is cache-only: the prmap pr-refresh already writes (ZERO extra gh).
-  # Done raw sessions do not necessarily HAVE a PR/cache row — nor does an issue
-  # session that finished with none, or a spawned scratch (issue #1832): the idle
-  # pass is the SECOND candidate source, every finished window, PR or not. Use the same
-  # daemon/lease/timebox, and account for their window closes in this tick's cap.
-  idle_cleaned=0
-  if [ -f "$BIN/fleet-cleanup-idle.sh" ]; then
-    idle_args=(); [ "$DRY" = 1 ] && idle_args=(--dry-run)
-    idle_out=$(fleet_timebox "$cto" bash "$BIN/fleet-cleanup-idle.sh" "$sess" \
-      --limit "$k" ${idle_args[@]+"${idle_args[@]}"})
-    idle_rc=$?
-    # One log line per token (issue #1832): `cleaned:done-no-pr` / `skip:<why>`
-    # for every finished session no PR will close, so none is invisible again.
-    [ -z "$idle_out" ] || printf '%s\n' "$idle_out" | while IFS= read -r l; do log "$sess: $l"; done
-    # A timed-out batch spends the tick budget; never start more destructive
-    # work after a partial observation. The next daemon tick can retry safely.
-    case "$idle_rc" in
-      124) log "$sess: idle cleanup deferred (rc=124)"; exit 0 ;;
-      75) log "$sess: idle cleanup deferred (rc=75); rate limit stops all fleets"; exit 75 ;;
-    esac
-    idle_cleaned=$(printf '%s\n' "$idle_out" | awk '/^(reaped-idle|cleaned:done-no-pr)/{n++} END{print n+0}')
-    k=$(( k - idle_cleaned ))
-    [ "$k" -gt 0 ] || exit 0
-  fi
-
+  # The PR pass runs FIRST (issue #3352): a merged PR is the surest reap there is,
+  # and before this an idle pass that timed out (`rc=124`) ended the tick ahead of
+  # it — on 2026-10-11 macmini's idle pass timed out every tick from 06:47 and not
+  # one merged worker (#3302, #3143, #3321) was looked at for over half an hour.
   # One pass per hosted repo (issue #791), sharing this fleet's per-tick cap.
   while IFS= read -r r; do
     [ -n "$r" ] || continue
@@ -366,6 +346,27 @@ cleanup_fleet() { (
   done <<EOF
 $(fleet_repos "$sess")
 EOF
+
+  # Done raw sessions do not necessarily HAVE a PR/cache row — nor does an issue
+  # session that finished with none, or a spawned scratch (issue #1832): the idle
+  # pass is the SECOND candidate source, every finished window, PR or not. Same
+  # daemon/lease/timebox, with what is left of this tick's cap.
+  [ "$k" -gt 0 ] || exit 0
+  if [ -f "$BIN/fleet-cleanup-idle.sh" ]; then
+    idle_args=(); [ "$DRY" = 1 ] && idle_args=(--dry-run)
+    idle_out=$(fleet_timebox "$cto" bash "$BIN/fleet-cleanup-idle.sh" "$sess" \
+      --limit "$k" ${idle_args[@]+"${idle_args[@]}"})
+    idle_rc=$?
+    # One log line per token (issue #1832): `cleaned:done-no-pr` / `skip:<why>`
+    # for every finished session no PR will close, so none is invisible again.
+    [ -z "$idle_out" ] || printf '%s\n' "$idle_out" | while IFS= read -r l; do log "$sess: $l"; done
+    # A timed-out batch is retried next tick. It is the LAST step of the tick, so
+    # nothing destructive starts after a partial observation.
+    case "$idle_rc" in
+      124) log "$sess: idle cleanup deferred (rc=124)" ;;
+      75) log "$sess: idle cleanup deferred (rc=75); rate limit stops all fleets"; exit 75 ;;
+    esac
+  fi
 ) }
 
 # --- which fleets? argv wins; else every live fleet session on this server. -----

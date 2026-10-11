@@ -1,0 +1,10 @@
+{
+  "name": "fleet-feedback",
+  "version": "0.1.0",
+  "description": "claude-fleet: /fleet-feedback 一句话 — tell the people who run this fleet what is wrong or slow, from any session: see what will go out and what becomes public first, choose whether to attach recent logs and the screen (secrets masked, admins only, 7 days), get a feedback number F… back (EPIC #3354).",
+  "author": { "name": "verkyyi", "url": "https://github.com/verkyyi" },
+  "homepage": "https://github.com/verkyyi/claude-fleet",
+  "repository": "https://github.com/verkyyi/claude-fleet",
+  "license": "MIT",
+  "keywords": ["claude-fleet", "feedback"]
+}

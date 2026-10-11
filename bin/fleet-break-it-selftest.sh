@@ -154,6 +154,9 @@
 #                                                   conf/tmux-shell.conf (User928), fleet-sidebar.py with_portal
 #   report-parent-gone                              bin/fleet-report-parent.sh (orphan → global/orphan-reports.ndjson
 #                                                   + fleet-alerts.sh event child-report)
+#   batch-green-unsaid                              bin/fleet-batch-green.sh (diskguard batch_green_watch)
+#   orphan-report-unseen                            bin/fleet-orphan-reports.py, fleet-control-read.sh column 31,
+#                                                   fleet_hub_common.py orphan_rep_cell
 # Cred half — cred-* rows: bin/fleet-break-it-cred-selftest.sh runs them (its own
 #   test; listed here only through the lockstep lint) — and cred-shared-down,
 #   bin/fleet-break-it-cred-shared-selftest.sh (issue #2217) — and cred-sep-by-agent /
@@ -5342,6 +5345,45 @@ $(run 2>&1)"
   WHAT='issue 已关、无 PR、策略 merged 的 done 会话：满 2 小时先记账再关（cleaned:done-no-pr），1 小时的留着并说 skip:done-recent'
 }
 
+# The cleanup daemon's idle pass times out (issue #3352): on 2026-10-11 macmini's
+# `fleet-cleanup-idle.sh` hit its 120 s box every tick and the daemon ended the
+# tick there — ahead of the merged-PR pass, so #3302 / #3143 / #3321 sat merged
+# and open for over half an hour, said nowhere. The real daemon on an isolated
+# server: an idle pass that overruns its box, a merged issue-12 with its window
+# and worktree. The merged PR must still be handed to the janitor that tick, and
+# the timeout said.
+drill_idle_timeout_starves_merged() {
+  CAP=30; BREAK_SOCK="$WORK/sock-itm"; local d="$WORK/itm" t0 out f
+  mkdir -p "$d/conf" "$d/fake" "$d/bin" "$d/leases" "$d/tmp/.claude-dash/fleets/acme-app"
+  git init -q -b master "$d/main" 2>/dev/null || git init -q "$d/main"
+  ( cd "$d/main" && git config user.email t@t && git config user.name t && git commit -qm i --allow-empty ) \
+    || { WHY="cannot build the repo"; return 1; }
+  git -C "$d/main" worktree add -qb issue-12 "$d/app-issue-12" 2>/dev/null || { WHY="cannot add the worktree"; return 1; }
+  for f in "$BIN"/*; do ln -s "$f" "$d/bin/" 2>/dev/null; done
+  rm -f "$d/bin/fleet-cleanup.sh" "$d/bin/fleet-cleanup-idle.sh" "$d/bin/fleet-diskguard.sh"
+  printf '#!/bin/bash\nprintf "%%s\\n" "$1" >> %q\necho cleaned:fake\n' "$d/janitor" > "$d/bin/fleet-cleanup.sh"
+  printf '#!/bin/bash\nexec sleep 30\n' > "$d/bin/fleet-cleanup-idle.sh"
+  printf '#!/bin/bash\nexit 0\n' > "$d/bin/fleet-diskguard.sh"
+  printf '#!/bin/sh\nexit 0\n' > "$d/fake/gh"
+  chmod +x "$d/bin/fleet-cleanup.sh" "$d/bin/fleet-cleanup-idle.sh" "$d/bin/fleet-diskguard.sh" "$d/fake/gh"
+  printf 'FLEET_REPO=acme/app\nFLEET_MAIN=%s\nFLEET_CLEANUP_CANDIDATE_TIMEOUT=2\n' "$d/main" > "$d/conf/itm.conf"
+  printf 'issue-12\t#40\tMERGED\t✓\tready\n' > "$d/tmp/.claude-dash/fleets/acme-app/prmap"
+  : > "$d/tmp/.claude-dash/fleets/acme-app/prmap.ts"
+  nt -f /dev/null new-session -d -s itm -n home 'exec sleep 600' || { WHY="cannot start the isolated tmux server"; return 1; }
+  f=$(nt new-window -d -P -F '#{window_id}' -t itm -c "$d/app-issue-12" 'exec sleep 600')
+  nt set-option -w -t "$f" @issue 12
+  nt set-option -w -t "$f" @claude_state "done"
+  t0=$(now)
+  out=$( cd "$d" && env -u TMUX -u TMUX_PANE PATH="$d/fake:$WORK/tbin:$PATH" HOME="$WORK/home" TMPDIR="$d/tmp" \
+           FLEET_CONF_DIR="$d/conf" FLEET_SKIP_GLOBAL_CONF=1 FLEET_DISPATCH_LEASE_DIR="$d/leases" \
+           FLEET_TRASH_SWEEP_BUDGET=0 BREAK_SOCK="$BREAK_SOCK" bash "$d/bin/fleet-cleanup-daemon.sh" itm 2>&1 )
+  SECS=$(since "$t0")
+  grep -qx 40 "$d/janitor" 2>/dev/null \
+    || { WHY="the merged PR never reached the janitor: [$(printf '%s' "$out" | tail -4 | tr '\n' ' ')]"; return 1; }
+  case "$out" in *'idle cleanup deferred (rc=124)'*) ;; *) WHY="the idle timeout was not said: [$(printf '%s' "$out" | tail -4 | tr '\n' ' ')]"; return 1 ;; esac
+  WHAT='闲置那一遍超时（rc=124）：同一拍里合并 PR 那一遍照样先跑、交给清理，超时照记一行'
+}
+
 # An auto send one machine declines (2026-10-08: mini2's `fleet discover:
 # fork/exec … invalid argument`, three times) was a failure, and an unknown one
 # left a GitHub claim with no session that only --force got past (issue #1610).
@@ -6404,6 +6446,59 @@ drill_role_seat_migrate_early() {
   [ "$(o "$a" @fleet_role)" = worker ] && [ "$(o "$a" @fleet_role_def)" = orchestrator ] && grep -q 'fid:66666666' "$WORK/rs.stop" \
     || { WHY="after the switch the seats did not move: $r"; return 1; }
   WHAT="旧安装还会重开座位时 roles-windows 不碰两个座位、各说一行；换到新版后同一步把编排变成普通行（持有角色）、收掉管家"
+}
+
+# A batch nobody drives with green member PRs (issue #3369): its driver is gone and
+# nobody holds the steward role, so nothing looked at its PRs — the sidebar said
+# 没人在跑, never that work waits to land. bin/fleet-batch-green.sh (diskguard tick)
+# says the READY count once per batch per count; read-only, merges nothing.
+drill_batch_green_unsaid() {
+  CAP=30; local d="$WORK/bg" t0 a
+  mkdir -p "$d/conf/global/epic-running.d" "$d/tmp/.claude-dash/fleets/acme-app"
+  printf 'epoch: %s\nttl: 2700\nepic: 50\nrepo: acme/app\n' "$(( $(date +%s) - 4000 ))" > "$d/conf/global/epic-running.d/acme-app-50"
+  printf 'm\t#50\t\tThe batch\n' > "$d/tmp/.claude-dash/fleets/acme-app/issues"
+  printf 'issue-51\t#151\tOPEN\t✓\tready\t\t\nissue-52\t#152\tOPEN\t✗\t\t\tci\n' > "$d/tmp/.claude-dash/fleets/acme-app/prmap"
+  printf '#!/bin/sh\nprintf "acme/app\\t51\\topen\\nacme/app\\t52\\topen\\n"\n' > "$d/members"
+  printf '#!/bin/sh\necho "$*" >> "%s/alerted"\n' "$d" > "$d/alert"
+  printf '#!/bin/sh\nexit 0\n' > "$d/driven"
+  chmod +x "$d/members" "$d/alert" "$d/driven"
+  bg() { env TMPDIR="$d/tmp" FLEET_CONF_DIR="$d/conf" FLEET_SKIP_GLOBAL_CONF=1 FLEET_BATCH_GREEN_SECS=0 \
+           FLEET_BATCH_GREEN_MEMBERS_CMD="$d/members" FLEET_BATCH_GREEN_ALERT_CMD="$d/alert" \
+           FLEET_BATCH_GREEN_DRIVEN_CMD="$d/driven" bash "$BIN/fleet-batch-green.sh"; }
+  t0=$(now)
+  bg
+  SECS=$(since "$t0")
+  a=$(cat "$d/alerted" 2>/dev/null)
+  case "$a" in *batch-green*acme/app#50*"还有 1 张已全绿"*'#151'*) ;; *) WHY="no batch-green alert naming the batch and its 1 green PR: [$a]"; return 1 ;; esac
+  bg; bg
+  [ "$(grep -c . "$d/alerted")" = 1 ] || { WHY="the same count was said again: $(cat "$d/alerted")"; return 1; }
+  WHAT="没人在跑的批次：一条提醒说出批次号和已全绿张数，同一张数不再说"
+}
+
+# A child's result handed to the person is never seen (issue #3369): orphan() wrote
+# global/orphan-reports.ndjson and one alert, but no sidebar row nor the entry read
+# it. bin/fleet-orphan-reports.py is the one reader: the inventory carries the
+# unread rows (column 31 → `orphan_reports`), the sidebar draws one row each, the
+# hub's overview lists them; read ⇒ gone everywhere.
+drill_orphan_report_unseen() {
+  CAP=30; local d="$WORK/oru" t0 id cell got
+  mkdir -p "$d/conf/global"
+  printf '{"ts": %s, "child_key": "issue-41", "state": "MERGED", "pr": "77", "summary": "landed the fix", "repo": "acme/app"}\n' \
+    "$(date +%s)" > "$d/conf/global/orphan-reports.ndjson"
+  t0=$(now)
+  id=$(FLEET_CONF_DIR="$d/conf" python3 "$BIN/fleet-orphan-reports.py" list | cut -f1)
+  cell=$(FLEET_CONF_DIR="$d/conf" python3 "$BIN/fleet-orphan-reports.py" cell)
+  got=$(cd "$BIN" && CELL="$cell" python3 -c 'import os, fleet_hub_common as h
+p = ["@5", "", "1", "/w/x", "idle", "claude", "a1", "", "acme/app", "scratch-7", "", "", "", "busy=", "born=", "cfg=", "title=", "reap=", "detail=", "role=", "epic=", "epicstale=", "backfill=", "ctxleft=", "ctxband=", "ctxts=", "model=", "effort=", "agentstatus=", "test="]
+o = h.inventory_row(p + ["orphanrep=" + os.environ["CELL"]])[1].get("orphan_reports") or [{}]
+print(o[0].get("child"), o[0].get("state"), o[0].get("pr"), o[0].get("summary"))' 2>&1)
+  SECS=$(since "$t0")
+  [ -n "$id" ] && [ "$got" = "issue-41 MERGED 77 landed the fix" ] \
+    || { WHY="the unread report does not reach the inventory: id=[$id] worker=[$got]"; return 1; }
+  FLEET_CONF_DIR="$d/conf" python3 "$BIN/fleet-orphan-reports.py" read "$id"
+  [ -z "$(FLEET_CONF_DIR="$d/conf" python3 "$BIN/fleet-orphan-reports.py" cell)" ] \
+    || { WHY="a read report is still carried"; return 1; }
+  WHAT="交给你的子会话结果：侧栏和入口都读得到（盘点第 31 列），读过就不再出现"
 }
 
 # ================================================================ run ====}

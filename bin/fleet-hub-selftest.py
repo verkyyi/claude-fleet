@@ -25,7 +25,7 @@ sys.path.insert(0, str(BIN))
 import fleet_control as control
 import fleet_hub as hub_module
 from fleet_config_write import revision, write
-from fleet_hub_common import Fault, PROTOCOL, canonical, now, parse_worker_id, validate_write
+from fleet_hub_common import Fault, PROTOCOL, SCOPE_OF, canonical, now, parse_worker_id, validate_write
 
 try:
     HAS_MCP_SDK = version("mcp") == "2.2.0"
@@ -151,7 +151,9 @@ if [ -f "$FLEET_CONF_DIR/spawn-full" ]; then
   echo "tmux: toast" >&2
   exit 2
 fi
-printf '%s\\n' "$*" >> "$FLEET_CONF_DIR/spawn.calls"
+# --words-file (issue #3331): its CONTENT is logged, <in brackets> — the path is a temp file
+_log=''; _prev=''; for a in "$@"; do _v=$a; [ "$_prev" = --words-file ] && _v="<$(cat "$a" 2>/dev/null)>"; _log="$_log${_log:+ }$_v"; _prev=$a; done
+printf '%s\\n' "$_log" >> "$FLEET_CONF_DIR/spawn.calls"
 # the agent it was asked for stamped on the window (@cc_agent, issue #2403), as the real one does
 repo=''; agent=claude; prev=''; for a in "$@"; do [ "$prev" = --repo ] && repo=$a; [ "$prev" = --agent ] && agent=$a; prev=$a; done
 printf '@12\\t%s\\t0\\t/fixture/issue-%s\\tdone\\t%s\\ta1\\t\\t%s\\n' "$1" "$1" "$agent" "$repo" >> "$FLEET_CONF_DIR/workers.tsv"
@@ -1077,6 +1079,50 @@ class HubTests(HubFixture):
         self.assertIn("没有编排", got["result"]["error"]["message"])
         self.assertNotIn("orch", calls)
 
+    def test_task_record_on_a_start_and_task_issue(self):
+        # issue #3325: the hub's task record T<n> rides a new / scratch start
+        # (FLEET_CONTROL_TASK to the adapter, never an argv word), and task_issue
+        # files a record's issue here — the URL first, the session's address beside.
+        validate_write("worker_start", {"kind": "scratch", "no_repo": True, "task": "T218"})
+        validate_write("worker_start", {"kind": "new", "title": "加一个 /healthz", "repo": "acme/web", "task": "T9"})
+        for bad in ({"kind": "scratch", "task": "218"}, {"kind": "scratch", "task": "T0"},
+                    {"kind": "scratch", "task": "T1; rm -rf ~"}, {"issue": 3, "task": "T1"}):
+            with self.assertRaises(Fault):
+                validate_write("worker_start", bad)
+        wid = self.fleet + "/" + str(uuid.uuid4())
+        validate_write("task_issue", {"repo": "acme/web", "task": "T218", "title": "整理账单", "worker_id": wid})
+        for bad in ({"repo": "web", "task": "T1", "title": "x"}, {"repo": "acme/web", "task": "1", "title": "x"},
+                    {"repo": "acme/web", "task": "T1", "title": "a\nb"}, {"repo": "acme/web", "task": "T1"},
+                    {"repo": "acme/web", "task": "T1", "title": "x", "worker_id": "issue-7; rm"}):
+            with self.assertRaises(Fault):
+                validate_write("task_issue", bad)
+        self.assertEqual(SCOPE_OF["task_issue"], "gh:comment")
+        real_popen, real_adapter = control.subprocess.Popen, self.node.controller.adapter
+
+        def no_executor(argv, *args, **kwargs):
+            return MagicMock() if "execute" in argv else real_popen(argv, *args, **kwargs)
+
+        calls = []
+
+        def adapter(mode, *a, **k):
+            if mode != "taskissue":
+                return real_adapter(mode, *a, **k)
+            calls.append((mode, *a, k.get("payload")))
+            return 0, b"https://github.com/acme/web/issues/3312\n", b""
+        op_id = str(uuid.uuid4())
+        with patch.object(control.subprocess, "Popen", side_effect=no_executor):
+            self.node.rpc("submit", {"operation_id": op_id, "fleet_id": self.fleet, "action": "task_issue",
+                                     "params": {"repo": "acme/web", "task": "T218", "title": "整理账单",
+                                                "body": "整理账单\n\nhub 任务 T218 补建的单。", "worker_id": wid},
+                                     "actor": "operator"})
+        with patch.object(self.node.controller, "adapter", side_effect=adapter):
+            self.node.controller.execute(op_id)
+        got = self.node.rpc("operation_get", {"operation_id": op_id})
+        self.assertEqual((got["status"], got["result"].get("issue_url")),
+                         ("succeeded", "https://github.com/acme/web/issues/3312"), got)
+        self.assertEqual(calls, [("taskissue", "demo", "acme/web", "T218", wid.split("/", 1)[1], "整理账单",
+                                  "整理账单\n\nhub 任务 T218 补建的单。".encode())])
+
     def test_start_names_the_repo_in_a_multi_repo_fleet(self):
         # issue #984: two repos can both have an issue-123, so the spawn needs --repo.
         with self.assertRaises(Fault):
@@ -1247,13 +1293,14 @@ echo "https://github.com/example/project/issues/128"
         self.assertEqual((self.node.conf / "file.calls").read_text(),
                          "--repo example/project --from hub --title 侧栏的名字太长 --body 两行\n正文\n")
         self.assertEqual((self.node.conf / "spawn.calls").read_text(),
-                         "128 demo --print --agent claude --origin hub --repo example/project\n")
+                         "128 demo --print --agent claude --origin hub --repo example/project"
+                         " --words-file <两行\n正文>\n")
         # a filing that fails opens nothing
         (self.node.conf / "file-fail").touch()
         failed = self.node.wait(self.call("worker_start", dict(fleet_id=self.fleet, idempotency_key="new-2",
                                                                params={"kind": "new", "title": "y"}))["operation_id"])
         self.assertEqual((failed["status"], failed["result"]["error"]["exit"]), ("failed", 7))
-        self.assertEqual(len((self.node.conf / "spawn.calls").read_text().splitlines()), 1)
+        self.assertEqual((self.node.conf / "spawn.calls").read_text().count(" --print "), 1)
 
     def test_new_issue_start_names_its_attachments_here(self):
         # issue #2393: the writing area's files — the agent downloaded each to
@@ -1309,7 +1356,8 @@ echo "https://github.com/example/project/issues/131"
             self.assertEqual(op["status"], "succeeded", key)
         self.assertEqual((self.node.conf / "spawn.calls").read_text(),
                          "130 demo --print --agent codex --origin hub --repo example/project\n"
-                         "131 demo --print --agent codex --origin hub --repo example/project\n"
+                         "131 demo --print --agent codex --origin hub --repo example/project"
+                         " --words-file <在 m4 上用 codex>\n"
                          "132 demo --print --agent claude --origin hub --repo example/project\n")
         self.assertEqual((self.node.conf / "scratch.calls").read_text(),
                          "demo --origin hub --print --agent codex --repo example/project --name codex 试试\n")

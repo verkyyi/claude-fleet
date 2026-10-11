@@ -22,6 +22,7 @@
 #   G. a slash-command seed → ticketed, but its seed is left as typed
 #   H. fleet-ticket.sh: parse · hub:N refused · read · comment · state · children ·
 #      evidence · the `desk` label in the canonical taxonomy
+#   T. --task T<n> (issue #3325): the hub's record owns it — no desk ticket, @task
 #   I. (n) adding a repo to the fleet changes nothing for a desk spawn: the same
 #      filer call and the same window options, byte for byte
 set -uo pipefail
@@ -133,6 +134,18 @@ grep -q 'curl .*tok' "$LOG" || fail "A the node token rides the header" "$(cat "
 grep -q '第二行细节' "$LOG" && { grep '^curl' "$LOG" | grep -q '第二行细节' && fail "A the hub row carries no body" "$(cat "$LOG")"; }
 ok "A orchestrator/hub no-repo session → desk ticket, @desk/@issue/@repo + @norepo, \$HOME, registered"
 A_OPTS=$(opts); A_FILE=$(grep '^fleet-issue-file.sh' "$LOG")
+
+# ============ T: the hub's task record owns it (issue #3325) ==================
+# A start the hub placed with `task: T218` — the record is its ticket: no desk
+# ticket filed, nothing registered, the seed untouched; the window says @task.
+FLEET_HOST=1 CCQUOTA_FLEET=1 run_raw --origin hub --task T218 --prompt '看看这台机器风扇为什么一直转'
+[ -s "$LOG" ] && fail "T a task's session files no desk ticket" "$(cat "$LOG")"
+grep -q '@desk\|@issue\|@repo' "$OPTS_LOG" && fail "T no ticket options" "$(cat "$OPTS_LOG")"
+grep -q 'SETOPT .*@task T218$' "$OPTS_LOG" || fail "T the window carries its record" "$(cat "$OPTS_LOG")"
+[ "$(seed)" = '看看这台机器风扇为什么一直转' ] || fail "T the seed is the person's words, untouched" "$(seed)"
+FLEET_HOST=1 CCQUOTA_FLEET=1 run_raw --origin hub --task 'T1; rm' --prompt 'x'
+grep -q '@task' "$OPTS_LOG" && fail "T a malformed record number is dropped" "$(cat "$OPTS_LOG")"
+ok "T a task's session: no desk ticket, @task T<n>"
 
 # ============================ B: off ⇒ as before ==============================
 run_raw --origin hub --prompt '写设计页：编排架构'

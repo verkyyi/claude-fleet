@@ -135,6 +135,53 @@ func TestMeUsage_Totals_Days_Models(t *testing.T) {
 	}
 }
 
+// by_session is the viewer's sessions, today and this week, by worker_id
+// (claude-fleet#3377): each column sums to today / week with the "none" item
+// for the rows on no session, a session is named off its fleet's heartbeat,
+// and another person's session is never in it.
+func TestMeUsage_BySession(t *testing.T) {
+	h, bob, carol, _, _ := meUsageHarness(t)
+	u, raw := readMeUsage(t, h, bob, "")
+	var today, week int64
+	got := map[string]MeUsageSession{}
+	for _, it := range u.BySession {
+		today += it.Today
+		week += it.Week
+		k := it.WorkerID
+		if it.Kind == workNone {
+			k = workNone
+		}
+		got[k] = it
+	}
+	if today != u.Today || week != u.Week {
+		t.Errorf("by_session sums to %d / %d; want today %d / week %d: %s", today, week, u.Today, u.Week, raw)
+	}
+	if it := got[meWIss]; it.Key != "issue-12" || it.Today != 1300 || it.Week != 1300 || it.Repo != "o/app" || it.Issue != 12 {
+		t.Errorf("the issue worker = %+v; want issue-12, 1300 / 1300 on o/app#12", it)
+	}
+	if it := got[meWScr]; it.Key != "scratch-7" || it.Today != 40 {
+		t.Errorf("the scratch = %+v; want scratch-7 at 40", it)
+	}
+	if it := got[meWOrch]; it.Today != 300 || it.Key == "" {
+		t.Errorf("the orchestrator's window = %+v; want 300 and a name", it)
+	}
+	if it := got[workNone]; it.Today != 0 || it.Week != 500 {
+		t.Errorf("no session = %+v; want 0 today, yesterday's 500 this week", it)
+	}
+	if len(u.BySession) != 4 || u.BySession[len(u.BySession)-1].Kind != workNone || u.BySession[0].WorkerID != meWIss {
+		t.Errorf("by_session order = %+v; want largest first, none last", u.BySession)
+	}
+	c, raw := readMeUsage(t, h, carol, "")
+	for _, it := range c.BySession {
+		if it.WorkerID != "" || it.Kind != workNone {
+			t.Errorf("carol's by_session names a session: %+v (%s)", it, raw)
+		}
+	}
+	if len(c.BySession) != 1 || c.BySession[0].Today != 9999 {
+		t.Errorf("carol's by_session = %+v; want only none at 9999", c.BySession)
+	}
+}
+
 // since_first is when the hub's first pool row was written, anyone's — a
 // previous window that starts before it was not fully recorded and the page
 // shows no percent off it (claude-fleet#3230). Nothing recorded = absent.

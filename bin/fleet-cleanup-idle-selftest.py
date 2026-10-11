@@ -144,6 +144,20 @@ class Rig(unittest.TestCase):
     def exists(self):
         return self.win in self.tm("list-windows", "-t", self.label, "-F", "#{window_id}").split()
 
+    def codexify(self):
+        """Make the rig's window a Codex session (issue #3352: the reapers judge
+        Claude and Codex by the same @claude_state / @claude_state_ts)."""
+        home = self.root / "codex-home"
+        transcript = home / "sessions/2026/09/17" / ("rollout-" + self.sid + ".jsonl")
+        transcript.parent.mkdir(parents=True, exist_ok=True)
+        transcript.write_text(json.dumps({"type": "session_meta", "payload": {"id": self.sid, "cwd": str(self.wt)}}) + "\n")
+        pid = self.tm("display-message", "-p", "-t", self.win, "#{pane_pid}").strip()
+        self.set("@cc_agent", "codex")
+        self.set("@cc_launcher_pid", pid)
+        self.set("@codex_identity", json.dumps({"session_id": self.sid, "owner": pid,
+                                               "home": str(home), "transcript": str(transcript), "cwd": str(self.wt)}))
+        return transcript
+
     def mature_notice(self):
         self.clean()
         self.set("@reap_due", str(int(time.time()) - 1))
@@ -291,7 +305,7 @@ class PolicyGrammar(unittest.TestCase):
         import fleet_reap_policy as rp
         self.assertEqual(rp.norm("merged"), "merged")
         self.assertEqual(rp.norm("merged:48h"), "merged:48h")
-        self.assertEqual(rp.norm("done"), "done:2h")
+        self.assertEqual(rp.norm("done"), "done:15m")
         self.assertEqual(rp.norm("done:30m"), "done:30m")
         self.assertEqual(rp.norm("loop-end"), "loop-end")
         self.assertEqual(rp.norm("keep"), "keep")
@@ -302,10 +316,12 @@ class PolicyGrammar(unittest.TestCase):
                     "merged:1y", "loop-end:1h", "done:9999999d"):
             self.assertIsNone(rp.norm(bad), bad)
         self.assertEqual((rp.default("issue"), rp.default("scratch"), rp.default("loop")),
-                         ("merged", "done:2h", "loop-end"))
+                         ("merged", "done:15m", "loop-end"))
+        self.assertEqual(rp.parse("done"), ("done", 900))
         self.assertEqual(rp.parse("done:2h"), ("done", 7200))
-        self.assertEqual([rp.label(p) for p in ("merged", "done:2h", "loop-end", "keep")],
+        self.assertEqual([rp.label(p) for p in ("merged", "done:15m", "loop-end", "keep")],
                          ["合并后回收", "做完就回收", "循环停了回收", "常驻"])
+        self.assertEqual(rp.label("done:2h"), "做完闲 2 小时")   # an older window's own stamp
         self.assertEqual(rp.label("merged:48h"), "合并后留 2 天")
         self.assertEqual([rp.merged_grace(p) for p in ("", "merged", "merged:48h", "keep", "done:2h", "junk")],
                          ["", "", "172800", "keep", "other", ""])
@@ -368,6 +384,28 @@ class ReapPolicy(Rig):
         self.assertTrue(self.wt.is_dir())            # the worktree and its branch stay
         self.assertIn("unpushed", self.call("git", "-C", str(self.main), "log", "-1", "--format=%s", "scratch-7"))
         self.assertIn("reap policy done:2h", (self.root / "ledger.tsv").read_text())
+
+    def test_scratch_default_is_fifteen_minutes_for_claude_and_codex(self):
+        # Issue #3352 (发起人 2026-10-11, superseding ruling 7's two hours): a
+        # scratch's `done` closes it 15 minutes after its turn ended — Claude and
+        # Codex alike; 10 minutes in it stays.
+        for agent in ("claude", "codex"):
+            with self.subTest(agent=agent):
+                if agent == "codex":
+                    self.tearDown()
+                    self.setUp()
+                    self.codexify()
+                self.policy("done")
+                self.assertEqual(self.call("bash", str(self.ibin / "fleet-reap-policy.sh"), "get", "--win", self.win,
+                                           "--session", self.label).strip(), "done:15m")
+                self.set("@claude_state_ts", str(int(time.time()) - 600))
+                self.due()
+                self.assertTrue(self.exists())
+                self.set("@claude_state_ts", str(int(time.time()) - 1000))
+                self.set("@reap_due", "")
+                out = self.due()
+                self.assertIn("reaped-idle:" + self.win + " policy=done:15m", out)
+                self.assertFalse(self.exists())
 
     def test_keep_and_merged_are_never_this_pass(self):
         for p in ("keep", "merged", "merged:48h"):
@@ -515,6 +553,7 @@ class HomeReap(ReapPolicy):
     test_at_only_once_the_time_has_come_and_never_while_working = None
     test_loop_end_waits_for_the_loop = None
     test_sleep_on_considers_only_windows_with_a_policy = None
+    test_scratch_default_is_fifteen_minutes_for_claude_and_codex = None
 
 
 @unittest.skipUnless(shutil.which("tmux"), "tmux absent")
@@ -562,6 +601,7 @@ class PinIsOrder(ReapPolicy):
     test_at_only_once_the_time_has_come_and_never_while_working = None
     test_loop_end_waits_for_the_loop = None
     test_sleep_on_considers_only_windows_with_a_policy = None
+    test_scratch_default_is_fifteen_minutes_for_claude_and_codex = None
 
 
 @unittest.skipUnless(shutil.which("tmux"), "tmux absent")
@@ -607,6 +647,16 @@ class DoneNoPr(Rig):
         self.assertFalse(self.listed())
         self.assertIn("scratch-7", self.call("git", "-C", str(self.main), "branch", "--list", "scratch-7"))
         self.assertIn(self.sid, (self.root / "ledger.tsv").read_text())   # recorded first
+
+    def test_codex_worker_closes_like_a_claude_one(self):
+        # Issue #3352: a Codex worker whose issue closed with no PR goes the same
+        # road, on the same state stamps.
+        self.codexify()
+        self.set("@issue", "12")
+        self.ago(7300)
+        out = self.due()
+        self.assertIn("cleaned:done-no-pr " + self.win, out)
+        self.assertFalse(self.exists())
 
     def test_dirty_or_unpushed_only_closes_the_window(self):
         self.ago(7300)

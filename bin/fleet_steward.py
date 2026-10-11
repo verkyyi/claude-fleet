@@ -400,6 +400,25 @@ def panel_groups(d, now_t=None):
     return fd.group(rows)
 
 
+def reap_overdue():
+    """Sessions past their reap policy and still open (issue #3352), off the one
+    reader bin/fleet-reap-overdue.py: {n, stuck, top} — top is the longest-stuck
+    one's line. A reader that cannot run leaves {} (the panel says nothing)."""
+    try:
+        out = subprocess.run(["python3", str(Path(__file__).resolve().parent / "fleet-reap-overdue.py"), "--json"],
+                             capture_output=True, text=True, timeout=60).stdout
+        d = json.loads(out)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return {}
+    rows = d.get("rows") or []
+    top = ""
+    if rows:
+        r = rows[0]
+        top = "%s · %s · %dm · %s" % (r.get("key") or r.get("window"), r.get("why_due", ""),
+                                       int(r.get("over", 0)) // 60, r.get("reason", ""))
+    return {"n": int(d.get("overdue", 0)), "stuck": int(d.get("stuck", 0)), "top": top}
+
+
 class State:
     def __init__(self):
         self.path = gdir() / "steward.state.json"
@@ -1004,6 +1023,7 @@ def cmd_beat(a):
         stamp_decide(sess, pk["n_parked"], wins, "@orch_park")
         stamp_decide(sess, park_cell(st.d["parked"]), wins, "@orch_park_list")
     hf, ha, hd, delta["health"] = health.check(st, sess, socket(sess), repo_of_slug(sess), now_t, doctor_rows, tr)
+    st.d["reap_overdue"] = reap_overdue()
     delta["deferred"] += hd
     delta["health_deferred"] = hd
     path = write_delta(delta)

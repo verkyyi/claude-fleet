@@ -223,6 +223,10 @@ type Server struct {
 	// diagnostics up with (claude-fleet#2891; CCQUOTA_FLEET_DEBUG_DIR +
 	// CCQUOTA_FLEET_DEBUG_KEY). Nil: no /v1/fleet/debug/ route exists.
 	Debug *DebugTickets
+	// Feedback takes what people on managed machines send with
+	// /fleet-feedback (claude-fleet#3355; CCQUOTA_FLEET_FEEDBACK_DIR). Nil: no
+	// feedback route exists.
+	Feedback *FeedbackDesk
 	// joinClock replaces the join-code clock in tests.
 	joinClock func() time.Time
 	// roleTreeFn replaces where the merged roles view reads the built-in
@@ -468,6 +472,10 @@ func (s *Server) routes() *routeMux {
 		mux.Handle("/machines/", s.viewerOnly(http.HandlerFunc(s.serveMachinesPage)))
 		// 我的会话 (claude-fleet#1429): the phone view of fleet_sessions.
 		mux.Handle("/sessions", s.viewerOnly(http.HandlerFunc(s.serveSessionsPage)))
+		// 任务 (claude-fleet#3325): the viewer's task records, T<n>.
+		mux.Handle(TasksPagePath, s.viewerOnly(http.HandlerFunc(s.serveTasksPage)))
+		mux.Handle(FleetTasksPath, s.viewerOnly(http.HandlerFunc(s.handleFleetTasks)))
+		mux.Handle(FleetTasksPath+"/", s.viewerOnly(http.HandlerFunc(s.handleFleetTasks)))
 		mux.Handle("/v1/fleet/me", s.viewerOnly(http.HandlerFunc(s.handleFleetMe)))
 		mux.Handle("/v1/fleet/accounts", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetAccounts))))
 		// Per-person node caps (claude-fleet#1410), the operator's.
@@ -654,6 +662,12 @@ func (s *Server) routes() *routeMux {
 			mux.HandleFunc(debugReportsPfx, s.handleDebugReport)
 			mux.HandleFunc(DebugShortPrefix, s.handleDebugShort)
 			mux.HandleFunc(NodeDebugPrefix, s.handleNodeDebug)
+		}
+		// Feedback (claude-fleet#3355): the node door takes the login's own
+		// token; a person reads only their own. Off: not registered at all.
+		if s.Feedback != nil {
+			mux.HandleFunc(NodeFeedbackPath, s.handleNodeFeedback)
+			mux.Handle(FeedbackMinePath, s.viewerOnly(http.HandlerFunc(s.handleFeedbackMine)))
 		}
 	}
 

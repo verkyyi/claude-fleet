@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
@@ -90,6 +91,17 @@ type clientPlaceRequest struct {
 	// Attachments: the files the writing area sends with a new or scratch
 	// start (claude-fleet#2393) — see fleet_attachment.go.
 	Attachments []clientAttachment `json:"attachments"`
+	// Task: the start is a person's task (claude-fleet#3325) — the hub writes
+	// its record T<n> first (fleet_tasks.go), then places it as before; a
+	// repo's task is a `new` start (its issue hangs on the record), a task
+	// with no repo a no-repo scratch (the record alone, no desk ticket). Via
+	// says where it was asked (⌘P …), shown on the record. An older hub
+	// ignores both and places it as before.
+	Task bool   `json:"task"`
+	Via  string `json:"via"`
+	// TaskRef is `action: task_issue`'s record (T<n>): 「建 GitHub 单」 from the
+	// client — Repo names where to file it, else the task's own.
+	TaskRef string `json:"task_ref"`
 }
 
 // ClientPlaceResponse is the answer: Line and Exit are fleet_hub_place's.
@@ -131,6 +143,8 @@ type ClientPlaceResponse struct {
 	// AlsoOpen: a RESUME's other devices that have the session open now
 	// (claude-fleet#2564) — the client says so at the top of its view.
 	AlsoOpen []string `json:"also_open,omitempty"`
+	// Task is the record a task start wrote (claude-fleet#3325): T<n>.
+	Task string `json:"task,omitempty"`
 }
 
 // placedLogin is the login of the candidate placement chose (its fleet_id).
@@ -247,8 +261,10 @@ func (s *Server) handleFleetClientPlace(w http.ResponseWriter, r *http.Request) 
 		s.clientPlaceStatus(w, r, p, req.OperationID, wait)
 	case "", "place":
 		s.clientPlace(w, r, p, key, env.Lease, req, wait, now)
+	case "task_issue":
+		s.clientTaskIssue(w, r, p, req)
 	default:
-		httpError(w, http.StatusBadRequest, "action must be place or status")
+		httpError(w, http.StatusBadRequest, "action must be place, status or task_issue")
 	}
 }
 
@@ -276,6 +292,18 @@ func (s *Server) clientPlace(w http.ResponseWriter, r *http.Request, p fleetPrin
 		return
 	}
 	test := strings.HasSuffix(leaseKey, clientTestSlot)
+	if req.Task && (req.Home || !(req.Kind == "new" || (req.Kind == "scratch" && req.NoRepo))) {
+		httpError(w, http.StatusBadRequest, "a task is a new start in a repo, or a no_repo scratch")
+		return
+	}
+	if req.Task && taskTitle(req) == "" {
+		httpError(w, http.StatusBadRequest, "a task needs its words (a title or a body)")
+		return
+	}
+	if req.Via != "" && (!req.Task || utf8.RuneCountInString(req.Via) > 24 || strings.ContainsAny(req.Via, "\n\r\t")) {
+		httpError(w, http.StatusBadRequest, "via is a task's short origin (≤ 24 characters, one line)")
+		return
+	}
 	if req.NoRepo {
 		// The writing area's 「不关联仓库」 (claude-fleet#1956): a scratch only,
 		// and it names no repo — any of this person's fleets may open it.
@@ -472,10 +500,25 @@ func (s *Server) clientPlace(w http.ResponseWriter, r *http.Request, p fleetPrin
 	// `after …` field; every machine declining is REFUSED ALL_DECLINED. A
 	// machine named, a restore (one fleet holds its row) and a new issue
 	// (the machine may have filed it before it said no) are tried once.
+	// The task's record (claude-fleet#3325) is written before anything is
+	// placed: every answer below fills it, a refusal included.
+	var task *store.FleetTask
+	if req.Task {
+		rec, err := s.Store.CreateFleetTask(store.FleetTask{Owner: p.Actor, Title: taskTitle(req), Via: req.Via,
+			Device: s.clientLeases.deviceOf(leaseKey, lease), Repo: req.Repo, Agent: req.Agent},
+			"place:"+p.Actor+":"+idem, now)
+		if err != nil {
+			httpError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		task = &rec
+	}
 	var err error
 	if pl, err = s.pickNode(p, req.Repo, node, now); err != nil {
 		s.leaseAudit(p.Actor, "client_place", what, errorObject(err)["code"], now)
-		writeJSON(w, http.StatusOK, refusedAnswer(err, &pl))
+		out := refusedAnswer(err, &pl)
+		s.taskAnswered(task, &out)
+		writeJSON(w, http.StatusOK, out)
 		return
 	}
 	retry := node == "auto" && wait > 0 && (req.Kind == "" || req.Kind == "issue" || req.Kind == "scratch")
@@ -487,6 +530,7 @@ func (s *Server) clientPlace(w http.ResponseWriter, r *http.Request, p fleetPrin
 		if req.Home {
 			s.homeRecord(homeActorID, homeAgent, lease, s.clientLeases.deviceOf(leaseKey, lease), out, pl, time.Now())
 		}
+		s.taskAnswered(task, &out)
 		out.Attached, out.AttachNote = attached, attachNote
 		if len(attempts) > 0 {
 			out.Attempts = attempts
@@ -530,6 +574,13 @@ func (s *Server) clientPlace(w http.ResponseWriter, r *http.Request, p fleetPrin
 		delete(args, "test")
 		if test && req.Kind == "scratch" && s.canTestIdentity(r.Context(), target.EndpointID) {
 			args["test"] = true
+		}
+		// The task's number goes only where the node takes it (claude-fleet#3325):
+		// an older one opens the start as before (a no-repo one may then still
+		// file its desk ticket there).
+		delete(args, "task")
+		if task != nil && s.canTask(r.Context(), target.EndpointID) {
+			args["task"] = task.Ref
 		}
 		attached, attachNote = 0, ""
 		if len(held) > 0 {
@@ -677,6 +728,9 @@ func (s *Server) clientPlaceStatus(w http.ResponseWriter, r *http.Request, p fle
 		}
 	}
 	out, _ := s.clientPlaceAnswer(r, operationView(o), &pl, wait)
+	if t, err := s.Store.FleetTaskByOperation(opID); err == nil && t.Owner == p.Actor {
+		s.taskAnswered(&t, &out) // the start's later word fills its record (claude-fleet#3325)
+	}
 	if (out.State == "refused" || out.State == "failed") && o.Action == "worker_start" {
 		// The start there did not open: its lease goes back to the pool,
 		// as a place answered on the spot gives it back.

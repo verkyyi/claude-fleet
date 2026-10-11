@@ -34,7 +34,10 @@ SCOPE_OF = {"worker_start": "worker:start", "config_set": "config:write",
             "worker_reap_policy": "worker:reap",
             # orch_ensure (issue #2616): an older client's ⌘N, answered 「没有编排」
             # since issue #3118 — compat-1v: 下一批删
-            "orch_ensure": "worker:start"}
+            "orch_ensure": "worker:start",
+            # task_issue (issue #3325): a hub task record's 「建 GitHub 单」 —
+            # filing an issue is a GitHub write of a comment's weight.
+            "task_issue": "gh:comment"}
 # The tools that name a WORKER (a worker_id), not a fleet. worker_answer and
 # worker_reap (issue #1487, EPIC #1479 C8) are what a sidebar on another machine
 # runs on a row here: answer the pane's open prompt (fleet-answer.sh /
@@ -219,6 +222,32 @@ def epic_stale_cell(cell):
     return out
 
 
+ORPHAN_ID_RE = re.compile(r"[0-9a-f]{12}")
+ORPHAN_STATES = ("MERGED", "BLOCKED", "FAILED", "STOPPED", "REAPED", "WAITING", "IDLE")
+
+
+def orphan_rep_cell(cell):
+    """Column 31's cell (issue #3369) → [{id, ts, repo, child, state, pr, summary}]:
+    the login's unread orphaned child reports (bin/fleet-orphan-reports.py cell),
+    each `id\x1fts\x1frepo\x1fchild\x1fstate\x1fpr\x1fsummary`, \x1e-joined; at most
+    10, a summary at most 300 characters with no control character. Junk is
+    dropped, never a protocol error."""
+    out = []
+    for entry in (cell or "").split("\x1e")[:10]:
+        p = entry.split("\x1f")
+        if len(p) != 7:
+            continue
+        rid, ts, repo, child, state, pr, summ = p
+        if not ORPHAN_ID_RE.fullmatch(rid) or not ts.isdigit() or state not in ORPHAN_STATES \
+                or not re.fullmatch(r"[A-Za-z0-9_.:/#-]{1,100}", child):
+            continue
+        out.append(dict(id=rid, ts=int(ts),
+                        repo=repo if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo) else "",
+                        child=child, state=state, pr=pr if pr.isdigit() else "",
+                        summary=re.sub(r"[\x00-\x1f\x7f]", " ", summ)[:300]))
+    return out
+
+
 def agent_status_cell(raw):
     """@agent_status's JSON (bin/fleet-status-7501.py) → {status_kind, status_msg},
     each only when present and well-formed (issue #2536)."""
@@ -298,9 +327,17 @@ def inventory_row(parts):
     fill status_kind / status_msg (issue #2538).
     Columns 31-37 (`orchq=` … `orchtodol=`) were the resident orchestrator's and
     steward's (issues #2617-#2913), gone with the seat (issue #3118): an older
-    node's are dropped unread — compat-1v: 下一批删."""
+    node's are dropped unread — compat-1v: 下一批删.
+    Column 31 (issue #3369): `orphanrep=` — the login's unread results of
+    sessions whose spawner was gone (orphan_rep_cell): `orphan_reports`, a list,
+    on every row alike (like epic_stale); absent when empty. The sidebar and the
+    hub's overview list them for the person."""
     parts = list(parts)
     extra = {}
+    if len(parts) >= 31 and parts[-1].startswith("orphanrep="):
+        orep = orphan_rep_cell(parts.pop()[10:])
+        if orep:
+            extra["orphan_reports"] = orep
     while len(parts) >= 31 and parts[-1].startswith(ORCH_TAGS):   # compat-1v: 下一批删
         parts.pop()
     if len(parts) >= 30 and parts[-1].startswith("test="):
@@ -492,12 +529,13 @@ def validate_gh_read(params):
 
 
 DEBUG_ID_RE = re.compile(r"[a-z2-7]{8}")
+TASK_REF_RE = re.compile(r"T[1-9][0-9]{0,17}")
 
 
 def validate_write(action, params):
     if action == "worker_start":
         fields(params, (), ("issue", "kind", "name", "title", "body", "agent", "repo", "no_repo", "origin_wid",
-                            "account_class", "reap", "attachments", "test", "debug"))
+                            "account_class", "reap", "attachments", "test", "debug", "task"))
         # kind (issue #1541): "issue" (the default — a worker on an issue, `issue`
         # required) or "scratch" (a raw scratch session: no issue, an optional
         # name — dash-raw-session.sh opens it). Held to the hub's own rule
@@ -555,6 +593,14 @@ def validate_write(action, params):
             raise Fault("INVALID_ARGUMENT", "kind must be issue, scratch or new")
         if params.get("agent", "") not in ("", "claude", "codex"):
             raise Fault("INVALID_ARGUMENT", "agent must be claude or codex")
+        # task (issue #3325): the hub's task record this start belongs to — T<n>,
+        # a new or scratch start only; stamped @task, and a no-repo one files no
+        # desk ticket (the record is its ticket).
+        if "task" in params:
+            if not (isinstance(params["task"], str) and TASK_REF_RE.fullmatch(params["task"])):
+                raise Fault("INVALID_ARGUMENT", "task is a task record's number (T<n>)")
+            if kind not in ("new", "scratch"):
+                raise Fault("INVALID_ARGUMENT", "task belongs to a new or scratch start")
         if "attachments" in params:
             # issue #2393: the writing area's files, downloaded by this node's
             # agent before the start — held to the hub's checkAttachList.
@@ -609,6 +655,20 @@ def validate_write(action, params):
             check_answer(params["answer"])
     elif action == "orch_ensure":
         fields(params, (), ())   # issue #2616: nothing to name — the fleet is the session
+    elif action == "task_issue":
+        # issue #3325: file a hub task record's issue here (fleet-issue-file.sh),
+        # binding the task's session when it is this fleet's and has none.
+        fields(params, ("repo", "task", "title"), ("body", "worker_id"))
+        check_repo(params)
+        if "/" not in params["repo"]:
+            raise Fault("INVALID_ARGUMENT", "repo must be owner/name")
+        if not (isinstance(params["task"], str) and TASK_REF_RE.fullmatch(params["task"])):
+            raise Fault("INVALID_ARGUMENT", "task is a task record's number (T<n>)")
+        check_issue_title(params["title"])
+        if params.get("body", "") != "":
+            check_text(params["body"], "body")
+        if "worker_id" in params:
+            parse_worker_id(params["worker_id"])
     elif action == "config_set":
         fields(params, ("key", "value", "expected_revision"))
         key, value = params["key"], params["value"]

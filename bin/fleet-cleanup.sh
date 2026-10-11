@@ -628,6 +628,11 @@ teardown() {
   fi
   [ -n "$WIN" ] && fleet_win_retire "$WIN" "$(fleet_socket "$FLEET_SESSION")"   # the fleet's close, not one to pull back (#1840)
   [ -n "$WIN" ] && ftmux kill-window -t "$WIN" 2>/dev/null
+  # A shell / view left in the worktree goes with it (issue #3352).
+  if [ -n "$WT" ]; then
+    local _h; _h=$(fleet_wt_helpers_close "$FLEET_SESSION" "$WT" "${WIN:-}")
+    [ -z "$_h" ] || note "  teardown: closed helper window(s) $(printf '%s' "$_h" | tr '\n' ' ')"
+  fi
   if [ -n "$WT" ]; then
     # Drop, don't delete (issue #586) — a rename into .fleet-trash/ plus a prune,
     # so the bytes are swept later under a budget instead of holding this tick.

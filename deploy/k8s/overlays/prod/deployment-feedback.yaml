@@ -1,0 +1,44 @@
+# Feedback (#3355, EPIC #3354 C1): /v1/node/feedback is on. Attachments live
+# seven days beside the debug bundles, on the same OSS volume
+# (deployment-debug.yaml mounts it at /debug) — no new volume for them.
+# Filing (#3356, C2): each feedback becomes one issue in verkyyi/claude-fleet,
+# written as the fleet's GitHub App (ID 5271651, installation 170195053). Its
+# credentials come from the Secret `ccquota-feedback-github` in new-deploy —
+# keys `app-id`, `installation-id`, `private-key` (the App's PEM) — made by a
+# person from the key the cluster already holds, never here. `optional: true`:
+# no Secret (or a key missing) ⇒ the hub starts, takes feedback, and sends
+# nothing to GitHub. Roll back: delete this patch and its line in
+# kustomization.yaml (the feedback routes go; the rows stay in fleet_feedback).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ccquota-hub
+spec:
+  template:
+    spec:
+      containers:
+        - name: ccquota
+          env:
+            - name: CCQUOTA_FLEET_FEEDBACK_DIR
+              value: /debug/feedback-attachments
+            - name: CCQUOTA_FLEET_FEEDBACK_GH_DIR
+              value: /etc/ccquota-feedback-github
+            - name: CCQUOTA_FLEET_FEEDBACK_REPO
+              value: verkyyi/claude-fleet
+          volumeMounts:
+            - name: feedback-github
+              mountPath: /etc/ccquota-feedback-github
+              readOnly: true
+      volumes:
+        - name: feedback-github
+          secret:
+            secretName: ccquota-feedback-github
+            optional: true
+            defaultMode: 0440
+            items:
+              - key: app-id
+                path: app-id
+              - key: installation-id
+                path: installation-id
+              - key: private-key
+                path: private-key

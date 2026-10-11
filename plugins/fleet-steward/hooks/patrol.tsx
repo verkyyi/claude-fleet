@@ -91,7 +91,13 @@ export function patrolModel(p: Patrol, writesCap: number): PatrolModel {
       {
         id: 'health',
         head: t('panel_patrol_health_fmt', String(p.health)),
-        lines: p.healthTop === '' ? [] : [p.healthTop],
+        lines: [
+          ...(p.healthTop === '' ? [] : [p.healthTop]),
+          // issue #3352: sessions that should have been reaped but were not
+          ...(p.overdue > 0
+            ? [t('panel_patrol_reap_fmt', String(p.overdue), String(p.overdueStuck)), ...(p.overdueTop === '' ? [] : [p.overdueTop])]
+            : []),
+        ],
       },
       {
         id: 'next',

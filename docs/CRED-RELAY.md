@@ -19,6 +19,19 @@
                         （节点令牌换本登录的通行证）                     （核验进程；只带 X-Fleet-Relay + 路径，不带 Authorization）
 ```
 
+## 出口探测按会话真走的路判（issue #3364）
+
+本机出口在 Claude / OpenAI 不支持的地区（如 ACK 深圳 `loc=CN`），而这登录的会话经 relay 出去时，
+`bin/fleet-node-probe.sh` 不再按本机出口把它关掉：本机判断不合适时，它问本机凭据代理
+`fleet-cred-proxy.sh relay-probe`——代理（只有它持通行证）经 relay 对 `/anthropic/v1/messages`、
+`/chatgpt/wham/usage` 各发一个**不带凭据**的请求，答各家的状态和 relay 的对端地址；探测再用
+`ipinfo.io/<对端>/country` 取 relay 出口。`node-probe.json` 记 `route: relay`、本机 `loc_local`、
+`relay_anthropic` / `relay_openai`，`loc` 和 `verdict` 是 relay 那条路的；`anthropic` / `openai`
+仍是本机直连的结果（代理路由读它们），代理见 `route: relay` 就先走 relay。relay 出口在不支持地区、
+经 relay 被地区拒照样关；relay 拒通行证 / 连不上算 `unreachable`（天气，不关）。没有 relay 的登录
+（代理不在、没配 relay、没通行证、机器不可信）记 `route: direct`，规则和以前一样。入口的
+compute off / compute_region 文案写成「HK via relay (local CN)」。BREAK-IT `probe-ignores-relay`。
+
 ## 入口自己刷新 OpenAI 凭据（R1，issue #1976）
 
 入口设 `CCQUOTA_FLEET_OAUTH_REFRESH_VIA=relay` + `CCQUOTA_FLEET_CRED_RELAY_URL=https://fleet-relay.24hw.cn`

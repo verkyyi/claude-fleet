@@ -15,9 +15,19 @@
 # for one. A key with no entry prints itself, so a typo is visible, never blank.
 #
 # FLEET_UI_LANG:
-#   auto  follow the login locale (zh* => Chinese, everything else English)
+#   auto  the person's choice, else the client's locale, else Chinese (below)
 #   en    force English
 #   zh    force Chinese
+#
+# auto, in order (issue #3329, EPIC #3178 D5–D7):
+#   1. the person's own choice — `ui_lang` (zh | en) in the personal layer this
+#      login last read from the hub ($FLEET_CONF_DIR/person-bundle.json), set in a
+#      看台's ⌘P (fleet-config.py lang); once set, nothing is detected any more
+#   2. a 看台's own connection — FLEET_VIEW_LANG, what its client brought through
+#      the door (`@view_lang`, put in the 看台 session's environment by
+#      fleet-remote-view.sh attach --thin): zh* => Chinese, none / C / POSIX =>
+#      Chinese (D6), anything else English. Set (even empty) = this rule decides.
+#   3. the login's own locale, the same way — what a script outside a 看台 reads.
 #
 # A script that looks up many strings in a row (the key sheet, the row menu)
 # calls `fleet_ui_pin` once: the language is resolved one time instead of in a
@@ -28,12 +38,48 @@ fleet_ui_lang() {
     zh|zh_*|zh-*|ZH|ZH_*|ZH-*|cn|CN|chinese|Chinese) printf 'zh\n'; return 0 ;;
     en|en_*|en-*|EN|EN_*|EN-*|english|English)       printf 'en\n'; return 0 ;;
   esac
+  fleet_ui_person_lang && return 0
+  if [ -n "${FLEET_VIEW_LANG+x}" ]; then
+    case "$FLEET_VIEW_LANG" in
+      ''|C|C.*|POSIX|POSIX.*|zh*|ZH*) printf 'zh\n' ;;
+      *) printf 'en\n' ;;
+    esac
+    return 0
+  fi
   case "${LC_ALL:-${LC_MESSAGES:-${LC_CTYPE:-${LANG:-}}}}" in
     zh*|ZH*) printf 'zh\n' ;;
     en*|EN*) printf 'en\n' ;;
     ''|C|POSIX) printf 'zh\n' ;;
     *)       printf 'en\n' ;;
   esac
+}
+
+# fleet_ui_person_lang — the person's own choice (rule 1 above): zh | en, rc 1
+# when they never set one. FLEET_UI_PERSON_FILE is the selftest seam.
+fleet_ui_person_lang() {
+  _fup_f=${FLEET_UI_PERSON_FILE:-${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/person-bundle.json}
+  [ -f "$_fup_f" ] || return 1
+  _fup_v=$(sed -n 's/.*"ui_lang": *"\([a-z]*\)".*/\1/p' "$_fup_f" 2>/dev/null | head -n 1)
+  case "$_fup_v" in zh|en) printf '%s\n' "$_fup_v" ;; *) return 1 ;; esac
+}
+
+# fleet_ui_first_hint <device> — the one-time line a 看台's top line wears for 8 s
+# (issue #3329, D8, L4): printed — and <device> stamped — only when this
+# connection's language was DETECTED (FLEET_UI_LANG auto, no person's choice, a
+# FLEET_VIEW_LANG the client said) as something other than the Chinese default,
+# the first time <device> (the 看台's view id) comes in. rc 1 = nothing to say. A
+# stamp that cannot be written fails open: the line shows again next time.
+fleet_ui_first_hint() {
+  case "${FLEET_UI_LANG:-auto}" in auto) ;; *) return 1 ;; esac
+  fleet_ui_person_lang >/dev/null && return 1
+  [ -n "${FLEET_VIEW_LANG:-}" ] || return 1
+  [ "$(fleet_ui_lang)" = en ] || return 1
+  case "${1:-}" in ''|*[!A-Za-z0-9._-]*) return 1 ;; esac
+  _fuf_d=${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/entry
+  [ -e "$_fuf_d/$1.lang-hinted" ] && return 1
+  mkdir -p "$_fuf_d" 2>/dev/null
+  { true > "$_fuf_d/$1.lang-hinted"; } 2>/dev/null || true
+  fleet_ui_t view_lang_auto_fmt "$FLEET_VIEW_LANG"
 }
 
 fleet_ui_pin() { _FLEET_UI_L=$(fleet_ui_lang); }
@@ -521,6 +567,10 @@ fleet_ui_t() {
     en:view_gone_hint) printf '↵ restore' ;;
     zh:view_pr_fmt) printf 'PR %s' "${1:-}" ;;
     en:view_pr_fmt) printf 'PR %s' "${1:-}" ;;
+    zh:view_today_fmt) printf '今天 %s token' "${1:-}" ;;
+    en:view_today_fmt) printf '%s tokens today' "${1:-}" ;;
+    zh:view_tok_style) printf 'zh' ;;
+    en:view_tok_style) printf 'en' ;;
     zh:view_ask_restore) printf 'y 先 reopen PR 再恢复 · r 直接恢复 · 其它键取消' ;;
     en:view_ask_restore) printf 'y reopen the PR, then restore · r restore anyway · any other key cancels' ;;
     zh:view_state_needs) printf '在问你' ;;
@@ -591,6 +641,20 @@ fleet_ui_t() {
     en:view_lang_saved) printf 'Language: English · saved to your account' ;;
     zh:view_lang_auto_fmt) printf '已按你的系统用中文 · ⌘P → 语言 可改' ;;
     en:view_lang_auto_fmt) printf 'Using English from your system (LANG=%s) · ⌘P → Language to change' "${1:-}" ;;
+    # the language row's own lines (issue #3329): ↵ flips, Tab picks, 跟系统走 clears the choice
+    zh:view_lang_foot) printf '↵ 换成 English · 存到你的账号，换设备也跟着 · Tab 跟系统走' ;;
+    en:view_lang_foot) printf '↵ switch to 中文 · saved to your account, follows you to every device · Tab follow the system' ;;
+    zh:view_lang_nolang_fmt) printf '没收到你的系统语言（Termius → Hosts → %s → Environment 加 LANG=en_US.UTF-8）· ↵ 换成 English' "${1:-}" ;;
+    en:view_lang_nolang_fmt) printf 'Your system language did not arrive (Termius → Hosts → %s → Environment: LANG=en_US.UTF-8) · ↵ switch to 中文' "${1:-}" ;;
+    zh:view_lang_auto) printf '跟系统走' ;;
+    en:view_lang_auto) printf 'Follow the system' ;;
+    zh:view_lang_auto_saved) printf '界面语言：跟系统走 · 已存到你的账号' ;;
+    en:view_lang_auto_saved) printf 'Language: follow the system · saved to your account' ;;
+    zh:view_lang_failed_fmt) printf '语言没换：%s' "${1:-}" ;;
+    en:view_lang_failed_fmt) printf 'Language not changed: %s' "${1:-}" ;;
+    # the door's one welcome line (issue #3329, L4) — printed only as you come in
+    zh:door_welcome) printf '欢迎回来。⌃空格 打开面板。' ;;
+    en:door_welcome) printf 'Welcome back. ⌃Space opens the panel.' ;;
     zh:view_door_welcome) printf '欢迎回来。⌃空格 打开面板。' ;;
     en:view_door_welcome) printf 'Welcome back. ⌃Space opens the panel.' ;;
     zh:view_cmd_quit) printf '⏻ 退出 fleet（会话在后台继续）' ;;
@@ -727,6 +791,48 @@ fleet_ui_t() {
     en:popup_answer)            printf 'Answer' ;;
     zh:popup_repo_add)          printf '添加仓库' ;;
     en:popup_repo_add)          printf 'Add repo' ;;
+    # ⌘P's 添加仓库… and dash-repo-add.sh's words (issue #3375): a result token
+    # (fleet-repo.sh add's) is never shown bare — each has its sentence here
+    zh:panel_repo_add)          printf '添加仓库…' ;;
+    en:panel_repo_add)          printf 'Add a repo…' ;;
+    zh:repo_add_header_fmt)     printf '加仓库到 %s  ·  输入 owner/name，或粘贴 GitHub 链接  ·  ↵ 加入 · esc 取消 · [✕ close]' "${1:-}" ;;
+    en:repo_add_header_fmt)     printf 'Add a repo to %s  ·  type owner/name, or paste a GitHub link  ·  ↵ add · esc cancel · [✕ close]' "${1:-}" ;;
+    zh:repo_add_hosted_list_fmt) printf '已托管：%s' "${1:-}" ;;
+    en:repo_add_hosted_list_fmt) printf 'Already here: %s' "${1:-}" ;;
+    zh:repo_add_none)           printf '（无）' ;;
+    en:repo_add_none)           printf '(none)' ;;
+    zh:repo_add_retry_fmt)      printf '✗ 这不像一个仓库：%s —— 写 owner/name，或粘贴 GitHub 链接，再试一次' "${1:-}" ;;
+    en:repo_add_retry_fmt)      printf '✗ That is not a repo: %s — type owner/name or paste a GitHub link, then try again' "${1:-}" ;;
+    zh:repo_add_running_fmt)    printf '放到 %s —— 已经是这个仓库就直接用，没有就从 GitHub 拉（可能要几十秒）' "${1:-}" ;;
+    en:repo_add_running_fmt)    printf 'Into %s — reused if it already is this repo, else pulled from GitHub (may take a while)' "${1:-}" ;;
+    zh:repo_add_close)          printf '[✕ close]  ·  ↵ / esc 关闭' ;;
+    en:repo_add_close)          printf '[✕ close]  ·  ↵ / esc to close' ;;
+    zh:repo_add_added_fmt)      printf '✓ 已加入 %s —— 代码在 %s，已登记到这个 fleet' "${1:-}" "${2:-}" ;;
+    en:repo_add_added_fmt)      printf '✓ Added %s — the code is in %s, and this fleet now hosts it' "${1:-}" "${2:-}" ;;
+    zh:repo_add_hosted_fmt)     printf '%s 已在本 fleet 里，代码在 %s —— 不用再加' "${1:-}" "${2:-}" ;;
+    en:repo_add_hosted_fmt)     printf '%s is already in this fleet, the code is in %s — nothing to do' "${1:-}" "${2:-}" ;;
+    zh:repo_add_mismatch_fmt)   printf '✗ %s 里已经是别的仓库（不是 %s）—— 把那个文件夹挪开再试' "${1:-}" "${2:-}" ;;
+    en:repo_add_mismatch_fmt)   printf '✗ %s already holds another repo (not %s) — move that folder away and try again' "${1:-}" "${2:-}" ;;
+    zh:repo_add_notcheckout_fmt) printf '✗ %s 已经有个同名文件夹，但不是 git 仓库 —— 把它挪开再试' "${1:-}" ;;
+    en:repo_add_notcheckout_fmt) printf '✗ %s already exists and is not a git repo — move it away and try again' "${1:-}" ;;
+    zh:repo_add_invalid_fmt)    printf '✗ 这不像一个仓库：%s —— 写 owner/name，或粘贴 GitHub 链接' "${1:-}" ;;
+    en:repo_add_invalid_fmt)    printf '✗ That is not a repo: %s — type owner/name or paste a GitHub link' "${1:-}" ;;
+    zh:repo_add_net)            printf '✗ 拉不到 GitHub，网络不通 —— 网络好了再试一次' ;;
+    en:repo_add_net)            printf '✗ Cannot reach GitHub — the network is down; try again once it is back' ;;
+    zh:repo_add_notfound_fmt)   printf '✗ GitHub 上找不到 %s —— 看看名字拼对没有；私有仓库要你有权限' "${1:-}" ;;
+    en:repo_add_notfound_fmt)   printf '✗ GitHub has no %s — check the spelling; a private repo needs your access' "${1:-}" ;;
+    zh:repo_add_auth)           printf '✗ GitHub 还没登录（或登录过期了）—— 先在终端运行 gh auth login，再试一次' ;;
+    en:repo_add_auth)           printf '✗ Not signed in to GitHub (or the sign-in expired) — run gh auth login in a terminal, then try again' ;;
+    zh:repo_add_clone)          printf '✗ 没拉下来 —— 原因见上面几行 git 的输出' ;;
+    en:repo_add_clone)          printf '✗ The pull failed — the git lines above say why' ;;
+    zh:repo_add_write)          printf '✗ 登记没写进去（磁盘满了，或没有写权限）' ;;
+    en:repo_add_write)          printf '✗ Could not record it (disk full, or no write permission)' ;;
+    zh:repo_add_nofleet)        printf '✗ 这台电脑上没有 fleet —— 要在跑会话的那台电脑上加仓库' ;;
+    en:repo_add_nofleet)        printf '✗ There is no fleet on this computer — add the repo on the computer that runs the sessions' ;;
+    zh:repo_add_noresult)       printf '✗ 没得到结果 —— 看上面的输出' ;;
+    en:repo_add_noresult)       printf '✗ No result came back — see the lines above' ;;
+    zh:repo_add_other)          printf '✗ 没加上 —— 看上面的输出' ;;
+    en:repo_add_other)          printf '✗ Not added — see the lines above' ;;
     zh:hint_alerts)             printf '↵ 处理 · 1✖ 2▲ 3● 0全部 · m 静音1h · [✕ 关闭]' ;;
     en:hint_alerts)             printf '↵ act · 1✖ 2▲ 3● 0 all · m mute 1h · [✕ close]' ;;
     zh:hint_usage)              printf '↵ 新会话用它 · Esc 取消 · [✕ 关闭]' ;;
@@ -832,6 +938,14 @@ fleet_ui_t() {
     en:sidebar_epic_reopen_keys) printf '↵ open · esc cancel' ;;
     zh:sidebar_epic_reopening_fmt) printf '在开 #%s 的驱动会话…' "${1:-}" ;;
     en:sidebar_epic_reopening_fmt) printf 'opening the driver for #%s…' "${1:-}" ;;
+    zh:sidebar_orphan_rep)      printf '结果给你' ;;
+    en:sidebar_orphan_rep)      printf 'yours now' ;;
+    zh:sidebar_ask_orphan_fmt)  printf '%s 的结果 — 派它的会话已不在' "${1:-}" ;;
+    en:sidebar_ask_orphan_fmt)  printf 'the result of %s — its spawner is gone' "${1:-}" ;;
+    zh:sidebar_orphan_read)     printf '知道了，不再显示' ;;
+    en:sidebar_orphan_read)     printf 'Got it, hide it' ;;
+    zh:sidebar_orphan_keys)     printf '↵ 已读 · esc 留着' ;;
+    en:sidebar_orphan_keys)     printf '↵ read · esc keep' ;;
     zh:sidebar_landed_heading_fmt) printf '已落地 (%s) · ↵ 恢复' "${1:-}" ;;
     en:sidebar_landed_heading_fmt) printf 'Landed (%s) · ↵ restore' "${1:-}" ;;
     zh:sidebar_landed_empty)    printf '（还没有已落地的会话）' ;;
@@ -1126,6 +1240,8 @@ fleet_ui_t() {
     en:panel_patrol_answers_fmt) printf 'today: answered %s · by default %s · handed to you %s' "${1:-}" "${2:-}" "${3:-}" ;;
     zh:panel_patrol_health_fmt) printf '健康 %s' "${1:-}" ;;
     en:panel_patrol_health_fmt) printf 'Health %s' "${1:-}" ;;
+    zh:panel_patrol_reap_fmt)   printf '该回收没回收 %s · 卡住超 30 分钟 %s' "${1:-}" "${2:-}" ;;
+    en:panel_patrol_reap_fmt)   printf 'past their reap policy %s · stuck > 30 min %s' "${1:-}" "${2:-}" ;;
     zh:panel_patrol_next_fmt)   printf '下一拍 %s' "${1:-}" ;;
     en:panel_patrol_next_fmt)   printf 'Next beat %s' "${1:-}" ;;
     zh:panel_patrol_night)      printf '白天 20 分钟一拍（有变化 10 分钟），23:00–08:00 一小时一拍' ;;
@@ -1455,6 +1571,8 @@ quit	z	quit fleet — in the client only: every process of the client on this co
     en:topbar_left_fmt)         printf '%s left' "${1:-}" ;;
     zh:topbar_ago_fmt)          printf '%s 分钟前' "${1:-}" ;;
     en:topbar_ago_fmt)          printf '%s min ago' "${1:-}" ;;
+    zh:topbar_today_fmt)        printf '今天 %s' "${1:-}" ;;
+    en:topbar_today_fmt)        printf '%s today' "${1:-}" ;;
     zh:topbar_pr_merged)        printf 'PR 已合并' ;;
     en:topbar_pr_merged)        printf 'PR merged' ;;
     zh:topbar_pr_closed)        printf 'PR 已关闭' ;;
@@ -1509,8 +1627,8 @@ quit	z	quit fleet — in the client only: every process of the client on this co
     en:reap_menu_title)         printf 'When to reap' ;;
     zh:reap_menu_merged)        printf '合并后回收 — PR 合并 10 分钟后' ;;
     en:reap_menu_merged)        printf 'After merge — 10 min after the PR merges' ;;
-    zh:reap_menu_done_2h)       printf '做完就回收 — 闲满 2 小时' ;;
-    en:reap_menu_done_2h)       printf 'When done — idle 2 hours' ;;
+    zh:reap_menu_done_15m)      printf '做完就回收 — 闲满 15 分钟' ;;
+    en:reap_menu_done_15m)      printf 'When done — idle 15 minutes' ;;
     zh:reap_menu_loop_end)      printf '循环停了回收 — /loop 停了以后' ;;
     en:reap_menu_loop_end)      printf 'After the loop — once /loop stops' ;;
     zh:reap_menu_at)            printf '到点回收…' ;;
@@ -1537,8 +1655,8 @@ quit	z	quit fleet — in the client only: every process of the client on this co
     # the five choices of 「什么时候回收？」 (issue #1902): `label<TAB>note`
     zh:sidebar_place_reap_merged) printf '合并后回收\tPR 合并 10 分钟后' ;;
     en:sidebar_place_reap_merged) printf 'After merge\t10 min after the PR merges' ;;
-    zh:sidebar_place_reap_done) printf '做完就回收\t闲满 2 小时' ;;
-    en:sidebar_place_reap_done) printf 'When done\tidle 2 hours' ;;
+    zh:sidebar_place_reap_done) printf '做完就回收\t闲满 15 分钟' ;;
+    en:sidebar_place_reap_done) printf 'When done\tidle 15 minutes' ;;
     zh:sidebar_place_reap_loop_end) printf '循环停了回收\t/loop 停了以后' ;;
     en:sidebar_place_reap_loop_end) printf 'After the loop\tonce /loop stops' ;;
     zh:sidebar_place_reap_at)   printf '到点回收\t下一步写时间' ;;
@@ -1872,6 +1990,8 @@ fleet_ui_hint_once() {
 case "$0" in */fleet-ui-lang.sh|fleet-ui-lang.sh)
   case "${1:-lang}" in
     lang) fleet_ui_lang ;;
+    # first-hint DEVICE — the 看台's one-time language line, or nothing (issue #3329)
+    first-hint) fleet_ui_first_hint "${2:-}" ;;
     t) shift; fleet_ui_t "$@" ;;
     # toast CLIENT KEY [args…] — a tmux bind's message, in the login's language
     toast) _c=${2:-}; shift 2 2>/dev/null || shift $#
@@ -1888,6 +2008,6 @@ case "$0" in */fleet-ui-lang.sh|fleet-ui-lang.sh)
               case "$_k" in "$_p"*) printf '%s\0%s\0' "$_k" "$(fleet_ui_t "$_k" "$_s" "$_s" "$_s" "$_s")"; break ;; esac
             done
           done ;;
-    *) printf 'usage: fleet-ui-lang.sh [lang|t KEY|toast CLIENT KEY|hint CLIENT KEY|dump PREFIX…]\n' >&2; exit 2 ;;
+    *) printf 'usage: fleet-ui-lang.sh [lang|first-hint DEVICE|t KEY|toast CLIENT KEY|hint CLIENT KEY|dump PREFIX…]\n' >&2; exit 2 ;;
   esac ;;
 esac

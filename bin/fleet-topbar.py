@@ -7,7 +7,7 @@ what the others are doing, is the panel's.
 
     fleet-topbar.py render cw=<cols> [down=<epoch>] [rr=<route>] [rv=<auto|manual> <route>]
                            [rp=<pinned route>] [rt=<reconnects>] [wn=<window name>] [gen=…]
-        the line, as tmux format: glyph (word ·) #N title (· repo) …… PR · context (· machine) (· ⌘P)
+        the line, as tmux format: glyph (word ·) #N title (· repo) …… PR · context (· 今天 N) (· machine) (· ⌘P)
     fleet-topbar.py render --node view=<id> s=<fleet> reg=<dir> g=<dir> sock=<socket> cw= w= [pc=] [pd=]
         the same line drawn ON the machine, as a thin client's 看台's status line
         (issue #2763, EPIC #2999 C1; fleet-remote-view.sh attach --thin) — see
@@ -38,7 +38,9 @@ that one dropped), `@remote_route` (on the hub relay), `@remote_via`
 Three widths, the design's: a phone (~45 columns) has the glyph, #N, the title
 and 「62%」; from 80 the state's word, 「PR #N」 and 「62% Opus 5.5 high」; from
 140 the repo after the title, the PR's checks, 「剩余 62% · Opus 5.5 · high」 and
-「⌘P」 at the right. The title is clipped with `…`. The six glyphs and their
+「⌘P」 at the right. On every width 「今天 12.3 万」 after the context when the
+hub recorded pool tokens for the session today (issue #3377, the record's
+tokens_today — none ⇒ nothing, never 0). The title is clipped with `…`. The six glyphs and their
 colours are fleet_view.py's table (! x » ✓ ∙ ?, FLEET_GLYPHS=ascii, NO_COLOR):
 the whole line red while the session waits on you (its question in the title's
 place), grey with ? while its machine is out of reach or on the relay — the only
@@ -202,7 +204,7 @@ def pr_part(pr, cols):
 def layout(rec, cols, down="", route="", now=None, via="", pin="", tries=""):
     """The line as a list of (text, colour, range) parts plus its background
     (None / BG_ASK / BG_DOWN) — the ⌘P panel's blueprint (issue #3194, EPIC #3178):
-    glyph · (word ·) #N · title (· repo) …… PR · context (· machine) (· ⌘P).
+    glyph · (word ·) #N · title (· repo) …… PR · context (· 今天 N) (· machine) (· ⌘P).
     The whole line red while the session waits on you (a question or an OK — the
     question's own words take the title's place), grey while out of reach or on
     the relay. Pure: the selftest reads `fit`."""
@@ -226,6 +228,11 @@ def layout(rec, cols, down="", route="", now=None, via="", pin="", tries=""):
     ctx = ctx_parts(rec, cols, now)
     if ctx:
         right.append(ctx)
+    tok = rec.get("tokens_today")
+    if isinstance(tok, int) and not isinstance(tok, bool) and tok > 0:
+        # what the session used today on the pool (issue #3377): the hub's count,
+        # never a 0 when none is recorded
+        right.append([(say("topbar_today_fmt", FV.tokens_short(tok)), DIM, "")])
     if trouble:
         right.append([(trouble, WARN, "machine")])
     if cols >= WIDE:
@@ -316,7 +323,16 @@ US = "\x1f"
 NODE_FMT = "|".join(["#{@fleet_id}", "#{@peer_cur}", "#{@peer_node}", "#{@peer_login}",
                      "#{@claude_state}", "#{@claude_needs}", "#{@issue}", "#{@ctx_left}",
                      "#{@ctx_band}", "#{@ctx_ts}", "#{@model}", "#{@effort}", "#{@fleet_role}",
-                     "#{window_name}"])
+                     "#{window_name}", "#{@task}"])
+TASK_RE = re.compile(r"T[1-9][0-9]{0,17}")
+
+
+def ticket(issue, task):
+    """The number in the bar (issue #3325): the issue's #N when there is one,
+    else the hub's task record T<n> (@task), else nothing."""
+    if issue.isdigit():
+        return "#" + issue
+    return task if TASK_RE.fullmatch(task or "") else ""
 
 
 def reg_row(path):
@@ -401,8 +417,11 @@ def node_record(kv):
     sock, win, sess = kv.get("sock") or "", kv.get("w") or "", kv.get("s") or ""
     out = subprocess.run(["tmux", "-S", sock, "display-message", "-p", "-t", win, NODE_FMT],
                          capture_output=True, text=True, stdin=subprocess.DEVNULL).stdout if sock and win else ""
-    p = out.rstrip("\n").split("|", 13)
+    # the name may hold a `|`: it is cut off the front, @task (the last) off the end
+    head, _, task = out.rstrip("\n").rpartition("|") if out.count("|") >= 14 else (out.rstrip("\n"), "", "")
+    p = head.split("|", 13)
     p += [""] * (14 - len(p))
+    p.append(task)
     fid, peer, pnode, plogin = p[0], p[1][4:] if p[1].startswith("wid:") else p[1], p[2], p[3]
     wid = peer or ("%s/%s" % (row["fuid"], fid) if row.get("fuid") and fid else "")
     lines = cache_lines(kv.get("g") or "", sess)
@@ -420,14 +439,14 @@ def node_record(kv):
         rec = {"state": state,
                "kind": ("perm" if q[9].startswith("perm") else "ask") if state == "needs" else "",
                "q": FV.one_line(q[27]) if state == "needs" else "",
-               "key": "#" + q[3] if q[3].isdigit() else "", "title": (q[16] or q[7]).strip(),
+               "key": ticket(q[3], "" if peer else p[14]), "title": (q[16] or q[7]).strip(),
                "node": q[1].strip() or pnode or here, "lost": q[2] == "lost", "wid": q[0][4:]}
         rec.update(line_ctx(q))
     else:
         state = p[4] or "idle"
         rec = {"state": state,
                "kind": ("perm" if p[5].startswith("perm") else "ask") if state == "needs" else "",
-               "key": "#" + p[6] if p[6].isdigit() else "", "title": p[13].strip(),
+               "key": ticket(p[6], p[14]), "title": p[13].strip(),
                "node": pnode or here, "lost": False, "wid": wid}
     if not peer:
         rec.update(stamp_ctx(p))   # this machine's own window: its stamps are the freshest reading
@@ -445,6 +464,17 @@ def node_record(kv):
 
 
 def render_node(kv, cols):
+    # this connection's language (issue #3329): the 看台's `@view_lang`, when the
+    # door recorded one (`vl=1:<locale>`) — fleet-ui-lang.sh weighs it after the
+    # person's own choice; set before the first word is looked up
+    vl = kv.get("vl", "")
+    if vl.startswith("1:"):
+        os.environ["FLEET_VIEW_LANG"] = vl[2:]
+    # the one-time language line (D8, L4): the whole line for 8 s, then the status
+    flu = kv.get("flu", "")
+    if kv.get("fl") and flu.isdigit() and time.time() < int(flu):
+        print("#[fg=%s,bold] i #[nobold]#[fg=%s]%s#[default]" % (HL, FG, tmux_text(kv["fl"])))
+        return 0
     rec, down, rr, via = node_record(kv)
     parts, bg = layout(rec, cols, down, rr, None, via)
     print(paint(parts, bg))

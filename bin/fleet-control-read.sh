@@ -225,7 +225,13 @@ case "$mode" in
     # Columns 31-37 (orchq= · orchdec= · orchtodo= · orchpark= · orchpage= ·
     # orchparkl= · orchtodol=) were the resident orchestrator's and steward's
     # (issues #2617 #2670 #2672 #2671 #2735 #2913); gone with the seat (issue
-    # #3118). A row ends at test=.
+    # #3118). Column 31 (issue #3369): `orphanrep=` — the results of sessions
+    # whose spawner was gone, filed for the person (global/orphan-reports.ndjson,
+    # fleet-report-parent.sh) and not read yet: bin/fleet-orphan-reports.py cell —
+    # `id\037ts\037repo\037child\037state\037pr\037summary`, \036-joined, at most
+    # 10. The LOGIN's, like epicstale=: every row carries the same cell; empty (and
+    # no fork) when the file does not exist — the common case. A row ends at
+    # orphanrep=; an older node's ends at test=.
     ttl=$'\n'; drepo=''; _nr=0
     while IFS= read -r _r; do
       [ -n "$_r" ] || continue
@@ -239,6 +245,9 @@ case "$mode" in
     [ "$_nr" = 1 ] || drepo=''   # a window with no repo column falls to the fleet's ONLY repo
     cwds=$(tmux -u -L "$sock" list-windows -t "=$sess" ${lwf[@]+"${lwf[@]}"} -F $'#{window_id}\t#{pane_current_path}\t#{@norepo}\t#{@cc_agent}\t#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}\t#{?@born,#{@born},#{window_created}}\t#{@reap_policy}\t#{?#{==:#{@claude_state},needs},#{@claude_needs_detail},}\t#{?#{||:#{==:#{@fleet_role},orchestrator},#{==:#{@fleet_role},steward}},#{@fleet_role},}\t#{@epic}\t#{?#{==:#{@backfill},failed},failed,}\t#{?#{==:#{@test_identity},1},1,}\t#{@task_line}\t#{?@name_manual,#{?#{==:#{window_name},#{@name_manual}},#{@name_manual},},}' 2>/dev/null) || cwds=''
     fleet_cfg_expected_load; fleet_cfg_broken_load     # broken (#2076): judged here too
+    orep=''
+    [ -s "$FLEET_CONF_DIR/global/orphan-reports.ndjson" ] && orep=$(python3 "$BIN/fleet-orphan-reports.py" cell 2>/dev/null)
+    orep=${orep//$'\t'/ }; orep=${orep//$'\n'/ }
     estale=''
     while IFS=$'\t' read -r _sr _sn _sa _st; do
       [ -n "$_sr" ] || continue
@@ -333,7 +342,7 @@ case "$mode" in
       fi
       # the holder of an old seat is an ordinary row (issue #3119): `role=worker`
       orole=''; [ -n "$wrole" ] && orole=worker
-      printf '%s\tbusy=%s\tborn=%s\tcfg=%s\ttitle=%s\treap=%s\tdetail=%s\trole=%s\tepic=%s\tepicstale=%s\tbackfill=%s\tctxleft=%s\tctxband=%s\tctxts=%s\tmodel=%s\teffort=%s\tagentstatus=%s\ttest=%s\n' "$row" "$b" "$born" "$FCFG_STATE" "$t" "$wreap" "$wdet" "$orole" "$wepic" "$estale" "$wbf" "$cl" "$cb" "$cts" "$cm" "$ce" "$cas" "$wtest"
+      printf '%s\tbusy=%s\tborn=%s\tcfg=%s\ttitle=%s\treap=%s\tdetail=%s\trole=%s\tepic=%s\tepicstale=%s\tbackfill=%s\tctxleft=%s\tctxband=%s\tctxts=%s\tmodel=%s\teffort=%s\tagentstatus=%s\ttest=%s\torphanrep=%s\n' "$row" "$b" "$born" "$FCFG_STATE" "$t" "$wreap" "$wdet" "$orole" "$wepic" "$estale" "$wbf" "$cl" "$cb" "$cts" "$cm" "$ce" "$cas" "$wtest" "$orep"
     done <<<"$rows"
     ;;
   # --- wstate <sess> <@win> (issue #2238) --------------------------------------
@@ -502,6 +511,12 @@ case "$mode" in
     # adds nothing.
     acls="${7:-}"
     case "$acls" in local|pool) ;; *) acls='' ;; esac
+    # The hub's task record this start belongs to (issue #3325), from the
+    # controller's environment (validated there: T<n>): --task to the spawner —
+    # the window is stamped @task, and a no-repo scratch files no desk ticket.
+    # Unset ⇒ the argv is exactly what it was.
+    taskarg="${FLEET_CONTROL_TASK:-}"
+    case "$taskarg" in T[1-9]*) case "${taskarg#T}" in *[!0-9]*) taskarg='' ;; esac ;; *) taskarg='' ;; esac
     if [ "${3:-}" = scratch ]; then
       # A raw scratch session the hub placed here (issue #1541): no issue, no
       # claim — dash-raw-session.sh in its headless form, with $8 (the name the
@@ -545,7 +560,7 @@ case "$mode" in
           wseed=$(mktemp "${TMPDIR:-/tmp}/fcr-seed.XXXXXX") && cp "$seedf" "$wseed" || { wseed=''; wok=0; }
         fi
         if [ "$wok" = 1 ]; then
-          out=$(bash "$BIN/dash-raw-session.sh" "$sess" --origin hub --print --warm-only --agent "$agent" ${srepo:+--repo "$srepo"} ${nrarg:+"$nrarg"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} ${sname:+--name "$sname"} ${9:+--reap "$9"} $tiarg ${wseed:+"--prompt-file=$wseed"})
+          out=$(bash "$BIN/dash-raw-session.sh" "$sess" --origin hub --print --warm-only --agent "$agent" ${srepo:+--repo "$srepo"} ${nrarg:+"$nrarg"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} ${sname:+--name "$sname"} ${9:+--reap "$9"} $tiarg ${taskarg:+--task "$taskarg"} ${wseed:+"--prompt-file=$wseed"})
           wrc=$?; [ -z "$wseed" ] || rm -f "$wseed"
           if [ "$wrc" != 3 ]; then
             [ -z "$seedf" ] || rm -f "$seedf"
@@ -554,7 +569,7 @@ case "$mode" in
           fi
         fi
       fi
-      exec bash "$BIN/dash-raw-session.sh" "$sess" --origin hub --print --agent "$agent" ${srepo:+--repo "$srepo"} ${nrarg:+"$nrarg"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} ${sname:+--name "$sname"} ${9:+--reap "$9"} $tiarg ${dbgarg:+--as fleet-debugger --desk} ${seedf:+"--prompt-file=$seedf"}
+      exec bash "$BIN/dash-raw-session.sh" "$sess" --origin hub --print --agent "$agent" ${srepo:+--repo "$srepo"} ${nrarg:+"$nrarg"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} ${sname:+--name "$sname"} ${9:+--reap "$9"} $tiarg ${dbgarg:+--as fleet-debugger --desk} ${taskarg:+--task "$taskarg"} ${seedf:+"--prompt-file=$seedf"}
     fi
     num="${3:-}"
     if [ "$num" = new ]; then
@@ -579,7 +594,7 @@ case "$mode" in
         first=$nbody; [ -n "${first//[[:space:]]/}" ] || first=${8:-}
         wseed=$(mktemp "${TMPDIR:-/tmp}/fcr-seed.XXXXXX") || wseed=''
         if [ -n "$wseed" ] && printf '%s\n\n%s\n' "$first" "$FLEET_START_NOTE" > "$wseed"; then
-          out=$(bash "$BIN/dash-raw-session.sh" "$sess" --origin hub --print --warm-only --agent "$agent" --repo "$srepo" ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} --name "${8:-}" --reap "${9:-merged}" "--prompt-file=$wseed")
+          out=$(bash "$BIN/dash-raw-session.sh" "$sess" --origin hub --print --warm-only --agent "$agent" --repo "$srepo" ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} --name "${8:-}" --reap "${9:-merged}" ${taskarg:+--task "$taskarg"} "--prompt-file=$wseed")
           wrc=$?; rm -f "$wseed"
           if [ "$wrc" = 0 ]; then
             rcpt=$(printf '%s\n' "$out" | awk 'NF { l = $0 } END { print l }')
@@ -606,8 +621,15 @@ case "$mode" in
       # its stderr is kept too (issue #3097): a caller reads only our LAST line,
       # so a refusal's own reason rides in it rather than vanish above it
       serr=$(mktemp "${TMPDIR:-/tmp}/fcr-spawn.XXXXXX" 2>/dev/null) || serr=/dev/null
-      bash "$BIN/dash-issue-session.sh" "$num" "$sess" --print --agent "$agent" --origin hub ${srepo:+--repo "$srepo"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} ${acls:+--account "$acls"} ${9:+--reap "$9"} 2>"$serr"
+      # The person's words are the session's first turn (issue #3331): the body
+      # they wrote, else the title — handed over as a file, never an argv.
+      wordsf=$(mktemp "${TMPDIR:-/tmp}/fcr-words.XXXXXX" 2>/dev/null) || wordsf=''
+      if [ -n "$wordsf" ]; then
+        if [ -n "${nbody//[[:space:]]/}" ]; then printf '%s' "$nbody" > "$wordsf"; else printf '%s' "${8:-}" > "$wordsf"; fi
+      fi
+      bash "$BIN/dash-issue-session.sh" "$num" "$sess" --print --agent "$agent" --origin hub ${srepo:+--repo "$srepo"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} ${acls:+--account "$acls"} ${9:+--reap "$9"} ${taskarg:+--task "$taskarg"} ${wordsf:+--words-file "$wordsf"} 2>"$serr"
       rc=$?
+      [ -n "$wordsf" ] && rm -f "$wordsf"
       cat "$serr" >&2 2>/dev/null
       if [ "$rc" != 0 ]; then
         swhy=$(awk 'NF { l = $0 } END { print l }' "$serr" 2>/dev/null | tr '\t' ' ')
@@ -691,6 +713,32 @@ case "$mode" in
       *) exit 2 ;;
     esac
     exec bash "$BIN/fleet-gh.sh" "$1" "$2" "$n" --repo "$repo" ${fields:+--json "$fields"}
+    ;;
+  # --- taskissue <sess> <repo> <T<n>> <addr> <title> (issue #3325): a hub task
+  # record's 「建 GitHub 单」 — the body on stdin. Filed through the one filer
+  # channel (fleet-issue-file.sh, the URL printed first); then, when <addr> (the
+  # task's session: a key or its lifelong identity) is a window of this fleet
+  # that is bound to no issue, it is stamped `@issue N @repo <repo>` so a comment
+  # on the issue reaches it (the bridge matches a window by its @repo + @issue)
+  # and its top bar says #N. 6 = a repo this fleet does not host; 7 = not filed.
+  taskissue)
+    fleet_load_conf "$sess"
+    trepo=$(fleet_repo_for_slug "$sess" "${3:-}") || { printf 'taskissue: %s is not a repo this fleet hosts\n' "${3:-}" >&2; exit 6; }
+    tref=${4:-}; taddr=${5:-}; ttitle=${6:-}
+    case "$tref" in T[1-9]*) case "${tref#T}" in *[!0-9]*) exit 2 ;; esac ;; *) exit 2 ;; esac
+    [ -n "$ttitle" ] || exit 2
+    tbody=$(cat)
+    url=$(FLEET_SESSION="$sess" bash "$BIN/fleet-issue-file.sh" --repo "$trepo" --from hub --title "$ttitle" ${tbody:+--body "$tbody"}) \
+      || { printf 'taskissue: filing in %s failed\n' "$trepo" >&2; exit 7; }
+    url=$(printf '%s\n' "$url" | awk '/\/issues\/[0-9]+$/ { u = $0 } END { print u }')
+    [ -n "$url" ] || { printf 'taskissue: the filer printed no issue URL\n' >&2; exit 7; }
+    printf '%s\n' "$url"
+    case "$taddr" in ''|*[!A-Za-z0-9:._-]*) exit 0 ;; esac
+    tsock=$(fleet_socket "$sess")
+    twin=$(fleet_win_for_addr "$taddr" "$tsock" 2>/dev/null) || exit 0
+    [ -n "$(tmux -L "$tsock" show-options -wqv -t "$twin" @issue 2>/dev/null)" ] && exit 0
+    tmux -L "$tsock" set-option -w -t "$twin" @repo "$trepo" \; set-option -w -t "$twin" @issue "${url##*/}" 2>/dev/null
+    exit 0
     ;;
   # --- orch <sess> (issue #2616): an older hub's orch_ensure. There is no
   # orchestrating seat to open any more (issue #3118): answer 3 (off) with one

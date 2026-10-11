@@ -15,6 +15,7 @@
 #   E  fleet-hooks-emit.sh --plugin-dir: the plugin's SessionStart is in the codex
 #      output, its PreCompact is not (one stderr line says so); no --plugin-dir ⇒
 #      byte for byte as before
+#   I  fleet-feedback's /fleet-feedback becomes a marked adapter skill (issue #3358)
 #   F  fleet-epic's commands become marked adapter skills; doctor names what Codex
 #      cannot carry (mod modules · PreCompact · tools limits · /plugin); `mention`
 #      names a linked skill <plugin>:<name> (how Codex lists it); no Codex
@@ -56,7 +57,7 @@ cp "$HOME_C/config.toml" "$WORK/orig.toml"
 
 # the plugins' installed copies (Claude Code's cache shape: <name>/<version>)
 CACHE="$WORK/cache"
-for p in fleet-orchestrate fleet-epic; do
+for p in fleet-orchestrate fleet-epic fleet-feedback; do
   mkdir -p "$CACHE/$p/0.1.0" && cp -R "$ROOT/plugins/$p/." "$CACHE/$p/0.1.0/"
 done
 mkdir -p "$CACHE/fleet-orchestrate/0.1.0/hooks"
@@ -183,6 +184,17 @@ python3 "$CP" doctor --root "$ROOT" --claude "$WORK/claude-fake" --cache '' --co
 echo '[]' > "$LIST"; cx sync >/dev/null
 [ -e "$A" ] && fail "F uninstall left the adapter"; ok
 cmp -s "$HOME_C/config.toml" "$WORK/orig.toml" || fail "F config.toml not the original after uninstall"; ok
+
+# ---- I: fleet-feedback's command (issue #3358) ------------------------------------------
+printf '[%s]\n' "$(row fleet-feedback true)" > "$LIST"
+cx sync >/dev/null
+A="$HOME_C/skills/fleet-plugin-fleet-feedback/SKILL.md"
+[ -f "$A" ] && grep -q '<!-- fleet codex plugin skill -->' "$A" && grep -q '^name: fleet-feedback' "$A" \
+  || fail "I fleet-feedback is not a marked adapter skill" "$(ls "$HOME_C/skills")"; ok
+grep -q 'fleet-feedback.sh preview' "$A" && grep -q '1 附上' "$A" && ! grep -q '\$ARGUMENTS' "$A" \
+  || fail "I the adapter lost the preview step, the 1/2/3 question, or kept \$ARGUMENTS" "$(cat "$A")"; ok
+echo '[]' > "$LIST"; cx sync >/dev/null
+[ -e "$A" ] && fail "I uninstall left the fleet-feedback adapter"; ok
 
 # ---- G: override ------------------------------------------------------------------------
 echo '["codex.plugins"]' > "$FLEET_CONF_DIR/agent-overrides.json"

@@ -184,6 +184,9 @@ export function sessionRows(fs, live) {
       ctx: l && !l.context_unknown && Number.isFinite(Number(l.context_used_pct)) ? Number(l.context_used_pct) : null,
       model: (l && l.model) || '',
       account: (l && l.account) || '',
+      // the session's pool tokens since this UTC midnight (claude-fleet#3377);
+      // 0 = none recorded, which the page leaves out rather than print 0
+      tokens: Number(s.tokens_today) > 0 ? Number(s.tokens_today) : 0,
     });
   }
   return rows.sort((a, b) => b.born - a.born || a.key.localeCompare(b.key));
@@ -221,6 +224,37 @@ export function attention(rows, nodes, admin) {
     }
   }
   return out;
+}
+
+/** orphanReports is the results of sessions whose spawner was gone (issue
+ *  #3369): each login's unread `orphan_reports` (fleet-orphan-reports.py's
+ *  cell, the same list on every row of that login), once per machine + id,
+ *  newest first — what Overview lists under "Needs attention". */
+export function orphanReports(fs) {
+  const seen = new Set();
+  const out = [];
+  for (const s of (fs && Array.isArray(fs.sessions)) ? fs.sessions : []) {
+    const list = s.worker && Array.isArray(s.worker.orphan_reports) ? s.worker.orphan_reports : [];
+    for (const o of list) {
+      if (!o || !o.id) continue;
+      const k = `${s.machine_name || ''}/${s.os_user || ''}/${o.id}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push({ ...o, machine: s.machine_name || '' });
+    }
+  }
+  return out.sort((a, b) => (Number(b.ts) || 0) - (Number(a.ts) || 0));
+}
+
+/** orphanAttention turns orphanReports into "Needs attention" items: the
+ *  child, its outcome and PR as the title, the result itself under it. */
+export function orphanAttention(fs) {
+  return orphanReports(fs).map((o) => ({
+    tone: o.state === 'MERGED' ? 'ok' : 'warn',
+    icon: 'alert',
+    title: t('ui.att.orphan', { key: o.child || '—', state: o.state || '', pr: o.pr ? ' (PR #' + o.pr + ')' : '' }),
+    sub: [o.summary, o.machine].filter(Boolean).join(' · '),
+  }));
 }
 
 /** askLine is a waiting row's question as one line — `权限：Bash: git push`,
@@ -356,44 +390,8 @@ export function parseImport(text) {
   return bundle;
 }
 
-// ── 我的额度 (claude-fleet#2517) ─────────────────────────────────────────
-
-/** quotaState is a /v1/me/quota row's status chip: [tone, text]. Used up
- *  says which window — the weekly one is the wait people ask about. */
-export function quotaState(r) {
-  const full = (p) => p != null && Number(p) >= 100;
-  switch (r && r.state) {
-    case 'ok': return ['ok', t('ui.q.ok')];
-    case 'paused': return ['', t('ui.q.paused')];
-    case 'limited':
-      return ['bad', t(full(r.used_7d_pct) ? 'ui.q.limitedWeek' : full(r.used_5h_pct) ? 'ui.q.limited5h' : 'ui.q.limited')];
-    default: return ['', t('ui.q.unknown')];
-  }
-}
-
+/** qLevel is a used share's bar tone: past 70% yellow, at 100% red. */
 const qLevel = (p) => (p >= 100 ? 'bad' : p >= 70 ? 'warn' : '');
-
-function qCell(p) {
-  if (p == null) return '<td class="mono">—</td>';
-  const n = Math.max(0, Math.min(100, Math.round(Number(p))));
-  return `<td class="mono"><div class="win"><b>${n}%</b><div class="track"><i class="${qLevel(n)}" style="width:${n}%"></i></div></div></td>`;
-}
-
-/** quotaTable draws /v1/me/quota: one row per subscription, or the empty
- *  state when the hub has given the person none. */
-export function quotaTable(rows) {
-  const list = Array.isArray(rows) ? rows : [];
-  if (!list.length) {
-    return `<div class="empty"><b>${esc(t('ui.q.empty'))}</b><span>${esc(t('ui.q.emptyHint'))}</span></div>`;
-  }
-  const th = ['ui.q.col.sub', 'ui.q.col.h5', 'ui.q.col.h7', 'ui.q.col.reset', 'ui.q.col.state'].map((k) => `<th>${esc(t(k))}</th>`).join('');
-  const body = list.map((r) => {
-    const [tone, text] = quotaState(r);
-    return `<tr class="quota-row"><td><b>${esc(r.subscription || '—')}</b></td>${qCell(r.used_5h_pct)}${qCell(r.used_7d_pct)}` +
-      `<td>${esc(r.resets_at ? fmtDate(r.resets_at) : '—')}</td><td><span class="chip ${tone}">${esc(text)}</span></td></tr>`;
-  }).join('');
-  return `<div class="tw"><table class="t quota"><thead><tr>${th}</tr></thead><tbody>${body}</tbody></table></div>`;
-}
 
 // 我的机器 (claude-fleet#2518): one row per machine of the viewer's (#2680), from
 // /v1/nodes (already cut to their logins, nodes.go handleNodes) and
@@ -484,11 +482,13 @@ export function limitKpi(l) {
     `<span class="delta${left ? '' : ' down'}"${left ? ' style="color:var(--muted)"' : ''}>${esc(line)}</span></div>`;
 }
 
-/** hb draws [label, tokens] rows (bars()) as horizontal bars. */
-export function hb(rows, color) {
+/** hb draws [label, tokens] rows (bars()) as horizontal bars. A row's own
+ *  third element is its colour (a model's provider); mono false names in the
+ *  body face (a model's human name, not an id). */
+export function hb(rows, color, mono = true) {
   if (!rows.length) return `<div class="ghostrow">${esc(t('ui.ov.noUsage7'))}</div>`;
   const max = Math.max(...rows.map((r) => r[1])) || 1;
-  return '<div class="hb">' + rows.map((r) => `<div class="hb-row"><span class="name mono" title="${esc(r[0])}">${esc(r[0])}</span><span class="track"><i style="width:${(r[1] / max * 100).toFixed(0)}%;background:${color}"></i></span><span class="v">${esc(fmtTokens(r[1]))}</span></div>`).join('') + '</div>';
+  return '<div class="hb">' + rows.map((r) => `<div class="hb-row"><span class="name${mono ? ' mono' : ''}" title="${esc(r[0])}">${esc(r[0])}</span><span class="track"><i style="width:${(r[1] / max * 100).toFixed(0)}%;background:${r[2] || color}"></i></span><span class="v">${esc(fmtTokens(r[1]))}</span></div>`).join('') + '</div>';
 }
 
 /** bundleList draws a settings layer's [kind, text] items (bundleItems);
@@ -498,38 +498,61 @@ export function bundleList(list, src) {
   return '<div class="items">' + list.map(([k, txt]) => `<div><span class="kind">${esc(k)}</span><span class="mono" style="min-width:0;overflow-wrap:anywhere">${esc(txt)}</span><span class="src chip${src === 'team' ? ' brand' : ''}">${esc(t(src === 'team' ? 'ui.cfg.srcTeam' : 'ui.cfg.srcMine'))}</span></div>`).join('') + '</div>';
 }
 
-// ── 我的用量 (claude-fleet#2519) ─────────────────────────────────────────
-// /v1/fleet/person-usage, cut by the hub to the viewer: their budget's two
-// windows (fleet.person_budget, #1977/#2067) and their tokens per day this
-// week, drawn with By person's bars.
+/* ---------------- tasks (claude-fleet#3325) ---------------- */
 
-/** usageDays turns the answer's days into hb() rows, oldest first; [] when
- *  the week has nothing. */
-export function usageDays(days) {
-  const list = Array.isArray(days) ? days : [];
-  if (!list.some((d) => Number(d.tokens) > 0)) return [];
-  return list.map((d) => [dayLabel(d.day), Number(d.tokens) || 0]);
-}
+/** TASK_FILTERS are the 任务 page's buttons: [id, t() key]. */
+export const TASK_FILTERS = Object.freeze([['all', 'ui.f.all'], ['working', 'ui.st.working'], ['waiting', 'ui.task.waitingYou']]);
 
-function budgetWin(label, used, limit) {
-  used = Number(used) || 0; limit = Number(limit) || 0;
-  if (!limit) {
-    return `<div class="win"><div class="win-h"><span>${esc(label)}</span><b>${esc(fmtTokens(used))} · ${esc(t('ui.use.noLimit'))}</b></div></div>`;
+/** A record's own word, before (or without) its session's: placing · open ·
+ *  refused · unknown. An open record whose session the inventory no longer
+ *  lists is over (`done`). */
+const TASK_STATE = { placing: ['unknown', 'ui.task.placing'], refused: ['blocked', 'ui.task.refused'], unknown: ['unknown', 'ui.st.unknown'] };
+
+/** taskRows flattens /v1/fleet/tasks into the page's rows, newest first. */
+export function taskRows(body) {
+  const rows = [];
+  for (const r of (body && Array.isArray(body.tasks)) ? body.tasks : []) {
+    const live = r.live && typeof r.live === 'object' ? r.live : null;
+    let state, label;
+    if (live && live.state) {
+      state = stateKey(live.state);
+      label = t(STATES[state].key);
+    } else if (TASK_STATE[r.state]) {
+      [state, label] = [TASK_STATE[r.state][0], t(TASK_STATE[r.state][1])];
+    } else {
+      [state, label] = ['done', t('ui.task.over')];
+    }
+    const m = /^([A-Za-z0-9._-]+\/[A-Za-z0-9._-]+)#([0-9]+)$/.exec(r.issue || '');
+    const born = Date.parse(r.created_at || '') / 1000;
+    const left = live ? Number(live.ctx_left) : NaN;
+    rows.push({
+      id: r.id || '', title: r.title || '', owner: r.owner || '', via: r.via || '', device: r.device || '',
+      repo: r.repo || '', repoChosen: !!r.repo, agent: r.agent || '', machine: (r.machine || '').split('.')[0],
+      session: (live && live.key) || r.session_key || '', state, stateLabel: label, note: r.note || '',
+      issueURL: m ? `https://github.com/${m[1]}/issues/${m[2]}` : '', issueN: m ? m[2] : '',
+      asked: r.asked || '', parked: r.parked || '', born: Number.isFinite(born) ? born : 0,
+      observed: (body && body.observed_at) || '', ctxLeft: Number.isFinite(left) ? left : null,
+    });
   }
-  const p = Math.round(used / limit * 100);
-  return `<div class="win"><div class="win-h"><span>${esc(label)}</span><b>${esc(fmtTokens(used))} / ${esc(fmtTokens(limit))}</b></div>` +
-    `<div class="track"><i class="${qLevel(p)}" style="width:${Math.min(100, p)}%"></i></div></div>`;
+  return rows.sort((a, b) => b.born - a.born || b.id.localeCompare(a.id));
 }
 
-/** usageBudget draws one person's standing: both windows against their
- *  limits, and — over one — which and until when. */
-export function usageBudget(st) {
-  const s = st || {};
-  const set = Number(s.limit_5h) > 0 || Number(s.limit_week) > 0;
-  const chip = s.over
-    ? `<span class="chip bad">${esc(t(s.window === 'week' ? 'ui.use.overWeek' : 'ui.use.over5h'))}</span>`
-    : `<span class="chip${set ? ' ok' : ''}">${esc(t(set ? 'ui.use.within' : 'ui.use.unset'))}</span>`;
-  const reset = s.over && s.reset_at ? `<p class="sub" style="font-size:12.5px;margin:0">${esc(t('ui.use.backAt', { at: fmtDate(s.reset_at) }))}</p>` : '';
-  return `<div style="display:grid;gap:14px"><div>${chip}</div>${budgetWin(t('ui.use.h5'), s.used_5h, s.limit_5h)}${budgetWin(t('ui.use.week'), s.used_week, s.limit_week)}${reset}` +
-    (set ? '' : `<p class="sub" style="font-size:12.5px;color:var(--muted);margin:0">${esc(t('ui.use.unsetHint'))}</p>`) + '</div>';
+/** taskCounts: today's, the working ones and the ones waiting on you —
+ *  per filter, plus `today` for the band. */
+export function taskCounts(rows, now = Date.now()) {
+  const day = new Date(now); day.setHours(0, 0, 0, 0);
+  const c = { all: rows.length, working: 0, waiting: 0, today: 0 };
+  for (const r of rows) {
+    const g = stateOf(r.state).group;
+    if (g === 'working' || g === 'waiting') c[g]++;
+    if (r.born * 1000 >= day.getTime()) c.today++;
+  }
+  return c;
+}
+
+/** filterTasks applies the filter and the search box. */
+export function filterTasks(rows, filter, query) {
+  const q = String(query || '').trim().toLowerCase();
+  return rows.filter((r) => (filter === 'all' || !filter || stateOf(r.state).group === filter) &&
+    (!q || [r.id, r.title, r.repo, r.machine, r.session, r.owner, r.issueN && '#' + r.issueN].join(' ').toLowerCase().includes(q)));
 }

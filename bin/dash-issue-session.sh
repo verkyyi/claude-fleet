@@ -46,14 +46,14 @@ set -uo pipefail
 # GATE (cap / dedup / claim) still runs + refuses in the foreground; only its slow
 # tail is backgrounded. Opt-in, interactive-only (a headless TARGET_SESS caller
 # that needs the window id back stays synchronous).
-num=""; TARGET_SESS=""; WIN_TITLE=""; ORIGIN=""; AGENT=""; REPO_ARG=""; NODE_ARG=""; ORIGIN_WID=""; ACCOUNT_ARG=""; REAP=""; AS_ARG=""; RESUME_SID=""; SEED_FILE=""; FORCE_FLAG=0; ASYNC_FLAG=0; PRINT_FLAG=0; _pos=0; _want=""
+num=""; TARGET_SESS=""; WIN_TITLE=""; ORIGIN=""; AGENT=""; REPO_ARG=""; NODE_ARG=""; ORIGIN_WID=""; ACCOUNT_ARG=""; REAP=""; TASK_REF=""; AS_ARG=""; RESUME_SID=""; SEED_FILE=""; WORDS_FILE=""; FORCE_FLAG=0; ASYNC_FLAG=0; PRINT_FLAG=0; _pos=0; _want=""
 for _a in "$@"; do
   # A value-taking flag (--title <t>) consumes the NEXT arg: _want carries that
   # expectation across one loop turn so the value isn't mistaken for a positional.
   if [ -n "$_want" ]; then
     case "$_want" in title) WIN_TITLE="$_a" ;; origin) ORIGIN="$_a" ;; agent) AGENT="$_a" ;; repo) REPO_ARG="$_a" ;;
       node) NODE_ARG="$_a" ;; origin-wid) ORIGIN_WID="$_a" ;; account) ACCOUNT_ARG="$_a" ;; reap) REAP="$_a" ;;
-      resume) RESUME_SID="$_a" ;; seed-file) SEED_FILE="$_a" ;; as) AS_ARG="$_a" ;; esac
+      resume) RESUME_SID="$_a" ;; seed-file) SEED_FILE="$_a" ;; words-file) WORDS_FILE="$_a" ;; as) AS_ARG="$_a" ;; task) TASK_REF="$_a" ;; esac
     _want=""; continue
   fi
   # A FUSED "--flag value" (issue #1543) is --flag=value: zsh — Claude's Bash tool —
@@ -61,7 +61,7 @@ for _a in "$@"; do
   # us ONE arg, which fell to the unknown-flag branch and let the hub place a pinned
   # spawn on another machine.
   case "$_a" in
-    '--title '*|'--origin '*|'--agent '*|'--repo '*|'--node '*|'--origin-wid '*|'--account '*|'--reap '*|'--resume '*|'--seed-file '*|'--as '*)
+    '--title '*|'--origin '*|'--agent '*|'--repo '*|'--node '*|'--origin-wid '*|'--account '*|'--reap '*|'--resume '*|'--seed-file '*|'--words-file '*|'--as '*|'--task '*)
       _v=${_a#* }; _v=${_v#"${_v%%[! ]*}"}; _a="${_a%% *}=$_v" ;;
   esac
   case "$_a" in
@@ -113,6 +113,10 @@ for _a in "$@"; do
     # the historic rule (PR merged + the fleet's grace). Stamped as @reap_policy.
     --reap) _want=reap ;;
     --reap=*) REAP="${_a#--reap=}" ;;
+    # --task T<n> (issue #3325): the hub's task record this worker belongs to (a
+    # task that chose a repo) — stamped @task beside @issue.
+    --task) _want=task ;;
+    --task=*) TASK_REF="${_a#--task=}" ;;
     # --as <name> (issue #3122, EPIC #3111 C11): the standard agent file this
     # session starts as — `claude --agent <name>`, found the way Claude Code finds
     # it (the repo's .claude/agents > ~/.claude/agents > a plugin). None = the
@@ -133,6 +137,13 @@ for _a in "$@"; do
     --resume=*) RESUME_SID="${_a#--resume=}" ;;
     --seed-file) _want=seed-file ;;
     --seed-file=*) SEED_FILE="${_a#--seed-file=}" ;;
+    # --words-file <f> (issue #3331, EPIC #3178 ⑧): the person's own words — a task
+    # someone typed (⌘P's `new` start). They are the session's FIRST TURN, shown as
+    # typed; the flow comes from the SessionStart hook (fleet-worker-start-hook.sh),
+    # never a visible /fleet-claim. No file ⇒ the issue's title is the first turn.
+    # The caller owns the file.
+    --words-file) _want=words-file ;;
+    --words-file=*) WORDS_FILE="${_a#--words-file=}" ;;
     # An UNKNOWN dash-flag is almost always a typo (e.g. --forc). Do NOT let it
     # fall through to the positional slots — treating "--forc" as the issue number
     # strips to "" and silently spawns the wrong thing. Warn loudly and ignore it.
@@ -798,7 +809,7 @@ if [ "$ASYNC_FLAG" = 1 ] && [ "$TAIL_ONLY" != 1 ] && [ -z "$TARGET_SESS" ]; then
   # this redirect drops, and the tail has no caller left to read it — the
   # interactive --async path is toast-only by construction).
   _bg="$_bg FLEET_SPAWN_WNAME=$(shq "$wname")"
-  _bg="$_bg exec $(shq "$SELF") $(shq "$num") --title $(shq "$title") --origin $(shq "$ORIGIN")${AGENT:+ --agent $AGENT}${REPO_ARG:+ --repo $(shq "$REPO_ARG")}${ORIGIN_WID:+ --origin-wid $(shq "$ORIGIN_WID")}${ACCOUNT_ARG:+ --account $ACCOUNT_ARG}${REAP:+ --reap $REAP}${AS_ARG:+ --as $AS_ARG} >/dev/null 2>&1"
+  _bg="$_bg exec $(shq "$SELF") $(shq "$num") --title $(shq "$title") --origin $(shq "$ORIGIN")${AGENT:+ --agent $AGENT}${REPO_ARG:+ --repo $(shq "$REPO_ARG")}${ORIGIN_WID:+ --origin-wid $(shq "$ORIGIN_WID")}${ACCOUNT_ARG:+ --account $ACCOUNT_ARG}${REAP:+ --reap $REAP}${AS_ARG:+ --as $AS_ARG}${TASK_REF:+ --task $(shq "$TASK_REF")}${WORDS_FILE:+ --words-file $(shq "$WORDS_FILE")} >/dev/null 2>&1"
   TM run-shell -b "$_bg" 2>/dev/null \
     || { refuse "spawn failed for #$num: dispatch"; exit "$RC_INFRA"; }
   exit 0
@@ -830,14 +841,38 @@ tf="$(fleet_cache_dir "$(fleet_slug "$REPO")")/task_$slug.txt"
 # namespaced — `/fleet:fleet-claim` — and a bare slash does not resolve there, so
 # the seed would land as literal text and the worker would never claim. fleet_cmd
 # probes which install path this machine has and types the form that resolves.
-printf '%s' "$(fleet_cmd fleet-claim)" > "$tf"
+#
+# THE PERSON'S WORDS FIRST (issue #3331, EPIC #3178 ⑧, D2 = ①): a Claude session's
+# first turn is what the person typed (--words-file), else the issue's title — the
+# ticket's own one line, for a spawn nobody typed words for (an EPIC member, a
+# backlog pick) — shown exactly as written. The flow does not ride the first turn
+# any more: the window is stamped `@seed_words <the claim command>` before its
+# agent starts, and the SessionStart hook (bin/fleet-worker-start-hook.sh) reads it
+# — a grey line for the person, and an instruction for the agent to run the claim
+# skill before anything else (fleet-worker's body is empty on purpose, so the hook
+# is the only road in). The stamp and the words go together or not at all:
+# no words (no file, no title), a Codex session (no SessionStart context road it
+# reads the same way — it keeps the slash seed, fleet-codex.sh expands it) or
+# FLEET_SEED_WORDS=0 ⇒ the bare claim command, byte for byte as before.
+CLAIM_CMD=$(fleet_cmd fleet-claim)
+SEED_WORDS=''
+if [ "${FLEET_SEED_WORDS:-1}" != 0 ] && [ "${AGENT:-${FLEET_AGENT:-claude}}" != codex ]; then
+  _words=''
+  [ -n "$WORDS_FILE" ] && [ -s "$WORDS_FILE" ] && _words=$(cat "$WORDS_FILE")
+  [ -n "${_words//[[:space:]]/}" ] || _words=$title
+  if [ -n "${_words//[[:space:]]/}" ]; then
+    printf '%s' "$_words" > "$tf" && SEED_WORDS=$CLAIM_CMD
+  fi
+  unset _words
+fi
+[ -n "$SEED_WORDS" ] || printf '%s' "$CLAIM_CMD" > "$tf"
 # A parked session's return (--resume, issue #2671): the same conversation, its
 # own first turn — only when the transcript is still there and the agent is Claude.
 RESUME_ARG=''
 if [ -n "$RESUME_SID" ] && [ "${AGENT:-${FLEET_AGENT:-claude}}" != codex ] \
    && [ -f "$(fleet_transcript_dir "$wt")/$RESUME_SID.jsonl" ]; then
   RESUME_ARG=" --resume $RESUME_SID"
-  [ -n "$SEED_FILE" ] && [ -s "$SEED_FILE" ] && cat "$SEED_FILE" > "$tf"
+  [ -n "$SEED_FILE" ] && [ -s "$SEED_FILE" ] && { cat "$SEED_FILE" > "$tf"; SEED_WORDS=''; }
 fi
 if [ -n "$FETCH_PID" ]; then wait "$FETCH_PID" 2>/dev/null
 else git -C "$MAIN" fetch origin "$BASE" --quiet 2>/dev/null; fi
@@ -914,6 +949,9 @@ stamp=''; [ -n "$REPO" ] && stamp=$(fleet_win_stamp_cmd @repo "$REPO" @worktree 
 # the window before fleet-claude.sh reads it, and it is the window's — a conf
 # default changed later does not move a running session.
 [ -n "$ACCOUNT" ] && stamp="$stamp$(fleet_win_stamp_cmd @account_class "$ACCOUNT")"
+# @seed_words (issue #3331): the first turn is the person's words, so the
+# SessionStart hook carries the flow — on the window before its agent starts.
+[ -n "$SEED_WORDS" ] && stamp="$stamp$(fleet_win_stamp_cmd @seed_words "$SEED_WORDS")"
 pend=''; [ -n "$FILL_MARK" ] && pend="FLEET_WT_PENDING=$(shq "$FILL_MARK") "
 win=$(TM new-window ${detach[@]+"${detach[@]}"} -P -F '#{window_id}' -t "$SESS:" -n "$wname" -c "$wt" "$stamp$pend'$BIN/fleet-session-wrap.sh'${AGENT:+ --agent $AGENT}${AS_ARG:+ --as $AS_ARG}$RESUME_ARG \"\$(cat '$tf')\"; exec \$SHELL") \
   || { [ -n "$FILL_PID" ] && { wait "$FILL_PID" 2>/dev/null; rm -f "$FILL_MARK"; }
@@ -944,6 +982,7 @@ _fid=$(fleet_fid_mint 2>/dev/null) && fleet_is_fid "$_fid" || _fid=''
 _sw=(set-window-option -t "$win" @issue "$num")
 _sw+=(\; set-window-option -t "$win" @born "$(date +%s)")
 _sw+=(\; set-window-option -t "$win" @reap_policy "${REAP:-merged}")
+case "$TASK_REF" in T[1-9]*) case "${TASK_REF#T}" in *[!0-9]*) ;; *) _sw+=(\; set-window-option -t "$win" @task "$TASK_REF") ;; esac ;; esac
 [ -n "$REPO" ] && _sw+=(\; set-window-option -t "$win" @repo "$REPO")
 _sw+=(\; set-window-option -t "$win" @worktree "$wt")
 [ -n "$ORIGIN" ] && _sw+=(\; set-window-option -t "$win" @origin "$ORIGIN")

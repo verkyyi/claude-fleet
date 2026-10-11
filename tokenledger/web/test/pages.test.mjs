@@ -8,9 +8,9 @@ import { readFileSync } from 'node:fs';
 import {
   dayKeys, dayTokens, stack, delta, bars, areaChart, niceMax,
   sessionRows, counts, filterRows, running, attention, stateOf,
-  activeDevices, clientDevices, whyNotClient, limitKpi, fullFrom, deviceHistory, looksLikeKey, bundleItems, parseImport, quotaTable, quotaState, myMachines, takesOf, usageDays, usageBudget,
+  activeDevices, clientDevices, whyNotClient, limitKpi, fullFrom, deviceHistory, looksLikeKey, bundleItems, parseImport, myMachines, takesOf,
 } from '../dist/lib/pages.js';
-import { askOf, askLine } from '../dist/lib/pages.js';
+import { askOf, askLine, orphanReports, orphanAttention } from '../dist/lib/pages.js';
 import { useLocale } from '../dist/lib/i18n.js';
 import { en } from '../dist/lib/i18n/en.js';
 
@@ -114,6 +114,15 @@ test('a worker that waits on you says what it asks, in its own words (claude-fle
   try { useLocale('zh-CN'); assert.equal(askLine(by('issue-2').ask), '问题：放在 m5 还是 m4？'); } finally { useLocale('en'); }
 });
 
+test('a row carries its session\'s pool tokens today, none recorded is 0 (claude-fleet#3377)', () => {
+  const rows = sessionRows({ sessions: [
+    { machine_name: 'm5', tokens_today: 1234567, worker: { worker_id: 'a', key: 'issue-1', born: 2 } },
+    { machine_name: 'm5', worker: { worker_id: 'b', key: 'issue-2', born: 1 } },
+  ] }, null);
+  assert.equal(rows.find((r) => r.key === 'issue-1').tokens, 1234567);
+  assert.equal(rows.find((r) => r.key === 'issue-2').tokens, 0);
+});
+
 test('an empty or failed list is no rows, not a crash', () => {
   assert.deepEqual(sessionRows(null, null), []);
   assert.deepEqual(sessionRows({ sessions: [] }, undefined), []);
@@ -139,6 +148,26 @@ test('attention: sessions waiting for everyone, machines only for an admin', () 
   const admin = attention(rows, FS.nodes, true);
   assert.deepEqual(admin.slice(2).map((a) => a.title), ['m1 is lost', 'm2 is in maintenance']);
   try { useLocale('zh-CN'); assert.equal(attention(rows, FS.nodes, true)[2].title, 'm1 失联了'); } finally { useLocale('en'); }
+});
+
+test('orphan reports (#3369): once per machine + id, newest first, under Needs attention', () => {
+  const o1 = { id: 'a1', ts: 100, child: 'issue-41', state: 'MERGED', pr: '12', summary: 'landed the fix' };
+  const o2 = { id: 'b2', ts: 200, child: 'issue-42', state: 'BLOCKED', pr: '', summary: 'needs a token' };
+  const fs = { sessions: [
+    { machine_name: 'm1', os_user: 'u', worker: { key: 'issue-1', orphan_reports: [o1, o2] } },
+    { machine_name: 'm1', os_user: 'u', worker: { key: 'issue-2', orphan_reports: [o1, o2] } },
+    { machine_name: 'm2', os_user: 'u', worker: { key: 'issue-3', orphan_reports: [o1] } },
+    { machine_name: 'm3', os_user: 'u', worker: { key: 'issue-4' } },
+  ] };
+  assert.deepEqual(orphanReports(fs).map((o) => o.machine + '/' + o.id), ['m1/b2', 'm1/a1', 'm2/a1']);
+  const att = orphanAttention(fs);
+  assert.equal(att.length, 3);
+  assert.equal(att[1].title, 'issue-41 MERGED (PR #12) · its spawner is gone, the result is yours');
+  assert.equal(att[1].sub, 'landed the fix · m1');
+  assert.equal(att[1].tone, 'ok');
+  assert.equal(att[0].tone, 'warn');
+  assert.deepEqual(orphanAttention({ sessions: [] }), []);
+  assert.deepEqual(orphanAttention(undefined), []);
 });
 
 test('devices: active ones, and the hand-issue key check', () => {
@@ -247,7 +276,7 @@ test('import takes an export back, and refuses what is not one', () => {
 // none of them reads the whole hub (by person, /v1/admin/*) or names a
 // principal, and no admin branch picks a wider read — those are the admin
 // area's three pages, which read only /v1/admin/*.
-const DAILY = ['overview.js', 'sessions-page.js', 'machines.js', 'connect.js', 'config.js', 'quota.js', 'usage.js', 'app-shell.js', 'lib/sessions-view.js', 'lib/devices-view.js'];
+const DAILY = ['overview.js', 'sessions-page.js', 'machines.js', 'connect.js', 'config.js', 'quota.js', 'usage.js', 'app-shell.js', 'lib/sessions-view.js', 'lib/devices-view.js', 'lib/usage-view.js'];
 test('no page asks the hub for someone else\'s rows', () => {
   for (const f of DAILY) {
     const src = readFileSync(new URL('../dist/' + f, import.meta.url), 'utf8');
@@ -290,43 +319,11 @@ test('the daily tables carry no person, subscription or owner column', () => {
 // no English sentence typed into a template, and no t() key the dictionary
 // lacks (the parity test in i18n.test.mjs then holds zh-CN to it).
 test('the app pages print only dictionary words', () => {
-  for (const f of ['overview.js', 'sessions-page.js', 'machines.js', 'connect.js', 'config.js', 'quota.js', 'usage.js', 'app-shell.js', 'lib/shell.js', 'lib/pages.js', 'lib/sessions-view.js', 'lib/devices-view.js']) {
+  for (const f of ['overview.js', 'sessions-page.js', 'machines.js', 'connect.js', 'config.js', 'quota.js', 'usage.js', 'app-shell.js', 'lib/shell.js', 'lib/pages.js', 'lib/sessions-view.js', 'lib/devices-view.js', 'lib/usage-view.js']) {
     const src = readFileSync(new URL('../dist/' + f, import.meta.url), 'utf8').replace(/^\s*(\/\/|\*|\/\*).*$/gm, '');
     const bare = src.match(/>[A-Z][a-z]+[ <.]/g) || [];
     assert.deepEqual(bare.filter((m) => !/>(Claude|Codex|GitHub)/.test(m)), [], `${f} types English into markup`);
     for (const [, key] of src.matchAll(/\bt\('(ui\.[\w.]*\w)'/g)) assert.ok(key in en, `${f}: t('${key}') is not in en.js`);
-  }
-});
-
-// 我的额度 (claude-fleet#2517): no subscription is the empty state that sends
-// the person to an admin; two are two rows, each with its windows, its reset
-// and a status that says which window ran out.
-test('quotaTable: the empty state, and one row per subscription', () => {
-  useLocale('zh-CN');
-  try {
-    for (const none of [[], null, undefined]) {
-      const html = quotaTable(none);
-      assert.match(html, /入口还没给你分配订阅/);
-      assert.match(html, /找管理员/);
-      assert.doesNotMatch(html, /<table/);
-    }
-    const rows = [
-      { subscription: 'icloud', provider: 'claude', used_5h_pct: 62, used_7d_pct: 31, resets_at: '2026-10-10T23:00:00Z', state: 'ok' },
-      { subscription: '24helpful', provider: 'claude', used_5h_pct: 100, used_7d_pct: 96, resets_at: '2026-10-10T23:00:00Z', state: 'limited' },
-    ];
-    const html = quotaTable(rows);
-    assert.equal((html.match(/class="quota-row"/g) || []).length, 2);
-    assert.match(html, /icloud/);
-    assert.match(html, /62%/);
-    assert.match(html, /可用/);
-    assert.match(html, /暂时用尽/);
-    assert.doesNotMatch(html, /入口还没给你分配订阅/);
-    assert.equal(quotaState({ state: 'limited', used_5h_pct: 40, used_7d_pct: 100 })[1], '本周用尽');
-    assert.equal(quotaState({ state: 'paused' })[1], '管理员已暂停');
-    assert.equal(quotaState({ state: 'unknown', used_5h_pct: null })[1], '还没有读数');
-    assert.match(quotaTable([{ subscription: 'x', used_5h_pct: null, used_7d_pct: null, state: 'unknown' }]), /—/);
-  } finally {
-    useLocale('en');
   }
 });
 
@@ -399,38 +396,33 @@ test('my machines reads only the cut roster: no join code, no retire', () => {
   assert.doesNotMatch(src, /join-codes|retire|\/v1\/fleet\/settings|POST/);
 });
 
-// 我的用量 (claude-fleet#2519): a quiet week is the empty state; a week with
-// usage is seven bars in day order; the budget panel shows both windows
-// against their limits, says which one ran out and when it frees up, and says
-// so plainly when no admin set one. The page asks only for its own (?mine=1).
-test('my usage: the days, and the budget against both windows', () => {
-  useLocale('zh-CN');
-  try {
-    assert.deepEqual(usageDays([]), []);
-    assert.deepEqual(usageDays([{ day: '2026-10-08', tokens: 0 }]), []);
-    const days = ['03', '04', '05', '06', '07', '08', '09'].map((d, i) => ({ day: `2026-10-${d}`, tokens: i * 1000 }));
-    const rows = usageDays(days);
-    assert.equal(rows.length, 7);
-    assert.deepEqual(rows.map((r) => r[1]), [0, 1000, 2000, 3000, 4000, 5000, 6000]);
-
-    const over = usageBudget({ limit_5h: 200000, limit_week: 1000000, used_5h: 50000, used_week: 1000000, over: true, window: 'week', reset_at: '2026-10-10T23:00:00Z' });
-    assert.match(over, /已达个人额度（近 7 天）/);
-    assert.match(over, /约 .* 恢复/);
-    assert.match(over, /近 5 小时/);
-    assert.match(over, /width:25%/);
-    assert.match(over, /class="bad" style="width:100%"/);
-
-    const ok = usageBudget({ limit_5h: 0, limit_week: 1000000, used_5h: 1200, used_week: 300000, over: false });
-    assert.match(ok, /在预算内/);
-    assert.match(ok, /不限/);
-    assert.doesNotMatch(ok, /恢复/);
-
-    const unset = usageBudget({});
-    assert.match(unset, /没有设预算/);
-    assert.match(unset, /用量不会被拦/);
-  } finally {
-    useLocale('en');
-  }
-  const src = readFileSync(new URL('../dist/usage.js', import.meta.url), 'utf8');
-  assert.match(src, /\/v1\/fleet\/person-usage\?mine=1/);
+// 任务 (claude-fleet#3325): a record's state is its session's live word, else
+// the record's own; an issue becomes a link; the band counts today's.
+test('taskRows reads a task record beside its session', async () => {
+  const { taskRows, taskCounts, filterTasks } = await import('../dist/lib/pages.js');
+  const now = Date.parse('2026-10-11T14:10:00');
+  const body = { observed_at: '2026-10-11T14:10:00Z', tasks: [
+    { id: 'T219', title: '看看这台机器风扇为什么一直转', owner: 'verky', machine: 'macmini.local', state: 'open',
+      created_at: '2026-10-11T14:06:00', live: { key: '', state: 'working', ctx_left: 71 } },
+    { id: 'T218', title: '给 hub 加一个 /healthz', owner: 'verky', repo: 'verkyyi/claude-fleet', state: 'open',
+      issue: 'verkyyi/claude-fleet#3312', session_key: 'issue-3312', created_at: '2026-10-11T14:02:00', live: { state: 'needs' } },
+    { id: 'T214', title: '整理一下这周的账单', owner: 'verky', state: 'open', created_at: '2026-10-10T11:12:00' },
+    { id: 'T213', title: '没开起来的', owner: 'verky', state: 'refused', note: 'no machine', created_at: '2026-10-10T10:00:00' },
+  ] };
+  const rows = taskRows(body);
+  assert.deepEqual(rows.map((r) => r.id), ['T219', 'T218', 'T214', 'T213']);
+  assert.equal(rows[0].state, 'working');
+  assert.equal(rows[0].machine, 'macmini');
+  assert.equal(rows[0].ctxLeft, 71);
+  assert.equal(rows[0].issueURL, '');
+  assert.equal(rows[1].state, 'waiting');
+  assert.equal(rows[1].issueURL, 'https://github.com/verkyyi/claude-fleet/issues/3312');
+  assert.equal(rows[1].session, 'issue-3312');
+  assert.equal(rows[2].state, 'done', 'a record whose session is gone is over');
+  assert.equal(rows[3].state, 'blocked');
+  const c = taskCounts(rows, now);
+  assert.deepEqual([c.today, c.working, c.waiting], [2, 1, 2]);
+  assert.deepEqual(filterTasks(rows, 'all', '#3312').map((r) => r.id), ['T218']);
+  assert.deepEqual(filterTasks(rows, 'all', 't219').map((r) => r.id), ['T219']);
+  assert.deepEqual(taskRows(null), []);
 });

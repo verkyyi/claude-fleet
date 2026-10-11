@@ -152,8 +152,8 @@ ok
 # rows first; the list's rows carry 单号 · PR · 回收方式 (rows_text ⇄ parse_rows).
 tmux -S "$SOCK" set-option -g @fleet_layout solo
 out=$(Q panel-cmds)
-[ "$(printf '%s\n' "$out" | cut -f1 | tr '\n' ' ')" = "dispatch quit new:claude new:codex layout:multi rename-current route " ] \
-  || fail "E: > does not start with 派一件事 (#2753) · 退出 · 新会话 claude / codex · the layout flip · 改名当前会话 · 连接路线" "$out"; ok
+[ "$(printf '%s\n' "$out" | cut -f1 | tr '\n' ' ')" = "dispatch quit new:claude new:codex layout:multi rename-current route repo-add " ] \
+  || fail "E: > does not start with 派一件事 (#2753) · 退出 · 新会话 claude / codex · the layout flip · 改名当前会话 · 连接路线 · 添加仓库 (#3375)" "$out"; ok
 # claude-fleet#2886: 连接路线… runs `fleet route --pick`; 「/route」 is in its name
 printf '%s\n' "$out" | grep -qx 'route	连接路线…（/route）	!route' || fail "E: > has no 连接路线…（/route） (#2886)" "$out"; ok
 grep -q 'query.startswith("/")' "$BIN/fleet-quickopen.py" || fail "E: a query led by / is not a command query (#2886)"; ok

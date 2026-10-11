@@ -265,6 +265,7 @@ func loadFleetCerts(srv *api.Server) error {
 	if err := loadFleetDebug(srv); err != nil {
 		return err
 	}
+	loadFleetFeedback(srv)
 	switch {
 	case srv.Stable.Offline && srv.Releases == nil:
 		srv.Stable = nil
@@ -397,6 +398,35 @@ func loadFleetDebug(srv *api.Server) error {
 	log.Printf("fleet: debug tickets on, bundles in %s; debugger %s; feed to %s", dir,
 		orNone(login), orNone(notify))
 	return nil
+}
+
+// loadFleetFeedback wires /fleet-feedback's hub half (claude-fleet#3355).
+// CCQUOTA_FLEET_FEEDBACK_DIR is where attachments are kept seven days (the
+// cluster's OSS bucket, mounted) and the switch: unset, the feature is off and
+// no feedback route exists.
+func loadFleetFeedback(srv *api.Server) {
+	dir := os.Getenv("CCQUOTA_FLEET_FEEDBACK_DIR")
+	if dir == "" {
+		log.Printf("fleet: no CCQUOTA_FLEET_FEEDBACK_DIR — feedback is off")
+		return
+	}
+	srv.Feedback = &api.FeedbackDesk{Dir: dir}
+	log.Printf("fleet: feedback on, attachments in %s", dir)
+	// Filing each one as a GitHub issue (claude-fleet#3356): the App's
+	// credentials from the mounted Secret (app-id · installation-id ·
+	// private-key). Missing ⇒ feedback is taken and listed, nothing goes to
+	// GitHub; a key that will not parse ⇒ the same, said once.
+	ghDir := os.Getenv("CCQUOTA_FLEET_FEEDBACK_GH_DIR")
+	gh, err := api.LoadFeedbackGitHub(ghDir, os.Getenv("CCQUOTA_FLEET_FEEDBACK_REPO"))
+	switch {
+	case err != nil:
+		log.Printf("fleet: feedback filing off — %v", err)
+	case gh == nil:
+		log.Printf("fleet: feedback filing off — no GitHub App credentials in CCQUOTA_FLEET_FEEDBACK_GH_DIR (%s)", orNone(ghDir))
+	default:
+		srv.Feedback.GitHub = gh
+		log.Printf("fleet: feedback filed as issues in %s (GitHub App %s)", gh.Repo, gh.AppID)
+	}
 }
 
 func orNone(s string) string {
@@ -840,6 +870,9 @@ func runHub(args []string) error {
 		// Debug reports (claude-fleet#2893): no page in 15 minutes ⇒ unfinished,
 		// seven days ⇒ deleted. Off (srv.Debug nil): returns at once.
 		go srv.RunDebug(ctx)
+		// Feedback attachments past seven days are deleted (claude-fleet#3355).
+		// Off (srv.Feedback nil): returns at once.
+		go srv.RunFeedback(ctx)
 		// Address records (claude-fleet#3073): no CCQUOTA_DNS_* ⇒ off,
 		// no call at all.
 		if c, ok := dns.FromEnv(); ok {

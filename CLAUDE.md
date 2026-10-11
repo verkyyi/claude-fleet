@@ -355,6 +355,32 @@ Do not install from memory: read the doc and work from it.
   `unknown` window. The `oldcfg:` step NAMES the broken and the looping stale
   sessions (window · repo · issue · state) and reopens none (#2068 B). BREAK-IT
   row `oldcfg-broken-unmarked`; `fleet-oldcfg-check-selftest.sh`.
+- **A person's task is a hub record first, an issue only when it needs one**
+  (issue #3325, EPIC #3178). ⌘P's words go out as a task (`fleet-compose.py` →
+  `fleet-client-place.sh --task --via ⌘P`): the hub writes `T<n>` in `fleet_tasks`
+  (`internal/store/fleet_tasks.go`) BEFORE it places the start, then fills it from
+  the answer (machine · login · worker_id · key · state). A task that chose a repo
+  is a `new` start, so its issue hangs on the record; a task with no repo is the
+  record alone — a node that says `CapTask` is sent `task: T<n>`, stamps `@task`
+  and files no desk ticket (`dash-raw-session.sh --task`). 「建 GitHub 单」 is the
+  hub's `task_issue` (`POST /v1/fleet/tasks/<T>/issue`, the client's
+  `fleet-client-place.sh <repo|-> task-issue:T<n>`) — reached only through the
+  record, never a generic tool road. The top bar shows `#N`, else `T<n>`; the
+  hub's 任务 page (`/tasks`) lists them. No `task` asked, or a node without
+  `CapTask`, or no hub ⇒ byte for byte as before (`TestTaskOffAddsNothing`).
+- **A session's first turn is the person's own words; the flow rides a hook**
+  (issue #3331, EPIC #3178 ⑧, D2 = ①). `dash-issue-session.sh` seeds a Claude
+  worker with `--words-file` (⌘P's cold `new` start hands the body, else the
+  title), else the issue's title — shown as typed, never `/fleet-claim` — and
+  stamps the window `@seed_words <the claim command>` before its agent starts:
+  the words and the stamp go together or not at all. `bin/fleet-worker-start-hook.sh`
+  (SessionStart, `startup` only) reads the stamp and answers one grey
+  `systemMessage` line (「fleet-worker · <repo> · 单 #N · 做完开 PR，门绿了自己合」)
+  + an `additionalContext` that makes the claim skill the agent's first step —
+  fleet-worker's body stays empty, so this is the flow's only road in. A no-repo
+  task, a scratch, a desk ticket, a Codex worker (keeps the slash seed),
+  `FLEET_SEED_WORDS=0` ⇒ no stamp, no flow. `seed-words-selftest.sh` +
+  `dash-issue-session-prompt-selftest.sh` A/W pin «words first ⇒ claim next».
 - **A session says when it may be closed: `@reap_policy`** (issue #1902). Chosen
   at spawn (`--reap` on both spawners, the `spawn` tool, the client's new-session
   question 「什么时候回收？」 → hub `reap` → the node's `worker_start`), changed by

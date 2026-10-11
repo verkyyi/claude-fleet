@@ -19,6 +19,9 @@ fleet's hooks are its rails. Whatever the project:
   what it can do (open a page, take a file, a link only) — is the `fleet` tool
   `where` (`fleet-client-where.sh` outside a session): the one reader. Never
   guess a terminal or a device yourself.
+- **A new repo comes in through `~/.claude/fleet/bin/fleet-repo.sh add <owner/repo>`**
+  (the `fleet-add-repo` skill; ⌘P 「添加仓库…」 is the same road): it lands in
+  `~/projects/<name>` and the fleet hosts it. Never a bare `git clone` elsewhere.
 - **A temp server binds `127.0.0.1`, never `*`**, and dies with the work.
 - **Credentials never enter a config, a commit, an issue or a comment.** Tokens
   are read at start (`gh auth token`, the environment), never written down.

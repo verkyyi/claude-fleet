@@ -42,11 +42,16 @@ def minutes():
     return int(value) if re.fullmatch(r"\d{1,6}", value) else 30
 
 
+DONE_NO_PR_DEFAULT = 2 * 3600    # 发起人拍板 3
+
+
 def done_no_pr_secs():
     """How long a finished session with no PR sits before it is closed (issue
-    #1832; 发起人拍板 3: two hours, the same as `done:2h`)."""
+    #1832; 发起人拍板 3: two hours). Its own number since issue #3352: the
+    scratch default (`done`, fleet_reap_policy.DONE_DEFAULT) went to 15 minutes,
+    a finished ticket's session did not."""
     value = os.environ.get("FLEET_REAP_DONE_NO_PR_SECS", "")
-    return int(value) if re.fullmatch(r"\d{1,7}", value) else fleet_reap_policy.DONE_DEFAULT
+    return int(value) if re.fullmatch(r"\d{1,7}", value) else DONE_NO_PR_DEFAULT
 
 
 def norm_repo(value):

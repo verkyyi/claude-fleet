@@ -58,7 +58,13 @@ export const ic = (name, cls) => `<svg class="i ${cls || ''}" viewBox="0 0 24 24
  *  `module` the script the shell imports to draw it (lib/router.js). */
 export const PAGES = Object.freeze([
   { id: 'overview', label: 'ui.nav.overview', icon: 'home', href: '/', module: '/overview.js' },
+  // 我的用量 (claude-fleet#2519), one page since claude-fleet#3229: 我的额度
+  // (/quota, #2517) moved into it (lib/router.js MOVED).
+  { id: 'usage', label: 'ui.nav.usage', icon: 'scroll', href: '/usage', module: '/usage.js' },
   { id: 'sessions', label: 'ui.nav.sessions', icon: 'list', href: '/sessions', module: '/sessions-page.js' },
+  // 任务 (claude-fleet#3325): the viewer's task records, T<n> — what they asked
+  // for, beside the sessions that do it.
+  { id: 'tasks', label: 'ui.nav.tasks', icon: 'scroll', href: '/tasks', module: '/tasks.js' },
   // 我的机器 (claude-fleet#2518): a user's own machines.
   { id: 'mymachines', label: 'ui.nav.mymachines', icon: 'server', href: '/machines', module: '/machines.js' },
   // One machine (claude-fleet#2796): /machines/<host>, opened from either
@@ -73,10 +79,6 @@ export const PAGES = Object.freeze([
   // 我的连接 (claude-fleet#3199): the home every device shares, the address,
   // the keys — the hub's page too.
   { id: 'connection', label: 'ui.nav.connection', icon: 'home', href: '/fleet/connection' },
-  // 我的额度 (claude-fleet#2517).
-  { id: 'quota', label: 'ui.nav.quota', icon: 'card', href: '/quota', module: '/quota.js' },
-  // 我的用量 (claude-fleet#2519).
-  { id: 'usage', label: 'ui.nav.usage', icon: 'scroll', href: '/usage', module: '/usage.js' },
   { id: 'config', label: 'ui.nav.config', icon: 'sliders', href: '/config', module: '/config.js' },
   // The admin group (claude-fleet#1990): first the whole hub the four pages
   // above used to show an admin (claude-fleet#2515), then the hub's own.

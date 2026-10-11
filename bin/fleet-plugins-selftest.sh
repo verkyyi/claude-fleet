@@ -60,7 +60,7 @@ m = json.load(open(os.path.join(root, ".claude-plugin", "marketplace.json")))
 entries = {p["name"]: p for p in m["plugins"]}
 dirs = sorted(d for d in os.listdir(os.path.join(root, "plugins"))
               if os.path.isdir(os.path.join(root, "plugins", d)))
-want = ["fleet-browser", "fleet-epic", "fleet-orchestrate", "fleet-steward"]
+want = ["fleet-browser", "fleet-epic", "fleet-feedback", "fleet-orchestrate", "fleet-steward"]
 if dirs != want:
     bad.append("A plugins/ holds %s, expected %s" % (dirs, want))
 ours = sorted(n for n, p in entries.items() if str(p.get("source", "")).startswith("./plugins/"))
@@ -159,7 +159,7 @@ missing=$(python3 "$BIN/fleet-agent-defaults.py" check --root "$ROOT" --claude-c
 for s in fleet-orchestrate fleet-steward epic-page; do
   hasnt "skill $s" "$missing" "C fleet-agent-defaults.py still counts $s as a default skill"
 done
-[ "$(python3 "$PL" names --root "$ROOT" | paste -sd, -)" = "fleet-browser,fleet-epic,fleet-orchestrate,fleet-steward" ] && ok \
+[ "$(python3 "$PL" names --root "$ROOT" | paste -sd, -)" = "fleet-browser,fleet-epic,fleet-feedback,fleet-orchestrate,fleet-steward" ] && ok \
   || fail "C names" "$(python3 "$PL" names --root "$ROOT")"
 
 # ---- D: ensure, against a fake claude ----------------------------------------

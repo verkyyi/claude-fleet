@@ -89,6 +89,8 @@ R="${E}0m"; US=$'\x1f'
 # bash 3.2 keeps the backslash of a `${v:+\}}` inside double quotes (issue #2601).
 # Last (issue #2717): the measurement bus #2431 stamps — `left|band|ts|model|effort`,
 # empty with no @ctx_pct — the sidebar's field 19, read by the client's top line.
+# A remote row adds a sixth part, `|tokens`, its pool tokens today off the hub
+# cache's field 29 (issue #3377); a window here has none.
 _WTEST='#{?@test_identity,,'; _WTEND='}'
 [ "${FLEET_ROWS_TEST:-0}" = 1 ] && { _WTEST=''; _WTEND=''; }
 WFMT="#{session_name}${US}#{window_index}${US}#{?#{||:#{@remote},#{@solo_shell}},,${_WTEST}#{window_name}${_WTEND}}${US}#{pane_current_path}${US}#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{?#{==:#{@claude_state},looping},#{@claude_wait},#{@claude_needs}}${US}#{@expand}${US}#{@pin}${US}#{?@degenerate_ts,degen=#{@degenerate_ts}:,}#{?@mem_killed,mem:,}#{?@claude_mem_warn,fat=#{@claude_mem_warn}:,}#{?@ctx_warn,ctxw:,}#{?@quota_stuck,stuck:,}#{@quota_failover}${US}#{@reap_due}${US}#{@reap_seen}${US}#{@reap_state_ts}${US}#{@repo}${US}#{@norepo}${US}#{@sleep_since}#{?@sleep_wake_deferred,:#{@sleep_wake_deferred},}${US}#{@repo_fold}${US}#{@loop}${US}#{@title_info}${US}#{?@born,#{@born},#{window_created}}${US}#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}${US}#{@task_line}${US}#{@reap_policy}${US}#{@epic}${US}#{?#{==:#{@backfill},failed},failed,}${US}${US}#{?#{==:#{@claude_state},needs},#{@claude_needs_detail},}${US}#{?@ctx_pct,#{?@ctx_left,#{@ctx_left},#{e|-:100,#{@ctx_pct}}}|#{@ctx_band}|#{@ctx_ts}|#{?@model,#{@model},#{?#{==:#{@cc_agent},codex},#{@cc_model},}}|#{@effort},}${US}#{?@name_manual,#{?#{==:#{window_name},#{@name_manual}},#{@name_manual},},}"
@@ -512,7 +514,7 @@ if [ -n "${FLEET_SESSION:-}" ] && fleet_hub_on "$FLEET_SESSION" && [ -s "$G/remo
   # `local` and `wid` (fields 11/12, #1480) are named so a new cache's needs field
   # stays its own; a cache older than #1480 leaves them empty. `via` (field 13,
   # #1488: hub | node) the same — empty reads as hub.
-  while IFS=$US read -r r_wid r_node r_av r_iss r_repo r_state r_agent r_name r_orig r_needs r_local r_lwid r_via _r_busy r_born r_cfg r_ttl r_reap r_epic r_bf r_cl r_cb r_ct r_cm r_ce r_test r_akind r_atext _; do
+  while IFS=$US read -r r_wid r_node r_av r_iss r_repo r_state r_agent r_name r_orig r_needs r_local r_lwid r_via _r_busy r_born r_cfg r_ttl r_reap r_epic r_bf r_cl r_cb r_ct r_cm r_ce r_test r_akind r_atext r_tok _; do
     # field 26 (issue #2505): a test identity's session — after the five
     # measurement fields, so the sixth of the rest; hidden but for `fleet ls`
     [ "$r_test" = 1 ] && { [ "${FLEET_ROWS_TEST:-0}" = 1 ] || continue; }
@@ -545,6 +547,10 @@ if [ -n "${FLEET_SESSION:-}" ] && fleet_hub_on "$FLEET_SESSION" && [ -s "$G/remo
     fi
     # fields 21-25 (issue #2431) → one `left|band|ts|model|effort` (issue #2717)
     r_ctx="$r_cl|$r_cb|$r_ct|$r_cm|$r_ce"; [ "$r_ctx" = '||||' ] && r_ctx=''
+    # field 29 (issue #3377): the session's pool tokens today rides the same
+    # field as a sixth part — only when the hub recorded any, so a row without
+    # is byte for byte as before
+    case "$r_tok" in ''|*[!0-9]*) ;; *) r_ctx="${r_ctx:-||||}|$r_tok" ;; esac
     _rrows+=("$r_wid$US$r_node$US$r_iss$US$r_repo$US$r_state$US$r_agent$US$r_name$US$r_orig$US$r_needs$US$r_born$US$r_cfg$US$r_ttl$US$r_reap$US$r_epic$US$r_bf$US$r_akind$US$r_atext$US$r_ctx")
   done < "$G/remote_$FLEET_SESSION"
   for _rr in ${_rrows[@]+"${_rrows[@]}"}; do
@@ -1652,6 +1658,46 @@ if [ "$SIDEBAR" = 1 ]; then
     done <<< "$_erows"
   fi
   unset _eseen _erows _ref _enode _eav _eage _et _eloc _er _en _es _k _ed
+fi
+
+# The results nobody took (issue #3369): a child session's report whose spawner
+# was gone, filed for the person (global/orphan-reports.ndjson, fleet-report-parent.sh)
+# and not read yet. THIS machine's off bin/fleet-orphan-reports.py (one fork, only
+# when the file exists — the shell reads none here), each other machine's off the
+# hub cache's orphanrep_<sess> (`<id> US <machine> US <online|lost> US <ts> US <repo>
+# US <child> US <state> US <pr> US <summary> US <local>`), minus what this computer
+# already read (orphanrep_read, `<machine>/<id>` a line — the sidebar writes it).
+# Each becomes ONE row under its repo's heading, `<child> <STATE> PR #n` badged
+# 结果给你, keyed `orphanrep:<id>[@<machine>]`; a second tap shows the result and
+# asks to mark it read (fleet-sidebar.py). None ⇒ not one line more.
+if [ "$SIDEBAR" = 1 ]; then
+  _orows=''
+  if [ "${FLEET_SHELL:-0}" != 1 ] && [ -s "$FLEET_CONF_DIR/global/orphan-reports.ndjson" ]; then
+    while IFS=$'\t' read -r _oid _ots _orepo _ochild _ost _opr _osum; do
+      [ -n "$_oid" ] || continue
+      _orows+="$_oid$US$US$_orepo$US$_ochild$US$_ost$US$_opr$US$_osum"$'\n'
+    done < <(python3 "$BIN/fleet-orphan-reports.py" list 2>/dev/null)
+  fi
+  if [ -n "${FLEET_SESSION:-}" ] && [ -s "$G/orphanrep_$FLEET_SESSION" ] && fleet_hub_on "$FLEET_SESSION"; then
+    _oread=$'\n'; [ -s "$G/orphanrep_read" ] && _oread+=$(cat "$G/orphanrep_read" 2>/dev/null)$'\n'
+    while IFS=$US read -r _oid _onode _oav _ots _orepo _ochild _ost _opr _osum _oloc; do
+      [ -n "$_oid" ] && [ -n "$_onode" ] || continue
+      [ "$_oloc" = 1 ] && continue
+      case "$_oread" in *$'\n'"$_onode/$_oid"$'\n'*) continue ;; esac
+      [ "$_oav" = lost ] && _onode="$_onode!"
+      _orows+="$_oid$US$_onode$US$_orepo$US$_ochild$US$_ost$US$_opr$US$_osum"$'\n'
+    done < "$G/orphanrep_$FLEET_SESSION"
+  fi
+  if [ -n "$_orows" ]; then
+    [ -n "${OR_BADGE-}" ] || OR_BADGE=$(fleet_ui_t sidebar_orphan_rep)
+    while IFS=$US read -r _oid _onode _orepo _ochild _ost _opr _osum; do
+      [ -n "$_oid" ] || continue
+      if [ -n "$_orepo" ]; then rgrp_v "$_orepo" ''; else rgrp_v '' 1; fi
+      _oiss=${_ochild##*issue-}; case "$_oiss" in ''|*[!0-9]*) _oiss='' ;; *) _oiss="#$_oiss" ;; esac
+      buf+="$rgrp	1	0	orphanrep:$_oid${_onode:+@${_onode%!}}${US}orphanrep${US}✉${US}$_ochild $_ost${_opr:+ PR #$_opr}${US} ${US}$OR_BADGE${US}0${US}$_osum${US}$_onode${US}$_oiss"$'\n'
+    done <<< "$_orows"
+  fi
+  unset _orows _oread _oid _onode _oav _ots _orepo _ochild _ost _opr _osum _oloc _oiss
 fi
 
 # the 置顶 group's frame (issue #1170): a `置顶 (n)` heading above the pinned rows

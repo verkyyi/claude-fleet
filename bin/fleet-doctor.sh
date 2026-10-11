@@ -2933,6 +2933,21 @@ if [ -f "$(dirname "$0")/fleet-agent-team.py" ] && command -v python3 >/dev/null
   esac
 fi
 
+# --- reap: sessions past their reap policy that are still open (issue #3352) ---
+# bin/fleet-reap-overdue.py is the one reader: a merged worker past its grace, a
+# finished scratch past its `done`, with why it is still there. WARN once any has
+# been stuck > 30 min — on 2026-10-11 macmini's idle pass timed out every tick and
+# took the merged-PR pass with it, and nothing said so. No fleet ⇒ no row.
+_ro="$(dirname "$0")/fleet-reap-overdue.py"
+if [ -f "$_ro" ]; then
+  _rout=$(python3 "$_ro" --if-fleet 2>/dev/null)
+  _rhead=$(printf '%s\n' "$_rout" | head -1)
+  case "$_rhead" in
+    overdue*'stuck 0 '*) pass reap "$_rhead" ;;
+    overdue*) warn reap "$_rhead — $(printf '%s\n' "$_rout" | sed -n '2,4p' | grep STUCK | tr '\n' ';' | sed 's/;$//') (fix: read \`python3 $_ro\` for why each is still open; the cleanup daemon's log is logs/cleanup.launchd.log)" ;;
+  esac
+fi
+
 # --- agentcfg: the configuration a session is launched with (issue #1782) ---
 # bin/fleet-claude.sh / fleet-codex.sh compose fleet default < team < local at
 # every launch and stamp the fingerprint as @agent_cfg. A LOCKED item

@@ -32,7 +32,7 @@ func TestAppPage_EveryPagePathAnswersTheAppDocument(t *testing.T) {
 		"index.html": &fstest.MapFile{Data: []byte("<title>overview</title>OWN-PAGE")},
 	}
 	// Each page's own file, so a path that skipped the app document shows.
-	for _, f := range []string{"sessions.html", "machines.html", "connect.html", "quota.html", "usage.html", "config.html"} {
+	for _, f := range []string{"sessions.html", "tasks.html", "machines.html", "connect.html", "quota.html", "usage.html", "config.html"} {
 		ui[f] = &fstest.MapFile{Data: []byte("<title>" + f + "</title>OWN-PAGE")}
 	}
 	routes := append(adminPageRoutes, struct{ path, id, file string }{"/nodes", "machines", "admin/nodes.html"})
