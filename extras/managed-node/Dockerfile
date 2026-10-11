@@ -10,7 +10,7 @@ ENV DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8 LC_ALL=C.UTF-8 \
     PATH=/var/db/fleet-node/runtime/current/tools/bin:/var/db/fleet-node/runtime/current/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 RUN apt-get update -qq && apt-get install -y --no-install-recommends \
     ca-certificates curl git gh python3 zsh tini procps openssh-client openssh-server \
-    jq ripgrep less sudo passwd libevent-2.1-7t64 libncursesw6 locales tzdata \
+    jq ripgrep less sudo passwd iptables libevent-2.1-7t64 libncursesw6 locales tzdata \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 499 fleetcred \
     && useradd --uid 499 --gid 499 --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin fleetcred \
@@ -29,6 +29,7 @@ RUN python3 /usr/local/lib/fleet-image-stage.py stage /opt/fleet-release /opt/cl
     && for t in tmux claude codex; do ln -sfn /var/db/fleet-node/runtime/current/tools/bin/$t /usr/local/bin/$t; done \
     && ln -sfn /var/db/fleet-node/runtime/current/bin/ccquota /usr/local/bin/ccquota
 COPY release.pub /etc/fleet-release.pub
-# No host privileges or Kubernetes API credentials are needed.
+# No host privileges or Kubernetes API credentials are needed. iptables is for the
+# egress-guard init container only (#3281); the fleet container has no NET_ADMIN.
 # FLEET_NODE_UPDATE_OWNER=image turns the self-update off (the old image-owned way).
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/bin/python3", "-I", "/usr/local/lib/fleet-image-stage.py", "boot"]

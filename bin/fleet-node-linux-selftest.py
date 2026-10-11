@@ -215,6 +215,57 @@ class LinuxNode(unittest.TestCase):
         self.assertFalse(pod['containers'][0]['securityContext']['allowPrivilegeEscalation'])
         self.assertEqual(st['volumeClaimTemplates'][0]['spec']['accessModes'], ['ReadWriteOncePod'])
 
+    def test_egress_guard_cuts_metadata_and_cluster(self):
+        """BREAK-IT linux-egress-metadata (#3281): flannel enforces no NetworkPolicy,
+        so an init container holding NET_ADMIN (+NET_RAW) writes OUTPUT rules into
+        the pod's own netns — loopback, replies, DNS to kube-dns, then REJECT the
+        cloud metadata address, the pod and service ranges and every private range;
+        the fleet container never holds NET_ADMIN / NET_RAW, so root there cannot
+        undo them. The ranges are flags, and a bad one refuses to render."""
+        render = BIN.parent / 'extras/managed-node/render.py'
+        base = [sys.executable, str(render), '--image', 'example/image@sha256:' + 'a' * 64,
+                '--hub', 'https://hub.example', '--storage-class', 'essd']
+        pod = json.loads(subprocess.check_output(base))['items'][-1]['spec']['template']['spec']
+        self.assertEqual([c['name'] for c in pod['initContainers']], ['egress-guard'])
+        g = pod['initContainers'][0]
+        self.assertEqual(g['image'], 'example/image@sha256:' + 'a' * 64)
+        sc = g['securityContext']
+        self.assertEqual(sc['capabilities'], {'drop': ['ALL'], 'add': ['NET_ADMIN', 'NET_RAW']})
+        self.assertFalse(sc['allowPrivilegeEscalation'])
+        self.assertTrue(sc['readOnlyRootFilesystem'])
+        for c in pod['containers']:
+            caps = c['securityContext']['capabilities']
+            self.assertEqual(caps['drop'], ['ALL'], c['name'])
+            self.assertFalse({'NET_ADMIN', 'NET_RAW', 'SYS_ADMIN'} & set(caps.get('add', [])), c['name'])
+            self.assertNotIn('privileged', c['securityContext'])
+        self.assertIn('egress-run', [v['name'] for v in pod['volumes']])
+        script = g['command'][-1]
+        v4 = [l for l in script.split("V4='", 1)[1].split('COMMIT', 1)[0].splitlines() if l.startswith('-A OUTPUT')]
+        self.assertEqual(v4[:4], ['-A OUTPUT -o lo -j ACCEPT',
+                                  '-A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT',
+                                  '-A OUTPUT -d 172.21.0.10/32 -p udp -m udp --dport 53 -j ACCEPT',
+                                  '-A OUTPUT -d 172.21.0.10/32 -p tcp -m tcp --dport 53 -j ACCEPT'])
+        cut = [l.split()[3] for l in v4[4:]]
+        self.assertTrue(all(l.endswith(' -j REJECT') for l in v4[4:]), v4)
+        for want in ('100.100.100.200/32', '172.20.0.0/16', '172.21.0.0/20', '10.0.0.0/8', '192.168.0.0/16'):
+            self.assertIn(want, cut)
+        self.assertEqual(cut[0], '100.100.100.200/32')
+        self.assertIn('exit 1', script)  # no backend took the rules: the pod never starts
+        # the ranges are flags
+        pod = json.loads(subprocess.check_output(base + [
+            '--egress-dns', '10.96.0.10', '--egress-pod-cidr', '10.244.0.0/16', '--egress-service-cidr',
+            '10.96.0.0/12', '--egress-private', '10.0.0.0/8']))['items'][-1]['spec']['template']['spec']
+        script = pod['initContainers'][0]['command'][-1]
+        self.assertIn('-A OUTPUT -d 10.96.0.10/32 -p udp -m udp --dport 53 -j ACCEPT', script)
+        self.assertIn('-A OUTPUT -d 10.244.0.0/16 -j REJECT', script)
+        self.assertNotIn('192.168.0.0/16', script)
+        for bad in (['--egress-pod-cidr', '172.20.0.1/16'], ['--egress-private', "10.0.0.0/8'; iptables -F #"],
+                    ['--egress-dns', 'kube-dns']):
+            r = subprocess.run(base + bad, capture_output=True)
+            self.assertNotEqual(r.returncode, 0, bad)
+        df = (BIN.parent / 'extras/managed-node/Dockerfile').read_text()
+        self.assertRegex(df, r'\biptables\b')
+
     def test_entry_door_is_the_entry_port_only(self):
         """BREAK-IT linux-entry-weak-door (#3213): the public Service carries 22022
         alone (Local), the system sshd's 22 stays on the headless one; the pod turns

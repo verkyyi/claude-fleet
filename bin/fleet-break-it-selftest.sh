@@ -6224,6 +6224,21 @@ drill_linux_entry_weak_door() {
   WHAT="公网 Service 只有 22022（Local）、系统 22 只在无头 Service；FLEET_ENTRY=1，entry=<负载均衡>:22022 到得了 entry reach；入口 sshd 只认 root 的 keys，无密码、无 root、不读 ~/.ssh"
 }
 
+# ---- linux-egress-metadata (#3281): flannel enforces no NetworkPolicy, so the ACK
+# node's own netns carries the egress guard — an init container with NET_ADMIN cuts
+# the cloud metadata address, the cluster's pod / service ranges and the private
+# ranges; the fleet container never holds NET_ADMIN, so its root cannot undo them.
+drill_linux_egress_metadata() {
+  CAP=15; local t0
+  t0=$(now)
+  if ! python3 "$BIN/fleet-node-linux-selftest.py" LinuxNode.test_egress_guard_cuts_metadata_and_cluster \
+       >"$WORK/linux-egress.out" 2>&1; then
+    WHY="the ACK pod can reach the cloud metadata or the cluster, or root there can lift the guard: $(tail -n 3 "$WORK/linux-egress.out")"; return 1
+  fi
+  SECS=$(since "$t0")
+  WHAT="init 容器 egress-guard（只 NET_ADMIN+NET_RAW）写 OUTPUT：lo、回包、kube-dns 53 放行，元数据 / pod / Service / 私网段 REJECT；fleet 容器无 NET_ADMIN；坏网段不渲染"
+}
+
 # A child's report whose parent is gone (issue #3117, EPIC #3111 C6): a scratch spawned
 # a worker and was closed; the worker merged and its report went nowhere — a silent
 # exit 0. Now it is the person's: one row in global/orphan-reports.ndjson and one

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Render a single managed ACK node. Output is a kubectl-compatible JSON List."""
 import argparse
+import ipaddress
 import json
 import re
 
@@ -13,6 +14,75 @@ ENTRY_PORT = 22022
 LB = 'service.beta.kubernetes.io/alibaba-cloud-loadbalancer-'
 
 
+# The egress guard (#3281). ACK's flannel enforces no NetworkPolicy, so the guard
+# lives in the pod's own network namespace: an init container holding NET_ADMIN
+# writes OUTPUT rules once, and the `fleet` container — root included — has no
+# NET_ADMIN to undo them. Defaults are the hub's ACK cluster (kube-dns, pod and
+# service ranges, the cloud metadata address); everything else private is cut,
+# the public internet stays open, and inbound replies ride ESTABLISHED.
+EGRESS = {
+    'dns': '172.21.0.10',
+    'metadata': '100.100.100.200/32',
+    'pod_cidr': '172.20.0.0/16',
+    'service_cidr': '172.21.0.0/20',
+    'private': ['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '100.64.0.0/10', '169.254.0.0/16'],
+}
+EGRESS6_BLOCK = ['fc00::/7']
+
+
+def egress_rules(dns, blocked):
+    """iptables-restore input: loopback, replies, DNS to kube-dns, then REJECT each range."""
+    v4 = ['*filter', ':INPUT ACCEPT [0:0]', ':FORWARD ACCEPT [0:0]', ':OUTPUT ACCEPT [0:0]',
+          '-A OUTPUT -o lo -j ACCEPT',
+          '-A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT',
+          '-A OUTPUT -d %s/32 -p udp -m udp --dport 53 -j ACCEPT' % dns,
+          '-A OUTPUT -d %s/32 -p tcp -m tcp --dport 53 -j ACCEPT' % dns]
+    v4 += ['-A OUTPUT -d %s -j REJECT' % c for c in blocked] + ['COMMIT']
+    v6 = ['*filter', ':INPUT ACCEPT [0:0]', ':FORWARD ACCEPT [0:0]', ':OUTPUT ACCEPT [0:0]',
+          '-A OUTPUT -o lo -j ACCEPT',
+          '-A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT']
+    v6 += ['-A OUTPUT -d %s -j REJECT' % c for c in EGRESS6_BLOCK] + ['COMMIT']
+    return '\n'.join(v4), '\n'.join(v6)
+
+
+def egress_guard(image, dns, blocked, metadata):
+    v4, v6 = egress_rules(dns, blocked)
+    # nft first (Debian's default), legacy when the node's kernel has no nf_tables
+    # for us; no backend that writes AND shows the metadata cut = the pod never
+    # starts (fail closed). No IPv6 here is not a failure.
+    script = '''set -eu
+V4='%s'
+V6='%s'
+ok=
+for b in nft legacy; do
+  command -v iptables-$b-restore >/dev/null 2>&1 || continue
+  printf '%%s\\n' "$V4" | iptables-$b-restore 2>/dev/null || continue
+  iptables-$b -S OUTPUT | grep -qF -- '-d %s -j REJECT' || continue
+  ok=$b; break
+done
+[ -n "$ok" ] || { echo 'egress-guard: no iptables backend took the rules' >&2; exit 1; }
+printf '%%s\\n' "$V6" | ip6tables-$ok-restore 2>/dev/null || echo 'egress-guard: no IPv6 rules (no IPv6 here)' >&2
+echo "egress-guard: rules in place ($ok)"
+iptables-$ok -S OUTPUT
+''' % (v4, v6, metadata)
+    return {
+        'name': 'egress-guard', 'image': image, 'command': ['/bin/sh', '-ec', script],
+        'resources': {'requests': {'cpu': '10m', 'memory': '16Mi'}, 'limits': {'cpu': '200m', 'memory': '64Mi'}},
+        'securityContext': {'runAsUser': 0, 'allowPrivilegeEscalation': False, 'readOnlyRootFilesystem': True,
+                            'capabilities': {'drop': ['ALL'], 'add': ['NET_ADMIN', 'NET_RAW']},
+                            'seccompProfile': {'type': 'RuntimeDefault'}},
+        # the legacy backend's lock file (/run/xtables.lock)
+        'volumeMounts': [{'name': 'egress-run', 'mountPath': '/run'}],
+    }
+
+
+def _net(value, flag):
+    try:
+        return str(ipaddress.IPv4Network(value, strict=True))
+    except ValueError:
+        raise ValueError('%s is an IPv4 CIDR, not %r' % (flag, value))
+
+
 def entry_annotations(spec):
     a = {LB + 'address-type': 'internet', LB + 'charge-type': 'paybytraffic'}
     if spec == 'clcu':
@@ -23,7 +93,7 @@ def entry_annotations(spec):
 
 
 def resources(image, hub, storage_class, namespace='fleet-workers', size='100Gi',
-              entry_host='', entry_spec='slb.s1.small'):
+              entry_host='', entry_spec='slb.s1.small', egress=None):
     if not re.fullmatch(r'[^\s]+@sha256:[a-f0-9]{64}', image):
         raise ValueError('pin the deployed image by sha256 digest')
     if not hub.startswith('https://'):
@@ -34,6 +104,15 @@ def resources(image, hub, storage_class, namespace='fleet-workers', size='100Gi'
         raise ValueError('--entry-host is the load balancer address (an IP or a DNS name)')
     if entry_spec != 'clcu' and not re.fullmatch(r'slb\.s[0-9]\.[a-z0-9]+', entry_spec):
         raise ValueError('--entry-lb-spec is a CLB spec (slb.s1.small) or clcu')
+    eg = dict(EGRESS, **(egress or {}))
+    try:
+        dns = str(ipaddress.IPv4Address(eg['dns']))
+    except ValueError:
+        raise ValueError('--egress-dns is an IPv4 address, not %r' % eg['dns'])
+    metadata = _net(eg['metadata'], '--egress-metadata')
+    blocked = [metadata, _net(eg['pod_cidr'], '--egress-pod-cidr'),
+               _net(eg['service_cidr'], '--egress-service-cidr')]
+    blocked += [_net(c, '--egress-private') for c in eg['private']]
     labels = {'app.kubernetes.io/name': 'fleet-managed-node'}
     volumes = [('node', '/var/db/fleet-node'), ('credentials', '/var/db/fleet-cred'),
                ('homes', '/home'), ('logs', '/var/log/fleet-node')]
@@ -51,7 +130,8 @@ def resources(image, hub, storage_class, namespace='fleet-workers', size='100Gi'
     container = {
         'name': 'fleet', 'image': image,
         'env': env,
-        'resources': {'requests': {'cpu': '2', 'memory': '8Gi'}, 'limits': {'cpu': '4', 'memory': '16Gi'}},
+        'resources': {'requests': {'cpu': '1', 'memory': '4Gi'}, 'limits': {'cpu': '2', 'memory': '8Gi'}},
+        # never NET_ADMIN / NET_RAW: the egress guard's rules stay put (#3281)
         'securityContext': {'runAsUser': 0, 'allowPrivilegeEscalation': False,
                             'capabilities': {'drop': ['ALL'], 'add': ['CHOWN', 'DAC_OVERRIDE', 'FOWNER',
                                 'SETUID', 'SETGID', 'KILL', 'NET_BIND_SERVICE', 'SYS_CHROOT', 'AUDIT_WRITE']},
@@ -88,9 +168,12 @@ def resources(image, hub, storage_class, namespace='fleet-workers', size='100Gi'
                   'persistentVolumeClaimRetentionPolicy': {'whenDeleted': 'Retain', 'whenScaled': 'Retain'},
                   'template': {'metadata': {'labels': labels}, 'spec': {
                       'automountServiceAccountToken': False, 'terminationGracePeriodSeconds': 120,
-                      'imagePullSecrets': [{'name': 'acr-pull'}], 'containers': [container],
+                      'imagePullSecrets': [{'name': 'acr-pull'}],
+                      'initContainers': [egress_guard(image, dns, blocked, metadata)],
+                      'containers': [container],
                       'volumes': [{'name': 'join', 'secret': {'secretName': 'fleet-linux-join',
-                                                           'optional': True, 'defaultMode': 256}}]}},
+                                                           'optional': True, 'defaultMode': 256}},
+                                  {'name': 'egress-run', 'emptyDir': {'medium': 'Memory', 'sizeLimit': '1Mi'}}]}},
                   'volumeClaimTemplates': [{'metadata': {'name': 'data'}, 'spec': {
                       'accessModes': ['ReadWriteOncePod'], 'storageClassName': storage_class,
                       'resources': {'requests': {'storage': size}}}}]}},
@@ -107,7 +190,20 @@ if __name__ == '__main__':
                    help="the door's load balancer address (kubectl get svc fleet-linux-entry); "
                         'empty until the CLB exists')
     p.add_argument('--entry-lb-spec', default='slb.s1.small', help='CLB spec, or clcu (pay by use)')
+    # the egress guard's ranges (#3281; docs/MANAGED-LINUX.md «Egress guard»)
+    p.add_argument('--egress-dns', default=EGRESS['dns'], help='kube-dns ClusterIP: the one private address allowed (53)')
+    p.add_argument('--egress-metadata', default=EGRESS['metadata'], help='cloud metadata address, cut')
+    p.add_argument('--egress-pod-cidr', default=EGRESS['pod_cidr'], help="the cluster's pod range, cut")
+    p.add_argument('--egress-service-cidr', default=EGRESS['service_cidr'], help="the cluster's service range, cut")
+    p.add_argument('--egress-private', default=','.join(EGRESS['private']),
+                   help='comma-separated VPC / private ranges, cut')
     args = p.parse_args()
-    print(json.dumps({'apiVersion': 'v1', 'kind': 'List', 'items': resources(
-        args.image, args.hub, args.storage_class, args.namespace,
-        entry_host=args.entry_host, entry_spec=args.entry_lb_spec)}, indent=2))
+    egress = {'dns': args.egress_dns, 'metadata': args.egress_metadata, 'pod_cidr': args.egress_pod_cidr,
+              'service_cidr': args.egress_service_cidr,
+              'private': [c.strip() for c in args.egress_private.split(',') if c.strip()]}
+    try:
+        items = resources(args.image, args.hub, args.storage_class, args.namespace,
+                          entry_host=args.entry_host, entry_spec=args.entry_lb_spec, egress=egress)
+    except ValueError as e:
+        p.error(str(e))
+    print(json.dumps({'apiVersion': 'v1', 'kind': 'List', 'items': items}, indent=2))
