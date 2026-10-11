@@ -1,0 +1,17 @@
+# Feedback (#3355, EPIC #3354 C1): /v1/node/feedback is on. Attachments live
+# seven days beside the debug bundles, on the same OSS volume
+# (deployment-debug.yaml mounts it at /debug) — no new volume, no new Secret.
+# Roll back: delete this patch and its line in kustomization.yaml (the
+# feedback routes go; the rows stay in fleet_feedback).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ccquota-hub
+spec:
+  template:
+    spec:
+      containers:
+        - name: ccquota
+          env:
+            - name: CCQUOTA_FLEET_FEEDBACK_DIR
+              value: /debug/feedback-attachments

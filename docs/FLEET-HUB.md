@@ -1826,6 +1826,40 @@ session lasting for `FLEET_DEBUG_STALL_SECS` (60), adds 「已经连了 N 秒 ·
 code changes; `FLEET_DEBUG_PROMPT=0` turns all of it off (`fleet login` execs as
 before). `fleet-debug-prompt-selftest.sh`.
 
+## Feedback: a sentence from a managed machine becomes a number (claude-fleet#3355)
+
+EPIC #3354 C1 — the hub half of `/fleet-feedback`. A person on a managed machine
+types one sentence; their session's `fleet-feedback.sh` (C4) sends it with the
+login's own node token and gets back the number they will know it by, at once.
+
+    POST /v1/node/feedback        (node token)  {text, ctx{fleet_version, agent, machine_kind,
+                                                 worker_id, cc_session, window}, login?}
+                                                or multipart text=… ctx=<json> attach=@file …
+                                                → {"id":"F12","state":"received"}
+    GET  /v1/fleet/feedback/mine  (viewer)      the caller's own, newest first
+
+- **Who** is the hub's word, never the body's: the token names the login
+  (`nodeEndpoint` → `nodeIdentity`), the login names the person (`principalOnNode`).
+  A `login` in the body that is not the token's is `403 WRONG_LOGIN`; a login that is
+  nobody's is taken with no person and limited by its endpoint.
+- **Credentials**: the words, every `ctx` field and every attachment (gunzipped when
+  gzip) are held against `conf/secret-shapes.list` (the one table) and the team
+  layer's value shapes. One hit ⇒ `422 {error:"secret"}` naming where, and nothing is
+  written, counted or kept.
+- **Limits** ride the debug tickets' use counters (`fleet_debug_uses`): kind
+  `feedback` per person (`fb:<principal>`, else `fb:ep:<endpoint>`) — 10 a UTC day —
+  and hub-wide (`*`) — 200 a day; kind `feedback-last` holds the last send's second,
+  claimed by one conditional UPDATE, for the 30-second gap. Past one ⇒
+  `429 {error:"rate_limited", message, retry_after}` + `Retry-After`.
+- **Kept**: the row in `fleet_feedback` (id = the `F` number; principal · login ·
+  host · ctx · text · attach · state · gh_number · filed_at · closed_at · reply ·
+  replied_at · created_at — the later columns are C2/C5's to write) forever;
+  attachments (≤ 20 MB in all, else 413) in `<CCQUOTA_FLEET_FEEDBACK_DIR>/F<id>/`,
+  deleted after seven days by `RunFeedback` (hourly, leader-elected), the row kept.
+- **Off** — no `CCQUOTA_FLEET_FEEDBACK_DIR` — neither route exists
+  (`TestFeedbackOffAddsNothing`). Production sets it to `/debug/feedback-attachments`
+  on the debug volume (`deploy/k8s/overlays/prod/deployment-feedback.yaml`).
+
 ## Validation and next increments
 
 Run the hermetic regression suite through the normal shadow-root gate:

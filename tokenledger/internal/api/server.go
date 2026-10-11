@@ -223,6 +223,10 @@ type Server struct {
 	// diagnostics up with (claude-fleet#2891; CCQUOTA_FLEET_DEBUG_DIR +
 	// CCQUOTA_FLEET_DEBUG_KEY). Nil: no /v1/fleet/debug/ route exists.
 	Debug *DebugTickets
+	// Feedback takes what people on managed machines send with
+	// /fleet-feedback (claude-fleet#3355; CCQUOTA_FLEET_FEEDBACK_DIR). Nil: no
+	// feedback route exists.
+	Feedback *FeedbackDesk
 	// joinClock replaces the join-code clock in tests.
 	joinClock func() time.Time
 	// roleTreeFn replaces where the merged roles view reads the built-in
@@ -654,6 +658,12 @@ func (s *Server) routes() *routeMux {
 			mux.HandleFunc(debugReportsPfx, s.handleDebugReport)
 			mux.HandleFunc(DebugShortPrefix, s.handleDebugShort)
 			mux.HandleFunc(NodeDebugPrefix, s.handleNodeDebug)
+		}
+		// Feedback (claude-fleet#3355): the node door takes the login's own
+		// token; a person reads only their own. Off: not registered at all.
+		if s.Feedback != nil {
+			mux.HandleFunc(NodeFeedbackPath, s.handleNodeFeedback)
+			mux.Handle(FeedbackMinePath, s.viewerOnly(http.HandlerFunc(s.handleFeedbackMine)))
 		}
 	}
 
