@@ -55,7 +55,7 @@ GITFAKE
 cat > "$WORK/fakebin/gh" <<'GHFAKE'
 #!/bin/bash
 case "${1:-} ${2:-}" in
-  "issue view") printf '%s\n' "${GH_TITLE:-Some Issue Title}" ;;
+  "issue view") printf '%s\n' "${GH_TITLE-Some Issue Title}" ;;
   *) : ;;
 esac
 exit 0
@@ -103,18 +103,46 @@ seedfile() { ls "$WORK"/dash/.claude-dash/fleets/*/task_issue-234.txt 2>/dev/nul
 seed()     { local f; f=$(seedfile); [ -n "$f" ] && cat "$f"; }
 has()      { case "$(seed)" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
 
-# ===== SEED A: the collapsed seed is EXACTLY a bare /fleet-claim ================
-run_spawn 234
+# ===== SEED A: the first turn is the issue's own words, the flow rides a stamp ==
+# Since issue #3331 (EPIC #3178 ⑧) a Claude worker's first turn is the person's
+# words — none typed for a plain issue spawn, so the issue's title — and the
+# window is stamped `@seed_words /fleet-claim` before its agent starts: the
+# SessionStart hook (fleet-worker-start-hook.sh) carries the claim from there.
+# FLEET_SEED_WORDS=0 = the bare /fleet-claim, no stamp, byte for byte as before.
+stamped() { grep -qF -- "@seed_words '/fleet-claim'" "$WORK/newwin"; }
+: > "$WORK/newwin"; run_spawn 234
 [ -n "$(seedfile)" ] || fail "A no seed task file was written" "$(cat "$WORK/spawn.err")"
+[ "$(seed)" = "Some Issue Title" ] \
+  || fail "A with no words the first turn must be the issue's title" "$(seed)"
+stamped || fail "A a words seed must stamp @seed_words before the agent starts" "$(cat "$WORK/newwin")"
+: > "$WORK/newwin"; FLEET_SEED_WORDS=0 run_spawn 234
 [ "$(seed)" = "/fleet-claim" ] \
-  || fail "A the collapsed seed must be exactly the bare slash command /fleet-claim" "$(seed)"
-ok "A the worker seed collapsed to a bare /fleet-claim"
+  || fail "A FLEET_SEED_WORDS=0 must keep the bare slash command /fleet-claim" "$(seed)"
+stamped && fail "A FLEET_SEED_WORDS=0 must stamp no @seed_words" "$(cat "$WORK/newwin")"
+: > "$WORK/newwin"; GH_TITLE='' run_spawn 234
+[ "$(seed)" = "/fleet-claim" ] || fail "A no words and no title: the bare /fleet-claim" "$(seed)"
+stamped && fail "A no words: no @seed_words" "$(cat "$WORK/newwin")"
+ok "A the first turn is the issue's words + @seed_words; off / no words = bare /fleet-claim"
+
+# ===== SEED W: --words-file — the person's words, verbatim (issue #3331) =======
+printf '给 hub 加一个 /healthz\n\n要返回 "ok"，别用 $HOME' > "$WORK/words.txt"
+: > "$WORK/newwin"; run_spawn 234 --words-file "$WORK/words.txt"
+[ "$(seed)" = "$(cat "$WORK/words.txt")" ] || fail "W the words file must be the first turn, byte for byte" "$(seed)"
+stamped || fail "W words ⇒ @seed_words" "$(cat "$WORK/newwin")"
+grep -qF 'healthz' "$WORK/newwin" && fail "W the words must never ride the new-window command" "$(cat "$WORK/newwin")"
+: > "$WORK/words.txt"; run_spawn 234 --words-file "$WORK/words.txt"
+[ "$(seed)" = "Some Issue Title" ] || fail "W an empty words file falls back to the title" "$(seed)"
+printf 'do it' > "$WORK/words.txt"
+: > "$WORK/newwin"; run_spawn 234 --words-file "$WORK/words.txt" --agent codex
+[ "$(seed)" = "/fleet-claim" ] || fail "W a Codex worker keeps the slash seed" "$(seed)"
+stamped && fail "W a Codex worker gets no @seed_words" "$(cat "$WORK/newwin")"
+ok "W --words-file is the first turn verbatim; Codex keeps /fleet-claim"
 
 # ===== SEED B: the seed is STABLE under FLEET_WORKER_PROMPT (body left the seed) =
 FLEET_WORKER_PROMPT='Follow CONTRIBUTING and add coverage' run_spawn 234
-[ "$(seed)" = "/fleet-claim" ] \
+[ "$(seed)" = "Some Issue Title" ] \
   || fail "B FLEET_WORKER_PROMPT must NOT change the seed — the body moved into the skill" "$(seed)"
-FLEET_WORKER_PROMPT_FILE="$WORK/whatever.txt" run_spawn 234
+FLEET_WORKER_PROMPT_FILE="$WORK/whatever.txt" FLEET_SEED_WORDS=0 run_spawn 234
 [ "$(seed)" = "/fleet-claim" ] \
   || fail "B FLEET_WORKER_PROMPT_FILE must NOT change the seed either" "$(seed)"
 ok "B the seed is stable regardless of the per-fleet body override"
@@ -123,11 +151,13 @@ ok "B the seed is stable regardless of the per-fleet body override"
 run_spawn 234
 # The old assembly (issue-binding head, claim line, per-fleet body, ship tail) and
 # the retired self-land/ship/blocked text must NOT reappear in the seed.
+for _sw in 1 0; do FLEET_SEED_WORDS=$_sw run_spawn 234
 for gone in 'Work GitHub issue' 'To finish:' 'arm GitHub auto-merge' \
             'do NOT merge it yourself' 'com.claude-fleet.cleanup' \
             'Implement and verify per the repo conventions' \
             '/fleet-ship' '/fleet-blocked' '/fleet-land-self' 'FLEET_SELF_LAND'; do
   ! has "$gone" || fail "C retired seed text '$gone' leaked back into the collapsed seed" "$(seed)"
+done
 done
 ok "C the collapsed seed carries none of the retired paragraph pieces or skills"
 
@@ -139,7 +169,7 @@ ok "C the collapsed seed carries none of the retired paragraph pieces or skills"
 # spawn carries no --agent — byte-for-byte the historic command. An unknown token
 # is dropped, not embedded.
 : > "$WORK/newwin"; run_spawn 234 --agent codex
-[ "$(seed)" = "/fleet-claim" ] || fail "D --agent must not change the seed" "$(seed)"
+[ "$(seed)" = "/fleet-claim" ] || fail "D a Codex seed stays the bare /fleet-claim" "$(seed)"
 grep -qF -- "fleet-session-wrap.sh' --agent codex \"\$(cat '" "$WORK/newwin" \
   || fail "D --agent codex must sit between the launcher and the seed in the new-window command" "$(cat "$WORK/newwin")"
 : > "$WORK/newwin"; run_spawn 234
@@ -157,7 +187,7 @@ SID=0f0e0d0c-1111-2222-3333-444455556666
 printf '[fleet park] read the handoff' > "$WORK/park.seed"
 : > "$WORK/newwin"
 CLAUDE_PROJECTS_DIR="$WORK/projects" run_spawn 234 --resume "$SID" --seed-file "$WORK/park.seed"
-[ "$(seed)" = "/fleet-claim" ] || fail "R no transcript: the seed must stay /fleet-claim" "$(seed)"
+[ "$(seed)" = "Some Issue Title" ] || fail "R no transcript: the plain spawn's seed (the title)" "$(seed)"
 grep -q -- '--resume' "$WORK/newwin" && fail "R no transcript: no --resume" "$(cat "$WORK/newwin")"
 WT=$(sed -n 's/.* -c \([^ ]*\) .*/\1/p' "$WORK/newwin" | head -1)
 [ -n "$WT" ] || fail "R the new-window carried no -c <worktree>" "$(cat "$WORK/newwin")"
@@ -166,6 +196,7 @@ mkdir -p "$WORK/projects/$(printf '%s' "$WT" | LC_ALL=C tr -c 'A-Za-z0-9' '-')"
 : > "$WORK/newwin"
 CLAUDE_PROJECTS_DIR="$WORK/projects" run_spawn 234 --resume "$SID" --seed-file "$WORK/park.seed"
 [ "$(seed)" = "[fleet park] read the handoff" ] || fail "R the seed file must be the first turn" "$(seed)"
+grep -qF -- '@seed_words' "$WORK/newwin" && fail "R a parked return is no words seed: no @seed_words" "$(cat "$WORK/newwin")"
 grep -qF -- "fleet-session-wrap.sh' --resume $SID \"\$(cat '" "$WORK/newwin" \
   || fail "R --resume <sid> must sit between the launcher and the seed" "$(cat "$WORK/newwin")"
 : > "$WORK/newwin"

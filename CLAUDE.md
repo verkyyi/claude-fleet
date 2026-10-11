@@ -368,6 +368,19 @@ Do not install from memory: read the doc and work from it.
   record, never a generic tool road. The top bar shows `#N`, else `T<n>`; the
   hub's 任务 page (`/tasks`) lists them. No `task` asked, or a node without
   `CapTask`, or no hub ⇒ byte for byte as before (`TestTaskOffAddsNothing`).
+- **A session's first turn is the person's own words; the flow rides a hook**
+  (issue #3331, EPIC #3178 ⑧, D2 = ①). `dash-issue-session.sh` seeds a Claude
+  worker with `--words-file` (⌘P's cold `new` start hands the body, else the
+  title), else the issue's title — shown as typed, never `/fleet-claim` — and
+  stamps the window `@seed_words <the claim command>` before its agent starts:
+  the words and the stamp go together or not at all. `bin/fleet-worker-start-hook.sh`
+  (SessionStart, `startup` only) reads the stamp and answers one grey
+  `systemMessage` line (「fleet-worker · <repo> · 单 #N · 做完开 PR，门绿了自己合」)
+  + an `additionalContext` that makes the claim skill the agent's first step —
+  fleet-worker's body stays empty, so this is the flow's only road in. A no-repo
+  task, a scratch, a desk ticket, a Codex worker (keeps the slash seed),
+  `FLEET_SEED_WORDS=0` ⇒ no stamp, no flow. `seed-words-selftest.sh` +
+  `dash-issue-session-prompt-selftest.sh` A/W pin «words first ⇒ claim next».
 - **A session says when it may be closed: `@reap_policy`** (issue #1902). Chosen
   at spawn (`--reap` on both spawners, the `spawn` tool, the client's new-session
   question 「什么时候回收？」 → hub `reap` → the node's `worker_start`), changed by
