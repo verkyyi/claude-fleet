@@ -390,7 +390,10 @@ if [ "${FLEET_MCP:-1}" != 0 ] && [ -f "$_fc_mw" ] && [ -f "$BIN/fleet-mcp.py" ];
       # `fleet-mcp.py --bridge-seat`), which keeps spawn / await / children /
       # answer_dialog / send until EPIC #3111 C7 retires those seats.
       # FLEET_MCP_ORCH=1 tells the core server's file_issue the group is here.
-      if [ -f "$BIN/../conf/mcp-orch.json" ] && python3 "$BIN/fleet-mcp.py" --bridge-seat "$_fc_role" 2>/dev/null; then
+      # An agent file that grants `spawn` (issue #3122 — the shipped epic-driver)
+      # is such a seat too: it was started to dispatch.
+      if [ -f "$BIN/../conf/mcp-orch.json" ] && { [ "${_fc_as_spawn:-0}" = 1 ] \
+           || python3 "$BIN/fleet-mcp.py" --bridge-seat "$_fc_as" 2>/dev/null; }; then
         mcp_flag+=("--mcp-config=$BIN/../conf/mcp-orch.json"); export FLEET_MCP_ORCH=1
       fi
       ;;

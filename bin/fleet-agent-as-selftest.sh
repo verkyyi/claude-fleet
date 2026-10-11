@@ -113,6 +113,11 @@ eq "C: --role worker reads as --as fleet-worker" "$(fc bash "$BIN/fleet-claude.s
 eq "C: --role=epic-driver" "$(fc bash "$BIN/fleet-claude.sh" --role=epic-driver x)" "--model opus --agent epic-driver x"
 eq "C: --role debugger reads as fleet-debugger" "$(fc bash "$BIN/fleet-claude.sh" --role debugger x)" "--model opus --agent fleet-debugger x"
 eq "C: a file gone at launch ⇒ a plain session" "$(fc bash "$BIN/fleet-claude.sh" --as gone-now x)" "--model opus x"
+orch() { env -u TMUX -u TMUX_PANE -u FLEET_CRED_SID -u FLEET_CRED_PROXY -u FLEET_MCP_CONFIG FLEET_CLAUDE_BIN="$WORK/claude" \
+           FLEET_AGENT_CFG=0 FLEET_MOD=0 FLEET_STATUS_7501=0 FLEET_AGENT=claude FLEET_PRETRUST=0 \
+           bash "$BIN/fleet-claude.sh" "$@" 2>/dev/null | grep -c 'conf/mcp-orch.json$'; }
+eq "C: an agent file that grants spawn (epic-driver) mounts the dispatch group" "$(orch --as epic-driver x)" 1
+eq "C: …fleet-worker (spawn taken away) does not" "$(orch --as fleet-worker x)" 0
 grep -q "no agent file 'gone-now'.*starting a plain session" "$WORK/fc.err" && ok "C: …and one stderr line says so" || bad "C: no stderr line: $(cat "$WORK/fc.err")"
 
 # --- D a Claude Code with no --agent -------------------------------------------------
