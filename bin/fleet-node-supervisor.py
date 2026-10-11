@@ -72,6 +72,11 @@ machine's work ONCE, however many logins the machine carries:
                 minutes): the global IPv6, the router asked to forward the port
                 (FLEET_ENTRY_PORTMAP), POSTed to the hub, which dials each address
                 and answers; <state>/entry/reach.json feeds the doctor's `public` row.
+  * ci-runner — the machine's one test runner (issue #3144, EPIC #3139 C5), only
+                while <state>/ci.env exists: bin/fleet-ci-runner.py `loop` as a
+                child (restarted on a new ci.env); its word, <state>/ci-runner.json,
+                goes into state.json `ci_runner` and the status `ci-runner` line;
+                its login (fleet-ci) is one of the tenants the doctor checks.
   * sweep     — fleet plist leftovers (`*.plist.bak*`, `.pre-move`, `.retired*`,
                 `.disabled*` …) in /Library/LaunchDaemons and every login's
                 ~/Library/LaunchAgents are MOVED to the attic
@@ -724,9 +729,10 @@ def tenant_privileges(login):
 
 def tenant_logins(paths):
     """Every login this daemon took over: managed in accounts.json, or with a
-    logins/<login>.env."""
+    logins/<login>.env — and the test runner's login (#3144), which must be one too."""
+    ci = ci_login(paths)
     return sorted({k for k, v in accounts_read(paths).items() if (v or {}).get("managed")}
-                  | taken_over(paths))
+                  | taken_over(paths) | ({ci} if ci and account_ident(ci) else set()))
 
 
 def tenants_reading(paths):
@@ -1402,6 +1408,8 @@ class Supervisor(object):
     def all_children(self):
         # the entry port (#3070) only where it is switched on — off, no child at all
         entry = [entry_child(self.p)] if entry_settings(self.p)[0] else []
+        # the test runner (#3144) only where ci.env is — off, no child at all
+        entry += [ci_child(self.p)] if ci_on(self.p) else []
         return (list(self.table["children"]) + entry + [e for e in self.account_entries() if e.get("keepalive")]
                 + self.service_entries())
 
@@ -1443,6 +1451,11 @@ class Supervisor(object):
             self.state["services"] = services_summary(self.p, self.state)
         except Exception as e:  # the register must never take the heartbeat down
             self.log("services summary failed: %s" % e)
+        ci = ci_summary(self.p)
+        if ci is not None:
+            self.state["ci_runner"] = ci
+        else:
+            self.state.pop("ci_runner", None)
         write_json(self.p.state_file, self.state)
         self.dirty = False
         self.last_save = t
@@ -3469,6 +3482,9 @@ def status_lines(paths, table, state):
     el = entry_line(paths, state)
     if el:
         out.append(el)
+    cl = ci_line(paths)
+    if cl:
+        out.append(cl)
     sw = state.get("sweep") or {}
     for h in sw.get("handwritten") or []:
         out.append("handwritten %-12s runs as %s, not in the register — fleet service|task add, then "
@@ -3484,6 +3500,76 @@ def status_lines(paths, table, state):
                   sw.get("removed", 0), sw.get("total_removed", 0), sw.get("extra", 0),
                   " · held: %s" % sw["hold"] if sw.get("hold") else "", len(read_json(paths.attic_index, []))))
     return code, out
+
+
+# --------------------------------------------------------------- ci-runner ------
+# The machine's one test runner (issue #3144, EPIC #3139 C5): a GitHub Actions
+# runner for the merged train only, under its own non-admin login. It is a child
+# of this daemon — bin/fleet-ci-runner.py `loop` — only while <state>/ci.env
+# (root 0600: a GitHub App's id + key file, or FLEET_CI_TOKEN — credentials that
+# never leave the root loop's memory) exists;
+# the loop yields to the sessions (memory, admission, load, heavy slots), mints one
+# just-in-time runner at a time, and writes its word into <state>/ci-runner.json
+# (0644, no secret), which save() copies into state.json's `ci_runner` — the node
+# program's heartbeat carries it to the hub (`GET /v1/fleet/ci-runners`).
+# No ci.env ⇒ no child, no key, no status line: byte for byte as before.
+CI_DEFAULT_LOGIN = "fleet-ci"
+CI_BOOK_STALE = 180
+
+
+def ci_env_path(paths):
+    return os.path.join(paths.state, "ci.env")
+
+
+def ci_book_path(paths):
+    return os.path.join(paths.state, "ci-runner.json")
+
+
+def ci_on(paths):
+    return os.path.exists(ci_env_path(paths))
+
+
+def ci_child(paths):
+    """The loop, as a child: started once ci.env exists, stopped when it goes,
+    restarted on a new one (a new token, a new repo)."""
+    return {"name": "ci-runner",
+            "cmd": ["/usr/bin/python3", "-I", os.path.join(paths.runtime, "bin", "fleet-ci-runner.py"), "loop"],
+            "requires": [ci_env_path(paths)], "reload": ci_env_path(paths), "note": "#3144"}
+
+
+def ci_summary(paths):
+    """{state, why, at, login, …} — the loop's word for state.json, or None while
+    there is no ci.env. A word older than CI_BOOK_STALE is no word: `off`."""
+    if not ci_on(paths):
+        return None
+    book = read_json(ci_book_path(paths), None)
+    if not isinstance(book, dict) or now() - (book.get("at") or 0) > CI_BOOK_STALE:
+        return {"state": "off", "why": "the loop is not running", "at": now()}
+    out = {k: book.get(k) for k in ("state", "why", "at", "since", "login", "runs", "last")
+           if book.get(k) is not None}
+    out.setdefault("state", "off")
+    return out
+
+
+def ci_line(paths):
+    """`ci-runner …` for status, or None when there is no ci.env."""
+    s = ci_summary(paths)
+    if s is None:
+        return None
+    runs = s.get("runs") or {}
+    last = s.get("last") or {}
+    return "ci-runner  %s%s · login %s · runs %d (%d failed) · last %s%s" % (
+        s.get("state"), (" — %s" % s["why"]) if s.get("why") else "", s.get("login") or CI_DEFAULT_LOGIN,
+        runs.get("total") or 0, runs.get("failed") or 0, iso(last.get("at")),
+        (" rc=%s %ss" % (last.get("rc"), last.get("secs"))) if last.get("at") else "")
+
+
+def ci_login(paths):
+    """The test login, while there is a ci.env (the tenants check covers it)."""
+    if not ci_on(paths):
+        return None
+    book = read_json(ci_book_path(paths), {}) or {}
+    return book.get("login") or CI_DEFAULT_LOGIN
 
 
 # --------------------------------------------------------------- entry ----------

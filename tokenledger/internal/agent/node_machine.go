@@ -406,12 +406,13 @@ func (ml *machineLink) demux(ctx context.Context, conn *websocket.Conn, m contro
 // machineHeartbeat is the machine link's own beat: liveness and the machine's
 // load (the sampler's, with its time — claude-fleet#2798), never sessions — its logins report those on their own lanes — the
 // logins whose hello the hub refused (claude-fleet#2501) and the machine
-// daemon's register of login services (claude-fleet#2526).
+// daemon's register of login services (claude-fleet#2526) and its test runner
+// (claude-fleet#3144).
 func machineHeartbeat(version string, refused map[string]string, servicesFile string) control.Heartbeat {
 	off := false
 	hb := control.Heartbeat{OS: runtime.GOOS, Arch: runtime.GOARCH, NCPU: runtime.NumCPU(),
 		AgentVersion: version, ObservedAt: time.Now().UTC(), Compute: &off, LoginsRefused: refused,
-		Services: readServices(servicesFile)}
+		Services: readServices(servicesFile), CIRunner: readCIRunner(servicesFile)}
 	hb.Hostname, _ = os.Hostname()
 	if u, err := user.Current(); err == nil {
 		hb.OSUser = u.Username

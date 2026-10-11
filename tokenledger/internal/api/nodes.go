@@ -553,10 +553,11 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 			}
 			s.auditComputeForce(*ep, nc, hb.ComputeForce, hb.Probe, now)
 			payload := string(m.Payload)
-			if hb.Services != nil && !nc.machineLink {
+			if (hb.Services != nil || hb.CIRunner != nil) && !nc.machineLink {
 				// Only the machine link speaks for the register
-				// (claude-fleet#2526): a login's beat cannot add to it.
-				hb.Services = nil
+				// (claude-fleet#2526) and the test runner (#3144): a
+				// login's beat cannot add to either.
+				hb.Services, hb.CIRunner = nil, nil
 				if b, err := json.Marshal(hb); err == nil {
 					payload = string(b)
 				}
