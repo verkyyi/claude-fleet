@@ -106,7 +106,14 @@ for r in a b c d; do mkrepo "$WORK/src/$r" "o/$r"; done
 up()   { bash "$UP" "$@" --base master </dev/null 2>&1; }
 live() { local s n=0; for s in "$SOCKD"/*; do [ -S "$s" ] && "$REAL_TMUX" -S "$s" has-session 2>/dev/null && n=$((n+1)); done; echo "$n"; }
 val()  { ( . "$1" >/dev/null 2>&1; eval "printf '%s' \"\${$2:-}\"" ); }
-lib()  { bash -c ". '$SB/fleet-lib.sh'; $1"; }
+# The tick's guide open runs detached (issue #3320): a call returns once that
+# open is through, so the next assertion sees its window and its count.
+lib()  {
+  local rc _
+  bash -c ". '$SB/fleet-lib.sh'; $1"; rc=$?
+  for _ in $(seq 1 150); do [ -e "${FLEET_CONF_DIR:-/nonexistent}/global/onboard.opening" ] || break; sleep 0.1; done
+  return "$rc"
+}
 
 # ---- 1. a login with no fleet: the new fleet is called "fleet" ----
 out=$(up o/a "$WORK/src/a"); rc=$?
@@ -254,12 +261,13 @@ out=$(up o/g "$g"); rc=$?
 eq "7 rc" "$rc" 0
 has "7 says so" "$out" "opened the onboarding guide"
 eq "7 one guide" "$(wins '#{window_name}' | grep -cx guide)" 1
-eq "7 guide pinned" "$(wins '#{window_name} #{@pin} #{@raw}' | grep '^guide ')" "guide 1 1"
+# no repo (issue #3320): the guide is a conversation, not a checkout of the starter
+eq "7 guide pinned, no repo" "$(wins '#{window_name} #{@pin} #{@norepo}' | grep '^guide ')" "guide 1 1"
 [ -f "$marker" ] || fail "7: global/onboarded not written"
 [ -f "$FLEET_CONF_DIR/global/guide.spoke" ] || fail "7: brief did not leave global/guide.spoke"
 [ ! -e "$FLEET_CONF_DIR/global/onboard.pending" ] || fail "7: pending marker left behind a spoken guide"
 for _ in 1 2 3 4 5 6 7 8 9 10; do [ -s "$WORK/guide-seed" ] && break; sleep 0.3; done
-eq "7 seeded" "$(cat "$WORK/guide-seed" 2>/dev/null)" "/fleet-onboard"
+has "7 seeded" "$(cat "$WORK/guide-seed" 2>/dev/null)" "/fleet-onboard"
 "$REAL_TMUX" -S "$SOCKD/fleet" kill-server 2>/dev/null
 # an existing fleet coming back up never reads the marker — even with none
 rm -f "$marker"

@@ -4572,6 +4572,8 @@ drill_guide_retry_forever() {
     ( PATH="$WORK/tbin:$PATH" HOME="$d/home" FLEET_CONF_DIR="$d/conf"; export PATH HOME FLEET_CONF_DIR BREAK_SOCK
       . "$BIN/fleet-lib.sh"; fleet_guide_tick gd ) 2>/dev/null
     sleep 0.3
+    # the open runs detached (issue #3320): let it finish before the next tick
+    until_ok 5 test ! -e "$d/conf/global/onboard.opening"
   done
   SECS=$(since "$t0")
   n=$(wc -c < "$d/launches" 2>/dev/null | tr -d ' ')
@@ -4579,6 +4581,37 @@ drill_guide_retry_forever() {
   grep -q '会话编号被占用' "$d/conf/global/onboard.stuck" 2>/dev/null \
     || { WHY="no onboard.stuck naming the id clash: [$(cat "$d/conf/global/onboard.stuck" 2>/dev/null)]"; return 1; }
   WHAT="引导连开 3 次都没开口：第 4 拍不再重开，写 onboard.stuck（「会话编号被占用 · 连续 3 次没开口」），窗口挂上同一句原因"
+}
+
+# A new tenant's first entry lands in a bare shell (issue #3320, fleet-linux-0
+# 2026-10-11): the guide's open took longer than the collector's 30 s guide phase
+# (a scratch checkout of the starter repo + claude's start on a loaded node), the
+# phase budget killed it every tick — no window, no try counted, no stop — and a
+# stop once written (the admission gate refused the first open) was forever. The
+# opener here takes 2 s against a 1 s phase budget; the guide must still open,
+# and an old stop must lift by itself.
+drill_guide_killed_midopen() {
+  CAP=15; BREAK_SOCK="$WORK/sock-gk"; local d="$WORK/gk" t0 f
+  mkdir -p "$d/conf/global" "$d/home" "$d/bin"
+  for f in "$BIN"/*; do ln -s "$f" "$d/bin/${f##*/}"; done
+  rm -f "$d/bin/dash-raw-session.sh"
+  printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s/opens"\nsleep 2\ntmux new-window -d -t gk: -n guide "exec sleep 600"\ntmux set-option -w -t gk:guide @pin 1\n' "$d" > "$d/bin/dash-raw-session.sh"
+  chmod +x "$d/bin/dash-raw-session.sh"
+  nt -f /dev/null new-session -d -s gk -n home -x 100 -y 20 'exec sleep 600' || { WHY="cannot start the isolated tmux server"; return 1; }
+  # the stop the admission gate left on fleet-linux-0, written 2 h ago
+  : > "$d/conf/global/onboard.pending"; printf '0\n' > "$d/conf/global/onboard.tries"
+  printf '引导窗口没能重开 · 第 1 次 · 2026-10-11 12:38\n' > "$d/conf/global/onboard.stuck"
+  printf '%s\n' "$(( $(date +%s) - 7200 ))" > "$d/conf/global/onboard.stuck.ts"
+  t0=$(now)
+  ( PATH="$WORK/tbin:$PATH" HOME="$d/home" FLEET_CONF_DIR="$d/conf"; export PATH HOME FLEET_CONF_DIR BREAK_SOCK
+    . "$d/bin/fleet-lib.sh"; fleet_timebox 1 fleet_guide_tick gk ) >/dev/null 2>&1
+  until_ok "$CAP" sh -c "'$REAL_TMUX' -S '$BREAK_SOCK' list-windows -t gk -F '#{window_name} #{@pin}' | grep -qx 'guide 1'" \
+    || { WHY="no guide window after a 2 s open under a 1 s phase budget: opens=[$(tr '\n' '|' < "$d/opens" 2>/dev/null)] stuck=[$(cat "$d/conf/global/onboard.stuck" 2>/dev/null)] tries=$(cat "$d/conf/global/onboard.tries" 2>/dev/null)"; return 1; }
+  SECS=$(since "$t0")
+  grep -q -- '--no-repo' "$d/opens" 2>/dev/null || { WHY="the guide opened on a repo checkout: [$(cat "$d/opens")]"; return 1; }
+  [ ! -e "$d/conf/global/onboard.stuck" ] || { WHY="the 2 h old stop is still there"; return 1; }
+  [ "$(cat "$d/conf/global/onboard.tries" 2>/dev/null)" = 1 ] || { WHY="the open was not counted: tries=$(cat "$d/conf/global/onboard.tries" 2>/dev/null)"; return 1; }
+  WHAT="打开要 2 s、阶段只给 1 s：开窗的那一步不在阶段的进程组里，引导照样开出来（无仓库）、算一次；2 小时前的「没能重开」停止自己解除"
 }
 
 # A warm-pool entry started before an upgrade (its @agent_cfg / @agent_ver no longer

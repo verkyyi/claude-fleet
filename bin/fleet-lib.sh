@@ -64,7 +64,7 @@ FLEET_CONF_DIR="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"
 # global-scoped key into a per-fleet conf (bin/dash-config-edit.sh). Keep this list
 # in step with the @scope=global tags in fleet.conf.example — tmux-config-selftest.sh
 # cross-checks the two so they can't drift.
-_FLEET_GLOBAL_ONLY="FLEET_GLOBAL_MAX_SESSIONS FLEET_ISSUE_BRIDGE_SECRET FLEET_ISSUE_TTL FLEET_GH_TTL FLEET_GH_SHARE FLEET_PR_REFRESH_INTERVAL FLEET_STUCK_WORKING_SECS FLEET_STATE_IDLE_SECS FLEET_DEGENERATE_SECS FLEET_DEGENERATE_LINES FLEET_DEGENERATE_COOLDOWN_SECS FLEET_DEGENERATE_MARK_SECS FLEET_ACCOUNTS FLEET_ACCOUNT_LIMIT_TTL FLEET_ACCOUNT_CEILING FLEET_ACCOUNT_WARN_PCT FLEET_ACCOUNT_PAUSED FLEET_ACCOUNT_QUOTA_TTL FLEET_ACCOUNT_QUOTA_STALE FLEET_QUOTA_RL_TTL FLEET_ACCOUNT_QUOTA_BLIND_STREAK FLEET_QUOTA_STALE_OK FLEET_QUOTA_REFUSED_ALARM FLEET_ACCOUNT_QUOTA_VIA_BANNER_SECS FLEET_ACCOUNT_VERDICT_REFETCH FLEET_ACCOUNT_PICK FLEET_ACCOUNT_PICK_HYST FLEET_ACCOUNT_PACE_LEAD FLEET_ACCOUNT_PACE_HOLD FLEET_ACCOUNT_PACE_MARGIN FLEET_ACCOUNT_PACE_REBALANCE FLEET_ACCOUNT_PACE_COOLDOWN FLEET_ACCOUNT_PACE_SPREAD_WARN FLEET_ACCOUNT_PHASE FLEET_ACCOUNT_PHASE_AUTO FLEET_COLLECT_DEADLINE FLEET_COLLECT_GIT_BUDGET FLEET_COLLECT_GIT_SLOW FLEET_COLLECT_TICK_BUDGET FLEET_COLLECT_QUOTAWATCH_BUDGET FLEET_COLLECT_SOCKETS_BUDGET FLEET_COLLECT_SESSMAP_BUDGET FLEET_COLLECT_ISSUES_BUDGET FLEET_COLLECT_CTX_BUDGET FLEET_COLLECT_USAGE_BUDGET FLEET_COLLECT_SCRAPE_BUDGET FLEET_COLLECT_BANNER_BUDGET FLEET_COLLECT_BANNER_PER_WINDOW_MS FLEET_COLLECT_ESCALATE_BUDGET FLEET_COLLECT_AGENTCFG_BUDGET FLEET_COLLECT_SNAPSHOT_BUDGET FLEET_COLLECT_HUBSESS_BUDGET FLEET_COLLECT_VIEWS_BUDGET FLEET_NODE_ALIASES FLEET_COLLECT_STALE FLEET_COLLECT_KICK FLEET_COLLECT_KICK_COOLDOWN FLEET_COLLECT_KICK_TRACE FLEET_DAEMON_STALE_MULT FLEET_DAEMON_STALE_FLOOR FLEET_DAEMON_KICK FLEET_DAEMON_KICK_COOLDOWN FLEET_DAEMON_KICK_COOLDOWN_MULT FLEET_DAEMON_KICK_COOLDOWN_FLOOR FLEET_DAEMON_KICK_TRACE FLEET_DAEMON_RELOAD_AFTER FLEET_DAEMON_RELOAD_COOLDOWN FLEET_DAEMON_DOMAIN_MIN FLEET_DAEMON_DOMAIN_KICK_WINDOW FLEET_DAEMON_IDLE_AFTER FLEET_POLL_MAX_BACKOFF FLEET_LAUNCHD_PROBE FLEET_LAUNCHD_PROBE_WINDOW FLEET_LAUNCHD_PROBE_INTERVAL FLEET_LAUNCHD_PROBE_TTL FLEET_MODEL_FALLBACK FLEET_MODEL_LIMIT_TTL FLEET_MODEL_CAP_PCT FLEET_CLOSE_ON_EXIT FLEET_NOTIFY_CMD FLEET_ESCALATE_AFTER FLEET_STATUS_CONTAINER FLEET_STATUS_QUOTA_PCT FLEET_STATUS_CACHE_SECS FLEET_DISK_FLOOR_GB FLEET_DISK_WARN_GB FLEET_QUOTA_GATE FLEET_QUOTA_CEILING FLEET_QUOTA_ACCOUNT FLEET_QUOTA_BIN FLEET_RUNAWAY_CPU_PCT FLEET_RUNAWAY_CPU_SECS FLEET_RUNAWAY_CPU_ACTION FLEET_ORPHAN_CPU_PCT FLEET_ORPHAN_CPU_SECS FLEET_ORPHAN_CPU_ACTION FLEET_ORPHAN_EXTRA_RE FLEET_ORPHAN_LISTEN_SECS FLEET_ORPHAN_LISTEN_ACTION FLEET_ORPHAN_LISTEN_EVERY FLEET_SELFTEST_REAP FLEET_DOCTOR_TESTTMUX_LIVE FLEET_DOCTOR_TESTTMUX_DEAD FLEET_LISTEN_EXEMPT_RE FLEET_LOAD_WARN_PER_CORE FLEET_FSEVENTSD_WARN_MB FLEET_DOCTOR_SPOTLIGHT FLEET_CODEX_VERSION_CHECK FLEET_DOCTOR_SLEEP FLEET_DOCTOR_SIRI FLEET_DOCTOR_ICLOUD FLEET_DOCTOR_NETWORK FLEET_DOCTOR_MCP FLEET_LOADGEN_MAX_PROCS FLEET_LOADGEN_MAX_SECS FLEET_LOADGEN_LOAD_PER_CORE FLEET_LOADGEN_CORE_PCT FLEET_USAGE_WARN_PCT FLEET_USAGE_CRIT_PCT FLEET_RATELIMIT_TTL FLEET_WEBHOOK_PORT FLEET_WEBHOOK_SECRET FLEET_OPEN_LAPTOP FLEET_REAP_KEPT_PROCS FLEET_REAP_KEPT_MINAGE FLEET_ROTATE_LEASE_TTL FLEET_HELPER_NO_MCP FLEET_SPAWN_GUARD_MS FLEET_INFLIGHT_TTL FLEET_INSTALL_SYNC FLEET_INSTALL_SYNC_TIMEOUT FLEET_INSTALL_LOOP_MARGIN_SECS FLEET_KEEP_AGENTS_KEY FLEET_INSTALL_FOLLOW_STUCK_SECS FLEET_INSTALL_VERSIONS_KEEP_SECS FLEET_NODE_FOLLOW FLEET_NODE_FOLLOW_RETRY_SECS FLEET_ONBOARD FLEET_GUIDE_WAIT_SECS FLEET_GUIDE_COOLDOWN FLEET_GUIDE_SPEAK_SECS FLEET_GUIDE_MAX_TRIES FLEET_EXIT_CLOSE_SECS FLEET_COLLECT_GUIDE_BUDGET FLEET_SSH_PUBLIC_HOST FLEET_SSH_PUBLIC_PORT FLEET_SSH_PROBE_HOST FLEET_DOCTOR_INGRESS FLEET_INGRESS_TTL FLEET_INGRESS_TIMEOUT FLEET_HEAVY FLEET_HEAVY_SLOTS FLEET_HEAVY_WAIT FLEET_HEAVY_RE FLEET_HEAVY_LIGHT_RE FLEET_MEMGUARD FLEET_MEM_SPIKE_GROW_MB FLEET_MEM_SPIKE_WINDOW FLEET_MEM_SPIKE_ACTION FLEET_MEM_PROC_HARD_PCT FLEET_MEM_EXEMPT_RE FLEET_MEM_ORPHAN_MB FLEET_MEM_ORPHAN_SECS FLEET_MEM_ORPHAN_ACTION FLEET_CRED_PROXY FLEET_CRED_PROXY_IDLE_SECS FLEET_CRED_RELAY_URL FLEET_CRED_CENTRAL_URL FLEET_CRED_BUDGET FLEET_CRED_BUDGET_SECS FLEET_CRED_SEPARATE FLEET_CLAUDE_RSS_WARN_MB FLEET_ADMIT FLEET_ADMIT_MEM_FREE_PCT FLEET_ADMIT_PRESSURE FLEET_ADMIT_LOAD_PER_CORE FLEET_ADMIT_RESERVE_MB FLEET_ADMIT_HYST_MB FLEET_ADMIT_SESSION_MB FLEET_ADMIT_SESSION_MB_MIN FLEET_ADMIT_SESSION_GROWTH FLEET_ADMIT_SETTLE_SECS FLEET_FILES_WARN_PCT FLEET_PTY_WARN_PCT FLEET_MEM_NOTIFY_COOLDOWN FLEET_TRANSCRIPT_KEEP_DAYS FLEET_TRANSCRIPT_HELPER_KEEP_HOURS FLEET_TRANSCRIPT_ARCHIVE FLEET_TRANSCRIPT_ARCHIVE_EVERY FLEET_TRANSCRIPT_ARCHIVE_BUDGET FLEET_BREW_PERMS FLEET_BREW_PERMS_EVERY FLEET_MACHINE_MAX_SESSIONS FLEET_MACHINE_SESSIONS_STALE FLEET_MOD FLEET_STATUS_7501 FLEET_STATUS_REPLAY_DEPTH FLEET_AGENT_CFG FLEET_AGENT_LOCK FLEET_CFG_RESTART FLEET_CFG_RESTART_IDLE FLEET_CFG_RESTART_MAX FLEET_SIDEBAR_WIDTH_MAX FLEET_SIDEBAR_FOLD FLEET_NOTIFY FLEET_NOTIFY_JUMP_SECS FLEET_NOTIFY_DONE FLEET_NOTIFY_QUIET FLEET_CLIENT_PASTE FLEET_KEYS_PARITY FLEET_DASH_ORDER FLEET_COMPOSE FLEET_KEY_PANEL FLEET_KEYS_EXTRA FLEET_KEY_PHONE FLEET_KEYS_PHONE_EXTRA"
+_FLEET_GLOBAL_ONLY="FLEET_GLOBAL_MAX_SESSIONS FLEET_ISSUE_BRIDGE_SECRET FLEET_ISSUE_TTL FLEET_GH_TTL FLEET_GH_SHARE FLEET_PR_REFRESH_INTERVAL FLEET_STUCK_WORKING_SECS FLEET_STATE_IDLE_SECS FLEET_DEGENERATE_SECS FLEET_DEGENERATE_LINES FLEET_DEGENERATE_COOLDOWN_SECS FLEET_DEGENERATE_MARK_SECS FLEET_ACCOUNTS FLEET_ACCOUNT_LIMIT_TTL FLEET_ACCOUNT_CEILING FLEET_ACCOUNT_WARN_PCT FLEET_ACCOUNT_PAUSED FLEET_ACCOUNT_QUOTA_TTL FLEET_ACCOUNT_QUOTA_STALE FLEET_QUOTA_RL_TTL FLEET_ACCOUNT_QUOTA_BLIND_STREAK FLEET_QUOTA_STALE_OK FLEET_QUOTA_REFUSED_ALARM FLEET_ACCOUNT_QUOTA_VIA_BANNER_SECS FLEET_ACCOUNT_VERDICT_REFETCH FLEET_ACCOUNT_PICK FLEET_ACCOUNT_PICK_HYST FLEET_ACCOUNT_PACE_LEAD FLEET_ACCOUNT_PACE_HOLD FLEET_ACCOUNT_PACE_MARGIN FLEET_ACCOUNT_PACE_REBALANCE FLEET_ACCOUNT_PACE_COOLDOWN FLEET_ACCOUNT_PACE_SPREAD_WARN FLEET_ACCOUNT_PHASE FLEET_ACCOUNT_PHASE_AUTO FLEET_COLLECT_DEADLINE FLEET_COLLECT_GIT_BUDGET FLEET_COLLECT_GIT_SLOW FLEET_COLLECT_TICK_BUDGET FLEET_COLLECT_QUOTAWATCH_BUDGET FLEET_COLLECT_SOCKETS_BUDGET FLEET_COLLECT_SESSMAP_BUDGET FLEET_COLLECT_ISSUES_BUDGET FLEET_COLLECT_CTX_BUDGET FLEET_COLLECT_USAGE_BUDGET FLEET_COLLECT_SCRAPE_BUDGET FLEET_COLLECT_BANNER_BUDGET FLEET_COLLECT_BANNER_PER_WINDOW_MS FLEET_COLLECT_ESCALATE_BUDGET FLEET_COLLECT_AGENTCFG_BUDGET FLEET_COLLECT_SNAPSHOT_BUDGET FLEET_COLLECT_HUBSESS_BUDGET FLEET_COLLECT_VIEWS_BUDGET FLEET_NODE_ALIASES FLEET_COLLECT_STALE FLEET_COLLECT_KICK FLEET_COLLECT_KICK_COOLDOWN FLEET_COLLECT_KICK_TRACE FLEET_DAEMON_STALE_MULT FLEET_DAEMON_STALE_FLOOR FLEET_DAEMON_KICK FLEET_DAEMON_KICK_COOLDOWN FLEET_DAEMON_KICK_COOLDOWN_MULT FLEET_DAEMON_KICK_COOLDOWN_FLOOR FLEET_DAEMON_KICK_TRACE FLEET_DAEMON_RELOAD_AFTER FLEET_DAEMON_RELOAD_COOLDOWN FLEET_DAEMON_DOMAIN_MIN FLEET_DAEMON_DOMAIN_KICK_WINDOW FLEET_DAEMON_IDLE_AFTER FLEET_POLL_MAX_BACKOFF FLEET_LAUNCHD_PROBE FLEET_LAUNCHD_PROBE_WINDOW FLEET_LAUNCHD_PROBE_INTERVAL FLEET_LAUNCHD_PROBE_TTL FLEET_MODEL_FALLBACK FLEET_MODEL_LIMIT_TTL FLEET_MODEL_CAP_PCT FLEET_CLOSE_ON_EXIT FLEET_NOTIFY_CMD FLEET_ESCALATE_AFTER FLEET_STATUS_CONTAINER FLEET_STATUS_QUOTA_PCT FLEET_STATUS_CACHE_SECS FLEET_DISK_FLOOR_GB FLEET_DISK_WARN_GB FLEET_QUOTA_GATE FLEET_QUOTA_CEILING FLEET_QUOTA_ACCOUNT FLEET_QUOTA_BIN FLEET_RUNAWAY_CPU_PCT FLEET_RUNAWAY_CPU_SECS FLEET_RUNAWAY_CPU_ACTION FLEET_ORPHAN_CPU_PCT FLEET_ORPHAN_CPU_SECS FLEET_ORPHAN_CPU_ACTION FLEET_ORPHAN_EXTRA_RE FLEET_ORPHAN_LISTEN_SECS FLEET_ORPHAN_LISTEN_ACTION FLEET_ORPHAN_LISTEN_EVERY FLEET_SELFTEST_REAP FLEET_DOCTOR_TESTTMUX_LIVE FLEET_DOCTOR_TESTTMUX_DEAD FLEET_LISTEN_EXEMPT_RE FLEET_LOAD_WARN_PER_CORE FLEET_FSEVENTSD_WARN_MB FLEET_DOCTOR_SPOTLIGHT FLEET_CODEX_VERSION_CHECK FLEET_DOCTOR_SLEEP FLEET_DOCTOR_SIRI FLEET_DOCTOR_ICLOUD FLEET_DOCTOR_NETWORK FLEET_DOCTOR_MCP FLEET_LOADGEN_MAX_PROCS FLEET_LOADGEN_MAX_SECS FLEET_LOADGEN_LOAD_PER_CORE FLEET_LOADGEN_CORE_PCT FLEET_USAGE_WARN_PCT FLEET_USAGE_CRIT_PCT FLEET_RATELIMIT_TTL FLEET_WEBHOOK_PORT FLEET_WEBHOOK_SECRET FLEET_OPEN_LAPTOP FLEET_REAP_KEPT_PROCS FLEET_REAP_KEPT_MINAGE FLEET_ROTATE_LEASE_TTL FLEET_HELPER_NO_MCP FLEET_SPAWN_GUARD_MS FLEET_INFLIGHT_TTL FLEET_INSTALL_SYNC FLEET_INSTALL_SYNC_TIMEOUT FLEET_INSTALL_LOOP_MARGIN_SECS FLEET_KEEP_AGENTS_KEY FLEET_INSTALL_FOLLOW_STUCK_SECS FLEET_INSTALL_VERSIONS_KEEP_SECS FLEET_NODE_FOLLOW FLEET_NODE_FOLLOW_RETRY_SECS FLEET_ONBOARD FLEET_GUIDE_WAIT_SECS FLEET_GUIDE_COOLDOWN FLEET_GUIDE_SPEAK_SECS FLEET_GUIDE_MAX_TRIES FLEET_GUIDE_STUCK_SECS FLEET_GUIDE_OPEN_SECS FLEET_EXIT_CLOSE_SECS FLEET_COLLECT_GUIDE_BUDGET FLEET_SSH_PUBLIC_HOST FLEET_SSH_PUBLIC_PORT FLEET_SSH_PROBE_HOST FLEET_DOCTOR_INGRESS FLEET_INGRESS_TTL FLEET_INGRESS_TIMEOUT FLEET_HEAVY FLEET_HEAVY_SLOTS FLEET_HEAVY_WAIT FLEET_HEAVY_RE FLEET_HEAVY_LIGHT_RE FLEET_MEMGUARD FLEET_MEM_SPIKE_GROW_MB FLEET_MEM_SPIKE_WINDOW FLEET_MEM_SPIKE_ACTION FLEET_MEM_PROC_HARD_PCT FLEET_MEM_EXEMPT_RE FLEET_MEM_ORPHAN_MB FLEET_MEM_ORPHAN_SECS FLEET_MEM_ORPHAN_ACTION FLEET_CRED_PROXY FLEET_CRED_PROXY_IDLE_SECS FLEET_CRED_RELAY_URL FLEET_CRED_CENTRAL_URL FLEET_CRED_BUDGET FLEET_CRED_BUDGET_SECS FLEET_CRED_SEPARATE FLEET_CLAUDE_RSS_WARN_MB FLEET_ADMIT FLEET_ADMIT_MEM_FREE_PCT FLEET_ADMIT_PRESSURE FLEET_ADMIT_LOAD_PER_CORE FLEET_ADMIT_RESERVE_MB FLEET_ADMIT_HYST_MB FLEET_ADMIT_SESSION_MB FLEET_ADMIT_SESSION_MB_MIN FLEET_ADMIT_SESSION_GROWTH FLEET_ADMIT_SETTLE_SECS FLEET_FILES_WARN_PCT FLEET_PTY_WARN_PCT FLEET_MEM_NOTIFY_COOLDOWN FLEET_TRANSCRIPT_KEEP_DAYS FLEET_TRANSCRIPT_HELPER_KEEP_HOURS FLEET_TRANSCRIPT_ARCHIVE FLEET_TRANSCRIPT_ARCHIVE_EVERY FLEET_TRANSCRIPT_ARCHIVE_BUDGET FLEET_BREW_PERMS FLEET_BREW_PERMS_EVERY FLEET_MACHINE_MAX_SESSIONS FLEET_MACHINE_SESSIONS_STALE FLEET_MOD FLEET_STATUS_7501 FLEET_STATUS_REPLAY_DEPTH FLEET_AGENT_CFG FLEET_AGENT_LOCK FLEET_CFG_RESTART FLEET_CFG_RESTART_IDLE FLEET_CFG_RESTART_MAX FLEET_SIDEBAR_WIDTH_MAX FLEET_SIDEBAR_FOLD FLEET_NOTIFY FLEET_NOTIFY_JUMP_SECS FLEET_NOTIFY_DONE FLEET_NOTIFY_QUIET FLEET_CLIENT_PASTE FLEET_KEYS_PARITY FLEET_DASH_ORDER FLEET_COMPOSE FLEET_KEY_PANEL FLEET_KEYS_EXTRA FLEET_KEY_PHONE FLEET_KEYS_PHONE_EXTRA"
 
 # Source the GLOBAL fleet.conf on load + EXPORT the global-only keys (issue #399).
 # ---------------------------------------------------------------------------------
@@ -2197,8 +2197,14 @@ fleet_guide_alive() { fleet_guide_spoke && fleet_guide_running "$1"; }
 # carries `--session-id <uuid>`, and rerunning it hands Claude an id whose
 # conversation already exists — `Session ID … is already in use`, exit 1, every
 # time. It has no worktree to keep, so it is retired and opened anew, which mints
-# a fresh id (the recovery page's `r`). Every open that took counts one try
-# (fleet_guide_tried); the tick stops at FLEET_GUIDE_MAX_TRIES.
+# a fresh id (the recovery page's `r`). The try is counted by the caller
+# (fleet_guide_open after an open that took, the tick at launch — issue #3320);
+# the tick stops at FLEET_GUIDE_MAX_TRIES.
+# A new guide opens with NO repo (issue #3320): it is a conversation — the
+# wizard reads no checkout and its writes go through fleet-repo.sh / the filer —
+# and a scratch worktree of the fleet's (starter) repo cost a `git fetch` + a
+# whole checkout before the agent even started: on a loaded Linux node that alone
+# outlasted the collector's 30 s guide phase, which killed the open every tick.
 fleet_guide_respawn() {
   local sess="$1" bin name wid pin nsid sep='|'
   bin="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -2212,13 +2218,11 @@ fleet_guide_respawn() {
     else
       tmux -L "$sess" respawn-window -k -t "$wid" >/dev/null 2>&1 || return 1
     fi
-    fleet_guide_tried
     return 0
   done <<EOF
 $(tmux -L "$sess" list-windows -t "$sess" -F "#{window_name}${sep}#{window_id}${sep}#{@pin}${sep}#{@norepo_sid}" 2>/dev/null)
 EOF
-  TMUX='' bash "$bin/dash-raw-session.sh" --name guide --prompt /fleet-onboard --pin "$sess" || return 1
-  fleet_guide_tried
+  TMUX='' bash "$bin/dash-raw-session.sh" --name guide --prompt /fleet-onboard --pin --no-repo "$sess" || return 1
 }
 
 # ---- the guide's retry budget (issue #2424) ----------------------------------
@@ -2229,9 +2233,19 @@ EOF
 #                          nothing; the doctor's onboard row prints it and the
 #                          guide window wears it as its needs question (the
 #                          lists' `detail=`). A person's `fleet guide` clears it.
+#                          A stop is not forever (issue #3320): after
+#                          FLEET_GUIDE_STUCK_SECS (1800; 0 = never) from
+#                          onboard.stuck.ts the tick lifts it with a fresh budget
+#                          — a load spike or an admission refusal passes.
 # global/onboard.dismissed the person closed the pinned guide window — a clear
 #                          «not now». The pending marker goes with it; nothing
 #                          reopens it until they ask (`fleet guide`).
+# global/onboard.opening   «<pid> <epoch>» of the tick's detached open in flight
+#                          (issue #3320); the tick waits for it, at most
+#                          FLEET_GUIDE_OPEN_SECS (300).
+# global/onboard.openfail  ONE line: the last open that failed and its last
+#                          output line (global/onboard.open.log holds it all). A
+#                          failed open is no window the person closed.
 fleet_guide_tries() {
   local n
   n=$(cat "$FLEET_CONF_DIR/global/onboard.tries" 2>/dev/null || true)
@@ -2248,7 +2262,7 @@ fleet_guide_tried() {
 fleet_guide_rearm() {
   local g="$FLEET_CONF_DIR/global"
   [ -d "$g" ] || mkdir -p "$g" 2>/dev/null || return 0
-  rm -f "$g/onboard.stuck" "$g/onboard.dismissed"
+  rm -f "$g/onboard.stuck" "$g/onboard.stuck.ts" "$g/onboard.dismissed" "$g/onboard.openfail"
   printf '0\n' > "$g/onboard.tries"
   if [ ! -e "$g/onboarded" ] && [ "${FLEET_ONBOARD:-1}" != 0 ]; then
     : > "$g/onboard.pending"
@@ -2273,7 +2287,11 @@ EOF
 # account), then a missing command, a lapsed login — else the state it is in.
 fleet_guide_why() {
   local sess="$1" wid txt esc last
-  wid=$(fleet_guide_wid "$sess") || { printf '引导窗口不在了'; return 0; }
+  if ! wid=$(fleet_guide_wid "$sess"); then
+    if [ -s "$FLEET_CONF_DIR/global/onboard.openfail" ]; then head -n 1 "$FLEET_CONF_DIR/global/onboard.openfail" | sed 's/ · [^·]*$//'
+    else printf '引导窗口不在了'; fi
+    return 0
+  fi
   esc=$(printf '\033')
   txt=$(tmux -L "$sess" capture-pane -p -J -t "$wid" -S -200 2>/dev/null | sed "s/$esc\[[0-9;?]*[A-Za-z]//g" | grep -v '^[[:space:]]*$')
   if printf '%s' "$txt" | grep -qi 'already in use'; then
@@ -2310,7 +2328,40 @@ fleet_guide_stuck_mark() {
 # running-but-silent guide is the collector tick's call, on its own clock.
 fleet_guide_open() {
   fleet_guide_running "$1" && return 0
-  fleet_guide_respawn "$1"
+  fleet_guide_respawn "$1" || return 1
+  fleet_guide_tried
+  rm -f "$FLEET_CONF_DIR/global/onboard.openfail"
+}
+
+# fleet_guide_open_detached <session> — the tick's open (issue #3320), off the
+# collector's clock, in its own process group: fleet_timebox kills the PHASE's
+# group at FLEET_COLLECT_GUIDE_BUDGET (30 s), and a cold open — claude's start on
+# a busy node — can take longer. A killed open left no window, no try counted and
+# no stop written: the same kill every tick, a bare shell for good (fleet-linux-0,
+# 2026-10-11). Its output goes to global/onboard.open.log; a failure leaves
+# global/onboard.openfail for the next tick (fleet_guide_why), never a stop —
+# the budget decides when to stop.
+fleet_guide_open_detached() {
+  local sess="$1" lib g="$FLEET_CONF_DIR/global" mflag=0 pid
+  lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fleet-lib.sh"
+  case "$-" in *m*) mflag=1 ;; esac
+  set -m
+  (
+    . "$lib" || exit 1
+    if fleet_guide_respawn "$sess"; then
+      rm -f "$g/onboard.openfail"
+    else
+      _last=$(grep -v '^[[:space:]]*$' "$g/onboard.open.log" 2>/dev/null | tail -n 1 | tr '\t' ' ' | cut -c1-120)
+      printf '引导窗口没能打开%s · %s\n' "${_last:+：$_last}" "$(date '+%Y-%m-%d %H:%M')" > "$g/onboard.openfail"
+      printf 'fleet-guide: could not reopen onboarding guide in %s\n' "$sess"
+    fi
+    rm -f "$g/onboard.opening"
+  ) </dev/null >"$g/onboard.open.log" 2>&1 9>&- &
+  pid=$!
+  [ "$mflag" = 1 ] || set +m
+  # it may be gone already: a dead pid here is cleared by the next tick
+  printf '%s %s\n' "$pid" "$(date +%s)" > "$g/onboard.opening"
+  return 0
 }
 
 # A live guide has to survive a second look before onboarded is durable.
@@ -2347,7 +2398,7 @@ fleet_guide_wait() {
 # the tick writes onboard.stuck (the reason) and stops; a guide window the person
 # closed is onboard.dismissed — before #2424 both came back every minute, forever.
 fleet_guide_tick() {
-  local sockets="$1" sock retry cooldown stamp tries max g="$FLEET_CONF_DIR/global"
+  local sockets="$1" sock retry cooldown stamp tries max life since opid ots g="$FLEET_CONF_DIR/global"
   [ "${FLEET_ONBOARD:-1}" != 0 ] || return 0
   [ -f "$g/onboard.pending" ] || return 0
   [ ! -e "$g/onboarded" ] || return 0
@@ -2360,12 +2411,38 @@ fleet_guide_tick() {
   done
   [ -n "$sockets" ] || return 0
   sock=${sockets%%$'\n'*}
-  # Stopped: keep the reason on the window, reopen nothing.
-  if [ -s "$g/onboard.stuck" ]; then fleet_guide_stuck_mark "$sock"; return 0; fi
+  stamp=$(date +%s)
+  # Stopped: keep the reason on the window, reopen nothing — until the stop is
+  # FLEET_GUIDE_STUCK_SECS old (issue #3320): then a fresh budget, because what
+  # stopped it (a loaded machine, an admission refusal, a lapsed login) passes.
+  if [ -s "$g/onboard.stuck" ]; then
+    life="${FLEET_GUIDE_STUCK_SECS:-1800}"
+    case "$life" in ''|*[!0-9]*) life=1800 ;; esac
+    since=$(cat "$g/onboard.stuck.ts" 2>/dev/null || true)
+    case "$since" in ''|*[!0-9]*) since=$stamp; printf '%s\n' "$stamp" > "$g/onboard.stuck.ts" ;; esac
+    if [ "$life" = 0 ] || [ $((stamp - since)) -lt "$life" ]; then
+      fleet_guide_stuck_mark "$sock"; return 0
+    fi
+    rm -f "$g/onboard.stuck" "$g/onboard.stuck.ts"
+    printf '0\n' > "$g/onboard.tries"
+    printf '0\n' > "$g/onboard.retry"
+  fi
+  # An open still in flight (fleet_guide_open_detached): wait for it.
+  if [ -s "$g/onboard.opening" ]; then
+    read -r opid ots < "$g/onboard.opening" 2>/dev/null || true
+    case "$opid" in ''|*[!0-9]*) opid=0 ;; esac
+    case "$ots" in ''|*[!0-9]*) ots=0 ;; esac
+    if [ "$opid" -gt 0 ] && kill -0 "$opid" 2>/dev/null \
+       && [ $((stamp - ots)) -lt "${FLEET_GUIDE_OPEN_SECS:-300}" ]; then
+      return 0
+    fi
+    rm -f "$g/onboard.opening"
+  fi
   tries=$(fleet_guide_tries)
   # The person closed the guide we opened (q on its page, a kill-window): that is
-  # a «no», not a failure — stop asking.
-  if [ "$tries" -ge 1 ] && tmux -L "$sock" has-session -t "$sock" 2>/dev/null \
+  # a «no», not a failure — stop asking. An open that FAILED left no window
+  # either, and that is no «no» (onboard.openfail, issue #3320).
+  if [ "$tries" -ge 1 ] && [ ! -s "$g/onboard.openfail" ] && tmux -L "$sock" has-session -t "$sock" 2>/dev/null \
      && ! tmux -L "$sock" list-windows -t "$sock" -F '#{window_name}' 2>/dev/null | grep -qx guide; then
     date '+%Y-%m-%d %H:%M:%S' > "$g/onboard.dismissed"
     rm -f "$g/onboard.pending" "$g/onboard.tries"
@@ -2376,20 +2453,19 @@ fleet_guide_tick() {
   if fleet_guide_running "$sock"; then cooldown="${FLEET_GUIDE_SPEAK_SECS:-180}"
   else cooldown="${FLEET_GUIDE_COOLDOWN:-60}"; fi
   case "$cooldown" in ''|*[!0-9]*) cooldown=60 ;; esac
-  stamp=$(date +%s)
   [ $((stamp - retry)) -ge "$cooldown" ] || return 0
   max="${FLEET_GUIDE_MAX_TRIES:-3}"
   case "$max" in ''|*[!0-9]*) max=3 ;; esac
   if [ "$tries" -ge "$max" ]; then
     printf '%s · 连续 %s 次没开口 · %s\n' "$(fleet_guide_why "$sock")" "$tries" "$(date '+%Y-%m-%d %H:%M')" > "$g/onboard.stuck"
+    printf '%s\n' "$stamp" > "$g/onboard.stuck.ts"
     fleet_guide_stuck_mark "$sock"
     return 0
   fi
   printf '%s\n' "$stamp" > "$g/onboard.retry"
-  fleet_guide_respawn "$sock" >/dev/null 2>&1 || {
-    printf '引导窗口没能重开 · 第 %s 次 · %s\n' "$((tries + 1))" "$(date '+%Y-%m-%d %H:%M')" > "$g/onboard.stuck"
-    printf 'fleet-guide: could not reopen onboarding guide in %s\n' "$sock" >&2
-  }
+  # The try counts at launch: an open that dies half-way still spends one.
+  fleet_guide_tried
+  fleet_guide_open_detached "$sock"
 }
 
 # ~/.local/bin on the PATH a fleet's tmux server runs under (issue #1191). Claude

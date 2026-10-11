@@ -52,8 +52,9 @@ never recorded over it, `fleet-doctor` keeps naming the guide as missing, and
 the collector reopens it after a grace. So this is the first thing you do, before
 any greeting.
 
-- **No fleet** (`FLEET_REPO` empty, or `brief` exits 3) → one line: *"not inside
-  a fleet — open this from a fleet window."* Stop.
+- **No fleet** (`brief` exits 3) → one line: *"not inside a fleet — open this
+  from a fleet window."* Stop. An empty `repo=` is NOT that: a fleet with no repo
+  yet is exactly where a newcomer starts (step 1 adds theirs).
 - **Worker seat** (`seat=worker`) → one line: *"/fleet-onboard runs in its own
   window, not inside a worker session."* Stop. (A worker is bound to one issue;
   the wizard files new ones.)
