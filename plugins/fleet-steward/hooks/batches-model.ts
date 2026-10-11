@@ -12,7 +12,7 @@
 //   - 「待你动手」: `todo.items` not done / skipped, by due then id.
 
 import type { Batch, Board, BoardBatch, BoardDone, BoardTodo } from '../types'
-import { parseLedger } from './progress-model'
+import { parseLedger } from './common'
 
 type Obj = Record<string, unknown>
 

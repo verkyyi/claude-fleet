@@ -573,19 +573,26 @@ Do not install from memory: read the doc and work from it.
   `orch_multi_<sess>` feeds the doctor's `orch` WARN; no hub / an old hub ⇒
   each machine decides alone. BREAK-IT `orchestrator-two`,
   `fleet-orchestrator-selftest.sh`.
-- **The orchestrator has a STEWARD, and a calm beat calls no model** (issue #2670,
-  EPIC #2668 C2). `bin/fleet-steward.sh ensure` opens it like the orchestrator
-  (`@fleet_role steward`, `@norepo 1`, `$HOME`, as `agents/steward.md` says: its body in
-  the system prompt, one tier cheaper — opus at medium), home_watch
-  reopens it on the same conversation (`steward.sid`); caps never count it, restore /
-  migrate / move read it as `home`, `fleet_win_for_key steward` addresses it, the
-  client draws no row for it (`steward_all_<sess>`). Its beat is
-  `fleet-steward-tick.sh beat` (`bin/fleet_steward.py`) on the same tick, NO model:
+- **The steward is a role a session TAKES, and nothing patrols without a holder**
+  (issue #2670, EPIC #2668 C2; issue #3115, EPIC #3111 C4). `/fleet-steward` (the
+  fleet-steward plugin's skill) calls `take_role steward` and then runs the patrol in
+  ITS OWN `/loop`: each round `fleet-steward-tick.sh beat --holder`
+  (`bin/fleet_steward.py`), which refuses (rc 3) a bare `beat`, a beat with nobody
+  holding the role and a beat from any window but the holder's (`fleet_role_holder`;
+  `fleet_decision.steward_holder` is its Python door, seam `FLEET_STEWARD_HOLDER_CMD`).
+  The diskguard tick runs no beat and drains no breakage queue. **Nobody holds it ⇒
+  nothing is answered at a deadline, spawned, merged, parked or filed, and no sheet,
+  page or `[decision]` is written**: an `ask` with no field posts today's body (no
+  marker), a worker's red base is filed and the person told once (`fleet-alerts.sh
+  event breakage`), kept queued for the next holder. `bin/fleet-steward.sh ensure`
+  still opens the old seat (`@fleet_role steward`) where `FLEET_STEWARD=1` until C7
+  removes it. The beat, NO model:
   every `FLEET_STEWARD_EVERY` it reads the orchestrator's and the drivers' children
   ledgers, the epic marks and C1's ask rows (`fleet_decision.py`), answers due rows
   by their default, asks the backstop about a driverless batch's PRs, writes
-  `global/steward.{state,delta}.json` — and hands the window one `[steward]` turn only
-  when there is a new question, a BLOCKED/FAILED report or a driverless batch. Every
+  `global/steward.{state,delta}.json` — and ends its card with one `[steward]` line (the
+  holder's loop reads it) only when there is a new question, a BLOCKED/FAILED report or
+  a driverless batch. Every
   answer (the steward's own, the person's from the orchestrator) goes through
   `fleet-steward-tick.sh answer`; the open rest becomes ONE `[decision]` to the
   orchestrator (`sheet`), and its open rows ride `@orch_decide` → the inventory's
@@ -611,28 +618,31 @@ Do not install from memory: read the doc and work from it.
   `fleet-steward-page-selftest.sh`.
   **The right-hand panels follow its books by a change stamp** (issue #2835, EPIC
   #2831 C4): every `State.save()` writes `global/steward.stamp` (`<seq> <epoch_ms>`);
-  mod `hooks/panels.ts` — the orchestrator's and the steward's windows only
-  (`windowRole()`), `FLEET_MOD_PANELS=0` off — stats it, the orchestrator's children
-  ledger, `epic-running.d/` and `park.json` on the inbox's 1 s tick and re-reads
+  the fleet-steward plugin's mod module `plugins/fleet-steward/hooks/panels.ts` (out of
+  `mod/fleet` since #3115; no plugin, no panels) — every fleet window binding no issue
+  stats `global/roles.held` on its 1 s tick, and only the steward holder's
+  (`common.ts` `isHolder`, `FLEET_MOD_PANELS=0` off) stats the stamp, the orchestrator's children
+  ledger, `epic-running.d/` and `park.json` and re-reads
   only when one moved (a 10 s full read covers a missed stamp), no process run;
+  dropped or stolen ⇒ its panes close on the next tick;
   each read's time and a new sheet's 写出→看见 go to `logs/panel.ndjson`,
   `/sheet --stats` prints them. BREAK-IT `panel-stale`, `panel-wrong-window`.
   **The decision sheet is a pane there, answered in one press** (issue #2832, C1):
-  mod `hooks/sheet.tsx` draws the steward's `groups` (`fleet_decision.group` — the
+  the plugin's `hooks/sheet.tsx` draws the steward's `groups` (`fleet_decision.group` — the
   open asks on ONE ticket are one line, the latest ask speaks; the ONE merge rule,
   the `[decision]` text and the steward page use it too, the panel never merges)
   with 按建议 `y` · 翻案 `f` · 看原话 `t`; an answer waits 10 s for `u`, then runs
   `fleet-steward-tick.sh answer --by person` once per row id (the steward logs one
-  line in `decision-<day>.md`). The orchestrator's first fullscreen band opens it
+  line in `decision-<day>.md`). The holder's first fullscreen band opens it
   (never on the main screen) and stamps `@sheet_pane 1` while it is up — the steward
-  then sends one sentence (`panel_sheet_ping_fmt`), never the table; no option = the
+  then sends the orchestrator one sentence (`panel_sheet_ping_fmt`), never the table; no option = the
   whole sheet, byte for byte, counted in `sheets_full[day]`.
   **Narrow or on the main screen, one command brings it** (issue #2836, C5): it opens
   unasked only fullscreen from 144 columns; otherwise the band above the prompt
   says 「决定单 N 件待定」 + 打开 (`s`), and `/sheet` (`immediate`, runs mid-turn)
   opens it asked — focused, Esc closes it, placed from 110 — and closes it only
-  when it is placed (an open but unplaced pane is opened, never closed); the
-  steward's `/sheet` does the same for its patrol, `/sheet b` the batches. Codex
+  when it is placed (an open but unplaced pane is opened, never closed); `/sheet p`
+  does the same for the patrol, `/sheet b` the batches (neither opens unasked). Codex
   (no mod) never stamps `@sheet_pane`, so it gets the text sheet as before.
   **A driver here but not moving is seen** (issue #2958): a batch whose heartbeat
   went stale while its driver's window is still open gets a `dialog-<fp>` row when
@@ -643,12 +653,14 @@ Do not install from memory: read the doc and work from it.
   (the `answer_dialog` tool): fingerprint + labels verbatim, never over a person
   typing, pressed once via `fleet-answer.sh`, the trail on the decision log and the
   batch issue — the guard opens no general send-keys. `dialog-wait-selftest.sh`.
-  `FLEET_STEWARD`: `0` byte for byte · `count` (default where an orchestrator runs:
-  only the attention count, the node conf's [76] hooks → `logs/attention.ndjson`,
-  `fleet-steward-stats.sh`) · `1` the window too. `fleet-steward-selftest.sh`;
-  BREAK-IT `steward-exited`, `steward-write-storm`.
+  `FLEET_STEWARD` (the old seat's switch until C7): `0` byte for byte · `count` (only
+  the attention count, the node conf's [76] hooks → `logs/attention.ndjson`,
+  `fleet-steward-stats.sh`) · `1` the window too. `fleet-steward-selftest.sh` (O: no
+  holder ⇒ nothing); BREAK-IT `steward-exited` (the holder closed ⇒ nothing happens by
+  itself), `steward-write-storm`.
 - **A stuck session gives its place back, and comes back as it was** (issue #2671,
-  EPIC #2668 C3). The steward's beat runs `bin/fleet_park.py` (`fleet-park.sh`): a
+  EPIC #2668 C3). The steward holder's beat (`beat --holder`, issue #3115 — no holder,
+  no parking) runs `bin/fleet_park.py` (`fleet-park.sh`): a
   worker blocked `FLEET_PARK_BLOCKED_SECS` (900) or with no progress (state stamp,
   transcript, branch head) for `FLEET_PARK_STALL_SECS` (2700) — never one with a
   pending /loop or a background job — is asked over the peer channel to write its
@@ -661,8 +673,7 @@ Do not install from memory: read the doc and work from it.
   condition (`answer:` · `pr:…:merged` · `issue:…:closed` · `time:` · `reply:`)
   holds, `dash-issue-session.sh --resume <same sid> --seed-file` reopens it on the
   same conversation. `@orch_park` → `orchpark=` (the last tag) → `park=N` on the
-  client. `FLEET_STEWARD_PARK=0` (or a steward in `count`) parks nothing — `count`
-  still measures (`fleet-steward-stats.sh stuck`). `fleet-park-selftest.sh`;
+  client. `FLEET_STEWARD_PARK=0` parks nothing. `fleet-park-selftest.sh`;
   BREAK-IT `park-lost-progress`, `park-restored-by-restore`.
 - **Navigate by name, not index.** The hub/dashboard is placed at the lowest
   index once, at spawn; numbers still shift when a window closes

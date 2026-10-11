@@ -1,0 +1,6 @@
+{
+  "description": "fleet-steward: the decision sheet, the patrol and the batches panes, drawn only in the window that took the steward role (/fleet-steward, issue #3115).",
+  "modules": [
+    "./register.ts"
+  ]
+}

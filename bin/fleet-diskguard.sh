@@ -808,25 +808,17 @@ home_watch() {
       mkdir -p "$GDIR" 2>/dev/null
       printf '%s %s orchestrator %s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$s" "$(printf '%s' "$w" | tr '\n' ' ')" >> "$GDIR/home-heal.log" 2>/dev/null
     fi
-    # The steward (issue #2670, EPIC #2668 C2) comes back the same way, and its
-    # beat runs here — detached, and a no-op until the next one is due: only a
-    # beat with something new wakes its model (fleet-steward-tick.sh).
+    # The steward (issue #2670) comes back the same way while bin/fleet-steward.sh
+    # is still here (EPIC #3111 C7 removes it). Its beat no longer runs on this
+    # tick (C4, issue #3115): only the loop of the window that took the steward
+    # role runs `fleet-steward-tick.sh beat --holder`, and a worker's red base is
+    # drained by its filer and that beat — nobody holds the role ⇒ nothing patrols.
     had="$(tmux -L "$s" list-windows -t "=$s" -F '#{@fleet_role}' 2>/dev/null | grep -cx steward)"
     w="$(bash "$BIN/fleet-steward.sh" ensure "$s" 2>/dev/null)"; rc=$?
-    if [ "$rc" = 0 ]; then
-      if [ "${had:-0}" = 0 ] && [ -n "$w" ]; then
-        mkdir -p "$GDIR" 2>/dev/null
-        printf '%s %s steward reopened %s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$s" "$w" >> "$GDIR/home-heal.log" 2>/dev/null
-      fi
-      ( bash "$BIN/fleet-steward-tick.sh" beat --session "$s" >/dev/null 2>&1 & ) 2>/dev/null
+    if [ "$rc" = 0 ] && [ "${had:-0}" = 0 ] && [ -n "$w" ]; then
+      mkdir -p "$GDIR" 2>/dev/null
+      printf '%s %s steward reopened %s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$s" "$w" >> "$GDIR/home-heal.log" 2>/dev/null
     fi
-    # A red base a WORKER filed waits here for its fixer (issue #2960: a worker
-    # never spawns) — drained every tick, whatever the steward's mode; an empty
-    # queue costs one directory read.
-    for bq in "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/fleets/$s/breakage-spawn"/*; do
-      [ -e "$bq" ] && { ( bash "$BIN/fleet-steward-tick.sh" breakage --session "$s" >/dev/null 2>&1 & ) 2>/dev/null; }
-      break
-    done
     out="$(fleet_home_heal "$s" "$s")"
     [ -n "$out" ] || continue
     mkdir -p "$GDIR" 2>/dev/null

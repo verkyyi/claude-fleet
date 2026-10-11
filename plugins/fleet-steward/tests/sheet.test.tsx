@@ -1,5 +1,6 @@
-// The decision sheet's pane (issue #2832, EPIC #2831 C1). A mocked engine: the
-// version answers in range; `process.run` answers the window's @fleet_role, the
+// The decision sheet's pane (issue #2832, EPIC #2831 C1; the fleet-steward
+// plugin's since #3115). A mocked engine: `process.run` answers the window read
+// (window-fixture.ts: who holds the steward role is roles.held), the
 // strings dump, and `fleet-steward-tick.sh answer` (each recorded with its row and
 // words, its exit code the test's); an in-memory file map answers fs.* (the books:
 // steward.state.json as the steward writes it, with its `groups`); ui.open /
@@ -8,14 +9,12 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import { INBOX_MS } from '../hooks/inbox'
-import { isRoleRun, resetRole } from '../hooks/orchestrator'
-import { BATCHES_ARG, SHEET_COMMAND, panelPaths, resetPanels, sheetCommand } from '../hooks/panels'
-import { isStringsRun } from '../hooks/qd'
+import { isStringsRun, isWindowRun, resetCommon } from '../hooks/common'
+import { BATCHES_ARG, SHEET_COMMAND, TICK_MS, panelPaths, resetPanels, resetWindow, sheetCommand } from '../hooks/panels'
 import { SHEET_OPTION, SHEET_PANE, UNDO_MS, answerArgv, closedText, isAnswerRun, resetSheet, splitGroups } from '../hooks/sheet'
 import { parseState } from '../hooks/panels-model'
-import { SUPPORTED } from '../hooks/version'
 import { SHEET_STATE } from './sheet-fixture'
+import { HELD, VERSION, heldOf, windowOf } from './window-fixture'
 
 const DUMP = [
   'panel_sheet_defaulted_fmt', '已按默认 \u0001', 'panel_sheet_answered_fmt', '已答（\u0001）\u0001',
@@ -44,12 +43,13 @@ function engine(on: On, windowRole: string, opts: { exit?: number; env?: Record<
   const registered: string[] = []
   let tick = 1
   const put = (path: string, text: string) => files.set(path, { text, mtimeMs: tick++ })
-  on('session.version', () => ({ value: { version: SUPPORTED.min, base: SUPPORTED.min } }))
+  if (heldOf(windowRole) !== '') put(HELD, heldOf(windowRole))
+  on('session.version', () => ({ value: VERSION }))
   on('session.model', () => ({ value: 'claude-opus-5-5' }))
   on('process.run', (_$, e) => {
     let stdout = ''
     let exitCode = 0
-    if (isRoleRun(e.argv)) stdout = `${windowRole}\n`
+    if (isWindowRun(e.argv)) stdout = windowOf(windowRole)
     else if (isStringsRun(e.argv)) stdout = DUMP
     else if (isAnswerRun(e.argv)) {
       const at = (k: string) => e.argv[e.argv.indexOf(k) + 1] as string
@@ -128,7 +128,8 @@ function engine(on: On, windowRole: string, opts: { exit?: number; env?: Record<
 type T$ = Parameters<Parameters<typeof test>[1]>[0]
 
 async function start($: T$): Promise<void> {
-  resetRole()
+  resetCommon()
+  resetWindow()
   resetPanels()
   resetSheet()
   await $.session.start(START)
@@ -144,7 +145,7 @@ async function band($: T$, isFullscreen: boolean, columns = 200): Promise<void> 
 
 function mountBand($: T$, isFullscreen: boolean, columns = 200) {
   return $.ui.mount({
-    plugin: 'fleet', surface: 'terminal', component: 'AbovePrompt', props: { ...BAND, bodyColumns: columns } as never,
+    plugin: 'fleet-steward', surface: 'terminal', component: 'AbovePrompt', props: { ...BAND, bodyColumns: columns } as never,
     viewport: { columns, rows: 50, isFullscreen },
   } as never)
 }
@@ -166,15 +167,15 @@ test('sheet: the steward\'s six asks of the day draw as 2 groups — five on one
   expect(open[0]?.item).toBe('真机演练第 5 次：可以开始吗？')
   expect(open[0]?.from).toContain('问了 5 次')
   expect(closed.map(g => g.gid)).toEqual(['rnever', 'rdef'])
-  expect(answerArgv('/x/mod/fleet', 'fleet', 'r1', '开始')).toEqual(
-    ['bash', '/x/mod/fleet/../../bin/fleet-steward-tick.sh', 'answer', '--row', 'r1', '--text', '开始', '--by', 'person', '--session', 'fleet'])
+  expect(answerArgv('/x/bin', 'fleet', 'r1', '开始')).toEqual(
+    ['bash', '/x/bin/fleet-steward-tick.sh', 'answer', '--row', 'r1', '--text', '开始', '--by', 'person', '--session', 'fleet'])
 })
 
 for (const surface of ['terminal', 'desktop'] as const) {
   test(`sheet (${surface}): open on top, answered dim below; a defaulted line says 已按默认 + its time, a never one never does`, async ($, on) => {
-    engine(on, 'orchestrator')
+    engine(on, 'holder')
     await start($)
-    const ui = await $.ui.mount({ plugin: 'fleet', surface, component: 'Pane', requestId: SHEET_PANE, props: PANE })
+    const ui = await $.ui.mount({ plugin: 'fleet-steward', surface, component: 'Pane', requestId: SHEET_PANE, props: PANE })
     expect(await ui.find({ text: /1\. 真机演练第 5 次/ })).toBeDefined()
     expect(await ui.find({ text: /2\. 小程序试点选哪家商户/ })).toBeDefined()
     expect(await ui.find({ text: /3\./ })).toBeUndefined()
@@ -191,9 +192,9 @@ for (const surface of ['terminal', 'desktop'] as const) {
 }
 
 test('sheet: y → 10 s later exactly one answer per row of the group (5), the same words; then one answer row in panel.ndjson', async ($, on) => {
-  const { answered, files, clock } = engine(on, 'orchestrator')
+  const { answered, files, clock } = engine(on, 'holder')
   await start($)
-  const ui = await $.ui.mount({ plugin: 'fleet', surface: 'terminal', component: 'Pane', requestId: SHEET_PANE, props: PANE })
+  const ui = await $.ui.mount({ plugin: 'fleet-steward', surface: 'terminal', component: 'Pane', requestId: SHEET_PANE, props: PANE })
   await ui.press({ key: 'take:r2139-4' })
   expect(await ui.find({ text: /已答：开始/ })).toBeDefined()
   await clock.advance(UNDO_MS - 100)
@@ -201,7 +202,7 @@ test('sheet: y → 10 s later exactly one answer per row of the group (5), the s
   await clock.advance(200)
   expect(answered.map(a => a.row)).toEqual(['r2139-0', 'r2139-1', 'r2139-2', 'r2139-3', 'r2139-4'])
   expect(new Set(answered.map(a => `${a.text}|${a.session}`))).toEqual(new Set(['开始|fleet']))
-  await clock.advance(INBOX_MS)
+  await clock.advance(TICK_MS)
   const log = (files.get(P.log)?.text ?? '').split('\n').filter(l => l.includes('"answer"'))
   expect(log.length).toBe(1)
   const row = JSON.parse(log[0] as string) as { gid: string; how: string; presses: number }
@@ -212,9 +213,9 @@ test('sheet: y → 10 s later exactly one answer per row of the group (5), the s
 })
 
 test('sheet: u within 10 s takes it back — zero answers', async ($, on) => {
-  const { answered, clock } = engine(on, 'orchestrator')
+  const { answered, clock } = engine(on, 'holder')
   await start($)
-  const ui = await $.ui.mount({ plugin: 'fleet', surface: 'terminal', component: 'Pane', requestId: SHEET_PANE, props: PANE })
+  const ui = await $.ui.mount({ plugin: 'fleet-steward', surface: 'terminal', component: 'Pane', requestId: SHEET_PANE, props: PANE })
   await ui.press({ key: 'take:r2139-4' })
   await clock.advance(3000)
   await ui.press({ key: 'undo:r2139-4' })
@@ -225,9 +226,9 @@ test('sheet: u within 10 s takes it back — zero answers', async ($, on) => {
 })
 
 test('sheet: 翻案 opens a field; ↵ sends its words after the undo window', async ($, on) => {
-  const { answered, clock } = engine(on, 'orchestrator')
+  const { answered, clock } = engine(on, 'holder')
   await start($)
-  const ui = await $.ui.mount({ plugin: 'fleet', surface: 'terminal', component: 'Pane', requestId: SHEET_PANE, props: PANE })
+  const ui = await $.ui.mount({ plugin: 'fleet-steward', surface: 'terminal', component: 'Pane', requestId: SHEET_PANE, props: PANE })
   await ui.press({ key: 'turn:r11958' })
   await ui.input({ key: 'input:r11958', text: '选甲，先小后大' })
   await clock.advance(UNDO_MS + 10)
@@ -236,9 +237,9 @@ test('sheet: 翻案 opens a field; ↵ sends its words after the undo window', a
 })
 
 test('sheet: a failed write-back puts the line back and toasts why', async ($, on) => {
-  const { answered, toasts, clock } = engine(on, 'orchestrator', { exit: 1 })
+  const { answered, toasts, clock } = engine(on, 'holder', { exit: 1 })
   await start($)
-  const ui = await $.ui.mount({ plugin: 'fleet', surface: 'terminal', component: 'Pane', requestId: SHEET_PANE, props: PANE })
+  const ui = await $.ui.mount({ plugin: 'fleet-steward', surface: 'terminal', component: 'Pane', requestId: SHEET_PANE, props: PANE })
   await ui.press({ key: 'take:r2139-4' })
   await clock.advance(UNDO_MS + 10)
   expect(answered.length).toBe(1)
@@ -248,7 +249,7 @@ test('sheet: a failed write-back puts the line back and toasts why', async ($, o
 })
 
 test('sheet: the first fullscreen band opens it once and stamps @sheet_pane 1; /sheet closes (0) and reopens (1); an exit unsets it', async ($, on) => {
-  const { opened, closed, options } = engine(on, 'orchestrator')
+  const { opened, closed, options } = engine(on, 'holder')
   await start($)
   expect(opened).toEqual([])
   await band($, true)
@@ -266,7 +267,7 @@ test('sheet: the first fullscreen band opens it once and stamps @sheet_pane 1; /
 })
 
 test('sheet: the main screen opens nothing unasked and stamps nothing — the steward keeps sending the whole sheet', async ($, on) => {
-  const { opened, options } = engine(on, 'orchestrator')
+  const { opened, options } = engine(on, 'holder')
   await start($)
   await band($, false)
   expect(opened).toEqual([])
@@ -282,12 +283,15 @@ test('sheet: a worker window opens no sheet, stamps no @sheet_pane and draws not
   expect(registered).not.toContain(SHEET_COMMAND)
 })
 
-test('sheet: the steward\'s window has the panels but not the decision sheet', async ($, on) => {
-  const { opened, options, registered } = engine(on, 'steward')
+test('sheet: a window that does not hold the steward role opens nothing, stamps nothing; /sheet says so', async ($, on) => {
+  const { opened, options, registered } = engine(on, 'other')
   await start($)
+  await band($, true)
   expect(registered).toContain(SHEET_COMMAND)
   expect(opened).toEqual([])
   expect(options).toEqual([])
+  const r = await $.command.run({ command: SHEET_COMMAND, args: '', ...(RUN as object) } as never) as { text?: string }
+  expect(r.text).toBe('panel_not_holder')
   const g = parseState(JSON.stringify(SHEET_STATE)).groups.find(x => x.gid === 'rdef')
   expect(g === undefined ? '' : closedText({ ...g, never: true })).not.toContain('已按默认')
 })
@@ -295,7 +299,7 @@ test('sheet: the steward\'s window has the panels but not the decision sheet', a
 // Narrow screens and the main screen (issue #2836, EPIC #2831 C5).
 
 test('narrow (#2836): 120 columns opens nothing unasked and the band says 决定单 N 件待定; /sheet opens it placed, focused, Esc closes; /sheet again closes it', async ($, on) => {
-  const m = engine(on, 'orchestrator')
+  const m = engine(on, 'holder')
   m.room.columns = 120
   await start($)
   await band($, true, 120)
@@ -315,7 +319,7 @@ test('narrow (#2836): 120 columns opens nothing unasked and the band says 决定
 })
 
 test('narrow (#2836): open but unplaced (90 columns), /sheet opens it again — never closes it', async ($, on) => {
-  const m = engine(on, 'orchestrator')
+  const m = engine(on, 'holder')
   m.room.columns = 90
   await start($)
   const run = () => $.command.run({ command: SHEET_COMMAND, args: '', ...(RUN as object) } as never) as Promise<{ text?: string }>
@@ -327,7 +331,7 @@ test('narrow (#2836): open but unplaced (90 columns), /sheet opens it again — 
 })
 
 test('narrow (#2836): the band\'s 打开 runs /sheet', async ($, on) => {
-  const m = engine(on, 'orchestrator')
+  const m = engine(on, 'holder')
   m.room.columns = 120
   await start($)
   const ui = await mountBand($, true, 120)
@@ -338,7 +342,7 @@ test('narrow (#2836): the band\'s 打开 runs /sheet', async ($, on) => {
 })
 
 test('wide (#2836): 200 columns opens it unasked and draws no hint', async ($, on) => {
-  const m = engine(on, 'orchestrator')
+  const m = engine(on, 'holder')
   await start($)
   await band($, true, 200)
   expect(m.opened).toEqual([SHEET_PANE])
@@ -347,7 +351,7 @@ test('wide (#2836): 200 columns opens it unasked and draws no hint', async ($, o
 })
 
 test('wide (#2836): a terminal widened past 144 opens the sheet on its next band', async ($, on) => {
-  const m = engine(on, 'orchestrator')
+  const m = engine(on, 'holder')
   m.room.columns = 120
   await start($)
   await band($, true, 120)
@@ -358,7 +362,7 @@ test('wide (#2836): a terminal widened past 144 opens the sheet on its next band
 })
 
 test('main screen (#2836): isFullscreen false never opens unasked; the hint and /sheet are the way', async ($, on) => {
-  const m = engine(on, 'orchestrator')
+  const m = engine(on, 'holder')
   await start($)
   await band($, false, 200)
   expect(m.opened).toEqual([])

@@ -15,15 +15,11 @@
 
 import type { Register } from 'claude-code'
 
-import { registerBatches } from './batches'
 import { registerCompose } from './compose'
 import { registerExitGuard } from './exit-guard'
 import { registerLifecycle } from './lifecycle'
-import { registerPanels } from './panels'
-import { registerPatrol } from './patrol'
 import { registerProgress } from './progress'
 import { registerQueue } from './queue'
-import { registerSheet } from './sheet'
 import { registerState } from './state'
 import { registerTools } from './tools'
 import { registerUsage } from './usage'
@@ -32,15 +28,9 @@ export const register: Register = on => {
   registerLifecycle(on)
   registerUsage(on)
   registerState(on)
-  // before progress: its band answers the orchestrator's AbovePrompt without
-  // next(e), and the sheet opens itself from the first fullscreen band (#2832)
-  registerSheet(on)
   registerProgress(on)
   registerCompose(on)
   registerTools(on)
   registerExitGuard(on)
   registerQueue(on)
-  registerPatrol(on)
-  registerPanels(on)
-  registerBatches(on)
 }

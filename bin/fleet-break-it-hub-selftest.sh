@@ -1138,7 +1138,7 @@ drill_followup_stable_storm() {
   printf '#!/bin/sh\nprintf "{\\"seq\\": 0, \\"children\\": []}\\n"\n' > "$g/children"
   printf '#!/bin/sh\n:\n' > "$g/none"
   chmod +x "$g/issue" "$g/move" "$g/hold" "$g/post" "$g/ticket" "$g/children" "$g/none"
-  fs() { env FLEET_CONF_DIR="$g/conf" FLEET_UI_LANG=zh FLEET_STEWARD=1 FLEET_STEWARD_FOLLOWUP_SYNC=1 \
+  fs() { env FLEET_CONF_DIR="$g/conf" FLEET_UI_LANG=zh FLEET_STEWARD_HOLDER_CMD='echo @9' FLEET_STEWARD_FOLLOWUP_SYNC=1 \
            FLEET_STEWARD_ISSUE_CMD="$g/issue" FLEET_STEWARD_STABLE_CMD="$g/move" FLEET_STEWARD_HOLD_CMD="$g/hold" \
            FLEET_STEWARD_TICKET_CMD="$g/ticket" FLEET_DECISION_POST_CMD="$g/post" FLEET_DECISION_COMMENTS_CMD="$g/none" \
            FLEET_STEWARD_WINDOWS_CMD="$g/none" FLEET_STEWARD_CHILDREN_CMD="$g/children" FLEET_STEWARD_SEND_CMD="$g/none" \
@@ -1152,10 +1152,10 @@ drill_followup_stable_storm() {
     fs followups --watch "o/r#$n" >/dev/null
   done
   t0=$(now)
-  fs beat --force >/dev/null 2>&1; fs beat --force >/dev/null 2>&1
+  fs beat --holder --force >/dev/null 2>&1; fs beat --holder --force >/dev/null 2>&1
   [ ! -s "$g/moves" ] || { WHY="stable moved while a batch holds the install"; return 1; }
   rm -f "$g/held"
-  fs beat --force >/dev/null 2>&1; fs beat --force >/dev/null 2>&1
+  fs beat --holder --force >/dev/null 2>&1; fs beat --holder --force >/dev/null 2>&1
   n=$(grep -c . "$g/moves" 2>/dev/null || echo 0)
   [ "$n" = 1 ] || { WHY="four batches' 「move stable」 ran $n moves (want one)"; return 1; }
   w=$(grep -c . "$g/posts" 2>/dev/null || echo 0)
@@ -1220,13 +1220,13 @@ drill_health_silent_pass() {
   printf '#!/bin/sh\ngrep -F -- "$2" "%s/issues" 2>/dev/null | head -1 | cut -f1\n' "$g" > "$g/find"
   printf '#!/bin/sh\ncat >/dev/null; echo "$1#$2" >> "%s/posts"\n' "$g" > "$g/post"
   chmod +x "$g/none" "$g/doctor" "$g/idle" "$g/file" "$g/find" "$g/post"
-  hp() { env FLEET_CONF_DIR="$g/conf" FLEET_UI_LANG=zh FLEET_STEWARD=1 FLEET_SLEEP=observe \
+  hp() { env FLEET_CONF_DIR="$g/conf" FLEET_UI_LANG=zh FLEET_STEWARD_HOLDER_CMD='echo @9' FLEET_SLEEP=observe \
            FLEET_DECISION_COMMENTS_CMD="$g/none" FLEET_DECISION_POST_CMD="$g/post" FLEET_STEWARD_WINDOWS_CMD="$g/none" \
            FLEET_STEWARD_CHILDREN_CMD="$g/none" FLEET_STEWARD_SEND_CMD="$g/none" FLEET_STEWARD_STAMP_CMD="$g/none" \
            FLEET_STEWARD_DOCTOR_CMD="$g/doctor" FLEET_STEWARD_IDLE_CMD="$g/idle" FLEET_STEWARD_SLEEP_LOG="$g/sleep.log" \
            FLEET_STEWARD_CLEANUP_LOG="$g/cleanup.log" FLEET_STEWARD_HEALTH_REPO=o/f FLEET_STEWARD_HEALTH_EVERY=0 FLEET_STEWARD_HEALTH_CONFIRM=1 \
            FLEET_STEWARD_HEALTH_FILE_CMD="$g/file" FLEET_STEWARD_HEALTH_FIND_CMD="$g/find" FLEET_STEWARD_IDLE_SECS=60 \
-           python3 "$BIN/fleet_steward.py" beat --force --session hp >/dev/null 2>&1; }
+           python3 "$BIN/fleet_steward.py" beat --holder --force --session hp >/dev/null 2>&1; }
   printf '{"rows": [{"level": "PASS", "row": "qwatch", "msg": "quota cache fresh"}]}\n' > "$g/doctor.json"
   : > "$g/idle.txt"
   hp

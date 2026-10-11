@@ -86,7 +86,7 @@
 # THE MARK CARRIES ITS BATCH'S TITLE (issue #2833, EPIC #2831 C2). `--title` (the
 # parent issue's title, which the loop already read) is written as one `title:`
 # line, a leading `EPIC: ` / `EPIC:` dropped, newlines folded, ≤ 120 characters —
-# the orchestrator's batches pane names the row with it (mod/fleet/hooks/batches.tsx)
+# the orchestrator's batches pane names the row with it (plugins/fleet-steward/hooks/batches.tsx)
 # and shows `#<N>` for a mark without one. No reader of the lease looks at it
 # (fleet_epic_running reads epoch / ttl / epic / session / tick / live / inflight).
 # A bare `touch` of a mark (no epoch:) counts from its mtime — a hand override

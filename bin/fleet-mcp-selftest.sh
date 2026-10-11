@@ -1007,15 +1007,16 @@ ok "N --call refusals (type · unhosted repo · unknown argument · unknown tool
 
 # --- O: ask carries the decision format (issue #2669) -------------------------
 # With bin/fleet_decision.py beside it: a field ⇒ 建议 / 不答按 / 截止 + the
-# fleet:ask marker; no field + FLEET_STEWARD=0 ⇒ today's body byte for byte; no
-# field + the steward on ⇒ the marker, a row that waits (「等你」).
+# fleet:ask marker; no field + nobody holding the steward role ⇒ today's body byte
+# for byte; no field + a holder (take_role, issue #3115) ⇒ the marker, a row that
+# waits (「等你」).
 cp "$BIN/fleet_decision.py" "$BIN/fleet_iso.py" "$BIN/fleet-ui-lang.sh" "$WORK/bin/"
 : > "$LOG"
 {
   call 120 ask '{"question":"which repo owns this?"}'
   call 121 ask '{"question":"20 or 50?","suggest":"20","due":"90m"}'
-} | FLEET_STEWARD=0 FLEET_UI_LANG=zh serve "$WORK/o"
-{ call 122 ask '{"question":"which repo owns this?"}'; } | FLEET_STEWARD=1 FLEET_UI_LANG=zh serve "$WORK/o2"
+} | FLEET_STEWARD_HOLDER_CMD='' FLEET_UI_LANG=zh serve "$WORK/o"
+{ call 122 ask '{"question":"which repo owns this?"}'; } | FLEET_STEWARD_HOLDER_CMD='echo @9' FLEET_UI_LANG=zh serve "$WORK/o2"
 python3 - "$WORK/o" "$WORK/o2" <<'PY' || fail "O: ask with the decision format" "$(cat "$WORK/o" "$WORK/o2")"
 import json, sys
 rows = {}

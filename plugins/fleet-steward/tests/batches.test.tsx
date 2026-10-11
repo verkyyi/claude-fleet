@@ -10,25 +10,21 @@ import type { On, RenderPropsOf } from 'claude-code'
 
 import { BATCHES_PANE, batchLine, jumpArgv, jumpToast, resetBatches } from '../hooks/batches'
 import { bar, beatClock, foldBoard, splitRef } from '../hooks/batches-model'
-import { isRoleRun, resetRole } from '../hooks/orchestrator'
-import { SHEET_COMMAND, panelPaths, resetPanels } from '../hooks/panels'
+import { isStringsRun, isWindowRun, resetCommon, takeStrings } from '../hooks/common'
+import { SHEET_COMMAND, panelPaths, resetPanels, resetWindow } from '../hooks/panels'
 import { parseMarks } from '../hooks/panels-model'
-import { isStringsRun, takeStrings } from '../hooks/qd'
-import { resetQueue } from '../hooks/queue'
-import { SUPPORTED } from '../hooks/version'
+import { HELD, VERSION, heldOf, windowOf } from './window-fixture'
 
 const NOW = 1_000_000_000_000
 const SEC = NOW / 1000
 const P = panelPaths('/conf', 'fleet')
 const ENV = { TMUX_PANE: '%7', TMUX: '/private/tmp/tmux-501/fleet,123,0', FLEET_CONF_DIR: '/conf', HOME: '/h' }
 const START = { cwd: '/tmp', surface: 'terminal', isInteractive: true } as const
-const HAND = { kind: 'composer' } as const
 const DUMP = [
   'panel_batches_landed_fmt', '\u0001/\u0001',
   'panel_batches_beat_fmt', 'beat \u0001 \u0001m',
   'panel_batches_stale_fmt', 'stale \u0001 \u0001m',
   'panel_batches_parked_fmt', 'parked \u0001',
-  'orch_queue_fmt', 'queued \u0001 · \u0001 · \u0001s', 'orch_queue_thinking', 'thinking',
 ].join('\0') + '\0'
 
 // ---- fixtures: 3 marks (fresh / past ttl / no title) + a driver only the ledger has --------
@@ -110,7 +106,7 @@ test('the lines: a title or #N, the bar, 心跳 vs 心跳停了, 没写心跳', 
 })
 
 test('jump: argv through fleet-panel-jump.sh; every non-zero exit says why, 0 says nothing', () => {
-  expect(jumpArgv('/i/mod/fleet', 'o-r:scratch-14', '%7')).toEqual(['bash', '/i/mod/fleet/../../bin/fleet-panel-jump.sh', 'o-r:scratch-14', '--pane', '%7'])
+  expect(jumpArgv('/i/bin', 'o-r:scratch-14', '%7')).toEqual(['bash', '/i/bin/fleet-panel-jump.sh', 'o-r:scratch-14', '--pane', '%7'])
   expect(jumpToast(0)).toBe('')
   expect(jumpToast(1)).toBe('panel_batches_jump_notfound')
   expect(jumpToast(2)).toBe('panel_batches_jump_ambiguous')
@@ -123,16 +119,17 @@ function engine(on: On, windowRole: string, items: Record<string, unknown> = ITE
   const files = new Map<string, { text: string; mtimeMs: number }>()
   let tick = 1
   const put = (path: string, text: string) => files.set(path, { text, mtimeMs: tick++ })
+  if (heldOf(windowRole) !== '') put(HELD, heldOf(windowRole))
   const runs: string[][] = []
   const opened: string[] = []
   const toasts: string[] = []
   const commands: string[] = []
   const exit = { code: 0 }
-  on('session.version', () => ({ value: { version: SUPPORTED.min, base: SUPPORTED.min } }))
+  on('session.version', () => ({ value: VERSION }))
   on('session.model', () => ({ value: 'claude-opus-5-5' }))
   on('process.run', (_$, e) => {
     if (/fleet-(panel-jump\.sh|open\.sh)$/.test(e.argv[1] ?? '')) runs.push([...e.argv])
-    const stdout = isRoleRun(e.argv) ? `${windowRole}\n` : isStringsRun(e.argv) ? DUMP : ''
+    const stdout = isWindowRun(e.argv) ? windowOf(windowRole) : isStringsRun(e.argv) ? DUMP : ''
     const code = (e.argv[1] ?? '').endsWith('fleet-panel-jump.sh') ? exit.code : 0
     return { value: { exitCode: code, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
@@ -190,22 +187,22 @@ function paneProps(placement: 'dock' | 'inline' = 'dock'): RenderPropsOf['Pane']
 }
 
 async function mountPane($: Engine, surface: 'terminal' | 'desktop', placement: 'dock' | 'inline' = 'dock') {
-  return $.ui.mount({ plugin: 'fleet', surface, component: 'Pane', props: paneProps(placement), requestId: BATCHES_PANE } as never)
+  return $.ui.mount({ plugin: 'fleet-steward', surface, component: 'Pane', props: paneProps(placement), requestId: BATCHES_PANE } as never)
 }
 
 function fresh(): void {
-  resetRole()
+  resetCommon()
+  resetWindow()
   resetPanels()
-  resetQueue()
   resetBatches()
 }
 
 for (const surface of ['terminal', 'desktop'] as const) {
-  test(`pane (${surface}): opened at start in the orchestrator; the rows; 到驱动 runs only when pressed`, async ($, on) => {
+  test(`pane (${surface}): never opened unasked; the rows; 到驱动 runs only when pressed`, async ($, on) => {
     fresh()
-    const m = engine(on, 'orchestrator')
+    const m = engine(on, 'holder')
     await $.session.start(START)
-    expect(m.opened).toEqual([BATCHES_PANE])
+    expect(m.opened).toEqual([])
     const ui = await mountPane($, surface)
     expect((await ui.find({ key: 'fleet-batch-o/r#2831' }))?.text).toContain('#2831 面板')
     expect((await ui.find({ key: 'fleet-batch-g/m#11900' }))?.text).toContain('panel_batches_nomark')
@@ -228,33 +225,23 @@ for (const surface of ['terminal', 'desktop'] as const) {
     await ui.press({ key: 'fleet-todo-a-open' })
     expect(m.runs[m.runs.length - 1]!.slice(-1)).toEqual(['https://x/1999'])
     expect(m.runs[m.runs.length - 1]![1]!.endsWith('fleet-open.sh')).toBe(true)
-    // /qd from the pane
-    await ui.press({ key: 'fleet-batches-qd' })
-    expect(m.commands).toContain('qd')
+    expect(await ui.find({ key: 'fleet-batches-queue' })).toBeUndefined()
     await ui.unmount()
   })
 }
 
-test('pane: todo.items empty → 「今天没有」; the queue line is fleet/queue\'s', async ($, on) => {
+test('pane: todo.items empty → 「今天没有」', async ($, on) => {
   fresh()
-  engine(on, 'orchestrator', {})
+  engine(on, 'holder', {})
   await $.session.start(START)
-  let ui = await mountPane($, 'terminal')
+  const ui = await mountPane($, 'terminal')
   expect((await ui.find({ key: 'fleet-todo-none' }))?.text).toBe('panel_batches_todo_none')
-  expect((await ui.find({ key: 'fleet-batches-queue' }))?.text).toContain('panel_batches_queue_none')
-  await ui.unmount()
-  // two prompts typed over a running turn: queue.ts counts them into fleet/queue
-  await $.turn.start({ text: 'go', turnId: 't1' })
-  await $.prompt.submit({ text: '再加一件', wait: false, origin: HAND, turnId: 't1' })
-  await $.prompt.submit({ text: '还有一件', wait: false, origin: HAND, turnId: 't1' })
-  ui = await mountPane($, 'terminal')
-  expect((await ui.find({ key: 'fleet-batches-queue' }))?.text).toContain('queued 2')
   await ui.unmount()
 })
 
-test('pane: seated inline after an unasked open → one hint line; /sheet batches opens it asked', async ($, on) => {
+test('pane: seated inline before it was asked → one hint line; /sheet batches opens it asked', async ($, on) => {
   fresh()
-  const m = engine(on, 'orchestrator')
+  const m = engine(on, 'holder')
   await $.session.start(START)
   let ui = await mountPane($, 'terminal', 'inline')
   expect((await ui.find({ key: 'fleet-batches' }))?.text).toBe('panel_batches_inline')
@@ -262,7 +249,7 @@ test('pane: seated inline after an unasked open → one hint line; /sheet batche
   await ui.unmount()
   const r = await $.command.run({ command: SHEET_COMMAND, args: 'batches', origin: { kind: 'composer' } } as never)
   expect(r.text).toBe('panel_batches_opened')
-  expect(m.opened).toEqual([BATCHES_PANE, BATCHES_PANE])
+  expect(m.opened).toEqual([BATCHES_PANE])
   ui = await mountPane($, 'terminal', 'inline')
   expect(await ui.find({ text: 'panel_batches_running' })).toBeDefined()
   await ui.unmount()
@@ -270,8 +257,8 @@ test('pane: seated inline after an unasked open → one hint line; /sheet batche
 
 for (const [what, role, env] of [
   ['a worker window', 'worker', {}],
-  ['the steward window', 'steward', {}],
-  ['FLEET_MOD_PANELS=0', 'orchestrator', { FLEET_MOD_PANELS: '0' }],
+  ['a window that does not hold the steward role', 'other', {}],
+  ['FLEET_MOD_PANELS=0', 'holder', { FLEET_MOD_PANELS: '0' }],
 ] as const) {
   test(`${what}: no batches pane opened, /sheet batches not ours`, async ($, on) => {
     fresh()

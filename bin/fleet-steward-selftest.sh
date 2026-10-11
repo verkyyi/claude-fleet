@@ -10,8 +10,10 @@
 # windows / ledgers / peer channel are seams too; the window legs run an isolated
 # tmux server with a fake agent.
 #
-#   A  a calm beat: delta empty, exit 1, NO turn sent to the model (0 calls)
-#   B  three questions, one the charter answers: the beat wakes the model once;
+#   Every beat below is `beat --holder` with a holder (the seam FLEET_STEWARD_HOLDER_CMD).
+#   A  a calm beat: delta empty, exit 1, NO turn for the model (0 calls)
+#   B  three questions, one the charter answers: the beat wakes the model once
+#      (the [steward] line printed to the holder's own loop, never sent);
 #      `answer --by steward` closes one; `sheet` hands the orchestrator ONE
 #      [decision] of 2 rows; the decide count stamped is 2; a second `sheet` with
 #      the same rows sends nothing
@@ -21,11 +23,15 @@
 #      says 延后 N, the next beat posts them, never more than the budget a beat
 #   F  not due: the every-minute caller returns 4 with no lock and no read
 #   W  a red base a worker filed (issue #2960): `breakage` spawns its fixer with
-#      --origin steward (no steward window: hub), whatever FLEET_STEWARD says; spawned
-#      or claimed ⇒ off the queue, no room ⇒ kept for the next tick
-#   G  the switch: FLEET_STEWARD=0 ⇒ ensure rc 3, no window, no @attention_log,
-#      the beat rc 3 and no state file; unset + FLEET_HOST=1 ⇒ `count`: the
-#      attention flag on, no window
+#      --origin steward while somebody holds the role; spawned or claimed ⇒ off the
+#      queue, no room ⇒ kept; NOBODY holds it ⇒ nothing spawned, the person told
+#      once, kept — the next holder's beat spawns it
+#   O  nobody holds the steward role (EPIC #3111 C4, issue #3115): a due row is not
+#      answered, no backstop / merge, no sheet, page, [decision] or state
+#   G  the beat is the holder's: `beat --holder` with no holder and a bare `beat`
+#      even with one are rc 3, no state file; the window's switch: FLEET_STEWARD=0
+#      ⇒ ensure rc 3, no window, no @attention_log; unset + FLEET_HOST=1 ⇒
+#      `count`: the attention flag on, no window
 #   H  the window: opens (@fleet_role steward, @norepo 1, on /fleet-steward with
 #      the role file); killed ⇒ the next ensure opens it on the SAME conversation
 #      with the resume seed; `fleet_win_for_key steward` answers it
@@ -97,6 +103,9 @@ cat > "$WORK/bin/send" <<'EOF'
 { printf '>>> %s\n' "$1"; cat; printf '\n'; } >> "$ST_GH/sends.log"
 EOF
 printf '#!/bin/sh\nprintf "%%s\\n" "$1" > "$ST_GH/decide"\n' > "$WORK/bin/stamp"
+# who holds the steward role (take_role, EPIC #3111 C4): @9, unless $ST_GH/noholder
+printf '#!/bin/sh\n[ -e "$ST_GH/noholder" ] || printf "@9\\n"\n' > "$WORK/bin/holder"
+printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "$ST_GH/alerts.log"\n' > "$WORK/bin/alert"
 # the health watch (issue #2674): the doctor prints $ST_DOCTOR, the idle windows $ST_IDLE
 printf '#!/bin/sh\ncat "$ST_DOCTOR" 2>/dev/null || printf "{\\"rows\\": []}\\n"\n' > "$WORK/bin/doctor"
 printf '#!/bin/sh\ncat "$ST_IDLE" 2>/dev/null\n' > "$WORK/bin/idle"
@@ -106,7 +115,8 @@ export ST_GH="$WORK/gh" ST_WINS="$WORK/wins.txt" \
   FLEET_DECISION_COMMENTS_CMD="$WORK/bin/gh-comments" FLEET_DECISION_POST_CMD="$WORK/bin/gh-post" \
   FLEET_DECISION_PARENT_CMD="$WORK/bin/gh-parent" FLEET_STEWARD_WINDOWS_CMD="$WORK/bin/wins" \
   FLEET_STEWARD_CHILDREN_CMD="$WORK/bin/children" FLEET_STEWARD_SEND_CMD="$WORK/bin/send" \
-  FLEET_STEWARD_STAMP_CMD="$WORK/bin/stamp" FLEET_STEWARD=1 FLEET_STEWARD_PAGE_SHARE=0 \
+  FLEET_STEWARD_STAMP_CMD="$WORK/bin/stamp" FLEET_STEWARD_HOLDER_CMD="$WORK/bin/holder" FLEET_STEWARD_PAGE_SHARE=0 \
+  FLEET_STEWARD_ALERT_CMD="$WORK/bin/alert" \
   FLEET_STEWARD_DOCTOR_CMD="$WORK/bin/doctor" FLEET_STEWARD_IDLE_CMD="$WORK/bin/idle" \
   FLEET_STEWARD_SLEEP_LOG="$WORK/sleep.log" FLEET_STEWARD_CLEANUP_LOG="$WORK/cleanup.log" FLEET_SLEEP=observe
 : > "$ST_WINS"
@@ -124,8 +134,8 @@ rowid() { python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print([k 
 calls() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("model_calls", 0))' "$STATE"; }
 
 # A — calm
-TICK beat --force >/dev/null; rc=$?
-TICK beat --force >"$WORK/out" 2>&1; rc=$?
+TICK beat --holder --force >/dev/null; rc=$?
+TICK beat --holder --force >"$WORK/out" 2>&1; rc=$?
 [ "$rc" = 1 ] && [ "$(sends)" = 0 ] && [ "$(calls)" = 0 ] && grep -q '平静' "$WORK/out" \
   && ok "A: a calm beat — exit 1, card 平静, no turn sent (0 model calls)" \
   || bad "A: calm beat rc=$rc sends=$(sends) calls=$(calls): $(cat "$WORK/out")"
@@ -134,7 +144,7 @@ TICK beat --force >"$WORK/out" 2>&1; rc=$?
 # global/steward.stamp `<seq> <epoch_ms>` by exactly one
 STAMP="$FLEET_CONF_DIR/global/steward.stamp"
 s0=$(cut -d' ' -f1 "$STAMP" 2>/dev/null || echo 0)
-TICK beat --force >/dev/null 2>&1
+TICK beat --holder --force >/dev/null 2>&1
 s1=$(cut -d' ' -f1 "$STAMP" 2>/dev/null || echo 0)
 python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import fleet_steward as f; f.State().save()' "$BIN"
 s2=$(cut -d' ' -f1 "$STAMP" 2>/dev/null || echo 0)
@@ -148,10 +158,10 @@ ask 11 '先发 20 家还是 50 家？' --suggest '20 家' --due 4h
 ask 12 '要不要拆成两个 PR？' --suggest '拆' --due 4h
 ask 13 '用哪个颜色？' --suggest '蓝' --due 4h
 needs 11; needs 12; needs 13
-TICK beat --force >"$WORK/out" 2>&1; rc=$?
-[ "$rc" = 0 ] && [ "$(sends)" = 1 ] && grep -q '>>> steward' "$ST_GH/sends.log" && grep -q '新问题 3' "$ST_GH/sends.log" \
-  && ok "B: three new questions wake the model once ([steward] · 新问题 3)" \
-  || bad "B: beat rc=$rc sends=$(sends): $(cat "$WORK/out") / $(cat "$ST_GH/sends.log" 2>/dev/null)"
+TICK beat --holder --force >"$WORK/out" 2>&1; rc=$?
+[ "$rc" = 0 ] && [ "$(sends)" = 0 ] && grep -q '^\[steward\].*新问题 3' "$WORK/out" && [ "$(calls)" = 1 ] \
+  && ok "B: three new questions wake the model once — the [steward] line printed to the holder's loop, nothing sent" \
+  || bad "B: beat rc=$rc sends=$(sends) calls=$(calls): $(cat "$WORK/out") / $(cat "$ST_GH/sends.log" 2>/dev/null)"
 r11=$(rowid 先发)
 TICK answer --row "$r11" --text '20 家（共同约定 2：先小后大）' --source 'https://github.com/o/r/issues/100' >/dev/null
 grep -q "fleet:answer row=$r11 by=steward" "$ST_GH/o-r-11.json" && grep -q 'o/r#11 to-worker' "$ST_GH/posts.log" \
@@ -171,10 +181,10 @@ ls "$FLEET_CONF_DIR/fleets/st/steward/"decision-*.md >/dev/null 2>&1 && ok "B: t
 TICK sheet >/dev/null 2>&1
 [ "$(grep -c '^>>> orchestrator' "$ST_GH/sends.log")" = 1 ] && ok "B: the same rows again — not sent twice" \
   || bad "B: an unchanged sheet was sent again"
-TICK beat --force >/dev/null 2>&1
-[ "$(cat "$ST_GH/decide")" = 2 ] && [ "$(grep -c '^>>> steward' "$ST_GH/sends.log")" = 1 ] \
+TICK beat --holder --force >"$WORK/out" 2>&1
+[ "$(cat "$ST_GH/decide")" = 2 ] && [ "$(calls)" = 1 ] && ! grep -q '^\[steward\]' "$WORK/out" \
   && ok "B: the next beat keeps decide=2 and wakes no one (nothing new)" \
-  || bad "B: next beat decide=$(cat "$ST_GH/decide") steward sends=$(grep -c '^>>> steward' "$ST_GH/sends.log")"
+  || bad "B: next beat decide=$(cat "$ST_GH/decide") calls=$(calls): $(cat "$WORK/out")"
 r12=$(rowid 要不要)
 TICK answer --row "$r12" --text '拆' --by person >/dev/null
 [ "$(cat "$ST_GH/decide")" = 1 ] && grep -q "fleet:answer row=$r12 by=person" "$ST_GH/o-r-12.json" \
@@ -183,7 +193,7 @@ TICK answer --row "$r12" --text '拆' --by person >/dev/null
 # C — never-default rows are not the steward's
 ask 14 '要不要开一台云机器？' --suggest '不开' --due 4h
 needs 14
-TICK beat --force >/dev/null 2>&1
+TICK beat --holder --force >/dev/null 2>&1
 r14=$(rowid 要不要开)
 TICK answer --row "$r14" --text '不开' >/dev/null 2>"$WORK/err"; rc=$?
 [ "$rc" = 1 ] && grep -q never "$WORK/err" && ! grep -q "row=$r14" "$ST_GH/o-r-14.json" \
@@ -192,8 +202,8 @@ TICK answer --row "$r14" --text '不开' >/dev/null 2>"$WORK/err"; rc=$?
 # D — a due row is answered by its default, once
 ask 15 '日志留几天？' --suggest '7 天' --due 2000-01-01T00:00:00Z
 needs 15
-TICK beat --force >/dev/null 2>&1
-TICK beat --force >/dev/null 2>&1
+TICK beat --holder --force >/dev/null 2>&1
+TICK beat --holder --force >/dev/null 2>&1
 nd=$(grep -c 'by=default' "$ST_GH/o-r-15.json")
 [ "$nd" = 1 ] && grep -q 'fleet:default-decided' "$ST_GH/o-r-100.json" \
   && ok "D: a due row answered by its default once + 默认拍板 on the parent" || bad "D: defaults posted $nd times"
@@ -209,13 +219,13 @@ python3 -c 'import json,sys
 d=json.load(open(sys.argv[1]))
 for r in d["rows"].values(): r.pop("by", None)
 json.dump(d, open(sys.argv[1], "w"))' "$STATE"
-TICK beat --force >"$WORK/out" 2>&1; rc=$?
+TICK beat --holder --force >"$WORK/out" 2>&1; rc=$?
 case "$rc" in 0|1) ok "M: a state file with no \`by\` on any row still beats (rc $rc)" ;;
   *) bad "M: an old state file broke the beat rc=$rc: $(cat "$WORK/out")" ;; esac
 
 # E — a write storm: budget 3, five answers
 for i in 21 22 23 24 25; do ask "$i" "问题 ${i}？" --suggest 是 --due 4h; needs "$i"; done
-TICK beat --force >/dev/null 2>&1
+TICK beat --holder --force >/dev/null 2>&1
 before=$(posts)
 for i in 21 22 23 24 25; do
   FLEET_STEWARD_WRITES=3 TICK answer --row "$(rowid "问题 ${i}")" --text 是 >/dev/null 2>&1
@@ -225,19 +235,19 @@ mid=$(( $(posts) - before ))
 # the beat that wrote these spent nothing yet: the five land 3 now, 2 deferred
 [ "$mid" = 3 ] && [ "$(cat "$WORK/def")" = 2 ] && ok "E: past the budget (3) the answers wait — 3 posted, 2 deferred" \
   || bad "E: posted $mid, deferred $(cat "$WORK/def")"
-FLEET_STEWARD_WRITES=3 TICK beat --force >"$WORK/out" 2>&1
+FLEET_STEWARD_WRITES=3 TICK beat --holder --force >"$WORK/out" 2>&1
 [ $(( $(posts) - before )) = 5 ] && ok "E: the next beat posts the deferred two first" || bad "E: after the beat posted $(( $(posts) - before ))"
 FLEET_STEWARD_WRITES=0 TICK answer --row "$r14" --text x --by person >/dev/null 2>&1
-FLEET_STEWARD_WRITES=0 TICK beat --force >"$WORK/out" 2>&1
+FLEET_STEWARD_WRITES=0 TICK beat --holder --force >"$WORK/out" 2>&1
 grep -q '延后 1 条' "$WORK/out" && ok "E: the card says 延后 N 条" || bad "E: card: $(cat "$WORK/out")"
 
 # F — not due: returns 4 at once
-TICK beat >/dev/null 2>&1; rc=$?
+TICK beat --holder >/dev/null 2>&1; rc=$?
 [ "$rc" = 4 ] && ok "F: not due — the every-minute caller returns 4" || bad "F: rc=$rc"
 
 # N — the decision sheet's panel (issue #2832, EPIC #2831 C1), in a book of its
 # own: one ticket asked three times is ONE group (fleet_decision.group, kept as
-# `groups` on every save); the orchestrator's @sheet_pane 0 (or none at all) gets
+# `groups` on every save); the steward holder's @sheet_pane 0 (or none at all) gets
 # the whole sheet byte for byte as before, 1 gets one sentence and no table; an
 # answer through the panel's road lands on the row and once in decision-<day>.md;
 # old-format rows (v=0, no fields) group the same way
@@ -252,7 +262,7 @@ TICK beat >/dev/null 2>&1; rc=$?
   ask 31 '真机演练第 3 次可以开始吗？' --suggest '开始' --due 4h
   ask 32 '小程序试点选哪家商户？' --suggest '甲' --due 4h
   needs 31; needs 32
-  TICK beat --force >/dev/null 2>&1
+  TICK beat --holder --force >/dev/null 2>&1
   g=$(python3 -c 'import json,sys; g=json.load(open(sys.argv[1]))["groups"]; o=[x for x in g if x["state"]=="open"]; print(len(o), len(o[0]["ids"]), "问了 3 次" in o[0]["from"], o[0]["item"])' "$STATE")
   n=$(python3 "$BIN/fleet_decision.py" group --rows "$STATE" | grep -c '"state": "open"')
   [ "$g" = "2 3 True 真机演练第 3 次可以开始吗？" ] && [ "$n" = 2 ] \
@@ -260,15 +270,15 @@ TICK beat >/dev/null 2>&1; rc=$?
     || bad "N: groups '$g', CLI open groups $n"
   last() { awk '/^>>> orchestrator/{m=""; f=1; next} /^>>> /{f=0} f{m=m $0 "\n"} END{printf "%s", m}' "$ST_GH/sends.log" \
     | sed 's/id=[0-9a-f-]*/id=X/'; }
-  printf '@0\torchestrator\tidle\t\t\t\t\n' >> "$ST_WINS"
+  printf '@9\tsteward\tidle\t\t\t\t\n' >> "$ST_WINS"
   TICK sheet --force >/dev/null 2>&1; none=$(last)
-  sed -i.bak '/orchestrator/d' "$ST_WINS"; printf '@0\torchestrator\tidle\t\t\t\t\t0\n' >> "$ST_WINS"
+  sed -i.bak '/steward/d' "$ST_WINS"; printf '@9\tsteward\tidle\t\t\t\t\t0\n' >> "$ST_WINS"
   TICK sheet --force >/dev/null 2>&1; zero=$(last)
   full=$(python3 -c 'import json,sys,time; print(json.load(open(sys.argv[1])).get("sheets_full", {}).get(time.strftime("%Y-%m-%d", time.gmtime()), 0))' "$STATE")
   [ -n "$none" ] && [ "$none" = "$zero" ] && printf '%s\n' "$zero" | grep -q '〔row ' && [ "$full" = 2 ] \
     && ok "N: @sheet_pane 0 = no option at all, byte for byte: the whole sheet, counted in sheets_full (2)" \
     || bad "N: pane 0 vs none differ or not full (sheets_full=$full): [$none] vs [$zero]"
-  sed -i.bak '/orchestrator/d' "$ST_WINS"; printf '@0\torchestrator\tidle\t\t\t\t\t1\n' >> "$ST_WINS"
+  sed -i.bak '/steward/d' "$ST_WINS"; printf '@9\tsteward\tidle\t\t\t\t\t1\n' >> "$ST_WINS"
   TICK sheet --force >/dev/null 2>&1; one=$(last)
   full=$(python3 -c 'import json,sys,time; print(json.load(open(sys.argv[1])).get("sheets_full", {}).get(time.strftime("%Y-%m-%d", time.gmtime()), 0))' "$STATE")
   [ "$(printf '%s\n' "$one" | grep -c .)" = 2 ] && printf '%s\n' "$one" | grep -q '决定单有 2 件新的，在右边' \
@@ -308,7 +318,7 @@ printf '#!/bin/sh\ngrep -F -- "$2" "$ST_GH/hissues" 2>/dev/null | head -1 | cut 
 chmod +x "$WORK/bin/hfile" "$WORK/bin/hfind"
 doc() { python3 -c 'import json,sys; print(json.dumps({"rows": [dict(zip(("level","row","msg"), r.split("|"))) for r in sys.argv[1:]]}))' "$@" > "$ST_DOCTOR"; }
 HT() { FLEET_STEWARD_HEALTH_EVERY=0 FLEET_STEWARD_HEALTH_CONFIRM="${FLEET_STEWARD_HEALTH_CONFIRM:-1}" FLEET_STEWARD_HEALTH_REPO=o/f FLEET_STEWARD_HEALTH_FILE_CMD="$WORK/bin/hfile" \
-         FLEET_STEWARD_HEALTH_FIND_CMD="$WORK/bin/hfind" FLEET_STEWARD_IDLE_SECS=60 TICK beat --force; }
+         FLEET_STEWARD_HEALTH_FIND_CMD="$WORK/bin/hfind" FLEET_STEWARD_IDLE_SECS=60 TICK beat --holder --force; }
 hn() { grep -c . "$ST_GH/hissues" 2>/dev/null || echo 0; }
 # the beats above ran the doctor too (no rows): start this leg on a fresh watch
 python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d.pop("health", None); json.dump(d, open(sys.argv[1], "w"))' "$STATE"
@@ -408,8 +418,14 @@ EOF
   [ "${o##*rc=}" = 3 ] && [ "$(count)" = 0 ] && [ -z "$(TT show-option -gqv @attention_log)" ] \
     && ok "G: FLEET_STEWARD=0 — rc 3, no window, no attention flag" || bad "G: off: $o"
   rm -f "$STATE"
-  FLEET_STEWARD=0 TICK beat >/dev/null 2>&1; rc=$?
-  [ "$rc" = 3 ] && [ ! -e "$STATE" ] && ok "G: FLEET_STEWARD=0 — the beat is a no-op (rc 3, no state written)" || bad "G: off beat rc=$rc"
+  touch "$ST_GH/noholder"
+  TICK beat --holder >/dev/null 2>&1; rc=$?
+  python3 "$BIN/fleet_steward.py" beat --session st >/dev/null 2>&1; rc2=$?
+  rm -f "$ST_GH/noholder"
+  python3 "$BIN/fleet_steward.py" beat --session st >/dev/null 2>&1; rc3=$?
+  [ "$rc" = 3 ] && [ "$rc2" = 3 ] && [ "$rc3" = 3 ] && [ ! -e "$STATE" ] \
+    && ok "G: no holder ⇒ beat --holder is a no-op; a bare beat refuses even with one (rc 3, no state written)" \
+    || bad "G: unheld beat rc=$rc, bare rc=$rc2/$rc3"
   o=$(ens FLEET_HOST=1)
   [ "${o##*rc=}" = 3 ] && [ "$(count)" = 0 ] && [ "$(TT show-option -gqv @attention_log)" = 1 ] \
     && ok "G: unset + 承载 ⇒ count — the attention flag on, no window" || bad "G: count: $o"
@@ -499,7 +515,9 @@ case "${plain:-role=worker}" in *$'\t'role=worker$'\t'*|role=worker) ok "J: the 
   *) bad "J: the holder's inventory row does not say role=worker: [$plain]" ;; esac
 
 # W — a red base a WORKER filed (issue #2960): the drain spawns its fixer under the
-# steward when its window is up, else the hub; claimed ⇒ off the queue, no room ⇒ kept
+# steward HOLDER; claimed ⇒ off the queue, no room ⇒ kept. Nobody holds the role
+# (EPIC #3111 C4) ⇒ nothing spawned: the person told ONCE, the issue kept queued,
+# and the next holder's beat spawns it.
 BQ="$FLEET_CONF_DIR/fleets/st/breakage-spawn"; mkdir -p "$BQ"
 printf 'o/r\t71\tmaster 红\t\n' > "$BQ/o-r-71"
 printf 'o/r\t72\t又红\tcodex\n' > "$BQ/o-r-72"
@@ -510,18 +528,49 @@ case " $* " in *" 72 "*) exit "${BK_RC72:-0}" ;; esac
 exit 0
 EOF
 chmod +x "$WORK/bin/bkspawn"
-printf '@9\tsteward\tidle\t\t\t\t\t\n' > "$ST_WINS"
-BK_RC72=2 FLEET_STEWARD=0 FLEET_STEWARD_SPAWN_CMD="$WORK/bin/bkspawn" TICK breakage >/dev/null 2>&1
+BK_RC72=2 FLEET_STEWARD_SPAWN_CMD="$WORK/bin/bkspawn" TICK breakage >/dev/null 2>&1
 grep -qx '71 st --repo o/r --origin steward --title master 红' "$ST_GH/bkspawn.log" \
   && grep -qx '72 st --repo o/r --origin steward --title 又红 --agent codex' "$ST_GH/bkspawn.log" \
   && [ ! -f "$BQ/o-r-71" ] && [ -f "$BQ/o-r-72" ] \
-  && ok "W: a worker's breakage — spawned under the steward (steward off or not); no room stays queued" \
+  && ok "W: a worker's breakage — spawned under the steward holder; no room stays queued" \
   || bad "W: drain $(cat "$ST_GH/bkspawn.log" 2>&1) · left $(ls "$BQ")"
-: > "$ST_WINS"; : > "$ST_GH/bkspawn.log"
+: > "$ST_GH/bkspawn.log"; : > "$ST_GH/alerts.log"; touch "$ST_GH/noholder"
 FLEET_STEWARD_SPAWN_CMD="$WORK/bin/bkspawn" TICK breakage >/dev/null 2>&1
-grep -qx '72 st --repo o/r --origin hub --title 又红 --agent codex' "$ST_GH/bkspawn.log" && [ ! -f "$BQ/o-r-72" ] \
-  && ok "W2: no steward window ⇒ the hub is the fixer's parent; spawned ⇒ off the queue" \
-  || bad "W2: drain $(cat "$ST_GH/bkspawn.log" 2>&1) · left $(ls "$BQ")"
+FLEET_STEWARD_SPAWN_CMD="$WORK/bin/bkspawn" TICK breakage >/dev/null 2>&1
+[ ! -s "$ST_GH/bkspawn.log" ] && [ -f "$BQ/o-r-72" ] && [ "$(grep -c . "$ST_GH/alerts.log")" = 1 ] \
+  && grep -q '^event breakage .*o/r#72.*没人接手管家' "$ST_GH/alerts.log" \
+  && ok "W2: no holder ⇒ nothing spawned, the person told ONCE (two drains), the issue kept queued" \
+  || bad "W2: spawned [$(cat "$ST_GH/bkspawn.log")] alerts [$(cat "$ST_GH/alerts.log")] left $(ls "$BQ")"
+rm -f "$ST_GH/noholder"
+[ -f "$STATE" ] && python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d.pop("next_at", None); json.dump(d, open(sys.argv[1], "w"))' "$STATE"
+FLEET_STEWARD_SPAWN_CMD="$WORK/bin/bkspawn" TICK beat --holder >/dev/null 2>&1
+grep -qx '72 st --repo o/r --origin steward --title 又红 --agent codex' "$ST_GH/bkspawn.log" && [ ! -f "$BQ/o-r-72" ] \
+  && [ ! -e "$BQ/.told-o-r-72" ] \
+  && ok "W3: a holder took the role — its beat drains the queue (spawned ⇒ off it)" \
+  || bad "W3: drain $(cat "$ST_GH/bkspawn.log" 2>&1) · left $(ls -a "$BQ")"
+
+# O — nobody holds the steward role (EPIC #3111 C4): a due row is not answered,
+# nothing spawned, no orphan PR merged, no sheet / page / [decision] written
+(
+  export FLEET_CONF_DIR="$WORK/confO" ST_GH="$WORK/ghO" ST_WINS="$WORK/winsO.txt"
+  STATE="$FLEET_CONF_DIR/global/steward.state.json"
+  mkdir -p "$FLEET_CONF_DIR/fleets/st/repos" "$ST_GH" "$FLEET_CONF_DIR/global/epic-running.d"
+  printf 'FLEET_REPO="o/r"\n' > "$FLEET_CONF_DIR/fleets/st/repos/o-r.conf"
+  : > "$ST_WINS"; touch "$ST_GH/noholder"
+  printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "$ST_GH/backstop.log"\n' > "$WORK/bin/backstopO"; chmod +x "$WORK/bin/backstopO"
+  printf 'o-r-300 %s\n' "$(( $(date +%s) - 86400 ))" > "$FLEET_CONF_DIR/global/epic-running.d/o-r-300"
+  ask 41 '日志留几天？' --suggest '7 天' --due 2000-01-01T00:00:00Z
+  needs 41
+  p0=$(posts)
+  FLEET_STEWARD_BACKSTOP_CMD="$WORK/bin/backstopO" TICK beat --holder --force >/dev/null 2>&1; rc=$?
+  TICK sheet --force >"$WORK/outO" 2>&1; rc2=$?
+  [ "$rc" = 3 ] && [ "$rc2" = 3 ] && [ "$(posts)" = "$p0" ] && ! grep -q 'by=default' "$ST_GH/o-r-41.json" \
+    && [ ! -s "$ST_GH/backstop.log" ] && [ "$(sends)" = 0 ] && [ ! -e "$STATE" ] \
+    && [ ! -e "$FLEET_CONF_DIR/fleets/st/steward" ] && grep -q '没人接手管家' "$WORK/outO" \
+    && ok "O: no holder — the due row unanswered, no backstop / merge, no sheet, page or [decision], no state" \
+    || bad "O: rc=$rc sheet rc=$rc2 posts ${p0}→$(posts) backstop [$(cat "$ST_GH/backstop.log" 2>/dev/null)] sends=$(sends) state=$(ls "$FLEET_CONF_DIR/global")"
+) | while IFS= read -r line; do printf '%s\n' "$line"; case "$line" in FAIL*) echo x >> "$WORK/failsO" ;; esac; done
+[ -s "$WORK/failsO" ] && fails=$((fails + $(grep -c . "$WORK/failsO")))
 
 [ "$fails" = 0 ] && { echo "fleet-steward selftest PASS"; exit 0; }
 echo "fleet-steward selftest: $fails FAILED"; exit 1

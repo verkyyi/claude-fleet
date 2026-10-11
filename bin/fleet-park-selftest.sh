@@ -21,11 +21,13 @@
 #      same sid> --seed-file <reads the handoff> --force; out of the book
 #   E  no room (spawn rc 2): it stays parked, `blocked` goes back on
 #   F  a condition already met before the park lands cancels it — the window stays
-#   G  the steward's beat moves parks and stamps the count; FLEET_STEWARD_PARK=0
-#      leaves the book untouched
+#   G  the steward holder's beat (`beat --holder`, EPIC #3111 C4) moves parks and
+#      stamps the count; FLEET_STEWARD_PARK=0 leaves the book untouched
 #   I  the metric: the parked stretch is one `stuck` segment ended by the park;
 #      fleet-steward-stats.sh stuck counts it
-#   J  the steward in `count` mode parks nothing but still measures (every 10 min)
+#   J  parking runs ONLY under `beat --holder` with a holder (issue #3115): a bare
+#      `beat`, and `beat --holder` when nobody holds the steward role, park nothing,
+#      ask nothing and touch neither book
 #   H  a restore from a map taken while it was still open (bin/fleet-restore.sh,
 #      the reboot / lost-server road) does not reopen the parked one — and does
 #      reopen an ordinary missing one beside it
@@ -228,9 +230,10 @@ grep -q '"ev": "cancel", "ref": "o/r#9"' "$FLEET_CONF_DIR/logs/park.ndjson" && o
 
 # --- G: the steward's beat -------------------------------------------------------------
 printf '#!/bin/sh\n:\n' > "$S/none"; chmod +x "$S/none"
-beat() { env FLEET_STEWARD=1 FLEET_STEWARD_WINDOWS_CMD="$S/none" FLEET_STEWARD_CHILDREN_CMD="$S/none" \
+printf '#!/bin/sh\nprintf "@9\\n"\n' > "$S/holder"; chmod +x "$S/holder"
+beat() { env FLEET_STEWARD_HOLDER_CMD="$S/holder" FLEET_STEWARD_WINDOWS_CMD="$S/none" FLEET_STEWARD_CHILDREN_CMD="$S/none" \
              FLEET_STEWARD_SEND_CMD="$S/none" FLEET_STEWARD_STAMP_CMD="$S/none" FLEET_STEWARD_DOCTOR_CMD="$S/none" FLEET_STEWARD_IDLE_CMD="$S/none" \
-             python3 "$BIN/fleet_steward.py" beat --force --session pk; }
+             python3 "$BIN/fleet_steward.py" beat --holder --force --session pk; }
 card=$(beat 2>&1)
 printf '%s\n' "$card" | grep -q '停放 1 个' && ok "G the beat's card counts the parked" || bad "G card: $card"
 python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if [p["ref"] for p in d.get("parked", [])] == ["o/r#11"] else 1)' \
@@ -250,7 +253,7 @@ grep '"ev": "stuck"' "$FLEET_CONF_DIR/logs/park.ndjson" | grep '"ref": "o/r#7"' 
 st=$(bash "$BIN/fleet-steward-stats.sh" stuck --days 7)
 case "$st" in "stuck: "*" · parked 1 · "*) ok "I fleet-steward-stats.sh stuck reads it: $st" ;; *) bad "I stats: $st" ;; esac
 
-# --- J: count mode: measured, never parked ---------------------------------------
+# --- J: no holder, no park (issue #3115) -----------------------------------------
 python3 -c '
 import json, sys
 p = sys.argv[1]; d = json.load(open(p)); d.pop("next_at", None); json.dump(d, open(p, "w"))' \
@@ -259,14 +262,23 @@ python3 -c '
 import json, sys
 p = sys.argv[1]; d = json.load(open(p)); d["observed_at"] = 0; d["stuck"] = {"o/r#99": 1}; json.dump(d, open(p, "w"))' \
   "$FLEET_CONF_DIR/global/park.json"
+cp "$FLEET_CONF_DIR/global/park.json" "$WORK/park.j"
+cp "$FLEET_CONF_DIR/global/steward.state.json" "$WORK/state.j"
 : > "$S/sent"
-env FLEET_STEWARD=count FLEET_STEWARD_WINDOWS_CMD="$S/none" FLEET_STEWARD_CHILDREN_CMD="$S/none" \
-    python3 "$BIN/fleet_steward.py" beat --session pk >/dev/null 2>&1
-rc=$?
-[ "$rc" = 3 ] && [ ! -s "$S/sent" ] && ok "J count mode: the beat parks nothing (rc 3, no request)" \
-  || bad "J count mode: rc $rc, sent [$(cat "$S/sent")]"
-grep '"ev": "stuck"' "$FLEET_CONF_DIR/logs/park.ndjson" | grep -q '"ref": "o/r#99", .*"how": "ended"' \
-  && ok "J count mode still closes a finished stuck stretch" || bad "J count mode measured nothing"
+for how in bare unheld; do
+  if [ "$how" = bare ]; then
+    env FLEET_STEWARD_HOLDER_CMD="$S/holder" FLEET_STEWARD_WINDOWS_CMD="$S/none" FLEET_STEWARD_CHILDREN_CMD="$S/none" \
+        python3 "$BIN/fleet_steward.py" beat --force --session pk >/dev/null 2>&1
+  else
+    env FLEET_STEWARD_HOLDER_CMD="$S/none" FLEET_STEWARD_WINDOWS_CMD="$S/none" FLEET_STEWARD_CHILDREN_CMD="$S/none" \
+        python3 "$BIN/fleet_steward.py" beat --holder --force --session pk >/dev/null 2>&1
+  fi
+  rc=$?
+  [ "$rc" = 3 ] && [ ! -s "$S/sent" ] && cmp -s "$WORK/park.j" "$FLEET_CONF_DIR/global/park.json" \
+    && cmp -s "$WORK/state.j" "$FLEET_CONF_DIR/global/steward.state.json" \
+    && ok "J $how beat: rc 3, nothing parked, asked or written" \
+    || bad "J $how beat: rc $rc, sent [$(cat "$S/sent")]"
+done
 
 # --- H: a restore from the map taken before the park -----------------------------
 # #11 is still parked (#7 woke in D); #10 is an ordinary window lost beside it.

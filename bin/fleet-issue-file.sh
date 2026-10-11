@@ -449,18 +449,19 @@ if [ "$bind" = 1 ] && [ -n "$num" ]; then
     || printf 'fleet-issue-file: filed #%s but the bind was refused — it is on the backlog\n' "$num" >&2
 fi
 
-# --- 5c. a worker's breakage: the steward spawns its fixer (issue #2960) --------
-# One level of delegation: the fixer's parent is the steward (else the hub), never
-# the worker that saw it first. The issue is queued in the fleet's state dir and
-# the queue drained at once in the background, off this pane
-# (fleet-steward-tick.sh breakage); the diskguard tick drains it again if that
-# spawn was refused (no room), whatever the steward's mode.
+# --- 5c. a worker's breakage: the steward holder spawns its fixer (issue #2960) --
+# One level of delegation: the fixer's parent is the session holding the steward
+# role, never the worker that saw it first. The issue is queued in the fleet's
+# state dir and the queue drained at once in the background, off this pane
+# (fleet-steward-tick.sh breakage); the holder's beat drains it again if that
+# spawn was refused (no room). Nobody holds the role (issue #3115) ⇒ nobody is
+# spawned: the person is told once and the issue waits in the queue.
 if [ "$worker_seat" = 1 ] && [ -n "$breakage_key" ] && [ -n "$num" ] && [ -n "$_fs" ]; then
   _bq="$(fleet_state_dir "$_fs")/breakage-spawn"
   mkdir -p "$_bq" 2>/dev/null
   printf '%s\t%s\t%s\t%s\n' "$repo" "$num" "$(printf '%s' "$title" | tr '\t\n' '  ')" "$spawn_agent" \
     > "$_bq/$(fleet_slug "$repo")-$num" 2>/dev/null \
-    && printf 'fleet-issue-file: #%s queued for the steward — it spawns the fixer (wait with await %s)\n' "$num" "$num" >&2
+    && printf 'fleet-issue-file: #%s queued for the steward — its holder spawns the fixer (none: the person is told; wait with await %s)\n' "$num" "$num" >&2
   ( env -u TMUX_PANE -u TMUX bash "$BIN/fleet-steward-tick.sh" breakage --session "$_fs" >/dev/null 2>&1 & ) 2>/dev/null
 fi
 exit 0
