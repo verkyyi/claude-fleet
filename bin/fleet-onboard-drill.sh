@@ -657,11 +657,24 @@ PANEL_NOMATCH='没有会话叫这句话|no session goes by these words'
 PANEL_NO='新会话没开起来|the new session did not open'
 # pw_row <name>: the new session's row — the old client's list row on screen;
 # the thin client's (no list) the client's own `fleet ls --json`, as
-# 「<name> · <machine> · <key>」
+# 「<name> · <machine> · <key>」. A list that could not be READ (not JSON — on
+# 202937a7 a working row's spinner byte crashed it, #3444) leaves its last stderr
+# line in PW_LSERR: drill 30 (#3452) read that as «nothing opened» while the new
+# session was answering on screen.
+PW_LSERR=''
 pw_row() {
-  local r
+  local r out err
   if [ "$THINC" = 1 ]; then
-    r=$(as_login "$H/.local/bin/fleet" ls --json 2>/dev/null | ls_row "$1") || return 0
+    err=$(mktemp "${TMPDIR:-/tmp}/drill-ls.XXXXXX") || err=/dev/null
+    out=$(as_login "$H/.local/bin/fleet" ls --json 2>"$err")
+    if printf '%s' "$out" | python3 -c 'import json,sys; sys.exit(0 if isinstance(json.load(sys.stdin), list) else 1)' 2>/dev/null; then
+      PW_LSERR=''
+    else
+      PW_LSERR=$(sed '/^[[:space:]]*$/d' "$err" 2>/dev/null | tail -n 1 | cut -c1-160)
+      PW_LSERR=${PW_LSERR:-not JSON: $(printf '%s' "$out" | head -n 1 | cut -c1-80)}
+    fi
+    [ "$err" = /dev/null ] || rm -f "$err"
+    r=$(printf '%s' "$out" | ls_row "$1") || return 0
     printf '%s · %s · %s\n' "$1" "$(printf '%s' "$r" | cut -f1)" "$(printf '%s' "$r" | cut -f2)"
   else
     row_named "$1"
@@ -697,7 +710,7 @@ thin_open() {
 PW_K='' PW_P='' PW_ANSWERED=0 PW_OPENING='' PW_OPENED=0
 place_wait() {
   local deadline open0='' open_end=0 eta last_eta='' v
-  PW_K='' PW_P='' PW_ANSWERED=0 PW_OPENING='' PW_OPENED=0
+  PW_K='' PW_P='' PW_ANSWERED=0 PW_OPENING='' PW_OPENED=0 PW_LSERR=''
   if thin_is; then
     thin_open "$1" "$3" || { PW_K=nopanel; return 0; }
   else
@@ -712,7 +725,9 @@ place_wait() {
     if printf '%s\n' "$PW_P" | grep -Eq -- "$SCRATCH_NO"; then PW_K=no; break; fi
     v=$(screen)
     if [ "$THINC" = 1 ] && printf '%s\n' "$v" | grep -Eq -- "$PANEL_NO"; then PW_K=no PW_P=$v; break; fi
-    if [ -n "$(pw_row "$2")" ]; then PW_K=row; break; fi
+    # not $(pw_row): its PW_LSERR must reach the verdict
+    pw_row "$2" > "$RUN/pw-row.txt"
+    if [ -s "$RUN/pw-row.txt" ]; then PW_K=row; break; fi
     if printf '%s\n' "$v" | grep -Eq -- "$SCRATCH_HOSTKEY"; then PW_K=hostkey; break; fi
     if printf '%s\n' "$v" | grep -Eq -- "$SCRATCH_OPENING"; then
       if [ -z "$open0" ]; then
@@ -795,6 +810,11 @@ step_scratch() {
            # nor its failed came in its own give-up + a minute (#2908)
            row "提示：${opening}，${PW_OPENED}s 后左边仍没有机器、入口也没说失败" "等" "是 — 入口说在开机器，过了它自己的放弃时限仍没开好也没说失败"
            failstep scratch "the hub said '$opening' and neither a row $NAME nor a failure came within ${PW_OPENED}s (cap ${OPENING_CAP}s):"; tail_pane; return 1
+         fi
+         if [ "$THINC" = 1 ] && [ -n "$PW_LSERR" ]; then
+           # the list could not be read: say so, never «nothing opened» (#3452)
+           row "面板 ↵ 之后读不出会话列表（fleet ls --json：${PW_LSERR}）" "$(new_keys "$NAME")" "是 — 会话列表读不出来，看不到新任务有没有开"
+           failstep scratch "fleet ls --json could not be read, so no row $NAME could be seen within ${STEP_SECS}s: $PW_LSERR"; tail_pane; return 1
          fi
          row "敲名字回车后没有问题、没有新行、也没有提示" "$(new_keys "$NAME")" "是 — 不知道怎么开会话"
          failstep scratch "no question, no row named $NAME and no refusal within ${STEP_SECS}s:"; tail_pane; return 1 ;;
