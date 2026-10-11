@@ -35,6 +35,9 @@
 #      `fleet ls --json`; claude's 「⏺ PONG」 PASSes claude-answers
 #   F  the same, claude saying 「API Error: 403 …」: claude-answers FAILs quoting it
 #   G  answer_state / answer_bad_line on canned screens
+#   H  (issue #3452) ⚡ opens the session but the client's `fleet ls --json` cannot
+#      be read (202937a7's spinner byte, #3444): step 8 FAILs NAMING the list, never
+#      «no question, no row» — drill 30 read that as words sent to the old session
 set -u
 BIN="$(cd "$(dirname "$0")" && pwd)"
 DRILL="$BIN/fleet-onboard-drill.sh"
@@ -323,6 +326,11 @@ chmod +x "$T/claude.sh" "$T/newsess.sh" "$T/argv.sh" "$T/ssh.sh" "$RHOME/.claude
 cat > "$LH/.local/bin/fleet" <<EOF
 #!/bin/bash
 [ "\$1 \$2" = 'ls --json' ] || exit 2
+# ls.mode crash: 202937a7's list, a working row's lone spinner byte (#3444, #3452)
+if [ "\$(cat "$T/ls.mode" 2>/dev/null)" = crash ]; then
+  printf 'Traceback (most recent call last):\nUnicodeDecodeError: utf-8 codec cannot decode byte 0xe2 in position 812\n' >&2
+  exit 1
+fi
 TMUX='' "$TMUXB" -S "$IN" list-windows -t fl -F '#{window_name}	#{@task_line}	#{@fleet_id}' 2>/dev/null | python3 -c '
 import json, sys
 print(json.dumps([{"name": n, "title": t, "key": "wid:U/" + f, "node": "home1"} for n, t, f in (l.rstrip("\\n").split("\\t") for l in sys.stdin)]))'
@@ -370,6 +378,21 @@ if command -v python3 >/dev/null 2>&1 && start_thin ok; then
     && bad 'E: a bare shell window opened on the home (prefix c?)' || ok 'E: no stray shell window on the home'
   [ "$(TMUX='' "$TMUXB" -S "$IN" list-windows -t fl -F '#{window_name}' | grep -c 我的会话)" = 2 ] \
     && ok 'E: the panel opened a second session beside the first' || bad 'E: no second 我的会话 on the home'
+
+  # H (issue #3452): ⚡ opened the session, but the client's `fleet ls` cannot be
+  # read — the FAIL names the list, never «no question, no row»
+  if start_thin ok; then
+    echo crash > "$T/ls.mode"
+    out=$(drill env FLEET_DRILL_ONLY=8 FLEET_DRILL_STEP_SECS=8 bash "$DRILL" --login "$LOGIN" --name first 2>&1); rc=$?
+    rm -f "$T/ls.mode"
+    if [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -Eq '^FAIL +scratch +fleet ls --json could not be read.*UnicodeDecodeError'; then
+      ok 'H: an unreadable fleet ls is named in the FAIL, not «no row»'
+    else bad "H: exit $rc: $(printf '%s\n' "$out" | grep -E '^(PASS|FAIL|SKIP)' | head -n 3)"; fi
+    case "$(cat "$T/new.argv" 2>/dev/null)" in
+      *'--prompt first'*) ok 'H: the panel did open the new session' ;;
+      *) bad "H: no new session argv: $(cat "$T/new.argv" 2>/dev/null)" ;;
+    esac
+  else bad 'H: the thin client did not come up'; fi
 
   if start_thin apierr; then
     out=$(drill env FLEET_DRILL_ONLY=8 bash "$DRILL" --login "$LOGIN" --name first 2>&1); rc=$?
