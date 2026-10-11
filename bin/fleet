@@ -10,12 +10,9 @@
 #   fleet m4                    the same, onto a machine you name
 #   fleet --thin [<session>]    the THIN client (#3003, EPIC #2999): one small
 #                               loop and one ssh to your home machine — no tmux
-#                               here. Plain `fleet` IS it since the drill
-#                               (#3007, C10); FLEET_CLIENT=shell keeps the old
-#                               client for plain `fleet`
-#   fleet --old                 the OLD client, once (#3007): the way back while
-#                               it is still here — every use is one line in
-#                               ~/.cache/claude-fleet/old-client.log
+#                               here; FLEET_CLIENT=thin makes it plain `fleet`,
+#                               and so does an ssh login (a phone, #3006;
+#                               FLEET_CLIENT=shell keeps the old client there)
 #   fleet shell [m4]            the client, by its script's name (fleet-shell.sh)
 #   fleet quit                  退出 fleet (#2349): the client's every process on
 #                               this computer goes — the list, the hub loop, the
@@ -217,20 +214,7 @@ fi
 # hub asked, no ssh back to itself), elsewhere the hub's pick, which answers
 # `local` too when it is this machine and login. FLEET_CLIENT=shell keeps the old
 # client there (until the old client goes, C11).
-# Since the drill (issue #3007, EPIC #2999 C10) plain `fleet` is the thin loop
-# everywhere, not only over ssh; `fleet --old` is the way back, one line in
-# old-client.log each time (C11 reads it before it deletes the old client).
-if [ "${1-}" = --old ]; then
-  shift
-  _ol="${XDG_CACHE_HOME:-$HOME/.cache}/claude-fleet"
-  mkdir -p "$_ol" 2>/dev/null \
-    && printf '%s\t%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(id -un)" "${SSH_CONNECTION:+ssh}${SSH_CONNECTION:-local}" "$*" \
-         >> "$_ol/old-client.log" 2>/dev/null
-  unset _ol
-  FLEET_CLIENT=shell; export FLEET_CLIENT
-  client "$@"
-fi
-if [ $# -eq 0 ] && [ -z "${FLEET_CLIENT:-}" ]; then
+if [ $# -eq 0 ] && [ -z "${FLEET_CLIENT:-}" ] && [ -n "${SSH_CONNECTION:-}" ]; then
   FLEET_CLIENT=thin
 fi
 if [ "${1-}" = --thin ] || { [ $# -eq 0 ] && [ "${FLEET_CLIENT:-}" = thin ]; }; then
