@@ -120,6 +120,7 @@ export const zhCN = {
   'ui.nav.mymachines': '我的机器',
   'ui.nav.devices': '设备与 SSH',
   'ui.nav.config': '配置',
+  'ui.nav.connection': '我的连接',
   'ui.nav.phone': '从手机连',
   'ui.nav.quota': '我的额度',
   'ui.nav.subscriptions': '订阅',

@@ -70,6 +70,9 @@ export const PAGES = Object.freeze([
   // the hub (fleet_entry_page.go), not the app — no module, so a click is a
   // plain page load.
   { id: 'phone', label: 'ui.nav.phone', icon: 'phone', href: '/fleet/keys' },
+  // 我的连接 (claude-fleet#3199): the home every device shares, the address,
+  // the keys — the hub's page too.
+  { id: 'connection', label: 'ui.nav.connection', icon: 'home', href: '/fleet/connection' },
   // 我的额度 (claude-fleet#2517).
   { id: 'quota', label: 'ui.nav.quota', icon: 'card', href: '/quota', module: '/quota.js' },
   // 我的用量 (claude-fleet#2519).

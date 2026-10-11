@@ -30,7 +30,14 @@ func keysPage(t *testing.T, h *harness, principal, query string, form url.Values
 	if form != nil {
 		method, body = http.MethodPost, strings.NewReader(form.Encode())
 	}
-	req, _ := http.NewRequest(method, h.http.URL+EntryPagePath+query, body)
+	path := EntryPagePath
+	if strings.HasPrefix(query, "/") { // another page of the book: /fleet/connection?…
+		path, query = query, ""
+		if i := strings.IndexByte(path, '?'); i >= 0 {
+			path, query = path[:i], path[i:]
+		}
+	}
+	req, _ := http.NewRequest(method, h.http.URL+path+query, body)
 	req.Header.Set("Accept", "text/html")
 	if form != nil {
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -105,6 +112,8 @@ func TestEntryPageOwnBookOnly(t *testing.T) {
 	b64 := strings.Fields(line)[1]
 
 	code, body, _ = keysPage(t, h, pAlice, "?ok=added", nil)
+	_, conn, _ := keysPage(t, h, pAlice, EntryConnPath, nil) // the keys themselves are 我的连接's
+	body += conn
 	short := drawnFP(k.FP)
 	for _, want := range []string{"已加上", "alice-1.cf.example.com", ">22022<", ">alice<", "iPhone", short, "ed25519", "还没用过", `href="?revoke=` + k.ID} {
 		if !strings.Contains(body, want) {
@@ -116,7 +125,7 @@ func TestEntryPageOwnBookOnly(t *testing.T) {
 	}
 
 	// Bob sees none of it — not even naming Alice — and cannot revoke it.
-	for _, q := range []string{"", "?principal=" + url.QueryEscape(pAlice), "?revoke=" + k.ID} {
+	for _, q := range []string{"", "?principal=" + url.QueryEscape(pAlice), "?revoke=" + k.ID, EntryConnPath, EntryConnPath + "?revoke=" + k.ID} {
 		_, body, _ = keysPage(t, h, pBob, q, nil)
 		if strings.Contains(body, `class="n">iPhone<`) || strings.Contains(body, short) || strings.Contains(body, k.ID) || strings.Contains(body, "alice-1") {
 			t.Fatalf("Bob's page %q shows Alice's book:\n%s", q, body)
@@ -237,7 +246,7 @@ func TestEntryPageMoveOnlyLiveFleets(t *testing.T) {
 	}
 	connectNode(t, h, "spare-alice", "spare", "alice", false) // online, no fleet
 	keysPost(t, h, pAlice, "do", "name", "name", "alice")
-	_, body, _ := keysPage(t, h, pAlice, "", nil)
+	_, body, _ := keysPage(t, h, pAlice, EntryConnPath, nil)
 	home, ok, _ := h.srv.Store.EntryHomeOf(pAlice)
 	if !ok {
 		t.Fatalf("Alice has no home after her first visit")

@@ -35,6 +35,10 @@ import (
 // EntryPagePath is the keys page.
 const EntryPagePath = "/fleet/keys"
 
+// EntryConnPath is 我的连接 (claude-fleet#3199): the same book as a settings
+// page — the home every device shares, the address, the keys — for every role.
+const EntryConnPath = "/fleet/connection"
+
 // entryReturnCookie remembers, across the GitHub sign-in, that the browser
 // was on its way to the keys page (loginReturn reads it).
 const entryReturnCookie = "ccquota_return"
@@ -109,6 +113,10 @@ type entryPageData struct {
 	Revoke   *entryKeyRow
 	Move     *entryChoiceRow
 
+	Conn     bool   // 我的连接 (EntryConnPath), not the wizard
+	Self     string // the path the page is on: its forms post back there
+	ConnPath string
+
 	Steps   []entryStep
 	Step    int  // the open step, 0 = all done
 	Used    bool // a key of theirs has come in through the door
@@ -125,7 +133,11 @@ func (s *Server) handleEntryPage(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusMethodNotAllowed, "GET or POST")
 		return
 	}
-	page := entryPageData{pageView: newPageView(r, i18n.ZhCN), Port: entryPort, AppURL: entryAppStore}
+	page := entryPageData{pageView: newPageView(r, i18n.ZhCN), Port: entryPort, AppURL: entryAppStore,
+		Conn: r.URL.Path == EntryConnPath, Self: EntryPagePath, ConnPath: EntryConnPath}
+	if page.Conn {
+		page.Self = EntryConnPath
+	}
 	if !s.entryOn() {
 		s.entryPageOff(w, r, page)
 		return
@@ -155,7 +167,7 @@ func (s *Server) handleEntryPage(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if ok, status := s.entryPagePost(r, c, now, &page); ok != "" {
-			http.Redirect(w, r, EntryPagePath+"?ok="+ok, http.StatusSeeOther)
+			http.Redirect(w, r, page.Self+"?ok="+ok, http.StatusSeeOther)
 			return
 		} else if status != 0 {
 			if err := s.fillEntryPage(r, c, now, &page); err != nil {
@@ -200,7 +212,7 @@ func (s *Server) entryPageOff(w http.ResponseWriter, r *http.Request, page entry
 			httpError(w, code, why)
 			return
 		}
-		http.Redirect(w, r, EntryPagePath+"?ok=enabled", http.StatusSeeOther)
+		http.Redirect(w, r, page.Self+"?ok=enabled", http.StatusSeeOther)
 		return
 	}
 	s.writeEntryPage(w, http.StatusOK, page)
@@ -565,7 +577,11 @@ func (s *Server) writeEntryPage(w http.ResponseWriter, status int, page entryPag
 func (s *Server) rememberEntryReturn(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if _, ok := s.sshRelayHTTPIdentity(r); !ok && r.Method == http.MethodGet {
-			http.SetCookie(w, &http.Cookie{Name: entryReturnCookie, Value: EntryPagePath, Path: "/",
+			back := EntryPagePath
+			if r.URL.Path == EntryConnPath {
+				back = EntryConnPath
+			}
+			http.SetCookie(w, &http.Cookie{Name: entryReturnCookie, Value: back, Path: "/",
 				HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: isHTTPS(r), MaxAge: int(loginCookieTTL.Seconds())})
 		}
 		next.ServeHTTP(w, r)
@@ -580,10 +596,11 @@ func entryReturnTo(w http.ResponseWriter, r *http.Request) string {
 		return ""
 	}
 	http.SetCookie(w, &http.Cookie{Name: entryReturnCookie, Value: "", Path: "/", MaxAge: -1})
-	if c.Value != EntryPagePath { // the one place it may send anyone
-		return ""
+	switch c.Value { // the only places it may send anyone
+	case EntryPagePath, EntryConnPath:
+		return c.Value
 	}
-	return EntryPagePath
+	return ""
 }
 
 var entryPageTmpl = template.Must(template.Must(template.New("keys").Funcs(template.FuncMap{"stepOf": entryStepOf, "inc": func(n int) int { return n + 1 }, "dec": func(n int) int { return n - 1 }}).Parse(entryStepTmpl)).Parse(`<!doctype html>
@@ -591,7 +608,7 @@ var entryPageTmpl = template.Must(template.Must(template.New("keys").Funcs(templ
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="robots" content="noindex, nofollow">
 {{if .Refresh}}<meta http-equiv="refresh" content="15">{{end}}
-<title>从手机连 fleet · claudefleet</title>
+<title>{{if .Conn}}我的连接{{else}}从手机连 fleet{{end}} · claudefleet</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%230e6e5e'/%3E%3Cpath d='M4 17l4-10 4 10M12 17l4-10 4 10M3 20h18' stroke='%23fff' stroke-width='2.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
 <style>
 ` + authPaletteCSS + zhTypeCSS + `*{box-sizing:border-box}
@@ -656,19 +673,46 @@ ol.do{margin:6px 0 0;padding-left:1.3em}ol.do li{margin:6px 0}
 .foot{font-size:13px;color:var(--muted);margin-top:16px}
 </style></head><body><main>
 <nav><a class="logo" href="/"><span class="mark"><svg viewBox="0 0 24 24"><path d="M4 17l4-10 4 10M12 17l4-10 4 10M3 20h18"/></svg></span>claudefleet</a></nav>
-<h1>从手机连 fleet</h1>
-<p class="hint">在 iPhone 上用 Termius 直接连进你的会话。一步一步来，每步只做一件事。</p>
+{{if .Conn}}<h1>我的连接</h1>
+<p class="hint">你的家机器、你的地址和你的钥匙：每台设备共用这一份。Mac 上的 <code>fleet</code> 和手机都先进家机器。</p>
+{{else}}<h1>从手机连 fleet</h1>
+<p class="hint">在 iPhone 上用 Termius 直接连进你的会话。一步一步来，每步只做一件事。</p>{{end}}
 {{if .OK}}<p class="msg ok" role="status">{{.OK}}</p>{{end}}
-{{if and .Err (or (eq .ErrFor "revoke") (eq .ErrFor ""))}}<p class="msg err" role="alert">{{.Err}}</p>{{end}}
+{{if and .Err (or (eq .ErrFor "revoke") (eq .ErrFor "") (and (eq .ErrFor "home") (not .Conn)))}}<p class="msg err" role="alert">{{.Err}}</p>{{end}}
 {{if .Off}}
 <div class="card"><h2>直连入口还没开</h2>
 <p>这个入口（hub）还没打开「从手机直连」，所以这一页还加不了钥匙。</p>
 {{if .CanOn}}<p class="hint" style="margin-top:6px">你是管理员：点一下就打开（设置 <code>fleet.entry</code>，随时可在「设置」里关掉）。</p>
-<form method="post" action="/fleet/keys"><input type="hidden" name="do" value="enable"><button class="go wide" type="submit">打开直连入口</button></form>
+<form method="post" action="{{$.Self}}"><input type="hidden" name="do" value="enable"><button class="go wide" type="submit">打开直连入口</button></form>
 {{else}}<p class="hint" style="margin-top:6px">请管理员打开它（设置里的 <code>fleet.entry</code>），打开后再来这一页。</p>{{end}}</div>
 {{else if .NoPerson}}
 <div class="card"><p>这一页给每个人管自己的钥匙。请用你自己的 GitHub 登录打开它（管理员的口令不代表任何人）。</p>
 <a class="btn wide" href="/signin">用 GitHub 登录</a></div>
+{{else if .Conn}}
+<div class="card" id="addr"><h2>你的地址</h2>
+<div class="row"><span class="k">地址</span>{{if .Address}}<span class="v">{{.Address}}</span><button class="cp" type="button" data-cp="{{.Address}}">复制</button>{{else}}<span class="v miss">{{if .NeedName}}还没起名{{else}}地址还没配好{{end}}</span>{{end}}</div>
+<div class="row"><span class="k">端口</span><span class="v">{{.Port}}</span><button class="cp" type="button" data-cp="{{.Port}}">复制</button></div>
+<div class="row"><span class="k">用户名</span>{{if .Home}}<span class="v">{{.Home.Login}}</span><button class="cp" type="button" data-cp="{{.Home.Login}}">复制</button>{{else}}<span class="v miss">还没有家</span>{{end}}</div>
+{{template "state" .}}
+<details style="margin-top:6px"{{if or .NeedName (eq .ErrFor "name")}} open{{end}}><summary>{{if .NeedName}}起地址名{{else}}改地址名（现在：{{.Name}}）{{end}}</summary>
+<form method="post" action="{{$.Self}}"><input type="hidden" name="do" value="name">
+<input name="name" value="{{.NameVal}}" autocapitalize="off" autocorrect="off" spellcheck="false" autocomplete="off" maxlength="20" aria-label="地址名">
+<p class="hint" style="margin-top:6px">小写字母、数字和「-」，3–20 个。{{if not .NeedName}}旧名字还能用 7 天。{{end}}</p>
+{{if eq .ErrFor "name"}}<p class="msg err">{{.Err}}</p>{{end}}
+<button class="wide" type="submit">{{if .NeedName}}就用这个{{else}}改成这个{{end}}</button></form></details></div>
+<div class="card" id="home"><h2>家机器{{if .Home}}：{{.Home.Display}}{{end}}</h2>
+{{if .Home}}<p class="hint">手机的地址指向它（登录 <b>{{.Home.Login}}</b>），Mac 上的 <code>fleet</code> 也先进它；它离线时才临时进别的机器，并告诉你进了哪台。{{.HomeWhy}}</p>
+<div class="choice"><span><b>{{.Home.Display}}</b> · {{.Home.Login}} {{if .Home.Online}}<span class="pill">在线</span>{{else}}<span class="pill off">连不上</span>{{end}}</span><span class="pill">现在的家</span></div>
+{{range .Others}}<div class="choice"><span><b>{{.Display}}</b> · {{.Login}} {{if .Online}}<span class="pill">在线</span>{{else}}<span class="pill off">连不上</span>{{end}}</span>
+<a class="btn cp" href="?move={{.Machine}}&amp;login={{.Login}}#confirm">设为家</a></div>{{else}}<p class="hint" style="margin-top:8px">现在没有别的机器可换：只列你有登录、上面开着你的 fleet 的机器。</p>{{end}}
+<p class="hint" style="margin-top:8px">换家后地址几分钟内指向新家；两台在同一个路由器后面时端口会变；手机第一次连会说主机钥匙变了，接受一次。</p>
+{{if eq .ErrFor "home"}}<p class="msg err">{{.Err}}</p>{{end}}
+{{else}}<p class="hint">你还没有家：家是你有登录、上面开着 fleet 的那台机器。先在一台机器上把 fleet 开起来，这里就会写出来。</p>{{end}}</div>
+<div class="card" id="keys"><h2>我的设备钥匙（{{len .Keys}}）</h2>
+{{range .Keys}}<div class="key"><div class="t"><div class="n">{{if .Name}}{{.Name}}{{else}}（没起名）{{end}}</div>
+<div class="s">{{.Type}} · <code>{{.FP}}</code> · 加于 {{.Added}}</div><div class="s">上次用：{{.LastUsed}}</div></div>
+<a class="btn bad cp" href="?revoke={{.ID}}#confirm">撤掉</a></div>{{else}}<p class="hint">还没有钥匙。</p>{{end}}
+<a class="btn wide" href="/fleet/keys?step={{if .Keys}}3{{else}}1{{end}}#now">{{if .Keys}}再加一把（照「从手机连」第 3 步）{{else}}从手机连：一步步来{{end}}</a></div>
 {{else}}
 <div class="steps">
 {{range .Steps}}{{if .Open}}{{template "step" (stepOf $ .)}}{{else if .Done}}<a class="st done" href="?step={{.N}}"><span class="no">✓</span>{{.Title}}<span class="re">再看</span></a>
@@ -682,38 +726,22 @@ ol.do{margin:6px 0 0;padding-left:1.3em}ol.do li{margin:6px 0}
 <div class="row"><span class="k">端口</span><span class="v">{{.Port}}</span></div>
 <div class="row"><span class="k">用户名</span>{{if .Home}}<span class="v">{{.Home.Login}}</span>{{else}}<span class="v miss">还没有家</span>{{end}}</div>
 </div>{{end}}
-{{if .Home}}<div class="card" id="where"><h2>你的家机器：{{.Home.Display}}</h2>
-<p class="hint">手机连的就是这台（登录 <b>{{.Home.Login}}</b>）。{{.HomeWhy}}{{if .Others}}要换，见下面「换一台当家」。{{end}}</p></div>{{end}}
-{{if .Keys}}<div class="card" id="keys"><details><summary>你的钥匙（{{len .Keys}}）</summary>
-{{range .Keys}}<div class="key"><div class="t"><div class="n">{{if .Name}}{{.Name}}{{else}}（没起名）{{end}}</div>
-<div class="s">{{.Type}} · <code>{{.FP}}</code> · 加于 {{.Added}}</div><div class="s">上次用：{{.LastUsed}}</div></div>
-<a class="btn bad cp" href="?revoke={{.ID}}#confirm">撤掉</a></div>{{end}}
-<a class="btn wide" href="?step=3#now">再加一把</a></details></div>{{end}}
-{{if not .NeedName}}<div class="card"><details{{if eq .ErrFor "name"}} open{{end}}><summary>改地址名（现在：{{.Name}}）</summary>
-<form method="post" action="/fleet/keys"><input type="hidden" name="do" value="name">
-<input name="name" value="{{.NameVal}}" autocapitalize="off" autocorrect="off" spellcheck="false" autocomplete="off" maxlength="20" aria-label="地址名">
-<p class="hint" style="margin-top:6px">旧名字还能用 7 天。</p>
-{{if eq .ErrFor "name"}}<p class="msg err">{{.Err}}</p>{{end}}
-<button class="wide" type="submit">改成这个</button></form></details></div>{{end}}
-{{if .Home}}<div class="card" id="home"><details{{if or .HomeDown (eq .ErrFor "home")}} open{{end}}><summary>换一台当家</summary>
-<p class="hint">只列你有登录、上面有你在用的 fleet 的机器。换过去后你的地址几分钟内指向它；手机第一次连会说主机钥匙变了，接受一次。</p>
-{{range .Others}}<div class="choice"><span><b>{{.Display}}</b> · {{.Login}} {{if .Online}}<span class="pill">在线</span>{{else}}<span class="pill off">连不上</span>{{end}}</span>
-<a class="btn cp" href="?move={{.Machine}}&amp;login={{.Login}}#confirm">换到这台</a></div>{{else}}<p class="hint" style="margin-top:8px">现在没有别的机器可换。</p>{{end}}
-{{if eq .ErrFor "home"}}<p class="msg err">{{.Err}}</p>{{end}}
-</details></div>{{end}}
+{{if .Home}}<div class="card" id="where"><div class="choice" style="border:0;padding:0"><span>家机器：<b>{{.Home.Display}}</b>（登录 {{.Home.Login}}）</span><a class="btn cp" href="{{.ConnPath}}#home">去改</a></div>
+<p class="hint" style="margin-top:6px">手机连的就是这台。{{.HomeWhy}}</p></div>{{end}}
+<p class="hint" style="text-align:center;margin-top:10px"><a href="{{.ConnPath}}">我的连接：钥匙、地址名、家机器</a></p>
 {{end}}
 <p class="foot">入口不在时，已加的钥匙照常能进；只是那时加钥匙、撤钥匙和换家要等它回来。</p>
 </main>
 {{if .Revoke}}<div class="sheet" id="confirm" role="dialog" aria-modal="true"><div class="in">
 <p><b>撤掉「{{if .Revoke.Name}}{{.Revoke.Name}}{{else}}{{.Revoke.FP}}{{end}}」？</b></p>
 <p class="hint" style="margin-top:6px">几秒内家机器不再认它；正用它连着的入口连接也会断开（会话本身不受影响）。</p>
-<form method="post" action="/fleet/keys" class="two"><input type="hidden" name="do" value="revoke"><input type="hidden" name="id" value="{{.Revoke.ID}}">
-<a class="btn" href="/fleet/keys">算了</a><button class="bad" type="submit">撤掉</button></form></div></div>{{end}}
+<form method="post" action="{{$.Self}}" class="two"><input type="hidden" name="do" value="revoke"><input type="hidden" name="id" value="{{.Revoke.ID}}">
+<a class="btn" href="{{$.Self}}">算了</a><button class="bad" type="submit">撤掉</button></form></div></div>{{end}}
 {{if .Move}}<div class="sheet" id="confirm" role="dialog" aria-modal="true"><div class="in">
 <p><b>把家换到 {{.Move.Display}} · {{.Move.Login}}？</b></p>
 <p class="hint" style="margin-top:6px">{{if ne .Move.Port $.Port}}你的地址几分钟内指向它；Termius 里改一样：端口改成 <b>{{.Move.Port}}</b>（原来 {{$.Port}}）。{{else}}你的地址几分钟内指向它，Termius 里的四样都不用改；{{end}}手机第一次连会说主机钥匙变了，接受一次。</p>
-<form method="post" action="/fleet/keys" class="two"><input type="hidden" name="do" value="home"><input type="hidden" name="machine" value="{{.Move.Machine}}"><input type="hidden" name="login" value="{{.Move.Login}}">
-<a class="btn" href="/fleet/keys">算了</a><button class="go" type="submit">换过去</button></form></div></div>{{end}}
+<form method="post" action="{{$.Self}}" class="two"><input type="hidden" name="do" value="home"><input type="hidden" name="machine" value="{{.Move.Machine}}"><input type="hidden" name="login" value="{{.Move.Login}}">
+<a class="btn" href="{{$.Self}}">算了</a><button class="go" type="submit">换过去</button></form></div></div>{{end}}
 <script>
 (function(){
 document.querySelectorAll('[data-cp]').forEach(function(b){b.addEventListener('click',function(){
@@ -760,14 +788,14 @@ const entryStepTmpl = `{{define "state"}}{{if eq .State "nokey"}}<p class="state
 {{else if eq .S.N 3}}<ol class="do"><li>在 Termius 的 <span class="tap">Keychain</span> 里，点开刚才那把 <code>iPhone</code>。</li>
 <li>点 <span class="tap">Copy Public Key</span>（复制公钥：以 <code>ssh-ed25519</code> 开头的一行）。</li>
 <li>回到这一页，长按下面的框，点 <span class="tap">粘贴</span>，再点「加上」。</li></ol>
-<form method="post" action="/fleet/keys" style="margin-top:10px"><input type="hidden" name="do" value="add">
+<form method="post" action="{{$.Self}}" style="margin-top:10px"><input type="hidden" name="do" value="add">
 <textarea name="key" rows="3" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="ssh-ed25519 AAAA…（贴公钥，以 ssh-ed25519 开头的一行）" aria-label="公钥">{{.Pasted}}</textarea>
 <input class="lbl" name="label" value="{{if .Label}}{{.Label}}{{else}}iPhone{{end}}" maxlength="40" placeholder="给它起个名（如：iPhone）" aria-label="钥匙的名字">
 {{if eq .ErrFor "add"}}<p class="msg err">{{.Err}}</p>{{end}}
 <button class="go wide" type="submit">加上</button></form>
 {{if .Keys}}<p class="hint" style="margin-top:8px">你已经加过 {{len .Keys}} 把；再加一把也行。</p>{{end}}
 {{else if eq .S.N 4}}{{if .NeedName}}<p>先给你的地址起个名字，它就是下面的「Hostname」。</p>
-<form method="post" action="/fleet/keys"><input type="hidden" name="do" value="name">
+<form method="post" action="{{$.Self}}"><input type="hidden" name="do" value="name">
 <input id="nm" name="name" value="{{.NameVal}}" autocapitalize="off" autocorrect="off" spellcheck="false" autocomplete="off" maxlength="20" style="margin-top:10px" aria-label="地址名">
 <p class="hint" style="margin-top:6px">小写字母、数字和「-」，3–20 个。你的地址会是 <b><span id="nmv">{{if .NameVal}}{{.NameVal}}{{else}}…{{end}}</span>.{{if .Domain}}{{.Domain}}{{else}}（地址还没配好）{{end}}</b></p>
 <p class="hint" id="nmw" style="color:var(--bad)"></p>

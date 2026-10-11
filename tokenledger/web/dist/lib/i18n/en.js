@@ -99,6 +99,7 @@ export const en = {
   'ui.nav.mymachines': 'My machines',
   'ui.nav.devices': 'Devices & SSH',
   'ui.nav.config': 'Config',
+  'ui.nav.connection': 'My connection',
   'ui.nav.phone': 'Connect from a phone',
   'ui.nav.quota': 'My quota',
   'ui.nav.subscriptions': 'Subscriptions',

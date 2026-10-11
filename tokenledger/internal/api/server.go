@@ -484,6 +484,7 @@ func (s *Server) routes() *routeMux {
 		// The keys page (claude-fleet#3069): a browser not signed in comes
 		// back here after GitHub's.
 		mux.Handle(EntryPagePath, s.rememberEntryReturn(s.viewerOnly(http.HandlerFunc(s.handleEntryPage))))
+		mux.Handle(EntryConnPath, s.rememberEntryReturn(s.viewerOnly(http.HandlerFunc(s.handleEntryPage))))
 		// Its pictures, and the paths a person types for it (claude-fleet#3199).
 		mux.HandleFunc(EntryPagePath+"/", s.handleEntryPageAside)
 		mux.HandleFunc("/fleet/key", s.handleEntryPageAside)

@@ -104,25 +104,9 @@ ol.do{margin:6px 0 0;padding-left:1.3em}ol.do li{margin:6px 0}
 
 </div>
 
-<div class="card" id="where"><h2>你的家机器：m5</h2>
-<p class="hint">手机连的就是这台（登录 <b>alice</b>）。系统替你选的：你在这台上有登录、上面开着 fleet，也是你平时打 fleet 进的那台。要换，见下面「换一台当家」。</p></div>
-<div class="card" id="keys"><details><summary>你的钥匙（1）</summary>
-<div class="key"><div class="t"><div class="n">iPhone · Termius</div>
-<div class="s">ed25519 · <code>SHA256:FP</code> · 加于 刚才</div><div class="s">上次用：还没用过</div></div>
-<a class="btn bad cp" href="?revoke=k_ID#confirm">撤掉</a></div>
-<a class="btn wide" href="?step=3#now">再加一把</a></details></div>
-<div class="card"><details><summary>改地址名（现在：alice）</summary>
-<form method="post" action="/fleet/keys"><input type="hidden" name="do" value="name">
-<input name="name" value="alice" autocapitalize="off" autocorrect="off" spellcheck="false" autocomplete="off" maxlength="20" aria-label="地址名">
-<p class="hint" style="margin-top:6px">旧名字还能用 7 天。</p>
-
-<button class="wide" type="submit">改成这个</button></form></details></div>
-<div class="card" id="home"><details><summary>换一台当家</summary>
-<p class="hint">只列你有登录、上面有你在用的 fleet 的机器。换过去后你的地址几分钟内指向它；手机第一次连会说主机钥匙变了，接受一次。</p>
-<div class="choice"><span><b>m4</b> · alice <span class="pill">在线</span></span>
-<a class="btn cp" href="?move=macmini-m4&amp;login=alice#confirm">换到这台</a></div>
-
-</details></div>
+<div class="card" id="where"><div class="choice" style="border:0;padding:0"><span>家机器：<b>m5</b>（登录 alice）</span><a class="btn cp" href="/fleet/connection#home">去改</a></div>
+<p class="hint" style="margin-top:6px">手机连的就是这台。系统替你选的：你在这台上有登录、上面开着 fleet，也是你平时打 fleet 进的那台。</p></div>
+<p class="hint" style="text-align:center;margin-top:10px"><a href="/fleet/connection">我的连接：钥匙、地址名、家机器</a></p>
 
 <p class="foot">入口不在时，已加的钥匙照常能进；只是那时加钥匙、撤钥匙和换家要等它回来。</p>
 </main>
