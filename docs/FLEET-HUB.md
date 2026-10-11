@@ -1859,6 +1859,23 @@ login's own node token and gets back the number they will know it by, at once.
 - **Off** — no `CCQUOTA_FLEET_FEEDBACK_DIR` — neither route exists
   (`TestFeedbackOffAddsNothing`). Production sets it to `/debug/feedback-attachments`
   on the debug volume (`deploy/k8s/overlays/prod/deployment-feedback.yaml`).
+- **The session half** (claude-fleet#3358, C4) is the `fleet-feedback` plugin's
+  `/fleet-feedback 一句话` → `bin/fleet-feedback.sh preview|send [--attach]|outbox|status`.
+  `preview` sends nothing and reads no token: the words through
+  `conf/secret-shapes.list` (`fleet_redact.py`), what rides along (version · machine
+  kind · Claude/Codex · this session), what becomes public, and what could be
+  attached — the rows of `conf/debug-collect.list` written in the last 30 minutes and
+  this window's `capture-pane -p`, masked, with a count of what was masked. The person
+  is asked 附上 / 不附 / 先不发 every time (Codex: 1/2/3 in the text). `send` builds the
+  same set, scans it once more (a hit ⇒ exit 3, nothing sent) and posts it multipart
+  with the login's node token, read only in curl's subshell (`_fleet_hub_env`).
+  Exit 0 F-number · 2 no hub / token / desk · 3 遮不干净 (here or the hub's 422) ·
+  4 the hub's 429 sentence, nothing kept · 5 unreachable or 5xx: kept, redacted, in
+  `$FLEET_CONF_DIR/feedback-outbox/` (0700, 3 days), sent once by the diskguard tick
+  (`feedback_watch` → `outbox`; an entry leaves the box before it is posted) and the
+  session told its number over `fleet-peer-send.sh wid:<worker_id>`. A person may run
+  the script by hand; it is not a fleet tool. `fleet-feedback-selftest.sh`, BREAK-IT
+  `feedback-secret-in-text` / `feedback-secret-in-attach`.
 
 ## Validation and next increments
 
