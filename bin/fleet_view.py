@@ -458,7 +458,10 @@ def produce(fleet):
     seam = os.environ.get("FLEET_VIEW_ROWS_CMD")
     argv = ["sh", "-c", seam] if seam else ["bash", str(Path(__file__).absolute().parent / "tmux-dashboard-rows.sh"), "--sidebar"]
     try:
-        return subprocess.run(argv, env=env, capture_output=True, text=True, timeout=10).stdout
+        # a cell cut mid-character (bash slices bytes with no UTF-8 locale) is one
+        # row's blemish, never the whole list's loss (issue #3444)
+        return subprocess.run(argv, env=env, capture_output=True, encoding="utf-8", errors="replace",
+                              timeout=10).stdout
     except (OSError, subprocess.TimeoutExpired):
         return ""
 

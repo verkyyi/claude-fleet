@@ -274,8 +274,11 @@ def full_rows(session, timeout=8):
     if session:
         env["FLEET_SESSION"] = session
     try:
+        # errors="replace" (issue #3444): a cell cut mid-character must not take
+        # the whole list down with a UnicodeDecodeError (`fleet ls` died on one)
         out = subprocess.run(["bash", str(BIN / "tmux-dashboard-rows.sh"), "--sidebar"], env=env,
-                             stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=timeout)
+                             stdin=subprocess.DEVNULL, capture_output=True, encoding="utf-8",
+                             errors="replace", timeout=timeout)
     except (OSError, subprocess.TimeoutExpired):
         return None
     if out.returncode != 0:
