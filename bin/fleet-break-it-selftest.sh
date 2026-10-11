@@ -51,6 +51,7 @@
 #   conf-keys-lost                                  bin/fleet-migrate-layout.sh, bin/fleet-conf.sh migrate
 #                                                   (install-apply's layout + conf passes), fleet_conf_reserved
 #   node-menu / node-prefix-keys                    conf/tmux-node-human.conf (via tmux-fleet-server.conf)
+#   view-mouse-stale                                conf/tmux-view.conf + fleet-quickopen.py view-keys --if-stale
 #   window-killed                                   bin/fleet-restore.sh --auto (pull-back), fleet_win_retire
 #   loop-window-killed                              bin/fleet-restore.sh (loop re-arm), fleet_loop_mark.py rearm
 #   tool-wait-idle                                  fleet_window_tool_busy / fleet_window_wait (fleet-lib.sh),
@@ -1734,6 +1735,27 @@ drill_node_prefix_keys() {
   nt has-session -t '=hk' 2>/dev/null || { WHY="prefix \$ renamed the fleet session"; return 1; }
   [ "$(nt show-options -gqv @fleet_human)" = v1 ] || { WHY="the human layer (@fleet_human) is not on the server"; return 1; }
   SECS=$(since "$t0"); WHAT="prefix x / & / \$ / < 都不起作用，个人配置绑回的 x / & 也被最后一层拿掉"
+}
+
+# view-mouse-stale (issue #3000, EPIC #2999 C2): the 看台's key table is a COPY of
+# root — tmux does not fall back to root for a key a session's key-table lacks — so
+# a root changed after the copy (a person re-sourcing ~/.tmux.conf) leaves the
+# 看台's mouse unlike a direct attach's, until attach --thin's --if-stale rebuild.
+drill_view_mouse_stale() {
+  CAP=10; local t0
+  hnode vm || return 1
+  vmcopy() { nt list-keys -T fleet-view | awk '$4 !~ /^User9[0-9][0-9]$/ && $4 != "C-]" { $3 = "root"; $1 = $1; print }' | sort; }
+  vmroot() { nt list-keys -T root | awk '{ $1 = $1; print }' | sort; }
+  [ "$(vmcopy)" = "$(vmroot)" ] || { WHY="right after start the 看台's fleet-view is not root's copy"; return 1; }
+  grep -q 'view-keys --if-stale' "$BIN/fleet-remote-view.sh" || { WHY="attach --thin does not rebuild a stale fleet-view (view-keys --if-stale)"; return 1; }
+  # the break: root's wheel re-bound after the copy, as a re-sourced ~/.tmux.conf does
+  nt bind-key -n WheelUpPane copy-mode -e
+  [ "$(vmcopy)" = "$(vmroot)" ] && { WHY="the break did not take (root's wheel is still the copy's)"; return 1; }
+  t0=$(now)
+  TMUX="$BREAK_SOCK,0,0" python3 "$BIN/fleet-quickopen.py" view-keys --if-stale >/dev/null 2>&1
+  [ "$(vmcopy)" = "$(vmroot)" ] || { WHY="after attach --thin's rebuild the 看台's mouse still differs from root: $(diff <(vmcopy) <(vmroot) | head -3)"; return 1; }
+  nt list-keys -T fleet-view | awk '$4 == "User927"' | grep -q . || { WHY="the rebuild lost the 看台's ⌘P"; return 1; }
+  SECS=$(since "$t0"); WHAT="root 改了之后，下一次 attach --thin 重建看台键表：滚轮、点击与直接 attach 一致，⌘ 键还在"
 }
 
 drill_window_killed() {

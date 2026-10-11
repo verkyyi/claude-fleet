@@ -24,6 +24,11 @@ session (issue #1903, EPIC #1906 C10) — and the switch history ⌘[ / ⌘] wal
                                               phone width): 在等你的 · 最近 (1–9) ·
                                               全部, two-line rows big enough for a
                                               thumb; type to filter, tap or ↵ to go
+    fleet-quickopen.py --view <view> · do <verb> --view <view> · view-keys ·
+    go <view> <target> · view-rows --view <view>
+                                              the 看台's switcher on the home machine
+                                              (issue #3000, EPIC #2999 C2): its node
+                                              half, bin/fleet_view.py, says it all
     fleet-quickopen.py do <verb>              next | prev | back | fwd | needs — the
                                               one-pane layout's F2–F4 and ⌘ keys
                                               (the list is zoomed away there, so
@@ -1224,6 +1229,11 @@ def full(screen, pane, session=""):
 
 def main(argv):
     locale.setlocale(locale.LC_ALL, "")
+    if argv[:1] in (["view-keys"], ["go"], ["view-rows"], ["view-order"]) or "--view" in argv:
+        # the 看台's half, on the home machine (issue #3000, EPIC #2999 C2) — the
+        # client never comes here, and never ships fleet_view.py
+        import fleet_view
+        return fleet_view.main(argv, sys.modules[__name__])
     if argv[:1] == ["do"] and len(argv) == 2:
         return 0 if do(argv[1]) else 1
     if argv[:1] == ["items"]:

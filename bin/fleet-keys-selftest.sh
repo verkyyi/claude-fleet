@@ -40,7 +40,9 @@
 #      is exactly the three keys it always was.
 #
 #   8. The node binds none of them (issue #1714, EPIC #1710 C4): a server that
-#      sources conf/tmux-attention.conf lists EXACTLY tmux's stock keys, and one
+#      sources conf/tmux-attention.conf lists EXACTLY tmux's stock keys in root
+#      and prefix — its only keys of its own live in the 看台's tables (issue
+#      #3000: fleet-view = root copied + ⌘↓ ⌘↑ ⌘[ ⌘] ⌘P ⌘K, fleet-view-pfx) — and one
 #      that sources the client's conf has every sheet key — on an isolated socket.
 #      Its bar says ⌘N 编排, ⌘N 新任务 only with @fleet_compose (issue #2616);
 #      ⌘N, prefix c and the bar's cell are one road (fleet-shell.sh portal), solo
@@ -404,13 +406,26 @@ if command -v tmux >/dev/null 2>&1; then
   HUMAN_KEYS=' prefix:x prefix:& prefix:$ prefix:< prefix:> root:MouseDown3Pane root:M-MouseDown3Pane root:MouseDown3Status root:MouseDown3StatusLeft root:MouseDown3StatusRight root:M-MouseDown3Status root:M-MouseDown3StatusLeft root:M-MouseDown3StatusRight '
   # tmux pads the key column to the longest key, so a removed key re-pads every
   # line: compare whitespace-normalised.
-  hk() { awk -v hk="$HUMAN_KEYS" '/kill-(pane|window|session|server)|respawn-(pane|window)|rename-session/ { next } { k = $3 ":" $4; gsub(/\\/, "", k); if (index(hk, " " k " ") == 0) { $1 = $1; print } }' "$1"; }
+  # The 看台's own tables (issue #3000, conf/tmux-view.conf) are the node's only
+  # keys of its own: compared apart, below — root and prefix stay tmux's.
+  hk() { awk -v hk="$HUMAN_KEYS" '$3 == "fleet-view" || $3 == "fleet-view-pfx" { next } /kill-(pane|window|session|server)|respawn-(pane|window)|rename-session/ { next } { k = $3 ":" $4; gsub(/\\/, "", k); if (index(hk, " " k " ") == 0) { $1 = $1; print } }' "$1"; }
   ndiff=$(diff <(hk "$KW/stock.keys") <(hk "$KW/node.keys"))
   [ -z "$ndiff" ] || { ktm stock kill-server; ktm node kill-server; ktm shell kill-server; fail "8: the node binds keys of its own (beyond the human layer it must list exactly tmux's stock keys):
 $ndiff"; }
-  if grep -Eq 'kill-(pane|window|session|server)|respawn-(pane|window)|rename-session' "$KW/node.keys"; then
+  # fleet-view = the node's root, copied (the 看台's mouse: tmux does not fall back
+  # to root for a key a session's key-table lacks), + the 看台's ⌘ keys and ⌃].
+  fv_copy=$(awk '$3 == "fleet-view" && $4 !~ /^User9[0-9][0-9]$/ && $4 != "C-]" { $3 = "root"; $1 = $1; print }' "$KW/node.keys")
+  [ "$fv_copy" = "$(awk '$3 == "root" { $1 = $1; print }' "$KW/node.keys")" ] \
+    || fail "8: the 看台's fleet-view is not a copy of the node's root: $(diff <(printf '%s\n' "$fv_copy") <(awk '$3 == "root" { $1 = $1; print }' "$KW/node.keys") | head -5)"
+  for c in 920 921 922 923 927 930; do
+    awk -v k="User$c" '$3 == "fleet-view" && $4 == k' "$KW/node.keys" | grep -q . || fail "8: the 看台 does not bind User$c"
+  done
+  awk '($3 == "fleet-view" && ($4 ~ /^User/ || $4 == "C-]")) || $3 == "fleet-view-pfx"' "$KW/node.keys" \
+    | grep -Eq 'kill-(pane|window|session|server)|respawn-(pane|window)|rename-session' && fail "8: a 看台 key deletes, respawns or renames"
+  awk '$3 == "root" || $3 == "prefix"' "$KW/node.keys" | grep -q 'fleet-quickopen' && fail "8: a 看台 key leaked into root / prefix"
+  if awk '$3 != "fleet-view"' "$KW/node.keys" | grep -Eq 'kill-(pane|window|session|server)|respawn-(pane|window)|rename-session'; then
     ktm stock kill-server; ktm node kill-server; ktm shell kill-server
-    fail "8: a node key still deletes, respawns or renames: $(grep -E 'kill-|respawn-|rename-session' "$KW/node.keys" | awk '{print $3, $4}' | tr '\n' ' ')"
+    fail "8: a node key still deletes, respawns or renames: $(awk '$3 != "fleet-view"' "$KW/node.keys" | grep -E 'kill-|respawn-|rename-session' | awk '{print $3, $4}' | tr '\n' ' ')"
   fi
   for k in x '&' '$' '<' '>'; do
     awk -v k="$k" '$3 == "prefix" { kk = $4; gsub(/\\/, "", kk); if (kk == k) f = 1 } END { exit !f }' "$KW/node.keys" \

@@ -997,7 +997,7 @@ PY
   t0=$(now)
   for par in 1 0; do
     mkdir -p "$d/conf"
-    for s in tmux-shell tmux-shell-stage tmux-attention fleet-palette tmux-bar tmux-node-human; do
+    for s in tmux-shell tmux-shell-stage tmux-attention fleet-palette tmux-bar tmux-node-human tmux-view; do
       sed -e "s#__BIN__#$BIN#g" -e "s#__PARITY__#$par#g" -e 's#__PREFIX__#C-b#g' -e 's#__STAGE__#kst#g' \
           -e 's#__SESS__#ks#g' -e 's#__PASTE__#0#g' -e '/^set-hook -g /d' -e '/^run-shell /d' \
           "$ROOT/conf/$s.conf" > "$d/conf/$s.conf"

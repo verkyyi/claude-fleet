@@ -686,7 +686,10 @@ rv_thin_dress() {
     set-option -t "$gid" status-format[0] "$bar" \; set-option -t "$gid" destroy-unattached off \; \
     set-option -t "$gid" @view_thin "$v" 2>/dev/null
   # C2's key table, once it exists — a table tmux does not have would take every key
-  T list-keys -T fleet-view >/dev/null 2>&1 && T set-option -t "$gid" key-table fleet-view 2>/dev/null
+  T list-keys -T fleet-view >/dev/null 2>&1 && T set-option -t "$gid" key-table fleet-view 2>/dev/null \
+    && { python3 "$BIN/fleet-quickopen.py" view-keys --if-stale --socket "$sock" </dev/null >/dev/null 2>&1 & }
+  # ↑ and rebuilt, off the attach's path, when root moved since it was copied (a
+  # personal conf re-sourced after the fleet's): the 看台's mouse is root's (#3000)
   # the `cur=` hook: global, but it acts only in a session marked @view_thin
   T set-hook -g 'session-window-changed[78]' \
     "if -F '#{@view_thin}' { run-shell -b \"bash '$BIN/fleet-remote-view.sh' cur '$VIEWS' '#{socket_path}' '#{hook_session_name}' >/dev/null 2>&1 || :\" }" 2>/dev/null

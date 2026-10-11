@@ -231,6 +231,8 @@ tn has-session -t "$V" 2>/dev/null; eq "E: past FLEET_VIEW_KEEP_SECS the 看台 
 eq "E: …and its row" "" "$(row dev1)"
 term thin3 "--thin --view dev1 --resume --device $DEV --route lan --token t2k"
 waitfor 5 sh -c "'$REAL_TMUX' -L '$RS' has-session -t '$V' 2>/dev/null" || fail "E: no 看台 on a resume after the reap"
+# the session exists a moment before attach --thin selects its window: wait for it
+waitfor 5 sh -c "[ \"\$('$REAL_TMUX' -L '$RS' display-message -p -t '=$(vs dev1):' '#{window_id}' 2>/dev/null)\" = '$OW' ]"
 eq "E: --resume with no cur= lands on the orchestrator" "$OW" "$(vcur dev1)"
 tt kill-window -t "=$TL:thin3"
 term thin4 "--thin --view dev2 --want $U/fid-7 --device $DEV --route lan --token t3k"
@@ -244,6 +246,7 @@ tt kill-window -t "=$TL:thin4"
 tn bind-key -T fleet-view F1 display-message x
 term thin5 "--thin --view dev3 --device $DEV --route lan --token t4k"
 waitfor 5 sh -c "'$REAL_TMUX' -L '$RS' has-session -t '=$(vs dev3):' 2>/dev/null" || fail "K: no 看台"
+waitfor 5 sh -c "[ \"\$('$REAL_TMUX' -L '$RS' show-options -qv -t '=$(vs dev3):' key-table)\" = fleet-view ]"
 eq "K: key-table fleet-view once the table exists" "fleet-view" "$(tn show-options -qv -t "=$(vs dev3):" key-table)"
 eq "K: …the fleet session's key-table untouched" "" "$(tn show-options -qv -t "=$RS:" key-table)"
 tt kill-window -t "=$TL:thin5"
