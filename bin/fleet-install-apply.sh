@@ -25,6 +25,13 @@
 #   plugin    a plugin install owns commands/skills/hooks: `claude plugin update
 #             fleet` replaces the three passes below (unless a copy install sits
 #             beside it, in which case both run)
+#   plugins   a hosting login (not --bundle): this repo is a Claude Code plugin
+#             marketplace (issue #3112) — add it from the install path once,
+#             install NOTHING, except carry-over: a part that moved into a
+#             plugin and is still installed here (its GONE path) installs that
+#             plugin; update an installed one behind the runtime
+#             (bin/fleet-plugins.py ensure). Before the passes that remove the
+#             moved copies. claude.plugins in the override file = skip.
 #   hooks     settings-hooks.json changed -> fleet-hooks-merge.py merge
 #   settings  every apply that moved -> fleet-hooks-merge.py defaults (issue
 #             #1558, folding #1528's keys pass): conf/claude-settings.default.json
@@ -773,6 +780,32 @@ if [ "$PLUGIN" = 1 ]; then
     say 'plugin: ok — nothing plugin-side changed'
   fi
   [ "$COPY" = 1 ] || say 'plugin: commands/skills/hooks are the plugin'\''s — copy passes skipped'
+fi
+
+# --- plugins (issue #3112, EPIC #3111 C1) -------------------------------------------
+# Orchestration, the steward and EPIC batches are standard plugins of this repo's
+# marketplace; /plugin installs them, never the sync. Here: add the marketplace
+# (from $ROOT as spelled — ~/.claude/fleet, never its resolved version dir), and
+# keep what a login already used working (carry-over, before the commands/skills
+# passes below remove the moved copies). bin/fleet-plugins.py is the one reader of
+# `claude plugin list`.
+if [ "$BUNDLE" = 0 ] && [ -f "$ROOT/.claude-plugin/marketplace.json" ] && [ -f "$ROOT/bin/fleet-plugins.py" ]; then
+  if shielded claude.plugins; then
+    say "plugins: skip — this login keeps its own (claude.plugins in $OVR)"
+  elif ! command -v "$CLAUDE" >/dev/null 2>&1; then
+    say "plugins: skip — no $CLAUDE on PATH"
+  else
+    gonef=$(mktemp "${TMPDIR:-/tmp}/fleet-plugins-gone.XXXXXX")
+    printf '%s\n' "$GONE" > "$gonef"
+    if out=$(python3 "$ROOT/bin/fleet-plugins.py" ensure --root "$ROOT" --claude "$CLAUDE" \
+               --claude-dir "$CDIR" --gone "$gonef" ${DRYFLAG:+"$DRYFLAG"} 2>&1); then
+      printf '%s\n' "$out"
+    else
+      printf '%s\n' "$out" | grep -v ': FAIL ' || true
+      fail plugins "$(printf '%s\n' "$out" | grep ': FAIL ' | head -1 | sed 's/^plugins: FAIL //')"
+    fi
+    rm -f "$gonef"
+  fi
 fi
 
 # --- hooks --------------------------------------------------------------------

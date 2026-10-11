@@ -68,6 +68,10 @@ machine's work ONCE, however many logins the machine carries:
                 push) and put back every FLEET_ENTRY_EVERY when someone else changed
                 them; AllowUsers = the list's taken-over, non-admin logins — none ⇒
                 no config, no listener. The system's sshd is never touched.
+                `entry reach` (issue #3072, C6; the node program runs it every 5
+                minutes): the global IPv6, the router asked to forward the port
+                (FLEET_ENTRY_PORTMAP), POSTed to the hub, which dials each address
+                and answers; <state>/entry/reach.json feeds the doctor's `public` row.
   * sweep     — fleet plist leftovers (`*.plist.bak*`, `.pre-move`, `.retired*`,
                 `.disabled*` …) in /Library/LaunchDaemons and every login's
                 ~/Library/LaunchAgents are MOVED to the attic
@@ -4246,6 +4250,430 @@ def entry_check(paths):
     return 0, line
 
 
+# ---- can the outside reach the entry port? (issue #3072, EPIC #3067 C6) --------
+# `entry reach`, run by the node program every 5 minutes (off its beat): this
+# machine's global IPv6 addresses, its router asked to forward the port
+# (FLEET_ENTRY_PORTMAP=auto|off: NAT-PMP, then UPnP), POSTed to the hub's
+# /v1/node/entry-reach. The hub takes the public IPv4 from where it sees the report
+# come from, dials every address, counts one only when the entry's own host key
+# answers there, and says so; the answer lands in <state>/entry/reach.json (0644 —
+# addresses and reasons, nothing secret), which `entry reach --check` (the doctor's
+# `public` row) reads. A router that never answers costs a few seconds, never the
+# report; the report failing costs nothing but this row.
+ENTRY_REACH_STALE = 20 * 60
+ENTRY_VIRTUAL_IF = ("utun", "tailscale", "tun", "wg", "docker", "veth", "br-", "bridge", "vmnet",
+                    "virbr", "awdl", "llw", "anpi", "ap", "gif", "stf", "lo")
+ENTRY_REASONS = {"timeout": "超时", "refused": "被拒（端口没开 / 没转发）",
+                 "hostkey": "钥匙不符（那个地址上是别的机器）", "not_ssh": "不是 SSH", "unreachable": "不通"}
+
+
+def entry_ifaddrs():
+    """[(ifname, addr, prefixlen, flags)] of the up interfaces. FLEET_ENTRY_IFADDRS
+    names a file of `<if> <addr>/<plen> [flag …]` lines (the selftests' seam)."""
+    seam = os.environ.get("FLEET_ENTRY_IFADDRS")
+    out = []
+    if seam:
+        try:
+            lines = open(seam).read().splitlines()
+        except (IOError, OSError):
+            return []
+        for ln in lines:
+            f = ln.split()
+            if len(f) >= 2 and "/" in f[1]:
+                a, p = f[1].split("/", 1)
+                out.append((f[0], a, int(p) if p.isdigit() else 0, set(f[2:])))
+        return out
+    if sys.platform == "darwin":
+        try:
+            txt = subprocess.check_output(["/sbin/ifconfig"], stderr=subprocess.DEVNULL,
+                                          timeout=10).decode("utf-8", "replace")
+        except (OSError, subprocess.SubprocessError):
+            return []
+        ifn = ""
+        for ln in txt.splitlines():
+            m = re.match(r"^(\S+?):\s+flags=", ln)
+            if m:
+                ifn = m.group(1)
+                continue
+            f = ln.split()
+            if len(f) >= 2 and f[0] == "inet":
+                plen = 0
+                if "netmask" in f and f.index("netmask") + 1 < len(f):
+                    try:
+                        plen = bin(int(f[f.index("netmask") + 1], 16)).count("1")
+                    except ValueError:
+                        pass
+                out.append((ifn, f[1], plen, set()))
+            elif len(f) >= 2 and f[0] == "inet6":
+                plen = int(f[f.index("prefixlen") + 1]) if "prefixlen" in f else 0
+                out.append((ifn, f[1].split("%")[0], plen, set(f[2:])))
+        return out
+    for ipb in ("/usr/sbin/ip", "/sbin/ip", "/usr/bin/ip", "/bin/ip"):
+        if os.path.exists(ipb):
+            break
+    else:
+        return []
+    try:
+        txt = subprocess.check_output([ipb, "-o", "addr", "show", "up"], stderr=subprocess.DEVNULL,
+                                      timeout=10).decode("utf-8", "replace")
+    except (OSError, subprocess.SubprocessError):
+        return []
+    for ln in txt.splitlines():
+        f = ln.split()
+        if len(f) >= 4 and f[2] in ("inet", "inet6") and "/" in f[3]:
+            a, p = f[3].split("/", 1)
+            out.append((f[1], a, int(p) if p.isdigit() else 0, set(f[4:])))
+    return out
+
+
+def entry_addrs(ifaddrs, default_if=""):
+    """(lan IPv4 list, global IPv6 list) a home is reached on — never a tunnel's,
+    a bridge's, a temporary or deprecated IPv6. The default route's interface goes
+    first: the router forwards to THAT address (mini2's wired en0, never the Wi-Fi's)."""
+    import ipaddress
+    lan, v6 = [], []
+    cg = ipaddress.ip_network("100.64.0.0/10")
+    for ifn, a, _plen, flags in ifaddrs:
+        if ifn.startswith(ENTRY_VIRTUAL_IF):
+            continue
+        try:
+            ip = ipaddress.ip_address(a)
+        except ValueError:
+            continue
+        if ip.version == 4:
+            if ip.is_private and ip not in cg and not ip.is_loopback and not ip.is_link_local and a not in lan:
+                lan.append(a)
+        elif ip.is_global and not (flags & {"temporary", "deprecated", "tentative", "dadfailed", "detached"}) \
+                and a not in v6:
+            v6.append(a)
+    if default_if:
+        on = set(a for ifn, a, _p, _f in ifaddrs if ifn == default_if)
+        lan.sort(key=lambda a: a not in on)
+        v6.sort(key=lambda a: a not in on)
+    return lan[:4], v6[:4]
+
+
+def entry_default_route():
+    """(gateway IPv4, interface) of the default route — ("", "") when there is none.
+    FLEET_ENTRY_GATEWAY / FLEET_ENTRY_DEFAULT_IF are the selftests' seams."""
+    gw, ifn = os.environ.get("FLEET_ENTRY_GATEWAY"), os.environ.get("FLEET_ENTRY_DEFAULT_IF")
+    if gw is not None or ifn is not None:
+        return gw or "", ifn or ""
+    if sys.platform == "darwin":
+        try:
+            txt = subprocess.check_output(["/sbin/route", "-n", "get", "default"], stderr=subprocess.DEVNULL,
+                                          timeout=5).decode("utf-8", "replace")
+        except (OSError, subprocess.SubprocessError):
+            return "", ""
+        g = re.search(r"gateway:\s*(\d+\.\d+\.\d+\.\d+)", txt)
+        i = re.search(r"interface:\s*(\S+)", txt)
+        return (g.group(1) if g else ""), (i.group(1) if i else "")
+    try:
+        best = None
+        for ln in open("/proc/net/route").read().splitlines()[1:]:
+            f = ln.split()
+            if len(f) > 6 and f[1] == "00000000" and f[2] != "00000000":
+                if best is None or int(f[6]) < int(best[6]):
+                    best = f
+        if best:
+            import socket
+            import struct
+            return socket.inet_ntoa(struct.pack("<I", int(best[2], 16))), best[0]
+    except (IOError, OSError, ValueError):
+        pass
+    return "", ""
+
+
+def entry_gateway():
+    return entry_default_route()[0]
+
+
+def entry_natpmp(gw, port):
+    """NAT-PMP (RFC 6886): the router's outside address, then a TCP mapping of
+    port. {method, external_ip, external_port} or {method, error}."""
+    import socket
+    import struct
+    out = {"method": "natpmp"}
+    dst = (gw, int(env_num("FLEET_ENTRY_NATPMP_PORT", 5351)))
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+    def ask(req, n, op):
+        for wait in (0.25, 0.5, 1.0):
+            s.sendto(req, dst)
+            s.settimeout(wait)
+            t0 = time.time()
+            while time.time() - t0 < wait:
+                try:
+                    data, src = s.recvfrom(64)
+                except socket.timeout:
+                    break
+                except OSError as e:
+                    raise RuntimeError("router: %s" % (e.strerror or e))
+                if src[0] == gw and len(data) >= n and data[0] == 0 and data[1] == op:
+                    rc = struct.unpack("!H", data[2:4])[0]
+                    if rc:
+                        raise RuntimeError("router refused (NAT-PMP result %d)" % rc)
+                    return data
+        raise RuntimeError("no answer from %s" % gw)
+    try:
+        d = ask(b"\x00\x00", 12, 128)
+        out["external_ip"] = socket.inet_ntoa(d[8:12])
+        d = ask(struct.pack("!BBHHHI", 0, 2, 0, port, port, 7200), 16, 130)
+        out["external_port"] = struct.unpack("!H", d[10:12])[0]
+    except (RuntimeError, OSError) as e:
+        out.pop("external_ip", None)
+        out["error"] = str(e)
+    finally:
+        s.close()
+    return out
+
+
+def _upnp_soap(url, stype, action, args):
+    from urllib.request import Request, urlopen
+    body = ('<?xml version="1.0"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" '
+            's:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"><s:Body><u:%s xmlns:u="%s">%s'
+            '</u:%s></s:Body></s:Envelope>') % (action, stype, "".join("<%s>%s</%s>" % (k, v, k) for k, v in args),
+                                                action)
+    req = Request(url, data=body.encode("utf-8"), headers={
+        "Content-Type": 'text/xml; charset="utf-8"', "SOAPAction": '"%s#%s"' % (stype, action)})
+    with urlopen(req, timeout=4) as r:
+        return r.read(65536).decode("utf-8", "replace")
+
+
+def entry_upnp(lan, port):
+    """UPnP IGD: find the router on the LAN (SSDP), ask it to forward TCP port to
+    lan:port, then its outside address. Only a description URL on the answering
+    router's own private address is ever fetched."""
+    import ipaddress
+    import socket
+    out = {"method": "upnp"}
+    if env("FLEET_ENTRY_SSDP", "on") == "off":
+        out["error"] = "SSDP off"
+        return out
+    st = "urn:schemas-upnp-org:device:InternetGatewayDevice:1"
+    msg = ("M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 2\r\n"
+           "ST: %s\r\n\r\n" % st).encode("ascii")
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    loc = ""
+    try:
+        s.settimeout(2.5)
+        s.sendto(msg, (env("FLEET_ENTRY_SSDP_ADDR", "239.255.255.250"), int(env_num("FLEET_ENTRY_SSDP_PORT", 1900))))
+        t0 = time.time()
+        while time.time() - t0 < 2.5 and not loc:
+            try:
+                data, src = s.recvfrom(4096)
+            except socket.timeout:
+                break
+            m = re.search(r"(?im)^location:\s*(\S+)", data.decode("utf-8", "replace"))
+            if not m:
+                continue
+            from urllib.parse import urlparse
+            u = urlparse(m.group(1))
+            try:
+                hip = ipaddress.ip_address(u.hostname or "")
+            except ValueError:
+                continue
+            if u.scheme == "http" and u.hostname == src[0] and (hip.is_private or hip.is_loopback):
+                loc = m.group(1)
+    except OSError as e:
+        out["error"] = "SSDP: %s" % (e.strerror or e)
+        return out
+    finally:
+        s.close()
+    if not loc:
+        out["error"] = "no UPnP router answered"
+        return out
+    try:
+        from urllib.parse import urljoin
+        from urllib.request import urlopen
+        import xml.etree.ElementTree as ET
+        with urlopen(loc, timeout=4) as r:
+            root = ET.fromstring(r.read(65536))
+        base = loc
+        for el in root.iter():
+            if el.tag.endswith("URLBase") and (el.text or "").strip():
+                base = el.text.strip()
+        ctl = stype = ""
+        for el in root.iter():
+            if not el.tag.endswith("}service"):
+                continue
+            kids = {c.tag.split("}")[-1]: (c.text or "").strip() for c in el}
+            if re.search(r"WAN(IP|PPP)Connection:\d", kids.get("serviceType", "")):
+                ctl, stype = urljoin(base, kids.get("controlURL", "")), kids["serviceType"]
+                break
+        if not ctl:
+            out["error"] = "the router offers no WAN connection service"
+            return out
+        args = [("NewRemoteHost", ""), ("NewExternalPort", port), ("NewProtocol", "TCP"), ("NewInternalPort", port),
+                ("NewInternalClient", lan), ("NewEnabled", 1), ("NewPortMappingDescription", "claude-fleet entry"),
+                ("NewLeaseDuration", 7200)]
+        try:
+            _upnp_soap(ctl, stype, "AddPortMapping", args)
+        except Exception:  # some routers take only a permanent lease (725)
+            _upnp_soap(ctl, stype, "AddPortMapping", args[:-1] + [("NewLeaseDuration", 0)])
+        out["external_port"] = port
+        m = re.search(r"<NewExternalIPAddress>\s*([0-9.]+)\s*<", _upnp_soap(ctl, stype, "GetExternalIPAddress", []))
+        if m:
+            out["external_ip"] = m.group(1)
+    except Exception as e:  # urllib / XML / a SOAP fault: the reason is all we keep
+        out.pop("external_port", None)
+        out["error"] = "UPnP: %s" % (getattr(e, "code", None) or getattr(e, "reason", None) or e)
+    return out
+
+
+def entry_portmap(lan, port, gw=None):
+    """FLEET_ENTRY_PORTMAP (environment, else machine.env): auto (default) tries
+    NAT-PMP, then UPnP; off asks no router."""
+    if gw is None:
+        gw = entry_gateway()
+    tried = []
+    if gw:
+        r = entry_natpmp(gw, port)
+        if not r.get("error"):
+            return r
+        tried.append("NAT-PMP: %s" % r["error"])
+    if lan:
+        r = entry_upnp(lan[0], port)
+        if not r.get("error"):
+            return r
+        tried.append(r["error"])
+    return {"method": "auto", "error": "; ".join(tried) or "no router found"}
+
+
+def entry_route(paths, me):
+    """(host, port) of the machine's operator-written entry route —
+    CCQUOTA_FLEET_NODE_ROUTES `entry=host[:port]`, the public port the router
+    forwards to the entry port (macmini :22122, mini2 :22123) — from the environment,
+    machine.env, else a taken-over login's <state>/logins/<login>.env, where the node
+    program reads it. `public=` is the system sshd's and is never read here. ("", 0)
+    when there is none: then the entry's own port is the one knocked on."""
+    srcs = [os.environ.get("CCQUOTA_FLEET_NODE_ROUTES"), me.get("CCQUOTA_FLEET_NODE_ROUTES")]
+    for f in sorted(glob.glob(os.path.join(paths.state, "logins", "*.env"))):
+        srcs.append((_env_file(f, 0) or {}).get("CCQUOTA_FLEET_NODE_ROUTES"))
+    for v in srcs:
+        for part in (v or "").split(","):
+            name, _, hp = part.strip().partition("=")
+            if name.strip() != "entry" or not hp.strip():
+                continue
+            h, _, prt = hp.strip().partition(":")
+            if not re.match(r"^[A-Za-z0-9._-]{1,253}$", h):
+                continue
+            n = int(prt) if prt.isdigit() else 0
+            if 0 < n < 65536:
+                return h, n
+    return "", 0
+
+
+def entry_reach(paths):
+    """One report: 0 the hub answered · 1 it did not (reach.json says why) · 3 entry off."""
+    on, port, me = entry_settings(paths)
+    if not on:
+        print("entry off (FLEET_ENTRY=1 in machine.env turns it on)")
+        return 3
+    ep = EntryPaths(paths)
+    _entry_root_dir(ep.dir, 0o755)
+    book = read_json(ep.book, {}) or {}
+    cs = (read_json(paths.state_file, {}).get("children") or {}).get("entry") or {}
+    listening = bool(book.get("allow")) and pid_alive(cs.get("pid"))
+    gw, default_if = entry_default_route()
+    lan, v6 = entry_addrs(entry_ifaddrs(), default_if)
+    hostkey = " ".join((_entry_read(ep.hostkey + ".pub") or "").split()[:2])
+    rep = {"port": port, "host_key": hostkey, "listening": listening, "v6": v6, "lan": lan}
+    ent_host, ent_port = entry_route(paths, me)
+    if ent_port:
+        rep.update(entry_host=ent_host, entry_port=ent_port)
+    mode = os.environ.get("FLEET_ENTRY_PORTMAP") or me.get("FLEET_ENTRY_PORTMAP") or "auto"
+    if listening and mode != "off":
+        rep["portmap"] = entry_portmap(lan, port, gw)
+    out = {"at": now(), "port": port, "listening": listening, "lan": lan, "v6": v6, "default_if": default_if,
+           "entry_host": ent_host, "entry_port": ent_port,
+           "portmap": rep.get("portmap"), "portmap_mode": mode, "verdict": None, "error": ""}
+    hub, token = (me.get("CCQUOTA_HUB_URL") or "").rstrip("/"), me.get("CCQUOTA_TOKEN") or ""
+    if not hub or not token:
+        out["error"] = "machine.env names no hub or no token"
+    else:
+        from urllib.request import Request, urlopen
+        try:
+            req = Request(hub + "/v1/node/entry-reach", data=json.dumps(rep).encode("utf-8"),
+                          headers={"Authorization": "Bearer " + token, "Content-Type": "application/json",
+                                   "Accept": "application/json"})
+            with urlopen(req, timeout=env_num("FLEET_ENTRY_REACH_SECS", 30)) as r:
+                out["verdict"] = json.loads(r.read().decode("utf-8"))
+        except Exception as e:  # urllib raises many kinds; the reason is all we keep
+            out["error"] = "the hub: %s" % (getattr(e, "code", None) or getattr(e, "reason", None) or e)
+    prev = read_json(os.path.join(ep.dir, "reach.json"), {}) or {}
+    if out["error"] and prev.get("verdict"):
+        out["verdict"], out["verdict_at"] = prev["verdict"], prev.get("verdict_at") or prev.get("at")
+    elif out["verdict"]:
+        out["verdict_at"] = out["at"]
+    write_json(os.path.join(ep.dir, "reach.json"), out, 0o644)
+    print(entry_reach_check(paths)[1])
+    return 1 if out["error"] else 0
+
+
+def _reach_addr(a):
+    h = a.get("addr") or "?"
+    return ("[%s]:%s" % (h, a.get("port")) if ":" in h else "%s:%s" % (h, a.get("port")))
+
+
+def entry_reach_check(paths):
+    """The doctor's `public` row: (code, line). 0 reachable · 1 WARN · 2 no row
+    (entry off, or nobody's home here so nothing listens)."""
+    ep = EntryPaths(paths)
+    book = read_json(ep.book, {}) or {}
+    on, port = entry_on_for_reader(paths, book)
+    if not on:
+        return 2, "off"
+    r = read_json(os.path.join(ep.dir, "reach.json"), None)
+    if r is None:
+        if not book.get("allow"):
+            return 2, "nobody's home here"
+        return 1, "外面能不能连上还没查过（节点程序每 5 分钟查一次；现在查：sudo fleet-node-supervisor.py entry reach）"
+    if not r.get("listening"):
+        return 2, "the entry is not listening"
+    lan = (r.get("lan") or [None])[0]
+    there = ("%s:%d" % (lan, port)) if lan else ("这台的 %d" % port)
+    # The public port the router forwards to the entry: the entry= route's, else the same.
+    fwd = "在路由器上把公网 TCP %d 转发到 %s" % (r.get("entry_port") or port, there)
+    v = r.get("verdict")
+    if not v:
+        return 1, "外面能不能连上查不了：%s" % (r.get("error") or "入口没回答")
+    addrs = v.get("addrs") or []
+    ok = [a for a in addrs if a.get("reachable")]
+    bad = [a for a in addrs if not a.get("reachable")]
+    when = "查于 %s 前" % ago(r.get("verdict_at") or r.get("at"))
+    stale = now() - (r.get("verdict_at") or r.get("at") or 0) > ENTRY_REACH_STALE
+    tail = []
+    if r.get("error"):
+        tail.append("这次没报上：%s" % r["error"])
+    pm = r.get("portmap") or {}
+    if pm.get("error"):
+        tail.append("路由器没自动开端口（%s）" % pm["error"])
+    elif pm.get("method") and pm.get("external_port"):
+        tail.append("路由器已开端口（%s → %s）" % (pm["method"].upper(), pm["external_port"]))
+    badtxt = "；".join("%s %s" % (_reach_addr(a), ENTRY_REASONS.get(a.get("reason"), a.get("reason") or "?"))
+                      for a in bad)
+    if ok:
+        line = "外面连得上：%s · %s" % (" · ".join("%s（%s）" % (_reach_addr(a), "IPv6" if a.get("family") == "ipv6"
+                                                              else "IPv4") for a in ok), when)
+        if badtxt:
+            line += " · 连不上：" + badtxt
+        if tail:
+            line += " · " + " · ".join(tail)
+        return (1, line + " · 结果过期（超过 20 分钟没再查）") if stale else (0, line)
+    if v.get("no_public") == "cgnat":
+        why = "这台没有公网地址（运营商级 NAT%s）：外面的 IPv4 进不来——有 IPv6 才行，或向运营商要公网 IP 后%s" % (
+            "，路由器外侧是 %s" % pm["external_ip"] if pm.get("external_ip") else "", fwd)
+    elif not addrs:
+        why = "入口看不到这台的公网地址（来源 %s），这台也没有全局 IPv6；%s" % (v.get("source") or "?", fwd)
+    else:
+        why = fwd
+    line = "外面连不上：" + " · ".join(x for x in (badtxt, why, when) if x)
+    if tail:
+        line += " · " + " · ".join(tail)
+    return 1, line
+
+
 def entry_cli(paths, rest):
     sub = rest[0] if rest else "status"
     if sub == "pull":
@@ -4278,6 +4706,12 @@ def entry_cli(paths, rest):
         if b is None:
             return 3
         return 1 if b.get("error") else 0
+    if sub == "reach":
+        if "--check" in rest:
+            code, line = entry_reach_check(paths)
+            print(line)
+            return code
+        return entry_reach(paths)
     if sub == "status":
         if "--check" in rest:
             code, line = entry_check(paths)
@@ -4286,7 +4720,7 @@ def entry_cli(paths, rest):
         line = entry_line(paths, read_json(paths.state_file, {}))
         print(line or "entry  off")
         return 0
-    print("usage: entry pull [--version N] | apply <file|-> [--force] | ensure | status [--check]",
+    print("usage: entry pull [--version N] | apply <file|-> [--force] | ensure | reach [--check] | status [--check]",
           file=sys.stderr)
     return 2
 

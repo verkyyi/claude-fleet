@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -215,7 +216,7 @@ func TestCredPolicyUnknownMachineFailsClosed(t *testing.T) {
 	if p.check(credvault.GitHub, "") != "" {
 		t.Fatal("a GitHub token is not a subscription")
 	}
-	if p := credPolicyOf(map[string]string{}, "", pAlice); p.Restricted() {
+	if p := credPolicyOf(map[string]string{CredPolicyModeKey: "legacy"}, "", pAlice); p.Restricted() {
 		t.Fatal("no lists: unrestricted")
 	}
 	// A machine is its enrolled name, not what it reports now.
@@ -333,5 +334,215 @@ func TestCredPolicyRenameReplace(t *testing.T) {
 	}
 	if got, _, _ := leased(t, h, alice); !eq(got, "claude/gmail-renamed") {
 		t.Fatalf("rename / replace: %v", got)
+	}
+}
+
+func TestCredPolicyStrictRequiresBothScopes(t *testing.T) {
+	h, alice, bob := policyRig(t)
+	if err := h.srv.Store.SetFleetSetting(CredPolicyModeKey, "strict", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if got, wd, resp := leased(t, h, alice); len(got) != 0 || len(wd) != 5 || resp.RecheckSecs == 0 {
+		t.Fatalf("unconfigured: %v %v %+v", got, wd, resp)
+	}
+	setPolicy(t, h, "user", pAlice, []string{uuidGmail})
+	if got, _, _ := leased(t, h, alice); len(got) != 0 {
+		t.Fatalf("missing machine grant: %v", got)
+	}
+	if code, out := h.post(t, CredPolicyPath, map[string]any{"scope": "node", "id": "m4", "all": true}); code != 200 {
+		t.Fatalf("all: %d %v", code, out)
+	}
+	if got, _, _ := leased(t, h, alice); !eq(got, "claude/gmail") {
+		t.Fatalf("intersection: %v", got)
+	}
+	if got, _, _ := leased(t, h, bob); len(got) != 0 {
+		t.Fatalf("missing person grant: %v", got)
+	}
+	// Manifest deliberately evaluates machine scope only, even without a user grant.
+	_, man, _ := getPool(t, h, bob)
+	if len(man.Pool) == 0 {
+		t.Fatal("machine manifest unexpectedly required person grant")
+	}
+	setPolicy(t, h, "user", pAlice, nil)
+	if got, _, _ := leased(t, h, alice); len(got) != 0 {
+		t.Fatalf("cleared grants must deny: %v", got)
+	}
+	p := credPolicyOf(map[string]string{credNodeKey("m4"): `"*"`, credUserKey(pAlice): `"*"`}, "m4", pAlice)
+	if p.check(credvault.Claude, uuidOwn) != "" || p.check(credvault.Claude, "") != "" {
+		t.Fatal("explicit all must include future and old unidentified subscriptions")
+	}
+	if p := credPolicyOf(map[string]string{credUserKey(pAlice): `"*"`}, "", pAlice); p.check(credvault.Claude, uuidGmail) == "" {
+		t.Fatal("unknown machine escaped strict policy")
+	}
+}
+
+func TestCredPolicyMigrationReview(t *testing.T) {
+	h, alice, bob := policyRig(t)
+	var view struct {
+		Mode      string          `json:"mode"`
+		Migration policyMigration `json:"migration"`
+	}
+	h.getJSON(t, CredPolicyPath, &view)
+	if view.Mode != "legacy" || len(view.Migration.Objects) != 3 {
+		t.Fatalf("review: %+v", view)
+	}
+	// Viewing does not change current access.
+	if got, _, _ := leased(t, h, alice); len(got) != 5 {
+		t.Fatal("review changed access")
+	}
+	req := map[string]any{"action": "activate", "revision": view.Migration.Revision, "retain": []string{credNodeKey("m4"), credUserKey(pAlice)}}
+	setPolicy(t, h, "user", pBob, []string{})
+	if code, _ := h.post(t, CredPolicyPath, req); code != 409 {
+		t.Fatalf("stale review: %d", code)
+	}
+	h.getJSON(t, CredPolicyPath, &view)
+	req["revision"] = view.Migration.Revision
+	if code, out := h.post(t, CredPolicyPath, req); code != 200 {
+		t.Fatalf("activate: %d %v", code, out)
+	}
+	if got, _, _ := leased(t, h, alice); len(got) != 5 {
+		t.Fatalf("retained: %v", got)
+	}
+	if got, _, _ := leased(t, h, bob); len(got) != 0 {
+		t.Fatalf("existing deny was overwritten: %v", got)
+	}
+	settings, _ := h.srv.Store.FleetSettings()
+	if settings[CredPolicyModeKey] != "strict" || settings[credNodeKey("m4")] != `"*"` {
+		t.Fatalf("settings: %v", settings)
+	}
+	if p := credPolicyOf(settings, "new-machine", "gh:999"); p.check(credvault.Claude, uuidGmail) == "" {
+		t.Fatal("new object got legacy access")
+	}
+	if code, _ := h.post(t, CredPolicyPath, req); code != 409 {
+		t.Fatalf("replayed activation: %d", code)
+	}
+	if code, _ := h.post(t, "/v1/fleet/settings", map[string]string{"key": CredPolicyModeKey, "value": "legacy"}); code == 200 {
+		t.Fatal("generic settings bypassed migration")
+	}
+}
+
+func TestCredPolicyBeforeFirstLoginAndRevokedMigration(t *testing.T) {
+	h, alice, _ := policyRig(t)
+	if err := h.srv.Store.UpsertHubUser(store.HubUser{GitHubID: 98765, Login: "invited", Role: roleUser, AddedAt: time.Now(), AddedBy: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	setPolicy(t, h, "user", "gh:98765", []string{uuidGmail})
+	settings, _ := h.srv.Store.FleetSettings()
+	if settings[credUserKey("gh:98765")] == "" {
+		t.Fatal("preauthorization was not stored")
+	}
+	review, err := h.srv.credPolicyReview(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := map[string]any{"action": "activate", "revision": review.Revision, "retain": []string{"fleet.cred_allow.node.not-in-review"}}
+	if code, _ := h.post(t, CredPolicyPath, req); code != 400 {
+		t.Fatalf("unreviewed grant: %d", code)
+	}
+	req["retain"] = []string{}
+	if code, out := h.post(t, CredPolicyPath, req); code != 200 {
+		t.Fatalf("revoke migration: %d %v", code, out)
+	}
+	if got, _, _ := leased(t, h, alice); len(got) != 0 {
+		t.Fatalf("revoked user/machine still leased: %v", got)
+	}
+	audits, err := h.srv.Store.CredAuditLog("", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, a := range audits {
+		if a.Action == store.CredPolicy && strings.Contains(a.Detail, "activate strict") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("migration missing from credential audit")
+	}
+}
+
+func TestCredPolicyStrictSessionChoices(t *testing.T) {
+	h, alice, _ := policyRig(t)
+	if err := h.srv.Store.SetFleetSetting(CredPolicyModeKey, "strict", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	ep, err := h.srv.Store.EndpointByTokenHash(HashToken(alice))
+	if err != nil {
+		t.Fatal(err)
+	}
+	grantAll := func(scope, id string) {
+		t.Helper()
+		if code, out := h.post(t, CredPolicyPath, map[string]any{"scope": scope, "id": id, "all": true}); code != 200 {
+			t.Fatalf("grant: %d %v", code, out)
+		}
+	}
+	grantAll("node", "m4")
+	if choices, err := h.srv.sessionBindChoices(pAlice, ep.ID, credvault.Claude); err != nil || len(choices) != 0 {
+		t.Fatalf("missing user: %v %v", choices, err)
+	}
+	if _, err := h.srv.sessionBindChoices("", ep.ID, credvault.Claude); err == nil {
+		t.Fatal("empty session owner became node-only policy")
+	}
+	grantAll("user", pAlice)
+	if choices, err := h.srv.sessionBindChoices(pAlice, ep.ID, credvault.Claude); err != nil || len(choices) != 4 {
+		t.Fatalf("all grants: %v %v", choices, err)
+	}
+	setPolicy(t, h, "node", "m4", nil)
+	if choices, err := h.srv.sessionBindChoices(pAlice, ep.ID, credvault.Claude); err != nil || len(choices) != 0 {
+		t.Fatalf("missing machine: %v %v", choices, err)
+	}
+}
+
+// Upgrading an old schema must preserve both unrestricted and limited leases.
+func TestCredPolicyLegacyUpgradePreservesLeases(t *testing.T) {
+	for _, restricted := range []bool{false, true} {
+		name := "unconfigured"
+		if restricted {
+			name = "configured"
+		}
+		t.Run(name, func(t *testing.T) {
+			h, alice, bob := policyRig(t)
+			if restricted {
+				setPolicy(t, h, "node", "m4", []string{uuidGmail, uuidCodex, uuidOwn})
+				setPolicy(t, h, "user", pAlice, []string{uuidCodex})
+			}
+			type result struct {
+				allowed, withdrawn []string
+				recheck            int
+			}
+			capture := func(tok string) result {
+				a, w, r := leased(t, h, tok)
+				return result{a, w, r.RecheckSecs}
+			}
+			a, b := capture(alice), capture(bob)
+			if err := h.srv.Store.SetFleetSetting(CredPolicyModeKey, "", time.Now()); err != nil {
+				t.Fatal(err)
+			}
+			before, err := h.srv.Store.FleetSettings()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = h.srv.Store.EnsureNodes(); err != nil {
+				t.Fatal(err)
+			}
+			if err = h.srv.Store.EnsureNodes(); err != nil {
+				t.Fatal(err)
+			} // second replica / restart
+			after, err := h.srv.Store.FleetSettings()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if after[CredPolicyModeKey] != "legacy" {
+				t.Fatal("upgrade activated strict mode")
+			}
+			delete(after, CredPolicyModeKey)
+			if !reflect.DeepEqual(before, after) {
+				t.Fatalf("upgrade changed existing settings: before=%v after=%v", before, after)
+			}
+			aa, bb := capture(alice), capture(bob)
+			if !reflect.DeepEqual(a, aa) || !reflect.DeepEqual(b, bb) {
+				t.Fatalf("upgrade changed leases: alice %v -> %v; bob %v -> %v", a, aa, b, bb)
+			}
+		})
 	}
 }

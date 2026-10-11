@@ -237,7 +237,8 @@ until_ok() {
   "$@"
 }
 
-# ============================================================== the list ========
+# ============================================================== the list =}
+
 # rows: "<id>" for a drilled row, "@<text>" for a registered one
 ROWS=$(python3 - "$DOC" <<'PY'
 import re, sys
@@ -286,7 +287,8 @@ done
 # The convention is written down where the next person will read it.
 grep -q 'BREAK-IT.md' "$ROOT/CLAUDE.md" 2>/dev/null || lintfail "CLAUDE.md does not name docs/BREAK-IT.md"
 
-# ======================================================= node: the sandbox =======
+# ======================================================= node: the sandbox }
+
 # A tmux shim pins every tmux call (bare, -L <label>) to $BREAK_SOCK.
 mkdir -p "$WORK/tbin" "$WORK/wbin" "$WORK/home"
 cat > "$WORK/tbin/tmux" <<EOF
@@ -755,7 +757,7 @@ EOC
 # the `/fleet-orchestrate` seed — after it the session no longer knew it was the
 # orchestrator. Its role rides the system prompt now, from ONE text — its
 # definition's body, agents/orchestrator.md (issue #2782), rendered to
-# $FLEET_CONF_DIR/roles/ and generated as skills/fleet-orchestrate/role.md for a
+# $FLEET_CONF_DIR/roles/ and generated as plugins/fleet-orchestrate/skills/fleet-orchestrate/role.md for a
 # window opened before it: the launcher's --append-system-prompt-file
 # on a new AND a resumed launch, kept by the wrapper's ↵ resume, and the mod's
 # `fleet:orchestrator-role` section on every request. No real Claude here: the
@@ -763,8 +765,8 @@ EOC
 # 上线证据).
 drill_orchestrator_cleared() {
   CAP=10; BREAK_SOCK="$WORK/sock-oq"; local t0 w sid role oa="$WORK/oq-argv" h="$WORK/oqhome" c="$WORK/oq"
-  role="$ROOT/skills/fleet-orchestrate/role.md"
-  [ -s "$role" ] || { WHY="no skills/fleet-orchestrate/role.md — the role has no file to ride the system prompt"; return 1; }
+  role="$ROOT/plugins/fleet-orchestrate/skills/fleet-orchestrate/role.md"
+  [ -s "$role" ] || { WHY="no plugins/fleet-orchestrate/skills/fleet-orchestrate/role.md — the role has no file to ride the system prompt"; return 1; }
   [ "$(wc -l < "$role")" -le 60 ] || { WHY="role.md is $(wc -l < "$role" | tr -d ' ') lines, the charter caps it at 60"; return 1; }
   grep -q '编排会话' "$role" || { WHY="role.md never says 编排会话"; return 1; }
   grep -q "'fleet:orchestrator-role'" "$ROOT/mod/fleet/hooks/orchestrator.ts" 2>/dev/null \
@@ -782,7 +784,7 @@ drill_orchestrator_cleared() {
   grep -q -- "--append-system-prompt-file .*/roles/orchestrator-[0-9a-f]*\.md .*/fleet-orchestrate\$" "$oa" \
     || { WHY="a new orchestrator is not launched with its role in the system prompt: $(cat "$oa")"; return 1; }
   cmp -s "$(ls "$WORK"/oqconf/roles/orchestrator-*.md 2>/dev/null | head -1)" "$role" \
-    || { WHY="the rendered role is not the definition's body (skills/fleet-orchestrate/role.md)"; return 1; }
+    || { WHY="the rendered role is not the definition's body (plugins/fleet-orchestrate/skills/fleet-orchestrate/role.md)"; return 1; }
   sid=$(cat "$WORK/oqconf/fleets/oq/orchestrator.sid" 2>/dev/null)
   mkdir -p "$h/.claude/projects/$(printf '%s' "$h" | LC_ALL=C tr -c 'A-Za-z0-9' '-')"
   : > "$h/.claude/projects/$(printf '%s' "$h" | LC_ALL=C tr -c 'A-Za-z0-9' '-')/$sid.jsonl"
@@ -2081,7 +2083,8 @@ drill_fleet_down_confirm() {
   WHAT="不确认不关（脚本无 --yes、终端输错名字）；--yes 关后 fleet up --undo 两个会话都以原对话回来"
 }
 
-# ===================================================== client: the sandbox =======
+# ===================================================== client: the sandbox }
+
 CLIENT_UP=''
 client_env() {
   export HOME="$WORK/chome" XDG_CONFIG_HOME="$WORK/chome/.config" XDG_CACHE_HOME="$WORK/chome/.cache"
@@ -6033,6 +6036,15 @@ PYR
   WHAT="派单的会话不在：报告进 orphan-reports.ndjson 一行 + 一条提醒，重报 / 回收不重复，hub 派的不写"
 }
 
+drill_db_move_policy_seed() {
+  CAP=120; local t0
+  t0=$(now)
+  _drill_go_tests 'TestMoveDatabasePolicySeed' "$ROOT/tokenledger/internal/store/dbmove_test.go" \
+    'Postgres 门验证新库可迁移、已有授权拒绝覆盖、源库 legacy 模式保留' ./internal/store || return 1
+  [ -n "${CCQUOTA_DB_URL:-}" ] || WHAT='没有测试 Postgres：按名核对搬迁回归测试在，tokenledger-pg 门执行'
+  SECS=$(since "$t0")
+}
+
 # Nothing starts a session by itself (issue #3120, EPIC #3111 C9): the autofill
 # dispatcher ran every minute and spawned `autofill`-labelled issues by priority
 # (③), and its red-master macOS watcher spawned a fixer for the breakage it filed
@@ -6092,7 +6104,8 @@ SH
   WHAT="③ 自动填充：没有 dispatch 守护、壳脚本什么都不开；④ 红主干：diskguard 节拍开单 + 提醒，0 个会话自己开出来"
 }
 
-# ================================================================ run ===========
+# ================================================================ run ====}
+
 FAILS=$LINT; PASSES=0
 printf 'fleet-break-it: %d rows in docs/BREAK-IT.md\n' "$NROWS"
 # BREAK_PART → the ids of this slice (" id id … "); empty = every drill

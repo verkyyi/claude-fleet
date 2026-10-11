@@ -1,3 +1,7 @@
+---
+description: Turn a theme into a confirmed, two-layer EPIC — one design page first, issues only after you say yes.
+---
+
 # /fleet-epic-plan — turn a theme into a confirmed, two-layer EPIC
 
 <!-- fleet skill · owner: hub -->
@@ -141,7 +145,7 @@ charter, the member sections and the dependency order are read in one place and
 recorded from one place. Build it from the shared frame:
 
 ```sh
-cat ~/.claude/skills/epic-page/template.html   # the ONE frame plan + report share — keep <style> + ids
+cat ~/.claude/fleet/plugins/fleet-epic/skills/epic-page/template.html   # the ONE frame plan + report share — keep <style> + ids
 ```
 
 Write it to your scratchpad (`<scratchpad>/epic-plan-<slug>.html`; **not** into the
@@ -163,7 +167,7 @@ of what it received before this change.
 EPIC #883's page, fixed into the frame so the next page starts there instead of
 at round one; rules 0 and 16–23 from issue #929, rule 24 from issue #1754, a page that filled every slot
 and was still sent back for its surface). The surface is for someone deciding,
-not someone executing — same rules as `skills/epic-page/SKILL.md`'s
+not someone executing — same rules as `plugins/fleet-epic/skills/epic-page/SKILL.md`'s
 「What goes IN the slots」:
 
 0. **动笔前先读一份已批的样例页 — its surface, folds closed.**

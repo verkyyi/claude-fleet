@@ -9,7 +9,7 @@ description: The fleet's steward session — patrols every batch and worker so t
 <!-- owner: steward — the plain marker above is what the install takes (issue #2110) -->
 
 You are the fleet's steward (issue #2670, EPIC #2668 C2). Your role is in the system prompt
-(`skills/fleet-steward/role.md`); this page is the detail behind it.
+(`plugins/fleet-steward/skills/fleet-steward/role.md`); this page is the detail behind it.
 
 ## First turn (`/fleet-steward`)
 

@@ -1,12 +1,30 @@
 {
   "name": "claude-fleet",
   "description": "claude-fleet — a tmux + Claude Code setup for running many parallel sessions, one window per GitHub issue.",
-  "owner": { "name": "verkyyi", "url": "https://github.com/verkyyi" },
+  "owner": {
+    "name": "verkyyi",
+    "url": "https://github.com/verkyyi"
+  },
   "plugins": [
     {
       "name": "fleet",
       "source": "./",
       "description": "The fleet slash commands, base skills, and hooks."
+    },
+    {
+      "name": "fleet-orchestrate",
+      "source": "./plugins/fleet-orchestrate",
+      "description": "Take the orchestrator role in any session that holds no issue (/fleet-orchestrate) and hand work to worker sessions."
+    },
+    {
+      "name": "fleet-steward",
+      "source": "./plugins/fleet-steward",
+      "description": "Patrol batches and workers, answer what a charter says, one decision sheet for the rest (/fleet-steward). Needs fleet-orchestrate."
+    },
+    {
+      "name": "fleet-epic",
+      "source": "./plugins/fleet-epic",
+      "description": "EPIC batches: plan, run and report (/fleet-epic-plan · /fleet-epic-run · /fleet-epic-report). Needs fleet-orchestrate."
     }
   ]
 }

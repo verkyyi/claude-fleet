@@ -613,8 +613,14 @@ func moveGuard(ctx context.Context, tx pgx.Tx, overwrite bool) error {
 		if moveSeedTables[t] {
 			continue
 		}
+		query := `SELECT EXISTS (SELECT 1 FROM ` + quoteIdent(t) + `)`
+		if t == "fleet_settings" {
+			// EnsureNodes seeds only this row on a fresh target. Never exempt
+			// other settings (or legacy mode): they belong to a used hub.
+			query = `SELECT EXISTS (SELECT 1 FROM fleet_settings WHERE NOT (key = 'fleet.cred_policy.mode' AND value = 'strict'))`
+		}
 		var held bool
-		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM `+quoteIdent(t)+`)`).Scan(&held); err != nil {
+		if err := tx.QueryRow(ctx, query).Scan(&held); err != nil {
 			return err
 		}
 		if held {

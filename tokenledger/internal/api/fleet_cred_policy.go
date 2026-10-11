@@ -38,8 +38,8 @@ import (
 // Codex `codex:account:<32 hex>` — what Vault.AccountUUID reads off the sealed
 // secret. Account labels are display only and never match.
 //
-//   - no key        unrestricted within the existing eligibility (today's
-//     behaviour, byte for byte — the resolver reads no secret then);
+//   - no key        denied (legacy installations keep unrestricted until reviewed);
+//   - `"*"`         explicitly allow all current and future eligible subscriptions;
 //   - `[]`          deny all;
 //   - a list        only its entries;
 //   - unparsable    deny all in that scope (reason names it) — a broken
@@ -70,6 +70,7 @@ import (
 // machine, or rotate the subscription, to cut that short).
 
 const (
+	CredPolicyModeKey   = "fleet.cred_policy.mode"
 	CredAllowNodePrefix = "fleet.cred_allow.node."
 	CredAllowUserPrefix = "fleet.cred_allow.user."
 	// CredPolicyPath is the admin route.
@@ -83,7 +84,8 @@ const (
 
 // credAllow is one scope's allowance.
 type credAllow struct {
-	Set bool            // a key exists: restricted
+	All bool            // explicit grant, including future subscriptions
+	Set bool            // this scope requires an explicit match or all grant
 	Bad string          // the key's value does not parse: deny all
 	IDs map[string]bool // normalised subscription IDs
 }
@@ -133,7 +135,10 @@ func parseCredAllow(raw string) (map[string]bool, error) {
 func credAllowOf(settings map[string]string, key string) credAllow {
 	raw, ok := settings[key]
 	if !ok {
-		return credAllow{}
+		return credAllow{Set: settings[CredPolicyModeKey] != "legacy"}
+	}
+	if raw == `"*"` {
+		return credAllow{Set: true, All: true}
 	}
 	ids, err := parseCredAllow(raw)
 	if err != nil {
@@ -150,6 +155,9 @@ func credUserKey(principal string) string { return CredAllowUserPrefix + princip
 
 // anyNodePolicy says whether some machine has an allowlist.
 func anyNodePolicy(settings map[string]string) bool {
+	if settings[CredPolicyModeKey] != "legacy" {
+		return true
+	}
 	for k := range settings {
 		if strings.HasPrefix(k, CredAllowNodePrefix) {
 			return true
@@ -160,6 +168,9 @@ func anyNodePolicy(settings map[string]string) bool {
 
 // anyCredPolicy says whether any allowlist exists at all.
 func anyCredPolicy(settings map[string]string) bool {
+	if settings[CredPolicyModeKey] != "legacy" {
+		return true
+	}
 	for k := range settings {
 		if strings.HasPrefix(k, CredAllowNodePrefix) || strings.HasPrefix(k, CredAllowUserPrefix) {
 			return true
@@ -198,7 +209,7 @@ func (p credPolicy) check(provider, uuid string) string {
 		what string
 		a    credAllow
 	}{{"machine " + p.Machine, p.Node}, {"person " + p.Principal, p.User}} {
-		if !sc.a.Set {
+		if !sc.a.Set || sc.a.All {
 			continue
 		}
 		switch {
@@ -267,11 +278,16 @@ func (s *Server) credPolicyFilter(rows []store.Credential, p credPolicy) []store
 }
 
 // CredPolicyPut is the body of PUT /v1/fleet/cred-policy. Allow nil (JSON
-// null, or absent) clears the scope's list — unrestricted again; [] denies all.
+// null, or absent) clears the scope (denied in strict mode); [] denies all.
+// All explicitly grants all present and future eligible subscriptions.
 type CredPolicyPut struct {
-	Scope string    `json:"scope"` // node | user
-	ID    string    `json:"id"`    // a machine name, or a principal ID
-	Allow *[]string `json:"allow"`
+	Scope    string    `json:"scope"` // node | user
+	ID       string    `json:"id"`    // a machine name, or a principal ID
+	Allow    *[]string `json:"allow"`
+	All      bool      `json:"all"`
+	Action   string    `json:"action"`
+	Revision string    `json:"revision"`
+	Retain   []string  `json:"retain"`
 }
 
 // CredPolicyEntry is one account in the effective view.
@@ -310,6 +326,7 @@ func (s *Server) credPolicyGet(w http.ResponseWriter, r *http.Request) {
 		ID    string   `json:"id"`
 		Allow []string `json:"allow"`
 		Error string   `json:"error,omitempty"`
+		All   bool     `json:"all,omitempty"`
 	}
 	nodes, users := []scope{}, []scope{}
 	for k, v := range settings {
@@ -323,7 +340,9 @@ func (s *Server) credPolicyGet(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		sc := scope{ID: id, Allow: []string{}}
-		if ids, err := parseCredAllow(v); err != nil {
+		if v == `"*"` {
+			sc.All = true
+		} else if ids, err := parseCredAllow(v); err != nil {
 			sc.Error = err.Error()
 		} else {
 			for x := range ids {
@@ -336,9 +355,18 @@ func (s *Server) credPolicyGet(w http.ResponseWriter, r *http.Request) {
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].ID < nodes[j].ID })
 	sort.Slice(users, func(i, j int) bool { return users[i].ID < users[j].ID })
 	out := map[string]any{"nodes": nodes, "users": users,
-		"semantics":   "no list = unrestricted within existing eligibility; [] = deny all; a list = only its subscription IDs; malformed = deny all",
+		"mode":        settings[CredPolicyModeKey],
+		"semantics":   "unconfigured = denied in strict mode; all = explicit grant including future subscriptions; both machine and user must allow; legacy mode requires reviewed migration",
 		"propagation": "central proxy ≤ 30 s; a node lease rechecks every " + credPolicyRecheck.String() + " while any list exists (older agents, and the first list ever set: ≤ 6 h); tokens already on a machine live to their own expiry"}
 
+	if settings[CredPolicyModeKey] == "legacy" {
+		review, err := s.credPolicyReview(settings)
+		if err != nil {
+			httpError(w, 500, err.Error())
+			return
+		}
+		out["migration"] = review
+	}
 	q := r.URL.Query()
 	machine, principal := q.Get("machine"), q.Get("principal")
 	if epID := q.Get("endpoint_id"); epID != "" {
@@ -359,6 +387,9 @@ func (s *Server) credPolicyGet(w http.ResponseWriter, r *http.Request) {
 	byEndpoint := q.Get("endpoint_id") != ""
 	if machine != "" || principal != "" || byEndpoint {
 		pol := credPolicyOf(settings, strings.ToLower(firstLabel(machine)), principal)
+		if byEndpoint && principal == "" {
+			pol.User = credAllow{Set: true, Bad: "no active owner"}
+		}
 		if machine == "" && !byEndpoint {
 			pol.NodeUnknown = false // a person's view alone: the machine is the caller's question, not unknown
 		}
@@ -405,6 +436,14 @@ func (s *Server) credPolicyPut(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusBadRequest, "malformed request: "+err.Error())
 		return
 	}
+	if req.Action == "activate" {
+		s.activateCredPolicy(w, r, req)
+		return
+	}
+	if req.All && req.Allow != nil {
+		httpError(w, 400, "choose all or allow, not both")
+		return
+	}
 	var key string
 	audit := store.CredAudit{Action: store.CredPolicy}
 	switch req.Scope {
@@ -420,8 +459,25 @@ func (s *Server) credPolicyPut(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if _, err := s.Store.Principal(req.ID); err != nil {
-			httpError(w, http.StatusBadRequest, "unknown principal "+req.ID)
-			return
+			// Administrators can authorize an invited user before their first login.
+			known := false
+			if gid, ok := githubIDOf(req.ID); ok {
+				u, e := s.Store.HubUserByID(gid)
+				if e != nil {
+					httpError(w, 500, e.Error())
+					return
+				}
+				role, e := s.githubRole(gid)
+				if e != nil {
+					httpError(w, 500, e.Error())
+					return
+				}
+				known = u != nil || role == roleAdmin
+			}
+			if !known {
+				httpError(w, http.StatusBadRequest, "unknown principal "+req.ID)
+				return
+			}
 		}
 		key, audit.PrincipalID = credUserKey(req.ID), req.ID
 	default:
@@ -451,6 +507,9 @@ func (s *Server) credPolicyPut(w http.ResponseWriter, r *http.Request) {
 		b, _ := json.Marshal(norm)
 		value = string(b)
 	}
+	if req.All {
+		value = `"*"`
+	}
 	settings, err := s.Store.FleetSettings()
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
@@ -464,7 +523,7 @@ func (s *Server) credPolicyPut(w http.ResponseWriter, r *http.Request) {
 	}
 	show := func(v string, set bool) string {
 		if !set {
-			return "unrestricted"
+			return "unconfigured (mode=" + settings[CredPolicyModeKey] + ")"
 		}
 		return v
 	}
@@ -474,7 +533,12 @@ func (s *Server) credPolicyPut(w http.ResponseWriter, r *http.Request) {
 	}
 	s.settingAudit(actorOf(r), key, before, value, now)
 	s.sessCred.drop("") // the central proxy's next resolve re-reads its pass (#1969's cache)
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "key": key, "allow": json.RawMessage(orNull(value))})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "key": key, "all": req.All, "allow": func() any {
+		if req.All {
+			return nil
+		}
+		return json.RawMessage(orNull(value))
+	}()})
 }
 
 func orNull(v string) string {

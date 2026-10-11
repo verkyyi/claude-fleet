@@ -22,7 +22,7 @@ shared source: one `template.html`, one `<style>`, one set of section ids.
 ## Use
 
 ```sh
-cat ~/.claude/skills/epic-page/template.html     # read the frame, then write your page
+cat ~/.claude/fleet/plugins/fleet-epic/skills/epic-page/template.html     # read the frame, then write your page
 ~/.claude/skills/doc-preview/share.sh <page.html> # host it; relay the READY URL
 ~/.claude/skills/doc-preview/share.sh --refresh   # after editing the SAME file — URL unchanged
 ```
