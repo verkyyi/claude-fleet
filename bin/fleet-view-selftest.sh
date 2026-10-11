@@ -152,6 +152,8 @@ for bad in 'merged' 'done:2h' '⇢' ' ! '; do
 done
 here=$(grep -n "（这台）" "$W/popup.txt" | head -1 | cut -d: -f1); far=$(grep -n '─ m4 ' "$W/popup.txt" | head -1 | cut -d: -f1)
 [ "$here" -lt "$far" ] || fail "B: this machine's group is not first"
+# the lit row (the current session, alpha) is marked ▶ — reverse alone on a grey row was invisible (#3007)
+[ "$(grep -c '▶' "$W/popup.txt")" = 1 ] && grep -q '▶.*Alpha' "$W/popup.txt" || fail "B: the lit row is not the one marked ▶: $(grep -n '▶' "$W/popup.txt")"
 [ -n "${FLEET_VIEW_EVIDENCE:-}" ] && cp "$W/popup.txt" "$FLEET_VIEW_EVIDENCE"
 pass "B  ⌘P: the list in the 看台 (grouped, words, sections), nothing in a direct attach"
 
