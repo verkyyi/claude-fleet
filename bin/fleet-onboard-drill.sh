@@ -1030,7 +1030,7 @@ case $op in
     S=
     for d in "$C"/fleets/*/; do
       s=$(basename "$d")
-      tmux -L "$s" list-windows -a -F "#{@fleet_id}" 2>/dev/null | grep -qxF -- "$arg" && { S=$s; break; }
+      tmux -L "$s" list-windows -a -F "#{@fleet_id}" 2>/dev/null | grep -qxF -- "$arg" && { S=$s; break; }  # view-ok: a presence test in the remote login shell (no fleet-lib there), a view session duplicate row is harmless
     done
     [ -n "$S" ] || { echo "no fleet of $(id -un) has @fleet_id $arg"; exit 4; }
     printf "fleet\t%s\n" "$S"
