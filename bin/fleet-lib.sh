@@ -5703,6 +5703,14 @@ fleet_parked() {
   awk -F'\t' -v r="$1#$2" '$1 == r { f = 1; exit } END { exit !f }' "$FLEET_CONF_DIR/global/park.idx" 2>/dev/null
 }
 
+# fleet_parked_fid <fleet_id> — rc 0 when that SESSION is parked, whatever it is
+# keyed by (issue #3387): a session with no issue is booked under its task record
+# `T<n>`, so only its identity — park.idx's second column — finds it.
+fleet_parked_fid() {
+  fleet_is_fid "${1:-}" || return 1
+  awk -F'\t' -v f="$1" '$2 == f { h = 1; exit } END { exit !h }' "$FLEET_CONF_DIR/global/park.idx" 2>/dev/null
+}
+
 # fleet_fid_retired <fid> — rc 0 when the fleet closed that session on purpose.
 fleet_fid_retired() {
   fleet_is_fid "${1:-}" && [ -f "$(fleet_retired_dir)/$1" ]

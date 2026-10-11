@@ -92,6 +92,16 @@
 # A session the hub's task record owns (`--task T<n>`, issue #3325 — the hub's
 # start passes it) files none: the record is its ticket, stamped `@task T<n>`.
 #
+# --resume <sid> + --seed-file <f> [+ --worktree <dir>] (issue #3387): a PARKED
+# session with no issue coming back (bin/fleet_park.py's wake) — the scratch
+# counterpart of dash-issue-session.sh --resume. The window opens on the same
+# conversation (`--resume <sid>`, Claude only, and only while its transcript is
+# still in the project dir of where it ran — $HOME for --no-repo, else the
+# worktree) and its first turn is the file's text. --worktree reopens it in its
+# OWN kept scratch worktree (with --repo; the dir must be a `*-scratch-<N>`
+# worktree that still exists) instead of allocating a new one. No transcript ⇒ a
+# fresh session seeded with the file. Always cold, always on this machine.
+#
 # The dash's ⌃s is a ONE-KEYSTROKE spawn (issue #444): no name popup, no confirm —
 # press it and the scratch window is on its way. Naming was a prompt nobody filled
 # in (the auto `scratch-<N>` matches the worktree and reads better in the dash), and
@@ -117,7 +127,7 @@ set -uo pipefail
 # and input draft; --prompt <t> / --prompt=<t> is the optional submitted seed;
 # --bg backgrounds the slow half of the spawn (the dash ⌃s / typed-↵ path — see
 # below); the lone positional is the headless <fleet-session>.
-NAME=""; PROMPT=""; TARGET_SESS=""; BG=0; PIN=0; ORIGIN=""; AGENT=""; REPO_ARG=""; NOREPO=0; SEL=""; NODE_ARG=""; ORIGIN_WID=""; PRINT_WIN=0; REAP=""; WARM_ONLY=0; TEST_ID=0; DESK_ARG=""; TASK_REF=""; ROLE=""; AS_ARG=""; AS_SOFT=0
+NAME=""; PROMPT=""; TARGET_SESS=""; BG=0; PIN=0; ORIGIN=""; AGENT=""; REPO_ARG=""; NOREPO=0; SEL=""; NODE_ARG=""; ORIGIN_WID=""; PRINT_WIN=0; REAP=""; WARM_ONLY=0; TEST_ID=0; DESK_ARG=""; TASK_REF=""; ROLE=""; AS_ARG=""; AS_SOFT=0; RESUME_SID=""; SEED_FILE=""; WT_ARG=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --name)        NAME="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
@@ -213,12 +223,27 @@ while [ "$#" -gt 0 ]; do
     # its ticket, so no desk ticket is filed (unless --desk asks for one).
     --task)        TASK_REF="${2:-}"; shift 2 ;;
     --task=*)      TASK_REF="${1#--task=}"; shift ;;
+    # --resume <sid> / --seed-file <f> / --worktree <dir> (issue #3387): see above.
+    --resume)      RESUME_SID="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
+    --resume=*)    RESUME_SID="${1#--resume=}"; shift ;;
+    --seed-file)   SEED_FILE="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
+    --seed-file=*) SEED_FILE="${1#--seed-file=}"; shift ;;
+    --worktree)    WT_ARG="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
+    --worktree=*)  WT_ARG="${1#--worktree=}"; shift ;;
     *)             TARGET_SESS="$1"; shift ;;
   esac
 done
 case "$ORIGIN_WID" in ''|*[!A-Za-z0-9/:._-]*) ORIGIN_WID='' ;; esac
 case "$TASK_REF" in T[1-9]*) case "${TASK_REF#T}" in *[!0-9]*) TASK_REF='' ;; esac ;; *) TASK_REF='' ;; esac
 [ -n "$TASK_REF" ] && [ -z "$DESK_ARG" ] && DESK_ARG=off
+case "$RESUME_SID" in *[!0-9a-fA-F-]*) RESUME_SID='' ;; esac
+# A parked session's return (issue #3387): its seed is the first turn, and it never
+# files a desk ticket — whatever it had, it had before the park.
+if [ -n "$RESUME_SID" ] || [ -n "$SEED_FILE" ] || [ -n "$WT_ARG" ]; then
+  [ -z "$DESK_ARG" ] && DESK_ARG=off
+  [ -z "$NODE_ARG" ] && NODE_ARG=local          # its transcript and worktree are here
+  if [ -z "$PROMPT" ] && [ -n "$SEED_FILE" ] && [ -s "$SEED_FILE" ]; then PROMPT=$(cat "$SEED_FILE"); fi
+fi
 case "$DESK_ARG" in ''|on|off) ;; */*/*|*[!A-Za-z0-9/._-]*|/*|*/) DESK_ARG=on ;; */*) ;; *) DESK_ARG=on ;; esac
 # Trim the seed; a whitespace-only prompt is no prompt (plain scratch).
 PROMPT="${PROMPT#"${PROMPT%%[![:space:]]*}"}"; PROMPT="${PROMPT%"${PROMPT##*[![:space:]]}"}"
@@ -441,6 +466,9 @@ if [ "$BG" = 1 ]; then
   [ -n "$REAP" ] && owarg="$owarg --reap=$REAP"
   [ "$TEST_ID" = 1 ] && owarg="$owarg --test-identity"
   [ -n "$TASK_REF" ] && owarg="$owarg --task=$TASK_REF"   # T<n>, checked above
+  [ -n "$RESUME_SID" ] && owarg="$owarg --resume=$RESUME_SID"   # hex + dashes, checked above
+  case "$WT_ARG" in '') ;; *"'"*) refuse "raw: --worktree path has a quote"; exit 1 ;;
+    *) owarg="$owarg --worktree='$WT_ARG'" ;; esac
   case "$DESK_ARG" in
     '') ;; on) owarg="$owarg --desk" ;; off) owarg="$owarg --no-desk" ;;
     *) owarg="$owarg --desk='$DESK_ARG'" ;;   # sanitized to owner/name below
@@ -614,6 +642,7 @@ if [ "$WARM_ONLY" = 1 ]; then
     exit 3
   fi
 else
+[ -n "$WT_ARG$RESUME_SID" ] && _pool_ok=0      # a parked session's return is always cold (#3387)
 [ "$_pool_ok" = 1 ] && [ -z "$PROMPT" ] && [ -z "$ROLE" ] && [ -z "$AS_ARG" ] && { [ -z "$AGENT" ] || [ "$AGENT" = "${FLEET_AGENT:-claude}" ]; } && claimed=$(bash "$BIN/scratch-pool.sh" claim "$SESS" ${_pool_repo:+--repo "$_pool_repo"} 2>/dev/null | head -1)
 if [ -n "$claimed" ]; then
   warm=1
@@ -631,6 +660,12 @@ fi
 # add -b` is itself the serialization point vs concurrent ⌃s presses.
 if [ "$NOREPO" = 1 ]; then
   slug=norepo; wt="$HOME"                        # no worktree: the agent runs in $HOME
+elif [ -n "$WT_ARG" ]; then
+  # A parked scratch's own kept worktree (issue #3387): reopened, never allocated.
+  slug="scratch-${WT_ARG##*-scratch-}"
+  case "${slug#scratch-}" in ''|*[!0-9]*) refuse "raw: --worktree $WT_ARG is not a scratch worktree"; exit 1 ;; esac
+  [ -d "$WT_ARG" ] && [ -e "$WT_ARG/.git" ] || { refuse "raw: --worktree $WT_ARG is gone"; exit 1; }
+  wt=$WT_ARG
 elif [ "$warm" = 0 ]; then
   alloc=$(fleet_scratch_alloc "$MAIN" "$BASE" "$SESS") || alloc=""
   if [ -n "$alloc" ]; then slug=${alloc%%	*}; wt=${alloc#*	}; fi
@@ -734,8 +769,17 @@ else
   # The window stamps its own repo identity BEFORE the launcher reads its conf
   # (issue #789 — see fleet_win_stamp_cmd).
   stamp=''; nsid=''
+  # A parked session's return (issue #3387): the same conversation when its
+  # transcript is still where it ran and the agent is Claude; else a fresh one.
+  rsid=''
+  if [ -n "$RESUME_SID" ] && [ "${AGENT:-${FLEET_AGENT:-claude}}" = claude ] \
+     && [ -f "$(fleet_transcript_dir "$wt")/$RESUME_SID.jsonl" ]; then
+    rsid=$RESUME_SID
+  fi
   if [ "$NOREPO" = 1 ]; then
-    if [ "${AGENT:-${FLEET_AGENT:-claude}}" = claude ]; then
+    if [ -n "$rsid" ]; then
+      nsid=$rsid; launch="$launch --resume $nsid"
+    elif [ "${AGENT:-${FLEET_AGENT:-claude}}" = claude ]; then
       nsid=$(uuidgen 2>/dev/null || python3 -c 'import uuid; print(uuid.uuid4())' 2>/dev/null)
       nsid=$(printf '%s' "$nsid" | tr 'A-F' 'a-f' | LC_ALL=C tr -cd '0-9a-f-')
       [ -n "$nsid" ] && launch="$launch --session-id $nsid"
@@ -745,6 +789,7 @@ else
   elif [ -n "$REPO_ARG" ]; then
     stamp=$(fleet_win_stamp_cmd @repo "$REPO_ARG" @worktree "$wt")
   fi
+  [ "$NOREPO" != 1 ] && [ -n "$rsid" ] && launch="$launch --resume $rsid"
   if [ -n "$PROMPT" ]; then
     tf="$(fleet_cache_dir "$(fleet_slug "${REPO_ARG:-${FLEET_REPO:-$SESS}}")")/task_$slug.txt"
     [ "$NOREPO" = 1 ] && tf="$(fleet_cache_dir "$(fleet_slug "$SESS")")/task_norepo-$$.txt"
@@ -752,7 +797,7 @@ else
       && launch="$launch \"\$(cat '$tf')\""
   fi
   win=$(TM new-window -d -P -F '#{window_id}' -t "$SESS:" -n "$name" -c "$wt" "$stamp$launch; exec \$SHELL") \
-    || { [ "$NOREPO" = 1 ] || fleet_scratch_free "$MAIN" "$slug" "$wt"
+    || { [ "$NOREPO" = 1 ] || [ -n "$WT_ARG" ] || fleet_scratch_free "$MAIN" "$slug" "$wt"
          [ -n "$DESK_ID" ] && bash "$BIN/fleet-ticket.sh" state "$DESK_ID" closed --reason not_planned >/dev/null 2>&1
          # Say WHY when it is the server (issue #2477): the line rides into
          # the hub's DECLINED / UNKNOWN answer as the refusal.

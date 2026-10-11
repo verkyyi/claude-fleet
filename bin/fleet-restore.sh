@@ -570,6 +570,12 @@ restore() {
         log "skip $sess/$wname parked $wrepo#$wissue"
         continue
       fi
+      # …and one with no issue, booked under its task record (issue #3387): by identity.
+      case "$wtag" in WIN:?*) if fleet_parked_fid "${wtag#WIN:}"; then
+        say "    · $wname: parked (fleet-park.sh list) — not reopened"
+        log "skip $sess/$wname parked fid ${wtag#WIN:}"
+        continue
+      fi ;; esac
       # reconcile path: the session is already live — don't duplicate. Its
       # @fleet_id answers first (issue #1844): a window the person renamed is
       # still that session, and a name is only the fallback for a map row or a

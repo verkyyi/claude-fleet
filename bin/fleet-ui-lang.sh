@@ -364,6 +364,8 @@ fleet_ui_t() {
     en:park_wait_time_fmt)      printf 'until %s' "${1:-}" ;;
     zh:park_wait_reply_fmt)     printf '%s 上有新回复' "${1:-}" ;;
     en:park_wait_reply_fmt)     printf 'a new reply on %s' "${1:-}" ;;
+    zh:park_wait_task_fmt)      printf '任务记录 %s 上有回音' "${1:-}" ;;
+    en:park_wait_task_fmt)      printf 'an answer on task record %s' "${1:-}" ;;
     zh:park_request_fmt)        printf '[fleet park] 你%s，fleet 要把你停放、让出位置；等「%s」满足后在同一对话把你叫回来。现在请把交接写到 %s（做到哪、下一步、要注意的；/fleet-handoff 的文件格式），写完就结束这一轮，不要再做别的。' "${1:-}" "${2:-}" "${3:-}" ;;
     en:park_request_fmt)        printf '[fleet park] You are %s; the fleet will park you to free your place and bring you back in this same conversation once "%s" holds. Write your handoff to %s now (where you are, the next step, what to watch; the /fleet-handoff file format), then end this turn and do nothing else.' "${1:-}" "${2:-}" "${3:-}" ;;
     zh:park_report_fmt)         printf '停放：等 %s；满足后同一对话自动接回' "${1:-}" ;;
@@ -384,6 +386,8 @@ fleet_ui_t() {
     en:park_comment_back_fmt)   printf 'It comes back in the same conversation (%s) when that holds; to bring it back now: fleet-park.sh wake <repo#N>.' "${1:-}" ;;
     zh:park_seed_fmt)           printf '[fleet park] 你之前被停放过，等的「%s」已经满足。先读交接 %s（没有就看屏幕存档 %s），再读 %s 上停放之后的新评论，从原来的进度接着干，不要从头来。' "${1:-}" "${2:-}" "${3:-}" "${4:-}" ;;
     en:park_seed_fmt)           printf '[fleet park] You were parked; what you waited for ("%s") holds now. Read your handoff %s first (none: the screen kept at %s), then the comments on %s since the park, and go on from where you were — never from the start.' "${1:-}" "${2:-}" "${3:-}" "${4:-}" ;;
+    zh:park_seed_task_fmt)      printf '[fleet park] 你之前被停放过，等的「%s」已经满足。先读交接 %s（没有就看屏幕存档 %s），再读任务记录 %s（fleet-task-record.sh get %s）上的回音，从原来的进度接着干，不要从头来。' "${1:-}" "${2:-}" "${3:-}" "${4:-}" "${4:-}" ;;
+    en:park_seed_task_fmt)      printf '[fleet park] You were parked; what you waited for ("%s") holds now. Read your handoff %s first (none: the screen kept at %s), then the answer on task record %s (fleet-task-record.sh get %s), and go on from where you were — never from the start.' "${1:-}" "${2:-}" "${3:-}" "${4:-}" "${4:-}" ;;
     zh:park_seed_nohandoff)     printf '（没写）' ;;
     en:park_seed_nohandoff)     printf '(none written)' ;;
     zh:repo_none_tag)           printf '⇢无' ;;
