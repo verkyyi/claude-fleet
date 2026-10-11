@@ -145,6 +145,10 @@ if not said or "localhost:%d" % port not in said[0] or "issue-1" not in said[0] 
     bad.append("notice: %r" % said)
 fw.tick()
 if closed: bad.append("tick closed a live forward")
+try:
+    srv.shutdown(socket.SHUT_RDWR)
+except OSError:
+    pass
 srv.close()
 for c in held: c.close()
 time.sleep(0.2)
@@ -242,6 +246,10 @@ except OSError as e:
     bad.append("cport: localhost:%d does not reach the session (%s)" % (cport, e))
 if not th.said or "localhost:%d" % cport not in th.said[0] or "issue-3236" not in th.said[0]:
     bad.append("cport: notice %r" % th.said)
+try:
+    far.shutdown(socket.SHUT_RDWR)
+except OSError:
+    pass
 far.close()
 for c in held: c.close()
 time.sleep(0.3)
