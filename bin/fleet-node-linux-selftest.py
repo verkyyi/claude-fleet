@@ -269,11 +269,14 @@ class LinuxNode(unittest.TestCase):
             (lib.parent).mkdir(parents=True)  # LIB itself not made yet: skipped
             os.chmod(Path(d, 'usr/local'), 0o775)
             mine = {str(p) for p in [lib.parent] + list(lib.parent.parents) if os.lstat(p).st_uid != 0}
-            with patch.object(m.os, 'lchown') as lc:
+            # never touch the real ancestors (/tmp is 1777 on Linux): record only
+            with patch.object(m.os, 'lchown') as lc, patch.object(m.os, 'chmod') as cm:
                 fixed = m.lib_owner_heal(lib)
             self.assertEqual({c.args[0].__fspath__() for c in lc.call_args_list}, mine)
             self.assertTrue(all(c.args[1:] == (0, 0) for c in lc.call_args_list))
-            self.assertEqual(os.stat(Path(d, 'usr/local')).st_mode & 0o022, 0)
+            modes = {str(c.args[0]): c.args[1] for c in cm.call_args_list}
+            self.assertEqual(modes[str(Path(d, 'usr/local'))], 0o755)
+            self.assertTrue(all(v & 0o022 == 0 for v in modes.values()))
             self.assertIn(str(Path(d, 'usr/local')), fixed)
             self.assertNotIn(str(lib), fixed)
 
