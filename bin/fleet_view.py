@@ -101,8 +101,14 @@ TAB (issue #3181, EPIC #3178 C3): the lit row's actions — the old sidebar row
 menu's, item for item (ACTIONS; SIDEBAR_ACTIONS maps its letters), each running
 the same script the sidebar ran. ↑↓ ↵ pick, Esc steps back; one that needs words
 (rename, a message, an answer, a time) asks on the bottom line (↵ submit, Esc
-cancel), a reap asks y / n first; then back on the list, read again. A row on
-another machine has 进入 and its shell (C5) until C4 fills the rest of `far`.
+cancel), a reap asks y / n first; then back on the list, read again.
+
+A ROW ON ANOTHER MACHINE (issue #3182, EPIC #3178 C4): 回答 · 发一句话 · 改名 ·
+改回收方式 · 停 · 回收 · 恢复 are each `far` — the hub write the old sidebar made for
+that row, through the same fleet-sidebar-remote.sh (FLEET_REMOTE_SAY=print: its
+outcome line, the hub's refusal verbatim, comes back as the bottom line). Run off
+the screen's thread, then one hub cache --refresh, so a reaped row leaves within
+the next read. A lost row (`!`) sends nothing: 「<机器> 失联，做不了 · 正在重连」.
 """
 import curses
 import getpass
@@ -357,6 +363,20 @@ def hub_fresh(fleet):
         run("--ensure", 3)
 
 
+def hub_reread(fleet):
+    """After a write to another machine's session: read the hub's rows once now
+    (fleet-hub-sessions.sh --refresh, ≤ FLEET_VIEW_HUB_REFRESH_SECS), so the next
+    list read shows it — a reaped row gone, a new name. No cache ⇒ nothing."""
+    if not fleet or not (dash_global() / ("remote_" + fleet)).is_file():
+        return
+    hs = os.environ.get("FLEET_VIEW_HUBSESS") or str(Path(__file__).absolute().parent / "fleet-hub-sessions.sh")
+    try:
+        subprocess.run(["bash", hs, "--refresh"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL, timeout=fenv("FLEET_VIEW_HUB_REFRESH_SECS", 5), start_new_session=True)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+
 def produce(fleet):
     """tmux-dashboard-rows.sh --sidebar, every subtree open: the rows the old list
     drew, the same producer (it reads remote_<sess>, so other machines come too)."""
@@ -521,6 +541,7 @@ def entries(vid, now=None):
             tags.append(f[5].strip())
         e = {"kind": "sess", "target": target, "far": not local, "machine": machine, "login": login,
              "state": state, "text": title or name, "name": name, "reap": f[14].strip(), "issue": issue, "depth": depth,
+             "detail": detail,
              "group": grp, "sym": sym_of(state, lost), "lost": lost, "lost_secs": lost_secs, "ask": ask, "tags": tags, "repo": repo,
              "word": state_words(state, detail if state == "needs" else ""),
              "foot": " · ".join(x for x in (title or name, reap_words(f[14]),
@@ -1479,7 +1500,11 @@ def facts(fleet, e):
     """What a local row's window says now: pin · sleep · keep-awake · agent · the
     needs kind · @fleet_id · its name · the wrapper's page up · its PR."""
     t = e.get("target") or ""
-    if e.get("far") or not t.startswith("@"):
+    if e.get("far"):
+        # another machine's: what it asks is all the panel needs to know (a
+        # permission prompt is y / n; fleet-sidebar-remote.sh reads the rest)
+        return {"needs": ("perm" if e.get("detail") == "perm" else "ask") if e.get("state") == "needs" else ""}
+    if not t.startswith("@"):
         return {}
     rc, out = tm("display-message", "-p", "-t", t, "#{window_id}|#{@pin}|#{@worker_lifecycle}|#{@sleep_keep_awake}|"
                  "#{@cc_agent}|#{@claude_needs}|#{@fleet_id}|#{window_name}|#{@wrap_exit_rc}|#{pane_id}")
@@ -1551,6 +1576,17 @@ def reappol_local(r, ans, fleet):
     return sh("fleet-reap-policy.sh", "set", ans, "--win", r["target"], "--session", fleet)
 
 
+def far(action):
+    """Another machine's row: the hub write the old sidebar made for it
+    (fleet-sidebar-remote.sh <action> <fleet> wid:<worker_id>); the answer rides
+    FLEET_SIDEBAR_TEXT (act_run)."""
+    return lambda r, a, f: sh("fleet-sidebar-remote.sh", action, f, "wid:" + r["target"])
+
+
+def far_live(r):
+    return bool(r.get("far")) and r.get("state") != "exited" and not ended(r)
+
+
 # Each entry: id · label · when · local · far · ask (+ prompt / choices / slow: run
 # in the background from the popup — a stop, a reap, a move take seconds).
 ACTIONS = [
@@ -1563,28 +1599,30 @@ ACTIONS = [
     {"id": "pr", "label": lambda r: say("view_act_pr_fmt", r.get("pr")), "when": lambda r: bool(r.get("pr")),
      "local": lambda r, a, f: sh("dash-open-pr.sh", "--wid", r["target"]), "far": None, "ask": None},
     # 消息
-    {"id": "answer", "label": lambda r: say("view_act_answer"), "when": lambda r: live(r) and r.get("state") == "needs",
-     "local": answer_local, "far": None, "ask": answer_ask,
+    {"id": "answer", "label": lambda r: say("view_act_answer"),
+     "when": lambda r: (live(r) or far_live(r)) and r.get("state") == "needs",
+     "local": answer_local, "far": far("answer"), "ask": answer_ask,
      "prompt": lambda r: say("view_ask_perm") if r.get("needs") == "perm" else say("view_ask_pick"), "keys": "yYnN"},
-    {"id": "message", "label": lambda r: say("view_act_message"), "when": live,
-     "local": lambda r, a, f: sh("fleet-peer-send.sh", r["target"], a), "far": None, "ask": "text",
+    {"id": "message", "label": lambda r: say("view_act_message"), "when": lambda r: live(r) or far_live(r),
+     "local": lambda r, a, f: sh("fleet-peer-send.sh", r["target"], a), "far": far("message"), "ask": "text",
      "prompt": lambda r: say("view_ask_message")},
     # 控制
-    {"id": "rename", "label": lambda r: say("view_act_rename"), "when": lambda r: not r.get("far") and not r.get("gone"),
-     "local": lambda r, a, f: sh("dash-rename.sh", "--wid", r["target"], a), "far": None, "ask": "text",
+    {"id": "rename", "label": lambda r: say("view_act_rename"), "when": lambda r: not r.get("gone"),
+     "local": lambda r, a, f: sh("dash-rename.sh", "--wid", r["target"], a), "far": far("rename"), "ask": "text",
      "prompt": lambda r: say("view_ask_rename"), "default": lambda r: r.get("wname") or r.get("name") or ""},
     {"id": "pin", "label": lambda r: say("view_act_unpin" if r.get("pin") else "view_act_pin"),
      "when": lambda r: not r.get("far") and not r.get("gone"),
      "local": lambda r, a, f: sh("dash-pin-toggle.sh", r["target"]), "far": None, "ask": None},
-    {"id": "reappol", "label": lambda r: say("view_act_reappol"), "when": lambda r: not r.get("far") and not r.get("gone"),
-     "local": reappol_local, "far": None, "ask": "choice", "choices": reap_choices,
+    {"id": "reappol", "label": lambda r: say("view_act_reappol"), "when": lambda r: not r.get("gone"),
+     "local": reappol_local, "far": far("reappol"), "ask": "choice", "choices": reap_choices,
      "then": {"at": ("text", lambda r: say("view_ask_at"))}},
     {"id": "stop", "label": lambda r: say("view_act_stop"),
-     "when": lambda r: live(r) and bool(r.get("fid")) and r.get("life") != "sleeping",
-     "local": lambda r, a, f: sh("fleet-worker-stop.sh", f, "fid:" + r["fid"]), "far": None, "ask": None, "slow": True},
+     "when": lambda r: (live(r) and bool(r.get("fid")) and r.get("life") != "sleeping") or far_live(r),
+     "local": lambda r, a, f: sh("fleet-worker-stop.sh", f, "fid:" + r["fid"]), "far": far("stop"), "ask": None,
+     "slow": True},
     {"id": "resume", "label": lambda r: say("view_act_restore" if ended(r) else "view_act_resume"),
-     "when": lambda r: not r.get("far") and r.get("state") == "exited" and r.get("page"),
-     "local": lambda r, a, f: "resume", "far": None, "ask": None},
+     "when": lambda r: r.get("state") == "exited" and (r.get("far") or r.get("page")),
+     "local": lambda r, a, f: "resume", "far": far("resume"), "ask": None, "slow": True},
     {"id": "wake", "label": lambda r: say("view_act_wake"), "when": lambda r: not r.get("far") and r.get("life") == "sleeping",
      "local": lambda r, a, f: sh("fleet-sleep.sh", "wake", f, r["target"], "--over-cap"), "far": None, "ask": None,
      "slow": True},
@@ -1598,8 +1636,8 @@ ACTIONS = [
     {"id": "agent", "label": lambda r: say("view_act_agent_fmt", other_agent(r)), "when": live,
      "local": lambda r, a, f: sh("fleet-transfer.sh", "--session", f, "--window", r["target"], "--to",
                                  other_agent(r).lower()), "far": None, "ask": None, "slow": True},
-    {"id": "reap", "label": lambda r: say("view_act_reap"), "when": lambda r: not r.get("far") and not r.get("gone"),
-     "local": lambda r, a, f: sh("dash-reap.sh", r["target"], "--yes"), "far": None, "ask": "key",
+    {"id": "reap", "label": lambda r: say("view_act_reap"), "when": lambda r: not r.get("gone"),
+     "local": lambda r, a, f: sh("dash-reap.sh", r["target"], "--yes"), "far": far("reap"), "ask": "key",
      "prompt": lambda r: say("view_ask_reap_fmt", r.get("text") or r.get("name") or r["target"]), "keys": "yYnN",
      "yes": True, "slow": True},
 ]
@@ -1674,6 +1712,21 @@ def act_run(qo, vid, fleet, a, r, ans, client="", wait=True):
         went = rc == 0 and go(qo, vid, r["target"], "menu", client, r) == 0
         return rc, say("view_act_done_fmt", label) if rc == 0 else say("view_act_failed_fmt", label, ""), went
     env = act_env(fleet)
+    if r.get("far"):
+        # a hub write (fleet-sidebar-remote.sh): nothing goes out for a lost row
+        if r.get("lost"):
+            return 1, say("view_lost_act_fmt", r.get("machine") or "?"), False
+        env.update(FLEET_SIDEBAR_TEXT=ans, FLEET_REMOTE_SAY="print")
+        try:
+            p = subprocess.run(argv, env=env, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=150,
+                               start_new_session=True)
+        except (OSError, subprocess.TimeoutExpired):
+            return 1, say("view_act_failed_fmt", label, ""), False
+        said = ((p.stdout.strip() or p.stderr.strip()).splitlines() or [""])[-1]
+        hub_reread(fleet)
+        if p.returncode != 0:
+            return p.returncode, "✗ " + one_line(said or label, 160), False
+        return 0, "✓ " + one_line(said or label, 160), False
     if not wait and a.get("slow"):
         try:
             subprocess.Popen(argv, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
@@ -1802,6 +1855,9 @@ def popup(screen, qo, vid, client):
     # Tab (issue #3181): `menu` = the row's actions, `choice` = an action's options,
     # `ask` = the question on the bottom line. Esc steps back to the list.
     mode, mrow, mitems, mat, mtitle, pend, line = "", None, [], 0, "", None, Line()
+    # another machine's action runs off the screen's thread (a hub write waits up
+    # to its op's answer): its line lands here, then the list is read again
+    landed = []
 
     def back():
         nonlocal mode, mrow, mitems, mat, pend
@@ -1811,6 +1867,13 @@ def popup(screen, qo, vid, client):
         """Do it, say how it went, read the list again (a pin, a rename, a reap
         shows at once); back on the list."""
         nonlocal items, shown, msg
+        if r.get("far") and not r.get("lost") and a["id"] not in ("enter", "shell"):
+            def far_run():
+                landed.append(act_run(qo, vid, fleet, a, r, ans, client)[1])
+            threading.Thread(target=far_run, daemon=True).start()
+            back()
+            msg = say("view_act_sent_fmt", a["label"](r).rstrip("…"))
+            return False
         rc, said, went = act_run(qo, vid, fleet, a, r, ans, client, wait=False)
         back()
         if went:
@@ -1849,6 +1912,10 @@ def popup(screen, qo, vid, client):
         return False
 
     while True:
+        if landed:
+            msg = landed.pop(0)
+            items = entries(vid)
+            shown = visible(items, query, opened)
         new = fresh.poll()
         if new is not None:
             # the list read again: the lit row stays the lit row (by its key)
