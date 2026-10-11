@@ -553,4 +553,6 @@ c = socket.create_connection(("127.0.0.1", int(sys.argv[1])), 3); c.settimeout(3
   WHAT="入口只放到本机的转发：-W / -L 到 127.0.0.1 通，到 192.0.2.1 / 10.255.255.1 被入口拒（request was denied），-R 被拒；经入口拖进来的文件（fleet-client-upload.py recv）只落进那个登录的 inbox"
 }
 
+# bin/entry-e2e-selftest.sh (issue #3076) sources the rig above and runs its own legs
+[ -n "${BREAK_ENTRY_LIB:-}" ] && return 0
 cred_run_drills "$0"

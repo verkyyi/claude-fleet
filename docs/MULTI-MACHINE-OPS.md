@@ -293,6 +293,52 @@ Codex 的刷新凭证（refresh token）**一次性**：谁刷新，服务端就
   但旧 fleet 服务若还活着照样会被选中。迁移后用 `fleet.node_login.<机器>=<新 login>`
   钉住，或退役旧 login 的 agent（停掉它的 `ccquota agent`）。
 
+## 5⅞⅞⅞. 从外面连进来：你的地址、入口端口、换家（EPIC #3067）
+
+手机（Termius）和没装 Tailscale 的电脑从外面连 fleet，走的是**你的地址**
+`<名字>.cf.24haowan.com` → 家里路由器的转发 → **家机器的入口端口**（第二个 sshd，
+`FLEET_ENTRY_PORT` 22022，只认钥匙页登记过的钥匙，`docs/MANAGED-NODE.md` §16）。
+机器原有的 22 端口不上公网；机器之间照旧走 Tailscale。
+
+**一台机器开入口（运维，一次）**
+
+1. `/var/db/fleet-node/machine.env` 加 `FLEET_ENTRY=1`（`sudo fleet node install` 会收敛它），
+   路由器转发的外部端口不是 22022 时，节点路线 `CCQUOTA_FLEET_NODE_ROUTES` 加 `entry=<主机>:<外部端口>`
+   （今天：macmini `entry=ssh.minihaowan.com:22122`、mini2 `entry=ssh.minihaowan.com:22123`）；
+   `launchctl kickstart -k system/com.claude-fleet.node` 让它生效。
+2. 路由器上把外部端口转发到这台的内网地址:22022。转发哪个端口给哪个地址，体检 `public` 行写着；
+   自动开端口（NAT-PMP / UPnP）成了就不用手做。
+3. 看体检：`entry` 行「入口 vN · 本机 vM · 拉到 …」（落后一小时 WARN）、`public` 行「外面连得上」。
+   连不上时它说卡在哪：超时 · 被拒 · 钥匙不符 · 这台没有公网地址。
+
+**一个人第一次从手机连**：钥匙页 `<入口>/fleet/keys` 起名字 → 贴 Termius 生成的公钥 → 在 Termius
+里照页面填四样（`docs/CLIENT.md`「手机：Termius 四样」）。撤一把钥匙在同一页「撤掉」，几秒内家机器拒它、
+断开它正连着的连接。
+
+**入口不在时**：家机器存着最后一份钥匙名单，已加的钥匙照常进；加 / 撤钥匙、换家等入口回来。
+
+**手动换家**：钥匙页「换一台当家」只列你有登录、上面有活 fleet 的在线机器。换后新旧两台各收一份
+新名单，地址几分钟内（记录 TTL 600 秒）指向新家。**两件事要你做一次**：两台 mini 在同一个路由器后面、
+同一个公网 IP，地址不变而**端口变**——Termius 里把端口改成钥匙页写的新端口；第一次连会说
+**主机钥匙变了**（每台入口端口有自己的主机钥匙）——核对是换家造成的，接受一次。Mac 上的 fleet
+从入口拿主机钥匙，不会问。
+
+**宽带换了公网地址**：节点每 5 分钟报一次、入口每分钟比对一次 DNS，记录 10 分钟过期，所以
+≤ 15 分钟手机就跟上；期间手机连不上，等一会儿再连。
+
+**演练**（`bin/entry-e2e-selftest.sh` 是替身版，每次改入口都跑；真机版批后、你在场时跑一次，约 30 分钟）：
+
+| 步 | 做什么 | 记什么 |
+|---|---|---|
+| 0 | 前提：入口已部署本批、两台 `FLEET_ENTRY=1` + `entry=` 路线 + agent 重启、路由器转发在、stable 已含 C9 且 MacBook 已 `fleet update` | 体检 `entry` / `public` 两行原文 |
+| 1 | iPhone 关 Wi‑Fi、不开 Tailscale；只装 Termius | 为连 fleet 装的 App 个数 |
+| 2 | 打开钥匙页、起名、Termius 生成钥匙、贴公钥、在 Termius 建主机填四样、连 | 每个亲手动作一行；看台截图 |
+| 3 | 入口不在：真机上不停生产入口——由替身演练 `entry-hub-down` 与 e2e 的 `hub-down-still-in` 证明；真机只核家机器上 `entry` 行有最后一份名单 | 体检 `entry` 行原文 |
+| 4 | 钥匙页撤掉那把，立刻用它再连；第 2–5 次用 MacBook 上 `ssh-keygen` 现做的钥匙（加上 → 连上 → 撤掉 → `ssh -p <端口> -i <钥匙> <登录>@<地址>`） | 审计 `revoked_at` → `Permission denied` 的秒数，5 次取中位；手机被拒截图 |
+| 5 | MacBook 卸掉 Tailscale（不只是断开），家里同一局域网断开重连 3 次 | `~/.cache/claude-fleet/thin.log` 选路行：应为 `lan` |
+| 6 | MacBook 连手机热点，连 3 次 | 选路应为 `entry`，没有一次 `relay` |
+| 7 | 收尾：Mac 已在 `entry` 上之后，发起人删掉路由器上旧的 22022 / 22023 两条转发（改约定 3） | 删前删后各连一次 |
+
 ## 6. 速查
 
 | 要做的事 | 命令 / 接口 |
@@ -301,6 +347,7 @@ Codex 的刷新凭证（refresh token）**一次性**：谁刷新，服务端就
 | 运营者标任意机器 | `/nodes` 页卡片按钮；或 `PUT /v1/fleet/settings {"key":"fleet.node_maintenance.m5","value":"原因"}`，`value:""` 撤 |
 | 搬空闲会话到别台 | `fleet-spot-evacuate.sh [--dry-run]`（每个登录一次）= `fleet-move.sh --rebalance --max all` |
 | 搬一个指定会话 | `fleet-move.sh <window> --via hub --to m4` |
+| 从外面（手机 / 没 Tailscale）连 | 钥匙页 `<入口>/fleet/keys` · Termius 四样 · 体检 `entry` / `public` 行 · 第 5⅞⅞⅞ 节 |
 | 进某台机器 | `fleet`（入口选）· `fleet m4`（指名）· `fleet connect --print` 看选了哪条线 |
 | 认领释放 / 强取 | 自动：失联 30 分钟 · 手动：`ccquota lease acquire --force <repo> <N> <wid>` |
 | 这台机器的 Codex 谁在刷新 | `ccquota codex list --json` → `login.source`：`hub` 入口托管（本机刷新被拒）· `local` 本机自管；切换见 5⅞ |

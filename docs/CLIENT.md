@@ -297,6 +297,30 @@ always has); **no command and no terminal** (`ssh -T`) is your login shell. It
 is the entry sshd's `ForceCommand`, `bin/fleet-entry.sh` — a dispatch run as
 your login, never a limit; each arrival is one line in `logs/entry.ndjson`.
 
+**手机：Termius 四样** (EPIC #3067). One app, no Tailscale, no computer:
+
+1. Open the hub's key page on the phone — `<hub>/fleet/keys` (sign in once).
+   The first time it asks for your address's name: lowercase letters, digits
+   and `-`, 3–20 (the GitHub name is filled in); your address becomes
+   `<name>.cf.24haowan.com`.
+2. In Termius: Keychain → **Generate key** (ED25519) → open it → **Copy public
+   key**; paste that one line on the key page, give it a name (`iPhone`), **加上**.
+   A private key pasted by mistake is refused and never kept.
+3. In Termius: **New host** with the four things the page lists, each with a
+   copy button — **地址** `<name>.cf.24haowan.com` · **端口** your home's entry
+   port as the page says (today 22122 for macmini, 22123 for mini2 — the
+   router's outside port, not always 22022) · **用户名** your login on the home
+   machine · **钥匙** the one you just added. Connect: the first time Termius
+   asks you to trust the host key — that is the home's entry port's own key.
+4. You are in your 看台. Lost the phone? Open the key page anywhere and tap
+   **撤掉** on its key: the home refuses it within seconds and cuts the
+   connection it holds.
+
+The key is an ordinary key of your login, the same as a computer's. Changing
+home on the page changes the port when the new home sits behind the same router
+(Termius: edit the port once) and Termius says the host key changed once —
+`docs/MULTI-MACHINE-OPS.md` «从外面连进来».
+
 **The keys: ⌃] then one letter.** A phone has no ⌘, so every ⌘ key of the 看台
 has a letter after ⌃] (the `fleet-view-pfx` table; `bin/dash-keymap.sh --panel
 switch view` is the one list):
