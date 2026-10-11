@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# probe #3171 (do not merge)
 """fleet-compose.py — ⌘N: the writing area on the right (issue #1953, EPIC #1949 C4;
 one box and three options since issue #2231, EPIC #2230 C1).
 
