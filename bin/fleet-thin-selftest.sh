@@ -461,6 +461,53 @@ case $out in *'你的第一个会话没开出来'*'原因：useradd failed'*'下
 case $out in *'重连'*) fail "J3: a reconnect line against the machine with no session" ;; *) ok "J3: no reconnect against m3" ;; esac
 grep -q '^release --lease L1' "$T/lease.log" && ok "J3: the lease is given back" || fail "J3: lease: $(cat "$T/lease.log")"
 rm -f "$T/j.fail" "$T/j.opening"
+# J4 (issue #3062): the hub says opening, then — the login made, its fleet not yet
+# reported — nothing ({}), while the place still answers 「没有你的登录」 three times
+# more: the loop waits that out (the old client's #2941 settle), never two tries
+cat > "$T/place.sh" <<EOF
+#!/bin/sh
+echo "\$* lease=\$(cat "\$FLEET_CLIENT_DIR/client.lease")" >> "$T/place.log"
+n=\$(cat "$T/j.settle" 2>/dev/null || echo 0)
+if [ "\$n" -gt 0 ]; then echo \$((n - 1)) > "$T/j.settle"; printf 'REFUSED NO_LOGIN\tNo fleet on any of your machines — m2: 没有你的登录\n'; exit 4; fi
+printf '{"worker_id": "fu/fid9", "machine": "m2"}' > "\$FLEET_PLACE_RESULT"
+printf 'REMOTE m2 scratch done fu/fid9\tok\n'
+EOF
+cat > "$T/acct.sh" <<EOF
+#!/bin/sh
+n=\$(cat "$T/j.acct" 2>/dev/null || echo 0)
+[ "\$n" -gt 0 ] && { echo \$((n - 1)) > "$T/j.acct"; echo '{"state": "opening", "eta_s": 40, "machine": "m2"}'; exit 0; }
+echo '{}'
+EOF
+: > "$T/rv.log"; : > "$T/place.log"; : > "$T/lease.log"; echo 4 > "$T/j.settle"; echo 1 > "$T/j.acct"
+THIN_ARGS='[]' jenv drive first4 '[
+ ["expect", "VIEW fu/fid9 ON m2", 20],
+ ["send", "quit\n"],
+ ["wait", 10]
+]'
+out=$(cat "$T/out.first4")
+case $(cat "$T/res.first4") in *'RC 0'*) ok "J4: opening → {} with the place still refusing → waited, placed, exit 0" ;;
+  *) fail "J4: $(cat "$T/res.first4") / $(printf '%s' "$out" | tr -d '\r' | tail -5)" ;; esac
+[ "$(grep -c -- '- home --agent claude' "$T/place.log")" = 5 ] && ok "J4: asked until placed (5 asks), not given up after two" \
+  || fail "J4: place asked $(grep -c -- '- home' "$T/place.log") times"
+case $out in *'等它的 fleet 报上来'*) ok "J4: 「登录开好了，等它的 fleet 报上来」 on the screen" ;; *) fail "J4: no settle line" ;; esac
+case $out in *'没开出来'*) fail "J4: judged a failure while the fleet was settling" ;; *) ok "J4: no failure" ;; esac
+grep -q '^m2 attach --thin .*--want fu/fid9' "$T/rv.log" && ok "J4: lands on the placed session" || fail "J4: rv: $(cat "$T/rv.log")"
+# J5: the fleet never reports → past the settle a failure naming why, never
+# forever; and a terminal the installer just put on PATH (rc file only) is told
+# how to type fleet (issue #3062)
+: > "$T/rv.log"; echo 1000 > "$T/j.settle"; echo 1 > "$T/j.acct"
+THIN_ARGS='[]' FLEET_THIN_FIRST_SETTLE=1 FLEET_INSTALL_PATH_NEW="$T/client/.local/bin" jenv drive first5 '[
+ ["expect", "下一步", 20],
+ ["wait", 10]
+]'
+out=$(cat "$T/out.first5")
+case $(cat "$T/res.first5") in *'RC 1'*) ok "J5: the fleet never reported → exit 1" ;; *) fail "J5: $(cat "$T/res.first5")" ;; esac
+case $out in *'原因：m2 上的登录开好后等了'*'没有你的登录'*) ok "J5: 原因 names the wait and the place's answer" ;;
+  *) fail "J5: lines: $(printf '%s' "$out" | tr -d '\r' | tail -5)" ;; esac
+case $out in *'下一步：稍后再敲 ~/.local/bin/fleet'*) ok "J5: 下一步 spells fleet's full path" ;; *) fail "J5: no full path in 下一步" ;; esac
+case $out in *'这个终端还找不到 fleet 命令：先敲 exec '*) ok "J5: the exit says how to get fleet on this terminal's PATH" ;; *) fail "J5: no PATH hint" ;; esac
+grep -q '^m2 ' "$T/rv.log" && fail "J5: connected to m2 with no session placed" || ok "J5: no connection"
+rm -f "$T/j.settle" "$T/j.acct"
 
 echo
 [ "$FAILS" = 0 ] && { echo "fleet-thin-selftest: PASS"; exit 0; }

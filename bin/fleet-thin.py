@@ -74,7 +74,7 @@ reason = its first word).
 Knobs: FLEET_THIN_UP_SECS (10), FLEET_THIN_BACKOFF ("1,2,4,8,16,30"),
 FLEET_THIN_REHOME_AFTER (3), FLEET_THIN_HUB_PROBE_SECS (4), FLEET_REMOTE_BIN (.claude/fleet/bin),
 FLEET_CLIENT_PASTE=0 (drops and ⌃V byte for byte), FLEET_ITERM_KEYS=0,
-FLEET_THIN_FIRST_RETRY (10), FLEET_HOME_FIRST_OPENING_MAX (2400),
+FLEET_THIN_FIRST_RETRY (10), FLEET_HOME_FIRST_OPENING_MAX (2400), FLEET_THIN_FIRST_SETTLE (600),
 FLEET_THIN_FIRST_ROUNDS (3), FLEET_THIN_LOG. Seams (tests): FLEET_THIN_ARGV_CMD (in place of
 `fleet-connect.py --argv`), FLEET_THIN_UPDATE_CMD (in place of
 `fleet-client-update.sh start`), FLEET_CLIENT_CLIP_CMD (the clipboard),
@@ -816,7 +816,7 @@ class Thin:
 
     def first_failed(self, text, ask=""):
         """没开出来 · 原因 · 下一步 (who to ask, when the hub names them): False."""
-        nxt = tr("thin_first_ask_fmt", ask) if ask else tr("thin_first_next")
+        nxt = tr("thin_first_ask_fmt", ask) if ask else tr("thin_first_next", fleet_cmd(), fleet_cmd())
         self.first_say(tr("thin_first_failed"), keep=True)
         for line in (tr("thin_first_why_fmt", " ".join(str(text or "-").split())[:200]), tr("thin_first_next_fmt", nxt)):
             write_out(("  %s\r\n" % line).encode("utf-8", "replace"))
@@ -830,7 +830,9 @@ class Thin:
         - home --agent claude`, signed by a lease this loop takes for it and gives
         back; while the hub says opening, its progress and the ask again every
         FLEET_THIN_FIRST_RETRY (10) s, at most FLEET_HOME_FIRST_OPENING_MAX (40 min);
-        anything else is tried twice. Placed → home is that machine and the first
+        once it stops (the login is made, its fleet not yet reported — #2941 /
+        #3062) the ask again for FLEET_THIN_FIRST_SETTLE (600 s, the hub's own
+        settle), then a failure naming why; anything else is tried twice. Placed → home is that machine and the first
         connection lands on the session (--want <worker_id>): True. Not → three
         lines (没开出来 · 原因 · 下一步, who to ask) and False — never a backoff
         against a machine with no session."""
@@ -846,7 +848,14 @@ class Thin:
             ["bash", os.path.join(BIN, "fleet-client-place.sh")]
         retry = env_num("FLEET_THIN_FIRST_RETRY", 10)
         deadline = time.time() + env_num("FLEET_HOME_FIRST_OPENING_MAX", 2400)
+        settle = env_num("FLEET_THIN_FIRST_SETTLE", 600)
         lease, tries, said, acct = "", 0, "", {}
+        # The hub opened a login for us (it said opening, at the pick or since):
+        # once it stops saying so, the login exists but its fleet may not have
+        # reported yet, and the place keeps answering 「没有你的登录」 meanwhile —
+        # the old client waits that out (#2941), so this does too, up to the hub's
+        # own settle (openingSettle, 10 min) from the moment opening ended (#3062).
+        opened, machine, settle_end = why == OPENING, "", 0.0
 
         def run(cmd, timeout):
             try:
@@ -891,6 +900,8 @@ class Thin:
                     (err.strip().splitlines() or ["exit %d" % rc])[-1]
                 acct = account_state()
                 if acct.get("state") == "opening":
+                    opened, settle_end = True, 0.0
+                    machine = acct.get("machine") or machine
                     if time.time() >= deadline:
                         return failed(tr("thin_first_timeout_fmt", "%d" % (env_num("FLEET_HOME_FIRST_OPENING_MAX", 2400) // 60)))
                     self.first_say(tr("thin_first_opening_fmt", acct.get("machine") or "?", acct.get("eta_s") or "?"))
@@ -898,6 +909,16 @@ class Thin:
                     continue
                 if acct.get("state") == "failed":
                     return failed(acct.get("why") or said)
+                if opened:
+                    # opened, its fleet not reported yet: wait for it, never forever
+                    now = time.time()
+                    settle_end = settle_end or now + settle
+                    if now >= settle_end or now >= deadline:
+                        return failed(tr("thin_first_settle_timeout_fmt", machine or "?",
+                                         "%d" % max(1, settle // 60), said))
+                    self.first_say(tr("thin_first_settle_fmt", machine or "?", "%d" % (settle_end - now)))
+                    time.sleep(retry)
+                    continue
                 tries += 1
                 if tries >= 2:
                     return failed(acct.get("why") or said)
@@ -973,6 +994,7 @@ class Thin:
         finally:
             self.restore_tty()   # echo back, if it ended between two connections (mute)
             self.profile(False)
+            path_hint()
 
     def resize(self, *_):
         """SIGWINCH: the terminal's size onto the child's pty (the kernel tells ssh)."""
@@ -982,6 +1004,27 @@ class Thin:
             fcntl.ioctl(self.master, termios.TIOCSWINSZ, fcntl.ioctl(0, termios.TIOCGWINSZ, b"\0" * 8))
         except OSError:
             pass
+
+
+def fleet_cmd():
+    """How to type `fleet` in THIS terminal: the word, or — right after the
+    install line put its bin dir on PATH only in the rc file
+    (FLEET_INSTALL_PATH_NEW, fleet-install.sh) — its full path (#3062)."""
+    d = os.environ.get("FLEET_INSTALL_PATH_NEW") or ""
+    if not d:
+        return "fleet"
+    home = os.path.expanduser("~")
+    d = "~" + d[len(home):] if home and home != "/" and d.startswith(home + "/") else d
+    return os.path.join(d, "fleet")
+
+
+def path_hint():
+    """The terminal the installer ran in does not have `fleet` on its PATH yet
+    (the rc file is read by the next shell): say how to get it, once, on the
+    way out — else the newcomer's next `fleet` is 「command not found」 (#3062)."""
+    if os.environ.get("FLEET_INSTALL_PATH_NEW"):
+        sh = os.path.basename(os.environ.get("SHELL") or "") or "zsh"
+        write_out(("fleet · %s\r\n" % tr("thin_path_hint_fmt", sh, fleet_cmd())).encode("utf-8", "replace"))
 
 
 def rc_of(st):

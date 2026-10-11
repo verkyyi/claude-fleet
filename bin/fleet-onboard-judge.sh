@@ -35,6 +35,26 @@ list_row_named() {
 # that this computer was already known, so it never reads none by itself.
 CLIENT_UP='新任务|[Nn]ew task|⌘N|⌘P'   # the list's portal row, else its bar's keys (run 2: 「⌘N 编排」, no 新任务)
 INSTALL_END='^(能力:|用时 [0-9]+ 秒)'
+# The thin client's first-session road (fleet-thin.py first_session, #3054): its
+# lines while it opens the newcomer's first session — the start, the hub's
+# opening (OPENING_SAYS, below), the wait for the opened login's fleet (#3062)
+# and the session placed — and its failure. Not 「back at the prompt」 (run 17).
+# shellcheck disable=SC2034  # read by fleet-onboard-drill.sh, which sources this
+THIN_FIRST='你还没有 fleet 会话|no fleet session of yours yet|等它的 fleet 报上来|waiting for its fleet to report|第一个会话开在|your first session opened on|正在为你开机器|opening a machine for you'
+# shellcheck disable=SC2034  # read by fleet-onboard-drill.sh
+THIN_FIRST_FAILED='你的第一个会话没开出来|your first session did not open'
+# thin_first_state (the newcomer's thin.log on stdin, docs/CLIENT-LOGS.md):
+# landed — a `first` placed (rc 0) and a connection after it drew the view
+# (first_ms set); failed — the loop quit with no first session; placed — placed,
+# not yet drawn; wait — anything else.
+thin_first_state() {
+  awk -F'\t' '
+    $2 == "first" && $8 == "0" { placed = 1; drawn = 0 }
+    $2 == "first" && $8 == "1" { failed = 1 }
+    $2 == "connect" && placed && $7 != "" { drawn = 1 }
+    $2 == "quit" && $9 == "no first session" { failed = 1 }
+    END { if (placed && drawn) print "landed"; else if (failed) print "failed"; else if (placed) print "placed"; else print "wait" }'
+}
 qr_state() {
   local p
   p=$(cat)
