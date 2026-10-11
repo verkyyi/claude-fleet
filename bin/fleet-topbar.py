@@ -445,6 +445,17 @@ def node_record(kv):
 
 
 def render_node(kv, cols):
+    # this connection's language (issue #3329): the 看台's `@view_lang`, when the
+    # door recorded one (`vl=1:<locale>`) — fleet-ui-lang.sh weighs it after the
+    # person's own choice; set before the first word is looked up
+    vl = kv.get("vl", "")
+    if vl.startswith("1:"):
+        os.environ["FLEET_VIEW_LANG"] = vl[2:]
+    # the one-time language line (D8, L4): the whole line for 8 s, then the status
+    flu = kv.get("flu", "")
+    if kv.get("fl") and flu.isdigit() and time.time() < int(flu):
+        print("#[fg=%s,bold] i #[nobold]#[fg=%s]%s#[default]" % (HL, FG, tmux_text(kv["fl"])))
+        return 0
     rec, down, rr, via = node_record(kv)
     parts, bg = layout(rec, cols, down, rr, None, via)
     print(paint(parts, bg))

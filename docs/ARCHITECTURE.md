@@ -305,7 +305,18 @@ pane it does not have. Every string — the sidebar's, the menu's, the key sheet
 `fleet_ui_t` key in `bin/fleet-ui-lang.sh`; the Python view reads its strings
 once through `fleet-ui-lang.sh dump sidebar_ no_repo`, and fleet-ui-lang-selftest
 fails on a second table, a zh/en branch outside it, a key missing in one
-language, or a key the code asks for that the table lacks.
+language, or a key the code asks for that the table lacks. WHICH language is
+`fleet_ui_lang`'s alone (issue #3329, EPIC #3178 D5–D9): `FLEET_UI_LANG` zh|en
+forces a machine; else the person's own choice — `ui_lang` (zh | en) in their
+personal layer, set from a 看台's ⌘P 「◐ 语言 / Language」 row (`fleet-config.py
+lang zh|en|auto`, pushed to every login like any person-bundle change); else the
+language the 看台's client brought through the door (`@view_lang`, handed to its
+run-shells and popups as FLEET_VIEW_LANG in the 看台 session's environment and to
+the top line as `vl=`: zh* or none ⇒ Chinese, else English); else the login's
+locale. A device that comes in on detected English is told so once, on the top
+line for 8 s (`fleet-ui-lang.sh first-hint`), and the door prints one welcome
+line in the same language before the 看台 attaches. Claude's own replies are not
+this table's.
 Its last item, 「恢复已收工…」 (issue #901), and ⌃o on the sidebar (the hub's
 own restore key; `restore` in `dash-keymap.sh --panel sidebar`) open
 `fleet-restore-pick.sh`: the hub's ⌃t landed list (`fleet-history.sh rows`) in a

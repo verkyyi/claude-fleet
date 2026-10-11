@@ -787,7 +787,9 @@ rv_thin_dress() {
     return 0 ;;
   esac
   bar="#(python3 '$BIN/fleet-topbar.py' render --node view=$v s=$s reg='$VIEWS' g='$FLEET_C/global'"
-  bar="$bar sock=#{q:socket_path} cw=#{client_width} w=#{window_id} pc=#{q:@peer_cur} pd=#{pane_dead})"
+  bar="$bar sock=#{q:socket_path} cw=#{client_width} w=#{window_id} pc=#{q:@peer_cur} pd=#{pane_dead}"
+  # this connection's language and its one-time line (issue #3329): what attach set
+  bar="$bar vl=#{q:@view_lang_set}:#{q:@view_lang} fl=#{q:@view_flash} flu=#{@view_flash_until})"
   T set-option -t "$gid" status on \; set-option -t "$gid" status-position top \; \
     set-option -t "$gid" status-interval 2 \; set-option -t "$gid" status-style "bg=#1a1b26,fg=#565f89" \; \
     set-option -t "$gid" status-format[0] "$bar" \; set-option -t "$gid" destroy-unattached off \; \
@@ -807,7 +809,7 @@ rv_thin_dress() {
   return 0
 }
 rv_attach_thin() {
-  local view='' want='' resume='' device='' route='' token='' lang='' setlang='' s w='' g gid='' tty f p fu cur rc kept wfar orchfar
+  local view='' want='' resume='' device='' route='' token='' lang='' setlang='' hint='' s w='' g gid='' tty f p fu cur rc kept wfar orchfar
   while [ $# -gt 0 ]; do
     case "$1" in
       --view) view="${2:-}"; shift 2 ;;
@@ -870,9 +872,19 @@ rv_attach_thin() {
   [ -z "$w" ] || T select-window -t "$gid:$w" 2>/dev/null
   rv_thin_dress "$gid" "$view" "$s"
   # the language this connection's client brought (issue #3326): per 看台, never the
-  # server's environment (started before, `update-environment` has no LANG); only
-  # recorded here — empty = it said none
-  [ -z "$setlang" ] || T set-option -t "$gid" @view_lang "$lang" 2>/dev/null
+  # server's environment (started before, `update-environment` has no LANG) —
+  # empty = it said none. Issue #3329: the 看台 draws in it — FLEET_VIEW_LANG in its
+  # session's environment (every run-shell and popup of the 看台 inherits it;
+  # fleet-ui-lang.sh: the person's choice first, then this), `@view_lang_set` for
+  # the top line's format — and the first time this device comes in on English
+  # detected for it, the top line says so for 8 s (`@view_flash`, D8 / L4).
+  if [ -n "$setlang" ]; then
+    T set-option -t "$gid" @view_lang "$lang" \; set-option -t "$gid" @view_lang_set 1 \; \
+      set-environment -t "$gid" FLEET_VIEW_LANG "$lang" 2>/dev/null
+    hint=$(FLEET_VIEW_LANG="$lang" sh "$BIN/fleet-ui-lang.sh" first-hint "$view" 2>/dev/null)
+    [ -z "$hint" ] || T set-option -t "$gid" @view_flash "$hint" \; \
+      set-option -t "$gid" @view_flash_until "$(( $(date +%s) + 8 ))" 2>/dev/null
+  fi
   # C4: a window per other (machine, login) your sessions are on, made now — off
   # the attach's path — so the first visit to another machine is already warm
   case "$view" in *-via-*) ;; *)

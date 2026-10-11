@@ -153,6 +153,14 @@ case "$WANT" in *[!A-Za-z0-9@/:._-]*) WANT='' ;; esac
 TOKEN=$(od -An -N8 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')
 
 entry_log view
+# the door's welcome (issue #3329, L4): printed only as you come in, in the language
+# this connection will draw in (the person's choice, else what the client brought,
+# else Chinese — fleet-ui-lang.sh); the 看台 covers it the moment it attaches
+UILANG="$(dirname "$0")/fleet-ui-lang.sh"
+if [ -f "$UILANG" ]; then
+  HELLO=$(FLEET_CONF_DIR="$C" FLEET_VIEW_LANG="$FLEET_CLIENT_LANG" sh "$UILANG" t door_welcome 2>/dev/null)
+  [ -z "$HELLO" ] || printf 'fleet · %s · %s\r\n%s\r\n' "$(hostname -s 2>/dev/null)" "$(id -un 2>/dev/null)" "$HELLO"
+fi
 trap ':' HUP                           # the attach's own HUP rule runs; we still remember
 cd "$HOME" 2>/dev/null || :
 bash "$VIEWER" attach --thin --view "$VIEW" --resume ${WANT:+--want "$WANT"} \
