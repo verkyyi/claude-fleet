@@ -258,7 +258,7 @@ grep -q "${T}run${T}" "$W/thin.log" || fail "L: thin.log has no run line: $(cat 
 # --home open: the newest live 看台 here goes there (its client gone after ⌘Q: re-attach)
 to new-window -d -t o -n view2 "TMUX= tmux -S '$IN' attach -t 'fl@view-v1'"; sleep 1
 ti select-window -t "=fl@view-v1:$PW"
-TMUX="$IN,0,0" FLEET_SESSION_CLI_ROWS="$W/rows.tsv" FLEET_SESSION_CLI_CACHE= \
+TMUX="$IN,0,0" FLEET_SESSION_CLI_ROWS="$W/rows.tsv" FLEET_SESSION_CLI_CACHE='' \
   python3 "$BIN/fleet-session-cli.py" --home open 样式 >/dev/null 2>&1 || fail "L: --home open exited non-zero"
 [ "$(cur)" = "$W2" ] || fail "L: --home open did not move the 看台 to beta ($(cur))"
 pass "L  fleet ls with no client tmux: one ssh to the home (no master), two machines' sessions; --home open moves the 看台"
