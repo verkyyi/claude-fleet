@@ -314,7 +314,7 @@ eq "8 first attempt" "$(wc -l < "$launches" | tr -d ' ')" 1
 eq "8 one guide window" "$(wins '#{window_name}' | grep -cx guide)" 1
 lib 'fleet_guide_running fleet' || fail "8: silent agent not seen as running"
 lib 'fleet_guide_alive fleet' && fail "8: silent agent counted as alive"
-_pane=$(tmux -L fleet capture-pane -p -t fleet:guide)
+_pane=$(tmux -L fleet capture-pane -p -J -t fleet:guide)
 has "8 pane shows the failure" "$_pane" "Unknown command:"
 has "8 pane shows the seed" "$_pane" "/fleet-onboard"
 
