@@ -32,8 +32,7 @@ import (
 //   - A relay credential is per machine and per login: POST
 //     /v1/node/relay-credential, with the node's enrollment token, mints
 //     `frl1.<random>` for a TRUSTED machine with an active fleet account that
-//     is not revoked — or one the hub is creating right now (claude-fleet#3434:
-//     a new login gets its pass at create, not minutes after). Only its SHA-256 is kept, in the fleet setting
+//     is not revoked. Only its SHA-256 is kept, in the fleet setting
 //     `fleet.node_relay.<machine>` (the same table and machine match as
 //     C1's `fleet.node_trust.<machine>`) as `<login>:<hash>` words, so
 //     several logins on one machine each hold their own and re-minting one
@@ -213,14 +212,6 @@ func (s *Server) handleNodeRelayCredential(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	principal, err := s.principalOnNode(ep.ID, host, osUser)
-	if errors.Is(err, store.ErrNoPrincipal) {
-		// A login opened by the hub asks from inside its own create
-		// (claude-fleet#3434): the account turns active only on the node's
-		// answer, which comes after. The pass is the machine's (relayJudge
-		// reads trust, never the account), and the hub minted this login's
-		// node token for that very create — so the create in flight counts.
-		principal, err = s.Store.PrincipalCreatingLogin(host, osUser)
-	}
 	if errors.Is(err, store.ErrNoPrincipal) {
 		refuse(http.StatusForbidden, LeaseNoPrincipal, "no active fleet account is "+osUser+" on "+host)
 		return

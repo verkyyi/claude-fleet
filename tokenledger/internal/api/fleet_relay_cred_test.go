@@ -278,36 +278,3 @@ func TestRelayCheckSessionPass(t *testing.T) {
 		t.Fatalf("revoked session pass: %d, want 403", code)
 	}
 }
-
-// A login the hub is opening asks for its pass from inside its own create
-// (claude-fleet#3434): the account is still `creating` — the node's answer
-// that makes it active comes after — and the pass is minted all the same. A
-// queued create (nothing sent yet) and a failed one are refused as before.
-func TestRelayCredDuringCreate(t *testing.T) {
-	h, _, _ := newVaultHarness(t)
-	now := time.Now()
-	p, err := h.srv.Store.AdoptPrincipal("gh:1007", "carol", "Carol", now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	carol := enrollAs(t, h, "carol-m4", "m4", "carol")
-	if _, err := h.srv.Store.RequestAccount(p, "m4", false, now); err != nil {
-		t.Fatal(err)
-	}
-	if code, out := mintRelay(t, h, carol); code != http.StatusForbidden {
-		t.Fatalf("pending (not sent): %d %v, want 403", code, out)
-	}
-	if ok, err := h.srv.Store.MarkAccountSent(p.ID, "m4", "pending", "creating", "op-carol", "ep_admin", now); err != nil || !ok {
-		t.Fatalf("mark sent: %v %v", ok, err)
-	}
-	tok := mustMintRelay(t, h, carol)
-	if code, who := relayCheck(t, h, tok, "/anthropic/v1/messages"); code != http.StatusOK || who != "m4" {
-		t.Fatalf("pass minted during create: %d who=%q", code, who)
-	}
-	if _, err := h.srv.Store.FinishAccountOp("op-carol", "ep_admin", "failed", "boom", now); err != nil {
-		t.Fatal(err)
-	}
-	if code, out := mintRelay(t, h, carol); code != http.StatusForbidden {
-		t.Fatalf("failed create: %d %v, want 403", code, out)
-	}
-}
