@@ -88,7 +88,7 @@ out=$(cx sync); rc=$?
 [ "$rc" = 0 ] || fail "A sync rc $rc" "$out"; ok
 has 'unchanged' "$out" "A sync should change nothing"
 cmp -s "$HOME_C/config.toml" "$WORK/orig.toml" || fail "A config.toml changed" "$(diff "$WORK/orig.toml" "$HOME_C/config.toml")"; ok
-[ -z "$(ls "$HOME_C/skills" | grep '^fleet-plugin-')" ] || fail "A a fleet-plugin-* entry appeared" "$(ls "$HOME_C/skills")"; ok
+for e in "$HOME_C/skills"/fleet-plugin-*; do [ -e "$e" ] || [ -L "$e" ] && fail "A a fleet-plugin-* entry appeared" "$e"; done; ok
 [ -z "$(cx dirs)" ] || fail "A dirs printed something"; ok
 
 # ---- B: fleet-orchestrate installed ---------------------------------------------
