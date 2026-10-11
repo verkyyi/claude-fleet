@@ -2361,7 +2361,7 @@ class S_EntryReach(Sandbox):
         self.assertTrue(b["host_key"].startswith("ssh-ed25519 AAAA") and "root@" not in b["host_key"], b["host_key"])
         self.assertEqual(b["v6"], ["2408:8207:1:2::9"], "a tunnel's, a temporary or a link-local IPv6 was reported")
         self.assertEqual(b["lan"], ["192.168.1.249", "192.168.1.200"], "the default route's interface goes first")
-        self.assertNotIn("public_port", b, "no public= route, yet a public port was reported")
+        self.assertNotIn("entry_port", b, "no entry= route, yet an entry port was reported")
         self.assertEqual(b["portmap"], {"method": "natpmp", "external_ip": "100.77.0.3", "external_port": 22022})
         f = os.path.join(self.d, "db", "entry", "reach.json")
         self.assertEqual(os.stat(f).st_mode & 0o777, 0o644)
@@ -2370,28 +2370,35 @@ class S_EntryReach(Sandbox):
         c = self.run_sup("entry", "reach", "--check")
         self.assertEqual(c.returncode, 1, c.stdout)
         for w in ("外面连不上", "[2408:8207:1:2::9]:22022 超时", "这台没有公网地址", "100.77.0.3",
-                  "TCP 22022 转发到 192.168.1.249:22022"):
+                  "在路由器上把公网 TCP 22022 转发到 192.168.1.249:22022"):
             self.assertIn(w, c.stdout)
         self.assertNotIn("·  ·", c.stdout)
 
-    def test_public_route_port_and_system_sshd_still_answering(self):
-        """The router already forwards a public port (the login's public= route,
-        mini2's :22023) — the report names it, and a host-key mismatch there means the
-        router still points at the system sshd on :22."""
+    def test_entry_route_port(self):
+        """The router forwards a public port of its own to the entry (the login's
+        entry= route, mini2's :22123); public= is the system sshd's and is not read."""
         os.makedirs(os.path.join(self.d, "db", "logins"))
         with open(os.path.join(self.d, "db", "logins", "verky.env"), "w") as f:
-            f.write("CCQUOTA_TOKEN=x\nCCQUOTA_FLEET_NODE_ROUTES=public=23.119.126.213:22023,lan=192.168.1.249\n")
+            f.write("CCQUOTA_TOKEN=x\nCCQUOTA_FLEET_NODE_ROUTES=public=ssh.minihaowan.com:22023,"
+                    "entry=ssh.minihaowan.com:22123,lan=192.168.1.249\n")
         self.answer["body"] = {"checked_at": "x", "source": "23.119.126.213", "addrs": [
-            {"addr": "23.119.126.213", "family": "ipv4", "port": 22023, "via": "source",
-             "reachable": False, "reason": "hostkey"}]}
+            {"addr": "23.119.126.213", "family": "ipv4", "port": 22123, "via": "source",
+             "reachable": False, "reason": "refused"}]}
         self.assertEqual(self.run_sup("entry", "reach").returncode, 0)
         b = self.posts[0]["body"]
-        self.assertEqual((b["public_host"], b["public_port"], b["port"]), ("23.119.126.213", 22023, 22022))
+        self.assertEqual((b["entry_host"], b["entry_port"], b["port"]), ("ssh.minihaowan.com", 22123, 22022))
+        self.assertNotIn("public_port", b)
         c = self.run_sup("entry", "reach", "--check")
         self.assertEqual(c.returncode, 1, c.stdout)
-        for w in ("23.119.126.213:22023 钥匙不符——路由器的 :22023 还指着系统的 sshd（:22），把它改到 192.168.1.249:22022",
-                  "把路由器上已有的 :22023 转发改到 192.168.1.249:22022"):
+        for w in ("23.119.126.213:22123 被拒", "在路由器上把公网 TCP 22123 转发到 192.168.1.249:22022"):
             self.assertIn(w, c.stdout)
+
+    def test_public_route_alone_is_not_the_entry(self):
+        with open(os.path.join(self.d, "db", "machine.env"), "a") as f:
+            f.write("CCQUOTA_FLEET_NODE_ROUTES=public=ssh.minihaowan.com:22023\n")
+        self.answer["body"] = {"checked_at": "x", "addrs": []}
+        self.assertEqual(self.run_sup("entry", "reach").returncode, 0)
+        self.assertNotIn("entry_port", self.posts[0]["body"], "public= (the system sshd) was taken for the entry")
 
     def test_reachable_passes(self):
         self.answer["body"] = {"checked_at": "2026-10-10T00:00:00Z", "source": "203.0.114.7",

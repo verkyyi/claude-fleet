@@ -231,10 +231,10 @@ func entryReachCandidates(rep control.EntryReachReport, src netip.Addr, forwarde
 	}
 	var wan netip.Addr
 	extPort := rep.Port
-	if rep.PublicPort > 0 {
-		// The router already forwards this port from outside (the machine's
-		// public= route): that, not the entry's own, is where to knock.
-		extPort = rep.PublicPort
+	if rep.EntryPort > 0 {
+		// The router forwards this public port to the entry (the machine's
+		// entry= route): that, not the entry's own, is where to knock.
+		extPort = rep.EntryPort
 	}
 	if pm := rep.PortMap; pm != nil && pm.Error == "" {
 		wan, _ = netip.ParseAddr(pm.ExternalIP)
@@ -244,7 +244,7 @@ func entryReachCandidates(rep control.EntryReachReport, src netip.Addr, forwarde
 		}
 	}
 	if src.IsValid() {
-		if (wan.IsValid() && src == wan) || rep.PublicPort > 0 {
+		if (wan.IsValid() && src == wan) || rep.EntryPort > 0 {
 			add(src, extPort, "source")
 		} else {
 			add(src, rep.Port, "source")
@@ -277,7 +277,7 @@ func entryReachCandidates(rep control.EntryReachReport, src netip.Addr, forwarde
 	return out, noPublic
 }
 
-// entryResolve is the public route's host's addresses (an IP literal is
+// entryResolve is the entry route's host's addresses (an IP literal is
 // itself); nothing when there is none or it does not resolve in 3 s.
 var entryResolve = func(ctx context.Context, host string) []netip.Addr {
 	host = strings.TrimSpace(host)
@@ -342,12 +342,12 @@ func (s *Server) handleNodeEntryReach(w http.ResponseWriter, r *http.Request) {
 	}
 	s.entryReachAt.Store(key, now)
 
-	if rep.PublicPort < 0 || rep.PublicPort > 65535 {
-		httpError(w, http.StatusBadRequest, "public_port must be 1–65535")
+	if rep.EntryPort < 0 || rep.EntryPort > 65535 {
+		httpError(w, http.StatusBadRequest, "entry_port must be 1–65535")
 		return
 	}
 	src, fwd := entryReportSource(r)
-	cands, noPublic := entryReachCandidates(rep, src, fwd, entryResolve(r.Context(), rep.PublicHost)...)
+	cands, noPublic := entryReachCandidates(rep, src, fwd, entryResolve(r.Context(), rep.EntryHost)...)
 	if !rep.Listening {
 		cands = nil // nothing listens: no address counts, none is dialled
 	}

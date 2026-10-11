@@ -479,7 +479,7 @@ assert r["lan"] == ["192.168.1.249"] and r["v6"] == [] and "portmap" not in r, r
 PY
   python3 "$SUP" entry reach --check > "$E/check.out"
   [ $? = 1 ] && grep -q "外面连不上：203.0.114.7:$EPORT 超时" "$E/check.out" \
-    && grep -q "TCP $EPORT 转发到 192.168.1.249:$EPORT" "$E/check.out" \
+    && grep -q "公网 TCP $EPORT 转发到 192.168.1.249:$EPORT" "$E/check.out" \
     || { WHY="the doctor's public row: $(cat "$E/check.out")"; edown; return 1; }
   grep -q 'entry reach --check' "$BIN/fleet-doctor.sh" || { WHY="fleet-doctor.sh has no public row"; edown; return 1; }
   etry k1 || { WHY="the entry stopped taking its key after a reach check: $(cat "$E/ssh.err")"; edown; return 1; }

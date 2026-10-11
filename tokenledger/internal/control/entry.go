@@ -92,12 +92,12 @@ type EntryReachReport struct {
 	V6      []string      `json:"v6,omitempty"`
 	LAN     []string      `json:"lan,omitempty"`
 	PortMap *EntryPortMap `json:"portmap,omitempty"`
-	// PublicHost / PublicPort are the machine's operator-written public
-	// route (CCQUOTA_FLEET_NODE_ROUTES public=host:port): the port the
-	// router already forwards from outside, which need not be Port. The hub
+	// EntryHost / EntryPort are the machine's operator-written entry route
+	// (CCQUOTA_FLEET_NODE_ROUTES entry=host:port): the public port the
+	// router forwards to the entry port, which need not be Port. The hub
 	// dials the source address — and the host's own addresses — on it.
-	PublicHost string `json:"public_host,omitempty"`
-	PublicPort int    `json:"public_port,omitempty"`
+	EntryHost string `json:"entry_host,omitempty"`
+	EntryPort int    `json:"entry_port,omitempty"`
 }
 
 // Entry reach reasons: why an address did not count.

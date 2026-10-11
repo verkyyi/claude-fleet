@@ -4492,11 +4492,12 @@ def entry_portmap(lan, port, gw=None):
     return {"method": "auto", "error": "; ".join(tried) or "no router found"}
 
 
-def entry_public_route(paths, me):
-    """(host, port) of the machine's operator-written public route —
-    CCQUOTA_FLEET_NODE_ROUTES `public=host[:port]` (the port the router already
-    forwards from outside) — from the environment, machine.env, else a taken-over
-    login's <state>/logins/<login>.env, where the node program reads it. ("", 0)
+def entry_route(paths, me):
+    """(host, port) of the machine's operator-written entry route —
+    CCQUOTA_FLEET_NODE_ROUTES `entry=host[:port]`, the public port the router
+    forwards to the entry port (macmini :22122, mini2 :22123) — from the environment,
+    machine.env, else a taken-over login's <state>/logins/<login>.env, where the node
+    program reads it. `public=` is the system sshd's and is never read here. ("", 0)
     when there is none: then the entry's own port is the one knocked on."""
     srcs = [os.environ.get("CCQUOTA_FLEET_NODE_ROUTES"), me.get("CCQUOTA_FLEET_NODE_ROUTES")]
     for f in sorted(glob.glob(os.path.join(paths.state, "logins", "*.env"))):
@@ -4504,12 +4505,12 @@ def entry_public_route(paths, me):
     for v in srcs:
         for part in (v or "").split(","):
             name, _, hp = part.strip().partition("=")
-            if name.strip() != "public" or not hp.strip():
+            if name.strip() != "entry" or not hp.strip():
                 continue
             h, _, prt = hp.strip().partition(":")
             if not re.match(r"^[A-Za-z0-9._-]{1,253}$", h):
                 continue
-            n = int(prt) if prt.isdigit() else (22 if not prt else 0)
+            n = int(prt) if prt.isdigit() else 0
             if 0 < n < 65536:
                 return h, n
     return "", 0
@@ -4530,14 +4531,14 @@ def entry_reach(paths):
     lan, v6 = entry_addrs(entry_ifaddrs(), default_if)
     hostkey = " ".join((_entry_read(ep.hostkey + ".pub") or "").split()[:2])
     rep = {"port": port, "host_key": hostkey, "listening": listening, "v6": v6, "lan": lan}
-    pub_host, pub_port = entry_public_route(paths, me)
-    if pub_port:
-        rep.update(public_host=pub_host, public_port=pub_port)
+    ent_host, ent_port = entry_route(paths, me)
+    if ent_port:
+        rep.update(entry_host=ent_host, entry_port=ent_port)
     mode = os.environ.get("FLEET_ENTRY_PORTMAP") or me.get("FLEET_ENTRY_PORTMAP") or "auto"
     if listening and mode != "off":
         rep["portmap"] = entry_portmap(lan, port, gw)
     out = {"at": now(), "port": port, "listening": listening, "lan": lan, "v6": v6, "default_if": default_if,
-           "public_host": pub_host, "public_port": pub_port,
+           "entry_host": ent_host, "entry_port": ent_port,
            "portmap": rep.get("portmap"), "portmap_mode": mode, "verdict": None, "error": ""}
     hub, token = (me.get("CCQUOTA_HUB_URL") or "").rstrip("/"), me.get("CCQUOTA_TOKEN") or ""
     if not hub or not token:
@@ -4584,12 +4585,8 @@ def entry_reach_check(paths):
         return 2, "the entry is not listening"
     lan = (r.get("lan") or [None])[0]
     there = ("%s:%d" % (lan, port)) if lan else ("这台的 %d" % port)
-    pub_port = r.get("public_port") or 0
-    if pub_port:
-        # The router already forwards a public port here (the public= route).
-        fwd = "把路由器上已有的 :%d 转发改到 %s" % (pub_port, there)
-    else:
-        fwd = "在路由器上把 TCP %d 转发到 %s" % (port, there)
+    # The public port the router forwards to the entry: the entry= route's, else the same.
+    fwd = "在路由器上把公网 TCP %d 转发到 %s" % (r.get("entry_port") or port, there)
     v = r.get("verdict")
     if not v:
         return 1, "外面能不能连上查不了：%s" % (r.get("error") or "入口没回答")
@@ -4606,12 +4603,8 @@ def entry_reach_check(paths):
         tail.append("路由器没自动开端口（%s）" % pm["error"])
     elif pm.get("method") and pm.get("external_port"):
         tail.append("路由器已开端口（%s → %s）" % (pm["method"].upper(), pm["external_port"]))
-    def why_not(a):
-        if pub_port and a.get("reason") == "hostkey" and a.get("port") == pub_port:
-            # Another sshd answers on the forwarded port: the system's, on :22.
-            return "钥匙不符——路由器的 :%d 还指着系统的 sshd（:22），把它改到 %s" % (pub_port, there)
-        return ENTRY_REASONS.get(a.get("reason"), a.get("reason") or "?")
-    badtxt = "；".join("%s %s" % (_reach_addr(a), why_not(a)) for a in bad)
+    badtxt = "；".join("%s %s" % (_reach_addr(a), ENTRY_REASONS.get(a.get("reason"), a.get("reason") or "?"))
+                      for a in bad)
     if ok:
         line = "外面连得上：%s · %s" % (" · ".join("%s（%s）" % (_reach_addr(a), "IPv6" if a.get("family") == "ipv6"
                                                               else "IPv4") for a in ok), when)
