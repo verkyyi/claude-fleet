@@ -34,6 +34,9 @@
 #                                                   /internal/v1/node-write; go test, when a toolchain is here)
 #   two-hubs-double-refresh                         tokenledger/internal/leader (Leader / Lock), credvault Lease's
 #                                                   CrossLock, the three gated loops (go test, when a toolchain is here)
+#   github-signin-unreachable                       tokenledger/internal/api github_auth.go (githubExchange) +
+#                                                   fleet_relay_cred.go (the /github-oauth/ gate); go test, when a
+#                                                   toolchain is here; extras/cred-relay/Caddyfile, overlays/prod
 #   entry-dns-follows                               tokenledger/internal/api fleet_entry_dns.go + internal/dns
 #                                                   (DNSPod; go test, when a toolchain is here), deploy/k8s/overlays/prod
 #   entry-name-unclaimed                            tokenledger/internal/api fleet_entry.go (entryEnsureName) +
@@ -646,6 +649,44 @@ drill_two_hubs_double_refresh() {
     esac
   else
     WHAT='没有 go：测试与三处 Leader 门按名核对在，Go 门（tokenledger.yml）跑它们'
+  fi
+  SECS=$(since "$t0")
+}
+
+# ---- github-signin-unreachable (#3392): github.com times out from the hub's
+# cluster, so the sign-in's token exchange goes through the Singapore relay's
+# /github-oauth/ route with the hub's own pass — through the relay with github.com
+# dead; relay down / refusing / hanging ⇒ github.com directly once; both dead ⇒
+# the usual page, bounded; only frh1. opens the route, and only its one path. The
+# relay's Caddyfile carries that one path, the prod overlay switches it on.
+# Without go the tests must exist by name.
+drill_github_signin_unreachable() {
+  CAP=120; local t0 out rc f tl
+  local tests='TestGitHubSignIn_ThroughRelay TestGitHubSignIn_RelayDownFallsBackDirect TestGitHubSignIn_RelayAndGitHubDownIsBounded TestGitHubRelayRouteCheck'
+  t0=$(now)
+  f="$ROOT/tokenledger/internal/api/github_oauth_relay_test.go"
+  for tl in $tests; do
+    grep -q "^func $tl(" "$f" 2>/dev/null || { WHY="the hub test $tl is not in ${f#$ROOT/}"; return 1; }
+  done
+  grep -q '^	handle /github-oauth/login/oauth/access_token {' "$ROOT/extras/cred-relay/Caddyfile" \
+    || { WHY="the relay's Caddyfile has no /github-oauth/login/oauth/access_token route"; return 1; }
+  grep -q '"/github-oauth/"' "$ROOT/extras/cred-relay/fleet-relay-check.py" \
+    || { WHY="the relay's checker does not know the /github-oauth/ prefix"; return 1; }
+  grep -A1 'name: CCQUOTA_GITHUB_OAUTH_VIA' "$ROOT/deploy/k8s/overlays/prod/deployment-env.yaml" | grep -q 'value: "relay"' \
+    || { WHY="the prod overlay does not set CCQUOTA_GITHUB_OAUTH_VIA=relay"; return 1; }
+  WHAT='github.com 不通 ⇒ 换令牌经转发机成功、日志写经中转；转发机连不上 / 拒通行证 / 不答 ⇒ 直连再试一次；两条都不通 ⇒ 原来那句提示、有上限；/github-oauth/ 只开那一条路径、只认 frh1.'
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/api 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
+      0:*) WHAT="${WHAT}（go test 四条）" ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
+        WHAT="${WHAT}；Go 测试这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们" ;;
+      *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  else
+    WHAT="${WHAT}；没有 go：四条测试按名核对在，Go 门（tokenledger.yml）跑它们"
   fi
   SECS=$(since "$t0")
 }

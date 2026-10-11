@@ -392,3 +392,41 @@ kubectl -n new-deploy create secret generic ccquota-feedback-github \
 - GitHub 连不上：反馈留在「待转」，1 分钟起翻倍到 1 小时重试；同一个 F 号靠正文末行
   `<!-- fleet:feedback id=F<n> -->` 认领已有的单，不建第二张。
 - 私钥、令牌不进日志、单子、配置、仓库。关掉建单：删这个 Secret 再滚 pod。
+
+## GitHub 登录换令牌走新加坡中转（#3392）
+
+集群连 `github.com` 时通时断（`api.github.com` 通），网页「用 GitHub 登录」最后一步换令牌会 15 秒超时，
+用户看到「连不上 GitHub，没能完成登录」。开关：
+
+| 东西 | 在哪 | 内容 |
+|---|---|---|
+| `CCQUOTA_GITHUB_OAUTH_VIA=relay` | `overlays/prod/deployment-env.yaml`（随发布列车上线） | 换令牌改 POST `$CCQUOTA_FLEET_CRED_RELAY_URL/github-oauth/login/oauth/access_token`，带入口自己的 `frh1.` 通行证；要 `CCQUOTA_FLEET_CRED_RELAY_URL` 和 `CCQUOTA_FLEET_SESSION_CRED_KEY`，缺一个入口起不来 |
+| 中转白名单 | 转发机 `/etc/caddy/Caddyfile` + `/usr/local/lib/fleet-relay/fleet-relay-check.py`（仓库 `extras/cred-relay/`） | 只放行 `/github-oauth/login/oauth/access_token` 一条路径到 `https://github.com`，`/github-oauth/` 下其余 404；只认入口的 `frh1.` |
+
+中转 5 秒没给出 GitHub 的回答（连不上 / 超时 / 403 / 404 / 5xx）就直连 `github.com` 再试一次（8 秒），
+两条都不通给原来那句提示，最多 13 秒。回滚：删掉 overlay 里那一条，下一次发布即恢复直连。
+
+**转发机先升级，再发布入口**（管理员在 Lightsail `fleet-relay-sg` 上跑；顺序：核验进程先，Caddy 后）：
+
+```sh
+# 运维本机，仓库 master 上
+scp extras/cred-relay/fleet-relay-check.py extras/cred-relay/Caddyfile admin@fleet-relay.24hw.cn:/tmp/
+# 转发机上
+sudo install -m 0755 /tmp/fleet-relay-check.py /usr/local/lib/fleet-relay/fleet-relay-check.py
+sudo systemctl restart fleet-relay-check && curl -s http://127.0.0.1:2091/healthz          # ok
+sudo install -m 0644 /tmp/Caddyfile /etc/caddy/Caddyfile
+sudo -u caddy caddy validate --config /etc/caddy/Caddyfile && sudo systemctl reload caddy
+curl -s -o /dev/null -w '%{http_code}\n' -X POST https://fleet-relay.24hw.cn/github-oauth/login/oauth/access_token   # 403（没通行证）
+curl -s -o /dev/null -w '%{http_code}\n' https://fleet-relay.24hw.cn/anthropic/v1/messages                           # 403（老路由照旧）
+```
+
+发布后验证：
+
+```sh
+kubectl -n new-deploy logs deploy/ccquota-hub | grep 'github sign-in: the token exchange goes through the relay'   # 开关生效
+# 有人在网页上用 GitHub 登录一次，然后：
+kubectl -n new-deploy logs deploy/ccquota-hub --since=10m | grep 'github sign-in'
+#   github sign-in: token exchanged through the relay https://fleet-relay.24hw.cn   ← 经中转成功
+#   github sign-in: relay …: … — trying github.com directly                         ← 中转没答，回落了：查转发机
+```
+

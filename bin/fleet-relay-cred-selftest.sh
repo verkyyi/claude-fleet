@@ -18,10 +18,12 @@
 #                Authorization + X-Fleet-Relay → 200 PONG streamed; upstream saw
 #                the Authorization byte for byte, no X-Fleet-Relay, no
 #                X-Forwarded-*; Codex /chatgpt/codex/… → /backend-api/codex/…;
-#                the hub's check never saw an Authorization
+#                /github-oauth/login/oauth/access_token → /login/oauth/access_token
+#                (#3392); the hub's check never saw an Authorization
 #   E. refused   no pass / forged pass / revoked pass → 403 and the upstream is
 #                never reached; check → exit 3 REFUSED
-#   F. not open  any other path → 404, upstream not reached
+#   F. not open  any other path → 404, upstream not reached; /github-oauth/
+#                forwards github.com's token exchange only (#3392)
 #   G. log       the relay's log has the prefix, status and bytes — and no
 #                subscription fragment, no pass, no path past the prefix
 #   H. operator  revoke / status: the viewer token on curl's stdin; status
@@ -64,7 +66,7 @@ import hashlib, http.client, http.server, json, os, secrets, signal, socketserve
 signal.alarm(int(os.environ.get("FAKE_TTL", "180")))   # never outlive the test
 work, mode = sys.argv[1], sys.argv[2]
 NODE, VIEWER = os.environ["NODE_TOK"], os.environ["VIEWER"]
-PREFIXES = ("/anthropic/", "/chatgpt/", "/openai-auth/")
+PREFIXES = ("/anthropic/", "/chatgpt/", "/openai-auth/", "/github-oauth/")
 
 def jlog(name, row):
     with open(os.path.join(work, name), "a") as f:
@@ -164,7 +166,7 @@ class Relay(Base):
         path = self.path
         if path == "/healthz":
             return self.send(200, raw=b"ok")
-        if not path.startswith(PREFIXES):
+        if not path.startswith(PREFIXES) or (path.startswith("/github-oauth/") and path != "/github-oauth/login/oauth/access_token"):
             return self.send(404, raw=b"")
         hub = http.client.HTTPConnection("127.0.0.1", int(os.environ["CHECK_PORT"]), timeout=10)
         h = {k: v for k, v in self.headers.items()
@@ -294,7 +296,7 @@ if [ -n "$CADDY" ] && [ -x "$CADDY" ]; then
   mkdir -p "$WORK/xdg/data" "$WORK/xdg/config"
   FLEET_RELAY_SITE="http://127.0.0.1:$RELAY_PORT" FLEET_RELAY_CHECK="127.0.0.1:$CHECK_PORT" FLEET_RELAY_LOG="$RELAY_LOG" FLEET_RELAY_ADMIN=off \
     FLEET_RELAY_ANTHROPIC="http://127.0.0.1:$UP_PORT" FLEET_RELAY_CHATGPT="http://127.0.0.1:$UP_PORT" \
-    FLEET_RELAY_OPENAI_AUTH="http://127.0.0.1:$UP_PORT" XDG_DATA_HOME="$WORK/xdg/data" XDG_CONFIG_HOME="$WORK/xdg/config" \
+    FLEET_RELAY_OPENAI_AUTH="http://127.0.0.1:$UP_PORT" FLEET_RELAY_GITHUB="http://127.0.0.1:$UP_PORT" XDG_DATA_HOME="$WORK/xdg/data" XDG_CONFIG_HOME="$WORK/xdg/config" \
     "$CADDY" run --config "$CADDYFILE" --adapter caddyfile >"$WORK/caddy.out" 2>&1 &
   PIDS="$PIDS $!"
   KIND=caddy
@@ -336,6 +338,10 @@ code=$(through /chatgpt/codex/responses "$PASS")
 grep -q '"path": "/backend-api/codex/responses"' "$WORK/upstream.log" || fail "D[$KIND]: codex path not /backend-api/codex/…"; ok
 code=$(through /openai-auth/oauth/token "$PASS")
 [ "$code" = 200 ] && grep -q '"path": "/oauth/token"' "$WORK/upstream.log" || fail "D[$KIND]: openai-auth route: $code"; ok
+# The hub's GitHub sign-in (#3392): github.com's token exchange, prefix stripped.
+code=$(through /github-oauth/login/oauth/access_token "$PASS")
+[ "$code" = 200 ] && tail -n 1 "$WORK/upstream.log" | grep -q '"path": "/login/oauth/access_token", "authorization": "Bearer '"$SUB"'", "relay": null, "fwd": \[\]' \
+  || fail "D[$KIND]: github-oauth route: $code $(tail -n 1 "$WORK/upstream.log")"; ok
 grep '"route": "check"' "$WORK/hub.log" | grep -q '"authorization": true' && fail "D[$KIND]: the hub's check saw an Authorization header"; ok
 grep '"route": "check"' "$WORK/hub.log" | grep -q '"uri": "/anthropic/v1/messages"' || fail "D[$KIND]: the check was not told the original path"; ok
 
@@ -354,6 +360,11 @@ code=$(through /v1/messages "$PASS")
 [ "$code" = 404 ] || fail "F[$KIND]: unrouted path → $code"; ok
 code=$(through /anthropicx/v1/messages "$PASS")
 [ "$code" = 404 ] || fail "F[$KIND]: lookalike prefix → $code"; ok
+# /github-oauth/ forwards the token exchange and nothing else of github.com.
+for pth in /github-oauth/login/oauth/authorize /github-oauth/user /github-oauth/; do
+  code=$(through "$pth" "$PASS")
+  [ "$code" = 404 ] || fail "F[$KIND]: $pth → $code, want 404"; ok
+done
 [ "$(ups)" = "$n" ] || fail "F[$KIND]: an unrouted request reached the upstream"; ok
 
 # ---- H. operator: status, revoke --------------------------------------------

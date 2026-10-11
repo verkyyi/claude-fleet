@@ -23,14 +23,19 @@ import (
 //
 // keyed with a key derived from SessionCredKey (one Secret, the same on every
 // replica, so whichever replica the check lands on can verify it), good for
-// hubRelayPassTTL, and only for the /openai-auth/ route — it opens neither
-// /anthropic/ nor /chatgpt/. Nothing is stored: a pass is minted per refresh
-// and expires on its own.
+// hubRelayPassTTL, and only for the /openai-auth/ route and the GitHub
+// sign-in's token exchange (/github-oauth/login/oauth/access_token,
+// claude-fleet#3392) — it opens neither /anthropic/ nor /chatgpt/. Nothing is
+// stored: a pass is minted per request and expires on its own.
 
 const (
 	hubRelayPassPrefix = "frh1."
 	hubRelayPassTTL    = 5 * time.Minute
 	hubRelayPassRoute  = "/openai-auth/"
+	// relayGitHubPrefix is the relay's github.com route (claude-fleet#3392):
+	// the hub's own sign-in token exchange, and that one path only.
+	relayGitHubPrefix    = "/github-oauth/"
+	relayGitHubTokenPath = relayGitHubPrefix + "login/oauth/access_token"
 )
 
 // errHubRelayPassOff means the hub holds no key to sign its relay pass.
@@ -59,8 +64,8 @@ func (s *Server) verifyHubRelayPass(tok, uri string, now time.Time) relayVerdict
 	if len(s.SessionCredKey) == 0 {
 		return relayVerdict{why: "hub pass refused: " + SessionCredOff}
 	}
-	if !strings.HasPrefix(uri, hubRelayPassRoute) {
-		return relayVerdict{why: "hub pass refused: it opens " + hubRelayPassRoute + " only"}
+	if !strings.HasPrefix(uri, hubRelayPassRoute) && uri != relayGitHubTokenPath {
+		return relayVerdict{why: "hub pass refused: it opens " + hubRelayPassRoute + " and " + relayGitHubTokenPath + " only"}
 	}
 	i := strings.LastIndexByte(tok, '.')
 	if i <= len(hubRelayPassPrefix) {

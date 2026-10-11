@@ -23,7 +23,7 @@
 #                      the hub's URL is ITS setting, FLEET_HUB_URL)
 #   FLEET_RELAY_LOG    the access log (default /var/log/caddy/fleet-relay.log)
 #   FLEET_RELAY_ADMIN  Caddy's admin address (default localhost:2019; tests: off)
-#   FLEET_RELAY_ANTHROPIC / _CHATGPT / _OPENAI_AUTH   the upstreams (tests only)
+#   FLEET_RELAY_ANTHROPIC / _CHATGPT / _OPENAI_AUTH / _GITHUB   the upstreams (tests only)
 {
 	admin {$FLEET_RELAY_ADMIN:localhost:2019}
 }
@@ -38,7 +38,7 @@
 			wrap json
 			fields {
 				request>headers delete
-				request>uri regexp ^(?:(/(?:anthropic|chatgpt|openai-auth)/)|/).*$ ${1}
+				request>uri regexp ^(?:(/(?:anthropic|chatgpt|openai-auth|github-oauth)/)|/).*$ ${1}
 				request>remote_ip delete
 				request>remote_port delete
 				request>client_ip delete
@@ -55,9 +55,9 @@
 		respond "ok" 200
 	}
 
-	# One gate for the three routes: the hub decides, per request, through the
+	# One gate for the four routes: the hub decides, per request, through the
 	# local checker. Both directives run before any handle (Caddy's directive order).
-	@fleet path /anthropic/* /chatgpt/* /openai-auth/*
+	@fleet path /anthropic/* /chatgpt/* /openai-auth/* /github-oauth/*
 	forward_auth @fleet {$FLEET_RELAY_CHECK:127.0.0.1:2091} {
 		uri /v1/relay/check
 		header_up Host {upstream_hostport}
@@ -94,6 +94,20 @@
 	# OpenAI sign-in refresh (R1): auth.openai.com
 	handle_path /openai-auth/* {
 		reverse_proxy {$FLEET_RELAY_OPENAI_AUTH:https://auth.openai.com} {
+			header_up Host {upstream_hostport}
+			header_up -X-Forwarded-For
+			header_up -X-Forwarded-Host
+			header_up -X-Forwarded-Proto
+		}
+	}
+
+	# The hub's GitHub sign-in (claude-fleet#3392): github.com's token exchange,
+	# that one path only — the hub's cluster cannot reach github.com reliably.
+	# Only the hub's own pass opens it (the hub's check), and any other path
+	# under /github-oauth/ falls through to the 404 below: not a GitHub proxy.
+	handle /github-oauth/login/oauth/access_token {
+		uri strip_prefix /github-oauth
+		reverse_proxy {$FLEET_RELAY_GITHUB:https://github.com} {
 			header_up Host {upstream_hostport}
 			header_up -X-Forwarded-For
 			header_up -X-Forwarded-Host

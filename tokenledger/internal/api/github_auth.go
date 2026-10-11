@@ -80,6 +80,20 @@ type GitHubAuth struct {
 	// HTTP is the client for the token exchange and the API; nil means one
 	// with a 15-second timeout.
 	HTTP *http.Client
+
+	// RelayURL, when set, sends the token exchange through the Singapore
+	// relay's /github-oauth/ route (CCQUOTA_GITHUB_OAUTH_VIA=relay,
+	// claude-fleet#3392): github.com is unreliable from the hub's cluster,
+	// api.github.com is not, so only this one POST moves. RelayPass mints
+	// the hub's own pass for it (Server.HubRelayPass). A relay that does not
+	// answer within RelayTimeout falls back to github.com directly, within
+	// DirectTimeout — so a dead relay still ends in the usual "could not
+	// reach GitHub" well inside 15 seconds. Zero means githubRelayTimeout /
+	// githubDirectTimeout.
+	RelayURL      string
+	RelayPass     func() (string, error)
+	RelayTimeout  time.Duration
+	DirectTimeout time.Duration
 }
 
 const (
@@ -96,6 +110,11 @@ const (
 	githubFlowCookie = "ccq_gh_flow"
 	githubFlowPath   = "/auth/github/"
 	githubFlowTTL    = 10 * time.Minute
+
+	// The token exchange through the relay, then github.com once
+	// (claude-fleet#3392): together under the 15 s a person waited before.
+	githubRelayTimeout  = 5 * time.Second
+	githubDirectTimeout = 8 * time.Second
 )
 
 // Roles, as roleOf names them. admin and user are a GitHub person's (and the
@@ -123,6 +142,15 @@ func (g *GitHubAuth) client() *http.Client {
 		return g.HTTP
 	}
 	return &http.Client{Timeout: 15 * time.Second}
+}
+
+func (g *GitHubAuth) viaRelay() bool { return g.RelayURL != "" && g.RelayPass != nil }
+
+func durOr(d, def time.Duration) time.Duration {
+	if d <= 0 {
+		return def
+	}
+	return d
 }
 
 func (g *GitHubAuth) authorizeURL() string { return orDefault(g.AuthorizeURL, githubAuthorizeURL) }
@@ -592,31 +620,84 @@ func (s *Server) githubWho(ctx context.Context, code, verifier, redirect string)
 		"redirect_uri":  {redirect},
 		"code_verifier": {verifier},
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.GitHub.tokenURL(), strings.NewReader(form.Encode()))
+	tok, err := s.githubExchange(ctx, form)
 	if err != nil {
 		return 0, "", err
 	}
+	return s.githubUser(ctx, "/user", tok)
+}
+
+// githubExchange posts the token exchange: through the relay first when
+// one is set, then github.com directly once. An answer from GitHub — a token
+// or an error code — ends it; only a relay that cannot be asked (no answer,
+// or one of its own refusals) is retried directly. The access token is
+// returned, never logged.
+func (s *Server) githubExchange(ctx context.Context, form url.Values) (string, error) {
+	g := s.GitHub
+	if !g.viaRelay() {
+		tok, _, err := g.postToken(ctx, g.tokenURL(), "", form)
+		return tok, err
+	}
+	relayURL := strings.TrimRight(g.RelayURL, "/") + relayGitHubTokenPath
+	pass, err := g.RelayPass()
+	if err == nil {
+		rctx, cancel := context.WithTimeout(ctx, durOr(g.RelayTimeout, githubRelayTimeout))
+		var answered bool
+		var tok string
+		tok, answered, err = g.postToken(rctx, relayURL, pass, form)
+		cancel()
+		if answered {
+			if err == nil {
+				log.Printf("github sign-in: token exchanged through the relay %s", g.RelayURL)
+			}
+			return tok, err
+		}
+	}
+	log.Printf("github sign-in: relay %s: %v — trying github.com directly", g.RelayURL, err)
+	dctx, cancel := context.WithTimeout(ctx, durOr(g.DirectTimeout, githubDirectTimeout))
+	defer cancel()
+	tok, _, err := g.postToken(dctx, g.tokenURL(), "", form)
+	return tok, err
+}
+
+// postToken is one token-exchange POST. answered is true when GitHub itself
+// answered (HTTP 200 and its JSON) — a token or an error code; false for
+// anything that never reached it: no connection, a timeout, any non-200 (the
+// relay's own 403/404/5xx).
+func (g *GitHubAuth) postToken(ctx context.Context, to, pass string, form url.Values) (tok string, answered bool, err error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, to, strings.NewReader(form.Encode()))
+	if err != nil {
+		return "", false, err
+	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
-	resp, err := s.GitHub.client().Do(req)
-	if err != nil {
-		return 0, "", fmt.Errorf("token exchange: %w", err)
+	if pass != "" {
+		req.Header.Set(RelayHeader, pass)
 	}
-	var tok struct {
+	resp, err := g.client().Do(req)
+	if err != nil {
+		return "", false, fmt.Errorf("token exchange: %w", err)
+	}
+	var out struct {
 		AccessToken string `json:"access_token"`
 		Error       string `json:"error"`
 	}
-	err = json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&tok)
+	derr := json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&out)
 	resp.Body.Close()
-	if err != nil {
-		return 0, "", fmt.Errorf("token exchange: HTTP %d, unreadable answer", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK {
+		// GitHub answers the exchange with 200, even for a bad code; anything
+		// else is not its answer (the relay's 403, a 502, …).
+		return "", false, errors.New(strings.TrimSpace(fmt.Sprintf("token exchange: HTTP %d %s", resp.StatusCode, out.Error)))
 	}
-	if tok.AccessToken == "" {
+	if derr != nil {
+		return "", false, fmt.Errorf("token exchange: HTTP %d, unreadable answer", resp.StatusCode)
+	}
+	if out.AccessToken == "" {
 		// The error code only (bad_verification_code, …): the description
 		// can echo request details.
-		return 0, "", fmt.Errorf("token exchange: HTTP %d, %s", resp.StatusCode, orDefault(tok.Error, "no token"))
+		return "", true, fmt.Errorf("token exchange: HTTP %d, %s", resp.StatusCode, orDefault(out.Error, "no token"))
 	}
-	return s.githubUser(ctx, "/user", tok.AccessToken)
+	return out.AccessToken, true, nil
 }
 
 // githubLookup is the public profile of a username, unauthenticated.

@@ -43,6 +43,28 @@ compute off / compute_region 文案写成「HK via relay (local CN)」。BREAK-I
 
 prod 入口已开（#2137：`deploy/k8s/overlays/prod/deployment-env.yaml`，base 仍是 `node`）；回滚删掉 overlay 那一条即可。
 
+## 入口的 GitHub 登录换令牌（issue #3392）
+
+深圳集群连 `github.com` 时通时断（`api.github.com` 是通的），网页「用 GitHub 登录」最后一步——
+入口 POST `https://github.com/login/oauth/access_token` 换令牌——会 15 秒超时。入口设
+`CCQUOTA_GITHUB_OAUTH_VIA=relay`（同样要 `CCQUOTA_FLEET_CRED_RELAY_URL` 和
+`CCQUOTA_FLEET_SESSION_CRED_KEY`）后，这一个请求改发到转发机
+`/github-oauth/login/oauth/access_token`，带入口自己的 `frh1.` 通行证：
+
+- **只这一条路径**：转发机的 Caddyfile 只给 `/github-oauth/login/oauth/access_token` 建了路由，
+  `/github-oauth/` 下别的路径一律 404；入口核验时也只让 `frh1.` 开这一条，`frl1.` / `fcp-h1.` /
+  `frq1.` 一律拒。**不是 GitHub 代理**——浏览器跳转的 authorize 页和 `api.github.com` 都不经过它。
+- **回落**：转发机 5 秒内没给出 GitHub 自己的回答（连不上、超时、403/404/5xx），入口直连
+  `github.com` 再试一次（8 秒）；两条都不通，用户看到原来那句「连不上 GitHub」，总共不超过 13 秒。
+  GitHub 自己答了错（如 `bad_verification_code`）就到此为止，不重试。
+- **日志**：成功是 `github sign-in: token exchanged through the relay https://fleet-relay.24hw.cn`；
+  回落是 `github sign-in: relay …: <原因> — trying github.com directly`。
+- 不设（或 `direct`）：入口自己直连，和以前一模一样；GitHub 登录没开时这个开关被忽略。
+
+prod 入口已开（`deploy/k8s/overlays/prod/deployment-env.yaml`）；回滚删掉那一条即可。
+**转发机要先换上带 `/github-oauth/` 的 Caddyfile 和核验进程**（`fleet-relay-check.py` 的前缀表也加了
+这一条），否则请求被 404 / 403，入口每次登录都要多等一次回落。
+
 ## 入口自己读订阅额度（issue #2169）
 
 入口设 `CCQUOTA_FLEET_HUB_QUOTA=relay`（同样要 `CCQUOTA_FLEET_CRED_RELAY_URL` 和
@@ -77,14 +99,16 @@ prod 入口已开（#2137：`deploy/k8s/overlays/prod/deployment-env.yaml`，bas
      （`fleet-relay-cred.sh fetch`）。入口只存它的 SHA-256，放在 fleet 设置
      `fleet.node_relay.<machine>`（与 C1 的 `fleet.node_trust.<machine>` 同表、同一套机器名匹配），
      值是 `<login>:<hash>` 若干个；同一登录重领只替换自己那一张。
-   - `frh1.…`：入口自己的通行证，只给它自己经 `/openai-auth/` 刷新 OpenAI 凭据用（R1，见上一节）。
+   - `frh1.…`：入口自己的通行证，只给它自己经 `/openai-auth/` 刷新 OpenAI 凭据用（R1），和经
+     `/github-oauth/login/oauth/access_token` 换 GitHub 登录令牌用（#3392）——`/github-oauth/` 只认它。
    - `frq1.…`：入口自己读额度的通行证，只开 `/anthropic/v1/messages`、`/chatgpt/wham/usage`，
      只在 `CCQUOTA_FLEET_HUB_QUOTA=relay` 时认（#2169，见上一节）。
    - `fcp-h1.…`：入口签给不可信机器会话的通行证（C2）。中心代理（C6）出门时带它。
      由 C2 的 `verifySessionCred` 核验，并且只放它覆盖的那家：`/anthropic/` 要 claude，
      `/chatgpt/`、`/openai-auth/` 要 codex；经 C2 的路由撤销即刻生效（不走下面的缓存）。
    - 不认：伪造的、被替换的、机器被标为不可信的、机器凭据被撤销的、放在 `Authorization` 里的。
-2. **前缀白名单** —— 只有 `/anthropic/` `/chatgpt/` `/openai-auth/` 三条（入口核验时也按
+2. **前缀白名单** —— 只有 `/anthropic/` `/chatgpt/` `/openai-auth/` 三条，加 `/github-oauth/` 下的
+   `login/oauth/access_token` 一条路径（#3392）（入口核验时也按
    `X-Forwarded-Uri` 再查一遍）；其余一律 404。`/healthz` 不要通行证。**这不是开放代理。**
 
 入口对同一张 `frl1.` 的判断缓存 30 秒（按哈希，不按原文）；领新证、撤销、改可信、撤销机器凭据都会
@@ -225,6 +249,7 @@ fleet-node-trust.sh set m9 untrusted   # 标为不可信，同样立即拒绝（
    curl -s https://fleet-relay.24hw.cn/healthz                                  # ok
    curl -s -o /dev/null -w '%{http_code}\n' -X POST https://fleet-relay.24hw.cn/anthropic/v1/messages   # 403（没有通行证）
    curl -s -o /dev/null -w '%{http_code}\n' https://fleet-relay.24hw.cn/v1/models                       # 404（不是开放代理）
+   curl -s -o /dev/null -w '%{http_code}\n' -X POST https://fleet-relay.24hw.cn/github-oauth/login/oauth/access_token   # 403（没有通行证；#3392 的路由在）
    ```
 
 6. 一台可信、不能直连的登录：`fleet.conf` 加 `FLEET_CRED_RELAY_URL`，`fleet-relay-cred.sh fetch`，

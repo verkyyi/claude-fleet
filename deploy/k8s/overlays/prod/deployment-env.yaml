@@ -67,6 +67,17 @@ spec:
             # this entry (the base's `node` comes back).
             - name: CCQUOTA_FLEET_OAUTH_REFRESH_VIA
               value: "relay"
+            # The GitHub sign-in's token exchange goes through the relay above
+            # (#3392): github.com times out from this cluster (api.github.com
+            # does not), and a sign-in used to fail after 15 s. The hub posts
+            # /github-oauth/login/oauth/access_token with its own frh1. pass;
+            # relay down = github.com directly once (5 s + 8 s). Needs the relay
+            # URL above, CCQUOTA_FLEET_SESSION_CRED_KEY and a relay carrying the
+            # /github-oauth/ route (extras/cred-relay/Caddyfile). Log line:
+            # "github sign-in: token exchanged through the relay …". Roll back:
+            # delete this entry.
+            - name: CCQUOTA_GITHUB_OAUTH_VIA
+              value: "relay"
             # The hub reads every pool subscription's quota itself through the
             # relay above (#2169 code, switched on by #2182): readings no longer
             # depend on a node being online. Needs the relay URL above and
