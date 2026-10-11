@@ -107,11 +107,14 @@ fld() { local w="$1" s="$2" n=${#2}
 # no-perl fallback reads whole seconds from `date` (one fork, as before).
 # The same perl also says the local UTC offset (TZOFF, seconds) so a Loop's next
 # round renders as local HH:MM in @title_info (issue #1377) with no extra fork.
-SPINF='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+# An array, never a `${s:i:1}` slice (issue #3444): with no UTF-8 locale (an ssh
+# forced command, a bare daemon) bash slices BYTES, and a lone 0xe2 on every
+# working row made the readers' strict UTF-8 decode fail — `fleet ls` died on it.
+SPINF=(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏)
 TICK=$(perl -MTime::HiRes=time -e '$t=time; @l=localtime($t); @g=gmtime($t); $d=$l[7]-$g[7]; $d=$d>1?-1:$d<-1?1:$d; printf "%d %d", $t*4, $d*86400+($l[2]-$g[2])*3600+($l[1]-$g[1])*60' 2>/dev/null)
 TZOFF=${TICK#* }; TICK=${TICK%% *}
 if [ -n "$TICK" ]; then NOW=$(( TICK / 4 )); else TICK=$(date +%s); NOW=$TICK; TZOFF=''; fi
-FRAME=${SPINF:$(( TICK % 10 )):1}
+FRAME=${SPINF[TICK % 10]}
 
 # state → color/glyph/rank (set vars; no subshells)
 # FIVE glyphs, one per thing the operator does about a row (issue #1328 — there
@@ -1367,9 +1370,17 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   # default. A pin wins (the 置顶 group is the operator's own word); a row with
   # children keeps its place so its subtree is never split across two groups.
   # Like a pinned row it wears its repo tag where the heading names none.
+  # Only a session that is OVER (issue #3444): `exited`, or `done` with nothing
+  # but the idle reaper's word on it — no policy, or `done[:dur]`. A done session
+  # whose person chose another (`keep`, `at:…`, `loop-end`, `merged…`) is alive,
+  # waiting on them: a no-repo home session kept with `keep` went quiet after
+  # every reopen and vanished from `fleet ls` and ⌘P while it ran on.
   repod=''; ended=0
   if [ "$pinned" = 1 ] && [ "$depth" = 0 ] && [ -z "$iss" ] && [ -z "$carg" ]; then
-    case "$state" in done|exited) ended=1 ;; esac
+    case "$state" in
+      exited) ended=1 ;;
+      done) case "$wreap" in ''|done|done:*) ended=1 ;; esac ;;
+    esac
   fi
   if [ "$pinned" = 0 ]; then
     rgrp=$PGRP; PINCNT=$((PINCNT + 1))

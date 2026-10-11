@@ -653,6 +653,87 @@ for _ in $(seq 1 30); do grep -q 'sid-noloop' "$WORK/launched" 2>/dev/null && br
 ok; grep -qx -- "--resume sid-noloop" "$WORK/launched" 2>/dev/null \
   || fail "nothing pending ⇒ a bare resume, as before (launched: $(cat "$WORK/launched" 2>/dev/null)) $out"
 
+# --- a renamed home session through a ver-stale reopen stays on the list (issue
+# #3444): no issue, no repo, in $HOME, renamed by its person, kept (`keep`). The
+# fleet version moved (待换新), it has been idle — fleet-migrate.sh --cfg-stale
+# reopens it. After the reopen it is `done` again (waiting on its person), and the
+# row producer, `fleet ls` and ⌘P (fleet_view.entries) must still list it, under
+# the name it was given — before #3444 a done no-issue root went to 已结束, which
+# `fleet ls` drops and ⌘P folds, so a live session vanished from both.
+mkdir -p "$WORK/home"
+NM='语音 demo 调研'
+wh=$(TM new-window -d -t "$SESS": -n "$NM" -c "$WORK/home" -P -F '#{window_id}' "$FB/runner-hook sid-home") || fail "spawn home"
+set -- @norepo 1 @norepo_sid sid-home @name_manual "$NM" @reap_policy keep @task_line '帮我调研语音 demo' \
+       @fleet_role worker @agent_cfg fpX @agent_ver oldver @claude_state 'done' @claude_state_ts 1 @cc_account acctB
+while [ "$#" -ge 2 ]; do TM set-window-option -t "$wh" "$1" "$2"; shift 2; done
+mkdir -p "$FLEET_CONF_DIR/global"
+printf 'claude fpX t\nver newver\n' > "$FLEET_CONF_DIR/global/agent-cfg.expected"
+sleep 1.5
+ok; why=$(FLEET_CFG_RESTART_IDLE=0 fleet_cfg_restart_why "$LBL" "$wh" 0) \
+  || fail "rig: the home session must qualify for a ver-stale reopen (said '$why')"
+: > "$WORK/launched"
+out=$(FLEET_CFG_RESTART_IDLE=0 bash "$SCRIPT" --cfg-stale --session "$SESS" "$wh" 2>&1)
+nwh=''
+for _ in $(seq 1 30); do
+  nwh=$(TM list-windows -t "$SESS" -F '#{window_id}	#{@norepo_sid}' | awk -F'\t' -v o="$wh" '$2=="sid-home" && $1!=o {print $1}' | head -1)
+  [ -n "$nwh" ] && break; sleep 0.5
+done
+ok; [ -n "$nwh" ] || fail "#3444: the home session must be reopened in a new window — $out $(diag)"
+ok; grep -q -- '--resume sid-home' "$WORK/launched" 2>/dev/null || fail "#3444: the reopen must resume the same conversation (launched: $(cat "$WORK/launched" 2>/dev/null))"
+for opt in "@norepo=1" "@name_manual=$NM" "@reap_policy=keep" "@claude_state=done"; do
+  ok; [ "$(TM display-message -p -t "$nwh" "#{${opt%%=*}}")" = "${opt#*=}" ] \
+    || fail "#3444: the reopened home window must carry ${opt%%=*}=${opt#*=} (got '$(TM display-message -p -t "$nwh" "#{${opt%%=*}}")')"
+done
+ok; [ "$(TM display-message -p -t "$nwh" '#{window_name}')" = "$NM" ] \
+  || fail "#3444: the reopen must keep the name its person gave it (got '$(TM display-message -p -t "$nwh" '#{window_name}')')"
+# the list, read the way every reader reads it: the producer on this server
+RS="$WORK/rowshim"; mkdir -p "$RS"
+# the PATH it was made under, not this one: a tmux further down the PATH may be a
+# shim that runs `tmux` again (bin/tmux-shim/tmux), and would find this one. `-u`:
+# tmux's own output stays UTF-8 under LC_ALL=C below — only bash is byte-wise, the
+# world of a login whose LANG names a locale the machine does not have
+printf '#!/bin/sh\nPATH=%s exec tmux -u -L %s "$@"\n' "'$PATH'" "$LBL" > "$RS/tmux"; chmod +x "$RS/tmux"
+rows=$(PATH="$RS:$PATH" FLEET_SESSION="$SESS" FLEET_ROWS_UNFOLD=1 LC_ALL=C bash "$BIN/tmux-dashboard-rows.sh" --sidebar 2>/dev/null)
+hrow=$(printf '%s\n' "$rows" | awk -F'\037' -v w="$nwh" '$1 == w')
+ok; [ -n "$hrow" ] || fail "#3444: the producer must list the reopened home session: $(printf '%s' "$rows" | tr '\037' '|')"
+ok; printf '%s' "$hrow" | grep -qF "$NM" || fail "#3444: its row must wear its name: $(printf '%s' "$hrow" | tr '\037' '|')"
+ok; [ -z "$(printf '%s\n' "$rows" | awk -F'\037' -v w="$nwh" '$1 == "hdr" && $2 == "ended" { e = 1 } e && $1 == w')" ] \
+  || fail "#3444: a kept, done home session is not 已结束: $(printf '%s' "$rows" | tr '\037' '|')"
+# no UTF-8 locale (LC_ALL=C above, an ssh forced command's world): every byte the
+# readers get must still decode — a byte-sliced spinner glyph killed `fleet ls`
+TM set-window-option -t "$nwh" @claude_state working
+rows=$(PATH="$RS:$PATH" FLEET_SESSION="$SESS" FLEET_ROWS_UNFOLD=1 LC_ALL=C bash "$BIN/tmux-dashboard-rows.sh" --sidebar 2>/dev/null)
+ok; printf '%s' "$rows" | python3 -c 'import sys; sys.stdin.buffer.read().decode("utf-8")' 2>/dev/null \
+  || fail "#3444: the rows must be valid UTF-8 without a UTF-8 locale: $(printf '%s' "$rows" | tr '\037' '|' | od -c | head -5)"
+TM set-window-option -t "$nwh" @claude_state 'done'
+# `fleet ls`: the rows full_rows reads (the producer, every subtree open), through
+# the CLI's own seam — the road a client takes is not this rig's to drive
+PATH="$RS:$PATH" FLEET_SESSION="$SESS" python3 - "$BIN" "$SESS" > "$WORK/ls-rows.tsv" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("qo", sys.argv[1] + "/fleet-quickopen.py")
+qo = importlib.util.module_from_spec(spec); spec.loader.exec_module(qo)
+rows = qo.full_rows(sys.argv[2])
+for r in rows or []:
+    print("\t".join((r["key"], r["state"], r["glyph"], r["name"], r["node"], r["group"], r["badge"],
+                     r["issue"], r["pr"], r["reap"], r["title"], r["repo"], r["ended"])))
+PY
+lsout=$(FLEET_SESSION_CLI_ROWS="$WORK/ls-rows.tsv" python3 "$BIN/fleet-session-cli.py" ls --json 2>&1)
+ok; printf '%s' "$lsout" | grep -qF "\"name\": \"$NM\"" || fail "#3444: fleet ls must list it by its name: $lsout"
+vout=$(PATH="$RS:$PATH" FLEET_SESSION="$SESS" python3 - "$BIN" "$SESS" <<'PY'
+import importlib.util, sys
+sys.path.insert(0, sys.argv[1])
+spec = importlib.util.spec_from_file_location("fv", sys.argv[1] + "/fleet_view.py")
+fv = importlib.util.module_from_spec(spec); spec.loader.exec_module(fv)
+fv.view_row = lambda vid: {}
+fv.view_fleet = lambda vid, row: sys.argv[2]
+for e in fv.entries("v", hub=False):
+    if e.get("kind") == "sess":
+        print(e["group"], e["name"], sep="\t")
+PY
+)
+ok; printf '%s\n' "$vout" | grep -qF "$NM" && ! printf '%s\n' "$vout" | grep -q "^ended	$NM" \
+  || fail "#3444: ⌘P (fleet_view.entries) must list it outside 已结束: $vout"
+
 cleanup; trap - EXIT
 printf 'fleet-migrate selftest: OK (%d checks)\n' "$CHECKS"
 exit 0

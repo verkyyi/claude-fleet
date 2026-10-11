@@ -22,6 +22,9 @@
 #   E. fleet ls — hides the 已结束 rows; --all lists them.
 #   F. THE SIDEBAR — fleet-sidebar.py taps `hdr:ended` as a fold stop only
 #      (select, never a new session) and names no repo for it.
+#   G. KEPT IS ALIVE (issue #3444) — a done no-issue row whose person chose a
+#      reap policy other than the idle reaper's (`keep`, `at:…`) stays on the
+#      list; `done:2h` / no policy still ends; `exited` ends whatever its policy.
 # tmux runs on a PRIVATE socket via a PATH shim; gh fails.
 set -uo pipefail
 export FLEET_DASH_ORDER=status
@@ -150,6 +153,24 @@ print(sb.tap("hdr:ended", "hdr:ended"), repr(sb.target_name("hdr:ended")), sb.fo
 PY
 )
 eq    "F: a tap on 已结束 only selects it, names no repo, folds" "$out" "select '' hdr:ended"
+
+# --- G. kept is alive (issue #3444) ----------------------------------------------
+for w in $(tmux list-windows -t alpha -F '#{window_id}'); do
+  case "$(tmux display-message -p -t "$w" '#{window_name}')" in plan) ;; *) tmux kill-window -t "$w" ;; esac
+done
+tmux set -u -t '=alpha:' @repo_fold 2>/dev/null
+win keephome  @norepo 1 @claude_state done   @reap_policy keep        >/dev/null
+win athome    @norepo 1 @claude_state done   @reap_policy at:18:00    >/dev/null
+win idlehome  @norepo 1 @claude_state done   @reap_policy done:2h     >/dev/null
+win barehome  @norepo 1 @claude_state done                            >/dev/null
+win keptgone  @norepo 1 @claude_state exited @reap_policy keep        >/dev/null
+n=$(names)
+has   "G: a kept, done home session stays on the list" "$n" "keephome"
+has   "G: …so does one closed at a time its person chose" "$n" "athome"
+hasnt "G: a done:2h one still ends" "$n" "idlehome"
+hasnt "G: …so does one with no policy" "$n" "barehome"
+hasnt "G: an exited one ends whatever its policy" "$n" "keptgone"
+has   "G: the heading counts the three" "$n" "▸ 已结束 (3)"
 
 printf 'dash-ended-group-selftest: %d checks, %d failed\n' "$CHECKS" "$FAILS"
 [ "$FAILS" = 0 ]
