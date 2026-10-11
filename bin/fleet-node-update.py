@@ -1050,7 +1050,14 @@ class Updater(object):
             return []
         tried = self.st.setdefault("follow", {})
         notes, todo = [], []
-        for login, why in fns.managed_accounts(self.p.sup).items():
+        managed = fns.managed_accounts(self.p.sup)
+        # a login NOT taken over whose ~/.claude/fleet is a tree linked into this
+        # root (an admin bootstrapped by link-tree — issue #3248) moves with the
+        # machine too: nothing else does (its install-sync answers off), and its
+        # node agent exec's this tree's bin/. Its own copy is never touched.
+        cands = sorted(managed.items()) + [(l, None) for l, _, _, _ in linked_logins(self.p.root)
+                                           if l not in managed]
+        for login, why in cands:
             ident = fns.account_ident(login)
             if (only and login != only) or why or ident is None:
                 continue
@@ -1091,12 +1098,15 @@ class Updater(object):
         return notes
 
     def linked_releases(self):
-        """The releases a managed login stands on (issue #2774): the tree its
+        """The releases a login stands on (issue #2774; any login, #3248): the tree its
         ~/.claude/fleet names and its .prev. A retired tree of its (kept a while
         for the sessions started from it) holds nothing by itself — a running
         process that names it is process_releases' (issue #3100)."""
         used = set()
-        for login in fns.managed_accounts(self.p.sup):
+        # every login's, not only a managed one's (issue #3248: mini2's admin
+        # verkyyi stood on a tree into fc6b100 — pruned, and every script its
+        # agent exec'd was a dangling link)
+        for login in sorted(set(fns.managed_accounts(self.p.sup)) | set(local_logins())):
             ident = fns.account_ident(login)
             if ident is None:
                 continue
@@ -1555,6 +1565,7 @@ def doctor_rows(p):
         if ir:
             rows.append(ir)
     rows += admin_agent_rows(p, cur)
+    rows += login_tree_rows(p)
     cr = credsep_row(p)
     if cr:
         rows.append(cr)
@@ -1573,6 +1584,42 @@ def doctor_rows(p):
     # non-managed install that follows stable onto it moves forward off it again.
     if os.path.exists(os.path.join(d, DRILL_FAIL)):
         rows.append(("FAIL", "drill", "%s carries %s — a deliberate drill failure (#2336)" % (cur[:12], DRILL_FAIL)))
+    return rows
+
+
+def login_tree_rows(p):
+    """issue #3248: a login's ~/.claude/fleet — taken over or not — that names a
+    release the runtime no longer has (or a tree that is gone) runs nothing: every
+    bin/ file a dangling link, so an admin's node agent could open no login and
+    delete none. FAIL, one row per such login (the name is stable, so a broken
+    tree from before a switch is in its baseline and rolls nothing back); one PASS
+    when every linked login stands on a release that is here; no linked login and
+    nothing broken ⇒ no row. A home this process cannot read is not looked at."""
+    rows, ok = [], 0
+    for login, ident in sorted(local_logins().items()):
+        live = os.path.join(ident[2], ".claude", "fleet")
+        try:
+            if not os.path.islink(live):
+                continue
+            real = os.path.realpath(live)
+            gone = not os.path.isdir(real)
+            m = None if gone else linked_mark(real)
+        except OSError:
+            continue
+        fix = "sudo python3 '%s' follow %s" % (os.path.join(p.current, "bin", "fleet-node-update.py"), login)
+        if gone:
+            rows.append(("FAIL", "login-tree", "%s: ~/.claude/fleet → %s, which is gone — nothing under it runs; "
+                         "sudo -u %s HOME=%s python3 '%s' link-tree %s" % (
+                             login, real, login, ident[2], os.path.join(p.current, "bin", "fleet-node-update.py"),
+                             link_sha(p.current) or "<current sha>")))
+        elif m and os.path.realpath(m["root"]) == os.path.realpath(p.root):
+            if os.path.isdir(os.path.join(p.root, m["sha"], "bin")):
+                ok += 1
+            else:
+                rows.append(("FAIL", "login-tree", "%s: ~/.claude/fleet links into %s, a release the runtime no longer "
+                             "has — every bin/ file is a dangling link; %s" % (login, p.rel(m["sha"]), fix)))
+    if ok and not rows:
+        rows.append(("PASS", "login-tree", "%d login tree(s) linked into releases that are here" % ok))
     return rows
 
 
@@ -1919,6 +1966,46 @@ def linked_sha(path, root):
     if not m or os.path.realpath(m["root"]) != os.path.realpath(root):
         return None
     return m["sha"]
+
+
+def local_logins():
+    """{login: (uid, gid, home)} of every login on this machine (issue #3248):
+    the passwd database's, never root or a system account. The selftests'
+    FLEET_NODE_PASSWD (under FLEET_NODE_TEST=1) is the list instead."""
+    fake = os.environ.get("FLEET_NODE_PASSWD")
+    if fake and env("FLEET_NODE_TEST", "") == "1":
+        names = sorted(read_json(fake, {}) or {})
+    else:
+        try:
+            import pwd
+            names = sorted({p.pw_name for p in pwd.getpwall() if p.pw_uid >= 500 and not p.pw_name.startswith("_")})
+        except Exception:
+            names = []
+    out = {}
+    for login in names:
+        ident = fns.account_ident(login)
+        if ident and os.path.isdir(ident[2]):
+            out[login] = ident
+    return out
+
+
+def linked_logins(root):
+    """[(login, ident, live, mark)] of every login — taken over or not (an admin,
+    issue #3248) — whose ~/.claude/fleet is a tree LINKED into <root>; a login's
+    own copy (a git checkout) is never one. A home this process cannot read is
+    not looked at."""
+    out = []
+    for login, ident in sorted(local_logins().items()):
+        live = os.path.join(ident[2], ".claude", "fleet")
+        try:
+            if not os.path.islink(live):
+                continue
+            m = linked_mark(os.path.realpath(live))
+        except OSError:
+            continue
+        if m and os.path.realpath(m["root"]) == os.path.realpath(root):
+            out.append((login, ident, live, m))
+    return out
 
 
 def _own_entries(d, against=None):

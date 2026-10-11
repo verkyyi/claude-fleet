@@ -48,6 +48,7 @@ import hashlib
 import json
 import os
 import pwd
+import re
 import shutil
 import signal
 import subprocess
@@ -1693,6 +1694,90 @@ class Q_AdminAgent(Sandbox):
         self.assertEqual(self.rows(), [])
 
 
+class S_AdminTree(Sandbox):
+    """issue #3248: a login NOT taken over (mini2's admin verkyyi, its node agent
+    exec'ing ~/.claude/fleet/bin/fleet-login-new.sh) whose ~/.claude/fleet is a
+    tree LINKED into the runtime: the release it links is never pruned while it
+    stands there, the updater moves it with the machine like a managed login's,
+    and the machine doctor's `login-tree` row FAILs when it links a release that
+    is gone. A login's own copy (carol's checkout) is never touched."""
+
+    def setUp(self):
+        Sandbox.setUp(self)
+        self.vh = os.path.join(self.d, "Users", "verky")
+        self.ch = os.path.join(self.d, "Users", "carol")
+        os.makedirs(self.vh)
+        os.makedirs(os.path.join(self.ch, ".claude", "fleet", "bin"))
+        me = {"uid": os.geteuid(), "gid": os.getegid()}
+        self.wj(self.env["FLEET_NODE_PASSWD"], {"alice": dict(me, home=self.home), "verky": dict(me, home=self.vh),
+                                                "carol": dict(me, home=self.ch)})
+
+    def live(self, home):
+        return os.path.join(home, ".claude", "fleet")
+
+    def at(self, home):
+        try:
+            return self.rj(os.path.join(os.path.realpath(self.live(home)), ".fleet-linked"))["sha"]
+        except (IOError, OSError, ValueError, KeyError):
+            return None
+
+    def link(self, sha):
+        """verky bootstrapped by link-tree (fleet-login-install.sh's runtime road)."""
+        r = subprocess.run([sys.executable, UPD, "link-tree", sha, "--no-apply"],
+                           env=dict(self.env, HOME=self.vh, FLEET_NODE_ROOT=self.root),
+                           capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.at(self.vh), sha)
+
+    def to(self, sha, **extra):
+        self.release(sha)
+        self.assertEqual(self.tick(sha, **extra)["phase"], "switched")
+        self.daemon_on(sha)
+        self.assertEqual(self.tick(sha, **extra)["result"], "committed")
+
+    def rows(self):
+        return [l for l in self.cmd("doctor").stdout.splitlines() if "login-tree" in l]
+
+    def test_admin_tree_kept_then_followed(self):
+        self.install(V1)
+        self.link(V1)
+        self.assertTrue(any("PASS" in l for l in self.rows()), self.rows())
+        # the logins may not move (follow off): the admin's release is never pruned
+        self.to(V2, FLEET_NODE_UPDATE_FOLLOW="0")
+        self.to(V3, FLEET_NODE_UPDATE_FOLLOW="0")
+        self.tick(V3, FLEET_NODE_UPDATE_FOLLOW="0", FLEET_NODE_UPDATE_KEEP_SECS="0", FLEET_NODE_PS_CMD=os.devnull)
+        self.assertTrue(os.path.isdir(os.path.join(self.root, V1)), "a release the admin's tree links was pruned")
+        self.assertEqual(self.at(self.vh), V1)
+        self.assertTrue(os.path.exists(os.path.join(self.live(self.vh), "bin", "fleet-node-update.py")))
+        # follow on: the admin's tree moves with the machine; carol's own copy is left
+        self.tick(V3, FLEET_NODE_PS_CMD=os.devnull)
+        self.assertEqual(self.at(self.vh), V3)
+        self.assertEqual(os.readlink(os.path.join(self.live(self.vh), "bin", "fleet-node-update.py")),
+                         os.path.join(self.root, V3, "bin", "fleet-node-update.py"))
+        self.assertFalse(os.path.islink(self.live(self.ch)))
+        self.assertFalse(any("FAIL" in l for l in self.rows()), self.rows())
+
+    def test_pruned_release_fails_doctor_then_relinks(self):
+        """BREAK-IT runtime-gc-admin-tree: an updater from before #3248 pruned the
+        release under the admin's tree — the doctor FAILs, the next tick re-links it."""
+        self.install(V1)
+        self.link(V1)
+        self.to(V2, FLEET_NODE_UPDATE_FOLLOW="0")
+        shutil.rmtree(os.path.join(self.root, V1))
+        self.assertFalse(os.path.exists(os.path.join(self.live(self.vh), "bin", "fleet-node-update.py")))
+        rows = self.rows()
+        self.assertTrue(any(re.search(r"FAIL\s+login-tree\s+verky: .*no longer has", l) for l in rows), rows)
+        self.assertFalse(any("carol" in l for l in rows), rows)
+        self.tick(V2)
+        self.assertEqual(self.at(self.vh), V2)
+        self.assertTrue(os.path.exists(os.path.join(self.live(self.vh), "bin", "fleet-node-update.py")))
+        rows = self.rows()
+        self.assertTrue(rows and all("PASS" in l for l in rows), rows)
+        # a tree that is gone outright FAILs too
+        shutil.rmtree(os.path.realpath(self.live(self.vh)))
+        self.assertTrue(any(re.search(r"FAIL\s+login-tree\s+verky: .*which is gone", l) for l in self.rows()))
+
+
 if __name__ == "__main__":
     # the BREAK-IT drill (node-update-half) builds its fixtures with the same code
     if len(sys.argv) > 1 and sys.argv[1] == "--fake-ccquota":
@@ -1719,6 +1804,9 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--drill-admin-agent":
         # BREAK-IT admin-agent-stale (issue #3034): an admin's own agent follows the release
         unittest.main(argv=[sys.argv[0], "Q_AdminAgent"], verbosity=1)
+    if len(sys.argv) > 1 and sys.argv[1] == "--drill-admin-tree":
+        # BREAK-IT runtime-gc-admin-tree (issue #3248): kept, followed, FAILed when pruned anyway
+        unittest.main(argv=[sys.argv[0], "S_AdminTree"], verbosity=1)
     if len(sys.argv) > 1 and sys.argv[1] == "--drill-fetch":
         # BREAK-IT release-fetch-slow: the updater half
         unittest.main(argv=[sys.argv[0], "L_ResumableFetch"], verbosity=1)
