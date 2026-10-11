@@ -438,16 +438,15 @@ UST=$(printf '%s' "$STATE" | tr '[:lower:]' '[:upper:]')
 # plus one alert on the fleet's existing channel. Silent: as before, nothing.
 orphan() {
   [ "$TIER" = silent ] && quiet "$1 (tier=silent · $UST — ledger only)"
-  local f="$FLEET_CONF_DIR/global/orphan-reports.ndjson" sockl="${SOCK:-}" pr="${PR//[^0-9]/}" new
+  local f="$FLEET_CONF_DIR/global/orphan-reports.ndjson" sockl="${SOCK:-}" prn="${PR//[^0-9]/}" new
   if [ "$DRY" = 1 ]; then
     printf 'fleet-report-parent: %s — would file %s for the person (%s) and raise one alert
 ' "$1" "$UST" "$f"
     exit 0
   fi
   mkdir -p "${f%/*}" 2>/dev/null
-  new=$(OR_CHILD="$ledkey" OR_STATE="$UST" OR_PR="$pr" OR_SUM="$SUMMARY" OR_TITLE="$wname" OR_PARENT="$worigin" \
-    python3 - "$f" <<'PYORPHAN' 2>/dev/null
-import json, os, sys, time
+  new=$(OR_CHILD="$ledkey" OR_STATE="$UST" OR_PR="$prn" OR_SUM="$SUMMARY" OR_TITLE="$wname" OR_PARENT="$worigin" \
+    python3 -c 'import json, os, sys, time
 f = sys.argv[1]
 e = os.environ
 row = {"ts": int(time.time()), "child_key": e["OR_CHILD"], "state": e["OR_STATE"],
@@ -474,17 +473,16 @@ if last and (last.get("state"), last.get("pr")) == (row["state"], row["pr"]):
 with open(f, "a", encoding="utf-8") as fh:
     fh.write(json.dumps(row, ensure_ascii=False) + "\n")
 print("new")
-PYORPHAN
-)
+' "$f" 2>/dev/null)
   if [ "$new" = new ]; then
     [ -n "$sockl" ] || sockl=$(fleet_socket "$sess" 2>/dev/null)
     bash "${FLEET_ORPHAN_ALERT_CMD:-$BIN/fleet-alerts.sh}" event ${sockl:+-L "$sockl"} child-report \
-      "fleet: $label${wname:+ \"$wname\"} $UST${pr:+ (PR #$pr)} — 派它的会话 $worigin 已不在，结果交给你${SUMMARY:+: $(printf '%s' "$SUMMARY" | head -1 | cut -c1-160)}" \
+      "fleet: $label${wname:+ \"$wname\"} $UST${prn:+ (PR #$prn)} — 派它的会话 $worigin 已不在，结果交给你${SUMMARY:+: $(printf '%s' "$SUMMARY" | head -1 | cut -c1-160)}" \
       >/dev/null 2>&1 || printf 'fleet-report-parent: filed for the person, but the alert failed\n' >&2
   fi
   # Stamped like a delivered one: the reaper's --only-once backstop must not file a second.
   TM set-window-option -t "$selfwin" @reported 1 2>/dev/null
-  printf 'orphaned → 你的提醒 (%s): %s — %s\n' "$f" "$UST${pr:+ (PR #$pr)}" "$1"
+  printf 'orphaned → 你的提醒 (%s): %s — %s\n' "$f" "$UST${prn:+ (PR #$prn)}" "$1"
   exit 0
 }
 
