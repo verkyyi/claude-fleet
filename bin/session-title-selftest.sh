@@ -158,7 +158,7 @@ if [ -n "$REAL_TMUX" ]; then
   # sends it as title= while the window still wears it
   w7=$(T display-message -p -t "=$S:fix-sidebar-slug" '#{window_id}')
   wd=$(T display-message -p -t "=$S:draft" '#{window_id}')
-  r=$(bash "$CREAD" rename "$S" "$w7" '' '登录页 · 重做' 2>"$WORK/err") || fail "A3: the hub's rename road failed" "$(cat "$WORK/err")"
+  bash "$CREAD" rename "$S" "$w7" '' '登录页 · 重做' >/dev/null 2>"$WORK/err" || fail "A3: the hub's rename road failed" "$(cat "$WORK/err")"
   eq "A3: the hub's rename road stamps @name_manual" "登录页 · 重做" "$(T show-options -wqv -t "$w7" @name_manual)"
   TMUX="$(T display-message -p '#{socket_path}'),0,0" bash "$BIN/dash-rename.sh" --wid "$wd" '草稿 2' \
     || fail "A3: dash-rename.sh --wid failed"
