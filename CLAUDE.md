@@ -838,7 +838,10 @@ Do not install from memory: read the doc and work from it.
   (`<current>/bin/fleet-credsep.py machine refresh` on switch, rollback, before the
   verify and every tick; the proxy restarts on new bytes — launchd's, or the
   daemon's child by its `reload` on the copy's dir; the doctor's `credsep` row FAILs
-  on a stale copy or a proxy still on old code — issue #2435); the daemon restarts
+  on a stale copy or a proxy still on old code — issue #2435); an admin login's own agent
+  (never taken over, the one that opens logins) follows as well — its credsep `meta.json`
+  `agent_argv[0]` → `<current>/bin/ccquota`, kickstarted once per release; the doctor's
+  `admin-agent` row WARNs on an older one (issue #3034, BREAK-IT `admin-agent-stale`); the daemon restarts
   last (`update-restart.json`). The machine
   doctor (`fleet doctor --machine`) after the switch: a FAIL the old version did
   not have rolls EVERYTHING back and skips that sha. `update.json`'s phase makes

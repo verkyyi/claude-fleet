@@ -314,6 +314,34 @@ def credsep_rec():
     return r if isinstance(r, dict) and r.get("shared") and r.get("lib") else None
 
 
+def admin_agents():
+    """[(login, meta.json path, meta)] of every ccquota agent the credential
+    launcher starts as a system service (fleet-credsep.py's meta.json under
+    FLEET_CREDSEP_ROOT_BASE): `<…>/ccquota agent …`, launchd-system or
+    systemd-system. root's to read (0600); another reader sees none."""
+    base = env("FLEET_CREDSEP_ROOT_BASE", "/var/db/fleet-cred")
+    try:
+        names = sorted(os.listdir(base))
+    except OSError:
+        return []
+    out = []
+    for login in names:
+        mp = os.path.join(base, login, "meta.json")
+        if login.startswith(".") or not os.path.isfile(mp):
+            continue
+        meta = read_json(mp, None)
+        if not isinstance(meta, dict) or meta.get("login") != login:
+            continue
+        svc, argv = meta.get("agent"), meta.get("agent_argv")
+        if not (isinstance(svc, dict) and svc.get("kind") in ("launchd-system", "systemd-system") and svc.get("label")):
+            continue
+        if not (isinstance(argv, list) and len(argv) > 1 and all(isinstance(a, str) for a in argv)
+                and os.path.isabs(argv[0]) and os.path.basename(argv[0]) == "ccquota" and argv[1] == "agent"):
+            continue
+        out.append((login, mp, meta))
+    return out
+
+
 def link_sha(path):
     """The release sha a link names, or None."""
     try:
@@ -867,7 +895,66 @@ class Updater(object):
                     os.chmod(dd, 0o755)
             except OSError as e:
                 notes.append("cache: %s" % e)
-        return notes + self.link_accounts()
+        return notes + self.link_accounts() + self.follow_admin_agents()
+
+    # -- an admin login's own ccquota agent follows the release (issue #3034)
+    def follow_admin_agents(self):
+        """Every login NOT taken over whose ccquota agent the credential
+        launcher starts (an admin — never adopted, #2842 — whose agent is the
+        machine's admin node and opens every new login) runs the release's
+        ccquota: its credsep meta.json's agent_argv[0] → <current>/bin/ccquota
+        (root's file; nothing in the login's home is written), and the agent is
+        kickstarted whenever the release under it moved — the switch, the
+        rollback, the first tick that re-pointed it. Before this it ran its own
+        ~/.local/bin/ccquota, which no release touched (mini2 prod-e715029:
+        it never said login_join, so no login was ever opened there). -> notes."""
+        cur = link_sha(self.p.current)
+        cq = os.path.join(self.p.current, "bin", "ccquota")
+        if not cur or not os.access(cq, os.X_OK):
+            return []
+        managed = fns.managed_accounts(self.p.sup)
+        rec = self.st.setdefault("admin_agents", {})
+        notes, seen = [], set()
+        for login, mp, meta in admin_agents():
+            if login in managed:
+                continue
+            seen.add(login)
+            argv = list(meta["agent_argv"])
+            r = rec.get(login) or {}
+            if argv[0] != cq:
+                was = argv[0]
+                argv[0] = cq
+                meta["agent_argv"] = argv
+                try:
+                    st = os.stat(mp)
+                    tmp = "%s.tmp-%d" % (mp, os.getpid())
+                    with open(tmp, "w") as f:
+                        f.write(json.dumps(meta, indent=1))
+                    os.chmod(tmp, st.st_mode & 0o7777)
+                    if os.geteuid() == 0:
+                        os.chown(tmp, st.st_uid, st.st_gid)
+                    os.rename(tmp, mp)
+                except OSError as e:
+                    notes.append("admin agent %s: cannot re-point %s: %s" % (login, mp, e))
+                    continue
+                self.log("admin agent %s: %s → %s" % (login, was, cq))
+                r = {}
+            if r.get("sha") == cur:
+                continue
+            svc = meta["agent"]
+            if svc["kind"] == "launchd-system":
+                rc = fns.launchctl("kickstart", "-k", "system/%s" % svc["label"])
+            else:
+                rc = fns.systemctl("restart", svc["label"])
+            self.log("admin agent %s: restarted onto %s · rc %d" % (login, cur[:12], rc))
+            if rc == 0:
+                rec[login] = {"sha": cur, "at": now()}
+            else:
+                rec[login] = {"sha": None, "at": now(), "rc": rc}
+                notes.append("admin agent %s: restart %s rc %d" % (login, svc["label"], rc))
+        for login in [x for x in rec if x not in seen]:
+            rec.pop(login, None)
+        return notes
 
     def ensure_helpers(self):
         """A helper release.json pins that current/tools/bin lacks is put there
@@ -1370,6 +1457,7 @@ def doctor_rows(p):
         ir = install_row(p, cur, login, ident)
         if ir:
             rows.append(ir)
+    rows += admin_agent_rows(p, cur)
     cr = credsep_row(p)
     if cr:
         rows.append(cr)
@@ -1387,6 +1475,42 @@ def doctor_rows(p):
     # non-managed install that follows stable onto it moves forward off it again.
     if os.path.exists(os.path.join(d, DRILL_FAIL)):
         rows.append(("FAIL", "drill", "%s carries %s — a deliberate drill failure (#2336)" % (cur[:12], DRILL_FAIL)))
+    return rows
+
+
+def admin_agent_rows(p, cur):
+    """One `admin-agent` row per login not taken over whose ccquota agent the
+    credential launcher starts (issue #3034): PASS when it runs the release's
+    ccquota and was restarted onto `current`, WARN when it is older — never a
+    FAIL (an admin's agent is no part of the release; the rollback gate does not
+    read it). As root it reads credsep's meta.json; another reader only the
+    updater's record in update.json. Neither ⇒ no row."""
+    cq = os.path.join(p.current, "bin", "ccquota")
+    managed = fns.managed_accounts(p.sup)
+    rec = (read_json(p.file, {}) or {}).get("admin_agents") or {}
+    rows, seen = [], set()
+    for login, _, meta in admin_agents():
+        if login in managed:
+            continue
+        seen.add(login)
+        path = meta["agent_argv"][0]
+        if path != cq:
+            rc, v = tool_version(path, ["version"])
+            rc2, want = tool_version(cq, ["version"])
+            rows.append(("WARN", "admin-agent", "%s: 管理员 agent 跑 %s（%s），比发布版 %s（%s）旧——更新器下一轮把它指向 "
+                         "current/bin/ccquota 并重启（#3034）" % (login, path, v if rc == 0 else "rc %d" % rc,
+                                                                cur[:12], want if rc2 == 0 else "?")))
+        elif (rec.get(login) or {}).get("sha") != cur:
+            rows.append(("WARN", "admin-agent", "%s: 管理员 agent 指向发布版的 ccquota，但还没在 %s 上重启（下一轮重启）"
+                         % (login, cur[:12])))
+        else:
+            rows.append(("PASS", "admin-agent", "%s: 管理员 agent 跑发布版 %s 的 ccquota" % (login, cur[:12])))
+    for login in sorted(x for x in rec if x not in seen and x not in managed):
+        if (rec[login] or {}).get("sha") == cur:
+            rows.append(("PASS", "admin-agent", "%s: 管理员 agent 在发布版 %s 上重启过" % (login, cur[:12])))
+        else:
+            rows.append(("WARN", "admin-agent", "%s: 管理员 agent 没在发布版 %s 上重启（rc %s）"
+                         % (login, cur[:12], (rec[login] or {}).get("rc", "?"))))
     return rows
 
 

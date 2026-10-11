@@ -24,6 +24,8 @@
 #               curl's argv
 #   J  ROLLBACK --rollback: a login that never comes back on the target gets its
 #               path's .prev restored and is kickstarted again; exit 1 says so
+#   K  RELEASE  an agent on the managed machine's release ccquota (a path with a
+#               space, under FLEET_NODE_ROOT) is skipped and never written over (#3034)
 #   H  DOCTOR   `agent` WARN naming the behind logins → PASS once upgraded; no
 #               agent service → no `agent` line at all (the degenerate case)
 #
@@ -248,6 +250,21 @@ contains "G: says so" "$out" "no ccquota agent service on testhost"
 out=$(run FLEET_NODE_UPGRADE_OS=Linux -- "$FULL" --status); rc=$?
 [ "$rc" = 1 ] || fail "G: Linux exit $rc" "$out"
 contains "G: macOS only" "$out" "macOS (launchd) only"
+
+# ── K release ───────────────────────────────────────────────────────────────
+# issue #3034: an agent running the release's ccquota (a path under the managed
+# machine's root, with a space in it) is the updater's — skipped, never written over.
+setup
+# uid 1003 (a3): CI's own uid is 1001, the same as a1's fake one
+mkdir -p "$S/node root/current/bin"; cp "$S/usr/ccquota" "$S/node root/current/bin/ccquota"
+awk -v r="$S/node root/current/bin/ccquota" '$1 == 1003 { $3 = r } { print }' "$S/ps" > "$S/ps.new" && mv "$S/ps.new" "$S/ps"
+out=$(run FLEET_NODE_ROOT="$S/node root" -- "$FULL" --dry-run); rc=$?
+[ "$rc" = 0 ] || fail "K: dry-run exit $rc" "$out"
+contains "K: a3 skipped" "$out" "  a3  system/com.ccquota.agent.a3  $S/node root/current/bin/ccquota  → the release's ccquota"
+contains "K: four left" "$out" "dry-run: 4 login(s) would be upgraded"
+out=$(run FLEET_NODE_ROOT="$S/node root" -- "$FULL" --binary "$S/new/ccquota" --wait 5)
+grep -q prod-9b7e562 "$S/node root/current/bin/ccquota" || fail "K: the release's ccquota was written over" "$out"; ok
+lacks "K: a3 not restarted" "$(cat "$S/launchctl.log")" "agent.a3"
 
 # ── H doctor `agent` line ───────────────────────────────────────────────────
 DFILES="fleet-doctor.sh fleet-account.sh fleet-lib.sh usage-lib.sh fleet-quotawatch.sh fleet-hub-node.sh fleet-daemon-lib.sh fleet-node-upgrade.sh fleet-conf.sh"

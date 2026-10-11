@@ -76,6 +76,10 @@ LOGINS_ARG=""
 SUDO="${FLEET_NODE_UPGRADE_SUDO-sudo -n}"
 LAUNCHCTL="${FLEET_NODE_UPGRADE_LAUNCHCTL:-launchctl}"
 DDIR="${FLEET_NODE_UPGRADE_DAEMON_DIR:-/Library/LaunchDaemons}"
+# A managed machine's root runtime: an agent whose binary lives under it runs the
+# release's ccquota — the machine's updater moves and restarts it (issue #3034),
+# and this script never writes over a release's bytes.
+NODE_ROOT="${FLEET_NODE_ROOT:-/Library/Application Support/claude-fleet}"
 ADIR="${FLEET_NODE_UPGRADE_AGENT_DIR:-$HOME/Library/LaunchAgents}"
 POLL="${FLEET_NODE_UPGRADE_POLL:-2}"
 
@@ -220,8 +224,10 @@ ps_rows() {
   if [ -n "${FLEET_NODE_UPGRADE_PS:-}" ]; then sh -c "$FLEET_NODE_UPGRADE_PS"
   else ps -axo uid=,pid=,comm= 2>/dev/null; fi
 }
-PSROWS=$(ps_rows | awk '{ n=split($3, p, "/"); if (p[n] == "ccquota") print $1, $2, $3 }')
-running_path() { printf '%s\n' "$PSROWS" | awk -v u="$1" '$1 == u {print $3; exit}'; }
+# the path may hold a space (/Library/Application Support/… — the release's, #3034)
+PSROWS=$(ps_rows | awk '{ c = $0; sub(/^[ \t]*[0-9]+[ \t]+[0-9]+[ \t]+/, "", c)
+                          n = split(c, p, "/"); if (p[n] == "ccquota") print $1, $2, c }')
+running_path() { printf '%s\n' "$PSROWS" | awk -v u="$1" '$1 == u { c = $0; sub(/^[0-9]+ [0-9]+ /, "", c); print c; exit }'; }
 running_pid() { printf '%s\n' "$PSROWS" | awk -v u="$1" '$1 == u {print $2; exit}'; }
 # The binary a service runs when it is not running right now: ProgramArguments[0],
 # or the `exec "<bin>" agent` line of the runner script fleet-node-join writes.
@@ -232,6 +238,8 @@ service_path() {
   if [ -n "$p" ] && [ -f "$p" ] && head -c 2 "$p" 2>/dev/null | grep -q '#!'; then
     p=$(sed -n 's/^exec "\([^"]*\)" agent.*/\1/p' "$p" 2>/dev/null | head -n 1)
   fi
+  # a credsep launcher's plist names python, not the agent: never a path to write over
+  case "$p" in */ccquota) ;; *) p="" ;; esac
   printf '%s\n' "$p"
 }
 add_login() { # name domain label plist
@@ -345,6 +353,10 @@ PATHS=() TODO=()
 for i in ${SEL[@]+"${SEL[@]}"}; do
   nm="${L_NAME[$i]}" p="${L_PATH[$i]}"
   [ "$p" != "?" ] || fail "cannot tell which binary $nm's agent runs (not running, no ProgramArguments)"
+  case "$p" in
+    "$NODE_ROOT"/*) say "  $nm  ${L_DOMAIN[$i]}/${L_LABEL[$i]}  $p  → the release's ccquota — the machine's updater moves it (#3034), skip"
+                    continue ;;
+  esac
   v=$( [ -x "$p" ] && bin_version "$p" ); v=${v:-?}
   hv=$(hub_field "$nm" "$HR" 2)
   # Hub not read at all (--no-hub, no viewer token, down) → the bytes on disk
