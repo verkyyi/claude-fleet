@@ -16,6 +16,8 @@
 #                  local row (this machine's issue cache) and a remote one (cache
 #                  field 17); field 13 stays empty when cfg is unknown; a row with
 #                  no title is byte for byte what it was with no issue cache at all
+#   A3/D3        — a name the person gave the window (@name_manual, issue #3317)
+#                  beats the issue title in title= and field 14 while it is worn
 # No gh, no network. Exit 0 = pass.
 set -uo pipefail
 
@@ -146,6 +148,27 @@ if [ -n "$REAL_TMUX" ]; then
   eq "A: an issue window keeps its issue's title" "title=修复侧栏：显示 issue 标题" "$(col17 "$out5" fix-sidebar-slug)"
   eq "A: …and the line moves no other column (30 columns, #3118)" "19 reap= detail= role= epic=" \
      "$(printf '%s\n' "$out5" | awk -F'\t' '$10 == "draft" { print NF - 11, $18, $19, $20, $21 }')"
+  # A3 (issue #3317): a name the person gave the window beats the issue title and
+  # the first sentence — both rename roads stamp @name_manual, and the inventory
+  # sends it as title= while the window still wears it
+  w7=$(T display-message -p -t "=$S:fix-sidebar-slug" '#{window_id}')
+  wd=$(T display-message -p -t "=$S:draft" '#{window_id}')
+  bash "$CREAD" rename "$S" "$w7" '' '登录页 · 重做' >/dev/null 2>"$WORK/err" || fail "A3: the hub's rename road failed" "$(cat "$WORK/err")"
+  eq "A3: the hub's rename road stamps @name_manual" "登录页 · 重做" "$(T show-options -wqv -t "$w7" @name_manual)"
+  TMUX="$(T display-message -p '#{socket_path}'),0,0" bash "$BIN/dash-rename.sh" --wid "$wd" '草稿 2' \
+    || fail "A3: dash-rename.sh --wid failed"
+  eq "A3: the local rename road renames and stamps @name_manual" "草稿 2|草稿 2" \
+     "$(T display-message -p -t "$wd" '#{window_name}|#{@name_manual}')"
+  out6=$(bash "$CREAD" workers "$S" 2>"$WORK/err") || fail "A: workers failed" "$(cat "$WORK/err")"
+  eq "A3: a renamed issue window → its name as title=" "title=登录页 · 重做" "$(col17 "$out6" '登录页 · 重做')"
+  eq "A3: a renamed scratch → its name over its first sentence" "title=草稿 2" "$(col17 "$out6" '草稿 2')"
+  eq "A3: …and the rename moves no other column" \
+     "$(printf '%s\n' "$out5" | awk -F'\t' '$10 == "fix-sidebar-slug" { $10 = ""; $17 = ""; print }' OFS='\t')" \
+     "$(printf '%s\n' "$out6" | awk -F'\t' '$10 == "登录页 · 重做" { $10 = ""; $17 = ""; print }' OFS='\t')"
+  T rename-window -t "$w7" fix-sidebar-slug
+  out7=$(bash "$CREAD" workers "$S" 2>"$WORK/err") || fail "A: workers failed" "$(cat "$WORK/err")"
+  eq "A3: a window that no longer wears the name → the issue title again" "title=修复侧栏：显示 issue 标题" \
+     "$(col17 "$out7" fix-sidebar-slug)"
   T kill-server 2>/dev/null
 else
   echo 'session-title selftest: tmux absent — leg A skipped'
@@ -338,6 +361,23 @@ spec = importlib.util.spec_from_file_location("qo", sys.argv[1]); m = importlib.
 lines = [l.split(m.US, 14) for l in sys.stdin.read().split("\n") if l.count(m.US) >= 4]
 rows = [(r + [""] * 15)[:15] for r in lines]
 print("|".join(r["name"] for r in m.parse_rows(m.rows_text(rows)) if not r["key"].startswith("hdr")))' "$BIN/fleet-quickopen.py")"
+
+# D3 (issue #3317): a name the person gave the window (@name_manual, WFMT's last
+# field, only while the window wears it) is field 14 — over the issue title and
+# the first sentence — and the label; an EPIC driver keeps its EPIC's title.
+# wm <idx> <name> <window_id> <issue> <task_line> <manual>: the 35 WFMT fields
+wm() { printf '%s\n' "$S$US$1$US$2$US/w/app-$2${US}working$US$US$3$US$4$US$US$US$US$US$US$US$US$US$US$US$US$US$US$US$US$US$US${1}000$US$US$5$US$US$US$US$US$US$US$6" >> "$WLIST_FILE"; }
+issues
+: > "$WLIST_FILE"
+wm 1 '登录页 · 重做' @1 7 '' '登录页 · 重做'
+wm 2 '草稿 2' @2 '' '试一下新的侧栏' '草稿 2'
+wm 3 fix-sidebar-slug @3 7 '' ''
+s=$(side)
+f14() { printf '%s\n' "$1" | LC_ALL=C awk -F"$US" -v w="$2" '$1 == w { print (NF >= 14 ? $14 : "-") }'; }
+eq "D3: a renamed issue window → its name as field 14, over the issue title" "登录页 · 重做" "$(f14 "$s" @1)"
+eq "D3: …and as the label" "登录页 · 重做" "$(lbl "$s" @1)"
+eq "D3: a renamed scratch → its name over its first sentence" "草稿 2" "$(f14 "$s" @2)"
+eq "D3: no manual name → the issue title as before" "修复侧栏：显示 issue 标题" "$(f14 "$s" @3)"
 
 # E (issue #2355): ccquota's agent runs the adapter with no TMPDIR (a
 # LaunchDaemon) — it must find the SAME cache the login's daemons write, or

@@ -34,8 +34,9 @@
 # row menu edits the name in the sidebar's own input line and hands it here as
 # an argv word — no tmux or shell parser ever sees it. Renames that window by its
 # stable id (never an index) with the same rule as dash-enter.sh's rename
-# branch: an EMPTY name cancels. Without [name] it reads `@rename_to` off the
-# window (and clears it) — a seam for callers that can only set an option.
+# branch: an EMPTY name cancels. It stamps @name_manual with the name (issue
+# #3317): a name the person chose beats the issue title in every list. Without
+# [name] it reads `@rename_to` off the window (and clears it) — a seam for callers that can only set an option.
 set -uo pipefail
 C="${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash"; flag="$C/rename_target"
 
@@ -51,7 +52,11 @@ if [ "${1:-}" = --wid ]; then
   fi
   tmux set-option -uw -t "$w" @rename_to 2>/dev/null || :
   [ -n "$name" ] || exit 0
-  tmux rename-window -t "$w" -- "$name" 2>/dev/null || exit 0
+  name=${name//$'\t'/ }
+  # @name_manual (issue #3317): the name the person chose, so every list shows it
+  # over the issue title (fleet_view.py's rows, the inventory's title= column) —
+  # while the window still wears it; a later rename by the fleet ends it.
+  tmux rename-window -t "$w" -- "$name" \; set-option -w -t "$w" @name_manual "$name" 2>/dev/null || exit 0
   exit 0
 fi
 target="${1:-}"

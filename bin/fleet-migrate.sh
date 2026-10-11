@@ -124,8 +124,9 @@ LAUNCH="${FLEET_MIGRATE_LAUNCH:-$BIN/fleet-session-wrap.sh}"   # selftest seam: 
 # The window options a moved session keeps besides its identity (issue #2970) —
 # what the reapers (@reap_policy, @reap_hold, @pin, @epic, @test_identity), the
 # report chain (@origin_gen, @origin_retired), the launcher (@account_class) and
-# the lists (@task_line) read. @fleet_role rides apart: it defaults to worker.
-MIGRATE_CARRY="@reap_policy @reap_hold @pin @epic @test_identity @origin_gen @origin_retired @account_class @task_line"
+# the lists (@task_line, @name_manual — issue #3317) read. @fleet_role rides
+# apart: it defaults to worker.
+MIGRATE_CARRY="@reap_policy @reap_hold @pin @epic @test_identity @origin_gen @origin_retired @account_class @task_line @name_manual"
 EXIT_WAIT="${FLEET_MIGRATE_EXIT_WAIT:-30}"                 # s to wait for Claude to exit
 CLOSE_WAIT="${FLEET_MIGRATE_CLOSE_WAIT:-15}"               # s to wait for the hook to close the window
 BOOT_WAIT="${FLEET_MIGRATE_BOOT_WAIT:-15}"                 # s to wait for the resumed Claude to appear
