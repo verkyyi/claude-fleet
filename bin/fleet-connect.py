@@ -1050,6 +1050,13 @@ def connect(want, hub, token, verbose, retest, print_only, ssh_args, info=None, 
     # never seen yet is looked up below first.
     key = want or (cache.get("last") if cache.get("last") != AVOID else "") or ""
     ent = entries.get(key) if key else None
+    # the hub's home answer names the login THIS machine is entered as
+    # (claude-fleet#3049: the one with a live fleet there) — it wins over the
+    # remembered one, which may be the login the fleet moved away from
+    hm = pick_machine((info or {}).get("machines") or [], key, None) if ent and key else None
+    if hm and isinstance(hm.get("login"), str) and hm["login"] and hm["login"] != ent.get("login"):
+        ent["login"] = hm["login"]
+        save_cache(cache)
     pin = pin_for(key, *machine_names((ent or {}).get("machine")))
     if pin and ent and ent.get("hub") == hub and isinstance(ent.get("machine"), dict):
         r = pinned_row(route_rows(ent["machine"], hub), pin)
@@ -1516,12 +1523,18 @@ def enter(want, hub, token, verbose, retest, print_only, ssh_args, ssh_opts=(), 
     name = m.get("alias") or m.get("hostname")
     if name and AVOID and AVOID in (m.get("alias"), m.get("hostname")):
         # 换家 (claude-fleet#3003): the next machine the hub says is online
-        alt = next((c for c in home.get("candidates") or [] if c.get("online")
+        # — never one where no login of yours has a fleet, while another
+        # machine has one (claude-fleet#3049: the hub marks it no_fleet)
+        cands = home.get("candidates") or []
+        has_fleet = any(not c.get("no_fleet") for c in cands)
+        alt = next((c for c in cands if c.get("online") and not (has_fleet and c.get("no_fleet"))
                     and AVOID not in (c.get("alias"), c.get("machine"))), None)
         alias = (alt or {}).get("alias") or (alt or {}).get("machine") or ""
         m = pick_machine(home.get("machines") or [], alias, None) if alias else None
         if m is None:
-            sys.stderr.write("fleet · 除了 %s 没有别的在线机器\n" % AVOID)
+            bare = has_fleet and any(c.get("online") and c.get("no_fleet") for c in cands)
+            sys.stderr.write(("fleet · 除了 %s，别的在线机器上你的登录下都没有 fleet\n" if bare else
+                              "fleet · 除了 %s 没有别的在线机器\n") % AVOID)
             print_candidates(home)
             sys.exit(1)
         name = m.get("alias") or m.get("hostname")

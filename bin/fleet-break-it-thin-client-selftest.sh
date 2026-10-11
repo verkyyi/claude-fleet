@@ -21,6 +21,10 @@
 #                           view, the same session — never 换家 to a fresh view
 #   thin-home-down          the home machine down, the hub reachable: 换家 to
 #                           another machine after three failures
+#   thin-home-login-no-fleet  the person's fleet moved to another login on the
+#                           machine (#3049): the hub's home answer names the
+#                           login with the live fleet (Go tests by name, run when
+#                           a toolchain is here), and the client enters as it
 #
 # The loop runs for real under a python pty (the terminal), with the real
 # bin/fleet-connect.py --argv (a sandbox HOME, its own fleet-ssh-config + routes,
@@ -341,6 +345,36 @@ drill_thin_home_down() {
   grep -aq 'rehome' "$R/thin.log" || { WHY="thin.log has no rehome line"; tc_done; return 1; }
   tc_done; wait 2>/dev/null
   WHAT="家机器 m1 停了、入口在：连续 3 次连不上后 ${SECS}s 换到 m2，新的看台（没有 --resume，仍按 --want 打开 s1），thin.log 记了 rehome"
+}
+
+drill_thin_home_login_no_fleet() {
+  CAP=120; local t0 out rc tests f
+  tests='TestHomeLoginIsTheOneWithALiveFleet TestHomeLoginNeverAnotherPersonsLogin'
+  f="$ROOT/tokenledger/internal/api/fleet_home_login_test.go"
+  for out in $tests; do
+    grep -q "^func $out(" "$f" 2>/dev/null || { WHY="the hub half's test $out is not in ${f#$ROOT/}"; return 1; }
+  done
+  # the client half: a machine's own login wins, a no_fleet machine is no 换家
+  # target, and rc 3 names the machine and the login
+  grep -q 'hm\["login"\] != ent.get("login")' "$BIN/fleet-connect.py" && grep -q 'c.get("no_fleet")' "$BIN/fleet-connect.py" \
+    || { WHY="fleet-connect.py no longer takes the home answer's per-machine login / skips no_fleet"; return 1; }
+  grep -q 'thin_no_fleet_fmt' "$BIN/fleet-thin.py" || { WHY="the thin loop no longer says which login had no fleet"; return 1; }
+  t0=$(now)
+  WHAT='人的 fleet 搬到同机另一个登录（verkyyi → verky）：入口的家答案每台机器带上有活 fleet 的那个登录（不是人的默认登录、不是别人的登录），别处有 fleet 时没有 fleet 的机器不当家、换家也不去；fleet-connect 照它进（FLEET_CONNECT_LOGIN 仍优先），看台遇到 rc 3 说「<机器> 这台机器的登录 <登录> 下没有 fleet」'
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/api 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
+      0:*) WHAT="${WHAT}（go test 两条）" ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
+        WHAT="${WHAT}；Go 测试这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们" ;;
+      *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  else
+    WHAT="${WHAT}；没有 go：两条测试按名核对在，Go 门（tokenledger.yml）跑它们"
+  fi
+  SECS=$(since "$t0")
 }
 
 tc_cleanup() {

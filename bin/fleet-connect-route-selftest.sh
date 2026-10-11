@@ -223,7 +223,11 @@ def serve(c):
         if st.get("home") == "none":
             return reply(c, 503, {"error": "你的机器都不在线", "code": "no_machine_online",
                                   "home": {"machine": None, "rule": "", "reason": "你的机器都不在线", "online": 0, "candidates": cands}})
-        return reply(c, 200, {"hub": "x", "login": "alice", "machines": machines(), "machine": machines()[0],
+        ms = machines()
+        if st.get("home_login"):
+            # #3049: the login with a live fleet on that machine, per machine
+            ms[0]["login"] = st["home_login"]
+        return reply(c, 200, {"hub": "x", "login": "alice", "machines": ms, "machine": ms[0],
                               "rule": "last", "reason": "上次用的机器在线", "online": 1, "candidates": cands})
     if u.path == "/v1/ssh-relay/connect":
         bump("relay_hits")
@@ -370,6 +374,16 @@ if command -v ssh-keygen >/dev/null 2>&1; then
      && ssh-keygen -L -f "$HOME/.ssh/fleet-cert-cert.pub" | grep -q 'Serial: 7'; then
     ok "fleet: renewed the 1h certificate (serial 7), entered the hub's pick m4, no second route fetch, hint last=m4"
   else bad "fleet: rc=$rc renew=$(hits renew_hits) home=$(hits home_hits) routes ${r_before}→$(hits routes_hits) out=$out"$'\n'"$(cat "$WORK/err9")"; fi
+
+  # 9b — the home answer names the machine's own login (#3049: the one with a
+  #      live fleet there): entered as it, over the person's default and over the
+  #      login remembered from 9; FLEET_CONNECT_LOGIN still wins.
+  echo '{"tailnet_up": true, "relay_ok": true, "home": "m4", "home_login": "bob"}' > "$WORK/state"
+  out=$("$BIN/fleet-connect.py" --enter --print 2>"$WORK/err9b"); rc=$?
+  out2=$(FLEET_CONNECT_LOGIN=carol "$BIN/fleet-connect.py" --enter --print 2>>"$WORK/err9b"); rc2=$?
+  if [ "$rc" = 0 ] && [[ "$out" == *" -l bob "* ]] && [ "$rc2" = 0 ] && [[ "$out2" == *" -l carol "* ]]; then
+    ok "fleet: the home answer's machine login (bob) is entered; FLEET_CONNECT_LOGIN (carol) still wins"
+  else bad "home login: rc=$rc out=$out rc2=$rc2 out2=$out2 $(cat "$WORK/err9b")"; fi
 
   # 10 — a 12h certificate is kept (no renew); none of the machines online →
   #      exit 1, the hub's words, the candidates.

@@ -428,6 +428,7 @@ THIN_ARGS='[]' jenv drive first '[
 out=$(cat "$T/out.first"); res=$(cat "$T/res.first")
 case $res in *TIMEOUT*) fail "J1: timed out: $(tr -d '\r' < "$T/out.first" | tail -5)" ;; esac
 grep -q '^m3 attach --thin' "$T/rv.log" && ok "J1: the hub's pick m3 answers no fleet (rc 3)" || fail "J1: rv: $(cat "$T/rv.log")"
+case $out in *'m3 这台机器的登录 u1 下没有 fleet'*) ok "J1: says which login on which machine had no fleet (#3049)" ;; *) fail "J1: no no-fleet line" ;; esac
 case $out in *'正在为你开机器（m2），约 40 秒'*) ok "J1: the hub's opening progress on the screen" ;; *) fail "J1: no opening line" ;; esac
 case $out in *'第一个会话开在 m2'*) ok "J1: 「第一个会话开在 m2」" ;; *) fail "J1: no placed line" ;; esac
 [ "$(grep -c -- '- home --agent claude --node auto lease=L1' "$T/place.log")" = 3 ] \

@@ -143,6 +143,11 @@ type RouteMachine struct {
 	FleetMachine
 	// Relay is true while an agent there can carry a relay through the hub.
 	Relay bool `json:"relay"`
+	// Login is the login THIS machine is entered as (claude-fleet#3049):
+	// homeLoginFor's answer — the person's login there that has a live fleet,
+	// else their account's. Empty for the operator, who brings their own; an
+	// older client ignores it and takes RoutesResponse.Login.
+	Login string `json:"login,omitempty"`
 }
 
 // RoutesResponse is the body of control.RoutesPath.
@@ -193,6 +198,7 @@ func (s *Server) handleFleetRoutes(w http.ResponseWriter, r *http.Request) {
 	}
 	out := RoutesResponse{Hub: s.hubURL(r), Machines: []RouteMachine{}}
 	var hosts map[string]bool
+	loginOn := func(string) (string, bool) { return "", false }
 	if !id.Operator {
 		p, _, h, err := s.fleetLoginsOf(id.Principal)
 		switch {
@@ -204,13 +210,18 @@ func (s *Server) handleFleetRoutes(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		out.Login, hosts = p.Login, h
+		if loginOn, err = s.homeLogins(id.Principal); err != nil {
+			httpError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 	}
 	relayReady := s.sshRelayReadiness()
 	for _, m := range s.fleetMachines() {
 		if hosts != nil && !hosts[m.Hostname] {
 			continue
 		}
-		out.Machines = append(out.Machines, RouteMachine{FleetMachine: m, Relay: relayReady(m.Hostname)})
+		lg, _ := loginOn(m.Hostname)
+		out.Machines = append(out.Machines, RouteMachine{FleetMachine: m, Relay: relayReady(m.Hostname), Login: lg})
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, out)
