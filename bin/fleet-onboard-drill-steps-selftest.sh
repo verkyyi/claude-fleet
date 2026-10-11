@@ -39,6 +39,9 @@ for d in $(printf '%s' "$PATH" | tr ':' ' '); do
 done
 [ -n "$TMUXB" ] || { echo 'fleet-onboard-drill-steps-selftest: SKIP (no tmux)'; exit 0; }
 
+# the drill reaches the node as its login through `env -i` (as_sess), which keeps
+# no TMUX_TMPDIR: every server here lives in tmux's default dir, labels unique
+unset TMUX_TMPDIR
 T=$(mktemp -d "${TMPDIR:-/tmp}/odsteps.XXXXXX")
 T=$(cd "$T" && pwd -P)
 ID=$$
@@ -56,7 +59,6 @@ THIS=$(hostname -s 2>/dev/null || hostname)
 
 mkdir -p "$T/shim" "$T/conf" "$T/homes/$LOGIN/.local/bin" "$T/client"
 printf 'export FLEET_HUB_URL="https://hub.example"\n' > "$T/conf/fleet.conf"
-ln -s "$TMUXB" "$T/shim/tmux"
 for t in ssh ssh-keygen curl; do printf '#!/bin/sh\nexit 0\n' > "$T/shim/$t"; done
 # sudo: as this user, HOME the target login's home under the sandbox homes
 cat > "$T/shim/sudo" <<EOF
@@ -71,6 +73,7 @@ if [ "\$1" = install ]; then shift; a=(); while [ \$# -gt 0 ]; do case "\$1" in 
 exec "\$@"
 EOF
 chmod +x "$T/shim/"*
+ln -s "$TMUXB" "$T/shim/tmux"
 
 # node <home>: a login's fleet runtime — its conf dir, its tools' tmux, and the
 # stand-in fleet-sessions-snapshot.sh (save pins name + @fleet_id, restore
