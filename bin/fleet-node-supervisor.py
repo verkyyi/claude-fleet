@@ -3795,6 +3795,9 @@ def entry_config(ep, port, allow, paths=None):
         "PermitUserRC no",
         "PermitUserEnvironment no",
         "ExposeAuthInfo yes",
+        # the client's own locale, as the system sshd takes it (issue #3196): without
+        # it a phone arrives in the C locale and the 看台's tmux draws Chinese as `_`
+        "AcceptEnv LANG LC_*",
         # forwarding only to THIS machine (issue #3075): `fleet open`'s -L and the thin
         # client pass; another address, -R, a unix socket, the agent, X11, a tunnel do not
         "AllowTcpForwarding local",
