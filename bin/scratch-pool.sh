@@ -417,6 +417,9 @@ warm_input() {
         TM send-keys -t "$wid" C-u 2>/dev/null      # clear the char we just typed
         sleep 0.5
         rest=$(input_line "$wid"); rest=${rest#*❯}
+        # Claude Code draws its prompt as `❯` + a no-break space, which is not
+        # [:space:] (issue #3311: every entry was retired as dirty)
+        rest=${rest//$'\302\240'/}
         case "$rest" in
           *[![:space:]]*) return 1 ;;               # would hand over a dirty prompt
         esac

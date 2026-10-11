@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""fleet_view.py — the 看台's switcher, on the home machine (issue #3000, EPIC #2999 C2).
+r"""fleet_view.py — the 看台's switcher, on the home machine (issue #3000, EPIC #2999 C2).
 
 The thin client has no tmux and no list of its own: its ⌘ keys land in the 看台
 (`<fleet>@view-<id>`, fleet-remote-view.sh attach --thin) as the `fleet-view` key
@@ -409,8 +409,8 @@ def hub_reread(fleet):
 
 def produce(fleet):
     """tmux-dashboard-rows.sh --sidebar, every subtree open: the rows the old list
-    drew, the same producer (it reads remote_<sess>, so other machines come too)."""
-    hub_fresh(fleet)
+    drew, the same producer (it reads remote_<sess>, so other machines come too).
+    entries() runs hub_fresh before it, unless told not to (#3311)."""
     env = dict(os.environ, FLEET_SESSION=fleet, FLEET_ROWS_UNFOLD="1")
     seam = os.environ.get("FLEET_VIEW_ROWS_CMD")
     argv = ["sh", "-c", seam] if seam else ["bash", str(Path(__file__).absolute().parent / "tmux-dashboard-rows.sh"), "--sidebar"]
@@ -567,7 +567,7 @@ def gone_rows(text, now=None):
     return out
 
 
-def entries(vid, now=None):
+def entries(vid, now=None, hub=True):
     """Every line the popup can show, in order (issue #3179): grouped by what you
     should do — 置顶 (@pin) · 等你 (needs / failed / blocked) · 在干活 (working /
     looping) · 刚落地 (done, its PR merged within FLEET_VIEW_LANDED_SECS, 24 h) ·
@@ -595,6 +595,8 @@ def entries(vid, now=None):
     groups = {g: [] for g in GROUPS}
     ended, repos, anc = [], [], {}
     section, repo = "", ""
+    if hub:     # hub=False: the cache as it is — the popup's first paint (#3311)
+        hub_fresh(fleet)
     for line in produce(fleet).splitlines():
         f = line.split(US)
         if f[0] == "hdr":
@@ -742,11 +744,14 @@ def lost_msg(e):
 class Refresh:
     """The open popup's list, read again every FLEET_VIEW_REFRESH (2 s) off the
     screen's thread (entries() runs the producer and hub_fresh, up to seconds when
-    the hub is silent): `poll()` hands back a new list once one is read, else None."""
+    the hub is silent): `poll()` hands back a new list once one is read, else None.
+    first: seconds to the first read (default `every`) — 0 when the popup drew its
+    first frame from the cache and the hub check is still owed (issue #3311)."""
 
-    def __init__(self, vid, every=None):
+    def __init__(self, vid, every=None, first=None):
         self.vid, self.every = vid, fenv("FLEET_VIEW_REFRESH", 2) if every is None else every
-        self.due, self.res, self.busy = time.monotonic() + self.every, None, False
+        self.due = time.monotonic() + (self.every if first is None else first)
+        self.res, self.busy = None, False
         self.lock = threading.Lock()
 
     def _run(self):
@@ -1252,7 +1257,8 @@ def do(qo, verb, vid, client="", target=None):
 
 def go_new(qo, vid, client=""):
     """⌘N (issue #3119): a NEW session — a no-repo one on this machine, in $HOME
-    (dash-raw-session.sh --no-repo, the hub's own origin), then go() onto it: the
+    (dash-raw-session.sh --no-repo, the hub's own origin; the warm pool's HOME
+    entry when one is ready, issue #3311), then go() onto it: the
     pane is the agent's input. No session is special, so nothing here names an
     orchestrator. rc as go(); 3 when none opened (one line on the client)."""
     fleet = view_fleet(vid)
@@ -1260,12 +1266,22 @@ def go_new(qo, vid, client=""):
         return 2
     seam = os.environ.get("FLEET_VIEW_NEW_CMD")
     argv = shlex.split(seam) if seam else ["bash", str(Path(__file__).absolute().parent / "dash-raw-session.sh")]
-    try:
-        p = subprocess.run(argv + ["--origin", "hub", "--no-repo", "--no-desk", "--print", fleet], stdin=subprocess.DEVNULL, capture_output=True, text=True,
-                           timeout=fenv("FLEET_VIEW_NEW_SECS", 60))
-        rc, w = p.returncode, ((p.stdout.strip().splitlines() or [""])[-1].split("\t") + [""])[0].strip()
-    except (OSError, subprocess.TimeoutExpired):
-        rc, w = 1, ""
+    # the HOME slot of the warm pool first (issue #3311): a claimed window is an agent
+    # already at its prompt (~0.3 s, against 5-20 s cold on a busy machine); exit 3 =
+    # none ready ⇒ the cold open, as a hub start does (fleet-control-read.sh).
+    # FLEET_START_WARM=0 = cold only.
+    tries = [["--warm-only"], []] if os.environ.get("FLEET_START_WARM", "1") != "0" else [[]]
+    rc, w = 1, ""
+    for extra in tries:
+        try:
+            p = subprocess.run(argv + ["--origin", "hub", "--no-repo", "--no-desk"] + extra + ["--print", fleet],
+                               stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                               timeout=fenv("FLEET_VIEW_NEW_SECS", 60))
+            rc, w = p.returncode, ((p.stdout.strip().splitlines() or [""])[-1].split("\t") + [""])[0].strip()
+        except (OSError, subprocess.TimeoutExpired):
+            rc, w = 1, ""
+        if not (extra and rc == 3):
+            break
     if rc == 0 and re.fullmatch(r"@[0-9]+", w):
         return go(qo, vid, w, "new", client)
     toast(client, say("view_new_failed"))
@@ -1313,7 +1329,7 @@ def far_name(fleet, wid):
 
 
 def open_shell(qo, vid, client="", target=None, meta=None):
-    """⌃\ (#2744's meaning, in a 看台): a SESSION's shell — a login shell on
+    r"""⌃\ (#2744's meaning, in a 看台): a SESSION's shell — a login shell on
     the machine it runs on, as its login, in the directory its agent is in right
     now (the agent pane's, else `@worktree`, else $HOME — issue #3183) — a window
     of the 看台's group marked `@view_shell <machine>@<login>:<worker id>` +
@@ -1434,7 +1450,7 @@ def agent_dir(w):
 
 
 def shell_pane(vid, prog, m, l, wid):
-    """`view-shell` — the ⌃\ window's program. here: the session's window (wid)
+    r"""`view-shell` — the ⌃\ window's program. here: the session's window (wid)
     in this fleet; its directory, a login shell there, HUP'd when that window goes.
     far: a channel on C5's link into the far machine's `shell-here`. home: $HOME."""
     bin_dir = str(Path(__file__).absolute().parent)
@@ -2210,7 +2226,13 @@ def popup(screen, qo, vid, client):
         for k in style:
             a |= styles.get(k, 0)
         return a
-    items = entries(vid)
+    # the first frame never waits on the hub (issue #3311): a stale hub_ok made this
+    # read run hub_fresh's --ensure / --refresh (3-5 s) before anything was drawn.
+    # The cache is drawn as it is (a stale one wears the 失联 banner) and the hub
+    # check is the Refresh thread's first read, at once. FLEET_VIEW_REFRESH=0 (no
+    # Refresh) keeps the old blocking read.
+    bg = fenv("FLEET_VIEW_REFRESH", 2) > 0
+    items = entries(vid, hub=not bg)
     order_save(vid, items)
     cur = current(vid)
     # opened in a session's shell (⌃\): its session is the lit row — ↵ is back on it;
@@ -2235,7 +2257,7 @@ def popup(screen, qo, vid, client):
                    next((i for i, e in enumerate(shown) if pickable(e)), 0)))
     top = 0
     heal = qo.Heal()
-    fresh = Refresh(vid)
+    fresh = Refresh(vid, first=0 if bg else None)
     # Tab (issue #3181): `menu` = the row's actions, `choice` = an action's options,
     # `ask` = the question on the bottom line. Esc steps back to the list.
     mode, mrow, mitems, mat, mtitle, pend, line = "", None, [], 0, "", None, Line()
