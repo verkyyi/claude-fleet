@@ -63,7 +63,7 @@ class Hub(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
-def multi_login(d, state, runtime, hub, first, s, made):
+def multi_login(d, state, runtime, hub, first, s, m, made):
     """EPIC #3208 C1 for real: open · restart · remove · open again."""
     for name in ('24haowan', 'drill2', 'drill3'):
         try:
@@ -121,7 +121,7 @@ def multi_login(d, state, runtime, hub, first, s, made):
     assert list((d / 'homes/.attic').glob('drill2-*.tar.gz')), 'drill2 home not archived'
     assert not (d / 'cred/drill2').exists() and not (d / 'lib/drill2.conf').exists(), 'drill2 credsep left behind'
     assert not (state / 'logins/drill2.env').exists(), 'drill2 still in the machine daemon'
-    assert subprocess.run(['pgrep', '-U', str(b.pw_uid)], capture_output=True).returncode != 0
+    assert not m.live_pids(b.pw_uid), 'a drill2 process still runs'
     login('remove', 'drill2', '--keep-home', rc=4)
     c = opened('drill3')
     assert c.pw_uid != b.pw_uid and c.pw_uid not in (31022, a.pw_uid), 'drill3 got a used number'
@@ -292,7 +292,7 @@ def main():
             else:
                 raise AssertionError('changed tenant UID accepted on existing PVC')
             print('PASS Linux installer/SSH CA; one machine + one tenant join across retry; fixed UID; separated store; shared proxy; mint')
-            multi_login(d, state, runtime, args.hub, login, s, made)
+            multi_login(d, state, runtime, args.hub, login, s, m, made)
             print('PASS several logins: legacy declaration migrated; 24haowan + drill2 opened; numbers and homes '
                   'kept across a passwd wipe; drill2 removed whole; drill3 got a fresh number')
         finally:

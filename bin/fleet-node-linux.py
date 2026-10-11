@@ -509,11 +509,25 @@ def credsep_word(s, login, conf, wait):
     return 'pending — ' + (why[-1] if why else 'check rc %d' % ck.returncode), 0
 
 
+def live_pids(uid):
+    """Processes of a real UID that still run — a zombie waits on its parent's
+    reap, it holds nothing of the login (pgrep would count it)."""
+    out = []
+    for d in Path('/proc').glob('[0-9]*'):
+        try:
+            st = dict(line.split(':', 1) for line in (d / 'status').read_text().splitlines() if ':' in line)
+        except OSError:
+            continue
+        if int(st.get('Uid', '-1').split()[0]) == uid and not st.get('State', '').strip().startswith(('Z', 'X')):
+            out.append(int(d.name))
+    return out
+
+
 def kill_uid(uid, rounds=3):
     for _ in range(rounds):
         subprocess.run(['pkill', '-KILL', '-U', str(uid)], check=False)
         time.sleep(0.5)
-        if subprocess.run(['pgrep', '-U', str(uid)], capture_output=True).returncode:
+        if not live_pids(uid):
             return
     raise RuntimeError('processes still run as UID %d after three kills; stopped before deleting the login' % uid)
 

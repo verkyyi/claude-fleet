@@ -342,7 +342,7 @@ class FakeOS:
                       patch.object(m.grp, 'getgrnam', self.gr), patch.object(m.grp, 'getgrgid', self.grgid),
                       patch.object(m.subprocess, 'run', self.run), patch.object(m.os, 'chown', self.chown), patch.object(m.os, 'fchown', lambda *a: None),
                       patch.object(m, 'owner_of', self.owner_of), patch.object(m, 'as_tenant'),
-                      patch.object(m, 'request', return_value={}), patch.object(m.time, 'sleep'),
+                      patch.object(m, 'request', return_value={}), patch.object(m, 'live_pids', return_value=[]), patch.object(m.time, 'sleep'),
                       patch.object(m, 'load', lambda n: self.sup if n == 'fleet-node-supervisor' else self.cred)]
         for p in self.stack:
             p.start()
