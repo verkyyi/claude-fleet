@@ -1701,7 +1701,7 @@ ensure() {
   hub_on || return 0
   mkdir -p "$G" 2>/dev/null || return 0
   date +%s > "$WANTF" 2>/dev/null
-  local p code='' i
+  local p code=''
   p=$(loop_pid)
   if [ -n "$p" ]; then
     # a loop of other code — an older version still running after a switch, or
@@ -1709,7 +1709,7 @@ ensure() {
     { read -r code < "$LOOPCODEF"; } 2>/dev/null || code=''
     [ "$code" = "$MAPCODE" ] && return 0
     kill -TERM "$p" 2>/dev/null
-    for i in 1 2 3 4 5 6 7 8 9 10; do
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
       [ -n "$(loop_pid)" ] || break
       sleep 0.2
     done
