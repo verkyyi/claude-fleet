@@ -23,6 +23,10 @@ request on, with the real credential put in on the way out (or none, centrally).
                                  this login the account — its index entry, own
                                  copy, pins and picks go; another login's stay)
     probe                       (node-probe.json on STDIN — separated mode only)
+    relay-probe                 → {relay, peer, anthropic, openai, …}: the road a
+                                 session takes through the relay, measured with
+                                 the relay pass and NO credential (issue #3364 —
+                                 bin/fleet-node-probe.sh judges a relay login by it)
     node-token                  → a short-lived fcpn1.<…> for the hub broker
     node-hash                   → sha256 hex of the node token (the fleet-mcp
                                  worker assertion's key; the token never leaves)
@@ -644,6 +648,12 @@ class Router:
         return t
 
     # probe ------------------------------------------------------------------
+    def probe_route(self):
+        """relay | direct | "" — the road the last probe judged this login by
+        (issue #3364): relay = this machine's egress is not served, the relay's is."""
+        d = read_json(getattr(self.cfg, "probe_path", "") or env("FLEET_CRED_PROBE", os.path.join(conf_dir(), "node-probe.json")), None)
+        return str(d.get("route") or "") if isinstance(d, dict) else ""
+
     def probe(self, provider):
         """reachable | unreachable | unsupported_region | none (never probed)."""
         if env("FLEET_PROBE_FORCE_UNREACHABLE") == "1":
@@ -661,7 +671,11 @@ class Router:
         if trust != "trusted":
             return ["central"], "%s (%s) → central, no credential file is read" % (trust, twhy)
         p = self.probe(provider)
-        if p in ("reachable", "none"):
+        if relay and self.probe_route() == "relay":
+            # the probe judged this login by the relay (issue #3364): this
+            # machine's egress is not served even where the API answers
+            order, why = ["relay", "direct"], "trusted + probe route relay (local %s)" % p
+        elif p in ("reachable", "none"):
             order, why = ["direct", "relay"], "trusted + %s" % ("reachable" if p == "reachable" else "never probed")
         else:
             order, why = ["relay", "direct"], "trusted + %s" % p
@@ -1792,6 +1806,8 @@ def ctl_handle(req, t):
             return {"ok": False, "err": "probe: a JSON object"}
         write_json(pp, d)
         return {"ok": True}
+    if op == "relay_probe":
+        return dict(relay_probe(cfg, t.router), ok=True)
     if op == "relay":
         # separated: the relay pass fleet-relay-cred.sh minted for the login
         if not cfg.store:
@@ -1981,6 +1997,57 @@ def ctl_call(state, req):
         sys.stderr.write("fleet-cred-proxy: %s\n" % res.get("err", "failed"))
         sys.exit(1)
     return res
+
+
+def relay_probe(cfg, router):
+    """The relay road, measured (issue #3364): one request per provider through
+    the relay with the pass and NO credential — what a session sends, minus the
+    subscription. Each answer reads as fleet-node-probe.sh's words: reachable
+    (the provider answered, an auth error included) · unsupported_region (a
+    region refusal through the relay) · unreachable (no answer, a gateway error,
+    or the relay's own gate refused the pass). `peer` is the address the relay
+    answered from — the probe asks where it is."""
+    if not cfg.relay_url:
+        return {"relay": False, "why": "no relay configured (FLEET_CRED_RELAY_URL)"}
+    tok = relay_pass(cfg)
+    if not tok:
+        return {"relay": False, "why": "no relay pass (fleet-relay-cred.sh fetch)"}
+    trust = router.trust or "unknown"
+    if trust != "trusted":
+        return {"relay": False, "why": "%s: sessions go central, not the relay" % trust}
+    out, peer = {"relay": True}, ""
+    for prov, method, path, body in (("anthropic", "POST", "/anthropic/v1/messages", b"{}"),
+                                     ("openai", "GET", "/chatgpt/wham/usage", None)):
+        u = urlsplit(cfg.relay_url + path)
+        hdrs = {"Host": u.netloc, "X-Fleet-Relay": tok, "content-type": "application/json",
+                "anthropic-version": "2023-06-01"}
+        word, code = "unreachable", "000"
+        try:
+            if u.scheme == "http":
+                conn = http.client.HTTPConnection(u.hostname, u.port or 80, timeout=10)
+            else:
+                conn = http.client.HTTPSConnection(u.hostname, u.port or 443, timeout=10,
+                                                   context=ssl._create_default_https_context())
+            conn.connect()
+            peer = peer or conn.sock.getpeername()[0]
+            conn.request(method, u.path, body=body, headers=hdrs)
+            r = conn.getresponse()
+            text = r.read(65536).decode("utf-8", "replace").lower()
+            conn.close()
+            code = str(r.status)
+            if "relay_refused" in text or "relay_check_unavailable" in text:
+                word = "unreachable"          # the relay's gate, not the provider
+            elif r.status == 403 and any(m in text for m in REGION_MARKS):
+                word = "unsupported_region"
+            elif r.status in (502, 503, 504):
+                word = "unreachable"
+            else:
+                word = "reachable"
+        except (OSError, http.client.HTTPException):
+            pass
+        out[prov], out[prov + "_code"] = word, code
+    out["peer"] = peer
+    return out
 
 
 def relay_pass(cfg):
@@ -2295,6 +2362,7 @@ def main():
     sub.add_parser("accounts")
     sub.add_parser("probe")
     sub.add_parser("relay")
+    sub.add_parser("relay-probe")
     sub.add_parser("pass")
     sub.add_parser("node-token")
     sub.add_parser("node-hash")
@@ -2329,6 +2397,10 @@ def main():
         print(json.dumps(ctl_call(a.state, {"op": "accounts"}).get("claude") or {}, sort_keys=True))
     elif a.cmd == "probe":
         ctl_call(a.state, {"op": "probe", "data": sys.stdin.read(65536)})
+    elif a.cmd == "relay-probe":
+        res = ctl_call(a.state, {"op": "relay_probe"})
+        res.pop("ok", None)
+        print(json.dumps(res, ensure_ascii=False))
     elif a.cmd == "relay":
         ctl_call(a.state, {"op": "relay", "data": sys.stdin.read(4097)})
     elif a.cmd == "pass":

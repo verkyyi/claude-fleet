@@ -83,7 +83,7 @@ func decideCompute(claimOn, force bool, p *control.NodeProbe, auto bool, now tim
 	v := computeVerdict{Probe: p}
 	if p != nil && p.Verdict == control.ProbeUnsupportedRegion && !force {
 		v.Off, v.Closed = true, claimOn
-		v.Why = "compute off (出口地区 " + orUnknown(p.Loc) + " 不在 Claude / OpenAI 支持范围)"
+		v.Why = "compute off (出口地区 " + p.Where() + " 不在 Claude / OpenAI 支持范围)"
 		return v
 	}
 	if claimOn {
@@ -97,11 +97,13 @@ func decideCompute(claimOn, force bool, p *control.NodeProbe, auto bool, now tim
 	return v
 }
 
-func orUnknown(s string) string {
-	if s == "" {
-		return "未知"
+// probeLoc is the compute_region finding's region: the probe's own, with
+// its route when the sessions go through the relay (claude-fleet#3364).
+func probeLoc(p *control.NodeProbe) string {
+	if p.Route != "relay" {
+		return p.Loc
 	}
-	return s
+	return p.Where()
 }
 
 // computeOf decides one login's compute from its live link (the hello) and
@@ -178,7 +180,7 @@ func (s *Server) auditComputeForce(ep store.Endpoint, nc *nodeConn, force bool, 
 	}
 	outcome := "compute forced on"
 	if p != nil {
-		outcome += " over probe verdict " + p.Verdict + " (loc " + orUnknown(p.Loc) + ")"
+		outcome += " over probe verdict " + p.Verdict + " (loc " + p.Where() + ")"
 		if p.Reason != "" {
 			outcome += ": " + p.Reason
 		}
@@ -208,7 +210,7 @@ func (s *Server) computeClosed(now time.Time) []findings.ComputeClosed {
 			continue
 		}
 		out = append(out, findings.ComputeClosed{EndpointID: n.EndpointID, Hostname: n.Hostname,
-			OSUser: n.OSUser, Loc: cv.Probe.Loc, Reason: cv.Probe.Reason})
+			OSUser: n.OSUser, Loc: probeLoc(cv.Probe), Reason: cv.Probe.Reason})
 	}
 	return out
 }

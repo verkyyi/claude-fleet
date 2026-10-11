@@ -31,6 +31,12 @@
 #                  CCQUOTA_FLEET_PERSONAL=1 and says 个人电脑; --shared writes 0
 #                  and a later plain `on` keeps it; --personal on a desktop;
 #                  a desktop with no flag writes no line; status says it
+#   K. relay       (issue #3364) egress CN, but the login's proxy has the relay
+#                  road: judged by the relay — its egress (the peer → ipinfo)
+#                  and its answers: ok, route relay, loc_local CN, the local
+#                  anthropic/openai kept; the relay in HK or refused there →
+#                  closed / unreachable; no relay (the proxy says relay:false,
+#                  or none answers) → route direct, closed as before
 #   J. sleepwatch  bin/fleet-node-sleepwatch.sh: not macOS → exit 3; on macOS
 #                  its selftest seam prints ready / sleep / wake
 set -u
@@ -56,6 +62,7 @@ echo "$url" >>"$FAKE_CURL_LOG"
 code=""
 case "$url" in
   *cdn-cgi/trace) [ "${FAKE_LOC1:-US}" = DOWN ] && exit 6; printf 'ip=192.0.2.1\nloc=%s\n' "${FAKE_LOC1:-US}" ;;
+  *ipinfo.io/*/country) printf '%s\n' "${FAKE_RLOC:-SG}" ;;
   *ipinfo.io*) [ "${FAKE_LOC2:-US}" = DOWN ] && exit 6; printf '%s\n' "${FAKE_LOC2:-US}" ;;
   *anthropic*) code="${FAKE_ANTH:-401}" ;;
   *openai*) code="${FAKE_OAI:-401}" ;;
@@ -224,6 +231,35 @@ fleet_in i2 node compute on
 fleet_in i2 node compute on --personal
 grep -qx 'CCQUOTA_FLEET_PERSONAL=1' "$SB/i2/.config/claude-fleet/node.env" && grep -q '^个人电脑：' "$SB/out" \
   && ok "I --personal on a desktop" || bad "I --personal: $(out)"
+
+# ── K. relay ─────────────────────────────────────────────────────────────
+RP='{"relay": true, "anthropic": "reachable", "anthropic_code": "401", "openai": "reachable", "openai_code": "401", "peer": "203.0.113.9"}'
+FAKE_LOC1=CN FAKE_LOC2=CN FAKE_ANTH=403 FAKE_OAI=403 FLEET_PROBE_RELAY_CMD="printf '%s' '$RP'" probe_in k
+if [ "$(rc)" = 0 ] && J k | grep -q '"loc":"SG","anthropic":"unsupported_region","openai":"unsupported_region",' \
+   && J k | grep -q '"route":"relay","loc_local":"CN","relay_anthropic":"reachable","relay_openai":"reachable",' \
+   && J k | grep -q '"verdict":"ok"' && J k | grep -q 'route relay — local: egress CN' \
+   && grep -q '^本机判断：合适 — 本机出口 CN，会话经新加坡转发（转发出口 SG）' "$SB/out" \
+   && grep -q 'ipinfo.io/203.0.113.9/country' "$SB/curl.log"; then
+  ok "K relay login, egress CN → judged by the relay (SG): ok, route relay, loc_local CN"
+else bad "K relay ok: rc=$(rc) json=$(J k) out=$(out)"; fi
+FAKE_RLOC=HK FAKE_LOC1=CN FAKE_LOC2=CN FAKE_ANTH=403 FAKE_OAI=403 FLEET_PROBE_RELAY_CMD="printf '%s' '$RP'" probe_in k2
+[ "$(rc)" = 1 ] && J k2 | grep -q '"loc":"HK",' && J k2 | grep -q '"route":"relay"' && J k2 | grep -q '"verdict":"unsupported_region"' \
+  && grep -q '转发出口 HK 不在 Claude / OpenAI 支持范围' "$SB/out" \
+  && ok "K the relay's own egress unsupported (HK) → closed all the same" || bad "K relay HK: rc=$(rc) json=$(J k2) out=$(out)"
+RPU='{"relay": true, "anthropic": "unreachable", "anthropic_code": "403", "openai": "reachable", "openai_code": "401", "peer": "203.0.113.9"}'
+FAKE_LOC1=CN FAKE_LOC2=CN FAKE_ANTH=403 FAKE_OAI=403 FLEET_PROBE_RELAY_CMD="printf '%s' '$RPU'" probe_in k3
+[ "$(rc)" = 1 ] && J k3 | grep -q '"route":"relay"' && J k3 | grep -q '"verdict":"unreachable"' \
+  && ok "K the relay refuses the pass → unreachable (weather), never closed" || bad "K relay refused: rc=$(rc) json=$(J k3)"
+for rp in '{"relay": false, "why": "no relay configured"}' ''; do
+  FAKE_LOC1=CN FAKE_LOC2=CN FLEET_PROBE_RELAY_CMD="printf '%s' '$rp'; exit 3" probe_in k4
+  [ "$(rc)" = 1 ] && J k4 | grep -q '"loc":"CN",' && J k4 | grep -q '"route":"direct","ts"' && ! J k4 | grep -q loc_local \
+    && J k4 | grep -q '"verdict":"unsupported_region"' && grep -q '^本机判断：不合适 — 出口 CN' "$SB/out" \
+    && ok "K no relay (${rp:-no proxy}) → route direct, closed as before" || bad "K no relay: rc=$(rc) json=$(J k4) out=$(out)"
+done
+: >"$SB/curl.log"
+FLEET_PROBE_RELAY_CMD="echo called >>'$SB/relay.called'" probe_in k5
+[ "$(rc)" = 0 ] && [ ! -e "$SB/relay.called" ] && J k5 | grep -q '"route":"direct"' \
+  && ok "K an ok egress never asks the relay" || bad "K ok egress asked the relay: $(J k5)"
 
 # ── J. sleepwatch ────────────────────────────────────────────────────────
 if [ "$(uname -s)" != Darwin ]; then
