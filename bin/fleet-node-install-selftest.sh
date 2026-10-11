@@ -253,7 +253,7 @@ OUT="$(FLEET_ENTRY=1 FLEET_ENTRY_PORT=22977 ${FNI_BASH:-bash} "$INST" --hub http
 check "FLEET_ENTRY=1 → only 入口, the switch written into machine.env (token kept)" \
   sh -c "[ $RC = 0 ] && [ \"$(shape)\" = '$QUIET +入口 ' ] && grep -qx FLEET_ENTRY=1 '$SB/db/machine.env' && grep -qx FLEET_ENTRY_PORT=22977 '$SB/db/machine.env' && grep -qx CCQUOTA_TOKEN=tok-1 '$SB/db/machine.env'"
 check "  … its own host key; no config (no listener) while no login has its home here" \
-  sh -c "[ -f '$SB/db/entry/ssh_host_ed25519_key' ] && [ ! -e '$SB/db/entry/sshd_config' ] && [ \"\$(stat -f %Lp '$SB/db/machine.env' 2>/dev/null || stat -c %a '$SB/db/machine.env')\" = 600 ]"
+  sh -c "[ -f '$SB/db/entry/ssh_host_ed25519_key' ] && [ ! -e '$SB/db/entry/sshd_config' ] && [ \"\$(python3 -c 'import os,sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777)[2:])' '$SB/db/machine.env')\" = 600 ]"
 run
 check "the same command again: 跳过 入口 (已开)" sh -c "[ $RC = 0 ] && [ \"$(shape)\" = '$QUIET -入口 ' ] && printf '%s' \"\$OUT\" | grep -q '^跳过 入口：已开'"
 OUT="$(FLEET_ENTRY=0 ${FNI_BASH:-bash} "$INST" --hub https://hub.test 2>&1)"; RC=$?

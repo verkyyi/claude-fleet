@@ -2170,6 +2170,32 @@ class R_Entry(Sandbox):
                     "ssh-ed25519 %s" % blob):
             self.assertIsNone(fns.entry_key_line(bad), bad)
 
+    def test_old_sshd_is_never_started(self):
+        """An sshd without PerSourcePenalties (OpenSSH < 9.8) is not put on the
+        internet: no config, the book and the doctor's row say what is missing."""
+        sshd = self.script("sshd", 'case "$1" in -t) exit 0 ;; -T) printf "passwordauthentication no\\n'
+                           'kbdinteractiveauthentication no\\npermitrootlogin no\\nauthenticationmethods publickey\\n" ;; esac\n')
+        me = __import__("pwd").getpwuid(os.getuid()).pw_name
+        db = os.path.join(self.d, "db")
+        os.makedirs(os.path.join(db, "logins"))
+        open(os.path.join(db, "logins", me + ".env"), "w").close()
+        with open(os.path.join(self.d, "passwd"), "w") as f:
+            json.dump({me: {"uid": os.getuid(), "gid": os.getgid(), "home": self.d}}, f)
+        blob = __import__("base64").b64encode(b"\x00\x00\x00\x0bssh-ed25519" + b"\x00\x00\x00\x20" + b"k" * 32).decode()
+        lst = os.path.join(self.d, "list.json")
+        with open(lst, "w") as f:
+            json.dump({"version": 1, "logins": {me: {"person": "gh:1", "keys": [
+                {"type": "ssh-ed25519", "b64": blob, "fp": "SHA256:x"}]}}}, f)
+        env = {"FLEET_ENTRY": "1", "FLEET_ENTRY_SSHD": sshd, "FLEET_NODE_PASSWD": os.path.join(self.d, "passwd"),
+               "FLEET_ENTRY_DSEDITGROUP": ""}
+        r = self.run_sup("entry", "apply", lst, env=env)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("lacks PerSourcePenalties", r.stdout)
+        self.assertFalse(os.path.exists(os.path.join(db, "entry", "sshd_config")), "an old sshd got a config")
+        c = self.run_sup("entry", "status", "--check", env=env)
+        self.assertEqual(c.returncode, 1)
+        self.assertIn("PerSourcePenalties", c.stdout)
+
     def test_config_is_the_convention(self):
         ep = fns.EntryPaths(fns.Paths())
         cfg = fns.entry_config(ep, 22022, ["bob", "alice"])

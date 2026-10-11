@@ -25,7 +25,8 @@
 #                         doctor's entry row says how far behind it is
 #
 # Each prints `PASS <id> <secs>s ≤<cap>s <what came back>` like its parent.
-# No sshd / ssh / ssh-keygen here → SKIP (exit 0).
+# No sshd / ssh / ssh-keygen here, or an sshd without PerSourcePenalties
+# (OpenSSH < 9.8: the entry refuses to start on it) → SKIP (exit 0).
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT are read by the sourced runner
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -37,6 +38,17 @@ done
 BREAK_CRED_LIB=1 . "$BIN/fleet-break-it-cred-selftest.sh"
 SUP="$BIN/fleet-node-supervisor.py"
 ME="$(id -un)"
+# The entry never starts on an sshd without per-source penalties (OpenSSH < 9.8 —
+# ubuntu-24.04's 9.6, Debian bookworm's 9.2): it refuses, and the doctor says what
+# is missing (fleet-node-supervisor-selftest.py Q pins that). Nothing to drill there.
+_pk="$WORK/entry-probe"; mkdir -p "$_pk"
+ssh-keygen -q -t ed25519 -N '' -f "$_pk/hk" && printf 'HostKey %s\nPidFile %s/pid\n' "$_pk/hk" "$_pk" > "$_pk/cfg"
+if ! "$SSHD_BIN" -T -f "$_pk/cfg" -C user=nobody,host=localhost,addr=127.0.0.1 2>/dev/null \
+     | grep -q '^persourcepenalties [^n]'; then
+  printf 'fleet-break-it-entry: %s has no PerSourcePenalties (OpenSSH < 9.8) — the entry refuses to start on it; SKIP\n' \
+    "$SSHD_BIN"
+  exit 0
+fi
 
 # sshd's StrictModes refuses a keys file under a group/world-writable directory —
 # /tmp is one — so the rig lives where every ancestor is root's or ours, 0755.
@@ -214,7 +226,7 @@ drill_entry_self_added_key() {
   grep -Eqx 'authorizedkeyscommand none' "$E/T" || { WHY="an AuthorizedKeysCommand: $(grep -i authorizedkeyscommand "$E/T")"; edown; return 1; }
   grep -Eqx 'trustedusercakeys none' "$E/T" || { WHY="a user CA is trusted: $(grep -i trustedusercakeys "$E/T")"; edown; return 1; }
   grep -Eqx 'permituserenvironment no' "$E/T" && grep -Eqx 'permituserrc no' "$E/T" \
-    || { WHY="~/.ssh/environment or ~/.ssh/rc honoured"; edown; return 1; }
+    || { WHY="the login's .ssh/environment or .ssh/rc honoured"; edown; return 1; }
   etry k3 && { WHY="an unregistered key got in"; edown; return 1; }
   etry k1 || { WHY="the registered key was refused: $(cat "$E/ssh.err")"; edown; return 1; }
   SECS=$(since "$t0")
