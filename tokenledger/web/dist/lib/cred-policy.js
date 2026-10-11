@@ -1,6 +1,7 @@
 // Subscription permissions: the hub owns identity resolution and verdicts.
 // This editor only writes one scope through the audited administrator API.
-import { esc, ic } from './shell.js';
+import { esc, ic, relTime } from './shell.js';
+import { windowsOf, level, fmtIn } from './admin.js';
 import { t } from './i18n.js';
 
 export const POLICY_PATH = '/v1/fleet/cred-policy';
@@ -32,6 +33,21 @@ export function policyChoices(credentials, entry, scope, id) {
   }
   return [...choices.values(), ...missing];
 }
+// Quotas are display-only and matched by subscription identity, never labels.
+export function policyLimitHTML(id, limits, now = Date.now()) {
+  const lim = (limits?.per_account || []).find((a) => String(a.account_uuid || '').toLowerCase() === id)?.limits;
+  const { h5, h7 } = windowsOf(lim);
+  const window = (label, w) => {
+    const p = w?.p;
+    const reset = fmtIn(w?.resets, now);
+    return `<span class="policy-limit-window"><span class="policy-limit-heading"><span>${esc(label)}</span><b>${esc(p == null ? t('ui.policy.limitUnknown') : t('ui.policy.limitUsed', { p }))}</b></span>` +
+      (p == null ? '' : `<span class="track"><i class="${level(p)}" style="width:${p}%"></i></span>`) +
+      `<small>${esc(reset ? t('ui.sub.resets', { when: reset }) : t('ui.policy.limitResetUnknown'))}</small></span>`;
+  };
+  return `<span class="policy-limit-windows">${window(t('ui.sub.h5'), h5)}${window(t('ui.sub.h7'), h7)}</span>` +
+    `<small class="policy-limit-read">${esc(lim?.observed_at ? t('ui.sub.lastRead') + ' · ' + relTime(lim.observed_at) : t('ui.policy.limitNoReading'))}</small>`;
+}
+
 export function policyPayload(scope, id, mode, selected) {
   if (!['node', 'user'].includes(scope) || !id) throw new Error(t('ui.policy.choose'));
   if (!['all', 'deny', 'selected'].includes(mode)) throw new Error(t('ui.policy.chooseMode'));
@@ -107,7 +123,7 @@ export async function mountObjectPolicy(ctx, root, scope, id) {
       `<div class="panel-b">${view.mode === 'legacy' ? `<div class="notice">${esc(t('ui.policy.legacy'))} <a href="/subscriptions/settings">${esc(t('ui.policy.global'))}</a></div>` : ''}<form>` +
       `<fieldset class="policy-modes"><legend>${esc(t('ui.policy.mode'))}</legend>` +
       [['deny', 'denyHint'], ['selected', 'selectedHint'], ['all', 'allHint']].map(([mode,hint]) => `<label class="policy-mode"><input type="radio" name="mode" value="${mode}"${draft.mode === mode ? ' checked' : ''}><span><strong>${esc(modeText(mode))}</strong><small>${esc(t('ui.policy.' + hint))}</small></span></label>`).join('') + '</fieldset>' +
-      `<fieldset class="policy-subscriptions" data-choices><legend>${esc(t('ui.policy.subscription'))}</legend>` + choices.map((c) => `<label class="policy-subscription"><input type="checkbox" name="subscription" value="${esc(c.id)}"${draft.selected.includes(c.id) ? ' checked' : ''}${!c.id ? ' disabled' : ''}><span>${esc(c.label)}${!c.id ? `<small>${esc(t('ui.policy.missingID'))}</small>` : ''}</span></label>`).join('') + '</fieldset>' +
+      `<fieldset class="policy-subscriptions" data-choices><legend>${esc(t('ui.policy.subscription'))} <button type="button" class="btn ghost sm" data-refresh-limits>${esc(t('ui.policy.refreshLimits'))}</button></legend>` + choices.map((c) => `<label class="policy-subscription"><input type="checkbox" name="subscription" value="${esc(c.id)}"${draft.selected.includes(c.id) ? ' checked' : ''}${!c.id ? ' disabled' : ''}><span class="policy-subscription-body"><strong>${esc(c.label)}</strong>${!c.id ? `<small>${esc(t('ui.policy.missingID'))}</small>` : `<span class="policy-limits" data-policy-limit="${esc(c.id)}">${esc(t('ui.loading'))}</span>`}</span></label>`).join('') + '</fieldset>' +
       `<div class="policy-save"><span class="sub" data-dirty></span><div class="acts"><button type="button" class="btn danger" data-revoke>${esc(t('ui.policy.revoke'))}</button><button type="submit" class="btn primary">${esc(t('ui.policy.save'))}</button></div></div><p class="err" role="alert"></p></form>` +
       `<p class="sub">${esc(t('ui.policy.defaults'))}</p><details class="policy-notes"><summary>${esc(t('ui.policy.notes'))}</summary><p>${esc(t('ui.policy.scopeNote'))}</p><p>${esc(t('ui.policy.timing'))}</p></details></div>`;
     const form = root.querySelector('form'); let busy = false;
@@ -133,6 +149,17 @@ export async function mountObjectPolicy(ctx, root, scope, id) {
       }
     };
     update();
+    // Refresh only quota text: checkbox choices and unsaved drafts stay intact.
+    const refreshButton = form.querySelector('[data-refresh-limits]');
+    const refreshLimits = async () => {
+      refreshButton.disabled = true;
+      const limits = await ctx.api('/v1/limits?account=all').catch(() => null);
+      if (!form.isConnected) return;
+      form.querySelectorAll('[data-policy-limit]').forEach((el) => { el.innerHTML = policyLimitHTML(el.dataset.policyLimit, limits); });
+      refreshButton.disabled = busy;
+    };
+    refreshButton.onclick = refreshLimits;
+    void refreshLimits();
     const inspector = document.createElement('div');root.querySelector('.panel-b').append(inspector);
     void mountObjectInspector(ctx,inspector,scope,id);
   } catch (err) { root.innerHTML = `<p class="panel-b err">${esc(err.message)}</p>`; }

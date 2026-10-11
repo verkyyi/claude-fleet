@@ -452,3 +452,18 @@ button.chip { border: 0; cursor: pointer; font: inherit; font-size: 11.5px; }
 @media(max-width:480px){.grant-groups{padding:0 12px 16px;gap:12px}.grant-row{padding:14px 12px;gap:9px}.grant-group-head{padding:14px 12px}.grant-avatar{width:28px;height:28px}.grant-footnote{padding:12px}.grant-edit{font-size:11px}}
 
 .grant-lead{margin:5px 0 0;font-size:12px;line-height:1.7;color:var(--muted)}
+
+/* Quota readings in subscription grant editors. */
+.policy-subscription-body { flex:1; min-width:0; }
+.policy-subscription-body > strong { font-size:13px; overflow-wrap:anywhere; }
+.policy-limits { display:block; margin-top:10px; }
+.policy-limit-windows { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px 24px; }
+.policy-limit-window { display:grid; gap:6px; }
+.policy-limit-heading { display:flex; flex-wrap:wrap; justify-content:space-between; gap:4px 12px; font-size:12px; }
+.policy-limit-heading > span { color:var(--muted); }
+.policy-limit-window .track { height:6px; border-radius:3px; background:var(--line-2); overflow:hidden; }
+.policy-limit-window .track i { display:block; height:100%; border-radius:3px; background:var(--ok); }
+.policy-limit-window .track i.warn { background:var(--warn); }
+.policy-limit-window .track i.bad { background:var(--bad); }
+.policy-limit-read { margin-top:8px; }
+@media(max-width:480px) { .policy-limit-windows { grid-template-columns:1fr; } }

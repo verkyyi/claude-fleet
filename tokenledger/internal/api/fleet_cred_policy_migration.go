@@ -55,10 +55,23 @@ func (s *Server) credPolicyReview(settings map[string]string) (policyMigration, 
 	if err != nil {
 		return review, err
 	}
+	// Use the roster's shared role classifier. Offline hosts still count;
+	// where several names normalize to one machine, any hosting login wins.
+	snapshot, err := s.Nodes(time.Now())
+	if err != nil {
+		return review, err
+	}
+	roles := map[string]string{}
+	for _, machine := range snapshot.Machines {
+		m := strings.ToLower(firstLabel(machine.Hostname))
+		if roles[m] != MachineRoleHost {
+			roles[m] = machine.Role
+		}
+	}
 	seen := map[string]bool{}
 	for _, ep := range trusts {
 		m := strings.ToLower(firstLabel(ep.EnrolledHost))
-		if m == "" || m == "?" || seen[m] {
+		if m == "" || m == "?" || seen[m] || roles[m] == MachineRoleClient {
 			continue
 		}
 		seen[m] = true

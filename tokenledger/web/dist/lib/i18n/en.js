@@ -13,6 +13,12 @@
 // file under web/dist still uses (claude-fleet#2027): delete a page's last
 // t('…') and its key goes with it.
 export const en = {
+  "ui.policy.limitUnknown": "Unknown",
+  "ui.policy.limitUsed": "{p}% used",
+  "ui.policy.limitResetUnknown": "Reset time unavailable",
+  "ui.policy.limitNoReading": "No quota reading available",
+  "ui.policy.refreshLimits": "Refresh limits",
+
   "ui.policy.inspectTitle": "Check a user’s access on a machine",
   "ui.policy.savedState": "No unsaved changes",
   "ui.policy.notes": "Scope and when changes take effect",

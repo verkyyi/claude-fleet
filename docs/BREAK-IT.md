@@ -294,3 +294,5 @@
 | 新版初始化授权模式后搬迁数据库 | 空目标库的默认标记被误判为已有数据，搬迁拒绝 | 仅忽略新库的 strict 初始化行，真实设置仍拒绝覆盖；复制保留源库授权模式 | `db-move-policy-seed` |
 | 没人叫、会话自己开工：派单后台每分钟醒一次，按优先级开出带 `autofill` 标签的单（③）；它顺带跑的红主干 macOS 巡查开出修复会话（④） | 你分不清哪张单会自己开工；一个仓库里关着它也每分钟醒一次；红主干的修复会话没人叫就开了、算在谁头上不清楚 | 自动填充整条拿掉（#3120，EPIC #3111 C9）：`com.claude-fleet.dispatch` 模板删掉，install-apply 卸掉已装的、托管机器的账号表随模板不再跑它、已装的收进 attic；`fleet-dispatch.sh` 留一版什么都不做的壳；`FLEET_AUTOFILL*` 由 `fleet-conf.sh migrate` 注释掉；`autofill` 标签建单时去掉；红主干巡查搬到 diskguard 节拍，只开单（`--breakage` 去重不变）+ 一条 `breakage` 提醒，不开会话。① ② ⑤ 由 C7 / C4 各自加进这条演练 | `nothing-starts-by-itself` |
 | 派单的会话先关了（scratch 关掉、编排被回收），它派出的子会话随后合并、被卡或被回收 | 报告找不到父窗口、账本里也没有活着的上级：`fleet-report-parent.sh` 静默 exit 0，结果谁也没收到，只剩单子上一条评论 | 没人收就交给你（#3117，EPIC #3111 C6）：会叫醒人的报告（loud / quiet）写一行 `$FLEET_CONF_DIR/global/orphan-reports.ndjson`（{ts, child_key, state, pr, summary}，同一子会话同一结果只写一次）并经 `fleet-alerts.sh event child-report` 发一条提醒，打 `@reported` 让回收的兜底不再补一份；父键被后来的会话占用（换代）同样交给你；hub 派的（`@origin` 空）照旧什么都不写 | `report-parent-gone` |
+
+| 授权迁移把纯客户端列为执行节点 | 管理员被要求给连接用的设备配置订阅机器授权，容易留下无用授权 | 复用机器角色过滤纯客户端，离线和混合执行节点保留；角色变化后要求重新审核，已有规则不改写 | `cred-migration-client` |

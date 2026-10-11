@@ -31,6 +31,12 @@
 // 文件再用的键也会让它变红（claude-fleet#2027）—— 删掉页面上最后一处 t('…')，
 // 两本词典里的键一起删。
 export const zhCN = {
+  "ui.policy.limitUnknown": "未知",
+  "ui.policy.limitUsed": "已用 {p}%",
+  "ui.policy.limitResetUnknown": "重置时间暂无更新",
+  "ui.policy.limitNoReading": "暂未取得额度读数",
+  "ui.policy.refreshLimits": "刷新额度",
+
   "ui.policy.inspectTitle": "检查用户在指定机器上的权限",
   "ui.policy.savedState": "没有待保存的修改",
   "ui.policy.notes": "适用范围与生效时间",

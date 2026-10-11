@@ -6117,6 +6117,14 @@ PYR
   WHAT="派单的会话不在：报告进 orphan-reports.ndjson 一行 + 一条提醒，重报 / 回收不重复，hub 派的不写"
 }
 
+drill_cred_migration_client() {
+  CAP=120; local t0
+  t0=$(now)
+  _drill_go_tests 'TestCredPolicyMigrationSkipsClients' "$ROOT/tokenledger/internal/api/fleet_cred_policy_test.go" \
+    '迁移排除纯客户端、保留离线及混合执行节点，角色变化重审且旧授权不变' || return 1
+  SECS=$(since "$t0")
+}
+
 drill_db_move_policy_seed() {
   CAP=120; local t0
   t0=$(now)
