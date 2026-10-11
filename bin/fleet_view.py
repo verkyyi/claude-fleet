@@ -35,6 +35,9 @@ fleet-quickopen.py (this module is its node half — the client never loads it):
     fleet-quickopen.py view-act --view <view> <target> <id> [--text <answer>] [--yes]
                                               do one (ACTIONS, below) — the Tab
                                               menu's own road; exit = the script's
+    fleet-quickopen.py view-gone --view <view>
+                                              read the 已回收 list now (below), wait
+                                              for it — what the popup reads cached
     fleet-quickopen.py view-rows --view <view> [<query>]
                                               the popup's lines, plain (the selftest):
                                               kind · target · word · text · right ·
@@ -116,6 +119,19 @@ menu's, item for item (ACTIONS; SIDEBAR_ACTIONS maps its letters), each running
 the same script the sidebar ran. ↑↓ ↵ pick, Esc steps back; one that needs words
 (rename, a message, an answer, a time) asks on the bottom line (↵ submit, Esc
 cancel), a reap asks y / n first; then back on the list, read again.
+
+GONE (issue #3286): 已结束 lists, after the rows whose windows are still open,
+the sessions whose windows were reaped — the old sidebar's ⌃t landed list, the
+same ledger (`fleet-history.sh rows`, issue #1532: this machine's, then the hub's
+rows of the other machines), every row it gives. Each is `gone` (no window): its
+one action is 恢复 (Tab, or ↵), the script the sidebar's ⌃t ran —
+fleet-restore-pick.sh --select (a CLOSED-unmerged PR asks first, y reopen · r
+anyway, as the sidebar's input line did). That read takes seconds on a long
+ledger (~30 s here), so it never runs in a list read: it is written to
+`$G/view-gone.<fleet>` in the background, single-flight, when the copy is older
+than FLEET_VIEW_GONE_SECS (60 s — the sidebar's 10 s LANDED_SECS was a re-read
+only while ⌃t was shown; this list is read every time the popup is), and the list
+shows the copy it has.
 
 A ROW ON ANOTHER MACHINE (issue #3182, EPIC #3178 C4): 回答 · 发一句话 · 改名 ·
 改回收方式 · 停 · 回收 · 恢复 are each `far` — the hub write the old sidebar made for
@@ -467,6 +483,90 @@ def one_line(text, n=200):
     return re.sub(r"\s+", " ", text or "").strip()[:n]
 
 
+# --- the 已回收 rows (issue #3286) --------------------------------------------------------
+
+GONE_TX = re.compile(r"\x1b\[38;2;169;177;214m(.*?)\x1b\[0m")   # fleet-history.sh's TX: name, then title
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def gone_file(fleet):
+    return dash_global() / ("view-gone." + (fleet or "-"))
+
+
+def gone_read(fleet, wait=True):
+    """Write `fleet-history.sh rows` (FLEET_VIEW_LANDED_CMD — the selftest's seam)
+    to gone_file, single-flight (a `.lock` dir; one older than 10 minutes is a dead
+    reader's). A failed read keeps the last copy. wait=False: in the background, its
+    own session. True when this call ran (or started) the read."""
+    out = gone_file(fleet)
+    lock = Path(str(out) + ".lock")
+    try:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        lock.mkdir()
+    except FileExistsError:
+        try:
+            if time.time() - lock.stat().st_mtime < 600:
+                return False
+            os.utime(str(lock))
+        except OSError:
+            return False
+    except OSError:
+        return False
+    prod = os.environ.get("FLEET_VIEW_LANDED_CMD") or 'bash "$1" rows'
+    script = '(%s) > "$2.$$" 2>/dev/null && mv -f "$2.$$" "$2"; rm -f "$2.$$"; rmdir "$3"' % prod
+    argv = ["sh", "-c", script, "sh", str(Path(__file__).absolute().parent / "fleet-history.sh"), str(out), str(lock)]
+    env = dict(os.environ, FLEET_SESSION=fleet, FZF_COLUMNS="240")
+    try:
+        if wait:
+            subprocess.run(argv, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL, timeout=300)
+        else:
+            subprocess.Popen(argv, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, start_new_session=True)
+    except subprocess.TimeoutExpired:
+        pass
+    except OSError:
+        try:
+            lock.rmdir()
+        except OSError:
+            pass
+        return False
+    return True
+
+
+def gone_text(fleet):
+    """The last copy of the 已回收 list; one older than FLEET_VIEW_GONE_SECS (or
+    none) starts a read in the background — never waited for here."""
+    p = gone_file(fleet)
+    try:
+        age, text = time.time() - p.stat().st_mtime, p.read_text(errors="replace")
+    except OSError:
+        age, text = None, ""
+    if age is None or age >= fenv("FLEET_VIEW_GONE_SECS", 60):
+        gone_read(fleet, wait=False)
+    return text
+
+
+def gone_rows(text, now=None):
+    """fleet-history.sh rows → (target, glyph, label, name, title, act, pr), one per
+    `landed:…` target, the first (newest) of a key the ledger lists twice. Its
+    fixed columns (cmd_rows): glyph · issue (5) · tree · window (26), then the
+    title in its own colour, and the 21 right cells act (8) · PR (7) · dep (4)."""
+    out, seen = [], set()
+    for line in (text or "").split("\n"):
+        parts = line.split(US, 2)
+        if len(parts) < 3 or not parts[0].startswith("landed:") or parts[0] in seen:
+            continue
+        seen.add(parts[0])
+        plain = ANSI.sub("", parts[2]).rstrip("\n")
+        tx = [t.strip() for t in GONE_TX.findall(parts[2])]
+        name = tx[0] if tx else plain[11:37].strip()
+        title = tx[1] if len(tx) > 1 else ""
+        tail = plain[-21:] if len(plain) >= 59 else ""
+        out.append((parts[0], plain[:1], plain[2:7].strip(), name, title, tail[:8].strip(), tail[9:16].strip()))
+    return out
+
+
 def entries(vid, now=None):
     """Every line the popup can show, in order (issue #3179): grouped by what you
     should do — 置顶 (@pin) · 等你 (needs / failed / blocked) · 在干活 (working /
@@ -577,6 +677,22 @@ def entries(vid, now=None):
         anc = {d: v for d, v in anc.items() if d < depth}
         anc[depth] = (grp, e["depth"])
         groups[grp].append(e)
+    # the sessions whose windows are gone (issue #3286): after the open ended rows,
+    # one an open row already shows (its issue, restored since) left out
+    open_issues = {e["issue"] for g in groups.values() for e in g if e.get("issue")} | \
+        {e["issue"] for e in ended if e.get("issue")}
+    for target, glyph, label, name, title, act, pr in gone_rows(gone_text(fleet)):
+        if label.startswith("#") and label in open_issues:
+            continue
+        grepo = target.rpartition("@")[2] if "@" in target else ""
+        word = say("view_ended_gone_merged") if glyph == "✓" else say("view_ended_gone")
+        ended.append({"kind": "sess", "target": target, "far": False, "gone": True, "machine": here, "login": me,
+                      "state": "landed", "text": title or name, "name": name, "reap": "", "issue": label,
+                      "depth": 0, "detail": "", "group": "ended", "sec": "ended",
+                      "sym": "done" if glyph == "✓" else "fail", "lost": False, "lost_secs": None, "ask": "",
+                      "tags": [], "repo": grepo.rpartition("/")[2], "word": word, "right": act,
+                      "foot": " · ".join(x for x in (title or name, label, say("view_pr_fmt", pr) if pr.startswith("#") else "",
+                                                     word, say("view_gone_hint")) if x)})
     multi = len(set(repos)) >= 2
     out = []
     for g in GROUPS:
@@ -788,7 +904,7 @@ def paint(shown, at, width, cells, clip):
 
 def session_order(items):
     """The order ⌘↓ / ⌘↑ walk: every session line of the list, as it is drawn."""
-    return [e["target"] for e in items if e["kind"] == "sess" and e.get("target")]
+    return [e["target"] for e in items if e["kind"] == "sess" and e.get("target") and not e.get("gone")]
 
 
 def order_file(vid):
@@ -800,7 +916,7 @@ def order_save(vid, items):
     every open, view-order after a ⌘↓ — and return (seq, metas)."""
     seq = session_order(items)
     metas = {e["target"]: {"machine": e.get("machine", ""), "login": e.get("login", "")}
-             for e in items if e["kind"] == "sess" and e.get("target")}
+             for e in items if e["kind"] == "sess" and e.get("target") and not e.get("gone")}
     path = order_file(vid)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -1669,7 +1785,7 @@ def far_live(r):
 # in the background from the popup — a stop, a reap, a move take seconds).
 ACTIONS = [
     # 进入
-    {"id": "enter", "label": lambda r: say("view_act_enter"), "when": lambda r: True,
+    {"id": "enter", "label": lambda r: say("view_act_enter"), "when": lambda r: not r.get("gone"),
      "local": lambda r, a, f: "go", "far": lambda r, a, f: "go", "ask": None},
     {"id": "shell", "label": lambda r: say("view_act_shell"),
      "when": lambda r: not r.get("gone") and not r.get("lost") and r.get("state") != "exited",
@@ -1699,8 +1815,9 @@ ACTIONS = [
      "local": lambda r, a, f: sh("fleet-worker-stop.sh", f, "fid:" + r["fid"]), "far": far("stop"), "ask": None,
      "slow": True},
     {"id": "resume", "label": lambda r: say("view_act_restore" if ended(r) else "view_act_resume"),
-     "when": lambda r: r.get("state") == "exited" and (r.get("far") or r.get("page")),
-     "local": lambda r, a, f: "resume", "far": far("resume"), "ask": None, "slow": True},
+     "when": lambda r: r.get("gone") or (r.get("state") == "exited" and (r.get("far") or r.get("page"))),
+     "local": lambda r, a, f: "restore" if r.get("gone") else "resume", "far": far("resume"), "ask": None,
+     "slow": True, "keys": "yYrR"},
     {"id": "wake", "label": lambda r: say("view_act_wake"), "when": lambda r: not r.get("far") and r.get("life") == "sleeping",
      "local": lambda r, a, f: sh("fleet-sleep.sh", "wake", f, r["target"], "--over-cap"), "far": None, "ask": None,
      "slow": True},
@@ -1803,6 +1920,30 @@ def act_run(qo, vid, fleet, a, r, ans, client="", wait=True):
             return 2, say("view_new_norepo") if not have else ask_line({"repos": have, "i": -1}), False
         rc, said = dispatch(None, vid, client, ans, repo)
         return rc, said, False
+    if argv == "restore":
+        # a gone row (issue #3286): the sidebar's ⌃t restore, the same script. A
+        # `landed:issue:` row may have to ask first (a CLOSED-unmerged PR, #543):
+        # --ask exits 4 with the question, the answer comes back as --answer y|r
+        cmd = sh("fleet-restore-pick.sh", "--select", r["target"], "--session", fleet)
+        env = act_env(fleet)
+        if not wait and not ans and not r["target"].startswith("landed:issue:"):
+            try:
+                subprocess.Popen(cmd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL, start_new_session=True)
+            except OSError:
+                return 1, say("view_act_failed_fmt", label, ""), False
+            return 0, say("view_act_sent_fmt", label), False
+        try:
+            p = subprocess.run(cmd + (["--answer", ans.lower()] if ans else ["--ask"]), env=env, capture_output=True,
+                               text=True, stdin=subprocess.DEVNULL, timeout=300)
+        except (OSError, subprocess.TimeoutExpired):
+            return 1, say("view_act_failed_fmt", label, ""), False
+        said = ((p.stdout.strip() or p.stderr.strip()).splitlines() or [""])[-1]
+        if p.returncode == 4:
+            return 4, one_line(said, 160), False
+        if p.returncode != 0:
+            return p.returncode, say("view_act_failed_fmt", label, one_line(said, 120)), False
+        return 0, say("view_act_done_fmt", label), False
     if argv == "resume":
         # the wrapper's page (fleet-session-wrap.sh): ↵ resumes the same conversation
         rc, _ = tm("send-keys", "-t", r.get("pane") or r["target"], "Enter")
@@ -2109,7 +2250,7 @@ def popup(screen, qo, vid, client):
     def run(a, r, ans):
         """Do it, say how it went, read the list again (a pin, a rename, a reap
         shows at once); back on the list."""
-        nonlocal items, shown, msg
+        nonlocal items, shown, msg, mode, pend, line
         if r.get("far") and not r.get("lost") and a["id"] not in ("enter", "shell"):
             def far_run():
                 landed.append(act_run(qo, vid, fleet, a, r, ans, client)[1])
@@ -2119,6 +2260,11 @@ def popup(screen, qo, vid, client):
             return False
         rc, said, went = act_run(qo, vid, fleet, a, r, ans, client, wait=False)
         back()
+        if rc == 4 and r.get("gone") and not ans:
+            # a restore that asks first (#543): its question on the bottom line,
+            # y reopen the PR · r restore anyway · any other key cancels
+            mode, pend, line = "ask", (a, r, "", "key", said + " · " + say("view_ask_restore")), Line()
+            return False
         if went:
             return True     # the 看台 is on it now: the popup closes
         msg = said
@@ -2347,6 +2493,11 @@ def popup(screen, qo, vid, client):
             target = e.get("target") or ""
             if not target:
                 continue
+            if e.get("gone"):
+                # a reaped session (issue #3286): ↵ is its one action, 恢复
+                if pick(ACTION["resume"], act_row(fleet, e)):
+                    return 0
+                continue
             msg = lost_msg(e) or ""
             if msg:
                 continue
@@ -2439,6 +2590,9 @@ def main(argv, qo):
         for e in panel_rows(entries(vid), q, {"ended"}, current(vid)):
             print("\t".join((e["kind"], e.get("cmd") or e.get("target") or e.get("group") or "", e.get("text") or "")))
         return 0
+    if argv[:1] == ["view-gone"]:
+        # read the 已回收 list now and wait (the selftest, a person's evidence)
+        return 0 if gone_read(view_fleet(vid), wait=True) else 1
     if argv[:1] == ["view-rows"]:
         rest = [a for i, a in enumerate(argv[1:], 1) if a not in ("--view", "--client")
                 and argv[i - 1] not in ("--view", "--client")]

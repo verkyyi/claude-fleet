@@ -577,6 +577,16 @@ fleet_ui_t() {
     en:view_ended_exited) printf 'exited' ;;
     zh:view_ended_done) printf '做完了' ;;
     en:view_ended_done) printf 'done' ;;
+    zh:view_ended_gone) printf '窗口已回收' ;;
+    en:view_ended_gone) printf 'window reaped' ;;
+    zh:view_ended_gone_merged) printf '已合并 · 窗口已回收' ;;
+    en:view_ended_gone_merged) printf 'merged · window reaped' ;;
+    zh:view_gone_hint) printf '↵ 恢复' ;;
+    en:view_gone_hint) printf '↵ restore' ;;
+    zh:view_pr_fmt) printf 'PR %s' "${1:-}" ;;
+    en:view_pr_fmt) printf 'PR %s' "${1:-}" ;;
+    zh:view_ask_restore) printf 'y 先 reopen PR 再恢复 · r 直接恢复 · 其它键取消' ;;
+    en:view_ask_restore) printf 'y reopen the PR, then restore · r restore anyway · any other key cancels' ;;
     zh:view_state_needs) printf '在问你' ;;
     en:view_state_needs) printf 'asking' ;;
     zh:view_state_blocked) printf '卡住了' ;;

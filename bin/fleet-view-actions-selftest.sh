@@ -91,6 +91,9 @@ cat > "$W/rows.sh" <<'EOF'
 cat "$FLEET_VIEW_ROWS_FILE"
 EOF
 export FLEET_VIEW_ROWS_CMD="sh '$W/rows.sh'" FLEET_VIEW_ROWS_FILE="$W/rows.txt"
+# the 已回收 list's read (issue #3286, fleet-view-selftest.sh J): an empty ledger here
+: > "$W/gone.txt"
+export FLEET_VIEW_LANDED_CMD="cat '$W/gone.txt'"
 {
   row hdr verkyyi/claude-fleet '' 'claude-fleet (5)' ' '
   row "$W1" 'done' ✓ 'alpha' ' ' '' 0 '' '' '#11' open 50% ok 'Alpha 做完了' merged '' '' '' ''
