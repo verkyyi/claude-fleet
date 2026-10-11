@@ -95,7 +95,7 @@ EOF
   # the hub's rows on home: your sessions on far1 and far2 (same login)
   local g="$PR_WORK/m/home/tmp/.claude-dash/global" u
   { printf '#me%shome\n' "$PR_US"
-    for u in "$PR_U_far1/fid-a far1" "$PR_U_far1/fid-b far1" "$PR_U_far2/fid-c far2"; do
+    for u in "$PR_U_far1/fid-a far1" "$PR_U_far1/fid-b far1" "$PR_U_far1/orchestrator far1" "$PR_U_far2/fid-c far2"; do
       set -- $u
       printf 'wid:%s%s%s%sonline%s1%sacme/app%sworking%sclaude%sn%s%s%s0\n' "$1" "$PR_US" "$2" "$PR_US" "$PR_US" "$PR_US" "$PR_US" "$PR_US" "$PR_US" "$PR_US" "$PR_US" "$PR_US"
     done

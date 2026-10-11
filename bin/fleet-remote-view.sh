@@ -241,10 +241,14 @@ if [ "${1:-}" = select ] && [ -n "${3:-}" ]; then
     done <<EOF
 $(tmux -L "$_s" list-windows -t "=$_s" -F 'W #{window_id} #{@fleet_id}' \; list-clients -t "=$_g" -F 'C #{client_tty}' 2>/dev/null)
 EOF
-    [ -n "$_w" ] || exit 3
-    { [ -n "$_c" ] && tmux -L "$_s" switch-client -c "$_c" -t "=$_g:$_w" 2>/dev/null; } \
-      || tmux -L "$_s" select-window -t "=$_g:$_w" 2>/dev/null || exit 5
-    exit 0
+    # no window carries that @fleet_id: the hub's row may name it by its KEY
+    # (`<fleet UUID>/<key>`, fleet_worker_id_key — issue #3007), so rv_select
+    # below resolves it the one way (fleet_worker_locate) and answers 3 itself
+    if [ -n "$_w" ]; then
+      { [ -n "$_c" ] && tmux -L "$_s" switch-client -c "$_c" -t "=$_g:$_w" 2>/dev/null; } \
+        || tmux -L "$_s" select-window -t "=$_g:$_w" 2>/dev/null || exit 5
+      exit 0
+    fi
   fi
 fi
 

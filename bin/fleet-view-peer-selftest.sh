@@ -80,6 +80,11 @@ pr_wait 5 grep -q "cur=$PR_U_far1/fid-a" "$PR_WORK/m/far1/conf/remote-views/v1-v
 pr_go "$PR_W_home_l1"; pr_go "$PR_U_far1/fid-a"; rc=$?
 [ "$rc" = 0 ] && last | grep -q '"method":"peer-window"' && ok || fail "B: back to the session far1 already shows is not select-window alone: $(last)"
 pr_go "$PR_U_far1/fid-b" && pr_wait 5 shows SCREEN-far1-b && ok || fail "B: far1/b: $(last) / $(pr_screen | tr -s '\n' | head -2)"
+# a far row the hub names by its KEY (`<fleet UUID>/<key>`, the readable alias
+# fleet_worker_id_key — what remote_<sess> carries), not its @fleet_id: the far
+# end resolves it as rv_select does (issue #3007: the fast path answered 3, gone)
+pr_go "$PR_U_far1/orchestrator" && pr_wait 5 shows SCREEN-far1-orch && ok \
+  || fail "B: far1 by key (orchestrator): $(last) / $(pr_screen | tr -s '\n' | head -2)"
 pr_wait 10 pr_up_link far2
 pr_go "$PR_U_far2/fid-c" && [ "$(pr_cur)" = "$P2" ] && pr_wait 5 shows SCREEN-far2-c && ok || fail "B: far2/c: $(last)"
 pr_go "$PR_W_home_l2" && pr_wait 5 shows SCREEN-home-l2 && ok || fail "B: back home: $(last)"
