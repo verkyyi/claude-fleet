@@ -2951,7 +2951,7 @@ fi
 # /bin/sh doctor cannot source it) — KEEP IN SYNC.
 _cb=$(command -v claude 2>/dev/null) || { [ -x "$HOME/.local/bin/claude" ] && _cb="$HOME/.local/bin/claude"; } || _cb=''
 if [ -n "$_cb" ]; then
-  _mt=$(stat -f %m "$_cb" 2>/dev/null || stat -c %Y "$_cb" 2>/dev/null) || _mt=0
+  _mt=$(stat -c %Y "$_cb" 2>/dev/null || stat -f %m "$_cb" 2>/dev/null) || _mt=0
   _ck=$(printf '%s %s' "$_cb" "$_mt" | cksum | awk '{print $1}')
   _cd="$conf_dir/agents"; _ans=''
   if [ -f "$_cd/agent-flag.$_ck.yes" ]; then _ans=yes

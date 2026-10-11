@@ -618,7 +618,7 @@ EOF
 fleet_claude_has_agent_flag() {
   local bin="${1:-claude}" pth mt key dir
   pth=$(command -v "$bin" 2>/dev/null) || return 0
-  mt=$(stat -f %m "$pth" 2>/dev/null || stat -c %Y "$pth" 2>/dev/null) || mt=0
+  mt=$(stat -c %Y "$pth" 2>/dev/null || stat -f %m "$pth" 2>/dev/null) || mt=0
   key=$(printf '%s %s' "$pth" "$mt" | cksum | awk '{print $1}')
   dir="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/agents"
   [ -f "$dir/agent-flag.$key.yes" ] && return 0
