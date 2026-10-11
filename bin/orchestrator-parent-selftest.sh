@@ -22,6 +22,11 @@
 #      (canon → `orchestrator`; elsewhere still empty; the gate never refuses `hub`),
 #      and a NO-REPO child (a batch driver) is booked by its @fleet_id and listed by
 #      fleet-children.sh under its window name.
+#   H  issue #3117: the role's HOLDER answers `orchestrator` — an ordinary window
+#      marked `@fleet_role_def orchestrator` (C3's take_role) wins over the old seat's
+#      @fleet_role; with no holder and no seat the report is the person's — one row in
+#      global/orphan-reports.ndjson, the alert called once, a repeat files nothing,
+#      a hub-spawned child files nothing.
 # tmux absent → SKIP. Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -143,6 +148,32 @@ kids = {k["child"]: k for k in json.load(sys.stdin)["children"]}
 k = kids[sys.argv[1]]
 assert k["live"] and k["title"] == "批次·驱动" and (k.get("settled") or k["last"])["state"] == "MERGED", k
 ' "$dfid" 2>/dev/null || fail "G: fleet-children.sh --json lists the no-repo child by name, merged" "$r"
+
+# --- H: the holder, and nobody to take it (issue #3117) ---------------------------
+wt=$(tf new-window -d -P -F '#{window_id}' -n taker -c "$WORK" 'while :; do sleep 300; done')
+tf set-window-option -t "$wt" @fleet_role_def orchestrator
+r=$(lib '' '' fleet_win_for_key orchestrator "$L");       ok; [ "$r" = "$wt" ] || fail "H: the take_role holder answers orchestrator" "$r"
+tf set-window-option -t "$wt" -u @fleet_role_def
+r=$(lib '' '' fleet_win_for_key orchestrator "$L");       ok; [ "$r" = "$wo" ] || fail "H: no holder → the old seat (compat)" "$r"
+tf kill-window -t "$wo"
+wk=$(tf new-window -d -P -F '#{window_id}' -n kid2 -c "$WORK" 'while :; do sleep 300; done')
+tf set-window-option -t "$wk" @issue 102
+tf set-window-option -t "$wk" @repo acme/app
+tf set-window-option -t "$wk" @origin orchestrator
+tf set-window-option -t "$wk" @claude_state 'done'
+printf '#!/bin/sh\necho "$*" >> "%s/alerted"\n' "$WORK" > "$WORK/alert"; chmod +x "$WORK/alert"
+ORPH="$FLEET_CONF_DIR/global/orphan-reports.ndjson"
+r=$(FLEET_ORPHAN_ALERT_CMD="$WORK/alert" bash "$BIN/fleet-report-parent.sh" -L "$L" --win "$wk" --state blocked --summary 'needs a token' 2>&1)
+ok; case "$r" in orphaned*) ;; *) fail "H: the orchestrator gone → orphaned" "$r" ;; esac
+ok; python3 -c 'import json,sys; r=[json.loads(l) for l in open(sys.argv[1])]; assert len(r)==1 and r[0]["child_key"]=="acme-app:issue-102" and r[0]["state"]=="BLOCKED" and r[0]["summary"]=="needs a token", r' "$ORPH" 2>/dev/null \
+  || fail "H: one BLOCKED row in orphan-reports.ndjson" "$(cat "$ORPH" 2>/dev/null)"
+FLEET_ORPHAN_ALERT_CMD="$WORK/alert" bash "$BIN/fleet-report-parent.sh" -L "$L" --win "$wk" --state blocked --summary 'needs a token' >/dev/null 2>&1
+ok; [ "$(grep -c . "$ORPH"):$(grep -c child-report "$WORK/alerted" 2>/dev/null)" = 1:1 ] || fail "H: a repeat files nothing, alerts once" "$(cat "$ORPH" "$WORK/alerted" 2>/dev/null)"
+wn=$(tf new-window -d -P -F '#{window_id}' -n kid3 -c "$WORK" 'while :; do sleep 300; done')
+tf set-window-option -t "$wn" @issue 103
+tf set-window-option -t "$wn" @repo acme/app
+FLEET_ORPHAN_ALERT_CMD="$WORK/alert" bash "$BIN/fleet-report-parent.sh" -L "$L" --win "$wn" --state blocked --summary x >/dev/null 2>&1
+ok; [ "$(grep -c . "$ORPH")" = 1 ] || fail "H: a hub-spawned child files nothing" "$(cat "$ORPH")"
 
 if [ "$FAIL" -gt 0 ]; then
   printf 'orchestrator-parent selftest: %d of %d checks FAILED\n' "$FAIL" "$CHECKS" >&2
