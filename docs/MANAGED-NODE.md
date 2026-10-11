@@ -594,7 +594,7 @@ BREAK-IT 行 `service-handwritten`。只点名接管过的登录（`logins/<登�
 
 - **每 5 分钟报一次**：整机节点程序（`ccquota agent --machine`）在心跳之外、自己的 goroutine 里跑
   `fleet-node-supervisor.py entry reach`——一次报不上、路由器不回答，都不耽误一拍心跳。它读入口有没有在听、入口端口的
-  主机公钥、本机的全局 IPv6（不报隧道 / 网桥上的、临时的、废弃的）和私网 IPv4（只用来写「转发到哪个内网地址」），
+  主机公钥、本机的全局 IPv6（不报隧道 / 网桥上的、临时的、废弃的）和私网 IPv4（只用来写「转发到哪个内网地址」——默认路由那块网卡的排第一，有线 en0 与 Wi-Fi en1 都在时写的是 en0 的），
   `FLEET_ENTRY_PORTMAP=auto`（默认，machine.env 或环境）时先用 NAT-PMP、不行再用 UPnP 请路由器把入口端口转出去
   （租期 2 小时，每次报时续上；UPnP 只取应答路由器自己私网地址上的描述）；`off` 不碰路由器。没人以这台为家（没在听）就不请路由器。
 - **入口从外面敲门**：机器 token `POST /v1/node/entry-reach`。公网 IPv4 不由机器说——是入口看到这次报告从哪来

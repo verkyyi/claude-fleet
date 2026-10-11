@@ -95,6 +95,7 @@ FLEET_ENTRY_PORTMAP                knob: auto (NAT-PMP, then UPnP) | off — whe
 FLEET_ENTRY_REACH_SECS             knob: how long `entry reach` waits for the hub's dials (30 s) (#3072)
 FLEET_ENTRY_IFADDRS                seam: a file of `<if> <addr>/<plen> [flag …]` lines `entry reach` reads instead of ifconfig / ip (#3072)
 FLEET_ENTRY_GATEWAY                seam: the default gateway `entry reach` asks over NAT-PMP, instead of the route table (#3072)
+FLEET_ENTRY_DEFAULT_IF             seam: the default route's interface `entry reach` puts first, instead of the route table (#3072)
 FLEET_ENTRY_NATPMP_PORT            seam: the NAT-PMP port (5351) — a fake router in the selftests (#3072)
 FLEET_ENTRY_SSDP                   seam: off = no UPnP discovery in `entry reach` (#3072)
 FLEET_ENTRY_SSDP_ADDR              seam: the SSDP address (239.255.255.250) — a fake router in the selftests (#3072)

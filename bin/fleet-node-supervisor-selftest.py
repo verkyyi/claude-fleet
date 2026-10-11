@@ -55,7 +55,8 @@ FLEET_NODE_* seams; nothing touches /Library, /var or a real login.
      directory); the switch from the environment or machine.env; only a plain
      public key becomes a keys-file line; the config is 共同约定 2 line for line
   S  can the outside reach the entry port (#3072): `entry reach` posts the port, its
-     host key, the global IPv6 (never a tunnel's, a temporary one) and the router's
+     host key, the global IPv6 (never a tunnel's, a temporary one), the LAN IPv4 with
+     the default route's interface first (wired en0, not Wi-Fi), and the router's
      answer to the hub, writes reach.json 0644; the doctor's `public` row says
      连得上 / 连不上 + why (carrier NAT, the port to forward to which LAN address); a
      router that never answers or refuses costs seconds, never the report; the hub
@@ -2305,7 +2306,8 @@ class S_EntryReach(Sandbox):
         fns.write_json(os.path.join(db, "state.json"), {"children": {"entry": {"pid": self.sshd.pid}}})
         ifs = os.path.join(self.d, "ifaddrs")
         with open(ifs, "w") as f:
-            f.write("en0 192.168.1.249/24\nen0 2408:8207:1:2::9/64 autoconf secured\n"
+            # Wi-Fi listed first: the hint must still name the default route's (wired) address
+            f.write("en1 192.168.1.200/24\nen0 192.168.1.249/24\nen0 2408:8207:1:2::9/64 autoconf secured\n"
                     "en0 2408:8207:1:2:abcd::1/64 autoconf temporary\nen0 fe80::1/64\n"
                     "utun3 100.101.1.2/32\nutun3 fd7a:115c::1/48\nlo0 127.0.0.1/8\n")
         # a router that answers NAT-PMP from 127.0.0.1
@@ -2327,7 +2329,7 @@ class S_EntryReach(Sandbox):
                     ip_ = struct.unpack("!H", data[4:6])[0]
                     self.router.sendto(struct.pack("!BBHIHHI", 0, 130, 0, 1, ip_, ip_, 7200), src)
         threading.Thread(target=serve, daemon=True).start()
-        self.env.update(FLEET_ENTRY_IFADDRS=ifs, FLEET_ENTRY_GATEWAY="127.0.0.1",
+        self.env.update(FLEET_ENTRY_IFADDRS=ifs, FLEET_ENTRY_GATEWAY="127.0.0.1", FLEET_ENTRY_DEFAULT_IF="en0",
                         FLEET_ENTRY_NATPMP_PORT=str(self.router.getsockname()[1]), FLEET_ENTRY_SSDP="off")
 
     def tearDown(self):
@@ -2358,7 +2360,7 @@ class S_EntryReach(Sandbox):
         self.assertEqual((b["port"], b["listening"]), (22022, True))
         self.assertTrue(b["host_key"].startswith("ssh-ed25519 AAAA") and "root@" not in b["host_key"], b["host_key"])
         self.assertEqual(b["v6"], ["2408:8207:1:2::9"], "a tunnel's, a temporary or a link-local IPv6 was reported")
-        self.assertEqual(b["lan"], ["192.168.1.249"])
+        self.assertEqual(b["lan"], ["192.168.1.249", "192.168.1.200"], "the default route's interface goes first")
         self.assertEqual(b["portmap"], {"method": "natpmp", "external_ip": "100.77.0.3", "external_port": 22022})
         f = os.path.join(self.d, "db", "entry", "reach.json")
         self.assertEqual(os.stat(f).st_mode & 0o777, 0o644)

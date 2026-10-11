@@ -4278,9 +4278,10 @@ def entry_ifaddrs():
     return out
 
 
-def entry_addrs(ifaddrs):
+def entry_addrs(ifaddrs, default_if=""):
     """(lan IPv4 list, global IPv6 list) a home is reached on — never a tunnel's,
-    a bridge's, a temporary or deprecated IPv6."""
+    a bridge's, a temporary or deprecated IPv6. The default route's interface goes
+    first: the router forwards to THAT address (mini2's wired en0, never the Wi-Fi's)."""
     import ipaddress
     lan, v6 = [], []
     cg = ipaddress.ip_network("100.64.0.0/10")
@@ -4297,31 +4298,46 @@ def entry_addrs(ifaddrs):
         elif ip.is_global and not (flags & {"temporary", "deprecated", "tentative", "dadfailed", "detached"}) \
                 and a not in v6:
             v6.append(a)
+    if default_if:
+        on = set(a for ifn, a, _p, _f in ifaddrs if ifn == default_if)
+        lan.sort(key=lambda a: a not in on)
+        v6.sort(key=lambda a: a not in on)
     return lan[:4], v6[:4]
 
 
-def entry_gateway():
-    seam = os.environ.get("FLEET_ENTRY_GATEWAY")
-    if seam is not None:
-        return seam
+def entry_default_route():
+    """(gateway IPv4, interface) of the default route — ("", "") when there is none.
+    FLEET_ENTRY_GATEWAY / FLEET_ENTRY_DEFAULT_IF are the selftests' seams."""
+    gw, ifn = os.environ.get("FLEET_ENTRY_GATEWAY"), os.environ.get("FLEET_ENTRY_DEFAULT_IF")
+    if gw is not None or ifn is not None:
+        return gw or "", ifn or ""
     if sys.platform == "darwin":
         try:
             txt = subprocess.check_output(["/sbin/route", "-n", "get", "default"], stderr=subprocess.DEVNULL,
                                           timeout=5).decode("utf-8", "replace")
         except (OSError, subprocess.SubprocessError):
-            return ""
-        m = re.search(r"gateway:\s*(\d+\.\d+\.\d+\.\d+)", txt)
-        return m.group(1) if m else ""
+            return "", ""
+        g = re.search(r"gateway:\s*(\d+\.\d+\.\d+\.\d+)", txt)
+        i = re.search(r"interface:\s*(\S+)", txt)
+        return (g.group(1) if g else ""), (i.group(1) if i else "")
     try:
+        best = None
         for ln in open("/proc/net/route").read().splitlines()[1:]:
             f = ln.split()
-            if len(f) > 2 and f[1] == "00000000" and f[2] != "00000000":
-                import socket
-                import struct
-                return socket.inet_ntoa(struct.pack("<I", int(f[2], 16)))
+            if len(f) > 6 and f[1] == "00000000" and f[2] != "00000000":
+                if best is None or int(f[6]) < int(best[6]):
+                    best = f
+        if best:
+            import socket
+            import struct
+            return socket.inet_ntoa(struct.pack("<I", int(best[2], 16))), best[0]
     except (IOError, OSError, ValueError):
         pass
-    return ""
+    return "", ""
+
+
+def entry_gateway():
+    return entry_default_route()[0]
 
 
 def entry_natpmp(gw, port):
@@ -4457,10 +4473,11 @@ def entry_upnp(lan, port):
     return out
 
 
-def entry_portmap(lan, port):
+def entry_portmap(lan, port, gw=None):
     """FLEET_ENTRY_PORTMAP (environment, else machine.env): auto (default) tries
     NAT-PMP, then UPnP; off asks no router."""
-    gw = entry_gateway()
+    if gw is None:
+        gw = entry_gateway()
     tried = []
     if gw:
         r = entry_natpmp(gw, port)
@@ -4486,13 +4503,14 @@ def entry_reach(paths):
     book = read_json(ep.book, {}) or {}
     cs = (read_json(paths.state_file, {}).get("children") or {}).get("entry") or {}
     listening = bool(book.get("allow")) and pid_alive(cs.get("pid"))
-    lan, v6 = entry_addrs(entry_ifaddrs())
+    gw, default_if = entry_default_route()
+    lan, v6 = entry_addrs(entry_ifaddrs(), default_if)
     hostkey = " ".join((_entry_read(ep.hostkey + ".pub") or "").split()[:2])
     rep = {"port": port, "host_key": hostkey, "listening": listening, "v6": v6, "lan": lan}
     mode = os.environ.get("FLEET_ENTRY_PORTMAP") or me.get("FLEET_ENTRY_PORTMAP") or "auto"
     if listening and mode != "off":
-        rep["portmap"] = entry_portmap(lan, port)
-    out = {"at": now(), "port": port, "listening": listening, "lan": lan, "v6": v6,
+        rep["portmap"] = entry_portmap(lan, port, gw)
+    out = {"at": now(), "port": port, "listening": listening, "lan": lan, "v6": v6, "default_if": default_if,
            "portmap": rep.get("portmap"), "portmap_mode": mode, "verdict": None, "error": ""}
     hub, token = (me.get("CCQUOTA_HUB_URL") or "").rstrip("/"), me.get("CCQUOTA_TOKEN") or ""
     if not hub or not token:
