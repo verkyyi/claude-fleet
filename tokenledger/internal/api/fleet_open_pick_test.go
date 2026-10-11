@@ -115,3 +115,45 @@ func TestOpenPickPrefersAMachineThatOpenedOne(t *testing.T) {
 		t.Fatalf("picked %q; want m5, which has opened a login", got)
 	}
 }
+
+// claude-fleet#3312: C9's 24th drill — the hub opened the newcomer's login on
+// fleet-linux-0, whose egress is CN, and the login's first lease was refused
+// compute_off. A create asks placement's compute rule of the machine's probe:
+// a region the providers do not serve is never a candidate, the Mac is.
+func TestOpenPickSkipsAMachineWhoseRegionClosesCompute(t *testing.T) {
+	h, lin := openPickRig(t)
+	setHubSetting(t, h.srv, trustKey("fleet-linux-0"), TrustTrusted)
+	cn := &control.NodeProbe{Loc: "CN", Anthropic: control.ProbeUnsupportedRegion, Verdict: control.ProbeUnsupportedRegion, TS: time.Now()}
+	// The machine link says it; the login it carries is compute on, no probe.
+	lin.beat("", control.Heartbeat{OS: "linux", Hostname: "fleet-linux-0", OSUser: "root", NCPU: 4, Probe: cn, ObservedAt: time.Now()})
+	waitFor(t, 3*time.Second, "fleet-linux-0 dropped for its region", func() bool {
+		return h.srv.leastBusyMachine(time.Now()) == ""
+	})
+	mac := connectNode(t, h, "mini2-op", "mini2", "verkyyi", true)
+	beat(t, mac.c, control.Proto, control.Heartbeat{Hostname: "mini2", OSUser: "verkyyi", Sessions: 3, NCPU: 10, Load1: 3.05,
+		Probe: &control.NodeProbe{Loc: "US", Verdict: control.ProbeOK, TS: time.Now()}})
+	waitFor(t, 3*time.Second, "mini2 picked over the CN machine", func() bool {
+		return h.srv.leastBusyMachine(time.Now()) == "mini2"
+	})
+	// Even unloaded and idle, the CN machine stays out.
+	lin.beat("", control.Heartbeat{OS: "linux", Hostname: "fleet-linux-0", OSUser: "root", NCPU: 4, Probe: cn, ObservedAt: time.Now()})
+	if got := h.srv.leastBusyMachine(time.Now(), "mini2"); got != "" {
+		t.Fatalf("with mini2 skipped the pick is %q, want none (fleet-linux-0's egress is CN)", got)
+	}
+}
+
+// A login's own probe says it just as well (an older machine with no link).
+func TestNewLoginComputeReadsTheNewestProbe(t *testing.T) {
+	now := time.Now()
+	snap := NodesSnapshot{Nodes: []NodeView{
+		{Hostname: "box", Status: "online", Probe: &control.NodeProbe{Verdict: control.ProbeOK, TS: now.Add(-time.Hour)}},
+		{Hostname: "box", Status: "online", Probe: &control.NodeProbe{Loc: "CN", Verdict: control.ProbeUnsupportedRegion, TS: now}},
+		{Hostname: "other", Status: "online"},
+	}}
+	if cv := newLoginCompute(snap, "box", nil, now); !cv.Off {
+		t.Fatalf("box: %+v, want off for its CN egress", cv)
+	}
+	if cv := newLoginCompute(snap, "other", nil, now); cv.Off {
+		t.Fatalf("other (no probe): %+v, want open", cv)
+	}
+}
