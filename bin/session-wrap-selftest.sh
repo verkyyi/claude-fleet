@@ -11,6 +11,11 @@
 #      fast launch failure return the status with no page (and stamps @wrap_gone);
 #      a launch the LAUNCHER refused (@launch_refused, #2404) stops on the page
 #      even the first time, ↵ retrying it; q → session-end-hook --recycle
+#   X  the end line's countdown (issue #3170): after the person's own exit it says
+#      「N 秒后关闭 · 按任意键取消」 and at 0 recycles like q (a Codex window too,
+#      and on the plain prompt when the page is broken); a key cancels it and the
+#      window waits as before; FLEET_EXIT_CLOSE_SECS=0 (in fleet.conf) never counts;
+#      a crash and the orchestrator never count
 #   B' the worker credential (issue #1809): with fleet-mcp.py beside it the wrapper
 #      hands the launch a FLEET_WORKER_CRED that verifies, for this window's
 #      @fleet_id, and revokes it when the agent exits; without it (every leg
@@ -118,7 +123,7 @@ chmod +x "$WORK/wbin/session-end-hook.sh" "$WORK/fake-launch"
 # win <name> <fast-fail secs> — a window running the wrapper as the spawners do.
 win() {
   mkdir -p "$WORK/$1"; : > "$WORK/$1/argv"
-  local cmd="env CTL='$WORK/$1' FLEET_WRAP_LAUNCH='$WORK/fake-launch' FLEET_WRAP_FAST_FAIL=$2 FLEET_UI_LANG=zh"
+  local cmd="env CTL='$WORK/$1' FLEET_WRAP_LAUNCH='$WORK/fake-launch' FLEET_WRAP_FAST_FAIL=$2 FLEET_UI_LANG=zh ${WRAP_ENV:-FLEET_EXIT_CLOSE_SECS=0}"
   cmd="$cmd '$WORK/wbin/fleet-session-wrap.sh' --agent claude 'the seed prompt'; echo WRAP_RC=\$?; exec sleep 600"
   if tf has-session -t sw 2>/dev/null; then tf new-window -d -t sw: -n "$1" "$cmd"
   else tf -f /dev/null new-session -d -s sw -n "$1" -x 100 -y 30 "$cmd" || fail "cannot start the isolated tmux server"; fi
@@ -127,6 +132,7 @@ o() { tf display-message -p -t "sw:$1" "#{$2}" 2>/dev/null; }
 launches() { [ "$(grep -c . "$WORK/$1/argv")" = "$2" ]; }
 state_is() { [ "$(o "$1" @claude_state)" = "$2" ]; }
 screen_has() { tf capture-pane -p -t "sw:$1" | grep -qF -- "$2"; }
+eq_recycles() { [ "$(cat "$WORK/recycled" 2>/dev/null | grep -c .)" = "$1" ]; }
 
 win w 0
 waitfor "w: first launch" launches w 1
@@ -194,6 +200,57 @@ waitfor "q: session-end-hook --recycle was asked" grep -sqx -- '--recycle' "$WOR
 waitfor "q: the wrapper returned 0" screen_has q 'WRAP_RC=0'
 eq "q: recycled windows read done" "done" "$(o q @claude_state)"
 
+# X (issue #3170): the countdown after the person's own exit.
+recycles() { cat "$WORK/recycled" 2>/dev/null | grep -c .; }
+# at 0 it recycles like q — a Codex window as well as a Claude one
+r0=$(recycles)
+WRAP_ENV=FLEET_EXIT_CLOSE_SECS=2 win xa 0
+waitfor "xa: first launch" launches xa 1
+tf set-option -w -t sw:xa @cc_agent codex; tf set-option -w -t sw:xa @codex_session_id CX-1
+printf rc0 > "$WORK/xa/mode"; : > "$WORK/xa/go"
+waitfor "xa: the line counts down" screen_has xa '秒后关闭 · 按任意键取消'
+waitfor "xa: at 0 session-end-hook --recycle was asked" eq_recycles $((r0 + 1))
+waitfor "xa: the wrapper returned 0" screen_has xa 'WRAP_RC=0'
+eq "xa: auto-closed windows read done" "done" "$(o xa @claude_state)"
+eq "xa: the countdown never relaunched" 1 "$(grep -c . "$WORK/xa/argv")"
+# a key cancels it: the window waits, and ↵ still resumes
+r0=$(recycles)
+WRAP_ENV=FLEET_EXIT_CLOSE_SECS=2 win xk 0
+waitfor "xk: first launch" launches xk 1
+printf rc0 > "$WORK/xk/mode"; : > "$WORK/xk/go"
+waitfor "xk: the line counts down" screen_has xk '秒后关闭'
+tf send-keys -t sw:xk x
+waitfor "xk: a key took the countdown off the line" eval '! screen_has xk 秒后关闭'
+sleep 3
+eq "xk: cancelled — nothing recycled" "$r0" "$(recycles)"
+eq "xk: the window still waits" exited "$(o xk @claude_state)"
+tf send-keys -t sw:xk Enter
+waitfor "xk: ↵ after the cancel resumes" launches xk 2
+eq "xk: the same conversation" "--agent claude --resume SID-1" "$(sed -n 2p "$WORK/xk/argv")"
+# 0 in fleet.conf: no countdown (the environment says nothing)
+mkdir -p "$WORK/xzconf"; printf 'FLEET_EXIT_CLOSE_SECS=0\n' > "$WORK/xzconf/fleet.conf"
+WRAP_ENV="FLEET_CONF_DIR=$WORK/xzconf" win xz 0
+waitfor "xz: first launch" launches xz 1
+printf rc0 > "$WORK/xz/mode"; : > "$WORK/xz/go"
+waitfor "xz: the line is drawn" screen_has xz '会话已结束 · ↵ 重开'
+sleep 2
+CHECKS=$((CHECKS + 1)); screen_has xz '秒后关闭' && fail "xz: FLEET_EXIT_CLOSE_SECS=0 still counted down"
+eq "xz: nothing recycled" "$r0" "$(recycles)"
+# a crash, and the orchestrator's own exit: never
+WRAP_ENV=FLEET_EXIT_CLOSE_SECS=1 win xc 0
+waitfor "xc: first launch" launches xc 1
+printf kill > "$WORK/xc/mode"; : > "$WORK/xc/go"
+waitfor "xc: the crash line" screen_has xc '会话意外退出'
+WRAP_ENV=FLEET_EXIT_CLOSE_SECS=1 win xo 0
+waitfor "xo: first launch" launches xo 1
+tf set-option -w -t sw:xo @fleet_role orchestrator
+printf rc0 > "$WORK/xo/mode"; : > "$WORK/xo/go"
+waitfor "xo: the line is drawn" screen_has xo '会话已结束'
+sleep 2
+CHECKS=$((CHECKS + 1)); screen_has xc '秒后关闭' && fail "xc: a crash counted down"
+CHECKS=$((CHECKS + 1)); screen_has xo '秒后关闭' && fail "xo: the orchestrator counted down"
+eq "xc/xo: nothing recycled" "$r0" "$(recycles)"
+
 # U (issue #1842 ①): commits on no remote are counted on the page.
 git init -q --bare "$WORK/u-origin.git"
 git init -q "$WORK/u"; git -C "$WORK/u" config user.email t@t; git -C "$WORK/u" config user.name t
@@ -201,7 +258,7 @@ git -C "$WORK/u" commit -q --allow-empty -m seed; git -C "$WORK/u" checkout -qb 
 git -C "$WORK/u" remote add origin "$WORK/u-origin.git"; git -C "$WORK/u" push -q origin issue-7 2>/dev/null
 git -C "$WORK/u" commit -q --allow-empty -m one; git -C "$WORK/u" commit -q --allow-empty -m two
 mkdir -p "$WORK/uc"; : > "$WORK/uc/argv"
-tf new-window -d -t sw: -n u -c "$WORK/u" "env CTL='$WORK/uc' FLEET_WRAP_LAUNCH='$WORK/fake-launch' FLEET_WRAP_FAST_FAIL=0 FLEET_UI_LANG=zh '$WORK/wbin/fleet-session-wrap.sh' --agent claude; exec sleep 600"
+tf new-window -d -t sw: -n u -c "$WORK/u" "env CTL='$WORK/uc' FLEET_WRAP_LAUNCH='$WORK/fake-launch' FLEET_WRAP_FAST_FAIL=0 FLEET_UI_LANG=zh FLEET_EXIT_CLOSE_SECS=0 '$WORK/wbin/fleet-session-wrap.sh' --agent claude; exec sleep 600"
 waitfor "u: first launch" launches uc 1
 printf rc0 > "$WORK/uc/mode"; : > "$WORK/uc/go"
 waitfor "u: the page counts the unpushed commits" screen_has u '未推送：2 个提交（分支 issue-7）'
@@ -212,7 +269,7 @@ for f in fleet-session-wrap.sh fleet_sleep_park.py; do ln -s "$BIN/$f" "$WORK/pb
 printf 'import sys\nraise SystemExit(1)\n' > "$WORK/pbin/fleet-session-page.py"
 ln -s "$WORK/wbin/session-end-hook.sh" "$WORK/pbin/session-end-hook.sh"
 mkdir -p "$WORK/pc"; : > "$WORK/pc/argv"
-tf new-window -d -t sw: -n p "env CTL='$WORK/pc' FLEET_WRAP_LAUNCH='$WORK/fake-launch' FLEET_WRAP_FAST_FAIL=0 FLEET_UI_LANG=zh '$WORK/pbin/fleet-session-wrap.sh' --agent claude; echo WRAP_RC=\$?; exec sleep 600"
+tf new-window -d -t sw: -n p "env CTL='$WORK/pc' FLEET_WRAP_LAUNCH='$WORK/fake-launch' FLEET_WRAP_FAST_FAIL=0 FLEET_UI_LANG=zh FLEET_EXIT_CLOSE_SECS=0 '$WORK/pbin/fleet-session-wrap.sh' --agent claude; echo WRAP_RC=\$?; exec sleep 600"
 waitfor "p: first launch" launches pc 1
 printf rc0 > "$WORK/pc/mode"; : > "$WORK/pc/go"
 waitfor "p: a broken page falls to the plain prompt" screen_has p '会话已结束 · ↵ 重开'
@@ -220,6 +277,16 @@ CHECKS=$((CHECKS + 1)); screen_has p 'WRAP_RC=' && fail "p: a broken page closed
 tf send-keys -t sw:p Enter
 waitfor "p: ↵ on the plain prompt resumes" launches pc 2
 eq "p: the same conversation" "--agent claude --resume SID-1" "$(sed -n 2p "$WORK/pc/argv")"
+
+# X on the plain prompt (a broken page): it counts down too, and at 0 recycles.
+r0=$(recycles)
+mkdir -p "$WORK/pac"; : > "$WORK/pac/argv"
+tf new-window -d -t sw: -n pa "env CTL='$WORK/pac' FLEET_WRAP_LAUNCH='$WORK/fake-launch' FLEET_WRAP_FAST_FAIL=0 FLEET_UI_LANG=zh FLEET_EXIT_CLOSE_SECS=2 '$WORK/pbin/fleet-session-wrap.sh' --agent claude; echo WRAP_RC=\$?; exec sleep 600"
+waitfor "pa: first launch" launches pac 1
+printf rc0 > "$WORK/pac/mode"; : > "$WORK/pac/go"
+waitfor "pa: the plain prompt counts down" screen_has pa '秒后关闭 · 按任意键取消'
+waitfor "pa: at 0 the plain prompt recycles" eq_recycles $((r0 + 1))
+waitfor "pa: the wrapper returned 0" screen_has pa 'WRAP_RC=0'
 
 # B': the worker credential (issue #1809) — minted per launch, revoked on exit.
 mkdir -p "$WORK/kbin" "$WORK/kconf"
@@ -235,7 +302,7 @@ EOF
 chmod +x "$WORK/cred-launch"
 mkdir -p "$WORK/k"
 tf new-window -d -t sw: -n k "env CTL='$WORK/k' FLEET_WRAP_LAUNCH='$WORK/cred-launch' FLEET_WRAP_FAST_FAIL=0 \
-  FLEET_CONF_DIR='$WORK/kconf' FLEET_CRED_FID_WAIT=0 '$WORK/kbin/fleet-session-wrap.sh' --agent claude; echo WRAP_RC=\$?; exec sleep 600"
+  FLEET_CONF_DIR='$WORK/kconf' FLEET_EXIT_CLOSE_SECS=0 FLEET_CRED_FID_WAIT=0 '$WORK/kbin/fleet-session-wrap.sh' --agent claude; echo WRAP_RC=\$?; exec sleep 600"
 waitfor "k: the launch ran" test -s "$WORK/k/had"
 eq "k: the launch has FLEET_WORKER_CRED" set "$(cat "$WORK/k/had")"
 waitfor "k: the credential was checked" test -s "$WORK/k/claims"
@@ -269,7 +336,7 @@ chmod +x "$WORK/sid-launch"
 for sw in 0 1; do
   mkdir -p "$WORK/x$sw" "$WORK/xconf$sw"
   tf new-window -d -t sw: -n "x$sw" "env CTL='$WORK/x$sw' FLEET_WRAP_LAUNCH='$WORK/sid-launch' FLEET_WRAP_FAST_FAIL=0 \
-    FLEET_CONF_DIR='$WORK/xconf$sw' FLEET_CRED_PROXY=$sw FLEET_MCP=0 '$WORK/xbin/fleet-session-wrap.sh' --agent claude; echo WRAP_RC=\$?; exec sleep 600"
+    FLEET_CONF_DIR='$WORK/xconf$sw' FLEET_EXIT_CLOSE_SECS=0 FLEET_CRED_PROXY=$sw FLEET_MCP=0 '$WORK/xbin/fleet-session-wrap.sh' --agent claude; echo WRAP_RC=\$?; exec sleep 600"
   waitfor "x$sw: the launch ran" test -s "$WORK/x$sw/sid"
 done
 eq "x0: switched off — no FLEET_CRED_SID, no @cred_sid" "sid= opt=" "$(tr '\n' ' ' < "$WORK/x0/sid" | sed 's/ $//')"
