@@ -3134,19 +3134,25 @@ fleet_reap_ok() {
   local wtdir="${1:-}" root="${2:-}" branch="${3:-}" head="${4:-}" base="${5:-}" merged="${6:-}"
   # $7 (optional, issue #1542): the merged PR's epoch — the probe waives the
   # young-agent / `looping` gates for an agent alive at that merge (#1329, #1356).
-  local merged_at="${7:-}"
+  # $8 (optional, issue #3352): the window being reaped, which its caller has
+  # checked itself — its own panes are not «another live window». The live
+  # window the probe found, and why, goes to stderr as `reap: in use: …`.
+  local merged_at="${7:-}" self_win="${8:-}"
   case "$merged_at" in ''|0|*[!0-9]*) merged_at="" ;; esac
+  case "$self_win" in @[0-9]*) ;; *) self_win="" ;; esac
   # Liveness precedes Git eligibility (#565). Scan the registered fleet sockets
   # using bound worktrees and every pane cwd; a failed probe is never permission
   # to remove data. Callers retain their additional identity/rotation guards.
-  local _reap_sockets _reap_bin
+  local _reap_sockets _reap_bin _reap_why
   if [ -n "$wtdir" ]; then
     _reap_sockets=$(fleet_sockets)
     if [ -n "$_reap_sockets" ]; then
       _reap_bin="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
-      if ! FLEET_REAP_MIN_AGE="${FLEET_REAP_MIN_AGE:-300}" \
+      if ! _reap_why=$(FLEET_REAP_MIN_AGE="${FLEET_REAP_MIN_AGE:-300}" \
         python3 "$_reap_bin/fleet-reap-live.py" --worktree "$wtdir" \
-          --socket-names "$_reap_sockets" ${merged_at:+--merged-at "$merged_at"} >/dev/null 2>&1; then
+          --socket-names "$_reap_sockets" ${merged_at:+--merged-at "$merged_at"} \
+          ${self_win:+--exclude-window "$self_win"} 2>/dev/null); then
+        printf 'reap: in use: %s\n' "${_reap_why:-probe unavailable}" >&2
         printf 'live'; return 1
       fi
     fi
@@ -3472,6 +3478,49 @@ fleet_wt_window() {
           -F '#{window_id} #{@claude_state}' 2>/dev/null \
        | awk -v w="$wid" '$1 == w { print $2; exit }')
   printf '%s\t%s' "$wid" "${st:--}"
+}
+
+# fleet_wt_helpers_close <sess> <worktree> <reaped window> — close the HELPER
+# windows a reaped session leaves in its worktree (issue #3352): a shell or a view
+# someone opened beside the agent, every pane of it inside <worktree>, bound to no
+# session of its own (no @issue but the reaped one's, no @raw, no @worktree
+# elsewhere, not home / a panel) and not live by fleet-reap-live.py (no agent
+# under it). Each is retired first (fleet_win_retire — the fleet's close, never one
+# restore pulls back) and killed; prints `helper:<id>` per window closed. The
+# reaped window's own extra panes go with its kill-window; this is the rest.
+fleet_wt_helpers_close() {
+  local sess="${1:-}" dir="${2:-}" keep="${3:-}" wid ok iss raw wt role name kissue
+  [ -n "$sess" ] && [ -n "$dir" ] || return 0
+  dir="${dir%/}"
+  kissue=$(_fleet_tmux "$sess" show-options -wqv -t "$keep" @issue 2>/dev/null)
+  _fleet_tmux "$sess" list-panes -s -t "$sess" -F '#{window_id} #{pane_current_path}' 2>/dev/null \
+    | awk -v d="$dir" '{ w=$1; p=$0; sub(/^[^ ]* /, "", p)
+                         if (!(w in seen)) { seen[w]=1; order[++n]=w; inside[w]=1 }
+                         if (!(p == d || index(p, d "/") == 1)) inside[w]=0 }
+                       END { for (i=1; i<=n; i++) if (inside[order[i]]) print order[i] }' \
+    | while read -r wid; do
+        [ -n "$wid" ] && [ "$wid" != "$keep" ] || continue
+        IFS='|' read -r iss raw wt role name <<EOF
+$(_fleet_tmux "$sess" display-message -p -t "$wid" '#{@issue}|#{@raw}|#{@worktree}|#{@fleet_role}|#{window_name}' 2>/dev/null)
+EOF
+        [ -z "$iss" ] || [ "$iss" = "$kissue" ] || continue
+        [ "$raw" != 1 ] || continue
+        [ -z "$wt" ] || [ "${wt%/}" = "$dir" ] || continue
+        case "$role" in home|panel) continue ;; esac
+        case "$name" in dash|plan|backlog|home) continue ;; esac
+        ok=1
+        if [ -n "${TMUX:-}" ]; then
+          python3 "$(dirname "${BASH_SOURCE[0]:-$0}")/fleet-reap-live.py" "$wid" >/dev/null 2>&1 || ok=0
+        else
+          python3 "$(dirname "${BASH_SOURCE[0]:-$0}")/fleet-reap-live.py" "$wid" \
+            --socket-name "$(fleet_socket "$sess")" >/dev/null 2>&1 || ok=0
+        fi
+        [ "$ok" = 1 ] || continue
+        if [ -n "${TMUX:-}" ]; then fleet_win_retire "$wid"
+        else fleet_win_retire "$wid" "$(fleet_socket "$sess")"; fi
+        _fleet_tmux "$sess" kill-window -t "$wid" 2>/dev/null && printf 'helper:%s\n' "$wid"
+      done
+  return 0
 }
 
 # fleet_pid_alive <pid> — has this process NOT exited? `kill -0` alone answers

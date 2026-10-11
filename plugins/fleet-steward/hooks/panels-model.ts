@@ -121,6 +121,7 @@ export const EMPTY_PATROL: Patrol = {
   beat: 0, at: '', changed: false, writes: 0, nextAt: 0, card: [], modelCalls: 0,
   parked: [], newAsks: 0, closed: 0, defaulted: 0,
   drivers: 0, openRows: 0, events: 0, bySteward: 0, byDefault: 0, groups: 0, health: 0, healthTop: '', deferred: 0, page: '',
+  overdue: 0, overdueStuck: 0, overdueTop: '',
 }
 
 export type StateView = { sheet: Sheet | null; groups: SheetGroup[]; todo: Todo; patrol: Patrol }
@@ -156,6 +157,7 @@ export function parseState(text: string): StateView {
   const open = sheet?.rows.filter(r => r.state === 'open') ?? []
   const groups = new Set(open.map(r => str(obj(rows[r.id]).group) || r.id)).size
   const hl = health(obj(d.health))
+  const od = obj(d.reap_overdue)
   return {
     sheet,
     groups: arr(d.groups).map(sheetGroup).filter((g): g is SheetGroup => g !== null),
@@ -179,6 +181,9 @@ export function parseState(text: string): StateView {
       healthTop: hl.top,
       deferred: arr(d.deferred).length,
       page: str(obj(d.page).url),
+      overdue: num(od.n),
+      overdueStuck: num(od.stuck),
+      overdueTop: str(od.top),
     },
   }
 }

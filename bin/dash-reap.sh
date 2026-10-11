@@ -262,6 +262,9 @@ reap_full() {
   # network `gh issue` settle + `git worktree remove`). This whole function already
   # runs backgrounded (fleet_bg / run-shell -b, #304), so it never blocks the bind.
   reap_kill
+  # A shell / view left in its worktree goes with it (issue #3352) — only on the
+  # full reap; a kept (dirty) worktree keeps whoever is still in it.
+  [ -z "$wtdir" ] || fleet_wt_helpers_close "${FLEET_SESSION:-}" "$wtdir" "$target" >&2
   reap_record                                          # index it BEFORE the remove (#471)
   if [ -n "$wtdir" ] && [ -n "$MAIN" ]; then
     # Reap any detached process anchored to this worktree first (issue #151) — a
@@ -481,7 +484,9 @@ if [ "$(tmux display-message -t "$target" -p '#{@raw}' 2>/dev/null)" = 1 ]; then
     || git -C "$MAIN" rev-parse --verify -q "$SBASE" 2>/dev/null)"
   SMERGED=""
   command -v gh >/dev/null 2>&1 && SMERGED="$(fleet_gh_merged_heads "${FLEET_REPO:-}" "$sbranch" --sha 2>/dev/null)"
-  sreason="$(fleet_reap_ok "$swt" "$MAIN" "$sbranch" "$shead" "$SMASTER" "$SMERGED")"
+  # The target was vetted by guard_live above; the worktree probe looks at the
+  # OTHER windows only (issue #3352 — its own panes are not another user).
+  sreason="$(fleet_reap_ok "$swt" "$MAIN" "$sbranch" "$shead" "$SMASTER" "$SMERGED" "" "$target")"
   [ "$sreason" != live ] || { emit skip:live; printf 'reap: another live window uses this worktree\n' >&2; exit 3; }
 
   scratch_remove() {   # remove worktree + branch (reap anchored procs first, #151)
@@ -680,7 +685,9 @@ if [ -n "$MAIN" ]; then
     || git -C "$MAIN" rev-parse --verify -q "$BASE" 2>/dev/null)"
 fi
 
-reason="$(fleet_reap_ok "$wtdir" "$MAIN" "$branch" "$whead" "$MASTER" "$MERGED_PRS" "$MERGED_AT")"
+# guard_live vetted the target; the worktree probe looks at the OTHER windows
+# (issue #3352: the target's own panes are not «another live window»).
+reason="$(fleet_reap_ok "$wtdir" "$MAIN" "$branch" "$whead" "$MASTER" "$MERGED_PRS" "$MERGED_AT" "$target")"
 [ "$reason" != live ] || { emit skip:live; printf 'reap: another live window uses this worktree\n' >&2; exit 3; }
 describe_target "$reason" "$wtdir"
 

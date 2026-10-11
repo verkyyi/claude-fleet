@@ -81,7 +81,7 @@ row), in fleet-quickopen.py's own stack / at / mru shape; beside it `order.json`
 the list's session order as last drawn — ⌘↓ ⌘↑ read it (a press never waits
 ~0.2 s for the row producer) and refresh it in the background after the switch.
 
-WORDS (#2752): no row says `merged` or `done:2h` — the reap policy is
+WORDS (#2752): no row says `merged` or `done:15m` — the reap policy is
 「合并后关」 / 「空闲 2 小时关」, and only on the lit row's line at the foot;
 names are the issue's title as wide as the popup is (the producer's 12-cell name
 when there is none) with no `⇢cla` tag. A state is ONE glyph (#3179: ! needs ·
@@ -1846,7 +1846,7 @@ def other_agent(r):
     return "Claude" if r.get("agent") == "codex" else "Codex"
 
 
-REAP_CHOICES = (("merged", "reap_menu_merged"), ("done:2h", "reap_menu_done_2h"), ("loop-end", "reap_menu_loop_end"),
+REAP_CHOICES = (("merged", "reap_menu_merged"), ("done:15m", "reap_menu_done_15m"), ("loop-end", "reap_menu_loop_end"),
                 ("at", "reap_menu_at"), ("keep", "reap_menu_keep"))
 
 

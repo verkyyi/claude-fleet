@@ -1620,7 +1620,7 @@ try:
     pol_menu = command(['bash', str(bin_dir / 'fleet-reap-policy.sh'), 'menu', 'fleet-test', remote_wid, '', '--print']).stdout
     pol_rows = [l.split('\t') for l in pol_menu.splitlines() if l.count('\t') == 2]
     check(len(pol_rows) == 5 and all('fleet-sidebar-remote.sh' in c and 'reappol' in c and remote_wid in c for _, _, c in pol_rows)
-          and 'FLEET_SIDEBAR_TEXT=done:2h' in pol_rows[1][2] and 'command-prompt' in pol_rows[3][2],
+          and 'FLEET_SIDEBAR_TEXT=done:15m' in pol_rows[1][2] and 'command-prompt' in pol_rows[3][2],
           'the remote reap-policy menu does not send worker_reap_policy picks: %r' % pol_menu)
     # message asks for its text on the line under the session (issues #1620,
     # #1950), not in a popup — and parks it without moving the keyboard to the list
@@ -1732,7 +1732,7 @@ try:
                        env=dict(env_w, FLEET_SIDEBAR_TEXT='done'), text=True, stdin=subprocess.DEVNULL,
                        capture_output=True, timeout=30)
     last = writes.read_text().splitlines()[-1].split('\t')
-    check(r.returncode == 0 and last[0] == 'worker_reap_policy' and _json.loads(last[1]).get('policy') == 'done:2h'
+    check(r.returncode == 0 and last[0] == 'worker_reap_policy' and _json.loads(last[1]).get('policy') == 'done:15m'
           and _json.loads(last[1]).get('worker_id') == F + '/issue-1423',
           'the picked reap policy did not go out as worker_reap_policy: %r %s' % (last, r.stderr))
     subprocess.run(['bash', str(bin_dir / 'fleet-sidebar-remote.sh'), 'reappol', 'fleet-test', remote_wid],

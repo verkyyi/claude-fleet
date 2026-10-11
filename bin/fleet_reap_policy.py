@@ -5,7 +5,7 @@ One window option says when the fleet may close a session on its own:
 
     merged[:<dur>]   after its PR merged (+ the fleet's grace, or <dur>) — the
                      default for an issue session; the historic rule
-    done[:<dur>]     its turn is over and it has sat idle <dur> (default 2h), no
+    done[:<dur>]     its turn is over and it has sat idle <dur> (default 15m), no
                      /loop pending, no background job — a scratch's default
     loop-end         the /loop it was opened with has stopped (then idle 10 min)
     at:<when>        at a moment (ISO-8601 UTC `2026-10-06T18:00:00Z`, or an
@@ -28,7 +28,7 @@ import sys
 import time
 from datetime import datetime, timezone
 
-DONE_DEFAULT = 2 * 3600          # 发起人拍板 7: 草稿闲满 2 小时
+DONE_DEFAULT = 15 * 60           # 发起人 2026-10-11 (issue #3352，取代拍板 7 的 2 小时): 草稿闲满 15 分钟
 LOOP_END_GRACE = 600             # idle after the loop stopped
 DUR_RE = re.compile(r"([1-9][0-9]{0,6})([smhd]?)")
 UNIT = {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}
@@ -103,12 +103,12 @@ def norm(policy):
     if kind == "at":
         return "at:" + iso(val)
     if kind == "done" and ":" not in p:
-        return "done:2h"
+        return "done:15m"
     return p
 
 
 def default(kind):
-    return {"issue": "merged", "scratch": "done:2h", "loop": "loop-end"}.get(kind, "")
+    return {"issue": "merged", "scratch": "done:15m", "loop": "loop-end"}.get(kind, "")
 
 
 def _dur_words(secs, zh):

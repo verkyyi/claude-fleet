@@ -252,7 +252,9 @@ done
 LEGACY="$FLEET_CONF_DIR/restore/legacy.map"
 printf 'FLEET\tlegacy\tacme/widgets\t%s\tmain\n' "$STEW_PATH"                > "$LEGACY"
 printf 'WIN\tissue-42\t%s\twrk-def456\t42\n'      "$WORK_PATH"              >> "$LEGACY"  # legacy 5-field row
-printf 'WIN\tissue-77\t%s\t-\t77\tworking\t-\t-\n' "$WORK_PATH"             >> "$LEGACY"  # working, no transcript
+# its own worktree: two rows naming one worktree reopen once (issue #3352)
+mkdir -p "$WORK/repo-issue-77"
+printf 'WIN\tissue-77\t%s\t-\t77\tworking\t-\t-\n' "$WORK/repo-issue-77"  >> "$LEGACY"  # working, no transcript
 dry2=$(bash "$RESTORE" --dry-run 2>/dev/null)
 rm -f "$LEGACY"
 printf '%s\n' "$dry2" | grep 'issue-42 ' | grep -q 'claude --resume wrk' \
@@ -515,6 +517,20 @@ bash "$RESTORE" >/dev/null 2>&1
 dup=$(tmux list-windows -t hubonly -F '#{window_name}' 2>/dev/null | grep -cxF issue-9)
 [ "$dup" = 1 ] \
   || fail "reconcile: a second restore duplicated the issue-9 window (count: $dup)"
+# --- ONE WORKTREE, ONE WINDOW (issue #3352): a live window the person renamed and
+# that carries no identity is still the session bound to that worktree — restore
+# must not open a second window for it.
+i9wt=$(tmux show-window-options -v -t hubonly:issue-9 @worktree 2>/dev/null)
+[ -n "$i9wt" ] || fail "reconcile: the reopened issue-9 window carries no @worktree"
+tmux rename-window -t hubonly:issue-9 'renamed by the person'
+tmux set-window-option -u -t 'hubonly:renamed by the person' @fleet_id 2>/dev/null
+out=$(bash "$RESTORE" 2>/dev/null)
+n9=$(tmux list-windows -t hubonly -F '#{@worktree}' 2>/dev/null | grep -cxF "$i9wt")
+[ "$n9" = 1 ] \
+  || fail "reconcile: a renamed, identity-less window got a second window for its worktree (count: $n9; $out)"
+printf '%s\n' "$out" | grep -q "a live window already works in $i9wt" \
+  || fail "reconcile: skipping the bound worktree should be said (got: $out)"
+
 for state in working idle 'done'; do
   target="hubonly:renamed-$state"
   [ "$(tmux show-window-options -v -t "$target" @raw)" = 1 ] \
