@@ -93,14 +93,28 @@ GAPS = [
 ]
 
 
+def any_installed(mname):
+    """Claude Code's own installed_plugins.json names a plugin of ours? Only then is
+    `claude plugin list` asked — a Codex launch on a login with none starts no node
+    (and a missing file means none: /plugin writes it on the first install)."""
+    cdir = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
+    try:
+        with open(os.path.join(cdir, "plugins", "installed_plugins.json"), encoding="utf-8") as f:
+            return ("@%s\"" % mname) in f.read()
+    except OSError:
+        return False
+
+
 def plugins(a):
     """[(name, dir)] of this marketplace's plugins installed AND enabled on the
     Claude side, or None when that cannot be told (no marketplace, no claude)."""
     m = PL.market(a.root)
     if m is None:
         return None
-    ours = PL.ours(m)
-    have, _why = PL.installed(a.claude, m.get("name") or "claude-fleet", a.cache)
+    ours, mname = PL.ours(m), m.get("name") or "claude-fleet"
+    if not any_installed(mname):
+        return []                               # nothing of ours: no node start at all
+    have, _why = PL.installed(a.claude, mname, a.cache)
     if have is None:
         return None
     out = []

@@ -152,6 +152,7 @@ FLEET_STEWARD_FILES_TTL            knob: seconds a PR's cached file list holds b
 FLEET_STEWARD_CI_STUCK             knob: seconds past which a queued run counts as stuck, not waiting (fleet-steward-conflicts.sh, 86400, #2673)
 FLEET_SUBMIT_WAIT_SECS             knob: seconds the first turn waits for an idle, empty input before giving up (fleet-pane-submit.sh, 5, #2234)
 FLEET_SUBMIT_CONFIRM_SECS          knob: seconds the first turn is watched after its Enter, re-pressing Enter while the text sits in the box (fleet-pane-submit.sh, 6, #2430)
+FLEET_CODEX_PLUGINS                knob: 0 = a Codex launch leaves its CODEX_HOME alone instead of syncing the plugins Claude has installed (fleet-codex-plugins.py, on, #3123)
 FLEET_CODEX_SEED_CONFIRM           knob: 0 = never press Enter for a Codex seed left in the composer (fleet-codex-seed.py, on, #2430)
 FLEET_CODEX_SEED_SECS              knob: seconds a Codex launch watches its composer for the unsent seed (fleet-codex-seed.py, 30, #2430)
 FLEET_CODEX_SEED_TICK              test seam: the seed watcher's poll interval when run standalone (fleet-codex-seed.py, 1 s, #2430)

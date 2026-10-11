@@ -74,6 +74,9 @@ cat > "$WORK/claude-fake" <<SH
 exit 1
 SH
 chmod +x "$WORK/claude-fake"
+# Claude Code's own record of an install (the launch's cheap pre-check reads it)
+mkdir -p "$CLAUDE_CONFIG_DIR/plugins"
+mark_installed() { printf '{"version":2,"plugins":{"fleet-orchestrate@claude-fleet":[]}}\n' > "$CLAUDE_CONFIG_DIR/plugins/installed_plugins.json"; }
 row() { # name enabled
   printf '{"id":"%s@claude-fleet","version":"0.1.0","enabled":%s,"installPath":"%s/%s/0.1.0"}' "$1" "$2" "$CACHE" "$1"
 }
@@ -92,6 +95,12 @@ cmp -s "$HOME_C/config.toml" "$WORK/orig.toml" || fail "A config.toml changed" "
 mkdir -p "$HOME_C/skills/fleet-plugin-mine"
 printf -- '---\nname: mine\ndescription: personal\n---\n' > "$HOME_C/skills/fleet-plugin-mine/SKILL.md"
 printf '[%s]\n' "$(row fleet-orchestrate true)" > "$LIST"
+# no installed_plugins.json naming ours ⇒ claude is never asked, nothing written
+mv "$WORK/claude-fake" "$WORK/claude-fake.off"
+out=$(cx sync); has 'unchanged · plugins: none' "$out" "B0 with no install record, sync should not ask claude"
+mv "$WORK/claude-fake.off" "$WORK/claude-fake"
+[ -L "$HOME_C/skills/fleet-plugin-fleet-orchestrate" ] && fail "B0 linked without an install record"; ok
+mark_installed
 dry=$(cx sync --dry-run)
 has 'link ' "$dry" "B dry run should plan the link"
 cmp -s "$HOME_C/config.toml" "$WORK/orig.toml" || fail "B --dry-run wrote config.toml"; ok
