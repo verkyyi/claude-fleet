@@ -18,8 +18,9 @@
 #   • panels never show it: the hub / dash / sidebar panes, and a window NAMED
 #     dash / plan / backlog
 #
-# Also guards `pane-border-status top` is set globally in the conf — without it the
-# format renders nowhere.
+# Also guards `pane-border-status off` is the conf's global (issue #3192: the header
+# repeated the status bar; the format stays for a person who turns it back on), and
+# that the conf's run-shell unsets a window-level `top` a live window still carries.
 #
 # tmux absent → SKIP cleanly (exit 0), per the run-selftests convention.
 # Exit 0 = pass. Non-zero = fail (prints which assertion diverged).
@@ -46,8 +47,10 @@ render() { tmux display-message -p -t "$1" "$FMT" | sed -E 's/#\[[^]]*\]//g'; }
 raw()    { tmux display-message -p -t "$1" "$FMT"; }
 
 # --- pull the REAL conf lines (the thing we actually ship) --------------------
+grep -qE '^[[:space:]]*set(-option)?[[:space:]]+-g[[:space:]]+pane-border-status[[:space:]]+off' "$CONF" \
+  || fail "conf does not turn 'pane-border-status' off globally (issue #3192)"
 grep -qE '^[[:space:]]*set(-option)?[[:space:]]+-g[[:space:]]+pane-border-status[[:space:]]+top' "$CONF" \
-  || fail "conf does not enable 'pane-border-status top' globally"
+  && fail "conf still turns the top header on globally (issue #3192)"
 
 # extract the pane-border-format value (the string between the outer quotes)
 FMT="$(sed -n 's/^[[:space:]]*set\(-option\)\{0,1\}[[:space:]]\{1,\}-g[[:space:]]\{1,\}pane-border-format[[:space:]]\{1,\}"\(.*\)"[[:space:]]*$/\2/p' "$CONF")"
@@ -181,4 +184,19 @@ for nm in dash plan backlog; do
   esac
 done
 
-printf 'selftest OK: top-of-window header routes worker/hub/dash/raw correctly (#267), leaves 剩余 %% · model · effort to the client (#2717) and carries PR #N + its checks after the name (#1954)\n'
+# --- issue #3192: off for every window, and a live window's own `top` converges --
+cw="$(tmux new-window -P -F '#{window_id}' -t s: -n issue-3192)"
+tmux set-window-option -t "$cw" pane-border-status top
+ow="$(tmux new-window -P -F '#{window_id}' -t s: -n viewed)"
+tmux set-window-option -t "$ow" pane-border-status off
+grep -E '^[[:space:]]*(set(-option)?[[:space:]]+-g[[:space:]]+pane-border-status|run-shell -b .*pane-border-status)' "$CONF" > "$WORK/off.conf"
+[ "$(wc -l < "$WORK/off.conf" | tr -d ' ')" = 2 ] || fail "expected the global off + one converging run-shell in the conf"
+tmux source-file "$WORK/off.conf" || fail "the conf's header-off lines do not source cleanly"
+[ "$(tmux show-options -gv pane-border-status)" = off ] || fail "global pane-border-status is not off after sourcing the conf"
+i=0; while [ -n "$(tmux show-options -wqv -t "$cw" pane-border-status)" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i+1)); done
+[ -z "$(tmux show-options -wqv -t "$cw" pane-border-status)" ] \
+  || fail "a window-level 'top' survived the conf's source — got [$(tmux show-options -wqv -t "$cw" pane-border-status)]"
+[ "$(tmux show-options -wqv -t "$ow" pane-border-status)" = off ] || fail "a window already off was touched"
+[ "$(tmux display-message -p -t "$cw" '#{pane-border-status}')" = off ] || fail "the converged window does not resolve to off"
+
+printf 'selftest OK: top-of-window header routes worker/hub/dash/raw correctly (#267), leaves 剩余 %% · model · effort to the client (#2717) and carries PR #N + its checks after the name (#1954); drawn nowhere — off globally, a live window top converges (#3192)\n'
