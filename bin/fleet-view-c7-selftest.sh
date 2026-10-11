@@ -11,7 +11,8 @@
 #
 #   N  ⌘N (fleet-quickopen.py do new / fleet_view.go_new, issue #3119): a NEW
 #      session every press — dash-raw-session.sh --origin hub --no-repo --no-desk
-#      --print <fleet> (FLEET_VIEW_NEW_CMD), the 看台 onto the window it printed
+#      --print <fleet> (FLEET_VIEW_NEW_CMD), the warm pool's HOME entry first
+#      (`--warm-only`, exit 3 ⇒ cold — issue #3311), the 看台 onto the window it printed
 #      (logged how=new) — never the window holding the orchestrator, even with
 #      orch_<fleet> naming one, and no orchestrator script run at all
 #      (FLEET_VIEW_ORCH_CMD would leave a mark); a direct attach: nothing
@@ -80,6 +81,13 @@ waitfor() {   # <secs*4> <cmd…> — until the command succeeds
 # --print receipt (`<window_id>\t<name>\t<worktree>\t<fleet_id>`) back
 cat > "$W/newsess.sh" <<EOF
 #!/bin/sh
+# the warm pool's HOME slot (issue #3311): empty (exit 3) unless warm.ok is there
+case " \$* " in *' --warm-only '*)
+  printf '%s\n' "\$*" >> '$W/warm.argv'
+  [ -e '$W/warm.ok' ] || exit 3
+  w=\$(tmux -S '$IN' new-window -d -P -F '#{window_id}' -t fl -n warm 'sleep 600') || exit 1
+  printf '%s\twarm\t\tfidw\t1\t\t\n' "\$w"; exit 0 ;;
+esac
 printf '%s\n' "\$*" >> '$W/new.argv'
 n=\$(wc -l < '$W/new.argv' | tr -d ' ')
 w=\$(tmux -S '$IN' new-window -d -P -F '#{window_id}' -t fl -n "new\$n" 'sleep 600') || exit 1
@@ -162,6 +170,8 @@ waitfor 16 sh -c "[ \"\$(tmux -S '$IN' display-message -p -t 'fl@view-v1:' '#{wi
 [ "$(cur)" != "$W0" ] || fail "N: ⌘N landed on the orchestrator's holder"
 [ "$(head -1 "$W/new.argv")" = "--origin hub --no-repo --no-desk --print fl" ] \
   || fail "N: the new session was not asked as a no-repo one of this fleet: $(head -1 "$W/new.argv")"
+[ "$(head -1 "$W/warm.argv" 2>/dev/null)" = "--origin hub --no-repo --no-desk --warm-only --print fl" ] \
+  || fail "N: ⌘N did not ask the warm pool's HOME slot first: $(head -1 "$W/warm.argv" 2>/dev/null)"
 log="$W/conf/logs/view-switch.ndjson"
 tail -1 "$log" | grep -q '"how":"new"' || fail "N: the switch is not logged how=new: $(tail -1 "$log")"
 to send-keys -t o:view -H 1b 5b 39 32 38 7e
@@ -170,6 +180,15 @@ N2=$(ti list-windows -t fl -F '#{window_id} #{window_name}' | awk '$2 == "new2" 
 waitfor 16 sh -c "[ \"\$(tmux -S '$IN' display-message -p -t 'fl@view-v1:' '#{window_id}')\" = '$N2' ]" \
   || fail "N: the second ⌘N did not land on its new session (now $(cur), it is $N2)"
 [ -e "$W/orch.called" ] && fail "N: ⌘N ran an orchestrator script"
+# a warm HOME entry ready (issue #3311): ⌘N takes it, no cold open
+: > "$W/warm.ok"; ncold=$(wc -l < "$W/new.argv" | tr -d ' ')
+to send-keys -t o:view -H 1b 5b 39 32 38 7e
+waitfor 20 sh -c "tmux -S '$IN' list-windows -t fl -F '#{window_name}' | grep -qx warm" || fail "N: ⌘N did not take the ready warm window"
+NW=$(ti list-windows -t fl -F '#{window_id} #{window_name}' | awk '$2 == "warm" { print $1 }')
+waitfor 16 sh -c "[ \"\$(tmux -S '$IN' display-message -p -t 'fl@view-v1:' '#{window_id}')\" = '$NW' ]" \
+  || fail "N: ⌘N did not land on the warm window (now $(cur), it is $NW)"
+[ "$(wc -l < "$W/new.argv" | tr -d ' ')" = "$ncold" ] || fail "N: a warm window was ready, yet ⌘N opened one cold too"
+rm -f "$W/warm.ok"
 rm -f "$W/g/orch_fl"
 # another machine's C4 window (made here, link up) — the S and Q legs use it
 PW=$(ti new-window -d -P -F '#{window_id}' -t fl -n @m4 'sleep 600')

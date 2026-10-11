@@ -20,6 +20,9 @@
 #      are grey end to end, ↵ on one says 进不去 instead of going; hub_ok back to
 #      now ⇒ the next read has no banner; a popup left open (a real one, on a pty)
 #      shows a row added to the cache within 2-4 s (FLEET_VIEW_REFRESH)
+#   F  the first frame never waits on the hub (issue #3311) — hub_ok old, no loop,
+#      a hub that takes 6 s: the popup (a real one, on a pty) draws its list from
+#      the cache within 1.5 s, and the hub is asked right after, off the screen
 #
 # `fleet-view-hub-fresh-selftest.sh B` runs one leg (docs/BREAK-IT.md
 # view-far-reaped runs B). Drives bin/fleet_view.py through fleet-quickopen.py
@@ -28,7 +31,7 @@
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 command -v python3 >/dev/null 2>&1 || { echo 'fleet-view-hub-fresh: python3 absent — SKIP'; exit 0; }
-LEGS="${1:-ABCDE}"
+LEGS="${1:-ABCDEF}"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/vhfresh.XXXXXX") || exit 2
 cleanup() {
   local p
@@ -226,5 +229,55 @@ PY2
 )
   [ "$r" = ok ] || fail "E: a popup left open did not show the new row in time" "$r"
   pass "E: hub_ok 2 h old — banner, grey 「? 失联 120 分钟」 rows, ↵ 进不去; back to now — no banner; an open popup shows a new row within 2-4 s"
+;; esac
+case "$LEGS" in *F*)
+  printf '#!/bin/sh\necho ask >> "%s/hub.log"\ncat "%s/hub.json"\n' "$WORK" "$WORK" > "$WORK/hub.sh"   # E left it silent
+  frozen; cp "$WORK/before.json" "$WORK/hub.json"
+  printf '#!/bin/sh\necho ask >> "%s/hub.log"\nsleep 6\ncat "%s/hub.json"\n' "$WORK" "$WORK" > "$WORK/hub.sh"   # a slow hub
+  r=$(FLEET_UI_LANG=zh FLEET_VIEW_REFRESH=2 TERM=xterm-256color python3 - "$BIN" "$WORK/hub.log" <<'PY2'
+import os, pty, select, sys, time
+binp, log = sys.argv[1:3]
+t0 = time.monotonic()
+pid, fd = pty.fork()
+if pid == 0:
+    os.execvp("python3", ["python3", binp + "/fleet-quickopen.py", "--view", "v1"])
+def read_until(word, secs):
+    buf, end = b"", time.monotonic() + secs
+    while time.monotonic() < end:
+        r, _, _ = select.select([fd], [], [], 0.05)
+        if r:
+            try:
+                buf += os.read(fd, 65536)
+            except OSError:
+                break
+            if word in buf:
+                return True
+    return False
+def asked():
+    try:
+        return sum(1 for _ in open(log))
+    except OSError:
+        return 0
+try:
+    seen = read_until("弹窗背后刷中文".encode(), 10)
+    dt = time.monotonic() - t0
+    end = time.monotonic() + 4
+    while asked() < 1 and time.monotonic() < end:
+        time.sleep(0.1)
+    print("ok" if seen and dt <= 1.5 and asked() >= 1 else "drawn=%s after %.1fs, hub asked %d×" % (seen, dt, asked()))
+finally:
+    os.write(fd, b"\x1b")
+    time.sleep(0.3)
+    try:
+        os.kill(pid, 9)
+    except OSError:
+        pass
+    os.close(fd)
+    os.waitpid(pid, 0)
+PY2
+)
+  [ "$r" = ok ] || fail "F: the popup's first frame waited on a slow hub (or never asked it)" "$r"
+  stop_loop
+  pass "F: hub_ok old, a 6 s hub — the popup draws the cache at once, the hub is asked behind it"
 ;; esac
 echo "PASS fleet-view-hub-fresh-selftest ($LEGS)"

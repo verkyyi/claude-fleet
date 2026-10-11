@@ -21,6 +21,12 @@
 #   view-far-reaped        bin/fleet_view.py hub_fresh + bin/fleet-hub-sessions.sh
 #                          (issue #3079): a worker reaped on another machine while
 #                          this one's copy of the hub's list had stopped
+#   view-first-frame-hub-slow  bin/fleet_view.py popup (issue #3311): hub_ok stale,
+#                          no loop, a hub that takes 6 s — ⌘P's first frame drawn
+#                          from the cache at once, the hub asked behind it
+#   pool-prompt-nbsp       bin/scratch-pool.sh warm_input (issue #3311): Claude
+#                          Code's `❯` + no-break space, read by a bash fallen back to
+#                          C (a Linux node) — no warm entry ever became ready
 #
 # One isolated tmux server (-S under a short /tmp dir), the person's terminals
 # python ptys that answer DA / XTVERSION as iTerm2 and record every byte, the hub a
@@ -305,6 +311,24 @@ drill_view_far_reaped() {
   out=$(bash "$BIN/fleet-view-hub-fresh-selftest.sh" B 2>&1) || { WHY=$(printf '%s\n' "$out" | grep -m1 FAIL); return 1; }
   SECS=$(since "$t0")
   WHAT="家机器的远端缓存停在 16 分钟前（采集器停了、没有刷新循环），另一台机器收掉的会话：下一次打开 ⌘P 先刷一次入口的清单再列，它不在了，刷新循环也起来了"
+}
+
+drill_view_first_frame_hub_slow() {
+  CAP=30
+  local t0 out
+  t0=$(now)
+  out=$(bash "$BIN/fleet-view-hub-fresh-selftest.sh" F 2>&1) || { WHY=$(printf '%s\n' "$out" | grep -m1 FAIL); return 1; }
+  SECS=$(since "$t0")
+  WHAT="入口清单过期、没有刷新循环、入口要 6 秒才答：⌘P 照缓存 1.5 秒内画出第一帧，入口在后台被问到"
+}
+
+drill_pool_prompt_nbsp() {
+  CAP=180
+  local t0 out
+  t0=$(now)
+  out=$(bash "$BIN/scratch-pool-live-selftest.sh" 2>&1) || { WHY=$(printf '%s\n' "$out" | grep -m1 FAIL); return 1; }
+  SECS=$(since "$t0")
+  WHAT="提示符是 ❯ + 不换行空格、脚本跑在退回 C 的 locale 里（Linux 节点）：暖池照样有一个就绪的条目，⌘N 拿得到"
 }
 
 th_cleanup() {

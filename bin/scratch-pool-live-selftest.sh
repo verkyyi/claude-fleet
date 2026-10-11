@@ -8,7 +8,9 @@
 #
 #   A. ensure: every slot (the repo + HOME) gets ONE entry, ready (@pool_ready 1)
 #      and idle (@claude_state empty — never ran a turn); the HOME one in $HOME,
-#      stamped @norepo. Needs claude_pid to see through the wrapper (#2233).
+#      stamped @norepo. Needs claude_pid to see through the wrapper (#2233). The
+#      fake TUI's prompt is `❯` + NBSP and the pool runs in a C-falling-back
+#      locale, as on a Linux node (#3311: every entry was retired as dirty).
 #   B. claim --repo <slug> --agent claude answers the window id inside 0.5 s, the
 #      window moves into the fleet, its worktree sits on the newest origin/master;
 #      a second claim on the emptied slot is exit 3
@@ -53,11 +55,13 @@ ln -s "$REAL_TMUX" "$WORK/b/tmux"
 cat > "$WORK/b/claude" <<'PY'
 #!/usr/bin/env python3
 # A fake Claude Code TUI: an input box that echoes what is typed, ^U clears it.
+# Its prompt is `❯` + a NO-BREAK SPACE, as Claude Code 2.1.295 draws it (issue
+# #3311: an empty input read as dirty, so no entry ever became ready).
 import os, sys, termios, tty
 tty.setraw(0)
 buf = ''
 def draw():
-    sys.stdout.write('\x1b[2J\x1b[H' + '-' * 20 + '\r\n❯ ' + buf + '\r\n' + '-' * 20)
+    sys.stdout.write('\x1b[2J\x1b[H' + '-' * 20 + '\r\n❯\u00a0' + buf + '\r\n' + '-' * 20)
     sys.stdout.flush()
 draw()
 while True:
@@ -102,7 +106,10 @@ ready_in() {  # ready_in <secs> <slot> — true once `status` shows that slot re
 ms() { python3 -c 'import time; print(int(time.time() * 1000))'; }
 
 # ---- A: every slot comes up ready and idle -----------------------------------
-bash "$POOL" ensure "$SESS" --tick >/dev/null 2>&1
+# under a UTF-8 locale this machine does not have — a Linux node's daemons (LANG
+# en_US.UTF-8, not installed: bash falls back to C, where the prompt's no-break
+# space is no [:space:], while tmux still talks UTF-8 — issue #3311)
+LC_ALL=xx_XX.UTF-8 bash "$POOL" ensure "$SESS" --tick >/dev/null 2>&1
 rows=$(pool_wins)
 [ "$(printf '%s\n' "$rows" | grep -c '|1$')" = 2 ] || fail "A one ready entry per slot (o/a, HOME)" "$rows
 $(bash "$POOL" status "$SESS" 2>&1)"
