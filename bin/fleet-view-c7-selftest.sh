@@ -46,6 +46,11 @@
 #      (开工中… · 派单中，esc 可以先关) — esc closes the panel and the send still lands.
 #      No words: ↑ goes round to ⚡, ↵ = ⌘N's argv, the 看台 on it; words with 不绑仓库
 #      = a session here, `--prompt <the words>`; ⏻ = ⌘Q's OSC 7502 + detach
+#   I  ⌘P's language row (issue #3329, EPIC #3178 D7): 语言 lights 「◐ 语言 / Language」,
+#      ↵ flips to English — kept on the hub (a seam) and re-read here at once, the
+#      panel redrawn in it with a 3 s line — Tab's 跟系统走 takes it back; none
+#      said ⇒ 中文 and the Termius line (D9). FLEET_VIEW_LANG_EVIDENCE=<prefix>
+#      keeps the two screens.
 #   Q  ⌘Q: `ESC ] 7502 ; quit ; token=<the row's> BEL` on the client's tty, then
 #      the client detached; a direct attach stays
 #   L  `fleet ls` with no client tmux: one ssh to the home (fleet-thin.py --run:
@@ -349,8 +354,14 @@ ti select-window -t "=fl@view-v1:$W3"; sleep 0.3
 vp > "$W/panel.txt" || fail "P: view-panel exited non-zero"
 # 1 the empty panel: the sessions, then ⚡ 新会话（空白） with its cells (不绑仓库 · the
 # fleet's agent, codex grey with why), then ⏻ — nothing else is a command row
-[ "$(grep -c '^cmd' "$W/panel.txt")" = 2 ] || fail "P: not exactly ⚡ and ⏻ as command rows: $(cat "$W/panel.txt")"
-[ "$(tail -3 "$W/panel.txt" | cut -f1,2 | tr '\t\n' ': ')" = "cmd:new grid:grid cmd:quit " ] || fail "P: ⚡ · its cells · ⏻ are not last: $(cat "$W/panel.txt")"
+[ "$(grep -c '^cmd' "$W/panel.txt")" = 3 ] || fail "P: not exactly ⚡, ◐ and ⏻ as command rows: $(cat "$W/panel.txt")"
+[ "$(tail -4 "$W/panel.txt" | cut -f1,2 | tr '\t\n' ': ')" = "cmd:new grid:grid cmd:lang cmd:quit " ] || fail "P: ⚡ · its cells · ◐ · ⏻ are not last: $(cat "$W/panel.txt")"
+# the language row (issue #3329): both scripts on it, found by either; other words hide it
+grep -q "^cmd${T}lang${T}◐ 语言 / Language" "$W/panel.txt" || fail "P: no 「◐ 语言 / Language」 row: $(cat "$W/panel.txt")"
+for w in 语言 lang english 中文; do
+  vp "$w" | grep -q "^cmd${T}lang" || fail "P: typing $w does not find the language row: $(vp "$w")"
+done
+vp Gamma | grep -q "^cmd${T}lang" && fail "P: words that do not name it still list the language row"
 grep -qx "cmd${T}new${T}⚡ 新会话（空白）" "$W/panel.txt" || fail "P: no words, ⚡ is not 「新会话（空白）」: $(cat "$W/panel.txt")"
 grep -q "^grid${T}grid${T}仓库 ‹不绑仓库›  ·  Agent ‹Claude›  .*这台没装 codex" "$W/panel.txt" || fail "P: the cells: $(grep ^grid "$W/panel.txt")"
 grep -qx "cmd${T}quit${T}⏻ 退出 fleet（会话在后台继续）" "$W/panel.txt" || fail "P: no ⏻ row: $(cat "$W/panel.txt")"
@@ -363,7 +374,7 @@ vp Gamma > "$W/panel-hit.txt"
 grep -qx "cmd${T}new${T}⚡ 新任务：Gamma" "$W/panel-hit.txt" || fail "P: ⚡ does not carry the words: $(cat "$W/panel-hit.txt")"
 grep -q "^grid${T}grid${T}仓库 ‹acme/web›" "$W/panel-hit.txt" || fail "P: words, the cells are not the last send's repo: $(grep ^grid "$W/panel-hit.txt")"
 FLEET_PANEL_COMMANDS=none vp | grep -q '^cmd' && fail "P: FLEET_PANEL_COMMANDS=none still lists a command row: $(FLEET_PANEL_COMMANDS=none vp)"
-[ "$(FLEET_PANEL_COMMANDS='new shell newsess' vp | grep '^cmd' | cut -f2 | tr '\n' ' ')" = "new quit " ] \
+[ "$(FLEET_PANEL_COMMANDS='new shell newsess' vp | grep '^cmd' | cut -f2 | tr '\n' ' ')" = "new lang quit " ] \
   || fail "P: the retired words still make rows: $(FLEET_PANEL_COMMANDS='new shell newsess' vp)"
 # the popup: the session in view lit, the search line's hint, ↑ 到 ⚡ in the keys
 to send-keys -t o:view -H 1b 5b 39 32 37 7e
@@ -453,6 +464,57 @@ python3 -c 'import sys; sys.exit(0 if b"\x1b]7502;quit;token=tok7\x07" in open(s
   || fail "P: ⏻ sent no OSC 7502 quit: $(od -c "$W/client-p.bytes" | tail -5)"
 to new-window -d -t o -n view "TMUX= tmux -S '$IN' attach -t 'fl@view-v1'"; sleep 1
 pass "P  ⌘P's one entry (方案 B): sessions then ⚡ (cells 仓库 · Agent) then ⏻; empty ↵ = the session in view lit; a hit lit, ↓ to ⚡; no hit ⇒ ⚡, ↵ one send (progress, esc keeps it going); Tab / ←→ cells; ↑ round to blank ⚡ = ⌘N; words + 不绑仓库 = a seeded session; ⏻ = ⌘Q (#3180, #3327)"
+
+# --- I: the language row (issue #3329, EPIC #3178 D7, L1–L3) --------------------------------
+# The person's choice is kept on the hub (a seam: GET/PUT the state file) and read back
+# at once into person-bundle.json; the 看台 said no language (FLEET_VIEW_LANG empty) ⇒
+# Chinese, and the row's footer says how to bring one (D9). FLEET_UI_LANG auto here.
+printf '{"version":1,"bundle":{}}' > "$W/person.json"
+cat > "$W/person-hub.sh" <<EOF
+#!/bin/sh
+st='$W/person.json'; body=\$(cat)
+[ "\$1" = GET ] && { cat "\$st"; exit 0; }
+python3 -c '
+import json, sys
+b, st = json.loads(sys.argv[1]), sys.argv[2]
+cur = json.load(open(st))
+if b.get("base") != cur["version"]:
+    print(json.dumps({"status": 409, "error": "stale"})); sys.exit()
+new = {"version": cur["version"] + 1, "prev": cur["version"], "bundle": b["bundle"]}
+json.dump(new, open(st, "w")); print(json.dumps(new))' "\$body" "\$st"
+EOF
+for k in FLEET_UI_LANG=auto FLEET_VIEW_LANG= "FLEET_PERSON_HUB_CMD=sh $W/person-hub.sh \"\$@\"" "FLEET_PERSON_BUNDLE_CMD=cat $W/person.json"; do
+  ti set-environment -t 'fl@view-v1' "${k%%=*}" "${k#*=}"
+done
+lshot() { to capture-pane -p -t o:view | grep -v '^$'; }
+to send-keys -t o:view -H 1b 5b 39 32 37 7e
+waitfor 20 listed || fail "I: ⌘P listed nothing"
+to send-keys -t o:view -l '语言'; sleep 0.5
+waitfor 10 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -q '▶ ◐ 语言 / Language　中文 ✓ · English'" \
+  || fail "I: typing 语言 did not light the language row: $(lshot)"
+lshot | grep -q 'Termius → Hosts → .* → Environment 加 LANG=en_US.UTF-8' || fail "I: no language came, yet the footer does not say how (D9): $(lshot)"
+[ -n "${FLEET_VIEW_LANG_EVIDENCE:-}" ] && lshot > "$FLEET_VIEW_LANG_EVIDENCE.zh.txt"
+to send-keys -t o:view Enter
+waitfor 20 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -q 'Language: English · saved to your account'" \
+  || fail "I: ↵ did not switch to English and say so: $(lshot)"
+lshot | grep -q '◐ Language / 语言　English ✓ · 中文' || fail "I: the panel did not redraw in English: $(lshot)"
+[ -n "${FLEET_VIEW_LANG_EVIDENCE:-}" ] && lshot > "$FLEET_VIEW_LANG_EVIDENCE.en.txt"
+grep -q '"ui_lang": *"en"' "$W/person.json" || fail "I: the hub was not told: $(cat "$W/person.json")"
+grep -q '"ui_lang": *"en"' "$W/conf/person-bundle.json" || fail "I: this computer's copy was not re-read: $(cat "$W/conf/person-bundle.json" 2>&1)"
+[ "$(FLEET_VIEW_LANG=en_US.UTF-8 FLEET_UI_LANG=auto sh "$BIN/fleet-ui-lang.sh" first-hint devX)" = "" ] \
+  || fail "I: a person who chose is still told about detection (D8)"
+waitfor 24 sh -c "! tmux -S '$OUT' capture-pane -p -t o:view | grep -q 'Language: English · saved'" || fail "I: the confirmation did not go by itself (3 s): $(lshot)"
+# Tab: 中文 · English · Follow the system — the last takes the choice away
+to send-keys -t o:view Tab; sleep 0.4
+lshot | grep -q 'Follow the system' || fail "I: Tab on the row offers no 跟系统走: $(lshot)"
+to send-keys -t o:view Down; sleep 0.1; to send-keys -t o:view Down; sleep 0.1; to send-keys -t o:view Enter
+waitfor 20 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -q '界面语言：跟系统走 · 已存到你的账号'" \
+  || fail "I: 跟系统走 did not go back to the detected language (中文, none said): $(lshot)"
+grep -q 'ui_lang' "$W/person.json" && fail "I: 跟系统走 left ui_lang on the hub: $(cat "$W/person.json")"
+to send-keys -t o:view Escape
+for k in FLEET_UI_LANG FLEET_VIEW_LANG FLEET_PERSON_HUB_CMD FLEET_PERSON_BUNDLE_CMD; do ti set-environment -t 'fl@view-v1' -u "$k"; done
+rm -f "$W/conf/person-bundle.json" "$W/conf/person-bundle.good.json"
+pass "I  ⌘P's language row: 语言 finds it, ↵ flips to English on the hub and here at once (the panel redraws, 3 s line), Tab 跟系统走 takes it back; no language said ⇒ 中文 + the Termius line (#3329)"
 
 # --- Q: ⌘Q -----------------------------------------------------------------------------------
 to pipe-pane -o -t o:view "cat > '$W/client.bytes'"; sleep 0.3

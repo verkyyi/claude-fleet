@@ -643,6 +643,8 @@ FLEET_REMOTE_WARM_WAIT             knob: seconds a proxy waits for a warm master
 FLEET_REMOTE_SELECT_SECS           knob: seconds a retarget waits on a proxy's one-shot select before reconnecting instead (2, #1876)
 FLEET_REMOTE_ORPHAN_SECS           knob: age before a registered attach with no tmux client counts as an orphan (60, #1907)
 FLEET_REMOTE_ORPHAN_REAP           knob: 0 = an attach never reaps orphaned attaches; health still counts them (1, #1907)
+FLEET_VIEW_LANG                    handoff: the language a 看台's client brought through the door (@view_lang), in the 看台 session's environment for fleet-ui-lang.sh; set (even empty) = it decides after the person's choice (fleet-remote-view.sh, #3329)
+FLEET_UI_PERSON_FILE               seam: the person-bundle.json fleet-ui-lang.sh reads the person's ui_lang from (default $FLEET_CONF_DIR/person-bundle.json, #3329)
 FLEET_VIEW_FIRST_CMD               seam: replaces `fleet-quickopen.py` when attach --thin lands a 看台 with no orchestrator here on ⌘N's road (`do new`) (fleet-remote-view.sh, #3007)
 FLEET_VIEW_KEEP_SECS               knob: seconds a thin client's 看台 (attach --thin) outlives its client for --resume before prune takes it (600, #2763)
 FLEET_VIEW_ROWS_CMD                seam: a shell command printing the 看台 switcher's rows instead of tmux-dashboard-rows.sh --sidebar (fleet_view.py, #3000)
