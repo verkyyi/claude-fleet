@@ -6295,6 +6295,17 @@ drill_linux_create_relay_403() {
   WHAT="开号时 relay-credential 答 403：登录照常 adopt、不写 relay.token；答 500 仍停下"
 }
 
+# ---- linux-login-locked (#3304): useradd left the shadow field `!` (locked); the
+# entry sshd runs `UsePAM no`, and OpenSSH without PAM refuses a locked account
+# even with its key. open / boot leave `*`, an older `!` is put right by the next boot.
+drill_linux_login_locked() {
+  CAP=15; local t0
+  t0=$(now)
+  linux_tenant_leg test_login_locked || { WHY="a Linux login is left locked (shadow \`!\`): $(tail -n 3 "$WORK/test_login_locked.out")"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="开号、boot 重建后 shadow 第二列是 *；旧的 ! 下次 boot / open 改正；已是 * 不再 usermod"
+}
+
 # ---- linux-restore-crashloop (#3289): a session restore that did not bring every
 # pinned session back raised out of bootstrap and the container exited — CrashLoop
 # on the same snapshot. Now the snapshot is set aside and the machine goes ready;

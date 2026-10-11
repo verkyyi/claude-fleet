@@ -600,7 +600,7 @@ class FakeOS:
 
     def __init__(self, m, d):
         self.m, self.d = m, Path(os.path.realpath(d))
-        self.users, self.groups, self.calls, self.owner = {}, {}, [], {}
+        self.users, self.groups, self.calls, self.owner, self.shadow = {}, {}, [], {}, {}
         self.paths = Mock(state=str(self.d / 'state'), users=str(self.d / 'home'),
                           logins=str(self.d / 'state/logins'))
         Path(self.paths.users).mkdir(parents=True)
@@ -642,8 +642,13 @@ class FakeOS:
             self.groups[cmd[-1]] = int(cmd[cmd.index('--gid') + 1])
         elif tool == 'useradd':
             self.users[cmd[-1]] = (int(cmd[cmd.index('--uid') + 1]), cmd[cmd.index('--home-dir') + 1])
+            # Debian's useradd locks a login it gave no password: `!`
+            self.shadow[cmd[-1]] = cmd[cmd.index('--password') + 1] if '--password' in cmd else '!'
+        elif tool == 'usermod' and '--password' in cmd:
+            self.shadow[cmd[-1]] = cmd[cmd.index('--password') + 1]
         elif tool == 'userdel':
             self.users.pop(cmd[-1])
+            self.shadow.pop(cmd[-1], None)
         elif tool == 'groupdel':
             self.groups.pop(cmd[-1])
         elif tool == 'pgrep':
@@ -661,13 +666,14 @@ class FakeOS:
     def reboot(self):
         self.users.clear()
         self.groups.clear()
+        self.shadow.clear()
 
     def __enter__(self):
         m = self.m
         self.stack = [patch.object(m.pwd, 'getpwnam', self.pw), patch.object(m.pwd, 'getpwuid', self.pwuid),
                       patch.object(m.grp, 'getgrnam', self.gr), patch.object(m.grp, 'getgrgid', self.grgid),
                       patch.object(m.subprocess, 'run', self.run), patch.object(m.os, 'chown', self.chown), patch.object(m.os, 'fchown', lambda *a: None),
-                      patch.object(m, 'owner_of', self.owner_of), patch.object(m, 'as_tenant'),
+                      patch.object(m, 'owner_of', self.owner_of), patch.object(m, 'shadow_password', self.shadow.get), patch.object(m, 'as_tenant'),
                       patch.object(m, 'request', return_value={}), patch.object(m, 'live_pids', return_value=[]), patch.object(m.time, 'sleep'),
                       patch.object(m, 'load', lambda n: self.sup if n == 'fleet-node-supervisor' else self.cred)]
         for p in self.stack:
@@ -736,6 +742,35 @@ class LinuxTenants(unittest.TestCase):
                 self.m.boot()
             self.assertEqual(f.owner, chowns)
             self.assertNotIn('24haowan', f.users)
+
+    def test_login_locked(self):
+        """linux-login-locked (#3304): the entry sshd runs `UsePAM no`, which turns
+        a LOCKED account (`!`) away even with its key — open and boot leave `*`,
+        and a login an older open left locked is put right by the next boot."""
+        with FakeOS(self.m, self.tmp.name) as f:
+            f.open('24haowan')
+            self.assertEqual(f.shadow['24haowan'], '*')
+            f.shadow['24haowan'] = '!'          # what an older open / the image left
+            self.m.boot()
+            self.assertEqual(f.shadow['24haowan'], '*')
+            f.reboot()
+            self.m.boot()
+            self.assertEqual(f.shadow['24haowan'], '*')
+            f.shadow['24haowan'] = '!'
+            f.open('24haowan')                  # an open of the existing login heals it too
+            self.assertEqual(f.shadow['24haowan'], '*')
+            n = len(f.calls)
+            self.m.boot()                       # already `*`: nothing to change
+            self.assertFalse(any(c[0] == 'usermod' for c in f.calls[n:]))
+
+    def test_shadow_password_reads_the_second_field(self):
+        with tempfile.NamedTemporaryFile('w', delete=False) as sh:
+            sh.write('root:*:19000:0:99999:7:::\nfleet:!:19000:0:99999:7:::\n')
+        self.addCleanup(os.unlink, sh.name)
+        with patch.object(self.m, 'SHADOW', sh.name):
+            self.assertEqual(self.m.shadow_password('fleet'), '!')
+            self.assertEqual(self.m.shadow_password('root'), '*')
+            self.assertIsNone(self.m.shadow_password('nobody'))
 
     def test_removed_login_lingers(self):
         """linux-removed-login-lingers: remove leaves no user, group, process,

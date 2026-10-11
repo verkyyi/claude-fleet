@@ -287,6 +287,30 @@ def check_home(t):
     return False
 
 
+SHADOW = '/etc/shadow'
+
+
+def shadow_password(login):
+    """The second field of the login's /etc/shadow line, None when it has none."""
+    try:
+        with open(SHADOW) as f:
+            for line in f:
+                parts = line.rstrip('\n').split(':')
+                if parts[0] == login and len(parts) > 1:
+                    return parts[1]
+    except OSError:
+        return None
+    return None
+
+
+def unlock(login):
+    """`*`, never useradd's `!`: no password can match it, but the account is
+    not LOCKED — the entry sshd runs `UsePAM no`, and OpenSSH without PAM turns a
+    locked account away even with its key (linux-login-locked, #3304)."""
+    if shadow_password(login) != '*':
+        subprocess.run(['usermod', '--password', '*', login], check=True)
+
+
 def make_user(t, full_name=''):
     """groupadd/useradd exactly as declared; an existing entry must match it."""
     login, uid = t['login'], t['uid']
@@ -307,10 +331,11 @@ def make_user(t, full_name=''):
             raise ValueError('UID %d already belongs to %s' % (uid, other))
         subprocess.run(['useradd'] + _bad_name_flag('useradd', login) +
                        ['--uid', str(uid), '--gid', str(uid), '--no-create-home', '--home-dir', t['home'],
-                        '--shell', '/bin/zsh'] + (['--comment', full_name] if full_name else []) + [login], check=True)
+                        '--shell', '/bin/zsh', '--password', '*'] + (['--comment', full_name] if full_name else []) + [login], check=True)
         p = pwd.getpwnam(login)
     if (p.pw_uid, p.pw_gid, p.pw_dir) != (uid, uid, t['home']):
         raise ValueError('existing login %s does not match the declared UID/GID/home' % login)
+    unlock(login)
     return p
 
 
