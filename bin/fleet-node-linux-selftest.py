@@ -214,6 +214,22 @@ class LinuxNode(unittest.TestCase):
         self.assertNotIn('hostNetwork', pod)
         self.assertFalse(pod['containers'][0]['securityContext']['allowPrivilegeEscalation'])
         self.assertEqual(st['volumeClaimTemplates'][0]['spec']['accessModes'], ['ReadWriteOncePod'])
+        self.assertEqual(pod['imagePullSecrets'], [{'name': 'acr-pull'}])
+
+    def test_pull_secret_is_a_flag(self):
+        """#3290: ACK's password-free ACR plugin names its Secret acr-credential-<hash>;
+        --pull-secret (repeatable) replaces the acr-pull default, a bad name refuses."""
+        render = BIN.parent / 'extras/managed-node/render.py'
+        base = [sys.executable, str(render), '--image', 'example/image@sha256:' + 'a' * 64,
+                '--hub', 'https://hub.example', '--storage-class', 'essd']
+        pod = lambda extra: json.loads(subprocess.check_output(base + extra))['items'][-1]['spec']['template']['spec']
+        self.assertEqual(pod(['--pull-secret', 'x'])['imagePullSecrets'], [{'name': 'x'}])
+        self.assertEqual(pod(['--pull-secret', 'acr-credential-560b', '--pull-secret', 'y'])['imagePullSecrets'],
+                         [{'name': 'acr-credential-560b'}, {'name': 'y'}])
+        r = subprocess.run(base + ['--pull-secret', 'Bad Name'], capture_output=True)
+        self.assertNotEqual(r.returncode, 0)
+        doc = (BIN.parent / 'docs/MANAGED-LINUX.md').read_text()
+        self.assertIn('--pull-secret', doc)
 
     def test_egress_guard_cuts_metadata_and_cluster(self):
         """BREAK-IT linux-egress-metadata (#3281): flannel enforces no NetworkPolicy,
