@@ -184,6 +184,9 @@ export function sessionRows(fs, live) {
       ctx: l && !l.context_unknown && Number.isFinite(Number(l.context_used_pct)) ? Number(l.context_used_pct) : null,
       model: (l && l.model) || '',
       account: (l && l.account) || '',
+      // the session's pool tokens since this UTC midnight (claude-fleet#3377);
+      // 0 = none recorded, which the page leaves out rather than print 0
+      tokens: Number(s.tokens_today) > 0 ? Number(s.tokens_today) : 0,
     });
   }
   return rows.sort((a, b) => b.born - a.born || a.key.localeCompare(b.key));

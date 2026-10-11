@@ -58,6 +58,12 @@ type MeUsage struct {
 	Models    []MeUsageModel `json:"models"`
 	Work      MeUsageWork    `json:"work"`
 
+	// BySession is what each of the viewer's sessions used today and this
+	// week (claude-fleet#3377): the same rows as Today and Week, by worker_id,
+	// plus the one kind "none" item for rows on no session — so each column
+	// sums to Today / Week. Largest week first, "none" last.
+	BySession []MeUsageSession `json:"by_session"`
+
 	// SinceFirst is when the hub recorded its first pool row (anyone's): a
 	// previous window starting before it was not fully recorded, so the page
 	// says so instead of a percent off a near-empty base (claude-fleet#3230).
@@ -80,6 +86,20 @@ type MeUsageLimit struct {
 	Reset5h       *time.Time `json:"reset_5h,omitempty"`
 	Over          bool       `json:"over,omitempty"`
 	Window        string     `json:"window,omitempty"` // 5h | week, when over
+}
+
+// MeUsageSession is one session's pool tokens (claude-fleet#3377). Key is its
+// name as the fleet says it (issue-12, scratch-7) — off its fleet's last
+// heartbeat, else its row's task, else the worker_id's own key; Kind "none"
+// is the rows on no session.
+type MeUsageSession struct {
+	Kind     string `json:"kind,omitempty"` // none, for the rows on no session
+	WorkerID string `json:"worker_id,omitempty"`
+	Key      string `json:"key,omitempty"`
+	Repo     string `json:"repo,omitempty"`
+	Issue    int    `json:"issue,omitempty"`
+	Today    int64  `json:"today"`
+	Week     int64  `json:"week"`
 }
 
 // MeUsageDay is one UTC day, split by provider.
@@ -153,7 +173,7 @@ func (s *Server) meUsage(ctx context.Context, principal, rng string, now time.Ti
 	if ndays < 7 {
 		chart = today.AddDate(0, 0, -6) // a day's bar alone says nothing: a week of them
 	}
-	out := MeUsage{Range: rng, Since: since, Days: []MeUsageDay{}, Models: []MeUsageModel{},
+	out := MeUsage{Range: rng, Since: since, Days: []MeUsageDay{}, Models: []MeUsageModel{}, BySession: []MeUsageSession{},
 		Work: MeUsageWork{Issue: []MeUsageItem{}, Repo: []MeUsageItem{}, Epic: []MeUsageItem{}}}
 	var rows []store.PoolUsage
 	if principal != "" {
@@ -214,7 +234,59 @@ func (s *Server) meUsage(ctx context.Context, principal, rng string, now time.Ti
 	}
 	out.Models = meUsageModels(inRange)
 	out.Work = s.meUsageWork(ctx, inRange)
+	out.BySession = s.meUsageSessions(rows, today, weekCut)
 	return out, nil
+}
+
+// meUsageSessions sums rows by session: today (since this UTC midnight) and
+// this week (since weekCut), as MeUsage.Today and .Week count them. A session
+// with nothing in the week is left out; the "none" item is always there.
+func (s *Server) meUsageSessions(rows []store.PoolUsage, today, weekCut time.Time) []MeUsageSession {
+	sess := s.meSessions(rows)
+	by := map[string]*MeUsageSession{}
+	none := &MeUsageSession{Kind: workNone}
+	for _, u := range rows {
+		inToday, inWeek := !u.At.Before(today), !u.At.Before(weekCut)
+		if !inToday && !inWeek {
+			continue
+		}
+		it := none
+		if u.WorkerID != "" {
+			if it = by[u.WorkerID]; it == nil {
+				it = &MeUsageSession{WorkerID: u.WorkerID, Key: sess[u.WorkerID].key}
+				by[u.WorkerID] = it
+			}
+			if it.Repo == "" && u.Repo != "" && u.Issue > 0 {
+				it.Repo, it.Issue = u.Repo, u.Issue
+			}
+		}
+		n := u.Tokens()
+		if inToday {
+			it.Today += n
+		}
+		if inWeek {
+			it.Week += n
+		}
+	}
+	out := make([]MeUsageSession, 0, len(by)+1)
+	for _, it := range by {
+		if it.Key == "" && it.Issue > 0 {
+			it.Key = fmt.Sprintf("issue-%d", it.Issue)
+		}
+		if it.Key == "" {
+			if _, k, err := fleetid.ParseWorkerID(it.WorkerID); err == nil {
+				it.Key = k
+			}
+		}
+		out = append(out, *it)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Week != out[j].Week {
+			return out[i].Week > out[j].Week
+		}
+		return out[i].WorkerID < out[j].WorkerID
+	})
+	return append(out, *none)
 }
 
 // meUsageLimit is principal's limit, from the same state the proxies are

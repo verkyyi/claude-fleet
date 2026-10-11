@@ -567,6 +567,10 @@ fleet_ui_t() {
     en:view_gone_hint) printf '↵ restore' ;;
     zh:view_pr_fmt) printf 'PR %s' "${1:-}" ;;
     en:view_pr_fmt) printf 'PR %s' "${1:-}" ;;
+    zh:view_today_fmt) printf '今天 %s token' "${1:-}" ;;
+    en:view_today_fmt) printf '%s tokens today' "${1:-}" ;;
+    zh:view_tok_style) printf 'zh' ;;
+    en:view_tok_style) printf 'en' ;;
     zh:view_ask_restore) printf 'y 先 reopen PR 再恢复 · r 直接恢复 · 其它键取消' ;;
     en:view_ask_restore) printf 'y reopen the PR, then restore · r restore anyway · any other key cancels' ;;
     zh:view_state_needs) printf '在问你' ;;
@@ -1525,6 +1529,8 @@ quit	z	quit fleet — in the client only: every process of the client on this co
     en:topbar_left_fmt)         printf '%s left' "${1:-}" ;;
     zh:topbar_ago_fmt)          printf '%s 分钟前' "${1:-}" ;;
     en:topbar_ago_fmt)          printf '%s min ago' "${1:-}" ;;
+    zh:topbar_today_fmt)        printf '今天 %s' "${1:-}" ;;
+    en:topbar_today_fmt)        printf '%s today' "${1:-}" ;;
     zh:topbar_pr_merged)        printf 'PR 已合并' ;;
     en:topbar_pr_merged)        printf 'PR merged' ;;
     zh:topbar_pr_closed)        printf 'PR 已关闭' ;;

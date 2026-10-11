@@ -7,7 +7,7 @@ what the others are doing, is the panel's.
 
     fleet-topbar.py render cw=<cols> [down=<epoch>] [rr=<route>] [rv=<auto|manual> <route>]
                            [rp=<pinned route>] [rt=<reconnects>] [wn=<window name>] [gen=…]
-        the line, as tmux format: glyph (word ·) #N title (· repo) …… PR · context (· machine) (· ⌘P)
+        the line, as tmux format: glyph (word ·) #N title (· repo) …… PR · context (· 今天 N) (· machine) (· ⌘P)
     fleet-topbar.py render --node view=<id> s=<fleet> reg=<dir> g=<dir> sock=<socket> cw= w= [pc=] [pd=]
         the same line drawn ON the machine, as a thin client's 看台's status line
         (issue #2763, EPIC #2999 C1; fleet-remote-view.sh attach --thin) — see
@@ -38,7 +38,9 @@ that one dropped), `@remote_route` (on the hub relay), `@remote_via`
 Three widths, the design's: a phone (~45 columns) has the glyph, #N, the title
 and 「62%」; from 80 the state's word, 「PR #N」 and 「62% Opus 5.5 high」; from
 140 the repo after the title, the PR's checks, 「剩余 62% · Opus 5.5 · high」 and
-「⌘P」 at the right. The title is clipped with `…`. The six glyphs and their
+「⌘P」 at the right. On every width 「今天 12.3 万」 after the context when the
+hub recorded pool tokens for the session today (issue #3377, the record's
+tokens_today — none ⇒ nothing, never 0). The title is clipped with `…`. The six glyphs and their
 colours are fleet_view.py's table (! x » ✓ ∙ ?, FLEET_GLYPHS=ascii, NO_COLOR):
 the whole line red while the session waits on you (its question in the title's
 place), grey with ? while its machine is out of reach or on the relay — the only
@@ -202,7 +204,7 @@ def pr_part(pr, cols):
 def layout(rec, cols, down="", route="", now=None, via="", pin="", tries=""):
     """The line as a list of (text, colour, range) parts plus its background
     (None / BG_ASK / BG_DOWN) — the ⌘P panel's blueprint (issue #3194, EPIC #3178):
-    glyph · (word ·) #N · title (· repo) …… PR · context (· machine) (· ⌘P).
+    glyph · (word ·) #N · title (· repo) …… PR · context (· 今天 N) (· machine) (· ⌘P).
     The whole line red while the session waits on you (a question or an OK — the
     question's own words take the title's place), grey while out of reach or on
     the relay. Pure: the selftest reads `fit`."""
@@ -226,6 +228,11 @@ def layout(rec, cols, down="", route="", now=None, via="", pin="", tries=""):
     ctx = ctx_parts(rec, cols, now)
     if ctx:
         right.append(ctx)
+    tok = rec.get("tokens_today")
+    if isinstance(tok, int) and not isinstance(tok, bool) and tok > 0:
+        # what the session used today on the pool (issue #3377): the hub's count,
+        # never a 0 when none is recorded
+        right.append([(say("topbar_today_fmt", FV.tokens_short(tok)), DIM, "")])
     if trouble:
         right.append([(trouble, WARN, "machine")])
     if cols >= WIDE:
