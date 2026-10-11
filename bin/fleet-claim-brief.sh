@@ -96,6 +96,13 @@ at_origin=$(fleet_pane_fmt '#{@origin}')
 # #789). Stripped, that key read as `<slug>issue-<N>` — which no branch below knows,
 # so a monorepo child was told nobody was waiting on it (issue #1511).
 at_origin=$(printf '%s' "$at_origin" | tr -cd 'A-Za-z0-9._:-')
+# The parent's worker_id (issue #3439): when its fleet is another machine's, the
+# report goes there through the hub — the key alone would read as nobody here.
+at_owid=$(fleet_pane_fmt '#{@origin_wid}' | tr -cd 'A-Za-z0-9._:/-')
+at_remote=''
+if [ -n "$at_owid" ] && [ -n "$at_origin" ]; then
+  fleet_wid_home "$at_owid" >/dev/null 2>&1; [ "$?" = 1 ] && at_remote=1
+fi
 cwd=$(pwd -P 2>/dev/null)
 wt_issue=''
 case "$cwd" in
@@ -135,7 +142,11 @@ printf 'issue=%s  (@issue=%s worktree=%s%s)\n' \
 # names a window key, /fleet-claim's last move before stopping is one
 # fleet-report-parent.sh call, so the session that spawned this one hears the
 # outcome instead of polling the dash for it.
+if [ -n "$at_remote" ]; then
+  printf 'origin: %s on another machine (worker_id %s — report to it when you ship: the report / send parent tools carry it through the hub; `queued` means it waits there until that session can take it)\n' "$at_origin" "$at_owid"
+else
 case "$at_origin" in
+  orchestrator|steward) printf 'origin: %s (spawned by the session holding the %s role — report to it when you ship: bin/fleet-report-parent.sh)\n' "$at_origin" "$at_origin" ;;
   issue-*)   printf 'origin: %s (spawned by the worker on issue #%s — report to it when you ship: bin/fleet-report-parent.sh)\n' "$at_origin" "${at_origin#issue-}" ;;
   scratch-*) printf 'origin: %s (spawned by scratch session ~%s — report to it when you ship: bin/fleet-report-parent.sh)\n' "$at_origin" "${at_origin#scratch-}" ;;
   # Repo-qualified (issue #789 — a fleet hosting 2+ repos): the same two keys with
@@ -143,8 +154,13 @@ case "$at_origin" in
   ?*:issue-*)   printf 'origin: %s (spawned by the worker on issue #%s of %s — report to it when you ship: bin/fleet-report-parent.sh)\n' "$at_origin" "${at_origin##*:issue-}" "${at_origin%%:*}" ;;
   ?*:scratch-*) printf 'origin: %s (spawned by scratch session ~%s of %s — report to it when you ship: bin/fleet-report-parent.sh)\n' "$at_origin" "${at_origin##*:scratch-}" "${at_origin%%:*}" ;;
   '')        printf 'origin: none (hub-spawned — the operator has the dash; nothing to report back to)\n' ;;
-  *)         printf 'origin: %s (not a live-window key — a daemon or another fleet; nothing to report back to)\n' "$at_origin" ;;
+  *)         if fleet_is_fid "$at_origin"; then
+               printf 'origin: %s (spawned by a session named by its identity — report to it when you ship: bin/fleet-report-parent.sh)\n' "$at_origin"
+             else
+               printf 'origin: %s (not a live-window key — a daemon or another fleet; nothing to report back to)\n' "$at_origin"
+             fi ;;
 esac
+fi
 
 # --------------------------------------------------------- snapshot or ONE gh read
 # A fresh machine-local spawn snapshot costs zero gh calls (#459). On a miss,

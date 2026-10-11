@@ -627,10 +627,34 @@ def list_agents():
     return {"session": session, "self": me or None, "parent": parent or None, "agents": agents}
 
 
+FID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+
+def parent_remote():
+    """The parent's worker_id when it lives on ANOTHER machine (issue #3439): this
+    pane's @origin_wid, unless its fleet UUID is one configured here. Empty when the
+    pane has none, or the parent's fleet is this machine's."""
+    pane = os.environ.get("TMUX_PANE", "")
+    owid = tmux("display-message", "-p", "-t", pane, "#{@origin_wid}") if pane else ""
+    if not owid or not re.match(r"^[A-Za-z0-9/:._-]+$", owid):
+        return ""
+    home = lib("fleet_wid_home " + shquote(owid) + " " + shquote(current_session()), check=False)
+    return owid if home.returncode == 1 else ""
+
+
 def parent_window():
     parent = origin_option()
-    if parent not in ("orchestrator", "steward") and not re.match(r"^([A-Za-z0-9._-]+:)?(issue|scratch)-[0-9]+$", parent or ""):
+    if parent not in ("orchestrator", "steward") and not FID_RE.match(parent or "") \
+            and not re.match(r"^([A-Za-z0-9._-]+:)?(issue|scratch)-[0-9]+$", parent or ""):
+        # A parent on another machine is addressed by its worker_id (issue #3439);
+        # fleet-peer-send.sh carries `wid:` through the hub.
+        owid = parent_remote()
+        if owid:
+            return "wid:" + owid
         raise ToolFault("this session has no live-addressable parent")
+    owid = parent_remote()
+    if owid:
+        return "wid:" + owid
     session = current_session()
     # The ONE resolver (fleet_win_for_key, issue #1537): rc 2 = the key is
     # ambiguous (two windows, or a bare issue key in a 2+ repo fleet) — said on
@@ -1294,7 +1318,8 @@ TOOLS = {
         "description": "报 — tell the session that SPAWNED this one how it ended (bin/fleet-report-parent.sh). "
                        "Exit 0 reported (or no parent to tell — a hub-spawned session; or `orphaned`: the "
                        "parent is gone, so the report becomes the person's reminder), 3 queued: the parent "
-                       "cannot take it now and it is delivered when it can (do not resend), 1 refused. A merged "
+                       "cannot take it now and it is delivered when it can (do not resend), 1 refused or "
+                       "`undelivered` (nothing reached the parent and nothing waits — say so). A merged "
                        "report is checked against the PR's real state: report merged only after pr_merge says "
                        "MERGED. A waiting report whose summary names a page / code for a person to scan or click "
                        "holds every automatic reopen and handoff of this session until your next report "

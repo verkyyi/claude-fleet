@@ -356,6 +356,11 @@ override them):
      now — its machine is offline, it is asleep at a full fleet, its Claude is
      down — and the report waits for it and is delivered when it can be: nothing
      to do, don't resend. Only `reported → …` (exit 0) means it arrived.
+     `undelivered → …` (exit 1, issue #3439) means nothing reached the parent and
+     nothing waits for it — the person has it as a reminder; say so in your last
+     line rather than assume it arrived. A parent on ANOTHER machine (the brief's
+     `origin: … on another machine`) is reached through the hub the same way:
+     `report`, and `send` with `to: parent`.
   7. **Then stop.** `com.claude-fleet.cleanup` reaps the worktree/window/branch
      and records the resume ledger after the merged grace (default 10 minutes)
      and liveness checks; the dash marks pending cleanup with `rNm`.
