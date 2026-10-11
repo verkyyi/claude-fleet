@@ -832,6 +832,8 @@ FLEET_BATCH_GREEN_MEMBERS_CMD      test seam: replaces fleet_sub_issues in fleet
 FLEET_BATCH_GREEN_DRIVEN_CMD       test seam: replaces the live windows' @epic read in fleet-batch-green.sh (#3369)
 FLEET_BATCH_GREEN_ALERT_CMD        test seam: replaces fleet-alerts.sh in fleet-batch-green.sh (#3369)
 FLEET_ORPHAN_REPORT_DAYS           knob: how many days an unread orphaned child report stays listed on the sidebar / entry (fleet-orphan-reports.py, default 14, #3369)
+FLEET_FEEDBACK_CLAUDE              seam: the claude binary fleet-feedback-switch.sh on/off runs (selftest, #3360)
+FLEET_FEEDBACK_MANAGED             seam: 0|1 over fleet_node_manages in fleet-feedback-switch.sh (selftest, #3360)
 FLEET_FEEDBACK_COLLECT             test seam: the collect list fleet-feedback.sh reads (default conf/debug-collect.list, #3358)
 FLEET_FEEDBACK_SHAPES              test seam: the shapes table fleet-feedback.sh redacts with (default conf/secret-shapes.list, #3358)
 FLEET_FEEDBACK_MACHINE_KIND        test seam: the machine kind fleet-feedback.sh reports (managed-mac | managed-linux | own, #3358)
