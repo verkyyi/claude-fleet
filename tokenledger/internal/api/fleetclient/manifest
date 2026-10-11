@@ -225,16 +225,12 @@ commands/fleet-sync-install.md
 conf/codex-preamble.md
 mod/fleet/.claude-plugin/plugin.json
 mod/fleet/hooks/compose.ts
-mod/fleet/hooks/exit-guard.ts
 mod/fleet/hooks/gate.ts
 mod/fleet/hooks/hooks.json
 mod/fleet/hooks/inbox.ts
 mod/fleet/hooks/lifecycle.ts
-mod/fleet/hooks/orchestrator.ts
 mod/fleet/hooks/progress-model.ts
 mod/fleet/hooks/progress.tsx
-mod/fleet/hooks/qd.ts
-mod/fleet/hooks/queue.ts
 mod/fleet/hooks/register.ts
 mod/fleet/hooks/state.ts
 mod/fleet/hooks/tmux.ts
