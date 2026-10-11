@@ -953,6 +953,10 @@ class Thin:
                     # one): the first session, never a backoff against it (#3054)
                     self.firsts += 1
                     there = why or "no fleet session is live on %s" % (self.home or "?")
+                    if rc == NO_FLEET:
+                        # say which login was empty, never rotate homes silently (#3049)
+                        write_out(("fleet · %s\r\n" % tr("thin_no_fleet_fmt", self.home or "?",
+                                                           (self.base or {}).get("login") or "?")).encode("utf-8", "replace"))
                     if self.firsts > int(env_num("FLEET_THIN_FIRST_ROUNDS", 3)):
                         self.first_failed(tr("thin_first_rounds_fmt", self.home or "?", self.firsts - 1))
                     if self.firsts > int(env_num("FLEET_THIN_FIRST_ROUNDS", 3)) or not self.first_session(there):

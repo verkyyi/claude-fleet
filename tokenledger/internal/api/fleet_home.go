@@ -23,6 +23,13 @@ import (
 //  3. the least loaded online machine the person has an account on — scored
 //     by the same judge node placement uses (#1425).
 //
+// Each machine is entered as homeLoginFor's login (claude-fleet#3049): the
+// person's login THERE that has a live fleet. A machine where none of their
+// logins has one is no home while another machine has — the thin client
+// would land on a login with no fleet, or an old one. Only when no machine
+// has a fleet of theirs (a newcomer, #3054's first session) does the pick
+// fall back to the account's login, as before.
+//
 // No machine of theirs online: no pick, and the answer says so in words the
 // client prints as is. The answer also carries the whole route list, so
 // `fleet` goes straight to measuring the chosen machine's routes without a
@@ -55,6 +62,10 @@ type HomeCandidate struct {
 	// Maintenance is the 维护中 reason (claude-fleet#1427): still enterable —
 	// the operator shutting it down needs in — but the pick's last choice.
 	Maintenance string `json:"maintenance,omitempty"`
+	// Login is the login this machine is entered as, NoFleet that none of
+	// the person's logins there has a live fleet (claude-fleet#3049).
+	Login   string `json:"login,omitempty"`
+	NoFleet bool   `json:"no_fleet,omitempty"`
 }
 
 // HomeResponse is the body of control.HomePath.
@@ -77,6 +88,7 @@ func (s *Server) homePick(pid, last string, now time.Time) (HomeResponse, error)
 	var hosts map[string]bool
 	var scope func(hostname, osUser string) bool
 	login := ""
+	loginOn := func(string) (string, bool) { return "", false }
 	if pid != "" {
 		p, _, h, err := s.fleetLoginsOf(pid)
 		if err != nil {
@@ -84,6 +96,9 @@ func (s *Server) homePick(pid, last string, now time.Time) (HomeResponse, error)
 		}
 		out.Login, hosts, login = p.Login, h, p.Login
 		if scope, err = s.scopeFor(pid); err != nil {
+			return out, err
+		}
+		if loginOn, err = s.homeLogins(pid); err != nil {
 			return out, err
 		}
 	}
@@ -105,12 +120,16 @@ func (s *Server) homePick(pid, last string, now time.Time) (HomeResponse, error)
 	accounts := s.loginAccounts()
 
 	relayReady := s.sshRelayReadiness()
+	anyFleet := false
 	for _, m := range s.fleetMachines() {
 		if hosts != nil && !hosts[m.Hostname] {
 			continue
 		}
-		out.Machines = append(out.Machines, RouteMachine{FleetMachine: m, Relay: relayReady(m.Hostname)})
-		c := HomeCandidate{Machine: m.Hostname, Alias: m.alias(), Sessions: sessions[strings.ToLower(m.Hostname)]}
+		lg, live := loginOn(m.Hostname)
+		out.Machines = append(out.Machines, RouteMachine{FleetMachine: m, Relay: relayReady(m.Hostname), Login: lg})
+		c := HomeCandidate{Machine: m.Hostname, Alias: m.alias(), Sessions: sessions[strings.ToLower(m.Hostname)],
+			Login: lg, NoFleet: pid != "" && !live}
+		anyFleet = anyFleet || (c.Login != "" && !c.NoFleet)
 		// The endpoint that speaks for this machine: the person's own login
 		// when it reports, else any online one — they share the box.
 		var ep *store.Node
@@ -162,7 +181,9 @@ func (s *Server) homePick(pid, last string, now time.Time) (HomeResponse, error)
 	// so a person lands on the machine that is staying up, and the operator
 	// taking the last one down can still get in.
 	for _, allowMaint := range []bool{false, true} {
-		up := func(c HomeCandidate) bool { return c.Online && (allowMaint || c.Maintenance == "") }
+		up := func(c HomeCandidate) bool {
+			return c.Online && (allowMaint || c.Maintenance == "") && !(anyFleet && c.NoFleet)
+		}
 		// 1 — last used, online.
 		for i, c := range out.Candidates {
 			if up(c) && c.Last {
@@ -212,6 +233,12 @@ func (s *Server) homePick(pid, last string, now time.Time) (HomeResponse, error)
 	}
 	if pick < 0 {
 		out.Reason = "你的机器都不在线"
+		for _, c := range out.Candidates {
+			if c.Online && c.NoFleet {
+				out.Reason = "有你 fleet 的机器都不在线"
+				break
+			}
+		}
 		if len(out.Candidates) == 0 {
 			out.Reason = "入口没有列出你能连的机器"
 		}
@@ -225,6 +252,74 @@ func (s *Server) homePick(pid, last string, now time.Time) (HomeResponse, error)
 		}
 	}
 	return out, nil
+}
+
+// homeLogins is pid's reader of homeLoginFor, for a loop over machines: one
+// read of the accounts and the fleet registry. A login is the person's when
+// it is one of their active managed accounts (the logins their certificate
+// carries, managedLoginsOf) and, on that machine, no one else's account. Of
+// those, the one with a live fleet there (registered by the node's newest
+// heartbeat, not down — claude-fleet#2477 reports them per login) wins: the
+// machine's own account login first, else the most sessions, else by name.
+// None live ⇒ the machine's account login, live false.
+func (s *Server) homeLogins(pid string) (func(hostname string) (string, bool), error) {
+	logins, _, byHost, err := s.managedLoginsOf(pid)
+	if err != nil {
+		return nil, err
+	}
+	others := map[[2]string]bool{}
+	accts, err := s.Store.FleetAccountsInState(store.AccountActive)
+	if err != nil {
+		return nil, err
+	}
+	for _, a := range accts {
+		if a.PrincipalID != pid {
+			others[[2]string{strings.ToLower(a.Hostname), a.Login}] = true
+		}
+	}
+	mine := map[string]bool{}
+	for _, l := range logins {
+		mine[l] = true
+	}
+	rows, err := s.Store.Fleets()
+	if err != nil {
+		return nil, err
+	}
+	return func(hostname string) (string, bool) {
+		workers := map[string]int{}
+		for _, r := range rows {
+			if !r.Present || r.State == fleetStateDown || !mine[r.OSUser] || !sameMachine(r.Hostname, hostname) ||
+				(byHost[hostname] != r.OSUser && others[[2]string{strings.ToLower(hostname), r.OSUser}]) {
+				continue
+			}
+			workers[r.OSUser] += r.WorkerCount + 1 // a fleet with no session still counts
+		}
+		if own := byHost[hostname]; workers[own] > 0 {
+			return own, true
+		}
+		best := ""
+		for l, n := range workers {
+			if best == "" || n > workers[best] || (n == workers[best] && l < best) {
+				best = l
+			}
+		}
+		if best != "" {
+			return best, true
+		}
+		return byHost[hostname], false
+	}, nil
+}
+
+// homeLoginFor is the login pid enters hostname as, and whether a fleet of
+// theirs is live under it there (claude-fleet#3049) — the ONE answer the
+// home pick, the route list and the thin client's address share.
+func (s *Server) homeLoginFor(pid, hostname string) (string, bool, error) {
+	f, err := s.homeLogins(pid)
+	if err != nil {
+		return "", false, err
+	}
+	l, live := f(hostname)
+	return l, live, nil
 }
 
 // handleFleetHome serves control.HomePath.
