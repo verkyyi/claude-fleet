@@ -61,12 +61,21 @@ func (s *Server) credPolicyReview(settings map[string]string) (policyMigration, 
 	if err != nil {
 		return review, err
 	}
-	roles := map[string]string{}
-	for _, machine := range snapshot.Machines {
-		m := strings.ToLower(firstLabel(machine.Hostname))
-		if roles[m] != MachineRoleHost {
-			roles[m] = machine.Role
+	byMachine := map[string][]NodeView{}
+	for _, node := range snapshot.Nodes {
+		ep, known := trusts[node.EndpointID]
+		if !known {
+			continue
 		}
+		// Display hostnames can change. Join through the endpoint's enrolled
+		// identity, exactly as credential authorization does.
+		m := strings.ToLower(firstLabel(ep.EnrolledHost))
+		node.Hostname = m
+		byMachine[m] = append(byMachine[m], node)
+	}
+	roles := map[string]string{}
+	for m, nodes := range byMachine {
+		roles[m] = machineRole(MachineView{Hostname: m}, nodes)
 	}
 	seen := map[string]bool{}
 	for _, ep := range trusts {

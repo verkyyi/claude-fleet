@@ -565,6 +565,11 @@ func TestCredPolicyMigrationSkipsClients(t *testing.T) {
 	}
 	off := false
 	node("laptop", "laptop.local", true, nil)
+	// A display hostname can change; grants and filtering use the enrolled identity.
+	renamed, _ := json.Marshal(control.Heartbeat{Hostname: "renamed-client", Personal: true, ObservedAt: now})
+	if err := h.srv.Store.NodeHeartbeat("ep_laptop", "renamed-client", "viewer", "", control.Proto, string(renamed), now); err != nil {
+		t.Fatal(err)
+	}
 	node("console", "console", false, &off)
 	node("mixed-client", "mixed.local", true, nil)
 	node("mixed-host", "MIXED", false, nil)
