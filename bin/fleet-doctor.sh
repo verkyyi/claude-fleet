@@ -3301,7 +3301,25 @@ if [ "$_hub_on" = 1 ] && [ -x "$(dirname "$0")/fleet-hub-sessions.sh" ]; then
     fi
     unset _hsfail _hsage _hsfix
   fi
-  unset _hid _hst
+  # personcert (issue #3106): a node's own hub calls — the sessions read and
+  # every write (the steward's and the idle reaper's reaps, a remote answer) —
+  # go by this login's node token; one that would still borrow a person's
+  # 12-hour `fleet login` certificate stops dead the night it lapses.
+  _pcw=$(bash "$(dirname "$0")/fleet-hub-write.sh" --identity 2>/dev/null </dev/null)
+  _pcl=''
+  for _pc in "sessions read:$_hid" "hub writes:$_pcw"; do
+    case "${_pc#*:}" in
+      node\ *|cmd\ *|token\ *) ;;
+      cert\ *) _pcl="${_pcl}${_pcl:+; }${_pc%%:*} use your connection certificate (${_pc#*:cert })" ;;
+      *) _pcl="${_pcl}${_pcl:+; }${_pc%%:*}: ${_pc#*:}" ;;
+    esac
+  done
+  if [ -z "$_pcl" ]; then
+    pass personcert "no node-side hub call needs a person's certificate (sessions: ${_hid%% *}, writes: ${_pcw%% *})"
+  else
+    warn personcert "$_pcl — a node must act by its own node token, never a person's \`fleet login\` (#3106): check node.env / the credential proxy (credsep), and redeploy a hub older than the node write door"
+  fi
+  unset _hid _hst _pcw _pcl _pc
 fi
 # --- hubauth (issue #2630): every node-side hub READ the hub refused, one line
 # per reader (fleet_hub_auth_note → global/hub_auth_fail). Refused past

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -34,6 +35,12 @@ import (
 // grant, and the journal and the audit row carry their principal. The viewer
 // token and a GitHub session still work here too (an operator's shell), as on
 // every fleet door.
+//
+// A node's own daemons write here by the login's NODE token, as a bearer, with
+// no cert (claude-fleet#3106): read as that login's owner (nodeLoginIdentity),
+// scoped exactly like their certificate, limited to nodeWriteTools, and each
+// write leaves a fleet.node_write hub-audit row naming the machine. A person's
+// short-lived certificate is never what a machine's background work rides on.
 
 // WriteRequest is the body of POST control.WritePath.
 type WriteRequest struct {
@@ -76,6 +83,20 @@ func (s *Server) handleFleetWrite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id, ok := s.sshRelayHTTPIdentity(r)
+	nodeActor := ""
+	if !ok && req.Cert == "" && bearer(r) != "" {
+		// A machine acting for its owner (claude-fleet#3106): the node token of
+		// a login, never a person's short-lived certificate. It acts as that
+		// login's person — FleetScope cuts the target to their own logins, so
+		// another person's worker is NOT_FOUND — on the worker tools only.
+		if nid, nok := s.nodeLoginIdentity(r); nok {
+			if !nodeWriteTools[req.Tool] {
+				httpError(w, http.StatusForbidden, "a node token writes the worker tools only (worker_message, worker_stop, worker_resume, worker_answer, worker_reap, worker_reap_policy, worker_rename, worker_switch) and operation_get")
+				return
+			}
+			id, ok, nodeActor = nid, true, nid.Actor
+		}
+	}
 	if !ok {
 		if req.Cert == "" || req.Sig == "" {
 			w.Header().Set("WWW-Authenticate", `Bearer realm="ccquota"`)
@@ -108,5 +129,25 @@ func (s *Server) handleFleetWrite(w http.ResponseWriter, r *http.Request) {
 		ctx = context.WithValue(withViewer(ctx, id.Principal), principalKey{}, id.Principal)
 	}
 	out, err := s.CallFleetTool(r.WithContext(ctx), req.Tool, args)
+	if nodeActor != "" && req.Tool != "operation_get" {
+		// The fleet audit names the person (their journal); this row names the
+		// machine that acted for them.
+		outcome := "ok"
+		if err != nil {
+			outcome = errorObject(err)["code"]
+		}
+		wid, _ := args["worker_id"].(string)
+		if aerr := s.Store.HubAudit(nodeActor, "fleet.node_write", req.Tool+" "+wid, outcome, "for "+id.Principal, time.Now()); aerr != nil {
+			log.Printf("fleet node write audit: %v", aerr)
+		}
+	}
 	writeFleetResult(w, r, out, err)
 }
+
+// nodeWriteTools are what a node token may write through the write door
+// (claude-fleet#3106): a machine's own daemons — the steward, the idle reaper,
+// a remote row's menu — act on their owner's workers. Never placement (that is
+// /v1/node/place), configuration, a service or a GitHub comment.
+var nodeWriteTools = map[string]bool{"worker_message": true, "worker_stop": true, "worker_resume": true,
+	"worker_answer": true, "worker_reap": true, "worker_reap_policy": true, "worker_rename": true,
+	"worker_switch": true, "operation_get": true}
