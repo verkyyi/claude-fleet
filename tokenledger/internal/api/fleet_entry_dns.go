@@ -28,11 +28,26 @@ import (
 // by hand while the target stood still is put back next tick, its audit
 // line saying 有人手改.
 //
+// A name nobody claimed must not answer at all (claude-fleet#3337): the
+// zone's own wildcard (*.24haowan.com → the hub, TTL 3600) caught
+// <unclaimed>.cf and sent a phone to the hub's port instead of anyone's
+// door. So the loop keeps one more record of its own, *.<sub> — a TXT that
+// says the name is unclaimed, and no A or AAAA: under it an unclaimed name
+// has no address (NODATA), and the zone's wildcard is no longer the closest
+// one. A claimed name's own records win over it as any name does.
+//
 // Off — no token in the environment (dns.FromEnv), or fleet.entry off —
 // the loop makes no call at all and the page reads as before.
 
 // EntryDNSEvery is how often the records are compared.
 const EntryDNSEvery = time.Minute
+
+// EntryDNSUnclaimed is the text the *.<sub> guard carries (ASCII: a TXT's
+// characters are DNSPod's to escape, and dig shows it as is).
+const EntryDNSUnclaimed = "fleet: this address name is not claimed - pick one on the hub keys page (/fleet/keys)"
+
+// entryDNSGuard is the guard's host under sub: "*.cf".
+func entryDNSGuard(sub string) string { return "*." + sub }
 
 // entryDNSMaxWrites bounds one tick's writes (DNSPod rate-limits); the rest
 // are the next tick's.
@@ -96,6 +111,7 @@ func (s *Server) EntryDNSTick(ctx context.Context, now time.Time) int {
 	if d == nil || !s.entryOn() {
 		return 0
 	}
+	s.entryEnsureNames(now)
 	targets, err := s.entryDNSTargets(d.Subdomain, now)
 	if err != nil {
 		log.Printf("entry dns: read the book: %v", err)
@@ -179,7 +195,9 @@ func (s *Server) entryDNSTargets(sub string, now time.Time) (map[string]entryDNS
 	for _, h := range homes {
 		home[h.Person] = h
 	}
-	out := map[string]entryDNSTarget{}
+	out := map[string]entryDNSTarget{
+		entryDNSGuard(sub): {want: map[string][]string{"TXT": {EntryDNSUnclaimed}}},
+	}
 	for _, n := range names {
 		host := dns.Host(n.Name, sub)
 		h, ok := home[n.Person]

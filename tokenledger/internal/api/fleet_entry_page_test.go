@@ -89,14 +89,16 @@ func TestEntryPageOwnBookOnly(t *testing.T) {
 	h := entryHarness(t)
 	_ = h.srv.Store.SetFleetSetting(EntryDomainKey, "cf.example.com", time.Now())
 
-	// First visit: the wizard at step 1; the name is asked at step 4 (the
-	// Hostname), suggested from the sign-in name.
+	// First visit: the wizard at step 1. Her home is set on it, and with the
+	// home her suggested name (#3337): step 4's Hostname is already one that
+	// resolves, and she may still rename it.
 	code, body, _ := keysPage(t, h, pAlice, "", nil)
 	if code != 200 || !strings.Contains(body, "去 App Store 装 Termius") || strings.Contains(body, "Hostname") {
 		t.Fatalf("Alice's first visit: HTTP %d\n%s", code, body)
 	}
-	if _, body, _ = keysPage(t, h, pAlice, "?step=4", nil); !strings.Contains(body, "先给你的地址起个名字") || strings.Contains(body, ">Hostname<") {
-		t.Fatalf("step 4 before a name:\n%s", body)
+	if _, body, _ = keysPage(t, h, pAlice, "?step=4", nil); strings.Contains(body, "先给你的地址起个名字") || !strings.Contains(body, ">Hostname<") ||
+		!strings.Contains(body, ">user1001.cf.example.com<") {
+		t.Fatalf("step 4 after the first visit claimed her name:\n%s", body)
 	}
 	code, body, loc := keysPost(t, h, pAlice, "do", "name", "name", "Alice-1")
 	wantRedirect(t, "Alice names her address", code, body, loc, "name")
