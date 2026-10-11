@@ -118,19 +118,19 @@ eq 'A: connect never ran' '' "$(cat "$WORK/connect.log")"
 rm -f "$SB/fleet-shell.sh"; ln -s "$BIN/fleet-shell.sh" "$SB/fleet-shell.sh"
 fake_tmux 3.4 1                                   # new-session fails: the client cannot start
 : > "$WORK/connect.log"
-out=$(PATH="$SH" FLEET_SHELL_NO_ATTACH=1 "$SB/fleet" 2>&1); rc=$?
+out=$(PATH="$SH" FLEET_CLIENT=shell FLEET_SHELL_NO_ATTACH=1 "$SB/fleet" 2>&1); rc=$?
 eq 'A: the client cannot start → exit 1' 1 "$rc"
 has 'A: one line says why' "$out" '客户端起不来：tmux 开不了会话'
 eq 'A: … and only that line' 1 "$(printf '%s\n' "$out" | grep -c .)"
 hasnt 'A: no --enter (nothing else opens)' "$(cat "$WORK/connect.log")" '--enter'
 fake_tmux 3.1 0
 : > "$WORK/connect.log"
-out=$(PATH="$SH" FLEET_SHELL_NO_ATTACH=1 "$SB/fleet" 2>&1); rc=$?
+out=$(PATH="$SH" FLEET_CLIENT=shell FLEET_SHELL_NO_ATTACH=1 "$SB/fleet" 2>&1); rc=$?
 eq 'A: tmux 3.1 → exit 1' 1 "$rc"
 has 'A: tmux 3.1 → says ≥ 3.2' "$out" 'tmux ≥ 3.2'
 eq 'A: tmux 3.1 → connect never ran' '' "$(cat "$WORK/connect.log")"
 rm -f "$SH/tmux"
-out=$(PATH="$SH" FLEET_SHELL_NO_ATTACH=1 "$SB/fleet" 2>&1); rc=$?
+out=$(PATH="$SH" FLEET_CLIENT=shell FLEET_SHELL_NO_ATTACH=1 "$SB/fleet" 2>&1); rc=$?
 eq 'A: no tmux → exit 1' 1 "$rc"
 has 'A: no tmux → the install hint' "$out" 'brew install tmux'
 eq 'A: no tmux → connect never ran' '' "$(cat "$WORK/connect.log")"

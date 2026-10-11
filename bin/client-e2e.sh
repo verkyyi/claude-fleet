@@ -43,6 +43,9 @@
 # the deps step on). Exit 0 = every step green; 1 = a step failed (its name and
 # the logs are printed); 2 = usage.
 set -uo pipefail
+# plain `fleet` is the thin loop since #3007 (EPIC #2999 C10): what runs here is the
+# OLD client's road, kept until C11 deletes it — so it asks for it by name
+export FLEET_CLIENT=shell
 
 CCQ=''
 while [ $# -gt 0 ]; do
@@ -254,7 +257,7 @@ printf '#!/bin/sh\necho client-laptop\n' > "$HSHIM/hostname"; chmod +x "$HSHIM/h
 # directly runs without `fleet` in front, on a runner that may have no tmux (#3018)
 cenv() {
   env -i PATH="$HSHIM:$CH/.local/share/claude-fleet-vendor/bin:$CH/.local/bin:$PATH" HOME="$CH" SHELL=/bin/bash TERM=xterm-256color LANG=C.UTF-8 \
-    FLEET_SHELL_SESSION="$SESS" FLEET_SHELL_CACHE="$SC" FLEET_SHELL_NO_ATTACH=1 FLEET_SHELL_WARM=0 \
+    FLEET_CLIENT=shell FLEET_SHELL_SESSION="$SESS" FLEET_SHELL_CACHE="$SC" FLEET_SHELL_NO_ATTACH=1 FLEET_SHELL_WARM=0 \
     FLEET_HUB_TOKEN="$VT" CCQUOTA_VIEWER_TOKEN="$VT" FLEET_REMOTE_SSH_CMD="$SHIM/ssh" \
     FLEET_HUB_SESSIONS_EVERY=1 FLEET_HUB_SESSIONS_LOOP_SECS=8 "$@"
 }

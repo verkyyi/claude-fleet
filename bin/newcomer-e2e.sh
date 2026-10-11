@@ -54,6 +54,9 @@
 # NEWCOMER_E2E_HOLD=<secs> (on red, keep everything up that long). Exit 0 = every step green; 1 = a step failed
 # (its name and the logs are printed); 2 = usage.
 set -uo pipefail
+# plain `fleet` is the thin loop since #3007 (EPIC #2999 C10): what runs here is the
+# OLD client's road, kept until C11 deletes it — so it asks for it by name
+export FLEET_CLIENT=shell
 
 CCQ=''
 while [ $# -gt 0 ]; do
@@ -298,7 +301,7 @@ SHIM="$WORK/shim"; mkdir -p "$SHIM"
 SC=$(mktemp -d /tmp/nce2e-c.XXXXXX) || die 'no short cache dir'
 nenv() {
   env -i PATH="$SHIM:$CH/.local/bin:$PATH" HOME="$CH" SHELL=/bin/zsh TERM=xterm-256color LANG=zh_CN.UTF-8 \
-    PYTHONUNBUFFERED=1 "$@"
+    PYTHONUNBUFFERED=1 FLEET_CLIENT=shell "$@"
 }
 
 # =============================================================================
@@ -370,7 +373,7 @@ chmod +x "$SHIM/ssh"
 # must not take itself for that machine (it would run the node's side here).
 printf '#!/bin/sh\necho newcomer-laptop\n' > "$SHIM/hostname"; chmod +x "$SHIM/hostname"
 fenv() {
-  nenv FLEET_SHELL_SESSION="$SESS" FLEET_SHELL_CACHE="$SC" FLEET_SHELL_NO_ATTACH=1 FLEET_SHELL_WARM=0 \
+  nenv FLEET_CLIENT=shell FLEET_SHELL_SESSION="$SESS" FLEET_SHELL_CACHE="$SC" FLEET_SHELL_NO_ATTACH=1 FLEET_SHELL_WARM=0 \
     FLEET_HUB_SESSIONS_EVERY=1 FLEET_HUB_SESSIONS_LOOP_SECS=8 "$@"
 }
 before=$(ssh-keygen -L -f "$CERT" | awk '/Serial:/{print $2}')

@@ -221,7 +221,7 @@ EOF
   TMUX='' "$TMUXB" -S "$sock" -f /dev/null new-session -d -s drill -x 160 -y 48 \
     env -i HOME="$sb/home" PATH="$pth" TERM=xterm-256color LANG=zh_CN.UTF-8 LC_CTYPE=zh_CN.UTF-8 \
       SHELL=/bin/zsh USER="$(id -un)" LOGNAME="$(id -un)" TMPDIR="$sb/tmp" TMUX_TMPDIR="$sb/t" \
-      FLEET_LOGIN_BROWSER=1 FLEET_DEVICE_NAME="newcomer-$n-$$" FLEET_NODE_JOIN_ARGS='--service detached' \
+      FLEET_CLIENT=shell FLEET_LOGIN_BROWSER=1 FLEET_DEVICE_NAME="newcomer-$n-$$" FLEET_NODE_JOIN_ARGS='--service detached' \
       PS1='newcomer% ' "$PSHELL" -f \
     || { R_why='the drill terminal did not start'; cleanup_run "$sb"; return 1; }
   sleep 0.5
