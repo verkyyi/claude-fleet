@@ -189,7 +189,7 @@ marker="${TMPDIR:-/tmp}/.dash-popup-ran.$$"
 rm -f "$marker" 2>/dev/null || true
 
 if [ -n "$client" ]; then
-  trap 'rm -f "$marker" 2>/dev/null; fleet_popup_thaw; tmux set -g @popup_open 0 \; set -gu @popup_pid \; set -gu @popup_title 2>/dev/null || true' EXIT INT TERM HUP
+  trap 'rm -f "$marker" 2>/dev/null; tmux set -g @popup_open 0 \; set -gu @popup_pid \; set -gu @popup_title 2>/dev/null || true; fleet_popup_thaw' EXIT INT TERM HUP
   # `@popup_pid <epoch>:<pid>` names the holder of THIS epoch (issue #1536): the
   # sidebar pauses only while this process lives, so a holder SIGKILLed past
   # its trap (or a flag that outlived its popup) frees the list at once, not 30s on.
