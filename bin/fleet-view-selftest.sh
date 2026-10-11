@@ -155,9 +155,12 @@ done
 for want in '─ 等你 1' '─ 在干活 3' '要不要继续合并？' 'Alpha 的完整标题很长很长' '已结束 1 个'; do
   grep -qF "$want" "$W/popup.txt" || fail "B: the list lacks 「${want}」: $(cat "$W/popup.txt")"
 done
-# no session is special (issue #3119): no 「新任务」 line, no 停放 / 待你动手 section
+# no session is special (issue #3119): no orchestrator 「新任务」 row, no 停放 / 待你动手
+# section — the panel's own command row 「新任务…」 (issue #3180) is first, with no session behind it
 # issue #3179: no (machine, login) grouping, a state is a glyph (the word only on the lit row)
-for bad in 'merged' 'done:2h' '⇢' '新任务' '编排' '停放' '待你动手' '（这台）' '─ m4' '─ nodeA' '在问你'; do
+grep -A1 '│› ' "$W/popup.txt" | tail -1 | grep -q '新任务…' || fail "B: the first line is not the panel's 「新任务…」: $(head -4 "$W/popup.txt")"
+[ "$(grep -c '新任务' "$W/popup.txt")" = 1 ] || fail "B: 「新任务」 more than once: $(grep -n '新任务' "$W/popup.txt")"
+for bad in 'merged' 'done:2h' '⇢' '编排' '停放' '待你动手' '（这台）' '─ m4' '─ nodeA' '在问你'; do
   grep -qF -- "$bad" "$W/popup.txt" && fail "B: the list still says 「${bad}」: $(grep -F -- "$bad" "$W/popup.txt")"
 done
 ask=$(grep -n '─ 等你' "$W/popup.txt" | head -1 | cut -d: -f1); work=$(grep -n '─ 在干活' "$W/popup.txt" | head -1 | cut -d: -f1)
