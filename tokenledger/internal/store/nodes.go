@@ -98,6 +98,10 @@ func (s *Store) EnsureNodes() error {
 	if err := s.ensureFleetDebugReports(); err != nil {
 		return err
 	}
+	// What people on managed machines sent with /fleet-feedback (claude-fleet#3355).
+	if err := s.ensureFleetFeedback(); err != nil {
+		return err
+	}
 	// The team configuration layer (claude-fleet#1726).
 	if err := s.ensureFleetTeamBundles(); err != nil {
 		return err

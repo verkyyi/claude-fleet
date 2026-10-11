@@ -25,3 +25,4 @@ patches:
   - path: ingress-hosts.yaml
   - path: deployment-release.yaml
   - path: deployment-debug.yaml
+  - path: deployment-feedback.yaml

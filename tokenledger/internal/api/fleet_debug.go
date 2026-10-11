@@ -114,11 +114,18 @@ type debugShape struct {
 // (tests), else the copy the hub's client pack carries. None ⇒ an error —
 // a hub that cannot check a bundle does not take one.
 func (s *Server) debugShapes() ([]debugShape, error) {
+	return loadSecretShapes(s.Debug.ShapesFile)
+}
+
+// loadSecretShapes reads conf/secret-shapes.list from file, else the client
+// pack's copy — every hub reader of the table (debug bundles, feedback) goes
+// through it.
+func loadSecretShapes(file string) ([]debugShape, error) {
 	var b []byte
 	var err error
 	switch {
-	case s.Debug.ShapesFile != "":
-		b, err = os.ReadFile(s.Debug.ShapesFile)
+	case file != "":
+		b, err = os.ReadFile(file)
 	case fleetclient.Packed:
 		b, err = fleetclient.Files.ReadFile("conf/secret-shapes.list")
 	default:
