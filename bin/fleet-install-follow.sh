@@ -25,7 +25,10 @@
 #   OFF      FLEET_INSTALL_SYNC=0 in that login's fleet.settings / fleet.conf —
 #            a choice, never a warning (the documented way to silence one)
 #   UNSEEN   the last tick could not read the mark (`fetch-failed`, offline) or
-#            there is no tag yet (`none`) — not seen ≠ not following; INFO only
+#            there is no tag yet (`none`) — not seen ≠ not following; INFO only.
+#            A `fetch-failed` whose stable WAS named (the hub answered; the
+#            release did not arrive / verify) for longer than
+#            FLEET_INSTALLS_LAG_WARN (1800 s) is STUCK: 「落后 Nm」 + why (#3047)
 #   UNKNOWN  the state cannot be read (another login's home without passwordless
 #            sudo) or carries a token this reader does not know — never OK
 #
@@ -94,6 +97,10 @@ if [ -z "$STUCK_SECS" ]; then
   done
 fi
 case "$STUCK_SECS" in ''|*[!0-9]*) STUCK_SECS=86400 ;; esac
+# how long a SEEN stable may go untaken before a fetch-failed is STUCK (#3047) —
+# the same bound fleet-installs.sh (`fleet doctor --installs`) WARNs 落后 past
+LAG_SECS="${FLEET_INSTALLS_LAG_WARN:-1800}"
+case "$LAG_SECS" in ''|*[!0-9]*) LAG_SECS=1800 ;; esac
 
 # --- reading another login's files ---------------------------------------------
 # as_owner <owner> — can this shell act as <owner> through $SUDO? Probed once.
@@ -224,7 +231,18 @@ judge() {
     refused|rolled-back|skipped|failed)
       F_VERDICT=STUCK; F_WHY="$j_result — $j_reason" ;;
     fetch-failed|none)
-      F_VERDICT=UNSEEN; F_WHY="$j_result — $j_reason" ;;
+      F_VERDICT=UNSEEN; F_WHY="$j_result — $j_reason"
+      # issue #3047: stable WAS seen (the hub named it) and has not been taken for
+      # longer than FLEET_INSTALLS_LAG_WARN — a release that never arrives or
+      # never verifies is not «offline», it is a login left behind: say so
+      j_st=$(j_get stable); j_ss=$(j_get stable_since)
+      case "$j_ss" in ''|*[!0-9]*) j_ss='' ;; esac
+      case "$j_st" in ''|none|'?') j_st='' ;; esac
+      if [ "$j_result" = fetch-failed ] && [ -n "$j_st" ] && [ -n "$j_ss" ] \
+         && [ "$j_st" != "$(j_get head)" ] && [ $(( now - j_ss )) -gt "$LAG_SECS" ]; then
+        F_VERDICT=STUCK
+        F_WHY="落后 $(fmt_age $(( now - j_ss ))): stable ${F_STABLE} seen, not taken — $j_reason"
+      fi ;;
     '')
       F_VERDICT=UNKNOWN; F_WHY="$j_state has no result line" ;;
     *)

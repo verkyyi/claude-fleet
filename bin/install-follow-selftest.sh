@@ -16,7 +16,9 @@
 #                   the fallback (dual-read); state `off` + conf on → OK
 #   F. no tick      no state file → STUCK ("no tick has run yet")
 #   G. stale        `current` but last_check 2 days old → STUCK ("last tick 2d ago")
-#   H. unseen       fetch-failed / none → UNSEEN, doctor INFO, never WARN
+#   H. unseen       fetch-failed / none → UNSEEN, doctor INFO, never WARN —
+#                   unless the hub named stable and it has gone untaken past
+#                   FLEET_INSTALLS_LAG_WARN: STUCK, 「落后 Nm」 + why (#3047)
 #   I. no daemon    an install without bin/fleet-install-sync.sh → STUCK
 #   J. others       four other logins (current / off / deferred 26h / no tick) →
 #                   --summary tokens, `2 stuck`, exit 1; an unreadable one (no
@@ -243,6 +245,21 @@ D=$(doc_sync)
 contains "H: doctor INFO" "$D" "INFO"
 contains "H: doctor says not seen" "$D" "stable not seen at the last tick"
 not_contains "H: doctor no WARN" "$D" "WARN"
+# issue #3047: the hub NAMED stable and its release has not arrived / verified
+# for longer than FLEET_INSTALLS_LAG_WARN — a login left behind, not offline
+H_ST=$STABLESHA; STABLESHA=abfd579000000000000000000000000000000000
+mk_state "$CONF" fetch-failed "the hub's release abfd579 did not arrive or did not verify: old ccquota"
+printf 'stable_since: %s\n' "$(( $(date +%s) - 7200 ))" >> "$CONF/global/install-sync.state"
+fself
+eq "H: a seen stable untaken for 2h is STUCK" STUCK "$(fv verdict)"
+contains "H: …says how long" "$(fv why)" "落后 2h"
+contains "H: …and why" "$(fv why)" "old ccquota"
+contains "H: doctor WARNs" "$(doc_sync)" "WARN"
+mk_state "$CONF" fetch-failed "the hub's release abfd579 did not arrive: old ccquota"
+printf 'stable_since: %s\n' "$(( $(date +%s) - 60 ))" >> "$CONF/global/install-sync.state"
+fself
+eq "H: …under the bound it stays UNSEEN" UNSEEN "$(fv verdict)"
+STABLESHA=$H_ST
 mk_state "$CONF" none "no refs/tags/stable on origin yet"
 fself
 eq "H: none is UNSEEN" UNSEEN "$(fv verdict)"

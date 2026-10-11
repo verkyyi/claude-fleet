@@ -597,7 +597,7 @@ if [ "$HUB_ANS" = 1 ] && [ ! -s "$CONF/release.pub" ]; then
      && grep -Eq '^ed25519 [A-Za-z0-9+/=_-]{8,}$' "$tmp/release.pub"; then
     head -n 1 "$tmp/release.pub" > "$CONF/release.pub.tmp" && chmod 0644 "$CONF/release.pub.tmp" \
       && mv -f "$CONF/release.pub.tmp" "$CONF/release.pub" \
-      && say "入口: 记下了它的发布签名钥匙（指纹 $(awk '{print $2}' "$CONF/release.pub" | { shasum -a 256 2>/dev/null || sha256sum; } | cut -c1-16)）— 之后只认它"
+      && say "入口: 记下了它的发布签名钥匙（指纹 $(awk '{print $2}' "$CONF/release.pub" | python3 -c 'import base64, hashlib, sys; print(hashlib.sha256(base64.b64decode(sys.stdin.read().strip())).hexdigest()[:16])' 2>/dev/null || echo ?)）— 之后只认它"
   fi
 fi
 # the invitation, for the first `fleet login` (EPIC #2259 C2): 0600, never shown
