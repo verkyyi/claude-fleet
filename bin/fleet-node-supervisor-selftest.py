@@ -2208,6 +2208,54 @@ class R_Entry(Sandbox):
         self.assertNotIn(".ssh", "".join(l for l in cfg.splitlines(True) if not l.startswith("#")))
         self.assertNotIn("PerSourcePenalties", cfg, "the system default, never weakened here")
 
+    def test_dispatch_once_the_runtime_carries_it(self):
+        # issue #3071 (C5): the ForceCommand is the runtime's fleet-entry.sh, only
+        # once the runtime has it — before that the config is #3070's, byte for byte
+        old = dict(os.environ)
+        try:
+            rt = os.path.join(self.d, "rt")
+            os.makedirs(os.path.join(rt, "bin"))
+            os.environ.update(FLEET_NODE_RUNTIME=rt, FLEET_NODE_STATE=os.path.join(self.d, "db"))
+            os.environ.pop("FLEET_NODE_TEST", None)
+            paths = fns.Paths()
+            ep = fns.EntryPaths(paths)
+            bare = fns.entry_config(ep, 22022, ["alice"], paths)
+            self.assertNotIn("ForceCommand", bare)
+            self.assertNotIn("SetEnv", bare)
+            self.assertIn("Subsystem sftp internal-sftp\n", bare)
+            self.assertEqual(bare, fns.entry_config(ep, 22022, ["alice"]))
+            open(os.path.join(rt, "bin", "fleet-entry.sh"), "w").close()
+            os.environ["FLEET_ENTRY_TEST_SETENV"] = "FLEET_ENTRY_VIEW=/x"   # not a test run: ignored
+            cfg = fns.entry_config(ep, 22022, ["alice"], paths)
+            self.assertIn("ForceCommand /bin/bash %s\n" % os.path.join(rt, "bin", "fleet-entry.sh"), cfg)
+            self.assertIn("SetEnv FLEET_ENTRY_BOOK=%s\n" % ep.book, cfg)
+            self.assertEqual(len([l for l in cfg.splitlines() if l.startswith("SetEnv")]), 1)
+            sftp = [l for l in cfg.splitlines() if l.startswith("Subsystem sftp ")][0]
+            if any(os.access(x, os.X_OK) for x in fns.ENTRY_SFTP_SERVERS):
+                self.assertTrue(sftp.endswith("/sftp-server"), sftp)
+            self.assertNotIn("DisableForwarding", cfg)
+        finally:
+            os.environ.clear()
+            os.environ.update(old)
+
+    def test_audit_lines(self):
+        # issue #3071 (共同约定 11): what the listener logged, one line each, no key text
+        book = {"logins": {"alice": {"person": "gh:1"}}}
+        text = ("Connection from 1.2.3.4 port 5 on 0.0.0.0 port 22022\n"
+                "Accepted publickey for alice from 1.2.3.4 port 5 ssh2: ED25519 SHA256:abc\n"
+                "Failed publickey for alice from 6.6.6.6 port 7 ssh2: ED25519 SHA256:bad\n"
+                "Invalid user mallory from 6.6.6.6 port 8\n"
+                "User bob from 6.6.6.6 not allowed because not listed in AllowUsers\n")
+        out = fns.entry_audit_lines(text, book, "mini2", 100, 0)
+        self.assertEqual([(d["login"], d["source_ip"], d["fp"], d["result"]) for d in out], [
+            ("alice", "1.2.3.4", "SHA256:abc", "ok"), ("alice", "6.6.6.6", "SHA256:bad", "denied: key"),
+            ("mallory", "6.6.6.6", "", "denied: no such login"), ("bob", "6.6.6.6", "", "denied: not on the entry")])
+        self.assertEqual(out[0]["person"], "gh:1")
+        self.assertEqual(out[0]["machine"], "mini2")
+        ids = [d["id"] for d in out]
+        self.assertEqual(len(set(ids)), 4, "each line its own id (its byte offset)")
+        self.assertEqual(ids[0], str(100 + len(text.splitlines(True)[0])))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

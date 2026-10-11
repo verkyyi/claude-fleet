@@ -764,7 +764,9 @@ Do not install from memory: read the doc and work from it.
   `FLEET_ENTRY_PORT` (22022) on every interface — keys only, AllowUsers only the
   taken-over non-admin logins whose home it is, keys files root's and written only
   from the hub's list (`fleet-node-supervisor.py entry`, docs/MANAGED-NODE.md §16,
-  BREAK-IT `entry-*`). Nothing else may widen a bind.
+  BREAK-IT `entry-*`). Its `ForceCommand` is `bin/fleet-entry.sh` (issue #3071, C5) —
+  a dispatch as the login, never a limit: no command on a terminal is the 看台, a
+  command runs as on port 22. Nothing else may widen a bind.
 - **A closed window takes its process trees with it** (issue #1298). tmux's
   `window-unlinked` / `pane-exited` / `after-kill-pane` hooks run
   `bin/fleet-window-reap.sh --hook`, which kills every PPID=1 tree of ours whose

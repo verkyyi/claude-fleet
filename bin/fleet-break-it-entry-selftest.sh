@@ -23,6 +23,11 @@
 #                         file rewritten outside the hub's list is put back
 #   entry-hub-down        entry_pull: the hub away — the last list keeps working, the
 #                         doctor's entry row says how far behind it is
+#   entry-no-command-lands  bin/fleet-entry.sh, the ForceCommand (issue #3071, C5): no
+#                         command on a terminal is the 看台 (a stand-in viewer records
+#                         its argv), a command / sftp / scp / rsync runs as on port 22,
+#                         no command and no terminal is the login shell; each arrival
+#                         is a line in entry.ndjson (the login's and the door's)
 #
 # Each prints `PASS <id> <secs>s ≤<cap>s <what came back>` like its parent.
 # No sshd / ssh / ssh-keygen here, or an sshd without PerSourcePenalties
@@ -109,13 +114,13 @@ PY
 eunset() {
   unset FLEET_NODE_STATE FLEET_NODE_LOG FLEET_NODE_RUNTIME FLEET_NODE_TEST FLEET_NODE_PASSWD FLEET_NODE_TABLE \
     FLEET_NODE_TICK FLEET_NODE_LAUNCHCTL FLEET_NODE_TENANT_EVERY FLEET_ENTRY FLEET_ENTRY_PORT FLEET_ENTRY_EVERY \
-    FLEET_ENTRY_SSHD FLEET_ENTRY_DSEDITGROUP
+    FLEET_ENTRY_SSHD FLEET_ENTRY_DSEDITGROUP FLEET_ENTRY_TEST_SETENV
 }
 # elist <version> <login>=<key>[,<key>…] … → $E/list-<version>.json, the hub's shape
 elist() {
   local v="$1"; shift
   python3 - "$E" "$v" "$@" <<'PY'
-import json, sys
+import base64, hashlib, json, sys
 d, v, specs = sys.argv[1], int(sys.argv[2]), sys.argv[3:]
 out = {"version": v, "logins": {}}
 for spec in specs:
@@ -123,7 +128,8 @@ for spec in specs:
     ks = []
     for k in keys.split(","):
         t, b = open("%s/%s.pub" % (d, k)).read().split()[:2]
-        ks.append({"fp": "SHA256:%s" % k, "type": t, "b64": b})
+        fp = "SHA256:" + base64.b64encode(hashlib.sha256(base64.b64decode(b)).digest()).decode().rstrip("=")
+        ks.append({"fp": fp, "type": t, "b64": b, "name": "drill-%s" % k})
     out["logins"][login] = {"person": "gh:%s" % login, "keys": ks}
 json.dump(out, open("%s/list-%d.json" % (d, v), "w"))
 PY
@@ -322,6 +328,79 @@ PY
   sys_same || { edown; return 1; }
   edown
   WHAT="入口不在：拉名单失败、钥匙文件一字不动，已加的钥匙照常进；落后入口一小时，体检 entry 行 WARN「入口 v5 · 本机 v4 · 落后入口一小时以上」"
+}
+
+drill_entry_no_command_lands() {
+  CAP=25   # the listener + four kinds of arrival + one audit pass
+  local t0 cf fp v want out dev h; local -a eopts
+  erig lands
+  # the runtime carries the dispatcher (on a node: <root>/current/bin/fleet-entry.sh)
+  mkdir -p "$E/rt/bin" "$E/conf" "$E/files"; ln -s "$BIN/fleet-entry.sh" "$E/rt/bin/fleet-entry.sh"
+  cf="$E/conf"
+  # the 看台 stand-in: records how it was called, writes the row a real attach would
+  cat > "$E/view.sh" <<'SH'
+#!/bin/bash
+printf '%s\n' "$*" >> "$(dirname "$0")/view.args"
+v=''; while [ $# -gt 0 ]; do [ "$1" = --view ] && v=$2; shift; done
+mkdir -p "$FLEET_CONF_DIR/remote-views"
+printf 'tty\tfleet\tthin\t1\t1\tcur=uuid/fid-last\troute=entry\n' > "$FLEET_CONF_DIR/remote-views/$v"
+echo VIEW-STAND-IN
+SH
+  chmod +x "$E/view.sh"
+  export FLEET_ENTRY_TEST_SETENV="FLEET_ENTRY_VIEW=$E/view.sh FLEET_CONF_DIR=$cf"
+  eapply "$(elist 1 "$ME=k1")" || { WHY="entry apply failed: $(tail -2 "$E/apply.out")"; edown; return 1; }
+  grep -q "^ForceCommand /bin/bash $E/rt/bin/fleet-entry.sh\$" "$E/db/entry/sshd_config" \
+    || { WHY="no ForceCommand in the entry config: $(grep -i force "$E/db/entry/sshd_config")"; edown; return 1; }
+  t0=$(now); eup
+  until_ok 10 listening || { WHY="the entry sshd never listened"; edown; return 1; }
+  eopts=(-F /dev/null -o BatchMode=yes -o IdentitiesOnly=yes -o IdentityAgent=none -o StrictHostKeyChecking=no
+         -o UserKnownHostsFile="$E/known_hosts" -o ConnectTimeout=5 -o LogLevel=ERROR -i "$E/k1")
+  # 1. no command, a terminal ⇒ the 看台
+  out=$(ssh "${eopts[@]}" -tt -p "$EPORT" "$ME@127.0.0.1" </dev/null 2>"$E/ssh.err")
+  case "$out" in *VIEW-STAND-IN*) ;; *) WHY="no command on a terminal did not reach the 看台: [$out] $(cat "$E/ssh.err")"; edown; return 1 ;; esac
+  v=$(head -n 1 "$E/view.args")
+  case "$v" in "attach --thin --view e-drill-k1-"[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]" --resume --device "*" --route entry --token "*) ;;
+    *) WHY="the 看台 was called as [$v]"; edown; return 1 ;; esac
+  dev=$(printf '%s' "$v" | sed -n 's/.* --device \([^ ]*\) .*/\1/p' | base64 -d 2>/dev/null)
+  case "$dev" in *'"device": "drill-k1"'*'"via": "entry"'*) ;; *) WHY="the device it said: [$dev]"; edown; return 1 ;; esac
+  # 2. the same key again: back to the session it showed last (--want <last>)
+  ssh "${eopts[@]}" -tt -p "$EPORT" "$ME@127.0.0.1" </dev/null >/dev/null 2>&1
+  want=$(sed -n 2p "$E/view.args")
+  case "$want" in *" --resume --want uuid/fid-last "*) ;; *) WHY="the second arrival did not come back: [$want]"; edown; return 1 ;; esac
+  # 3. a command ⇒ exactly what port 22 gives (the login's shell -c)
+  printf 'one\ntwo\n' > "$E/files/a.txt"
+  out=$(ssh "${eopts[@]}" -p "$EPORT" "$ME@127.0.0.1" "ls '$E/files'; cat '$E/files/a.txt'" </dev/null 2>"$E/ssh.err")
+  [ "$out" = "$("$SHELL" -c "ls '$E/files'; cat '$E/files/a.txt'" </dev/null 2>/dev/null)" ] \
+    || { WHY="ssh … ls gave [$out], the shell gives [$("$SHELL" -c "ls '$E/files'")]: $(cat "$E/ssh.err")"; edown; return 1; }
+  [ "$(wc -l < "$E/view.args")" -eq 2 ] || { WHY="a command reached the 看台"; edown; return 1; }
+  # 4. sftp / scp / rsync as always
+  printf 'put %s %s\nget %s %s\n' "$E/files/a.txt" "$E/files/b.txt" "$E/files/b.txt" "$E/files/c.txt" > "$E/sftp.batch"
+  sftp "${eopts[@]}" -P "$EPORT" -b "$E/sftp.batch" "$ME@127.0.0.1" >"$E/sftp.out" 2>&1 \
+    && cmp -s "$E/files/a.txt" "$E/files/c.txt" || { WHY="sftp: $(tail -3 "$E/sftp.out")"; edown; return 1; }
+  scp "${eopts[@]}" -P "$EPORT" "$E/files/a.txt" "$ME@127.0.0.1:$E/files/d.txt" >"$E/scp.out" 2>&1 \
+    && cmp -s "$E/files/a.txt" "$E/files/d.txt" || { WHY="scp: $(tail -3 "$E/scp.out")"; edown; return 1; }
+  if command -v rsync >/dev/null 2>&1; then
+    rsync -e "ssh ${eopts[*]} -p $EPORT" "$E/files/a.txt" "$ME@127.0.0.1:$E/files/e.txt" >"$E/rsync.out" 2>&1 \
+      && cmp -s "$E/files/a.txt" "$E/files/e.txt" || { WHY="rsync: $(tail -3 "$E/rsync.out")"; edown; return 1; }
+  fi
+  # 5. no command, no terminal ⇒ the login shell
+  out=$(printf 'echo shell-$((40+2))\n' | ssh "${eopts[@]}" -T -p "$EPORT" "$ME@127.0.0.1" 2>"$E/ssh.err")
+  case "$out" in *shell-42*) ;; *) WHY="no command, no terminal: [$out] $(cat "$E/ssh.err")"; edown; return 1 ;; esac
+  [ "$(wc -l < "$E/view.args")" -eq 2 ] || { WHY="ssh -T reached the 看台"; edown; return 1; }
+  SECS=$(since "$t0")
+  # the login's line per arrival, and the door's own record (with the key) once a pass ran
+  for h in view exec sftp shell; do
+    grep -q "\"how\":\"$h\"" "$cf/logs/entry.ndjson" || { WHY="no $h line in the login's entry.ndjson: $(cat "$cf/logs/entry.ndjson")"; edown; return 1; }
+  done
+  fp=$(ssh-keygen -lf "$E/k1.pub" | awk '{ print $2 }')
+  grep -q "\"fp\":\"$fp\"" "$cf/logs/entry.ndjson" || { WHY="the login's lines lack the key's fp"; edown; return 1; }
+  until_ok 10 sh -c 'grep -q "$1" "$2" 2>/dev/null' _ "\"fp\": \"$fp\".*\"result\": \"ok\"" "$E/log/entry.ndjson" \
+    || { WHY="the door's entry.ndjson: $(tail -2 "$E/log/entry.ndjson" 2>/dev/null)"; edown; return 1; }
+  grep -q '"person": "gh:'"$ME"'"' "$E/log/entry.ndjson" || { WHY="the door's line lacks the person"; edown; return 1; }
+  grep -q 'ssh-ed25519 AAAA' "$E/log/entry.ndjson" "$cf/logs/entry.ndjson" && { WHY="a key's text in an entry log"; edown; return 1; }
+  sys_same || { edown; return 1; }
+  edown
+  WHAT="入口不带命令有终端 ⇒ 看台（--resume，第二次带回上次的会话；设备名是钥匙在入口上的名字）；带命令 / sftp / scp / rsync 与 22 端口一样；无命令无终端 ⇒ 登录 shell；每次进门登录处一行、入口 sshd 日志里的那把钥匙一行（logs/entry.ndjson，不含钥匙正文）"
 }
 
 cred_run_drills "$0"

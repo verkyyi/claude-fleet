@@ -89,6 +89,8 @@ FLEET_DISPATCH_AGENTS_HERE         seam: the agents installed here, comma-separa
 FLEET_DISPATCH_GO_CMD              seam: replaces fleet-view-go.sh when a 看台's ⌘T goes to the window it opened (fleet-quick-dispatch.py, #3097)
 FLEET_ENTRY                        knob: a managed machine's entry port on/off — machine.env (root 0600), written by `fleet node install`, not a fleet.conf key (#3070)
 FLEET_ENTRY_PORT                   knob: the entry port's port (22022) — machine.env beside FLEET_ENTRY (#3070)
+FLEET_ENTRY_BOOK                   handoff: the entry sshd's SetEnv to fleet-entry.sh — the entry book (root 0644) that names each key (#3071)
+FLEET_ENTRY_VIEW                   seam: the drill's 看台 stand-in for fleet-entry.sh, set only through FLEET_ENTRY_TEST_SETENV under FLEET_NODE_TEST (#3071)
 FLEET_HOME_THIN_CMD                seam: replaces `fleet --thin <session>` at the end of `fleet claude` on the thin path (fleet-home-session.sh, #3004)
 FLEET_NOTIFY_SEND_CMD              seam: what fleet_notify.py hands an event to (default fleet-client-actions.py notify, #2759)
 FLEET_NOTIFY_BARK_CMD              seam: the phone push (the address on stdin; default a GET to the Bark URL, #2759)

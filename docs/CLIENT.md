@@ -278,6 +278,17 @@ old client's parts, and none of their faults.
 - `FLEET_CLIENT=shell fleet` (or `fleet <machine>`) is the old client, kept
   until the old client goes (EPIC #2999 C11).
 
+**Your address: no command = the 看台** (issue #3071, EPIC #3067 C5). On your
+home machine's entry port (`ssh -p 22022 <login>@<name>.cf.24haowan.com`, a key
+added on the hub's key page) there is nothing to type: a connection with **no
+command on a terminal** lands in your 看台 — the session you looked at last
+from that key, else the orchestrator (#3060's first screen); ⌃\ there is the
+shell as always. **A command runs exactly as on port 22** — `ssh … ls`, sftp /
+scp / rsync, and the thin client's own attach (it sends the same command it
+always has); **no command and no terminal** (`ssh -T`) is your login shell. It
+is the entry sshd's `ForceCommand`, `bin/fleet-entry.sh` — a dispatch run as
+your login, never a limit; each arrival is one line in `logs/entry.ndjson`.
+
 **The keys: ⌃] then one letter.** A phone has no ⌘, so every ⌘ key of the 看台
 has a letter after ⌃] (the `fleet-view-pfx` table; `bin/dash-keymap.sh --panel
 switch view` is the one list):
