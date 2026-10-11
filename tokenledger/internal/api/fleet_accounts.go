@@ -255,7 +255,10 @@ func (s *Server) preferredLogin(principal, displayName string) string {
 // computer, not a SPOT node, with a connected admin node to open the login
 // and a session count it can read, and — a machine's own node program
 // opening it (a Linux machine) — one the relay trusts, since its create ends
-// by fetching the login's relay credential (claude-fleet#3294) — the one that
+// by fetching the login's relay credential (claude-fleet#3294) — and one where
+// a new login could run at all: newLoginCompute, placement's own rule, so an
+// egress region the providers do not serve is never picked
+// (claude-fleet#3312) — the one that
 // can finish the opening first: a ready spare, then an opener whose link has
 // stayed up openerSettle, then a machine that has opened a login before, then
 // one whose last create did not fail. Then a machine whose fleets already host
@@ -286,6 +289,10 @@ func (s *Server) leastBusyMachine(now time.Time, skip ...string) string {
 	for _, m := range snap.Machines {
 		if m.Status != "online" || m.ComputeOff || m.Personal || m.Kind == store.NodeKindEphemeral ||
 			m.Sessions == nil || !admin[strings.ToLower(m.Hostname)] || hasFold(skip, m.Hostname) {
+			continue
+		}
+		if cv := newLoginCompute(snap, m.Hostname, settings, now); cv.Off {
+			log.Printf("fleet: least-busy: %s skipped: a login opened there could not run — %s", m.Hostname, cv.Why)
 			continue
 		}
 		c := cand{m: m, spare: spare[strings.ToLower(m.Hostname)] > 0, settled: true}

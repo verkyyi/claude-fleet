@@ -119,7 +119,12 @@ func (s *Server) computeOf(endpointID string, hb control.Heartbeat, settings map
 		if c.machineLink {
 			// A machine's own link carries logins; it is never one to run
 			// sessions on (claude-fleet#2333), whatever the team policy says.
-			return computeVerdict{Off: true, Why: "machine link"}
+			// Its probe is the machine's egress all the same: a create reads
+			// it (newLoginCompute, claude-fleet#3312).
+			if probe == nil {
+				probe = c.probe
+			}
+			return computeVerdict{Off: true, Why: "machine link", Probe: probe}
 		}
 		if c.computeOff && !c.beatSaidOn.Load() {
 			if claimOn {
@@ -216,4 +221,23 @@ func (s *Server) computeAutoAudit(value string, now time.Time) {
 	if err := s.Store.FleetAudit("operator", "compute_auto", "hub", ComputeAutoKey+" = "+value, "", now); err != nil {
 		log.Printf("fleet audit: %v", err)
 	}
+}
+
+// newLoginCompute is the verdict a login opened on host now would get
+// (claude-fleet#3312): decideCompute for a login that asks to run, unforced,
+// against the machine's newest probe from any of its heard links — its own
+// node program's included. The egress region is the machine's, so a login
+// opened where it is unsupported is closed at its first lease, and a create
+// never picks such a machine. No probe there ⇒ open, exactly as placement.
+func newLoginCompute(snap NodesSnapshot, host string, settings map[string]string, now time.Time) computeVerdict {
+	var newest *control.NodeProbe
+	for _, n := range snap.Nodes {
+		if n.Probe == nil || n.Status == "lost" || !strings.EqualFold(n.Hostname, host) {
+			continue
+		}
+		if newest == nil || n.Probe.TS.After(newest.TS) {
+			newest = n.Probe
+		}
+	}
+	return decideCompute(true, false, newest, computeAutoOn(settings), now)
 }
