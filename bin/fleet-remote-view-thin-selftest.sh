@@ -29,6 +29,11 @@
 #                   `--resume` then lands home (no cur= left); `--want` lands on
 #                   the worker it names
 #   K. key table  — `key-table fleet-view` only once that table exists (C2)
+#   R. bell       — a 看台 rings only for the window it shows (issue #3090): with the
+#                   node's `bell-action any`, a BEL in another window reaches neither
+#                   a 看台's terminal nor a far 看台's (`<id>-via-<home>`, the client
+#                   a home's peer window is); a BEL in the shown window reaches both;
+#                   an old client's view session still rings for any window
 # tmux / python3 absent → SKIP (exit 0). Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -277,6 +282,34 @@ waitfor 5 sh -c "[ \"\$('$REAL_TMUX' -L '$RS' show-options -qv -t '=$(vs dev3):'
 eq "K: key-table fleet-view once the table exists" "fleet-view" "$(tn show-options -qv -t "=$(vs dev3):" key-table)"
 eq "K: …the fleet session's key-table untouched" "" "$(tn show-options -qv -t "=$RS:" key-table)"
 tt kill-window -t "=$TL:thin5"
+
+# ============================================================================
+# R. bell: only the window the 看台 shows rings its terminal (issue #3090)
+# ============================================================================
+tn set-option -g monitor-bell on \; set-option -g bell-action any \; set-option -g visual-bell off
+bell() { tt display-message -p -t "=$TL:$1" '#{window_bell_flag}' 2>/dev/null; }
+ring() { printf '\a' > "$(tn display-message -p -t "$1" '#{pane_tty}')"; }
+term bellh "--thin --view devb --want $U/fid-7 --device $DEV --route lan --token tbk"
+term bellf "--thin --view devf-via-home --want $U/fid-7 --device $DEV --route lan --token tfk"
+term bello "--shell - devo"
+for v in devb devf-via-home devo; do
+  waitfor 5 sh -c "[ -n \"\$('$REAL_TMUX' -L '$RS' list-clients -t '=$(vs $v)' 2>/dev/null)\" ]" || fail "R: no client on $(vs $v)"
+done
+tn select-window -t "=$(vs devo):$W7"
+waitfor 5 sh -c "[ \"\$('$REAL_TMUX' -L '$RS' display-message -p -t '=$(vs devb):' '#{window_id}' 2>/dev/null)\" = '$W7' ]"
+eq "R: a 看台 says bell-action current" "current" "$(tn show-options -qv -t "=$(vs devb):" bell-action)"
+eq "R: … a far 看台 too" "current" "$(tn show-options -qv -t "=$(vs devf-via-home):" bell-action)"
+eq "R: the fleet session keeps the global" "" "$(tn show-options -qv -t "=$RS:" bell-action)"
+sleep 0.5
+eq "R: no bell before any BEL" "0 0 0" "$(bell bellh) $(bell bellf) $(bell bello)"
+ring "$W8"; sleep 1
+eq "R: a BEL in another window does not reach the 看台's terminal" "0" "$(bell bellh)"
+eq "R: … nor a far 看台's (a peer window's client)" "0" "$(bell bellf)"
+eq "R: an old client's view still rings for any window" "1" "$(bell bello)"
+ring "$W7"; sleep 1
+eq "R: a BEL in the shown window reaches the 看台's terminal" "1" "$(bell bellh)"
+eq "R: … and a far 看台's" "1" "$(bell bellf)"
+for w in bellh bellf bello; do tt kill-window -t "=$TL:$w" 2>/dev/null; done
 
 # ============================================================================
 # L. lint: the collector reaps a kept 看台 (its `views` phase)
