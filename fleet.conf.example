@@ -2592,6 +2592,21 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # @label=Worktree setup timeout @group=spawn @tier=internal @scope=fleet @edit=int @unit=sec
 #FLEET_WORKTREE_SETUP_TIMEOUT=120
 
+# Share the dependency trees this login already installed (issue #3403). Every new
+# worktree runs bin/fleet-deps-share.sh after the setup hook above: a lockfile dir
+# whose lockfile is byte-identical to the base checkout's — or another worktree's —
+# and whose node_modules was installed from it gets that node_modules as a
+# copy-on-write clone (APFS clonefile; `cp --reflink=always` on Linux), an
+# independent tree of its own that costs metadata only (monorepo
+# core/admin-frontend: 0.33 s and 12 MB instead of 41,778 files and 298 MB). No
+# such source, a filesystem that cannot clone, a differing lockfile ⇒ nothing is
+# done and the install runs as usual; nothing is ever installed by it. pnpm / uv /
+# Go keep their per-login stores and are only recorded. Each worktree's answer is in
+# <git-dir>/fleet-deps-share (`fleet-deps-share.sh --status <wt>`) and one line of
+# logs/deps-share.log. Same login only, never across logins. 0 = off.
+# @label=Share dependency trees @group=spawn @tier=internal @scope=fleet @edit=bool
+#FLEET_DEPS_SHARE=1
+
 # Keep the BASE checkout's dependencies current with master (issue #961). The link
 # above only proves the LOCKFILES match — and base-sync fast-forwards the base every
 # 60 s, so they always do, even when the base's node_modules was installed from an

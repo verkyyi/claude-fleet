@@ -4876,7 +4876,8 @@ fleet_worktree_fill() {
 # bare name against bin/, a leading ~/ against $HOME. Unset (the default) = no-op.
 fleet_worktree_setup() {
   local main="${1:-}" wt="${2:-}" cmd="${FLEET_WORKTREE_SETUP:-}" budget bin log rc
-  [ -n "$cmd" ] && [ -n "$wt" ] || return 0
+  [ -n "$wt" ] || return 0
+  [ -n "$cmd" ] || { fleet_worktree_deps_share "$main" "$wt"; return 0; }
   budget="${FLEET_WORKTREE_SETUP_TIMEOUT:-120}"
   case "$budget" in ''|*[!0-9]*) budget=120 ;; esac
   bin="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
@@ -4902,6 +4903,28 @@ fleet_worktree_setup() {
       *)   printf '%s FAILED rc=%s %s — spawn continues\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$rc" "$wt" ;;
     esac
   } >>"$log" 2>&1
+  fleet_worktree_deps_share "$main" "$wt"
+  return 0
+}
+
+# fleet_worktree_deps_share <main> <wt> — the built-in half of a new worktree's
+# setup (issue #3403): bin/fleet-deps-share.sh clones in the node_modules this
+# login already installed from an identical lockfile (APFS clonefile / reflink)
+# and records which way each lockfile dir shares (<git-dir>/fleet-deps-share,
+# logs/deps-share.log). Runs after FLEET_WORKTREE_SETUP, so a fleet-deps-link
+# symlink stays the operator's choice. Under fleet_timebox
+# (FLEET_DEPS_SHARE_TIMEOUT, 60 s), silent on both streams, always rc 0 — a
+# failure is the old way (install as usual), never a failed spawn.
+# FLEET_DEPS_SHARE=0 turns it off.
+fleet_worktree_deps_share() {
+  local main="${1:-}" wt="${2:-}" budget bin
+  [ "${FLEET_DEPS_SHARE:-1}" = 0 ] && return 0
+  [ -d "$wt" ] || return 0
+  budget="${FLEET_DEPS_SHARE_TIMEOUT:-60}"
+  case "$budget" in ''|*[!0-9]*) budget=60 ;; esac
+  bin="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
+  [ -x "$bin/fleet-deps-share.sh" ] || return 0
+  ( cd "$wt" && fleet_timebox "$budget" "$bin/fleet-deps-share.sh" "$wt" "$main" ) </dev/null >/dev/null 2>&1
   return 0
 }
 
