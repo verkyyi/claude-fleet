@@ -39,7 +39,7 @@ sys.path.insert(0, str(BIN))
 import fleet_reap_policy  # noqa: E402
 
 FIELDS = ("window_id", "@issue", "@repo", "@reap_policy", "@claude_state", "@claude_state_ts",
-          "@reap_skip", "@raw", "@norepo", "@fleet_role", "@cc_agent", "@worktree", "window_name")
+          "@reap_skip", "@reap_due", "@reap_key", "@raw", "@norepo", "@fleet_role", "@cc_agent", "@worktree", "window_name")
 FINISHED = ("done", "exited")
 
 
@@ -187,7 +187,8 @@ def collect(now, stuck_secs, found=None):
                 # The merged-PR pass owns it: its word, else why the tick stopped;
                 # the idle pass's token is about another road.
                 said = said if "PR #" in said else ""
-                reason = said or tick or w["@reap_skip"]
+                held = ("held for a person: " + w["@reap_key"]) if w["@reap_due"] == "hold" else ""
+                reason = held or said or tick or w["@reap_skip"]
             else:
                 reason = w["@reap_skip"] or said or tick
             rows.append({"session": sock, "window": w["window_id"], "key": key, "repo": repo,

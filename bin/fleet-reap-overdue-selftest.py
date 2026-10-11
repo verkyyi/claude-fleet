@@ -47,6 +47,13 @@ class Overdue(unittest.TestCase):
         # the merged road's reason is the PR pass's, never the idle pass's token
         self.assertEqual(r["reason"], "cleanup daemon: idle cleanup deferred (rc=124)")
 
+    def test_a_held_notice_says_it_waits_for_a_person(self):
+        rows = self.run_with([win("@3775", **{"@issue": "3214", "@claude_state": "done", "@reap_due": "hold",
+                                              "@reap_key": "issue-open:3283:3214"})],
+                             prs={"issue-3214": "3283"}, landed={"3214": NOW - 5000},
+                             log="x fleet-cleanup: fleet: idle cleanup deferred (rc=124)")
+        self.assertEqual(rows[0]["reason"], "held for a person: issue-open:3283:3214")
+
     def test_within_grace_working_and_unlanded_are_not_overdue(self):
         rows = self.run_with(
             [win("@1", **{"@issue": "1", "@claude_state": "done"}),
