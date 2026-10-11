@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -44,6 +45,9 @@ import (
 // sentence. Attachments are kept in CCQUOTA_FLEET_FEEDBACK_DIR/F<id>/ for
 // seven days; the row stays.
 //
+// Each feedback taken becomes one GitHub issue when the hub holds the App's
+// credentials (fleet_feedback_github.go, claude-fleet#3356).
+//
 // Off (no CCQUOTA_FLEET_FEEDBACK_DIR): none of these routes exists.
 const (
 	NodeFeedbackPath   = "/v1/node/feedback"
@@ -69,6 +73,12 @@ type FeedbackDesk struct {
 	ShapesFile string
 	// Now replaces the clock in tests.
 	Now func() time.Time
+	// GitHub files each feedback as an issue (claude-fleet#3356,
+	// fleet_feedback_github.go); nil = nothing is ever sent to GitHub.
+	GitHub *FeedbackGitHub
+
+	kickOnce sync.Once
+	kickCh   chan struct{}
 }
 
 func (d *FeedbackDesk) now() time.Time {
@@ -230,10 +240,12 @@ func (s *Server) handleNodeFeedback(w http.ResponseWriter, r *http.Request) {
 			log.Printf("feedback %s: attachments not kept: %v", num, werr)
 			writeJSON(w, http.StatusOK, map[string]any{"id": num, "state": store.FeedbackReceived,
 				"note": "附件没存下（入口的存储出错），原话已收到。"})
+			d.kickFeedbackFiler()
 			return
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"id": num, "state": store.FeedbackReceived})
+	d.kickFeedbackFiler()
 }
 
 // readFeedbackRequest reads the JSON or multipart body. A non-zero status is
@@ -415,11 +427,15 @@ func (s *Server) handleFeedbackMine(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"feedback": out})
 }
 
-// RunFeedback deletes attachments past seven days, hourly. Off (s.Feedback
-// nil): returns at once.
+// RunFeedback deletes attachments past seven days, hourly, and — with the
+// GitHub App configured — runs the filer (fleet_feedback_github.go). Off
+// (s.Feedback nil): returns at once.
 func (s *Server) RunFeedback(ctx context.Context) {
 	if s.Feedback == nil {
 		return
+	}
+	if s.Feedback.GitHub != nil {
+		go s.runFeedbackFiler(ctx)
 	}
 	t := time.NewTicker(feedbackTickEvery)
 	defer t.Stop()

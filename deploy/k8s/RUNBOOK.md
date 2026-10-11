@@ -367,3 +367,28 @@ kubectl -n new-deploy get pvc ccquota-debug        # Bound 之后才合并带挂
 - 发布前的 `--check`：钥匙文件在 `/etc/ccquota-debug`，只有新渲染挂它，hub-deploy 把它写进
   `CCQUOTA_CHECK_UNMOUNTED`，`--check` 报告而不拒绝。
 - 关掉：删 `deployment-debug.yaml` 和 kustomization 里它那一行；PV 是 Retain，留着无害。
+
+## 反馈建单（#3356，EPIC #3354 C2）
+
+入口把收下的 `/fleet-feedback` 反馈写成 `verkyyi/claude-fleet` 里一张带 `feedback` 标签的单子，
+身份是现有的 GitHub App（ID 5271651，installation 170195053，Issues: Read and write）：每轮现签
+JWT、换一小时的 installation token，用完即弃。
+
+| 东西 | 谁建 | 内容 |
+|---|---|---|
+| Secret `ccquota-feedback-github`（`new-deploy`） | 管理员，从集群里已有的那份 App 私钥建 | 键 `app-id`（`5271651`）、`installation-id`（`170195053`）、`private-key`（App 的 PEM）；只读挂到 `/etc/ccquota-feedback-github`（0440） |
+| 环境变量 + 挂载 | hub-deploy | `overlays/prod/deployment-feedback.yaml`（`CCQUOTA_FLEET_FEEDBACK_GH_DIR`、`CCQUOTA_FLEET_FEEDBACK_REPO`；卷 `optional: true`） |
+
+```sh
+kubectl -n new-deploy create secret generic ccquota-feedback-github \
+  --from-literal=app-id=5271651 --from-literal=installation-id=170195053 \
+  --from-file=private-key=<App 私钥的 PEM 文件>
+```
+
+- 没有这个 Secret（或少一个键）：入口照常起、照收反馈，状态「待转」，什么都不往 GitHub 发；
+  日志 `fleet: feedback filing off — no GitHub App credentials …`。有了以后日志是
+  `fleet: feedback filed as issues in verkyyi/claude-fleet (GitHub App 5271651)`。Secret 是挂成文件的，
+  建好后要等下一次发布（或滚一次 pod）才读到。
+- GitHub 连不上：反馈留在「待转」，1 分钟起翻倍到 1 小时重试；同一个 F 号靠正文末行
+  `<!-- fleet:feedback id=F<n> -->` 认领已有的单，不建第二张。
+- 私钥、令牌不进日志、单子、配置、仓库。关掉建单：删这个 Secret 再滚 pod。
