@@ -339,12 +339,15 @@ ok "a refused cwd is silent, a real write failure is shown — and neither block
 # bin/ to run (FLEET_MCP_BIN) and the mod not to register its own copy.
 mkdir -p "$WORK/conf"
 cp "$BIN/../conf/mcp-worker.json" "$WORK/conf/mcp-worker.json"
+cp "$BIN/../conf/mcp-orch.json" "$WORK/conf/mcp-orch.json"
 ln -s "$BIN/fleet-mcp.py" "$WORK/bin/fleet-mcp.py"
 MW="$(cd "$WORK/bin" && pwd)/../conf/mcp-worker.json"
+MO="$(cd "$WORK/bin" && pwd)/../conf/mcp-orch.json"
 cat > "$WORK/fakebin/claude" <<EOF
 #!/bin/sh
 printf '%s\n' "\$*" > "$WORK/argv"
 printf '%s|%s\n' "\${FLEET_MCP_BIN:-}" "\${FLEET_MCP_SERVER:-}" > "$WORK/mcpenv"
+printf '%s\n' "\${FLEET_MCP_ORCH:-}" > "$WORK/mcporch"
 exit 0
 EOF
 chmod +x "$WORK/fakebin/claude"
@@ -355,6 +358,18 @@ case "$argv" in *--strict-mcp-config*) fail "#1807 the mount alone made the laun
 has "$argv" "/fleet-claim" || fail "#1807 the seed prompt was swallowed by the mount" "$argv"
 [ "$(cat "$WORK/mcpenv")" = "$(cd "$WORK/bin" && pwd)|1" ] || fail "#1807 FLEET_MCP_BIN / FLEET_MCP_SERVER not exported" "$(cat "$WORK/mcpenv")"
 ok "#1807 default: --mcp-config=conf/mcp-worker.json (additive, =form, seed intact), FLEET_MCP_BIN + FLEET_MCP_SERVER set"
+
+# #3113: the dispatch group `fleet-orch` (conf/mcp-orch.json) is mounted only on a seat
+# the fleet opens itself — here an EPIC driver's --role; a worker / plain launch never.
+case "$argv" in *"--mcp-config=$MO"*) fail "#3113 a plain launch mounted the dispatch group" "$argv" ;; esac
+[ "$(cat "$WORK/mcporch")" = "" ] || fail "#3113 a plain launch said FLEET_MCP_ORCH" "$(cat "$WORK/mcporch")"
+argv="$( (export FLEET_MCP_ORCH=1; run --role worker /fleet-claim) )"
+case "$argv" in *"--mcp-config=$MO"*) fail "#3113 a worker mounted the dispatch group" "$argv" ;; esac
+[ "$(cat "$WORK/mcporch")" = "" ] || fail "#3113 a worker inherited FLEET_MCP_ORCH" "$(cat "$WORK/mcporch")"
+argv="$(run --role epic-driver '/fleet-epic-run 1')"
+has "$argv" "--mcp-config=$MW" && has "$argv" "--mcp-config=$MO" || fail "#3113 an EPIC driver did not mount both servers" "$argv"
+[ "$(cat "$WORK/mcporch")" = 1 ] || fail "#3113 an EPIC driver's launch did not say FLEET_MCP_ORCH=1" "$(cat "$WORK/mcporch")"
+ok "#3113 the dispatch group rides only a seat the fleet opens (--role epic-driver); a plain or worker launch gets the core alone"
 
 printf 'FLEET_MODEL="fable"\nFLEET_MCP_CONFIG="none"\n' > "$WORK/conf/fleets/f1/conf"
 argv="$(run)"

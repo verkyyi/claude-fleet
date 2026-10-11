@@ -362,7 +362,7 @@ def brief(d, source='compact', now=None, handoff=None):
         head.append('接力文档：%s（%s 写）——这一轮之后会跑 /fleet-handoff pickup，照它的 NEXT ACTION 接着做。'
                     % (handoff['store'], hm(handoff['at'])))
     if age > STALE_SECS:
-        head.append('⚠ 这份状态已超过 2 小时，只当参考：先用 mcp__fleet__children 和 mcp__fleet__gh 核对再说。')
+        head.append('⚠ 这份状态已超过 2 小时，只当参考：先用 mcp__fleet-orch__children 和 mcp__fleet__gh 核对再说。')
     body = ['## 在跟的批次']
     bs = d.get('batches') or []
     for b in bs[:6]:
@@ -379,7 +379,7 @@ def brief(d, source='compact', now=None, handoff=None):
                                          (' · ' + k['title']) if k.get('title') else '',
                                          (' · PR #%s' % k['pr']) if k.get('pr') else ''))
     if len(w) > 10:
-        body.append('- …还有 %d 个，见 mcp__fleet__children' % (len(w) - 10))
+        body.append('- …还有 %d 个，见 mcp__fleet-orch__children' % (len(w) - 10))
     if not w:
         body.append('- （没有还在外面的子会话）')
     u = d.get('unread_reports') or []
@@ -545,7 +545,7 @@ def main():
     d = load()
     text = brief(d, a.source)
     if not text:
-        print('[fleet orchestrator state] 没有存下的状态（%s）——用 mcp__fleet__children 看子会话。' % state_path())
+        print('[fleet orchestrator state] 没有存下的状态（%s）——用 mcp__fleet-orch__children 看子会话。' % state_path())
         return 0
     print(text)
     if not a.no_mark:

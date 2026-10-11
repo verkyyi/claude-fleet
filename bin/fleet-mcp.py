@@ -29,14 +29,33 @@ see the same tools (Claude shows them as mcp__fleet__<action>):
 
 docs/FLEET-MCP.md is the one spec; later EPIC members add tools there and here.
 
+Two groups (issue #3113, EPIC #3111 C2). The default server `fleet` LISTS the tools
+a session works with; the dispatch group — spawn · await · children · answer_dialog ·
+send — is listed by the same script started as `fleet-mcp.py --group orch`, the
+server `fleet-orch`, which only the fleet-orchestrate plugin's .mcp.json registers
+(plus, until EPIC #3111 C7, the launchers of the seats the fleet opens itself —
+conf/mcp-orch.json, see --bridge-seat). For at least one version (#2068) `fleet`
+still ANSWERS a dispatch-group call under its old name (logged road=legacy), and a
+server that took over from a pre-group version keeps listing everything, so a
+session that started with the old list never loses a tool mid-conversation.
+`file_issue` with spawn: true and no dispatch group files the issue and says how to
+install it.
+
 The rule (EPIC #1813 decision 4, the one the retired mod tools kept): a tool only
 CHECKS its arguments — an unknown or missing argument, a wrong type, a repo this
 fleet does not host is refused with the reason and NOTHING runs — then runs the
 existing script unchanged and hands back its exit code, stdout and stderr as they
 came. Caps, claim dedup and guards live in the scripts, once.
 
-  fleet-mcp.py                 serve on stdin/stdout
-  fleet-mcp.py --mount codex   print the `-c` value bin/fleet-codex.sh mounts it with
+  fleet-mcp.py                 serve on stdin/stdout (the server `fleet`)
+  fleet-mcp.py --group orch    serve the dispatch group (the server `fleet-orch`)
+  fleet-mcp.py [--group orch] --list
+                               print the tools that server lists, one per line
+  fleet-mcp.py --bridge-seat   exit 0 when THIS pane is a seat the fleet opens with the
+                               dispatch group mounted (orchestrator · steward · epic-driver),
+                               1 otherwise — the launchers' one test (C7 removes it)
+  fleet-mcp.py --mount codex [--group orch]
+                               print the `-c` value bin/fleet-codex.sh mounts it with
   fleet-mcp.py --legacy-peer   the old fleet-peer server (list_agents/send_message)
   fleet-mcp.py --cred mint     print a fresh worker credential for THIS pane (stdout only)
   fleet-mcp.py --cred check    verify $FLEET_WORKER_CRED; print its claims (never the credential)
@@ -101,7 +120,8 @@ SHOW_TIMEOUT_S = 300       # --inline holds the screen until the operator presse
 # Codex hands an MCP server only a short env allowlist (HOME, PATH, USER, …);
 # these are what the scripts need to find the pane, the fleet and the install —
 # and the session's credential (issue #1809): forwarded by NAME, never its value.
-CODEX_ENV = ["TMUX", "TMUX_PANE", "FLEET_CONF_DIR", "FLEET_SESSION", "FLEET_WORKER_CRED", "FLEET_MCP_BIN"]
+CODEX_ENV = ["TMUX", "TMUX_PANE", "FLEET_CONF_DIR", "FLEET_SESSION", "FLEET_WORKER_CRED", "FLEET_MCP_BIN",
+             "FLEET_MCP_ORCH"]
 # A blocking await outlives Codex's 60s default per-call timeout.
 CODEX_TOOL_TIMEOUT_S = AWAIT_MAX_S + AWAIT_SLACK_S + 5
 
@@ -391,7 +411,8 @@ ASSERT_PREFIX = "fwa1"
 ASSERT_TTL_S = 600              # a placement: the call is happening now
 ASSERT_RELAY_TTL_S = 24 * 3600  # a message may wait in the hub outbox while the hub is away
 SIGNED = {"assert": False}      # whether the call being served handed one out (the call log says so)
-ROAD = {"call": False}          # served through --call (the mod's fallback, issue #2057), not MCP
+ROAD = {"call": False,          # served through --call (the mod's fallback, issue #2057), not MCP
+        "legacy": False}        # a dispatch-group call answered by `fleet` (issue #3113)
 
 
 def node_token_hash():
@@ -459,7 +480,8 @@ def log_call(tool, claims, verdict, why="", via=None):
     line = "%s tool=%s via=%s who=%s verdict=%s%s%s\n" % (
         time.strftime("%Y-%m-%dT%H:%M:%S%z"), tool, via, who or "-", verdict,
         " hub=asserted" if SIGNED["assert"] else "",
-        (" road=call" if ROAD["call"] else "") + ((" why=" + json.dumps(why, ensure_ascii=False)) if why else ""))
+        (" road=call" if ROAD["call"] else " road=legacy" if ROAD["legacy"] else "")
+        + ((" why=" + json.dumps(why, ensure_ascii=False)) if why else ""))
     try:
         log_path().parent.mkdir(parents=True, exist_ok=True)
         with open(str(log_path()), "a") as fh:
@@ -933,7 +955,8 @@ def tool_file_issue(args):
     if "parent" in args:
         argv += ["--parent", str(args["parent"])]
     argv += check_repo(args)
-    if args.get("spawn"):
+    unspawned = bool(args.get("spawn")) and not orch_installed()
+    if args.get("spawn") and not unspawned:
         argv.append("--spawn")
     if args.get("bind"):
         argv.append("--bind")
@@ -945,7 +968,62 @@ def tool_file_issue(args):
         argv += ["--breakage-key", args["breakage_key"]]
     if "rule" in args:
         argv += ["--rule", str(args["rule"])]
-    return script(argv, FILE_TIMEOUT_S)
+    data = script(argv, FILE_TIMEOUT_S)
+    if unspawned:   # issue #3113: filed as asked, nobody started
+        data["stderr"] = (data.get("stderr") or "") + ORCH_HINT + "\n"
+    return data
+
+
+# --- the dispatch group (issue #3113, EPIC #3111 C2) -------------------------------
+
+ORCH_PLUGIN = "fleet-orchestrate@claude-fleet"
+ORCH_HINT = ("spawn: 派单要装插件：/plugin install %s — the issue was filed, no worker was started"
+             % ORCH_PLUGIN)
+# The seats the fleet still opens itself with the group mounted (EPIC #3111 C7 removes
+# them): @fleet_role on the orchestrator's / steward's window, @fleet_role_def (or the
+# launch's --role) on an EPIC driver's — and a take_role mark (C3). Never the debugger:
+# its definition disallows spawn / await.
+BRIDGE_ROLES = ("orchestrator", "steward")
+BRIDGE_DEFS = ("orchestrator", "steward", "epic-driver")
+
+
+def bridge_seat(role=""):
+    """Is THIS pane a seat the fleet opens with the dispatch group? (--bridge-seat)"""
+    if role in BRIDGE_DEFS:
+        return True
+    pane = os.environ.get("TMUX_PANE", "")
+    if not os.environ.get("TMUX") or not pane:
+        return False
+    r = run(["tmux", "display-message", "-p", "-t", pane, "#{@fleet_role}|#{@fleet_role_def}"],
+            check=False, timeout=STATUS_TIMEOUT_S)
+    if r.returncode != 0:
+        return False
+    fr, _, fd = r.stdout.strip().partition("|")
+    return fr in BRIDGE_ROLES or fd in BRIDGE_DEFS
+
+
+def plugin_enabled():
+    """fleet-orchestrate enabled in Claude Code's own settings (user, then this
+    directory's project files) — the record /plugin keeps; the fleet keeps none."""
+    home = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
+    on = None
+    for f in (os.path.join(home, "settings.json"), os.path.join(".claude", "settings.json"),
+              os.path.join(".claude", "settings.local.json")):
+        try:
+            with open(f) as fh:
+                v = (json.load(fh).get("enabledPlugins") or {}).get(ORCH_PLUGIN)
+        except (OSError, ValueError, AttributeError):
+            continue
+        if isinstance(v, bool):
+            on = v              # a later (narrower) scope wins, as in Claude Code
+    return on is True
+
+
+def orch_installed():
+    """Does this session have the dispatch group? The launcher's bridge mount says so
+    in the environment (FLEET_MCP_ORCH=1, forwarded to Codex by name); a plugin
+    install, in Claude Code's settings."""
+    return os.environ.get("FLEET_MCP_ORCH") == "1" or plugin_enabled()
 
 
 GH_KIND = {"issue": ["issue", "view"], "pr": ["pr", "view"], "checks": ["pr", "checks"]}
@@ -1388,6 +1466,24 @@ LEGACY = {
     "send_message": (tool_send, dict(TOOLS["send"][1])),
 }
 
+# Two groups (issue #3113). TOOLS stays every handler: `fleet` answers all of them
+# (a dispatch-group call there is road=legacy, one version — # compat-1v: 下一批删)
+# but LISTS only CORE; `fleet-orch` lists and answers ORCH. C3 adds take_role here.
+ORCH_SERVER = "fleet-orch"
+ORCH_GROUP = ("spawn", "await", "children", "answer_dialog", "send")
+CORE = {n: e for n, e in TOOLS.items() if n not in ORCH_GROUP}
+ORCH = {n: TOOLS[n] for n in ORCH_GROUP}
+# What `fleet` lists: CORE, unless this process took over (#1898) from a server of a
+# version before the groups — its session met the full list and Claude Code re-lists
+# on the takeover's tools/list_changed, so it keeps the full list (#2068).
+SERVING = {"list_all": False}
+
+
+def listing(table):
+    if table is TOOLS:
+        return TOOLS if SERVING["list_all"] else CORE
+    return table
+
 
 def check_args(schema, args):
     """The reason `args` does not fit `schema`, or None when it does."""
@@ -1457,6 +1553,7 @@ def tool_result(name, data, error=False):
 
 def tool_call(table, name, args):
     SIGNED["assert"] = False
+    ROAD["legacy"] = table is TOOLS and not ROAD["call"] and name in ORCH_GROUP and name not in listing(table)
     entry = table.get(name)
     if entry is None:
         log_call(str(name), None, "refused", "unknown tool")
@@ -1506,7 +1603,7 @@ def handle(request, table, name):
                 "capabilities": {"tools": {"listChanged": True}},
                 "serverInfo": {"name": name, "version": VERSION}}
     if method == "tools/list":
-        return {"tools": [{"name": n, **spec} for n, (_, spec) in table.items()]}
+        return {"tools": [{"name": n, **spec} for n, (_, spec) in listing(table).items()]}
     if method == "tools/call":
         params = request.get("params") or {}
         return tool_call(table, params.get("name"), params.get("arguments"))
@@ -1587,7 +1684,7 @@ def reload_due():
 def reload_exec(sig, carry):
     """Become the new version: same pid, same stdin/stdout. Returns only on failure."""
     import tempfile
-    state = {"from": RELOAD["sig"], "to": sig}
+    state = {"from": RELOAD["sig"], "to": sig, "list": "all" if SERVING["list_all"] else "group"}
     if carry:
         fd, path = tempfile.mkstemp(prefix="fleet-mcp-carry.")
         with os.fdopen(fd, "wb") as fh:
@@ -1597,7 +1694,7 @@ def reload_exec(sig, carry):
     sys.stdout.flush()
     reload_log("exec", "%s -> %s" % (RELOAD["sig"], sig))
     try:
-        os.execv(sys.executable, [sys.executable, SELF])
+        os.execv(sys.executable, [sys.executable, SELF] + sys.argv[1:])   # --group rides along
     except OSError as exc:
         os.environ.pop(RELOAD_ENV, None)
         if state.get("carry"):
@@ -1620,6 +1717,9 @@ def reload_resume():
             os.unlink(state["carry"])
     except (OSError, ValueError, AttributeError):
         state = {}
+    # No "list" in the handover = the old process predates the groups (issue #3113):
+    # its session was handed every tool, so it keeps them.
+    SERVING["list_all"] = (state.get("list") if isinstance(state, dict) else None) != "group"
     RELOAD["ready"] = True
     print(json.dumps({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"},
                      separators=(",", ":")), flush=True)
@@ -1655,7 +1755,7 @@ def serve(table, name):
     HELD["cred"] = os.environ.get(CRED_ENV) or None
     if HELD["cred"]:
         threading.Thread(target=renew_loop, daemon=True).start()
-    watch = table is TOOLS
+    watch = table is TOOLS or table is ORCH
     RELOAD["sig"] = self_sig() if watch else None
     buf = reload_resume() if watch else b""
     for raw, rest in read_lines(buf, watch):
@@ -1684,17 +1784,18 @@ def toml_str(value):
     return json.dumps(value, ensure_ascii=False)   # a JSON string is a TOML basic string
 
 
-def mount_codex():
+def mount_codex(group="core"):
     """The `-c` value that mounts this server in Codex: what conf/mcp-worker.json
-    says, plus the env Codex would otherwise withhold and a per-call timeout an
-    await fits in."""
-    conf = json.loads((BIN.parent / "conf" / "mcp-worker.json").read_text())
-    srv = conf["mcpServers"][SERVER]
+    (the dispatch group: conf/mcp-orch.json) says, plus the env Codex would otherwise
+    withhold and a per-call timeout an await fits in."""
+    name, fname = (ORCH_SERVER, "mcp-orch.json") if group == "orch" else (SERVER, "mcp-worker.json")
+    conf = json.loads((BIN.parent / "conf" / fname).read_text())
+    srv = conf["mcpServers"][name]
     fields = ["command=" + toml_str(srv["command"]),
               "args=[" + ",".join(toml_str(a) for a in srv.get("args", [])) + "]",
               "env_vars=[" + ",".join(toml_str(v) for v in CODEX_ENV) + "]",
               "tool_timeout_sec=%d" % CODEX_TOOL_TIMEOUT_S]
-    return "mcp_servers.%s={%s}" % (SERVER, ",".join(fields))
+    return "mcp_servers.%s={%s}" % (name, ",".join(fields))
 
 
 def call_main(name, raw):
@@ -1731,9 +1832,23 @@ def spec_main(names):
 
 
 def main(argv):
+    group = "core"
+    if "--group" in argv:
+        i = argv.index("--group")
+        group = argv[i + 1] if i + 1 < len(argv) else ""
+        if group not in ("core", "orch"):
+            print("fleet-mcp: --group core|orch, got %r" % group, file=sys.stderr)
+            return 2
+        argv = argv[:i] + argv[i + 2:]
+    table, name = (ORCH, ORCH_SERVER) if group == "orch" else (TOOLS, SERVER)
     if argv[:2] == ["--mount", "codex"]:
-        print(mount_codex())
+        print(mount_codex(group))
         return 0
+    if argv == ["--list"]:
+        print("\n".join(listing(table)))
+        return 0
+    if argv[:1] == ["--bridge-seat"] and len(argv) <= 2:
+        return 0 if bridge_seat(argv[1] if len(argv) == 2 else "") else 1
     if argv[:1] == ["--spec"]:
         return spec_main(argv[1:])
     if argv[:1] == ["--call"] and len(argv) in (2, 3):
@@ -1748,10 +1863,11 @@ def main(argv):
         serve(LEGACY, "fleet-peer")
         return 0
     if argv:
-        print("usage: fleet-mcp.py [--mount codex | --legacy-peer | --probe | --spec <tool>… | "
-              "--call <tool> [<json args>] | --cred mint|check|revoke|assert]", file=sys.stderr)
+        print("usage: fleet-mcp.py [--group core|orch] [--list | --mount codex] | --legacy-peer | --probe | "
+              "--spec <tool>… | --call <tool> [<json args>] | --bridge-seat [<role>] | "
+              "--cred mint|check|revoke|assert", file=sys.stderr)
         return 2
-    serve(TOOLS, SERVER)
+    serve(table, name)
     return 0
 
 
