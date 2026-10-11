@@ -256,3 +256,7 @@ For a real deployment, record:
    the prior digest and confirm rollback with the same identities and volume.
 
 Do not label the node production-ready until those live checks pass.
+
+The real-person walk on fleet-linux-0 (a login opened from the hub, connected
+from a computer and a phone, Claude answering, a drill login removed and checked
+gone) follows [MANAGED-LINUX-DRILL.md](MANAGED-LINUX-DRILL.md), step by step.
