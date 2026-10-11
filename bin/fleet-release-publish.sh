@@ -1,5 +1,5 @@
 #!/bin/bash
-# fleet-release-publish.sh <sha> [--hub <url>] [--dir <checkout>] [--dry-run]
+# fleet-release-publish.sh <sha> [--hub <url>] [--dir <checkout>] [--train <json file>] [--dry-run]
 #   — hand the hub a stable it then serves to every machine (issue #2772,
 #   EPIC #2770 C2). Run by CI right after `fleet-stable.sh move`:
 #   .github/workflows/stable-auto.yml's publish step, and stable-publish.yml (the
@@ -13,6 +13,10 @@
 #   commits  `git rev-list --first-parent <prev>..<sha> | git cat-file --batch`
 #   tree     `git archive --format=tar <sha> | gzip -n` — the whole commit
 #   run      this run's URL, for the hub's log and fleet_audit
+#   train    with --train <file> (issue #3142): the release train's ledger — what
+#            it carried, its stages, its macOS queue (#3140's JSON). Bookkeeping
+#            only: a hub without the ledger ignores the part, and a hub with it
+#            never refuses a publish over it.
 # The hub hashes the archive into a git tree and the commit objects into their
 # shas, so it needs no trust in this script — only in who runs it:
 #
@@ -29,20 +33,22 @@
 #      2 usage / git / no identity · 3 the hub could not be reached
 set -uo pipefail
 
-sha="" hub="${FLEET_HUB_URL:-${CCQUOTA_HUB_URL:-}}" dir="" dry=0
+sha="" hub="${FLEET_HUB_URL:-${CCQUOTA_HUB_URL:-}}" dir="" dry=0 train=""
 die() { printf 'fleet-release-publish: %s\n' "$*" >&2; exit 2; }
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --hub) shift; hub="${1:-}" ;;
     --dir) shift; dir="${1:-}" ;;
+    --train) shift; train="${1:-}" ;;
     --dry-run|-n) dry=1 ;;
-    -h|--help) sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,33p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*) die "unknown option $1" ;;
     *) [ -z "$sha" ] || die "one sha only"; sha="$1" ;;
   esac
   shift
 done
 [ -n "$dir" ] || dir="$(cd "$(dirname "$0")/.." && pwd)"
+[ -z "$train" ] || [ -s "$train" ] || die "--train $train is not a file"
 [ -n "$hub" ] || die "no hub — pass --hub <url> or set FLEET_HUB_URL"
 hub="${hub%/}"
 sha=$(git -C "$dir" rev-parse -q --verify "${sha:-HEAD}^{commit}") || die "unknown commit ${sha:-HEAD} in $dir"
@@ -106,8 +112,9 @@ tok=""
 
 run=""
 [ -z "${GITHUB_RUN_ID:-}" ] || run="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY:-}/actions/runs/$GITHUB_RUN_ID" # dist-ok: the run's link, for the hub's log
-code=$(curl -sS -m 900 -K "$work/auth.cfg" -o "$work/answer" -w '%{http_code}' \
-  -F "sha=$sha" -F "prev=$prev" -F "run=$run" \
+set -- -F "sha=$sha" -F "prev=$prev" -F "run=$run"
+[ -z "$train" ] || set -- "$@" -F "train=@$train;type=application/json"
+code=$(curl -sS -m 900 -K "$work/auth.cfg" -o "$work/answer" -w '%{http_code}' "$@" \
   -F "commits=@$work/commits;type=application/octet-stream" \
   -F "tree=@$work/tree.tar.gz;type=application/gzip" \
   "$hub/v1/fleet/release/publish") || { printf 'fleet-release-publish: POST to %s failed\n' "$hub" >&2; exit 3; }

@@ -22,6 +22,15 @@
 #   behind:  <n>|?               ahead:   <n>|?
 #   verdict: CURRENT|BEHIND|AHEAD|DIVERGED|NOHUB|UNREACHABLE|UNSTAMPED|UNKNOWN
 #   note:    <why, for anything but CURRENT>
+#   source:  SAME|SPLIT|?        srcnote: <why, for SPLIT and ?>
+#            (issue #3142) the Go source the hub image's ccquota was built from
+#            (/v1/fleet/release/artifacts `ccquota_src`) against the one the hub's
+#            stable release was signed with (/v1/fleet/release/stable
+#            `ccquota_src`). SPLIT = the hub image is not stable's source — a
+#            rollback dispatched by hand, or a train that deployed and then failed
+#            to publish; the next green train closes it. `?` = either side names
+#            none (releases off, an older hub). Printed whenever /version stamps a
+#            commit, before the commit-distance lines.
 #   BEHIND   the image lacks N commits stable has (the hub serves an older client)
 #   AHEAD    the image is newer than stable (deployed from trunk) — not a fault
 #   UNSTAMPED the hub answers but names no commit: built before #1696 (no
@@ -98,6 +107,23 @@ if [ -z "$commit" ]; then
   exit 0
 fi
 out commit "$commit"
+
+# The source the hub's ccquota and its stable release name (issue #3142).
+src_of() {   # src_of <path under the hub> → ccquota_src, or nothing
+  curl -fsS --max-time "$timeout" "$hub/$1" 2>/dev/null | python3 -c 'import json,sys
+try: print(json.load(sys.stdin).get("ccquota_src") or "")
+except Exception: pass' 2>/dev/null
+}
+src_img=$(src_of v1/fleet/release/artifacts); src_st=$(src_of v1/fleet/release/stable)
+if [ -z "$src_img" ] || [ -z "$src_st" ]; then
+  side="its image"; [ -z "$src_img" ] || side="its stable release"
+  out source '?'; out srcnote "the hub names no ccquota_src for $side (releases off, or a hub older than #2930) — not compared"
+elif [ "$src_img" = "$src_st" ]; then
+  out source SAME
+else
+  out source SPLIT
+  out srcnote "the hub image ($image) was built from Go source $(printf '%.12s' "$src_img"), its stable release from $(printf '%.12s' "$src_st") — the next release would be refused (422 ccquota:); the next green release train deploys and publishes one commit"
+fi
 
 unknown() { out behind '?'; out verdict UNKNOWN; out note "$1 — distance unknown, NOT 0"; exit 0; }
 git -C "$dir" rev-parse --git-dir >/dev/null 2>&1 || { out stable '?'; unknown "$dir is not a git checkout"; }

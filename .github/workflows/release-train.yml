@@ -31,8 +31,22 @@ name: release train
 #     red and ships nothing; the next merge starts the next one (拍板 7).
 #   * `train` leaves the macOS verdict on TRAIN_SHA as the commit status
 #     `release train: macOS` — `fleet-stable.sh move` reads a green one as the BSD
-#     half on that commit (stable-auto.yml moves stable off a green train until the
-#     train moves it itself, C3).
+#     half on that commit.
+#   * then ONE commit goes out (issue #3142, C3) — the hub, the publish and stable
+#     all name TRAIN_SHA, so the hub can never be a commit the release is not:
+#       `hub plan`  bin/fleet-train-hub.sh: does the hub already run TRAIN_SHA's Go
+#                   source and deploy/k8s/? (发起人拍板 9 — no new image then)
+#       `hub`       hub-deploy.yml's own deploy job, called with sha=TRAIN_SHA:
+#                   image prod-<TRAIN_SHA>, snapshot / check / rollout, /version
+#                   must name TRAIN_SHA (its health step)
+#       `release`   bin/fleet-release-publish.sh TRAIN_SHA (this run's OIDC;
+#                   the hub takes release-train.yml) with the train's ledger
+#                   (#3140), then `fleet-stable.sh move TRAIN_SHA --train <run>`:
+#                   its CI and macOS gates read THIS run's jobs, its ccquota gate
+#                   holds the hub to TRAIN_SHA's source; no --force, ever.
+#     Any red stops the train where it is: a hub already rolled stays (it serves
+#     older machines too), a publish is idempotent, and the next train starts over
+#     (拍板 7 / 8 — the hub's rollback is still hub-deploy's dispatch with `tag`).
 #
 # Outputs of `board` (C1 / C3 hang off them): train_sha · stable_sha · skip ·
 # merges (count) · merges_json (first-parent stable..TRAIN_SHA, newest first,
@@ -225,4 +239,138 @@ jobs:
           for r in "$BOARD" "$LINUX" "$MACOS" "$WAIT" "$GATE"; do
             [ "$r" = success ] || { echo "::error::this train is red (board $BOARD · Linux $LINUX · macOS $MACOS · macOS 排队 $WAIT · precheck $GATE) — it ships nothing; the next merge starts the next train"; exit 1; }
           done
-          echo "train ${SHA:0:7} is green"
+          echo "train ${SHA:0:7} is green — the hub, the publish and stable follow"
+
+  hub-plan:
+    # Does the hub need TRAIN_SHA's image, or is it already TRAIN_SHA's source?
+    name: hub plan
+    needs: [board, train]
+    if: needs.board.outputs.skip == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      deploy: ${{ steps.plan.outputs.deploy }}
+      live: ${{ steps.plan.outputs.live }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.board.outputs.train_sha }}
+          fetch-depth: 0
+      - name: fleet-train-hub.sh
+        id: plan
+        env:
+          SHA: ${{ needs.board.outputs.train_sha }}
+          RELEASE_TRAIN_HUB: ${{ vars.RELEASE_TRAIN_HUB }}
+        run: |
+          bash bin/fleet-train-hub.sh "$SHA" --dir . --hub https://claudefleet.24haowan.com || exit 1
+          echo "### 入口 → \`${SHA:0:7}\`: $(sed -n 's/^why=//p' "$GITHUB_OUTPUT" | tail -1)" >> "$GITHUB_STEP_SUMMARY"
+
+  hub:
+    # hub-deploy.yml's one deploy job, on TRAIN_SHA (its environment `prod` and
+    # its OIDC role are the same as when it runs by itself).
+    name: hub
+    needs: [board, linux, macos, gate, train, hub-plan]
+    if: needs.hub-plan.outputs.deploy == 'true'
+    permissions:
+      contents: read
+      deployments: read
+      id-token: write
+      issues: write
+    uses: ./.github/workflows/hub-deploy.yml
+    with:
+      sha: ${{ needs.board.outputs.train_sha }}
+
+  release:
+    # The last job, so `--train` finds every other job of this run finished.
+    name: release
+    needs: [board, train, hub-plan, hub]
+    if: >-
+      always() && needs.board.outputs.skip == 'false' &&
+      needs.train.result == 'success' && needs.hub-plan.result == 'success' &&
+      (needs.hub.result == 'success' || needs.hub.result == 'skipped')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write   # the stable tag (GITHUB_TOKEN; a tag pushed so triggers nothing)
+      id-token: write   # the publish's OIDC token (audience ccquota-fleet-release)
+      actions: read     # --train reads this run's jobs
+    env:
+      TRAIN_SHA: ${{ needs.board.outputs.train_sha }}
+      STABLE_SHA: ${{ needs.board.outputs.stable_sha }}
+      PLANNED: ${{ needs.hub-plan.outputs.deploy }}
+      DEPLOYED: ${{ needs.hub.outputs.deployed }}
+      FLEET_HUB_URL: https://claudefleet.24haowan.com
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.board.outputs.train_sha }}
+          fetch-depth: 0
+
+      - name: the hub is TRAIN_SHA's
+        run: |
+          v=$(curl -fsS -m 30 "$FLEET_HUB_URL/version") || { echo "::error::cannot read $FLEET_HUB_URL/version"; exit 1; }
+          echo "$v"
+          img=$(printf '%s' "$v" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("version") or "")')
+          if [ "$PLANNED" = true ] && [ "$DEPLOYED" != success ]; then
+            echo "::error::the hub needed prod-${TRAIN_SHA:0:7} and its deploy did not run (${DEPLOYED:-?}: HUB_DEPLOY_PAUSED=1?) — nothing published; the next train starts over"; exit 1
+          fi
+          if [ "$DEPLOYED" = success ] && [ "$img" != "prod-${TRAIN_SHA:0:7}" ]; then
+            echo "::error::this train deployed prod-${TRAIN_SHA:0:7} but the hub answers $img — another deploy overtook it; the next train starts over"; exit 1
+          fi
+          echo "### 入口 \`$img\`$( [ "$DEPLOYED" = success ] && echo '（本趟部署）' || echo '（与本趟同源，未重出镜像；挪动前 ccquota 门再核对）')" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: the train's ledger (#3140)
+        env:
+          MERGES: ${{ needs.board.outputs.merges_json }}
+        run: |
+          gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100" --jq '.jobs[]' > jobs.ndjson \
+            || { echo "::warning::could not read this run's jobs — publishing without the ledger"; exit 0; }
+          python3 - > train.json <<'PY' || { echo "::warning::no ledger: $(cat train.json)"; rm -f train.json; }
+          import json, os, datetime
+          jobs = [json.loads(l) for l in open("jobs.ndjson") if l.strip()]
+          def ts(s):
+              return datetime.datetime.strptime(s, "%Y-%m-%dT%H:%M:%SZ") if s else None
+          now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None, microsecond=0)
+          stages, queue = {}, []
+          for j in jobs:
+              a = ts(j.get("started_at"))
+              if a is None or j.get("conclusion") == "skipped":
+                  continue
+              b = ts(j.get("completed_at")) or now   # this job: still running
+              stage = (j.get("name") or "").split(" / ")[0]   # "Linux / shard 3" -> Linux
+              lo, hi = stages.get(stage, (a, b))
+              stages[stage] = (min(lo, a), max(hi, b))
+              if stage == "macOS" and ts(j.get("created_at")):
+                  queue.append(round((a - ts(j["created_at"])).total_seconds(), 1))
+          iso = lambda t: t.strftime("%Y-%m-%dT%H:%M:%SZ")
+          print(json.dumps({
+              "run_id": os.environ["GITHUB_RUN_ID"],
+              "prev_sha": os.environ.get("STABLE_SHA", ""),
+              "merges": [{"sha": m["sha"], "merged_at": m["committed"]} for m in json.loads(os.environ.get("MERGES") or "[]")],
+              "stages": [{"name": n, "started_at": iso(a), "ended_at": iso(b)} for n, (a, b) in sorted(stages.items(), key=lambda kv: kv[1][0])],
+              "macos_queue_secs": queue,
+          }))
+          PY
+          [ ! -s train.json ] || python3 -c 'import json; d=json.load(open("train.json")); print("ledger: %d merge(s), stages %s" % (len(d["merges"]), ", ".join(s["name"] for s in d["stages"])))'
+
+      - name: publish TRAIN_SHA to the hub
+        run: |
+          set +e
+          train=''; [ ! -s train.json ] || train='--train train.json'
+          # shellcheck disable=SC2086  # $train is one flag and its file, or nothing
+          bash bin/fleet-release-publish.sh "$TRAIN_SHA" --dir . $train > pub.txt 2>&1
+          rc=$?
+          cat pub.txt
+          { echo "### publish \`${TRAIN_SHA:0:7}\` → hub"; echo '```'; cat pub.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          exit $rc
+
+      - name: move stable to TRAIN_SHA
+        run: |
+          set +e
+          sh bin/fleet-stable.sh move "$TRAIN_SHA" --train "$GITHUB_RUN_ID" --ignore-check release \
+            --dir . --repo "$GITHUB_REPOSITORY" > out.txt 2>&1
+          rc=$?
+          cat out.txt
+          { echo "### stable → \`${TRAIN_SHA:0:7}\`"; echo '```'; cat out.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          exit $rc

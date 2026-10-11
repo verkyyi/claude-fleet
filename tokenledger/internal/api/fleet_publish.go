@@ -71,7 +71,7 @@ type PublishAuth struct {
 	Audience  string       // default ccquota-fleet-release
 	Repo      string       // owner/name the token must name; default the store's
 	Ref       string       // default refs/heads/master
-	Workflows []string     // default stable-auto.yml, stable-publish.yml
+	Workflows []string     // default release-train.yml, stable-auto.yml, stable-publish.yml
 	Token     string       // the fallback publish-only bearer ("" = none)
 	CacheFile string       // where the issuer's keys are kept across restarts
 	Client    *http.Client // nil = a 15 s one
@@ -110,7 +110,9 @@ func (a *PublishAuth) workflows() []string {
 	if len(a.Workflows) > 0 {
 		return a.Workflows
 	}
-	return []string{"stable-auto.yml", "stable-publish.yml"}
+	// release-train.yml publishes the TRAIN_SHA it just deployed (issue #3142,
+	// EPIC #3139 C3); its workflow_ref is the train's even inside a called job.
+	return []string{"release-train.yml", "stable-auto.yml", "stable-publish.yml"}
 }
 
 func (a *PublishAuth) now() time.Time {

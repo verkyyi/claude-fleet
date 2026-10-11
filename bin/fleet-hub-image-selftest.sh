@@ -16,6 +16,9 @@
 #   G. image newer       AHEAD 1
 #   H. no stable tag     UNKNOWN, never 0
 #   I. hub from conf     FLEET_HUB_URL read from $FLEET_CONF_DIR/fleet.conf
+#   J. source            (issue #3142) the image's ccquota_src vs its stable
+#                        release's: SAME, SPLIT (the doctor WARNs 不同源), `?` when
+#                        either side names none — and no doctor warning then
 #
 # Exit 0 = pass.
 set -uo pipefail
@@ -112,5 +115,27 @@ printf '# [common]\nexport FLEET_HUB_URL="file://%s"\nexport CCQUOTA_HUB_URL="$F
 stamp "prod-$C3" "$C3"
 run
 eq "I: hub read from fleet.conf" "file://$HUB" "$(field hub)"; eq "I: CURRENT" CURRENT "$(field verdict)"
+
+# --- J. the hub image's Go source vs its stable release's (issue #3142) ---------------------------
+mkdir -p "$HUB/v1/fleet/release"
+run --hub "file://$HUB"
+eq "J: neither names a source → ?" '?' "$(field source)"
+printf '{"artifacts":["ccquota-darwin-arm64"],"ccquota_src":"aaaa"}\n' > "$HUB/v1/fleet/release/artifacts"
+run --hub "file://$HUB"
+eq "J: no stable release source → ?" '?' "$(field source)"; contains "J: says which side" "$OUT" "for its stable release"
+printf '{"sha":"x","ccquota_src":"aaaa"}\n' > "$HUB/v1/fleet/release/stable"
+run --hub "file://$HUB"
+eq "J: same source → SAME" SAME "$(field source)"; eq "J: CURRENT still" CURRENT "$(field verdict)"
+if [ -f "$BIN/fleet-doctor.sh" ]; then
+  DOUT=$(FLEET_LIVE_DIR="$CO" FLEET_HUB_URL="file://$HUB" sh "$BIN/fleet-doctor.sh" 2>&1)
+  lacks "J: no 不同源 warning on SAME" "$DOUT" "不同源"
+fi
+printf '{"sha":"x","ccquota_src":"bbbb"}\n' > "$HUB/v1/fleet/release/stable"
+run --hub "file://$HUB"
+eq "J: another source → SPLIT" SPLIT "$(field source)"; contains "J: says the next train closes it" "$OUT" "release train"
+if [ -f "$BIN/fleet-doctor.sh" ]; then
+  DOUT=$(FLEET_LIVE_DIR="$CO" FLEET_HUB_URL="file://$HUB" sh "$BIN/fleet-doctor.sh" 2>&1)
+  contains "J: doctor WARNs 入口镜像与 stable 不同源" "$DOUT" "入口镜像与 stable 不同源"
+fi
 
 printf 'fleet-hub-image-selftest OK (%d checks)\n' "$CHECKS"

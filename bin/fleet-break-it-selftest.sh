@@ -4399,6 +4399,97 @@ drill_train_push_cancels() {
   WHAT="一条车道：正在跑的不取消、只留最新一趟排着；第二趟上车的是开车时的头（带上中间 3 个合并），stable 已是头就空跑"
 }
 
+# ---- train-hub-stable-split (#3142, EPIC #3139 C3): the hub image and stable come
+# from different commits — hub-deploy shipped the hub on its own clock, the
+# auto-move / publish moved stable on another, and the hub refused the publish
+# (422 `ccquota:`): stable moved, no machine followed. Now ONE train does both for
+# one TRAIN_SHA: after its tests and precheck it deploys the hub through
+# hub-deploy.yml's own job (workflow_call, sha) — or skips it when the hub already
+# runs TRAIN_SHA's Go and deploy/k8s (bin/fleet-train-hub.sh) — then publishes
+# TRAIN_SHA and moves stable with --train (CI / macOS gates read this run's jobs).
+# A rollback dispatched by hand still makes a split: the doctor's hub-image row
+# says so (bin/fleet-hub-image.sh `source: SPLIT`). The hub taking the train's
+# OIDC publish is its Go test, held by name. Rigs: a bare repo, a file:// hub, a
+# fake gh.
+drill_train_hub_stable_split() {
+  CAP=60; local t0 d out rc c1 c2 c3 c4 wf hd job v
+  grep -q 'TestPublishAcceptsReleaseTrain(' "$ROOT/tokenledger/internal/api/fleet_publish_test.go" 2>/dev/null \
+    || { WHY="TestPublishAcceptsReleaseTrain is not in tokenledger/internal/api/fleet_publish_test.go — the hub would 401 the train's publish"; return 1; }
+  wf="$ROOT/.github/workflows/release-train.yml" hd="$ROOT/.github/workflows/hub-deploy.yml"
+  [ -x "$BIN/fleet-train-hub.sh" ] || { WHY="no bin/fleet-train-hub.sh — the train cannot tell whether the hub needs a new image"; return 1; }
+  # hub-deploy.yml is callable with the train's sha, and builds/checks THAT commit
+  awk '/^on:/{o=1; next} o && /^[^ ]/{o=0} o' "$hd" | grep -q '^[[:space:]]*workflow_call:' \
+    || { WHY="hub-deploy.yml has no workflow_call — the train would need a second copy of the deploy"; return 1; }
+  grep -q 'inputs.sha' "$hd" || { WHY="hub-deploy.yml never reads inputs.sha — a called deploy would build the commit that queued the train"; return 1; }
+  # the train: deploy (via hub-deploy.yml) after tests + precheck, then publish, then move — all on TRAIN_SHA
+  job=$(awk '/^  [a-z][a-z0-9_-]*:$/{j=$1} /uses: \.\/\.github\/workflows\/hub-deploy\.yml/{print j; exit}' "$wf")
+  [ -n "$job" ] || { WHY="release-train.yml deploys no hub (no job uses ./.github/workflows/hub-deploy.yml)"; return 1; }
+  v=$(awk -v j="  $job" '$0 == j {o=1; next} o && /^  [a-z]/{o=0} o' "$wf")
+  for need in linux macos gate; do
+    printf '%s\n' "$v" | grep -Eq "needs:.*[^a-z_]$need([^a-z_]|\$)" || { WHY="the hub deploy ($job) does not wait for $need"; return 1; }
+  done
+  printf '%s\n' "$v" | grep -q 'sha: \${{ needs.board.outputs.train_sha }}' \
+    || { WHY="the hub deploy ($job) is not handed TRAIN_SHA"; return 1; }
+  grep -q 'fleet-release-publish.sh "\$TRAIN_SHA"' "$wf" || { WHY="the train does not publish TRAIN_SHA (bin/fleet-release-publish.sh \"\$TRAIN_SHA\")"; return 1; }
+  grep -Eq 'fleet-stable.sh move "\$TRAIN_SHA" .*--train ' "$wf" || { WHY="the train does not move stable to TRAIN_SHA with --train"; return 1; }
+  grep -Eq 'fleet-stable.sh .*--force' "$wf" && { WHY="--force is in the train"; return 1; }
+  [ "$(awk '/fleet-release-publish.sh "\$TRAIN_SHA"/{print NR; exit}' "$wf")" -lt "$(awk '/fleet-stable.sh move "\$TRAIN_SHA" .*--train /{print NR; exit}' "$wf")" ] \
+    || { WHY="the train moves stable before it publishes"; return 1; }
+  d="$WORK/thss"; mkdir -p "$d/shim" "$d/conf" "$d/hub/v1/fleet/release"
+  ( export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+    export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
+    git init -q --bare -b master "$d/origin.git" && git clone -q "$d/origin.git" "$d/seed" 2>/dev/null || exit 1
+    mkdir -p "$d/seed/bin" "$d/seed/tokenledger/internal/x" "$d/seed/deploy/k8s"
+    printf 'module x\n' > "$d/seed/tokenledger/go.mod"; printf 'package x\n' > "$d/seed/tokenledger/internal/x/x.go"
+    printf 'a: 1\n' > "$d/seed/deploy/k8s/k.yaml"; printf 'echo\n' > "$d/seed/bin/s.sh"
+    git -C "$d/seed" add -A && git -C "$d/seed" commit -qm hub && git -C "$d/seed" rev-parse HEAD > "$d/c1"
+    printf 'echo 2\n' > "$d/seed/bin/s.sh"; printf 'package x\n// a test-only note\n' > "$d/seed/tokenledger/internal/x/x_test.go"
+    git -C "$d/seed" add -A && git -C "$d/seed" commit -qm 'scripts only' && git -C "$d/seed" rev-parse HEAD > "$d/c2"
+    printf 'package x\n\nconst Y = 1\n' > "$d/seed/tokenledger/internal/x/x.go"
+    git -C "$d/seed" add -A && git -C "$d/seed" commit -qm 'go' && git -C "$d/seed" rev-parse HEAD > "$d/c3"
+    printf 'a: 2\n' > "$d/seed/deploy/k8s/k.yaml"
+    git -C "$d/seed" add -A && git -C "$d/seed" commit -qm 'k8s' && git -C "$d/seed" rev-parse HEAD > "$d/c4"
+    git -C "$d/seed" push -q origin HEAD:master && git --git-dir="$d/origin.git" update-ref refs/tags/stable "$(cat "$d/c1")" \
+      && git clone -q "$d/origin.git" "$d/co" 2>/dev/null
+  ) || { WHY="could not build the rig repo"; return 1; }
+  c1=$(cat "$d/c1"); c2=$(cat "$d/c2"); c3=$(cat "$d/c3"); c4=$(cat "$d/c4")
+  ver() { printf '{"commit":"%.7s","version":"prod-%.7s"}\n' "$1" "$1" > "$d/hub/version"; }
+  plan() { out=$(bash "$BIN/fleet-train-hub.sh" "$1" --dir "$d/co" --hub "file://$d/hub" 2>&1); rc=$?; printf '%s\n' "$out" | sed -n 's/^deploy=//p' | head -1; }
+  t0=$(now)
+  ver "$c1"
+  [ "$(plan "$c2")" = false ] || { WHY="a train with no Go / deploy/k8s change since the live hub would rebuild it: $(printf '%s' "$out" | tr '\n' '|')"; return 1; }
+  [ "$(plan "$c3")" = true ] || { WHY="a train whose Go changed does not deploy the hub: $(printf '%s' "$out" | tr '\n' '|')"; return 1; }
+  ver "$c3"
+  [ "$(plan "$c4")" = true ] || { WHY="a train whose deploy/k8s changed does not deploy the hub: $(printf '%s' "$out" | tr '\n' '|')"; return 1; }
+  printf '{"version":"prod-dev"}\n' > "$d/hub/version"
+  [ "$(plan "$c4")" = true ] || { WHY="a hub whose commit is unknown is not redeployed: $(printf '%s' "$out" | tr '\n' '|')"; return 1; }
+  [ "$(RELEASE_TRAIN_HUB=off plan "$c4")" = false ] || { WHY="RELEASE_TRAIN_HUB=off still deploys from the train"; return 1; }
+  # --train: the gates read THIS run's jobs — a red macOS job refuses, no check-runs are read
+  printf '#!/bin/sh\ncase "$*" in *actions/runs/*/jobs*) cat "%s/jobs";; *) echo "unexpected gh $*" >&2; exit 9;; esac\n' "$d" > "$d/shim/gh"; chmod +x "$d/shim/gh"
+  printf 'completed success board\ncompleted success Linux / shard 1\ncompleted failure macOS / shard 1\ncompleted success precheck\nin_progress null release\n' > "$d/jobs"
+  out=$(PATH="$d/shim:$PATH" FLEET_CONF_DIR="$d/conf" XDG_CONFIG_HOME="$d/conf" CCQUOTA_HUB_URL='' FLEET_HUB_URL='' \
+          sh "$BIN/fleet-stable.sh" move "$c2" --train 42 --ignore-check release --dir "$d/co" --repo o/r 2>&1); rc=$?
+  [ "$rc" = 3 ] || { WHY="--train past a red macOS job exited $rc, want 3: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1; }
+  case "$out" in *'REFUSED — macos:'*) ;; *) WHY="the refusal is not macos:: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1 ;; esac
+  sed -i.bak 's/failure macOS/success macOS/' "$d/jobs"
+  out=$(PATH="$d/shim:$PATH" FLEET_CONF_DIR="$d/conf" XDG_CONFIG_HOME="$d/conf" CCQUOTA_HUB_URL='' FLEET_HUB_URL='' \
+          sh "$BIN/fleet-stable.sh" move "$c2" --train 42 --ignore-check release --dir "$d/co" --repo o/r 2>&1) \
+    || { WHY="--train with every job green did not move: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1; }
+  [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable)" = "$c2" ] || { WHY="stable did not move off a green train"; return 1; }
+  # a rollback dispatched by hand: the hub's image source ≠ stable's — the doctor's source says SPLIT
+  printf '{"artifacts":["ccquota-darwin-arm64"],"ccquota_src":"aaaa"}\n' > "$d/hub/v1/fleet/release/artifacts"
+  printf '{"sha":"%s","ccquota_src":"bbbb"}\n' "$c2" > "$d/hub/v1/fleet/release/stable"
+  ver "$c1"
+  out=$(sh "$BIN/fleet-hub-image.sh" --dir "$d/co" --hub "file://$d/hub" 2>&1)
+  case "$out" in *'source:  SPLIT'*) ;; *) WHY="fleet-hub-image.sh does not say SPLIT for a hub image of another source than stable: $(printf '%s' "$out" | tr '\n' '|')"; return 1 ;; esac
+  printf '{"artifacts":["ccquota-darwin-arm64"],"ccquota_src":"bbbb"}\n' > "$d/hub/v1/fleet/release/artifacts"
+  out=$(sh "$BIN/fleet-hub-image.sh" --dir "$d/co" --hub "file://$d/hub" 2>&1)
+  case "$out" in *'source:  SAME'*) ;; *) WHY="same source is not SAME: $(printf '%s' "$out" | tr '\n' '|')"; return 1 ;; esac
+  grep -q 'SPLIT)' "$BIN/fleet-doctor.sh" || { WHY="the doctor's hub-image row has no SPLIT case"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="列车测试 + 门全绿后同一个 TRAIN_SHA 出入口（Go / deploy/k8s 没变就不出）、发布、--train 挪 stable（本趟 macOS 任务红就拒）；手动回退造出的不同源 doctor 报 SPLIT"
+}
+
 # ---- release-artifact-missing (#2631): release.json pins a Claude Code version
 # whose artifact nobody put in the hub's CCQUOTA_FLEET_RELEASE_ARTIFACTS. Before:
 # stable moved, the hub baked the release without it, every managed machine sat

@@ -2,7 +2,7 @@
 # fleet-stable.sh show | move [<sha>] [--dry-run] [--precheck] [--allow-no-checks] [--force]
 #                 [--dir <checkout>] [--remote <name>] [--branch <trunk>]
 #                 [--repo <owner/name>] [--timeout <s>] [--macos-timeout <s>]
-#                 [--ignore-check <name>]
+#                 [--ignore-check <name>] [--train <run id>]
 #   — the "stable" mark every install follows (issue #1118, EPIC #1117 C1).
 #
 # Merging to master used to be the same event as "this reaches all my machines"
@@ -95,6 +95,14 @@
 #          4 oldcfg, 6 release.json, 7 artifacts — and never pushes, dispatches or
 #          waits: the train's own Linux / macOS jobs are its CI, and the hub it
 #          deploys (C3) is its ccquota. 0 = every one passed (or nothing to move).
+#          --train <run id> (issue #3142, the release train's own move): gates 3
+#          and 5 read THAT workflow run's jobs (gh api …/actions/runs/<id>/jobs),
+#          never the commit's check runs — the train boarded TRAIN_SHA, but its
+#          check runs belong to the commit that queued it, and a derived run's red
+#          (an old publish, another move) is not this train's. Every job but the
+#          one --ignore-check names must be completed green, at least one; its
+#          `macOS …` jobs are gate 5's and need at least one, all green. Every
+#          other gate (1, 2, 4, 6, 7, 8) runs as on any move.
 #          After the push, outside CI, dispatches stable-publish.yml for the
 #          target (issue #2772): the hub takes stable only from that publish.
 #
@@ -117,7 +125,7 @@ set -u
 
 BIN_DIR=$(cd "$(dirname "$0")" && pwd)
 dir="$(cd "$BIN_DIR/.." && pwd)"
-remote=origin branch=master repo="" timeout=15 dry=0 precheck=0 allow_nochecks=0 force=0 macos_timeout=5400 ignore_check=""
+remote=origin branch=master repo="" timeout=15 dry=0 precheck=0 allow_nochecks=0 force=0 macos_timeout=5400 ignore_check="" train_run=""
 cmd="" target=""
 TAG=stable
 
@@ -139,6 +147,8 @@ while [ "$#" -gt 0 ]; do
     --timeout)         shift; timeout="${1:-15}" ;;
     --macos-timeout)   shift; macos_timeout="${1:-5400}" ;;
     --ignore-check)    shift; ignore_check="${1:-}" ;;
+    --train)           shift; train_run="${1:-}"
+                       case "$train_run" in ''|*[!0-9]*) die "--train takes a workflow run id" ;; esac ;;
     -h|--help)         sed -n '2,80p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*)                die "unknown flag $1" ;;
     *)                 [ "$cmd" = move ] && [ -z "$target" ] || die "unexpected argument $1"
@@ -457,6 +467,24 @@ macos_gate() {   # macos_gate <old> <new> <slug>
   refuse "macos: the newest macOS run on $(short "$2") is $_concl (run $_id, $_ev: https://github.com/$3/actions/runs/$_id) — fix it (its breakage issue), or --force to move anyway (logged)"
 }
 
+# --train <run id> (issue #3142): the train's own jobs, "status conclusion name"
+# one per line — gates 3 and 5 for a move the release train makes.
+train_jobs() {   # train_jobs <slug> <run id>
+  gh api --paginate "repos/$1/actions/runs/$2/jobs?per_page=100" \
+    --jq '.jobs[] | "\(.status) \(.conclusion) \(.name)"'
+}
+train_macos_gate() {   # train_macos_gate <old> <new> <jobs: the run's macOS lines>
+  _n=$(printf '%s\n' "$3" | awk 'NF' | wc -l | tr -d ' ')
+  _bad=$(printf '%s\n' "$3" | awk 'NF && !($1 == "completed" && $2 == "success")')
+  if [ "$_n" -gt 0 ] && [ -z "$_bad" ]; then
+    printf 'macos: green on %s (%s macOS job(s) of train run %s)\n' "$(short "$2")" "$_n" "$train_run"; return 0
+  fi
+  if [ "$_n" -eq 0 ]; then _why="train run $train_run ran no macOS job"
+  else printf '%s\n' "$_bad" | sed 's/^/  not green: /' >&2; _why="train run $train_run's macOS half is not green"; fi
+  [ "$force" -eq 0 ] || { force_log "$1" "$2" macos "$_why" "the BSD half (train)"; return 0; }
+  refuse "macos: $_why on $(short "$2") — this train ships nothing; the next one starts on the next merge"
+}
+
 # After a move, hand the hub the new stable (issue #2772, EPIC #2770 C2): the hub
 # no longer looks on GitHub for it. stable-publish.yml cuts the commit (git
 # archive + its first-parent chain from the hub's stable) and POSTs it to
@@ -505,7 +533,13 @@ do_move() {
     exit 0
   fi
   slug=$(repo_slug); [ -n "$slug" ] || die "cannot tell the GitHub repo from $remote — pass --repo owner/name"
-  runs=$(check_runs "$slug" "$new") || die "could not read check runs for $(short "$new") on $slug (gh auth?)"
+  if [ -n "$train_run" ]; then
+    runs=$(train_jobs "$slug" "$train_run") || die "could not read the jobs of train run $train_run on $slug (gh auth?)"
+  else
+    runs=$(check_runs "$slug" "$new") || die "could not read check runs for $(short "$new") on $slug (gh auth?)"
+  fi
+  train_macos=$(printf '%s\n' "$runs" | awk -v ign="$ignore_check" 'NF && $3 == "macOS" {
+      n = $0; sub(/^[^ ]+ [^ ]+ /, "", n); if (ign == "" || n != ign) print }')
   # The macOS shards (`macOS shard K`, and the shared matrix's `macOS / shard K` —
   # issue #3141) are gate 5's (issue #2286): a push run a later push cancelled
   # is no verdict, and a running one is waited for there, not refused here.
@@ -522,6 +556,9 @@ do_move() {
     printf '%s\n' "$bad" | sed 's/^/  not green: /' >&2
     refuse "$(short "$new") has check runs that are not green — CI must be all green to move stable"
   fi
+  if [ -n "$train_run" ] && [ "$total" -eq 0 ]; then
+    refuse "train run $train_run has no finished job but this one — no evidence $(short "$new") is green"
+  fi
   if [ "$total" -eq 0 ] && [ "$allow_nochecks" -ne 1 ]; then
     refuse "$(short "$new") has NO check runs (path-filtered CI?) — no evidence it is green; pick a commit CI ran on, or pass --allow-no-checks"
   fi
@@ -529,13 +566,15 @@ do_move() {
   artifacts_gate "$old" "$new"
   ccquota_gate "$old" "$new"
   [ -z "$old" ] || oldcfg_gate "$old" "$new"
-  macos_gate "$old" "$new" "$slug"
+  if [ -n "$train_run" ]; then train_macos_gate "$old" "$new" "$train_macos"
+  else macos_gate "$old" "$new" "$slug"; fi
 
   # Lease: the tag must still hold exactly what we read ("" = must not exist).
   lease="refs/tags/$TAG:$old"
   if [ -n "$old" ]; then from=$(short "$old"); else from=none; fi
   printf 'stable: %s -> %s  (%s)\n' "$from" "$(short "$new")" "$(subject "$new")"
-  printf 'checks: %s green on %s\n' "$total" "$slug"
+  if [ -n "$train_run" ]; then printf 'checks: %s job(s) of train run %s green\n' "$total" "$train_run"
+  else printf 'checks: %s green on %s\n' "$total" "$slug"; fi
   if [ "$old" ]; then printf 'forward: +%s commit(s)\n' "$(git -C "$dir" rev-list --count "$old..$new")"; fi
   if [ "$dry" -eq 1 ]; then
     printf 'dry-run: would run: git push --force-with-lease=%s %s %s:refs/tags/%s\n' "$lease" "$remote" "$new" "$TAG"
