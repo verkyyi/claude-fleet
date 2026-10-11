@@ -176,6 +176,8 @@ bin/fleet-topbar.py
 # the top line's six glyphs + their colours are the ⌘P panel's one table (#3194)
 bin/fleet_view.py
 bin/fleet-iterm-profile.py
+# …and which ⌘ chords it writes: the panel + the person's extras (#3185)
+bin/fleet_keys.py
 # ⌘N's writing area (#1953): the stage's portal pane and its one way out
 bin/fleet-compose.py
 # …and how long each of its sends took, per segment (#2238)

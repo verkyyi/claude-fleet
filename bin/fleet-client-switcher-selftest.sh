@@ -207,7 +207,11 @@ assert order == ["wid:F/issue-12", "wid:F/issue-13"], order
 PY
 ok
 CONF="$BIN/../conf/tmux-shell.conf"
-for k in 'bind -n User930 ' 'bind s ' 'bind -n User927 ' 'bind / '; do
+# ⌘K / prefix s went with issue #3185: unbound, ⌘P / prefix / are the panel
+for k in 'unbind -n User930' 'unbind s'; do
+  grep -qxF "$k" "$CONF" || fail "E: the client conf does not '$k'"; ok
+done
+for k in 'bind -n User927 ' 'bind / '; do
   grep -E "^$k" "$CONF" | grep -q -- "fleet-quickopen.py --session" || fail "E: $k does not open the panel"; ok
   grep -E "^$k" "$CONF" | grep -q -- '--switch' && fail "E: $k still opens the old switcher"; ok
 done

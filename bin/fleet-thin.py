@@ -410,6 +410,31 @@ class Osc7502:
 # the terminal
 # ---------------------------------------------------------------------------
 
+def iterm_keys():
+    """Write iTerm2's `fleet` profile (issue #3185, EPIC #3178 C7): only the panel
+    key and the ⌘ chords of FLEET_KEYS_EXTRA (fleet-iterm-profile.py, nothing when
+    it is current, nothing off a Mac with iTerm2) — every start, so a changed
+    setting or a new version is in it before the window wears it."""
+    if os.environ.get("FLEET_ITERM_KEYS", "1") == "0":
+        return
+    try:
+        subprocess.run([sys.executable, os.path.join(BIN, "fleet-iterm-profile.py"), "write"],
+                       stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+
+def keys_carried():
+    """The client's FLEET_KEYS_EXTRA (+ a non-⌘ panel key) for the machine to bind
+    (fleet_keys.carried), '' by default."""
+    try:
+        sys.path.insert(0, BIN)
+        import fleet_keys
+        return fleet_keys.carried()
+    except Exception:
+        return ""
+
+
 def iterm_profile():
     """The profile to go back to when the fleet one goes on (约定 11), or ''."""
     back = os.environ.get("ITERM_PROFILE", "")
@@ -495,6 +520,9 @@ class Thin:
         self.base = None        # the last --argv answer (the upload rides it)
         self.cur = None         # (m, l, w) from the last valid `cur`
         self.quit = False
+        if not local:
+            iterm_keys()    # --local: the person's terminal is not this machine's (#2720)
+        self.keys = keys_carried()
         self.back = iterm_profile()
         self.child = 0
         self.master = None
@@ -524,7 +552,10 @@ class Thin:
         elif self.want:
             words += ["--want", self.want]
         words += ["--device", self.device, "--route", route or "-", "--token", token]
-        return " ".join(shlex.quote(w) for w in words)
+        # the person's extra keys ride the command's environment, not an option: a
+        # home on an older version runs the attach as before (issue #3185)
+        env = ["FLEET_KEYS_EXTRA=" + shlex.quote(self.keys)] if self.keys else []
+        return " ".join(env + [shlex.quote(w) for w in words])
 
     def command(self, j, extra, remote):
         if j.get("local"):

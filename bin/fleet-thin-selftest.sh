@@ -27,6 +27,8 @@
 #   I  this machine is home (issue #3006): --argv for this machine + login →
 #      local (FLEET_CONNECT_SELF=ssh keeps the ssh); --local → no hub asked, the
 #      view's command the loop's only child, no ssh in the tree
+#   K  the keys (issue #3185): each start writes iTerm2's profile — ⌘P + ⇧↵ only;
+#      FLEET_KEYS_EXTRA adds its ⌘ chords and rides the remote command's environment
 #   J  a newcomer with no fleet anywhere (issue #3054): the home answers rc 3 /
 #      the hub says opening → the first-session road (a lease, `- home` placed,
 #      the hub's opening progress), then the first connection lands on that
@@ -277,6 +279,22 @@ case $(grep -ao 'GOT\[[^]]*\]' "$T/out.pic") in *"^[[200~$T/home/m1/.cache/claud
 case $res in *'RC 0'*) ok "H: ⌘Q (quit, our token) → exit 0" ;; *) fail "H: quit: $res" ;; esac
 case $out in *$'\e]1337;SetProfile=Default\a') ok "H: the iTerm2 profile back last" ;; *) fail "H: profile not restored at the end" ;; esac
 rm -f "$T/clip.on"
+
+# K — the keys (issue #3185, EPIC #3178 C7): each start writes iTerm2's `fleet`
+# profile with ONE ⌘ chord (⌘P) + ⇧↵; a FLEET_KEYS_EXTRA adds its ⌘ chords there and
+# rides the remote command's environment to the home, which binds them
+kmap() { python3 -c 'import json,sys; print(" ".join(sorted(json.load(open(sys.argv[1]))["Profiles"][0]["Keyboard Map"])))' "$T/iterm/fleet.json" 2>/dev/null; }
+[ "$(kmap)" = "0x70-0x100000 0xd-0x20000" ] && ok "K: the start wrote the profile — ⌘P + ⇧↵, nothing else" || fail "K: profile keys: $(kmap)"
+grep -q 'FLEET_KEYS_EXTRA' "$T/ssh.log" && fail "K: no extras, yet the remote command names FLEET_KEYS_EXTRA" || ok "K: no extras → the remote command as before"
+: > "$T/ssh.log"
+FLEET_KEYS_EXTRA='next=cmd+down shell=ctrl+\\' THIN_ARGS='[]' drive keys '[
+ ["expect", "VIEW orch ON m1"],
+ ["send", "quit\n"],
+ ["wait", 10]
+]'
+[ "$(kmap)" = "0x70-0x100000 0xd-0x20000 0xf701-0x300000" ] && ok "K: FLEET_KEYS_EXTRA=next=cmd+down → ⌘↓ in the profile (⌃\\ is the terminal's own)" || fail "K: profile keys with extras: $(kmap)"
+case $(sed -n 1p "$T/ssh.log") in *" m1 FLEET_KEYS_EXTRA='next=cmd+down shell=ctrl+"*"' bash .claude/fleet/bin/fleet-remote-view.sh attach --thin "*)
+  ok "K: the extras ride the remote command's environment" ;; *) fail "K: remote command: $(sed -n 1p "$T/ssh.log")" ;; esac
 
 # ---------------------------------------------------------------------------
 # F — three failures → another home

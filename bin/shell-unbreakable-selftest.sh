@@ -10,8 +10,8 @@
 #
 #   A. lint — no bind in either conf (the client's, the stage's) kills a pane, a
 #      window, a session or the server, or respawns one with -k; the rendered
-#      servers list no prefix x / & / $ / < / > / w (prefix s is ⌘K's switcher,
-#      #2266 — never choose-tree), and no right-click that
+#      servers list no prefix x / & / $ / < / > / w (prefix s, ⌘K's switcher
+#      until #3185, is unbound — never choose-tree), and no right-click that
 #      opens tmux's menus (Kill, Respawn, Rename)
 #   B. the real client (bin/fleet, isolated sockets, an ssh shim), a python pty
 #      as the person's terminal: prefix x + y, prefix & + y, a right-click + X on
@@ -117,11 +117,10 @@ for k in x '&' '$' '<' '>' w; do
   CHECKS=$((CHECKS + 1))
   [ -z "$(ts list-keys -T prefix 2>/dev/null | awk -v k="$k" '$4 == k || $4 == "\\" k')" ] || fail "A: the client still binds prefix $k"
 done
-# prefix s is ⌘P's panel now (issue #2266 → #2365, ⌘K's key elsewhere) — never choose-tree
+# prefix s went with ⌘K's switcher (issue #3185) — unbound, never back to choose-tree
 CHECKS=$((CHECKS + 1))
-ts list-keys -T prefix 2>/dev/null | awk '$4 == "s"' | grep -q 'fleet-quickopen.py --session' \
-  && ! ts list-keys -T prefix 2>/dev/null | awk '$4 == "s"' | grep -qE 'choose-tree|kill' \
-  || fail "A: prefix s is not ⌘P's panel (or still choose-tree)"
+[ -z "$(ts list-keys -T prefix 2>/dev/null | awk '$4 == "s"')" ] \
+  || fail "A: prefix s is bound again: $(ts list-keys -T prefix 2>/dev/null | awk '$4 == "s"')"
 for m in MouseDown3Pane M-MouseDown3Pane MouseDown3Status M-MouseDown3Status MouseDown3StatusLeft M-MouseDown3StatusLeft; do
   CHECKS=$((CHECKS + 1))
   ts list-keys -T root 2>/dev/null | awk -v k="$m" '$4 == k' | grep -qE 'display-menu|kill' && fail "A: the client's $m opens a menu"

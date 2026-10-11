@@ -37,8 +37,9 @@ The question wins over the reading: «手机上怎么…» asked from the Mac is
 | the address stopped working after the home's internet changed | `docs/MULTI-MACHINE-OPS.md` § 「宽带换了公网地址」 |
 | connecting from the Mac, which machine `fleet` picks, a named machine | `docs/CLIENT.md` § 「On a phone — the same road as the Mac」 · `docs/MULTI-MACHINE-OPS.md` § 「6. 速查」 |
 | ⌘P: what it lists, its row keys, the `>` commands | `docs/CLIENT.md` § 「⌘P — sessions and actions」 |
-| every Mac key (⌘↑↓ ⌘[ ⌘] ⌘↩ ⌘K ⌘Q …) | `docs/CLIENT.md` § 「The keys」 |
-| the phone's keys (⌃] p / n / b / c / t / q …), tapping them in Termius or Blink | `docs/CLIENT.md` § 「The keys: ⌃] then one letter.」 · `docs/CLIENT.md` § 「Termius (iPhone)」 |
+| the one default key (⌘P · ⌃空格 · F12 · ⌃] p), getting another key back or changing one (`FLEET_KEYS_EXTRA` …) | `docs/CLIENT.md` § 「One key + the panel」 |
+| every key of the old client (⌘↑↓ ⌘[ ⌘] ⌘↩ ⌘Q …) | `docs/CLIENT.md` § 「The keys」 |
+| the phone's keys (⌃空格 · F12 · ⌃] p, the letters you can add), tapping them in Termius or Blink | `docs/CLIENT.md` § 「The keys: one, to open the panel」 · `docs/CLIENT.md` § 「Termius (iPhone)」 |
 | a new session | `docs/CLIENT.md` § 「A new session」 · `docs/CLIENT.md` § 「A new session in one command」 |
 | 派一件事 / hand a task to a worker | `docs/CLIENT.md` § 「派一件事」 |
 | a session's state, who is waiting on them | `docs/CLIENT.md` § 「⌘P — sessions and actions」 (the 状态 column, the waiting ones first) · `docs/STATE.md` § 「The states」 |

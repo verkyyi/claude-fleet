@@ -118,6 +118,9 @@ export HOME="$W/home" FLEET_CONF_DIR="$W/conf" FLEET_STATUS_G="$W/g" FLEET_UI_LA
   FLEET_SWITCH_STATE="$W/state" FLEET_AGENT=claude FLEET_SESSION_SHELL_WATCH=1 FLEET_PEERLINK_SSH="$W/fakessh.sh" \
   SHELL=/bin/sh FLEET_VIEW_ROWS_CMD="cat '$W/rows.txt'"
 unset TMUX TMUX_PANE FLEET_SHELL FLEET_SESSION FLEET_CLIENT
+# C7's keys are a person's to add since issue #3185 (by default only the panel)
+export FLEET_KEYS_EXTRA='next=cmd+down prev=cmd+up back=cmd+[ fwd=cmd+] new=cmd+n dispatch=cmd+t quit=cmd+q shell=ctrl+\\'
+export FLEET_KEYS_PHONE_EXTRA='ctrl+]n=next ctrl+]b=prev ctrl+]c=new ctrl+]t=dispatch ctrl+]q=quit ctrl+]\\=shell'
 
 # --- the home: a fleet, a 看台, two clients ------------------------------------------------
 # panes ignore ⌃\ (stty -isig) so a key that reaches one shows instead of killing it

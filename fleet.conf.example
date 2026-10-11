@@ -343,6 +343,29 @@ FLEET_CTX_WINDOW=200000
 # draft to the orchestrator). Read at each ⌘N; the bar's word at the shell's start.
 # @label=⌘N opens the writing area @group=status @tier=internal @scope=global @edit=bool
 #FLEET_COMPOSE=0
+# Keys (issue #3185, EPIC #3178 C7): a new install takes ONE key — the panel.
+# The CLIENT's two ([client] section): FLEET_KEY_PANEL is the panel's chord (cmd+p;
+# another, e.g. cmd+' · off = none); FLEET_KEYS_EXTRA brings back any other, one
+# `action=chord` each — actions next prev back fwd new dispatch quit shell (the
+# session's shell, a chord the terminal sends itself), chords cmd+down · cmd+[ ·
+# ctrl+\\ … (bin/fleet_keys.py). A ⌘ chord reaches the fleet only through
+# iTerm2's `fleet` profile (fleet-iterm-profile.py, rewritten at each start); every
+# ⌘ key not named here is iTerm2's own (⌘K clear, ⌘T tab …). Example:
+#   e.g. FLEET_KEYS_EXTRA="next=cmd+down prev=cmd+up back=cmd+[ fwd=cmd+] new=cmd+n dispatch=cmd+t quit=cmd+q shell=ctrl+\\"
+# @label=Panel key @group=status @tier=internal @scope=global @edit=str
+#FLEET_KEY_PANEL=cmd+p
+# @label=Extra client keys @group=status @tier=internal @scope=global @edit=str
+#FLEET_KEYS_EXTRA=""
+# The MACHINE's two ([common]): the keys a phone or a terminal with no ⌘ opens the
+# panel with — ctrl+space (two taps on Termius: Ctrl, space), f12 (one, once put on
+# its key row), ctrl+]p (⌃] then p); drop ctrl+space if you use readline's
+# set-mark in a session's shell. FLEET_KEYS_PHONE_EXTRA binds more, `chord=action`:
+#   e.g. FLEET_KEYS_PHONE_EXTRA="ctrl+]n=next ctrl+]b=prev ctrl+]c=new ctrl+]t=dispatch ctrl+]q=quit"
+# ⌃] ⌃] always sends one ⌃] on to the session.
+# @label=Phone panel keys @group=status @tier=internal @scope=global @edit=str
+#FLEET_KEY_PHONE="ctrl+space f12 ctrl+]p"
+# @label=Extra phone keys @group=status @tier=internal @scope=global @edit=str
+#FLEET_KEYS_PHONE_EXTRA=""
 # @label=Orchestrator wake wait @group=status @tier=internal @scope=global @edit=int @unit=seconds
 #FLEET_ORCH_BOOT_SECS=75
 
