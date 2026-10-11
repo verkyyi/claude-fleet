@@ -150,6 +150,17 @@ func TestEntryReachCandidates(t *testing.T) {
 	if got, np := entryReachCandidates(rep, ip("203.0.114.7"), true); len(got) != 1 || got[0].port != 40022 || np != "" {
 		t.Fatalf("a mapped port: %+v %q, want 203.0.114.7:40022 only", got, np)
 	}
+	// the router already forwards :22023 (the machine's public= route): the
+	// source and the route's own address are knocked on there
+	pub := control.EntryReachReport{Port: 22022, PublicHost: "gw.example", PublicPort: 22023}
+	got, _ = entryReachCandidates(pub, ip("23.119.126.213"), true, ip("23.119.126.213"), ip("23.119.126.214"), ip("10.1.1.1"))
+	s = nil
+	for _, c := range got {
+		s = append(s, netip.AddrPortFrom(c.addr, uint16(c.port)).String()+"/"+c.via)
+	}
+	if strings.Join(s, " ") != "23.119.126.213:22023/source 23.119.126.214:22023/route" {
+		t.Fatalf("public route: %v, want the source and the route's other public address on :22023", s)
+	}
 	// the router's outside address is the carrier's
 	rep.PortMap.ExternalIP = "100.77.0.3"
 	if got, np := entryReachCandidates(rep, ip("203.0.114.7"), true); np != "cgnat" || len(got) != 1 || got[0].port != 22022 {

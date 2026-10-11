@@ -597,6 +597,10 @@ BREAK-IT 行 `service-handwritten`。只点名接管过的登录（`logins/<登�
   主机公钥、本机的全局 IPv6（不报隧道 / 网桥上的、临时的、废弃的）和私网 IPv4（只用来写「转发到哪个内网地址」——默认路由那块网卡的排第一，有线 en0 与 Wi-Fi en1 都在时写的是 en0 的），
   `FLEET_ENTRY_PORTMAP=auto`（默认，machine.env 或环境）时先用 NAT-PMP、不行再用 UPnP 请路由器把入口端口转出去
   （租期 2 小时，每次报时续上；UPnP 只取应答路由器自己私网地址上的描述）；`off` 不碰路由器。没人以这台为家（没在听）就不请路由器。
+- **路由器已经转发的公网端口**：机器有运维写的 `CCQUOTA_FLEET_NODE_ROUTES` `public=host:port`（环境、machine.env，或接管登录的
+  `<state>/logins/<login>.env`——节点程序读的那份）时，报告带上 `public_host` / `public_port`，入口在**那个端口**上敲来源地址和
+  这个 host 解析出的公网地址（macmini :22022、mini2 :22023——不一定是 22022）；体检写「把路由器上已有的 :<公网端口> 转发改到
+  <有线网卡地址>:22022」，那个端口上钥匙不符就写「路由器的 :<端口> 还指着系统的 sshd（:22），把它改到 …」。没有 `public=` 照旧。
 - **入口从外面敲门**：机器 token `POST /v1/node/entry-reach`。公网 IPv4 不由机器说——是入口看到这次报告从哪来
   （入口前面的 ingress 写进 `X-Forwarded-For` 的那个）；路由器给了映射就用映射的外侧端口。入口对每个地址拨 TCP、
   读到 `SSH-` 横幅、完成密钥交换看到的主机钥匙**就是**入口端口那把才算可达（不登录、不试钥匙，入口 sshd 不记失败）；

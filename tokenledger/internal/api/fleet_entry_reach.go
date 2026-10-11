@@ -215,7 +215,7 @@ func entryFamily(a netip.Addr) string {
 // machine's global IPv6 addresses. noPublic is "cgnat" when the machine looks
 // to sit behind carrier NAT: its router's outside address is not public, or
 // it is but the hub saw the machine come from another one.
-func entryReachCandidates(rep control.EntryReachReport, src netip.Addr, forwarded bool) (out []entryCandidate, noPublic string) {
+func entryReachCandidates(rep control.EntryReachReport, src netip.Addr, forwarded bool, routeAddrs ...netip.Addr) (out []entryCandidate, noPublic string) {
 	seen := map[string]bool{}
 	add := func(a netip.Addr, port int, via string) {
 		a = a.Unmap()
@@ -231,6 +231,11 @@ func entryReachCandidates(rep control.EntryReachReport, src netip.Addr, forwarde
 	}
 	var wan netip.Addr
 	extPort := rep.Port
+	if rep.PublicPort > 0 {
+		// The router already forwards this port from outside (the machine's
+		// public= route): that, not the entry's own, is where to knock.
+		extPort = rep.PublicPort
+	}
 	if pm := rep.PortMap; pm != nil && pm.Error == "" {
 		wan, _ = netip.ParseAddr(pm.ExternalIP)
 		wan = wan.Unmap()
@@ -239,11 +244,14 @@ func entryReachCandidates(rep control.EntryReachReport, src netip.Addr, forwarde
 		}
 	}
 	if src.IsValid() {
-		if wan.IsValid() && src == wan {
+		if (wan.IsValid() && src == wan) || rep.PublicPort > 0 {
 			add(src, extPort, "source")
 		} else {
 			add(src, rep.Port, "source")
 		}
+	}
+	for _, a := range routeAddrs {
+		add(a, extPort, "route")
 	}
 	if wan.IsValid() {
 		add(wan, extPort, "portmap")
@@ -267,6 +275,28 @@ func entryReachCandidates(rep control.EntryReachReport, src netip.Addr, forwarde
 		add(a, rep.Port, "ipv6")
 	}
 	return out, noPublic
+}
+
+// entryResolve is the public route's host's addresses (an IP literal is
+// itself); nothing when there is none or it does not resolve in 3 s.
+var entryResolve = func(ctx context.Context, host string) []netip.Addr {
+	host = strings.TrimSpace(host)
+	if host == "" || len(host) > 253 {
+		return nil
+	}
+	if a, err := netip.ParseAddr(host); err == nil {
+		return []netip.Addr{a}
+	}
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	ips, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+	if err != nil {
+		return nil
+	}
+	if len(ips) > 4 {
+		ips = ips[:4]
+	}
+	return ips
 }
 
 // handleNodeEntryReach serves EntryReachNodePath.
@@ -312,8 +342,12 @@ func (s *Server) handleNodeEntryReach(w http.ResponseWriter, r *http.Request) {
 	}
 	s.entryReachAt.Store(key, now)
 
+	if rep.PublicPort < 0 || rep.PublicPort > 65535 {
+		httpError(w, http.StatusBadRequest, "public_port must be 1–65535")
+		return
+	}
 	src, fwd := entryReportSource(r)
-	cands, noPublic := entryReachCandidates(rep, src, fwd)
+	cands, noPublic := entryReachCandidates(rep, src, fwd, entryResolve(r.Context(), rep.PublicHost)...)
 	if !rep.Listening {
 		cands = nil // nothing listens: no address counts, none is dialled
 	}

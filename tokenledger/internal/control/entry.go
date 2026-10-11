@@ -92,6 +92,12 @@ type EntryReachReport struct {
 	V6      []string      `json:"v6,omitempty"`
 	LAN     []string      `json:"lan,omitempty"`
 	PortMap *EntryPortMap `json:"portmap,omitempty"`
+	// PublicHost / PublicPort are the machine's operator-written public
+	// route (CCQUOTA_FLEET_NODE_ROUTES public=host:port): the port the
+	// router already forwards from outside, which need not be Port. The hub
+	// dials the source address — and the host's own addresses — on it.
+	PublicHost string `json:"public_host,omitempty"`
+	PublicPort int    `json:"public_port,omitempty"`
 }
 
 // Entry reach reasons: why an address did not count.
@@ -108,7 +114,7 @@ type EntryReachAddr struct {
 	Addr      string     `json:"addr"`
 	Family    string     `json:"family"` // "ipv4" | "ipv6"
 	Port      int        `json:"port"`
-	Via       string     `json:"via"` // "source" | "portmap" | "ipv6"
+	Via       string     `json:"via"` // "source" | "portmap" | "route" | "ipv6"
 	Reachable bool       `json:"reachable"`
 	Reason    string     `json:"reason,omitempty"`
 	LastOK    *time.Time `json:"last_ok,omitempty"`
