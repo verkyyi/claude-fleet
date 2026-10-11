@@ -529,8 +529,8 @@ fleet_ui_t() {
     # the 看台's switcher (issue #3000, EPIC #2999 C2; #2752: no word to guess)
     zh:view_title) printf '会话' ;;
     en:view_title) printf 'Sessions' ;;
-    zh:view_keys) printf '↵ 切过去  Tab 操作  ↑↓ 选  ⌃\\ 开 shell  打字筛选  ? 图例  esc 关' ;;
-    en:view_keys) printf '↵ go  Tab act  ↑↓ pick  ⌃\\ shell  type to filter  ? legend  esc close' ;;
+    zh:view_keys) printf '↵ 切过去  Tab 操作  ↑↓ 选  打字筛选  ? 图例  esc 关' ;;
+    en:view_keys) printf '↵ go  Tab act  ↑↓ pick  type to filter  ? legend  esc close' ;;
     zh:view_grp_pin_fmt) printf '置顶 %s' "${1:-}" ;;
     en:view_grp_pin_fmt) printf 'Pinned %s' "${1:-}" ;;
     zh:view_grp_ask_fmt) printf '等你 %s' "${1:-}" ;;
@@ -649,6 +649,29 @@ fleet_ui_t() {
     en:view_cmd_back_fmt) printf 'Back to %s' "${1:-}" ;;
     zh:view_cmd_newsess) printf '开一个空白新会话' ;;
     en:view_cmd_newsess) printf 'Open a blank new session' ;;
+    # EPIC #3178 round 2 (issue #3324): the ⌘P panel's next words, for ④ ⑥
+    zh:view_search_ph) printf '搜会话，或直接写一件新任务' ;;
+    en:view_search_ph) printf 'Search sessions, or type a new task' ;;
+    zh:view_cmd_blank) printf '⚡ 新会话（空白）' ;;
+    en:view_cmd_blank) printf '⚡ New session (blank)' ;;
+    zh:view_cmd_task_fmt) printf '⚡ 新任务：%s' "${1:-}" ;;
+    en:view_cmd_task_fmt) printf '⚡ New task: %s' "${1:-}" ;;
+    zh:view_grid_repo) printf '仓库' ;;
+    en:view_grid_repo) printf 'Repo' ;;
+    zh:view_grid_norepo) printf '不绑仓库' ;;
+    en:view_grid_norepo) printf 'No repo' ;;
+    zh:view_grid_agent) printf 'Agent' ;;
+    en:view_grid_agent) printf 'Agent' ;;
+    zh:view_started_fmt) printf '已开工 · T%s' "${1:-}" ;;
+    en:view_started_fmt) printf 'started · T%s' "${1:-}" ;;
+    zh:view_lang_row) printf '语言 / Language　中文 ✓ · English' ;;
+    en:view_lang_row) printf 'Language / 语言　English ✓ · 中文' ;;
+    zh:view_lang_saved) printf '界面语言：中文 · 已存到你的账号' ;;
+    en:view_lang_saved) printf 'Language: English · saved to your account' ;;
+    zh:view_lang_auto_fmt) printf '已按你的系统用中文 · ⌘P → 语言 可改' ;;
+    en:view_lang_auto_fmt) printf 'Using English from your system (LANG=%s) · ⌘P → Language to change' "${1:-}" ;;
+    zh:view_door_welcome) printf '欢迎回来。⌃空格 打开面板。' ;;
+    en:view_door_welcome) printf 'Welcome back. ⌃Space opens the panel.' ;;
     zh:view_cmd_quit) printf '退出 fleet' ;;
     en:view_cmd_quit) printf 'Quit fleet' ;;
     zh:view_grp_more) printf '更多' ;;
@@ -1513,6 +1536,23 @@ quit	z	quit fleet — in the client only: every process of the client on this co
     en:clients_revoke_failed)   printf 'Could not disconnect:' ;;
     zh:topbar_no_record)        printf '顶行无记录' ;;
     en:topbar_no_record)        printf 'no top-line record' ;;
+    # the top line's own words (fleet-topbar.py reads `dump topbar_`, issue #3324)
+    zh:topbar_left_fmt)         printf '剩余 %s' "${1:-}" ;;
+    en:topbar_left_fmt)         printf '%s left' "${1:-}" ;;
+    zh:topbar_ago_fmt)          printf '%s 分钟前' "${1:-}" ;;
+    en:topbar_ago_fmt)          printf '%s min ago' "${1:-}" ;;
+    zh:topbar_pr_merged)        printf 'PR 已合并' ;;
+    en:topbar_pr_merged)        printf 'PR merged' ;;
+    zh:topbar_pr_closed)        printf 'PR 已关闭' ;;
+    en:topbar_pr_closed)        printf 'PR closed' ;;
+    zh:topbar_down_fmt)         printf '%s 连不上' "${1:-}" ;;
+    en:topbar_down_fmt)         printf '%s unreachable' "${1:-}" ;;
+    zh:topbar_retry_fmt)        printf '第 %s 次重连' "${1:-}" ;;
+    en:topbar_retry_fmt)        printf 'retry %s' "${1:-}" ;;
+    zh:topbar_relay_fmt)        printf '%s 经中转' "${1:-}" ;;
+    en:topbar_relay_fmt)        printf '%s via relay' "${1:-}" ;;
+    zh:topbar_direct_quiet)     printf '直连（入口没声音）' ;;
+    en:topbar_direct_quiet)     printf 'direct (the entry is silent)' ;;
     zh:notify_ask)              printf '%s 在问你' "${1:-}" ;;
     en:notify_ask)              printf '%s is asking you' "${1:-}" ;;
     zh:notify_perm)             printf '%s 要你批准' "${1:-}" ;;

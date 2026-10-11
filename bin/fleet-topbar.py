@@ -129,7 +129,9 @@ def state_word(rec, sym):
     return FV.state_words({"work": "working", "done": "done"}.get(sym, "idle"))
 
 
-PIN_WORDS = {"relay": "中转", "tailscale": "Tailscale", "tailnet": "Tailscale", "direct": "直连", "entry": "入口直连"}
+# @remote_via's route word for the hub relay: fleet-connect.py route_label's, a value
+# the stage carries (`auto 中转`), matched here — never drawn
+RELAY_WORD = "\u4e2d\u8f6c"
 
 
 def trouble_text(rec, down, route, via, pin, tries, cols):
@@ -140,9 +142,10 @@ def trouble_text(rec, down, route, via, pin, tries, cols):
     node = rec.get("node") or "?"
     if rec.get("lost") or down:
         n = int(tries) if str(tries).isdigit() else 0
-        return node + " 连不上" + (" · 第 %d 次重连" % n if down and pin and n and cols >= MID else "")
-    if route == "relay" or (via or "").partition(" ")[2] == "中转":
-        return node + " 经中转"
+        return say("topbar_down_fmt", node) + (" · " + say("topbar_retry_fmt", n)
+                                               if down and pin and n and cols >= MID else "")
+    if route == "relay" or (via or "").partition(" ")[2] == RELAY_WORD:
+        return say("topbar_relay_fmt", node)
     return ""
 
 
@@ -159,7 +162,8 @@ def ctx_parts(rec, cols, now):
     old = isinstance(ts, int) and not isinstance(ts, bool) and ts > 0 and now - ts >= 300
     band = rec.get("ctx_band")
     pcol = DIM if old else BAD if band == "handoff" or left < 20 else WARN if left <= 50 else OK
-    pct = ("剩余 " if cols >= WIDE else "") + "%d%%" % left + (" ⚠" if band == "handoff" else "")
+    pct = "%d%%" % left
+    pct = (say("topbar_left_fmt", pct) if cols >= WIDE else pct) + (" ⚠" if band == "handoff" else "")
     out = [(pct, pcol, "")]
     model, effort = rec.get("model") or "", rec.get("effort") or ""
     sep = " · " if cols >= WIDE else " "
@@ -167,7 +171,7 @@ def ctx_parts(rec, cols, now):
     if model and cols >= MID:
         tail += sep + model + (sep + effort if effort else "")
     if old and cols >= MID:
-        tail += " · %d 分钟前" % ((now - ts) // 60)
+        tail += " · " + say("topbar_ago_fmt", (now - ts) // 60)
     if tail:
         out.append((tail, DIM if old else FG, ""))
     return out
@@ -179,10 +183,10 @@ def pr_part(pr, cols):
     merged / live / deploy… / deploy✗, closed."""
     gl = FV.glyphs()
     if pr in FV.MERGED_PR:
-        return ("PR 已合并" + ((" ✗" if gl is FV.GLYPHS else " x") if pr == "deploy✗" and cols >= WIDE else ""),
+        return (say("topbar_pr_merged") + ((" ✗" if gl is FV.GLYPHS else " x") if pr == "deploy✗" and cols >= WIDE else ""),
                 BAD if pr == "deploy✗" else OK, "pr")
     if pr == "closed":
-        return ("PR 已关闭", DIM, "pr")
+        return (say("topbar_pr_closed"), DIM, "pr")
     m = re.match(r"#([0-9]+)(.*)", pr)
     if not m:
         return (pr, DIM, "pr")
@@ -263,7 +267,7 @@ def render(args):
         # (going round the sessions is the panel's, #3194). No record at
         # all (issue #2739) is said, not drawn as a bare shell: the list never
         # wrote one, and logs/topbar.log says why when a write failed.
-        missing = "" if path.is_file() else "#[fg=%s]  %s" % (WARN, tmux_text(say("topbar_no_record") or "顶行无记录"))
+        missing = "" if path.is_file() else "#[fg=%s]  %s" % (WARN, tmux_text(say("topbar_no_record")))
         print("#[fg=%s,bold]#[range=user|title] %s#[norange]#[nobold]%s#[default]"
               % (HL, tmux_text(kv.get("wn", "")), missing))
         return 0
@@ -430,14 +434,13 @@ def node_record(kv):
         if rec["state"] == "needs":
             rec["q"] = asked(sock, win) or rec.get("q", "")
     if p[12] == "orchestrator" and not rec.get("title"):
-        rec["title"] = say("sidebar_portal") or "新任务"
+        rec["title"] = say("sidebar_portal")
     down = ""
     if peer and (kv.get("pd") == "1" or peer_down(str(reg.parent), pnode, plogin)):
         down = "1"
     route = row.get("route") or ""
     src, _, rname = route.rpartition(":")
-    via = "" if not rname or rname == "relay" else "%s %s" % ("manual" if src == "manual" else "auto",
-                                                                 PIN_WORDS.get(rname, rname))
+    via = "" if not rname or rname == "relay" else "%s %s" % ("manual" if src == "manual" else "auto", rname)
     return rec, down, "relay" if rname == "relay" else "", via
 
 
@@ -507,15 +510,31 @@ def click(what, sess):
         mach = "@" + (rec.get("node") or "?")
         word = "offline" if rec.get("lost") else "online"
         if rec.get("direct"):
-            word += " · 直连（入口没声音）"
+            word += " · " + say("topbar_direct_quiet")
         note(sess, client, "%s · %s · %s" % (mach, word, rec.get("title") or ""))
     return 0
 
 
+_WORDS = {}
+
+
 def say(key, *args):
-    r = subprocess.run(["sh", str(BIN / "fleet-ui-lang.sh"), "t", key, *args],
-                       capture_output=True, text=True, stdin=subprocess.DEVNULL)
-    return r.stdout.strip()
+    """A string off fleet-ui-lang.sh, the one table — read once per process
+    (`dump`, as fleet_view.py and fleet-sidebar.py do); a key it lacks prints itself."""
+    if not _WORDS:
+        try:
+            raw = subprocess.run(["sh", str(BIN / "fleet-ui-lang.sh"), "dump", "topbar_", "sidebar_portal", "solo_"],
+                                 capture_output=True, text=True, stdin=subprocess.DEVNULL,
+                                 timeout=5).stdout.split("\0")
+        except (OSError, subprocess.TimeoutExpired):
+            raw = []
+        _WORDS.update({k: v.replace("\1", "%s") for k, v in zip(raw[0::2], raw[1::2])})
+        _WORDS.setdefault("_", "")
+    text = _WORDS.get(key, key)
+    try:
+        return text % args if args else text
+    except (TypeError, ValueError):
+        return text
 
 
 ENDED_FRESH = 600   # a solo-ended file older than this was never taken: a detach since is a plain one
