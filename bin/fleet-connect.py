@@ -95,7 +95,9 @@ the hub's pick is MACHINE → the next ONLINE candidate the home answer lists
 no hub URL and this computer the one machine — or the machine picked being THIS
 computer and this login (claude-fleet#3006: `fleet` typed over ssh on a home
 machine) — {"local": true, "machine", "argv": []}: run the remote command here,
-no ssh. FLEET_CONNECT_SELF=ssh keeps the ssh to itself.
+no ssh. FLEET_CONNECT_SELF=ssh keeps the ssh to itself. The hub opening this
+person's first login (claude-fleet#3054) → {"opening": {state, eta_s, machine,
+ask, …}} and exit 1: the thin client waits on it itself.
 
 --cert-check (claude-fleet#2457): the doctor's `cert` row — this computer's
 ~/.ssh/fleet-cert-cert.pub, its principals and how long it is still valid, and
@@ -1465,6 +1467,14 @@ def enter(want, hub, token, verbose, retest, print_only, ssh_args, ssh_opts=(), 
             if e.code == "opening":
                 # The hub is opening this person's first login (issue #2069):
                 # nothing to enter yet, and nothing to ask anyone for.
+                if ARGV_OUT:
+                    # the thin client (claude-fleet#3054) waits on it itself:
+                    # the hub's account answer as the line, no 「稍后再运行」
+                    acct = e.body.get("account") if isinstance(e.body.get("account"), dict) else {}
+                    sys.stdout.write(json.dumps({"opening": dict(acct, state="opening",
+                                                                 eta_s=e.body.get("eta_s", acct.get("eta_s")))},
+                                                ensure_ascii=False) + "\n")
+                    sys.exit(1)
                 sys.stderr.write("fleet · %s，稍后再运行 fleet\n" % (e.body.get("error") or "正在为你开机器，约 1 分钟"))
                 sys.exit(1)
             if e.code == "no_machine_online":
