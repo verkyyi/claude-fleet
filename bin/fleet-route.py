@@ -4,7 +4,7 @@
     fleet route                              every machine: its route, auto or
                                              pinned, and the last handshakes
     fleet route <machine>                    that one machine
-    fleet route <machine> auto|relay|direct|tailscale|<route name>|<host[:port]>
+    fleet route <machine> auto|relay|direct|entry|tailscale|<route name>|<host[:port]>
                                              pin it (auto: back to measuring)
     fleet route --json                       the list as JSON
     fleet route --get <name>…                the pin of the first name that has
@@ -23,7 +23,8 @@ answer.
 The routes: `lan` — the machine's own private address, when you are on its
 network (#3074); `relay` — through the hub (入口中转); `tailscale` — the machine's
 tailnet name; `direct` — its first direct route that is not the tailnet, in the
-hub's order (`lan`, `public` …); any route name the hub lists; or an address,
+hub's order (`lan`, `public` …); `entry` — your address at the home's entry
+port, with this computer's own key (#3075); any route name the hub lists; or an address,
 host[:port] (port 22 when none). The pins live in ~/.config/claude-fleet/routes,
 one `<machine> <route>` a line.
 
@@ -139,13 +140,13 @@ def print_list(only=None):
         rs = [{"machine": only, "mode": "auto", "pin": "", "route": None, "measured_at": None, "table": [],
                "last": False}]
     if not rs:
-        print("还没连过任何机器 · 钉一条：fleet route <机器> relay|direct|tailscale|<地址>")
+        print("还没连过任何机器 · 钉一条：fleet route <机器> relay|direct|entry|tailscale|<地址>")
         return 0
     w = max(4, max(fc_cells(r["machine"]) + (2 if r["last"] else 0) for r in rs)) + 2
     print(fc.pad("机器", w) + fc.pad("路线", 24) + "最近一次各路线握手")
     for r in rs:
         print(fc.pad(r["machine"] + (" *" if r["last"] else ""), w) + fc.pad(describe(r), 24) + handshakes(r))
-    print("改：fleet route <机器> auto|relay|direct|tailscale|<地址[:端口]>")
+    print("改：fleet route <机器> auto|relay|direct|entry|tailscale|<地址[:端口]>")
     return 0
 
 
@@ -156,7 +157,7 @@ def fc_cells(s):
 
 def set_pin(machine, route):
     if not fc.PIN_RE.match(route):
-        sys.stderr.write("fleet route: 「%s」不是一条路线 — auto · relay · direct · tailscale · 路线名 · 地址[:端口]\n" % route)
+        sys.stderr.write("fleet route: 「%s」不是一条路线 — auto · relay · direct · entry · tailscale · 路线名 · 地址[:端口]\n" % route)
         return 2
     name = canon(machine)
     ms, _ = known()
@@ -185,8 +186,8 @@ def pick():
         return 1
     r = rs[int(a) - 1]
     print("\n%s · 最近握手：%s\n" % (r["machine"], handshakes(r)))
-    opts = [("auto", "自动（测速选最快）"), ("relay", "入口中转"), ("direct", "直连"), ("tailscale", "Tailscale"),
-            ("", "某个地址…")]
+    opts = [("auto", "自动（测速选最快）"), ("relay", "入口中转"), ("direct", "直连"), ("entry", "入口直连（你的地址）"),
+            ("tailscale", "Tailscale"), ("", "某个地址…")]
     for i, (k, label) in enumerate(opts, 1):
         print("  %d  %s%s" % (i, label, "  ← 现在" if (k == (r["pin"] or "auto")) else ""))
     b = input("走哪条？ ").strip()
@@ -224,7 +225,7 @@ def main(argv):
         return print_list(canon(argv[0]))
     if len(argv) == 2:
         return set_pin(argv[0], argv[1])
-    sys.stderr.write("用法：fleet route [<机器> [auto|relay|direct|tailscale|<地址>]]（fleet route --help）\n")
+    sys.stderr.write("用法：fleet route [<机器> [auto|relay|direct|entry|tailscale|<地址>]]（fleet route --help）\n")
     return 2
 
 

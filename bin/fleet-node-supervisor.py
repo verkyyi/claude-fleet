@@ -3631,7 +3631,8 @@ def entry_dispatch(paths):
 
 def entry_config(ep, port, allow, paths=None):
     """共同约定 2, line for line — and 4: the ForceCommand that dispatches (a
-    command runs as on port 22; none on a terminal is the 看台)."""
+    command runs as on port 22; none on a terminal is the 看台) — and C9's
+    forwarding to this machine only (issue #3075)."""
     import shlex
     disp = entry_dispatch(paths) if paths is not None else None
     sftp = next((s for s in ENTRY_SFTP_SERVERS if os.access(s, os.X_OK)), None)
@@ -3664,6 +3665,15 @@ def entry_config(ep, port, allow, paths=None):
         "PermitUserRC no",
         "PermitUserEnvironment no",
         "ExposeAuthInfo yes",
+        # forwarding only to THIS machine (issue #3075): `fleet open`'s -L and the thin
+        # client pass; another address, -R, a unix socket, the agent, X11, a tunnel do not
+        "AllowTcpForwarding local",
+        "PermitOpen localhost:* 127.0.0.1:* [::1]:*",
+        "AllowStreamLocalForwarding no",
+        "AllowAgentForwarding no",
+        "X11Forwarding no",
+        "PermitTunnel no",
+        "GatewayPorts no",
         "MaxAuthTries 3",
         "LoginGraceTime 20",
         "MaxStartups 10:30:60",

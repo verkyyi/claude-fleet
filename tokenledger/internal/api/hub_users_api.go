@@ -295,6 +295,7 @@ func (s *Server) revokePersonDevices(principal, actor string, now time.Time) int
 		if changed {
 			n++
 			s.deviceAudit(store.DeviceRevoke, d.Fingerprint, principal, actor, "taken off the list; name "+d.Name, now)
+			s.entryDeviceRevoke(principal, d.Fingerprint, actor, now)
 		}
 	}
 	return n

@@ -74,6 +74,7 @@ func (s *Server) registerDevice(pid, keyLine, name, via string, now time.Time) {
 		detail += ", name " + name
 	}
 	s.deviceAudit(store.DeviceRegister, fp, pid, pid, detail, now)
+	s.entryDeviceKey(pid, keyLine, name, true, now)
 }
 
 // cleanDeviceName keeps a device's self-reported name printable and short:
@@ -163,10 +164,14 @@ func (s *Server) handleDeviceRenew(w http.ResponseWriter, r *http.Request) {
 	if err := s.Store.TouchDevice(fp, now, "", true); err != nil {
 		log.Printf("fleet: touch device %s: %v", fp, err)
 	}
+	devName := dev.Name
 	if name := cleanDeviceName(req.DeviceName); name != "" && name != dev.Name {
 		// The device's name is its own word; keep the newest.
 		_ = s.Store.SetDeviceName(fp, name)
+		devName = name
 	}
+	// A device registered before the door was on gets its key there now.
+	s.entryDeviceKey(dev.PrincipalID, req.PublicKey, devName, false, now)
 	s.deviceAudit(store.DeviceRenew, fp, dev.PrincipalID, dev.PrincipalID,
 		"serial "+resp.Serial+", until "+resp.ValidBefore.UTC().Format(time.RFC3339), now)
 	w.Header().Set("Cache-Control", "no-store")
@@ -311,6 +316,7 @@ func (s *Server) handleFleetDeviceRevoke(w http.ResponseWriter, r *http.Request)
 	}
 	if changed {
 		s.deviceAudit(store.DeviceRevoke, req.Fingerprint, dev.PrincipalID, actor, "name "+dev.Name, now)
+		s.entryDeviceRevoke(dev.PrincipalID, req.Fingerprint, actor, now)
 		log.Printf("fleet: device %s (%s, %s) revoked by %s", req.Fingerprint, dev.Name, dev.PrincipalID, actor)
 	}
 	w.Header().Set("Cache-Control", "no-store")
