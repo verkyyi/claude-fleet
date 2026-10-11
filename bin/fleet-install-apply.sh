@@ -80,6 +80,10 @@
 #             written. The github token is read by bin/mcp-github.sh from
 #             `gh auth token` at start — no merged file carries one. Skills are
 #             the two passes above; this one only counts them.
+#   codex-plugins  every apply -> fleet-codex-plugins.py sync (issue #3123): the
+#             optional plugins Claude has installed, carried into every Codex
+#             home (skills linked as fleet-plugin-*, MCP servers as one marked
+#             config.toml block). None installed = nothing written.
 #   credsep   FLEET_CRED_SEPARATE (issue #1971): converge this login on it —
 #             bin/fleet-credsep.sh apply (install / uninstall / refresh the root-
 #             owned copy; needs password-less sudo, else one line says what to
@@ -1070,6 +1074,20 @@ if [ -d "$ROOT/conf/agent-defaults" ] && [ -f "$ROOT/bin/fleet-agent-defaults.py
   fi
 else
   say 'agents: skip — no conf/agent-defaults in this version'
+fi
+# The Codex side of the optional plugins (issue #3123, EPIC #3111 C12): Codex has
+# no /plugin, so fleet-codex-plugins.py follows what Claude has installed — the
+# skills linked into every Codex home as fleet-plugin-*, the MCP servers as one
+# marked block in config.toml (fill only, the rest byte for byte). None installed
+# ⇒ nothing written. The Codex launcher runs the same sync before every launch.
+if [ "$BUNDLE" = 0 ] && [ -f "$ROOT/bin/fleet-codex-plugins.py" ] && command -v "$CLAUDE" >/dev/null 2>&1; then
+  if out=$(FLEET_INSTALL_CLAUDE="$CLAUDE" python3 "$ROOT/bin/fleet-codex-plugins.py" sync --root "$ROOT" \
+             --override "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/agent-overrides.json" ${DRYFLAG:+"$DRYFLAG"} 2>&1); then
+    say "codex-plugins: $(printf '%s\n' "$out" | tail -1)"
+    printf '%s\n' "$out" | grep -E '^(link|skill|unlink|mcp|drop) ' | sed 's/^/    /'
+  else
+    fail codex-plugins "fleet-codex-plugins.py sync: $(printf '%s\n' "$out" | grep '^FAIL' | head -1)"
+  fi
 fi
 # The agent files the core ships (issue #3122, EPIC #3111 C11): fleet-worker — the
 # issue-bound session a spawn starts as by default — and, until their own plugin

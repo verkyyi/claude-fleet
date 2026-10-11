@@ -419,7 +419,17 @@ Do not install from memory: read the doc and work from it.
   — pins a semver `version`, and bumps it whenever its files change (an installed
   copy updates on the version; the doctor's `plugins` row says 落后). Their parts
   never go back into `skills/`, `commands/` or the agent bundle.
-  `fleet-plugins-selftest.sh`.
+  `fleet-plugins-selftest.sh`. **Codex reads the same plugins** (issue #3123,
+  C12): it has no /plugin, so `bin/fleet-codex-plugins.py sync` (the Codex
+  launcher before every launch, install-apply after the agents pass) follows what
+  Claude has installed AND enabled — skills linked as `$CODEX_HOME/skills/fleet-plugin-*`
+  (Codex lists them `<plugin>:<name>`), plugin commands as marked adapter skills,
+  `.mcp.json` servers as ONE marker block at the end of `config.toml` (fill only,
+  the rest byte for byte), hooks.json merged by `fleet-hooks-emit.sh --plugin-dir`
+  through `hooks/codex-map.json` (PreCompact dropped). It only ever removes
+  `fleet-plugin-*` it made; none installed ⇒ nothing written. What Codex cannot
+  carry — mod modules, PreCompact, an agent file's `tools`, /plugin — ends the
+  doctor's `plugins` row. `fleet-codex-plugins-selftest.sh`.
 - **A role starts as its ONE definition says: `agents/<role>.md`** (issue #2782,
   EPIC #2781 C1). orchestrator · steward · worker · epic-driver, each in Claude
   Code's subagent file format (model · effort · tools · disallowedTools ·

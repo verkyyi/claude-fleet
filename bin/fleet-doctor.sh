@@ -2909,10 +2909,17 @@ fi
 # installed only by /plugin; the row asks `claude plugin list --json` (through
 # fleet-plugins.py, the one reader) which are installed and whether one is behind
 # the runtime (落后 → WARN). Marketplace not added on a hosting login → WARN (the
-# sync adds it). No claude / no marketplace.json → no row.
+# sync adds it). No claude / no marketplace.json → no row. With a Codex home and a
+# plugin installed, the row ends with what Codex carries and what it cannot
+# (fleet-codex-plugins.py doctor — mod modules, PreCompact, tools limits, /plugin).
 _plg="$(dirname "$0")/fleet-plugins.py"
 if [ -f "$_plg" ] && command -v python3 >/dev/null 2>&1 && command -v "${FLEET_INSTALL_CLAUDE:-claude}" >/dev/null 2>&1; then
   _pline="$(python3 "$_plg" doctor --root "$(dirname "$0")/.." 2>/dev/null)"; _prc=$?
+  # the Codex side (issue #3123): what a Codex session carries of them, and what not
+  if [ "$_prc" -le 1 ] && [ -f "$(dirname "$0")/fleet-codex-plugins.py" ]; then
+    _pcx="$(python3 "$(dirname "$0")/fleet-codex-plugins.py" doctor --root "$(dirname "$0")/.." 2>/dev/null)" \
+      && [ -n "$_pcx" ] && _pline="$_pline · $_pcx"
+  fi
   case "$_prc" in
     0) pass plugins "$_pline" ;;
     1) warn plugins "$_pline" ;;
