@@ -36,6 +36,7 @@ PIDS=""
 cleanup() { for p in $PIDS; do kill "$p" 2>/dev/null; done; [ -n "${KEEP:-}" ] || rm -rf "$WORK"; }
 trap cleanup EXIT
 
+mode() { python3 -c 'import os,sys;print("%o" % (os.stat(sys.argv[1]).st_mode & 0o777))' "$1"; }
 free_port() { python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1])'; }
 UP=$(free_port); PX=$(free_port)
 
@@ -69,7 +70,7 @@ for _ in $(seq 1 50); do
 done
 TOK=$(python3 "$PM" token) || fail "token prints the minted token"
 [ "${#TOK}" -ge 32 ] || fail "a token of at least 32 chars" "$TOK"; ok
-eq "the book is 0600" "600" "$(stat -f %Lp "$FLEET_PHONE_DIR/tokens.json" 2>/dev/null || stat -c %a "$FLEET_PHONE_DIR/tokens.json")"
+eq "the book is 0600" "600" "$(mode "$FLEET_PHONE_DIR/tokens.json")"
 
 post() {  # post <path> [token] → "<code> <body>"
   local h=()
@@ -160,7 +161,7 @@ has "E: claude: the old phone removed first" "mcp remove phone -s user" "$A"
 has "E: claude: added as http with a headersHelper" '"type": "http", "url": "http://mini2.example:47230/mcp", "headersHelper":' "$A"
 hasnt "E: claude: never the token in argv" "$NEW" "$A"
 eq "E: client header prints the bearer" "{\"Authorization\": \"Bearer $NEW\"}" "$(python3 "$PM" client header)"
-eq "E: client.json is 0600" "600" "$(stat -f %Lp "$FLEET_PHONE_DIR/client.json" 2>/dev/null || stat -c %a "$FLEET_PHONE_DIR/client.json")"
+eq "E: client.json is 0600" "600" "$(mode "$FLEET_PHONE_DIR/client.json")"
 python3 "$PM" client unset --claude "$WORK/fake-claude" >/dev/null
 C=$(cat "$CODEX_HOME/config.toml")
 hasnt "E: unset takes the table out" "mcp_servers.phone" "$C"
