@@ -612,8 +612,15 @@ case "$mode" in
       # its stderr is kept too (issue #3097): a caller reads only our LAST line,
       # so a refusal's own reason rides in it rather than vanish above it
       serr=$(mktemp "${TMPDIR:-/tmp}/fcr-spawn.XXXXXX" 2>/dev/null) || serr=/dev/null
-      bash "$BIN/dash-issue-session.sh" "$num" "$sess" --print --agent "$agent" --origin hub ${srepo:+--repo "$srepo"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} ${acls:+--account "$acls"} ${9:+--reap "$9"} ${taskarg:+--task "$taskarg"} 2>"$serr"
+      # The person's words are the session's first turn (issue #3331): the body
+      # they wrote, else the title — handed over as a file, never an argv.
+      wordsf=$(mktemp "${TMPDIR:-/tmp}/fcr-words.XXXXXX" 2>/dev/null) || wordsf=''
+      if [ -n "$wordsf" ]; then
+        if [ -n "${nbody//[[:space:]]/}" ]; then printf '%s' "$nbody" > "$wordsf"; else printf '%s' "${8:-}" > "$wordsf"; fi
+      fi
+      bash "$BIN/dash-issue-session.sh" "$num" "$sess" --print --agent "$agent" --origin hub ${srepo:+--repo "$srepo"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} ${acls:+--account "$acls"} ${9:+--reap "$9"} ${taskarg:+--task "$taskarg"} ${wordsf:+--words-file "$wordsf"} 2>"$serr"
       rc=$?
+      [ -n "$wordsf" ] && rm -f "$wordsf"
       cat "$serr" >&2 2>/dev/null
       if [ "$rc" != 0 ]; then
         swhy=$(awk 'NF { l = $0 } END { print l }' "$serr" 2>/dev/null | tr '\t' ' ')
