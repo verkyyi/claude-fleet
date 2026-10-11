@@ -78,10 +78,8 @@ R="${E}0m"; US=$'\x1f'
 # the fleet version it runs, so 待换新 costs no field and no fork either.
 # Last (issue #1902): an empty slot where a remote row carries its title
 # (#1921 — a local one is looked up below), then @reap_policy.
-# The orchestrating session (issue #1957, `@fleet_role orchestrator`) reads as
-# `home` in the name field: no row, as a panel — 「新任务」 wears it instead.
-# So does its steward (issue #2670, `@fleet_role steward`): no row, ever — what it
-# finds reaches you only as the orchestrator's decision sheet.
+# No session is special (issue #3119): the window holding the orchestrator or
+# the steward is a row like any other — no `home` name, no hidden row.
 # After @reap_policy (issue #1958): @epic, `<owner/name>#<N>` on the window that
 # drives a running EPIC (fleet-epic-heartbeat.sh stamps it) — the row is then the
 # EPIC's: its parent issue's number + title, badged landed/members (epic_v).
@@ -93,7 +91,7 @@ R="${E}0m"; US=$'\x1f'
 # empty with no @ctx_pct — the sidebar's field 19, read by the client's top line.
 _WTEST='#{?@test_identity,,'; _WTEND='}'
 [ "${FLEET_ROWS_TEST:-0}" = 1 ] && { _WTEST=''; _WTEND=''; }
-WFMT="#{session_name}${US}#{window_index}${US}#{?#{||:#{@remote},#{@solo_shell}},,#{?#{||:#{==:#{@fleet_role},orchestrator},#{==:#{@fleet_role},steward}},home,${_WTEST}#{window_name}${_WTEND}}}${US}#{pane_current_path}${US}#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{?#{==:#{@claude_state},looping},#{@claude_wait},#{@claude_needs}}${US}#{@expand}${US}#{@pin}${US}#{?@degenerate_ts,degen=#{@degenerate_ts}:,}#{?@mem_killed,mem:,}#{?@claude_mem_warn,fat=#{@claude_mem_warn}:,}#{?@ctx_warn,ctxw:,}#{?@quota_stuck,stuck:,}#{@quota_failover}${US}#{@reap_due}${US}#{@reap_seen}${US}#{@reap_state_ts}${US}#{@repo}${US}#{@norepo}${US}#{@sleep_since}#{?@sleep_wake_deferred,:#{@sleep_wake_deferred},}${US}#{@repo_fold}${US}#{@loop}${US}#{@title_info}${US}#{?@born,#{@born},#{window_created}}${US}#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}${US}#{@task_line}${US}#{@reap_policy}${US}#{@epic}${US}#{?#{==:#{@backfill},failed},failed,}${US}${US}#{?#{==:#{@claude_state},needs},#{@claude_needs_detail},}${US}#{?@ctx_pct,#{?@ctx_left,#{@ctx_left},#{e|-:100,#{@ctx_pct}}}|#{@ctx_band}|#{@ctx_ts}|#{?@model,#{@model},#{?#{==:#{@cc_agent},codex},#{@cc_model},}}|#{@effort},}"
+WFMT="#{session_name}${US}#{window_index}${US}#{?#{||:#{@remote},#{@solo_shell}},,${_WTEST}#{window_name}${_WTEND}}${US}#{pane_current_path}${US}#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{?#{==:#{@claude_state},looping},#{@claude_wait},#{@claude_needs}}${US}#{@expand}${US}#{@pin}${US}#{?@degenerate_ts,degen=#{@degenerate_ts}:,}#{?@mem_killed,mem:,}#{?@claude_mem_warn,fat=#{@claude_mem_warn}:,}#{?@ctx_warn,ctxw:,}#{?@quota_stuck,stuck:,}#{@quota_failover}${US}#{@reap_due}${US}#{@reap_seen}${US}#{@reap_state_ts}${US}#{@repo}${US}#{@norepo}${US}#{@sleep_since}#{?@sleep_wake_deferred,:#{@sleep_wake_deferred},}${US}#{@repo_fold}${US}#{@loop}${US}#{@title_info}${US}#{?@born,#{@born},#{window_created}}${US}#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}${US}#{@task_line}${US}#{@reap_policy}${US}#{@epic}${US}#{?#{==:#{@backfill},failed},failed,}${US}${US}#{?#{==:#{@claude_state},needs},#{@claude_needs_detail},}${US}#{?@ctx_pct,#{?@ctx_left,#{@ctx_left},#{e|-:100,#{@ctx_pct}}}|#{@ctx_band}|#{@ctx_ts}|#{?@model,#{@model},#{?#{==:#{@cc_agent},codex},#{@cc_model},}}|#{@effort},}"
 
 # pad/truncate a plaintext string to N DISPLAY chars (locale-aware ${#}) → $fld_out
 fld() { local w="$1" s="$2" n=${#2}
@@ -514,21 +512,7 @@ if [ -n "${FLEET_SESSION:-}" ] && fleet_hub_on "$FLEET_SESSION" && [ -s "$G/remo
   # `local` and `wid` (fields 11/12, #1480) are named so a new cache's needs field
   # stays its own; a cache older than #1480 leaves them empty. `via` (field 13,
   # #1488: hub | node) the same — empty reads as hub.
-  # The orchestrating session (issue #1957) is no row: 「新任务」 wears it
-  # (fleet-sidebar.py). Its worker_ids are fleet-hub-sessions.sh's orch_all_<sess>
-  # — every one still answering (issue #2117: orch_<sess> keeps one line); a cache
-  # older than #2117 has only orch_<sess>.
-  _orchw=' ' _orchf="$G/orch_all_$FLEET_SESSION"
-  [ -e "$_orchf" ] || _orchf="$G/orch_$FLEET_SESSION"
-  if [ -s "$_orchf" ]; then
-    while IFS=$US read -r _ow _; do [ -n "$_ow" ] && _orchw+="wid:$_ow "; done < "$_orchf"
-  fi
-  # Nor is its steward (issue #2670): steward_all_<sess>, one worker_id a line.
-  if [ -s "$G/steward_all_$FLEET_SESSION" ]; then
-    while IFS= read -r _ow; do [ -n "$_ow" ] && _orchw+="wid:$_ow "; done < "$G/steward_all_$FLEET_SESSION"
-  fi
   while IFS=$US read -r r_wid r_node r_av r_iss r_repo r_state r_agent r_name r_orig r_needs r_local r_lwid r_via _r_busy r_born r_cfg r_ttl r_reap r_epic r_bf r_cl r_cb r_ct r_cm r_ce r_test r_akind r_atext _; do
-    case "$_orchw" in *" $r_wid "*) continue ;; esac
     # field 26 (issue #2505): a test identity's session — after the five
     # measurement fields, so the sixth of the rest; hidden but for `fleet ls`
     [ "$r_test" = 1 ] && { [ "${FLEET_ROWS_TEST:-0}" = 1 ] || continue; }

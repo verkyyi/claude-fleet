@@ -15,8 +15,7 @@ keyboard on the list.
 | zoom the right pane | ⌘↩ | F9 | again to restore |
 | sessions and actions (also ⌘K / prefix s, issue #2365) | ⌘P | prefix / | type a few letters, ↵ — below |
 | 派一件事: one line + a repo, ↵ files it and starts its worker, from any window (issue #2753) | ⌘T | prefix t | below |
-| a new task: the writing area on the right | ⌘N | prefix c | below |
-| the orchestrating session ⇄ the writing area (issue #2146) | ⌘N again | prefix c again | only with an orchestrator; also the 「新任务」 row's right-click menu |
+| a new session: no repo, on your home machine, the cursor in its input (issue #3119) | ⌘N | prefix c | `FLEET_COMPOSE=1`: the writing area on the right, below |
 | open / shut the sub-tasks of the session in view (issue #2167) | ⌘. | prefix . | on a sub-task: shuts its parent |
 | the switcher: every session, a new one, the layout (issue #2266) | ⌘K | prefix s | |
 | quit fleet: the client's processes here go, the sessions run on (issue #2349) | ⌘Q | prefix Q | below |
@@ -58,9 +57,18 @@ is the same thing from inside it (fleet-issue-file.sh either way). ⌘P's top gr
 — 派一件事 · + 新会话 · the layout flip · 退出 fleet — needs no `>`; an empty ⌘P
 still lights the session before, so ↵ there is «the one before» as it was.
 
-**A new task** (issue #1953): ⌘N — or prefix c, or a tap on the list's first row
-「+ 新任务」 — turns the right pane into the writing area (`bin/fleet-compose.py`,
-the stage's `@fleet_role portal` window, made once). Write as many lines as you
+**A new session** (issue #3119): ⌘N — or prefix c — opens a new session on your
+home machine, in your home directory with no repo, and puts you in its input
+(`fleet-shell.sh portal` → `home-session claude --new`; in a 看台
+`fleet_view.go_new` → `dash-raw-session.sh --no-repo`). No session is special: the
+list has no 「新任务」 row, and a session that took on the orchestrator or the
+steward is a row like any other — the one treatment a row gets is the pin you
+gave it (⌘P / its menu), which only orders the list and keeps nothing from being
+reaped (a session you want kept says 「一直留着」 — `@reap_policy keep`).
+
+**The writing area** (issue #1953, only with the client's `FLEET_COMPOSE=1`): ⌘N
+turns the right pane into it (`bin/fleet-compose.py`, the stage's `@fleet_role
+portal` window, made once). Write as many lines as you
 like (⇧↵ — the `fleet` profile sends it as 0x0a — ⌃j or ⌥↵ start a new one);
 drop a file on the window and its path is an attachment. Under the box sit three
 options, already picked, so ↵ needs none of them (issue #2231; Tab walks to them,
@@ -70,8 +78,8 @@ with no issue — **节点** — the machine the hub would pick (fewest running)
 维护中 / 失联 machines are greyed — and **Agent** — this fleet's default
 (`FLEET_AGENT`). A change is for this send only: the next ⌘N shows the defaults
 again. ↵ sends: the first line is the issue's title, the whole text its body (a
-HOME session starts on the whole text). The list draws 「开工中…」 under 「新任务」
-at once. When that machine has a session already open and idle for this repo
+HOME session starts on the whole text). The list draws 「开工中…」 on top at
+once. When that machine has a session already open and idle for this repo
 (or HOME) and agent — the warm pool, `scratch-pool.sh` — it takes that one and
 submits your text into it as its first turn (plus one line: the issue and branch
 follow), and answers in about a second (issue #2234); the issue is then filed and
@@ -299,7 +307,7 @@ switch view` is the one list):
 | `n` / `b` | the next / the previous session in that list (other machines' too) | ⌘↓ / ⌘↑ |
 | `h` / `l` | back / forward in where you have been | ⌘[ / ⌘] |
 | `s` | the list (its actions) | ⌘K |
-| `c` | the orchestrator — 新任务 | ⌘N |
+| `c` | a new session | ⌘N |
 | `t` | 派单 | ⌘T |
 | `q` | 退出 fleet | ⌘Q |
 | `⌃]` | a literal ⌃] to the session | — |
@@ -327,7 +335,7 @@ client goes.
 **The bar** (issue #2365) holds three things: who is signed in (the GitHub login
 off `fleet login`'s certificate — orange, with why, when the hub cannot be asked
 or refuses this computer), the ⟳ slot, and the keys of WHERE THE KEYBOARD IS — in
-a session `⌘P 会话与动作 · ⌘T 派单 · ⌘N 新任务 · ⌘↑↓ 切换 · ⌘Q 退出 fleet`, in the writing
+a session `⌘P 会话与动作 · ⌘T 派单 · ⌘N 新会话 · ⌘↑↓ 切换 · ⌘Q 退出 fleet`, in the writing
 area its keys, in ⌘P the panel's, with the prefix pressed the prefix keys. It is
 the same whichever list row is lit. No quota, no 「N 等你」 (the list's red `!` and
 ⌘P's order say who waits), no machine or issue of the row in view (⌘P and
@@ -410,14 +418,14 @@ writes off the very rows it paints (`fleet-sidebar.py bar_record`) — so the li
 and the list never disagree — and bumps the stage's `@fleet_bar_gen`, which the
 line's command names: tmux draws it again at once. The title is the issue's
 own title (the list's 14th field, carried from the session's machine — #1921),
-else the row's name. A session in view that is no row — the orchestrator behind
-「新任务」, the steward — gets its record off the refresh loop's cache instead
+else the row's name. A session in view that is no row — one the batch view
+folded away — gets its record off the refresh loop's cache instead
 (`cache_record`, issue #2739); the record lives in `~/.local/state/claude-fleet`,
 or `~/.cache/claude-fleet/state` when that cannot be written, a failed write is a
 line in `logs/topbar.log`, and a line with no record at all says 「顶行无记录」
 rather than pass for a bare shell. Once the client has shown a session (its switch
 history), the first screen of a plain `fleet` is the last one you looked at, else
-「新任务」 — not the hub's pick's own window, which stays for `fleet <machine>`,
+a new session (⌘N's road, issue #3119) — not the hub's pick's own window, which stays for `fleet <machine>`,
 this computer's fleet, and a newcomer's first start (no history: their home page); a bare machine
 window an older start left on the stage is cleared at the next start.
 `bin/fleet-client-layout-selftest.sh` pins the layout, the keys, a real tap on

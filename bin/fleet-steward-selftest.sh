@@ -3,8 +3,8 @@
 # bin/fleet-steward.sh (the window), bin/fleet-steward-tick.sh → bin/fleet_steward.py
 # (the beat with no model), bin/fleet-steward-stats.sh (the count), and the
 # decide count's road to the client (fleet-control-read.sh `orchdec=` →
-# fleet_hub_common.inventory_row → fleet-hub-sessions.sh `decide=N` →
-# fleet-sidebar.py orch_decide).
+# fleet_hub_common.inventory_row → fleet-hub-sessions.sh `decide=N`; since
+# issue #3119 the sidebar draws nothing off it — no session is special).
 #
 # GitHub is a directory of comment files (fleet_decision.py's seams), the fleet's
 # windows / ledgers / peer channel are seams too; the window legs run an isolated
@@ -31,7 +31,8 @@
 #      with the resume seed; `fleet_win_for_key steward` answers it
 #   I  the attention count: `note` logs a client's move once, `attention` counts
 #      a worker window once a day
-#   J  the decide count travels: orchdec=2 → orch_decide 2 → `decide=2` → red;
+#   J  the decide count travels: orchdec=2 → orch_decide 2 → `decide=2` (the
+#      holder's row says role=worker, issue #3119; no 「新任务」 to turn red);
 #      the park count beside it (issue #2671): @orch_park → orchpark= (the last
 #      tag) → orch_park → `park=N`
 #   M  who closed a row (issue #2834): rows[id].by is steward · person · default,
@@ -492,18 +493,10 @@ if [ -n "$REAL_TMUX" ]; then
 fi
 grep -q '"park=" + r\["park"\]' "$BIN/fleet-hub-sessions.sh" && ok "J: park=N rides orch_<sess> (the sidebar's 停放 N)" \
   || bad "J: hub-sessions does not carry park"
-grep -q 'decide=" + r\["decide"\]' "$BIN/fleet-hub-sessions.sh" && grep -q 'orch_decide(line) > 0' "$BIN/fleet-sidebar.py" \
-  && ok "J: decide=N rides orch_<sess>, and 「新任务」 turns red on it" || bad "J: hub-sessions / sidebar do not carry decide"
-python3 - "$BIN" <<'EOF' && ok "J: orch_decide reads decide=N wherever it sits, 0 without" || bad "J: orch_decide"
-import importlib.util, sys
-src = open(sys.argv[1] + "/fleet-sidebar.py", encoding="utf-8").read()
-start = src.index("def orch_decide(p):"); end = src.index("\ndef ", start + 10)
-ns = {}; exec(src[start:end], ns)
-f = ns["orch_decide"]
-assert f(["w", "n", "online", "done", "", "", "", "decide=2"]) == 2
-assert f(["w", "n", "online", "done", "", "", "3"]) == 0
-assert f(None) == 0
-EOF
+grep -q 'decide=" + r\["decide"\]' "$BIN/fleet-hub-sessions.sh" && ! grep -q 'orch_decide' "$BIN/fleet-sidebar.py" \
+  && ok "J: decide=N rides orch_<sess>; the sidebar draws nothing off it (issue #3119)" || bad "J: hub-sessions / sidebar on decide"
+case "${plain:-role=worker}" in *$'\t'role=worker$'\t'*|role=worker) ok "J: the holder's inventory row says role=worker (issue #3119)" ;;
+  *) bad "J: the holder's inventory row does not say role=worker: [$plain]" ;; esac
 
 # W — a red base a WORKER filed (issue #2960): the drain spawns its fixer under the
 # steward when its window is up, else the hub; claimed ⇒ off the queue, no room ⇒ kept

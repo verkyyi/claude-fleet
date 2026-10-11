@@ -466,8 +466,8 @@ fleet_ui_t() {
     en:unknown_repo_heading)    printf '? · unknown repo' ;;
     zh:no_repo)                 printf '无仓库' ;;
     en:no_repo)                 printf 'no repo' ;;
-    zh:empty_sidebar)           printf '暂无会话 — ⌘N 新任务' ;;
-    en:empty_sidebar)           printf 'No sessions — ⌘N new task' ;;
+    zh:empty_sidebar)           printf '暂无会话 — ⌘N 新会话' ;;
+    en:empty_sidebar)           printf 'No sessions — ⌘N new session' ;;
     zh:empty_dash_fmt)          printf '暂无会话 — 输入名称新建 · %s 新任务' "${1:-}" ;;
     en:empty_dash_fmt)          printf 'No sessions — type a name to start one · %s new task' "${1:-}" ;;
     zh:keys_sidebar_title)      printf '任务栏：只点' ;;
@@ -524,26 +524,8 @@ fleet_ui_t() {
     en:view_here_fmt) printf '%s · %s (this one)' "${1:-}" "${2:-}" ;;
     zh:view_group_fmt) printf '%s · %s' "${1:-}" "${2:-}" ;;
     en:view_group_fmt) printf '%s · %s' "${1:-}" "${2:-}" ;;
-    zh:view_portal) printf '新任务（编排）' ;;
-    en:view_portal) printf 'New task (orchestrator)' ;;
-    zh:view_portal_foot) printf '编排会话：说一件事，它来派' ;;
-    en:view_portal_foot) printf 'The orchestrator: say what you need, it hands it out' ;;
-    zh:view_sec_park_fmt) printf '停放 %s 个' "${1:-}" ;;
-    en:view_sec_park_fmt) printf 'Parked (%s)' "${1:-}" ;;
-    zh:view_sec_todo_fmt) printf '待你动手 %s 件' "${1:-}" ;;
-    en:view_sec_todo_fmt) printf 'For you to do (%s)' "${1:-}" ;;
     zh:view_sec_ended_fmt) printf '已结束 %s 个' "${1:-}" ;;
     en:view_sec_ended_fmt) printf 'Ended (%s)' "${1:-}" ;;
-    zh:view_park_item_fmt) printf '%s · 等 %s' "${1:-}" "${2:-}" ;;
-    en:view_park_item_fmt) printf '%s · waiting on %s' "${1:-}" "${2:-}" ;;
-    zh:view_park_foot_fmt) printf '%s 停放着，等 %s · ↵ 立刻唤醒' "${1:-}" "${2:-}" ;;
-    en:view_park_foot_fmt) printf '%s is parked, waiting on %s · ↵ wakes it now' "${1:-}" "${2:-}" ;;
-    zh:view_todo_word) printf '待办' ;;
-    en:view_todo_word) printf 'to do' ;;
-    zh:view_todo_foot_fmt) printf '%s · 来自 %s · ↵ 去编排会话看' "${1:-}" "${2:-}" ;;
-    en:view_todo_foot_fmt) printf '%s · from %s · ↵ opens the orchestrator' "${1:-}" "${2:-}" ;;
-    zh:view_due_fmt) printf '%s 到期' "${1:-}" ;;
-    en:view_due_fmt) printf 'due %s' "${1:-}" ;;
     zh:view_ago_fmt) printf '%s前' "${1:-}" ;;
     en:view_ago_fmt) printf '%s ago' "${1:-}" ;;
     zh:view_dur_m_fmt) printf '%s 分钟' "${1:-}" ;;
@@ -598,18 +580,10 @@ fleet_ui_t() {
     en:view_far_fmt) printf '%s is not connected yet' "${1:-}" ;;
     zh:view_gone) printf '这个会话已经不在了' ;;
     en:view_gone) printf 'that session is gone' ;;
+    zh:view_new_failed) printf '新会话没开起来' ;;
+    en:view_new_failed) printf 'the new session did not open' ;;
     zh:view_peer_wait_fmt) printf '正在连 %s…' "${1:-}" ;;
     en:view_peer_wait_fmt) printf 'connecting to %s…' "${1:-}" ;;
-    zh:view_waking_fmt) printf '正在唤醒 %s' "${1:-}" ;;
-    en:view_waking_fmt) printf 'waking %s' "${1:-}" ;;
-    zh:view_orch_waking) printf '正在叫起编排会话…' ;;
-    en:view_orch_waking) printf 'starting the orchestrator…' ;;
-    zh:view_orch_elsewhere) printf '编排会话在别的机器上，列表还没拿到它：稍等再按 ⌘N' ;;
-    en:view_orch_elsewhere) printf 'the orchestrator runs on another machine the list has not shown yet — press ⌘N again in a moment' ;;
-    zh:view_orch_off) printf '这台没开编排会话（FLEET_ORCHESTRATOR）' ;;
-    en:view_orch_off) printf 'no orchestrator on this machine (FLEET_ORCHESTRATOR)' ;;
-    zh:view_orch_none) printf '编排会话没叫起来' ;;
-    en:view_orch_none) printf 'the orchestrator did not start' ;;
     zh:view_shell_title_fmt) printf 'shell · %s @%s' "${1:-}" "${2:-}" ;;
     en:view_shell_title_fmt) printf 'shell · %s @%s' "${1:-}" "${2:-}" ;;
     zh:view_shell_home_fmt) printf '%s shell' "${1:-}" ;;
@@ -726,18 +700,6 @@ fleet_ui_t() {
     en:sidebar_backfill_failed) printf 'issue not filed' ;;
     zh:sidebar_solo_fmt)        printf '单独的活 · %s' "${1:-}" ;;
     en:sidebar_solo_fmt)        printf 'on their own · %s' "${1:-}" ;;
-    zh:sidebar_steward_park_fmt) printf '停放 %s' "${1:-}" ;;
-    en:sidebar_steward_park_fmt) printf '%s parked' "${1:-}" ;;
-    zh:sidebar_steward_todo_fmt) printf '待你动手 %s' "${1:-}" ;;
-    en:sidebar_steward_todo_fmt) printf '%s for you to do' "${1:-}" ;;
-    zh:sidebar_steward_park_item_fmt) printf '%s · 等 %s · %s' "${1:-}" "${2:-}" "${3:-}" ;;
-    en:sidebar_steward_park_item_fmt) printf '%s · waits on %s · %s' "${1:-}" "${2:-}" "${3:-}" ;;
-    zh:sidebar_steward_todo_item_fmt) printf '%s · 来自 %s' "${1:-}" "${2:-}" ;;
-    en:sidebar_steward_todo_item_fmt) printf '%s · from %s' "${1:-}" "${2:-}" ;;
-    zh:sidebar_steward_todo_due_fmt) printf '截止 %s' "${1:-}" ;;
-    en:sidebar_steward_todo_due_fmt) printf 'due %s' "${1:-}" ;;
-    zh:sidebar_steward_more_fmt) printf '还有 %s 个 · 看管家页' "${1:-}" ;;
-    en:sidebar_steward_more_fmt) printf '%s more · see the steward page' "${1:-}" ;;
     zh:steward_menu_wake)       printf '立刻唤醒' ;;
     en:steward_menu_wake)       printf 'Wake it now' ;;
     zh:steward_menu_open_issue_fmt) printf '打开 %s' "${1:-}" ;;
@@ -1237,10 +1199,6 @@ fleet_ui_t() {
     en:orch_queue_qd)           printf 'quick dispatch' ;;
     zh:orch_queue_idle)         printf '说一句即派 · /qd 或 ⌘T 快速派单' ;;
     en:orch_queue_idle)         printf 'one line dispatches it · /qd or ⌘T for a quick dispatch' ;;
-    zh:orch_queue_row_fmt)      printf '排队 %s' "${1:-}" ;;
-    en:orch_queue_row_fmt)      printf '%s queued' "${1:-}" ;;
-    zh:orch_busy_hint)          printf '编排在忙 · 你说的会排到它这一步做完' ;;
-    en:orch_busy_hint)          printf 'orchestrator busy · what you say waits for this step to finish' ;;
     zh:compose_sent_fmt)        printf '已发出：%s · 开工中…' "${1:-}" ;;
     en:compose_sent_fmt)        printf 'sent: %s · starting…' "${1:-}" ;;
     zh:compose_empty)           printf '先写一行再 ↵' ;;
@@ -1332,10 +1290,7 @@ message	m	发消息… — 只有别机行有：在输入行写，经入口送�
 stop	q	停 — 只有别机行有：经入口让那台机器上的会话 /exit（可恢复）
 resume	c	继续 — 只有别机行有：经入口恢复刚停掉的会话（活着的会被拒绝并告诉你）
 clients	d	我的客户端 — 只在客户端：同时开着的每台设备、终端、最后使用时间，可断开某一台
-quit	z	退出 fleet — 只在客户端：关掉这台电脑上客户端的全部进程，远端会话照常在机器上跑（⌘Q · fleet quit）
-orch	b	进编排会话 — 直接切到固定的编排会话（写作区里再按 ⌘N 也是；「新任务」行的右键菜单，⌘P 的 > 也有）
-steward	u	进管家会话 — 切到管家会话（它不占列表的行；「新任务」行的右键菜单，⌘P 的 > 也有）
-stewardpage	j	管家页 — 在你自己的浏览器里打开今天的管家页：要你定的事、待你动手、已按默认走（「新任务」行的右键菜单）' ;;
+quit	z	退出 fleet — 只在客户端：关掉这台电脑上客户端的全部进程，远端会话照常在机器上跑（⌘Q · fleet quit）' ;;
     en:menu_keys)               printf '%s' 'rename	r	rename — edits on the input line (↵ applies, esc / an empty name cancels)
 pin	t	pin / unpin the row to the top
 pr	p	open its PR (greyed when it has none)
@@ -1355,10 +1310,7 @@ message	m	message… — a row on another machine only: typed on the input line,
 stop	q	stop — a row on another machine only: /exit there through the hub (resumable)
 resume	c	resume — a row on another machine only: reopen a just-stopped one through the hub (a live one is refused, and says so)
 clients	d	my clients — in the client only: every device you have open, its terminal and when last used; disconnect one
-quit	z	quit fleet — in the client only: every process of the client on this computer goes, the sessions keep running on their machines (⌘Q · fleet quit)
-orch	b	go to the orchestrator — straight to the orchestrating session of the fleet (⌘N again in the writing area too; also on the right-click menu of the 「New task」 row, and in ⌘P >)
-steward	u	go to the steward — the steward session, which has no row of its own (the right-click menu of the 「New task」 row, and ⌘P >)
-stewardpage	j	steward page — the steward page of the day, in your own browser: what to decide, what to do, what went by default (the right-click menu of the 「New task」 row)' ;;
+quit	z	quit fleet — in the client only: every process of the client on this computer goes, the sessions keep running on their machines (⌘Q · fleet quit)' ;;
     zh:menu_open_remote)        printf '进入（代理窗口）…' ;;
     en:menu_open_remote)        printf 'Enter (proxy window)…' ;;
     zh:menu_r_message)          printf '发消息…' ;;
@@ -1540,14 +1492,6 @@ stewardpage	j	steward page — the steward page of the day, in your own browser:
     en:menu_reap_confirm_fmt)   printf 'Reap "%s"? (y/n)' "${1:-}" ;;
     zh:menu_new)                printf '新建任务（建 issue）…' ;;
     en:menu_new)                printf 'New task (file issue)…' ;;
-    zh:menu_orch)               printf '进编排会话' ;;
-    en:menu_orch)               printf 'Go to the orchestrator' ;;
-    zh:menu_orch_none)          printf '进编排会话 · 这台机器没有编排会话' ;;
-    en:menu_orch_none)          printf 'Go to the orchestrator · none on this machine' ;;
-    zh:menu_steward)            printf '进管家会话' ;;
-    en:menu_steward)            printf 'Go to the steward' ;;
-    zh:menu_stewardpage)        printf '管家页' ;;
-    en:menu_stewardpage)        printf 'Steward page' ;;
     zh:menu_restore)            printf '恢复已收工…' ;;
     en:menu_restore)            printf 'Restore finished task…' ;;
     zh:menu_repo)               printf '＋ 仓库…' ;;
@@ -1602,8 +1546,8 @@ stewardpage	j	steward page — the steward page of the day, in your own browser:
     en:keys_switch_zoom)       printf %s 'zoom the session on the right; again to restore' ;;
     zh:keys_switch_quickopen)  printf %s '快速跳转：打几个字（名字、机器、状态都算），↵ 切过去；不打字 ↵ = 上一个看的' ;;
     en:keys_switch_quickopen)  printf %s 'quick open: type a few letters (name, machine, state), ↵ switches; ↵ on nothing = the one you saw before' ;;
-    zh:keys_switch_new)        printf %s '编排：直接到编排会话的输入框，说一句 ↵ 就派出（没在跑先叫起来）；FLEET_COMPOSE=1 时是右边的写作区' ;;
-    en:keys_switch_new)        printf %s 'orchestrator: straight to its input — one line and ↵ dispatches it (woken first when not running); with FLEET_COMPOSE=1 the writing area on the right' ;;
+    zh:keys_switch_new)        printf %s '新会话：在家里的机器开一个不绑仓库的会话，光标就在它的输入框；FLEET_COMPOSE=1 时是右边的写作区' ;;
+    en:keys_switch_new)        printf %s 'new session: a no-repo session on your home machine, the cursor in its input; with FLEET_COMPOSE=1 the writing area on the right' ;;
     zh:keys_switch_fold)       printf %s '展开/收起当前会话的子任务；在子任务上按：收起它的父任务' ;;
     en:keys_switch_fold)       printf %s 'open / shut the sub-tasks of the session in view; on a sub-task: shut its parent' ;;
     zh:keys_switch_switcher)   printf %s '切换会话：全部会话按最近使用排，可搜索；最下面「+ 新会话」和「打开多会话视图」（多会话视图里是「收起侧栏」）' ;;

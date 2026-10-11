@@ -269,8 +269,9 @@ def inventory_row(parts):
     Column 19 (issue #1951): `detail=<question>`, what a session in `needs` asks
     (@claude_needs_detail) — the client's bar and notification say it; empty = none.
     Column 20 (issue #1957): `role=orchestrator` — the fleet's one orchestrating
-    session (bin/fleet-orchestrator.sh): its key is `orchestrator`, and the client
-    wears it on 「新任务」 instead of listing it; empty on every other window.
+    session (bin/fleet-orchestrator.sh). Since issue #3119 a node writes
+    `role=worker` for it (no session is special: an ordinary row everywhere);
+    an older node's `orchestrator` / `steward` is still read — compat-1v: 下一批删.
     Column 21 (issue #1958): `epic=<owner/name>#<N>[:<landed>/<members>]` — the
     window that drives a running EPIC, so every machine's list draws the batch as
     ONE row named after its parent, badged landed/members; empty elsewhere.
