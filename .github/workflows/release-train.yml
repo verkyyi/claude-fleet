@@ -196,16 +196,67 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "in force: $(printf '%s' "$active" | grep -c . || true) · red on the previous train (run $(cat q/prev-run)): $(tr '\n' ' ' < q/prev-fails)"
 
+  plan:
+    # How wide each test half runs and how long a shard may take (issue #3241, C9):
+    # the train tests everything changed since stable, close to the whole suite when
+    # stable is behind, so it prices that selection off the durations table first
+    # (bin/fleet-train-plan.sh) instead of wearing the PR's 12 × 8 minutes. Linux
+    # picks its own width (≤ 6 minutes a shard, 12..20); macOS keeps board's width
+    # (the runners are the limit) and gets the bound — GitHub's Macs at ×2.3, ours
+    # by their own table. A shard cut short with no test red reruns once
+    # (bin/fleet-shard-run.sh); a forecast that cannot be made falls back, never stops.
+    name: plan
+    needs: board
+    if: needs.board.outputs.skip == 'false' || needs.board.outputs.drill == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      linux_shards: ${{ steps.plan.outputs.linux_shards }}
+      linux_budget_secs: ${{ steps.plan.outputs.linux_budget_secs }}
+      linux_step_minutes: ${{ steps.plan.outputs.linux_step_minutes }}
+      linux_job_minutes: ${{ steps.plan.outputs.linux_job_minutes }}
+      macos_budget_secs: ${{ steps.plan.outputs.macos_budget_secs }}
+      macos_step_minutes: ${{ steps.plan.outputs.macos_step_minutes }}
+      macos_job_minutes: ${{ steps.plan.outputs.macos_job_minutes }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.board.outputs.train_sha }}
+          fetch-depth: 0
+      - name: fleet-train-plan.sh
+        id: plan
+        env:
+          STABLE: ${{ needs.board.outputs.stable_sha }}
+          WHERE: ${{ needs.board.outputs.macos_where }}
+          MACOS_SHARDS: ${{ needs.board.outputs.macos_shards }}
+        run: |
+          {
+            echo "### 预测（\`--changed ${STABLE:0:7}\`，按 bin/selftest-durations*.txt）"
+            echo "| 段 | 选中 | 宽 | 最重一片 | 每次上限 | 步骤 |"
+            echo "|---|---|---|---|---|---|"
+          } >> "$GITHUB_STEP_SUMMARY"
+          bash bin/fleet-train-plan.sh --base "$STABLE" --prefix linux
+          n=$(printf '%s' "$MACOS_SHARDS" | tr -cd ',' | wc -c); n=$((n + 1))
+          if [ "$WHERE" = fleet-ci ]; then
+            bash bin/fleet-train-plan.sh --base "$STABLE" --prefix macos --shards "$n" \
+              --durations selftest-durations-fleet-ci.txt --floor 1320
+          else
+            bash bin/fleet-train-plan.sh --base "$STABLE" --prefix macos --shards "$n" --scale 2.3 --floor 3000
+          fi
+
   linux:
     name: Linux
-    needs: [board, quarantine]
+    needs: [board, quarantine, plan]
     if: needs.board.outputs.skip == 'false' || needs.board.outputs.drill == 'true'
     uses: ./.github/workflows/selftests-shards.yml
     with:
       sha: ${{ needs.board.outputs.train_sha }}
       base: ${{ needs.board.outputs.stable_sha }}
       runs_on: ubuntu-latest
-      shards: '[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]'
+      shards: ${{ needs.plan.outputs.linux_shards }}
+      budget_secs: ${{ needs.plan.outputs.linux_budget_secs }}
+      step_minutes: ${{ needs.plan.outputs.linux_step_minutes }}
+      job_minutes: ${{ needs.plan.outputs.linux_job_minutes }}
       quarantine: ${{ needs.quarantine.outputs.active }}
       prev_fails: ${{ needs.quarantine.outputs.prev_fails }}
       drill_red: ${{ inputs.drill_red || '' }}
@@ -216,7 +267,7 @@ jobs:
     # runs at most 5 macOS jobs, and the nightly full suite needs the rest) — as
     # `board` picked (issue #3145).
     name: macOS
-    needs: [board, quarantine]
+    needs: [board, quarantine, plan]
     if: needs.board.outputs.skip == 'false' && needs.board.outputs.drill != 'true'
     uses: ./.github/workflows/selftests-shards.yml
     with:
@@ -224,6 +275,9 @@ jobs:
       base: ${{ needs.board.outputs.stable_sha }}
       runs_on: ${{ needs.board.outputs.macos_runs_on }}
       shards: ${{ needs.board.outputs.macos_shards }}
+      budget_secs: ${{ needs.plan.outputs.macos_budget_secs }}
+      step_minutes: ${{ needs.plan.outputs.macos_step_minutes }}
+      job_minutes: ${{ needs.plan.outputs.macos_job_minutes }}
       quarantine: ${{ needs.quarantine.outputs.active }}
       prev_fails: ${{ needs.quarantine.outputs.prev_fails }}
       record: true
@@ -328,7 +382,7 @@ jobs:
     # half's verdict to TRAIN_SHA (a commit status — a check run belongs to the
     # commit that queued the run, which may not be TRAIN_SHA).
     name: train
-    needs: [board, quarantine, linux, macos, macos-wait, gate, record]
+    needs: [board, quarantine, plan, linux, macos, macos-wait, gate, record]
     if: always() && needs.board.outputs.skip == 'false' && needs.board.outputs.drill != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5

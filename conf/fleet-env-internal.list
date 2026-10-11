@@ -818,3 +818,4 @@ FLEET_OPEN_CALLBACK_SECS           knob: how long an OAuth callback forward stay
 FLEET_THIN_OPEN_OUT                seam: where fleet-open.sh writes the thin 看台's OSC 7502 open instead of its tty (selftest, #3236)
 FLEET_TQ_FILER                     seam: the issue filer fleet-train-quarantine.sh record runs for a new quarantine (default bin/fleet-issue-file.sh; #3243)
 FLEET_TQ_HOURS                     knob: how long a train quarantine entry holds, capped at the decision's 48 h (#3243)
+FLEET_TRAIN_PLAN_CMD               seam: the runner command fleet-train-plan.sh prices the selection with (the BREAK-IT drill's fake; #3241)

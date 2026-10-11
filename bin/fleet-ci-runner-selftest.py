@@ -125,7 +125,7 @@ class FakeGitHub(object):
 # real one — runs the job-started hook and the job's step only when the hook
 # says yes, the step as a child named Runner.Worker; then exits (one job).
 RUN_SH = r"""#!/bin/bash
-env > "$HOME/seen.env"
+env > "$HOME/seen.env.tmp" && mv "$HOME/seen.env.tmp" "$HOME/seen.env"   # whole, or not yet there (#3241)
 ps -o nice= -p $$ | tr -d ' ' > "$HOME/seen.nice"
 pwd > "$HOME/seen.pwd"
 while [ ! -e "$HOME/go" ]; do sleep 0.1; done
