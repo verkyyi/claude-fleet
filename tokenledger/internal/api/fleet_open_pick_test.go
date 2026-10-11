@@ -186,14 +186,8 @@ func TestOpenPickDrill27SnapshotPicksMini2(t *testing.T) {
 	waitFor(t, 3*time.Second, "mini2 picked over fleet-linux-0", func() bool {
 		return h.srv.leastBusyMachine(time.Now()) == "mini2"
 	})
-	// claude-fleet#3434: trusted, fleet-linux-0's new login gets its relay pass
-	// at create and routes relay like its old ones — a candidate, behind mini2.
-	waitFor(t, 3*time.Second, "fleet-linux-0 picked with mini2 skipped (trusted: relay pass at create)", func() bool {
-		return h.srv.leastBusyMachine(time.Now(), "mini2") == "fleet-linux-0"
-	})
-	// Untrusted, it gets no pass: its new login would egress CN, so no pick.
-	setHubSetting(t, h.srv, trustKey("fleet-linux-0"), TrustUntrusted)
-	waitFor(t, 3*time.Second, "no pick with mini2 skipped (untrusted: a new login on fleet-linux-0 egresses CN)", func() bool {
+	// The relay probe rides the login's beat: wait for it to land.
+	waitFor(t, 3*time.Second, "no pick with mini2 skipped (a new login on fleet-linux-0 egresses CN)", func() bool {
 		return h.srv.leastBusyMachine(time.Now(), "mini2") == ""
 	})
 }
@@ -232,27 +226,5 @@ func TestDirectProbeDropsTheRelayRoad(t *testing.T) {
 	}
 	if cv := newLoginCompute(snap, "us", nil, now); cv.Off {
 		t.Fatalf("us: %+v, want open", cv)
-	}
-}
-
-// claude-fleet#3434: a new login on a TRUSTED machine gets its relay pass at
-// create, so it takes the relay road its machine's logins take — fleet-linux-0
-// with an SG-via-relay probe is a create candidate. The same machine untrusted
-// gives its new login no pass: it would see its own CN egress, so it is not.
-func TestNewLoginComputeRelayWhenTrusted(t *testing.T) {
-	now := time.Now()
-	snap := NodesSnapshot{Nodes: []NodeView{
-		{Hostname: "fleet-linux-0", Status: "online", Probe: &control.NodeProbe{Loc: "SG", Route: "relay", LocLocal: "CN", Verdict: control.ProbeOK, TS: now}},
-	}}
-	trusted := map[string]string{trustKey("fleet-linux-0"): TrustTrusted}
-	if cv := newLoginCompute(snap, "fleet-linux-0", trusted, now); cv.Off {
-		t.Fatalf("trusted (relay pass at create): %+v, want open", cv)
-	}
-	if cv := newLoginCompute(snap, "fleet-linux-0", nil, now); !cv.Off || cv.Probe == nil || cv.Probe.Loc != "CN" {
-		t.Fatalf("untrusted (no relay pass): %+v, want off for its own CN egress", cv)
-	}
-	untrusted := map[string]string{trustKey("fleet-linux-0"): TrustUntrusted}
-	if cv := newLoginCompute(snap, "fleet-linux-0", untrusted, now); !cv.Off {
-		t.Fatalf("marked untrusted: %+v, want off", cv)
 	}
 }

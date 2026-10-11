@@ -242,25 +242,10 @@ func newLoginCompute(snap NodesSnapshot, host string, settings map[string]string
 			newest = n.Probe
 		}
 	}
-	if !newLoginRelays(host, settings) {
-		newest = directProbe(newest)
-	}
-	return decideCompute(true, false, newest, computeAutoOn(settings), now)
+	return decideCompute(true, false, directProbe(newest), computeAutoOn(settings), now)
 }
 
-// newLoginRelays is true when a login opened on host now takes the relay road
-// its machine's logins take (claude-fleet#3434): the hub mints a login's relay
-// pass from inside its create, for a TRUSTED machine (handleNodeRelayCredential;
-// relayJudge reads the machine's trust, never the account), so its proxy routes
-// relay from its first request — the relay probe is its own. An untrusted
-// machine's new login gets no pass and sees the machine's own egress.
-func newLoginRelays(host string, settings map[string]string) bool {
-	m := strings.ToLower(firstLabel(host))
-	return m != "" && !nameUntrusted(m, settings) && trustOf(m, settings) == TrustTrusted
-}
-
-// directProbe is p as a login with no relay pass reads it (claude-fleet#3426;
-// since #3434 only on an untrusted machine — newLoginRelays):
+// directProbe is p as a login opened today would read it (claude-fleet#3426):
 // a relay probe (claude-fleet#3364) is an existing login whose credential
 // proxy goes through the relay BECAUSE this machine's own egress is not
 // served — a new login is not given that road (EPIC #3208), so it sees the
