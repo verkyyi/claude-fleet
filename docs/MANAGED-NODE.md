@@ -547,3 +547,34 @@ BREAK-IT 行 `service-handwritten`。只点名接管过的登录（`logins/<登�
 - **派活跟着能力走**：worker 被「需要管理员登录」拒了的活，编排经管理员 SSH 自己跑（规则 20），管家不把它当「只能人做」（规则 21）。
 - **不做的**：不改 sudoers，不给任何接管的登录任何 sudo。一个管理员登录已经被接管了（`tenants` FAIL 指着它）：
   `sudo fleet-node-supervisor.py account release <登录>` 把它的服务放回去，它照旧以自己的 LaunchAgents 跑。
+
+## 16. 入口端口：只认入口登记的钥匙（EPIC #3067 C3，#3070）
+
+每人一个地址（`<名字>.cf.24haowan.com`），指向他的家机器上**第二个 sshd**——fleet 里唯一一个有意监听公网的服务。
+机器原有的远程登录（22 端口、tailnet 上的）一字不动、不上公网。
+
+- **开关**：`FLEET_ENTRY=1`（端口 `FLEET_ENTRY_PORT`，默认 22022），写在 `<state>/machine.env`——launchd 不给守护环境变量，
+  所以 `FLEET_ENTRY=1 sudo fleet node install` 的「入口」一步把它写进去（`FLEET_ENTRY=0` 去掉），再跑一遍 `entry ensure`。
+  没开 ⇒ 不建任何东西、不监听，`status` 逐字节如前。
+- **进程**：守护的子进程 `sshd -D -e -f <state>/entry/sshd_config`，自己的主机钥匙（`<state>/entry/ssh_host_ed25519_key`，
+  和系统 sshd 的不同），配置一变发 SIGHUP（sshd 原 pid 重读，已有连接不断）。配置先过 `sshd -t`，再看 `sshd -T` 里
+  密码 / 键盘交互 / root 都是 no、`PerSourcePenalties` 在（OpenSSH 9.8+）——不过就留原样；没有每来源惩罚的老 sshd 根本不起，
+  体检说缺什么。日志在守护的子进程日志 `<log>/entry.log`（`LogLevel VERBOSE`：每次进门的登录、来源、钥匙指纹）。
+- **钥匙文件**：每个登录一份 `<state>/entry/keys/<login>`（root 0644，目录 root 0755），每行一把普通钥匙
+  `<type> <b64> fleet:<fp>`（不加 `restrict` / `command=`，手机与电脑同权）。入口 sshd 只读它
+  （`AuthorizedKeysFile …/keys/%u`），不读 `~/.ssh/authorized_keys`、不信用户 CA、不跑 `AuthorizedKeysCommand`。
+  只由这里写：入口推 `entry_keys {version}`（`CapEntryKeys`，整机链路），整机节点程序跑
+  `fleet-node-supervisor.py entry pull --version N`——用机器 token `GET /v1/node/entry-keys`，形状
+  `{version, logins:{<login>:{person, keys:[{fp,type,b64}]}}}`；version 只进不退。最后一份好名单存在
+  `<state>/entry/list.json`（root 0600），守护每 `FLEET_ENTRY_EVERY`（60 秒）比对一次，有人改过就放回。
+  入口不在时最后一份一直有效。
+- **谁能进**：`AllowUsers` = 名单里**守护接管了、没有管理员能力**（与 §15 同一个判断）的登录；管理员登录、root
+  名单点名也不写。一个人都没有 ⇒ 删配置、入口 sshd 停。macOS「仅这些用户可远程登录」开着时，把这些登录加进
+  `com.apple.access_ssh`（只加、记在 `state.json` 的 `access_ssh`，离开入口时只撤自己加的）。
+- **撤钥匙**：重写后被撤的钥匙下一次就被拒；它正连着的入口连接被断开——Linux 按 `ExposeAuthInfo` 的
+  `$SSH_USER_AUTH`，macOS（看不到别的进程的环境）按入口日志里该指纹的来源端口对上连接（`lsof`）。tmux 会话不受影响。
+- **体检**：`fleet doctor` 的 `entry` 行（`entry status --check`）：入口 vN · 本机 vM · 拉到 …；落后一小时、配置被拒、
+  名单有人却没在监听 ⇒ WARN。`fleet-node-supervisor.py status` 多一行 `entry`。
+- **Linux 托管节点**同一份规则：容器的环境里给 `FLEET_ENTRY=1`，守护照样起它（`fleet-node-linux.py` 已建 `/run/sshd`）。
+- BREAK-IT：`entry-password` · `entry-other-login` · `entry-revoked-key` · `entry-self-added-key` · `entry-admin-login` ·
+  `entry-keys-tampered` · `entry-hub-down`（`bin/fleet-break-it-entry-selftest.sh`，真 sshd、沙箱端口、沙箱状态目录）。

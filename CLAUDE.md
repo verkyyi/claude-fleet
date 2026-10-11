@@ -759,6 +759,12 @@ Do not install from memory: read the doc and work from it.
   scratchpad root, a `*-issue-N`/`*-scratch-N` worktree (even a removed one) or
   `~/.claude` — never a machine-wide hunt. Claude Code names a session dir by
   turning EVERY non-alphanumeric into `-` (`fleet_mangle_path`), not just `/`.
+  **The ONE deliberate exception is the entry port** (issue #3070, EPIC #3067
+  C3): with `FLEET_ENTRY=1` a managed machine's daemon runs a second sshd on
+  `FLEET_ENTRY_PORT` (22022) on every interface — keys only, AllowUsers only the
+  taken-over non-admin logins whose home it is, keys files root's and written only
+  from the hub's list (`fleet-node-supervisor.py entry`, docs/MANAGED-NODE.md §16,
+  BREAK-IT `entry-*`). Nothing else may widen a bind.
 - **A closed window takes its process trees with it** (issue #1298). tmux's
   `window-unlinked` / `pane-exited` / `after-kill-pane` hooks run
   `bin/fleet-window-reap.sh --hook`, which kills every PPID=1 tree of ours whose

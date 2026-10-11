@@ -1903,6 +1903,16 @@ if [ -f "$_nsup" ] && command -v python3 >/dev/null 2>&1; then
     1) fail tenants "a taken-over login can do what only an admin may — $tline. A tenant has no admin and no sudo: take it out of the admin group / sudoers (\`sudo dseditgroup -o edit -d <login> -t user admin\`), or, for an admin's own login, \`sudo fleet-node-supervisor.py account release <login>\`; detail: \`fleet-node-supervisor.py tenants\`" ;;
     3) warn tenants "$tline — run \`sudo fleet-node-supervisor.py tenants\` for the whole reading" ;;
   esac
+  # The entry port (issue #3070, EPIC #3067 C3): the second sshd the person's
+  # address reaches — the hub's list version against this machine's, when it last
+  # pulled. WARN: a list an hour behind, a config sshd refused, an sshd without
+  # per-source penalties (not started), or logins on the list but no listener.
+  # Not switched on (no FLEET_ENTRY=1) ⇒ no row.
+  eline=$(python3 "$_nsup" entry status --check 2>/dev/null); erc=$?
+  case "$erc" in
+    0) pass entry "$eline" ;;
+    1) warn entry "$eline — detail: \`fleet-node-supervisor.py status\` (entry line), log /var/log/fleet-node/entry.log; pull again: \`sudo fleet-node-supervisor.py entry pull\`" ;;
+  esac
 fi
 # The home machine's standing connections to the other machines (issue #3002,
 # EPIC #2999 C5): one line per link (machine@login · route · age · round trip ·

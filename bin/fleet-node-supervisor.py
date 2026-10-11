@@ -59,6 +59,15 @@ machine's work ONCE, however many logins the machine carries:
                 rest (fleet-node-update.py tick). When it moves `current` it asks
                 this daemon to restart (<state>/update-restart.json): the daemon
                 stops its children and exits, and launchd starts the new code.
+  * entry     — the address's entry port (issue #3070, EPIC #3067 C3), only with
+                FLEET_ENTRY=1 (the environment, else machine.env): a SECOND sshd
+                (`sshd -D -e -f <state>/entry/sshd_config`, its own host key, port
+                FLEET_ENTRY_PORT = 22022) as a child, reloaded by SIGHUP; its keys
+                files <state>/entry/keys/<login> (root 0644) written only from the
+                hub's list (`entry pull`, run by the node program on an entry_keys
+                push) and put back every FLEET_ENTRY_EVERY when someone else changed
+                them; AllowUsers = the list's taken-over, non-admin logins — none ⇒
+                no config, no listener. The system's sshd is never touched.
   * sweep     — fleet plist leftovers (`*.plist.bak*`, `.pre-move`, `.retired*`,
                 `.disabled*` …) in /Library/LaunchDaemons and every login's
                 ~/Library/LaunchAgents are MOVED to the attic
@@ -118,6 +127,12 @@ Usage:
                                                taken-over login · 3 the sudo half unread (not
                                                root, no daemon reading yet). `account adopt`
                                                refuses (5) a login that can.
+  fleet-node-supervisor.py entry pull [--version N] | apply <file|-> [--force] | ensure | status [--check]
+                                               the entry port (#3070): pull the hub's list
+                                               (0 applied · 1 the hub did not answer, the
+                                               last list stands · 3 off); apply a list in
+                                               hand; one converge pass; --check is the
+                                               doctor's row (0 ok · 1 WARN · 2 off)
   fleet-node-supervisor.py sweep [--dry-run]   the leftover sweep, now
   fleet-node-supervisor.py attic [list | restore <id> | purge]
   fleet-node-supervisor.py service add|rm|stop|start|restart|move|run|schedule|cred|ls|logs …
@@ -166,6 +181,9 @@ Seams (sandbox tests, docs/BREAK-IT.md `node-supervisor-dead`):
                         the passwd database and the tenant check (tests; under
                         FLEET_NODE_TEST only)
   FLEET_NODE_TENANT_EVERY (300)  how often the daemon re-reads the tenants' abilities
+  FLEET_ENTRY_SSHD (/usr/sbin/sshd)  FLEET_ENTRY_KEYGEN (/usr/bin/ssh-keygen)  FLEET_ENTRY_EVERY (60)
+  FLEET_ENTRY_LSOF  FLEET_ENTRY_DSEDITGROUP (/usr/sbin/dseditgroup on macOS; '' = leave
+                        com.apple.access_ssh alone)  FLEET_ENTRY_PULL_SECS (10)
   FLEET_NODE_BREW_PREFIX  __BREW_PREFIX__ in the templates (default /opt/homebrew, or
                         /usr/local when that is where brew is)
 """
@@ -200,7 +218,7 @@ DEFAULT_ROOT = "/Library/Application Support/claude-fleet" if MAC else "/opt/cla
 NODE_ENV_KEYS = ("FLEET_NODE_ROOT", "FLEET_NODE_STATE", "FLEET_NODE_RUNTIME", "FLEET_NODE_LOG",
                  "FLEET_NODE_USERS", "FLEET_NODE_SERVICE", "FLEET_NODE_UPDATE_OWNER", "FLEET_NODE_BOOT_ID",
                  "FLEET_CREDSEP_LIB", "FLEET_CREDSEP_ROOT_BASE", "FLEET_CREDSEP_RUN_BASE",
-                 "FLEET_CREDSEP_ROLE", "FLEET_NODE_RUN_SSHD")
+                 "FLEET_CREDSEP_ROLE", "FLEET_NODE_RUN_SSHD", "FLEET_ENTRY", "FLEET_ENTRY_PORT")
 
 
 def node_environment():
@@ -383,6 +401,13 @@ def dir_sig(d):
     return "|".join(out)
 
 
+def reload_sig(r):
+    """dir_sig of a child's `reload`: one path / pattern, or a list of them."""
+    if isinstance(r, (list, tuple)):
+        return "||".join(dir_sig(x) for x in r)
+    return dir_sig(r)
+
+
 def trusted(path, as_root=None):
     """Root runs only a root-owned script no group / other may write, in a dir
     likewise. Off under FLEET_NODE_TEST, and for a non-root supervisor."""
@@ -488,7 +513,10 @@ def default_table(paths):
              # it reads its tenants once, at start: an adopt / release (#2387)
              # changes them, and the daemon starts it again on them — the
              # <login>.env files only: a login's services/ (#2525) is not a tenant
-             "reload": os.path.join(paths.state, "logins", "*.env"),
+             "reload": [os.path.join(paths.state, "logins", "*.env"),
+                        # …and machine.env: its token, and FLEET_ENTRY, which
+                        # decides whether it follows the entry keys (#3070)
+                        os.path.join(paths.state, "machine.env")],
              # …but never under an account op it is running (#2918): opening a
              # login writes that login's .env half way through, and the restart
              # cut off the very create that wrote it. Each tenant's book names
@@ -1367,7 +1395,9 @@ class Supervisor(object):
         return out
 
     def all_children(self):
-        return (list(self.table["children"]) + [e for e in self.account_entries() if e.get("keepalive")]
+        # the entry port (#3070) only where it is switched on — off, no child at all
+        entry = [entry_child(self.p)] if entry_settings(self.p)[0] else []
+        return (list(self.table["children"]) + entry + [e for e in self.account_entries() if e.get("keepalive")]
                 + self.service_entries())
 
     def all_tasks(self):
@@ -1529,7 +1559,7 @@ class Supervisor(object):
                 self.died(name, cs, None, t)
                 continue
             if c.get("reload") and (name in self.procs or name in self.adopted) \
-                    and cs.get("reload_sig") != dir_sig(c["reload"]):
+                    and cs.get("reload_sig") != reload_sig(c["reload"]):
                 cpid = self.procs[name].pid if name in self.procs else self.adopted.get(name)
                 held, since = reload_held(c, cpid), cs.get("reload_held_since")
                 if held and (since is None or t - since < env_num("FLEET_NODE_RELOAD_HOLD", 960)):
@@ -1537,6 +1567,17 @@ class Supervisor(object):
                         cs["reload_held_since"] = t
                         self.dirty = True
                         self.log("child %s: %s changed — held while %s runs" % (name, c["reload"], held))
+                elif c.get("reload_signal") and cpid:
+                    # a child that re-reads its config on a signal keeps its pid and its
+                    # live connections (the entry's sshd: SIGHUP re-execs on the new file)
+                    try:
+                        os.kill(cpid, getattr(signal, "SIG" + c["reload_signal"]))
+                        self.log("child %s: %s changed — SIG%s" % (name, c["reload"], c["reload_signal"]))
+                    except OSError:
+                        pass
+                    cs["reload_sig"] = reload_sig(c["reload"])
+                    self.dirty = True
+                    continue
                 else:
                     why = "%s changed — starting it again" % c["reload"]
                     if since is not None:
@@ -1603,7 +1644,7 @@ class Supervisor(object):
         self.procs[c["name"]] = p
         cs.update(pid=p.pid, started=t, cmd=pid_cmd(p.pid) or " ".join(c["cmd"]))
         if c.get("reload"):
-            cs["reload_sig"] = dir_sig(c["reload"])
+            cs["reload_sig"] = reload_sig(c["reload"])
         cs.pop("reload_held_since", None)
         self.dirty = True
         self.log("child %s started pid %d" % (c["name"], p.pid))
@@ -1929,6 +1970,25 @@ class Supervisor(object):
         self.state["tenants"] = cur
         self.dirty = True
 
+    # -- the entry port (issue #3070)
+    def tend_entry(self, t, force=False):
+        """Every FLEET_ENTRY_EVERY (60 s) while the entry is on: one converge pass —
+        the host key, a keys file someone else rewrote put back from the last good
+        list, a login that became an admin taken off AllowUsers."""
+        if not force and t - (self.state.get("entry_at") or 0) < env_num("FLEET_ENTRY_EVERY", 60):
+            return
+        self.state["entry_at"] = t
+        b = entry_converge(self.p)
+        if b is None:
+            return
+        if b.get("healed") and b["healed"].get("at") == b.get("checked_at"):
+            self.log("entry: keys file(s) of %s were changed outside the hub's list — put back"
+                     % ", ".join(b["healed"]["logins"]))
+        if b.get("error") and b["error"] != self.state.get("entry_error"):
+            self.log("entry: %s" % b["error"])
+        self.state["entry_error"] = b.get("error") or ""
+        self.dirty = True
+
     # -- Full Disk Access (issue #2973)
     def tend_fda(self, t):
         """Every FLEET_NODE_TENANT_EVERY (300 s), as root only: can this daemon's
@@ -2062,6 +2122,11 @@ class Supervisor(object):
                 self.tend_fda(t)
             except Exception as e:  # a check must never take the daemon down
                 self.log("fda: %s" % e)
+            self.at("entry")
+            try:
+                self.tend_entry(t)
+            except Exception as e:  # the entry must never take the daemon down
+                self.log("entry: %s" % e)
             if self.sweep_due(t):
                 self.at("sweep")
                 if wd > 0:
@@ -2164,6 +2229,7 @@ class Supervisor(object):
         self.tend_tenants(t)
         if os.geteuid() == 0 or os.environ.get("FLEET_NODE_TCC_DB"):
             self.state["fda"] = fda_reading()   # bounded: a child, killed past FLEET_NODE_FDA_TIMEOUT
+        self.tend_entry(t, force=True)
         self.dirty = True
         write_json(self.p.state_file, self.state)
         return 0
@@ -3343,6 +3409,9 @@ def status_lines(paths, table, state):
         out.append("lane   %-18s 令牌失效 · 需要 relogin since %s — the hub: %s — fix: "
                    "sudo fleet-node-supervisor.py account adopt %s --rejoin" % (login, ln.get("since") or "-",
                                                                                 ln.get("why") or "-", login))
+    el = entry_line(paths, state)
+    if el:
+        out.append(el)
     sw = state.get("sweep") or {}
     for h in sw.get("handwritten") or []:
         out.append("handwritten %-12s runs as %s, not in the register — fleet service|task add, then "
@@ -3358,6 +3427,656 @@ def status_lines(paths, table, state):
                   sw.get("removed", 0), sw.get("total_removed", 0), sw.get("extra", 0),
                   " · held: %s" % sw["hold"] if sw.get("hold") else "", len(read_json(paths.attic_index, []))))
     return code, out
+
+
+# --------------------------------------------------------------- entry ----------
+# The address's port (issue #3070, EPIC #3067 C3): a SECOND sshd, the one fleet
+# service that listens on the public internet on purpose. The system's sshd and
+# every ~/.ssh/authorized_keys stay byte for byte: this one is a child of this
+# daemon, `sshd -D -e -f <state>/entry/sshd_config`, with its own host key, and it
+# reads ONE keys file per login, <state>/entry/keys/<login> (root 0644 in a root
+# 0755 directory) — written only here, from the hub's list (`entry pull`, which
+# the node program runs on an `entry_keys` push; `entry apply <file>` for a list
+# in hand). So a key a session adds for itself opens nothing on it, a key the hub
+# revoked is gone at the next pull and the connections it holds are cut (found by
+# ExposeAuthInfo), and a keys file someone else rewrote is put back from the last
+# good list on the next pass. AllowUsers is the list's logins this daemon took over
+# that can do nothing an admin can (#2842) — never an admin; no such login ⇒ no
+# config ⇒ no listener. The last list keeps working while the hub is away.
+# Off (no FLEET_ENTRY=1 in the environment or machine.env) ⇒ nothing is written,
+# nothing listens, status is byte for byte as before.
+ENTRY_KEY_TYPES = ("ssh-ed25519", "ecdsa-sha2-nistp256", "ecdsa-sha2-nistp384",
+                   "ecdsa-sha2-nistp521", "ssh-rsa")
+ENTRY_DEFAULT_PORT = 22022
+ENTRY_ACCESS_GROUP = "com.apple.access_ssh"
+
+
+class EntryPaths(object):
+    def __init__(self, paths):
+        self.dir = os.path.join(paths.state, "entry")
+        self.cfg = os.path.join(self.dir, "sshd_config")
+        self.hostkey = os.path.join(self.dir, "ssh_host_ed25519_key")
+        self.keys = os.path.join(self.dir, "keys")
+        self.pid = os.path.join(self.dir, "sshd.pid")
+        # 0644 — versions, logins, fingerprints, never a key's text (any doctor reads it)
+        self.book = os.path.join(self.dir, "state.json")
+        # 0600 — the last good list, what a rewritten keys file is put back from
+        self.list = os.path.join(self.dir, "list.json")
+        self.lock = os.path.join(self.dir, ".lock")
+        self.machine_env = os.path.join(paths.state, "machine.env")
+
+
+def entry_settings(paths):
+    """(on, port, machine.env): FLEET_ENTRY / FLEET_ENTRY_PORT from the daemon's
+    environment, else machine.env (what `fleet node install` writes — launchd hands
+    the daemon no environment)."""
+    me = _env_file(os.path.join(paths.state, "machine.env"), 0) or {}
+    on = (os.environ.get("FLEET_ENTRY") or me.get("FLEET_ENTRY") or "") == "1"
+    port = os.environ.get("FLEET_ENTRY_PORT") or me.get("FLEET_ENTRY_PORT") or ""
+    port = int(port) if port.isdigit() and 0 < int(port) < 65536 else ENTRY_DEFAULT_PORT
+    return on, port, me
+
+
+def entry_sshd():
+    return env("FLEET_ENTRY_SSHD", "/usr/sbin/sshd")
+
+
+def entry_child(paths):
+    """The listener, as a child: started once its config exists, stopped when the
+    config goes (no login has its home here), and told SIGHUP — sshd re-execs on
+    the new file, its live connections untouched — whenever the config changes."""
+    ep = EntryPaths(paths)
+    return {"name": "entry", "cmd": [entry_sshd(), "-D", "-e", "-f", ep.cfg],
+            "requires": [ep.cfg], "reload": ep.cfg, "reload_signal": "HUP",
+            "note": "#3070"}
+
+
+def _entry_put(path, text, mode):
+    d = os.path.dirname(path)
+    tmp = os.path.join(d, ".%s.%d" % (os.path.basename(path), os.getpid()))
+    with open(tmp, "w") as f:
+        f.write(text)
+    os.chmod(tmp, mode)
+    os.rename(tmp, path)
+
+
+def _entry_read(path):
+    try:
+        with open(path) as f:
+            return f.read()
+    except (IOError, OSError):
+        return None
+
+
+def _entry_root_dir(d, mode):
+    if not os.path.isdir(d):
+        os.makedirs(d)
+    if os.geteuid() == 0:
+        st = os.lstat(d)
+        if st.st_uid != 0 or st.st_gid != 0:
+            os.chown(d, 0, 0)
+    if os.stat(d).st_mode & 0o7777 != mode:
+        os.chmod(d, mode)
+
+
+def entry_key_line(k):
+    """One key of the hub's list as its keys-file line `<type> <b64> fleet:<fp>`,
+    or None when it is not a plain public key of a kind the entry takes. A plain
+    line — no `restrict`, no `command=` (共同约定 3): the phone's key and the
+    computer's open the same login."""
+    if not isinstance(k, dict):
+        return None
+    t, b, fp = str(k.get("type") or ""), str(k.get("b64") or ""), str(k.get("fp") or "")
+    if t not in ENTRY_KEY_TYPES or not re.match(r"^[A-Za-z0-9+/]{16,16384}={0,2}$", b) \
+            or not re.match(r"^[A-Za-z0-9+/=:_.-]{1,128}$", fp):
+        return None
+    try:
+        import base64
+        raw = base64.b64decode(b)
+        n = int.from_bytes(raw[:4], "big")
+        if raw[4:4 + n].decode("ascii") != t:
+            return None
+    except Exception:
+        return None
+    return "%s %s fleet:%s\n" % (t, b, fp)
+
+
+def entry_eligible(paths, logins):
+    """{login: None (on the entry) | why not}. Only a login this daemon took over,
+    that exists, and that holds nothing only an admin may (#2842) — never root,
+    never an admin, whatever the list says."""
+    tenants = set(tenant_logins(paths))
+    out = {}
+    for login in logins:
+        if login == "root" or not re.match(r"^[A-Za-z0-9._-]{1,64}$", login):
+            out[login] = "not a login the entry takes"
+        elif login not in tenants:
+            out[login] = "not taken over by this machine's daemon (account adopt)"
+        elif account_ident(login) is None:
+            out[login] = "no such login here"
+        else:
+            bad = tenant_privileges(login)[0]
+            out[login] = ("an admin login never goes on the entry (%s)" % "; ".join(bad)) if bad else None
+    return out
+
+
+def entry_config(ep, port, allow):
+    """共同约定 2, line for line."""
+    return "".join(l + "\n" for l in [
+        "# claude-fleet entry port (issue #3070) — written by fleet-node-supervisor.py; every",
+        "# change passes `sshd -t` first. The system's sshd and ~/.ssh/authorized_keys are not read.",
+        "Port %d" % port,
+        "HostKey %s" % ep.hostkey,
+        "PidFile %s" % ep.pid,
+        "AllowUsers %s" % " ".join(sorted(allow)),
+        "AuthenticationMethods publickey",
+        "PubkeyAuthentication yes",
+        "PasswordAuthentication no",
+        "KbdInteractiveAuthentication no",
+        "PermitRootLogin no",
+        "AuthorizedKeysFile %s/%%u" % ep.keys,
+        "AuthorizedPrincipalsFile none",
+        "TrustedUserCAKeys none",
+        "HostbasedAuthentication no",
+        "StrictModes yes",
+        "UsePAM no",
+        "PermitUserRC no",
+        "PermitUserEnvironment no",
+        "ExposeAuthInfo yes",
+        "MaxAuthTries 3",
+        "LoginGraceTime 20",
+        "MaxStartups 10:30:60",
+        "LogLevel VERBOSE",
+        "Subsystem sftp internal-sftp",
+    ])
+
+
+def _entry_sshd_check(text, ep):
+    """(ok, why, missing): `sshd -t` on <text>, then `sshd -T` must show
+    PerSourcePenalties (OpenSSH ≥ 9.8) — an older sshd is not started at all."""
+    tmp = os.path.join(ep.dir, ".sshd_config.check.%d" % os.getpid())
+    try:
+        _entry_put(tmp, text, 0o644)
+        r = subprocess.run([entry_sshd(), "-t", "-f", tmp], stdout=subprocess.PIPE,
+                           stderr=subprocess.STDOUT, universal_newlines=True, timeout=30)
+        if r.returncode != 0:
+            return False, "sshd -t: %s" % (r.stdout.strip().splitlines() or ["rc=%d" % r.returncode])[-1], []
+        r = subprocess.run([entry_sshd(), "-T", "-f", tmp, "-C", "user=nobody,host=localhost,addr=127.0.0.1"],
+                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True, timeout=30)
+        eff = dict((l.split(None, 1) + [""])[:2] for l in r.stdout.splitlines() if l.strip())
+        missing = []
+        if eff.get("persourcepenalties", "no").strip() in ("", "no"):
+            missing.append("PerSourcePenalties (OpenSSH 9.8+)")
+        for k, want in (("passwordauthentication", "no"), ("kbdinteractiveauthentication", "no"),
+                        ("permitrootlogin", "no"), ("authenticationmethods", "publickey")):
+            if r.returncode == 0 and eff.get(k, "").strip() != want:
+                return False, "sshd -T: %s is %r, not %s" % (k, eff.get(k), want), []
+        if r.returncode != 0:
+            return False, "sshd -T: %s" % (r.stdout.strip().splitlines() or ["rc=%d" % r.returncode])[-1], []
+        return not missing, "", missing
+    except (OSError, subprocess.SubprocessError) as e:
+        return False, "sshd: %s" % e, []
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+
+
+def _entry_hostkey(ep):
+    if os.path.exists(ep.hostkey) and os.path.exists(ep.hostkey + ".pub"):
+        return ""
+    for f in (ep.hostkey, ep.hostkey + ".pub"):
+        try:
+            os.remove(f)
+        except OSError:
+            pass
+    r = subprocess.run([env("FLEET_ENTRY_KEYGEN", "/usr/bin/ssh-keygen"), "-q", "-t", "ed25519", "-N", "",
+                        "-C", "fleet-entry", "-f", ep.hostkey],
+                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True, timeout=60)
+    return "" if r.returncode == 0 else "ssh-keygen: %s" % r.stdout.strip()
+
+
+def _entry_b64s(text):
+    out = set()
+    for line in (text or "").splitlines():
+        f = line.split()
+        if len(f) >= 2 and f[0] in ENTRY_KEY_TYPES:
+            out.add(f[1])
+    return out
+
+
+def _entry_procs():
+    """{pid: (ppid, command)} — one `ps`."""
+    try:
+        out = subprocess.check_output(["ps", "-axo", "pid=,ppid=,command="], stderr=subprocess.DEVNULL,
+                                      universal_newlines=True)
+    except Exception:
+        return {}
+    procs = {}
+    for line in out.splitlines():
+        f = line.split(None, 2)
+        if len(f) >= 2 and f[0].isdigit() and f[1].isdigit():
+            procs[int(f[0])] = (int(f[1]), f[2] if len(f) > 2 else "")
+    return procs
+
+
+def _entry_auth_file(pid):
+    """The $SSH_USER_AUTH a process carries (ExposeAuthInfo), or None."""
+    try:
+        with open("/proc/%d/environ" % pid, "rb") as f:
+            for kv in f.read().split(b"\0"):
+                if kv.startswith(b"SSH_USER_AUTH="):
+                    return kv[len(b"SSH_USER_AUTH="):].decode("utf-8", "replace")
+        return None
+    except (IOError, OSError):
+        pass
+    try:
+        out = subprocess.check_output(["ps", "-wwE", "-o", "command=", "-p", str(pid)],
+                                      stderr=subprocess.DEVNULL, universal_newlines=True)
+    except Exception:
+        return None
+    m = re.search(r"(?:^|\s)SSH_USER_AUTH=(\S+)", out)
+    return m.group(1) if m else None
+
+
+def _entry_fp(b64):
+    import base64
+    import hashlib
+    try:
+        return "SHA256:" + base64.b64encode(hashlib.sha256(base64.b64decode(b64)).digest()).decode().rstrip("=")
+    except Exception:
+        return ""
+
+
+def _entry_logged(logdir, fps):
+    """{(addr, port): fp} for every login the entry sshd logged (LogLevel VERBOSE:
+    `Accepted publickey for <login> from <addr> port <port> ssh2: <TYPE> <fp>`)
+    with one of <fps> — its log is this daemon's child log, entry.log."""
+    out = {}
+    pat = re.compile(r"Accepted publickey for \S+ from (\S+) port (\d+) ssh2: \S+ (SHA256:\S+)")
+    for f in (os.path.join(logdir, "entry.log.1"), os.path.join(logdir, "entry.log")):
+        for line in (_entry_read(f) or "").splitlines():
+            m = pat.search(line)
+            if m and m.group(3) in fps:
+                out[(m.group(1), m.group(2))] = m.group(3)
+    return out
+
+
+def _entry_peers(pid):
+    """The (addr, port) peers of <pid>'s established TCP sockets (lsof), or set()."""
+    try:
+        lsof = env("FLEET_ENTRY_LSOF", "/usr/sbin/lsof" if os.path.exists("/usr/sbin/lsof") else "/usr/bin/lsof")
+        out = subprocess.check_output([lsof, "-nP", "-a", "-p", str(pid),
+                                       "-iTCP", "-sTCP:ESTABLISHED", "-Fn"],
+                                      stderr=subprocess.DEVNULL, universal_newlines=True, timeout=10)
+    except Exception:
+        return set()
+    peers = set()
+    for line in out.splitlines():
+        if line.startswith("n") and "->" in line:
+            addr, _, port = line.split("->", 1)[1].rpartition(":")
+            peers.add((addr.strip("[]"), port))
+    return peers
+
+
+def entry_cut(ep, b64s, logdir=None):
+    """Close every live entry connection that logged in with one of <b64s> — its
+    per-connection sshd under the listener, found by the key in the file
+    $SSH_USER_AUTH names (ExposeAuthInfo; /proc on Linux), else — macOS shows no
+    process's environment — by its peer port in the listener's own log line for
+    that key's fingerprint. The tmux session it watched stays."""
+    if not b64s:
+        return []
+    fps = set(f for f in (_entry_fp(b) for b in b64s) if f)
+    logged = _entry_logged(logdir, fps) if logdir else {}
+    procs = _entry_procs()
+    mark = "-f " + ep.cfg
+    listeners = [p for p, (pp, cmd) in procs.items()
+                 if mark in cmd and not (pp in procs and mark in procs[pp][1])]
+    kids = {}
+    for p, (pp, _c) in procs.items():
+        kids.setdefault(pp, []).append(p)
+    cut = []
+    for lst in listeners:
+        for conn in kids.get(lst, []):
+            todo, seen, hit = [conn], set(), False
+            while todo and not hit:
+                q = todo.pop()
+                if q in seen:
+                    continue
+                seen.add(q)
+                af = _entry_auth_file(q)
+                if af:
+                    used = _entry_b64s("\n".join(l.split(None, 1)[1] if " " in l else l
+                                                  for l in (_entry_read(af) or "").splitlines()))
+                    hit = bool(used & b64s)
+                todo.extend(kids.get(q, []))
+            if not hit and logged:
+                hit = bool(_entry_peers(conn) & set(logged))
+            if hit:
+                try:
+                    os.kill(conn, signal.SIGTERM)
+                    cut.append(conn)
+                except OSError:
+                    pass
+    return cut
+
+
+def _entry_dsedit(*args):
+    tool = env("FLEET_ENTRY_DSEDITGROUP", "/usr/sbin/dseditgroup" if sys.platform == "darwin" else "")
+    if not tool:
+        return None
+    try:
+        return subprocess.run([tool] + list(args), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                              universal_newlines=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def entry_access_ssh(allow, added):
+    """macOS «allow access for: only these users» (com.apple.access_ssh) shuts any
+    sshd to a login outside the group: while the group exists, each entry login
+    joins it — only added, and booked, so only the ones the entry added leave it
+    when they leave the entry. Returns the new book."""
+    added = set(added or [])
+    r = _entry_dsedit("-o", "read", ENTRY_ACCESS_GROUP)
+    if r is None or r.returncode != 0:
+        return sorted(added & set(allow)) if r is None else []
+    for login in sorted(set(allow) - added):
+        c = _entry_dsedit("-o", "checkmember", "-m", login, ENTRY_ACCESS_GROUP)
+        if c is not None and c.returncode == 0:
+            continue                       # a member already — the person's, not ours
+        e = _entry_dsedit("-o", "edit", "-a", login, "-t", "user", ENTRY_ACCESS_GROUP)
+        if e is not None and e.returncode == 0:
+            added.add(login)
+    for login in sorted(added - set(allow)):
+        e = _entry_dsedit("-o", "edit", "-d", login, "-t", "user", ENTRY_ACCESS_GROUP)
+        if e is not None and e.returncode == 0:
+            added.discard(login)
+    return sorted(added)
+
+
+def entry_converge(paths, lst=None, force=False):
+    """One pass: dirs + host key, the keys files from <lst> (else the last good
+    list) — a file someone else rewrote is put back —, AllowUsers, the config
+    through `sshd -t`, com.apple.access_ssh, and the cut of every connection a
+    removed key holds. Writes the book; returns it. Off ⇒ nothing (None)."""
+    on, port, _me = entry_settings(paths)
+    if not on:
+        return None
+    ep = EntryPaths(paths)
+    if not os.path.isdir(paths.state):
+        _entry_root_dir(paths.state, 0o755)
+    _entry_root_dir(ep.dir, 0o755)
+    _entry_root_dir(ep.keys, 0o755)
+    lk = os.open(ep.lock, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(lk, fcntl.LOCK_EX)
+        return _entry_converge(paths, ep, port, lst, force)
+    finally:
+        os.close(lk)
+
+
+def _entry_converge(paths, ep, port, lst, force):
+    book = read_json(ep.book, {}) or {}
+    t = now()
+    book.update(on=True, port=port, checked_at=t)
+    given = lst is not None
+    if given:
+        if not isinstance(lst, dict) or not isinstance(lst.get("logins"), dict) \
+                or not isinstance(lst.get("version"), int):
+            book["error"] = "the list is not {version, logins:{…}} — kept the last one"
+            write_json(ep.book, book)
+            return book
+        if lst["version"] < (book.get("version") or 0) and not force:
+            book["error"] = "list v%d is older than v%d held here — kept" % (lst["version"], book.get("version") or 0)
+            write_json(ep.book, book)
+            return book
+        _entry_put(ep.list, json.dumps(lst, sort_keys=True), 0o600)
+        book["applied_at"] = t
+    else:
+        lst = read_json(ep.list, None)
+        if not isinstance(lst, dict) or not isinstance(lst.get("logins"), dict):
+            lst = {"version": 0, "logins": {}}
+    book["error"] = ""
+    why = _entry_hostkey(ep)
+    if why:
+        book["error"] = why
+        write_json(ep.book, book)
+        return book
+    verdict = entry_eligible(paths, sorted(lst["logins"]))
+    want, logins_book, skipped = {}, {}, 0
+    for login in sorted(lst["logins"]):
+        ent = lst["logins"][login] if isinstance(lst["logins"][login], dict) else {}
+        if verdict.get(login):
+            continue
+        lines, fps = [], []
+        for k in ent.get("keys") or []:
+            line = entry_key_line(k)
+            if line is None:
+                skipped += 1
+                continue
+            if line not in lines:
+                lines.append(line)
+                fps.append(str(k.get("fp")))
+        if not lines:
+            continue
+        want[login] = "".join(lines)
+        logins_book[login] = {"person": str(ent.get("person") or ""), "fps": fps, "keys": len(lines)}
+    # the keys files: exactly <want>, each root 0644; what was there and is not
+    # wanted any more is a removed key — its connections are cut below
+    removed, healed = set(), []
+    try:
+        present = [n for n in os.listdir(ep.keys) if not n.startswith(".")]
+    except OSError:
+        present = []
+    for n in present:
+        p = os.path.join(ep.keys, n)
+        old = _entry_read(p)
+        if n not in want:
+            removed |= _entry_b64s(old)
+            try:
+                os.remove(p) if not os.path.isdir(p) or os.path.islink(p) else shutil.rmtree(p)
+            except OSError:
+                pass
+            continue
+        st = os.lstat(p)
+        bad_owner = os.geteuid() == 0 and (st.st_uid != 0 or st.st_gid != 0)
+        if old != want[n] or os.path.islink(p) or bad_owner or st.st_mode & 0o7777 != 0o644:
+            removed |= _entry_b64s(old) - _entry_b64s(want[n])
+            if not given and old is not None:
+                healed.append(n)
+    for login, text in sorted(want.items()):
+        p = os.path.join(ep.keys, login)
+        st = None
+        try:
+            st = os.lstat(p)
+        except OSError:
+            pass
+        if st is None or _entry_read(p) != text or os.path.islink(p) or st.st_mode & 0o7777 != 0o644 \
+                or (os.geteuid() == 0 and (st.st_uid != 0 or st.st_gid != 0)):
+            if st is not None and os.path.islink(p):
+                os.remove(p)
+            _entry_put(p, text, 0o644)
+    allow = sorted(want)
+    # the config: none (no listener) when no login has its home here
+    book["missing"], book["refused"] = [], dict((l, w) for l, w in verdict.items() if w)
+    if not allow:
+        for f in (ep.cfg,):
+            try:
+                os.remove(f)
+            except OSError:
+                pass
+    else:
+        text = entry_config(ep, port, allow)
+        if _entry_read(ep.cfg) != text:
+            ok, why, missing = _entry_sshd_check(text, ep)
+            book["missing"] = missing
+            if ok:
+                _entry_put(ep.cfg, text, 0o644)
+            elif missing:
+                # an sshd without per-source penalties is not put on the internet
+                try:
+                    os.remove(ep.cfg)
+                except OSError:
+                    pass
+                book["error"] = "not started — this sshd lacks %s" % ", ".join(missing)
+            else:
+                book["error"] = "%s — the config before it stays" % why
+    book["access_ssh"] = entry_access_ssh(allow if os.path.exists(ep.cfg) else [], book.get("access_ssh"))
+    cut = entry_cut(ep, removed, paths.log)
+    if given:
+        book["version"] = lst.get("version", 0)
+    book.update(logins=logins_book, allow=allow if os.path.exists(ep.cfg) else [], skipped=skipped)
+    if healed:
+        book["healed"] = {"at": t, "logins": healed}
+    if cut:
+        book["cut"] = {"at": t, "pids": cut}
+    write_json(ep.book, book)
+    return book
+
+
+def entry_pull(paths, version=None):
+    """The hub's list for this machine: GET /v1/node/entry-keys with the
+    machine's token (machine.env), applied. 0 applied · 1 the hub did not answer
+    (the last list stands) · 3 entry off."""
+    on, _port, me = entry_settings(paths)
+    if not on:
+        print("entry off (FLEET_ENTRY=1 in machine.env turns it on)")
+        return 3
+    ep = EntryPaths(paths)
+    _entry_root_dir(ep.dir, 0o755)
+    book = read_json(ep.book, {}) or {}
+    if version:
+        book["hub_version"] = version
+        book["hub_version_at"] = now()
+    hub, token = (me.get("CCQUOTA_HUB_URL") or "").rstrip("/"), me.get("CCQUOTA_TOKEN") or ""
+    err, lst = "", None
+    if not hub or not token:
+        err = "machine.env names no hub or no token"
+    else:
+        from urllib.request import Request, urlopen
+        try:
+            req = Request(hub + "/v1/node/entry-keys", headers={"Authorization": "Bearer " + token,
+                                                                 "Accept": "application/json"})
+            with urlopen(req, timeout=env_num("FLEET_ENTRY_PULL_SECS", 10)) as r:
+                lst = json.loads(r.read().decode("utf-8"))
+        except Exception as e:  # urllib raises many kinds; the reason is all we keep
+            err = "the hub: %s" % (getattr(e, "code", None) or getattr(e, "reason", None) or e)
+    book.update(pull_error=err, pulled_at=now() if not err else book.get("pulled_at"),
+                pull_tried_at=now())
+    write_json(ep.book, book)
+    if err:
+        print("entry pull: %s — the last list (v%s) stands" % (err, book.get("version") or 0), file=sys.stderr)
+        return 1
+    b = entry_converge(paths, lst)
+    print("entry v%s · %d login(s) on the port%s" % (b.get("version"), len(b.get("allow") or []),
+                                                     " · " + b["error"] if b.get("error") else ""))
+    return 0 if not b.get("error") else 1
+
+
+def entry_on_for_reader(paths, book):
+    """(on, port) as a reader sees it: machine.env is root's 600, so a login's
+    doctor that cannot read it goes by the book (0644) the daemon wrote."""
+    on, port, _me = entry_settings(paths)
+    if not on and book and book.get("on") and os.environ.get("FLEET_ENTRY") is None \
+            and os.path.exists(EntryPaths(paths).machine_env) \
+            and not os.access(EntryPaths(paths).machine_env, os.R_OK):
+        return True, book.get("port") or port
+    return on, port
+
+
+def entry_line(paths, state):
+    """`entry …` for status, or None when the entry is off and never was."""
+    ep = EntryPaths(paths)
+    book = read_json(ep.book, None)
+    on, port = entry_on_for_reader(paths, book)
+    if not on:
+        return None if book is None else "entry  off · %s left from before (FLEET_ENTRY=1 turns it on)" % ep.dir
+    book = book or {}
+    cs = (state.get("children") or {}).get("entry") or {}
+    if book.get("error"):
+        what = "PROBLEM — %s" % book["error"]
+    elif not book.get("allow"):
+        what = "no login has its home here — not listening"
+    elif pid_alive(cs.get("pid")):
+        what = "listening pid %s" % cs["pid"]
+    else:
+        what = "not listening yet"
+    pulled = ("pulled %s ago" % ago(book["pulled_at"])) if book.get("pulled_at") else "never pulled"
+    if book.get("pull_error"):
+        pulled += " (last try: %s)" % book["pull_error"]
+    return "entry  port %d · %s · %d login(s)%s · v%s · hub v%s · %s" % (
+        port, what, len(book.get("allow") or []),
+        (" (%s)" % ", ".join(book["allow"])) if book.get("allow") else "",
+        book.get("version") or 0, book.get("hub_version") or "-", pulled)
+
+
+def entry_check(paths):
+    """The doctor's `entry` row: (code, line). 0 ok · 1 WARN · 2 off."""
+    book = read_json(EntryPaths(paths).book, {}) or {}
+    on, port = entry_on_for_reader(paths, book)
+    if not on:
+        return 2, "off"
+    st = read_json(paths.state_file, {})
+    cs = (st.get("children") or {}).get("entry") or {}
+    hub_v, mine = book.get("hub_version"), book.get("version") or 0
+    line = "入口 v%s · 本机 v%s · %s · 端口 %d · %d 个登录" % (
+        hub_v or "-", mine, ("拉到 %s 前" % ago(book["pulled_at"])) if book.get("pulled_at") else "没拉到过",
+        port, len(book.get("allow") or []))
+    if book.get("error"):
+        return 1, line + " · " + book["error"]
+    if book.get("allow") and not pid_alive(cs.get("pid")):
+        return 1, line + " · 名单有人但入口 sshd 没在跑"
+    if hub_v and hub_v > mine and now() - (book.get("hub_version_at") or now()) > 3600:
+        return 1, line + " · 落后入口一小时以上（%s）" % (book.get("pull_error") or "拉取没成")
+    return 0, line
+
+
+def entry_cli(paths, rest):
+    sub = rest[0] if rest else "status"
+    if sub == "pull":
+        v = None
+        if "--version" in rest[1:]:
+            try:
+                v = int(rest[rest.index("--version") + 1])
+            except (IndexError, ValueError):
+                print("usage: entry pull [--version N]", file=sys.stderr)
+                return 2
+        return entry_pull(paths, v)
+    if sub == "apply" and len(rest) > 1:
+        src = rest[1]
+        try:
+            lst = json.load(sys.stdin) if src == "-" else read_json(src, None)
+        except ValueError:
+            lst = None
+        if lst is None:
+            print("entry apply: %s is not JSON" % src, file=sys.stderr)
+            return 2
+        b = entry_converge(paths, lst, force="--force" in rest)
+        if b is None:
+            print("entry off (FLEET_ENTRY=1 turns it on)")
+            return 3
+        print("entry v%s · %d login(s) on the port%s" % (b.get("version"), len(b.get("allow") or []),
+                                                         " · " + b["error"] if b.get("error") else ""))
+        return 1 if b.get("error") else 0
+    if sub == "ensure":
+        b = entry_converge(paths)
+        if b is None:
+            return 3
+        return 1 if b.get("error") else 0
+    if sub == "status":
+        if "--check" in rest:
+            code, line = entry_check(paths)
+            print(line)
+            return code
+        line = entry_line(paths, read_json(paths.state_file, {}))
+        print(line or "entry  off")
+        return 0
+    print("usage: entry pull [--version N] | apply <file|-> [--force] | ensure | status [--check]",
+          file=sys.stderr)
+    return 2
 
 
 # --------------------------------------------------------------- install --------
@@ -4086,6 +4805,8 @@ def main(argv):
         return uninstall(paths)
     if cmd == "service":
         return service_cli(paths, rest)
+    if cmd == "entry":
+        return entry_cli(paths, rest)
     if cmd == "account":
         sub = rest[0] if rest else "list"
         if sub == "list":
