@@ -49,8 +49,9 @@ import (
 //     cache's, never this one's, so a pass revoked through C2's routes stops
 //     at once.
 //   - The check also takes the hub's own pass (`frh1.`, claude-fleet#1976),
-//     for the vault's refreshes through /openai-auth/ only
-//     (fleet_relay_refresh.go).
+//     for the vault's refreshes through /openai-auth/ and the GitHub sign-in's
+//     token exchange through /github-oauth/ (fleet_relay_refresh.go). No
+//     other pass opens /github-oauth/ (claude-fleet#3392).
 //   - And the hub's quota pass (`frq1.`, claude-fleet#2169), for the hub's
 //     own quota reads — /anthropic/v1/messages and /chatgpt/wham/usage only,
 //     and only while CCQUOTA_FLEET_HUB_QUOTA is on (fleet_hub_quota.go).
@@ -75,7 +76,7 @@ const (
 
 // relayPrefixes are the forwarder's routes (docs/CRED-RELAY.md); a check that
 // names another path is refused, so a pass opens nothing else on that host.
-var relayPrefixes = []string{"/anthropic/", "/chatgpt/", "/openai-auth/"}
+var relayPrefixes = []string{"/anthropic/", "/chatgpt/", "/openai-auth/", relayGitHubPrefix}
 
 var relayLoginRE = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,64}$`)
 
@@ -318,6 +319,10 @@ func (s *Server) relayVerdictFor(tok, uri string, now time.Time) relayVerdict {
 	}
 	if strings.HasPrefix(tok, hubRelayPassPrefix) {
 		return s.verifyHubRelayPass(tok, uri, now)
+	}
+	if strings.HasPrefix(uri, relayGitHubPrefix) {
+		// github.com is the hub's own sign-in road, never a machine's.
+		return relayVerdict{why: relayGitHubPrefix + " opens to the hub's own pass only"}
 	}
 	if strings.HasPrefix(tok, hubQuotaPassPrefix) {
 		return s.verifyHubQuotaPass(tok, uri, now)

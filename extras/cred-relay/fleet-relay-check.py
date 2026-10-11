@@ -38,7 +38,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
-PREFIXES = ("/anthropic/", "/chatgpt/", "/openai-auth/")
+PREFIXES = ("/anthropic/", "/chatgpt/", "/openai-auth/", "/github-oauth/")
 FORWARD = ("X-Fleet-Relay", "X-Forwarded-Uri", "X-Forwarded-Method")
 MAX_ENTRIES = 20000
 

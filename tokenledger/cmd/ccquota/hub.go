@@ -825,6 +825,11 @@ func runHub(args []string) error {
 			log.Printf("fleet: SPOT nodes off (set CCQUOTA_FLEET_SPOT_IMAGE to turn them on)")
 		}
 	}
+	// The GitHub sign-in's token exchange through the relay
+	// (claude-fleet#3392). After the session pass key: it signs the pass.
+	if err := githubOAuthVia(srv, os.Getenv); err != nil {
+		return err
+	}
 	srv.MCP = mcp.Handler(srv)
 	// The settings an admin changes on the web (claude-fleet#1986): the one
 	// old value still read is a SPOT image (fleet.spot), copied into the
@@ -1030,6 +1035,41 @@ func githubAuthFromEnv(getenv func(string) string) (*api.GitHubAuth, error) {
 	// token endpoints never move, so no sign-in can be completed against it.
 	return &api.GitHubAuth{ClientID: id, ClientSecret: secret, Admins: admins,
 		APIBase: strings.TrimSpace(getenv("CCQUOTA_GITHUB_API_BASE"))}, nil
+}
+
+// githubOAuthVia wires where the GitHub sign-in trades its code for a token
+// (claude-fleet#3392). github.com is unreliable from the hub's cluster in
+// Shenzhen (api.github.com is fine), so CCQUOTA_GITHUB_OAUTH_VIA=relay posts
+// that one exchange to the Singapore relay's /github-oauth/ route
+// (CCQUOTA_FLEET_CRED_RELAY_URL) with the hub's own pass, falling back to
+// github.com directly when the relay cannot be asked. Unset or "direct" keeps
+// the hub posting itself, exactly as before; with sign-in off it is ignored;
+// anything else, or relay without the relay URL or the session pass key,
+// refuses to start rather than guess.
+func githubOAuthVia(srv *api.Server, getenv func(string) string) error {
+	v := strings.ToLower(strings.TrimSpace(getenv("CCQUOTA_GITHUB_OAUTH_VIA")))
+	switch v {
+	case "", "direct":
+		return nil
+	case "relay":
+	default:
+		return fmt.Errorf("CCQUOTA_GITHUB_OAUTH_VIA: %q is not relay or direct", v)
+	}
+	if srv.GitHub == nil {
+		log.Printf("github sign-in: CCQUOTA_GITHUB_OAUTH_VIA=relay set, but GitHub sign-in is off — nothing to relay")
+		return nil
+	}
+	url := strings.TrimSpace(getenv("CCQUOTA_FLEET_CRED_RELAY_URL"))
+	if url == "" {
+		return errors.New("CCQUOTA_GITHUB_OAUTH_VIA=relay needs CCQUOTA_FLEET_CRED_RELAY_URL (the Singapore relay, docs/CRED-RELAY.md)")
+	}
+	if len(srv.SessionCredKey) == 0 {
+		return errors.New("CCQUOTA_GITHUB_OAUTH_VIA=relay needs CCQUOTA_FLEET=1 and CCQUOTA_FLEET_SESSION_CRED_KEY — the hub signs its relay pass with it")
+	}
+	srv.GitHub.RelayURL = url
+	srv.GitHub.RelayPass = srv.HubRelayPass
+	log.Printf("github sign-in: the token exchange goes through the relay %s (CCQUOTA_GITHUB_OAUTH_VIA=relay); relay down = github.com directly", url)
+	return nil
 }
 
 func splitList(s string) []string {

@@ -1202,6 +1202,7 @@ What a machine can do with only the short-lived half was **measured first**
 | agent | `CCQUOTA_FLEET_COMPUTE_FORCE=1` | `fleet node compute on --force` (claude-fleet#1720): open over a probe that says the region is unsupported; the hub audits it |
 | agent | `CCQUOTA_ACCOUNTS_DIR` (default `~/.config/claude-fleet/accounts`), `CCQUOTA_FLEET_CODEX_HOMES` (default `~/.codex-accounts`) | where the Claude / Codex files go |
 | hub | `CCQUOTA_FLEET_OAUTH_REFRESH_VIA=node` | refresh through an online admin node instead of the hub's own network (claude-fleet#1490, below). Unset / `direct` = the hub posts itself |
+| hub | `CCQUOTA_GITHUB_OAUTH_VIA=relay` | the GitHub sign-in's token exchange goes through the relay's `/github-oauth/login/oauth/access_token` with the hub's `frh1.` pass (claude-fleet#3392); relay down = github.com directly once (5 s + 8 s). Needs `CCQUOTA_FLEET_CRED_RELAY_URL` + `CCQUOTA_FLEET_SESSION_CRED_KEY`. Unset / `direct` = the hub posts itself |
 | agent | `CCQUOTA_FLEET_OAUTH_REFRESH=0` | an admin agent stops offering to carry the hub's refreshes (on by default with `CCQUOTA_FLEET_ADMIN=1`) |
 
 A lease (`POST /v1/node/credentials`, the node's enrollment token) is answered
