@@ -413,7 +413,7 @@ fi
 # A first Linux tenant is enrolled separately from the machine identity.
 if [ -n "$LOGIN" ]; then
   [ "$OS" = linux ] || fail 账号 "--login is the Linux bootstrap; macOS uses its existing account opener"
-  "$PY" -I "$CUR/bin/fleet-node-linux.py" prepare --login "$LOGIN" --hub "$HUB" \
+  "$PY" -I "$CUR/bin/fleet-node-linux.py" login open "$LOGIN" --no-start --hub "$HUB" ${FLEET_NODE_UID:+--uid "$FLEET_NODE_UID"} \
     ${LOGIN_CODE_FILE:+--join-file "$LOGIN_CODE_FILE"} || fail 账号 "Linux tenant preparation failed"
 fi
 

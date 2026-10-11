@@ -17,6 +17,9 @@
 |---|---|---|---|
 | ACK 容器重启后沿用旧 PID 或执行上次未完的运行时切换 | 接管错进程、镜像版本被机器更新器改掉 | 每次容器启动独立代号；镜像负责更新时在恢复更新状态之前退出（#3022） | `node-container-restart` |
 | Linux 托管机器的登录没开租约：`fleet-node-linux.py prepare` 写的登录设置（`logins/<login>.env`、凭据存储里的 `node.env`）缺 `CCQUOTA_FLEET_CREDS=1`（fleet-linux-0 实见，#3211） | 池子同步把账号放进了共享代理（「hub 1 · here 1」），可节点程序从不替这个登录租：`accounts/` 里没有 `hub:<label>` 标记，`ready` 的 creds 一直 false，入口每次派活都写 `not ready: creds` 把这台排除在外；新开的登录一样 | `prepare`（每次容器启动都跑）新登录写上这一行；旧存储缺它就补上、令牌和其它行逐字不动，登录设置随之带上，节点程序照 Mac 登录的方式租、写标记（#3211） | `linux-login-no-lease` |
+| ACK 上这台 Linux 住几个人时，容器重启后 `/etc/passwd`（镜像层）没了：同一登录被重建成另一个号码，或删掉的登录的号码发给了新开的人（EPIC #3208 C1） | 别人的家、凭据、会话归到错的人名下；新人一开就读到前任留下的文件 | 每个登录的声明在盘上 `linux-tenants/<login>.json`（号码从 10002 递增，高水位 `.next-uid`，删掉的进 `.retired` 永不再发）；容器起来先 `fleet-node-linux.py boot` 照声明重建全部组 / 用户再起 supervisor，家目录属主不是声明的号码就停下报错、绝不 chown（#3209） | `linux-uid-reuse` |
+| Linux 托管机器删一个登录，只删了 OS 用户：它的进程、credsep 租户与存储、守护里的账号条目、入口上的节点令牌、盘上的声明还在（EPIC #3208 C1） | 删掉的人的会话还在跑、还在用账号池；入口还认它的令牌；下次开机 boot 又把它建回来 | 只有 `fleet-node-linux.py login remove <login> --keep-home` 或 `--delete-home` 一条路，照 `fleet-login-remove.sh` 的顺序：停 fleet → 入口 `node leave` → `account forget` → `fleet-credsep.py purge` → 杀该号码全部进程 → 家打包到 `/home/.attic/<login>-<UTC>.tar.gz`（root 600，30 天后 boot 时清）→ userdel / groupdel → 声明删掉、号码进 `.retired`（#3209） | `linux-removed-login-lingers` |
+| Linux 托管机器上一个登录的家被放宽（0755），或新开的登录名落在一个属于别的号码的家目录上（EPIC #3208 C1） | 一个人读到另一个人的家、会话、代码 | `login open` 与每次 `boot` 把每个家收回 0700；家已存在且属主不是这个登录的号码 ⇒ 拒绝、不 chown；凭据本就在 `fleetcred` 的存储里（`linux-tenant-cross-read` 只钉家这一半，存储由 cred-sep 各行钉）（#3209） | `linux-tenant-cross-read` |
 | 会话里 `/exit`（或 Ctrl+D）退出 | 窗口跟着关，会话从列表消失 | 窗口留下画恢复页（#1784）：↵ 用同一对话 id 续上，r 新开，q 回收 | `session-exit` |
 | 会话里连按 Ctrl+C 退出 | 同上 | 同上，恢复页写「按了 Ctrl+C」 | `session-ctrl-c` |
 | 会话进程被杀（kill -9、OOM） | 同上 | 同上，恢复页写「被结束（信号 9）」 | `session-killed` |

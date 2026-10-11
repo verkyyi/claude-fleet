@@ -12,6 +12,7 @@ import sys
 from unittest.mock import patch, Mock
 
 BIN = Path(__file__).resolve().parent
+REAL_RUN = subprocess.run
 
 
 def module(name):
@@ -265,6 +266,217 @@ class LinuxNode(unittest.TestCase):
                 patch.object(s, 'pid_alive', return_value=True), patch.object(s, 'pid_cmd', return_value='same'):
             obj.adopt()
         self.assertEqual(obj.adopted, {})
+
+
+class FakeOS:
+    """A passwd/group that vanishes like the image layer's, plus the calls
+    login open/remove make — every write lands in a temp dir (EPIC #3208 C1)."""
+
+    def __init__(self, m, d):
+        self.m, self.d = m, Path(os.path.realpath(d))
+        self.users, self.groups, self.calls, self.owner = {}, {}, [], {}
+        self.paths = Mock(state=str(self.d / 'state'), users=str(self.d / 'home'),
+                          logins=str(self.d / 'state/logins'))
+        Path(self.paths.users).mkdir(parents=True)
+        self.sup = Mock(Paths=lambda: self.paths, tenant_privileges=lambda login: ([], True),
+                        account_forget=Mock(return_value=0), remove_login_env=Mock(return_value=True))
+        self.cred = Mock(ROOT_BASE=str(self.d / 'cred'), purge=Mock(return_value=0))
+
+    def pw(self, name):
+        if name not in self.users:
+            raise KeyError(name)
+        uid, home = self.users[name]
+        return Mock(pw_name=name, pw_uid=uid, pw_gid=uid, pw_dir=home)
+
+    def pwuid(self, uid):
+        for n, (u, _) in self.users.items():
+            if u == uid:
+                return self.pw(n)
+        raise KeyError(uid)
+
+    def gr(self, name):
+        if name not in self.groups:
+            raise KeyError(name)
+        return Mock(gr_gid=self.groups[name])
+
+    def grgid(self, gid):
+        for n, g in self.groups.items():
+            if g == gid:
+                return self.gr(n)
+        raise KeyError(gid)
+
+    def run(self, cmd, **kw):
+        self.calls.append(list(cmd))
+        tool = cmd[0]
+        if cmd[1:] == ['--help']:
+            return Mock(returncode=0, stdout='  -b, --badname    allow bad names\n')
+        if tool in ('groupadd', 'useradd') and cmd[-1][0].isdigit() and '--badname' not in cmd:
+            raise subprocess.CalledProcessError(3, cmd)     # Debian refuses a digit-leading name
+        if tool == 'groupadd':
+            self.groups[cmd[-1]] = int(cmd[cmd.index('--gid') + 1])
+        elif tool == 'useradd':
+            self.users[cmd[-1]] = (int(cmd[cmd.index('--uid') + 1]), cmd[cmd.index('--home-dir') + 1])
+        elif tool == 'userdel':
+            self.users.pop(cmd[-1])
+        elif tool == 'groupdel':
+            self.groups.pop(cmd[-1])
+        elif tool == 'pgrep':
+            return Mock(returncode=1, stdout='')
+        elif tool == 'tar':
+            return REAL_RUN(cmd, capture_output=True, text=True)
+        return Mock(returncode=0, stdout='', stderr='')
+
+    def chown(self, path, uid, gid):
+        self.owner[str(path)] = (uid, gid)
+
+    def owner_of(self, path):
+        return self.owner.get(str(path), (0, 0))
+
+    def reboot(self):
+        self.users.clear()
+        self.groups.clear()
+
+    def __enter__(self):
+        m = self.m
+        self.stack = [patch.object(m.pwd, 'getpwnam', self.pw), patch.object(m.pwd, 'getpwuid', self.pwuid),
+                      patch.object(m.grp, 'getgrnam', self.gr), patch.object(m.grp, 'getgrgid', self.grgid),
+                      patch.object(m.subprocess, 'run', self.run), patch.object(m.os, 'chown', self.chown), patch.object(m.os, 'fchown', lambda *a: None),
+                      patch.object(m, 'owner_of', self.owner_of), patch.object(m, 'as_tenant'),
+                      patch.object(m, 'request', return_value={}), patch.object(m, 'live_pids', return_value=[]), patch.object(m.time, 'sleep'),
+                      patch.object(m, 'load', lambda n: self.sup if n == 'fleet-node-supervisor' else self.cred)]
+        for p in self.stack:
+            p.start()
+        return self
+
+    def __exit__(self, *exc):
+        for p in self.stack:
+            p.stop()
+
+    def open(self, login, **kw):
+        return self.m.ensure_login(self.sup, self.paths, login, kw.get('uid'), kw.get('full_name', ''))
+
+    def remove(self, login, home='keep'):
+        return self.m.login_remove(_ns(name=login, home=home))
+
+
+def _ns(**kw):
+    import argparse
+    return argparse.Namespace(**kw)
+
+
+class LinuxTenants(unittest.TestCase):
+    """The three BREAK-IT rows of EPIC #3208 C1 — drilled through these."""
+
+    def setUp(self):
+        self.m = module('fleet-node-linux')
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    def test_legacy_declaration_migrates_to_per_login(self):
+        with FakeOS(self.m, self.tmp.name) as f:
+            st = Path(f.paths.state)
+            st.mkdir()
+            (st / 'linux-tenant.json').write_text(json.dumps(
+                {'login': 'fleet', 'uid': 10002, 'gid': 10002, 'home': f.paths.users + '/fleet'}))
+            got = self.m.tenants(f.paths)
+            self.assertEqual(got['fleet']['uid'], 10002)
+            self.assertTrue((st / 'linux-tenant.json.bak').is_file())
+            self.assertFalse((st / 'linux-tenant.json').exists())
+            self.assertEqual(f.open('drill2').pw_uid, 10003)
+
+    def test_uid_reuse(self):
+        """linux-uid-reuse: same number after a restart, a removed number never
+        handed out again, a home owned by anyone else stops the boot."""
+        with FakeOS(self.m, self.tmp.name) as f:
+            a = f.open('24haowan')
+            b = f.open('drill2')
+            self.assertEqual((a.pw_uid, b.pw_uid), (10002, 10003))
+            self.assertTrue(any(c[0] == 'useradd' and c[-1] == '24haowan' for c in f.calls))
+            f.reboot()
+            self.m.boot()
+            self.assertEqual(f.users['24haowan'][0], 10002)
+            self.assertEqual(f.users['drill2'][0], 10003)
+            self.assertEqual(f.remove('drill2'), 0)
+            c = f.open('drill3')
+            self.assertNotEqual(c.pw_uid, 10003)
+            self.assertEqual(c.pw_uid, 10004)
+            # the same name back is a NEW person: a new number, never the retired one
+            self.assertEqual(f.open('drill2').pw_uid, 10005)
+            # a wrong owner on a home stops the boot; nothing is chowned
+            f.owner[f.paths.users + '/24haowan'] = (10004, 10004)
+            f.reboot()
+            chowns = dict(f.owner)
+            with self.assertRaisesRegex(ValueError, 'nothing chowned'):
+                self.m.boot()
+            self.assertEqual(f.owner, chowns)
+            self.assertNotIn('24haowan', f.users)
+
+    def test_removed_login_lingers(self):
+        """linux-removed-login-lingers: remove leaves no user, group, process,
+        credsep tenant, daemon entry, node token or declaration; the home is in
+        the attic."""
+        with FakeOS(self.m, self.tmp.name) as f:
+            f.open('drill2')
+            home = Path(f.paths.users) / 'drill2'
+            (home / 'work.txt').write_text('kept in the attic')
+            store = Path(f.cred.ROOT_BASE) / 'drill2'
+            store.mkdir(parents=True)
+            (store / 'node.env').write_text('CCQUOTA_HUB_URL=https://hub.example\nCCQUOTA_TOKEN=t\n')
+            self.assertEqual(f.remove('drill2'), 0)
+            self.assertNotIn('drill2', f.users)
+            self.assertNotIn('drill2', f.groups)
+            self.assertFalse(home.exists())
+            self.assertIn(['pkill', '-KILL', '-U', '10002'], f.calls)
+            f.sup.account_forget.assert_called_once_with(f.paths, 'drill2')
+            f.sup.remove_login_env.assert_called_once_with(f.paths, 'drill2')
+            self.assertEqual(f.cred.purge.call_args[0][0].login, 'drill2')
+            self.m.request.assert_any_call('https://hub.example', '/v1/node/leave', 't',
+                                           {'reason': 'login drill2 removed'})
+            self.assertFalse(self.m.tenant_path(f.paths, 'drill2').exists())
+            archived = list((Path(f.paths.users) / '.attic').glob('drill2-*.tar.gz'))
+            self.assertEqual(len(archived), 1)
+            self.assertEqual(archived[0].stat().st_mode & 0o777, 0o600)
+            self.assertIn('./work.txt', REAL_RUN(['tar', '-tzf', str(archived[0])],
+                                                       capture_output=True, text=True).stdout)
+            self.assertIn('10002', (self.m.tenants_dir(f.paths) / '.retired').read_text().split())
+            with self.assertRaises(self.m.NoLogin):
+                f.remove('drill2')
+
+    def test_tenant_cross_read(self):
+        """linux-tenant-cross-read: every home is 0700 after open and boot, and a
+        new login never takes over a home another number owns."""
+        with FakeOS(self.m, self.tmp.name) as f:
+            f.open('24haowan')
+            f.open('drill2')
+            homes = Path(f.paths.users)
+            os.chmod(homes / 'drill2', 0o755)       # someone widened it
+            f.reboot()
+            self.m.boot()
+            for h in ('24haowan', 'drill2'):
+                self.assertEqual((homes / h).stat().st_mode & 0o777, 0o700, h)
+            (homes / 'drill9').mkdir()
+            f.owner[str(homes / 'drill9')] = (10002, 10002)     # 24haowan's files
+            with self.assertRaisesRegex(ValueError, 'nothing chowned'):
+                f.open('drill9')
+            self.assertEqual(f.owner[str(homes / 'drill9')], (10002, 10002))
+
+    def test_names_and_exit_codes(self):
+        m = self.m
+        for good in ('24haowan', 'fleet', 'drill2'):
+            self.assertTrue(m.valid_name(good), good)
+        for bad in ('1234', 'a', 'root', 'Bob', '-x', 'a_b', 'x' * 17):
+            self.assertFalse(m.valid_name(bad), bad)
+        self.assertFalse(m.valid_full_name('a:b'))
+        self.assertTrue(m.valid_full_name('Arvin Wang'))
+        with FakeOS(m, self.tmp.name) as f:
+            f.users['admin1'] = (20000, '/home/admin1')
+            f.sup.tenant_privileges = lambda login: (['sudo -l: (ALL) ALL'], True)
+            with self.assertRaises(m.Refuse) as e:
+                f.open('admin1')
+            self.assertEqual(e.exception.rc, 5)
+            self.assertEqual(m.guarded(lambda: m.login_cmd(['open', '1234'])), 3)
+            self.assertEqual(m.guarded(lambda: m.login_cmd(['remove', 'nobody2', '--keep-home'])), 4)
+            self.assertEqual(m.guarded(lambda: m.login_cmd(['remove', 'nobody2'])), 3)
 
 
 if __name__ == '__main__':
