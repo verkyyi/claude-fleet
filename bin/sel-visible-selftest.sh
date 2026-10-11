@@ -11,7 +11,7 @@
 #   B  draw_cmds (⌘P's `>` list) for real, under curses on a pty, per terminal:
 #      the selected line carries `›`; low depth draws it in reverse (SGR 7), a
 #      truecolour 256 terminal keeps the coloured ground and no reverse;
-#      Nothing on the selected line is dimmed (the whole row must read, not
+#  B2  nothing on the selected line is dimmed (the whole row must read, not
 #      only its mark);
 #   C  every popup that draws a selection goes through the helper — no bare
 #      `color_pair(…) if sel` ground left in quickopen / quick-dispatch / compose / ask.
@@ -95,14 +95,30 @@ for term, ct, low in (("xterm", "", True), ("xterm", "truecolor", True), ("xterm
     check("› beta" in text and "› alpha" not in text, tag + ": `›` marks the selected line only")
     at = raw.find("beta".encode())
     rev = re.search(rb"\x1b\[(?:[0-9;]*;)?7(?:;[0-9;]*)?m", raw[:at]) is not None
-    line = raw[raw.rfind(b"\n", 0, at) + 1:raw.find(b"\n", at) if raw.find(b"\n", at) > 0 else len(raw)]
-    check(re.search(rb"\x1b\[(?:[0-9;]*;)?2(?:;[0-9;]*)?m", line) is None,
-          tag + ": nothing on the selected line is dimmed (its words stay readable)")
     if low:
         check(rev, tag + ": selected line drawn in reverse video")
     else:
         check(not rev, tag + ": truecolour keeps the colour ground (no reverse)")
         check(re.search(rb"\x1b\[(?:44|48;5;4)m", raw) is not None, tag + ": the blue ground is drawn")
+
+# B2 — nothing on the selected line is dimmed (every addstr onto its row, a
+#      greyed command's too): a recording screen, off a truecolour terminal
+class Rec:
+    def __init__(self):
+        self.calls = []
+
+    def addstr(self, y, x, text, attr=0):
+        self.calls.append((y, text, attr))
+
+
+rec = Rec()
+qo.draw_cmds(rec, ">", "", [("a", "alpha", "first"), ("b", "-beta", "second"), ("c", "gamma", "third")],
+             1, 60, 10, {})
+on_row = [c for c in rec.calls if c[0] == 4]
+check(on_row and all(not (attr & curses.A_DIM) for _, _, attr in on_row),
+      "B2 draw_cmds: nothing on the selected line is dimmed %r" % [(t, attr) for _, t, attr in on_row if attr & curses.A_DIM])
+check(any(attr & curses.A_DIM for y, _, attr in rec.calls if y == 3),
+      "B2 draw_cmds: an unselected line keeps its dim hint (the check can see A_DIM)")
 
 # C — no popup paints a selection ground past the helper
 bare = re.compile(r"color_pair\((?:2|3|PAIR_ON)\)[^\n]*\bif (?:sel|on|n == menu_at|focus == kind)\b")
