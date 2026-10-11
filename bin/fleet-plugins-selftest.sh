@@ -114,8 +114,8 @@ for d in dirs:
         for name, srv in (mc.get("mcpServers") or mc).items():
             runs.append((".mcp.json " + name, " ".join([srv.get("command", "")] + list(srv.get("args", [])))))
     for where, cmd in runs:
-        if "~/.claude/fleet/bin/" not in cmd and "${HOME}/.claude/fleet/bin/" not in cmd \
-                and "$HOME/.claude/fleet/bin/" not in cmd:
+        # ~/.claude/fleet/bin/…, $HOME/…, ${HOME}/…, or ${SEAM:-$HOME/.claude/fleet/bin}/…
+        if not re.search(r"(~|\$HOME|\$\{HOME\})/\.claude/fleet/bin(/|\}/)", cmd):
             bad.append("B %s: %s runs %r — a plugin's commands call ~/.claude/fleet/bin, one implementation" % (d, where, cmd))
     for dp, _, fs in os.walk(base):
         for f in fs:
