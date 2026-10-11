@@ -65,6 +65,9 @@ class H(BaseHTTPRequestHandler):
             return self.reply(200, {"trust": open(os.path.join(SB, "trust")).read().strip()})
         if self.path == "/v1/fleet/session-cred/renew":
             return self.reply(500, {"error": "the hub is having a day"})
+        if self.path == "/v1/node/usage":
+            # the usage report (issue #3407): a hub that refuses it is a doctor WARN
+            return self.reply(200, {"principal": "gh:1", "over": False})
         self.reply(404, {"error": self.path})
 srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
 open(os.path.join(SB, "fake.pid"), "w").write(str(os.getpid()))

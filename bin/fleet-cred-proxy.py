@@ -146,9 +146,15 @@ with error.code person_budget_exceeded and the hub's line (「已达个人额度
 neither client retries a 403. The central route is metered by the cluster
 proxy, never twice here. No hub / no node token / FLEET_CRED_BUDGET=0 = nothing
 reported, nothing refused; a verdict the hub has not renewed for
-FLEET_CRED_BUDGET_STALE (600 s) lapses (open).
+FLEET_CRED_BUDGET_STALE (600 s) lapses (open). A metered request goes out
+asking only for codings the meter opens (gzip / deflate — Claude Code asks for
+br / zstd too, and Anthropic gzips its stream): the client gets the upstream's
+bytes as they came, the meter reads its own decoded copy (issue #3407). A 2xx
+answer it still reads nothing from is logged `meter_miss`, and a flush with no
+hub / node token / an error is `budget_err` (once per change) — both in
+`status` (budget.err · misses) and the doctor's cred-proxy row, never silent.
 """
-import argparse, base64, fcntl, hashlib, hmac, http.client, json, os, re, secrets
+import argparse, base64, fcntl, hashlib, hmac, http.client, json, os, re, secrets, zlib
 import resource, shutil, signal, socket, ssl, sys, threading, time, urllib.error, urllib.request
 from urllib.parse import urlsplit
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -258,6 +264,18 @@ def node_env(path=None):
 
 # ---- per-person budget (issue #1977) ------------------------------------------
 BUDGET_CODE = "person_budget_exceeded"
+METER_CODINGS = ("gzip", "x-gzip", "deflate", "identity")
+
+
+def meter_accept(v):
+    """The Accept-Encoding a metered request goes out with (issue #3407): the
+    client's own list less what the meter cannot open (br, zstd, *) — stdlib
+    zlib reads gzip and deflate — else identity."""
+    keep = []
+    for part in (v or "").split(","):
+        if part.split(";")[0].strip().lower() in METER_CODINGS:
+            keep.append(part.strip())
+    return ", ".join(keep) or "identity"
 
 
 class Meter:
@@ -266,10 +284,41 @@ class Meter:
     a plain JSON body: once). Mirrors tokenledger internal/credproxy usage.go."""
     MAX_WHOLE = 8 << 20
 
-    def __init__(self):
+    def __init__(self, encoding=""):
         self.line, self.whole, self.sse, self.f, self.model = bytearray(), bytearray(), False, {}, ""
+        # a compressed answer is opened here, on the meter's copy only — the
+        # client gets the upstream's bytes as they came (issue #3407)
+        self.enc, self.z = (encoding or "").strip().lower(), None
+        if self.enc in ("gzip", "x-gzip"):
+            self.z = zlib.decompressobj(16 + zlib.MAX_WBITS)
+        elif self.enc == "deflate":
+            self.z = zlib.decompressobj(zlib.MAX_WBITS)
+        elif self.enc in ("", "identity"):
+            self.enc = ""
+        else:
+            self.enc = "unreadable:" + self.enc[:32]
 
     def feed(self, d):
+        if self.z is not None:
+            try:
+                d = self.z.decompress(d)
+            except zlib.error:
+                if self.enc == "deflate" and not self.f and not self.line:
+                    # a raw deflate stream (no zlib header), as some servers send
+                    self.z = zlib.decompressobj(-zlib.MAX_WBITS)
+                    try:
+                        d = self.z.decompress(d)
+                    except zlib.error:
+                        self.z, self.enc = None, "unreadable:deflate"
+                        return
+                else:
+                    self.z, self.enc = None, "unreadable:" + self.enc
+                    return
+        elif self.enc:
+            return
+        self.feed_plain(d)
+
+    def feed_plain(self, d):
         if not self.sse and len(self.whole) < self.MAX_WHOLE:
             self.whole += d
         parts = d.split(b"\n")
@@ -346,6 +395,8 @@ class Budget:
         self.lock = threading.Lock()
         self.pending = {}            # (provider, worker, acct, model) -> [tokens, requests, in, cw, cr, out]
         self.state, self.ts, self.err = {}, 0, ""
+        self.said = ""               # the last flush problem logged (said once per change)
+        self.misses, self.miss_why = 0, ""   # 2xx answers the meter read nothing from (#3407)
 
     def worker(self, sid):
         """-> the worker_id the session's credential was minted for ("" = none
@@ -383,6 +434,18 @@ class Budget:
                 return self.state.get("message") or "已达个人额度（%s）" % BUDGET_CODE
         return ""
 
+    def miss(self, why):
+        with self.lock:
+            self.misses, self.miss_why = self.misses + 1, why
+
+    def problem(self, why, log=None):
+        """Why a flush sent nothing (issue #3407) — kept for status / the doctor,
+        logged once per change, never silent."""
+        with self.lock:
+            self.err, said, self.said = why, self.said, why
+        if log and why and why != said:
+            log(ev="budget_err", why=why, pending=sum(v[0] for v in self.pending.values()))
+
     def flush(self, log=None):
         """POST the pending usage (none = just ask); keep it on failure."""
         if env("FLEET_CRED_BUDGET", "1") == "0":
@@ -391,6 +454,10 @@ class Budget:
         hub = (ne.get("CCQUOTA_HUB_URL") or env("FLEET_HUB_URL")).rstrip("/")
         tok = ne.get("CCQUOTA_TOKEN", "")
         if not hub or not tok or not loopback_ok(hub):
+            ne_path = getattr(self.cfg, "node_env", None) or "node.env"
+            self.problem("no node token (CCQUOTA_TOKEN in %s unreadable or missing)" % ne_path if not tok else
+                         "no hub address (CCQUOTA_HUB_URL in %s / FLEET_HUB_URL)" % ne_path if not hub else
+                         "hub %s is plain http off loopback" % hub, log)
             return None
         with self.lock:
             sent = {k: list(v) for k, v in self.pending.items()}
@@ -401,8 +468,8 @@ class Budget:
             with urllib.request.urlopen(req, timeout=10) as r:
                 st = json.loads(r.read() or b"{}")
         except Exception as e:
-            with self.lock:
-                self.err = type(e).__name__
+            self.problem("POST /v1/node/usage: %s" % (
+                "HTTP %d" % e.code if isinstance(e, urllib.error.HTTPError) else type(e).__name__), log)
             return None
         with self.lock:
             for k, v in sent.items():
@@ -413,7 +480,7 @@ class Budget:
                     if p[0] <= 0 and p[1] <= 0:
                         del self.pending[k]
             was = bool(self.state.get("over"))
-            self.state, self.ts, self.err = st if isinstance(st, dict) else {}, time.time(), ""
+            self.state, self.ts, self.err, self.said = st if isinstance(st, dict) else {}, time.time(), "", ""
             now_over = bool(self.state.get("over"))
         if log and was != now_over:
             log(ev="budget", over=now_over, principal=self.state.get("principal", ""),
@@ -427,7 +494,8 @@ class Budget:
             out = {k: s.get(k) for k in ("principal", "over", "window", "used_5h", "limit_5h",
                                          "used_week", "limit_week", "message") if k in s}
             out.update(age=int(time.time() - self.ts) if self.ts else None, err=self.err,
-                       pending=sum(v[0] for v in self.pending.values()))
+                       pending=sum(v[0] for v in self.pending.values()),
+                       misses=self.misses, miss_why=self.miss_why)
             return out
 
 
@@ -1195,6 +1263,13 @@ class Proxy(BaseHTTPRequestHandler):
             if OAUTH_BETA not in betas:
                 betas.append(OAUTH_BETA)
             out["anthropic-beta"] = ",".join(betas)
+        if cred == "file":
+            # a metered answer must be readable here (issue #3407): Claude Code
+            # asks for br / zstd, which the meter cannot open — and a gzip'd
+            # stream it could not open either counted nothing
+            ae = meter_accept(" ".join(v for k, v in out.items() if k.lower() == "accept-encoding"))
+            out = {k: v for k, v in out.items() if k.lower() != "accept-encoding"}
+            out["Accept-Encoding"] = ae
         out.update(put)
         # a picked account (issue #2412) may hand a quota 429 to the next one — three times at most
         self.rehome = getattr(self, "auto", False) and cred == "file" and hops < 3
@@ -1269,7 +1344,7 @@ class Proxy(BaseHTTPRequestHandler):
         size = 0
         # metered here only when this login's credential was used (issue #1977):
         # the central route's answer is the cluster proxy's to count
-        meter = Meter() if cred == "file" and 200 <= r.status < 300 else None
+        meter = Meter(r.getheader("Content-Encoding", "")) if cred == "file" and 200 <= r.status < 300 else None
         try:
             if chunked:
                 d = first
@@ -1291,6 +1366,11 @@ class Proxy(BaseHTTPRequestHandler):
             split = meter.split()
             extra["tokens"] = split["in"] + split["cache_write"] + split["out"]
             self.budget.add(provider, extra["tokens"], split, self.budget.worker(sid), acct, meter.model)
+            if extra["tokens"] <= 0 and provider in ("claude", "codex") and self.command == "POST":
+                # a 2xx answer the meter could read nothing from (issue #3407):
+                # said once per answer, never silent
+                extra["meter_miss"] = meter.enc or "no usage"
+                self.budget.miss(extra["meter_miss"])
         self.log(ev="fwd", sid=sid, acct=acct, route=route, cred=cred, provider=provider,
                  m=self.command, path=self.path.split("?")[0], up=u.netloc, status=r.status,
                  ttfb_ms=int(ttfb * 1000), total_ms=int((time.time() - t0) * 1000), bytes=size,

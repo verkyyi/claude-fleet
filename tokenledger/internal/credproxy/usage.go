@@ -2,6 +2,8 @@ package credproxy
 
 import (
 	"bytes"
+	"compress/gzip"
+	"compress/zlib"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -160,6 +162,75 @@ func dig(v map[string]any, keys ...string) any {
 		cur = mm[k]
 	}
 	return cur
+}
+
+// meterCodings are the content codings the meter can open (claude-fleet#3407).
+var meterCodings = map[string]bool{"gzip": true, "x-gzip": true, "deflate": true, "identity": true}
+
+// meterAccept is the Accept-Encoding a metered request goes out with: the
+// client's own list less what the meter cannot open (br, zstd, *), else identity.
+func meterAccept(vs []string) string {
+	var keep []string
+	for _, v := range vs {
+		for _, part := range strings.Split(v, ",") {
+			c := strings.ToLower(strings.TrimSpace(strings.SplitN(part, ";", 2)[0]))
+			if meterCodings[c] {
+				keep = append(keep, strings.TrimSpace(part))
+			}
+		}
+	}
+	if len(keep) == 0 {
+		return "identity"
+	}
+	return strings.Join(keep, ", ")
+}
+
+// decoder is where the meter's copy of an answer goes: as is, or opened
+// (gzip / deflate) on a goroutine of its own — the client always gets the
+// upstream's bytes as they came. Write never fails (it must not fail the
+// client's read); Close waits until everything written was read.
+func (m *meter) decoder(enc string) io.WriteCloser {
+	var open func(io.Reader) (io.Reader, error)
+	switch strings.ToLower(strings.TrimSpace(enc)) {
+	case "", "identity":
+		return nopCloser{m}
+	case "gzip", "x-gzip":
+		open = func(r io.Reader) (io.Reader, error) { return gzip.NewReader(r) }
+	case "deflate":
+		open = func(r io.Reader) (io.Reader, error) { return zlib.NewReader(r) }
+	default:
+		return nopCloser{io.Discard}
+	}
+	pr, pw := io.Pipe()
+	d := &decodeW{pw: pw, done: make(chan struct{})}
+	go func() {
+		defer close(d.done)
+		if zr, err := open(pr); err == nil {
+			_, _ = io.Copy(m, zr)
+		}
+		_, _ = io.Copy(io.Discard, pr)
+	}()
+	return d
+}
+
+type nopCloser struct{ io.Writer }
+
+func (nopCloser) Close() error { return nil }
+
+type decodeW struct {
+	pw   *io.PipeWriter
+	done chan struct{}
+}
+
+func (d *decodeW) Write(p []byte) (int, error) {
+	_, _ = d.pw.Write(p)
+	return len(p), nil
+}
+
+func (d *decodeW) Close() error {
+	_ = d.pw.Close()
+	<-d.done
+	return nil
 }
 
 // usage is what the answer said it used, by kind. An OpenAI-shaped input
