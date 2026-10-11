@@ -1002,6 +1002,12 @@ fi
 # overwrite; a refusal stops only the rest of the list, which is nothing).
 [ -n "$_fid" ] && _sw+=(\; set-window-option -o -t "$win" @fleet_id "$_fid")
 TM "${_sw[@]}" 2>/dev/null
+# A coordinator's record (issue #3330): the record names this session — its key and
+# worker_id — so the hub's 任务 page and `await T<n>` find it. A hub-placed start
+# is filled from the start's answer by the hub itself; no hub ⇒ fleet-task-record
+# exits 3 and nothing is sent.
+case "$TASK_REF" in T[1-9]*) [ -n "$ORIGIN" ] && [ "$ORIGIN" != hub ] \
+  && ( bash "$BIN/fleet-task-record.sh" attach "$TASK_REF" "$win" >/dev/null 2>&1 & ) ;; esac
 [ -n "$_fid" ] || fleet_window_fid "$SESS" "$win" "$SOCK" >/dev/null 2>&1 || :
 fleet_win_role_stamp "$win" worker "$SOCK"   # what it IS, whatever it is renamed to (#1844) — every opener's one stamper
 unset _sw _fid

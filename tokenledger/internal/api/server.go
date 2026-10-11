@@ -456,6 +456,10 @@ func (s *Server) routes() *routeMux {
 		// reaped it and read back by its owner's others (claude-fleet#1609).
 		mux.HandleFunc("/v1/node/worker-records", s.handleNodeWorkerRecords)
 		mux.HandleFunc("/v1/node/progress", s.handleNodeProgress)
+		// The task record's node road (claude-fleet#3330): a coordinator's
+		// record, a question or a park on one, an EPIC member's.
+		mux.HandleFunc(NodeTasksPath, s.handleNodeTasks)
+		mux.HandleFunc(NodeTasksPath+"/", s.handleNodeTasks)
 		mux.Handle("/v1/fleet/peer-certs", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetPeerCerts))))
 		mux.Handle("/v1/fleet/spot", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetSpot))))
 		mux.Handle("/v1/nodes", s.viewerOnly(http.HandlerFunc(s.handleNodes)))

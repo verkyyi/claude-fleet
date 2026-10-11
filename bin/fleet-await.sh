@@ -1,7 +1,7 @@
 #!/bin/bash
 # fleet-await.sh — hand an issue to a worker and WAIT for its outcome (issue #812).
 #
-#   fleet-await.sh <N | wid:<worker_id>> [--timeout <secs>] [--interval <secs>] [--no-spawn]
+#   fleet-await.sh <N | wid:<worker_id> | T<n>> [--timeout <secs>] [--interval <secs>] [--no-spawn]
 #                      [--parent <key>] [--repo <owner/name>] [-L <socket>]
 #
 # The one thing a subagent gave that a worker did not: a result that comes BACK.
@@ -77,6 +77,12 @@
 # all (hub-spawned) is adopted — its @origin is set to yours, so its report lands
 # in your ledger.
 #
+# `T<n>` (issue #3330) is a hub task record: the record's issue (a development task
+# the orchestrator dispatched, or an EPIC member) is waited on exactly as `<N>`
+# with its repo, and the verdict carries a `task: T<n>` line. A record with no
+# issue yet — a no-repo session — is NO-WORKER (5) naming its session: its report
+# lands in your ledger all the same (children). No hub here: NO-WORKER too.
+#
 # No orphans, no bare trap (the fleet-loadgen.sh rule, issue #697): nothing runs in
 # the background — every wait is a FOREGROUND `sleep` capped at the time left, so a
 # SIGINT to the process group takes the sleep with it, and the loop is bounded by
@@ -109,7 +115,7 @@ while [ "$#" -gt 0 ]; do
   esac
   shift
 done
-case "$NUM" in wid:?*) ;; ''|*[!0-9]*) die "usage: fleet-await.sh <issue-number> [--timeout s] [--no-spawn]" ;; esac
+case "$NUM" in wid:?*|T[1-9]*) ;; ''|*[!0-9]*) die "usage: fleet-await.sh <issue-number> [--timeout s] [--no-spawn]" ;; esac
 case "$TIMEOUT" in ''|*[!0-9]*|0) die "--timeout wants a positive number of seconds" ;; esac
 case "$INTERVAL" in ''|*[!0-9]*|0) die "--interval wants a positive number of seconds" ;; esac
 
@@ -143,6 +149,32 @@ sess="$SOCK"; [ -n "$sess" ] || sess=$(fleet_current_session)
 [ -n "$KEY" ] || KEY=$(fleet_origin_key)
 [ -n "$KEY" ] || die "no parent key — run it from a scratch or worker pane (the hub has none), or pass --parent issue-N|scratch-N"
 KEY=$(fleet_origin_canon "$KEY" '' "$sess")
+
+# A hub task record (issue #3330) → its issue, or a refusal naming its session.
+TASK=''
+case "$NUM" in T*)
+  TASK=$NUM
+  case "${TASK#T}" in *[!0-9]*) die "usage: fleet-await.sh <issue-number | T<n>> [--timeout s] [--no-spawn]" ;; esac
+  trec=$(bash "$BIN/fleet-task-record.sh" get "$TASK" 2>/dev/null); trc=$?
+  tget() { printf '%s' "$trec" | python3 -c 'import json,sys
+try: print((json.load(sys.stdin).get("task") or {}).get(sys.argv[1]) or "")
+except ValueError: pass' "$1" 2>/dev/null; }
+  tiss=''; tkey=''
+  if [ "$trc" -eq 0 ]; then tiss=$(tget issue); tkey=$(tget session_key); fi
+  case "$tiss" in
+    */*'#'[1-9]*) NUM=${tiss##*#}; [ -n "$REPO_ARG" ] || REPO_ARG=${tiss%#*} ;;
+    *)
+      case "$trc" in
+        0) note="$TASK has no issue and no session yet"
+           [ -n "$tkey" ] && note="$TASK has no issue — its session $tkey has no repo: its report lands in your ledger (children)" ;;
+        3) note="no hub here — $TASK is a hub task record" ;;
+        *) note="the hub did not answer for $TASK" ;;
+      esac
+      printf 'fleet-await: %s\n' "$note" >&2
+      printf 'NO-WORKER\ntask: %s\nnote: %s\n' "$TASK" "$note"
+      exit 5 ;;
+  esac ;;
+esac
 
 # A worker_id target (issue #1420) → this fleet's issue number, or a refusal.
 case "$NUM" in wid:*)
@@ -285,6 +317,7 @@ finish() {  # <OUTCOME> [<note>]
   esac
   printf '%s\n' "$1"
   printf 'issue: #%s%s\n' "$NUM" "${P_TITLE:+ · $P_TITLE}"
+  [ -n "$TASK" ] && printf 'task: %s\n' "$TASK"
   [ -n "$P_PR" ] && printf 'pr: #%s\n' "${P_PR#\#}"
   [ -n "$P_SUM" ] && printf 'summary: %s\n' "$P_SUM"
   [ -n "${2:-}" ] && printf 'note: %s\n' "$2"
@@ -473,6 +506,7 @@ if [ -z "$wid" ]; then
   # A worker waits on a session that exists, never spawns one (issue #2960).
   fleet_spawn_refused && finish NO-WORKER "#$NUM has no live worker, and $FLEET_SPAWN_REFUSAL"
   sargs=("$NUM" "$sess" --origin "$KEY")
+  [ -n "$TASK" ] && sargs+=(--task "$TASK")   # the record's worker carries @task (#3330)
   [ -n "$REPO_ARG" ] && sargs+=(--repo "$REPO_ARG")
   err=$(bash "$BIN/dash-issue-session.sh" "${sargs[@]}" 2>&1 >/dev/null); rc=$?
   case "$rc" in

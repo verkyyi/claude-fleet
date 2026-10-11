@@ -804,6 +804,10 @@ fleet_win_role_stamp "$win" worker "$SOCK"   # what it IS, whatever it is rename
 # EXITED": a turn that merely ended is the session waiting for you, not over.
 [ "$TEST_ID" = 1 ] && { TM set-window-option -t "$win" @test_identity 1 2>/dev/null; [ -n "$REAP" ] || REAP=done:10m; }
 [ -n "$TASK_REF" ] && TM set-window-option -t "$win" @task "$TASK_REF" 2>/dev/null   # the hub's record (#3325)
+# … and a coordinator's record names this session (issue #3330; the hub fills its
+# own starts' from the answer, no hub ⇒ fleet-task-record exits 3).
+[ -n "$TASK_REF" ] && [ -n "$ORIGIN" ] && [ "$ORIGIN" != hub ] \
+  && ( bash "$BIN/fleet-task-record.sh" attach "$TASK_REF" "$win" >/dev/null 2>&1 & )
 if [ -z "$REAP" ]; then
   case "$PROMPT" in /loop|/loop[[:space:]]*) REAP=loop-end ;; *) REAP=done:15m ;; esac
 fi

@@ -21,6 +21,9 @@ unchanged. One line per event:
   {"seq": 3, "ts": "2026-09-22T10:00:00Z", "child": "issue-101", "state": "MERGED",
    "pr": "950", "verdict": "", "summary": "…", "title": "…"}
 
+(+ "task": "T218" when the child carries a hub task record — issue #3330; `show`
+carries it on the child, the text view puts it before the title.)
+
 That shape, `children_append`, and `fleet-children.sh`'s text + `--json` output are
 a stable interface (C4/C5/C6/R1 of EPIC #935 build on it): add fields, never rename.
 
@@ -239,6 +242,9 @@ def append_row(path, raw):
     # out the ones the writing area opened. Kept only when set.
     pfid = str(raw.get('pfid') or '').lower()
     pfid = pfid if is_fid(pfid) else ''
+    # task (issue #3330): the child's hub task record, T<n>. Kept only when set.
+    task = str(raw.get('task') or '')
+    task = task if task[:1] == 'T' and task[1:].isdigit() and task[1:2] != '0' and len(task) <= 11 else ''
     deg = {'lines': ''.join(ch for ch in str(raw.get('lines') or '') if ch.isdigit())[:8],
            'sample': clean(str(raw.get('sample') or '').replace('<', '‹').replace('>', '›'), 1, 64)}
     if not ev['child'] or ev['state'] not in STATES:
@@ -285,6 +291,8 @@ def append_row(path, raw):
             ev['fid'] = fid
         if pfid:
             ev['pfid'] = pfid
+        if task:
+            ev['task'] = task
         ev.update((f, v) for f, v in gens.items() if v)
         ev.update((f, v) for f, v in deg.items() if v)
         fh.seek(0, os.SEEK_END)
@@ -969,6 +977,9 @@ def cmd_show(a):
                 kids[-1]['remote_state'], kids[-1]['remote_node'] = hs
         if disp:
             kids[-1]['dispatch'] = disp
+        task = next((e['task'] for e in reversed(evs) if e.get('task')), '')
+        if task:                        # the child's hub record (issue #3330): only then
+            kids[-1]['task'] = task
         kids[-1]['progress'] = progress_of(live, st, disp)
         if stale_claim(live, last, disp, hub_said, hub_state_of(child, hub)):
             # an added field, only then: every other row is unchanged (issue #1610)
@@ -1031,7 +1042,8 @@ def cmd_show(a):
             live = '%s %s' % (k['remote_node'], k['remote_state'])
         elif k.get('node') and not k['live']:
             live += (' ↗' if d else ' · ') + k['node']
-        print('  %s %-16s %-18s %-22s %s' % (k['bucket'], k['child'], live, rep.strip(), k['title']))
+        title = ('%s %s' % (k['task'], k['title'])).strip() if k.get('task') else k['title']
+        print('  %s %-16s %-18s %-22s %s' % (k['bucket'], k['child'], live, rep.strip(), title))
     print(text)
     return 0
 

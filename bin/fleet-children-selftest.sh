@@ -21,6 +21,9 @@
 #             parent's old bare book (`scratch-7.ndjson`) and a child's bare
 #             @origin are read as that repo's — one book, each child once — and
 #             fleet_origin_heal rewrites the bare @origin so the dash agrees.
+#   TASK      (issue #3330) a child carrying a hub task record (@task T218) writes
+#             `task` on its rows; `--json` carries it on the child, the text view
+#             puts it before the title; a child without one is byte for byte.
 #
 # Runs on a DEDICATED tmux server on its own -L label (never the live server,
 # issue #159). The dash half replays that server's window list through a PATH shim,
@@ -112,7 +115,7 @@ opt() { TM set-window-option -t "$1" "$2" "$3" 2>/dev/null; }
 mkdir -p "$WORK/repo-scratch-7"
 new_win '分拆方案'; PARENT="$WID"; opt "$PARENT" @raw 1; opt "$PARENT" @worktree "$WORK/repo-scratch-7"; opt "$PARENT" @claude_state idle
 new_win kid-merged; K1="$WID"; opt "$K1" @issue 101; opt "$K1" @origin "${P}scratch-7"; opt "$K1" @claude_state 'done'
-new_win kid-failed; K2="$WID"; opt "$K2" @issue 102; opt "$K2" @origin "${P}scratch-7"; opt "$K2" @claude_state needs
+new_win kid-failed; K2="$WID"; opt "$K2" @issue 102; opt "$K2" @origin "${P}scratch-7"; opt "$K2" @claude_state needs; opt "$K2" @task T218
 new_win kid-stopped; K3="$WID"; opt "$K3" @issue 103; opt "$K3" @origin "${P}scratch-7"; opt "$K3" @claude_state 'done'
 new_win stranger; opt "$WID" @issue 900; opt "$WID" @claude_state 'done'      # hub-spawned: nobody's child
 
@@ -133,6 +136,7 @@ got = [(e["seq"], e["child"], e["state"], e["pr"]) for e in ev]
 assert got == [(1, "acme-app:issue-101", "MERGED", "501"), (2, "acme-app:issue-102", "FAILED", "502"),
                (3, "acme-app:issue-103", "STOPPED", "")], got
 assert ev[0]["title"] == "kid-merged" and ev[0]["summary"] == "landed", ev[0]
+assert ev[1]["task"] == "T218" and "task" not in ev[0] and "task" not in ev[2], ev   # TASK (#3330)
 PY
 CHECKS=$((CHECKS + 1))
 # --dry-run sends nothing, so it records nothing either.
@@ -170,6 +174,7 @@ eq "fleet-children's summary == the dash parent row's badge" "$want" "$(kn "$(su
 out=$(bash "$CLI" -L "$LBL" scratch-7 2>&1)
 has "a row per child: the FAILED one is loud" '! acme-app:issue-102' "$out"
 has "…the MERGED one is done, with its PR"   'MERGED #501' "$out"
+has "…the hub task record before its title (#3330)" 'T218 kid-failed' "$out"
 case "$out" in *issue-900*) fail "a hub-spawned window is nobody's child" "$out" ;; esac
 CHECKS=$((CHECKS + 1))
 
@@ -182,6 +187,7 @@ s = d["summary"]
 assert (s["total"], s["done"], s["needs"], s["text"]) == (3, 2, 1, "2/3 ✓ · 1!"), s
 k = {c["child"]: c for c in d["children"]}
 assert k["acme-app:issue-101"]["last"]["state"] == "MERGED" and k["acme-app:issue-101"]["live"], k
+assert k["acme-app:issue-102"]["task"] == "T218" and "task" not in k["acme-app:issue-101"], k   # TASK (#3330)
 ' || fail "--json shape"
 CHECKS=$((CHECKS + 1))
 bash "$CLI" -L "$LBL" scratch-7 --json --since 2 | python3 -c '

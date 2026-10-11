@@ -30,6 +30,7 @@ var enrollmentTokenRoutes = []struct{ method, path string }{
 	{http.MethodGet, "/v1/node/self"},
 	{http.MethodPost, "/v1/node/maintenance"},
 	{http.MethodPost, "/v1/node/progress"},
+	{http.MethodPost, NodeTasksPath},
 	{http.MethodPost, "/v1/node/relay-credential"},
 	{http.MethodPost, "/v1/fleet/session-cred"},
 	{http.MethodGet, control.TeamBundlePath},

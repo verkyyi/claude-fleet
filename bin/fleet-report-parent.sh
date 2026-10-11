@@ -147,7 +147,7 @@ TM() { if [ -n "$SOCK" ]; then tmux -L "$SOCK" "$@"; else tmux "$@"; fi; }
 target="${WIN:-${TMUX_PANE:-}}"
 [ -n "$target" ] || quiet 'no child window (no --win and no $TMUX_PANE)'
 row=$(TM display-message -p -t "$target" \
-        '#{window_id}|#{@origin}|#{@issue}|#{@reported}|#{@worktree}|#{@claude_state}|#{@origin_wid}|#{@origin_gen}|#{@origin_retired}|#{@origin_fid}|#{@fleet_id}|#{window_name}' 2>/dev/null)
+        '#{window_id}|#{@origin}|#{@issue}|#{@reported}|#{@worktree}|#{@claude_state}|#{@origin_wid}|#{@origin_gen}|#{@origin_retired}|#{@origin_fid}|#{@fleet_id}|#{@task}|#{window_name}' 2>/dev/null)
 [ -n "$row" ] || quiet "child window '$target' is gone"
 selfwin=${row%%|*};  row=${row#*|}
 worigin=${row%%|*};  row=${row#*|}
@@ -159,7 +159,9 @@ owid=${row%%|*};     row=${row#*|}
 wogen=${row%%|*};    row=${row#*|}
 wretired=${row%%|*}; row=${row#*|}
 ofid=${row%%|*};     row=${row#*|}
-selffid=${row%%|*};  wname=${row#*|}
+selffid=${row%%|*};  row=${row#*|}
+wtask=${row%%|*};    wname=${row#*|}   # the hub's task record (issue #3330), T<n> or ''
+case "$wtask" in T[1-9]*) case "${wtask#T}" in *[!0-9]*) wtask='' ;; esac ;; *) wtask='' ;; esac
 
 case "$ORIGIN" in
   wid:*) owid=${ORIGIN#wid:}; worigin=${owid#*/}; ofid=''
@@ -355,15 +357,18 @@ esac
 # (@origin_gen); a relayed row is filed in someone else's book and carries none.
 # `fid` is the child's own @fleet_id (issue #1351) — its identity, never its name;
 # `pfid` the parent's (@origin_fid), so a book can say which session it was
-# (issue #1955: fleet-history.sh drafts leaves out the writing area's).
+# (issue #1955: fleet-history.sh drafts leaves out the writing area's). `task` the
+# child's hub task record (issue #3330) — only when it has one.
 row_json() {
-  RJ_PFID="$ofid" RJ_FID="$selffid" RJ_GEN="$wogen" RJ_CGEN="$selfgen" RJ_CKEY="$selfgkey" RJ_LINES="$DROWS" RJ_SAMPLE="$DSAMPLE" python3 -c 'import json, os, sys
+  RJ_TASK="$wtask" RJ_PFID="$ofid" RJ_FID="$selffid" RJ_GEN="$wogen" RJ_CGEN="$selfgen" RJ_CKEY="$selfgkey" RJ_LINES="$DROWS" RJ_SAMPLE="$DSAMPLE" python3 -c 'import json, os, sys
 d = dict(zip(("child","state","pr","verdict","summary","title","tier","relayed_from"), sys.argv[1:]))
 for f in ("lines", "sample"):   # a DEGENERATE row (issue #1557); every other row is unchanged
     if os.environ.get("RJ_" + f.upper()):
         d[f] = os.environ["RJ_" + f.upper()]
 if os.environ.get("RJ_FID"):
     d["fid"] = os.environ["RJ_FID"]
+if os.environ.get("RJ_TASK"):
+    d["task"] = os.environ["RJ_TASK"]
 if os.environ.get("RJ_PFID") and "relayed_from" not in d:
     d["pfid"] = os.environ["RJ_PFID"]
 if os.environ.get("RJ_GEN") and "relayed_from" not in d:

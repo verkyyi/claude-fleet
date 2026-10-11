@@ -31,7 +31,9 @@ nothing (共同约定 4):
      (fleet_win_retire — fleet-restore --auto never pulls it back) and stopped
      through fleet-worker-stop.sh (its /fleet-history row; the worktree stays), the
      hub lease released, the issue labelled `blocked` and given ONE comment
-     「停放：等 …」 carrying `<!-- fleet:park wait=<cond> sid=<sid> -->`.
+     「停放：等 …」 carrying `<!-- fleet:park wait=<cond> sid=<sid> -->` — and a
+     window carrying a hub task record (@task, issue #3330) has the same 「停放：等 …」
+     put on the record (fleet-task-record.sh set --parked), cleared at its wake.
      There is no @park on a live window: parked = no window + `blocked` + the mark.
      A condition already met before step 2 cancels the park.
 
@@ -60,7 +62,8 @@ Seams (selftest): FLEET_PARK_STATE_CMD (argv + wid → a reap word),
 FLEET_PARK_BUSY_CMD (argv + wid; rc 0 = busy), FLEET_PARK_SEND_CMD (argv + wid, text
 on stdin), FLEET_PARK_STOP_CMD (argv + session key), FLEET_PARK_SPAWN_CMD (argv +
 dash-issue-session.sh's), FLEET_PARK_GH_CMD (argv + label|comment|state verb…),
-FLEET_PARK_REPORT_CMD (argv + fleet-report-parent.sh's); comments come through
+FLEET_PARK_REPORT_CMD (argv + fleet-report-parent.sh's), FLEET_PARK_TASK_CMD (argv +
+fleet-task-record.sh's `set T<n> …`); comments come through
 fleet_decision.py's FLEET_DECISION_COMMENTS_CMD.
 """
 import argparse
@@ -208,11 +211,11 @@ def peek():
 # ---- windows ----------------------------------------------------------------------
 
 WIN_FIELDS = ("wid", "role", "issue", "repo", "wt", "fid", "sid", "agent", "state", "state_ts", "lifecycle",
-              "pin", "remote", "reap", "origin", "loop", "manifest", "name")
+              "pin", "remote", "reap", "origin", "loop", "manifest", "task", "name")
 WIN_FMT = "\t".join(("#{window_id}", "#{@fleet_role}", "#{@issue}", "#{@repo}", "#{@worktree}", "#{@fleet_id}",
                      "#{@cc_session_id}", "#{@cc_agent}", "#{@claude_state}", "#{@claude_state_ts}",
                      "#{@worker_lifecycle}", "#{@pin}", "#{@remote}", "#{@reap_policy}", "#{@origin}",
-                     "#{@loop}", "#{@handoff_manifest}", "#{window_name}"))
+                     "#{@loop}", "#{@handoff_manifest}", "#{@task}", "#{window_name}"))
 
 
 def windows(sess):
@@ -400,6 +403,25 @@ def gh(verb, repo, n, *rest, body=None):
     return False
 
 
+# ---- the hub's task record (issue #3330) ------------------------------------------
+
+def task_of(w):
+    """The window's hub task record (@task), or ""."""
+    t = w.get("task") or ""
+    return t if re.match(r"^T[1-9][0-9]{0,9}$", t) else ""
+
+
+def task_mirror(task, *args):
+    """A park / a wake on the record (「停放」), best-effort: no record, no hub (the
+    script's exit 3) or a hub that does not answer changes nothing else here."""
+    if not task:
+        return None
+    r = seam("FLEET_PARK_TASK_CMD", ["set", task] + list(args))
+    if r is None:
+        r = run(["bash", str(BIN / "fleet-task-record.sh"), "set", task] + list(args), timeout=30)
+    return r.returncode
+
+
 # ---- park -------------------------------------------------------------------------
 
 def park_dir(sess):
@@ -479,11 +501,13 @@ def finalize(sess, book, p, w, now, budget):
         spent += 1
     if gh("comment", repo, n, body=body):
         spent += 1
+    # …and on its hub record, when it has one (issue #3330): the 「停放」 column.
+    task_mirror(task_of(w), "--parked", tr("park_comment_head_fmt", " / ".join(say_cond(c) for c in p["wait"])))
     book.d["parked"][ref] = {"ref": ref, "key": p["key"], "wait": p["wait"], "why": p.get("why", ""),
                              "at": int(now), "sid": w["sid"], "agent": w["agent"], "fid": w["fid"],
                              "wt": w["wt"], "branch": branch, "pushed": pushed, "dirty": dirty,
                              "handoff": hp if has_handoff else "", "capture": str(cap),
-                             "origin": w["origin"], "session": sess}
+                             "origin": w["origin"], "session": sess, "task": task_of(w)}
     book.d["pending"].pop(ref, None)
     event("park", ref, wait=p["wait"], sid=w["sid"], pushed=pushed, handoff=bool(has_handoff))
     since = book.d.setdefault("stuck", {}).pop(ref, None)
@@ -628,6 +652,7 @@ def wake(sess, book, ref, met, now, budget):
         gh("label", repo, n, "add")
         return 2
     book.d["parked"].pop(ref, None)
+    task_mirror(p.get("task", ""), "--clear", "parked")   # back at work: off the record (#3330)
     book.d["woken"].append({"ref": ref, "at": int(now), "met": met, "sid": p.get("sid", ""),
                             "parked_at": p.get("at", 0)})
     event("wake", ref, met=met, sid=p.get("sid", ""), held=int(now) - p.get("at", int(now)))

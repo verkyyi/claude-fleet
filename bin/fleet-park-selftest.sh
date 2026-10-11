@@ -83,11 +83,12 @@ for a in "\$@"; do [ "\$prev" = --seed-file ] && cat "\$a" > "$S/seed.last"; pre
 exit \$(cat "$S/spawn.rc" 2>/dev/null || echo 0)
 EOF
 printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s/reported"\n' "$S" > "$S/report"
+printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s/task.log"\n' "$S" > "$S/task"
 printf '#!/bin/sh\nprintf "{\\"comments\\": []}\\n"\n' > "$S/comments-cmd"
 chmod +x "$S"/*
 export FLEET_PARK_STATE_CMD="$S/state" FLEET_PARK_BUSY_CMD="$S/busy" FLEET_PARK_SEND_CMD="$S/send" \
        FLEET_PARK_STOP_CMD="$S/stop" FLEET_PARK_GH_CMD="$S/gh" FLEET_PARK_SPAWN_CMD="$S/spawn" \
-       FLEET_PARK_REPORT_CMD="$S/report" FLEET_DECISION_COMMENTS_CMD="$S/comments-cmd"
+       FLEET_PARK_REPORT_CMD="$S/report" FLEET_DECISION_COMMENTS_CMD="$S/comments-cmd" FLEET_PARK_TASK_CMD="$S/task"
 park() { python3 "$BIN/fleet_park.py" "$@"; }
 o() { tmux show-options -wqv -t "$1" "$2"; }
 
@@ -118,6 +119,7 @@ mkwin() { # mkwin <issue> <commit-age-secs> → window id; worktree $WORK/wt-<n>
   || { echo "SKIP  cannot start an isolated tmux server"; exit 0; }
 W7=$(mkwin 7 7200); W8=$(mkwin 8 7200); W9=$(mkwin 9 7200); W10=$(mkwin 10 60); W11=$(mkwin 11 7200)
 W12=$(mkwin 12 7200)
+tmux set-option -w -t "$W7" @task T41                                # a hub task record (issue #3330)
 touch "$S/busy.$W8"                                                  # a /loop or a bg job
 tmux set-option -w -t "$W9" @claude_state_ts "$((NOW - 100))"       # blocked a moment ago
 echo 'done' > "$S/state.$W10"                                          # idle, but its branch just moved
@@ -181,6 +183,8 @@ grep -qx 'label o/r 7 add' "$S/gh.log" && ok "B labelled blocked" || bad "B no b
 grep -q "停放：等 有人答「要不要换库」" "$S/comments" && grep -q "交接：$HP" "$S/comments" \
   && grep -q "<!-- fleet:park wait=answer:d1 sid=$SID7 -->" "$S/comments" \
   && ok "B one 停放 comment: what it waits for, the handoff, the mark" || bad "B the comment: $(cat "$S/comments")"
+[ "$(cat "$S/task.log" 2>/dev/null)" = "set T41 --parked 停放：等 有人答「要不要换库」" ] \
+  && ok "B its hub record says 停放 too (issue #3330)" || bad "B the record: $(cat "$S/task.log" 2>&1)"
 [ "$(grep -c '^comment' "$S/gh.log")" = 1 ] && ok "B exactly one comment" || bad "B comments: $(grep -c '^comment' "$S/gh.log")"
 ( . "$BIN/fleet-lib.sh"; fleet_parked o/r 7 ) && ok "B fleet_parked o/r 7 (fleet-restore.sh skips it)" \
   || bad "B fleet_parked does not know it: $(cat "$FLEET_CONF_DIR/global/park.idx" 2>&1)"
@@ -210,6 +214,8 @@ grep -q "^7 pk --repo o/r --force --seed-file .* --resume $SID7 --origin issue-1
 grep -q "$HP" "$S/seed.last" 2>/dev/null && grep -q '不要从头来' "$S/seed.last" \
   && ok "D its first turn reads the handoff and goes on" || bad "D seed: $(cat "$S/seed.last" 2>&1)"
 grep -qx 'label o/r 7 remove' "$S/gh.log" && ok "D blocked comes off" || bad "D label: $(cat "$S/gh.log")"
+[ "$(tail -1 "$S/task.log")" = "set T41 --clear parked" ] && [ "$(grep -c T41 "$S/task.log")" = 2 ] \
+  && ok "D …and off its hub record; #11 (no record) never touched one" || bad "D the record: $(cat "$S/task.log")"
 ( . "$BIN/fleet-lib.sh"; fleet_parked o/r 7 ) && bad "D still in park.idx after waking" || ok "D out of the book"
 ( . "$BIN/fleet-lib.sh"; fleet_parked o/r 11 ) && ok "D the other one stays parked" || bad "D #11 lost its park"
 

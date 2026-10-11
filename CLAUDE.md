@@ -368,6 +368,14 @@ Do not install from memory: read the doc and work from it.
   record, never a generic tool road. The top bar shows `#N`, else `T<n>`; the
   hub's 任务 page (`/tasks`) lists them. No `task` asked, or a node without
   `CapTask`, or no hub ⇒ byte for byte as before (`TestTaskOffAddsNothing`).
+  **The fleet's coordinators write the same record from a machine** (issue #3330):
+  `bin/fleet-task-record.sh` (`/v1/node/tasks`, the node token on curl's stdin) —
+  the orchestrator's `task` tool opens the record FIRST and only a development
+  task then files its issue (`fleet-issue-file.sh --task T<n>`, the worker stamped
+  `@task`); a child report carries `task`, `await` takes `T<n>`, the steward's
+  `ask` and a park write 「问过你」 / 「停放」 on the record (no issue: only there),
+  and an EPIC member gets a read-only record (`epic-member`). No hub ⇒ the script
+  exits 3 and every caller is byte for byte as before.
 - **A session's first turn is the person's own words; the flow rides a hook**
   (issue #3331, EPIC #3178 ⑧, D2 = ①). `dash-issue-session.sh` seeds a Claude
   worker with `--words-file` (⌘P's cold `new` start hands the body, else the

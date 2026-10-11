@@ -757,10 +757,37 @@ def tool_set_reap(args):
 
 
 def tool_await(args):
+    if ("issue" in args) == ("task" in args):
+        raise Refused("await takes issue or task (T<n>, issue #3330) — exactly one")
+    if "task" in args and "repo" in args:
+        raise Refused("a task record names its own repo — drop repo")
     repo = check_repo(args)
     t = args.get("timeout", AWAIT_DEFAULT_S)
-    return script([str(BIN / "fleet-await.sh"), str(args["issue"]), "--timeout", str(t)] + repo,
+    target = args["task"] if "task" in args else str(args["issue"])
+    return script([str(BIN / "fleet-await.sh"), target, "--timeout", str(t)] + repo,
                   t + AWAIT_SLACK_S, env=hub_env(ASSERT_TTL_S))
+
+
+def tool_task(args):
+    """The orchestrator's dispatch, record first (issue #3330): fleet-task-record.sh
+    dispatch — the hub's T<n>, then a repo task's issue (+ worker), or a no-repo
+    session given the words."""
+    if args.get("spawn"):
+        spawn_gate()
+    argv = [str(BIN / "fleet-task-record.sh"), "dispatch", "--title", args["title"], "--body-file", "-"]
+    if args.get("repo"):
+        argv += ["--repo", args["repo"]]
+    if "rule" in args:
+        argv += ["--rule", str(args["rule"])]
+    if args.get("spawn"):
+        argv.append("--spawn")
+    if args.get("reap"):
+        argv += ["--reap", args["reap"]]
+    if args.get("agent"):
+        argv += ["--agent", args["agent"]]
+    r = run(argv, input_text=args.get("body", ""), check=False, timeout=FILE_TIMEOUT_S + SPAWN_TIMEOUT_S,
+            env=hub_env(ASSERT_TTL_S))
+    return {"command": "fleet-task-record.sh", "exit": r.returncode, "stdout": r.stdout, "stderr": r.stderr}
 
 
 def tool_agents(_args):
@@ -795,6 +822,24 @@ def pane_issue():
     return v if v.isdigit() else ""
 
 
+def pane_task():
+    """This window's hub task record (@task, issue #3325), or "" — off THIS pane."""
+    pane = os.environ.get("TMUX_PANE", "")
+    if not os.environ.get("TMUX") or not pane:
+        return ""
+    r = run(["tmux", "display-message", "-p", "-t", pane, "#{@task}"], check=False, timeout=STATUS_TIMEOUT_S)
+    v = r.stdout.strip()
+    return v if re.match(r"^T[1-9][0-9]{0,9}$", v) else ""
+
+
+def task_asked(task, line):
+    """The question on the hub's record (issue #3330): 「问过你」. None when there is
+    no record; the script's result otherwise (exit 3 = no hub here, nothing sent)."""
+    if not task:
+        return None
+    return script([str(BIN / "fleet-task-record.sh"), "set", task, "--asked", line], WRITE_TIMEOUT_S)
+
+
 def tool_report(args):
     argv = [str(BIN / "fleet-report-parent.sh"), "--state", args["state"]]
     if "pr" in args:
@@ -816,9 +861,21 @@ except ImportError:   # a half-synced install: ask posts today's body
 
 def tool_ask(args):
     issue = str(args["issue"]) if "issue" in args else pane_issue()
+    # A session's hub task record (issue #3330): with no issue the question goes on
+    # the record ALONE (「问过你」); with one it is mirrored there. Neither ⇒ as before.
+    task = pane_task() if "issue" not in args else ""
+    head = ASK_HEAD[args.get("kind", "question")] + args["question"]
+    if not issue and task:
+        rec = task_asked(task, head)
+        if rec["exit"] != 0:
+            raise Refused("this window's record %s could not take the question (%s) — ask in your reply"
+                          % (task, (rec.get("stderr") or "no hub here").strip() or "exit %d" % rec["exit"]))
+        red = stdin_script(["sh", str(BIN / "set-claude-state.sh"), "blocked"], "", STATUS_TIMEOUT_S)
+        red["command"] = "set-claude-state.sh"
+        return dict(rec, task=task, body=head, state=red)
     if not issue:
         raise Refused("this window has no bound issue to ask on — pass issue, or ask in your reply")
-    body = ASK_HEAD[args.get("kind", "question")] + args["question"]
+    body = head
     fields = [k for k in ASK_FIELDS if k in args]
     if fields or (fleet_decision and fleet_decision.steward_on()):
         # the decision format (issue #2669): one marker the steward reads back;
@@ -834,7 +891,11 @@ def tool_ask(args):
     # to prevent. stdin pinned shut — `blocked` reads no hook payload.
     red = stdin_script(["sh", str(BIN / "set-claude-state.sh"), "blocked"], "", STATUS_TIMEOUT_S)
     red["command"] = "set-claude-state.sh"
-    return dict(said, issue=int(issue), body=body, state=red)
+    out = dict(said, issue=int(issue), body=body, state=red)
+    mirror = task_asked(task, head)
+    if mirror is not None:
+        out["task"], out["record"] = task, mirror
+    return out
 
 
 def tool_answer_dialog(args):
@@ -980,6 +1041,8 @@ def tool_file_issue(args):
         argv += ["--breakage-key", args["breakage_key"]]
     if "rule" in args:
         argv += ["--rule", str(args["rule"])]
+    if "task" in args:
+        argv += ["--task", args["task"]]
     data = script(argv, FILE_TIMEOUT_S)
     if unspawned:   # issue #3113: filed as asked, nobody started
         data["stderr"] = (data.get("stderr") or "") + ORCH_HINT + "\n"
@@ -1123,6 +1186,8 @@ REPO = {"type": "string", "pattern": r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$",
         "description": "owner/name of a repo THIS fleet hosts (the repos tool lists them). "
                        "Omit for the fleet's default repo."}
 NO_ARGS = {"type": "object", "properties": {}, "additionalProperties": False}
+# A hub task record (issue #3325): T<n>.
+TASK_REF = {"type": "string", "pattern": "^T[1-9][0-9]{0,9}$", "description": "A hub task record, T<n>."}
 
 # The debugger's three (issue #2893): a debug report on the hub, read and answered
 # as this login's node — the hub answers only the login the report was sent to.
@@ -1194,10 +1259,32 @@ TOOLS = {
                        "only waits on a live worker — no spawn (issue #2960).",
         "inputSchema": {"type": "object", "properties": {
             "issue": ISSUE, "repo": REPO,
+            "task": dict(TASK_REF, description="Wait on a hub task record instead (issue #3330): its issue's "
+                                               "worker; a record with no issue answers NO-WORKER naming its session."),
             "timeout": {"type": "integer", "minimum": 1, "maximum": AWAIT_MAX_S,
                         "description": "Seconds to wait before answering TIMEOUT (default %d, at most %d)."
                                        % (AWAIT_DEFAULT_S, AWAIT_MAX_S)}},
-            "required": ["issue"], "additionalProperties": False}}),
+            "additionalProperties": False}}),
+    "task": (tool_task, {
+        "description": "派 — dispatch a piece of work RECORD FIRST (issue #3330, bin/fleet-task-record.sh "
+                       "dispatch): the hub writes task record T<n> (first stdout line); with repo — a "
+                       "development task — its issue is filed and hung on the record (+ spawn: its worker, "
+                       "stamped @task; the URL follows); without repo + spawn a no-repo session is opened with "
+                       "the words. rule goes on the record and the issue. No hub here: a repo task is filed "
+                       "exactly as file_issue would (no T line); a no-repo one exits 3 — file an issue instead. "
+                       "await takes the T<n>.",
+        "inputSchema": {"type": "object", "properties": {
+            "title": {"type": "string", "description": "The task in one line (the person's words)."},
+            "body": {"type": "string", "description": "The rest of the words (the issue body / the session's "
+                                                      "first message)."},
+            "repo": REPO,
+            "rule": {"type": "integer", "minimum": 1,
+                     "description": "The rule-table number this dispatch follows (fleet-role.py rules)."},
+            "spawn": {"type": "boolean", "description": "Start its session now."},
+            "reap": dict(REAP_POLICY, description="When the fleet may close a no-repo session on its own."),
+            "agent": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$",
+                      "description": "The agent file a no-repo session starts as (issue #3122)."}},
+            "required": ["title"], "additionalProperties": False}}),
     "send": (tool_send, {
         "description": "Send text to a live fleet peer as its next turn (bin/fleet-peer-send.sh). "
                        "to is issue:<N>, scratch-<N>, orchestrator or parent.",
@@ -1223,7 +1310,9 @@ TOOLS = {
         "description": "问 — you are blocked on the operator: a question only they can answer, or an "
                        "authorization you cannot grant yourself. Posts the question on the bound issue "
                        "(bin/fleet-comment.sh --note, as `⛔ blocked: …`) and turns this window red on the dash "
-                       "(set-claude-state.sh blocked) until the next prompt arrives. The answer comes back as "
+                       "(set-claude-state.sh blocked) until the next prompt arrives. A session with no issue but "
+                       "a hub task record (@task) puts the question on the record instead (「问过你」, "
+                       "bin/fleet-task-record.sh — issue #3330); one with both mirrors it there. The answer comes back as "
                        "your next turn, by the existing channels. Then end your turn — do not spin. Give "
                        "suggest (+ default / due): with the steward installed and someone holding its seat, "
                        "past the deadline it answers with the suggestion; otherwise the question waits for "
@@ -1387,6 +1476,8 @@ TOOLS = {
                              "description": "A fingerprint already computed (fleet_breakage_key) instead of probing."},
             "rule": {"type": "integer", "minimum": 1,
                      "description": "The rule-table number this dispatch follows (fleet-role.py rules)."},
+            "task": dict(TASK_REF, description="The hub task record this issue is filed FOR (issue #3330): "
+                                               "hung on it, and a spawn's worker carries it."),
             "repo": REPO},
             "required": ["title"], "additionalProperties": False}}),
     "gh": (tool_gh, {
@@ -1493,7 +1584,7 @@ LEGACY = {
 # (a dispatch-group call there is road=legacy, one version — # compat-1v: 下一批删)
 # but LISTS only CORE; `fleet-orch` lists and answers ORCH — take_role among them (#3114).
 ORCH_SERVER = "fleet-orch"
-ORCH_GROUP = ("spawn", "await", "children", "answer_dialog", "send", "take_role")
+ORCH_GROUP = ("spawn", "await", "children", "answer_dialog", "send", "take_role", "task")
 CORE = {n: e for n, e in TOOLS.items() if n not in ORCH_GROUP}
 ORCH = {n: TOOLS[n] for n in ORCH_GROUP}
 # What `fleet` lists: CORE, unless this process took over (#1898) from a server of a

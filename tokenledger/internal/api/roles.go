@@ -73,6 +73,7 @@ var routeAccess = map[string]string{
 	NodeLeavePath:     accessSelf,
 	"/v1/node/client": accessSelf, "/v1/node/client/actions": accessSelf,
 	"/v1/node/worker-records": accessSelf, "/v1/node/progress": accessSelf,
+	NodeTasksPath: accessSelf, NodeTasksPath + "/": accessSelf,
 	"/v1/node/credentials": accessSelf,
 	// The direct door (claude-fleet#3068): a machine's own list and record.
 	control.EntryKeysNodePath: accessSelf, control.EntryAuditNodePath: accessSelf,

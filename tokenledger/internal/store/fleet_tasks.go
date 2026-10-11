@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS fleet_tasks (
   pr           TEXT NOT NULL DEFAULT '',
   asked        TEXT NOT NULL DEFAULT '',
   parked       TEXT NOT NULL DEFAULT '',
+  rule         TEXT NOT NULL DEFAULT '',
   created_at   TEXT NOT NULL,
   updated_at   TEXT NOT NULL
 );
@@ -59,28 +60,31 @@ const (
 
 // FleetTask is one task record.
 type FleetTask struct {
-	ID          int64     `json:"-"`
-	Ref         string    `json:"id"` // T<id>
-	Owner       string    `json:"owner"`
-	Title       string    `json:"title"`
-	Via         string    `json:"via"`
-	Device      string    `json:"device"`
-	Repo        string    `json:"repo"`
-	Agent       string    `json:"agent"`
-	Machine     string    `json:"machine"`
-	Login       string    `json:"login"`
-	WorkerID    string    `json:"worker_id"`
-	SessionKey  string    `json:"session_key"`
-	OperationID string    `json:"operation_id"`
-	State       string    `json:"state"`
-	Note        string    `json:"note"`
-	Issue       string    `json:"issue"`
-	PR          string    `json:"pr"`
-	Asked       string    `json:"asked"`
-	Parked      string    `json:"parked"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
-	token       string
+	ID          int64  `json:"-"`
+	Ref         string `json:"id"` // T<id>
+	Owner       string `json:"owner"`
+	Title       string `json:"title"`
+	Via         string `json:"via"`
+	Device      string `json:"device"`
+	Repo        string `json:"repo"`
+	Agent       string `json:"agent"`
+	Machine     string `json:"machine"`
+	Login       string `json:"login"`
+	WorkerID    string `json:"worker_id"`
+	SessionKey  string `json:"session_key"`
+	OperationID string `json:"operation_id"`
+	State       string `json:"state"`
+	Note        string `json:"note"`
+	Issue       string `json:"issue"`
+	PR          string `json:"pr"`
+	Asked       string `json:"asked"`
+	Parked      string `json:"parked"`
+	// Rule is the dispatch rule a coordinator's record was given under
+	// (claude-fleet#3330): `n=<N> v=<version>`, the issue body's marker's words.
+	Rule      string    `json:"rule,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	token     string
 }
 
 // TaskRef is a record's number as people write it: T218.
@@ -100,11 +104,12 @@ func (s *Store) ensureFleetTasks() error {
 	if _, err := s.write.Exec(s.d.ddl(fleetTasksSchema)); err != nil {
 		return fmt.Errorf("create fleet_tasks table: %w", err)
 	}
-	return nil
+	// claude-fleet#3330: the rule a coordinator dispatched it under.
+	return s.addColumn("fleet_tasks", "rule", "TEXT NOT NULL DEFAULT ''")
 }
 
 const fleetTaskCols = `id, token, owner, title, via, device, repo, agent, machine, login, worker_id,
-	session_key, operation_id, state, note, issue, pr, asked, parked, created_at, updated_at`
+	session_key, operation_id, state, note, issue, pr, asked, parked, rule, created_at, updated_at`
 
 // CreateFleetTask writes a new record and returns it with its number. token is
 // the caller's one-time key (the place's idempotency key): writing the same
@@ -124,20 +129,25 @@ func (s *Store) CreateFleetTask(t FleetTask, token string, now time.Time) (Fleet
 		state = TaskPlacing
 	}
 	if _, err := s.write.Exec(s.d.insertIgnore(`INSERT OR IGNORE INTO fleet_tasks (token, owner, title, via, device, repo, agent,
-		machine, login, worker_id, session_key, operation_id, state, note, issue, pr, asked, parked, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+		machine, login, worker_id, session_key, operation_id, state, note, issue, pr, asked, parked, rule, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
 		token, t.Owner, t.Title, t.Via, t.Device, t.Repo, t.Agent, t.Machine, t.Login, t.WorkerID, t.SessionKey,
-		t.OperationID, state, t.Note, t.Issue, t.PR, t.Asked, t.Parked, ts, ts); err != nil {
+		t.OperationID, state, t.Note, t.Issue, t.PR, t.Asked, t.Parked, t.Rule, ts, ts); err != nil {
 		return FleetTask{}, err
 	}
 	return s.fleetTaskBy(`token = ?`, token)
 }
 
 // FleetTaskUpdate is what a start's answer (or a later step) adds to a record;
-// an empty field is left as it is.
+// an empty field is left as it is, and a column named in Clear is emptied (a
+// question answered, a park lifted — claude-fleet#3330).
 type FleetTaskUpdate struct {
-	Machine, Login, WorkerID, SessionKey, OperationID, State, Note, Issue, PR, Asked, Parked string
+	Machine, Login, WorkerID, SessionKey, OperationID, State, Note, Issue, PR, Asked, Parked, Rule string
+	Clear                                                                                          []string
 }
+
+// taskClearable are the columns a FleetTaskUpdate may empty.
+var taskClearable = map[string]bool{"asked": true, "parked": true, "note": true}
 
 // UpdateFleetTask fills the record's non-empty fields from u and returns it.
 func (s *Store) UpdateFleetTask(id int64, u FleetTaskUpdate, now time.Time) (FleetTask, error) {
@@ -146,10 +156,16 @@ func (s *Store) UpdateFleetTask(id int64, u FleetTaskUpdate, now time.Time) (Fle
 		col, v string
 	}{{"machine", u.Machine}, {"login", u.Login}, {"worker_id", u.WorkerID}, {"session_key", u.SessionKey},
 		{"operation_id", u.OperationID}, {"state", u.State}, {"note", u.Note}, {"issue", u.Issue}, {"pr", u.PR},
-		{"asked", u.Asked}, {"parked", u.Parked}} {
+		{"asked", u.Asked}, {"parked", u.Parked}, {"rule", u.Rule}} {
 		if f.v != "" {
 			sets, args = append(sets, f.col+" = ?"), append(args, f.v)
 		}
+	}
+	for _, c := range u.Clear {
+		if !taskClearable[c] {
+			return FleetTask{}, fmt.Errorf("a task's %q cannot be cleared", c)
+		}
+		sets, args = append(sets, c+" = ?"), append(args, "")
 	}
 	if len(sets) > 0 {
 		sets, args = append(sets, "updated_at = ?"), append(args, now.UTC().Format(rfc))
@@ -215,7 +231,7 @@ func scanFleetTasks(rows *sql.Rows) ([]FleetTask, error) {
 		var created, updated string
 		if err := rows.Scan(&t.ID, &t.token, &t.Owner, &t.Title, &t.Via, &t.Device, &t.Repo, &t.Agent, &t.Machine,
 			&t.Login, &t.WorkerID, &t.SessionKey, &t.OperationID, &t.State, &t.Note, &t.Issue, &t.PR, &t.Asked,
-			&t.Parked, &created, &updated); err != nil {
+			&t.Parked, &t.Rule, &created, &updated); err != nil {
 			return nil, err
 		}
 		t.Ref = TaskRef(t.ID)
