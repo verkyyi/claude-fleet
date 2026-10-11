@@ -16,6 +16,9 @@
 #                          certificate: two certificate lives pass under a live link
 #   peerlink-hub-down      bin/fleet-peerlink.py start: the hub is down — the links up
 #                          stay, a new one is not opened and says why
+#   peerlink-hostkey-unknown bin/fleet-peer-cert.sh (issue #3050): the other machine's
+#                          host key is in no known_hosts this login has — a REAL
+#                          BatchMode ssh to a REAL sshd (`sshd -i` as a ProxyCommand)
 #   peer-window-ssh-killed bin/fleet-peerlink.py pane (C4, issue #2751): the ssh under a
 #                          看台's window onto another machine dies with its link
 #   peer-window-left-behind bin/fleet-remote-view.sh rv_peer_sweep (C4): a 看台 reaped
@@ -204,6 +207,108 @@ drill_peerlink_hub_down() {
   python3 "$PL" status --check >/dev/null || { WHY="still WARN after the hub came back: $(python3 "$PL" status --check)"; pl_stop; return 1; }
   pl_stop
   WHAT="入口不在：已有的 m4 照用（同一 pid），新来的 m5 不开、不退回长期钥匙，doctor 写明 入口不在；入口回来后退避内开好 m5"
+}
+
+drill_peerlink_hostkey_unknown() {
+  CAP=8   # the hub learns the key → the next try (a doubled backoff after one or two fails) is up
+  local oh="$HOME" rc
+  hk_body; rc=$?
+  export HOME="$oh"; unset FLEET_HUB_CURL FLEET_PEERLINK_SSH
+  return "$rc"
+}
+hk_body() {
+  local W0="$WORK" me t0 mode=sshd out o sock
+  local -a opts
+  me=$(id -un)
+  # a short root: ssh's control socket (+ its 17-byte temp suffix) must fit AF_UNIX's 104 bytes
+  WORK=$(mktemp -d /tmp/hk.XXXXXX) || { WORK=$W0; WHY="no /tmp dir"; return 1; }
+  pl_box hk "m4:$me"; cat "$WORK/cred-pids" >> "$W0/cred-pids"; WORK=$W0
+  sock="$B/conf/peerlink/m4@$me.sock"
+  # this login: a hub node whose own known_hosts never heard of m4
+  export HOME="$B/home"; mkdir -p "$HOME/.ssh"; : > "$B/empty"; : > "$B/hub-keys"
+  printf 'CCQUOTA_TOKEN=node-secret\nCCQUOTA_HUB_URL=https://hub.example\n' > "$B/conf/node.env"
+  ssh-keygen -q -t ed25519 -N '' -f "$B/host" </dev/null >/dev/null 2>&1 \
+    && ssh-keygen -q -t ed25519 -N '' -f "$B/other" </dev/null >/dev/null 2>&1 || { WHY="ssh-keygen failed"; return 1; }
+  # the hub: a certificate (not a real one — sshd admits the plain peer key) and
+  # whatever host keys it knows for m4 ($B/hub-keys); ttl 31 s = the cache lasts 1 s
+  cat > "$B/curl" <<EOF
+#!/bin/bash
+python3 -c 'import json, sys; print(json.dumps({"certificate": "ssh-ed25519-cert-v01@openssh.com AAAAfake\n", "login": sys.argv[1], "target": "m4", "ttl_sec": 31, "alias": "m4", "host_keys": [l.strip() for l in open(sys.argv[2]) if l.strip()]}))' "$me" "$B/hub-keys"
+printf '200'
+EOF
+  chmod +x "$B/curl"
+  export FLEET_HUB_CURL="$B/curl"; unset FLEET_PEERLINK_CERT_CMD
+  cat > "$B/sshd_config" <<EOF
+HostKey $B/host
+PidFile $B/sshd.pid
+StrictModes no
+UsePAM no
+PubkeyAuthentication yes
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+AuthorizedKeysFile $HOME/.ssh/fleet-peer.pub
+EOF
+  # m4 is reached the way a route is: a plain name; the person's known_hosts is $B/empty
+  cat > "$B/ssh_config" <<EOF
+Host m4
+  ProxyCommand /usr/sbin/sshd -i -f $B/sshd_config
+  GlobalKnownHostsFile /dev/null
+  UserKnownHostsFile $B/empty
+EOF
+  if [ ! -x /usr/sbin/sshd ] || ! command -v ssh >/dev/null 2>&1 || ! /usr/sbin/sshd -t -f "$B/sshd_config" >/dev/null 2>&1; then
+    mode=options
+  fi
+  export FLEET_PEERLINK_SSH="ssh -F $B/ssh_config"
+  hostpub() { awk '{ print $1, $2 }' "$1.pub"; }
+  # hk_past <login> — the link is up, or its last try failed on something after the host key
+  hk_past() {
+    pl_up "m4@$1" && return 0
+    grep -q . "$B/conf/peerlink/m4@$1.err" 2>/dev/null && ! grep -q "Host key verification failed" "$B/conf/peerlink/m4@$1.err"
+  }
+  if [ "$mode" = sshd ]; then
+    # the break: the hub lists no key — BatchMode turns «unknown host» into a refusal
+    pl_start
+    until_ok 8 pl_link "m4@$me" '"Host key verification failed" in (l.get("err") or "")' >/dev/null \
+      || { WHY="the break did not reproduce: $(python3 "$PL" status | tr '\n' ' ')"; pl_stop; return 1; }
+    pl_up "m4@$me" && { WHY="a link came up to a host nobody vouched for"; pl_stop; return 1; }
+    # the fix: the hub knows m4's key → written under fleet-m4, the next try gets
+    # past the host-key check (up where an unprivileged sshd can open a session —
+    # macOS's dies on its BSM audit session right after authenticating)
+    hostpub "$B/host" > "$B/hub-keys"; t0=$(now)
+    until_ok 10 hk_past "$me" || { WHY="still refused with the hub's key: $(python3 "$PL" status | tr '\n' ' ')"; pl_stop; return 1; }
+    SECS=$(since "$t0")
+    ssh -F "$B/ssh_config" -S "$sock" -O exit m4 >/dev/null 2>&1
+    pl_stop
+  fi
+  grep -qxF "fleet-m4 $(hostpub "$B/host")" "$B/conf/peer/known_hosts" 2>/dev/null \
+    || { [ "$mode" = sshd ] && { WHY="peer/known_hosts: $(cat "$B/conf/peer/known_hosts" 2>&1)"; return 1; }; }
+  # one more ask, by hand: the options say HostKeyAlias + only that file
+  hostpub "$B/host" > "$B/hub-keys"; sleep 1.1; t0=$(now)
+  out=$(bash "$BIN/fleet-peer-cert.sh" m4 view 2>&1) || { WHY="fleet-peer-cert: $out"; return 1; }
+  opts=(); while IFS= read -r o; do [ -n "$o" ] && opts+=("$o"); done <<EOF_O
+$out
+EOF_O
+  case "$out" in *"HostKeyAlias=fleet-m4"*"UserKnownHostsFile=$B/conf/peer/known_hosts"*) ;; *) WHY="options: $out"; return 1 ;; esac
+  ssh-keygen -F fleet-m4 -f "$B/conf/peer/known_hosts" >/dev/null 2>&1 || { WHY="ssh-keygen cannot find fleet-m4 in peer/known_hosts"; return 1; }
+  ssh -F "$B/ssh_config" -G ${opts[@]+"${opts[@]}"} m4 2>/dev/null | grep -qi "^hostkeyalias fleet-m4$" || { WHY="ssh -G does not take the alias"; return 1; }
+  [ "$mode" = sshd ] || SECS=$(since "$t0")
+  if [ "$mode" = sshd ]; then
+    out=$(ssh -v -F "$B/ssh_config" ${opts[@]+"${opts[@]}"} -o BatchMode=yes m4 true 2>&1)
+    case "$out" in *"is known and matches"*"Authenticated to"*) ;; *) WHY="the hub's key did not match on a real ssh: $(printf '%s' "$out" | tail -3 | tr '\n' ' ')"; return 1 ;; esac
+    # a key the hub does NOT list is still refused — the hub's word, not TOFU
+    hostpub "$B/other" > "$B/hub-keys"; sleep 1.1
+    out=$(bash "$BIN/fleet-peer-cert.sh" m4 view 2>&1) || { WHY="fleet-peer-cert: $out"; return 1; }
+    opts=(); while IFS= read -r o; do [ -n "$o" ] && opts+=("$o"); done <<EOF_O
+$out
+EOF_O
+    out=$(ssh -F "$B/ssh_config" ${opts[@]+"${opts[@]}"} -o BatchMode=yes m4 true 2>&1) && { WHY="a host key the hub did not list was let in"; return 1; }
+    case "$out" in *"Host key verification failed"*) ;; *) WHY="an unlisted key was not refused by the host-key check: $out"; return 1 ;; esac
+    grep -q "fleet-m4 $(hostpub "$B/host")" "$B/conf/peer/known_hosts" && { WHY="the old key stayed beside the new one"; return 1; }
+    WHAT="别的机器的 host key 不在任何 known_hosts：入口没给 key 时真 ssh（BatchMode）照旧 Host key verification failed、常开连接不起；入口给了 key → 写进 peer/known_hosts 的 fleet-m4，下一次重试过了 host key 这关（真 sshd -i：key 对上、认证通过）；入口没列的 key 仍被拒"
+  else
+    WHAT="（这里跑不了非特权 sshd，只核对选项）入口给的 host key 写进 peer/known_hosts 的 fleet-m4，选项带 HostKeyAlias + UserKnownHostsFile，ssh -G 认这个别名"
+  fi
+  rm -rf "$B"
 }
 
 # --- C4's windows onto the other machines (issue #2751) ------------------------------

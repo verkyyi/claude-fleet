@@ -1101,7 +1101,10 @@ Do not install from memory: read the doc and work from it.
   hub checks the target login is the same owner's, signs `~/.ssh/fleet-peer` for
   `sshca.PeerTTL`, audits it in `fleet_peer_certs`). Exit 1 = the hub said no or is
   down: pause and say so — never fall back to authorized_keys; exit 3 = no hub
-  here: plain ssh, byte for byte. Any new cross-machine ssh goes through it
+  here: plain ssh, byte for byte. The answer carries the target's host keys too
+  (issue #3050): written to `peer/known_hosts` under `fleet-<alias>`, the options
+  add `HostKeyAlias` + `UserKnownHostsFile` — the hub's word, never TOFU (BREAK-IT
+  `peerlink-hostkey-unknown`). Any new cross-machine ssh goes through it
   (`fleet-peer-cert-selftest.sh` I lints it); `fleet-doctor`'s `sshtrust` row
   WARNs on another fleet machine's key in `~/.ssh/authorized_keys`.
 - Claude Code re-reads `settings.json` hooks per turn, so running sessions pick

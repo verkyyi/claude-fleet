@@ -230,3 +230,33 @@ func TestPeerCertLoginBoundOnBothEnds(t *testing.T) {
 		}
 	}
 }
+
+// The answer carries the target's host keys and the alias they go under
+// (claude-fleet#3050): the source machine's own known_hosts never heard of the
+// other machine, and its BatchMode ssh refuses an unknown host. A target the
+// hub knows no keys for answers without them, as before.
+func TestPeerCertCarriesTargetHostKeys(t *testing.T) {
+	h, _, n := peerHarness(t)
+	key := newUserKey(t)
+	st, got, raw := peerPost(t, h, n["alice5"].token, map[string]any{"target": "m4", "purpose": "view", "public_key": key})
+	if st != 200 || got.Alias != "" || len(got.HostKeys) != 0 {
+		t.Fatalf("no keys known: HTTP %d alias %q keys %v %s; want neither", st, got.Alias, got.HostKeys, raw)
+	}
+	m4, m5 := hostKeyLine(t), hostKeyLine(t)
+	for i := range h.srv.FleetRoutes {
+		switch h.srv.FleetRoutes[i].Hostname {
+		case "macmini-m4":
+			h.srv.FleetRoutes[i].HostKeys = []string{m4 + " root@m4"}
+		case "macmini":
+			h.srv.FleetRoutes[i].HostKeys = []string{m5}
+		}
+	}
+	st, got, raw = peerPost(t, h, n["alice5"].token, map[string]any{"target": "m4", "purpose": "view", "public_key": key})
+	if st != 200 || got.Alias != "m4" || len(got.HostKeys) != 1 || got.HostKeys[0] != m4 {
+		t.Fatalf("HTTP %d alias %q keys %v %s; want m4's one key under m4", st, got.Alias, got.HostKeys, raw)
+	}
+	st, got, raw = peerPost(t, h, n["alice4"].token, map[string]any{"target": "macmini", "purpose": "move", "public_key": key})
+	if st != 200 || got.Alias != "m5" || len(got.HostKeys) != 1 || got.HostKeys[0] != m5 {
+		t.Fatalf("HTTP %d alias %q keys %v %s; want m5's key under m5", st, got.Alias, got.HostKeys, raw)
+	}
+}
