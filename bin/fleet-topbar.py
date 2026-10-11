@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 """fleet-topbar.py — the session's top line in the client (issue #1904, EPIC #1906
 C11): the line above the right pane, which the shell's STAGE server draws
-(conf/tmux-shell-stage.conf's status-left) — and, at phone width, the way round
-the sessions with a thumb.
+(conf/tmux-shell-stage.conf's status-left). It says THIS session only, in the
+⌘P panel's own glyphs (issue #3194, EPIC #3178): going round the sessions, and
+what the others are doing, is the panel's.
 
     fleet-topbar.py render cw=<cols> [down=<epoch>] [rr=<route>] [rv=<auto|manual> <route>]
                            [rp=<pinned route>] [rt=<reconnects>] [wn=<window name>] [gen=…]
-        the line, as tmux format: ‹ i/n ›  state  key  title …… PR  repo  @machine
+        the line, as tmux format: glyph (word ·) #N title (· repo) …… PR · context (· machine) (· ⌘P)
     fleet-topbar.py render --node view=<id> s=<fleet> reg=<dir> g=<dir> sock=<socket> cw= w= [pc=] [pd=]
         the same line drawn ON the machine, as a thin client's 看台's status line
         (issue #2763, EPIC #2999 C1; fleet-remote-view.sh attach --thin) — see
         render_node below
     fleet-topbar.py click <range> <shell session>
         a tap on one of its parts (the stage's MouseDown1Status bind):
-        prev / next — the session above / below, as ⌘↑ ⌘↓ (the list's queue);
         title — the full-screen switcher (fleet-quickopen.py --full);
         key — the issue, pr — the PR, opened on the person's computer
         (fleet-open.sh); machine — what is known about that machine, as a note
@@ -31,21 +31,18 @@ state dir (fleet-quickopen.py state_dir), written by the task list
 list never disagree — and only on change, when it also bumps the stage's
 `@fleet_bar_gen`, which status-left names: tmux runs the line again at once.
 The stage adds what only it knows: `@remote_down` (this machine's connection to
-that one dropped: ⟳ and for how long), `@remote_route` (on the hub relay) and —
-claude-fleet#2886 — `@remote_via` (the route and who chose it: 自动 / 手动),
-`@remote_pin` + `@remote_tries` (a pinned route reconnecting: 第 N 次).
+that one dropped), `@remote_route` (on the hub relay), `@remote_via`
+(claude-fleet#2886: the route and who chose it), `@remote_pin` + `@remote_tries`
+(a pinned route reconnecting: 第 N 次).
 
-Narrow, the line gives up, in this order (the prototype's widths): the repo
-(< 130 columns), the PR (< 110), the state's word (< 70, its glyph stays), then
-the title is clipped with `…`. ‹ i/n ›, the key and the machine are never
-dropped. The whole line turns red only while the session asks you a question,
-grey only while its machine is out of reach.
-
-When another client of yours is looking at the same session (issue #1932: a
-person may hold several clients at once), the line says so before the machine —
-「也在 iPhone 上打开」 — off the clients the keeper last heard from the hub
-(client.list.json: each client's `viewing`, the session's worker id), never a
-network ask of its own; dropped first when narrow.
+Three widths, the design's: a phone (~45 columns) has the glyph, #N, the title
+and 「62%」; from 80 the state's word, 「PR #N」 and 「62% Opus 5.5 high」; from
+140 the repo after the title, the PR's checks, 「剩余 62% · Opus 5.5 · high」 and
+「⌘P」 at the right. The title is clipped with `…`. The six glyphs and their
+colours are fleet_view.py's table (! x » ✓ ∙ ?, FLEET_GLYPHS=ascii, NO_COLOR):
+the whole line red while the session waits on you (its question in the title's
+place), grey with ? while its machine is out of reach or on the relay — the only
+time the machine is written.
 """
 import json
 import os
@@ -58,21 +55,22 @@ from pathlib import Path
 
 BIN = Path(__file__).absolute().parent
 
-# state → (glyph, word). The six of the design, plus the two the list also has.
-STATES = {
-    "working": ("●", "working"), "preparing": ("●", "working"), "waking": ("●", "working"),
-    "looping": ("↻", "looping"), "done": ("✓", "done"), "failed": ("✖", "failed"),
-    "exited": ("⏏", "exited"),
-}
-ASK = ("?", "asking you")
-PERM = ("⊘", "needs OK")
-IDLE = ("○", "idle")
+sys.path.insert(0, str(BIN))
+import fleet_view as FV   # noqa: E402 — the ⌘P panel: its glyph table is the one table (#3194)
 
-# colours: the stage's own (conf/tmux-shell-stage.conf)
+# a state the panel's sym_of reads as idle but this line calls working (the design:
+# 在干活 含循环中、准备中、唤醒中)
+WORKING = ("preparing", "waking")
+
+# colours: the stage's own (conf/tmux-shell-stage.conf); the glyphs' are the
+# panel's 16-colour palette numbers (FV.GLYPH_COLORS), as tmux colourN
 FG, DIM, HL, OK, WARN, BAD = "#a9b1d6", "#565f89", "#7aa2f7", "#9ece6a", "#e0af68", "#f7768e"
 BG_ASK, BG_DOWN = "#f7768e", "#3b4261"
 
-REPO_MIN, PR_MIN, WORD_MIN = 130, 110, 70
+# the design's three widths: a phone (~45) has the glyph, #N, the title and the %;
+# from MID the state's word, the PR, the model and effort; from WIDE the repo, the
+# PR's checks, 「剩余」 and the ⌘P hint
+MID, WIDE = 80, 140
 
 
 def state_dir():
@@ -92,37 +90,12 @@ def read_record(path=None):
     return rec if isinstance(rec, dict) else None
 
 
-def also_on(rec):
-    """「也在 <device> 上打开」 when another of the person's clients views this
-    session (issue #1932), '' otherwise. Off the keeper's client.list.json."""
-    wid = rec.get("wid") or ""
-    if not wid:
-        return ""
-    f = os.environ.get("FLEET_CLIENT_LIST_FILE") or os.path.join(os.environ.get("TMPDIR") or "/tmp", "client.list.json")
-    try:
-        with open(f) as fh:
-            d = json.load(fh)
-    except (OSError, ValueError):
-        return ""
-    if not isinstance(d, dict):
-        return ""
-    own = d.get("lease") or ""
-    devs = []
-    for c in d.get("clients") or []:
-        if isinstance(c, dict) and c.get("id") != own and c.get("viewing") == wid:
-            dev = (c.get("device") or "?").strip()
-            if dev not in devs:
-                devs.append(dev)
-    if not devs:
-        return ""
-    r = subprocess.run(["sh", str(BIN / "fleet-ui-lang.sh"), "t", "topbar_also_fmt", "、".join(devs)],
-                       capture_output=True, text=True, stdin=subprocess.DEVNULL)
-    return r.stdout.strip()
-
-
 def cells(text):
-    return sum(0 if unicodedata.combining(c) else 2 if unicodedata.east_asian_width(c) in "WF" else 1
-               for c in text)
+    """Cells as the panel counts them (fleet-quickopen.py char_cells): wide /
+    full-width 2, a riding mark or zero-width 0, else 1 — so » and ∙ (ambiguous
+    width) are one cell, as the panel draws them."""
+    return sum(0 if unicodedata.category(c) in ("Mn", "Me", "Cf") else
+               2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in text)
 
 
 def clip(text, room):
@@ -140,84 +113,45 @@ def clip(text, room):
     return out + "…"
 
 
-def state_of(rec):
-    if rec.get("state") == "needs":
-        return PERM if rec.get("kind") == "perm" else ASK
-    return STATES.get(rec.get("state", ""), IDLE)
+def sym_of(rec, trouble=False):
+    """The record's glyph class off the panel's table: lost wins (out of reach,
+    the reading stale, on the relay), then the state."""
+    state = rec.get("state") or "idle"
+    return FV.sym_of("working" if state in WORKING else state, trouble)
 
 
-def node_old(node):
-    """Whether the hub calls that machine's fleet behind the stable mark (#644,
-    `old:<n>` in hub_nodes' ver_state — the word the bar's machine chip drew
-    before the title became this line)."""
-    g = os.environ.get("FLEET_STATUS_G") or os.path.join(os.environ.get("TMPDIR") or f"/tmp/claude-fleet-{os.getuid()}", ".claude-dash", "global")
-    try:
-        with open(os.path.join(g, "hub_nodes"), encoding="utf-8", errors="replace") as f:
-            for line in f:
-                part = line.rstrip("\n").split("\x1f")
-                if part[0] == node and len(part) > 10:
-                    return part[10].startswith("old:")
-    except OSError:
-        pass
-    return False
+def state_word(rec, sym):
+    """在干活 · 做完了 · 已退出 / 失败 · 空闲 — the panel's words; ! and ? say none."""
+    if sym in ("needs", "lost"):
+        return ""
+    if sym == "fail":
+        return FV.state_words("failed" if rec.get("state") == "failed" else "exited")
+    return FV.state_words({"work": "working", "done": "done"}.get(sym, "idle"))
 
 
 PIN_WORDS = {"relay": "中转", "tailscale": "Tailscale", "tailnet": "Tailscale", "direct": "直连", "entry": "入口直连"}
 
 
-def machine_text(rec, down, route, now, via="", pin="", tries="", cols=100):
-    """@machine and its connection: offline · ⟳ (dropped, how long) · the route.
-    The route (claude-fleet#2886): `via` is the stage's `@remote_via`, `<auto|
-    manual> <route in words>` — a pinned one always 「· 中转·手动」, an automatic
-    one 「· Tailscale·自动」 from 100 columns (the relay keeps its 「· 中转」 below);
-    no via ⇒ `route` alone, as before. `pin` / `tries` (`@remote_pin` /
-    `@remote_tries`): while a pinned line is down, 「钉住：中转（手动）· 第 N 次重连」."""
-    m = "@" + (rec.get("node") or "?")
-    if rec.get("node") and node_old(rec["node"]):
-        m += " 旧"
-    if rec.get("lost"):
-        return m + " offline", True
-    if down:
-        secs = now - int(down) if str(down).isdigit() and int(down) > 1 else -1
-        m += " ⟳ %ds" % secs if secs >= 0 else " ⟳"
-        if pin:
-            word = PIN_WORDS.get(pin, pin)
-            n = int(tries) if str(tries).isdigit() else 0
-            if cols >= 100:
-                m += " · 钉住：%s（手动）" % word + ("· 第 %d 次重连" % n if n else "")
-            else:
-                m += " · 钉%s" % word + (" %d" % n if n else "")
-        return m, True
-    src, _, label = (via or "").partition(" ")
-    if label and src == "manual":
-        return m + " · %s·手动" % label, False
-    if label and cols >= 100:
-        return m + " · %s·自动" % label, False
-    if route == "relay":
-        return m + " · 中转", False
-    return m, False
-
-
-EFFORT_SHORT = {"low": "L", "medium": "M", "high": "H", "xhigh": "XH", "max": "MX"}
-
-
-def short_model(model):
-    """Opus 5.5 → O5.5, gpt-6-astra → g6a: the node header's 50–69 column form."""
-    m = re.match(r"^([A-Z])[a-z]+ ([0-9][0-9.]*)", model)
-    if m:
-        return m.group(1) + m.group(2)
-    m = re.match(r"^gpt-([0-9][0-9.]*)-([a-z])", model)
-    return "g" + m.group(1) + m.group(2) if m else model
+def trouble_text(rec, down, route, via, pin, tries, cols):
+    """The machine — only when something is wrong with reaching it: 「m4 连不上」
+    (lost, or this machine's connection to it dropped; a pinned route reconnecting
+    adds 「第 N 次重连」 from MID) or 「m4 经中转」 (on the hub relay). '' when all
+    is well: the machine is otherwise never written (#3194)."""
+    node = rec.get("node") or "?"
+    if rec.get("lost") or down:
+        n = int(tries) if str(tries).isdigit() else 0
+        return node + " 连不上" + (" · 第 %d 次重连" % n if down and pin and n and cols >= MID else "")
+    if route == "relay" or (via or "").partition(" ")[2] == "中转":
+        return node + " 经中转"
+    return ""
 
 
 def ctx_parts(rec, cols, now):
-    """The right side's 剩余 % · model · effort (issue #2717): the node's pane
-    header (conf/tmux-attention.conf @fleet_ctx_hdr, #2431) said the same way —
-    the % by what is left (>50 green, 20–50 amber, <20 red; handoff red +
-    「⚠ 将交接」), the whole of it grey with 「· N 分钟前」 once the reading is
-    5 minutes old, and its four widths: ≥100 all of it, 70–99 without 「剩余」,
-    50–69 abbreviated, <50 the % alone. No ctx_left (a row nothing measured, an
-    older node) ⇒ no parts."""
+    """The context reading (issue #2717), on every width: 「62%」 · from MID
+    「62% Opus 5.5 high」 · from WIDE 「剩余 62% · Opus 5.5 · high」. The % by
+    what is left (>50 green, 20–50 amber, <20 red; the handoff band adds ⚠), the
+    whole of it grey with 「· N 分钟前」 once the reading is 5 minutes old. No
+    ctx_left (nothing measured, an older node) ⇒ no parts."""
     left = rec.get("ctx_left")
     if not isinstance(left, int) or isinstance(left, bool):
         return []
@@ -225,66 +159,83 @@ def ctx_parts(rec, cols, now):
     old = isinstance(ts, int) and not isinstance(ts, bool) and ts > 0 and now - ts >= 300
     band = rec.get("ctx_band")
     pcol = DIM if old else BAD if band == "handoff" or left < 20 else WARN if left <= 50 else OK
-    pct = ("剩余 " if cols >= 100 else "") + "%d%%" % left
-    if band == "handoff" and cols >= 50:
-        pct += " ⚠ 将交接" if cols >= 70 else " ⚠"
+    pct = ("剩余 " if cols >= WIDE else "") + "%d%%" % left + (" ⚠" if band == "handoff" else "")
     out = [(pct, pcol, "")]
     model, effort = rec.get("model") or "", rec.get("effort") or ""
+    sep = " · " if cols >= WIDE else " "
     tail = ""
-    if model and cols >= 50:
-        tail += " · " + (model if cols >= 70 else short_model(model))
-        if effort:
-            tail += " · " + (effort if cols >= 70 else EFFORT_SHORT.get(effort, effort))
-    if old and cols >= 70:
+    if model and cols >= MID:
+        tail += sep + model + (sep + effort if effort else "")
+    if old and cols >= MID:
         tail += " · %d 分钟前" % ((now - ts) // 60)
     if tail:
         out.append((tail, DIM if old else FG, ""))
     return out
 
 
+def pr_part(pr, cols):
+    """「PR #3171」, from WIDE with its checks (✓ / … / ✗); a merged one
+    「PR 已合并」. The producer's cell (tmux-dashboard-rows.sh): `#N<ci>` open,
+    merged / live / deploy… / deploy✗, closed."""
+    gl = FV.glyphs()
+    if pr in FV.MERGED_PR:
+        return ("PR 已合并" + ((" ✗" if gl is FV.GLYPHS else " x") if pr == "deploy✗" and cols >= WIDE else ""),
+                BAD if pr == "deploy✗" else OK, "pr")
+    if pr == "closed":
+        return ("PR 已关闭", DIM, "pr")
+    m = re.match(r"#([0-9]+)(.*)", pr)
+    if not m:
+        return (pr, DIM, "pr")
+    ci = m.group(2)
+    good, bad = ci.startswith("✓"), "✗" in ci or "✖" in ci or "!" in ci
+    text = "PR #" + m.group(1)
+    if cols >= WIDE:
+        fancy = gl is FV.GLYPHS
+        text += " " + (gl["done"] if good else ("✗" if fancy else "x") if bad else "…" if fancy else "...")
+    return (text, OK if good else BAD if bad else WARN, "pr")
+
+
 def layout(rec, cols, down="", route="", now=None, via="", pin="", tries=""):
     """The line as a list of (text, colour, range) parts plus its background
-    (None / BG_ASK / BG_DOWN). Pure: the selftest reads `fit`."""
+    (None / BG_ASK / BG_DOWN) — the ⌘P panel's blueprint (issue #3194, EPIC #3178):
+    glyph · (word ·) #N · title (· repo) …… PR · context (· machine) (· ⌘P).
+    The whole line red while the session waits on you (a question or an OK — the
+    question's own words take the title's place), grey while out of reach or on
+    the relay. Pure: the selftest reads `fit`."""
     now = int(time.time()) if now is None else now
-    glyph, word = state_of(rec)
-    mach, grey = machine_text(rec, down, route, now, via, pin, tries, cols)
-    asking = rec.get("state") == "needs" and rec.get("kind") != "perm"
-    bg = BG_DOWN if grey else BG_ASK if asking else None
-    scol = (BAD if glyph in ("?", "✖") else WARN if glyph in ("⊘", "↻") else
-            OK if glyph == "✓" else HL if glyph == "●" else DIM)
-    i, n = rec.get("i") or 0, rec.get("n") or 0
-    left = []
-    if rec.get("waiting"):
-        # the 看台's line (issue #3184): how many sessions ask you, ahead of the record
-        left += [(" " + (say("topbar_waiting_fmt", str(rec["waiting"])) or "! %d" % rec["waiting"]), BAD, "title"),
-                 (" ", None, "")]
-    left += [(" ‹ ", DIM, "prev"), ("%s/%s" % (i or "–", n), DIM, ""), (" ›", DIM, "next"), ("  ", None, "")]
-    left.append((glyph + (" " + word if cols >= WORD_MIN else ""), scol, ""))
-    left.append(("  ", None, ""))
+    trouble = trouble_text(rec, down, route, via, pin, tries, cols)
+    sym = sym_of(rec, bool(trouble))
+    bg = BG_DOWN if trouble else BG_ASK if sym == "needs" else None
+    scol = "colour%d" % FV.GLYPH_COLORS[sym] if FV.color_on() else None
+    left = [(" ", None, ""), (FV.glyphs()[sym], scol, "sym")]
+    word = state_word(rec, sym) if cols >= MID else ""
+    if word:
+        left.append((" " + word + " ·", scol, ""))
     if rec.get("key"):
-        left += [(rec["key"], HL, "key"), (" ", None, "")]
-    if rec.get("cfg_broken"):
-        left += [(say("topbar_cfg_broken") or "会坏·需重开", BAD, ""), (" ", None, "")]
+        left += [(" ", None, ""), (rec["key"], HL, "key")]
+    left.append((" ", None, ""))
+    title = (rec.get("q") if sym == "needs" else "") or rec.get("title") or ""
+    repo = " · " + rec["repo"] if rec.get("repo") and cols >= WIDE else ""
     right = []
-    if rec.get("also") and cols >= REPO_MIN:
-        right.append((rec["also"], WARN, ""))
-    pr = rec.get("pr") or ""
-    if pr and cols >= PR_MIN:
-        prc = OK if pr.endswith("✓") or pr in ("merged", "live") else BAD if "✗" in pr or "✖" in pr else WARN
-        right.append(("PR " + pr if pr[:1] == "#" else pr, prc, "pr"))
-    if rec.get("repo") and cols >= REPO_MIN:
-        right.append((rec["repo"], DIM, ""))
+    if rec.get("pr") and cols >= MID:
+        right.append([pr_part(rec["pr"], cols)])
     ctx = ctx_parts(rec, cols, now)
-    right.append((mach, WARN if grey else HL, "machine"))
+    if ctx:
+        right.append(ctx)
+    if trouble:
+        right.append([(trouble, WARN, "machine")])
+    if cols >= WIDE:
+        right.append([("⌘P", DIM, "")])
+    sep = " · " if cols >= MID else " "
     rtext = []
-    for part in right:
-        if part[2] == "machine" and ctx:
-            rtext += ctx + [("  ", None, "")]
-        rtext += [part, ("  ", None, "")]
-    rtext[-1] = (" ", None, "")
+    for group in right:
+        rtext += ([(sep, DIM, "")] if rtext else []) + group
+    rtext.append((" ", None, ""))
     room = cols - sum(cells(t) for t, _, _ in left) - sum(cells(t) for t, _, _ in rtext) - 1
-    title = clip(rec.get("title") or "", max(0, room))
-    parts = left + [(title, FG if bg is None else None, "title")]
+    if repo and cells(repo) > room - 6:
+        repo = ""                 # the title's start before the repo
+    title = clip(title, max(0, room - cells(repo)))
+    parts = left + [(title, FG, "title"), (repo, DIM, "")]
     pad = cols - sum(cells(t) for t, _, _ in parts) - sum(cells(t) for t, _, _ in rtext)
     parts.append((" " * max(1, pad), None, ""))
     return parts + rtext, bg
@@ -308,17 +259,14 @@ def render(args):
     rec = read_record(path)
     if rec is None:
         # no session row in view — a machine's bare shell, the writing area (the
-        # list wrote `null`): the window's name. ‹ › and a tap on the name
-        # still go round the sessions, so the one-pane layout (a phone in
-        # Termius) never leaves a bare shell with no way to them. No record at
+        # list wrote `null`): the window's name; a tap on it opens the switcher
+        # (going round the sessions is the panel's, #3194). No record at
         # all (issue #2739) is said, not drawn as a bare shell: the list never
         # wrote one, and logs/topbar.log says why when a write failed.
         missing = "" if path.is_file() else "#[fg=%s]  %s" % (WARN, tmux_text(say("topbar_no_record") or "顶行无记录"))
-        print("#[fg=%s]#[range=user|prev] ‹ #[norange]#[range=user|next]› #[norange] "
-              "#[fg=%s,bold]#[range=user|title]%s#[norange]#[nobold]%s#[default]"
-              % (DIM, HL, tmux_text(kv.get("wn", "")), missing))
+        print("#[fg=%s,bold]#[range=user|title] %s#[norange]#[nobold]%s#[default]"
+              % (HL, tmux_text(kv.get("wn", "")), missing))
         return 0
-    rec["also"] = also_on(rec)
     parts, bg = layout(rec, cols, kv.get("down", ""), kv.get("rr", ""), None,
                        kv.get("rv", ""), kv.get("rp", ""), kv.get("rt", ""))
     print(paint(parts, bg))
@@ -326,18 +274,20 @@ def render(args):
 
 
 def paint(parts, bg):
-    """The (text, colour, range) parts as tmux format, on `bg`."""
-    fg_all = "#1a1b26" if bg == BG_ASK else None
+    """The (text, colour, range) parts as tmux format, on `bg`: a red line is
+    dark text throughout, a grey one plain text but for its yellow ?."""
+    fg_all = "#1a1b26" if bg == BG_ASK else FG if bg == BG_DOWN else None
     out = "#[bg=%s]" % bg if bg else ""
     if fg_all:
         out += "#[fg=%s]" % fg_all
     for text, colour, rng in parts:
         if not text:
             continue
-        style = "fg=%s" % (fg_all or colour) if (colour or fg_all) else ""
+        own = colour if bg == BG_DOWN and rng == "sym" else None
+        style = "fg=%s" % (own or fg_all or colour) if (colour or fg_all) else ""
         bold = ",bold" if rng in ("key", "title") and bg != BG_DOWN else ""
         seg = tmux_text(text)
-        if rng:
+        if rng and rng != "sym":
             seg = "#[range=user|%s]%s#[norange]" % (rng, seg)
         if style:
             seg = "#[%s%s]%s#[nobold]" % (style, bold, seg)
@@ -355,13 +305,10 @@ def paint(parts, bg):
 # for another machine's window, C4, the far session's `@peer_cur`), else the
 # window's own stamps (the measurement bus, the same ones `fleet ls` reads). The
 # route comes from the 看台's registry row, another machine's link state from
-# peerlink/state.json (C5). layout() and fit() are the client's; the 看台's record
-# alone adds `waiting` — 「! N 个在等你」 ahead of ‹ i/n ›, the needs rows of the same
-# lines (a lost one not counted), 0 draws nothing — and `cfg_broken` (会坏·需重开:
-# the window on global/agent-cfg.broken, or its cache line's cfg) — issue #3184.
+# peerlink/state.json (C5). layout() and fit() are the client's, unchanged — a
+# phone's 看台 keeps the % too (#3194: it used to drop the reading under 100 columns).
 
 US = "\x1f"
-NODE_NARROW = 100   # a 看台 narrower than this (a phone, #3006) drops 剩余 · model · effort
 NODE_FMT = "|".join(["#{@fleet_id}", "#{@peer_cur}", "#{@peer_node}", "#{@peer_login}",
                      "#{@claude_state}", "#{@claude_needs}", "#{@issue}", "#{@ctx_left}",
                      "#{@ctx_band}", "#{@ctx_ts}", "#{@model}", "#{@effort}", "#{@fleet_role}",
@@ -428,32 +375,19 @@ def line_ctx(p):
     return stamp_ctx([""] * 7 + p[20:25])
 
 
-def view_rows(sock, win, states=None):
-    """The 看台's own session windows, in order (window ids) — what ‹ i/n ›
-    counts while the hub's list has no line for this fleet yet (a login just
-    opened: 「‹ –/0 ›」 beside two windows, #3155). A home / panel / steward
-    window is no session row. `states`, a dict, gets each one's @claude_state."""
-    out = subprocess.run(["tmux", "-S", sock, "list-windows", "-t", win, "-F",
-                          "#{window_id}|#{@fleet_id}|#{@fleet_role}|#{@claude_state}"],
-                         capture_output=True, text=True, stdin=subprocess.DEVNULL).stdout if sock and win else ""
-    rows = []
-    for line in out.splitlines():
-        wid, fid, role, st = (line.split("|") + ["", "", ""])[:4]
-        if fid and role not in ("home", "panel", "steward"):
-            rows.append(wid)
-            if states is not None:
-                states[wid] = st
-    return rows
-
-
-def cfg_broken(conf_dir, sess, win):
-    """Whether global/agent-cfg.broken — the ONE list fleet_cfg_state consults
-    (fleet-oldcfg-check.sh --sweep writes it) — names this window."""
+def asked(sock, win):
+    """What a local window waiting on you asks, in one line: the agent's own
+    words (@agent_status's msg, issue #2538), else the hooks' @claude_needs_detail.
+    One read each — either may hold a `|` (and tmux does not pass every control
+    byte through display-message, so they cannot share NODE_FMT's line)."""
+    def opt(name):
+        return subprocess.run(["tmux", "-S", sock, "display-message", "-p", "-t", win, "#{%s}" % name],
+                              capture_output=True, text=True, stdin=subprocess.DEVNULL).stdout.strip()
     try:
-        with open(os.path.join(conf_dir, "global", "agent-cfg.broken"), encoding="utf-8", errors="replace") as f:
-            return any(l.split("\t")[:2] == [sess, win] for l in f)
-    except OSError:
-        return False
+        msg = (json.loads(opt("@agent_status") or "{}") or {}).get("msg")
+    except (ValueError, AttributeError):
+        msg = ""
+    return FV.one_line(msg if isinstance(msg, str) and msg else opt("@claude_needs_detail"))
 
 
 def node_record(kv):
@@ -469,42 +403,32 @@ def node_record(kv):
     wid = peer or ("%s/%s" % (row["fuid"], fid) if row.get("fuid") and fid else "")
     lines = cache_lines(kv.get("g") or "", sess)
     hit = None
-    for i, line in enumerate(lines):
+    for line in lines:
         key = line[0][4:]
         if (wid and key == wid) or (not peer and fid and not row.get("fuid") and key.endswith("/" + fid)):
-            hit = (i, line)
+            hit = line
             break
     here = row.get("node") or ""
     if hit:
-        i, line = hit
-        q = line + [""] * (25 - len(line))
+        line = hit
+        q = line + [""] * (28 - len(line))
         state = q[5] or "idle"
-        rec = {"i": i + 1, "n": len(lines), "state": state,
+        rec = {"state": state,
                "kind": ("perm" if q[9].startswith("perm") else "ask") if state == "needs" else "",
+               "q": FV.one_line(q[27]) if state == "needs" else "",
                "key": "#" + q[3] if q[3].isdigit() else "", "title": (q[16] or q[7]).strip(),
                "node": q[1].strip() or pnode or here, "lost": q[2] == "lost", "wid": q[0][4:]}
         rec.update(line_ctx(q))
     else:
         state = p[4] or "idle"
-        rec = {"i": 0, "n": len(lines), "state": state,
+        rec = {"state": state,
                "kind": ("perm" if p[5].startswith("perm") else "ask") if state == "needs" else "",
                "key": "#" + p[6] if p[6].isdigit() else "", "title": p[13].strip(),
                "node": pnode or here, "lost": False, "wid": wid}
     if not peer:
         rec.update(stamp_ctx(p))   # this machine's own window: its stamps are the freshest reading
-    # 「! N 个在等你」 off the same rows ‹ i/n › counts: every needs row but a lost
-    # one (what a lost row last said is no longer known)
-    waiting = sum(1 for l in lines if (l + [""] * 6)[5] == "needs" and (l + [""] * 3)[2] != "lost")
-    if not lines:
-        states = {}
-        own = view_rows(sock, win, states)
-        rec["n"] = len(own)
-        rec["i"] = own.index(win) + 1 if win in own else 0
-        waiting = sum(1 for w in own if states.get(w) == "needs")
-    rec["waiting"] = waiting
-    conf = str(reg.parent) if kv.get("reg") else os.environ.get("FLEET_CONF_DIR", "")
-    rec["cfg_broken"] = bool(hit and (hit[1] + [""] * 16)[15] == "broken") or \
-        (not peer and bool(conf) and cfg_broken(conf, sess, win))
+        if rec["state"] == "needs":
+            rec["q"] = asked(sock, win) or rec.get("q", "")
     if p[12] == "orchestrator" and not rec.get("title"):
         rec["title"] = say("sidebar_portal") or "新任务"
     down = ""
@@ -519,10 +443,6 @@ def node_record(kv):
 
 def render_node(kv, cols):
     rec, down, rr, via = node_record(kv)
-    if cols < NODE_NARROW:
-        # a phone (issue #3006, C9): no 剩余 · model · effort — the key, the title
-        # and the machine are what a thumb's screen has room for
-        rec = {k: v for k, v in rec.items() if k not in ("ctx_left", "model", "effort")}
     parts, bg = layout(rec, cols, down, rr, None, via)
     print(paint(parts, bg))
     return 0
@@ -555,14 +475,6 @@ def shell_client(sess):
     return best[0]
 
 
-def list_pane(sess):
-    for line in shell_tmux(sess, "list-panes", "-a", "-F", "#{pane_id} #{@sidebar}").splitlines():
-        pid, _, flag = line.partition(" ")
-        if flag == "1":
-            return pid
-    return ""
-
-
 def note(sess, client, text):
     shell_tmux(sess, "display-message", *(["-c", client] if client else []), text)
 
@@ -577,12 +489,6 @@ def switcher_cmd(sess, client):
 def click(what, sess):
     rec = read_record() or {}
     client = shell_client(sess)
-    if what in ("prev", "next"):
-        pane = list_pane(sess)
-        if pane:
-            shell_tmux(sess, "set-option", "-pa", "-t", pane, "@sidebar_do", what + " ", ";",
-                       "send-keys", "-t", pane, "F12")
-        return 0
     if what == "title":
         subprocess.run(switcher_cmd(sess, client), env=shell_env(sess), stdin=subprocess.DEVNULL,
                        capture_output=True)

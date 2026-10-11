@@ -340,6 +340,8 @@ def bar_record(rows, current, session=""):
     return {
         "i": ids.index(current) + 1 if current in ids else 0, "n": len(ids),
         "state": row[1], "kind": kind, "key": row[9] if row[9] not in ("—", "·") else "",
+        # what it asks, in the title's place on the top line (issue #3194)
+        "q": re.sub(r"\s+", " ", row[17]).strip()[:200] if row[1] == "needs" else "",
         "title": (row[13] or row[3]).strip(), "pr": pr,
         "repo": repo if len(repos) > 1 else "", "slug": slug if slug != "none" else "",
         "node": machine_tag(node.rstrip("!~"))[1:] if node.rstrip("!~") else tr("sidebar_here"),
@@ -369,13 +371,14 @@ def cache_record(session, current, rows, ids):
         line = None
     if line is None:
         return None
-    p = line + [""] * (25 - len(line))
+    p = line + [""] * (28 - len(line))
     state = p[5] or "idle"
     node = p[1].strip()
     return {
         "i": 0, "n": len(ids), "state": state,
         "kind": ("perm" if p[9].startswith("perm") else "ask") if state == "needs" else "",
         "key": "#" + p[3] if p[3].isdigit() else "",
+        "q": re.sub(r"\s+", " ", p[27]).strip()[:200] if state == "needs" else "",
         "title": (p[16] or p[7]).strip(), "pr": "", "repo": "", "slug": "",
         "node": machine_tag(node)[1:] if node else tr("sidebar_here"),
         "lost": p[2] == "lost", "direct": False,

@@ -16,7 +16,7 @@
 #   D  keepalive — a running loop goes on past its LOOP_SECS while --ensure keeps
 #      being called (hubsess.want), and stops LOOP_SECS after the last call
 #   E  seen at once (issue #3184) — hub_ok 2 hours old and the hub silent: the
-#      popup's red banner names the machine, its rows read 「⊘ 失联 120 分钟」 and
+#      popup's red banner names the machine, its rows read 「? 失联 120 分钟」 and
 #      are grey end to end, ↵ on one says 进不去 instead of going; hub_ok back to
 #      now ⇒ the next read has no banner; a popup left open (a real one, on a pty)
 #      shows a row added to the cache within 2-4 s (FLEET_VIEW_REFRESH)
@@ -163,7 +163,7 @@ ban = fv.banner(items)
 chk("banner names the machine and the minutes", ("farbox" in ban, "120 分钟没更新" in ban, "正在重连" in ban), (True, True, True))
 for e in far:
     chk("lost", e.get("lost"), True)
-    chk("tag 「⊘ 失联 120 分钟」", "⊘ 失联 120 分钟" in e["tags"], True)
+    chk("tag 「? 失联 120 分钟」", "? 失联 120 分钟" in e["tags"], True)
     chk("↵ says 进不去", "进不去" in (fv.lost_msg(e) or ""), True)
     for lit in (False, True):
         segs = fv.paint([e], 0 if lit else -1, 100, len, lambda t, n: t[:n])[0]
@@ -225,6 +225,6 @@ finally:
 PY2
 )
   [ "$r" = ok ] || fail "E: a popup left open did not show the new row in time" "$r"
-  pass "E: hub_ok 2 h old — banner, grey 「⊘ 失联 120 分钟」 rows, ↵ 进不去; back to now — no banner; an open popup shows a new row within 2-4 s"
+  pass "E: hub_ok 2 h old — banner, grey 「? 失联 120 分钟」 rows, ↵ 进不去; back to now — no banner; an open popup shows a new row within 2-4 s"
 ;; esac
 echo "PASS fleet-view-hub-fresh-selftest ($LEGS)"

@@ -427,15 +427,20 @@ in the background as from the session. In every other layout ⌃\ goes to the
 pane. `fleet-client-solo-selftest.sh` B and D5, `fleet-remote-view-selftest.sh` S
 pin it.
 
-**The top line is the same at every width** — the stage's own status line
-(`conf/tmux-shell-stage.conf` → `bin/fleet-topbar.py`): `‹ i/n ›` · state (●
-working · ? asking you · ⊘ needs OK · ↻ looping · ✓ done · ○ idle) · key · title
-…… PR · repo (only when the client shows more than one) · `@machine` (`⟳ 4s`
-while this computer reconnects to it, `offline` when the hub calls it lost, `·
-中转` on the hub relay, `旧` behind stable). Narrow, it drops the repo (< 130
-columns), the PR (< 110), the state's word (< 70), then clips the title; `‹ i/n
-›`, the key and the machine stay. The whole line is red only while the session
-asks you a question, grey only while its machine is out of reach.
+**The top line says this session only, in the ⌘P panel's glyphs** (issue #3194,
+EPIC #3178) — the stage's own status line (`conf/tmux-shell-stage.conf` →
+`bin/fleet-topbar.py`; a 看台 draws the same with `render --node`): glyph · state
+word · #N · title …… PR · context. The six glyphs and their colours are
+`bin/fleet_view.py`'s one table — **!** waiting on you · **x** failed / exited ·
+**»** working · **✓** done · **∙** idle · **?** lost / on the relay (ASCII with
+`FLEET_GLYPHS=ascii`, uncoloured with `NO_COLOR`). Three widths: a phone (~45
+columns) has the glyph, #N, the clipped title and 「62%」; from 80 the state's word,
+「PR #N」 and 「62% Opus 5.5 high」; from 140 the repo after the title, the PR's
+checks (✓ / … / ✗), 「剩余 62% · Opus 5.5 · high」 and 「⌘P」. The whole line is red
+while the session waits on you — a question or an OK, its own words in the
+title's place — and grey with ? while its machine is out of reach (「m4 连不上」)
+or on the hub relay (「m4 经中转」), the only time the machine is named. Going
+round the sessions, and what the others are doing, is the panel's (⌘P ↑↓ ↵).
 
 It reads ONE record, `switch-bar.json` beside the switch history, which the list
 writes off the very rows it paints (`fleet-sidebar.py bar_record`) — so the line

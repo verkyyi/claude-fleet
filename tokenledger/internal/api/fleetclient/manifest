@@ -170,6 +170,8 @@ bin/dash-fold-toggle.sh
 # and the iTerm2 profile whose ⌘ chords send the switch codes
 bin/fleet-quickopen.py
 bin/fleet-topbar.py
+# the top line's six glyphs + their colours are the ⌘P panel's one table (#3194)
+bin/fleet_view.py
 bin/fleet-iterm-profile.py
 # ⌘N's writing area (#1953): the stage's portal pane and its one way out
 bin/fleet-compose.py

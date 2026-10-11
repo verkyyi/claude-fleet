@@ -2,10 +2,11 @@
 # fleet-client-layout-selftest.sh — the client on a phone, and the session's top
 # line (issue #1904, EPIC #1906 C11).
 #
-#   A  pure: bin/fleet-topbar.py lays the line out at 150 / 100 / 60 / 44 columns
-#      in the design's drop order (repo → PR → the state's word → the title
-#      clipped; ‹ i/n ›, the key and the machine always kept), red only while the
-#      session asks you, grey only while its machine is lost or reconnecting;
+#   A  pure: bin/fleet-topbar.py lays the line out at 140 / 80 / 45 columns, the
+#      ⌘P panel's glyphs (issue #3194: ! x » ✓ ∙ ?, the word from 80, the PR from
+#      80 and its checks from 140, the % on every width), red while the session
+#      waits on you (its question in the title's place), grey with ? while its
+#      machine is lost, reconnecting or on the relay — the only time it is named;
 #      fleet-sidebar.py bar_record reads the line's record off the list's own rows
 #      (place, key, PR, repo only in a fleet of several); fleet-quickopen.py's
 #      full-screen switcher groups 在等你的 · 最近 (1–9) · 全部; single_layout.
@@ -44,60 +45,76 @@ def has(what, text, part, yes=True):
     if (part in text) != yes:
         errs.append("%s: %r %s %r" % (what, text, "lacks" if yes else "has", part))
 rec = {"i": 3, "n": 8, "state": "working", "kind": "", "key": "#1894",
-       "title": "机器上一直有会话在忙，也照样更新", "pr": "#1885●", "repo": "claude-fleet",
-       "slug": "verkyyi/claude-fleet", "node": "m5", "lost": False, "direct": False, "ask": 1}
+       "title": "机器上一直有会话在忙，也照样更新", "pr": "#1885✓", "repo": "claude-fleet",
+       "slug": "verkyyi/claude-fleet", "node": "m5", "lost": False, "direct": False, "ask": 1,
+       "ctx_left": 62, "ctx_band": "ok", "ctx_ts": 1000, "model": "Opus 5.5", "effort": "high"}
+os.environ["FLEET_UI_LANG"] = "zh"
+# the design's three widths (issue #3194): 45 · 80 · 140, the ⌘P panel's glyphs
 w = {}
-for cols in (150, 100, 60, 44):
-    text, bg = tb.fit(rec, cols, now=0)
+for cols in (140, 80, 45):
+    text, bg = tb.fit(rec, cols, now=1060)
     w[cols] = text
     eq("%d: the line is exactly the width" % cols, tb.cells(text), cols)
     eq("%d: no colour while all is well" % cols, bg, None)
-    for part in ("‹ 3/8 ›", "#1894", "@m5", "●"):
+    for part in ("»", "#1894", "62%", "机器上"):
         has("%d: never dropped" % cols, text, part)
-has("150: everything", w[150], "PR #1885●"); has("150: the repo", w[150], "claude-fleet")
-has("150: the state's word", w[150], "● working")
-has("100: the repo goes first", w[100], "claude-fleet", False); has("100: then the PR", w[100], "PR #", False)
-has("100: the word stays", w[100], "● working"); has("100: the title whole", w[100], rec["title"])
-has("60: the word goes", w[60], "working", False)
-has("44: the title clipped", w[44], "…"); has("44: still the start of the title", w[44], "机器上")
-ask = dict(rec, state="needs", kind="ask")
-t, bg = tb.fit(ask, 100, now=0); eq("asking: red", bg, tb.BG_ASK); has("asking: says so", t, "? asking you")
-t, bg = tb.fit(dict(rec, state="needs", kind="perm"), 100, now=0)
-eq("needs OK: not red", bg, None); has("needs OK: ⊘", t, "⊘ needs OK")
-t, bg = tb.fit(dict(rec, lost=True, node="m4"), 100, now=0)
-eq("lost: grey", bg, tb.BG_DOWN); has("lost: offline", t, "@m4 offline")
-t, bg = tb.fit(rec, 100, down="1000", now=1004)
-eq("reconnecting: grey", bg, tb.BG_DOWN); has("reconnecting: ⟳ 4s", t, "@m5 ⟳ 4s")
-t, _ = tb.fit(rec, 100, route="relay", now=0); has("relay: 中转", t, "@m5 · 中转")
-# the route and who chose it (claude-fleet#2886): @remote_via / @remote_pin / @remote_tries
-t, _ = tb.fit(rec, 100, route="relay", via="manual 中转", now=0); has("pinned: 中转·手动", t, "@m5 · 中转·手动")
-t, _ = tb.fit(rec, 60, via="manual Tailscale", now=0); has("pinned, narrow: still 手动", t, "@m5 · Tailscale·手动")
-t, _ = tb.fit(rec, 100, via="auto Tailscale", now=0); has("auto, wide: Tailscale·自动", t, "@m5 · Tailscale·自动")
-t, _ = tb.fit(rec, 60, route="relay", via="auto 中转", now=0); has("auto relay, narrow: 中转 as before", t, "@m5 · 中转")
-t, _ = tb.fit(rec, 60, via="auto 直连 lan", now=0); has("auto direct, narrow: nothing added", t, "@m5 · ", False)
-t, bg = tb.fit(rec, 100, down="1000", pin="relay", tries="3", now=1004)
-eq("pinned, reconnecting: grey", bg, tb.BG_DOWN); has("pinned, reconnecting: 第 N 次", t, "@m5 ⟳ 4s · 钉住：中转（手动）· 第 3 次重连")
-t, _ = tb.fit(rec, 60, down="1000", pin="relay", tries="3", now=1004); has("pinned, reconnecting, narrow", t, "@m5 ⟳ 4s · 钉中转 3")
-t, _ = tb.fit(dict(ask, lost=True), 100, now=0)
-eq("lost wins over asking: grey", tb.fit(dict(ask, lost=True), 100, now=0)[1], tb.BG_DOWN)
-t, _ = tb.fit(dict(rec, key="", title="scratch-5"), 60, now=0); has("no key: the title", t, "scratch-5")
-# also open on another of your clients (#1932): off client.list.json, wide only;
-# your own client and another session's viewers never count
-d = tempfile.mkdtemp()
-json.dump({"lease": "L1", "clients": [{"id": "L1", "device": "MacBook", "viewing": "f/w9"},
-          {"id": "L2", "device": "iPhone", "viewing": "f/w9"}, {"id": "L3", "device": "iPad", "viewing": "f/other"}]},
-          open(os.path.join(d, "client.list.json"), "w"))
-os.environ["FLEET_CLIENT_LIST_FILE"] = os.path.join(d, "client.list.json"); os.environ["FLEET_UI_LANG"] = "zh"
-also = tb.also_on(dict(rec, wid="f/w9"))
-eq("also: the other client viewing it", also, "也在 iPhone 上打开")
-eq("also: nobody else on this one", tb.also_on(dict(rec, wid="f/w1")), "")
-eq("also: no wid", tb.also_on(rec), "")
-t, _ = tb.fit(dict(rec, also=also), 150, now=0); has("also: shown wide", t, "也在 iPhone 上打开")
-eq("also: the line is still the width", tb.cells(t), 150)
-t, _ = tb.fit(dict(rec, also=also), 100, now=0); has("also: dropped first", t, "也在", False)
-del os.environ["FLEET_CLIENT_LIST_FILE"]; del os.environ["FLEET_UI_LANG"]
-eq("loop / done / idle glyphs", [tb.state_of({"state": s})[0] for s in ("looping", "done", "", "failed")],
-   ["↻", "✓", "○", "✖"])
+    for gone in ("‹", "›", "@m5", "m5", "●", "working"):
+        has("%d: no %s (#3194)" % (cols, gone), text, gone, False)
+eq("140: all of it", w[140].split(), ["»", "在干活", "·", "#1894", rec["title"], "·", "claude-fleet",
+                                      "PR", "#1885", "✓", "·", "剩余", "62%", "·", "Opus", "5.5", "·", "high",
+                                      "·", "⌘P"])
+eq("80: word, PR, 62% Opus 5.5 high", w[80].split(), ["»", "在干活", "·", "#1894", rec["title"],
+                                                     "PR", "#1885", "·", "62%", "Opus", "5.5", "high"])
+eq("45: the glyph, #N, the title clipped, the %", w[45].split(), ["»", "#1894", "机器上一直有会话在忙，也照样更…", "62%"])
+# each state, at 80
+def at(cols=80, **kw):
+    return tb.fit(dict(rec, **kw), cols, now=1060)
+t, bg = at(state="needs", kind="ask", q="要你确认：删掉旧分支吗？")
+eq("asking: red", bg, tb.BG_ASK); has("asking: !, no word", t, " ! #1894 要你确认：删掉旧分支吗？")
+has("asking: the question takes the title's place", t, "机器上", False)
+t, bg = at(state="needs", kind="perm", q="Bash: git push")
+eq("needs OK: red too", bg, tb.BG_ASK); has("needs OK: its words", t, "! #1894 Bash: git push")
+t, _ = at(state="needs", kind="ask"); has("asking, no words: the title", t, "! #1894 机器上")
+t, bg = at(state="done", pr="merged"); eq("done: no colour", bg, None)
+has("done: ✓ 做完了", t, " ✓ 做完了 · #1894"); has("done: PR 已合并", t, "PR 已合并 · 62%")
+t, bg = at(state="exited"); eq("exited: the line unchanged", bg, None); has("exited: x 已退出", t, " x 已退出 · #1894")
+t, _ = at(state="failed"); has("failed: x 失败", t, " x 失败 · ")
+eq("exited: only the glyph red", [p[1] for p in tb.layout(dict(rec, state="exited"), 80, now=1060)[0] if p[2] == "sym"],
+   ["colour1"])
+t, _ = at(state="idle"); has("idle: ∙ 空闲", t, " ∙ 空闲 · ")
+t, _ = at(state="sleeping"); has("asleep: ∙ 空闲", t, " ∙ 空闲 · ")
+for s in ("looping", "preparing", "waking"):
+    has("%s: » 在干活" % s, at(state=s)[0], " » 在干活 · ")
+t, bg = at(lost=True)
+eq("lost: grey", bg, tb.BG_DOWN); has("lost: ?, no word", t, " ? #1894 "); has("lost: the machine", t, "· m5 连不上")
+t, bg = at(45, lost=True); eq("lost 45: grey", bg, tb.BG_DOWN); has("lost 45: 62% m5 连不上", t, "62% m5 连不上")
+eq("lost 45: still the width", tb.cells(t), 45)
+t, bg = tb.fit(rec, 80, down="1000", now=1004)
+eq("reconnecting: grey", bg, tb.BG_DOWN); has("reconnecting: 连不上", t, "m5 连不上")
+t, bg = tb.fit(rec, 80, route="relay", now=1060)
+eq("relay: grey", bg, tb.BG_DOWN); has("relay: ? · 经中转", t, "· m5 经中转"); has("relay: ?", t, " ? #1894")
+t, bg = tb.fit(rec, 80, via="auto 中转", now=1060); has("auto relay: 经中转", t, "m5 经中转")
+t, bg = tb.fit(rec, 80, via="manual Tailscale", now=1060); eq("Tailscale: all well", bg, None)
+has("Tailscale: no machine", t, "m5", False)
+t, bg = tb.fit(rec, 80, down="1000", pin="relay", tries="3", now=1004)
+has("pinned, reconnecting: 第 N 次", t, "m5 连不上 · 第 3 次重连")
+eq("grey: the ? stays yellow", [p[1] for p in tb.layout(rec, 80, route="relay", now=1060)[0] if p[2] == "sym"],
+   ["colour3"])
+eq("lost wins over asking: grey", tb.fit(dict(rec, state="needs", kind="ask", lost=True), 80, now=1060)[1], tb.BG_DOWN)
+t, _ = at(key="", title="整理周报里的发布时间线"); has("no issue: the title alone", t, " » 在干活 · 整理周报里的发布时间线")
+t, _ = at(140, pr="#7…"); has("140: checks running", t, "PR #7 …")
+t, _ = at(140, pr="#7✗"); has("140: checks red", t, "PR #7 ✗")
+t, _ = at(80, pr="#7✗"); has("80: no checks", t, "PR #7 ·")
+eq("glyphs: the panel's table", [tb.sym_of({"state": s}) for s in ("needs", "failed", "working", "done", "idle")],
+   ["needs", "fail", "work", "done", "idle"])
+eq("colours: the panel's table", tb.FV.GLYPH_COLORS["work"], 2)
+os.environ["FLEET_GLYPHS"] = "ascii"
+t, _ = at(140); has("ascii: > and +", t, " > 在干活 · #1894"); has("ascii: PR #N +", t, "PR #1885 +")
+del os.environ["FLEET_GLYPHS"]
+os.environ["NO_COLOR"] = "1"
+eq("NO_COLOR: the glyph uncoloured", [p[1] for p in tb.layout(rec, 80, now=1060)[0] if p[2] == "sym"], [None])
+del os.environ["NO_COLOR"]
+eq("» and ∙ are one cell, as the panel counts", (tb.cells("»"), tb.cells("∙"), tb.cells("中")), (1, 1, 2))
 # the record, off the list's rows (fleet-sidebar.py bar_record)
 os.environ["FLEET_SHELL"] = "1"
 sb = load("sb", "fleet-sidebar.py")
@@ -108,6 +125,9 @@ rows = [["hdr", "verkyyi/claude-fleet", "", "claude-fleet", ""],
         ["@3", "done", "✓", "three", "", "", "0", "", "", "—", "", "", ""]]
 r = sb.bar_record(rows, "@2")
 eq("record: place", (r["i"], r["n"]), (2, 3)); eq("record: perm", r["kind"], "perm")
+eq("record: what it asks (#3194)", sb.bar_record([rows[2][:13] + ["", "", "", "", "Bash: git  push\n"]], "@2")["q"],
+   "Bash: git push")
+eq("record: nothing asked, no words", sb.bar_record(rows, "@1")["q"], "")
 eq("record: key / pr", (r["key"], r["pr"]), ("#2", "#9✓")); eq("record: lost", r["lost"], True)
 eq("record: machine", r["node"], "m4"); eq("record: repo in a fleet of two", r["repo"], "claude-fleet")
 eq("record: slug", r["slug"], "verkyyi/claude-fleet"); eq("record: waiting rows", r["ask"], 1)
@@ -118,30 +138,24 @@ eq("record: a one-repo fleet names no repo", sb.bar_record(rows[:3], "@1")["repo
 eq("record: no PR → empty", sb.bar_record(rows, "@1")["pr"], "")
 eq("record: a title field (14th) wins over the name", sb.bar_record(
    [rows[1][:13] + ["The real title"]], "@1")["title"], "The real title")
-# 剩余 % · model · effort on the right (issue #2717): the node header's four widths
-c = dict(rec, ctx_left=62, ctx_band="ok", ctx_ts=1000, model="Opus 5.5", effort="high")
-w = {cols: tb.fit(c, cols, now=1060)[0] for cols in (150, 100, 60, 44)}
-for cols, want in ((150, "剩余 62% · Opus 5.5 · high"), (100, "剩余 62% · Opus 5.5 · high"),
-                   (60, "62% · O5.5 · H")):
-    has("ctx %d" % cols, w[cols], want)
-    eq("ctx %d: still the width" % cols, tb.cells(w[cols]), cols)
-has("ctx 60: no 剩余", w[60], "剩余", False)
-has("ctx 44: the % alone", w[44], "62%"); has("ctx 44: no model", w[44], "O5.5", False)
-has("ctx: before the machine", w[150], "high  @m5")
-parts = tb.layout(c, 150, now=1060)[0]
+# the context reading on every width (issue #2717, #3194): its three forms
+c = dict(rec)
+for cols, want in ((140, "剩余 62% · Opus 5.5 · high"), (80, "62% Opus 5.5 high"), (45, "62%")):
+    eq("ctx %d" % cols, "".join(p[0] for p in tb.ctx_parts(c, cols, 1060)), want)
+parts = tb.layout(c, 140, now=1060)[0]
 eq("ctx >50: green", [p[1] for p in parts if p[0].startswith("剩余")], [tb.OK])
-eq("ctx 20–50: amber", tb.ctx_parts(dict(c, ctx_left=50), 150, 1060)[0][1], tb.WARN)
-eq("ctx <20: red", tb.ctx_parts(dict(c, ctx_left=19), 150, 1060)[0][1], tb.BAD)
-h = tb.ctx_parts(dict(c, ctx_left=8, ctx_band="handoff"), 150, 1060)
-eq("handoff: red + ⚠ 将交接", h[0], ("剩余 8% ⚠ 将交接", tb.BAD, ""))
-eq("handoff 60: ⚠ alone", tb.ctx_parts(dict(c, ctx_band="handoff"), 60, 1060)[0][0], "62% ⚠")
-old = tb.ctx_parts(c, 150, 1000 + 420)
+eq("ctx 20–50: amber", tb.ctx_parts(dict(c, ctx_left=50), 140, 1060)[0][1], tb.WARN)
+eq("ctx <20: red", tb.ctx_parts(dict(c, ctx_left=19), 140, 1060)[0][1], tb.BAD)
+h = tb.ctx_parts(dict(c, ctx_left=15, ctx_band="handoff"), 80, 1060)
+eq("handoff: red + ⚠", h[0], ("15% ⚠", tb.BAD, ""))
+has("handoff 80: 15% ⚠ Opus 5.5 high", tb.fit(dict(c, ctx_left=15, ctx_band="handoff"), 80, now=1060)[0], "15% ⚠ Opus 5.5 high")
+old = tb.ctx_parts(c, 140, 1000 + 420)
 eq("5 minutes old: all grey", [p[1] for p in old], [tb.DIM, tb.DIM])
 has("5 minutes old: N 分钟前", old[1][0], " · 7 分钟前")
-eq("gpt short form", tb.short_model("gpt-6-astra"), "g6a")
-t, _ = tb.fit(dict(rec, model="Opus 5.5", effort="high"), 150, now=0)
+nc = {k: v for k, v in rec.items() if k not in ("ctx_left",)}
+t, _ = tb.fit(nc, 140, now=0)
 has("no ctx_left: no segment", t, "Opus", False)
-eq("no ctx_left: no parts, no error", tb.ctx_parts(rec, 150, 0), [])
+eq("no ctx_left: no parts, no error", tb.ctx_parts(nc, 140, 0), [])
 r = sb.bar_record([rows[1][:13] + ["", "", "", "", "", "62|ok|1000|Opus 5.5|high"]], "@1")
 eq("record: field 19 → the five", {k: r.get(k) for k in ("ctx_left", "ctx_band", "ctx_ts", "model", "effort")},
    {"ctx_left": 62, "ctx_band": "ok", "ctx_ts": 1000, "model": "Opus 5.5", "effort": "high"})
@@ -307,11 +321,13 @@ try:
              if not l.endswith(' 1')][0]
     check(zoomed() == '0' and wopt('@fleet_single') == '', '160: zoomed or marked single')
     top = tm('capture-pane', '-p', '-t', right).split('\n')[0]
-    check(wait(lambda: '@m4' in tm('capture-pane', '-p', '-t', right).split('\n')[0], 8),
+    check(wait(lambda: '#1894' in tm('capture-pane', '-p', '-t', right).split('\n')[0], 8),
           'the stage top line does not say the record: %r' % tm('capture-pane', '-p', '-t', right).split('\n')[0])
     top = tm('capture-pane', '-p', '-t', right).split('\n')[0]
-    check('62% · ' in top, 'the top line draws no 剩余 %% · model (#2717): %r' % top)
-    check('‹ 3/8 ›' in top and '#1894' in top and '@m4' in top, 'the top line: %r (stage cw=%s, pane %s)' % (top, tm('list-clients', '-F', '#{client_width}', s=stage), tm('display-message', '-p', '-t', right, '#{pane_width}')))
+    check(wait(lambda: '62% ' in tm('capture-pane', '-p', '-t', right).split('\n')[0], 8),
+          'the top line draws no 剩余 %% · model (#2717): %r' % tm('capture-pane', '-p', '-t', right).split('\n')[0])
+    top = tm('capture-pane', '-p', '-t', right).split('\n')[0]
+    check('#1894' in top and 'TitleOfTheSession' in top and '@m4' not in top, 'the top line: %r (stage cw=%s, pane %s)' % (top, tm('list-clients', '-F', '#{client_width}', s=stage), tm('display-message', '-p', '-t', right, '#{pane_width}')))
     print('B: 160 columns — the list beside the session; the top line: %s' % top.strip())
     os.write(master, b'\x1bOR')   # F3, xterm's
     check(wait(lambda: '^[OR' in tm('capture-pane', '-p', '-t', 'fc-stage:', s=stage), 4),
@@ -337,7 +353,7 @@ try:
     print('B: 60 columns — one pane (the list running behind), F3 no longer reaches the session, ⌘↩ keeps it, F1 opens the switcher')
     # a tap on the top line's title, through the nested client
     top = tm('capture-pane', '-p', '-t', right).split('\n')[0]
-    check(wait(lambda: '@m4' in tm('capture-pane', '-p', '-t', right).split('\n')[0], 8),
+    check(wait(lambda: 'TitleOfTheSession' in tm('capture-pane', '-p', '-t', right).split('\n')[0], 8),
           '60: the top line lost the title: %r' % top)
     top = tm('capture-pane', '-p', '-t', right).split('\n')[0]
     x = top.index('TitleOfTheSession') + 3

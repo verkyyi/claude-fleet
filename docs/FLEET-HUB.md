@@ -342,8 +342,7 @@ refuses, the warm loop opens nothing and the keeper stops renewing; Enter is an
 acquire again. On one machine a second `fleet` attaches to the running server
 (never a second one) and both clients simply work; the one typed into last is
 that server's where. A renewal also carries `viewing` (the worker id the stage
-shows), so the top line says 「也在 iPhone 上打开」 when another of your clients
-looks at the same session. A lapsed lease (a MacBook asleep) carries on when it
+shows) — the top line no longer says 「也在 iPhone 上打开」 (issue #3194). A lapsed lease (a MacBook asleep) carries on when it
 wakes unless it was asked to leave. A server that ends releases its lease. An
 older hub (one lease a person) still answers `taken_over` with no reason, and the
 old screen 「正在 <device> 上使用 · 按回车接回」 shows. A hub restart forgets
