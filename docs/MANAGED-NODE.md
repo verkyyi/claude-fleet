@@ -485,6 +485,9 @@ BREAK-IT 行 `service-handwritten`。只点名接管过的登录（`logins/<登�
 次日 07:00 的 `daily-<日期>` 会话由守护开出；手机收到一条测试短信推送。`~/daily-report/run.sh --now`
 仍可手动补跑一版。
 
+**mini2 的手机 MCP（#3247）**：`phone-mcp` 同样登记给守护，以管理员登录 verkyyi 常驻、带鉴权代理听 tailnet，
+人的每个登录经 http 连它——装法、配法、换令牌见 [PHONE-MCP.md](PHONE-MCP.md)。
+
 ## 14. 托管机器不是谁的常驻客户端（#2702 · #2720 · #2904）
 
 人在自己的设备上跑 `fleet`（客户端壳）；托管机器只跑会话和后台服务。所以在托管机器上
