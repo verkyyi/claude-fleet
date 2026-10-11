@@ -224,6 +224,10 @@ if [ "${1:-}" = select ] && [ -n "${3:-}" ]; then
     _s=${_row#*	}; _s=${_s%%	*}
     case "$_row" in *"	fuid="*) _u=${_row#*	fuid=}; _u=${_u%%	*} ;; esac ;;
   esac
+  # No thin row for a far 看台 yet: 5 HERE (issue #3036). Falling through, the
+  # attach could write its row while the lib loads, and the slow path below —
+  # seeing it thin — would answer rv_select's 3 (gone) for a 看台 one beat old.
+  case "$_v" in *-via-*) [ -n "$_s" ] || exit 5 ;; esac
   _t=${2#wid:}
   if [ -n "$_s" ] && [ -n "$_u" ] && [ "${_t%%/*}" = "$_u" ]; then
     command -v tmux >/dev/null 2>&1 || PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
