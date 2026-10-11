@@ -31,7 +31,7 @@ func adminList(t *testing.T, h *harness, q string) (rows []feedbackRow, counts m
 	t.Helper()
 	st, _, b := adminGet(t, h, AdminFeedbackPath+q)
 	var out struct {
-		Feedback []feedbackRow `json:"feedback"`
+		Feedback []feedbackRow  `json:"feedback"`
 		Counts   map[string]int `json:"counts"`
 		Next     string         `json:"next"`
 	}
