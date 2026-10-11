@@ -63,6 +63,14 @@ const (
 	// credRefusedWait is the retry after the hub refused this login (revoked,
 	// or no account yet): it may be lifted, or the account may land.
 	credRefusedWait = 15 * time.Minute
+	// credNoPrincipalMin is the first retry after a no_principal refusal
+	// (claude-fleet#3397): a freshly opened login's first lease always beats
+	// the hub's registering it — its fleet arrives on the same heartbeats —
+	// so the wait doubles from here up to credRefusedWait instead of starting
+	// there, and a new login has credentials within a minute, not fifteen.
+	credNoPrincipalMin = 30 * time.Second
+	// leaseNoPrincipal is the hub's LeaseNoPrincipal reason.
+	leaseNoPrincipal = "no_principal"
 	// credRejectPoll is how often a waiting lease loop looks for an upstream
 	// refusal of a token it holds (claude-fleet#2007): a new one renews at
 	// once instead of at the token's exp, which a revocation does not move.
@@ -128,6 +136,7 @@ func (a *Agent) runCredLeases(ctx context.Context) {
 	}
 	var bo nodeBackoff
 	var lastErr string
+	noPrincipal := 0
 	for {
 		wait, err := a.credCycle(ctx)
 		if ctx.Err() != nil {
@@ -136,7 +145,12 @@ func (a *Agent) runCredLeases(ctx context.Context) {
 		if err != nil {
 			var refused errLeaseRefused
 			if errors.As(err, &refused) {
-				wait = credRefusedWait
+				wait = credRefusedRetry(refused.reason, noPrincipal)
+				if refused.reason == leaseNoPrincipal {
+					noPrincipal++
+				} else {
+					noPrincipal = 0
+				}
 			} else {
 				wait = bo.next()
 			}
@@ -147,11 +161,30 @@ func (a *Agent) runCredLeases(ctx context.Context) {
 		} else {
 			bo.reset()
 			lastErr = ""
+			noPrincipal = 0
 		}
 		if !a.waitCredLease(ctx, wait) {
 			return
 		}
 	}
+}
+
+// credRefusedRetry is the wait after the hub refused a lease for reason, the
+// n+1-th no_principal in a row being n: no_principal doubles from
+// credNoPrincipalMin up to credRefusedWait (claude-fleet#3397); any other
+// refusal (revoked, …) waits credRefusedWait at once.
+func credRefusedRetry(reason string, n int) time.Duration {
+	if reason != leaseNoPrincipal {
+		return credRefusedWait
+	}
+	w := credNoPrincipalMin
+	for i := 0; i < n && w < credRefusedWait; i++ {
+		w *= 2
+	}
+	if w > credRefusedWait {
+		w = credRefusedWait
+	}
+	return w
 }
 
 // waitCredLease waits wait before the next lease, cut short when an upstream
