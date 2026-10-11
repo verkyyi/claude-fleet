@@ -26,17 +26,8 @@
 // Where (issue #1716): the same module reads bin/fleet-client-where.sh at the
 // start and every WHERE_POLL_MS; where.ts puts the line in the context.
 //
-// Orchestrator (issue #2582): the same start reads the window's @fleet_role and,
-// in the orchestrator's window, its role's text (@fleet_role_body, #2782);
-// orchestrator.ts
-// puts it in every request, so a /clear leaves the session its role.
-//
-// Strings (qd.ts): in the orchestrator's window the same start reads the `qd_`
-// strings its band shows. `/qd` itself moved into the fleet-orchestrate plugin
-// (issue #3114) — this mod registers no command for it.
-//
-// Queue (issue #2617): in the orchestrator's window the same start stamps
-// `@orch_queue 0` (queue.ts counts from there), and a real exit unsets it.
+// The orchestrator's role section (#2582), its band strings and its queue count
+// (#2617) left with the resident seat (issue #3118): nothing here reads a role.
 //
 // Panels (issue #2835) — the decision sheet, the patrol, the batches — are the
 // fleet-steward plugin's mod module since issue #3115 (EPIC #3111 C4), drawn only
@@ -53,9 +44,6 @@ import type { EngineInterface, On, Timer, ToolSpec } from 'claude-code'
 import type { FleetModStatus } from '../types'
 import { isOpen, openGate } from './gate'
 import { INBOX_MS, inboxDir, pollInbox } from './inbox'
-import { bodyArgv, isOrchestrator, roleArgv, rolePath, takeRole } from './orchestrator'
-import { stringsArgv, takeStrings } from './qd'
-import { QUEUE_OPTION } from './queue'
 import type { InboxIo } from './inbox'
 import { TMUX_TIMEOUT_MS, windowOptionsArgv } from './tmux'
 import { SPEC_TIMEOUT_MS, binDir, fallbackSpecs, specArgv } from './tools'
@@ -142,56 +130,6 @@ async function pollWhere($: EngineInterface): Promise<void> {
   }
 }
 
-// The orchestrator's role (orchestrator.ts): read once — a window's role does not
-// change under a running session. A read that fails adds nothing.
-async function readRole($: EngineInterface): Promise<void> {
-  if (pane === undefined) return
-  let windowRole = ''
-  try {
-    const r = await $.process.run(roleArgv(pane), { timeoutMs: TMUX_TIMEOUT_MS })
-    windowRole = r.exitCode === 0 ? r.stdout : ''
-  } catch {
-    takeRole('', undefined)
-    return
-  }
-  // A role file that cannot be read drops the section, never the window's role
-  // (exit-guard.ts asks isOrchestrator with or without it).
-  // The launcher's rendered body first (@fleet_role_body, #2782), else the copy
-  // beside the skill — a window opened before the stamp existed.
-  let text: string | undefined
-  if (windowRole.trim() === 'orchestrator') {
-    let body = ''
-    try {
-      const b = await $.process.run(bodyArgv(pane), { timeoutMs: TMUX_TIMEOUT_MS })
-      body = b.exitCode === 0 ? b.stdout.trim() : ''
-    } catch {
-      body = ''
-    }
-    for (const path of body !== '' ? [body, rolePath($.plugin.root)] : [rolePath($.plugin.root)]) {
-      try {
-        text = await $.fs.read(path)
-        break
-      } catch {
-        text = undefined
-      }
-    }
-  }
-  takeRole(windowRole, text)
-}
-
-// The `qd_` / `orch_queue` strings (qd.ts), for the orchestrator's band. /qd
-// itself is the fleet-orchestrate plugin's (issue #3114). A read that fails
-// leaves every key showing itself, never costs the session.
-async function readStrings($: EngineInterface): Promise<void> {
-  if (!isOrchestrator()) return
-  try {
-    const r = await $.process.run(stringsArgv($.plugin.root), { timeoutMs: TMUX_TIMEOUT_MS })
-    if (r.exitCode === 0) takeStrings(r.stdout)
-  } catch {
-    // Every key shows itself; the command still works.
-  }
-}
-
 async function pollOnce($: EngineInterface): Promise<void> {
   // One command at a time: a /compact can hold its run for a minute, and the
   // next one waits its turn behind it rather than racing it.
@@ -249,14 +187,9 @@ async function onReady($: EngineInterface): Promise<void> {
   modelTimer = $.clock.every(MODEL_POLL_MS, () => {
     void pollModel($)
   })
-  // The orchestrator's role, in the context from the first request (#2582).
-  await readRole($)
   const home = (await $.env.get('HOME')) ?? ''
   const conf = (await $.env.get('FLEET_CONF_DIR')) || `${home}/.config/claude-fleet`
   const tmux = await $.env.get('TMUX')
-  await readStrings($)
-  // What waits behind its turn starts at 0, so a counting orchestrator always says a number (#2617).
-  if (isOrchestrator()) await setOptions($, { [QUEUE_OPTION]: '0' }).catch(() => undefined)
   // Where the person is, in the context from the first request (#1716).
   await pollWhere($)
   whereTimer?.cancel()
@@ -304,7 +237,6 @@ export function registerLifecycle(on: On): void {
       whereTimer = undefined
       await setOptions($, {
         '@mod_alive': null,
-        ...(isOrchestrator() ? { [QUEUE_OPTION]: null } : {}),
       })
     }
     return next(e)

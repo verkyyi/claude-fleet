@@ -27,18 +27,6 @@ export type ProgressSnapshot = {
   needsKids: string[]
 }
 
-/** What waits behind the orchestrator's running turn (issue #2617). */
-export type OrchQueue = {
-  /** Prompts typed by hand over the running turn, not yet folded in. */
-  n: number
-  /** When the running turn started (epoch ms); 0 = idle. */
-  since: number
-  /** The main loop's tool call running now ('' = the model is thinking). */
-  what: string
-  /** The last tick (epoch ms) — what the band's seconds count to. */
-  now: number
-}
-
 declare module 'claude-code' {
   interface PluginState {
     fleet: {
@@ -46,8 +34,6 @@ declare module 'claude-code' {
       progress: ProgressSnapshot | null
       /** Alert keys standing now and already toasted (`kid:issue-12`, `pr:34`). */
       alerts: string[]
-      /** What waits behind the orchestrator's turn (issue #2617). */
-      queue: OrchQueue
     }
   }
 }
