@@ -15,6 +15,9 @@
 #      one line, exit 3, `fleet claude --here` is its road as before. An unmanaged
 #      machine, the hatch FLEET_NODE_CLIENT=1 and the test identity: the install's
 #      own script, the update asked, no FLEET_NODE_HOSTED — byte for byte as before.
+#      Over ssh (SSH_CONNECTION, issue #3006) plain `fleet` is the thin loop: the
+#      runtime's fleet-thin.py --local on a managed machine, the install's
+#      elsewhere; FLEET_CLIENT=shell (and `fleet <machine>`) the old client.
 #   B. the real client from a sandbox runtime (every real script, a fake
 #      fleet-connect.py that finds no machine online, a lease stub around the real
 #      `device`), headless: up on its own tmux server, the environment says
@@ -96,6 +99,13 @@ printf '%s\n' "\${FLEET_SHELL_SESSION:-}" > "$W/sess"
 exit 0
 EOF
 chmod +x "$W/fakert/bin/fleet-shell.sh"
+# the thin loop (issue #3006): the runtime's and the install's, each saying which it is
+for w in fakert inst; do
+  cat > "$W/$w/bin/fleet-thin.py" <<EOF
+import os, sys
+open("$W/calls", "a").write("$w fleet-thin.py %s|hosted=%s\\n" % (" ".join(sys.argv[1:]), os.environ.get("FLEET_NODE_HOSTED", "")))
+EOF
+done
 # fa <env…> -- <args…> → $out (stderr+stdout), $rc, $calls
 fa() {
   local e=()
@@ -137,6 +147,18 @@ inst fleet-shell.sh |hosted=|cache="
 fa FLEET_NODE_STATE="$W/nowhere" --
 eq "A an unmanaged machine: as before, no line" "$calls|$out" "inst fleet-client-update.sh start|hosted=|cache=
 inst fleet-shell.sh |hosted=|cache=|"
+# over ssh (a phone, issue #3006): the thin loop — on a managed machine the runtime's,
+# --local (no hub, no ssh to itself), no update asked; FLEET_CLIENT=shell the old client
+SSHC='203.0.113.9 50000 10.0.0.3 22'
+fa SSH_CONNECTION="$SSHC" --
+eq "A over ssh: the runtime's thin loop, --local, no update" "$calls" "fakert fleet-thin.py --local|hosted=1"
+fa SSH_CONNECTION="$SSHC" FLEET_CLIENT=shell --
+eq "A over ssh, FLEET_CLIENT=shell: the old client" "$calls" "runtime fleet-shell.sh |hosted=1|cache=$NHC"
+fa SSH_CONNECTION="$SSHC" -- m4
+eq "A over ssh, fleet m4: the old client's machine road" "$calls" "runtime fleet-shell.sh m4|hosted=1|cache=$NHC"
+fa SSH_CONNECTION="$SSHC" FLEET_NODE_STATE="$W/nowhere" --
+eq "A over ssh, an unmanaged machine: the install's thin loop, the hub's pick" "$calls" "inst fleet-client-update.sh start|hosted=|cache=
+inst fleet-thin.py |hosted="
 
 # ---- B. the real client from a sandbox runtime --------------------------------
 echo "B. the client up on the machine, then fleet quit"
@@ -168,7 +190,7 @@ cenv() {
   env FLEET_NODE_RUNTIME="$W/rt" FLEET_HUB_URL=https://hub.example FLEET_HUB_SESSIONS_CMD="cat $W/sessions.json" \
       FLEET_CLIENT_LEASE_CMD="$W/lease.sh" FLEET_CERT_RENEW_CMD=true FLEET_SHELL_WARM=0 FLEET_CLIENT_ACTIONS=0 \
       FLEET_SHELL_NO_ATTACH=1 FLEET_SHELL_NO_FIRST=1 FLEET_SIDEBAR_HOST=selftest-host \
-      SSH_CONNECTION='203.0.113.9 50000 10.0.0.3 22' "$@"
+      SSH_CONNECTION='203.0.113.9 50000 10.0.0.3 22' FLEET_CLIENT=shell "$@"
 }
 up() { cenv FLEET_NODE_HOSTED_IDLE="${1:-600}" sh "$W/inst/bin/fleet" </dev/null >"$W/up.out" 2>&1; }
 gone() { ! T has-session 2>/dev/null && ! TS has-session 2>/dev/null; }

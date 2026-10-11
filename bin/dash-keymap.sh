@@ -23,6 +23,7 @@
 #   dash-keymap.sh --panel dash|backlog|config|switch <command>  # default panel: dash
 #   dash-keymap.sh --panel switch list|actions   # the ⌘ / prefix switch keys (#1903):
 #                                   #   action ⌘glyph iterm-key code prefix-key
+#   dash-keymap.sh --panel switch view   # the 看台's ⌃] letters (#3006): action letter
 #                                   # env names stay DASH_KEY_* within each panel
 #   dash-keymap.sh env              # shell assignments, one fork for the table —
 #                                   #   DASH_KEY_<ACTION>=<fzf key>  DASH_GLYPH_<ACTION>=⌃x|⌥x
@@ -141,11 +142,27 @@ fold ⌘. 0x2e-0x100000 929 .
 switcher ⌘K 0x6b-0x100000 930 s
 quit ⌘Q 0x71-0x100000 931 Q
 dispatch ⌘T 0x74-0x100000 932 t'
+# The 看台's ⌃] letters (issue #3006, EPIC #2999 C9): a terminal with no ⌘ — a
+# phone's Termius, an iPad's Blink — reaches a 看台's actions with ⌃] then ONE
+# letter (fleet_view.py's `fleet-view-pfx` table). Not the prefix column above:
+# that is the old client's tmux prefix row, where p is ⌘↑ and Q is shifted; a
+# thumb wants p the list, n / b next and back up the list, q quit. Only the
+# actions a 看台 binds get a letter; every one is a row of the table above.
+VIEW='quickopen p
+next n
+prev b
+back h
+fwd l
+switcher s
+new c
+dispatch t
+quit q'
   cmd="${1:-list}"
   case "$cmd" in
     list)    printf '%s\n' "$TABLE" ;;
     actions) printf '%s\n' "$TABLE" | awk '{print $1}' ;;
-    *) echo "usage: dash-keymap.sh --panel switch list|actions" >&2; exit 2 ;;
+    view)    printf '%s\n' "$VIEW" ;;
+    *) echo "usage: dash-keymap.sh --panel switch list|actions|view" >&2; exit 2 ;;
   esac
   exit 0 ;;
 *) echo "dash-keymap.sh: unknown panel '$PANEL' (dash|backlog|config|switch)" >&2; exit 2 ;;

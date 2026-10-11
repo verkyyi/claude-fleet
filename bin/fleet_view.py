@@ -87,6 +87,7 @@ VIEW_RE = re.compile(r"^[A-Za-z0-9-]{1,64}$")
 VIEW_ACTIONS = {"next": "do next", "prev": "do prev", "back": "do back", "fwd": "do fwd",
                 "quickopen": "popup", "switcher": "popup"}
 PFX_KEY = "C-]"
+NARROW = 100      # a client narrower than this (a phone) gets the switcher full-screen (#3006)
 HERE, ME = "here", "me"
 
 
@@ -788,11 +789,15 @@ def key_lines(me):
     for line in root.splitlines() if rc == 0 else []:
         if ROOT_RE.match(line):
             lines.append(ROOT_RE.sub(r"\1 -T fleet-view ", line, count=1))
+    keymap = lambda what: subprocess.run(["bash", str(Path(me).parent / "dash-keymap.sh"), "--panel", "switch", what],
+                                         capture_output=True, text=True, timeout=5).stdout
     try:
-        table = subprocess.run(["bash", str(Path(me).parent / "dash-keymap.sh"), "--panel", "switch", "list"],
-                               capture_output=True, text=True, timeout=5).stdout
+        table = keymap("list")
+        # ⌃] + a letter (issue #3006, C9): the 看台's own letters, a thumb's — p the list,
+        # n / b down / up it, q quit; an action with none keeps its prefix-column letter
+        letters = dict(t.split()[:2] for t in keymap("view").splitlines() if len(t.split()) >= 2)
     except (OSError, subprocess.TimeoutExpired):
-        table = ""
+        table, letters = "", {}
     # the codes too (conf/tmux-view.conf sets the same, idempotent)
     codes = sorted({t.split()[3] for t in table.splitlines() if len(t.split()) >= 5} | {"924", "926"})
     lines += ['set-option -s user-keys[%s] "\\e[%s~"' % (c, c) for c in codes if c.isdigit()]
@@ -800,14 +805,16 @@ def key_lines(me):
         f = t.split()
         if len(f) < 5 or f[0] not in VIEW_ACTIONS:
             continue
-        action, code, letter = f[0], f[3], f[4]
+        action, code, letter = f[0], f[3], letters.get(f[0], f[4])
         verb = VIEW_ACTIONS[action]
         if verb == "popup":
             # display-popup expands no format in its command (nor in -e), so the
-            # popup opens from a run-shell, which does — the old client's road too
-            cmd = ("run-shell -b \"tmux display-popup -c '#{client_name}' -E -w 90%% -h 80%% -T ' %s ' "
+            # popup opens from a run-shell, which does — the old client's road too.
+            # Narrower than NARROW columns (a phone, C9): the whole screen
+            size = lambda pc: "#{?#{e|<:#{client_width},%d},100%%,%d%%}" % (NARROW, pc)
+            cmd = ("run-shell -b \"tmux display-popup -c '#{client_name}' -E -w %s -h %s -T ' %s ' "
                    "\\\"python3 '%s' --view '#{session_name}' --client '#{client_name}'\\\" "  # view-ok: the key's own session IS the 看台
-                   ">/dev/null 2>&1 || :\"") % (say("view_title"), me)
+                   ">/dev/null 2>&1 || :\"") % (size(90), size(80), say("view_title"), me)
         else:
             cmd = ("run-shell -b \"python3 '%s' %s --view '#{session_name}' --client '#{client_name}' "  # view-ok: the 看台
                    ">/dev/null 2>&1 || :\"") % (me, verb)

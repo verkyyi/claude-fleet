@@ -10,7 +10,9 @@
 #   fleet m4                    the same, onto a machine you name
 #   fleet --thin [<session>]    the THIN client (#3003, EPIC #2999): one small
 #                               loop and one ssh to your home machine — no tmux
-#                               here; FLEET_CLIENT=thin makes it plain `fleet`
+#                               here; FLEET_CLIENT=thin makes it plain `fleet`,
+#                               and so does an ssh login (a phone, #3006;
+#                               FLEET_CLIENT=shell keeps the old client there)
 #   fleet shell [m4]            the client, by its script's name (fleet-shell.sh)
 #   fleet quit                  退出 fleet (#2349): the client's every process on
 #                               this computer goes — the list, the hub loop, the
@@ -205,10 +207,23 @@ if [ "${1-}" = --test-identity ]; then
   shift
 fi
 # the thin client (issue #3003): fleet-thin.py, which reconnects, re-homes and
-# picks up a new version by itself — the same update check first, once
+# picks up a new version by itself — the same update check first, once.
+# Over ssh (issue #3006, EPIC #2999 C9) plain `fleet` IS the thin loop: a phone's
+# Termius / an iPad's Blink ssh-ing into a MacBook or a machine runs the same one
+# road as the Mac — on a managed machine with `--local` (home is this machine: no
+# hub asked, no ssh back to itself), elsewhere the hub's pick, which answers
+# `local` too when it is this machine and login. FLEET_CLIENT=shell keeps the old
+# client there (until the old client goes, C11).
+if [ $# -eq 0 ] && [ -z "${FLEET_CLIENT:-}" ] && [ -n "${SSH_CONNECTION:-}" ]; then
+  FLEET_CLIENT=thin
+fi
 if [ "${1-}" = --thin ] || { [ $# -eq 0 ] && [ "${FLEET_CLIENT:-}" = thin ]; }; then
   [ "${1-}" = --thin ] && shift
   managed
+  if [ "${FLEET_NODE_HOSTED:-0}" = 1 ]; then
+    _tb=$SHELL_BIN; [ -f "$_tb/fleet-thin.py" ] || _tb=$here
+    exec python3 "$_tb/fleet-thin.py" --local "$@"
+  fi
   if [ -z "${FLEET_CLIENT_UPDATED:-}" ] && [ "${FLEET_NODE_HOSTED:-0}" != 1 ] && [ -x "$here/fleet-client-update.sh" ]; then
     "$here/fleet-client-update.sh" start
     if [ $? -eq 3 ]; then
@@ -221,7 +236,7 @@ fi
 cmd=${1-}
 case $cmd in
   -h|--help|help)
-    sed -n '2,105p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,107p' "$0" | sed 's/^# \{0,1\}//'
     exit 0 ;;
   '')
     client ;;

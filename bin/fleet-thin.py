@@ -43,6 +43,13 @@ the hub is asked for another online machine to be home (`--avoid <home>`).
 Between two connections a new client version (the install's .client-version,
 `fleet-client-update.sh start` → 3) is exec'd in place, view and home kept.
 
+`--local` (issue #3006, EPIC #2999 C9): this machine is home — a managed
+machine's own `fleet`, typed over ssh from a phone. No hub is asked and no ssh
+is run: the view's command is this loop's child, under the same pty filter
+(fleet-connect.py --argv answers the same `local` when the hub's pick is this
+machine and this login — no ssh back to itself either). No 换家, no update of
+its own (the machine's runtime moves it).
+
 thin.log — TSV, one line per connection, fields only ever added at the end
 (docs/CLIENT-LOGS.md; C10 reads it):
     time(UTC)  event  home  route  pick_ms  ssh_ms  first_ms  rc  reason
@@ -292,8 +299,9 @@ def install_home():
 # ---------------------------------------------------------------------------
 
 class Thin:
-    def __init__(self, want, home, view, avoid=""):
+    def __init__(self, want, home, view, avoid="", local=False):
         self.want, self.home, self.view, self.avoid = want, home, view, avoid
+        self.local = local      # --local: this machine is home — no hub, no ssh (#3006)
         self.resume = bool(view)
         self.view = view or view_id()
         self.device = device_b64()
@@ -309,6 +317,11 @@ class Thin:
 
     # -- the argv ---------------------------------------------------------
     def argv(self, reconnect):
+        if self.local:
+            # a managed machine's own `fleet` over ssh (issue #3006, C9): the view is
+            # right here — the remote command runs as a child, never an ssh to itself
+            m = load("fleet-connect.py", "fleet_connect").local_machine()
+            return {"local": True, "machine": m["alias"], "argv": []}, "0", ""
         seam = os.environ.get("FLEET_THIN_ARGV_CMD")
         cmd = shlex.split(seam) if seam else [sys.executable or "python3", os.path.join(BIN, "fleet-connect.py"),
                                               "--argv"]
@@ -588,7 +601,7 @@ class Thin:
             [os.path.join(BIN, "fleet-client-update.sh"), "start"]
             if os.access(os.path.join(BIN, "fleet-client-update.sh"), os.X_OK) else [])
         rc = 0
-        if upd and not os.environ.get("FLEET_CLIENT_UPDATED"):
+        if upd and not self.local and not os.environ.get("FLEET_CLIENT_UPDATED"):   # --local: the machine's runtime moves it
             try:
                 rc = subprocess.call(upd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, timeout=60)
             except (OSError, subprocess.SubprocessError):
@@ -600,7 +613,9 @@ class Thin:
             me = os.path.abspath(__file__)
         tlog("exec", self.home, "", "", "", "", "", "%s → %s" % (self.version or "-", version() or "-"))
         args = [sys.executable or "python3", me, "--view", self.view]
-        if self.home:
+        if self.local:
+            args.append("--local")
+        elif self.home:
             args += ["--home", self.home]
         if self.want and not self.resume:
             args.append(self.want)
@@ -628,7 +643,7 @@ class Thin:
                 else:
                     fails += 1
                 k += 1
-                if fails >= rehome and self.home:
+                if fails >= rehome and self.home and not self.local:   # --local has no other home
                     self.avoid, self.home, fails = self.home, "", 0
                     self.resume = False   # a new home has no view of ours yet
                     tlog("rehome", "", "", "", "", "", "", "asking for a home other than %s" % self.avoid)
@@ -674,12 +689,14 @@ def main(argv):
     ap = argparse.ArgumentParser(prog="fleet --thin", description=__doc__.split("\n\n")[0])
     ap.add_argument("session", nargs="?", default="", help="the session to open first (default: the last one)")
     ap.add_argument("--home", default="", help="this machine is home (default: the hub's pick)")
+    ap.add_argument("--local", action="store_true",
+                    help="this machine is home: no hub, no ssh (a managed machine's own `fleet`)")
     ap.add_argument("--view", default="", help=argparse.SUPPRESS)   # an exec'd new version keeps its view
     a = ap.parse_args(argv)
     if not (os.isatty(0) and os.isatty(1)) and os.environ.get("FLEET_THIN_NO_TTY_OK") != "1":
         sys.stderr.write("fleet · %s\n" % tr("thin_no_tty"))
         return 2
-    return Thin(a.session, a.home, a.view).run()
+    return Thin(a.session, a.home, a.view, local=a.local).run()
 
 
 if __name__ == "__main__":

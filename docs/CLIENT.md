@@ -257,33 +257,61 @@ proxy window onto another machine from a local one, and two quick presses are
 two steps. `bin/fleet-switch-selftest.sh` sends every code to a real list on a
 private tmux socket.
 
-## On a phone — one pane, and the top line (issue #1904)
+## On a phone — the same road as the Mac (issues #3006, #1904)
 
-On a screen too narrow for the list beside 80 columns of session — an iPhone or
-an iPad in portrait in Termius, a small window anywhere — the client shows **one
-pane**: the session, full screen, with its **top line** above it. The list keeps
-running behind it (the session is zoomed over it, the window is marked
-`@fleet_single`), so every switch still goes through the list's own `jump()`.
-Turn the phone, or widen the window, and the list comes back; the session in
-view does not change.
+A phone or an iPad has no client of its own. You **ssh** into something that has
+`fleet` — your MacBook, or any of your machines — and type `fleet`. Over ssh
+(`SSH_CONNECTION` set) plain `fleet` is the **thin loop** (`fleet --thin`,
+bin/fleet-thin.py), the very one the Mac runs: one connection to your home
+machine, and everything you see — the top line, the switcher, the other
+machines' sessions — drawn there, in your own 看台. So the phone has none of the
+old client's parts, and none of their faults.
 
-    ‹ 3/8 ›  ● working  #1894 机器上一直有会话在忙…   PR #1885 ● 11/13  claude-fleet  @m5
+- **ssh into the MacBook** (or any computer with the client): the loop there
+  asks the hub for home and connects to it, as on the Mac itself.
+- **ssh into a machine** (a managed one, `/var/db/fleet-node/machine.env`):
+  that machine is home — `fleet-thin.py --local`, no hub asked, no ssh back to
+  itself; the 看台 attaches right there, a child of the loop.
+- **The machine the hub picks IS the one you ssh-ed into, as the same login**:
+  `fleet-connect.py --argv` answers `local` too — no ssh to itself
+  (`FLEET_CONNECT_SELF=ssh` keeps it, for a test of the route).
+- `FLEET_CLIENT=shell fleet` (or `fleet <machine>`) is the old client, kept
+  until the old client goes (EPIC #2999 C11).
 
-| Tap | Does |
-|---|---|
-| `‹` / `›` | the session above / below (as ⌘↑ ⌘↓) |
-| the title | the **full-screen switcher**: 在等你的 · 最近 (numbered 1–9) · 全部, two-line rows big enough for a thumb; type to filter (`m4`, `?` = only those waiting on you), tap a row or ↵; a digit on an empty filter picks that recent one |
-| the key (`#1894`) | the issue, opened on your computer (`fleet-open.sh`) |
-| `PR …` | the PR, the same way |
-| `@m5` | what is known of that machine, as a note |
+**The keys: ⌃] then one letter.** A phone has no ⌘, so every ⌘ key of the 看台
+has a letter after ⌃] (the `fleet-view-pfx` table; `bin/dash-keymap.sh --panel
+switch view` is the one list):
 
-**Keys for the Termius extra-key row** (add F1–F4 to it once): **F1** the
-switcher · **F2 / F3** the session above / below · **F4** the next one waiting on
-you. They act only in the one-pane layout; in the wide layout they go to the
-session as they always did. Two taps reach any session: the title, then its row.
-*Whether Termius sends F1–F4 and taps on the top line on your own phone is to be
-confirmed there; the taps need no setup, and the prefix keys (prefix / · n · p ·
-k) do the same jobs if a key does not arrive.*
+| ⌃] then | Does | On the Mac |
+|---|---|---|
+| `p` | the list of every session — all machines, every login of yours | ⌘P |
+| `n` / `b` | the next / the previous session in that list (other machines' too) | ⌘↓ / ⌘↑ |
+| `h` / `l` | back / forward in where you have been | ⌘[ / ⌘] |
+| `s` | the list (its actions) | ⌘K |
+| `c` | the orchestrator — 新任务 | ⌘N |
+| `t` | 派单 | ⌘T |
+| `q` | 退出 fleet | ⌘Q |
+| `⌃]` | a literal ⌃] to the session | — |
+
+Narrower than 100 columns the list opens on **the whole screen**, and the top
+line drops 剩余 · 模型 · effort (the session's key, its title and its machine
+stay). In the list: type to filter, ↑↓ (⌃P / ⌃N) to move, ↵ to go, Esc to close.
+
+**Termius (iPhone)**: ⌃ is the **Ctrl** key on the extra-key row above the
+keyboard — tap it, then `]` (on the symbols page), then the letter. Copy works
+by long-press (Termius takes no OSC 52 — see 复制 above); a session asking you
+reaches the phone by the hub's push, not the terminal.
+**Blink (iPad)**: with a hardware keyboard ⌃] is the chord itself (Caps Lock can
+be Ctrl in Blink's keyboard settings); on screen, Blink's Ctrl key then `]`.
+Blink takes OSC 52, so a copy in a session lands on the iPad.
+*Which taps your own phone needs is confirmed in the C10 drill; the letters
+above are what the 看台 binds.*
+
+The old client's phone layout (one pane, `‹ i/n ›` taps, F1–F4 on Termius'
+extra-key row, issue #1904) lives on under `FLEET_CLIENT=shell` until the old
+client goes.
+
+## The old client — its bar, commands and layout
 
 **The bar** (issue #2365) holds three things: who is signed in (the GitHub login
 off `fleet login`'s certificate — orange, with why, when the hub cannot be asked

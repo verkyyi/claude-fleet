@@ -92,8 +92,10 @@ machine or the route: {"argv": [...], "host": <index of the host in argv>,
 options before argv[host] and its remote command after it. `--avoid MACHINE`:
 the hub's pick is MACHINE → the next ONLINE candidate the home answer lists
 (exit 1 when there is none) — the thin client's 换家 after three failures. With
-no hub URL and this computer the one machine: {"local": true, "machine", "argv":
-[]} — run the remote command here, no ssh.
+no hub URL and this computer the one machine — or the machine picked being THIS
+computer and this login (claude-fleet#3006: `fleet` typed over ssh on a home
+machine) — {"local": true, "machine", "argv": []}: run the remote command here,
+no ssh. FLEET_CONNECT_SELF=ssh keeps the ssh to itself.
 
 --cert-check (claude-fleet#2457): the doctor's `cert` row — this computer's
 ~/.ssh/fleet-cert-cert.pub, its principals and how long it is still valid, and
@@ -1196,9 +1198,34 @@ ARGV_OUT = False   # --argv (claude-fleet#3003): --print as one JSON line
 AVOID = ""         # --avoid: never this machine (the thin client's 换家)
 
 
+def is_self(machine, login):
+    """The machine is THIS computer and the login this one (claude-fleet#3006): the
+    thin client run on a home machine, over ssh from a phone — connecting to itself
+    is no ssh at all. Names by their first label, case aside, either the hub's
+    alias or its hostname against this computer's (FLEET_NODE_ALIASES applied).
+    FLEET_CONNECT_SELF=ssh (a test of the route itself) never answers yes."""
+    if os.environ.get("FLEET_CONNECT_SELF") == "ssh":
+        return False
+    import getpass
+    try:
+        me = getpass.getuser()
+    except Exception:
+        return False
+    if login and login != me:
+        return False
+    first = lambda n: (n or "").split(".", 1)[0].lower()
+    here = {first(v) for v in local_machine().values()} - {""}
+    return bool(here & ({first(machine.get("alias")), first(machine.get("hostname"))} - {""}))
+
+
 def run_ssh(machine, route, login, hub, print_only, ssh_args, ssh_opts=(), pin=""):
     alias = machine.get("alias") or machine.get("hostname") or "?"
     login = login_override(login)
+    if print_only and ARGV_OUT and is_self(machine, login):
+        sys.stdout.write(json.dumps({"local": True, "machine": alias, "login": login or "", "argv": []},
+                                    ensure_ascii=False) + "\n")
+        sys.stdout.flush()
+        return 0
     kh = write_known_hosts(machine)
     base = ssh_command(machine, route, login, hub, ssh_opts, known_hosts=kh)
     cmd = base + list(ssh_args)
