@@ -134,14 +134,24 @@ getent hosts registry.npmjs.org                  # DNS
 
 ## ⑥ 派来的活照跑（运维 / 编排会话）
 
-编排会话派一个小活到这台（落在 `fleet` 上，不在 `24haowan`）：
+编排会话派一个小活到这台，落在**发起人自己在这台上的登录**（如 `verkyyi`）——不是 `fleet`，
+也不是 `24haowan`。入口只把一个人派的活放到绑在这个人名下的登录上（`nodePrincipal`，#3417）；
+`fleet` 是保留名，入口从不把它绑给人（adopt 答 409），所以活落不到它上面。
+
+先备好（节点上逐项看）：
+
+- 这个登录在入口上是 `fleet-linux-0:active:separated`（`fleet hub accounts`，同 ①）；
+- 它有中转通行证（#3423 处处上线前：`su - <登录> -c "$R/fleet-relay-cred.sh fetch"`）；
+- 它登过 gh（`su - <登录> -c "gh auth status"`，#3424）。
 
 ```sh
 FLEET_SPAWN_NODE=fleet-linux-0 dash-issue-session.sh <N>   # 或 --node fleet-linux-0
 ```
 
-- **算过**：打印 `#N → fleet-linux-0 已开窗 …`，活在 `fleet` 登录上跑完、PR 合并。
-- **出事看**：入口派活的排除原因（`not ready: …`）；节点上 `su - fleet -c "$R/fleet-control-read.sh ready"`。
+- **算过**：打印 `#N → fleet-linux-0 已开窗 …`，活在发起人自己的登录上跑完、PR 合并。
+- **出事看**：入口派活的排除原因（`not ready: …`）；节点上 `su - <登录> -c "$R/fleet-control-read.sh ready"`。
+  `compute off (出口地区 CN …)` ⇒ 这个登录还没有中转通行证（上面第二条）；
+  `No fleet hosting … on fleet-linux-0` ⇒ 这台上没有绑在发起人名下的登录（上面第一条）。
 - **记**：那个 PR 的号。
 - **实练（2026-10-11）**：本 PR 即在 fleet-linux-0 / verkyyi 登录上派出、实现并合并（stable 05226fa4）。
 
