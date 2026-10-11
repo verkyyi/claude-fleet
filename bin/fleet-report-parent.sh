@@ -434,7 +434,8 @@ UST=$(printf '%s' "$STATE" | tr '[:lower:]' '[:upper:]')
 
 # orphan <why> — nobody can take this report (issue #3117): the parent is gone and no
 # live ancestor stands in. A report that would wake someone becomes the person's
-# reminder — a row in global/orphan-reports.ndjson (what the sidebar / entry read)
+# reminder — a row in global/orphan-reports.ndjson (what the sidebar / entry read,
+# through bin/fleet-orphan-reports.py — issue #3369)
 # plus one alert on the fleet's existing channel. Silent: as before, nothing.
 orphan() {
   [ "$TIER" = silent ] && quiet "$1 (tier=silent · $UST — ledger only)"
@@ -445,7 +446,11 @@ orphan() {
     exit 0
   fi
   mkdir -p "${f%/*}" 2>/dev/null
-  new=$(OR_CHILD="$ledkey" OR_STATE="$UST" OR_PR="$prn" OR_SUM="$SUMMARY" OR_TITLE="$wname" OR_PARENT="$worigin" \
+  # its repo too (issue #3369): the sidebar files the row under that repo's heading
+  local orepo=''
+  [ -n "$sess" ] && [ -n "${selfwin:-}" ] && orepo=$(fleet_window_repo "$sess" "$selfwin" 2>/dev/null)
+  [ -n "$orepo" ] || orepo="${FLEET_REPO:-}"
+  new=$(OR_CHILD="$ledkey" OR_STATE="$UST" OR_PR="$prn" OR_SUM="$SUMMARY" OR_TITLE="$wname" OR_PARENT="$worigin" OR_REPO="$orepo" \
     python3 -c 'import json, os, sys, time
 f = sys.argv[1]
 e = os.environ
@@ -455,6 +460,8 @@ if e.get("OR_TITLE"):
     row["title"] = e["OR_TITLE"]
 if e.get("OR_PARENT"):
     row["parent"] = e["OR_PARENT"]
+if e.get("OR_REPO"):
+    row["repo"] = e["OR_REPO"]
 last = None
 try:
     with open(f, encoding="utf-8") as fh:

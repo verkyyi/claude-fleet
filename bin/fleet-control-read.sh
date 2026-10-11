@@ -225,7 +225,13 @@ case "$mode" in
     # Columns 31-37 (orchq= · orchdec= · orchtodo= · orchpark= · orchpage= ·
     # orchparkl= · orchtodol=) were the resident orchestrator's and steward's
     # (issues #2617 #2670 #2672 #2671 #2735 #2913); gone with the seat (issue
-    # #3118). A row ends at test=.
+    # #3118). Column 31 (issue #3369): `orphanrep=` — the results of sessions
+    # whose spawner was gone, filed for the person (global/orphan-reports.ndjson,
+    # fleet-report-parent.sh) and not read yet: bin/fleet-orphan-reports.py cell —
+    # `id\037ts\037repo\037child\037state\037pr\037summary`, \036-joined, at most
+    # 10. The LOGIN's, like epicstale=: every row carries the same cell; empty (and
+    # no fork) when the file does not exist — the common case. A row ends at
+    # orphanrep=; an older node's ends at test=.
     ttl=$'\n'; drepo=''; _nr=0
     while IFS= read -r _r; do
       [ -n "$_r" ] || continue
@@ -239,6 +245,9 @@ case "$mode" in
     [ "$_nr" = 1 ] || drepo=''   # a window with no repo column falls to the fleet's ONLY repo
     cwds=$(tmux -u -L "$sock" list-windows -t "=$sess" ${lwf[@]+"${lwf[@]}"} -F $'#{window_id}\t#{pane_current_path}\t#{@norepo}\t#{@cc_agent}\t#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}\t#{?@born,#{@born},#{window_created}}\t#{@reap_policy}\t#{?#{==:#{@claude_state},needs},#{@claude_needs_detail},}\t#{?#{||:#{==:#{@fleet_role},orchestrator},#{==:#{@fleet_role},steward}},#{@fleet_role},}\t#{@epic}\t#{?#{==:#{@backfill},failed},failed,}\t#{?#{==:#{@test_identity},1},1,}\t#{@task_line}\t#{?@name_manual,#{?#{==:#{window_name},#{@name_manual}},#{@name_manual},},}' 2>/dev/null) || cwds=''
     fleet_cfg_expected_load; fleet_cfg_broken_load     # broken (#2076): judged here too
+    orep=''
+    [ -s "$FLEET_CONF_DIR/global/orphan-reports.ndjson" ] && orep=$(python3 "$BIN/fleet-orphan-reports.py" cell 2>/dev/null)
+    orep=${orep//$'\t'/ }; orep=${orep//$'\n'/ }
     estale=''
     while IFS=$'\t' read -r _sr _sn _sa _st; do
       [ -n "$_sr" ] || continue
@@ -333,7 +342,7 @@ case "$mode" in
       fi
       # the holder of an old seat is an ordinary row (issue #3119): `role=worker`
       orole=''; [ -n "$wrole" ] && orole=worker
-      printf '%s\tbusy=%s\tborn=%s\tcfg=%s\ttitle=%s\treap=%s\tdetail=%s\trole=%s\tepic=%s\tepicstale=%s\tbackfill=%s\tctxleft=%s\tctxband=%s\tctxts=%s\tmodel=%s\teffort=%s\tagentstatus=%s\ttest=%s\n' "$row" "$b" "$born" "$FCFG_STATE" "$t" "$wreap" "$wdet" "$orole" "$wepic" "$estale" "$wbf" "$cl" "$cb" "$cts" "$cm" "$ce" "$cas" "$wtest"
+      printf '%s\tbusy=%s\tborn=%s\tcfg=%s\ttitle=%s\treap=%s\tdetail=%s\trole=%s\tepic=%s\tepicstale=%s\tbackfill=%s\tctxleft=%s\tctxband=%s\tctxts=%s\tmodel=%s\teffort=%s\tagentstatus=%s\ttest=%s\torphanrep=%s\n' "$row" "$b" "$born" "$FCFG_STATE" "$t" "$wreap" "$wdet" "$orole" "$wepic" "$estale" "$wbf" "$cl" "$cb" "$cts" "$cm" "$ce" "$cas" "$wtest" "$orep"
     done <<<"$rows"
     ;;
   # --- wstate <sess> <@win> (issue #2238) --------------------------------------

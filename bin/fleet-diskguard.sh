@@ -867,6 +867,18 @@ macos_watch() {
   return 0
 }
 
+# batch_green_watch — a batch nobody drives still has green PRs (issue #3369):
+# bin/fleet-batch-green.sh counts each stale batch's READY member PRs (prmap, one
+# REST sub-issue read per batch per FLEET_BATCH_GREEN_SECS) and says the count once
+# per change. Read-only — it merges nothing. No epic-running mark ⇒ it reads
+# nothing. Detached: the sub-issue read is network.
+batch_green_watch() {
+  [ "${FLEET_BATCH_GREEN:-1}" = 0 ] && return 0
+  [ -f "$BIN/fleet-batch-green.sh" ] || return 0
+  ( bash "$BIN/fleet-batch-green.sh" >/dev/null 2>&1 & ) 2>/dev/null
+  return 0
+}
+
 # mem_watch — the --watch tick's share: one notice per edge, per kind.
 mem_watch() {
   local rows mem lvl av co sw top u m w word kind
@@ -993,6 +1005,7 @@ EOF2
     brew_watch                                    # a keg other logins cannot read: repair it (#2283)
     pool_watch                                    # warm-pool slots topped back up (#2233)
     macos_watch                                   # red macOS on master: file + alert, no spawn (#3120)
+    batch_green_watch                             # a driverless batch's green PRs: say how many (#3369)
     free=$(free_gb)
     [ -z "$free" ] && exit 0                      # measurement failed — stay quiet
     [ "$free" -ge "$WARN_GB" ] && exit 0          # healthy

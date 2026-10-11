@@ -222,6 +222,32 @@ def epic_stale_cell(cell):
     return out
 
 
+ORPHAN_ID_RE = re.compile(r"[0-9a-f]{12}")
+ORPHAN_STATES = ("MERGED", "BLOCKED", "FAILED", "STOPPED", "REAPED", "WAITING", "IDLE")
+
+
+def orphan_rep_cell(cell):
+    """Column 31's cell (issue #3369) → [{id, ts, repo, child, state, pr, summary}]:
+    the login's unread orphaned child reports (bin/fleet-orphan-reports.py cell),
+    each `id\x1fts\x1frepo\x1fchild\x1fstate\x1fpr\x1fsummary`, \x1e-joined; at most
+    10, a summary at most 300 characters with no control character. Junk is
+    dropped, never a protocol error."""
+    out = []
+    for entry in (cell or "").split("\x1e")[:10]:
+        p = entry.split("\x1f")
+        if len(p) != 7:
+            continue
+        rid, ts, repo, child, state, pr, summ = p
+        if not ORPHAN_ID_RE.fullmatch(rid) or not ts.isdigit() or state not in ORPHAN_STATES \
+                or not re.fullmatch(r"[A-Za-z0-9_.:/#-]{1,100}", child):
+            continue
+        out.append(dict(id=rid, ts=int(ts),
+                        repo=repo if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo) else "",
+                        child=child, state=state, pr=pr if pr.isdigit() else "",
+                        summary=re.sub(r"[\x00-\x1f\x7f]", " ", summ)[:300]))
+    return out
+
+
 def agent_status_cell(raw):
     """@agent_status's JSON (bin/fleet-status-7501.py) → {status_kind, status_msg},
     each only when present and well-formed (issue #2536)."""
@@ -301,9 +327,17 @@ def inventory_row(parts):
     fill status_kind / status_msg (issue #2538).
     Columns 31-37 (`orchq=` … `orchtodol=`) were the resident orchestrator's and
     steward's (issues #2617-#2913), gone with the seat (issue #3118): an older
-    node's are dropped unread — compat-1v: 下一批删."""
+    node's are dropped unread — compat-1v: 下一批删.
+    Column 31 (issue #3369): `orphanrep=` — the login's unread results of
+    sessions whose spawner was gone (orphan_rep_cell): `orphan_reports`, a list,
+    on every row alike (like epic_stale); absent when empty. The sidebar and the
+    hub's overview list them for the person."""
     parts = list(parts)
     extra = {}
+    if len(parts) >= 31 and parts[-1].startswith("orphanrep="):
+        orep = orphan_rep_cell(parts.pop()[10:])
+        if orep:
+            extra["orphan_reports"] = orep
     while len(parts) >= 31 and parts[-1].startswith(ORCH_TAGS):   # compat-1v: 下一批删
         parts.pop()
     if len(parts) >= 30 and parts[-1].startswith("test="):

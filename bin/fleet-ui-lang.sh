@@ -892,6 +892,14 @@ fleet_ui_t() {
     en:sidebar_epic_reopen_keys) printf '↵ open · esc cancel' ;;
     zh:sidebar_epic_reopening_fmt) printf '在开 #%s 的驱动会话…' "${1:-}" ;;
     en:sidebar_epic_reopening_fmt) printf 'opening the driver for #%s…' "${1:-}" ;;
+    zh:sidebar_orphan_rep)      printf '结果给你' ;;
+    en:sidebar_orphan_rep)      printf 'yours now' ;;
+    zh:sidebar_ask_orphan_fmt)  printf '%s 的结果 — 派它的会话已不在' "${1:-}" ;;
+    en:sidebar_ask_orphan_fmt)  printf 'the result of %s — its spawner is gone' "${1:-}" ;;
+    zh:sidebar_orphan_read)     printf '知道了，不再显示' ;;
+    en:sidebar_orphan_read)     printf 'Got it, hide it' ;;
+    zh:sidebar_orphan_keys)     printf '↵ 已读 · esc 留着' ;;
+    en:sidebar_orphan_keys)     printf '↵ read · esc keep' ;;
     zh:sidebar_landed_heading_fmt) printf '已落地 (%s) · ↵ 恢复' "${1:-}" ;;
     en:sidebar_landed_heading_fmt) printf 'Landed (%s) · ↵ restore' "${1:-}" ;;
     zh:sidebar_landed_empty)    printf '（还没有已落地的会话）' ;;

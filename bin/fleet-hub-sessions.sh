@@ -772,6 +772,21 @@ def stale_of(w):
     return out
 
 
+def orphans_of(w):
+    """The login's unread results of sessions whose spawner was gone (issue
+    #3369): the worker's `orphan_reports` — the same list on every row of that
+    login — as (id, ts, repo, child, state, pr, summary) kept valid."""
+    out = []
+    for e in (w.get("orphan_reports") if isinstance(w.get("orphan_reports"), list) else [])[:10]:
+        if not isinstance(e, dict) or not isinstance(e.get("id"), str) or type(e.get("ts")) is not int:
+            continue
+        if not re.fullmatch(r"[0-9a-f]{12}", e["id"]):
+            continue
+        out.append((e["id"], e["ts"]) + tuple(e.get(k) if isinstance(e.get(k), str) else ""
+                                              for k in ("repo", "child", "state", "pr", "summary")))
+    return out
+
+
 rows = []
 
 def ctx_of(w):
@@ -820,7 +835,7 @@ for s in sessions:
                      issue=w.get("issue") or "", repo=w.get("repo") or "",
                      state=w.get("lifecycle") if w.get("lifecycle") not in (None, "", "awake") else (w.get("state") or ""),
                      agent=w.get("agent") or "", name=w.get("name") or w.get("key") or wid.split("/", 1)[1],
-                     owid=by_ident.get(w.get("origin_wid") or "", w.get("origin_wid") or ""), needs=w.get("needs") or "", busy=w.get("busy") or "", born=born_of(w), cfg=w.get("cfg") if w.get("cfg") in ("stale", "renew", "ok") else "", title=w.get("title") if isinstance(w.get("title"), str) else "", detail=w.get("detail") if isinstance(w.get("detail"), str) else "", epic=w.get("epic") if isinstance(w.get("epic"), str) and re.fullmatch(r"(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#[1-9][0-9]{0,9}(?::[0-9]{1,4}/[0-9]{1,4})?", w.get("epic")) else "", reap=w.get("reap") if isinstance(w.get("reap"), str) and re.fullmatch(r"[A-Za-z0-9:.+-]{1,48}", w.get("reap")) else "", backfill="failed" if w.get("backfill") == "failed" else "", test=w.get("test") is True, ctx=ctx_of(w), ask=ask_of(w, w.get("lifecycle") if w.get("lifecycle") not in (None, "", "awake") else (w.get("state") or "")), stale=stale_of(w), seen=epoch(s.get("observed_at")), seenf=fepoch(s.get("observed_at")),
+                     owid=by_ident.get(w.get("origin_wid") or "", w.get("origin_wid") or ""), needs=w.get("needs") or "", busy=w.get("busy") or "", born=born_of(w), cfg=w.get("cfg") if w.get("cfg") in ("stale", "renew", "ok") else "", title=w.get("title") if isinstance(w.get("title"), str) else "", detail=w.get("detail") if isinstance(w.get("detail"), str) else "", epic=w.get("epic") if isinstance(w.get("epic"), str) and re.fullmatch(r"(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#[1-9][0-9]{0,9}(?::[0-9]{1,4}/[0-9]{1,4})?", w.get("epic")) else "", reap=w.get("reap") if isinstance(w.get("reap"), str) and re.fullmatch(r"[A-Za-z0-9:.+-]{1,48}", w.get("reap")) else "", backfill="failed" if w.get("backfill") == "failed" else "", test=w.get("test") is True, ctx=ctx_of(w), ask=ask_of(w, w.get("lifecycle") if w.get("lifecycle") not in (None, "", "awake") else (w.get("state") or "")), stale=stale_of(w), orphans=orphans_of(w), seen=epoch(s.get("observed_at")), seenf=fepoch(s.get("observed_at")),
                      local=here["sess"] if here else None,
                      lwid=windows.get((here["sess"], wid.split("/", 1)[1]), "") if here else ""))
 
@@ -1043,6 +1058,22 @@ for f in local:
             st_lines.append("\x1f".join(clean(v) for v in (ref, r["node"], r["av"], age, title[:200],
                                                          "1" if r["local"] else "0")) + "\n")
     write(os.path.join(gdir, "epicstale_" + f["sess"]), "".join(st_lines))
+    # The results nobody took (issue #3369): `orphanrep_<sess>`, one line per
+    # (machine, report) — `<id> US <machine> US <online|lost> US <ts> US <repo> US
+    # <child> US <state> US <pr> US <summary> US <local 1|0>` — off any row of that
+    # machine (every row carries its login's list). The sidebar draws each as a
+    # 「结果给你」 row; THIS machine's (local 1) it reads off its own file instead.
+    seen_or, or_lines = set(), []
+    for r in rows:
+        if r["local"] and r["local"] != f["sess"]:
+            continue
+        for rid, ts, orepo, child, state, pr, summ in r["orphans"]:
+            if (r["node"], rid) in seen_or:
+                continue
+            seen_or.add((r["node"], rid))
+            or_lines.append("\x1f".join(clean(v) for v in (rid, r["node"], r["av"], ts, orepo, child, state, pr,
+                                                         summ[:300], "1" if r["local"] else "0")) + "\n")
+    write(os.path.join(gdir, "orphanrep_" + f["sess"]), "".join(or_lines))
 # A session needs you (issue #2759, EPIC #2756 C3): the CLIENT's notification,
 # decided here — on every round that brought rows, a terminal attached or not
 # (the bar's status-right job ran only while one drew it). bin/fleet_notify.py is
