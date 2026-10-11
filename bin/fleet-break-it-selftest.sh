@@ -6046,8 +6046,9 @@ SH
   t0=$(now)
   # ③ the old daemon's command and its tick: no template to schedule it, and the
   #    script a stale plist would still run does nothing
-  ls "$ROOT/launchd" "$ROOT/systemd" 2>/dev/null | grep -q dispatch \
-    && { WHY="a dispatch daemon template is still installed by default"; return 1; }
+  for i in "$ROOT"/launchd/*dispatch* "$ROOT"/systemd/*dispatch*; do
+    [ -e "$i" ] && { WHY="a dispatch daemon template is still installed by default: ${i##*/}"; return 1; }
+  done
   ( . "$BIN/fleet-daemon-lib.sh"; fleet_daemon_unit_names ) | grep -qx dispatch \
     && { WHY="the daemon registry still lists dispatch"; return 1; }
   PATH="$sb/shim:$PATH" FLEET_CONF_DIR="$sb/conf" FLEET_AUTOFILL=1 bash "$sb/bin/fleet-dispatch.sh" >/dev/null 2>&1
