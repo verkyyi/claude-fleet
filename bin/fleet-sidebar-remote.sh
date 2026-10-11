@@ -54,6 +54,12 @@
 # the row (the proxy window) is a direct ssh, not a hub write: untouched.
 # Nothing here runs on a local row (an `@` id exits 0 at once), and nothing runs
 # in a one-machine fleet: the menu offers these items on `wid:` rows only.
+#
+# FLEET_REMOTE_SAY=print (issue #3182, EPIC #3178 C4 — the 看台's Tab menu,
+# bin/fleet_view.py's ACTIONS `far`): the outcome line goes to stdout instead of
+# a toast, and the exit says how it went — 0 done (or accepted, the machine on
+# it), 1 refused / failed / not sent / the hub silent; the hub's reason is the
+# line, verbatim. Unset = the sidebar's toast and exit 0, byte for byte.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
@@ -76,7 +82,12 @@ name="${rest%%$'\037'*}"; needs="${rest#*$'\037'}"
 [ -n "$node" ] || node='?'
 [ -n "$name" ] || name="${worker_id##*/}"
 
-toast() { tmux display-message ${client:+-c "$client"} "$1" 2>/dev/null || :; }
+PRINT=''; [ "${FLEET_REMOTE_SAY:-}" = print ] && PRINT=1
+RC=0
+toast() {
+  if [ -n "$PRINT" ]; then printf '%s\n' "${1#fleet: }"; return 0; fi
+  tmux display-message ${client:+-c "$client"} "$1" 2>/dev/null || :
+}
 WRITE="$BIN/fleet-hub-write.sh"
 
 # outcome <record-json> → one line for a human, in the UI language
@@ -88,12 +99,12 @@ what = os.environ["FR_WHAT"]
 try:
     o = json.load(sys.stdin)
 except ValueError:
-    print(("%s：没发出去" if zh else "%s: not sent") % what); sys.exit(0)
+    print(("%s：没发出去" if zh else "%s: not sent") % what); sys.exit(1)
 if "error" in o and not o.get("operation_id"):
     e = o["error"] if isinstance(o["error"], dict) else {"message": str(o["error"])}
     print(("%s：入口拒绝 — %s%s" if zh else "%s: the hub refused — %s%s")
           % (what, (e.get("code", "") + ": ") if e.get("code") else "", e.get("message", "")))
-    sys.exit(0)
+    sys.exit(1)
 st = o.get("status", "?")
 res = o.get("result") if isinstance(o.get("result"), dict) else {}
 err = res.get("error") if isinstance(res.get("error"), dict) else None
@@ -105,10 +116,19 @@ elif st == "failed":
           % (what, (err or {}).get("code", "?"), (err or {}).get("message", "")))
 elif st in ("accepted", "running", "pending"):
     print(("%s：入口已受理，那台机器处理中" if zh else "%s: accepted — the machine is on it") % what)
+    sys.exit(0)
 else:
     print(("%s：未确认（%s）— %s" if zh else "%s: unconfirmed (%s) — %s")
           % (what, st, (err or {}).get("message", "op=" + str(o.get("operation_id", "?")))))
+sys.exit(0 if st == "succeeded" else 1)
 '
+}
+# said <tool> <json> <wait> <what> — write it, tell the outcome, RC its verdict
+said() {
+  local rec out
+  rec=$(write "$1" "$2" "$3")
+  out=$(outcome "$rec" "$4") || RC=1
+  tell "$out"
 }
 
 label() {  # the action's human name for the toast / popup title
@@ -143,6 +163,7 @@ if fleet_status_hub_lost "$(date +%s)"; then
       else printf '%s\n%s\n' "$(label "$action")" "$(fleet_ui_t remote_hub_lost_fmt "$FSA")" >&2; pause; fi ;;
     stop|resume|reap|switch) toast "fleet: $(fleet_ui_t remote_hub_lost_fmt "$FSA")" ;;
   esac
+  [ -n "$PRINT" ] && exit 1
   exit 0
 fi
 
@@ -150,21 +171,24 @@ case "$action" in
   reap)
     # fleet_hub_reap (issue #1589): the node's own dash-reap token, reason and
     # exit — so the toast is the one a local row's reap shows, plus the machine.
-    out=$(fleet_hub_reap "$worker_id" 90 2>/dev/null); token=$(printf '%s\n' "$out" | tail -1)
+    out=$(fleet_hub_reap "$worker_id" 90 2>&1)
+    token=$(printf '%s\n' "$out" | grep -v '^reap: ' | tail -1)
+    why=$(printf '%s\n' "$out" | sed -n 's/^reap: //p' | tail -1)
     case "$token" in
       reaped:full) msg=$(fleet_ui_t reap_done) ;;
       reaped:keep) msg=$(fleet_ui_t reap_kept) ;;
-      skip:live)   msg=$(fleet_ui_t reap_live) ;;
-      skip:*)      msg=$(fleet_ui_t reap_skip_fmt "${token#skip:}") ;;
-      refused:*|failed:*) msg=$(fleet_ui_t reap_refused_fmt "$token") ;;
-      *)           msg=$(fleet_ui_t reap_none) ;;
+      skip:live)   msg=$(fleet_ui_t reap_live); RC=1 ;;
+      skip:*)      msg=$(fleet_ui_t reap_skip_fmt "${token#skip:}"); RC=1 ;;
+      refused:*|failed:*) msg=$(fleet_ui_t reap_refused_fmt "$token"); RC=1 ;;
+      *)           msg=$(fleet_ui_t reap_none); RC=1 ;;
     esac
+    # the panel shows the node's reason too (fleet_hub_reap's stderr is its why)
+    [ -z "$PRINT" ] || [ "$RC" = 0 ] || [ -z "$why" ] || msg="$msg · $why"
     toast "$msg · $(label reap)"
     ;;
   stop|resume|switch)
     tool=worker_$action
-    rec=$(write "$tool" "$(json_wid)" 30)
-    toast "fleet: $(outcome "$rec" "$(label "$action")")"
+    said "$tool" "$(json_wid)" 30 "$(label "$action")"
     ;;
   message)
     # the text from the sidebar's line, else the keyboard — straight into the JSON
@@ -175,8 +199,7 @@ case "$action" in
       IFS= read -r -e text 2>/dev/null || text=''
     fi
     [ -n "${text// /}" ] || exit 0
-    rec=$(write worker_message "$(json_wid text "$text")" 30)
-    tell "$(outcome "$rec" "$(label message)")"
+    said worker_message "$(json_wid text "$text")" 30 "$(label message)"
     ;;
   rename)
     # the new name from the sidebar's line (pre-filled with the old one), else
@@ -187,8 +210,7 @@ case "$action" in
       IFS= read -r -e nm 2>/dev/null || nm=''
     fi
     [ -n "${nm// /}" ] && [ "$nm" != "$name" ] || exit 0
-    rec=$(write worker_rename "$(json_wid name "$nm")" 30)
-    tell "$(outcome "$rec" "$(label rename)")"
+    said worker_rename "$(json_wid name "$nm")" 30 "$(label rename)"
     ;;
   reappol)
     if [ -n "$LINE" ]; then pol=$FLEET_SIDEBAR_TEXT
@@ -200,10 +222,9 @@ case "$action" in
     [ -n "$pol" ] || exit 0
     canon=$(python3 "$BIN/fleet_reap_policy.py" norm "$pol" 2>/dev/null) || canon=''
     if [ -z "$canon" ]; then
-      tell "$(fleet_ui_t remote_reappol_bad_fmt "$(label reappol)" "$pol")"; exit 0
+      tell "$(fleet_ui_t remote_reappol_bad_fmt "$(label reappol)" "$pol")"; [ -n "$PRINT" ] && exit 2; exit 0
     fi
-    rec=$(write worker_reap_policy "$(json_wid policy "$canon")" 30)
-    tell "$(outcome "$rec" "$(label reappol)")"
+    said worker_reap_policy "$(json_wid policy "$canon")" 30 "$(label reappol)"
     ;;
   answer)
     ans=''
@@ -228,9 +249,9 @@ case "$action" in
     fi
     [ -n "$ans" ] || exit 0
     [ -n "$LINE" ] || printf '%s\n' "$(fleet_ui_t remote_sending)" >&2
-    rec=$(write worker_answer "$(json_wid answer "$ans")" 90)
-    tell "$(outcome "$rec" "$(label answer)")"
+    said worker_answer "$(json_wid answer "$ans")" 90 "$(label answer)"
     ;;
   *) exit 0 ;;
 esac
+[ -n "$PRINT" ] && exit "$RC"
 exit 0

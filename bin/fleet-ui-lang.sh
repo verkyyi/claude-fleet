@@ -543,6 +543,8 @@ fleet_ui_t() {
     en:view_stale_banner_fmt) printf 'sessions on %s not updated for %s min (hub unreachable) · reconnecting' "${1:-}" "${2:-}" ;;
     zh:view_lost_go_fmt) printf '%s 失联，进不去 · 正在重连' "${1:-}" ;;
     en:view_lost_go_fmt) printf '%s is lost, cannot go there · reconnecting' "${1:-}" ;;
+    zh:view_lost_act_fmt) printf '%s 失联，做不了 · 正在重连' "${1:-}" ;;
+    en:view_lost_act_fmt) printf '%s is lost, cannot do that · reconnecting' "${1:-}" ;;
     zh:view_tag_direct_fmt) printf '%s 直连' "${1:-}" ;;
     en:view_tag_direct_fmt) printf '%s direct' "${1:-}" ;;
     zh:view_tag_cfg_broken) printf '会坏·需重开' ;;

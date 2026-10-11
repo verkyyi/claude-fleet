@@ -15,7 +15,7 @@
 #      a row item for (`mk <action>`) is in the table
 #   B  view-menu: a done row here gets its actions (no 回答 / 唤醒 / 继续), an
 #      asking row 回答, a sleeping one 唤醒, an ended exited one 恢复, another
-#      machine's row only 进入
+#      machine's row its hub writes (no 置顶 / PR / 唤醒 there)
 #   C  view-act, item by item: each calls its script exactly once with the
 #      sidebar's arguments; 改名 really renames the window (dash-rename.sh);
 #      回收 without a yes does nothing (exit 3); 恢复 presses ↵ on the wrapper's
@@ -23,6 +23,13 @@
 #   D  the popup on a client: ⌘P's list, Tab opens the row's menu, Esc steps back
 #      and Esc again closes with NOTHING run; Tab → 回收 → n does nothing, → y
 #      runs dash-reap.sh once; 改名 asks on the bottom line, Esc cancels it
+#   E  another machine's row (issue #3182, EPIC #3178 C4): each `far` action runs
+#      fleet-sidebar-remote.sh ONCE with (action, fleet, wid:<worker_id>) and makes
+#      ONE hub write (FLEET_HUB_WRITE_CMD) naming that worker_id and the answer;
+#      the outcome names the machine; the hub's refusal comes back verbatim with a
+#      non-zero exit; a lost row (`!`) runs nothing and says 失联，做不了; every
+#      write is followed by one hub cache --refresh; in the popup, Tab → 停 on a
+#      far row says how it went on the bottom line
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 fail() { echo "FAIL: $*" >&2; exit 1; }
@@ -38,7 +45,7 @@ cleanup() {
 trap cleanup EXIT INT TERM
 mkdir -p "$W/conf/remote-views/v1.d" "$W/g" "$W/home" "$W/stub"
 export HOME="$W/home" FLEET_CONF_DIR="$W/conf" FLEET_STATUS_G="$W/g" FLEET_UI_LANG=zh LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
-unset TMUX TMUX_PANE
+unset TMUX TMUX_PANE FLEET_HUB_WRITE_CMD FLEET_REMOTE_SAY FLEET_SIDEBAR_TEXT
 ME=$(id -un)
 US=$'\037'
 ti() { tmux -S "$IN" "$@"; }
@@ -48,7 +55,7 @@ LOG="$W/calls.log"; : > "$LOG"
 # --- the stubs: one line per call, `name|arg|arg|…` ----------------------------------
 for s in dash-open-pr.sh fleet-permission.sh fleet-answer.sh fleet-peer-send.sh dash-pin-toggle.sh \
          fleet-reap-policy.sh fleet-worker-stop.sh fleet-sleep.sh fleet-manual-sub.sh dash-migrate.sh \
-         fleet-transfer.sh dash-reap.sh dash-rename.sh; do
+         fleet-transfer.sh dash-reap.sh dash-rename.sh fleet-sidebar-remote.sh; do
   cat > "$W/stub/$s" <<EOF
 #!/bin/bash
 { printf '%s' "$s"; for a in "\$@"; do printf '|%s' "\$a"; done; printf '\n'; } >> "$LOG"
@@ -56,6 +63,7 @@ case "$s:\$*" in
   dash-open-pr.sh:*--probe*) printf '#41\n' ;;
   fleet-manual-sub.sh:list*) printf 'account\t5h\t7d\tstate\nacct1\t20%%\t40%%\t可迁入\nacct2\t5%%\t9%%\t可迁入\n' ;;
   dash-rename.sh:*) exec bash "$BIN/dash-rename.sh" "\$@" ;;
+  fleet-sidebar-remote.sh:*) exec bash "$BIN/fleet-sidebar-remote.sh" "\$@" ;;
   dash-reap.sh:*) printf 'reaped:clean\n' ;;
 esac
 exit 0
@@ -90,6 +98,9 @@ export FLEET_VIEW_ROWS_CMD="sh '$W/rows.sh'" FLEET_VIEW_ROWS_FILE="$W/rows.txt"
   row "$W4" needs ! 'delta' ' ' '' 0 'question' '' '#14' — 50% ok 'Delta 在问' merged '' '' '选哪个？' ''
   row "$W5" sleeping z 'eps' ' ' '' 0 '' '' '#15' — 50% ok 'Eps 睡着' merged '' '' '' ''
   row "wid:$MU/far1" working ⠹ 'far' ' ' '' 0 '' m4 '#13' — · ok 'Far 在 m4' keep '' '' '' ''
+  row "wid:$MU/far2" needs ! 'farask' ' ' '' 0 'perm' m4 '#16' — · ok 'Farask 要批准' keep '' '' 'Bash ls' ''
+  row "wid:$MU/far3" working ⠹ 'farlost' ' ' '' 0 '' 'm4!' '#17' — · ok 'Farlost 失联' keep '' '' '' ''
+  row "wid:$MU/far4" exited x 'fargone' ' ' '' 0 '' m4 '#18' — · ok 'Fargone 停了' keep '' '' '' ''
   row hdr ended '' '▸ Ended (1)' ' '
   row "$W3" exited x 'gamma' ' ' '' 0 '' '' '' — · ok 'Gamma 退出了' merged '' '' '' ''
 } > "$W/rows.txt"
@@ -139,8 +150,10 @@ case " $(ids "$W5") " in *" wake "*) ;; *) fail "B: sleeping row lacks wake" ;; 
 case " $(ids "$W5") " in *" stop "*) fail "B: a sleeping row offers stop" ;; esac
 m3=$(qo view-menu --view fl@view-v1 "$W3")
 grep -q $'^resume\t恢复' <<< "$m3" || fail "B: ended exited row lacks 恢复: $m3"
-[ "$(ids "$MU/far1")" = "enter shell " ] || fail "B: another machine's row: $(ids "$MU/far1")"
-pass "B  a row's menu: done · asking · sleeping · ended (恢复) · another machine's (进入 + shell)"
+[ "$(ids "$MU/far1")" = "enter shell message rename reappol stop reap " ] || fail "B: another machine's row: $(ids "$MU/far1")"
+case " $(ids "$MU/far2") " in *" answer "*) ;; *) fail "B: a far asking row lacks answer: $(ids "$MU/far2")" ;; esac
+case " $(ids "$MU/far4") " in *" resume "*) ;; *) fail "B: a far exited row lacks resume: $(ids "$MU/far4")" ;; esac
+pass "B  a row's menu: done · asking · sleeping · ended (恢复) · another machine's (its hub writes)"
 
 # --- C: each action, its script, once ---------------------------------------------------
 one() {   # <id> <expected line> [view-act args…]
@@ -233,4 +246,74 @@ if [ -n "${FLEET_VIEW_ACT_EVIDENCE:-}" ]; then
     cat "$W/after.txt"; echo '--- Tab 的菜单'; cat "$W/menu.txt"; } > "$FLEET_VIEW_ACT_EVIDENCE"
 fi
 pass "D  popup: Tab opens the row's menu, Esc steps back and closes with nothing run; 回收 asks y/n (n nothing, y one dash-reap.sh); 改名 asks on the bottom line"
+# --- E: another machine's row --------------------------------------------------------------
+# the sidebar's own cache (fleet-sidebar-remote.sh reads $FLEET_C/global, FLEET_C
+# under $TMPDIR): the same dir the list reads (FLEET_STATUS_G)
+export TMPDIR="$W/t"; G="$TMPDIR/.claude-dash/global"; mkdir -p "$G"
+export FLEET_STATUS_G="$G" CCQUOTA_FLEET=1
+{ printf '#ts\037%s\n' "$(date +%s)"
+  for k in far1:far: far2:farask:perm far3:farlost: far4:fargone:; do
+    IFS=: read -r id nm nd <<< "$k"
+    printf 'wid:%s/%s\037m4\037\037\037\037\037\037%s\037\037%s\n' "$MU" "$id" "$nm" "$nd"
+  done; } > "$G/remote_fl"
+date +%s > "$G/hub_ok"
+WRITES="$W/writes"; : > "$WRITES"
+cat > "$W/hubw.sh" <<'EOF'
+printf '%s\t%s\n' "$1" "$2" >> "$WRITES"
+if [ -s "$FLEET_CONF_DIR/hub.answer" ]; then cat "$FLEET_CONF_DIR/hub.answer"; exit 0; fi
+case "$1" in
+  worker_reap) printf '{"operation_id":"op1","status":"succeeded","result":{"token":"reaped:full","exit":0}}\n' ;;
+  *) printf '{"operation_id":"op1","status":"succeeded","result":{}}\n' ;;
+esac
+EOF
+export WRITES FLEET_HUB_WRITE_CMD="bash '$W/hubw.sh' \"\$@\""
+HS="$W/hubsess.log"; : > "$HS"
+printf 'printf "%%s\\n" "$*" >> %q\n' "$HS" > "$W/hubsess.sh"
+export FLEET_VIEW_HUBSESS="$W/hubsess.sh"
+far() {   # <id> <action> <tool> <json fragment> [view-act args…]
+  local id=$1 act=$2 tool=$3 frag=$4; shift 4
+  reset; : > "$WRITES"; : > "$HS"
+  out=$(qo view-act --view fl@view-v1 "$MU/$id" "$act" "$@" 2>"$W/err") || fail "E: $act failed: $out $(cat "$W/err")"
+  [ "$(calls)" = "fleet-sidebar-remote.sh|$act|fl|wid:$MU/$id" ] || fail "E: $act ran «$(calls)»"
+  [ "$(grep -c . "$WRITES")" = 1 ] && [ "$(cut -f1 "$WRITES")" = "$tool" ] || fail "E: $act wrote «$(cat "$WRITES")»"
+  body=$(cut -f2 "$WRITES")
+  case "$body" in *"\"worker_id\":\"$MU/$id\""*) ;; *) fail "E: $act's write names no worker_id: $body" ;; esac
+  case "$body" in *"$frag"*) ;; *) fail "E: $act's write lacks $frag: $body" ;; esac
+  case "$out" in *m4*) ;; *) fail "E: $act's outcome does not name the machine: $out" ;; esac
+  grep -qx -- --refresh "$HS" || fail "E: $act was not followed by a hub --refresh: $(cat "$HS")"
+}
+far far1 message worker_message '"text":"你好 hi"' --text '你好 hi'
+far far1 rename worker_rename '"name":"新名"' --text '新名'
+far far1 reappol worker_reap_policy '"policy":"done:2h"' --text done:2h
+far far1 stop worker_stop ''
+far far4 resume worker_resume ''
+far far2 answer worker_answer '"answer":"yes"' --text y
+far far1 reap worker_reap '' --yes
+# the hub says no: its words, verbatim, and a non-zero exit
+printf '{"error":{"code":"FORBIDDEN","message":"no grant for this login"}}\n' > "$FLEET_CONF_DIR/hub.answer"
+reset
+out=$(qo view-act --view fl@view-v1 "$MU/far1" stop 2>&1) && fail "E: a refused stop exited 0: $out"
+case "$out" in *"FORBIDDEN"*"no grant for this login"*) ;; *) fail "E: the refusal is not shown verbatim: $out" ;; esac
+rm -f "$FLEET_CONF_DIR/hub.answer"
+# a lost row: nothing goes out, and it says so
+reset; : > "$WRITES"
+out=$(qo view-act --view fl@view-v1 "$MU/far3" reap --yes 2>&1) && fail "E: a lost row's reap exited 0"
+[ -z "$(calls)" ] && [ ! -s "$WRITES" ] || fail "E: a lost row sent «$(calls) $(cat "$WRITES")»"
+case "$out" in *"m4 失联，做不了"*) ;; *) fail "E: a lost row does not say why: $out" ;; esac
+# the popup: Tab → 停 on the far row, off the screen's thread, the outcome on the bottom line
+reset; : > "$WRITES"
+# the pane is the outer server's: hand it E's environment (the hub seams, the cache)
+penv=$(printf ' %q' "TMPDIR=$TMPDIR" "FLEET_STATUS_G=$G" "CCQUOTA_FLEET=1" "WRITES=$WRITES" \
+       "FLEET_HUB_WRITE_CMD=$FLEET_HUB_WRITE_CMD" "FLEET_VIEW_HUBSESS=$FLEET_VIEW_HUBSESS")
+to respawn-pane -k -t o "env TMUX='$IN,0,0' ESCDELAY=25$penv python3 '$BIN/fleet-quickopen.py' --view fl@view-v1; echo POPUP-CLOSED; sleep 600"
+waitfor 'Tab 操作' || fail "E: the list did not reopen: $(screen)"
+to send-keys -t o -l 'Far 在'
+waitfor '› Far 在' || fail "E: typing did not filter: $(screen)"
+to send-keys -t o Tab; waitfor '─ Far 在 m4' || fail "E: Tab on the far row: $(screen)"
+for _ in $(seq 1 5); do to send-keys -t o Down; done
+waitfor '▶ 停下' || fail "E: ↓5 is not 停下: $(screen)"
+to send-keys -t o Enter
+waitfor '（在 m4）：已完成' || fail "E: the popup does not say the stop landed: $(screen)"
+[ "$(calls)" = "fleet-sidebar-remote.sh|stop|fl|wid:$MU/far1" ] || fail "E: the popup's stop ran «$(calls)»"
+pass "E  another machine's row: each far action one sidebar-remote call + one hub write (worker_id, answer), the machine named, a refusal verbatim, a lost row nothing, a --refresh after; the popup's 停 lands off-thread"
 echo "PASS fleet-view-actions-selftest"
