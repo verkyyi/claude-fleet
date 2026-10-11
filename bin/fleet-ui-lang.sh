@@ -1424,10 +1424,6 @@ quit	z	quit fleet — in the client only: every process of the client on this co
     en:notify_perm)             printf '%s needs your approval' "${1:-}" ;;
     zh:notify_auth)             printf '%s 要你登录' "${1:-}" ;;
     en:notify_auth)             printf '%s needs you to sign in' "${1:-}" ;;
-    zh:notify_decide)           printf '%s 有事要你定' "${1:-}" ;;
-    en:notify_decide)           printf '%s has decisions for you' "${1:-}" ;;
-    zh:notify_decide_body)      printf '决定单 %s 行' "${1:-}" ;;
-    en:notify_decide_body)      printf '%s on the decision sheet' "${1:-}" ;;
     zh:notify_stuck)            printf '%s 被卡住了' "${1:-}" ;;
     en:notify_stuck)            printf '%s is stuck' "${1:-}" ;;
     zh:notify_failed)           printf '%s 失败了' "${1:-}" ;;
@@ -1438,10 +1434,6 @@ quit	z	quit fleet — in the client only: every process of the client on this co
     en:notify_done_batch)       printf '%s: %s done' "${1:-}" "${2:-}" ;;
     zh:notify_done_last)        printf '最新：%s' "${1:-}" ;;
     en:notify_done_last)        printf 'latest: %s' "${1:-}" ;;
-    zh:notify_who_orch)         printf '编排会话' ;;
-    en:notify_who_orch)         printf 'The orchestrator' ;;
-    zh:notify_who_steward)      printf '管家' ;;
-    en:notify_who_steward)      printf 'The steward' ;;
     zh:notify_doctor_tn)        printf '通知点一下直接切到会话（terminal-notifier）' ;;
     en:notify_doctor_tn)        printf 'a click on a notification goes to its session (terminal-notifier)' ;;
     zh:notify_doctor_no_tn)     printf '没装 terminal-notifier：通知照弹，点了只把终端叫到前面（brew install terminal-notifier 可直接切到会话）' ;;

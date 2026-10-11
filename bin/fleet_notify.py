@@ -9,12 +9,11 @@ attached to the client or not (the old road, fleet_alerts_notify on the bar's
 status-right job, ran only while a client drew that bar: a client in the
 background, or `fleet claude`'s own view, never notified — #1951's 0%).
 
-What counts, per row (a session on any machine, the orchestrator and the
-steward included):
-  ask    `needs` perm / ask / auth / anything but blocked, or the orchestrator's
-         `decide=N` going red — 在问你; sound; the phone too
+What counts, per row (a session on any machine — no session is special: the
+orchestrator's decision-sheet count left with the resident seat, issue #3118):
+  ask    `needs` perm / ask / auth / anything but blocked — 在问你; sound; the phone too
   stuck  `needs` blocked, or `failed` — 卡住; sound; the phone too
-  done   `done` from anything else (never the steward's) — 做完; no sound, never
+  done   `done` from anything else — 做完; no sound, never
          the phone; one batch's dones within FLEET_NOTIFY_DONE_MERGE (600 s) are
          ONE notification (the same group, its count growing)
 A notification is for ENTERING one of them: the key (worker id, kind, a hash of
@@ -94,8 +93,6 @@ def classify(r):
     st, nd = r.get("state") or "", r.get("needs") or ""
     ask = r.get("ask") or ()
     words = (ask[1] if len(ask) > 1 and ask[1] else "") or r.get("detail") or ""
-    if r.get("role") == "orchestrator" and str(r.get("decide") or "0") not in ("", "0") and st != "needs":
-        return "ask", "decide", r.get("decide")
     if st == "needs":
         if nd == "blocked":
             return "stuck", "blocked", words
@@ -103,16 +100,12 @@ def classify(r):
         return "ask", {"permission": "perm", "question": "ask"}.get(sub, sub), words
     if st == "failed":
         return "stuck", "failed", words
-    if st == "done" and r.get("role") != "steward":
+    if st == "done":
         return "done", "", ""
     return None
 
 
 def subject(r):
-    if r.get("role") == "orchestrator":
-        return ui("notify_who_orch")
-    if r.get("role") == "steward":
-        return ui("notify_who_steward")
     return ("#%s" % r["issue"]) if r.get("issue") else (r.get("name") or r.get("wid") or "?")
 
 
@@ -152,7 +145,7 @@ def ui(key, *args):
         return key
 
 
-TITLE = {("ask", "perm"): "notify_perm", ("ask", "auth"): "notify_auth", ("ask", "decide"): "notify_decide",
+TITLE = {("ask", "perm"): "notify_perm", ("ask", "auth"): "notify_auth",
          ("stuck", "failed"): "notify_failed", ("stuck", "blocked"): "notify_stuck"}
 
 
@@ -234,8 +227,6 @@ def beat(rows, gdir, session, now=None, sender=None):
             ev["body"] = node
         else:
             ev["title"] = ui(TITLE.get((kind, sub), "notify_ask"), who)
-            if sub == "decide":
-                words = ui("notify_decide_body", words)
             ev["body"] = " · ".join(x for x in (words, node) if x)
         events.append(ev)
     for wid in [w for w, v in seen.items() if w not in here and now - int(v.get("t", 0)) > KEEP]:

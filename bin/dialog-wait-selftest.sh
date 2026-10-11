@@ -11,7 +11,7 @@
 #      the driver's window here and asking ⇒ ONE decision row carrying the question
 #      and its options and the window; a fresh heartbeat ⇒ none; asking about a new
 #      dialog closes the old row; not asking and stale past one TTL ⇒ a 「没在走」
-#      row and the page's 待你动手 line; stale less than a TTL past ⇒ none;
+#      row (the hosted page left with issue #3118); stale less than a TTL past ⇒ none;
 #      `answer --row dialog-…` goes through the channel with the row's fp + label
 #   C  the channel (bin/fleet_dialog_answer.py → bin/fleet-answer.sh) against a fake
 #      dialog in an isolated tmux: answered + confirmed + the trail (decision log,
@@ -189,11 +189,8 @@ TICK beat --holder --force >/dev/null 2>&1
   || bad "W: after the answer: dialog=[$(rows dialog-)] stalled=[$(rows stalled-)]"
 mark $(( now - 6000 ))
 TICK beat --holder --force >/dev/null 2>&1
-PAGE="$FLEET_CONF_DIR/fleets/st/steward/page.html"
 r=$(rows stalled-)
-case "$r" in *'没在走'*'批次·单会话像本地'*)
-  grep -q '没在走' "$PAGE" 2>/dev/null && ok "W: not asking, stale past a TTL ⇒ a 「没在走」 row and the page's line" \
-    || bad "W: no 没在走 on the page ($PAGE)" ;;
+case "$r" in *'没在走'*'批次·单会话像本地'*) ok "W: not asking, stale past a TTL ⇒ a 「没在走」 row" ;;
   *) bad "W: no stalled row: [$r]" ;; esac
 mark "$now"
 TICK beat --holder --force >/dev/null 2>&1

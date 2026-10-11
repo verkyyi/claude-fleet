@@ -993,7 +993,7 @@ ORCH_HINT = ("spawn: 派单要装插件：/plugin install %s — the issue was f
              % ORCH_PLUGIN)
 def bridge_seat():
     """Is THIS pane started to dispatch — its agent file grants `spawn` (@agent_spawn
-    1, stamped by bin/fleet-claude.sh, issue #3122)? (--bridge-seat) The seats the
+    1, stamped by the Claude launcher, issue #3122)? (--bridge-seat) The seats the
     fleet used to open itself (orchestrator · steward) are gone (issue #3118), and a
     role is never matched by name: an epic-driver without the fleet-epic plugin is a
     plain session."""

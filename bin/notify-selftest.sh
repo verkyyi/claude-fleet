@@ -14,7 +14,7 @@
 #               same batch within 10 minutes → ONE notification grown (same
 #               group, 「做完了 2 个」); FLEET_NOTIFY_DONE=0 → none, logged skip
 #   D. quiet    inside FLEET_NOTIFY_QUIET: still notified, no sound, no phone
-#   E. orch     the orchestrator's decide=N going red → 「有事要你定」
+#   E. orch     an old orchestrator row is ordinary (issue #3118): done → 做完, no decide
 #   F. phone    a Bark push for ask / stuck only, its address read from
 #               secrets.env — never in the log, the argv, the environment
 #   G. click    the notification's click lands `jump=wid:<worker>` on the list
@@ -122,13 +122,16 @@ eq "D: quiet hours: still notified, no sound" "#1909 在问你|夜里的问题 �
 eq "D: …and nothing to the phone" "" "$(cat "$WORK/phone")"
 
 # ============================================================================ E
+# an old orchestrator row (issue #3118: no session is special) is a row like any other
 O='"role":"orchestrator"'
-answer "$(row issue-1909 needs ask '夜里的问题')" "$(row issue-90 'done' '' '' ",$O")"; round
+answer "$(row issue-1909 needs ask '夜里的问题')" "$(row issue-90 working '' '' ",$O")"; round
 answer "$(row issue-1909 needs ask '夜里的问题')" "$(row issue-90 'done' '' '' ",$O,\"orch_decide\":2")"; round; settle 9
-eq "E: the orchestrator's decide=N going red → 有事要你定" "编排会话 有事要你定|决定单 2 行 · m5|1" "$(last)"
+eq "E: an old orchestrator's row is an ordinary row — its done is 做完, no decide count" "#90 做完了|m5|" "$(last)"
+answer "$(row issue-1909 needs ask '夜里的问题')" "$(row issue-90 'done' '' '' ",$O,\"orch_decide\":2")" "$(row issue-91 needs ask '合不合？')"; round; settle 10
+eq "E: …and a new ask beside it rings" "#91 在问你|合不合？ · m5|1" "$(last)"
 
 # ============================================================================ F
-eq "F: ask → the phone, its address from secrets.env" "编排会话 有事要你定|决定单 2 行 · m5|https://api.day.app/SeCrEtKeY123" "$(cat "$WORK/phone")"
+eq "F: ask → the phone, its address from secrets.env" "#91 在问你|合不合？ · m5|https://api.day.app/SeCrEtKeY123" "$(cat "$WORK/phone")"
 hasnt "F: the address is never in logs/notify.ndjson" "$(cat "$WORK/notify.ndjson")" SeCrEtKeY123
 has "F: …which says the phone was sent" "$(tail -1 "$WORK/notify.ndjson")" '"phone": "sent"'
 hasnt "F: …nor in the client's environment list (fleet-shell.sh SHELL_ENV)" "$(grep -n 'FLEET_NOTIFY_BARK' "$BIN/fleet-shell.sh")" BARK

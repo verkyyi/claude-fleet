@@ -31,10 +31,10 @@
 #                   field 26) is no row on the sidebar, a remote one or a local
 #                   window alike; FLEET_ROWS_TEST=1 (`fleet ls`) lists it
 #   O. orchestrator — issue #1957: a worker the hub marks `role: orchestrator` keeps
-#                   its line in the cache (fleet-remote-view.sh open finds it there)
-#                   and is named in orch_<sess> (worker_id · machine · online · state ·
-#                   needs · question); since issue #3119 the sidebar draws it as an
-#                   ordinary row — byte for byte the row of the same worker unmarked
+#                   its line in the cache (fleet-remote-view.sh open finds it there);
+#                   since issue #3119 the sidebar draws it as an ordinary row — byte
+#                   for byte the row of the same worker unmarked — and since #3118 no
+#                   orch_<sess> / orch_multi_ / orch_all_ file is written
 #   Q. one EPIC, one row — issue #1958: the window that drives a running EPIC
 #                   (@epic, in a 2-repo fleet) is ONE row named `#<N> <the EPIC's
 #                   title>`, badged landed/members off its heartbeat mark; its three
@@ -747,8 +747,10 @@ OID=0d1e2a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b
 FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-orch.json'" PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null || fail "O: --refresh (orchestrator) failed"
 eq   "O: the orchestrator keeps its line in the cache (open finds it there)" "m4|编排" \
      "$(LC_ALL=C awk -F"$US" -v w="wid:$F/$OID" '$1 == w { print $2 "|" $8 }' "$G/remote_$S")"
-eq   "O: orch_<sess> names it: worker_id, machine, online, state, needs, its question" \
-     "$F/$OID${US}m4${US}online${US}needs${US}ask${US}开一个 EPIC 还是三个快任务？" "$(cat "$G/orch_$S" 2>/dev/null)"
+printf 'stale\n' > "$G/orch_$S"; printf 'stale\n' > "$G/orch_multi_$S"
+FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-orch.json'" PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null
+eq   "O: no orch_<sess> / orch_multi_<sess> file any more (issue #3118: an older one is removed)" "00" \
+     "$([ -e "$G/orch_$S" ] && echo 1 || echo 0)$([ -e "$G/orch_multi_$S" ] && echo 1 || echo 0)"
 s=$(side)
 has  "O: the sidebar draws its row (issue #3119: no session is special)" "$s" "编排"
 has  "O: …the other rows are all there" "$s" "侧边栏"
@@ -763,9 +765,8 @@ PY
 FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-plain.json'" PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null || fail "O: --refresh (unmarked) failed"
 eq   "O: …byte for byte the row of the same worker with no role" "$(side | grep "编排")" "$orow"
 FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-orch.json'" PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null || fail "O: --refresh (orchestrator) failed"
-# O2. two machines still answer with one (issue #2117): orch_<sess> keeps ONE line —
-# the online one on the home machine (connect.json's last), else online first —
-# orch_multi_<sess> names both for the doctor; both are rows (#3119).
+# O2. two machines answer as orchestrator (issue #2117 once kept one line): both are
+# rows (#3119), and nothing is written for the doctor (issue #3118).
 python3 - "$WORK/sessions-orch.json" "$WORK/sessions-orch2.json" "$F" <<'PY'
 import json, sys
 src, dst, f = sys.argv[1:4]
@@ -776,39 +777,10 @@ o["worker_id"], o["machine_name"], o["worker"]["identity"] = f + "/" + oid, "zz9
 d["sessions"].append(o)
 json.dump(d, open(dst, "w"), ensure_ascii=False)
 PY
-OID2=1e2f3a4b-5c6d-4e7f-8a9b-0c1d2e3f4a5c
-mkdir -p "$WORK/xdgc/claude-fleet"
-FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-orch2.json'" XDG_CACHE_HOME="$WORK/xdgc" PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null || fail "O2: --refresh (two orchestrators) failed"
-eq   "O2: two answer — orch_<sess> keeps one line" "1" "$(grep -c . "$G/orch_$S" 2>/dev/null)"
-eq   "O2: …orch_multi_<sess> names both for the doctor" "2" "$(grep -c . "$G/orch_multi_$S" 2>/dev/null)"
-eq   "O2: …orch_all_<sess> carries both worker_ids" "2" "$(grep -c . "$G/orch_all_$S" 2>/dev/null)"
-eq "O2: …the sidebar draws both, as rows (#3119)" "2" "$(side | grep -c "编排")"
-printf '{"last":"zz9"}' > "$WORK/xdgc/claude-fleet/connect.json"
-FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-orch2.json'" XDG_CACHE_HOME="$WORK/xdgc" PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null
-eq   "O2: …the line is the home machine's (fleet connect's last)" "$F/$OID2" "$(cut -d"$US" -f1 "$G/orch_$S" 2>/dev/null)"
-printf '{"last":"nowhere"}' > "$WORK/xdgc/claude-fleet/connect.json"
-FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-orch.json'" XDG_CACHE_HOME="$WORK/xdgc" PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null
-eq   "O2: one again — orch_multi_<sess> empties" "" "$(cat "$G/orch_multi_$S" 2>/dev/null)"
-# O3. what waits behind its turn (issue #2617): the worker's orch_queue (the node's
-# `orchq=`) is orch_<sess>'s 7th column — 0 too; none (Codex, an older node) = the
-# six columns of O, byte for byte.
-for q in 2 0; do
-  python3 - "$WORK/sessions-orch.json" "$WORK/sessions-orchq.json" "$q" <<'PY'
-import json, sys
-src, dst, q = sys.argv[1:4]
-d = json.load(open(src, encoding="utf-8"))
-d["sessions"][-1]["worker"]["orch_queue"] = int(q)
-json.dump(d, open(dst, "w"), ensure_ascii=False)
-PY
-  FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-orchq.json'" PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null || fail "O3: --refresh (queue $q) failed"
-  eq "O3: orch_queue $q → orch_<sess>'s 7th column" \
-     "$F/$OID${US}m4${US}online${US}needs${US}ask${US}开一个 EPIC 还是三个快任务？${US}$q" "$(cat "$G/orch_$S" 2>/dev/null)"
-done
-FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-orch.json'" PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null
-eq   "O3: …no orch_queue: the six columns, as before" \
-     "$F/$OID${US}m4${US}online${US}needs${US}ask${US}开一个 EPIC 还是三个快任务？" "$(cat "$G/orch_$S" 2>/dev/null)"
-PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null
-eq   "O: no orchestrator: orch_<sess> is empty" "" "$(cat "$G/orch_$S" 2>/dev/null)"
+FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-orch2.json'" PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null || fail "O2: --refresh (two orchestrators) failed"
+eq "O2: the sidebar draws both, as rows (#3119)" "2" "$(side | grep -c "编排")"
+eq "O2: …no orch_multi_ / orch_all_ file" "00" \
+   "$([ -e "$G/orch_multi_$S" ] && echo 1 || echo 0)$([ -e "$G/orch_all_$S" ] && echo 1 || echo 0)"
 
 PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null; R=$(cat "$G/remote_$S")
 OK=$(cat "$G/hub_ok" 2>/dev/null)
