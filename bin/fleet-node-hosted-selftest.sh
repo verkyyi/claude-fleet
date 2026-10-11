@@ -114,7 +114,7 @@ fa() {
   out=$(env ${e[@]+"${e[@]}"} FLEET_NODE_RUNTIME="$W/fakert" FLEET_SHELL_NO_ATTACH=1 sh "$W/inst/bin/fleet" "$@" </dev/null 2>&1); rc=$?
   calls=$(cat "$W/calls")
 }
-fa -- ; me=$(hostname -s); me=${me%%.*}
+fa FLEET_CLIENT=shell -- ; me=$(hostname -s); me=${me%%.*}
 eq "A fleet → rc 0" "$rc" 0
 eq "A … one line: the client runs on this machine" "$out" "fleet · 客户端在 $me 上运行；平时请在自己设备上用 fleet（装：curl -fsSL <入口>/install | sh）。"
 eq "A … the runtime's fleet-shell.sh, hosted, the temp cache — no update asked" "$calls" "runtime fleet-shell.sh |hosted=1|cache=$NHC"
@@ -129,22 +129,22 @@ eq "A fleet claude → exit 3" "$rc" 3
 has "A … says to type fleet or --here" "$out" "敲 fleet 在这台上开客户端，或 fleet claude --here"
 fa -- claude --here
 eq "A fleet claude --here → its road as before" "$calls" "inst fleet-home-session.sh claude --here|hosted=1|cache=$NHC"
-fa FLEET_NODE_HOSTED_SESSION= --
+fa FLEET_CLIENT=shell FLEET_NODE_HOSTED_SESSION= --
 eq "A … its own tmux server, never the resident client's fleet-shell (#2904)" "$(cat "$W/sess")" fleet-node-client
 # a resident client from before #2702 still running here: the line says how to retire it
 "$REAL_TMUX" -L fleet-shell -f /dev/null new-session -d -s fleet-shell 'sleep 30' 2>/dev/null
-fa --
+fa FLEET_CLIENT=shell --
 "$REAL_TMUX" -L fleet-shell kill-server 2>/dev/null
 has "A … an old resident client's server running: the retire command (#2904)" "$out" "fleet-node-shell-retire.sh --login"
 fa FLEET_NODE_HOSTED_CACHE="$W/elsewhere" --
 has "A FLEET_NODE_HOSTED_CACHE moves the temp cache" "$calls" "cache=$W/elsewhere"
-fa FLEET_NODE_CLIENT=1 --
+fa FLEET_CLIENT=shell FLEET_NODE_CLIENT=1 --
 eq "A the hatch: the install's own client, as before" "$calls" "inst fleet-client-update.sh start|hosted=|cache=
 inst fleet-shell.sh |hosted=|cache="
-fa FLEET_CLIENT_IDENTITY=test --
+fa FLEET_CLIENT=shell FLEET_CLIENT_IDENTITY=test --
 eq "A the test identity: as before" "$calls" "inst fleet-client-update.sh start|hosted=|cache=
 inst fleet-shell.sh |hosted=|cache="
-fa FLEET_NODE_STATE="$W/nowhere" --
+fa FLEET_CLIENT=shell FLEET_NODE_STATE="$W/nowhere" --
 eq "A an unmanaged machine: as before, no line" "$calls|$out" "inst fleet-client-update.sh start|hosted=|cache=
 inst fleet-shell.sh |hosted=|cache=|"
 # over ssh (a phone, issue #3006): the thin loop — on a managed machine the runtime's,
@@ -159,6 +159,14 @@ eq "A over ssh, fleet m4: the old client's machine road" "$calls" "runtime fleet
 fa SSH_CONNECTION="$SSHC" FLEET_NODE_STATE="$W/nowhere" --
 eq "A over ssh, an unmanaged machine: the install's thin loop, the hub's pick" "$calls" "inst fleet-client-update.sh start|hosted=|cache=
 inst fleet-thin.py |hosted="
+
+# since the drill (issue #3007, C10): plain `fleet` is the thin loop with no ssh too;
+# `fleet --old` the old client, one line in old-client.log each time
+fa --
+eq "A fleet (no ssh) → the runtime's thin loop, --local" "$calls" "fakert fleet-thin.py --local|hosted=1"
+fa XDG_CACHE_HOME="$W/xc" -- --old
+eq "A fleet --old → the old client" "$calls" "runtime fleet-shell.sh |hosted=1|cache=$NHC"
+eq "A … one line in old-client.log" "$(grep -c . "$W/xc/claude-fleet/old-client.log" 2>/dev/null)" 1
 
 # ---- B. the real client from a sandbox runtime --------------------------------
 echo "B. the client up on the machine, then fleet quit"
