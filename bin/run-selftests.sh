@@ -57,6 +57,9 @@
 #               longest first, each into the lightest slice, so no coincidence of
 #               names can stack the slow tests into one. A NEW test (no row) costs
 #               the table's median and rebalances the slices by itself.
+#   --durations F pack by table F instead: a bare name is a file beside this script
+#               (the release train's own Macs use selftest-durations-fleet-ci.txt,
+#               issue #3145); a missing one falls back to selftest-durations.txt.
 #   NAME        run only the named tests. The `-selftest.sh` suffix is optional, and a
 #               shell glob works (`run-selftests.sh 'dash-*'`), so chasing one red test
 #               still goes through the same hermetic prelude CI uses. A NAME that
@@ -214,12 +217,15 @@ fi
 # selftest name never starts with `-`), so `run-selftests.sh --shard 1/4 'dash-*'`
 # works. Forwarded verbatim through the shadow re-exec above, so it is only ever
 # parsed here, in the inner run.
-shard_k=1 shard_n=1 changed_base=''
+shard_k=1 shard_n=1 changed_base='' dur_spec=''
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --shard) [ "$#" -ge 2 ] || { echo "run-selftests: --shard needs K/N" >&2; exit 2; }
              shard_spec=$2; shift 2 ;;
     --shard=*) shard_spec=${1#--shard=}; shift ;;
+    --durations) [ "$#" -ge 2 ] && [ -n "$2" ] \
+                   || { echo "run-selftests: --durations needs a table file" >&2; exit 2; }
+                 dur_spec=$2; shift 2; continue ;;
     --changed) [ "$#" -ge 2 ] && [ -n "$2" ] \
                  || { echo "run-selftests: --changed needs a base revision" >&2; exit 2; }
                changed_base=$2; shift 2; continue ;;
@@ -435,6 +441,11 @@ fi
 # Within a shard the tests still run in name order. Refresh the table with
 # bin/selftest-durations.sh when a shard's predicted load (printed below) creeps up.
 dur_table="$script_dir/selftest-durations.txt"
+if [ -n "$dur_spec" ]; then
+  case "$dur_spec" in */*) d=$dur_spec ;; *) d="$script_dir/$dur_spec" ;; esac
+  if [ -f "$d" ]; then dur_table=$d
+  else echo "run-selftests: no durations table $dur_spec — packing by selftest-durations.txt" >&2; fi
+fi
 discovered=0 listed=''
 for t in "$@"; do
   # No matches → the glob stays literal; the -f guard drops that phantom entry.
@@ -491,12 +502,12 @@ if [ "$shard_n" -ne 1 ]; then
   # selftests.yml) shows up on a green run, before it times out — WARN past 400s. Only with a table:
   # without one the "seconds" are a count of tests.
   if [ -f "$dur_table" ]; then
-    printf '%s\n' "$deal" | awk -v k="$shard_k" -v n="$shard_n" -v warn=400 '
+    printf '%s\n' "$deal" | awk -v k="$shard_k" -v n="$shard_n" -v warn=400 -v tbl="${dur_table##*/}" '
       $1 == "=" { if ($2 == k) mine = $3; if ($3 + 0 > max) { max = $3 + 0; at = $2 } }
       END {
-        printf "run-selftests: shard %s/%s — predicted ~%ss (heaviest of %s: shard %s, ~%ss) by selftest-durations.txt\n", k, n, mine, n, at, max
+        printf "run-selftests: shard %s/%s — predicted ~%ss (heaviest of %s: shard %s, ~%ss) by %s\n", k, n, mine, n, at, max, tbl
         if (max > warn)
-          printf "run-selftests: WARN heaviest shard predicted ~%ss > %ss — widen the shard: matrix, or refresh bin/selftest-durations.txt\n", max, warn
+          printf "run-selftests: WARN heaviest shard predicted ~%ss > %ss — widen the shard: matrix, or refresh bin/%s\n", max, warn, tbl
       }'
   fi
 fi

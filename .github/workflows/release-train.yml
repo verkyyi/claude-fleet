@@ -18,6 +18,14 @@ name: release train
 #     empty and ends within the minute.
 #   * the tests are the shared matrix (selftests-shards.yml), `--changed <stable>`:
 #     Linux and macOS on TRAIN_SHA (发起人拍板 2 — the full suite stays nightly).
+#   * the macOS half goes to OUR Macs first (issue #3145, C6): `board` asks the hub's
+#     /v1/fleet/ci-runners (bin/fleet-train-macos.sh pick, secret
+#     FLEET_HUB_VIEWER_TOKEN) — a runner online and idle/busy ⇒ `[self-hosted, macOS,
+#     fleet-ci]`, one shard per machine (≤ 2); none, no secret or no answer ⇒
+#     `macos-latest`, 2 shards — the train runs either way. `macos-wait` reports each
+#     shard's runner and queue time, and a shard our runner left queued 20 minutes
+#     reds the train (「自家测试机没接」) and cancels it; the next board reads the
+#     heartbeat and picks GitHub's.
 #   * the gate is `fleet-stable.sh move TRAIN_SHA --precheck`: trunk / forward /
 #     oldcfg / release.json / artifacts, no tag pushed. Any red ⇒ this train is
 #     red and ships nothing; the next merge starts the next one (拍板 7).
@@ -28,7 +36,8 @@ name: release train
 #
 # Outputs of `board` (C1 / C3 hang off them): train_sha · stable_sha · skip ·
 # merges (count) · merges_json (first-parent stable..TRAIN_SHA, newest first,
-# {sha, subject, committed}).
+# {sha, subject, committed}) · macos_runs_on (JSON) · macos_shards · macos_where
+# (fleet-ci | github) · macos_why.
 run-name: release train
 
 on:
@@ -46,6 +55,7 @@ concurrency:
 permissions:
   contents: read
   statuses: write   # `train` leaves `release train: macOS` on TRAIN_SHA
+  actions: write    # `macos-wait` reads this run's jobs and cancels it when our runner never took it
 
 jobs:
   board:
@@ -58,6 +68,10 @@ jobs:
       skip: ${{ steps.board.outputs.skip }}
       merges: ${{ steps.board.outputs.merges }}
       merges_json: ${{ steps.board.outputs.merges_json }}
+      macos_runs_on: ${{ steps.macos.outputs.macos_runs_on }}
+      macos_shards: ${{ steps.macos.outputs.macos_shards }}
+      macos_where: ${{ steps.macos.outputs.macos_where }}
+      macos_why: ${{ steps.macos.outputs.macos_why }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -79,6 +93,16 @@ jobs:
           for m in json.load(sys.stdin):
               print("- `%s` %s · %s" % (m["sha"][:7], m["committed"], m["subject"]))'
           } >> "$GITHUB_STEP_SUMMARY"
+      - name: pick the macOS runners
+        # issue #3145: our own Macs when the hub says one is there, else GitHub's.
+        id: macos
+        env:
+          FLEET_HUB_URL: https://claudefleet.24haowan.com
+          FLEET_HUB_CI_TOKEN: ${{ secrets.FLEET_HUB_VIEWER_TOKEN }}
+        run: |
+          bash bin/fleet-train-macos.sh pick 2> pick.err
+          echo "macOS → $(cat pick.err)" >> "$GITHUB_STEP_SUMMARY"
+          cat pick.err
 
   linux:
     name: Linux
@@ -92,8 +116,9 @@ jobs:
       shards: '[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]'
 
   macos:
-    # GitHub's macOS runners until C6 puts the train on our own Macs. 2 wide: a free
-    # account runs at most 5 macOS jobs, and the nightly full suite needs the rest.
+    # Our Macs (fleet-ci, one shard each, ≤ 2) or GitHub's (2 wide: a free account
+    # runs at most 5 macOS jobs, and the nightly full suite needs the rest) — as
+    # `board` picked (issue #3145).
     name: macOS
     needs: board
     if: needs.board.outputs.skip == 'false'
@@ -101,8 +126,28 @@ jobs:
     with:
       sha: ${{ needs.board.outputs.train_sha }}
       base: ${{ needs.board.outputs.stable_sha }}
-      runs_on: macos-latest
-      shards: '[1, 2]'
+      runs_on: ${{ needs.board.outputs.macos_runs_on }}
+      shards: ${{ needs.board.outputs.macos_shards }}
+
+  macos-wait:
+    # A job queued for a self-hosted label waits a day, and timeout-minutes only
+    # starts counting once it runs: this watches the shards start, writes each one's
+    # runner + queue time to the summary, and reds + cancels the train when our
+    # runner left one queued 20 minutes (issue #3145).
+    name: macOS 排队
+    needs: board
+    if: needs.board.outputs.skip == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.board.outputs.train_sha }}
+      - name: watch the macOS shards start
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WHERE: ${{ needs.board.outputs.macos_where }}
+        run: bash bin/fleet-train-macos.sh watch --where "$WHERE" --deadline 1200
 
   gate:
     name: precheck
@@ -138,7 +183,7 @@ jobs:
     # half's verdict to TRAIN_SHA (a commit status — a check run belongs to the
     # commit that queued the run, which may not be TRAIN_SHA).
     name: train
-    needs: [board, linux, macos, gate]
+    needs: [board, linux, macos, macos-wait, gate]
     if: always() && needs.board.outputs.skip == 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -150,6 +195,9 @@ jobs:
           BOARD: ${{ needs.board.result }}
           LINUX: ${{ needs.linux.result }}
           MACOS: ${{ needs.macos.result }}
+          WAIT: ${{ needs.macos-wait.result }}
+          WHERE: ${{ needs.board.outputs.macos_where }}
+          WHY: ${{ needs.board.outputs.macos_why }}
           GATE: ${{ needs.gate.result }}
           URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -170,10 +218,11 @@ jobs:
             echo "|---|---|"
             echo "| board | $BOARD |"
             echo "| Linux | $LINUX |"
-            echo "| macOS | $MACOS |"
+            echo "| macOS | ${MACOS}（${WHERE}：${WHY}） |"
+            echo "| macOS 排队 | $WAIT |"
             echo "| precheck | $GATE |"
           } >> "$GITHUB_STEP_SUMMARY"
-          for r in "$BOARD" "$LINUX" "$MACOS" "$GATE"; do
-            [ "$r" = success ] || { echo "::error::this train is red (board $BOARD · Linux $LINUX · macOS $MACOS · precheck $GATE) — it ships nothing; the next merge starts the next train"; exit 1; }
+          for r in "$BOARD" "$LINUX" "$MACOS" "$WAIT" "$GATE"; do
+            [ "$r" = success ] || { echo "::error::this train is red (board $BOARD · Linux $LINUX · macOS $MACOS · macOS 排队 $WAIT · precheck $GATE) — it ships nothing; the next merge starts the next train"; exit 1; }
           done
           echo "train ${SHA:0:7} is green"

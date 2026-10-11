@@ -22,7 +22,8 @@
 #                    slowest into shard 1/6) are spread one per shard; the partition
 #                    still holds for every N, a test with no row is still scheduled,
 #                    each shard prints its predicted load, and a heaviest shard past
-#                    400s WARNs.
+#                    400s WARNs; `--durations F` packs by table F instead (our own
+#                    Macs, issue #3145), a missing F falls back saying so.
 #   • DURATIONS      bin/selftest-durations.sh rewrites the table from runner output:
 #                    median of a test's observations, unseen rows kept, rows for a
 #                    deleted test dropped, the header comment kept.
@@ -217,7 +218,16 @@ sed -i.bak 's/^100 f01/450 f01/' "$TABLE" && rm -f "$TABLE.bak"
 out=$(run --shard 2/4) || fail "a WARN must not turn the shard red" "$out"
 case "$out" in *"WARN heaviest shard predicted ~450s"*) ok "a heaviest shard past 400s WARNs — on every shard's log, not just its own" ;;
   *) fail "a 450s shard must WARN" "$out" ;; esac
-rm -f "$TABLE"
+# --durations (issue #3145): our own Macs pack by THEIR table — here a flat one, so
+# the 450s row of the default table is not what this shard reads.
+{ echo '# own machines'; for n in 01 02 03 04 05 06 07 08 09 10 11 12 13; do echo "2 f$n-selftest.sh"; done; } > "$WORK/bin/own-durations.txt"
+out=$(run --durations own-durations.txt --shard 2/4) || fail "--durations went red" "$out"
+case "$out" in *"by own-durations.txt"*) ;; *) fail "--durations must pack by the named table" "$out" ;; esac
+case "$out" in *WARN*) fail "--durations still read the default table's 450s row" "$out" ;; *) ok "--durations packs by the named table (our own Macs keep their own costs)" ;; esac
+out=$(run --durations no-such.txt --shard 2/4) || fail "a missing --durations table went red" "$out"
+case "$out" in *"no durations table no-such.txt"*"WARN heaviest shard predicted ~450s"*) ok "a missing --durations table falls back to selftest-durations.txt" ;;
+  *) fail "a missing --durations table must fall back to the default, saying so" "$out" ;; esac
+rm -f "$TABLE" "$WORK/bin/own-durations.txt"
 
 # ---------------------------------------------------------------------------
 # DURATIONS — the table's updater
