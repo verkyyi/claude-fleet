@@ -1887,7 +1887,7 @@ def main(argv):
         return 0
     if argv:
         print("usage: fleet-mcp.py [--group core|orch] [--list | --mount codex] | --legacy-peer | --probe | "
-              "--spec <tool>… | --call <tool> [<json args>] | --bridge-seat [<role>] | "
+              "--spec <tool>… | --call <tool> [<json args>] | --bridge-seat | "
               "--cred mint|check|revoke|assert", file=sys.stderr)
         return 2
     serve(table, name)

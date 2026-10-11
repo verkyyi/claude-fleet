@@ -45,11 +45,14 @@ Codex shows them on its `fleet-orch` server).
   by name) or `enabledPlugins["fleet-orchestrate@claude-fleet"]` is `true` in Claude
   Code's own settings (user, then this directory's project files) — the fleet keeps
   no record of its own.
-- **The bridge, until C7.** The seats the fleet still opens itself — the
-  orchestrator and the steward (`@fleet_role`), an EPIC driver (`--as epic-driver`, fleet-epic's agent file / `--role epic-driver` /
-  `@fleet_role_def`) — get `fleet-orch` from their launcher (`bin/fleet-claude.sh`,
-  `bin/fleet-codex.sh`, both asking `fleet-mcp.py --bridge-seat`), so a running batch
-  keeps dispatching. The debugger never does: its definition disallows spawn / await.
+- **The launcher mounts it only for an agent file that grants `spawn`** (issue
+  #3118). The resident seats it used to bridge (orchestrator, steward) are gone, and
+  no role name is matched: a session started `--as` an agent file whose tools keep
+  `spawn` (`@agent_spawn 1` — the fleet-epic plugin's `epic-driver`) gets `fleet-orch`
+  from its launcher (`bin/fleet-claude.sh`; `bin/fleet-codex.sh` asks
+  `fleet-mcp.py --bridge-seat`, which reads `@agent_spawn`). Everyone else gets it
+  only by installing the fleet-orchestrate plugin. The debugger never does: its
+  definition disallows spawn / await.
 - **Old sessions keep their tools (#2068, one version — `# compat-1v`).** `fleet`
   still ANSWERS every dispatch-group call under its old name; the call log marks it
   `road=legacy`. A server that takes over from a pre-group version (#1898's exec —
