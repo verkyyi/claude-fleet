@@ -1155,15 +1155,18 @@ def login_shell():
 
 
 def agent_dir(w):
-    """Where a session's agent is right now (issue #3183): its pane's
-    `pane_current_path` — the pane the wrapper started, else the window's first,
-    never a shell beside it — else the window's `@worktree`; "" when neither is a
-    directory. fleet-remote-view.sh shell-here keeps the same order."""
-    _, out = tm("list-panes", "-t", w, "-F", "#{pane_current_path}\t#{pane_start_command}")
-    panes = [(ln.split("\t") + [""])[:2] for ln in out.splitlines() if ln]
-    pick = next((p for p in panes if "fleet-session-wrap" in p[1]), panes[0] if panes else ["", ""])
-    if pick[0] and os.path.isdir(pick[0]):
-        return pick[0]
+    """Where a session's agent is right now (issue #3183): the cwd its last Bash
+    call left (`@agent_cwd`, stamped by set-claude-state.sh — Claude Code never
+    chdirs its process), else its pane's `pane_current_path` — the pane the
+    wrapper started, else the window's first, never a shell beside it — else the
+    window's `@worktree`; "" when none is a directory. fleet-remote-view.sh
+    shell-here keeps the same order."""
+    _, out = tm("list-panes", "-t", w, "-F", "#{@agent_cwd}\t#{pane_current_path}\t#{pane_start_command}")
+    panes = [(ln.split("\t") + ["", ""])[:3] for ln in out.splitlines() if ln]
+    pick = next((p for p in panes if "fleet-session-wrap" in p[2]), panes[0] if panes else ["", "", ""])
+    for d in pick[:2]:
+        if d and os.path.isdir(d):
+            return d
     _, wt = tm("display-message", "-p", "-t", w, "#{@worktree}")
     return wt if wt and os.path.isdir(wt) else ""
 

@@ -7,6 +7,9 @@
 #   B. a later prompt never replaces it; a PostToolUse never writes it
 #   C. a blocked window still clears on that same first prompt (the payload is
 #      read once, parsed by both)
+#   D. @agent_cwd (issue #3183): a Bash call's PostToolUse stamps the payload's
+#      top-level cwd (never one inside tool_input); another tool's leaves it; a
+#      relative or escaped one is not written
 # No live Claude, no network. Exit 0 = pass.
 set -uo pipefail
 
@@ -87,5 +90,17 @@ eq "C: a blocked window stays blocked across a tool call" "needs/blocked" \
 hook "$PA" "$UPS" "$(ups '答复：用 m4')"
 eq "C: the first prompt both clears blocked…" "working" "$(tf display-message -p -t "$PA" '#{@claude_state}')"
 eq "C: …and stamps the line" "答复：用 m4" "$(tl "$PA")"
+
+# --- D ------------------------------------------------------------------------
+ac() { tf display-message -p -t "$1" '#{@agent_cwd}'; }
+hook "$PB" "$POST" '{"session_id":"s","cwd":"/w/wt-x/bin","hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"echo \"cwd\": \"/nope\""}}'
+eq "D: a Bash call stamps the payload's cwd" "/w/wt-x/bin" "$(ac "$PB")"
+hook "$PB" "$POST" '{"session_id":"s", "cwd": "/w/wt-x/sub dir", "hook_event_name": "PostToolUse", "tool_name": "Bash"}'
+eq "D: …spaced JSON, a path with a space" "/w/wt-x/sub dir" "$(ac "$PB")"
+hook "$PB" "$POST" '{"session_id":"s","cwd":"/elsewhere","hook_event_name":"PostToolUse","tool_name":"Read"}'
+eq "D: another tool's call leaves it" "/w/wt-x/sub dir" "$(ac "$PB")"
+hook "$PB" "$POST" '{"session_id":"s","cwd":"rel/dir","hook_event_name":"PostToolUse","tool_name":"Bash"}'
+hook "$PB" "$POST" '{"session_id":"s","cwd":"/a\\\"b","hook_event_name":"PostToolUse","tool_name":"Bash"}'
+eq "D: a relative or escaped cwd is not written" "/w/wt-x/sub dir" "$(ac "$PB")"
 
 printf 'task-line selftest: PASS (%s checks)\n' "$CHECKS"

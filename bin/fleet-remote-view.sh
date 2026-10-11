@@ -1819,12 +1819,15 @@ shell-here)
     loc=$(fleet_worker_locate "wid:${wid#wid:}" 2>/dev/null)
     case "$loc" in local\ *) ;; *) note "${wid#*/} is not live on $(hostname -s)"; exit 3 ;; esac
     set -- $loc; w=$2; s=$3; sock=$(fleet_socket "$s")
-    # where its agent is right now (issue #3183): the agent pane's directory (the
-    # pane the wrapper started, else the window's first), then @worktree, then $HOME
-    # — fleet_view.agent_dir's order
-    panes=$(T list-panes -t "=$s:$w" -F "#{pane_current_path}$(printf '\t')#{pane_start_command}" 2>/dev/null)
-    dir=$(printf '%s\n' "$panes" | awk -F '\t' 'index($2, "fleet-session-wrap") { print $1; exit }')
-    [ -n "$dir" ] || dir=$(printf '%s\n' "$panes" | head -n 1 | cut -f 1)
+    # where its agent is right now (issue #3183): the cwd its last Bash call left
+    # (@agent_cwd), then the agent pane's directory (the pane the wrapper started,
+    # else the window's first), then @worktree, then $HOME — fleet_view.agent_dir's
+    dir=$(T display-message -p -t "=$s:$w" '#{@agent_cwd}' 2>/dev/null)
+    if [ -z "$dir" ] || [ ! -d "$dir" ]; then
+      panes=$(T list-panes -t "=$s:$w" -F "#{pane_current_path}$(printf '\t')#{pane_start_command}" 2>/dev/null)
+      dir=$(printf '%s\n' "$panes" | awk -F '\t' 'index($2, "fleet-session-wrap") { print $1; exit }')
+      [ -n "$dir" ] || dir=$(printf '%s\n' "$panes" | head -n 1 | cut -f 1)
+    fi
     [ -n "$dir" ] && [ -d "$dir" ] || dir=$(T display-message -p -t "=$s:$w" '#{@worktree}' 2>/dev/null)
     # the session's window gone (reaped, moved): its shell goes with it
     shpid=$$
