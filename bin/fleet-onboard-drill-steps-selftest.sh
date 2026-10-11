@@ -24,6 +24,17 @@
 #      restarts the node over the login's client (--run --home remotebox)
 #   C  --home elsewhere, the session lands on remotebox: step 8 FAILs naming both
 #   D  a mint the hub refuses: exit 2, nothing run
+#   E  THE THIN CLIENT (issue #3445): step 8 + 8a through the REAL key path — the
+#      real bin/fleet-thin.py in the drill's pane (its pty filter, its ssh argv;
+#      only the ssh and the attach are stand-ins: they run the 看台's attach on a
+#      local isolated socket), the real conf/tmux-view.conf key tables, the real
+#      ⌘P panel (fleet-quickopen.py --view through dash-popup.sh) and its ⚡ row
+#      (`do new` → go); only dash-raw-session.sh (FLEET_VIEW_NEW_CMD) and claude
+#      stand in. The drill reads the panel's key off the client's own
+#      dash-keymap.sh, never `prefix c`; the session turns up by its title in
+#      `fleet ls --json`; claude's 「⏺ PONG」 PASSes claude-answers
+#   F  the same, claude saying 「API Error: 403 …」: claude-answers FAILs quoting it
+#   G  answer_state / answer_bad_line on canned screens
 set -u
 BIN="$(cd "$(dirname "$0")" && pwd)"
 DRILL="$BIN/fleet-onboard-drill.sh"
@@ -240,6 +251,146 @@ if [ "$rc" = 2 ] && printf '%s\n' "$out" | grep -q 'did not mint a drill person 
 else bad "D: exit $rc: $(printf '%s' "$out" | head -n 3)"; fi
 out=$(drill bash "$DRILL" --login drill-x1 --home m5 2>&1); rc=$?
 [ "$rc" = 2 ] && printf '%s\n' "$out" | grep -q 'mints a drill person' && ok 'D: --home with no --invite needs a drill<x> login' || bad "D: login: exit $rc: $out"
+
+# --- E/F: the thin client's road, the real fleet-thin.py key path ---------------
+# The home: an isolated server (-S) with the fleet `fl`, the 看台 key tables of
+# conf/tmux-view.conf and the panel's environment; its first session 我的会话.
+IN="$T/in.sock"
+VC="$T/vconf"
+LH="$T/homes/$LOGIN"
+RHOME="$T/thinhome"
+thin_down() {
+  TMUX='' "$TMUXB" -L "$CSOCK" kill-server >/dev/null 2>&1
+  TMUX='' "$TMUXB" -S "$IN" kill-server >/dev/null 2>&1
+}
+mkdir -p "$VC/remote-views" "$T/vg" "$T/vstate" "$RHOME/.claude/fleet/bin" "$LH/.local/share/claude-fleet/bin" "$LH/.local/bin"
+# the client's own switch table, as its install carries it
+ln -sf "$BIN/dash-keymap.sh" "$LH/.local/share/claude-fleet/bin/dash-keymap.sh"
+# claude: its prompt, then a reply per line — PONG for pong, or the API's 403
+cat > "$T/claude.sh" <<EOF
+#!/bin/bash
+printf '╭─ Claude Code ──────────╮\\n> '
+while IFS= read -r l; do
+  if [ "\$(cat "$T/claude.mode")" = apierr ]; then
+    printf 'API Error: 403 {"type":"error","error":{"type":"forbidden","message":"Request not allowed"}}\\n'
+  else
+    case "\$l" in *pong*) printf '⏺ PONG\\n' ;; *) printf '⏺ 好的\\n' ;; esac
+  fi
+  printf '> '
+done
+EOF
+# dash-raw-session.sh's stand-in (FLEET_VIEW_NEW_CMD): its argv kept, a claude
+# window opened, the words its @task_line, the --print receipt back
+cat > "$T/newsess.sh" <<EOF
+#!/bin/sh
+case " \$* " in *' --warm-only '*) exit 3 ;; esac
+printf '%s\\n' "\$*" >> "$T/new.argv"
+p= prev=
+for a; do [ "\$prev" = --prompt ] && p=\$a; prev=\$a; done
+w=\$(TMUX= "$TMUXB" -S "$IN" new-window -d -P -F '#{window_id}' -t fl -n 我的会话 "bash '$T/claude.sh'") || exit 1
+TMUX= "$TMUXB" -S "$IN" set-option -w -t "\$w" @fleet_id fnew
+TMUX= "$TMUXB" -S "$IN" set-option -w -t "\$w" @task_line "\$p"
+printf '%s\\t我的会话\\t\\tfnew\\n' "\$w"
+EOF
+# fleet-connect.py --argv's stand-in: the "ssh" below, the host at index 2
+cat > "$T/argv.sh" <<EOF
+#!/bin/sh
+printf '{"argv": ["sh", "$T/ssh.sh", "home1"], "host": 2, "machine": "home1", "login": "$LOGIN", "route": {"kind": "direct", "name": "lan"}}\\n'
+EOF
+# ssh's stand-in: the remote command in the home login's HOME (its last word)
+cat > "$T/ssh.sh" <<EOF
+#!/bin/sh
+for a; do last=\$a; done
+unset TMUX TMUX_PANE
+cd "$RHOME" && HOME="$RHOME" exec sh -c "\$last"
+EOF
+# fleet-remote-view.sh attach --thin's stand-in: the 看台 grouped onto fl with the
+# fleet-view key table, its row (the token thin sent), cur, then the attach
+cat > "$RHOME/.claude/fleet/bin/fleet-remote-view.sh" <<EOF
+#!/bin/bash
+view= token=
+while [ \$# -gt 0 ]; do case \$1 in --view) view=\$2; shift ;; --token) token=\$2; shift ;; esac; shift; done
+t() { TMUX= "$TMUXB" -S "$IN" "\$@"; }
+t has-session -t "=fl@view-\$view" 2>/dev/null || t new-session -d -t fl -s "fl@view-\$view"
+t set-option -t "fl@view-\$view" key-table fleet-view
+printf '/dev/null\\tfl\\tthin\\t%s\\t%s\\tcur=U/f0\\troute=lan\\tdevice=\\ttoken=%s\\tfuid=U\\tnode=home1\\n' \\
+  "\$(date +%s)" "\$\$" "\$token" > "$VC/remote-views/\$view"
+printf '\\033]7502;cur;token=%s;m=home1;l=%s;w=U/f0\\007' "\$token" "\$(id -un)"
+exec "$TMUXB" -S "$IN" attach -t "fl@view-\$view"
+EOF
+chmod +x "$T/claude.sh" "$T/newsess.sh" "$T/argv.sh" "$T/ssh.sh" "$RHOME/.claude/fleet/bin/fleet-remote-view.sh"
+# the client's `fleet ls --json`: the home's windows, name + title (@task_line)
+cat > "$LH/.local/bin/fleet" <<EOF
+#!/bin/bash
+[ "\$1 \$2" = 'ls --json' ] || exit 2
+TMUX='' "$TMUXB" -S "$IN" list-windows -t fl -F '#{window_name}	#{@task_line}	#{@fleet_id}' 2>/dev/null | python3 -c '
+import json, sys
+print(json.dumps([{"name": n, "title": t, "key": "wid:U/" + f, "node": "home1"} for n, t, f in (l.rstrip("\\n").split("\\t") for l in sys.stdin)]))'
+EOF
+chmod +x "$LH/.local/bin/fleet"
+
+# start_thin <claude mode>: the home up, the real thin client in the drill's pane
+start_thin() {
+  thin_down
+  rm -rf "$T/new.argv" "$LH/.cache/claude-fleet/thin.log" "$VC/remote-views/"*
+  printf '%s' "$1" > "$T/claude.mode"
+  env -u TMUX -u TMUX_PANE HOME="$T/vhome" FLEET_CONF_DIR="$VC" FLEET_STATUS_G="$T/vg" FLEET_SWITCH_STATE="$T/vstate" \
+    FLEET_UI_LANG=zh LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 FLEET_VIEW_NEW_CMD="sh $T/newsess.sh" \
+    FLEET_VIEW_ROWS_CMD=true FLEET_DISPATCH_AGENTS_HERE=claude FLEET_AGENT=claude FLEET_VIEW_REFRESH=0 \
+    "$TMUXB" -S "$IN" -f /dev/null new-session -d -s fl -x 150 -y 36 -n 我的会话 "bash '$T/claude.sh'" || return 1
+  TMUX='' "$TMUXB" -S "$IN" source-file "$ROOT/conf/tmux-view.conf" || return 1
+  mkdir -p "$T/vhome"
+  TMUX='' "$TMUXB" -L "$CSOCK" new-session -d -s drill -x 160 -y 40 \
+    "env -u XDG_CACHE_HOME -u FLEET_THIN_LOG HOME='$LH' FLEET_THIN_ARGV_CMD='sh $T/argv.sh' FLEET_THIN_UPDATE_CMD=true \
+FLEET_CLIENT_XTVERSION=0 FLEET_ITERM_KEYS=0 FLEET_UI_LANG=zh FLEET_THIN_HUB_PROBE_CMD=true \
+python3 '$BIN/fleet-thin.py'; sleep 600"
+  local n=40
+  while [ "$n" -gt 0 ]; do
+    [ -s "$LH/.cache/claude-fleet/thin.log" ] && TMUX='' "$TMUXB" -L "$CSOCK" capture-pane -p -t drill | grep -q 'Claude Code' && return 0
+    sleep 0.5; n=$((n - 1))
+  done
+  return 1
+}
+ROOT="$(cd "$BIN/.." && pwd)"
+if command -v python3 >/dev/null 2>&1 && start_thin ok; then
+  ok 'E: the real thin client is up in the drill pane, on the 看台'
+  out=$(drill env FLEET_DRILL_ONLY=8 bash "$DRILL" --login "$LOGIN" --name first 2>&1); rc=$?
+  for s in scratch claude-answers; do
+    if printf '%s\n' "$out" | grep -Eq "^PASS +$s "; then ok "E: step $s PASS"
+    else bad "E: step $s: $(printf '%s\n' "$out" | grep -E "^(PASS|FAIL|SKIP) +$s " | head -n 1) [rc $rc]"; fi
+  done
+  [ "$rc" = 0 ] && ok 'E: exit 0' || { bad "E: exit $rc"; printf '%s\n' "$out" | tail -n 25 | sed 's/^/     │ /'; }
+  case "$(cat "$T/new.argv" 2>/dev/null)" in
+    *'--no-repo'*'--prompt first'*) ok 'E: ⌘P → ⚡ ran the panel'"'"'s new session with the words (do new --prompt first)' ;;
+    *) bad "E: the new-session argv: $(cat "$T/new.argv" 2>/dev/null)" ;;
+  esac
+  printf '%s\n' "$out" | grep -q '⌘P，敲「first」，⚡ 回车' && ok 'E: steps.md says ⌘P, never prefix c' || bad 'E: steps.md does not name ⌘P'
+  # tmux's stock new-window (prefix c, drill 29) starts the default shell: no command
+  TMUX='' "$TMUXB" -S "$IN" list-windows -t fl -F 'x#{pane_start_command}' | grep -qx x \
+    && bad 'E: a bare shell window opened on the home (prefix c?)' || ok 'E: no stray shell window on the home'
+  [ "$(TMUX='' "$TMUXB" -S "$IN" list-windows -t fl -F '#{window_name}' | grep -c 我的会话)" = 2 ] \
+    && ok 'E: the panel opened a second session beside the first' || bad 'E: no second 我的会话 on the home'
+
+  if start_thin apierr; then
+    out=$(drill env FLEET_DRILL_ONLY=8 bash "$DRILL" --login "$LOGIN" --name first 2>&1); rc=$?
+    if [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -Eq '^FAIL +claude-answers +claude cannot answer: "API Error: 403'; then
+      ok 'F: an API Error is a FAIL quoting the line'
+    else bad "F: exit $rc: $(printf '%s\n' "$out" | grep -E '^(PASS|FAIL|SKIP)' | head -n 3)"; fi
+  else bad 'F: the thin client did not come up'; fi
+  thin_down
+else
+  bad "E: the real thin client did not come up in the drill pane: $(TMUX='' "$TMUXB" -L "$CSOCK" capture-pane -p -t drill 2>/dev/null | sed '/^ *$/d' | tail -n 5 | tr '\n' '|')"
+  thin_down
+fi
+
+# --- G: the judge on canned screens ----------------------------------------------
+j() { bash "$DRILL" "$@"; }
+[ "$(printf '╭─ Claude Code\n> \n⏺ PONG\n' | j --answer-state PONG)" = answered ] && ok 'G: ⏺ PONG → answered' || bad 'G: answered'
+[ "$(printf '╭─ Claude Code\n> 把 pong 写成大写\n' | j --answer-state PONG)" = up ] && ok 'G: the ask alone → up' || bad 'G: up'
+[ "$(printf '⏺ PONG\n  ⎿  API Error: 500 overloaded\n' | j --answer-state PONG)" = bad ] && ok 'G: API Error wins over a reply' || bad 'G: API Error'
+[ "$(printf '│ Please run /login · API key\n' | j --answer-bad)" = 'Please run /login · API key' ] && ok 'G: /login quoted' || bad "G: /login: $(printf '│ Please run /login · API key\n' | j --answer-bad)"
+[ "$(printf 'error: 403 Forbidden\n' | j --answer-state X)" = bad ] && ok 'G: a 403 error line → bad' || bad 'G: 403'
+[ "$(printf '#403 merged · ‹ 1/2 ›\n' | j --answer-state X)" = wait ] && ok 'G: a bare 403 (an issue number) is no error' || bad 'G: bare 403'
 
 [ "$FAILS" = 0 ] && { echo 'fleet-onboard-drill-steps-selftest: PASS'; exit 0; }
 echo "fleet-onboard-drill-steps-selftest: FAIL ($FAILS)"; exit 1

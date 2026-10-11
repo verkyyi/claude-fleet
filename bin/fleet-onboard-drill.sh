@@ -50,7 +50,17 @@
 #               a new colleague's first time, not your second computer's.
 #   7 client    the installer execs `fleet`: the task list must come up — `open
 #               terminal failed` there is a FAIL (fixed in #1901).
-#   8 scratch   the writing area (prefix c — ⌘N, the key the client's bar
+#   8 scratch   THE THIN CLIENT (issue #3445 — plain `fleet` since EPIC #2999;
+#               told by its own thin.log): its 看台 binds ONE key of ours, the
+#               panel, and tmux's stock keys otherwise — prefix c there is a
+#               bare new-window (drill 29 typed `first` into a zsh). So: the
+#               panel's key as the client sends it, read off the client's OWN
+#               switch table (dash-keymap.sh --panel switch: the default action,
+#               quickopen — ⌘P — and its code, ESC [ 927 ~), the name typed into
+#               its search line, ⚡ lit (↓ when the words hit a session), Enter:
+#               the session must turn up in the client's `fleet ls --json` (its
+#               name or title). Its panel never coming up, or 「新会话没开起来」,
+#               is a FAIL. THE OLD CLIENT: the writing area (prefix c — ⌘N, the key the client's bar
 #               names, is iTerm2's spelling of it; the list itself takes no
 #               keys since #1950), a name typed, Enter; the repo question and
 #               「开在哪」 each Enter (the default, 自动); a new ROW — never the
@@ -67,17 +77,27 @@
 #               sidebar's refusal (no repo / no machine of yours / hub down,
 #               zh or en) is 要人帮 — a FAIL naming it. The row's line is the
 #               evidence.
+#  8a claude-answers  (issue #3445) the pass line: in the session step 8 opened
+#               (the 看台 is on it), claude's prompt up, one short line typed
+#               (pong, asked back in capitals), its reply 「⏺ PONG」 on screen
+#               within FLEET_DRILL_AGENT_SECS. 「API Error」 / 「Please run /login」
+#               / an invalid key / a 403 on an error line is a FAIL quoting the
+#               line. The old client: SKIP (its list holds the keys).
 #   9 attach-attachment  (EPIC #2482 C1) a solid red PNG in the login's home,
 #               its path typed into the writing area after 「看图 这张图是什么颜色？…」,
 #               Enter; the session — on whatever machine the hub put it — must
 #               show the file at ITS machine's path (…/attachments/<id>/…) and
 #               answer 红 / red (FLEET_DRILL_AGENT_SECS, 300). 「附件没带过去」 or
-#               no such path is 要人帮 — a FAIL naming it.
+#               no such path is 要人帮 — a FAIL naming it. The thin client: the
+#               panel opens 看图, then the question is typed in the session and
+#               the file DROPPED (a bracketed paste of its path — the thin loop
+#               uploads it and pastes the path on the home), Enter.
 #  10 node-restart-resume  (C5) the session's machine restarts its tmux as an
 #               update does: as the login that runs it (found by the row's
 #               @fleet_id, `fleet ls --json`), `fleet-sessions-snapshot.sh save`,
 #               kill-server, `restore` — which must say `back`; the client must
-#               come back on the same row and key, its text shown again. A
+#               come back on the same row and key, its text shown again (the
+#               thin client: its visible screen no longer down, the text on it). A
 #               session on another machine is restarted there, as its login,
 #               over the login's own client (fleet-thin.py --run --home, #3432).
 #  11 offboard  stop the login's processes, revoke its device on the hub
@@ -168,6 +188,8 @@ while [ $# -gt 0 ]; do
     --row-named) [ $# -ge 2 ] || usage; ROW_ONLY=$2; shift 2 ;;   # selftest seam: screen on stdin
     --qr-state) QR_ONLY=1; shift ;;                                 # selftest seam: screen on stdin
     --attach-state) attach_state; exit 0 ;;                         # selftest seam: screen on stdin
+    --answer-state) [ $# -ge 2 ] || usage; answer_state "$2"; exit 0 ;;   # selftest seam: screen on stdin
+    --answer-bad) answer_bad_line; exit 0 ;;                         # selftest seam: screen on stdin
     --opening-eta) opening_eta; exit 0 ;;                           # selftest seam: screen on stdin
     --eta-rises) eta_rises; exit 0 ;;                               # selftest seam: ETAs on stdin
     --thin-first) thin_first_state; exit 0 ;;                       # selftest seam: thin.log on stdin
@@ -220,11 +242,11 @@ SOCK="fleet-drill-$LOGIN"        # this run's own tmux server (label), never a f
 TSESS=drill
 RM_SH="${FLEET_DRILL_LOGIN_REMOVE:-$BIN/fleet-login-remove.sh}"   # the env is the selftest's seam
 INVITE_SH="${FLEET_DRILL_INVITE_SH:-$BIN/fleet-drill.sh}"          # the env is the selftest's seam
-# FLEET_DRILL_ONLY=8-10 (selftest seam, issue #3432): steps 8–10 against a client
+# FLEET_DRILL_ONLY=8-10 (selftest seam, issue #3432; `8` = steps 8 + 8a, #3445): steps 8–10 against a client
 # already up on this run's own tmux server (-L fleet-drill-<login>, session
 # drill) — no login is opened and none is removed, the run's tmux is the test's
 ONLY=${FLEET_DRILL_ONLY:-}
-case "$ONLY" in ''|8-10) ;; *) die2 "FLEET_DRILL_ONLY: only 8-10 (got '$ONLY')" ;; esac
+case "$ONLY" in ''|8|8-10) ;; *) die2 "FLEET_DRILL_ONLY: 8 or 8-10 (got '$ONLY')" ;; esac
 TMUXB=$(command -v tmux 2>/dev/null || :)
 [ -n "$TMUXB" ] || for t in /opt/homebrew/bin/tmux /usr/local/bin/tmux; do [ -x "$t" ] && TMUXB=$t && break; done
 
@@ -571,7 +593,8 @@ client_thin() {
   done
   shot client-thin
   case "$st" in
-    landed) row "瘦客户端：开出第一个会话并连上" "—（装完自己打开）" 否
+    landed) THINC=1
+            row "瘦客户端：开出第一个会话并连上" "—（装完自己打开）" 否
             pass client "the thin client opened the first session and drew it · $(elapsed)" ;;
     failed) row "瘦客户端：第一个会话没开出来" "—" "是 — 首会话没开出来"
             failstep client "the thin client's first session did not open:"; tail_pane 6; return 1 ;;
@@ -603,8 +626,70 @@ SCRATCH_OPENING=$OPENING_SAYS
 # cannot judge a fingerprint, so it is 要人帮 — named, never 「没开好」 (run 13)
 SCRATCH_HOSTKEY='Are you sure you want to continue connecting|authenticity of host'
 OPENING_CAP=${FLEET_DRILL_OPENING_SECS:-1260}
+# The thin client (issue #3445): it has no writing area and no list — its 看台
+# takes one key of ours, the panel (⌘P), and tmux's stock keys otherwise (prefix
+# c there is a bare new-window: drill 29 typed `first` into a zsh). A new session
+# is the panel's ⚡ row: its words typed into the search line, ↵.
+THINC=''
+# thin_is: is the newcomer's client the thin loop? its own book says so
+# (thin.log, written on its first connection), once known it stays known
+thin_is() {
+  [ -z "$THINC" ] || { [ "$THINC" = 1 ]; return; }
+  if ( cd / && sudo -n test -s "$H/.cache/claude-fleet/thin.log" ) 2>/dev/null; then THINC=1; else THINC=0; fi
+  [ "$THINC" = 1 ]
+}
+# panel_code: the private code the newcomer's client sends for the panel, read
+# off ITS OWN install, never guessed — the switch table's default action
+# (dash-keymap.sh --panel switch default: quickopen, ⌘P) and that action's code
+# (list's 4th column, 927): iTerm2's fleet profile turns ⌘P into ESC [ <code> ~
+# (fleet-iterm-profile.py), which the 看台 binds as User<code> (fleet_view.key_lines)
+panel_code() {
+  local km="$H/.local/share/claude-fleet/bin/dash-keymap.sh" run=as_login a
+  ( cd / && sudo -n test -f "$km" ) 2>/dev/null || { km="$BIN/dash-keymap.sh" run=''; }
+  a=$($run bash "$km" --panel switch default 2>/dev/null | awk '{print $1; exit}')
+  [ -n "$a" ] || return 1
+  $run bash "$km" --panel switch list 2>/dev/null | awk -v a="$a" '$1 == a && $4 ~ /^[0-9]+$/ {print $4; exit}'
+}
+hexof() { printf '%s' "$1" | od -An -tx1; }
+PANEL_UP='⚡ (新会话|新任务|New session|New task)'
+PANEL_NOMATCH='没有会话叫这句话|no session goes by these words'
+# the panel's ⚡ row that did not open (fleet-ui-lang.sh view_new_failed)
+PANEL_NO='新会话没开起来|the new session did not open'
+# pw_row <name>: the new session's row — the old client's list row on screen;
+# the thin client's (no list) the client's own `fleet ls --json`, as
+# 「<name> · <machine> · <key>」
+pw_row() {
+  local r
+  if [ "$THINC" = 1 ]; then
+    r=$(as_login "$H/.local/bin/fleet" ls --json 2>/dev/null | ls_row "$1") || return 0
+    printf '%s · %s · %s\n' "$1" "$(printf '%s' "$r" | cut -f1)" "$(printf '%s' "$r" | cut -f2)"
+  else
+    row_named "$1"
+  fi
+}
+# thin_open <words>: the thin client's new session — the panel (its own key), the
+# words, ⚡ lit (words that hit no session light it; one that hit is lit instead,
+# and ↓ is ⚡), ↵. 1 = the panel did not come up within STEP_SECS.
+thin_open() {
+  local code deadline
+  code=$(panel_code) || code=''
+  [ -n "$code" ] || { PW_P="no panel key in the client's switch table (dash-keymap.sh --panel switch)"; return 1; }
+  # shellcheck disable=SC2046  # one hex byte a word
+  keys -H 1b 5b $(hexof "$code") 7e
+  deadline=$((SECONDS + STEP_SECS))
+  until screen | grep -Eq -- "$PANEL_UP"; do
+    [ "$SECONDS" -lt "$deadline" ] || { PW_P=$(screen); return 1; }
+    sleep 1
+  done
+  shot "$2-panel"
+  keys -l "$1"; sleep 1
+  screen | grep -Eq -- "$PANEL_NOMATCH" || { keys Down; sleep 1; }
+  shot "$2-panel-words"
+  keys Enter
+}
 # place_wait <text> <row name> <shot prefix>: the writing area (prefix c), the
-# text typed, Enter; the questions on the way each answered with Enter. Sets
+# text typed, Enter; the questions on the way each answered with Enter. On the
+# thin client: thin_open (PW_K=nopanel when its panel never came up). Sets
 # PW_K (row · no · hostkey · stuck · '' = nothing within the wait), PW_P (the last
 # screen), PW_ANSWERED, PW_OPENING (the hub's 「正在为你开机器」, if said) and
 # PW_OPENED (seconds from it first said to the end). Every ETA it read lands in
@@ -613,16 +698,21 @@ PW_K='' PW_P='' PW_ANSWERED=0 PW_OPENING='' PW_OPENED=0
 place_wait() {
   local deadline open0='' open_end=0 eta last_eta='' v
   PW_K='' PW_P='' PW_ANSWERED=0 PW_OPENING='' PW_OPENED=0
-  keys C-b c
-  sleep 1
-  keys -l "$1"; keys Enter
+  if thin_is; then
+    thin_open "$1" "$3" || { PW_K=nopanel; return 0; }
+  else
+    keys C-b c
+    sleep 1
+    keys -l "$1"; keys Enter
+  fi
   deadline=$((SECONDS + STEP_SECS))
   while [ "$SECONDS" -lt "$deadline" ]; do
     keep_sudo
     PW_P=$(pane)
     if printf '%s\n' "$PW_P" | grep -Eq -- "$SCRATCH_NO"; then PW_K=no; break; fi
-    if [ -n "$(row_named "$2")" ]; then PW_K=row; break; fi
     v=$(screen)
+    if [ "$THINC" = 1 ] && printf '%s\n' "$v" | grep -Eq -- "$PANEL_NO"; then PW_K=no PW_P=$v; break; fi
+    if [ -n "$(pw_row "$2")" ]; then PW_K=row; break; fi
     if printf '%s\n' "$v" | grep -Eq -- "$SCRATCH_HOSTKEY"; then PW_K=hostkey; break; fi
     if printf '%s\n' "$v" | grep -Eq -- "$SCRATCH_OPENING"; then
       if [ -z "$open0" ]; then
@@ -664,6 +754,10 @@ eta_row() {
     row "ETA：$seen" "等" 否
   fi
 }
+# new_keys <words>: what the person pressed for a new session, as steps.md says it
+new_keys() {
+  if [ "$THINC" = 1 ]; then printf '⌘P，敲「%s」，⚡ 回车' "$1"; else printf 'prefix c 新任务，敲名字 %s，回车' "$1"; fi
+}
 step_scratch() {
   local k said p answered r opening
   if pane | grep -Eq -- "$SCRATCH_NOHOST"; then
@@ -683,9 +777,13 @@ step_scratch() {
            row "提示：${opening}，${PW_OPENED}s 后：$said" "等" "是 — 入口开机器失败：$said"
            failstep scratch "the hub said '$opening', then after ${PW_OPENED}s: $said"; return 1
          fi
-         row "提示：$said" "prefix c 新任务，敲名字 ${NAME}，回车" "是 — 开不出会话：$said"
+         row "提示：$said" "$(new_keys "$NAME")" "是 — 开不出会话：$said"
          failstep scratch "the list refused a new session: $said"; return 1 ;;
     row) : ;;
+    nopanel)
+         shot scratch-nopanel
+         row "按面板键（⌘P）后没有面板：$(printf '%s' "$PW_P" | sed '/^[[:space:]]*$/d' | tail -n 1 | cut -c1-80)" "⌘P" "是 — 瘦客户端开不出新任务面板"
+         failstep scratch "the thin client's panel did not open within ${STEP_SECS}s: $(printf '%s' "$PW_P" | sed '/^[[:space:]]*$/d' | tail -n 1)"; return 1 ;;
     hostkey)
          shot scratch-hostkey
          said=$(printf '%s\n' "$p" | grep -Eo -- "authenticity of host '[^']*'" | head -n 1)
@@ -698,15 +796,19 @@ step_scratch() {
            row "提示：${opening}，${PW_OPENED}s 后左边仍没有机器、入口也没说失败" "等" "是 — 入口说在开机器，过了它自己的放弃时限仍没开好也没说失败"
            failstep scratch "the hub said '$opening' and neither a row $NAME nor a failure came within ${PW_OPENED}s (cap ${OPENING_CAP}s):"; tail_pane; return 1
          fi
-         row "敲名字回车后没有问题、没有新行、也没有提示" "prefix c 新任务，敲名字，回车" "是 — 不知道怎么开会话"
+         row "敲名字回车后没有问题、没有新行、也没有提示" "$(new_keys "$NAME")" "是 — 不知道怎么开会话"
          failstep scratch "no question, no row named $NAME and no refusal within ${STEP_SECS}s:"; tail_pane; return 1 ;;
   esac
   [ -z "$opening" ] || row "提示：${opening}（${PW_OPENED}s 后开好）" "等（入口在开机器，开好自动接着开）" 否
   [ "$answered" = 0 ] || row "问题（选仓库 / 开在哪）×$answered" "回车（默认，自动）" 否
   shot scratch
-  r=$(row_named "$NAME")
+  r=$(pw_row "$NAME")
   home_check "$NAME" || return 1
-  row "列表里新的一行 ${NAME}，右边切到它${HOME_M:+（开在 ${HOME_M}）}" "等" 否
+  if [ "$THINC" = 1 ]; then
+    row "面板关了，看台切到新会话 ${NAME}${HOME_M:+（开在 ${HOME_M}）}" "$(new_keys "$NAME")" 否
+  else
+    row "列表里新的一行 ${NAME}，右边切到它${HOME_M:+（开在 ${HOME_M}）}" "等" 否
+  fi
   pass scratch "the new session's row: $r${HOME_M:+ · on $HOME_M} · $(elapsed)"
 }
 # same_machine <a> <b>: one machine, spelled either way (macmini-m4 · macmini-m4.local)
@@ -737,6 +839,57 @@ home_check() {
   return 0
 }
 
+# --- 8a claude-answers ---------------------------------------------------------------
+# The pass line (issue #3445): claude ANSWERS in the newcomer's first session —
+# a session that opened but whose agent says 「API Error」 / 「Please run /login」
+# / a 403 is no first session. On the thin client the 看台 is on the session
+# step 8 opened: its prompt up, one short line typed, its reply on screen.
+# The word asked for is in nothing typed (pong, asked back in capitals).
+ANSWER_ASK='只回复一个词：把 pong 写成大写字母'
+ANSWER_WORD=PONG
+step_answer() {
+  local deadline st said
+  if [ "$THINC" != 1 ]; then
+    skip claude-answers "the old client: its list keeps the keys, the session's input is not in front"; return 0
+  fi
+  deadline=$((SECONDS + STEP_SECS)); st='wait'
+  while :; do
+    keep_sudo
+    st=$(screen | answer_state "$ANSWER_WORD")
+    case "$st" in up|bad) break ;; esac
+    [ "$SECONDS" -lt "$deadline" ] || break
+    sleep "$POLL"
+  done
+  if [ "$st" = up ]; then
+    shot answer-up
+    keys -l "$ANSWER_ASK"; sleep 1; keys Enter
+    deadline=$((SECONDS + ${FLEET_DRILL_AGENT_SECS:-300}))
+    while :; do
+      keep_sudo
+      st=$(screen | answer_state "$ANSWER_WORD")
+      case "$st" in answered|bad) break ;; esac
+      [ "$SECONDS" -lt "$deadline" ] || break
+      sleep "$POLL"
+    done
+  fi
+  shot answer
+  case "$st" in
+    answered)
+      row "会话里问一句「${ANSWER_ASK}」，claude 答 ${ANSWER_WORD}" "敲一句，回车" 否
+      pass claude-answers "claude answered in the first session: $(screen | grep -E '^[[:space:]]*(│[[:space:]]*)?⏺' | grep -F -- "$ANSWER_WORD" | head -n 1 | sed 's/^[[:space:]]*//') · $(elapsed)" ;;
+    bad)
+      said=$(screen | answer_bad_line)
+      row "claude 不答：$said" "敲一句，回车" "是 — 会话开了，claude 答不了：$said"
+      failstep claude-answers "claude cannot answer: \"$said\""; return 1 ;;
+    up)
+      row "问了「${ANSWER_ASK}」，${FLEET_DRILL_AGENT_SECS:-300}s 内 claude 没答" "敲一句，回车" "是 — claude 没答"
+      failstep claude-answers "no reply carrying $ANSWER_WORD within ${FLEET_DRILL_AGENT_SECS:-300}s:"; tail_pane; return 1 ;;
+    *)
+      row "会话里 ${STEP_SECS}s 没出现 claude 的输入框" "等" "是 — 会话里没有 claude"
+      failstep claude-answers "claude's prompt did not come up within ${STEP_SECS}s:"; tail_pane; return 1 ;;
+  esac
+}
+
 # --- 9 attach-attachment ---------------------------------------------------------------
 # A task with a screenshot (EPIC #2482 C1, #2393): an image on the colleague's
 # computer, its path dropped into the writing area with a question about it;
@@ -747,26 +900,46 @@ home_check() {
 ATTACH_FILE=drill-shot.png
 ATTACH_ASK='看图 这张图是什么颜色？只回答一个颜色词'
 RESUME_NAME='' RESUME_MARK=''
+attach_keys() {
+  if [ "$THINC" = 1 ]; then printf '⌘P，敲「看图」，⚡ 回车；会话里问一句、拖进截图，回车'
+  else printf 'prefix c 新任务，拖进截图、问一句，回车'; fi
+}
 step_attach() {
   local f="$H/$ATTACH_FILE" png="$RUN/$ATTACH_FILE" st deadline k said
   drill_png "$png" || { failstep attach-attachment "cannot write the test image"; return 1; }
   ( cd / && sudo -n install -o "$LOGIN" -g staff -m 644 "$png" "$f" ) >> "$RUN/open.log" 2>&1 \
     || { failstep attach-attachment "cannot hand the test image to $LOGIN: $(tail -n 1 "$RUN/open.log")"; return 1; }
-  place_wait "$ATTACH_ASK $f" 看图 attach
+  if thin_is; then
+    # the thin client (issue #3445): the panel opens the session (its words 看图),
+    # then the question and the file go into it — the file dropped, a bracketed
+    # paste of its path, which the thin loop carries to the home (fleet-thin.py's
+    # Rewriter → fleet-client-upload.py) and pastes as the path there
+    place_wait 看图 看图 attach
+  else
+    place_wait "$ATTACH_ASK $f" 看图 attach
+  fi
   k=$PW_K
   case "$k" in
     row) : ;;
     no)  shot attach-refused
          said=$(printf '%s\n' "$PW_P" | grep -Eo -- "($SCRATCH_NO)[^│]*" | head -n 1 | sed 's/ *$//')
-         row "提示：$said" "prefix c 新任务，拖进截图、问一句，回车" "是 — 带图的任务开不出会话：$said"
+         row "提示：$said" "$(attach_keys)" "是 — 带图的任务开不出会话：$said"
          failstep attach-attachment "the list refused the task with a screenshot: $said"; return 1 ;;
     *)   shot attach-none
-         row "带图的任务回车后没有新行" "prefix c 新任务，拖进截图、问一句，回车" "是 — 带图的任务开不出会话"
+         row "带图的任务回车后没有新行" "$(attach_keys)" "是 — 带图的任务开不出会话"
          failstep attach-attachment "no row 看图 within ${STEP_SECS}s:"; tail_pane; return 1 ;;
   esac
   RESUME_NAME=看图
   [ "$PW_ANSWERED" = 0 ] || row "问题（选仓库 / 开在哪）×$PW_ANSWERED" "回车（默认，自动）" 否
   shot attach-row
+  if [ "$THINC" = 1 ]; then
+    deadline=$((SECONDS + STEP_SECS))
+    until [ "$(screen | answer_state 红)" = up ] || [ "$SECONDS" -ge "$deadline" ]; do sleep "$POLL"; done
+    keys -l "$ATTACH_ASK "
+    # shellcheck disable=SC2046  # one hex byte a word
+    keys -H 1b 5b 32 30 30 7e $(hexof "$f") 1b 5b 32 30 31 7e
+    sleep 3; keys Enter
+  fi
   deadline=$((SECONDS + ${FLEET_DRILL_AGENT_SECS:-300}))
   while :; do
     keep_sudo
@@ -857,7 +1030,7 @@ case $op in
     S=
     for d in "$C"/fleets/*/; do
       s=$(basename "$d")
-      tmux -L "$s" list-windows -a -F "#{@fleet_id}" 2>/dev/null | grep -qxF -- "$arg" && { S=$s; break; }
+      tmux -L "$s" list-windows -a -F "#{@fleet_id}" 2>/dev/null | grep -qxF -- "$arg" && { S=$s; break; }  # view-ok: a presence test in the remote login shell (no fleet-lib there), a view session duplicate row is harmless
     done
     [ -n "$S" ] || { echo "no fleet of $(id -un) has @fleet_id $arg"; exit 4; }
     printf "fleet\t%s\n" "$S"
@@ -870,6 +1043,20 @@ THIN="${FLEET_DRILL_THIN:-$H/.local/share/claude-fleet/bin/fleet-thin.py}"   # t
 # remote <op> <arg>: REMOTE_RESTART on $SNODE as the login, its output
 remote() { as_login python3 "$THIN" --run --home "$SNODE" -- sh -c "$REMOTE_RESTART" fleet-drill-restart "$1" "$2" 2>&1; }
 RESTART_DOWN='机器在重启|稍等|restarting|connection lost|连接断了|没有活着的'
+# restart_back: the client is back on the session — the old client's list row
+# and the session's text; the thin client (issue #3445: no list) the 看台 itself,
+# the VISIBLE screen no longer saying it is down and showing the session's text
+restart_back() {
+  local v
+  if [ "$THINC" = 1 ]; then
+    v=$(screen)
+    [ -n "$(printf '%s' "$v" | tr -d '[:space:]')" ] && ! printf '%s\n' "$v" | grep -Eq -- "$RESTART_DOWN" \
+      && { [ -z "$RESUME_MARK" ] || printf '%s\n' "$v" | grep -qF -- "$RESUME_MARK"; }
+  else
+    [ -n "$(row_named "$RESUME_NAME")" ] && ! pane | grep -Eq -- "$RESTART_DOWN" \
+      && { [ -z "$RESUME_MARK" ] || pane | grep -qF -- "$RESUME_MARK"; }
+  fi
+}
 step_restart() {
   local bin out deadline k back
   [ -n "$RESUME_NAME" ] || RESUME_NAME=$NAME
@@ -908,8 +1095,7 @@ step_restart() {
   deadline=$((SECONDS + STEP_SECS)); k=''
   while [ "$SECONDS" -lt "$deadline" ]; do
     keep_sudo
-    if [ -n "$(row_named "$RESUME_NAME")" ] && ! pane | grep -Eq -- "$RESTART_DOWN" \
-       && { [ -z "$RESUME_MARK" ] || pane | grep -qF -- "$RESUME_MARK"; }; then k=back; break; fi
+    if restart_back; then k=back; break; fi
     sleep "$POLL"
   done
   shot restart-back
@@ -1136,9 +1322,10 @@ fi
 if [ -n "$ONLY" ]; then
   # the seam (FLEET_DRILL_ONLY=8-10): the client is up on the test's tmux server
   TMUX_UP=0 SUMMARISED=1
-  step_scratch && { step_attach || :; step_restart || :; }
-  printf '\n%s: %s  %d passed · %d failed · steps 8-10 only (FLEET_DRILL_ONLY) · log %s\n' "$PROG" \
-    "$([ "$NFAIL" = 0 ] && echo PASS || echo FAIL)" "$NPASS" "$NFAIL" "$RUN"
+  if [ "$ONLY" = 8 ]; then step_scratch && { step_answer || :; }
+  else step_scratch && { step_answer || :; step_attach || :; step_restart || :; }; fi
+  printf '\n%s: %s  %d passed · %d failed · steps %s only (FLEET_DRILL_ONLY) · log %s\n' "$PROG" \
+    "$([ "$NFAIL" = 0 ] && echo PASS || echo FAIL)" "$NPASS" "$NFAIL" "$ONLY" "$RUN"
   sed 's/^/  /' "$STEPS"
   [ "$NFAIL" = 0 ]; exit
 fi
@@ -1147,5 +1334,5 @@ step_ssh || finish
 step_install || finish
 step_scan || finish
 step_client || finish
-step_scratch && { step_attach || :; step_restart || :; }
+step_scratch && { step_answer || :; step_attach || :; step_restart || :; }
 finish

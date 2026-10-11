@@ -14,6 +14,8 @@
 #   agent_state <word>      exited · answered · up · wait — a `fleet claude` view
 #   curl_noise              how many `curl: (` lines the screen carries
 #   opening_eta             the seconds 「正在为你开机器…约 N 秒」 says, '' when it says none
+#   answer_state <word>     bad · answered · up · wait — claude answering in a session
+#   answer_bad_line         the line that made it bad
 #   eta_rises               the first ETA that went UP (「a→b」), '' when none did
 
 # list_row_named <name> (a screen on stdin): a list ROW carrying the name — the left column before 「│」,
@@ -100,7 +102,9 @@ attach_state() {
 }
 attach_answer() { sed -n '/\/attachments\//,$p' | grep -Eo -- "$ATTACH_RED" | head -n 1 | tr -d ' '; }
 # ls_row <name> (`fleet ls --json` on stdin): <node> TAB <key> TAB <fleet_id> of
-# the first session whose name starts with <name>. A hub row's key is
+# the first session whose name — or title (issue #3445: a session the thin
+# client's ⚡ row opens is 「我的会话」, its words the title) — starts with
+# <name>. A hub row's key is
 # wid:<fleet UUID>/<fleet_id> — the window's lifelong @fleet_id is what finds it
 # on its machine; a row of this computer's own has none (-).
 ls_row() {
@@ -111,7 +115,7 @@ try:
 except ValueError:
     sys.exit(1)
 for r in rows:
-    if str(r.get("name", "")).startswith(sys.argv[1]):
+    if str(r.get("name", "")).startswith(sys.argv[1]) or str(r.get("title") or "").startswith(sys.argv[1]):
         k = str(r.get("key", ""))
         fid = k.split("/", 1)[1] if k.startswith("wid:") and "/" in k else "-"
         print("%s\t%s\t%s" % (r.get("node", "") or "-", k, fid or "-"))
@@ -132,6 +136,29 @@ agent_state() {
   p=$(cat)
   if printf '%s\n' "$p" | grep -Eq '__NCCN_EXIT=[0-9]+'; then echo exited
   elif printf '%s\n' "$p" | grep -E '^[[:space:]]*⏺' | grep -qF -- "$1"; then echo answered
+  elif printf '%s\n' "$p" | grep -Eq -- "$AGENT_UP"; then echo up
+  else echo wait; fi
+}
+# answer_state <word> (a VISIBLE screen on stdin, issue #3445): the pass line
+# 「claude answers in the newcomer's first session」. bad — the agent cannot
+# answer: Claude Code's 「API Error」, 「Please run /login」, an invalid key / an
+# expired token, or a 403 on an error line (answer_bad_line quotes it);
+# answered — a reply of its own (a 「⏺」 line) carries <word>; up — its prompt
+# is drawn (AGENT_UP); wait — anything else. bad wins: a reply on the same
+# screen as an API error is not a session that works.
+ANSWER_BAD='API Error|Please run /login|Invalid API key|OAuth token (has )?expired'
+answer_bad_line() {
+  local p
+  p=$(cat)
+  { printf '%s\n' "$p" | grep -E -- "$ANSWER_BAD"
+    printf '%s\n' "$p" | grep -E '(^|[^0-9])403([^0-9]|$)' | grep -Ei 'error|forbidden'
+  } | head -n 1 | sed 's/^[[:space:]]*//; s/^│[[:space:]]*//; s/[[:space:]]*$//; s/[[:space:]]*│$//'
+}
+answer_state() {
+  local p
+  p=$(cat)
+  if [ -n "$(printf '%s\n' "$p" | answer_bad_line)" ]; then echo bad
+  elif printf '%s\n' "$p" | grep -E '^[[:space:]]*(│[[:space:]]*)?⏺' | grep -qF -- "$1"; then echo answered
   elif printf '%s\n' "$p" | grep -Eq -- "$AGENT_UP"; then echo up
   else echo wait; fi
 }
