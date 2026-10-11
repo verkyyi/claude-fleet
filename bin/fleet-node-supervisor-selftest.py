@@ -1151,6 +1151,55 @@ class H_Accounts(Sandbox):
         self.assertFalse(os.path.exists(os.path.join(self.home("bob"), "Library", "LaunchAgents",
                                                      "com.ccquota.agent.plist")))
 
+    def test_store_login_leases_its_credentials(self):
+        # issue #3276 (the Mac half of #3211): a login with a credential store
+        # leases its accounts — node-join's node.env never says so, so the
+        # login's settings must; a value the store already holds is kept, a
+        # login with no store gets nothing; an older logins/<login>.env is
+        # backfilled once, the other lines as they were
+        cred = os.path.join(self.d, "cred")
+        stores = {"alice": "CCQUOTA_TOKEN=tok-alice\nCCQUOTA_FLEET_COMPUTE=0\n",
+                  "bob": "CCQUOTA_TOKEN=tok-bob\nCCQUOTA_FLEET_CREDS=store-only\n"}
+        for who, body in stores.items():
+            os.makedirs(os.path.join(cred, who))
+            json.dump({"login": who, "mode": "shared"}, open(os.path.join(cred, who, "meta.json"), "w"))
+            self.node_env(os.path.join(cred, who, "node.env"), body)
+            self.agent_plist(who, {"CCQUOTA_FLEET": "1"})
+        self.acct_table()
+        e = {"FLEET_CREDSEP_ROOT_BASE": cred, "FLEET_CREDSEP_RUN_BASE": "/run/fc"}
+        for who in ("alice", "bob"):
+            r = self.run_sup("account", "adopt", who, env=e)
+            self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.login_env("alice")[0].get("CCQUOTA_FLEET_CREDS"), "1")
+        self.assertEqual(self.login_env("bob")[0].get("CCQUOTA_FLEET_CREDS"), "store-only")
+
+        # an older adopt: alice's settings without the line, bob's own and
+        # carol (no store) — only alice's is rewritten
+        logins = os.path.join(self.d, "db", "logins")
+        old = "CCQUOTA_FLEET=1\nCCQUOTA_FLEET_CRED_STORE=/run/fc/.shared/ctl.sock\nCCQUOTA_TOKEN=tok-alice\n"
+        self.node_env(os.path.join(logins, "alice.env"), old)
+        self.node_env(os.path.join(logins, "carol.env"), "CCQUOTA_TOKEN=tok-carol\n")
+        past = time.time() - 600
+        for who in ("alice", "bob", "carol"):
+            os.utime(os.path.join(logins, who + ".env"), (past, past))
+        saved = dict(os.environ)
+        os.environ.update({k: v for k, v in self.env.items() if k.startswith("FLEET_")})
+        os.environ.update(e)
+        try:
+            fixed = fns.logins_creds_backfill(fns.Paths())
+            again = fns.logins_creds_backfill(fns.Paths(), settle=0)
+        finally:
+            os.environ.clear()
+            os.environ.update(saved)
+        self.assertEqual(fixed, ["alice"])
+        self.assertEqual(again, [], "a second pass rewrote again")
+        kv = self.login_env("alice")[0]
+        self.assertEqual(kv.get("CCQUOTA_FLEET_CREDS"), "1")
+        self.assertEqual(kv.get("CCQUOTA_TOKEN"), "tok-alice")
+        self.assertEqual(kv.get("CCQUOTA_FLEET_CRED_STORE"), "/run/fc/.shared/ctl.sock")
+        self.assertEqual(self.login_env("bob")[0].get("CCQUOTA_FLEET_CREDS"), "store-only")
+        self.assertNotIn("CCQUOTA_FLEET_CREDS", self.login_env("carol")[0])
+
     def test_credsep_store_owned_by_the_role_account(self):
         # m4 (issue #2336): the store's node.env is _fleetcred's, not root's —
         # the owner check (forced on here) must take the role account

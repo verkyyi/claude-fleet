@@ -43,6 +43,12 @@ INSTALL_END='^(能力:|用时 [0-9]+ 秒)'
 THIN_FIRST='你还没有 fleet 会话|no fleet session of yours yet|等它的 fleet 报上来|waiting for its fleet to report|第一个会话开在|your first session opened on|正在为你开机器|opening a machine for you'
 # shellcheck disable=SC2034  # read by fleet-onboard-drill.sh
 THIN_FIRST_FAILED='你的第一个会话没开出来|your first session did not open'
+# The 看台 drawn: its top line's ‹ i/n › (fleet-topbar.py) — the screen's own proof
+# the view is up. thin.log's `drawn` / a `connect` with first_ms need the home's
+# OSC 7502 cur, which no home sends yet, so the log alone never said landed
+# (C9 run 22, issue #3276: 「‹ 2/2 › … @mini2」 on screen, 1260 s of waiting).
+# shellcheck disable=SC2034  # read by fleet-onboard-drill.sh
+VIEW_UP='‹ ?[0-9–-]+/[0-9]+ ?›'
 # thin_first_state (the newcomer's thin.log on stdin, docs/CLIENT-LOGS.md):
 # landed — a `first` placed (rc 0) and a connection after it drew the view
 # (a `drawn` line, written while the view is up — #3155; or a `connect` with

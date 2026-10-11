@@ -2044,6 +2044,9 @@ class Supervisor(object):
         if t - (last.get("at") or 0) < env_num("FLEET_NODE_TENANT_EVERY", 300):
             return
         cur = tenants_reading(self.p)
+        for login in logins_creds_backfill(self.p):
+            self.log("tenant %s: logins/%s.env had no CCQUOTA_FLEET_CREDS — added =1, its node program now "
+                     "leases its accounts (issue #3276)" % (login, login))
         for login in sorted(set(cur["bad"]) - set(last.get("bad") or {})):
             self.log("tenant %s can do what only an admin may: %s — a taken-over login has no admin "
                      "and no sudo (issue #2842)" % (login, "; ".join(cur["bad"][login])))
@@ -2947,6 +2950,12 @@ def account_agent(paths, login, uid, home):
                 out[k] = v
         if store:
             out["CCQUOTA_FLEET_CRED_STORE"] = store
+            # a login with a credential store leases its accounts from the hub
+            # (issue #3276, the Mac half of #3211): node-join's node.env never says
+            # so, and without it the node program never runs this tenant's lease —
+            # the shared proxy holds the pool, the login holds no account. A value
+            # already there (store-only, 0) is the login's, kept
+            out.setdefault("CCQUOTA_FLEET_CREDS", "1")
         if not out.get("CCQUOTA_TOKEN"):
             return "%s: no CCQUOTA_TOKEN in its EnvironmentVariables or %s" % (path, ne_path)
         return {"path": path, "domain": domain, "label": _plist_label(path) or os.path.basename(path)[:-len(".plist")],
@@ -3090,6 +3099,37 @@ def write_login_env(paths, login, kv):
         except OSError:
             pass
         raise
+
+
+def logins_creds_backfill(paths, settle=60):
+    """Every logins/<login>.env of a login with a credential store that has no
+    CCQUOTA_FLEET_CREDS line gets CCQUOTA_FLEET_CREDS=1 (issue #3276): adopted
+    before account_agent said so, its node program never leased for it. The other
+    lines stay as they were; a file written in the last <settle> s is left for the
+    next pass (an adopt may be mid-write). The node agent reloads on the change
+    (its `reload` names logins/*.env). → the logins fixed."""
+    cbase = env("FLEET_CREDSEP_ROOT_BASE", "/var/db/fleet-cred")
+    fixed = []
+    for login in sorted(taken_over(paths)):
+        meta = read_json(os.path.join(cbase, login, "meta.json"), None)
+        if not (isinstance(meta, dict) and meta.get("login") == login):
+            continue
+        path = login_env_path(paths, login)
+        try:
+            if now() - os.lstat(path).st_mtime < settle:
+                continue
+        except OSError:
+            continue
+        kv = _env_file(path, 0)
+        if not kv or "CCQUOTA_FLEET_CREDS" in kv or not kv.get("CCQUOTA_TOKEN"):
+            continue
+        kv["CCQUOTA_FLEET_CREDS"] = "1"
+        try:
+            write_login_env(paths, login, kv)
+        except OSError:
+            continue
+        fixed.append(login)
+    return fixed
 
 
 def remove_login_env(paths, login):
