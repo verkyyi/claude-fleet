@@ -33,8 +33,7 @@ ROOT="$(cd "$BIN/.." && pwd)"
 command -v python3 >/dev/null 2>&1 || { echo 'selftest: python3 missing — SKIP'; exit 0; }
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/fbrowser-selftest.XXXXXX")" || exit 2
 WORK="$(cd "$WORK" && pwd -P)"
-PIDS=""
-trap 'for p in $PIDS; do kill "$p" 2>/dev/null; done; rm -rf "$WORK"' EXIT
+trap 'pkill -f "$WORK/bin/relay.py" 2>/dev/null; rm -rf "$WORK"' EXIT
 export TMPDIR="$WORK" HOME="$WORK/home"
 mkdir -p "$WORK/bin" "$HOME/.claude"
 unset FLEET_BROWSER CLAUDE_CONFIG_DIR FLEET_CONF_DIR
