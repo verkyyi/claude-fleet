@@ -503,6 +503,13 @@ case "$mode" in
     fi
     bash "$BIN/fleet-diskguard.sh" --gate >&2 || exit 4
     if [ "$agent" = codex ]; then
+      # dash-issue-session.sh refuses it the same way — but only after a `new`
+      # has filed its issue (issue #3097: #12013 was left on the backlog), so say
+      # it here first, before anything is filed or opened. Only a `new`: an
+      # issue start's spawn says the same itself, and a scratch never checked.
+      if [ "${3:-}" = new ] && [ "${FLEET_CODEX_READY_CHECK:-1}" != 0 ] && ! fleet_codex_ready; then
+        printf 'start: this login has no valid Codex login — run `ccquota codex login` first\n' >&2; exit 4
+      fi
       if [ "${FLEET_CODEX_QUOTA_GATE:-0}" = 1 ]; then
         bash "$BIN/fleet-codex-account.sh" gate --session "$sess" >&2 || exit 4
       fi
@@ -624,9 +631,18 @@ case "$mode" in
       printf '%s\n' "$url"
       num="${url##*/}"; num="${num//[^0-9]/}"
       [ -n "$num" ] || { printf 'start: the filed issue has no number: %s\n' "$url" >&2; exit 1; }
-      bash "$BIN/dash-issue-session.sh" "$num" "$sess" --print --agent "$agent" --origin hub ${srepo:+--repo "$srepo"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} ${acls:+--account "$acls"} ${9:+--reap "$9"}
+      # its stderr is kept too (issue #3097): a caller reads only our LAST line,
+      # so a refusal's own reason rides in it rather than vanish above it
+      serr=$(mktemp "${TMPDIR:-/tmp}/fcr-spawn.XXXXXX" 2>/dev/null) || serr=/dev/null
+      bash "$BIN/dash-issue-session.sh" "$num" "$sess" --print --agent "$agent" --origin hub ${srepo:+--repo "$srepo"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} ${acls:+--account "$acls"} ${9:+--reap "$9"} 2>"$serr"
       rc=$?
-      [ "$rc" = 0 ] || printf 'start: filed #%s but its session did not open — it is on the backlog\n' "$num" >&2
+      cat "$serr" >&2 2>/dev/null
+      if [ "$rc" != 0 ]; then
+        swhy=$(awk 'NF { l = $0 } END { print l }' "$serr" 2>/dev/null | tr '\t' ' ')
+        swhy=${swhy#dash-issue-session: }
+        printf 'start: filed #%s but its session did not open%s — it is on the backlog\n' "$num" "${swhy:+ ($swhy)}" >&2
+      fi
+      [ "$serr" = /dev/null ] || rm -f "$serr"
       exit "$rc"
     fi
     # --print (issue #2237): the window it opened, last on stdout — the controller

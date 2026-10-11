@@ -7441,8 +7441,16 @@ fleet_epic_agent() {
 # reads the same column); with no ccquota on this login, a plain `codex login`'s
 # non-empty $CODEX_HOME/auth.json. rc 1 = neither — say `ccquota codex login`.
 # FLEET_CODEX_READY_CMD replaces the ccquota read (a test seam).
+# A SEPARATED login (credsep.json, issue #1971) is ready (issue #3097): its Codex
+# auth.json lives in the role account's store and every launch reaches it through
+# the credential proxy (fleet-codex.sh mint), so the login cannot read it —
+# `ccquota codex list` says no_credentials there for a login that runs Codex fine.
 fleet_codex_ready() {
   local rows
+  if [ -f "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/credsep.json" ] \
+     && grep -q '"separated": *true' "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/credsep.json" 2>/dev/null; then
+    return 0
+  fi
   if [ -n "${FLEET_CODEX_READY_CMD:-}" ]; then rows=$(eval "$FLEET_CODEX_READY_CMD" 2>/dev/null) || return 1
   elif command -v ccquota >/dev/null 2>&1; then
     rows=$(ccquota codex list 2>/dev/null) || return 1

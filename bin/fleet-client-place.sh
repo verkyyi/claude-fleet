@@ -545,6 +545,16 @@ case "$KIND" in
 esac
 why=$(tail -n1 "$ef" 2>/dev/null | tr '\t' ' ')
 [ "$ef" = /dev/null ] || rm -f "$ef"
+# the window it opened (issue #3097), as the hub's road says it: the adapter's
+# last `@N` line (a spawn's --print), or a warm start's `warm\t@N\t…` receipt —
+# so a 看台's ⌘T switches to it at once
+if [ "$src" = 0 ] && [ -n "${FLEET_PLACE_RESULT:-}" ]; then
+  _lw=$(printf '%s\n' "$out" | awk -F'\t' '$1 == "warm" && $2 ~ /^@[0-9]+$/ { w = $2 } $0 ~ /^@[0-9]+$/ { w = $0 } END { print w }')
+  _lf=$(printf '%s\n' "$out" | awk '/^https:\/\/[^ ]*\/issues\/[0-9]+$/ { print; exit }')
+  [ -n "$_lw$_lf" ] && python3 -c 'import json, sys
+said = {k: v for k, v in (("window_id", sys.argv[2]), ("filed", sys.argv[3]), ("machine", sys.argv[4])) if v}
+open(sys.argv[1], "w", encoding="utf-8").write(json.dumps(said))' "$FLEET_PLACE_RESULT" "$_lw" "$_lf" "$HOST" 2>/dev/null
+fi
 case "$src" in
   0) line=$(printf 'LOCAL %s\t%s' "$HOST" "$(printf '%s' "$out" | head -n1 | tr '\t' ' ')"); rc=0 ;;
   3) line=$(printf 'HELD %s\t%s' "$HOST" "$why"); rc=3 ;;
