@@ -114,6 +114,28 @@ spec:
                   key: replica-token
             - name: CCQUOTA_SHUTDOWN_GRACE
               value: "25s"
+            # Address records (claude-fleet#3073, EPIC #3067 C7): every
+            # person's <name>.cf.24haowan.com, written by the hub only. The
+            # token is ACME DNS-01's own (new-deploy/acme-dnspod), read here,
+            # never copied — it covers the whole DNSPod account, so rotating
+            # it means ACME too. No Secret ⇒ the pod starts and the loop makes
+            # no call at all.
+            - name: CCQUOTA_DNS_DP_ID
+              valueFrom:
+                secretKeyRef:
+                  name: acme-dnspod
+                  key: DP_Id
+                  optional: true
+            - name: CCQUOTA_DNS_DP_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: acme-dnspod
+                  key: DP_Key
+                  optional: true
+            - name: CCQUOTA_DNS_DOMAIN
+              value: "24haowan.com"
+            - name: CCQUOTA_DNS_SUBDOMAIN
+              value: "cf"
           lifecycle:
             # Out of the Service first: the endpoint removal reaches the
             # ingress while this pod still answers; only then SIGTERM.

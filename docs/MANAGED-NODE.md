@@ -615,3 +615,19 @@ BREAK-IT 行 `service-handwritten`。只点名接管过的登录（`logins/<登�
   转发到 <内网地址>:22022」，运营商级 NAT 说「这台没有公网地址」，路由器没肯自动开写原因，超过 20 分钟没新结果写「结果过期」。
   入口没开、或没人以这台为家 ⇒ 无此行。现在就查：`sudo fleet-node-supervisor.py entry reach`。
 - BREAK-IT：`entry-public-unreachable`（入口那半由 Go 测试对演练里真的入口 sshd 拨号）。
+
+### 你的地址指向你的家（EPIC #3067 C7，#3073）
+
+- **只有入口写记录**：`tokenledger/internal/dns`（provider 接口 List · Upsert · Delete、DNSPod 实现、测试用假实现）。
+  记录建在 DNSPod 上已有的 24haowan.com 里（`<名字>.cf`，A / AAAA，TTL 600），不委托、不另开 zone。
+  DNSPod 用旧版 token API（`https://dnsapi.cn/`：`Record.List` / `Record.Create` + `Record.Remark` / `Record.Modify` /
+  `Record.Remove`）；建时在备注里打 `fleet`，List 只认带它、且在 `cf` 下的——别的记录一条不碰；打不上备注的新记录当场删掉。
+- **一个循环**：入口上 `RunEntryDNS`（`internal/leader` 选主 `entry-dns`，只一个副本写）每分钟：每个在用的地址名
+  （改名后的旧名留 7 天）的目标 = 它的人的家机器的 `reachable(machine)`（上一节）；与记录现状比对，只写差异
+  （每拍至多 40 次写），每写一条记一行入口审计（kind `dns`，「A verky.cf 旧 → 新」）。家从外面连不上（或 15 分钟没新结果）
+  ⇒ 一条不改，记录留着最后的地址，钥匙页写「从外面连不上」；手动换家 ⇒ 下一拍改指新家；有人在控制台手改 ⇒ 下一拍改回，
+  审计写「有人手改」。DNSPod 报错只记日志（不带凭据），不删记录，下一拍再试。
+- **凭据**：入口环境 `CCQUOTA_DNS_DP_ID` / `CCQUOTA_DNS_DP_KEY`（`deploy/k8s/base/deployment.yaml` 从 `new-deploy/acme-dnspod`
+  的 `DP_Id` / `DP_Key` 只读引用，`optional: true`）+ `CCQUOTA_DNS_DOMAIN=24haowan.com`、`CCQUOTA_DNS_SUBDOMAIN=cf`。
+  缺一样 ⇒ 循环不起、0 次调用。⚠️ 这把 token 与 ACME DNS-01 共用、管整个 DNSPod 账号（不只这一个域名）：轮换它要同时顾到 ACME。
+- 查：`dig +short @223.5.5.5 <名字>.cf.24haowan.com`；入口审计里 kind `dns` 的行。BREAK-IT：`entry-dns-follows`。

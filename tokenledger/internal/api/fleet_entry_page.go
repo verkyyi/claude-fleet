@@ -216,6 +216,12 @@ func (s *Server) fillEntryPage(r *http.Request, c entryCaller, now time.Time, pa
 		if t := s.entryLastBeat(page.Home.Machine); t != nil {
 			page.HomeDown = entryWhen(*t, now) + "起"
 		}
+	} else if page.Home != nil && s.EntryDNS != nil {
+		// Online but nobody outside reaches it (C6): the address keeps its
+		// last records and goes nowhere new (claude-fleet#3073).
+		if reach, err := s.EntryReachable(page.Home.Machine, now); err == nil && len(reach) == 0 {
+			page.HomeDown = "从外面"
+		}
 	}
 	q := r.URL.Query()
 	if id := q.Get("revoke"); id != "" && r.Method != http.MethodPost {
