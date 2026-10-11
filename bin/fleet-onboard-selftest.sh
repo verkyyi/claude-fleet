@@ -5,7 +5,7 @@
 # $FLEET_CONF_DIR/global/onboard.state, written by bin/fleet-onboard.sh. What
 # this pins:
 #
-#   1. RESUME — no state ⇒ `resume: repo`; after `set step=watch` a fresh `brief`
+#   1. RESUME — no state ⇒ `resume: key` (the plain walk, issue #3332); after `set step=watch` a fresh `brief`
 #      says `resume: watch` and still carries repo=/issue= from earlier calls.
 #   2. MERGE — `set` keeps every key it was not given, the last value of a key
 #      wins, `updated=` is restamped, the file is 0600.
@@ -17,6 +17,15 @@
 #   6. THE SKILL MATCHES THE SCRIPT — every `set step=<x>` in the skill is a step
 #      the script accepts, every fleet script it names exists in bin/, and it
 #      carries the installer's marker line.
+#   8. THE PLAIN WALK (issue #3332) — a fleet with no repo briefs fine; the
+#      brief prints lang= + every say.* line in zh and en from fleet-ui-lang.sh;
+#      no say line but `dev` (and nothing else the plain brief prints) names a
+#      repo / issue / PR / GitHub, and the plain brief never asks gh; `--dev`
+#      (or a saved path=dev) shows the repos; an old saved `handoff` resumes done.
+#   9. LOOK — `look` before `look --mark` refuses; after it, only a worker window
+#      that was not there is printed (`new …`), home / panels never.
+#  10. NO SEAT GRAB — the skill never takes a role, spawns, files an issue or
+#      talks about the sidebar (issue #3320 gaps 2, 3, 5).
 #   7. SPOKE MARKER (issue #1215) — the first `brief` inside a fleet writes
 #      global/guide.spoke (0600-ish, a timestamp), a later brief leaves the
 #      first stamp alone, `reset` keeps it, and a brief outside a fleet never
@@ -45,18 +54,18 @@ SESS=onb-test
 mkdir -p "$FLEET_CONF_DIR/fleets/$SESS/repos"
 printf 'FLEET_REPO=verkyyi/claude-fleet\nFLEET_MAIN=%s/main\n' "$WORK" > "$FLEET_CONF_DIR/fleets/$SESS/conf"
 printf 'FLEET_REPO=victor/app\n' > "$FLEET_CONF_DIR/fleets/$SESS/repos/victor-app.conf"
-brief() { bash "$OB" brief --session "$SESS" --no-gh 2>&1; }
+brief() { bash "$OB" brief --session "$SESS" --no-gh "$@" 2>&1; }
 
 # --- 1. resume from nothing --------------------------------------------------
 out=$(brief) || fail "brief failed on a fresh fleet" "$out"
-printf '%s\n' "$out" | grep -qx 'resume: repo' || fail "fresh start must resume at repo" "$out"
+printf '%s\n' "$out" | grep -qx 'resume: key' || fail "fresh start must resume at key" "$out"
 [ "$(bash "$OB" path)" = "$STATE" ] || fail "path is not \$FLEET_CONF_DIR/global/onboard.state"
-ok "fresh fleet: resume at repo, state under global/"
+ok "fresh fleet: resume at key, state under global/"
 
 # --- 5. seed tag (FLEET_SEED absent ⇒ no tag) --------------------------------
 printf '%s\n' "$out" | grep -q '\[seed\]' && fail "no FLEET_SEED, yet a repo was tagged [seed]" "$out"
 printf 'FLEET_SEED=1\n' >> "$FLEET_CONF_DIR/fleets/$SESS/conf"
-out=$(brief)
+out=$(brief --dev)
 printf '%s\n' "$out" | grep -q '^  verkyyi/claude-fleet  \[seed\]' || fail "the conf's own repo is not tagged [seed]" "$out"
 printf '%s\n' "$out" | grep -q '^  victor/app *$' || fail "an overlay repo must never be the seed" "$out"
 ok "FLEET_SEED=1 tags only the conf's own repo"
@@ -100,7 +109,7 @@ ok "unknown step / bad key refused, file untouched"
 # --- reset -------------------------------------------------------------------
 bash "$OB" reset
 [ -e "$STATE" ] && fail "reset left the state file"
-brief | grep -qx 'resume: repo' || fail "after reset brief must resume at repo"
+brief | grep -qx 'resume: key' || fail "after reset brief must resume at key"
 ok "reset starts over"
 
 # not inside a fleet
@@ -132,11 +141,72 @@ for s in $(grep -o 'step=[a-z]*' "$SKILL" | sed 's/step=//' | sort -u); do
   case " $steps " in *" $s "*) ;; *) fail "skill uses step=$s, the script accepts: $steps" ;; esac
 done
 for s in $steps; do
-  grep -q "^## [0-9]\. \`$s\`" "$SKILL" || [ "$s" = "done" ] || fail "step $s has no section in the skill"
+  grep -qE "^##+ [0-9.]+ \`$s\`" "$SKILL" || fail "step $s has no section in the skill"
 done
 for f in $(grep -o '[~]/\.claude/fleet/bin/[A-Za-z0-9_.-]*' "$SKILL" | sed 's|.*/||' | sort -u); do
   [ -f "$BIN/$f" ] || fail "skill names bin/$f, which does not exist"
 done
 ok "skill steps, sections and script references match"
+
+# --- 8. the plain walk (issue #3332) -----------------------------------------
+NOREPO=onb-norepo
+mkdir -p "$FLEET_CONF_DIR/fleets/$NOREPO"
+printf 'FLEET_MAIN=%s/none\n' "$WORK" > "$FLEET_CONF_DIR/fleets/$NOREPO/conf"
+# a gh that leaves a mark: the plain brief must never ask it
+mkdir -p "$WORK/shim"
+printf '#!/bin/sh\n: > "%s/gh.called"\necho someone\n' "$WORK" > "$WORK/shim/gh"; chmod +x "$WORK/shim/gh"
+bash "$OB" reset
+out=$(PATH="$WORK/shim:$PATH" FLEET_UI_LANG=zh bash "$OB" brief --session "$NOREPO" 2>&1) || fail "a fleet with no repo must brief (exit 0)" "$out"
+printf '%s\n' "$out" | grep -qx 'resume: key' || fail "no-repo fleet: resume is not key" "$out"
+[ -e "$WORK/gh.called" ] && fail "the plain brief asked gh (GitHub belongs to the developer walk only)" "$out"
+printf '%s\n' "$out" | grep -q '^repos:' && fail "the plain brief lists repos" "$out"
+printf '%s\n' "$out" | grep -q 'lang=zh' || fail "FLEET_UI_LANG=zh: brief does not say lang=zh" "$out"
+says=$(sed -n 's/^SAY="\(.*\)"$/\1/p' "$OB")
+[ -n "$says" ] || fail "cannot read SAY from fleet-onboard.sh"
+for L in zh en; do
+  o=$(FLEET_UI_LANG=$L bash "$OB" brief --session "$NOREPO" 2>&1)
+  for n in $says; do
+    line=$(printf '%s\n' "$o" | sed -n "s/^say\.$n: //p")
+    [ -n "$line" ] && [ "$line" != "onboard_$n" ] || fail "$L: say.$n missing from the table" "$o"
+  done
+  plain=$(printf '%s\n' "$o" | grep -v '^say\.dev: ')
+  hit=$(printf '%s\n' "$plain" | grep -inE '仓库|issue|\bPR\b|pull request|github|\brepo|worktree|分支|branch|单号|建单')
+  [ -z "$hit" ] || fail "$L: the plain walk names a developer word" "$hit"
+done
+en=$(FLEET_UI_LANG=en bash "$OB" brief --session "$NOREPO" | sed -n 's/^say\.key: //p')
+zh=$(FLEET_UI_LANG=zh bash "$OB" brief --session "$NOREPO" | sed -n 's/^say\.key: //p')
+[ "$en" != "$zh" ] || fail "say.key reads the same in zh and en"
+printf '%s\n%s\n' "$en" "$zh" | grep -q '⌘P' || fail "say.key does not teach ⌘P"
+printf '%s\n' "$zh" | grep -q '⌃空格' || fail "zh say.key does not teach ⌃空格 (the phone)"
+bash "$OB" set step=try lang=en
+[ "$(bash "$OB" brief --session "$NOREPO" | sed -n 's/^.*lang=\([a-z]*\).*$/\1/p' | head -n 1)" = en ] || fail "a saved lang= does not win over the table's language"
+bash "$OB" set path=dev
+o=$(PATH="$WORK/shim:$PATH" bash "$OB" brief --session "$SESS" 2>&1)
+printf '%s\n' "$o" | grep -q '^repos:' || fail "path=dev: the brief does not list repos" "$o"
+[ -e "$WORK/gh.called" ] || fail "path=dev: the brief does not ask gh for the login" "$o"
+printf 'step=handoff\n' > "$STATE"
+bash "$OB" brief --session "$NOREPO" | grep -qx 'resume: done' || fail "an old saved handoff must resume as done"
+bash "$OB" reset
+ok "plain walk: no repo needed, zh+en say lines, no developer words, gh only on --dev"
+
+# --- 9. look ------------------------------------------------------------------
+ROWS="$WORK/rows"
+printf '#!/bin/sh\ncat "%s"\n' "$ROWS" > "$WORK/shim/tmux"; chmod +x "$WORK/shim/tmux"
+printf 'fid-guide|guide|worker|done||||\nfid-home|home|home|||||\n' > "$ROWS"
+look() { PATH="$WORK/shim:$PATH" bash "$OB" look "$@" 2>&1; }
+rm -f "$FLEET_CONF_DIR/global/onboard.seen"
+look >/dev/null && fail "look before look --mark must refuse"
+look --mark | grep -q '^marked: 2' || fail "look --mark did not remember both windows" "$(look --mark)"
+[ "$(look)" = none ] || fail "nothing new yet, look printed: $(look)"
+printf 'fid-pan|plan|panel|||||\nfid-new|norepo-3|worker|working|T7|||帮我写一封请假邮件\n' >> "$ROWS"
+got=$(look)
+[ "$got" = "$(printf 'new\tworking\tT7\t\t-\t帮我写一封请假邮件')" ] || fail "look did not print exactly the new worker" "$got"
+ok "look: refuses unmarked, prints only the window that is new"
+
+# --- 10. no seat grab, no ticket, no sidebar (issue #3320) -------------------
+for bad in fleet-role-take '--spawn' 'fleet-issue-file' sidebar 'fleet-keys.sh'; do
+  grep -q -- "$bad" "$SKILL" && fail "the skill still says '$bad' (#3320: no role, no spawn, no ticket, no sidebar)"
+done
+ok "the skill takes no role, spawns nothing, files nothing, has no sidebar"
 
 printf 'fleet-onboard selftest: %d passed\n' "$pass"

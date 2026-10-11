@@ -1,244 +1,215 @@
-# /fleet-onboard — walk a newcomer from «my repo, my idea» to their first merged PR
+# /fleet-onboard — one key, one thing done, two or three minutes
 
 <!-- fleet skill · owner: scratch -->
 
-A conversation, not a manual (issue #1168, EPIC #1163 C5). It asks the newcomer
-which of **their own** repos they want to work in and what they want done, adds
-the repo to this fleet, turns the wish into an issue, opens a worker session for
-it, explains the session list while the worker runs, and stays with them until
-**they** merge the result. Then it tells them how to do the next one alone.
+The first thing a new login sees (the pinned `guide` session). The person is
+**not a developer** (issue #3332, EPIC #3178 C20): Claude Code is already set up
+for them, and this walk only has to show them the one key and get one thing of
+theirs done, right in front of them:
 
-It never writes code and never edits a file. Its writes are exactly four, and
-**each one is shown to the newcomer and runs only after they say yes**: creating
-a GitHub repo (only when they have none), adding a repo to this fleet, filing the
-issue (+ spawning its worker), merging their PR. Progress lives in
-`$FLEET_CONF_DIR/global/onboard.state` (`bin/fleet-onboard.sh`), so calling the
-wizard back picks up at the step it left.
+1. say hello in one line;
+2. teach one key — ⌘P on a computer, ⌃Space on a phone;
+3. they press it, write one thing on the panel's **⚡** row and press ↵ — the
+   panel opens a new session whose first line is their own words (#3327, #3331),
+   with no ticket filed (a hub task record, #3325) — and they watch it work and
+   finish;
+4. done — two or three minutes.
+
+The old developer walk (pick a repo → a session that opens a PR → merged) stays,
+**only when they ask for it** (step 5). Until then never say «仓库 / repo»,
+«issue / 单», «PR», «GitHub», «worktree», «分支 / branch» — not once.
+
+This window is an ordinary session: it never takes the orchestrator role, never
+spawns a session, never files anything on the default walk, never edits a file.
+Progress lives in `$FLEET_CONF_DIR/global/onboard.state` (`bin/fleet-onboard.sh`),
+so calling the guide back picks up where it left off.
 
 **Argument** (`$ARGUMENTS`): none — or `reset` to forget the saved progress and
-start over (`~/.claude/fleet/bin/fleet-onboard.sh reset`, then continue at step 0).
+start over (`~/.claude/fleet/bin/fleet-onboard.sh reset`, then step 0).
 
 ## How to talk (read this before saying anything)
 
-- **Language: follow the newcomer's.** If `lang=` is saved (step 0 prints it),
-  speak that. Otherwise your FIRST message is one short line in Chinese and
-  English both; from their first reply on, speak only the language they wrote in,
-  and save it: `fleet-onboard.sh set lang=<zh|en|…>`. Fleet automation that lands
-  in this pane (a `[child-report]`, a resume nudge) is English — that is never a
+- **Say the `say.<name>:` lines.** `brief` prints the walk's fixed lines in the
+  person's language (`lang=`, from the fleet's one table — `fleet-ui-lang.sh`,
+  which follows their own choice, then their device). Say each one as printed —
+  you may join two, never pad them with fleet words. Everything else you say is
+  in that same language; if they write in another one, switch and save it:
+  `~/.claude/fleet/bin/fleet-onboard.sh set lang=<zh|en>`. Fleet automation that
+  lands in this pane (a `[child-report]`, a resume nudge) is English — never a
   reason to switch.
-- **Short turns, one question at a time.** Two or three sentences, then a
-  question. They are new: no fleet jargon they have not been shown yet
-  (worktree, seat, socket, hub, EPIC, daemon — never). Say «执行会话 / a worker
-  session», «单 / an issue», «会话列表 / the session list».
-- **Never send them to a document.** The success measure of this wizard is that
-  they read zero docs (EPIC #1163). If they need a fact, you read it and tell
-  them the part that matters now.
-- **Confirm before every write.** Show the exact thing (repo name, issue title +
-  body, PR number) and ask; only a clear yes runs it. A no or an edit loops back
-  to the draft.
-- **Save progress the moment a step completes** (the `set` lines below), BEFORE
-  saying the next thing — a reaped window or a closed laptop must not lose it.
+- **Short.** One or two sentences a turn, then wait for them. No lists, no
+  headings, no documents — they read nothing but what you say.
+- **Save the step the moment it changes** (the `set` lines below), before saying
+  the next thing — a closed laptop must not lose it.
 
-## 0. Resolve fleet + guard seat + read the progress (run FIRST, every time)
+## 0. Read where we are (run FIRST, every time)
 
 ```sh
 ~/.claude/fleet/bin/fleet-onboard.sh brief
 ```
 
 Running it is also how the fleet learns the guide is really up (issue #1215):
-the first `brief` inside a fleet leaves `$FLEET_CONF_DIR/global/guide.spoke`,
-and until that exists a guide window counts as *not yet spoken* — `onboarded` is
-never recorded over it, `fleet-doctor` keeps naming the guide as missing, and
-the collector reopens it after a grace. So this is the first thing you do, before
-any greeting.
+the first `brief` leaves `$FLEET_CONF_DIR/global/guide.spoke`; until it exists
+the guide counts as not yet spoken and the collector reopens it.
 
-- **No fleet** (`brief` exits 3) → one line: *"not inside a fleet — open this
-  from a fleet window."* Stop. An empty `repo=` is NOT that: a fleet with no repo
-  yet is exactly where a newcomer starts (step 1 adds theirs).
+- **No fleet** (exit 3) → one line: *"not inside a fleet — open this from a fleet
+  window."* Stop. A fleet with no repo at all is NOT that — it is exactly where a
+  newcomer starts, and the default walk needs none.
 - **Worker seat** (`seat=worker`) → one line: *"/fleet-onboard runs in its own
-  window, not inside a worker session."* Stop. (A worker is bound to one issue;
-  the wizard files new ones.)
-- `brief` prints this fleet's repos — `[seed]` is the **starter repo**
-  (`FLEET_SEED=1`, claude-fleet itself: the tool, not theirs); `[mine]` is owned
-  by the logged-in GitHub user — the `gh=` login (`NOT-LOGGED-IN` → help them run
-  `gh auth login` first; nothing below works without it), and the saved progress
-  ending in `resume: <step>`.
-- **Go to the step `resume:` names.** A fresh start is `repo`. On a resume, open
-  with one sentence of where you left off («上次我们开了 #12，正在做——看看进展？»)
-  instead of starting over. `done` → offer step 5 again (it is what a newcomer
-  calling the wizard back usually wants), or `reset` if they want a new walk.
+  window, not inside a session bound to one task."* Stop.
+- `brief` prints `lang=`, the `say.*` lines, the saved progress, and
+  `resume: <step>`. **Go to that step.** On a resume, open with one sentence of
+  where you left off instead of starting over. `path=dev` means they chose the
+  developer walk: `brief` then also prints the GitHub login and their repos.
 
-## 1. `repo` — which repo, and put it in the fleet
+## 1. `key` — hello, and the one key
 
-1. Say hello, then ask what they want to work on. If `brief` showed a `[seed]`
-   repo, say it plainly once: **it is the tool this fleet runs on, not their
-   repo — the wizard never files work there.** Never offer it as a choice.
-2. List their repos:
-
-   ```sh
-   gh repo list --limit 30 --json nameWithOwner,description,pushedAt,isArchived --jq '.[] | select(.isArchived|not) | "\(.nameWithOwner)\t\(.pushedAt[:10])\t\(.description // "")"'
-   ```
-
-   Show the most recently pushed few (a repo `brief` already tagged `[mine]` is
-   already in the fleet — say so). Ask which one to start with. They may name one
-   not in the list (an org repo): take `owner/name` as given.
-3. **No repo at all?** Offer to create one — name it with them, show the command,
-   run it only on yes: `gh repo create <name> --private --add-readme`.
-4. **Add it to the fleet** unless `brief` already listed it. Say what happens
-   («我会把它克隆到 ~/projects/<name>，加进你的会话列表，可以吗？») and on yes:
-
-   ```sh
-   ~/.claude/fleet/bin/fleet-repo.sh add <owner/name>
-   ```
-
-   stdout is one token: `added:<slug>` (or `refused:hosted` — already there,
-   fine) → tell them in one line where it is: **「你的代码在 `~/projects/`」**
-   (`~/projects/<name>` — every repo they add lands there), then go on (a `not trusted … pre-#563 launcher` WARNING on stderr is about
-   old launchers — don't mention it). Any other `refused:` / `failed:` → read its stderr to them in
-   plain words and help fix it (usually a typo, or no access). Then:
-
-   ```sh
-   ~/.claude/fleet/bin/fleet-onboard.sh set repo=<owner/name> step=issue
-   ```
-
-5. **The starter repo can go now** (issue #1172). If `brief` tagged a `[seed]`
-   repo, say so once, right after the add: it was only there so the fleet worked
-   before they had a repo of their own, and now it is dead weight in their session
-   list — then offer, in one line, to take it out («起步仓库 claude-fleet 现在可以
-   拿掉了，会话列表里就只剩你的仓库——要拿掉吗？»). On yes:
-
-   ```sh
-   ~/.claude/fleet/bin/fleet-repo.sh remove <seed owner/name>
-   ```
-
-   It promotes their repo into the fleet's own slot; this `guide` window keeps
-   running (a scratch of the starter never blocks it). A `refused:` on stderr
-   (an issue window still open on the starter) → leave it and go on — the same
-   command works later from any window. On no → go on; nothing depends on it.
-
-## 2. `issue` — turn the wish into an issue and open a session for it
-
-1. Ask them to say, in their own words, the first thing they want changed — one
-   small, visible thing is the best first issue; if the wish is big, help them
-   pick a first slice. You may look at the repo to ground the draft (read-only:
-   `gh repo view <repo>`, the checkout's `README` / tree) — never edit it.
-2. Draft the issue in their language: a short title, and a body with **what**,
-   **why**, and **how we'll know it's done**. Append this section verbatim (it is
-   for the worker session, so it stays in English):
-
-   ```markdown
-   ---
-   **For the worker:** this is the author's first fleet task. Open the PR and get
-   the checks green, but **do not merge it** — the author merges their first PR
-   themselves. When it is ready, report
-   `fleet-report-parent.sh --state waiting --pr <PR> --summary 'ready for the author to merge'`,
-   mark the window `set-claude-state.sh blocked`, and stop.
-   ```
-
-3. Show them the title + body (minus the worker note, which you mention in one
-   line: «我还加了一句给执行会话的话：让它开好 PR 等你来合并»). Edit until they say
-   yes. Then file it **and** open its session — one call:
-
-   ```sh
-   ~/.claude/fleet/bin/fleet-issue-file.sh --repo <owner/name> --title '<title>' --body '<body>' --spawn
-   ```
-
-   A pin grants nothing (issue #3114): this window spawns only once it holds the
-   orchestrator role, so take it first — `~/.claude/fleet/bin/fleet-role-take.sh
-   orchestrator` (exit 0, or 0 «held by this window already»). Exit 4 = someone
-   else orchestrates here: drop `--spawn` from the line above, and they open the
-   session from the list.
-
-   stdout is the issue URL; the trailing number is `N`. A spawn refusal on
-   stderr (session cap, …) leaves the issue filed — tell them, and they can open
-   it later from the session list. Save it before anything else:
-
-   ```sh
-   ~/.claude/fleet/bin/fleet-onboard.sh set issue=<N> step=watch
-   ```
-
-4. Tell them what just happened in two sentences: a new session is working on
-   #N in its own copy of the repo; it will open a PR when it's done.
-
-## 3. `watch` — read the session list while it works
-
-Point at the session list (the task sidebar on the left) and explain **only the
-states they can see right now** — look first:
+Say `say.hello`, then `say.key`. Then remember which sessions exist right now,
+so you can tell theirs apart in a minute:
 
 ```sh
-tmux list-windows -F '#{window_name}|#{@issue}|#{@repo}|#{@claude_state}'
-~/.claude/fleet/bin/fleet-keys.sh --context sidebar --plain
+~/.claude/fleet/bin/fleet-onboard.sh look --mark
+~/.claude/fleet/bin/fleet-onboard.sh set step=try
 ```
 
-The row for #N is theirs. In plain words: a spinning row is **working**; green
-✓ means it **finished a turn**; red means **it needs you** (a question, or — for
-this issue — «PR 开好了，等你合并»); a PR number on the row means **a PR is open**.
-Take every key you mention from the `fleet-keys.sh` output above, never from
-memory — say only the two or three they need now (switching to a row with ↑↓,
-getting back here). If a key isn't in that output, don't mention it.
+## 2. `try` — they hand over one thing
 
-Then let them go look — they can switch to the worker's row and watch it, and
-come back here any time. **Do not poll in a loop.** The worker was spawned from
-this window, so it reports back here by itself (`[child-report]`) when it opens
-the PR, is blocked, or finishes; when they come back and ask, look once:
+Say `say.try`. If they ask what to write: anything they would ask a helpful
+person at a computer — a letter, a summary of a web page, a plan for the
+weekend, a question. Keep the example theirs; never steer them to code.
+
+Wait for them to come back («好了 / done / sent»), or — if they type the wish
+here instead — say it goes on the ⚡ row: ⌘P, write it, ↵. Then look once:
+
+```sh
+~/.claude/fleet/bin/fleet-onboard.sh look
+```
+
+- A `new` row → that is their session (its words are the last column). Save it
+  and say `say.sent`:
+
+  ```sh
+  ~/.claude/fleet/bin/fleet-onboard.sh set task=<the task column, or its words> step=see
+  ```
+
+- `none` → it may still be opening, or it opened on another of their computers
+  (the panel picks where it runs). Say: press ⌘P — their words are a row there; if
+  they are, it is running (go on to step 3 all the same). If the ⚡ row showed a
+  red line instead, read it to them in plain words and have them try once more.
+
+## 3. `see` — it works, it finishes
+
+They switch to it (⌘P, pick it, ↵) and watch; this window stays. When they come
+back, look once (`fleet-onboard.sh look`) and read its state column in plain
+words: `working` — still at it; `done` — finished; a `needs…` state — **it is
+asking them something**: go to it (⌘P, its row, ↵) and answer in their own words.
+Never poll in a loop; look when they come back or ask.
+
+Finished (or they are happy with what they saw) → say `say.done`, then `say.more`,
+then `say.dev` once, and:
+
+```sh
+~/.claude/fleet/bin/fleet-onboard.sh set step=done
+```
+
+That is the whole walk. If they want another, the same key does it — no need for
+you.
+
+## 4. `done` — they called the guide back
+
+Offer, in one line, one more thing on ⌘P (back to step 2 — `look --mark`, then
+`set step=try`) or the developer walk (`say.dev`). `reset` starts over.
+
+## 5. The developer walk — only when they ask
+
+They asked to change code / get a PR. Record it, then read the brief again —
+with `path=dev` it shows the GitHub login and the repos this fleet hosts:
+
+```sh
+~/.claude/fleet/bin/fleet-onboard.sh set path=dev step=repo
+~/.claude/fleet/bin/fleet-onboard.sh brief --dev
+```
+
+### 5.1 `repo` — which repo
+
+- `gh=NOT-LOGGED-IN` → they log in first: have them type `! gh auth login` here
+  and follow its prompts. Nothing below works without it.
+- A `[seed]` repo is the tool this fleet runs on, not theirs: never offer it,
+  don't bring it up; only if they ask to remove it, `fleet-repo.sh remove` it.
+- List theirs and ask which one (they may name an org repo as `owner/name`):
+
+  ```sh
+  gh repo list --limit 30 --json nameWithOwner,description,pushedAt,isArchived --jq '.[] | select(.isArchived|not) | "\(.nameWithOwner)\t\(.pushedAt[:10])\t\(.description // "")"'
+  ```
+
+  None at all → offer to create one; show the command, run it only on yes:
+  `gh repo create <name> --private --add-readme`.
+- Unless `brief` already lists it, say what happens («我会把它克隆到这台电脑，
+  加进 ⌘P 的仓库格子里，可以吗？») and on yes:
+
+  ```sh
+  ~/.claude/fleet/bin/fleet-repo.sh add <owner/name>
+  ```
+
+  stdout `added:<slug>` or `refused:hosted` → tell them in one line where it is:
+  **「你的代码在 `~/projects/`」** (`~/projects/<name>` — every repo they add
+  lands there), then go on (a `not trusted … pre-#563
+  launcher` warning on stderr is not for them). Any other `refused:` / `failed:`
+  → read its stderr to them in plain words and help fix it. Then:
+
+  ```sh
+  ~/.claude/fleet/bin/fleet-onboard.sh set repo=<owner/name> step=issue
+  ```
+
+### 5.2 `issue` — the same ⚡ row, with the repo
+
+The same key as before. Mark first, then tell them: ⌘P, write the change they
+want (one small, visible thing is the best first one), and before ↵ press **Tab**
+on the ⚡ row — the 仓库 / Repo cell — and pick their repo with ←→; then ↵. The
+panel files the issue on that repo and opens a session for it (its progress line
+shows the number).
+
+```sh
+~/.claude/fleet/bin/fleet-onboard.sh look --mark
+```
+
+When they are back, `fleet-onboard.sh look`: a `new` row with an issue number is
+it →
+
+```sh
+~/.claude/fleet/bin/fleet-onboard.sh set issue=<N> step=watch
+```
+
+### 5.3 `watch` — it works and opens a PR
+
+The session works in its own copy of the repo, opens a PR when the change is
+ready and lands it itself once the checks are green. Explain only what they can
+see (`look`'s state column, the row's PR number). Look once when they come back:
 
 ```sh
 gh pr list --repo <owner/name> --head issue-<N> --state all --json number,url,state,title
 ```
 
-- A PR exists → `fleet-onboard.sh set pr=<PR> step=merge` → step 4.
-- The worker says it is blocked on a question → help them answer it (switch to
-  its row; it is asking in plain language).
-- Still working → say so, and that you'll be here.
+A PR → `fleet-onboard.sh set pr=<PR> step=merge`. A question from the session →
+help them answer it on its row. Still working → say so.
 
-## 4. `merge` — look at the PR together; they merge it
+### 5.4 `merge` — the result
 
-1. Show what changed, briefly: `gh pr view <PR> --repo <owner/name>` and the gist
-   of `gh pr diff <PR> --repo <owner/name>` in their words — not the raw diff
-   unless they ask.
-2. Read the gate (never eyeball it):
-   `~/.claude/fleet/bin/fleet-pr-verdict.sh <PR> --repo <owner/name>` —
-   `READY` → go on; `PENDING` → checks still running, say so and wait for them to
-   ask again; `FAILING` / `CONFLICT` → the worker fixes it (it usually already
-   is) — tell them to reply on its row, or you can say it in its session:
-   `~/.claude/fleet/bin/fleet-peer-send.sh issue:<N> '<what to fix>'`;
-   `MERGED` → the worker merged it anyway: congratulate them, skip to 3.
-3. Ask: **merge it?** They can press Merge on the PR's GitHub page themselves, or
-   say yes and you run:
-
-   ```sh
-   gh pr merge <PR> --repo <owner/name> --squash --delete-branch
-   ~/.claude/fleet/bin/fleet-pr-verdict.sh <PR> --repo <owner/name>   # → MERGED
-   ```
-
-   The confirming read, not `gh`'s exit code, says it landed. Then
-   `fleet-onboard.sh set step=handoff`.
-4. Tell them the worker's window **cleans itself up** a few minutes after the
-   merge — the row disappears on its own; nothing to close.
-
-## 5. `handoff` — how to do the next one alone
-
-Three things, each with the key read live from
-`~/.claude/fleet/bin/fleet-keys.sh --plain` (the full sheet — grep the lines you
-need; skip any that are gone):
-
-- **The next issue:** type what they want on the input line at the bottom of the
-  session list and press ↵ for a quick session, or the «new task» key (⌃n in the
-  sheet) to file an issue and open its session in one go — what you just did
-  together, without you.
-- **Another repo:** the row menu's «add a repo» letter (the sheet's `row menu`
-  group), or ask the wizard again.
-- **Calling the wizard back:** `/fleet-onboard` in any non-worker window — it
-  remembers where they left off.
-
-Then `fleet-onboard.sh set step=done` and say goodbye in one line.
+Read the gate, never eyeball it:
+`~/.claude/fleet/bin/fleet-pr-verdict.sh <PR> --repo <owner/name>`.
+`MERGED` → show what changed in their words (`gh pr view <PR> --repo <owner/name>`,
+the gist of `gh pr diff <PR> --repo <owner/name>`). `PENDING` / `FAILING` /
+`CONFLICT` → the session is on it; say so. `BLOCKED` → their repo wants a review:
+they press Merge on the PR's page themselves (give them its URL from the
+PR list in 5.3). Then
+`fleet-onboard.sh set step=done`, and say the next one is the same ⌘P, ⚡, Tab, ↵.
 
 ---
 
-Rails: this fleet only, and only repos the newcomer names — never the `[seed]`
-starter repo (taking it OUT of the fleet, step 1.5, is the one thing you do to
-it), never another fleet's. Read-only everywhere except the five
-confirmed writes above; code is a worker's job, and the worker is a spawned
-session (`fleet-issue-file.sh --spawn`), never a subagent. No `tmux send-keys`
-into another pane (hook-blocked; `fleet-peer-send.sh issue:<N>` is the channel).
-Never run `/fleet-sync-install` or touch the live install.
+Rails: this fleet only. The default walk writes nothing but its own progress
+file. The developer walk's writes are two, each shown and run only after a yes:
+creating their GitHub repo (only when they have none) and adding a repo to this
+fleet. Never take a role, never spawn, never file an issue yourself, never edit a
+file; the session that does the work is the one the panel opened. No
+`tmux send-keys` into another pane (hook-blocked). Never run `/fleet-sync-install`
+or touch the live install.
