@@ -31,7 +31,7 @@ role=${1:-}; [ "$#" -gt 0 ] && shift
 act=take
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --steal) act=steal ;; --drop) act=drop ;; --who) act=who ;;
+    --steal) act=steal ;; --drop) act=drop ;; --who) act='who' ;;
     -h|--help) sed -n '2,25p' "$0"; exit 0 ;;
     *) die 2 "unknown argument: $1" ;;
   esac
