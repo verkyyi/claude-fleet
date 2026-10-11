@@ -6,7 +6,7 @@ file — `name` · `description` · `tools` · `disallowedTools` · `model` · t
 — found the way Claude Code finds it: the project's `.claude/agents` (the nearest
 directory up to the repo's root wins) > the login's `~/.claude/agents` > an
 installed plugin's `agents/`. A spawn names it (`--as <name>`: dash-issue-session.sh,
-dash-raw-session.sh, the `spawn` tool's `agent`); fleet-claude.sh starts
+dash-raw-session.sh, the `spawn` tool's `agent`); the launcher starts
 `claude --agent <name>` and Claude Code reads the model, the tools and the body
 itself. The fleet adds ONE frontmatter key, `fleet:` (Claude Code ignores keys it
 does not know), with the sub-keys
@@ -23,7 +23,7 @@ is `fleet.codex_model`; the tool list does not carry over (Codex has none).
 
   find <name> [--dir D]           the file's path (exit 1: none — stderr says where it looked)
   launch <name> [--dir D] [--agent claude|codex] [--no-agent-flag]
-                                  what fleet-claude.sh starts it with, `key<TAB>value`
+                                  what the launcher starts it with, `key<TAB>value`
                                   lines: file · sha · name · model · spawn (0|1) ·
                                   reap · repo · agent · codex_model · codex_effort ·
                                   body (Codex / --no-agent-flag: the body's copy) and
@@ -35,7 +35,7 @@ is `fleet.codex_model`; the tool list does not carry over (Codex has none).
 
 `--dir` is the session's working directory (default: the cwd) — where the
 project layer is looked for. `--no-agent-flag` is the fallback for a Claude Code
-without `--agent` (fleet-claude.sh asks `claude --help` once per binary): the
+without `--agent` (the launcher asks `claude --help` once per binary): the
 model, the tools and the body ride `--model` / `--tools` /
 `--disallowedTools` / `--append-system-prompt-file` instead.
 
