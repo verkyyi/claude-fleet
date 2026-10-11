@@ -246,7 +246,7 @@ SG=$(ti list-windows -t fl -F "#{window_id} #{@view_shell}" | awk -v k="nodeA@$M
 waitfor 12 sh -c "[ \"\$(tmux -S '$IN' display-message -p -t 'fl@view-v1:' '#{window_id}')\" = '$SG' ]" || fail "S: the 看台 is not on gamma's shell ($(cur))"
 sleep 1; to send-keys -t o:view -l 'echo "AT=$(pwd)"'; to send-keys -t o:view Enter
 waitfor 20 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -q 'AT=.*wt-gamma/bin'" \
-  || fail "S: gamma's shell is not where its agent is (…/wt-gamma/bin): $(to capture-pane -p -t o:view | tail -5)"
+  || fail "S: gamma's shell is not where its agent is (…/wt-gamma/bin): $(to capture-pane -p -t o:view | grep -v '^$'; ti display-message -p -t "$SG" 'mode=#{pane_in_mode} dead=#{pane_dead} cmd=#{pane_current_command} pid=#{pane_pid}'; ti capture-pane -p -t "$SG" | grep -v '^$')"
 # ⌘P from the shell: its session lit — ↵ is back on gamma
 to send-keys -t o:view -H 1b 5b 39 32 37 7e
 waitfor 20 listed || fail "S: ⌘P from the shell listed nothing"
@@ -275,7 +275,7 @@ TMUX="$IN,0,0" python3 "$BIN/fleet-quickopen.py" do shell --view fl@view-v1 --ta
 waitfor 20 sh -c "tmux -S '$IN' list-windows -t fl -F '#{@view_shell}' | grep -qx 'nodeA@$ME:$W4'" || fail "S: --target f4 made no shell for delta"
 sleep 1; to send-keys -t o:view -l 'echo "AT=$(pwd)=="'; to send-keys -t o:view Enter
 waitfor 20 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -q 'AT=.*wt-delta=='" \
-  || fail "S: delta's agent directory gone, the shell is not in its @worktree: $(to capture-pane -p -t o:view | tail -5)"
+  || fail "S: delta's agent directory gone, the shell is not in its @worktree: $(to capture-pane -p -t o:view | grep -v '^$'; ti list-windows -t fl -F '#{window_id} #{@view_shell} mode=#{pane_in_mode} cmd=#{pane_current_command}')"
 pass "S  ⌃\\: the session's shell in its worktree (here; m4 over the link's shell-here), ⌃\\ back and forth, one a session, gone with the session; nothing in a direct attach; ⌘P's ⌃\\ on a session off screen — where its agent is (bin/, else @worktree), ↵ back from its shell, exit closes the shell alone (#3183)"
 
 # --- Q: ⌘Q -----------------------------------------------------------------------------------
