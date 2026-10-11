@@ -1,8 +1,8 @@
 # fleet-linux-0 真人演练单（EPIC #3208 C7 · issue #3214）
 
 arvin 在 fleet-linux-0 上拿到自己的登录、从电脑和手机连进来、开会话、Claude 答话；
-再开一个演练登录、删掉它，确认删干净。**C2（#3210）与 C6（#3213）合并、上线后才开练**；
-在那之前不碰线上这台。
+再开一个演练登录、删掉它，确认删干净。**C2（#3210）、C6（#3213）与 C8（#3281，出口护栏）合并、上线、
+贴出上线证据后才开练**；在那之前不碰线上这台。
 
 约定：
 
@@ -106,6 +106,31 @@ su - 24haowan -c 'ls /home/fleet; sudo -n true'      # 两个都被拒
   的一条，停下报。
 - **记**：扫描的输出。
 
+## ⑤′ 出口护栏（运维，节点上；C8 #3281）
+
+这台碰不到云元数据和集群内网——以 `24haowan` **和** `fleet` 容器里的 root 各跑一遍：
+
+```sh
+curl -m3 http://100.100.100.200/                 # 失败（云元数据）
+curl -m3 -k https://kubernetes.default.svc       # 失败（集群服务网段）
+curl -m3 http://<space 命名空间里一个 pod 的 IP>/   # 失败（pod 网段；IP 由运维在本机 kubectl 查）
+iptables -F                                      # root 下也被拒（容器没有 NET_ADMIN）
+```
+
+这些照通：
+
+```sh
+curl -fsS https://claudefleet.24haowan.com/version
+git ls-remote https://github.com/verkyyi/claude-fleet HEAD
+getent hosts registry.npmjs.org                  # DNS
+```
+
+- **算过**：前四条全失败、后三条全成功；④ 的 Claude 答话本身就证明经凭据代理出去的路还在，
+  ③ 的门照进得去。
+- **出事看**：`kubectl -n fleet-workers get pod fleet-linux-0 -o jsonpath='{.spec.initContainers[*].name}'`
+  有 `egress-guard`、它的日志；元数据通了就是 BREAK-IT `linux-egress-metadata`，**停下报，不往下练**。
+- **记**：两种身份下四条失败、三条成功的输出。
+
 ## ⑥ 派来的活照跑（运维 / 编排会话）
 
 编排会话派一个小活到这台（落在 `fleet` 上，不在 `24haowan`）：
@@ -163,4 +188,4 @@ Username `24haowan`，Key `iPhone`）、连接时信任新主机钥匙、进看�
 | 正式版更新后跟上要多久 | 第 0 步的 `current` 对 stable |
 | 更新一次被打断的会话 | C4 的读数（本演练不量） |
 | 从外面进来的路 | ③ 的两张表 → 2/2 |
-| 已知的出事方式 | BREAK-IT 六行（`linux-uid-reuse` · `linux-removed-login-lingers` · `linux-tenant-cross-read` · `linux-entry-weak-door` · `linux-hub-other-root-op` · `linux-image-pins-old`）全绿 → 0 |
+| 已知的出事方式 | BREAK-IT 七行（`linux-egress-metadata` · `linux-uid-reuse` · `linux-removed-login-lingers` · `linux-tenant-cross-read` · `linux-entry-weak-door` · `linux-hub-other-root-op` · `linux-image-pins-old`）全绿 → 0（第七行是 C8 新加的） |
