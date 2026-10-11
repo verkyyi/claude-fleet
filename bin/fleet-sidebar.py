@@ -2011,7 +2011,7 @@ def is_attn_summary(row):
 def sessions(rows):
     """The window ids alone — what a close lands on (#900), never a heading, nor
     a batch nobody drives (issue #1916: it has no window)."""
-    return [row[0] for row in rows if row[0] != "hdr" and not row[0].startswith((EPIC_STALE, SOLO))]
+    return [row[0] for row in rows if row[0] != "hdr" and not row[0].startswith(ASK_ROWS + (SOLO,))]
 
 
 # A batch NOBODY drives (issue #1916): the producer's grey row for a stale EPIC
@@ -2036,6 +2036,62 @@ def ask_epic(key, row=None):
     name = (row[3] if row is not None and len(row) > 3 else "") or "#" + ref[1]
     return Ask("epic", tr("sidebar_ask_epic_fmt", ref[1]), arg=key, hint=tr("sidebar_epic_reopen_keys"),
                menu=[("reopen", tr("sidebar_epic_reopen"), name, False)])
+
+
+# A result nobody took (issue #3369): a child session's report whose spawner was
+# gone, filed for the person — `orphanrep:<id>[@<machine>]`, no window behind it
+# (tmux-dashboard-rows.sh). A tap highlights it, a second shows the result and asks
+# to mark it read; ↵ marks it, esc keeps it.
+ORPHAN_REP = "orphanrep:"
+# The window-less rows whose second tap asks one question (#1916, #3369).
+ASK_ROWS = (EPIC_STALE, ORPHAN_REP)
+
+
+def orphan_ref(key):
+    """An `orphanrep:` key → (id, machine label — "" for this one), or None."""
+    m = re.fullmatch(r"orphanrep:([0-9a-f]{12})(?:@([A-Za-z0-9_.-]+))?", key or "")
+    return (m.group(1), m.group(2) or "") if m else None
+
+
+def ask_orphan(key, row=None):
+    """The question an orphaned result's second tap asks: the result itself as
+    the one menu line's note, ↵ marks it read."""
+    ref = orphan_ref(key)
+    if ref is None:
+        return None
+    name = (row[3] if row is not None and len(row) > 3 else "") or ref[0]
+    note = (row[7] if row is not None and len(row) > 7 else "") or name
+    return Ask("orphan", tr("sidebar_ask_orphan_fmt", name), arg=key, hint=tr("sidebar_orphan_keys"),
+               menu=[("read", tr("sidebar_orphan_read"), note, False)])
+
+
+def ask_row(key, row=None):
+    """A window-less row's question: a batch nobody drives, or a result nobody took."""
+    return ask_orphan(key, row) if key.startswith(ORPHAN_REP) else ask_epic(key, row)
+
+
+def read_orphan(key):
+    """↵ on 「知道了」: this machine's row → its node cursor
+    (fleet-orphan-reports.py read — the entry stops listing it too); another
+    machine's, or any row in the shell → this computer's own orphanrep_read
+    (`<machine>/<id>`), which the producer skips. False when it could not."""
+    ref = orphan_ref(key)
+    if ref is None:
+        return False
+    rid, node = ref
+    if not node and not SHELL:
+        try:
+            return subprocess.run([sys.executable, str(BIN / "fleet-orphan-reports.py"), "read", rid],
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10).returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            return False
+    try:
+        os.makedirs(status_dir(), exist_ok=True)
+        with open(os.path.join(status_dir(), "orphanrep_read"), "a", encoding="utf-8") as fh:
+            fh.write("%s/%s\n" % (node, rid))
+        return True
+    except OSError:
+        return False
 
 
 def node_host(label):
@@ -2109,8 +2165,8 @@ def tap(hit, highlighted):
         return "select"  # a fold stop only (issues #1170, #2565): no repo to open a session in
     if hit.startswith("hdr:"):
         return "new" if hit == highlighted else "select"
-    if hit.startswith(EPIC_STALE):
-        return "epic" if hit == highlighted else "select"   # no window to jump to (#1916)
+    if hit.startswith(ASK_ROWS):
+        return "epic" if hit == highlighted else "select"   # no window to jump to (#1916, #3369)
     if hit.startswith(SOLO):
         return "select"   # 单独的活 (issue #2675): no window; the caret path folds it
     return "menu" if hit == highlighted else "jump"
@@ -2121,7 +2177,7 @@ def acts(key):
     a heading (`hdr:…`) is none — jump, menu, tap all stay no-ops on it (EPIC #994)
     — and so is a landed row (`landed:…`, issue #1532): its one action is ↵,
     restore, which the landed view handles itself."""
-    return "" if key.startswith(("hdr", "landed:", EPIC_STALE, SOLO)) or key == PLACING_KEY else key
+    return "" if key.startswith(("hdr", "landed:", SOLO) + ASK_ROWS) or key == PLACING_KEY else key
 
 
 def folds(key):
@@ -2131,7 +2187,7 @@ def folds(key):
     empty-state hint), a batch nobody drives (issue #1916) or no row at all:
     nothing to fold."""
     return key if key and key != "hdr" and key not in (PORTAL_KEY, PLACING_KEY) \
-        and not key.startswith(EPIC_STALE) else ""
+        and not key.startswith(ASK_ROWS) else ""
 
 
 # ←/→ fold AT ONCE (issue #1530): the view applies the fold to the rows it has
@@ -2392,7 +2448,7 @@ def batch_view(rows, current, opened, cache=None):
             out.append(row)
             i += 1
             continue
-        if row_depth(row) == 0 and owns_fold(row) and not row[0].startswith(EPIC_STALE):
+        if row_depth(row) == 0 and owns_fold(row) and not row[0].startswith(ASK_ROWS):
             end = block_end(rows, i)
             block = rows[i + 1:end]
             loud = any(r[1] in FOLD_KEEP for r in block)
@@ -2402,7 +2458,7 @@ def batch_view(rows, current, opened, cache=None):
             out.extend(block if fold_open(row) else [r for r in block if r[0] == current])
             i = end
             continue
-        if row_depth(row) == 0 and section[1] and not row[0].startswith(EPIC_STALE) \
+        if row_depth(row) == 0 and section[1] and not row[0].startswith(ASK_ROWS) \
                 and row[0] not in (PORTAL_KEY, PLACING_KEY):
             solo.append(row)
         else:
@@ -2947,7 +3003,7 @@ def ui(screen, session, worker, lock):
         """The answer from the question's line (bin/fleet-ask.py's JSON): run
         what it answers, through the path its kind always had. Cancelled (Esc,
         an empty one-key answer, the pane closed) does nothing."""
-        nonlocal asking, selected, follow_at
+        nonlocal asking, selected, follow_at, refresh_at
         asking = None
         if rc == 2:
             # the line could not open: why, on the bar
@@ -2980,6 +3036,12 @@ def ui(screen, session, worker, lock):
                 if job is not None:
                     jobs.append(job)
                     say(session, tr("sidebar_epic_reopening_fmt", epic_stale_ref(ask.arg)[1]), 3)
+            return
+        if ask.kind == "orphan":
+            # 「知道了」 (issue #3369): ↵ marks the result read; the next frame drops it
+            if answer.get("choice") == "read":
+                read_orphan(ask.arg)
+                refresh_at = 0
             return
         if ask.menu:
             place_step(*place_answer(ask, answer.get("choice", "")), ask.plan)
@@ -3616,9 +3678,9 @@ def ui(screen, session, worker, lock):
                 follow_at, armed = None, None
                 if hit and acts(hit) and view == "live":
                     open_menu(session, hit, env)
-                elif hit and hit.startswith(EPIC_STALE):
-                    selected = hit   # a batch nobody drives (#1916): its one question
-                    ask_now(ask_epic(hit, hit_row))
+                elif hit and hit.startswith(ASK_ROWS):
+                    selected = hit   # a batch nobody drives (#1916), a result nobody took (#3369)
+                    ask_now(ask_row(hit, hit_row))
                 elif hit and hit.startswith("hdr:") and hit not in FOLD_HEADINGS:
                     selected = hit
                     nxt = open_tap(session, "new", hit, env)
@@ -3682,7 +3744,7 @@ def ui(screen, session, worker, lock):
                     # reopen its driver — on the release, as a menu opens.
                     follow_at = None
                     if buttons & curses.BUTTON1_CLICKED:
-                        ask_now(ask_epic(hit, hit_row))
+                        ask_now(ask_row(hit, hit_row))
                     else:
                         armed = hit
                 elif action == "select":
@@ -3703,8 +3765,8 @@ def ui(screen, session, worker, lock):
                         jobs.append(job)
                     view, rows, selected = "live", live_rows, current_row
                     refresh_at = 0
-                elif armed is not None and hit == armed and armed.startswith(EPIC_STALE):
-                    ask_now(ask_epic(armed, hit_row))
+                elif armed is not None and hit == armed and armed.startswith(ASK_ROWS):
+                    ask_now(ask_row(armed, hit_row))
                     refresh_at = 0
                 elif armed is not None and hit == armed:
                     nxt = open_tap(session, "new" if armed.startswith("hdr:") else "menu", armed, env)

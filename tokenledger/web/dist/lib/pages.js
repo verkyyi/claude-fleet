@@ -223,6 +223,37 @@ export function attention(rows, nodes, admin) {
   return out;
 }
 
+/** orphanReports is the results of sessions whose spawner was gone (issue
+ *  #3369): each login's unread `orphan_reports` (fleet-orphan-reports.py's
+ *  cell, the same list on every row of that login), once per machine + id,
+ *  newest first — what Overview lists under "Needs attention". */
+export function orphanReports(fs) {
+  const seen = new Set();
+  const out = [];
+  for (const s of (fs && Array.isArray(fs.sessions)) ? fs.sessions : []) {
+    const list = s.worker && Array.isArray(s.worker.orphan_reports) ? s.worker.orphan_reports : [];
+    for (const o of list) {
+      if (!o || !o.id) continue;
+      const k = `${s.machine_name || ''}/${s.os_user || ''}/${o.id}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push({ ...o, machine: s.machine_name || '' });
+    }
+  }
+  return out.sort((a, b) => (Number(b.ts) || 0) - (Number(a.ts) || 0));
+}
+
+/** orphanAttention turns orphanReports into "Needs attention" items: the
+ *  child, its outcome and PR as the title, the result itself under it. */
+export function orphanAttention(fs) {
+  return orphanReports(fs).map((o) => ({
+    tone: o.state === 'MERGED' ? 'ok' : 'warn',
+    icon: 'alert',
+    title: t('ui.att.orphan', { key: o.child || '—', state: o.state || '', pr: o.pr ? ' (PR #' + o.pr + ')' : '' }),
+    sub: [o.summary, o.machine].filter(Boolean).join(' · '),
+  }));
+}
+
 /** askLine is a waiting row's question as one line — `权限：Bash: git push`,
  *  its words cut to `max` characters when given; '' when it asks nothing. */
 export function askLine(ask, max) {

@@ -10,7 +10,7 @@ import {
   sessionRows, counts, filterRows, running, attention, stateOf,
   activeDevices, clientDevices, whyNotClient, limitKpi, fullFrom, deviceHistory, looksLikeKey, bundleItems, parseImport, quotaTable, quotaState, myMachines, takesOf, usageDays, usageBudget,
 } from '../dist/lib/pages.js';
-import { askOf, askLine } from '../dist/lib/pages.js';
+import { askOf, askLine, orphanReports, orphanAttention } from '../dist/lib/pages.js';
 import { useLocale } from '../dist/lib/i18n.js';
 import { en } from '../dist/lib/i18n/en.js';
 
@@ -139,6 +139,26 @@ test('attention: sessions waiting for everyone, machines only for an admin', () 
   const admin = attention(rows, FS.nodes, true);
   assert.deepEqual(admin.slice(2).map((a) => a.title), ['m1 is lost', 'm2 is in maintenance']);
   try { useLocale('zh-CN'); assert.equal(attention(rows, FS.nodes, true)[2].title, 'm1 失联了'); } finally { useLocale('en'); }
+});
+
+test('orphan reports (#3369): once per machine + id, newest first, under Needs attention', () => {
+  const o1 = { id: 'a1', ts: 100, child: 'issue-41', state: 'MERGED', pr: '12', summary: 'landed the fix' };
+  const o2 = { id: 'b2', ts: 200, child: 'issue-42', state: 'BLOCKED', pr: '', summary: 'needs a token' };
+  const fs = { sessions: [
+    { machine_name: 'm1', os_user: 'u', worker: { key: 'issue-1', orphan_reports: [o1, o2] } },
+    { machine_name: 'm1', os_user: 'u', worker: { key: 'issue-2', orphan_reports: [o1, o2] } },
+    { machine_name: 'm2', os_user: 'u', worker: { key: 'issue-3', orphan_reports: [o1] } },
+    { machine_name: 'm3', os_user: 'u', worker: { key: 'issue-4' } },
+  ] };
+  assert.deepEqual(orphanReports(fs).map((o) => o.machine + '/' + o.id), ['m1/b2', 'm1/a1', 'm2/a1']);
+  const att = orphanAttention(fs);
+  assert.equal(att.length, 3);
+  assert.equal(att[1].title, 'issue-41 MERGED (PR #12) · its spawner is gone, the result is yours');
+  assert.equal(att[1].sub, 'landed the fix · m1');
+  assert.equal(att[1].tone, 'ok');
+  assert.equal(att[0].tone, 'warn');
+  assert.deepEqual(orphanAttention({ sessions: [] }), []);
+  assert.deepEqual(orphanAttention(undefined), []);
 });
 
 test('devices: active ones, and the hand-issue key check', () => {

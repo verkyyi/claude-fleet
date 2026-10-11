@@ -183,6 +183,7 @@ export const en = {
   'ui.att.lostSub': 'No heartbeat · its leases were released',
   'ui.att.maint': '{m} is in maintenance',
   'ui.att.maintSub': 'No new sessions are placed on it',
+  'ui.att.orphan': '{key} {state}{pr} · its spawner is gone, the result is yours',
   'ui.st.working': 'Working',
   'ui.st.waiting': 'Needs answer',
   'ui.st.blocked': 'Blocked',

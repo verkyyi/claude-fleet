@@ -208,6 +208,7 @@ export const zhCN = {
   'ui.att.lostSub': '没有心跳 · 它的租约已释放',
   'ui.att.maint': '{m} 维护中',
   'ui.att.maintSub': '不再往它上面放新会话',
+  'ui.att.orphan': '{key} {state}{pr} · 派它的会话已不在，结果交给你',
   'ui.st.working': '进行中',
   'ui.st.waiting': '在等你回答',
   'ui.st.blocked': '被卡住',

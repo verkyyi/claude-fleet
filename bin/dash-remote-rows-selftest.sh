@@ -61,6 +61,14 @@
 #                   dropped); fleet_epic_stale_list says the same as the rows; the
 #                   shell reads no local mark; leg G: the real adapter hands every
 #                   window the login's list
+#   U. a result nobody took — issue #3369: an unread orphan report (global/
+#                   orphan-reports.ndjson through fleet-orphan-reports.py) is ONE row
+#                   under its repo's heading — `orphanrep:<id>`, `<child> <STATE> PR
+#                   #n`, badged 结果给你, the result as its detail; read ⇒ gone, no
+#                   file ⇒ byte for byte; the shell reads no local one; another
+#                   machine's off orphanrep_<sess> (a local=1 line skipped, one in
+#                   orphanrep_read skipped); the refresher writes that file off the
+#                   workers' `orphan_reports`
 #   D. no network — rendering with the hub on runs no curl/wget/nc/ccquota, and the
 #                   producer names none of them (nor the refresher)
 #   H. hub source — FLEET_SIDEBAR_SOURCE=hub (issue #1480, EPIC #1479 C1): the
@@ -1109,6 +1117,51 @@ p = ["@5", "", "1", "/w/x", "idle", "claude", "a1", "", "", "test-norepo", "", "
 print(h.inventory_row(p + ["test=1"])[1].get("test"), h.inventory_row(p + ["test="])[1].get("test"),
       h.inventory_row(p)[1].get("test"), h.inventory_row(p + ["test=1"])[1].get("reap"))' 2>&1)
 eq "X: inventory column 30 (#2505) — test=1 kept, empty / absent none, the columns before it intact" "True None None done:10m" "$got"
+# --- U. a result nobody took (issue #3369) ---------------------------------------
+OF="$WORK/conf/global/orphan-reports.ndjson"
+rm -f "$EDIR"/* 2>/dev/null
+printf '{"ts": %s, "child_key": "issue-41", "state": "MERGED", "pr": "12", "summary": "落地了 修好侧栏", "repo": "acme/app"}\n' "$((NOW - 60))" > "$OF"
+OID=$(python3 "$BIN/fleet-orphan-reports.py" list | cut -f1)
+t=$(unset CCQUOTA_FLEET; tside)
+eq "U: an unread orphan report — one row, keyed orphanrep:<id>, badged 结果给你, a root" \
+   "orphanrep:$OID| |结果给你|0|" "$(srow "$t" 'issue-41 MERGED PR #12')"
+eq "U: …its state orphanrep, the result as its detail, the issue as its cell" "orphanrep|✉|落地了 修好侧栏|#41" \
+   "$(printf '%s\n' "$t" | LC_ALL=C awk -F"$US" '$1 ~ /^orphanrep:/ { print $2 "|" $3 "|" $8 "|" $10; exit }')"
+has "U: …under the acme/app heading" "$(printf '%s\n' "$t" | LC_ALL=C awk -F"$US" '{ printf "%s;", $4 }')" "app ("
+hasnt "U: the shell reads no local report" "$(unset CCQUOTA_FLEET; FLEET_SHELL=1 tside)" "orphanrep"
+python3 "$BIN/fleet-orphan-reports.py" read "$OID"
+hasnt "U: read — the row is gone" "$(unset CCQUOTA_FLEET; tside)" "orphanrep"
+rm -f "$OF" "$WORK/conf/global/orphan-reports.read"
+eq "U: no report file — byte for byte the frame without one" "$t0" "$(unset CCQUOTA_FLEET; tside)"
+# another machine's, off the hub cache; what this computer read is skipped
+printf '#ts\037%s\n#me\037m5\n#node\037m4\037online\0370\037%s\n' "$NOW" "$NOW" > "$G/remote_$TS"
+printf '%s\n' "$NOW" > "$G/hub_ok"
+printf 'aaaaaaaaaaaa\037m4\037online\037%s\037acme/tool\037issue-77\037BLOCKED\037\037要一个 token\0370\nbbbbbbbbbbbb\037m5\037online\0371\037acme/app\037issue-5\037MERGED\0373\037本机的\0371\ncccccccccccc\037m4\037online\0371\037acme/tool\037issue-78\037MERGED\0379\037已读的\0370\n' "$NOW" > "$G/orphanrep_$TS"
+printf 'm4/cccccccccccc\n' > "$G/orphanrep_read"
+t=$(CCQUOTA_FLEET=1 tside)
+eq "U: a remote report — its machine on the row" "orphanrep:aaaaaaaaaaaa@m4| |结果给你|0|m4" "$(srow "$t" 'issue-77 BLOCKED')"
+hasnt "U: …a local=1 line is left to this machine's own file" "$t" "本机的"
+hasnt "U: …one this computer read is skipped" "$t" "issue-78"
+hasnt "U: …the hub off draws no remote one" "$(unset CCQUOTA_FLEET; tside)" "orphanrep"
+rm -f "$G/orphanrep_$TS" "$G/orphanrep_read" "$G/remote_$TS" "$G/hub_ok"
+# the refresher: a worker's orphan_reports → orphanrep_<sess>, one line per (machine, id)
+python3 - "$WORK/sessions.json" "$WORK/sessions-orphan.json" <<'PY3'
+import json, sys
+src, dst = sys.argv[1:3]
+d = json.load(open(src, encoding="utf-8"))
+orr = [dict(id="aaaaaaaaaaaa", ts=100, repo="acme/app", child="issue-41", state="MERGED", pr="12", summary="landed"),
+       dict(id="nothex", ts=1, repo="", child="x", state="MERGED", pr="", summary="junk")]
+for s in d["sessions"]:
+    if (s.get("worker") or {}).get("key"):
+        s["worker"]["orphan_reports"] = orr
+json.dump(d, open(dst, "w"), ensure_ascii=False)
+PY3
+FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-orphan.json'" PATH="$SHIMPATH" CCQUOTA_FLEET=1 bash "$HUBS" --refresh 2>/dev/null || fail "U: --refresh (orphan_reports) failed"
+got=$(LC_ALL=C awk -F"$US" '{ print $1 "|" $4 "|" $5 "|" $6 "|" $7 "|" $8 "|" $9 }' "$G/orphanrep_$S" | LC_ALL=C sort -u)
+eq "U: the refresher writes orphanrep_<sess> off the workers' orphan_reports (junk dropped)" "aaaaaaaaaaaa|100|acme/app|issue-41|MERGED|12|landed" "$got"
+eq "U: …once per machine" "" "$(LC_ALL=C cut -d"$US" -f1,2 "$G/orphanrep_$S" | LC_ALL=C sort | uniq -d)"
+FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions.json'" PATH="$SHIMPATH" CCQUOTA_FLEET=1 bash "$HUBS" --refresh 2>/dev/null
+eq "U: …and empties it when no worker carries one" "" "$(cat "$G/orphanrep_$S" 2>/dev/null)"
 rm -rf "$WORK/conf/fleets/$TS" "$EDIR"
 cp "$WORK/wlist.t" "$WLIST_FILE"
 

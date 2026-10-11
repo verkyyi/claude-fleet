@@ -222,6 +222,51 @@ try:
     assert sidebar.reopen_epic('@1', {}) is None
 finally:
     sidebar.start_job, sidebar.SHELL = real_start, real_shell
+# A result nobody took (issue #3369): `orphanrep:<id>[@<machine>]`, no window — a
+# tap highlights it, a second shows the result (the one menu line's note) and asks
+# to mark it read; ↵ marks this machine's row on the node's cursor
+# (fleet-orphan-reports.py read), another machine's / the shell's in this
+# computer's orphanrep_read.
+ok_, okr = 'orphanrep:0123456789ab', 'orphanrep:0123456789ab@m4'
+assert sidebar.orphan_ref(ok_) == ('0123456789ab', '') and sidebar.orphan_ref(okr) == ('0123456789ab', 'm4')
+assert sidebar.orphan_ref('orphanrep:XYZ') is None and sidebar.orphan_ref('@1') is None
+assert sidebar.tap(ok_, '@1') == 'select' and sidebar.tap(ok_, ok_) == 'epic', 'two taps: select, then ask'
+assert sidebar.acts(ok_) == '' and sidebar.folds(ok_) == '' and ok_ in sidebar.selectable([[ok_, 'orphanrep']])
+assert sidebar.sessions([['@1', 'working'], [ok_, 'orphanrep']]) == ['@1'], 'no window: never a place a close lands'
+orow = sidebar.row_fields('\x1f'.join([ok_, 'orphanrep', '✉', 'issue-41 MERGED PR #12', ' ', '结果给你', '0', '落地了', '', '#41']))
+oa = sidebar.ask_row(ok_, orow)
+assert oa.kind == 'orphan' and 'issue-41 MERGED PR #12' in oa.prompt and oa.menu[0][0] == 'read' \
+    and oa.menu[0][2] == '落地了' and not oa.menu[0][3], vars(oa)
+assert sidebar.ask_row(ek, erow).kind == 'epic', 'a stale batch still asks its own question'
+assert sidebar.ask_orphan('@1') is None and sidebar.read_orphan('@1') is False
+real_shell = sidebar.SHELL
+real_sd = os.environ.get('FLEET_STATUS_G')
+sd = tempfile.mkdtemp()
+os.environ['FLEET_STATUS_G'] = sd
+try:
+    sidebar.SHELL = False
+    assert sidebar.read_orphan(okr) is True
+    sidebar.SHELL = True
+    assert sidebar.read_orphan(ok_) is True
+    assert open(os.path.join(sd, 'orphanrep_read')).read() == 'm4/0123456789ab\n/0123456789ab\n'
+    sidebar.SHELL = False
+    cd = tempfile.mkdtemp()
+    real_cd = os.environ.get('FLEET_CONF_DIR')
+    os.environ['FLEET_CONF_DIR'] = cd
+    try:
+        assert sidebar.read_orphan(ok_) is True
+        assert open(os.path.join(cd, 'global', 'orphan-reports.read')).read() == '0123456789ab\n'
+    finally:
+        if real_cd is None:
+            os.environ.pop('FLEET_CONF_DIR', None)
+        else:
+            os.environ['FLEET_CONF_DIR'] = real_cd
+finally:
+    sidebar.SHELL = real_shell
+    if real_sd is None:
+        os.environ.pop('FLEET_STATUS_G', None)
+    else:
+        os.environ['FLEET_STATUS_G'] = real_sd
 # The question's line editor (issue #1097 — the list's input line's until #1950,
 # bin/fleet-ask.py now): a cursor, readline's moves and kills.
 aspec = importlib.util.spec_from_file_location('fleet_ask', real_bin / 'fleet-ask.py')

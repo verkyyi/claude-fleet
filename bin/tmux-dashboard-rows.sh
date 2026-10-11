@@ -1654,6 +1654,46 @@ if [ "$SIDEBAR" = 1 ]; then
   unset _eseen _erows _ref _enode _eav _eage _et _eloc _er _en _es _k _ed
 fi
 
+# The results nobody took (issue #3369): a child session's report whose spawner
+# was gone, filed for the person (global/orphan-reports.ndjson, fleet-report-parent.sh)
+# and not read yet. THIS machine's off bin/fleet-orphan-reports.py (one fork, only
+# when the file exists — the shell reads none here), each other machine's off the
+# hub cache's orphanrep_<sess> (`<id> US <machine> US <online|lost> US <ts> US <repo>
+# US <child> US <state> US <pr> US <summary> US <local>`), minus what this computer
+# already read (orphanrep_read, `<machine>/<id>` a line — the sidebar writes it).
+# Each becomes ONE row under its repo's heading, `<child> <STATE> PR #n` badged
+# 结果给你, keyed `orphanrep:<id>[@<machine>]`; a second tap shows the result and
+# asks to mark it read (fleet-sidebar.py). None ⇒ not one line more.
+if [ "$SIDEBAR" = 1 ]; then
+  _orows=''
+  if [ "${FLEET_SHELL:-0}" != 1 ] && [ -s "$FLEET_CONF_DIR/global/orphan-reports.ndjson" ]; then
+    while IFS=$'\t' read -r _oid _ots _orepo _ochild _ost _opr _osum; do
+      [ -n "$_oid" ] || continue
+      _orows+="$_oid$US$US$_orepo$US$_ochild$US$_ost$US$_opr$US$_osum"$'\n'
+    done < <(python3 "$BIN/fleet-orphan-reports.py" list 2>/dev/null)
+  fi
+  if [ -n "${FLEET_SESSION:-}" ] && [ -s "$G/orphanrep_$FLEET_SESSION" ] && fleet_hub_on "$FLEET_SESSION"; then
+    _oread=$'\n'; [ -s "$G/orphanrep_read" ] && _oread+=$(cat "$G/orphanrep_read" 2>/dev/null)$'\n'
+    while IFS=$US read -r _oid _onode _oav _ots _orepo _ochild _ost _opr _osum _oloc; do
+      [ -n "$_oid" ] && [ -n "$_onode" ] || continue
+      [ "$_oloc" = 1 ] && continue
+      case "$_oread" in *$'\n'"$_onode/$_oid"$'\n'*) continue ;; esac
+      [ "$_oav" = lost ] && _onode="$_onode!"
+      _orows+="$_oid$US$_onode$US$_orepo$US$_ochild$US$_ost$US$_opr$US$_osum"$'\n'
+    done < "$G/orphanrep_$FLEET_SESSION"
+  fi
+  if [ -n "$_orows" ]; then
+    [ -n "${OR_BADGE-}" ] || OR_BADGE=$(fleet_ui_t sidebar_orphan_rep)
+    while IFS=$US read -r _oid _onode _orepo _ochild _ost _opr _osum; do
+      [ -n "$_oid" ] || continue
+      if [ -n "$_orepo" ]; then rgrp_v "$_orepo" ''; else rgrp_v '' 1; fi
+      _oiss=${_ochild##*issue-}; case "$_oiss" in ''|*[!0-9]*) _oiss='' ;; *) _oiss="#$_oiss" ;; esac
+      buf+="$rgrp	1	0	orphanrep:$_oid${_onode:+@${_onode%!}}${US}orphanrep${US}✉${US}$_ochild $_ost${_opr:+ PR #$_opr}${US} ${US}$OR_BADGE${US}0${US}$_osum${US}$_onode${US}$_oiss"$'\n'
+    done <<< "$_orows"
+  fi
+  unset _orows _oread _oid _onode _oav _ots _orepo _ochild _ost _opr _osum _oloc _oiss
+fi
+
 # the 置顶 group's frame (issue #1170): a `置顶 (n)` heading above the pinned rows
 # and ONE thin rule below them, the pin tier's only mark — no row carries one.
 # Both exist only while a row is pinned, so a fleet with no pin renders byte for
