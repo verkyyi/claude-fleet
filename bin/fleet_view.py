@@ -111,6 +111,15 @@ this machine (`do new`: the repo or none, the words its first turn). Below it �
 fleet.conf `[common]`) keeps `new quit landed` (the 刚落地 group first) and
 `none` (no ⚡, no ⏻); panel_rows() builds it, `view-panel` prints it.
 
+LANGUAGE (issue #3329, EPIC #3178 D7, L1–L3): the 「◐ 语言 / Language」 row sits
+under ⚡, above ⏻, both scripts on it so a person who cannot read the one in use
+still knows it; typing 语言 · lang · english · 中文 finds it (and lights it when no
+session is hit). ↵ flips between 中文 and English, Tab adds 跟系统走 (the choice cleared) —
+`fleet-config.py lang`, kept on the hub under the person and re-read here at
+once; the popup redraws in it and says so on its footer for 3 s. Which language
+is in use is fleet-ui-lang.sh's (the person's choice > the 看台's FLEET_VIEW_LANG >
+Chinese), never decided here.
+
 STALE (issue #3184, EPIC #3178 C6): 失联 is judged off ONE time, global/hub_ok —
 the file the producer's `m4!` reads. A lost row is grey end to end and tagged
 「? 失联 N 分钟」; hub_ok older than FLEET_HUB_SESSIONS_STALE (60 s) puts a red
@@ -163,11 +172,13 @@ from pathlib import Path
 US = "\x1f"
 VIEW_RE = re.compile(r"^[A-Za-z0-9-]{1,64}$")
 # The 看台's actions off dash-keymap.sh --panel switch: the verb each one runs.
-# ⌘N ⌘T ⌘Q are C7's (issue #3004); zoom / fold stay caught by user-keys, bound to
-# nothing (a 看台 has one pane a window, and no list to fold).
+# ⌘N ⌘Q are C7's (issue #3004), bound only when the person names them (#3185);
+# zoom / fold stay caught by user-keys, bound to nothing (a 看台 has one pane a
+# window, and no list to fold). ⌘T's 派一件事 popup has no entry since issue #3328:
+# `dispatch` is the panel lit on its ⚡ row — the same send, one entry.
 VIEW_ACTIONS = {"next": "do next", "prev": "do prev", "back": "do back", "fwd": "do fwd",
                 "quickopen": "popup", "switcher": "popup",
-                "new": "do new", "quit": "do quit", "dispatch": "dispatch"}
+                "new": "do new", "quit": "do quit", "dispatch": "forward"}
 PFX_KEY = "C-]"
 NARROW = 100      # a client narrower than this (a phone) gets the switcher full-screen (#3006)
 # ⌃\ (issue #3004, #2744's meaning): no ⌘ chord, so no row of the switch table —
@@ -1653,8 +1664,12 @@ def key_lines(me, extra=None):
     size = lambda pc: "#{?#{e|<:#{client_width},%d},100%%,%d%%}" % (NARROW, pc)
     popup = str(Path(me).parent / "dash-popup.sh")
 
-    def cmd_of(action):
+    def cmd_of(action, forward=""):
         verb = "do shell" if action == "shell" else VIEW_ACTIONS.get(action)
+        if verb == "forward":
+            forward = forward or action
+        if forward:
+            verb = "popup"
         if verb == "popup":
             # through the one popup door (dash-popup.sh, issue #3044), from a
             # run-shell, which expands the formats — the old client's road too.
@@ -1662,14 +1677,9 @@ def key_lines(me, extra=None):
             # --freeze: the session behind holds still while the list is up — tmux
             # 3.7c bleeds a pane's wrapped CJK through any popup (issue #3058)
             return ("run-shell -b \"bash '%s' --client '#{client_name}' --no-inline --freeze -w %s -h %s --title view_title "
-                    "-- python3 '%s' --view '#{session_name}' --client '#{client_name}' "  # view-ok: the key's own session IS the 看台
-                    ">/dev/null 2>&1 || :\"") % (popup, size(90), size(80), me)
-        if verb == "dispatch":
-            # ⌘T (C7): the old client's 派一件事 popup, run HERE with --view — the
-            # repos the hub names, the agent picked per this one send (#1834)
-            return ("run-shell -b \"bash '%s' --client '#{client_name}' --no-inline --freeze -w %s -h 12 --title view_dispatch_title "
-                    "-- python3 '%s' --view '#{session_name}' --client '#{client_name}' "  # view-ok: the 看台
-                    ">/dev/null 2>&1 || :\"") % (popup, size(80), str(Path(me).parent / "fleet-quick-dispatch.py"))
+                    "-- python3 '%s' --view '#{session_name}' --client '#{client_name}'%s "  # view-ok: the key's own session IS the 看台
+                    ">/dev/null 2>&1 || :\"") % (popup, size(90), size(80), me,
+                                                  " --forward %s" % forward if forward else "")
         if verb:
             return ("run-shell -b \"python3 '%s' %s --view '#{session_name}' --client '#{client_name}' "  # view-ok: the 看台
                     ">/dev/null 2>&1 || :\"") % (me, verb)
@@ -1677,8 +1687,8 @@ def key_lines(me, extra=None):
 
     binds = {}      # (table, key) → command; a later layer wins a key it names again
 
-    def bind(table, key, action):
-        c = cmd_of(action)
+    def bind(table, key, action, forward=""):
+        c = cmd_of(action, forward)
         if c and key:
             binds[(table, key)] = c
 
@@ -1696,7 +1706,17 @@ def key_lines(me, extra=None):
             bind("fleet-view", "User%s" % codes[action], action)
     for chord in fleet_keys.phone():                          # ⌃空格 · F12 · ⌃] p
         bind_chord(chord, "quickopen")
-    for action, chord in fleet_keys.pairs(key_extra() if extra is None else extra, known):
+    carried = key_extra() if extra is None else extra
+    # the keys issue #3328 took away, one version long: the panel + a one-time hint,
+    # unless the person bound that chord (an extra below wins it). compat-1v: 下一批删
+    for action, chord, _, code in fleet_keys.forwards(carried):
+        if fleet_keys.is_cmd(chord):
+            bind("fleet-view", "User%s" % code if code else "", "quickopen", action)
+        else:
+            tk = fleet_keys.tmux_key(chord)
+            if tk and tk[0] == "fleet-view":
+                bind(tk[0], tk[1], "quickopen", action)
+    for action, chord in fleet_keys.pairs(carried, known):
         bind_chord(chord, action)
     for action, chord in fleet_keys.pairs(fleet_keys.phone_extra(), known):
         bind_chord(chord, action)
@@ -1939,6 +1959,10 @@ ACTIONS = [
      "local": lambda r, a, f: "new", "far": None, "ask": None},
     {"id": "quit", "label": lambda r: say("view_cmd_quit"), "when": lambda r: True, "rowless": True,
      "local": lambda r, a, f: "quit", "far": None, "ask": None},
+    # the interface language (issue #3329): ↵ flips it, Tab offers 跟系统走 too
+    {"id": "lang", "label": lambda r: say("view_lang_row"), "when": lambda r: True, "rowless": True,
+     "local": lambda r, a, f: "lang", "far": None, "ask": None,
+     "choices": lambda r, f: [("zh", "中文"), ("en", "English"), ("auto", say("view_lang_auto"))]},
 ]
 ACTION = {a["id"]: a for a in ACTIONS}
 # The sidebar menu's letters (fleet-ui-lang.sh menu_keys) → the action here; the
@@ -1947,7 +1971,7 @@ ACTION = {a["id"]: a for a in ACTIONS}
 SIDEBAR_ACTIONS = {"rename": "rename", "pin": "pin", "pr": "pr", "answer": "answer", "sub": "sub", "wake": "wake",
                    "awake": "awake", "reappol": "reappol", "agent": "agent", "reap": "reap", "open": "enter",
                    "message": "message", "stop": "stop", "resume": "resume", "restore": "resume"}
-ROWLESS = {"new": "C2", "newto": "C2", "repo": "C2", "clients": "C7", "quit": "C7"}
+ROWLESS = {"new": "C2", "newto": "C2", "repo": "C2", "clients": "C7", "quit": "C7", "lang": "#3329"}
 
 
 def act_env(fleet):
@@ -2008,6 +2032,9 @@ def act_run(qo, vid, fleet, a, r, ans, client="", wait=True):
     if argv == "quit":
         rc = quit_view(vid, client)
         return rc, "", rc == 0
+    if argv == "lang":
+        rc, said = lang_set(fleet, ans)
+        return rc, said, False
     if argv == "restore":
         # a gone row (issue #3286): the sidebar's ⌃t restore, the same script. A
         # `landed:issue:` row may have to ask first (a CLOSED-unmerged PR, #543):
@@ -2120,6 +2147,80 @@ def cli_act(qo, vid, target, aid, text=None, yes=False, client=""):
     if said:
         print(said)
     return rc
+
+
+# --- the interface language (issue #3329, EPIC #3178 D7) ------------------------------
+
+def ui_lang():
+    """zh | en — the language fleet-ui-lang.sh draws in right now."""
+    try:
+        out = subprocess.run(["sh", str(Path(__file__).absolute().parent / "fleet-ui-lang.sh"), "lang"],
+                             capture_output=True, text=True, timeout=5).stdout.strip()
+    except (OSError, subprocess.TimeoutExpired):
+        out = ""
+    return out if out in ("zh", "en") else "zh"
+
+
+_LANG_NONE = []
+
+
+def lang_said_none():
+    """The 看台's client brought no language (D6/D9: the door kept none) and the
+    person never chose one — what the row's footer explains how to fix. Asked
+    once per popup (lang_set asks again)."""
+    if _LANG_NONE:
+        return _LANG_NONE[0]
+    none = False
+    if os.environ.get("FLEET_VIEW_LANG", "-") in ("", "C", "POSIX"):
+        try:
+            none = subprocess.run(["sh", "-c", '. "$1"; fleet_ui_person_lang >/dev/null', "-",
+                                   str(Path(__file__).absolute().parent / "fleet-ui-lang.sh")],
+                                  capture_output=True, timeout=5).returncode != 0
+        except (OSError, subprocess.TimeoutExpired):
+            none = False
+    _LANG_NONE.append(none)
+    return none
+
+
+def lang_set(fleet, want=""):
+    """(rc, line): `want` zh · en · auto (跟系统走), "" flips the one in use. Kept
+    on the hub under the person — fleet-config.py lang, which re-reads this
+    computer's copy at once — and every word after it is drawn in the new one."""
+    want = want or ("en" if ui_lang() == "zh" else "zh")
+    try:
+        p = subprocess.run([sys.executable, str(Path(__file__).absolute().parent / "fleet-config.py"), "lang", want],
+                           capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=60)
+        rc, why = p.returncode, ((p.stderr.strip() or p.stdout.strip()).splitlines() or [""])[-1]
+    except (OSError, subprocess.TimeoutExpired) as error:
+        rc, why = 1, str(error)
+    if rc != 0:
+        return 1, say("view_lang_failed_fmt", one_line(why.replace("fleet config · ", ""), 120))
+    _WORDS.clear()
+    del _LANG_NONE[:]
+    return 0, say("view_lang_auto_saved" if want == "auto" else "view_lang_saved")
+
+
+def view_lang_env(vid):
+    """The 看台's client language into this process's environment when the popup
+    was not handed it (fleet-remote-view.sh puts FLEET_VIEW_LANG in the 看台
+    session's environment; `@view_lang_set` says the door recorded one)."""
+    if "FLEET_VIEW_LANG" in os.environ:
+        return
+    rc, out = tm("display-message", "-p", "-t", "=%s@view-%s:" % (view_fleet(vid), vid),
+                 "#{@view_lang_set}|#{@view_lang}")
+    said, _, lang = (out or "").partition("|")
+    if rc == 0 and said == "1":
+        os.environ["FLEET_VIEW_LANG"] = lang
+
+
+def lang_row(query):
+    """「◐ 语言 / Language」 (issue #3329) — when there are no words, or they name it."""
+    text = "◐ " + say("view_lang_row")
+    q = query.strip().lower()
+    if q and not all(w in text.lower() for w in q.split()):
+        return None
+    return {"kind": "cmd", "cmd": "lang", "act": "lang", "row": {}, "text": text,
+            "foot": say("view_lang_nolang_fmt", here_label({})) if lang_said_none() else say("view_lang_foot")}
 
 
 # --- the panel's ⚡ and ⏻ rows (issue #3180, EPIC #3178 C2; issue #3327 ④) ---------------
@@ -2267,6 +2368,9 @@ def panel_rows(items, query, opened, cmds=None, bolt=None, busy=None):
             cells, note = bolt_cells(st, query)
             out.append({"kind": "grid", "cells": cells, "note": note,
                         "text": "  ·  ".join(t for t, _ in cells) + (("  " + note) if note else "")})
+    lr = lang_row(query) if words else None
+    if lr:
+        out.append(lr)      # under ⚡, above ⏻ (issue #3329)
     if "quit" in words:
         out.append({"kind": "cmd", "cmd": "quit", "act": "quit", "row": {}, "text": say("view_cmd_quit")})
     return out
@@ -2327,7 +2431,75 @@ class Line:
 
 # --- the popup -------------------------------------------------------------------------
 
-def popup(screen, qo, vid, client):
+# --- the keys issue #3328 took away (EPIC #3178 ⑤) — compat-1v: 下一批删 ----------------------
+# One version long, ⌘↓ ⌘↑ ⌘[ ⌘] ⌘N ⌘T ⌘Q ⌘K ⌃\ open the panel instead (fleet_keys.FORWARD,
+# key_lines): ⌘N ⌘T lit on ⚡, and each says 「⌘T 已并进 ⌘P」 the first time — one
+# mark per key per login. Every press is a line of view-switch.ndjson, how=old:<action>,
+# which the doctor's `oldkeys` row counts.
+FORWARD_BOLT = ("new", "dispatch")
+
+
+def forward_marks():
+    return conf_dir() / "keys-forwarded.json"
+
+
+def forward_note(vid, action):
+    """Log the press; the hint the first time this login pressed that key, else ''."""
+    glyph = next((f[2] for f in _keys().FORWARD if f[0] == action), "")
+    log_switch({"ts": round(time.time(), 3), "view": vid, "from": "", "to": "", "machine": "", "login": getpass.getuser(),
+                "method": "forward", "ms": 0, "how": "old:" + action, "key": glyph})
+    if not glyph:
+        return ""
+    path = forward_marks()
+    try:
+        seen = json.loads(path.read_text())
+    except (OSError, ValueError):
+        seen = {}
+    if not isinstance(seen, dict) or action in seen:
+        return ""
+    seen[action] = round(time.time())
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp%d" % os.getpid())
+        tmp.write_text(json.dumps(seen) + "\n")
+        os.replace(str(tmp), str(path))
+    except OSError:
+        return ""
+    return say("view_forward_fmt", glyph)
+
+
+def keys_notice(vid, client=""):
+    """The one message after the update that took the keys away (issue #3328): on
+    this 看台's client, once per login — 翻会话改用 ⌘P, the biggest change of habit."""
+    path = conf_dir() / "keys-notice-3328"
+    if path.exists():
+        return 0
+    fleet = view_fleet(vid)
+    if not fleet:
+        return 2
+    if client:
+        clients = [client]
+    else:
+        _, out = tm("list-clients", "-t", "=%s@view-%s" % (fleet, vid), "-F", "#{client_name}")
+        clients = [c for c in out.splitlines() if c]
+    if not clients:
+        return 1
+    for c in clients:
+        tm("display-message", "-d", "8000", "-c", c, say("view_keys_moved"))
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("%d\n" % time.time())
+    except OSError:
+        pass
+    return 0
+
+
+def _keys():
+    import fleet_keys
+    return fleet_keys
+
+
+def popup(screen, qo, vid, client, forward=""):
     # raw: ⌃\ is a key here (a shell beside the lit row), never SIGQUIT
     curses.raw()
     curses.curs_set(0)
@@ -2368,8 +2540,10 @@ def popup(screen, qo, vid, client):
     if ":" in vsh:
         cur = vsh.split(":", 1)[1]
     fleet = view_fleet(vid)
+    view_lang_env(vid)
     cmds = panel_commands()
     query, opened, msg, show_legend = "", set(), "", False
+    msg_until = 0      # a line that goes by itself (the language row's, 3 s — L3)
     # the ⚡ row (issue #3327): its cells, read off the screen's thread (⌘T's rules);
     # `busy` while a ↵ runs, its outcome landing in `job`
     bolt, busy, job = bolt_new(), None, []
@@ -2392,6 +2566,11 @@ def popup(screen, qo, vid, client):
     at = next((i for i, e in enumerate(shown) if e.get("target") == cur and e["kind"] == "sess"),
               next((i for i, e in enumerate(shown) if e["kind"] == "sess"),
                    next((i for i, e in enumerate(shown) if pickable(e)), 0)))
+    # a key issue #3328 took away (compat-1v): ⌘N ⌘T open on ⚡, every one says so once
+    if forward:
+        if forward in FORWARD_BOLT and bolt_at() >= 0:
+            at = bolt_at()
+        msg = forward_note(vid, forward)
     top = 0
     heal = qo.Heal()
     fresh = Refresh(vid, first=0 if bg else None)
@@ -2409,7 +2588,7 @@ def popup(screen, qo, vid, client):
     def run(a, r, ans):
         """Do it, say how it went, read the list again (a pin, a rename, a reap
         shows at once); back on the list."""
-        nonlocal items, shown, msg, mode, pend, line
+        nonlocal items, shown, msg, mode, pend, line, msg_until
         if r.get("far") and not r.get("lost") and a["id"] not in ("enter", "shell"):
             def far_run():
                 landed.append(act_run(qo, vid, fleet, a, r, ans, client)[1])
@@ -2418,6 +2597,7 @@ def popup(screen, qo, vid, client):
             msg = say("view_act_sent_fmt", a["label"](r).rstrip("…"))
             return False
         rc, said, went = act_run(qo, vid, fleet, a, r, ans, client, wait=False)
+        msg_until = time.time() + 3 if a["id"] == "lang" and rc == 0 else 0
         back()
         if rc == 4 and r.get("gone") and not ans:
             # a restore that asks first (#543): its question on the bottom line,
@@ -2460,6 +2640,8 @@ def popup(screen, qo, vid, client):
         return False
 
     while True:
+        if msg_until and time.time() > msg_until:
+            msg, msg_until = "", 0
         if landed:
             msg = landed.pop(0)
             items = entries(vid)
@@ -2599,7 +2781,8 @@ def popup(screen, qo, vid, client):
                 else keys if busy or bolt["focus"] else say("view_keys_short")
         screen.addnstr(height - 1, 0, qo.clip(keys, width - 1), width - 1, attr(("dim",)))
         screen.refresh()
-        screen.timeout(min(heal.timeout(False) or 1000, fresh.wait_ms(), 200 if busy or not bolt["ready"] else 1000))
+        screen.timeout(min(heal.timeout(False) or 1000, fresh.wait_ms(), 200 if busy or not bolt["ready"] else 1000,
+                           max(50, int((msg_until - time.time()) * 1000)) if msg_until else 1000))
         try:
             ch = screen.get_wch()
         except curses.error:
@@ -2633,6 +2816,12 @@ def popup(screen, qo, vid, client):
             shown = listing()
             continue
         if ch == "\t":
+            if lit_e.get("cmd") == "lang":
+                # the language row's options (issue #3329): 中文 · English · 跟系统走
+                a = ACTION["lang"]
+                mitems = [(v, label, a) for v, label in a["choices"]({}, fleet)]
+                mode, mat, mtitle, pend = "choice", 0, a["label"]({}), (a, {})
+                continue
             if 0 <= at < len(shown) and shown[at]["kind"] == "sess":
                 mrow = act_row(fleet, shown[at])
                 mitems = [(a["id"], label, a) for a, label in menu_of(mrow)]
@@ -2658,6 +2847,9 @@ def popup(screen, qo, vid, client):
                     busy, bolt["focus"] = {"title": title, "where": where}, ""
                     bolt_run(argv, job)
                     shown = listing()
+                    continue
+                if e["act"] == "lang":
+                    run(ACTION["lang"], {}, "")     # flips it; the list redraws in it
                     continue
                 rc, msg, went = act_run(qo, vid, fleet, ACTION[e["act"]], e["row"], "", client)
                 if went:
@@ -2703,10 +2895,12 @@ def popup(screen, qo, vid, client):
         show_legend = False
         lit = shown[at].get("target") if 0 <= at < len(shown) else None
         shown = listing()
-        # typed words: the best session hit is lit; none hit — ⚡ is
+        # typed words: the best session hit is lit; none hit — the language row
+        # when they name it (语言 · lang …, issue #3329), else ⚡
         at = next((i for i, e in enumerate(shown) if e["kind"] == "sess"),
-                  next((i for i, e in enumerate(shown) if e.get("cmd") == "new"),
-                       next((i for i, e in enumerate(shown) if pickable(e)), 0)))
+                  next((i for i, e in enumerate(shown) if query and e.get("cmd") == "lang"),
+                       next((i for i, e in enumerate(shown) if e.get("cmd") == "new"),
+                            next((i for i, e in enumerate(shown) if pickable(e)), 0))))
         if not query:
             at = next((i for i, e in enumerate(shown) if e["kind"] == "sess" and e.get("target") in (lit, cur)), at)
         top = 0
@@ -2776,5 +2970,14 @@ def main(argv, qo):
                              gl.get(e.get("sym") or "", "") if e["kind"] == "sess" else "",
                              e.get("group") or "", " ".join(e.get("tags") or ()))))
         return 0
+    if argv[:1] == ["view-forward"] and len(argv) >= 2:
+        # what a forwarded key says when the panel opens (the selftest's view, #3328)
+        print(forward_note(vid, argv[1]))
+        return 0
+    if argv[:1] == ["view-notice"]:
+        if opt(argv, "--socket"):
+            _SOCK[0] = opt(argv, "--socket")
+            os.environ.pop("TMUX", None)
+        return keys_notice(vid, client)
     os.environ.setdefault("ESCDELAY", "25")
-    return curses.wrapper(popup, qo, vid, client)
+    return curses.wrapper(popup, qo, vid, client, opt(argv, "--forward"))

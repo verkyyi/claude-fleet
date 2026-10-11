@@ -12,8 +12,9 @@
 #      writing area's own road, nothing else
 #   E. fleet-compose.py --send says the issue a `new` filed (`filed: #N` on
 #      stderr) so the list can say 「已建 #N 并开工」; stdout stays the place's line
-#   F. the key: ⌘T / prefix t open it (conf/tmux-shell.conf, dash-keymap.sh), the
-#      bar says 「⌘T 派单」, ⌘P's first line is 「⚡ 派一件事…」 (fleet-quickopen.py)
+#   F. no key of its own since issue #3328: ⌘T / prefix t open ⌘P instead (one
+#      version, saying so — conf/tmux-shell.conf), the bar has no ⌘T cell, and
+#      ⌘P's first line 「⚡ 派一件事…」 (fleet-quickopen.py) is the way in
 #   G. a 看台's ⌘T (issue #3097), as its key runs it — under run-shell: $TMUX set,
 #      no $TMUX_PANE — for BOTH agents: the send goes out with that agent
 #      (fleet-compose.py --send → fleet-client-place.sh, faked), fleet-compose
@@ -153,10 +154,10 @@ eq 'G: …and the 看台 stays where it is' '' "$(cat "$WORK/go.log")"
 # --- F. the key, the bar, ⌘P ---------------------------------------------------------
 CONF="$ROOT/conf/tmux-shell.conf"
 eq 'F: the switch table row' 'dispatch ⌘T 0x74-0x100000 932 t' "$(bash "$BIN/dash-keymap.sh" --panel switch list | awk '$1 == "dispatch"')"
-has 'F: ⌘T opens fleet-quick-dispatch.py through the popup door' "$(grep -E '^bind -n User932 ' "$CONF")" 'dash-popup.sh'
-has 'F: …the dispatch popup' "$(grep -E '^bind -n User932 ' "$CONF")" 'fleet-quick-dispatch.py'
+has 'F: ⌘T opens ⌘P through the popup door (#3328)' "$(grep -E '^bind -n User932 ' "$CONF")" 'fleet-quickopen.py --session'
+case "$(grep -E '^bind -n User932 |^bind t ' "$CONF")" in *fleet-quick-dispatch*) fail "F: ⌘T / prefix t still open the 派一件事 popup" ;; esac
 eq 'F: prefix t is the same body' "$(grep -E '^bind -n User932 ' "$CONF" | sed 's/^bind -n User932 //')" "$(grep -E '^bind t ' "$CONF" | sed 's/^bind t //')"
-has 'F: the bar says ⌘T 派单' "$(grep -F '@fleet_hint_session ' "$CONF")" '⌘T#{E:@fleet_hint_k0} 派单'
+case "$(grep -F '@fleet_hint_session ' "$CONF")" in *派单*) fail "F: the bar still says ⌘T 派单" ;; esac
 first=$(python3 - "$BIN" <<'PY'
 import importlib.util, os, sys
 spec = importlib.util.spec_from_file_location("q", os.path.join(sys.argv[1], "fleet-quickopen.py"))

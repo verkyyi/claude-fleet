@@ -105,7 +105,8 @@ func (p *DNSPod) call(ctx context.Context, action string, form url.Values, out a
 	return st.Status, nil
 }
 
-// List is every marked A / AAAA record under the subdomain.
+// List is every marked A / AAAA record under the subdomain, and the marked
+// TXT on *.<subdomain> (the unclaimed-name guard, claude-fleet#3337).
 func (p *DNSPod) List(ctx context.Context) ([]Record, error) {
 	out := []Record{}
 	for off := 0; ; off += dnspodPage {
@@ -124,8 +125,12 @@ func (p *DNSPod) List(ctx context.Context) ([]Record, error) {
 			return nil, err
 		}
 		for _, r := range ans.Records {
-			if r.Remark != Marker || (r.Type != "A" && r.Type != "AAAA") || NameOf(r.Name, p.Subdomain) == "" {
+			guard := r.Type == "TXT" && strings.EqualFold(r.Name, "*."+p.Subdomain)
+			if r.Remark != Marker || (r.Type != "A" && r.Type != "AAAA" && !guard) || NameOf(r.Name, p.Subdomain) == "" {
 				continue
+			}
+			if guard {
+				r.Value = strings.Trim(r.Value, `"`) // as written, whichever way DNSPod quotes it
 			}
 			ttl, _ := strconv.Atoi(r.TTL)
 			out = append(out, Record{ID: r.ID, Name: strings.ToLower(r.Name), Type: r.Type, Value: r.Value, TTL: ttl})

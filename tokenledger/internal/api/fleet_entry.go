@@ -40,7 +40,11 @@ import (
 //	PUT    /v1/fleet/entry/home            {machine, login?}  only a login with a live fleet
 //
 // The operator names the person (?principal=) and may read, revoke and move a
-// home — never add a key or pick a name for someone.
+// home — never add a key or pick a name for someone. The one name the hub
+// gives a person itself is the suggested one (entrySuggestedName: their
+// GitHub login), claimed the moment they have a home and no name
+// (entryEnsureName, claude-fleet#3337 — the person's ruling); they rename it
+// on the keys page like any other.
 //
 // A machine's doors (its node program's machine token, claude-fleet#2333):
 //
@@ -345,6 +349,9 @@ func (s *Server) entryEnsureHome(person string, choices []EntryHomeChoice, now t
 	}
 	if v > 0 {
 		s.entryAudit(store.EntryAudit{At: now, Kind: "home_set", Person: person, Login: h.Login, Machine: h.Machine, Result: "auto", Actor: "hub"})
+		if nv := s.entryEnsureName(person, now, false); nv > v {
+			v = nv // one push carries both
+		}
 		s.broadcastEntry(v, h.Machine)
 	}
 	return &h, nil
@@ -360,6 +367,9 @@ func (s *Server) entryViewOf(c entryCaller, now time.Time) (EntryView, error) {
 	home, err := s.entryEnsureHome(c.person, choices, now)
 	if err != nil {
 		return EntryView{}, err
+	}
+	if home != nil {
+		s.entryEnsureName(c.person, now, true)
 	}
 	out := EntryView{Person: c.person, Home: home, HomeChoices: choices}
 	if out.Keys, err = s.Store.EntryKeys(c.person, c.operator); err != nil {
@@ -383,6 +393,52 @@ func (s *Server) writeEntryView(w http.ResponseWriter, c entryCaller, now time.T
 		return
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// entryEnsureName claims person's suggested name when they have a home and
+// no name (claude-fleet#3337): an address nobody claimed resolves nowhere,
+// so a home without a name is a door nobody can find. No suggestion, or it
+// was taken a moment ago → still none, and the keys page asks as before.
+// It answers the version the claim made (0: none); push=false leaves the
+// push to a caller that is about to push anyway (a home just set).
+func (s *Server) entryEnsureName(person string, now time.Time, push bool) int {
+	if _, ok, err := s.Store.EntryName(person); err != nil || ok {
+		return 0
+	}
+	if _, ok, err := s.Store.EntryHomeOf(person); err != nil || !ok {
+		return 0
+	}
+	name := s.entrySuggestedName(person)
+	if name == "" {
+		return 0
+	}
+	v, err := s.Store.SetEntryName(person, name, now)
+	if err != nil {
+		if !errors.Is(err, store.ErrEntryNameTaken) {
+			log.Printf("entry: claim %s's suggested name: %v", person, err)
+		}
+		return 0
+	}
+	if v > 0 {
+		s.entryAudit(store.EntryAudit{At: now, Kind: "name_set", Person: person, Result: name, Actor: "hub"})
+		if push {
+			s.entryPushPerson(person, v)
+		}
+	}
+	return v
+}
+
+// entryEnsureNames runs entryEnsureName for every person with a home — the
+// ones homed before #3337 get their name on the first tick after a deploy.
+func (s *Server) entryEnsureNames(now time.Time) {
+	homes, err := s.Store.EntryHomes()
+	if err != nil {
+		log.Printf("entry: read the homes: %v", err)
+		return
+	}
+	for _, h := range homes {
+		s.entryEnsureName(h.Person, now, true)
+	}
 }
 
 // entrySuggestedName is the name a first visit offers: the GitHub login,
@@ -542,7 +598,10 @@ type EntryNameRequest struct {
 	Name string `json:"name"`
 }
 
-// handleEntryName serves EntryNamePath.
+// handleEntryName serves EntryNamePath: a person picks or changes their own
+// address name. The operator picks no one's — the one name the hub gives a
+// person without asking is their suggested name, claimed with their home
+// (entryEnsureName, claude-fleet#3337), never one named here.
 func (s *Server) handleEntryName(w http.ResponseWriter, r *http.Request) {
 	c, ok := s.entryCallerOf(w, r)
 	if !ok {
@@ -662,6 +721,9 @@ func (s *Server) entrySetHome(c entryCaller, machine, login string, now time.Tim
 	}
 	if v > 0 {
 		s.entryAudit(store.EntryAudit{At: now, Kind: "home_set", Person: c.person, Login: h.Login, Machine: h.Machine, Result: "ok", Actor: c.actor})
+		if nv := s.entryEnsureName(c.person, now, false); nv > v {
+			v = nv // one push carries both
+		}
 		// Both the new home and the one it left hear it.
 		hosts := []string{h.Machine}
 		if hadOld {

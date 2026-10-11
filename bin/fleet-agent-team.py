@@ -305,12 +305,12 @@ def validate(b, layer="team"):
     layer (#1857) has the team's allow-list plus `hook_scripts` (C4's)."""
     if not isinstance(b, dict):
         return "bundle is not an object"
-    allowed = ALLOWED + (("hook_scripts", "roles", "rules") if layer == "personal" else ())
+    allowed = ALLOWED + (("hook_scripts", "roles", "rules", "ui_lang") if layer == "personal" else ())
     for k in b:
         if k not in allowed:
             return "bundle.%s is not something a team hands out" % k
-        if k == "rules":
-            continue            # a table or a list of rows (#2784), checked below
+        if k in ("rules", "ui_lang"):
+            continue            # a table or a list of rows (#2784) / a word (#3329), checked below
         if not isinstance(b[k], dict):
             return "bundle.%s must be an object" % k
     for n, s in b.get("mcp", {}).items():
@@ -357,6 +357,9 @@ def validate(b, layer="team"):
             return "bundle.rules must be a Markdown table or a list of rows"
         if len(json.dumps(rules, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) > RULES_MAX:
             return "bundle.rules is over 32 KiB"
+    # the person's interface language (#3329, EPIC #3178 D7) — the hub's rule
+    if "ui_lang" in b and b["ui_lang"] not in ("zh", "en"):
+        return 'bundle.ui_lang must be "zh" or "en" (leave it out to follow the system)'
     p = secret_in("bundle", b)
     if p:
         return "%s looks like a credential — the %s layer never carries one" % (p, layer)

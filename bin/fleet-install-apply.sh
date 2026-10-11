@@ -1269,6 +1269,21 @@ else
   say 'reeval: skip — no fleet-wait-reeval.sh in this version'
 fi
 
+# --- roles-windows (issue #3121, EPIC #3111 C10) ------------------------------------
+# The old resident seats onto the new marks, in place: an orchestrator seat becomes
+# an ordinary row holding the role, a steward seat is stopped (retired), an old
+# driver gets @agent_def epic-driver, a pinned window reap keep once. Re-runnable;
+# each change is one line.
+if [ -f "$ROOT/bin/fleet-role-windows.sh" ] && [ "$BUNDLE" != 1 ]; then
+  rwa=(); [ "$DRY" = 1 ] && rwa=(--dry-run)
+  out=$(FLEET_INSTALL_ROOT="$ROOT" bash "$ROOT/bin/fleet-role-windows.sh" ${rwa[@]+"${rwa[@]}"} 2>&1); rc=$?
+  printf '%s\n' "$out" | sed '$d' | sed 's/^/roles-windows:   /'
+  if [ "$rc" = 0 ]; then say "$(printf '%s\n' "$out" | tail -1)"
+  else fail roles-windows "$(printf '%s\n' "$out" | tail -1 | sed 's/^roles-windows: //')"; fi
+else
+  say 'roles-windows: skip — no fleet-role-windows.sh in this version'
+fi
+
 # --- oldcfg (issue #2076, EPIC #2074 C3) --------------------------------------------
 # Which open sessions THIS version breaks — their start (@agent_cfg_manifest) names a
 # hook script, a mod tool's handler or an MCP script the new tree no longer has, the

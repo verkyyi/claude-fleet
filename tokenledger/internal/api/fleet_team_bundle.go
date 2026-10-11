@@ -129,12 +129,12 @@ func validateBundle(raw json.RawMessage, personal bool) (string, error) {
 		return "", errors.New("bundle must be a JSON object")
 	}
 	for k := range b {
-		if personal && (k == "hook_scripts" || k == "roles" || k == "rules") {
+		if personal && (k == "hook_scripts" || k == "roles" || k == "rules" || k == "ui_lang") {
 			continue
 		}
 		if !teamBundleKeys[k] {
 			if personal {
-				return "", fmt.Errorf("bundle: %q is not part of a personal configuration (only mcp, hooks, skills, claude_settings, codex_config, hook_scripts, roles, rules)", k)
+				return "", fmt.Errorf("bundle: %q is not part of a personal configuration (only mcp, hooks, skills, claude_settings, codex_config, hook_scripts, roles, rules, ui_lang)", k)
 			}
 			return "", fmt.Errorf("bundle: %q is not something a team hands out (only mcp, hooks, skills, claude_settings, codex_config)", k)
 		}
@@ -293,6 +293,14 @@ func validateBundle(raw json.RawMessage, personal bool) (string, error) {
 					return "", fmt.Errorf("bundle.rules: %v", err)
 				}
 			}
+		}
+	}
+	// The person's interface language (claude-fleet#3329, EPIC #3178 D7): set
+	// by hand in a 看台's ⌘P, it beats what a client's locale says. Absent =
+	// follow the system; only the two languages the fleet draws.
+	if v, ok := all["ui_lang"]; ok {
+		if s, _ := v.(string); s != "zh" && s != "en" {
+			return "", errors.New(`bundle.ui_lang must be "zh" or "en" (leave it out to follow the system)`)
 		}
 	}
 	if path := secretIn("bundle", all); path != "" {

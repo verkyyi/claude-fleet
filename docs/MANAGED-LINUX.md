@@ -260,6 +260,30 @@ curl -m3 https://YOUR-HUB/version           # works
 
 BREAK-IT `linux-egress-metadata`.
 
+### Dev network
+
+(issue #3348) From the cluster's CN egress `https://github.com` times out, so
+git cannot clone, fetch or push, while `api.github.com`, npmmirror and
+goproxy.cn answer. Three render flags fix it for every login on the machine,
+with no hand step per login:
+
+| Flag | What the node does at each start (`fleet-node-linux.py`) |
+|---|---|
+| `--github-proxy http://47.131.114.67:3128` | `/etc/gitconfig`: `http.https://github.com/.proxy` — git's github.com traffic through the Singapore relay (`extras/gh-relay`, CONNECT to GitHub hosts :443 from the cluster egress only). The image's `gh` wrapper reads the same address from `/etc/fleet-devnet.env` and sets `HTTPS_PROXY` for gh alone. |
+| `--git-mirror git://git-mirror.arc-runners.svc.cluster.local/24haowan-monorepo.git=https://github.com/GuangZhouShanyouGame/24haowan-monorepo.git` (repeatable) | `/etc/gitconfig`: `url.<mirror>.insteadOf <upstream>` — fetches come from the in-cluster CI mirror — and an identity `url.<upstream>.pushInsteadOf <upstream>`, so pushes still go to GitHub through the relay. |
+| `--cn-mirrors` | `/etc/fleet-devnet.env`: npmmirror (npm · pnpm · yarn · corepack), the node dist mirror (nvm · fnm), goproxy.cn + `sum.golang.google.cn`. Every shell exports it (`/etc/profile.d/fleet-devnet.sh`, read by zshenv and bash.bashrc); a value the login already has wins. |
+| `--egress-allow 172.21.x.y:9418` | the egress guard lets that one in-cluster tcp destination through (before the Service-range cut) — the git-mirror Service's ClusterIP. Nothing else in-cluster. |
+
+A remote must name the upstream as `https://github.com/OWNER/REPO.git` with **no
+explicit `pushurl`**: git rewrites an explicit pushurl with `insteadOf` too, so it
+would push to the read-only mirror. `git remote -v` shows the mirror for fetch and
+GitHub for push. `gh` uses its own auth; git's credential helper is the login's
+(`gh auth setup-git`).
+
+The image carries node 24 (+ corepack's pnpm / yarn), fnm (reads `.nvmrc` on cd
+in an interactive shell; a login with its own `~/.nvm` keeps nvm), go, kubectl and
+the aliyun CLI, each fetched at build time and checked by sha256.
+
 ## Hub, relay, and access
 
 Use the hub HTTPS URL reachable from ACK. Allow egress to the hub and

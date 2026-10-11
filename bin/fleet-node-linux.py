@@ -339,6 +339,63 @@ def make_user(t, full_name=''):
     return p
 
 
+# Machine-wide dev settings for every login (#3348), from the pod's environment
+# (render.py --github-proxy / --git-mirror / --cn-mirrors), rewritten at each start:
+# /etc/gitconfig sends git's github.com traffic through the relay and fetches a
+# mirrored repo from the in-cluster mirror (pushes still go to GitHub: the
+# identity pushInsteadOf); /etc/fleet-devnet.env is what every shell exports
+# (the image's /etc/profile.d/fleet-devnet.sh, a login's own value wins) and
+# where the image's gh wrapper finds the relay. Nothing set = neither file.
+DEVNET_MARK = '# written by fleet-node-linux.py at each start (#3348) - edits here are lost\n'
+CN_MIRRORS = (('npm_config_registry', 'https://registry.npmmirror.com'),
+              ('YARN_REGISTRY', 'https://registry.npmmirror.com'),
+              ('COREPACK_NPM_REGISTRY', 'https://registry.npmmirror.com'),
+              ('COREPACK_ENABLE_DOWNLOAD_PROMPT', '0'),
+              ('NVM_NODEJS_ORG_MIRROR', 'https://npmmirror.com/mirrors/node'),
+              ('FNM_NODE_DIST_MIRROR', 'https://npmmirror.com/mirrors/node'),
+              ('GOPROXY', 'https://goproxy.cn,direct'),
+              ('GOSUMDB', 'sum.golang.google.cn'))
+GH_PROXY_RE = re.compile(r'http://[A-Za-z0-9.-]+:[0-9]{1,5}')
+MIRROR_RE = re.compile(r'(git|https?)://[A-Za-z0-9.-]+(:[0-9]{1,5})?/[A-Za-z0-9._/-]+')
+UPSTREAM_RE = re.compile(r'https://github\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+\.git')
+
+
+def devnet_settings(env):
+    """(gitconfig text, env-file text) for the pod's settings; ValueError on a bad one."""
+    proxy = env.get('FLEET_GITHUB_PROXY', '').strip().rstrip('/')
+    if proxy and not GH_PROXY_RE.fullmatch(proxy):
+        raise ValueError('FLEET_GITHUB_PROXY is http://HOST:PORT, not %r' % proxy)
+    git = []
+    if proxy:
+        git += ['[http "https://github.com/"]', '\tproxy = ' + proxy]
+    for item in env.get('FLEET_GIT_MIRRORS', '').split():
+        mirror, _, upstream = item.partition('=')
+        if not MIRROR_RE.fullmatch(mirror) or not UPSTREAM_RE.fullmatch(upstream):
+            raise ValueError('FLEET_GIT_MIRRORS takes MIRROR=https://github.com/OWNER/REPO.git, not %r' % item)  # dist-ok: a login's repo URL in an error text, not the fleet's code
+        git += ['[url "%s"]' % mirror, '\tinsteadOf = ' + upstream,
+                '[url "%s"]' % upstream, '\tpushInsteadOf = ' + upstream]
+    pairs = [('FLEET_GITHUB_PROXY', proxy)] if proxy else []
+    if env.get('FLEET_CN_MIRRORS', '') == '1':
+        pairs += list(CN_MIRRORS)
+    return ('\n'.join(git) + '\n' if git else '', ''.join('%s=%s\n' % kv for kv in pairs))
+
+
+def devnet(env=None, gitconfig='/etc/gitconfig', envfile='/etc/fleet-devnet.env'):
+    git, shell = devnet_settings(os.environ if env is None else env)
+    for path, text in ((gitconfig, git), (envfile, shell)):
+        p = Path(path)
+        if text:
+            tmp = p.with_name(p.name + '.tmp')
+            tmp.write_text(DEVNET_MARK + text)
+            tmp.chmod(0o644)
+            os.replace(tmp, p)
+        elif p.is_file() and not p.is_symlink() and p.read_text().startswith(DEVNET_MARK):
+            p.unlink()
+    print('devnet: github proxy %s · git mirrors %d · cn mirrors %s' % (
+        'on' if 'FLEET_GITHUB_PROXY=' in shell else 'off', git.count('\tinsteadOf = '),
+        'on' if 'GOPROXY=' in shell else 'off'))
+
+
 def boot(a=None):
     """Container start, before the supervisor: every declared login back with
     its own number and home. A home owned by anyone else stops the boot."""
@@ -790,6 +847,11 @@ def foreground(a):
         Path('/run/sshd').mkdir(parents=True, exist_ok=True)
         Path('/etc/ssh/sshd_config.d/90-fleet-container.conf').write_text(
             'HostKey ' + str(key) + '\nUsePAM yes\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nPermitRootLogin no\n')
+        try:
+            devnet()
+        except (ValueError, OSError) as e:
+            # a bad setting costs the dev conveniences, never the machine
+            print('devnet: not written (%s)' % e, file=sys.stderr)
         # passwd is the image's: every declared login back before anything runs as one.
         boot()
         cmd = ['bash', str(HERE / 'fleet-node-install.sh'), '--hub', a.hub, '--service', 'foreground',

@@ -113,7 +113,7 @@ their own switch, `FLEET_MOD_PANELS`.
 | M6 | `compose.ts` + `orchestrator.ts` | Appends the orchestrator role to the system prompt | ext | orchestrator only | no | — | **opt-in** — with the orchestrator (P5) |
 | M7 | `where.ts` | Appends "where the operator is" to **every** session's system prompt | ext | yes | no | — | **opt-in** — prompt injection (P5) |
 | M8 | `exit-guard.ts` | Intercepts `/exit` and `/clear` in the orchestrator | ext | orchestrator only | no | — | **opt-in** — overrides native commands (N) |
-| M9 | `qd.tsx` | `/qd` quick dispatch | ext | orchestrator only | no | — | **opt-in** (P2) |
+| M9 | `qd.tsx` | quick dispatch — retired into ⌘P's ⚡ (#3328), an old session's command forwards one version | ext | orchestrator only | no | — | **compat-1v** (下一批删) |
 | M10 | `queue.ts` | Counts queued prompts | ext | orchestrator only | no | — | **opt-in** (P2) |
 | M11 | `panels.ts` / `panels-model.ts` | Right-hand panels | ext | steward holder | `FLEET_MOD_PANELS` | — | **done** — fleet-steward plugin (#3115) |
 | M12 | `sheet.tsx` | Decision sheet, `/sheet` | ext | steward holder | `FLEET_MOD_PANELS` | — | **done** — fleet-steward plugin (#3115) |

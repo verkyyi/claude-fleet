@@ -1,0 +1,39 @@
+# GitHub-only forward proxy on ai-relay-sg (claude-fleet#3348). Install per README.md.
+# Two walls in front of it: the Lightsail firewall opens 3128 to the cluster egress /32
+# only, and the program checks the source again (GH_RELAY_SOURCES). Nothing here is a secret.
+[Unit]
+Description=fleet gh-relay — CONNECT to GitHub hosts only, for the ACK cluster egress (#3348)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+DynamicUser=yes
+Environment=GH_RELAY_LISTEN=0.0.0.0:3128
+Environment=GH_RELAY_SOURCES=47.106.171.142/32
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 -I /opt/gh-relay/gh-relay.py
+Restart=always
+RestartSec=3
+# a 1 GB box shared with caddy (the AI relay) and git-mirror-sg: caddy wins
+OOMScoreAdjust=300
+MemoryHigh=100M
+MemoryMax=160M
+TasksMax=32
+LimitNOFILE=4096
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6
+CapabilityBoundingSet=
+# The program refuses a host that resolves private; the kernel refuses it too.
+# 172.26.0.2 is the Lightsail VPC resolver (/etc/resolv.conf) — check it after a rebuild.
+IPAddressAllow=172.26.0.2/32
+IPAddressDeny=127.0.0.0/8 0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 169.254.0.0/16 172.16.0.0/12 192.0.0.0/24 192.168.0.0/16 198.18.0.0/15 224.0.0.0/3 ::1/128 fc00::/7 fe80::/10 ff00::/8
+
+[Install]
+WantedBy=multi-user.target

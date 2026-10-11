@@ -16,9 +16,10 @@
 #      (logged how=new) — never the window holding the orchestrator, even with
 #      orch_<fleet> naming one, and no orchestrator script run at all
 #      (FLEET_VIEW_ORCH_CMD would leave a mark); a direct attach: nothing
-#   T  ⌘T: the 派一件事 popup in the 看台 — 用哪个 Coding Agent, the fleet's default
-#      first, an agent this machine lacks grey with why; ↵ sends with no --agent
-#      (the default), `send --agent codex` carries it; a direct attach: no popup
+#   T  ⌘T and ⌘K, keys issue #3328 took away (compat-1v): the panel — ⌘T lit on
+#      its ⚡ row, no 派一件事 popup — saying 「⌘T 已并进 ⌘P」 the first time only;
+#      each press logged how=old:<action>, counted by fleet_keys.old_presses (the
+#      doctor's oldkeys row); `send --agent codex` still carries; a direct attach: nothing
 #   S  ⌃\: the session's shell — here: a window of the 看台 (@view_shell, panel,
 #      @peer_view) whose shell's directory is the session's @worktree; ⌃\ again is
 #      back on the session, ⌃\ there selects the same one (one a session); the
@@ -45,6 +46,11 @@
 #      (开工中… · 派单中，esc 可以先关) — esc closes the panel and the send still lands.
 #      No words: ↑ goes round to ⚡, ↵ = ⌘N's argv, the 看台 on it; words with 不绑仓库
 #      = a session here, `--prompt <the words>`; ⏻ = ⌘Q's OSC 7502 + detach
+#   I  ⌘P's language row (issue #3329, EPIC #3178 D7): 语言 lights 「◐ 语言 / Language」,
+#      ↵ flips to English — kept on the hub (a seam) and re-read here at once, the
+#      panel redrawn in it with a 3 s line — Tab's 跟系统走 takes it back; none
+#      said ⇒ 中文 and the Termius line (D9). FLEET_VIEW_LANG_EVIDENCE=<prefix>
+#      keeps the two screens.
 #   Q  ⌘Q: `ESC ] 7502 ; quit ; token=<the row's> BEL` on the client's tty, then
 #      the client detached; a direct attach stays
 #   L  `fleet ls` with no client tmux: one ssh to the home (fleet-thin.py --run:
@@ -202,35 +208,50 @@ for o in "@fleet_role panel" "@peer m4@$ME" "@peer_view v1" "@peer_node m4" "@pe
 done
 pass "N  ⌘N: a new no-repo session every press, the 看台 on it — never the orchestrator's holder, no orchestrator script; a direct attach: nothing"
 
-# --- T: ⌘T ----------------------------------------------------------------------------------
+# --- T: ⌘T and the other keys issue #3328 took away ------------------------------------------
+# ⌘T's 派一件事 popup has no entry any more: ⌘T (even as the person's own extra,
+# dispatch=cmd+t) opens the panel lit on its ⚡ row; a key that went (⌘K here — no
+# extra names it, so it is the default forward) opens the panel too. Each says
+# 「<key> 已并进 ⌘P」 the first time only, and every press is a line how=old:<action>
+# that fleet_keys.old_presses — the doctor's `oldkeys` row — counts.
 to send-keys -t o:direct -H 1b 5b 39 33 32 7e
 sleep 1.5
-to capture-pane -p -t o:direct | grep -q '用哪个 Coding Agent' && fail "T: ⌘T opened the popup in a direct attach"
+to capture-pane -p -t o:direct | grep -q '⚡' && fail "T: ⌘T opened the panel in a direct attach"
+log="$W/conf/logs/view-switch.ndjson"
 to send-keys -t o:view -H 1b 5b 39 33 32 7e
 ok=''; for _ in $(seq 1 20); do
-  sleep 0.4; to capture-pane -p -t o:view > "$W/dispatch.txt"; grep -q '用哪个 Coding Agent' "$W/dispatch.txt" && { ok=1; break; }
+  sleep 0.4; to capture-pane -p -t o:view > "$W/dispatch.txt"; grep -q '已并进 ⌘P' "$W/dispatch.txt" && { ok=1; break; }
 done
-[ -n "$ok" ] || fail "T: ⌘T in the 看台 opened no 派一件事 popup: $(cat "$W/dispatch.txt")"
-for want in '派一件事' '仓库' 'claude（默认）' "这台没装 codex"; do
-  grep -qF "$want" "$W/dispatch.txt" || fail "T: the popup lacks 「${want}」: $(cat "$W/dispatch.txt")"
-done
+[ -n "$ok" ] || fail "T: ⌘T in the 看台 did not open the panel saying 「⌘T 已并进 ⌘P」: $(cat "$W/dispatch.txt")"
+grep -q '▶ ⚡ 新会话（空白）' "$W/dispatch.txt" || fail "T: ⌘T's panel is not lit on ⚡: $(grep -v '^$' "$W/dispatch.txt")"
+grep -qF '⌘T 已并进 ⌘P' "$W/dispatch.txt" || fail "T: the hint does not name ⌘T: $(grep '已并进' "$W/dispatch.txt")"
+grep -q '用哪个 Coding Agent' "$W/dispatch.txt" && fail "T: ⌘T still opened the 派一件事 popup"
 [ -n "${FLEET_VIEW_EVIDENCE:-}" ] && cp "$W/dispatch.txt" "$FLEET_VIEW_EVIDENCE"
-to send-keys -t o:view -l '修登录页'; sleep 0.3
-to send-keys -t o:view Tab; to send-keys -t o:view Tab; to send-keys -t o:view Right; sleep 0.3   # codex is grey: still claude
-to send-keys -t o:view Enter
-waitfor 20 test -s "$W/sent.json" || fail "T: ↵ sent nothing: $(to capture-pane -p -t o:view)"
-python3 - "$W/sent.json" <<'PY' || fail "T: the payload: $(cat "$W/sent.json")"
-import json, sys
-d = json.load(open(sys.argv[1]))
-assert d["title"] == "修登录页" and d["via"] == "dispatch" and d["repo"] == "acme/app", d
-assert d.get("agent") is None, d   # the default rides no --agent
-PY
-rm -f "$W/sent.json"
+to send-keys -t o:view Escape; sleep 0.8
+to send-keys -t o:view -H 1b 5b 39 33 32 7e
+waitfor 20 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -q '▶ ⚡'" || fail "T: a second ⌘T opened no panel"
+sleep 0.4; to capture-pane -p -t o:view | grep -q '已并进' && fail "T: the second ⌘T said 「已并进 ⌘P」 again"
+to send-keys -t o:view Escape; sleep 0.8
+to send-keys -t o:view -H 1b 5b 39 33 30 7e
+waitfor 20 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -qF '⌘K 已并进 ⌘P'" || fail "T: ⌘K (code 930) did not open the panel saying 「⌘K 已并进 ⌘P」: $(to capture-pane -p -t o:view)"
+to send-keys -t o:view Escape; sleep 0.8
+[ "$(grep -c '"how":"old:dispatch"' "$log")" = 2 ] || fail "T: two ⌘T are not two how=old:dispatch lines: $(grep old: "$log")"
+grep -q '"how":"old:switcher","key":"⌘K"' "$log" || fail "T: ⌘K is not logged how=old:switcher: $(grep old: "$log")"
+[ "$(PYTHONPATH="$BIN" python3 -c 'import fleet_keys,sys; print(fleet_keys.old_presses(sys.argv[1]))' "$log")" = "3 ⌘T 2 · ⌘K 1" ] \
+  || fail "T: old_presses does not count them: $(PYTHONPATH="$BIN" python3 -c 'import fleet_keys,sys; print(fleet_keys.old_presses(sys.argv[1]))' "$log")"
+grep -q 'fleet_keys.old_presses' "$BIN/fleet-doctor.sh" || fail "T: the doctor's oldkeys row does not read fleet_keys.old_presses"
+# the one message after the update (fleet-remote-view.sh attach --thin runs view-notice):
+# on the 看台's client once, then never again on this login
+TMUX="$IN,0,0" python3 "$BIN/fleet-quickopen.py" view-notice --view fl@view-v1 || fail "T: view-notice exited non-zero"
+[ -s "$W/conf/keys-notice-3328" ] || fail "T: view-notice left no mark — it would say it at every attach"
+grep -q 'view-notice --view' "$BIN/fleet-remote-view.sh" || fail "T: attach --thin does not run view-notice"
+# ⌘T's send itself is ⌘P's ⚡ (leg P); `send` keeps its --agent
 python3 "$BIN/fleet-quick-dispatch.py" send --title '看日志' --repo acme/web --agent codex --view fl@view-v1 >/dev/null \
   || fail "T: send --agent codex --view exited non-zero"
 [ "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("agent"))' "$W/sent.json")" = codex ] \
   || fail "T: --agent codex did not ride the payload: $(cat "$W/sent.json")"
-pass "T  ⌘T: 派一件事 in the 看台 — the agent step (default claude, codex grey: not installed), ↵ sends, --agent carries; nothing in a direct attach"
+rm -f "$W/sent.json"
+pass "T  ⌘T / ⌘K (#3328): the panel — ⌘T lit on ⚡ — 「已并进 ⌘P」 once, each press how=old:<action> for the doctor; no 派一件事 popup; nothing in a direct attach"
 
 # --- S: ⌃\ -----------------------------------------------------------------------------------
 ti select-window -t "=fl@view-v1:$W1"; sleep 0.3
@@ -333,8 +354,14 @@ ti select-window -t "=fl@view-v1:$W3"; sleep 0.3
 vp > "$W/panel.txt" || fail "P: view-panel exited non-zero"
 # 1 the empty panel: the sessions, then ⚡ 新会话（空白） with its cells (不绑仓库 · the
 # fleet's agent, codex grey with why), then ⏻ — nothing else is a command row
-[ "$(grep -c '^cmd' "$W/panel.txt")" = 2 ] || fail "P: not exactly ⚡ and ⏻ as command rows: $(cat "$W/panel.txt")"
-[ "$(tail -3 "$W/panel.txt" | cut -f1,2 | tr '\t\n' ': ')" = "cmd:new grid:grid cmd:quit " ] || fail "P: ⚡ · its cells · ⏻ are not last: $(cat "$W/panel.txt")"
+[ "$(grep -c '^cmd' "$W/panel.txt")" = 3 ] || fail "P: not exactly ⚡, ◐ and ⏻ as command rows: $(cat "$W/panel.txt")"
+[ "$(tail -4 "$W/panel.txt" | cut -f1,2 | tr '\t\n' ': ')" = "cmd:new grid:grid cmd:lang cmd:quit " ] || fail "P: ⚡ · its cells · ◐ · ⏻ are not last: $(cat "$W/panel.txt")"
+# the language row (issue #3329): both scripts on it, found by either; other words hide it
+grep -q "^cmd${T}lang${T}◐ 语言 / Language" "$W/panel.txt" || fail "P: no 「◐ 语言 / Language」 row: $(cat "$W/panel.txt")"
+for w in 语言 lang english 中文; do
+  vp "$w" | grep -q "^cmd${T}lang" || fail "P: typing $w does not find the language row: $(vp "$w")"
+done
+vp Gamma | grep -q "^cmd${T}lang" && fail "P: words that do not name it still list the language row"
 grep -qx "cmd${T}new${T}⚡ 新会话（空白）" "$W/panel.txt" || fail "P: no words, ⚡ is not 「新会话（空白）」: $(cat "$W/panel.txt")"
 grep -q "^grid${T}grid${T}仓库 ‹不绑仓库›  ·  Agent ‹Claude›  .*这台没装 codex" "$W/panel.txt" || fail "P: the cells: $(grep ^grid "$W/panel.txt")"
 grep -qx "cmd${T}quit${T}⏻ 退出 fleet（会话在后台继续）" "$W/panel.txt" || fail "P: no ⏻ row: $(cat "$W/panel.txt")"
@@ -347,7 +374,7 @@ vp Gamma > "$W/panel-hit.txt"
 grep -qx "cmd${T}new${T}⚡ 新任务：Gamma" "$W/panel-hit.txt" || fail "P: ⚡ does not carry the words: $(cat "$W/panel-hit.txt")"
 grep -q "^grid${T}grid${T}仓库 ‹acme/web›" "$W/panel-hit.txt" || fail "P: words, the cells are not the last send's repo: $(grep ^grid "$W/panel-hit.txt")"
 FLEET_PANEL_COMMANDS=none vp | grep -q '^cmd' && fail "P: FLEET_PANEL_COMMANDS=none still lists a command row: $(FLEET_PANEL_COMMANDS=none vp)"
-[ "$(FLEET_PANEL_COMMANDS='new shell newsess' vp | grep '^cmd' | cut -f2 | tr '\n' ' ')" = "new quit " ] \
+[ "$(FLEET_PANEL_COMMANDS='new shell newsess' vp | grep '^cmd' | cut -f2 | tr '\n' ' ')" = "new lang quit " ] \
   || fail "P: the retired words still make rows: $(FLEET_PANEL_COMMANDS='new shell newsess' vp)"
 # the popup: the session in view lit, the search line's hint, ↑ 到 ⚡ in the keys
 to send-keys -t o:view -H 1b 5b 39 32 37 7e
@@ -437,6 +464,57 @@ python3 -c 'import sys; sys.exit(0 if b"\x1b]7502;quit;token=tok7\x07" in open(s
   || fail "P: ⏻ sent no OSC 7502 quit: $(od -c "$W/client-p.bytes" | tail -5)"
 to new-window -d -t o -n view "TMUX= tmux -S '$IN' attach -t 'fl@view-v1'"; sleep 1
 pass "P  ⌘P's one entry (方案 B): sessions then ⚡ (cells 仓库 · Agent) then ⏻; empty ↵ = the session in view lit; a hit lit, ↓ to ⚡; no hit ⇒ ⚡, ↵ one send (progress, esc keeps it going); Tab / ←→ cells; ↑ round to blank ⚡ = ⌘N; words + 不绑仓库 = a seeded session; ⏻ = ⌘Q (#3180, #3327)"
+
+# --- I: the language row (issue #3329, EPIC #3178 D7, L1–L3) --------------------------------
+# The person's choice is kept on the hub (a seam: GET/PUT the state file) and read back
+# at once into person-bundle.json; the 看台 said no language (FLEET_VIEW_LANG empty) ⇒
+# Chinese, and the row's footer says how to bring one (D9). FLEET_UI_LANG auto here.
+printf '{"version":1,"bundle":{}}' > "$W/person.json"
+cat > "$W/person-hub.sh" <<EOF
+#!/bin/sh
+st='$W/person.json'; body=\$(cat)
+[ "\$1" = GET ] && { cat "\$st"; exit 0; }
+python3 -c '
+import json, sys
+b, st = json.loads(sys.argv[1]), sys.argv[2]
+cur = json.load(open(st))
+if b.get("base") != cur["version"]:
+    print(json.dumps({"status": 409, "error": "stale"})); sys.exit()
+new = {"version": cur["version"] + 1, "prev": cur["version"], "bundle": b["bundle"]}
+json.dump(new, open(st, "w")); print(json.dumps(new))' "\$body" "\$st"
+EOF
+for k in FLEET_UI_LANG=auto FLEET_VIEW_LANG= "FLEET_PERSON_HUB_CMD=sh $W/person-hub.sh \"\$@\"" "FLEET_PERSON_BUNDLE_CMD=cat $W/person.json"; do
+  ti set-environment -t 'fl@view-v1' "${k%%=*}" "${k#*=}"
+done
+lshot() { to capture-pane -p -t o:view | grep -v '^$'; }
+to send-keys -t o:view -H 1b 5b 39 32 37 7e
+waitfor 20 listed || fail "I: ⌘P listed nothing"
+to send-keys -t o:view -l '语言'; sleep 0.5
+waitfor 10 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -q '▶ ◐ 语言 / Language　中文 ✓ · English'" \
+  || fail "I: typing 语言 did not light the language row: $(lshot)"
+lshot | grep -q 'Termius → Hosts → .* → Environment 加 LANG=en_US.UTF-8' || fail "I: no language came, yet the footer does not say how (D9): $(lshot)"
+[ -n "${FLEET_VIEW_LANG_EVIDENCE:-}" ] && lshot > "$FLEET_VIEW_LANG_EVIDENCE.zh.txt"
+to send-keys -t o:view Enter
+waitfor 20 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -q 'Language: English · saved to your account'" \
+  || fail "I: ↵ did not switch to English and say so: $(lshot)"
+lshot | grep -q '◐ Language / 语言　English ✓ · 中文' || fail "I: the panel did not redraw in English: $(lshot)"
+[ -n "${FLEET_VIEW_LANG_EVIDENCE:-}" ] && lshot > "$FLEET_VIEW_LANG_EVIDENCE.en.txt"
+grep -q '"ui_lang": *"en"' "$W/person.json" || fail "I: the hub was not told: $(cat "$W/person.json")"
+grep -q '"ui_lang": *"en"' "$W/conf/person-bundle.json" || fail "I: this computer's copy was not re-read: $(cat "$W/conf/person-bundle.json" 2>&1)"
+[ "$(FLEET_VIEW_LANG=en_US.UTF-8 FLEET_UI_LANG=auto sh "$BIN/fleet-ui-lang.sh" first-hint devX)" = "" ] \
+  || fail "I: a person who chose is still told about detection (D8)"
+waitfor 24 sh -c "! tmux -S '$OUT' capture-pane -p -t o:view | grep -q 'Language: English · saved'" || fail "I: the confirmation did not go by itself (3 s): $(lshot)"
+# Tab: 中文 · English · Follow the system — the last takes the choice away
+to send-keys -t o:view Tab; sleep 0.4
+lshot | grep -q 'Follow the system' || fail "I: Tab on the row offers no 跟系统走: $(lshot)"
+to send-keys -t o:view Down; sleep 0.1; to send-keys -t o:view Down; sleep 0.1; to send-keys -t o:view Enter
+waitfor 20 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -q '界面语言：跟系统走 · 已存到你的账号'" \
+  || fail "I: 跟系统走 did not go back to the detected language (中文, none said): $(lshot)"
+grep -q 'ui_lang' "$W/person.json" && fail "I: 跟系统走 left ui_lang on the hub: $(cat "$W/person.json")"
+to send-keys -t o:view Escape
+for k in FLEET_UI_LANG FLEET_VIEW_LANG FLEET_PERSON_HUB_CMD FLEET_PERSON_BUNDLE_CMD; do ti set-environment -t 'fl@view-v1' -u "$k"; done
+rm -f "$W/conf/person-bundle.json" "$W/conf/person-bundle.good.json"
+pass "I  ⌘P's language row: 语言 finds it, ↵ flips to English on the hub and here at once (the panel redraws, 3 s line), Tab 跟系统走 takes it back; no language said ⇒ 中文 + the Termius line (#3329)"
 
 # --- Q: ⌘Q -----------------------------------------------------------------------------------
 to pipe-pane -o -t o:view "cat > '$W/client.bytes'"; sleep 0.3

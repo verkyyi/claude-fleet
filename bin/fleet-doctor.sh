@@ -919,6 +919,17 @@ else
   warn keys "bin/dash-keymap.sh missing — panel keys are not checked against the tmux prefix"
 fi
 
+# --- the keys issue #3328 took away, still pressed (compat-1v: 下一批删) ---
+# One version long ⌘↓ ⌘↑ ⌘[ ⌘] ⌘N ⌘T ⌘Q ⌘K ⌃\ open ⌘P instead, each press a line of
+# logs/view-switch.ndjson with how=old:<action> (fleet_view.forward_note). Advice,
+# never counted: who still reaches for them, before the next batch drops them.
+_oldkeys=$(PYTHONPATH="$(dirname "$0")" python3 -c 'import fleet_keys,sys; print(fleet_keys.old_presses(sys.argv[1]))' \
+  "$conf_dir/logs/view-switch.ndjson" 2>/dev/null)
+case "${_oldkeys:-0}" in
+  0|0\ *) pass oldkeys "no retired key (⌘↑↓ ⌘[ ⌘] ⌘N ⌘T ⌘Q ⌘K ⌃\\) pressed in 7 days — everything goes through ⌘P" ;;
+  *) info oldkeys "retired keys pressed ${_oldkeys%% *} times in 7 days (${_oldkeys#* }) — each opened ⌘P; the next version drops them (issue #3328)" ;;
+esac
+
 # --- multi-account token pool (optional: auto-failover across subscriptions) ---
 if [ -d "$conf_dir/handoffs/quota-requests" ]; then
   _failover=$(python3 - "$conf_dir/handoffs/quota-requests" <<'PY'

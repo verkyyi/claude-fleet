@@ -52,6 +52,13 @@ itself stays in fleet-agent-team.py, which it imports — no second set of rules
         the person's next request is refused「已达个人额度」(person_budget_exceeded);
         nobody else is touched. PERSON is a principal (gh:<id>) or a display
         name `people` prints.
+  lang [zh|en|auto]
+        your interface language (issue #3329, EPIC #3178 D7): zh / en is kept as
+        your personal layer's `ui_lang` and wins over what any client's locale
+        says, on every computer (the hub pushes it, #2784's road); `auto` takes
+        it out — follow the system again. Then this computer's copy is re-read at
+        once (fleet-agent-team.py person), so fleet-ui-lang.sh draws in it now.
+        No word: print the choice (zh · en · auto). A 看台's ⌘P language row runs it.
   export [--personal|--team] > f.json
         the layer's bundle as one JSON file, plus a `"_from": "personal vN"`
         note key (issue #1865). Personal is the default; --team reads the team
@@ -429,7 +436,7 @@ def mutate(bundle, kind, name, value, op):
         bundle.pop(kind, None)
 
 
-def put_personal(a, change, note):
+def put_personal(a, change, note, after=None):
     """GET → change → PUT base; a 409 re-reads and retries once."""
     for attempt in (1, 2):
         code, cur = person_call(a, "GET")
@@ -447,9 +454,35 @@ def put_personal(a, change, note):
         if code != 200:
             hub_err(code, resp)
         print("个人配置 v%s（上一版 v%s）— 其余机器下次同步就带上" % (resp.get("version"), resp.get("prev")))
-        sync_here(a)
+        (after or sync_here)(a)
         return 0
     return 1
+
+
+def person_here(a):
+    """This computer's copy of the personal layer, re-read now — nothing applied."""
+    if os.environ.get("FLEET_CONFIG_NO_SYNC") == "1":
+        return
+    subprocess.run([sys.executable, os.path.join(HERE, "fleet-agent-team.py"), "person"],
+                   capture_output=True, text=True)
+
+
+def lang(a):
+    """`lang [zh|en|auto]` (issue #3329): the person's interface language."""
+    if not a.args:
+        b = (T.read_json_quiet(T.PERSON_CACHE) or {}).get("bundle") or {}
+        print(b.get("ui_lang") if b.get("ui_lang") in ("zh", "en") else "auto")
+        return 0
+    want = a.args[0]
+    if want not in ("zh", "en", "auto"):
+        die("lang 要 zh、en 或 auto（跟系统走）")
+
+    def change(b):
+        if want == "auto":
+            b.pop("ui_lang", None)
+        else:
+            b["ui_lang"] = want
+    return put_personal(a, change, a.note or "ui_lang %s" % want, after=person_here)
 
 
 def edit(a):
@@ -942,7 +975,7 @@ def main():
     ap = argparse.ArgumentParser(prog="fleet config", description=__doc__.split("\n")[0])
     ap.add_argument("action", nargs="?", default="show",
                     choices=("show", "add", "set", "rm", "promote", "history", "restore", "people",
-                             "export", "import", "budget"))
+                             "export", "import", "budget", "lang"))
     ap.add_argument("args", nargs="*")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--personal", action="store_true")
@@ -961,7 +994,7 @@ def main():
         die("--person 只用于 history / restore（操作者只能帮人退回到他自己的某一版）")
     return {"show": show, "add": edit, "set": edit, "rm": edit, "promote": promote,
             "history": history, "restore": restore, "people": people, "export": export,
-            "import": import_, "budget": budget}[a.action](a)
+            "import": import_, "budget": budget, "lang": lang}[a.action](a)
 
 
 if __name__ == "__main__":

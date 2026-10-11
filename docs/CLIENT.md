@@ -7,28 +7,38 @@ This page is the contract for moving between sessions from the keyboard
 (issue #1903, EPIC #1906 C10) — from anywhere, without first putting the
 keyboard on the list.
 
-## One key + the panel (issue #3185, EPIC #3178 C7)
+## One key + the panel (issue #3185, EPIC #3178 C7; issue #3328)
 
-A new install takes **one key**: **⌘P** on a Mac (iTerm2), and on a phone or any
-terminal with no ⌘ **⌃空格** (two taps on Termius: Ctrl, space), **F12** (one, once
-you put it on Termius' key row) or **⌃] p**. It opens the panel: every session,
-and every action (a new task, a new session, quit fleet …). Every other ⌘ key is
-iTerm2's own again — ⌘K clears, ⌘T opens a tab, ⌘N a window, ⌘Q quits iTerm2.
+There is **one key**: **⌘P** on a Mac (iTerm2), and on a phone or any terminal
+with no ⌘ **⌃空格** (two taps on Termius: Ctrl, space), **F12** (one, once you put
+it on Termius' key row) or **⌃] p**. It opens the panel: every session, and every
+action — a new task or a blank session (its ⚡ row: type the task, ↵), a session's
+shell (Tab on its row), quit fleet (the last row). ⌘P ↵ goes back to the session
+you came from; switching sessions is ⌘P too.
+
+**The keys that went (issue #3328, EPIC #3178 ⑤ — kept one version):** ⌘↓ ⌘↑ ⌘[
+⌘] ⌘N ⌘K ⌘Q ⌃\ and the old popup's key still reach fleet for this one version:
+each opens the panel (a new task / blank session lit on ⚡) and says
+「… 已并进 ⌘P」 the first time. `fleet doctor`'s `oldkeys` row counts how often they
+were still pressed (`logs/view-switch.ndjson`, `how=old:<action>`). The next
+version drops them and they are iTerm2's own again. The orchestrator's old quick
+dispatch went the same way: an old session's dialog says so and sends through ⌘P's ⚡.
 
 Want an old key back, or a different one? One line in `fleet.conf`
-(`~/.config/claude-fleet/fleet.conf`; `bin/fleet_keys.py` reads it):
+(`~/.config/claude-fleet/fleet.conf`; `bin/fleet_keys.py` reads it) — a key you
+name there is yours, never a forward:
 
 ```
 [client]                         # this computer's keys
 FLEET_KEY_PANEL=cmd+p            # the panel's chord: cmd+' … · off = none
-FLEET_KEYS_EXTRA="next=cmd+down prev=cmd+up back=cmd+[ fwd=cmd+] new=cmd+n dispatch=cmd+t quit=cmd+q shell=ctrl+\\"
+FLEET_KEYS_EXTRA="next=cmd+down prev=cmd+up back=cmd+[ fwd=cmd+] new=cmd+n quit=cmd+q shell=ctrl+\\"
 [common]                         # the machine's keys for a phone
 FLEET_KEY_PHONE="ctrl+space f12 ctrl+]p"
-FLEET_KEYS_PHONE_EXTRA="ctrl+]n=next ctrl+]b=prev ctrl+]c=new ctrl+]t=dispatch ctrl+]q=quit"
+FLEET_KEYS_PHONE_EXTRA="ctrl+]n=next ctrl+]b=prev ctrl+]c=new ctrl+]q=quit"
 ```
 
 An extra is `action=chord` (`chord=action` works too); actions are the switch
-table's (next prev back fwd new dispatch quit) and `shell`, the session's shell.
+table's (next prev back fwd new quit) and `shell`, the session's shell.
 A chord is `+`-joined `cmd` · `ctrl` · `alt` · `shift` and one key (a character,
 `down` `up` `left` `right`, `space`, `tab`, `return`, `esc`, `f1`…`f20`);
 `ctrl+]x` is ⌃] then x. A ⌘ chord becomes a row of iTerm2's `fleet` profile
@@ -43,7 +53,8 @@ extras takes nothing from the Mac's. ⌃] ⌃] always sends one ⌃] on.
 - Not iTerm2 (Ghostty, Terminal.app): a ⌘ chord never reaches the fleet — use
   ⌃] p (or ⌃空格 / F12).
 - The old client (`fleet --old`) keeps every key below; its profile is written
-  with all of them (`fleet-iterm-profile.py write --all`).
+  with all of them (`fleet-iterm-profile.py write --all`). It is the way back,
+  and goes with #3008.
 
 ## 侧栏下线清单 — every sidebar job's new home (issue #3186, EPIC #3178 C8)
 
@@ -100,7 +111,7 @@ never committed) — `panel` · `menus` · `rows` are the macmini 看台's own
 | back / forward through the sessions you were on | ⌘[ ⌘] | prefix h / l | a closed session is stepped over |
 | zoom the right pane | ⌘↩ | F9 | again to restore |
 | sessions and actions (issue #2365) | ⌘P | prefix / | type a few letters, ↵ — below |
-| 派一件事: one line + a repo, ↵ files it and starts its worker, from any window (issue #2753) | ⌘T | prefix t | below |
+| 派一件事 went into ⌘P (issue #3328): one version long the old keys open ⌘P and say so | ⌘T → ⌘P | prefix t → ⌘P | its first line 「⚡ 派一件事…」 |
 | a new session: no repo, on your home machine, the cursor in its input (issue #3119) | ⌘N | prefix c | `FLEET_COMPOSE=1`: the writing area on the right, below |
 | open / shut the sub-tasks of the session in view (issue #2167) | ⌘. | prefix . | on a sub-task: shuts its parent |
 | quit fleet: the client's processes here go, the sessions run on (issue #2349) | ⌘Q | prefix Q | below |
@@ -130,15 +141,14 @@ From a zoomed session, ⌘↓ ⌘↑ ⌘[ ⌘] unzoom first (⌘P keeps the zoom
 pick). With no task list on screen they do nothing — prefix h is then still
 «the machine before», as prefix q.
 
-**派一件事** (issue #2753): ⌘T — or prefix t, or ⌘P's first line 「⚡ 派一件事…」 —
-from any window (a worker's, the orchestrator's, Claude or Codex, a bare shell, a
-session on another machine) opens a small popup (`bin/fleet-quick-dispatch.py`): a
-title, the repo (the one your last task went to; ←→ when there are several) and
-「交给 Codex」 (⌃X). ↵ writes the writing area's own payload and hands the list
-`compose`, exactly as the writing area's ↵ does — no model and no orchestrator
-queue on the way — so the list draws 「开工中…」, switches to the new session's
-row when it shows, and says 「已建 #N 并开工」. `/qd` in the orchestrator's window
-is the same thing from inside it (fleet-issue-file.sh either way). ⌘P's top group
+**派一件事** (issue #2753; issue #3328): ⌘P's first line 「⚡ 派一件事…」 — from any
+window (a worker's, the orchestrator's, Claude or Codex, a bare shell, a session on
+another machine) — opens a small popup (`bin/fleet-quick-dispatch.py`): a title, the
+repo (the one your last task went to; ←→ when there are several) and 「交给 Codex」
+(⌃X). ↵ writes the writing area's own payload and hands the list `compose`, exactly
+as the writing area's ↵ does — no model and no orchestrator queue on the way — so
+the list draws 「开工中…」, switches to the new session's row when it shows, and says
+「已建 #N 并开工」. Its old keys open ⌘P for one version (compat-1v). ⌘P's top group
 — 派一件事 · + 新会话 · the layout flip · 退出 fleet — needs no `>`; an empty ⌘P
 still lights the session before, so ↵ there is «the one before» as it was.
 
@@ -414,15 +424,14 @@ is on Termius' key row) and **⌃] p** — `FLEET_KEY_PHONE`, above. ⌃] ⌃] s
 literal ⌃] to the session. Want a key per action? `FLEET_KEYS_PHONE_EXTRA` binds
 the letters below (`bin/dash-keymap.sh --panel switch view` spells them):
 
-| ⌃] then | Does | On the Mac |
-|---|---|---|
-| `p` | the list of every session — all machines, every login of yours (default) | ⌘P |
-| `n` / `b` | the next / the previous session in that list (other machines' too) | ⌘↓ / ⌘↑ |
-| `h` / `l` | back / forward in where you have been | ⌘[ / ⌘] |
-| `c` | a new session | ⌘N |
-| `t` | 派单 | ⌘T |
-| `q` | 退出 fleet | ⌘Q |
-| `⌃]` | a literal ⌃] to the session (always) | — |
+| ⌃] then | Does |
+|---|---|
+| `p` | the panel: every session — all machines, every login of yours — and every action (default; ⌘P on the Mac) |
+| `n` / `b` | the next / the previous session in that list (other machines' too) |
+| `h` / `l` | back / forward in where you have been |
+| `c` | a new session |
+| `q` | 退出 fleet |
+| `⌃]` | a literal ⌃] to the session (always) |
 
 Narrower than 100 columns the list opens on **the whole screen**, and the top
 line drops 剩余 · 模型 · effort (the session's key, its title and its machine
@@ -447,7 +456,7 @@ client goes.
 **The bar** (issue #2365) holds three things: who is signed in (the GitHub login
 off `fleet login`'s certificate — orange, with why, when the hub cannot be asked
 or refuses this computer), the ⟳ slot, and the keys of WHERE THE KEYBOARD IS — in
-a session `⌘P 会话与动作 · ⌘T 派单 · ⌘N 新会话 · ⌘↑↓ 切换 · ⌘Q 退出 fleet`, in the writing
+a session `⌘P 会话与动作 · ⌘N 新会话 · ⌘↑↓ 切换 · ⌘Q 退出 fleet`, in the writing
 area its keys, in ⌘P the panel's, with the prefix pressed the prefix keys. It is
 the same whichever list row is lit. No quota, no 「N 等你」 (the list's red `!` and
 ⌘P's order say who waits), no machine or issue of the row in view (⌘P and

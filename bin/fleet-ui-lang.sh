@@ -15,9 +15,19 @@
 # for one. A key with no entry prints itself, so a typo is visible, never blank.
 #
 # FLEET_UI_LANG:
-#   auto  follow the login locale (zh* => Chinese, everything else English)
+#   auto  the person's choice, else the client's locale, else Chinese (below)
 #   en    force English
 #   zh    force Chinese
+#
+# auto, in order (issue #3329, EPIC #3178 D5–D7):
+#   1. the person's own choice — `ui_lang` (zh | en) in the personal layer this
+#      login last read from the hub ($FLEET_CONF_DIR/person-bundle.json), set in a
+#      看台's ⌘P (fleet-config.py lang); once set, nothing is detected any more
+#   2. a 看台's own connection — FLEET_VIEW_LANG, what its client brought through
+#      the door (`@view_lang`, put in the 看台 session's environment by
+#      fleet-remote-view.sh attach --thin): zh* => Chinese, none / C / POSIX =>
+#      Chinese (D6), anything else English. Set (even empty) = this rule decides.
+#   3. the login's own locale, the same way — what a script outside a 看台 reads.
 #
 # A script that looks up many strings in a row (the key sheet, the row menu)
 # calls `fleet_ui_pin` once: the language is resolved one time instead of in a
@@ -28,12 +38,48 @@ fleet_ui_lang() {
     zh|zh_*|zh-*|ZH|ZH_*|ZH-*|cn|CN|chinese|Chinese) printf 'zh\n'; return 0 ;;
     en|en_*|en-*|EN|EN_*|EN-*|english|English)       printf 'en\n'; return 0 ;;
   esac
+  fleet_ui_person_lang && return 0
+  if [ -n "${FLEET_VIEW_LANG+x}" ]; then
+    case "$FLEET_VIEW_LANG" in
+      ''|C|C.*|POSIX|POSIX.*|zh*|ZH*) printf 'zh\n' ;;
+      *) printf 'en\n' ;;
+    esac
+    return 0
+  fi
   case "${LC_ALL:-${LC_MESSAGES:-${LC_CTYPE:-${LANG:-}}}}" in
     zh*|ZH*) printf 'zh\n' ;;
     en*|EN*) printf 'en\n' ;;
     ''|C|POSIX) printf 'zh\n' ;;
     *)       printf 'en\n' ;;
   esac
+}
+
+# fleet_ui_person_lang — the person's own choice (rule 1 above): zh | en, rc 1
+# when they never set one. FLEET_UI_PERSON_FILE is the selftest seam.
+fleet_ui_person_lang() {
+  _fup_f=${FLEET_UI_PERSON_FILE:-${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/person-bundle.json}
+  [ -f "$_fup_f" ] || return 1
+  _fup_v=$(sed -n 's/.*"ui_lang": *"\([a-z]*\)".*/\1/p' "$_fup_f" 2>/dev/null | head -n 1)
+  case "$_fup_v" in zh|en) printf '%s\n' "$_fup_v" ;; *) return 1 ;; esac
+}
+
+# fleet_ui_first_hint <device> — the one-time line a 看台's top line wears for 8 s
+# (issue #3329, D8, L4): printed — and <device> stamped — only when this
+# connection's language was DETECTED (FLEET_UI_LANG auto, no person's choice, a
+# FLEET_VIEW_LANG the client said) as something other than the Chinese default,
+# the first time <device> (the 看台's view id) comes in. rc 1 = nothing to say. A
+# stamp that cannot be written fails open: the line shows again next time.
+fleet_ui_first_hint() {
+  case "${FLEET_UI_LANG:-auto}" in auto) ;; *) return 1 ;; esac
+  fleet_ui_person_lang >/dev/null && return 1
+  [ -n "${FLEET_VIEW_LANG:-}" ] || return 1
+  [ "$(fleet_ui_lang)" = en ] || return 1
+  case "${1:-}" in ''|*[!A-Za-z0-9._-]*) return 1 ;; esac
+  _fuf_d=${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/entry
+  [ -e "$_fuf_d/$1.lang-hinted" ] && return 1
+  mkdir -p "$_fuf_d" 2>/dev/null
+  { true > "$_fuf_d/$1.lang-hinted"; } 2>/dev/null || true
+  fleet_ui_t view_lang_auto_fmt "$FLEET_VIEW_LANG"
 }
 
 fleet_ui_pin() { _FLEET_UI_L=$(fleet_ui_lang); }
@@ -561,6 +607,11 @@ fleet_ui_t() {
     en:view_reap_keep) printf 'never closed by itself' ;;
     zh:view_far_fmt) printf '%s 这台还没接上' "${1:-}" ;;
     en:view_far_fmt) printf '%s is not connected yet' "${1:-}" ;;
+    # the keys issue #3328 took away (compat-1v: 下一批删): what a forwarded one says, once
+    zh:view_forward_fmt) printf '%s 已并进 ⌘P —— 下一版这个键就不管用了' "${1:-}" ;;
+    en:view_forward_fmt) printf '%s is part of ⌘P now — the next version drops this key' "${1:-}" ;;
+    zh:view_keys_moved) printf '快捷键只剩 ⌘P：翻会话、新任务、shell、退出都在里面（⌘↑↓ ⌘[ ⌘] ⌘T ⌘N 下一版删）' ;;
+    en:view_keys_moved) printf 'One key now, ⌘P: switching sessions, a new task, a shell, quit are all in it (⌘↑↓ ⌘[ ⌘] ⌘T ⌘N go next version)' ;;
     zh:view_gone) printf '这个会话已经不在了' ;;
     en:view_gone) printf 'that session is gone' ;;
     zh:view_new_failed) printf '新会话没开起来' ;;
@@ -586,6 +637,20 @@ fleet_ui_t() {
     en:view_lang_saved) printf 'Language: English · saved to your account' ;;
     zh:view_lang_auto_fmt) printf '已按你的系统用中文 · ⌘P → 语言 可改' ;;
     en:view_lang_auto_fmt) printf 'Using English from your system (LANG=%s) · ⌘P → Language to change' "${1:-}" ;;
+    # the language row's own lines (issue #3329): ↵ flips, Tab picks, 跟系统走 clears the choice
+    zh:view_lang_foot) printf '↵ 换成 English · 存到你的账号，换设备也跟着 · Tab 跟系统走' ;;
+    en:view_lang_foot) printf '↵ switch to 中文 · saved to your account, follows you to every device · Tab follow the system' ;;
+    zh:view_lang_nolang_fmt) printf '没收到你的系统语言（Termius → Hosts → %s → Environment 加 LANG=en_US.UTF-8）· ↵ 换成 English' "${1:-}" ;;
+    en:view_lang_nolang_fmt) printf 'Your system language did not arrive (Termius → Hosts → %s → Environment: LANG=en_US.UTF-8) · ↵ switch to 中文' "${1:-}" ;;
+    zh:view_lang_auto) printf '跟系统走' ;;
+    en:view_lang_auto) printf 'Follow the system' ;;
+    zh:view_lang_auto_saved) printf '界面语言：跟系统走 · 已存到你的账号' ;;
+    en:view_lang_auto_saved) printf 'Language: follow the system · saved to your account' ;;
+    zh:view_lang_failed_fmt) printf '语言没换：%s' "${1:-}" ;;
+    en:view_lang_failed_fmt) printf 'Language not changed: %s' "${1:-}" ;;
+    # the door's one welcome line (issue #3329, L4) — printed only as you come in
+    zh:door_welcome) printf '欢迎回来。⌃空格 打开面板。' ;;
+    en:door_welcome) printf 'Welcome back. ⌃Space opens the panel.' ;;
     zh:view_door_welcome) printf '欢迎回来。⌃空格 打开面板。' ;;
     en:view_door_welcome) printf 'Welcome back. ⌃Space opens the panel.' ;;
     zh:view_cmd_quit) printf '⏻ 退出 fleet（会话在后台继续）' ;;
@@ -1255,8 +1320,8 @@ fleet_ui_t() {
     en:panel_answer_none)      printf 'No panel answer recorded yet' ;;
     zh:qd_title)                printf '快速派发' ;;
     en:qd_title)                printf 'Quick dispatch' ;;
-    zh:qd_desc)                 printf '快速派发：一行标题、选个仓库，回车就建单开工，不用等编排会话' ;;
-    en:qd_desc)                 printf 'Quick dispatch: one-line title, pick a repo, Enter files it and starts a worker without waiting for the orchestrator' ;;
+    zh:qd_desc)                 printf '已并进 ⌘P（这一版还能用，下一版删）' ;;
+    en:qd_desc)                 printf 'now part of ⌘P (works this version, gone in the next)' ;;
     zh:qd_field_title)          printf '标题' ;;
     en:qd_field_title)          printf 'Title' ;;
     zh:qd_field_repo)           printf '仓库' ;;
@@ -1265,14 +1330,17 @@ fleet_ui_t() {
     en:qd_placeholder)          printf 'what it is for, in one line' ;;
     zh:qd_submit)               printf '建单开工' ;;
     en:qd_submit)               printf 'file + start' ;;
-    zh:qd_hint)                 printf '↵ 建单并开工 · Esc 关闭 · 不经过编排会话，回报照常回到它' ;;
-    en:qd_hint)                 printf 'Enter files + starts · Esc closes · skips the orchestrator; reports still come back to it' ;;
+    zh:qd_hint)                 printf '↵ 派出（和 ⌘P 的 ⚡ 一样） · Esc 关闭' ;;
+    en:qd_hint)                 printf 'Enter sends (as ⌘P\x27s ⚡ does) · Esc closes' ;;
     zh:qd_empty)                printf '标题是空的：写一句这件事是干什么用的' ;;
     en:qd_empty)                printf 'the title is empty: say in one line what it is for' ;;
     zh:qd_norepo)               printf '读不到这个 fleet 托管的仓库' ;;
     en:qd_norepo)               printf 'could not read the repos this fleet hosts' ;;
-    zh:qd_sending)              printf '正在建单…' ;;
-    en:qd_sending)              printf 'filing…' ;;
+    zh:qd_sending)              printf '派单中…' ;;
+    # /qd retired by issue #3328 (compat-1v: 下一批删, with every qd_ key)
+    zh:qd_moved)                printf '/qd 已并进 ⌘P：在 ⌘P 里直接写这件事，↵ 就派出；下一版 /qd 就没有了' ;;
+    en:qd_moved)                printf '/qd is part of ⌘P now: type the task in ⌘P and press Enter; the next version drops /qd' ;;
+    en:qd_sending)              printf 'sending…' ;;
     zh:qd_done_fmt)             printf '已建 #%s 并开工' "${1:-}" ;;
     en:qd_done_fmt)             printf 'filed #%s and started its worker' "${1:-}" ;;
     zh:qd_failed_fmt)           printf '没派出去：%s' "${1:-}" ;;
@@ -1866,6 +1934,8 @@ fleet_ui_hint_once() {
 case "$0" in */fleet-ui-lang.sh|fleet-ui-lang.sh)
   case "${1:-lang}" in
     lang) fleet_ui_lang ;;
+    # first-hint DEVICE — the 看台's one-time language line, or nothing (issue #3329)
+    first-hint) fleet_ui_first_hint "${2:-}" ;;
     t) shift; fleet_ui_t "$@" ;;
     # toast CLIENT KEY [args…] — a tmux bind's message, in the login's language
     toast) _c=${2:-}; shift 2 2>/dev/null || shift $#
@@ -1882,6 +1952,6 @@ case "$0" in */fleet-ui-lang.sh|fleet-ui-lang.sh)
               case "$_k" in "$_p"*) printf '%s\0%s\0' "$_k" "$(fleet_ui_t "$_k" "$_s" "$_s" "$_s" "$_s")"; break ;; esac
             done
           done ;;
-    *) printf 'usage: fleet-ui-lang.sh [lang|t KEY|toast CLIENT KEY|hint CLIENT KEY|dump PREFIX…]\n' >&2; exit 2 ;;
+    *) printf 'usage: fleet-ui-lang.sh [lang|first-hint DEVICE|t KEY|toast CLIENT KEY|hint CLIENT KEY|dump PREFIX…]\n' >&2; exit 2 ;;
   esac ;;
 esac

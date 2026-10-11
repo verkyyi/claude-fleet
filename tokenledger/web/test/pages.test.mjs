@@ -8,7 +8,7 @@ import { readFileSync } from 'node:fs';
 import {
   dayKeys, dayTokens, stack, delta, bars, areaChart, niceMax,
   sessionRows, counts, filterRows, running, attention, stateOf,
-  activeDevices, clientDevices, whyNotClient, scopeOf, deviceHistory, looksLikeKey, bundleItems, parseImport, quotaTable, quotaState, myMachines, takesOf, usageDays, usageBudget,
+  activeDevices, clientDevices, whyNotClient, limitKpi, fullFrom, deviceHistory, looksLikeKey, bundleItems, parseImport, quotaTable, quotaState, myMachines, takesOf, usageDays, usageBudget,
 } from '../dist/lib/pages.js';
 import { askOf, askLine } from '../dist/lib/pages.js';
 import { useLocale } from '../dist/lib/i18n.js';
@@ -32,8 +32,18 @@ test('a sparse series fills absent days with 0', () => {
 
 test('delta: percent change, nothing when there is no earlier window', () => {
   assert.deepEqual(delta(114, 100, 'ui.ov.vsYesterday'), { text: '+14% vs yesterday', down: false });
-  assert.deepEqual(delta(50, 100, 'ui.ov.vsLastWeek'), { text: '-50% vs last week', down: true });
+  assert.deepEqual(delta(50, 100, 'ui.ov.vsYesterday'), { text: '-50% vs yesterday', down: true });
   assert.deepEqual(delta(5, 0, 'ui.ov.vsYesterday'), { text: '', down: false });
+  // A near-empty base the hub did not fully record is no percent (claude-fleet#3230):
+  // pool_usage began this morning, so yesterday's 12 tokens are not "yesterday".
+  const first = '2026-10-11T09:00:00Z';
+  assert.ok(!fullFrom(first, '2026-10-10T00:00:00Z'), 'yesterday began before the first row');
+  assert.ok(fullFrom('2026-10-01T00:00:00Z', '2026-10-10T00:00:00Z'));
+  assert.ok(fullFrom(first, '2026-10-11T09:00:00Z'), 'a window starting at the first row is full');
+  assert.ok(!fullFrom(undefined, '2026-10-10T00:00:00Z'), 'nothing recorded is not full');
+  assert.deepEqual(delta(3200000, 12, 'ui.ov.vsYesterday', !fullFrom(first, '2026-10-10T00:00:00Z') && 'ui.ov.noFullYesterday'),
+    { text: 'No full record of yesterday', down: false, muted: true });
+  assert.deepEqual(delta(114, 100, 'ui.ov.vsYesterday', false), { text: '+14% vs yesterday', down: false });
   try {
     useLocale('zh-CN');
     assert.equal(delta(114, 100, 'ui.ov.vsYesterday').text, '比昨天 +14%');
@@ -159,17 +169,25 @@ test('deviceHistory: past devices and the certificate audit, named', () => {
   assert.match(dev, /<details class="panel fold" id="devhistory">/, 'the history is folded');
 });
 
-// The overview says what it counts (claude-fleet#2680): the viewer's own
-// (machine, login) pairs, and to an admin where the whole hub went (#2515).
-test('overview scope: the pairs counted, and a pointer for an admin', () => {
+// The overview's first tile is the viewer's own limit (claude-fleet#3230):
+// 不限额 with no limit set, else what is left of the week — limit − used,
+// never below 0 — and never the pool's.
+test('limit tile: 不限额, what is left of the week, the 5-hour window alone', () => {
   useLocale('zh-CN');
   try {
-    const logins = [{ machine: 'mini2', login: 'verky' }, { machine: 'macmini', login: 'verky' }];
-    assert.equal(scopeOf({ role: 'user', logins }), '只算你在这些登录上的用量：mini2·verky、macmini·verky。');
-    assert.match(scopeOf({ role: 'admin', logins }), /管理 · 按人概览/);
-    assert.equal(scopeOf({ logins: [] }), '');
-    assert.equal(scopeOf(null), '');
+    const none = limitKpi({ set: false, used_week: 5e6 });
+    assert.match(none, /我的上限/); assert.match(none, /不限额/); assert.doesNotMatch(none, /剩/);
+    const week = limitKpi({ set: true, limit_week: 40e6, used_week: 21.4e6, remaining_week: 18.6e6 });
+    assert.match(week, /本周还剩/); assert.match(week, /剩 1860 万/); assert.match(week, /上限 4000 万 · 已用 2140 万/);
+    assert.match(week, /width:54%/);
+    const over = limitKpi({ set: true, limit_week: 10e6, used_week: 12e6 });
+    assert.match(over, /剩 0/); assert.match(over, /class="bad"/); assert.match(over, /delta down/);
+    assert.match(limitKpi({ set: true, limit_5h: 2e6, used_5h: 1e6 }), /5 小时内还剩/);
+    assert.match(limitKpi(undefined), /不限额/);
   } finally { useLocale('en'); }
+  const ov = readFileSync(new URL('../dist/overview.js', import.meta.url), 'utf8');
+  assert.match(ov, /\/v1\/me\/usage/, 'the overview reads the viewer\'s own usage');
+  assert.doesNotMatch(ov, /by=endpoint|by=model|\/v1\/fleet\/devices/, 'no per-machine / per-model / per-device split');
 });
 
 // 我的设备 is the computers a person signs in FROM (claude-fleet#2680): a
@@ -194,8 +212,6 @@ test('client devices: not a hosting machine, not idle, the newest key per name',
   assert.deepEqual(deviceHistory(body, now).past.map((d) => [d.fingerprint, d.why]),
     [['mbp-old', 'replaced'], ['mini2', 'host'], ['stale', 'idle'], ['gone', 'revoked']]);
   assert.deepEqual(clientDevices(undefined), []);
-  const ov = readFileSync(new URL('../dist/overview.js', import.meta.url), 'utf8');
-  assert.match(ov, /clientDevices\(devs\.value\)\.length/, 'the overview tile counts client devices');
 });
 
 test('a bundle lists one row per server, hook, skill and setting', () => {

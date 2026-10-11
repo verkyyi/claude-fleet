@@ -168,7 +168,7 @@ else
   PO="$BIN/../plugins/fleet-orchestrate"
   v=$(claude plugin validate "$PO" 2>&1) || fail "D: claude plugin validate plugins/fleet-orchestrate failed" "$v"
   q=$(cd "$PO" && claude plugin test . 2>&1) || fail "D: claude plugin test plugins/fleet-orchestrate failed" "$q"
-  case "$q" in *'Enter files exactly once with spawn'*) : ;; *) fail "D: the quick-dispatch tests (plugins/fleet-orchestrate/tests/qd.test.tsx, #2618 · #3114) did not run" "$q" ;; esac
+  case "$q" in *'Enter sends exactly once through ⌘P'*) : ;; *) fail "D: the /qd forward tests (plugins/fleet-orchestrate/tests/qd.test.tsx, #2618 · #3114 · #3328) did not run" "$q" ;; esac
   # the panels live in the fleet-steward plugin (issue #3115): its own validate + tests
   PS="$BIN/../plugins/fleet-steward"
   v=$(claude plugin validate "$PS" 2>&1) || fail "D: claude plugin validate plugins/fleet-steward failed" "$v"
