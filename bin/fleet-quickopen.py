@@ -25,7 +25,7 @@ session (issue #1903, EPIC #1906 C10) — and the switch history ⌘[ / ⌘] wal
                                               全部, two-line rows big enough for a
                                               thumb; type to filter, tap or ↵ to go
     fleet-quickopen.py --view <view> · do <verb> --view <view> · view-keys ·
-    go <view> <target> · view-rows --view <view> · view-peers --view <view>
+    go <view> <target> · view-rows --view <view> · view-panel --view <view> · view-peers --view <view>
                                               the 看台's switcher on the home machine
                                               (issue #3000, EPIC #2999 C2; another
                                               machine's windows, C4): its node

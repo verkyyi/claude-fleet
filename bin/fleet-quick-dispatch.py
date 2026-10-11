@@ -16,6 +16,10 @@ Codex), a bare shell, a session on another machine.
     fleet-quick-dispatch.py send --title T [--repo R] [--codex | --agent A] [--view V]
                                           the ↵ without the screen: write it, hand
                                           it on; prints 「已发出：…」 or why not
+                                          (⌘P's 「新任务」 row, issue #3180, sends
+                                          through it — no second dialog)
+    fleet-quick-dispatch.py pick          the repo ⌘P's 「新任务」 sends to: line 1
+                                          the pick (empty = ask), then every repo
 
 The popup: 标题 (one line), 仓库 (every repo the hub says this person's machines
 host — the one the last send went to first; ←→ picks, shown only when there is
@@ -107,6 +111,17 @@ def repo_default(have=None, last=None):
     if not have:
         return last
     return last if last in have else have[0]
+
+
+def repo_pick(have=None, last=None):
+    """⌘P's 「新任务」 (issue #3180): the last send's repo when the hub still names
+    it, the only one when there is one, else '' — the panel asks 「派到哪个仓库」
+    rather than guess the first of several."""
+    have = repos() if have is None else have
+    last = compose.last_repo() if last is None else last
+    if last and (last in have or not have):
+        return last
+    return have[0] if len(have) == 1 else ""
 
 
 AGENTS = ("claude", "codex")
@@ -337,6 +352,11 @@ def main(argv):
     locale.setlocale(locale.LC_ALL, "")
     TEXT = load_text()
     compose.TEXT = TEXT
+    if argv[:1] == ["pick"]:
+        print(repo_pick())
+        for r in repos():
+            print(r)
+        return 0
     o = opts(argv[1:] if argv[:1] in (["payload"], ["send"]) else argv)
     if argv[:1] in (["payload"], ["send"]):
         agent = o["--agent"] if o["--agent"] in AGENTS else None
