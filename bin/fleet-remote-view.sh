@@ -801,7 +801,7 @@ rv_thin_dress() {
   return 0
 }
 rv_attach_thin() {
-  local view='' want='' resume='' device='' route='' token='' s w='' g gid='' tty f p fu cur rc kept wfar
+  local view='' want='' resume='' device='' route='' token='' s w='' g gid='' tty f p fu cur rc kept wfar orchfar
   while [ $# -gt 0 ]; do
     case "$1" in
       --view) view="${2:-}"; shift 2 ;;
@@ -849,7 +849,14 @@ rv_attach_thin() {
     [ -n "$w" ] || w=$(rv_thin_window "$s" "$cur")
   fi
   # Nowhere named: a resumed 看台 still kept stays where it was; anything else lands home.
-  [ -n "$w" ] || { [ -n "$resume" ] && [ -n "$kept" ]; } || w=$(rv_thin_home "$s")
+  # Home is the orchestrator: here, or — no such window here — wherever it runs,
+  # through ⌘N's own road below (issue #3007: a home that is not the holder put the
+  # person on a bare `home` shell, on the MacBook and on the phone alike)
+  orchfar=''
+  if [ -z "$w" ] && ! { [ -n "$resume" ] && [ -n "$kept" ]; }; then
+    w=$(rv_thin_home "$s")
+    [ "$(T display-message -p -t "$w" '#{@fleet_role}' 2>/dev/null)" = orchestrator ] || orchfar=1
+  fi
   [ -z "$w" ] || T select-window -t "$gid:$w" 2>/dev/null
   rv_thin_dress "$gid" "$view" "$s"
   # C4: a window per other (machine, login) your sessions are on, made now — off
@@ -861,6 +868,13 @@ rv_attach_thin() {
   # the 看台's one switch road takes it there once attached — its C4 window
   case "$wfar:$view" in ?*:*-via-*|:*) ;; *)
     ( sleep 0.3; TMUX='' python3 "$BIN/fleet-quickopen.py" go "$s@view-$view" "$wfar" --how want </dev/null >/dev/null 2>&1 & ) ;;
+  esac
+  case "$orchfar:$wfar:$view" in 1::*-via-*) ;; 1::*)
+    if [ -n "${FLEET_VIEW_FIRST_CMD:-}" ]; then   # the selftest's seam: what ran, nothing switched
+      ( sleep 0.3; TMUX='' sh -c "$FLEET_VIEW_FIRST_CMD"' "$@"' _ "do" new --view "$s@view-$view" </dev/null >/dev/null 2>&1 & )
+    else
+      ( sleep 0.3; TMUX='' python3 "$BIN/fleet-quickopen.py" "do" new --view "$s@view-$view" </dev/null >/dev/null 2>&1 & )
+    fi ;;
   esac
   rv_hide_borders "$s"
   tty=$(tty 2>/dev/null) || tty=-
