@@ -5209,19 +5209,25 @@ fleet_win_for_key() {
     orchestrator|steward)
       # The fleet's one orchestrating session (issue #1957), and its steward (issue
       # #2670): the @fleet_role, on this fleet's server — no number to recycle, no
-      # repo to qualify it.
+      # repo to qualify it. The role's HOLDER answers first (issue #3117, EPIC #3111
+      # rule 4): an ordinary window that took the role carries `@fleet_role_def <role>`
+      # (C3's take_role); only when none does is the old seat's @fleet_role read
+      # (# compat-1v: 下一批删) — so a report finds whoever holds the role now.
       [ -z "$pre" ] || return 1
       if [ -n "$sock" ]; then
-        hits=$(fleet_lw '#{window_id}|#{@fleet_role}' tmux -L "$sock" | awk -F'|' -v r="$key" '$2 == r { print $1 }')
+        hits=$(fleet_lw '#{window_id}|#{@fleet_role}|#{@fleet_role_def}' tmux -L "$sock")
       else
-        hits=$(fleet_lw '#{window_id}|#{@fleet_role}' | awk -F'|' -v r="$key" '$2 == r { print $1 }')
+        hits=$(fleet_lw '#{window_id}|#{@fleet_role}|#{@fleet_role_def}')
       fi
+      hits=$(printf '%s\n' "$hits" | awk -F'|' -v r="$key" '
+        $3 == r { d = d $1 "\n" } $2 == r { o = o $1 "\n" }
+        END { printf "%s", (d != "" ? d : o) }')
       n=$(printf '%s' "$hits" | grep -c .)
       case "$n" in
         0) return 1 ;;
         1) printf '%s' "$hits"; return 0 ;;
       esac
-      printf 'fleet: %s is ambiguous — %s windows carry @fleet_role %s\n' "$key" "$n" "$key" >&2
+      printf 'fleet: %s is ambiguous — %s windows hold the role %s\n' "$key" "$n" "$key" >&2
       return 2 ;;
     *) return 1 ;;
   esac

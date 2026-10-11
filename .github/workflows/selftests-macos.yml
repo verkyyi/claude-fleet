@@ -37,32 +37,28 @@ name: selftests (macOS)
 # from `strategy.job-total`, so the list is the only thing to edit) or drop the
 # schedule.
 #
-# AFTER MERGE, NOT BEFORE (issue #2286)
-# ---------------------------------------
+# AFTER MERGE, NOT BEFORE (issue #2286) — AND NOW ONLY IN THE TRAIN (issue #3141)
+# -------------------------------------------------------------------------------
 # A free account runs at most 5 macOS jobs at once. From #1374 to #2286 every PR
-# took 2 of them, so two EPICs with five PRs open queued here: the last 23 PR runs
-# took a median 21 minutes (worst 56) while every ubuntu check was long green, and
-# the merge gate sat PENDING on the BSD half alone. What the BSD half guards is
-# RELEASING to a machine — moving `stable` (bin/fleet-stable.sh) — not merging to
-# master: master's code reaches m4 / m5 / a client only when stable moves.
-#
-# So the division of labour is:
+# took 2 of them, and the merge gate sat PENDING on the BSD half alone (median 21
+# minutes). What the BSD half guards is RELEASING to a machine — moving `stable`
+# (bin/fleet-stable.sh) — not merging to master, so #2286 moved it after the merge:
+# a run on every push to master, a newer push cancelling the older one. On a busy
+# night that cancelled 17 of 20 runs and nothing was ever green long enough to
+# release (EPIC #3139). So since #3141:
 #   * pull_request — NO macOS job. The ubuntu gate (selftests.yml) is the merge
 #     gate, and `fleet-pr-verdict.sh` ignores any `macOS shard *` check it still
 #     finds on an older PR.
-#   * push to master — `run-selftests.sh --changed <the previous master>` (the
-#     tests related to what just landed) on 2 shards. One group for all of master,
-#     and a newer push CANCELS the older run: the newest master is what stable may
-#     move to, and a cancelled run counts as no run at all (below).
-#   * a red master run is filed ONCE as a breakage (bin/fleet-macos-watch.sh, on
-#     the dispatch daemon's tick → fleet-issue-file.sh --breakage, one issue per
-#     fingerprint) and gets its fixer.
+#   * push to master — NOT here. The release train (release-train.yml) runs the
+#     BSD half inside its one lane: one train at a time, never cancelled by a push,
+#     `--changed <stable>` on the commit it boards.
 #   * `fleet-stable.sh move` refuses (`macos:`) a target whose newest macOS run is
-#     not green; a target with no run (path-filtered, cancelled by a later push)
-#     gets a `workflow_dispatch` of the FULL suite on exactly that commit (input
-#     `sha`, which the run's name carries) and the move waits for it.
+#     not green; a target with no run gets a `workflow_dispatch` of the FULL suite
+#     here on exactly that commit (input `sha`, which the run's name carries) and
+#     the move waits for it. A green train on the target counts as its BSD half.
 #   * nightly — the full suite on master's head, the backstop for anything the
-#     selector cannot see.
+#     selector cannot see; a red one is filed ONCE as a breakage
+#     (bin/fleet-macos-watch.sh).
 #
 # A dispatched run names its commit, so `fleet-stable.sh move` can find the run it
 # asked for: GitHub attaches a dispatch run to the branch head, never to `sha`.
@@ -79,187 +75,27 @@ on:
         description: 'the commit to run the full suite on (fleet-stable.sh move dispatches this; empty = the ref head)'
         required: false
         default: ''
-  push:
-    branches: [master]
-    # The same trees as selftests.yml: a docs-only landing runs no BSD half (and
-    # fleet-stable.sh dispatches one if stable is ever moved onto it).
-    paths:
-      - 'bin/**'
-      - 'hooks/**'
-      - 'conf/**'
-      - 'launchd/**'
-      - 'systemd/**'
-      - '.claude-plugin/**'
-      - 'commands/**'
-      - 'skills/**'
-      - 'shell/**'
-      - 'extras/**'
-      - 'mod/**'
-      - 'fleet.conf.example'
-      - '.github/workflows/selftests.yml'
-      - '.github/workflows/selftests-macos.yml'
 
-# Master's push runs are ONE group and a newer push cancels the older run (only the
-# newest master matters to stable). The full runs (nightly, dispatch) are another
-# group that queues instead of cancelling — a dispatch fleet-stable.sh is waiting
-# on must not be killed by the nightly.
+# Full runs queue instead of cancelling — a dispatch fleet-stable.sh is waiting on
+# must not be killed by the nightly.
 concurrency:
-  group: selftests-macos-${{ github.event_name == 'push' && 'master' || 'full' }}
-  cancel-in-progress: ${{ github.event_name == 'push' }}
+  group: selftests-macos-full
+  cancel-in-progress: false
 
 jobs:
   selftests-macos:
-    # The name carries the platform on purpose. A red here must be legible AS a
-    # BSD-only failure at a glance in the checks list — never mistakable for one
-    # of the ubuntu shards, which is the whole diagnostic value of this job.
-    name: macOS shard ${{ matrix.shard }}
-    runs-on: macos-latest
-    strategy:
-      # A red shard must not hide whether the other five were green: a partial
-      # picture is what makes people re-run instead of read.
-      fail-fast: false
-      matrix:
-        # Two widths, configured apart from the ubuntu matrix (issue #1374): a
-        # master push gets at most 2 macOS shards, because a free account runs at
-        # most 5 macOS jobs at once; the nightly / dispatch full suite runs 10 (issue
-        # #2659: at 6 the table put ~600 ubuntu-seconds in a shard, 2.3x that on
-        # macOS — three shards hit the 20-minute bound on #2638; at 10 a shard is
-        # ~370 ubuntu-seconds, two waves of five). The runner reads N from
-        # `strategy.job-total`, so each list stays the single source of its width.
-        shard: ${{ github.event_name == 'push' && fromJSON('[1, 2]') || fromJSON('[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]') }}
-    # A push whose change falls back to the FULL suite (a harness edit) runs it on 2
-    # shards, not 10: measured ~28 min a shard on #1375, so the push bounds are wider.
-    # A full shard measured 1000-1250 s on macOS at 6 wide (issue #2638: 2.3x the
-    # ubuntu table run-selftests.sh predicts from), so the full bounds carry ~2x
-    # headroom even before the widening to 10.
-    timeout-minutes: ${{ github.event_name == 'push' && 60 || 50 }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          # A dispatch from fleet-stable.sh names the commit to test; else the
-          # event's own commit.
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.sha || '' }}
-          # A push run diffs against the previous master (--changed); it must be
-          # in the clone.
-          fetch-depth: 0
-
-      - name: Assert a BSD toolchain
-        # The premise of this entire workflow, checked rather than assumed. If a
-        # future runner image puts GNU coreutils/sed ahead of the BSD ones on
-        # PATH, every test here would pass for the wrong reason and the ubuntu
-        # matrix would silently be the only thing running — the exact blind spot
-        # #696 exists to close, restored by accident. Fail loudly instead.
-        #
-        # It also prints the toolchain up front, so a red log further down
-        # identifies itself as BSD-only without anyone having to infer it.
-        run: |
-          set -u
-          uname -a
-          for u in sh bash sed grep awk stat date base64 readlink mktemp tmux; do
-            printf '%-10s %s\n' "$u" "$(command -v "$u" 2>/dev/null || echo '(absent)')"
-          done
-          printf 'default bash  %s\n' "$(bash --version | head -1)"
-          printf '/bin/bash     %s\n' "$(/bin/bash --version | head -1)"
-          if sed --version 2>/dev/null | head -1 | grep -q GNU; then
-            echo "::error::sed on PATH is GNU, not BSD — this runner is not testing what this job exists to test (see the header of this workflow)"
-            exit 1
-          fi
-          echo "sed is BSD — this is a real BSD toolchain"
-
-      - name: Install tmux
-        # ~40 selftests drive tmux on their own isolated `-S` socket. The ubuntu
-        # image ships tmux; the macOS image does not guarantee it, and an absent
-        # tmux would turn those into failures that say nothing about portability.
-        # Homebrew is preinstalled on the runner.
-        run: |
-          command -v tmux >/dev/null 2>&1 || brew install tmux
-          tmux -V
-
-      - name: Skip http.server's lookup of its own address
-        # issue #2319: on this runner image the FIRST reverse lookup of 127.0.0.1
-        # in a process takes 35 s (measured; rewriting /etc/hosts does not help).
-        # http.server's bind does exactly that (`socket.getfqdn` for server_name,
-        # which nothing here reads), so every python fake server a selftest starts
-        # paid 35 s and the full shards ran past their 20-minute bound. A
-        # sitecustomize in the PATH python3's site-packages (loaded even under
-        # `python3 -I`) binds without the lookup. The fleet's own server
-        # (bin/fleet-cred-proxy.py) never asks — fleet-cred-proxy-selftest.sh K —
-        # so this hides nothing the product does.
-        run: |
-          # Homebrew's python ships its own sitecustomize.py in the stdlib dir,
-          # which shadows one in site-packages: append to the one it imports.
-          sc=$(python3 -c 'import sitecustomize; print(sitecustomize.__file__)' 2>/dev/null) \
-            || sc="$(python3 -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')/sitecustomize.py"
-          echo "sitecustomize: $sc"
-          cat >> "$sc" <<'PY'
-          import http.server as _hs, socketserver as _ss
-          def _bind(self):
-              _ss.TCPServer.server_bind(self)
-              self.server_name, self.server_port = self.server_address[:2]
-          _hs.HTTPServer.server_bind = _bind
-          PY
-          python3 -I -c 'import sys, time, http.server as h; t = time.time(); h.ThreadingHTTPServer(("127.0.0.1", 0), h.BaseHTTPRequestHandler); d = time.time() - t; print("bind %.2fs" % d); sys.exit(d > 5)'
-
-      - name: Run this shard's selftests
-        # Same command and the same sharding as the ubuntu matrix — K from the
-        # matrix entry, N from `strategy.job-total`, so the `shard:` list stays
-        # the single source of truth for the width on both platforms.
-        #
-        # The bound is looser than ubuntu's 8: several tests carry real-time
-        # budgets, a macOS runner is a noisier neighbour than an ubuntu one, and
-        # this job is nightly — a timeout red costs a whole night's signal, where
-        # a few extra idle minutes cost nothing on a free public runner.
-        timeout-minutes: ${{ github.event_name == 'push' && 50 || 40 }}
-        env:
-          # push → only the tests related to what landed since the previous master
-          # (issue #2286); nightly / dispatch → full. A first push or a force-push
-          # has no usable `before` (all zeros / not in the clone): run-selftests.sh
-          # falls back to the full suite on an unresolvable base.
-          CHANGED_BASE: ${{ github.event_name == 'push' && github.event.before || '' }}
-        run: |
-          set -o pipefail
-          set -- --shard "${{ matrix.shard }}/${{ strategy.job-total }}"
-          [ -z "$CHANGED_BASE" ] || set -- --changed "$CHANGED_BASE" "$@"
-          bash bin/run-selftests.sh "$@" 2>&1 | tee selftests.log
-
-      - name: Per-test timings
-        if: always()
-        # Same as the ubuntu matrix, and for the same reason (#681): a test
-        # getting slower should surface on the run that made it slower, not on
-        # the run that went red. The macOS label matters here — these numbers are
-        # NOT comparable with the ubuntu shards', and a reader must not diff them.
-        run: |
-          {
-            echo "## selftests · macOS · shard ${{ matrix.shard }}/${{ strategy.job-total }}"
-            echo
-            echo '```'
-            [ "${{ matrix.shard }}" != 1 ] || grep '^select: ' selftests.log 2>/dev/null || true
-            if grep -q '^-* slowest' selftests.log 2>/dev/null; then
-              sed -n '/^-* slowest/,$p' selftests.log
-            elif grep -Eq 'has nothing to run|^select: \(none\)' selftests.log 2>/dev/null; then
-              echo 'nothing related landed in this shard'
-            else
-              echo 'the shard was cut short — this test started and never finished:'
-              awk '/^=== /{h=$2} /^(PASS  |FAIL  |TIMEOUT )/{h=""}
-                   END{print "  " (h ? h : "(none identified — read the log)")}' \
-                selftests.log 2>/dev/null
-            fi
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Name the failures as macOS-only
-        if: failure()
-        # The one thing that must not happen on a red night is someone reading
-        # this as "the suite is broken" and re-running the ubuntu gate. Say what
-        # a failure here means, next to the names of what failed.
-        run: |
-          {
-            echo "### ⚠️ macOS-only failure · shard ${{ matrix.shard }}/${{ strategy.job-total }}"
-            echo
-            echo "These tests are green on the ubuntu matrix. A failure HERE is a"
-            echo "BSD-toolchain or bash-3.2 difference (issue #696) — not a broken test."
-            echo
-            echo '```'
-            grep -E '^(FAIL|failed:)' selftests.log 2>/dev/null || echo '(no FAIL line — the shard was cut short; see the timings above)'
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+    # The name carries the platform on purpose: a red here must be legible AS a
+    # BSD-only failure in the checks list (`macOS / shard K`).
+    name: macOS
+    # The matrix is selftests-shards.yml's (the one copy, issue #3141): the BSD
+    # assertion, tmux, the http.server fix and the macOS bounds live there.
+    # 10 wide (issue #2659: at 6 the table put ~600 ubuntu-seconds in a shard, 2.3x
+    # that on macOS — three shards hit the 20-minute bound on #2638; at 10 a shard
+    # is ~370 ubuntu-seconds, two waves of five).
+    uses: ./.github/workflows/selftests-shards.yml
+    with:
+      # A dispatch from fleet-stable.sh names the commit to test; else the event's own.
+      sha: ${{ github.event_name == 'workflow_dispatch' && inputs.sha || '' }}
+      base: ''
+      runs_on: macos-latest
+      shards: '[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]'

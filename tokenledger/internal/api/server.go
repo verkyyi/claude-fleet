@@ -226,6 +226,10 @@ type Server struct {
 	// (claude-fleet#1428); nil when CCQUOTA_FLEET_SPOT_IMAGE is unset.
 	Spot *SpotController
 
+	// EntryDNS writes every person's address record (claude-fleet#3073);
+	// nil when the hub has no DNS token (CCQUOTA_DNS_*) — no call at all.
+	EntryDNS *EntryDNS
+
 	// Elector says which replica runs each background loop when two hubs
 	// share one Postgres database (claude-fleet#2123). nil — every hub on
 	// SQLite — leads everything, exactly as before.
@@ -400,6 +404,9 @@ func (s *Server) routes() *routeMux {
 		// machine's desired state are the operator's; the node reads its own.
 		// The exact /v1/fleet/nodes/revoke and /retire routes still win.
 		mux.Handle(FleetNodesPrefix, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetNodes))))
+		// Every machine's test runner (claude-fleet#3144): the machine links'
+		// word, an admin's (the train's macOS job holds the viewer token).
+		mux.Handle(CIRunnersPath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleCIRunners))))
 		mux.HandleFunc("/v1/node/desired", s.handleNodeDesired)
 		// SPOT nodes (claude-fleet#1428): the node's own reclaim notice
 		// authenticates with its token; starting and releasing are the

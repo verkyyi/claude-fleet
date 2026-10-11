@@ -22,6 +22,9 @@
 #      the menu's own items for the row in view in the table's order, filters
 #      them (`>pin`), and for real ⌘P `>pin` ↵ pins the row in view, the way the
 #      menu's 置顶 does.
+#   E  a lost machine's rows (issue #3164): a row whose machine mark ends `!`
+#      parses as lost, its detail says `m4 失联`, and ⌘P's rule carries how old the
+#      list is (off global/hub_ok); no lost row ⇒ no note.
 #   C  no iTerm2: the profile writer writes nothing, and fleet-shell.sh's attach is
 #      the bare `exec tmux … attach` it always was, byte for byte; in iTerm2 with
 #      the profile there, the window wears `fleet` only around the attach.
@@ -429,5 +432,31 @@ if out != bare:
 if errs:
     print("FAIL C:\n  " + "\n  ".join(errs)); sys.exit(1)
 print("C: no iTerm2 = the bare attach, byte for byte; iTerm2 + profile = SetProfile around it")
+PY
+python3 - "$BIN" <<'PY' || exit 1
+import importlib.util, os, sys, tempfile, time
+g = tempfile.mkdtemp()
+os.environ["FLEET_STATUS_G"] = g
+spec = importlib.util.spec_from_file_location("q", os.path.join(sys.argv[1], "fleet-quickopen.py"))
+q = importlib.util.module_from_spec(spec); spec.loader.exec_module(q)
+errs = []
+rows = q.parse_rows("k1\tworking\t●\tone\tm4!\tg\t\nk2\tidle\t○\ttwo\tm5~\tg\t\nk3\tidle\t○\tthree\t\tg\t\n")
+if [r["lost"] for r in rows] != [True, False, False] or rows[0]["node"] != "m4":
+    errs.append("parse: %r" % [(r["node"], r["lost"]) for r in rows])
+if [q.node_say(r) for r in rows] != ["m4 失联", "m5", ""]:
+    errs.append("node_say: %r" % [q.node_say(r) for r in rows])
+if q.stale_note(rows[1:]):
+    errs.append("a note with no lost row: %r" % q.stale_note(rows[1:]))
+with open(os.path.join(g, "hub_ok"), "w") as f:
+    f.write("%d\n" % (time.time() - 7427))
+note = q.stale_note(rows)
+if "2h" not in note or "失联" not in note:
+    errs.append("stale note: %r" % note)
+os.unlink(os.path.join(g, "hub_ok"))
+if "?" not in q.stale_note(rows):
+    errs.append("no hub_ok: %r" % q.stale_note(rows))
+if errs:
+    print("FAIL E:\n  " + "\n  ".join(errs)); sys.exit(1)
+print("E: a lost row says 失联 and ⌘P says how old the list is")
 PY
 echo "fleet-switch selftest: OK"

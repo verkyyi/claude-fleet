@@ -88,6 +88,9 @@ type ReleaseStore struct {
 	Client        *http.Client       // the fetches' client (tests); nil = one per call
 	Keep          int                // default ReleaseKeep
 	Publish       *PublishAuth       // who may POST …/publish (claude-fleet#2772); nil = the route is off
+	// OnPromote runs (in its own goroutine) each time the stable pointer moves
+	// — Server.BroadcastRelease tells every node at once (claude-fleet#3146).
+	OnPromote func(sha string, seq int64)
 
 	mu        sync.Mutex
 	building  map[string]*releaseBuild
@@ -568,6 +571,9 @@ func (rs *ReleaseStore) promoteWith(ctx context.Context, sha string, all map[str
 	rs.pubAt = time.Time{} // PublishedStable reads the new pointer
 	rs.pubMu.Unlock()
 	log.Printf("fleet: release %s is stable #%d", sha[:7], want.Seq)
+	if rs.OnPromote != nil {
+		go rs.OnPromote(sha, want.Seq)
+	}
 	rs.prune()
 	return nil
 }

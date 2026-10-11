@@ -78,6 +78,8 @@
 #                                                   tokenledger/internal/api pickNodeAfter (go test, when here)
 #   oldcfg-deleted-hook                             bin/fleet-stable.sh move (the oldcfg gate), fleet-oldcfg-replay.py
 #   macos-red-to-stable                             bin/fleet-macos-watch.sh (breakage filing), fleet-stable.sh move (macos gate)
+#   train-push-cancels                              .github/workflows/release-train.yml (concurrency), bin/fleet-train-board.sh,
+#                                                   selftests-macos.yml (no push trigger)
 #   release-artifact-missing                        bin/fleet-stable.sh move (the artifacts gate),
 #                                                   fleet-node-update.py pinned-artifacts, the hub's build refusal
 #   release-ccquota-behind                          bin/fleet-stable.sh move (the ccquota gate)
@@ -157,6 +159,8 @@
 #                                                   write_stamp
 #   cmdn-waits-orch                                 bin/fleet-shell.sh portal (home-session --new),
 #                                                   conf/tmux-shell.conf (User928), fleet-sidebar.py with_portal
+#   report-parent-gone                              bin/fleet-report-parent.sh (orphan → global/orphan-reports.ndjson
+#                                                   + fleet-alerts.sh event child-report)
 # Cred half — cred-* rows: bin/fleet-break-it-cred-selftest.sh runs them (its own
 #   test; listed here only through the lockstep lint) — and cred-shared-down,
 #   bin/fleet-break-it-cred-shared-selftest.sh (issue #2217) — and cred-sep-by-agent /
@@ -171,6 +175,8 @@
 #   The thin loop on the person's own computer (issue #3007): bin/fleet-break-it-thin-client-selftest.sh.
 # Entry half — entry-* rows (issue #3070): the home machine's public entry port, a
 #   real sshd in a sandbox on 127.0.0.1, bin/fleet-break-it-entry-selftest.sh.
+# CI half — ci-runner-* rows (issue #3144): the machine's test runner, a fake GitHub
+#   API on 127.0.0.1 and a fake runner archive, bin/fleet-break-it-ci-selftest.sh.
 # Shell half — a sandbox fleet on -L kf (TMUX_TMPDIR under $WORK), the real wrapper:
 #   shell-kill-fleet                                bin/tmux-shim/tmux, fleet-session-wrap.sh, hooks/bash-guard.py
 #   zsh-guard-fleet-label                           shell/cw.zsh tmux()
@@ -179,6 +185,9 @@
 #                                                   bin/fleet-brew-perms.sh, shell/cw.zsh brew()
 #   nothing-starts-by-itself                        bin/fleet-dispatch.sh (the retired shell),
 #                                                   bin/fleet-diskguard.sh macos_watch, fleet-macos-watch.sh
+#   release-push-lost                               bin/fleet-node-supervisor.py (task_due: update-now + the
+#                                                   update clock), fleet-install-sync.sh --now; the Go half is
+#                                                   tokenledger/internal/{api,agent} *release_push / node_release
 #
 # tmux / python3 absent → SKIP (exit 0). BREAK_KEEP=1 keeps the work dir.
 # BREAK_ONLY="<id> <id>" runs only those drills (the lockstep lint always runs);
@@ -257,7 +266,7 @@ lintfail() { LINT=$((LINT + 1)); printf 'FAIL  lint: %s\n' "$1"; }
 [ -f "$DOC" ] || lintfail "docs/BREAK-IT.md is missing"
 # The cred half lives in its own script (issue #1975: its own run, its own
 # durations row) — its drills are listed rows like any other.
-DRILLS=$(sed -n 's/^drill_\([a-z0-9_]*\)() *{.*/\1/p' "$0" "$BIN/fleet-break-it-cred-selftest.sh" "$BIN/fleet-break-it-cred-shared-selftest.sh" "$BIN/fleet-break-it-cred-sep-selftest.sh" "$BIN/fleet-break-it-node-selftest.sh" "$BIN/fleet-break-it-tenant-selftest.sh" "$BIN/fleet-break-it-hub-selftest.sh" "$BIN/fleet-break-it-peerlink-selftest.sh" "$BIN/fleet-break-it-thin-selftest.sh" "$BIN/fleet-break-it-thin-client-selftest.sh" "$BIN/fleet-break-it-entry-selftest.sh" | tr _ -)
+DRILLS=$(sed -n 's/^drill_\([a-z0-9_]*\)() *{.*/\1/p' "$0" "$BIN/fleet-break-it-cred-selftest.sh" "$BIN/fleet-break-it-cred-shared-selftest.sh" "$BIN/fleet-break-it-cred-sep-selftest.sh" "$BIN/fleet-break-it-node-selftest.sh" "$BIN/fleet-break-it-tenant-selftest.sh" "$BIN/fleet-break-it-hub-selftest.sh" "$BIN/fleet-break-it-peerlink-selftest.sh" "$BIN/fleet-break-it-thin-selftest.sh" "$BIN/fleet-break-it-thin-client-selftest.sh" "$BIN/fleet-break-it-entry-selftest.sh" "$BIN/fleet-break-it-ci-selftest.sh" | tr _ -)
 IDS=''
 NROWS=0
 while IFS= read -r r; do
@@ -4384,6 +4393,77 @@ SH
   WHAT="master 上 macOS 红：开出带指纹的修复单、stable 拒挪（macos:）；同一提交跑绿后照常挪"
 }
 
+# ---- train-push-cancels (#3141, EPIC #3139 C2): every merge used to start its own
+# macOS run, and the next merge cancelled it (17 of 20 one night) — so nothing was
+# ever green long enough to release. Now ONE lane: release-train.yml, a fixed
+# concurrency group with cancel-in-progress false (GitHub keeps one running + the
+# newest waiting; a new push only replaces the WAITING one), and each train boards
+# the head of origin/master at the moment it starts, not the commit that queued it.
+# The GitHub half is its configuration, linted; the boarding is run for real on a
+# bare repo: a push lands while a train is "running" → the next train's TRAIN_SHA is
+# that later head and it carries every merge since stable; stable already at the
+# head → the train is empty (skip) within the minute.
+drill_train_push_cancels() {
+  CAP=60; local t0 d out wf c1 c2 c3 c4 v
+  wf="$ROOT/.github/workflows/release-train.yml"
+  [ -f "$wf" ] || { WHY="no .github/workflows/release-train.yml — every merge still runs its own macOS"; return 1; }
+  [ -x "$BIN/fleet-train-board.sh" ] || { WHY="no bin/fleet-train-board.sh"; return 1; }
+  # one lane: a top-level concurrency group with a fixed name, never cancelling
+  out=$(awk '/^concurrency:/{c=1; next} c && /^[^ ]/{c=0} c' "$wf")
+  printf '%s\n' "$out" | grep -Eq '^[[:space:]]+group:[[:space:]]*release-train[[:space:]]*$' \
+    || { WHY="release-train.yml has no top-level concurrency group 'release-train': $(printf '%s' "$out" | tr '\n' ' ')"; return 1; }
+  printf '%s\n' "$out" | grep -Eq '^[[:space:]]+cancel-in-progress:[[:space:]]*false[[:space:]]*$' \
+    || { WHY="the train's concurrency would cancel a running train (cancel-in-progress is not false)"; return 1; }
+  grep -nE 'cancel-in-progress:[[:space:]]*(true|\$\{\{)' "$wf" >/dev/null \
+    && { WHY="something in release-train.yml can cancel in progress: $(grep -nE 'cancel-in-progress' "$wf" | tr '\n' ' ')"; return 1; }
+  [ "$(grep -cE '^[[:space:]]*concurrency:' "$wf")" = 1 ] \
+    || { WHY="release-train.yml has a second (job-level) concurrency — it would split the lane"; return 1; }
+  for v in 'push:' 'workflow_dispatch:' 'schedule:'; do
+    awk '/^on:/{o=1; next} o && /^[^ ]/{o=0} o' "$wf" | grep -q "^[[:space:]]*$v" \
+      || { WHY="release-train.yml is not triggered by $v"; return 1; }
+  done
+  grep -q 'fleet-train-board.sh' "$wf" || { WHY="the train does not board through bin/fleet-train-board.sh"; return 1; }
+  grep -qE 'runs_on:.*macos' "$wf" || { WHY="the train runs no macOS tests of its own"; return 1; }
+  # the per-merge macOS run is gone (the nightly full suite stays)
+  awk '/^on:/{o=1; next} o && /^[^ ]/{o=0} o' "$ROOT/.github/workflows/selftests-macos.yml" | grep -q '^[[:space:]]*push:' \
+    && { WHY="selftests-macos.yml is still triggered by push — the next merge cancels it again"; return 1; }
+  d="$WORK/train"; mkdir -p "$d/seed"
+  ( export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+    export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
+    git init -q --bare -b master "$d/origin.git" && git clone -q "$d/origin.git" "$d/seed" 2>/dev/null || exit 1
+    for i in 1 2; do echo "$i" > "$d/seed/f"; git -C "$d/seed" add -A; git -C "$d/seed" commit -qm "merge $i"; git -C "$d/seed" rev-parse HEAD > "$d/c$i"; done
+    git -C "$d/seed" push -q origin HEAD:master || exit 1
+    git --git-dir="$d/origin.git" update-ref refs/tags/stable "$(cat "$d/c1")"
+    git clone -q "$d/origin.git" "$d/co" 2>/dev/null
+  ) || { WHY="could not build the rig repo"; return 1; }
+  c1=$(cat "$d/c1"); c2=$(cat "$d/c2")
+  board() { GITHUB_SHA=$c2 GITHUB_OUTPUT="$d/out.$1" bash "$BIN/fleet-train-board.sh" --dir "$d/co" >/dev/null 2>"$d/err.$1"; }
+  outv() { sed -n "s/^$2=//p" "$d/out.$1" | head -1; }
+  t0=$(now)
+  board 1 || { WHY="boarding failed: $(cat "$d/err.1")"; return 1; }
+  [ "$(outv 1 train_sha)" = "$c2" ] && [ "$(outv 1 stable_sha)" = "$c1" ] && [ "$(outv 1 skip)" = false ] \
+    || { WHY="train 1 boarded $(outv 1 train_sha) over $(outv 1 stable_sha) skip=$(outv 1 skip), want $c2 over $c1"; return 1; }
+  # while train 1 "runs", two more merges land; the waiting train (queued by the
+  # push of c2's era) starts after it and must board the head as it is THEN
+  ( export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+    export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
+    for i in 3 4; do echo "$i" > "$d/seed/f"; git -C "$d/seed" commit -qam "merge $i"; git -C "$d/seed" rev-parse HEAD > "$d/c$i"; git -C "$d/seed" push -q origin HEAD:master; done
+  ) || { WHY="could not push the later merges"; return 1; }
+  c3=$(cat "$d/c3"); c4=$(cat "$d/c4")
+  board 2 || { WHY="boarding train 2 failed: $(cat "$d/err.2")"; return 1; }
+  [ "$(outv 2 train_sha)" = "$c4" ] \
+    || { WHY="train 2 boarded $(outv 2 train_sha), want the head at its start $c4 (not the commit that queued it, $c2)"; return 1; }
+  v=$(outv 2 merges_json)
+  for c in "$c2" "$c3" "$c4"; do case "$v" in *"$c"*) ;; *) WHY="train 2 does not carry merge ${c%"${c#???????}"}: $v"; return 1 ;; esac; done
+  case "$v" in *"$c1"*) WHY="train 2 carries stable's own commit: $v"; return 1 ;; esac
+  # stable reaches the head: the next train has nothing to carry
+  git --git-dir="$d/origin.git" update-ref refs/tags/stable "$c4"
+  board 3 || { WHY="boarding train 3 failed: $(cat "$d/err.3")"; return 1; }
+  SECS=$(since "$t0")
+  [ "$(outv 3 skip)" = true ] || { WHY="stable at the head, the train still runs (skip=$(outv 3 skip))"; return 1; }
+  WHAT="一条车道：正在跑的不取消、只留最新一趟排着；第二趟上车的是开车时的头（带上中间 3 个合并），stable 已是头就空跑"
+}
+
 # ---- release-artifact-missing (#2631): release.json pins a Claude Code version
 # whose artifact nobody put in the hub's CCQUOTA_FLEET_RELEASE_ARTIFACTS. Before:
 # stable moved, the hub baked the release without it, every managed machine sat
@@ -4415,7 +4495,10 @@ drill_release_artifact_missing() {
   hub_has() { printf '{"artifacts":[' > "$d/hub/v1/fleet/release/artifacts"
     printf '"%s",' "$@" | sed 's/,$//' >> "$d/hub/v1/fleet/release/artifacts"
     printf ']}\n' >> "$d/hub/v1/fleet/release/artifacts"; }
-  hub_has ccquota-darwin-arm64 claude-2.1.293-darwin-arm64 codex-0.154.0-darwin-arm64 codex-code-mode-host-0.154.0-darwin-arm64 tmux-3.7c-darwin-arm64
+  # codex / tmux as the repo's release.json pins them (a codex bump must not red this drill — #3157)
+  cxv=$(python3 -c 'import json,sys; c=json.load(open(sys.argv[1]))["components"]; print(c["codex"]["version"], c["tmux"]["version"])' "$ROOT/release.json")
+  txv=${cxv#* }; cxv=${cxv%% *}
+  hub_has ccquota-darwin-arm64 claude-2.1.293-darwin-arm64 "codex-$cxv-darwin-arm64" "codex-code-mode-host-$cxv-darwin-arm64" "tmux-$txv-darwin-arm64"
   t0=$(now)
   out=$(PATH="$d/shim:$PATH" FLEET_CONF_DIR="$d/conf" XDG_CONFIG_HOME="$d/conf" CCQUOTA_HUB_URL='' FLEET_HUB_URL="file://$d/hub" \
           sh "$BIN/fleet-stable.sh" move "$c2" --dir "$d/co" --repo o/r 2>&1); rc=$?
@@ -4424,7 +4507,7 @@ drill_release_artifact_missing() {
   case "$out" in *'claude-9.9.9-darwin-arm64'*) ;; *) WHY="the refusal does not name claude-9.9.9-darwin-arm64: $(printf '%s' "$out" | tr '\n' '|')"; return 1 ;; esac
   [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable)" = "$c1" ] || { WHY="stable moved onto a release the hub cannot build"; return 1; }
   # the operator drops the file in → the same move goes through
-  hub_has ccquota-darwin-arm64 claude-9.9.9-darwin-arm64 codex-0.154.0-darwin-arm64 codex-code-mode-host-0.154.0-darwin-arm64 tmux-3.7c-darwin-arm64
+  hub_has ccquota-darwin-arm64 claude-9.9.9-darwin-arm64 "codex-$cxv-darwin-arm64" "codex-code-mode-host-$cxv-darwin-arm64" "tmux-$txv-darwin-arm64"
   out=$(PATH="$d/shim:$PATH" FLEET_CONF_DIR="$d/conf" XDG_CONFIG_HOME="$d/conf" CCQUOTA_HUB_URL='' FLEET_HUB_URL="file://$d/hub" \
           sh "$BIN/fleet-stable.sh" move "$c2" --dir "$d/co" --repo o/r 2>&1) \
     || { WHY="the move after the artifact landed failed: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1; }
@@ -5985,6 +6068,55 @@ drill_node_container_restart() {
   WHAT="新容器不接管上次的 PID；镜像负责升级时不恢复旧的切换"
 }
 
+# A child's report whose parent is gone (issue #3117, EPIC #3111 C6): a scratch spawned
+# a worker and was closed; the worker merged and its report went nowhere — a silent
+# exit 0. Now it is the person's: one row in global/orphan-reports.ndjson and one
+# alert, never twice (the reaper's --only-once backstop, a re-run), and a hub-spawned
+# child (@origin empty) still files nothing.
+drill_report_parent_gone() {
+  CAP=30; local d="$WORK/rpg" w wh t0 f n a out
+  BREAK_SOCK="$WORK/sock-rpg"
+  mkdir -p "$d/conf/fleets/rpg" "$d/shim" "$d/main"
+  printf 'FLEET_REPO=acme/app\nFLEET_MAIN=%s/main\n' "$d" > "$d/conf/fleets/rpg/conf"
+  printf '#!/bin/sh\ncase "$*" in *pulls/*) echo "true closed false" ;; esac\nexit 0\n' > "$d/shim/gh"
+  printf '#!/bin/sh\necho "$*" >> "%s/alerted"\n' "$d" > "$d/alert"
+  chmod +x "$d/shim/gh" "$d/alert"
+  nt -f /dev/null new-session -d -s rpg -n home 'exec sleep 600' || { WHY="cannot start the isolated tmux server"; return 1; }
+  # the worker the closed scratch-7 spawned; scratch-7's window is gone
+  w=$(nt new-window -d -P -F '#{window_id}' -t rpg -n kid 'exec sleep 600')
+  nt set-option -w -t "$w" @issue 41 \; set-option -w -t "$w" @repo acme/app \; \
+     set-option -w -t "$w" @origin scratch-7 \; set-option -w -t "$w" @claude_state 'done'
+  wh=$(nt new-window -d -P -F '#{window_id}' -t rpg -n hubkid 'exec sleep 600')
+  nt set-option -w -t "$wh" @issue 42 \; set-option -w -t "$wh" @repo acme/app \; set-option -w -t "$wh" @claude_state 'done'
+  rpg() { env PATH="$WORK/tbin:$d/shim:$PATH" HOME="$WORK/home" BREAK_SOCK="$BREAK_SOCK" FLEET_CONF_DIR="$d/conf" FLEET_SKIP_GLOBAL_CONF=1 \
+            FLEET_ORPHAN_ALERT_CMD="$d/alert" bash "$BIN/fleet-report-parent.sh" -L rpg "$@"; }
+  f="$d/conf/global/orphan-reports.ndjson"
+  t0=$(now)
+  out=$(rpg --win "$w" --state merged --pr 77 --summary 'landed the fix' 2>&1)
+  case "$out" in orphaned*) ;; *) WHY="a report whose parent is gone said [$out], want orphaned → …"; return 1 ;; esac
+  SECS=$(since "$t0")
+  python3 - "$f" <<'PYR' || { WHY="orphan-reports.ndjson is not one MERGED row for issue-41: $(cat "$f" 2>/dev/null)"; return 1; }
+import json, sys
+rows = [json.loads(l) for l in open(sys.argv[1])]
+assert len(rows) == 1, rows
+r = rows[0]
+assert r["child_key"].endswith("issue-41") and r["state"] == "MERGED" and r["pr"] == "77" and r["summary"] == "landed the fix", r
+assert isinstance(r["ts"], int), r
+PYR
+  a=$(grep -c 'child-report' "$d/alerted" 2>/dev/null); a=${a:-0}
+  [ "$a" = 1 ] || { WHY="the person got $a alert(s) for it, want 1"; return 1; }
+  # the reaper's backstop, then a re-run of the same report: no second row, no second alert
+  rpg --win "$w" --state reaped --verdict merged --only-once >/dev/null 2>&1
+  rpg --win "$w" --state merged --pr 77 --summary 'landed the fix' >/dev/null 2>&1
+  n=$(grep -c . "$f"); a=$(grep -c 'child-report' "$d/alerted")
+  [ "$n:$a" = 1:1 ] || { WHY="a repeat filed rows:alerts=$n:$a, want 1:1"; return 1; }
+  # hub-spawned: nobody spawned it, nothing to file
+  rpg --win "$wh" --state merged --pr 78 >/dev/null 2>&1
+  n=$(grep -c . "$f")
+  [ "$n" = 1 ] || { WHY="a hub-spawned child's report was filed for the person ($n rows)"; return 1; }
+  WHAT="派单的会话不在：报告进 orphan-reports.ndjson 一行 + 一条提醒，重报 / 回收不重复，hub 派的不写"
+}
+
 drill_db_move_policy_seed() {
   CAP=120; local t0
   t0=$(now)
@@ -6053,8 +6185,47 @@ SH
   WHAT="③ 自动填充：没有 dispatch 守护、壳脚本什么都不开；④ 红主干：diskguard 节拍开单 + 提醒，0 个会话自己开出来"
 }
 
-# ================================================================ run ====}
+# ---- release-push-lost (#3146, EPIC #3139 C7): the hub now tells every machine
+# the moment stable moves (`release {sha}` → the node program's update-now, a
+# login's install-sync --now). A push that is dropped — the link was down, the
+# write failed, an older agent never listed CapRelease — must cost no more than
+# the old wait: the machine's update clock (FLEET_NODE_UPDATE_EVERY, 300 s)
+# still runs the update, and a pushed update-now runs it at once and is consumed.
+drill_release_push_lost() {
+  CAP=120; local t0 sb got
+  t0=$(now)
+  sb="$WORK/rpl"; mkdir -p "$sb/state"
+  got=$(cd "$ROOT/bin" && FLEET_NODE_STATE="$sb/state" python3 -c 'import importlib.util, os
+s = importlib.util.spec_from_file_location("fns", "fleet-node-supervisor.py"); m = importlib.util.module_from_spec(s); s.loader.exec_module(m)
+d = object.__new__(m.Supervisor); d.p = m.Paths(); d.state = {"tasks": {"update": {"last_start": 1000.0}}}
+tk = [t for t in m.default_table(d.p)["tasks"] if t["name"] == "update"][0]
+out = []
+out.append("lost-early=%s" % d.task_due(tk, 1000.0 + 60))            # a push lost: not yet …
+out.append("lost-clock=%s" % d.task_due(tk, 1000.0 + tk["every"]))   # … the clock runs it
+open(os.path.join(d.p.state, "update-now"), "w").write("a" * 40 + "\n")
+out.append("pushed=%s" % d.task_due(tk, 1000.0 + 1))                  # a push: at once
+out.append("took=%s" % m.update_now_take(d.p)[:7])
+out.append("left=%s" % os.path.exists(os.path.join(d.p.state, "update-now")))
+out.append("every=%s" % tk["every"])
+print(" ".join(out))' 2>&1)
+  case "$got" in
+    *'lost-early=False lost-clock=True pushed=True took=aaaaaaa left=False every=300'*) ;;
+    *) WHY="the update task's clock / update-now: $got"; return 1 ;;
+  esac
+  grep -q '<integer>1800</integer>' "$ROOT/launchd/com.claude-fleet.install-sync.plist.tmpl" \
+    || { WHY="install-sync's 30-minute clock is gone — a lost push to a login would never be followed"; return 1; }
+  bash "$BIN/fleet-install-sync.sh" --now --status >/dev/null 2>&1; [ $? -le 1 ] \
+    || { WHY="fleet-install-sync.sh does not take --now"; return 1; }
+  _drill_go_tests 'TestReleasePushOnPromoteBeatAndReconnect TestReleasePushOffAddsNothing TestReleasePromoteCallsOnPromote' \
+    "$ROOT/tokenledger/internal/api/fleet_release_push_test.go" \
+    '推送丢了：机器的 update 定时（300 秒）照样切到；推送到了：update-now 当拍就跑、跑时消掉；入口在发布、每条连接第一拍发 release，重复 / 旧的 seq 不发，不带能力的节点什么都不收（go test）' || return 1
+  local what=$WHAT
+  _drill_go_tests 'TestReleasePushWritesUpdateNow TestReleaseMachineHelloCapability TestReleasePushRunsInstallSync' \
+    "$ROOT/tokenledger/internal/agent/node_release_test.go" "$what" ./internal/agent || return 1
+  SECS=$(since "$t0")
+}
 
+# ================================================================ run ====}
 FAILS=$LINT; PASSES=0
 printf 'fleet-break-it: %d rows in docs/BREAK-IT.md\n' "$NROWS"
 # BREAK_PART → the ids of this slice (" id id … "); empty = every drill

@@ -513,6 +513,11 @@ fleet_ui_t() {
     en:quickopen_cmd_loading)   printf 'reading commands…' ;;
     zh:quickopen_keys)          printf '↵ 切过去  ⌃R 改名  ⌃X 回收  ⌃A 回答  ⌃E 回收方式  ⌃O PR  > 命令  esc 关' ;;
     en:quickopen_keys)          printf '↵ go  ⌃R rename  ⌃X close  ⌃A answer  ⌃E reap  ⌃O PR  > commands  esc close' ;;
+    # a lost machine's rows (issue #3164)
+    zh:quickopen_stale_fmt)     printf '远端列表 %s 没更新 · 标「失联」的行可能已不在' "${1:-}" ;;
+    en:quickopen_stale_fmt)     printf "the other machines' list is %s old · rows marked lost may be gone" "${1:-}" ;;
+    zh:quickopen_lost)          printf '失联' ;;
+    en:quickopen_lost)          printf 'lost' ;;
     zh:quickopen_cmd_keys)      printf '↵ 执行  ↑↓ 选  ⌫ 回到会话  esc 关' ;;
     en:quickopen_cmd_keys)      printf '↵ run  ↑↓ pick  ⌫ back to sessions  esc close' ;;
     # the 看台's switcher (issue #3000, EPIC #2999 C2; #2752: no word to guess)

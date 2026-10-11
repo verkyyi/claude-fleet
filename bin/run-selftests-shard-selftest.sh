@@ -46,7 +46,10 @@ set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 RUNNER="$BIN/run-selftests.sh"
 MK="$BIN/selftest-shadow-root.sh"
-WF="$BIN/../.github/workflows/selftests.yml"
+# The matrix lives in the reusable selftests-shards.yml since issue #3141 (the PR
+# gate and the release train both call it); selftests.yml must still call it.
+WF="$BIN/../.github/workflows/selftests-shards.yml"
+GATE_WF="$BIN/../.github/workflows/selftests.yml"
 [ -f "$RUNNER" ] || { printf 'selftest: %s missing\n' "$RUNNER" >&2; exit 2; }
 [ -f "$MK" ]     || { printf 'selftest: %s missing\n' "$MK" >&2; exit 2; }
 
@@ -102,14 +105,15 @@ eq "the fixture is the 12 fakes and nothing else (the runner discovers by glob)"
 # actually runs, so read it off the shipped matrix and exercise that too — the
 # check then follows the workflow instead of needing an edit beside it.
 WIDTHS='1 2 3 4'
-if [ -f "$WF" ]; then
+if [ -f "$GATE_WF" ]; then
+  # The PR gate's width: its `shards:` input to selftests-shards.yml (issue #3141).
   # NB `tr -d '[:space:]'` would eat the newlines too and collapse the entries onto
   # one line, counting 6 shards as 1 — so split on commas and count the lines that
   # carry a digit, stripping nothing.
-  wf_n=$(sed -n 's/^[[:space:]]*shard:[[:space:]]*\[\(.*\)\].*/\1/p' "$WF" \
+  wf_n=$(sed -n "s/^[[:space:]]*shards:[[:space:]]*'\{0,1\}\[\(.*\)\].*/\1/p" "$GATE_WF" \
            | tr ',' '\n' | grep -c '[0-9]')
   case "$wf_n" in
-    ''|*[!0-9]*|0) fail "could not read the shard: matrix width out of $WF" ;;
+    ''|*[!0-9]*|0) fail "could not read the shards: matrix width out of $GATE_WF" ;;
   esac
   case " $WIDTHS " in *" $wf_n "*) ;; *) WIDTHS="$WIDTHS $wf_n" ;; esac
   ok "the shipped matrix width parses ($wf_n shards) and is covered below"
@@ -320,6 +324,13 @@ else
   grep -qE '^\s*fail-fast:\s*false' "$WF" \
     || fail "fail-fast must stay false: one red shard cancelling its siblings hides whether the rest were green, which is what makes people re-run instead of read"
   ok "a red shard does not cancel the others (fail-fast: false)"
+
+  if [ -f "$GATE_WF" ]; then
+    CHECKS=$((CHECKS + 1))
+    grep -qE '^[[:space:]]*uses:[[:space:]]*\./\.github/workflows/selftests-shards\.yml' "$GATE_WF" \
+      || fail "selftests.yml (the PR gate) no longer calls selftests-shards.yml — the gate and the release train would run different matrices"
+    ok "the PR gate runs the one shared matrix (selftests-shards.yml)"
+  fi
 fi
 
 printf '%s checks\n' "$CHECKS"

@@ -299,10 +299,45 @@ def parse_rows(text):
         if len(f) >= 4 and f[0]:
             f += [""] * (13 - len(f))
             rows.append({"key": f[0], "state": f[1], "glyph": f[2], "name": f[3],
-                         "node": f[4].rstrip("!~"), "group": f[5], "badge": f[6],
+                         "node": f[4].rstrip("!~"), "lost": f[4].endswith("!"),
+                         "group": f[5], "badge": f[6],
                          "issue": cell(f[7]).lstrip("#"), "pr": cell(f[8]), "reap": f[9],
                          "title": f[10], "repo": f[11], "ended": f[12]})
     return rows
+
+
+def hub_age():
+    """Seconds since the refresh loop's last round that stood (global/hub_ok,
+    issue #1483 — fleet-sidebar.py's hub_down reads the same file); None when
+    there is none to read."""
+    g = os.environ.get("FLEET_STATUS_G") or os.path.join(
+        os.environ.get("TMPDIR") or "/tmp/claude-fleet-%d" % os.getuid(), ".claude-dash", "global")
+    try:
+        with open(os.path.join(g, "hub_ok")) as f:
+            return max(0, int(time.time() - int((f.read().split() or ["0"])[0])))
+    except (OSError, ValueError):
+        return None
+
+
+def stale_note(rows, say=None):
+    """The one line ⌘P says when any row it lists is another machine's and lost
+    (issue #3164: three dead credentials left two-hour-old rows looking live) —
+    how old the list is, off hub_ok; '' when no row is lost."""
+    if not any(r.get("lost") for r in rows):
+        return ""
+    say = say or {}
+    age = hub_age()
+    fmt = say.get("quickopen_stale_fmt") or "远端列表 %s 没更新 · 标「失联」的行可能已不在"
+    return fmt % (ago(time.time() - age) if age is not None else "?")
+
+
+def node_say(row, say=None):
+    """A row's machine as its detail says it: `m4`, or `m4 失联` once lost."""
+    if not row.get("node"):
+        return ""
+    if row.get("lost"):
+        return "%s %s" % (row["node"], (say or {}).get("quickopen_lost") or "失联")
+    return row["node"]
 
 
 # --- scoring ----------------------------------------------------------------------
@@ -883,7 +918,8 @@ def popup(screen, pane, session="", target="", switch=False):
         say.update(words("quickopen_keys", "quickopen_cmd_keys", "quickopen_cmd_for_fmt", "quickopen_cmd_none",
                          "quickopen_cmd_loading", "switch_new", "switch_multi", "switch_solo", "panel_quit",
                          "panel_new_fmt", "panel_multi", "panel_solo", "panel_rename_current",
-                         "panel_no_action_fmt", "panel_no_waiting", "switch_quit", "panel_dispatch"))
+                         "panel_no_action_fmt", "panel_no_waiting", "switch_quit", "panel_dispatch",
+                         "quickopen_stale_fmt", "quickopen_lost"))
         fetched.append(full_rows(session))
     reader = threading.Thread(target=fetch, daemon=True)
     reader.start()
@@ -949,7 +985,7 @@ def popup(screen, pane, session="", target="", switch=False):
                 row, marks = payload
                 # the row's detail (issue #2365 — the bar no longer says it):
                 # 单号 · 机器 · 状态 · PR · 回收方式, right-aligned and dim
-                node = " · ".join(p for p in (("#" + row["issue"]) if row.get("issue") else "", row["node"],
+                node = " · ".join(p for p in (("#" + row["issue"]) if row.get("issue") else "", node_say(row, say),
                                               STATE_SAY.get(row["state"], ""), row.get("pr") or "",
                                               row.get("reap") or "") if p)
                 if switch:
@@ -967,7 +1003,9 @@ def popup(screen, pane, session="", target="", switch=False):
                     for i, c in enumerate(name):
                         screen.addstr(c, base | (curses.color_pair(1) | curses.A_BOLD if i in marks else 0))
                     if node:
-                        screen.addstr(y, width - 1 - cells(node), node, base | curses.A_DIM)
+                        # a lost machine's row says so in yellow, never dim (#3164)
+                        screen.addstr(y, width - 1 - cells(node), node,
+                                      base | (curses.color_pair(1) if row.get("lost") else curses.A_DIM))
                 except curses.error:
                     pass
         # the panel's keys on its last line, always (issue #2365) — or the one
@@ -988,6 +1026,9 @@ def popup(screen, pane, session="", target="", switch=False):
             else:
                 screen.addstr(0, 0, clip(prompt, width - 1), curses.A_BOLD)
             screen.addstr(1, 0, "─" * (width - 1), curses.A_DIM)
+            stale = stale_note(rows, say)
+            if stale:
+                screen.addstr(1, 2, clip(" %s " % stale, width - 5), curses.color_pair(1) | curses.A_BOLD)
             screen.move(0, min(width - 1, cells(prompt)))
         except curses.error:
             pass
@@ -1141,6 +1182,9 @@ def full(screen, pane, session=""):
                 screen.addstr(1, cells(prompt), clip("名字、m4、? …", max(0, width - 1 - cells(prompt))),
                               curses.A_DIM)
             screen.addstr(2, 0, "─" * (width - 1), curses.A_DIM)
+            stale = stale_note(rows)
+            if stale:
+                screen.addstr(2, 2, clip(" %s " % stale, width - 5), curses.color_pair(1) | curses.A_BOLD)
         except curses.error:
             pass
         rowmap = {}
@@ -1163,7 +1207,7 @@ def full(screen, pane, session=""):
                                   base | curses.A_BOLD)
                 else:
                     info = "     " + " · ".join(x for x in (
-                        "@" + row["node"] if row["node"] else "", row["group"],
+                        "@" + node_say(row) if row["node"] else "", row["group"],
                         STATE_SAY.get(row["state"], row["state"])) if x)
                     screen.addstr(y, 0, clip(info, width - 1), base | curses.A_DIM)
             except curses.error:

@@ -227,6 +227,12 @@ PIDF="$G/hubsess.pid"
 # collector tick, the tick's --ensure used to find the loop still alive, start
 # nothing, and leave remote_<sess> unrefreshed for up to a minute once it ended.
 WANTF="$G/hubsess.want"
+# The code the running loop loaded (its MAPCODE), written at its start: an
+# --ensure of other code replaces the loop (issue #3164). The loop is kept alive
+# by every --ensure, so before this a version switch never reached it — macmini's
+# loop ran the code from before #3107's broker for hours after the switch and
+# kept the two-hour-old list on screen.
+LOOPCODEF="$G/hubsess.loopcode"
 SESSIONS_NS='fleet-sessions@claude-fleet'
 SUMMARY_NS='fleet-summary@claude-fleet'   # the status bar's two summaries (#1502)
 
@@ -1559,6 +1565,7 @@ loop() {
   fi
   unset FLEET_HUBSESS_LOCKED FLEET_HUBSESS_GUARD
   printf '%s\n' "$$" > "$PIDF"
+  printf '%s\n' "$MAPCODE" > "$LOOPCODEF.new" 2>/dev/null && mv -f "$LOOPCODEF.new" "$LOOPCODEF"
   end=$(( $(date +%s) + LOOP_SECS ))
   while :; do
     # the lock's holder is gone (SIGKILLed): the lock went with it — stop
@@ -1694,7 +1701,20 @@ ensure() {
   hub_on || return 0
   mkdir -p "$G" 2>/dev/null || return 0
   date +%s > "$WANTF" 2>/dev/null
-  [ -z "$(loop_pid)" ] || return 0
+  local p code=''
+  p=$(loop_pid)
+  if [ -n "$p" ]; then
+    # a loop of other code — an older version still running after a switch, or
+    # one from before this stamp (no file) — gives way to this one (issue #3164)
+    { read -r code < "$LOOPCODEF"; } 2>/dev/null || code=''
+    [ "$code" = "$MAPCODE" ] && return 0
+    kill -TERM "$p" 2>/dev/null
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+      [ -n "$(loop_pid)" ] || break
+      sleep 0.2
+    done
+    [ -z "$(loop_pid)" ] || return 0
+  fi
   ( cd / && exec python3 -c "$LOCK_PY" "$LOCKF" 1 bash "$BIN/fleet-hub-sessions.sh" --loop </dev/null >/dev/null 2>&1 & )
   return 0
 }

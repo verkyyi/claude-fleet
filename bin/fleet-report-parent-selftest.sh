@@ -16,8 +16,10 @@
 #   CHANNEL   it rides fleet_peer_send (the SendMessage inbox socket, #513) — a real
 #             unix socket here — never tmux send-keys (#437).
 #   EXIT 0    every "no parent" case is a SILENT SUCCESS: hub-spawned (@origin empty),
-#             a daemon/cross-fleet origin, a parent window already reaped, a parent
-#             with no live Claude, FLEET_CHILD_REPORT=0. This runs on the child's SHIP
+#             a daemon/cross-fleet origin, a parent with no live Claude,
+#             FLEET_CHILD_REPORT=0. A parent window already reaped (no live ancestor)
+#             is exit 0 too, but no longer silent (issue #3117): `orphaned →`, one row
+#             in global/orphan-reports.ndjson and one alert for the person. This runs on the child's SHIP
 #             path — it must never fail a landed PR, and it must never guess.
 #   BACKSTOP  --only-once + the @reported stamp: the ship path reports, the reaper's
 #             blunter reap-time line fires only for the sessions that never got there.
@@ -173,7 +175,8 @@ ok; fleet_win_for_key issue-     "$LBL" >/dev/null 2>&1 && fail "a malformed key
 # python3's json.dumps spaces its separators (`{"type": "auth"`) while the nc
 # fallback does not — match either, or this counts zero deliveries forever.
 frames() { grep -c '"type":[[:space:]]*"auth"' "$INBOX_LOG" 2>/dev/null | tr -d ' '; }
-RUN() { bash "$CLI" -L "$LBL" "$@" 2>&1; }
+printf '#!/bin/sh\necho "$*" >> "%s/alerted"\n' "$WORK" > "$WORK/alert"; chmod +x "$WORK/alert"
+RUN() { FLEET_ORPHAN_ALERT_CMD="$WORK/alert" bash "$CLI" -L "$LBL" "$@" 2>&1; }
 
 # --- ENVELOPE: the happy path, byte for byte ------------------------------------
 before=$(frames)
@@ -212,7 +215,17 @@ silent() {   # silent <desc> <args…>
 }
 silent "hub-spawned (@origin empty)"        --win "$HUBCHILD"    --state merged
 silent "a daemon origin (autofill)"         --win "$DAEMONCHILD" --state merged
-silent "the parent window is gone"          --win "$ORPHAN"      --state merged
+# The parent window is gone and nobody above it (issue #3117): nothing sent, exit 0,
+# but the person gets it — one orphan row, one alert, and the child stamped so the
+# reaper's backstop files no second.
+b=$(frames); out=$(RUN --win "$ORPHAN" --state merged); rc=$?
+eq "the parent window is gone — exit 0" 0 "$rc"
+eq "the parent window is gone — nothing sent" "$b" "$(frames)"
+ok; has 'orphaned →' "$out" || fail "the parent window is gone — says orphaned" "$out"
+eq "the parent window is gone — one orphan row" 1 "$(grep -c . "$FLEET_CONF_DIR/global/orphan-reports.ndjson" 2>/dev/null)"
+eq "the parent window is gone — one alert" 1 "$(grep -c child-report "$WORK/alerted" 2>/dev/null)"
+eq "the parent window is gone — the child is stamped @reported" 1 "$(TM display-message -p -t "$ORPHAN" '#{@reported}')"
+TM set-window-option -t "$ORPHAN" -u @reported 2>/dev/null
 # A parent window with no live Claude under it is QUEUED for, never dropped (issue
 # #1647): exit 3, one `queued →` line, nothing sent yet — bin/peer-queue-selftest.sh
 # pins the drain that delivers it.

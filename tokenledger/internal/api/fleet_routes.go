@@ -220,12 +220,13 @@ func (s *Server) handleFleetRoutes(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	relayReady := s.sshRelayReadiness()
+	now := time.Now()
 	for _, m := range s.fleetMachines() {
 		if hosts != nil && !hosts[m.Hostname] {
 			continue
 		}
 		lg, _ := loginOn(m.Hostname)
-		out.Machines = append(out.Machines, RouteMachine{FleetMachine: m, Relay: relayReady(m.Hostname), Login: lg})
+		out.Machines = append(out.Machines, RouteMachine{FleetMachine: s.withEntryReach(m, now), Relay: relayReady(m.Hostname), Login: lg})
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, out)

@@ -202,6 +202,10 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 		// … and so does the person's own layer (claude-fleet#2784).
 		caps = append(caps, control.CapPerson)
 	}
+	if a.releaseCapable() {
+		// A new stable wakes install-sync at once (claude-fleet#3146).
+		caps = append(caps, control.CapRelease)
+	}
 	if a.relaysOAuthRefresh() {
 		caps = append(caps, control.CapOAuthRefresh)
 	}
@@ -302,6 +306,8 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 				a.handleTeam(ctx, m)
 			case control.TypePerson:
 				a.handlePerson(ctx, m)
+			case control.TypeRelease:
+				a.handleRelease(ctx, m)
 			case control.TypeSSHRelayOpen:
 				// Bound to this session's ctx: when the control channel
 				// drops, every relay it opened is closed with it
