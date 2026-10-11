@@ -44,6 +44,8 @@ FLEET_NODE_* seams; nothing touches /Library, /var or a real login.
      taken over is no row (2); `account adopt` refuses such a login (5) with nothing
      moved; the daemon's tick writes the reading into state.json and a non-root
      reader's check carries it
+  Q  root's reads in a login's places never wait on a FIFO; SIGUSR1 dumps the
+     stacks of a live loop (#3084)
   P  the watchdog (#3079, #3086): a loop wedged in a blocking open() is ended
      within FLEET_NODE_WATCHDOG_SECS — the phase named, its stack in the log,
      `supervisor.wedged` for status, exit 70; status --check reads WEDGED (5)
@@ -2060,6 +2062,50 @@ class P_Watchdog(Sandbox):
         t0 = time.time()
         self.assertEqual(fns.read_json(f, {"d": 1}), {"d": 1})
         self.assertLess(time.time() - t0, 1)
+
+
+
+class Q_RootReads(Sandbox):
+    """Root's reads in a login's places never wait (issue #3084): a FIFO answers at
+    once (refused); a symlink only when asked to follow; `kill -USR1` tells which
+    read a live loop is in — its stacks in the log, the loop going on."""
+
+    def test_open_ro(self):
+        f = os.path.join(self.d, "f")
+        with open(f, "w") as fh:
+            fh.write("A=1\n")
+        os.mkfifo(os.path.join(self.d, "fifo"))
+        os.symlink(f, os.path.join(self.d, "ln"))
+        with os.fdopen(fns.open_ro(f)) as fh:
+            self.assertEqual(fh.read(), "A=1\n")
+        t0 = time.time()
+        with self.assertRaises(OSError):
+            fns.open_ro(os.path.join(self.d, "fifo"))
+        self.assertLess(time.time() - t0, 2, "a FIFO held the read")
+        with self.assertRaises(OSError):
+            fns.open_ro(os.path.join(self.d, "ln"))
+        os.close(fns.open_ro(os.path.join(self.d, "ln"), follow=True))
+        self.assertIsNone(fns._env_file(os.path.join(self.d, "fifo"), os.getuid()))
+        self.assertEqual(fns.log_tail(os.path.join(self.d, "fifo")), [])
+        self.assertEqual(fns._plist_label(os.path.join(self.d, "fifo")), "")
+        self.assertEqual(fns._env_file(f, os.getuid()), {"A": "1"})
+
+    def test_sigusr1_dumps_stacks_and_stays_up(self):
+        sh = self.script("ok.sh", "exit 0\n")
+        self.table(tasks=[{"name": "ok", "every": 0.1, "cmd": ["/bin/bash", sh]}])
+        p = self.start()
+        self.assertTrue(until(10, lambda: (self.task("ok").get("runs") or 0) >= 1), "the task never ran")
+        p.send_signal(signal.SIGUSR1)
+        err = os.path.join(self.d, "sup.err")
+
+        def text():
+            with open(err) as f:
+                return f.read()
+        self.assertTrue(until(5, lambda: "most recent call first" in text()), "no stack after SIGUSR1")
+        self.assertIn("in run", text())
+        n = self.task("ok").get("runs") or 0
+        self.assertTrue(until(5, lambda: (self.task("ok").get("runs") or 0) > n), "the loop stopped after SIGUSR1")
+        self.assertIsNone(p.poll())
 
 
 if __name__ == "__main__":
