@@ -1,6 +1,6 @@
 {
   "name": "fleet-orchestrate",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "claude-fleet orchestration: /fleet-orchestrate takes the orchestrator role in a session that holds no issue — talk a request through, then hand it to worker sessions. Not installed by default (EPIC #3111).",
   "author": { "name": "verkyyi", "url": "https://github.com/verkyyi" },
   "homepage": "https://github.com/verkyyi/claude-fleet",
