@@ -35,7 +35,7 @@
 #   two-hubs-double-refresh                         tokenledger/internal/leader (Leader / Lock), credvault Lease's
 #                                                   CrossLock, the three gated loops (go test, when a toolchain is here)
 #   entry-dns-follows                               tokenledger/internal/api fleet_entry_dns.go + internal/dns
-#                                                   (DNSPod; go test, when a toolchain is here), deploy/k8s/base
+#                                                   (DNSPod; go test, when a toolchain is here), deploy/k8s/overlays/prod
 #   invite-expired                                  tokenledger/internal/api fleet_invites.go + github_auth.go
 #                                                   (admitInvite, denyText; go test, when a toolchain is here)
 #   drill-person-no-machine                         tokenledger/internal/api fleet_opening.go + fleet_drill.go
@@ -648,7 +648,7 @@ drill_entry_dns_follows() {
   grep -q '^func TestDNSPodProvider(' "$f" 2>/dev/null || { WHY="the provider test is not in ${f#$ROOT/}"; return 1; }
   grep -q 'Leader(ctx, "entry-dns")' "$ROOT/tokenledger/internal/api/fleet_entry_dns.go" \
     || { WHY="the address-record loop is not gated on the leader"; return 1; }
-  grep -q 'acme-dnspod' "$ROOT/deploy/k8s/base/deployment.yaml" \
+  grep -q 'acme-dnspod' "$ROOT/deploy/k8s/overlays/prod/deployment-env.yaml" \
     || { WHY="the hub's deployment no longer reads the DNSPod token from new-deploy/acme-dnspod"; return 1; }
   WHAT='地址变 ⇒ 下一拍改（同一条记录）；家连不上 ⇒ 一条不改；手动换家 ⇒ 指新家；手改 ⇒ 改回 + 「有人手改」；调用失败 ⇒ 不算写过、下一拍再试；没 token ⇒ 0 次调用；DNSPod 只认带 fleet 备注的 cf 记录，token 不进 URL / 错误；同一路由器后两个家：钥匙页端口 = 家的转发端口，换家说端口要改，别的端口上的 IPv6 不写 AAAA'
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
