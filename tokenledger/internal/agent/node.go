@@ -458,6 +458,10 @@ type readyProbe struct {
 	at    time.Time
 	ready *bool
 	why   string
+
+	// repoWhy names what a start on a repo lacks when it differs from ready
+	// (claude-fleet#3424: gh on a seed-only login); "" when it does not.
+	repoWhy string
 }
 
 const readyInterval = 60 * time.Second
@@ -466,7 +470,7 @@ func (p *readyProbe) reading(ctx context.Context, home string, now time.Time) (*
 	if !p.at.IsZero() && now.Sub(p.at) < readyInterval {
 		return p.ready, p.why
 	}
-	p.at, p.ready, p.why = now, nil, ""
+	p.at, p.ready, p.why, p.repoWhy = now, nil, "", ""
 	script := filepath.Join(home, fleetControlScript)
 	if _, err := os.Stat(script); err != nil {
 		return nil, ""
@@ -476,12 +480,22 @@ func (p *readyProbe) reading(ctx context.Context, home string, now time.Time) (*
 	var out struct {
 		Ready   bool     `json:"ready"`
 		Missing []string `json:"missing"`
+
+		// Absent from a claude-fleet older than #3424.
+		RepoReady   *bool    `json:"repo_ready"`
+		RepoMissing []string `json:"repo_missing"`
 	}
 	if err := fleetRPC(ctx, script, map[string]any{"protocol": 1, "method": "ready", "params": map[string]any{}}, &out); err != nil {
 		return nil, ""
 	}
 	r := out.Ready
 	p.ready, p.why = &r, strings.Join(out.Missing, ", ")
+	if r && out.RepoReady != nil && !*out.RepoReady {
+		p.repoWhy = strings.Join(out.RepoMissing, ", ")
+		if p.repoWhy == "" {
+			p.repoWhy = "not ready"
+		}
+	}
 	return p.ready, p.why
 }
 

@@ -698,6 +698,9 @@ func TestNodeHeartbeatCarriesReadiness(t *testing.T) {
 			if m == "old-controller" {
 				return []byte(`{"error":{"code":"INVALID_ARGUMENT","message":"Unsupported method"}}`), nil
 			}
+			if m == "seed-only" {
+				return []byte(`{"protocol":1,"machine_id":"m-1","result":{"ready":true,"missing":[],"repo_ready":false,"repo_missing":["gh"]}}`), nil
+			}
 			return []byte(`{"protocol":1,"machine_id":"m-1","result":{"ready":false,"missing":["gh","checkout:x"]}}`), nil
 		}
 		return nil, errors.New("unexpected method")
@@ -721,6 +724,14 @@ func TestNodeHeartbeatCarriesReadiness(t *testing.T) {
 	mu.Unlock()
 	if hb := a.nodeHeartbeat(context.Background(), &fleetProbe{}); hb.Ready != nil || hb.NotReady != "" {
 		t.Fatalf("an old controller: ready = %v %q; want unsaid", hb.Ready, hb.NotReady)
+	}
+	// claude-fleet#3424: a login hosting only the seed repo with no gh is ready
+	// for a home session, and says what a start on a repo lacks.
+	mu.Lock()
+	mode = "seed-only"
+	mu.Unlock()
+	if hb := a.nodeHeartbeat(context.Background(), &fleetProbe{}); hb.Ready == nil || !*hb.Ready || hb.NotReady != "" || hb.RepoNotReady != "gh" {
+		t.Fatalf("seed only, no gh: ready = %v %q repo %q; want true, repo start missing gh", hb.Ready, hb.NotReady, hb.RepoNotReady)
 	}
 }
 

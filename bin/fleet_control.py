@@ -173,7 +173,9 @@ class Control:
         verdict — gh login, a usable credential, every checkout — as one object:
         {"ready": bool, "gh": bool, "creds": bool, "checkouts": bool, "missing": [...]}.
         The node agent puts it in its heartbeat; the hub's auto placement skips a
-        login that says no."""
+        login that says no. `repo_ready` / `repo_missing` (issue #3424) are the
+        verdict for a start on a repo — gh asked even for the seed repo — passed
+        on only when the adapter says them."""
         code, output, _ = self.adapter("ready")
         if code:
             raise Fault("UNAVAILABLE", "Cannot judge readiness")
@@ -184,9 +186,12 @@ class Control:
         if not isinstance(verdict, dict) or not isinstance(verdict.get("ready"), bool) \
                 or not isinstance(verdict.get("missing"), list):
             raise Fault("PROTOCOL_ERROR", "Invalid readiness verdict")
-        return dict(ready=verdict["ready"], gh=bool(verdict.get("gh")), creds=bool(verdict.get("creds")),
-                    checkouts=bool(verdict.get("checkouts")),
-                    missing=[str(m) for m in verdict["missing"]], observed_at=now())
+        out = dict(ready=verdict["ready"], gh=bool(verdict.get("gh")), creds=bool(verdict.get("creds")),
+                   checkouts=bool(verdict.get("checkouts")),
+                   missing=[str(m) for m in verdict["missing"]], observed_at=now())
+        if isinstance(verdict.get("repo_ready"), bool) and isinstance(verdict.get("repo_missing"), list):
+            out.update(repo_ready=verdict["repo_ready"], repo_missing=[str(m) for m in verdict["repo_missing"]])
+        return out
 
     def capacity(self):
         """This login's own session cap and the count its spawn gate reads (issue

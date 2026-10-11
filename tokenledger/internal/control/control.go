@@ -672,6 +672,13 @@ type Heartbeat struct {
 	Ready    *bool  `json:"ready,omitempty"`
 	NotReady string `json:"not_ready,omitempty"`
 
+	// RepoNotReady is the same verdict for a start ON a repo
+	// (claude-fleet#3424): Ready waives gh for a login hosting only the seed
+	// repo, so a newcomer's home session can start, but an issue there reads,
+	// pushes and opens a PR. Non-empty names what such a start lacks ("gh");
+	// empty — and absent from an older agent — means Ready says it all.
+	RepoNotReady string `json:"repo_not_ready,omitempty"`
+
 	// Compute repeats the hello's (claude-fleet#1719) so the roster row the
 	// hub keeps says it too: false = coordinate only, never placed or leased.
 	Compute *bool `json:"compute,omitempty"`

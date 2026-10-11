@@ -208,6 +208,31 @@ func TestNodePlaceSkipsNotReadyNodeOnAuto(t *testing.T) {
 	}
 }
 
+// A login hosting only the seed repo with no gh (claude-fleet#3424) is ready
+// for a home session but not for an issue: auto passes it over for a start
+// that names a repo, with gh on the refusal; naming it still goes there.
+func TestNodePlaceSkipsRepoNotReadyNodeOnAuto(t *testing.T) {
+	h, _, m4, f5, f4 := twoNodes(t)
+	yes := true
+	beat(t, m4.conn, control.Proto, control.Heartbeat{Hostname: "m4", OSUser: "verk", MachineID: machineB,
+		Load1: 1, NCPU: 10, MemFreeBytes: 8 << 30, MemTotalBytes: 16 << 30, Sessions: 1,
+		Fleets: []control.Fleet{f4}, Ready: &yes, RepoNotReady: "gh", ObservedAt: time.Now()})
+	waitFor(t, 3*time.Second, "m4 reported repo not ready", func() bool {
+		hb, _, _ := h.srv.nodeStatusOf("ep_m4", time.Now())
+		return hb.RepoNotReady == "gh"
+	})
+	wid5 := issueWID(f5.FleetID, 16)
+	st, out := placeCall(t, h, h.tokens["m5"], map[string]any{"repo": writeRepo, "issue": 16, "worker_id": wid5})
+	e, _ := out["error"].(map[string]any)
+	msg, _ := e["message"].(string)
+	if st != 503 || e["code"] != "NO_ELIGIBLE_NODE" || !strings.Contains(msg, "m4: not ready: gh") || m4.count() != 0 {
+		t.Fatalf("auto issue start with m4 repo-not-ready = %d %v; want NO_ELIGIBLE_NODE naming gh, nothing sent", st, out)
+	}
+	if st, out := placeCall(t, h, h.tokens["m5"], map[string]any{"repo": writeRepo, "issue": 16, "worker_id": wid5, "node": "m4"}); st != 200 || out["local"] != false {
+		t.Fatalf("node=m4 while repo-not-ready = %d %v; want the start sent there anyway", st, out)
+	}
+}
+
 // claude-fleet#1586: the asker hears what became of a REMOTE start, not just
 // that it was accepted. A window opened there: done, exit 0, its window id.
 func TestNodePlaceWaitsForTheWindow(t *testing.T) {
