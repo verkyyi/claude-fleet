@@ -41,6 +41,10 @@
 #   入口      the entry port (#3070): FLEET_ENTRY=1 [FLEET_ENTRY_PORT=<n>] on the
 #             command writes the switch into machine.env (FLEET_ENTRY=0 takes it
 #             out), then `fleet-node-supervisor.py entry ensure` (not on ⇒ 跳过)
+#   开号      Linux only (#3210): FLEET_NODE_ACCOUNT_OPS=1 in machine.env — the
+#             machine's node program opens and closes its own logins for the hub
+#             (fleet-node-linux.py login open|remove); FLEET_NODE_ACCOUNT_OPS=0 on
+#             the command takes it out. A Mac writes nothing (its admin opens them).
 #
 # On a managed machine the old roads (`fleet host on`, `fleet node join`) say to
 # use this command instead, and still work for one version.
@@ -460,6 +464,27 @@ else
     [ "$erc" = 0 ] || fail 入口 "${eline:-$(printf '%s' "$eout" | tail -n 1)}"
     if [ -n "$echanged" ]; then ok 入口 "开了 · ${eline#entry  }"
     else skip 入口 "已开 · ${eline#entry  }"; fi
+  fi
+fi
+
+# ---------------------------------------------------------------- 开号 ----------
+# A Linux managed machine has no admin login: its root node program opens the
+# hub's logins itself (issue #3210, EPIC #3208 C2) — on by default, the switch in
+# machine.env (the daemon reloads the node program when it changes).
+if [ "$OS" = linux ]; then
+  awant=1
+  [ "${FLEET_NODE_ACCOUNT_OPS:-}" = 0 ] && awant=0
+  { [ -r "$ENVF" ] && grep -Ev '^FLEET_NODE_ACCOUNT_OPS=' "$ENVF"
+    [ "$awant" = 1 ] && echo FLEET_NODE_ACCOUNT_OPS=1; } > "$WORK/machine.env"
+  if cmp -s "$WORK/machine.env" "$ENVF"; then
+    rm -f "$WORK/machine.env"
+    if [ "$awant" = 1 ]; then skip 开号 "已开（入口给这台指派的人，由这台的节点程序开号 / 删号）"
+    else skip 开号 "没开"; fi
+  else
+    put "$WORK/machine.env" "$ENVF" 600 || fail 开号 "写不了 $ENVF"
+    rm -f "$WORK/machine.env"
+    if [ "$awant" = 1 ]; then ok 开号 "开了（machine.env FLEET_NODE_ACCOUNT_OPS=1）"
+    else ok 开号 "关了（machine.env 去掉 FLEET_NODE_ACCOUNT_OPS）"; fi
   fi
 fi
 

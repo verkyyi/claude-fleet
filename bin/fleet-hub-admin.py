@@ -12,6 +12,11 @@
     fleet hub accounts rekey <from> <to> hand an old identity's logins to <to>
                                          (gh:<id> or a bare GitHub ID); runs nothing
     fleet hub accounts forget <principal> drop a record that never reached a machine
+    fleet hub accounts assign <principal> --host <machine> [--login <login>]
+                                         open their login on <machine> (queued; --login
+                                         only checks it is theirs) — claude-fleet#3210
+    fleet hub accounts remove <principal> --host <machine>
+                                         close it there (the home is archived 30 days)
     fleet hub accounts relogin <principal> <machine> <login>
                                          give them a new login there (the old one stays)
     fleet hub accounts rename <principal> <machine>
@@ -360,6 +365,21 @@ def machines_main(a):
 
 # --- login records -------------------------------------------------------------
 
+def credsep_word(detail):
+    """The `credsep: <word>` an opening ended with (its last non-empty line), or ""."""
+    lines = [l.strip() for l in (detail or "").splitlines() if l.strip()]
+    if lines and lines[-1].startswith("credsep: "):
+        return lines[-1][len("credsep: "):].split(" ")[0]
+    return ""
+
+
+def account_cell(ac):
+    """host:state, plus :separated (or what the opening said) when it said."""
+    cell = "%s:%s" % (ac.get("hostname"), ac.get("state"))
+    word = credsep_word(ac.get("detail"))
+    return cell + (":" + word if word else "")
+
+
 def accounts_main(a):
     if a.action == "list":
         resp = call(a, "GET", ACCOUNTS_PATH)
@@ -368,7 +388,7 @@ def accounts_main(a):
             return
         by = {}
         for ac in resp.get("accounts") or []:
-            by.setdefault(ac.get("principal_id"), []).append("%s:%s" % (ac.get("hostname"), ac.get("state")))
+            by.setdefault(ac.get("principal_id"), []).append(account_cell(ac))
         fmt = "%-24s %-16s %-16s %s"
         print(fmt % ("principal", "login", "name", "machines"))
         for p in resp.get("principals") or []:
@@ -413,6 +433,27 @@ def accounts_main(a):
         else:
             print("rename %s: login already %s (as on %s) — nothing changed" % (a.principal, resp.get("login", ""), a.to))
         return
+    if a.action in ("assign", "remove"):
+        if not a.principal or not a.host:
+            die("fleet hub accounts %s <principal> --host <machine>%s"
+                % (a.action, " [--login <login>]" if a.action == "assign" else ""), 2)
+        if a.login and a.action == "assign":
+            have = {p.get("principal_id"): p.get("login", "")
+                    for p in call(a, "GET", ACCOUNTS_PATH).get("principals") or []}
+            if have.get(a.principal, a.login) != a.login:
+                die("%s's login is %s, not %s — a different name there is `fleet hub accounts relogin`"
+                    % (a.principal, have[a.principal], a.login), 2)
+        resp = call(a, "POST", ACCOUNTS_PATH, {"action": a.action, "principal_id": a.principal, "hostname": a.host})
+        if a.json:
+            print(json.dumps(resp, indent=2, ensure_ascii=False))
+            return
+        for ac in resp.get("accounts") or []:
+            if ac.get("principal_id") == a.principal and ac.get("hostname") == a.host:
+                print("%s · %s · %s · %s" % (ac.get("login", ""), a.host, ac.get("state", ""),
+                                             credsep_word(ac.get("detail")) or "-"))
+                return
+        print("%s %s on %s: queued" % (a.action, a.principal, a.host))
+        return
     if not a.principal:
         die("fleet hub accounts forget <principal> [--host <machine>]", 2)
     body = {"action": "forget", "principal_id": a.principal}
@@ -445,11 +486,13 @@ def main(argv):
     us.add_argument("name", nargs="?")
     us.add_argument("--machine-login", help="the OS login that is theirs on the machines")
     ac = sub.add_parser("accounts", parents=[common], help="the people the hub records and their logins")
-    ac.add_argument("action", choices=["list", "rekey", "forget", "relogin", "rename"], nargs="?", default="list")
+    ac.add_argument("action", choices=["list", "rekey", "forget", "relogin", "rename", "assign", "remove"],
+                    nargs="?", default="list")
     ac.add_argument("principal", nargs="?")
     ac.add_argument("to", nargs="?", help="rekey: the new id · relogin / rename: the machine")
     ac.add_argument("login", nargs="?", help="relogin: the new login")
-    ac.add_argument("--host", help="forget: only the record on this machine")
+    ac.add_argument("--host", help="forget: only the record on this machine · assign / remove: the machine")
+    ac.add_argument("--login", dest="login", help="assign: the login they must have (checked, never set)")
     iv = sub.add_parser("invite", parents=[common], help="an install command that lets one new person in")
     iv.add_argument("login", nargs="?", help="only this GitHub user may use it")
     iv.add_argument("--list", action="store_true", help="every invite and its state")

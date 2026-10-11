@@ -113,6 +113,16 @@ type Config struct {
 	// account op is refused.
 	FleetAdmin bool
 
+	// LinuxOpener, set only on the account half of a Linux managed machine's
+	// node program (claude-fleet#3210), is the root runtime's
+	// fleet-node-linux.py: account ops run its `login open|remove` as root
+	// instead of an admin login's scripts. ServiceLogin is the machine's own
+	// service login (never touched); LinuxTenants the declarations directory
+	// whose <login>.json names the op that made a login.
+	LinuxOpener  string
+	ServiceLogin string
+	LinuxTenants string
+
 	// FleetComputeOff makes this login coordinate only (CCQUOTA_FLEET_COMPUTE=0,
 	// claude-fleet#1719): it says so in its hello and every heartbeat, the hub
 	// never places a session on it nor answers its credential lease. A fresh `fleet node join` writes the 0; unset is

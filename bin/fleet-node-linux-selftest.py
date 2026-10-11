@@ -589,9 +589,57 @@ class LinuxTenants(unittest.TestCase):
             with self.assertRaises(m.Refuse) as e:
                 f.open('admin1')
             self.assertEqual(e.exception.rc, 5)
-            self.assertEqual(m.guarded(lambda: m.login_cmd(['open', '1234'])), 3)
+            # fleet-login-new.sh's codes (#3210): 2 bad argument, 3 exists, 4 none
+            self.assertEqual(m.guarded(lambda: m.login_cmd(['open', '1234'])), 2)
             self.assertEqual(m.guarded(lambda: m.login_cmd(['remove', 'nobody2', '--keep-home'])), 4)
-            self.assertEqual(m.guarded(lambda: m.login_cmd(['remove', 'nobody2'])), 3)
+            self.assertEqual(m.guarded(lambda: m.login_cmd(['remove', 'nobody2'])), 2)
+            f.sup.tenant_privileges = lambda login: ([], True)
+            f.users['hand1'] = (20001, '/home/hand1')
+            with self.assertRaises(m.Refuse) as e:
+                f.open('hand1')
+            self.assertEqual(e.exception.rc, 3)
+
+    def test_hub_op_owns_its_login(self):
+        """The hub's create (#3210): its op goes into the declaration; the same
+        op again goes on, any other op (or a hand) meets 'exists' (3)."""
+        m = self.m
+        with FakeOS(m, self.tmp.name) as f:
+            m.ensure_login(f.sup, f.paths, '24haowan', op='ab12')
+            decl = json.loads(m.tenant_path(f.paths, '24haowan').read_text())
+            self.assertEqual(decl['op'], 'ab12')
+            m.ensure_login(f.sup, f.paths, '24haowan', op='ab12')       # a re-ask, a resume
+            with self.assertRaises(m.Refuse) as e:
+                m.ensure_login(f.sup, f.paths, '24haowan', op='cd34')
+            self.assertEqual(e.exception.rc, 3)
+            f.open('drill2')                                            # by hand: no op
+            with self.assertRaises(m.Refuse) as e:
+                m.ensure_login(f.sup, f.paths, 'drill2', op='ab12')
+            self.assertEqual(e.exception.rc, 3)
+            f.open('drill2')                                            # a hand reopens as before
+
+    def test_join_code_from_env(self):
+        m = self.m
+        with FakeOS(m, self.tmp.name) as f, patch.dict(os.environ, {'FLEET_LOGIN_JOIN_CODE': 'fj_; rm -rf /'}):
+            with self.assertRaises(m.Refuse) as e:
+                m.login_open(_ns(name='drill3', full_name='', join_file='', hub='', relay='', start=False))
+            self.assertIn('join code', str(e.exception))
+            self.assertNotIn('drill3', f.users)
+        with FakeOS(m, os.path.join(self.tmp.name, '2')) as f, patch.dict(os.environ, {'FLEET_LOGIN_OP_ID': 'NOT-HEX'}):
+            with self.assertRaises(m.Refuse):
+                m.login_open(_ns(name='drill3', full_name='', join_file='', hub='', relay='', start=False))
+
+    def test_tenant_conf_is_sourceable(self):
+        """#3224: fleet.conf is sourced — a section is a comment; an old literal
+        `[common]` line is turned into one, the rest kept."""
+        home = Path(self.tmp.name, 'h')
+        conf = home / '.config/claude-fleet/fleet.conf'
+        env = dict(os.environ, HOME=str(home))
+        REAL_RUN([sys.executable, '-c', self.m.TENANT_CONF], env=env, check=True)
+        self.assertTrue(conf.read_text().startswith('# ---- [common] ----\n'))
+        conf.write_text('[common]\nFLEET_CRED_PROXY=1\nX=2\n')
+        REAL_RUN([sys.executable, '-c', self.m.TENANT_CONF], env=env, check=True)
+        self.assertEqual(conf.read_text(), '# ---- [common] ----\nFLEET_CRED_PROXY=1\nX=2\n')
+        self.assertEqual(REAL_RUN(['sh', '-n', str(conf)]).returncode, 0)
 
 
 if __name__ == '__main__':

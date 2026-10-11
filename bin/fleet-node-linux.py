@@ -9,10 +9,17 @@ before the supervisor starts. Machine and tenants use separate hub join codes an
 retain their own tokens. This uses the existing supervisor, shared credential
 store and login bootstrap; it never starts a second node agent.
 
-login open <login> [--full-name N] [--join-file F]   exit 0 · 3 bad argument ·
-login remove <login> --keep-home|--delete-home       4 no such login (remove) ·
-login list   → <login> <uid> <home> <state>           5 an administrator already;
+login open <login> [--full-name N] [--join-file F]   exit 0 · 2 bad argument ·
+login remove <login> --keep-home|--delete-home       3 exists already (open) ·
+login list   → <login> <uid> <home> <state>           4 no such login (remove) ·
+                                                      5 an administrator already;
                                                       last line `credsep: <word>`
+The exit codes are fleet-login-new.sh / fleet-login-remove.sh's, so the node
+program reads one answer from either system (EPIC #3208 共同约定 3). The hub's
+create (the machine's node program, C2 #3210) hands its join code in
+FLEET_LOGIN_JOIN_CODE and its op in FLEET_LOGIN_OP_ID, never the argv: the op
+is written into the declaration, and a login some other op (or a hand) made is
+"exists" (3) to it — the same op again goes on where it stopped.
 """
 import argparse
 import fcntl
@@ -133,10 +140,10 @@ RESERVED = ('root', 'admin', 'daemon', 'nobody', 'guest', 'shared')
 
 
 class Refuse(ValueError):
-    """An argument the caller must change (exit 3) — or, with rc 5, a name that
-    is already an administrator."""
+    """An argument the caller must change (exit 2) — or, with rc 3, a login
+    that exists already; with rc 5, a name that is already an administrator."""
 
-    def __init__(self, msg, rc=3):
+    def __init__(self, msg, rc=2):
         super().__init__(msg)
         self.rc = rc
 
@@ -332,8 +339,10 @@ def tenants_lock(paths):
     return f
 
 
-def ensure_login(s, paths, login, uid=None, full_name=''):
-    """Declare (number from the allocator), create and home one login."""
+def ensure_login(s, paths, login, uid=None, full_name='', op=''):
+    """Declare (number from the allocator), create and home one login. With
+    op (the hub's FLEET_LOGIN_OP_ID) the declaration records it, and a login
+    another op or a hand declared is refused as existing (3)."""
     if not valid_name(login) and not tenant_path(paths, login).exists():
         raise Refuse('login %r: 2-16 of a-z0-9, at least one letter' % login)
     declared = tenants(paths)
@@ -347,12 +356,17 @@ def ensure_login(s, paths, login, uid=None, full_name=''):
             why, _ = s.tenant_privileges(login)
             if why:
                 raise Refuse('%s is already an administrator here (%s)' % (login, why), rc=5)
-            raise Refuse('login %s already exists outside fleet-node-linux; choose a fresh name' % login)
+            raise Refuse('login %s already exists outside fleet-node-linux; choose a fresh name' % login, rc=3)
         uid = allocate_uid(paths, declared, uid)
         t = {'login': login, 'uid': uid, 'gid': uid, 'home': str(Path(paths.users) / login), 'since': int(time.time())}
+        if op:
+            t['op'] = op
         # Declared before passwd changes, so an interrupted open is reconciled by
         # the next open or boot rather than leaving an unnamed number behind.
         private_write(tenant_path(paths, login), json.dumps(t, sort_keys=True) + '\n')
+    elif op and t.get('op') != op:
+        raise Refuse('login %s already exists on this machine (not made by this op); adopt it only if it is theirs'
+                     % login, rc=3)
     elif uid is not None and uid != t['uid']:
         raise ValueError('tenant identity differs from the persistent volume; use the original login/UID')
     had = check_home(t)
@@ -379,6 +393,15 @@ def prepare(a):
     return login_open(a)
 
 
+# The tenant's own fleet.conf, written as the tenant (see login_open).
+TENANT_CONF = (
+    'from pathlib import Path; p=Path.home()/".config/claude-fleet"; p.mkdir(parents=True,exist_ok=True); '
+    'f=p/"fleet.conf"; '
+    'f.write_text("# ---- [common] ----\\nFLEET_CRED_PROXY=1\\nFLEET_CRED_SEPARATE=1\\n") if not f.exists() else '
+    'f.write_text("".join("# ---- [common] ----\\n" if l.strip() == "[common]" else l '
+    'for l in f.read_text().splitlines(True)))')
+
+
 def login_open(a):
     s = load('fleet-node-supervisor')
     paths = s.Paths()
@@ -394,8 +417,14 @@ def login_open(a):
             code = Path(a.join_file).read_text().strip()
         except OSError:
             raise Refuse('cannot read the join file') from None
-        if not re.fullmatch(r'fj_[a-z2-7]{26}', code):
-            raise Refuse('invalid tenant join code')
+    elif os.environ.get('FLEET_LOGIN_JOIN_CODE'):
+        # The hub's create, through the node program: never in argv (#3210).
+        code = os.environ['FLEET_LOGIN_JOIN_CODE'].strip()
+    if code is not None and not re.fullmatch(r'fj_[a-z2-7]{26}', code):
+        raise Refuse('invalid tenant join code')
+    op = os.environ.get('FLEET_LOGIN_OP_ID', '')
+    if op and not re.fullmatch(r'[0-9a-f]{1,64}', op):
+        raise Refuse('invalid FLEET_LOGIN_OP_ID')
     if not Path(paths.state, 'machine.env').is_file():
         raise ValueError('enroll the machine with fleet node install first')
     hub = machine_hub(paths, a.hub)
@@ -403,13 +432,12 @@ def login_open(a):
         raise ValueError('no hub URL (--hub, or CCQUOTA_HUB_URL in machine.env)')
     os.environ.setdefault('FLEET_NODE_SERVICE', 'systemd')
     with tenants_lock(paths):
-        p = ensure_login(s, paths, login, getattr(a, 'uid', None), a.full_name)
+        p = ensure_login(s, paths, login, getattr(a, 'uid', None), a.full_name, op)
     conf = Path(p.pw_dir) / '.config/claude-fleet'
     # User-owned files are written after dropping privileges, including on retry.
-    as_tenant(s, login, ['python3', '-c',
-        'from pathlib import Path; p=Path.home()/".config/claude-fleet"; p.mkdir(parents=True,exist_ok=True); '
-        'f=p/"fleet.conf"; '
-        'f.write_text("[common]\\nFLEET_CRED_PROXY=1\\nFLEET_CRED_SEPARATE=1\\n") if not f.exists() else None'])
+    # fleet.conf is SOURCED (#1623): a section is a comment, never a literal
+    # `[common]` line — one an older open wrote becomes one (#3224).
+    as_tenant(s, login, ['python3', '-c', TENANT_CONF])
     c = load('fleet-credsep')
     # The node store, never the tenant's home, holds the token from its first byte.
     c.ensure_role()
@@ -640,7 +668,7 @@ def login_cmd(rest):
     try:
         a = lp.parse_args(rest)
     except SystemExit as e:
-        return 3 if e.code else 0
+        return 2 if e.code else 0
     return {'open': login_open, 'remove': login_remove, 'list': login_list}[a.verb](a)
 
 
@@ -839,7 +867,7 @@ def main():
     if sys.argv[1:2] == ['login']:
         if os.geteuid() != 0 or not sys.platform.startswith('linux'):
             print('fleet-node-linux: run as root on Linux', file=sys.stderr)
-            return 3
+            return 2
         return guarded(lambda: login_cmd(sys.argv[2:]))
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('action', choices=('boot', 'prepare', 'activate', 'bootstrap', 'foreground', 'live', 'ready'))

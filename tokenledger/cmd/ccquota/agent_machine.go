@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"os/user"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -61,6 +62,8 @@ func runAgentMachine(args []string) error {
 	}
 	maxBusy := os.Getenv("FLEET_MAX_CPU_BUSY")
 	entryOn := os.Getenv("FLEET_ENTRY")
+	acctOn := os.Getenv("FLEET_NODE_ACCOUNT_OPS")
+	service := os.Getenv("FLEET_NODE_LOGIN")
 	if *machineEnv != "" {
 		env, err := readLoginEnv(*machineEnv, os.Geteuid() == 0)
 		if err != nil {
@@ -71,6 +74,12 @@ func runAgentMachine(args []string) error {
 		}
 		if entryOn == "" {
 			entryOn = env["FLEET_ENTRY"]
+		}
+		if acctOn == "" {
+			acctOn = env["FLEET_NODE_ACCOUNT_OPS"]
+		}
+		if service == "" {
+			service = env["FLEET_NODE_LOGIN"]
 		}
 		if *token == "" {
 			*token = env["CCQUOTA_TOKEN"]
@@ -113,8 +122,28 @@ func runAgentMachine(args []string) error {
 		// <state>/update-now (claude-fleet#3146) — only where the updater is.
 		UpdateNow:      updateNow(filepath.Dir(filepath.Clean(*state))),
 		CurrentRelease: filepath.Join(envOr("FLEET_NODE_ROOT", "/Library/Application Support/claude-fleet"), "current"),
+		// …and, on a Linux managed machine with FLEET_NODE_ACCOUNT_OPS=1,
+		// the opener of its own logins (claude-fleet#3210).
+		AccountOpener: accountOpener(acctOn),
+		AccountState:  filepath.Join(filepath.Clean(*state), "_machine"),
+		ServiceLogin:  service,
+		LinuxTenants:  filepath.Join(filepath.Dir(filepath.Clean(*state)), "linux-tenants"),
 	})
 }
+
+// accountOpener is fleet-node-linux.py beside this binary when this Linux
+// managed machine opens its own logins (FLEET_NODE_ACCOUNT_OPS=1, the
+// environment, else machine.env — claude-fleet#3210); "" anywhere else: a Mac
+// never does, its admin login's agent opens them.
+func accountOpener(on string) string {
+	if on != "1" || accountGOOS != "linux" {
+		return ""
+	}
+	return envOr("CCQUOTA_MACHINE_OPENER", machineScript("fleet-node-linux.py"))
+}
+
+// accountGOOS is the platform accountOpener judges; a test seam.
+var accountGOOS = runtime.GOOS
 
 // updateNow is the daemon's update-now beside the agent's state directory, or
 // "" where this machine has no updater (an image-managed one: Kubernetes owns

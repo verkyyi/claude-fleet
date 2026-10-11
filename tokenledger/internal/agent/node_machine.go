@@ -93,6 +93,17 @@ type MachineConfig struct {
 	// CurrentRelease is the runtime's <root>/current: a pushed release it is
 	// already at (sha) or past (seq) writes nothing.
 	CurrentRelease string
+	// AccountOpener is the root runtime's fleet-node-linux.py on a Linux
+	// managed machine whose machine.env says FLEET_NODE_ACCOUNT_OPS=1
+	// (claude-fleet#3210): the machine opens and closes its own logins, and
+	// its hello lists CapLoginJoin. "" = no account ops (every Mac), byte for
+	// byte as before. AccountState is the directory of that half's book;
+	// ServiceLogin the machine's service login, never touched; LinuxTenants
+	// the opener's declarations (linux-tenants/).
+	AccountOpener string
+	AccountState  string
+	ServiceLogin  string
+	LinuxTenants  string
 	// Tenants is one Config per login served: its own Token (that login's
 	// node token), Home, StateDir and RunAs. Fleet is forced on.
 	Tenants []Config
@@ -116,6 +127,9 @@ type machineLink struct {
 	entry entryFollow
 	// reach is the entry port's reachability report clock (claude-fleet#3072).
 	reach entryReachClock
+	// acct runs the account ops of a machine that opens its own logins
+	// (claude-fleet#3210); nil on every other machine.
+	acct *Agent
 }
 
 // setRefused records (why != "") or clears a login's refused hello.
@@ -282,6 +296,10 @@ func (ml *machineLink) session(ctx context.Context) (bool, error) {
 		// A new stable starts the machine's update at once (claude-fleet#3146).
 		caps = append(caps, control.CapRelease)
 	}
+	if ml.acct != nil {
+		// This machine opens its own logins (claude-fleet#3210).
+		caps = append(caps, control.CapLoginJoin)
+	}
 	hello, err := control.New(control.TypeHello, control.Hello{
 		HeartbeatMS:  int(ml.cfg.LiveInterval / time.Millisecond),
 		AgentVersion: ml.cfg.Version,
@@ -320,6 +338,8 @@ func (ml *machineLink) session(ctx context.Context) (bool, error) {
 		}
 		ml.mu.Unlock()
 	}()
+
+	defer ml.accountAttach(conn)()
 
 	readErr := make(chan error, 1)
 	go func() {
@@ -378,13 +398,22 @@ func (ml *machineLink) session(ctx context.Context) (bool, error) {
 func (ml *machineLink) demux(ctx context.Context, conn *websocket.Conn, m control.Message) {
 	if m.Login == "" {
 		// The machine's own half: nothing is ever asked of it but the entry
-		// port's keys (claude-fleet#3070) and a new stable (claude-fleet#3146).
+		// port's keys (claude-fleet#3070) and a new stable (claude-fleet#3146)…
 		if m.Type == control.TypeEntryKeys {
 			ml.handleEntryKeys(ctx, m)
 			return
 		}
 		if m.Type == control.TypeRelease {
 			ml.handleRelease(m)
+			return
+		}
+		// …and, on a Linux managed machine, its own logins (claude-fleet#3210).
+		if m.Type == control.TypeAccountOp {
+			ml.machineAccountOp(ctx, conn, m)
+			return
+		}
+		if m.Type == control.TypeAck && ml.acct != nil {
+			ml.acct.acct.acked(m.OpID)
 			return
 		}
 		if m.Type == control.TypeError && m.Error != nil {
@@ -501,6 +530,7 @@ func RunMachine(ctx context.Context, mc MachineConfig) error {
 	machineStrict.Add(1)
 	defer machineStrict.Add(-1)
 	ml := newMachineLink(mc)
+	ml.acct = newMachineAccounts(mc)
 	for _, a := range agents {
 		registerTenant(a.cfg.RunAs)
 		defer unregisterTenant(a.cfg.RunAs)

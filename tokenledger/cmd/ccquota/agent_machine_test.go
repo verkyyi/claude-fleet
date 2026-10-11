@@ -61,3 +61,22 @@ func TestMachineTenantsFromLoginsDir(t *testing.T) {
 		t.Fatal("machineFlag")
 	}
 }
+
+// A Mac's machine program never opens logins, whatever machine.env says; a
+// Linux one only with FLEET_NODE_ACCOUNT_OPS=1 (claude-fleet#3210).
+func TestAccountOpenerOnlyOnLinuxWhenOn(t *testing.T) {
+	old := accountGOOS
+	t.Cleanup(func() { accountGOOS = old })
+	t.Setenv("CCQUOTA_MACHINE_OPENER", "/opt/claude-fleet/current/bin/fleet-node-linux.py")
+	accountGOOS = "darwin"
+	if got := accountOpener("1"); got != "" {
+		t.Fatalf("darwin opener = %q; want none", got)
+	}
+	accountGOOS = "linux"
+	if got := accountOpener(""); got != "" {
+		t.Fatalf("linux, FLEET_NODE_ACCOUNT_OPS unset: opener = %q; want none", got)
+	}
+	if got := accountOpener("1"); got == "" {
+		t.Fatal("linux, FLEET_NODE_ACCOUNT_OPS=1: no opener")
+	}
+}
