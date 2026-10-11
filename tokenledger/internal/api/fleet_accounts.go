@@ -876,6 +876,9 @@ type FleetAccountsView struct {
 	// Spares are the spare logins (claude-fleet#2263), apart from anyone's;
 	// absent when there are none. `forget` takes their principal_id.
 	Spares []store.FleetAccount `json:"spares,omitempty"`
+	// Logins is each person's machine·login pairs keyed by principal_id,
+	// with the home (家) and the machine's kind marked (claude-fleet#3302).
+	Logins map[string][]PersonLogin `json:"logins"`
 }
 
 // FleetAccountRequest is the body of POST /v1/fleet/accounts.
@@ -925,6 +928,7 @@ func (s *Server) handleFleetAccounts(w http.ResponseWriter, r *http.Request) {
 				view.Accounts = append(view.Accounts, a)
 			}
 		}
+		view.Logins = s.personLogins(view.Accounts)
 		w.Header().Set("Cache-Control", "no-store")
 		writeJSON(w, http.StatusOK, view)
 	case http.MethodPost:

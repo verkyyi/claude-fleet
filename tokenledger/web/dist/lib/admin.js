@@ -8,6 +8,7 @@
 // Every word goes through t() (lib/i18n.js); stored audit text is shown as
 // the hub recorded it, never translated.
 import { t, fmtDate } from './i18n.js';
+import { esc } from './shell.js';
 
 const toMs = (v) => (typeof v === 'number' ? v : Date.parse(v || ''));
 
@@ -188,12 +189,11 @@ export function headroom(cards, which, now = Date.now()) {
  *  the GitHub account /v1/fleet/users maps it to. */
 export function leaseRows(live, cards, users) {
   const byId = new Map(cards.map((c) => [c.id, c.label]));
-  const who = new Map();
-  for (const u of (users && users.users) || []) if (u.machine_login) who.set(u.machine_login, u.login);
+  const who = loginOwners(users);
   return ((live && live.sessions) || []).filter((s) => s.account)
     .map((s) => ({
       session: (s.worktree || s.cwd || '').split('/').filter(Boolean).pop() || String(s.session_id || '').slice(0, 8),
-      person: who.get(s.os_user) || s.os_user || '—', sub: byId.get(s.account) || s.account, since: s.started_at || s.observed_at,
+      person: who(s.hostname, s.os_user) || s.os_user || '—', sub: byId.get(s.account) || s.account, since: s.started_at || s.observed_at,
     }))
     .sort((a, b) => toMs(b.since) - toMs(a.since));
 }
@@ -299,6 +299,65 @@ export const GH_LOGIN_RE = /^[a-z0-9](?:[a-z0-9]|-(?=[a-z0-9])){0,38}$/i;
 export const cleanLogin = (s) => String(s || '').trim().replace(/^https?:\/\/github\.com\//i, '').replace(/^@/, '').replace(/\/+$/, '');
 
 /** userRows: deploy admins first, then everyone by name. */
+/** hostKey is a machine name compared the way the hub's sameMachine does:
+ *  case-blind, a hostname matching its own first label. */
+const hostKey = (h) => String(h || '').toLowerCase().split('.')[0];
+
+/** loginOwners answers who holds a (machine, login) pair, from /v1/fleet/users:
+ *  every pair a person holds (claude-fleet#3302), the machine first — the
+ *  same login name on two machines can be two people — then the login alone
+ *  when only one person holds it, then the old machine_login. */
+export function loginOwners(users) {
+  const pair = new Map();
+  const byLogin = new Map();
+  const legacy = new Map();
+  for (const u of (users && users.users) || []) {
+    if (u.machine_login) legacy.set(u.machine_login, u.login);
+    for (const l of u.logins || []) {
+      pair.set(hostKey(l.hostname) + '\0' + l.login, u.login);
+      const s = byLogin.get(l.login) || new Set();
+      s.add(u.login);
+      byLogin.set(l.login, s);
+    }
+  }
+  return (host, login) => {
+    if (!login) return '';
+    if (host && pair.has(hostKey(host) + '\0' + login)) return pair.get(hostKey(host) + '\0' + login);
+    const s = byLogin.get(login);
+    if (s && s.size === 1) return [...s][0];
+    return legacy.get(login) || '';
+  };
+}
+
+/** loginPairs is a person's machine·login pairs as the pages print them
+ *  (claude-fleet#3302): `macmini · verky`, its state, 家 on the home, and
+ *  the machine's kind. One login is never the person's "account name". */
+export function loginPairs(u) {
+  return ((u && u.logins) || []).map((l) => ({
+    machine: l.hostname || '—', login: l.login || '—', state: l.state || 'unknown',
+    stateText: t('ui.usr.st.' + (l.state || 'unknown')), home: !!l.home,
+    kind: l.kind === 'node' ? 'node' : 'client', kindText: t('ui.usr.kind.' + (l.kind === 'node' ? 'node' : 'client')),
+  }));
+}
+
+/** loginPairText is one pair as a line: `macmini · verky (active, 家, 服务节点)`. */
+export function loginPairText(p) {
+  return `${p.machine} · ${p.login} (${[p.stateText, ...(p.home ? [t('ui.usr.home')] : []), p.kindText].join(', ')})`;
+}
+
+// pairsCell lists every machine·login pair the person holds (claude-fleet#3302):
+// the machine and login, its state, 家 on the home, the machine's kind.
+const STATE_CHIP = { active: 'ok', failed: 'bad', unknown: 'warn', removed: 'gone' };
+export const pairsCell = (u) => {
+  const ps = loginPairs(u);
+  if (!ps.length) return `<span class="sub">${esc(u.machine_login || t('ui.usr.noLogins'))}</span>`;
+  return ps.map((p) => `<div class="pair" title="${esc(loginPairText(p))}"><span class="mono">${esc(p.machine)} · ${esc(p.login)}</span> ` +
+    `<span class="chip ${STATE_CHIP[p.state] || ''}">${esc(p.stateText)}</span>` +
+    (p.home ? ` <span class="chip brand">${esc(t('ui.usr.home'))}</span>` : '') +
+    ` <span class="chip">${esc(p.kindText)}</span></div>`).join('');
+};
+
+
 export function userRows(list) {
   const users = (list && Array.isArray(list.users)) ? list.users : [];
   return users.slice().sort((a, b) => (b.deploy ? 1 : 0) - (a.deploy ? 1 : 0) || (a.role === b.role ? 0 : a.role === 'admin' ? -1 : 1) || String(a.login).localeCompare(String(b.login)));

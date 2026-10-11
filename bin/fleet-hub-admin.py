@@ -373,11 +373,19 @@ def credsep_word(detail):
     return ""
 
 
-def account_cell(ac):
-    """host:state, plus :separated (or what the opening said) when it said."""
-    cell = "%s:%s" % (ac.get("hostname"), ac.get("state"))
-    word = credsep_word(ac.get("detail"))
-    return cell + (":" + word if word else "")
+KIND_WORD = {"node": "服务节点", "client": "客户端"}
+
+
+def pair_cell(l, word=""):
+    """machine · login (state[, 家][, kind][, credsep word]) — one pair of a person's."""
+    tags = [l.get("state") or "?"]
+    if l.get("home"):
+        tags.append("家")
+    if l.get("kind") in KIND_WORD:
+        tags.append(KIND_WORD[l["kind"]])
+    if word:
+        tags.append(word)
+    return "%s · %s (%s)" % (l.get("hostname"), l.get("login") or "?", ", ".join(tags))
 
 
 def accounts_main(a):
@@ -386,21 +394,33 @@ def accounts_main(a):
         if a.json:
             print(json.dumps(resp, indent=2, ensure_ascii=False))
             return
+        # Every machine·login pair a person holds, one a line (claude-fleet#3302):
+        # one OS login is never "the person's name". An older hub with no
+        # `logins` answers from the account rows, without home or kind.
+        logins = resp.get("logins")
         by = {}
+        word = {}
         for ac in resp.get("accounts") or []:
-            by.setdefault(ac.get("principal_id"), []).append(account_cell(ac))
-        fmt = "%-24s %-16s %-16s %s"
-        print(fmt % ("principal", "login", "name", "machines"))
+            pid = ac.get("principal_id")
+            word[(pid, ac.get("hostname"))] = credsep_word(ac.get("detail"))
+            if logins is None:
+                by.setdefault(pid, []).append(ac)
+        if logins is not None:
+            by = logins
+        fmt = "%-24s %-16s %s"
+        print(fmt % ("principal", "name", "machine · login"))
         for p in resp.get("principals") or []:
             pid = p.get("principal_id", "")
-            print(fmt % (pid, p.get("login", ""), p.get("display_name", "") or "-", " ".join(by.get(pid, [])) or "-"))
+            cells = [pair_cell(l, word.get((pid, l.get("hostname")), "")) for l in by.get(pid) or []] or ["-"]
+            print(fmt % (pid, p.get("display_name", "") or "-", cells[0]))
+            for c in cells[1:]:
+                print(fmt % ("", "", c))
         spares = resp.get("spares") or []
         if spares:
             # opened ahead of a newcomer (claude-fleet#2263); `forget` takes the principal
             print("\nspare logins (备用):")
             for ac in spares:
-                print(fmt % (ac.get("principal_id", ""), ac.get("login", ""), "-",
-                             "%s:%s" % (ac.get("hostname"), ac.get("state"))))
+                print(fmt % (ac.get("principal_id", ""), "-", pair_cell(ac)))
         return
     if a.action == "rekey":
         if not a.principal or not a.to:

@@ -38,6 +38,9 @@ type hubUserView struct {
 	Principal string `json:"principal"`
 	// Deploy marks an admin CCQUOTA_GITHUB_ADMINS names: read-only here.
 	Deploy bool `json:"deploy,omitempty"`
+	// Logins are every machine·login pair the person holds
+	// (claude-fleet#3302) — machine_login is only the name a new login takes.
+	Logins []PersonLogin `json:"logins"`
 }
 
 // deployAdminView is one name of CCQUOTA_GITHUB_ADMINS and whether it is
@@ -46,6 +49,8 @@ type deployAdminView struct {
 	Login    string `json:"login"`
 	GitHubID int64  `json:"github_id,omitempty"`
 	Pinned   bool   `json:"pinned"`
+	// Logins as on a user row, once pinned.
+	Logins []PersonLogin `json:"logins"`
 }
 
 func (s *Server) handleFleetUsers(w http.ResponseWriter, r *http.Request) {
@@ -74,9 +79,18 @@ func (s *Server) writeFleetUsers(w http.ResponseWriter, status int, extra map[st
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	accts, err := s.Store.FleetAccounts("")
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	logins := s.personLogins(accts)
 	out := make([]hubUserView, 0, len(users))
 	for _, u := range users {
 		v := hubUserView{HubUser: u, Principal: githubPrincipal(u.GitHubID)}
+		if v.Logins = logins[v.Principal]; v.Logins == nil {
+			v.Logins = []PersonLogin{}
+		}
 		if role, err := s.githubRole(u.GitHubID); err == nil && role == roleAdmin {
 			v.Deploy = true
 		}
@@ -87,6 +101,9 @@ func (s *Server) writeFleetUsers(w http.ResponseWriter, status int, extra map[st
 		a := deployAdminView{Login: strings.TrimSpace(name)}
 		if id, ok, err := s.Store.PinnedID(a.Login); err == nil && ok {
 			a.GitHubID, a.Pinned = id, true
+		}
+		if a.Logins = logins[githubPrincipal(a.GitHubID)]; !a.Pinned || a.Logins == nil {
+			a.Logins = []PersonLogin{}
 		}
 		admins = append(admins, a)
 	}

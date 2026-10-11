@@ -84,10 +84,16 @@ class H(BaseHTTPRequestHandler):
                 if b.get("action") == "rename":
                     return self.answer(200, {"principal_id": b["principal_id"], "from": "verkyyi", "login": "verky", "changed": True})
                 return self.answer(200, {"accounts": []})
-            return self.answer(200, {"principals": [{"principal_id": "zx", "login": "zx", "display_name": ""}],
-                                     "accounts": [{"principal_id": "zx", "hostname": "macmini", "state": "active"},
-                                                  {"principal_id": "zx", "hostname": "fleet-linux-0", "state": "active",
-                                                   "detail": "prepared tenant zx\ncredsep: separated\n"}],
+            # claude-fleet#3302: one person, two machines, two login names;
+            # `old` is a hub from before `logins` (rows only).
+            return self.answer(200, {"principals": [{"principal_id": "zx", "login": "zx", "display_name": ""},
+                                                    {"principal_id": "old", "login": "old", "display_name": "Old"}],
+                                     "accounts": [{"principal_id": "zx", "hostname": "macmini", "login": "zx", "state": "active"},
+                                                  {"principal_id": "zx", "hostname": "fleet-linux-0", "login": "zxw", "state": "active",
+                                                   "detail": "prepared tenant zxw\ncredsep: separated\n"}],
+                                     "logins": {"zx": [{"hostname": "fleet-linux-0", "login": "zxw", "state": "active", "home": True, "kind": "node"},
+                                                       {"hostname": "macmini", "login": "zx", "state": "active", "kind": "node"},
+                                                       {"hostname": "zx-mac", "login": "zhangxu", "state": "pending", "kind": "client"}]},
                                      "spares": [{"principal_id": "spare:macmini:abcd1234", "login": "flk2m9qa",
                                                  "hostname": "macmini", "state": "active"}]})
         if u.path == "/v1/nodes":
@@ -233,7 +239,11 @@ l=$(run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok python3 "$BIN/fleet-hub.py
 if [ "$rc" = 0 ] && [ "$(field "$r" method)" = POST ] && [ "$(field "$r" path)" = /v1/fleet/accounts ] \
    && [ "$(field "$r" body)" = '{"action": "rekey", "principal_id": "zx", "to_principal_id": "4001"}' ] \
    && grep -q '已把 zx（macmini、mini2）从旧身份 zx 转给 gh:4001' "$WORK/out" \
-   && printf '%s\n' "$l" | grep -q '^zx .*macmini:active fleet-linux-0:active:separated$'; then
+   && printf '%s\n' "$l" | grep -q '^zx  *-  *fleet-linux-0 · zxw (active, 家, 服务节点, separated)$' \
+   && printf '%s\n' "$l" | grep -q '^  *macmini · zx (active, 服务节点)$' \
+   && printf '%s\n' "$l" | grep -q '^  *zx-mac · zhangxu (pending, 客户端)$' \
+   && printf '%s\n' "$l" | grep -q '^old  *Old  *-$' \
+   && ! printf '%s\n' "$l" | grep -q 'principal  *login'; then
   ok "J fleet hub accounts rekey → POST {action: rekey}; accounts lists the records"
 else bad "J rc=$rc req=$r out=$(cat "$WORK/out") err=$(cat "$WORK/err") list=$l"; fi
 
@@ -302,7 +312,7 @@ if [ "$rc1" = 0 ] && [ "$rc2" = 0 ] && [ "$(field "$r" method)" = GET ] && [ "$(
    && printf '%s\n' "$on" | grep -q '^m5 (macmini) .*online .*4 .*0\.25 *1 *verkyyi、zx · 备用 1 · 已用 2 / 上限 10$' \
    && printf '%s\n' "$off" | grep -q '^m5 (macmini) .*0\.25 *1 *verkyyi、zx$' && ! printf '%s\n' "$off" | grep -q 'root' \
    && printf '%s\n' "$on" | grep -q '^mini2 .*maintenance .*? .*备用 0 · 已用 9 / 上限 9$' \
-   && printf '%s\n' "$acc" | grep -q '^spare:macmini:abcd1234 .*flk2m9qa .*macmini:active$'; then
+   && printf '%s\n' "$acc" | grep -q '^spare:macmini:abcd1234 .*macmini · flk2m9qa (active)$'; then
   ok "M fleet hub machines → GET /v1/nodes, 连接 N + its logins (not the link) per machine, 备用 N (hint while off); accounts lists spares apart"
 else bad "M rc=$rc1/$rc2 req=$r off=$off on=$on acc=$acc"; fi
 

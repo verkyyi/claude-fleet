@@ -467,3 +467,5 @@ button.chip { border: 0; cursor: pointer; font: inherit; font-size: 11.5px; }
 .policy-limit-window .track i.bad { background:var(--bad); }
 .policy-limit-read { margin-top:8px; }
 @media(max-width:480px) { .policy-limit-windows { grid-template-columns:1fr; } }
+/* a person's machine·login pairs, one a line (claude-fleet#3302) */
+.pair{margin:2px 0}
