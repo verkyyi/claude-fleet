@@ -852,7 +852,7 @@ step_answer() {
   if [ "$THINC" != 1 ]; then
     skip claude-answers "the old client: its list keeps the keys, the session's input is not in front"; return 0
   fi
-  deadline=$((SECONDS + STEP_SECS)); st=wait
+  deadline=$((SECONDS + STEP_SECS)); st='wait'
   while :; do
     keep_sudo
     st=$(screen | answer_state "$ANSWER_WORD")
