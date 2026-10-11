@@ -35,6 +35,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -515,6 +516,13 @@ def drill_pr_code():
         b.close()
 
 
+def burner_count():
+    """The fleet-loadgen.sh burners running now: each carries its mark as $0, the
+    last word of its argv."""
+    r = subprocess.run(["ps", "-axo", "command="], capture_output=True, text=True)
+    return sum(1 for l in r.stdout.splitlines() if re.search(r"\sFLEET_LOADGEN_BURNER#\S+\s*$", l))
+
+
 def drill_hogs(wait_secs, already=False):
     """Under load (the caller runs this inside fleet-loadgen.sh): no runner minted,
     the doctor's check says paused. `already`: the box was too busy for the load
@@ -523,7 +531,15 @@ def drill_hogs(wait_secs, already=False):
     try:
         n = os.cpu_count() or 1
         base = os.getloadavg()[0]
-        limit = (base * 0.8 if already else base + 0.25) / n
+        if already:
+            limit = base * 0.8 / n
+        else:
+            # Busy = above where we started, or above what the burners alone hold
+            # the 1-min load at — whichever is lower. A base still decaying from the
+            # tests before (2.28 on a 3-core runner, one burner after the clamp)
+            # never "rises" though the box is plainly busy (issue #3219).
+            burners = burner_count()
+            limit = min(base + 0.25, max(0.5, 0.5 * burners)) / n
         if not until(wait_secs, lambda: os.getloadavg()[0] / n > limit, step=1):
             return "the load never rose (%.2f → %.2f, limit %.2f/core)" % (base, os.getloadavg()[0], limit)
         b.ci_env("FLEET_CI_TOKEN=%s\n" % TOKEN)

@@ -557,7 +557,9 @@ class Loop(object):
         demote = sup.demote(c.login, uid, gid, rundir)
 
         def pre():
-            os.nice(10)
+            # nice 10 itself, not +10: a parent already at a negative nice (a CI
+            # runner's own service) would leave os.nice(10) at 0 (issue #3219)
+            os.setpriority(os.PRIO_PROCESS, 0, 10)
             demote()
 
         try:
