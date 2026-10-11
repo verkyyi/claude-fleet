@@ -594,14 +594,16 @@ grep -q '未注明规则\|fleet:rule' "$BODY" && fail "V5 a non-orchestrator fil
 ok "V rules: 5/5 orchestrator shapes marked; no rule ⇒ 「未注明规则」 + log; unknown rule refused; elsewhere untouched"
 
 # --- W. a worker files, never spawns (issue #2960) --------------------------------
-# The fake tmux answers the whole `role|role_def|pin|name` read with FAKE_FLEET_ROLE.
+# The fake tmux answers the whole `role|role_def|pin|name|agent_spawn` read with FAKE_FLEET_ROLE.
 FAKE_FLEET_ROLE='worker|||issue-5' TMUX_PANE=%9 run_fif --title "旁支活" --spawn
 [ "$RC" -eq 6 ] && ! grep -q 'issue create' "$GH_LOG" && [ ! -s "$SPAWN_LOG" ] && grep -q 'issue #2960' "$WORK/err" \
   || fail "W1 --spawn from a worker pane: exit 6, nothing filed or spawned (got $RC)" "$(cat "$WORK/err")"
+FAKE_FLEET_ROLE='worker|||issue-5|0' TMUX_PANE=%9 run_fif --title "旁支活" --spawn
+[ "$RC" -eq 6 ] && [ ! -s "$SPAWN_LOG" ] || fail "W1 an agent file that holds no spawn (@agent_spawn 0) is refused too (got $RC)" "$(cat "$WORK/err")"
 FAKE_FLEET_ROLE='worker|||issue-5' TMUX_PANE=%9 run_fif --title "旁支活" --parent 5
 [ "$RC" -eq 0 ] && grep -q 'issue create' "$GH_LOG" && [ ! -s "$SPAWN_LOG" ] \
   || fail "W2 a worker files without --spawn as before" "$(cat "$WORK/err")"
-for who in 'worker|epic-driver||issue-9' 'orchestrator|||orchestrator' 'steward|||steward' 'worker||1|guide' 'home|||home' '' ; do
+for who in 'worker|epic-driver||issue-9' 'worker|||issue-9|1' 'orchestrator|||orchestrator' 'steward|||steward' 'worker||1|guide' 'home|||home' '' ; do
   FAKE_FLEET_ROLE="$who" TMUX_PANE=%9 run_fif --title "派" --spawn
   [ "$RC" -eq 0 ] && grep -q '^777' "$SPAWN_LOG" || fail "W3 [$who] may spawn (got $RC)" "$(cat "$WORK/err")"
 done

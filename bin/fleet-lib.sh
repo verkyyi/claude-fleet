@@ -600,8 +600,8 @@ FLEET_SPAWN_REFUSAL='a worker does not spawn sessions (issue #2960) — fix it i
 fleet_spawn_refused() {
   [ "${FLEET_ALLOW_WORKER_SPAWN:-0}" = 1 ] && return 1
   local r role def wname pin grant
-  r=$(fleet_pane_fmt '#{@fleet_role}|#{@fleet_role_def}|#{@pin}|#{@agent_spawn}|#{window_name}') || return 1
-  IFS='|' read -r role def pin grant wname <<EOF
+  r=$(fleet_pane_fmt '#{@fleet_role}|#{@fleet_role_def}|#{@pin}|#{window_name}|#{@agent_spawn}') || return 1
+  IFS='|' read -r role def pin wname grant <<EOF
 $r
 EOF
   [ "$role" = worker ] || return 1
