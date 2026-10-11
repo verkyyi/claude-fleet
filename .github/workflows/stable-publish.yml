@@ -1,9 +1,13 @@
-# Hand the hub a stable by hand (issue #2772, EPIC #2770 C2). The hub takes stable
-# only from a publish: stable-auto.yml publishes after its own move, and a move by
-# hand (`bin/fleet-stable.sh move`) dispatches this with the sha it moved to. Also
-# the way to repair a hub that missed one: re-run, or `gh workflow run
+# Hand the hub a stable by hand (issue #2772, EPIC #2770 C2) — the REPAIR road,
+# dispatch only (issue #3143, EPIC #3139 C4: nothing triggers it by itself). The
+# hub takes stable only from a publish: the release train publishes its own
+# TRAIN_SHA before it moves stable (release-train.yml), and a move by hand
+# (`bin/fleet-stable.sh move`) dispatches this with the sha it moved to. Also the
+# way to repair a hub that missed one: re-run, or `gh workflow run
 # stable-publish.yml -f sha=<the stable tag's commit>` — the same sha twice is a
-# 200 no-op, a sha not forward of the hub's stable a 409.
+# 200 no-op, a sha not forward of the hub's stable a 409. A red run here is its
+# own: the next train's move does not count it (fleet-stable.sh gate 3 passes over
+# the release workflows' own runs, FLEET_STABLE_DERIVED_RE).
 #
 # The identity is this run's OIDC token (id-token: write): the hub checks the
 # repository, refs/heads/master and this file's name — so it runs on master only.

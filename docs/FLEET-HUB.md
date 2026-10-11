@@ -709,9 +709,10 @@ is a person's. A client that has not taken a stable it saw for 2 hours
 `install` row red. BREAK-IT rows `client-verify-no-ccquota`, `client-update-silent-fail`.
 
 **Stable is pushed to the hub, never fetched** (issue #2772, EPIC #2770 C2). The
-CI that moves stable hands the hub the commit itself: `stable-auto.yml`'s last
-step (and `stable-publish.yml`, which `fleet-stable.sh move` by hand dispatches
-with the sha it moved to) runs `bin/fleet-release-publish.sh <sha>` — `POST
+CI that moves stable hands the hub the commit itself: the release train's
+`release` job, before its move (`release-train.yml`, issue #3142; `stable-auto.yml`
+until #3143 retired it), and `stable-publish.yml` — dispatch only, the repair road,
+which `fleet-stable.sh move` by hand dispatches with the sha it moved to — run `bin/fleet-release-publish.sh <sha>` — `POST
 /v1/fleet/release/publish`, multipart: `sha`, `prev` (the hub's own stable, read
 from `/v1/fleet/release/stable`), `commits` (`git rev-list --first-parent
 prev..sha | git cat-file --batch`), `tree` (`git archive --format=tar sha`, the

@@ -2,18 +2,23 @@
 # fleet-macos-watch.sh --repo <owner/name> [--session <fleet>] [--dry-run] [--now]
 #   — a red BSD half on master becomes ONE breakage issue and one alert (issues #2286, #3120).
 #
-# Since #2286 the macOS selftests no longer run on a pull request: they run on
-# master after the merge (.github/workflows/selftests-macos.yml, push → the related
-# tests; nightly → the full suite), and `fleet-stable.sh move` refuses a target
-# whose macOS run is not green. A red master run therefore blocks every release
-# until someone fixes it — and nobody watches the Actions tab. This script does:
+# Since #2286 the macOS selftests no longer run on a pull request; since #3141 they
+# run in the release train (.github/workflows/release-train.yml, its `macOS / shard
+# K` jobs on the commit it boarded), and the full suite nightly
+# (selftests-macos.yml). A red BSD half means the train ships nothing, and nobody
+# watches the Actions tab. This script does (issue #3143, EPIC #3139 C4):
 #
-#   1. reads the macOS workflow's newest COMPLETED run on master that is not a
-#      pull_request and not cancelled (a newer push superseded it — no verdict);
+#   1. walks the workflow's (FLEET_MACOS_WORKFLOW, default release-train.yml)
+#      completed non-pull_request runs on master, newest first, and judges each by
+#      its macOS shard jobs only (`macOS / shard K`, the nightly's `macOS shard K`):
+#      one failed / timed out ⇒ red, all green ⇒ green, none or cancelled ⇒ no
+#      verdict (a train a red Linux shard stopped, one a newer push replaced). A
+#      train red for another stage is not the BSD half's;
 #   2. green → forgets what it filed, prints `green`, exit 0;
 #   3. red → names what is red (the failed job, the FAIL/TIMEOUT tests in its log)
-#      and since which commit (the red streak walked back to the last green run),
-#      and files it through the ONE filer road with `--breakage`
+#      and since which commit (the red streak walked back to the last green run;
+#      a run's head commit — a train boards master's head when it starts, at or
+#      past it), and files it through the ONE filer road with `--breakage`
 #      (bin/fleet-issue-file.sh, issue #2078): one issue per fingerprint across
 #      every machine and login; a breakage someone already filed comes back exit 5
 #      and is left alone. Either way it raises ONE `breakage` alert
@@ -23,9 +28,11 @@
 #   4. remembers the run id it filed for, so the same red run is never re-filed
 #      (nor re-commented 「同一故障」) on every tick.
 #
+# The walk reads at most FLEET_MACOS_WATCH_WALK (25) runs' jobs.
+#
 # Run from the diskguard tick (bin/fleet-diskguard.sh --watch, ~60s; the dispatch
 # daemon's until #3120) for every hosted repo whose base checkout carries both the
-# macOS workflow and bin/fleet-stable.sh — so a business repo is never read. Throttled to one read
+# watched workflow and bin/fleet-stable.sh — so a business repo is never read. Throttled to one read
 # per FLEET_MACOS_WATCH_SECS (default 600) per repo; --now ignores the throttle.
 # FLEET_MACOS_WATCH=0 turns it off. --dry-run reads and prints the filing it
 # would make, files nothing and remembers nothing.
@@ -56,7 +63,7 @@ done
 [ "${FLEET_MACOS_WATCH:-1}" = 0 ] && exit 0
 command -v gh >/dev/null 2>&1 || { printf 'fleet-macos-watch: gh not on PATH\n' >&2; exit 2; }
 
-WF="${FLEET_MACOS_WORKFLOW:-selftests-macos.yml}"
+WF="${FLEET_MACOS_WORKFLOW:-release-train.yml}"
 BRANCH="${FLEET_MACOS_BRANCH:-master}"
 slug=$(fleet_slug "$repo")
 SD="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/global/macos-watch"
@@ -76,27 +83,44 @@ fi
 rows=$(gh api "repos/$repo/actions/workflows/$WF/runs?branch=$BRANCH&status=completed&per_page=50" \
          --jq '.workflow_runs[] | [(.id|tostring), .head_sha, (.conclusion // ""), .event] | @tsv' 2>/dev/null) \
   || { log "could not read the $WF runs"; exit 2; }
-rows=$(printf '%s\n' "$rows" | awk -F'\t' 'NF >= 4 && $4 !~ /^pull_request/ && $3 != "cancelled" && $3 != "skipped"')
+rows=$(printf '%s\n' "$rows" | awk -F'\t' 'NF >= 4 && $4 !~ /^pull_request/ && $3 != "skipped"')
 [ -n "$rows" ] || { log "no completed $WF run on $BRANCH yet"; exit 0; }
 
-IFS=$'\t' read -r rid rsha rcon _ <<EOF
-$(printf '%s\n' "$rows" | head -1)
-EOF
-if [ "$rcon" = success ]; then
-  [ "$dry" = 1 ] || rm -f "$memo"
-  printf 'green\t%s\t%.7s\n' "$rid" "$rsha"; exit 0
-fi
-if [ "$(cat "$memo" 2>/dev/null)" = "$rid" ]; then
-  printf 'filed\t%s\t%.7s\t(already, for this run)\n' "$rid" "$rsha"; exit 0
-fi
+# A run's BSD verdict from its macOS shard jobs: prints `green`, or `red` and then
+# one "<job id><TAB><name>" line per failed shard; nothing = no verdict.
+mac_verdict() {
+  gh api "repos/$repo/actions/runs/$1/jobs?per_page=100" \
+      --jq '.jobs[] | [(.id|tostring), (.conclusion // ""), .name] | @tsv' 2>/dev/null |
+    awk -F'\t' 'NF >= 3 && $3 ~ /^macOS( \/)? shard / {
+        n++
+        if ($2 == "failure" || $2 == "timed_out") bad = bad $1 "\t" $3 "\n"
+        else if ($2 == "success") ok++
+      }
+      END { if (bad != "") printf "red\n%s", bad; else if (n && ok == n) print "green" }'
+}
 
-# Since which commit: the oldest red run before the newest green one.
-start=$(printf '%s\n' "$rows" | awk -F'\t' '$3 == "success" { exit } { s = $2 } END { print s }')
+walk="${FLEET_MACOS_WATCH_WALK:-25}"; case "$walk" in ''|*[!0-9]*|0) walk=25 ;; esac
+rid='' rsha='' jobs='' start='' seen=0
+while IFS=$'\t' read -r id sha _ _; do
+  [ -n "$id" ] || continue
+  seen=$((seen + 1)); [ "$seen" -le "$walk" ] || break
+  v=$(mac_verdict "$id")
+  case "$v" in
+    green*) [ -z "$rid" ] && { [ "$dry" = 1 ] || rm -f "$memo"; printf 'green\t%s\t%.7s\n' "$id" "$sha"; exit 0; }
+            break ;;                       # the streak's first red is the one before it
+    red*)   if [ -z "$rid" ]; then
+              rid=$id rsha=$sha jobs=$(printf '%s\n' "$v" | sed 1d)
+              [ "$(cat "$memo" 2>/dev/null)" = "$rid" ] && { printf 'filed\t%s\t%.7s\t(already, for this run)\n' "$rid" "$rsha"; exit 0; }
+            fi
+            start=$sha ;;
+  esac
+done <<EOF
+$rows
+EOF
+[ -n "$rid" ] || { log "no macOS verdict in the newest $walk $WF run(s) on $BRANCH"; exit 0; }
 [ -n "$start" ] || start="$rsha"
 
-# What is red: the failed jobs, and the FAIL / TIMEOUT tests in the first one's log.
-jobs=$(gh api "repos/$repo/actions/runs/$rid/jobs?per_page=100" \
-         --jq '.jobs[] | select(.conclusion == "failure" or .conclusion == "timed_out") | [(.id|tostring), .name] | @tsv' 2>/dev/null)
+# What is red: the failed shards, and the FAIL / TIMEOUT tests in the first one's log.
 jid=$(printf '%s\n' "$jobs" | awk -F'\t' 'NF { print $1; exit }')
 jnames=$(printf '%s\n' "$jobs" | cut -f2 | grep . | paste -sd ',' - | sed 's/,/, /g')
 tests=''
@@ -115,8 +139,8 @@ body="## master 上的 BSD 半边红了（issue #2286 的自动开单）
 - 红的测试：${tests:-（日志里没有读出 FAIL/TIMEOUT 行，看上面的 run）}
 - 从哪个提交开始红：\`$s7\`（往回找到最后一次绿之后的第一个红）
 
-macOS 检查在合并后跑（#2286），所以它红着时 \`fleet-stable.sh move\` 会以 \`macos:\` 拒绝移 stable：这张单修好之前，master 上的新代码到不了任何机器。
-修法：在 \`bin/run-selftests.sh <name>\` 里复现那个测试（BSD sed / bash 3.2 的差别最常见，见 CLAUDE.md「The gate has a BSD half」），修好后合并，master 的下一次 macOS run 绿了即可。"
+macOS 检查在合并后跑（#2286；#3141 起在发布列车里），所以它红着时列车不发、\`fleet-stable.sh move\` 会以 \`macos:\` 拒绝移 stable：这张单修好之前，master 上的新代码到不了任何机器。
+修法：在 \`bin/run-selftests.sh <name>\` 里复现那个测试（BSD sed / bash 3.2 的差别最常见，见 CLAUDE.md「The gate has a BSD half」），修好后合并，下一趟列车的 macOS 绿了即可。"
 
 if [ "$dry" = 1 ]; then
   printf 'would-file\t%s\t%s\n' "$rid" "$title"; exit 0

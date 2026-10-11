@@ -18,6 +18,13 @@
 #   train-shard-timeout  stable far behind, a near-full selection: the train sizes
 #                       its shards by the forecast and reruns a shard cut short
 #                       with no test red once — never one with a FAIL line (#3241)
+#   train-red-holds-lane    one Linux shard red while macOS runs on: the train's
+#                       fail-fast cancels the run at once (#3143)
+#   train-derived-red       a failed publish run and a failed move run on the
+#                       commit: the next train moves stable anyway, no hand
+#                       --ignore-check; the old auto roads are gone (#3143)
+#   train-superseded-red    stable moved past TRAIN_SHA mid-run: the train's release
+#                       ends green saying superseded, not red on the 409 (#3143)
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT are read by the sourced runner
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -178,6 +185,140 @@ S
   ! pgrep -f 'sleep 31' >/dev/null || { WHY="the cut shard's process group was left running"; rm -rf "$d"; return 1; }
   SECS=$(since "$t0"); rm -rf "$d"
   WHAT="stable 落后、近全量 4600 s：列车排 13 片、每次上限 710 s；截断且无红 ⇒ 同一片重跑一次变绿，有 FAIL 行不重跑，两次截断才红"
+}
+
+# The release train gives its lane back the moment it cannot ship (issue #3143):
+# run 38126091475 went red on a Linux shard and held the lane while macOS ran on.
+drill_train_red_holds_lane() {
+  CAP=30
+  local t0 d out rc wf
+  wf="$BIN/../.github/workflows/release-train.yml"
+  grep -q 'bin/fleet-train-failfast.sh' "$wf" || { WHY="release-train.yml runs no fleet-train-failfast.sh"; return 1; }
+  # after the cancel, C10's 隔离 still records the red shard (it runs if: always());
+  # a quarantine drill (deliberately red) is never cut short
+  sed -n '/^  record:/,/^  [a-z-]*:$/p' "$wf" | grep -q "if: always()" \
+    || { WHY="the quarantine record job does not run after a cancel (if: always())"; return 1; }
+  sed -n '/^  fail-fast:/,/^  gate:/p' "$wf" | grep -q "drill != 'true'" \
+    || { WHY="fail-fast would cancel a quarantine drill"; return 1; }
+  d=$(mktemp -d "${TMPDIR:-/tmp}/train-failfast.XXXXXX"); t0=$(now)
+  cat > "$d/gh" <<'G'
+#!/bin/bash
+case "$1" in
+  api) cat "$FAKE_DIR/jobs.tsv" ;;
+  run) [ "$2" = cancel ] && echo "$3" >> "$FAKE_DIR/cancelled" ;;
+esac
+G
+  chmod +x "$d/gh"
+  ff() { FAKE_DIR=$d FLEET_TRAIN_GH="$d/gh" GITHUB_STEP_SUMMARY="$d/sum" \
+           bash "$BIN/fleet-train-failfast.sh" --repo o/r --run 77 --every 1 --deadline "$1" 2>&1; }
+  # a shard C9 cut short is rerunning in its step (job in progress): not judged
+  printf 'completed\tsuccess\tboard\ncompleted\tsuccess\tprecheck\nin_progress\t\tLinux / shard 9\ncompleted\tsuccess\tmacOS / shard 1\n' > "$d/jobs.tsv"
+  out=$(ff 2); rc=$?
+  [ "$rc" = 0 ] && [ ! -f "$d/cancelled" ] || { WHY="a shard still rerunning was judged: exit $rc: $out"; rm -rf "$d"; return 1; }
+  # Linux shard 3 red, the macOS shards still running: cancel now
+  printf 'completed\tsuccess\tboard\ncompleted\tsuccess\tprecheck\ncompleted\tfailure\tLinux / shard 3\nin_progress\t\tLinux / shard 4\nin_progress\t\tmacOS / shard 1\nqueued\t\tmacOS / shard 2\n' > "$d/jobs.tsv"
+  out=$(ff 30); rc=$?
+  [ "$rc" = 1 ] || { WHY="a red Linux shard: failfast exit $rc, want 1: $out"; rm -rf "$d"; return 1; }
+  [ "$(cat "$d/cancelled" 2>/dev/null)" = 77 ] || { WHY="the red train was not cancelled"; rm -rf "$d"; return 1; }
+  grep -q '红灯即停：Linux / shard 3' "$d/sum" 2>/dev/null || { WHY="the summary does not name the red shard: $(cat "$d/sum" 2>/dev/null)"; rm -rf "$d"; return 1; }
+  # all green: nothing cancelled; shards not listed yet (a called workflow not started): not green yet
+  rm -f "$d/cancelled" "$d/sum"
+  printf 'completed\tsuccess\tboard\ncompleted\tsuccess\tprecheck\n' > "$d/jobs.tsv"
+  out=$(ff 2); rc=$?
+  [ "$rc" = 0 ] && case "$out" in *'no verdict'*) true ;; *) false ;; esac \
+    || { WHY="board + precheck green before any shard was listed was judged: exit $rc: $out"; rm -rf "$d"; return 1; }
+  printf 'completed\tsuccess\tboard\ncompleted\tsuccess\tprecheck\ncompleted\tsuccess\tLinux / shard 1\ncompleted\tsuccess\tmacOS / shard 1\ncompleted\tcancelled\tmacOS 排队\n' > "$d/jobs.tsv"
+  out=$(ff 30); rc=$?
+  [ "$rc" = 0 ] && [ ! -f "$d/cancelled" ] || { WHY="an all-green train: exit $rc, cancel $(cat "$d/cancelled" 2>/dev/null): $out"; rm -rf "$d"; return 1; }
+  SECS=$(since "$t0"); rm -rf "$d"
+  WHAT="一片 Linux 红、macOS 还在跑：列车的「红灯即停」当场取消整趟，车道让给下一趟；全绿什么都不动"
+}
+
+# A red derived run (a publish, a move, an old auto road) on the commit no longer
+# blocks the next train's move (issue #3143): the move's CI gate passes over the
+# release workflows' own runs, and the old roads that left them are retired.
+drill_train_derived_red() {
+  CAP=60
+  local t0 d out wfs c1 c2 c3
+  wfs="$BIN/../.github/workflows"
+  [ ! -e "$wfs/stable-auto.yml" ] || { WHY="stable-auto.yml still moves stable on its own"; return 1; }
+  awk '/^on:/{o=1; next} o && /^[^ ]/{o=0} o' "$wfs/hub-deploy.yml" | grep -q '^[[:space:]]*push:' \
+    && { WHY="hub-deploy.yml is still triggered by push"; return 1; }
+  awk '/^on:/{o=1; next} o && /^[^ ]/{o=0} o' "$wfs/stable-publish.yml" | grep -v '^[[:space:]]*#' | grep -Eq '^  (push|workflow_run|schedule):' \
+    && { WHY="stable-publish.yml is triggered by more than a dispatch"; return 1; }
+  d=$(mktemp -d "${TMPDIR:-/tmp}/train-derived.XXXXXX"); mkdir -p "$d/shim" "$d/conf"
+  ( export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+    export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
+    git init -q --bare -b master "$d/origin.git" && git clone -q "$d/origin.git" "$d/seed" 2>/dev/null || exit 1
+    for i in 1 2 3; do echo "$i" >> "$d/seed/f"; git -C "$d/seed" add -A && git -C "$d/seed" commit -qm "c$i" || exit 1
+      git -C "$d/seed" rev-parse HEAD > "$d/c$i"; done
+    git -C "$d/seed" push -q origin HEAD:master || exit 1
+    git --git-dir="$d/origin.git" update-ref refs/tags/stable "$(cat "$d/c1")" && git clone -q "$d/origin.git" "$d/co" 2>/dev/null
+  ) || { WHY="could not build the rig repo"; rm -rf "$d"; return 1; }
+  c1=$(cat "$d/c1"); c2=$(cat "$d/c2"); c3=$(cat "$d/c3")
+  # GitHub: on the commits a failed publish (suite 802) and a failed move (803) beside
+  # the green tests (801); the train run 77's own jobs are all green.
+  cat > "$d/shim/gh" <<SH
+#!/bin/sh
+case "\$*" in
+  *'actions/runs?head_sha='*) printf '801 .github/workflows/selftests.yml\n802 .github/workflows/stable-publish.yml\n803 .github/workflows/stable-auto.yml\n' ;;
+  *actions/runs/77/jobs*) printf 'completed success board\ncompleted success Linux / shard 1\ncompleted success macOS / shard 1\ncompleted success 红灯即停\nin_progress null release\n' ;;
+  *check-runs*) printf '801 completed success shard 1\n802 completed failure publish stable\n803 completed failure move stable\n' ;;
+  *actions/workflows/*) printf '%s\tcompleted\tsuccess\tschedule\t9\tselftests (macOS)\n' "$c3" ;;
+esac
+SH
+  chmod +x "$d/shim/gh"
+  t0=$(now)
+  mv1() { env -u FLEET_HUB_URL -u CCQUOTA_HUB_URL PATH="$d/shim:$PATH" FLEET_CONF_DIR="$d/conf" XDG_CONFIG_HOME="$d/conf" \
+            sh "$BIN/fleet-stable.sh" move "$@" --dir "$d/co" --repo o/r 2>&1; }
+  # the train's own move: its run's jobs, never the commit's red derived runs
+  out=$(mv1 "$c2" --train 77 --ignore-check release) || { WHY="the train's move refused past derived reds: $(printf '%s' "$out" | tail -3 | tr '\n' '|')"; rm -rf "$d"; return 1; }
+  [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable)" = "$c2" ] || { WHY="stable did not move to the train's commit"; rm -rf "$d"; return 1; }
+  # a move by hand on the next commit: the failed publish + move are passed over and named
+  out=$(mv1 "$c3") || { WHY="a move by hand refused on a failed publish / move run: $(printf '%s' "$out" | tail -3 | tr '\n' '|')"; rm -rf "$d"; return 1; }
+  case "$out" in *'passed over (a release workflow'*'publish stable'*) ;; *) WHY="the passed-over publish is not named: $out"; rm -rf "$d"; return 1 ;; esac
+  [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable)" = "$c3" ] || { WHY="stable did not move past the derived reds"; rm -rf "$d"; return 1; }
+  SECS=$(since "$t0"); rm -rf "$d"
+  WHAT="提交上留着一次失败的发布和一次失败的挪动：下一趟列车照常挪 stable，手挪也不再要逐个 --ignore-check；旧的自动三条路已退"
+}
+
+# A late train is not a red one (issue #3143): run 38139898013 went red on the
+# hub's 409 because stable had been moved past its TRAIN_SHA by hand mid-run.
+drill_train_superseded_red() {
+  CAP=30
+  local t0 d out rc wf c1 c2 c3
+  wf="$BIN/../.github/workflows/release-train.yml"
+  grep -q 'fleet-train-superseded.sh "$TRAIN_SHA"' "$wf" || { WHY="release-train.yml never asks fleet-train-superseded.sh"; return 1; }
+  [ "$(grep -c 'fleet-train-superseded.sh' "$wf")" -ge 3 ] || { WHY="release-train.yml asks before publishing but not again on a 409 / a refused move"; return 1; }
+  d=$(mktemp -d "${TMPDIR:-/tmp}/train-sup.XXXXXX")
+  ( export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+    export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
+    git init -q --bare -b master "$d/origin.git" && git clone -q "$d/origin.git" "$d/seed" 2>/dev/null || exit 1
+    for i in 1 2 3; do echo "$i" >> "$d/seed/f"; git -C "$d/seed" add -A && git -C "$d/seed" commit -qm "c$i" || exit 1
+      git -C "$d/seed" rev-parse HEAD > "$d/c$i"; done
+    git -C "$d/seed" push -q origin HEAD:master && git clone -q "$d/origin.git" "$d/co" 2>/dev/null
+  ) || { WHY="could not build the rig repo"; rm -rf "$d"; return 1; }
+  c1=$(cat "$d/c1"); c2=$(cat "$d/c2"); c3=$(cat "$d/c3"); t0=$(now)
+  sup() { env -u FLEET_HUB_URL GITHUB_OUTPUT="$d/out" GITHUB_STEP_SUMMARY="$d/sum" bash "$BIN/fleet-train-superseded.sh" "$@" --dir "$d/co" 2>&1; }
+  # stable behind the train: not superseded — the train ships
+  git --git-dir="$d/origin.git" update-ref refs/tags/stable "$c1"
+  out=$(sup "$c2"); rc=$?
+  [ "$rc" = 1 ] && grep -q '^superseded=false$' "$d/out" || { WHY="stable behind TRAIN_SHA was called superseded: $rc $out"; rm -rf "$d"; return 1; }
+  # moved by hand past it (the 409 case), or exactly onto it: superseded, green
+  for s in "$c3" "$c2"; do
+    git --git-dir="$d/origin.git" update-ref refs/tags/stable "$s"; : > "$d/out"
+    out=$(sup "$c2"); rc=$?
+    [ "$rc" = 0 ] && grep -q '^superseded=true$' "$d/out" && case "$out" in "superseded: stable is at ${s:0:7}, already ahead"*) true ;; *) false ;; esac \
+      || { WHY="stable at ${s:0:7} (≥ TRAIN_SHA) was not superseded: $rc $out"; rm -rf "$d"; return 1; }
+  done
+  grep -q 'superseded: stable is at' "$d/sum" || { WHY="the summary does not say superseded"; rm -rf "$d"; return 1; }
+  # the hub's stable ahead while the tag lags (a publish landed, the tag push did not)
+  git --git-dir="$d/origin.git" update-ref refs/tags/stable "$c1"
+  mkdir -p "$d/hub/v1/fleet/release"; printf '{"sha": "%s"}\n' "$c3" > "$d/hub/v1/fleet/release/stable"
+  out=$(sup "$c2" --hub "file://$d/hub"); rc=$?
+  [ "$rc" = 0 ] && case "$out" in *"the hub's stable"*) true ;; *) false ;; esac || { WHY="the hub's stable ahead was not superseded: $rc $out"; rm -rf "$d"; return 1; }
+  SECS=$(since "$t0"); rm -rf "$d"
+  WHAT="stable 被手动挪过了 TRAIN_SHA（或入口 stable 已在前面）：release 写 superseded、以成功收场，不再被 409 打红；stable 落后则照常发"
 }
 
 cred_run_drills "$0"

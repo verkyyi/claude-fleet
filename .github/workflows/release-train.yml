@@ -29,6 +29,10 @@ name: release train
 #   * the gate is `fleet-stable.sh move TRAIN_SHA --precheck`: trunk / forward /
 #     oldcfg / release.json / artifacts, no tag pushed. Any red ⇒ this train is
 #     red and ships nothing; the next merge starts the next one (拍板 7).
+#   * `fail-fast` (issue #3143, C4) watches the stages beside them: the first red
+#     shard, precheck or board cancels the whole run (bin/fleet-train-failfast.sh) —
+#     a train that can no longer ship gives the lane back at once instead of
+#     holding it while its other shards run on (BREAK-IT train-red-holds-lane).
 #   * `train` leaves the macOS verdict on TRAIN_SHA as the commit status
 #     `release train: macOS` — `fleet-stable.sh move` reads a green one as the BSD
 #     half on that commit.
@@ -47,6 +51,11 @@ name: release train
 #     Any red stops the train where it is: a hub already rolled stays (it serves
 #     older machines too), a publish is idempotent, and the next train starts over
 #     (拍板 7 / 8 — the hub's rollback is still hub-deploy's dispatch with `tag`).
+#   * this is the ONLY road that releases by itself (issue #3143, C4): hub-deploy
+#     has no push trigger, stable-auto.yml is gone, stable-publish.yml is dispatch
+#     only — and a red publish / move / train left on a commit is not counted
+#     against the next train's move (fleet-stable.sh gate 3 passes over the release
+#     workflows' own runs; BREAK-IT train-derived-red).
 #
 #   * a test red on TWO trains in a row is quarantined (issue #3243, C10; 拍板 10):
 #       `quarantine` fetches the previous trains' state (the `train-quarantine`
@@ -348,6 +357,34 @@ jobs:
           WHERE: ${{ needs.board.outputs.macos_where }}
         run: bash bin/fleet-train-macos.sh watch --where "$WHERE" --deadline 1200
 
+  fail-fast:
+    # A red stage cancels the run: the lane goes to the next train now (issue #3143).
+    # It reads JOB conclusions only, so a shard C9 cut short and is rerunning inside
+    # its step (bin/fleet-shard-run.sh) is never judged before its last attempt ends;
+    # a QUARANTINE line (C10) leaves its shard green. After the cancel, `隔离`
+    # (if: always()) still records the red shard's tests for the next train.
+    # It must end green unless it cancels (`release`'s --train move reads every job),
+    # so its deadline outlasts the longest shard plan sized and it then exits 0.
+    name: 红灯即停
+    needs: [board, plan]
+    if: needs.board.outputs.skip == 'false' && needs.board.outputs.drill != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.board.outputs.train_sha }}
+      - name: watch the stages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LINUX_JOB: ${{ needs.plan.outputs.linux_job_minutes }}
+          MACOS_JOB: ${{ needs.plan.outputs.macos_job_minutes }}
+        run: |
+          m=60
+          for v in "$LINUX_JOB" "$MACOS_JOB"; do case "$v" in ''|*[!0-9]*) ;; *) [ "$v" -le "$m" ] || m=$v ;; esac; done
+          d=$(( (m + 30) * 60 )); [ "$d" -le 21000 ] || d=21000   # under the job's 360 minutes
+          bash bin/fleet-train-failfast.sh --deadline "$d"
+
   gate:
     name: precheck
     needs: board
@@ -382,7 +419,8 @@ jobs:
     # half's verdict to TRAIN_SHA (a commit status — a check run belongs to the
     # commit that queued the run, which may not be TRAIN_SHA).
     name: train
-    needs: [board, quarantine, plan, linux, macos, macos-wait, gate, record]
+    # fail-fast is waited for (not judged) so `release`'s --train move finds it done.
+    needs: [board, quarantine, plan, linux, macos, macos-wait, fail-fast, gate, record]
     if: always() && needs.board.outputs.skip == 'false' && needs.board.outputs.drill != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -495,7 +533,16 @@ jobs:
           ref: ${{ needs.board.outputs.train_sha }}
           fetch-depth: 0
 
+      # A late train is not a red one (issue #3143, BREAK-IT train-superseded-red):
+      # stable already at / past TRAIN_SHA (moved by hand, or by a later train) ⇒
+      # nothing left to ship — the job ends green, saying so. Asked before the
+      # publish, and again on a 409 not-forward or a move that no longer descends.
+      - name: superseded?
+        id: sup
+        run: bash bin/fleet-train-superseded.sh "$TRAIN_SHA" --dir . --hub "$FLEET_HUB_URL" || true
+
       - name: the hub is TRAIN_SHA's
+        if: steps.sup.outputs.superseded != 'true'
         run: |
           v=$(curl -fsS -m 30 "$FLEET_HUB_URL/version") || { echo "::error::cannot read $FLEET_HUB_URL/version"; exit 1; }
           echo "$v"
@@ -509,6 +556,7 @@ jobs:
           echo "### 入口 \`$img\`$( [ "$DEPLOYED" = success ] && echo '（本趟部署）' || echo '（与本趟同源，未重出镜像；挪动前 ccquota 门再核对）')" >> "$GITHUB_STEP_SUMMARY"
 
       - name: the train's ledger (#3140)
+        if: steps.sup.outputs.superseded != 'true'
         env:
           MERGES: ${{ needs.board.outputs.merges_json }}
         run: |
@@ -543,6 +591,8 @@ jobs:
           [ ! -s train.json ] || python3 -c 'import json; d=json.load(open("train.json")); print("ledger: %d merge(s), stages %s" % (len(d["merges"]), ", ".join(s["name"] for s in d["stages"])))'
 
       - name: publish TRAIN_SHA to the hub
+        id: pub
+        if: steps.sup.outputs.superseded != 'true'
         run: |
           set +e
           train=''; [ ! -s train.json ] || train='--train train.json'
@@ -551,9 +601,14 @@ jobs:
           rc=$?
           cat pub.txt
           { echo "### publish \`${TRAIN_SHA:0:7}\` → hub"; echo '```'; cat pub.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$rc" != 0 ] && grep -q '409' pub.txt; then
+            bash bin/fleet-train-superseded.sh "$TRAIN_SHA" --dir . --hub "$FLEET_HUB_URL" && exit 0
+          fi
+          echo "superseded=false" >> "$GITHUB_OUTPUT"
           exit $rc
 
       - name: move stable to TRAIN_SHA
+        if: steps.sup.outputs.superseded != 'true' && steps.pub.outputs.superseded != 'true'
         run: |
           set +e
           sh bin/fleet-stable.sh move "$TRAIN_SHA" --train "$GITHUB_RUN_ID" --ignore-check release \
@@ -561,4 +616,7 @@ jobs:
           rc=$?
           cat out.txt
           { echo "### stable → \`${TRAIN_SHA:0:7}\`"; echo '```'; cat out.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$rc" = 3 ] && grep -q 'does not descend from the current stable' out.txt; then
+            bash bin/fleet-train-superseded.sh "$TRAIN_SHA" --dir . --hub "$FLEET_HUB_URL" && exit 0
+          fi
           exit $rc

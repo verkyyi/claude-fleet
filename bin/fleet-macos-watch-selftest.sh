@@ -1,8 +1,8 @@
 #!/bin/bash
 # fleet-macos-watch-selftest.sh — bin/fleet-macos-watch.sh (issue #2286), hermetic.
 #
-# `gh` is a PATH shim serving the macOS workflow's runs, a run's jobs and a job's
-# failed log from files; the filer and the alert are FLEET_MACOS_FILE_CMD /
+# `gh` is a PATH shim serving the watched workflow's runs, each run's jobs
+# (jobs.<run id>) and a job's failed log from files; the filer and the alert are FLEET_MACOS_FILE_CMD /
 # FLEET_MACOS_ALERT_CMD stand-ins that log their argv. Nothing touches GitHub.
 # Since #3120 (EPIC #3111 C9) nothing is ever spawned: a stand-in for
 # dash-issue-session.sh sits first on PATH and must stay unrun.
@@ -16,7 +16,9 @@
 #   D. throttle       inside FLEET_MACOS_WATCH_SECS nothing is read
 #   E. rc 5           the breakage is already open: remembered, alerted, no spawn
 #   F. rc 1           a failed filing is NOT remembered (retried next tick), exit 1
-#   G. noise          a cancelled run and a pull_request run are no verdict
+#   G. noise          a cancelled run and a pull_request run are no verdict; a
+#                     train red only on Linux, or one with no macOS job, is not
+#                     the BSD half's (issue #3143: the watcher reads the train)
 #   H. --dry-run      prints the filing, files and remembers nothing
 #   I. off            FLEET_MACOS_WATCH=0 reads nothing
 #   J. diskguard      fleet-diskguard.sh --watch's macos_watch drives it for a repo
@@ -43,7 +45,7 @@ cat > "$WORK/shim/gh" <<SH
 #!/bin/sh
 case "\$*" in
   *actions/workflows/*) cat "$WORK/runs" ;;
-  *actions/runs/*/jobs*) cat "$WORK/jobs" 2>/dev/null ;;
+  *actions/runs/*/jobs*) id=\${2#*actions/runs/}; id=\${id%%/*}; cat "$WORK/jobs.\$id" 2>/dev/null ;;
   'run view'*) cat "$WORK/log" 2>/dev/null ;;
 esac
 SH
@@ -65,8 +67,20 @@ chmod +x "$WORK/shim/gh" "$WORK/filer" "$WORK/alert" "$WORK/shim/dash-issue-sess
 
 S1=1111111aaaaaaa S2=2222222bbbbbbb S3=3333333ccccccc
 row() { printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4"; }
-red_runs() { { row 30 "$S3" failure push; row 29 "$S2" failure push; row 28 "$S1" success schedule; } > "$WORK/runs"; }
-printf '901\tmacOS shard 2\n' > "$WORK/jobs"
+# jobs <run> green|red|linux|none — a train's jobs: macOS green / one macOS shard red /
+# red on Linux only / no macOS job ran (a waiting train a newer push replaced)
+jobs() {
+  case "$2" in
+    green) printf '1\tsuccess\tLinux / shard 1\n2\tsuccess\tmacOS / shard 1\n3\tsuccess\tmacOS / shard 2\n' ;;
+    red)   printf '1\tsuccess\tLinux / shard 1\n2\tsuccess\tmacOS / shard 1\n901\tfailure\tmacOS / shard 2\n4\tskipped\trelease\n' ;;
+    linux) printf '1\tfailure\tLinux / shard 1\n2\tcancelled\tmacOS / shard 1\n3\tcancelled\tmacOS / shard 2\n' ;;
+    none)  : ;;
+  esac > "$WORK/jobs.$1"
+}
+red_runs() {
+  { row 30 "$S3" failure push; row 29 "$S2" failure push; row 28 "$S1" success schedule; } > "$WORK/runs"
+  jobs 30 red; jobs 29 red; jobs 28 green
+}
 printf '2026-10-07T01:02:03Z FAIL  dash-marker-selftest.sh   12s\n2026-10-07T01:02:04Z selftest FAIL: a thing\n' > "$WORK/log"
 
 run() {
@@ -78,11 +92,11 @@ memo() { cat "$WORK/conf/global/macos-watch/o-r.filed" 2>/dev/null || echo none;
 filed() { cat "$WORK/filed" 2>/dev/null; }
 alerted() { cat "$WORK/alerted" 2>/dev/null; }
 spawned() { [ -f "$WORK/spawned" ] && echo yes || echo no; }
-reset() { rm -f "$WORK/filed" "$WORK/spawned" "$WORK/alerted" "$WORK/filer_rc" "$WORK/conf/global/macos-watch/"*; }
+reset() { rm -f "$WORK/filed" "$WORK/spawned" "$WORK/alerted" "$WORK/filer_rc" "$WORK/jobs."* "$WORK/conf/global/macos-watch/"*; }
 
 # --- A. green ------------------------------------------------------------------
 reset; echo 9 > "$WORK/conf/stale"; mkdir -p "$WORK/conf/global/macos-watch"; echo 7 > "$WORK/conf/global/macos-watch/o-r.filed"
-{ row 31 "$S3" success push; row 30 "$S2" failure push; } > "$WORK/runs"
+{ row 31 "$S3" success push; row 30 "$S2" failure push; } > "$WORK/runs"; jobs 31 green; jobs 30 red
 run --now
 eq "A: green exits 0" 0 "$RC"; contains "A: says green" "$OUT" "green	31"; eq "A: nothing filed" "" "$(filed)"; eq "A: memo forgotten" none "$(memo)"
 
@@ -94,7 +108,7 @@ F=$(filed)
 contains "B: filed with --breakage" "$F" "--breakage --repo o/r"
 contains "B: title names the test" "$F" "macOS 检查红了：dash-marker-selftest.sh"
 lacks "B: a bare 'FAIL: a thing' line is not a test name" "$F" "红了：a,"
-contains "B: title names the job" "$F" "（macOS shard 2）"
+contains "B: title names the job" "$F" "（macOS / shard 2）"
 contains "B: title names the streak's first red commit" "$F" "自 2222222 起"
 contains "B: body links the run" "$F" "https://github.com/o/r/actions/runs/30"
 eq "B: nobody spawned" no "$(spawned)"
@@ -129,9 +143,15 @@ eq "F: no alert for a failed filing" "" "$(alerted)"
 
 # --- G. cancelled / pull_request runs are no verdict ----------------------------------
 reset
-{ row 40 "$S3" cancelled push; row 39 "$S3" success pull_request; row 38 "$S2" failure push; row 37 "$S1" success push; } > "$WORK/runs"
+{ row 42 "$S3" failure push; row 41 "$S3" cancelled push; row 40 "$S3" cancelled push; row 39 "$S3" success pull_request
+  row 38 "$S2" failure push; row 37 "$S1" success push; } > "$WORK/runs"
+jobs 42 linux; jobs 41 none; jobs 40 linux; jobs 39 green; jobs 38 red; jobs 37 green
 run --now
-contains "G: the red push run under a cancelled one decides" "$OUT" "filed	38"; eq "G: remembered 38" 38 "$(memo)"
+contains "G: the red macOS run under Linux-red / replaced / PR runs decides" "$OUT" "filed	38"; eq "G: remembered 38" 38 "$(memo)"
+contains "G: the streak starts at 38's commit" "$(filed)" "自 2222222 起"
+reset; { row 52 "$S3" failure push; row 51 "$S2" success push; } > "$WORK/runs"; jobs 52 linux; jobs 51 green
+run --now
+contains "G: a train red on Linux only leaves the BSD half green" "$OUT" "green	51"; eq "G: nothing filed" "" "$(filed)"
 
 # --- H. --dry-run ------------------------------------------------------------------------
 reset; red_runs
@@ -147,7 +167,7 @@ eq "I: off exits 0" 0 "$RC"; eq "I: says nothing" "" "$OUT"; eq "I: nothing file
 # --- J. the diskguard tick drives it, files + alerts, spawns nobody (#3120) --------------
 reset; red_runs
 mkdir -p "$WORK/mainA/.github/workflows" "$WORK/mainA/bin" "$WORK/mainB"
-: > "$WORK/mainA/.github/workflows/selftests-macos.yml"; : > "$WORK/mainA/bin/fleet-stable.sh"
+: > "$WORK/mainA/.github/workflows/release-train.yml"; : > "$WORK/mainA/bin/fleet-stable.sh"
 cat > "$WORK/dg.sh" <<SH
 FLEET_DISKGUARD_SOURCE=1 . "$BIN/fleet-diskguard.sh"
 BIN="$BIN" GDIR="$WORK/dg"
