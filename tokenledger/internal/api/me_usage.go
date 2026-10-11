@@ -494,7 +494,13 @@ func sortWork(xs []MeUsageItem) {
 		if xs[i].Tokens != xs[j].Tokens {
 			return xs[i].Tokens > xs[j].Tokens
 		}
-		return xs[i].Title+xs[i].Repo < xs[j].Title+xs[j].Repo || xs[i].Issue < xs[j].Issue
+		if xs[i].Repo != xs[j].Repo {
+			return xs[i].Repo < xs[j].Repo
+		}
+		if xs[i].Issue != xs[j].Issue {
+			return xs[i].Issue < xs[j].Issue
+		}
+		return xs[i].Epic+xs[i].Title < xs[j].Epic+xs[j].Title
 	})
 }
 
