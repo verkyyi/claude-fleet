@@ -29,15 +29,15 @@
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$BIN/.."
-RUN="$ROOT/commands/fleet-epic-run.md"
-REPORT="$ROOT/commands/fleet-epic-report.md"
+RUN="$ROOT/plugins/fleet-epic/commands/fleet-epic-run.md"
+REPORT="$ROOT/plugins/fleet-epic/commands/fleet-epic-report.md"
 CHECKS=0
 fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
 hasF() { CHECKS=$((CHECKS + 1)); grep -q -F -- "$2" "$1" || fail "$3 — [$2] not in ${1#"$ROOT"/}"; }
 lacksF() { CHECKS=$((CHECKS + 1)); grep -q -F -- "$2" "$1" && fail "$3 — [$2] still in ${1#"$ROOT"/}"; return 0; }
 
-[ -f "$RUN" ] || fail "commands/fleet-epic-run.md is missing"
-[ -f "$REPORT" ] || fail "commands/fleet-epic-report.md is missing"
+[ -f "$RUN" ] || fail "plugins/fleet-epic/commands/fleet-epic-run.md is missing"
+[ -f "$REPORT" ] || fail "plugins/fleet-epic/commands/fleet-epic-report.md is missing"
 
 # 1. the report is a beat of the run, not something handed off to someone else.
 #    The old wording is the regression to catch: it reads as a contract and is
@@ -69,8 +69,8 @@ hasF "$REPORT" '#852' "report: cites the seam's issue"
 # 6. an EPIC spanning repos (issue #1942) — every reader keys a member on (repo,
 #    issue). The regression to catch is a doc that goes back to «an EPIC lives in
 #    ONE repo» and a run that spawns or merges a repo-B member in repo A.
-PLAN="$ROOT/commands/fleet-epic-plan.md"
-[ -f "$PLAN" ] || fail "commands/fleet-epic-plan.md is missing"
+PLAN="$ROOT/plugins/fleet-epic/commands/fleet-epic-plan.md"
+[ -f "$PLAN" ] || fail "plugins/fleet-epic/commands/fleet-epic-plan.md is missing"
 for f in "$PLAN" "$RUN" "$REPORT"; do
   lacksF "$f" 'and an EPIC lives in' "the one-repo EPIC wording (#803) is retired"
   hasF "$f" '#1942' "cites the cross-repo EPIC issue"

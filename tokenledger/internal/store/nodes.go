@@ -50,12 +50,25 @@ type Node struct {
 // (claude-fleet#1412), the credential vault (claude-fleet#1415), the issue
 // leases (claude-fleet#1422) and the relay audit (claude-fleet#1413). Idempotent.
 func (s *Store) EnsureNodes() error {
+	existing, err := hasColumn(s.write, "fleet_settings", "key")
+	if err != nil {
+		return err
+	}
 	if _, err := s.write.Exec(s.d.ddl(nodesSchema)); err != nil {
 		return fmt.Errorf("create nodes table: %w", err)
 	}
 	// The Fleet Hub registry rides the same switch (claude-fleet#1409).
 	if _, err := s.write.Exec(s.d.ddl(fleetSchema)); err != nil {
 		return fmt.Errorf("create fleet registry tables: %w", err)
+	}
+	// A fresh hub requires explicit grants. Upgrades keep the old default until
+	// an administrator reviews migration; reopen never resets the chosen mode.
+	mode := "strict"
+	if existing {
+		mode = "legacy"
+	}
+	if _, err := s.write.Exec(`INSERT INTO fleet_settings (key,value,updated) VALUES (?, ?, ?) ON CONFLICT(key) DO NOTHING`, "fleet.cred_policy.mode", mode, time.Now().UTC().Format(rfc)); err != nil {
+		return err
 	}
 	if err := s.ensureFleetColumns(); err != nil {
 		return err

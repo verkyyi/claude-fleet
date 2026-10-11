@@ -118,3 +118,63 @@ func TestEntryPushPullsAndRetries(t *testing.T) {
 		t.Fatalf("an applied version ran again (%d → %d)", n, m)
 	}
 }
+
+// The reach report (claude-fleet#3072) runs off the beat: a router that never
+// answers (the report hangs) or a failed mapping (it exits 1) does not hold a
+// single heartbeat up; it runs once per entryReachEvery, never twice at once;
+// with the entry off it never runs.
+func TestEntryReachNeverHoldsTheBeat(t *testing.T) {
+	dir := t.TempDir()
+	calls := filepath.Join(dir, "calls")
+	script := filepath.Join(dir, "sup")
+	// `entry reach` hangs 3 s then fails, the way a silent router + a dead hub would
+	if err := os.WriteFile(script, []byte("#!/bin/sh\necho \"$*\" >> "+calls+"\n[ \"$2\" = reach ] && { sleep 3; echo 'portmap: no answer from 192.168.1.1'; exit 1; }\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	beats := make(chan time.Time, 100)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		var m control.Message
+		if wsjson.Read(r.Context(), c, &m) != nil {
+			return
+		}
+		welcome, _ := control.New(control.TypeWelcome, control.Welcome{Accepted: true})
+		_ = wsjson.Write(r.Context(), c, welcome)
+		for {
+			if wsjson.Read(context.Background(), c, &m) != nil {
+				return
+			}
+			if m.Type == control.TypeHeartbeat {
+				beats <- time.Now()
+			}
+		}
+	}))
+	defer srv.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go newMachineLink(MachineConfig{HubURL: srv.URL, Token: "m", LiveInterval: 100 * time.Millisecond, EntryCtl: script,
+		EntryReachEvery: 300 * time.Millisecond}).run(ctx)
+	deadline := time.After(2500 * time.Millisecond)
+	n := 0
+	prev := time.Time{}
+	for n < 15 {
+		select {
+		case at := <-beats:
+			if !prev.IsZero() && at.Sub(prev) > 600*time.Millisecond {
+				t.Fatalf("a beat waited %v behind the reach report", at.Sub(prev))
+			}
+			prev = at
+			n++
+		case <-deadline:
+			t.Fatalf("only %d beats in 2.5 s while the reach report hung", n)
+		}
+	}
+	b, _ := os.ReadFile(calls)
+	if got := strings.Count(string(b), "entry reach"); got != 1 {
+		t.Fatalf("the hung report ran %d times (want once — never twice at once): %q", got, b)
+	}
+
+}

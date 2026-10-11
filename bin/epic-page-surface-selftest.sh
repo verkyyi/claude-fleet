@@ -18,7 +18,7 @@ set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$BIN/.."
 S="$BIN/epic-page-surface.sh"
-T="$ROOT/skills/epic-page/template.html"
+T="$ROOT/plugins/fleet-epic/skills/epic-page/template.html"
 CHECKS=0
 fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/eps.XXXXXX") || fail "mktemp"
@@ -152,11 +152,11 @@ for gone in '技术细节' '共同约定' '预检原文' '⟨R1 · 已有 #N⟩'
   CHECKS=$((CHECKS + 1))
   printf '%s\n' "$TS" | grep -q -F -- "$gone" && fail "template surface leaks fold content: $gone"
 done
-for f in "$ROOT/skills/epic-page/SKILL.md" "$ROOT/commands/fleet-epic-plan.md"; do
+for f in "$ROOT/plugins/fleet-epic/skills/epic-page/SKILL.md" "$ROOT/plugins/fleet-epic/commands/fleet-epic-plan.md"; do
   CHECKS=$((CHECKS + 1))
   grep -q -F 'epic-page-surface.sh' "$f" || fail "${f#"$ROOT"/} does not point at epic-page-surface.sh"
 done
-for f in "$ROOT/skills/epic-page/SKILL.md" "$ROOT/commands/fleet-epic-plan.md" "$T"; do
+for f in "$ROOT/plugins/fleet-epic/skills/epic-page/SKILL.md" "$ROOT/plugins/fleet-epic/commands/fleet-epic-plan.md" "$T"; do
   CHECKS=$((CHECKS + 1))
   grep -q -F '▶ 打开可交互原型' "$f" || fail "${f#"$ROOT"/} does not carry the prototype rule (issue #1754)"
 done

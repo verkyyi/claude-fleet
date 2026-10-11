@@ -355,7 +355,7 @@ if [ -n "$changed_base" ]; then
           continue ;;
       esac
       case "$f" in
-        bin/*|hooks/*|conf/*|commands/*|skills/*|launchd/*|systemd/*|mod/*|shell/*|extras/*|.claude-plugin/*|fleet.conf.example) ;;
+        bin/*|hooks/*|conf/*|commands/*|skills/*|plugins/*|launchd/*|systemd/*|mod/*|shell/*|extras/*|.claude-plugin/*|fleet.conf.example) ;;
         *) continue ;;
       esac
       # An EXTENSIONLESS basename (bin/fleet) is an ordinary word — `fleet` is in

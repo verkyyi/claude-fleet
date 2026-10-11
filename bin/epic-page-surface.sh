@@ -19,7 +19,7 @@
 # / 回执 / 404, 为谁 read 「所有 Agent」. None of that is visible while you are
 # writing the page with every fold in your head; all of it is visible here.
 # Read this output before `share.sh`, and read an APPROVED page's output first
-# (skills/epic-page/SKILL.md, rule 0) so you know what "good" looks like.
+# (plugins/fleet-epic/skills/epic-page/SKILL.md, rule 0) so you know what "good" looks like.
 #
 # --lint also checks the surface against the decider's-view rules that a machine
 # CAN see, one `WARN <rule>: <text>` line each, and exits 1 when any fires:

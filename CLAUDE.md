@@ -367,6 +367,24 @@ Do not install from memory: read the doc and work from it.
   carries it as a `REAP<TAB><fleet_id><TAB><policy>` row, the inventory as
   `reap=`. **No @reap_policy = the kind's old rule, byte for byte** —
   `fleet-cleanup-idle-selftest.py` (`ReapPolicy`, `PolicyGrammar`) pins both.
+- **This repo is a plugin marketplace; orchestration, the steward and EPIC
+  batches are its optional plugins** (issue #3112, EPIC #3111 C1).
+  `.claude-plugin/marketplace.json` lists the core `fleet` (source `./`) and
+  `plugins/fleet-orchestrate` · `plugins/fleet-steward` · `plugins/fleet-epic`
+  (steward and epic depend on orchestrate), each a standard plugin (skills ·
+  commands · agents · hooks/hooks.json · .mcp.json). **Nothing installs them but
+  Claude Code's `/plugin`** (`claude plugin install|uninstall|enable|disable`);
+  the fleet records nothing — `bin/fleet-plugins.py` is the one reader of `claude
+  plugin list --json`. A hosting login's install-apply (`plugins` pass) only adds
+  the marketplace from `~/.claude/fleet` as spelled (it follows every version
+  switch; a managed link tree adds `<runtime>/current` instead — install copies
+  no symlink leaving the marketplace), except carry-over: a part that moved into a plugin and is still
+  installed on that login installs its plugin, so a fresh login has none. A
+  plugin carries no script — its hooks / MCP commands run `~/.claude/fleet/bin/…`
+  — pins a semver `version`, and bumps it whenever its files change (an installed
+  copy updates on the version; the doctor's `plugins` row says 落后). Their parts
+  never go back into `skills/`, `commands/` or the agent bundle.
+  `fleet-plugins-selftest.sh`.
 - **A role starts as its ONE definition says: `agents/<role>.md`** (issue #2782,
   EPIC #2781 C1). orchestrator · steward · worker · epic-driver, each in Claude
   Code's subagent file format (model · effort · tools · disallowedTools ·

@@ -164,10 +164,13 @@ bad = []
 if not m.get("name"):  bad.append("marketplace.json has no name")
 if not m.get("owner"): bad.append("marketplace.json has no owner")
 plugins = m.get("plugins") or []
-if len(plugins) != 1:
-    bad.append("expected exactly one plugin entry, got %d" % len(plugins))
+# the core plugin is the entry named like plugin.json; the others are the
+# optional plugins under ./plugins/ (issue #3112, fleet-plugins-selftest.sh)
+core = [e for e in plugins if not str(e.get("source", "")).startswith("./plugins/")]
+if len(core) != 1:
+    bad.append("expected exactly one core plugin entry (not under ./plugins/), got %d" % len(core))
 else:
-    e = plugins[0]
+    e = core[0]
     if e.get("name") != p.get("name"):
         bad.append("marketplace serves %r but plugin.json is named %r" % (e.get("name"), p.get("name")))
     if e.get("source") != "./":
@@ -197,8 +200,12 @@ man = r.get("manifest", {})
 errs = man.get("errors") or []
 if errs or not r.get("success"):
     print(json.dumps(errs or r, indent=2)); sys.exit(1)
-# The one expected warning is the deliberate missing version (see the header).
-unexpected = [w for w in (man.get("warnings") or []) if "version" not in (w.get("path") or "")]
+# The one expected warning is the deliberate missing version (see the header) —
+# plus, under the shadow root of the gate (every top-level entry a symlink), the
+# ./plugins/* sources of the optional plugins "traverse a symlink" and go unread;
+# fleet-plugins-selftest.sh validates each plugin itself (issue #3112).
+unexpected = [w for w in (man.get("warnings") or []) if "version" not in (w.get("path") or "")
+              and not ("symlink" in (w.get("message") or "") and "./plugins/" in (w.get("message") or ""))]
 if unexpected:
     print("unexpected validation warnings:\n%s" % json.dumps(unexpected, indent=2)); sys.exit(1)
 ' 2>&1)" || fail "claude plugin validate rejected the manifests" "$d"

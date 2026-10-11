@@ -8,7 +8,7 @@
 // stamps on the window as `@fleet_role_body` — and this `session` section, so a
 // session the launcher did not start (a hand `claude --resume`, a handoff) still
 // carries it. A window with no stamp (one opened before #2782) reads the copy
-// generated beside the skill, skills/fleet-orchestrate/role.md (compat-1v).
+// generated beside the skill, plugins/fleet-orchestrate/skills/fleet-orchestrate/role.md (compat-1v).
 //
 // lifecycle.ts reads the window's `@fleet_role` and the file once at the start
 // (the run and `$` live there: the engine follows `$` only within one file); a
@@ -28,10 +28,10 @@ let kept: WindowRole = 'other'
 /** The window's role as the panels tell it apart (issue #2835). */
 export type WindowRole = 'orchestrator' | 'steward' | 'other'
 
-/** <install>/skills/fleet-orchestrate/role.md from the plugin root (<install>/mod/fleet). */
+/** <install>/plugins/fleet-orchestrate/skills/fleet-orchestrate/role.md from the plugin root (<install>/mod/fleet). */
 export function rolePath(root: string): string {
   const base = root.replace(/\/+$/, '').replace(/\/\.claude-plugin$/, '')
-  return `${base}/../../skills/fleet-orchestrate/role.md`
+  return `${base}/../../plugins/fleet-orchestrate/skills/fleet-orchestrate/role.md`
 }
 
 /** The argv that prints the rendered body's path the launcher stamped (#2782). */
