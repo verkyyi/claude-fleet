@@ -22,7 +22,9 @@
 #   release.sh env <deploy.json>          one line per env / envFrom entry of the
 #                                         ccquota container (sorted), for a
 #                                         before/after diff. '-' = stdin.
-#   release.sh hold                       the batching (issue #2052): a push's
+#   release.sh hold                       (unused since #3143 retired hub-deploy's push
+#                                         trigger; kept one version for its selftest)
+#                                         the batching (issue #2052): a push's
 #                                         run waits until master has been quiet
 #                                         for $QUIET_MINUTES (no newer
 #                                         tokenledger / deploy/k8s commit) AND

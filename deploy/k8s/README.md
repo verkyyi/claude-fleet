@@ -20,23 +20,20 @@ updating/          the 「正在更新」 page the Ingress falls back to during 
 RUNBOOK.md         when the pod will not come up, the data disk, the two secrets
 ```
 
-## Release = merge, batched
+## Release = the release train
 
-A merge to `master` that touches `tokenledger/**` or `deploy/k8s/**` starts
-[`hub-deploy`](../../.github/workflows/hub-deploy.yml). Nobody approves the run
-(environment `prod` admits master only, no reviewer — issue #2013).
-
-**Cadence** (issue #2052) — a push does not deploy at once. Its `gate` job holds
-until master has been **quiet for `QUIET_MINUTES` (10)** — no newer
-`tokenledger/` / `deploy/k8s/` commit — **and `MIN_GAP_MINUTES` (10)** have
-passed since the last successful release (the newest success of environment
-`prod`). When a newer such commit lands while it holds, the run stands down
-green (summary: 已合并到后面的发布): that commit's run is already queued behind
-it in the `prod` concurrency group and ships both. So an evening of fifteen
-merges is one or two releases, not fifteen restarts. The two constants sit at
-the top of the workflow. **Emergency release** (a fix, a rollback) =
-Actions → hub-deploy → Run workflow: `workflow_dispatch` never holds and is
-never paused.
+A merge to `master` boards the next
+[release train](../../.github/workflows/release-train.yml) (issue #3141): once its
+tests and precheck are green it calls
+[`hub-deploy`](../../.github/workflows/hub-deploy.yml) with `sha` = its TRAIN_SHA
+(issue #3142) — unless the hub already runs that commit's Go source and
+`deploy/k8s/` (`bin/fleet-train-hub.sh`) — then publishes the same commit and
+moves stable to it. The train's one lane is the batching: an evening of fifteen
+merges is a few trains, not fifteen restarts. Nobody approves the run
+(environment `prod` admits master only, no reviewer — issue #2013). A merge no
+longer starts hub-deploy by itself: its push trigger and quiet-master hold
+(issue #2052) retired with #3143. **Emergency release** (a fix, a rollback) =
+Actions → hub-deploy → Run workflow: `workflow_dispatch` is never paused.
 
 Once it goes, the deploy job:
 
@@ -130,10 +127,11 @@ and whether it rolled back. The logic lives in
 (`--selftest` runs on every PR).
 
 **Pause** — repo variable `HUB_DEPLOY_PAUSED=1`
-(`gh variable set HUB_DEPLOY_PAUSED --body 1`): a push to master deploys
-nothing; the run is green and its summary says 已暂停. Delete the variable
-(`gh variable delete HUB_DEPLOY_PAUSED`) to resume — the commits merged while
-paused go out with the next push, or run the workflow by hand. A manual
+(`gh variable set HUB_DEPLOY_PAUSED --body 1`): the release train's call deploys
+nothing (its summary says 已暂停, and a train that needed the hub publishes
+nothing). Delete the variable (`gh variable delete HUB_DEPLOY_PAUSED`) to resume —
+the commits merged while paused go out with the next train, or run the workflow
+by hand. A manual
 `workflow_dispatch` is never paused.
 
 **Notify** — repo variable `HUB_DEPLOY_NOTIFY_ISSUE=<N>`: every release

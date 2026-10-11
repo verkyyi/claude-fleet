@@ -860,11 +860,11 @@ pool_watch() {
   return 0
 }
 
-# macos_watch — the BSD half on master (issues #2286, #3120): a red macOS run
-# there blocks every `fleet-stable.sh move`, so bin/fleet-macos-watch.sh files it
-# ONCE as a breakage (one issue per fingerprint, fleet-wide) and raises one alert —
-# it spawns nobody. Only a repo whose base checkout carries BOTH the macOS workflow
-# and bin/fleet-stable.sh is read (business repos never are); throttled inside the
+# macos_watch — the BSD half on master (issues #2286, #3120, #3143): a red macOS
+# half of the release train blocks every release, so bin/fleet-macos-watch.sh files
+# it ONCE as a breakage (one issue per fingerprint, fleet-wide) and raises one alert
+# — it spawns nobody. Only a repo whose base checkout carries BOTH the watched
+# workflow (release-train.yml) and bin/fleet-stable.sh is read (business repos never are); throttled inside the
 # watcher (FLEET_MACOS_WATCH_SECS); FLEET_MACOS_WATCH=0 turns it off. Each fleet
 # in a subshell, so one conf never colours the next; detached, a read is network.
 macos_watch() {
@@ -880,7 +880,7 @@ macos_watch() {
         [ -n "$r" ] || continue
         ( fleet_load_repo_conf "$s" "$r" >/dev/null 2>&1
           main="${FLEET_MAIN:-}"
-          [ -n "$main" ] && [ -f "$main/.github/workflows/selftests-macos.yml" ] && [ -f "$main/bin/fleet-stable.sh" ] || exit 0
+          [ -n "$main" ] && [ -f "$main/.github/workflows/${FLEET_MACOS_WORKFLOW:-release-train.yml}" ] && [ -f "$main/bin/fleet-stable.sh" ] || exit 0
           out=$(bash "$BIN/fleet-macos-watch.sh" --repo "$r" --session "$s" 2>&1)
           [ -z "$out" ] || { mkdir -p "$GDIR" 2>/dev/null
             printf '%s %s %s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$s" "$r" "${out//$'\n'/ | }" >> "$GDIR/macos-watch.log" 2>/dev/null; } )

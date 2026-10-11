@@ -1,22 +1,31 @@
 name: hub-deploy
 
-# The ONE way the hub (tokenledger/, the ccquota image) goes live — EPIC #1982
-# C1, issue #1983. A merge to master that touches tokenledger/** or
-# deploy/k8s/** — once master has been quiet for QUIET_MINUTES and
-# MIN_GAP_MINUTES have passed since the last release (issue #2052) — builds the
-# image, pushes it as `prod-<sha7>`, snapshots the database, starts the new
-# image with the real config on a copy of it (`ccquota hub --check`, issues
-# #2050 #2052), applies deploy/k8s/overlays/prod with that tag, waits for the
-# rollout and checks /healthz + /version + the entry (/install, /version's
-# stable, login/start — issue #2060) on every address. From the moment before
-# the apply until the health check (or rollback) is done, a probe hits /healthz
-# and a write once a second and the summary says how many seconds were down
-# (downtime_seconds=<n>, issue #2125). The render's shape decides the rest: the
-# single SQLite shape (one replica, Recreate, the data disk) is snapshotted and
-# its new image checked on a copy first; the rolling shape (two replicas on
-# Postgres) needs neither — RDS keeps its own backups, and a new pod that is
-# not ready never replaces an old one. A manual rollback =
-# `workflow_dispatch` with the old tag (no build; the snapshot step still runs).
+# The ONE deploy job for the hub (tokenledger/, the ccquota image) — EPIC #1982
+# C1, issue #1983. It builds the image, pushes it as `prod-<sha7>`, snapshots
+# the database, starts the new image with the real config on a copy of it
+# (`ccquota hub --check`, issues #2050 #2052), applies deploy/k8s/overlays/prod
+# with that tag, waits for the rollout and checks /healthz + /version + the
+# entry (/install, /version's stable, login/start — issue #2060) on every
+# address. From the moment before the apply until the health check (or
+# rollback) is done, a probe hits /healthz and a write once a second and the
+# summary says how many seconds were down (downtime_seconds=<n>, issue #2125).
+# The render's shape decides the rest: the single SQLite shape (one replica,
+# Recreate, the data disk) is snapshotted and its new image checked on a copy
+# first; the rolling shape (two replicas on Postgres) needs neither — RDS keeps
+# its own backups, and a new pod that is not ready never replaces an old one.
+#
+# Who runs it (issue #3143, EPIC #3139 C4): the release train, and a person.
+#   * the release train calls it (issue #3142, C3): `workflow_call` with `sha` =
+#     the train's TRAIN_SHA, after the train's tests and precheck are green — the
+#     image is `prod-<TRAIN_SHA>` built from that commit; the train then publishes
+#     the same commit and moves stable to it, so the hub and stable never come
+#     from two commits. The train's one lane is the batching.
+#   * `workflow_dispatch` is the repair road: this commit by hand, or an EXISTING
+#     `tag` (no build; the snapshot step still runs) — the rollback.
+# A merge no longer deploys by itself: the push trigger (and its quiet-master
+# hold, issue #2052) retired with C4 — a second deployer on another clock is how
+# the hub and stable came from two commits (BREAK-IT train-hub-stable-split), and
+# how one red release held up the ones after it (BREAK-IT train-derived-red).
 #
 # Nobody approves a run any more (issue #2013, 方案 B), so the job is its own
 # safety net: it reads the live image before it changes anything and, when the
@@ -25,7 +34,7 @@ name: hub-deploy
 # in the summary, RUNBOOK.md has the restore). Every run writes a summary (old →
 # new, the commits between, schema changes, env changes, snapshot, rollback),
 # comments on issue $HUB_DEPLOY_NOTIFY_ISSUE (repo variable; unset = silent),
-# and repo variable HUB_DEPLOY_PAUSED=1 stops a push from deploying at all.
+# and repo variable HUB_DEPLOY_PAUSED=1 stops the train's call from deploying.
 #
 # No long-lived credential exists for it, in this repo or anywhere: the deploy
 # job runs in environment `prod` (master only) and
@@ -39,25 +48,8 @@ name: hub-deploy
 # The `check` job runs on every PR that touches any of it and needs no
 # credential: the actions' selftests, the overlay renders, the base names no
 # environment.
-#
-# The release train calls it (issue #3142, EPIC #3139 C3): `workflow_call` with
-# `sha` = the train's TRAIN_SHA, after the train's tests and precheck are green —
-# no quiet-master hold (the train's lane is the batching), the image is
-# `prod-<TRAIN_SHA>` built from that commit, and every step below runs as on any
-# release (snapshot / check on a copy / rollout / health on /version / rollback).
-# The train then publishes the same commit and moves stable to it, so the hub
-# and stable never come from two commits. While the train deploys, a push here
-# only stands down (已由列车接手) in a lane of its own, so it can never replace
-# the train's deploy waiting in `prod`; repo variable RELEASE_TRAIN_HUB=off hands
-# the hub back to this push trigger (and the train stops deploying it). A
-# workflow_dispatch with an old `tag` is still the rollback.
 
 on:
-  push:
-    branches: [master]
-    paths:
-      - 'tokenledger/**'
-      - 'deploy/k8s/**'
   pull_request:
     paths:
       - 'deploy/k8s/**'
@@ -99,23 +91,15 @@ on:
 # One deploy at a time, never cancelled half-way (a cancelled Recreate rollout
 # leaves the hub down until the next one): a newer run waits, and replaces any
 # run that is still only waiting. The train's call (inputs.sha) and a dispatch
-# share `prod`; a push that only stands down for the train (issue #3142) waits in
-# `push`, so it never replaces the train's deploy that is waiting in `prod`.
+# share `prod`.
 concurrency:
-  group: hub-deploy-${{ github.event_name == 'pull_request' && github.ref || (github.event_name == 'push' && !inputs.sha && vars.RELEASE_TRAIN_HUB != 'off') && 'push' || 'prod' }}
+  group: hub-deploy-${{ github.event_name == 'pull_request' && github.ref || 'prod' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
 
 env:
-  # The release cadence (issue #2052): a push ships once master has been quiet
-  # this long, and never sooner than this after the last successful release.
-  # workflow_dispatch ignores both. The gap was 30 while the hub was one SQLite
-  # pod (every restart was downtime); the rolling shape restarts with none, so
-  # it is 10 (issue #2972).
-  QUIET_MINUTES: 10
-  MIN_GAP_MINUTES: 10
   NS: new-deploy
   PUSH_REPO: registry.cn-shenzhen.aliyuncs.com/24haowan/ccquota
   PLACEHOLDER: set-by-hub-deploy
@@ -190,87 +174,37 @@ jobs:
           [ "$n" = 1 ] || { echo "::error::expected one image tagged :$PLACEHOLDER, found $n"; exit 1; }
           grep -q 'value: https://' "$RUNNER_TEMP/credproxy.yaml" || { echo "::error::no relay URL in the prod render"; exit 1; }
 
-  # The pause switch (issue #2013): repo variable HUB_DEPLOY_PAUSED=1 and a push
-  # deploys nothing — this job goes green, says 已暂停 on the summary, and the
-  # deploy job is skipped. A person's workflow_dispatch is never paused: that
-  # is how you deploy (or roll back) by hand while automatic releases are off.
-  #
-  # The batching (issue #2052): a push does not deploy at once. This job holds
-  # until master has been quiet for QUIET_MINUTES (no newer tokenledger/ or
-  # deploy/k8s/ commit) AND MIN_GAP_MINUTES have passed since the last
-  # successful release (the newest success of environment prod); when a newer
-  # such commit lands meanwhile, this run stands down green (已合并到后面) —
-  # that commit's run is already queued behind this one in the `prod`
-  # concurrency group and ships both. Fifteen merges in an evening are one
-  # release, not fifteen restarts. workflow_dispatch never holds.
+  # The pause switch (issue #2013): repo variable HUB_DEPLOY_PAUSED=1 and the
+  # release train's call deploys nothing — this job goes green, says 已暂停 on the
+  # summary, and the deploy job is skipped (the train then publishes nothing: it
+  # needed the hub). A person's workflow_dispatch is never paused: that is how you
+  # deploy (or roll back) by hand while automatic releases are off.
   gate:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 5
     permissions:
       contents: read
-      deployments: read   # when the last release went out
     outputs:
-      go: ${{ steps.train.outputs.standdown != 'true' && steps.pause.outputs.paused != 'true' && (github.event_name != 'push' || inputs.sha != '' || steps.hold.outputs.verdict == 'go') }}
+      go: ${{ steps.pause.outputs.paused != 'true' }}
     steps:
-      # Issue #3142: the release train deploys the hub from the commit it tested
-      # and then publishes; a push of its own would be a second deployer on
-      # another clock (BREAK-IT train-hub-stable-split). RELEASE_TRAIN_HUB=off
-      # gives the hub back to this trigger.
-      - name: The release train deploys the hub
-        id: train
-        if: github.event_name == 'push' && inputs.sha == '' && vars.RELEASE_TRAIN_HUB != 'off'
-        run: |
-          echo "standdown=true" >> "$GITHUB_OUTPUT"
-          { echo "## hub-deploy · 🚂 已由列车接手"
-            echo
-            echo "这次 push（\`${GITHUB_SHA:0:7}\`）不单独发布入口：发布列车（release-train.yml）测完同一个提交后出入口镜像、发布、挪 stable。"
-            echo "要让这里重新自己发：仓库变量 \`RELEASE_TRAIN_HUB=off\`；要现在手动发 / 回退：Actions → hub-deploy → Run workflow。"
-          } >> "$GITHUB_STEP_SUMMARY"
-          echo "::notice::the release train deploys the hub (RELEASE_TRAIN_HUB != off) — nothing deployed here"
-
       - name: Paused?
         id: pause
-        if: steps.train.outputs.standdown != 'true'
         env:
           PAUSED: ${{ vars.HUB_DEPLOY_PAUSED }}
           INPUT_SHA: ${{ inputs.sha }}
         run: |
-          # automatic releases pause: a push, and the release train's call (any event)
-          if [ "$PAUSED" = 1 ] && { [ "$GITHUB_EVENT_NAME" = push ] || [ -n "$INPUT_SHA" ]; }; then
+          # automatic releases pause: the release train's call (any event)
+          if [ "$PAUSED" = 1 ] && [ -n "$INPUT_SHA" ]; then
             echo "paused=true" >> "$GITHUB_OUTPUT"
             { echo "## hub-deploy · ⏸ 已暂停"
               echo
-              echo "仓库变量 \`HUB_DEPLOY_PAUSED=1\`：这次 push（\`${GITHUB_SHA:0:7}\`）没有部署。"
+              echo "仓库变量 \`HUB_DEPLOY_PAUSED=1\`：发布列车这一趟（\`${INPUT_SHA:0:7}\`）没有部署入口。"
               echo "恢复自动发布：删掉这个变量（或改成别的值）；要现在发这一版：Actions → hub-deploy → Run workflow。"
             } >> "$GITHUB_STEP_SUMMARY"
-            echo "::notice::hub-deploy paused (HUB_DEPLOY_PAUSED=1) — nothing deployed${INPUT_SHA:+ (also the release train call)}"
+            echo "::notice::hub-deploy paused (HUB_DEPLOY_PAUSED=1) — the release train's call deployed nothing"
           else
             echo "paused=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - uses: actions/checkout@v4
-        if: steps.train.outputs.standdown != 'true' && steps.pause.outputs.paused != 'true' && github.event_name == 'push' && inputs.sha == ''
-        with:
-          fetch-depth: 0
-
-      # Not for the train (inputs.sha): its one lane is the batching.
-      - name: Hold for a quiet master (${{ env.QUIET_MINUTES }} min) and the release gap (${{ env.MIN_GAP_MINUTES }} min)
-        id: hold
-        if: steps.train.outputs.standdown != 'true' && steps.pause.outputs.paused != 'true' && github.event_name == 'push' && inputs.sha == ''
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          out=$(.github/actions/hub-release/release.sh hold)
-          echo "$out" >> "$GITHUB_OUTPUT"
-          if grep -q '^verdict=superseded' <<<"$out"; then
-            newer=$(sed -n 's/^newer=//p' <<<"$out")
-            { echo "## hub-deploy · ⏭ 已合并到后面的发布"
-              echo
-              echo "这次 push（\`${GITHUB_SHA:0:7}\`）没有单独发布：master 上又来了 \`${newer:0:7}\`，它的运行排在这次后面，会把两者一起发出去（合并发布，issue #2052）。"
-            } >> "$GITHUB_STEP_SUMMARY"
-            echo "::notice::superseded by ${newer:0:7} — its run ships this commit too"
           fi
 
   deploy:

@@ -776,14 +776,22 @@ Do not install from memory: read the doc and work from it.
   with `sha=TRAIN_SHA` (skipped when `bin/fleet-train-hub.sh` finds the hub already
   TRAIN_SHA's Go source and `deploy/k8s/`), `fleet-release-publish.sh TRAIN_SHA`,
   `fleet-stable.sh move TRAIN_SHA --train <run>` (gates 3 / 5 read the run's jobs) —
-  so the hub and stable never come from two commits; a push-triggered hub-deploy
-  stands down unless `RELEASE_TRAIN_HUB=off`, and the doctor's `hub-image` row WARNs
-  不同源 when a hand rollback splits them, BREAK-IT `train-hub-stable-split`),
+  so the hub and stable never come from two commits; the doctor's `hub-image` row
+  WARNs 不同源 when a hand rollback splits them, BREAK-IT `train-hub-stable-split`;
+  a red stage cancels the whole train at once, `bin/fleet-train-failfast.sh`, BREAK-IT
+  `train-red-holds-lane`). **The train is the ONLY road that releases by itself**
+  (issue #3143, C4): `hub-deploy.yml` has no push trigger (the train's call + a
+  person's `workflow_dispatch`, `tag` = rollback), `stable-auto.yml` is gone,
+  `stable-publish.yml` is dispatch only (repair), and a release workflow's own red
+  run on a commit (a failed publish / move / train / hub-deploy) is not counted by
+  `fleet-stable.sh`'s CI gate (`FLEET_STABLE_DERIVED_RE`, matched through the run's
+  check suite; `--ignore-check` repeats) — BREAK-IT `train-derived-red`;
   and `selftests-macos.yml` stays FULL nightly / on dispatch; the merge gate is the ubuntu checks alone (`fleet-pr-verdict.sh` drops
   any `macOS shard *` an older PR still carries). It gates RELEASING instead:
   `fleet-stable.sh move` refuses (`macos:`) a target whose newest macOS run is not
-  green and dispatches the full suite on a target with none, and a red master run
-  is filed once as a breakage by `bin/fleet-macos-watch.sh` (diskguard tick →
+  green and dispatches the full suite on a target with none, and a red macOS half
+  of the train (its `macOS / shard *` jobs — a train red on another stage is not
+  the BSD half's) is filed once as a breakage by `bin/fleet-macos-watch.sh` (diskguard tick →
   `fleet-issue-file.sh --breakage`) and raised as one `breakage` alert — no fixer
   is spawned (issue #3120). So **don't run the
   suite locally**: push, open the PR, read the gate. Locally run only the one
@@ -844,9 +852,10 @@ Do not install from memory: read the doc and work from it.
     guards releasing, not merging — master reaches a machine only when `stable`
     moves. So the BSD half's verdict lands in two places: `fleet-stable.sh move`
     (gate 5, `macos:`; no run on the target ⇒ dispatch + wait; `--force` logs) and
-    `bin/fleet-macos-watch.sh` (a red master run ⇒ ONE breakage issue + one
-    alert, never a spawned fixer — #3120; on the diskguard tick, only for a repo
-    carrying this workflow and `bin/fleet-stable.sh`). BREAK-IT row `macos-red-to-stable`.
+    `bin/fleet-macos-watch.sh` (a red macOS half of the train ⇒ ONE breakage
+    issue + one alert, never a spawned fixer — #3120; it reads release-train.yml's
+    `macOS / shard *` jobs since #3143, `FLEET_MACOS_WORKFLOW`; on the diskguard
+    tick, only for a repo carrying that workflow and `bin/fleet-stable.sh`). BREAK-IT row `macos-red-to-stable`.
     This is the half a lint structurally cannot do: **behaviour** differences.
     #703 (a bare `${a[@]}` on an empty array is fatal on bash 3.2, a no-op on
     bash 5) is not an enumerable idiom, only an observable outcome. The lint nets

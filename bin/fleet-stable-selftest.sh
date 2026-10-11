@@ -29,7 +29,13 @@
 #                         waited for, then the tag moves; --force moves past red
 #                         and logs `macos=`
 #   L. --ignore-check     the caller's own pending CI job (exact name) is passed
-#                         over; any other pending run still refuses
+#                         over; any other pending run still refuses; the flag
+#                         repeats (issue #3143) — every name it gives is passed over
+#   P. derived runs       (issue #3143) a red publish / move / train / hub-deploy run
+#                         on the target (a release workflow's own run, matched by
+#                         its check suite) is passed over and named; a red run of
+#                         any other workflow still refuses; FLEET_STABLE_DERIVED_RE=''
+#                         counts every run again
 #   N. the release train  (issue #3141) --precheck runs trunk / forward / oldcfg /
 #                         release.json / artifacts only — red or pending CI and no
 #                         macOS run pass, nothing is pushed or dispatched; backward
@@ -76,6 +82,7 @@ cat > "$WORK/shim/gh" <<SH
 #!/bin/sh
 case "\$*" in
   *actions/workflows/*) cat "$WORK/macos" 2>/dev/null ;;
+  *'actions/runs?head_sha='*) cat "$WORK/derived" 2>/dev/null ;;
   *actions/runs/*/jobs*) cat "$WORK/jobs" 2>/dev/null ;;
   */statuses*) cat "$WORK/statuses" 2>/dev/null ;;
   'workflow run'*) echo "\$*" >> "$WORK/dispatched"; cat "$WORK/dispatch_to" >> "$WORK/macos" 2>/dev/null ;;
@@ -255,7 +262,7 @@ macos_green "$C14" 23
 run move "$C14"
 eq "K: a valid release.json moves" 0 "$RC"; eq "K: tag at C14" "$C14" "$(tag)"; contains "K: says valid" "$OUT" "carries a valid release.json"
 
-# --- L. --ignore-check (stable-auto.yml) -----------------------------------------------
+# --- L. --ignore-check (a CI caller's own job) -----------------------------------------------
 # The CI job that runs the move is a check run on the very commit it moves to, never
 # finished yet: without the flag it is refused like any pending run; with its exact
 # name it is passed over — and only that name (a pending run beside it still refuses).
@@ -271,10 +278,12 @@ run move "$C16" --ignore-check "move stable"
 eq "L: another pending run still refuses" 3 "$RC"; contains "L: names the other one" "$OUT" "not green: queued null deploy hub"
 case "$OUT" in *"not green: in_progress null move stable"*) fail "L: the ignored job was counted" ;; esac
 eq "L: tag still C15" "$C15" "$(tag)"
+run move "$C16" --ignore-check "move stable" --ignore-check "deploy hub" --dry-run
+eq "L: a repeated --ignore-check passes over both" 0 "$RC"; contains "L: dry-run says so" "$OUT" "dry-run: would run"
 
 # --- M. publish (issue #2772) ------------------------------------------------------------
 # A moved stable is handed to the hub: outside CI the move dispatches stable-publish.yml
-# for exactly the target; inside CI (GITHUB_ACTIONS=true — stable-auto.yml publishes in
+# for exactly the target; inside CI (GITHUB_ACTIONS=true — the release train publishes in
 # its own step) and for a tree without that workflow, nothing is dispatched.
 green; rm -f "$WORK/dispatched"; : > "$WORK/dispatch_to"   # the shim answers 0
 mkdir -p "$SEED/.github/workflows"; printf 'name: stable publish\n' > "$SEED/.github/workflows/stable-publish.yml"
@@ -342,5 +351,26 @@ contains "O: says the run" "$OUT" "job(s) of train run 77 green"; contains "O: m
 case "$(cat "$WORK/dispatched" 2>/dev/null)" in *selftests-macos*) fail "O: dispatched a macOS run past a green train run" ;; esac
 run move --train abc
 eq "O: --train takes a run id" 2 "$RC"
+
+# --- P. a release workflow's own red run is not the target's CI (issue #3143) ------------------
+# One failed publish and one failed move on the target used to block every move after
+# them, one --ignore-check name at a time. They are derived from releasing it: passed over.
+C23=$(commit twentythree); push; macos_green "$C23" 28; rm -f "$WORK/dispatched"
+printf '501 .github/workflows/selftests.yml\n502 .github/workflows/stable-publish.yml\n503 .github/workflows/stable-auto.yml\n504 .github/workflows/release-train.yml\n505 .github/workflows/hub-deploy.yml\n' > "$WORK/derived"
+printf '501 completed success shard 1\n502 completed failure publish stable\n503 completed failure move stable\n504 completed failure train\n505 completed cancelled deploy\n' > "$WORK/checks"
+run move "$C23" --dry-run
+eq "P: derived reds are passed over" 0 "$RC"
+contains "P: names the publish it passed over" "$OUT" "passed over (a release workflow's own run): completed failure publish stable"
+contains "P: names the move" "$OUT" "completed failure move stable"
+contains "P: counts the one real check" "$OUT" "checks: 1 green"
+printf '501 completed failure shard 1\n502 completed failure publish stable\n' > "$WORK/checks"
+run move "$C23" --dry-run
+eq "P: a red test run still refuses" 3 "$RC"; contains "P: names it" "$OUT" "not green: completed failure shard 1"
+printf '501 completed success shard 1\n502 completed failure publish stable\n' > "$WORK/checks"
+OUT=$(FLEET_STABLE_DERIVED_RE='' sh "$ST" move "$C23" --dry-run --dir "$CO" --repo o/r 2>&1); RC=$?
+eq "P: an empty FLEET_STABLE_DERIVED_RE counts every run" 3 "$RC"
+OUT=$(FLEET_STABLE_DERIVED_RE='^selftests\.yml$' sh "$ST" move "$C23" --dry-run --dir "$CO" --repo o/r 2>&1); RC=$?
+eq "P: FLEET_STABLE_DERIVED_RE names the workflows" 3 "$RC"; contains "P: … the publish counts then" "$OUT" "not green: completed failure publish stable"
+: > "$WORK/derived"; green
 
 printf 'fleet-stable-selftest OK (%d checks)\n' "$CHECKS"

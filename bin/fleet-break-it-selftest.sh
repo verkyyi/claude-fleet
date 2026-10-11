@@ -4292,7 +4292,8 @@ drill_macos_red_to_stable() {
 case "\$*" in
   *actions/workflows/*status=completed*) cat "$d/runs.watch" ;;
   *actions/workflows/*) cat "$d/runs.stable" ;;
-  *actions/runs/*/jobs*) printf '7\tmacOS shard 1\n' ;;
+  *actions/runs/9/jobs*) printf '7\tfailure\tmacOS / shard 1\n' ;;
+  *actions/runs/*/jobs*) printf '6\tsuccess\tmacOS / shard 1\n' ;;
   'run view'*) printf 'FAIL  bsd-only-selftest.sh  1s\n' ;;
   *) printf 'completed success shard 1\n' ;;
 esac
@@ -6401,13 +6402,14 @@ drill_nothing_starts_by_itself() {
   for f in dash-issue-session.sh dash-raw-session.sh; do
     rm -f "$sb/bin/$f"; printf '#!/bin/sh\necho "$0 $*" >> "%s/spawned"\n' "$sb" > "$sb/bin/$f"; chmod +x "$sb/bin/$f"
   done
-  : > "$sb/mainA/.github/workflows/selftests-macos.yml"; : > "$sb/mainA/bin/fleet-stable.sh"
+  : > "$sb/mainA/.github/workflows/release-train.yml"; : > "$sb/mainA/bin/fleet-stable.sh"
   # a backlog of autofill-labelled issues, and master's macOS run red
   cat > "$sb/shim/gh" <<SH
 #!/bin/sh
 case "\$*" in
   *actions/workflows/*) printf '30\t3333333ccc\tfailure\tpush\n29\t1111111aaa\tsuccess\tpush\n' ;;
-  *actions/runs/*/jobs*) printf '901\tmacOS shard 2\n' ;;
+  *actions/runs/30/jobs*) printf '901\tfailure\tmacOS / shard 2\n' ;;
+  *actions/runs/*/jobs*) printf '902\tsuccess\tmacOS / shard 2\n' ;;
   'issue list'*) echo '[{"number":12,"labels":[{"name":"autofill"},{"name":"priority:p0"}],"assignees":[]}]' ;;
 esac
 SH

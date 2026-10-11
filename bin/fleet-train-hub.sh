@@ -15,9 +15,9 @@
 # deployed (unknown is never "the same"). When it is skipped, gate 8 of the
 # train's move still holds the hub's ccquota to TRAIN_SHA's source.
 #
-# RELEASE_TRAIN_HUB=off (a repo variable the workflow passes in) hands the hub
-# back to hub-deploy.yml's own push trigger: the train never deploys, gate 8
-# still checks.
+# RELEASE_TRAIN_HUB=off (a repo variable the workflow passes in): the train never
+# deploys — hub-deploy.yml by hand is then the only road (its push trigger retired
+# with #3143) — and gate 8 still checks.
 #
 # Prints, and appends to $GITHUB_OUTPUT when set:
 #   deploy   true | false
@@ -51,7 +51,7 @@ say() {   # say <deploy> <live> <why>
   exit 0
 }
 
-[ "${RELEASE_TRAIN_HUB:-}" != off ] || say false "" "RELEASE_TRAIN_HUB=off — hub-deploy.yml's own push trigger deploys the hub; the move's ccquota gate still checks it"
+[ "${RELEASE_TRAIN_HUB:-}" != off ] || say false "" "RELEASE_TRAIN_HUB=off — the train deploys no hub (hub-deploy.yml by hand: Actions → Run workflow); the move's ccquota gate still checks it"
 [ -n "$hub" ] || say true "" "no hub address — deploying"
 
 ver=$(curl -fsS -m "$timeout" "$hub/version" 2>/dev/null | python3 -c 'import json,sys

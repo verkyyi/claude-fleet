@@ -2,7 +2,7 @@
 # fleet-stable.sh show | move [<sha>] [--dry-run] [--precheck] [--allow-no-checks] [--force]
 #                 [--dir <checkout>] [--remote <name>] [--branch <trunk>]
 #                 [--repo <owner/name>] [--timeout <s>] [--macos-timeout <s>]
-#                 [--ignore-check <name>] [--train <run id>]
+#                 [--ignore-check <name>]... [--train <run id>]
 #   — the "stable" mark every install follows (issue #1118, EPIC #1117 C1).
 #
 # Merging to master used to be the same event as "this reaches all my machines"
@@ -24,9 +24,20 @@
 #               has none; `--allow-no-checks` accepts that deliberately. The
 #               `macOS shard *` runs (and the train's / the nightly's
 #               `macOS / shard *`) are not counted here: gate 5 owns them, and
-#               neither is the one run `--ignore-check <name>` names exactly —
-#               the caller's own job, when the caller is CI (stable-auto.yml): it
-#               runs on the commit it moves to and is never finished yet;
+#               neither is a run `--ignore-check <name>` names exactly (the
+#               flag repeats) — the caller's own job, when the caller is CI: it
+#               runs on the commit it moves to and is never finished yet. Nor
+#               are the release workflows' OWN runs on the target (issue #3143,
+#               EPIC #3139 C4): a failed publish, a failed move, a train or a
+#               hub-deploy on that commit is derived from releasing it, not
+#               evidence about its code — counting it is how one red publish
+#               used to block every move after it, one --ignore-check name at a
+#               time. Which workflows: FLEET_STABLE_DERIVED_RE, an ERE on the
+#               workflow's file name (default
+#               `^(release-train|stable-[a-z0-9-]+|hub-deploy)\.yml$`; empty =
+#               count every run), matched through the run's check suite
+#               (gh api …/actions/runs?head_sha=<sha>); each run passed over is
+#               named on stderr;
 #            4. an old session of the current stable keeps working on the target
 #               (issue #2075, EPIC #2074 C2): bin/fleet-oldcfg-replay.py replays
 #               stable's hook table, the mod's tool list and the MCP servers
@@ -100,7 +111,7 @@
 #          never the commit's check runs — the train boarded TRAIN_SHA, but its
 #          check runs belong to the commit that queued it, and a derived run's red
 #          (an old publish, another move) is not this train's. Every job but the
-#          one --ignore-check names must be completed green, at least one; its
+#          ones --ignore-check names must be completed green, at least one; its
 #          `macOS …` jobs are gate 5's and need at least one, all green. Every
 #          other gate (1, 2, 4, 6, 7, 8) runs as on any move.
 #          After the push, outside CI, dispatches stable-publish.yml for the
@@ -128,6 +139,8 @@ dir="$(cd "$BIN_DIR/.." && pwd)"
 remote=origin branch=master repo="" timeout=15 dry=0 precheck=0 allow_nochecks=0 force=0 macos_timeout=5400 ignore_check="" train_run=""
 cmd="" target=""
 TAG=stable
+US=$(printf '\037')   # joins the --ignore-check names (a name may hold spaces)
+DERIVED_RE=${FLEET_STABLE_DERIVED_RE-'^(release-train|stable-[a-z0-9-]+|hub-deploy)\.yml$'}
 
 die() { printf 'fleet-stable: %s\n' "$*" >&2; exit 2; }
 refuse() { printf 'fleet-stable: REFUSED — %s\n' "$*" >&2; exit 3; }
@@ -146,7 +159,7 @@ while [ "$#" -gt 0 ]; do
     --repo)            shift; repo="${1:-}" ;;
     --timeout)         shift; timeout="${1:-15}" ;;
     --macos-timeout)   shift; macos_timeout="${1:-5400}" ;;
-    --ignore-check)    shift; ignore_check="${1:-}" ;;
+    --ignore-check)    shift; ignore_check="$ignore_check${1:-}$US" ;;   # repeats
     --train)           shift; train_run="${1:-}"
                        case "$train_run" in ''|*[!0-9]*) die "--train takes a workflow run id" ;; esac ;;
     -h|--help)         sed -n '2,80p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
@@ -225,10 +238,32 @@ repo_slug() {
     sed -n 's#^.*github\.com[:/]\([^/]*/[^/]*\)$#\1#p' | sed 's#\.git$##'
 }
 
-# Every check run on <sha>, one "status conclusion name" line each.
+# The check suites of <sha>'s release workflows' own runs (FLEET_STABLE_DERIVED_RE
+# on the workflow's file name), one id a line; nothing when none, or unread.
+derived_suites() {
+  [ -n "$DERIVED_RE" ] || return 0
+  gh api --paginate "repos/$1/actions/runs?head_sha=$2&per_page=100" \
+    --jq '.workflow_runs[] | "\(.check_suite_id) \(.path)"' 2>/dev/null |
+    awk -v re="$DERIVED_RE" '$1 ~ /^[0-9]+$/ { p = $2; sub(/.*\//, "", p); sub(/@.*/, "", p); if (p ~ re) print $1 }'
+}
+
+# Every check run on <sha> but the release workflows' own (issue #3143), one
+# "status conclusion name" line each; each one passed over is said on stderr.
 check_runs() {
-  gh api --paginate "repos/$1/commits/$2/check-runs?per_page=100" \
-    --jq '.check_runs[] | "\(.status) \(.conclusion) \(.name)"'
+  _ds=$(derived_suites "$1" "$2")
+  if [ -z "$_ds" ]; then
+    gh api --paginate "repos/$1/commits/$2/check-runs?per_page=100" \
+      --jq '.check_runs[] | "\(.status) \(.conclusion) \(.name)"'
+    return
+  fi
+  _ids=",$(printf '%s\n' "$_ds" | paste -sd, -),"
+  _cr=$(gh api --paginate "repos/$1/commits/$2/check-runs?per_page=100" \
+    --jq '.check_runs[] | "\(.check_suite.id) \(.status) \(.conclusion) \(.name)"') || return 1
+  printf '%s\n' "$_cr" | awk -v ids="$_ids" 'NF {
+      n = $0; sub(/^[^ ]+ /, "", n)
+      if (index(ids, "," $1 ",")) print "  passed over (a release workflow'"'"'s own run): " n > "/dev/stderr"
+      else print n
+    }'
 }
 
 # One line per FORCED move past gate 4 or 5 is kept (FLEET_STABLE_LOG).
@@ -486,10 +521,11 @@ train_macos_gate() {   # train_macos_gate <old> <new> <jobs: the run's macOS lin
 }
 
 # After a move, hand the hub the new stable (issue #2772, EPIC #2770 C2): the hub
-# no longer looks on GitHub for it. stable-publish.yml cuts the commit (git
+# no longer looks on GitHub for it. stable-publish.yml (dispatch only — the
+# repair road since #3143) cuts the commit (git
 # archive + its first-parent chain from the hub's stable) and POSTs it to
 # /v1/fleet/release/publish under the workflow's own OIDC identity. Inside CI
-# (stable-auto.yml) the job publishes in its own next step, so nothing is
+# (the release train) the job has published before the move, so nothing is
 # dispatched there; a tree without the workflow has nothing to dispatch. A failed
 # dispatch is said, never undoes the move — the workflow can be run again by hand.
 PUBLISH_WF=${FLEET_STABLE_PUBLISH_WORKFLOW:-stable-publish.yml}
@@ -538,16 +574,18 @@ do_move() {
   else
     runs=$(check_runs "$slug" "$new") || die "could not read check runs for $(short "$new") on $slug (gh auth?)"
   fi
-  train_macos=$(printf '%s\n' "$runs" | awk -v ign="$ignore_check" 'NF && $3 == "macOS" {
-      n = $0; sub(/^[^ ]+ [^ ]+ /, "", n); if (ign == "" || n != ign) print }')
+  train_macos=$(printf '%s\n' "$runs" | awk -v ign="$ignore_check" '
+    BEGIN { k = split(ign, a, "\037"); for (i = 1; i <= k; i++) if (a[i] != "") skip[a[i]] = 1 }
+    NF && $3 == "macOS" { n = $0; sub(/^[^ ]+ [^ ]+ /, "", n); if (!(n in skip)) print }')
   # The macOS shards (`macOS shard K`, and the shared matrix's `macOS / shard K` —
   # issue #3141) are gate 5's (issue #2286): a push run a later push cancelled
   # is no verdict, and a running one is waited for there, not refused here.
-  # So is the one run --ignore-check names (the CI job running this move).
+  # So is every run --ignore-check names (the CI job running this move).
   runs=$(printf '%s\n' "$runs" | awk -v ign="$ignore_check" '
+    BEGIN { k = split(ign, a, "\037"); for (i = 1; i <= k; i++) if (a[i] != "") skip[a[i]] = 1 }
     NF && !($3 == "macOS" && ($4 == "shard" || ($4 == "/" && $5 == "shard"))) {
       n = $0; sub(/^[^ ]+ [^ ]+ /, "", n)
-      if (ign != "" && n == ign) next
+      if (n in skip) next
       print
     }')
   bad=$(printf '%s\n' "$runs" | awk 'NF && !($1=="completed" && ($2=="success" || $2=="neutral" || $2=="skipped"))')

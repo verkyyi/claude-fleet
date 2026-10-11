@@ -1,9 +1,9 @@
 #!/bin/bash
 # fleet-release-publish.sh <sha> [--hub <url>] [--dir <checkout>] [--train <json file>] [--dry-run]
 #   — hand the hub a stable it then serves to every machine (issue #2772,
-#   EPIC #2770 C2). Run by CI right after `fleet-stable.sh move`:
-#   .github/workflows/stable-auto.yml's publish step, and stable-publish.yml (the
-#   one `fleet-stable.sh move` by hand dispatches). The hub never looks on GitHub
+#   EPIC #2770 C2). Run by CI: the release train's `release` job (before its
+#   move, issue #3142), and stable-publish.yml (dispatch only — the repair road,
+#   and the one `fleet-stable.sh move` by hand dispatches). The hub never looks on GitHub
 #   for a new stable once one publish has landed.
 #
 # What it sends (POST <hub>/v1/fleet/release/publish, multipart):
