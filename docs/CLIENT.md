@@ -45,6 +45,53 @@ extras takes nothing from the Mac's. ⌃] ⌃] always sends one ⌃] on.
 - The old client (`fleet --old`) keeps every key below; its profile is written
   with all of them (`fleet-iterm-profile.py write --all`).
 
+## 侧栏下线清单 — every sidebar job's new home (issue #3186, EPIC #3178 C8)
+
+The old client's task list (`fleet --old`'s sidebar) goes with #3008 only when
+every row below is ✅. One row per row of the EPIC page's 「侧栏的每一件去哪」
+(17 rows covering the sidebar's 24 jobs — the 11 menu items share row 7), no more,
+no fewer; a job found later gets a row here and a member issue. Evidence lives
+under `$FLEET_CONF_DIR/fleets/fleet/epic/3178/evidence/3186/` (`fleet-evidence.sh`,
+never committed) — `panel` · `menus` · `rows` are the macmini 看台's own
+`fleet-quickopen.py view-panel | view-menu | view-rows` output. 「点头」 = 发起人
+@verkyyi 2026-10-11 确认方案（「需要你定的事」全部按建议）.
+
+状态：✅ 有证据 · 🖥 机器侧有证据，待 MacBook / iPhone 真机走一遍 · 🔴 缺口（有单）
+
+| # | 侧栏今天做的 | 在面板里怎么做 | 证据 | 状态 |
+|---|---|---|---|---|
+| 1 | 一直看得见谁在干活、谁卡住 | ⌘P：分组 置顶 · 等你 · 在干活 · 刚落地 · 其他 · ▸已结束，组标题带个数；顶上一行只说**这个**会话（#3194 改了页上的「顶上一行写 N 个在等你」，同样点头） | `panel` | 🖥 |
+| 2 | 「N 个在问你」，点一下跳过去 | 「等你」组排在最上；系统通知（`fleet_notify.py`）点开直达 | `fleet-view-selftest.sh`（组序） | 🖥 回答一个 |
+| 3 | 问题原话 | 「等你」那一行下面一行（status_msg / `@claude_needs_detail`） | `fleet-view-selftest.sh`（原话行） | 🖥 |
+| 4 | 按仓库分组、父子缩进、已结束折起来 | 按「你该做什么」分组；仓库只在 2 个以上时做行尾标签；子会话缩进；已结束折在最下 | `panel` · `rows`（`claude-fleet` / `no repo` 标签） | ✅ |
+| 5 | 置顶 | 「置顶」组；Tab →「置顶」（本机的行；别的机器的行侧栏也不能置顶） | `menus`（Pin） | 🖥 |
+| 6 | 别的机器的会话、失联变灰 | 同样列出，行尾标机器；失联 / 过期：顶上整条红字 + 那几行「? 失联 N 分钟」，↵ 说进不去 | `panel`（mini2 的行）· `fleet-view-hub-fresh-selftest.sh` | 🖥 让列表过期看红字 |
+| 7 | 点一行出菜单：回答 · 发消息 · 改名 · 停 · 继续 · 唤醒 · 改回收方式 · 回收 · 换账号 · 换 Claude/Codex · 打开它的改动 | 选中按 Tab，同一份菜单（`ACTIONS`；`SIDEBAR_ACTIONS` 一一对照）；别的机器的行有 回答 · 发消息 · 改名 · 改回收方式 · 停 · 回收 · 恢复 | `menus` · `fleet-view-actions-selftest.sh` | 🖥 Tab 回收一个 · 在别的机器上做一个 |
+| 8 | 改名、发消息、回答时在那一行下面问一句 | 面板底部问一句（↵ 交 · Esc 退），答完回到列表 | `fleet-view-actions-selftest.sh` | 🖥 |
+| 9 | 配置坏了「会坏·需重开」 | 那一行的 `✗ 会坏·需重开` 标签 | `fleet-view-selftest.sh`（cfg broken） | ✅ |
+| 10 | 已落地的列表、点一下恢复 | 「已结束」只列**窗口还开着**的；窗口已回收的（侧栏 ⌃t，`fleet-history.sh rows`）面板里没有 → #3286；在此之前任一会话里 `/fleet-history` | — | 🔴 #3286 |
+| 11 | 新会话时问「开在哪台」「什么时候回收」 | 默认不问（家里那台、合并后回收）；事后 Tab →「改回收方式」；每次都问 = R4 有空再做 | 点头 · `menus`（Reap policy） | ✅ |
+| 12 | 批次视图、「#N 没人在跑」重开 | EPIC 那一行行尾 k/N；重开 = R3 有空再做；没人在跑照样来通知 | 点头 · `rows`（21/22 · 9/12 …） | ✅ |
+| 13 | 铃声、系统通知 | 照旧（`fleet_notify.py`，不靠侧栏） | 不随侧栏删 | ✅ |
+| 14 | 上下文、模型、额度 | 照旧在顶上一行（`fleet-topbar.py`） | 不随侧栏删 | ✅ |
+| 15 | 顶上一条消息提示、等账号开好 | 照旧（新客户端已有） | 不随侧栏删 | ✅ |
+| 16 | 窄屏布局切换、放大、折叠、隐藏侧栏、⌂ | 不要了：新客户端全屏，面板 100 列以下自动全屏 | 点头 | ✅ |
+| 17 | 「新任务」红行、决定单、管家行 | 已随「编排和管家改成插件」（#3111）拿掉，不归这批 | #3119 | ✅ |
+
+**手机上要实测的**（EPIC 页「出处与未核实」，iPhone Termius）：
+
+| 实测 | 结果 |
+|---|---|
+| Termius 附加键默认那排有哪些键 | 待真机 |
+| ⌃空格（点 Ctrl 再点空格）能不能开面板 — 开不了就把 `FLEET_KEY_PHONE` 默认改成 `f12 ctrl+]p` | 待真机 |
+| 按上面「设置一次」把 F12 放到第一排后，点一下能开 | 待真机 |
+| 音量键能不能设成 F12 | 待真机 |
+| ⌃\ 在面板里能按出（开 shell） | 待真机 |
+
+**真机演练**（MacBook iTerm2 一遍、iPhone Termius 一遍）：开面板（⌘P / ⌃空格 / F12）→ 派一件新任务 → 开 shell 并回来 → Tab 回收一个 → 回答一个 → 在别的机器上做一个 → 让列表过期看红字。每一步一张截图进 `fleet-evidence.sh`。
+
+全部 ✅ 后在 #3008 留「侧栏下线清单已全绿，可删」。
+
 ## The keys (the old client, `fleet --old`)
 
 | Action | iTerm2 on a Mac | Any other terminal | |
