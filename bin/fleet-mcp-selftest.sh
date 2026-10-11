@@ -65,7 +65,7 @@
 #      spawn:true with no dispatch group files WITHOUT --spawn and says how to install
 #      it, with it (FLEET_MCP_ORCH=1, or the plugin enabled in Claude Code's settings)
 #      spawns as before; --mount codex --group orch derives from conf/mcp-orch.json,
-#      the same server the plugin's .mcp.json registers; --bridge-seat answers by role
+#      the same server the plugin's .mcp.json registers; --bridge-seat answers by @agent_spawn, never a role name (issue #3118)
 set -u
 
 BIN=$(cd "$(dirname "$0")" && pwd)
@@ -1141,11 +1141,11 @@ w, o = (json.load(open(f))["mcpServers"] for f in sys.argv[1:3])
 assert set(w) == {"fleet"} and set(o) == {"fleet-orch"}, (w, o)
 assert "--group orch" in " ".join(o["fleet-orch"]["args"]) and "--group" not in " ".join(w["fleet"]["args"])
 PY
-python3 "$WORK/bin/fleet-mcp.py" --bridge-seat epic-driver \
-  && ! env -u TMUX python3 "$WORK/bin/fleet-mcp.py" --bridge-seat debugger \
-  && ! env -u TMUX python3 "$WORK/bin/fleet-mcp.py" --bridge-seat worker \
+# no seat by role any more (issue #3118): a name is ignored, outside tmux nothing is one
+! env -u TMUX python3 "$WORK/bin/fleet-mcp.py" --bridge-seat epic-driver \
+  && ! env -u TMUX python3 "$WORK/bin/fleet-mcp.py" --bridge-seat orchestrator \
   && ! env -u TMUX python3 "$WORK/bin/fleet-mcp.py" --bridge-seat \
-  || fail "Q: --bridge-seat does not answer by role"
+  || fail "Q: --bridge-seat still answers by role"
 ok "Q fleet-orch lists the dispatch group; fleet answers it road=legacy; a pre-group takeover keeps all 28; file_issue spawn follows the group; one server definition for Codex and the plugin"
 
 printf 'fleet-mcp-selftest: %d passed\n' "$pass"

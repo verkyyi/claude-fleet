@@ -33,8 +33,8 @@ Two groups (issue #3113, EPIC #3111 C2). The default server `fleet` LISTS the to
 a session works with; the dispatch group — spawn · await · children · answer_dialog ·
 send — is listed by the same script started as `fleet-mcp.py --group orch`, the
 server `fleet-orch`, which only the fleet-orchestrate plugin's .mcp.json registers
-(plus, until EPIC #3111 C7, the launchers of the seats the fleet opens itself —
-conf/mcp-orch.json, see --bridge-seat). For at least one version (#2068) `fleet`
+(plus the launchers of a session whose agent file grants spawn — conf/mcp-orch.json,
+see --bridge-seat). For at least one version (#2068) `fleet`
 still ANSWERS a dispatch-group call under its old name (logged road=legacy), and a
 server that took over from a pre-group version keeps listing everything, so a
 session that started with the old list never loses a tool mid-conversation.
@@ -51,9 +51,9 @@ came. Caps, claim dedup and guards live in the scripts, once.
   fleet-mcp.py --group orch    serve the dispatch group (the server `fleet-orch`)
   fleet-mcp.py [--group orch] --list
                                print the tools that server lists, one per line
-  fleet-mcp.py --bridge-seat   exit 0 when THIS pane is a seat the fleet opens with the
-                               dispatch group mounted (orchestrator · steward · epic-driver),
-                               1 otherwise — the launchers' one test (C7 removes it)
+  fleet-mcp.py --bridge-seat   exit 0 when THIS pane's agent file grants spawn
+                               (@agent_spawn 1) — the Codex launcher mounts the dispatch
+                               group there; 1 otherwise (no seat by role, issue #3118)
   fleet-mcp.py --mount codex [--group orch]
                                print the `-c` value bin/fleet-codex.sh mounts it with
   fleet-mcp.py --legacy-peer   the old fleet-peer server (list_agents/send_message)
@@ -991,27 +991,18 @@ def tool_file_issue(args):
 ORCH_PLUGIN = "fleet-orchestrate@claude-fleet"
 ORCH_HINT = ("spawn: 派单要装插件：/plugin install %s — the issue was filed, no worker was started"
              % ORCH_PLUGIN)
-# The seats the fleet still opens itself with the group mounted (EPIC #3111 C7 removes
-# them): @fleet_role on the orchestrator's / steward's window, @fleet_role_def (or the
-# launch's --role) on an EPIC driver's — and a take_role mark (C3). Never the debugger:
-# its definition disallows spawn / await.
-BRIDGE_ROLES = ("orchestrator", "steward")
-BRIDGE_DEFS = ("orchestrator", "steward", "epic-driver")
-
-
-def bridge_seat(role=""):
-    """Is THIS pane a seat the fleet opens with the dispatch group? (--bridge-seat)"""
-    if role in BRIDGE_DEFS:
-        return True
+def bridge_seat():
+    """Is THIS pane started to dispatch — its agent file grants `spawn` (@agent_spawn
+    1, stamped by the Claude launcher, issue #3122)? (--bridge-seat) The seats the
+    fleet used to open itself (orchestrator · steward) are gone (issue #3118), and a
+    role is never matched by name: an epic-driver without the fleet-epic plugin is a
+    plain session."""
     pane = os.environ.get("TMUX_PANE", "")
     if not os.environ.get("TMUX") or not pane:
         return False
-    r = run(["tmux", "display-message", "-p", "-t", pane, "#{@fleet_role}|#{@fleet_role_def}"],
+    r = run(["tmux", "display-message", "-p", "-t", pane, "#{@agent_spawn}"],
             check=False, timeout=STATUS_TIMEOUT_S)
-    if r.returncode != 0:
-        return False
-    fr, _, fd = r.stdout.strip().partition("|")
-    return fr in BRIDGE_ROLES or fd in BRIDGE_DEFS
+    return r.returncode == 0 and r.stdout.strip() == "1"
 
 
 def plugin_enabled():
@@ -1879,8 +1870,8 @@ def main(argv):
     if argv == ["--list"]:
         print("\n".join(listing(table)))
         return 0
-    if argv[:1] == ["--bridge-seat"] and len(argv) <= 2:
-        return 0 if bridge_seat(argv[1] if len(argv) == 2 else "") else 1
+    if argv[:1] == ["--bridge-seat"] and len(argv) <= 2:   # a role name is ignored (issue #3118)
+        return 0 if bridge_seat() else 1
     if argv[:1] == ["--spec"]:
         return spec_main(argv[1:])
     if argv[:1] == ["--call"] and len(argv) in (2, 3):
@@ -1896,7 +1887,7 @@ def main(argv):
         return 0
     if argv:
         print("usage: fleet-mcp.py [--group core|orch] [--list | --mount codex] | --legacy-peer | --probe | "
-              "--spec <tool>… | --call <tool> [<json args>] | --bridge-seat [<role>] | "
+              "--spec <tool>… | --call <tool> [<json args>] | --bridge-seat | "
               "--cred mint|check|revoke|assert", file=sys.stderr)
         return 2
     serve(table, name)

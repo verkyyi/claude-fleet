@@ -820,7 +820,7 @@ for s in sessions:
                      issue=w.get("issue") or "", repo=w.get("repo") or "",
                      state=w.get("lifecycle") if w.get("lifecycle") not in (None, "", "awake") else (w.get("state") or ""),
                      agent=w.get("agent") or "", name=w.get("name") or w.get("key") or wid.split("/", 1)[1],
-                     owid=by_ident.get(w.get("origin_wid") or "", w.get("origin_wid") or ""), needs=w.get("needs") or "", busy=w.get("busy") or "", born=born_of(w), cfg=w.get("cfg") if w.get("cfg") in ("stale", "renew", "ok") else "", title=w.get("title") if isinstance(w.get("title"), str) else "", detail=w.get("detail") if isinstance(w.get("detail"), str) else "", role=w.get("role") if w.get("role") in ("orchestrator", "steward") else "", queue=str(w["orch_queue"]) if type(w.get("orch_queue")) is int and w["orch_queue"] >= 0 else "", decide=str(w["orch_decide"]) if type(w.get("orch_decide")) is int and w["orch_decide"] > 0 else "", todo=str(w["orch_todo"]) if type(w.get("orch_todo")) is int and w["orch_todo"] > 0 else "", park=str(w["orch_park"]) if type(w.get("orch_park")) is int and w["orch_park"] > 0 else "", page=w["orch_page"] if isinstance(w.get("orch_page"), str) and re.fullmatch(r"https?://[-A-Za-z0-9._~:/?#@+,=%]{1,292}", w["orch_page"]) else "", parkl=w["orch_park_list"] if isinstance(w.get("orch_park_list"), str) and re.fullmatch(r"[-A-Za-z0-9_]{1,4000}", w["orch_park_list"]) else "", todol=w["orch_todo_list"] if isinstance(w.get("orch_todo_list"), str) and re.fullmatch(r"[-A-Za-z0-9_]{1,4000}", w["orch_todo_list"]) else "", epic=w.get("epic") if isinstance(w.get("epic"), str) and re.fullmatch(r"(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#[1-9][0-9]{0,9}(?::[0-9]{1,4}/[0-9]{1,4})?", w.get("epic")) else "", reap=w.get("reap") if isinstance(w.get("reap"), str) and re.fullmatch(r"[A-Za-z0-9:.+-]{1,48}", w.get("reap")) else "", backfill="failed" if w.get("backfill") == "failed" else "", test=w.get("test") is True, ctx=ctx_of(w), ask=ask_of(w, w.get("lifecycle") if w.get("lifecycle") not in (None, "", "awake") else (w.get("state") or "")), stale=stale_of(w), seen=epoch(s.get("observed_at")), seenf=fepoch(s.get("observed_at")),
+                     owid=by_ident.get(w.get("origin_wid") or "", w.get("origin_wid") or ""), needs=w.get("needs") or "", busy=w.get("busy") or "", born=born_of(w), cfg=w.get("cfg") if w.get("cfg") in ("stale", "renew", "ok") else "", title=w.get("title") if isinstance(w.get("title"), str) else "", detail=w.get("detail") if isinstance(w.get("detail"), str) else "", epic=w.get("epic") if isinstance(w.get("epic"), str) and re.fullmatch(r"(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#[1-9][0-9]{0,9}(?::[0-9]{1,4}/[0-9]{1,4})?", w.get("epic")) else "", reap=w.get("reap") if isinstance(w.get("reap"), str) and re.fullmatch(r"[A-Za-z0-9:.+-]{1,48}", w.get("reap")) else "", backfill="failed" if w.get("backfill") == "failed" else "", test=w.get("test") is True, ctx=ctx_of(w), ask=ask_of(w, w.get("lifecycle") if w.get("lifecycle") not in (None, "", "awake") else (w.get("state") or "")), stale=stale_of(w), seen=epoch(s.get("observed_at")), seenf=fepoch(s.get("observed_at")),
                      local=here["sess"] if here else None,
                      lwid=windows.get((here["sess"], wid.split("/", 1)[1]), "") if here else ""))
 
@@ -1019,67 +1019,14 @@ for f in local:
         need.append("\x1f".join(clean(v) for v in (r["wid"], subj, clean(r["needs"]) if st == "needs" else "failed",
                                                    r["node"], r["detail"][:120])) + "\n")
     write(os.path.join(gdir, "needs_" + f["sess"]), "".join(need))
-    # The orchestrating session (issue #1957): `orch_<sess>` beside the cache, ONE
-    # line — `<worker_id> US <machine> US <online|lost> US <state> US <needs> US
-    # <question>[ US <queue>]`. The person has one (issue #2117: the hub names the machine that
-    # holds it, fleet-orchestrator.sh closes the others); should two still answer
-    # — a machine that has not asked yet, an old hub — the line is the online one
-    # on the home machine (`fleet connect`'s last pick), then online, then by
-    # machine, and `orch_multi_<sess>` names them all for the doctor's WARN. Every
-    # orchestrator's row stays in the cache (fleet-remote-view.sh open finds it
-    # there), the rows skip every one of them (tmux-dashboard-rows.sh reads the
-    # worker_ids from `orch_all_<sess>`), and 「新任务」 wears the line's state
-    # (fleet-sidebar.py), the writing area its busy line (fleet-compose.py).
-    home = ""
-    try:
-        cp = os.path.join(os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache"),
-                          "claude-fleet", "connect.json")
-        with open(cp, encoding="utf-8") as cf:
-            home = str((json.load(cf) or {}).get("last") or "")
-    except (OSError, ValueError, AttributeError):
-        home = ""
-    def first_label(n):
-        return (n or "").split(".")[0].lower()
-    orch = sorted((r for r in rows if r["role"] == "orchestrator" and not (r["local"] and r["local"] != f["sess"])),
-                  key=lambda r: (r["av"] != "online", not home or first_label(r["node"]) != first_label(home), r["node"]))
-    # A 7th column (issue #2617, EPIC #2615 C2): `<queue>`, what waits behind its
-    # running turn (the worker's orch_queue, the node inventory's `orchq=`) — only
-    # when the node counted one (0 included), so an orchestrator that cannot count
-    # (Codex, no mod, an older node) writes the six columns byte for byte as before.
-    # An 8th column (issue #2670, EPIC #2668 C2): `decide=<n>`, the steward's
-    # decision sheet rows still open (the node's `orchdec=`) — the 7th kept (empty
-    # when not counted) so the two never trade places; none ⇒ byte for byte as before.
-    # A `todo=<n>` column after it (issue #2672, EPIC #2668 C4): the steward's
-    # 待你动手 rows still open (the node's `orchtodo=`) — fleet-sidebar.py reads the
-    # tagged columns past the 7th by name. `park=<n>` (issue #2671, C3): sessions
-    # parked (the node's `orchpark=`), last. `renew=1` (issue #2733): it runs an
-    # older fleet version than its machine has installed (the row's cfg stale /
-    # renew) — its machine renews it at a quiet moment; meanwhile 「新任务」 says 待换新.
-    # `page=<url>` (issue #2735): the steward's page (the node's `orchpage=`), after
-    # every other tag but the two lists — 「新任务」's menu opens it (fleet-sidebar-menu.sh).
-    # `parkl=<cell>` / `todol=<cell>` (issue #2913): who is parked on what and the
-    # open 待你动手 items (the node's `orchparkl=` / `orchtodol=`, fleet_steward.py
-    # list_cell) — what the sidebar's 停放 / 待你动手 rows open into; last.
-    renew = lambda r: r["cfg"] in ("stale", "renew")
-    line = lambda r: "\x1f".join(clean(v) for v in (r["wid"], r["node"], r["av"], r["state"], r["needs"],
-                                                      r["detail"][:120]) + ((r["queue"],) if r["queue"] or r["decide"] or r["todo"] or r["park"] or renew(r) or r.get("page") or r.get("parkl") or r.get("todol") else ())
-                                 + (("decide=" + r["decide"],) if r["decide"] else ())
-                                 + (("todo=" + r["todo"],) if r["todo"] else ())
-                                 + (("park=" + r["park"],) if r["park"] else ())
-                                 + (("renew=1",) if renew(r) else ())
-                                 + (("page=" + r["page"],) if r.get("page") else ())
-                                 + (("parkl=" + r["parkl"],) if r.get("parkl") else ())
-                                 + (("todol=" + r["todol"],) if r.get("todol") else ())) + "\n"
-    write(os.path.join(gdir, "orch_" + f["sess"]), "".join(line(r) for r in orch[:1]))
-    write(os.path.join(gdir, "orch_all_" + f["sess"]), "".join(line(r) for r in orch))
-    # The steward (issue #2670) is no row either: its worker_ids, for the rows
-    # pass to skip (tmux-dashboard-rows.sh); never one ⇒ no file at all.
-    stew = "".join(clean(r["wid"]) + "\n" for r in rows if r["role"] == "steward"
-                   and not (r["local"] and r["local"] != f["sess"]))
-    if stew or os.path.exists(os.path.join(gdir, "steward_all_" + f["sess"])):
-        write(os.path.join(gdir, "steward_all_" + f["sess"]), stew)
-    write(os.path.join(gdir, "orch_multi_" + f["sess"]),
-          "".join(clean(r["node"]) + "\x1f" + clean(r["av"]) + "\n" for r in orch) if len(orch) > 1 else "")
+    # `orch_<sess>` / `orch_all_<sess>` / `orch_multi_<sess>` / `steward_all_<sess>`
+    # were the resident orchestrator's and steward's (issues #1957 #2117 #2670); no
+    # such seat exists any more (issue #3118) — an older version's file goes.
+    for pre in ("orch_", "orch_all_", "orch_multi_", "steward_all_"):   # compat-1v: 下一批删
+        try:
+            os.remove(os.path.join(gdir, pre + f["sess"]))
+        except OSError:
+            pass
     # The batches nobody drives (issue #1916): `epicstale_<sess>` beside the cache,
     # one line per (machine, EPIC) — `<owner/name>#<N> US <machine> US <online|lost>
     # US <age s> US <title> US <local 1|0>` — off any row of that machine (every

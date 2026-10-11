@@ -671,23 +671,6 @@ skills_dir="${CLAUDE_SKILLS_DIR:-$HOME/.claude/skills}"
 if [ "$plug" = 0 ] && [ -f "$cmd_dir/fleet-handoff.md" ] && [ ! -f "$skills_dir/handoff/SKILL.md" ]; then
   warn skills "/fleet-handoff installed but its base skill $skills_dir/handoff/SKILL.md is missing — handoff will have nothing to delegate to (run /fleet-sync-install to install skills/*)"
 fi
-# The orchestrating session (issue #1957) is seeded `/fleet-orchestrate`; with
-# the skill missing it opens on `Unknown command` and sits there empty (issue
-# #2110). Same switch fleet-orchestrator.sh reads: FLEET_ORCHESTRATOR, default 承载.
-_orch_on=${FLEET_ORCHESTRATOR:-$(_gconf_val FLEET_ORCHESTRATOR)}
-[ -n "$_orch_on" ] || _orch_on=$(bash "$(dirname "$0")/fleet-conf.sh" host 2>/dev/null)
-case "$_orch_on" in 1|on|yes|true) _orch_on=1 ;; *) _orch_on=0 ;; esac
-_orch_agent=${FLEET_AGENT:-$(_gconf_val FLEET_AGENT)}
-if [ "$_orch_agent" = codex ]; then _orch_sk="${CODEX_HOME:-$HOME/.codex}/skills/fleet-orchestrate/SKILL.md"
-else _orch_sk="$skills_dir/fleet-orchestrate/SKILL.md"; fi
-# Since issue #3112 the skill is the fleet-orchestrate PLUGIN's: an installed copy
-# in Claude Code's plugin cache counts as present.
-_orch_plug=0
-[ "$_orch_agent" != codex ] && ls "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"/plugins/cache/*/fleet-orchestrate/*/skills/fleet-orchestrate/SKILL.md >/dev/null 2>&1 && _orch_plug=1
-if [ "$_orch_on" = 1 ] && [ "$plug" = 0 ] && [ "$_orch_plug" = 0 ] && [ ! -f "$_orch_sk" ]; then
-  warn skills "the orchestrator is on here but $_orch_sk is missing — its session opens on \`Unknown command: /fleet-orchestrate\` and sits empty (install the plugin: claude plugin install fleet-orchestrate@claude-fleet; or FLEET_ORCHESTRATOR=0 to turn it off)"
-fi
-
 # doc-preview is a soft/opt dep on tailscale: it hosts Markdown docs on the
 # machine's tailnet, so with the skill installed but tailscale absent it's a
 # no-op (share.sh exits "tailscale is not running / logged out"), not a broken
@@ -3032,40 +3015,6 @@ if [ -n "$_cb" ]; then
   unset _mt _ck _cd _ans _h
 fi
 unset _cb
-
-# --- orch: the person has ONE orchestrating session (issue #2117) ---
-# The client's refresh loop writes orch_multi_<sess> when more than one machine
-# still answers with one (fleet-hub-sessions.sh); the hub names the holder and
-# every other machine closes its own on the next tick, so a lasting line here is
-# a machine that cannot ask (no node token, an old hub) or FLEET_ORCHESTRATOR
-# forced on in two places. Silent when there is no client cache here.
-for _of in "${FLEET_STATUS_G:-${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash/global}"/orch_multi_*; do
-  [ -s "$_of" ] || continue
-  _om=$(awk -F '\037' '{ printf "%s%s(%s)", (NR > 1 ? " " : ""), $1, $2 }' "$_of")
-  warn orch "${_of##*/orch_multi_}: 不止一个编排会话 — $_om (fix: 每台的 \`fleet-orchestrator.sh where <fleet>\` 应只有一台 here；不能问入口的那台补 node token，或去掉它的 FLEET_ORCHESTRATOR=1)"
-done
-
-# --- orch: the orchestrator / steward on an older fleet version (issue #2733) ---
-# Their own `ensure` renews them at a quiet moment (fleet_role_renew_why) and
-# stamps @renew_since while it waits for one; pending is an INFO (待换新), pending
-# past FLEET_ORCH_RESTART_WAIT (2 h) a WARN — the tick never forces the switch.
-_rw=${FLEET_ORCH_RESTART_WAIT:-$(_gconf_val FLEET_ORCH_RESTART_WAIT)}
-case "$_rw" in ''|*[!0-9]*) _rw=7200 ;; esac
-_rl=$(FLEET_CONF_DIR="$conf_dir" bash -c '. "$1"; for s in $(fleet_sockets); do
-        tmux -L "$s" list-windows -t "=$s" -F "$s #{@fleet_role} #{@renew_since} #{window_id}" 2>/dev/null; done' \
-        _ "$(dirname "$0")/fleet-lib.sh" 2>/dev/null \
-      | awk -v now="$(date +%s)" '($2 == "orchestrator" || $2 == "steward") && $3 ~ /^[0-9]+$/ {
-          printf "%s%s:%s %s(%dm)", (n++ ? " " : ""), $1, $2, $4, (now - $3) / 60; if (now - $3 > m) m = now - $3 }
-          END { if (n) printf "|%d\n", m }')
-if [ -n "$_rl" ]; then
-  _rage=${_rl##*|}; _rl=${_rl%|*}
-  if [ "$_rage" -ge "$_rw" ]; then
-    warn orch "待换新 等了 $((_rage / 60)) 分钟仍没换上新版本 — $_rl (fix: 它一直不安静：看它是不是一直在跑或在问；要立刻换就让它 /exit，下一拍 ensure 原地续开同一对话)"
-  else
-    info orch "待换新 — ${_rl}：下一个安静时刻原地续开到装的版本（issue #2733）"
-  fi
-fi
-unset _rw _rl _rage
 
 # --- auto-handoff nudge: does the Stop hook SEE the threshold? (issue #561) ---
 # FLEET_AUTO_HANDOFF_PCT=60 sat in the global fleet.conf for weeks while the Stop

@@ -405,11 +405,9 @@ Do not install from memory: read the doc and work from it.
   a role (`@fleet_role_def orchestrator|steward`); `--role worker|epic-driver|debugger`
   and an old window's `@fleet_role_def epic-driver` are read for one version
   (`# compat-1v`). The person's role layer, the merge, the locks and `fleet role
-  set|unset|undo` are gone; `bin/fleet-role.py` keeps only what the orchestrator's
-  and the steward's launchers (C7 deletes them) and the rule table need — their
-  model / effort from `agents/<role>.md`, the old `FLEET_ORCH_*` / `FLEET_STEWARD_*`
-  knobs, then the person's model / effort still in `person-bundle.json`
-  (compat-1v). `fleet-agent-as-selftest.sh`, `spawn-origin-gate-selftest.sh` F,
+  set|unset|undo` are gone; `bin/fleet-role.py` keeps only the two role definitions'
+  reads (`get` · `body` · `prompt` · `sha`) and the rule table — its `render` left
+  with the seats it launched (issue #3118). `fleet-agent-as-selftest.sh`, `spawn-origin-gate-selftest.sh` F,
   `fleet-role-selftest.sh`.
 - **This repo is a plugin marketplace; orchestration, the steward and EPIC
   batches are its optional plugins** (issue #3112, EPIC #3111 C1).
@@ -470,62 +468,18 @@ Do not install from memory: read the doc and work from it.
   (`conf/role-rules.default.md` is their union, one version, for the hub's view);
   `/qd` is the plugin's mod module (`plugins/fleet-orchestrate/hooks/qd.tsx`, any
   window with no issue). `fleet-role-take-selftest.sh`, BREAK-IT `role-taken-twice`.
-- **A role starts as its ONE definition says: `agents/<role>.md`** (issue #2782,
-  EPIC #2781 C1). orchestrator · steward · worker · epic-driver, each in Claude
-  Code's subagent file format (model · effort · tools · disallowedTools ·
-  mcpServers · permissionMode … + the body); `bin/fleet-role.py render <role>
-  [--agent claude|codex]` is the one reader. The orchestrator's and the steward's
-  launchers splice what `fleet_role_render` gives (and stamp `@fleet_role_file`
-  <sha> + `@fleet_role_body`); a worker / driver launch carries `--role
-  worker|epic-driver` (dash-issue-session.sh; `dash-raw-session.sh --role
-  epic-driver`) and fleet-claude.sh renders it — the definition's model is the
-  FLEET_MODEL default, the cap / subagent tier / @cc_model go on as before; no
-  `--role` = byte for byte as before; the wrapper's resume keeps the rendered
-  group. A worker's / driver's body is read by its seed skill, injected nowhere.
-  The old knobs (`FLEET_ORCH_*`, `FLEET_STEWARD_*`, `FLEET_MODEL`, the login's
-  `effortLevel`) still win for one version (`# compat-1v`) —
-  `fleet-conf.sh migrate`'s roles step (`fleet-role.py migrate-conf`, issue #2788)
-  moves every one that differs from the built-in into the person's layer (one PUT;
-  a field the person already set is theirs), comments its line out (.bak kept),
-  writes nothing on a second run, and the doctor's `roles` row WARNs while one is
-  left; Codex models and `FLEET_SUBAGENT_MODEL` stay the machine's
-  (docs/ROLES-ACCEPTANCE.md) — and
-  `skills/*/role.md` stay as copies of the bodies for a window opened before
-  (`fleet-role-selftest.sh` B: byte-identical). The repo root is the plugin root:
-  `plugin.json` says `"agents": []`, so the roles never register as plugin
-  subagents. A definition that cannot be read is not used: the last good launch
-  (`$FLEET_CONF_DIR/roles/<role>.<agent>.last.json`) stands — BREAK-IT
-  `role-def-broken`. Never hard-code a role's model, effort or prompt in a launcher.
-  **A person writes only what changes** (issue #2783, C2): a layer in the same
-  format — the person bundle's `roles.<role>` (`person-bundle.json`), then this
-  computer's `$FLEET_CONF_DIR/roles/<role>.md` — merged by `fleet-role.py merge`
-  (pure; scalars replace, lists `+X`/`-X` or `!replace`, dicts by key with `null`
-  deleting, the body appended unless `body: replace`), render launches the merge,
-  `fleet role show <role> --sources` names each field's 自带 · 你的 vN · 本机 · 🔒.
-  `role.<role>.<field>` in `conf/agent-locked.list` is written back after the
-  merge (never looser than the built-in). A bad layer is not used — its last good
-  copy stands (BREAK-IT `role-overlay-broken`); no layer ⇒ byte for byte C1.
-  `tests/role-merge/*.json` are the vectors the hub's Go copy (C6) runs too.
-  **The person's layer lives on the hub** (issue #2784, C3): the person bundle
-  takes `roles` (`{<role>: overlay}`, the four roles only, ≤ 16 KiB each) and
-  `rules` (C5's table text or list of rows, ≤ 32 KiB) — Go `validateBundle` and
-  `fleet-agent-team.py validate` in step, the same credential scan. A PUT pushes
-  `person` {principal, version} (`CapPerson`) to every connected login bound to
-  that person (`PrincipalForLogin`), and the agent runs `fleet-agent-team.py sync
-  --person-version N` (retried every beat, apart from the team's); `render` re-reads
-  a cache older than `FLEET_ROLE_STALE` (600 s) via `fleet-agent-team.py person`,
-  at most `FLEET_ROLE_FETCH_SECS` (3 s) — the hub away, the cache stands. The
-  doctor's `roles` row: 入口 vN · 本机 vM · 拉到 … (`status --roles`,
-  `person-sync.json`), WARN past a day. No person ⇒ no file, no row, no message
-  (`TestPersonRolesOffAddsNothing`); BREAK-IT `person-hub-down`.
-  **A person changes it by saying so** (issue #2785, C4): the `fleet-config` skill
-  turns a sentence into ONE `fleet-role.py set|unset|rule-set|rule-unset|undo` —
-  GET the person bundle (fleet-config.py's client) → the smallest change to
-  `roles` / `rules` → 改前 → 改后 on the merged definition (exit 4, nothing sent)
-  → `--yes` PUTs with `base` (409: redone once) and writes the hub's answer into
-  person-bundle.json at once. A worker's window (`@fleet_role worker`) exits 3; a
-  credential-shaped value is refused before sending. Never hand-edit the layer
-  files for it; `fleet-role-write-selftest.sh`.
+- **A role's text is its ONE definition: `agents/<role>.md`** (issue #2782, EPIC
+  #2781 C1). orchestrator · steward, in Claude Code's subagent file format (model ·
+  effort · … + the body); `bin/fleet-role.py get|body|prompt|sha <role>` is the one
+  reader, and `prompt` (the body + the role's rule-table rows) is what the plugins'
+  `skills/*/role.md` copy byte for byte (`fleet-role-selftest.sh` B) — the text a
+  session that takes the role reads. Nothing launches a session from it any more:
+  the worker and the EPIC driver are standard agent files (`--as`, above), and the
+  resident seats whose launchers rendered it are gone (issue #3118), with their
+  knobs. The person's layer, the merge, `fleet role set|unset|undo` and the hub's
+  `roles` view left with C11 (issue #3122). The repo root is the plugin root:
+  `plugin.json` says `"agents": []`, so the definitions never register as plugin
+  subagents.
 - **How the orchestrator dispatches and what the steward may answer is ONE rule
   table** (issue #2786, EPIC #2781 C5): the plugins' `skills/*/rules.md` (issue #3114;
   `conf/role-rules.default.md` their one-version union) (编号 · 角色 ·
@@ -533,8 +487,8 @@ Do not install from memory: read the doc and work from it.
   (`person-bundle.json` `rules`) < this computer's `$FLEET_CONF_DIR/roles/rules.md`,
   merged by number in `bin/fleet_rules.py` (the one reader; a number is never
   reused, a new one starts at 100, a layer with a bad row is not used at all).
-  `fleet-role.py render` appends the role's rows to the orchestrator's / steward's
-  system prompt (`prompt <role>`, ≤ 40 lines; `skills/*/role.md` are its copies);
+  `fleet-role.py prompt <role>` appends the role's rows to its body (≤ 40 lines;
+  the plugins' `skills/*/role.md` are its copies);
   `fleet_decision.classify` reads the `ask` rows' `never:<class>` keywords
   (`NEVER_WORDS` is only the backstop). A dispatch carries `rule: N` (`--rule N`):
   the ticket ends 「按规则 N 派发」 + `<!-- fleet:rule n=N v=<version> -->`, every
@@ -542,139 +496,46 @@ Do not install from memory: read the doc and work from it.
   orchestrator filing with none gets 「未注明规则」 + `logs/rules.log`, never a
   refusal. Never list a keyword or a dispatch shape anywhere else.
   `fleet-rules-selftest.sh`, `fleet-issue-file-selftest.sh` V.
-- **The fleet has ONE orchestrating session, and it is no row** (issue #1957).
-  `bin/fleet-orchestrator.sh ensure` opens it (fleet-up, and the diskguard tick's
-  `home_watch` reopens it — the same conversation when it can): `@fleet_role
-  orchestrator`, `@norepo 1`, in `$HOME`, the login's agent at its strongest model
-  and high effort (its definition, `agents/orchestrator.md`), seeded `/fleet-orchestrate` — its ROLE rides the system prompt, not that seed
-  (issue #2582): `--append-system-prompt-file` the definition's body
-  (≤ 60 lines; kept by the wrapper's ↵ resume) plus the mod's
-  `fleet:orchestrator-role` section from the same text (`@fleet_role_body`), so a `/clear` or a
-  compaction leaves it the orchestrator (Codex: the seed alone). Its WORKING STATE rides a
-  compaction too (issue #2583): `bin/fleet-orchestrator-state.py` writes
-  `global/orchestrator.state.json` (batches · waiting · unread reports · loop) on
-  PreCompact / SessionEnd / ScheduleWakeup / a `[child-report]`, and SessionStart
-  (compact · resume · startup) hands back ≤ 40 lines ending in «re-arm the Loop»;
-  a typed `/compact` gets its next turn from `fleet-compact-resume.sh`. And it comes back AS IT WAS (issue #2585): a Claude orchestrator on the wrapper's recovery page past `FLEET_ORCH_REVIVE_SECS` (30 s) is respawned in place by the next `ensure` on the same conversation, and every resumed one gets a first turn (the resume seed) — SessionStart resume/startup re-reads the batches and the Loop first, since a killed process ran no SessionEnd. BREAK-IT `orchestrator-exited`. A `/fleet-handoff` there ends its conversation for good (issue #2937): the cycle stamps `@handoff_cycle` (no renew / revive / cfg-restart while it holds — `fleet_handoff_cycle_live`), the `/clear`'s SessionStart writes the new sid into `<role>.sid`, and `ensure` never resumes the one named in `<role>.handoff` — a new conversation, first turn the pickup; the context ladder (prep 55 · cap 3 · handoff 80) runs on `@fleet_role orchestrator` as on a scratch, and a stored-not-cleared cycle is a `handoff-failed` ladder row (`fleet-context.sh` `last`, the steward page). BREAK-IT `handoff-renew-race`. A hand-typed /exit or /clear there
-  first answers a hint (⌃D 放后台; the same command within 60 s, or `/exit!`, runs it —
-  `mod/fleet/hooks/exit-guard.ts`, issue #2584); a plugin's run (the inbox) passes. While it is busy, `/qd` (mod `hooks/qd.tsx`, `immediate`, its window only — issue #2618) opens a title + repo dialog that files through `fleet-mcp.py --call file_issue {spawn: true}` past the model and the queue (`派：` prefix: `FLEET_ORCH_QD_PREFIX=1`). What waits behind its turn is counted (mod `hooks/queue.ts`, issue #2617): a prompt typed by hand over a running turn is +1, back to 0 at the next main-loop `turn.step` — a yellow 「排队 N 条 · 在忙 X」 line in its prompt band, `@orch_queue` → the inventory's `orchq=` (column 31) → `orch_<sess>`'s 7th column → 「排队 N」 at 「新任务」's end; no count (Codex) ⇒ the bar's 「编排在忙」, no 7th column ⇒ byte for byte as before. Restore / migrate / move read it
-  as `home` (the role-aware formats map it there — never snapshotted, never moved);
-  the session caps never count it (only `worker` does); `fleet_win_for_key
-  orchestrator` addresses it. **On the client it is no special row** (issue #3119):
-  the inventory's column 20 says `role=worker` for it, every list draws it as an
-  ordinary row, there is no 「新任务」 row, and ⌘N opens a new session (never this
-  one); the only treatment a row gets is the person's pin (`@pin`), which orders
-  the list and keeps nothing from the reapers (`@reap_policy keep` does). Off
-  unless `FLEET_ORCHESTRATOR` (default: `FLEET_HOST`) — no orchestrator ⇒ byte
-  for byte as before. **One per PERSON, not per machine** (issue #2117): with the
-  hub on, `ensure` asks `/v1/node/orchestrator` (`fleet_orchestrator.go`: the
-  holder sticks while online and not 维护中) and a machine not named closes its
-  own (rc 5); `home_watch` asks every tick. `orch_<sess>` is one line,
-  `orch_multi_<sess>` feeds the doctor's `orch` WARN; no hub / an old hub ⇒
-  each machine decides alone. BREAK-IT `orchestrator-two`,
-  `fleet-orchestrator-selftest.sh`.
-- **The steward is a role a session TAKES, and nothing patrols without a holder**
-  (issue #2670, EPIC #2668 C2; issue #3115, EPIC #3111 C4). `/fleet-steward` (the
-  fleet-steward plugin's skill) calls `take_role steward` and then runs the patrol in
-  ITS OWN `/loop`: each round `fleet-steward-tick.sh beat --holder`
-  (`bin/fleet_steward.py`), which refuses (rc 3) a bare `beat`, a beat with nobody
-  holding the role and a beat from any window but the holder's (`fleet_role_holder`;
-  `fleet_decision.steward_holder` is its Python door, seam `FLEET_STEWARD_HOLDER_CMD`).
-  The diskguard tick runs no beat and drains no breakage queue. **Nobody holds it ⇒
-  nothing is answered at a deadline, spawned, merged, parked or filed, and no sheet,
-  page or `[decision]` is written**: an `ask` with no field posts today's body (no
-  marker), a worker's red base is filed and the person told once (`fleet-alerts.sh
-  event breakage`), kept queued for the next holder. `bin/fleet-steward.sh ensure`
-  still opens the old seat (`@fleet_role steward`) where `FLEET_STEWARD=1` until C7
-  removes it. The beat, NO model:
-  every `FLEET_STEWARD_EVERY` it reads the orchestrator's and the drivers' children
-  ledgers, the epic marks and C1's ask rows (`fleet_decision.py`), answers due rows
-  by their default, asks the backstop about a driverless batch's PRs, writes
-  `global/steward.{state,delta}.json` — and ends its card with one `[steward]` line (the
-  holder's loop reads it) only when there is a new question, a BLOCKED/FAILED report or
-  a driverless batch. Every
-  answer (the steward's own, the person's from the orchestrator) goes through
-  `fleet-steward-tick.sh answer`; the open rest becomes ONE `[decision]` to the
-  orchestrator (`sheet`), and its open rows ride `@orch_decide` → the inventory's
-  `orchdec=` (column 32, only when set) → `orch_<sess>`'s `decide=N` (no list draws
-  it since issue #3119). GitHub writes ≤ `FLEET_STEWARD_WRITES` (20) a beat, the rest deferred.
-  The beat also watches the fleet's OWN health (issue #2674, C6;
-  `bin/fleet_steward_health.py`): `fleet-doctor.sh --json` against the last run (a
-  new WARN/FAIL by row + first-line fingerprint, on 2 runs in a row; the first run is
-  the baseline), idle sessions past `FLEET_STEWARD_IDLE_SECS` (2h) while the sleep
-  scan accepted none, and `done:` ones the idle reaper closed none of (judged
-  apart — a merged cleanup is no idle reap) ⇒ ONE issue per `<!-- fleet:health key=… -->` in the
-  fleet's repo (`FLEET_STEWARD_HEALTH_REPO`, else the hosted `*/claude-fleet`), a
-  recurrence a 「又出现」 comment; a red base stays `--breakage`'s. BREAK-IT
-  `health-silent-pass`.
-  **What a person reads is the steward's PAGE, never the table** (issue #2735):
-  `bin/fleet_steward_page.py` renders the epic-page frame on every beat — a band
-  (今天问了 · 你答了 · 按默认走 · 停放 · 待你动手), 要你定的事 one line a thing (a row's
-  `say`, else the worker's words made plain), grouped by what the person does and
-  the same question merged, 待你动手, today's 默认 with how to overturn each — at ONE
-  doc-preview link (`state.page`), stamped `@orch_page` → `orchpage=` (column 35) →
-  `page=<url>` on `orch_<sess>` (no menu item since issue #3119); the `[decision]`
-  message carries the same plain lines + `〔row ids〕`. `FLEET_STEWARD_PAGE=0` off;
-  `fleet-steward-page-selftest.sh`.
-  **The right-hand panels follow its books by a change stamp** (issue #2835, EPIC
-  #2831 C4): every `State.save()` writes `global/steward.stamp` (`<seq> <epoch_ms>`);
-  the fleet-steward plugin's mod module `plugins/fleet-steward/hooks/panels.ts` (out of
-  `mod/fleet` since #3115; no plugin, no panels) — every fleet window binding no issue
-  stats `global/roles.held` on its 1 s tick, and only the steward holder's
-  (`common.ts` `isHolder`, `FLEET_MOD_PANELS=0` off) stats the stamp, the orchestrator's children
-  ledger, `epic-running.d/` and `park.json` and re-reads
-  only when one moved (a 10 s full read covers a missed stamp), no process run;
-  dropped or stolen ⇒ its panes close on the next tick;
-  each read's time and a new sheet's 写出→看见 go to `logs/panel.ndjson`,
-  `/sheet --stats` prints them. BREAK-IT `panel-stale`, `panel-wrong-window`.
-  **The decision sheet is a pane there, answered in one press** (issue #2832, C1):
-  the plugin's `hooks/sheet.tsx` draws the steward's `groups` (`fleet_decision.group` — the
-  open asks on ONE ticket are one line, the latest ask speaks; the ONE merge rule,
-  the `[decision]` text and the steward page use it too, the panel never merges)
-  with 按建议 `y` · 翻案 `f` · 看原话 `t`; an answer waits 10 s for `u`, then runs
-  `fleet-steward-tick.sh answer --by person` once per row id (the steward logs one
-  line in `decision-<day>.md`). The holder's first fullscreen band opens it
-  (never on the main screen) and stamps `@sheet_pane 1` while it is up — the steward
-  then sends the orchestrator one sentence (`panel_sheet_ping_fmt`), never the table; no option = the
-  whole sheet, byte for byte, counted in `sheets_full[day]`.
-  **Narrow or on the main screen, one command brings it** (issue #2836, C5): it opens
-  unasked only fullscreen from 144 columns; otherwise the band above the prompt
-  says 「决定单 N 件待定」 + 打开 (`s`), and `/sheet` (`immediate`, runs mid-turn)
-  opens it asked — focused, Esc closes it, placed from 110 — and closes it only
-  when it is placed (an open but unplaced pane is opened, never closed); `/sheet p`
-  does the same for the patrol, `/sheet b` the batches (neither opens unasked). Codex
-  (no mod) never stamps `@sheet_pane`, so it gets the text sheet as before.
-  **A driver here but not moving is seen** (issue #2958): a batch whose heartbeat
-  went stale while its driver's window is still open gets a `dialog-<fp>` row when
-  it waits on a choice dialog (the question + options off its transcript) or a
-  `stalled-…` row + the page's 「没在走」 line a TTL later; an open dialog stays
-  `needs/ask` through a Stop, the mod's turn.complete and the screen classifier.
-  Such a dialog is answered for its person ONLY through `bin/fleet-dialog-answer.sh`
-  (the `answer_dialog` tool): fingerprint + labels verbatim, never over a person
-  typing, pressed once via `fleet-answer.sh`, the trail on the decision log and the
-  batch issue — the guard opens no general send-keys. `dialog-wait-selftest.sh`.
-  `FLEET_STEWARD` (the old seat's switch until C7): `0` byte for byte · `count` (only
-  the attention count, the node conf's [76] hooks → `logs/attention.ndjson`,
-  `fleet-steward-stats.sh`) · `1` the window too. `fleet-steward-selftest.sh` (O: no
-  holder ⇒ nothing); BREAK-IT `steward-exited` (the holder closed ⇒ nothing happens by
-  itself), `steward-write-storm`.
-- **A stuck session gives its place back, and comes back as it was** (issue #2671,
-  EPIC #2668 C3). The steward holder's beat (`beat --holder`, issue #3115 — no holder,
-  no parking) runs `bin/fleet_park.py` (`fleet-park.sh`): a
-  worker blocked `FLEET_PARK_BLOCKED_SECS` (900) or with no progress (state stamp,
-  transcript, branch head) for `FLEET_PARK_STALL_SECS` (2700) — never one with a
-  pending /loop or a background job — is asked over the peer channel to write its
-  handoff, then (written, or `FLEET_PARK_GRACE` 300 s on) its screen is kept, its
-  branch pushed, its window retired + stopped through `fleet-worker-stop.sh`
-  (worktree kept), its issue labelled `blocked` with ONE 「停放：等 …」 comment
-  carrying `<!-- fleet:park wait=<cond> sid=<sid> -->`. Parked = no window +
-  `blocked` + the mark — there is no `@park`; the book is `global/park.json`,
-  `global/park.idx` is what `fleet_parked` (fleet-restore.sh's skip) reads. When its
-  condition (`answer:` · `pr:…:merged` · `issue:…:closed` · `time:` · `reply:`)
-  holds, `dash-issue-session.sh --resume <same sid> --seed-file` reopens it on the
-  same conversation. `@orch_park` → `orchpark=` (the last tag) → `park=N` on the
-  client. `FLEET_STEWARD_PARK=0` parks nothing. `fleet-park-selftest.sh`;
-  BREAK-IT `park-lost-progress`, `park-restored-by-restore`.
+- **Orchestration is an extension a person installs, and nothing keeps a session
+  open** (issue #3118, EPIC #3111 C7 — it replaced the resident-seat sections of
+  #1957 / #2670 / #2671). There is no resident orchestrator or steward: nothing opens,
+  reopens, revives or renews one — not fleet-up, not the diskguard tick's
+  `home_watch`, not the hub (`/v1/node/orchestrator` and `orch_ensure` answer
+  「没有编排」 for one version, never a 500, never a window — Go
+  `TestNoOrchestratorEndpoint`), and no setting brings one back (FLEET_ORCHESTRATOR,
+  FLEET_STEWARD, FLEET_ORCH_*, FLEET_STEWARD_MODEL|EFFORT|CODEX_MODEL|REVIVE_SECS are
+  gone). `bin/fleet-orchestrator.sh` / `bin/fleet-steward.sh` are quiet shells (exit 0,
+  `# compat-1v`). A person who wants the role types `/fleet-orchestrate` or
+  `/fleet-steward` in any session that binds no issue (take_role, above); closed is
+  closed. Gone with the seat: the mod's role section, exit guard and queue count
+  (`orchestrator.ts` · `exit-guard.ts` · `queue.ts`), the inventory's columns 31-37
+  (an older node's tags are dropped unread by `inventory_row`, `# compat-1v`), the
+  client's `orch_*` / `steward_all_*` files, the steward's hosted page and
+  `@orch_page` (`bin/fleet_steward_say.py` keeps only the plain lines the `[decision]`
+  message says), the attention count (`fleet-steward-stats.sh` and the node conf's
+  [76] hooks, unset on a reload), the client's steward rows
+  (`fleet-sidebar-steward.sh`), `fleet-role.py render` / `fleet_role_render`, the
+  doctor's `orch` rows, and `--bridge-seat` by role name (the dispatch group is mounted
+  only for an agent file that grants `spawn`, `@agent_spawn 1`). `@fleet_role
+  orchestrator|steward` is never written again; a window still wearing it (an old
+  seat) is an ordinary row for restore / migrate / move, and only the readers keep
+  it one version (`fleet_role_holder`'s ③, the idle reaper leaves such a window for
+  its person) — EPIC #3111 C10 hands macmini's over. BREAK-IT `role-auto-reopen-off`.
+  What the fleet-steward plugin does once a session holds the role is unchanged and
+  lives in its skill: the beat with no model (`fleet-steward-tick.sh beat --holder`,
+  refusing rc 3 for nobody / a bare beat / another window; nobody holds it ⇒ nothing
+  is answered, spawned, merged, parked or filed, a worker's red base is filed and
+  the person told once), the health watch (`fleet_steward_health.py`, BREAK-IT
+  `health-silent-pass`), the decision sheet and the patrol / batches panes off the
+  books' change stamp (BREAK-IT `panel-stale`, `panel-wrong-window`), a stalled
+  driver's dialog answered only through `bin/fleet-dialog-answer.sh`, and parking — a
+  stuck worker asked for its handoff, its window retired with the worktree kept, its
+  issue `blocked` with ONE `<!-- fleet:park … -->` comment, reopened on the same
+  conversation when its condition holds (`bin/fleet_park.py`, `FLEET_STEWARD_PARK=0`
+  off; BREAK-IT `park-lost-progress`, `park-restored-by-restore`). GitHub writes ≤
+  `FLEET_STEWARD_WRITES` a beat (BREAK-IT `steward-write-storm`); the holder closed ⇒
+  nothing happens by itself (`steward-exited`). `fleet-steward-selftest.sh`,
+  `fleet-park-selftest.sh`, `dialog-wait-selftest.sh`.
 - **Navigate by name, not index.** The hub/dashboard is placed at the lowest
   index once, at spawn; numbers still shift when a window closes
   (`renumber-windows on`).

@@ -266,11 +266,9 @@ HUB_SESSION="$NAME" HUB_CWD="$HUB_DIR" bash "$BIN/hub-session.sh"
 # session starts with ONLY the hub (hub-session.sh already selected it). tmux
 # needs an initial window to create the session; we drop it once the hub exists.
 tmux -L "$SOCK" kill-window -t "$workwin" 2>/dev/null || true
-# The fleet's one orchestrating session (issue #1957): opened beside home, in
-# $HOME (FLEET_ORCHESTRATOR=0 turns it off); the tick's home_watch keeps it there.
-bash "$BIN/fleet-orchestrator.sh" ensure "$NAME" >/dev/null 2>&1 || true
-# Its steward (issue #2670): opened after it (FLEET_STEWARD — off, count or on).
-bash "$BIN/fleet-steward.sh" ensure "$NAME" >/dev/null 2>&1 || true
+# No orchestrating or steward seat is opened here (issue #3118): a role is
+# something a session TAKES (/fleet-orchestrate, /fleet-steward), never a window
+# the fleet keeps open.
 
 # --- first fleet on this login: open the guide, pinned (issue #1169) ---
 # A newcomer does not know /fleet-onboard exists, so their first fleet comes up

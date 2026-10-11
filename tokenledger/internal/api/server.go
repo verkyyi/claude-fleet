@@ -298,9 +298,6 @@ type Server struct {
 	// or not — the keys page's 「正在打开」 (claude-fleet#3199).
 	entryReachSeen sync.Map
 
-	// orchHost is who asked to hold the orchestrator, and serialises the pick
-	// (claude-fleet#2117, fleet_orchestrator.go).
-	orchHost orchState
 	// relayExpiredAt is when pending relays were last expired (UnixNano).
 	relayExpiredAt atomic.Int64
 }
@@ -432,8 +429,8 @@ func (s *Server) routes() *routeMux {
 		// opened, with its own token — exact, so the /v1/fleet/ viewer gate is not
 		// in the way.
 		mux.HandleFunc(FleetTicketRegisterPath, s.handleFleetTicketRegister)
-		// The person's one orchestrator (claude-fleet#2117): each machine asks,
-		// with its own token, whether it is the one to hold it.
+		// The person's one orchestrator (claude-fleet#2117) is gone (#3118): an
+		// older node still asks, and is told 「没有编排」 — compat-1v.
 		mux.HandleFunc("/v1/node/orchestrator", s.handleNodeOrchestrator)
 		// The direct door (claude-fleet#3068): a home machine reads its list
 		// and sends its record with the machine's token.

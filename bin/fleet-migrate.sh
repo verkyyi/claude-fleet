@@ -488,11 +488,12 @@ migrate_one_body() {
   # What the reapers, the caps and the lists read off the window (issue #2970): a
   # new window without them was a role-less, policy-less session nothing closed.
   # Read now, stamped on the new window below; a window with no role is a worker
-  # (every opener stamps one, #1844 — only an orchestrator / steward / hub, never
-  # migrated, is anything else). Ephemeral state (@claude_*, @loop, @ctx_*) is not
+  # (every opener stamps one, #1844 — only a hub, never migrated, is anything
+  # else; an old seat's orchestrator / steward is written as worker, issue #3118). Ephemeral state (@claude_*, @loop, @ctx_*) is not
   # carried: the resumed agent stamps its own.
   local role o v cpairs=()
   role=$(wopt "$wid" '#{@fleet_role}'); role=${role:-worker}
+  case "$role" in orchestrator|steward) role=worker ;; esac   # the old seat's stamp is never written again (issue #3118)
   for o in $MIGRATE_CARRY; do
     v=$(wopt "$wid" "#{$o}")
     [ -n "$v" ] && cpairs+=("$o" "$v")
@@ -510,9 +511,7 @@ migrate_one_body() {
   # a pre-#1937 conf naming only a checkout lists no repo.)
   local wmain
   wmain=$( { fleet_repo_mains "$SESS"; printf '%s\n' "${FLEET_MAIN:-}"; } | grep -Fx -- "${cwd%/}" | head -n 1)
-  # the orchestrating session (issue #1957) stays on its login, as the hub does:
-  # its fleet's tick reopens it there (bin/fleet-orchestrator.sh ensure)
-  if ! migrate_eligible "$name" "$(TM display-message -p -t "$wid" '#{?#{||:#{==:#{@fleet_role},orchestrator},#{==:#{@fleet_role},steward}},1,#{@hub}}' 2>/dev/null)" "$raw" "$cwd" "$wmain" "$sid"; then
+  if ! migrate_eligible "$name" "$(TM display-message -p -t "$wid" '#{@hub}' 2>/dev/null)" "$raw" "$cwd" "$wmain" "$sid"; then
     say "  – $name ($wid): not eligible (panel/hub/main-cwd) — skipped"; skipped=$((skipped+1)); return 0
   fi
   # --cfg-stale (issue #1783): the one judge, asked again NOW — the pick was a

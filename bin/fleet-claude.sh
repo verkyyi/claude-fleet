@@ -194,7 +194,7 @@ fleet_as_stamp
 # machine as trusted (the credential proxy's cached word from the hub), the grant
 # names EVERY repo this fleet hosts (fleet_repos → each one's FLEET_MAIN), so a
 # worktree of the second repo is covered whatever the window's overlay said, and
-# — for a window the fleet opened with no repo (@norepo 1, or the orchestrator)
+# — for a window the fleet opened with no repo (@norepo 1)
 # whose cwd is the login's $HOME — `--home`, that one directory. Still the same
 # door: the ↵ on the recovery page, fleet-migrate, fleet-restore and a sleeper's
 # wake all relaunch through here. Not trusted / cannot tell ⇒ the narrow call
@@ -203,10 +203,10 @@ _fc_tr_args='' _fc_tr_home=0
 if [ "${FLEET_PRETRUST:-1}" != 0 ] && [ -f "$BIN/fleet-trust.sh" ]; then
   _fc_norepo=''
   if [ -n "${TMUX_PANE:-}" ]; then
-    _fc_norepo=$(tmux display-message -p -t "$TMUX_PANE" '#{@norepo}|#{@fleet_role}' 2>/dev/null)
+    _fc_norepo=$(tmux display-message -p -t "$TMUX_PANE" '#{@norepo}|' 2>/dev/null)
   fi
   case "$_fc_norepo" in
-    1\|*|*\|orchestrator)
+    1\|*)
       [ "$(cd "$PWD" 2>/dev/null && pwd -P)" = "$(cd "${HOME:-/nonexistent}" 2>/dev/null && pwd -P)" ] \
         && _fc_tr_home=1 ;;
   esac
@@ -385,15 +385,11 @@ if [ "${FLEET_MCP:-1}" != 0 ] && [ -f "$_fc_mw" ] && [ -f "$BIN/fleet-mcp.py" ];
       esac
       unset _fc_mwin
       # The dispatch group (issue #3113, EPIC #3111 C2) is the server `fleet-orch`,
-      # which only the fleet-orchestrate plugin registers — except on a seat the
-      # fleet still opens itself (orchestrator · steward · EPIC driver:
-      # `fleet-mcp.py --bridge-seat`), which keeps spawn / await / children /
-      # answer_dialog / send until EPIC #3111 C7 retires those seats.
+      # which only the fleet-orchestrate plugin registers — except in a session
+      # whose agent file grants `spawn` (issue #3122 — the epic-driver): it was
+      # started to dispatch. No seat is matched by role any more (issue #3118).
       # FLEET_MCP_ORCH=1 tells the core server's file_issue the group is here.
-      # An agent file that grants `spawn` (issue #3122 — the shipped epic-driver)
-      # is such a seat too: it was started to dispatch.
-      if [ -f "$BIN/../conf/mcp-orch.json" ] && { [ "${_fc_as_spawn:-0}" = 1 ] \
-           || python3 "$BIN/fleet-mcp.py" --bridge-seat "$_fc_as" 2>/dev/null; }; then
+      if [ -f "$BIN/../conf/mcp-orch.json" ] && [ "${_fc_as_spawn:-0}" = 1 ]; then
         mcp_flag+=("--mcp-config=$BIN/../conf/mcp-orch.json"); export FLEET_MCP_ORCH=1
       fi
       ;;

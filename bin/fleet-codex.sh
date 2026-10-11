@@ -103,7 +103,7 @@
 # knows where the person is from the first turn (device · terminal · what it can do) | ✅ | ✅ | One reader, `bin/fleet-client-where.sh`. Claude Code gets the line from the mod (`where.ts`, every request); Codex gets the same text as SessionStart `additionalContext` from `bin/fleet-where-hook.sh`, in the shared hook table and gated to a Codex pane so Claude never reads it twice (issue #1954). A takeover mid-session reaches Codex through the `where` tool.
 # the task list only shows and taps · its short questions (rename · answer · message) on one line under the session | ✅ | ✅ | Not agent code: the client's list (`bin/fleet-sidebar.py`) takes no keys, and a question opens as a one-line pane of the client's own tmux under the session pane (`bin/fleet-ask.py`, issue #1950) — whichever agent runs in that session, it is resized by one line and keeps its own screen.
 # who waits on you, and what they ask, without the list (the bar's `! n 等你` · a notification with the question's own words · its click jumps there) | ✅ | ✅ | One field, the needs alert's `detail` (issue #1951): Claude's from the AskUserQuestion / permission payload or transcript (`bin/set-claude-state.sh`, the mod's `ask`), Codex's from the app-server's request_user_input / approval request (`bin/fleet-codex-attention.py`), both through `bin/fleet_needs_detail.py` into `@claude_needs_detail`; the node's inventory and the hub carry it to the client's `needs_<sess>`, where `bin/fleet-alerts.sh` draws the count and raises one notification per wait (`FLEET_NOTIFY=0` off).
-# one orchestrating session behind 「新任务」 (talks first, then dispatches; ⇧⇥ hands it the draft) | ✅ | ✅ | `bin/fleet-orchestrator.sh` opens it on the login's default agent (FLEET_AGENT) at that agent's strongest model and high effort — Claude `--model ${FLEET_ORCH_MODEL:-fable} --effort high` (resumes its conversation by its kept id), Codex `-m $FLEET_ORCH_CODEX_MODEL -c model_reasoning_effort="high"` — seeded with `/fleet-orchestrate` (`plugins/fleet-orchestrate/skills/fleet-orchestrate/`, a native `$fleet-orchestrate` skill on Codex). Its state reaches the client as the inventory's `role=orchestrator` + `@claude_state`, read the same for both agents (issue #1957).
+# orchestrating: any session that binds no issue takes the role (/fleet-orchestrate — the fleet-orchestrate plugin); nothing opens or reopens a resident one | ✅ | ✅ | `take_role` stamps `@fleet_role_def orchestrator` (bin/fleet-role-take.sh, issue #3114); a Codex session reads the plugin's skill as `$fleet-orchestrate` and the dispatch group through bin/fleet-codex-plugins.py (issue #3123). The resident seat is gone (issue #3118).
 # MATRIX-END
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -430,8 +430,8 @@ if [ "${FLEET_MCP:-1}" != 0 ] && [ -f "$BIN/../conf/mcp-worker.json" ] && [ -f "
   _mount=$(python3 "$BIN/fleet-mcp.py" --mount codex 2>/dev/null) && [ -n "$_mount" ] && {
     export FLEET_MCP_BIN="$BIN"
     flags+=(-c "$_mount")
-    # The dispatch group `fleet-orch` (issue #3113) — on a seat the fleet opens
-    # itself only, as bin/fleet-claude.sh mounts it (C7 retires those seats).
+    # The dispatch group `fleet-orch` (issue #3113) — only where the agent file
+    # grants spawn (@agent_spawn 1), as bin/fleet-claude.sh mounts it.
     python3 "$BIN/fleet-mcp.py" --bridge-seat 2>/dev/null \
       && _mount=$(python3 "$BIN/fleet-mcp.py" --mount codex --group orch 2>/dev/null) && [ -n "$_mount" ] \
       && { flags+=(-c "$_mount"); export FLEET_MCP_ORCH=1; }

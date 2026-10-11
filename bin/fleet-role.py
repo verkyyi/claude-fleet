@@ -1,20 +1,13 @@
 #!/usr/bin/env python3
-"""The orchestrator's and the steward's launch arguments, and the rule table.
+"""The role definitions agents/orchestrator.md · steward.md, and the rule table.
 
-What is left of the role engine (issue #2782) after EPIC #3111 C11 (issue
-#3122): a session started AS something is a standard agent file now
-(bin/fleet-agent-def.py, `--as <name>` → `claude --agent <name>`), and the
-person's layer, the merge, the locks and `fleet role set|unset|undo` are gone —
-a personal override is your own agent file or skill copy, found the way Claude
-Code finds it. Only the two launchers EPIC #3111 C7 deletes still read here
-(bin/fleet-orchestrator.sh, bin/fleet-steward.sh — their body rides the system
-prompt), and the rule table's reader stays until C3 / C4 move it into their skills.
+What is left of the role engine (issue #2782) after EPIC #3111: a session started
+AS something is a standard agent file (bin/fleet-agent-def.py, `--as <name>` →
+`claude --agent <name>`), and a person takes the orchestrator / steward role in a
+session with /fleet-orchestrate · /fleet-steward (take_role). The two launchers
+that rendered a role onto a resident window — and their FLEET_ORCH_* /
+FLEET_STEWARD_MODEL|EFFORT|CODEX_MODEL knobs — went with the seat (issue #3118).
 
-  render orchestrator|steward [--agent claude|codex] [--kv | --json] [--cap]
-      the role's launch arguments: --kv is the launchers' form
-      (`sha`/`model`/`effort`/`body`/`arg` TAB value). --cap: the per-model cap
-      fallback (issue #524) — a model this login's active account is walled on
-      gives way to FLEET_MODEL_FALLBACK.
   get <role> <field>      one frontmatter field (a list joins with `,`)
   body <role>             the definition's body
   prompt <role>           the body + the role's rows of the rule table
@@ -23,32 +16,18 @@ prompt), and the rule table's reader stays until C3 / C4 move it into their skil
                           the merged rule table (bin/fleet_rules.py, issue #2786)
   list                    the roles
 
-The launcher's old knobs still win (# compat-1v: 下一批删): FLEET_ORCH_MODEL /
-FLEET_ORCH_EFFORT / FLEET_ORCH_CODEX_MODEL, FLEET_STEWARD_MODEL /
-FLEET_STEWARD_EFFORT / FLEET_STEWARD_CODEX_MODEL, then the model / effort the
-person set on the hub (person-bundle.json `roles.<role>`). A definition that cannot be
-read is an error (exit 2): the launcher opens the session without a role.
-Writes only the body's content-addressed copy, $FLEET_CONF_DIR/roles/<role>-<sha>.md
-(made once, never changed — a session resumed after a release still finds it).
+A definition that cannot be read is an error (exit 2). Writes nothing.
 """
 import hashlib
 import json
 import os
-import subprocess
 import sys
-import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fleet_rules  # noqa: E402  the rule table's one reader (issue #2786)
 BIN = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(BIN)
 ROLES = ('orchestrator', 'steward')
-COMPAT = {
-    'orchestrator': {'model': 'FLEET_ORCH_MODEL', 'effort': 'FLEET_ORCH_EFFORT',
-                     'codex_model': 'FLEET_ORCH_CODEX_MODEL'},
-    'steward': {'model': 'FLEET_STEWARD_MODEL', 'effort': 'FLEET_STEWARD_EFFORT',
-                'codex_model': 'FLEET_STEWARD_CODEX_MODEL'},
-}
 
 
 class RoleError(Exception):
@@ -177,32 +156,6 @@ def _listval(v):
     return [x.strip() for x in str(v).split(',') if x.strip()]
 
 
-def _env(name):
-    """(set?, value) — an empty value is a choice (no --model), unset is not."""
-    return (name in os.environ, os.environ.get(name, ''))
-
-
-def _capped(model):
-    """The per-model cap (issue #524): FLEET_MODEL_FALLBACK while the login's
-    active account is walled on `model`. Unchanged when nothing says so."""
-    fset, fb = _env('FLEET_MODEL_FALLBACK')
-    if not fset:
-        fb = 'opus'
-    if not model or not fb:
-        return model
-    acct = os.path.join(BIN, 'fleet-account.sh')
-    try:
-        label = subprocess.run([acct, 'active'], capture_output=True, text=True,
-                               timeout=20).stdout.strip()
-        if not label:
-            return model
-        till = subprocess.run([acct, 'model-limited-until', label, model], capture_output=True,
-                              text=True, timeout=20).stdout.strip()
-    except (OSError, subprocess.SubprocessError):
-        return model
-    return fb if till.isdigit() and int(till) > time.time() else model
-
-
 def prompt(d):
     """The body as the system prompt carries it: the definition's body, then the
     rule table's rows for this role (issue #2786). A table that cannot be read
@@ -212,77 +165,6 @@ def prompt(d):
     except fleet_rules.RulesError as e:
         print('fleet-role: %s — the rule table is left out' % e, file=sys.stderr)
         return d['body']
-
-
-def body_file(d):
-    """The prompt's content-addressed copy: written once, atomically."""
-    body = prompt(d)
-    sha = hashlib.sha256(body.encode('utf-8')).hexdigest()[:16]
-    dst = os.path.join(conf_dir(), 'roles', '%s-%s.md' % (d['role'], sha))
-    if not os.path.isfile(dst):
-        os.makedirs(os.path.dirname(dst), exist_ok=True)
-        tmp = '%s.%d.tmp' % (dst, os.getpid())
-        with open(tmp, 'w', encoding='utf-8') as f:
-            f.write(body)
-        os.replace(tmp, dst)
-    return dst
-
-
-def _person_scalar(role, field):
-    """The person's model / effort for <role> as they set it on the hub before
-    the layer was retired (person-bundle.json's `roles.<role>`), or '' — read
-    until C7 deletes these launchers, so a reopened orchestrator keeps the model
-    the person chose (# compat-1v: 下一批删). Nothing else of the layer is read."""
-    try:
-        with open(os.path.join(conf_dir(), 'person-bundle.json')) as f:
-            pc = json.load(f)
-        b = pc.get('bundle') if isinstance(pc.get('bundle'), dict) else pc
-        ov = (b.get('roles') or {}).get(role)
-        if isinstance(ov, str):
-            ov = {'front': parse(ov if ov.startswith('---\n') else '---\n---\n' + ov)[0]}
-        front = ov.get('front') if isinstance(ov.get('front'), dict) else ov
-        v = front.get(field)
-        return v if isinstance(v, str) else ''
-    except (OSError, ValueError, AttributeError, RoleError):
-        return ''
-
-
-def render(role, agent='claude', cap=False):
-    d = load(role)
-    fr, compat = d['front'], COMPAT[role]
-    out = {'role': role, 'agent': agent, 'sha': d['sha'], 'file': d['path'], 'args': [],
-           'model': '', 'effort': '', 'body': ''}
-    args = out['args']
-    if agent == 'claude':
-        model = _person_scalar(role, 'model') or str(fr.get('model', '') or '')
-        if _env(compat['model'])[0]:
-            model = _env(compat['model'])[1]
-        if model == 'inherit':
-            model = ''
-        if cap:
-            model = _capped(model)
-    else:
-        model = _env(compat['codex_model'])[1]
-    out['model'] = model
-    if model:
-        args += (['--model', model] if agent == 'claude' else ['-m', model])
-    effort = (_env(compat['effort'])[1] or _person_scalar(role, 'effort')
-              or str(fr.get('effort', '') or ''))
-    out['effort'] = effort
-    if effort:
-        args += (['--effort', effort] if agent == 'claude'
-                 else ['-c', 'model_reasoning_effort="%s"' % effort])
-    if agent == 'claude':
-        if d['body'].strip():
-            out['body'] = body_file(d)
-            args += ['--append-system-prompt-file', out['body']]
-        if fr.get('tools'):
-            args.append('--tools=' + ','.join(_listval(fr['tools'])))
-        if fr.get('disallowedTools'):
-            args.append('--disallowedTools=' + ','.join(_listval(fr['disallowedTools'])))
-        if fr.get('permissionMode'):
-            args += ['--permission-mode', str(fr['permissionMode'])]
-    return out
 
 
 def rules_cmd(rest):
@@ -344,39 +226,6 @@ def main(argv):
         if not rest:
             raise RoleError('%s: which role?' % cmd)
         role = rest[0]
-        if cmd == 'render':
-            agent, fmt, cap, i = 'claude', 'lines', False, 1
-            while i < len(rest):
-                a = rest[i]
-                if a == '--agent' and i + 1 < len(rest):
-                    agent = rest[i + 1]
-                    i += 1
-                elif a.startswith('--agent='):
-                    agent = a.split('=', 1)[1]
-                elif a in ('--json', '--kv'):
-                    fmt = a[2:]
-                elif a == '--cap':
-                    cap = True
-                else:
-                    raise RoleError('render: unknown option %s' % a)
-                i += 1
-            if agent not in ('claude', 'codex'):
-                raise RoleError('render: --agent claude|codex, not %s' % agent)
-            r = render(role, agent, cap)
-            if fmt == 'json':
-                print(json.dumps(r, ensure_ascii=False, indent=1))
-            elif fmt == 'kv':
-                print('sha\t%s' % r['sha'])
-                print('model\t%s' % r['model'])
-                print('effort\t%s' % r['effort'])
-                if r['body']:
-                    print('body\t%s' % r['body'])
-                for a in r['args']:
-                    print('arg\t%s' % a)
-            else:
-                for a in r['args']:
-                    print(a)
-            return 0
         d = load(role)
         if cmd == 'get':
             if len(rest) < 2:

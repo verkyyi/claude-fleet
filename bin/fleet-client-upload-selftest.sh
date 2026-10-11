@@ -18,7 +18,6 @@
 #      a session on this computer → ⌃V on to the pane as it is
 #   D  sweep: a gone session's inbox goes, a live one stays, a key-named one and
 #      `machine` wait out the days, a file past them goes
-#   F  the writing area's draft handed to an open session: its files go first
 #   E  the conf: ⌃V bound behind @fleet_paste; paste_sed fills 1 on a Mac only,
 #      0 off / elsewhere / on a managed machine
 set -uo pipefail
@@ -211,18 +210,6 @@ HOME="$W/home" FLEET_INBOX_LIVE_CMD="$W/live" python3 "$UP" sweep >/dev/null
 printf '#!/bin/sh\nexit 1\n' > "$W/live"
 HOME="$W/home" FLEET_INBOX_LIVE_CMD="$W/live" python3 "$UP" sweep >/dev/null
 [ -f "$I2/$FID/f" ] && ok "D no read of the live windows removes no session's inbox" || fail "D an unknown read removed a live inbox"
-
-# ---------------------------------------------------------------- F the draft
-# ⇧⇥ hands the writing area's draft to the open orchestrator (fleet-compose.py
-# carry): its dropped files go first, the text names them there
-got=$(python3 - "$BIN/fleet-compose.py" "$W/mac/a\\ shot.png" "$WID" <<'EOF'
-import importlib.util, sys
-s = importlib.util.spec_from_file_location("c", sys.argv[1]); m = importlib.util.module_from_spec(s); s.loader.exec_module(m)
-print(m.carried_files("look at %s please" % sys.argv[2], {"node": "m9", "wid": sys.argv[3]}))
-EOF
-)
-case "$got" in "look at $INBOX/$FID/"*a_shot.png" please") ok "F the draft's file goes first, the text names it there" ;;
-  *) fail "F carried_files gave [$got]" ;; esac
 
 # ---------------------------------------------------------------- E conf
 CONF="$BIN/../conf/tmux-shell.conf"

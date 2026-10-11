@@ -1,6 +1,6 @@
 {
   "name": "fleet-orchestrate",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "claude-fleet orchestration: /fleet-orchestrate takes the orchestrator role (take_role) in a session that holds no issue — talk a request through, then hand it to worker sessions; its state and role ride a compaction (hooks), /qd files and spawns past a busy turn. Not installed by default (EPIC #3111).",
   "author": {
     "name": "verkyyi",

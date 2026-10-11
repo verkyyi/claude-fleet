@@ -23,16 +23,8 @@
 #   wedged-socket                                   fleet_socket_heal (fleet-restore.sh, fleet-up.sh)
 #   no-claude-on-path                               bin/fleet-claude.sh, fleet_find_tool
 #   window-renamed                                  fleet_win_role (fleet-lib.sh), fleet-restore.sh
-#   orchestrator-closed                             bin/fleet-orchestrator.sh ensure (fleet-up.sh,
-#                                                   fleet-diskguard.sh home_watch)
-#   orchestrator-exited                             bin/fleet-orchestrator.sh ensure (revive in place),
-#                                                   fleet-orchestrator-state.py (SessionStart resume)
-#   orchestrator-stale-version                      fleet_role_renew_why (fleet-lib.sh), fleet-orchestrator.sh
-#                                                   ensure (renew in place at a quiet moment)
-#   handoff-renew-race                              fleet_handoff_cycle_live (fleet-lib.sh), fleet-handoff-cycle.sh,
-#                                                   handoff-latch-reset-hook.sh (<role>.sid), ensure
-#   orchestrator-two                                bin/fleet-orchestrator.sh ensure asks the hub
-#                                                   (/v1/node/orchestrator) which machine holds it
+#   role-auto-reopen-off                            nothing reopens a seat: fleet-up.sh, fleet-diskguard.sh
+#                                                   home_watch, bin/fleet-orchestrator.sh / fleet-steward.sh shells
 #   break-pane                                      bin/fleet-window-carry.sh (conf/tmux-attention.conf hook)
 #   install-sync-killed                             bin/fleet-install-sync.sh (the tick lock)
 #   epic-mark-overwritten / epic-fresh-switched     bin/fleet-epic-heartbeat.sh (one mark per batch),
@@ -154,8 +146,6 @@
 #   client-other-login-empty-list                   bin/fleet-hub-sessions.sh (fetch: ETag + its mapping stamp)
 #   hub-restart-where                               bin/fleet-shell.sh (keeper renew), fleet-client-lease.py renew,
 #                                                   fleet-client-where.sh
-#   orch-busy-queue-invisible                       mod/fleet/hooks/queue.ts (its test, when a claude CLI is here),
-#                                                   fleet-control-read.sh (orchq=), fleet_hub_common inventory_row
 #   panel-stale / panel-wrong-window                plugins/fleet-steward/hooks/panels.ts (its tests, when a claude CLI is here),
 #                                                   lifecycle.ts (PANELS_FULL_MS timer, role gate), fleet_steward.py
 #                                                   write_stamp
@@ -692,126 +682,44 @@ drill_disk_full() {
   SECS=$(since "$t0"); WHAT="盘满时只记 held 不拉起，腾出空间后下一拍拉起"
 }
 
-# orchestrator-closed (issue #1957): the fleet's one orchestrating session is
-# closed — the tick's home_watch opens it again, in $HOME, on the same Claude
-# conversation (its id kept in fleets/<sess>/orchestrator.sid, its transcript on
-# disk), told by @fleet_role orchestrator whatever it was renamed to.
-drill_orchestrator_closed() {
-  CAP=5; BREAK_SOCK="$WORK/sock-or"; local t0 w w2 sid oa="$WORK/orch-argv" h="$WORK/ohome"
-  grep -q 'fleet-orchestrator.sh" ensure' "$BIN/fleet-up.sh" || { WHY="fleet-up.sh no longer opens the orchestrator"; return 1; }
-  sed -n '/^home_watch()/,/^}/p' "$BIN/fleet-diskguard.sh" | grep -q 'fleet-orchestrator.sh" ensure' \
-    || { WHY="the diskguard tick's home_watch no longer reopens the orchestrator"; return 1; }
-  mkdir -p "$h"; : > "$oa"
-  printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> %s\nexec sleep 600\n' "$oa" > "$WORK/orch-agent"; chmod +x "$WORK/orch-agent"
-  nt -f /dev/null new-session -d -s or -n home -x 100 -y 30 'exec sh' || { WHY="cannot start the isolated tmux server"; return 1; }
-  oens() { env PATH="$WORK/tbin:$PATH" HOME="$h" FLEET_CONF_DIR="$WORK/oconf" FLEET_SKIP_GLOBAL_CONF=1 BREAK_SOCK="$BREAK_SOCK" \
-             FLEET_ORCHESTRATOR=1 FLEET_AGENT=claude FLEET_WRAP_LAUNCH="$WORK/orch-agent" bash "$BIN/fleet-orchestrator.sh" ensure or 2>/dev/null; }
-  w=$(oens) || { WHY="ensure did not open it"; return 1; }
-  until_ok 5 grep -q . "$oa" || { WHY="the orchestrator's agent never started"; return 1; }
-  grep -q -- '--model fable --effort high .*--session-id .* /fleet-orchestrate' "$oa" || { WHY="not the strongest model at high effort, seeded: $(cat "$oa")"; return 1; }
-  [ "$(o "$w" @fleet_role)" = orchestrator ] || { WHY="no @fleet_role orchestrator on $w"; return 1; }
-  [ "$(o "$w" pane_current_path)" = "$(cd "$h" && pwd -P)" ] || [ "$(o "$w" pane_current_path)" = "$h" ] || { WHY="not opened in \$HOME: $(o "$w" pane_current_path)"; return 1; }
-  [ "$(oens)" = "$w" ] || { WHY="a second ensure opened a second one"; return 1; }
-  sid=$(cat "$WORK/oconf/fleets/or/orchestrator.sid" 2>/dev/null)
-  [ -n "$sid" ] || { WHY="no conversation id kept"; return 1; }
-  mkdir -p "$h/.claude/projects/$(printf '%s' "$h" | LC_ALL=C tr -c 'A-Za-z0-9' '-')"
-  : > "$h/.claude/projects/$(printf '%s' "$h" | LC_ALL=C tr -c 'A-Za-z0-9' '-')/$sid.jsonl"   # it talked
-  nt rename-window -t "$w" 'my planner'
-  nt kill-window -t "$w"                          # the break
-  : > "$oa"; t0=$(now)
-  w2=$(oens)                                      # the next tick's home_watch
-  [ -n "$w2" ] && [ "$w2" != "$w" ] || { WHY="it did not come back"; return 1; }
-  until_ok "$CAP" grep -q -- "--resume $sid" "$oa" || { WHY="it came back on a new conversation: $(cat "$oa")"; return 1; }
-  SECS=$(since "$t0")
-  [ "$(nt list-windows -t or -F '#{@fleet_role}' | grep -cx orchestrator)" = 1 ] || { WHY="more than one orchestrator"; return 1; }
-  WHAT="下一拍在 \$HOME 重开，续上同一对话（节拍 60s 另计）"
-}
-
-# orchestrator-two (issue #2117): two 承载 machines of one person each opened their
-# own orchestrator (#1957's ensure ran per machine). Two machines, one fake hub
-# (the holder file — fleet_orchestrator.go's answer): only the holder opens one;
-# the hub names the other machine and the old one is closed on its next tick.
-drill_orchestrator_two() {
-  CAP=5; BREAK_SOCK="$WORK/sock-o5"; local t0 m hub="$WORK/ohub2"
-  sed -n '/^home_watch()/,/^}/p' "$BIN/fleet-diskguard.sh" | grep -q 'fleet-orchestrator.sh" ensure "$s" 2>/dev/null)"; rc=' \
-    || { WHY="home_watch no longer asks ensure on every tick — a machine the hub did not name never closes its own"; return 1; }
-  mkdir -p "$hub"; printf 'm5' > "$hub/holder"
-  cat > "$WORK/ocurl" <<'EOC'
-#!/bin/sh
-h=$(cat "$OHUB/holder"); here=false; [ "$h" = "$OME" ] && here=true
-printf '{"machine":"%s","here":%s}\n200' "$h" "$here"
-EOC
-  chmod +x "$WORK/ocurl"
-  printf '#!/bin/sh\nexec sleep 600\n' > "$WORK/o2-agent"; chmod +x "$WORK/o2-agent"
-  for m in m4 m5; do
-    mkdir -p "$WORK/o2$m/home"
-    "$REAL_TMUX" -S "$WORK/sock-$m" -f /dev/null new-session -d -s or -n home -x 100 -y 30 'exec sh' || { WHY="cannot start the isolated tmux server"; return 1; }
+# role-auto-reopen-off (issue #3118, EPIC #3111 C7): nothing keeps a session open.
+# Before, the resident orchestrator and steward came back within a tick of being
+# closed — fleet-up.sh opened them and the diskguard tick's home_watch reopened
+# them (`fleet-orchestrator.sh ensure`, `fleet-steward.sh ensure`). Now a role is
+# a mark a session takes: close an old seat's window AND a window that took the
+# steward role, run two ticks' worth of everything that used to reopen them, and
+# not one window comes back.
+drill_role_auto_reopen_off() {
+  CAP=10; BREAK_SOCK="$WORK/sock-ra"; local t0 wins n f
+  for f in fleet-orchestrator.sh fleet-steward.sh; do
+    grep -v '^#' "$BIN/$f" | grep -qx 'exit 0' && [ "$(grep -v '^#' "$BIN/$f" | grep -c .)" = 1 ] \
+      || { WHY="$f is more than a quiet shell — it can open a window again"; return 1; }
   done
-  o2() { env PATH="$WORK/tbin:$PATH" HOME="$WORK/o2$1/home" FLEET_CONF_DIR="$WORK/o2$1/conf" FLEET_SKIP_GLOBAL_CONF=1 \
-           BREAK_SOCK="$WORK/sock-$1" OME="$1" OHUB="$hub" FLEET_HUB_CURL="$WORK/ocurl" CCQUOTA_FLEET=1 CCQUOTA_TOKEN=t \
-           CCQUOTA_HUB_URL=http://hub.invalid FLEET_ORCHESTRATOR=1 FLEET_AGENT=claude FLEET_ORCH_MODEL='' \
-           FLEET_WRAP_LAUNCH="$WORK/o2-agent" bash "$BIN/fleet-orchestrator.sh" ensure or 2>/dev/null; }
-  oc() { "$REAL_TMUX" -S "$WORK/sock-$1" list-windows -t or -F '#{@fleet_role}' 2>/dev/null | grep -cx orchestrator; }
-  o2 m4 >/dev/null; o2 m5 >/dev/null              # one tick on each machine
-  [ "$(oc m4)+$(oc m5)" = 0+1 ] || { WHY="two machines ticked: m4+m5 = $(oc m4)+$(oc m5), want 0+1"; return 1; }
-  printf 'm4' > "$hub/holder"; t0=$(now)          # the break: home moved to m4
-  o2 m5 >/dev/null; o2 m4 >/dev/null              # the next tick
-  SECS=$(since "$t0")
-  [ "$(oc m4)+$(oc m5)" = 1+0 ] || { WHY="after the hub named m4: m4+m5 = $(oc m4)+$(oc m5), want 1+0"; return 1; }
-  WHAT="入口只认一台：下一拍旧的那台收掉（标记 retired、对话 id 留着），新的那台开出（节拍 60s 另计）"
-}
-
-# orchestrator-cleared (issue #2582, EPIC #2581 C1): a /clear (or a compaction)
-# empties the conversation, and the orchestrator's role was only its first turn,
-# the `/fleet-orchestrate` seed — after it the session no longer knew it was the
-# orchestrator. Its role rides the system prompt now, from ONE text — its
-# definition's body, agents/orchestrator.md (issue #2782), rendered to
-# $FLEET_CONF_DIR/roles/ and generated as plugins/fleet-orchestrate/skills/fleet-orchestrate/role.md for a
-# window opened before it: the launcher's --append-system-prompt-file
-# on a new AND a resumed launch, kept by the wrapper's ↵ resume, and the mod's
-# `fleet:orchestrator-role` section on every request. No real Claude here: the
-# drill pins every road that carries the file (the model's answer is the issue's
-# 上线证据).
-drill_orchestrator_cleared() {
-  CAP=10; BREAK_SOCK="$WORK/sock-oq"; local t0 w sid role oa="$WORK/oq-argv" h="$WORK/oqhome" c="$WORK/oq"
-  role="$ROOT/plugins/fleet-orchestrate/skills/fleet-orchestrate/role.md"
-  [ -s "$role" ] || { WHY="no plugins/fleet-orchestrate/skills/fleet-orchestrate/role.md — the role has no file to ride the system prompt"; return 1; }
-  [ "$(wc -l < "$role")" -le 60 ] || { WHY="role.md is $(wc -l < "$role" | tr -d ' ') lines, the charter caps it at 60"; return 1; }
-  grep -q '编排会话' "$role" || { WHY="role.md never says 编排会话"; return 1; }
-  grep -q "'fleet:orchestrator-role'" "$ROOT/mod/fleet/hooks/orchestrator.ts" 2>/dev/null \
-    && grep -q 'roleSection' "$ROOT/mod/fleet/hooks/compose.ts" 2>/dev/null \
-    && grep -q '^  registerCompose(on)$' "$ROOT/mod/fleet/hooks/register.ts" \
-    || { WHY="the mod no longer adds the fleet:orchestrator-role section"; return 1; }
-  mkdir -p "$h"; : > "$oa"
-  printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> %s\nexec sleep 600\n' "$oa" > "$WORK/oq-agent"; chmod +x "$WORK/oq-agent"
-  nt -f /dev/null new-session -d -s oq -n home -x 100 -y 30 'exec sh' || { WHY="cannot start the isolated tmux server"; return 1; }
-  oqens() { env PATH="$WORK/tbin:$PATH" HOME="$h" FLEET_CONF_DIR="$WORK/oqconf" FLEET_SKIP_GLOBAL_CONF=1 BREAK_SOCK="$BREAK_SOCK" \
-              FLEET_ORCHESTRATOR=1 FLEET_AGENT=claude FLEET_WRAP_LAUNCH="$WORK/oq-agent" bash "$BIN/fleet-orchestrator.sh" ensure oq 2>/dev/null; }
+  grep -q 'fleet-orchestrator.sh\|fleet-steward.sh' "$BIN/fleet-up.sh" \
+    && { WHY="fleet-up.sh still runs a seat launcher"; return 1; }
+  sed -n '/^home_watch() {/,/^}/p' "$BIN/fleet-diskguard.sh" | grep -q 'ensure' \
+    && { WHY="the tick's home_watch still runs an ensure"; return 1; }
+  nt -f /dev/null new-session -d -s ra -n home -x 100 -y 30 'exec sh' || { WHY="cannot start the isolated tmux server"; return 1; }
+  nt new-window -d -t ra: -n orchestrator 'exec sleep 600'
+  nt set-option -wq -t ra:orchestrator @fleet_role orchestrator
+  nt new-window -d -t ra: -n scratch-2 'exec sleep 600'
+  nt set-option -wq -t ra:scratch-2 @fleet_role worker
+  nt set-option -wq -t ra:scratch-2 @fleet_role_def steward
   t0=$(now)
-  w=$(oqens) || { WHY="ensure did not open it"; return 1; }
-  until_ok 5 grep -q . "$oa" || { WHY="the orchestrator's agent never started"; return 1; }
-  grep -q -- "--append-system-prompt-file .*/roles/orchestrator-[0-9a-f]*\.md .*/fleet-orchestrate\$" "$oa" \
-    || { WHY="a new orchestrator is not launched with its role in the system prompt: $(cat "$oa")"; return 1; }
-  cmp -s "$(ls "$WORK"/oqconf/roles/orchestrator-*.md 2>/dev/null | head -1)" "$role" \
-    || { WHY="the rendered role is not the definition's body (plugins/fleet-orchestrate/skills/fleet-orchestrate/role.md)"; return 1; }
-  sid=$(cat "$WORK/oqconf/fleets/oq/orchestrator.sid" 2>/dev/null)
-  mkdir -p "$h/.claude/projects/$(printf '%s' "$h" | LC_ALL=C tr -c 'A-Za-z0-9' '-')"
-  : > "$h/.claude/projects/$(printf '%s' "$h" | LC_ALL=C tr -c 'A-Za-z0-9' '-')/$sid.jsonl"
-  nt kill-window -t "$w"; : > "$oa"
-  oqens >/dev/null || { WHY="ensure did not reopen it"; return 1; }
-  until_ok 5 grep -q . "$oa" || { WHY="the reopened orchestrator never started"; return 1; }
-  grep -q -- "--append-system-prompt-file .*/roles/orchestrator-[0-9a-f]*\.md --resume $sid" "$oa" \
-    || { WHY="a resumed orchestrator lost its role: $(cat "$oa")"; return 1; }
-  # the recovery page's ↵ (the wrapper's own resume) keeps the flag too
-  WRAP_ARGS="--append-system-prompt-file '$role' " wrapped sx w "$c" || { WHY="cannot start the wrapped window"; return 1; }
-  until_ok 10 grep -q . "$c/argv" || { WHY="the wrapped agent never started"; return 1; }
-  printf rc0 > "$c/mode"; : > "$c/go"
-  until_ok 10 page_says '⌘P 回列表' || { WHY="no recovery page"; return 1; }
-  nt send-keys -t sx:w Enter
-  until_ok 10 sh -c "[ \$(grep -c . '$c/argv') = 2 ]" || { WHY="↵ relaunched nothing"; return 1; }
-  [ "$(sed -n 2p "$c/argv")" = "--agent claude --append-system-prompt-file $role --resume SID-1" ] \
-    || { WHY="↵ resumed without the role: [$(sed -n 2p "$c/argv")]"; return 1; }
-  SECS=$(since "$t0"); WHAT="新开、续开、恢复页 ↵ 都带 role.md 进系统提示；mod 每轮加 fleet:orchestrator-role"
+  nt kill-window -t ra:orchestrator; nt kill-window -t ra:scratch-2      # the break: both closed
+  for n in 1 2; do                                                         # two ticks
+    ( PATH="$WORK/tbin:$PATH" HOME="$WORK/home" FLEET_CONF_DIR="$WORK/raconf" FLEET_HOST=1 \
+        FLEET_ORCHESTRATOR=1 FLEET_STEWARD=1 GDIR="$WORK/rag"; export PATH HOME FLEET_CONF_DIR BREAK_SOCK FLEET_HOST FLEET_ORCHESTRATOR FLEET_STEWARD GDIR
+      . "$BIN/fleet-lib.sh"
+      fleet_sockets() { echo ra; }
+      eval "$(sed -n '/^home_watch() {/,/^}/p' "$BIN/fleet-diskguard.sh")"
+      home_watch
+      bash "$BIN/fleet-orchestrator.sh" ensure ra; bash "$BIN/fleet-steward.sh" ensure ra ) >/dev/null 2>&1
+  done
+  SECS=$(since "$t0")
+  wins=$(nt list-windows -t ra -F '#{window_name}' | tr '\n' ' ')
+  [ "$wins" = "home " ] || { WHY="a closed seat came back: windows [$wins]"; return 1; }
+  WHAT="关掉旧编排窗口和接手管家的窗口，两拍之后一个都没回来"
 }
 
 # agent-file-broken (issue #3122, EPIC #3111 C11): a custom session is a standard
@@ -888,189 +796,6 @@ drill_orchestrator_compacted() {
   [ "$(nt display-message -p -t "$p" '#{@compact_stage}')" = restored ] \
     || { WHY="a typed /compact leaves the REPL idle and nothing starts the next turn"; return 1; }
   WHAT="压缩前存下批次、在等谁、未读回报、循环；压缩后注入 ≤40 行并让会话先重新 arm 循环；人敲的 /compact 自动起下一轮"
-}
-
-# orchestrator-exited (issue #2585, EPIC #2581 C4): the orchestrator's process
-# is killed (or it /exits, or the machine restarts). The window stayed on the
-# wrapper's recovery page, so #1957's ensure saw "it is open" and did nothing —
-# and a reopen resumed the conversation with no turn to start it: nobody re-armed
-# the Loop or said the batch until the person typed. Now the next tick's ensure
-# respawns it in place on the same conversation with a first turn, and
-# SessionStart (resume) — no SessionEnd ran — reads the batch and the Loop again
-# and tells it to re-arm. The model's own first answer is the issue's 上线证据.
-drill_orchestrator_exited() {
-  CAP=10; BREAK_SOCK="$WORK/sock-ox"; local t0 w sid p out h="$WORK/oxhome" c="$WORK/oxconf" oa="$WORK/ox-argv" tr ts
-  mkdir -p "$h" "$c/global/epic-running.d"; : > "$oa"
-  printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> %s\necho $$ > %s.pid\nexec sleep 600\n' "$oa" "$oa" > "$WORK/ox-agent"; chmod +x "$WORK/ox-agent"
-  nt -f /dev/null new-session -d -s ox -n home -x 100 -y 30 'exec sh' || { WHY="cannot start the isolated tmux server"; return 1; }
-  # the wrapper in the pane: its tmux calls reach this server, nothing of the operator's runs
-  local e; for e in BREAK_SOCK="$BREAK_SOCK" FLEET_WRAP_FAST_FAIL=0 FLEET_MCP=0 FLEET_CRED_PROXY=0 SHELL=/bin/sh; do
-    nt set-environment -g "${e%%=*}" "${e#*=}"; done
-  nt set-option -g default-shell /bin/sh
-  oxens() { env PATH="$WORK/tbin:$PATH" HOME="$h" FLEET_CONF_DIR="$c" FLEET_SKIP_GLOBAL_CONF=1 BREAK_SOCK="$BREAK_SOCK" \
-              FLEET_ORCHESTRATOR=1 FLEET_AGENT=claude FLEET_WRAP_LAUNCH="$WORK/ox-agent" "$@" \
-              bash "$BIN/fleet-orchestrator.sh" ensure ox 2>/dev/null; }
-  w=$(oxens) || { WHY="ensure did not open it"; return 1; }
-  until_ok 5 test -s "$oa.pid" || { WHY="the orchestrator's agent never started"; return 1; }
-  sid=$(cat "$c/fleets/ox/orchestrator.sid" 2>/dev/null)
-  local proj; proj="$h/.claude/projects/$(printf '%s' "$h" | LC_ALL=C tr -c 'A-Za-z0-9' '-')"
-  mkdir -p "$proj"; tr="$proj/$sid.jsonl"; ts=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
-  printf '%s\n%s\n' \
-    "{\"type\":\"assistant\",\"timestamp\":\"$ts\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"id\":\"t\",\"name\":\"ScheduleWakeup\",\"input\":{\"delaySeconds\":1200,\"prompt\":\"<<autonomous-loop-dynamic>>\"}}]}}" \
-    "{\"type\":\"user\",\"timestamp\":\"$ts\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"t\",\"content\":\"ok\"}]}}" > "$tr"
-  printf 'epoch: %s\nttl: 2700\nepic: 2581\nrepo: o/n\nsession: ox\ntick: 4\n' "$(date +%s)" > "$c/global/epic-running.d/o-n-2581"
-  : > "$oa"
-  kill -9 "$(cat "$oa.pid")"                      # the break: no SessionEnd, nothing saved
-  oxst() { [ "$(o "$w" @claude_state)" = exited ]; }
-  until_ok 5 oxst || { WHY="the wrapper never put it on the recovery page"; return 1; }
-  t0=$(now)
-  [ "$(oxens)" = "$w" ] && [ ! -s "$oa" ] || { WHY="it was revived inside the grace — the person on the page lost the choice"; return 1; }
-  [ "$(oxens FLEET_ORCH_REVIVE_SECS=0)" = "$w" ] \
-    || { WHY="the next tick left it on the recovery page (or opened a second window)"; return 1; }
-  until_ok "$CAP" grep -q -- "--resume $sid" "$oa" || { WHY="not resumed on the same conversation: $(cat "$oa")"; return 1; }
-  grep -q '会话刚被 fleet 接回' "$oa" || { WHY="resumed with no first turn — nothing re-arms until the person types: $(cat "$oa")"; return 1; }
-  p=$(o "$w" pane_id)
-  out=$(printf '{"hook_event_name":"SessionStart","source":"resume","transcript_path":"%s"}' "$tr" \
-        | env PATH="$WORK/tbin:$PATH" HOME="$h" FLEET_CONF_DIR="$c" BREAK_SOCK="$BREAK_SOCK" TMUX="$BREAK_SOCK,1,0" \
-              TMUX_PANE="$p" CLAUDE_CODE_ENTRYPOINT=cli python3 "$BIN/fleet-orchestrator-state.py" hook 2>/dev/null)
-  SECS=$(since "$t0")
-  case "$out" in *'EPIC #2581'*) ;; *) WHY="back from the kill the session is not told its batch: [$out]"; return 1 ;; esac
-  case "$out" in *'<<autonomous-loop-dynamic>>'*'重新 arm 循环'*) ;; *) WHY="back from the kill the Loop is not handed back: [$out]"; return 1 ;; esac
-  [ "$(nt list-windows -t ox -F '#{@fleet_role}' | grep -cx orchestrator)" = 1 ] || { WHY="more than one orchestrator"; return 1; }
-  WHAT="进程被杀后窗口停在恢复页；下一拍原地续开同一对话并带首轮，注入批次与循环、先重新 arm（节拍 60s 与 30s 宽限另计）"
-}
-
-# orchestrator-stale-version (issue #2733): stable moved and the orchestrator kept
-# running the version it started on — fleet-migrate.sh --cfg-stale never reopens it,
-# so 2026-10-09's ran 11 hours past six releases until it killed itself. Now its
-# own `ensure` renews it at a quiet moment: never mid-turn, never right before its
-# Loop's next round; then in place, on the same conversation, the state saved first
-# (the Loop off its transcript), the role file in its system prompt.
-drill_orchestrator_stale_version() {
-  CAP=120; BREAK_SOCK="$WORK/sock-osv"; local t0 w sid out h="$WORK/osvhome" c="$WORK/osvconf" oa="$WORK/osv-argv" tr ts nw opid
-  mkdir -p "$h" "$c/global"; : > "$oa"
-  printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> %s\necho $$ > %s.pid\nexec sleep 600\n' "$oa" "$oa" > "$WORK/osv-agent"; chmod +x "$WORK/osv-agent"
-  nt -f /dev/null new-session -d -s osv -n home -x 100 -y 30 'exec sh' || { WHY="cannot start the isolated tmux server"; return 1; }
-  local e; for e in BREAK_SOCK="$BREAK_SOCK" FLEET_WRAP_FAST_FAIL=0 FLEET_MCP=0 FLEET_CRED_PROXY=0 SHELL=/bin/sh; do
-    nt set-environment -g "${e%%=*}" "${e#*=}"; done
-  nt set-option -g default-shell /bin/sh
-  osvens() { env PATH="$WORK/tbin:$PATH" HOME="$h" FLEET_CONF_DIR="$c" FLEET_SKIP_GLOBAL_CONF=1 BREAK_SOCK="$BREAK_SOCK" \
-               FLEET_ORCHESTRATOR=1 FLEET_AGENT=claude FLEET_WRAP_LAUNCH="$WORK/osv-agent" \
-               bash "$BIN/fleet-orchestrator.sh" ensure osv 2>/dev/null; }
-  w=$(osvens) || { WHY="ensure did not open it"; return 1; }
-  until_ok 5 test -s "$oa.pid" || { WHY="the orchestrator's agent never started"; return 1; }
-  opid=$(cat "$oa.pid"); sid=$(cat "$c/fleets/osv/orchestrator.sid" 2>/dev/null); : > "$oa"
-  local proj; proj="$h/.claude/projects/$(printf '%s' "$h" | LC_ALL=C tr -c 'A-Za-z0-9' '-')"
-  mkdir -p "$proj"; tr="$proj/$sid.jsonl"; ts=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
-  printf '%s\n%s\n' \
-    "{\"type\":\"assistant\",\"timestamp\":\"$ts\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"id\":\"t\",\"name\":\"ScheduleWakeup\",\"input\":{\"delaySeconds\":1200,\"prompt\":\"<<autonomous-loop-dynamic>>\"}}]}}" \
-    "{\"type\":\"user\",\"timestamp\":\"$ts\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"t\",\"content\":\"ok\"}]}}" > "$tr"
-  # it started on version OLD; the break: stable moves, the install is NEW
-  nt set-window-option -t "$w" @agent_cfg fpX \; set-window-option -t "$w" @agent_ver OLD0000000000 \; \
-     set-window-option -t "$w" @cc_session_id "$sid"
-  printf 'claude fpX fleet\nver NEW0000000000\n' > "$c/global/agent-cfg.expected"
-  t0=$(now); nw=$(date +%s)
-  nt set-window-option -t "$w" @claude_state working \; set-window-option -t "$w" @claude_state_ts $((nw - 300)) \; \
-     set-window-option -t "$w" @loop "kind=wakeup next=$((nw + 1200)) ttl=1200"
-  [ "$(osvens)" = "$w" ] && [ ! -s "$oa" ] || { WHY="renewed in the middle of a turn"; return 1; }
-  [ -n "$(o "$w" @renew_since)" ] || { WHY="a pending renew is not marked (@renew_since) — nothing says 待换新"; return 1; }
-  nt set-window-option -t "$w" @claude_state "done" \; set-window-option -t "$w" @loop "kind=wakeup next=$((nw + 60)) ttl=60"
-  [ "$(osvens)" = "$w" ] && [ ! -s "$oa" ] || { WHY="renewed a minute before its Loop's next round"; return 1; }
-  nt set-window-option -t "$w" @loop "kind=wakeup next=$((nw + 1200)) ttl=1200"
-  out=$(osvens) && [ "$out" = "$w" ] || { WHY="the quiet tick did not answer with the same window: [$out]"; return 1; }
-  until_ok 10 grep -q -- "--resume $sid" "$oa" || { WHY="not renewed onto the same conversation at a quiet moment: [$(cat "$oa")]"; return 1; }
-  SECS=$(since "$t0")
-  grep -q '会话刚被 fleet 接回' "$oa" || { WHY="renewed with no first turn — the Loop waits for the person: $(cat "$oa")"; return 1; }
-  grep -q -- '--append-system-prompt-file .*/roles/orchestrator-[0-9a-f]*\.md' "$oa" \
-    || { WHY="renewed without its role in the system prompt: $(cat "$oa")"; return 1; }
-  kill -0 "$opid" 2>/dev/null && { WHY="the old agent ($opid) still runs beside the new one"; return 1; }
-  python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d.get("reason") == "renew" and d.get("loop") else 1)' \
-    "$c/global/orchestrator.state.json" 2>/dev/null || { WHY="the state was not saved with its Loop before the kill (no SessionEnd runs)"; return 1; }
-  [ -z "$(o "$w" @renew_since)" ] || { WHY="待换新 still marked after the renew"; return 1; }
-  grep -q 'renewed OLD0000000000 → NEW0000000000' "$c/fleets/osv/renew.log" 2>/dev/null || { WHY="the renew left no line in renew.log"; return 1; }
-  [ "$(nt list-windows -t osv -F '#{@fleet_role}' | grep -cx orchestrator)" = 1 ] || { WHY="more than one orchestrator"; return 1; }
-  WHAT="版本旧了：忙时、循环将到时不换；安静的那一拍原地续开同一对话，先存状态与循环、带首轮、角色在系统提示里"
-}
-
-# handoff-renew-race (issue #2937): the orchestrator ran /fleet-handoff at 65% and
-# armed the cycle; the same minute stable moved, its `ensure` renewed it — a
-# respawn `--resume` of the very conversation being handed off — and the cycle,
-# never seeing its /clear, exited 「存了、没清」. The context only grew (79% by
-# night). Now the cycle stamps @handoff_cycle and no renew runs while it holds;
-# the /clear's SessionStart writes the new conversation into orchestrator.sid,
-# so the renew after resumes THAT one; and a conversation a handoff named is never
-# resumed again — a cycle that lost anyway leaves a new conversation, its first
-# turn the pickup.
-drill_handoff_renew_race() {
-  CAP=60; BREAK_SOCK="$WORK/sock-hrr"; local t0 w sid nsid p out h="$WORK/hrrhome" c="$WORK/hrrconf" oa="$WORK/hrr-argv" \
-    doc="$WORK/hrr-handoff.md" lg="$WORK/hrr-log" nw proj cpid
-  mkdir -p "$h" "$c/global" "$lg"; : > "$oa"; printf '# handoff\nNEXT ACTION: re-arm the Loop\n' > "$doc"
-  printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> %s\necho $$ > %s.pid\nexec sleep 600\n' "$oa" "$oa" > "$WORK/hrr-agent"; chmod +x "$WORK/hrr-agent"
-  nt -f /dev/null new-session -d -s hrr -n home -x 100 -y 30 'exec sh' || { WHY="cannot start the isolated tmux server"; return 1; }
-  local e; for e in BREAK_SOCK="$BREAK_SOCK" FLEET_WRAP_FAST_FAIL=0 FLEET_MCP=0 FLEET_CRED_PROXY=0 SHELL=/bin/sh; do
-    nt set-environment -g "${e%%=*}" "${e#*=}"; done
-  nt set-option -g default-shell /bin/sh
-  hrrenv() { env PATH="$WORK/tbin:$PATH" HOME="$h" FLEET_CONF_DIR="$c" FLEET_SKIP_GLOBAL_CONF=1 BREAK_SOCK="$BREAK_SOCK" "$@"; }
-  hrrens() { hrrenv FLEET_ORCHESTRATOR=1 FLEET_AGENT=claude FLEET_WRAP_LAUNCH="$WORK/hrr-agent" \
-               bash "$BIN/fleet-orchestrator.sh" ensure hrr 2>/dev/null; }
-  w=$(hrrens) || { WHY="ensure did not open it"; return 1; }
-  until_ok 5 test -s "$oa.pid" || { WHY="the orchestrator's agent never started"; return 1; }
-  sid=$(cat "$c/fleets/hrr/orchestrator.sid" 2>/dev/null); p=$(o "$w" pane_id); : > "$oa"
-  proj="$h/.claude/projects/$(printf '%s' "$h" | LC_ALL=C tr -c 'A-Za-z0-9' '-')"; mkdir -p "$proj"
-  printf '{"type":"user","message":{"content":"hi"}}\n' > "$proj/$sid.jsonl"
-  # it started on OLD and is mid-turn: the turn that runs /fleet-handoff
-  nw=$(date +%s)
-  nt set-window-option -t "$w" @agent_cfg fpX \; set-window-option -t "$w" @agent_ver OLD0000000000 \; \
-     set-window-option -t "$w" @cc_session_id "$sid" \; set-window-option -t "$w" @ctx_pct 65 \; \
-     set-window-option -t "$w" @claude_state working \; set-window-option -t "$w" @claude_state_ts $((nw - 300))
-  hrrenv TMUX="$BREAK_SOCK,1,0" TMUX_PANE="$p" FLEET_HANDOFF_LOG_DIR="$lg" FLEET_HANDOFF_POLL=1 FLEET_HANDOFF_DEFER_SECS=0 \
-    FLEET_HANDOFF_IDLE_TIMEOUT=40 FLEET_HANDOFF_VERIFY_TIMEOUT=30 FLEET_HANDOFF_RETRY_AFTER=100 FLEET_MOD_TAKE_SECS=1 \
-    FLEET_HANDOFF_PICKUP_CMD='/fleet-handoff pickup' bash "$BIN/fleet-handoff-cycle.sh" --pane "$p" --doc "$doc" >/dev/null 2>&1 &
-  cpid=$!
-  hrrmk() { [ -n "$(o "$w" @handoff_cycle)" ] && [ -s "$c/fleets/hrr/orchestrator.handoff" ]; }
-  until_ok 5 hrrmk || { WHY="the armed cycle does not mark the window (@handoff_cycle)"; return 1; }
-  grep -q "^sid=$sid\$" "$c/fleets/hrr/orchestrator.handoff" 2>/dev/null \
-    || { WHY="the cycle did not record which conversation it hands off"; return 1; }
-  # the break: stable moves, and the arming turn ends — a quiet, stale window
-  printf 'claude fpX fleet\nver NEW0000000000\n' > "$c/global/agent-cfg.expected"
-  t0=$(now)
-  nt set-window-option -t "$w" @claude_state "done"
-  # the cycle has typed its /clear and waits for the fresh session — the window a renew would take
-  until_ok 10 grep -q 'verifying fresh session' "$lg/handoff-cycle.log" || { WHY="the cycle never reached its /clear"; return 1; }
-  [ "$(hrrens)" = "$w" ] && [ ! -s "$oa" ] || { WHY="renewed while the handoff cycle waited to /clear: $(cat "$oa")"; return 1; }
-  out=$(hrrenv bash -c '. "$1/fleet-lib.sh"; fleet_role_renew_why hrr "$2"' _ "$BIN" "$w")
-  [ "$out" = handoff ] || { WHY="fleet_role_renew_why does not say handoff mid-cycle: [$out]"; return 1; }
-  # the cycle's /clear lands: SessionStart(clear) of a NEW conversation
-  nsid=$(python3 -c 'import uuid; print(uuid.uuid4())')
-  printf '{"type":"user","message":{"content":"hi"}}\n' > "$proj/$nsid.jsonl"
-  printf '{"hook_event_name":"SessionStart","source":"clear","session_id":"%s"}' "$nsid" \
-    | hrrenv TMUX="$BREAK_SOCK,1,0" TMUX_PANE="$p" CLAUDE_CODE_ENTRYPOINT=cli sh "$BIN/handoff-latch-reset-hook.sh" >/dev/null 2>&1
-  wait "$cpid" 2>/dev/null
-  grep -q 'handoff-complete' "$lg/context-ladder.log" 2>/dev/null \
-    || { WHY="the cycle did not complete: $(tail -3 "$lg/handoff-cycle.log" 2>/dev/null)"; return 1; }
-  [ -z "$(o "$w" @handoff_cycle)" ] || { WHY="@handoff_cycle outlived the cycle — no renew could ever run"; return 1; }
-  [ "$(cat "$c/fleets/hrr/orchestrator.sid")" = "$nsid" ] \
-    || { WHY="orchestrator.sid still names the handed-off conversation after the /clear"; return 1; }
-  grep -q "^next=$nsid\$" "$c/fleets/hrr/orchestrator.handoff" || { WHY="the handoff record does not name who picked it up"; return 1; }
-  # the renew runs at the next quiet tick — onto the NEW conversation
-  nt set-window-option -t "$w" @cc_session_id "$nsid" \; set-window-option -t "$w" @claude_state "done" \; \
-     set-window-option -t "$w" @claude_state_ts $(( $(date +%s) - 300 ))
-  [ "$(hrrens)" = "$w" ] || { WHY="the quiet tick after the handoff did not answer with the same window"; return 1; }
-  until_ok 10 grep -q -- "--resume $nsid" "$oa" || { WHY="the renew after the handoff did not resume the new conversation: [$(cat "$oa")]"; return 1; }
-  SECS=$(since "$t0")
-  grep -q -- "--resume $sid" "$oa" && { WHY="the handed-off conversation was resumed"; return 1; }
-  # a cycle that lost anyway (the record names the live conversation): never resumed
-  : > "$oa"; rm -f "$oa.pid"
-  printf 'sid=%s\nstore=%s\npickup=/fleet-handoff pickup %s\nat=%s\nctx=65\n' "$nsid" "$doc" "$doc" "$(date +%s)" \
-    > "$c/fleets/hrr/orchestrator.handoff"
-  nt set-window-option -t "$w" @agent_ver OLD0000000000 \; set-window-option -t "$w" @claude_state "done" \; \
-     set-window-option -t "$w" @claude_state_ts $(( $(date +%s) - 300 ))
-  hrrens >/dev/null
-  until_ok 10 grep -q -- '--session-id ' "$oa" || { WHY="a handed-off conversation was resumed, not replaced: [$(cat "$oa")]"; return 1; }
-  grep -q -- "--resume $nsid" "$oa" && { WHY="the handed-off conversation was resumed"; return 1; }
-  grep -q "fleet-handoff pickup $doc" "$oa" || { WHY="the new conversation's first turn is not the pickup: [$(cat "$oa")]"; return 1; }
-  [ "$(nt list-windows -t hrr -F '#{@fleet_role}' | grep -cx orchestrator)" = 1 ] || { WHY="more than one orchestrator"; return 1; }
-  WHAT="接力 arm 期间版本移动：不换新、cycle 清完；/clear 把新对话写进 orchestrator.sid，之后换新接的是新对话；被接力过的对话再也不 resume（输了也开新对话、首轮 pickup）"
 }
 
 # window-renamed (issue #1844): a name is not an identity. Home renamed, a worker
@@ -2576,41 +2301,6 @@ orch_list() {
   local p
   p=$("$REAL_TMUX" -L "$1" list-panes -a -F '#{@sidebar} #{pane_id}' 2>/dev/null | awk '$1 == 1 { print $2; exit }')
   [ -n "$p" ] && "$REAL_TMUX" -L "$1" capture-pane -p -t "$p" 2>/dev/null
-}
-
-# ① the Claude orchestrator busy, three said in a row: the first starts its turn,
-# two wait — the band above its prompt (the mod, when a claude CLI can run its
-# tests here) and the node's inventory (orchq=) read 2; the client draws no
-# 「新任务」 row any more (issue #3119)
-drill_orch_busy_queue_invisible() {
-  CAP=30; local d="$WORK/oq" t0 tt out m q
-  mkdir -p "$d"
-  t0=$(now)
-  # the mod half: queue.test.tsx's three-in-a-row, alone (no claude CLI → the node + client half only)
-  m=''
-  if command -v claude >/dev/null 2>&1; then
-    mkdir -p "$d/mod" && cp -R "$ROOT/mod/fleet/." "$d/mod/" && find "$d/mod/tests" -type f ! -name queue.test.tsx -delete
-    out=$(cd "$d/mod" && claude plugin test . 2>&1)
-    case "$out" in *'(pass) three in a row'*'排队 2 条'*) m='黄条「排队 2 条」 · ' ;;
-      *) WHY="the mod's three-in-a-row did not read 「排队 2 条」: $(printf '%s' "$out" | grep -E 'three|fail|error' | head -3 | tr '\n' ' ')"; return 1 ;; esac
-  fi
-  # the node half: @orch_queue as the mod stamps it → fleet-control-read.sh orchq= → the inventory's orch_queue
-  tt="$d/tt"; mkdir -p "$tt" "$d/conf/fleets/oq$$"
-  printf 'FLEET_REPO=acme/app\n' > "$d/conf/fleets/oq$$/conf"
-  oqt() { TMUX_TMPDIR="$tt" "$REAL_TMUX" -L "oq$$" "$@"; }
-  oqt -f /dev/null new-session -d -s "oq$$" -n home 'sleep 600' || { WHY="cannot start the node's server"; return 1; }
-  oqt new-window -d -t "=oq$$:" -n orchestrator 'sleep 600'
-  oqt set-option -w -t "=oq$$:orchestrator" @fleet_role orchestrator
-  oqt set-option -w -t "=oq$$:orchestrator" @norepo 1
-  oqt set-option -w -t "=oq$$:orchestrator" @orch_queue 2
-  out=$(env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$tt" TMPDIR="$d" FLEET_SKIP_GLOBAL_CONF=1 FLEET_CONF_DIR="$d/conf" \
-          bash "$BIN/fleet-control-read.sh" workers "oq$$" 2>&1 | awk -F'\t' '$10 == "orchestrator"')
-  oqt kill-server 2>/dev/null
-  case "$out" in *$'\torchq=2'*) ;; *) WHY="the node's inventory does not carry orchq=2: [$out]"; return 1 ;; esac
-  q=$(printf '%s' "$out" | python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); from fleet_hub_common import inventory_row; r = inventory_row(sys.stdin.read().rstrip("\n").split("\t")); print((r[1] if r else {}).get("orch_queue", ""))' "$BIN")
-  [ "$q" = 2 ] || { WHY="inventory_row reads orch_queue [$q], want 2"; return 1; }
-  SECS=$(since "$t0")
-  WHAT="忙时连发 3 条：${m}节点 orchq=2 → orch_queue 2"
 }
 
 # the panels' mod half (issue #2835; the fleet-steward plugin's since #3115):

@@ -43,15 +43,12 @@ nests three levels, and this is where the confusing vocabulary starts:
   (issue #441), so the hub only steps in for the strays. **One hub per fleet**; its pane carries `@hub=1` and F9 /
   the ⌂ icon jump to it. Built by
   [`bin/hub-session.sh`](../bin/hub-session.sh).
-- **Orchestrator** (编排会话) — the fleet's ONE resident session that talks a
-  request through with you and then dispatches it (a quick task, an EPIC, the
-  queue), never writing code itself (issue #1957). A no-repo session in `$HOME`,
-  told by `@fleet_role orchestrator`, addressed as `orchestrator`; it has no row
-  of its own — it lives in the client's 「新任务」 (its glyph is its state; ⇧⇥ in
-  the writing area hands it the draft). Opened and kept open by
-  [`bin/fleet-orchestrator.sh`](../bin/fleet-orchestrator.sh) (fleet-up, the
-  diskguard tick); restore / migrate / move treat it as `home`. On by default
-  where the computer is 承载 (`FLEET_HOST=1`); `FLEET_ORCHESTRATOR=0` turns it off.
+- **Orchestrator** (编排会话) — a ROLE a session takes, not a window the fleet
+  keeps: type `/fleet-orchestrate` (the fleet-orchestrate plugin) in any session
+  that binds no issue, and it talks a request through with you and then dispatches
+  it (a quick task, an EPIC, the queue), never writing code itself (issues #1957,
+  #3114). One holder at a time (`take_role`, `@fleet_role_def orchestrator`),
+  addressed as `orchestrator`; nothing opens or reopens one (issue #3118).
   Instructions: [`plugins/fleet-orchestrate/skills/fleet-orchestrate/`](../plugins/fleet-orchestrate/skills/fleet-orchestrate/SKILL.md).
 - **Scheduler** — whatever starts the collector on a timer: **launchd** on macOS
   (`launchd/com.claude-fleet.collect.plist.tmpl`), a **systemd** user timer on

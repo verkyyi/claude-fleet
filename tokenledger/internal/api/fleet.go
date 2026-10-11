@@ -923,7 +923,7 @@ func writeFleetResult(w http.ResponseWriter, r *http.Request, out any, err error
 		e := errorObject(err)
 		status := map[string]int{"INVALID_ARGUMENT": 400, "NOT_FOUND": 404, "FORBIDDEN": 403,
 			"UNAVAILABLE": 503, "TIMEOUT": 504, control.CodeProtoMismatch: 409,
-			"IDEMPOTENCY_CONFLICT": 409, "AT_CAPACITY": 429, "NO_ELIGIBLE_NODE": 503}[e["code"]]
+			"IDEMPOTENCY_CONFLICT": 409, "AT_CAPACITY": 429, "NO_ELIGIBLE_NODE": 503, "INVALID_STATE": 409}[e["code"]]
 		if status == 0 {
 			status = http.StatusBadGateway
 			if e["code"] == "INTERNAL" {

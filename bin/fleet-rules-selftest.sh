@@ -2,8 +2,8 @@
 # fleet-rules-selftest.sh — dispatch and the steward's three tiers follow ONE
 # editable rule table (issue #2786, EPIC #2781 C5). bin/fleet_rules.py reads
 # conf/role-rules.default.md < the person's layer (person-bundle.json `rules`) <
-# this computer's ($FLEET_CONF_DIR/roles/rules.md); bin/fleet-role.py renders the
-# role's rows into the orchestrator's / steward's system prompt; bin/fleet_decision.py
+# this computer's ($FLEET_CONF_DIR/roles/rules.md); bin/fleet-role.py prompt appends the
+# role's rows to the orchestrator's / steward's body (the plugins' role.md); bin/fleet_decision.py
 # classifies off the table's `ask` rows.
 #
 #   A  the default table: numbers unique, the keywords ≡ fleet_decision.NEVER_WORDS
@@ -121,18 +121,17 @@ m=$(R rules --mark 1)
 [ "$m" = "按规则 1 派发"$'\n'"<!-- fleet:rule n=1 v=$v2 -->" ] && ok "E: --mark 1 prints the ticket's two lines at the current v=" || bad "E: mark [$m]"
 R rules --mark 77 >/dev/null 2>&1; [ $? = 2 ] && ok "E: --mark of a rule the table lacks is refused (exit 2)" || bad "E: unknown mark not refused"
 
-# --- F render --------------------------------------------------------------------
-ob=$(R render orchestrator --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["body"])')
-sec=$(sed -n '/^## 规则表 v=/,$p' "$ob")
+# --- F prompt (body + the role's rows; the plugins' role.md copy it) ---------------
+sec=$(R prompt orchestrator | sed -n '/^## 规则表 v=/,$p')
 nl=$(printf '%s\n' "$sec" | wc -l | tr -d ' ')
 case "$sec" in *"v=$v2"*'| 1 | 一处改动 | 一律先问 | ask |'*'| 12 |'*)
     printf '%s' "$sec" | grep -q '^| 13 |' && bad "F: a steward row in the orchestrator's prompt" \
       || { [ "$nl" -le 40 ] && ok "F: the orchestrator's prompt ends with its $((nl - 3)) rows at v=$v2 (≤ 40 lines), the local edit in" || bad "F: $nl lines"; } ;;
   *) bad "F: orchestrator section: $sec" ;; esac
 rm -f "$FLEET_CONF_DIR/roles/rules.md"
-sb=$(R render steward --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["body"])')
-grep -q '^| 16 | 改 fleet 的铁律' "$sb" && ! grep -q '^| 1 |' "$sb" && ok "F: the steward's prompt carries its rules only (13–19, 21)" || bad "F: steward section"
-case "$(R render worker)" in *append-system-prompt*) bad "F: a worker launch carries a prompt file" ;; *) ok "F: a worker's launch carries no table" ;; esac
+sb=$(R prompt steward)
+printf '%s\n' "$sb" | grep -q '^| 16 | 改 fleet 的铁律' && ! printf '%s\n' "$sb" | grep -q '^| 1 |' && ok "F: the steward's prompt carries its rules only (13–19, 21)" || bad "F: steward section"
+R prompt worker >/dev/null 2>&1 && bad "F: a worker has a role prompt" || ok "F: a worker has no role prompt (no table)"
 
 # --- G a broken fleet table ------------------------------------------------------------
 printf 'not a table\n| 编号 | 角色 | 条件 | 动作 | 档位 | 关键词 |\n|---|---|---|---|---|---|\n| x | nobody | | | | |\n' > "$WORK/broken.md"

@@ -217,36 +217,14 @@ case "$mode" in
     # own report, @agent_status as bin/fleet-status-7501.py stamped it (one line of
     # JSON, no tab); inventory_row turns it into the worker's `status_kind` /
     # `status_msg`. Empty on a window whose agent never said anything.
-    ctxs=$(tmux -u -L "$sock" list-windows -t "=$sess" ${lwf[@]+"${lwf[@]}"} -F $'#{window_id}\t=#{?@ctx_left,#{@ctx_left},#{?@ctx_pct,#{e|-:100,#{@ctx_pct}},}}\t=#{@ctx_band}\t=#{@ctx_ts}\t=#{?@model,#{@model},#{?#{==:#{@cc_agent},codex},#{@cc_model},}}\t=#{@effort}\t=#{@agent_status}\t=#{@orch_queue}\t=#{@orch_decide}\t=#{@orch_todo}\t=#{@orch_park}\t=#{@orch_page}\t=#{@orch_park_list}\t=#{@orch_todo_list}' 2>/dev/null) || ctxs=''
+    ctxs=$(tmux -u -L "$sock" list-windows -t "=$sess" ${lwf[@]+"${lwf[@]}"} -F $'#{window_id}\t=#{?@ctx_left,#{@ctx_left},#{?@ctx_pct,#{e|-:100,#{@ctx_pct}},}}\t=#{@ctx_band}\t=#{@ctx_ts}\t=#{?@model,#{@model},#{?#{==:#{@cc_agent},codex},#{@cc_model},}}\t=#{@effort}\t=#{@agent_status}' 2>/dev/null) || ctxs=''
     # Column 30 (issue #2505): `test=1` on a session the TEST identity's client
     # placed (@test_identity, `fleet --test-identity`): the person's list hides
     # it, `fleet ls` marks it 测试. Empty on every other window.
-    # Column 31 (issue #2617, EPIC #2615 C2): `orchq=<n>` — what waits behind the
-    # orchestrator's running turn, @orch_queue as the mod (queue.ts) stamps it
-    # (0 from its start); fleet-hub-sessions.sh carries it as `orch_<sess>`'s 7th
-    # column. Empty on every other window, and on an orchestrator that cannot
-    # count (Codex, no mod).
-    # Column 32 (issue #2670, EPIC #2668 C2): `orchdec=<n>` — the rows of the
-    # steward's decision sheet still open (@orch_decide, fleet-steward-tick.sh stamps
-    # it on the orchestrator's window); fleet-hub-sessions.sh carries it as
-    # `orch_<sess>`'s `decide=<n>` column. Written ONLY when there is a count, so a
-    # fleet with no steward prints every row byte for byte as before.
-    # Column 33 (issue #2672, EPIC #2668 C4): `orchtodo=<n>` — the steward's
-    # 「待你动手」 rows still open (@orch_todo, bin/fleet_followup.py stamps it);
-    # carried as `orch_<sess>`'s `todo=<n>` column. Written ONLY when there is a
-    # count, after orchdec= when both are — never one without the other's order.
-    # Column 34 (issue #2671, EPIC #2668 C3): `orchpark=<n>` — sessions parked,
-    # waiting on something (@orch_park, stamped by the steward's beat from
-    # bin/fleet_park.py's book) → `orch_<sess>`'s `park=<n>`. Only with a count,
-    # the last tag (after orchdec= / orchtodo= when they are) — read first.
-    # Column 35 (issue #2735): `orchpage=<url>` — the steward's page (@orch_page,
-    # fleet_steward_page.py's doc-preview link) → `orch_<sess>`'s `page=<url>`, which
-    # 「新任务」's menu opens. Only with a link, after orchpark= — read before it.
-    # Columns 36-37 (issue #2913): `orchparkl=<cell>` / `orchtodol=<cell>` — who is
-    # parked on what, and the open 待你动手 items (@orch_park_list / @orch_todo_list,
-    # fleet_steward.py list_cell: base64url JSON, one [-A-Za-z0-9_] token, ≤4000) →
-    # `orch_<sess>`'s `parkl=` / `todol=`, what the client's two rows open into.
-    # Only when set, after every other tag — read first.
+    # Columns 31-37 (orchq= · orchdec= · orchtodo= · orchpark= · orchpage= ·
+    # orchparkl= · orchtodol=) were the resident orchestrator's and steward's
+    # (issues #2617 #2670 #2672 #2671 #2735 #2913); gone with the seat (issue
+    # #3118). A row ends at test=.
     ttl=$'\n'; drepo=''; _nr=0
     while IFS= read -r _r; do
       [ -n "$_r" ] || continue
@@ -332,23 +310,12 @@ case "$mode" in
       [ -z "$t" ] && [ -z "$c2" ] && [ -z "$wepic" ] && t=$wtl
       row=$wid$'\t'$c2$'\t'$c3$'\t'$wt$'\t'$rest
       b=''; [ -z "$busy" ] || b=$(printf '%s\n' "$busy" | awk -v w="$wid" '$1 == w { print $2; exit }')
-      cl='' cb='' cts='' cm='' ce='' cas='' cq='' cdec='' ctodo='' cpark='' cpage='' cparkl='' ctodol=''
+      cl='' cb='' cts='' cm='' ce='' cas=''
       if [ -n "$ctxs" ]; then
         # each field `=`-led, so no field is ever empty: a TAB is IFS whitespace and
         # `read` would collapse an empty one (no \037 here — an older tmux prints it as _)
-        IFS=$'\t' read -r _ cl cb cts cm ce cas cq cdec ctodo cpark cpage cparkl ctodol <<<"$(printf '%s\n' "$ctxs" | awk -F'\t' -v w="$wid" '$1 == w { print; exit }')"
-        cl=${cl#=} cb=${cb#=} cts=${cts#=} cm=${cm#=} ce=${ce#=} cas=${cas#=} cq=${cq#=} cdec=${cdec#=} ctodo=${ctodo#=} cpark=${cpark#=} cpage=${cpage#=} cparkl=${cparkl#=} ctodol=${ctodol#=}
-        [ "$wrole" = orchestrator ] || { cq=''; cdec=''; ctodo=''; cpark=''; cpage=''; cparkl=''; ctodol=''; }
-        case "$cparkl" in *[!-A-Za-z0-9_]*) cparkl='' ;; esac
-        case "$ctodol" in *[!-A-Za-z0-9_]*) ctodol='' ;; esac
-        [ "${#cparkl}" -le 4000 ] || cparkl=''
-        [ "${#ctodol}" -le 4000 ] || ctodol=''
-        case "$cdec" in *[!0-9]*) cdec='' ;; esac
-        case "$ctodo" in *[!0-9]*) ctodo='' ;; esac
-        case "$cpark" in *[!0-9]*) cpark='' ;; esac
-        case "$cpage" in *[!-A-Za-z0-9._~:/?#@+,=%]*) cpage='' ;; http://?*|https://?*) ;; *) cpage='' ;; esac
-        [ "${#cpage}" -le 300 ] || cpage=''
-        case "$cq" in *[!0-9]*) cq='' ;; esac
+        IFS=$'\t' read -r _ cl cb cts cm ce cas <<<"$(printf '%s\n' "$ctxs" | awk -F'\t' -v w="$wid" '$1 == w { print; exit }')"
+        cl=${cl#=} cb=${cb#=} cts=${cts#=} cm=${cm#=} ce=${ce#=} cas=${cas#=}
         case "$cas" in '{'*'}') ;; *) cas='' ;; esac
         case "$cl" in *[!0-9]*) cl='' ;; esac
         case "$cb" in ok|watch|handoff) ;; *) cb='' ;; esac
@@ -356,16 +323,9 @@ case "$mode" in
         case "$cm" in *[!-A-Za-z0-9\ ._\(\)+]*) cm='' ;; esac
         case "$ce" in *[!a-z]*) ce='' ;; esac
       fi
-      od=''; [ -n "$cdec" ] && od=$'\t'"orchdec=$cdec"
-      [ -n "$ctodo" ] && od="$od"$'\t'"orchtodo=$ctodo"
-      [ -n "$cpark" ] && od="$od"$'\t'"orchpark=$cpark"
-      [ -n "$cpage" ] && od="$od"$'\t'"orchpage=$cpage"
-      [ -n "$cparkl" ] && od="$od"$'\t'"orchparkl=$cparkl"
-      [ -n "$ctodol" ] && od="$od"$'\t'"orchtodol=$ctodol"
-      # the holder is an ordinary row (issue #3119): `role=worker`; its steward
-      # columns (31-37, gated on the real @fleet_role above) ride on until C7
+      # the holder of an old seat is an ordinary row (issue #3119): `role=worker`
       orole=''; [ -n "$wrole" ] && orole=worker
-      printf '%s\tbusy=%s\tborn=%s\tcfg=%s\ttitle=%s\treap=%s\tdetail=%s\trole=%s\tepic=%s\tepicstale=%s\tbackfill=%s\tctxleft=%s\tctxband=%s\tctxts=%s\tmodel=%s\teffort=%s\tagentstatus=%s\ttest=%s\torchq=%s%s\n' "$row" "$b" "$born" "$FCFG_STATE" "$t" "$wreap" "$wdet" "$orole" "$wepic" "$estale" "$wbf" "$cl" "$cb" "$cts" "$cm" "$ce" "$cas" "$wtest" "$cq" "$od"
+      printf '%s\tbusy=%s\tborn=%s\tcfg=%s\ttitle=%s\treap=%s\tdetail=%s\trole=%s\tepic=%s\tepicstale=%s\tbackfill=%s\tctxleft=%s\tctxband=%s\tctxts=%s\tmodel=%s\teffort=%s\tagentstatus=%s\ttest=%s\n' "$row" "$b" "$born" "$FCFG_STATE" "$t" "$wreap" "$wdet" "$orole" "$wepic" "$estale" "$wbf" "$cl" "$cb" "$cts" "$cm" "$ce" "$cas" "$wtest"
     done <<<"$rows"
     ;;
   # --- wstate <sess> <@win> (issue #2238) --------------------------------------
@@ -724,12 +684,12 @@ case "$mode" in
     esac
     exec bash "$BIN/fleet-gh.sh" "$1" "$2" "$n" --repo "$repo" ${fields:+--json "$fields"}
     ;;
-  # --- orch <sess> (issue #2616): the hub's orch_ensure — ⌘N on a client found no
-  # orchestrating session. fleet-orchestrator.sh ensure asks the hub who holds it
-  # first; its exit code passes through (0 opened/here · 3 off · 5 held elsewhere).
+  # --- orch <sess> (issue #2616): an older hub's orch_ensure. There is no
+  # orchestrating seat to open any more (issue #3118): answer 3 (off) with one
+  # line, never a window. # compat-1v: 下一批删
   orch)
-    fleet_load_conf "$sess"
-    exec bash "$BIN/fleet-orchestrator.sh" ensure "$sess"
+    echo "没有编排：用 /fleet-orchestrate 在任一会话里接手" >&2
+    exit 3
     ;;
   stop)
     fleet_load_conf "$sess"

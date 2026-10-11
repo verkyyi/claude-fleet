@@ -305,42 +305,25 @@ FLEET_CTX_WINDOW=200000
 # @label=Subagent model @group=spawn @tier=advanced @scope=fleet @edit=enum
 #FLEET_SUBAGENT_MODEL="opus"
 
-# The fleet's ONE orchestrating session (issue #1957, bin/fleet-orchestrator.sh):
-# a no-repo session in $HOME that lives behind the client's 「新任务」 — the person
-# hands it a draft (⇧⇥ in the writing area), it talks the work through and then
-# files / spawns / plans it (plugins/fleet-orchestrate/skills/fleet-orchestrate/). fleet-up opens it, the
-# diskguard tick reopens it when it is closed. Default: on where this computer
-# hosts sessions (FLEET_HOST=1, 承载); 0 = no orchestrator on this fleet.
-# @label=Orchestrator session @group=spawn @tier=internal @scope=fleet @edit=bool
-#FLEET_ORCHESTRATOR=1
-
-# The steward (EPIC #2668; issue #2670, bin/fleet-steward.sh): the resident
-# session that patrols every batch for you, answers a worker's question when the
-# batch charter already says it, and hands the rest to the orchestrator as ONE
-# decision sheet (plugins/fleet-steward/skills/fleet-steward/). 0 = no steward, and everything it brings
-# — the desk tickets below included — stays as before; `count` = only the
-# attention count (logs/attention.ndjson), no window — the default where an
-# orchestrator runs, for the batch's three-day baseline; 1 = the window too. Its
-# beat runs on the diskguard tick with no model; only a beat with something new
-# wakes it.
-# @label=Steward @group=spawn @tier=internal @scope=fleet @edit=str
-#FLEET_STEWARD=count
+# There is no resident orchestrating or steward session (issue #3118): nothing
+# opens, reopens or keeps one. Type /fleet-orchestrate or /fleet-steward in any
+# session that binds no issue to take the role (the fleet-orchestrate /
+# fleet-steward plugins). FLEET_ORCHESTRATOR, FLEET_STEWARD and the FLEET_ORCH_* /
+# FLEET_STEWARD_MODEL|EFFORT|CODEX_MODEL|REVIVE_SECS knobs are gone with it.
 
 # Desk tickets (issue #2676): a session the orchestrator or you open with no repo
 # (a design page, research, a release) gets a `desk`-labelled ticket of its own in
 # FLEET_DESK_REPO, bound to the window like an issue (no workspace), so a comment
-# there reaches it and its outcome stays there. Default: follows FLEET_STEWARD;
-# 0 = never. The desk repo must be one this fleet hosts, else no ticket is filed.
+# there reaches it and its outcome stays there. Default: on where this computer
+# hosts sessions (FLEET_HOST=1); 0 = never. The desk repo must be one this fleet hosts, else no ticket is filed.
 # @label=Desk tickets @group=spawn @tier=internal @scope=fleet @edit=bool
 #FLEET_DESK=1
 # @label=Desk repo @group=spawn @tier=internal @scope=fleet @edit=str
 #FLEET_DESK_REPO="verkyyi/claude-fleet"
 
-# ⌘N on the client (its [client] section — issue #2616): 0 (default) = straight
-# to the orchestrating session's input, woken first through the hub
-# (orch_ensure) when no machine runs it, at most FLEET_ORCH_BOOT_SECS; 1 = the
-# writing area on the right as before (multi-line, attachments, ⇧⇥ hands the
-# draft to the orchestrator). Read at each ⌘N; the bar's word at the shell's start.
+# ⌘N on the client (its [client] section — issue #2616): 0 (default) = a new
+# session (issue #3119); 1 = the writing area on the right as before (multi-line,
+# attachments). Read at each ⌘N; the bar's word at the shell's start.
 # @label=⌘N opens the writing area @group=status @tier=internal @scope=global @edit=bool
 #FLEET_COMPOSE=0
 # Keys (issue #3185, EPIC #3178 C7): a new install takes ONE key — the panel.
@@ -366,57 +349,9 @@ FLEET_CTX_WINDOW=200000
 #FLEET_KEY_PHONE="ctrl+space f12 ctrl+]p"
 # @label=Extra phone keys @group=status @tier=internal @scope=global @edit=str
 #FLEET_KEYS_PHONE_EXTRA=""
-# @label=Orchestrator wake wait @group=status @tier=internal @scope=global @edit=int @unit=seconds
-#FLEET_ORCH_BOOT_SECS=75
 
-# The orchestrator runs this login's default agent (FLEET_AGENT) on its strongest
-# model at high effort: Claude --model FLEET_ORCH_MODEL (fable; FLEET_MODEL_FALLBACK
-# while that model is capped on the active account) --effort FLEET_ORCH_EFFORT;
-# Codex -m FLEET_ORCH_CODEX_MODEL (empty: the login's own) with
-# model_reasoning_effort = FLEET_ORCH_EFFORT. Read when it is (re)opened.
-# ⚠ FLEET_ORCH_MODEL / FLEET_ORCH_EFFORT are read for ONE more version (issue
-# #2788): the role's definition says them (agents/orchestrator.md, your layer:
-# `fleet role set orchestrator model <m>`), and `fleet-conf.sh migrate` moves them
-# there. FLEET_ORCH_CODEX_MODEL has no field in a layer and stays here.
-# @label=Orchestrator model (Claude) @group=spawn @tier=internal @scope=fleet @edit=str
-#FLEET_ORCH_MODEL="fable"
-# @label=Orchestrator model (Codex) @group=spawn @tier=internal @scope=fleet @edit=str
-#FLEET_ORCH_CODEX_MODEL=""
-# @label=Orchestrator effort @group=spawn @tier=internal @scope=fleet @edit=str
-#FLEET_ORCH_EFFORT="high"
-# A Claude orchestrator that exited (/exit, a crash, a killed process) waits on the
-# recovery page this many seconds, then the next tick resumes the same conversation
-# in place with a first turn that re-arms its Loop (issue #2585). `off` keeps the page.
-# @label=Orchestrator revive after (s) @group=spawn @tier=internal @scope=fleet @edit=str
-#FLEET_ORCH_REVIVE_SECS=30
-# An orchestrator / steward launched from an older ~/.claude/fleet than the one
-# installed is renewed by its own `ensure` at a QUIET moment — done/looping for
-# FLEET_ORCH_RENEW_QUIET seconds with no keypress on its window, its Loop's next
-# round FLEET_ORCH_RENEW_LOOP_GAP seconds away or more, no tool call in flight —
-# in place, on the same conversation (issue #2733). Never forced: pending past
-# FLEET_ORCH_RESTART_WAIT seconds is a doctor WARN. FLEET_ORCH_RENEW=0 turns it off.
-# @label=Orchestrator renew on a new version @group=spawn @tier=internal @scope=fleet @edit=bool
-#FLEET_ORCH_RENEW=1
-# @label=Orchestrator renew: quiet for (s) @group=spawn @tier=internal @scope=fleet @edit=str
-#FLEET_ORCH_RENEW_QUIET=60
-# @label=Orchestrator renew: Loop round at least (s) away @group=spawn @tier=internal @scope=fleet @edit=str
-#FLEET_ORCH_RENEW_LOOP_GAP=120
-# @label=Orchestrator renew: WARN when pending past (s) @group=spawn @tier=internal @scope=fleet @edit=str
-#FLEET_ORCH_RESTART_WAIT=7200
-
-# One tier cheaper than the orchestrator (发起人拍板 3): Claude --model
-# FLEET_STEWARD_MODEL --effort FLEET_STEWARD_EFFORT; Codex -m FLEET_STEWARD_CODEX_MODEL.
-# ⚠ FLEET_STEWARD_MODEL / _EFFORT: read for ONE more version, moved into your layer
-# by `fleet-conf.sh migrate` (issue #2788) — as the orchestrator's above.
-# @label=Steward model (Claude) @group=spawn @tier=internal @scope=fleet @edit=str
-#FLEET_STEWARD_MODEL="opus"
-# @label=Steward model (Codex) @group=spawn @tier=internal @scope=fleet @edit=str
-#FLEET_STEWARD_CODEX_MODEL=""
-# @label=Steward effort @group=spawn @tier=internal @scope=fleet @edit=str
-#FLEET_STEWARD_EFFORT="medium"
-# @label=Steward revive after (s) @group=spawn @tier=internal @scope=fleet @edit=str
-#FLEET_STEWARD_REVIVE_SECS=30
-# Its beat (seconds): every FLEET_STEWARD_EVERY, FLEET_STEWARD_AGAIN after a beat
+# The steward plugin's beat (seconds), in the loop of the session that took the
+# role: every FLEET_STEWARD_EVERY, FLEET_STEWARD_AGAIN after a beat
 # that changed something, FLEET_STEWARD_NIGHT_EVERY from 23:00 to 08:00.
 # @label=Steward beat @group=spawn @tier=internal @scope=fleet @edit=int @unit=seconds
 #FLEET_STEWARD_EVERY=1200

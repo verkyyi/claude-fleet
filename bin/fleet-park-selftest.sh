@@ -23,8 +23,7 @@
 #   F  a condition already met before the park lands cancels it — the window stays
 #   G  the steward holder's beat (`beat --holder`, EPIC #3111 C4) moves parks and
 #      stamps the count; FLEET_STEWARD_PARK=0 leaves the book untouched
-#   I  the metric: the parked stretch is one `stuck` segment ended by the park;
-#      fleet-steward-stats.sh stuck counts it
+#   I  the metric: the parked stretch is one `stuck` segment ended by the park
 #   J  parking runs ONLY under `beat --holder` with a holder (issue #3115): a bare
 #      `beat`, and `beat --holder` when nobody holds the steward role, park nothing,
 #      ask nothing and touch neither book
@@ -250,8 +249,6 @@ cmp -s "$WORK/park.before" "$FLEET_CONF_DIR/global/park.json" \
 grep '"ev": "stuck"' "$FLEET_CONF_DIR/logs/park.ndjson" | grep '"ref": "o/r#7"' | grep -q '"how": "parked"' \
   && ok "I #7's stuck stretch is one segment, ended by its park" \
   || bad "I no parked segment for #7: $(grep stuck "$FLEET_CONF_DIR/logs/park.ndjson")"
-st=$(bash "$BIN/fleet-steward-stats.sh" stuck --days 7)
-case "$st" in "stuck: "*" · parked 1 · "*) ok "I fleet-steward-stats.sh stuck reads it: $st" ;; *) bad "I stats: $st" ;; esac
 
 # --- J: no holder, no park (issue #3115) -----------------------------------------
 python3 -c '
