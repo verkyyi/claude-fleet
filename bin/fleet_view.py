@@ -12,9 +12,10 @@ fleet-quickopen.py (this module is its node half — the client never loads it):
                                               root copied over, then the 看台's keys
     fleet-quickopen.py --view <view> [--client <c>]
                                               ⌘P / ⌘K: every session of yours, every
-                                              machine, every login, grouped by
-                                              (machine, login); 已结束 under them;
-                                              ↵ goes there
+                                              machine, every login, grouped by what
+                                              you should do (#3179: 置顶 · 等你 ·
+                                              在干活 · 刚落地 · 其他); 已结束 under
+                                              them; ↵ goes there
     fleet-quickopen.py do next|prev|back|fwd --view <view>
                                               ⌘↓ ⌘↑ (the list's order) · ⌘[ ⌘] (history)
     fleet-quickopen.py do new|quit|shell --view <view>
@@ -27,7 +28,9 @@ fleet-quickopen.py (this module is its node half — the client never loads it):
     fleet-quickopen.py view-order --view <view>
                                               rewrite the order ⌘↓ ⌘↑ walk (below)
     fleet-quickopen.py view-rows --view <view> [<query>]
-                                              the popup's lines, plain (the selftest)
+                                              the popup's lines, plain (the selftest):
+                                              kind · target · word · text · right ·
+                                              foot · glyph · group · tags
     fleet-quickopen.py go <view> <target>     THE way a 看台 changes session (= bin/fleet-view-go.sh)
     fleet-quickopen.py view-peers --view <view> [--socket <label>]
                                               (attach --thin, in the background) one
@@ -70,7 +73,11 @@ the list's session order as last drawn — ⌘↓ ⌘↑ read it (a press never 
 WORDS (#2752): no row says `merged` or `done:2h` — the reap policy is
 「合并后关」 / 「空闲 2 小时关」, and only on the lit row's line at the foot;
 names are the issue's title as wide as the popup is (the producer's 12-cell name
-when there is none) with no `⇢cla` tag; a state is a word, never `!`. No session
+when there is none) with no `⇢cla` tag. A state is ONE glyph (#3179: ! needs ·
+x failed · » working · ✓ done · ∙ idle · ? lost, coloured unless NO_COLOR /
+FLEET_COLOR=0, ASCII with FLEET_GLYPHS=ascii) — only the lit row writes its word
+beside it, and `?` on an empty query shows the legend. Machine, login and repo
+(only when 2+) are tags at the row's end, never a group. No session
 is special (issue #3119): the one holding the orchestrator or the steward is a row
 like any other, and there is no 「新任务」 line. All of it through fleet-ui-lang.sh
 (`view_*`).
@@ -333,102 +340,302 @@ def windows(fleet):
     return res
 
 
+# What a row is, in one cell (issue #3179, EPIC #3178 C1): a shape that reads
+# without colour (16 colours, black and white, a reader who cannot tell red from
+# green), every one an East-Asian-narrow character so it is one cell in a CJK
+# terminal too, and in all seven of Termius iOS's fonts (✓ borrows a system font
+# in UbuntuMono). FLEET_GLYPHS=ascii swaps in plain ASCII.
+GLYPHS = {"needs": "!", "fail": "x", "work": "»", "done": "✓", "idle": "∙", "lost": "?"}
+GLYPHS_ASCII = {"needs": "!", "fail": "x", "work": ">", "done": "+", "idle": ".", "lost": "?"}
+# the 16-colour palette's numbers, present in every theme: red red green blue grey yellow
+GLYPH_COLORS = {"needs": 1, "fail": 1, "work": 2, "done": 4, "idle": 8, "lost": 3}
+GROUPS = ("pin", "ask", "work", "landed", "other")
+MERGED_PR = ("merged", "live", "deploy…", "deploy✗")
+
+
+def glyphs():
+    return GLYPHS_ASCII if os.environ.get("FLEET_GLYPHS") == "ascii" else GLYPHS
+
+
+def color_on():
+    """NO_COLOR (any value, no-color.org) or FLEET_COLOR=0 leaves the shapes alone."""
+    return not os.environ.get("NO_COLOR") and os.environ.get("FLEET_COLOR", "1") != "0"
+
+
+def sym_of(state, lost=False):
+    """A row's glyph class: lost wins (whatever it last said is no longer known)."""
+    if lost:
+        return "lost"
+    if state == "needs":
+        return "needs"
+    if state in ("failed", "exited", "error"):
+        return "fail"
+    if state in ("working", "looping"):
+        return "work"
+    if state in ("done", "landed"):
+        return "done"
+    return "idle"
+
+
+def group_of(state, pinned, landed, ended):
+    if pinned:
+        return "pin"
+    if state in ("needs", "failed"):
+        return "ask"
+    if state in ("working", "looping"):
+        return "work"
+    if landed:
+        return "landed"
+    return "ended" if ended else "other"
+
+
+def one_line(text, n=200):
+    return re.sub(r"\s+", " ", text or "").strip()[:n]
+
+
 def entries(vid, now=None):
-    """Every line the popup can show, in order. Each a dict:
-    kind  hdr (a (machine, login) group) · sess · sec (已结束, folds) — and
-          `sec` names the section a line sits in
-    text  the line's words · word (left column) · right (the issue) · foot (the
-          lit row's line) · target (what go() takes) · far (another machine/login)"""
+    """Every line the popup can show, in order (issue #3179): grouped by what you
+    should do — 置顶 (@pin) · 等你 (needs / failed / blocked) · 在干活 (working /
+    looping) · 刚落地 (done, its PR merged within FLEET_VIEW_LANDED_SECS, 24 h) ·
+    其他 — then ▸ 已结束 (folds). Within a group the producer's order stands, and a
+    row stays indented under its parent while the parent is in the same group.
+    Machine, login and repo are tags, never groups. Each a dict:
+    kind  hdr (a group heading, `group`) · sess · ask (the question a needs row
+          asks, the line under it) · sec (已结束, folds) — `sec` names the
+          section a line sits in
+    text  the line's words · word (the state, written out on the lit row) · sym
+          (its glyph class) · group · ask · tags (lost / direct machine, ✗ broken
+          configuration, ∅ no issue, k/N, repo when 2+) · right (the issue) · foot
+          (the lit row's line) · target (what go() takes) · far (another
+          machine/login)"""
     now = time.time() if now is None else now
     row = view_row(vid)
     fleet = view_fleet(vid, row)
     here, me = here_label(row), getpass.getuser()
     logins = fleet_logins()
     wins = windows(fleet) if fleet else {}
-    groups, order, ended = {}, [], []
-    section = ""
+    landed_secs = fenv("FLEET_VIEW_LANDED_SECS", 86400)
+    gl = glyphs()
+    groups = {g: [] for g in GROUPS}
+    ended, repos, anc = [], [], {}
+    section, repo = "", ""
     for line in produce(fleet).splitlines():
         f = line.split(US)
         if f[0] == "hdr":
-            section = "ended" if f[1:2] == ["ended"] else ""
+            kind = f[1] if len(f) > 1 else ""
+            text = f[3] if len(f) > 3 else ""
+            if kind in ("pin", "ended"):
+                section = kind
+            elif text.startswith("─") or not text.strip():
+                section = ""          # the rule closing the pinned block
+            else:
+                section = ""
+                repo = re.sub(r"\s*\(\d+\)$", "", re.sub(r"^▸\s*", "", text.strip()))
+                repos.append(repo)
             continue
         if len(f) < 15 or not f[0]:
             continue
+        f += [""] * (19 - len(f))
         key = f[0]
         local = not key.startswith("wid:")
         target = key if local else key[4:]
-        machine = f[8].rstrip("!~") or here
+        mark = f[8]
+        machine = mark.rstrip("!~") or here
+        lost, direct = mark.endswith("!"), mark.endswith("~")
         login = me if local else logins.get(target.split("/", 1)[0], "")
-        far = not local
         name = TAG_RE.sub("", f[3]).strip()
         title = (f[13] or "").strip()
         detail = (f[7] or "").strip()
         issue = f[9].strip() if f[9].strip() not in ("—", "·", "-") else ""
         depth = int(f[6]) if f[6].isdigit() else 0
-        e = {"kind": "sess", "target": target, "far": far, "machine": machine, "login": login,
-             "state": f[1], "text": title or name, "name": name, "issue": issue, "depth": depth,
-             "word": state_words(f[1], detail if f[1] == "needs" else ""),
+        state = f[1]
+        act = wins.get(target, ("", "", 0))[2] if local else 0
+        if not act:
+            # another machine's: the measurement bus's reading time is its last word
+            ts = (f[18].split("|") + ["", "", ""])[2]
+            act = int(ts) if ts.isdigit() else 0
+        landed = state in ("done", "landed") and f[10].strip() in MERGED_PR and \
+            (not act or now - act <= landed_secs)
+        grp = group_of(state, section == "pin", landed, section == "ended")
+        ask = one_line(f[17]) if state == "needs" else ""
+        tags = []
+        if lost:
+            tags.append(say("view_tag_lost_fmt", machine))
+        elif direct:
+            tags.append(say("view_tag_direct_fmt", machine))
+        if f[12] == "broken":
+            tags.append(("x " if gl is GLYPHS_ASCII else "✗ ") + say("view_tag_cfg_broken"))
+        if f[15] == "failed":
+            tags.append("-" if gl is GLYPHS_ASCII else "∅")
+        if f[5].strip():
+            tags.append(f[5].strip())
+        e = {"kind": "sess", "target": target, "far": not local, "machine": machine, "login": login,
+             "state": state, "text": title or name, "name": name, "issue": issue, "depth": depth,
+             "group": grp, "sym": sym_of(state, lost), "lost": lost, "ask": ask, "tags": tags, "repo": repo,
+             "word": state_words(state, detail if state == "needs" else ""),
              "foot": " · ".join(x for x in (title or name, reap_words(f[14]),
-                                            detail if detail and detail != f[1] else "",
+                                            detail if detail and detail != state else "",
                                             " · ".join(x for x in (machine, login) if x)) if x)}
-        if section == "ended":
-            act = wins.get(target, ("", "", 0))[2] if local else 0
+        if grp == "ended":
             why = say("view_ended_merged") if f[10].strip() == "merged" else \
-                say("view_ended_exited") if f[1] == "exited" else say("view_ended_done")
+                say("view_ended_exited") if state == "exited" else say("view_ended_done")
             e["word"] = why
-            e["right"] = say("view_ago_fmt", dur(now - act)) if act else ""
+            e["right"] = say("view_ago_fmt", dur(now - act)) if act and local else ""
             e["sec"] = "ended"
+            e["depth"] = 0
             ended.append(e)
             continue
-        g = (machine, login)
-        if g not in groups:
-            groups[g] = []
-            order.append(g)
-        groups[g].append(e)
-    # this login on this machine first, then the rest by machine, login
-    order.sort(key=lambda g: (g != (here, me), g[0], g[1]))
+        # indented under its parent only while the parent sits in the same group
+        par = anc.get(depth - 1) if depth > 0 else None
+        e["depth"] = par[1] + 1 if par and par[0] == grp else 0
+        anc = {d: v for d, v in anc.items() if d < depth}
+        anc[depth] = (grp, e["depth"])
+        groups[grp].append(e)
+    multi = len(set(repos)) >= 2
     out = []
-    for g in order:
-        # a login the hub has not named yet (no fleet_logins line): the machine alone
-        out.append({"kind": "hdr", "text": say("view_here_fmt", g[0], g[1]) if g == (here, me)
-                    else say("view_group_fmt", g[0], g[1]) if g[1] else g[0], "machine": g[0], "login": g[1]})
-        out.extend(groups[g])
+    for g in GROUPS:
+        if not groups[g]:
+            continue
+        out.append({"kind": "hdr", "group": g, "text": say("view_grp_" + g + "_fmt", len(groups[g]))})
+        for e in groups[g]:
+            if multi and e["repo"]:
+                e["tags"].append(e["repo"])
+            out.append(e)
+            if e["ask"]:
+                out.append({"kind": "ask", "of": e["target"], "text": e["ask"], "depth": e["depth"]})
     if ended:
         out.append({"kind": "sec", "sec": "ended", "text": say("view_sec_ended_fmt", len(ended)), "n": len(ended)})
-        out.extend(ended)
+        for e in ended:
+            if multi and e["repo"]:
+                e["tags"].append(e["repo"])
+            out.append(e)
     return out
+
+
+# --- the filter: every word must hit, best first (the old ⌘P's scoring, #3179) ---------
+
+def word_start(text, i):
+    if i == 0:
+        return True
+    a, b = text[i - 1], text[i]
+    return (not a.isalnum()) or (a.islower() and b.isupper())
+
+
+def fuzzy(token, text):
+    """(score, positions) of the letters of `token` in order in `text`, or None.
+    Greedy, preferring a word start for each letter when one is ahead."""
+    low, pos, at, score, last = text.lower(), [], 0, 0, -2
+    for ch in token:
+        i = low.find(ch, at)
+        if i < 0:
+            return None
+        j = i
+        while j >= 0 and not word_start(text, j) and j != last + 1:
+            j = low.find(ch, j + 1)
+        if j >= 0:
+            i = j
+        score += 10 if word_start(text, i) else 0
+        score += 8 if i == last + 1 else -min(i - at, 10) * 0.2
+        pos.append(i)
+        last, at = i, i + 1
+    return score, pos
+
+
+def score_token(token, e):
+    """The row's name (substring, a word start better) > any other field > the
+    name's letters in order."""
+    name = e.get("text") or ""
+    i = name.lower().find(token)
+    if i >= 0:
+        return 3000 - i + (200 if word_start(name, i) else 0)
+    issue = (e.get("issue") or "").lstrip("#")
+    hay = " ".join(str(x) for x in (e.get("name"), "#" + issue if issue else "", e.get("word"),
+                                    e.get("machine"), e.get("login"), e.get("repo"), e.get("ask"),
+                                    " ".join(e.get("tags") or ())) if x).lower()
+    i = hay.find(token)
+    if i >= 0:
+        return 2000 - i
+    hit = fuzzy(token, name)
+    return 1000 + hit[0] if hit else None
+
+
+def score(query, e):
+    """The row's score, or None when one word of `query` does not hit it."""
+    total = 0
+    for token in query.lower().split():
+        s = score_token(token, e)
+        if s is None:
+            return None
+        total += s
+    return total
 
 
 def matches(e, query):
-    words = query.lower().split()
-    if not words:
-        return True
-    hay = " ".join(str(e.get(k) or "") for k in ("text", "name", "issue", "word", "machine", "login", "ref")).lower()
-    return all(w in hay for w in words)
+    return not query.split() or score(query, e) is not None
+
+
+def pickable(e):
+    return e["kind"] in ("sess", "sec")
 
 
 def visible(items, query, opened):
-    """What the popup lists: a section's items only when it is open (a query opens
-    every one), a group heading only when one of its rows is listed."""
-    out, pend = [], None
-    for e in items:
+    """What the popup lists. No query: every group, a section's items only when it
+    is open. A query: the rows every word hits, best first, flat (each needs row
+    with its question under it)."""
+    asks = {e["of"]: e for e in items if e["kind"] == "ask"}
+    if query.split():
+        hits = [(score(query, e), i, e) for i, e in enumerate(items) if e["kind"] == "sess"]
+        out = []
+        for _, _, e in sorted((h for h in hits if h[0] is not None), key=lambda h: (-h[0], h[1])):
+            out.append(dict(e, depth=0))
+            if e.get("target") in asks and not e.get("sec"):
+                out.append(dict(asks[e["target"]], depth=0))
+        return out
+    return [dict(e, closed=e["sec"] not in opened) if e["kind"] == "sec" else e
+            for e in items if not (e.get("sec") and e["kind"] != "sec" and e["sec"] not in opened)]
+
+
+def legend():
+    """The one line `?` toggles on an empty query: every glyph and its word."""
+    gl = glyphs()
+    return "  ".join("%s %s" % (gl[k], say("view_legend_" + k)) for k in ("needs", "fail", "work", "done", "idle", "lost"))
+
+
+def paint(shown, at, width, cells, clip):
+    """The list's lines as segments [(text, style)] — style a tuple of: bold ·
+    lit · dim · c<N> (a 16-colour palette number). Kept off curses so the
+    selftest reads exactly what is drawn. Only the lit row writes its state."""
+    gl, col = glyphs(), color_on()
+    lines = []
+    for i, e in enumerate(shown):
+        lit = i == at
         if e["kind"] == "hdr":
-            pend = e
+            lines.append([(clip("─ " + e["text"] + " ", width), ("bold",))])
             continue
         if e["kind"] == "sec":
-            pend = None
-            if not query:
-                out.append(e)
+            lines.append([(clip(("▸ " if e.get("closed", True) else "▾ ") + e["text"], width),
+                           ("bold", "lit") if lit else ("bold",))])
             continue
-        if e.get("sec") and not query and e["sec"] not in opened:
+        indent = "  " * (e.get("depth") or 0)
+        if e["kind"] == "ask":
+            lines.append([(clip("    " + indent + e["text"], width), ("dim",))])
             continue
-        if not matches(e, query):
-            continue
-        if pend is not None:
-            out.append(pend)
-            pend = None
-        out.append(e)
-    return out
+        base = ("lit", "bold") if lit else (("dim",) if e.get("far") or e.get("sec") else ())
+        sym = e.get("sym") or "idle"
+        gstyle = base + (("c%d" % GLYPH_COLORS[sym],) if col else ())
+        head = ("▶ " if lit else "  ")
+        word = (" " + e["word"]) if lit and e.get("word") else ""
+        right = " ".join(list(e.get("tags") or ()) + [e.get("right") or (
+            "#" + e["issue"].lstrip("#") if e.get("issue") else "")]).strip()
+        used = cells(head) + 1 + cells(word) + 1
+        room = width - used - (cells(right) + 1 if right else 0)
+        name = clip(indent + (e.get("text") or ""), max(1, room))
+        segs = [(head, base), (gl[sym], gstyle), (word + " " + name, base)]
+        if right:
+            pad = max(1, width - used - cells(name) - cells(right))
+            segs.append((" " * pad + right, base if lit else ("dim",)))
+        lines.append(segs)
+    return lines
 
 
 def session_order(items):
@@ -1101,19 +1308,33 @@ def view_keys(me, if_stale=False):
 
 def popup(screen, qo, vid, client):
     curses.curs_set(0)
+    styles = {"bold": curses.A_BOLD, "lit": curses.A_REVERSE | curses.A_BOLD}
     try:
         curses.use_default_colors()
-        curses.init_pair(1, curses.COLOR_RED, -1)
-        curses.init_pair(2, 8 if curses.COLORS > 8 else curses.COLOR_WHITE, -1)
-        curses.init_pair(3, curses.COLOR_CYAN, -1)
+        grey = 8 if curses.COLORS > 8 else curses.COLOR_WHITE
+        styles["dim"] = curses.A_NORMAL
+        if color_on():
+            curses.init_pair(2, grey, -1)
+            curses.init_pair(3, curses.COLOR_CYAN, -1)
+            styles["dim"] = curses.color_pair(2)
+            for n in sorted(set(GLYPH_COLORS.values())):
+                c = n if n < curses.COLORS else (curses.COLOR_WHITE if n == 8 else n % 8)
+                curses.init_pair(10 + n, c, -1)
+                styles["c%d" % n] = curses.color_pair(10 + n)
     except curses.error:
         pass
+
+    def attr(style):
+        a = 0
+        for k in style:
+            a |= styles.get(k, 0)
+        return a
     items = entries(vid)
     order_save(vid, items)
     cur = current(vid)
-    query, opened, msg = "", set(), ""
+    query, opened, msg, show_legend = "", set(), "", False
     shown = visible(items, query, opened)
-    at = next((i for i, e in enumerate(shown) if e.get("target") == cur), 0)
+    at = next((i for i, e in enumerate(shown) if e.get("target") == cur and pickable(e)), 0)
     top = 0
     heal = qo.Heal()
     while True:
@@ -1121,55 +1342,31 @@ def popup(screen, qo, vid, client):
         height, width = screen.getmaxyx()
         screen.erase()
         body = max(1, height - 3)
-        sel = [i for i, e in enumerate(shown) if e["kind"] != "hdr"]
+        sel = [i for i, e in enumerate(shown) if pickable(e)]
         if sel and at not in sel:
             at = min(sel, key=lambda i: abs(i - at))
         if at < top:
             top = at
         if at >= top + body:
             top = at - body + 1
-        qline = "› " + query
-        screen.addnstr(0, 0, qo.clip(qline, width - 1), width - 1)
-        for row in range(body):
-            i = top + row
-            if i >= len(shown):
-                break
-            e = shown[i]
-            y = row + 1
-            lit = i == at
-            if e["kind"] == "hdr":
-                screen.addnstr(y, 0, qo.clip("─ " + e["text"] + " ", width - 1), width - 1, curses.A_BOLD)
-                continue
-            if e["kind"] == "sec":
-                caret = "▾ " if e["sec"] in opened or query else "▸ "
-                screen.addnstr(y, 0, qo.clip(caret + e["text"], width - 1), width - 1,
-                               curses.A_BOLD | (curses.A_REVERSE if lit else 0))
-                continue
-            word = e.get("word") or ""
-            wcol = 8
-            indent = "  " * (e.get("depth") or 0)
-            right = e.get("right") or ("#" + e["issue"].lstrip("#") if e.get("issue") else "")
-            lw = width - 1 - 2 - wcol - 1 - (qo.cells(right) + 1 if right else 0)
-            name = qo.clip(indent + (e.get("text") or ""), max(1, lw))
-            # the lit row: a ▶ in the gutter + reverse video, never in the far grey —
-            # reverse of the grey (SGR 90) is a dim bar some terminals barely show,
-            # so a lit far / pinned row looked unselected (#3007's drill)
-            line = ("▶ " if lit else "  ") + word + " " * max(1, wcol - qo.cells(word) + 1) + name
-            attr = (curses.A_REVERSE | curses.A_BOLD) if lit else 0
-            if e.get("state") == "needs" or e.get("state") == "failed":
-                attr |= curses.color_pair(1)
-            elif e.get("far") and not lit:
-                attr |= curses.color_pair(2)
-            screen.addnstr(y, 0, qo.clip(line, width - 1), width - 1, attr)
-            if right:
-                x = max(0, width - 1 - qo.cells(right))
+        # the lit row's question under it stays on screen
+        if at + 1 < len(shown) and shown[at + 1]["kind"] == "ask" and at + 1 >= top + body:
+            top += 1
+        screen.addnstr(0, 0, qo.clip("› " + query, width - 1), width - 1)
+        for y, segs in enumerate(paint(shown[top:top + body], at - top, width - 1, qo.cells, qo.clip), 1):
+            x = 0
+            for text, style in segs:
+                if x >= width - 1:
+                    break
                 try:
-                    screen.addstr(y, x, right, attr | (0 if lit else curses.color_pair(2)))
+                    screen.addnstr(y, x, text, width - 1 - x, attr(style))
                 except curses.error:
                     pass
-        foot = msg or (shown[at].get("foot", "") if 0 <= at < len(shown) else "")
-        screen.addnstr(height - 2, 0, qo.clip(foot, width - 1), width - 1, curses.color_pair(3))
-        screen.addnstr(height - 1, 0, qo.clip(say("view_keys"), width - 1), width - 1, curses.color_pair(2))
+                x += qo.cells(text)
+        foot = msg or (legend() if show_legend else shown[at].get("foot", "") if 0 <= at < len(shown) else "")
+        screen.addnstr(height - 2, 0, qo.clip(foot, width - 1), width - 1, attr(("dim",)) if show_legend and not msg
+                       else (curses.color_pair(3) if color_on() else 0))
+        screen.addnstr(height - 1, 0, qo.clip(say("view_keys"), width - 1), width - 1, attr(("dim",)))
         screen.refresh()
         screen.timeout(heal.timeout(False) or 1000)
         try:
@@ -1183,11 +1380,11 @@ def popup(screen, qo, vid, client):
             heal.resized(screen)
             continue
         if ch in (curses.KEY_UP, "\x10"):
-            sel = [i for i, e in enumerate(shown) if e["kind"] != "hdr" and i < at]
+            sel = [i for i, e in enumerate(shown) if pickable(e) and i < at]
             at = sel[-1] if sel else at
             continue
         if ch in (curses.KEY_DOWN, "\x0e"):
-            sel = [i for i, e in enumerate(shown) if e["kind"] != "hdr" and i > at]
+            sel = [i for i, e in enumerate(shown) if pickable(e) and i > at]
             at = sel[0] if sel else at
             continue
         if ch in ("\n", "\r", curses.KEY_ENTER):
@@ -1206,14 +1403,22 @@ def popup(screen, qo, vid, client):
                 return 0
             msg = say("view_far_fmt", e.get("machine") or "?") if rc == 3 else say("view_gone")
             continue
+        if ch == "?" and not query:
+            # an empty query: `?` is the legend, not a letter (with text it is one)
+            show_legend = not show_legend
+            continue
         if ch in (curses.KEY_BACKSPACE, "\x7f", "\b"):
             query = query[:-1]
         elif isinstance(ch, str) and ch.isprintable():
             query += ch
         else:
             continue
+        show_legend = False
+        lit = shown[at].get("target") if 0 <= at < len(shown) else None
         shown = visible(items, query, opened)
-        at = next((i for i, e in enumerate(shown) if e["kind"] != "hdr"), 0)
+        at = next((i for i, e in enumerate(shown) if pickable(e)), 0)
+        if not query:
+            at = next((i for i, e in enumerate(shown) if pickable(e) and e.get("target") in (lit, cur)), at)
         top = 0
 
 
@@ -1254,9 +1459,12 @@ def main(argv, qo):
     if argv[:1] == ["view-rows"]:
         rest = [a for i, a in enumerate(argv[1:], 1) if a not in ("--view", "--client")
                 and argv[i - 1] not in ("--view", "--client")]
+        gl = glyphs()
         for e in visible(entries(vid), " ".join(rest), {"ended"}):
-            print("\t".join((e["kind"], e.get("target") or e.get("ref") or e.get("sec") or "", e.get("word") or "",
-                             e.get("text") or "", e.get("right") or "", e.get("foot") or "")))
+            print("\t".join((e["kind"], e.get("target") or e.get("of") or e.get("sec") or e.get("group") or "",
+                             e.get("word") or "", e.get("text") or "", e.get("right") or "", e.get("foot") or "",
+                             gl.get(e.get("sym") or "", "") if e["kind"] == "sess" else "",
+                             e.get("group") or "", " ".join(e.get("tags") or ()))))
         return 0
     os.environ.setdefault("ESCDELAY", "25")
     return curses.wrapper(popup, qo, vid, client)
