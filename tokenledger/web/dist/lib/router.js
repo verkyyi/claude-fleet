@@ -13,7 +13,7 @@ export const CACHE_TTL = 30000;
 
 /** MOVED are the old paths that now open another page's address — a link
  *  or a bookmark never lands on nothing (EPIC #3225 共同约定 8). */
-export const MOVED = Object.freeze({ '/admin/devices': '/nodes?tab=clients' });
+export const MOVED = Object.freeze({ '/admin/devices': '/nodes?tab=clients', '/quota': '/usage' });
 
 /** movedTo is the address an old path opens (keeping a query of its own
  *  the new one does not set, and the hash), or '' when the path has not moved. */
