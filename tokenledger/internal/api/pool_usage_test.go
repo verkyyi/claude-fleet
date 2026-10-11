@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -123,14 +124,16 @@ func TestPoolUsageOrchestratorToLoginOwner(t *testing.T) {
 }
 
 // The local proxy's aggregate report is the login's person's, in the same
-// table — and no row anywhere is ownerless.
+// table — and no row anywhere is ownerless: a login with no person writes
+// nothing, but is raised as pool_usage_unowned (claude-fleet#3376) and cleared
+// once that login's usage is filed under a person.
 func TestPoolUsageNodeReportAndNoOwnerless(t *testing.T) {
 	h, tok5, tok4, _, _ := sessHarness(t)
 	rep := map[string]any{"usage": []map[string]any{{"provider": "claude", "tokens": 600, "requests": 2}}}
 	if st, out := sessDo(t, h, http.MethodPost, "/v1/node/usage", tok5, "", rep); st != 200 || out["used_5h"].(float64) != 600 {
 		t.Fatalf("node report: %d %v", st, out)
 	}
-	// a login with no person: nothing written at all
+	// a login with no person: no row written, an alert raised
 	if st, _ := sessDo(t, h, http.MethodPost, "/v1/node/usage", tok4, "", rep); st != 200 {
 		t.Fatalf("nobody's login: %d", st)
 	}
@@ -140,5 +143,81 @@ func TestPoolUsageNodeReportAndNoOwnerless(t *testing.T) {
 	}
 	if err := h.srv.Store.AddPoolUsage(store.PoolUsage{Provider: "claude", In: 1, At: time.Now()}); err != store.ErrPoolUsageNoPrincipal {
 		t.Fatalf("an ownerless row: %v; want ErrPoolUsageNoPrincipal", err)
+	}
+	open, err := h.srv.Store.OpenFleetAlertSubjects(store.AlertPoolUsageUnowned, "")
+	if err != nil || len(open) != 1 || !strings.HasSuffix(open[0], "/verk") {
+		t.Fatalf("open %s = %v %v; want one, on m4's login", store.AlertPoolUsageUnowned, open, err)
+	}
+	// a login with a person never raises it; a just-asking GET with no usage neither
+	if st, _ := sessDo(t, h, http.MethodGet, "/v1/node/usage", tok4, "", nil); st != 200 {
+		t.Fatalf("nobody's login, GET: %d", st)
+	}
+	if open, _ := h.srv.Store.OpenFleetAlertSubjects(store.AlertPoolUsageUnowned, ""); len(open) != 1 {
+		t.Fatalf("open after the person's report and a GET = %v; want m4's alone", open)
+	}
+	// m4's login is mapped to the person: the next report files and clears it
+	p, err := h.srv.Store.Principal("gh:1005")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.srv.Store.AdoptAccount(p, "m4", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if st, out := sessDo(t, h, http.MethodPost, "/v1/node/usage", tok4, "", rep); st != 200 || out["principal"] != "gh:1005" {
+		t.Fatalf("m4 mapped: %d %v", st, out)
+	}
+	if open, _ := h.srv.Store.OpenFleetAlertSubjects(store.AlertPoolUsageUnowned, ""); len(open) != 0 {
+		t.Fatalf("still open once the login has a person: %v", open)
+	}
+}
+
+// A proxy that knows its sessions reports one entry per (session, account,
+// model) with the usage by kind (claude-fleet#3376): each lands as its own
+// row, repo / issue frozen from that session's lease — and the person's
+// 5h / week standing is exactly what the same requests reported as the old
+// aggregate came to (C1's invariant).
+func TestPoolUsageNodeReportPerSession(t *testing.T) {
+	h, tok5, _, f5, _ := sessHarness(t)
+	widA, widB := fleetid.WorkerID(f5, fidA), fleetid.WorkerID(f5, fidB)
+	now := time.Now()
+	if ok, _, _, err := h.srv.Store.AcquireLease(store.LeaseClaim{Repo: "verkyyi/claude-fleet", Issue: 3376, WorkerID: widA,
+		FleetID: f5, EndpointID: "ep-m5", Hostname: "m5", OSUser: "verk"}, time.Hour, now); err != nil || !ok {
+		t.Fatalf("lease: %v %v", ok, err)
+	}
+	rep := map[string]any{"usage": []map[string]any{
+		{"provider": "claude", "worker_id": widA, "account": "a1", "model": "claude-opus-5-5", "tokens": 450, "requests": 3,
+			"in": 100, "cache_write": 300, "cache_read": 9000, "out": 50},
+		{"provider": "codex", "worker_id": widB, "account": "c1", "model": "gpt-5.5", "tokens": 250, "requests": 1,
+			"in": 200, "cache_read": 800, "out": 50},
+	}}
+	st, out := sessDo(t, h, http.MethodPost, "/v1/node/usage", tok5, "", rep)
+	if st != 200 || out["principal"] != "gh:1005" || out["used_5h"].(float64) != 700 || out["used_week"].(float64) != 700 {
+		t.Fatalf("per-session report: %d %v", st, out)
+	}
+	rows := poolRows(t, h, "gh:1005")
+	if len(rows) != 2 {
+		t.Fatalf("rows = %+v; want one per session", rows)
+	}
+	byWid := map[string]store.PoolUsage{}
+	for _, u := range rows {
+		byWid[u.WorkerID] = u
+	}
+	if a := byWid[widA]; a.Repo != "verkyyi/claude-fleet" || a.Issue != 3376 || a.Account != "a1" || a.Model != "claude-opus-5-5" ||
+		a.In != 100 || a.CacheWrite != 300 || a.CacheRead != 9000 || a.Out != 50 || a.Requests != 3 {
+		t.Fatalf("leased session's row = %+v", a)
+	}
+	if b := byWid[widB]; b.Repo != "" || b.Issue != 0 || b.Provider != "codex" || b.In != 200 || b.CacheRead != 800 || b.Out != 50 {
+		t.Fatalf("unleased session's row = %+v; want 「没挂在任务上」", b)
+	}
+
+	// the same requests as the old aggregate, on a fresh hub: the same standing
+	h2, tok52, _, _, _ := sessHarness(t)
+	agg := map[string]any{"usage": []map[string]any{{"provider": "claude", "tokens": 450, "requests": 3}, {"provider": "codex", "tokens": 250, "requests": 1}}}
+	st, out2 := sessDo(t, h2, http.MethodPost, "/v1/node/usage", tok52, "", agg)
+	if st != 200 || out2["used_5h"] != out["used_5h"] || out2["used_week"] != out["used_week"] {
+		t.Fatalf("aggregate %v / %v vs per-session %v / %v", out2["used_5h"], out2["used_week"], out["used_5h"], out["used_week"])
+	}
+	if rows := poolRows(t, h2, "gh:1005"); len(rows) != 2 || rows[0].WorkerID != "" || rows[0].Model != "" || rows[0].Repo != "" {
+		t.Fatalf("an old proxy's aggregate rows = %+v; want the fields left empty", rows)
 	}
 }

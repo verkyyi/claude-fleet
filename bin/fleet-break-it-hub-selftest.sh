@@ -58,6 +58,9 @@
 #   pool-usage-unattributed                         tokenledger/internal/api fleet_person_budget.go (handleCredProxyUsage,
 #                                                   poolUsagePass) + internal/store pool_usage.go + internal/credproxy
 #                                                   usage.go (go test, when a toolchain is here)
+#   pool-usage-node-dropped                         tokenledger/internal/api fleet_person_budget.go (handleNodeUsage,
+#                                                   recordUsage, unownedUsage) + bin/fleet-cred-proxy.py (Budget,
+#                                                   Meter.split) + bin/fleet-session-cred.sh (--worker; go test, when a toolchain is here)
 #   place-server-down                               fleet_server_down (fleet-lib.sh), fleet-control-read.sh start
 #                                                   (exit 8), fleet_control.py (UNAVAILABLE); the hub half is
 #                                                   tokenledger/internal/api pickNodeAfter (go test, when here)
@@ -1722,6 +1725,50 @@ drill_feedback_secret_in_attach() {
   SECS=$(since "$t0")
   [ -z "$left" ] || { WHY="credentials left in the attachments:$left"; return 1; }
   WHAT='附上的日志和屏幕各塞假凭据：发出的附件和本机存下待补发的一处不剩'
+}
+
+# ---- pool-usage-node-dropped (#3376, EPIC #3225 C1's patch): a login's local
+# proxy's usage. The hub dropped the whole report when no person was mapped to
+# the login — nothing written, nothing said — and filed the rest as one row a
+# provider: no session, no model, no cache split, all of it 「没挂在任务上」.
+# Now the hub resolves the login's owner like every node read (principalOnNode:
+# the machine's account, else the login row bound to this endpoint); with none,
+# nothing is written (no ownerless rows) but pool_usage_unowned is raised, and
+# cleared by the first report that files. The proxy reports one entry per
+# (provider, session's worker_id, account, model) with the split, the session
+# named by the worker_id its launcher minted it for; the hub freezes repo /
+# issue from that session's lease. An old proxy's aggregate is filed as before.
+drill_pool_usage_node_dropped() {
+  CAP=120; local t0 out rc t
+  local api_tests='TestPoolUsageNodeReportAndNoOwnerless TestPoolUsageNodeReportPerSession TestPersonBudgetNode'
+  local tl="$ROOT/tokenledger/internal"
+  t0=$(now)
+  grep -q 's.unownedUsage(ep, host, user, rep, now)' "$tl/api/fleet_person_budget.go" 2>/dev/null \
+    || { WHY="the hub drops a node report from a login with no person in silence again"; return 1; }
+  grep -q 'principal, err := s.principalOnNode(ep.ID, host, user)' "$tl/api/fleet_person_budget.go" \
+    || { WHY="the node usage report no longer finds the login's owner the way every node read does"; return 1; }
+  grep -q 's.Store.LeaseForWorker(e.WorkerID, now)' "$tl/api/fleet_person_budget.go" \
+    || { WHY="a node report's session row no longer takes its task from the session's lease"; return 1; }
+  grep -q 'self.budget.add(provider, extra\["tokens"\], split, self.budget.worker(sid), acct, meter.model)' "$ROOT/bin/fleet-cred-proxy.py" \
+    || { WHY="the local proxy no longer meters each answer under its session, account and model"; return 1; }
+  grep -q 'wid=$(session_worker)' "$ROOT/bin/fleet-session-cred.sh" \
+    || { WHY="the launcher no longer names the session's worker_id when the proxy mints its pass"; return 1; }
+  for t in $api_tests; do
+    grep -q "^func $t(" "$tl/api/pool_usage_test.go" "$tl/api/fleet_person_budget_test.go" 2>/dev/null \
+      || { WHY="the hub half's test $t is not in tokenledger/internal/api"; return 1; }
+  done
+  WHAT='节点代理的用量：登录没对应到人 → 不写无主行、记 pool_usage_unowned 告警；按会话（worker_id · 订阅 · 模型 · 分项）上报，repo/issue 取自租约；旧代理的汇总照记（测试按名核对在，Go 门跑它们）'
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run "^($(printf '%s' "$api_tests" | tr ' ' '|'))\$" ./internal/api 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
+      0:*) WHAT='节点代理的用量：无主登录告警不丢、按会话分行且 repo/issue 取自租约、个人上限累计与旧汇总相等（go test）' ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
+      *) WHY="the Go half is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  fi
+  SECS=$(since "$t0")
 }
 
 cred_run_drills "$0"

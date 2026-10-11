@@ -13,6 +13,13 @@ import (
 // a login nobody is using; this is the row that tells the two apart.
 const AlertUsageSilent = "usage_silent"
 
+// AlertPoolUsageUnowned: a login's local proxy reported subscription-pool
+// usage and no person is mapped to that login (claude-fleet#3376) — subject
+// "<endpoint_id>/<login>". The pool has no ownerless rows, so the usage is
+// not filed; this row is how an admin sees it was not, and is cleared by the
+// first report the login files under a person.
+const AlertPoolUsageUnowned = "pool_usage_unowned"
+
 // LastUsageAt is the newest turn the hub holds from (endpoint, os_user,
 // source) at or after since — zero when there is none. Read off the hourly
 // rollup, whose key leads with the hour, so the sweep never scans the raw
