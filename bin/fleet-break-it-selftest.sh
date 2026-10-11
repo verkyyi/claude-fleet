@@ -755,7 +755,7 @@ EOC
 # the `/fleet-orchestrate` seed — after it the session no longer knew it was the
 # orchestrator. Its role rides the system prompt now, from ONE text — its
 # definition's body, agents/orchestrator.md (issue #2782), rendered to
-# $FLEET_CONF_DIR/roles/ and generated as skills/fleet-orchestrate/role.md for a
+# $FLEET_CONF_DIR/roles/ and generated as plugins/fleet-orchestrate/skills/fleet-orchestrate/role.md for a
 # window opened before it: the launcher's --append-system-prompt-file
 # on a new AND a resumed launch, kept by the wrapper's ↵ resume, and the mod's
 # `fleet:orchestrator-role` section on every request. No real Claude here: the
@@ -763,8 +763,8 @@ EOC
 # 上线证据).
 drill_orchestrator_cleared() {
   CAP=10; BREAK_SOCK="$WORK/sock-oq"; local t0 w sid role oa="$WORK/oq-argv" h="$WORK/oqhome" c="$WORK/oq"
-  role="$ROOT/skills/fleet-orchestrate/role.md"
-  [ -s "$role" ] || { WHY="no skills/fleet-orchestrate/role.md — the role has no file to ride the system prompt"; return 1; }
+  role="$ROOT/plugins/fleet-orchestrate/skills/fleet-orchestrate/role.md"
+  [ -s "$role" ] || { WHY="no plugins/fleet-orchestrate/skills/fleet-orchestrate/role.md — the role has no file to ride the system prompt"; return 1; }
   [ "$(wc -l < "$role")" -le 60 ] || { WHY="role.md is $(wc -l < "$role" | tr -d ' ') lines, the charter caps it at 60"; return 1; }
   grep -q '编排会话' "$role" || { WHY="role.md never says 编排会话"; return 1; }
   grep -q "'fleet:orchestrator-role'" "$ROOT/mod/fleet/hooks/orchestrator.ts" 2>/dev/null \
@@ -782,7 +782,7 @@ drill_orchestrator_cleared() {
   grep -q -- "--append-system-prompt-file .*/roles/orchestrator-[0-9a-f]*\.md .*/fleet-orchestrate\$" "$oa" \
     || { WHY="a new orchestrator is not launched with its role in the system prompt: $(cat "$oa")"; return 1; }
   cmp -s "$(ls "$WORK"/oqconf/roles/orchestrator-*.md 2>/dev/null | head -1)" "$role" \
-    || { WHY="the rendered role is not the definition's body (skills/fleet-orchestrate/role.md)"; return 1; }
+    || { WHY="the rendered role is not the definition's body (plugins/fleet-orchestrate/skills/fleet-orchestrate/role.md)"; return 1; }
   sid=$(cat "$WORK/oqconf/fleets/oq/orchestrator.sid" 2>/dev/null)
   mkdir -p "$h/.claude/projects/$(printf '%s' "$h" | LC_ALL=C tr -c 'A-Za-z0-9' '-')"
   : > "$h/.claude/projects/$(printf '%s' "$h" | LC_ALL=C tr -c 'A-Za-z0-9' '-')/$sid.jsonl"

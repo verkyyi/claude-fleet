@@ -680,8 +680,12 @@ case "$_orch_on" in 1|on|yes|true) _orch_on=1 ;; *) _orch_on=0 ;; esac
 _orch_agent=${FLEET_AGENT:-$(_gconf_val FLEET_AGENT)}
 if [ "$_orch_agent" = codex ]; then _orch_sk="${CODEX_HOME:-$HOME/.codex}/skills/fleet-orchestrate/SKILL.md"
 else _orch_sk="$skills_dir/fleet-orchestrate/SKILL.md"; fi
-if [ "$_orch_on" = 1 ] && [ "$plug" = 0 ] && [ ! -f "$_orch_sk" ]; then
-  warn skills "the orchestrator is on here but $_orch_sk is missing — its session opens on \`Unknown command: /fleet-orchestrate\` and sits empty (run /fleet-sync-install; or FLEET_ORCHESTRATOR=0 to turn it off)"
+# Since issue #3112 the skill is the fleet-orchestrate PLUGIN's: an installed copy
+# in Claude Code's plugin cache counts as present.
+_orch_plug=0
+[ "$_orch_agent" != codex ] && ls "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"/plugins/cache/*/fleet-orchestrate/*/skills/fleet-orchestrate/SKILL.md >/dev/null 2>&1 && _orch_plug=1
+if [ "$_orch_on" = 1 ] && [ "$plug" = 0 ] && [ "$_orch_plug" = 0 ] && [ ! -f "$_orch_sk" ]; then
+  warn skills "the orchestrator is on here but $_orch_sk is missing — its session opens on \`Unknown command: /fleet-orchestrate\` and sits empty (install the plugin: claude plugin install fleet-orchestrate@claude-fleet; or FLEET_ORCHESTRATOR=0 to turn it off)"
 fi
 
 # doc-preview is a soft/opt dep on tailscale: it hosts Markdown docs on the
@@ -2863,6 +2867,21 @@ if [ -f "$_ad" ] && [ -d "$(dirname "$0")/../conf/agent-defaults" ] && command -
     0) pass agents "${_ahead#ok } (conf/agent-defaults)${_arun:+ — $_arun}" ;;
     1) warn agents "$_ahead — $(printf '%s\n' "$_aout" | sed '1d; s/^missing *//; s/  */ /g' | paste -sd ';' - | sed 's/;/; /g') (fix: the next sync fills them, or now: python3 $_ad apply; keep one for this login by listing it in $conf_dir/agent-overrides.json)${_arun:+ — $_arun}" ;;
     *) warn agents "fleet-agent-defaults.py check: $(printf '%s\n' "$_aout" | tail -1)" ;;
+  esac
+fi
+
+# --- plugins: the three optional plugins of this repo's marketplace (issue #3112) ---
+# fleet-orchestrate · fleet-steward · fleet-epic are standard Claude Code plugins,
+# installed only by /plugin; the row asks `claude plugin list --json` (through
+# fleet-plugins.py, the one reader) which are installed and whether one is behind
+# the runtime (落后 → WARN). Marketplace not added on a hosting login → WARN (the
+# sync adds it). No claude / no marketplace.json → no row.
+_plg="$(dirname "$0")/fleet-plugins.py"
+if [ -f "$_plg" ] && command -v python3 >/dev/null 2>&1 && command -v "${FLEET_INSTALL_CLAUDE:-claude}" >/dev/null 2>&1; then
+  _pline="$(python3 "$_plg" doctor --root "$(dirname "$0")/.." 2>/dev/null)"; _prc=$?
+  case "$_prc" in
+    0) pass plugins "$_pline" ;;
+    1) warn plugins "$_pline" ;;
   esac
 fi
 

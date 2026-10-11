@@ -1,3 +1,7 @@
+---
+description: What the batch actually did, as a page you can read — 改动前 / 改动后 / 已上线 per member.
+---
+
 # /fleet-epic-report — what the batch actually did, as a page you can read
 
 <!-- fleet skill · owner: hub -->
@@ -124,7 +128,7 @@ occupancy figure resurface upstairs as a cost.
 
 Before writing any chart, load the `dataviz` skill; before the page itself, load
 `artifact-design`. This is a document somebody reads at breakfast, not a log dump.
-Start from the shared frame — `cat ~/.claude/skills/epic-page/template.html` —
+Start from the shared frame — `cat ~/.claude/fleet/plugins/fleet-epic/skills/epic-page/template.html` —
 the same `<style>` and section ids the batch's design page used (issue #809), so
 the operator reads plan and report as one document; keep the report's sections
 (`#delivered` `#metrics` `#members` `#gaps` `#ops`; `#next` is an anchor inside

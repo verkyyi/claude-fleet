@@ -25,7 +25,7 @@
 # FLEET_MODEL_FALLBACK while that model is capped on the active account,
 # fleet-claude.sh's rule), Codex the login's own model, with model_reasoning_effort;
 # FLEET_ORCH_MODEL / FLEET_ORCH_EFFORT / FLEET_ORCH_CODEX_MODEL still win for one
-# version — and starts on `/fleet-orchestrate` (skills/fleet-orchestrate/). Its ROLE
+# version — and starts on `/fleet-orchestrate` (plugins/fleet-orchestrate/skills/fleet-orchestrate/). Its ROLE
 # is not that seed (issue #2582, EPIC #2581 C1): a Claude orchestrator is launched
 # with `--append-system-prompt-file` the definition's body, and the mod adds the
 # same text to every request (`fleet:orchestrator-role`), so a compaction or a

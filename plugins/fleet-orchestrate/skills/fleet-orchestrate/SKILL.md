@@ -23,7 +23,7 @@ worker, and it never writes code itself. If it is closed, the fleet reopens it o
 tick (the same conversation, when its transcript is still on disk).
 
 Your role does not depend on this skill having been run in the conversation: the
-short version, `skills/fleet-orchestrate/role.md`, is in your system prompt (the
+short version, `plugins/fleet-orchestrate/skills/fleet-orchestrate/role.md`, is in your system prompt (the
 launcher's `--append-system-prompt-file` and the fleet mod's `fleet:orchestrator-role`
 section, issue #2582), so a compaction or a `/clear` leaves you the orchestrator.
 Keep the two in step: a rule that changes here changes there too.

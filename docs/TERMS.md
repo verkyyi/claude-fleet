@@ -52,7 +52,7 @@ nests three levels, and this is where the confusing vocabulary starts:
   [`bin/fleet-orchestrator.sh`](../bin/fleet-orchestrator.sh) (fleet-up, the
   diskguard tick); restore / migrate / move treat it as `home`. On by default
   where the computer is 承载 (`FLEET_HOST=1`); `FLEET_ORCHESTRATOR=0` turns it off.
-  Instructions: [`skills/fleet-orchestrate/`](../skills/fleet-orchestrate/SKILL.md).
+  Instructions: [`plugins/fleet-orchestrate/skills/fleet-orchestrate/`](../plugins/fleet-orchestrate/skills/fleet-orchestrate/SKILL.md).
 - **Scheduler** — whatever starts the collector on a timer: **launchd** on macOS
   (`launchd/com.claude-fleet.collect.plist.tmpl`), a **systemd** user timer on
   Linux (`systemd/claude-fleet-collect.timer`).

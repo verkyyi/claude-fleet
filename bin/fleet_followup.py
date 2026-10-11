@@ -8,7 +8,7 @@ A batch's closing comment on its parent carries one line per thing it leaves:
     <!-- fleet:followup kind=stable|hub-deploy|human [due=<YYYY-MM-DD>] what=<one line> -->
 
 `what` is the rest of the marker (spaces allowed, never a `-->`). The driver
-writes them with `fleet_followup.py mark` (commands/fleet-epic-run.md, the closing
+writes them with `fleet_followup.py mark` (plugins/fleet-epic/commands/fleet-epic-run.md, the closing
 tick); the report's 挪稳定版 row prints its own (bin/fleet-epic-stable-row.sh `mark:`).
 A closing comment from before this format is read by words one version — `move
 stable` / `fleet-stable.sh move` is a stable followup, `重部署` / `redeploy` beside
