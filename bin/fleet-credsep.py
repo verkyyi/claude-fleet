@@ -1955,6 +1955,30 @@ def leave_login(login, wait=None):
     return True
 
 
+def shared_on():
+    """This machine runs the shared proxy: its record and its service (a
+    definition, or the machine daemon's child) — what join_login requires."""
+    return bool(shared_rec()) and (os.path.exists(SHARED_PATH) or shared_supervised())
+
+
+def fresh_join(login, wait=None):
+    """install --fresh as a tenant (issue #3155): the shared proxy restarts on a
+    tenants file that names the new login. Its answer is reported, not required —
+    `check` (fleet-login-new.sh's verdict step) is the one judgement."""
+    wait = JOIN_WAIT if wait is None else wait
+    if DRY:
+        say("    would restart %s with %s as a tenant" % (SHARED_LABEL, login))
+        return
+    shared_service()
+    shared_record([m["login"] for m in shared_tenants()])
+    shared_restart()
+    if wait_for(lambda: shared_ask(login) is not None, wait):
+        say("shared: %s — the shared proxy serves it" % login)
+    else:
+        say("shared: %s — a tenant; the shared proxy has not answered for it within %ds (check says when it does)"
+            % (login, wait))
+
+
 def machine_join(a):
     logins = [l for l, _, _ in machine_logins(a.logins)] if a.logins != "all" else \
         [d for d in (sorted(os.listdir(ROOT_BASE)) if os.path.isdir(ROOT_BASE) else [])
@@ -2832,8 +2856,17 @@ def main():
             fresh_gate(a.login, a.force)
         elif fresh:
             preflight_gate([(a.login, os.path.abspath(a.conf_dir))], a.force)
+        # A login just opened on a machine that runs the shared proxy is one more
+        # tenant of it (issue #3155): an own proxy beside it served the new login
+        # nothing the shared one leases, and its check WARNs «join it» forever.
+        a.shared = bool(a.fresh and shared_on())
+        if a.shared:
+            say("shared: this machine runs %s — %s joins it as a tenant" % (SHARED_LABEL, a.login))
         try:
-            return install(a)
+            rc = install(a)
+            if a.shared:
+                fresh_join(a.login)
+            return rc
         except BaseException as e:  # noqa: B036
             if not fresh:
                 raise

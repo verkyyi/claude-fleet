@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -222,10 +223,15 @@ func (a *Agent) upstreamRejections() []upstreamRejection {
 func (a *Agent) credCycle(ctx context.Context) (time.Duration, error) {
 	lease, err := a.fetchCredLease(ctx)
 	if err != nil {
+		var refused errLeaseRefused
+		if errors.As(err, &refused) {
+			a.credVerdict("refused", refused.reason, refused.message, 0)
+		}
 		return 0, err
 	}
 	now := time.Now()
 	wait := credMaxWait
+	claude := 0
 	for _, c := range lease.Credentials {
 		if c.Error != "" || c.Access == nil {
 			log.Printf("credentials: hub could not lease %s/%s: %s", c.Provider, c.Account, c.Error)
@@ -249,6 +255,9 @@ func (a *Agent) credCycle(ctx context.Context) (time.Duration, error) {
 			log.Printf("credentials: write %s/%s: %v", c.Provider, c.Account, werr)
 			continue
 		}
+		if c.Provider == "claude" {
+			claude++
+		}
 		if c.ExpiresAt != nil {
 			if d := c.ExpiresAt.Add(-credRenewLead).Sub(now); d < wait {
 				wait = d
@@ -271,7 +280,26 @@ func (a *Agent) credCycle(ctx context.Context) (time.Duration, error) {
 	if wait < credMinWait {
 		wait = credMinWait
 	}
+	a.credVerdict("ok", "", "", claude)
 	return wait, nil
+}
+
+// credVerdict tells the credential proxy how this login's last lease went
+// (claude-fleet#3155): a session that finds no account is then answered with
+// the hub's reason — refused, or leased none — instead of a bare 403 that
+// Claude Code shows as «Please run /login». Separated only; best effort — an
+// older proxy refuses the op, and nothing else depends on it.
+func (a *Agent) credVerdict(state, reason, message string, claude int) {
+	if a.cfg.FleetCredStore == "" {
+		return
+	}
+	as := ""
+	if a.cfg.RunAs != nil {
+		as = a.cfg.RunAs.Login
+	}
+	_ = credStoreCall(a.cfg.FleetCredStore, as, map[string]string{
+		"op": "lease", "state": state, "reason": reason, "message": message, "claude": strconv.Itoa(claude),
+	})
 }
 
 // withdrawCred removes this login's copy of one account a subscription

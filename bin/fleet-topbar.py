@@ -418,6 +418,22 @@ def line_ctx(p):
     return stamp_ctx([""] * 7 + p[20:25])
 
 
+def view_rows(sock, win):
+    """The 看台's own session windows, in order (window ids) — what ‹ i/n ›
+    counts while the hub's list has no line for this fleet yet (a login just
+    opened: 「‹ –/0 ›」 beside two windows, #3155). A home / panel / steward
+    window is no session row."""
+    out = subprocess.run(["tmux", "-S", sock, "list-windows", "-t", win, "-F",
+                          "#{window_id}|#{@fleet_id}|#{@fleet_role}"],
+                         capture_output=True, text=True, stdin=subprocess.DEVNULL).stdout if sock and win else ""
+    rows = []
+    for line in out.splitlines():
+        wid, fid, role = (line.split("|") + ["", ""])[:3]
+        if fid and role not in ("home", "panel", "steward"):
+            rows.append(wid)
+    return rows
+
+
 def node_record(kv):
     """The record for the 看台's current window, and the route / down words."""
     reg = Path(kv.get("reg") or "")
@@ -454,6 +470,10 @@ def node_record(kv):
                "node": pnode or here, "lost": False, "wid": wid}
     if not peer:
         rec.update(stamp_ctx(p))   # this machine's own window: its stamps are the freshest reading
+    if not lines:
+        own = view_rows(sock, win)
+        rec["n"] = len(own)
+        rec["i"] = own.index(win) + 1 if win in own else 0
     if p[12] == "orchestrator" and not rec.get("title"):
         rec["title"] = say("sidebar_portal") or "新任务"
     down = ""

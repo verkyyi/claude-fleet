@@ -221,6 +221,10 @@ printf '%s\n' 'drill@m5 ~ % ' | bash "$DRILL" --thin-first-says && bad 'client: 
 tl() { printf '%s\t%s\t%s\t\t\t\t%s\t%s\t%s\n' "2026-10-11T03:45:50Z" "$@"; }
 st=$( { tl first m5 '' '' 'no fleet session is live on m5'; tl first mini2 '' 0 'REMOTE mini2'; tl connect mini2 120 '' ''; } | bash "$DRILL" --thin-first)
 [ "$st" = landed ] && ok 'client: placed + drawn = landed' || bad "client: landed read as '$st'"
+# the view drawn while the connection is still open (#3155): the `drawn` line,
+# no `connect` line yet (that one is written when the connection ends)
+st=$( { tl first m5 '' '' x; tl first mini2 '' 0 'REMOTE mini2'; tl drawn mini2 340 '' ''; } | bash "$DRILL" --thin-first)
+[ "$st" = landed ] && ok 'client: placed + drawn (connection still open) = landed' || bad "client: drawn-while-open read as '$st'"
 st=$( { tl first m5 '' '' x; tl first mini2 '' 0 'REMOTE mini2'; } | bash "$DRILL" --thin-first)
 [ "$st" = placed ] && ok 'client: placed, not drawn yet' || bad "client: placed read as '$st'"
 st=$( { tl first m5 '' '' x; tl first - '' 1 'No fleet on any of your machines'; tl quit m5 '' 1 'no first session'; } | bash "$DRILL" --thin-first)

@@ -45,13 +45,14 @@ THIN_FIRST='你还没有 fleet 会话|no fleet session of yours yet|等它的 fl
 THIN_FIRST_FAILED='你的第一个会话没开出来|your first session did not open'
 # thin_first_state (the newcomer's thin.log on stdin, docs/CLIENT-LOGS.md):
 # landed — a `first` placed (rc 0) and a connection after it drew the view
-# (first_ms set); failed — the loop quit with no first session; placed — placed,
+# (a `drawn` line, written while the view is up — #3155; or a `connect` with
+# first_ms set, written only when that connection ends); failed — the loop quit with no first session; placed — placed,
 # not yet drawn; wait — anything else.
 thin_first_state() {
   awk -F'\t' '
     $2 == "first" && $8 == "0" { placed = 1; drawn = 0 }
     $2 == "first" && $8 == "1" { failed = 1 }
-    $2 == "connect" && placed && $7 != "" { drawn = 1 }
+    ($2 == "connect" || $2 == "drawn") && placed && $7 != "" { drawn = 1 }
     $2 == "quit" && $9 == "no first session" { failed = 1 }
     END { if (placed && drawn) print "landed"; else if (failed) print "failed"; else if (placed) print "placed"; else print "wait" }'
 }

@@ -71,7 +71,9 @@
 #      600), then, as root, `fleet-credsep.sh install --login <login> --fresh
 #      --install-dir ~<login>/.claude/fleet [--pool-src <pool>]`: the role
 #      account's store /var/db/fleet-cred/<login>/ (0700 _fleetcred), the proxy
-#      run as _fleetcred, the pool (step 5) inside the store. Its preflight is
+#      run as _fleetcred, the pool (step 5) inside the store — on a machine that
+#      runs the shared proxy the new login is one more TENANT of it, never an own
+#      proxy (issue #3155: drill10110804 on mini2 was neither). Its preflight is
 #      "nothing runs as this login yet". From then on the login needs no sudo:
 #      its sessions reach the subscription only through the proxy. The run ends
 #      with ONE line the hub reads — `credsep: separated` (status separated AND

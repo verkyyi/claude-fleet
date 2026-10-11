@@ -2,6 +2,7 @@ package agent
 
 import (
 	"bufio"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"net"
@@ -109,5 +110,42 @@ func TestNoCredStoreMeansNoSink(t *testing.T) {
 	a := &Agent{cfg: Config{}}
 	if a.credSink() != nil {
 		t.Fatal("an agent with no FleetCredStore has a sink")
+	}
+}
+
+// claude-fleet#3155: separated, the agent tells the proxy how each lease went —
+// the hub's refusal in its own words, or how many Claude accounts it leased — so
+// a session with no account is told why instead of «Please run /login».
+func TestCredVerdictReachesTheStore(t *testing.T) {
+	sock, got := fakeCredStore(t, "")
+	a := credAgent(fakeVaultHub(t, 403, `{"error":"drill","message":"a drill person gets no credentials"}`), t.TempDir())
+	a.cfg.FleetCredStore = sock
+	if _, err := a.credCycle(context.Background()); err == nil {
+		t.Fatal("a refused lease returned no error")
+	}
+	req := <-got
+	if req["op"] != "lease" || req["state"] != "refused" || req["reason"] != "drill" ||
+		req["message"] != "a drill person gets no credentials" || req["claude"] != "0" {
+		t.Fatalf("refused verdict = %v", req)
+	}
+
+	b := credAgent(fakeVaultHub(t, 200, `{"credentials":[]}`), t.TempDir())
+	b.cfg.FleetCredStore = sock
+	if _, err := b.credCycle(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if req := <-got; req["op"] != "lease" || req["state"] != "ok" || req["claude"] != "0" {
+		t.Fatalf("empty lease verdict = %v", req)
+	}
+}
+
+// Not separated: no verdict is sent anywhere (byte for byte as before).
+func TestCredVerdictOffWithoutStore(t *testing.T) {
+	a := credAgent(fakeVaultHub(t, 200, `{"credentials":[]}`), t.TempDir())
+	if a.cfg.FleetCredStore != "" {
+		t.Fatalf("credAgent is separated: %q", a.cfg.FleetCredStore)
+	}
+	if _, err := a.credCycle(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -250,12 +250,9 @@ func (s *Server) handleNodeCredentials(w http.ResponseWriter, r *http.Request) {
 			optional(" ("+rev.Reason+")", rev.Reason != ""))
 		return
 	}
-	// A drill person (claude-fleet#2010) borrows nothing: not its own rows
-	// (it has none) and never the shared pool.
-	if s.Store.IsDrill(principal) {
-		deny(http.StatusForbidden, LeaseDrill, principal, "a drill person gets no credentials")
-		return
-	}
+	// A drill person (claude-fleet#2010) leases as the newcomer it stands in
+	// for — no gate of its own (claude-fleet#3155): own rows ∩ pool ∩ the
+	// allowlists below, for its short life.
 	// Trust (claude-fleet#1968): only a machine the operator marked trusted
 	// leases subscription credentials; one that joined later, or was marked
 	// untrusted, gets nothing — an untrusted machine's sessions borrow a

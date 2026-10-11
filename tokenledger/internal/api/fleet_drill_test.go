@@ -18,6 +18,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/credvault"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/sshca"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
@@ -259,21 +260,38 @@ func TestDrillExpires(t *testing.T) {
 	}
 }
 
-// A drill person borrows nothing: the node running as its login gets no
-// credential — not even the shared pool — and no session pass.
-func TestDrillGetsNoCredentials(t *testing.T) {
+// A drill person leases like the newcomer it stands in for (claude-fleet#3155,
+// reversing #2010's refusal on the person's call): the shared pool rides in its
+// lease, another person's own account never does.
+func TestDrillLeasesLikeANewcomer(t *testing.T) {
 	h, tok, _ := newVaultHarness(t)
+	exp := time.Now().Add(365 * 24 * time.Hour).UTC().Truncate(time.Second)
+	if code, out := h.post(t, "/v1/fleet/credentials", FleetCredentialRequest{Action: "put", PrincipalID: store.PoolPrincipal,
+		Provider: credvault.Claude, Account: "icloud", Secret: credvault.Secret{SetupToken: "sk-ant-oat01-POOL", ExpiresAt: &exp}}); code != http.StatusOK {
+		t.Fatalf("put pool: %d %v", code, out)
+	}
+	putCred(t, h, credvault.Claude, "main", credvault.Secret{RefreshToken: "sk-ant-ort01-ALICE"})
 	now := time.Now()
 	if err := h.srv.Store.CreateDrill(store.DrillPerson{PrincipalID: "drill-x", Login: "drillx", Hostname: "m4",
 		CodeHash: HashToken("fd_x"), CreatedAt: now, ExpiresAt: now.Add(time.Hour)}); err != nil {
 		t.Fatal(err)
 	}
 	dtok := enrollAs(t, h, "drillx-m4", "m4", "drillx")
-	code, _, body := lease(t, h, dtok)
-	if code != http.StatusForbidden || body["error"] != LeaseDrill {
-		t.Fatalf("drill lease: %d %v, want 403 drill", code, body)
+	code, got, body := lease(t, h, dtok)
+	if code != http.StatusOK {
+		t.Fatalf("drill lease: %d %v, want 200 like a newcomer", code, body)
 	}
-	// Alice on the same machine still leases.
+	if got.PrincipalID != "drill-x" {
+		t.Fatalf("leased as %q, want drill-x", got.PrincipalID)
+	}
+	accts := map[string]bool{}
+	for _, c := range got.Credentials {
+		accts[c.Account] = true
+	}
+	if !accts["icloud"] || accts["main"] {
+		t.Fatalf("drill lease accounts = %v, want the pool's icloud and never alice's main", accts)
+	}
+	// Alice on the same machine still leases her own and the pool.
 	if code, _, body := lease(t, h, tok); code != 200 {
 		t.Fatalf("alice lease: %d %v", code, body)
 	}
