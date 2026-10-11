@@ -711,21 +711,9 @@ class Control:
                           "delivery": "record only; a live worker on this issue does not see it (use worker_message)",
                           "observed_at": now()}
             elif req["action"] == "orch_ensure":
-                # issue #2616: ⌘N on a client found no orchestrating session — open
-                # it here (fleet-orchestrator.sh ensure, which asks the hub who holds
-                # it first). rc 5 = another machine holds it: its own tick opens it.
-                attempted = True
-                code, output, err = self.adapter("orch", fleet["name"], timeout=60)
-                said = last_line(output if (output or b"").strip() else err)
-                if code == 5:
-                    result = {"orchestrator": "elsewhere", "said": said, "observed_at": now()}
-                elif code == 3:
-                    raise Unattempted("INVALID_STATE", "No orchestrating session on this machine (FLEET_ORCHESTRATOR off)")
-                elif code:
-                    # ensure is idempotent: a failed one is safe to ask again
-                    raise Unattempted("EXECUTION_FAILED", "The orchestrating session did not open: " + said)
-                else:
-                    result = {"orchestrator": "here", "window": said, "observed_at": now()}
+                # issue #2616's ⌘N from an older hub: there is no orchestrating
+                # seat to open any more (issue #3118) — compat-1v: 下一批删
+                raise Unattempted("INVALID_STATE", "没有编排：在任一会话里输入 /fleet-orchestrate 接手")
             elif req["action"] == "worker_start":
                 # No --force, arbitrary argv, paths, environment or shell input.
                 attempted = True

@@ -18,23 +18,11 @@ one box and three options since issue #2231, EPIC #2230 C1).
                                           #2232; null = auto / the fleet's default).
                                           Prints the place's one line and returns
                                           its code.
-    fleet-compose.py --orch <session> [--client C] [--boot]
-                                          ⌘N again on the writing area (issue
-                                          #2146, fleet-shell.sh portal) and
-                                          「新任务」's menu: the stage straight
-                                          onto the orchestrating session, no
-                                          draft — carry()'s own switch; with
-                                          none (no orch_<session>), or no list to
-                                          jump with, one line on the client C and
-                                          exit 1. --boot (issue #2616, ⌘N with
-                                          FLEET_COMPOSE off): with none, ask the
-                                          hub to open it (orch_ensure) and go
-                                          once it shows — 「正在叫起…」 meanwhile
-    fleet-compose.py --steward <session> [--client C]
-                                          「新任务」's 进管家会话 (issue #2735):
-                                          the same jump onto the steward's
-                                          window (steward_all_<session>'s first
-                                          worker_id); none ⇒ one line, exit 1
+    fleet-compose.py --orch|--steward <session> [--client C] [--boot]
+                                          retired (issue #3118): there is no
+                                          orchestrating or steward seat to jump
+                                          to; an older client's key gets one
+                                          line on C and exit 1 (compat-1v)
     fleet-compose.py payload <text-file> [--repo R | --no-repo] [--node N] [--agent A]
                                           the payload a ↵ on that text would write
                                           ({title, body, attachments, repo, node,
@@ -73,8 +61,8 @@ hub out of reach, a refusal, a machine that said no — leaves the text as it wa
 written, its reason on the line under the options until the next key, and its
 payload kept as compose-failed.json. Nothing on the way
 spends a token: the issue is filed by fleet-issue-file.sh on the machine, the
-worker opened by its spawn. The orchestrator is not reached from here: its own
-row (and ⌘N on the writing area, #2146) is the way in.
+worker opened by its spawn. There is no orchestrating seat to reach from here
+(issue #3118): a session takes that role itself (/fleet-orchestrate).
 """
 import curses
 import json
@@ -469,90 +457,6 @@ def send(path, repo="", node="", reap="", mode="", agent=""):
     return out.returncode
 
 
-# --- the orchestrating session (issue #1957) ----------------------------------------
-
-def orchestrator(session):
-    """The fleet's one orchestrating session, as fleet-hub-sessions.sh's
-    orch_<session> says: {wid, node, av, state, needs, detail} — the first line
-    (online first, then by machine), None when no machine runs one."""
-    try:
-        with open(os.path.join(status_dir(), "orch_" + (session or "")), encoding="utf-8") as f:
-            for line in f:
-                p = line.rstrip("\n").split("\x1f")
-                if len(p) >= 4 and "/" in p[0] and p[1]:
-                    p += [""] * (6 - len(p))
-                    return dict(zip(("wid", "node", "av", "state", "needs", "detail"), p[:6]))
-    except OSError:
-        pass
-    return None
-
-
-def carry(shell, o, text, wait=None):
-    """⌘N on the writing area: the stage onto the orchestrator (the list's own jump), and
-    the half-written text into its input — pasted, never sent: ↵ there is the
-    person's. The paste waits until the stage shows that session with an agent
-    reading bracketed paste (a line break must never send half of it), at most
-    FLEET_COMPOSE_CARRY_SECS (8 s). A tmux too old to say (no
-    `bracket_paste_flag`, < 3.5): the stage on it and a beat to settle — the
-    paste is still bracketed when the agent asked (`paste-buffer -p`).
-    Returns (switched, carried)."""
-    if not o or not shell.hand("jump=wid:" + o["wid"]):
-        return False, False
-    if not text.strip():
-        return True, True
-    text = carried_files(text, o)
-    want = o["node"] + ":" + o["wid"]
-    wait = float(os.environ.get("FLEET_COMPOSE_CARRY_SECS") or 8) if wait is None else wait
-    deadline = time.monotonic() + wait
-    while time.monotonic() < deadline:
-        for line in shell.stage("list-windows", "-F",
-                                "#{window_id}\t#{window_active}\t#{@remote}\t#{@remote_down}\t#{bracket_paste_flag}"
-                                ).splitlines():
-            w = (line.split("\t") + [""] * 5)[:5]
-            known = w[4] in ("0", "1")
-            if w[1] == "1" and w[2] == want and not w[3] and w[4] != "0":
-                if not known:
-                    time.sleep(1.0)
-                buf = "fleet-compose-carry"
-                try:
-                    subprocess.run(shell.stage_cmd + ["load-buffer", "-b", buf, "-"], input=text.encode("utf-8"),
-                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5, check=True)
-                    subprocess.run(shell.stage_cmd + ["paste-buffer", "-p", "-d", "-b", buf, "-t", w[0]],
-                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5, check=True)
-                except (OSError, subprocess.SubprocessError):
-                    return True, False
-                return True, True
-        time.sleep(0.2)
-    return True, False
-
-
-def carried_files(text, o):
-    """The draft's files onto the session's machine first (issue #2757): each
-    path a drop put in the text is sent to that session's inbox
-    (fleet-client-upload.py put — the same road as a drop into a session) and
-    the text names it there. One that did not go keeps its path and says why."""
-    files = attachments(text)
-    if not files:
-        return text
-    import importlib.util
-    spec = importlib.util.spec_from_file_location("fleet_client_upload", str(BIN / "fleet-client-upload.py"))
-    up = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(up)
-    for f in files:
-        rc, out = up.put(o["node"], o["wid"], f, f)
-        forms = [f.replace(" ", "\\ "), "'%s'" % f, '"%s"' % f, f]
-        home = os.path.expanduser("~")
-        if f.startswith(home + "/"):
-            forms += ["~" + f[len(home):].replace(" ", "\\ "), "~" + f[len(home):]]
-        for form in forms:
-            if form in text:
-                text = text.replace(form, out if rc == 0 else form + "（%s）" % out)
-                break
-    return text
-
-
-# --- where the writing area came from ----------------------------------------------
-
 def switch_lib():
     import importlib.util
     spec = importlib.util.spec_from_file_location("fleet_quickopen", str(BIN / "fleet-quickopen.py"))
@@ -618,120 +522,14 @@ class Shell:
         return True
 
 
-def to_orch(session, client="", boot=False):
-    """⌘N on the writing area / 进编排会话 (issue #2146): carry() with no text — the list's jump to
-    orch_<session>'s window, the road ⇧⇥ takes. Nothing to go to says so on
-    the client's line instead (never an error). 0 switched, 1 not.
-    boot (issue #2616 — ⌘N itself, FLEET_COMPOSE off): with no orch_<session>,
-    ask for it first (boot_orch) and go once it shows; the line says why not."""
-    shell = Shell(session)
-    o = orchestrator(session)
-    if not o and boot:
-        o, why = boot_orch(session, shell, client)
-        if not o:
-            msg = tr("orch_boot_timeout", why)
-            shell.run("display-message", *(["-c", client] if client else []), msg)
-            print(msg)
-            return 1
-    if o and carry(shell, o, "")[0]:
-        stamp_role(shell, o, agent=orch_agent(session, o))
-        return 0
-    msg = tr("compose_orch_nolist") if o else tr("compose_orch_none")
-    shell.run("display-message", *(["-c", client] if client else []), msg)
+def to_orch(session, client=""):
+    """An older client's ⌘N / 进编排会话 / 进管家会话 (issue #2146, #2735): no seat
+    exists to jump to any more (issue #3118) — one line on the client, exit 1.
+    compat-1v: 下一批删"""
+    msg = tr("compose_orch_none")
+    Shell(session).run("display-message", *(["-c", client] if client else []), msg)
     print(msg)
     return 1
-
-
-def to_steward(session, client=""):
-    """进管家会话 (issue #2735): the list's jump onto the steward's window — the
-    first worker_id of fleet-hub-sessions.sh's steward_all_<session>. The steward
-    draws no row (#2670); this and the menu are its door. 0 switched, 1 not."""
-    shell = Shell(session)
-    wid = ""
-    try:
-        with open(os.path.join(status_dir(), "steward_all_" + (session or "")), encoding="utf-8") as f:
-            wid = next((x.strip() for x in f if "/" in x), "")
-    except OSError:
-        pass
-    if wid and shell.hand("jump=wid:" + wid):
-        return 0
-    msg = tr("compose_orch_nolist") if wid else tr("compose_steward_none")
-    shell.run("display-message", *(["-c", client] if client else []), msg)
-    print(msg)
-    return 1
-
-
-def boot_orch(session, shell, client="", secs=None):
-    """No orchestrating session anywhere (issue #2616): one line on the client's
-    bar — 「正在叫起编排会话…」 — while the hub is asked to open it on the machine
-    that holds it (fleet-hub-write.sh orch_ensure: fleet-orchestrator.sh ensure
-    there), and orch_<session> is watched until it shows, at most
-    FLEET_ORCH_BOOT_SECS (75 — an older node refuses the write, and its next
-    home_watch tick, ≤ 60 s, opens it anyway). Returns (orchestrator, why)."""
-    secs = float(os.environ.get("FLEET_ORCH_BOOT_SECS") or 75) if secs is None else secs
-    try:
-        ask = subprocess.Popen(["bash", str(BIN / "fleet-hub-write.sh"), "orch_ensure", "{}"],
-                               stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-    except OSError:
-        ask = None
-    why, said = "", 0.0
-    deadline = time.monotonic() + secs
-    while True:
-        o = orchestrator(session)
-        if o:
-            break
-        if time.monotonic() >= said:
-            # re-said every 2 s for 2.5 s: gone within a moment of the switch
-            shell.run("display-message", *(["-c", client] if client else []), "-d", "2500", tr("orch_booting"))
-            said = time.monotonic() + 2
-        if ask is not None and ask.poll() is not None:
-            if ask.returncode:
-                lines = (ask.stderr.read() or b"").decode("utf-8", "replace").strip().splitlines()
-                why = lines[-1] if lines else ""
-            ask = None
-        if time.monotonic() >= deadline:
-            break
-        time.sleep(0.5)
-    if ask is not None:
-        ask.kill()
-    return o, ("" if o else why or tr("orch_boot_waited", int(secs)))
-
-
-def orch_agent(session, o):
-    """The orchestrator's agent (claude · codex) — its row in the list's cache
-    (remote_<session>, field 7: every orchestrator's row stays there), "" when
-    the cache does not say."""
-    try:
-        with open(os.path.join(status_dir(), "remote_" + (session or "")), encoding="utf-8") as f:
-            for line in f:
-                p = line.rstrip("\n").split("\x1f")
-                if len(p) >= 7 and p[0] == "wid:" + o["wid"] and p[1] == o["node"]:
-                    return p[6] if re.fullmatch(r"[a-z][a-z0-9-]{0,15}", p[6]) else ""
-    except OSError:
-        pass
-    return ""
-
-
-def stamp_role(shell, o, wait=3.0, agent=""):
-    """The stage window carry() switched to is the orchestrator's (issue #2616):
-    `@fleet_role orchestrator` on it, as the node's own window says — so the
-    client tells it by its role, never its name. Only a window with no role.
-    Its agent too (issue #2619 — `@cc_agent`, as the node's window says: a
-    Codex orchestrator reads codex), when the list's cache names one."""
-    want = o["node"] + ":" + o["wid"]
-    deadline = time.monotonic() + wait
-    while time.monotonic() < deadline:
-        for line in shell.stage("list-windows", "-F", "#{window_id}\t#{@remote}\t#{@fleet_role}\t#{@cc_agent}").splitlines():
-            w = (line.split("\t") + ["", "", ""])[:4]
-            if w[1] == want:
-                if not w[2]:
-                    shell.stage("set-window-option", "-t", w[0], "@fleet_role", "orchestrator")
-                if agent and w[3] != agent:
-                    shell.stage("set-window-option", "-t", w[0], "@cc_agent", agent)
-                return True
-        time.sleep(0.1)
-    return False
-
 
 def go_back(shell, prev):
     """esc: the session that was in view — the list's own jump (`jump=<key>`),
@@ -1339,13 +1137,10 @@ def main(argv):
             print(json.dumps(data, ensure_ascii=False, sort_keys=True))
             return 0
         return send(argv[1], opts["--repo"], opts["--node"], opts["--reap"], mode, opts["--agent"])
-    boot = argv[-1:] == ["--boot"]
-    if boot:
+    if argv[-1:] == ["--boot"]:   # an older client's ⌘N (issue #2616) — compat-1v
         argv = argv[:-1]
-    if argv[:1] == ["--orch"] and len(argv) in (2, 4) and (len(argv) == 2 or argv[2] == "--client"):
-        return to_orch(argv[1], argv[3] if len(argv) == 4 else "", boot=boot)
-    if argv[:1] == ["--steward"] and len(argv) in (2, 4) and (len(argv) == 2 or argv[2] == "--client"):
-        return to_steward(argv[1], argv[3] if len(argv) == 4 else "")
+    if argv[:1] in (["--orch"], ["--steward"]) and len(argv) in (2, 4) and (len(argv) == 2 or argv[2] == "--client"):
+        return to_orch(argv[1], argv[3] if len(argv) == 4 else "")
     session = ""
     if argv[:1] == ["--session"] and len(argv) >= 2:
         session = argv[1]

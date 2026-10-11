@@ -77,8 +77,8 @@ var fleetScopeOf = map[string]string{
 	// machine (claude-fleet#2527, EPIC #2524 C3): stop / start / restart /
 	// run now / a new schedule — on their own (machine, login) only.
 	"service_control": "service:control",
-	// The person's orchestrating session opened on its holder machine when ⌘N
-	// found none (claude-fleet#2616): a start's authority.
+	// An older client's ⌘N asking for the orchestrating session (claude-fleet#2616):
+	// answered 「没有编排」 since #3118, never sent — compat-1v.
 	"orch_ensure":   "worker:start",
 	"gh_comment":    "gh:comment",
 	"gh_issue_view": "gh:read",
@@ -610,9 +610,8 @@ func parseWrite(tool string, args map[string]any) (writeRequest, string, error) 
 		w.fleetID, w.params, err = parseMoveIn(args)
 		w.repo, _ = w.params["repo"].(string)
 	case "orch_ensure":
-		// claude-fleet#2616: no arguments but the key and, optionally, the fleet
-		// — without one the hub picks it (orchEnsureTarget); the node is sent
-		// nothing to name: the fleet IS the session.
+		// claude-fleet#2616: no arguments but the key and, optionally, the fleet.
+		// Nothing is ever sent (#3118): there is no seat to open.
 		if err = checkFields(args, []string{"idempotency_key"}, "fleet_id"); err != nil {
 			break
 		}
@@ -786,10 +785,8 @@ func (s *Server) submitWrite(ctx context.Context, p fleetPrincipal, tool string,
 		if target, err = s.serviceTarget(p, *w.svc); err != nil {
 			return nil, err
 		}
-	case tool == "orch_ensure" && w.fleetID == "":
-		if target, err = s.orchEnsureTarget(p, time.Now()); err != nil {
-			return nil, err
-		}
+	case tool == "orch_ensure":
+		return nil, fault("INVALID_STATE", noOrchestrator)
 	case w.fleetID != "":
 		if target, err = s.visibleFleet(p, w.fleetID); err != nil {
 			return nil, err

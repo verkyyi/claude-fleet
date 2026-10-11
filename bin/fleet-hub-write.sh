@@ -17,7 +17,7 @@
 #   <tool>       worker_message · worker_stop · worker_resume · worker_answer ·
 #                worker_reap · worker_switch · worker_rename · worker_reap_policy ·
 #                worker_start · gh_comment · config_set · service_control ·
-#                orch_ensure (issue #2616: open the orchestrating session) — the hub's
+#                orch_ensure (issue #2616; answers 「没有编排」 since #3118) — the hub's
 #                write tools; anything else is refused here before a byte goes out.
 #   <json-args>  ONE JSON object: the tool's arguments as docs/FLEET-HUB.md lists
 #                them. `idempotency_key` is added when absent (`--idem`, else a

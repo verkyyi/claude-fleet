@@ -793,32 +793,10 @@ mem_edge() {
 # #1801): the backstop for the pane-died hook a lost SIGCHLD never fires.
 home_watch() {
   type fleet_home_heal >/dev/null 2>&1 || return 0
-  local s out w had rc
+  local s out
   for s in $(fleet_sockets 2>/dev/null); do
-    # the orchestrating session (issue #1957) comes back like home: one closed
-    # by anything is reopened on this tick (rc 3 = off on this fleet). Asked on
-    # EVERY tick, open or not (issue #2117): the hub may have named another
-    # machine of this person, and then ours is closed here (rc 5, `retired`).
-    had="$(tmux -L "$s" list-windows -t "=$s" -F '#{@fleet_role}' 2>/dev/null | grep -cx orchestrator)"
-    w="$(bash "$BIN/fleet-orchestrator.sh" ensure "$s" 2>/dev/null)"; rc=$?
-    if [ "$rc" = 0 ] && [ "${had:-0}" = 0 ] && [ -n "$w" ]; then
-      mkdir -p "$GDIR" 2>/dev/null
-      printf '%s %s orchestrator reopened %s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$s" "$w" >> "$GDIR/home-heal.log" 2>/dev/null
-    elif [ "$rc" = 5 ] && case "$w" in *retired*) true ;; *) false ;; esac; then
-      mkdir -p "$GDIR" 2>/dev/null
-      printf '%s %s orchestrator %s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$s" "$(printf '%s' "$w" | tr '\n' ' ')" >> "$GDIR/home-heal.log" 2>/dev/null
-    fi
-    # The steward (issue #2670) comes back the same way while bin/fleet-steward.sh
-    # is still here (EPIC #3111 C7 removes it). Its beat no longer runs on this
-    # tick (C4, issue #3115): only the loop of the window that took the steward
-    # role runs `fleet-steward-tick.sh beat --holder`, and a worker's red base is
-    # drained by its filer and that beat — nobody holds the role ⇒ nothing patrols.
-    had="$(tmux -L "$s" list-windows -t "=$s" -F '#{@fleet_role}' 2>/dev/null | grep -cx steward)"
-    w="$(bash "$BIN/fleet-steward.sh" ensure "$s" 2>/dev/null)"; rc=$?
-    if [ "$rc" = 0 ] && [ "${had:-0}" = 0 ] && [ -n "$w" ]; then
-      mkdir -p "$GDIR" 2>/dev/null
-      printf '%s %s steward reopened %s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$s" "$w" >> "$GDIR/home-heal.log" 2>/dev/null
-    fi
+    # No orchestrating or steward seat is reopened here (issue #3118): a closed
+    # session stays closed; a role is taken in a session, never kept open.
     out="$(fleet_home_heal "$s" "$s")"
     [ -n "$out" ] || continue
     mkdir -p "$GDIR" 2>/dev/null

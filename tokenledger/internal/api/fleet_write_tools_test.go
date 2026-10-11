@@ -341,41 +341,26 @@ func TestFleetWriteSwitch(t *testing.T) {
 	}
 }
 
-// orch_ensure (claude-fleet#2616): ⌘N on a client found no orchestrating
-// session. A journalled write under worker:start's authority; with no fleet_id
-// the hub sends it to the holder machine's fleet (fleet.orchestrator_host.<owner>),
-// else the online fleet with the most sessions, then by name — and the node is
-// sent no params at all.
+// orch_ensure (claude-fleet#2616) is retired (#3118): still a listed write tool
+// under worker:start for one version, so an older client's ⌘N gets an answer —
+// 409 INVALID_STATE 「没有编排」 — and no node is ever sent anything.
 func TestFleetWriteOrchEnsure(t *testing.T) {
-	h, m5, m4, f5, f4 := twoNodes(t)
+	h, m5, m4, f5, _ := twoNodes(t)
 	if !hasString(FleetTools, "orch_ensure") || !fleetWriteTools["orch_ensure"] || fleetScopeOf["orch_ensure"] != "worker:start" {
-		t.Fatal("orch_ensure must be a listed write tool under worker:start")
+		t.Fatal("orch_ensure must stay a listed write tool under worker:start for one version")
 	}
-	// No holder yet, one session each: by name — m4.
-	op := postFleet(t, h, "orch_ensure", map[string]any{"idempotency_key": "o1"}, 200)
-	if op["status"] != "accepted" || op["fleet_id"] != f4.FleetID {
-		t.Fatalf("orch_ensure = %v; want accepted on m4's fleet %s", op, f4.FleetID)
-	}
-	waitFor(t, 2*time.Second, "m4 took it", func() bool { return m4.count() == 1 })
-	env := m4.writes[0]
-	if params, _ := env["params"].(map[string]any); env["action"] != "orch_ensure" || len(params) != 0 {
-		t.Fatalf("the node was sent %v", env)
-	}
-	// The holder wins over the name.
-	if err := h.srv.Store.SetFleetSetting(OrchestratorHostPrefix+"login:verk", "m5", time.Now()); err != nil {
-		t.Fatal(err)
-	}
-	op = postFleet(t, h, "orch_ensure", map[string]any{"idempotency_key": "o2"}, 200)
-	if op["fleet_id"] != f5.FleetID {
-		t.Fatalf("orch_ensure with m5 holding = %v; want m5's fleet %s", op, f5.FleetID)
-	}
-	waitFor(t, 2*time.Second, "m5 took it", func() bool { return m5.count() == 1 })
-	// A named fleet is that fleet; anything else never reaches a node.
-	if op = postFleet(t, h, "orch_ensure", map[string]any{"fleet_id": f4.FleetID, "idempotency_key": "o3"}, 200); op["fleet_id"] != f4.FleetID {
-		t.Fatalf("orch_ensure(fleet_id=m4) = %v", op)
+	for i, args := range []map[string]any{{"idempotency_key": "o1"}, {"fleet_id": f5.FleetID, "idempotency_key": "o2"}} {
+		out := postFleet(t, h, "orch_ensure", args, 409)
+		if e, _ := out["error"].(map[string]any); e["code"] != "INVALID_STATE" || !strings.Contains(e["message"].(string), "没有编排") {
+			t.Fatalf("orch_ensure #%d = %v; want INVALID_STATE 没有编排", i, out)
+		}
 	}
 	postFleet(t, h, "orch_ensure", map[string]any{"session": "x", "idempotency_key": "bad"}, 400)
 	postFleet(t, h, "orch_ensure", map[string]any{}, 400)
+	time.Sleep(200 * time.Millisecond)
+	if m4.count() != 0 || m5.count() != 0 {
+		t.Fatalf("orch_ensure reached a node (m4=%d m5=%d)", m4.count(), m5.count())
+	}
 }
 
 // A node acts for its owner by its OWN token (claude-fleet#3106): the steward

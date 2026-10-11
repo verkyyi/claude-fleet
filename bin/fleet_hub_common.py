@@ -32,8 +32,8 @@ SCOPE_OF = {"worker_start": "worker:start", "config_set": "config:write",
             # worker_reap_policy (issue #2368) says WHEN the fleet may close the
             # session on its own: a reap's authority — `done:1m` is a reap soon.
             "worker_reap_policy": "worker:reap",
-            # orch_ensure (issue #2616) opens the person's orchestrating session
-            # when ⌘N found none: a start's authority.
+            # orch_ensure (issue #2616): an older client's ⌘N, answered 「没有编排」
+            # since issue #3118 — compat-1v: 下一批删
             "orch_ensure": "worker:start"}
 # The tools that name a WORKER (a worker_id), not a fleet. worker_answer and
 # worker_reap (issue #1487, EPIC #1479 C8) are what a sidebar on another machine
@@ -294,52 +294,13 @@ def inventory_row(parts):
     placed (@test_identity): the person's list hides it, `fleet ls` marks it 测试.
     Absent otherwise. With no 7501 report, a `needs` row's subtype and `detail`
     fill status_kind / status_msg (issue #2538).
-    Column 31 (issue #2617, EPIC #2615 C2): `orchq=<n>` — what waits behind the
-    orchestrator's running turn (@orch_queue, the mod's count) → `orch_queue`
-    (an int); absent on every other window and on an orchestrator that cannot
-    count (Codex, no mod).
-    Column 32 (issue #2670, EPIC #2668 C2): `orchdec=<n>` — the steward's decision
-    sheet rows still open (@orch_decide on the orchestrator) → `orch_decide` (an
-    int); absent unless the steward stamped one. `role=steward` is its steward.
-    Column 33 (issue #2672, EPIC #2668 C4): `orchtodo=<n>` — the steward's 待你动手
-    rows still open (@orch_todo) → `orch_todo` (an int); it follows orchdec= when
-    both are written, so it is read first.
-    Column 34 (issue #2671, EPIC #2668 C3): `orchpark=<n>` — sessions parked
-    (@orch_park) → `orch_park` (an int).
-    Column 35 (issue #2735): `orchpage=<url>` — the steward's page (@orch_page) →
-    `orch_page` (an http(s) link, ≤300 characters); the last tag when written,
-    read first.
-    Columns 36-37 (issue #2913): `orchparkl=<cell>` / `orchtodol=<cell>` — who is
-    parked on what and the open 待你动手 items (fleet_steward.py list_cell) →
-    `orch_park_list` / `orch_todo_list`, the cell kept as it came (one
-    [-A-Za-z0-9_] token ≤4000, the client decodes it); the last tags, read first."""
+    Columns 31-37 (`orchq=` … `orchtodol=`) were the resident orchestrator's and
+    steward's (issues #2617-#2913), gone with the seat (issue #3118): an older
+    node's are dropped unread — compat-1v: 下一批删."""
     parts = list(parts)
     extra = {}
-    for tag, field in (("orchtodol=", "orch_todo_list"), ("orchparkl=", "orch_park_list")):
-        if len(parts) >= 32 and parts[-1].startswith(tag):
-            c = parts.pop()[len(tag):]
-            if re.fullmatch(r"[-A-Za-z0-9_]{1,4000}", c):
-                extra[field] = c
-    if len(parts) >= 32 and parts[-1].startswith("orchpage="):
-        u = parts.pop()[9:]
-        if re.fullmatch(r"https?://[-A-Za-z0-9._~:/?#@+,=%]{1,292}", u):
-            extra["orch_page"] = u
-    if len(parts) >= 32 and parts[-1].startswith("orchpark="):
-        k = parts.pop()[9:]
-        if re.fullmatch(r"[0-9]{1,4}", k):
-            extra["orch_park"] = int(k)
-    if len(parts) >= 32 and parts[-1].startswith("orchtodo="):
-        d = parts.pop()[9:]
-        if re.fullmatch(r"[0-9]{1,4}", d):
-            extra["orch_todo"] = int(d)
-    if len(parts) >= 32 and parts[-1].startswith("orchdec="):
-        d = parts.pop()[8:]
-        if re.fullmatch(r"[0-9]{1,4}", d):
-            extra["orch_decide"] = int(d)
-    if len(parts) >= 31 and parts[-1].startswith("orchq="):
-        q = parts.pop()[6:]
-        if re.fullmatch(r"[0-9]{1,4}", q):
-            extra["orch_queue"] = int(q)
+    while len(parts) >= 31 and parts[-1].startswith(ORCH_TAGS):   # compat-1v: 下一批删
+        parts.pop()
     if len(parts) >= 30 and parts[-1].startswith("test="):
         if parts.pop()[5:] == "1":
             extra["test"] = True
@@ -411,6 +372,9 @@ def inventory_row(parts):
         extra["status_msg"] = extra["detail"]
     return parts, extra
 
+
+# an older node's columns 31-37 (issue #3118) — compat-1v: 下一批删
+ORCH_TAGS = ("orchq=", "orchdec=", "orchtodo=", "orchpark=", "orchpage=", "orchparkl=", "orchtodol=")
 
 # @claude_needs subtype → the OSC 7501 kind it says (issue #2538)
 NEEDS_KIND = {"perm": "permission", "ask": "question", "auth": "auth"}
