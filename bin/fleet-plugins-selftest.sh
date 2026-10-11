@@ -28,7 +28,15 @@
 #      when git can tell)
 #   H  the real thing (claude on PATH): a sandbox HOME adds the marketplace and
 #      lists none of the three; install fleet-orchestrate lists it; uninstall
-#      lists none again
+#      lists none again; install fleet-epic carries its three commands, epic-page
+#      and agents/epic-driver.md (and pulls fleet-orchestrate in)
+#   I  the epic plugin (issue #3116, EPIC #3111 C5): fleet-epic carries
+#      /fleet-epic-plan · run · report, epic-page and the epic-driver agent file
+#      (`fleet: reap: loop-end`, every tool — spawn among them); the core ships
+#      no epic-driver; installed, `--as epic-driver` (the orchestrator's driver
+#      line) resolves to the plugin's file and the launch says `--agent
+#      epic-driver`; not installed, there is no such agent; a login an older
+#      release shipped epic-driver into gets fleet-epic (carry-over, D)
 # Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -232,6 +240,18 @@ out=$(ens --gone "$WORK/gone")
 has "installed fleet-epic@claude-fleet" "$out" "D carry-over: the epic command installed → fleet-epic"
 hasnt "installed fleet-orchestrate" "$out" "D carry-over: an installed plugin is not re-installed"
 
+# carry-over of an agent file the core shipped (issue #3116): epic-driver left
+# conf/agent-defaults/ for plugins/fleet-epic/agents/; a login holding the shipped
+# copy in ~/.claude/agents gets fleet-epic before the agentfiles pass retires it
+echo '[{"id":"fleet-orchestrate@claude-fleet","version":"0.1.0","folderVersion":"0.1.0","enabled":true}]' > "$ST/installed.json"
+rm -f "$CD/commands/fleet-epic-run.md"
+printf 'conf/agent-defaults/claude/agents/epic-driver.md\n' > "$WORK/gone"
+out=$(ens --gone "$WORK/gone")
+hasnt "fleet-epic@" "$out" "D carry-over: no shipped epic-driver here — no fleet-epic"
+mkdir -p "$CD/agents"; echo x > "$CD/agents/epic-driver.md"
+out=$(ens --gone "$WORK/gone")
+has "installed fleet-epic@claude-fleet" "$out" "D carry-over: the shipped epic-driver here → fleet-epic"
+
 # behind → update
 python3 - "$ST/installed.json" <<'PY'
 import json, sys
@@ -286,6 +306,31 @@ if GR=$(git -C "$ROOT/plugins" rev-parse --show-toplevel 2>/dev/null) && [ -n "$
   done
 fi
 
+# ---- I: the epic plugin (issue #3116) ---------------------------------------------
+EP="$ROOT/plugins/fleet-epic"
+for f in commands/fleet-epic-plan.md commands/fleet-epic-run.md commands/fleet-epic-report.md \
+         skills/epic-page/SKILL.md skills/epic-page/template.html agents/epic-driver.md; do
+  [ -f "$EP/$f" ] && ok || fail "I fleet-epic carries no $f"
+done
+[ ! -e "$ROOT/conf/agent-defaults/claude/agents/epic-driver.md" ] && [ ! -e "$ROOT/agents/epic-driver.md" ] && ok \
+  || fail "I the core still ships an epic-driver agent file — it is fleet-epic's"
+grep -q -- '--as epic-driver' "$ROOT/plugins/fleet-orchestrate/skills/fleet-orchestrate/SKILL.md" && ok \
+  || fail "I the orchestrator's driver line does not start --as epic-driver"
+grep -rq -- '--role epic-driver' "$ROOT/plugins" && fail "I a plugin still starts a driver with --role epic-driver" "$(grep -rn -- '--role epic-driver' "$ROOT/plugins")"; ok
+AE=$(mktemp -d "$WORK/ae.XXXXXX")
+adef() { env HOME="$AE" CLAUDE_CONFIG_DIR="$AE/.claude" FLEET_CONF_DIR="$AE/conf" \
+           FLEET_AGENT_PLUGINS_CMD="cat '$AE/plugins.json'" python3 "$BIN/fleet-agent-def.py" "$@" 2>&1; }
+printf '[{"id":"fleet-epic@claude-fleet","enabled":true,"installPath":"%s"}]\n' "$EP" > "$AE/plugins.json"
+out=$(adef launch epic-driver --dir "$AE")
+has "file	$EP/agents/epic-driver.md" "$out" "I installed: epic-driver resolves to fleet-epic's file"
+has "reap	loop-end" "$out" "I epic-driver's fleet.reap is loop-end"
+has "spawn	1" "$out" "I epic-driver grants spawn (a driver dispatches)"
+has "arg	--agent
+arg	epic-driver" "$out" "I the launch says --agent epic-driver (the bare name Claude Code finds)"
+printf '[]\n' > "$AE/plugins.json"; rm -rf "$AE/conf/agents/plugins.json"
+out=$(adef launch epic-driver --dir "$AE"); rc=$?
+[ "$rc" = 1 ] && ok || fail "I not installed: there is no epic-driver (rc=$rc)" "$out"
+
 # ---- A (cont.) + H: the real CLI ----------------------------------------------------
 if command -v claude >/dev/null 2>&1 && claude plugin validate --help >/dev/null 2>&1; then
   for p in "$ROOT" "$ROOT"/plugins/*; do
@@ -304,6 +349,14 @@ if command -v claude >/dev/null 2>&1 && claude plugin validate --help >/dev/null
     || fail "H the installed copy carries the /fleet-orchestrate skill"
   out=$(hc uninstall fleet-orchestrate@claude-fleet) || fail "H uninstall" "$out"
   [ -z "$(ids)" ] && ok || fail "H uninstall → none" "$(ids)"
+  out=$(hc install fleet-epic@claude-fleet) || fail "H install fleet-epic" "$out"
+  case " $(ids) " in *" fleet-epic@claude-fleet "*) ok ;; *) fail "H install fleet-epic → listed" "$(ids)" ;; esac
+  for f in agents/epic-driver.md commands/fleet-epic-run.md skills/epic-page/SKILL.md; do
+    ls "$H"/.claude/plugins/cache/claude-fleet/fleet-epic/*/"$f" >/dev/null 2>&1 && ok \
+      || fail "H the installed fleet-epic carries $f"
+  done
+  hc uninstall fleet-epic@claude-fleet >/dev/null; hc uninstall fleet-orchestrate@claude-fleet >/dev/null
+  case " $(ids) " in *" fleet-epic@"*) fail "H uninstall fleet-epic → still listed" "$(ids)" ;; *) ok ;; esac
 fi
 
 printf 'fleet-plugins-selftest: PASS (%d checks)\n' "$CHECKS"

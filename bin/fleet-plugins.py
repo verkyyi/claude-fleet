@@ -25,7 +25,9 @@ place that asks.
           · carry-over: F lists the paths that left the install this apply (its
             GONE list). A part that moved into a plugin — skills/<x>/… now at
             plugins/<p>/skills/<x>/, commands/<x>.md now at
-            plugins/<p>/commands/<x>.md — that this login still HAS installed in
+            plugins/<p>/commands/<x>.md, an agent file the core shipped
+            (conf/agent-defaults/claude/agents/<x>.md, in D/agents) now at
+            plugins/<p>/agents/<x>.md — that this login still HAS installed in
             D (a fleet copy) means the person used it: install <p> so nothing
             they did yesterday breaks. A fresh login never had one, so it gets
             none: a new install has no plugin;
@@ -169,6 +171,12 @@ def carried(root, plugs, gone, cdir):
         elif path.startswith("commands/") and path.endswith(".md") and path.count("/") == 1:
             x = path[len("commands/"):]
             part, sub, have = x, "commands/" + x, os.path.join(cdir, "commands", x)
+        elif path.startswith("conf/agent-defaults/claude/agents/") and path.endswith(".md") \
+                and path.count("/") == 4:
+            # an agent file the core shipped into ~/.claude/agents (issue #3116:
+            # epic-driver now rides fleet-epic) — the agentfiles pass retires it
+            x = path.rsplit("/", 1)[1]
+            part, sub, have = x, "agents/" + x, os.path.join(cdir, "agents", x)
         if part is None or not os.path.exists(have):
             continue
         for name, d in plugs.items():

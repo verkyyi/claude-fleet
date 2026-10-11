@@ -46,7 +46,7 @@ Codex shows them on its `fleet-orch` server).
   Code's own settings (user, then this directory's project files) — the fleet keeps
   no record of its own.
 - **The bridge, until C7.** The seats the fleet still opens itself — the
-  orchestrator and the steward (`@fleet_role`), an EPIC driver (`--role epic-driver` /
+  orchestrator and the steward (`@fleet_role`), an EPIC driver (`--as epic-driver`, fleet-epic's agent file / `--role epic-driver` /
   `@fleet_role_def`) — get `fleet-orch` from their launcher (`bin/fleet-claude.sh`,
   `bin/fleet-codex.sh`, both asking `fleet-mcp.py --bridge-seat`), so a running batch
   keeps dispatching. The debugger never does: its definition disallows spawn / await.

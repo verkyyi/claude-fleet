@@ -19,7 +19,7 @@
 #   F  who may spawn at all (issue #2960, #3122): fleet_spawn_refused on a worker
 #      pane — refused with no agent file or one whose tools hold no `spawn`
 #      (@agent_spawn 0, the shipped fleet-worker); allowed when the file grants
-#      it (@agent_spawn 1, the shipped epic-driver), after take_role
+#      it (@agent_spawn 1, fleet-epic's epic-driver), after take_role
 #      (@fleet_role_def orchestrator | steward) and on an old window's
 #      @fleet_role_def epic-driver (compat-1v); a hub pane is never refused.
 #      And the grant itself, off real files: bin/fleet-agent-def.py spawn-tools.
@@ -152,7 +152,9 @@ mkdir -p "$WORK/cc/agents"
 cp "$BIN/../conf/agent-defaults/claude/agents/"*.md "$WORK/cc/agents/"
 printf -- '---\nname: doc-only\ndescription: d\ntools: Read, Edit\n---\n只改文档。\n' > "$WORK/cc/agents/doc-only.md"
 printf -- '---\nname: dispatcher\ndescription: d\ntools:\n  - Read\n  - mcp__fleet-orch__spawn\n---\n' > "$WORK/cc/agents/dispatcher.md"
-grant() { CLAUDE_CONFIG_DIR="$WORK/cc" FLEET_AGENT_PLUGINS_CMD='echo []' python3 "$BIN/fleet-agent-def.py" spawn-tools "$1" --dir "$WORK"; }
+# epic-driver rides the fleet-epic plugin (issue #3116): listed as installed here
+printf '[{"id":"fleet-epic@claude-fleet","enabled":true,"installPath":"%s"}]\n' "$BIN/../plugins/fleet-epic" > "$WORK/plugins.json"
+grant() { CLAUDE_CONFIG_DIR="$WORK/cc" FLEET_AGENT_PLUGINS_CMD="cat '$WORK/plugins.json'" python3 "$BIN/fleet-agent-def.py" spawn-tools "$1" --dir "$WORK"; }
 for a in fleet-worker doc-only fleet-debugger; do ok; grant "$a" && fail "F: $a must not grant spawn"; done
 for a in epic-driver dispatcher; do ok; grant "$a" || fail "F: $a grants spawn"; done
 

@@ -386,11 +386,20 @@ Do not install from memory: read the doc and work from it.
   found or unreadable ⇒ the spawn refuses before any window, naming the file
   (BREAK-IT `agent-file-broken`). No `--as` ⇒ the shipped `fleet-worker` when it
   is there, else a plain session given the ticket. The core ships
-  `conf/agent-defaults/claude/agents/` (fleet-worker, and until their plugins
-  carry them epic-driver and fleet-debugger) into `~/.claude/agents` through
+  `conf/agent-defaults/claude/agents/` (fleet-worker, and until its plugin
+  carries it fleet-debugger) into `~/.claude/agents` through
   install-apply's `agent files` step (`fleet-agent-def.py ship`): written once,
   following the release while still the fleet's bytes, never touched once edited
-  (the person's override) or deleted (`agents-shipped.json` remembers). A worker
+  (the person's override) or deleted (`agents-shipped.json` remembers); one the
+  core stops shipping is retired while still the fleet's bytes. **The EPIC driver
+  is the fleet-epic plugin's** (issue #3116, C5): `plugins/fleet-epic/agents/epic-driver.md`
+  (`fleet: reap: loop-end`, every tool) beside its three commands and epic-page;
+  the orchestrator opens a batch with `dash-raw-session.sh --as epic-driver`, which
+  Claude Code finds by the bare name; no plugin ⇒ no driver, a ticket is a ticket.
+  A login an older release shipped it into gets fleet-epic (`fleet-plugins.py`
+  carry-over) before the copy is retired. The batch marks and heartbeat / floor /
+  backstop / preflight scripts stay in `bin/` — only the plugin's commands call
+  them (`fleet-plugins-selftest.sh` I). A worker
   window may spawn ⇔ its file grants `spawn` (no `tools` list, or one naming it,
   and no `disallowedTools` taking it away — fleet-worker takes it away) or it took
   a role (`@fleet_role_def orchestrator|steward`); `--role worker|epic-driver|debugger`
