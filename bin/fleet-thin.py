@@ -105,7 +105,8 @@ OSC_MAX = 4096
 START, END = b"\x1b[200~", b"\x1b[201~"
 # what a dropped connection may leave the terminal in: the alternate screen,
 # mouse reporting, bracketed paste, a hidden cursor
-RESET = b"\x1b[?1049l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l\x1b[?25h\x1b[0m\r\n"
+RESET = (b"\x1b[?1049l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1005l\x1b[?1006l\x1b[?1015l"
+         b"\x1b[?1004l\x1b[?2004l\x1b[?25h\x1b[0m\r\n")
 
 
 def env_num(name, default):
@@ -642,6 +643,10 @@ class Thin:
         out_wait = in_wait = 0.0
         st = None
         if tty_in:
+            try:
+                termios.tcflush(0, termios.TCIFLUSH)   # what was typed while the line was down
+            except termios.error:
+                pass
             tty.setraw(0, termios.TCSANOW)
         try:
             while True:
@@ -716,6 +721,21 @@ class Thin:
         return rc_of(st), first_byte, first_view
 
     # -- signals ----------------------------------------------------------
+    def mute(self):
+        """Between two connections (issue #3007's drill): the terminal echoes
+        nothing — a mouse report or a key typed while the line is down would
+        otherwise print as garbage — and ⌃C still stops the loop (ISIG kept).
+        What was typed meanwhile is dropped before the next connection starts
+        (pump's flush), never sent to the session."""
+        if self.attrs is None:
+            return
+        a = list(self.attrs)
+        a[3] &= ~(termios.ECHO | termios.ECHONL | getattr(termios, "ECHOCTL", 0))
+        try:
+            termios.tcsetattr(0, termios.TCSANOW, a)
+        except termios.error:
+            pass
+
     def restore_tty(self):
         if self.attrs is not None:
             try:
@@ -922,6 +942,7 @@ class Thin:
                     tlog("rehome", "", "", "", "", "", "", "asking for a home other than %s" % self.avoid)
                 if not why:
                     write_out(RESET)
+                self.mute()
                 wait = backoff[min(k - 1, len(backoff) - 1)]
                 msg = tr("thin_reconnect", self.home or self.avoid or "?", "%g" % wait, k)
                 if why:
@@ -935,6 +956,7 @@ class Thin:
             tlog("quit", self.home, "", "", "", "", 130, "^C between connections")
             return 130
         finally:
+            self.restore_tty()   # echo back, if it ended between two connections (mute)
             self.profile(False)
 
     def resize(self, *_):

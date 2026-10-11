@@ -301,7 +301,8 @@ drill_thin_view_lost_on_drop() {
   local t0 v n
   tc_rig
   # one terminal kept open across the drop: drive in the background, lingering
-  ( THIN_ARGS='["--home", "m1", "s1"]' tc_drive dr2 '[["expect", "VIEW s1 ON m1"], ["linger", 40]]' & ) 2>/dev/null
+  ( THIN_ARGS='["--home", "m1", "s1"]' tc_drive dr2 '[["expect", "VIEW s1 ON m1"], ["await", "'"$R"'/net.down", 15],
+    ["linger", 1.5], ["send", "\u001b[<35;10;5MJUNKTYPED\n"], ["linger", 40]]' & ) 2>/dev/null
   until_ok 10 grep -q 'True' "$R/res.dr2" || { WHY="the view never came up: $(cat "$R/res.dr2")"; tc_done; return 1; }
   v=$(sed -n '1s/.*--view \([^ ]*\).*/\1/p' "$R/rv.log")
   # the lid closed / the Wi-Fi gone: every ssh fails, the hub does not answer either
@@ -317,8 +318,10 @@ drill_thin_view_lost_on_drop() {
   case $n in "m1 attach --thin --view $v --resume "*) ;;
     *) WHY="after the drop the loop went to a fresh view: '$n' (was m1 --view $v); thin.log: $(grep -a rehome "$R/thin.log" | tail -n 2 | tr '\t' ' ')"; tc_done; return 1 ;; esac
   grep -aq 'VIEW orch ON m2\|VIEW s1 ON m2' "$R/term.out" && { WHY="it went to m2 on the way"; tc_done; return 1; }
+  # the mouse moved / a key typed while the line was down: no echo, and never sent to the session (#3007)
+  grep -aq '35;10;5M\|JUNKTYPED' "$R/term.out" && { WHY="input during the drop reached the screen or the session: $(grep -ao '.\{0,20\}JUNKTYPED.\{0,10\}\|.\{0,10\}35;10;5M' "$R/term.out" | head -2 | cat -v)"; tc_done; return 1; }
   tc_done; wait 2>/dev/null
-  WHAT="网断到连续 $(grep -c '	connect	' "$R/thin.log") 次连不上（入口也连不上）：不换家；网回来 ${SECS}s 内回到 m1 同一个看台（--resume）的 s1"
+  WHAT="网断到连续 $(grep -c '	connect	' "$R/thin.log") 次连不上（入口也连不上）：不换家，其间动鼠标、打字不回显也不送进会话；网回来 ${SECS}s 内回到 m1 同一个看台（--resume）的 s1"
 }
 
 drill_thin_home_down() {

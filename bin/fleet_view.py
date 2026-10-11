@@ -1176,17 +1176,20 @@ def popup(screen, qo, vid, client):
             right = e.get("right") or ("#" + e["issue"].lstrip("#") if e.get("issue") else "")
             lw = width - 1 - 2 - wcol - 1 - (qo.cells(right) + 1 if right else 0)
             name = qo.clip(indent + (e.get("text") or ""), max(1, lw))
-            line = "  " + word + " " * max(1, wcol - qo.cells(word) + 1) + name
-            attr = curses.A_REVERSE if lit else 0
+            # the lit row: a ▶ in the gutter + reverse video, never in the far grey —
+            # reverse of the grey (SGR 90) is a dim bar some terminals barely show,
+            # so a lit far / pinned row looked unselected (#3007's drill)
+            line = ("▶ " if lit else "  ") + word + " " * max(1, wcol - qo.cells(word) + 1) + name
+            attr = (curses.A_REVERSE | curses.A_BOLD) if lit else 0
             if e.get("state") == "needs" or e.get("state") == "failed":
                 attr |= curses.color_pair(1)
-            elif e.get("far"):
+            elif e.get("far") and not lit:
                 attr |= curses.color_pair(2)
             screen.addnstr(y, 0, qo.clip(line, width - 1), width - 1, attr)
             if right:
                 x = max(0, width - 1 - qo.cells(right))
                 try:
-                    screen.addstr(y, x, right, attr | curses.color_pair(2))
+                    screen.addstr(y, x, right, attr | (0 if lit else curses.color_pair(2)))
                 except curses.error:
                     pass
         foot = msg or (shown[at].get("foot", "") if 0 <= at < len(shown) else "")
