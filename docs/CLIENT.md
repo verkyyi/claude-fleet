@@ -569,3 +569,38 @@ only**. `fleet-cred-scan.py hashes` on a host that holds the pool's credentials
 prints their sha256 digests for `--hashes`, so a person's own login is told
 apart from a pool credential. ⚠️ On a trusted host `④` is a real lease call —
 pass `--no-hub` there.
+
+## 常见问题 — 连不上 · 中文乱码 · 列表停住 · 会话结束了 · 额度在哪看 (issue #3216)
+
+The `fleet-help` skill (`skills/fleet-help/SKILL.md`) answers from here; each
+answer is a person's steps, the reasons live in the sections it points to.
+`<入口>` is the hub's address — `FLEET_HUB_URL` in `fleet.conf`.
+
+**连不上**
+- 手机（Termius）：
+  1. 打开钥匙页 `<入口>/fleet/keys`：那把钥匙还在（没被「撤掉」）、页上写的**端口**和
+     Termius 里那台主机的端口一样——换过家端口会变（`docs/MULTI-MACHINE-OPS.md`
+     «手动换家»）。
+  2. 页上写「从外面连不上」：家机器的入口端口从外面够不着。在家机器上跑 `fleet doctor`，
+     `public` 行说卡在哪（超时 · 被拒 · 钥匙不符 · 这台没有公网地址），或在同一页换一台当家。
+  3. Termius 说**主机钥匙变了**：刚换过家就接受一次；没换过家先别接受，问运维。
+  4. 家里宽带刚换了公网地址：地址最多 15 分钟跟上，等一会儿再连。
+- Mac：`fleet` 说证书过期就 `fleet login`；`fleet doctor` 的 `fleet` 行写着版本、入口和证书。
+- 还不行：`fleet debug report`，把它打印的短链接交给运维。
+
+**中文乱码**（中文画成 `_` 或方块）——连入口端口时手机没带 `LANG`。家机器的入口自 #3196
+起自己补 UTF-8（BREAK-IT `entry-no-lang`），断开、重连一次即可。还乱：⌃\ 进 shell 打
+`locale`，`LC_CTYPE` 不是 `…UTF-8` 就是家机器还没更新到那一版——`fleet doctor` 的
+`install` 行看版本，或 `fleet debug report`。
+
+**列表停住**（⌘P 里别的机器的行不动、点进去进不去）——⌘P 第二行写「远端列表 N 没更新 ·
+标「失联」的行可能已不在」时，是家机器取列表的身份断了（#3164）。在家机器上 `fleet doctor`
+看哪一行红；在 Mac 上 `fleet login` 续证书、`fleet update` 跟上 stable。
+
+**会话结束了**（`/exit`、⌃C、进程被杀）——窗口留在恢复页：↵ 用同一段对话续上 · r 新开 ·
+q 回收（`docs/BREAK-IT.md` `session-exit`）。客户端说「会话已结束（m5）。fleet 可以恢复。」
+时，下一次 `fleet` 就回到那个恢复页。⌃D / 关终端只是**放到后台**，会话照跑（上一节）。
+
+**额度和用量在哪看**——入口网页：`<入口>/quota`「我的额度」：每个订阅的 5 小时 / 7 天窗、
+什么时候重置、是否用尽；`<入口>/usage`「我的用量」：每天用了多少、个人预算。看台顶行的
+「剩余 N%」是**这个会话的上下文**还剩多少，不是额度（手机窄屏不显示它）。

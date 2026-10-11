@@ -205,6 +205,7 @@ skills/doc-preview/SKILL.md
 skills/doc-preview/render.mjs
 skills/doc-preview/server.py
 skills/doc-preview/share.sh
+skills/fleet-help/SKILL.md
 skills/fleet-open/SKILL.md
 skills/handoff/SKILL.md
 commands/README.md

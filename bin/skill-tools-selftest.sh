@@ -11,7 +11,7 @@
 # fleet-history) keep their script form and are not linted.
 #
 # In scope: every commands/*.md marked `owner: worker`, plus the worker-run ones
-# named below (owner: either — run from a worker pane too), the fleet-open skill
+# named below (owner: either — run from a worker pane too), the fleet-open and fleet-help skills
 # and the Codex seed preamble.
 #   A  the linter itself, on fixtures: a path in a worker step is red; the same
 #      path under 排障 / 运营者 is clean, and the exemption ends at the next
@@ -142,7 +142,7 @@ for f in "$ROOT"/commands/*.md; do
   grep -q '^<!-- fleet skill · owner: worker -->$' "$f" && set -- "$@" "$f"
 done
 for f in commands/fleet-claim.md commands/fleet-handoff.md commands/fleet-compact-resume.md \
-         commands/fleet-context.md skills/fleet-open/SKILL.md skills/handoff/SKILL.md conf/codex-preamble.md; do
+         commands/fleet-context.md skills/fleet-open/SKILL.md skills/fleet-help/SKILL.md skills/handoff/SKILL.md conf/codex-preamble.md; do
   [ -f "$ROOT/$f" ] || fail "B: $f is in scope but missing"
   case " $* " in *" $ROOT/$f "*) : ;; *) set -- "$@" "$ROOT/$f" ;; esac
 done
