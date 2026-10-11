@@ -10,6 +10,11 @@ name: hub-rolling
 # Runs on every PR that touches what a release is made of: the manifests, the
 # release scripts, this file, or the hub itself (its /readyz, its shutdown).
 # Nothing here touches a real cluster, and it needs no credential.
+#
+# No pull goes to Docker Hub unauthenticated (claude-fleet#2734: its rate
+# limit turned this red three reruns in a row): the daemon, the BuildKit
+# builder and its image, and the two images the drill runs inside kind all
+# come through mirror.gcr.io, Google's pull-through cache of Docker Hub.
 
 on:
   pull_request:
@@ -38,7 +43,23 @@ jobs:
       - name: Pack the client
         run: bin/fleet-client-pack.sh
 
+      # The daemon's pulls (kind's node image, the preloads below) and the
+      # builder's FROMs go through the mirror; Docker Hub stays the fallback.
+      - name: Docker Hub through mirror.gcr.io
+        run: |
+          set -euo pipefail
+          f=/etc/docker/daemon.json
+          { sudo cat "$f" 2>/dev/null || echo '{}'; } | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' > /tmp/daemon.json
+          sudo mv /tmp/daemon.json "$f"
+          sudo systemctl restart docker
+          docker info --format '{{.RegistryConfig.Mirrors}}'
+
       - uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: image=mirror.gcr.io/moby/buildkit:buildx-stable-1
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
 
       - name: Build the hub image
         uses: docker/build-push-action@v6
@@ -70,6 +91,9 @@ jobs:
         run: |
           set -euo pipefail
           for t in drill-1 drill-2 drill-3 drill-4 drill-broken; do kind load docker-image "ccquota:$t" --name hub-drill; done
+          # The drill's own Postgres and prober: pulled here through the
+          # daemon's mirror, so the kind node never asks Docker Hub for them.
+          for i in postgres:16 curlimages/curl:8.10.1; do docker pull -q "$i"; kind load docker-image "$i" --name hub-drill; done
 
       - name: The drill (downtime_seconds must be 0)
         run: deploy/k8s/overlays/kind/drill.sh drill-1 drill-2 drill-3 drill-4 drill-broken

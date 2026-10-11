@@ -1,5 +1,7 @@
 package control
 
+import "time"
+
 // The direct door (claude-fleet#3068, EPIC #3067 C1/C3).
 
 // TypeEntryKeys is the hub's word that the direct door's list for a home
@@ -57,4 +59,77 @@ type EntryNodeLogin struct {
 type EntryNodeList struct {
 	Version int                       `json:"version"`
 	Logins  map[string]EntryNodeLogin `json:"logins"`
+}
+
+// EntryReachNodePath is POST EntryReachReport with the machine's token
+// (claude-fleet#3072, EPIC #3067 C6): the home machine says how the outside
+// could reach its entry port; the hub dials each address from where it
+// stands and answers an EntryReachVerdict.
+const EntryReachNodePath = "/v1/node/entry-reach"
+
+// EntryPortMap is what the machine's own router said when asked to forward
+// the entry port (NAT-PMP or UPnP; FLEET_ENTRY_PORTMAP=auto|off). Method
+// "" = not tried; Error set = tried and refused / no answer.
+type EntryPortMap struct {
+	Method       string `json:"method,omitempty"`
+	ExternalIP   string `json:"external_ip,omitempty"`
+	ExternalPort int    `json:"external_port,omitempty"`
+	Error        string `json:"error,omitempty"`
+}
+
+// EntryReachReport is one home machine's reading, every five minutes.
+// The public IPv4 is never the machine's say: it is the address the hub sees
+// the report come from.
+type EntryReachReport struct {
+	// Port is the entry port, HostKey its host key "<type> <base64>" — an
+	// address counts only when the sshd answering there shows this key.
+	Port    int    `json:"port"`
+	HostKey string `json:"host_key"`
+	// Listening: the entry sshd is up (someone has their home here).
+	Listening bool `json:"listening"`
+	// V6 is the machine's global IPv6 addresses; LAN its private IPv4 ones
+	// (only for the "open this port to …" hint, never dialled).
+	V6      []string      `json:"v6,omitempty"`
+	LAN     []string      `json:"lan,omitempty"`
+	PortMap *EntryPortMap `json:"portmap,omitempty"`
+	// EntryHost / EntryPort are the machine's operator-written entry route
+	// (CCQUOTA_FLEET_NODE_ROUTES entry=host:port): the public port the
+	// router forwards to the entry port, which need not be Port. The hub
+	// dials the source address — and the host's own addresses — on it.
+	EntryHost string `json:"entry_host,omitempty"`
+	EntryPort int    `json:"entry_port,omitempty"`
+}
+
+// Entry reach reasons: why an address did not count.
+const (
+	ReachTimeout = "timeout" // nothing answered
+	ReachRefused = "refused" // the port is closed there
+	ReachHostKey = "hostkey" // an sshd answered with another host key
+	ReachNotSSH  = "not_ssh" // something answered that is no sshd
+	ReachNoRoute = "unreachable"
+)
+
+// EntryReachAddr is one address the hub tried.
+type EntryReachAddr struct {
+	Addr      string     `json:"addr"`
+	Family    string     `json:"family"` // "ipv4" | "ipv6"
+	Port      int        `json:"port"`
+	Via       string     `json:"via"` // "source" | "portmap" | "route" | "ipv6"
+	Reachable bool       `json:"reachable"`
+	Reason    string     `json:"reason,omitempty"`
+	LastOK    *time.Time `json:"last_ok,omitempty"`
+}
+
+// EntryReachVerdict is EntryReachNodePath's answer: what the doctor's
+// `public` row reads.
+type EntryReachVerdict struct {
+	CheckedAt time.Time `json:"checked_at"`
+	// Source is the address the report came from, as the hub saw it.
+	Source string `json:"source,omitempty"`
+	// NoPublic says why this machine looks to have no public IPv4 of its
+	// own ("cgnat": carrier NAT) — "" when it has, or nobody can tell.
+	NoPublic string           `json:"no_public,omitempty"`
+	Addrs    []EntryReachAddr `json:"addrs"`
+	// Throttled: a report inside the last check's window, answered from it.
+	Throttled bool `json:"throttled,omitempty"`
 }

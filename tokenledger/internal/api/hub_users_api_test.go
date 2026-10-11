@@ -351,7 +351,7 @@ func TestMigrateLegacySettings_OnlyTheSpotImageIsLeft(t *testing.T) {
 	if err := s.MigrateLegacySettings(time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if settings, _ := st.FleetSettings(); len(settings) != 0 {
+	if settings, _ := st.FleetSettings(); len(settings) != 1 || settings[CredPolicyModeKey] != "strict" {
 		t.Fatalf("the start copied something with no SPOT image: %v", settings)
 	}
 }

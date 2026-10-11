@@ -157,6 +157,9 @@ func (s *Server) passEndpoint(id string, now time.Time) string {
 // resolve's first pick and its re-check of a retained binding, an explicit
 // bind, the 429 rebind. A policy that cannot be read is an error, never "all".
 func (s *Server) sessionBindChoices(principal, endpointID, provider string) ([]store.Credential, error) {
+	if principal == "" {
+		return nil, errors.New("session subscription access requires a principal")
+	}
 	pol, err := s.credPolicyFor(endpointID, principal)
 	if err != nil {
 		return nil, err

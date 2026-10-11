@@ -28,6 +28,10 @@ func newFleetHarness(t *testing.T) *harness {
 	if err := st.EnsureNodes(); err != nil {
 		t.Fatal(err)
 	}
+	// Existing behavior fixtures represent an installation awaiting policy migration.
+	if err := st.SetFleetSetting(CredPolicyModeKey, "legacy", time.Now()); err != nil {
+		t.Fatal(err)
+	}
 	srv := &Server{Store: st, Pricing: pricing.Default(), ViewerToken: viewerToken,
 		LiveStore: NewLive(), Fleet: true}
 	ts := httptest.NewServer(srv.Handler())

@@ -188,8 +188,9 @@ ccquota codex list                            # LOGIN valid
 
 ### 订阅白名单 — which subscriptions a machine and a person may use (issue #3043)
 
-With a hub, every active person leases every pool account by default. The
-operator narrows that with two allowlists, both on the hub:
+New installations require explicit subscription authorization for both the
+person and the machine. Existing installations retain legacy behavior until
+an administrator reviews and activates the migration. Both grants live on the hub:
 
     effective = eligible (own + pool, after revocation · trust · separation)
                 ∩ the machine's list ∩ the person's list
@@ -203,9 +204,11 @@ operator narrows that with two allowlists, both on the hub:
   place and a new token under an old label does not inherit it. A credential
   imported before account UUIDs were recorded matches no list: record one with
   `POST /v1/fleet/credentials {"action":"bind","account_uuid":…}`.
-- **Defaults.** No list = unrestricted (as before); `[]` = deny all; a list =
-  only its entries. A list that does not parse denies all in its scope; with any
-  machine list set, an endpoint whose joined name is unknown is denied. A list
+- **Defaults.** In strict mode, no list = unauthorized; `[]` = deny all;
+  a list = only its entries; explicit `all: true` = every current and future
+  eligible subscription (stored as JSON `"*"`). Malformed rules and unknown
+  machine identities deny access. Legacy mode keeps the old missing-list
+  behavior only until migration is explicitly activated. A grant
   never grants anything the existing gates refuse (another person's own
   subscription, a revoked machine or person).
 - **Where.** One resolver in the hub: the node lease (a forbidden account is
@@ -221,15 +224,54 @@ fleet-cred-policy.sh effective --machine fleet-linux-0 --principal gh:2718137   
 fleet-cred-policy.sh set node fleet-linux-0 <uuid> <uuid> …
 fleet-cred-policy.sh set user gh:2718137 <uuid> …
 fleet-cred-policy.sh deny user gh:…      # nothing at all
-fleet-cred-policy.sh clear node fleet-linux-0   # unrestricted again
+fleet-cred-policy.sh all node fleet-linux-0     # explicit all, including future subscriptions
+fleet-cred-policy.sh clear node fleet-linux-0   # unconfigured: denied in strict mode
 fleet-cred-policy.sh show
 ```
+
+Administrators configure access on **Users → user detail** or **Machines →
+machine detail**. Each object has three choices: **Unauthorized**, **Selected
+subscriptions**, and **All subscriptions** (including future additions).
+**Revoke access**, followed by **Save rule**, denies the object explicitly,
+including while legacy mode remains active. The user's and machine's grants
+must both allow a subscription. An optional inspector shows their intersection.
+The machine page's live refresh does not replace an authorization draft.
+
+**Subscriptions** is the overview; each subscription opens its own detail page
+with pause/removal and a read-only list of user and machine grants. Those links
+lead to the corresponding object settings. The top **Global settings** action
+opens the pool controls and migration status.
+
+For an older hub, global settings lists objects with absent rules and requires
+an explicit retain/revoke decision for each. Retain creates an **All
+subscriptions** grant, including future subscriptions; revoke leaves the object
+unauthorized under strict mode. Existing restrictions remain unchanged. A
+review revision detects changed policies or inventory; the database commits
+retained grants, strict mode and the audit together. New objects are denied.
+Activation can interrupt sessions at their next permission check; merely
+opening the review makes no changes. No automatic production migration runs.
+
+The admin API uses `PUT /v1/fleet/cred-policy` with `scope`, `id`, and either
+`allow: [IDs]`, `allow: []`, or `all: true`. `allow: null` removes a rule and is
+**not** an all-subscriptions grant in strict mode. GET includes `mode` and, in
+legacy mode, a `migration` review. Activate with `action: "activate"`, its
+`revision`, and the reviewed object `key`s in `retain`.
+
+Machine logins are grouped by the enrolled identity resolved by the hub,
+never the reported hostname; users use their hub principal, including pinned
+administrators. A failed machine identity lookup cannot become an editable
+machine. Credentials without a subscription ID cannot be selected until bound
+with the existing credentials API. Previously selected IDs remain in the
+editor even when their credential is no longer available. A pre-save read
+catches intervening policy changes; the API does not provide atomic revision
+checks for simultaneous writes. The displayed verdict is the hub's policy and
+revocation result, not a guarantee of upstream availability or other lease gates.
 
 Every write is a `policy` row in the credential audit (who, old → new); every
 lease denial is a `deny` row naming the reason. No secret is in either.
 
 **Timing, honestly.** The hub's central proxy sees a change within its ~30 s
-cache. A node's agent leases again every 15 min while any list exists and
+cache. A node's agent leases again every 15 min in strict mode or while any list exists and
 removes what was withdrawn; an agent that predates this, and the very first
 list ever set, wait for the agent's own renewal (≤ 6 h). With the hub
 unreachable nothing new is leased and what a node holds runs to its expiry; a
