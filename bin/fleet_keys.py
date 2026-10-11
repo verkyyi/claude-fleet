@@ -1,3 +1,4 @@
+# fleet_keys.py — imported, not run (a comment first: fleet-install.sh checks every bin/ file starts with one)
 """fleet_keys.py — which keys a person's fleet binds (issue #3185, EPIC #3178 C7).
 
 A new install takes ONE key on a Mac, ⌘P (the panel), and three on a phone or a
