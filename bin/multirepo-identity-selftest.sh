@@ -14,7 +14,6 @@
 # One leg per join the issue names:
 #   keys       fleet_repos / fleet_issue_key / fleet_window_key /
 #              fleet_bound_windows / fleet_repo_for_slug / fleet_okey_prefix
-#   dispatch   autofill dedup (fleet-dispatch.sh)
 #   backlog    the ACTIVE map (tmux-issues-rows.sh)
 #   reap       fleet-reap-target.py: bare #12 refused as ambiguous, <repo>#12 exact
 #   bridge     bridge_find_window (fleet-issue-bridge.sh --find-window)
@@ -86,9 +85,7 @@ cat > "$FLEET_CONF_DIR/fleets/$M/conf" <<EOF
 FLEET_REPO="o/a"
 FLEET_MAIN="$WORK/mainA"
 FLEET_BASE_BRANCH="master"
-FLEET_AUTOFILL=1
 FLEET_ISSUE_BRIDGE=1
-FLEET_AUTOFILL_MAX_PER_TICK=9
 FLEET_FAILOVER=0
 EOF
 cat > "$FLEET_CONF_DIR/fleets/$M/repos/o-b.conf" <<EOF
@@ -152,41 +149,6 @@ fleet_repo_for_slug "$M" o-z >/dev/null && fail "keys: an unhosted slug resolves
 eq "keys: okey prefix, multi" "$(fleet_okey_prefix "$M" o/b)" "o-b:"
 eq "keys: okey prefix, one-repo" "$(fleet_okey_prefix "$D" o/c)" "o-c:"
 leg keys
-
-# --- dispatch: autofill dedup ------------------------------------------------------
-# M dispatches for BOTH o/a and o/b (o/b's overlay inherits FLEET_AUTOFILL=1, #799).
-# A12 binds o/a#12; B14 binds only o/b#14; U16's repo is unknown, so it blocks #16
-# everywhere (conservative). D: the legacy bare set, bare log lines.
-cat > "$WORK/issues.json" <<'JSON'
-[ {"number":12,"labels":[{"name":"autofill"}],"assignees":[]},
-  {"number":14,"labels":[{"name":"autofill"}],"assignees":[]},
-  {"number":16,"labels":[{"name":"autofill"}],"assignees":[]},
-  {"number":18,"labels":[{"name":"autofill"}],"assignees":[]} ]
-JSON
-cat > "$WORK/bin/gh" <<EOF
-#!/bin/bash
-expr=''
-while [ "\$#" -gt 0 ]; do case "\$1" in --jq) shift; expr="\$1" ;; esac; shift; done
-[ -n "\$expr" ] && jq -r "\$expr" "$WORK/issues.json"
-exit 0
-EOF
-out=$(bash "$BIN/fleet-dispatch.sh" --dry-run "$M" 2>&1)
-has   "dispatch: A#12 bound"              "$out" "skip o/a#12"
-has   "dispatch: B#12 bound"              "$out" "skip o/b#12"
-has   "dispatch: B#14 does not bind A#14" "$out" "would spawn o/a#14 (p3) --repo o/a"
-has   "dispatch: B#14 bound"              "$out" "skip o/b#14"
-has   "dispatch: unknown-repo #16 blocks A" "$out" "skip o/a#16"
-has   "dispatch: unknown-repo #16 blocks B" "$out" "skip o/b#16"
-has   "dispatch: free A#18"               "$out" "would spawn o/a#18 (p3) --repo o/a"
-has   "dispatch: free B#18"               "$out" "would spawn o/b#18 (p3) --repo o/b"
-hasnt "dispatch: #12 never spawned"       "$out" "#12 (p3) --repo"
-out=$(bash "$BIN/fleet-dispatch.sh" --dry-run "$D" 2>&1)
-# One road (#1941): a one-repo fleet names and spawns by (repo, N) exactly as M does.
-has   "dispatch: one-repo #12 bound"      "$out" "skip o/c#12"
-has   "dispatch: one-repo #14 bound"      "$out" "skip o/c#14"
-has   "dispatch: one-repo #16 free"       "$out" "would spawn o/c#16 (p3) --repo o/c  [slot"
-printf '#!/bin/sh\nexit 1\n' > "$WORK/bin/gh"
-leg dispatch
 
 # --- backlog: the ACTIVE map -------------------------------------------------------
 # The list is o/a's issues (its cache). Bound rows are hidden by default: o/a#12 is

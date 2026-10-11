@@ -2,22 +2,26 @@
 # fleet-macos-watch-selftest.sh — bin/fleet-macos-watch.sh (issue #2286), hermetic.
 #
 # `gh` is a PATH shim serving the macOS workflow's runs, a run's jobs and a job's
-# failed log from files; the filer and the spawner are FLEET_MACOS_FILE_CMD /
-# FLEET_MACOS_SPAWN_CMD stand-ins that log their argv. Nothing touches GitHub.
+# failed log from files; the filer and the alert are FLEET_MACOS_FILE_CMD /
+# FLEET_MACOS_ALERT_CMD stand-ins that log their argv. Nothing touches GitHub.
+# Since #3120 (EPIC #3111 C9) nothing is ever spawned: a stand-in for
+# dash-issue-session.sh sits first on PATH and must stay unrun.
 #
 #   A. green          newest completed run green → `green`, nothing filed, memo gone
 #   B. red            files through the filer with --breakage; the title names the
 #                     failed test, the failed job and the commit the red streak
-#                     started at; the new issue's worker is spawned into --session
-#                     with --origin autofill; the run id is remembered
+#                     started at; ONE `breakage` alert names the issue on
+#                     --session's fleet; nobody is spawned; the run id is remembered
 #   C. same run       not re-filed (no 「同一故障」 comment spam every tick)
 #   D. throttle       inside FLEET_MACOS_WATCH_SECS nothing is read
-#   E. rc 5           the breakage is already open: remembered, no spawn
+#   E. rc 5           the breakage is already open: remembered, alerted, no spawn
 #   F. rc 1           a failed filing is NOT remembered (retried next tick), exit 1
 #   G. noise          a cancelled run and a pull_request run are no verdict
 #   H. --dry-run      prints the filing, files and remembers nothing
 #   I. off            FLEET_MACOS_WATCH=0 reads nothing
-#   J. dispatch hook  fleet-dispatch.sh names the watcher and its gates
+#   J. diskguard      fleet-diskguard.sh --watch's macos_watch drives it for a repo
+#                     carrying both gate files, files + alerts, spawns nobody; a
+#                     repo without them is never read; the dispatch shell is inert
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -49,11 +53,15 @@ printf '%s\n' "\$*" >> "$WORK/filed"
 echo https://github.com/o/r/issues/4242
 exit \$(cat "$WORK/filer_rc" 2>/dev/null || echo 0)
 SH
-cat > "$WORK/spawn" <<SH
+cat > "$WORK/alert" <<SH
+#!/bin/bash
+printf '%s\n' "\$*" >> "$WORK/alerted"
+SH
+cat > "$WORK/shim/dash-issue-session.sh" <<SH
 #!/bin/bash
 printf '%s\n' "\$*" >> "$WORK/spawned"
 SH
-chmod +x "$WORK/shim/gh" "$WORK/filer" "$WORK/spawn"
+chmod +x "$WORK/shim/gh" "$WORK/filer" "$WORK/alert" "$WORK/shim/dash-issue-session.sh"
 
 S1=1111111aaaaaaa S2=2222222bbbbbbb S3=3333333ccccccc
 row() { printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4"; }
@@ -63,12 +71,14 @@ printf '2026-10-07T01:02:03Z FAIL  dash-marker-selftest.sh   12s\n2026-10-07T01:
 
 run() {
   OUT=$(env PATH="$WORK/shim:$PATH" FLEET_CONF_DIR="$WORK/conf" FLEET_SKIP_GLOBAL_CONF=1 \
-          FLEET_MACOS_FILE_CMD="$WORK/filer" FLEET_MACOS_SPAWN_CMD="$WORK/spawn" \
+          FLEET_MACOS_FILE_CMD="$WORK/filer" FLEET_MACOS_ALERT_CMD="$WORK/alert" \
           bash "$W" --repo o/r "$@" 2>&1); RC=$?
 }
 memo() { cat "$WORK/conf/global/macos-watch/o-r.filed" 2>/dev/null || echo none; }
 filed() { cat "$WORK/filed" 2>/dev/null; }
-reset() { rm -f "$WORK/filed" "$WORK/spawned" "$WORK/filer_rc" "$WORK/conf/global/macos-watch/"*; }
+alerted() { cat "$WORK/alerted" 2>/dev/null; }
+spawned() { [ -f "$WORK/spawned" ] && echo yes || echo no; }
+reset() { rm -f "$WORK/filed" "$WORK/spawned" "$WORK/alerted" "$WORK/filer_rc" "$WORK/conf/global/macos-watch/"*; }
 
 # --- A. green ------------------------------------------------------------------
 reset; echo 9 > "$WORK/conf/stale"; mkdir -p "$WORK/conf/global/macos-watch"; echo 7 > "$WORK/conf/global/macos-watch/o-r.filed"
@@ -87,14 +97,17 @@ lacks "B: a bare 'FAIL: a thing' line is not a test name" "$F" "红了：a,"
 contains "B: title names the job" "$F" "（macOS shard 2）"
 contains "B: title names the streak's first red commit" "$F" "自 2222222 起"
 contains "B: body links the run" "$F" "https://github.com/o/r/actions/runs/30"
-contains "B: spawned into the fleet" "$(cat "$WORK/spawned" 2>/dev/null)" "4242 fleet --repo o/r"
-contains "B: spawned as autofill" "$(cat "$WORK/spawned" 2>/dev/null)" "--origin autofill"
+eq "B: nobody spawned" no "$(spawned)"
+contains "B: one breakage alert" "$(alerted)" "event -L fleet breakage"
+contains "B: the alert names the issue" "$(alerted)" "https://github.com/o/r/issues/4242"
+eq "B: exactly one alert" 1 "$(alerted | wc -l | tr -d ' ')"
 eq "B: run remembered" 30 "$(memo)"
 
 # --- C. the same red run is not re-filed ----------------------------------------
-rm -f "$WORK/filed" "$WORK/spawned"
+rm -f "$WORK/filed" "$WORK/spawned" "$WORK/alerted"
 run --now --session fleet
 eq "C: exits 0" 0 "$RC"; contains "C: says already" "$OUT" "already, for this run"; eq "C: nothing filed" "" "$(filed)"
+eq "C: no second alert" "" "$(alerted)"
 
 # --- D. throttle ------------------------------------------------------------------
 reset; red_runs
@@ -106,12 +119,13 @@ eq "D: throttled exits 0" 0 "$RC"; eq "D: says nothing" "" "$OUT"; eq "D: nothin
 reset; red_runs; echo 5 > "$WORK/filer_rc"
 run --now --session fleet
 eq "E: exits 0" 0 "$RC"; contains "E: says already open" "$OUT" "(already open)"; eq "E: remembered" 30 "$(memo)"
-eq "E: no spawn" no "$([ -f "$WORK/spawned" ] && echo yes || echo no)"
+eq "E: no spawn" no "$(spawned)"; contains "E: alerted" "$(alerted)" "breakage"
 
 # --- F. a failed filing is retried ---------------------------------------------------
 reset; red_runs; echo 1 > "$WORK/filer_rc"
 run --now --session fleet
 eq "F: exits 1" 1 "$RC"; contains "F: says retried" "$OUT" "retried next tick"; eq "F: not remembered" none "$(memo)"
+eq "F: no alert for a failed filing" "" "$(alerted)"
 
 # --- G. cancelled / pull_request runs are no verdict ----------------------------------
 reset
@@ -130,10 +144,34 @@ OUT=$(env PATH="$WORK/shim:$PATH" FLEET_CONF_DIR="$WORK/conf" FLEET_MACOS_WATCH=
         bash "$W" --repo o/r --now 2>&1); RC=$?
 eq "I: off exits 0" 0 "$RC"; eq "I: says nothing" "" "$OUT"; eq "I: nothing filed" "" "$(filed)"
 
-# --- J. the dispatch tick runs it, gated on the repo's own files ------------------------
+# --- J. the diskguard tick drives it, files + alerts, spawns nobody (#3120) --------------
+reset; red_runs
+mkdir -p "$WORK/mainA/.github/workflows" "$WORK/mainA/bin" "$WORK/mainB"
+: > "$WORK/mainA/.github/workflows/selftests-macos.yml"; : > "$WORK/mainA/bin/fleet-stable.sh"
+cat > "$WORK/dg.sh" <<SH
+FLEET_DISKGUARD_SOURCE=1 . "$BIN/fleet-diskguard.sh"
+BIN="$BIN" GDIR="$WORK/dg"
+fleet_sockets() { echo fleet; }
+fleet_conf_file() { echo "$WORK/fleet.conf"; }
+fleet_load_conf() { :; }
+fleet_repos() { printf 'o/r\no/biz\n'; }
+fleet_load_repo_conf() { case "\$2" in o/r) FLEET_MAIN="$WORK/mainA" ;; *) FLEET_MAIN="$WORK/mainB" ;; esac; }
+macos_watch
+SH
+: > "$WORK/fleet.conf"
+env PATH="$WORK/shim:$PATH" FLEET_CONF_DIR="$WORK/conf" FLEET_SKIP_GLOBAL_CONF=1 \
+  FLEET_MACOS_FILE_CMD="$WORK/filer" FLEET_MACOS_ALERT_CMD="$WORK/alert" bash "$WORK/dg.sh" >/dev/null 2>&1
+i=0; while [ "$i" -lt 100 ] && ! grep -q 'filed' "$WORK/dg/macos-watch.log" 2>/dev/null; do sleep 0.1; i=$((i + 1)); done
+contains "J: diskguard's tick ran the watcher on the gated repo" "$(cat "$WORK/dg/macos-watch.log" 2>/dev/null)" "fleet o/r filed	30"
+contains "J: filed with --breakage" "$(filed)" "--breakage --repo o/r"
+eq "J: a repo without the gate files is never read" 1 "$(filed | grep -c -e '--breakage')"
+contains "J: alerted on the fleet" "$(alerted)" "event -L fleet breakage"
+eq "J: nobody spawned" no "$(spawned)"
+lacks "J: the watcher has no spawner left" "$(cat "$W")" "dash-issue-session"
 D="$BIN/fleet-dispatch.sh"
-contains "J: dispatch calls the watcher" "$(cat "$D")" 'fleet-macos-watch.sh" --repo "$r" --session "$sess"'
-contains "J: only a repo carrying the macOS workflow" "$(cat "$D")" '.github/workflows/selftests-macos.yml'
-contains "J: … and bin/fleet-stable.sh" "$(cat "$D")" '"$main/bin/fleet-stable.sh"'
+OUT=$(env PATH="$WORK/shim:$PATH" bash "$D" 2>&1); RC=$?
+eq "J: the retired dispatch shell exits 0" 0 "$RC"; eq "J: … and says nothing" "" "$OUT"
+eq "J: … and still spawns nobody" no "$(spawned)"
+eq "J: no dispatch daemon template left" no "$([ -e "$BIN/../launchd/com.claude-fleet.dispatch.plist.tmpl" ] && echo yes || echo no)"
 
 printf 'fleet-macos-watch-selftest OK (%d checks)\n' "$CHECKS"

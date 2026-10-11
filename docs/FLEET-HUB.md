@@ -816,8 +816,8 @@ closed. A failed move gives the lease back. A `working` session is never moved.
 **Where a new session opens, and which machines are READY** (issue #1475).
 `FLEET_SPAWN_NODE=auto|local|<machine>` (global, default `auto`) is what every
 spawn on the login follows when nothing names a machine — `dash-issue-session.sh`
-reads it in place of its old bare `auto`; `FLEET_AUTOFILL_NODE` stays auto-fill's
-own override and the operator's `FLEET_HUB_PLACE_CMD` pin is no longer needed.
+reads it in place of its old bare `auto` (auto-fill's own `FLEET_AUTOFILL_NODE`
+left with the dispatcher, #3120), and the operator's `FLEET_HUB_PLACE_CMD` pin is no longer needed.
 `local` never asks the hub. The node's heartbeat carries `ready` + `not_ready`
 (`control.Heartbeat`): `fleet-control.py`'s `ready` method →
 `fleet-control-read.sh ready` — a gh login, a usable Claude/Codex credential (a
@@ -1371,12 +1371,11 @@ Remote configuration writes are limited to:
 | Key | Accepted integer values | Effect |
 |---|---|---|
 | `FLEET_MAX_SESSIONS` | 0–256 | Per-Fleet launch cap; 0 retains Fleet's unlimited-per-Fleet meaning, subject to the machine cap |
-| `FLEET_AUTOFILL` | 0 or 1 | Enable/disable dispatch for eligible labelled Issues |
-| `FLEET_AUTOFILL_MAX_PER_TICK` | 1–16 | Bound one Fleet's autofill batch |
 
-A key needs an explicit caller grant as well as `config:write`. Enabling
-autofill delegates future automatic launches according to the Fleet's labels
-and local caps. Global settings, credentials, launch prompts, executable paths
+(`FLEET_AUTOFILL` / `FLEET_AUTOFILL_MAX_PER_TICK` left with the autofill
+dispatcher, claude-fleet#3120: a write naming one is refused.)
+
+A key needs an explicit caller grant as well as `config:write`. Global settings, credentials, launch prompts, executable paths
 and authorization policy are not writable through MCP.
 
 `expected_revision` hashes the Fleet overlay, not the inherited global config.

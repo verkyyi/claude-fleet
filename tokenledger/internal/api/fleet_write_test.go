@@ -372,7 +372,7 @@ func TestFleetWriteAuthorization(t *testing.T) {
 	}
 	// Every person is refused config:write by default, whatever the key.
 	h.srv.FleetPersonScopes = nil
-	cfg := map[string]any{"fleet_id": f4.FleetID, "key": "FLEET_AUTOFILL", "value": 1,
+	cfg := map[string]any{"fleet_id": f4.FleetID, "key": "FLEET_MAX_SESSIONS", "value": 1,
 		"expected_revision": strings.Repeat("a", 64), "idempotency_key": "c1"}
 	if _, err := h.srv.SubmitWrite(context.Background(), as("wx-verk"), "config_set", cfg); errorObject(err)["code"] != "FORBIDDEN" {
 		t.Fatalf("config_set by a person: %v; want FORBIDDEN", err)

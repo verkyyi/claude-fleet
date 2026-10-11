@@ -791,7 +791,10 @@ class H_Accounts(Sandbox):
         tmpl = set(os.path.basename(x)[len("com.claude-fleet."):-len(".plist.tmpl")]
                    for x in g.glob(os.path.join(os.path.dirname(BIN), "launchd", "*.plist.tmpl")))
         self.assertEqual(set(units), tmpl - {"memguard"}, "every template but the machine's is an account unit")
-        for need in ("dispatch", "issue-bridge", "pr-refresh", "ledger-watch", "quotawatch", "sleep", "cleanup",
+        # the autofill dispatcher's template is gone (issue #3120): no account
+        # runs it, and nothing keeps a unit the runtime no longer carries
+        self.assertNotIn("dispatch", units)
+        for need in ("issue-bridge", "pr-refresh", "ledger-watch", "quotawatch", "sleep", "cleanup",
                      "worktree-autoclean", "spinner", "webhook", "collect", "install-sync", "base-sync"):
             self.assertIn(need, units)
         self.assertTrue(units["spinner"].get("keepalive") and units["webhook"].get("keepalive"))
@@ -800,12 +803,12 @@ class H_Accounts(Sandbox):
         self.assertEqual(units["worktree-autoclean"]["every"], 3600)
         self.assertEqual(units["spinner"]["env"].get("SPIN_INTERVAL"), "0.12")
         self.assertEqual(units["diskguard"]["env"]["FLEET_ORPHAN_CPU_PCT"], "0", "orphans would run twice")
-        e = fns.account_entry(units["dispatch"], "alice", (501, 20, "/Users/alice"), "/opt/homebrew")
-        self.assertEqual(e["script"], "/Users/alice/.claude/fleet/bin/fleet-dispatch.sh")
+        e = fns.account_entry(units["base-sync"], "alice", (501, 20, "/Users/alice"), "/opt/homebrew")
+        self.assertEqual(e["script"], "/Users/alice/.claude/fleet/bin/fleet-base-sync.sh")
         self.assertTrue(e["env"]["PATH"].startswith("/Users/alice/.local/bin:/opt/homebrew/bin"))
         self.assertEqual(e["env"]["FLEET_CONF_DIR"], "/Users/alice/.config/claude-fleet")
         self.assertEqual(e["cmd"][4], "/dev/null")
-        self.assertEqual(e["cmd"][5], "/Users/alice/.claude/fleet/logs/dispatch.launchd.log")
+        self.assertEqual(e["cmd"][5], "/Users/alice/.claude/fleet/logs/base-sync.launchd.log")
         self.assertNotIn("__HOME__", json.dumps(e))
 
     def test_runs_as_account_and_isolated(self):

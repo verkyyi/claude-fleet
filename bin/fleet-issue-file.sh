@@ -199,6 +199,17 @@ if [ "${#labels[@]}" -gt 0 ]; then
     printf 'fleet-issue-file: allowed labels: %s\n' "$(printf '%s' "$allowed" | paste -sd ',' -)" >&2
     exit 3
   fi
+  # `autofill` opted an issue into the retired dispatcher (issue #3120, EPIC #3111
+  # C9): nothing starts on its own now. An older orchestrator still adds it by
+  # the old rule, so it is accepted for one version — never filed, said once.
+  # compat-1v: 下一批删
+  kept=()
+  for _l in ${labels[@]+"${labels[@]}"}; do
+    if [ "$_l" = autofill ]; then
+      printf 'fleet-issue-file: label autofill dropped — nothing starts on its own any more (issue #3120); filed without it\n' >&2
+    else kept+=("$_l"); fi
+  done
+  labels=(${kept[@]+"${kept[@]}"})
 fi
 # The agent label (issue #2562): both at once says nothing — refused before
 # anything is filed; one rides the --spawn below as --agent, so a brand-new

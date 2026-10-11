@@ -71,8 +71,8 @@ for _a in "$@"; do
     --title) _want=title ;;      # value is the NEXT arg
     --title=*) WIN_TITLE="${_a#--title=}" ;;
     # --origin (issue #503): spawn provenance — who asked for this worker. A
-    # headless caller states it (the dispatcher passes `autofill`, the bridge
-    # `bridge`); left empty it is AUTO-DETECTED from the calling pane below
+    # headless caller states it (the bridge passes `bridge`; `autofill` is the
+    # retired dispatcher's, still read on old windows — #3120); left empty it is AUTO-DETECTED from the calling pane below
     # (a worker/scratch spawning a sibling), and empty-after-detect ≡ hub.
     --origin) _want=origin ;;
     --origin=*) ORIGIN="${_a#--origin=}" ;;
@@ -174,8 +174,8 @@ TM() { tmux -L "$SOCK" "$@"; }
 # Spawn provenance (issue #503): detect the calling pane's own key — issue-<N> /
 # scratch-<N> when a worker or scratch is spawning this, empty (≡ hub) for the
 # dash/backlog/operator — then let fleet_origin_canon decide between it and an
-# explicit --origin: a canonical key or known literal (the headless dispatcher's
-# `autofill`, the bridge's `bridge`) is honoured, a worktree BASENAME is folded to
+# explicit --origin: a canonical key or known literal (the bridge's `bridge`, the
+# retired dispatcher's `autofill`) is honoured, a worktree BASENAME is folded to
 # its key (a Claude that read this header passed `cd-conductor-scratch-52` and the
 # dash could not group it), garbage yields to the detected key, and a cross-fleet
 # spawn stamps the SOURCE fleet (#516 — the key would name another window on the
@@ -199,7 +199,7 @@ shq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 # line, so the operator actually sees WHY nothing spawned. Additive — keeps the
 # display-message idiom, just styled + held longer (FLEET_REFUSE_MS overrides).
 # The toast is for a human at the tmux client; it is NOT a record (issue #683). A
-# headless caller — the autofill dispatcher, the bridge's revive, an agent
+# headless caller — the bridge's revive, an agent
 # spawning from another pane — never sees it: the toast lands on SOMEONE ELSE's
 # screen, and all the caller gets back is `1`, which cannot tell "retry later"
 # (cap) from "pick another issue / --remove-assignee first" (claimed) from
@@ -315,9 +315,8 @@ if [ "$TAIL_ONLY" != 1 ]; then
 fi
 NODE="$NODE_ARG"
 # No --node: FLEET_SPAWN_NODE (issue #1475) — `auto` (the default), `local`, or
-# a machine name — is what every spawn on this login follows, autofill included
-# (FLEET_AUTOFILL_NODE, when set, is autofill's own override and arrives as
-# --node). Only read with the hub on: off, nothing is placed anyway.
+# a machine name — is what every spawn on this login follows. Only read with
+# the hub on: off, nothing is placed anyway.
 if [ -z "$NODE" ] && [ "${CCQUOTA_FLEET:-0}" = 1 ]; then
   NODE="${FLEET_SPAWN_NODE:-$(fleet_spawn_node_default)}"   # personal machine → local (#1721)
   case "$NODE" in ''|*[!A-Za-z0-9._-]*) NODE=auto ;; esac
