@@ -214,7 +214,7 @@ root 运行。**托管登录的 `~/.claude/fleet` 就是机器运行时那一份
   "components": {
     "ccquota":    {"artifact": "ccquota-{os}-{arch}"},
     "claude":     {"version": "2.1.295", "artifact": "claude-{version}-{os}-{arch}"},
-    "codex":      {"version": "0.154.0", "artifact": "codex-{version}-{os}-{arch}"},
+    "codex":      {"version": "0.162.1", "artifact": "codex-{version}-{os}-{arch}"},
     "tmux":       {"version": "3.7c",    "artifact": "tmux-{version}-{os}-{arch}", "lock": "conf/vendor-tmux.lock"},
     "supervisor": {"script": "bin/fleet-node-supervisor.py"}
   }

@@ -25,8 +25,10 @@ import time
 # entry is a version PREFIX matched on whole components: "0.154" covers 0.154.0
 # and 0.154.3, never 0.1540. Add a version here only after the fixture tests
 # (fleet-codex-session-selftest.sh) pass against its real rollout files.
-SUPPORTED_ROLLOUT_VERSIONS = ("0.154",)
-PIN_COMMAND = "npm i -g @openai/codex@0.154.0"
+# 0.162 is the release pin since issue #3157 (its fullscreen chat keeps the
+# composer at the bottom); 0.154 stays for a machine still on the old release.
+SUPPORTED_ROLLOUT_VERSIONS = ("0.154", "0.162")
+PIN_COMMAND = "npm i -g @openai/codex@0.162.1"
 
 
 def version_supported(version):
