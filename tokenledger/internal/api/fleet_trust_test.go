@@ -62,7 +62,7 @@ func TestTrustOffAddsNothing(t *testing.T) {
 	h, tok, _ := newVaultHarness(t)
 	putCred(t, h, credvault.Claude, "main", credvault.Secret{RefreshToken: "rt"})
 	putCred(t, h, credvault.GitHub, "alice", credvault.Secret{Token: "ghp_x", User: "alice"})
-	if s, _ := h.srv.Store.FleetSettings(); len(s) != 0 {
+	if s, _ := h.srv.Store.FleetSettings(); len(s) != 1 || s[CredPolicyModeKey] != "legacy" {
 		t.Fatalf("settings before the first read: %v", s)
 	}
 
@@ -109,7 +109,7 @@ func TestTrustOffAddsNothing(t *testing.T) {
 	}
 
 	s, _ := h.srv.Store.FleetSettings()
-	if len(s) != 2 || s[NodeTrustPrefix+"m4"] != TrustTrusted || s[NodeTrustMigratedKey] == "" {
+	if len(s) != 3 || s[CredPolicyModeKey] != "legacy" || s[NodeTrustPrefix+"m4"] != TrustTrusted || s[NodeTrustMigratedKey] == "" {
 		t.Fatalf("settings after the migration: %v", s)
 	}
 	if n := trustAuditCount(t, h, `actor = 'migration' AND fleet_id = 'machine:m4'`); n != 1 {
@@ -119,7 +119,7 @@ func TestTrustOffAddsNothing(t *testing.T) {
 	before := s[NodeTrustMigratedKey]
 	time.Sleep(1100 * time.Millisecond)
 	rawLease(t, h, tok)
-	if s2, _ := h.srv.Store.FleetSettings(); s2[NodeTrustMigratedKey] != before || len(s2) != 2 {
+	if s2, _ := h.srv.Store.FleetSettings(); s2[NodeTrustMigratedKey] != before || len(s2) != 3 {
 		t.Fatalf("the migration ran twice: %v", s2)
 	}
 }

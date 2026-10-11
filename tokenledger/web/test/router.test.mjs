@@ -152,3 +152,9 @@ test('the shell reads /v1/me once per document and swaps only the content', () =
   assert.match(shell, /c\.timers\.clear\(\);/);
   assert.match(shell, /c\.page\.dispose\(\)/);
 });
+
+test('object detail routes inherit only their administrator menu access', () => {
+  for (const [path,id,parent] of [['/admin/users/gh%3A1','person','people'],['/subscriptions/uuid','subscription','subscriptions'],['/subscriptions/settings','subscription-settings','subscriptions']]) {
+    const route=routeFor(path);assert.equal(route.id,id);assert.deepEqual(route.within,[parent]);
+  }
+});
