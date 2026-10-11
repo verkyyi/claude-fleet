@@ -28,7 +28,6 @@
 # text. The door's own record (accepted / refused, by the listener's log) is the
 # machine daemon's `<log>/entry.ndjson`, which also goes to the hub.
 set -u
-ENTRY_BIN="$(cd "$(dirname "$0")" && pwd)"
 SH="${SHELL:-/bin/sh}"
 [ -x "$SH" ] || SH=/bin/sh
 CMD="${SSH_ORIGINAL_COMMAND-}"
