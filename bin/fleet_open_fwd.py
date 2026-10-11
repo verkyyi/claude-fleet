@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """fleet_open_fwd.py — the person's side of a forwarded page or OAuth callback
 (issue #3236): ONE bookkeeping for the thin loop (fleet-thin.py) and the
 client's action loop (fleet-client-actions.py).
