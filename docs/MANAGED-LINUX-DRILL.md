@@ -143,6 +143,7 @@ FLEET_SPAWN_NODE=fleet-linux-0 dash-issue-session.sh <N>   # 或 --node fleet-li
 - **算过**：打印 `#N → fleet-linux-0 已开窗 …`，活在 `fleet` 登录上跑完、PR 合并。
 - **出事看**：入口派活的排除原因（`not ready: …`）；节点上 `su - fleet -c "$R/fleet-control-read.sh ready"`。
 - **记**：那个 PR 的号。
+- **实练（2026-10-11）**：本 PR 即在 fleet-linux-0 / verkyyi 登录上派出、实现并合并（stable 05226fa4）。
 
 ## ⑦ 再开一个演练登录、删掉它（运维）
 
