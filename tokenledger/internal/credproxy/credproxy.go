@@ -453,8 +453,10 @@ func (p *Proxy) serve(w http.ResponseWriter, r *http.Request, provider string) {
 	}
 	m := newMeter()
 	a.out = stream(w, io.TeeReader(resp.Body, m))
-	a.tokens = m.Tokens()
-	p.report(res.Principal, provider, a.tokens)
+	u := m.usage()
+	a.tokens = u.Tokens()
+	u.Cred, u.Principal, u.WorkerID, u.Provider, u.Owner, u.Account = pass, res.Principal, res.WorkerID, provider, res.Owner, res.Account
+	p.report(u)
 }
 
 // target is where a request goes, and by which road.

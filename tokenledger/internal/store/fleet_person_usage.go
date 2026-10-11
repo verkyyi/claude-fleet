@@ -11,8 +11,11 @@ import (
 // node token (the person is the login's), the cluster credential proxy with
 // its own token (the person rides the session pass). A person's budget
 // (fleet.person_budget.<principal>) is read against the sums of the last five
-// hours and the last seven days, so rows are kept in ten-minute buckets and
-// anything older than eight days is dropped.
+// hours and the last seven days, in ten-minute buckets.
+//
+// Since claude-fleet#3226 those buckets are summed from pool_usage, one row a
+// request; this table is no longer written (a re-key still moves what is left
+// of it).
 const fleetPersonUsageSchema = `
 CREATE TABLE IF NOT EXISTS fleet_person_usage (
   principal  TEXT NOT NULL,
@@ -25,9 +28,6 @@ CREATE TABLE IF NOT EXISTS fleet_person_usage (
 
 // PersonUsageBucket is the width of one usage row.
 const PersonUsageBucket = 10 * time.Minute
-
-// personUsageKeep is how far back rows are kept: the week window plus a day.
-const personUsageKeep = 8 * 24 * time.Hour
 
 func (s *Store) ensureFleetPersonUsage() error {
 	if _, err := s.write.Exec(s.d.ddl(fleetPersonUsageSchema)); err != nil {
@@ -43,21 +43,14 @@ func PersonBucketStart(b int64) time.Time {
 	return time.Unix(b*int64(PersonUsageBucket/time.Second), 0).UTC()
 }
 
-// AddPersonUsage adds one report's tokens (and request count) to a person's
-// bucket for at, and drops rows past the keep window.
+// AddPersonUsage files one aggregate report — a login's local proxy's, which
+// counts tokens per provider and no more — as one pool_usage row under the
+// person (claude-fleet#3226): its tokens as input, requests as reported.
 func (s *Store) AddPersonUsage(principal, provider string, tokens, requests int64, at time.Time) error {
-	if principal == "" || (tokens <= 0 && requests <= 0) {
+	if principal == "" || tokens <= 0 {
 		return nil
 	}
-	if _, err := s.write.Exec(`INSERT INTO fleet_person_usage (principal, provider, bucket, tokens, requests)
-		VALUES (?, ?, ?, ?, ?) ON CONFLICT (principal, provider, bucket) DO UPDATE SET
-		tokens = fleet_person_usage.tokens + excluded.tokens,
-		requests = fleet_person_usage.requests + excluded.requests`,
-		principal, provider, personBucket(at), tokens, requests); err != nil {
-		return err
-	}
-	_, err := s.write.Exec(`DELETE FROM fleet_person_usage WHERE bucket < ?`, personBucket(at.Add(-personUsageKeep)))
-	return err
+	return s.AddPoolUsage(PoolUsage{Principal: principal, Provider: provider, In: tokens, Requests: requests, At: at})
 }
 
 // PersonUsageRow is one bucket of one person's usage, every provider summed.
@@ -69,15 +62,19 @@ type PersonUsageRow struct {
 }
 
 // PersonUsageSince lists the buckets at or after since, oldest first — for
-// one person, or everyone when principal is "".
+// one person, or everyone when principal is "". It sums pool_usage
+// (claude-fleet#3226) into the ten-minute buckets the budget reads, so a
+// person's limit is held against exactly the rows their page shows.
 func (s *Store) PersonUsageSince(principal string, since time.Time) ([]PersonUsageRow, error) {
-	q := `SELECT principal, bucket, SUM(tokens), SUM(requests) FROM fleet_person_usage WHERE bucket >= ?`
-	args := []any{personBucket(since)}
+	w := int64(PersonUsageBucket / time.Second)
+	q := fmt.Sprintf(`SELECT principal, at_unix / %d, SUM(tokens_in + cache_write + tokens_out), SUM(requests)
+		FROM pool_usage WHERE at_unix >= ?`, w)
+	args := []any{personBucket(since) * w}
 	if principal != "" {
 		q += ` AND principal = ?`
 		args = append(args, principal)
 	}
-	rows, err := s.write.Query(q+` GROUP BY principal, bucket ORDER BY principal, bucket`, args...)
+	rows, err := s.write.Query(q+fmt.Sprintf(` GROUP BY principal, at_unix / %d ORDER BY principal, at_unix / %d`, w, w), args...)
 	if err != nil {
 		return nil, err
 	}

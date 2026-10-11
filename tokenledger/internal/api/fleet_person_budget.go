@@ -19,7 +19,8 @@ import (
 // `usage` names and report them here under the person: the local proxy with
 // its node token (POST /v1/node/usage — the person is the login's, never the
 // node's say-so), the cluster proxy with its own token (POST
-// /v1/fleet/credproxy/usage — the person rides the session pass). The
+// /v1/fleet/credproxy/usage — one row per request, filed under the session
+// pass it carries, claude-fleet#3226; see store.PoolUsage). The
 // operator sets a person's budget as fleet.person_budget.<principal> =
 // "5h=<tokens>,week=<tokens>" (either half may be left out; "" removes it).
 // Over either window, the person's next request is refused with
@@ -274,10 +275,10 @@ func humanDur(d time.Duration) string {
 	return fmt.Sprintf("%d 分钟", m)
 }
 
-// usageReport is what a proxy sends: tokens per provider since its last report.
+// usageReport is what a login's local proxy sends: tokens per provider since
+// its last report.
 type usageReport struct {
-	Principal string `json:"principal,omitempty"` // the cluster proxy only
-	Usage     []struct {
+	Usage []struct {
 		Provider string `json:"provider"`
 		Tokens   int64  `json:"tokens"`
 		Requests int64  `json:"requests"`
@@ -294,6 +295,43 @@ func (s *Server) recordUsage(principal string, rep usageReport, now time.Time) e
 		}
 	}
 	return nil
+}
+
+// poolUsageReport is the cluster proxy's report of ONE forwarded request
+// (claude-fleet#3226): the pass it forwarded, what the hub's resolve named
+// (principal / worker_id — checked against the pass, never taken from here),
+// the account it went out on, and the response's own usage, by kind.
+type poolUsageReport struct {
+	Cred       string `json:"cred"`
+	Principal  string `json:"principal,omitempty"`
+	WorkerID   string `json:"worker_id,omitempty"`
+	Provider   string `json:"provider"`
+	Owner      string `json:"owner,omitempty"`
+	Account    string `json:"account,omitempty"`
+	Model      string `json:"model,omitempty"`
+	In         int64  `json:"in"`
+	CacheWrite int64  `json:"cache_write"`
+	CacheRead  int64  `json:"cache_read"`
+	Out        int64  `json:"out"`
+}
+
+// PoolUsageRefused is the usage report's refusal code: no pass, a pass this
+// hub did not issue, or one naming another person / session than the report.
+const PoolUsageRefused = "pool_usage_refused"
+
+// poolUsagePass is the pass a report rode on, when it may carry usage: one
+// that verifies now, or that verified when the request went out and has since
+// expired or been revoked (the request was forwarded; its usage is still that
+// person's). A pass this hub did not sign, or that its record disowns, is "".
+func (s *Server) poolUsagePass(cred, provider string, now time.Time) (*sessionCredClaims, string) {
+	v, c := s.verifySessionCred(cred, "", provider, false, now)
+	switch {
+	case c == nil:
+		return nil, v.Reason
+	case v.Valid, v.Revoked, v.Reason == "expired":
+		return c, ""
+	}
+	return nil, v.Reason
 }
 
 // handleNodeUsage is a login's local proxy: GET = the login's person's
@@ -335,11 +373,16 @@ func (s *Server) handleNodeUsage(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, st)
 }
 
-// handleCredProxyUsage is the cluster proxy: POST {principal, usage:[…]}.
+// handleCredProxyUsage is the cluster proxy: POST one forwarded request's
+// usage with the pass it rode on (claude-fleet#3226). The row is filed under
+// the pass's principal and session — a report with no pass, a pass that does
+// not verify, or a principal / worker_id the pass does not carry is refused
+// 403 pool_usage_refused and writes nothing — with repo / issue read from the
+// session's lease at this moment.
 func (s *Server) handleCredProxyUsage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	if r.Method != http.MethodPost {
-		httpError(w, http.StatusMethodNotAllowed, "POST {principal, usage:[…]}")
+		httpError(w, http.StatusMethodNotAllowed, "POST {cred, provider, in, cache_write, cache_read, out, …}")
 		return
 	}
 	if s.CredProxyToken == "" {
@@ -351,17 +394,47 @@ func (s *Server) handleCredProxyUsage(w http.ResponseWriter, r *http.Request) {
 		sessionCredRefuse(w, http.StatusUnauthorized, "unauthenticated", "the credential proxy's token is required")
 		return
 	}
-	var rep usageReport
-	if err := readOptionalJSON(r, &rep); err != nil || !principalKeyRE.MatchString(rep.Principal) {
-		httpError(w, http.StatusBadRequest, "body must be {principal, usage:[{provider, tokens, requests}]}")
+	var rep poolUsageReport
+	if err := readOptionalJSON(r, &rep); err != nil || !hasString(sessionCredProviders, rep.Provider) {
+		httpError(w, http.StatusBadRequest, "body must be {cred, provider, in, cache_write, cache_read, out, …}")
+		return
+	}
+	for _, n := range []int64{rep.In, rep.CacheWrite, rep.CacheRead, rep.Out} {
+		if n < 0 || n > 1e10 {
+			httpError(w, http.StatusBadRequest, "a token count is out of range")
+			return
+		}
+	}
+	if rep.Cred == "" {
+		sessionCredRefuse(w, http.StatusForbidden, PoolUsageRefused, "a usage report carries the session pass it rode on")
 		return
 	}
 	now := s.budgetClock()
-	if err := s.recordUsage(rep.Principal, rep, now); err != nil {
+	c, why := s.poolUsagePass(rep.Cred, rep.Provider, time.Now())
+	switch {
+	case c == nil:
+		sessionCredRefuse(w, http.StatusForbidden, PoolUsageRefused, "session pass refused: "+why)
+		return
+	case rep.Principal != "" && rep.Principal != c.Principal:
+		sessionCredRefuse(w, http.StatusForbidden, PoolUsageRefused, "the report names another principal than its pass")
+		return
+	case rep.WorkerID != "" && rep.WorkerID != c.WorkerID:
+		sessionCredRefuse(w, http.StatusForbidden, PoolUsageRefused, "the report names another session than its pass")
+		return
+	}
+	u := store.PoolUsage{Principal: c.Principal, WorkerID: c.WorkerID, Account: rep.Account, Provider: rep.Provider,
+		Model: rep.Model, In: rep.In, CacheWrite: rep.CacheWrite, CacheRead: rep.CacheRead, Out: rep.Out, Requests: 1, At: now}
+	if rep.Owner != "" && rep.Owner != c.Principal {
+		u.Account = rep.Owner + "/" + rep.Account
+	}
+	if repo, issue, ok, err := s.Store.LeaseForWorker(c.WorkerID, now); err == nil && ok {
+		u.Repo, u.Issue = repo, issue
+	}
+	if err := s.Store.AddPoolUsage(u); err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	st, err := s.personBudgetState(rep.Principal, now)
+	st, err := s.personBudgetState(c.Principal, now)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return

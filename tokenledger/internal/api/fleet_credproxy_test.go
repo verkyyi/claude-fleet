@@ -85,7 +85,7 @@ func newCPRig(t *testing.T) *cpRig {
 			return
 		}
 		// usage: 150 counted tokens a request (claude-fleet#1977)
-		_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"PONG"}],"usage":{"input_tokens":100,"cache_read_input_tokens":9000,"output_tokens":50}}`)
+		_, _ = io.WriteString(w, `{"model":"claude-opus-5-5","content":[{"type":"text","text":"PONG"}],"usage":{"input_tokens":100,"cache_read_input_tokens":9000,"output_tokens":50}}`)
 	}))
 	t.Cleanup(up.Close)
 	p, err := credproxy.New(credproxy.Config{
