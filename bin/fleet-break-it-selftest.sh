@@ -6140,6 +6140,23 @@ drill_linux_tenant_cross_read() {
   WHAT="放宽成 0755 的家 boot 后回到 0700；新登录落在别人号码的家目录上被拒、不 chown"
 }
 
+# ---- linux-image-pins-old (#3212): the Linux node's runtime was the image's —
+# a restart put its old version back, so the machine never followed stable.
+# Now the image only seeds the disk runtime; a restart keeps what the updater
+# switched to, a newer image is taken only at rest, and the loop restarts the
+# supervisor from the new `current` instead of ending the container.
+drill_linux_image_pins_old() {
+  CAP=15; local t0
+  t0=$(now)
+  if ! python3 "$BIN/fleet-node-linux-selftest.py" LinuxNode.test_restart_never_goes_back_to_image \
+       LinuxNode.test_loop_restarts_supervisor_from_new_current LinuxNode.test_image_self_updates_on_its_volume \
+       >"$WORK/linux-pins.out" 2>&1; then
+    WHY="the Linux runtime still follows the image: $(tail -n 2 "$WORK/linux-pins.out")"; return 1
+  fi
+  SECS=$(since "$t0")
+  WHAT="镜像 A、盘上已切到 B：重启两次仍是 B；更新器切换中不播种；空闲时更新的镜像 C 才播种（.prev=B）；supervisor 退出后从新 current 再起"
+}
+
 # A child's report whose parent is gone (issue #3117, EPIC #3111 C6): a scratch spawned
 # a worker and was closed; the worker merged and its report went nowhere — a silent
 # exit 0. Now it is the person's: one row in global/orphan-reports.ndjson and one

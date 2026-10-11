@@ -245,6 +245,121 @@ class LinuxNode(unittest.TestCase):
             self.assertEqual(installed.read_bytes(), original)
             self.assertTrue(installed.stat().st_mode & 0o111)
 
+    # ---- #3212: the image only seeds; the disk runtime follows stable
+    def stage_mod(self):
+        spec = importlib.util.spec_from_file_location('image_stage', BIN.parent / 'extras/managed-node/image-stage.py')
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        return m
+
+    @staticmethod
+    def fake_release(root, sha, seq):
+        d = Path(root) / sha
+        (d / '.release').mkdir(parents=True)
+        (d / 'bin').mkdir()
+        (d / '.release/staged.json').write_text('{}')
+        (d / '.release/manifest.json').write_text(json.dumps({'sha': sha, 'seq': seq}))
+        (d / 'bin/fleet-node-linux.py').write_text('# ' + sha)
+        return d
+
+    def test_restart_never_goes_back_to_image(self):
+        """BREAK-IT linux-image-pins-old: the image is A; the updater moved the
+        disk to B; a container restart keeps B. A newer image (C) is seeded once
+        the updater is at rest; FLEET_NODE_UPDATE_OWNER=image puts the image's back."""
+        m = self.stage_mod()
+        A, B, C = 'a' * 40, 'b' * 40, 'c' * 40
+        with tempfile.TemporaryDirectory() as d:
+            seed, root, state = Path(d, 'seed'), Path(d, 'runtime'), Path(d, 'state')
+            state.mkdir()
+            self.fake_release(seed, A, 5)
+            (seed / 'current').symlink_to(A)
+            self.assertEqual(m.seed(seed, root, state), 'seeded')
+            self.assertEqual(os.readlink(root / 'current'), A)
+            self.assertTrue((root / A / 'bin/fleet-node-linux.py').is_file())
+            self.assertEqual(m.seed(seed, root, state), 'kept')
+            # the updater switches to B (a later stable, seq 6)
+            self.fake_release(root, B, 6)
+            m.swap(root / 'current', B)
+            for _ in range(2):   # a container restart, twice
+                self.assertEqual(m.seed(seed, root, state), 'kept')
+                self.assertEqual(os.readlink(root / 'current'), B)
+            # a new image C (seq 7) — but the updater is mid-switch: its own to finish
+            self.fake_release(seed, C, 7)
+            m.swap(seed / 'current', C)
+            (state / 'update.json').write_text(json.dumps({'phase': 'switched', 'to': B}))
+            self.assertEqual(m.seed(seed, root, state), 'kept')
+            (state / 'update.json').write_text(json.dumps({'phase': 'idle'}))
+            self.assertEqual(m.seed(seed, root, state), 'newer')
+            self.assertEqual((os.readlink(root / 'current'), os.readlink(root / '.prev')), (C, B))
+            # the off switch: the image's version, whatever the disk holds
+            m.swap(seed / 'current', A)
+            self.assertEqual(m.seed(seed, root, state), 'kept')
+            m.seed(seed, root, state, force=True)
+            self.assertEqual(os.readlink(root / 'current'), A)
+            # an image without a staged runtime is refused, the disk untouched
+            m.swap(seed / 'current', 'f' * 40)
+            with self.assertRaisesRegex(ValueError, 'no staged runtime'):
+                m.seed(seed, root, state)
+            self.assertEqual(os.readlink(root / 'current'), A)
+
+    def test_loop_restarts_supervisor_from_new_current(self):
+        """A switch's restart request ends the supervisor; the loop starts it again
+        from the re-read `current`, never exiting the container; one that keeps
+        dying ends the loop."""
+        m = module('fleet-node-linux')
+        with tempfile.TemporaryDirectory() as d:
+            root, out = Path(d), Path(d, 'ran')
+            for sha in ('a' * 40, 'b' * 40):
+                (root / sha / 'bin').mkdir(parents=True)
+                (root / sha / 'bin/fleet-node-supervisor.py').write_text(
+                    'import sys\nopen(%r, "a").write("%s\\n")\nsys.exit(0)\n' % (str(out), sha[:1]))
+            (root / 'current').symlink_to('a' * 40)
+            with patch.dict(os.environ, {'FLEET_NODE_HEARTBEAT': str(root / 'hb'),
+                                         'FLEET_NODE_LOOP_CRASHES': '3'}):
+                loop = m.Loop(root)
+                loop.start()
+                loop.child.wait()
+                os.unlink(root / 'current')
+                (root / 'current').symlink_to('b' * 40)   # the updater switched
+                self.assertIsNone(loop.tend())
+                loop.child.wait()
+                self.assertEqual(out.read_text().split(), ['a', 'b'])
+                loop.beat()
+                st = self.stage_mod()
+                st.HEARTBEAT = str(root / 'hb')
+                self.assertEqual(st.live(), 0)
+                os.utime(root / 'hb', (1, 1))
+                self.assertEqual(st.live(), 1)
+                for _ in range(2):
+                    self.assertIsNone(loop.tend())
+                    loop.child.wait()
+                self.assertEqual(loop.tend(), 1)   # a 4th death in the window: give up
+
+    def test_image_self_updates_on_its_volume(self):
+        """The image's defaults (#3212): the runtime on the PVC, owner node (the
+        updater runs and the node program says CapRelease), a boot that seeds,
+        PATH and /usr/local/bin following the disk's current, liveness on the loop."""
+        df = (BIN.parent / 'extras/managed-node/Dockerfile').read_text()
+        self.assertIn('FLEET_NODE_ROOT=/var/db/fleet-node/runtime', df)
+        self.assertIn('FLEET_NODE_UPDATE_OWNER=node', df)
+        self.assertIn('"/usr/local/lib/fleet-image-stage.py", "boot"]', df)
+        self.assertIn('PATH=/var/db/fleet-node/runtime/current/tools/bin:', df)
+        self.assertIn('/var/db/fleet-node/runtime/current/tools/bin/$t /usr/local/bin/$t', df)
+        self.assertNotIn('/opt/claude-fleet/current', df)
+        s = module('fleet-node-supervisor')
+        with patch.dict(os.environ, {'FLEET_NODE_UPDATE_OWNER': 'node'}):
+            self.assertIn('update', [x['name'] for x in s.default_table(s.Paths())['tasks']])
+        raw = subprocess.check_output([sys.executable, str(BIN.parent / 'extras/managed-node/render.py'),
+                                       '--image', 'example/image@sha256:' + 'a' * 64,
+                                       '--hub', 'https://hub.example', '--storage-class', 'essd'])
+        c = json.loads(raw)['items'][-1]['spec']['template']['spec']['containers'][0]
+        self.assertEqual(c['livenessProbe']['exec']['command'][-2:], ['/usr/local/lib/fleet-image-stage.py', 'live'])
+        self.assertIn('/var/db/fleet-node/runtime/current/bin/fleet-node-linux.py',
+                      c['readinessProbe']['exec']['command'])
+        # stable cannot move to a release without Linux artifacts: the hub's platforms
+        rel = (BIN.parent / 'deploy/k8s/overlays/prod/deployment-release.yaml').read_text()
+        self.assertRegex(rel, r'CCQUOTA_FLEET_RELEASE_PLATFORMS\n\s+value: darwin-arm64 linux-amd64')
+
     def test_image_update_never_resumes_saved_switch(self):
         u = module('fleet-node-update')
         obj = u.Updater.__new__(u.Updater)

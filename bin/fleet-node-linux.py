@@ -692,7 +692,10 @@ def foreground(a):
     state.mkdir(parents=True, exist_ok=True)
     with open(state / 'container.lock', 'a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        os.environ.update(FLEET_NODE_SERVICE='foreground', FLEET_NODE_UPDATE_OWNER='image',
+        # node (the image's default, #3212): the machine updater moves the disk
+        # runtime as on a Mac; image keeps the old image-owned way (the off switch)
+        os.environ.setdefault('FLEET_NODE_UPDATE_OWNER', 'node')
+        os.environ.update(FLEET_NODE_SERVICE='foreground',
                           FLEET_NODE_BOOT_ID=uuid.uuid4().hex, FLEET_NODE_RUN_SSHD='1')
         # SSH host identity must also survive container replacement.
         ssh_dir = state / 'ssh'
@@ -711,7 +714,8 @@ def foreground(a):
             cmd += ['--join-file', a.machine_join_file]
         cmd += ['--release-key', '/etc/fleet-release.pub']
         subprocess.run(cmd, check=True)
-        child = subprocess.Popen([sys.executable, '-I', str(HERE / 'fleet-node-supervisor.py'), 'run'])
+        loop = Loop(Path(os.environ.get('FLEET_NODE_ROOT', str(HERE.parent.parent))))
+        loop.start()
         stopping = False
 
         def stop(_sig, _frame):
@@ -724,7 +728,9 @@ def foreground(a):
         ready.unlink(missing_ok=True)
         s = load('fleet-node-supervisor')
         logins = sorted(set(tenants(s.Paths())) | {a.login})
+        rc = 0
         try:
+            loop.beat()
             for login in logins:
                 try:
                     bootstrap(argparse.Namespace(login=login))
@@ -734,22 +740,81 @@ def foreground(a):
                     # One person's broken home never keeps the others' sessions down.
                     print('bootstrap %s failed (%s); the other logins go on' % (login, e), file=sys.stderr)
             ready.write_text(os.environ['FLEET_NODE_BOOT_ID'])
-            while child.poll() is None and not stopping:
+            while not stopping:
+                loop.beat()
+                rc = loop.tend()
+                if rc is not None:
+                    break
                 time.sleep(1)
         finally:
             ready.unlink(missing_ok=True)
             for login in logins:
                 try:
-                    as_tenant(s, login, ['bash', str(HERE / 'fleet-sessions-snapshot.sh'), 'save'], timeout=30)
+                    as_tenant(s, login, ['bash', str(loop.bin() / 'fleet-sessions-snapshot.sh'), 'save'], timeout=30)
                 except (subprocess.SubprocessError, OSError, KeyError):
                     print('snapshot of %s failed; periodic persisted snapshot remains' % login, file=sys.stderr)
-            child.terminate()
-            try:
-                child.wait(timeout=60)
-            except subprocess.TimeoutExpired:
-                child.kill()
-                child.wait()
-        return 0 if stopping else child.returncode or 1
+            loop.stop()
+        return 0 if stopping else rc or 1
+
+
+class Loop(object):
+    """The container's resident loop (#3212): the supervisor runs from the disk
+    runtime's `current`, re-read at every start. When the updater switches
+    `current` the supervisor stops itself (its restart request) and the loop
+    starts it again on the new release — launchd's KeepAlive on a Mac; the
+    container, its tmux servers and every session in them stay. A supervisor
+    that keeps dying (FLEET_NODE_LOOP_CRASHES in FLEET_NODE_LOOP_WINDOW) ends the
+    loop, and Kubernetes restarts the container as before."""
+
+    def __init__(self, root):
+        self.root = Path(root)
+        self.child = None
+        self.deaths = []
+        self.heartbeat = Path(os.environ.get('FLEET_NODE_HEARTBEAT', '/run/fleet-node-loop'))
+
+    def bin(self):
+        return self.root / 'current' / 'bin'
+
+    def start(self):
+        script = (self.bin() / 'fleet-node-supervisor.py').resolve()
+        self.child = subprocess.Popen([sys.executable, '-I', str(script), 'run'])
+        print('fleet-node-linux: supervisor pid %d on %s' % (self.child.pid, script.parent.parent.name[:12]),
+              file=sys.stderr)
+
+    def beat(self):
+        # the liveness probe reads this, not the supervisor: a switch's restart
+        # is never a reason to kill the container
+        try:
+            self.heartbeat.write_text('%d %d\n' % (os.getpid(), time.time()))
+        except OSError:
+            pass
+
+    def tend(self):
+        """None while all is well (restarting a supervisor that ended), else the
+        exit code the loop ends with."""
+        rc = self.child.poll()
+        if rc is None:
+            return None
+        t = time.time()
+        window = int(os.environ.get('FLEET_NODE_LOOP_WINDOW', '600'))
+        self.deaths = [x for x in self.deaths if t - x < window] + [t]
+        if len(self.deaths) > int(os.environ.get('FLEET_NODE_LOOP_CRASHES', '10')):
+            print('fleet-node-linux: supervisor ended %d times in %ds (last rc %d) — giving up'
+                  % (len(self.deaths), window, rc), file=sys.stderr)
+            return rc or 1
+        print('fleet-node-linux: supervisor ended rc %d — starting it again from current' % rc, file=sys.stderr)
+        self.start()
+        return None
+
+    def stop(self):
+        if self.child is None or self.child.poll() is not None:
+            return
+        self.child.terminate()
+        try:
+            self.child.wait(timeout=60)
+        except subprocess.TimeoutExpired:
+            self.child.kill()
+            self.child.wait()
 
 
 
