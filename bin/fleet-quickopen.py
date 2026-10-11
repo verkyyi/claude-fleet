@@ -816,6 +816,26 @@ def char_cells(c):
     return 2 if unicodedata.east_asian_width(c) in "WF" else 1
 
 
+def rich_color(colors=None, env=None):
+    """Does this terminal say it draws a coloured row ground faithfully (issue
+    #3416)? Only a truecolour terminal (`COLORTERM` truecolor / 24bit) with 256+
+    colours does: an xterm-256color that says nothing — iPhone Termius — mapped
+    the ANSI blue ground onto its own background, so the selected row vanished."""
+    env = os.environ if env is None else env
+    if colors is None:
+        colors = getattr(curses, "COLORS", 0)
+    return colors >= 256 and env.get("COLORTERM", "").lower() in ("truecolor", "24bit")
+
+
+def sel_attr(pair, colors=None, env=None):
+    """The selected row's ground: the colour pair where `rich_color`, else reverse
+    video — swaps the terminal's own fg / bg, so it shows under any scheme. Always
+    bold, beside the `›` every list draws (a mark that needs no colour)."""
+    if rich_color(colors, env):
+        return curses.color_pair(pair) | curses.A_BOLD
+    return curses.A_REVERSE | curses.A_BOLD
+
+
 def cells(text):
     return sum(char_cells(c) for c in text)
 
@@ -894,7 +914,7 @@ def draw_cmds(screen, query, title, items, at, width, height, say):
     for y, it in enumerate((items or [])[:max(0, height - base_y - 2)], base_y):
         sel = y - base_y == at
         grey = it[1].startswith("-")
-        base = curses.color_pair(2) if sel else curses.A_NORMAL
+        base = sel_attr(2) if sel else curses.A_NORMAL
         name = ("› " if sel else "  ") + it[1].lstrip("-")
         try:
             screen.addstr(y, 0, " " * (width - 1), base)
@@ -987,7 +1007,7 @@ def popup(screen, pane, session="", target="", switch=False):
                         if kind == "sep":
                             screen.addstr(y, 2, "─" * max(0, width - 5), curses.A_DIM)
                         else:
-                            base = curses.color_pair(2) if sel else curses.A_NORMAL
+                            base = sel_attr(2) if sel else curses.A_NORMAL
                             screen.addstr(y, 0, " " * (width - 1), base)
                             screen.addstr(y, 0, clip(("› " if sel else "  ") + payload[1], width - 1),
                                           base | (curses.A_BOLD if sel else curses.color_pair(3)))
@@ -1006,7 +1026,7 @@ def popup(screen, pane, session="", target="", switch=False):
                 node = clip(node, max(0, width // 2))
                 left = "%s %s " % ("›" if sel else " ", row["glyph"] or " ")
                 name = clip(row["name"], max(0, width - cells(left) - cells(node) - 2))
-                base = curses.color_pair(2) if sel else curses.A_NORMAL
+                base = sel_attr(2) if sel else curses.A_NORMAL
                 try:
                     screen.addstr(y, 0, " " * (width - 1), base)
                     screen.addstr(y, 0, left, base)
@@ -1209,10 +1229,10 @@ def full(screen, pane, session=""):
                     continue
                 row, num = line[1], line[3]
                 on = idx == sel
-                base = curses.color_pair(2) if on else curses.A_NORMAL
+                base = sel_attr(2) if on else curses.A_NORMAL
                 screen.addstr(y, 0, " " * (width - 1), base)
                 if kind == "name":
-                    lead = " %s %s " % (str(num) if num else " ", row["glyph"] or " ")
+                    lead = "%s%s %s " % ("›" if on else " ", str(num) if num else " ", row["glyph"] or " ")
                     gl = curses.color_pair(3) if row["state"] in NEEDS else 0
                     screen.addstr(y, 0, lead, base | gl)
                     screen.addstr(y, cells(lead), clip(row["name"], max(0, width - 1 - cells(lead))),

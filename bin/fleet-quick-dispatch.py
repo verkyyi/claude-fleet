@@ -256,7 +256,7 @@ def ui(screen, session="", view="", client=""):
             if y >= height - 2:
                 return
             try:
-                base = curses.color_pair(2) if sel else 0
+                base = quick.sel_attr(2) if sel else 0
                 screen.addstr(y, 0, " " * (width - 1), base)
                 screen.addstr(y, 0, quick.clip(text, width - 1), base | attr)
             except curses.error:

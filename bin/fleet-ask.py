@@ -426,7 +426,7 @@ def ui(screen, spec_path, out_path):
     curses.init_pair(3, pal["PAL_FG"], pal["PAL_SEL"])
     curses.init_pair(4, blue, -1)
     dim = curses.color_pair(2) | (curses.A_DIM if pal["PAL_DIM"] == -1 else 0)
-    attrs = {"fg": curses.color_pair(1), "dim": dim, "sel": curses.color_pair(3) | curses.A_BOLD,
+    attrs = {"fg": curses.color_pair(1), "dim": dim, "sel": side.switch_lib().sel_attr(3),
              "prompt": curses.color_pair(4) | curses.A_BOLD, "text": curses.color_pair(1) | curses.A_BOLD}
     screen.keypad(True)
     curses.meta(True)
