@@ -64,6 +64,49 @@ var (
 // tccDisclaimPython runs fleet-tcc-disclaim.py; a test seam.
 var tccDisclaimPython = "/usr/bin/python3"
 
+// tccProbePath is the system TCC database: readable (it is 0644) only by a
+// process whose responsible chain holds Full Disk Access — the one question
+// tccGranted asks. A test seam, like tccProbeTimeout.
+var (
+	tccProbePath    = "/Library/Application Support/com.apple.TCC/TCC.db"
+	tccProbeTimeout = 5 * time.Second
+	tccProbing      sync.Mutex
+)
+
+// tccGranted reports whether THIS process — the responsible process of a script
+// it runs undisclaimed — holds Full Disk Access: it can open and read the
+// system TCC database. tccd not answering (claude-fleet#3086: the open() never
+// returns) is «no» after tccProbeTimeout, and while that open is still stuck
+// the next op does not start a second one. FLEET_ACCOUNT_DISCLAIM=1 always
+// disclaims.
+func tccGranted() bool {
+	if os.Getenv("FLEET_ACCOUNT_DISCLAIM") == "1" {
+		return false
+	}
+	if !tccProbing.TryLock() {
+		return false
+	}
+	done := make(chan bool, 1)
+	go func() {
+		defer tccProbing.Unlock()
+		f, err := os.Open(tccProbePath)
+		if err != nil {
+			done <- false
+			return
+		}
+		defer f.Close()
+		b := make([]byte, 16)
+		n, err := f.Read(b)
+		done <- err == nil && bytes.HasPrefix(b[:n], []byte("SQLite format 3"))
+	}()
+	select {
+	case ok := <-done:
+		return ok
+	case <-time.After(tccProbeTimeout):
+		return false
+	}
+}
+
 // credsepMark is the line fleet-login-new.sh ends a create with when it opened
 // the login credential-separated (claude-fleet#2294, its step 7b), and
 // credsepScriptMark what a version of the script that separates carries.
@@ -117,8 +160,20 @@ func accountArgv(home string, op control.AccountOp) (string, []string) {
 // Disclaimed, the responsible process is /bin/bash, a platform binary tccd
 // never prompts for: the access is refused at once instead. A login whose
 // install predates the wrapper runs the script as before.
+//
+// Once a person has granted this agent Full Disk Access (claude-fleet#3433: the
+// updater signs every release's ccquota with the machine's ONE fixed identity
+// and the admin agent runs it from one path, so the grant survives a version
+// switch), the script runs as this agent's own child instead: its accesses are
+// charged to the granted identity and succeed — sysadminctl -deleteUser, dscl —
+// and Full Disk Access covers the SystemPolicy services sysadminctl asks for, so
+// nothing can prompt. tccGranted is asked before every op: a grant taken back
+// sends the next one through the wrapper again.
 func tccDisclaimed(home, script string, args []string) (string, []string) {
 	if accountGOOS != "darwin" {
+		return script, args
+	}
+	if tccGranted() {
 		return script, args
 	}
 	w := filepath.Join(home, tccDisclaimScript)
