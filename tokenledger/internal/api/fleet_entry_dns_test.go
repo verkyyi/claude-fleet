@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"net/netip"
 	"strings"
 	"testing"
 	"time"
@@ -19,11 +20,15 @@ func dnsReach(t *testing.T, h *harness, machine string, now time.Time, ok bool, 
 	t.Helper()
 	var rows []store.EntryReach
 	for _, a := range addrs {
+		port := entryPort // "addr", or "addr:port" / "[v6]:port" on the router's port
+		if ap, err := netip.ParseAddrPort(a); err == nil {
+			a, port = ap.Addr().String(), int(ap.Port())
+		}
 		fam := "ipv4"
 		if strings.Contains(a, ":") {
 			fam = "ipv6"
 		}
-		rows = append(rows, store.EntryReach{Machine: machine, Addr: a, Port: entryPort, Family: fam, Via: "report",
+		rows = append(rows, store.EntryReach{Machine: machine, Addr: a, Port: port, Family: fam, Via: "report",
 			Reachable: ok, CheckedAt: now})
 	}
 	if _, err := h.srv.Store.SetEntryReach(machine, rows); err != nil {
@@ -275,5 +280,35 @@ func TestEntryPageHomeUnreachableFromOutside(t *testing.T) {
 	dnsReach(t, h, home.Machine, time.Now().UTC(), true, "23.119.126.213")
 	if _, body, _ = keysPage(t, h, pAlice, "", nil); strings.Contains(body, "从外面连不上") {
 		t.Fatalf("reachable home said unreachable:\n%s", body)
+	}
+}
+
+// Two homes behind one router (EPIC #3067 改约定 2): one address, the port
+// the router forwards tells them apart. The page's Termius port is the
+// home's, a move to the other says the port changes, and an IPv6 the door
+// answers on another port than the A's gets no AAAA.
+func TestEntryDNSPortIsTheHomes(t *testing.T) {
+	h := entryHarness(t)
+	f := dns.NewFake()
+	h.srv.EntryDNS = NewEntryDNS(f, "cf")
+	_ = h.srv.Store.SetFleetSetting(EntryDomainKey, "cf.24haowan.com", time.Now())
+	keysPost(t, h, pAlice, "do", "name", "name", "alice")
+	now := time.Now().UTC()
+	if _, err := h.srv.Store.SetEntryHome(store.EntryHome{Person: pAlice, Machine: "macmini-m4", Login: "alice", SetBy: "t", SetAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	dnsReach(t, h, "macmini", now, true, "23.119.126.213:22022")
+	dnsReach(t, h, "macmini-m4", now, true, "23.119.126.213:22023", "[2001:db8::9]:22022")
+	h.srv.EntryDNSTick(context.Background(), now)
+	if got, want := dnsZone(f), "A alice.cf 23.119.126.213"; got != want {
+		t.Fatalf("zone: %s\nwant %s (no AAAA on another port)", got, want)
+	}
+	_, body, _ := keysPage(t, h, pAlice, "", nil)
+	if !strings.Contains(body, `<span class="v">22023</span>`) {
+		t.Fatalf("home macmini-m4: the port is not 22023:\n%s", body)
+	}
+	_, body, _ = keysPage(t, h, pAlice, "?move=macmini&login=alice", nil)
+	if !strings.Contains(body, "端口改成 <b>22022</b>（原来 22023）") {
+		t.Fatalf("move sheet does not say the port changes:\n%s", body)
 	}
 }

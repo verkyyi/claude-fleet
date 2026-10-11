@@ -638,9 +638,9 @@ drill_two_hubs_double_refresh() {
 # token never in a URL or an error). Without go the tests must exist by name.
 drill_entry_dns_follows() {
   CAP=120; local t0 out rc tests f tl
-  tests='TestEntryDNSFollowsTheHome TestEntryDNSRetriesAFailedWrite TestEntryDNSOffMakesNoCall TestDNSPodProvider'
+  tests='TestEntryDNSFollowsTheHome TestEntryDNSRetriesAFailedWrite TestEntryDNSOffMakesNoCall TestEntryDNSPortIsTheHomes TestDNSPodProvider'
   t0=$(now)
-  for tl in TestEntryDNSFollowsTheHome TestEntryDNSRetriesAFailedWrite TestEntryDNSOffMakesNoCall; do
+  for tl in TestEntryDNSFollowsTheHome TestEntryDNSRetriesAFailedWrite TestEntryDNSOffMakesNoCall TestEntryDNSPortIsTheHomes; do
     f="$ROOT/tokenledger/internal/api/fleet_entry_dns_test.go"
     grep -q "^func $tl(" "$f" 2>/dev/null || { WHY="the hub test $tl is not in ${f#$ROOT/}"; return 1; }
   done
@@ -650,19 +650,19 @@ drill_entry_dns_follows() {
     || { WHY="the address-record loop is not gated on the leader"; return 1; }
   grep -q 'acme-dnspod' "$ROOT/deploy/k8s/base/deployment.yaml" \
     || { WHY="the hub's deployment no longer reads the DNSPod token from new-deploy/acme-dnspod"; return 1; }
-  WHAT='地址变 ⇒ 下一拍改（同一条记录）；家连不上 ⇒ 一条不改；手动换家 ⇒ 指新家；手改 ⇒ 改回 + 「有人手改」；调用失败 ⇒ 不算写过、下一拍再试；没 token ⇒ 0 次调用；DNSPod 只认带 fleet 备注的 cf 记录，token 不进 URL / 错误'
+  WHAT='地址变 ⇒ 下一拍改（同一条记录）；家连不上 ⇒ 一条不改；手动换家 ⇒ 指新家；手改 ⇒ 改回 + 「有人手改」；调用失败 ⇒ 不算写过、下一拍再试；没 token ⇒ 0 次调用；DNSPod 只认带 fleet 备注的 cf 记录，token 不进 URL / 错误；同一路由器后两个家：钥匙页端口 = 家的转发端口，换家说端口要改，别的端口上的 IPv6 不写 AAAA'
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
     out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/api ./internal/dns 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
-      0:*) WHAT="${WHAT}（go test 四条）" ;;
+      0:*) WHAT="${WHAT}（go test 五条）" ;;
       *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
         WHAT="${WHAT}；Go 测试这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们" ;;
       *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
     esac
   else
-    WHAT="${WHAT}；没有 go：四条测试按名核对在，Go 门（tokenledger.yml）跑它们"
+    WHAT="${WHAT}；没有 go：五条测试按名核对在，Go 门（tokenledger.yml）跑它们"
   fi
   SECS=$(since "$t0")
 }
@@ -1285,7 +1285,7 @@ drill_dist_publish_tampered() {
       *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
     esac
   else
-    WHAT="${WHAT}；没有 go：四条测试按名核对在，Go 门（tokenledger.yml）跑它们"
+    WHAT="${WHAT}；没有 go：五条测试按名核对在，Go 门（tokenledger.yml）跑它们"
   fi
   SECS=$(since "$t0")
 }

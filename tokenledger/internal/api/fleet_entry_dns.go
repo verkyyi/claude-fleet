@@ -192,10 +192,24 @@ func (s *Server) entryDNSTargets(sub string, now time.Time) (map[string]entryDNS
 			out[host] = t
 			continue
 		}
+		// The port is not in DNS: one name, one port for Termius. With an
+		// IPv4 the router forwards on its own port, an IPv6 reached on
+		// another port would send a phone with IPv6 to the wrong one — so an
+		// AAAA only where its port is the A's.
+		v4port := 0
+		for _, r := range reach {
+			if r.Family == "ipv4" {
+				v4port = r.Port
+				break
+			}
+		}
 		t.want = map[string][]string{}
 		for _, r := range reach {
 			typ := "A"
 			if r.Family == "ipv6" {
+				if v4port != 0 && r.Port != v4port {
+					continue
+				}
 				typ = "AAAA"
 			}
 			t.want[typ] = append(t.want[typ], r.Addr)
@@ -206,6 +220,29 @@ func (s *Server) entryDNSTargets(sub string, now time.Time) (map[string]entryDNS
 		out[host] = t
 	}
 	return out, nil
+}
+
+// entryPublicPort is the port the outside reaches machine's door at: the
+// router's forwarded port C6 knocked on (its public= route — two homes
+// behind one router differ by it), else the door's own. A reachable row
+// speaks first (IPv4 before IPv6, as the records), then any IPv4 row, then
+// entryPort.
+func (s *Server) entryPublicPort(machine string, now time.Time) int {
+	if machine == "" {
+		return entryPort
+	}
+	if reach, err := s.EntryReachable(machine, now); err == nil && len(reach) > 0 && reach[0].Port > 0 {
+		return reach[0].Port // IPv4 first: the A's port, else the AAAA's
+	}
+	rows, err := s.entryReachRows(machine)
+	if err == nil {
+		for _, r := range rows {
+			if r.Family == "ipv4" && r.Port > 0 {
+				return r.Port
+			}
+		}
+	}
+	return entryPort
 }
 
 // entryDNSApply turns ex into want with at most budget writes: a record

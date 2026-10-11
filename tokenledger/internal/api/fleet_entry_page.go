@@ -41,7 +41,7 @@ var entryOK = map[string]string{
 	"added":   "已加上。几秒内你的家机器就认它。",
 	"same":    "这把钥匙已经在你的列表里了。",
 	"revoked": "已撤掉。几秒内家机器不再认它，并断开正用它连着的入口连接。",
-	"home":    "已换家。你的地址几分钟内指向它；手机第一次连会说主机钥匙变了，接受一次。",
+	"home":    "已换家。你的地址几分钟内指向它；端口以下面写的为准（变了就在 Termius 里改一次）；手机第一次连会说主机钥匙变了，接受一次。",
 }
 
 type entryKeyRow struct {
@@ -51,6 +51,7 @@ type entryKeyRow struct {
 type entryChoiceRow struct {
 	Machine, Display, Login string
 	Online, Current         bool
+	Port                    int // the door's port from outside (entryPublicPort)
 }
 
 type entryPageData struct {
@@ -198,7 +199,8 @@ func (s *Server) fillEntryPage(r *http.Request, c entryCaller, now time.Time, pa
 			Added: entryWhen(k.Created, now), LastUsed: entryLastUsed(k.LastUsed, now)})
 	}
 	for _, ch := range v.HomeChoices {
-		row := entryChoiceRow{Machine: ch.Machine, Display: s.entryMachineName(ch.Machine), Login: ch.Login, Online: ch.Online}
+		row := entryChoiceRow{Machine: ch.Machine, Display: s.entryMachineName(ch.Machine), Login: ch.Login, Online: ch.Online,
+			Port: s.entryPublicPort(ch.Machine, now)}
 		if v.Home != nil && sameMachine(ch.Machine, v.Home.Machine) && ch.Login == v.Home.Login {
 			row.Current = true
 			page.Home = &row
@@ -209,7 +211,14 @@ func (s *Server) fillEntryPage(r *http.Request, c entryCaller, now time.Time, pa
 	if v.Home != nil && page.Home == nil {
 		// The home has no live fleet right now: the machine is gone, or the
 		// fleet on it is.
-		page.Home = &entryChoiceRow{Machine: v.Home.Machine, Display: s.entryMachineName(v.Home.Machine), Login: v.Home.Login, Current: true}
+		page.Home = &entryChoiceRow{Machine: v.Home.Machine, Display: s.entryMachineName(v.Home.Machine), Login: v.Home.Login, Current: true,
+			Port: s.entryPublicPort(v.Home.Machine, now)}
+	}
+	if page.Home != nil {
+		// Two homes behind one router share the address and differ by the
+		// port the router forwards (EPIC #3067 改约定 2): Termius's port is
+		// the home's, not a constant.
+		page.Port = page.Home.Port
 	}
 	if page.Home != nil && !page.Home.Online {
 		page.HomeDown = "现在"
@@ -464,7 +473,7 @@ code{font:13px ui-monospace,Menlo,monospace}
 <a class="btn" href="/fleet/keys">算了</a><button class="bad" type="submit">撤掉</button></form></div></div>{{end}}
 {{if .Move}}<div class="sheet" id="confirm" role="dialog" aria-modal="true"><div class="in">
 <p><b>把家换到 {{.Move.Display}} · {{.Move.Login}}？</b></p>
-<p class="hint" style="margin-top:6px">你的地址几分钟内指向它，Termius 里的四样都不用改；手机第一次连会说主机钥匙变了，接受一次。</p>
+<p class="hint" style="margin-top:6px">{{if ne .Move.Port $.Port}}你的地址几分钟内指向它；Termius 里改一样：端口改成 <b>{{.Move.Port}}</b>（原来 {{$.Port}}）。{{else}}你的地址几分钟内指向它，Termius 里的四样都不用改；{{end}}手机第一次连会说主机钥匙变了，接受一次。</p>
 <form method="post" action="/fleet/keys" class="two"><input type="hidden" name="do" value="home"><input type="hidden" name="machine" value="{{.Move.Machine}}"><input type="hidden" name="login" value="{{.Move.Login}}">
 <a class="btn" href="/fleet/keys">算了</a><button class="go" type="submit">换过去</button></form></div></div>{{end}}
 <script>

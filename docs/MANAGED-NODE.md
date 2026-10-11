@@ -627,6 +627,9 @@ BREAK-IT 行 `service-handwritten`。只点名接管过的登录（`logins/<登�
   （每拍至多 40 次写），每写一条记一行入口审计（kind `dns`，「A verky.cf 旧 → 新」）。家从外面连不上（或 15 分钟没新结果）
   ⇒ 一条不改，记录留着最后的地址，钥匙页写「从外面连不上」；手动换家 ⇒ 下一拍改指新家；有人在控制台手改 ⇒ 下一拍改回，
   审计写「有人手改」。DNSPod 报错只记日志（不带凭据），不删记录，下一拍再试。
+- **端口不进 DNS**（改约定 2）：两台家机器在同一个路由器后面时地址相同、端口不同（路由器转发的外侧端口，即机器 `public=` 路线的端口，
+  C6 敲门用的就是它）。钥匙页给 Termius 的「端口」= 家机器的这个端口（`entryPublicPort`：可达的那一行，IPv4 在前），不是常数 22022；
+  换家确认时端口变了就写「端口改成 N」。IPv6 在别的端口上应门（不经路由器转发）就不写 AAAA——一个名字只给 Termius 一个端口。
 - **凭据**：入口环境 `CCQUOTA_DNS_DP_ID` / `CCQUOTA_DNS_DP_KEY`（`deploy/k8s/base/deployment.yaml` 从 `new-deploy/acme-dnspod`
   的 `DP_Id` / `DP_Key` 只读引用，`optional: true`）+ `CCQUOTA_DNS_DOMAIN=24haowan.com`、`CCQUOTA_DNS_SUBDOMAIN=cf`。
   缺一样 ⇒ 循环不起、0 次调用。⚠️ 这把 token 与 ACME DNS-01 共用、管整个 DNSPod 账号（不只这一个域名）：轮换它要同时顾到 ACME。
