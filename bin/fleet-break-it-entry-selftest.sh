@@ -458,11 +458,23 @@ SH
     *) WHY="no LANG in ⇒ tmux drew [$(printf '%s' "$out" | tr -d '\033' | tr -s '\r\n' ' ' | head -c 200)] $(cat "$E/ssh.err")"
        edown; return 1 ;;
   esac
-  # 2. the client's own locale wins (AcceptEnv)
+  # 2. the client's own locale wins (AcceptEnv) — unless the login's own shell
+  # startup sets one, as on port 22 (issue #3274: the macOS runner's ~/.bashrc
+  # exports LC_CTYPE / LC_ALL / LANG, and sshd runs the ForceCommand through that
+  # bash). A command arriving the same way says which; LC_TIME, which no rc here
+  # sets, proves the client's locale was taken at all.
+  local acct want
+  acct=$(env -u LC_ALL -u LC_CTYPE LANG=fr_FR.UTF-8 LC_TIME=fr_FR.UTF-8 \
+    ssh "${eopts[@]}" -o SendEnv=LANG -o SendEnv=LC_TIME -T -p "$EPORT" "$ME@127.0.0.1" \
+    'printf "@@%s@@LANG=%s LC_CTYPE=%s LC_ALL=%s@@\n" "${LC_TIME-}" "${LANG-}" "${LC_CTYPE-}" "${LC_ALL-}"' </dev/null 2>/dev/null)
+  case "$acct" in *@@fr_FR.UTF-8@@*) ;; *) WHY="LANG / LC_TIME sent ⇒ a command got [$acct]: the client's locale was not taken"; edown; return 1 ;; esac
+  acct=${acct#*@@*@@}; acct=${acct%%@@*}
+  want="LANG=fr_FR.UTF-8 LC_CTYPE= LC_ALL="
+  [ "$acct" = "$want" ] || want="$acct"   # the account's rc set it: the 看台 must see the same
   env -u LC_ALL -u LC_CTYPE LANG=fr_FR.UTF-8 TERM=xterm-256color \
     ssh "${eopts[@]}" -o SendEnv=LANG -tt -p "$EPORT" "$ME@127.0.0.1" </dev/null >/dev/null 2>&1
   row=$(sed -n 2p "$E/view.args")
-  case "$row" in "LANG=fr_FR.UTF-8 LC_CTYPE= LC_ALL= "*) ;; *) WHY="LANG=fr_FR.UTF-8 sent ⇒ the 看台 got [$row]"; edown; return 1 ;; esac
+  case "$row" in "$want "*) ;; *) WHY="LANG=fr_FR.UTF-8 sent ⇒ the 看台 got [$row], a command [$acct]"; edown; return 1 ;; esac
   # 3. a client that brings a non-UTF-8 one (LC_ALL=C) still gets UTF-8
   env -u LANG -u LC_CTYPE LC_ALL=C TERM=xterm-256color \
     ssh "${eopts[@]}" -o SendEnv=LC_ALL -tt -p "$EPORT" "$ME@127.0.0.1" </dev/null >/dev/null 2>&1
