@@ -534,6 +534,7 @@ export const en = {
   'ui.mach.trusted': 'Trusted',
   'ui.mach.untrusted': 'Untrusted',
   'ui.mach.trustFrom': '{trust} · from {src}',
+  'ui.mach.trustSrc.machine': 'the machine setting',
   'ui.mach.trustSrc.join_code': 'the join code',
   'ui.mach.trustSrc.operator': 'the operator',
   'ui.mach.trustSrc.machine_name': 'the machine name (old rule)',

@@ -73,9 +73,9 @@ func (s *Store) RedeemJoinCode(codeHash string, now time.Time, endpointID, label
 		return err
 	}
 	defer tx.Rollback()
-	var codeLabel, kind, trust, role string
-	err = tx.QueryRow(`SELECT label, kind, trust, role FROM fleet_join_codes
-		WHERE code_hash = ? AND used_at IS NULL AND expires_at > ?`, codeHash, fmtTime(now)).Scan(&codeLabel, &kind, &trust, &role)
+	var codeLabel, kind, trust, role, machine string
+	err = tx.QueryRow(`SELECT label, kind, trust, role, machine FROM fleet_join_codes
+		WHERE code_hash = ? AND used_at IS NULL AND expires_at > ?`, codeHash, fmtTime(now)).Scan(&codeLabel, &kind, &trust, &role, &machine)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrJoinCode
 	}
@@ -105,15 +105,19 @@ func (s *Store) RedeemJoinCode(codeHash string, now time.Time, endpointID, label
 	// node_kind comes from the CODE, never from the joining side
 	// (claude-fleet#1428): the hub minted it knowing what it was for.
 	// Trust and role come from the CODE too (claude-fleet#2214): the
-	// operator's word at minting, held by this endpoint's identity whatever
-	// name it reports later. enrolled_host pins the name it joined under; a
-	// join that named no machine gets "?", so no later report can claim a
-	// trusted machine's name for it.
+	// operator's word at minting (the hub puts a trusted code's word on the
+	// machine — claude-fleet#3300). enrolled_host pins the machine it joined
+	// as: the code's, when the hub minted it for one (a login it opened
+	// there), else the name it reported; a join that named no machine gets
+	// "?", so no later report can claim a trusted machine's name for it.
 	source := ""
 	if trust != "" {
 		source = TrustSourceJoinCode
 	}
 	enrolled := host
+	if machine != "" {
+		enrolled = machine
+	}
 	if enrolled == "" {
 		enrolled = "?"
 	}

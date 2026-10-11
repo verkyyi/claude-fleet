@@ -7,24 +7,32 @@ EPIC #2329 共同约定 1：**机器的期望状态在入口。** 入口为每�
 就是两者的差。这份文档是那份「应有的样子」的约定——C2（#2214）建了它，C3–C6 读它。
 加一个字段，先改这里。
 
-## 1. 机器的身份 = 入口发的令牌，不是机器名
+## 1. 信任在机器上；机器 = 加入时的那台，不是自报的机器名
 
-一台机器在入口的身份是它加入时换到的**节点令牌**（一个 endpoint，`ep_…`）。
-机器名（hostname）是 agent 自己报的，谁都能报成别的——所以**信任记在身份上**。
+一台机器在入口的身份是它加入时换到的**节点令牌**（一个 endpoint，`ep_…`），
+加入时记下它是哪台机器（`endpoints.enrolled_host`）。**信任只在机器上**（#3300，人定：
+「trust shall be set on machines, not login」）：`fleet.node_trust.<机器>`，一台机器上
+每个登录 / endpoint 都随它。机器名（hostname）是 agent 自己报的，谁都能报成别的——
+所以按的是**加入时**的机器，不是现在报的名字（#2214）。
 
-| 从哪来 | `trust_source` | 说明 |
-|---|---|---|
-| 托管加入码 | `join_code` | 操作者在入口「机器」页点「添加机器」生成；码里写明可信 + 角色 `managed`，一次性、1 小时 |
-| 操作者 | `operator` | `PUT /v1/fleet/nodes/<ep>/desired` 带 `trust` |
-| 机器名（旧规则） | `machine_name` | `fleet.node_trust.<机器>`，只对**用这个名字加入**的 endpoint 生效；`# compat-1v`，一个发布版后删 |
-| 冒用的机器名 | `name_borrowed` | 报的名字是可信机器，但它不是用这个名字加入的 → 不可信、审计一行 |
+| `trust_source` | 说明 |
+|---|---|
+| `machine` | 加入时那台机器的设置 `fleet.node_trust.<机器>` |
+| `name_borrowed` | 报的名字是可信机器，但它不是用这个名字加入的 → 不可信、hello 审计一行 |
 
-判定顺序（`internal/api/fleet_trust.go` `nodeTrust`，唯一一处）：
+谁写机器的信任：
 
-1. 操作者把它报的机器名标了 `untrusted` → 不可信（操作者的话只会收回信任）；
-2. endpoint 自己的信任（加入码 / 操作者）→ 照它，不管报什么名字；
-3. 旧规则：名字可信 **且** 与 `endpoints.enrolled_host`（加入时的名字，没给就是第一次上报的名字；加入时没报名字记 `?`）同一台 → 可信；
-4. 其余不可信。
+- 操作者：`fleet-node-trust.sh set <机器> trusted|untrusted`（`PUT /v1/fleet/settings`），或
+  `PUT /v1/fleet/nodes/<ep>/desired` 带 `trust`——写的是这个 endpoint 加入时那台机器；
+- 可信加入码（托管路由默认）：兑换时把 `trusted` 写到它加入的机器上；操作者明说过
+  `untrusted` 的机器不被它翻掉；
+- 入口开号（`loginJoinCode`）：码里记着开在哪台机器，新登录就按那台入册、随那台的信任，
+  不管它报什么名字。
+
+加入时记下的机器（`enrolled_host`）：码里写了机器就用码的；否则用加入时报的名字；
+没报名字记 `?`（谁也不随）。旧的按 endpoint 的信任（`endpoints.trust`，加入码 / 旧的期望状态写）
+入口启动后一次性迁到机器（`fleet.node_trust_machines_migrated`；同一台既有可信又有操作者
+标的不可信 ⇒ 不可信），之后不再读。判定只在一处：`internal/api/fleet_trust.go` `nodeTrust`。
 
 ## 2. 加入码
 
@@ -59,7 +67,7 @@ GET 的回答：
   "accounts": ["verkyyi", "24haowan"],
   "spare_accounts": 2,
   "trust": "trusted",
-  "trust_source": "join_code",
+  "trust_source": "machine",
   "role": "managed",
   "updated_at": "2026-10-08T03:00:00Z",
   "updated_by": "…"
@@ -73,10 +81,10 @@ GET 的回答：
 | `components` | 各部件钉住的版本：`ccquota` `claude` `codex` `runtime` … | ≤ 32 项，名字小写，版本 `[A-Za-z0-9.+_-]` |
 | `accounts` | 这台应有的系统账号 | ≤ 64，系统登录名 |
 | `spare_accounts` | 备好的空账号数 | 0–32 |
-| `trust` / `trust_source` / `role` | 身份上的信任与角色（§1） | PUT 里可带 `trust`：`trusted` / `untrusted` / `""`（回到机器名规则） |
+| `trust` / `trust_source` / `role` | 所在机器的信任与身份上的角色（§1） | PUT 里可带 `trust`：`trusted` / `untrusted` / `""`（去掉，读不可信）——写到这台 endpoint 加入时的机器上 |
 
 PUT 的请求体就是上面可写的字段，外加可选的 `if_version`（读到的版本；对不上 `409 version_conflict`，什么都不写）。
-未知字段 `400`——凭据不会有地方落脚。每次写审计一行（`node_desired`），改信任另记一行（`node_trust`，`endpoint:<ep>`）。
+未知字段 `400`——凭据不会有地方落脚。每次写审计一行（`node_desired`），改信任另记一行（`node_trust`，`machine:<机器>`）。
 
 ## 4. 机器报「收敛到哪了」
 
@@ -96,7 +104,7 @@ PUT 的请求体就是上面可写的字段，外加可选的 `if_version`（读
 
 ## 5. 一个版本内新旧并存
 
-- 旧节点没有身份信任：照旧按机器名，但只认它加入时的名字（`machine_name`）。
+- 旧节点：按它加入时的机器（`enrolled_host`，老数据回填为当时报的名字）。
 - 迁移时 `enrolled_host` 用每个 endpoint 当时报的名字补齐，所以 m4 / m5 现有的登录一个都不掉。
 - 下一批删旧规则（`# compat-1v: 下一批删`）：那时每台机器都已凭托管加入码重新加入（C1 / C8）。
 

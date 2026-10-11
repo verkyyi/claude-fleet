@@ -157,8 +157,9 @@ func (s *Server) handleFleetNodes(w http.ResponseWriter, r *http.Request) {
 			DesiredBody
 			// IfVersion is the version the writer read; absent = overwrite.
 			IfVersion *int `json:"if_version"`
-			// Trust, when present, is the operator's word on THIS endpoint:
-			// trusted | untrusted | "" (back to the machine-name rule).
+			// Trust, when present, is the operator's word on the MACHINE this
+			// endpoint enrolled as (claude-fleet#3300): trusted | untrusted |
+			// "" (drop it, which reads untrusted) — every login there holds it.
 			Trust *string `json:"trust"`
 		}
 		dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10))
@@ -176,6 +177,10 @@ func (s *Server) handleFleetNodes(w http.ResponseWriter, r *http.Request) {
 			case "", TrustTrusted, TrustUntrusted:
 			default:
 				httpError(w, http.StatusBadRequest, "trust: trusted, untrusted or empty")
+				return
+			}
+			if et, err := s.Store.EndpointTrustOf(ep.ID); err == nil && enrolledMachine(et) == "" {
+				httpError(w, http.StatusConflict, "trust is the machine's, and this endpoint enrolled naming no machine — set it with fleet-node-trust.sh set <machine>")
 				return
 			}
 		}
@@ -199,16 +204,10 @@ func (s *Server) handleFleetNodes(w http.ResponseWriter, r *http.Request) {
 			log.Printf("desired audit: %v", err)
 		}
 		if req.Trust != nil {
-			was, _ := s.endpointTrust(ep.ID, ep.Hostname, mustSettings(s, now))
-			if err := s.Store.SetEndpointTrust(ep.ID, *req.Trust, store.TrustSourceOperator); err != nil {
+			if _, err := s.trustMachine(ep.ID, *req.Trust, actor, true, now); err != nil {
 				httpError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
-			to := *req.Trust
-			if to == "" {
-				to = "(machine name)"
-			}
-			s.leaseAudit(actor, "node_trust", "endpoint:"+ep.ID, was+" → "+to, now)
 		}
 		st, err := s.desiredState(ep.ID, ep.Hostname, now)
 		if err != nil {
@@ -241,9 +240,4 @@ func (s *Server) handleNodeDesired(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, st)
-}
-
-func mustSettings(s *Server, now time.Time) map[string]string {
-	m, _ := s.trustSettings(now)
-	return m
 }
