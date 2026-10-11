@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/credvault"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
@@ -544,5 +545,90 @@ func TestCredPolicyLegacyUpgradePreservesLeases(t *testing.T) {
 				t.Fatalf("upgrade changed leases: alice %v -> %v; bob %v -> %v", a, aa, b, bb)
 			}
 		})
+	}
+}
+
+// Migration uses the roster's machine roles, including offline and mixed hosts.
+func TestCredPolicyMigrationSkipsClients(t *testing.T) {
+	h, alice, _ := policyRig(t)
+	now := time.Now()
+	node := func(label, host string, personal bool, compute *bool) {
+		t.Helper()
+		enrollAs(t, h, label, host, "viewer")
+		if err := h.srv.Store.NodeConnected("ep_"+label, host, "viewer", "test", control.Proto, 5000, now.Add(-time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+		hb, _ := json.Marshal(control.Heartbeat{Hostname: host, Personal: personal, Compute: compute, ObservedAt: now.Add(-time.Hour)})
+		if err := h.srv.Store.NodeHeartbeat("ep_"+label, host, "viewer", "", control.Proto, string(hb), now.Add(-time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	off := false
+	node("laptop", "laptop.local", true, nil)
+	// A display hostname can change; grants and filtering use the enrolled identity.
+	renamed, _ := json.Marshal(control.Heartbeat{Hostname: "renamed-client", Personal: true, ObservedAt: now})
+	if err := h.srv.Store.NodeHeartbeat("ep_laptop", "renamed-client", "viewer", "", control.Proto, string(renamed), now); err != nil {
+		t.Fatal(err)
+	}
+	node("console", "console", false, &off)
+	node("mixed-client", "mixed.local", true, nil)
+	node("mixed-host", "MIXED", false, nil)
+	node("offline", "offline", false, nil)
+	node("configured-client", "configured-client", true, nil)
+	setPolicy(t, h, "node", "configured-client", []string{})
+	read := func() policyMigration {
+		t.Helper()
+		var view struct {
+			Migration policyMigration `json:"migration"`
+		}
+		h.getJSON(t, CredPolicyPath, &view)
+		return view.Migration
+	}
+	keys := func(r policyMigration) map[string]bool {
+		out := map[string]bool{}
+		for _, o := range r.Objects {
+			out[o.Key] = true
+		}
+		return out
+	}
+	review := read()
+	want := map[string]bool{credNodeKey("m4"): true, credNodeKey("mixed"): true, credNodeKey("offline"): true, credUserKey(pAlice): true, credUserKey(pBob): true}
+	if got := keys(review); !reflect.DeepEqual(got, want) {
+		t.Fatalf("migration objects: %v; want users and hosts only: %v", got, want)
+	}
+	// A hidden client cannot be smuggled into the activation request.
+	req := map[string]any{"action": "activate", "revision": review.Revision, "retain": []string{credNodeKey("laptop")}}
+	if code, _ := h.post(t, CredPolicyPath, req); code != 400 {
+		t.Fatalf("client grant accepted: %d", code)
+	}
+	// A client becoming a host invalidates a review, instead of silently denying it.
+	hb, _ := json.Marshal(control.Heartbeat{Hostname: "laptop.local", ObservedAt: now})
+	if err := h.srv.Store.NodeHeartbeat("ep_laptop", "laptop.local", "viewer", "", control.Proto, string(hb), now); err != nil {
+		t.Fatal(err)
+	}
+	req["retain"] = []string{credNodeKey("m4"), credUserKey(pAlice)}
+	if code, _ := h.post(t, CredPolicyPath, req); code != 409 {
+		t.Fatalf("stale role review accepted: %d", code)
+	}
+	changed := read()
+	if !keys(changed)[credNodeKey("laptop")] {
+		t.Fatal("new host missing from refreshed review")
+	}
+	req["revision"] = changed.Revision
+	if code, out := h.post(t, CredPolicyPath, req); code != 200 {
+		t.Fatalf("activation: %d %v", code, out)
+	}
+	settings, err := h.srv.Store.FleetSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings[credNodeKey("configured-client")] != "[]" {
+		t.Fatal("existing client rule changed")
+	}
+	if _, ok := settings[credNodeKey("console")]; ok {
+		t.Fatal("migration wrote a pure client's rule")
+	}
+	if got, _, _ := leased(t, h, alice); len(got) != 5 {
+		t.Fatalf("remote access changed: %v", got)
 	}
 }

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { policyEntry, policyMode, policyChoices, policyPayload, savePolicy, effectiveHTML, machineTargets, userTargets, newDraft, draftChanged, POLICY_PATH } from '../dist/lib/cred-policy.js';
+import { policyEntry, policyMode, policyChoices, policyPayload, savePolicy, effectiveHTML, machineTargets, userTargets, newDraft, draftChanged, POLICY_PATH, policyLimitHTML } from '../dist/lib/cred-policy.js';
 
 const A = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
 const B = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
@@ -118,4 +118,32 @@ test('user targets include unconfigured users and administrators without generat
     { id: 'gh:1', label: 'alice' }, { id: 'gh:2', label: 'bob' },
   ]);
   assert.equal(view.users.length, 1);
+});
+
+
+test('grant editor shows Claude and Codex quota windows using exact identities', () => {
+  const now = Date.parse('2026-10-11T00:00:00Z');
+  const reset = new Date(now + 3600000).toISOString();
+  const limits = { per_account: [
+    { account_uuid: A.toUpperCase(), limits: { five_hour: { utilization: 0.32, resets_at: reset }, seven_day: { utilization: 88 }, observed_at: new Date(now).toISOString() } },
+    { account_uuid: C, limits: { windows: [{ id: 'primary', minutes: 300, utilization: 0 }, { id: 'secondary', minutes: 10080, utilization: 1 }] } },
+  ] };
+  const claude = policyLimitHTML(A, limits, now);
+  assert.match(claude, /32% used/);
+  assert.match(claude, /88% used/);
+  assert.match(claude, /width:88%/);
+  assert.match(claude, /1h 0m/);
+  assert.match(claude, /Last read/);
+  const codex = policyLimitHTML(C, limits, now);
+  assert.match(codex, /0% used/);
+  assert.match(codex, /100% used/);
+  assert.doesNotMatch(codex, /32%/);
+});
+
+test('missing or unavailable quota readings stay unknown rather than looking unused', () => {
+  for (const limits of [null, {}, { per_account: [{ account_uuid: A, limits: { available: false, five_hour: { utilization: 0.4 } } }] }, { per_account: [{ account_uuid: B, label: A, limits: { five_hour: { utilization: 0 } } }] }]) {
+    const html = policyLimitHTML(A, limits);
+    assert.match(html, /Unknown/);
+    assert.doesNotMatch(html, /% used|width:/);
+  }
 });

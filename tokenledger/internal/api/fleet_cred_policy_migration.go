@@ -55,10 +55,32 @@ func (s *Server) credPolicyReview(settings map[string]string) (policyMigration, 
 	if err != nil {
 		return review, err
 	}
+	// Use the roster's shared role classifier. Offline hosts still count;
+	// where several names normalize to one machine, any hosting login wins.
+	snapshot, err := s.Nodes(time.Now())
+	if err != nil {
+		return review, err
+	}
+	byMachine := map[string][]NodeView{}
+	for _, node := range snapshot.Nodes {
+		ep, known := trusts[node.EndpointID]
+		if !known {
+			continue
+		}
+		// Display hostnames can change. Join through the endpoint's enrolled
+		// identity, exactly as credential authorization does.
+		m := strings.ToLower(firstLabel(ep.EnrolledHost))
+		node.Hostname = m
+		byMachine[m] = append(byMachine[m], node)
+	}
+	roles := map[string]string{}
+	for m, nodes := range byMachine {
+		roles[m] = machineRole(MachineView{Hostname: m}, nodes)
+	}
 	seen := map[string]bool{}
 	for _, ep := range trusts {
 		m := strings.ToLower(firstLabel(ep.EnrolledHost))
-		if m == "" || m == "?" || seen[m] {
+		if m == "" || m == "?" || seen[m] || roles[m] == MachineRoleClient {
 			continue
 		}
 		seen[m] = true
