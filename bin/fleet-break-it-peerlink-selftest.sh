@@ -26,7 +26,7 @@
 # certificate an epoch the fake master checks at the handshake only). The
 # peer-window-* drills build three machines on isolated tmux sockets
 # (bin/fleet-view-peer-rig.sh) on the same fake ssh.
-# shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT are read by the sourced runner
+# shellcheck disable=SC2034,SC2154  # CAP / SECS / WHY / WHAT are read by the sourced runner; PR_* come from the sourced rig
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=fleet-break-it-cred-selftest.sh

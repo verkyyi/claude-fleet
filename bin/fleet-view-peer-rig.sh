@@ -23,6 +23,10 @@
 # the socket labels: unique per rig (PR_TAG, a drill's own) so two never meet
 PR_HS="prH${PR_TAG:-$$}"; PR_FS1="prA${PR_TAG:-$$}"; PR_FS2="prB${PR_TAG:-$$}"; PR_TL="prT${PR_TAG:-$$}"
 PR_US=$'\037'
+# what pr_machine / pr_up fill in (fleet UUIDs, window ids) — named here so a
+# reader (and shellcheck) sees them assigned
+# shellcheck disable=SC2034  # read by the scripts that source this
+PR_U_home='' PR_U_far1='' PR_U_far2='' PR_W_home_l1='' PR_W_home_l2='' PR_KP=''
 PR_ME=$(id -un)
 
 pr_env() {   # <machine> — its environment, as `env` arguments
@@ -36,6 +40,7 @@ pr_env() {   # <machine> — its environment, as `env` arguments
 }
 pr_t() { local m="$1"; shift; "$REAL_TMUX" -L "$(pr_sock "$m")" "$@"; }
 pr_sock() { case "$1" in home) printf '%s' "$PR_HS" ;; far1) printf '%s' "$PR_FS1" ;; far2) printf '%s' "$PR_FS2" ;; term) printf '%s' "$PR_TL" ;; esac; }
+# shellcheck disable=SC2046  # pr_env's words ARE the env arguments
 pr_in() { local m="$1"; shift; env -u TMUX -u TMUX_PANE $(pr_env "$m") "$@"; }   # run as <machine>
 
 # pr_machine <label> <machine id> <window>… — a fleet session whose windows each
@@ -99,6 +104,7 @@ EOF
   # the keeper (C5)
   # straight through env (exec), so $! IS the keeper — pr_in in the background
   # would be a subshell, and killing it would leave the keeper running
+  # shellcheck disable=SC2046  # pr_env's words ARE the env arguments
   env -u TMUX -u TMUX_PANE $(pr_env home) python3 "$BIN/fleet-peerlink.py" run >>"$PR_WORK/keeper.err" 2>&1 </dev/null & PR_KP=$!
   "$REAL_TMUX" -L "$PR_TL" -f /dev/null new-session -d -s "$PR_TL" -n idle -x 160 -y 40 'while :; do sleep 300; done'
 }

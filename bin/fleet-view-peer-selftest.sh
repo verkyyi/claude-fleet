@@ -25,6 +25,7 @@
 # docs/BREAK-IT.md rows, drilled on the same rig by
 # bin/fleet-break-it-peerlink-selftest.sh (peer-window-ssh-killed / -left-behind).
 # tmux / python3 absent → SKIP (exit 0). Exit 0 = pass.
+# shellcheck disable=SC2154  # PR_U_* / PR_W_* come from the sourced rig
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 REAL_TMUX=$(command -v tmux) || { echo "fleet-view-peer selftest: tmux absent — SKIP"; exit 0; }
