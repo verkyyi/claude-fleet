@@ -19,7 +19,9 @@ RUN apt-get update -qq && apt-get install -y --no-install-recommends \
        | grep -Ei '^persourcepenalties ' | grep -Eqv ' no$' \
     && rm -f /tmp/hk /tmp/hk.pub
 # The dev toolchain every login gets (#3348), fetched at BUILD time (outside CN)
-# and checked by sha256. Node versions a repo pins (.nvmrc) come from fnm at run
+# and checked by sha256. Every tar runs --no-same-owner: as root tar keeps the
+# archive's owner, and node's uid 1001 on /usr/local/lib made the shared proxy's
+# launcher `untrusted` — the pod never went Ready (#3421; asserted below). Node versions a repo pins (.nvmrc) come from fnm at run
 # time through the CN mirrors /etc/fleet-devnet.env names (fleet-node-linux.py).
 ARG NODE_VERSION=24.21.0 NODE_SHA256=fd8e59d5a511510f6a298afb548f18c7d2b1be404d8b4a27d94fbe49f56cb2d6
 ARG GO_VERSION=1.27.2 GO_SHA256=ecbadb99091a3f46e31f5f934b068b1864eafa7995211b39eaddf76996045fe5
@@ -28,16 +30,16 @@ ARG FNM_VERSION=1.39.0 FNM_SHA256=7807664f39d39fc518da1c35ba0181e4b3267603c4b1de
 ARG ALIYUN_VERSION=3.5.1 ALIYUN_SHA256=3a9a45b9c7899228074135612d2b7ebbf32abb97826d825787cb454cd3011bdc
 RUN set -eu; cd /tmp; get() { curl -fsSL --retry 3 -o "$1" "$2"; echo "$3  $1" | sha256sum -c -; }; \
     get node.txz "https://nodejs.org/dist/v$NODE_VERSION/node-v$NODE_VERSION-linux-x64.tar.xz" "$NODE_SHA256"; \
-    tar -xJf node.txz -C /usr/local --strip-components=1 --exclude='*/CHANGELOG.md' --exclude='*/README.md' --exclude='*/LICENSE'; \
+    tar --no-same-owner -xJf node.txz -C /usr/local --strip-components=1 --exclude='*/CHANGELOG.md' --exclude='*/README.md' --exclude='*/LICENSE'; \
     corepack enable --install-directory /usr/local/bin; \
     get go.tgz "https://go.dev/dl/go$GO_VERSION.linux-amd64.tar.gz" "$GO_SHA256"; \
-    tar -xzf go.tgz -C /usr/local; ln -sfn /usr/local/go/bin/go /usr/local/go/bin/gofmt /usr/local/bin/; \
+    tar --no-same-owner -xzf go.tgz -C /usr/local; ln -sfn /usr/local/go/bin/go /usr/local/go/bin/gofmt /usr/local/bin/; \
     get kubectl "https://dl.k8s.io/release/v$KUBECTL_VERSION/bin/linux/amd64/kubectl" "$KUBECTL_SHA256"; \
     install -m 755 kubectl /usr/local/bin/kubectl; \
     get fnm.zip "https://github.com/Schniz/fnm/releases/download/v$FNM_VERSION/fnm-linux.zip" "$FNM_SHA256"; \
     python3 -m zipfile -e fnm.zip fnm.d; install -m 755 fnm.d/fnm /usr/local/bin/fnm; \
     get aliyun.tgz "https://github.com/aliyun/aliyun-cli/releases/download/v$ALIYUN_VERSION/aliyun-cli-linux-$ALIYUN_VERSION-amd64.tgz" "$ALIYUN_SHA256"; \
-    tar -xzf aliyun.tgz -C /usr/local/bin aliyun; chmod 755 /usr/local/bin/aliyun; \
+    tar --no-same-owner -xzf aliyun.tgz -C /usr/local/bin aliyun; chmod 755 /usr/local/bin/aliyun; \
     rm -rf /tmp/*; node --version; go version; kubectl version --client; fnm --version; aliyun version; corepack --version
 # Every shell reads the node's machine-wide dev settings (mirrors, the GitHub
 # relay) — written at each start by fleet-node-linux.py, absent = nothing set;
@@ -58,6 +60,13 @@ RUN python3 /usr/local/lib/fleet-image-stage.py stage /opt/fleet-release /opt/cl
     && for t in tmux claude codex; do ln -sfn /var/db/fleet-node/runtime/current/tools/bin/$t /usr/local/bin/$t; done \
     && ln -sfn /var/db/fleet-node/runtime/current/bin/ccquota /usr/local/bin/ccquota
 COPY release.pub /etc/fleet-release.pub
+# Root runs only root-owned code from a root-owned path (fleet-node-supervisor.py
+# trusted()); credsep's LIB is /usr/local/lib/claude-fleet/credsep (#3421).
+RUN bad=$(find /usr/local \( ! -user root -o ! -group root \) -print | head -5); \
+    [ -z "$bad" ] || { echo "image: /usr/local is not root's: $bad" >&2; exit 1; }; \
+    for d in / /usr /usr/local /usr/local/lib; do \
+      [ "$(stat -c '%u %g' "$d")" = '0 0' ] && [ -z "$(find "$d" -maxdepth 0 -perm /022)" ] \
+        || { echo "image: $d is not root's alone" >&2; exit 1; }; done
 # No host privileges or Kubernetes API credentials are needed. iptables is for the
 # egress-guard init container only (#3281); the fleet container has no NET_ADMIN.
 # FLEET_NODE_UPDATE_OWNER=image turns the self-update off (the old image-owned way).
