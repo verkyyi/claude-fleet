@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -198,6 +199,17 @@ func (s *Server) handleFleetStream(w http.ResponseWriter, r *http.Request) {
 	}
 	// The scope is asked before the stream opens, so a caller with none is
 	// told so with a status, not a stream of errors.
+	//
+	// The sessions topic is the page's 我的会话, the same read as
+	// /v1/fleet/fleet_sessions — which cuts an admin to their own (#2515,
+	// handleFleetSessions) — so it is read as an ownView request. Without it an
+	// admin's stream carried the whole fleet and every reload showed one count
+	// or the other (claude-fleet#3321). nodes stays /v1/nodes' cut.
+	sessR := r.WithContext(context.WithValue(r.Context(), ownViewKey{}, true))
+	if _, err := s.fleetScope(sessR); err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	if _, err := s.fleetScope(r); err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -213,7 +225,7 @@ func (s *Server) handleFleetStream(w http.ResponseWriter, r *http.Request) {
 			snap, err := s.nodesFor(r, now)
 			return snap, nodesObserved(snap), err
 		case "sessions":
-			out, err := s.FleetSessions(r)
+			out, err := s.FleetSessions(sessR)
 			return out, sessionsObserved(out), err
 		default:
 			l := s.liveStore()
