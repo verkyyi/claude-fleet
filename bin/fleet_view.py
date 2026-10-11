@@ -28,6 +28,12 @@ fleet-quickopen.py (this module is its node half — the client never loads it):
                                               (the ⌃\ window's program)
     fleet-quickopen.py view-order --view <view>
                                               rewrite the order ⌘↓ ⌘↑ walk (below)
+    fleet-quickopen.py view-menu --view <view> <target>
+                                              a row's actions (Tab, issue #3181):
+                                              id · label · what it asks
+    fleet-quickopen.py view-act --view <view> <target> <id> [--text <answer>] [--yes]
+                                              do one (ACTIONS, below) — the Tab
+                                              menu's own road; exit = the script's
     fleet-quickopen.py view-rows --view <view> [<query>]
                                               the popup's lines, plain (the selftest):
                                               kind · target · word · text · right ·
@@ -90,6 +96,13 @@ banner on top naming the machines (banner()); ↵ on a lost row says 进不去 i
 of going (lost_msg()). An open popup reads its list again every
 FLEET_VIEW_REFRESH (2 s, 0 = never) off the screen's thread (Refresh), the lit
 row kept by its key — and each read runs hub_fresh, so a silent hub is retried.
+
+TAB (issue #3181, EPIC #3178 C3): the lit row's actions — the old sidebar row
+menu's, item for item (ACTIONS; SIDEBAR_ACTIONS maps its letters), each running
+the same script the sidebar ran. ↑↓ ↵ pick, Esc steps back; one that needs words
+(rename, a message, an answer, a time) asks on the bottom line (↵ submit, Esc
+cancel), a reap asks y / n first; then back on the list, read again. A row on
+another machine has 进入 and its shell (C5) until C4 fills the rest of `far`.
 """
 import curses
 import getpass
@@ -209,7 +222,7 @@ _WORDS = {}
 def say(key, *args):
     if not _WORDS:
         try:
-            raw = subprocess.run(["sh", str(Path(__file__).absolute().parent / "fleet-ui-lang.sh"), "dump", "view_"],
+            raw = subprocess.run(["sh", str(Path(__file__).absolute().parent / "fleet-ui-lang.sh"), "dump", "view_", "reap_menu_"],
                                  capture_output=True, text=True, timeout=5).stdout.split("\0")
         except (OSError, subprocess.TimeoutExpired):
             raw = []
@@ -507,7 +520,7 @@ def entries(vid, now=None):
         if f[5].strip():
             tags.append(f[5].strip())
         e = {"kind": "sess", "target": target, "far": not local, "machine": machine, "login": login,
-             "state": state, "text": title or name, "name": name, "issue": issue, "depth": depth,
+             "state": state, "text": title or name, "name": name, "reap": f[14].strip(), "issue": issue, "depth": depth,
              "group": grp, "sym": sym_of(state, lost), "lost": lost, "lost_secs": lost_secs, "ask": ask, "tags": tags, "repo": repo,
              "word": state_words(state, detail if state == "needs" else ""),
              "foot": " · ".join(x for x in (title or name, reap_words(f[14]),
@@ -1440,6 +1453,309 @@ def view_keys(me, if_stale=False):
             pass
 
 
+# --- a row's actions: Tab (issue #3181, EPIC #3178 C3) ----------------------------------
+#
+# THE table (共同约定 2): every thing the old sidebar's row menu did to a session
+# (fleet-sidebar-menu.sh) is one ACTIONS entry — `id` · `label(row)` · `when(row)`
+# · `local(row, answer)` · `far(row, answer)` (C4 fills it; None = not on another
+# machine's row yet) · `ask` (None | "text" | "key" | "choice": the question the
+# panel's bottom line asks first). `local` / `far` return the argv of the SAME
+# script the sidebar ran (nothing re-implemented), or a verb this module does
+# itself (go · shell · resume). The popup's Tab menu, `view-menu` and `view-act`
+# (C2's command line) all read this one table. A row is the list's entry (entries())
+# plus what its window says now (facts()).
+
+def act_bin():
+    """Where the actions' scripts are: beside this file (FLEET_VIEW_ACT_BIN — the
+    selftest's stubs)."""
+    return Path(os.environ.get("FLEET_VIEW_ACT_BIN") or Path(__file__).absolute().parent)
+
+
+def sh(name, *args):
+    return ["bash", str(act_bin() / name)] + [str(a) for a in args]
+
+
+def facts(fleet, e):
+    """What a local row's window says now: pin · sleep · keep-awake · agent · the
+    needs kind · @fleet_id · its name · the wrapper's page up · its PR."""
+    t = e.get("target") or ""
+    if e.get("far") or not t.startswith("@"):
+        return {}
+    rc, out = tm("display-message", "-p", "-t", t, "#{window_id}|#{@pin}|#{@worker_lifecycle}|#{@sleep_keep_awake}|"
+                 "#{@cc_agent}|#{@claude_needs}|#{@fleet_id}|#{window_name}|#{@wrap_exit_rc}|#{pane_id}")
+    f = (out.split("|") + [""] * 10)[:10] if rc == 0 else [""] * 10
+    if f[0] != t:     # tmux answers a gone id with another window's format
+        return {"gone": True}
+    pr = ""
+    try:
+        pr = subprocess.run(sh("dash-open-pr.sh", "--wid", t, "--probe"), capture_output=True, text=True, timeout=3,
+                            env=act_env(fleet), stdin=subprocess.DEVNULL).stdout.strip().splitlines()
+        pr = pr[-1] if pr else ""
+    except (OSError, subprocess.TimeoutExpired):
+        pr = ""
+    return {"pin": f[1] == "1", "life": f[2], "keep": f[3] == "1", "agent": f[4] or "claude", "needs": f[5],
+            "fid": f[6], "wname": f[7], "page": f[8] != "", "pane": f[9], "pr": pr}
+
+
+def live(r):
+    return not r.get("far") and not r.get("gone") and r.get("state") not in ("exited",)
+
+
+def ended(r):
+    return r.get("sec") == "ended"
+
+
+def other_agent(r):
+    return "Claude" if r.get("agent") == "codex" else "Codex"
+
+
+REAP_CHOICES = (("merged", "reap_menu_merged"), ("done:2h", "reap_menu_done_2h"), ("loop-end", "reap_menu_loop_end"),
+                ("at", "reap_menu_at"), ("keep", "reap_menu_keep"))
+
+
+def reap_choices(r, fleet):
+    cur = (r.get("reap") or "").partition(":")[0]
+    return [(v, ("● " if cur and cur == v.partition(":")[0] else "") + say(k)) for v, k in REAP_CHOICES]
+
+
+def sub_choices(r, fleet):
+    """fleet-manual-sub.sh list → (account, `account · 5h · 7d · note`), as the
+    sidebar's 迁移到… stepped through them."""
+    try:
+        out = subprocess.run(sh("fleet-manual-sub.sh", "list", fleet), capture_output=True, text=True, timeout=15,
+                             env=act_env(fleet), stdin=subprocess.DEVNULL).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    rows = [l.split("\t") for l in out.splitlines()[1:] if l.count("\t") >= 3]
+    return [(x[0], " · ".join(y for y in (x[0], "5h " + x[1] if x[1] else "", "7d " + x[2] if x[2] else "", x[3]) if y))
+            for x in rows]
+
+
+def answer_ask(r):
+    """A permission prompt is y / n, a question its option number(s); anything
+    else (a login, a blocked worker) is answered in its own pane: go there."""
+    return {"perm": "key", "ask": "text"}.get(r.get("needs"), None)
+
+
+def answer_local(r, ans, fleet):
+    w = r["target"]
+    if r.get("needs") == "perm":
+        return sh("fleet-permission.sh", "--allow" if ans in ("y", "Y") else "--deny", w,
+                  "--session", fleet, "--by", getpass.getuser())
+    if r.get("needs") == "ask":
+        return sh("fleet-answer.sh", "--answer", w, "--session", fleet, *ans.split())
+    return "go"
+
+
+def reappol_local(r, ans, fleet):
+    return sh("fleet-reap-policy.sh", "set", ans, "--win", r["target"], "--session", fleet)
+
+
+# Each entry: id · label · when · local · far · ask (+ prompt / choices / slow: run
+# in the background from the popup — a stop, a reap, a move take seconds).
+ACTIONS = [
+    # 进入
+    {"id": "enter", "label": lambda r: say("view_act_enter"), "when": lambda r: True,
+     "local": lambda r, a, f: "go", "far": lambda r, a, f: "go", "ask": None},
+    {"id": "shell", "label": lambda r: say("view_act_shell"),
+     "when": lambda r: not r.get("gone") and not r.get("lost") and r.get("state") != "exited",
+     "local": lambda r, a, f: "shell", "far": lambda r, a, f: "shell", "ask": None},
+    {"id": "pr", "label": lambda r: say("view_act_pr_fmt", r.get("pr")), "when": lambda r: bool(r.get("pr")),
+     "local": lambda r, a, f: sh("dash-open-pr.sh", "--wid", r["target"]), "far": None, "ask": None},
+    # 消息
+    {"id": "answer", "label": lambda r: say("view_act_answer"), "when": lambda r: live(r) and r.get("state") == "needs",
+     "local": answer_local, "far": None, "ask": answer_ask,
+     "prompt": lambda r: say("view_ask_perm") if r.get("needs") == "perm" else say("view_ask_pick"), "keys": "yYnN"},
+    {"id": "message", "label": lambda r: say("view_act_message"), "when": live,
+     "local": lambda r, a, f: sh("fleet-peer-send.sh", r["target"], a), "far": None, "ask": "text",
+     "prompt": lambda r: say("view_ask_message")},
+    # 控制
+    {"id": "rename", "label": lambda r: say("view_act_rename"), "when": lambda r: not r.get("far") and not r.get("gone"),
+     "local": lambda r, a, f: sh("dash-rename.sh", "--wid", r["target"], a), "far": None, "ask": "text",
+     "prompt": lambda r: say("view_ask_rename"), "default": lambda r: r.get("wname") or r.get("name") or ""},
+    {"id": "pin", "label": lambda r: say("view_act_unpin" if r.get("pin") else "view_act_pin"),
+     "when": lambda r: not r.get("far") and not r.get("gone"),
+     "local": lambda r, a, f: sh("dash-pin-toggle.sh", r["target"]), "far": None, "ask": None},
+    {"id": "reappol", "label": lambda r: say("view_act_reappol"), "when": lambda r: not r.get("far") and not r.get("gone"),
+     "local": reappol_local, "far": None, "ask": "choice", "choices": reap_choices,
+     "then": {"at": ("text", lambda r: say("view_ask_at"))}},
+    {"id": "stop", "label": lambda r: say("view_act_stop"),
+     "when": lambda r: live(r) and bool(r.get("fid")) and r.get("life") != "sleeping",
+     "local": lambda r, a, f: sh("fleet-worker-stop.sh", f, "fid:" + r["fid"]), "far": None, "ask": None, "slow": True},
+    {"id": "resume", "label": lambda r: say("view_act_restore" if ended(r) else "view_act_resume"),
+     "when": lambda r: not r.get("far") and r.get("state") == "exited" and r.get("page"),
+     "local": lambda r, a, f: "resume", "far": None, "ask": None},
+    {"id": "wake", "label": lambda r: say("view_act_wake"), "when": lambda r: not r.get("far") and r.get("life") == "sleeping",
+     "local": lambda r, a, f: sh("fleet-sleep.sh", "wake", f, r["target"], "--over-cap"), "far": None, "ask": None,
+     "slow": True},
+    {"id": "awake", "label": lambda r: say("view_act_allow_sleep" if r.get("keep") else "view_act_keep_awake"),
+     "when": lambda r: not r.get("far") and not r.get("gone"),
+     "local": lambda r, a, f: sh("fleet-sleep.sh", "allow-sleep" if r.get("keep") else "keep-awake", f, r["target"]),
+     "far": None, "ask": None},
+    {"id": "sub", "label": lambda r: say("view_act_sub"), "when": lambda r: live(r) and r.get("agent") != "codex",
+     "local": lambda r, a, f: sh("dash-migrate.sh", r["target"], "to", a), "far": None, "ask": "choice",
+     "choices": sub_choices, "slow": True},
+    {"id": "agent", "label": lambda r: say("view_act_agent_fmt", other_agent(r)), "when": live,
+     "local": lambda r, a, f: sh("fleet-transfer.sh", "--session", f, "--window", r["target"], "--to",
+                                 other_agent(r).lower()), "far": None, "ask": None, "slow": True},
+    {"id": "reap", "label": lambda r: say("view_act_reap"), "when": lambda r: not r.get("far") and not r.get("gone"),
+     "local": lambda r, a, f: sh("dash-reap.sh", r["target"], "--yes"), "far": None, "ask": "key",
+     "prompt": lambda r: say("view_ask_reap_fmt", r.get("text") or r.get("name") or r["target"]), "keys": "yYnN",
+     "yes": True, "slow": True},
+]
+ACTION = {a["id"]: a for a in ACTIONS}
+# The sidebar menu's letters (fleet-ui-lang.sh menu_keys) → the action here; the
+# row-less ones (no row to act on) live elsewhere — the list's top lines (C2), the
+# client's own keys (C7). fleet-view-actions-selftest.sh holds the two lists in step.
+SIDEBAR_ACTIONS = {"rename": "rename", "pin": "pin", "pr": "pr", "answer": "answer", "sub": "sub", "wake": "wake",
+                   "awake": "awake", "reappol": "reappol", "agent": "agent", "reap": "reap", "open": "enter",
+                   "message": "message", "stop": "stop", "resume": "resume", "restore": "resume"}
+ROWLESS = {"new": "C2", "newto": "C2", "repo": "C2", "clients": "C7", "quit": "C7"}
+
+
+def act_env(fleet):
+    """The scripts' context: bare tmux on THIS fleet's server (TMUX inherited in a
+    pane, else pointed at the socket — as fleet-control-read.sh does), never a
+    TMUX_PANE (an empty one is the pane the person looks at)."""
+    env = dict(os.environ, FLEET_SESSION=fleet)
+    env.pop("TMUX_PANE", None)
+    if not env.get("TMUX") and _SOCK[0]:
+        rc, sp = tm("display-message", "-p", "#{socket_path}")
+        if rc == 0 and sp:
+            env["TMUX"] = sp + ",0,0"
+    return env
+
+
+def act_row(fleet, e):
+    r = dict(e)
+    r.update(facts(fleet, e))
+    return r
+
+
+def menu_of(r):
+    """The actions a row gets, in the table's order: (action, label)."""
+    out = []
+    for a in ACTIONS:
+        if (a["far"] if r.get("far") else a["local"]) is None:
+            continue
+        try:
+            if a["when"](r):
+                out.append((a, a["label"](r)))
+        except (KeyError, TypeError):
+            continue
+    return out
+
+
+def act_ask(a, r):
+    ask = a["ask"]
+    return ask(r) if callable(ask) else ask
+
+
+def act_run(qo, vid, fleet, a, r, ans, client="", wait=True):
+    """Do one action: (rc, the line to say, went — the 看台 is on the row now).
+    `wait` False runs a slow one in the background (the popup does not freeze on
+    a reap)."""
+    fn = a["far"] if r.get("far") else a["local"]
+    argv = fn(r, ans, fleet)
+    label = a["label"](r).rstrip("…")
+    if argv in ("go", "shell") and lost_msg(r):
+        return 1, lost_msg(r), False
+    if argv == "go":
+        rc = go(qo, vid, r["target"], "menu", client, r)
+        return rc, "" if rc == 0 else (say("view_far_fmt", r.get("machine") or "?") if rc == 3 else say("view_gone")), rc == 0
+    if argv == "shell":
+        # C5's road (issue #3183): a shell beside that session, where its agent is
+        rc = open_shell(qo, vid, client, r["target"], r)
+        return rc, "" if rc == 0 else (say("view_gone") if rc == 3 else
+                                       say("view_shell_failed_fmt", r.get("machine") or "?")), rc == 0
+    if argv == "resume":
+        # the wrapper's page (fleet-session-wrap.sh): ↵ resumes the same conversation
+        rc, _ = tm("send-keys", "-t", r.get("pane") or r["target"], "Enter")
+        went = rc == 0 and go(qo, vid, r["target"], "menu", client, r) == 0
+        return rc, say("view_act_done_fmt", label) if rc == 0 else say("view_act_failed_fmt", label, ""), went
+    env = act_env(fleet)
+    if not wait and a.get("slow"):
+        try:
+            subprocess.Popen(argv, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, start_new_session=True)
+        except OSError:
+            return 1, say("view_act_failed_fmt", label, ""), False
+        return 0, say("view_act_sent_fmt", label), False
+    try:
+        p = subprocess.run(argv, env=env, capture_output=True, text=True, stdin=subprocess.DEVNULL,
+                           timeout=300 if a.get("slow") else 30)
+    except (OSError, subprocess.TimeoutExpired):
+        return 1, say("view_act_failed_fmt", label, ""), False
+    said = ((p.stdout.strip() or p.stderr.strip()).splitlines() or [""])[-1]
+    if p.returncode != 0:
+        return p.returncode, say("view_act_failed_fmt", label, one_line(said, 120)), False
+    return 0, say("view_act_done_fmt", label) + ((" · " + one_line(said, 80)) if said else ""), False
+
+
+def find_row(vid, target):
+    for e in entries(vid):
+        if e["kind"] == "sess" and e.get("target") == target:
+            return e
+    return None
+
+
+def cli_menu(vid, target):
+    """view-menu: the row's actions, `id<TAB>label<TAB>ask` a line."""
+    e = find_row(vid, target)
+    if e is None:
+        print(say("view_gone"), file=sys.stderr)
+        return 1
+    r = act_row(view_fleet(vid), e)
+    for a, label in menu_of(r):
+        print("\t".join((a["id"], label, act_ask(a, r) or "")))
+    return 0
+
+
+def cli_act(qo, vid, target, aid, text=None, yes=False, client=""):
+    """view-act: one action on one row, as the Tab menu does it (C2's command line).
+    A question the action asks is --text (a line, a choice's value, a key); a
+    confirming one needs --yes. Exit: the script's, 2 not applicable / no answer,
+    3 not confirmed."""
+    fleet = view_fleet(vid)
+    e = find_row(vid, target)
+    if e is None or aid not in ACTION:
+        print(say("view_gone") if e is None else "no action " + aid, file=sys.stderr)
+        return 2
+    r = act_row(fleet, e)
+    a = ACTION[aid]
+    if all(x is not a for x, _ in menu_of(r)):
+        print("%s: not for this row" % aid, file=sys.stderr)
+        return 2
+    if a.get("yes"):
+        # a y / n confirm (回收): --yes is the y
+        if not yes and (text or "").lower() != "y":
+            print("%s: not confirmed (--yes)" % aid, file=sys.stderr)
+            return 3
+        text = "y"
+    if act_ask(a, r) and text is None:
+        print("%s: needs --text" % aid, file=sys.stderr)
+        return 2
+    rc, said, _ = act_run(qo, vid, fleet, a, r, text or "", client, wait=True)
+    if said:
+        print(said)
+    return rc
+
+
+class Line:
+    """The bottom line's editor (fleet-ask.py's way, cut to what a short answer
+    needs): type, ⌫, ⌃U clears, ↵ submits, Esc cancels."""
+    def __init__(self, text=""):
+        self.text = text
+
+    def key(self, ch):
+        if ch in (curses.KEY_BACKSPACE, "\x7f", "\b"):
+            self.text = self.text[:-1]
+        elif ch == "\x15":
+            self.text = ""
+        elif isinstance(ch, str) and ch.isprintable():
+            self.text += ch
+
+
 # --- the popup -------------------------------------------------------------------------
 
 def popup(screen, qo, vid, client):
@@ -1476,12 +1792,62 @@ def popup(screen, qo, vid, client):
     _, vsh = tm("display-message", "-p", "-t", "=%s@view-%s:" % (view_fleet(vid), vid), "#{@view_shell}")
     if ":" in vsh:
         cur = vsh.split(":", 1)[1]
+    fleet = view_fleet(vid)
     query, opened, msg, show_legend = "", set(), "", False
     shown = visible(items, query, opened)
     at = next((i for i, e in enumerate(shown) if e.get("target") == cur and pickable(e)), 0)
     top = 0
     heal = qo.Heal()
     fresh = Refresh(vid)
+    # Tab (issue #3181): `menu` = the row's actions, `choice` = an action's options,
+    # `ask` = the question on the bottom line. Esc steps back to the list.
+    mode, mrow, mitems, mat, mtitle, pend, line = "", None, [], 0, "", None, Line()
+
+    def back():
+        nonlocal mode, mrow, mitems, mat, pend
+        mode, mrow, mitems, mat, pend = "", None, [], 0, None
+
+    def run(a, r, ans):
+        """Do it, say how it went, read the list again (a pin, a rename, a reap
+        shows at once); back on the list."""
+        nonlocal items, shown, msg
+        rc, said, went = act_run(qo, vid, fleet, a, r, ans, client, wait=False)
+        back()
+        if went:
+            return True     # the 看台 is on it now: the popup closes
+        msg = said
+        items = entries(vid)
+        shown = visible(items, query, opened)
+        return False
+
+    def pick(a, r, value=None):
+        """An action picked (or one of its options): ask what it needs, else do it."""
+        nonlocal mode, mitems, mat, mtitle, pend, line
+        ask = act_ask(a, r)
+        if value is not None:
+            then = (a.get("then") or {}).get(value)
+            if then:
+                mode, pend, line = "ask", (a, r, value + ":", "text", then[1](r)), Line()
+                return False
+            return run(a, r, value)
+        if ask == "choice":
+            ch = a["choices"](r, fleet)
+            if not ch:
+                return run_none(a, r)
+            mode, mitems, mat, mtitle, pend = "choice", [(v, l, a) for v, l in ch], 0, a["label"](r), (a, r)
+            return False
+        if ask in ("text", "key"):
+            dflt = a.get("default")
+            mode, pend, line = "ask", (a, r, "", ask, a["prompt"](r)), Line(dflt(r) if dflt else "")
+            return False
+        return run(a, r, "")
+
+    def run_none(a, r):
+        nonlocal msg
+        back()
+        msg = say("view_act_failed_fmt", a["label"](r), say("view_act_nothing"))
+        return False
+
     while True:
         new = fresh.poll()
         if new is not None:
@@ -1497,6 +1863,37 @@ def popup(screen, qo, vid, client):
         ban = banner(items)
         off = 2 if ban else 1
         body = max(1, height - 2 - off)
+        if mode in ("menu", "choice"):
+            screen.addnstr(0, 0, qo.clip("› " + query, width - 1), width - 1)
+            screen.addnstr(1, 0, qo.clip("─ " + mtitle + " ", width - 1), width - 1, attr(("bold",)))
+            mtop = max(0, mat - (body - 2))
+            for y, (_, label, _) in enumerate(mitems[mtop:mtop + body - 1], 2):
+                lit = mtop + y - 2 == mat
+                screen.addnstr(y, 0, qo.clip(("▶ " if lit else "  ") + label, width - 1), width - 1,
+                               attr(("lit", "bold") if lit else ()))
+            screen.addnstr(height - 2, 0, qo.clip(msg, width - 1), width - 1)
+            screen.addnstr(height - 1, 0, qo.clip(say("view_act_keys"), width - 1), width - 1, attr(("dim",)))
+            screen.refresh()
+            screen.timeout(heal.timeout(False) or 1000)
+            try:
+                ch = screen.get_wch()
+            except curses.error:
+                continue
+            msg = ""
+            if ch == curses.KEY_RESIZE:
+                heal.resized(screen)
+            elif ch in ("\x1b", "\x03"):
+                back()
+            elif ch in (curses.KEY_UP, "\x10"):
+                mat = max(0, mat - 1)
+            elif ch in (curses.KEY_DOWN, "\x0e", "\t"):
+                mat = min(len(mitems) - 1, mat + 1)
+            elif ch in ("\n", "\r", curses.KEY_ENTER) and mitems:
+                v, _, a = mitems[mat]
+                done = pick(a, mrow) if mode == "menu" else pick(a, pend[1], v)
+                if done:
+                    return 0
+            continue
         sel = [i for i, e in enumerate(shown) if pickable(e)]
         if sel and at not in sel:
             at = min(sel, key=lambda i: abs(i - at))
@@ -1523,6 +1920,39 @@ def popup(screen, qo, vid, client):
                 except curses.error:
                     pass
                 x += qo.cells(text)
+        if mode == "ask":
+            # the question on the bottom line, the keyboard in it (fleet-ask.py's way)
+            screen.addnstr(height - 2, 0, qo.clip(pend[4] + line.text + ("" if pend[3] == "key" else "▏"), width - 1),
+                           width - 1, curses.color_pair(3) if color_on() else attr(("bold",)))
+            screen.addnstr(height - 1, 0, qo.clip(say("view_ask_keys"), width - 1), width - 1, attr(("dim",)))
+            screen.refresh()
+            screen.timeout(heal.timeout(False) or 1000)
+            try:
+                ch = screen.get_wch()
+            except curses.error:
+                continue
+            a, r, pre, kind, _ = pend
+            if ch == curses.KEY_RESIZE:
+                heal.resized(screen)
+            elif ch in ("\x1b", "\x03"):
+                back()
+            elif kind == "key":
+                if isinstance(ch, str) and ch in (a.get("keys") or ""):
+                    if a.get("yes") and ch not in "yY":
+                        back()      # n: nothing done
+                    elif run(a, r, ch):
+                        return 0
+                elif ch not in (curses.KEY_RESIZE,):
+                    back()          # any other key cancels a one-key question
+            elif ch in ("\n", "\r", curses.KEY_ENTER):
+                text = line.text.strip()
+                if not text:
+                    back()          # an empty answer cancels, as an empty name always has
+                elif run(a, r, pre + text):
+                    return 0
+            else:
+                line.key(ch)
+            continue
         foot = msg or (legend() if show_legend else shown[at].get("foot", "") if 0 <= at < len(shown) else "")
         screen.addnstr(height - 2, 0, qo.clip(foot, width - 1), width - 1, attr(("dim",)) if show_legend and not msg
                        else (curses.color_pair(3) if color_on() else 0))
@@ -1546,6 +1976,15 @@ def popup(screen, qo, vid, client):
         if ch in (curses.KEY_DOWN, "\x0e"):
             sel = [i for i, e in enumerate(shown) if pickable(e) and i > at]
             at = sel[0] if sel else at
+            continue
+        if ch == "\t":
+            if 0 <= at < len(shown) and shown[at]["kind"] == "sess":
+                mrow = act_row(fleet, shown[at])
+                mitems = [(a["id"], label, a) for a, label in menu_of(mrow)]
+                word = mrow.get("word") or ""
+                mtitle = " · ".join(x for x in (mrow.get("text") or mrow.get("name") or "",
+                                                mrow.get("machine") if mrow.get("far") else "", word) if x)
+                mode, mat = "menu", 0
             continue
         if ch in ("\n", "\r", curses.KEY_ENTER):
             if not (0 <= at < len(shown)):
@@ -1630,6 +2069,15 @@ def main(argv, qo):
     if argv[:1] == ["view-order"]:
         order_save(vid, entries(vid))
         return 0
+    if argv[:1] in (["view-menu"], ["view-act"]):
+        flags = ("--view", "--client", "--text")
+        rest = [x for i, x in enumerate(argv[1:], 1) if x not in flags + ("--yes",) and argv[i - 1] not in flags]
+        if argv[0] == "view-menu":
+            return cli_menu(vid, rest[0]) if rest else 2
+        if len(rest) < 2:
+            return 2
+        return cli_act(qo, vid, rest[0], rest[1], opt(argv, "--text") if "--text" in argv[:-1] else None,
+                       "--yes" in argv, client)
     if argv[:1] == ["view-rows"]:
         rest = [a for i, a in enumerate(argv[1:], 1) if a not in ("--view", "--client")
                 and argv[i - 1] not in ("--view", "--client")]
