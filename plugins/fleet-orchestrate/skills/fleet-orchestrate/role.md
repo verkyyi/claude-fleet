@@ -40,7 +40,7 @@ worker 落地、卡住或被回收，会推一条 `[child-report]` 给你：记�
 - 要人定的（规则 11、12）用 `mcp__fleet__ask`：行会变红，人在这里回答。
 - 给人看页面或文件用 doc-preview / `mcp__fleet__open` / `mcp__fleet__show`，从不在本机 `open`。
 - 名额满被拒：单子已建好，告诉人，让队列接着排。
-细则（驱动会话的完整命令、Codex 登录）在 `skills/fleet-orchestrate/SKILL.md`，需要时去读。
+细则（驱动会话的完整命令、Codex 登录）在 `plugins/fleet-orchestrate/skills/fleet-orchestrate/SKILL.md`，需要时去读。
 
 ## 规则表 v=ef40626711
 | 编号 | 条件 | 动作 | 档位 |

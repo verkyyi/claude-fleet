@@ -23,7 +23,7 @@ worker, and it never writes code itself. If it is closed, the fleet reopens it o
 tick (the same conversation, when its transcript is still on disk).
 
 Your role does not depend on this skill having been run in the conversation: the
-short version, `skills/fleet-orchestrate/role.md`, is in your system prompt (the
+short version, `plugins/fleet-orchestrate/skills/fleet-orchestrate/role.md`, is in your system prompt (the
 launcher's `--append-system-prompt-file` and the fleet mod's `fleet:orchestrator-role`
 section, issue #2582), so a compaction or a `/clear` leaves you the orchestrator.
 Keep the two in step: a rule that changes here changes there too.
@@ -68,7 +68,7 @@ the HOW of each rule.
 |---|---|
 | one change in one repo, clear enough to start (rule 1) | **quick task**: `mcp__fleet__file_issue` (`title`, `body`, `repo`, `spawn: true`) — one issue, one worker, one PR. Its body says what «done» is. |
 | several independent changes, or one that spans repos (rule 2) | **an EPIC**: run `/fleet-epic-plan <theme>` here. It writes the charter, the members (in whichever hosted repo each belongs) and a design page — host it for the person (doc-preview) and wait for their confirmation. |
-| a confirmed EPIC (rule 3) | **a driver session**: `bin/dash-raw-session.sh --repo <owner/name> --origin hub --as epic-driver --name '<简称>·批次' --prompt '/fleet-epic-run <N>'` — `--repo` is ALWAYS the parent EPIC's repo (your pane sits in `$HOME`, so without it the driver is a no-repo session); `--as epic-driver` starts it as its definition says (`agents/epic-driver.md`); `<简称>` is the charter's `short=`, so the row reads `像本地·批次 7/9` from the start (issue #2544). Started from your pane it is YOUR child (issue #2623): when the batch closes it reports `merged` back to you — the report page and whatever it leaves for the person (move stable, redeploy the hub) — and its `done:2h` closes it. The driver keeps the batch moving; you go back to talking. |
+| a confirmed EPIC (rule 3) | **a driver session**: `bin/dash-raw-session.sh --repo <owner/name> --origin hub --as epic-driver --name '<简称>·批次' --prompt '/fleet-epic-run <N>'` — `--repo` is ALWAYS the parent EPIC's repo (your pane sits in `$HOME`, so without it the driver is a no-repo session); `--as epic-driver` starts it as that standard agent file says (`~/.claude/agents/epic-driver.md`, shipped by the install — issue #3122); `<简称>` is the charter's `short=`, so the row reads `像本地·批次 7/9` from the start (issue #2544). Started from your pane it is YOUR child (issue #2623): when the batch closes it reports `merged` back to you — the report page and whatever it leaves for the person (move stable, redeploy the hub) — and its `done:2h` closes it. The driver keeps the batch moving; you go back to talking. |
 | worth doing, not now (rule 4) | **the queue**: file it bare (`mcp__fleet__file_issue`, no `spawn`) with a `priority`, or `blocked` with 「等 #N 合并」 in the body. Nothing starts it on its own (the autofill dispatcher is gone, #3120): when its time comes, you spawn it. |
 | a question, not work (rule 5) | answer it. |
 

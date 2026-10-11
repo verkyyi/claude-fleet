@@ -216,8 +216,8 @@ Do not install from memory: read the doc and work from it.
   and narrower than 100 columns the list is full-screen; only a 看台 (`attach --thin`) wears
   that key-table, so a direct attach sees none of it. A 看台 changes session only
   through `bin/fleet-view-go.sh` (`fleet_view.go`, `logs/view-switch.ndjson`).
-  C7's keys (issue #3004) are the same table's: ⌘N = `go` to the orchestrator
-  (here, or `orch_<sess>`'s machine; none → `fleet-orchestrator.sh ensure`), ⌘T =
+  C7's keys (issue #3004) are the same table's: ⌘N = a NEW session (issue #3119:
+  `fleet_view.go_new` → `dash-raw-session.sh --no-repo`, then `go` onto it), ⌘T =
   `fleet-quick-dispatch.py --view` (the agent step, #1834), ⌘Q = OSC 7502 `quit`
   with the row's token on the client's tty + detach, ⌃\ (no ⌘ chord, bound by
   name) = the session's shell, a `@view_shell` window of the 看台. With no client
@@ -402,6 +402,80 @@ Do not install from memory: read the doc and work from it.
   knobs, then the person's model / effort still in `person-bundle.json`
   (compat-1v). `fleet-agent-as-selftest.sh`, `spawn-origin-gate-selftest.sh` F,
   `fleet-role-selftest.sh`.
+- **This repo is a plugin marketplace; orchestration, the steward and EPIC
+  batches are its optional plugins** (issue #3112, EPIC #3111 C1).
+  `.claude-plugin/marketplace.json` lists the core `fleet` (source `./`) and
+  `plugins/fleet-orchestrate` · `plugins/fleet-steward` · `plugins/fleet-epic`
+  (steward and epic depend on orchestrate), each a standard plugin (skills ·
+  commands · agents · hooks/hooks.json · .mcp.json). **Nothing installs them but
+  Claude Code's `/plugin`** (`claude plugin install|uninstall|enable|disable`);
+  the fleet records nothing — `bin/fleet-plugins.py` is the one reader of `claude
+  plugin list --json`. A hosting login's install-apply (`plugins` pass) only adds
+  the marketplace from `~/.claude/fleet` as spelled (it follows every version
+  switch; a managed link tree adds `<runtime>/current` instead — install copies
+  no symlink leaving the marketplace), except carry-over: a part that moved into a plugin and is still
+  installed on that login installs its plugin, so a fresh login has none. A
+  plugin carries no script — its hooks / MCP commands run `~/.claude/fleet/bin/…`
+  — pins a semver `version`, and bumps it whenever its files change (an installed
+  copy updates on the version; the doctor's `plugins` row says 落后). Their parts
+  never go back into `skills/`, `commands/` or the agent bundle.
+  `fleet-plugins-selftest.sh`.
+- **A role starts as its ONE definition says: `agents/<role>.md`** (issue #2782,
+  EPIC #2781 C1). orchestrator · steward · worker · epic-driver, each in Claude
+  Code's subagent file format (model · effort · tools · disallowedTools ·
+  mcpServers · permissionMode … + the body); `bin/fleet-role.py render <role>
+  [--agent claude|codex]` is the one reader. The orchestrator's and the steward's
+  launchers splice what `fleet_role_render` gives (and stamp `@fleet_role_file`
+  <sha> + `@fleet_role_body`); a worker / driver launch carries `--role
+  worker|epic-driver` (dash-issue-session.sh; `dash-raw-session.sh --role
+  epic-driver`) and fleet-claude.sh renders it — the definition's model is the
+  FLEET_MODEL default, the cap / subagent tier / @cc_model go on as before; no
+  `--role` = byte for byte as before; the wrapper's resume keeps the rendered
+  group. A worker's / driver's body is read by its seed skill, injected nowhere.
+  The old knobs (`FLEET_ORCH_*`, `FLEET_STEWARD_*`, `FLEET_MODEL`, the login's
+  `effortLevel`) still win for one version (`# compat-1v`) —
+  `fleet-conf.sh migrate`'s roles step (`fleet-role.py migrate-conf`, issue #2788)
+  moves every one that differs from the built-in into the person's layer (one PUT;
+  a field the person already set is theirs), comments its line out (.bak kept),
+  writes nothing on a second run, and the doctor's `roles` row WARNs while one is
+  left; Codex models and `FLEET_SUBAGENT_MODEL` stay the machine's
+  (docs/ROLES-ACCEPTANCE.md) — and
+  `skills/*/role.md` stay as copies of the bodies for a window opened before
+  (`fleet-role-selftest.sh` B: byte-identical). The repo root is the plugin root:
+  `plugin.json` says `"agents": []`, so the roles never register as plugin
+  subagents. A definition that cannot be read is not used: the last good launch
+  (`$FLEET_CONF_DIR/roles/<role>.<agent>.last.json`) stands — BREAK-IT
+  `role-def-broken`. Never hard-code a role's model, effort or prompt in a launcher.
+  **A person writes only what changes** (issue #2783, C2): a layer in the same
+  format — the person bundle's `roles.<role>` (`person-bundle.json`), then this
+  computer's `$FLEET_CONF_DIR/roles/<role>.md` — merged by `fleet-role.py merge`
+  (pure; scalars replace, lists `+X`/`-X` or `!replace`, dicts by key with `null`
+  deleting, the body appended unless `body: replace`), render launches the merge,
+  `fleet role show <role> --sources` names each field's 自带 · 你的 vN · 本机 · 🔒.
+  `role.<role>.<field>` in `conf/agent-locked.list` is written back after the
+  merge (never looser than the built-in). A bad layer is not used — its last good
+  copy stands (BREAK-IT `role-overlay-broken`); no layer ⇒ byte for byte C1.
+  `tests/role-merge/*.json` are the vectors the hub's Go copy (C6) runs too.
+  **The person's layer lives on the hub** (issue #2784, C3): the person bundle
+  takes `roles` (`{<role>: overlay}`, the four roles only, ≤ 16 KiB each) and
+  `rules` (C5's table text or list of rows, ≤ 32 KiB) — Go `validateBundle` and
+  `fleet-agent-team.py validate` in step, the same credential scan. A PUT pushes
+  `person` {principal, version} (`CapPerson`) to every connected login bound to
+  that person (`PrincipalForLogin`), and the agent runs `fleet-agent-team.py sync
+  --person-version N` (retried every beat, apart from the team's); `render` re-reads
+  a cache older than `FLEET_ROLE_STALE` (600 s) via `fleet-agent-team.py person`,
+  at most `FLEET_ROLE_FETCH_SECS` (3 s) — the hub away, the cache stands. The
+  doctor's `roles` row: 入口 vN · 本机 vM · 拉到 … (`status --roles`,
+  `person-sync.json`), WARN past a day. No person ⇒ no file, no row, no message
+  (`TestPersonRolesOffAddsNothing`); BREAK-IT `person-hub-down`.
+  **A person changes it by saying so** (issue #2785, C4): the `fleet-config` skill
+  turns a sentence into ONE `fleet-role.py set|unset|rule-set|rule-unset|undo` —
+  GET the person bundle (fleet-config.py's client) → the smallest change to
+  `roles` / `rules` → 改前 → 改后 on the merged definition (exit 4, nothing sent)
+  → `--yes` PUTs with `base` (409: redone once) and writes the hub's answer into
+  person-bundle.json at once. A worker's window (`@fleet_role worker`) exits 3; a
+  credential-shaped value is refused before sending. Never hand-edit the layer
+  files for it; `fleet-role-write-selftest.sh`.
 - **How the orchestrator dispatches and what the steward may answer is ONE rule
   table** (issue #2786, EPIC #2781 C5): `conf/role-rules.default.md` (编号 · 角色 ·
   条件 · 动作 · 档位 auto|default|ask|off · 关键词) < the person's layer
@@ -435,9 +509,11 @@ Do not install from memory: read the doc and work from it.
   `mod/fleet/hooks/exit-guard.ts`, issue #2584); a plugin's run (the inbox) passes. While it is busy, `/qd` (mod `hooks/qd.tsx`, `immediate`, its window only — issue #2618) opens a title + repo dialog that files through `fleet-mcp.py --call file_issue {spawn: true}` past the model and the queue (`派：` prefix: `FLEET_ORCH_QD_PREFIX=1`). What waits behind its turn is counted (mod `hooks/queue.ts`, issue #2617): a prompt typed by hand over a running turn is +1, back to 0 at the next main-loop `turn.step` — a yellow 「排队 N 条 · 在忙 X」 line in its prompt band, `@orch_queue` → the inventory's `orchq=` (column 31) → `orch_<sess>`'s 7th column → 「排队 N」 at 「新任务」's end; no count (Codex) ⇒ the bar's 「编排在忙」, no 7th column ⇒ byte for byte as before. Restore / migrate / move read it
   as `home` (the role-aware formats map it there — never snapshotted, never moved);
   the session caps never count it (only `worker` does); `fleet_win_for_key
-  orchestrator` addresses it. The inventory's column 20 `role=orchestrator` carries
-  it to the client: `fleet-hub-sessions.sh` writes `orch_<sess>`, the rows skip
-  it, 「新任务」 wears its state, ⌘N lands in its input (issue #2616 — none running: the hub's `orch_ensure` opens it on the holder, the bar says 「正在叫起…」; the client's `FLEET_COMPOSE=1` brings back the writing area, which hands it a draft with ⇧⇥). Off
+  orchestrator` addresses it. **On the client it is no special row** (issue #3119):
+  the inventory's column 20 says `role=worker` for it, every list draws it as an
+  ordinary row, there is no 「新任务」 row, and ⌘N opens a new session (never this
+  one); the only treatment a row gets is the person's pin (`@pin`), which orders
+  the list and keeps nothing from the reapers (`@reap_policy keep` does). Off
   unless `FLEET_ORCHESTRATOR` (default: `FLEET_HOST`) — no orchestrator ⇒ byte
   for byte as before. **One per PERSON, not per machine** (issue #2117): with the
   hub on, `ensure` asks `/v1/node/orchestrator` (`fleet_orchestrator.go`: the
@@ -462,8 +538,8 @@ Do not install from memory: read the doc and work from it.
   answer (the steward's own, the person's from the orchestrator) goes through
   `fleet-steward-tick.sh answer`; the open rest becomes ONE `[decision]` to the
   orchestrator (`sheet`), and its open rows ride `@orch_decide` → the inventory's
-  `orchdec=` (column 32, only when set) → `orch_<sess>`'s `decide=N` → a red
-  「新任务」. GitHub writes ≤ `FLEET_STEWARD_WRITES` (20) a beat, the rest deferred.
+  `orchdec=` (column 32, only when set) → `orch_<sess>`'s `decide=N` (no list draws
+  it since issue #3119). GitHub writes ≤ `FLEET_STEWARD_WRITES` (20) a beat, the rest deferred.
   The beat also watches the fleet's OWN health (issue #2674, C6;
   `bin/fleet_steward_health.py`): `fleet-doctor.sh --json` against the last run (a
   new WARN/FAIL by row + first-line fingerprint, on 2 runs in a row; the first run is
@@ -479,7 +555,7 @@ Do not install from memory: read the doc and work from it.
   `say`, else the worker's words made plain), grouped by what the person does and
   the same question merged, 待你动手, today's 默认 with how to overturn each — at ONE
   doc-preview link (`state.page`), stamped `@orch_page` → `orchpage=` (column 35) →
-  `page=<url>` on `orch_<sess>` → 「新任务」's menu 管家页 · 进管家会话; the `[decision]`
+  `page=<url>` on `orch_<sess>` (no menu item since issue #3119); the `[decision]`
   message carries the same plain lines + `〔row ids〕`. `FLEET_STEWARD_PAGE=0` off;
   `fleet-steward-page-selftest.sh`.
   **The right-hand panels follow its books by a change stamp** (issue #2835, EPIC

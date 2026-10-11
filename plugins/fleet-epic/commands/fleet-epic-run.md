@@ -1,3 +1,7 @@
+---
+description: Drive a confirmed EPIC to done, unattended — spawn its members, land them, write the report.
+---
+
 # /fleet-epic-run — drive a confirmed EPIC to done, unattended
 
 <!-- fleet skill · owner: hub -->

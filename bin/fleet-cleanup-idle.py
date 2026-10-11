@@ -76,7 +76,7 @@ class Cleaner:
 
     def snapshot(self, window):
         names = ("@raw", "@issue", "@repo", "@norepo", "@worktree", "@claude_state", "@claude_state_ts",
-                 "@pin", "@cc_agent", "@cc_launcher_pid", "@codex_identity",
+                 "@cc_agent", "@cc_launcher_pid", "@codex_identity",
                  "@handoff_manifest", "@agent_transfer_until", "window_name",
                  "@reap_policy", "@loop", "@worker_lifecycle", "@wrap_gone", "pane_dead",
                  "@fleet_role", "@reap_skip", "@test_identity", "@born", "@fleet_id",
@@ -163,19 +163,20 @@ class Cleaner:
             # loop-end / at, an issue session as well as a scratch. keep and merged
             # are never this pass's (merged is fleet-cleanup.sh's). Every gate
             # below still applies.
-            if (pol[0] not in ("done", "loop-end", "at") or snap["@pin"] == "1"
+            if (pol[0] not in ("done", "loop-end", "at")
                     or snap["@worker_lifecycle"] not in ("", "sleeping")):
                 return False
         elif self.args.policy_only:
             return False
         elif snap["@raw"] != "1" or snap["@issue"]:
             return False
-        if (snap["@pin"] == "1"
-                # An exited session on its recovery page (issue #1784) is as idle
-                # as a finished turn: the same grace, the same resumable record —
-                # and so is a window with no agent at all (the wrapper gone, the
-                # pane dead: fleet_window_has_agent, issue #2404).
-                or (snap["@claude_state"] not in ("done", "exited")
+        # A pin is only the list's order (issue #3119): it keeps no window —
+        # `@reap_policy keep` does.
+        # An exited session on its recovery page (issue #1784) is as idle as a
+        # finished turn: the same grace, the same resumable record — and so is a
+        # window with no agent at all (the wrapper gone, the pane dead:
+        # fleet_window_has_agent, issue #2404).
+        if ((snap["@claude_state"] not in ("done", "exited")
                     and snap["@wrap_gone"] != "1" and snap["pane_dead"] != "1")
                 or snap["window_name"] in ("dash", "plan", "backlog", "home")):
             return False
@@ -230,11 +231,11 @@ class Cleaner:
         @test_identity): a placement check, never anyone's work — so, unlike every
         other no-repo session (#791), its own policy closes it (done:10m unless it
         asked for another). Its clock is its last turn, or its birth when it never
-        took one; working / asking / pinned / holding a job is never closed. No
+        took one; working / asking / holding a job is never closed. No
         worktree, so nothing to record: stopped the graceful way, by identity
         (fleet-worker-stop.sh fid:, as dash-reap.sh's no-repo row)."""
         pol = self.policy(snap)
-        if pol is None or pol[0] not in ("done", "at") or snap["@pin"] == "1":
+        if pol is None or pol[0] not in ("done", "at"):
             return False
         if (snap["@claude_state"] not in ("", "done", "exited", "idle")
                 and snap["@wrap_gone"] != "1" and snap["pane_dead"] != "1"):
@@ -275,7 +276,7 @@ class Cleaner:
         spawned = bool(snap["@origin"] or snap["@origin_fid"])
         kinds = ("done", "loop-end", "at") if spawned else ("done",)
         ended = (("done", "exited") if spawned else ("exited",))
-        if (pol is None or pol[0] not in kinds or snap["@pin"] == "1"
+        if (pol is None or pol[0] not in kinds
                 or snap["@worker_lifecycle"] not in ("", "sleeping")
                 or snap["@fleet_role"] not in ("", "worker")
                 or snap["window_name"] in ("dash", "plan", "backlog", "home")
@@ -397,7 +398,7 @@ class Cleaner:
         in the history first, then its window closed; its worktree is dropped
         only when clean with nothing that is not on the base already — dirty or
         unpushed, it stays on disk (发起人拍板 3: 不干净只关窗口)."""
-        if (snap["@pin"] == "1" or snap["@worker_lifecycle"] not in ("", "sleeping")
+        if (snap["@worker_lifecycle"] not in ("", "sleeping")
                 or snap["@fleet_role"] in ("home", "panel", "orchestrator", "steward")
                 or snap["window_name"] in ("dash", "plan", "backlog", "home")
                 or (snap["@claude_state"] not in ("done", "exited")
@@ -546,7 +547,34 @@ class Cleaner:
         print("cleaned:done-no-pr " + window + " " + key + " " + fate)
         return True
 
+    def pin_keep_once(self):
+        """Once per login (issue #3119): a pin used to keep its window from every
+        reaper; now it is only the list's order. So the windows pinned when this
+        version first runs — and with no policy of their own — get `@reap_policy
+        keep`, the one way to keep a session; a pin set later gets nothing. The
+        mark is written only after a pass that saw the fleet's windows."""
+        mark = retired_dir().parent / "pin-keep.done"
+        if self.args.dry_run or mark.exists():
+            return
+        try:
+            out = self.tm("list-windows", "-t", self.args.session, "-F", "#{window_id}\t#{@pin}\t#{@reap_policy}")
+            if not out:
+                return
+            for line in out.splitlines():
+                w, pin, pol = (line.split("\t") + ["", ""])[:3]
+                if re.fullmatch(r"@\d+", w) and pin == "1" and not pol:
+                    self.tm("set-option", "-w", "-t", w, "@reap_policy", "keep")
+                    print("pin-keep:" + w)
+        except (OSError, subprocess.SubprocessError):
+            return
+        try:
+            mark.parent.mkdir(parents=True, exist_ok=True)
+            mark.write_text(str(self.now) + "\n")
+        except OSError:
+            pass
+
     def main(self):
+        self.pin_keep_once()
         if not self.idle or not self.args.repo or not (Path(self.args.main) / ".git").is_dir():
             return 0
         count = 0

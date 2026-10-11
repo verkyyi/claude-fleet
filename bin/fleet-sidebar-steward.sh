@@ -20,7 +20,7 @@
 # (the client shell — every row is remote) they go to the steward session as
 # ONE message through fleet-sidebar-remote.sh (the hub write road every remote
 # row action takes), naming the exact command — the steward's
-# skill runs it (skills/fleet-steward/SKILL.md «侧栏»). No steward session ⇒ the
+# skill runs it (plugins/fleet-steward/skills/fleet-steward/SKILL.md «侧栏»). No steward session ⇒ the
 # toast says to tick it on the ticket. Either way the outcome is a toast.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"

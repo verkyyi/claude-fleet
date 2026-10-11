@@ -766,9 +766,9 @@ grep -qE "RUNSHELL .*--exec full 'merged-pr' '[0-9]+'" "$TMLOG" || fail "the mer
 : > "$TMLOG"; : > "$GHLOG"
 run_reap_tok 7 'fleet-x:c4-name-8558' --yes 2>/dev/null
 [ "$TOK" = refused:target ] && [ "$RC" = 4 ] || fail "a session:name target must refuse non-zero (#869) (got [$TOK] rc $RC)"
-grep -q 'dash-reap.sh <window-target>' "$BIN/../commands/fleet-epic-run.md" \
+grep -q 'dash-reap.sh <window-target>' "$BIN/../plugins/fleet-epic/commands/fleet-epic-run.md" \
   && fail "fleet-epic-run.md still teaches the refused <window-target> form (#869)"
-grep -q 'dash-reap.sh <slug>:issue-<N>' "$BIN/../commands/fleet-epic-run.md" \
+grep -q 'dash-reap.sh <slug>:issue-<N>' "$BIN/../plugins/fleet-epic/commands/fleet-epic-run.md" \
   || fail "fleet-epic-run.md must name dash-reap.sh <slug>:issue-<N> (#869, #1942)"
 
 # F5 (#867): a worker that never started is reaped, but its issue stays OPEN,

@@ -151,14 +151,12 @@
 #   hub-restart-where                               bin/fleet-shell.sh (keeper renew), fleet-client-lease.py renew,
 #                                                   fleet-client-where.sh
 #   orch-busy-queue-invisible                       mod/fleet/hooks/queue.ts (its test, when a claude CLI is here),
-#                                                   fleet-control-read.sh (orchq=), fleet_hub_common inventory_row,
-#                                                   fleet-hub-sessions.sh (orch_<sess> col 7), fleet-sidebar.py
+#                                                   fleet-control-read.sh (orchq=), fleet_hub_common inventory_row
 #   panel-stale / panel-wrong-window                mod/fleet/hooks/panels.ts (its tests, when a claude CLI is here),
 #                                                   lifecycle.ts (PANELS_FULL_MS timer, role gate), fleet_steward.py
 #                                                   write_stamp
-#   cmdn-no-orch / cmdn-codex-orch                  bin/fleet-shell.sh portal, fleet-compose.py --orch --boot
-#                                                   (boot_orch, stamp_role), fleet-hub-write.sh orch_ensure,
-#                                                   conf/tmux-shell.conf (User927/928, ⌃\), fleet-sidebar.py orch_busy
+#   cmdn-waits-orch                                 bin/fleet-shell.sh portal (home-session --new),
+#                                                   conf/tmux-shell.conf (User928), fleet-sidebar.py with_portal
 # Cred half — cred-* rows: bin/fleet-break-it-cred-selftest.sh runs them (its own
 #   test; listed here only through the lockstep lint) — and cred-shared-down,
 #   bin/fleet-break-it-cred-shared-selftest.sh (issue #2217) — and cred-sep-by-agent /
@@ -184,7 +182,7 @@
 #
 # tmux / python3 absent → SKIP (exit 0). BREAK_KEEP=1 keeps the work dir.
 # BREAK_ONLY="<id> <id>" runs only those drills (the lockstep lint always runs);
-# so do ids given as arguments (`fleet-break-it-selftest.sh cmdn-no-orch …`).
+# so do ids given as arguments (`fleet-break-it-selftest.sh cmdn-waits-orch …`).
 # BREAK_PART=K/N runs the K-th of N contiguous slices of this script's drills, in
 # the table's order (issue #2955: the whole list outgrew the gate's 240 s per-test
 # ceiling). This file runs 1/2 by default, bin/fleet-break-it-2-selftest.sh 2/2 —
@@ -755,7 +753,7 @@ EOC
 # the `/fleet-orchestrate` seed — after it the session no longer knew it was the
 # orchestrator. Its role rides the system prompt now, from ONE text — its
 # definition's body, agents/orchestrator.md (issue #2782), rendered to
-# $FLEET_CONF_DIR/roles/ and generated as skills/fleet-orchestrate/role.md for a
+# $FLEET_CONF_DIR/roles/ and generated as plugins/fleet-orchestrate/skills/fleet-orchestrate/role.md for a
 # window opened before it: the launcher's --append-system-prompt-file
 # on a new AND a resumed launch, kept by the wrapper's ↵ resume, and the mod's
 # `fleet:orchestrator-role` section on every request. No real Claude here: the
@@ -763,8 +761,8 @@ EOC
 # 上线证据).
 drill_orchestrator_cleared() {
   CAP=10; BREAK_SOCK="$WORK/sock-oq"; local t0 w sid role oa="$WORK/oq-argv" h="$WORK/oqhome" c="$WORK/oq"
-  role="$ROOT/skills/fleet-orchestrate/role.md"
-  [ -s "$role" ] || { WHY="no skills/fleet-orchestrate/role.md — the role has no file to ride the system prompt"; return 1; }
+  role="$ROOT/plugins/fleet-orchestrate/skills/fleet-orchestrate/role.md"
+  [ -s "$role" ] || { WHY="no plugins/fleet-orchestrate/skills/fleet-orchestrate/role.md — the role has no file to ride the system prompt"; return 1; }
   [ "$(wc -l < "$role")" -le 60 ] || { WHY="role.md is $(wc -l < "$role" | tr -d ' ') lines, the charter caps it at 60"; return 1; }
   grep -q '编排会话' "$role" || { WHY="role.md never says 编排会话"; return 1; }
   grep -q "'fleet:orchestrator-role'" "$ROOT/mod/fleet/hooks/orchestrator.ts" 2>/dev/null \
@@ -782,7 +780,7 @@ drill_orchestrator_cleared() {
   grep -q -- "--append-system-prompt-file .*/roles/orchestrator-[0-9a-f]*\.md .*/fleet-orchestrate\$" "$oa" \
     || { WHY="a new orchestrator is not launched with its role in the system prompt: $(cat "$oa")"; return 1; }
   cmp -s "$(ls "$WORK"/oqconf/roles/orchestrator-*.md 2>/dev/null | head -1)" "$role" \
-    || { WHY="the rendered role is not the definition's body (skills/fleet-orchestrate/role.md)"; return 1; }
+    || { WHY="the rendered role is not the definition's body (plugins/fleet-orchestrate/skills/fleet-orchestrate/role.md)"; return 1; }
   sid=$(cat "$WORK/oqconf/fleets/oq/orchestrator.sid" 2>/dev/null)
   mkdir -p "$h/.claude/projects/$(printf '%s' "$h" | LC_ALL=C tr -c 'A-Za-z0-9' '-')"
   : > "$h/.claude/projects/$(printf '%s' "$h" | LC_ALL=C tr -c 'A-Za-z0-9' '-')/$sid.jsonl"
@@ -2568,9 +2566,10 @@ orch_list() {
 
 # ① the Claude orchestrator busy, three said in a row: the first starts its turn,
 # two wait — the band above its prompt (the mod, when a claude CLI can run its
-# tests here), the node's inventory (orchq=) and the client's 「新任务」 row read 2
+# tests here) and the node's inventory (orchq=) read 2; the client draws no
+# 「新任务」 row any more (issue #3119)
 drill_orch_busy_queue_invisible() {
-  CAP=30; local d="$WORK/oq" s="${CSESS}q" t0 tt out m q
+  CAP=30; local d="$WORK/oq" t0 tt out m q
   mkdir -p "$d"
   t0=$(now)
   # the mod half: queue.test.tsx's three-in-a-row, alone (no claude CLI → the node + client half only)
@@ -2596,13 +2595,8 @@ drill_orch_busy_queue_invisible() {
   case "$out" in *$'\torchq=2'*) ;; *) WHY="the node's inventory does not carry orchq=2: [$out]"; return 1 ;; esac
   q=$(printf '%s' "$out" | python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); from fleet_hub_common import inventory_row; r = inventory_row(sys.stdin.read().rstrip("\n").split("\t")); print((r[1] if r else {}).get("orch_queue", ""))' "$BIN")
   [ "$q" = 2 ] || { WHY="inventory_row reads orch_queue [$q], want 2"; return 1; }
-  # the client half: the hub hands it on, 「新任务」 ends in 「排队 2」
-  orch_json "$d/cur.json" claude working 2
-  orch_up "$s" "$d" || { orch_down "$s" "$d"; return 1; }
-  until_ok 20 sh -c "orch_l=\$('$REAL_TMUX' -L '$s' list-panes -a -F '#{@sidebar} #{pane_id}' | awk '\$1 == 1 { print \$2; exit }'); '$REAL_TMUX' -L '$s' capture-pane -p -t \"\$orch_l\" | grep -q '新任务.*排队 2'" \
-    || { WHY="the list's 「新任务」 row does not end in 排队 2: [$(orch_list "$s" | grep -m1 新任务)] orch_${s}=[$(tr '\037' '|' < "$G/orch_$s" 2>/dev/null)]"; orch_down "$s" "$d"; return 1; }
-  SECS=$(since "$t0"); orch_down "$s" "$d"
-  WHAT="忙时连发 3 条：${m}节点 orchq=2 · 侧栏「新任务 … 排队 2」"
+  SECS=$(since "$t0")
+  WHAT="忙时连发 3 条：${m}节点 orchq=2 → orch_queue 2"
 }
 
 # the panels' mod half (issue #2835): panels.test.ts alone, when a claude CLI can run it here
@@ -2653,70 +2647,40 @@ drill_panel_wrong_window() {
   SECS=$(since "$t0"); WHAT="执行会话窗口装了 mod：${m}只认编排 / 管家两个角色"
 }
 
-# ② no orchestrating session anywhere: ⌘N is not lost — the hub is asked to open
-# it (orch_ensure), the bar says so, and the stage goes to it once it shows
-drill_cmdn_no_orch() {
-  CAP=30; local d="$WORK/on" s="${CSESS}n" t0 v
-  mkdir -p "$d"; orch_json "$d/cur.json" none; orch_json "$d/booted.json" claude
-  # the hub's write: orch_ensure opens it on the machine that holds it — the next answer lists it
+# ② ⌘N waits on no orchestrator (issue #3119): whether one runs or not, ⌘N is a
+# NEW session at once — fleet-shell.sh portal → home-session claude --new
+# (FLEET_PORTAL_NEW_CMD here), never orch_ensure, never the orchestrator's row;
+# the list draws no 「新任务」 row and the bar says 「⌘N 新会话」
+drill_cmdn_waits_orch() {
+  CAP=30; local d="$WORK/on" s="${CSESS}n" t0 n hint
+  mkdir -p "$d"; orch_json "$d/cur.json" claude working
   cat > "$d/write.sh" <<EOF
 #!/bin/bash
 printf '%s\n' "\$*" >> "$d/write.log"
-[ "\$1" = orch_ensure ] && cp "$d/booted.json" "$d/cur.json"
 printf '{"operation_id": "op-o", "action": "%s", "status": "accepted"}\n' "\$1"
 EOF
-  chmod +x "$d/write.sh"; : > "$d/write.log"
-  orch_up "$s" "$d" FLEET_HUB_WRITE_CMD="bash $d/write.sh \"\$@\"" || { orch_down "$s" "$d"; return 1; }
-  : > "$G/orch_$s"                                                     # the break: nobody runs it
-  t0=$(now); orch_type "$d" '\033[928~'
-  until_ok "$CAP" sh -c "'$REAL_TMUX' -L '$s-stage' display-message -p -t '=$s-stage:' '#{@fleet_role}' | grep -qx orchestrator" \
-    || { WHY="⌘N with no orchestrator: the stage shows [$(orch_view "$s")], the hub was asked [$(tr '\n' ' ' < "$d/write.log")]"; orch_down "$s" "$d"; return 1; }
-  SECS=$(since "$t0")
-  grep -q '^orch_ensure ' "$d/write.log" || { WHY="the stage went there without asking the hub to open it"; orch_down "$s" "$d"; return 1; }
-  v=$(orch_view "$s"); orch_down "$s" "$d"
-  case "$v" in *"/orchestrator") ;; *) WHY="the stage is on [$v], not the orchestrator's row"; return 1 ;; esac
-  WHAT="没有编排会话时 ⌘N：入口 orch_ensure 叫起，起来后聚焦它（${v}）"
-}
-
-# ③ a Codex orchestrator (FLEET_AGENT=codex — no mod, no count): ⌘N focuses it
-# (@fleet_role orchestrator, @cc_agent codex); ⌘P still opens the panel with its
-# ⌃X 回收, the one-session layout's ⌃\ still goes to this computer's shell and
-# back, and while it works the bar says 编排在忙
-drill_cmdn_codex_orch() {
-  CAP=30; local d="$WORK/ox" s="${CSESS}x" t0 v hint
-  mkdir -p "$d"; orch_json "$d/cur.json" codex working
-  orch_up "$s" "$d" || { orch_down "$s" "$d"; return 1; }
-  until_ok 15 test -s "$G/orch_$s" || { WHY="the hub's Codex orchestrator never reached orch_$s"; orch_down "$s" "$d"; return 1; }
-  t0=$(now); orch_type "$d" '\033[928~'
-  until_ok 15 sh -c "'$REAL_TMUX' -L '$s-stage' display-message -p -t '=$s-stage:' '#{@fleet_role} #{@cc_agent}' | grep -qx 'orchestrator codex'" \
-    || { WHY="⌘N on a Codex orchestrator: the stage shows [$(orch_view "$s")] (want orchestrator codex)"; orch_down "$s" "$d"; return 1; }
-  SECS=$(since "$t0"); v=$(orch_view "$s")
-  # the bar while it works: 「⌘N 编排」 and 编排在忙 (it cannot count — no 排队 N)
-  # (the list stamps it on its own window: the bar reads it from the window in view)
-  until_ok 15 sh -c "'$REAL_TMUX' -L '$s' display-message -p -t '=$s:' '#{@fleet_orch_busy}' | grep -q 编排在忙" \
-    || { WHY="a busy Codex orchestrator: no 编排在忙 on the bar"; orch_down "$s" "$d"; return 1; }
+  cat > "$d/new.sh" <<EOF
+#!/bin/bash
+printf 'new %s\n' "\$*" >> "$d/new.log"
+EOF
+  chmod +x "$d/write.sh" "$d/new.sh"; : > "$d/write.log"; : > "$d/new.log"
+  orch_up "$s" "$d" FLEET_HUB_WRITE_CMD="bash $d/write.sh \"\$@\"" FLEET_PORTAL_NEW_CMD="bash $d/new.sh" \
+    || { orch_down "$s" "$d"; return 1; }
+  orch_list "$s" | grep -q '新任务' && { WHY="the list still draws 「新任务」: [$(orch_list "$s" | grep -m1 新任务)]"; orch_down "$s" "$d"; return 1; }
   hint=$("$REAL_TMUX" -L "$s" display-message -p -t "=$s:" '#{E:@fleet_hint_session}' 2>/dev/null | sed 's/#\[[^]]*\]//g')
-  case "$hint" in *"⌘N 编排"*"编排在忙"*) ;; *) WHY="the bar reads [$hint]"; orch_down "$s" "$d"; return 1 ;; esac
-  # ⌘P: the panel, its ⌃X 回收 as before
-  orch_type "$d" '\033[927~'
-  until_ok 10 sh -c "'$REAL_TMUX' -L '$s' show-options -gqv @popup_title | grep -qx popup_quickopen" \
-    || { WHY="⌘P opened no panel (@popup_title [$("$REAL_TMUX" -L "$s" show-options -gqv @popup_title)])"; orch_down "$s" "$d"; return 1; }
-  hint=$("$REAL_TMUX" -L "$s" display-message -p '#{E:@fleet_hint_palette}' 2>/dev/null | sed 's/#\[[^]]*\]//g')
-  case "$hint" in *"⌃X 回收"*) ;; *) WHY="⌘P's panel no longer says ⌃X 回收: [$hint]"; orch_down "$s" "$d"; return 1 ;; esac
-  orch_type "$d" '\033'
-  until_ok 10 sh -c "[ \"\$('$REAL_TMUX' -L '$s' show-options -gqv @popup_open)\" = 0 ]" || { WHY="esc did not close ⌘P's panel"; orch_down "$s" "$d"; return 1; }
-  # the one-session layout: ⌃\ is a shell window (the session's, #2744 — this
-  # computer's when no session is in view), ⌃\ again back
-  ( client_env; bash "$WORK/sbin/fleet-shell.sh" layout solo "$s" ) >/dev/null 2>&1
-  until_ok 5 sh -c "[ \"\$('$REAL_TMUX' -L '$s' show-options -gqv @fleet_layout)\" = solo ]" || { WHY="layout solo did not take"; orch_down "$s" "$d"; return 1; }
-  orch_type "$d" '\034'
-  until_ok 10 sh -c "'$REAL_TMUX' -L '$s' display-message -p '#{@solo_shell}' | grep -q ." \
-    || { WHY="solo ⌃\\ did not open a shell"; orch_down "$s" "$d"; return 1; }
-  orch_type "$d" '\034'
-  until_ok 10 sh -c "! '$REAL_TMUX' -L '$s' display-message -p '#{@solo_shell}' | grep -q ." \
-    || { WHY="solo ⌃\\ again did not go back"; orch_down "$s" "$d"; return 1; }
+  case "$hint" in *"⌘N 新会话"*) ;; *) WHY="the bar reads [$hint], not ⌘N 新会话"; orch_down "$s" "$d"; return 1 ;; esac
+  # an orchestrator running (the hub lists one), then none: ⌘N is a new session both times
+  t0=$(now); orch_type "$d" '\033[928~'
+  until_ok "$CAP" sh -c "grep -c . '$d/new.log' | grep -qx 1" || { WHY="⌘N with an orchestrator running opened no new session (new.log [$(tr '\n' '|' < "$d/new.log")])"; orch_down "$s" "$d"; return 1; }
+  SECS=$(since "$t0")
+  orch_json "$d/cur.json" none; : > "$G/orch_$s"
+  orch_type "$d" '\033[928~'
+  until_ok 15 sh -c "grep -c . '$d/new.log' | grep -qx 2" || { WHY="⌘N with no orchestrator opened no new session (new.log [$(tr '\n' '|' < "$d/new.log")])"; orch_down "$s" "$d"; return 1; }
+  n=$(grep -c . "$d/new.log")
+  grep -q '^orch_ensure' "$d/write.log" && { WHY="⌘N still asked the hub to open an orchestrator"; orch_down "$s" "$d"; return 1; }
+  case "$(orch_view "$s")" in orchestrator*) WHY="the stage went to the orchestrator: [$(orch_view "$s")]"; orch_down "$s" "$d"; return 1 ;; esac
   orch_down "$s" "$d"
-  WHAT="Codex 编排 ⌘N 聚焦它（${v}）；底栏「编排在忙」；⌘P 面板（⌃X 回收）、solo ⌃\\ shell 照旧"
+  WHAT="⌘N 两次（有编排 / 没编排）各开一个新会话（${n} 次 home-session --new），不叫起、不去编排；列表无「新任务」，底栏「⌘N 新会话」"
 }
 
 # The proxy pane's `run` loop (fleet-remote-view.sh) against an ssh shim: a

@@ -13,14 +13,15 @@ fleet-quickopen.py (this module is its node half — the client never loads it):
     fleet-quickopen.py --view <view> [--client <c>]
                                               ⌘P / ⌘K: every session of yours, every
                                               machine, every login, grouped by
-                                              (machine, login); 停放 · 待你动手 · 已结束
-                                              under them; ↵ goes there
+                                              (machine, login); 已结束 under them;
+                                              ↵ goes there
     fleet-quickopen.py do next|prev|back|fwd --view <view>
                                               ⌘↓ ⌘↑ (the list's order) · ⌘[ ⌘] (history)
     fleet-quickopen.py do new|quit|shell --view <view>
-                                              C7 (issue #3004): ⌘N the orchestrator
-                                              (wherever it runs) · ⌘Q OSC 7502 quit +
-                                              detach · ⌃\ the session's shell
+                                              C7 (issue #3004): ⌘N a new session (a
+                                              no-repo one on this machine, #3119) ·
+                                              ⌘Q OSC 7502 quit + detach · ⌃\ the
+                                              session's shell
     fleet-quickopen.py view-shell here|far|home <machine> <login> <target> --view <view>
                                               (the ⌃\ window's program)
     fleet-quickopen.py view-order --view <view>
@@ -69,8 +70,10 @@ the list's session order as last drawn — ⌘↓ ⌘↑ read it (a press never 
 WORDS (#2752): no row says `merged` or `done:2h` — the reap policy is
 「合并后关」 / 「空闲 2 小时关」, and only on the lit row's line at the foot;
 names are the issue's title as wide as the popup is (the producer's 12-cell name
-when there is none) with no `⇢cla` tag; a state is a word, never `!`; the
-orchestrator is 「新任务（编排）」. All of it through fleet-ui-lang.sh (`view_*`).
+when there is none) with no `⇢cla` tag; a state is a word, never `!`. No session
+is special (issue #3119): the one holding the orchestrator or the steward is a row
+like any other, and there is no 「新任务」 line. All of it through fleet-ui-lang.sh
+(`view_*`).
 """
 import curses
 import getpass
@@ -320,37 +323,6 @@ def produce(fleet):
         return ""
 
 
-def orch_line(fleet):
-    """orch_<fleet> split, or [] (the steward's park= / todo= columns ride it)."""
-    try:
-        line = (dash_global() / ("orch_" + fleet)).read_text().split("\n", 1)[0]
-    except OSError:
-        return []
-    return line.split(US)
-
-
-def orch_list(p, name):
-    import base64
-    for cell in (p or [])[7:]:
-        k, eq, v = cell.strip().partition("=")
-        if not eq or k != name or not re.fullmatch(r"[-A-Za-z0-9_]{1,4000}", v):
-            continue
-        try:
-            d = json.loads(base64.urlsafe_b64decode(v + "=" * (-len(v) % 4)).decode("utf-8"))
-        except ValueError:
-            return []
-        return [e for e in d.get("i") or [] if isinstance(e, dict)] if isinstance(d, dict) else []
-    return []
-
-
-def orch_count(p, name):
-    for cell in (p or [])[7:]:
-        k, eq, v = cell.strip().partition("=")
-        if eq and k == name and v.isdigit():
-            return int(v)
-    return 0
-
-
 def windows(fleet):
     """{window id: (fleet_id, role, activity)} of the fleet session."""
     rc, out = tm("list-windows", "-t", "=" + fleet, "-F", "#{window_id}|#{@fleet_id}|#{@fleet_role}|#{window_activity}")
@@ -363,8 +335,8 @@ def windows(fleet):
 
 def entries(vid, now=None):
     """Every line the popup can show, in order. Each a dict:
-    kind  hdr (a (machine, login) group) · sess · sec (停放 / 待你动手 / 已结束,
-          folds) · park · todo — and `sec` names the section a line sits in
+    kind  hdr (a (machine, login) group) · sess · sec (已结束, folds) — and
+          `sec` names the section a line sits in
     text  the line's words · word (left column) · right (the issue) · foot (the
           lit row's line) · target (what go() takes) · far (another machine/login)"""
     now = time.time() if now is None else now
@@ -416,48 +388,11 @@ def entries(vid, now=None):
     # this login on this machine first, then the rest by machine, login
     order.sort(key=lambda g: (g != (here, me), g[0], g[1]))
     out = []
-    # the orchestrator: its window here, else the hub's holder on another machine
-    # (orch_<fleet>, #2117) — a home that is not the holder still lists it (#3007)
-    ot, om = orch_target(fleet, wins) if fleet else ("", {})
-    orch = [ot] if ot else []
-    if orch:
-        far = bool(om)
-        out.append({"kind": "sess", "target": ot, "far": far, "machine": om.get("machine") or here,
-                    "login": logins.get(ot.split("/", 1)[0], "") if far else me,
-                    "state": "", "text": say("view_portal"), "word": "", "issue": "", "depth": 0,
-                    "foot": say("view_portal_foot"), "pin": True})
     for g in order:
         # a login the hub has not named yet (no fleet_logins line): the machine alone
         out.append({"kind": "hdr", "text": say("view_here_fmt", g[0], g[1]) if g == (here, me)
                     else say("view_group_fmt", g[0], g[1]) if g[1] else g[0], "machine": g[0], "login": g[1]})
         out.extend(groups[g])
-    oline = orch_line(fleet) if fleet else []
-    for name, kind in (("park", "park"), ("todo", "todo")):
-        n = orch_count(oline, name)
-        if n <= 0:
-            continue
-        out.append({"kind": "sec", "sec": name, "text": say("view_sec_" + name + "_fmt", n), "n": n})
-        for it in orch_list(oline, name + "l"):
-            if kind == "park":
-                ref = str(it.get("r") or "")
-                if not ref:
-                    continue
-                at = it.get("a") if isinstance(it.get("a"), int) else 0
-                who = str(it.get("k") or "") or ref
-                wait = str(it.get("w") or "")
-                out.append({"kind": "park", "sec": name, "ref": ref, "word": say("view_state_parked"),
-                            "text": say("view_park_item_fmt", who, wait),
-                            "right": say("view_ago_fmt", dur(now - at)) if at else "",
-                            "foot": say("view_park_foot_fmt", ref, wait)})
-            else:
-                iid = str(it.get("id") or "")
-                if not iid:
-                    continue
-                what, src, due = str(it.get("w") or ""), str(it.get("s") or ""), str(it.get("d") or "")
-                out.append({"kind": "todo", "sec": name, "ref": iid, "word": say("view_todo_word"),
-                            "text": what, "right": say("view_due_fmt", due) if due else "",
-                            "foot": say("view_todo_foot_fmt", what, src) if src else what,
-                            "target": orch[0] if orch else ""})
     if ended:
         out.append({"kind": "sec", "sec": "ended", "text": say("view_sec_ended_fmt", len(ended)), "n": len(ended)})
         out.extend(ended)
@@ -791,7 +726,7 @@ def go(qo, vid, target, how="go", client="", meta=None, record=True):
 def do(qo, verb, vid, client=""):
     """⌘↓ ⌘↑ ⌘[ ⌘] in a 看台 — and C7's ⌘N (new) · ⌘Q (quit) · ⌃\\ (shell)."""
     if verb == "new":
-        return go_orch(qo, vid, client)
+        return go_new(qo, vid, client)
     if verb == "quit":
         return quit_view(vid, client)
     if verb == "shell":
@@ -843,46 +778,25 @@ def do(qo, verb, vid, client=""):
 
 # --- ⌘N ⌘Q ⌃\ (issue #3004, EPIC #2999 C7) ----------------------------------------------
 
-def orch_target(fleet, wins=None):
-    """(target, meta) of the orchestrator: its window here, else the session
-    orch_<fleet> names on another machine (the hub's holder, #2117) — ("", {})
-    when there is none."""
-    wins = windows(fleet) if wins is None else wins
-    here = [w for w, v in wins.items() if v[1] == "orchestrator"]
-    if here:
-        return here[0], {}
-    p = orch_line(fleet)
-    if len(p) >= 2 and "/" in p[0] and p[1].strip():
-        return p[0], {"machine": p[1].strip().rstrip("!~")}
-    return "", {}
-
-
-def go_orch(qo, vid, client=""):
-    """⌘N: the orchestrator, wherever it runs — one go when it is known (here, or
-    another machine's through its C4 window), so the press is instant; none
-    anywhere → `fleet-orchestrator.sh ensure`, then there. rc as go()."""
+def go_new(qo, vid, client=""):
+    """⌘N (issue #3119): a NEW session — a no-repo one on this machine, in $HOME
+    (dash-raw-session.sh --no-repo, the hub's own origin), then go() onto it: the
+    pane is the agent's input. No session is special, so nothing here names an
+    orchestrator. rc as go(); 3 when none opened (one line on the client)."""
     fleet = view_fleet(vid)
     if not fleet:
         return 2
-    target, meta = orch_target(fleet)
-    if target:
-        return go(qo, vid, target, "new", client, meta)
-    toast(client, say("view_orch_waking"))
-    seam = os.environ.get("FLEET_VIEW_ORCH_CMD")
-    argv = shlex.split(seam) if seam else ["bash", str(Path(__file__).absolute().parent / "fleet-orchestrator.sh")]
+    seam = os.environ.get("FLEET_VIEW_NEW_CMD")
+    argv = shlex.split(seam) if seam else ["bash", str(Path(__file__).absolute().parent / "dash-raw-session.sh")]
     try:
-        p = subprocess.run(argv + ["ensure", fleet], stdin=subprocess.DEVNULL, capture_output=True, text=True,
-                           timeout=fenv("FLEET_VIEW_ORCH_SECS", 90))
-        rc, w = p.returncode, (p.stdout.strip().splitlines() or [""])[-1].strip()
+        p = subprocess.run(argv + ["--origin", "hub", "--no-repo", "--no-desk", "--print", fleet], stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                           timeout=fenv("FLEET_VIEW_NEW_SECS", 60))
+        rc, w = p.returncode, ((p.stdout.strip().splitlines() or [""])[-1].split("\t") + [""])[0].strip()
     except (OSError, subprocess.TimeoutExpired):
         rc, w = 1, ""
-    if rc == 0 and w.startswith("@"):
+    if rc == 0 and re.fullmatch(r"@[0-9]+", w):
         return go(qo, vid, w, "new", client)
-    # rc 5: another machine holds it — there, once the hub's rows say where
-    target, meta = orch_target(fleet)
-    if target:
-        return go(qo, vid, target, "new", client, meta)
-    toast(client, say("view_orch_elsewhere") if rc == 5 else say("view_orch_off") if rc == 3 else say("view_orch_none"))
+    toast(client, say("view_new_failed"))
     return 3
 
 
@@ -1284,13 +1198,6 @@ def popup(screen, qo, vid, client):
                 opened ^= {e["sec"]}
                 shown = visible(items, query, opened)
                 continue
-            if e["kind"] == "park":
-                fleet = view_fleet(vid)
-                subprocess.Popen(["bash", str(Path(__file__).absolute().parent / "fleet-sidebar-steward.sh"),
-                                  "wake", fleet, e["ref"]], stdin=subprocess.DEVNULL,
-                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-                toast(client, say("view_waking_fmt", e["ref"]))
-                return 0
             target = e.get("target") or ""
             if not target:
                 continue
@@ -1347,7 +1254,7 @@ def main(argv, qo):
     if argv[:1] == ["view-rows"]:
         rest = [a for i, a in enumerate(argv[1:], 1) if a not in ("--view", "--client")
                 and argv[i - 1] not in ("--view", "--client")]
-        for e in visible(entries(vid), " ".join(rest), {"park", "todo", "ended"}):
+        for e in visible(entries(vid), " ".join(rest), {"ended"}):
             print("\t".join((e["kind"], e.get("target") or e.get("ref") or e.get("sec") or "", e.get("word") or "",
                              e.get("text") or "", e.get("right") or "", e.get("foot") or "")))
         return 0

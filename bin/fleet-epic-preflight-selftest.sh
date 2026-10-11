@@ -423,8 +423,8 @@ ok "K4 --member-repo: hosted + writable passes, unhosted / read-only blocks, non
 # loop follows its doc literally, so an unattended batch stalls on the first
 # refill. Pin the doc: the spawn line, the preflight call and the report's
 # evidence reads all carry the resolved repo (issue #803).
-CMDS="$BIN/../commands"
-[ -f "$CMDS/fleet-epic-run.md" ] || fail "L commands/fleet-epic-run.md not found beside bin/"
+CMDS="$BIN/../plugins/fleet-epic/commands"
+[ -f "$CMDS/fleet-epic-run.md" ] || fail "L plugins/fleet-epic/commands/fleet-epic-run.md not found beside bin/"
 grep -E 'dash-issue-session\.sh <N>' "$CMDS/fleet-epic-run.md" | grep -qv -- '--repo' \
   && fail "L every documented epic-run spawn line must carry --repo" "$(grep -n 'dash-issue-session' "$CMDS/fleet-epic-run.md")"
 grep -q 'dash-issue-session\.sh <N> --repo "\$MREPO"' "$CMDS/fleet-epic-run.md" \

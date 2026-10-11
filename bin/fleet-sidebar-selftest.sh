@@ -139,33 +139,23 @@ for w in (24, 30, 44):
         assert not badge or line.endswith('· 2/3 #1532'), repr(line)
 assert sidebar.row_need(r12) == sidebar.row_need(r12[:9] + [''] * 7) + len(' #1532'), 'row_need keeps room for the number'
 assert sidebar.row_num(r12[:9] + ['—']) == '' and sidebar.row_num(r12[:9] + ['#12x']) == '', 'only a #<digits> number'
-# 「新任务」 ends in what waits behind the orchestrator (issue #2617): orch_<sess>'s
-# 7th column → 「排队 N」 where a session row has its #N; no 7th column (Codex, an
-# older node) or 0 → the row byte for byte as before. The bar's busy line only
-# for a busy orchestrator that cannot count.
+# No 「新任务」 row and no steward rows (issue #3119): the shell's list is the
+# producer's rows, whatever orch_<sess> holds (a queue, a sheet, parked or 待你动手
+# items an older node still sends); a 「开工中…」 row and its rule only while a
+# compose is on its way. The bar names no orchestrator.
 import tempfile
 _g, _stage = os.environ.get('FLEET_STATUS_G'), sidebar.STAGE
 os.environ['FLEET_STATUS_G'] = tempfile.mkdtemp()
 sidebar.STAGE = 'fleet-shell'
-def _orch(cols):
-    with open(os.path.join(os.environ['FLEET_STATUS_G'], 'orch_x'), 'w', encoding='utf-8') as f:
-        f.write('\x1f'.join(['f/o', 'm4', 'online'] + cols) + '\n')
-_orch(['working', '', ''])
-before = sidebar.with_portal([r12], None, 'x')[0]
-assert sidebar.row_num(before) == '' and sidebar.orch_busy('x') == sidebar.tr('orch_busy_hint'), before
-# the glyph is the working spinner's frame, which turns every 0.25 s: never compared
-_ng = lambda r: r[:2] + r[3:]
-_orch(['working', '', '', '0'])
-assert _ng(sidebar.with_portal([r12], None, 'x')[0]) == _ng(before) and sidebar.orch_busy('x') == '', 'a 0 count: as before, no bar line'
-_orch(['working', '', '', '2'])
-top = sidebar.with_portal([r12], None, 'x')[0]
-assert sidebar.row_num(top) == sidebar.tr('orch_queue_row_fmt', '2') and _ng(top[:9]) == _ng(before[:9]), top
-for w in (24, 30):
-    line = sidebar.row_text(' ', top[2], top[4], top[3], top[5], w, sidebar.row_num(top))
-    assert sidebar.width_of(line) <= w and line.endswith(sidebar.tr('orch_queue_row_fmt', '2')), repr(line)
-_orch(['done', '', '', '2'])
-assert sidebar.orch_busy('x') == '', 'idle: no bar line'
-assert sidebar.bar_hint([r12], '@1', '@1', 30, True, 'a#b')[3] == 'a##b', 'the busy line: # doubled for tmux'
+with open(os.path.join(os.environ['FLEET_STATUS_G'], 'orch_x'), 'w', encoding='utf-8') as f:
+    f.write('\x1f'.join(['f/o', 'm4', 'online', 'needs', '', '', '2', 'decide=3', 'todo=1', 'park=2']) + '\n')
+assert sidebar.with_portal([r12], None, 'x') == [r12], sidebar.with_portal([r12], None, 'x')
+placing = {'verb': 'compose', 'state': 'placing', 'title': '一件事'}
+top = sidebar.with_portal([r12], placing, 'x')
+assert [r[0] for r in top] == [sidebar.PLACING_KEY, 'hdr', '@1'] and '一件事' in top[0][3], top
+assert sidebar.with_portal(top, None, 'x') == [r12], 'the 「开工中…」 row and its rule go with the place'
+assert sidebar.bar_hint([r12], '@1', '@1', 30)[2:] == ('', ''), 'the bar names no orchestrator'
+assert not hasattr(sidebar, 'orch_busy') and not hasattr(sidebar, 'steward_rows'), 'the orchestrator / steward readers are gone'
 sidebar.STAGE = _stage
 if _g is None: os.environ.pop('FLEET_STATUS_G', None)
 else: os.environ['FLEET_STATUS_G'] = _g
@@ -680,7 +670,18 @@ try:
     check(top[0] == 'hdr' and top[2] == '!' and '1 个在问你' in top[3],
           'the producer lost the 要你处理 summary (the list drops it; #1940 retires it): %r' % (top,))
     check('在问你' not in tm('capture-pane', '-p', '-t', side), 'the list draws the 要你处理 summary again (#1950)')
+    # No session is special (issue #3119): the window holding the orchestrator
+    # or the steward is a row like any other — byte for byte the row it was.
+    # (the working spinner's frame turns every 0.25 s: never compared)
+    mine = lambda: [r[:2] + r[3:] for r in row_data() if r[0] == w1]
+    plain = mine()
+    for role in ('orchestrator', 'steward'):
+        tm('set-option', '-w', '-t', w1, '@fleet_role', role)
+        held = mine()
+        check(held == plain and plain, 'the %s\'s holder is not an ordinary row: %r vs %r' % (role, held, plain))
     tm('set-option', '-w', '-t', w1, '@pin', '1')
+    check(row_data()[1][0] == w1, 'a pinned holder is not on top')
+    tm('set-option', '-uw', '-t', w1, '@fleet_role')
     # The 置顶 group (issue #1170): its heading, then the pinned row — bare, no
     # `* ` — then ONE inert rule the view clips to its width.
     pinned = row_data()

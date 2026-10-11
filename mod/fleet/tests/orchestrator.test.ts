@@ -27,7 +27,7 @@ function engine(on: On, windowRole: string, file: string | null = ROLE_MD, body 
   on('fs.read', (_$, e) => {
     reads.push(e.path)
     if (body !== '' && e.path === body && body === BODY) return { value: BODY_MD }
-    if (file === null || !e.path.endsWith('/skills/fleet-orchestrate/role.md')) throw new Error('ENOENT')
+    if (file === null || !e.path.endsWith('/plugins/fleet-orchestrate/skills/fleet-orchestrate/role.md')) throw new Error('ENOENT')
     return { value: file }
   })
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
@@ -44,8 +44,8 @@ function engine(on: On, windowRole: string, file: string | null = ROLE_MD, body 
 }
 
 test('role.md sits in the install beside the plugin: <install>/skills', () => {
-  expect(rolePath('/i/mod/fleet')).toBe('/i/mod/fleet/../../skills/fleet-orchestrate/role.md')
-  expect(rolePath('/i/mod/fleet/.claude-plugin/')).toBe('/i/mod/fleet/../../skills/fleet-orchestrate/role.md')
+  expect(rolePath('/i/mod/fleet')).toBe('/i/mod/fleet/../../plugins/fleet-orchestrate/skills/fleet-orchestrate/role.md')
+  expect(rolePath('/i/mod/fleet/.claude-plugin/')).toBe('/i/mod/fleet/../../plugins/fleet-orchestrate/skills/fleet-orchestrate/role.md')
 })
 
 test('only an orchestrator window with a non-empty file keeps a role', () => {
@@ -93,7 +93,7 @@ test('the rendered body the launcher stamped (#2782) is the text, the skill copy
   const role = (await $.prompt.compose(COMPOSE)).sections.find(s => s.id === ROLE_SECTION)
   expect(role?.text).toBe(BODY_MD.trim())
   expect(reads).toContain(BODY)
-  expect(reads.filter(p => p.endsWith('/skills/fleet-orchestrate/role.md'))).toEqual([])
+  expect(reads.filter(p => p.endsWith('/plugins/fleet-orchestrate/skills/fleet-orchestrate/role.md'))).toEqual([])
 })
 
 test('a stamped body that cannot be read falls back to the skill copy', async ($, on) => {

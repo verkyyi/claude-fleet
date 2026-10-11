@@ -300,7 +300,7 @@ FLEET_CTX_WINDOW=200000
 # The fleet's ONE orchestrating session (issue #1957, bin/fleet-orchestrator.sh):
 # a no-repo session in $HOME that lives behind the client's 「新任务」 — the person
 # hands it a draft (⇧⇥ in the writing area), it talks the work through and then
-# files / spawns / plans it (skills/fleet-orchestrate/). fleet-up opens it, the
+# files / spawns / plans it (plugins/fleet-orchestrate/skills/fleet-orchestrate/). fleet-up opens it, the
 # diskguard tick reopens it when it is closed. Default: on where this computer
 # hosts sessions (FLEET_HOST=1, 承载); 0 = no orchestrator on this fleet.
 # @label=Orchestrator session @group=spawn @tier=internal @scope=fleet @edit=bool
@@ -309,7 +309,7 @@ FLEET_CTX_WINDOW=200000
 # The steward (EPIC #2668; issue #2670, bin/fleet-steward.sh): the resident
 # session that patrols every batch for you, answers a worker's question when the
 # batch charter already says it, and hands the rest to the orchestrator as ONE
-# decision sheet (skills/fleet-steward/). 0 = no steward, and everything it brings
+# decision sheet (plugins/fleet-steward/skills/fleet-steward/). 0 = no steward, and everything it brings
 # — the desk tickets below included — stays as before; `count` = only the
 # attention count (logs/attention.ndjson), no window — the default where an
 # orchestrator runs, for the batch's three-day baseline; 1 = the window too. Its

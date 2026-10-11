@@ -60,12 +60,12 @@ case "$ob" in "$FLEET_CONF_DIR/roles/orchestrator-"*.md) ok "A: the body is a co
   && ok "A: rendering twice names the same file (made once)" || bad "A: the body path moved on a second render"
 
 # --- B bodies ---------------------------------------------------------------
-cmp -s "$ob" "$ROOT/skills/fleet-orchestrate/role.md" && cmp -s <(R prompt orchestrator) "$ROOT/skills/fleet-orchestrate/role.md" \
-  && ok "B: orchestrator prompt ≡ skills/fleet-orchestrate/role.md (compat-1v copy)" \
-  || bad "B: agents/orchestrator.md + the rule table and skills/fleet-orchestrate/role.md differ — regenerate: fleet-role.py prompt orchestrator > skills/fleet-orchestrate/role.md"
-cmp -s "$sb" "$ROOT/skills/fleet-steward/role.md" \
-  && ok "B: steward prompt ≡ skills/fleet-steward/role.md (compat-1v copy)" \
-  || bad "B: agents/steward.md + the rule table and skills/fleet-steward/role.md differ — regenerate: fleet-role.py prompt steward > skills/fleet-steward/role.md"
+cmp -s "$ob" "$ROOT/plugins/fleet-orchestrate/skills/fleet-orchestrate/role.md" && cmp -s <(R prompt orchestrator) "$ROOT/plugins/fleet-orchestrate/skills/fleet-orchestrate/role.md" \
+  && ok "B: orchestrator prompt ≡ plugins/fleet-orchestrate/skills/fleet-orchestrate/role.md (compat-1v copy)" \
+  || bad "B: agents/orchestrator.md + the rule table and plugins/fleet-orchestrate/skills/fleet-orchestrate/role.md differ — regenerate: fleet-role.py prompt orchestrator > plugins/fleet-orchestrate/skills/fleet-orchestrate/role.md"
+cmp -s "$sb" "$ROOT/plugins/fleet-steward/skills/fleet-steward/role.md" \
+  && ok "B: steward prompt ≡ plugins/fleet-steward/skills/fleet-steward/role.md (compat-1v copy)" \
+  || bad "B: agents/steward.md + the rule table and plugins/fleet-steward/skills/fleet-steward/role.md differ — regenerate: fleet-role.py prompt steward > plugins/fleet-steward/skills/fleet-steward/role.md"
 for r in orchestrator steward; do
   n=$(R body $r | wc -l | tr -d ' ')
   cap=60

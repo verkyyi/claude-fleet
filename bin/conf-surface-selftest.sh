@@ -37,7 +37,7 @@ find -L "$BIN" "$ROOT/hooks" -maxdepth 1 -type f ! -name '*selftest*' 2>/dev/nul
 # command's markdown is still read), minus the modal plumbing, which names keys
 # generically.
 { cat "$WORK/scripts"
-  find -L "$ROOT/commands" "$ROOT/skills" "$ROOT/conf" "$ROOT/extras" "$ROOT/shell" -type f 2>/dev/null
+  find -L "$ROOT/commands" "$ROOT/skills" "$ROOT/plugins" "$ROOT/conf" "$ROOT/extras" "$ROOT/shell" -type f 2>/dev/null
 } | grep -vE '/(fleet-config-lib\.sh|tmux-config\.sh|dash-config-edit\.sh|fleet_config_write\.py|fleet-env-internal\.list)$' \
   | grep -vE '/[^/]*selftest[^/]*$' > "$WORK/readers"   # basename only: the shadow root's own path says "selftest"
 

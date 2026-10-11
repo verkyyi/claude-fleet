@@ -17,6 +17,8 @@ agents/
 hooks/
 commands/
 skills/
+# the optional plugins of this repo's marketplace (issue #3112)
+plugins/
 mod/
 shell/
 launchd/

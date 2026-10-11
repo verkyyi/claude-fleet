@@ -12,7 +12,7 @@ kept in global/steward.state.json `page` and stamped as @orch_page on the
 orchestrator's window — fleet-control-read.sh's `orchpage=` carries it to the
 client (fleet-hub-sessions.sh: `page=<url>` on orch_<sess>).
 
-The page is the epic-page frame (skills/epic-page/template.html — its <style> is
+The page is the epic-page frame (plugins/fleet-epic/skills/epic-page/template.html — its <style> is
 read from there, never copied) under the decider's-view rules
 (`epic-page-surface.sh --lint` passes):
 
@@ -47,7 +47,7 @@ from pathlib import Path
 import fleet_decision as fd
 
 BIN = Path(__file__).resolve().parent
-TEMPLATE = BIN.parent / "skills" / "epic-page" / "template.html"
+TEMPLATE = BIN.parent / "plugins" / "fleet-epic" / "skills" / "epic-page" / "template.html"
 ACTIONS = ("scan", "choose", "grant", "money")   # the order a person reads them in
 
 SCAN_RE = re.compile(r"扫码|二维码|验证码|扫一下|登录|登陆|手机|QR|log ?in|scan", re.I)
