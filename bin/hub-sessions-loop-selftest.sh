@@ -29,6 +29,10 @@
 #   I. doctor            — a cache older than FLEET_HUB_SESSIONS_FAIL_SECS is a
 #      `hub-sessions` FAIL; a reader refused past FLEET_HUB_AUTH_FAIL_SECS is a
 #      `hubauth` FAIL (younger: WARN)
+#   J. other code       — the loop stamps the code it loaded
+#      (global/hubsess.loopcode); an --ensure of other code — a stamp that differs,
+#      or none (a loop from before the stamp) — replaces the live loop at once,
+#      so a version switch reaches it (issue #3164); the same code keeps it (B)
 # Drives bin/fleet-hub-sessions.sh, names bin/tmux-dash-collect.sh (its caller),
 # bin/fleet-doctor.sh and bin/fleet-lib.sh (fleet_hub_auth_note).
 set -uo pipefail
@@ -150,6 +154,28 @@ CHECKS=$((CHECKS+1))
 CHECKS=$((CHECKS+1)); sed -n '/^ensure() {/,/^}/p' "$HUBS" | grep -q nohup && fail "G: ensure() must not go through nohup"
 rm -f "$WORK/bin/nohup"
 killloop; wait_for 5 sh -c '! pgrep -f "^bash $1 --loop" >/dev/null' _ "$HUBS" || fail "G: could not stop the loop"
+
+# --- J: a loop of other code gives way ------------------------------------------
+bash "$HUBS" --ensure
+wait_for 5 loop_alive || fail "J: --ensure started no loop"
+wait_for 5 test -s "$G/hubsess.loopcode" || fail "J: the loop wrote no hubsess.loopcode"
+read -r J1 < "$G/hubsess.pid"
+printf 'old-code\n' > "$G/hubsess.loopcode"         # what a loop of the version before wrote
+bash "$HUBS" --ensure
+wait_for 5 sh -c 'read -r p < "$1" && [ "$p" != "$2" ] && kill -0 "$p"' _ "$G/hubsess.pid" "$J1" \
+  || fail "J: a loop of other code was not replaced by --ensure"
+CHECKS=$((CHECKS+1))
+CHECKS=$((CHECKS+1)); ! kill -0 "$J1" 2>/dev/null || fail "J: the old loop $J1 still runs beside the new one"
+n=$(pgrep -f "^bash $HUBS --loop" | wc -l | tr -d ' ')
+CHECKS=$((CHECKS+1)); [ "$n" = 1 ] || fail "J: $n loops after the replacement, want 1"
+read -r J2 < "$G/hubsess.pid"
+wait_for 5 sh -c '[ "$(cat "$1")" != old-code ]' _ "$G/hubsess.loopcode" || fail "J: the new loop did not restamp its code"
+rm -f "$G/hubsess.loopcode"                          # a loop from before the stamp
+bash "$HUBS" --ensure
+wait_for 5 sh -c 'read -r p < "$1" && [ "$p" != "$2" ] && kill -0 "$p"' _ "$G/hubsess.pid" "$J2" \
+  || fail "J: a loop with no code stamp was not replaced"
+CHECKS=$((CHECKS+1))
+killloop; wait_for 5 sh -c '! pgrep -f "^bash $1 --loop" >/dev/null' _ "$HUBS" || fail "J: could not stop the loop"
 
 # --- H: the node token first, and a refusal on record --------------------------------
 cat > "$WORK/hub.py" <<'PY'
