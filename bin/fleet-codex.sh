@@ -332,6 +332,14 @@ fi
 # has to.
 [ -n "${FLEET_MAIN:-}" ] && export FLEET_MAIN
 
+# The agent's browser (issue #3236): with the fleet-browser plugin installed and
+# enabled for this login (the person's switch; off by default), the agent runs
+# `$BROWSER <url>` for an MCP authorization, /login or a page — fleet-browser.sh
+# hands it to the person's own computer and forwards an OAuth callback port back.
+# A plugin cannot set its agent's own environment, so the launcher does; off =
+# no BROWSER touched, byte for byte as before.
+if bash "$BIN/fleet-browser.sh" enabled 2>/dev/null; then export BROWSER="$BIN/fleet-browser.sh"; fi
+
 # --- project trust: Codex asks "Do you trust the contents of this directory?" ---
 # for a project it has not seen, and a fleet pane has NOBODY to press Enter — the
 # worker would sit on that prompt forever, reading `done` on the dash. Verified on

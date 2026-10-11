@@ -68,13 +68,18 @@ type ClientActionLinks struct {
 
 // ClientAction is one action as its client receives it (the signed payload).
 type ClientAction struct {
-	ID      string            `json:"id"`
-	Lease   string            `json:"lease"`
-	Kind    string            `json:"kind"`
-	URL     string            `json:"url,omitempty"`
-	RPort   int               `json:"rport,omitempty"`
-	Path    string            `json:"path,omitempty"`
-	Scheme  string            `json:"scheme,omitempty"`
+	ID     string `json:"id"`
+	Lease  string `json:"lease"`
+	Kind   string `json:"kind"`
+	URL    string `json:"url,omitempty"`
+	RPort  int    `json:"rport,omitempty"`
+	Path   string `json:"path,omitempty"`
+	Scheme string `json:"scheme,omitempty"`
+	// CPort is an OAuth page's callback port on the sending machine (issue
+	// #3236, fleet-browser): the client forwards that very port back there
+	// before it opens URL. Who names the session asking, for its notice line.
+	CPort   int               `json:"cport,omitempty"`
+	Who     string            `json:"who,omitempty"`
 	File    string            `json:"file,omitempty"`
 	Name    string            `json:"name,omitempty"`
 	Size    int64             `json:"size,omitempty"`
@@ -101,6 +106,8 @@ type ClientActionSend struct {
 	RPort  int               `json:"rport,omitempty"`
 	Path   string            `json:"path,omitempty"`
 	Scheme string            `json:"scheme,omitempty"`
+	CPort  int               `json:"cport,omitempty"`
+	Who    string            `json:"who,omitempty"`
 	File   string            `json:"file,omitempty"`
 	Name   string            `json:"name,omitempty"`
 	Size   int64             `json:"size,omitempty"`
@@ -370,6 +377,12 @@ func (s *Server) handleNodeClientActions(w http.ResponseWriter, r *http.Request)
 		} else if a.URL = cleanActionURL(req.URL); a.URL == "" {
 			httpError(w, http.StatusBadRequest, "open_url needs an http(s) url or a loopback rport")
 			return
+		} else if req.CPort != 0 {
+			if req.CPort < 1 || req.CPort > 65535 {
+				httpError(w, http.StatusBadRequest, "cport must be a port")
+				return
+			}
+			a.CPort, a.Who = req.CPort, cleanClientField(req.Who, 80)
 		}
 	case "show_file":
 		f := cleanClientField(req.File, 1024)

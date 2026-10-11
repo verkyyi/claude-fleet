@@ -1,7 +1,7 @@
 #!/bin/bash
-# fleet-plugins-selftest.sh — this repo is a plugin marketplace of three optional
-# plugins (issue #3112, EPIC #3111 C1): fleet-orchestrate · fleet-steward ·
-# fleet-epic under plugins/, beside the core `fleet` plugin (the repo root).
+# fleet-plugins-selftest.sh — this repo is a plugin marketplace of optional
+# plugins (issue #3112, EPIC #3111 C1): fleet-orchestrate · fleet-steward · fleet-epic,
+# and fleet-browser (issue #3236) under plugins/, beside the core `fleet` plugin (the repo root).
 #
 #   A  manifests: the marketplace lists exactly the plugins/ dirs, each entry's
 #      source is its dir and its name the dir's plugin.json name; steward and
@@ -60,7 +60,7 @@ m = json.load(open(os.path.join(root, ".claude-plugin", "marketplace.json")))
 entries = {p["name"]: p for p in m["plugins"]}
 dirs = sorted(d for d in os.listdir(os.path.join(root, "plugins"))
               if os.path.isdir(os.path.join(root, "plugins", d)))
-want = ["fleet-epic", "fleet-orchestrate", "fleet-steward"]
+want = ["fleet-browser", "fleet-epic", "fleet-orchestrate", "fleet-steward"]
 if dirs != want:
     bad.append("A plugins/ holds %s, expected %s" % (dirs, want))
 ours = sorted(n for n, p in entries.items() if str(p.get("source", "")).startswith("./plugins/"))
@@ -159,7 +159,7 @@ missing=$(python3 "$BIN/fleet-agent-defaults.py" check --root "$ROOT" --claude-c
 for s in fleet-orchestrate fleet-steward epic-page; do
   hasnt "skill $s" "$missing" "C fleet-agent-defaults.py still counts $s as a default skill"
 done
-[ "$(python3 "$PL" names --root "$ROOT" | paste -sd, -)" = "fleet-epic,fleet-orchestrate,fleet-steward" ] && ok \
+[ "$(python3 "$PL" names --root "$ROOT" | paste -sd, -)" = "fleet-browser,fleet-epic,fleet-orchestrate,fleet-steward" ] && ok \
   || fail "C names" "$(python3 "$PL" names --root "$ROOT")"
 
 # ---- D: ensure, against a fake claude ----------------------------------------

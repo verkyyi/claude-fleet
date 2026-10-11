@@ -90,6 +90,25 @@ func TestClientActionsReachTheOwnersLeaseSigned(t *testing.T) {
 		t.Fatalf("delivered twice: %+v", p)
 	}
 
+	// An OAuth page whose callback listens on m4 (issue #3236): the port and the
+	// session asking ride the signed payload; a bad port is refused.
+	if code, _ := send(n["verk4"].token, ClientActionSend{Kind: "open_url", URL: "https://example.com/auth", CPort: 70000}); code != 400 {
+		t.Fatalf("cport 70000: HTTP %d, want 400", code)
+	}
+	code, sent = send(n["verk4"].token, ClientActionSend{Kind: "open_url", URL: "https://example.com/auth?redirect_uri=http://localhost:33418/callback",
+		CPort: 33418, Who: "issue-3236"})
+	if code != 200 || sent.State != "queued" {
+		t.Fatalf("send cport: HTTP %d %+v", code, sent)
+	}
+	_, pc := poll(acq.Lease.ID, 0)
+	if len(pc.Actions) != 1 {
+		t.Fatalf("poll cport: %+v", pc)
+	}
+	var ca ClientAction
+	if err := json.Unmarshal([]byte(pc.Actions[0].Payload), &ca); err != nil || ca.CPort != 33418 || ca.Who != "issue-3236" || ca.RPort != 0 {
+		t.Fatalf("cport payload = %+v (%v)", ca, err)
+	}
+
 	// A long poll wakes on the send; the sender waiting gets the client's answer.
 	type sres struct{ out ClientActionSendResponse }
 	ch := make(chan sres, 1)
