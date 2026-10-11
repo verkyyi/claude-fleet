@@ -1860,6 +1860,29 @@ login's own node token and gets back the number they will know it by, at once.
   (`TestFeedbackOffAddsNothing`). Production sets it to `/debug/feedback-attachments`
   on the debug volume (`deploy/k8s/overlays/prod/deployment-feedback.yaml`).
 
+### The admin's page: 反馈 (claude-fleet#3357)
+
+EPIC #3354 C3. The public issue says only the words (共同约定 5); who, which
+machine, which session and the attachments are read here, by an admin.
+
+    GET  /v1/admin/feedback                    ?state=received|filed|closed&before=F<n>&limit=N
+                                               → {feedback:[…], counts:{state:n}, next:"F<n>"|""}
+    GET  /v1/admin/feedback/F12                one: + endpoint_id, ctx{…}, attach[{name,size,url}]
+    GET  /v1/admin/feedback/F12/attach/<name>  one attachment, a download (nosniff, sandbox CSP)
+    POST /v1/admin/feedback/F12/duplicate      {of:"F3"} → closed, reply 「与 F3 重复」
+
+- Every door is `adminOnly`; the page is `/admin/feedback` (`web/dist/admin/feedback.*`,
+  under `admin/` so a user's request is the 403 page). `/v1/me` lists `feedback` for an
+  admin only while feedback is on.
+- An attachment is served only by a name its row lists, from `F<id>/`; it was held
+  against the secret shapes when it came in (C1), so the page shows nothing the hub
+  would not take. No token is ever on the page.
+- 「标为重复」 comments on and closes the row's GitHub issue first through
+  `FeedbackDesk.CloseIssue` (C2 wires it; nil ⇒ only the row closes and the answer
+  says to close #N by hand); GitHub refusing ⇒ `502`, the row unchanged. The reply is
+  C5's to deliver. Audited as `feedback_duplicate`.
+
+
 ## Validation and next increments
 
 Run the hermetic regression suite through the normal shadow-root gate:

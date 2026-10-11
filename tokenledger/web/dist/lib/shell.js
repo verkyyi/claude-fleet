@@ -94,6 +94,9 @@ export const PAGES = Object.freeze([
   { id: 'people', label: 'ui.nav.people', icon: 'users', group: 'admin', href: '/admin/users', module: '/admin/users.js' },
   { id: 'settings', label: 'ui.nav.settings', icon: 'gear', group: 'admin', href: '/admin/settings', module: '/admin/settings.js' },
   { id: 'audit', label: 'ui.nav.audit', icon: 'scroll', group: 'admin', href: '/admin/audit', module: '/admin/audit.js' },
+  // 反馈 (claude-fleet#3357): every /fleet-feedback; /v1/me lists it only
+  // when the hub takes feedback.
+  { id: 'feedback', label: 'ui.nav.feedback', icon: 'alert', group: 'admin', href: '/admin/feedback', module: '/admin/feedback.js' },
 ]);
 
 /** navFor turns /v1/me's pages into the menu: [{heading}|{id,label,icon,href}].

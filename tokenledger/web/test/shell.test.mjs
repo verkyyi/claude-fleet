@@ -19,6 +19,15 @@ test('a user sees their own pages and no Admin group', () => {
   assert.ok(!PAGES.some((p) => p.href === '/quota'), '/quota is no page of its own: it moves to /usage');
 });
 
+test('反馈 is an admin page listed only when the hub says so (#3357)', () => {
+  assert.ok(!navFor(ADMIN).some((x) => x.id === 'feedback'), 'not without the hub listing it');
+  const admin = navFor([...ADMIN, 'feedback']);
+  const fb = admin.find((x) => x.id === 'feedback');
+  assert.equal(fb.href, '/admin/feedback');
+  assert.equal(fb.group, 'admin');
+  assert.equal(admin[admin.length - 1].id, 'feedback', 'after Audit');
+});
+
 test('an admin also sees the Admin group: the whole hub, then the five admin pages (#1990, #2515)', () => {
   const nav = navFor(ADMIN);
   const i = nav.findIndex((x) => x.heading === 'Admin');

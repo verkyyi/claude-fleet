@@ -668,6 +668,10 @@ func (s *Server) routes() *routeMux {
 		if s.Feedback != nil {
 			mux.HandleFunc(NodeFeedbackPath, s.handleNodeFeedback)
 			mux.Handle(FeedbackMinePath, s.viewerOnly(http.HandlerFunc(s.handleFeedbackMine)))
+			// The admin's page and its doors (claude-fleet#3357).
+			mux.Handle(AdminFeedbackPath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleAdminFeedback))))
+			mux.Handle(adminFeedbackPrefix, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleAdminFeedback))))
+			mux.Handle(feedbackPagePath, s.viewerOnly(s.adminPage(feedbackPageID, feedbackPageFile)))
 		}
 	}
 
