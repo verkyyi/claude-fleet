@@ -136,7 +136,11 @@ PER-PERSON BUDGET (issue #1977, EPIC #1967 R2): every 2xx answer sent with a
 credential of this login (direct / relay) is metered off its own `usage`
 (input + cache writes + output — cache reads are left out) and reported to the
 hub every FLEET_CRED_BUDGET_SECS (15) as POST /v1/node/usage with the node
-token; the hub files it under the login's person and answers their standing
+token — one entry per (provider, session, account, model), the session named by
+the worker_id its launcher minted it for (`mint --worker`, kept in
+workers.json), with input / cache writes / cache reads / output apart and the
+old `tokens` beside them (issue #3376); the hub files each under the login's
+person, repo / issue from that session's lease, and answers their standing
 against fleet.person_budget.<principal>. Over it, every request is refused 403
 with error.code person_budget_exceeded and the hub's line (「已达个人额度…」) —
 neither client retries a 403. The central route is metered by the cluster
@@ -263,7 +267,7 @@ class Meter:
     MAX_WHOLE = 8 << 20
 
     def __init__(self):
-        self.line, self.whole, self.sse, self.f = bytearray(), bytearray(), False, {}
+        self.line, self.whole, self.sse, self.f, self.model = bytearray(), bytearray(), False, {}, ""
 
     def feed(self, d):
         if not self.sse and len(self.whole) < self.MAX_WHOLE:
@@ -300,8 +304,16 @@ class Meter:
             det = u.get("input_tokens_details")
             if isinstance(det, dict) and isinstance(det.get("cached_tokens"), (int, float)):
                 self.f["cached_tokens"] = max(self.f.get("cached_tokens", 0), int(det["cached_tokens"]))
+        # the model the answer names (Claude: message_start's message; Codex:
+        # response.*'s response; a plain body: its own) — issue #3376
+        for o in (v, v.get("message"), v.get("response")):
+            if isinstance(o, dict) and isinstance(o.get("model"), str) and o["model"] and not self.model:
+                self.model = o["model"][:128]
 
-    def tokens(self):
+    def split(self):
+        """-> {in, cache_write, cache_read, out} (issue #3376): in + cache_write +
+        out is exactly tokens() — the budget's count — and cache reads ride
+        along, never counted."""
         if not self.sse and self.whole:
             try:
                 self.take(json.loads(bytes(self.whole)))
@@ -309,26 +321,59 @@ class Meter:
                 pass
             self.whole = bytearray()
         g = self.f.get
-        return (max(0, g("input_tokens", 0) - g("cached_tokens", 0)) + g("cache_creation_input_tokens", 0)
-                + g("output_tokens", 0) + g("prompt_tokens", 0) + g("completion_tokens", 0))
+        return {"in": max(0, g("input_tokens", 0) - g("cached_tokens", 0)) + g("prompt_tokens", 0),
+                "cache_write": g("cache_creation_input_tokens", 0),
+                "cache_read": g("cache_read_input_tokens", 0) + g("cached_tokens", 0),
+                "out": g("output_tokens", 0) + g("completion_tokens", 0)}
+
+    def tokens(self):
+        u = self.split()
+        return u["in"] + u["cache_write"] + u["out"]
+
+
+WORKER_RE = re.compile(r"^[A-Za-z0-9._:/-]{1,200}$")
+PENDING_FIELDS = ("tokens", "requests", "in", "cache_write", "cache_read", "out")
 
 
 class Budget:
     """This login's person's standing, as the hub last said, and what is still
-    to be reported."""
+    to be reported — by (provider, session's worker_id, account, model), with
+    the usage by kind (issue #3376), so the hub files each session's row under
+    its task."""
 
     def __init__(self, cfg=None):
         self.cfg = cfg
         self.lock = threading.Lock()
-        self.pending = {}            # provider -> [tokens, requests]
+        self.pending = {}            # (provider, worker, acct, model) -> [tokens, requests, in, cw, cr, out]
         self.state, self.ts, self.err = {}, 0, ""
 
-    def add(self, provider, tokens):
+    def worker(self, sid):
+        """-> the worker_id the session's credential was minted for ("" = none
+        named: an older launcher, a session outside a fleet window)."""
+        st = getattr(self.cfg, "state", None)
+        if not sid or not st:
+            return ""
+        return read_json(os.path.join(st, "workers.json"), {}).get(sid, "")
+
+    def add(self, provider, tokens, split=None, worker="", acct="", model=""):
         if tokens <= 0:
             return
+        u = split or {"in": tokens}
         with self.lock:
-            p = self.pending.setdefault(provider, [0, 0])
-            p[0] += tokens; p[1] += 1
+            p = self.pending.setdefault((provider, worker or "", acct or "", model or ""), [0] * len(PENDING_FIELDS))
+            for i, n in enumerate((tokens, 1, u.get("in", 0), u.get("cache_write", 0), u.get("cache_read", 0), u.get("out", 0))):
+                p[i] += n
+
+    @staticmethod
+    def entry(key, v):
+        """One report entry: tokens / requests for any hub (an older one counts
+        tokens alone), the session and the split for one that files them."""
+        e = {"provider": key[0]}
+        e.update(zip(PENDING_FIELDS, v))
+        for k, x in zip(("worker_id", "account", "model"), key[1:]):
+            if x:
+                e[k] = x
+        return e
 
     def over(self):
         """-> the hub's line when the person is over (and the word is fresh), else ""."""
@@ -349,7 +394,7 @@ class Budget:
             return None
         with self.lock:
             sent = {k: list(v) for k, v in self.pending.items()}
-        body = json.dumps({"usage": [{"provider": k, "tokens": v[0], "requests": v[1]} for k, v in sorted(sent.items())]}).encode()
+        body = json.dumps({"usage": [self.entry(k, v) for k, v in sorted(sent.items())]}).encode()
         try:
             req = urllib.request.Request(hub + "/v1/node/usage", data=body, method="POST",
                                          headers={"Authorization": "Bearer " + tok, "Content-Type": "application/json"})
@@ -360,10 +405,11 @@ class Budget:
                 self.err = type(e).__name__
             return None
         with self.lock:
-            for k, (t, n) in sent.items():
+            for k, v in sent.items():
                 p = self.pending.get(k)
                 if p:
-                    p[0] -= t; p[1] -= n
+                    for i, n in enumerate(v):
+                        p[i] -= n
                     if p[0] <= 0 and p[1] <= 0:
                         del self.pending[k]
             was = bool(self.state.get("over"))
@@ -1242,8 +1288,9 @@ class Proxy(BaseHTTPRequestHandler):
         conn.close()
         extra = {}
         if meter:
-            extra["tokens"] = meter.tokens()
-            self.budget.add(provider, extra["tokens"])
+            split = meter.split()
+            extra["tokens"] = split["in"] + split["cache_write"] + split["out"]
+            self.budget.add(provider, extra["tokens"], split, self.budget.worker(sid), acct, meter.model)
         self.log(ev="fwd", sid=sid, acct=acct, route=route, cred=cred, provider=provider,
                  m=self.command, path=self.path.split("?")[0], up=u.netloc, status=r.status,
                  ttfb_ms=int(ttfb * 1000), total_ms=int((time.time() - t0) * 1000), bytes=size,
@@ -1618,6 +1665,13 @@ def ctl_handle(req, t):
             return {"ok": False, "err": "mint: --account LABEL"}
         sid = req.get("sid") or "s-" + secrets.token_hex(4)
         tok = t.keys.mint(acct, sid, int(req.get("ttl") or cfg.ttl), lg=t.name)
+        wid = req.get("worker") or ""
+        if wid and WORKER_RE.match(wid):
+            # the session's worker_id (its fleet credential's, issue #3376): its
+            # usage is reported under it, so the hub files it under its task
+            p = os.path.join(cfg.state, "workers.json")
+            with Proxy.lock:
+                d = read_json(p, {}); d[sid] = wid; write_json(p, d)
         wrap = int(req.get("wrap") or 0)
         if wrap > 1:
             # the session's wrapper: while it lives, this credential outlives its stamp
@@ -1656,10 +1710,11 @@ def ctl_handle(req, t):
             b = read_json(os.path.join(cfg.state, "bind.json"), {})
             if b.pop(sid, None) is not None:
                 write_json(os.path.join(cfg.state, "bind.json"), b)
-            p = os.path.join(cfg.state, "live.json")
-            d = read_json(p, {})
-            if d.pop(sid, None) is not None:
-                write_json(p, d)
+            for f in ("live.json", "workers.json"):
+                p = os.path.join(cfg.state, f)
+                d = read_json(p, {})
+                if d.pop(sid, None) is not None:
+                    write_json(p, d)
         t.log(ev="revoke", sid=sid)
         return {"ok": True}
     if op == "attach":
@@ -2341,7 +2396,7 @@ def main():
     r.add_argument("--json", action="store_true")
     m = sub.add_parser("mint")
     m.add_argument("--account", default=""); m.add_argument("--sid", default="")
-    m.add_argument("--provider", default="")
+    m.add_argument("--provider", default=""); m.add_argument("--worker", default="")
     m.add_argument("--ttl", type=int, default=0); m.add_argument("--wrap", type=int, default=0)
     b = sub.add_parser("rebind")
     b.add_argument("--sid", required=True); b.add_argument("--account", required=True)
@@ -2378,6 +2433,8 @@ def main():
         req = {"op": "mint", "account": a.account, "sid": a.sid, "ttl": a.ttl, "wrap": a.wrap}
         if a.provider:
             req["provider"] = a.provider
+        if a.worker:
+            req["worker"] = a.worker
         print(ctl_call(a.state, req)["token"])
     elif a.cmd == "rebind":
         ctl_call(a.state, {"op": "rebind", "sid": a.sid, "account": a.account})

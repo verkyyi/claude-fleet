@@ -378,9 +378,10 @@ func (s *Server) alertsSeenBy(p fleetPrincipal, rows []store.FleetAlert) []store
 			} else {
 				mine = seesEndpoint(a.Subject)
 			}
-		case store.AlertServiceFailed, store.AlertUsageSilent:
+		case store.AlertServiceFailed, store.AlertUsageSilent, store.AlertPoolUsageUnowned:
 			// One login's entry on one machine (claude-fleet#2526), one
-			// login's usage gone quiet (claude-fleet#3204).
+			// login's usage gone quiet (claude-fleet#3204) or reported with
+			// no person behind it (claude-fleet#3376).
 			var d struct {
 				Hostname string `json:"hostname"`
 				OSUser   string `json:"os_user"`

@@ -23,6 +23,11 @@
 #      out) is reported to the hub's /v1/node/usage; over the person's budget the
 #      next request is refused 403 person_budget_exceeded with the hub's line and
 #      reaches nothing; the window passing lets them back in
+#   J2 by session (issue #3376): each report entry names the session's worker_id
+#      (minted with --worker), its account and model, input / cache writes /
+#      cache reads / output apart with tokens = in + cache writes + out (the
+#      budget's count, unchanged); a session minted without one reports none;
+#      a revoke forgets the worker_id
 #   K  binding never asks DNS for its own name (issue #2319): with getfqdn made
 #      to hang, the proxy's server still binds at once
 set -uo pipefail
@@ -95,9 +100,13 @@ class H(BaseHTTPRequestHandler):
                 return self.reply(401, {"error": "node token"})
             tf, lf = os.path.join(SB, "usage.total"), os.path.join(SB, "budget.limit")
             tot = int(open(tf).read() or 0) if os.path.exists(tf) else 0
-            for u in json.loads(body or b"{}").get("usage", []):
+            us = json.loads(body or b"{}").get("usage", [])
+            for u in us:
                 tot += int(u["tokens"])
             open(tf, "w").write(str(tot))
+            with open(os.path.join(SB, "usage.entries"), "a") as f:
+                for u in us:
+                    f.write(json.dumps(u, sort_keys=True) + "\n")
             lim = int(open(lf).read()) if os.path.exists(lf) else 0
             over = bool(lim) and tot >= lim
             st = {"principal": "gh:1", "used_5h": tot, "limit_5h": lim, "over": over}
@@ -127,7 +136,7 @@ class H(BaseHTTPRequestHandler):
         self.reply(200, {"via": via, "prov": prov, "path": p, "auth": h.get("authorization", ""),
                          "xkey": "x-api-key" in h, "acct_id": h.get("chatgpt-account-id", ""),
                          "relay_hdr": h.get("x-fleet-relay", ""), "beta": h.get("anthropic-beta", ""),
-                         "sha": hashlib.sha256(body).hexdigest(),
+                         "sha": hashlib.sha256(body).hexdigest(), "model": "m-" + prov,
                          "usage": {"input_tokens": 100, "cache_read_input_tokens": 9000, "output_tokens": 50}}, chunks=4)
 srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
 srv.daemon_threads = True
@@ -347,6 +356,41 @@ bwait '"over": false' || fail "J the proxy never learned the window passed"
 j=$(R /v1/messages "$TJ")
 [ "$(jf "$j" _status)" = 200 ] && pass "J the window passes → the person is back in" || fail "J after reset: $j"
 rm -f "$SB/budget.limit"
+
+# ── J2: reported by session (issue #3376) ───────────────────────────────────
+bwait '"pending": 0' || fail "J2 J's usage never left the proxy"
+rm -f "$SB/usage.entries" "$SB/usage.total"
+WA='fleet-uuid-a/7d1c0f00-0000-4000-8000-00000000000a'; WB='fleet-uuid-a/7d1c0f00-0000-4000-8000-00000000000b'
+TA=$(CP mint --account a1 --sid swa --worker "$WA"); TB=$(CP mint --account a2 --sid swb --worker "$WB")
+TN=$(CP mint --account a1 --sid swn)
+R /v1/messages "$TA" >/dev/null; R /v1/messages "$TA" >/dev/null; R /codex/responses "$TB" >/dev/null; R /v1/messages "$TN" >/dev/null
+waitn 600 || fail "J2 four answers never reached the hub (total=$(utot))"
+j2=$(python3 - "$SB/usage.entries" "$WA" "$WB" <<'PY2'
+import json, sys
+es = [json.loads(l) for l in open(sys.argv[1])]
+wa, wb = sys.argv[2], sys.argv[3]
+def one(w, p):
+    m = [e for e in es if e.get("worker_id", "") == w and e["provider"] == p]
+    return m[0] if len(m) == 1 else None
+a, b, n = one(wa, "claude"), one(wb, "codex"), one("", "claude")
+bad = []
+if not a or (a["account"], a["model"], a["requests"], a["in"], a["cache_write"], a["cache_read"], a["out"], a["tokens"]) != ("a1", "m-claude", 2, 200, 0, 18000, 100, 300):
+    bad.append("A %s" % a)
+if not b or (b["account"], b["model"], b["requests"], b["cache_read"], b["tokens"]) != ("a2", "m-codex", 1, 9000, 150):
+    bad.append("B %s" % b)
+if not n or "worker_id" in n or n["requests"] != 1 or n["tokens"] != 150:
+    bad.append("no worker %s" % n)
+for e in es:
+    if e["tokens"] != e["in"] + e["cache_write"] + e["out"]:
+        bad.append("tokens != in + cache_write + out: %s" % e)
+print("; ".join(bad) or "ok")
+PY2
+)
+[ "$j2" = ok ] && pass "J2 one entry per session (worker_id · account · model · in / cache write / cache read / out), tokens unchanged; none named → no worker_id" \
+  || fail "J2 $j2 :: $(cat "$SB/usage.entries" 2>/dev/null | head -5)"
+CP revoke --sid swa >/dev/null
+grep -q swa "$FLEET_CONF_DIR/cred-proxy/workers.json" 2>/dev/null && fail "J2 a revoked session's worker_id stays in workers.json" \
+  || pass "J2 revoke forgets the session's worker_id"
 
 # ── H: the daemon entry ──────────────────────────────────────────────────────
 kill "$PROXY_PID" 2>/dev/null; PROXY_PID=''

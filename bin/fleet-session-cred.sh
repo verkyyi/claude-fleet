@@ -91,6 +91,15 @@ hub_broker() {
 # hub_pass <provider> → "<id>\t<cred>": the node token is read INSIDE python from
 # node.env (never exported, issue #1491) — or, separated, the broker's short-lived
 # fcpn1. pair, only in python's environment; the assertion travels the same way.
+# session_worker → the worker_id this session's own fleet credential names
+# (FLEET_WORKER_CRED, verified), or nothing: the proxy reports the session's
+# usage under it, so the hub files it under the session's task (issue #3376).
+session_worker() {
+  [ -n "${FLEET_WORKER_CRED:-}" ] || return 0
+  python3 "$BIN/fleet-mcp.py" --cred check 2>/dev/null \
+    | python3 -I -c 'import json,sys; print(json.load(sys.stdin).get("worker_id") or "")' 2>/dev/null
+}
+
 hub_pass() {
   local a="${FLEET_WORKER_ASSERT:-}"   # a caller that already holds this session's own
   [ -n "$a" ] || a=$(python3 "$BIN/fleet-mcp.py" --cred assert 2>/dev/null)
@@ -191,6 +200,7 @@ case "$cmd" in
     case "$rt" in *'"trust": "unknown"'*) rt=$(bash "$PROXY" route --provider "$provider" --refresh --json 2>/dev/null) ;; esac
     route=$(printf '%s' "$rt" | python3 -c 'import json,sys; print(json.load(sys.stdin)["route"])' 2>/dev/null) \
       || die "the proxy did not say which route this machine takes"
+    wid=''; [ "$route" = central ] || wid=$(session_worker)   # central: the cluster proxy's to meter
     if [ "$route" = central ]; then
       row=$(hub_pass "$provider"); hrc=$?
       [ "$hrc" = 0 ] || exit $(( hrc == 5 ? 5 : 1 ))
@@ -213,10 +223,10 @@ case "$cmd" in
       # to give. A proxy older than #2412 still wants one: the login's own pick,
       # for that proxy's last version.
       err=$(mktemp "${TMPDIR:-/tmp}/fsc-mint.XXXXXX")
-      cred=$(bash "$PROXY" mint --provider claude --sid "$sid" --wrap "${FLEET_SESSION_WRAP:-$PPID}" 2>"$err")
+      cred=$(bash "$PROXY" mint --provider claude --sid "$sid" ${wid:+--worker "$wid"} --wrap "${FLEET_SESSION_WRAP:-$PPID}" 2>"$err")
       if [ -z "$cred" ] && grep -q -- '--account LABEL' "$err"; then
         account=$(bash "$BIN/fleet-account.sh" active 2>/dev/null)
-        [ -n "$account" ] && cred=$(bash "$PROXY" mint --account "$account" --sid "$sid" --wrap "${FLEET_SESSION_WRAP:-$PPID}" 2>/dev/null)
+        [ -n "$account" ] && cred=$(bash "$PROXY" mint --account "$account" --sid "$sid" ${wid:+--worker "$wid"} --wrap "${FLEET_SESSION_WRAP:-$PPID}" 2>/dev/null)
       else
         account=proxy
       fi
@@ -230,7 +240,7 @@ case "$cmd" in
       [ -n "$account" ] || exit 4
       # --wrap: the session's wrapper — while it lives the proxy keeps this
       # credential good past its stamp (issue #1975: no mid-session expiry)
-      cred=$(bash "$PROXY" mint --account "$account" --sid "$sid" --wrap "${FLEET_SESSION_WRAP:-$PPID}" 2>/dev/null) && [ -n "$cred" ] \
+      cred=$(bash "$PROXY" mint --account "$account" --sid "$sid" ${wid:+--worker "$wid"} --wrap "${FLEET_SESSION_WRAP:-$PPID}" 2>/dev/null) && [ -n "$cred" ] \
         || die "the proxy would not mint a session credential for $account"
       rec_set "$sid" account "$account"
     fi

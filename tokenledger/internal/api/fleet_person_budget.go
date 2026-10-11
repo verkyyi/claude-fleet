@@ -1,7 +1,10 @@
 package api
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"regexp"
 	"sort"
@@ -277,24 +280,104 @@ func humanDur(d time.Duration) string {
 
 // usageReport is what a login's local proxy sends: tokens per provider since
 // its last report.
+// usageReport is a login's local proxy's report (POST /v1/node/usage). An
+// entry is either the old aggregate — {provider, tokens, requests}, one per
+// provider — or, from a proxy that knows its sessions (claude-fleet#3376), one
+// per (session, account, model): the worker_id it minted the session's pass
+// for, and the usage by kind. tokens stays in a split entry (an older hub
+// counts it); when the split is there, the split is what is filed.
 type usageReport struct {
-	Usage []struct {
-		Provider string `json:"provider"`
-		Tokens   int64  `json:"tokens"`
-		Requests int64  `json:"requests"`
-	} `json:"usage"`
+	Usage []usageEntry `json:"usage"`
 }
 
+type usageEntry struct {
+	Provider   string `json:"provider"`
+	Tokens     int64  `json:"tokens"`
+	Requests   int64  `json:"requests"`
+	WorkerID   string `json:"worker_id,omitempty"`
+	Account    string `json:"account,omitempty"`
+	Model      string `json:"model,omitempty"`
+	In         int64  `json:"in,omitempty"`
+	CacheWrite int64  `json:"cache_write,omitempty"`
+	CacheRead  int64  `json:"cache_read,omitempty"`
+	Out        int64  `json:"out,omitempty"`
+}
+
+// split reports whether the entry carries its usage by kind.
+func (u usageEntry) split() bool {
+	return u.In != 0 || u.CacheWrite != 0 || u.CacheRead != 0 || u.Out != 0
+}
+
+func (u usageEntry) valid() bool {
+	if !hasString(sessionCredProviders, u.Provider) || u.Requests < 0 || u.Requests > 1e6 ||
+		len(u.WorkerID) > 256 || len(u.Account) > 128 || len(u.Model) > 128 {
+		return false
+	}
+	for _, n := range []int64{u.Tokens, u.In, u.CacheWrite, u.CacheRead, u.Out} {
+		if n < 0 || n > 1e10 {
+			return false
+		}
+	}
+	return true
+}
+
+// recordUsage files a node report under principal: an aggregate entry as one
+// row (its tokens as input — byte for byte the old road), a session's entry as
+// its own row with repo / issue frozen from that session's lease at this
+// moment, as the cluster proxy's rows are.
 func (s *Server) recordUsage(principal string, rep usageReport, now time.Time) error {
-	for _, u := range rep.Usage {
-		if !hasString(sessionCredProviders, u.Provider) || u.Tokens < 0 || u.Tokens > 1e10 || u.Requests < 0 || u.Requests > 1e6 {
+	for _, e := range rep.Usage {
+		if !e.valid() {
 			continue
 		}
-		if err := s.Store.AddPersonUsage(principal, u.Provider, u.Tokens, u.Requests, now); err != nil {
+		if !e.split() {
+			if err := s.Store.AddPersonUsage(principal, e.Provider, e.Tokens, e.Requests, now); err != nil {
+				return err
+			}
+			continue
+		}
+		u := store.PoolUsage{Principal: principal, WorkerID: e.WorkerID, Account: e.Account, Provider: e.Provider,
+			Model: e.Model, In: e.In, CacheWrite: e.CacheWrite, CacheRead: e.CacheRead, Out: e.Out, Requests: e.Requests, At: now}
+		if repo, issue, ok, err := s.Store.LeaseForWorker(e.WorkerID, now); err == nil && ok {
+			u.Repo, u.Issue = repo, issue
+		}
+		if err := s.Store.AddPoolUsage(u); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// unownedUsage is a node report from a login no person is mapped to
+// (claude-fleet#3376): the pool has no ownerless rows, so nothing is written —
+// but it is never dropped in silence either. It raises pool_usage_unowned on
+// "<endpoint_id>/<login>" (once; the row keeps the moment it was first seen)
+// with what the report carried, for an admin to map the login to its person.
+func (s *Server) unownedUsage(ep *store.Endpoint, host, user string, rep usageReport, now time.Time) {
+	var tokens, requests int64
+	for _, e := range rep.Usage {
+		if !e.valid() {
+			continue
+		}
+		if e.split() {
+			tokens += e.In + e.CacheWrite + e.Out
+		} else {
+			tokens += e.Tokens
+		}
+		requests += e.Requests
+	}
+	if tokens <= 0 && requests <= 0 {
+		return
+	}
+	b, _ := json.Marshal(map[string]any{"endpoint_id": ep.ID, "hostname": host, "os_user": user,
+		"tokens": tokens, "requests": requests})
+	sub := ep.ID + "/" + user
+	if raised, err := s.Store.RaiseFleetAlert(store.AlertPoolUsageUnowned, sub, string(b), now); err != nil {
+		log.Printf("node usage: raise %s %s: %v", store.AlertPoolUsageUnowned, sub, err)
+	} else if raised {
+		log.Printf("fleet alert: %s %s@%s — %d tokens in %d request(s) on the pool, no person mapped to this login",
+			store.AlertPoolUsageUnowned, user, nodeLabel(host), tokens, requests)
+	}
 }
 
 // poolUsageReport is the cluster proxy's report of ONE forwarded request
@@ -348,21 +431,32 @@ func (s *Server) handleNodeUsage(w http.ResponseWriter, r *http.Request) {
 	}
 	now := s.budgetClock()
 	host, user := s.nodeIdentity(ep)
-	principal, err := s.Store.PrincipalForLogin(host, user)
-	if err != nil {
-		// no person for this login: nothing to count against, nothing refused
-		writeJSON(w, http.StatusOK, PersonBudgetState{Message: "no person is mapped to " + user + "@" + host})
-		return
-	}
+	var rep usageReport
 	if r.Method == http.MethodPost {
-		var rep usageReport
 		if err := readOptionalJSON(r, &rep); err != nil {
 			httpError(w, http.StatusBadRequest, "body must be {usage:[{provider, tokens, requests}]}")
 			return
 		}
+	}
+	// the login's owner: the machine's account, else the login row bound to
+	// this very endpoint (a node's machine name may drift — claude-fleet#2212)
+	principal, err := s.principalOnNode(ep.ID, host, user)
+	if err != nil {
+		// no person for this login: nothing to count against, nothing refused —
+		// and its usage raised, never dropped in silence (claude-fleet#3376)
+		if errors.Is(err, store.ErrNoPrincipal) {
+			s.unownedUsage(ep, host, user, rep, now)
+		}
+		writeJSON(w, http.StatusOK, PersonBudgetState{Message: "no person is mapped to " + user + "@" + host})
+		return
+	}
+	if r.Method == http.MethodPost {
 		if err := s.recordUsage(principal, rep, now); err != nil {
 			httpError(w, http.StatusInternalServerError, err.Error())
 			return
+		}
+		if _, err := s.Store.ClearFleetAlert(store.AlertPoolUsageUnowned, ep.ID+"/"+user, now); err != nil {
+			log.Printf("node usage: clear %s: %v", store.AlertPoolUsageUnowned, err)
 		}
 	}
 	st, err := s.personBudgetState(principal, now)
