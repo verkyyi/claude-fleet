@@ -73,6 +73,16 @@ r=$(lib "$INTMUX" "$po" fleet_epic_parent_key "$L" acme/app 1949 2>/dev/null); o
 r=$(lib '' '' fleet_origin_canon orchestrator "''" "$L");  ok; [ "$r" = orchestrator ] || fail "A: canon keeps an explicit orchestrator" "$r"
 r=$(lib '' '' fleet_origin_canon "''" orchestrator "$L");  ok; [ "$r" = orchestrator ] || fail "A: canon keeps a detected orchestrator" "$r"
 r=$(lib '' '' fleet_origin_canon orchestrator acme-app:issue-7 "$L" 2>&1); ok; [ "$r" = orchestrator ] || fail "A: an explicit orchestrator is never swapped" "$r"
+# A session that TOOK the role (issue #3114: `@fleet_role_def`, its @fleet_role a
+# worker's) and has no key of its own answers to the role's name (issue #3439); a
+# taken role in a scratch keeps the scratch key.
+wt=$(tf new-window -d -P -F '#{window_id}' -n taken -c "$WORK" 'while :; do sleep 300; done')
+tf set-window-option -t "$wt" @fleet_role worker \; set-window-option -t "$wt" @fleet_role_def steward \; set-window-option -t "$wt" @norepo 1
+pt=$(tf display-message -p -t "$wt" '#{pane_id}')
+r=$(lib "$INTMUX" "$pt" fleet_origin_key);                ok; [ "$r" = steward ] || fail "A: a taken role with no key is the role's key" "$r"
+tf set-window-option -t "$wt" @fleet_role_def '' \; set-window-option -u -t "$wt" @fleet_role_def
+r=$(lib "$INTMUX" "$pt" fleet_origin_key);                ok; [ -z "$r" ] || fail "A: no role, no key ⇒ nothing (the hub)" "$r"
+tf kill-window -t "$wt"
 
 # --- B: the gate + locate --------------------------------------------------------
 r=$(lib '' '' fleet_origin_gate "$L" orchestrator orchestrator); rc=$?; ok; [ "$rc:$r" = '0:' ] || fail "B: a live orchestrator passes the gate" "$rc:$r"

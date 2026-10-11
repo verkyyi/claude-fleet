@@ -60,6 +60,7 @@ case " $* " in
   *'#{session_name}'*) printf '%s\n' "${FAKE_SESSION-}" ;;
   *'#{@issue}'*)       printf '%s\n' "${FAKE_AT_ISSUE-}" ;;
   *'#{@origin}'*)      printf '%s\n' "${FAKE_AT_ORIGIN-}" ;;
+  *'#{@origin_wid}'*)  printf '%s\n' "${FAKE_AT_OWID-}" ;;
   *)                   : ;;   # list-panes (hub lookup) → no hub pane
 esac
 exit 0
@@ -104,7 +105,7 @@ run() {
   OUT=$(cd "$dir" && env PATH="$WORK/fakebin:$PATH" TMPDIR="$WORK" \
           FLEET_SKIP_GLOBAL_CONF=1 FLEET_CONF_DIR="$CONF" TMUX_PANE='%9' \
           FAKE_SESSION="${FAKE_SESSION-$SESS}" FAKE_AT_ISSUE="${FAKE_AT_ISSUE-}" \
-          FAKE_AT_ORIGIN="${FAKE_AT_ORIGIN-}" \
+          FAKE_AT_ORIGIN="${FAKE_AT_ORIGIN-}" FAKE_AT_OWID="${FAKE_AT_OWID-}" \
           GH_CALLS="${GH_CALLS:-/dev/null}" GH_RC="${GH_RC:-0}" \
           GH_ASSIGNEES="${GH_ASSIGNEES-}" \
           bash "$CLI" "$@" 2>"$WORK/err"); RC=$?
@@ -240,6 +241,21 @@ GH_ASSIGNEES=verkyyi FAKE_AT_ISSUE=77 FAKE_AT_ORIGIN=autofill run "$WORK/widgets
 has 'origin: autofill'    || fail "a daemon origin must still be shown" "$OUT"
 has 'not a live-window key' || fail "a non-key origin must be stated as un-addressable" "$OUT"
 ok "ORIGIN a daemon/cross-fleet origin is shown but marked un-addressable"
+
+# Issue #3439: a parent on ANOTHER machine (its worker_id names a fleet not configured
+# here) is an address — through the hub — never "nothing to report back to"; nor is
+# the session holding the orchestrator role, nor a parent named by its identity.
+PFID=0dbf19b9-1111-4222-8333-444455556666
+GH_ASSIGNEES=verkyyi FAKE_AT_ISSUE=77 FAKE_AT_ORIGIN=$PFID FAKE_AT_OWID=99999999-aaaa-4bbb-8ccc-dddddddddddd/$PFID run "$WORK/widgets-issue-12"
+has "on another machine" || fail "a remote parent must be named as reachable through the hub" "$OUT"
+if has 'not a live-window key'; then fail "a remote parent is not un-addressable" "$OUT"; fi
+ok "ORIGIN a parent on another machine reads as reachable through the hub (#3439)"
+GH_ASSIGNEES=verkyyi FAKE_AT_ISSUE=77 FAKE_AT_ORIGIN=orchestrator run "$WORK/widgets-issue-12"
+has 'origin: orchestrator (spawned by the session holding' || fail "the orchestrator is a parent to report to" "$OUT"
+ok "ORIGIN orchestrator reads as a parent to report to (#3439)"
+GH_ASSIGNEES=verkyyi FAKE_AT_ISSUE=77 FAKE_AT_ORIGIN=$PFID run "$WORK/widgets-issue-12"
+if has 'not a live-window key'; then fail "an identity origin is an address" "$OUT"; fi
+ok "ORIGIN an identity origin is an address (#3439)"
 
 # ===== ATOMIC: charter layers + per-fleet directive on EVERY run ================
 # No file layers and the tap-first flag off ⇒ the brief still says so explicitly,

@@ -5215,17 +5215,23 @@ fleet_win_stamp_cmd() {
 # rather than a bare key that could name another repo's window.
 fleet_origin_key() {
   [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ] || return 0
-  local o iss owt pth k pre
+  local o iss owt pth k pre rdef
   o=$(tmux display-message -p -t "$TMUX_PANE" \
-        '#{@fleet_role}|#{@issue}|#{@worktree}|#{pane_current_path}' 2>/dev/null)
+        '#{@fleet_role_def}|#{@fleet_role}|#{@issue}|#{@worktree}|#{pane_current_path}' 2>/dev/null)
   [ -n "$o" ] || return 0
+  rdef=${o%%|*}; o=${o#*|}
   # The orchestrating session (issue #2129): no issue, no scratch, no repo — its
   # key is the literal `orchestrator`, the one fleet_win_for_key answers to.
   [ "${o%%|*}" = orchestrator ] && { printf 'orchestrator'; return 0; }
   [ "${o%%|*}" = steward ] && { printf 'steward'; return 0; }   # issue #2670
   o=${o#*|}
   iss=${o%%|*}; o=${o#*|}; owt=${o%%|*}; pth=${o#*|}
-  pre=$(_fleet_key_prefix "$(fleet_current_session)" "$TMUX_PANE") || return 0
+  # A session that TOOK the role (issue #3114 — `@fleet_role_def`, never the old
+  # seat's `@fleet_role`) and has no key of its own answers to the role's name
+  # (issue #3439): before, its spawns read as the hub's and every child it
+  # dispatched reported to nobody. take_role refuses a window that binds an issue.
+  case "$rdef" in orchestrator|steward) ;; *) rdef='' ;; esac
+  pre=$(_fleet_key_prefix "$(fleet_current_session)" "$TMUX_PANE") || { printf '%s' "$rdef"; return 0; }
   case "$iss" in
     ''|*[!0-9]*) : ;;
     *) printf '%sissue-%s' "$pre" "$iss"; return 0 ;;
@@ -5240,7 +5246,7 @@ fleet_origin_key() {
   # cwd is the base checkout never keys as a scratch.
   k=$(fleet_scratch_key "$owt")
   [ -z "$k" ] && k=$(fleet_scratch_key "$pth")
-  [ -n "$k" ] && printf '%s%s' "$pre" "$k"
+  if [ -n "$k" ]; then printf '%s%s' "$pre" "$k"; else printf '%s' "$rdef"; fi
   return 0
 }
 
@@ -5335,6 +5341,11 @@ fleet_origin_gate() {
 # Always sanitized to the key charset (window option + run-shell embed), ≤32 chars.
 fleet_origin_canon() {
   local ex="${1:-}" det="${2:-}" tgt="${3:-}" src="${4:-}" k n pre=''
+  # A parent's IDENTITY (issue #3439): a hub-placed start hands over the parent's
+  # worker_id, `<fleet UUID>/<fleet_id>`, and its tail is a fleet_id — kept whole.
+  # The 32-character cut below once made it a 32-character stub no reader could
+  # place, and the child's report stopped there, silently.
+  fleet_is_fid "$ex" && { printf '%s' "$ex"; return 0; }
   # A repo-qualified key (issue #789, `<slug>:issue-<N>` / `<slug>:scratch-<N>`) keeps
   # its prefix; the rest canonicalizes as below. ':' survives ONLY in that shape.
   case "$ex" in

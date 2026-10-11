@@ -987,6 +987,9 @@ case "$TASK_REF" in T[1-9]*) case "${TASK_REF#T}" in *[!0-9]*) ;; *) _sw+=(\; se
 _sw+=(\; set-window-option -t "$win" @worktree "$wt")
 [ -n "$ORIGIN" ] && _sw+=(\; set-window-option -t "$win" @origin "$ORIGIN")
 [ -n "$ORIGIN_WID" ] && _sw+=(\; set-window-option -t "$win" @origin_wid "$ORIGIN_WID")
+# …and when that worker_id names the parent by identity, the identity as @origin_fid
+# (issue #3439) — what fleet-report-parent.sh and `send parent` route by.
+fleet_is_fid "${ORIGIN_WID#*/}" && _sw+=(\; set-window-option -t "$win" @origin_fid "${ORIGIN_WID#*/}")
 # - @cc_agent: the agent asked for (issue #2403), before the node's start reads the
 #   window back to check it — the launcher's own stamp comes later, from the pane
 [ -n "$AGENT" ] && _sw+=(\; set-window-option -t "$win" @cc_agent "$AGENT")
