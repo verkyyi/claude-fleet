@@ -1110,8 +1110,11 @@ touched bin/tmux-dashboard.sh || touched bin/tmux-dashboard-rows.sh && uiargs+=(
 beforeconf=''
 # The bar's two files are sourced BY tmux-attention.conf (issue #1534), so a
 # change to either reloads it the same way; so is the human key layer (#1840),
-# and the 看台's keys (conf/tmux-view.conf, issue #3000).
-if touched conf/tmux-attention.conf || touched conf/tmux-bar.conf || touched conf/fleet-palette.conf || touched conf/tmux-fleet-server.conf || touched conf/tmux-node-human.conf || touched conf/tmux-view.conf || touched bin/fleet-quickopen.py; then
+# and the 看台's keys (conf/tmux-view.conf, issue #3000) — built by
+# fleet_view.py's key_lines off dash-keymap.sh's table, so a change to either
+# rebuilds them too (issue #3085: #3058's --freeze landed in fleet_view.py and
+# a server kept its old ⌘P bind).
+if touched conf/tmux-attention.conf || touched conf/tmux-bar.conf || touched conf/fleet-palette.conf || touched conf/tmux-fleet-server.conf || touched conf/tmux-node-human.conf || touched conf/tmux-view.conf || touched bin/fleet-quickopen.py || touched bin/fleet_view.py || touched bin/dash-keymap.sh; then
   # The pre-sync conf, straight from --from — never from a shell var a caller
   # might have lost (#295) or a zsh-mangled ref (#325).
   beforeconf=$(mktemp "${TMPDIR:-/tmp}/fleet-apply-conf.XXXXXX")
