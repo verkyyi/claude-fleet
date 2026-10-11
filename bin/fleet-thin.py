@@ -109,6 +109,13 @@ RESET = (b"\x1b[?1049l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1005l\x1b[?1006l\x1
          b"\x1b[?1004l\x1b[?2004l\x1b[?25h\x1b[0m\r\n")
 
 
+def quiet(attrs):
+    """termios attrs with echo off (ISIG and the rest kept)."""
+    a = list(attrs)
+    a[3] &= ~(termios.ECHO | termios.ECHONL | getattr(termios, "ECHOCTL", 0))
+    return a
+
+
 def env_num(name, default):
     try:
         return float(os.environ.get(name) or default)
@@ -592,7 +599,7 @@ class Thin:
                  "-o", "ServerAliveInterval=2", "-o", "ServerAliveCountMax=3"]
         cmd = self.command(j, extra, self.remote(token, route))
         t0 = time.time()
-        rc, first_byte, first_view = self.pump(cmd, token)
+        rc, first_byte, first_view = self.pump(cmd, token, reconnect)
         up = first_view is not None or time.time() - t0 >= env_num("FLEET_THIN_UP_SECS", 10)
         tlog("connect", home, route, pick, ms(t0, first_byte) if first_byte else "",
              ms(t0, first_view) if first_view else "", rc, "quit" if self.quit else ("up" if up else "never up"))
@@ -600,12 +607,16 @@ class Thin:
             self.resume = True
         return rc, up, ""
 
-    def pump(self, cmd, token):
-        """ssh under our pty: (rc, time of the first byte | None, time of the first valid cur | None)."""
+    def pump(self, cmd, token, reconnect=False):
+        """ssh under our pty: (rc, time of the first byte | None, time of the first valid cur | None).
+        The child's pty does not echo (ssh puts it raw once the session is up; until
+        then a key would print through it — #3061), and on a reconnect what the
+        person types before the child's first byte is dropped: never sent to a
+        session that is not there yet."""
         tty_in = self.attrs is not None
         if tty_in:
             master, slave = os.openpty()
-            termios.tcsetattr(slave, termios.TCSANOW, self.attrs)
+            termios.tcsetattr(slave, termios.TCSANOW, quiet(self.attrs))
             try:
                 fcntl.ioctl(slave, termios.TIOCSWINSZ, fcntl.ioctl(0, termios.TIOCGWINSZ, b"\0" * 8))
             except OSError:
@@ -699,6 +710,8 @@ class Thin:
                     if not data:
                         # the terminal is gone: as a SIGHUP
                         self.hangup(signal.SIGHUP, None)
+                    if reconnect and first_byte is None and b"\x03" not in data:
+                        continue   # the line still down: a mouse report / a key goes nowhere (⌃C still stops the ssh)
                     if data == b"\x16" and not (rw and (rw.buf or rw.held)):
                         writeall(master, self.ctrl_v())
                         continue
@@ -713,7 +726,10 @@ class Thin:
                         pass
         finally:
             self.child, self.master = 0, None
-            self.restore_tty()
+            # cooked again, but echo stays off: the loop is between connections until
+            # the next pump's setraw — a key or a mouse report in the meantime (the hub
+            # probe, the next fleet-connect.py) must not print (#3061); run() restores
+            self.mute()
             try:
                 os.close(master)
             except OSError:
@@ -729,10 +745,8 @@ class Thin:
         (pump's flush), never sent to the session."""
         if self.attrs is None:
             return
-        a = list(self.attrs)
-        a[3] &= ~(termios.ECHO | termios.ECHONL | getattr(termios, "ECHOCTL", 0))
         try:
-            termios.tcsetattr(0, termios.TCSANOW, a)
+            termios.tcsetattr(0, termios.TCSANOW, quiet(self.attrs))
         except termios.error:
             pass
 
@@ -790,6 +804,7 @@ class Thin:
             args.append(self.want)
         os.environ["FLEET_CLIENT_UPDATED"] = "1"
         self.profile(False)
+        self.restore_tty()   # echo back first: the new client reads these attrs as the terminal's own
         os.execv(args[0], args)
 
     # -- no fleet of yours there: the first session (#3054) --------------
