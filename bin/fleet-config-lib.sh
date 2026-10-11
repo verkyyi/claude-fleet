@@ -470,6 +470,7 @@ fcfg_label_i18n() {
     FLEET_TRASH_PURGE_MAX_LOAD) printf 'Trash 清理负载上限（每核心）' ;;
     FLEET_WORKTREE_SETUP) printf 'Worktree setup 命令' ;;
     FLEET_WORKTREE_SETUP_TIMEOUT) printf 'Worktree setup 超时' ;;
+    FLEET_DEPS_SHARE) printf '共享依赖库' ;;
     FLEET_BASE_DEPS) printf '保持 base deps 最新' ;;
     FLEET_BASE_DEPS_TIMEOUT) printf 'Base deps 安装超时' ;;
     FLEET_SCRATCH_POOL) printf '预热 scratch 会话' ;;

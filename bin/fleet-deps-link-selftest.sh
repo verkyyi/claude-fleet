@@ -77,6 +77,9 @@ export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL="$WORK/home/.gitconfig"
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
 export FLEET_WORKTREE_SETUP_LOG="$WORK/setup.log"
 unset FLEET_WORKTREE_ROOT FLEET_WORKTREE_SETUP FLEET_WORKTREE_SETUP_TIMEOUT FLEET_MAIN TMUX TMUX_PANE
+# The built-in clone of #3403 runs on every new worktree too; this test is about
+# the symlink hook alone, so it is off here (fleet-deps-share-selftest.sh has it).
+export FLEET_DEPS_SHARE=0
 
 # shellcheck source=/dev/null
 . "$LIB"
