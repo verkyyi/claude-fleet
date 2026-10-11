@@ -4,6 +4,8 @@ import argparse
 import json
 import re
 
+# the disk runtime the machine updater moves (#3212; the image only seeds it)
+RUNTIME = '/var/db/fleet-node/runtime'
 
 def resources(image, hub, storage_class, namespace='fleet-workers', size='100Gi'):
     if not re.fullmatch(r'[^\s]+@sha256:[a-f0-9]{64}', image):
@@ -30,9 +32,12 @@ def resources(image, hub, storage_class, namespace='fleet-workers', size='100Gi'
         'volumeMounts': mounts + [{'name': 'join', 'mountPath': '/run/fleet-join', 'readOnly': True}],
         'startupProbe': {'exec': {'command': ['test', '-f', '/run/fleet-node-ready']},
                          'periodSeconds': 10, 'failureThreshold': 90},
-        'readinessProbe': {'exec': {'command': ['python3', '-I', '/opt/claude-fleet/current/bin/fleet-node-linux.py',
+        'readinessProbe': {'exec': {'command': ['python3', '-I', RUNTIME + '/current/bin/fleet-node-linux.py',
                                                'ready']}, 'periodSeconds': 15},
-        'livenessProbe': {'exec': {'command': ['python3', '-I', '/opt/claude-fleet/current/bin/fleet-node-linux.py', 'live']}, 'periodSeconds': 30, 'failureThreshold': 4},
+        # the resident loop only (#3212): a supervisor restarting onto a new
+        # release is never a reason to restart the container
+        'livenessProbe': {'exec': {'command': ['python3', '-I', '/usr/local/lib/fleet-image-stage.py', 'live']},
+                          'periodSeconds': 30, 'failureThreshold': 4},
     }
     meta = {'name': 'fleet-linux', 'namespace': namespace}
     return [

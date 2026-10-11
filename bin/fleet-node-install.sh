@@ -179,7 +179,9 @@ if [ -n "$TOKEN" ] && [ "$(envval CCQUOTA_HUB_URL)" = "$HUB" ] \
    && [ "$(req GET /v1/node/self "$WORK/self" "" "$TOKEN")" = 200 ]; then
   skip 加入 "这台机器已加入 ${HUB}（入口仍认 $ENVF 里的令牌）"
 else
-  if [ "${FLEET_NODE_UPDATE_OWNER:-hub}" = image ] && [ -n "$TOKEN" ]; then
+  # a container (image-owned, or a self-updating one on its volume — #3212) is
+  # never re-enrolled behind its operator's back
+  if { [ "${FLEET_NODE_UPDATE_OWNER:-hub}" = image ] || [ "${FLEET_NODE_SERVICE:-}" = foreground ]; } && [ -n "$TOKEN" ]; then
     fail 加入 "persisted machine identity could not be verified; retry connectivity or repair enrollment explicitly (never re-enroll a pod automatically)"
   fi
   if [ -z "$CODE" ]; then

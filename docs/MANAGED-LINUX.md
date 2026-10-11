@@ -182,15 +182,40 @@ which adds the line to a store written before it, token untouched. Check it with
 
 ## Upgrade and recovery
 
-Kubernetes owns the ACK runtime version. The supervisor omits its updater task,
-and a manual updater tick refuses to resume even an old persisted switch while
-`FLEET_NODE_UPDATE_OWNER=image`. The StatefulSet uses `OnDelete`: update its image
-digest, arrange a suitable restart, and delete the pod normally. Roll back by
-restoring the previous image digest and restarting again. The PVC stays.
-Credential pool synchronization continues independently of runtime updates.
-Each image activation relinks every login's runtime and reapplies its hooks and
-settings before restoring sessions. A failed apply remains pending for retry;
-the previous image's files do not need to exist on the replacement container.
+The machine follows `stable` by itself, with the same updater as a Mac
+(`fleet-node-update.py`, docs/MANAGED-NODE.md §7) — issue #3212. The runtime lives
+on the persistent volume, `FLEET_NODE_ROOT=/var/db/fleet-node/runtime`
+(`<sha>/`, `current`, `.prev` — the Mac `<root>`'s shape); the image's release is
+only a **seed** at `/opt/claude-fleet/seed/<sha>`. The entrypoint
+(`/usr/local/lib/fleet-image-stage.py boot`) copies it onto the volume when the
+volume has no `current`, or when the image's signed `seq` is newer than the
+disk's and the updater is at rest (`update.json` phase idle), then starts
+`<disk current>/bin/fleet-node-linux.py foreground`. A container restart never
+puts the image's older version back (BREAK-IT `linux-image-pins-old`).
+
+`FLEET_NODE_UPDATE_OWNER=node` (the image's default) keeps the supervisor's
+`update` task and its restart request, and the machine's node program lists
+`CapRelease`, so a new stable starts the update at once. A switch stages the
+release, moves `current`, re-links every login's `~/.claude/fleet` and asks the
+supervisor to restart; `foreground` is a resident loop that starts the supervisor
+again from the re-read `current` — the container, its tmux servers and every
+session stay. The machine doctor after the switch decides: a FAIL the old version
+did not have rolls everything back and skips that release. `/usr/local/bin`'s
+tmux / claude / codex / ccquota and the image's PATH point at the disk's
+`current/`, never the image's. The hub's `CCQUOTA_FLEET_RELEASE_PLATFORMS` lists
+`linux-amd64`, so a release without the Linux artifacts is neither built nor
+moved to stable (`fleet-stable.sh move` refuses, `artifacts:`).
+
+The image is rebuilt only when the system layer changes (Debian, OpenSSH,
+python). The StatefulSet uses `OnDelete`: update its image digest, arrange a
+suitable restart, and delete the pod normally — a newer image's seed is taken on
+that start, an older one is ignored. `FLEET_NODE_UPDATE_OWNER=image` turns the
+self-update off: the supervisor omits its updater task (a manual tick refuses to
+resume even a persisted switch), the boot always puts the image's version in
+`current`, and credential-pool synchronization runs as its own task. The PVC
+stays either way. Each activation relinks every login's runtime and reapplies its
+hooks and settings before restoring sessions; a failed apply remains pending for
+retry.
 
 On SIGTERM, the entrypoint saves every login's Fleet session snapshot before stopping the
 supervisor. On startup it restores snapshots through the existing restore
@@ -200,8 +225,11 @@ container start has a new boot ID, preventing adoption of persisted PIDs that
 now identify unrelated processes.
 
 Readiness requires completed bootstrap, a healthy supervisor, its proxy/node
-agent/sshd children, and no refused login lane. Liveness checks the supervisor
-only; a hub outage should not restart an otherwise healthy pod.
+agent/sshd children, and no refused login lane. Liveness checks the resident
+loop only (its heartbeat, `/run/fleet-node-loop`): neither a hub outage nor a
+supervisor restarting onto a new release restarts the pod. A supervisor that
+dies more than 10 times in 10 minutes ends the loop, and Kubernetes restarts
+the container.
 
 ## Acceptance evidence
 
