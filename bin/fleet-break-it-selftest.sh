@@ -4490,7 +4490,7 @@ drill_train_hub_stable_split() {
   ver "$c3"
   [ "$(plan "$c4")" = true ] || { WHY="a train whose deploy/k8s changed does not deploy the hub: $(printf '%s' "$out" | tr '\n' '|')"; return 1; }
   printf '{"version":"prod-dev"}\n' > "$d/hub/version"
-  [ "$(plan "$c4")" = true ] || { WHY="a hub whose commit is unknown is not redeployed: $(printf '%s' "$out" | tr '\n' '|')"; return 1; }
+  [ "$(plan "$c4")" != true ] && [ "$rc" != 0 ] || { WHY="a hub whose commit is unknown is deployed blind (#3319: red instead): $(printf '%s' "$out" | tr '\n' '|')"; return 1; }
   [ "$(RELEASE_TRAIN_HUB=off plan "$c4")" = false ] || { WHY="RELEASE_TRAIN_HUB=off still deploys from the train"; return 1; }
   # --train: the gates read THIS run's jobs — a red macOS job refuses, no check-runs are read
   printf '#!/bin/sh\ncase "$*" in *actions/runs/*/jobs*) cat "%s/jobs";; *) echo "unexpected gh $*" >&2; exit 9;; esac\n' "$d" > "$d/shim/gh"; chmod +x "$d/shim/gh"
