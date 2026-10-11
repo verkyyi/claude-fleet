@@ -138,7 +138,7 @@ out=$(bash "$FB" send --attach "入口挂了 $S_TEXT"); rc=$?
 has '先存在这台机器上' "$out" "D kept sentence"
 [ "$(outbox_n)" = 1 ] || fail "D outbox should hold 1, holds $(outbox_n)"; ok
 grep -rqF -e "$S_TEXT" -e "$S_LOG" -e "$S_SCREEN" "$FLEET_CONF_DIR/feedback-outbox" && fail "D the outbox holds a secret"; ok
-[ "$(stat -f '%Lp' "$FLEET_CONF_DIR/feedback-outbox" 2>/dev/null || stat -c '%a' "$FLEET_CONF_DIR/feedback-outbox")" = 700 ] \
+[ "$(python3 -c 'import os, sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777)[2:])' "$FLEET_CONF_DIR/feedback-outbox")" = 700 ] \
   || fail "D the outbox is not 0700"; ok
 e=$(ls "$FLEET_CONF_DIR/feedback-outbox"); printf 'wid-1\tfleet\t@3\tyes\n' > "$FLEET_CONF_DIR/feedback-outbox/$e/origin"
 out=$(bash "$FB" outbox); rc=$?    # still away: kept
