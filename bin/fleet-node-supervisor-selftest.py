@@ -623,6 +623,19 @@ class E_Status(Sandbox):
         r = self.run_sup("status", "--check")
         self.assertEqual(r.returncode, 1)
         self.assertIn("DOWN", r.stdout)
+        # issue #3100: launchd restarted it, the new one never wrote a heartbeat —
+        # alive and silent is WEDGED, not DOWN (another root's daemon is not ours)
+        ps = os.path.join(self.d, "ps.txt")
+        with open(ps, "w") as f:
+            f.write("4242 1 /usr/bin/python3 -I /elsewhere/current/bin/fleet-node-supervisor.py run\n")
+        seam = {"FLEET_NODE_PS_CMD": ps, "FLEET_NODE_HEARTBEAT_STALE": "0"}
+        self.assertEqual(self.run_sup("status", "--check", env=seam).returncode, 1)
+        with open(ps, "a") as f:
+            f.write("4343 1 /usr/bin/python3 -I %s/bin/fleet-node-supervisor.py run\n" % self.env["FLEET_NODE_RUNTIME"])
+            f.write("4444 4343 /usr/bin/python3 -I %s/bin/fleet-node-supervisor.py run\n" % self.env["FLEET_NODE_RUNTIME"])
+        r = self.run_sup("status", "--check", env=seam)
+        self.assertEqual(r.returncode, 5, r.stdout)
+        self.assertIn("WEDGED — pid 4343 alive but it never wrote a heartbeat", r.stdout)
 
 
 class F_Trust(Sandbox):

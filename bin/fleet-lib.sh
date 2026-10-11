@@ -5865,6 +5865,28 @@ _fleet_node_broker() {
   case "$out" in http://127.0.0.1:*"	"fcpn1.*) printf '%s\n' "$out" ;; *) return 1 ;; esac
 }
 
+# fleet_node_pair [<hub url>] → `<url>TAB<token>`: where this login's NODE token
+# is good, and the token (issue #3106; #2665: a token is good only at the address
+# it came with). node.env readable → its CCQUOTA_TOKEN at its CCQUOTA_HUB_URL
+# (else <hub url>); separated (issue #1971) → the credential proxy's hub broker
+# pair, whose fcpn1. the proxy swaps for the node token on the way out. rc 1 =
+# no node token here. Keep the answer in a shell variable — never export it,
+# never put the token on an argv (curl -K - takes the header on stdin).
+fleet_node_pair() {
+  local f t u
+  f=$(fleet_node_env_file)
+  if [ -r "$f" ]; then
+    t=$(sed -n 's/^CCQUOTA_TOKEN=//p' "$f" | head -n 1); t=${t#[\"\']}; t=${t%[\"\']}
+    u=$(sed -n 's/^CCQUOTA_HUB_URL=//p' "$f" | head -n 1); u=${u#[\"\']}; u=${u%[\"\']}
+    u=${u:-${1:-}}
+    [ -n "$t" ] && [ -n "$u" ] || return 1
+    printf '%s\t%s\n' "${u%/}" "$t"
+    return 0
+  fi
+  _fleet_node_separated || return 1
+  _fleet_node_broker
+}
+
 # fleet_spawn_node_default → what a spawn follows when neither --node nor
 # FLEET_SPAWN_NODE names a machine (issue #1721, EPIC #1718 C3): `local` on a
 # person's own computer (node.env CCQUOTA_FLEET_PERSONAL=1 while compute is on —

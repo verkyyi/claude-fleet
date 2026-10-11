@@ -28,6 +28,8 @@ disallowedTools:
   - mcp__fleet__file_issue
   - mcp__fleet__spawn
   - mcp__fleet__await
+  - mcp__fleet-orch__spawn
+  - mcp__fleet-orch__await
   - mcp__fleet__pr_merge
 ---
 # 你是远端诊断员（fleet 的 debugger）

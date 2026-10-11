@@ -23,7 +23,48 @@ Caps, claim dedup, the origin gate and every guard live in the scripts — once.
 No hub is needed for any tool (EPIC #1813 rule 1): with no hub configured all of
 them are listed and run locally.
 
+## Two groups — `fleet` and `fleet-orch` (issue #3113, EPIC #3111 C2)
+
+The same script serves two servers. Every session mounts the **core**, `fleet`
+(`conf/mcp-worker.json`): what a session works with — `status` · `repos` · `agents` ·
+`brief` · `gh` · `comment` · `file_issue` · `ask` · `report` · `pr_verdict` ·
+`pr_merge` · `evidence` · `handoff` · `context` · `transfer` · `where` · `open` ·
+`show` · `set_reap` · `whats_new` · the debugger's `debug_*`. The **dispatch group** —
+`spawn` · `await` · `children` · `answer_dialog` · `send` (C3 adds `take_role`) — is
+listed only by `fleet-mcp.py --group orch`, the server **`fleet-orch`**
+(`conf/mcp-orch.json`, byte for byte `plugins/fleet-orchestrate/.mcp.json`), which
+only the fleet-orchestrate plugin registers: `/plugin install
+fleet-orchestrate@claude-fleet`. Claude shows its tools as `mcp__fleet-orch__<tool>`
+(a plugin's server is namespaced by Claude Code — `mcp__plugin_fleet-orchestrate_fleet-orch__<tool>`;
+Codex shows them on its `fleet-orch` server).
+
+- **Not installed ⇒ not there.** A plain session's `fleet` lists no dispatch tool.
+  `file_issue` with `spawn: true` files the issue as asked, starts nobody, and adds
+  `spawn: 派单要装插件：/plugin install fleet-orchestrate@claude-fleet …` to stderr.
+  "Installed" = the launcher's bridge said so (`FLEET_MCP_ORCH=1`, forwarded to Codex
+  by name) or `enabledPlugins["fleet-orchestrate@claude-fleet"]` is `true` in Claude
+  Code's own settings (user, then this directory's project files) — the fleet keeps
+  no record of its own.
+- **The bridge, until C7.** The seats the fleet still opens itself — the
+  orchestrator and the steward (`@fleet_role`), an EPIC driver (`--role epic-driver` /
+  `@fleet_role_def`) — get `fleet-orch` from their launcher (`bin/fleet-claude.sh`,
+  `bin/fleet-codex.sh`, both asking `fleet-mcp.py --bridge-seat`), so a running batch
+  keeps dispatching. The debugger never does: its definition disallows spawn / await.
+- **Old sessions keep their tools (#2068, one version — `# compat-1v`).** `fleet`
+  still ANSWERS every dispatch-group call under its old name; the call log marks it
+  `road=legacy`. A server that takes over from a pre-group version (#1898's exec —
+  the handover carries no `list`) keeps listing all 28 tools and passes that on, so
+  Claude Code's re-list after `tools/list_changed` takes nothing away mid-session.
+  `fleet-oldcfg-replay` counts a tool the new server no longer lists but still
+  answers (its `--probe`) as kept.
+- `fleet-mcp.py [--group orch] --list` prints a server's list, one name per line;
+  `--mount codex --group orch` is Codex's `-c` value for `fleet-orch`;
+  `hooks/bash-guard.py`'s `_DIRECT_TOOLS` names each script's tool on its own server.
+
 ## Tools
+
+The first table's `children` · `spawn` · `await` · `send` and `answer_dialog` (below)
+are the dispatch group's — listed by `fleet-orch`, answered by `fleet` as legacy.
 
 | tool | arguments | runs | exit codes |
 |---|---|---|---|
@@ -427,7 +468,11 @@ REAL `fleet-comment.sh` (the byte-identical comment) and `fleet-report-parent.sh
 --dry-run` (the same envelope, on an isolated tmux server); L the C9 tools the same way,
 and `handoff arm` answering before its detached helper ends.
 `bin/skill-tools-selftest.sh` — no worker-run skill step names a `~/.claude/fleet/bin`
-script, and every `mcp__fleet__<tool>` a skill names is a real tool.
+script, and every `mcp__fleet__<tool>` / `mcp__fleet-orch__<tool>` a skill names is a
+tool THAT server lists.
+`bin/fleet-mcp-selftest.sh` Q — the two groups: `fleet-orch` lists the dispatch group,
+`fleet` answers it `road=legacy`, a pre-group takeover keeps all 28, `file_issue`
+spawn follows the group, one server definition for Codex and the plugin.
 `bin/fleet-mcp-selftest.sh` J — the credential: valid / expired / forged /
 tampered / another pane / another fleet / revoked, migration, renewal, no leak.
 `bin/fleet-mcp-selftest.sh` M — a new version between calls: the in-flight call

@@ -45,7 +45,7 @@ person's language.
 Before deciding the shape, look at the whole fleet — every call is read-only:
 
 - `mcp__fleet__agents` — the live sessions here, their issues and states;
-- `mcp__fleet__children` — the sessions **you** started and how each ended;
+- `mcp__fleet-orch__children` — the sessions **you** started and how each ended;
 - `mcp__fleet__repos` — the repos this fleet hosts (a task names one of them);
 - `mcp__fleet__gh` (`kind: issue|pr|checks`) — an issue's or PR's state off the local cache;
 - the other machines' sessions: the hub's `fleet_sessions` (`bin/fleet-hub-sessions.sh`
@@ -82,12 +82,12 @@ for ~9 glyphs; the mechanism, the script, the error line go in the body.
 One worker per issue, one issue per worker: never chase the change yourself, never take
 over a worker's issue. A worker's outcome comes back to you as a `[child-report]` — note
 it, tell the person what landed in one line if they are here, and do not reply to the
-report. `mcp__fleet__children` is the one place to read them all.
+report. `mcp__fleet-orch__children` is the one place to read them all.
 
 A worker never spawns (issue #2960) — the second level is yours. A `BLOCKED` report that
 names an issue the worker filed under its own (`parent: <its issue>`) is a question for
-you: worth it now → spawn that issue yourself (`mcp__fleet__spawn`, it reports here) and,
-once it lands, tell the blocked worker to go on (`mcp__fleet__send` `issue:<N>`); not now
+you: worth it now → spawn that issue yourself (`mcp__fleet-orch__spawn`, it reports here) and,
+once it lands, tell the blocked worker to go on (`mcp__fleet-orch__send` `issue:<N>`); not now
 → the queue, and tell the worker so. A red base a worker files is the steward's: it spawns
 the fixer on its own.
 
@@ -107,7 +107,7 @@ How to say it:
 
 - a quick task: add the label — `mcp__fleet__file_issue` with `labels: "agent:codex"` —
   and its spawn opens a Codex session (an existing issue: put the label on it, then
-  `mcp__fleet__spawn`); `agent:claude` pins Claude on a Codex fleet;
+  `mcp__fleet-orch__spawn`); `agent:claude` pins Claude on a Codex fleet;
 - an EPIC: `agent=codex` in the charter's `<!-- fleet:epic … -->` marker for the whole
   batch, or a member row ending ` (codex)` for one member (`/fleet-epic-plan`).
 

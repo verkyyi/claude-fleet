@@ -107,15 +107,26 @@ w=$(wait_spin w1 'done' 5000)
 sleep 1.5
 
 # --- IDLE ----------------------------------------------------------------------
+# Also count the quiet re-reads (the WFMT read, the only call naming
+# @worker_lifecycle) in the same window: START's bound is one re-read period.
+_ia=$(wc -l < "$CALLS")
 r=$(rate 6)
+reads=$(tail -n +$((_ia + 1)) "$CALLS" | grep -c '@worker_lifecycle')
 if le "$r" 1.3; then ok "IDLE: nothing animating → $r tmux calls/s (≤ ~1)"
 else fail "IDLE: nothing animating → $r tmux calls/s, want ≤ ~1" "$(tail -8 "$CALLS")"; fi
 
 # --- START (no marker: a writer that is not the hook) ---------------------------
 tl set-window-option -t "$LBL:w1" @claude_state working
 w=$(wait_spin w1 spin 3000)
-if [ "$w" != timeout ] && [ "$w" -le 1600 ]; then ok "START: working → spinning after ${w}ms (design ≤ 1000)"
-else fail "START: working → spinning after ${w}ms, want ≤ ~1000"; fi
+# The 1s re-read is counted in frame-EQUIVALENTS (IDLE_EVERY ticks), so on a loaded
+# runner — every tick's work on top of its sleep — the real period stretches: a
+# macOS run read every ~1.5s and saw 1710ms here (issue #3109). The bound is one
+# re-read period AS MEASURED during IDLE plus a tick's slack, never below the old
+# 1600; a daemon that stopped re-reading quiet fleets (reads=0) still reds.
+period=$(( reads > 0 ? 6000 / reads : 6000 ))
+lim=$(( period * 5 / 4 + 400 )); [ "$lim" -ge 1600 ] || lim=1600
+if [ "$reads" -gt 0 ] && [ "$w" != timeout ] && [ "$w" -le "$lim" ]; then ok "START: working → spinning after ${w}ms (re-read every ~${period}ms, bound ${lim}; design ≤ 1000)"
+else fail "START: working → spinning after ${w}ms, want ≤ ~${lim} (quiet re-reads in IDLE: $reads)"; fi
 
 # --- ANIM ----------------------------------------------------------------------
 g1=$(spin_of w1); sleep 0.4; g2=$(spin_of w1)

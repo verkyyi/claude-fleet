@@ -126,13 +126,17 @@ FLEET_NODE_USERS, plus
   FLEET_NODE_UPDATE_TARGET   the release to go to, instead of asking
   FLEET_NODE_UPDATE_SETTLE   seconds between the switch and the verify (30)
   FLEET_NODE_UPDATE_PLATFORM `<os>-<arch>` of the artifacts (default this machine's)
-  FLEET_NODE_UPDATE_KEEP_SECS how long a retired version stays (604800)
+  FLEET_NODE_UPDATE_KEEP_SECS how long a retired version stays (3600) — never one in use:
+                             current, .prev, the target, the daemon's, a login's live
+                             tree or .prev, or one a running process names (#3100)
+  FLEET_NODE_VERSIONS_WARN   the doctor's `versions` row WARNs past this many (8)
   FLEET_NODE_FETCH_TIMEOUT   seconds one tick's fetch may run (1500; 0 = no limit — the
                              installer's tick), a resumable fetch goes on next tick
   FLEET_NODE_UPDATE_LIB      the fleet-lib.sh the EPIC gate sources (default <current>/bin)
   FLEET_NODE_UPDATE_FOLLOW   0 = never move a login's install (default 1)
   FLEET_NODE_FOLLOW_TIMEOUT  seconds one login's link-tree + apply may run (1200)
-  FLEET_INSTALL_VERSIONS_KEEP_SECS  how long a login's retired version tree stays (604800)
+  FLEET_INSTALL_VERSIONS_KEEP_SECS  how long a login's retired version tree stays (604800);
+                             one whose release the machine pruned goes at once
 """
 from __future__ import print_function
 
@@ -1087,20 +1091,23 @@ class Updater(object):
         return notes
 
     def linked_releases(self):
-        """Every release some managed login's version tree still links into
-        (issue #2774): a retired <root>/<sha> one of them names is in use."""
+        """The releases a managed login stands on (issue #2774): the tree its
+        ~/.claude/fleet names and its .prev. A retired tree of its (kept a while
+        for the sessions started from it) holds nothing by itself — a running
+        process that names it is process_releases' (issue #3100)."""
         used = set()
         for login in fns.managed_accounts(self.p.sup):
             ident = fns.account_ident(login)
             if ident is None:
                 continue
-            vers = os.path.join(ident[2], ".claude", "fleet.versions")
-            try:
-                names = os.listdir(vers)
-            except OSError:
-                continue
-            for n in names:
-                m = linked_mark(os.path.join(vers, n))
+            live = os.path.join(ident[2], ".claude", "fleet")
+            vers = live + ".versions"
+            trees = [os.path.realpath(live)] if os.path.islink(live) else []
+            pv = (_read_lines(os.path.join(vers, ".prev")) or [""])[0]
+            if pv:
+                trees.append(os.path.join(vers, pv))
+            for d in trees:
+                m = linked_mark(d)
                 if m and os.path.realpath(m["root"]) == os.path.realpath(self.p.root):
                     used.add(m["sha"])
         return used
@@ -1240,20 +1247,57 @@ class Updater(object):
         return self.end("committed", "%s%s" % (self.st["to"][:12],
                                               (" (no previous version to go back to; FAIL: %s)" % ", ".join(new)) if new else ""))
 
+    def keep_set(self):
+        """{sha: why} — the releases prune never takes (issue #3100): `current`,
+        `.prev`, a switch under way, the daemon's own, every managed login's live
+        tree and its .prev, and any a running process names by path."""
+        keep = {}
+        for sha, why in ((link_sha(self.p.current), "current"), (link_sha(self.p.prev), ".prev"),
+                         (self.st.get("to") if self.st.get("phase") != "idle" else None, "switching"),
+                         (self.st.get("from") if self.st.get("phase") != "idle" else None, "switching"),
+                         ((self.st.get("target_seen") or {}).get("sha"), "target"),
+                         (((read_json(self.p.sup.state_file, {}) or {}).get("supervisor") or {}).get("runtime"),
+                          "daemon")):
+            if sha:
+                keep.setdefault(sha, why)
+        for sha in self.linked_releases():
+            keep.setdefault(sha, "login")
+        for sha in process_releases(self.p.root):
+            keep.setdefault(sha, "process")
+        return keep
+
     def prune(self):
-        keep = {link_sha(self.p.current), link_sha(self.p.prev)}
-        ttl = env_num("FLEET_NODE_UPDATE_KEEP_SECS", 604800)
-        used = None
+        """Every tick: a release no one stands on (keep_set) goes once it has
+        been retired FLEET_NODE_UPDATE_KEEP_SECS (1 h). A version dir the record
+        never named (staged, skipped, from an older updater) starts its clock
+        now — so the root holds a bounded handful, never a week of releases."""
+        if not os.path.isdir(self.p.root):
+            return []
+        keep = self.keep_set()
+        ttl = env_num("FLEET_NODE_UPDATE_KEEP_SECS", 3600)
+        gone = []
+        for e in sorted(os.listdir(self.p.root)):
+            if SHA_RE.match(e) and len(e) == 40 and os.path.isdir(self.p.rel(e)) \
+                    and not os.path.islink(self.p.rel(e)) and e not in keep:
+                self.st["retired"].setdefault(e, now())
         for sha, at in list(self.st["retired"].items()):
-            if sha in keep or now() - at < ttl:
+            if sha in keep:
                 continue
-            # a login's version tree still links into it (issue #2774): kept
-            used = self.linked_releases() if used is None else used
-            if sha in used:
+            if not os.path.isdir(self.p.rel(sha)):
+                del self.st["retired"][sha]
+                continue
+            if now() - at < ttl:
                 continue
             shutil.rmtree(self.p.rel(sha), ignore_errors=True)
+            if os.path.isdir(self.p.rel(sha)):
+                continue    # half gone (a file root cannot drop): the next tick again
             del self.st["retired"][sha]
+            gone.append(sha)
             self.log("removed retired version %s" % sha[:12])
+        self.prune_tools()
+        return gone
+
+    def prune_tools(self):
         used = set()
         for e in os.listdir(self.p.root) if os.path.isdir(self.p.root) else []:
             bd = os.path.join(self.p.root, e, "tools", "bin")
@@ -1271,6 +1315,18 @@ class Updater(object):
 
     # -- one tick
     def tick(self):
+        rc = self._tick()
+        # every tick at rest, not only after a switch (issue #3100: a week of
+        # releases at ~20 a day was 56 dirs, 18 GB on mini2)
+        if self.st.get("phase") == "idle" and env("FLEET_NODE_UPDATE_OWNER", "hub") != "image":
+            try:
+                self.prune()
+                self.save()
+            except OSError as e:
+                self.log("prune: %s" % e)
+        return rc
+
+    def _tick(self):
         # Image ownership wins BEFORE recovering any persisted partial switch.
         if env("FLEET_NODE_UPDATE_OWNER", "hub") == "image":
             print("image-managed: runtime updates belong to Kubernetes")
@@ -1348,6 +1404,47 @@ class StageError(Exception):
     pass
 
 
+def process_releases(root):
+    """The release shas a running process names by path — `<root>/<sha>/…` or a
+    login's `fleet.versions/<sha>[-linked]/…` (issue #3100): a session or daemon
+    started from a version keeps it until it ends. One `ps`; FLEET_NODE_PS_CMD
+    is the selftests' seam (a file of `ps` lines)."""
+    seam = os.environ.get("FLEET_NODE_PS_CMD")
+    try:
+        if seam:
+            with open(seam) as f:
+                out = f.read()
+        else:
+            out = subprocess.check_output(["ps", "-axww", "-o", "command="], stderr=subprocess.DEVNULL,
+                                          universal_newlines=True)
+    except Exception:
+        return set()
+    roots = sorted({root.rstrip("/"), os.path.realpath(root).rstrip("/")})
+    pat = re.compile(r"(?:%s|fleet\.versions)/([0-9a-f]{40})(?:-linked)?(?:/|\s|$)"
+                     % "|".join(re.escape(r) for r in roots))
+    return set(pat.findall(out))
+
+
+def runtime_usage(p):
+    """(count, bytes) of the release dirs under the root — `du -sk`, one call."""
+    dirs = [p.rel(e) for e in (os.listdir(p.root) if os.path.isdir(p.root) else [])
+            if SHA_RE.match(e) and os.path.isdir(p.rel(e)) and not os.path.islink(p.rel(e))]
+    if not dirs:
+        return 0, 0
+    rc, out, _ = run(["du", "-sk"] + dirs, timeout=120)
+    kb = sum(int(l.split()[0]) for l in out.splitlines() if l.split() and l.split()[0].isdigit())
+    return len(dirs), kb * 1024
+
+
+def versions_row(p):
+    """The root's version count and size (issue #3100): WARN past
+    FLEET_NODE_VERSIONS_WARN (8) — prune keeps current, .prev and what is in use."""
+    n, b = runtime_usage(p)
+    lvl = "WARN" if n > env_num("FLEET_NODE_VERSIONS_WARN", 8) else "PASS"
+    return (lvl, "versions", "%d release(s) under %s · %.1f GB%s" % (
+        n, p.root, b / 1e9, " — more than prune should keep (update.log says why)" if lvl == "WARN" else ""))
+
+
 # --------------------------------------------------------------- the doctor -----
 def tool_version(path, args):
     rc, out, err = run([path] + args, timeout=30)
@@ -1421,7 +1518,7 @@ def doctor_rows(p):
     code, word = fns.health(p.sup, st)
     if code == 2:
         rows.append(("WARN", "daemon", "com.claude-fleet.node not installed"))
-    elif code == 1:
+    elif code in (1, 5):    # 5: alive but silent — no task runs (issue #3100)
         rows.append(("FAIL", "daemon", word))
     else:
         rt = (st.get("supervisor") or {}).get("runtime")
@@ -1470,6 +1567,7 @@ def doctor_rows(p):
     if hr:
         rows.append(hr)
     rows.append(shell_row(p, st))
+    rows.append(versions_row(p))
     # the drill's deliberate failure (issue #2336): a release carrying this marker
     # fails its own doctor, so the updater must roll it back. On trunk, so a
     # non-managed install that follows stable onto it moves forward off it again.
@@ -1987,7 +2085,13 @@ def _prune_login_versions(live, vers):
         d = os.path.join(vers, n)
         if n.startswith(".") or n in keep or os.path.islink(d) or not os.path.isdir(d):
             continue
-        if not linked_mark(d):
+        m = linked_mark(d)
+        if not m:
+            continue
+        if not os.path.isdir(os.path.join(m["root"], m["sha"])):
+            # its release was pruned (issue #3100): nothing can run from it
+            shutil.rmtree(d, ignore_errors=True)
+            _retire(vers, n)
             continue
         t = (_read_lines(os.path.join(vers, ".retired", n)) or [""])[0]
         if not t.isdigit():

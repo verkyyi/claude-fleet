@@ -180,6 +180,33 @@ restore bin/fleet-mcp.py; N7=$(commit "service back")
 run --old stable --new "$N7"
 eq "E: restored ⇒ GREEN" 0 "$RC" "$OUT"
 
+# --- E2. unlisted but still answered (issue #3113): the new service lists only three of
+# the four, yet its --probe names a handler for every one — an old session's call is
+# served, so that is no finding; a tool with neither stays red.
+python3 - "$REPO/bin/fleet-mcp.py" <<'PY'
+import sys
+p = sys.argv[1]; s = open(p).read()
+s = s.replace('TOOLS = ["status", "spawn", "await", "brief"]',
+              'TOOLS = ["status", "spawn", "await", "brief"]\nLISTED = ["status", "await", "brief"]\n'
+              'if sys.argv[1:2] == ["--probe"]:\n    print(json.dumps({"tools": TOOLS})); sys.exit(0)', 1)
+open(p, "w").write(s)
+PY
+sed -i.bak 's/for t in TOOLS\]/for t in LISTED]/' "$REPO/bin/fleet-mcp.py"; rm -f "$REPO/bin/fleet-mcp.py.bak"
+grep -q 'for t in LISTED\]' "$REPO/bin/fleet-mcp.py" || fail "E2: the fake service's list did not take LISTED"
+N7b=$(commit "spawn unlisted, still answered")
+run --old stable --new "$N7b"
+eq "E2: an unlisted tool the new server still answers ⇒ GREEN" 0 "$RC" "$OUT"
+contains "E2: says so" "$OUT" "mcp   ok       fleet.spawn                  no longer listed, still answered"
+contains "E2: the server line counts it" "$OUT" "(1 unlisted, still answered)"
+sed -i.bak 's/^TOOLS = \["status", "spawn", "await", "brief"\]/TOOLS = ["status", "await", "brief"]/' "$REPO/bin/fleet-mcp.py"; rm -f "$REPO/bin/fleet-mcp.py.bak"
+N7c=$(commit "spawn gone for good")
+run --old stable --new "$N7c"
+eq "E2: unlisted AND no handler ⇒ RED" 1 "$RC" "$OUT"
+contains "E2: names it" "$OUT" "mcp   MISSING  fleet.spawn"
+restore bin/fleet-mcp.py; N7=$(commit "service back again")
+run --old stable --new "$N7"
+eq "E2: restored ⇒ GREEN" 0 "$RC" "$OUT"
+
 # --- F. a hook that errors, a hook that hangs -----------------------------------------
 printf '#!/bin/sh\necho "no such fleet" >&2\nexit 3\n' > "$REPO/bin/h-stop.sh"; N8=$(commit "h-stop errors")
 run --old stable --new "$N8"

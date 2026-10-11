@@ -82,8 +82,9 @@
 # Who asks (issue #1475), in this order — the first that exists is used:
 #   1. FLEET_HUB_SESSIONS_CMD: a seam; it prints the fleet_sessions JSON itself.
 #   1b. on a NODE (not the shell), this login's node token — node.env's
-#      CCQUOTA_TOKEN, as a bearer on curl's stdin config, never its argv (issue
-#      #2630): the hub reads it as the login's owner, the scope a certificate
+#      CCQUOTA_TOKEN at its hub, or a separated login's credential-proxy broker
+#      pair (fleet_node_pair, issue #3106) — as a bearer on curl's stdin config,
+#      never its argv (issue #2630): the hub reads it as the login's owner, the scope a certificate
 #      gets, and it never expires — the collector's loop no longer goes dark when
 #      a certificate lapses or no viewer token exists. A hub older than that door
 #      answers 401: noted for FLEET_HUB_SESSIONS_NODE_REFUSED_TTL (600s) and the
@@ -311,29 +312,39 @@ token_source() {
   printf 'file\n'
 }
 
-# node_token → rc 0 with this login's node token in $NTOK (issue #2630): node mode
-# only (the shell is a person's computer, never a node), node.env readable here
-# (a separated login's broker credential is not an endpoint token), and not
-# refused by this hub within NODE_REFUSED_TTL. It never enters the environment.
-NTOK=''; AUTH_TOK=''
+# node_token → rc 0 with this login's node token in $NTOK and the address it is
+# good at in $NURL (issue #2630; #3106): node mode only (the shell is a person's
+# computer, never a node), node.env's token at its hub — or, separated, the
+# credential proxy's broker pair (fleet_node_pair; re-minted past NODE_PAIR_TTL,
+# its fcpn1. lives 600 s) — and not refused by this hub within NODE_REFUSED_TTL.
+# It never enters the environment.
+NTOK=''; NURL=''; NPAIR=''; NTOK_AT=0; AUTH_TOK=''
+NODE_PAIR_TTL=300
 NODE_REFUSED_TTL="${FLEET_HUB_SESSIONS_NODE_REFUSED_TTL:-600}"
 case "$NODE_REFUSED_TTL" in ''|*[!0-9]*) NODE_REFUSED_TTL=600 ;; esac
 node_token() {
   local t
   NTOK=''
   [ -z "$CLIENT" ] && [ "${FLEET_HUB_SESSIONS_NODE_TOKEN:-1}" != 0 ] || return 1
-  [ -r "$(fleet_node_env_file)" ] || return 1
+  [ -r "$(fleet_node_env_file)" ] || _fleet_node_separated || return 1
   { read -r t < "$G/hubsess.nodetok.refused"; } 2>/dev/null || t=''
   case "$t" in ''|*[!0-9]*) ;; *) [ $(( $(date +%s) - t )) -ge "$NODE_REFUSED_TTL" ] || return 1 ;; esac
-  NTOK=$(_fleet_node_env_val CCQUOTA_TOKEN 2>/dev/null)
-  [ -n "$NTOK" ]
+  if [ -n "$NPAIR" ] && [ $(( $(date +%s) - NTOK_AT )) -lt "$NODE_PAIR_TTL" ]; then :
+  else NPAIR=$(fleet_node_pair "$(hub_url 2>/dev/null)") || NPAIR=''; NTOK_AT=$(date +%s); fi
+  case "$NPAIR" in *"	"*) ;; *) NPAIR=''; return 1 ;; esac
+  NURL=${NPAIR%%	*}; NTOK=${NPAIR#*	}
+  [ -n "$NTOK" ] && [ -n "$NURL" ]
 }
 
 # identity → one line: cert … / token … / none …; rc 0 / 0 / 1.
 identity() {
   local st src
   if [ -n "${FLEET_HUB_SESSIONS_CMD:-}" ]; then printf 'cmd FLEET_HUB_SESSIONS_CMD\n'; return 0; fi
-  if node_token; then printf 'node %s\n' "$(fleet_node_env_file)"; return 0; fi
+  if node_token; then
+    if [ -r "$(fleet_node_env_file)" ]; then printf 'node %s\n' "$(fleet_node_env_file)"
+    else printf 'node the credential proxy broker (separated)\n'; fi
+    return 0
+  fi
   st=$(cert_state)
   case "$st" in
     ok\ *) printf 'cert %s %s\n' "$CERT_PUB" "${st#ok }"; return 0 ;;
@@ -435,7 +446,7 @@ fetch() {
   if [ -n "$WAIT" ] && [ -n "$etag" ]; then LP_SENT=1; q="?wait=$WAIT"; fi
   if [ -n "$NTOK" ]; then
     AUTH_TOK=$NTOK
-    curl_sessions "$out" "$etag" "$url/v1/fleet/fleet_sessions$q"; rc=$?; AUTH_TOK=''
+    curl_sessions "$out" "$etag" "$NURL/v1/fleet/fleet_sessions$q"; rc=$?; AUTH_TOK=''
     # The hub answers a node token with its login's PERSON's rows — every login
     # of theirs, on every machine (FleetScope, issue #3001); a login no person
     # holds is refused below and reads as before.
@@ -1282,7 +1293,7 @@ fetch_summary_node() {
   SUMRC=1
   SUMJ=$(mktemp "$G/hubsummary.json.XXXXXX") || return 1
   code=$(printf 'header = "Authorization: Bearer %s"\n' "$NTOK" |
-         curl -K - -sS -m 8 -o "$SUMJ" -w '%{http_code}' "$url/v1/fleet/summary" 2>/dev/null)
+         curl -K - -sS -m 8 -o "$SUMJ" -w '%{http_code}' "${NURL:-$url}/v1/fleet/summary" 2>/dev/null)
   case "$code" in
     200)         SUMRC=0 ;;
     401|403|404) SUMRC=4; date +%s > "$G/hubsess.nodetok.refused" 2>/dev/null ;;

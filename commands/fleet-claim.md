@@ -109,10 +109,14 @@ Three habits buy most of it back:
   worktree, no one-worker-one-PR, no history row, no handoff — so work that
   writes code is a WORKER's, and a worker is never yours to start (issue #2960):
   fix it in place or file it — the three moves below. Waiting on an issue someone
-  else's worker holds? `mcp__fleet__await` (`issue: N`) blocks until it lands,
-  blocks or is reaped, then prints the verdict + PR + summary (issue #812);
-  `TIMEOUT` (exit 3) means still running — call it again. From your pane it only
-  waits: with no live worker it answers `NO-WORKER`, it never spawns one.
+  else's worker holds? In a session with the dispatch group (the fleet-orchestrate
+  plugin's server `fleet-orch`, issue #3113), `mcp__fleet-orch__await` (`issue: N`)
+  blocks until it lands, blocks or is reaped, then prints the verdict + PR +
+  summary (issue #812); `TIMEOUT` (exit 3) means still running — call it again.
+  From your pane it only waits: with no live worker it answers `NO-WORKER`, it
+  never spawns one. Without the group, read that issue with `mcp__fleet__gh`
+  (`kind: issue`) — and if it blocks your done condition, that is the blocked
+  outcome below, naming the issue.
 - **Don't dump a whole file to answer a narrow question.** A `grep -n` for the
   symbol plus a targeted `sed -n '<a>,<b>p'` range costs a fraction of a full
   `cat -n` — read the function, not the file that contains it.
@@ -172,11 +176,13 @@ override them):
   FIRST repo (issue #1461). ⚠️ **`mode: note` is the DEFAULT and it is
   RECORD-ONLY — a plain comment posts something the target worker will NEVER
   see, while returning a URL and exit 0.** To actually reach another worker,
-  pick a channel: **`mcp__fleet__send`** (`to: issue:<N>`, `text`) for a pure
+  pick a channel: **`mcp__fleet-orch__send`** (`to: issue:<N>`, `text`) for a pure
   instruction — direct to that worker's session, immediate, a delivery receipt;
   always by issue, never a `<sess>:<idx>` window number, which drifts when any
-  window closes (issue #1046) — or `mcp__fleet__comment` with `mode: to-worker`
-  when the instruction also belongs in the issue record. Since #489 the comment
+  window closes (issue #1046); it is the dispatch group's, so only a session with
+  the fleet-orchestrate plugin has it (issue #3113) — or `mcp__fleet__comment`
+  with `mode: to-worker`, every session's, when the instruction also belongs in
+  the issue record. Since #489 the comment
   prints which of the two happened on stderr, and warns when you post
   record-only to an issue that has a live worker — read that line instead of
   assuming delivery. NEVER drive
@@ -320,7 +326,9 @@ override them):
        **exit 5 = someone already filed it**: the URL printed is that
        issue, a 「同一故障，来自 …」 comment was left on it for you, nothing was
        filed. Either way the next step is the same: **wait for that issue** —
-       `mcp__fleet__await` with its number — then re-read your own verdict. Never
+       `mcp__fleet-orch__await` with its number where the dispatch group is
+       mounted, else `mcp__fleet__gh` (`kind: issue`) on it between
+       `mcp__fleet__pr_verdict` `wait: true` reads — then re-read your own verdict. Never
        a second issue, never a second fixer. (Forget the flag and the filer
        still catches it when your title names the red base or check — issue
        #2175 — but say `breakage: true`; `breakage: false` is for a different
@@ -439,7 +447,8 @@ override them):
   reaped. It is four lines and it ends `no reply needed` — that is literal.
   **Do not reply to it, do not open its PR, do not adopt its follow-up work.**
   Note it, and go straight back to your own issue. **Want to check it? ONE read,
-  not an investigation:** `mcp__fleet__children` answers "did it
+  not an investigation:** `mcp__fleet__status` (its children section; the
+  dispatch group's `mcp__fleet-orch__children` where mounted) answers "did it
   really land / stop / block, and how are the rest doing" from the ledger plus
   each child's live state and the dash's PR cache — no `gh pr list`, no
   `capture-pane` per child, no re-verifying a report by hand (issue #940; that

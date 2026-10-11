@@ -215,11 +215,20 @@ func (s *Server) sshRelayHTTPIdentity(r *http.Request) (sshRelayIdentity, bool) 
 // credential these doors accepted, so its quota and its other-machine rows
 // read 401 for as long as nobody noticed. A node token whose login is no
 // active account answers ok=false (the caller's usual 401). Never widened to
-// the relay or the write doors — those keep sshRelayHTTPIdentity.
+// the relay; the write door takes it for the worker tools only
+// (nodeWriteTools, claude-fleet#3106).
 func (s *Server) fleetReadIdentity(r *http.Request) (sshRelayIdentity, bool) {
 	if id, ok := s.sshRelayHTTPIdentity(r); ok {
 		return id, true
 	}
+	return s.nodeLoginIdentity(r)
+}
+
+// nodeLoginIdentity is a login's node token, as a bearer, read as that login's
+// OWNER (the person its active fleet account belongs to): Principal is the
+// person, Actor names the machine and login ("node:<host>/<user>"). ok=false
+// for no bearer, a token that is no node's, or a login no person holds.
+func (s *Server) nodeLoginIdentity(r *http.Request) (sshRelayIdentity, bool) {
 	tok := bearer(r)
 	if tok == "" {
 		return sshRelayIdentity{}, false
