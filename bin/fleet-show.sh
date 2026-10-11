@@ -154,6 +154,9 @@ try: d = json.load(sys.stdin)
 except Exception: d = {}
 print("%s %s %s" % (d.get("source") or "-", d.get("state") or "-", d.get("via") or "-"))' 2>/dev/null)
   case "$cw_src" in
+    # a thin client (issue #3005): its home holds the lease, no action loop — the
+    # terminal road below writes to its 看台's terminal
+    "hub active thin"|"local active thin") ;;
     "hub active "*)
       sent=0
       for f in ${files[@]+"${files[@]}"}; do

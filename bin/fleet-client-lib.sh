@@ -23,7 +23,8 @@
 #
 # Functions set FC_* globals; a failure sets FC_WHY (operator-facing) and returns 1.
 #   fc_session                 → FC_SESS (this pane's session)
-#   fc_pick <client> <re>      → FC_CLIENT FC_TERMTYPE FC_GEOM (cols,rows,cw,ch)
+#   fc_pick <client> <re>      → FC_CLIENT FC_TERMTYPE FC_GEOM (cols,rows,cw,ch) FC_CSESS
+#                                (the client's own session: a view session's name for a 看台)
 #   fc_lock                    → FC_LOCKDIR held (needs FC_SESS); fc_unlock frees it
 #   fc_run <cmd>               → lock-client FC_CLIENT running <cmd> (needs FC_SESS)
 #   fc_wait <status> <secs>    → 0 once <status> holds a `done` line
@@ -74,24 +75,29 @@ fc_clients() {
 
 fc_pick() {  # <client tty, or empty> <termtype ERE>
   local want="$1" re="$2" rows pick _tty _tt
-  FC_CLIENT=""; FC_TERMTYPE=""; FC_GEOM="0,0,0,0"
-  # activity <TAB> tty <TAB> termtype <TAB> cols,rows,cell-w,cell-h
-  rows=$(fc_clients '#{client_activity}	#{client_tty}	#{client_termtype}	#{client_width},#{client_height},#{client_cell_width},#{client_cell_height}')
+  FC_CLIENT=""; FC_TERMTYPE=""; FC_GEOM="0,0,0,0"; FC_CSESS=""
+  # activity <TAB> tty <TAB> termtype <TAB> cols,rows,cell-w,cell-h <TAB> its own session
+  rows=$(fc_clients '#{client_activity}	#{client_tty}	#{client_termtype}	#{client_width},#{client_height},#{client_cell_width},#{client_cell_height}	#{client_session}')
   if [ -n "$want" ]; then
-    pick=$(printf '%s\n' "$rows" | awk -F '\t' -v c="$want" '$2 == c { print $2 "\t" $3 "\t" $4; exit }')
+    pick=$(printf '%s\n' "$rows" | awk -F '\t' -v c="$want" '$2 == c { print $2 "\t" $3 "\t" $4 "\t" $5; exit }')
     [ -n "$pick" ] || { FC_WHY="$want is not a client of session '$FC_SESS'"; return 1; }
   else
     # The newest client is the one the operator is at — it must BE iTerm2 (#1371).
     pick=$(printf '%s\n' "$rows" | awk -F '\t' 'NF >= 2' | sort -t '	' -k1,1nr | head -n 1 \
-      | awk -F '\t' '{ print $2 "\t" $3 "\t" $4 }')
+      | awk -F '\t' '{ print $2 "\t" $3 "\t" $4 "\t" $5 }')
     [ -n "$pick" ] || { FC_WHY="no client is attached to session '$FC_SESS'"; return 1; }
     _tty="${pick%%	*}"; _tt="${pick#*	}"; _tt="${_tt%%	*}"
     [ -n "$_tt" ] || { FC_WHY="当前活跃 client ${_tty} 的终端类型未知（tmux < 3.4，或终端没回应 XTVERSION），不是 iTerm2"; return 1; }
     printf '%s\n' "$_tt" | grep -Eq -- "$re" \
       || { FC_WHY="当前活跃 client ${_tty} 是 ${_tt}，不是 iTerm2（/${re}/）"; return 1; }
   fi
-  FC_CLIENT="${pick%%	*}"; FC_TERMTYPE="${pick#*	}"; FC_GEOM="${FC_TERMTYPE#*	}"; FC_TERMTYPE="${FC_TERMTYPE%%	*}"
-  [ "$FC_GEOM" != "$FC_TERMTYPE" ] || FC_GEOM=""
+  # sliced, never `read`: a tab is IFS whitespace, so an empty termtype would shift the rest
+  FC_CLIENT="${pick%%	*}"; _tt="${pick#*	}"
+  [ "$_tt" != "$pick" ] || _tt=''
+  FC_TERMTYPE="${_tt%%	*}"; FC_GEOM="${_tt#*	}"
+  [ "$FC_GEOM" != "$_tt" ] || FC_GEOM=''
+  FC_CSESS="${FC_GEOM#*	}"; [ "$FC_CSESS" != "$FC_GEOM" ] || FC_CSESS=''
+  FC_GEOM="${FC_GEOM%%	*}"
   case "$FC_GEOM" in *[!0-9,]*|'') FC_GEOM="0,0,0,0" ;; esac
   return 0
 }
@@ -113,14 +119,17 @@ fc_unlock() { [ -n "${FC_LOCKDIR:-}" ] && rmdir "$FC_LOCKDIR" 2>/dev/null; retur
 fc_sq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 
 fc_run() {  # <cmd> — swap the session's lock-command for one lock, then put back
-  # exactly what was there (a session value, or none — the global default shows through)
-  local cmd="$1" prev_set prev_val lrc
-  prev_set=$(tmux show-options -q -t "$FC_SESS" lock-command 2>/dev/null)
-  prev_val=$(tmux show-options -qv -t "$FC_SESS" lock-command 2>/dev/null)
-  tmux set-option -t "$FC_SESS" lock-command "$cmd" 2>/dev/null || { FC_WHY='cannot set lock-command'; return 1; }
+  # exactly what was there (a session value, or none — the global default shows through).
+  # The CLIENT's own session (issue #3005): a client on a view session
+  # (`<fleet>@view-<id>`, a thin 看台) runs that session's lock-command, not the
+  # fleet session's — FC_CSESS, the same name for any other client.
+  local cmd="$1" prev_set prev_val lrc ls="${FC_CSESS:-$FC_SESS}"
+  prev_set=$(tmux show-options -q -t "$ls" lock-command 2>/dev/null)
+  prev_val=$(tmux show-options -qv -t "$ls" lock-command 2>/dev/null)
+  tmux set-option -t "$ls" lock-command "$cmd" 2>/dev/null || { FC_WHY='cannot set lock-command'; return 1; }
   tmux lock-client -t "$FC_CLIENT" 2>/dev/null; lrc=$?
-  if [ -n "$prev_set" ]; then tmux set-option -t "$FC_SESS" lock-command "$prev_val" 2>/dev/null
-  else tmux set-option -u -t "$FC_SESS" lock-command 2>/dev/null; fi
+  if [ -n "$prev_set" ]; then tmux set-option -t "$ls" lock-command "$prev_val" 2>/dev/null
+  else tmux set-option -u -t "$ls" lock-command 2>/dev/null; fi
   [ "$lrc" = 0 ] || { FC_WHY="tmux lock-client -t $FC_CLIENT failed"; return 1; }
 }
 

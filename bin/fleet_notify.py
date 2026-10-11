@@ -26,6 +26,12 @@ Notification Centre. FLEET_NOTIFY=0: nothing at all, as before #1951's road;
 FLEET_NOTIFY_DONE=0: no 做完. A client in standby (another device holds the
 person's lease, issue #1715) asks the hub nothing, so it never gets here.
 
+On a thin client's HOME machine (issue #3005, EPIC #2999 C8) the same rule runs
+in the node's loop (fleet-hub-sessions.sh, node mode) over every row of its
+caches, with fleet_thin_lease.py notify as the sender: OSC 9 to the terminal of
+the 看台 holding the person's lease, and nothing at all when no 看台 here holds
+it — another home, or the old client, is the one that tells them.
+
 Every event is one line of logs/notify.ndjson (ts · key · state · sent | skip),
 written by the sender (fleet-client-actions.py notify --log-*) once it knows
 what happened — the metric's source. The phone's address
@@ -150,11 +156,14 @@ TITLE = {("ask", "perm"): "notify_perm", ("ask", "auth"): "notify_auth", ("ask",
          ("stuck", "failed"): "notify_failed", ("stuck", "blocked"): "notify_stuck"}
 
 
-def send(ev, session):
-    """Hand one event to fleet-client-actions.py notify, detached: the loop never
-    waits on a notifier."""
+def send(ev, session, sender=None):
+    """Hand one event to fleet-client-actions.py notify (or `sender`, an argv
+    prefix — the home machine's fleet_thin_lease.py notify), detached: the loop
+    never waits on a notifier."""
     cmd = os.environ.get("FLEET_NOTIFY_SEND_CMD")
-    argv = (cmd.split() if cmd else [sys.executable, os.path.join(HERE, "fleet-client-actions.py")]) + [
+    base = cmd.split() if cmd else (list(sender) if sender else
+                                    [sys.executable, os.path.join(HERE, "fleet-client-actions.py")])
+    argv = base + [
         "notify", "--title", ev["title"], "--body", ev["body"], "--jump", ev["jump"], "--session", session,
         "--group", ev["group"], "--log-key", ev["key"], "--log-state", ev["kind"]]
     if ev["sound"]:
@@ -168,7 +177,7 @@ def send(ev, session):
         log({"key": ev["key"], "state": ev["kind"], "skip": "spawn:%s" % e.__class__.__name__})
 
 
-def beat(rows, gdir, session, now=None):
+def beat(rows, gdir, session, now=None, sender=None):
     """One round's rows → the notifications they call for; returns the events
     handed on (tests read them)."""
     if not env_on("FLEET_NOTIFY"):
@@ -235,7 +244,7 @@ def beat(rows, gdir, session, now=None):
         del batches[b]
     save(path, {"rows": seen, "done": batches, "ts": now})
     for ev in events:
-        send(ev, session)
+        send(ev, session, sender)
     return events
 
 

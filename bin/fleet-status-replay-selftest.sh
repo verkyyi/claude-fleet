@@ -21,6 +21,9 @@
 #   D  replay: a terminal attached to a node with the [75] hooks from the conf —
 #      attach hears its window's report, a switch to a window with no agent hears
 #      clear, a switch back hears the report again; no @agent_replay ⇒ no write
+#   F  thin (issue #3005): a thin client's terminal ← the home node (a session
+#      there), and ← the home node ← another node (C4): with `relay --replay 3`
+#      the terminal receives exactly one bare OSC 7501 at either depth
 #   E  lint: the three confs set allow-passthrough on; the node conf carries the
 #      [75] hooks; fleet-claude.sh passes --replay FLEET_STATUS_REPLAY_DEPTH
 # Prints what the terminal received — the issue's 上线证据 for the branch.
@@ -206,6 +209,36 @@ J=$(chain off)
 printf 'C shell=off (before #2539) → terminal received: %s\n' "$J"
 [ "$(field "$J" 'len(d["ask"])')" = 0 ] && ok "C shell at allow-passthrough off: nothing reaches the terminal (the gap)" \
   || bad "C shell off still passed it — the chain test is not measuring the shell's setting: $J"
+
+# ── F. the thin path (issue #3005, EPIC #2999 C8) ────────────────────────────
+# A thin client's terminal is the HOME machine's client: a session there is one
+# tmux deep, a session on another machine two (its server in a home pane, C4).
+# The relay's default depth (3) covers both, and exactly ONE bare copy arrives.
+chain_thin() {  # <depth 1|2> → the terminal's JSON
+  local s conf="$WORK/base.conf" outer=node
+  for s in shell stage node; do "$TMUX_BIN" -S "$WORK/$s" kill-server 2>/dev/null; done
+  rm -f "$WORK/go"
+  printf 'set -g default-terminal "tmux-256color"\nset -g status off\nset -g escape-time 0\n' > "$conf"
+  "$TMUX_BIN" -S "$WORK/node" -f "$conf" new-session -d -s node -x 96 -y 24 \
+    "python3 '$PY' relay --replay 3 -- python3 '$WORK/agent.py' '$WORK/go'"
+  "$TMUX_BIN" -S "$WORK/node" set -g allow-passthrough "$NODE_V"
+  if [ "$1" = 2 ]; then   # the home machine: another node conf, the far node in its pane
+    outer=shell
+    "$TMUX_BIN" -S "$WORK/shell" -f "$conf" new-session -d -s shell -x 100 -y 28 \
+      "TMUX= exec $TMUX_BIN -S $WORK/node attach -t node"
+    "$TMUX_BIN" -S "$WORK/shell" set -g allow-passthrough "$NODE_V"
+  fi
+  local ch='"node"'; [ "$1" = 2 ] && ch='"shell","node"'
+  python3 "$WORK/term.py" "$TMUX_BIN" "$WORK" "$outer" "$outer" \
+    "{\"chain\":[$ch],\"steps\":[[\"ask\",[[\"touch\",\"$WORK/go\"]]]]}"
+}
+for d in 1 2; do
+  J=$(chain_thin "$d")
+  printf 'F thin, %s tmux deep → terminal received: %s\n' "$d" "$J"
+  got=$(field "$J" '"|".join(d["ask"])')
+  [ "$got" = "$WANT" ] && ok "F thin $d deep (a session $( [ "$d" = 1 ] && echo on the home machine || echo on another machine)): exactly one bare OSC 7501, words intact" \
+    || bad "F thin $d deep: terminal got '$got', want '$WANT'"
+done
 
 # ── D. replay on switch / attach ────────────────────────────────────────────
 S1="$WORK/one"

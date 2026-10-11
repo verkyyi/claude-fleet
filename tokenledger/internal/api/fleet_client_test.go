@@ -380,3 +380,71 @@ func TestClientLeaseRenewRefillsAfterRestart(t *testing.T) {
 		t.Fatalf("a bare renewal after a restart = %+v", r)
 	}
 }
+
+// A thin client's home machine holds its lease (claude-fleet#3005, EPIC #2999
+// C8): POST /v1/node/client acquires, renews and releases the OWNER's lease with
+// the node token — via thin kept — hands out no action key, lists every client
+// (so the machine sees whether its 看台 is the primary), refuses a session's
+// request and any action beyond the lease's own; another person's node holds
+// nothing of theirs.
+func TestNodeClientHoldsThinLease(t *testing.T) {
+	h, _, n := peerHarness(t)
+	post := func(tok string, body any, hdr ...string) (int, ClientLeaseResponse) {
+		t.Helper()
+		b, _ := json.Marshal(body)
+		req, _ := http.NewRequest(http.MethodPost, h.http.URL+"/v1/node/client", strings.NewReader(string(b)))
+		req.Header.Set("Authorization", "Bearer "+tok)
+		if len(hdr) == 2 {
+			req.Header.Set(hdr[0], hdr[1])
+		}
+		res, err := h.http.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		var out ClientLeaseResponse
+		_ = json.NewDecoder(res.Body).Decode(&out)
+		return res.StatusCode, out
+	}
+	code, out := post(n["alice5"].token, map[string]any{"action": "acquire", "device": "MacBook", "os": "macOS",
+		"terminal": "iTerm2 3.6.1", "via": "thin", "host": "m5", "caps": []string{"notify", "iterm2"}})
+	if code != 200 || out.State != "active" || out.Lease == nil || out.Lease.Via != "thin" || out.Lease.Host != "m5" {
+		t.Fatalf("acquire: HTTP %d %+v", code, out)
+	}
+	if out.ActionKey != "" {
+		t.Fatalf("a node-held lease got an action key")
+	}
+	if out.Primary != out.Lease.ID || len(out.Clients) != 1 {
+		t.Fatalf("the list: %+v", out)
+	}
+	id := out.Lease.ID
+	alice := clientLeaseKey(sshRelayIdentity{Principal: pAlice})
+	if l, ok := h.srv.ClientLeaseOf(pAlice, time.Now()); !ok || l.ID != id || l.Device != "MacBook" {
+		t.Fatalf("alice's where: %+v %v", l, ok)
+	}
+	if code, out := post(n["alice5"].token, map[string]any{"action": "renew", "lease": id, "last_input": time.Now().Unix(),
+		"viewing": "u/f"}); code != 200 || out.State != "active" || out.Lease.Via != "thin" || out.Lease.Viewing != "u/f" {
+		t.Fatalf("renew: HTTP %d %+v", code, out)
+	}
+	if code, _ := post(n["bob4"].token, map[string]any{"action": "renew", "lease": id}); code != 200 {
+		t.Fatalf("bob renew: HTTP %d", code)
+	}
+	if l, _ := h.srv.ClientLeaseOf(pAlice, time.Now()); l.ID != id {
+		t.Fatalf("bob's node touched alice's lease: %+v", l)
+	}
+	if code, _ := post(n["alice5"].token, map[string]any{"action": "acquire"}, workerAssertHeader, "session"); code != 403 {
+		t.Fatalf("a session's acquire: HTTP %d, want 403", code)
+	}
+	if code, _ := post(n["alice5"].token, map[string]any{"action": "revoke", "target": id}); code != 400 {
+		t.Fatalf("revoke through the node door: HTTP %d, want 400", code)
+	}
+	if code, _ := post(n["alice5"].token, map[string]any{"action": "acquire", "identity": "test"}); code != 400 {
+		t.Fatalf("test identity through the node door: HTTP %d, want 400", code)
+	}
+	if code, out := post(n["alice5"].token, map[string]any{"action": "release", "lease": id}); code != 200 || out.State != "released" {
+		t.Fatalf("release: HTTP %d %+v", code, out)
+	}
+	if r := h.srv.clientLeasesGet(alice, time.Now()); r.Lease != nil {
+		t.Fatalf("released, yet alice is somewhere: %+v", r.Lease)
+	}
+}
