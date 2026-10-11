@@ -1,3 +1,4 @@
+# shellcheck shell=sh
 # fleet: machine-wide dev settings for every login (claude-fleet#3348).
 # Sourced by /etc/zsh/zshenv, /etc/bash.bashrc and login shells. The values live
 # in /etc/fleet-devnet.env, which fleet-node-linux.py writes at each start from
