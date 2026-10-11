@@ -1137,7 +1137,9 @@ main() {
       || finish fetch-failed "入口不可达（${HUB}）: no release key to pin — $REL_ERR; still at $(short "$HEAD_SHA")"
     mkdir -p "$VERS" 2>/dev/null
     stage="$VERS/.incoming.$$"; rm -rf "$stage" "$stage.partial"
-    if ! fleet_rel_fetch "$ccq" "$HUB" "$pub" "$STABLE_SHA" "$stage"; then
+    # a ccquota too old to know `release` takes the one this release carries,
+    # vouched for by the pinned key (#3047) — else no release could ever fix it
+    if ! fleet_rel_fetch_any "$ccq" "$HUB" "$pub" "$STABLE_SHA" "$stage" "$CONF_DIR/release-tools" "$TIMEOUT"; then
       rm -rf "$stage" "$stage.partial"
       finish fetch-failed "the hub's release $(short "$STABLE_SHA") did not arrive or did not verify against $pub ($(fleet_rel_fp "$pub")): $REL_ERR — nothing switched, still at $(short "$HEAD_SHA")"
     fi
@@ -1159,6 +1161,7 @@ MAN
       finish failed "the hub's release $(short "$STABLE_SHA") verified but could not be imported into $ROOT's repository — still at $(short "$HEAD_SHA")"
     fi
     rm -rf "$stage"
+    [ "$REL_CCQ" = "$ccq" ] || say "$ccq has no \`ccquota release\` — checked with the release's own ccquota ($REL_CCQ, vouched for by $(fleet_rel_fp "$pub"))"
     say "hub release $(short "$STABLE_SHA") seq $mseq verified ($(fleet_rel_fp "$pub")) and imported as $(short "$STABLE_C")"
   fi
 

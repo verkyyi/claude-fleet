@@ -21,6 +21,11 @@
 #                signed stable (an imported commit, no remote, the key pinned,
 #                ccquota fetched from the hub) — git never asked for GitHub
 #   G. origin    drop → the remote gone, its URL kept; restore → back
+#   H. stale     a ccquota older than `ccquota release` (#3047): the error names
+#                it (not usage's last line); fleet_rel_fetch_any takes the
+#                release's own ccquota ONLY when its manifest verifies against
+#                the pinned key (a real ed25519 signature, fleet-release-verify.py,
+#                RFC 8032 vector) and the binary matches; fleet_rel_fp = KeyID
 # Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -87,7 +92,18 @@ class Hd(BaseHTTPRequestHandler):
                 f = os.path.join(w, "art", p.rsplit("/", 1)[1])
                 if os.path.isfile(f):
                     body, code = open(f, "rb").read(), 200
+            elif p.startswith("/v1/fleet/release/"):
+                # <sha> → the manifest, its signature in a header · <sha>/manifest.sig
+                sha, _, sub = p[len("/v1/fleet/release/"):].partition("/")
+                d = os.path.join(w, "rel", sha, ".release")
+                f = os.path.join(d, "manifest.sig" if sub == "manifest.sig" else "manifest.json")
+                if sub in ("", "manifest.sig") and os.path.isfile(f):
+                    body, code = open(f, "rb").read(), 200
         self.send_response(code)
+        if code == 200 and self.path.count("/") == 4 and self.path.startswith("/v1/fleet/release/"):
+            sf = os.path.join(w, "rel", self.path.rsplit("/", 1)[1], ".release", "manifest.sig")
+            if os.path.isfile(sf) and not os.path.exists(os.path.join(w, "nosigheader")):
+                self.send_header("X-Ccquota-Release-Signature", open(sf).read().strip())
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -190,5 +206,90 @@ fleet_rel_drop_origin "$R" origin "$WORK/bak" 2>/dev/null
 eq "G: dropped" "" "$(git -C "$R" remote)"; eq "G: kept" "origin https://example.invalid/r.git" "$(cat "$WORK/bak")"
 fleet_rel_restore_origin "$R" origin "$WORK/bak" 2>/dev/null
 eq "G: restored" "https://example.invalid/r.git" "$(git -C "$R" remote get-url origin)"
+
+# --- H. a ccquota older than `ccquota release` (#3047) ------------------------------------
+V="$BIN/fleet-release-verify.py"
+# RFC 8032 §7.1 TEST 1 — the verifier speaks Go's ed25519
+printf 'ed25519 %s\n' "$(python3 -c 'import base64; print(base64.b64encode(bytes.fromhex("d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a")).decode())')" > "$WORK/rfc.pub"
+: > "$WORK/rfc.msg"; printf '{}' > "$WORK/rfc.json"
+RFCSIG=$(python3 -c 'import base64; print(base64.b64encode(bytes.fromhex("e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b")).decode())')
+python3 -c 'import importlib.util, base64, sys
+s = importlib.util.spec_from_file_location("v", sys.argv[1]); v = importlib.util.module_from_spec(s); s.loader.exec_module(v)
+pub = bytes.fromhex("d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a")
+sig = base64.b64decode(sys.argv[2])
+assert v.verify(pub, b"", sig), "RFC 8032 TEST 1 does not verify"
+assert not v.verify(pub, b"x", sig), "a changed message verifies"
+' "$V" "$RFCSIG" || fail "H: RFC 8032 vector"
+N=$((N + 1))
+# a signer for the sandbox: RFC 8032 §5.1.6 on the verifier's own curve code
+cat > "$H/sign.py" <<'PY'
+import base64, hashlib, importlib.util, sys
+s = importlib.util.spec_from_file_location("v", sys.argv[1]); v = importlib.util.module_from_spec(s); s.loader.exec_module(v)
+def enc(pt):
+    zi = v._inv(pt[2]); x, y = pt[0] * zi % v.P, pt[1] * zi % v.P
+    return (y | ((x & 1) << 255)).to_bytes(32, "little")
+seed = hashlib.sha256(sys.argv[2].encode()).digest(); h = hashlib.sha512(seed).digest()
+a = int.from_bytes(h[:32], "little") & ((1 << 254) - 8) | (1 << 254)
+A = enc(v._mul(a, v.G))
+if sys.argv[3] == "pub":
+    print("ed25519", base64.b64encode(A).decode()); sys.exit(0)
+msg = open(sys.argv[3], "rb").read()
+r = int.from_bytes(hashlib.sha512(h[32:] + msg).digest(), "little") % v.Q
+R = enc(v._mul(r, v.G))
+k = int.from_bytes(hashlib.sha512(R + A + msg).digest(), "little") % v.Q
+print(base64.b64encode(R + ((r + k * a) % v.Q).to_bytes(32, "little")).decode())
+PY
+C="$WORK/confH"; mkdir -p "$C"
+python3 "$H/sign.py" "$V" hub-key pub > "$C/release.pub"
+eq "H: fleet_rel_fp is ccquota's KeyID (sha256 of the raw key)" \
+  "$(awk '{print $2}' "$C/release.pub" | python3 -c 'import base64, hashlib, sys; print(hashlib.sha256(base64.b64decode(sys.stdin.read().strip())).hexdigest()[:16])')" \
+  "$(fleet_rel_fp "$C/release.pub")"
+signH() { python3 "$H/sign.py" "$V" "$1" "$H/rel/$S2/.release/manifest.json" > "$H/rel/$S2/.release/manifest.sig"; }
+publish "$S2" 3 "$(sha "$H/art/ccquota-$OS-$AR")"; signH hub-key
+python3 "$V" "$C/release.pub" "$H/rel/$S2/.release/manifest.json" "@$H/rel/$S2/.release/manifest.sig" >/dev/null
+eq "H: the sandbox's own signature verifies" 0 "$?"
+OLD="$WORK/old"; mkdir -p "$OLD"
+cat > "$OLD/ccquota" <<'EOF2'
+#!/bin/sh
+case "$1" in version) echo "ccquota prod-old"; exit 0 ;; esac
+printf 'ccquota: unknown command "%s"\n\nUsage:\n  ccquota version           Print the version\n\nRun any subcommand with -h for its flags.\n' "$1" >&2
+exit 2
+EOF2
+chmod +x "$OLD/ccquota"
+fleet_rel_fetch "$OLD/ccquota" "$HUB" "$C/release.pub" "$S2" "$WORK/stageH0"; eq "H: an old ccquota cannot fetch" 1 "$?"
+eq "H: …REL_STALE" 1 "$REL_STALE"
+has "H: …the error names the old ccquota" "$REL_ERR" "prod-old) has no \`ccquota release\`"
+case "$REL_ERR" in *"Run any subcommand"*) fail "H: the error is still usage's last line [$REL_ERR]" ;; esac
+: > "$H/ccquota.log"
+fleet_rel_fetch_any "$OLD/ccquota" "$HUB" "$C/release.pub" "$S2" "$WORK/stageH" "$WORK/toolsH" 5
+eq "H: fetch_any takes the release's own ccquota [$REL_ERR]" 0 "$?"
+eq "H: …REL_CCQ" "$WORK/toolsH/ccquota" "$REL_CCQ"
+eq "H: …the release arrived" two "$(cat "$WORK/stageH/f" 2>/dev/null)"
+has "H: …checked by it against the pinned key" "$(cat "$H/ccquota.log")" "--pubkey $C/release.pub $S2"
+# signed by ANOTHER key: no ccquota taken, nothing fetched
+signH other-key
+fleet_rel_fetch_any "$OLD/ccquota" "$HUB" "$C/release.pub" "$S2" "$WORK/stageH2" "$WORK/toolsH2" 5
+eq "H: a release not signed by the pinned key vouches for nothing" 1 "$?"
+has "H: …says so" "$REL_ERR" "does not match the pinned key"
+[ -e "$WORK/toolsH2/ccquota" ] && fail "H: a ccquota was taken on a bad signature"
+[ -e "$WORK/stageH2" ] && fail "H: a release was fetched on a bad signature"
+# the right signature, but the binary is not the one it names
+signH hub-key; cp "$H/art/ccquota-$OS-$AR" "$WORK/art.keep"; printf '\n# tampered\n' >> "$H/art/ccquota-$OS-$AR"
+fleet_rel_fetch_any "$OLD/ccquota" "$HUB" "$C/release.pub" "$S2" "$WORK/stageH3" "$WORK/toolsH3" 5
+eq "H: a binary off the signed sha256 is refused" 1 "$?"
+has "H: …says so" "$REL_ERR" "does not match the sha256 its signed release names"
+[ -e "$WORK/toolsH3/ccquota" ] && fail "H: a tampered ccquota was kept"
+cp "$WORK/art.keep" "$H/art/ccquota-$OS-$AR"
+# no signature header: manifest.sig is read instead
+touch "$H/nosigheader"
+fleet_rel_fetch_any "$OLD/ccquota" "$HUB" "$C/release.pub" "$S2" "$WORK/stageH4" "$WORK/toolsH4" 5
+eq "H: manifest.sig when the header is missing [$REL_ERR]" 0 "$?"
+rm -f "$H/nosigheader"
+# a new enough ccquota is used as it is — no second fetch
+q=$(fleet_rel_ccquota_get "$HUB" "$WORK/toolsH5" 5)
+fleet_rel_fetch_any "$q" "$HUB" "$C/release.pub" "$S2" "$WORK/stageH5" "$WORK/toolsH6" 5
+eq "H: a ccquota that knows release is used as is" "$q" "$REL_CCQ"
+[ -e "$WORK/toolsH6/ccquota" ] && fail "H: a ccquota was fetched although the login's knew release"
+rm -f "$H/rel/$S2/.release/manifest.sig"
 
 printf 'fleet-release-lib-selftest OK (%d checks)\n' "$N"
