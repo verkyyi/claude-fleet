@@ -155,6 +155,8 @@ Seams (sandbox tests, docs/BREAK-IT.md `node-supervisor-dead`):
                         phase it is stuck in, dumps its stacks and exits 70 for launchd
                         to restart it (0 = off); FLEET_NODE_WATCHDOG_SWEEP_SECS (900)
                         for a pass that sweeps (#3079, #3086)
+  SIGUSR1               `sudo kill -USR1 <pid>` writes every thread's Python stack into
+                        supervisor.log and the loop goes on (#3084)
   FLEET_NODE_FDA_TIMEOUT (20)  the Full Disk Access probe (a child) is killed past this
   FLEET_NODE_TEST_HANG <phase>:<fifo>  (FLEET_NODE_TEST=1 only) that phase blocks in an
                         open() of the FIFO — the watchdog drills' wedge
@@ -314,6 +316,24 @@ def read_json(path, default):
             return json.load(f)
     except (IOError, OSError, ValueError):
         return default
+
+
+def open_ro(path, follow=False):
+    """An fd for root's read of a file in a place it does not keep — a login's
+    home, its LaunchAgents, a tenant's log or credential (issue #3084): read_json's
+    rule (#3086) for the rest of root's reads — O_NONBLOCK, so a FIFO or a device
+    planted there answers at once instead of holding the loop in open(), then
+    refused unless it is a regular file; a symlink only when follow. OSError
+    otherwise."""
+    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | (0 if follow else getattr(os, "O_NOFOLLOW", 0)))
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError(errno.EINVAL, "not a regular file", path)
+        fcntl.fcntl(fd, fcntl.F_SETFL, fcntl.fcntl(fd, fcntl.F_GETFL) & ~os.O_NONBLOCK)
+    except OSError:
+        os.close(fd)
+        raise
+    return fd
 
 
 def pid_alive(pid):
@@ -970,7 +990,7 @@ def service_creds(paths, ent):
     d = service_cred_dir(paths, ent["account"])
     for c in ent.get("creds") or []:
         try:
-            fd = os.open(os.path.join(d, c), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+            fd = open_ro(os.path.join(d, c))
             with os.fdopen(fd) as f:
                 got[c] = f.read().rstrip("\n")
         except (IOError, OSError):
@@ -1000,7 +1020,7 @@ def service_logdir(ent):
 def log_tail(path, n=1, limit=SVC_LINE_MAX):
     """The last n lines of a log (each at most limit bytes), or [] — never a link."""
     try:
-        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        fd = open_ro(path)
     except OSError:
         return []
     with os.fdopen(fd, "rb") as f:
@@ -1977,6 +1997,9 @@ class Supervisor(object):
             return 3
         for s in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
             signal.signal(s, self.on_signal)
+        # `sudo kill -USR1 <pid>`: every thread's Python stack into this log, the
+        # loop untouched — what `sample` cannot say: WHICH open() (issue #3084)
+        faulthandler.register(signal.SIGUSR1, file=sys.stderr, all_threads=True)
         sv = self.state.get("supervisor") or {}
         self.state["supervisor"] = dict(sv, started=now(), starts=(sv.get("starts") or 0) + 1)
         # a task an earlier run left mid-flight is not running any more
@@ -2161,7 +2184,7 @@ def _agent_dirs(paths):
 
 def _plist_label(path):
     try:
-        with open(path, "rb") as f:
+        with os.fdopen(open_ro(path, follow=True), "rb") as f:
             return plistlib.load(f).get("Label") or ""
     except Exception:
         return ""
@@ -2198,7 +2221,7 @@ def _handwritten(paths, d, n, src):
     if not n.endswith(".plist") or FLEET_PLIST_RE.match(n):
         return None
     try:
-        with open(src, "rb") as f:
+        with os.fdopen(open_ro(src, follow=True), "rb") as f:
             pl = plistlib.load(f)
     except Exception:
         return None
@@ -2280,7 +2303,7 @@ def client_shell_of(home):
             return None
         has = False
     try:
-        with open(os.path.join(home, ".zshrc"), errors="replace") as f:
+        with os.fdopen(open_ro(os.path.join(home, ".zshrc"), follow=True), errors="replace") as f:
             hooks = len(shell_hooks(f.read().split("\n"))[1])
     except OSError as ex:
         if ex.errno != errno.ENOENT:
@@ -2427,7 +2450,7 @@ def _unit_login(paths, d, src, label):
     if d != paths.daemon_dir:
         return os.path.basename(os.path.dirname(os.path.dirname(d)))
     try:
-        with open(src, "rb") as f:
+        with os.fdopen(open_ro(src, follow=True), "rb") as f:
             u = (plistlib.load(f) or {}).get("UserName")
     except Exception:
         u = None
@@ -2702,7 +2725,7 @@ def _env_file(path, uid, also=()):
     login's home: never through a symlink, only one that login (or root) owns —
     or an owner in <also> (the credsep store's role account, issue #2336)."""
     try:
-        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        fd = open_ro(path)
     except OSError:
         return None
     with os.fdopen(fd) as f:
@@ -2743,7 +2766,7 @@ def account_agent(paths, login, uid, home):
         if os.path.islink(path) or not os.path.isfile(path):
             continue
         try:
-            with open(path, "rb") as f:
+            with os.fdopen(open_ro(path), "rb") as f:
                 pl = plistlib.load(f)
         except Exception as e:  # noqa: BLE001 — one line, no traceback
             return "%s: not a plist (%s)" % (path, e)
