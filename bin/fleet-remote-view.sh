@@ -871,9 +871,9 @@ rv_attach_thin() {
   esac
   case "$orchfar:$wfar:$view" in 1::*-via-*) ;; 1::*)
     if [ -n "${FLEET_VIEW_FIRST_CMD:-}" ]; then   # the selftest's seam: what ran, nothing switched
-      ( sleep 0.3; TMUX='' sh -c "$FLEET_VIEW_FIRST_CMD"' "$@"' _ do new --view "$s@view-$view" </dev/null >/dev/null 2>&1 & )
+      ( sleep 0.3; TMUX='' sh -c "$FLEET_VIEW_FIRST_CMD"' "$@"' _ "do" new --view "$s@view-$view" </dev/null >/dev/null 2>&1 & )
     else
-      ( sleep 0.3; TMUX='' python3 "$BIN/fleet-quickopen.py" do new --view "$s@view-$view" </dev/null >/dev/null 2>&1 & )
+      ( sleep 0.3; TMUX='' python3 "$BIN/fleet-quickopen.py" "do" new --view "$s@view-$view" </dev/null >/dev/null 2>&1 & )
     fi ;;
   esac
   rv_hide_borders "$s"
