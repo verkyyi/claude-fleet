@@ -1040,6 +1040,13 @@ _DIRECT_TOOLS = {
     "fleet-reap-policy.sh": ("set_reap", ("set",)),
     "fleet-dialog-answer.sh": ("answer_dialog", None),
 }
+# Which server lists each tool (issue #3113, EPIC #3111 C2): the dispatch group is
+# `fleet-orch` (the fleet-orchestrate plugin's), every other tool the core `fleet`.
+_ORCH_TOOLS = {"spawn", "await", "children", "send", "answer_dialog"}
+
+
+def _tool_mcp_name(tool):
+    return ("mcp__fleet-orch__" if tool in _ORCH_TOOLS else "mcp__fleet__") + tool
 # The mod's tools, by the name Claude shows them under (the fallback since #2057).
 _RETIRED_TOOLS = {
     "mcp__fleet__fleet_status": "status",
@@ -1136,7 +1143,7 @@ def _direct_script(orig_seg, cwd):
             return None
         if not any(path.startswith(r + os.sep) for r in _install_roots()):
             return None              # a worktree's own bin/: testing, not bypassing
-    return os.path.basename(word), "mcp__fleet__" + tool
+    return os.path.basename(word), _tool_mcp_name(tool)
 
 
 def _direct_seat(cwd):
@@ -1212,9 +1219,9 @@ def check_direct(script, tool, masked_cmd, cwd):
     sys.stderr.write(
         "⛔ BLOCKED by ~/.claude/fleet/hooks/bash-guard.py: a worker session calls the "
         "fleet through its tools — use %s instead of %s (issue #1812).\n"
-        "Codex shows the same tool as `fleet` → %s. Arguments: docs/FLEET-MCP.md.\n"
+        "Codex shows the same tool as `%s` → %s. Arguments: docs/FLEET-MCP.md.\n"
         "Truly need the script itself? Prefix FLEET_ALLOW_DIRECT_SCRIPTS=1.\n"
-        % (tool, script, tool[len("mcp__fleet__"):])
+        % ((tool, script) + tuple(tool[len("mcp__"):].split("__", 1)))
     )
     sys.exit(2)
 
@@ -1352,10 +1359,10 @@ def main():
     if name in _RETIRED_TOOLS:          # the same rule on the MCP road (#1812)
         try:
             if os.environ.get("FLEET_MCP_SERVER", "").strip() == "1":
-                check_direct(name, "mcp__fleet__" + _RETIRED_TOOLS[name], "",
+                check_direct(name, _tool_mcp_name(_RETIRED_TOOLS[name]), "",
                              data.get("cwd") or os.getcwd())
             else:                       # no service here: the mod's fallback (#2057)
-                check_fallback(name, "mcp__fleet__" + _RETIRED_TOOLS[name],
+                check_fallback(name, _tool_mcp_name(_RETIRED_TOOLS[name]),
                                data.get("cwd") or os.getcwd())
         except SystemExit:
             raise

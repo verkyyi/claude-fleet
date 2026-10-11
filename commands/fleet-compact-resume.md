@@ -28,7 +28,8 @@ map back — the operator has seen it.
 
 If the map's next step was waiting on something (CI, a child worker, the
 operator), resume that wait the way the map says (e.g. `mcp__fleet__pr_verdict`
-with `wait: true`, or `mcp__fleet__await` for a child) rather than idling.
+with `wait: true`, or `mcp__fleet-orch__await` for a child where the dispatch group
+is mounted) rather than idling.
 
 ## 排障
 

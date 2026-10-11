@@ -241,7 +241,7 @@ SIDF="$DIR/orchestrator.sid"
 SEED='/fleet-orchestrate'
 # The first turn of a RESUMED conversation (issue #2585): SessionStart (resume)
 # injects the saved state; this makes the session act on it.
-ORCH_RESUME_SEED='[fleet orchestrator] 会话刚被 fleet 接回（退出、崩溃或重启之后）。照上面「fleet orchestrator state」摘要的下一步做：先重新 arm 循环，再一句话报出当前批次和未读回报；没有摘要就先用 mcp__fleet__children 看一眼子会话。'
+ORCH_RESUME_SEED='[fleet orchestrator] 会话刚被 fleet 接回（退出、崩溃或重启之后）。照上面「fleet orchestrator state」摘要的下一步做：先重新 arm 循环，再一句话报出当前批次和未读回报；没有摘要就先用 mcp__fleet-orch__children 看一眼子会话。'
 args="--agent $AGENT"; sid=''
 # What it runs with is its definition, agents/orchestrator.md (issue #2782):
 # model, effort and the role in the system prompt — the role rides it, not the

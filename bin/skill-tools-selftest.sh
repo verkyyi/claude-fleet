@@ -34,19 +34,24 @@ pass=0
 ok()   { pass=$((pass + 1)); printf 'ok   %s\n' "$1"; }
 fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; exit 1; }
 
-# The tools the server really serves (tools/list, no hub, no tmux needed).
-printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' \
-  | env -u TMUX -u TMUX_PANE python3 "$BIN/fleet-mcp.py" > "$WORK/list" 2>"$WORK/list.err" \
-  || fail "fleet-mcp.py tools/list failed" "$(cat "$WORK/list.err")"
-python3 -c 'import json,sys; print("\n".join(t["name"] for t in json.load(open(sys.argv[1]))["result"]["tools"]))' \
-  "$WORK/list" > "$WORK/tools" || fail "could not read the tool list" "$(cat "$WORK/list")"
+# The tools each server really serves (tools/list, no hub, no tmux needed): `fleet`,
+# and the dispatch group `fleet-orch` (issue #3113) — a line is `<server>__<tool>`.
+: > "$WORK/tools"
+for grp in core orch; do
+  srv=fleet; [ "$grp" = orch ] && srv=fleet-orch
+  printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' \
+    | env -u TMUX -u TMUX_PANE -u FLEET_MCP_EXEC python3 "$BIN/fleet-mcp.py" --group "$grp" > "$WORK/list" 2>"$WORK/list.err" \
+    || fail "fleet-mcp.py --group $grp tools/list failed" "$(cat "$WORK/list.err")"
+  python3 -c 'import json,sys; print("\n".join(sys.argv[2] + "__" + t["name"] for t in json.load(open(sys.argv[1]))["result"]["tools"]))' \
+    "$WORK/list" "$srv" >> "$WORK/tools" || fail "could not read the tool list" "$(cat "$WORK/list")"
+done
 
 cat > "$WORK/lint.py" <<'PY'
 """lint <tools-file> <md>... — print `file:line: why` for each violation."""
 import re, sys
 
 PATH = re.compile(r'(~|\$HOME|\$\{HOME\})/\.claude/fleet/bin/|fleet-lib\.sh')
-TOOL = re.compile(r'mcp__fleet__([A-Za-z0-9_]+)')
+TOOL = re.compile(r'mcp__(fleet(?:-orch)?__[A-Za-z0-9_]+)')
 EXEMPT = re.compile(r'运营者|排障')
 tools = set(open(sys.argv[1]).read().split())
 bad = 0
@@ -66,7 +71,7 @@ for path in sys.argv[2:]:
                     exempt_at = level
         for t in TOOL.findall(line):
             if t not in tools:
-                print("%s:%d: mcp__fleet__%s is not a fleet tool" % (path, n, t)); bad += 1
+                print("%s:%d: mcp__%s is not a tool that server lists" % (path, n, t)); bad += 1
         if exempt_at is None and PATH.search(line):
             print("%s:%d: a script path in a worker step — name the tool (or move it under 排障)" % (path, n))
             bad += 1
@@ -91,6 +96,10 @@ cat > "$WORK/fx/red-tool.md" <<'MD'
 # skill
 Call `mcp__fleet__merge_now`.
 MD
+cat > "$WORK/fx/red-server.md" <<'MD'
+# skill
+Call `mcp__fleet__spawn` — the dispatch group is `fleet-orch`'s (issue #3113).
+MD
 cat > "$WORK/fx/red-after.md" <<'MD'
 # skill
 ## 排障
@@ -103,7 +112,7 @@ MD
 cat > "$WORK/fx/clean.md" <<'MD'
 # skill
 ## 1. Ship
-Call `mcp__fleet__pr_merge` (`pr`), then `mcp__fleet__report`.
+Call `mcp__fleet__pr_merge` (`pr`), then `mcp__fleet__report`; wait with `mcp__fleet-orch__await`.
 ```sh
 # 排障 — a comment inside a fence is not a heading
 echo hi
@@ -118,14 +127,14 @@ cat > "$WORK/fx/red-fence.md" <<'MD'
 ~/.claude/fleet/bin/fleet-pr-merge.sh 5
 ```
 MD
-for f in red-path red-lib red-tool red-after red-fence; do
+for f in red-path red-lib red-tool red-server red-after red-fence; do
   out=$(lint "$WORK/fx/$f.md") && fail "A: $f.md should be red" "$out"
 done
 out=$(lint "$WORK/fx/red-after.md")
 case "$out" in *'red-after.md:7:'*) : ;; *) fail "A: the exemption must end at the next same-level heading" "$out" ;; esac
 case "$out" in *'red-after.md:3:'*|*'red-after.md:5:'*) fail "A: a path under 排障 (and its sub-heading) must be clean" "$out" ;; esac
 out=$(lint "$WORK/fx/clean.md") || fail "A: clean.md should be clean" "$out"
-ok "A linter: a path in a worker step / fleet-lib.sh / an unknown tool are red; 排障 · 运营者 sections are exempt to the next heading; a fenced # is no heading"
+ok "A linter: a path in a worker step / fleet-lib.sh / an unknown tool / a tool on the wrong server are red; 排障 · 运营者 sections are exempt to the next heading; a fenced # is no heading"
 
 # --- B: the real skills ------------------------------------------------------------
 set --
@@ -144,7 +153,7 @@ ok "B worker skills ($#): no ~/.claude/fleet/bin path outside 排障 / 运营者
 need() { # need <file> <tool>…
   f=$1; shift
   for t in "$@"; do
-    grep -qw "mcp__fleet__$t" "$ROOT/$f" || fail "C: $f must name mcp__fleet__$t"
+    grep -Eqw "mcp__fleet(-orch)?__$t" "$ROOT/$f" || fail "C: $f must name mcp__fleet__$t (or the dispatch group's mcp__fleet-orch__$t)"
   done
 }
 need commands/fleet-claim.md brief comment send ask report evidence pr_verdict pr_merge \

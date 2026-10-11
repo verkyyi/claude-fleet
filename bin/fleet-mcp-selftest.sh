@@ -3,15 +3,16 @@
 #
 # bin/fleet-mcp.py is the ONE stdio MCP server Claude and Codex sessions both mount
 # (docs/FLEET-MCP.md). Driven against fake scripts in a sandbox bin/:
-#   A  initialize + tools/list: server `fleet`, exactly the twenty-eight tools, every
-#      schema closed (additionalProperties false)
+#   A  initialize + tools/list: server `fleet`, exactly the twenty-three core tools
+#      (the dispatch group is `fleet-orch`'s — Q), every schema closed
+#      (additionalProperties false)
 #   B  refusals: an unknown argument, a wrong type, a missing argument, an
 #      out-of-range timeout, a malformed repo, a repo this fleet does not host,
 #      an unknown tool — each answered isError with the reason, and NOTHING ran
 #   C  each tool runs its script once, with exactly its argv; the script's exit
 #      code, stdout and stderr come back as they came (a non-zero exit is data)
 #   D  degenerate (EPIC #1813 rule 1): no hub at all — every hub variable unset —
-#      and every tool is still listed and still runs
+#      and every core tool is still listed, spawn / await still run
 #   E  the legacy fleet-peer shim still serves list_agents / send_message
 #   F  `--mount codex` derives Codex's -c value from conf/mcp-worker.json, with
 #      the env Codex withholds and a per-call timeout an await fits in
@@ -56,6 +57,15 @@
 #      from a command line — the same argv to the script, the byte-identical text
 #      on stdout, exit 0 answered (the script's exit is in the text) / 1 refused
 #      (the reason on stdout, nothing ran) / 2 usage; the call log says road=call
+#   Q  two groups (issue #3113, EPIC #3111 C2): `--group orch` is the server
+#      `fleet-orch` listing exactly spawn · await · children · answer_dialog · send;
+#      `--list` prints each server's list; `fleet` still answers a dispatch-group
+#      call (an old session's, road=legacy in the call log); a server that took over
+#      from a pre-group version keeps listing all 28 and hands that on; file_issue
+#      spawn:true with no dispatch group files WITHOUT --spawn and says how to install
+#      it, with it (FLEET_MCP_ORCH=1, or the plugin enabled in Claude Code's settings)
+#      spawns as before; --mount codex --group orch derives from conf/mcp-orch.json,
+#      the same server the plugin's .mcp.json registers; --bridge-seat answers by role
 set -u
 
 BIN=$(cd "$(dirname "$0")" && pwd)
@@ -63,6 +73,7 @@ SUT="$BIN/fleet-mcp.py"
 [ -f "$SUT" ] || { echo "selftest: fleet-mcp.py missing" >&2; exit 2; }
 [ -f "$BIN/fleet-peer-mcp.py" ] || { echo "selftest: fleet-peer-mcp.py missing" >&2; exit 2; }
 [ -f "$BIN/../conf/mcp-worker.json" ] || { echo "selftest: conf/mcp-worker.json missing" >&2; exit 2; }
+[ -f "$BIN/../conf/mcp-orch.json" ] || { echo "selftest: conf/mcp-orch.json missing" >&2; exit 2; }
 
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/fleet-mcp.XXXXXX") || exit 2
 trap 'rm -rf "$WORK"' EXIT
@@ -76,6 +87,7 @@ mkdir -p "$WORK/bin" "$WORK/conf"
 cp "$SUT" "$WORK/bin/fleet-mcp.py"
 cp "$BIN/fleet-peer-mcp.py" "$WORK/bin/fleet-peer-mcp.py"
 cp "$BIN/../conf/mcp-worker.json" "$WORK/conf/mcp-worker.json"
+cp "$BIN/../conf/mcp-orch.json" "$WORK/conf/mcp-orch.json"
 LOG="$WORK/runs"; : > "$LOG"
 
 cat > "$WORK/bin/fleet-lib.sh" <<'SH'
@@ -141,10 +153,14 @@ SH
 chmod +x "$WORK/tmux"
 
 # serve <out> [extra server args] < requests — one stdio session, no hub anywhere.
+# The dispatch group counts as mounted (FLEET_MCP_ORCH=1) unless FAKE_ORCH says
+# otherwise; Claude Code's settings are the sandbox's, never the operator's.
+mkdir -p "$WORK/claude"
 serve() {
   out=$1; shift
-  env -u CCQUOTA_FLEET -u FLEET_HUB_URL -u CCQUOTA_HUB_URL -u CCQUOTA_URL -u FLEET_WORKER_CRED \
-    PATH="$WORK:$PATH" TMUX=1 TMUX_PANE=%1 python3 "$WORK/bin/fleet-mcp.py" "$@" > "$out"
+  env -u CCQUOTA_FLEET -u FLEET_HUB_URL -u CCQUOTA_HUB_URL -u CCQUOTA_URL -u FLEET_WORKER_CRED -u FLEET_MCP_EXEC \
+    PATH="$WORK:$PATH" TMUX=1 TMUX_PANE=%1 CLAUDE_CONFIG_DIR="$WORK/claude" FLEET_MCP_ORCH="${FAKE_ORCH-1}" \
+    python3 "$WORK/bin/fleet-mcp.py" "$@" > "$out"
 }
 call() { # call <id> <tool> <json args>
   printf '{"jsonrpc":"2.0","id":%s,"method":"tools/call","params":{"name":"%s","arguments":%s}}\n' "$1" "$2" "$3"
@@ -163,15 +179,13 @@ assert len(rows) == 2, rows                       # the notification got no answ
 assert rows[0]["result"]["serverInfo"]["name"] == "fleet", rows[0]
 assert rows[0]["result"]["protocolVersion"] == "2025-06-18", rows[0]
 tools = {t["name"]: t for t in rows[1]["result"]["tools"]}
-assert set(tools) == {"status", "children", "repos", "agents", "spawn", "await", "send",
+assert set(tools) == {"status", "repos", "agents",
                       "report", "ask", "comment", "evidence", "handoff", "pr_verdict", "pr_merge",
                       "brief", "file_issue", "gh", "context", "transfer", "where", "whats_new", "show", "open",
-                      "set_reap", "debug_bundle", "debug_publish", "debug_propose", "answer_dialog"}, sorted(tools)
+                      "set_reap", "debug_bundle", "debug_publish", "debug_propose"}, sorted(tools)
 for t in tools.values():
     assert t["inputSchema"]["additionalProperties"] is False, t
     assert t["description"], t
-assert tools["spawn"]["inputSchema"]["required"] == ["issue"]
-assert tools["send"]["inputSchema"]["required"] == ["to", "text"]
 assert tools["comment"]["inputSchema"]["required"] == ["issue", "body"]
 assert tools["ask"]["inputSchema"]["required"] == ["question"]
 for n in ("report", "evidence", "handoff"):
@@ -179,7 +193,7 @@ for n in ("report", "evidence", "handoff"):
 for n in ("pr_verdict", "pr_merge"):
     assert tools[n]["inputSchema"]["required"] == ["pr"], n
 PY
-ok "A server \`fleet\`, the twenty-eight tools, every schema closed"
+ok "A server \`fleet\`, the twenty-three core tools, every schema closed"
 
 # --- B: refusals — nothing runs -----------------------------------------------
 : > "$LOG"
@@ -272,12 +286,12 @@ ok "C status · children · repos · agents · spawn · await · send each ran i
 python3 - "$WORK/d" <<'PY' || fail "D: with no hub a tool was missing or failed" "$(cat "$WORK/d")"
 import json, sys
 rows = {r["id"]: r["result"] for r in (json.loads(l) for l in open(sys.argv[1]) if l.strip())}
-assert len(rows[1]["tools"]) == 28, rows[1]
+assert len(rows[1]["tools"]) == 23, rows[1]
 assert rows[40]["structuredContent"]["exit"] == 2 and not rows[40].get("isError"), rows[40]
 assert rows[41]["structuredContent"]["exit"] == 0, rows[41]
 PY
 grep -qx 'fleet-await.sh 3 --timeout 540' "$LOG" || fail "D: await's default timeout is not 540" "$(cat "$LOG")"
-ok "D no hub configured: all twenty-eight tools listed, spawn/await run locally (await default 540s)"
+ok "D no hub configured: all twenty-three core tools listed, spawn/await run locally (await default 540s)"
 
 # --- E: the legacy fleet-peer shim --------------------------------------------
 env -u FLEET_WORKER_CRED PATH="$WORK:$PATH" TMUX=1 TMUX_PANE=%1 python3 "$WORK/bin/fleet-peer-mcp.py" > "$WORK/e" <<'EOF'
@@ -297,7 +311,7 @@ ok "E fleet-peer-mcp.py still serves list_agents / send_message (one version)"
 # --- F: the Codex mount, from the one definition ------------------------------
 m=$(python3 "$WORK/bin/fleet-mcp.py" --mount codex) || fail "F: --mount codex failed"
 case "$m" in
-  'mcp_servers.fleet={command="bash",args=["-c",'*'fleet-mcp.py'*'],env_vars=["TMUX","TMUX_PANE",'*'"FLEET_WORKER_CRED","FLEET_MCP_BIN"],tool_timeout_sec=600}') : ;;
+  'mcp_servers.fleet={command="bash",args=["-c",'*'fleet-mcp.py'*'],env_vars=["TMUX","TMUX_PANE",'*'"FLEET_WORKER_CRED","FLEET_MCP_BIN","FLEET_MCP_ORCH"],tool_timeout_sec=600}') : ;;
   *) fail "F: the Codex mount value is wrong" "$m" ;;
 esac
 python3 - "$WORK/conf/mcp-worker.json" <<'PY' || fail "F: conf/mcp-worker.json is not the one fleet server"
@@ -867,7 +881,7 @@ req(1, "initialize", {"protocolVersion": "2025-06-18"})
 init = get()
 check(init["result"]["capabilities"]["tools"].get("listChanged") is True, "initialize does not declare tools.listChanged: %s" % init)
 req(2, "tools/list"); first = names(get())
-check("zz_new" not in first and "children" in first, "v1 lists %s" % first)
+check("zz_new" not in first and "status" in first, "v1 lists %s" % first)
 if mode == "off":
     switch("v2"); call(3, "children"); m = get()
     check(m.get("id") == 3 and "v1-children" in text(m), "with FLEET_MCP_RELOAD=0 the call left v1: %s" % m)
@@ -929,10 +943,11 @@ cli() { # cli <out> <args…> — one command line in the sandbox (no hub, no cr
 cli "$WORK/n.spec" --spec status spawn await; rc=$?
 [ "$rc" = 0 ] || fail "N: --spec status spawn await exited $rc" "$(cat "$WORK/n.spec.err")"
 printf '{"jsonrpc":"2.0","id":1,"method":"tools/list"}\n' | serve "$WORK/n.list"
-python3 - "$WORK/n.spec" "$WORK/n.list" <<'PY2' || fail "N: --spec is not the tools/list entry, byte for byte" "$(cat "$WORK/n.spec")"
+printf '{"jsonrpc":"2.0","id":1,"method":"tools/list"}\n' | serve "$WORK/n.list.orch" --group orch
+python3 - "$WORK/n.spec" "$WORK/n.list" "$WORK/n.list.orch" <<'PY2' || fail "N: --spec is not the tools/list entry, byte for byte" "$(cat "$WORK/n.spec")"
 import json, sys
 spec = json.load(open(sys.argv[1]))
-listed = {t["name"]: t for t in json.loads(open(sys.argv[2]).readline())["result"]["tools"]}
+listed = {t["name"]: t for f in sys.argv[2:4] for t in json.loads(open(f).readline())["result"]["tools"]}
 assert [s["name"] for s in spec] == ["status", "spawn", "await"], spec
 for s in spec:
     assert s == listed[s["name"]], (s, listed[s["name"]])
@@ -1035,5 +1050,100 @@ assert not r2.get("isError") and r2["structuredContent"]["command"] == "dash-iss
 PY
 [ "$(grep -c '^dash-issue-session.sh' "$LOG")" = 1 ] || fail "P: a refused spawn ran its script" "$(cat "$LOG")"
 ok "P spawn: refused from a worker seat (fleet_spawn_refused, nothing ran); any other seat runs it"
+
+# --- Q: two groups (issue #3113, EPIC #3111 C2) ------------------------------
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' \
+  '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' | serve "$WORK/q1" --group orch
+python3 - "$WORK/q1" <<'PY' || fail "Q: --group orch is not the dispatch group" "$(cat "$WORK/q1")"
+import json, sys
+rows = {r["id"]: r["result"] for r in (json.loads(l) for l in open(sys.argv[1]) if l.strip())}
+assert rows[1]["serverInfo"]["name"] == "fleet-orch", rows[1]
+tools = {t["name"]: t for t in rows[2]["tools"]}
+assert sorted(tools) == ["answer_dialog", "await", "children", "send", "spawn"], sorted(tools)
+assert tools["spawn"]["inputSchema"]["required"] == ["issue"]
+assert tools["send"]["inputSchema"]["required"] == ["to", "text"]
+for t in tools.values():
+    assert t["inputSchema"]["additionalProperties"] is False, t
+PY
+cli "$WORK/q.l0" --list && cli "$WORK/q.l1" --group orch --list || fail "Q: --list exited non-zero" "$(cat "$WORK/q.l0.err" "$WORK/q.l1.err")"
+[ "$(wc -l < "$WORK/q.l0" | tr -d ' ')" = 23 ] && ! grep -Eqx 'spawn|await|children|answer_dialog|send' "$WORK/q.l0" \
+  && [ "$(sort "$WORK/q.l1" | tr '\n' ' ')" = "answer_dialog await children send spawn " ] \
+  || fail "Q: --list is not each server's list" "$(cat "$WORK/q.l0"; echo ---; cat "$WORK/q.l1")"
+cli "$WORK/q.bad" --group zz --list && fail "Q: --group zz was accepted"
+# An old session (its list had spawn) calls it on `fleet`: answered, logged road=legacy.
+: > "$LOG"; : > "$WORK/q.log"
+{ call 140 spawn '{"issue":8}'; call 141 children '{}'; call 142 status '{}'; } | FLEET_MCP_LOG="$WORK/q.log" serve "$WORK/q2"
+python3 - "$WORK/q2" <<'PY' || fail "Q: fleet no longer answers a dispatch-group call" "$(cat "$WORK/q2")"
+import json, sys
+rows = {r["id"]: r["result"] for r in (json.loads(l) for l in open(sys.argv[1]) if l.strip())}
+assert rows[140]["structuredContent"]["command"] == "dash-issue-session.sh" and not rows[140].get("isError"), rows[140]
+assert rows[141]["structuredContent"]["command"] == "fleet-children.sh", rows[141]
+PY
+grep -qx 'dash-issue-session.sh 8' "$LOG" || fail "Q: the legacy spawn did not run its script" "$(cat "$LOG")"
+grep -q 'tool=spawn .*road=legacy' "$WORK/q.log" && grep -q 'tool=children .*road=legacy' "$WORK/q.log" \
+  && ! grep -q 'tool=status .*road=legacy' "$WORK/q.log" \
+  || fail "Q: the call log does not mark the dispatch-group calls on fleet road=legacy (and only them)" "$(cat "$WORK/q.log")"
+# The same call on fleet-orch is its own tool: no legacy mark.
+: > "$WORK/q.log"
+call 143 spawn '{"issue":8}' | FLEET_MCP_LOG="$WORK/q.log" serve "$WORK/q3" --group orch
+grep -q 'tool=spawn ' "$WORK/q.log" && ! grep -q 'road=legacy' "$WORK/q.log" || fail "Q: fleet-orch's own spawn was logged legacy" "$(cat "$WORK/q.log")"
+# A takeover (#1898) from a pre-group version: its handover has no "list" — every tool
+# stays listed (and the next handover says so); one from this version lists the core.
+: > "$WORK/q4"
+for st in '{"from":"a","to":"b"}' '{"from":"a","to":"b","list":"group"}' '{"from":"a","to":"b","list":"all"}'; do
+  printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
+    | env -u CCQUOTA_FLEET -u FLEET_HUB_URL -u FLEET_WORKER_CRED PATH="$WORK:$PATH" TMUX=1 TMUX_PANE=%1 \
+      FLEET_MCP_EXEC="$st" FLEET_MCP_LOG="$WORK/q.rl.log" python3 "$WORK/bin/fleet-mcp.py" >> "$WORK/q4"
+done
+python3 - "$WORK/q4" <<'PY' || fail "Q: a takeover from a pre-group server dropped tools from its session's list" "$(cat "$WORK/q4")"
+import json, sys
+lists = [r["result"]["tools"] for r in (json.loads(l) for l in open(sys.argv[1]) if l.strip()) if "id" in r]
+assert [len(x) for x in lists] == [28, 23, 28], [len(x) for x in lists]
+assert "spawn" in {t["name"] for t in lists[0]}
+PY
+grep -q '"list": "all" if SERVING\["list_all"\]' "$WORK/bin/fleet-mcp.py" \
+  && grep -q 'SELF\] + sys.argv\[1:\]' "$WORK/bin/fleet-mcp.py" \
+  || fail "Q: the handover no longer carries the list mode / the server's --group"
+# file_issue spawn:true: no dispatch group → filed without --spawn, the install hint said.
+: > "$LOG"
+call 150 file_issue '{"title":"a","spawn":true}' | FAKE_ORCH= serve "$WORK/q5"
+call 151 file_issue '{"title":"b","spawn":true}' | serve "$WORK/q6"
+printf '{"enabledPlugins":{"fleet-orchestrate@claude-fleet":true}}\n' > "$WORK/claude/settings.json"
+call 152 file_issue '{"title":"c","spawn":true}' | FAKE_ORCH= serve "$WORK/q7"
+printf '{"enabledPlugins":{"fleet-orchestrate@claude-fleet":false}}\n' > "$WORK/claude/settings.json"
+call 153 file_issue '{"title":"d","spawn":true}' | FAKE_ORCH= serve "$WORK/q8"
+rm -f "$WORK/claude/settings.json"
+grep -qx 'fleet-issue-file.sh --title a' "$LOG" && grep -qx 'fleet-issue-file.sh --title b --spawn' "$LOG" \
+  && grep -qx 'fleet-issue-file.sh --title c --spawn' "$LOG" && grep -qx 'fleet-issue-file.sh --title d' "$LOG" \
+  || fail "Q: file_issue spawn:true does not follow the dispatch group" "$(cat "$LOG")"
+python3 - "$WORK/q5" "$WORK/q6" <<'PY' || fail "Q: the unspawned filing does not say how to install the group" "$(cat "$WORK/q5" "$WORK/q6")"
+import json, sys
+r5 = json.loads(open(sys.argv[1]).readline())["result"]
+assert not r5.get("isError"), r5
+t = r5["content"][0]["text"]
+assert "issues/900" in t and "/plugin install fleet-orchestrate@claude-fleet" in t, t
+r6 = json.loads(open(sys.argv[2]).readline())["result"]
+assert "/plugin install" not in r6["content"][0]["text"], r6
+PY
+# The Codex mount and the plugin's registration are the one server.
+m=$(python3 "$WORK/bin/fleet-mcp.py" --mount codex --group orch) || fail "Q: --mount codex --group orch failed"
+case "$m" in
+  'mcp_servers.fleet-orch={command="bash",args=["-c",'*'fleet-mcp.py'*'--group orch'*'],env_vars=['*'"FLEET_MCP_ORCH"],tool_timeout_sec=600}') : ;;
+  *) fail "Q: the Codex mount of the dispatch group is wrong" "$m" ;;
+esac
+cmp -s "$BIN/../conf/mcp-orch.json" "$BIN/../plugins/fleet-orchestrate/.mcp.json" \
+  || fail "Q: plugins/fleet-orchestrate/.mcp.json is not conf/mcp-orch.json (the one definition)"
+python3 - "$BIN/../conf/mcp-worker.json" "$BIN/../conf/mcp-orch.json" <<'PY' || fail "Q: the two configs do not name the two servers"
+import json, sys
+w, o = (json.load(open(f))["mcpServers"] for f in sys.argv[1:3])
+assert set(w) == {"fleet"} and set(o) == {"fleet-orch"}, (w, o)
+assert "--group orch" in " ".join(o["fleet-orch"]["args"]) and "--group" not in " ".join(w["fleet"]["args"])
+PY
+python3 "$WORK/bin/fleet-mcp.py" --bridge-seat epic-driver \
+  && ! env -u TMUX python3 "$WORK/bin/fleet-mcp.py" --bridge-seat debugger \
+  && ! env -u TMUX python3 "$WORK/bin/fleet-mcp.py" --bridge-seat worker \
+  && ! env -u TMUX python3 "$WORK/bin/fleet-mcp.py" --bridge-seat \
+  || fail "Q: --bridge-seat does not answer by role"
+ok "Q fleet-orch lists the dispatch group; fleet answers it road=legacy; a pre-group takeover keeps all 28; file_issue spawn follows the group; one server definition for Codex and the plugin"
 
 printf 'fleet-mcp-selftest: %d passed\n' "$pass"

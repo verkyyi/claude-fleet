@@ -266,7 +266,7 @@ expand_slash() {
   body=$(cat "$f")
   body="${body//\$ARGUMENTS/$rest}"
   pre=$(cat "$ROOT/conf/codex-preamble.md" 2>/dev/null)
-  [ -n "$pre" ] || pre='You are a claude-fleet WORKER running on OpenAI Codex CLI. The text below is a Claude Code skill: slash commands and Claude-only tools (AskUserQuestion, SendMessage, Artifact, /fleet-handoff, /fleet-context) are not available to you — call each mcp__fleet__<name> it names as the tool <name> on your fleet MCP server, never wait on the operator, and every rail (worktree-only edits, no destructive tmux, land your own PR) applies unchanged.'
+  [ -n "$pre" ] || pre='You are a claude-fleet WORKER running on OpenAI Codex CLI. The text below is a Claude Code skill: slash commands and Claude-only tools (AskUserQuestion, SendMessage, Artifact, /fleet-handoff, /fleet-context) are not available to you — call each mcp__fleet__<name> it names as the tool <name> on your fleet MCP server (an mcp__fleet-orch__<name> on your fleet-orch server, when you have one), never wait on the operator, and every rail (worktree-only edits, no destructive tmux, land your own PR) applies unchanged.'
   EXPANDED="$pre"$'\n\n'"$body"
   return 0
 }
@@ -395,9 +395,15 @@ unset _codex_subagent _policy _value
 # Codex withholds from a server: TMUX, TMUX_PANE, …). Before the caller's -c.
 # FLEET_MCP=0 or no file beside bin/ adds nothing.
 if [ "${FLEET_MCP:-1}" != 0 ] && [ -f "$BIN/../conf/mcp-worker.json" ] && [ -f "$BIN/fleet-mcp.py" ]; then
+  unset FLEET_MCP_ORCH
   _mount=$(python3 "$BIN/fleet-mcp.py" --mount codex 2>/dev/null) && [ -n "$_mount" ] && {
     export FLEET_MCP_BIN="$BIN"
     flags+=(-c "$_mount")
+    # The dispatch group `fleet-orch` (issue #3113) — on a seat the fleet opens
+    # itself only, as bin/fleet-claude.sh mounts it (C7 retires those seats).
+    python3 "$BIN/fleet-mcp.py" --bridge-seat 2>/dev/null \
+      && _mount=$(python3 "$BIN/fleet-mcp.py" --mount codex --group orch 2>/dev/null) && [ -n "$_mount" ] \
+      && { flags+=(-c "$_mount"); export FLEET_MCP_ORCH=1; }
   }
   unset _mount
 fi
