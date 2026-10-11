@@ -254,6 +254,11 @@ func loadFleetCerts(srv *api.Server) error {
 	if repo == "off" {
 		srv.Stable.Repo = ""
 	}
+	// 我的用量's task titles and batches (claude-fleet#3227): GitHub's REST
+	// API, cached; off with the stable lookup. The token is optional.
+	if repo != "off" {
+		srv.IssueMeta = &api.GitHubIssueMeta{Token: os.Getenv("CCQUOTA_GITHUB_ISSUES_TOKEN")}
+	}
 	if err := loadFleetReleases(srv); err != nil {
 		return err
 	}

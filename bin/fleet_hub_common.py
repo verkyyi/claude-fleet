@@ -271,6 +271,8 @@ def inventory_row(parts):
     session (bin/fleet-orchestrator.sh). Since issue #3119 a node writes
     `role=worker` for it (no session is special: an ordinary row everywhere);
     an older node's `orchestrator` / `steward` is still read — compat-1v: 下一批删.
+    `role=worker` becomes `coordinator: true` (issue #3227) — the hub's 我的用量
+    reads it, every list still draws the row as an ordinary one.
     Column 21 (issue #1958): `epic=<owner/name>#<N>[:<landed>/<members>]` — the
     window that drives a running EPIC, so every machine's list draws the batch as
     ONE row named after its parent, badged landed/members; empty elsewhere.
@@ -374,6 +376,11 @@ def inventory_row(parts):
         r = parts.pop()[5:]
         if r in ("orchestrator", "steward"):
             extra["role"] = r
+        elif r == "worker":
+            # the window holding the orchestrator or the steward (issue #3119
+            # made it an ordinary row): the hub files its pool usage under one
+            # 「编排与管家」 row on 我的用量 (issue #3227) and nothing else reads it
+            extra["coordinator"] = True
     if len(parts) >= 19 and parts[-1].startswith("detail="):
         extra["detail"] = parts.pop()[7:][:120] or None
     if len(parts) >= 18 and parts[-1].startswith("reap="):

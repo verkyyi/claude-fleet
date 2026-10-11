@@ -123,6 +123,7 @@ var routeAccess = map[string]string{
 	CredPolicyPath:                accessAdmin,
 	"/v1/fleet/ssh-relays":        accessAdmin,
 	"/v1/accounts":                accessAdmin, "/v1/accounts/label": accessAdmin,
+	"/v1/me/quota":   accessAdmin, // the pool's windows (claude-fleet#3227)
 	"/v1/collectors": accessAdmin, "/v1/account-usage": accessAdmin,
 	"/v1/limits": accessAdmin, "/v1/limits/history": accessAdmin, "/v1/quota/history": accessAdmin,
 	"/v1/endpoints": accessAdmin, "/v1/account-switches": accessAdmin, "/v1/endpoint-accounts": accessAdmin,
@@ -140,9 +141,14 @@ var routeAccess = map[string]string{
 	// A user's own: scoped to their machine login, their principal, or
 	// FleetScope.
 	"/": accessUser, "/v1/me": accessUser,
-	// 我的额度 (claude-fleet#2517): the subscriptions their own logins use.
-	"/v1/me/quota": accessUser, "/quota": accessUser,
-	"/v1/usage": accessUser, "/v1/history": accessUser, "/v1/summary": accessUser,
+	// 我的额度 (claude-fleet#2517): the page stays until it folds into /usage
+	// (EPIC #3225 C4); its API reads the pool's windows, an admin's
+	// (claude-fleet#3227).
+	"/quota": accessUser,
+	// 我的用量 in one answer (claude-fleet#3227): their limit, days, models
+	// and where it went, off pool_usage under their principal.
+	"/v1/me/usage": accessUser,
+	"/v1/usage":    accessUser, "/v1/history": accessUser, "/v1/summary": accessUser,
 	"/v1/sessions": accessUser, "/v1/sessions/": accessUser,
 	"/v1/live": accessUser, "/v1/live/stream": accessUser,
 	"/v1/user": accessUser, "/mcp": accessUser,
@@ -442,10 +448,10 @@ func (s *Server) auditRoleDenied(r *http.Request) {
 // admin's every one: the same (their own, claude-fleet#2515), then All
 // sessions, By person and All devices — the whole hub those pages used to
 // show an admin — then Subscriptions, Machines, Users, Settings and Audit
-// (claude-fleet#1990). mymachines is 我的机器 (#2518), quota is 我的额度 (#2517),
-// usage is 我的用量 (#2519).
+// (claude-fleet#1990). mymachines is 我的机器 (#2518), quota is 我的额度 (#2517)
+// — the pool's windows, an admin's since #3227 — usage is 我的用量 (#2519).
 var (
-	userPages  = []string{"overview", "sessions", "mymachines", "devices", "phone", "connection", "quota", "usage", "config"}
+	userPages  = []string{"overview", "sessions", "mymachines", "devices", "phone", "connection", "usage", "config"}
 	adminPages = []string{"overview", "sessions", "mymachines", "devices", "phone", "connection", "quota", "usage", "config",
 		"all-sessions", "by-person", "all-devices",
 		"subscriptions", "machines", "people", "settings", "audit"}

@@ -80,23 +80,19 @@ func TestMeQuota_OwnSubscriptionsOnly(t *testing.T) {
 	own(ghBob, "m1", "ep_m1")
 	own(ghBob, "m3", "ep_m3")
 	own(ghCarol, "m2", "ep_m2")
-	_, bob := h.signIn(t, ghBob)
-	_, carol := h.signIn(t, ghCarol)
-
-	read := func(c *http.Cookie) ([]MyQuota, string) {
+	// Since claude-fleet#3227 the route is an admin's (the pool's windows):
+	// the cut to a person's own logins is myQuota's, read here directly.
+	read := func(u fakeGHUser) ([]MyQuota, string) {
 		t.Helper()
-		code, b := rolesGet(t, h, c, "/v1/me/quota")
-		if code != http.StatusOK {
-			t.Fatalf("/v1/me/quota: HTTP %d %s", code, b)
+		rows, err := h.srv.myQuota(githubPrincipal(u.ID), now)
+		if err != nil {
+			t.Fatal(err)
 		}
-		var rows []MyQuota
-		if err := json.Unmarshal(b, &rows); err != nil {
-			t.Fatalf("%v: %s", err, b)
-		}
+		b, _ := json.Marshal(rows)
 		return rows, string(b)
 	}
 
-	rows, raw := read(bob)
+	rows, raw := read(ghBob)
 	if len(rows) != 2 {
 		t.Fatalf("bob /v1/me/quota = %s; want his two subscriptions", raw)
 	}
@@ -119,25 +115,23 @@ func TestMeQuota_OwnSubscriptionsOnly(t *testing.T) {
 		t.Errorf("the weekly-full one = %+v (all: %s); want limited, resets with the 7-day window", b, raw)
 	}
 
-	if rows, raw := read(carol); len(rows) != 1 || rows[0].Used5hPct == nil || *rows[0].Used5hPct != 5 {
+	if rows, raw := read(ghCarol); len(rows) != 1 || rows[0].Used5hPct == nil || *rows[0].Used5hPct != 5 {
 		t.Errorf("carol /v1/me/quota = %s; want her one subscription", raw)
 	}
 
 	// An admin's "mine" is theirs too, not the pool: owning nothing, [].
-	ghAdmin := fakeGHUser{ID: 100, Login: "verkyyi"}
 	_, admin := h.signIn(t, ghAdmin)
-	if rows, raw := read(admin); len(rows) != 0 || raw != "[]\n" && raw != "[]" {
-		t.Errorf("an admin with no login /v1/me/quota = %q; want []", raw)
+	code, ab := rolesGet(t, h, admin, "/v1/me/quota")
+	if raw := strings.TrimSpace(string(ab)); code != http.StatusOK || raw != "[]" {
+		t.Errorf("an admin with no login /v1/me/quota = %d %q; want []", code, raw)
 	}
 
-	// The page is in both menus.
-	for _, c := range []*http.Cookie{bob, admin} {
-		var me Me
-		_, mb := rolesGet(t, h, c, "/v1/me")
-		_ = json.Unmarshal(mb, &me)
-		if !containsString(me.Pages, "quota") {
-			t.Errorf("/v1/me pages = %v; want quota", me.Pages)
-		}
+	// The page is an admin's menu only (claude-fleet#3227).
+	var me Me
+	_, mb := rolesGet(t, h, admin, "/v1/me")
+	_ = json.Unmarshal(mb, &me)
+	if !containsString(me.Pages, "quota") {
+		t.Errorf("/v1/me pages = %v; want quota", me.Pages)
 	}
 }
 
