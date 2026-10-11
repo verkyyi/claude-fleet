@@ -344,7 +344,7 @@ def main():
 def worktree_reason(worktree, minimum, sockets, merged_at=None, now=None, exclude=""):
     """The first OTHER window that works in this worktree and is live, as
     `<window> <reason>`, else None (issue #3352). A view session groups the
-    fleet's windows (#1489), so `list-windows -a` names one window once per
+    fleet's windows (#1489), so the all-sessions window list names one window once per
     session — seen once here. `exclude` is the window being reaped: its caller
     checked it already, and its own panes are never «another live window»."""
     target = Path(worktree).resolve()
