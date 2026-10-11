@@ -17,6 +17,7 @@
 #
 # Usage:
 #   fleet-hooks-emit.sh --target codex [--root <install-root>] [--event <Event>]
+#                       [--plugin-dir <dir>]…
 #   fleet-hooks-emit.sh --target claude [--root <install-root>]
 #
 #   --target codex   prints one `<Event>\t<toml-array>` line per wired event, for
@@ -27,19 +28,27 @@
 #                    so a selftest or a re-homed install wires ITS OWN copies
 #                    rather than the canonical live install. Default: the parent
 #                    of this script's directory.
+#   --plugin-dir <d> (codex, repeatable — issue #3123) also merge the plugin at <d>'s
+#                    hooks/hooks.json (its ${CLAUDE_PLUGIN_ROOT} spelled as <d>),
+#                    through the same codex-map: its groups follow the core's in an
+#                    event's array, an event Codex lacks (PreCompact) is dropped with
+#                    one stderr line. bin/fleet-codex.sh passes what
+#                    `fleet-codex-plugins.py dirs` prints. None = byte for byte as before.
 #
 # Exit 0 on success; 2 on a missing/unreadable source; 3 on malformed JSON.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$BIN/.." && pwd)"
 
-TARGET=''; OUT_ROOT="$ROOT"; ONLY_EVENT=''
+TARGET=''; OUT_ROOT="$ROOT"; ONLY_EVENT=''; PLUGIN_DIRS=''
 while [ $# -gt 0 ]; do
   case "$1" in
     --target) TARGET="${2:-}"; shift 2 ;;
     --root)   OUT_ROOT="${2:-}"; shift 2 ;;
     --event)  ONLY_EVENT="${2:-}"; shift 2 ;;
-    -h|--help) sed -n '2,32p' "$0"; exit 0 ;;
+    --plugin-dir) PLUGIN_DIRS="${PLUGIN_DIRS:+$PLUGIN_DIRS
+}${2:-}"; shift 2 ;;
+    -h|--help) sed -n '2,39p' "$0"; exit 0 ;;
     *) printf 'fleet-hooks-emit: unknown argument: %s\n' "$1" >&2; exit 2 ;;
   esac
 done
@@ -53,7 +62,7 @@ MAP="$ROOT/hooks/codex-map.json"
 [ -r "$SRC" ] || { printf 'fleet-hooks-emit: cannot read %s\n' "$SRC" >&2; exit 2; }
 [ "$TARGET" = codex ] && { [ -r "$MAP" ] || { printf 'fleet-hooks-emit: cannot read %s\n' "$MAP" >&2; exit 2; }; }
 
-SRC="$SRC" MAP="$MAP" TARGET="$TARGET" OUT_ROOT="$OUT_ROOT" ONLY_EVENT="$ONLY_EVENT" \
+SRC="$SRC" MAP="$MAP" TARGET="$TARGET" OUT_ROOT="$OUT_ROOT" ONLY_EVENT="$ONLY_EVENT" PLUGIN_DIRS="$PLUGIN_DIRS" \
 python3 - <<'PY'
 import json, os, sys
 
@@ -117,17 +126,44 @@ events = {k: v for k, v in m.get("events", {}).items() if v is True}
 matchers = m.get("matchers", {})       # old -> new, or null to drop the group
 drops = m.get("drop_commands", {})     # substring -> reason
 
+def re_ver(d):
+    """A plugin cache dir is <name>/<version>: name the plugin, not its version."""
+    import re
+    return re.match(r"^\d+(\.\d+)*", os.path.basename(d.rstrip("/"))) is not None
+
 def toml_str(s):
     return '"%s"' % s.replace("\\", "\\\\").replace('"', '\\"')
 
+# Plugin hook tables (issue #3123): each one's groups after the core's, same map.
+plugin_groups = {}
+for pdir in [d for d in os.environ.get("PLUGIN_DIRS", "").split("\n") if d]:
+    try:
+        ptable = json.load(open(os.path.join(pdir, "hooks", "hooks.json"))).get("hooks") or {}
+    except FileNotFoundError:
+        continue
+    except Exception as e:
+        sys.stderr.write("fleet-hooks-emit: %s/hooks/hooks.json unreadable (%s) — skipped\n" % (pdir, e))
+        continue
+    pname = os.path.basename(os.path.dirname(pdir.rstrip("/"))) if re_ver(pdir) else os.path.basename(pdir.rstrip("/"))
+    for ev, groups in ptable.items():
+        if ev not in events:
+            why = m.get("events", {}).get(ev) or "not a Codex event"
+            sys.stderr.write("fleet-hooks-emit: plugin %s: %s not carried — %s\n" % (pname, ev, why))
+            continue
+        for g in groups or []:
+            e = dict(g)
+            e["hooks"] = [dict(h, command=str(h.get("command", "")).replace("${CLAUDE_PLUGIN_ROOT}", pdir))
+                          for h in g.get("hooks", [])]
+            plugin_groups.setdefault(ev, []).append(e)
+
 emitted = 0
-for ev in table:
+for ev in list(table) + [e for e in plugin_groups if e not in table]:
     if ev not in events:
         continue
     if only and ev != only:
         continue
     groups = []
-    for g in table[ev]:
+    for g in table.get(ev, []) + plugin_groups.get(ev, []):
         matcher = g.get("matcher")
         if matcher is not None:
             if matcher in matchers:

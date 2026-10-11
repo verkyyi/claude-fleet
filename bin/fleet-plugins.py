@@ -86,9 +86,44 @@ def jlist(claude, *args):
         return None, ["unreadable --json output"]
 
 
-def installed(claude, mname):
-    """{plugin name: entry} of this marketplace's installed plugins, or (None, why)."""
+def listed(claude, cache=""):
+    """`claude plugin list --json` as a list, or (None, why). With a cache file it is
+    asked once per change of what is installed — the plugins dir, its
+    installed_plugins.json and settings.json move when /plugin installs, enables or
+    removes one — so a session launch (fleet-codex-plugins.py) costs no node start."""
+    if not cache:
+        return jlist(claude, "list", "--json")
+    cdir = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
+    stamp = [claude]
+    for pth in (os.path.join(cdir, "plugins"), os.path.join(cdir, "plugins", "installed_plugins.json"),
+                os.path.join(cdir, "settings.json")):
+        try:
+            stamp.append(os.stat(pth).st_mtime_ns)
+        except OSError:
+            stamp.append(0)
+    try:
+        with open(cache) as f:
+            c = json.load(f)
+        if c.get("stamp") == stamp and isinstance(c.get("rows"), list):
+            return c["rows"], None
+    except (OSError, ValueError, AttributeError):
+        pass
     lst, why = jlist(claude, "list", "--json")
+    if lst is not None:
+        try:
+            os.makedirs(os.path.dirname(cache), exist_ok=True)
+            tmp = "%s.%d.tmp" % (cache, os.getpid())
+            with open(tmp, "w") as f:
+                json.dump({"stamp": stamp, "rows": lst}, f)
+            os.replace(tmp, cache)
+        except OSError:
+            pass
+    return lst, why
+
+
+def installed(claude, mname, cache=""):
+    """{plugin name: entry} of this marketplace's installed plugins, or (None, why)."""
+    lst, why = listed(claude, cache)
     if lst is None:
         return None, why
     got = {}
