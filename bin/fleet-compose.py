@@ -642,6 +642,15 @@ class Editor:
 # --- the screen ------------------------------------------------------------------
 
 PAIR_BOX, PAIR_DIM, PAIR_ON, PAIR_GO, PAIR_TOAST = 1, 2, 3, 4, 5
+_SEL = []
+
+
+def sel_on():
+    """The focused option's / menu row's ground: fleet-quickopen's `sel_attr` —
+    PAIR_ON on a truecolour terminal, reverse video elsewhere (issue #3416)."""
+    if not _SEL:
+        _SEL.append(switch_lib().sel_attr(PAIR_ON))
+    return _SEL[0]
 
 
 def read_key(screen):
@@ -961,7 +970,7 @@ def ui(screen, session):
             put(y, x, tr("compose_" + kind) + " ", dim)
             x += cells(tr("compose_" + kind)) + 1
             field = " " + pick_label(kind, pick[kind], group) + " ▾ "
-            put(y, x, field, curses.color_pair(PAIR_ON) | curses.A_BOLD if focus == kind else curses.A_BOLD)
+            put(y, x, field, sel_on() if focus == kind else curses.A_BOLD)
             at_x[kind] = x
             x += cells(field) + 3
         go = tr("compose_go_issue")
@@ -980,7 +989,7 @@ def ui(screen, session):
                 line = row + " " * max(1, lw + 2 - cells(row)) + note
                 put(y + 2 + n, mx, "│" + " " * (mw - 2) + "│", curses.color_pair(PAIR_BOX))
                 put(y + 2 + n, mx + 1, clip(line, mw - 2),
-                    curses.color_pair(PAIR_ON) | curses.A_BOLD if n == menu_at else dim if grey else 0)
+                    sel_on() if n == menu_at else dim if grey else 0)
             put(y + 2 + len(menu), mx, "╰" + "─" * (mw - 2) + "╯", curses.color_pair(PAIR_BOX))
         # the cursor: in the box on the body, on the option in focus otherwise
         if focus == "body":

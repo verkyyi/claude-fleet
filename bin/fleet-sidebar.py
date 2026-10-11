@@ -2852,6 +2852,11 @@ def ui(screen, session, worker, lock):
     # Dim text is PAL_DIM; a terminal with no palette colour for it dims instead.
     pal_dim_default = pal["PAL_DIM"] == -1
     dim_attr = curses.color_pair(PAIR_DIM) | (curses.A_DIM if pal_dim_default else 0)
+    # The raised row's ground (issue #3416): PAL_SEL only on a truecolour terminal;
+    # elsewhere (Termius: xterm-256color, no COLORTERM) PAL_FG on PAL_SEL read as
+    # one colour, so the row goes reverse video — the terminal's own fg / bg swapped.
+    rich = switch_lib().rich_color(curses.COLORS)
+    sel_attr = curses.color_pair(PAIR_SEL) if rich else curses.A_REVERSE
     curses.mousemask(curses.ALL_MOUSE_EVENTS)
     curses.mouseinterval(0)
     screen.keypad(True)
@@ -3474,18 +3479,19 @@ def ui(screen, session, worker, lock):
                 if key_of((wid, state)) == selected:
                     # a tapped heading (issue #1032): its second tap opens a new
                     # session in that repo
-                    put(y, heading_text(row, True, many), curses.color_pair(PAIR_SEL) | curses.A_BOLD, fill=True)
+                    put(y, heading_text(row, True, many), sel_attr | curses.A_BOLD, fill=True)
                 else:
                     put(y, heading_text(row, False, many), dim_attr | curses.A_BOLD)
                 continue
             # The text is one colour; the glyph alone says the state (issue #1622).
             raised = wid == current_row or wid == selected
-            attr = curses.color_pair(PAIR_SEL if raised else PAIR_FG)
+            attr = sel_attr if raised else curses.color_pair(PAIR_FG)
             lost = (node.endswith("!") or state == "epicstale") and not raised
             if lost:
                 attr = dim_attr  # a lost machine's row (issue #1475); a batch nobody drives (#1916)
             pair = STATE_PAIR.get(state)
-            glyph_attr = curses.color_pair(pair + SEL_GLYPH if raised else pair) if pair else attr
+            glyph_attr = (curses.color_pair(pair + SEL_GLYPH if rich else pair) | (0 if rich else curses.A_REVERSE)
+                          if raised else curses.color_pair(pair)) if pair else attr
             if lost:
                 glyph_attr |= curses.A_DIM
             # An urgent condition takes the glyph's own cell (issue #2305): `⊘`
@@ -3494,7 +3500,8 @@ def ui(screen, session, worker, lock):
             # 配置旧 / 会坏·需重开, the reap policy — are the bar's (detail_line).
             glyph, why = row_glyph(row)
             if why in ("broken", "backfill"):
-                glyph_attr = curses.color_pair(PAIR_BROKEN + SEL_GLYPH if raised else PAIR_BROKEN) | curses.A_BOLD
+                glyph_attr = curses.color_pair(PAIR_BROKEN + SEL_GLYPH if raised and rich else PAIR_BROKEN) | curses.A_BOLD \
+                    | (curses.A_REVERSE if raised and not rich else 0)
             marker = "▶" if wid == current_row else "›" if wid == selected else " "
             # `marker glyph tree label` (issue #836): the hierarchy glyph is its own
             # fixed cell between the state glyph and the name, so at 30 columns every
