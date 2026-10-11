@@ -871,7 +871,7 @@ THIN="${FLEET_DRILL_THIN:-$H/.local/share/claude-fleet/bin/fleet-thin.py}"   # t
 remote() { as_login python3 "$THIN" --run --home "$SNODE" -- sh -c "$REMOTE_RESTART" fleet-drill-restart "$1" "$2" 2>&1; }
 RESTART_DOWN='机器在重启|稍等|restarting|connection lost|连接断了|没有活着的'
 step_restart() {
-  local why bin out deadline k back
+  local bin out deadline k back
   [ -n "$RESUME_NAME" ] || RESUME_NAME=$NAME
   # locate's answer is its variables, so it runs here, its words captured apart
   locate "$RESUME_NAME" > "$RUN/locate.txt" || { failstep node-restart-resume "$(cat "$RUN/locate.txt")"; return 1; }
