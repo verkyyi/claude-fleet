@@ -112,3 +112,14 @@ python3 bin/fleet-oldcfg-replay.py --new-dir .     # stable → 你的工作树
 ```
 
 PR 模板里有一行勾选：改了上面任何一样就勾上，并在 PR 里说兼容壳留在哪、留到哪一版。
+
+## 面向用户的改动：同一个 PR 里更新「怎么用」（issue #3216）
+
+人问「怎么用手机连」「⌘P 里能做什么」时，`fleet-help` skill（`skills/fleet-help/SKILL.md`）
+按它的索引去读文档的对应小节、一步一步教——它从不凭记忆答。所以凡是人会注意到的改动
+（一个键、一个页面、一步操作、一条报错的说法），**同一个 PR** 里：
+
+1. 更新讲它的那一节文档（多半是 `docs/CLIENT.md`、`docs/MULTI-MACHINE-OPS.md`）；
+2. 改了标题、挪了小节、换了入口页面的路径，就同步改 skill 的索引；新功能没有对应的问题行就加一行；
+3. `bin/fleet-help-selftest.sh` 绿——它核对索引里每个 `docs/…` § 「…」 都还是某个标题或加粗导语的开头、
+   每个 `<入口>/…` 页面入口都还在服务。
