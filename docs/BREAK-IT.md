@@ -9,6 +9,7 @@
 `演练` 一列写 `登记：<单号>`，只登记不演练。
 
 跑：`bin/run-selftests.sh fleet-break-it` — 每条一行 `PASS <id> <恢复用时> ≤<上限>`。
+入口直连一批（EPIC #3067）的 `entry-*` 与 `route-lan-elsewhere` 几行另有一条全程演练 `bin/entry-e2e-selftest.sh`（#3076）：手机加钥匙 → 进看台 → 入口停掉照样进 → 撤钥匙被拒，Mac 没有 Tailscale 在家走局域网、在外走地址，再按 id 把这几行的演练全跑一遍、打出批次指标表。
 演练全部跑在隔离的 tmux socket、临时 HOME、假的 claude / ssh / 入口上，不碰任何在跑的 fleet。
 表和脚本互相校验：表里的 `id` 没有演练、或演练不在表里，测试直接红。
 
