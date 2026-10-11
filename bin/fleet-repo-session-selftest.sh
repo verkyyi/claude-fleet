@@ -249,5 +249,41 @@ eq "G no @worktree" "$(opt "$wZ" @worktree)" ""
 wait_rec "$wZ" || fail "G the no-repo launcher never reached claude"
 eq "G it runs in \$HOME" "$(cat "$WORK/rec/$wZ.cwd" 2>/dev/null)" "$(cd "$HOME" && pwd -P)"
 
+# ---- H. a parked session with no issue comes back (issue #3387) -------------------
+# dash-raw-session.sh --resume <sid> --seed-file <f> [--worktree <its kept scratch>]:
+# the same conversation when its transcript is still where it ran, its first turn
+# the seed; a repo scratch reopens in its OWN worktree, never a new one.
+printf 'read your handoff, go on' > "$WORK/seed.txt"
+hsid=$(python3 -c 'import uuid; print(uuid.uuid4())')
+mkdir -p "$(fleet_transcript_dir "$HOME")" && : > "$(fleet_transcript_dir "$HOME")/$hsid.jsonl"
+raw --no-repo --resume "$hsid" --seed-file "$WORK/seed.txt" --task T5 "$S" || fail "H no-repo resume failed: $(cat "$WORK/err")"
+wH=$(newest "$S")
+wait_rec "$wH" || fail "H the no-repo resume never reached claude"
+eq "H @norepo_sid is the SAME conversation" "$(opt "$wH" @norepo_sid)" "$hsid"
+case "$(cat "$WORK/rec/$wH.args" 2>/dev/null)" in
+  *"--resume $hsid"*"read your handoff, go on"*) case "$(cat "$WORK/rec/$wH.args")" in
+    *--session-id*) fail "H a resume also minted a --session-id: $(cat "$WORK/rec/$wH.args")" ;;
+    *) ok "H launched --resume <sid> with the seed as its first turn" ;; esac ;;
+  *) fail "H claude args: $(cat "$WORK/rec/$wH.args" 2>/dev/null)" ;; esac
+wtS=$(opt "$wS" @worktree)
+ssid=$(python3 -c 'import uuid; print(uuid.uuid4())')
+mkdir -p "$(fleet_transcript_dir "$wtS")" && : > "$(fleet_transcript_dir "$wtS")/$ssid.jsonl"
+nwt=$(git -C "$WORK/mainB" worktree list | grep -c .)
+raw --repo o/b --worktree "$wtS" --resume "$ssid" --seed-file "$WORK/seed.txt" "$S" || fail "H scratch resume failed: $(cat "$WORK/err")"
+wR=$(newest "$S")
+wait_rec "$wR" || fail "H the scratch resume never reached claude"
+eq "H reopened in its own kept worktree" "$(opt "$wR" @worktree)|$(cat "$WORK/rec/$wR.cwd" 2>/dev/null)" "$wtS|$(cd "$wtS" && pwd -P)"
+eq "H no new worktree allocated" "$(git -C "$WORK/mainB" worktree list | grep -c .)" "$nwt"
+case "$(cat "$WORK/rec/$wR.args" 2>/dev/null)" in *"--resume $ssid"*"read your handoff"*) ok "H the scratch resumes its conversation" ;;
+  *) fail "H scratch args: $(cat "$WORK/rec/$wR.args" 2>/dev/null)" ;; esac
+raw --no-repo --resume "$(python3 -c 'import uuid; print(uuid.uuid4())')" --seed-file "$WORK/seed.txt" "$S" || fail "H gone-transcript spawn failed"
+wG=$(newest "$S")
+wait_rec "$wG" || fail "H the gone-transcript launcher never reached claude"
+case "$(cat "$WORK/rec/$wG.args" 2>/dev/null)" in *--resume*) fail "H resumed a conversation with no transcript" ;;
+  *"--session-id"*"read your handoff"*) ok "H no transcript ⇒ a fresh session given the seed" ;;
+  *) fail "H gone-transcript args: $(cat "$WORK/rec/$wG.args" 2>/dev/null)" ;; esac
+raw --repo o/b --worktree "$WORK/nope-scratch-9" --seed-file "$WORK/seed.txt" "$S" \
+  && fail "H a gone --worktree opened a window" || ok "H a gone --worktree is refused"
+
 [ "$FAILS" = 0 ] && { printf 'PASS fleet-repo-session-selftest\n'; exit 0; }
 printf '%s failure(s)\n' "$FAILS" >&2; exit 1

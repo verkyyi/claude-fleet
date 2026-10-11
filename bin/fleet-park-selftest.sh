@@ -30,6 +30,13 @@
 #   H  a restore from a map taken while it was still open (bin/fleet-restore.sh,
 #      the reboot / lost-server road) does not reopen the parked one — and does
 #      reopen an ordinary missing one beside it
+#   K  a session with NO issue, owned by a hub task record (@task T42, a no-repo
+#      session — issue #3387): judged stuck, waiting on `task:T42`; parked with
+#      no GitHub write, 「停放」 on its record alone, stopped by `fid:<fleet_id>`,
+#      booked as T42 (fleet_parked_fid; a restore leaves it closed); the record
+#      unchanged, or changed with a question still open ⇒ it stays; answered ⇒
+#      dash-raw-session.sh --task T42 --no-repo --resume <the same sid> --seed-file
+#      <reads the handoff and the record>, and the record's 「停放」 cleared
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/park-st.XXXXXX")
@@ -63,8 +70,11 @@ printf '#!/bin/sh\n[ -f "%s/busy.$1" ]\n' "$S" > "$S/busy"
 printf '#!/bin/sh\n{ printf "%%s\\t" "$1"; cat; echo; } >> "%s/sent"\n' "$S" > "$S/send"
 cat > "$S/stop" <<EOF
 #!/bin/sh
-n=\${2##*issue-}
-w=\$(tmux list-windows -t pk -F '#{window_id} #{@issue}' | awk -v n="\$n" '\$2 == n { print \$1; exit }')
+case "\$2" in
+  fid:*) w=\$(tmux list-windows -t pk -F '#{window_id} #{@fleet_id}' | awk -v f="\${2#fid:}" '\$2 == f { print \$1; exit }') ;;
+  *) n=\${2##*issue-}
+     w=\$(tmux list-windows -t pk -F '#{window_id} #{@issue}' | awk -v n="\$n" '\$2 == n { print \$1; exit }') ;;
+esac
 [ -n "\$w" ] || exit 5
 echo "\$1 \$2 parking=\$(tmux show-options -wqv -t "\$w" @parking)" >> "$S/stopped"
 tmux kill-window -t "\$w"
@@ -83,12 +93,22 @@ for a in "\$@"; do [ "\$prev" = --seed-file ] && cat "\$a" > "$S/seed.last"; pre
 exit \$(cat "$S/spawn.rc" 2>/dev/null || echo 0)
 EOF
 printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s/reported"\n' "$S" > "$S/report"
-printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s/task.log"\n' "$S" > "$S/task"
+cat > "$S/task" <<EOF
+#!/bin/sh
+if [ "\$1" = get ]; then [ -f "$S/rec.\$2" ] && cat "$S/rec.\$2" || exit 1; exit 0; fi
+printf '%s\n' "\$*" >> "$S/task.log"
+EOF
+cat > "$S/raw" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> "$S/raw.log"
+for a in "\$@"; do [ "\$prev" = --seed-file ] && cat "\$a" > "$S/rawseed.last"; prev=\$a; done
+exit 0
+EOF
 printf '#!/bin/sh\nprintf "{\\"comments\\": []}\\n"\n' > "$S/comments-cmd"
 chmod +x "$S"/*
 export FLEET_PARK_STATE_CMD="$S/state" FLEET_PARK_BUSY_CMD="$S/busy" FLEET_PARK_SEND_CMD="$S/send" \
        FLEET_PARK_STOP_CMD="$S/stop" FLEET_PARK_GH_CMD="$S/gh" FLEET_PARK_SPAWN_CMD="$S/spawn" \
-       FLEET_PARK_REPORT_CMD="$S/report" FLEET_DECISION_COMMENTS_CMD="$S/comments-cmd" FLEET_PARK_TASK_CMD="$S/task"
+       FLEET_PARK_REPORT_CMD="$S/report" FLEET_DECISION_COMMENTS_CMD="$S/comments-cmd" FLEET_PARK_TASK_CMD="$S/task" FLEET_PARK_RAW_CMD="$S/raw"
 park() { python3 "$BIN/fleet_park.py" "$@"; }
 o() { tmux show-options -wqv -t "$1" "$2"; }
 
@@ -294,6 +314,55 @@ printf '%s\n' "$out" | grep 'issue-11' | grep -qv 'parked' && bad "H restore tou
   || ok "H restore does nothing else with it"
 printf '%s\n' "$out" | grep 'issue-10' | grep -qv 'parked' && ok "H an ordinary lost window still takes restore's road" \
   || bad "H restore lost its ordinary road: $(printf '%s\n' "$out" | tail -8)"
+
+# --- K: a session with no issue, owned by a hub task record (issue #3387) ---------
+rec() { printf '{"task": {"id": "T42", "updated_at": "%s", "asked": "%s"}, "live": ""}\n' "$1" "$2" > "$S/rec.T42"; }
+rec 2026-10-11T10:00:00Z ''
+W13=$(tmux new-window -d -P -F '#{window_id}' -t pk: -n '我的会话' -c "$WORK" "sh -c 'echo SCREEN-OF-T42; exec sleep 600'")
+SID13=$(python3 -c 'import uuid; print(uuid.uuid4())'); FID13=$(python3 -c 'import uuid; print(uuid.uuid4())')
+tmux set-option -w -t "$W13" @fleet_role worker \; set-option -w -t "$W13" @norepo 1 \; \
+     set-option -w -t "$W13" @task T42 \; set-option -w -t "$W13" @fleet_id "$FID13" \; \
+     set-option -w -t "$W13" @cc_session_id "$SID13" \; set-option -w -t "$W13" @norepo_sid "$SID13" \; \
+     set-option -w -t "$W13" @claude_state needs \; set-option -w -t "$W13" @claude_state_ts "$OLD" \; \
+     set-option -w -t "$W13" @origin issue-1
+sleep 0.2
+FLEET_RESTORE_STALE_MAP_AGE=0 bash "$BIN/fleet-restore.sh" --snapshot >/dev/null 2>&1   # H's closed windows: the shrink guard
+grep -q "$FID13" "$FLEET_CONF_DIR/fleets/pk/restore.map" 2>/dev/null || bad "K the snapshot never mapped T42's window"
+park candidates --session pk | grep -q $'^T42\t'"$W13"$'\ttask:T42\t' && ok "K a no-issue session with a record is a candidate, waiting on task:T42" \
+  || bad "K candidates: $(park candidates --session pk)"
+: > "$S/gh.log"; : > "$S/sent"; : > "$S/task.log"
+park tick --judge --session pk >/dev/null
+grep -q "^$W13"$'\t''\[fleet park\]' "$S/sent" && ok "K asked for its handoff over the peer channel" || bad "K no request: $(cat "$S/sent")"
+HP13=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["pending"]["T42"]["handoff"])' "$FLEET_CONF_DIR/global/park.json" 2>/dev/null)
+[ -n "$HP13" ] && { mkdir -p "$(dirname "$HP13")"; printf '# handoff\nnext: the design page\n' > "$HP13"; }
+park tick --session pk >/dev/null
+tmux list-windows -t pk -F '#{window_id}' | grep -qx "$W13" && bad "K still open after its handoff" || ok "K handoff written ⇒ the window is closed"
+grep -q "^pk fid:$FID13 parking=T42\$" "$S/stopped" && ok "K stopped by its identity (fid:), @parking set" \
+  || bad "K stop: $(tail -2 "$S/stopped")"
+[ ! -s "$S/gh.log" ] && ok "K no GitHub write at all" || bad "K wrote to GitHub: $(cat "$S/gh.log")"
+[ "$(cat "$S/task.log")" = "set T42 --parked 停放：等 任务记录 T42 上有回音" ] && ok "K 「停放」 on its record" \
+  || bad "K the record: $(cat "$S/task.log")"
+grep -q 'SCREEN-OF-T42' "$FLEET_CONF_DIR/fleets/pk/park/task-T42.capture.txt" 2>/dev/null && ok "K the screen is kept" || bad "K no capture"
+grep -q -- "--state blocked --win $W13" "$S/reported" && ok "K the parent is told blocked" || bad "K no report"
+( . "$BIN/fleet-lib.sh"; fleet_parked_fid "$FID13" ) && ok "K booked as T42 (fleet_parked_fid)" \
+  || bad "K park.idx: $(cat "$FLEET_CONF_DIR/global/park.idx")"
+out=$(env -u QUIET bash "$BIN/fleet-restore.sh" --dry-run 2>&1)
+printf '%s\n' "$out" | grep -q '我的会话: parked' && ok "K a restore leaves it closed" \
+  || bad "K restore: $(printf '%s\n' "$out" | grep '我的会话'; printf '%s\n' "$out" | tail -5)"
+park tick --session pk >/dev/null
+[ ! -s "$S/raw.log" ] && ok "K the record unchanged ⇒ nothing wakes" || bad "K woke early: $(cat "$S/raw.log")"
+rec 2026-10-11T10:05:00Z '要不要换方案'
+park tick --session pk >/dev/null
+[ ! -s "$S/raw.log" ] && ok "K changed, but a question still open ⇒ still parked" || bad "K woke on an open question"
+rec 2026-10-11T10:09:00Z ''
+park tick --session pk >/dev/null
+grep -q "^pk --task T42 --seed-file .*task-T42.seed --node local --no-repo --resume $SID13 --name 我的会话 --origin issue-1\$" "$S/raw.log" \
+  && ok "K answered ⇒ reopened on the SAME conversation ($SID13), no repo, its record" || bad "K wake: $(cat "$S/raw.log" 2>&1)"
+grep -q "$HP13" "$S/rawseed.last" 2>/dev/null && grep -q 'T42' "$S/rawseed.last" && grep -q '不要从头来' "$S/rawseed.last" \
+  && ok "K its first turn reads the handoff and the record" || bad "K seed: $(cat "$S/rawseed.last" 2>&1)"
+[ "$(tail -1 "$S/task.log")" = "set T42 --clear parked" ] && ok "K the record's 「停放」 cleared" || bad "K record: $(cat "$S/task.log")"
+( . "$BIN/fleet-lib.sh"; fleet_parked_fid "$FID13" ) && bad "K still booked after waking" || ok "K out of the book"
+[ ! -s "$S/gh.log" ] && ok "K the wake wrote nothing to GitHub either" || bad "K wake wrote: $(cat "$S/gh.log")"
 
 [ "$fails" = 0 ] && { echo "fleet-park-selftest: all passed"; exit 0; }
 echo "fleet-park-selftest: $fails failed"; exit 1

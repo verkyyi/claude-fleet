@@ -174,7 +174,7 @@ watch_fleet() { (
   # printable '|' survives — same reasoning as fleet-restore.sh's snapshot).
   #   window-id | @issue | @raw | @worktree | pane_current_path | window_name | @origin
   raw=$(ftmux list-windows -t "$sess" \
-        -F '#{window_id}|#{@issue}|#{@raw}|#{@worktree}|#{pane_current_path}|#{window_name}|#{@origin}|#{@cc_agent}|#{@cc_launcher_pid}|#{@codex_identity}' 2>/dev/null)
+        -F '#{window_id}|#{@issue}|#{@raw}|#{@worktree}|#{pane_current_path}|#{window_name}|#{@origin}|#{@cc_agent}|#{@cc_launcher_pid}|#{@codex_identity}|#{@task}|#{@task_line}' 2>/dev/null)
   # A LIVE fleet always has ≥1 hub window (dash/plan/backlog). An empty read here
   # means the session is gone or tmux glitched — either way do NOT diff (that would
   # false-record still-live workers as closed) and do NOT overwrite the snapshot.
@@ -209,7 +209,7 @@ watch_fleet() { (
   # A bare key read back from an older snapshot means the fleet's first repo
   # (below) — compat-1v: 下一批删.
   : > "$cur"
-  while IFS='|' read -r wid iss rawf wt cwd wname worigin wagent wowner widentity; do
+  while IFS='|' read -r wid iss rawf wt cwd wname worigin wagent wowner widentity wtask wtline; do
     local_wt="$wt"; [ -z "$local_wt" ] && local_wt="$cwd"   # @worktree, else the pane cwd
     if [ "$rawf" = 1 ]; then
       # @raw SCRATCH: no issue to key on — use the scratch-<N> slug of its worktree
@@ -230,7 +230,13 @@ watch_fleet() { (
     smry=""
     # col 6 = @origin (issue #503): captured while live like the title, so
     # a vanished window's history row still carries its spawn provenance.
-    if [ "$wagent" = codex ]; then
+    # cols 10-11 (issue #3387): the hub task record (@task) and its words
+    # (@task_line), only when the window has one — a row without stays as it was.
+    case "$wtask" in T[1-9]*) ;; *) wtask='' ;; esac
+    if [ -n "$wtask" ]; then
+      wtline=$(printf '%s' "$wtline" | tr '\t\r\n\037' '    ')
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$key" "$wid" "$local_wt" "$wname" "$smry" "$worigin" "$wagent" "$wowner" "$widentity" "$wtask" "$wtline" >> "$cur"
+    elif [ "$wagent" = codex ]; then
       printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$key" "$wid" "$local_wt" "$wname" "$smry" "$worigin" "$wagent" "$wowner" "$widentity" >> "$cur"
     else
       printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$key" "$wid" "$local_wt" "$wname" "$smry" "$worigin" >> "$cur"
@@ -249,7 +255,7 @@ EOF
   if [ -f "$snap" ]; then
     # A non-whitespace separator preserves the intentionally empty summary and
     # origin columns. JSON's own control characters are escaped already.
-    while IFS=$'\037' read -r p_key p_wid p_wt p_title p_smry p_origin p_agent p_owner p_identity; do
+    while IFS=$'\037' read -r p_key p_wid p_wt p_title p_smry p_origin p_agent p_owner p_identity p_task p_tline; do
       [ -z "$p_key" ] && continue
       case "$cur_keys" in *$'\n'"$p_key"$'\n'*) continue ;; esac   # still live → not vanished
       # A snapshot written before #1941 holds a one-repo fleet's BARE keys: match
@@ -281,7 +287,7 @@ EOF
               --worktree "$p_wt" --win "$p_wid" \
               --title "$p_title" --summary "$p_smry" \
               --agent "${p_agent:-claude}" --launcher-pid "${p_owner:-}" --agent-identity "${p_identity:-}" \
-              --origin "${p_origin:-}" 2>/dev/null)
+              --origin "${p_origin:-}" ${p_task:+--task "$p_task" --task-line "${p_tline:-}"} 2>/dev/null)
       case "$tok" in
         closed-unlanded*) log "$sess: $tok"; recorded=$((recorded + 1)) ;;
         *)                log "$sess: $lbl — ${tok:-record-closed: no output}" ;;

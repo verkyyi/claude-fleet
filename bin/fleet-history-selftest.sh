@@ -670,4 +670,37 @@ assert any(g.get("matcher") == "resume" and any("fleet-history.sh resumed --stdi
 PY
 fi
 
-printf 'selftest OK: fleet-history (%s assertions — record/record-closed/resumed/list/find/resume/reuse/meta/rows/state/scratch/busy-dir/helper-transcripts/dedup/time-order)\n' "$CHECKS"
+# ============================================================================
+# T. a hub task record (issue #3387) — col 15 carries `T<n>` (a Claude row fills
+#    12–14 with '-'), the title is the session's own words (@task_line) over the
+#    window's default name, list/rows mark the row `T<n>`, resume still goes by the
+#    session key; no task ⇒ the 11-column row as before; a bad ref writes nothing.
+# ============================================================================
+: > "$FLEET_HISTORY_LEDGER"
+TWT="/w/repo-scratch-12"
+TTDIR="$CLAUDE_PROJECTS_DIR/$(printf '%s' "$TWT" | LC_ALL=C tr -c 'A-Za-z0-9' '-')"
+mkdir -p "$TTDIR"; : > "$TTDIR/sess-task.jsonl"
+run record-closed --key scratch-12 --worktree "$TWT" --title scratch-12 --sha cafe1234 \
+  --task T41 --task-line '把周报做成一页' >/dev/null
+eq "task: the row has 15 columns" "14" "$(tr -cd '\t' < "$FLEET_HISTORY_LEDGER" | wc -c | tr -d ' ')"
+IFS=$'\t' read -r _ t_key t_title _ _ _ _ t_sid _ _ _ t_ag t_h t_tr t_task <<<"$(cat "$FLEET_HISTORY_LEDGER")"
+eq "task: col 15 is the record" "T41" "$t_task"
+eq "task: a Claude row fills 12–14 with '-'" "-|-|-" "$t_ag|$t_h|$t_tr"
+eq "task: the title is the session's own words" "把周报做成一页" "$t_title"
+eq "task: still keyed by the session" "scratch-12|sess-task" "$t_key|$t_sid"
+contains "task: list marks the row T41" "$(run list)" "~12   "
+contains "task: list shows T41 + its words" "$(run list)" "T41 把周报做成一页"
+contains "task: dash rows show T41 + its words" "$(run rows)" "T41 把周报做成一页"
+contains "task: rows still target the session key" "$(run rows)" "landed:scratch:scratch-12"
+contains "task: resume still by the session key" "$(run resume --main /w/main scratch-12)" "sess-task"
+CHECKS=$((CHECKS + 1))
+case "$(run resume --main /w/main scratch-12)" in *T41*) fail "task: col 15 leaked into resume's verdict";; esac
+: > "$FLEET_HISTORY_LEDGER"
+run record-closed --key scratch-12 --worktree "$TWT" --title 'a named scratch' --task T41 --task-line 'words' >/dev/null
+eq "task: a real title wins over the words" "a named scratch" "$(cut -f3 "$FLEET_HISTORY_LEDGER")"
+: > "$FLEET_HISTORY_LEDGER"
+run record-closed --key scratch-12 --worktree "$TWT" --title scratch-12 --task X9 --task-line 'words' >/dev/null
+eq "task: a bad ref ⇒ the 11-column row, title untouched" "10|scratch-12" \
+  "$(tr -cd '\t' < "$FLEET_HISTORY_LEDGER" | wc -c | tr -d ' ')|$(cut -f3 "$FLEET_HISTORY_LEDGER")"
+
+printf 'selftest OK: fleet-history (%s assertions — record/record-closed/resumed/list/find/resume/reuse/meta/rows/state/scratch/busy-dir/helper-transcripts/dedup/time-order/task)\n' "$CHECKS"

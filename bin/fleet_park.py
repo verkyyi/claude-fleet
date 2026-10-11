@@ -5,7 +5,7 @@ waits for arrives (issue #2671, EPIC #2668 C3). Run as bin/fleet-park.sh.
     fleet-park.sh park <key> --wait COND [--wait COND…] [--why T] [--now] [--session S]
     fleet-park.sh tick       [--judge] [--session S] [--now ISO]
     fleet-park.sh candidates [--session S] [--now ISO]
-    fleet-park.sh wake <owner/name#N> [--session S]
+    fleet-park.sh wake <owner/name#N | T<n>> [--session S]
     fleet-park.sh check COND [--since EPOCH]
     fleet-park.sh list [--json]
 
@@ -16,7 +16,17 @@ A COND is one of
     time:<ISO>                      that moment passed
     reply:<owner/name#N>            a comment on that issue newer than the park
                                     (the park's own comment does not count)
+    task:T<n>                       the hub task record changed after the park and
+                                    holds no open question (「问过你」 cleared)
 Several --wait are ANY of them.
+
+A session with NO issue (issue #3387) — a no-repo or scratch session the hub's task
+record owns (@task T<n>) — is parked the same way under its record's number: the
+book's key is `T<n>`, its stop goes by `fid:<fleet_id>`, nothing is written to
+GitHub (no label, no comment) — the 「停放：等 …」 goes on the record alone — and its
+default wait is `task:T<n>`. It wakes through dash-raw-session.sh --resume <sid>
+--seed-file … --task T<n> (`--no-repo`, or `--repo R --worktree <its kept scratch
+worktree>`): the same conversation, its first turn reading the handoff and the record.
 
 PARK, two steps, both written down in global/park.json so a killed tick loses
 nothing (共同约定 4):
@@ -43,7 +53,7 @@ handoff, go on from where it was> --force — the same conversation, never from 
 (no transcript left, a Codex session ⇒ a plain /fleet-claim that reads the park
 comment). A refusal (no room: rc 2) keeps it parked for the next tick.
 
-JUDGE (`candidates`, `tick --judge`): a worker window (role worker, an @issue, no
+JUDGE (`candidates`, `tick --judge`): a worker window (role worker, an @issue or a @task, no
 @worker_lifecycle, no @pin, no @remote, reap policy not keep) that is
   - blocked (fleet_reap_state, #2540) for FLEET_PARK_BLOCKED_SECS (900), or
   - not working and has made no progress for FLEET_PARK_STALL_SECS (2700): its
@@ -63,7 +73,8 @@ FLEET_PARK_BUSY_CMD (argv + wid; rc 0 = busy), FLEET_PARK_SEND_CMD (argv + wid, 
 on stdin), FLEET_PARK_STOP_CMD (argv + session key), FLEET_PARK_SPAWN_CMD (argv +
 dash-issue-session.sh's), FLEET_PARK_GH_CMD (argv + label|comment|state verb…),
 FLEET_PARK_REPORT_CMD (argv + fleet-report-parent.sh's), FLEET_PARK_TASK_CMD (argv +
-fleet-task-record.sh's `set T<n> …`); comments come through
+fleet-task-record.sh's `set T<n> …` / `get T<n>`), FLEET_PARK_RAW_CMD (argv +
+dash-raw-session.sh's, a no-issue wake); comments come through
 fleet_decision.py's FLEET_DECISION_COMMENTS_CMD.
 """
 import argparse
@@ -84,6 +95,7 @@ BIN = Path(__file__).resolve().parent
 V = 1
 FID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 REF_RE = re.compile(r"^([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#([0-9]+)$")
+TREF_RE = re.compile(r"^T[1-9][0-9]{0,9}$")
 
 
 def conf_dir():
@@ -228,6 +240,12 @@ def windows(sess):
 
 
 def win_for_key(sess, key):
+    # A session with no issue (issue #3387): its task record `T<n>`, or its
+    # identity `fid:<fleet_id>` — exactly one live window, or none.
+    if TREF_RE.match(key) or key.startswith("fid:"):
+        field, want = ("task", key) if TREF_RE.match(key) else ("fid", key[4:])
+        hits = [w for w in windows(sess) if want and w[field] == want]
+        return hits[0] if len(hits) == 1 else None
     wid, rc = sh_lib('fleet_win_for_key "$1" "$2"', key, socket(sess))
     if rc != 0 or not wid:
         return None
@@ -237,8 +255,19 @@ def win_for_key(sess, key):
     return None
 
 
+def ref_of(w):
+    """The book's key: `owner/name#N` for an issue session, else its task record
+    `T<n>` (issue #3387), else ""."""
+    if w["issue"].isdigit() and w["repo"]:
+        return "%s#%s" % (w["repo"], w["issue"])
+    return task_of(w)
+
+
 def key_of(sess, w):
-    """The window's address: `<slug>:issue-N` when the fleet hosts 2+ repos."""
+    """The window's address: `<slug>:issue-N` when the fleet hosts 2+ repos; a
+    session with no issue goes by its identity, `fid:<fleet_id>` (issue #3387)."""
+    if not w["issue"].isdigit():
+        return "fid:" + w["fid"]
     n_repos = len(list((conf_dir() / "fleets" / sess / "repos").glob("*.conf")))
     slug = sh_lib('fleet_slug "$1"', w["repo"])[0] if n_repos > 1 else ""
     return ("%s:" % slug if slug else "") + "issue-" + w["issue"]
@@ -317,8 +346,9 @@ def comment_epoch(c):
     return fleet_iso.epoch(c.get("createdAt") or c.get("created_at") or "", utc=True)
 
 
-def check(cond, since=0, now=None):
-    """(met, why) for one condition."""
+def check(cond, since=0, now=None, seen=None):
+    """(met, why) for one condition. `seen` is the task record's updated_at read
+    right after the park wrote its 「停放」 (a task: condition's baseline)."""
     now = now or time.time()
     kind, _, arg = cond.partition(":")
     if kind == "answer":
@@ -336,6 +366,17 @@ def check(cond, since=0, now=None):
         if at is None:
             return False, "bad time"
         return now >= at, arg
+    if kind == "task":
+        rec = task_record(arg)
+        if rec is None:
+            return False, "unreadable"
+        if rec.get("asked"):
+            return False, "asked"
+        stamp = rec.get("updated_at") or ""
+        if seen is not None:
+            return (bool(stamp) and stamp != seen), "changed" if stamp != seen else "unchanged"
+        at = fleet_iso.epoch(stamp, default=0, utc=True) if stamp else 0
+        return at > since + 60, "changed" if at > since + 60 else "unchanged"
     if kind == "reply":
         repo, n = parse_ref(arg)
         try:
@@ -347,9 +388,9 @@ def check(cond, since=0, now=None):
     return False, "unknown condition"
 
 
-def check_any(conds, since=0, now=None):
+def check_any(conds, since=0, now=None, seen=None):
     for c in conds:
-        met, why = check(c, since, now)
+        met, why = check(c, since, now, seen)
         if met:
             return c, why
     return None, ""
@@ -364,6 +405,8 @@ def valid_cond(cond):
         return arg.endswith(want) and bool(REF_RE.match(arg[:-len(want)]))
     if kind == "reply":
         return bool(REF_RE.match(arg))
+    if kind == "task":
+        return bool(TREF_RE.match(arg))
     if kind == "time":
         return check(cond, now=0)[1] != "bad time"
     return False
@@ -382,6 +425,8 @@ def say_cond(cond):
         return tr("park_wait_time_fmt", arg)
     if kind == "reply":
         return tr("park_wait_reply_fmt", arg)
+    if kind == "task":
+        return tr("park_wait_task_fmt", arg)
     return cond
 
 
@@ -422,6 +467,21 @@ def task_mirror(task, *args):
     return r.returncode
 
 
+def task_record(task):
+    """The record (fleet-task-record.sh get → {task, live}), or None."""
+    r = seam("FLEET_PARK_TASK_CMD", ["get", task])
+    if r is None:
+        r = run(["bash", str(BIN / "fleet-task-record.sh"), "get", task], timeout=30)
+    if r.returncode != 0:
+        return None
+    try:
+        d = json.loads(r.stdout or "{}")
+    except ValueError:
+        return None
+    rec = d.get("task") if isinstance(d.get("task"), dict) else d
+    return rec if isinstance(rec, dict) else None
+
+
 # ---- park -------------------------------------------------------------------------
 
 def park_dir(sess):
@@ -430,22 +490,37 @@ def park_dir(sess):
     return d
 
 
+def park_base(ref):
+    """The park files' stem: `<repo slug>-<N>`, or `task-T<n>` (issue #3387)."""
+    if TREF_RE.match(ref):
+        return "task-" + ref
+    repo, n = parse_ref(ref)
+    return "%s-%s" % (sh_lib('fleet_slug "$1"', repo)[0] or "repo", n)
+
+
 def handoff_path(sess, w):
-    out, rc = sh_lib('"$0/fleet-handoff-file.sh" path --session "$1" --repo "$2" --slug "$3"',
-                     sess, w["repo"], "park-" + w["issue"])
+    ref = ref_of(w)
+    if TREF_RE.match(ref):
+        repo_args = '--repo "$2"' if w["repo"] else "--norepo"
+        out, rc = sh_lib('"$0/fleet-handoff-file.sh" path --session "$1" %s --slug "$3"' % repo_args,
+                         sess, w["repo"], "park-" + ref)
+    else:
+        out, rc = sh_lib('"$0/fleet-handoff-file.sh" path --session "$1" --repo "$2" --slug "$3"',
+                         sess, w["repo"], "park-" + w["issue"])
     if rc == 0 and out:
         return out.splitlines()[-1]
-    return str(park_dir(sess) / ("%s-%s.handoff.md" % (sh_lib('fleet_slug "$1"', w["repo"])[0] or "repo", w["issue"])))
+    return str(park_dir(sess) / (park_base(ref) + ".handoff.md"))
 
 
 def request(sess, book, w, waits, why, now):
-    ref = "%s#%s" % (w["repo"], w["issue"])
+    ref = ref_of(w)
     hp = handoff_path(sess, w)
     text = tr("park_request_fmt", why or tr("park_why_stuck"), " / ".join(say_cond(c) for c in waits), hp)
     r = seam("FLEET_PARK_SEND_CMD", [w["wid"]], input=text)
     if r is None:
-        r = run(["bash", str(BIN / "fleet-peer-send.sh"), "-L", socket(sess), "--repo", w["repo"],
-                 "--expect-issue", w["issue"], w["wid"], "-"], input=text, timeout=60)
+        pin = ["--repo", w["repo"], "--expect-issue", w["issue"]] if w["issue"].isdigit() else []
+        r = run(["bash", str(BIN / "fleet-peer-send.sh"), "-L", socket(sess)] + pin + [w["wid"], "-"],
+                input=text, timeout=60)
     book.d["pending"][ref] = {"ref": ref, "key": key_of(sess, w), "wid": w["wid"], "fid": w["fid"],
                               "wait": waits, "why": why, "at": int(now), "handoff": hp,
                               "sent": r.returncode in (0, 3)}
@@ -456,12 +531,12 @@ def request(sess, book, w, waits, why, now):
 def finalize(sess, book, p, w, now, budget):
     """Step 2. Returns the GitHub writes spent, or None when it must wait."""
     ref = p["ref"]
-    repo, n = parse_ref(ref)
-    if budget < 2:
+    task_only = bool(TREF_RE.match(ref))     # no issue: the record is its ticket (#3387)
+    repo, n = ("", "") if task_only else parse_ref(ref)
+    if budget < (0 if task_only else 2):
         return None
     pdir = park_dir(sess)
-    base = "%s-%s" % (sh_lib('fleet_slug "$1"', repo)[0] or "repo", n)
-    cap = pdir / (base + ".capture.txt")
+    cap = pdir / (park_base(ref) + ".capture.txt")
     r = tm(sess, "capture-pane", "-p", "-J", "-S", "-3000", "-t", w["wid"])
     cap.write_text(r.stdout or "")
     pushed, branch, dirty = "", "", 0
@@ -487,7 +562,8 @@ def finalize(sess, book, p, w, now, budget):
     if sr.returncode != 0:
         p["error"] = "stop: " + (sr.stdout.strip() or sr.stderr.strip())[:200]
         return None
-    sh_lib('fleet_hub_lease release "$1" "$2" "$3"', sess, repo, n)
+    if not task_only:
+        sh_lib('fleet_hub_lease release "$1" "$2" "$3"', sess, repo, n)
     wait = ",".join(p["wait"])
     body = "\n".join([
         tr("park_comment_head_fmt", " / ".join(say_cond(c) for c in p["wait"])), "",
@@ -497,17 +573,26 @@ def finalize(sess, book, p, w, now, budget):
         tr("park_comment_back_fmt", w["sid"] or "-"), "",
         "<!-- fleet:park wait=%s sid=%s -->" % (wait, w["sid"] or "-")])
     spent = 0
-    if gh("label", repo, n, "add"):
-        spent += 1
-    if gh("comment", repo, n, body=body):
-        spent += 1
-    # …and on its hub record, when it has one (issue #3330): the 「停放」 column.
-    task_mirror(task_of(w), "--parked", tr("park_comment_head_fmt", " / ".join(say_cond(c) for c in p["wait"])))
+    if not task_only:
+        if gh("label", repo, n, "add"):
+            spent += 1
+        if gh("comment", repo, n, body=body):
+            spent += 1
+    # …and on its hub record, when it has one (issue #3330): the 「停放」 column —
+    # for a session with no issue, the ONLY place the park is written (#3387).
+    task = task_of(w)
+    task_mirror(task, "--parked", tr("park_comment_head_fmt", " / ".join(say_cond(c) for c in p["wait"])))
+    seen = ""
+    if task_only:              # the task: condition's baseline: the record as the park left it
+        rec = task_record(task)
+        seen = (rec or {}).get("updated_at") or ""
     book.d["parked"][ref] = {"ref": ref, "key": p["key"], "wait": p["wait"], "why": p.get("why", ""),
                              "at": int(now), "sid": w["sid"], "agent": w["agent"], "fid": w["fid"],
                              "wt": w["wt"], "branch": branch, "pushed": pushed, "dirty": dirty,
                              "handoff": hp if has_handoff else "", "capture": str(cap),
-                             "origin": w["origin"], "session": sess, "task": task_of(w)}
+                             "origin": w["origin"], "session": sess, "task": task}
+    if task_only:
+        book.d["parked"][ref].update(repo=w["repo"], seen=seen, name=w["name"])
     book.d["pending"].pop(ref, None)
     event("park", ref, wait=p["wait"], sid=w["sid"], pushed=pushed, handoff=bool(has_handoff))
     since = book.d.setdefault("stuck", {}).pop(ref, None)
@@ -556,11 +641,14 @@ def survey(sess, now, held=()):
     blocked_after = env_int("FLEET_PARK_BLOCKED_SECS", 900)
     stall = env_int("FLEET_PARK_STALL_SECS", 2700)
     for w in windows(sess):
-        if w["role"] not in ("", "worker") or not w["issue"].isdigit() or not w["repo"]:
+        if w["role"] not in ("", "worker"):
+            continue
+        # an issue session, or one the hub's task record owns with no issue (#3387)
+        ref = ref_of(w)
+        if not ref or (TREF_RE.match(ref) and not w["fid"]):
             continue
         if w["lifecycle"] or w["pin"] or w["remote"] or w["reap"] == "keep":
             continue
-        ref = "%s#%s" % (w["repo"], w["issue"])
         if ref in held:
             continue
         word = reap_word(sess, w)
@@ -580,6 +668,9 @@ def survey(sess, now, held=()):
             continue
         stuck[ref] = since
         if not due:
+            continue
+        if TREF_RE.match(ref):
+            out.append({"w": w, "ref": ref, "why": why, "wait": ["task:" + ref], "since": since})
             continue
         src = "gh:%s#%s" % (w["repo"], w["issue"])
         waits = ["answer:" + r["id"] for r in rows.values() if r.get("src") == src and r.get("state") == "open"]
@@ -624,8 +715,50 @@ def observe_only(sess, now=None):
 
 # ---- wake -------------------------------------------------------------------------
 
+def wake_task(sess, book, ref, met, now):
+    """A parked session with no issue (issue #3387) comes back: dash-raw-session.sh
+    on the same conversation (--resume, Claude only), its kept scratch worktree or
+    $HOME, stamped with its record again. No GitHub write. 1 woken · 2 refused."""
+    p = book.d["parked"][ref]
+    seedf = park_dir(sess) / (park_base(ref) + ".seed")
+    seedf.write_text(tr("park_seed_task_fmt", say_cond(met), p.get("handoff") or tr("park_seed_nohandoff"),
+                        p.get("capture") or "-", ref))
+    args = [sess, "--task", ref, "--seed-file", str(seedf), "--node", "local"]
+    if p.get("repo") and p.get("wt") and os.path.isdir(p["wt"]):
+        args += ["--repo", p["repo"], "--worktree", p["wt"]]
+    else:
+        args += ["--no-repo"]
+    if p.get("sid") and p.get("agent", "claude") in ("", "claude"):
+        args += ["--resume", p["sid"]]
+    elif p.get("agent"):
+        args += ["--agent", p["agent"]]
+    if p.get("name"):
+        args += ["--name", p["name"]]
+    origins = [p["origin"], "hub"] if p.get("origin") else ["hub"]
+    rc = 1
+    for o in origins:
+        r = seam("FLEET_PARK_RAW_CMD", args + ["--origin", o])
+        if r is None:
+            r = run(["bash", str(BIN / "dash-raw-session.sh")] + args + ["--origin", o], timeout=300)
+        rc = r.returncode
+        if rc != 4:
+            break
+    if rc != 0:
+        p["error"] = "spawn rc %d" % rc
+        p["tries"] = p.get("tries", 0) + 1
+        return 2
+    book.d["parked"].pop(ref, None)
+    task_mirror(ref, "--clear", "parked")
+    book.d["woken"].append({"ref": ref, "at": int(now), "met": met, "sid": p.get("sid", ""),
+                            "parked_at": p.get("at", 0)})
+    event("wake", ref, met=met, sid=p.get("sid", ""), held=int(now) - p.get("at", int(now)))
+    return 1
+
+
 def wake(sess, book, ref, met, now, budget):
     p = book.d["parked"][ref]
+    if TREF_RE.match(ref):
+        return wake_task(sess, book, ref, met, now)
     repo, n = parse_ref(ref)
     if budget < 1:
         return None
@@ -664,15 +797,16 @@ def wake_due(sess, book, now, budget):
     for ref, p in list(book.d["parked"].items()):
         if p.get("session", sess) != sess:
             continue
-        met, _ = check_any(p["wait"], since=p.get("at", 0), now=now)
+        met, _ = check_any(p["wait"], since=p.get("at", 0), now=now, seen=p.get("seen"))
         if not met:
             continue
         got = wake(sess, book, ref, met, now, budget - spent)
+        task_only = bool(TREF_RE.match(ref))       # no GitHub write to count (#3387)
         if got == 1:
             woken.append(ref)
-            spent += 1
+            spent += 0 if task_only else 1
         elif got == 2:
-            spent += 2
+            spent += 0 if task_only else 2
     return woken, spent
 
 
@@ -715,12 +849,12 @@ def cmd_park(a):
         sys.stderr.write("fleet-park: not a condition: %s\n" % ", ".join(bad))
         return 2
     w = win_for_key(sess, a.key)
-    if not w or not w["issue"].isdigit() or not w["repo"]:
+    if not w or not ref_of(w):
         sys.stderr.write("fleet-park: no worker window answers %s\n" % a.key)
         return 1
     now = time.time()
     book = Book()
-    ref = "%s#%s" % (w["repo"], w["issue"])
+    ref = ref_of(w)
     if ref in book.d["parked"]:
         print("already parked %s" % ref)
         return 0
