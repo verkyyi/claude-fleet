@@ -116,7 +116,9 @@ if [ -f "$GATE_WF" ]; then
   case "$wf_n" in
     ''|*[!0-9]*|0) fail "could not read the shards: matrix width out of $GATE_WF" ;;
   esac
-  case " $WIDTHS " in *" $wf_n "*) ;; *) WIDTHS="$WIDTHS $wf_n" ;; esac
+  # A width past the 12-test fixture is checked below on a fixture grown to it
+  # (an empty shard is refused by design); one inside it joins the loops here.
+  [ "$wf_n" -gt 12 ] || case " $WIDTHS " in *" $wf_n "*) ;; *) WIDTHS="$WIDTHS $wf_n" ;; esac
   ok "the shipped matrix width parses ($wf_n shards) and is covered below"
 fi
 
@@ -228,6 +230,23 @@ out=$(run --durations no-such.txt --shard 2/4) || fail "a missing --durations ta
 case "$out" in *"no durations table no-such.txt"*"WARN heaviest shard predicted ~450s"*) ok "a missing --durations table falls back to selftest-durations.txt" ;;
   *) fail "a missing --durations table must fall back to the default, saying so" "$out" ;; esac
 rm -f "$TABLE" "$WORK/bin/own-durations.txt"
+
+# The shipped width wider than the fixture (14 since issue #3243): grow the fixture
+# to it with filler tests, check the partition at exactly that N, then drop them.
+if [ "${wf_n:-0}" -gt 13 ]; then
+  i=14; while [ "$i" -le "$wf_n" ]; do mkfake "w$i"; i=$((i + 1)); done
+  ALLW=$(cd "$WORK/bin" && ls ./*-selftest.sh | sed 's|^\./||' | sort)
+  union='' k=1
+  while [ "$k" -le "$wf_n" ]; do
+    out=$(run --shard "$k/$wf_n") || fail "shard $k/$wf_n went red on all-passing fakes" "$out"
+    union="$union$(ran "$out")
+"
+    k=$((k + 1))
+  done
+  eq "N=$wf_n (the shipped width) — the shards cover every test exactly once" \
+     "$ALLW" "$(printf '%s' "$union" | sed '/^$/d' | sort)"
+  rm -f "$WORK"/bin/w*-selftest.sh
+fi
 
 # ---------------------------------------------------------------------------
 # DURATIONS — the table's updater

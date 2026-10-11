@@ -48,6 +48,23 @@ name: release train
 #     older machines too), a publish is idempotent, and the next train starts over
 #     (拍板 7 / 8 — the hub's rollback is still hub-deploy's dispatch with `tag`).
 #
+#   * a test red on TWO trains in a row is quarantined (issue #3243, C10; 拍板 10):
+#       `quarantine` fetches the previous trains' state (the `train-quarantine`
+#                   artifact — the train never pushes master) through
+#                   bin/fleet-train-quarantine.sh: the entries in force (≤ 48 h each,
+#                   + conf/selftest-quarantine.list) and the tests red on the newest
+#                   earlier train on ANOTHER sha. The shards skip an entry this
+#                   change does not touch, and a test red again, untouched, prints
+#                   QUARANTINE instead of FAIL (bin/run-selftests.sh --quarantine /
+#                   --prev-fails — the PR gate and the nightly never pass them).
+#       `隔离`      files each new one's breakage issue (--breakage-key, one per
+#                   test), writes the entry, uploads the state for the next train
+#                   and says 「隔离了 N 个：…」 on the summary (nothing when none).
+#     A workflow_dispatch with `drill_red: <test>` is the drill: that test counts red,
+#     the state is `train-quarantine-drill` (never the real trains'), no issue is
+#     filed (`drill_issue` stands in), and nothing past the tests runs — no gate, no
+#     hub, no release. Two drills on two different heads show the second quarantine.
+#
 # Outputs of `board` (C1 / C3 hang off them): train_sha · stable_sha · skip ·
 # merges (count) · merges_json (first-parent stable..TRAIN_SHA, newest first,
 # {sha, subject, committed}) · macos_runs_on (JSON) · macos_shards · macos_where
@@ -58,6 +75,17 @@ on:
   push:
     branches: [master]
   workflow_dispatch:
+    inputs:
+      drill_red:
+        description: 'the quarantine drill (issue #3243): count this test red; no gate, hub or release runs'
+        type: string
+        required: false
+        default: ''
+      drill_issue:
+        description: 'the drill: the issue a drill quarantine names (nothing is filed)'
+        type: string
+        required: false
+        default: '3243'
   schedule:
     # hourly backstop (a push lost, a train red on a flake): off the top of the hour
     - cron: '41 * * * *'
@@ -86,6 +114,7 @@ jobs:
       macos_shards: ${{ steps.macos.outputs.macos_shards }}
       macos_where: ${{ steps.macos.outputs.macos_where }}
       macos_why: ${{ steps.macos.outputs.macos_why }}
+      drill: ${{ steps.drill.outputs.drill }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -107,6 +136,17 @@ jobs:
           for m in json.load(sys.stdin):
               print("- `%s` %s · %s" % (m["sha"][:7], m["committed"], m["subject"]))'
           } >> "$GITHUB_STEP_SUMMARY"
+      - name: a quarantine drill?
+        id: drill
+        env:
+          DRILL_RED: ${{ inputs.drill_red || '' }}
+        run: |
+          if [ -n "$DRILL_RED" ]; then
+            echo drill=true >> "$GITHUB_OUTPUT"
+            echo "### 演练：隔离（#3243）— $DRILL_RED 记红；不跑门、入口、发布" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo drill=false >> "$GITHUB_OUTPUT"
+          fi
       - name: pick the macOS runners
         # issue #3145: our own Macs when the hub says one is there, else GitHub's.
         id: macos
@@ -118,30 +158,121 @@ jobs:
           echo "macOS → $(cat pick.err)" >> "$GITHUB_STEP_SUMMARY"
           cat pick.err
 
+  quarantine:
+    # What the previous trains left (issue #3243): the entries in force and the
+    # tests red on the newest earlier train on another sha.
+    name: quarantine
+    needs: board
+    if: needs.board.outputs.skip == 'false' || needs.board.outputs.drill == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read     # the previous trains' state artifacts
+    outputs:
+      raw: ${{ steps.q.outputs.raw }}
+      active: ${{ steps.q.outputs.active }}
+      prev_fails: ${{ steps.q.outputs.prev_fails }}
+      prev_run: ${{ steps.q.outputs.prev_run }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.board.outputs.train_sha }}
+      - name: fleet-train-quarantine.sh fetch
+        id: q
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ needs.board.outputs.train_sha }}
+          NAME: ${{ needs.board.outputs.drill == 'true' && 'train-quarantine-drill' || 'train-quarantine' }}
+        run: |
+          sh bin/fleet-train-quarantine.sh fetch --repo "$GITHUB_REPOSITORY" --run "$GITHUB_RUN_ID" \
+            --sha "$SHA" --name "$NAME" --out q
+          active=$(sh bin/fleet-train-quarantine.sh active q/list)
+          {
+            echo 'raw<<FLEET_TQ_EOF'; cat q/list; echo 'FLEET_TQ_EOF'
+            echo 'active<<FLEET_TQ_EOF'; printf '%s\n' "$active"; echo 'FLEET_TQ_EOF'
+            echo 'prev_fails<<FLEET_TQ_EOF'; cat q/prev-fails; echo 'FLEET_TQ_EOF'
+            echo "prev_run=$(cat q/prev-run)"
+          } >> "$GITHUB_OUTPUT"
+          echo "in force: $(printf '%s' "$active" | grep -c . || true) · red on the previous train (run $(cat q/prev-run)): $(tr '\n' ' ' < q/prev-fails)"
+
   linux:
     name: Linux
-    needs: board
-    if: needs.board.outputs.skip == 'false'
+    needs: [board, quarantine]
+    if: needs.board.outputs.skip == 'false' || needs.board.outputs.drill == 'true'
     uses: ./.github/workflows/selftests-shards.yml
     with:
       sha: ${{ needs.board.outputs.train_sha }}
       base: ${{ needs.board.outputs.stable_sha }}
       runs_on: ubuntu-latest
       shards: '[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]'
+      quarantine: ${{ needs.quarantine.outputs.active }}
+      prev_fails: ${{ needs.quarantine.outputs.prev_fails }}
+      drill_red: ${{ inputs.drill_red || '' }}
+      record: true
 
   macos:
     # Our Macs (fleet-ci, one shard each, ≤ 2) or GitHub's (2 wide: a free account
     # runs at most 5 macOS jobs, and the nightly full suite needs the rest) — as
     # `board` picked (issue #3145).
     name: macOS
-    needs: board
-    if: needs.board.outputs.skip == 'false'
+    needs: [board, quarantine]
+    if: needs.board.outputs.skip == 'false' && needs.board.outputs.drill != 'true'
     uses: ./.github/workflows/selftests-shards.yml
     with:
       sha: ${{ needs.board.outputs.train_sha }}
       base: ${{ needs.board.outputs.stable_sha }}
       runs_on: ${{ needs.board.outputs.macos_runs_on }}
       shards: ${{ needs.board.outputs.macos_shards }}
+      quarantine: ${{ needs.quarantine.outputs.active }}
+      prev_fails: ${{ needs.quarantine.outputs.prev_fails }}
+      record: true
+
+  record:
+    # New quarantines get their issue + entry; the state goes to the next train
+    # (issue #3243). Red when a new one could not be filed — the train with it.
+    name: 隔离
+    needs: [board, quarantine, linux, macos]
+    if: always() && needs.quarantine.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write     # the breakage issue of a new quarantine
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.board.outputs.train_sha }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: train-result-*
+          path: results
+      - name: fleet-train-quarantine.sh record
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ needs.board.outputs.train_sha }}
+          RAW: ${{ needs.quarantine.outputs.raw }}
+          PREV_RUN: ${{ needs.quarantine.outputs.prev_run }}
+          DRILL: ${{ needs.board.outputs.drill }}
+          DRILL_ISSUE: ${{ inputs.drill_issue || '3243' }}
+        run: |
+          mkdir -p results; printf '%s\n' "$RAW" > raw.list
+          set -- --results results --list raw.list --prev-run "${PREV_RUN:-0}" --run "$GITHUB_RUN_ID" \
+                 --sha "$SHA" --repo "$GITHUB_REPOSITORY" --out state
+          [ "$DRILL" != true ] || set -- "$@" --issue "$DRILL_ISSUE"
+          set +e
+          sh bin/fleet-train-quarantine.sh record "$@"; rc=$?
+          sum=$(sh bin/fleet-train-quarantine.sh summary --expired raw.list state/list)
+          [ -z "$sum" ] || { echo "$sum"; printf '### 🧪 %s\n' "$sum" >> "$GITHUB_STEP_SUMMARY"; }
+          exit $rc
+      - name: hand the state to the next train
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ needs.board.outputs.drill == 'true' && 'train-quarantine-drill' || 'train-quarantine' }}
+          path: state/
+          retention-days: 7
+          if-no-files-found: ignore
 
   macos-wait:
     # A job queued for a self-hosted label waits a day, and timeout-minutes only
@@ -150,7 +281,7 @@ jobs:
     # runner left one queued 20 minutes (issue #3145).
     name: macOS 排队
     needs: board
-    if: needs.board.outputs.skip == 'false'
+    if: needs.board.outputs.skip == 'false' && needs.board.outputs.drill != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -166,7 +297,7 @@ jobs:
   gate:
     name: precheck
     needs: board
-    if: needs.board.outputs.skip == 'false'
+    if: needs.board.outputs.skip == 'false' && needs.board.outputs.drill != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -197,8 +328,8 @@ jobs:
     # half's verdict to TRAIN_SHA (a commit status — a check run belongs to the
     # commit that queued the run, which may not be TRAIN_SHA).
     name: train
-    needs: [board, linux, macos, macos-wait, gate]
-    if: always() && needs.board.outputs.skip == 'false'
+    needs: [board, quarantine, linux, macos, macos-wait, gate, record]
+    if: always() && needs.board.outputs.skip == 'false' && needs.board.outputs.drill != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -213,6 +344,8 @@ jobs:
           WHERE: ${{ needs.board.outputs.macos_where }}
           WHY: ${{ needs.board.outputs.macos_why }}
           GATE: ${{ needs.gate.result }}
+          QUAR: ${{ needs.quarantine.result }}
+          REC: ${{ needs.record.result }}
           URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           case "$MACOS" in
@@ -235,9 +368,10 @@ jobs:
             echo "| macOS | ${MACOS}（${WHERE}：${WHY}） |"
             echo "| macOS 排队 | $WAIT |"
             echo "| precheck | $GATE |"
+            echo "| 隔离 | $QUAR · $REC |"
           } >> "$GITHUB_STEP_SUMMARY"
-          for r in "$BOARD" "$LINUX" "$MACOS" "$WAIT" "$GATE"; do
-            [ "$r" = success ] || { echo "::error::this train is red (board $BOARD · Linux $LINUX · macOS $MACOS · macOS 排队 $WAIT · precheck $GATE) — it ships nothing; the next merge starts the next train"; exit 1; }
+          for r in "$BOARD" "$QUAR" "$LINUX" "$MACOS" "$WAIT" "$GATE" "$REC"; do
+            [ "$r" = success ] || { echo "::error::this train is red (board $BOARD · quarantine $QUAR · Linux $LINUX · macOS $MACOS · macOS 排队 $WAIT · precheck $GATE · 隔离 $REC) — it ships nothing; the next merge starts the next train"; exit 1; }
           done
           echo "train ${SHA:0:7} is green — the hub, the publish and stable follow"
 

@@ -117,6 +117,8 @@ jobs:
     # wide put ~475s in a shard against the 400s WARN (480s step bound); at 10
     # (~380s predicted) shard 6 of PR #2691's run went past 480s — runner variance
     # of ~1.3x. 12 wide predicts ~317s, which leaves that variance room.
+    # 14 since issue #3243: the table refreshed from that PR's two full runs predicts
+    # ~409s at 12 (past the WARN), and shards 3 and 12 ran ~470s and were cut off.
     uses: ./.github/workflows/selftests-shards.yml
     with:
       # The base --changed diffs against (issue #1374): the PR's target branch,
@@ -124,4 +126,4 @@ jobs:
       # branch) does not resolve, and the runner falls back to the full suite.
       base: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.before }}
       runs_on: ubuntu-latest
-      shards: '[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]'
+      shards: '[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]'

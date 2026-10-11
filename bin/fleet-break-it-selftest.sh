@@ -4401,6 +4401,26 @@ drill_train_push_cancels() {
   WHAT="一条车道：正在跑的不取消、只留最新一趟排着；第二趟上车的是开车时的头（带上中间 3 个合并），stable 已是头就空跑"
 }
 
+# ---- quarantine-* (#3243, EPIC #3139 C10): the release train quarantines a test
+# red on TWO trains in a row, untouched by the second train's change, for ≤ 48 h
+# against its breakage issue — and only the train skips it. Each drill runs its leg
+# of bin/fleet-train-quarantine-selftest.sh for real: the real runner and the real
+# reader in a throwaway git repo, a stub filer, a fake gh.
+quarantine_leg() {   # quarantine_leg <leg> <what>
+  CAP=60; local t0 out
+  [ -f "$BIN/fleet-train-quarantine-selftest.sh" ] || { WHY="no bin/fleet-train-quarantine-selftest.sh"; return 1; }
+  [ -f "$BIN/fleet-train-quarantine.sh" ] || { WHY="no bin/fleet-train-quarantine.sh — the train has no quarantine reader"; return 1; }
+  t0=$(now)
+  out=$(TQ_LEG=$1 bash "$BIN/fleet-train-quarantine-selftest.sh" 2>&1) \
+    || { WHY="$(printf '%s\n' "$out" | grep -E '^FAIL' | head -3 | tr '\n' ' ')"; return 1; }
+  SECS=$(since "$t0")
+  WHAT=$2
+}
+drill_quarantine_one_red()  { quarantine_leg one-red  "只红一趟（或上一趟红的是别的测试）照旧 FAIL、这一片红，不隔离、不开单，只记下这趟的红留给下一趟"; }
+drill_quarantine_touched()  { quarantine_leg touched  "条目还在期内，但这趟改了它点名的文件（或它自己）：照跑；在这种列车上再红是 FAIL，不再隔离"; }
+drill_quarantine_expired()  { quarantine_leg expired  "过期条目视为不存在、测试照跑，摘要写「已过期，恢复」；没有隔离就不出「隔离了」那行"; }
+drill_quarantine_pr_skips() { quarantine_leg pr-skips "不带 --quarantine 什么都不跳；没有 --changed 就拒（exit 2）；PR 门和夜里全量的工作流不传隔离输入，只有列车传"; }
+
 # ---- train-hub-stable-split (#3142, EPIC #3139 C3): the hub image and stable come
 # from different commits — hub-deploy shipped the hub on its own clock, the
 # auto-move / publish moved stable on another, and the hub refused the publish
