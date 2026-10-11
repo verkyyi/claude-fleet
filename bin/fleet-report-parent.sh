@@ -56,6 +56,14 @@
 # without a delivery. A queued report stamps @reported like a sent one: it WILL
 # arrive, and the reaper's backstop must not queue a second.
 #
+# NOBODY TO TAKE IT (issue #3117, EPIC #3111 C6): a report that would wake its parent
+# (tier loud / quiet) whose parent is gone — its window closed with no live ancestor
+# above it in the ledger, or its key now held by a later generation — is no longer
+# dropped. It becomes the PERSON's: one row in $FLEET_CONF_DIR/global/orphan-reports.ndjson
+# ({ts, child_key, state, pr, summary}, deduped on the child's last row) and one
+# `fleet-alerts.sh event child-report` (FLEET_ORPHAN_ALERT_CMD is the test seam), and
+# `orphaned → …` exit 0. A hub-spawned child (@origin empty) still sends nothing.
+#
 # EXIT 0 IS THE RULE for "nothing to send": no parent (hub-spawned / cross-fleet),
 # the parent window already reaped with no live ancestor above it in the ledger
 # (a reaped parent WITH one relays there, issue #1352 — see `relay` below), no
@@ -113,7 +121,7 @@ while [ "$#" -gt 0 ]; do
     -L*)        SOCK="${1#-L}" ;;
     --only-once) ONCE=1 ;;
     --dry-run)  DRY=1 ;;
-    -h|--help)  sed -n '2,88p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)  sed -n '2,96p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *)          printf 'fleet-report-parent: unknown argument %s\n' "$1" >&2; exit 2 ;;
   esac
   shift
@@ -424,6 +432,62 @@ else
 fi
 UST=$(printf '%s' "$STATE" | tr '[:lower:]' '[:upper:]')
 
+# orphan <why> — nobody can take this report (issue #3117): the parent is gone and no
+# live ancestor stands in. A report that would wake someone becomes the person's
+# reminder — a row in global/orphan-reports.ndjson (what the sidebar / entry read)
+# plus one alert on the fleet's existing channel. Silent: as before, nothing.
+orphan() {
+  [ "$TIER" = silent ] && quiet "$1 (tier=silent · $UST — ledger only)"
+  local f="$FLEET_CONF_DIR/global/orphan-reports.ndjson" sockl="${SOCK:-}" pr="${PR//[^0-9]/}" new
+  if [ "$DRY" = 1 ]; then
+    printf 'fleet-report-parent: %s — would file %s for the person (%s) and raise one alert
+' "$1" "$UST" "$f"
+    exit 0
+  fi
+  mkdir -p "${f%/*}" 2>/dev/null
+  new=$(OR_CHILD="$ledkey" OR_STATE="$UST" OR_PR="$pr" OR_SUM="$SUMMARY" OR_TITLE="$wname" OR_PARENT="$worigin" \
+    python3 - "$f" <<'PYORPHAN' 2>/dev/null
+import json, os, sys, time
+f = sys.argv[1]
+e = os.environ
+row = {"ts": int(time.time()), "child_key": e["OR_CHILD"], "state": e["OR_STATE"],
+       "pr": e["OR_PR"], "summary": e["OR_SUM"][:600]}
+if e.get("OR_TITLE"):
+    row["title"] = e["OR_TITLE"]
+if e.get("OR_PARENT"):
+    row["parent"] = e["OR_PARENT"]
+last = None
+try:
+    with open(f, encoding="utf-8") as fh:
+        for line in fh:
+            try:
+                r = json.loads(line)
+            except ValueError:
+                continue
+            if r.get("child_key") == row["child_key"]:
+                last = r
+except OSError:
+    pass
+if last and (last.get("state"), last.get("pr")) == (row["state"], row["pr"]):
+    print("dup")
+    sys.exit(0)
+with open(f, "a", encoding="utf-8") as fh:
+    fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+print("new")
+PYORPHAN
+)
+  if [ "$new" = new ]; then
+    [ -n "$sockl" ] || sockl=$(fleet_socket "$sess" 2>/dev/null)
+    bash "${FLEET_ORPHAN_ALERT_CMD:-$BIN/fleet-alerts.sh}" event ${sockl:+-L "$sockl"} child-report \
+      "fleet: $label${wname:+ \"$wname\"} $UST${pr:+ (PR #$pr)} — 派它的会话 $worigin 已不在，结果交给你${SUMMARY:+: $(printf '%s' "$SUMMARY" | head -1 | cut -c1-160)}" \
+      >/dev/null 2>&1 || printf 'fleet-report-parent: filed for the person, but the alert failed\n' >&2
+  fi
+  # Stamped like a delivered one: the reaper's --only-once backstop must not file a second.
+  TM set-window-option -t "$selfwin" @reported 1 2>/dev/null
+  printf 'orphaned → 你的提醒 (%s): %s — %s\n' "$f" "$UST${pr:+ (PR #$pr)}" "$1"
+  exit 0
+}
+
 # --- the envelope: FIXED shape, 4 lines typical, 6 at its widest ---------------
 # envelope → $msg + $st. A function (issue #1421): a parent on another machine gets
 # the same envelope, built here and carried there by the hub.
@@ -554,6 +618,8 @@ if [ -n "$RETIRED_GEN" ] || { [ -z "$PFOUND" ] && [ -n "$sess" ] && fleet_key_ge
   fi
   printf 'fleet-report-parent: parent %s is a later generation than the one that spawned this session (%s ≠ %s) — filed in its retired book, not sent\n' \
     "$worigin" "$RETIRED_GEN" "$(fleet_key_gen "$sess" "$worigin")" >&2
+  # The session that spawned it is gone (issue #3117): the person takes the report.
+  orphan "parent $worigin (generation $RETIRED_GEN) is gone"
   exit 0
 fi
 
@@ -593,6 +659,12 @@ if [ -z "$pwin" ] && _anc=$(fleet_live_ancestor "$worigin" "$sess" "$SOCK"); the
   fi
 fi
 
+# --- nobody to take it (issue #3117) ----------------------------------------------
+# No parent window and no live ancestor: before this a silent success, so a closed
+# scratch's children merged into nobody's turn. In batch mode too — the digest would
+# find no window to flush to.
+[ -n "$pwin" ] || orphan "parent $worigin has no window on this fleet (closed or reaped), and no live ancestor in the ledger"
+
 # --- batch (issue #939): the ledger IS the delivery queue -----------------------
 # A relay is delivered at once, never batched: the digest is per-parent and would
 # lose the stand-in note.
@@ -615,7 +687,6 @@ if [ "$MODE" = batch ] && [ -z "$RELAY_FROM" ]; then
 fi
 
 # --- rail 2: the parent window, and a live Claude under it ---------------------
-[ -n "$pwin" ] || quiet "parent $worigin has no window on this fleet (reaped, or another fleet), and no live ancestor in the ledger"
 # Defensive: a window whose @origin names ITSELF would otherwise message its own
 # pane and wake the child that is about to stop.
 [ "$pwin" = "$selfwin" ] && quiet "@origin $worigin resolves to this very window"

@@ -1197,7 +1197,8 @@ TOOLS = {
                         "required": ["to", "text"], "additionalProperties": False}}),
     "report": (tool_report, {
         "description": "报 — tell the session that SPAWNED this one how it ended (bin/fleet-report-parent.sh). "
-                       "Exit 0 reported (or no parent to tell — a hub-spawned session), 3 queued: the parent "
+                       "Exit 0 reported (or no parent to tell — a hub-spawned session; or `orphaned`: the "
+                       "parent is gone, so the report becomes the person's reminder), 3 queued: the parent "
                        "cannot take it now and it is delivered when it can (do not resend), 1 refused. A merged "
                        "report is checked against the PR's real state: report merged only after pr_merge says "
                        "MERGED. A waiting report whose summary names a page / code for a person to scan or click "
@@ -1216,8 +1217,9 @@ TOOLS = {
                        "(bin/fleet-comment.sh --note, as `⛔ blocked: …`) and turns this window red on the dash "
                        "(set-claude-state.sh blocked) until the next prompt arrives. The answer comes back as "
                        "your next turn, by the existing channels. Then end your turn — do not spin. Give "
-                       "suggest (+ default / due): past the deadline the steward answers with it "
-                       "(bin/fleet_decision.py, docs/DECISIONS.md).",
+                       "suggest (+ default / due): with the steward installed and someone holding its seat, "
+                       "past the deadline it answers with the suggestion; otherwise the question waits for "
+                       "the person (bin/fleet_decision.py, docs/DECISIONS.md).",
         "inputSchema": {"type": "object", "properties": {
             "question": {"type": "string", "description": "What you need, and why you cannot go on without it."},
             "kind": {"type": "string", "enum": ["question", "permission"],
