@@ -1062,3 +1062,4 @@ def main(argv):
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv[1:]))
+# probe (#3155): does fleet-node-hosted-selftest B fail on master on ubuntu? — never merge
