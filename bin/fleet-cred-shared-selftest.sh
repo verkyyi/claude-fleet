@@ -50,6 +50,8 @@
 #      stays and still serves it; the narrowed login is not served it; a session
 #      the proxy had picked onto the withdrawn account moves to one still held;
 #      the file nobody names any more is gone; no token in the log
+#   N  a login just opened (install --fresh, fleet-login-new.sh 7b) on a machine running
+#      the shared proxy joins it as a tenant; with none it gets its own, as before (#3155)
 #   I  machine install whose agent bootstrap fails AND whose way back fails too:
 #      exit 5, the credentials back anyway, the store kept as <login>.rolledback-*,
 #      the steps to do by hand printed (the clean rollback is BREAK-IT
@@ -67,7 +69,8 @@ trap cleanup EXIT
 export FLEET_CREDSEP_ROOT_BASE="$SB/db" FLEET_CREDSEP_RUN_BASE="$SB/run" FLEET_CREDSEP_LOG_BASE="$SB/log" \
        FLEET_CREDSEP_LIB="$SB/lib" FLEET_CREDSEP_DAEMON_DIR="$SB/daemons" FLEET_CREDSEP_ROLE="$ME" \
        FLEET_CREDSEP_SVC=0 FLEET_CREDSEP_TEST=1 FLEET_CREDSEP_PREFLIGHT=0 FLEET_CREDSEP_SUDO='' \
-       FLEET_CREDSEP_PW="$SB/pw" FLEET_CREDSEP_USERS="$SB/users" FLEET_CREDSEP_HOMES="$SB/homes"
+       FLEET_CREDSEP_PW="$SB/pw" FLEET_CREDSEP_USERS="$SB/users" FLEET_CREDSEP_HOMES="$SB/homes" \
+       FLEET_NODE_STATE="$SB/node"   # never this machine's own daemon state (a managed Mac has one)
 unset CCQUOTA_TOKEN CCQUOTA_HUB_URL FLEET_HUB_URL FLEET_CRED_SEPARATE FLEET_CRED_PROXY FLEET_CRED_AS
 FAIL=0
 pass() { printf 'PASS %s\n' "$*"; }
@@ -455,6 +458,39 @@ out=$(HOME="$SB/homes/beta" python3 -I "$BIN/fleet-credsep.py" uninstall --login
   && pass "H uninstall from meta.json alone: beta byte for byte" \
   || fail "H rc=$rc: $(diff <(printf '%s\n' "$BEFORE") <(snap) | head -4) $(printf '%s' "$out" | tail -2)"
 bash "$BIN/fleet-credsep.sh" machine uninstall >/dev/null 2>&1
+
+# ── N: a login just opened joins the machine's shared proxy (issue #3155) ─────────
+# fleet-login-new.sh's 7b runs `install --login <new> --fresh`: on a machine that
+# runs the shared proxy the new login is a TENANT of it — never an own proxy the
+# shared one's leases never reach. With no shared proxy: an own one, as before.
+newlogin() { # <login> <uid> → a home outside the homes dir (snap stays as it is)
+  local H="$SB/new/$1"
+  mkdir -p "$H/.config/claude-fleet" "$H/.claude/fleet/bin"
+  printf '# claude-fleet\n# ---- [common] ----\nexport FLEET_CRED_PROXY=1\nexport FLEET_CRED_SEPARATE=1\n' > "$H/.config/claude-fleet/fleet.conf"
+  printf '%s:%s:%s:%s\n' "$1" "$2" "$MYGID" "$H" >> "$SB/pw"
+}
+newlogin gamma 1999992; newlogin delta 1999993
+out=$(bash "$BIN/fleet-credsep.sh" machine install --logins beta 2>&1) || fail "N setup install: $out"
+out=$(FLEET_CREDSEP_JOIN_WAIT=1 HOME="$SB/new/gamma" python3 -I "$BIN/fleet-credsep.py" install --login gamma --fresh \
+  --conf-dir "$SB/new/gamma/.config/claude-fleet" --install-dir "$SB/new/gamma/.claude/fleet" 2>&1); rc=$?
+python3 -c 'import json,sys; m=json.load(open(sys.argv[1])); r=json.load(open(sys.argv[2])); s=json.load(open(sys.argv[3]))
+sys.exit(0 if m.get("mode")=="shared" and r.get("shared") and r["run"].endswith("/.shared") and "gamma" in s["logins"] else 1)' \
+  "$SB/db/gamma/meta.json" "$SB/new/gamma/.config/claude-fleet/credsep.json" "$SB/db/.shared.json" 2>/dev/null \
+  && [ "$rc" = 0 ] && [ ! -e "$SB/daemons/com.claude-fleet.credsep.gamma.plist" ] \
+  && [ ! -e "$SB/daemons/claude-fleet-credsep-gamma.service" ] \
+  && case "$out" in *"gamma joins it as a tenant"*) true ;; *) false ;; esac \
+  && pass "N a fresh login on a shared machine: a tenant of the shared proxy (record names it), no own proxy" \
+  || fail "N fresh gamma rc=$rc: $(printf '%s' "$out" | tail -4) · $(ls "$SB/daemons")"
+bash "$BIN/fleet-credsep.sh" machine uninstall >/dev/null 2>&1
+out=$(HOME="$SB/new/delta" python3 -I "$BIN/fleet-credsep.py" install --login delta --fresh \
+  --conf-dir "$SB/new/delta/.config/claude-fleet" --install-dir "$SB/new/delta/.claude/fleet" 2>&1); rc=$?
+python3 -c 'import json,sys; m=json.load(open(sys.argv[1])); sys.exit(0 if m.get("mode") != "shared" else 1)' "$SB/db/delta/meta.json" 2>/dev/null \
+  && [ "$rc" = 0 ] && ls "$SB/daemons" | grep -q 'credsep.*delta' \
+  && case "$out" in *"joins it as a tenant"*) false ;; *) true ;; esac \
+  && pass "N no shared proxy: a fresh login gets its own proxy, as before" \
+  || fail "N fresh delta rc=$rc: $(printf '%s' "$out" | tail -4) · $(ls "$SB/daemons")"
+HOME="$SB/new/delta" python3 -I "$BIN/fleet-credsep.py" uninstall --login delta --conf-dir "$SB/new/delta/.config/claude-fleet" >/dev/null 2>&1
+HOME="$SB/new/gamma" python3 -I "$BIN/fleet-credsep.py" uninstall --login gamma --conf-dir "$SB/new/gamma/.config/claude-fleet" >/dev/null 2>&1
 
 # ── I: the way back fails too: say so, keep the store, print the steps ──────────────
 mkdir -p "$SB/shim"

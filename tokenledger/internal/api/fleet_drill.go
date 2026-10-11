@@ -26,9 +26,12 @@ import (
 //	POST /fleet/login/approve     {code, approve_code} confirms ONE device login as that person
 //	DELETE /v1/self               the drill person removes itself (its own cert, or the code)
 //
-// A drill person gets no credentials and no session passes (fleet_creds.go,
-// fleet_session_cred.go), sees only its own sessions like any non-admin, and
-// is deleted with its devices and nodes when its life runs out.
+// A drill person leases like the newcomer it stands in for — its own rows ∩
+// the shared pool ∩ the subscription allowlists (fleet_creds.go,
+// fleet_session_cred.go; claude-fleet#3155, the person's call: a drill that
+// cannot get claude to answer never reaches the end it is there to prove) —
+// sees only its own sessions like any non-admin, and is deleted with its
+// devices and nodes when its life runs out.
 const (
 	DrillPath     = "/v1/admin/drill"
 	DrillSelfPath = "/v1/self"
@@ -42,9 +45,6 @@ const (
 	// The signatures a client makes for these doors: their own namespace, so
 	// a signature made for any other door is never accepted here.
 	DrillSigNamespace = "fleet-drill@claude-fleet"
-
-	// LeaseDrill: a drill person borrows nothing (claude-fleet#2010).
-	LeaseDrill = "drill"
 )
 
 // DrillInviteMessage is what `fleet drill invite` signs.

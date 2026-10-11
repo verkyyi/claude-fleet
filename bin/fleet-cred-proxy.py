@@ -991,8 +991,7 @@ class Proxy(BaseHTTPRequestHandler):
             acct = self.t.pick_account(provider, sid)
             if not acct:
                 self.log(ev="deny", sid=sid, path=path.split("?")[0], why="no account held")
-                return self.fail(403, "this login holds no %s account the proxy could pick" % provider,
-                                 "permission_error")
+                return self.fail(403, no_account_why(self.cfg, provider), "permission_error")
         hubcred = self.t.hubcreds.get(sid)
         if hubcred:
             hubcred = self.passes.best(hubcred)
@@ -1556,6 +1555,30 @@ def codex_verdict(seen, route, status, body):
         pass
 
 
+def no_account_why(cfg, provider):
+    """The 403 a session gets when this login holds no <provider> account
+    (issue #3155): the hub's last lease verdict made plain — why, and who can
+    change it — never «run /login», which a separated login cannot do."""
+    head = "this login holds no %s account the proxy could pick" % provider
+    v = read_json(os.path.join(cfg.state, "lease.json"), {})
+    if not isinstance(v, dict):
+        v = {}
+    if v.get("state") == "refused":
+        why = v.get("message") or v.get("reason") or "refused"
+        return ("%s — the hub refuses to lease this login any account (%s%s). /login cannot fix this: "
+                "ask the fleet operator who opened your login to grant it a subscription."
+                % (head, why, " · " + v["reason"] if v.get("reason") and v.get("message") else ""))
+    if v.get("state") == "ok" and provider == "claude" and not v.get("claude"):
+        return ("%s — the hub leased this login no claude account (none is allowed for you on this machine: "
+                "the subscription allowlists, or an empty pool). /login cannot fix this: ask the fleet "
+                "operator to allow you a subscription." % head)
+    if not v:
+        return ("%s — this login has not leased an account from the hub yet (its node program has not run "
+                "a lease, or cannot reach the hub). Try again in a minute; if it stays, ask the fleet operator."
+                % head)
+    return head
+
+
 # ---- the control socket ------------------------------------------------------
 def ctl_handle(req, t):
     cfg = t.cfg
@@ -1706,6 +1729,27 @@ def ctl_handle(req, t):
             if pinned:
                 write_json(bp, b)
         t.log(ev="unstore", kind=kind, acct=label, pool=(had or "-")[:12], unpinned=len(pinned))
+        return {"ok": True}
+    if op == "lease":
+        # the node agent's last lease verdict (issue #3155): refused (the hub's
+        # reason) or ok with N claude accounts — what a session that finds no
+        # account is told, instead of a bare 403 Claude Code reads as /login
+        if not cfg.store:
+            return {"ok": False, "err": "lease: not separated (FLEET_CRED_STORE unset)"}
+        v = {"state": req.get("state") if req.get("state") in ("ok", "refused") else "",
+             "reason": str(req.get("reason") or "")[:64], "message": str(req.get("message") or "")[:300]}
+        try:
+            v["claude"] = max(0, int(req.get("claude") or 0))
+        except (TypeError, ValueError):
+            v["claude"] = 0
+        if not v["state"]:
+            return {"ok": False, "err": "lease: state ok|refused"}
+        path = os.path.join(cfg.state, "lease.json")
+        old = read_json(path, {})
+        if not isinstance(old, dict) or {k: old.get(k) for k in v} != v:
+            v["at"] = int(time.time())
+            write_json(path, v)
+            t.log(ev="lease", state=v["state"], reason=v["reason"] or "-", claude=v["claude"])
         return {"ok": True}
     if op == "pool-drop":
         # the node's pool sweep (issue #2850): a token the hub no longer lists

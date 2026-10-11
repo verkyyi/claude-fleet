@@ -194,6 +194,12 @@ has "B: a window on the refresh loop's cache: its title" "$(printf '%s' "$L8" | 
 has "B: …its ctx columns" "$(printf '%s' "$L8" | sed 's/#\[[^]]*\]//g')" "40% · Sonnet 5.5 · medium"
 has "B: …a perm needs is the ⊘ word" "$(printf '%s' "$L8" | sed 's/#\[[^]]*\]//g')" "⊘ needs OK"
 hasnt "B: …and is no red line (only a question is)" "$L8" "bg=#f7768e"
+# a login just opened (#3155): the hub's list has no line for this fleet yet —
+# ‹ i/n › counts the 看台's own session windows (orchestrator, 7, 8), not 「–/0」
+mkdir -p "$TMPDIR/nocache"
+L9=$(python3 "$BIN/fleet-topbar.py" render --node view=dev1 "s=$RS" "reg=$FLEET_CONF_DIR/remote-views" "g=$TMPDIR/nocache" \
+  "sock=$(tn display-message -p '#{socket_path}')" cw=160 "w=$W7" | sed 's/#\[[^]]*\]//g')
+has "B: no hub line yet: ‹ 2/3 › off the 看台's own windows (#3155)" "$L9" "‹ 2/3 ›"
 # the screen itself: the client's first line is that top line
 tn select-window -t "$V$W7" 2>/dev/null   # no client switch: tmux redraws the 看台 anyway
 waitfor 8 sh -c "'$REAL_TMUX' -L '$TL' capture-pane -p -t '=$TL:thin1' -S 0 -E 0 | grep -q '剩余 62%'" \

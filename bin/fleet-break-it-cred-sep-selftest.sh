@@ -25,6 +25,8 @@
 #                              fleet-credsep.sh setenv --check (issue #2649)
 #   cred-sep-stale-agent       bin/fleet-credsep-launch.py (stop_strays / agents),
 #                              bin/fleet-doctor.sh agentdup row (issue #2663)
+#   cred-new-login-not-tenant  bin/fleet-credsep.py install --fresh (shared_on / fresh_join),
+#                              bin/fleet-login-new.sh 7b (issue #3155)
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT are read by the sourced runner
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -48,7 +50,7 @@ sep_install() {
   OUT=$(PATH="$sb/shim:$PATH" FAKE_SVC_LOG="$sb/svc.log" FAKE_DAEMONS="$sb/daemons" \
     FLEET_CREDSEP_ROOT_BASE="$sb/db" FLEET_CREDSEP_RUN_BASE="$sb/run" FLEET_CREDSEP_LOG_BASE="$sb/log" \
     FLEET_CREDSEP_LIB="$sb/lib" FLEET_CREDSEP_DAEMON_DIR="$sb/daemons" FLEET_CREDSEP_ROLE="$(id -un)" \
-    FLEET_CREDSEP_TEST=1 FLEET_CREDSEP_SUDO='' FLEET_CREDSEP_PW="$sb/pw" \
+    FLEET_CREDSEP_TEST=1 FLEET_CREDSEP_SUDO='' FLEET_CREDSEP_PW="$sb/pw" FLEET_NODE_STATE="$sb/node" \
     FLEET_CRED_SHARED_PORT="$(cred_deadport)" HOME="$sb/homes/alpha" FLEET_CRED_ROLLOUT_WAIT=1 \
     bash "$BIN/fleet-credsep.sh" machine install --logins alpha "$@" 2>&1); RC=$?
 }
@@ -465,6 +467,35 @@ EOF
   [ "$rc" = 0 ] || { WHY="after the switch the login runs: $(printf '%s' "$out" | tr '\n' ' ') (the launcher's is $new) · $(cat "$sb/launch.err")"; return 1; }
   grep -q 'stopped a stray agent pid' "$sb/launch.err" || { WHY="the launcher did not say what it stopped: $(cat "$sb/launch.err")"; return 1; }
   WHAT="分离时留着一个旧 agent（孤儿）：经启动器起新 agent 前先停掉同登录、同 --state 的旧的，切换后只剩一个"
+}
+
+# 2026-10-11 (#3155, C9's 20th run): the hub opened drill10110804 on mini2, whose
+# shared proxy served one login. fleet-login-new.sh 7b's `install --fresh` gave
+# the new login a proxy of its OWN, the shared one's tenants file never named it,
+# and the newcomer's first claude answered «Please run /login».
+drill_cred_new_login_not_tenant() {
+  CAP=20
+  local sb="$WORK/newtenant" t0 out rc env
+  sep_login "$sb"
+  FLEET_CREDSEP_SVC=0 FLEET_CREDSEP_PREFLIGHT=0 sep_install "$sb"
+  [ "$RC" = 0 ] || { WHY="the rig: machine install for alpha (rc $RC): $(printf '%s' "$OUT" | tail -2 | tr '\n' ' ')"; return 1; }
+  mkdir -p "$sb/new/beta/.config/claude-fleet" "$sb/new/beta/.claude/fleet/bin"
+  printf 'export FLEET_CRED_PROXY=1\nexport FLEET_CRED_SEPARATE=1\n' > "$sb/new/beta/.config/claude-fleet/fleet.conf"
+  printf 'beta:1999981:%s:%s\n' "$(id -g)" "$sb/new/beta" >> "$sb/pw"
+  env="FLEET_CREDSEP_ROOT_BASE=$sb/db FLEET_CREDSEP_RUN_BASE=$sb/run FLEET_CREDSEP_LOG_BASE=$sb/log FLEET_CREDSEP_LIB=$sb/lib"
+  env="$env FLEET_CREDSEP_DAEMON_DIR=$sb/daemons FLEET_CREDSEP_ROLE=$(id -un) FLEET_CREDSEP_TEST=1 FLEET_CREDSEP_SUDO="
+  env="$env FLEET_CREDSEP_PW=$sb/pw FLEET_CREDSEP_SVC=0 FLEET_CREDSEP_PREFLIGHT=0 FLEET_CREDSEP_JOIN_WAIT=1 FLEET_NODE_STATE=$sb/node"
+  t0=$(now)
+  # shellcheck disable=SC2086
+  out=$(env $env HOME="$sb/new/beta" python3 -I "$BIN/fleet-credsep.py" install --login beta --fresh \
+    --conf-dir "$sb/new/beta/.config/claude-fleet" --install-dir "$sb/new/beta/.claude/fleet" 2>&1); rc=$?
+  SECS=$(since "$t0")
+  [ "$rc" = 0 ] || { WHY="install --fresh failed (rc $rc): $(printf '%s' "$out" | tail -2 | tr '\n' ' ')"; return 1; }
+  ls "$sb/daemons" | grep -q 'credsep.*beta' && { WHY="the new login got a proxy of its own: $(ls "$sb/daemons" | tr '\n' ' ')"; return 1; }
+  python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1])).get("mode") == "shared" and "beta" in json.load(open(sys.argv[2]))["logins"] else 1)' \
+    "$sb/db/beta/meta.json" "$sb/db/.shared.json" 2>/dev/null \
+    || { WHY="the shared proxy's tenants do not name the new login: $(cat "$sb/db/.shared.json" 2>&1 | tr '\n' ' ')"; return 1; }
+  WHAT="共享代理在跑的机器上开新登录：install --fresh 直接把它登记为共享代理的租户（记录里有它），不再起一个自己的代理"
 }
 
 cred_run_drills "$0"

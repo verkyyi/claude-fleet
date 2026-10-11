@@ -21,6 +21,7 @@
 #      a bracketed paste; ⌃V with no picture is the ⌃V itself
 #   F  three failed connections → --avoid <home>: a new home, a fresh view there
 #   G  a new client between connections is exec'd, view kept (--resume)
+#   H  (+ #3155: a `drawn` line the moment the view is up, before `connect`)
 #   H  ⌘Q (quit with our token) → exit 0 and the profile back; SIGHUP → the loop
 #      and its ssh gone, nothing left; no terminal → exit 2
 #   I  this machine is home (issue #3006): --argv for this machine + login →
@@ -333,6 +334,11 @@ left=$(pgrep -f "$T/" | while read -r p; do ps -o command= -p "$p"; done | grep 
 case $(cat "$T/res.hup") in *'RC 129'*) ok "H: SIGHUP → exit 129" ;; *) fail "H: hup: $(cat "$T/res.hup")" ;; esac
 awk -F '\t' '$2 == "connect" && NF >= 9 && $3 == "m1" && $4 == "lan" && $5 ~ /^[0-9]+$/ && $6 ~ /^[0-9]+$/ && $7 ~ /^[0-9]+$/ { n++ } END { exit !(n > 0) }' "$T/thin.log" \
   && ok "H: thin.log connect lines carry home · route · pick_ms · ssh_ms · first_ms" || fail "H: thin.log: $(head -3 "$T/thin.log")"
+# the view drawn is written WHILE it is up (#3155), before that connection's own
+# `connect` line — the onboarding drill reads it to call the client step landed
+awk -F '\t' '$2 == "drawn" && $3 == "m1" && $4 == "lan" && $7 ~ /^[0-9]+$/ && !c { d = 1 } $2 == "connect" && $3 == "m1" { c = 1 }
+  END { exit !d }' "$T/thin.log" \
+  && ok "H: thin.log has a drawn line (home · route · first_ms) before its connect line" || fail "H: no drawn line: $(head -4 "$T/thin.log")"
 e=$(python3 "$BIN/fleet-thin.py" </dev/null 2>&1); rc=$?
 [ "$rc" = 2 ] && ok "H: no terminal → exit 2, one line" || fail "H: no tty rc=$rc $e"
 

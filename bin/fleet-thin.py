@@ -600,6 +600,7 @@ class Thin:
                  "-o", "ServerAliveInterval=2", "-o", "ServerAliveCountMax=3"]
         cmd = self.command(j, extra, self.remote(token, route))
         t0 = time.time()
+        self.drawn_at = (home, route, t0)
         rc, first_byte, first_view = self.pump(cmd, token, reconnect)
         up = first_view is not None or time.time() - t0 >= env_num("FLEET_THIN_UP_SECS", 10)
         tlog("connect", home, route, pick, ms(t0, first_byte) if first_byte else "",
@@ -700,6 +701,12 @@ class Thin:
                                 rw.node, rw.wid = self.cur[0], self.cur[2]
                             if first_view is None:
                                 first_view = now
+                                # written now, not when the connection ends: a
+                                # reader (the onboarding drill, #3155) learns the
+                                # view is up while it is up
+                                h, rt, t0 = getattr(self, "drawn_at", ("", "", now))
+                                tlog("drawn", h or "-", rt, "", ms(t0, first_byte) if first_byte else "",
+                                     ms(t0, now), "", "")
                         elif kind == "quit":
                             self.quit = True
                 if 0 in r:
