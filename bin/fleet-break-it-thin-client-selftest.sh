@@ -55,12 +55,14 @@ EOF
   echo '{}' > "$R/iterm/fleet.json"
   # the person's own ~/.ssh/config, as #2987 found it: a master for every host
   printf 'Host *\n  ControlMaster auto\n  ControlPath %s/cm-%%C\n  ControlPersist 10m\n' "$R/client/.ssh" > "$R/client/.ssh/config"
-  cat > "$R/bin/ssh" <<EOF
+  # the network down: ssh hangs in connect a while before it gives up, as a real one
+# does — keys typed then land on its pty, which must not echo them (#3061)
+cat > "$R/bin/ssh" <<EOF
 #!/bin/sh
 python3 -c 'import json, sys; print(json.dumps(sys.argv[1:]))' "\$@" >> "$R/ssh.ndjson"
 for a; do prev=\$last; last=\$a; done
 case \$prev in 127.0.0.1) host=m1 ;; 127.0.0.2) host=m2 ;; *) host=\$prev ;; esac
-[ -e "$R/net.down" ] && { sleep 0.1; echo "ssh: connect to host \$prev: Network is unreachable" >&2; exit 255; }
+[ -e "$R/net.down" ] && { sleep 1.5; echo "ssh: connect to host \$prev: Network is unreachable" >&2; exit 255; }
 [ -e "$R/down.\$host" ] && { echo "ssh: connect to host \$prev: Connection refused" >&2; exit 255; }
 mkdir -p "$R/home/\$host"
 cd "$R/home/\$host" && HOME="$R/home/\$host" HOST_NAME=\$host exec sh -c "\$last"
