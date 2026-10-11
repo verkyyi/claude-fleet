@@ -1918,6 +1918,18 @@ if [ -f "$_nsup" ] && command -v python3 >/dev/null 2>&1; then
     esac
   fi
 fi
+# Spotlight on a managed Mac (issue #3402): off — every volume's index and each
+# person's CoreSpotlight knowledge agents. WARN: a volume indexing, a knowledge
+# agent running, or a Spotlight / fsevents process hot for 10 minutes. Not a
+# managed machine (no /var/db/fleet-node/machine.env) ⇒ no row.
+_nspot="$(dirname "$0")/fleet-spotlight.sh"
+if [ -f "$_nspot" ]; then
+  spline=$(bash "$_nspot" status --check 2>/dev/null); sprc=$?
+  case "$sprc" in
+    0) pass spotlight "$spline" ;;
+    1) warn spotlight "$spline" ;;
+  esac
+fi
 # The home machine's standing connections to the other machines (issue #3002,
 # EPIC #2999 C5): one line per link (machine@login · route · age · round trip ·
 # failures). WARN: a link failing its check past 60 s, a wrong login, a second

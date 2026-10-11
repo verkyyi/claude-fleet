@@ -93,6 +93,9 @@
 #   managed-login-mod-escapes  bin/fleet-node-update.py _build_tree / _copy_heal +
 #                         follow_installs (#2964): the mod's files were links into the
 #                         runtime, Claude Code refused it (Path escapes plugin directory)
+#   spotlight-on          bin/fleet-spotlight.sh + the machine daemon's `spotlight` task +
+#                         bin/fleet-doctor.sh's `spotlight` row (#3402): Spotlight indexes
+#                         every worktree and a knowledge agent burns a core on a managed Mac
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT are read by the sourced runner
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -1170,6 +1173,47 @@ PY
   done
   rm -rf "$d"
   SECS=$(since "$t0"); WHAT="⇧↵ 穿过客户端、stage、节点三层 tmux 到会话还是 ⇧↵（扩展键）；关掉开关就不再是 ⇧↵，如今天"
+}
+
+# spotlight-on (#3402): a managed Mac with a volume indexing and a person's
+# CoreSpotlight knowledge agent at 99% for hours (mini2, 2026-10-11, while every
+# volume already read «Indexing disabled»). The doctor's row WARNs on both; one
+# `off` (what the machine daemon runs at its start and hourly) turns the volume
+# off and disables + boots out the agent, and the row reads PASS again.
+drill_spotlight_on() {
+  CAP=10
+  local sb t0 rc out
+  sb="$WORK/spotlight"; mkdir -p "$sb/state" "$sb/bin"; : > "$sb/state/machine.env"
+  printf '/ off\n/System/Volumes/Data on\n' > "$sb/vols"
+  printf 'verkyyi 07:13:04 99.0 /System/Library/Frameworks/CoreSpotlight.framework/spotlightknowledged\n' > "$sb/ps"
+  cat > "$sb/bin/mdutil" <<EOF
+#!/bin/bash
+case "\$*" in
+  "-as") while read -r v st; do echo "\$v:"; [ "\$st" = on ] && printf '\tIndexing enabled.\n' || printf '\tIndexing disabled.\n'; done < "$sb/vols" ;;
+  "-a -i off") sed -i.bak 's/ on\$/ off/' "$sb/vols" ;;
+esac
+EOF
+  cat > "$sb/bin/launchctl" <<EOF
+#!/bin/bash
+case "\$1 \$2" in "bootout gui/501/com.apple.spotlightknowledged") : > "$sb/ps" ;; esac
+EOF
+  chmod +x "$sb/bin/"*
+  spot() { FLEET_NODE_STATE="$sb/state" FLEET_NODE_TEST=1 FLEET_SPOTLIGHT_MDUTIL="$sb/bin/mdutil" \
+           FLEET_SPOTLIGHT_LAUNCHCTL="$sb/bin/launchctl" FLEET_SPOTLIGHT_PS="cat $sb/ps" FLEET_SPOTLIGHT_UIDS=501 \
+           bash "$BIN/fleet-spotlight.sh" "$@"; }
+  grep -q '"fleet-spotlight.sh"), "off", "--tick"' "$BIN/fleet-node-supervisor.py" \
+    || { WHY="the machine daemon runs no spotlight task"; return 1; }
+  grep -q 'warn spotlight' "$BIN/fleet-doctor.sh" || { WHY="fleet-doctor.sh has no spotlight row"; return 1; }
+  out=$(spot status --check); rc=$?
+  [ "$rc" = 1 ] && printf '%s' "$out" | grep -q 'indexing on: /System/Volumes/Data' \
+    && printf '%s' "$out" | grep -q 'spotlightknowledged(verkyyi) 99.0%' \
+    || { WHY="Spotlight on, yet the row is not WARN naming both (rc $rc): $out"; return 1; }
+  t0=$(now)
+  spot off --tick >/dev/null || { WHY="off --tick failed"; return 1; }
+  out=$(spot status --check); rc=$?
+  SECS=$(since "$t0")
+  [ "$rc" = 0 ] || { WHY="after off the row still reads rc $rc: $out"; return 1; }
+  WHAT="卷在索引、知识代理 99% 跑了 7 小时：体检 spotlight 行 WARN 写明两处；守护的 off 一次关掉卷索引、停掉代理，行回到 PASS"
 }
 
 cred_run_drills "$0"

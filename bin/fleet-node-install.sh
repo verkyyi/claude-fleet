@@ -38,6 +38,8 @@
 #             (fleet-login-remove-ssh.sh setup, #2994) — no admin ⇒ 跳过
 #   守护      <state>/logins, then the machine daemon's LaunchDaemon
 #             (fleet-node-supervisor.py install, from `current` — C3)
+#             — whose `spotlight` task turns Spotlight off at its start (#3402,
+#             docs/MANAGED-NODE.md §19)
 #   入口      the entry port (#3070): FLEET_ENTRY=1 [FLEET_ENTRY_PORT=<n>] on the
 #             command writes the switch into machine.env (FLEET_ENTRY=0 takes it
 #             out), then `fleet-node-supervisor.py entry ensure` (not on ⇒ 跳过)
