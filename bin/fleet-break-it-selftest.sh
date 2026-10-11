@@ -100,7 +100,7 @@
 #   account-remove-tenant-held                      tokenledger/internal/agent runas.go (holdLogin; go test)
 #   linux-hub-other-root-op                         tokenledger/internal/agent node_machine_accounts.go (go test)
 #                                                   + bin/fleet-node-linux.py (exit 3 to another op)
-#   newcomer-login-hosts-repo                       bin/fleet-control-read.sh ready (a seed repo needs no gh)
+#   newcomer-login-hosts-repo                       bin/fleet-control-read.sh ready (a seed repo needs no gh — but a repo start does, #3424)
 #   login-remove-dscl-denied                        bin/fleet-node-supervisor.py (fda reading, status --check 4), bin/fleet-login-remove-ssh.sh
 #                                                   + bin/fleet-login-remove.sh (says Full Disk Access)
 #   drill-login-handed-silently                     tokenledger/internal/api fleet_drill.go (closeDrillLogins
@@ -5082,11 +5082,13 @@ drill_newcomer_login_hosts_repo() {
   printf 'FLEET_REPO=verkyyi/claude-fleet\nFLEET_MAIN=%s/main\nFLEET_SEED=1\n' "$w" > "$w/c/fleets/fleet/repos/verkyyi-claude-fleet.conf"
   got=$(HOME="$w/home" FLEET_CONF_DIR="$w/c" PATH="$w/bin:$PATH" bash "$ROOT/bin/fleet-control-read.sh" ready 2>/dev/null)
   case "$got" in *'"ready":true'*) ;; *) rm -rf "$w"; WHY="a login on the seed repo only, no gh, reads not ready: $got"; return 1 ;; esac
+  # …but only for a start with no repo (#3424): an issue on the seed repo needs gh.
+  case "$got" in *'"repo_ready":false,"repo_missing":["gh"]'*) ;; *) rm -rf "$w"; WHY="a login on the seed repo only, no gh, reads ready for a repo start: $got"; return 1 ;; esac
   printf 'FLEET_REPO=acme/app\nFLEET_MAIN=%s/main\n' "$w" > "$w/c/fleets/fleet/repos/acme-app.conf"
   got=$(HOME="$w/home" FLEET_CONF_DIR="$w/c" PATH="$w/bin:$PATH" bash "$ROOT/bin/fleet-control-read.sh" ready 2>/dev/null)
   rm -rf "$w"
   case "$got" in *'"ready":false'*'"gh"'*) ;; *) WHY="a login with a repo of its own and no gh reads ready: $got"; return 1 ;; esac
-  WHAT='只托管起步仓库（--seed）的新登录缺 gh → ready；再加自己的仓库 → not ready: gh（真跑就绪检查）'
+  WHAT='只托管起步仓库（--seed）的新登录缺 gh → 无仓库的会话 ready、带仓库的开单 repo_ready:false 缺 gh；再加自己的仓库 → not ready: gh（真跑就绪检查）'
   SECS=$(since "$t0")
 }
 

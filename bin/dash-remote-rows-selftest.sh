@@ -1370,6 +1370,17 @@ mkdir -p "$WORK/conf-seed/fleets/solo$$/repos" "$WORK/seedmain"
 printf 'FLEET_SESSION=solo%s\n' "$$" > "$WORK/conf-seed/fleets/solo$$/conf"
 printf 'FLEET_REPO=verkyyi/claude-fleet\nFLEET_MAIN=%s\nFLEET_SEED=1\n' "$WORK/seedmain" > "$WORK/conf-seed/fleets/solo$$/repos/verkyyi-claude-fleet.conf"
 eq "R: only the seed repo hosted, no gh login: ready all the same" "True|False|True|True|" "$(FLEET_CONF_DIR="$WORK/conf-seed" rdy)"
+# …for a start with no repo only (#3424): a start ON a repo — the seed one too —
+# reads the issue and opens a PR, so repo_ready says no and names gh, and
+# fleet_control.py hands that half on to the agent's heartbeat
+rrdy() { PATH="$SHIMPATH" bash "$CREAD" ready 2>/dev/null | python3 -c 'import json, sys
+d = json.load(sys.stdin); print("%s|%s" % (d["repo_ready"], ",".join(d["repo_missing"])))'; }
+eq "R: only the seed repo hosted, no gh login: a repo start is not ready, gh named" "False|gh" "$(FLEET_CONF_DIR="$WORK/conf-seed" rrdy)"
+eq "R: no repo hosted, no gh login: nothing to start a repo on, repo_ready as ready" "True|" "$(FLEET_CONF_DIR="$WORK/conf-norepo" rrdy)"
+got=$(cd "$BIN" && PATH="$SHIMPATH" FLEET_CONF_DIR="$WORK/conf-seed" python3 -c 'import sys, fleet_control as c
+r = c.Control(sys.argv[1]).dispatch(dict(protocol=1, method="ready", params={}))
+print("%s|%s|%s" % (r["ready"], r["repo_ready"], ",".join(r["repo_missing"])))' "$WORK/conf-seed" 2>&1)
+eq "R: fleet_control.py hands repo_ready on" "True|False|gh" "$got"
 printf 'FLEET_REPO=o/own\nFLEET_MAIN=%s\n' "$WORK/seedmain" > "$WORK/conf-seed/fleets/solo$$/repos/o-own.conf"
 eq "R: the seed plus a repo of its own, no gh login: not ready, gh named" "False|False|True|True|gh" "$(FLEET_CONF_DIR="$WORK/conf-seed" rdy)"
 touch "$WORK/gh-ok"; rm -f "$HOME/.claude/.credentials.json"

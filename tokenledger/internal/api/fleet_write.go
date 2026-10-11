@@ -1306,6 +1306,10 @@ type Candidate struct {
 	// never picks a node that says false — only a name asks for it.
 	Ready    *bool  `json:"ready,omitempty"`
 	NotReady string `json:"not_ready,omitempty"`
+
+	// RepoNotReady names what a start ON a repo lacks there while Ready is
+	// true (claude-fleet#3424: gh on a login hosting only the seed repo).
+	RepoNotReady string `json:"repo_not_ready,omitempty"`
 	// Personal is a person's own computer (claude-fleet#1721): a candidate
 	// only for a start asked from it.
 	Personal bool `json:"personal,omitempty"`
@@ -1514,6 +1518,12 @@ func (s *Server) pickNodeAfter(p fleetPrincipal, repo, node string, now time.Tim
 			// sends work there; naming it with --node still does.
 			c.Eligible, c.Excluded = false, "not ready: "+c.NotReady
 		}
+		if node == "auto" && repo != "" && c.Eligible && c.RepoNotReady != "" {
+			// Ready for a home session, not for an issue (claude-fleet#3424:
+			// only the seed repo, no gh — the worker could not read the issue
+			// or open its PR). Same rule: auto passes it over, a name still asks.
+			c.Eligible, c.Excluded = false, "not ready: "+c.RepoNotReady
+		}
 		if c.Eligible && c.Personal && !s.isMachine(r.Hostname, from) {
 			// A person's own computer (claude-fleet#1721): only what is
 			// asked from it lands there — auto or named.
@@ -1685,7 +1695,7 @@ func (s *Server) judge(r store.FleetRow, settings map[string]string, accounts ma
 	c.Ready, c.NotReady = hb.Ready, hb.NotReady
 	c.Personal = s.personalOf(r.EndpointID, hb)
 	if hb.Ready == nil || *hb.Ready {
-		c.NotReady = ""
+		c.NotReady, c.RepoNotReady = "", hb.RepoNotReady
 	}
 	if hb.NCPU > 0 {
 		l := hb.Load1 / float64(hb.NCPU)

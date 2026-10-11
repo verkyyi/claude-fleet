@@ -374,6 +374,10 @@ case "$mode" in
     # every new login up on verkyyi/claude-fleet with --seed (FLEET_SEED=1, issue
     # #1167) — it only LOOKS (no autofill, no bridge, no write access), so a
     # newcomer with no GitHub credential is ready on it all the same.
+    # That exemption is for a start with NO repo only (issue #3424): a start on
+    # a repo — the seed one too — reads the issue, pushes and opens a PR, so
+    # `repo_ready` / `repo_missing` are the verdict with gh asked whenever the
+    # login hosts any repo, and the hub reads them for a start that names one.
     missing=''
     gh_ok=false
     if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then gh_ok=true; fi
@@ -394,10 +398,12 @@ case "$mode" in
     [ "$creds" = true ] || missing="$missing creds"
     checkouts=true
     nrepos=0
+    nall=0
     while IFS=$'\t' read -r s _c; do
       [ -n "$s" ] || continue
       while IFS= read -r r; do
         [ -n "$r" ] || continue
+        nall=$((nall + 1))
         fleet_repo_is_seed "$s" "$r" || nrepos=$((nrepos + 1))
         m=$( fleet_load_conf "$s" >/dev/null 2>&1; fleet_load_repo_conf "$s" "$r" >/dev/null 2>&1; printf '%s' "${FLEET_MAIN:-}" )
         [ -n "$m" ] && [ -d "$m" ] || { checkouts=false; missing="$missing checkout:$s/${r##*/}"; }
@@ -406,8 +412,13 @@ case "$mode" in
     gh_met=$gh_ok; [ "$gh_ok" = true ] || [ "$nrepos" -gt 0 ] || gh_met=true
     [ "$gh_met" = true ] || missing="gh$missing"
     ready=false; [ "$gh_met" = true ] && [ "$creds" = true ] && [ "$checkouts" = true ] && ready=true
+    rmissing=$missing
+    [ "$gh_ok" = true ] || [ "$nall" -eq 0 ] || [ "$gh_met" = false ] || rmissing="gh$missing"
+    rready=$ready; [ -z "$rmissing" ] || rready=false
     printf '{"ready":%s,"gh":%s,"creds":%s,"checkouts":%s,"missing":[' "$ready" "$gh_ok" "$creds" "$checkouts"
     sep=''; for w in $missing; do printf '%s"%s"' "$sep" "$w"; sep=','; done
+    printf '],"repo_ready":%s,"repo_missing":[' "$rready"
+    sep=''; for w in $rmissing; do printf '%s"%s"' "$sep" "$w"; sep=','; done
     printf ']}\n'
     ;;
   capacity)

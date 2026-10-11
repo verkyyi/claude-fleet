@@ -178,6 +178,7 @@ type fleetPart struct {
 	version  string
 	ready    *bool
 	notReady string
+	repoWhy  string
 	credsep  string
 }
 
@@ -190,6 +191,7 @@ func (a *Agent) readFleetPart(ctx context.Context, probe *fleetProbe) (fleetPart
 		fp.version = fv.Head
 	}
 	fp.ready, fp.notReady = probe.ready.reading(ctx, a.cfg.Home, time.Now())
+	fp.repoWhy = probe.ready.repoWhy
 	fp.credsep = probe.credsep.reading(ctx, a.cfg.Home, time.Now())
 	return fp, ctx.Err() == nil
 }
@@ -216,7 +218,7 @@ func (fp fleetPart) fill(hb *control.Heartbeat, at time.Time) {
 		}
 	}
 	hb.FleetVersion = fp.version
-	hb.Ready, hb.NotReady = fp.ready, fp.notReady
+	hb.Ready, hb.NotReady, hb.RepoNotReady = fp.ready, fp.notReady, fp.repoWhy
 	hb.Credsep = fp.credsep
 	if !at.IsZero() {
 		hb.FleetAt = &at
