@@ -751,6 +751,7 @@ FLEET_MACOS_WORKFLOW               knob: the macOS workflow file the watcher rea
 FLEET_MACOS_BRANCH                 knob: the branch whose macOS runs the watcher reads (fleet-macos-watch.sh, default master, #2286)
 FLEET_MACOS_FILE_CMD               seam: the filer the watcher runs instead of fleet-issue-file.sh (selftests, #2286)
 FLEET_MACOS_ALERT_CMD              seam: what the watcher runs instead of fleet-alerts.sh for its one alert (selftests, #3120)
+FLEET_ORPHAN_ALERT_CMD             seam: what fleet-report-parent.sh runs instead of fleet-alerts.sh for an orphaned report's one alert (selftests, #3117)
 FLEET_STABLE_MACOS_POLL            knob: internal pacing, seconds between two reads while fleet-stable.sh move waits for a macOS run (default 30, #2286)
 FLEET_STABLE_MACOS_WORKFLOW        knob: the macOS workflow file fleet-stable.sh move's macos gate reads / dispatches (default selftests-macos.yml, #2286)
 FLEET_RELEASE_MACHINES             knob: the machines `fleet release` waits on, comma-separated (default: /v1/nodes, else peer/machines — fleet-release.sh, #2483)
