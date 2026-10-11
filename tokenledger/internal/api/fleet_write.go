@@ -79,8 +79,11 @@ var fleetScopeOf = map[string]string{
 	"service_control": "service:control",
 	// An older client's ⌘N asking for the orchestrating session (claude-fleet#2616):
 	// answered 「没有编排」 since #3118, never sent — compat-1v.
-	"orch_ensure":   "worker:start",
-	"gh_comment":    "gh:comment",
+	"orch_ensure": "worker:start",
+	"gh_comment":  "gh:comment",
+	// A task record's 「建 GitHub 单」 (claude-fleet#3325): filing an issue is
+	// a GitHub write of the same weight as a comment.
+	"task_issue":    "gh:comment",
 	"gh_issue_view": "gh:read",
 	"gh_pr_view":    "gh:read",
 	"gh_pr_checks":  "gh:read",
@@ -114,8 +117,13 @@ var (
 	fleetGHReads = map[string]bool{"gh_issue_view": true, "gh_pr_view": true, "gh_pr_checks": true}
 )
 
+// task_issue (claude-fleet#3325) is journalled like the rest but reached only
+// through a task record (fleet_tasks.go), which hangs the issue it files on
+// the record: it is in no tool list, so no generic road files one beside it.
+
 var (
 	idemRE     = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,128}$`)
+	taskRefRE  = regexp.MustCompile(`^T[1-9][0-9]{0,17}$`)
 	repoRE     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}(/[A-Za-z0-9_.-]{1,100})?$`)
 	ghFieldRE  = regexp.MustCompile(`^[A-Za-z]{1,40}$`)
 	nodeNameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
@@ -391,7 +399,7 @@ func parseWrite(tool string, args map[string]any) (writeRequest, string, error) 
 	var err error
 	switch tool {
 	case "worker_start":
-		if err = checkFields(args, []string{"idempotency_key"}, "issue", "kind", "name", "title", "body", "fleet_id", "agent", "repo", "no_repo", "node", "origin_wid", "account_class", "reap", "attachments", "test", "debug"); err != nil {
+		if err = checkFields(args, []string{"idempotency_key"}, "issue", "kind", "name", "title", "body", "fleet_id", "agent", "repo", "no_repo", "node", "origin_wid", "account_class", "reap", "attachments", "test", "debug", "task"); err != nil {
 			break
 		}
 		// kind (claude-fleet#1541): "issue" (the default — a worker on an
@@ -594,6 +602,21 @@ func parseWrite(tool string, args map[string]any) (writeRequest, string, error) 
 			}
 			w.params["attachments"] = list
 		}
+		// task (claude-fleet#3325): the hub's task record this start belongs
+		// to — T<n>, a new or scratch start only; the node stamps @task and a
+		// no-repo one files no desk ticket.
+		if v, ok := args["task"]; ok {
+			ref, isStr := v.(string)
+			if !isStr || !taskRefRE.MatchString(ref) {
+				err = fault("INVALID_ARGUMENT", "task is a task record's number (T<n>)")
+				break
+			}
+			if kind != "new" && kind != "scratch" {
+				err = fault("INVALID_ARGUMENT", "task belongs to a new or scratch start")
+				break
+			}
+			w.params["task"] = ref
+		}
 		if w.node == "" {
 			w.node = "auto"
 		}
@@ -616,6 +639,50 @@ func parseWrite(tool string, args map[string]any) (writeRequest, string, error) 
 			break
 		}
 		w.fleetID, _ = args["fleet_id"].(string)
+	case "task_issue":
+		// claude-fleet#3325: 「建 GitHub 单」 on a task record — the node files
+		// the issue in repo (the one filer channel) and, when the task's
+		// session is its own and has none, binds it there. The hub places it
+		// on the task's fleet when that hosts the repo, else among the fleets
+		// that do.
+		if err = checkFields(args, []string{"idempotency_key", "repo", "title", "task"}, "body", "fleet_id", "worker_id"); err != nil {
+			break
+		}
+		if w.repo, err = checkRepo(args); err != nil {
+			break
+		}
+		if w.repo == "" || !strings.Contains(w.repo, "/") {
+			err = fault("INVALID_ARGUMENT", "repo must be owner/name")
+			break
+		}
+		ref, _ := args["task"].(string)
+		if !taskRefRE.MatchString(ref) {
+			err = fault("INVALID_ARGUMENT", "task is a task record's number (T<n>)")
+			break
+		}
+		var title string
+		if title, err = checkIssueTitle(args["title"]); err != nil {
+			break
+		}
+		w.params["repo"], w.params["task"], w.params["title"] = w.repo, ref, title
+		if b, ok := args["body"]; ok && b != "" {
+			var body string
+			if body, err = checkText(b, "body"); err != nil {
+				break
+			}
+			w.params["body"] = body
+		}
+		if wid, _ := args["worker_id"].(string); wid != "" {
+			if _, _, perr := fleetid.ParseWorkerID(wid); perr != nil {
+				err = fault("INVALID_ARGUMENT", "worker_id must be <fleet UUID>/<key or identity>")
+				break
+			}
+			w.params["worker_id"] = wid
+		}
+		if w.fleetID, err = argString(args, "fleet_id"); err != nil {
+			break
+		}
+		w.node = "auto"
 	case "gh_comment":
 		if err = checkFields(args, []string{"fleet_id", "issue", "body", "idempotency_key"}, "repo"); err != nil {
 			break

@@ -533,3 +533,62 @@ export function usageBudget(st) {
   return `<div style="display:grid;gap:14px"><div>${chip}</div>${budgetWin(t('ui.use.h5'), s.used_5h, s.limit_5h)}${budgetWin(t('ui.use.week'), s.used_week, s.limit_week)}${reset}` +
     (set ? '' : `<p class="sub" style="font-size:12.5px;color:var(--muted);margin:0">${esc(t('ui.use.unsetHint'))}</p>`) + '</div>';
 }
+
+/* ---------------- tasks (claude-fleet#3325) ---------------- */
+
+/** TASK_FILTERS are the 任务 page's buttons: [id, t() key]. */
+export const TASK_FILTERS = Object.freeze([['all', 'ui.f.all'], ['working', 'ui.st.working'], ['waiting', 'ui.task.waitingYou']]);
+
+/** A record's own word, before (or without) its session's: placing · open ·
+ *  refused · unknown. An open record whose session the inventory no longer
+ *  lists is over (`done`). */
+const TASK_STATE = { placing: ['unknown', 'ui.task.placing'], refused: ['blocked', 'ui.task.refused'], unknown: ['unknown', 'ui.st.unknown'] };
+
+/** taskRows flattens /v1/fleet/tasks into the page's rows, newest first. */
+export function taskRows(body) {
+  const rows = [];
+  for (const r of (body && Array.isArray(body.tasks)) ? body.tasks : []) {
+    const live = r.live && typeof r.live === 'object' ? r.live : null;
+    let state, label;
+    if (live && live.state) {
+      state = stateKey(live.state);
+      label = t(STATES[state].key);
+    } else if (TASK_STATE[r.state]) {
+      [state, label] = [TASK_STATE[r.state][0], t(TASK_STATE[r.state][1])];
+    } else {
+      [state, label] = ['done', t('ui.task.over')];
+    }
+    const m = /^([A-Za-z0-9._-]+\/[A-Za-z0-9._-]+)#([0-9]+)$/.exec(r.issue || '');
+    const born = Date.parse(r.created_at || '') / 1000;
+    const left = live ? Number(live.ctx_left) : NaN;
+    rows.push({
+      id: r.id || '', title: r.title || '', owner: r.owner || '', via: r.via || '', device: r.device || '',
+      repo: r.repo || '', repoChosen: !!r.repo, agent: r.agent || '', machine: (r.machine || '').split('.')[0],
+      session: (live && live.key) || r.session_key || '', state, stateLabel: label, note: r.note || '',
+      issueURL: m ? `https://github.com/${m[1]}/issues/${m[2]}` : '', issueN: m ? m[2] : '',
+      asked: r.asked || '', parked: r.parked || '', born: Number.isFinite(born) ? born : 0,
+      observed: (body && body.observed_at) || '', ctxLeft: Number.isFinite(left) ? left : null,
+    });
+  }
+  return rows.sort((a, b) => b.born - a.born || b.id.localeCompare(a.id));
+}
+
+/** taskCounts: today's, the working ones and the ones waiting on you —
+ *  per filter, plus `today` for the band. */
+export function taskCounts(rows, now = Date.now()) {
+  const day = new Date(now); day.setHours(0, 0, 0, 0);
+  const c = { all: rows.length, working: 0, waiting: 0, today: 0 };
+  for (const r of rows) {
+    const g = stateOf(r.state).group;
+    if (g === 'working' || g === 'waiting') c[g]++;
+    if (r.born * 1000 >= day.getTime()) c.today++;
+  }
+  return c;
+}
+
+/** filterTasks applies the filter and the search box. */
+export function filterTasks(rows, filter, query) {
+  const q = String(query || '').trim().toLowerCase();
+  return rows.filter((r) => (filter === 'all' || !filter || stateOf(r.state).group === filter) &&
+    (!q || [r.id, r.title, r.repo, r.machine, r.session, r.owner, r.issueN && '#' + r.issueN].join(' ').toLowerCase().includes(q)));
+}

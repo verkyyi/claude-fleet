@@ -109,7 +109,15 @@ class H(BaseHTTPRequestHandler):
             if op == "op7":
                 return self.answer(200, {"line": "REMOTE m5 op7 done %s/issue-7\tm4 excluded: full" % UUID, "exit": 0, "state": "done"})
             return self.answer(200, {"line": "UNKNOWN m5 %s\tstill starting" % op, "exit": 6, "state": "pending", "operation_id": op})
+        if p.get("action") == "task_issue":   # leg T (issue #3325)
+            if p.get("task_ref") != "T218":
+                return self.answer(200, {"line": "REFUSED NOT_FOUND\tno task %s of yours" % p.get("task_ref"), "exit": 4, "state": "refused"})
+            return self.answer(200, {"line": "FILED acme/web#3312\tT218", "exit": 0, "state": "done", "task": "T218",
+                                     "filed": "acme/web#3312"})
         kind, issue = p.get("kind"), p.get("issue")
+        if p.get("task"):   # leg T: the hub wrote the record first (issue #3325)
+            return self.answer(200, {"line": "REMOTE m4 op30 done %s/scratch-9\tchose m4" % UUID, "exit": 0, "state": "done",
+                                     "worker_id": "%s/scratch-9" % UUID, "machine": "m4", "task": "T218"})
         if kind == "new":   # leg G: an older hub answers no `attached`
             out = {"line": "REMOTE m4 op20 done %s/issue-20\tchose m4" % UUID, "exit": 0, "state": "done"}
             if p.get("title") != "old hub":
@@ -398,6 +406,34 @@ has "I: …keeps the spawn's reason on its line" "$OUT" "no Codex login"
 CHECKS=$((CHECKS + 1)); [ -s "$WORK/i.json" ] && fail "I: a declined start named a window" "$(cat "$WORK/i.json")"
 rm -rf "$FLEET_CONF_DIR/fleets"
 mv "$WORK/lease.kept" "$FLEET_CLIENT_DIR/client.lease" 2>/dev/null
+
+# --- T. a task (issue #3325): the record first, its number back; 建 GitHub 单 -------------
+rm -f "$WORK/t.json"
+FLEET_PLACE_RESULT="$WORK/t.json" run "$P" - scratch --name 看看风扇 --task --via ⌘P
+eq "T: a task opens" 0 "$RC"
+has "T: …asked as a task" "$(lastreq)" '"task": true'
+has "T: …from ⌘P" "$(lastreq)" '"via": "⌘P"'
+has "T: …a no-repo scratch" "$(lastreq)" '"no_repo": true'
+has "T: the record's number on stderr" "$ERR" 'task: T218'
+eq "T: …and in the result" 'T218' "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("task"))' "$WORK/t.json")"
+run "$P" verkyyi/claude-fleet scratch
+CHECKS=$((CHECKS + 1)); case "$(lastreq)" in *'"task"'*|*'"via"'*) fail "T: a plain start asks for no task" "$(lastreq)" ;; esac
+case "$ERR" in *'task:'*) fail "T: a plain start says no record" "$ERR" ;; esac
+run "$P" acme/web issue-3 --task;          eq "T: --task is for new / a no-repo scratch" 2 "$RC"
+run "$P" acme/web scratch --task;          eq "T: …not a repo scratch" 2 "$RC"
+run "$P" - home --task;                    eq "T: …not a home" 2 "$RC"
+run "$P" - scratch --via ⌘P;               eq "T: --via goes with --task" 2 "$RC"
+run "$P" acme/web task-issue:T218
+eq "T: 建 GitHub 单" 0 "$RC"
+eq "T: …its line" "$(printf 'FILED acme/web#3312\tT218')" "$OUT"
+has "T: …the record asked for" "$(lastreq)" '"task_ref": "T218"'
+has "T: …in the repo named" "$(lastreq)" '"repo": "acme/web"'
+run "$P" - task-issue:T218
+CHECKS=$((CHECKS + 1)); case "$(lastreq)" in *'"repo"'*) fail "T: - names no repo (the task's own)" "$(lastreq)" ;; esac
+run "$P" - task-issue:T9;                  eq "T: an unknown record" 4 "$RC"
+run "$P" - task-issue:9;                   eq "T: a malformed number" 2 "$RC"
+env -u FLEET_HUB_URL -u FLEET_HUB_TOKEN FLEET_CLIENT_DIR="$WORK/nohub" bash "$P" - task-issue:T218 >/dev/null 2>"$WORK/err"
+eq "T: 建 GitHub 单 needs the hub" 1 "$?"
 
 # --- E. usage -----------------------------------------------------------------------------
 run "$P" verkyyi/claude-fleet bogus;  eq "E: bad kind" 2 "$RC"

@@ -414,6 +414,11 @@ def send(path, repo="", node="", reap="", mode="", agent=""):
         args += ["--agent", agent]
     if reap:
         args += ["--reap", reap]
+    if data.get("via") == "dispatch" and (norepo or data.get("issue", True)):
+        # ⌘P's words (issue #3325): a person's task — the hub writes its record
+        # T<n> first; a repo's is still a new issue, one with no repo the record
+        # alone. No hub (or an older one) opens it as before.
+        args += ["--task", "--via", "⌘P"]
     # The node's timing points come back through a file (issue #2238): the
     # place's stdout stays its one line.
     fd, timef = tempfile.mkstemp(prefix="fleet-compose-timing.", dir=str(Path(path).parent))
@@ -453,7 +458,8 @@ def send(path, repo="", node="", reap="", mode="", agent=""):
                 op=words[2] if remote and len(words) > 2 else "",
                 secs=max(0, int(time.time()) - at),
                 t_accepted=timing.get("t_accepted"), timing=timing or None,
-                key=opened.get("key"), window=opened.get("window_id"), filed=opened.get("filed"))
+                key=opened.get("key"), window=opened.get("window_id"), filed=opened.get("filed"),
+                **({"task": opened["task"]} if opened.get("task") else {}))
     return out.returncode
 
 

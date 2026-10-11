@@ -434,3 +434,34 @@ test('my usage: the days, and the budget against both windows', () => {
   const src = readFileSync(new URL('../dist/usage.js', import.meta.url), 'utf8');
   assert.match(src, /\/v1\/fleet\/person-usage\?mine=1/);
 });
+
+// 任务 (claude-fleet#3325): a record's state is its session's live word, else
+// the record's own; an issue becomes a link; the band counts today's.
+test('taskRows reads a task record beside its session', async () => {
+  const { taskRows, taskCounts, filterTasks } = await import('../dist/lib/pages.js');
+  const now = Date.parse('2026-10-11T14:10:00');
+  const body = { observed_at: '2026-10-11T14:10:00Z', tasks: [
+    { id: 'T219', title: '看看这台机器风扇为什么一直转', owner: 'verky', machine: 'macmini.local', state: 'open',
+      created_at: '2026-10-11T14:06:00', live: { key: '', state: 'working', ctx_left: 71 } },
+    { id: 'T218', title: '给 hub 加一个 /healthz', owner: 'verky', repo: 'verkyyi/claude-fleet', state: 'open',
+      issue: 'verkyyi/claude-fleet#3312', session_key: 'issue-3312', created_at: '2026-10-11T14:02:00', live: { state: 'needs' } },
+    { id: 'T214', title: '整理一下这周的账单', owner: 'verky', state: 'open', created_at: '2026-10-10T11:12:00' },
+    { id: 'T213', title: '没开起来的', owner: 'verky', state: 'refused', note: 'no machine', created_at: '2026-10-10T10:00:00' },
+  ] };
+  const rows = taskRows(body);
+  assert.deepEqual(rows.map((r) => r.id), ['T219', 'T218', 'T214', 'T213']);
+  assert.equal(rows[0].state, 'working');
+  assert.equal(rows[0].machine, 'macmini');
+  assert.equal(rows[0].ctxLeft, 71);
+  assert.equal(rows[0].issueURL, '');
+  assert.equal(rows[1].state, 'waiting');
+  assert.equal(rows[1].issueURL, 'https://github.com/verkyyi/claude-fleet/issues/3312');
+  assert.equal(rows[1].session, 'issue-3312');
+  assert.equal(rows[2].state, 'done', 'a record whose session is gone is over');
+  assert.equal(rows[3].state, 'blocked');
+  const c = taskCounts(rows, now);
+  assert.deepEqual([c.today, c.working, c.waiting], [2, 1, 2]);
+  assert.deepEqual(filterTasks(rows, 'all', '#3312').map((r) => r.id), ['T218']);
+  assert.deepEqual(filterTasks(rows, 'all', 't219').map((r) => r.id), ['T219']);
+  assert.deepEqual(taskRows(null), []);
+});

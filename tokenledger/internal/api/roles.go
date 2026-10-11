@@ -155,6 +155,8 @@ var routeAccess = map[string]string{
 	// The app's push channel (claude-fleet#2794): each topic cut like its route.
 	"/v1/fleet/stream": accessUser,
 	"/sessions":        accessUser, "/v1/fleet/me": accessUser, "/v1/fleet/": accessUser,
+	// 任务 (claude-fleet#3325): the viewer's own records.
+	"/tasks": accessUser, "/v1/fleet/tasks": accessUser, "/v1/fleet/tasks/": accessUser,
 	// The roster, cut by FleetScope to the machines where their login runs
 	// (claude-fleet#1411); maintenance, SPOT and join codes stay an admin's.
 	"/v1/nodes": accessUser,
@@ -451,8 +453,8 @@ func (s *Server) auditRoleDenied(r *http.Request) {
 // (claude-fleet#1990). mymachines is 我的机器 (#2518), quota is 我的额度 (#2517)
 // — the pool's windows, an admin's since #3227 — usage is 我的用量 (#2519).
 var (
-	userPages  = []string{"overview", "sessions", "mymachines", "devices", "phone", "connection", "usage", "config"}
-	adminPages = []string{"overview", "sessions", "mymachines", "devices", "phone", "connection", "quota", "usage", "config",
+	userPages  = []string{"overview", "sessions", "tasks", "mymachines", "devices", "phone", "connection", "usage", "config"}
+	adminPages = []string{"overview", "sessions", "tasks", "mymachines", "devices", "phone", "connection", "quota", "usage", "config",
 		"all-sessions", "by-person", "all-devices",
 		"subscriptions", "machines", "people", "settings", "audit"}
 )

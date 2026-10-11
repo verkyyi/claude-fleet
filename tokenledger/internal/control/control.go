@@ -171,6 +171,15 @@ const CapAttach = "attach"
 // node that said it — an older one would refuse the unknown field.
 const CapTestIdentity = "test_identity"
 
+// CapTask is the hello capability a node lists when its claude-fleet takes
+// `task` on a worker_start and runs `task_issue` (claude-fleet#3325): the start
+// belongs to the hub's task record T<n> — the window is stamped @task, and a
+// no-repo one files no desk ticket (the record is its ticket) — and a record's
+// 「建 GitHub 单」 files the issue on the machine that holds its session. The
+// hub names `task` only to a node that said it — an older one would refuse the
+// unknown field, and its start opens as before.
+const CapTask = "task"
+
 // CapCredsep is the hello capability an admin node lists when every login its
 // create op opens is credential-separated from the start (claude-fleet#2294):
 // no subscription token in the login's home, its sessions only through the

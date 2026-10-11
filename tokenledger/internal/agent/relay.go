@@ -79,6 +79,9 @@ type relayPaths struct {
 	// test is whether claude-fleet marks the test identity's scratch
 	// (claude-fleet#2505); false on one that predates it.
 	test bool
+	// task is whether claude-fleet takes the hub's task record on a start
+	// (claude-fleet#3325); false on one that predates it.
+	task bool
 }
 
 // relayState is the outbox's in-flight table, kept across reconnects so a
@@ -129,6 +132,8 @@ func relaySetup(ctx context.Context, home string) (relayPaths, bool) {
 			}
 		case "test":
 			p.test = v == "1"
+		case "task":
+			p.task = v == "1"
 		}
 	}
 	if !filepath.IsAbs(p.outbox) || !filepath.IsAbs(p.workers) {

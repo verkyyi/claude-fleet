@@ -88,12 +88,17 @@ class Control:
             env["FLEET_TIMING_READY_SECS"] = os.environ["FLEET_TIMING_READY_SECS"]
         return env
 
-    def adapter(self, mode, *args, timeout=20, payload=None, op_id=None):
+    def adapter(self, mode, *args, timeout=20, payload=None, op_id=None, task=None):
         env = self.environment()
         if op_id:
             # The operation a start belongs to (issue #2235): its detached
             # paperwork (fleet-start-backfill.sh) stamps t_filed / t_bound on it.
             env["FLEET_CONTROL_OP"] = op_id
+        if task:
+            # The hub's task record a start belongs to (issue #3325), validated
+            # (T<n>): the window is stamped @task, a no-repo one files no desk
+            # ticket. In the environment, so the adapter's argv is what it was.
+            env["FLEET_CONTROL_TASK"] = task
         return run(["bash", str(self.bin / "fleet-control-read.sh"), mode, *args],
                    payload=payload, env=env, timeout=timeout)
 
@@ -710,6 +715,22 @@ class Control:
                 result = {"comment_url": output.decode("utf-8").strip(), "channel": "record",
                           "delivery": "record only; a live worker on this issue does not see it (use worker_message)",
                           "observed_at": now()}
+            elif req["action"] == "task_issue":
+                # issue #3325: a hub task record's 「建 GitHub 单」 — the issue filed
+                # here through the one filer channel (fleet-issue-file.sh), and the
+                # task's session bound to it when it is this fleet's and has none.
+                # Prints the issue URL first; the binding is best effort.
+                attempted = True
+                wid = params.get("worker_id", "")
+                code, output, err = self.adapter("taskissue", fleet["name"], params["repo"], params["task"],
+                                                 wid.split("/", 1)[1] if "/" in wid else "", params["title"].strip(),
+                                                 payload=(params.get("body") or "").encode("utf-8"), timeout=120)
+                url = output.decode("utf-8", "replace").split("\n", 1)[0].strip()
+                if code == 6:
+                    raise Unattempted("INVALID_ARGUMENT", "Name a repo this fleet hosts (owner/name)")
+                if code or not re.fullmatch(r"https://[^/\s]+/[^/\s]+/[^/\s]+/issues/[1-9][0-9]*", url):
+                    raise Fault("EXECUTION_FAILED", "The issue was not filed: " + last_line(err if (err or b"").strip() else output))
+                result = {"issue_url": url, "observed_at": now()}
             elif req["action"] == "orch_ensure":
                 # issue #2616's ⌘N from an older hub: there is no orchestrating
                 # seat to open any more (issue #3118) — compat-1v: 下一批删
@@ -748,7 +769,7 @@ class Control:
                                                      params.get("origin_wid", ""),
                                                      params.get("account_class", ""), params.get("name", "").strip(),
                                                      *test_arg, payload=body.encode("utf-8") if body else None,
-                                                     timeout=180)
+                                                     timeout=180, task=params.get("task"))
                 elif filed:
                     # issue #1953: the client's writing area — the adapter's start
                     # with `new` for the issue and the title (validated above) where
@@ -759,7 +780,7 @@ class Control:
                                                      params.get("repo", ""), params.get("origin_wid", ""),
                                                      params.get("account_class", ""), params["title"].strip(),
                                                      *reap_arg, payload=body.encode("utf-8"),
-                                                     timeout=240, op_id=op_id)
+                                                     timeout=240, op_id=op_id, task=params.get("task"))
                     first = output.decode("utf-8", "replace").split("\n", 1)[0].strip()
                     if not code and first.startswith("warm\t"):
                         # 发出即开 (issue #2234, EPIC #2230 C4): answered from the warm

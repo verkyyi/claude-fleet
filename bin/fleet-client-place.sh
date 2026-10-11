@@ -5,7 +5,19 @@
 #   fleet-client-place.sh <repo> <issue|scratch|home|restore:<key>|new> [--node <m>|auto]
 #                         [--title <t>] [--name <n>] [--agent claude|codex]
 #                         [--reap <policy>] [--body-file <f>] [--attach <file>]…
-#                         [--new]
+#                         [--new] [--task [--via <words>]]
+#   fleet-client-place.sh <repo|-> task-issue:T<n>
+#
+# --task (issue #3325, new or a no-repo scratch): the start is a person's task —
+# the hub writes its record T<n> first, then places it as before; the record's
+# number comes back on stderr (`task: T<n>`) and in FLEET_PLACE_RESULT's `task`.
+# --via names where it was asked (⌘P). A hub older than it, or no hub at all,
+# opens it exactly as without.
+#
+# `task-issue:T<n>` (issue #3325): 「建 GitHub 单」 — the hub has a machine of
+# yours file the record's issue (in <repo>, `-` = the task's own) and hangs it
+# on the record: `FILED <owner/name#N>\tT<n>` (exit 0), else REFUSED (4). It
+# needs the hub: without one, exit 1.
 #
 # --attach (issue #2393, EPIC #2482 C1; new or scratch, repeatable): a file the
 # writing area's text names. Its bytes go with the request (≤ 10 MiB each and
@@ -105,7 +117,7 @@ usage() { sed -n '5,8p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 [ $# -ge 2 ] || usage
 REPO=$1; WHAT=$2; shift 2
-NODE=auto; TITLE=''; NAME=''; AGENT=''; REAP=''; BODYF=''; ATTACH=(); NEW=''
+NODE=auto; TITLE=''; NAME=''; AGENT=''; REAP=''; BODYF=''; ATTACH=(); NEW=''; TASK=''; VIA=''
 while [ $# -gt 0 ]; do
   case "$1" in
     --node)  [ $# -ge 2 ] || usage; NODE=$2; shift 2 ;;
@@ -118,6 +130,8 @@ while [ $# -gt 0 ]; do
     --body-file) [ $# -ge 2 ] || usage; BODYF=$2; shift 2 ;;
     --attach) [ $# -ge 2 ] || usage; ATTACH+=("$2"); shift 2 ;;
     --new)   NEW=1; shift ;;
+    --task)  TASK=1; shift ;;
+    --via)   [ $# -ge 2 ] || usage; VIA=$2; shift 2 ;;
     *) usage ;;
   esac
 done
@@ -127,8 +141,10 @@ case "$AGENT" in ''|claude|codex) ;; *) printf 'fleet-client-place: --agent is c
 if [ -n "$REAP" ]; then
   REAP=$(python3 "$BIN/fleet_reap_policy.py" norm "$REAP") || exit 2
 fi
-KIND=''; ISSUE=''; KEY=''; HOME_ASK=''
+KIND=''; ISSUE=''; KEY=''; HOME_ASK=''; TASKREF=''
 case "$WHAT" in
+  task-issue:T[1-9]*) KIND=task_issue; TASKREF=${WHAT#task-issue:}
+                      case "${TASKREF#T}" in *[!0-9]*) KIND='' ;; esac ;;
   scratch) KIND=scratch ;;
   home) [ "$REPO" = - ] || { printf 'fleet-client-place: a home session belongs to no repo (-)\n' >&2; exit 2; }
         KIND=scratch; HOME_ASK=1 ;;
@@ -138,12 +154,17 @@ case "$WHAT" in
   [1-9]*) KIND=issue; ISSUE=$WHAT ;;
 esac
 case "$ISSUE" in *[!0-9]*) KIND='' ;; esac
-[ -n "$KIND" ] || { printf 'fleet-client-place: %s is not an issue number, scratch, home, restore:<key> or new\n' "$WHAT" >&2; exit 2; }
+[ -n "$KIND" ] || { printf 'fleet-client-place: %s is not an issue number, scratch, home, restore:<key>, new or task-issue:T<n>\n' "$WHAT" >&2; exit 2; }
+if [ -n "$TASK" ]; then
+  { [ "$KIND" = new ] || { [ "$KIND" = scratch ] && [ "$REPO" = - ] && [ -z "$HOME_ASK" ]; }; } \
+    || { printf 'fleet-client-place: --task goes with new, or a no-repo scratch\n' >&2; exit 2; }
+fi
+[ -z "$VIA" ] || [ -n "$TASK" ] || { printf 'fleet-client-place: --via goes with --task\n' >&2; exit 2; }
 [ -z "$NEW" ] || [ -n "$HOME_ASK" ] || { printf 'fleet-client-place: --new goes with home\n' >&2; exit 2; }
 if [ "$KIND" = new ]; then
   [ -n "$TITLE" ] || { printf 'fleet-client-place: new needs --title\n' >&2; exit 2; }
 fi
-[ "$REPO" != - ] || [ "$KIND" = scratch ] || { printf 'fleet-client-place: only a scratch belongs to no repo (-)\n' >&2; exit 2; }
+[ "$REPO" != - ] || [ "$KIND" = scratch ] || [ "$KIND" = task_issue ] || { printf 'fleet-client-place: only a scratch belongs to no repo (-)\n' >&2; exit 2; }
 [ -z "$BODYF" ] || [ "$KIND" = new ] || [ "$KIND" = scratch ] || { printf 'fleet-client-place: --body-file is for new or scratch\n' >&2; exit 2; }
 [ -z "$BODYF" ] || [ -r "$BODYF" ] || { printf 'fleet-client-place: cannot read %s\n' "$BODYF" >&2; exit 2; }
 [ "${#ATTACH[@]}" -eq 0 ] || [ "$KIND" = new ] || [ "$KIND" = scratch ] || { printf 'fleet-client-place: --attach is for new or scratch\n' >&2; exit 2; }
@@ -152,11 +173,11 @@ fi
 # ask_hub <retry 0|1> — rc 10 = not applicable here (no hub URL, or no lease / key
 # to sign with); rc 11 (only with retry 1) = 401 not your client.
 ask_hub() {
-python3 - "$BIN" "$REPO" "$KIND" "$ISSUE" "$KEY" "$NODE" "$TITLE" "$NAME" "$AGENT" "$REAP" "$BODYF" "$1" "$HOME_ASK" "$NEW" ${ATTACH[@]+"${ATTACH[@]}"} <<'PY'
+python3 - "$BIN" "$REPO" "$KIND" "$ISSUE" "$KEY" "$NODE" "$TITLE" "$NAME" "$AGENT" "$REAP" "$BODYF" "$1" "$HOME_ASK" "$NEW" "$TASK" "$VIA" "$TASKREF" ${ATTACH[@]+"${ATTACH[@]}"} <<'PY'
 import base64, hashlib, hmac, importlib.util, json, os, re, sys, time, urllib.error, urllib.request
 
-here, repo, kind, issue, key, node, title, name, agent, reap, bodyf, retry, home, new = sys.argv[1:15]
-files = sys.argv[15:]
+here, repo, kind, issue, key, node, title, name, agent, reap, bodyf, retry, home, new, task, via, taskref = sys.argv[1:18]
+files = sys.argv[18:]
 body = ""
 if bodyf:
     with open(bodyf, encoding="utf-8") as f:
@@ -272,7 +293,12 @@ def rnd():
 
 
 req = {"action": "place", "kind": kind, "node": node, "idempotency_key": idem, "wait": rnd()}
-if repo == "-":
+if kind == "task_issue":
+    # issue #3325: 「建 GitHub 单」 on a task record — no start, no placement
+    req = {"action": "task_issue", "task_ref": taskref}
+    if repo != "-":
+        req["repo"] = repo
+elif repo == "-":
     req["no_repo"] = True   # issue #1956: a scratch of no repo
 else:
     req["repo"] = repo
@@ -287,6 +313,10 @@ for k, v in (("key", key), ("title", title), ("name", name), ("agent", agent), (
         req[k] = v
 if attach:
     req["attachments"] = [{k: a[k] for k in ("name", "from", "sha256", "data")} for a in attach]
+if task:
+    req["task"] = True      # issue #3325: the hub writes the record T<n> first
+    if via:
+        req["via"] = via
 tried = []   # issue #1610: the machines that declined before the answer, as the hub said them
 
 
@@ -335,6 +365,8 @@ line = out.get("line") or ""
 if not line:
     sys.stderr.write("fleet-client-place: the hub's answer has no line\n")
     bye(1)
+if task and isinstance(out.get("task"), str) and re.fullmatch(r"T[1-9][0-9]*", out["task"]):
+    sys.stderr.write("task: %s\n" % out["task"])   # issue #3325: the record's number
 # The node's timing points (issue #2238), for a caller that asked for them by
 # naming a file (fleet-compose.py → compose.ndjson); the line stays ONE line.
 tf = os.environ.get("FLEET_PLACE_TIMING") or ""
@@ -370,7 +402,7 @@ if out.get("state") in ("done", "resume"):
             pass
 rf = os.environ.get("FLEET_PLACE_RESULT") or ""
 if rf and out.get("state") in ("done", "resume"):
-    said = {k: out[k] for k in ("worker_id", "window", "window_id", "key", "filed", "machine")
+    said = {k: out[k] for k in ("worker_id", "window", "window_id", "key", "filed", "machine", "task")
             if isinstance(out.get(k), str) and out[k]}
     if out.get("state") == "resume":
         said["resume"] = True
@@ -504,6 +536,11 @@ else
 fi
 [ "$ef" = /dev/null ] || rm -f "$ef"
 [ "$rc" = 10 ] || exit "$rc"
+if [ "$KIND" = task_issue ]; then
+  # the record lives on the hub: nothing here can file it onto one
+  printf 'fleet-client-place: 建 GitHub 单 needs the hub (no hub URL or lease here)\n' >&2
+  exit 1
+fi
 
 # --- no hub: this computer's own fleet, if it has one -------------------------------
 . "$BIN/fleet-lib.sh" 2>/dev/null

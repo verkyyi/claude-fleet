@@ -80,6 +80,9 @@ type nodeConn struct {
 	// canTest is the hello's CapTestIdentity: this node marks the test
 	// identity's scratch (claude-fleet#2505).
 	canTest bool
+	// canTask is the hello's CapTask: this node takes the hub's task record
+	// on a start and runs task_issue (claude-fleet#3325).
+	canTask bool
 	// workersAt is when the worker map was last pushed (UnixNano).
 	workersAt atomic.Int64
 	// canTeam is the hello's CapTeam (claude-fleet#1899): this node follows
@@ -482,7 +485,7 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 		canWrite: hp.HasCap(control.CapWrite), canRelay: hp.HasCap(control.CapRelay),
 		canMove: hp.HasCap(control.CapMove), canSSHRelay: hp.HasCap(control.CapSSHRelay),
 		canTeam: hp.HasCap(control.CapTeam), canPerson: hp.HasCap(control.CapPerson), canEntryKeys: hp.HasCap(control.CapEntryKeys), canRelease: hp.HasCap(control.CapRelease), canAttach: hp.HasCap(control.CapAttach),
-		canTest:       hp.HasCap(control.CapTestIdentity),
+		canTest: hp.HasCap(control.CapTestIdentity), canTask: hp.HasCap(control.CapTask),
 		canCredsep:    hp.HasCap(control.CapCredsep),
 		canLoginJoin:  hp.HasCap(control.CapLoginJoin),
 		canServiceLog: hp.HasCap(control.CapServiceLog),
@@ -1314,6 +1317,12 @@ func (s *Server) serveMachinesPage(w http.ResponseWriter, r *http.Request) {
 // day this week and their budget, from /v1/fleet/person-usage.
 func (s *Server) serveUsagePage(w http.ResponseWriter, r *http.Request) {
 	s.serveStandalonePage(w, r, "usage.html")
+}
+
+// serveTasksPage serves 任务 (claude-fleet#3325): the viewer's task records,
+// off /v1/fleet/tasks.
+func (s *Server) serveTasksPage(w http.ResponseWriter, r *http.Request) {
+	s.serveStandalonePage(w, r, "tasks.html")
 }
 
 // serveSessionsPage serves 我的会话 (claude-fleet#1429): every session the
