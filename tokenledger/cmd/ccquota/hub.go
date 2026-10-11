@@ -838,6 +838,7 @@ func runHub(args []string) error {
 		// no call at all.
 		if c, ok := dns.FromEnv(); ok {
 			srv.EntryDNS = api.NewEntryDNS(dns.NewDNSPod(c), c.Subdomain)
+			srv.EntryDNS.Zone = c.Subdomain + "." + c.Domain
 			log.Printf("fleet: address records under %s.%s are the hub's (DNSPod)", c.Subdomain, c.Domain)
 		}
 		go srv.RunEntryDNS(ctx)

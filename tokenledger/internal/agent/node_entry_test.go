@@ -178,3 +178,48 @@ func TestEntryReachNeverHoldsTheBeat(t *testing.T) {
 	}
 
 }
+
+// An applied list asks the outside again soon — not in up to five minutes —
+// so a first key (or a home moved here) reads 连得上 within a minute or two
+// (claude-fleet#3199).
+func TestEntryPullThenReachSoon(t *testing.T) {
+	dir := t.TempDir()
+	calls := filepath.Join(dir, "calls")
+	script := filepath.Join(dir, "sup")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\necho \"$*\" >> "+calls+"\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	old := entryReachAfterPull
+	entryReachAfterPull = 200 * time.Millisecond
+	t.Cleanup(func() { entryReachAfterPull = old })
+	srv, _, conns := entryHub(t)
+	defer srv.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// A report every hour: only the pull can bring the next one forward.
+	go newMachineLink(MachineConfig{HubURL: srv.URL, Token: "m", LiveInterval: 100 * time.Millisecond, EntryCtl: script,
+		EntryReachEvery: time.Hour}).run(ctx)
+	c := <-conns
+	count := func() int { b, _ := os.ReadFile(calls); return strings.Count(string(b), "entry reach") }
+	for i := 0; i < 30 && count() == 0; i++ {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if count() != 1 {
+		t.Fatalf("the first report: %d", count())
+	}
+	push, _ := control.New(control.TypeEntryKeys, control.EntryKeys{Version: 3})
+	if err := wsjson.Write(ctx, c, push); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 40 && count() < 2; i++ {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if count() != 2 {
+		b, _ := os.ReadFile(calls)
+		t.Fatalf("no report soon after the pull: %q", b)
+	}
+	time.Sleep(500 * time.Millisecond)
+	if count() != 2 {
+		t.Fatalf("reports kept coming: %d", count())
+	}
+}

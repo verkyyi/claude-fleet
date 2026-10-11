@@ -33,7 +33,9 @@ export default Shell.mount('by-person', async (ctx) => {
     `<div class="tw"><table class="t"><thead><tr><th>${esc(t('ui.col.person'))}</th><th>${esc(t('ui.bp.login'))}</th><th>${esc(t('ui.col.machine'))}</th><th>${esc(t('ui.bp.sessions'))}</th><th class="r">${esc(t('ui.bp.today'))}</th><th class="r">${esc(t('ui.bp.week'))}</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
 
   const bars = people.filter((p) => p.tokens > 0).map((p) => [p.login, p.tokens]);
-  ctx.el.innerHTML = `<div class="pagehead"><div><p>${esc(t('ui.bp.sub'))}</p></div></div>` +
+  ctx.el.innerHTML = `<div class="pagehead"><div><p>${esc(t('ui.bp.sub'))}</p></div>` +
+    // The keys page is everyone's, the admin's too (claude-fleet#3199).
+    `<div class="acts"><a class="btn" href="/fleet/keys">${ic('phone')}${esc(t('ui.ov.phone'))}</a></div></div>` +
     `<div class="grid g4">${tiles}</div>` +
     `<div class="grid g21"><div class="panel"><div class="panel-h"><h3>${esc(t('ui.ov.byPerson'))}</h3><span class="sub">${esc(t('ui.ov.days7'))}</span></div><div class="panel-b">${hb(bars, 'var(--brand-2)')}</div></div>` +
     `<div class="panel"><div class="panel-h"><h3>${esc(t('ui.ov.attention'))}</h3></div>${attHTML}</div></div>` + table;

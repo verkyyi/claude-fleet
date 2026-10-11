@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"golang.org/x/crypto/ssh"
+
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/dns"
 )
 
 // The keys page (claude-fleet#3069, EPIC #3067 C2).
@@ -80,10 +82,14 @@ func TestEntryPageOwnBookOnly(t *testing.T) {
 	h := entryHarness(t)
 	_ = h.srv.Store.SetFleetSetting(EntryDomainKey, "cf.example.com", time.Now())
 
-	// First visit: the name first, suggested from the sign-in name.
+	// First visit: the wizard at step 1; the name is asked at step 4 (the
+	// Hostname), suggested from the sign-in name.
 	code, body, _ := keysPage(t, h, pAlice, "", nil)
-	if code != 200 || !strings.Contains(body, "先给你的地址起个名字") || strings.Contains(body, "填这四样") {
+	if code != 200 || !strings.Contains(body, "去 App Store 装 Termius") || strings.Contains(body, "Hostname") {
 		t.Fatalf("Alice's first visit: HTTP %d\n%s", code, body)
+	}
+	if _, body, _ = keysPage(t, h, pAlice, "?step=4", nil); !strings.Contains(body, "先给你的地址起个名字") || strings.Contains(body, ">Hostname<") {
+		t.Fatalf("step 4 before a name:\n%s", body)
 	}
 	code, body, loc := keysPost(t, h, pAlice, "do", "name", "name", "Alice-1")
 	wantRedirect(t, "Alice names her address", code, body, loc, "name")
@@ -112,7 +118,7 @@ func TestEntryPageOwnBookOnly(t *testing.T) {
 	// Bob sees none of it — not even naming Alice — and cannot revoke it.
 	for _, q := range []string{"", "?principal=" + url.QueryEscape(pAlice), "?revoke=" + k.ID} {
 		_, body, _ = keysPage(t, h, pBob, q, nil)
-		if strings.Contains(body, "iPhone") || strings.Contains(body, short) || strings.Contains(body, k.ID) || strings.Contains(body, "alice-1") {
+		if strings.Contains(body, `class="n">iPhone<`) || strings.Contains(body, short) || strings.Contains(body, k.ID) || strings.Contains(body, "alice-1") {
 			t.Fatalf("Bob's page %q shows Alice's book:\n%s", q, body)
 		}
 	}
@@ -203,12 +209,20 @@ func TestEntryPagePrivateKeyRefused(t *testing.T) {
 func TestEntryPageNoDomain(t *testing.T) {
 	h := entryHarness(t)
 	keysPost(t, h, pAlice, "do", "name", "name", "alice")
-	_, body, _ := keysPage(t, h, pAlice, "", nil)
+	_, body, _ := keysPage(t, h, pAlice, "?step=4", nil)
 	if !strings.Contains(body, "地址还没配好") || !strings.Contains(body, ">22022<") || strings.Contains(body, "alice.cf") {
 		t.Fatalf("no zone:\n%s", body)
 	}
+	// The deploy's DNS zone is the default (claude-fleet#3199) …
+	h.srv.EntryDNS = NewEntryDNS(dns.NewFake(), "cf")
+	h.srv.EntryDNS.Zone = "cf.24haowan.com"
+	_, body, _ = keysPage(t, h, pAlice, "?step=4", nil)
+	if strings.Contains(body, "地址还没配好") || !strings.Contains(body, "alice.cf.24haowan.com") {
+		t.Fatalf("the deploy's zone:\n%s", body)
+	}
+	// … and a stored one wins.
 	_ = h.srv.Store.SetFleetSetting(EntryDomainKey, "cf.example.com", time.Now())
-	_, body, _ = keysPage(t, h, pAlice, "", nil)
+	_, body, _ = keysPage(t, h, pAlice, "?step=4", nil)
 	if strings.Contains(body, "地址还没配好") || !strings.Contains(body, "alice.cf.example.com") {
 		t.Fatalf("with a zone:\n%s", body)
 	}
@@ -270,7 +284,7 @@ func TestEntryPageDoors(t *testing.T) {
 	if !strings.Contains(body, "用你自己的 GitHub 登录") {
 		t.Fatalf("the operator's token:\n%s", body)
 	}
-	code, _, loc := keysPage(t, h, "", "", nil)
+	code, body, loc := keysPage(t, h, "", "", nil)
 	if code != http.StatusFound || loc != "/signin" {
 		t.Fatalf("not signed in: HTTP %d → %q", code, loc)
 	}
@@ -284,9 +298,39 @@ func TestEntryPageDoors(t *testing.T) {
 	if got := loginReturn(httptest.NewRecorder(), r); got != "/" {
 		t.Fatalf("a forged return: %q, want /", got)
 	}
+	// Off, the page says so — never a bare 404 (claude-fleet#3199); a user
+	// asks an admin, an admin opens it with one press.
 	_ = h.srv.Store.SetFleetSetting(EntryKey, "off", time.Now())
-	if code, _, _ := keysPage(t, h, pAlice, "", nil); code != http.StatusNotFound {
-		t.Fatalf("off: HTTP %d, want 404", code)
+	code, body, _ = keysPage(t, h, pAlice, "", nil)
+	if code != http.StatusOK || !strings.Contains(body, "直连入口还没开") || !strings.Contains(body, "请管理员打开") || strings.Contains(body, `value="enable"`) {
+		t.Fatalf("off, a user: HTTP %d\n%s", code, body)
+	}
+	if code, _, _ := keysPost(t, h, pAlice, "do", "enable"); code != http.StatusForbidden || h.srv.entryOn() {
+		t.Fatalf("a user switches it on: HTTP %d", code)
+	}
+	id, _ := githubIDOf(pCarol)
+	h.srv.GitHub.Admins = append(h.srv.GitHub.Admins, "carol")
+	if _, err := h.srv.Store.PinLogin("carol", id, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, body, _ := keysPage(t, h, pCarol, "", nil); !strings.Contains(body, `value="enable"`) {
+		t.Fatalf("off, an admin:\n%s", body)
+	}
+	code, body, loc = keysPost(t, h, pCarol, "do", "enable")
+	wantRedirect(t, "an admin opens the door", code, body, loc, "enabled")
+	if !h.srv.entryOn() {
+		t.Fatal("still off")
+	}
+	// The paths a person types land on the page.
+	for _, p := range []string{"/fleet/key", "/fleet/keys/", "/keys", "/fleet/keys/nope"} {
+		resp := h.raw(t, p, nil)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusMovedPermanently || resp.Header.Get("Location") != EntryPagePath {
+			t.Fatalf("%s: HTTP %d → %q", p, resp.StatusCode, resp.Header.Get("Location"))
+		}
+	}
+	if resp := h.raw(t, EntryPagePath+"/img/../../etc/passwd", nil); resp.StatusCode == http.StatusOK {
+		t.Fatal("a picture path walked out")
 	}
 }
 

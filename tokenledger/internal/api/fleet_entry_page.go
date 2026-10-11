@@ -1,16 +1,20 @@
 package api
 
 import (
+	"embed"
 	"errors"
 	"fmt"
 	"html/template"
 	"net/http"
 	"net/url"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
 	"golang.org/x/crypto/ssh"
 
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/i18n"
 )
 
@@ -38,10 +42,37 @@ const entryReturnCookie = "ccquota_return"
 // entryOK are the sentences a redirect back may carry (?ok=<key>).
 var entryOK = map[string]string{
 	"name":    "地址名定好了。",
-	"added":   "已加上。几秒内你的家机器就认它。",
+	"added":   "已加上。家机器正在为你打开入口，约 1 分钟。",
 	"same":    "这把钥匙已经在你的列表里了。",
 	"revoked": "已撤掉。几秒内家机器不再认它，并断开正用它连着的入口连接。",
 	"home":    "已换家。你的地址几分钟内指向它；端口以下面写的为准（变了就在 Termius 里改一次）；手机第一次连会说主机钥匙变了，接受一次。",
+	"enabled": "直连入口打开了。",
+}
+
+// The wizard (claude-fleet#3199): six steps, one shown at a time, each one
+// thing to do in Termius on an iPhone. Which step is open comes from the book
+// (no key yet → 1; a key never used → 4; a key used → all done) unless
+// ?step=N names one; the steps before it fold up with a tick.
+// entryOpenGrace is how long after a new key (or home) the page says
+// 「正在打开」 before it says what is in the way (a var for tests).
+var entryOpenGrace = 10 * time.Minute
+
+const (
+	entryStepCount = 6
+	// entryAppStore is Termius on the App Store.
+	entryAppStore = "https://apps.apple.com/app/termius-terminal-ssh-client/id549039908"
+)
+
+var entryStepTitles = [entryStepCount]string{"装 Termius", "在 Termius 里生成钥匙", "复制公钥，贴到这一页", "在 Termius 里新建主机", "连接，信任主机钥匙", "进到看台，打开会话列表"}
+
+//go:embed entryshots
+var entryShots embed.FS
+
+type entryStep struct {
+	N          int
+	Title      string
+	Done, Open bool
+	Shot       string // the picture's URL, "" when there is none
 }
 
 type entryKeyRow struct {
@@ -57,6 +88,8 @@ type entryChoiceRow struct {
 type entryPageData struct {
 	pageView
 	NoPerson bool // the operator's token: no book of their own
+	Off      bool // fleet.entry is off
+	CanOn    bool // … and the caller may switch it on (an admin)
 	OK       string
 	Err      string
 	ErrFor   string // name | add | home
@@ -67,6 +100,7 @@ type entryPageData struct {
 	Address  string // <name>.<domain>; "" when either is missing
 	Port     int
 	Home     *entryChoiceRow
+	HomeWhy  string // why this machine is the home
 	HomeDown string // when the home is not reachable: since when, or ""
 	Keys     []entryKeyRow
 	Others   []entryChoiceRow // homes to move to
@@ -74,24 +108,32 @@ type entryPageData struct {
 	Label    string
 	Revoke   *entryKeyRow
 	Move     *entryChoiceRow
+
+	Steps   []entryStep
+	Step    int  // the open step, 0 = all done
+	Used    bool // a key of theirs has come in through the door
+	AppURL  string
+	State   string // nokey | opening | ok | down | far | nohome
+	Why     string // State far: where it is stuck
+	Refresh bool   // State opening: the page reloads itself
 }
 
 // handleEntryPage serves EntryPagePath.
 func (s *Server) handleEntryPage(w http.ResponseWriter, r *http.Request) {
-	if !s.entryOn() {
-		http.NotFound(w, r)
-		return
-	}
 	if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodPost {
 		w.Header().Set("Allow", "GET, POST")
 		httpError(w, http.StatusMethodNotAllowed, "GET or POST")
+		return
+	}
+	page := entryPageData{pageView: newPageView(r, i18n.ZhCN), Port: entryPort, AppURL: entryAppStore}
+	if !s.entryOn() {
+		s.entryPageOff(w, r, page)
 		return
 	}
 	// The page is always the caller's own book: drop ?principal=.
 	own := r.Clone(r.Context())
 	own.URL = &url.URL{Path: r.URL.Path}
 	c, code, _ := s.entryCallerFor(own)
-	page := entryPageData{pageView: newPageView(r, i18n.ZhCN), Port: entryPort}
 	if code == http.StatusBadRequest { // the operator, no person named
 		page.NoPerson = true
 		s.writeEntryPage(w, http.StatusOK, page)
@@ -130,6 +172,89 @@ func (s *Server) handleEntryPage(w http.ResponseWriter, r *http.Request) {
 	}
 	page.OK = entryOK[r.URL.Query().Get("ok")]
 	s.writeEntryPage(w, http.StatusOK, page)
+}
+
+// entryPageOff is the page while fleet.entry is off: said plainly, and an
+// admin opens it with one press (claude-fleet#3199) — never a bare 404.
+func (s *Server) entryPageOff(w http.ResponseWriter, r *http.Request, page entryPageData) {
+	id, signed := s.sshRelayHTTPIdentity(r)
+	if !signed {
+		httpError(w, http.StatusUnauthorized, "sign in first")
+		return
+	}
+	page.Off, page.CanOn = true, id.Admin
+	if r.Method == http.MethodPost {
+		if !sameOrigin(r) {
+			httpError(w, http.StatusForbidden, "cross-origin form")
+			return
+		}
+		if !id.Admin {
+			httpError(w, http.StatusForbidden, "only an admin switches the direct door on")
+			return
+		}
+		if r.PostFormValue("do") != "enable" {
+			httpError(w, http.StatusBadRequest, "看不懂这个表单")
+			return
+		}
+		if code, why := s.putHubSetting(id.Actor, EntryKey, "on", time.Now()); code != http.StatusOK {
+			httpError(w, code, why)
+			return
+		}
+		http.Redirect(w, r, EntryPagePath+"?ok=enabled", http.StatusSeeOther)
+		return
+	}
+	s.writeEntryPage(w, http.StatusOK, page)
+}
+
+// handleEntryPageAside serves what sits beside the keys page: its pictures
+// (/fleet/keys/img/<step>.png) and the paths a person types for it —
+// /fleet/key, /fleet/keys/, /keys — sent on to it.
+func (s *Server) handleEntryPageAside(w http.ResponseWriter, r *http.Request) {
+	if name, ok := strings.CutPrefix(r.URL.Path, EntryPagePath+"/img/"); ok {
+		b, ctype := entryShot(name)
+		if b == nil {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", ctype)
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		_, _ = w.Write(b)
+		return
+	}
+	to := EntryPagePath
+	if r.URL.RawQuery != "" {
+		to += "?" + r.URL.RawQuery
+	}
+	http.Redirect(w, r, to, http.StatusMovedPermanently)
+}
+
+// entryShotRE is the only names a picture may have: step<N>.<png|jpg>.
+var entryShotRE = regexp.MustCompile(`^step[1-6]\.(png|jpg)$`)
+
+// entryShot is one step's picture and its type; nil when there is none.
+func entryShot(name string) ([]byte, string) {
+	if !entryShotRE.MatchString(name) {
+		return nil, ""
+	}
+	b, err := entryShots.ReadFile("entryshots/" + name)
+	if err != nil {
+		return nil, ""
+	}
+	if strings.HasSuffix(name, ".jpg") {
+		return b, "image/jpeg"
+	}
+	return b, "image/png"
+}
+
+// entryShotURL is step n's picture's URL, "" when it has none.
+func entryShotURL(n int) string {
+	for _, ext := range []string{"png", "jpg"} {
+		name := fmt.Sprintf("step%d.%s", n, ext)
+		if b, _ := entryShot(name); b != nil {
+			return EntryPagePath + "/img/" + name
+		}
+	}
+	return ""
 }
 
 // entryPagePost runs one form: the ?ok= key on success, else the status the
@@ -194,9 +319,16 @@ func (s *Server) fillEntryPage(r *http.Request, c entryCaller, now time.Time, pa
 	if page.Name != "" && page.Domain != "" {
 		page.Address = page.Name + "." + page.Domain
 	}
+	var changed time.Time // the newest key, or the home's move: what the door must catch up with
 	for _, k := range v.Keys {
 		page.Keys = append(page.Keys, entryKeyRow{ID: k.ID, Name: k.Name, Type: entryKeyType(k.Type), FP: entryShortFP(k.FP),
 			Added: entryWhen(k.Created, now), LastUsed: entryLastUsed(k.LastUsed, now)})
+		if k.LastUsed != nil {
+			page.Used = true
+		}
+		if k.Created.After(changed) {
+			changed = k.Created
+		}
 	}
 	for _, ch := range v.HomeChoices {
 		row := entryChoiceRow{Machine: ch.Machine, Display: s.entryMachineName(ch.Machine), Login: ch.Login, Online: ch.Online,
@@ -219,19 +351,27 @@ func (s *Server) fillEntryPage(r *http.Request, c entryCaller, now time.Time, pa
 		// port the router forwards (EPIC #3067 改约定 3, the entry= route): Termius's port is
 		// the home's, not a constant.
 		page.Port = page.Home.Port
+		page.HomeWhy = "你自己选的。"
+		if v.Home.SetBy == "auto" {
+			page.HomeWhy = "系统替你选的：你在这台上有登录、上面开着 fleet"
+			if len(v.HomeChoices) > 1 {
+				page.HomeWhy += "，也是你平时打 fleet 进的那台"
+			}
+			page.HomeWhy += "。"
+		}
+		if v.Home.SetAt.After(changed) {
+			changed = v.Home.SetAt
+		}
 	}
 	if page.Home != nil && !page.Home.Online {
 		page.HomeDown = "现在"
 		if t := s.entryLastBeat(page.Home.Machine); t != nil {
 			page.HomeDown = entryWhen(*t, now) + "起"
 		}
-	} else if page.Home != nil && s.EntryDNS != nil {
-		// Online but nobody outside reaches it (C6): the address keeps its
-		// last records and goes nowhere new (claude-fleet#3073).
-		if reach, err := s.EntryReachable(page.Home.Machine, now); err == nil && len(reach) == 0 {
-			page.HomeDown = "从外面"
-		}
 	}
+	page.State, page.Why = s.entryDoorState(page, changed, now)
+	page.Refresh = page.State == "opening"
+	s.entrySteps(r, page)
 	q := r.URL.Query()
 	if id := q.Get("revoke"); id != "" && r.Method != http.MethodPost {
 		for i := range page.Keys {
@@ -248,6 +388,92 @@ func (s *Server) fillEntryPage(r *http.Request, c entryCaller, now time.Time, pa
 		}
 	}
 	return nil
+}
+
+// entryDoorState is how the door stands for this person, said as a state
+// rather than a failed check (claude-fleet#3199): no key yet (nothing to
+// open); the home opening it since the last change (changed); the outside
+// reaching it; the home itself away; or stuck — and then where.
+func (s *Server) entryDoorState(page *entryPageData, changed, now time.Time) (string, string) {
+	switch {
+	case page.Home == nil:
+		return "nohome", ""
+	case len(page.Keys) == 0:
+		return "nokey", ""
+	case page.HomeDown != "":
+		return "down", ""
+	}
+	m := page.Home.Machine
+	if reach, err := s.EntryReachable(m, now); err == nil && len(reach) > 0 {
+		return "ok", ""
+	}
+	rows, _ := s.entryReachRows(m)
+	var checked time.Time
+	for _, r := range rows {
+		if r.CheckedAt.After(checked) {
+			checked = r.CheckedAt
+		}
+	}
+	last, seen := s.entryLastReport(m)
+	// The newest word: a report that said nothing listens, else the dials.
+	deaf := seen && !last.Listening && !last.At.Before(checked)
+	if seen && last.At.After(checked) {
+		checked = last.At
+	}
+	if now.Sub(changed) < entryOpenGrace && (checked.Before(changed) || deaf) {
+		return "opening", ""
+	}
+	name := page.Home.Display
+	switch {
+	case !seen && len(rows) == 0:
+		return "far", "家机器 " + name + " 还没报告它的入口（每 5 分钟报一次）。一直这样，多半是那台的直连入口没开：请管理员在它上面看 fleet doctor 的 entry 一行。"
+	case deaf:
+		return "far", "家机器 " + name + " 上的入口没在听：请管理员在它上面看 fleet doctor 的 entry 一行。"
+	case len(rows) == 0:
+		return "far", "看不到家机器 " + name + " 的公网地址：它在运营商级 NAT 后面，又没有 IPv6。请管理员看那台 fleet doctor 的 public 一行。"
+	}
+	r := rows[0]
+	at := fmt.Sprintf("%s:%d", r.Addr, r.Port)
+	if r.Family == "ipv6" {
+		at = fmt.Sprintf("[%s]:%d", r.Addr, r.Port)
+	}
+	switch r.Reason {
+	case control.ReachHostKey:
+		return "far", "从外面敲 " + at + "，应答的是另一台机器：路由器的端口 " + strconv.Itoa(r.Port) + " 转到了别处，请管理员改成转到 " + name + "。"
+	case control.ReachNotSSH:
+		return "far", "从外面敲 " + at + "，应答的不是入口：端口 " + strconv.Itoa(r.Port) + " 被别的程序占着，请管理员看一眼。"
+	}
+	return "far", "从外面敲 " + at + " 没有回应：路由器还没把端口 " + strconv.Itoa(r.Port) + " 转到 " + name + "。请管理员在路由器上开这个端口（或看那台 fleet doctor 的 public 一行）。"
+}
+
+// entrySteps lays out the wizard: which step is open, which are done.
+func (s *Server) entrySteps(r *http.Request, page *entryPageData) {
+	hasKey, used := len(page.Keys) > 0, page.Used
+	open := 1
+	switch {
+	case used:
+		open = 0
+	case hasKey:
+		open = 4
+	}
+	if q := r.URL.Query().Get("step"); q != "" {
+		if n, err := strconv.Atoi(q); err == nil && n >= 1 && n <= entryStepCount {
+			open = n
+		} else if q == "done" {
+			open = 0
+		}
+	}
+	if page.ErrFor == "add" {
+		open = 3
+	} else if page.ErrFor == "name" {
+		open = 4
+	}
+	page.Step = open
+	for i, t := range entryStepTitles {
+		n := i + 1
+		done := (n <= 3 && hasKey) || used || (open == 0) || n < open
+		page.Steps = append(page.Steps, entryStep{N: n, Title: t, Done: done && n != open, Open: n == open, Shot: entryShotURL(n)})
+	}
 }
 
 // entryMachineName is how a person knows a machine: its short name, else its
@@ -338,7 +564,7 @@ func (s *Server) writeEntryPage(w http.ResponseWriter, status int, page entryPag
 // page after GitHub's: the cookie loginReturn reads.
 func (s *Server) rememberEntryReturn(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if _, ok := s.sshRelayHTTPIdentity(r); !ok && r.Method == http.MethodGet && s.entryOn() {
+		if _, ok := s.sshRelayHTTPIdentity(r); !ok && r.Method == http.MethodGet {
 			http.SetCookie(w, &http.Cookie{Name: entryReturnCookie, Value: EntryPagePath, Path: "/",
 				HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: isHTTPS(r), MaxAge: int(loginCookieTTL.Seconds())})
 		}
@@ -360,10 +586,11 @@ func entryReturnTo(w http.ResponseWriter, r *http.Request) string {
 	return EntryPagePath
 }
 
-var entryPageTmpl = template.Must(template.New("keys").Parse(`<!doctype html>
+var entryPageTmpl = template.Must(template.Must(template.New("keys").Funcs(template.FuncMap{"stepOf": entryStepOf, "inc": func(n int) int { return n + 1 }, "dec": func(n int) int { return n - 1 }}).Parse(entryStepTmpl)).Parse(`<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="robots" content="noindex, nofollow">
+{{if .Refresh}}<meta http-equiv="refresh" content="15">{{end}}
 <title>从手机连 fleet · claudefleet</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%230e6e5e'/%3E%3Cpath d='M4 17l4-10 4 10M12 17l4-10 4 10M3 20h18' stroke='%23fff' stroke-width='2.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
 <style>
@@ -380,7 +607,7 @@ p{margin:0}.hint{color:var(--muted);font-size:13.5px}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);padding:14px;margin:12px 0;overflow-wrap:anywhere}
 .row{display:flex;align-items:center;gap:10px;padding:9px 0;border-top:1px solid var(--line-2)}
 .row:first-of-type{border-top:0}
-.row .k{width:3.4em;flex:none;color:var(--muted);font-size:13.5px}
+.row .k{width:5.6em;flex:none;color:var(--muted);font-size:13.5px}
 .row .v{flex:1;min-width:0;font:500 14.5px ui-monospace,Menlo,monospace;user-select:all;-webkit-user-select:all}
 .row .v.plain{font:inherit;user-select:auto;-webkit-user-select:auto}
 .row .v.miss{font:inherit;color:var(--warn)}
@@ -408,55 +635,66 @@ details summary{cursor:pointer;color:var(--ink-2);font-size:14px;padding:6px 0}
 .sheet .in{max-width:520px;margin:0 auto}
 .sheet .two{display:flex;gap:10px;margin-top:12px}.sheet .two>*{flex:1}
 code{font:13px ui-monospace,Menlo,monospace}
+.steps{margin:14px 0 0}
+.st{display:flex;align-items:center;gap:10px;padding:10px 12px;margin:6px 0;border:1px solid var(--line-2);border-radius:10px;color:var(--muted);text-decoration:none;font-size:14.5px}
+a.st{color:var(--ink-2)}
+.st .no{width:24px;height:24px;flex:none;border-radius:99px;display:grid;place-items:center;font:600 13px var(--f-ui);background:var(--line-2);color:var(--muted)}
+.st.done .no{background:var(--brand);color:var(--brand-ink)}
+.st .re{margin-left:auto;font-size:12.5px;color:var(--muted)}
+.card.now{border-color:var(--brand)}
+.card.now h2{display:flex;gap:10px;align-items:center}
+.card.now h2 .no{width:26px;height:26px;flex:none;border-radius:99px;display:grid;place-items:center;font:600 14px var(--f-ui);background:var(--brand);color:var(--brand-ink)}
+ol.do{margin:6px 0 0;padding-left:1.3em}ol.do li{margin:6px 0}
+.tap{display:inline-block;font:600 13.5px var(--f-ui);padding:0 7px;border-radius:6px;border:1px solid var(--line);background:var(--bg);white-space:nowrap}
+.shot{display:block;width:100%;max-width:320px;margin:12px auto 2px;border:1px solid var(--line);border-radius:12px}
+.nav2{display:flex;gap:10px;margin-top:14px}.nav2>*{flex:1}
+.state{display:flex;gap:10px;align-items:flex-start;border-radius:10px;padding:10px 12px;margin:10px 0;font-size:14px}
+.state.ok{background:var(--line-2);color:var(--brand)}
+.state.wait{background:var(--warn-soft);color:var(--warn)}
+.state.bad{background:var(--bad-soft);color:var(--bad)}
+.state.info{background:var(--line-2);color:var(--ink-2)}
 .foot{font-size:13px;color:var(--muted);margin-top:16px}
 </style></head><body><main>
 <nav><a class="logo" href="/"><span class="mark"><svg viewBox="0 0 24 24"><path d="M4 17l4-10 4 10M12 17l4-10 4 10M3 20h18"/></svg></span>claudefleet</a></nav>
 <h1>从手机连 fleet</h1>
-<p class="hint">贴上一把钥匙，在 Termius 里填四样，就进你的会话。不用装别的 App。</p>
+<p class="hint">在 iPhone 上用 Termius 直接连进你的会话。一步一步来，每步只做一件事。</p>
 {{if .OK}}<p class="msg ok" role="status">{{.OK}}</p>{{end}}
 {{if and .Err (or (eq .ErrFor "revoke") (eq .ErrFor ""))}}<p class="msg err" role="alert">{{.Err}}</p>{{end}}
-{{if .NoPerson}}
+{{if .Off}}
+<div class="card"><h2>直连入口还没开</h2>
+<p>这个入口（hub）还没打开「从手机直连」，所以这一页还加不了钥匙。</p>
+{{if .CanOn}}<p class="hint" style="margin-top:6px">你是管理员：点一下就打开（设置 <code>fleet.entry</code>，随时可在「设置」里关掉）。</p>
+<form method="post" action="/fleet/keys"><input type="hidden" name="do" value="enable"><button class="go wide" type="submit">打开直连入口</button></form>
+{{else}}<p class="hint" style="margin-top:6px">请管理员打开它（设置里的 <code>fleet.entry</code>），打开后再来这一页。</p>{{end}}</div>
+{{else if .NoPerson}}
 <div class="card"><p>这一页给每个人管自己的钥匙。请用你自己的 GitHub 登录打开它（管理员的口令不代表任何人）。</p>
 <a class="btn wide" href="/signin">用 GitHub 登录</a></div>
-{{else if .NeedName}}
-<div class="card" id="name"><h2>先给你的地址起个名字</h2>
-<p class="hint">小写字母、数字和「-」，3–20 个。以后可以改，旧名字还能用 7 天。</p>
-<form method="post" action="/fleet/keys"><input type="hidden" name="do" value="name">
-<input id="nm" name="name" value="{{.NameVal}}" autocapitalize="off" autocorrect="off" spellcheck="false" autocomplete="off" maxlength="20" style="margin-top:10px" aria-label="地址名">
-<p class="hint" style="margin-top:6px">你的地址会是 <b><span id="nmv">{{if .NameVal}}{{.NameVal}}{{else}}…{{end}}</span>.{{if .Domain}}{{.Domain}}{{else}}（地址还没配好）{{end}}</b></p>
-<p class="hint" id="nmw" style="color:var(--bad)"></p>
-{{if eq .ErrFor "name"}}<p class="msg err">{{.Err}}</p>{{end}}
-<button class="go wide" type="submit">就用这个</button></form></div>
 {{else}}
-<div class="card" id="termius"><h2>在 Termius 里新建一台主机，填这四样</h2>
-<div class="row"><span class="k">地址</span>{{if .Address}}<span class="v">{{.Address}}</span><button class="cp" type="button" data-cp="{{.Address}}">复制</button>{{else}}<span class="v miss">地址还没配好</span>{{end}}</div>
-<div class="row"><span class="k">端口</span><span class="v">{{.Port}}</span><button class="cp" type="button" data-cp="{{.Port}}">复制</button></div>
-<div class="row"><span class="k">用户名</span>{{if .Home}}<span class="v">{{.Home.Login}}</span><button class="cp" type="button" data-cp="{{.Home.Login}}">复制</button>{{else}}<span class="v miss">还没有家</span>{{end}}</div>
-<div class="row"><span class="k">钥匙</span><span class="v plain">选你在下面加的那把</span></div>
-{{if not .Address}}<p class="msg warn">地址还没配好：入口还没设地址用的域名。钥匙照样可以先加上，配好后这里就写出来。</p>{{end}}
-{{if not .Home}}<p class="msg warn">你还没有家：家是你有登录、上面有在用的 fleet 的那台机器。先在一台机器上把 fleet 开起来，这里就会写出来。</p>
-{{else if .HomeDown}}<p class="msg err">家机器 <b>{{.Home.Display}}</b> {{.HomeDown}}连不上，你的地址也就连不上。它回来就好；要换一台当家，点下面。</p>
-<a class="btn wide" href="#home">换一台当家…</a>
-{{else}}<p class="hint" style="margin-top:8px">现在指向你的家机器 <b>{{.Home.Display}}</b> <span class="pill">在线</span></p>{{end}}
-<details style="margin-top:6px"{{if eq .ErrFor "name"}} open{{end}}><summary>改地址名</summary>
+<div class="steps">
+{{range .Steps}}{{if .Open}}{{template "step" (stepOf $ .)}}{{else if .Done}}<a class="st done" href="?step={{.N}}"><span class="no">✓</span>{{.Title}}<span class="re">再看</span></a>
+{{else}}<a class="st" href="?step={{.N}}"><span class="no">{{.N}}</span>{{.Title}}</a>
+{{end}}{{end}}
+</div>
+{{if eq .Step 0}}<div class="card now" id="done"><h2><span class="no">✓</span>都好了</h2>
+<p>以后在 Termius 里点这台主机就进看台。记住两个键：<span class="tap">ctrl</span> 再 <span class="tap">]</span>，然后 <span class="tap">p</span> 是会话列表。</p>
+{{template "state" .}}
+<div class="row"><span class="k">地址</span>{{if .Address}}<span class="v">{{.Address}}</span>{{else}}<span class="v miss">地址还没配好</span>{{end}}</div>
+<div class="row"><span class="k">端口</span><span class="v">{{.Port}}</span></div>
+<div class="row"><span class="k">用户名</span>{{if .Home}}<span class="v">{{.Home.Login}}</span>{{else}}<span class="v miss">还没有家</span>{{end}}</div>
+</div>{{end}}
+{{if .Home}}<div class="card" id="where"><h2>你的家机器：{{.Home.Display}}</h2>
+<p class="hint">手机连的就是这台（登录 <b>{{.Home.Login}}</b>）。{{.HomeWhy}}{{if .Others}}要换，见下面「换一台当家」。{{end}}</p></div>{{end}}
+{{if .Keys}}<div class="card" id="keys"><details><summary>你的钥匙（{{len .Keys}}）</summary>
+{{range .Keys}}<div class="key"><div class="t"><div class="n">{{if .Name}}{{.Name}}{{else}}（没起名）{{end}}</div>
+<div class="s">{{.Type}} · <code>{{.FP}}</code> · 加于 {{.Added}}</div><div class="s">上次用：{{.LastUsed}}</div></div>
+<a class="btn bad cp" href="?revoke={{.ID}}#confirm">撤掉</a></div>{{end}}
+<a class="btn wide" href="?step=3#now">再加一把</a></details></div>{{end}}
+{{if not .NeedName}}<div class="card"><details{{if eq .ErrFor "name"}} open{{end}}><summary>改地址名（现在：{{.Name}}）</summary>
 <form method="post" action="/fleet/keys"><input type="hidden" name="do" value="name">
 <input name="name" value="{{.NameVal}}" autocapitalize="off" autocorrect="off" spellcheck="false" autocomplete="off" maxlength="20" aria-label="地址名">
 <p class="hint" style="margin-top:6px">旧名字还能用 7 天。</p>
 {{if eq .ErrFor "name"}}<p class="msg err">{{.Err}}</p>{{end}}
-<button class="wide" type="submit">改成这个</button></form></details>
-</div>
-{{if .Keys}}<div class="card" id="keys"><h2>你的钥匙（{{len .Keys}}）</h2>
-{{range .Keys}}<div class="key"><div class="t"><div class="n">{{if .Name}}{{.Name}}{{else}}（没起名）{{end}}</div>
-<div class="s">{{.Type}} · <code>{{.FP}}</code> · 加于 {{.Added}}</div><div class="s">上次用：{{.LastUsed}}</div></div>
-<a class="btn bad cp" href="?revoke={{.ID}}#confirm">撤掉</a></div>{{end}}
-</div>{{end}}
-<div class="card" id="add"><h2>加一把钥匙</h2>
-<form method="post" action="/fleet/keys"><input type="hidden" name="do" value="add">
-<textarea name="key" rows="3" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="在 Termius：钥匙 → 点一把 → 复制公钥（以 ssh-ed25519 开头的一行），贴到这里" aria-label="公钥">{{.Pasted}}</textarea>
-<input class="lbl" name="label" value="{{.Label}}" maxlength="40" placeholder="给它起个名（如：iPhone）" aria-label="钥匙的名字">
-{{if eq .ErrFor "add"}}<p class="msg err">{{.Err}}</p>{{end}}
-<button class="go wide" type="submit">加上</button></form>
-<p class="hint" style="margin-top:8px">手机上的钥匙和电脑上的一样，是你登录的普通钥匙。加上后几秒内你的家机器就认它。</p></div>
+<button class="wide" type="submit">改成这个</button></form></details></div>{{end}}
 {{if .Home}}<div class="card" id="home"><details{{if or .HomeDown (eq .ErrFor "home")}} open{{end}}><summary>换一台当家</summary>
 <p class="hint">只列你有登录、上面有你在用的 fleet 的机器。换过去后你的地址几分钟内指向它；手机第一次连会说主机钥匙变了，接受一次。</p>
 {{range .Others}}<div class="choice"><span><b>{{.Display}}</b> · {{.Login}} {{if .Online}}<span class="pill">在线</span>{{else}}<span class="pill off">连不上</span>{{end}}</span>
@@ -488,3 +726,72 @@ warn.textContent=!v?'':(held.indexOf(v)>=0?'「'+v+'」留作他用，换一个'
 })();
 </script>
 </body></html>`))
+
+// entryStepView is one open step with the page it sits on.
+type entryStepView struct {
+	*entryPageData
+	P *entryPageData // the page, for templates that take it whole
+	S entryStep
+}
+
+func entryStepOf(p entryPageData, st entryStep) entryStepView {
+	return entryStepView{entryPageData: &p, P: &p, S: st}
+}
+
+// entryStepTmpl is the open step: what to tap in Termius, where, by its name
+// on the screen; its picture when the repo has one (entryshots/).
+const entryStepTmpl = `{{define "state"}}{{if eq .State "nokey"}}<p class="state info">加上第一把钥匙后，家机器会打开入口。</p>
+{{else if eq .State "opening"}}<p class="state wait" role="status">正在为你打开入口，约 1 分钟。这一页会自己刷新。</p>
+{{else if eq .State "ok"}}<p class="state ok">入口开着，外面连得上。</p>
+{{else if eq .State "down"}}<p class="state bad">家机器 <b>{{.Home.Display}}</b> {{.HomeDown}}连不上（关机、睡着或断网），你的地址也就连不上。它回来就好；要换一台当家，见页底。</p>
+{{else if eq .State "far"}}<p class="state bad">外面还连不上：{{.Why}}</p>
+{{else if eq .State "nohome"}}<p class="state wait">你还没有家：家是你有登录、上面开着 fleet 的那台机器。先在一台机器上把 fleet 开起来，这里就会写出来。</p>{{end}}{{end}}
+{{define "step"}}<div class="card now" id="now"><h2><span class="no">{{.S.N}}</span>{{.S.Title}}</h2>
+{{if eq .S.N 1}}<ol class="do"><li>在 iPhone 上打开 <b>App Store</b>，搜 <b>Termius</b>（图标是黑底的 &gt;_）。</li>
+<li>点 <span class="tap">获取</span> 装上。免费版就够，不用买。</li>
+<li>打开 Termius。它请你注册或登录时，不用账号也能用：跳过即可。</li></ol>
+<a class="btn wide" href="{{.AppURL}}" rel="noopener">去 App Store 装 Termius</a>
+{{else if eq .S.N 2}}<p class="hint">钥匙是手机上的一对密钥：私钥一直留在手机里，只有公钥交给我们。</p>
+<ol class="do"><li>在 Termius 里打开 <span class="tap">Keychain</span>（钥匙串）。</li>
+<li>点右上角的 <span class="tap">+</span>。</li>
+<li>选 <span class="tap">Generate Key</span>。</li>
+<li><b>Type</b> 选 <span class="tap">ED25519</span>；<b>Label</b> 写 <code>iPhone</code>。</li>
+<li>点 <span class="tap">Save</span>。</li></ol>
+{{else if eq .S.N 3}}<ol class="do"><li>在 Termius 的 <span class="tap">Keychain</span> 里，点开刚才那把 <code>iPhone</code>。</li>
+<li>点 <span class="tap">Copy Public Key</span>（复制公钥：以 <code>ssh-ed25519</code> 开头的一行）。</li>
+<li>回到这一页，长按下面的框，点 <span class="tap">粘贴</span>，再点「加上」。</li></ol>
+<form method="post" action="/fleet/keys" style="margin-top:10px"><input type="hidden" name="do" value="add">
+<textarea name="key" rows="3" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="ssh-ed25519 AAAA…（贴公钥，以 ssh-ed25519 开头的一行）" aria-label="公钥">{{.Pasted}}</textarea>
+<input class="lbl" name="label" value="{{if .Label}}{{.Label}}{{else}}iPhone{{end}}" maxlength="40" placeholder="给它起个名（如：iPhone）" aria-label="钥匙的名字">
+{{if eq .ErrFor "add"}}<p class="msg err">{{.Err}}</p>{{end}}
+<button class="go wide" type="submit">加上</button></form>
+{{if .Keys}}<p class="hint" style="margin-top:8px">你已经加过 {{len .Keys}} 把；再加一把也行。</p>{{end}}
+{{else if eq .S.N 4}}{{if .NeedName}}<p>先给你的地址起个名字，它就是下面的「Hostname」。</p>
+<form method="post" action="/fleet/keys"><input type="hidden" name="do" value="name">
+<input id="nm" name="name" value="{{.NameVal}}" autocapitalize="off" autocorrect="off" spellcheck="false" autocomplete="off" maxlength="20" style="margin-top:10px" aria-label="地址名">
+<p class="hint" style="margin-top:6px">小写字母、数字和「-」，3–20 个。你的地址会是 <b><span id="nmv">{{if .NameVal}}{{.NameVal}}{{else}}…{{end}}</span>.{{if .Domain}}{{.Domain}}{{else}}（地址还没配好）{{end}}</b></p>
+<p class="hint" id="nmw" style="color:var(--bad)"></p>
+{{if eq .ErrFor "name"}}<p class="msg err">{{.Err}}</p>{{end}}
+<button class="go wide" type="submit">就用这个</button></form>
+{{else}}<ol class="do"><li>在 Termius 里打开 <span class="tap">Hosts</span>，点右上角的 <span class="tap">+</span>，选 <span class="tap">New Host</span>。</li>
+<li>照抄这四项（每项点「复制」，再到 Termius 里长按粘贴）：</li></ol>
+<div class="row"><span class="k">Hostname</span>{{if .Address}}<span class="v">{{.Address}}</span><button class="cp" type="button" data-cp="{{.Address}}">复制</button>{{else}}<span class="v miss">地址还没配好</span>{{end}}</div>
+<div class="row"><span class="k">Port</span><span class="v">{{.Port}}</span><button class="cp" type="button" data-cp="{{.Port}}">复制</button></div>
+<div class="row"><span class="k">Username</span>{{if .Home}}<span class="v">{{.Home.Login}}</span><button class="cp" type="button" data-cp="{{.Home.Login}}">复制</button>{{else}}<span class="v miss">还没有家</span>{{end}}</div>
+<div class="row"><span class="k">Key</span><span class="v plain">点 <span class="tap">Keys</span>，选第 2 步那把 <code>iPhone</code>（不填密码）</span></div>
+<ol class="do" start="3"><li>点右上角 <span class="tap">Save</span>。</li></ol>
+{{if not .Address}}<p class="msg warn">地址还没配好：这个入口还没设地址用的域名（设置 <code>fleet.entry_domain</code>）。请管理员配好，这里就写出来。</p>{{end}}
+{{if .Home}}<p class="hint" style="margin-top:8px">Username 是你在家机器 <b>{{.Home.Display}}</b> 上的登录。</p>{{end}}
+{{template "state" .P}}{{end}}
+{{else if eq .S.N 5}}<ol class="do"><li>在 Termius 的 <span class="tap">Hosts</span> 里点刚建的那台主机。</li>
+<li>第一次会问要不要信任这台主机的钥匙（<i>new host key</i>）：点 <span class="tap">Accept</span>（或 <span class="tap">Continue</span>）。以后不再问；换家后会再问一次。</li></ol>
+{{template "state" .P}}
+<p class="hint">连不进去？说 <i>Permission denied</i> 是钥匙没选对：回第 4 步看 Key 那一项。说 <i>timed out</i> 看上面那一行。</p>
+{{else if eq .S.N 6}}<p>连上后你就在<b>看台</b>：你正在用的那个会话。</p>
+<ol class="do"><li>Termius 键盘上方那一排有 <span class="tap">ctrl</span>：点一下它。</li>
+<li>再按 <span class="tap">]</span>（键盘上切到符号那一页）。</li>
+<li>松开后按 <span class="tap">p</span>：会话列表就出来了，点一个就进去。</li></ol>
+<p class="hint">ctrl ] 之后还有：<b>n</b> 下一个、<b>b</b> 上一个、<b>c</b> 新会话、<b>q</b> 退出看台。</p>{{end}}
+{{if .S.Shot}}<img class="shot" src="{{.S.Shot}}" alt="Termius 里第 {{.S.N}} 步要点的地方" loading="lazy">{{end}}
+<div class="nav2">{{if gt .S.N 1}}<a class="btn" href="?step={{dec .S.N}}">上一步</a>{{end}}{{if and (eq .S.N 3) (not .Keys)}}{{else if lt .S.N 6}}<a class="btn go" href="?step={{inc .S.N}}#now">下一步</a>{{else}}<a class="btn go" href="?step=done">做完了</a>{{end}}</div>
+</div>{{end}}`

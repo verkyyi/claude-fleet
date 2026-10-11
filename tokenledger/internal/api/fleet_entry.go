@@ -734,6 +734,17 @@ func (s *Server) broadcastEntry(v int, hosts ...string) {
 	if !s.entryOn() || len(hosts) == 0 {
 		return
 	}
+	// The machine reports how the outside reaches it right after it applies
+	// the list (claude-fleet#3199): that report is checked, never answered
+	// from the last check.
+	s.entryReachAt.Range(func(k, _ any) bool {
+		for _, h := range hosts {
+			if h != "" && (sameMachine(k.(string), h) || sameMachine(h, k.(string))) {
+				s.entryReachAt.Delete(k)
+			}
+		}
+		return true
+	})
 	s.nodes.each(func(id string, c *nodeConn) {
 		if !c.canEntryKeys {
 			return

@@ -68,6 +68,10 @@ type hubSetting struct {
 	check func(s *Server, v string) (string, string)
 	// legacy is the old variable's value; "" = it says nothing.
 	legacy func(s *Server) string
+	// deploy is a default the deploy implies (claude-fleet#3199): used in
+	// place of def while nothing is stored, never copied into the database —
+	// change the deploy and the default follows. "" = def.
+	deploy func(s *Server) string
 }
 
 func onOff(key, def string) func(*Server, string) (string, string) {
@@ -115,9 +119,23 @@ var hubSettings = map[string]hubSetting{
 			}
 			return strings.Join(hosts, ","), ""
 		}},
-	EntryKey: {def: "off", help: "the direct door: people's keys, address names and homes, pushed to their home machines",
-		check: onOff(EntryKey, "off")},
-	EntryDomainKey: {def: "", help: "the zone every person's address lives under: <name>.<zone> (cf.24haowan.com)",
+	EntryKey: {def: "off", help: "the direct door: people's keys, address names and homes, pushed to their home machines (default on when the hub writes address records: CCQUOTA_DNS_*)",
+		check: onOff(EntryKey, "off"),
+		deploy: func(s *Server) string {
+			// The DNS credentials are there for the addresses alone: a hub
+			// that has them means the door (claude-fleet#3199).
+			if s.EntryDNS != nil {
+				return "on"
+			}
+			return ""
+		}},
+	EntryDomainKey: {def: "", help: "the zone every person's address lives under: <name>.<zone> (cf.24haowan.com; default CCQUOTA_DNS_SUBDOMAIN.CCQUOTA_DNS_DOMAIN)",
+		deploy: func(s *Server) string {
+			if s.EntryDNS != nil {
+				return s.EntryDNS.Zone
+			}
+			return ""
+		},
 		check: func(_ *Server, v string) (string, string) {
 			v = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(v)), ".")
 			if !entryDomainRE.MatchString(v) || len(v) > 200 {
@@ -272,6 +290,12 @@ func machineLoginSettingKey(principal string) string {
 // as the old variable or the default.
 func (s *Server) setting(key string) string {
 	spec, ok := hubSettings[key]
+	def := spec.def
+	if ok && spec.deploy != nil {
+		if v := spec.deploy(s); v != "" {
+			def = v
+		}
+	}
 	if s.Store != nil {
 		if settings, err := s.Store.FleetSettings(); err == nil {
 			if v := settings[key]; v != "" {
@@ -280,7 +304,7 @@ func (s *Server) setting(key string) string {
 			if settings[legacyMigratedPrefix+key] != "" {
 				// The old value was copied in and since cleared: the
 				// default, not the variable.
-				return spec.def
+				return def
 			}
 		}
 	}
@@ -292,7 +316,7 @@ func (s *Server) setting(key string) string {
 			return v
 		}
 	}
-	return spec.def
+	return def
 }
 
 func (s *Server) settingOn(key string) bool { return strings.EqualFold(s.setting(key), "on") }
@@ -818,7 +842,7 @@ func (s *Server) putMachineLoginMoved(actor, pid, value string, settings map[str
 type hubSettingView struct {
 	Key    string `json:"key"`
 	Value  string `json:"value"`
-	Source string `json:"source"` // set | legacy | default
+	Source string `json:"source"` // set | legacy | deploy | default
 	Help   string `json:"help,omitempty"`
 }
 
@@ -833,6 +857,8 @@ func (s *Server) hubSettingsView(settings map[string]string) []hubSettingView {
 			v.Source = "set"
 		case settings[legacyMigratedPrefix+k] == "" && spec.legacy != nil && spec.legacy(s) != "":
 			v.Source = "legacy"
+		case spec.deploy != nil && spec.deploy(s) != "":
+			v.Source = "deploy"
 		}
 		out = append(out, v)
 	}
