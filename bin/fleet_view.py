@@ -407,12 +407,10 @@ def hub_reread(fleet):
         pass
 
 
-def produce(fleet, hub=True):
+def produce(fleet):
     """tmux-dashboard-rows.sh --sidebar, every subtree open: the rows the old list
     drew, the same producer (it reads remote_<sess>, so other machines come too).
-    hub=False: the cache as it is, no hub_fresh — the popup's first paint (#3311)."""
-    if hub:
-        hub_fresh(fleet)
+    entries() runs hub_fresh before it, unless told not to (#3311)."""
     env = dict(os.environ, FLEET_SESSION=fleet, FLEET_ROWS_UNFOLD="1")
     seam = os.environ.get("FLEET_VIEW_ROWS_CMD")
     argv = ["sh", "-c", seam] if seam else ["bash", str(Path(__file__).absolute().parent / "tmux-dashboard-rows.sh"), "--sidebar"]
@@ -597,7 +595,9 @@ def entries(vid, now=None, hub=True):
     groups = {g: [] for g in GROUPS}
     ended, repos, anc = [], [], {}
     section, repo = "", ""
-    for line in produce(fleet, hub).splitlines():
+    if hub:     # hub=False: the cache as it is — the popup's first paint (#3311)
+        hub_fresh(fleet)
+    for line in produce(fleet).splitlines():
         f = line.split(US)
         if f[0] == "hdr":
             kind = f[1] if len(f) > 1 else ""
