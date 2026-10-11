@@ -78,9 +78,9 @@ echo "✓ git $gv  ✓ tmux $FC_TMUX_V"
 
 # ---- 2 fleet: the one directory becomes a checkout of stable --------------------
 # With a hub that keeps releases (issue #2773) the checkout is the hub's signed
-# stable — the key pinned now (fleet-release-lib.sh), the tree verified by
-# ccquota (the hub's own, by its release's sha256, when this computer has none
-# yet), imported as one local commit; no remote, never GitHub. No hub, or one
+# stable — the key pinned now (fleet-release-lib.sh), the tree verified with
+# python3 + ssh-keygen (no ccquota, #3162), imported as one local commit; no
+# remote, never GitHub. No hub, or one
 # that keeps none (404): `git clone` of stable, as before.
 # hub_checkout <dir> — rc 0 made · 3 the hub keeps no releases · 1 failed (says why)
 hub_checkout() {
@@ -91,7 +91,6 @@ hub_checkout() {
     *) case "$REL_STAGE" in
          unreachable) echo "✗ 入口不可达（${REL_HUB}）：${REL_ERR} — 什么都没动；再跑一次即可" ;;
          key)         echo "✗ 入口没给发布签名钥匙（${REL_ERR}）— 什么都没动" ;;
-         ccquota)     echo "✗ 没有 ccquota 来验入口的章（${REL_ERR}）— 什么都没动" ;;
          fetch)       echo "✗ 入口的 stable 没验过章或没取到（${REL_ERR}）— 什么都没动" ;;
          *)           echo "✗ 入口的 stable 验过了，但放不进 $1 — 什么都没动" ;;
        esac

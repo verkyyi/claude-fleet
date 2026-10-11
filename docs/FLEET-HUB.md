@@ -687,6 +687,28 @@ the hub's copy or (`--dir`) an installed one. GitHub is the hub's business only 
 a restarted hub that cannot reach it still serves what it stored. No key ⇒ every
 release route 404s, the hub as before. BREAK-IT row `release-tampered`.
 
+**A client checks a release with no ccquota** (issue #3162). Beside the base64
+signature, every manifest the hub serves is signed again, as served, in OpenSSH's
+SSHSIG format with the same key (namespace `claude-fleet-release`): the blob in
+the manifest response's `X-Ccquota-Release-Sshsig` header, armored at
+`/<sha>/manifest.sshsig`. A login install / client (`fleet-install-sync.sh`, the
+first checkout) runs `bin/fleet-release-fetch.py` — python3's standard library +
+`ssh-keygen -Y verify` against an allowed_signers line built from its pinned
+`release.pub`, then the tree and every file by their sha256 — so a client needs
+no Go binary and no crypto library; a hub without SSHSIG is checked by its plain
+ed25519 signature (`fleet-release-verify.py`). Nodes keep `ccquota release fetch`
+from their versioned install. The format only grows: unknown fields are ignored,
+a release that needs a newer reader sets `min_client_compat` and the reader says
+how to update by hand. **A new signing key rides the old one**: run the hub with
+`CCQUOTA_FLEET_RELEASE_KEY` = the new key and `CCQUOTA_FLEET_RELEASE_PREV_KEY` =
+the old for the overlap; `/v1/fleet/release/key-endorsement` then serves the new
+key's line signed by the old (namespace `claude-fleet-release-key`), and a client
+whose manifest names the new key takes it only when that verifies against its pin
+(the old kept as `release.pub.prev`). Without it, `fleet host trust-release-key`
+is a person's. A client that has not taken a stable it saw for 2 hours
+(`FLEET_INSTALL_SYNC_FETCH_ALARM_SECS`) notifies once and turns its doctor's
+`install` row red. BREAK-IT rows `client-verify-no-ccquota`, `client-update-silent-fail`.
+
 **Stable is pushed to the hub, never fetched** (issue #2772, EPIC #2770 C2). The
 CI that moves stable hands the hub the commit itself: `stable-auto.yml`'s last
 step (and `stable-publish.yml`, which `fleet-stable.sh move` by hand dispatches

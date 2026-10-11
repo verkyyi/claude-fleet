@@ -28,7 +28,9 @@
 #            there is no tag yet (`none`) — not seen ≠ not following; INFO only.
 #            A `fetch-failed` whose stable WAS named (the hub answered; the
 #            release did not arrive / verify) for longer than
-#            FLEET_INSTALLS_LAG_WARN (1800 s) is STUCK: 「落后 Nm」 + why (#3047)
+#            FLEET_INSTALLS_LAG_WARN (1800 s) is STUCK: 「落后 Nm」 + why (#3047);
+#            past FLEET_INSTALL_SYNC_FETCH_ALARM_SECS (7200 s) it also carries
+#            `alarm: 1` — install-sync has notified, the doctor FAILs (#3162)
 #   UNKNOWN  the state cannot be read (another login's home without passwordless
 #            sudo) or carries a token this reader does not know — never OK
 #
@@ -101,6 +103,10 @@ case "$STUCK_SECS" in ''|*[!0-9]*) STUCK_SECS=86400 ;; esac
 # the same bound fleet-installs.sh (`fleet doctor --installs`) WARNs 落后 past
 LAG_SECS="${FLEET_INSTALLS_LAG_WARN:-1800}"
 case "$LAG_SECS" in ''|*[!0-9]*) LAG_SECS=1800 ;; esac
+# …and past this, the same fetch-failed is an ALARM (issue #3162): install-sync
+# has sent its one notification, and the doctor's install row is a FAIL
+ALARM_SECS="${FLEET_INSTALL_SYNC_FETCH_ALARM_SECS:-7200}"
+case "$ALARM_SECS" in ''|*[!0-9]*) ALARM_SECS=7200 ;; esac
 
 # --- reading another login's files ---------------------------------------------
 # as_owner <owner> — can this shell act as <owner> through $SUDO? Probed once.
@@ -161,7 +167,7 @@ fmt_age() {
 # F_FOLLOW on|off|?  F_RESULT <token>|no-tick|no-daemon|?  F_AGE secs|''
 # F_HEAD F_STABLE (7-char)  F_VERDICT OK|STUCK|OFF|UNSEEN|UNKNOWN  F_WHY text
 judge() {
-  F_FOLLOW=on F_RESULT='?' F_AGE='' F_HEAD='' F_STABLE='' F_VERDICT=UNKNOWN F_WHY=''
+  F_FOLLOW=on F_RESULT='?' F_AGE='' F_HEAD='' F_STABLE='' F_VERDICT=UNKNOWN F_WHY='' F_ALARM=0
   j_login=$1 j_owner=$2 j_conf=$3 j_inst=$4
   j_state="$j_conf/global/install-sync.state"
 
@@ -242,6 +248,7 @@ judge() {
          && [ "$j_st" != "$(j_get head)" ] && [ $(( now - j_ss )) -gt "$LAG_SECS" ]; then
         F_VERDICT=STUCK
         F_WHY="落后 $(fmt_age $(( now - j_ss ))): stable ${F_STABLE} seen, not taken — $j_reason"
+        [ $(( now - j_ss )) -ge "$ALARM_SECS" ] && F_ALARM=1
       fi ;;
     '')
       F_VERDICT=UNKNOWN; F_WHY="$j_state has no result line" ;;
@@ -271,6 +278,7 @@ emit_block() { # $1 login
   printf 'stable:   %s\n' "${F_STABLE:--}"
   printf 'verdict:  %s\n' "$F_VERDICT"
   printf 'why:      %s\n' "$F_WHY"
+  printf 'alarm:    %s\n' "${F_ALARM:-0}"
 }
 emit_row() { # $1 login
   printf '%-12s %-6s %-12s %-6s %-7s %-7s %-7s %s\n' "$1" "$F_FOLLOW" "$F_RESULT" \

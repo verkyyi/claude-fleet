@@ -18,7 +18,9 @@
 #   G. stale        `current` but last_check 2 days old → STUCK ("last tick 2d ago")
 #   H. unseen       fetch-failed / none → UNSEEN, doctor INFO, never WARN —
 #                   unless the hub named stable and it has gone untaken past
-#                   FLEET_INSTALLS_LAG_WARN: STUCK, 「落后 Nm」 + why (#3047)
+#                   FLEET_INSTALLS_LAG_WARN: STUCK, 「落后 Nm」 + why (#3047);
+#                   past FLEET_INSTALL_SYNC_FETCH_ALARM_SECS (2h): alarm: 1 and
+#                   the doctor's install row FAILs (#3162)
 #   I. no daemon    an install without bin/fleet-install-sync.sh → STUCK
 #   J. others       four other logins (current / off / deferred 26h / no tick) →
 #                   --summary tokens, `2 stuck`, exit 1; an unreadable one (no
@@ -249,12 +251,21 @@ not_contains "H: doctor no WARN" "$D" "WARN"
 # for longer than FLEET_INSTALLS_LAG_WARN — a login left behind, not offline
 H_ST=$STABLESHA; STABLESHA=abfd579000000000000000000000000000000000
 mk_state "$CONF" fetch-failed "the hub's release abfd579 did not arrive or did not verify: old ccquota"
+printf 'stable_since: %s\n' "$(( $(date +%s) - 3600 ))" >> "$CONF/global/install-sync.state"
+fself
+eq "H: a seen stable untaken for 1h is STUCK" STUCK "$(fv verdict)"
+contains "H: …says how long" "$(fv why)" "落后 1h"
+contains "H: …and why" "$(fv why)" "old ccquota"
+eq "H: …no alarm yet" 0 "$(fv alarm)"
+D=$(doc_sync)
+contains "H: doctor WARNs" "$D" "WARN"
+not_contains "H: …not a FAIL yet" "$D" "FAIL"
+# issue #3162: past FLEET_INSTALL_SYNC_FETCH_ALARM_SECS (2h) it is an alarm — red
+mk_state "$CONF" fetch-failed "the hub's release abfd579 did not arrive or did not verify: old ccquota"
 printf 'stable_since: %s\n' "$(( $(date +%s) - 7200 ))" >> "$CONF/global/install-sync.state"
 fself
-eq "H: a seen stable untaken for 2h is STUCK" STUCK "$(fv verdict)"
-contains "H: …says how long" "$(fv why)" "落后 2h"
-contains "H: …and why" "$(fv why)" "old ccquota"
-contains "H: doctor WARNs" "$(doc_sync)" "WARN"
+eq "H: 2h untaken is an alarm" 1 "$(fv alarm)"
+contains "H: …the doctor's install row FAILs" "$(doc_sync)" "FAIL  install"
 mk_state "$CONF" fetch-failed "the hub's release abfd579 did not arrive: old ccquota"
 printf 'stable_since: %s\n' "$(( $(date +%s) - 60 ))" >> "$CONF/global/install-sync.state"
 fself

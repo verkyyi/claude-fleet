@@ -6224,6 +6224,99 @@ print(" ".join(out))' 2>&1)
     "$ROOT/tokenledger/internal/agent/node_release_test.go" "$what" ./internal/agent || return 1
   SECS=$(since "$t0")
 }
+# ---- client-verify-no-ccquota / client-update-silent-fail (#3162): a client
+# takes the hub's signed release with no ccquota. Before: install-sync checked
+# every release with `ccquota release fetch`; the MacBook's ccquota (prod-46f5adf)
+# had no `release` command and the #3047 fallback found no ccquota artifact for
+# a client to borrow — fetch-failed every 30 minutes from 07:20, nobody told.
+# Now bin/fleet-release-fetch.py checks it with python3 + `ssh-keygen -Y verify`
+# (the hub's SSHSIG over the manifest, against the key pinned at install), and a
+# stable seen but not taken past FLEET_INSTALL_SYNC_FETCH_ALARM_SECS (2h) is one
+# notification and a red doctor row. A sandbox hub that really signs
+# (fleet-release-hub-fixture.py), a real bare repo + install, a real tick.
+relc_rig() { # <dir> — sets RC_C1 RC_C2 RC_HUB RC_PID; the install at C1, the hub's stable C2
+  local d="$1"
+  mkdir -p "$d/home/.local/bin" "$d/conf" "$d/hub/rel" "$d/tmp"
+  # the MacBook's ccquota: too old to know `release`; any call is logged
+  printf '#!/bin/sh\necho "$*" >> %s/ccquota.calls\necho "Error: unknown command \\"release\\" for \\"ccquota\\"" >&2\nexit 1\n' "$d" \
+    > "$d/home/.local/bin/ccquota"; chmod +x "$d/home/.local/bin/ccquota"
+  ( export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+    export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
+    git init -q --bare -b master "$d/origin.git" && git clone -q "$d/origin.git" "$d/seed" 2>/dev/null || exit 1
+    mkdir -p "$d/seed/bin"
+    printf '#!/bin/sh\necho "apply: ok — stub"\n' > "$d/seed/bin/fleet-install-apply.sh"
+    printf '#!/bin/sh\necho "  PASS  gh  ok"\n' > "$d/seed/bin/fleet-doctor.sh"
+    printf '#!/bin/sh\nexit 0\n' > "$d/seed/bin/fleet-install-sync.sh"   # the install carries its daemon
+    chmod +x "$d/seed/bin/"*
+    echo one > "$d/seed/f"; git -C "$d/seed" add -A && git -C "$d/seed" commit -qm one || exit 1
+    git -C "$d/seed" rev-parse HEAD > "$d/c1"
+    echo two > "$d/seed/f"; git -C "$d/seed" commit -qam two && git -C "$d/seed" push -q origin HEAD:master || exit 1
+    git -C "$d/seed" rev-parse HEAD > "$d/c2"
+    git clone -q "$d/origin.git" "$d/install" 2>/dev/null && git -C "$d/install" reset -q --hard "$(cat "$d/c1")"
+  ) || return 1
+  RC_C1=$(cat "$d/c1"); RC_C2=$(cat "$d/c2")
+  mkdir -p "$d/hub/rel/$RC_C2/.release"
+  git -C "$d/seed" archive "$RC_C2" | tar -x -C "$d/hub/rel/$RC_C2"
+  printf '{"seq": 7, "prev": "%s", "artifacts": []}\n' "$RC_C1" > "$d/hub/rel/$RC_C2/.release/manifest.json"
+  printf '%s\n' "$RC_C2" > "$d/hub/rel/stable"
+  python3 "$BIN/fleet-release-hub-fixture.py" "$d/hub" 2>"$d/hub.err" &
+  RC_PID=$!
+  local i; for i in $(seq 1 100); do [ -s "$d/hub/port" ] && break; sleep 0.05; done
+  [ -s "$d/hub/port" ] || return 1
+  RC_HUB="http://127.0.0.1:$(cat "$d/hub/port")"
+}
+relc_tick() { # <dir> [VAR=val …] — one install-sync tick as a client: no ccquota but the old one
+  local d="$1"; shift
+  env -u FLEET_CCQUOTA -u FLEET_NOTIFY_CMD -u FLEET_DIST_SOURCE -u CCQUOTA_HUB_URL \
+    HOME="$d/home" PATH="$d/home/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin" TMPDIR="$d/tmp" \
+    FLEET_CONF_DIR="$d/conf" FLEET_SKIP_GLOBAL_CONF=1 FLEET_HUB_URL="$RC_HUB" FLEET_INSTALL_SYNC_HOST=0 \
+    FLEET_NODE_STATE="$d/no-node" FLEET_NODE_FOLLOW=0 FLEET_INSTALL_SYNC_CLIENT_FOLLOW=0 \
+    GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null "$@" \
+    bash "$BIN/fleet-install-sync.sh" --root "$d/install" >"$d/tick.out" 2>&1
+}
+relc_st() { sed -n "s/^$2: //p" "$1/conf/global/install-sync.state" 2>/dev/null | head -1; }
+
+drill_client_verify_no_ccquota() {
+  CAP=30; local t0 d
+  command -v ssh-keygen >/dev/null 2>&1 || { WHY="no ssh-keygen here"; return 1; }
+  d="$WORK/relc1"
+  relc_rig "$d" || { WHY="could not build the rig: $(cat "$d/hub.err" 2>/dev/null)"; return 1; }
+  t0=$(now)
+  relc_tick "$d"
+  SECS=$(since "$t0"); kill "$RC_PID" 2>/dev/null
+  [ "$(relc_st "$d" result)" = switched ] \
+    || { WHY="a client with no working ccquota did not take the release: $(relc_st "$d" result) — $(relc_st "$d" reason)"; return 1; }
+  [ "$(git -C "$d/install" log -1 --format=%s)" = "fleet-release: $RC_C2 seq=7" ] \
+    || { WHY="HEAD is not the imported release: $(git -C "$d/install" log -1 --format=%s)"; return 1; }
+  [ ! -s "$d/ccquota.calls" ] || { WHY="ccquota was still asked: $(head -1 "$d/ccquota.calls")"; return 1; }
+  WHAT="客户端只有一份不认识 release 的旧 ccquota：install-sync 用 python3 + ssh-keygen -Y verify 验入口的 SSHSIG，照常切到新版，ccquota 一次没被调用"
+}
+
+drill_client_update_silent_fail() {
+  CAP=30; local t0 d sent
+  command -v ssh-keygen >/dev/null 2>&1 || { WHY="no ssh-keygen here"; return 1; }
+  d="$WORK/relc2"
+  relc_rig "$d" || { WHY="could not build the rig: $(cat "$d/hub.err" 2>/dev/null)"; return 1; }
+  touch "$d/hub/badsig"
+  printf '#!/bin/sh\nprintf "%%s\\n---\\n" "$*" >> %s/notified\n' "$d" > "$d/notify"; chmod +x "$d/notify"
+  # this login first saw stable C2 three hours ago, and has not taken it since
+  mkdir -p "$d/conf/global"
+  printf 'last_check: %s\nresult: fetch-failed\nhead: %s\nstable: %s\nstable_since: %s\nnotified: -\n' \
+    "$(date +%s)" "$RC_C1" "$RC_C2" $(( $(date +%s) - 3 * 3600 )) > "$d/conf/global/install-sync.state"
+  t0=$(now)
+  relc_tick "$d" FLEET_NOTIFY_CMD="$d/notify"
+  SECS=$(since "$t0")
+  [ "$(relc_st "$d" result)" = fetch-failed ] || { kill "$RC_PID" 2>/dev/null; WHY="a release that does not verify was not fetch-failed: $(relc_st "$d" result)"; return 1; }
+  sent=$(cat "$d/notified" 2>/dev/null)
+  case "$sent" in *fetch-failed*) ;; *) kill "$RC_PID" 2>/dev/null; WHY="3h behind stable on fetch-failed and nobody was told (notify: ${sent:-none})"; return 1 ;; esac
+  relc_tick "$d" FLEET_NOTIFY_CMD="$d/notify"; kill "$RC_PID" 2>/dev/null
+  [ "$(grep -c '^---$' "$d/notified")" = 1 ] || { WHY="the same stuck episode was announced twice"; return 1; }
+  sh "$BIN/fleet-install-follow.sh" --self --dir "$d/install" --conf-dir "$d/conf" > "$d/follow.out" 2>&1
+  grep -q '^alarm: *1' "$d/follow.out" || { WHY="the doctor's install row stays quiet: $(tr '\n' '|' < "$d/follow.out")"; return 1; }
+  WHAT="入口发布版 3 小时验不过（停在 fetch-failed）：一拍发一次通知（同一回只一次），install-follow 标 alarm → doctor 的 install 行 FAIL"
+}
+
+# ================================================================ run ====}
 
 # ================================================================ run ====}
 FAILS=$LINT; PASSES=0

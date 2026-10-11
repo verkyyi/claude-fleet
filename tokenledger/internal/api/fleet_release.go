@@ -2,10 +2,12 @@ package api
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -41,6 +43,8 @@ import (
 //	GET /v1/fleet/release/artifacts             the artifact names a build now carries
 //	GET /v1/fleet/release/<sha|stable>          the signed manifest (.files …)
 //	GET /v1/fleet/release/<sha>/manifest.sig    its signature
+//	GET /v1/fleet/release/<sha>/manifest.sshsig the same, as `ssh-keygen -Y verify` reads it (claude-fleet#3162)
+//	GET /v1/fleet/release/key-endorsement       the previous key vouching for this one (PrevKey; else 404)
 //	GET /v1/fleet/release/<sha>/tree.tar.gz     the runtime tree
 //	GET /v1/fleet/release/<sha>/artifacts/<n>   one binary / installer
 //	POST /v1/fleet/release/publish              the CI hands over a stable (fleet_publish.go)
@@ -78,6 +82,7 @@ const releaseBuildTime = 8 * time.Minute // room for a Claude Code fetch (claude
 type ReleaseStore struct {
 	Dir           string             // one <sha>/ per release
 	Key           ed25519.PrivateKey // signs every manifest
+	PrevKey       ed25519.PrivateKey // the key Key replaced, kept for the overlap: it vouches for Key (key-endorsement; claude-fleet#3162); nil = none
 	Repo          string             // owner/name, written into the manifest
 	Source        *StableSource      // where a commit's files come from
 	DistDir       string             // ccquota-<os>-<arch> binaries (FleetDistDir)
@@ -741,6 +746,16 @@ func (s *Server) handleRelease(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(release.FormatPublicKey(rs.Key.Public().(ed25519.PublicKey)) + "\n"))
 		return
 	}
+	if rest == release.EndorsementRel {
+		if rs.PrevKey == nil {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		_, _ = w.Write([]byte(release.Endorse(rs.PrevKey, rs.Key.Public().(ed25519.PublicKey))))
+		return
+	}
 	if rest == "artifacts" {
 		// what a release built now would carry: fleet-stable.sh move checks
 		// release.json's pins against it before stable moves (claude-fleet#2631)
@@ -802,12 +817,38 @@ func (s *Server) handleRelease(w http.ResponseWriter, r *http.Request) {
 		}
 	case sub == release.SigName:
 		file, ctype = release.SigName, "text/plain; charset=utf-8"
+	case sub == release.SSHSigName:
+		// signed as served, over the manifest on disk now (claude-fleet#3162)
+		mb, err := os.ReadFile(filepath.Join(base, release.ManifestName))
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		_, _ = w.Write([]byte(release.SSHSigArmor(release.SSHSign(rs.Key, release.SSHSigNS, mb))))
+		return
 	case sub == release.TreeName:
 		file, ctype = release.TreeName, "application/gzip"
 	case strings.HasPrefix(sub, release.ArtifactDir+"/") && release.ValidArtifact(strings.TrimPrefix(sub, release.ArtifactDir+"/")):
 		file, ctype = sub, "application/octet-stream"
 	default:
 		http.NotFound(w, r)
+		return
+	}
+	if sub == "" {
+		// the manifest and its SSHSIG in one response: what a client verifies
+		// is these bytes, never a pair read across a reseal (claude-fleet#2843)
+		mb, err := os.ReadFile(filepath.Join(base, release.ManifestName))
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set(release.SSHSigHeader, base64.StdEncoding.EncodeToString(release.SSHSign(rs.Key, release.SSHSigNS, mb)))
+		w.Header().Set("Content-Type", ctype)
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Cache-Control", "no-store")
+		http.ServeContent(w, r, "", time.Time{}, bytes.NewReader(mb))
 		return
 	}
 	f, err := os.Open(filepath.Join(base, filepath.FromSlash(file)))
