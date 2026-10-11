@@ -233,7 +233,7 @@ printf '#!/bin/sh\n:\n' > "$S/none"; chmod +x "$S/none"
 printf '#!/bin/sh\nprintf "@9\\n"\n' > "$S/holder"; chmod +x "$S/holder"
 beat() { env FLEET_STEWARD_HOLDER_CMD="$S/holder" FLEET_STEWARD_WINDOWS_CMD="$S/none" FLEET_STEWARD_CHILDREN_CMD="$S/none" \
              FLEET_STEWARD_SEND_CMD="$S/none" FLEET_STEWARD_STAMP_CMD="$S/none" FLEET_STEWARD_DOCTOR_CMD="$S/none" FLEET_STEWARD_IDLE_CMD="$S/none" \
-             python3 "$BIN/fleet_steward.py" beat --holder --force --session pk "$@"; }
+             python3 "$BIN/fleet_steward.py" beat --holder --force --session pk; }
 card=$(beat 2>&1)
 printf '%s\n' "$card" | grep -q '停放 1 个' && ok "G the beat's card counts the parked" || bad "G card: $card"
 python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if [p["ref"] for p in d.get("parked", [])] == ["o/r#11"] else 1)' \
