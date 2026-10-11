@@ -6106,6 +6106,8 @@ drill_linux_login_no_lease() {
   fi
   SECS=$(since "$t0")
   WHAT="新登录和旧存储的登录都带 CCQUOTA_FLEET_CREDS=1，令牌不动"
+}
+
 # Several logins on one Linux machine (EPIC #3208 C1, issue #3209): the image's
 # passwd is gone at every start, so the volume's declarations are the truth.
 # Each drill runs bin/fleet-node-linux-selftest.py's LinuxTenants leg on a fake
