@@ -78,6 +78,12 @@ type Server struct {
 	sourceCounters scopedCounters
 	quotaLeases    quotaLeases
 	loadHist       loadHistory
+	// trains is the release ledger's memory (fleet_release_train.go,
+	// claude-fleet#3140): which shas are trains, which machines reached them.
+	trains trainBook
+	// releaseRoster is the roster a train snapshots its machines from; nil =
+	// Nodes (a test's seam).
+	releaseRoster func(now time.Time) (NodesSnapshot, error)
 
 	// LiveStore holds the seconds-scale view of running sessions. In memory
 	// only: it describes this minute, and a restart legitimately knows nothing
@@ -550,6 +556,8 @@ func (s *Server) routes() *routeMux {
 		// Node releases (claude-fleet#2335): stable's files, binaries and
 		// installers, signed — public like /install; the signature is the trust.
 		mux.HandleFunc("/v1/fleet/release/", s.handleRelease)
+		// The release ledger's numbers (claude-fleet#3140): the operator's.
+		mux.Handle(ReleaseStatsPath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleReleaseStats))))
 		// A client's team defaults (claude-fleet#1722): whitelisted, never
 		// a credential, read by every client's start — public like /install.
 		mux.HandleFunc("/v1/fleet/client-settings", s.handleClientSettings)

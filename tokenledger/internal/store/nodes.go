@@ -110,6 +110,10 @@ func (s *Store) EnsureNodes() error {
 	if err := s.ensureFleetEntry(); err != nil {
 		return err
 	}
+	// The release ledger (claude-fleet#3140).
+	if err := s.ensureFleetReleaseTrains(); err != nil {
+		return err
+	}
 	// What a worker on another machine left behind (claude-fleet#1609).
 	if err := s.ensureFleetWorkerRecords(); err != nil {
 		return err

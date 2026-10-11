@@ -343,6 +343,8 @@ type publishForm struct {
 	sha, prev, run string
 	commits, tree  []byte
 	hasCommits     bool // an empty list is an answer: nothing between prev and sha
+	train          []byte
+	hasTrain       bool // the release ledger's part (fleet_release_train.go)
 }
 
 func readPublishForm(r *http.Request) (*publishForm, error) {
@@ -374,6 +376,8 @@ func readPublishForm(r *http.Request) (*publishForm, error) {
 			f.commits, f.hasCommits = b, true
 		case "tree":
 			f.tree = b
+		case "train":
+			f.train, f.hasTrain = b, true
 		}
 	}
 	switch {
@@ -444,6 +448,10 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 		}
 		done(pe.code, "REFUSED", pe.msg, nil)
 		return
+	}
+	if f.hasTrain {
+		// the ledger never gates the release: its answer rides beside it
+		out["train"] = s.recordTrain(f.sha, f.prev, f.train, time.Now())
 	}
 	done(http.StatusOK, strings.ToUpper(out["status"].(string)), fmt.Sprintf("stable #%v prev %v", out["seq"], short(fmt.Sprint(out["prev"]))), out)
 }
