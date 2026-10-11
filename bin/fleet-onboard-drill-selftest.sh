@@ -217,6 +217,12 @@ for say in 'fleet · opening a machine for you (mini2), about 45s — your first
 done
 printf '%s\n' 'drill@m5 ~ % ' | bash "$DRILL" --thin-first-says && bad 'client: a bare prompt read as the thin road' \
   || ok 'client: a bare prompt is not the thin road'
+# the 看台 on screen is the landing too (issue #3276, C9 run 22: the view drawn,
+# thin.log never said so — no home sends the OSC 7502 cur its `drawn` waits for)
+printf '%s\n' ' ‹ 2/2 ›  ● 在干活  scratch-1  first session …… @mini2' | bash "$DRILL" --thin-view-up \
+  && ok 'client: the drawn 看台 (‹ 2/2 › … @mini2) reads as up' || bad 'client: the drawn 看台 not recognised'
+printf '%s\n' 'fleet · 第一个会话开在 mini2' 'drill@m5 ~ % ' | bash "$DRILL" --thin-view-up \
+  && bad 'client: the road / a prompt read as the drawn 看台' || ok 'client: the road is not the drawn 看台'
 # its outcome, off the newcomer's thin.log: placed + a connection that drew the view
 tl() { printf '%s\t%s\t%s\t\t\t\t%s\t%s\t%s\n' "2026-10-11T03:45:50Z" "$@"; }
 st=$( { tl first m5 '' '' 'no fleet session is live on m5'; tl first mini2 '' 0 'REMOTE mini2'; tl connect mini2 120 '' ''; } | bash "$DRILL" --thin-first)

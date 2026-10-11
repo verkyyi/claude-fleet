@@ -6110,6 +6110,19 @@ drill_linux_login_no_lease() {
   WHAT="新登录和旧存储的登录都带 CCQUOTA_FLEET_CREDS=1，令牌不动"
 }
 
+# The Mac half (issue #3276): adopt built logins/<login>.env from the plist and the
+# store's node.env, neither of which says CCQUOTA_FLEET_CREDS=1 — the machine's
+# node program never leased for a new login and its first prompt was a 403.
+drill_mac_login_no_lease() {
+  CAP=20; local t0
+  t0=$(now)
+  if ! python3 "$BIN/fleet-node-supervisor-selftest.py" H_Accounts.test_store_login_leases_its_credentials >"$WORK/mac-lease.out" 2>&1; then
+    WHY="a Mac login's logins/<login>.env carries no CCQUOTA_FLEET_CREDS=1: $(tail -n 2 "$WORK/mac-lease.out")"; return 1
+  fi
+  SECS=$(since "$t0")
+  WHAT="接管时有凭据存储的登录带上 CCQUOTA_FLEET_CREDS=1；更早接管的补上，令牌不动，没存储的不碰"
+}
+
 # Several logins on one Linux machine (EPIC #3208 C1, issue #3209): the image's
 # passwd is gone at every start, so the volume's declarations are the truth.
 # Each drill runs bin/fleet-node-linux-selftest.py's LinuxTenants leg on a fake

@@ -158,6 +158,7 @@ while [ $# -gt 0 ]; do
     --eta-rises) eta_rises; exit 0 ;;                               # selftest seam: ETAs on stdin
     --thin-first) thin_first_state; exit 0 ;;                       # selftest seam: thin.log on stdin
     --thin-first-says) grep -Eq -- "$THIN_FIRST|$THIN_FIRST_FAILED"; exit $? ;;   # selftest seam: a screen on stdin
+    --thin-view-up) grep -Eq -- "$CLIENT_UP|$VIEW_UP"; exit $? ;;    # selftest seam: a screen on stdin
     --ls-row)   [ $# -ge 2 ] || usage; ls_row "$2"; exit ;;            # selftest seam: fleet ls --json on stdin
     --png)      [ $# -ge 2 ] || usage; drill_png "$2"; exit ;;         # selftest seam: the test image
     -h|--help)  sed -n '2,/^set -u/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 0 ;;
@@ -502,8 +503,9 @@ step_client() {
 # client_thin: the thin client is on its first-session road (#3054) — opening
 # the newcomer's first login, waiting for its fleet (#3062), placing the session.
 # Not 「back at the prompt」: wait for it, up to OPENING_CAP, by its own book
-# (thin.log: placed, then a connection that drew the view) — the screen is
-# cleared once the view is up, so the log is what says it landed.
+# (thin.log: placed, then a connection that drew the view), or the screen
+# showing the 看台 itself (VIEW_UP: its top line's ‹ i/n ›, #3276 — the log's
+# `drawn` needs the home's OSC 7502 cur, which no home sends yet).
 client_thin() {
   local deadline st log="$H/.cache/claude-fleet/thin.log"
   deadline=$((SECONDS + OPENING_CAP))
@@ -512,7 +514,7 @@ client_thin() {
     st=$( ( cd / && sudo -n cat "$log" ) 2>/dev/null | thin_first_state)
     case "$st" in landed|failed) break ;; esac
     pane | grep -Eq -- "$THIN_FIRST_FAILED" && { st=failed; break; }
-    pane | grep -Eq -- "$CLIENT_UP" && { st=landed; break; }
+    pane | grep -Eq -- "$CLIENT_UP|$VIEW_UP" && { st=landed; break; }
     [ "$SECONDS" -lt "$deadline" ] || break
     sleep "$POLL"
   done
