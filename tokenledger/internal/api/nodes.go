@@ -810,9 +810,9 @@ type NodeView struct {
 	// trusted | untrusted — only a trusted one leases credentials, and the
 	// node's own proxy reads it off /v1/node/self to pick its road.
 	Trust string `json:"trust,omitempty"`
-	// TrustSource is where Trust came from (claude-fleet#2214): join_code |
-	// operator (the endpoint's own) · machine_name (the old name rule,
-	// compat-1v) · name_borrowed (a trusted name this node did not join as).
+	// TrustSource is where Trust came from: machine (the setting of the
+	// machine this endpoint enrolled as — claude-fleet#3300) · name_borrowed
+	// (a trusted name this node did not join as, #2214).
 	TrustSource string `json:"trust_source,omitempty"`
 	// Role is managed for a 托管 machine (EPIC #2329).
 	Role string `json:"role,omitempty"`
@@ -980,7 +980,7 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 	// on a hub that never started a SPOT node, and the reads are one query
 	// each.
 	kinds, _ := s.Store.EphemeralEndpoints()
-	// Each endpoint's own trust (claude-fleet#2214): one read for the roster.
+	// Each endpoint's enrolled machine (claude-fleet#2214, #3300): one read for the roster.
 	epTrust, _, _ := s.Store.EndpointTrusts()
 	spotState := map[string]string{}
 	if spots, err := s.Store.SpotNodes(false, 0); err == nil {

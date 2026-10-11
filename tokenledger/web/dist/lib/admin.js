@@ -270,7 +270,7 @@ export function machineCards(snap) {
     // spare logins (claude-fleet#2263): 备用 N · 已用 M / 上限 K; null while fleet.spares is off
     spare: typeof m.spare === 'number' ? m.spare : null, used: typeof m.logins_used === 'number' ? m.logins_used : null,
     cap: typeof m.login_cap === 'number' ? m.login_cap : null,
-    // trust and its source (join_code · operator · machine_name · name_borrowed), 期望 / 实际 (claude-fleet#2214)
+    // trust and its source (machine · name_borrowed; join_code · operator · machine_name from an older hub), 期望 / 实际 (claude-fleet#2214)
     trust: (trust[m.hostname] || {}).trust || '', trustSource: (trust[m.hostname] || {}).source || '',
     desired: want[m.hostname] || null,
     // control connections and the logins they carry (claude-fleet#2333); links is null from an older hub

@@ -762,7 +762,9 @@ func (s *Server) loginJoinCode(a store.FleetAccount, now time.Time) string {
 		return ""
 	}
 	label := a.Hostname + "-" + a.Login
-	if err := s.Store.CreateJoinCodeFor(HashToken(code), label, store.NodeKindFixed, "", "", now, loginJoinCodeTTL); err != nil {
+	// The code names its machine (claude-fleet#3300): the login enrolls as
+	// a.Hostname, so it holds that machine's trust like every login there.
+	if err := s.Store.CreateJoinCodeFor(HashToken(code), label, store.NodeKindFixed, "", "", a.Hostname, now, loginJoinCodeTTL); err != nil {
 		log.Printf("fleet: join code for %s@%s: %v", a.Login, a.Hostname, err)
 		return ""
 	}

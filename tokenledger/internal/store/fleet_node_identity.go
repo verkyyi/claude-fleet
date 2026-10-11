@@ -9,18 +9,16 @@ import (
 
 // A machine's identity and its desired state (claude-fleet#2214, EPIC #2329 C2).
 //
-// Trust used to be a word about a machine NAME (fleet.node_trust.<machine>),
-// and the name is whatever the agent reports — so an untrusted endpoint that
-// reported a trusted machine's hostname inherited its trust. Trust now rides
-// the endpoint itself, the identity the hub minted with its token:
+// Trust is the machine's (fleet.node_trust.<machine>, claude-fleet#3300), and
+// the machine an endpoint is on is the one it ENROLLED as — never the name it
+// reports now, so a borrowed name inherits nothing (#2214):
 //
-//   - endpoints.trust / trust_source: set when a join code that carries trust
-//     is redeemed (source join_code), or by the operator's desired-state write
-//     (source operator) — never by anything the node says;
 //   - endpoints.enrolled_host (a core column, store.go): the name the endpoint
-//     enrolled under. The old name-keyed trust still holds for one version
-//     (compat-1v), but only while the endpoint reports the name it enrolled
-//     with — a borrowed name inherits nothing.
+//     enrolled under — the join code's machine when the code names one;
+//   - endpoints.trust / trust_source: what the join code (or an old
+//     desired-state write) said. No longer read for a judgment: the hub moved
+//     it onto the machine once, and a trusted code now writes the machine's
+//     setting at redemption.
 //
 // fleet_node_desired is the hub's copy of what a managed machine should look
 // like (release, component versions, accounts, spares). The node reads it and
@@ -44,8 +42,8 @@ const (
 // NodeRoleManaged is a machine the fleet manages whole (EPIC #2329).
 const NodeRoleManaged = "managed"
 
-// EndpointTrust is an endpoint's own trust record. Trust "" = the endpoint
-// carries none, and the machine-name rule decides.
+// EndpointTrust is an endpoint's trust record: EnrolledHost is its machine;
+// Trust / Source what its join code said (the record, not the judgment).
 type EndpointTrust struct {
 	Trust        string
 	Source       string
@@ -63,7 +61,7 @@ func (s *Store) ensureFleetIdentity() error {
 	}
 	for _, c := range []struct{ table, column string }{
 		{"endpoints", "trust"}, {"endpoints", "trust_source"}, {"endpoints", "role"},
-		{"fleet_join_codes", "trust"}, {"fleet_join_codes", "role"},
+		{"fleet_join_codes", "trust"}, {"fleet_join_codes", "role"}, {"fleet_join_codes", "machine"},
 	} {
 		if err := s.addColumn(c.table, c.column, "TEXT NOT NULL DEFAULT ''"); err != nil {
 			return err
@@ -74,12 +72,15 @@ func (s *Store) ensureFleetIdentity() error {
 
 // CreateJoinCodeFor stores a code that also carries the trust and role the
 // endpoint it enrolls will hold — the operator's word, written at minting.
-func (s *Store) CreateJoinCodeFor(codeHash, label, kind, trust, role string, now time.Time, ttl time.Duration) error {
+// machine, when set, is the machine the code is for (a login the hub opened
+// there, claude-fleet#3300): the endpoint enrolls as that machine whatever
+// name it reports.
+func (s *Store) CreateJoinCodeFor(codeHash, label, kind, trust, role, machine string, now time.Time, ttl time.Duration) error {
 	if kind == "" {
 		kind = NodeKindFixed
 	}
-	_, err := s.write.Exec(`INSERT INTO fleet_join_codes (code_hash, label, kind, created_at, expires_at, trust, role)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`, codeHash, label, kind, fmtTime(now), fmtTime(now.Add(ttl)), trust, role)
+	_, err := s.write.Exec(`INSERT INTO fleet_join_codes (code_hash, label, kind, created_at, expires_at, trust, role, machine)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, codeHash, label, kind, fmtTime(now), fmtTime(now.Add(ttl)), trust, role, machine)
 	return err
 }
 

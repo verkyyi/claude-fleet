@@ -52,8 +52,8 @@ function card(m) {
 }
 
 // trustLine says whether the machine is trusted and where that came from
-// (claude-fleet#2214): the join code, the operator, the old machine-name rule,
-// or a borrowed name that inherits nothing.
+// (claude-fleet#2214, #3300): the machine's setting, or a borrowed name that
+// inherits nothing.
 function trustLine(m) {
   if (!m.trust) return '';
   const src = m.trustSource ? t('ui.mach.trustSrc.' + m.trustSource) : '';

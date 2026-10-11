@@ -158,7 +158,7 @@ func (s *Server) fleetJoinCodes(w http.ResponseWriter, r *http.Request, managed 
 			return
 		}
 		now := s.joinNow()
-		if err := s.Store.CreateJoinCodeFor(HashToken(code), req.Label, req.Kind, trust, role, now, ttl); err != nil {
+		if err := s.Store.CreateJoinCodeFor(HashToken(code), req.Label, req.Kind, trust, role, "", now, ttl); err != nil {
 			httpError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -295,6 +295,15 @@ func (s *Server) redeemJoin(r *http.Request, code, hostname, osUser string) (*No
 	what := "JOINED " + label
 	if et, err := s.Store.EndpointTrustOf(id); err == nil && et.Trust != "" {
 		what += strings.TrimRight(" · "+et.Trust+" (join code) "+et.Role, " ")
+		// A trusted code's word goes on the machine it enrolled as
+		// (claude-fleet#3300): every login there holds it.
+		if et.Trust == TrustTrusted {
+			if m, err := s.trustMachine(id, TrustTrusted, "join:"+label, false, now); err != nil {
+				log.Printf("join %s: trust machine: %v", id, err)
+			} else if m != "" {
+				what += " → machine " + strings.ToLower(firstLabel(m))
+			}
+		}
 	}
 	if err := s.Store.FleetAudit("node:"+host+"/"+osUser, "node_join", "endpoint:"+id, what, "", now); err != nil {
 		log.Printf("join audit: %v", err)

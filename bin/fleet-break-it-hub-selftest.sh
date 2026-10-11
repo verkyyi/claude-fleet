@@ -835,42 +835,43 @@ drill_lease_unseparated_user() {
       0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
       0:*) WHAT='普通用户未隔离 / 不报字段 → 403「拒发：未隔离」、/self 带 credsep_gate（代理走 central）；隔离后 200；管理员与非 GitHub 用户不受影响；节点按 status+check 判定并 5 分钟缓存（go test 五条）' ;;
       *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
-        WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；五条测试按名核对在' ;;
+        WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；七条测试按名核对在' ;;
       *) WHY="the Go half is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
     esac
   else
-    WHAT='没有 go：五条测试按名核对在，Go 门（tokenledger.yml）跑它们'
+    WHAT='没有 go：七条测试按名核对在，Go 门（tokenledger.yml）跑它们'
   fi
   SECS=$(since "$t0")
 }
 
-# ---- trust-name-borrowed (#2214, EPIC #2329 C2): an untrusted node reports a
-# trusted machine's hostname. Trust rides the endpoint (the join code, the
-# operator), the old name rule holds only for the endpoint that enrolled under
-# that name, so the impostor's lease and relay credential are refused and its
-# hello is audited; a managed join code trusts the identity, once, for an hour.
+# ---- trust-name-borrowed (#2214, EPIC #2329 C2; #3300): an untrusted node
+# reports a trusted machine's hostname. Trust is the machine's, and the machine
+# is the one the endpoint ENROLLED as (a login the hub opened: the code's
+# machine), so the impostor's lease and relay credential are refused and its
+# hello is audited; a managed join code trusts its machine, once, for an hour;
+# a login opened on a trusted machine holds that trust.
 drill_trust_name_borrowed() {
   CAP=120; local t0 out rc tests f
-  tests='TestTrustBorrowedNameGetsNothing TestTrustOldNodeKeepsItsName TestManagedJoinCodeTrustsTheIdentity TestDesiredStateOperatorWrites TestDesiredAbsentAddsNothing'
+  tests='TestTrustBorrowedNameGetsNothing TestTrustIsTheEnrolledMachines TestManagedJoinCodeTrustsTheMachine TestOpenedLoginHoldsItsMachinesTrust TestTrustMigratesOntoMachines TestDesiredStateOperatorWrites TestDesiredAbsentAddsNothing'
   f="$ROOT/tokenledger/internal/api/fleet_node_identity_test.go"
   t0=$(now)
   for out in $tests; do
     grep -q "^func $out(" "$f" 2>/dev/null || { WHY="the hub half's test $out is not in ${f#$ROOT/}"; return 1; }
   done
-  grep -q 'sameName(et.EnrolledHost, host)' "$ROOT/tokenledger/internal/api/fleet_trust.go" \
-    || { WHY="nodeTrust no longer holds the name rule to the name the endpoint enrolled under"; return 1; }
+  grep -q 'machine := enrolledMachine(et)' "$ROOT/tokenledger/internal/api/fleet_trust.go" \
+    || { WHY="nodeTrust no longer judges the machine the endpoint enrolled as"; return 1; }
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
     out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/api 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
-      0:*) WHAT='冒名节点领凭据 / 中继凭据被拒、名册读 name_borrowed、hello 记审计；真机照领；托管加入码一次、一小时、信任记在身份上；期望状态只有操作者能写（go test 五条）' ;;
+      0:*) WHAT='冒名节点领凭据 / 中继凭据被拒、名册读 name_borrowed、hello 记审计；真机照领；信任在机器上：托管加入码一次、一小时、写机器；入口开的登录随机器；旧的按登录信任迁到机器；期望状态只有操作者能写（go test 七条）' ;;
       *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
-        WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；五条测试按名核对在' ;;
+        WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；七条测试按名核对在' ;;
       *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
     esac
   else
-    WHAT='没有 go：五条测试按名核对在，Go 门（tokenledger.yml）跑它们'
+    WHAT='没有 go：七条测试按名核对在，Go 门（tokenledger.yml）跑它们'
   fi
   SECS=$(since "$t0")
 }
@@ -929,11 +930,11 @@ drill_release_tampered() {
       0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
       0:*) WHAT='stable 一动入口就打包签名；机器从入口取到全部文件与二进制；GitHub 断了、入口重启也照样取；树 / 二进制 / 清单 / 签名 / 钥匙任一处被改都整个不换、不留半成品（go test 五条）' ;;
       *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
-        WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；五条测试按名核对在' ;;
+        WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；七条测试按名核对在' ;;
       *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
     esac
   else
-    WHAT='没有 go：五条测试按名核对在，Go 门（tokenledger.yml）跑它们'
+    WHAT='没有 go：七条测试按名核对在，Go 门（tokenledger.yml）跑它们'
   fi
   SECS=$(since "$t0")
 }

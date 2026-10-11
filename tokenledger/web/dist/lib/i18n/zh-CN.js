@@ -555,6 +555,7 @@ export const zhCN = {
   'ui.mach.trusted': '可信',
   'ui.mach.untrusted': '不可信',
   'ui.mach.trustFrom': '{trust} · 来自{src}',
+  'ui.mach.trustSrc.machine': '这台机器的设置',
   'ui.mach.trustSrc.join_code': '加入码',
   'ui.mach.trustSrc.operator': '操作者',
   'ui.mach.trustSrc.machine_name': '机器名（旧规则）',

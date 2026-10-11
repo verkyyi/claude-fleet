@@ -78,11 +78,21 @@ func (s *Server) trustSettings(now time.Time) (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	if settings[NodeTrustMigratedKey] != "" {
+	if settings[NodeTrustMigratedKey] != "" && settings[NodeTrustMachinesMigratedKey] != "" {
 		return settings, nil
 	}
-	if err := s.trustMigrate(settings, now); err != nil {
-		return nil, err
+	if settings[NodeTrustMigratedKey] == "" {
+		if err := s.trustMigrate(settings, now); err != nil {
+			return nil, err
+		}
+		if settings, err = s.Store.FleetSettings(); err != nil {
+			return nil, err
+		}
+	}
+	if settings[NodeTrustMachinesMigratedKey] == "" {
+		if err := s.trustMigrateMachines(settings, now); err != nil {
+			return nil, err
+		}
 	}
 	return s.Store.FleetSettings()
 }
@@ -120,6 +130,11 @@ func (s *Server) trustMigrate(settings map[string]string, now time.Time) error {
 // key, which reads untrusted). Every spelling of the machine is cleared first
 // so "m5.local" and "m5" cannot disagree.
 func (s *Server) setTrust(machine, value string, now time.Time) (was string, err error) {
+	return s.setTrustAs("operator", machine, value, now)
+}
+
+// setTrustAs is setTrust with the audit row's actor named.
+func (s *Server) setTrustAs(actor, machine, value string, now time.Time) (was string, err error) {
 	settings, err := s.trustSettings(now)
 	if err != nil {
 		return "", err
@@ -142,7 +157,7 @@ func (s *Server) setTrust(machine, value string, now time.Time) (was string, err
 	if to == "" {
 		to = TrustUntrusted + " (cleared)"
 	}
-	s.trustAudit("operator", machine, was+" → "+to, now)
+	s.trustAudit(actor, machine, was+" → "+to, now)
 	return was, nil
 }
 
@@ -152,27 +167,27 @@ func (s *Server) trustAudit(actor, machine, outcome string, at time.Time) {
 	s.leaseAudit(actor, "node_trust", "machine:"+strings.ToLower(firstLabel(machine)), outcome, at)
 }
 
-// Trust rides the endpoint, not the name (claude-fleet#2214, EPIC #2329 C2).
+// Trust is the MACHINE's, never a login's (claude-fleet#3300, after #2214).
 //
-// endpoints.hostname is the agent's own report, so a trust keyed only by it
-// let an untrusted endpoint inherit a trusted machine's trust by reporting
-// that machine's name. The answer for an endpoint is now, in order:
-//
-//  1. the operator named the machine untrusted → untrusted (their word only
-//     ever takes trust away);
-//  2. the endpoint's own trust — from the join code that enrolled it, or the
-//     operator's desired-state write — whatever name it reports;
-//  3. compat-1v: the old name rule (fleet.node_trust.<machine>), but only
-//     while the endpoint reports the name it ENROLLED under
-//     (endpoints.enrolled_host); a borrowed name reads untrusted, source
-//     name_borrowed, and the hello writes an audit row.
+// Every login and endpoint on a machine holds the machine's trust: the
+// operator's `fleet.node_trust.<machine>`. The machine an endpoint is on is
+// the one it ENROLLED as (endpoints.enrolled_host — a login's join code pins
+// the machine the hub opened it on), never the hostname it reports now, so an
+// endpoint cannot borrow a trusted machine's trust by reporting its name
+// (#2214). A borrowed name reads untrusted, source name_borrowed, and the
+// hello writes an audit row. An endpoint's own trust record (the join code's
+// trust, the old desired-state write) is no longer read: trustMigrateMachines
+// moved it onto its machine once, and a trusted join code or a desired-state
+// trust write now writes the machine's setting.
 const (
-	// TrustSourceMachineName: the old name-keyed setting, on the endpoint
-	// that enrolled under that name. # compat-1v: 下一批删
-	TrustSourceMachineName = "machine_name"
+	// TrustSourceMachine: the machine's setting, the machine being the one
+	// the endpoint enrolled as.
+	TrustSourceMachine = "machine"
 	// TrustSourceNameBorrowed: the reported name is trusted, but this
-	// endpoint enrolled under another — it inherits nothing.
+	// endpoint enrolled as another machine — it inherits nothing.
 	TrustSourceNameBorrowed = "name_borrowed"
+	// NodeTrustMachinesMigratedKey stamps trustMigrateMachines.
+	NodeTrustMachinesMigratedKey = "fleet.node_trust_machines_migrated"
 )
 
 // sameName is "these two spellings name one machine": first labels, any case.
@@ -193,21 +208,28 @@ func nameUntrusted(hostname string, settings map[string]string) bool {
 	return false
 }
 
-// nodeTrust is one endpoint's trust and where it came from. host is the name
-// the endpoint reports now; et its own record.
+// enrolledMachine is the machine an endpoint is on: the name it enrolled as;
+// "" when it enrolled naming none ("?").
+func enrolledMachine(et store.EndpointTrust) string {
+	if et.EnrolledHost == "?" {
+		return ""
+	}
+	return et.EnrolledHost
+}
+
+// nodeTrust is one endpoint's trust and where it came from: its machine's.
+// host is the name the endpoint reports now — it only decides whether a
+// refusal is a borrowed name.
 func nodeTrust(host string, et store.EndpointTrust, settings map[string]string) (trust, source string) {
-	if nameUntrusted(host, settings) {
-		return TrustUntrusted, store.TrustSourceOperator
+	machine := enrolledMachine(et)
+	if machine != "" && !nameUntrusted(machine, settings) && trustOf(machine, settings) == TrustTrusted {
+		return TrustTrusted, TrustSourceMachine
 	}
-	switch et.Trust {
-	case TrustTrusted, TrustUntrusted:
-		return et.Trust, et.Source
-	}
-	if trustOf(host, settings) == TrustTrusted {
-		if sameName(et.EnrolledHost, host) {
-			return TrustTrusted, TrustSourceMachineName
-		}
+	if host != "" && !sameName(machine, host) && !nameUntrusted(host, settings) && trustOf(host, settings) == TrustTrusted {
 		return TrustUntrusted, TrustSourceNameBorrowed
+	}
+	if machine != "" && nameUntrusted(machine, settings) {
+		return TrustUntrusted, TrustSourceMachine
 	}
 	return TrustUntrusted, ""
 }
@@ -224,34 +246,90 @@ func (s *Server) endpointTrust(endpointID, host string, settings map[string]stri
 
 // machineTrusted is "is the machine called this trusted" — for the checks
 // that hold a name, not an endpoint (a relay credential is the machine's; a
-// login registering a new node under a name): the operator's name setting, or
-// a live endpoint that holds trust of its own and reports this name.
+// login registering a new node under a name; a login opened on a machine).
 func (s *Server) machineTrusted(machine string, settings map[string]string) bool {
-	if machine == "" || nameUntrusted(machine, settings) {
-		return false
-	}
-	if trustOf(machine, settings) == TrustTrusted {
-		return true
-	}
-	trusts, hosts, err := s.Store.EndpointTrusts()
+	return machine != "" && !nameUntrusted(machine, settings) && trustOf(machine, settings) == TrustTrusted
+}
+
+// trustMachine puts a word on the machine an endpoint enrolled as: trusted |
+// untrusted | "" (drop the key). force is the operator's own write (the
+// desired-state PUT) and replaces whatever the machine held; without it (a
+// trusted join code) the word only adds trust, never overriding the
+// operator's explicit untrusted. Returns the machine ("" when the endpoint
+// enrolled naming none — nothing is written).
+func (s *Server) trustMachine(endpointID, value, actor string, force bool, now time.Time) (string, error) {
+	et, err := s.Store.EndpointTrustOf(endpointID)
 	if err != nil {
-		return false
+		return "", err
 	}
+	machine := enrolledMachine(et)
+	if machine == "" {
+		return "", nil
+	}
+	settings, err := s.trustSettings(now)
+	if err != nil {
+		return "", err
+	}
+	if !force && (value != TrustTrusted || nameUntrusted(machine, settings) || trustOf(machine, settings) == TrustTrusted) {
+		return machine, nil
+	}
+	if _, err := s.setTrustAs(actor, machine, value, now); err != nil {
+		return "", err
+	}
+	return machine, nil
+}
+
+// trustMigrateMachines moves every live endpoint's own trust onto its machine,
+// once (claude-fleet#3300): a machine with no key and an endpoint the operator
+// marked untrusted gets untrusted — the operator's untrusted wins over a
+// sibling's trusted, as it did per name before; else one with a trusted
+// endpoint gets trusted. A machine that already has a key keeps it. An
+// endpoint that enrolled naming no machine has none to move to: logged.
+func (s *Server) trustMigrateMachines(settings map[string]string, now time.Time) error {
+	trusts, _, err := s.Store.EndpointTrusts()
+	if err != nil {
+		return err
+	}
+	want := map[string]string{}
 	for id, et := range trusts {
-		if et.Trust == TrustTrusted && sameName(hosts[id], machine) {
-			return true
+		if et.Trust != TrustTrusted && et.Trust != TrustUntrusted {
+			continue
 		}
+		machine := strings.ToLower(firstLabel(enrolledMachine(et)))
+		if machine == "" {
+			log.Printf("fleet: node trust — endpoint %s held %s but enrolled naming no machine; not moved", id, et.Trust)
+			continue
+		}
+		if want[machine] == TrustUntrusted {
+			continue
+		}
+		if et.Trust == TrustUntrusted && et.Source != store.TrustSourceOperator {
+			continue
+		}
+		want[machine] = et.Trust
 	}
-	return false
+	for machine, v := range want {
+		if trustOf(machine, settings) == TrustTrusted || nameUntrusted(machine, settings) {
+			continue
+		}
+		if err := s.Store.SetFleetSetting(trustKey(machine), v, now); err != nil {
+			return err
+		}
+		s.trustAudit("migration", machine, v+" (moved from its endpoints)", now)
+	}
+	if len(want) > 0 {
+		log.Printf("fleet: node trust — endpoint trust moved onto %d machine(s)", len(want))
+	}
+	return s.Store.SetFleetSetting(NodeTrustMachinesMigratedKey, now.UTC().Format(time.RFC3339), now)
 }
 
 // untrustedWhy is the refusal text for an endpoint that holds no trust.
 func untrustedWhy(host, source string) string {
 	name := strings.ToLower(firstLabel(host))
 	if source == TrustSourceNameBorrowed {
-		return name + " is a trusted machine, but this node did not join as it — a borrowed machine name inherits no trust; join it with a trusted join code"
+		return name + " is a trusted machine, but this node did not join as it — a borrowed machine name inherits no trust"
 	}
-	return name + " is not a trusted machine — the operator marks it with fleet-node-trust.sh set " + name + " trusted, or joins it with a trusted join code"
+	return name + " is not a trusted machine — the operator marks it with fleet-node-trust.sh set " + name + " trusted"
 }
 
 // trustWord drops the source for a one-word audit field.

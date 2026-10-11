@@ -101,35 +101,38 @@ func TestTrustBorrowedNameGetsNothing(t *testing.T) {
 	}
 }
 
-// An old node (no trust of its own) keeps the name rule for one version: it
-// enrolled under the name it reports, so it reads trusted, source
-// machine_name.
-func TestTrustOldNodeKeepsItsName(t *testing.T) {
+// Trust is the machine's (claude-fleet#3300): an endpoint holds the trust of
+// the machine it ENROLLED as, whatever name it reports; a trusted name it did
+// not enroll as is name_borrowed; its own record (a join code's word) is not
+// read; the operator's untrusted on its machine takes it away.
+func TestTrustIsTheEnrolledMachines(t *testing.T) {
 	set := map[string]string{NodeTrustPrefix + "m5": TrustTrusted}
-	if tr, src := nodeTrust("m5.local", store.EndpointTrust{EnrolledHost: "m5"}, set); tr != TrustTrusted || src != TrustSourceMachineName {
-		t.Fatalf("old m5 = %s %s; want trusted machine_name", tr, src)
+	if tr, src := nodeTrust("m5.local", store.EndpointTrust{EnrolledHost: "m5"}, set); tr != TrustTrusted || src != TrustSourceMachine {
+		t.Fatalf("m5 = %s %s; want trusted machine", tr, src)
+	}
+	// renamed since: still the machine it enrolled as
+	if tr, _ := nodeTrust("renamed", store.EndpointTrust{EnrolledHost: "m5"}, set); tr != TrustTrusted {
+		t.Fatalf("a renamed m5 lost its machine's trust")
 	}
 	if tr, src := nodeTrust("m5", store.EndpointTrust{EnrolledHost: "evil"}, set); tr != TrustUntrusted || src != TrustSourceNameBorrowed {
 		t.Fatalf("borrowed m5 = %s %s", tr, src)
 	}
-	if tr, _ := nodeTrust("m5", store.EndpointTrust{}, set); tr != TrustUntrusted {
+	if tr, _ := nodeTrust("m5", store.EndpointTrust{EnrolledHost: "?"}, set); tr != TrustUntrusted {
 		t.Fatalf("a never-named endpoint inherited m5's trust")
 	}
-	// Its own trust wins over any name — but the operator's untrusted for
-	// the name it reports still takes it away.
 	own := store.EndpointTrust{Trust: TrustTrusted, Source: store.TrustSourceJoinCode, EnrolledHost: "m9"}
-	if tr, src := nodeTrust("m9", own, map[string]string{}); tr != TrustTrusted || src != store.TrustSourceJoinCode {
-		t.Fatalf("join-code m9 = %s %s", tr, src)
+	if tr, _ := nodeTrust("m9", own, map[string]string{}); tr != TrustUntrusted {
+		t.Fatalf("an endpoint's own record gave trust its machine does not hold")
 	}
-	if tr, _ := nodeTrust("m9", own, map[string]string{NodeTrustPrefix + "m9": TrustUntrusted}); tr != TrustUntrusted {
-		t.Fatalf("the operator's untrusted did not win over the endpoint's own trust")
+	if tr, _ := nodeTrust("m5", store.EndpointTrust{EnrolledHost: "m5"}, map[string]string{NodeTrustPrefix + "m5": TrustUntrusted}); tr != TrustUntrusted {
+		t.Fatalf("the operator's untrusted on the machine did not win")
 	}
 }
 
 // The 托管 route mints a trusted, managed code that lives an hour and
-// redeems once; the endpoint holds the trust on its identity, with no machine
-// setting at all — and the code is refused after its hour.
-func TestManagedJoinCodeTrustsTheIdentity(t *testing.T) {
+// redeems once; redeeming it puts the trust on the MACHINE the endpoint
+// enrolled as (claude-fleet#3300) — and the code is refused after its hour.
+func TestManagedJoinCodeTrustsTheMachine(t *testing.T) {
 	h := newFleetHarness(t)
 	t0 := time.Now()
 	now := t0
@@ -156,14 +159,14 @@ func TestManagedJoinCodeTrustsTheIdentity(t *testing.T) {
 		t.Fatalf("second redemption: %d; want 401", code)
 	}
 	et, err := h.srv.Store.EndpointTrustOf(out.EndpointID)
-	if err != nil || et.Trust != TrustTrusted || et.Source != store.TrustSourceJoinCode || et.Role != store.NodeRoleManaged || et.EnrolledHost != "m9" {
-		t.Fatalf("endpoint trust = %+v %v", et, err)
+	if err != nil || et.Role != store.NodeRoleManaged || et.EnrolledHost != "m9" {
+		t.Fatalf("endpoint = %+v %v", et, err)
 	}
-	if s, _ := h.srv.Store.FleetSettings(); s[NodeTrustPrefix+"m9"] != "" {
-		t.Fatalf("a join code wrote a machine-name setting: %v", s)
+	if s, _ := h.srv.Store.FleetSettings(); s[NodeTrustPrefix+"m9"] != TrustTrusted {
+		t.Fatalf("a trusted join code did not trust its machine: %v", s)
 	}
 	resp, body := getWithToken(t, h, "/v1/node/self", out.Token)
-	if resp.StatusCode != 200 || !strings.Contains(string(body), `"trust":"trusted"`) || !strings.Contains(string(body), `"trust_source":"join_code"`) {
+	if resp.StatusCode != 200 || !strings.Contains(string(body), `"trust":"trusted"`) || !strings.Contains(string(body), `"trust_source":"machine"`) {
 		t.Fatalf("self: %d %s", resp.StatusCode, body)
 	}
 
@@ -178,8 +181,15 @@ func TestManagedJoinCodeTrustsTheIdentity(t *testing.T) {
 		t.Fatalf("plain code = %+v", plain)
 	}
 	_, pout := joinWith(t, h, plain.Code, "m7", "verkyyi")
-	if et, _ := h.srv.Store.EndpointTrustOf(pout.EndpointID); et.Trust != "" {
-		t.Fatalf("a plain code gave trust: %+v", et)
+	if resp, body := getWithToken(t, h, "/v1/node/self", pout.Token); !strings.Contains(string(body), `"trust":"untrusted"`) {
+		t.Fatalf("a plain code gave trust: %d %s", resp.StatusCode, body)
+	}
+	// A trusted code never lifts the operator's untrusted on its machine.
+	putSetting(t, h, NodeTrustPrefix+"m6", TrustUntrusted, 200)
+	now = t0.Add(time.Second)
+	_, uout := joinWith(t, h, mintManaged(t, h, nil).Code, "m6", "verkyyi")
+	if _, body := getWithToken(t, h, "/v1/node/self", uout.Token); !strings.Contains(string(body), `"trust":"untrusted"`) {
+		t.Fatalf("a trusted code lifted the operator's untrusted: %s", body)
 	}
 	// And the managed route takes trusted:false.
 	if v := mintManaged(t, h, map[string]any{"trusted": false}); v.Trust != "" || v.Role != store.NodeRoleManaged {
@@ -187,8 +197,101 @@ func TestManagedJoinCodeTrustsTheIdentity(t *testing.T) {
 	}
 }
 
+// A login the hub opens on a machine (claude-fleet#3300) holds that
+// machine's trust: its join code names the machine, so it enrolls as it —
+// trusted on a trusted machine, untrusted on an untrusted one, and a login
+// that reports another (trusted) name gains nothing by it.
+func TestOpenedLoginHoldsItsMachinesTrust(t *testing.T) {
+	h := newFleetHarness(t)
+	putSetting(t, h, NodeTrustPrefix+"fleet-linux-0", TrustTrusted, 200)
+	now := time.Now()
+	self := func(tok string) string {
+		_, body := getWithToken(t, h, "/v1/node/self", tok)
+		return string(body)
+	}
+
+	code := h.srv.loginJoinCode(store.FleetAccount{Hostname: "fleet-linux-0", Login: "24haowan"}, now)
+	if code == "" {
+		t.Fatal("no join code minted")
+	}
+	st, out := joinWith(t, h, code, "fleet-linux-0", "24haowan")
+	if st != 200 {
+		t.Fatalf("join: %d", st)
+	}
+	if b := self(out.Token); !strings.Contains(b, `"trust":"trusted"`) || !strings.Contains(b, `"trust_source":"machine"`) {
+		t.Fatalf("a login opened on a trusted machine: %s; want trusted machine", b)
+	}
+
+	// An untrusted machine's login is untrusted — even reporting a trusted name.
+	code = h.srv.loginJoinCode(store.FleetAccount{Hostname: "m-untrusted", Login: "bob"}, now)
+	_, bout := joinWith(t, h, code, "fleet-linux-0", "bob")
+	if et, _ := h.srv.Store.EndpointTrustOf(bout.EndpointID); et.EnrolledHost != "m-untrusted" {
+		t.Fatalf("enrolled as %q; want the code's machine", et.EnrolledHost)
+	}
+	if b := self(bout.Token); !strings.Contains(b, `"trust":"untrusted"`) {
+		t.Fatalf("a login opened on an untrusted machine: %s; want untrusted", b)
+	}
+
+	// The operator marks the machine trusted: every login there follows.
+	putSetting(t, h, NodeTrustPrefix+"m-untrusted", TrustTrusted, 200)
+	if b := self(bout.Token); !strings.Contains(b, `"trust":"trusted"`) {
+		t.Fatalf("after the machine was trusted: %s", b)
+	}
+}
+
+// The one move (claude-fleet#3300): every endpoint's own trust lands on the
+// machine it enrolled as, once; the operator's untrusted wins over a
+// sibling's trusted; a machine with a key keeps it.
+func TestTrustMigratesOntoMachines(t *testing.T) {
+	h := newFleetHarness(t)
+	st := h.srv.Store
+	now := time.Now()
+	enroll := func(id, host, trust, src string) {
+		t.Helper()
+		code, _ := MintJoinCode()
+		if err := st.CreateJoinCodeFor(HashToken(code), "", store.NodeKindFixed, "", "", "", now, time.Hour); err != nil {
+			t.Fatal(err)
+		}
+		tok, _ := MintToken()
+		if err := st.RedeemJoinCode(HashToken(code), now, id, id, HashToken(tok), host, "u"); err != nil {
+			t.Fatal(err)
+		}
+		if trust != "" {
+			if err := st.SetEndpointTrust(id, trust, src); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	enroll("ep_a", "ma", TrustTrusted, store.TrustSourceJoinCode)
+	enroll("ep_a2", "ma", "", "")
+	enroll("ep_b", "mb", TrustTrusted, store.TrustSourceJoinCode)
+	enroll("ep_b2", "mb", TrustUntrusted, store.TrustSourceOperator)
+	enroll("ep_c", "mc", TrustTrusted, store.TrustSourceOperator)
+	if err := st.SetFleetSetting(NodeTrustPrefix+"mc", TrustUntrusted, now); err != nil {
+		t.Fatal(err)
+	}
+	set, err := h.srv.trustSettings(now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if set[NodeTrustPrefix+"ma"] != TrustTrusted || set[NodeTrustPrefix+"mb"] != TrustUntrusted || set[NodeTrustPrefix+"mc"] != TrustUntrusted {
+		t.Fatalf("after the move: ma=%q mb=%q mc=%q", set[NodeTrustPrefix+"ma"], set[NodeTrustPrefix+"mb"], set[NodeTrustPrefix+"mc"])
+	}
+	if set[NodeTrustMachinesMigratedKey] == "" {
+		t.Fatal("the move was not stamped")
+	}
+	if tr, _ := h.srv.endpointTrust("ep_a2", "ma", set); tr != TrustTrusted {
+		t.Fatalf("ma's other login = %s; want its machine's trusted", tr)
+	}
+	// Once: a later endpoint trust is not moved again.
+	enroll("ep_d", "md", TrustTrusted, store.TrustSourceJoinCode)
+	if set, _ := h.srv.trustSettings(now); set[NodeTrustPrefix+"md"] != "" {
+		t.Fatalf("the move ran twice: md=%q", set[NodeTrustPrefix+"md"])
+	}
+}
+
 // Desired state: only the operator writes, every write bumps the version, a
-// stale if_version is refused, trust in the body is the endpoint's own, the
+// stale if_version is refused, trust in the body is its machine's, the
 // node reads its own and its heartbeat's report lands on the roster.
 func TestDesiredStateOperatorWrites(t *testing.T) {
 	h := newFleetHarness(t)
@@ -229,13 +332,16 @@ func TestDesiredStateOperatorWrites(t *testing.T) {
 	if resp.StatusCode != 200 || !strings.Contains(string(nb), `"version":1`) || !strings.Contains(string(nb), `"spare_accounts":2`) {
 		t.Fatalf("node read: %d %s", resp.StatusCode, nb)
 	}
-	// Trust through the desired state is the operator's, on this endpoint.
+	// Trust through the desired state is the operator's, on the machine.
 	code, b = operatorDo(t, h, http.MethodPut, path, map[string]any{"release": "abc1234", "trust": "untrusted"})
-	if code != 200 || !strings.Contains(string(b), `"trust":"untrusted"`) || !strings.Contains(string(b), `"trust_source":"operator"`) {
+	if code != 200 || !strings.Contains(string(b), `"trust":"untrusted"`) || !strings.Contains(string(b), `"trust_source":"machine"`) {
 		t.Fatalf("trust put: %d %s", code, b)
 	}
-	if n := trustAuditCount(t, h, `fleet_id = 'endpoint:`+out.EndpointID+`'`); n != 1 {
-		t.Fatalf("endpoint trust audit rows = %d", n)
+	if s, _ := h.srv.Store.FleetSettings(); s[NodeTrustPrefix+"m4"] != TrustUntrusted {
+		t.Fatalf("desired trust did not land on the machine: %v", s)
+	}
+	if n := trustAuditCount(t, h, `fleet_id = 'machine:m4' AND outcome LIKE 'trusted → untrusted%'`); n != 1 {
+		t.Fatalf("machine trust audit rows = %d", n)
 	}
 
 	c := dialNode(t, h, out.Token)
