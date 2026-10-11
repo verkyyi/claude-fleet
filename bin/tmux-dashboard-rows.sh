@@ -838,7 +838,7 @@ chain_v() { croot=''; crootpin=0; cpnlvl=''; ANC=0
     case "$porig" in
       issue-*|scratch-*|*:issue-*|*:scratch-*|*/issue-*|*/scratch-*) cur=$porig ;;   # a child too — keep climbing
       *) croot=$cur; crootpin=${AP[ANC-1]}
-         return ;;                                            # hub/autofill/none: the root
+         return ;;                                            # hub/bridge/none: the root
     esac
   done
 }
@@ -1793,7 +1793,7 @@ fi
 # a one-repo fleet sorts exactly as before; the 置顶 group, PGRP, heads them all —
 # issue #1170), then pinned-first (issue #623), then grouped by spawn provenance (issue #503):
 # pinned windows (and the subtrees that float with them) take the whole top of the
-# list whatever their status; below them, roots (hub/autofill/bridge spawns) keep
+# list whatever their status; below them, roots (hub/bridge spawns) keep
 # the status-rank order they always had; each root's children sort directly below
 # it, each child's own children directly below IT (the path key, issue #1328 —
 # a byte sort, hence LC_ALL=C); orphans — children whose parent window closed —

@@ -23,8 +23,8 @@
 #
 # --seed (issue #1167): this repo is only the login's STARTER — the fleet comes up
 # on it so it works at once, but it never takes work: its overlay also gets
-# FLEET_SEED=1 + FLEET_AUTOFILL=0 + FLEET_ISSUE_BRIDGE=0, so the dispatcher never
-# auto-spawns from its backlog and the issue-bridge never relays its comments (see
+# FLEET_SEED=1 + FLEET_ISSUE_BRIDGE=0, so the issue-bridge never relays its
+# comments (see
 # fleet_repo_is_seed). It marks the fleet's ONLY repo — a --seed for a repo added
 # beside others is refused.
 #
@@ -194,10 +194,10 @@ mark_seed() {
   [ "$SEED" = 1 ] && [ -z "$ADD_REPO" ] || return 0
   f=$(fleet_repo_conf_file "$NAME" "$REPO")
   [ -f "$f" ] || return 0
-  for kv in FLEET_SEED=1 FLEET_AUTOFILL=0 FLEET_ISSUE_BRIDGE=0; do
+  for kv in FLEET_SEED=1 FLEET_ISSUE_BRIDGE=0; do
     fleet_conf_set "$f" "${kv%%=*}" "${kv#*=}" || die "failed to write ${kv%%=*} to $f"
   done
-  echo "fleet-up: $REPO is this fleet's seed repo — no autofill, no issue-bridge (FLEET_SEED=1)"
+  echo "fleet-up: $REPO is this fleet's seed repo — no issue-bridge (FLEET_SEED=1)"
 }
 
 if [ "$LIVE" = 1 ]; then

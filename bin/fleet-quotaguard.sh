@@ -1,17 +1,15 @@
 #!/bin/bash
-# fleet-quotaguard.sh — subscription-quota circuit-breaker for auto-spawn.
+# fleet-quotaguard.sh — subscription-quota circuit-breaker for remote starts.
 #
 # WHY: the disk guard stops the fleet filling a volume. Nothing stops it filling
-# a QUOTA. Autofill spawns real Claude sessions on a timer, and the sessions it
-# spawns are exactly the ones that spend the subscription those sessions run on.
-# A dispatcher that keeps filling slots while the weekly window closes does not
-# merely waste tokens — it hands the remaining budget to whichever issue happened
-# to be labelled `autofill`, and the operator finds out when their own session
-# is refused.
+# a QUOTA. A start or resume the hub sends opens a real Claude session that spends
+# the subscription it runs on; one that keeps opening while the weekly window
+# closes hands the remaining budget away, and the operator finds out when their
+# own session is refused. (It was written for the autofill dispatcher, retired in
+# #3120; fleet-control-read.sh's start / resume are its callers now.)
 #
 # This is the same shape as fleet-diskguard.sh --gate, deliberately: a cheap
-# precondition that fleet-dispatch.sh consults once per tick and REFUSES to add
-# load through. Same exit codes, same fail-open rule, so the two guards can be
+# precondition a caller consults and REFUSES to add load through. Same exit codes, same fail-open rule, so the two guards can be
 # reasoned about identically.
 #
 # It does NOT measure anything itself. The measurement lives in ccquota — the

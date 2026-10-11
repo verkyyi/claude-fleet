@@ -15,7 +15,7 @@
 #   perm      viewerPermission ≥ WRITE                read-only ⇒ blocker
 #   subissue  the sub-issues API answers for this repo 404 ⇒ blocker (falling back
 #             to a flat checklist is the operator's call, not this script's)
-#   labels    `epic` + `autofill` + `blocked` exist   missing ⇒ FIXABLE (--fix)
+#   labels    `epic` + `blocked` exist                missing ⇒ FIXABLE (--fix)
 #   base      FLEET_BASE_BRANCH == the repo default   drift ⇒ warn (#603)
 #   deploy    FLEET_DEPLOY_REF / _CHECK (#541)        neither ⇒ merged ≡ done
 #   slots     the effective concurrent-session cap    stated, never warned (#881)
@@ -219,11 +219,11 @@ if [ "$gh_ok" = 1 ] && [ -n "$perm" ]; then
 fi
 
 # --- labels: the only row `--fix` can clear ------------------------------------
-# `epic` marks the tracking parent, `autofill` is how a planned slice gets picked
-# up hands-off, `blocked` is how `run` marks a slice it had to stop. All three are
-# in fleet_labels_canonical, so the seeder installs them; the check is whether
+# `epic` marks the tracking parent, `blocked` is how `run` marks a slice it had to
+# stop (`autofill` left with the dispatcher, issue #3120). Both are in
+# fleet_labels_canonical, so the seeder installs them; the check is whether
 # THIS repo has been seeded at all.
-EPIC_LABELS='epic autofill blocked'
+EPIC_LABELS='epic blocked'
 # The desk repo also needs `desk` (issue #2676): a no-code session of the batch
 # is ticketed there with it (fleet-ticket.sh new).
 [ "$(fleet_norm_repo "$repo")" = "$(fleet_norm_repo "${FLEET_DESK_REPO:-verkyyi/claude-fleet}")" ] \

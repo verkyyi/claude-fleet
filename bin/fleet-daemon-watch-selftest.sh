@@ -240,14 +240,14 @@ grep -q 'kick .*unit=cleanup .*mgr=launchd.*rc=0' "$KICKLOG" \
 # 400s is stale (>= the 300s threshold) but well inside the 900s WEDGED bound that
 # #682 added — this section is about the SLOW half of that split, and §16 covers
 # the other. It used to stamp 900s, which is now exactly the wedge threshold.
-: > "$FAKE_KICK_LOG"; rm -f "$G/dispatch.kick.ts"
-tick dispatch 400
-FAKE_RUNNING=dispatch watch --unit dispatch
+: > "$FAKE_KICK_LOG"; rm -f "$G/ledger-watch.kick.ts"
+tick ledger-watch 400
+FAKE_RUNNING=ledger-watch watch --unit ledger-watch
 [ "$(kicks)" -eq 0 ] || fail "5: killed a RUNNING tick with kickstart -k"; ok
-grep -q 'slow .*unit=dispatch' "$KICKLOG" || fail "5: a slow unit was not logged: $(cat "$KICKLOG")"; ok
-[ -n "$(lib 'fleet_daemon_overdue dispatch '"$WORK")" ] || fail "5: alarm dropped for a slow unit"; ok
+grep -q 'slow .*unit=ledger-watch' "$KICKLOG" || fail "5: a slow unit was not logged: $(cat "$KICKLOG")"; ok
+[ -n "$(lib 'fleet_daemon_overdue ledger-watch '"$WORK")" ] || fail "5: alarm dropped for a slow unit"; ok
 # …and the deliberate override still gets through.
-FAKE_RUNNING=dispatch watch --unit dispatch --force --now
+FAKE_RUNNING=ledger-watch watch --unit ledger-watch --force --now
 [ "$(kicks)" -eq 1 ] || fail "5: --force --now did not override the running guard"; ok
 
 # ------------------------------------------------------------- 6. per-unit ----
@@ -296,9 +296,9 @@ printf '%s\n' "$tbl" | grep -q '^ledger-watch	' \
 
 # ------------------------------------------------------------------ 9. bar ----
 wipe
-tick cleanup 900; tick dispatch 900; tick base-sync 900
+tick cleanup 900; tick ledger-watch 900; tick base-sync 900
 out="$(FLEET_DAEMON_KICK=0 bar)"
-case "$out" in *"✖ 1#"*"daemon · stale · 3 units"*'"detail":"cleanup,dispatch,base-sync"'*) ok ;;
+case "$out" in *"✖ 1#"*"daemon · stale · 3 units"*'"detail":"cleanup,base-sync,ledger-watch"'*) ok ;;
   *) fail "9: bar did not count the stalled units, or the row lost their names: $out" ;; esac
 # collect belongs to the `dash · stale` row and must not be listed twice.
 wipe
@@ -321,7 +321,7 @@ case "$out" in *"daemon · stale"*) fail "9: the trace outlived its window: $out
 # stamp line is invisible — the unit just reads `never` forever.
 stamps_for() { grep -c "fleet_daemon_stamp_tick $2" "$BIN/$1" 2>/dev/null || echo 0; }
 for pair in 'tmux-dash-collect.sh collect' 'fleet-quotawatch.sh quotawatch' \
-            'fleet-cleanup-daemon.sh cleanup' 'fleet-dispatch.sh dispatch' \
+            'fleet-cleanup-daemon.sh cleanup' \
             'fleet-base-sync.sh base-sync' 'fleet-diskguard.sh diskguard' \
             'fleet-ledger-watch.sh ledger-watch' 'fleet-issue-bridge.sh issue-bridge' \
             'tmux-pr-refresh.sh pr-refresh' 'worktree-autoclean.sh worktree-autoclean' \
@@ -333,7 +333,7 @@ done
 # The three with a non-unit invocation mode must stamp ONLY in the unit's mode,
 # or another daemon's tick keeps their stamp fresh while they are pended.
 grep -q "case \" \$\* \" in \*' --watch '\*)" "$BIN/fleet-diskguard.sh" \
-  || fail "10: diskguard stamps outside --watch — cleanup/dispatch/base-sync call it --gate every tick"; ok
+  || fail "10: diskguard stamps outside --watch — cleanup/base-sync call it --gate every tick"; ok
 grep -q "case \" \$\* \" in \*' --poll '\*)" "$BIN/fleet-issue-bridge.sh" \
   || fail "10: issue-bridge stamps outside --poll — the webhook drives its deliver path"; ok
 grep -q 'if \[ "\$#" = 0 \]' "$BIN/tmux-pr-refresh.sh" \
@@ -342,7 +342,7 @@ grep -q 'CALLER" != collect \] && \[ "\$STATUS" = 0 \] && \[ "\$DRY" = 0 \]' "$B
   || fail "10: quotawatch stamps outside its own working tick — crediting --caller collect reproduces #639's blind spot, and crediting --status has fleet-doctor refreshing the very stamp it reads"; ok
 # The lib source is GUARDED everywhere: instrumentation must not be able to kill
 # the daemon it instruments if an install is ever half-synced.
-for f in tmux-dash-collect.sh fleet-quotawatch.sh fleet-cleanup-daemon.sh fleet-dispatch.sh \
+for f in tmux-dash-collect.sh fleet-quotawatch.sh fleet-cleanup-daemon.sh \
          fleet-base-sync.sh fleet-diskguard.sh fleet-ledger-watch.sh fleet-issue-bridge.sh \
          tmux-pr-refresh.sh worktree-autoclean.sh fleet-install-sync.sh; do
   grep -q 'fleet_daemon_stamp_tick' "$BIN/$f" || fail "10: $f lost its stamp"
@@ -491,9 +491,9 @@ dry_is_inert base-sync 'would BOOTSTRAP'
 [ -f "$FAKE_LC_STATE/base-sync.out" ] || fail "14: dry-run actually bootstrapped the unit"; ok
 # a running tick → would not touch it (400s: stale, but inside the 900s wedge
 # bound #682 added — §16 covers the dry-run report for a WEDGED unit)
-wipe; tick dispatch 400
+wipe; tick ledger-watch 400
 : > "$FAKE_KICK_LOG"
-out="$(FAKE_RUNNING=dispatch watch_err --unit dispatch --dry-run)"
+out="$(FAKE_RUNNING=ledger-watch watch_err --unit ledger-watch --dry-run)"
 case "$out" in *'would NOT touch it'*) ok ;; *) fail "14: dry-run on a running unit: $out" ;; esac
 [ ! -s "$FAKE_KICK_LOG" ] || fail "14: dry-run touched a running unit"; ok
 
@@ -527,26 +527,26 @@ wipe; : > "$FAKE_KICK_LOG"; : > "$KICKLOG"
 [ "$(lib 'fleet_daemon_wedged_secs collect')" = 900 ]   || fail "16: collect's wedge bound is not 3x its 300s stale threshold"; ok
 [ "$(FLEET_DAEMON_WEDGED_MULT=2 lib 'fleet_daemon_wedged_secs collect')" = 600 ]   || fail "16: FLEET_DAEMON_WEDGED_MULT does not retune the bound"; ok
 [ "$(FLEET_DAEMON_WEDGED_MULT=0 lib 'fleet_daemon_wedged_secs collect')" = 0 ]   || fail "16: MULT=0 must disable the wedge verdict"; ok
-[ "$(FLEET_DAEMON_WEDGED_DISPATCH=360 lib 'fleet_daemon_wedged_secs dispatch')" = 360 ]   || fail "16: a per-unit override must win outright"; ok
+[ "$(FLEET_DAEMON_WEDGED_LEDGER_WATCH=360 lib 'fleet_daemon_wedged_secs ledger-watch')" = 360 ]   || fail "16: a per-unit override must win outright"; ok
 
 # RUNNING + stale past the bound ⇒ healed, and said so in the log
-tick dispatch 1200
-FAKE_RUNNING=dispatch watch --unit dispatch
+tick ledger-watch 1200
+FAKE_RUNNING=ledger-watch watch --unit ledger-watch
 [ "$(kicks)" -eq 1 ]   || fail "16: a RUNNING unit frozen for 1200s was not healed — this is the #682 stand-down"; ok
-grep -q 'wedged .*unit=dispatch' "$KICKLOG"   || fail "16: the wedge verdict was not logged: $(cat "$KICKLOG")"; ok
+grep -q 'wedged .*unit=ledger-watch' "$KICKLOG"   || fail "16: the wedge verdict was not logged: $(cat "$KICKLOG")"; ok
 
 # …and the knob restores the pre-#682 hands-off guard exactly.
 wipe; : > "$FAKE_KICK_LOG"; : > "$KICKLOG"
-tick dispatch 1200
-FLEET_DAEMON_WEDGED_MULT=0 FAKE_RUNNING=dispatch watch --unit dispatch
+tick ledger-watch 1200
+FLEET_DAEMON_WEDGED_MULT=0 FAKE_RUNNING=ledger-watch watch --unit ledger-watch
 [ "$(kicks)" -eq 0 ]   || fail "16: FLEET_DAEMON_WEDGED_MULT=0 must never touch a running unit"; ok
-grep -q 'slow .*unit=dispatch' "$KICKLOG"   || fail "16: with the knob off a frozen unit must still log as slow"; ok
+grep -q 'slow .*unit=ledger-watch' "$KICKLOG"   || fail "16: with the knob off a frozen unit must still log as slow"; ok
 
 # The dry-run verdict and the real one must not be able to disagree (they are
 # decided in one place, beside do_reload).
 wipe; : > "$FAKE_KICK_LOG"; : > "$KICKLOG"
-tick dispatch 1200
-case "$(FAKE_RUNNING=dispatch watch_err --unit dispatch --dry-run)" in
+tick ledger-watch 1200
+case "$(FAKE_RUNNING=ledger-watch watch_err --unit ledger-watch --dry-run)" in
   *"RUNNING but WEDGED"*) ok ;;
   *) fail "16: --dry-run does not report the wedge verdict the real run acts on" ;;
 esac

@@ -253,7 +253,7 @@ class Control:
         if before != after:
             raise Fault("REVISION_CONFLICT", "Configuration changed while reading; retry")
         parts = output.decode("utf-8").split("\0")
-        if code or len(parts) != 4 or parts[-1] or not all(x.isdigit() for x in parts[:-1]):
+        if code or len(parts) != len(CONFIG_KEYS) + 1 or parts[-1] or not all(x.isdigit() for x in parts[:-1]):
             raise Fault("INVALID_STATE", "Managed configuration values must be integers")
         return dict(values=dict(zip(CONFIG_KEYS, map(int, parts[:-1]))), revision=after,
                     revision_scope="fleet_overlay", observed_at=now())

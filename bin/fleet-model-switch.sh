@@ -371,12 +371,12 @@ main() {
   # ---- ONE round trip for every window option the loop reads (issue #706) ----
   # This used to be five `display-message` per window, i.e. 5N round trips, and
   # this probe runs inside a daemon at QoS BACKGROUND where each one costs ~10x.
-  # Tab-separated with the window NAME last — the idiom fleet-dispatch.sh's
+  # Tab-separated with the window NAME last — the idiom the retired fleet-dispatch.sh's
   # trust_sweep already uses, for the same reason: a name is the only field that
   # can contain the separator. The split below is parameter expansion rather than
   # `read -r a b c …` BECAUSE tab is IFS whitespace, so `read` COLLAPSES the empty
   # fields this is full of (an unset @hub next to an unset @claude_state) and every
-  # column after the first empty one would shift. Same trap fleet-dispatch.sh
+  # column after the first empty one would shift. Same trap the retired fleet-dispatch.sh
   # documents; it escapes via `awk -F'\t'`, this escapes without the fork.
   # `@model` rides the same read (issue #1454): the statusline's stamp of the
   # model the session is on, read for free with the rest.

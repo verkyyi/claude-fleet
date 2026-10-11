@@ -1395,38 +1395,10 @@ if [ -f "$_ad_l" ]; then
   fi
 fi
 
-# --- autofill dispatcher (optional: auto-spawn `autofill`-labelled backlog, #70/#421) ---
-# OFF unless a fleet's conf sets FLEET_AUTOFILL=1. When ON, the dispatch daemon
-# auto-spawns eligible `autofill`-labelled backlog issues — which spends LLM tokens —
-# so surface the armed fleets and the cost. A missing daemon/config is not a fault
-# (opt-in), so this only speaks up when at least one fleet has enabled it.
+# (The autofill dispatcher's row left with it, issue #3120.)
 if [ -d "$conf_dir" ]; then
-  armed=0
-  # here-doc (not a pipe) so the `while` runs in THIS shell and `armed` survives.
-  while IFS= read -r cf; do
-    [ -n "$cf" ] || continue
-    # FLEET_AUTOFILL=1, tolerating quotes/spaces (FLEET_AUTOFILL = "1").
-    val=$(sed -n 's/^[[:space:]]*FLEET_AUTOFILL[[:space:]]*=[[:space:]]*//p' "$cf" | head -1 | tr -d "\"' 	")
-    [ "$val" = 1 ] && armed=$((armed+1))
-  done <<EOF
-$(_fleet_confs "$conf_dir")
-EOF
-  # A multi-repo fleet may arm a single repo in its overlay (issue #799).
-  for cf in "$conf_dir"/fleets/*/repos/*.conf; do
-    [ -f "$cf" ] || continue
-    val=$(sed -n 's/^[[:space:]]*FLEET_AUTOFILL[[:space:]]*=[[:space:]]*//p' "$cf" | head -1 | tr -d "\"' 	")
-    [ "$val" = 1 ] && armed=$((armed+1))
-  done
-  if [ "$armed" -gt 0 ]; then
-    if command -v gh >/dev/null 2>&1; then
-      pass autofill "$armed fleet(s)/repo overlay(s) with FLEET_AUTOFILL=1 — dispatcher auto-spawns \`autofill\`-labelled issues (spends LLM tokens)"
-    else
-      warn autofill "$armed fleet(s)/repo overlay(s) set FLEET_AUTOFILL=1 but gh is missing — the dispatcher can't read the backlog"
-    fi
-    printf '        note: needs the com.claude-fleet.dispatch daemon installed + the `autofill` label on issues; each auto-spawn opens a real Claude session + PR.\n'
-  fi
   # The seed repo (issue #1167): `fleet-up.sh --seed` brought the fleet up on a
-  # starter repo that only LOOKS — dispatch + issue-bridge skip it whatever its
+  # starter repo that only LOOKS — the issue-bridge skips it whatever its
   # switches say. Said once per seeded repo; a fleet without FLEET_SEED says nothing.
   # compat-1v: 下一批删 (the old layout, below)
   # The mark lives in the seed's overlay (issue #1937), or — the old layout, read
@@ -1436,7 +1408,7 @@ EOF
     for sd_f in "$cf" "${cf%/conf}/repos"/*.conf; do
       [ -f "$sd_f" ] || continue
       [ "$(_conf_val "$sd_f" FLEET_SEED)" = 1 ] || continue
-      info seed "$(_conf_val "$sd_f" FLEET_REPO) — 起步仓库，只读: no autofill, no issue-bridge (FLEET_SEED=1)"
+      info seed "$(_conf_val "$sd_f" FLEET_REPO) — 起步仓库，只读: no issue-bridge (FLEET_SEED=1)"
     done
   done <<EOF
 $(_fleet_confs "$conf_dir")

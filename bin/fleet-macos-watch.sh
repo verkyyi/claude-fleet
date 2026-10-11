@@ -1,6 +1,6 @@
 #!/bin/bash
 # fleet-macos-watch.sh --repo <owner/name> [--session <fleet>] [--dry-run] [--now]
-#   — a red BSD half on master becomes ONE breakage issue with its fixer (issue #2286).
+#   — a red BSD half on master becomes ONE breakage issue and one alert (issues #2286, #3120).
 #
 # Since #2286 the macOS selftests no longer run on a pull request: they run on
 # master after the merge (.github/workflows/selftests-macos.yml, push → the related
@@ -16,14 +16,16 @@
 #      and files it through the ONE filer road with `--breakage`
 #      (bin/fleet-issue-file.sh, issue #2078): one issue per fingerprint across
 #      every machine and login; a breakage someone already filed comes back exit 5
-#      and is left alone. A fresh issue gets its worker (dash-issue-session.sh
-#      --origin autofill) when --session names the fleet.
+#      and is left alone. Either way it raises ONE `breakage` alert
+#      (fleet-alerts.sh event) on --session's fleet — and spawns NOTHING: since
+#      #3120 (EPIC #3111 C9) no session starts by itself; sending a fixer is the
+#      person's, or a steward holder's (the fleet-steward plugin).
 #   4. remembers the run id it filed for, so the same red run is never re-filed
 #      (nor re-commented 「同一故障」) on every tick.
 #
-# Run from the dispatch daemon's tick (bin/fleet-dispatch.sh, ~60s) for every
-# hosted repo whose base checkout carries both the macOS workflow and
-# bin/fleet-stable.sh — so a business repo is never read. Throttled to one read
+# Run from the diskguard tick (bin/fleet-diskguard.sh --watch, ~60s; the dispatch
+# daemon's until #3120) for every hosted repo whose base checkout carries both the
+# macOS workflow and bin/fleet-stable.sh — so a business repo is never read. Throttled to one read
 # per FLEET_MACOS_WATCH_SECS (default 600) per repo; --now ignores the throttle.
 # FLEET_MACOS_WATCH=0 turns it off. --dry-run reads and prints the filing it
 # would make, files nothing and remembers nothing.
@@ -45,7 +47,7 @@ while [ "$#" -gt 0 ]; do
     --session) shift; sess="${1:-}" ;;
     --dry-run|-n) dry=1 ;;
     --now)     now=1 ;;
-    -h|--help) sed -n '2,33p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,35p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *)         printf 'fleet-macos-watch: unknown argument %s\n' "$1" >&2; exit 2 ;;
   esac
   shift
@@ -126,14 +128,16 @@ case "$rc" in
   0|5) printf '%s\n' "$rid" > "$memo" ;;
   *)   log "filing failed (rc $rc) — retried next tick"; exit 1 ;;
 esac
-num=${url##*/}; num=${num//[^0-9]/}
 if [ "$rc" = 5 ]; then
-  printf 'filed\t%s\t%s\t(already open)\n' "$rid" "$url"; exit 0
+  printf 'filed\t%s\t%s\t(already open)\n' "$rid" "$url"
+else
+  printf 'filed\t%s\t%s\n' "$rid" "$url"
 fi
-printf 'filed\t%s\t%s\n' "$rid" "$url"
-if [ -n "$sess" ] && [ -n "$num" ]; then
-  spawn="${FLEET_MACOS_SPAWN_CMD:-$BIN/dash-issue-session.sh}"
-  bash "$spawn" "$num" "$sess" --repo "$repo" --title "$title" --origin autofill >/dev/null 2>&1 \
-    || log "filed #$num but the spawn was refused — it is on the backlog"
-fi
+# The reminder: one alert per red run (the memo above keeps it to one), on the
+# fleet the tick named. Nobody is spawned for it (issue #3120).
+alert="${FLEET_MACOS_ALERT_CMD:-$BIN/fleet-alerts.sh}"
+sock=''; [ -n "$sess" ] && sock=$(fleet_socket "$sess" 2>/dev/null)
+bash "$alert" event ${sock:+-L "$sock"} breakage \
+  "fleet: master's macOS check is red since ${s7} — ${url:-$repo} (nobody fixes it on their own; open a session on it)" \
+  >/dev/null 2>&1 || log "filed ${url:-the breakage} but the alert failed"
 exit 0

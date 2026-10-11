@@ -51,6 +51,10 @@
 #                     doctor's hub row goes WARN → PASS, a second run changes
 #                     nothing; an explicit CCQUOTA_FLEET=0 is never overwritten;
 #                     a client with no node.env stays byte for byte
+#   K. retired keys — (issue #3120) a line still setting FLEET_AUTOFILL /
+#                     _MAX_PER_TICK / _NODE in fleet.conf, a fleet conf or an
+#                     overlay is commented out (`# retired #3120: …`), the rest
+#                     kept; a second migrate writes nothing
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 for f in fleet-conf.sh fleet-lib.sh fleet-doctor.sh fleet_config_write.py fleet-connect.py fleet-login.py; do
@@ -79,7 +83,7 @@ mkbox() {   # $1 name → sets INS, H, CD
 run() {
   env -i PATH="$PATH" HOME="$H" FLEET_CONF_DIR="$CD" TMPDIR="$WORK" LANG=C "$@"
 }
-KEYS='CCQUOTA_HUB_URL CCQUOTA_VIEWER_TOKEN CCQUOTA_FLEET FLEET_NODE_ALIASES FLEET_AUTOFILL_NODE FLEET_COMPACT_PREP_PCT FLEET_REPO FLEET_MAIN FLEET_BASE_BRANCH FLEET_AUTOFILL FLEET_SIDEBAR_SOURCE FLEET_SHELL_WIDTH FLEET_UI_LANG'
+KEYS='CCQUOTA_HUB_URL CCQUOTA_VIEWER_TOKEN CCQUOTA_FLEET FLEET_NODE_ALIASES FLEET_SPAWN_NODE FLEET_COMPACT_PREP_PCT FLEET_REPO FLEET_MAIN FLEET_BASE_BRANCH FLEET_ISSUE_BRIDGE FLEET_SIDEBAR_SOURCE FLEET_SHELL_WIDTH FLEET_UI_LANG'
 # view [shell] → KEY=value for every key a node script (or, with `shell`, the
 # shell) would resolve: fleet-lib's load + the fleet's conf.
 view() {
@@ -117,7 +121,7 @@ export CCQUOTA_HUB_URL=https://hub.example
 export CCQUOTA_VIEWER_TOKEN=vt-secret-123
 export CCQUOTA_FLEET=1
 FLEET_NODE_ALIASES="macmini=m5 mini2=m4"
-FLEET_AUTOFILL_NODE=local
+FLEET_SPAWN_NODE=local
 FLEET_SIDEBAR_SOURCE=local
 
 # --- 上下文梯子 ---
@@ -132,7 +136,7 @@ FLEET_REPO="acme/app"
 FLEET_MAIN="$H/projects/app"
 FLEET_BASE_BRANCH="main"
 FLEET_SEED="1"
-FLEET_AUTOFILL="0"
+FLEET_ISSUE_BRIDGE="0"
 EOF
   printf 'CCQUOTA_HUB_URL=https://hub.example\nCCQUOTA_TOKEN=node-tok\n' > "$CD/node.env"; chmod 600 "$CD/node.env"
 }
@@ -155,7 +159,7 @@ is "B: fleet.conf is 0600" "$(stat -c '%a' "$CD/fleet.conf" 2>/dev/null || stat 
 [ -f "$INS/fleet.conf.bak" ] && [ ! -e "$INS/fleet.conf" ] && ok || bad "B: install fleet.conf kept as .bak, gone from its path"
 [ -f "$CD/fleets/fleet/conf.bak" ] && ok || bad "B: fleet conf kept as .bak"
 fc=$(grep -v '^#' "$CD/fleets/fleet/conf")
-hasnt "B: fleet conf trimmed (FLEET_AUTOFILL moved)" "$fc" FLEET_AUTOFILL
+hasnt "B: fleet conf trimmed (FLEET_ISSUE_BRIDGE moved)" "$fc" FLEET_ISSUE_BRIDGE
 # …and its repo moved into repos/ like every repo (issue #1937; leg I pins it)
 hasnt "B: the fleet conf names no repo" "$fc" 'FLEET_REPO='
 ov=$(cat "$CD/fleets/fleet/repos/acme-app.conf" 2>/dev/null)
@@ -455,7 +459,7 @@ is "I: a repo recorded later lists after the others" "$(lib_i 'fleet_repos fleet
 # name (unbound under set -u) — LANG=C hides it
 hub_row() { run LC_ALL=C.UTF-8 bash "$INS/bin/fleet-doctor.sh" 2>/dev/null | grep -E '^[[:space:]]+(PASS|WARN|FAIL|INFO)[[:space:]]+hub([[:space:]]|$)'; }
 j_conf() {
-  printf '# claude-fleet — one file\n\n# ---- [common] ----\nFLEET_HOST=1\n%s\n# ---- [node] ----\nif [ "${FLEET_SHELL:-0}" != 1 ]; then\n:\nFLEET_AUTOFILL_NODE=local\nfi  # ---- [node] end ----\n' "${1:-}" > "$CD/fleet.conf"
+  printf '# claude-fleet — one file\n\n# ---- [common] ----\nFLEET_HOST=1\n%s\n# ---- [node] ----\nif [ "${FLEET_SHELL:-0}" != 1 ]; then\n:\nFLEET_SPAWN_NODE=local\nfi  # ---- [node] end ----\n' "${1:-}" > "$CD/fleet.conf"
 }
 mkbox j
 j_conf
@@ -502,6 +506,29 @@ out=$(run bash "$INS/bin/fleet-conf.sh" migrate --quiet 2>&1)
 is "J: a client without node.env is byte for byte" "$(cat "$CD/fleet.conf")" "$snap"
 is "J: …migrate says nothing" "$out" ""
 is "J: …and the doctor has no hub row" "$(hub_row)" ""
+
+# ---------------------------------------------------------------------------- K
+# The autofill keys are retired (issue #3120): migrate comments a line still setting
+# one out — fleet.conf, a fleet conf, a repo overlay — every other line kept, and a
+# second migrate writes nothing.
+mkbox k
+printf '# claude-fleet — one file\n\n# ---- [common] ----\nFLEET_HOST=1\nFLEET_AUTOFILL=1\n# ---- [node] ----\nif [ "${FLEET_SHELL:-0}" != 1 ]; then\nFLEET_AUTOFILL_NODE=local\nFLEET_SPAWN_NODE=local\nfi  # ---- [node] end ----\n' > "$CD/fleet.conf"
+mkdir -p "$CD/fleets/fleet/repos"
+printf 'FLEET_ISSUE_BRIDGE=1\n  export FLEET_AUTOFILL_MAX_PER_TICK=3\n' > "$CD/fleets/fleet/conf"
+printf 'FLEET_REPO="o/a"\nFLEET_AUTOFILL="1"\n' > "$CD/fleets/fleet/repos/o-a.conf"
+out=$(run bash "$INS/bin/fleet-conf.sh" migrate 2>&1); rc=$?
+is "K: migrate exits 0" "$rc" 0
+has "K: says what it commented out" "$out" "retired autofill keys commented out"
+active() { grep -hE '^[[:space:]]*(export[[:space:]]+)?FLEET_AUTOFILL' "$CD/fleet.conf" "$CD/fleets/fleet/conf" "$CD/fleets/fleet/repos/o-a.conf" | wc -l | tr -d ' '; }
+is "K: no active autofill line is left" "$(active)" 0
+is "K: each is kept as a comment" "$(cat "$CD/fleet.conf" "$CD/fleets/fleet/conf" "$CD/fleets/fleet/repos/o-a.conf" | grep -c '^# retired #3120: ')" 4
+has "K: the lines beside them stay" "$(cat "$CD/fleet.conf")" "FLEET_SPAWN_NODE=local"
+has "K: …in a fleet conf too" "$(cat "$CD/fleets/fleet/conf")" "FLEET_ISSUE_BRIDGE=1"
+has "K: …and an overlay" "$(cat "$CD/fleets/fleet/repos/o-a.conf")" 'FLEET_REPO="o/a"'
+snap=$(cat "$CD/fleet.conf" "$CD/fleets/fleet/conf" "$CD/fleets/fleet/repos/o-a.conf")
+out=$(run bash "$INS/bin/fleet-conf.sh" migrate 2>&1)
+is "K: a second migrate changes nothing" "$(cat "$CD/fleet.conf" "$CD/fleets/fleet/conf" "$CD/fleets/fleet/repos/o-a.conf")" "$snap"
+hasnt "K: …and says nothing about it" "$out" "retired autofill keys"
 
 printf 'fleet-conf-selftest: %d checks, %d failed\n' "$CHECKS" "$FAILS"
 [ "$FAILS" = 0 ]

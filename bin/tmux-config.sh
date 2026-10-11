@@ -179,7 +179,7 @@ cfg_is_essential() {
   case "$1" in
     FLEET_UI_LANG|FLEET_SIDEBAR|FLEET_SIDEBAR_WIDTH|FLEET_CLOSE_LANDS_NEXT|FLEET_HOME_SIDEBAR_FIRST|\
     FLEET_AGENT|FLEET_MODEL|FLEET_CODEX_MODEL|FLEET_WORKER_PROMPT|FLEET_SCRATCH_POOL|\
-    FLEET_MAX_SESSIONS|FLEET_GLOBAL_MAX_SESSIONS|FLEET_AUTOFILL|FLEET_QUOTA_GATE|FLEET_QUOTA_CEILING|\
+    FLEET_MAX_SESSIONS|FLEET_GLOBAL_MAX_SESSIONS|FLEET_QUOTA_GATE|FLEET_QUOTA_CEILING|\
     FLEET_ISSUE_BRIDGE|FLEET_CLEANUP|FLEET_SLEEP|FLEET_NOTIFY_CMD)
       return 0 ;;
     *) return 1 ;;
@@ -191,14 +191,14 @@ cfg_essential_group() {
     case "$1" in
       FLEET_UI_LANG|FLEET_SIDEBAR|FLEET_SIDEBAR_WIDTH|FLEET_CLOSE_LANDS_NEXT|FLEET_HOME_SIDEBAR_FIRST) printf '界面' ;;
       FLEET_AGENT|FLEET_MODEL|FLEET_CODEX_MODEL|FLEET_WORKER_PROMPT|FLEET_SCRATCH_POOL) printf '启动' ;;
-      FLEET_MAX_SESSIONS|FLEET_GLOBAL_MAX_SESSIONS|FLEET_AUTOFILL|FLEET_QUOTA_GATE|FLEET_QUOTA_CEILING) printf '容量' ;;
+      FLEET_MAX_SESSIONS|FLEET_GLOBAL_MAX_SESSIONS|FLEET_QUOTA_GATE|FLEET_QUOTA_CEILING) printf '容量' ;;
       *) printf '自动化' ;;
     esac
   else
     case "$1" in
       FLEET_UI_LANG|FLEET_SIDEBAR|FLEET_SIDEBAR_WIDTH|FLEET_CLOSE_LANDS_NEXT|FLEET_HOME_SIDEBAR_FIRST) printf 'Interface' ;;
       FLEET_AGENT|FLEET_MODEL|FLEET_CODEX_MODEL|FLEET_WORKER_PROMPT|FLEET_SCRATCH_POOL) printf 'Launch' ;;
-      FLEET_MAX_SESSIONS|FLEET_GLOBAL_MAX_SESSIONS|FLEET_AUTOFILL|FLEET_QUOTA_GATE|FLEET_QUOTA_CEILING) printf 'Capacity' ;;
+      FLEET_MAX_SESSIONS|FLEET_GLOBAL_MAX_SESSIONS|FLEET_QUOTA_GATE|FLEET_QUOTA_CEILING) printf 'Capacity' ;;
       *) printf 'Automation' ;;
     esac
   fi
@@ -223,7 +223,6 @@ cfg_essential_order() {
     FLEET_MERGE_METHOD) printf '029' ;;
     FLEET_MAX_SESSIONS) printf '030' ;;
     FLEET_GLOBAL_MAX_SESSIONS) printf '031' ;;
-    FLEET_AUTOFILL) printf '032' ;;
     FLEET_QUOTA_GATE) printf '033' ;;
     FLEET_QUOTA_CEILING) printf '034' ;;
     FLEET_ISSUE_BRIDGE) printf '040' ;;
@@ -288,16 +287,12 @@ EOF
 这个登录下所有 fleets 合计的最大会话数。默认 0 = 不按数封顶：开不开新会话由机器的实测余量（内存、负载）决定；只在想硬性封顶时设。
 EOF
         ;;
-      FLEET_AUTOFILL) cat <<'EOF'
-根据 backlog 中带标签的 issue 自动填充空闲 worker。适合批量推进任务；关闭后只手动启动。
-EOF
-        ;;
       FLEET_QUOTA_GATE) cat <<'EOF'
-接近配额上限时停止自动填充或新启动，避免把账号推到硬限制。通常和配额上限百分比一起使用。
+接近配额上限时停止从入口远程新开或恢复会话，避免把账号推到硬限制。通常和配额上限百分比一起使用。
 EOF
         ;;
       FLEET_QUOTA_CEILING) cat <<'EOF'
-配额保护阈值百分比。达到这个百分比后，quota gate 会阻止进一步自动启动。
+配额保护阈值百分比。达到这个百分比后，quota gate 会阻止入口再远程开会话。
 EOF
         ;;
       FLEET_ISSUE_BRIDGE) cat <<'EOF'

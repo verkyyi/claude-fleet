@@ -657,8 +657,9 @@ Do not install from memory: read the doc and work from it.
   any `macOS shard *` an older PR still carries). It gates RELEASING instead:
   `fleet-stable.sh move` refuses (`macos:`) a target whose newest macOS run is not
   green and dispatches the full suite on a target with none, and a red master run
-  is filed once as a breakage by `bin/fleet-macos-watch.sh` (dispatch tick →
-  `fleet-issue-file.sh --breakage`) with its fixer spawned. So **don't run the
+  is filed once as a breakage by `bin/fleet-macos-watch.sh` (diskguard tick →
+  `fleet-issue-file.sh --breakage`) and raised as one `breakage` alert — no fixer
+  is spawned (issue #3120). So **don't run the
   suite locally**: push, open the PR, read the gate. Locally run only the one
   test that reproduces a CI failure (`run-selftests.sh <name>`), never the full
   gate or `--changed`. A new selftest is selected when its own file changes or
@@ -715,9 +716,9 @@ Do not install from memory: read the doc and work from it.
     guards releasing, not merging — master reaches a machine only when `stable`
     moves. So the BSD half's verdict lands in two places: `fleet-stable.sh move`
     (gate 5, `macos:`; no run on the target ⇒ dispatch + wait; `--force` logs) and
-    `bin/fleet-macos-watch.sh` (a red master run ⇒ ONE breakage issue + its fixer,
-    on the dispatch daemon's tick, only for a repo carrying this workflow and
-    `bin/fleet-stable.sh`). BREAK-IT row `macos-red-to-stable`.
+    `bin/fleet-macos-watch.sh` (a red master run ⇒ ONE breakage issue + one
+    alert, never a spawned fixer — #3120; on the diskguard tick, only for a repo
+    carrying this workflow and `bin/fleet-stable.sh`). BREAK-IT row `macos-red-to-stable`.
     This is the half a lint structurally cannot do: **behaviour** differences.
     #703 (a bare `${a[@]}` on an empty array is fatal on bash 3.2, a no-op on
     bash 5) is not an enumerable idiom, only an observable outcome. The lint nets
