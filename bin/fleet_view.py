@@ -1054,6 +1054,7 @@ def key_lines(me):
     codes = sorted({t.split()[3] for t in table.splitlines() if len(t.split()) >= 5} | {"924", "926"})
     lines += ['set-option -s user-keys[%s] "\\e[%s~"' % (c, c) for c in codes if c.isdigit()]
     size = lambda pc: "#{?#{e|<:#{client_width},%d},100%%,%d%%}" % (NARROW, pc)
+    popup = str(Path(me).parent / "dash-popup.sh")
     for t in table.splitlines():
         f = t.split()
         if len(f) < 5 or f[0] not in VIEW_ACTIONS:
@@ -1061,19 +1062,18 @@ def key_lines(me):
         action, code, letter = f[0], f[3], letters.get(f[0], f[4])
         verb = VIEW_ACTIONS[action]
         if verb == "popup":
-            # display-popup expands no format in its command (nor in -e), so the
-            # popup opens from a run-shell, which does — the old client's road too.
+            # through the one popup door (dash-popup.sh, issue #3044), from a
+            # run-shell, which expands the formats — the old client's road too.
             # Narrower than NARROW columns (a phone, C9): the whole screen
-            cmd = ("run-shell -b \"tmux display-popup -c '#{client_name}' -E -w %s -h %s -T ' %s ' "
-                   "\\\"python3 '%s' --view '#{session_name}' --client '#{client_name}'\\\" "  # view-ok: the key's own session IS the 看台
-                   ">/dev/null 2>&1 || :\"") % (size(90), size(80), say("view_title"), me)
+            cmd = ("run-shell -b \"bash '%s' --client '#{client_name}' --no-inline -w %s -h %s --title view_title "
+                   "-- python3 '%s' --view '#{session_name}' --client '#{client_name}' "  # view-ok: the key's own session IS the 看台
+                   ">/dev/null 2>&1 || :\"") % (popup, size(90), size(80), me)
         elif verb == "dispatch":
             # ⌘T (C7): the old client's 派一件事 popup, run HERE with --view — the
             # repos the hub names, the agent picked per this one send (#1834)
-            cmd = ("run-shell -b \"tmux display-popup -c '#{client_name}' -E -w %s -h 12 -T ' %s ' "
-                   "\\\"python3 '%s' --view '#{session_name}' --client '#{client_name}'\\\" "  # view-ok: the 看台
-                   ">/dev/null 2>&1 || :\"") % (size(80), say("view_dispatch_title"),
-                                                str(Path(me).parent / "fleet-quick-dispatch.py"))
+            cmd = ("run-shell -b \"bash '%s' --client '#{client_name}' --no-inline -w %s -h 12 --title view_dispatch_title "
+                   "-- python3 '%s' --view '#{session_name}' --client '#{client_name}' "  # view-ok: the 看台
+                   ">/dev/null 2>&1 || :\"") % (popup, size(80), str(Path(me).parent / "fleet-quick-dispatch.py"))
         else:
             cmd = ("run-shell -b \"python3 '%s' %s --view '#{session_name}' --client '#{client_name}' "  # view-ok: the 看台
                    ">/dev/null 2>&1 || :\"") % (me, verb)
