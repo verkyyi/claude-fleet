@@ -457,6 +457,19 @@ zps() {
 }
 zout=$(ps() { zps "$@"; }; fleet_pane_claude_pids 900 910 2>/dev/null)
 ok; [ "$zout" = "910 911" ] || fail "a zombie claude must not count; a live one must" "$zout"
+# A cut CJK char in some process's argv (issue #3129): under a UTF-8 locale macOS
+# awk wrote «illegal byte sequence» + the raw 0xe6 to stderr, and fleet-sleep.py /
+# fleet-mcp.py, decoding that strictly, failed every send. The walk is silent now.
+cps() {
+  case "$*" in
+    *stat=,comm=*) printf '900 1 Ss zsh\n901 900 S+ claude\n' ;;
+    *command=*)    printf '900 -zsh\n901 claude\n950 python3 x \346\211\n' ;;
+  esac
+}
+cerr=$( { ps() { cps "$@"; }; LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 fleet_pane_claude_pids 900 >/dev/null; } 2>&1 )
+ok; [ -z "$cerr" ] || fail "a non-UTF-8 argv must not make the walk write to stderr" "$cerr"
+cout=$(ps() { cps "$@"; }; LC_ALL=en_US.UTF-8 fleet_pane_claude_pids 900 2>/dev/null)
+ok; [ "$cout" = "900 901" ] || fail "a non-UTF-8 argv elsewhere must not change the walk" "$cout"
 
 # --- the breadcrumb a tree-kill leaves behind (issue #706) -------------------
 # fleet-quotawatch runs this probe under fleet_timebox and kills the tree at the

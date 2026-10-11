@@ -138,7 +138,12 @@ class Refused(ToolFault):
 
 def run(argv, *, input_text=None, check=True, timeout=None, env=None):
     try:
-        result = subprocess.run(argv, input=input_text, text=True, capture_output=True, timeout=timeout, env=env)
+        # errors="replace" (issue #3129): a script's stderr can carry another
+        # program's raw bytes — macOS awk echoes an illegal byte sequence it met
+        # (a CJK char cut mid-sequence) — and a strict decode turned that into
+        # the tool's own failure, whatever the script did.
+        result = subprocess.run(argv, input=input_text, text=True, errors="replace",
+                                capture_output=True, timeout=timeout, env=env)
     except subprocess.TimeoutExpired:
         raise ToolFault("%s did not answer within %ss" % (Path(argv[0]).name, timeout))
     except OSError as exc:
