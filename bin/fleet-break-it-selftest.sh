@@ -105,6 +105,8 @@
 #   login-remove-no-fda                             bin/fleet-login-remove.sh (a failed deleteUser is checked, not
 #                                                   the end; leftover home moved aside) + agent accountWhy
 #   account-remove-tenant-held                      tokenledger/internal/agent runas.go (holdLogin; go test)
+#   linux-hub-other-root-op                         tokenledger/internal/agent node_machine_accounts.go (go test)
+#                                                   + bin/fleet-node-linux.py (exit 3 to another op)
 #   newcomer-login-hosts-repo                       bin/fleet-control-read.sh ready (a seed repo needs no gh)
 #   login-remove-dscl-denied                        bin/fleet-node-supervisor.py (fda reading, status --check 4), bin/fleet-login-remove-ssh.sh
 #                                                   + bin/fleet-login-remove.sh (says Full Disk Access)
@@ -6155,6 +6157,24 @@ drill_linux_image_pins_old() {
   fi
   SECS=$(since "$t0")
   WHAT="镜像 A、盘上已切到 B：重启两次仍是 B；更新器切换中不播种；空闲时更新的镜像 C 才播种（.prev=B）；supervisor 退出后从新 current 再起"
+}
+
+# The hub asks a Linux managed machine's root node program to do something
+# other than open / close one fresh login (EPIC #3208 C2, issue #3210). The node
+# half is tokenledger/internal/agent (the two fixed argvs, BAD_ARGS for the rest,
+# a Mac's program declares nothing); the opener half its own exit 3 to another op.
+drill_linux_hub_other_root_op() {
+  CAP=120; local t0 f="$ROOT/tokenledger/internal/agent/node_machine_accounts.go"
+  t0=$(now)
+  grep -q 'func validateLinuxAccountOp' "$f" && grep -q 'func linuxAccountArgv' "$f" \
+    || { WHY="the machine's account half has no whitelist (validateLinuxAccountOp / linuxAccountArgv)"; return 1; }
+  linux_tenant_leg test_hub_op_owns_its_login \
+    || { WHY="a login another op made was opened again: $(tail -n 3 "$WORK/test_hub_op_owns_its_login.out")"; return 1; }
+  _drill_go_tests "TestMachineOpensLoginsWithFixedArgv TestMachineRefusesOtherRootOps TestMachineAccountOpsOffAddsNothing" \
+    "$ROOT/tokenledger/internal/agent/node_machine_accounts_test.go" \
+    "别的 op、root / fleet / fleetcred、全数字、换行全名、坏加入码一律 BAD_ARGS、什么都不跑；只两条固定 argv；Mac 的整机程序不报 CapLoginJoin、回 NOT_ADMIN；别的 op 开过的登录答 3" \
+    ./internal/agent || return 1
+  SECS=$(since "$t0")
 }
 
 # A child's report whose parent is gone (issue #3117, EPIC #3111 C6): a scratch spawned

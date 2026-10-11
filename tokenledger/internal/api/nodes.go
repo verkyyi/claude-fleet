@@ -108,6 +108,12 @@ type nodeConn struct {
 	// canLoginJoin is an admin hello's CapLoginJoin (claude-fleet#3032): its
 	// create hands the login its join code. Set once, before publish.
 	canLoginJoin bool
+	// machineOpener: a machine link whose hello listed CapLoginJoin
+	// (claude-fleet#3210) — a Linux managed machine has no admin login, so its
+	// root node program opens and closes its own logins. It is that machine's
+	// account-op node and nothing more: not an admin for the SSH CA, the
+	// refresh relay or anything else. Set once, before publish.
+	machineOpener bool
 	// canSSHRelay is the hello's CapSSHRelay: this node splices relays onto its
 	// sshd (claude-fleet#1413). Set once, before the conn is published.
 	canSSHRelay bool
@@ -145,6 +151,11 @@ type nodeConn struct {
 	// host is the machine as the roster names it, refreshed by heartbeats.
 	host atomic.Value // string
 }
+
+// accountNode says the hub may send this link account ops (and take their
+// results): an admin login's agent, or a machine link that opens its own
+// logins (claude-fleet#3210).
+func (c *nodeConn) accountNode() bool { return c.admin || c.machineOpener }
 
 func (c *nodeConn) user() string {
 	u, _ := c.osUser.Load().(string)
@@ -264,7 +275,7 @@ func (n *nodeConns) pickAdmin(hostname string, join bool) (string, bool) {
 	sort.Strings(ids)
 	for _, id := range ids {
 		c := n.conns[id]
-		if c.admin && c.hostname() == hostname && control.Compatible(int(c.proto.Load())) && (!join || c.canLoginJoin) {
+		if c.accountNode() && c.hostname() == hostname && control.Compatible(int(c.proto.Load())) && (!join || c.canLoginJoin) {
 			return id, true
 		}
 	}
@@ -276,7 +287,7 @@ func (n *nodeConns) adminLink(endpointID, hostname string) bool {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	c := n.conns[endpointID]
-	return c != nil && c.admin && c.hostname() == hostname && control.Compatible(int(c.proto.Load()))
+	return c != nil && c.accountNode() && c.hostname() == hostname && control.Compatible(int(c.proto.Load()))
 }
 
 // staleAdmins names hostname's connected admin nodes that cannot open a login
@@ -463,6 +474,7 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 	// The refresh relay is an ADMIN role: a node that offers it without
 	// being on the hub's admin list is never handed a refresh token's form.
 	nc.canOAuthRefresh = nc.admin && hp.HasCap(control.CapOAuthRefresh)
+	nc.machineOpener = nc.machineLink && nc.canLoginJoin
 	nc.osUser.Store(ep.OSUser)
 	nc.proto.Store(int64(hello.Proto))
 	nc.host.Store(ep.Hostname)
@@ -492,6 +504,8 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 		// what it already has, so a matching machine changes nothing
 		// (claude-fleet#1412).
 		go s.sendSSHCA(ep.ID)
+	}
+	if nc.accountNode() {
 		// Anything sent down this link and not yet answered is now unknown:
 		// whether the login got made is a question only the node can answer,
 		// and it re-sends its answer when it is back.
@@ -619,7 +633,7 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 				// The stable this link has not heard yet (claude-fleet#3146).
 				go s.pushRelease(ep.ID, nc, stablePointer{})
 			}
-			if nc.admin {
+			if nc.accountNode() {
 				// Each admin beat is a chance to send what is queued for
 				// this machine: a person assigned while it was offline
 				// gets their login within a beat of it coming back.
@@ -651,7 +665,7 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 			if nc.pending.deliver(m) || s.svcLogs.refused(nc, m) {
 				break
 			}
-			if nc.admin && m.Error != nil {
+			if nc.accountNode() && m.Error != nil {
 				s.applyAccountRefusal(ep.ID, m)
 			}
 		case control.TypeRelay:
@@ -698,7 +712,9 @@ type NodeView struct {
 	Admin bool `json:"admin,omitempty"`
 	// LoginJoin is an admin node that hands a login it opens its join code
 	// (CapLoginJoin, claude-fleet#3032): the only kind a create goes to. An
-	// admin without it is too old to open one — update its ccquota.
+	// admin without it is too old to open one — update its ccquota. A Linux
+	// managed machine's own link lists it too (claude-fleet#3210): its root
+	// node program opens that machine's logins, with Admin false.
 	LoginJoin bool `json:"login_join,omitempty"`
 	// MachineLink is a machine's own node program (claude-fleet#2333): the
 	// one link that carries its logins — not a login itself. Via, on a login,
@@ -1024,7 +1040,7 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 		v.Desired = s.desiredView(n.EndpointID, hb.Desired)
 		if c := s.nodes.get(n.EndpointID); c != nil {
 			v.Connected, v.Admin = true, c.admin
-			v.LoginJoin = c.admin && c.canLoginJoin
+			v.LoginJoin = c.accountNode() && c.canLoginJoin
 			v.MachineLink, v.Via = c.machineLink, c.wire.machine()
 			if v.MachineLink {
 				v.Via = ""
@@ -1036,7 +1052,7 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 			// Held by another replica (claude-fleet#2124): connected all
 			// the same. The CA answer is that replica's to keep.
 			v.Connected, v.Admin = true, pc.Admin
-			v.LoginJoin = pc.Admin && pc.HasCap(control.CapLoginJoin)
+			v.LoginJoin = (pc.Admin || pc.HasCap(control.CapMachine)) && pc.HasCap(control.CapLoginJoin)
 		}
 		out.Nodes = append(out.Nodes, v)
 

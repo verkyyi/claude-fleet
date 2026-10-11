@@ -312,7 +312,7 @@ func (s *Server) leastBusyMachine(now time.Time, skip ...string) string {
 func adminNodesOnline(snap NodesSnapshot) map[string]bool {
 	admin := map[string]bool{}
 	for _, n := range snap.Nodes {
-		if n.Admin && n.LoginJoin && n.Connected && n.Status == "online" {
+		if n.LoginJoin && n.Connected && n.Status == "online" {
 			admin[strings.ToLower(n.Hostname)] = true
 		}
 	}
@@ -729,7 +729,7 @@ const existsDetail = "a login with this name already exists on this machine; ado
 // the node stops re-sending it. A result from a node that is not an admin is
 // refused; a duplicate or stale one is acked and changes nothing.
 func (s *Server) applyAccountResult(ctx context.Context, wire nodeWire, epID string, nc *nodeConn, m control.Message) {
-	if !nc.admin {
+	if !nc.accountNode() {
 		refuse(ctx, wire, m.OpID, control.CodeNotAdmin, "this node is not an admin node")
 		return
 	}

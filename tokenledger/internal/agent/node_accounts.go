@@ -162,7 +162,10 @@ type accountOps struct {
 	path string
 	// home is the admin login's home, where fleet-login-new.sh leaves
 	// ~/<login>-onboard/op (claude-fleet#2928); "" reads no mark.
-	home     string
+	home string
+	// owns says the login was made by this op's own run (Agent.ownsCreate);
+	// nil = a restart's cut-off creates are never resumed.
+	owns     func(login, opID string) bool
 	inflight map[string]accountInflight
 	// seen is every op_id ever accepted, so a duplicate send never runs the
 	// script twice (bounded: oldest forgotten past seenMax).
@@ -312,8 +315,8 @@ func (o *accountOps) load(path string) {
 			continue
 		}
 		exists := accountLoginExists(f.Login)
-		if f.Op == control.AccountCreate && exists && o.home != "" {
-			if mk, ok := readOpMark(o.home, f.Login); ok && mk.op == id {
+		if f.Op == control.AccountCreate && exists && o.ownsLocked() != nil {
+			if o.ownsLocked()(f.Login, id) {
 				// its own run made the login: finished, still running or
 				// stopped — the mark says which (claude-fleet#2928)
 				if o.resume == nil {
@@ -326,8 +329,8 @@ func (o *accountOps) load(path string) {
 					o.seen[id] = true
 					o.order = append(o.order, id)
 				}
-				log.Printf("account ops: %s %s (op %s) was cut off by a restart; its own run made the login — settling it from %s",
-					f.Op, f.Login, id, opMarkPath(o.home, f.Login))
+				log.Printf("account ops: %s %s (op %s) was cut off by a restart; its own run made the login — settling it now",
+					f.Op, f.Login, id)
 				continue
 			}
 		}
@@ -345,6 +348,18 @@ func (o *accountOps) load(path string) {
 		log.Printf("account ops: %s %s (op %s) was cut off by a restart; answering exit=%d", f.Op, f.Login, id, res.Exit)
 	}
 	o.saveLocked()
+}
+
+// ownsLocked is o.owns, else — with a home — fleet-login-new.sh's mark there.
+func (o *accountOps) ownsLocked() func(login, opID string) bool {
+	if o.owns != nil || o.home == "" {
+		return o.owns
+	}
+	home := o.home
+	return func(login, opID string) bool {
+		mk, ok := readOpMark(home, login)
+		return ok && mk.op == opID
+	}
 }
 
 // cutOffResult is the answer to an op the agent's restart cut off.
@@ -383,7 +398,7 @@ func (a *Agent) handleAccountOp(ctx context.Context, conn nodeLink, m control.Me
 		refuse(control.CodeBadArgs, "malformed account op")
 		return
 	}
-	if err := validateAccountOp(op, a.osLogin()); err != nil {
+	if err := a.validAccountOp(op); err != nil {
 		log.Printf("control channel: refused account op %s: %v", m.OpID, err)
 		refuse(control.CodeBadArgs, err.Error())
 		return
@@ -410,6 +425,16 @@ func (a *Agent) handleAccountOp(ctx context.Context, conn nodeLink, m control.Me
 }
 
 var joinCodeRE = regexp.MustCompile(`^fj_[a-z2-7]{26}$`)
+
+// validAccountOp is the whitelist this agent holds an op to: an admin
+// login's, or — on a Linux managed machine — its root node program's
+// (claude-fleet#3210).
+func (a *Agent) validAccountOp(op control.AccountOp) error {
+	if a.cfg.LinuxOpener != "" {
+		return validateLinuxAccountOp(op, a.cfg.ServiceLogin)
+	}
+	return validateAccountOp(op, a.osLogin())
+}
 
 func validateAccountOp(op control.AccountOp, self string) error {
 	if op.Op != control.AccountCreate && op.Op != control.AccountRemove {
@@ -457,12 +482,26 @@ func (a *Agent) runAccountOp(opID string, op control.AccountOp) control.AccountR
 		}
 	}
 	res := a.runAccountScript(ctx, opID, op)
-	if op.Op == control.AccountCreate && !res.OK && !res.Exists && accountLoginExists(op.Login) {
-		if mk, ok := readOpMark(a.cfg.Home, op.Login); ok && mk.op == opID {
-			res = a.rollbackOwnCreate(ctx, op.Login, res)
-		}
+	if op.Op == control.AccountCreate && !res.OK && !res.Exists && accountLoginExists(op.Login) &&
+		a.ownsCreate(op.Login, opID) {
+		res = a.rollbackOwnCreate(ctx, op.Login, res)
 	}
 	return res
+}
+
+// ownsCreate says login was made by op opID's own run: the mark
+// fleet-login-new.sh leaves (claude-fleet#2928), or on a Linux managed machine
+// the op fleet-node-linux.py wrote into the login's declaration
+// (claude-fleet#3210).
+func (a *Agent) ownsCreate(login, opID string) bool {
+	if opID == "" {
+		return false
+	}
+	if a.cfg.LinuxOpener != "" {
+		return linuxDeclaredOp(a.cfg.LinuxTenants, login) == opID
+	}
+	mk, ok := readOpMark(a.cfg.Home, login)
+	return ok && mk.op == opID
 }
 
 // runAccountScript runs op's script once and reads its exit.
@@ -472,6 +511,9 @@ func (a *Agent) runAccountScript(ctx context.Context, opID string, op control.Ac
 		defer holdLogin(op.Login)()
 	}
 	script, args := accountArgv(a.cfg.Home, op)
+	if a.cfg.LinuxOpener != "" {
+		script, args = linuxAccountArgv(a.cfg.LinuxOpener, op)
+	}
 	cmd := accountCommand(ctx, script, args...)
 	// The scripts cd to / themselves; starting there too means a sudo -u in
 	// them never inherits a cwd the new login cannot read.
@@ -479,7 +521,13 @@ func (a *Agent) runAccountScript(ctx context.Context, opID string, op control.Ac
 	cmd.Env = accountEnv(a.cfg.HubURL, opID, op)
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out
-	err := prepCmd(ctx, cmd)
+	var err error
+	if a.cfg.LinuxOpener == "" {
+		err = prepCmd(ctx, cmd)
+	}
+	// else: the Linux opener runs as root by design — it is the one command
+	// that makes and deletes OS users, and its argv is linuxAccountArgv's
+	// (claude-fleet#3210); nothing else on the machine half runs as root.
 	if err == nil {
 		err = cmd.Run()
 	}
@@ -562,6 +610,11 @@ var accountMarkPoll = 2 * time.Second
 // waited for (up to ctx); stopped half way ⇒ rolled back. false when the login
 // is not this op's (none there, no mark, another op's): the script decides.
 func (a *Agent) settleOwnCreate(ctx context.Context, opID, login string) (control.AccountResult, bool) {
+	if a.cfg.LinuxOpener != "" {
+		// fleet-node-linux.py login open is idempotent under its own op:
+		// running it again settles it (claude-fleet#3210).
+		return control.AccountResult{}, false
+	}
 	if a.cfg.Home == "" || !accountLoginExists(login) {
 		return control.AccountResult{}, false
 	}
@@ -599,7 +652,10 @@ func (a *Agent) settleOwnCreate(ctx context.Context, opID, login string) (contro
 // services behind. Its home is kept (archived by fleet-login-remove.sh). The
 // result stays a failure, saying what was done.
 func (a *Agent) rollbackOwnCreate(ctx context.Context, login string, res control.AccountResult) control.AccountResult {
-	rm := a.runAccountScript(ctx, "", control.AccountOp{Op: control.AccountRemove, Login: login})
+	// On a Linux managed machine the half-made login's home goes with it
+	// (claude-fleet#3210): nothing in it was ever the person's.
+	rm := a.runAccountScript(ctx, "", control.AccountOp{Op: control.AccountRemove, Login: login,
+		DropHome: a.cfg.LinuxOpener != ""})
 	verdict := "rolled back: login " + login + " removed (home kept)"
 	if !rm.OK && rm.Exit != control.RemoveExitNoLogin {
 		verdict = fmt.Sprintf("rollback FAILED (fleet-login-remove exit %d): login %s is still on this machine — remove it: %s",
@@ -618,13 +674,23 @@ func (a *Agent) resumeAccountOps() {
 	a.acct.resume = nil
 	a.acct.mu.Unlock()
 	for id, f := range todo {
-		a.acct.run.Lock()
-		ctx, cancel := context.WithTimeout(a.bgCtx(), accountOpTimeout)
-		res, ok := a.settleOwnCreate(ctx, id, f.Login)
-		cancel()
-		a.acct.run.Unlock()
-		if !ok {
-			res = cutOffResult(f, accountLoginExists(f.Login))
+		var res control.AccountResult
+		if a.cfg.LinuxOpener != "" {
+			// The opener is idempotent under its own op: run it again —
+			// without the join code, which the book never keeps; a login
+			// that enrolled before the cut goes on, one that did not fails
+			// and is rolled back (claude-fleet#3210).
+			res = a.runAccountOp(id, control.AccountOp{Op: control.AccountCreate, Login: f.Login})
+		} else {
+			a.acct.run.Lock()
+			ctx, cancel := context.WithTimeout(a.bgCtx(), accountOpTimeout)
+			var ok bool
+			res, ok = a.settleOwnCreate(ctx, id, f.Login)
+			cancel()
+			a.acct.run.Unlock()
+			if !ok {
+				res = cutOffResult(f, accountLoginExists(f.Login))
+			}
 		}
 		out, err := control.New(control.TypeAccountResult, res)
 		if err != nil {

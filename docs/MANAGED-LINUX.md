@@ -33,9 +33,11 @@ sudo /opt/claude-fleet/current/bin/fleet-node-linux.py login remove drill2 --kee
 - `list`: one line per login, `<login> <uid> <home> <state>` (`ok` · `missing`
   · `mismatch` · `no-home`).
 
-Exit 0 done · 3 bad argument (or a name already taken outside this road) ·
-4 no such login (remove) · 5 the name is already an administrator / has sudo;
-open's last line is `credsep: separated|pending — …|not separated`, remove's
+Exit 0 done · 2 bad argument · 3 the login exists already (made outside this
+road, or by another hub op) · 4 no such login (remove) · 5 the name is already
+an administrator / has sudo — `fleet-login-new.sh` / `fleet-login-remove.sh`'s
+codes, so the node program reads one answer from either system; open's last
+line is `credsep: separated|pending — …|not separated`, remove's
 `credsep: purged`.
 
 **Numbers never move and are never reused.** Each login is declared on the
@@ -49,6 +51,50 @@ with its number, home and shell, before the supervisor starts. A home owned by
 any other number stops the boot with an error; it is never chowned. A volume
 from the single-login version has its `linux-tenant.json` moved to
 `linux-tenants/<login>.json` (the old file kept as `.bak`).
+
+## Opening and closing a login from the hub
+
+On a Mac the hub's account ops go to the admin login's agent (it has sudo).
+A managed Linux machine has no such login, so **the machine's own node program
+opens and closes its logins** (issue #3210, EPIC #3208 C2): the same assign /
+remove on the hub, the same `fleet_accounts` row going `pending → creating →
+active` (or `remove_pending → removing → removed`), the same result and last
+`credsep:` line.
+
+```sh
+fleet hub accounts assign gh:2987262 --host fleet-linux-0 --login 24haowan
+fleet hub accounts                      # … fleet-linux-0:active:separated
+fleet hub accounts remove gh:2987262 --host fleet-linux-0
+```
+
+- `fleet node install` on Linux writes `FLEET_NODE_ACCOUNT_OPS=1` into
+  `machine.env` (`FLEET_NODE_ACCOUNT_OPS=0` on the command takes it out; the
+  daemon reloads the node program when it changes). Only then does
+  `ccquota agent --machine` list `CapLoginJoin` in its machine hello and take
+  an `account_op` on the machine's own half of the link. A Mac's node program
+  never does — its hello is byte for byte as before and an account op sent to
+  it is refused `NOT_ADMIN`.
+- The hub treats that link as the account-op node for **its own hostname
+  only**, and as nothing more: it is not an admin (no SSH CA, no refresh relay,
+  no spare logins).
+- The node program runs exactly two argvs, as root:
+  `python3 -I <current>/bin/fleet-node-linux.py login open <login> [--full-name N]`
+  and `… login remove <login> --keep-home|--delete-home`. The join code
+  (`FLEET_LOGIN_JOIN_CODE`) and the op (`FLEET_LOGIN_OP_ID`) travel in its
+  environment. Anything else — another op, `root`, the service login (`fleet`),
+  `fleetcred` or a reserved name, an all-digit or flag-shaped name, a full name
+  with a control character, a malformed join code — is refused `BAD_ARGS` with
+  one log line and nothing runs (BREAK-IT `linux-hub-other-root-op`). A digit
+  may lead only for a name the person already holds on another machine
+  (`24haowan`). `:` and `,` in a full name become spaces (passwd's separators).
+- The op is written into the login's declaration (`"op"`): the same op again
+  (a re-ask, a resume after the node program restarted) goes on where it
+  stopped; a login another op or a person made answers 3 (exists — adopt it
+  only if it is theirs). A create that fails after its own run declared the
+  login is rolled back with `login remove --delete-home`.
+- Its book is `/var/db/fleet-node/agent/_machine/account-ops.json`; the daemon
+  holds a node-program reload while an op in it runs, and an answer the hub has
+  not acked goes out again on the next connection.
 
 ## Native Linux
 

@@ -65,7 +65,7 @@ class Hub(BaseHTTPRequestHandler):
 
 def multi_login(d, state, runtime, hub, first, s, m, made):
     """EPIC #3208 C1 for real: open · restart · remove · open again."""
-    for name in ('24haowan', 'drill2', 'drill3'):
+    for name in ('24haowan', 'drill2', 'drill3', 'drill4'):
         try:
             pwd.getpwnam(name)
             raise SystemExit('fixture login %s already exists' % name)
@@ -89,7 +89,7 @@ def multi_login(d, state, runtime, hub, first, s, m, made):
 
     assert json.loads((state / 'linux-tenants' / (first + '.json')).read_text())['uid'] == 31022, 'legacy not migrated'
     assert (state / 'linux-tenant.json.bak').is_file() and not (state / 'linux-tenant.json').exists()
-    login('open', '1234', rc=3)
+    login('open', '1234', rc=2)      # fleet-login-new.sh's codes (#3210): 2 bad argument
     a, b = opened('24haowan'), opened('drill2')
     assert len({a.pw_uid, b.pw_uid, 31022}) == 3, 'two logins share a number'
     before = {n: (pwd.getpwnam(n).pw_uid, os.stat(pwd.getpwnam(n).pw_dir).st_uid) for n in (first, '24haowan', 'drill2')}
@@ -125,6 +125,39 @@ def multi_login(d, state, runtime, hub, first, s, m, made):
     login('remove', 'drill2', '--keep-home', rc=4)
     c = opened('drill3')
     assert c.pw_uid != b.pw_uid and c.pw_uid not in (31022, a.pw_uid), 'drill3 got a used number'
+    hub_ops(state, tool, hub, made)
+
+
+def hub_ops(state, tool, hub, made):
+    """EPIC #3208 C2: the argv and environment the machine's node program runs
+    for the hub's create / remove (node_machine_accounts.go linuxAccountArgv) —
+    the op owns its login, another op meets «exists», the rollback's remove takes
+    the home."""
+    def run(argv, op, rc=0, code=None):
+        env = dict(os.environ, FLEET_LOGIN_OP_ID=op)
+        env.pop('FLEET_LOGIN_JOIN_CODE', None)
+        if code:
+            env['FLEET_LOGIN_JOIN_CODE'] = code
+        r = subprocess.run(tool + ['login'] + argv, capture_output=True, text=True, env=env)
+        assert r.returncode == rc, 'hub op %s: rc %d (want %d)\n%s%s' % (argv, r.returncode, rc, r.stdout, r.stderr)
+        return r.stdout
+    out = run(['open', 'drill4', '--no-start', '--hub', hub, '--full-name', 'Drill Four'], 'a1', code='fj_' + 'c' * 26)
+    made.append('drill4')
+    assert out.strip().splitlines()[-1].startswith('credsep: '), out
+    assert json.loads((state / 'linux-tenants/drill4.json').read_text())['op'] == 'a1', 'the op is not in the declaration'
+    assert pwd.getpwnam('drill4').pw_gecos == 'Drill Four'
+    run(['open', 'drill4', '--no-start', '--hub', hub], 'a1')               # the same op again: goes on
+    run(['open', 'drill4', '--no-start', '--hub', hub], 'b2', rc=3)         # another op: exists
+    home = pwd.getpwnam('drill4').pw_dir
+    out = run(['remove', 'drill4', '--delete-home'], 'c3')
+    assert out.strip().splitlines()[-1] == 'credsep: purged', out
+    made.remove('drill4')
+    assert not Path(home).exists(), 'drill4 home left behind'
+    try:
+        pwd.getpwnam('drill4')
+        raise AssertionError('drill4 still in passwd')
+    except KeyError:
+        pass
 
 
 def main():

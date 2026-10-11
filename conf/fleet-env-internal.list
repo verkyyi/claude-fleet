@@ -699,6 +699,7 @@ FLEET_NODE_PYTHON                  seam: the python3 fleet-node-install.sh runs 
 FLEET_NODE_SSH_DIR                 seam: where fleet-node-install.sh writes the hub's ssh CA + sshd_config.d drop-in (default /etc/ssh, #2330)
 FLEET_NODE_SSHD                    seam: the sshd fleet-node-install.sh checks with (`-t` / `-T`; default /usr/sbin/sshd, '' = no check, #2330)
 FLEET_NODE_SERVICE                 handoff: installer selects systemd or foreground supervision on Linux (#3022)
+FLEET_NODE_ACCOUNT_OPS             knob: 1 = a Linux managed machine's node program opens / closes its own logins for the hub (CapLoginJoin); machine.env, written by fleet node install on Linux (#3210)
 FLEET_NODE_UPDATE_OWNER            handoff: image disables runtime self-updates in ACK; Kubernetes owns the pinned image (#3022)
 FLEET_NODE_RUN_SSHD                handoff: foreground supervisor owns the container SSH daemon (#3022)
 FLEET_NODE_SYSTEMCTL               seam: Linux systemd command for supervisor and SSH CA reload (#3022)
