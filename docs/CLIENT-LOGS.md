@@ -99,11 +99,19 @@ fields, only ever added at the end:
 |---|---|---|
 | `connect` | each connection, when it ends | `pick_ms` = `fleet-connect.py --argv` (certificate · machine · route); `ssh_ms` = ssh spawned → the first byte back (handshake + the far end starting); `first_ms` = spawned → the home's first valid `cur` (the view drawn); `rc` = ssh's exit; reason `up` · `never up` · `quit` |
 | `rehome` | three connections in a row never came up — a new home asked for (`--avoid`), or the machine named changed | reason: from / other than which |
+| `offline` | three connections failed and the hub did not answer either — this computer's own line is down, so no 换家: the home and the view are kept (#3007) | `home`; reason |
 | `upload` | a drop or a ⌃V picture sent through the home | `ssh_ms` = the one-shot's time; reason `<name> → <path there>` |
 | `exec` | a new client version between two connections | reason `<old> → <new>` |
 | `say` | a word for the person (a file not sent) — also an OSC 9 notification | the words |
 | `quit` / `end` | ⌘Q or a detach / a signal | `rc` |
 | `run` | `fleet-thin.py --run`: one command on the home over a one-shot ssh — `fleet ls / open / close / answer`, `fleet claude` with no client tmux (issue #3004) | `home` · `route`; reason = the command's first word |
+
+### old-client.log — `fleet --old` (#3007)
+
+`${XDG_CACHE_HOME:-~/.cache}/claude-fleet/old-client.log`: one line each time the
+old client is asked for by `fleet --old` since plain `fleet` became the thin loop
+(EPIC #2999 C10) — `time(UTC)  login  local|ssh  args`. C11 reads it before the
+old client goes.
 
 `connect.log` keeps the `home` / `pick` lines of each `--argv` run; the ssh
 itself is the thin client's child, so it has no `ssh-start` / `ssh-end` there —

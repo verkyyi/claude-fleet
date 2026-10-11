@@ -286,7 +286,7 @@ chmod +x "$TM/tmux"
 # --pick against the fake hub fails (it issues no certificate: POST → 501), so
 # the shell opens with no machine picked — exactly what a clean install with a
 # dead hub does; the server start is what is asserted.
-out=$(cd "$HOME" && PATH="$TM:$PATH" FLEET_SHELL_NO_ATTACH=1 "$HOME/.local/bin/fleet" 2>"$WORK/e.err"); rc=$?
+out=$(cd "$HOME" && PATH="$TM:$PATH" FLEET_CLIENT=shell FLEET_SHELL_NO_ATTACH=1 "$HOME/.local/bin/fleet" 2>"$WORK/e.err"); rc=$?
 [ "$rc" = 0 ] && [ "$out" = fleet-shell ] && ok "E fake tmux: fleet → fleet-shell.sh started the shell server (exit 0, session printed)" \
   || bad "E fake tmux: rc=$rc out='$out' err=$(tail -3 "$WORK/e.err")"
 grep -q 'new-session' "$WORK/tmux.log" && ok "E the shell asked tmux for its session" || bad "E tmux log: $(cat "$WORK/tmux.log")"
@@ -308,7 +308,7 @@ while [ "$q" -lt 20 ]; do
   m=$(wc -c < "$WORK/tmux.log"); [ "$m" = "$n" ] && break; n=$m; q=$((q + 1)); sleep 0.5
 done
 : > "$WORK/tmux.log"
-out=$(cd "$HOME" && PATH="$NOTMUX" FLEET_SHELL_NO_ATTACH=1 "$HOME/.local/bin/fleet" 2>&1 </dev/null); rc=$?
+out=$(cd "$HOME" && PATH="$NOTMUX" FLEET_CLIENT=shell FLEET_SHELL_NO_ATTACH=1 "$HOME/.local/bin/fleet" 2>&1 </dev/null); rc=$?
 echo "$out" | grep -q 'brew install tmux' && ok "E no tmux: the one install hint" || bad "E no tmux hint: $out"
 [ "$(printf '%s\n' "$out" | grep -c 'install tmux')" = 1 ] && ok "E the hint is ONE line" || bad "E hint lines: $out"
 [ -s "$WORK/tmux.log" ] && bad "E no tmux: a server was asked for anyway: $(cat "$WORK/tmux.log")" || ok "E no tmux: no server started"
@@ -794,7 +794,7 @@ KV="$KH/.local/share/claude-fleet-vendor/bin/tmux"
 ft=$(env -i HOME="$KH" PATH="$KP" bash -c '. "$1/fleet-lib.sh" >/dev/null 2>&1; fleet_find_tool tmux' _ "$KH/.claude/fleet/bin" 2>&1)
 [ "$ft" = "$KV" ] && ok "K fleet_find_tool tmux → the static one" || bad "K fleet_find_tool tmux: $ft"
 : > "$K/tmux.log"
-kout=$(cd "$KH" && env -i HOME="$KH" PATH="$KP" SHELL=/bin/zsh TMPDIR="$WORK" FLEET_SHELL_NO_ATTACH=1 "$KH/.local/bin/fleet" 2>"$K/fleet.err" </dev/null); krc=$?
+kout=$(cd "$KH" && env -i HOME="$KH" PATH="$KP" SHELL=/bin/zsh TMPDIR="$WORK" FLEET_CLIENT=shell FLEET_SHELL_NO_ATTACH=1 "$KH/.local/bin/fleet" 2>"$K/fleet.err" </dev/null); krc=$?
 [ "$krc" = 0 ] && [ "$kout" = fleet-shell ] && grep -q 'new-session' "$K/tmux.log" && ! grep -q 'install tmux' "$K/fleet.err" \
   && ok "K \`fleet\` finds the static tmux (nothing else on PATH) and starts the shell" || bad "K fleet: rc=$krc out=$kout err=$(tail -3 "$K/fleet.err") log=$(head -3 "$K/tmux.log")"
 [ "$(hval "$KH" FLEET_CLIENT_LAYOUT)" = solo ] && ok "K a computer the fleet was never on → FLEET_CLIENT_LAYOUT=solo" || bad "K layout: $(cat "$KH/.config/claude-fleet/fleet.conf" 2>&1)"
