@@ -18,6 +18,9 @@
 #                         an account script's TCC dialog nobody answers wedges sandboxd —
 #                         every user delete fails; the scripts never prompt now, and a
 #                         stuck TCC is the doctor's FAIL with the way out
+#   tcc-disclaim-sigpipe  bin/fleet-tcc-disclaim.py + bin/fleet-login-new.sh gen_password (#3419):
+#                         the wrapper handed Python's ignored SIGPIPE to the script — a
+#                         `… | head` never ended and the account create hung
 #   service-killed        bin/fleet-node-supervisor.py's login-level register (#2525):
 #                         a registered service is kill -9'd / dies at start
 #   service-login-moved   bin/fleet-node-supervisor.py `service move` + `account release`,
@@ -256,6 +259,30 @@ drill_tcc_prompt_wedge() {
   grep -q 'fda.stuck' "$BIN/fleet-doctor.sh" || { WHY="the doctor's node row has no case for exit 6"; return 1; }
   SECS=$(since "$t0")
   WHAT="账号脚本经 fleet-tcc-disclaim.py 起（自己是责任进程，/bin/bash 不弹框，退出码原样带回）；TCC 探针连续超时 → status --check 6、体检 node FAIL 写明点掉框 / kill tccd / killall sandboxd"
+}
+
+# tcc-disclaim-sigpipe (#3419): Python starts with SIGPIPE ignored and a bare
+# posix_spawn hands that on, so under the wrapper `tr </dev/urandom | head -c 22`
+# never died — an account create spun 9 minutes in gen_password. (`yes` alone
+# does not show it: it exits on its own write error; BSD tr keeps reading.)
+drill_tcc_disclaim_sigpipe() {
+  CAP=10
+  local t0 out rc pw
+  t0=$(now)
+  out=$(python3 -I "$BIN/fleet-tcc-disclaim.py" -- /bin/sh -c 'yes | head -c 1 >/dev/null; LC_ALL=C tr -dc A-Za-z0-9 </dev/urandom | head -c 1 >/dev/null; echo done' 2>&1 & p=$!
+        ( sleep 5; kill -9 "$p" ) >/dev/null 2>&1 & w=$!
+        wait "$p"; rc=$?; kill "$w" 2>/dev/null; exit "$rc"); rc=$?
+  SECS=$(since "$t0")
+  [ "$rc" = 0 ] && [ "$out" = done ] \
+    || { WHY="\`tr </dev/urandom | head -c 1\` under fleet-tcc-disclaim.py did not end (rc $rc, ${SECS}s): $out"; return 1; }
+  awk -v s="$SECS" 'BEGIN { exit !(s <= 1.5) }' || { WHY="\`tr </dev/urandom | head -c 1\` under the wrapper took ${SECS}s, want ≤ 1 (+ the clock's own startup)"; return 1; }
+  pw=$(sed -n 's/^gen_password() { \(.*\) }$/\1/p' "$BIN/fleet-login-new.sh")
+  [ -n "$pw" ] || { WHY="gen_password not found in fleet-login-new.sh"; return 1; }
+  # with SIGPIPE ignored outright, the bounded form still ends and still gives 22 + a7
+  out=$(python3 -I -c 'import signal,subprocess,sys; signal.signal(signal.SIGPIPE, signal.SIG_IGN); sys.exit(subprocess.call(["/bin/bash","-c",sys.argv[1]], restore_signals=False, timeout=5))' "$pw" 2>&1); rc=$?
+  [ "$rc" = 0 ] && [ "${#out}" = 24 ] || { WHY="gen_password with SIGPIPE ignored: rc $rc, out '$out'"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="经 fleet-tcc-disclaim.py 起的脚本 SIGPIPE 是默认处置：\`tr </dev/urandom | head -c 1\` ≤ 1 秒结束；gen_password 即使在忽略 SIGPIPE 时也有界、照样出 24 位"
 }
 
 drill_task_fail_silent() {
