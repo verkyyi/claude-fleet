@@ -371,7 +371,7 @@ def devnet_settings(env):
     for item in env.get('FLEET_GIT_MIRRORS', '').split():
         mirror, _, upstream = item.partition('=')
         if not MIRROR_RE.fullmatch(mirror) or not UPSTREAM_RE.fullmatch(upstream):
-            raise ValueError('FLEET_GIT_MIRRORS takes MIRROR=https://github.com/OWNER/REPO.git, not %r' % item)
+            raise ValueError('FLEET_GIT_MIRRORS takes MIRROR=https://github.com/OWNER/REPO.git, not %r' % item)  # dist-ok: a login's repo URL in an error text, not the fleet's code
         git += ['[url "%s"]' % mirror, '\tinsteadOf = ' + upstream,
                 '[url "%s"]' % upstream, '\tpushInsteadOf = ' + upstream]
     pairs = [('FLEET_GITHUB_PROXY', proxy)] if proxy else []
