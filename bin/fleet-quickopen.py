@@ -830,7 +830,9 @@ def rich_color(colors=None, env=None):
 def sel_attr(pair, colors=None, env=None):
     """The selected row's ground: the colour pair where `rich_color`, else reverse
     video — swaps the terminal's own fg / bg, so it shows under any scheme. Always
-    bold, beside the `›` every list draws (a mark that needs no colour)."""
+    bold, beside the `›` every list draws (a mark that needs no colour). Text on
+    the selected row is never A_DIM: a dimmed fg on the swapped ground is the
+    «can't read the row» the issue was about."""
     if rich_color(colors, env):
         return curses.color_pair(pair) | curses.A_BOLD
     return curses.A_REVERSE | curses.A_BOLD
@@ -918,8 +920,8 @@ def draw_cmds(screen, query, title, items, at, width, height, say):
         name = ("› " if sel else "  ") + it[1].lstrip("-")
         try:
             screen.addstr(y, 0, " " * (width - 1), base)
-            screen.addstr(y, 0, clip(name, col - 1), base | (curses.A_DIM if grey else curses.A_BOLD if sel else 0))
-            screen.addstr(y, col, clip(it[2], max(0, width - 1 - col)), base | curses.A_DIM)
+            screen.addstr(y, 0, clip(name, col - 1), base | (curses.A_BOLD if sel else curses.A_DIM if grey else 0))
+            screen.addstr(y, col, clip(it[2], max(0, width - 1 - col)), base | (0 if sel else curses.A_DIM))
         except curses.error:
             pass
 
@@ -1037,7 +1039,7 @@ def popup(screen, pane, session="", target="", switch=False):
                     if node:
                         # a lost machine's row says so in yellow, never dim (#3164)
                         screen.addstr(y, width - 1 - cells(node), node,
-                                      base | (curses.color_pair(1) if row.get("lost") else curses.A_DIM))
+                                      base | (curses.color_pair(1) if row.get("lost") else 0 if sel else curses.A_DIM))
                 except curses.error:
                     pass
         # the panel's keys on its last line, always (issue #2365) — or the one
@@ -1241,7 +1243,7 @@ def full(screen, pane, session=""):
                     info = "     " + " · ".join(x for x in (
                         "@" + node_say(row) if row["node"] else "", row["group"],
                         STATE_SAY.get(row["state"], row["state"])) if x)
-                    screen.addstr(y, 0, clip(info, width - 1), base | curses.A_DIM)
+                    screen.addstr(y, 0, clip(info, width - 1), base | (0 if on else curses.A_DIM))
             except curses.error:
                 pass
         try:

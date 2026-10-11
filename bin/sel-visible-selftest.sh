@@ -11,6 +11,8 @@
 #   B  draw_cmds (⌘P's `>` list) for real, under curses on a pty, per terminal:
 #      the selected line carries `›`; low depth draws it in reverse (SGR 7), a
 #      truecolour 256 terminal keeps the coloured ground and no reverse;
+#      Nothing on the selected line is dimmed (the whole row must read, not
+#      only its mark);
 #   C  every popup that draws a selection goes through the helper — no bare
 #      `color_pair(…) if sel` ground left in quickopen / quick-dispatch / compose / ask.
 set -uo pipefail
@@ -93,6 +95,9 @@ for term, ct, low in (("xterm", "", True), ("xterm", "truecolor", True), ("xterm
     check("› beta" in text and "› alpha" not in text, tag + ": `›` marks the selected line only")
     at = raw.find("beta".encode())
     rev = re.search(rb"\x1b\[(?:[0-9;]*;)?7(?:;[0-9;]*)?m", raw[:at]) is not None
+    line = raw[raw.rfind(b"\n", 0, at) + 1:raw.find(b"\n", at) if raw.find(b"\n", at) > 0 else len(raw)]
+    check(re.search(rb"\x1b\[(?:[0-9;]*;)?2(?:;[0-9;]*)?m", line) is None,
+          tag + ": nothing on the selected line is dimmed (its words stay readable)")
     if low:
         check(rev, tag + ": selected line drawn in reverse video")
     else:
@@ -105,6 +110,9 @@ for name in ("fleet-quickopen.py", "fleet-quick-dispatch.py", "fleet-compose.py"
     hits = [ln for ln in (BIN / name).read_text().splitlines() if bare.search(ln)]
     check(not hits, "C %s: selection ground via sel_attr %s" % (name, hits[:1] or ""))
 check("sel_attr(3)" in (BIN / "fleet-ask.py").read_text(), "C fleet-ask.py: the chosen answer via sel_attr")
+side = (BIN / "fleet-sidebar.py").read_text()
+check("rich_color(curses.COLORS)" in side and "color_pair(PAIR_SEL if raised" not in side,
+      "C fleet-sidebar.py: the raised row's PAL_SEL ground only where rich_color")
 
 print("selftest %s (%d failed)" % ("FAIL" if fails else "PASS", len(fails)))
 sys.exit(1 if fails else 0)
