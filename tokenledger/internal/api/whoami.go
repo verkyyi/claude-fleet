@@ -78,6 +78,9 @@ type Me struct {
 	// Pages is what the menu shows this role (claude-fleet#1985): a user's
 	// overview, sessions, devices, config; an admin's every page.
 	Pages []string `json:"pages"`
+	// Entry says the direct door's keys page (/fleet/keys, claude-fleet#3069)
+	// is there: fleet.entry is on. The overview links it only then.
+	Entry bool `json:"entry,omitempty"`
 	// CanLogout says a cookie THIS hub minted is behind the request, so
 	// POST /logout has something to clear. A bearer header has none.
 	CanLogout bool `json:"can_logout"`
@@ -94,6 +97,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	}
 	out := Me{Via: doorOf(r.Context()), Role: roleOf(r.Context())}
 	out.Pages = pagesFor(out.Role)
+	out.Entry = s.entryOn()
 	if pid := principalOf(r.Context()); pid != "" {
 		login, err := s.machineLoginOf(pid)
 		if err != nil {

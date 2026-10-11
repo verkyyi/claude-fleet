@@ -1040,6 +1040,9 @@ func (s *Server) rememberLoginCode(next http.Handler) http.Handler {
 func loginReturn(w http.ResponseWriter, r *http.Request) string {
 	c, err := r.Cookie(loginCookie)
 	if err != nil {
+		if to := entryReturnTo(w, r); to != "" {
+			return to
+		}
 		return "/"
 	}
 	http.SetCookie(w, &http.Cookie{Name: loginCookie, Value: "", Path: "/", MaxAge: -1})

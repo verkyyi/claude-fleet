@@ -460,6 +460,9 @@ func (s *Server) routes() *routeMux {
 		mux.HandleFunc(control.EntryKeysPath+"/", s.handleEntryKeys)
 		mux.HandleFunc(control.EntryNamePath, s.handleEntryName)
 		mux.HandleFunc(control.EntryHomePath, s.handleEntryHome)
+		// The keys page (claude-fleet#3069): a browser not signed in comes
+		// back here after GitHub's.
+		mux.Handle(EntryPagePath, s.rememberEntryReturn(s.viewerOnly(http.HandlerFunc(s.handleEntryPage))))
 		// The Fleet Hub's read tools (claude-fleet#1409), the same ones
 		// /mcp lists when the module is on.
 		mux.Handle("/v1/fleet/", s.viewerOnly(http.HandlerFunc(s.handleFleet)))

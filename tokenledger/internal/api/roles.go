@@ -78,7 +78,8 @@ var routeAccess = map[string]string{
 	// … and a person's own keys, name and home; the handler scopes them.
 	control.EntryKeysPath: accessUser, control.EntryKeysPath + "/": accessUser,
 	control.EntryNamePath: accessUser, control.EntryHomePath: accessUser,
-	NodePoolPath: accessSelf, // claude-fleet#2850: the pool manifest, any enrollment token
+	EntryPagePath: accessUser, // the keys page (claude-fleet#3069)
+	NodePoolPath:  accessSelf, // claude-fleet#2850: the pool manifest, any enrollment token
 	// The Singapore relay (claude-fleet#1974): a node token mints a pass;
 	// the check authenticates the pass the forwarder carries.
 	"/v1/node/relay-credential": accessSelf, RelayCheckPath: accessSelf,

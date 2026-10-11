@@ -54,6 +54,17 @@ import (
 // EntryKey is the hub setting that switches the direct door's book on.
 const EntryKey = "fleet.entry"
 
+// EntryDomainKey is the hub setting naming the zone every address lives
+// under (cf.24haowan.com: an address is <name>.cf.24haowan.com). Unset, the
+// keys page says the address is not set up yet (claude-fleet#3069).
+const EntryDomainKey = "fleet.entry_domain"
+
+// entryDomainRE is a DNS zone: dot-separated labels of a-z 0-9 -.
+var entryDomainRE = regexp.MustCompile(`^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$`)
+
+// entryPort is the door's port on every home machine (EPIC #3067 decision 3).
+const entryPort = 22022
+
 // entryNameRE is an address name: 3–20 of a-z 0-9 -, no dash at either end.
 var entryNameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,18}[a-z0-9]$`)
 
@@ -189,11 +200,23 @@ func (s *Server) entryCallerOf(w http.ResponseWriter, r *http.Request) (entryCal
 		httpError(w, http.StatusNotFound, "the direct door is off on this hub ("+EntryKey+")")
 		return entryCaller{}, false
 	}
+	c, code, msg := s.entryCallerFor(r)
+	if code != 0 {
+		if code == http.StatusUnauthorized {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="ccquota"`)
+		}
+		httpError(w, code, msg)
+		return entryCaller{}, false
+	}
+	return c, true
+}
+
+// entryCallerFor is entryCallerOf's answer without the writing: the caller,
+// or an HTTP status and why (the keys page draws its own refusal).
+func (s *Server) entryCallerFor(r *http.Request) (entryCaller, int, string) {
 	id, ok := s.sshRelayHTTPIdentity(r)
 	if !ok {
-		w.Header().Set("WWW-Authenticate", `Bearer realm="ccquota"`)
-		httpError(w, http.StatusUnauthorized, "sign in first")
-		return entryCaller{}, false
+		return entryCaller{}, http.StatusUnauthorized, "sign in first"
 	}
 	want := strings.TrimSpace(r.URL.Query().Get("principal"))
 	c := entryCaller{actor: id.Actor, person: id.Principal}
@@ -201,28 +224,24 @@ func (s *Server) entryCallerOf(w http.ResponseWriter, r *http.Request) (entryCal
 		c.person = id.Actor // an admin's own book is theirs as anyone's is
 	} else if id.Operator {
 		if want == "" {
-			httpError(w, http.StatusBadRequest, "the operator names the person: ?principal=<id>")
-			return entryCaller{}, false
+			return entryCaller{}, http.StatusBadRequest, "the operator names the person: ?principal=<id>"
 		}
 		c.operator, c.person = true, want
 	} else if want != "" {
 		// Someone else's book does not exist for this caller.
 		if q, err := s.Store.Principal(want); err != nil || !strings.EqualFold(q.ID, id.Principal) {
-			httpError(w, http.StatusNotFound, "no such person")
-			return entryCaller{}, false
+			return entryCaller{}, http.StatusNotFound, "no such person"
 		}
 	}
 	p, err := s.Store.Principal(c.person)
 	switch {
 	case errors.Is(err, store.ErrNoPrincipal):
-		httpError(w, http.StatusNotFound, "no such person")
-		return entryCaller{}, false
+		return entryCaller{}, http.StatusNotFound, "no such person"
 	case err != nil:
-		httpError(w, http.StatusInternalServerError, err.Error())
-		return entryCaller{}, false
+		return entryCaller{}, http.StatusInternalServerError, err.Error()
 	}
 	c.person = p.ID
-	return c, true
+	return c, 0, ""
 }
 
 func (s *Server) entryAudit(a store.EntryAudit) {
@@ -331,31 +350,38 @@ func (s *Server) entryEnsureHome(person string, choices []EntryHomeChoice, now t
 	return &h, nil
 }
 
-func (s *Server) writeEntryView(w http.ResponseWriter, c entryCaller, now time.Time) {
+// entryViewOf is a person's book as GET EntryKeysPath answers it, and as
+// the keys page draws it (claude-fleet#3069).
+func (s *Server) entryViewOf(c entryCaller, now time.Time) (EntryView, error) {
 	choices, err := s.entryHomeChoices(c.person, now)
 	if err != nil {
-		httpError(w, http.StatusInternalServerError, err.Error())
-		return
+		return EntryView{}, err
 	}
 	home, err := s.entryEnsureHome(c.person, choices, now)
 	if err != nil {
-		httpError(w, http.StatusInternalServerError, err.Error())
-		return
+		return EntryView{}, err
 	}
 	out := EntryView{Person: c.person, Home: home, HomeChoices: choices}
 	if out.Keys, err = s.Store.EntryKeys(c.person, c.operator); err != nil {
-		httpError(w, http.StatusInternalServerError, err.Error())
-		return
+		return EntryView{}, err
 	}
 	if n, ok, err := s.Store.EntryName(c.person); err != nil {
-		httpError(w, http.StatusInternalServerError, err.Error())
-		return
+		return EntryView{}, err
 	} else if ok {
 		out.Name = n.Name
 	} else {
 		out.SuggestedName = s.entrySuggestedName(c.person)
 	}
 	out.Version, _ = s.Store.EntryVersion()
+	return out, nil
+}
+
+func (s *Server) writeEntryView(w http.ResponseWriter, c entryCaller, now time.Time) {
+	out, err := s.entryViewOf(c, now)
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -434,17 +460,10 @@ func (s *Server) handleEntryKeys(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, k)
 	case id != "" && r.Method == http.MethodDelete:
-		k, v, err := s.Store.RevokeEntryKey(c.person, id, now)
-		if errors.Is(err, store.ErrEntryKeyNotFound) {
-			httpError(w, http.StatusNotFound, "no such key")
+		k, code, err := s.entryRevoke(c, id, now)
+		if err != nil {
+			httpError(w, code, err.Error())
 			return
-		} else if err != nil {
-			httpError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		if v > 0 {
-			s.entryAudit(store.EntryAudit{At: now, Kind: "key_revoke", Person: c.person, FP: k.FP, Result: "ok", Actor: c.actor})
-			s.entryPushPerson(c.person, v)
 		}
 		writeJSON(w, http.StatusOK, k)
 	default:
@@ -459,37 +478,63 @@ func (s *Server) addEntryKey(w http.ResponseWriter, r *http.Request, c entryCall
 		httpError(w, http.StatusBadRequest, "body must be JSON {public_key, name?}")
 		return
 	}
-	typ, b64, fp, comment, err := parseEntryKey(req.PublicKey)
+	k, added, code, err := s.entryAdd(c, req.PublicKey, req.Name, now)
 	req.PublicKey = "" // nothing below this line holds what was pasted
+	if err != nil {
+		httpError(w, code, err.Error())
+		return
+	}
+	if added {
+		writeJSON(w, http.StatusCreated, k)
+		return
+	}
+	writeJSON(w, http.StatusOK, k)
+}
+
+// entryAdd adds one pasted key to c's book: the key, whether it is new, and
+// on a refusal the HTTP status and the sentence a person reads. What was
+// pasted is held by nothing after this returns.
+func (s *Server) entryAdd(c entryCaller, pasted, label string, now time.Time) (store.EntryKey, bool, int, error) {
+	typ, b64, fp, comment, err := parseEntryKey(pasted)
 	if err != nil {
 		result := "refused"
 		if errors.Is(err, errEntryPrivate) {
 			result = "refused: private key"
 		}
 		s.entryAudit(store.EntryAudit{At: now, Kind: "key_add", Person: c.person, Result: result, Actor: c.actor})
-		httpError(w, http.StatusUnprocessableEntity, err.Error())
-		return
+		return store.EntryKey{}, false, http.StatusUnprocessableEntity, err
 	}
-	name := entryLabel(req.Name)
+	name := entryLabel(label)
 	if name == "" {
 		name = entryLabel(comment)
 	}
 	k, added, v, err := s.Store.AddEntryKey(store.EntryKey{ID: entryID("k_"), Person: c.person, FP: fp, Type: typ, B64: b64, Name: name, Created: now.UTC()})
 	if errors.Is(err, store.ErrEntryKeyTaken) {
 		s.entryAudit(store.EntryAudit{At: now, Kind: "key_add", Person: c.person, FP: fp, Result: "refused: another person's key", Actor: c.actor})
-		httpError(w, http.StatusConflict, "这把钥匙已经登记在别人名下：每个人用自己的钥匙")
-		return
+		return store.EntryKey{}, false, http.StatusConflict, errors.New("这把钥匙已经登记在别人名下：每个人用自己的钥匙")
 	} else if err != nil {
-		httpError(w, http.StatusInternalServerError, err.Error())
-		return
+		return store.EntryKey{}, false, http.StatusInternalServerError, err
 	}
 	if added {
 		s.entryAudit(store.EntryAudit{At: now, Kind: "key_add", Person: c.person, FP: fp, Result: "ok", Actor: c.actor})
 		s.entryPushPerson(c.person, v)
-		writeJSON(w, http.StatusCreated, k)
-		return
 	}
-	writeJSON(w, http.StatusOK, k)
+	return k, added, http.StatusOK, nil
+}
+
+// entryRevoke revokes one of c's keys and tells their home machine.
+func (s *Server) entryRevoke(c entryCaller, id string, now time.Time) (store.EntryKey, int, error) {
+	k, v, err := s.Store.RevokeEntryKey(c.person, id, now)
+	if errors.Is(err, store.ErrEntryKeyNotFound) {
+		return k, http.StatusNotFound, errors.New("no such key")
+	} else if err != nil {
+		return k, http.StatusInternalServerError, err
+	}
+	if v > 0 {
+		s.entryAudit(store.EntryAudit{At: now, Kind: "key_revoke", Person: c.person, FP: k.FP, Result: "ok", Actor: c.actor})
+		s.entryPushPerson(c.person, v)
+	}
+	return k, http.StatusOK, nil
 }
 
 // EntryNameRequest is PUT EntryNamePath.
@@ -517,25 +562,31 @@ func (s *Server) handleEntryName(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusBadRequest, "body must be JSON {name}")
 		return
 	}
-	name := strings.ToLower(strings.TrimSpace(req.Name))
-	if why := entryNameCheck(name); why != "" {
-		httpError(w, http.StatusUnprocessableEntity, why)
+	name, v, code, err := s.entrySetName(c, req.Name, time.Now())
+	if err != nil {
+		httpError(w, code, err.Error())
 		return
 	}
-	now := time.Now()
+	writeJSON(w, http.StatusOK, map[string]any{"name": name, "version": v})
+}
+
+// entrySetName gives c the address name: the name as stored, the version.
+func (s *Server) entrySetName(c entryCaller, raw string, now time.Time) (string, int, int, error) {
+	name := strings.ToLower(strings.TrimSpace(raw))
+	if why := entryNameCheck(name); why != "" {
+		return name, 0, http.StatusUnprocessableEntity, errors.New(why)
+	}
 	v, err := s.Store.SetEntryName(c.person, name, now)
 	if errors.Is(err, store.ErrEntryNameTaken) {
-		httpError(w, http.StatusConflict, "「"+name+"」已经有人用了，换一个")
-		return
+		return name, 0, http.StatusConflict, errors.New("「" + name + "」已经有人用了，换一个")
 	} else if err != nil {
-		httpError(w, http.StatusInternalServerError, err.Error())
-		return
+		return name, 0, http.StatusInternalServerError, err
 	}
 	if v > 0 {
 		s.entryAudit(store.EntryAudit{At: now, Kind: "name_set", Person: c.person, Result: name, Actor: c.actor})
 		s.entryPushPerson(c.person, v)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"name": name, "version": v})
+	return name, v, http.StatusOK, nil
 }
 
 // EntryHomeRequest is PUT EntryHomePath.
@@ -567,12 +618,22 @@ func (s *Server) handleEntryHome(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusBadRequest, "body must be JSON {machine, login?}")
 		return
 	}
-	choices, err := s.entryHomeChoices(c.person, now)
+	h, v, code, err := s.entrySetHome(c, req.Machine, req.Login, now)
 	if err != nil {
-		httpError(w, http.StatusInternalServerError, err.Error())
+		httpError(w, code, err.Error())
 		return
 	}
-	want := strings.TrimSpace(req.Machine)
+	writeJSON(w, http.StatusOK, map[string]any{"home": h, "version": v})
+}
+
+// entrySetHome moves c's home to one of their choices (machine by hostname
+// or alias; login when they have several there): the home, the version.
+func (s *Server) entrySetHome(c entryCaller, machine, login string, now time.Time) (store.EntryHome, int, int, error) {
+	choices, err := s.entryHomeChoices(c.person, now)
+	if err != nil {
+		return store.EntryHome{}, 0, http.StatusInternalServerError, err
+	}
+	want := strings.TrimSpace(machine)
 	aliases := map[string]string{} // hostname → its routes alias
 	for _, m := range s.fleetMachines() {
 		aliases[strings.ToLower(m.Hostname)] = m.alias()
@@ -580,28 +641,24 @@ func (s *Server) handleEntryHome(w http.ResponseWriter, r *http.Request) {
 	var pick *EntryHomeChoice
 	for i, ch := range choices {
 		named := sameMachine(ch.Machine, want) || (aliases[strings.ToLower(ch.Machine)] != "" && strings.EqualFold(aliases[strings.ToLower(ch.Machine)], want))
-		if named && (req.Login == "" || req.Login == ch.Login) {
-			if pick != nil && req.Login == "" {
-				httpError(w, http.StatusConflict, "you have more than one login there with a live fleet — name the login")
-				return
+		if named && (login == "" || login == ch.Login) {
+			if pick != nil && login == "" {
+				return store.EntryHome{}, 0, http.StatusConflict, errors.New("you have more than one login there with a live fleet — name the login")
 			}
 			pick = &choices[i]
 		}
 	}
 	if pick == nil {
-		httpError(w, http.StatusUnprocessableEntity, "只能换到你有登录、且上面有在用的 fleet 的机器")
-		return
+		return store.EntryHome{}, 0, http.StatusUnprocessableEntity, errors.New("只能换到你有登录、且上面有在用的 fleet 的机器")
 	}
 	old, hadOld, err := s.Store.EntryHomeOf(c.person)
 	if err != nil {
-		httpError(w, http.StatusInternalServerError, err.Error())
-		return
+		return store.EntryHome{}, 0, http.StatusInternalServerError, err
 	}
 	h := store.EntryHome{Person: c.person, Machine: pick.Machine, Login: pick.Login, SetBy: c.actor, SetAt: now.UTC()}
 	v, err := s.Store.SetEntryHome(h)
 	if err != nil {
-		httpError(w, http.StatusInternalServerError, err.Error())
-		return
+		return store.EntryHome{}, 0, http.StatusInternalServerError, err
 	}
 	if v > 0 {
 		s.entryAudit(store.EntryAudit{At: now, Kind: "home_set", Person: c.person, Login: h.Login, Machine: h.Machine, Result: "ok", Actor: c.actor})
@@ -614,7 +671,7 @@ func (s *Server) handleEntryHome(w http.ResponseWriter, r *http.Request) {
 	} else {
 		h = old
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"home": h, "version": v})
+	return h, v, http.StatusOK, nil
 }
 
 // entryPushPerson pushes v to person's home machine — none when they have
