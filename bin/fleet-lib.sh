@@ -8846,8 +8846,12 @@ fleet_pane_claude_pids() {
   # its comm (`claude`) until its parent reaps it, so a /exit'ed Claude read as
   # "another Claude appeared" for the few ms before tmux collected it (macOS shows
   # `<defunct>`, so it never hit there). fleet_pid_alive already treats Z as gone.
+  # LC_ALL=C (issue #3129): any process's argv may hold a CJK char cut mid-
+  # sequence; under a UTF-8 locale macOS awk then writes «illegal byte sequence»
+  # + those raw bytes to stderr, and a caller decoding it strictly failed. Every
+  # pattern here is ASCII, so bytes are exact.
   { ps -axo pid=,ppid=,stat=,comm=; echo '---CMDS---'; ps -axo pid=,command=; } 2>/dev/null \
-  | awk -v panes="$*" -v ccomm="${FLEET_CLAUDE_COMM:-}" '
+  | LC_ALL=C awk -v panes="$*" -v ccomm="${FLEET_CLAUDE_COMM:-}" '
       /^---CMDS---$/ { sec = 2; next }
       sec != 2 { if (NF >= 4 && index($3, "Z") == 0) { comm[$1] = $4; kids[$2] = kids[$2] " " $1 } next }
       { p = $1; $1 = ""; cmd[p] = " " substr($0, 2) " " }

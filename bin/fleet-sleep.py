@@ -75,7 +75,9 @@ def wake_on_view():
 
 
 def run(argv, **kwargs):
-    return subprocess.check_output([str(x) for x in argv], text=True,
+    # errors='replace' (issue #3129): a child's stderr may hold raw bytes it
+    # echoed (macOS awk's «illegal byte sequence»), never a reason to fail.
+    return subprocess.check_output([str(x) for x in argv], text=True, errors='replace',
                                    stderr=subprocess.PIPE, timeout=kwargs.pop('timeout', 15), **kwargs).strip()
 
 
@@ -244,7 +246,7 @@ class Worker:
             try: secs=max(float(os.environ.get('FLEET_SLEEP_DIGEST_SECS') or 120),1.0)
             except ValueError: secs=120.0
             try:
-                p=subprocess.run(digest_argv(),input=prompt,text=True,capture_output=True,timeout=secs,
+                p=subprocess.run(digest_argv(),input=prompt,text=True,errors='replace',capture_output=True,timeout=secs,
                                  cwd=str(self.directory),env={k:v for k,v in os.environ.items() if k not in ('TMUX','TMUX_PANE')})
                 digest=PARK['parse_digest'](p.stdout) if p.returncode==0 else None
                 if digest is None: error='model exit '+str(p.returncode) if p.returncode else 'no usable answer'
@@ -315,7 +317,7 @@ class Worker:
         env=dict(os.environ,FLEET_CONF_DIR=str(self.directory.parents[2]))
         try:
             out=subprocess.run(['bash','-c','. "$1"; fleet_load_conf "$2"; fleet_cap_full "$2"','cap',
-                                str(BIN/'fleet-lib.sh'),self.session],env=env,capture_output=True,text=True,timeout=15)
+                                str(BIN/'fleet-lib.sh'),self.session],env=env,capture_output=True,text=True,errors='replace',timeout=15)
         except (OSError,subprocess.SubprocessError): return None
         parts=out.stdout.split()
         if out.returncode!=0 or len(parts)!=2 or not all(x.isdigit() for x in parts): return None
