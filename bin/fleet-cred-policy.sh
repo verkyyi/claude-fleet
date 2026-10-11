@@ -6,8 +6,9 @@
 #   fleet-cred-policy.sh effective [--machine M] [--principal P] [--json]
 #                                                             each account: allowed, or why not
 #   fleet-cred-policy.sh set   node|user <id> <subscription-id>…   only these
+#   fleet-cred-policy.sh all   node|user <id>                       explicit all, including future subscriptions
 #   fleet-cred-policy.sh deny  node|user <id>                       none at all ([])
-#   fleet-cred-policy.sh clear node|user <id>                       no list: unrestricted again
+#   fleet-cred-policy.sh clear node|user <id>                       no list: denied in strict mode; legacy default before migration
 #
 # effective = eligible (the person's own + the shared pool, after revocation,
 # trust and separation) ∩ the machine's list ∩ the person's list. An OS login
@@ -39,9 +40,9 @@ BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$BIN/fleet-lib.sh"
 
 die() { printf 'fleet-cred-policy: %s\n' "$2" >&2; exit "$1"; }
-usage() { sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; }
 
-[ $# -gt 0 ] || { usage >&2; die 2 'say show, effective, set, deny or clear'; }
+[ $# -gt 0 ] || { usage >&2; die 2 'say show, effective, set, all, deny or clear'; }
 ACTION=$1; shift
 JSON='' MACHINE='' PRINCIPAL='' SCOPE='' ID=''
 IDS=()
@@ -58,7 +59,7 @@ case "$ACTION" in
       esac
     done
     [ -n "$MACHINE$PRINCIPAL" ] || die 2 'effective needs --machine and/or --principal' ;;
-  set|deny|clear)
+  set|all|deny|clear)
     [ $# -ge 2 ] || die 2 "$ACTION node|user <id>…"
     SCOPE=$1 ID=$2; shift 2
     case "$SCOPE" in node|user) ;; *) die 2 "scope is node or user, not '$SCOPE'" ;; esac
@@ -109,12 +110,14 @@ _answer() {
 }
 
 case "$ACTION" in
-  set|deny|clear)
+  set|all|deny|clear)
     body=$(python3 -c '
 import json, sys
 act, scope, ident, ids = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4:]
 allow = ids if act == "set" else ([] if act == "deny" else None)
-print(json.dumps({"scope": scope, "id": ident, "allow": allow}))
+body = {"scope": scope, "id": ident, "allow": allow}
+if act == "all": body["all"] = True
+print(json.dumps(body))
 ' "$ACTION" "$SCOPE" "$ID" ${IDS[@]+"${IDS[@]}"})
     resp=$(_call PUT "$CRED_POLICY_PATH" "$body"); rc=$?
     json=$(_answer "$resp" "$rc") || exit $?
@@ -122,7 +125,7 @@ print(json.dumps({"scope": scope, "id": ident, "allow": allow}))
 import json, sys
 d = json.load(sys.stdin)
 a = d.get("allow")
-what = "unrestricted" if a is None else ("deny all" if a == [] else " ".join(a))
+what = "all subscriptions (including future additions)" if d.get("all") else "unconfigured (denied in strict mode; legacy default before migration)" if a is None else ("deny all" if a == [] else " ".join(a))
 print("cred-policy: SET %s %s: %s" % (sys.argv[1], sys.argv[2], what))
 ' "$SCOPE" "$ID" || exit 4
     exit 0 ;;
@@ -140,9 +143,9 @@ for scope, key in (("node", "nodes"), ("user", "users")):
         if s.get("error"):
             print("cred-policy: %s %s MALFORMED (denies all): %s" % (scope, s["id"], s["error"]))
         else:
-            print("cred-policy: %s %s %s" % (scope, s["id"], " ".join(s["allow"]) or "(deny all)"))
+            print("cred-policy: %s %s %s" % (scope, s["id"], "(all subscriptions)" if s.get("all") else (" ".join(s["allow"]) or "(deny all)")))
 if not n:
-    print("cred-policy: no allowlists — every eligible subscription is usable (as before #3043)")
+    print("cred-policy: no grants — denied by default" if d.get("mode") == "strict" else "cred-policy: legacy default — eligible subscriptions unrestricted until migration")
 ' || exit 4
     exit 0 ;;
   effective)

@@ -69,6 +69,7 @@ func TestAssets_MenuLinksResolve(t *testing.T) {
 	route := map[string]string{
 		"/": "index.html", "/sessions": "sessions.html", "/machines": "machines.html", "/machines/": "machines.html", "/connect": "connect.html", "/config": "config.html",
 		"/quota": "quota.html", "/usage": "usage.html",
+		"/subscriptions/": "admin/subscription.html", "/subscriptions/settings": "admin/subscription-settings.html", "/admin/users/": "admin/user.html",
 		"/subscriptions": "admin/subscriptions.html", "/nodes": "admin/nodes.html", "/admin/users": "admin/users.html",
 		"/admin/settings": "admin/settings.html", "/admin/audit": "admin/audit.html",
 		"/admin/sessions": "admin/sessions.html", "/admin/overview": "admin/overview.html", "/admin/devices": "admin/devices.html",

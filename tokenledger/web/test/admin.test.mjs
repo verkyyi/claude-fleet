@@ -233,7 +233,7 @@ test('audit: grouped by day, newest first; actors without their principal', () =
 const PAGES = [
   { file: 'admin/subscriptions.js', id: 'subscriptions', confirms: 2, empty: 'ui.sub.empty' },
   { file: 'admin/nodes.js', id: 'machines', confirms: 2, empty: 'ui.mach.empty' },
-  { file: 'admin/users.js', id: 'people', confirms: 1, empty: 'ui.usr.empty' },
+  { file: 'admin/users.js', id: 'people', confirms: 0, empty: 'ui.usr.empty' },
   // Restoring the team layer (moved here from Config by claude-fleet#2515).
   { file: 'admin/settings.js', id: 'settings', confirms: 1, empty: null },
   { file: 'admin/audit.js', id: 'audit', confirms: 0, empty: 'ui.aud.empty' },
@@ -382,4 +382,9 @@ test('machines: trust and its source, 期望 / 实际 for a managed machine (cla
   assert.deepEqual([by.m4.trust, by.m4.trustSource, by.m4.desired.want, by.m4.desired.reached], ['trusted', 'join_code', 3, 2]);
   assert.deepEqual([by.m5.trust, by.m5.trustSource, by.m5.desired], ['untrusted', 'name_borrowed', null]);
   assert.deepEqual([by.m6.trust, by.m6.desired], ['', null]);
+});
+
+test('user deletion lives on the user detail page and still requires confirmation', () => {
+ const src=readFileSync(new URL('../dist/admin/user.js',import.meta.url),'utf8');
+ assert.match(src,/ctx\.confirm\(/);assert.match(src,/method:'DELETE'/);
 });

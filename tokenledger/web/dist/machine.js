@@ -17,6 +17,7 @@
 // 操作… opens the row's drawer (lib/services.js). The choice rides the URL
 // (?log=<login>/<name>), so a reload keeps it; the panel lives outside the
 // 10 s redraw, so a re-read never resets the lines.
+import { mountObjectPolicy, machineTargets } from './lib/cred-policy.js';
 import { Shell, api } from './app-shell.js';
 import { esc, ic, spark, freshTag } from './lib/shell.js';
 import { routeFor, pathParam } from './lib/router.js';
@@ -269,6 +270,14 @@ export default Shell.mount('machine', async (ctx) => {
     draw(ctx, v);
     if (first) {
       wireLog(ctx);
+      if (ctx.admin) {
+        const root = document.createElement('section'); root.className = 'panel'; root.id = 'machine-policy';
+        ctx.el.querySelector('#md-main').after(root);
+        const targets = await machineTargets({}, {nodes: d.logins || []}, ctx.api);
+        const identities = targets.filter((row) => !row.error);
+        if (targets.some((row) => row.error) || identities.length !== 1) root.innerHTML = `<p class="panel-b err">${esc(t('ui.policy.unknownMachine'))}</p>`;
+        else await mountObjectPolicy(ctx,root,'node',identities[0].id);
+      }
       // ?log=<login>/<name>: the log a reload (or a shared link) was on.
       const want = new URLSearchParams(location.search).get('log');
       const r = want && S.svcs.find((x) => x.login + '/' + x.name === want);
