@@ -1,0 +1,9 @@
+#!/bin/sh
+# gh through the node's GitHub relay (claude-fleet#3348): only gh's own traffic,
+# only when the node set one (FLEET_GITHUB_PROXY in /etc/fleet-devnet.env), and
+# never over a proxy the caller chose. git is routed by /etc/gitconfig instead.
+if [ -z "${HTTPS_PROXY:-}${https_proxy:-}" ] && [ -r /etc/fleet-devnet.env ]; then
+  p=$(sed -n 's/^FLEET_GITHUB_PROXY=//p' /etc/fleet-devnet.env | head -n 1)
+  [ -n "$p" ] && HTTPS_PROXY=$p && export HTTPS_PROXY
+fi
+exec /usr/bin/gh "$@"

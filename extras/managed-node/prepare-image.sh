@@ -14,4 +14,5 @@ ccquota release fetch --hub "$HUB" --pubkey "$KEY" --artifacts --pinned --platfo
   "$SHA" "$DEST/runtime" || exit 1
 cp "$KEY" "$DEST/release.pub" || exit 1
 cp "$HERE/Dockerfile" "$HERE/image-stage.py" "$DEST/" || exit 1
+cp -R "$HERE/devnet" "$DEST/devnet" || exit 1
 echo "Verified build context: $DEST ($PLATFORM, $SHA)"

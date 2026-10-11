@@ -5974,6 +5974,21 @@ drill_linux_egress_metadata() {
   WHAT="init 容器 egress-guard（只 NET_ADMIN+NET_RAW）写 OUTPUT：lo、回包、kube-dns 53 放行，元数据 / pod / Service / 私网段 REJECT；fleet 容器无 NET_ADMIN；坏网段不渲染"
 }
 
+# ---- linux-github-unreachable (#3348): the ACK node's CN egress cannot reach
+# github.com's git transport; git goes through the Singapore relay (GitHub hosts
+# :443 from the cluster egress only), a mirrored repo is fetched in-cluster, and
+# every login gets the mirrors and the toolchain without a hand step.
+drill_linux_github_unreachable() {
+  CAP=20; local t0
+  t0=$(now)
+  if ! python3 "$BIN/fleet-node-linux-selftest.py" LinuxNode.test_dev_network_github_relay_mirror_and_toolchain \
+       >"$WORK/linux-github.out" 2>&1; then
+    WHY="a login on the ACK node has no road to GitHub, or the relay lets more than GitHub through: $(tail -n 3 "$WORK/linux-github.out")"; return 1
+  fi
+  SECS=$(since "$t0")
+  WHAT="gh-relay 只放集群出口的 CONNECT 到 GitHub:443；/etc/gitconfig 让 github.com 走中转、镜像仓库从集群镜像拉而推去 GitHub；/etc/fleet-devnet.env 给每个登录镜像源；egress 只开镜像 Service 一个口；镜像带工具链"
+}
+
 # ---- linux-create-relay-403 (#3213): the hub's create op opens a login whose
 # account is still `creating`; the relay pass is refused (403) and must not undo it.
 drill_linux_create_relay_403() {
