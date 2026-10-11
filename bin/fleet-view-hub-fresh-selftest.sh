@@ -15,6 +15,11 @@
 #   C  fresh — hub_ok within FLEET_VIEW_HUB_FRESH: the open asks the hub nothing
 #   D  keepalive — a running loop goes on past its LOOP_SECS while --ensure keeps
 #      being called (hubsess.want), and stops LOOP_SECS after the last call
+#   E  seen at once (issue #3184) — hub_ok 2 hours old and the hub silent: the
+#      popup's red banner names the machine, its rows read 「⊘ 失联 120 分钟」 and
+#      are grey end to end, ↵ on one says 进不去 instead of going; hub_ok back to
+#      now ⇒ the next read has no banner; a popup left open (a real one, on a pty)
+#      shows a row added to the cache within 2-4 s (FLEET_VIEW_REFRESH)
 #
 # `fleet-view-hub-fresh-selftest.sh B` runs one leg (docs/BREAK-IT.md
 # view-far-reaped runs B). Drives bin/fleet_view.py through fleet-quickopen.py
@@ -23,7 +28,7 @@
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 command -v python3 >/dev/null 2>&1 || { echo 'fleet-view-hub-fresh: python3 absent — SKIP'; exit 0; }
-LEGS="${1:-ABCD}"
+LEGS="${1:-ABCDE}"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/vhfresh.XXXXXX") || exit 2
 cleanup() {
   local p
@@ -137,5 +142,89 @@ case "$LEGS" in *D*)
   loop_alive && fail "D: the loop outlived its last --ensure by more than LOOP_SECS"
   unset FLEET_HUB_SESSIONS_LOOP_SECS FLEET_HUB_SESSIONS_EVERY
   pass "D: one loop for as long as --ensure is called; gone LOOP_SECS after the last"
+;; esac
+case "$LEGS" in *E*)
+  cp "$WORK/before.json" "$WORK/hub.json"
+  bash "$HUBS" --refresh 2>/dev/null || fail "E setup: --refresh failed"
+  printf '#!/bin/sh\necho ask >> "%s/hub.log"\nexit 1\n' "$WORK" > "$WORK/hub.sh"   # the hub goes silent
+  echo $(( $(date +%s) - 7200 )) > "$G/hub_ok"
+  out=$(FLEET_UI_LANG=zh FLEET_VIEW_HUB_REFRESH_SECS=2 python3 - "$BIN" <<'PY2'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("fv", sys.argv[1] + "/fleet_view.py")
+fv = importlib.util.module_from_spec(spec); spec.loader.exec_module(fv)
+bad = []
+def chk(what, got, want):
+    if got != want:
+        bad.append("%s: %r, want %r" % (what, got, want))
+items = fv.entries("v1")
+far = [e for e in items if e["kind"] == "sess" and e.get("far")]
+chk("far rows listed", len(far) >= 1, True)
+ban = fv.banner(items)
+chk("banner names the machine and the minutes", ("farbox" in ban, "120 分钟没更新" in ban, "正在重连" in ban), (True, True, True))
+for e in far:
+    chk("lost", e.get("lost"), True)
+    chk("tag 「⊘ 失联 120 分钟」", "⊘ 失联 120 分钟" in e["tags"], True)
+    chk("↵ says 进不去", "进不去" in (fv.lost_msg(e) or ""), True)
+    for lit in (False, True):
+        segs = fv.paint([e], 0 if lit else -1, 100, len, lambda t, n: t[:n])[0]
+        if not lit:
+            chk("grey end to end", all("dim" in st for _, st in segs), True)
+        chk("no colour on a lost glyph (lit=%s)" % lit, any(k.startswith("c") for k in segs[1][1]), False)
+print("\n".join(bad) or "ok")
+PY2
+)
+  [ "$out" = ok ] || fail "E: a frozen list (hub_ok 2 h old, the hub silent) is not seen at once" "$out"
+  stop_loop
+  date +%s > "$G/hub_ok"
+  b=$(FLEET_UI_LANG=zh python3 -c '
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("fv", sys.argv[1] + "/fleet_view.py")
+fv = importlib.util.module_from_spec(spec); spec.loader.exec_module(fv)
+print(repr(fv.banner(fv.entries("v1"))))' "$BIN")
+  [ "$b" = "''" ] || fail "E: hub_ok back to now, yet the banner stays" "$b"
+  # a popup left open, on a real pty: a row added to the cache appears within 2-4 s
+  r=$(FLEET_UI_LANG=zh FLEET_VIEW_REFRESH=2 TERM=xterm-256color python3 - "$BIN" "$G/remote_$S" <<'PY2'
+import os, pty, select, sys, time
+binp, cache = sys.argv[1:3]
+pid, fd = pty.fork()
+if pid == 0:
+    os.execvp("python3", ["python3", binp + "/fleet-quickopen.py", "--view", "v1"])
+def read_until(word, secs):
+    buf, end = b"", time.monotonic() + secs
+    while time.monotonic() < end:
+        r, _, _ = select.select([fd], [], [], 0.1)
+        if r:
+            try:
+                buf += os.read(fd, 65536)
+            except OSError:
+                break
+            if word in buf:
+                return True
+    return False
+try:
+    if not read_until("断线重连不回显".encode(), 10):
+        print("the popup never drew its list"); sys.exit(0)
+    time.sleep(0.3)
+    lines = open(cache, encoding="utf-8").read().splitlines()
+    src = next(l for l in lines if "issue-3061" in l)
+    open(cache, "a", encoding="utf-8").write(src.replace("issue-3061", "issue-3099").replace("3061", "3099")
+                                             .replace("断线重连不回显", "zz-new-row") + "\n")
+    t0 = time.monotonic()
+    seen = read_until(b"zz-new-row", 6)
+    dt = time.monotonic() - t0
+    print("ok" if seen and dt <= 4.5 else "seen=%s after %.1fs" % (seen, dt))
+finally:
+    os.write(fd, b"\x1b")
+    time.sleep(0.3)
+    try:
+        os.kill(pid, 9)
+    except OSError:
+        pass
+    os.close(fd)   # macOS: an exiting child waits on its pty's unread output
+    os.waitpid(pid, 0)
+PY2
+)
+  [ "$r" = ok ] || fail "E: a popup left open did not show the new row in time" "$r"
+  pass "E: hub_ok 2 h old — banner, grey 「⊘ 失联 120 分钟」 rows, ↵ 进不去; back to now — no banner; an open popup shows a new row within 2-4 s"
 ;; esac
 echo "PASS fleet-view-hub-fresh-selftest ($LEGS)"
