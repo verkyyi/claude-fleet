@@ -39,7 +39,9 @@ INSTALL_END='^(能力:|用时 [0-9]+ 秒)'
 # lines while it opens the newcomer's first session — the start, the hub's
 # opening (OPENING_SAYS, below), the wait for the opened login's fleet (#3062)
 # and the session placed — and its failure. Not 「back at the prompt」 (run 17).
+# shellcheck disable=SC2034  # read by fleet-onboard-drill.sh, which sources this
 THIN_FIRST='你还没有 fleet 会话|no fleet session of yours yet|等它的 fleet 报上来|waiting for its fleet to report|第一个会话开在|your first session opened on|正在为你开机器|opening a machine for you'
+# shellcheck disable=SC2034  # read by fleet-onboard-drill.sh
 THIN_FIRST_FAILED='你的第一个会话没开出来|your first session did not open'
 # thin_first_state (the newcomer's thin.log on stdin, docs/CLIENT-LOGS.md):
 # landed — a `first` placed (rc 0) and a connection after it drew the view
