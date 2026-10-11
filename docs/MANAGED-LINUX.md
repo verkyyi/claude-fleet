@@ -165,13 +165,15 @@ Suggested first deployment: the existing ACK cluster hosting the hub, a separate
 16 GiB limits, and 100 GiB encrypted ESSD storage. Select an existing ACK CSI
 StorageClass configured for encryption and supporting `ReadWriteOncePod`.
 The renderer deliberately does not guess a StorageClass or downgrade access
-mode. The headless Service is internal; no public load balancer is created.
+mode. The headless Service (the system sshd's 22) stays internal; the one public
+Service is the door, `fleet-linux-entry`, carrying only the entry port 22022
+(«Hub, relay, and access»).
 
 ```sh
 python3 extras/managed-node/render.py \
   --image registry.cn-shenzhen.aliyuncs.com/24haowan/fleet-managed-node@sha256:IMAGE_DIGEST \
   --hub https://YOUR-HUB --storage-class YOUR_ENCRYPTED_ESSD_CLASS \
-  > /tmp/fleet-linux.json
+  [--entry-host LB_ADDRESS] > /tmp/fleet-linux.json
 kubectl apply --dry-run=server -f /tmp/fleet-linux.json
 ```
 
@@ -207,11 +209,62 @@ accounts. Confirm this workload fits the namespace's admission policy.
 
 Use the hub HTTPS URL reachable from ACK. Allow egress to the hub and
 `https://fleet-relay.24hw.cn`, as well as the Git/package services your work
-needs. Node control connects outward to the hub. Interactive SSH additionally
-needs a route from the Fleet client to the pod's internal Service, such as your
-existing VPC/private access; registration alone does not provide that route.
-The installer configures the hub SSH user CA and disables container password
-and root SSH login.
+needs. Node control connects outward to the hub.
+
+**The door** (issue #3213, EPIC #3208 C6). People reach this machine from
+outside through ONE public port, the entry port 22022 — the same second sshd a
+Mac home runs (#3070, docs/MANAGED-NODE.md §16): keys only, and only the keys
+the hub lists for a login whose home this machine is (root's
+`/var/db/fleet-node/entry/keys/<login>`, never `~/.ssh`); no password, no
+keyboard-interactive, no root, no admin login. `render.py` makes it a second
+Service, `fleet-linux-entry`: `type: LoadBalancer`, TCP 22022 only,
+`externalTrafficPolicy: Local` (the entry sshd sees the client's own address,
+which the key-revoke cut relies on), and ACK annotations for a public CLB of the
+smallest spec paid by traffic (`--entry-lb-spec slb.s1.small`; `clcu` for an
+account that can only buy pay-by-use instances). The container's system sshd
+(22, PAM, the hub SSH CA) stays on the headless Service — inside the cluster,
+never on the load balancer. The installer still disables its password and root
+login.
+
+The pod runs with `FLEET_ENTRY=1` / `FLEET_ENTRY_PORT=22022`, and — once the
+load balancer has an address — `CCQUOTA_FLEET_NODE_ROUTES=entry=<LB address>:22022`.
+That route is not optional on ACK: the hub knocks on the address a reach report
+comes from, which here is the cluster's NAT egress, so without it the door is
+reported unreachable. The route rides the supervisor's environment into the
+node program's `entry reach`, which hands it to the hub as `entry_host`. The
+door's address is only the load balancer's: a `<name>.cf.24haowan.com` record is
+written by the hub only for a person whose home this machine is (#3067's rule).
+
+The address does not exist until the CLB does, so the door goes up in two
+passes (OnDelete: nothing restarts until the pod is deleted):
+
+```sh
+# 1. the Service alone, to obtain the load balancer's address
+python3 extras/managed-node/render.py --image …@sha256:IMAGE_DIGEST --hub https://YOUR-HUB \
+  --storage-class YOUR_ENCRYPTED_ESSD_CLASS > /tmp/fleet-linux.json
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); \
+  d["items"]=[i for i in d["items"] if i["metadata"]["name"]=="fleet-linux-entry"]; \
+  json.dump(d,open(sys.argv[2],"w"))' /tmp/fleet-linux.json /tmp/fleet-linux-door.json
+kubectl apply --dry-run=server -f /tmp/fleet-linux-door.json
+kubectl apply -f /tmp/fleet-linux-door.json
+kubectl -n fleet-workers get svc fleet-linux-entry -w      # until EXTERNAL-IP is set
+# 2. everything, naming that address; then replace the pod (its volume stays)
+python3 extras/managed-node/render.py … --entry-host LB_ADDRESS > /tmp/fleet-linux.json
+kubectl apply --dry-run=server -f /tmp/fleet-linux.json
+kubectl apply -f /tmp/fleet-linux.json
+kubectl -n fleet-workers delete pod fleet-linux-0          # never --force
+kubectl -n fleet-workers wait pod/fleet-linux-0 --for=condition=Ready --timeout=15m
+```
+
+Check it: the machine's `fleet-node-supervisor.py entry reach` (or the node page)
+says the hub reached the door at the load balancer, with the host key it
+expects; from a computer outside ACK, `ssh -p 22022 -o
+PreferredAuthentications=password <login>@LB_ADDRESS` is refused and the login's
+registered key lands on its 看台 (BREAK-IT `linux-entry-weak-door`, plus the
+`entry-*` rows run against the address). When the door cannot be reached — a
+firewall, a CLB outage — the `fleet` client falls through its routes (entry <
+tailnet < another direct line < relay, #3067 共同约定 8) to the hub's relay, which
+needs nothing from ACK but the node's outward connection.
 
 The login's proxy settings live in root's
 `/usr/local/lib/claude-fleet/credsep/fleet.conf`. The default relay is the existing

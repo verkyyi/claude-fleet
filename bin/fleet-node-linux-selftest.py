@@ -215,6 +215,64 @@ class LinuxNode(unittest.TestCase):
         self.assertFalse(pod['containers'][0]['securityContext']['allowPrivilegeEscalation'])
         self.assertEqual(st['volumeClaimTemplates'][0]['spec']['accessModes'], ['ReadWriteOncePod'])
 
+    def test_entry_door_is_the_entry_port_only(self):
+        """BREAK-IT linux-entry-weak-door (#3213): the public Service carries 22022
+        alone (Local), the system sshd's 22 stays on the headless one; the pod turns
+        the entry on and names the load balancer as its entry= route, which reaches
+        `entry reach` through the supervisor's filtered environment; the door's sshd
+        takes keys from root's list only — no password, no root, no ~/.ssh."""
+        render = BIN.parent / 'extras/managed-node/render.py'
+        base = [sys.executable, str(render), '--image', 'example/image@sha256:' + 'a' * 64,
+                '--hub', 'https://hub.example', '--storage-class', 'essd']
+        items = json.loads(subprocess.check_output(base + ['--entry-host', '47.1.2.3']))['items']
+        svcs = {i['metadata']['name']: i for i in items if i['kind'] == 'Service'}
+        door = svcs['fleet-linux-entry']['spec']
+        self.assertEqual(door['type'], 'LoadBalancer')
+        self.assertEqual(door['externalTrafficPolicy'], 'Local')
+        self.assertEqual([(x['port'], x['targetPort'], x['protocol']) for x in door['ports']],
+                         [(22022, 22022, 'TCP')])
+        ann = svcs['fleet-linux-entry']['metadata']['annotations']
+        lb = 'service.beta.kubernetes.io/alibaba-cloud-loadbalancer-'
+        self.assertEqual(ann[lb + 'address-type'], 'internet')
+        self.assertEqual(ann[lb + 'charge-type'], 'paybytraffic')
+        self.assertEqual(ann[lb + 'spec'], 'slb.s1.small')
+        inner = svcs['fleet-linux']['spec']
+        self.assertEqual(inner['clusterIP'], 'None')
+        self.assertNotIn('type', inner)
+        for name, svc in svcs.items():
+            if svc['spec'].get('type') in ('LoadBalancer', 'NodePort'):
+                self.assertNotIn(22, [x['port'] for x in svc['spec']['ports']], name)
+        c = items[-1]['spec']['template']['spec']['containers'][0]
+        env = dict((e['name'], e['value']) for e in c['env'])
+        self.assertEqual(env['FLEET_ENTRY'], '1')
+        self.assertEqual(env['FLEET_ENTRY_PORT'], '22022')
+        self.assertEqual(env['CCQUOTA_FLEET_NODE_ROUTES'], 'entry=47.1.2.3:22022')
+        self.assertIn(22022, [x['containerPort'] for x in c['ports']])
+        # before the CLB has an address: the door is rendered, no route is guessed
+        items = json.loads(subprocess.check_output(base + ['--entry-lb-spec', 'clcu']))['items']
+        c = items[-1]['spec']['template']['spec']['containers'][0]
+        self.assertNotIn('CCQUOTA_FLEET_NODE_ROUTES', [e['name'] for e in c['env']])
+        ann = [i for i in items if i['metadata']['name'] == 'fleet-linux-entry'][0]['metadata']['annotations']
+        self.assertEqual(ann[lb + 'instance-charge-type'], 'PayByCLCU')
+        self.assertNotIn(lb + 'spec', ann)
+        r = subprocess.run(base + ['--entry-host', 'evil host'], capture_output=True)
+        self.assertNotEqual(r.returncode, 0)
+        s = module('fleet-node-supervisor')
+        with tempfile.TemporaryDirectory() as d, patch.dict(os.environ, {
+                'FLEET_ENTRY': '1', 'CCQUOTA_FLEET_NODE_ROUTES': 'entry=47.1.2.3:22022'}):
+            self.assertEqual(s.node_environment()['CCQUOTA_FLEET_NODE_ROUTES'], 'entry=47.1.2.3:22022')
+            p = s.Paths()
+            p.state = d
+            self.assertEqual(s.entry_route(p, {}), ('47.1.2.3', 22022))
+            cfg = s.entry_config(s.EntryPaths(p), 22022, ['24haowan'])
+        lines = set(cfg.splitlines())
+        for want in ('Port 22022', 'AuthenticationMethods publickey', 'PasswordAuthentication no',
+                     'KbdInteractiveAuthentication no', 'PermitRootLogin no', 'AllowUsers 24haowan'):
+            self.assertIn(want, lines)
+        self.assertIn('AuthorizedKeysFile %s/entry/keys/%%u' % d, lines)
+        self.assertFalse([l for l in lines if 'authorized_keys' in l and not l.startswith('#')])
+        self.assertFalse([l for l in lines if l.startswith('AuthorizedKeysCommand')])
+
     def test_image_stages_and_verifies_codex_helper(self):
         spec = importlib.util.spec_from_file_location('image_stage', BIN.parent / 'extras/managed-node/image-stage.py')
         m = importlib.util.module_from_spec(spec)
