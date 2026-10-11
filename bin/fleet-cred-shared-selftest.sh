@@ -485,7 +485,7 @@ bash "$BIN/fleet-credsep.sh" machine uninstall >/dev/null 2>&1
 out=$(HOME="$SB/new/delta" python3 -I "$BIN/fleet-credsep.py" install --login delta --fresh \
   --conf-dir "$SB/new/delta/.config/claude-fleet" --install-dir "$SB/new/delta/.claude/fleet" 2>&1); rc=$?
 python3 -c 'import json,sys; m=json.load(open(sys.argv[1])); sys.exit(0 if m.get("mode") != "shared" else 1)' "$SB/db/delta/meta.json" 2>/dev/null \
-  && [ "$rc" = 0 ] && ls "$SB/daemons" | grep -q 'credsep.*delta' \
+  && [ "$rc" = 0 ] && compgen -G "$SB/daemons/*credsep*delta*" >/dev/null \
   && case "$out" in *"joins it as a tenant"*) false ;; *) true ;; esac \
   && pass "N no shared proxy: a fresh login gets its own proxy, as before" \
   || fail "N fresh delta rc=$rc: $(printf '%s' "$out" | tail -4) · $(ls "$SB/daemons")"

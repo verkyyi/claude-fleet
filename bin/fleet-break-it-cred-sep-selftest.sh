@@ -491,7 +491,7 @@ drill_cred_new_login_not_tenant() {
     --conf-dir "$sb/new/beta/.config/claude-fleet" --install-dir "$sb/new/beta/.claude/fleet" 2>&1); rc=$?
   SECS=$(since "$t0")
   [ "$rc" = 0 ] || { WHY="install --fresh failed (rc $rc): $(printf '%s' "$out" | tail -2 | tr '\n' ' ')"; return 1; }
-  ls "$sb/daemons" | grep -q 'credsep.*beta' && { WHY="the new login got a proxy of its own: $(ls "$sb/daemons" | tr '\n' ' ')"; return 1; }
+  compgen -G "$sb/daemons/*credsep*beta*" >/dev/null && { WHY="the new login got a proxy of its own: $(ls "$sb/daemons" | tr '\n' ' ')"; return 1; }
   python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1])).get("mode") == "shared" and "beta" in json.load(open(sys.argv[2]))["logins"] else 1)' \
     "$sb/db/beta/meta.json" "$sb/db/.shared.json" 2>/dev/null \
     || { WHY="the shared proxy's tenants do not name the new login: $(cat "$sb/db/.shared.json" 2>&1 | tr '\n' ' ')"; return 1; }
