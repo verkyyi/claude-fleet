@@ -1,6 +1,6 @@
 #!/bin/bash
 # dash-popup.sh [--size S|M|L] [--title T] [--object O] [--client C] [--no-inline]
-#               [-w <width>] [-h <height>] -- <command> [args…]
+#               [--freeze] [-w <width>] [-h <height>] -- <command> [args…]
 #
 # THE way a fleet popup opens (issue #448; the one frame since #1535, EPIC #1529
 # E6; one style since #1619). A script or bind opens a popup through here (a
@@ -31,6 +31,10 @@
 #   --no-inline    a refused popup is NOT run in the caller's pane — for a bind's
 #                  `run-shell -b` (no terminal to fall back to) or a caller that
 #                  has its own fallback: toast why and exit 3
+#   --freeze       the panes under the popup hold still while it is up (copy-mode,
+#                  fleet_popup_freeze — issue #3058: tmux 3.7c lets a pane's wide
+#                  characters bleed through a popup). Only for a popup that types
+#                  into no pane: the 看台's ⌘P list and ⌘T dispatch
 #
 # It gives an in-pane popup the two things a `prefix`-bound popup gets for free
 # and a raw a tmux popup in an fzf `execute()` bind never had:
@@ -86,7 +90,7 @@
 # THIS fleet's socket (issue #159).
 set -u
 
-W=""; H=""; SIZE=""; TITLE=""; OBJECT=""; CLIENT=""; NO_INLINE=""; SESSION=""
+W=""; H=""; SIZE=""; TITLE=""; OBJECT=""; CLIENT=""; NO_INLINE=""; SESSION=""; FREEZE=""
 while [ $# -gt 0 ]; do
   case "$1" in
     -w) shift; W="${1:-}" ;;
@@ -97,6 +101,7 @@ while [ $# -gt 0 ]; do
     --client) shift; CLIENT="${1:-}" ;;
     --session) shift; SESSION="${1:-}" ;;
     --no-inline) NO_INLINE=1 ;;
+    --freeze) FREEZE=1 ;;
     --) shift; break ;;
     *)  break ;;
   esac
@@ -184,7 +189,7 @@ marker="${TMPDIR:-/tmp}/.dash-popup-ran.$$"
 rm -f "$marker" 2>/dev/null || true
 
 if [ -n "$client" ]; then
-  trap 'rm -f "$marker" 2>/dev/null; tmux set -g @popup_open 0 \; set -gu @popup_pid \; set -gu @popup_title 2>/dev/null || true' EXIT INT TERM HUP
+  trap 'rm -f "$marker" 2>/dev/null; tmux set -g @popup_open 0 \; set -gu @popup_pid \; set -gu @popup_title 2>/dev/null || true; fleet_popup_thaw' EXIT INT TERM HUP
   # `@popup_pid <epoch>:<pid>` names the holder of THIS epoch (issue #1536): the
   # sidebar pauses only while this process lives, so a holder SIGKILLed past
   # its trap (or a flag that outlived its popup) frees the list at once, not 30s on.
@@ -196,6 +201,9 @@ if [ -n "$client" ]; then
   # popup closes, so the check below is not racing it. (Kept as its own tmux call:
   # dash-popup-selftest.sh's shims dispatch on the subcommand.)
   fleet_home_mark popup
+  # shellcheck disable=SC2034  # read by fleet_popup_thaw (the trap)
+  FPOP_FROZEN=''
+  [ -z "$FREEZE" ] || fleet_popup_freeze "$client"
   [ -z "${FLEET_HOME_MS:-}" ] || cmd="FLEET_HOME_MS=$(printf '%q' "$FLEET_HOME_MS") $cmd"
   fleet_popup_draw "$client" "$cw" "$title" "$(printf 'printf 1 > %q; ' "$marker")$cmd" "$W" "$H"
   # Ran ⇒ done. NB we test the MARKER, never tmux's exit status: a refused popup
@@ -203,6 +211,7 @@ if [ -n "$client" ]; then
   [ -e "$marker" ] && exit 0
   # Refused (an overlay already on this client, the client vanished mid-flight, …)
   # — fall through to inline rather than leaving the keystroke dead.
+  fleet_popup_thaw
   tmux set -g @popup_open 0 \; set -gu @popup_pid \; set -gu @popup_title 2>/dev/null || true
   trap - EXIT INT TERM HUP
 fi

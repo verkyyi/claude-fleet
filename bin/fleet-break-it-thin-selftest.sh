@@ -9,6 +9,10 @@
 #                          看台 on one home machine; the person moves to the other
 #   thin-open-no-loop      bin/fleet-open.sh with a thin lease: no hub action, no
 #                          spool — the escape on the 看台's own terminal
+#   view-popup-wide-bleed  a session streaming wrapped CJK behind the ⌘P list
+#                          (issue #3058): the 看台's popup binds say --freeze, and
+#                          through the real dash-popup.sh not one of the pane's wide
+#                          glyphs reaches the terminal while the popup is up
 #
 # One isolated tmux server (-S under a short /tmp dir), the person's terminals
 # python ptys that answer DA / XTVERSION as iTerm2 and record every byte, the hub a
@@ -140,6 +144,70 @@ drill_thin_open_no_loop() {
   for d in "$B"/conf/remote-views/*.d/[0-9]*-[0-9]*.json; do [ -f "$d" ] && { WHY="a spool nobody reads was made"; th_done; return 1; }; done
   th_done
   WHAT="租约 via=thin：fleet open 不进入口的动作队列、不建 spool，OSC 1337 直接到看台客户端的终端（${r}）"
+}
+
+# view-popup-wide-bleed (issue #3058): tmux 3.7c draws a wide character a pane writes
+# under a popup through the wrong cells, so wrapped CJK behind the ⌘P list lands on
+# its frame and rows. The pane behind must write NOTHING while the popup is up.
+drill_view_popup_wide_bleed() {
+  CAP=6   # popup open → its frame on the terminal, the pane held still
+  local t0 pane binds n0 n1 b
+  B=$(mktemp -d /tmp/thb.XXXXXX); printf '%s\n' "$B" >> "$WORK/thin-boxes"
+  mkdir -p "$B/s" "$B/bin"
+  printf '#!/bin/bash\nexec "%s" -S "%s/s/fl" "$@"\n' "$RT" "$B" > "$B/bin/tmux"; chmod +x "$B/bin/tmux"
+  # 龘 is the glyph to count: wrapped lines, a wide char straddling every line end
+  cat > "$B/cjk.sh" <<'EOS'
+#!/bin/bash
+s=$(printf '龘%.0s' $(seq 66)); n=0
+while :; do printf '\033[H'; for r in $(seq 0 27); do printf '%*s%s' $(( (r + n) % 4 )) '' "$s"; [ $r -lt 27 ] && printf '\r\n'; done; n=$((n+1)); sleep 0.1; done
+EOS
+  chmod +x "$B/cjk.sh"
+  TT() { "$RT" -S "$B/s/fl" "$@"; }
+  TT -f /dev/null new-session -d -s fl -x 120 -y 30 "$B/cjk.sh"
+  TT set -g status off
+  cat > "$B/term.py" <<'PY'
+import os, pty, select, sys, time, fcntl, termios, struct
+tmux, sock, out = sys.argv[1:4]
+pid, fd = pty.fork()
+if pid == 0:
+    os.environ["TERM"] = "xterm-256color"; os.environ["LANG"] = "en_US.UTF-8"
+    os.execvp(tmux, [tmux, "-u", "-S", sock, "attach", "-t", "fl"])
+fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 120, 0, 0))
+o, end = open(out, "ab", buffering=0), time.time() + 40
+while time.time() < end:
+    if select.select([fd], [], [], 0.05)[0]:
+        try:
+            d = os.read(fd, 65536)
+        except OSError:
+            break
+        if not d:
+            break
+        o.write(d)
+os.kill(pid, 9)
+PY
+  python3 "$B/term.py" "$RT" "$B/s/fl" "$B/out" & printf '%s\n' "$!" >> "$WORK/cred-pids"
+  until_ok 5 sh -c '[ -n "$("$1" -S "$2" list-clients -F x)" ]' _ "$RT" "$B/s/fl" || { WHY="the terminal did not attach"; th_done; return 1; }
+  until_ok 5 grep -aq '龘' "$B/out" || { WHY="the session's CJK never reached the terminal"; th_done; return 1; }
+  # the 看台's own key tables, built here: every popup bind names --freeze
+  env TMUX="$B/s/fl,0,0" PATH="$B/bin:$PATH" python3 "$BIN/fleet-quickopen.py" view-keys >/dev/null 2>&1
+  binds=$(TT list-keys -T fleet-view 2>/dev/null | grep 'dash-popup.sh')
+  [ -n "$binds" ] || { WHY="view-keys built no popup bind in fleet-view"; th_done; return 1; }
+  b=$(printf '%s\n' "$binds" | grep -v -e '--freeze' | head -n 1)
+  [ -z "$b" ] || { WHY="a 看台 popup bind without --freeze: $b"; th_done; return 1; }
+  pane=$(TT list-panes -t fl -F '#{pane_id}')
+  t0=$(now)
+  ( env TMUX="$B/s/fl,0,0" PATH="$B/bin:$PATH" bash "$BIN/dash-popup.sh" --client "$(TT list-clients -F '#{client_name}' | head -n 1)" \
+      --no-inline --freeze -w 90% -h 80% -- sleep 3 >/dev/null 2>&1 & )
+  until_ok "$CAP" grep -aq '╭' "$B/out" || { WHY="the popup never drew its frame"; th_done; return 1; }
+  SECS=$(since "$t0")
+  [ "$(TT display -p -t "$pane" '#{pane_in_mode}')" = 1 ] || { WHY="the pane behind is not held while the popup is up"; th_done; return 1; }
+  sleep 0.4; n0=$(grep -ao '龘' "$B/out" | wc -l); sleep 1.5; n1=$(grep -ao '龘' "$B/out" | wc -l)
+  [ "$n1" = "$n0" ] || { WHY="$((n1 - n0)) of the pane's wide glyphs reached the terminal while the popup was up (tmux 3.7c draws them over it)"; th_done; return 1; }
+  until_ok 4 sh -c '[ "$("$1" -S "$2" display -p -t "$3" "#{pane_in_mode}")" = 0 ]' _ "$RT" "$B/s/fl" "$pane" \
+    || { WHY="the pane was left in copy-mode after the popup closed"; th_done; return 1; }
+  sleep 0.5; [ "$(grep -ao '龘' "$B/out" | wc -l)" -gt "$n1" ] || { WHY="the session never drew again after the popup closed"; th_done; return 1; }
+  th_done
+  WHAT="会话背后一直在刷折行的中文：看台的弹窗键都带 --freeze，弹窗 ${SECS}s 内画出来，开着的 1.9s 里背后的面板一个宽字也没送到终端；关掉后面板退出 copy-mode、接着刷"
 }
 
 th_cleanup() {

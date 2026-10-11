@@ -269,10 +269,11 @@ $direct"
 kinds=$(grep -l display-popup "$BIN"/*.sh | grep -v -- '-selftest\.' | sed 's#.*/##')
 [ "$kinds" = fleet-popup-lib.sh ] || fail "one style: display-popup named outside fleet-popup-lib.sh: $kinds"
 grep -q 'fleet_popup_draw ' "$HELPER" || fail "one door: dash-popup.sh does not draw through fleet_popup_draw"
-# an INVOCATION (the script path then its args), not a mention in prose
+# an INVOCATION (the script path then its args), not a mention in prose — nor a
+# path built to invoke it later (fleet_view.py's Path(…) / "dash-popup.sh")
 untitled=$(grep -n 'dash-popup\.sh' "$BIN"/*.sh "$BIN"/*.py "$ROOT"/conf/*.conf 2>/dev/null \
   | grep -v -- '-selftest\.' | grep -v '^[^:]*/dash-popup\.sh:' | grep -Ev '^[^:]+:[0-9]+:[[:space:]]*#' \
-  | grep -E 'dash-popup\.sh(["'"'"')]| --| -w| -h)' | grep -v -- '--title')
+  | grep -E 'dash-popup\.sh(["'"'"')]| --| -w| -h)' | grep -Ev 'Path\(.*"dash-popup\.sh"\)' | grep -v -- '--title')
 [ -z "$untitled" ] || fail "one frame: a popup without --title:
 $untitled"
 for f in tmux-dashboard.sh tmux-issues.sh fleet-sidebar.py fleet-task-pick.sh; do
