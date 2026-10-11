@@ -169,10 +169,11 @@ for want in '─ 等你 1' '─ 在干活 3' '要不要继续合并？' 'Alpha �
   grep -qF "$want" "$W/popup.txt" || fail "B: the list lacks 「${want}」: $(cat "$W/popup.txt")"
 done
 # no session is special (issue #3119): no orchestrator 「新任务」 row, no 停放 / 待你动手
-# section — the panel's own command row 「新任务…」 (issue #3180) is first, with no session behind it
+# section — the panel's own ⚡ row (issue #3327) sits once, under the sessions
 # issue #3179: no (machine, login) grouping, a state is a glyph (the word only on the lit row)
-grep -A1 '│› ' "$W/popup.txt" | tail -1 | grep -q '新任务…' || fail "B: the first line is not the panel's 「新任务…」: $(head -4 "$W/popup.txt")"
-[ "$(grep -c '新任务' "$W/popup.txt")" = 1 ] || fail "B: 「新任务」 more than once: $(grep -n '新任务' "$W/popup.txt")"
+grep -A1 '│› ' "$W/popup.txt" | tail -1 | grep -q '─ 等你 1' || fail "B: the first line is not 等你: $(head -4 "$W/popup.txt")"
+[ "$(grep -c '⚡ 新' "$W/popup.txt")" = 1 ] && grep -q '⚡ 新会话（空白）' "$W/popup.txt" || fail "B: the ⚡ row not once: $(grep -n '⚡' "$W/popup.txt")"
+grep -q '新任务[：…]' "$W/popup.txt" && fail "B: 「新任务」 on an empty panel: $(grep -n '新任务' "$W/popup.txt")"
 for bad in 'merged' 'done:2h' '⇢' '编排' '停放' '待你动手' '（这台）' '─ m4' '─ nodeA' '在问你'; do
   grep -qF -- "$bad" "$W/popup.txt" && fail "B: the list still says 「${bad}」: $(grep -F -- "$bad" "$W/popup.txt")"
 done
@@ -375,6 +376,11 @@ assert "claude-fleet" in t2["@2"] and "tokenledger" in t2["MU/far1"], t2
 v = fv.visible(it, "修 3164", set())
 assert v and v[0]["target"] == "@5", [e.get("target") for e in v]
 assert fv.visible(it, "3164 不存在的词", set()) == []
+# a match is the title or the issue number, never a machine's name (issue #3327):
+# `m4` lights no row on m4, `#8` its issue
+assert [e for e in fv.visible(it, "m4", set()) if e["kind"] == "sess" and "m4" not in (e.get("text") or "")] == [], \
+    [(e.get("target"), e.get("text")) for e in fv.visible(it, "m4", set())]
+assert [e["target"] for e in fv.visible(it, "#8", set()) if e["kind"] == "sess"] == ["MU/far2"], fv.visible(it, "#8", set())
 # paint
 def w1(c): return 0 if unicodedata.category(c) in ("Mn", "Me", "Cf") else (2 if unicodedata.east_asian_width(c) in "WF" else 1)
 for mode in ("", "ascii"):
