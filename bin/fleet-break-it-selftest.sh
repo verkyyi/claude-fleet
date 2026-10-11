@@ -2724,7 +2724,7 @@ printf '{"operation_id": "op-o", "action": "%s", "status": "accepted"}\n' "\$1"
 EOF
   cat > "$d/new.sh" <<EOF
 #!/bin/bash
-printf '%s\n' "\$*" >> "$d/new.log"
+printf 'new %s\n' "\$*" >> "$d/new.log"
 EOF
   chmod +x "$d/write.sh" "$d/new.sh"; : > "$d/write.log"; : > "$d/new.log"
   orch_up "$s" "$d" FLEET_HUB_WRITE_CMD="bash $d/write.sh \"\$@\"" FLEET_PORTAL_NEW_CMD="bash $d/new.sh" \
