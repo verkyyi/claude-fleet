@@ -1,7 +1,6 @@
-// web/dist/admin/nodes.js — Machines, at /nodes (claude-fleet#1990): one card per
-// computer that runs sessions (load trend, status, sessions, version) — a
-// client device (role client) is on All devices instead, one grey line
-// pointing there (claude-fleet#2795) — the
+// web/dist/admin/nodes.js — 服务节点与客户端, at /nodes (claude-fleet#1990,
+// #3232): two tabs, never mixed. 服务节点 is one card per computer that runs
+// sessions (load trend, status, sessions, version), the
 // maintenance switch behind a confirm, «add a machine» (a one-time join code,
 // its command and countdown, waiting for the machine to join), and the SPOT
 // switch. A code from 「添加机器」 is trusted and managed (claude-fleet#2214,
@@ -11,10 +10,16 @@
 // fleet.node_maintenance.<machine> and fleet.spot, and 「移除」 (claude-fleet#1928)
 // retires every enrollment on the machine through /v1/fleet/nodes/retire — its
 // token stops working and its card leaves the page. Below the cards, every
-// machine's 服务与定时任务 (claude-fleet#2526, lib/services.js). An admin's.
+// machine's 服务与定时任务 (claude-fleet#2526, lib/services.js). 客户端
+// (?tab=clients — once All devices, /admin/devices) is every person's client
+// devices of /v1/admin/devices with revoke (lib/devices-view.js): a `fleet
+// login` on a service node (host) and the client machines of /v1/nodes are not
+// listed there. An admin's.
 import { Shell } from '../app-shell.js';
 import { esc, ic, spark, relTime } from '../lib/shell.js';
-import { machineCards, clientMachines, joined, countdown } from '../lib/admin.js';
+import { machineCards, joined, countdown } from '../lib/admin.js';
+import { activeDevices } from '../lib/pages.js';
+import { devicesPanel, wireRevoke } from '../lib/devices-view.js';
 import { serviceRows, servicesSection, svcClick } from '../lib/services.js';
 import { machineHref, listNav } from '../lib/machine-view.js';
 import { t } from '../lib/i18n.js';
@@ -107,12 +112,39 @@ async function pollJoin(ctx) {
   join.timer = ctx.after(3000, () => pollJoin(ctx));
 }
 
+/** clientList is /v1/admin/devices without a `fleet login` on a service node
+ *  (host): the 客户端 tab's rows. */
+const clientList = (devs) => ({ ...(devs || {}), devices: ((devs && devs.devices) || []).filter((d) => !d.host) });
+
+// tabs is the 服务节点 / 客户端 switch; each a link, so the address says the tab.
+function tabs(clients, nNodes, nClients) {
+  const b = (on, href, icon, label, n) => `<a href="${href}"><button type="button" aria-pressed="${on}">${ic(icon)}${esc(t(label))} <span class="n">${n == null ? '?' : n}</span></button></a>`;
+  return `<div><div class="seg" role="group" aria-label="${esc(t('ui.mach.tabs'))}" style="margin-bottom:14px">` +
+    b(!clients, '/nodes', 'server', 'ui.mach.tabNodes', nNodes) + b(clients, '/nodes?tab=clients', 'key', 'ui.mach.tabClients', nClients) + '</div></div>';
+}
+
+const sub = (key) => `<p style="font-size:13px;color:var(--muted);margin:0 0 12px">${esc(t(key))}</p>`;
+
 export default Shell.mount('machines', async (ctx) => {
-  const [snapR, setR] = await Promise.allSettled([ctx.api('/v1/nodes'), ctx.api('/v1/fleet/settings')]);
-  if (snapR.status === 'rejected') throw snapR.reason;
-  const snap = snapR.value;
-  const ms = machineCards(snap);
+  const clients = new URLSearchParams(location.search).get('tab') === 'clients';
+  // The other tab's count is a courtesy: its read failing never fails this one.
+  const [snapR, setR, devR] = await Promise.allSettled([ctx.api('/v1/nodes'), clients ? null : ctx.api('/v1/fleet/settings'), ctx.api('/v1/admin/devices')]);
+  if (snapR.status === 'rejected' && !clients) throw snapR.reason;
+  if (devR.status === 'rejected' && clients) throw devR.reason;
+  const snap = snapR.status === 'fulfilled' ? snapR.value : null;
+  const ms = snap ? machineCards(snap) : [];
+  const devs = devR.status === 'fulfilled' ? clientList(devR.value) : null;
+  const nClients = devs ? activeDevices(devs.devices).length : null;
   ctx.setCount('machines', ms.length);
+  const head = `<div class="pagehead"><div><p>${esc(t('ui.mach.lead'))}</p></div>` +
+    (clients ? '' : `<div class="acts"><button class="btn primary" data-act="add">${ic('plus')}${esc(t('ui.mach.addBtn'))}</button></div>`) + '</div>' +
+    tabs(clients, snap ? ms.length : null, nClients);
+  if (clients) {
+    ctx.el.innerHTML = head + sub('ui.mach.clientsSub') + devicesPanel(devs, true);
+    wireRevoke(ctx);
+    ctx.el.onclick = null;
+    return;
+  }
   const settings = setR.status === 'fulfilled' ? setR.value : null;
   const spotRow = settings && (settings.hub || []).find((h) => h.key === 'fleet.spot');
   const spotOn = !!(spotRow && spotRow.value === 'on');
@@ -125,11 +157,8 @@ export default Shell.mount('machines', async (ctx) => {
     : `<div class="panel"><div class="empty">${ic('server')}<b>${esc(t('ui.mach.empty'))}</b><span>${esc(t('ui.mach.emptySub'))}</span><button class="btn primary" data-act="add">${ic('plus')}${esc(t('ui.mach.addBtn'))}</button></div></div>`;
   // 服务与定时任务 (claude-fleet#2526): every machine's register, when any
   const svcs = serviceRows(snap);
-  // The client devices left off (claude-fleet#2795): said, so none looks lost.
-  const nClient = clientMachines(snap).length;
-  const clientsLine = nClient ? `<p class="sub" style="font-size:12.5px;color:var(--muted);margin:-4px 0 14px"><a href="/admin/devices" data-clients style="color:inherit">${esc(t('ui.mach.clients', { n: nClient }))}</a></p>` : '';
-  ctx.el.innerHTML = `<div class="pagehead"><div><p>${esc(t('ui.mach.lead'))}</p></div><div class="acts"><button class="btn primary" data-act="add">${ic('plus')}${esc(t('ui.mach.addBtn'))}</button></div></div>` +
-    cards + clientsLine + (svcs.length ? servicesSection(svcs) : '') +
+  ctx.el.innerHTML = head + sub('ui.mach.nodesSub') +
+    cards + (svcs.length ? servicesSection(svcs) : '') +
     `<div class="panel"><div class="panel-h"><div><h3>${esc(t('ui.mach.spotTitle'))}</h3><span class="sub">${esc(t('ui.mach.spotSub'))}</span></div>` +
     `<button class="switch" role="switch" aria-checked="${spotOn}" data-act="spot" aria-label="${esc(t('ui.mach.spotTitle'))}"${settings ? '' : ' disabled'}></button></div>` +
     `<div class="panel-b" style="font-size:13px;color:var(--muted)">${esc(spotLine)}</div></div>`;

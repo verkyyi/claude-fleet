@@ -141,6 +141,12 @@ any greeting.
    ~/.claude/fleet/bin/fleet-issue-file.sh --repo <owner/name> --title '<title>' --body '<body>' --spawn
    ```
 
+   A pin grants nothing (issue #3114): this window spawns only once it holds the
+   orchestrator role, so take it first — `~/.claude/fleet/bin/fleet-role-take.sh
+   orchestrator` (exit 0, or 0 «held by this window already»). Exit 4 = someone
+   else orchestrates here: drop `--spawn` from the line above, and they open the
+   session from the list.
+
    stdout is the issue URL; the trailing number is `N`. A spawn refusal on
    stderr (session cap, …) leaves the issue filed — tell them, and they can open
    it later from the session list. Save it before anything else:

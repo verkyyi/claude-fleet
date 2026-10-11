@@ -12,6 +12,7 @@ import sys
 from unittest.mock import patch, Mock
 
 BIN = Path(__file__).resolve().parent
+REAL_RUN = subprocess.run
 
 
 def module(name):
@@ -244,6 +245,121 @@ class LinuxNode(unittest.TestCase):
             self.assertEqual(installed.read_bytes(), original)
             self.assertTrue(installed.stat().st_mode & 0o111)
 
+    # ---- #3212: the image only seeds; the disk runtime follows stable
+    def stage_mod(self):
+        spec = importlib.util.spec_from_file_location('image_stage', BIN.parent / 'extras/managed-node/image-stage.py')
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        return m
+
+    @staticmethod
+    def fake_release(root, sha, seq):
+        d = Path(root) / sha
+        (d / '.release').mkdir(parents=True)
+        (d / 'bin').mkdir()
+        (d / '.release/staged.json').write_text('{}')
+        (d / '.release/manifest.json').write_text(json.dumps({'sha': sha, 'seq': seq}))
+        (d / 'bin/fleet-node-linux.py').write_text('# ' + sha)
+        return d
+
+    def test_restart_never_goes_back_to_image(self):
+        """BREAK-IT linux-image-pins-old: the image is A; the updater moved the
+        disk to B; a container restart keeps B. A newer image (C) is seeded once
+        the updater is at rest; FLEET_NODE_UPDATE_OWNER=image puts the image's back."""
+        m = self.stage_mod()
+        A, B, C = 'a' * 40, 'b' * 40, 'c' * 40
+        with tempfile.TemporaryDirectory() as d:
+            seed, root, state = Path(d, 'seed'), Path(d, 'runtime'), Path(d, 'state')
+            state.mkdir()
+            self.fake_release(seed, A, 5)
+            (seed / 'current').symlink_to(A)
+            self.assertEqual(m.seed(seed, root, state), 'seeded')
+            self.assertEqual(os.readlink(root / 'current'), A)
+            self.assertTrue((root / A / 'bin/fleet-node-linux.py').is_file())
+            self.assertEqual(m.seed(seed, root, state), 'kept')
+            # the updater switches to B (a later stable, seq 6)
+            self.fake_release(root, B, 6)
+            m.swap(root / 'current', B)
+            for _ in range(2):   # a container restart, twice
+                self.assertEqual(m.seed(seed, root, state), 'kept')
+                self.assertEqual(os.readlink(root / 'current'), B)
+            # a new image C (seq 7) — but the updater is mid-switch: its own to finish
+            self.fake_release(seed, C, 7)
+            m.swap(seed / 'current', C)
+            (state / 'update.json').write_text(json.dumps({'phase': 'switched', 'to': B}))
+            self.assertEqual(m.seed(seed, root, state), 'kept')
+            (state / 'update.json').write_text(json.dumps({'phase': 'idle'}))
+            self.assertEqual(m.seed(seed, root, state), 'newer')
+            self.assertEqual((os.readlink(root / 'current'), os.readlink(root / '.prev')), (C, B))
+            # the off switch: the image's version, whatever the disk holds
+            m.swap(seed / 'current', A)
+            self.assertEqual(m.seed(seed, root, state), 'kept')
+            m.seed(seed, root, state, force=True)
+            self.assertEqual(os.readlink(root / 'current'), A)
+            # an image without a staged runtime is refused, the disk untouched
+            m.swap(seed / 'current', 'f' * 40)
+            with self.assertRaisesRegex(ValueError, 'no staged runtime'):
+                m.seed(seed, root, state)
+            self.assertEqual(os.readlink(root / 'current'), A)
+
+    def test_loop_restarts_supervisor_from_new_current(self):
+        """A switch's restart request ends the supervisor; the loop starts it again
+        from the re-read `current`, never exiting the container; one that keeps
+        dying ends the loop."""
+        m = module('fleet-node-linux')
+        with tempfile.TemporaryDirectory() as d:
+            root, out = Path(d), Path(d, 'ran')
+            for sha in ('a' * 40, 'b' * 40):
+                (root / sha / 'bin').mkdir(parents=True)
+                (root / sha / 'bin/fleet-node-supervisor.py').write_text(
+                    'import sys\nopen(%r, "a").write("%s\\n")\nsys.exit(0)\n' % (str(out), sha[:1]))
+            (root / 'current').symlink_to('a' * 40)
+            with patch.dict(os.environ, {'FLEET_NODE_HEARTBEAT': str(root / 'hb'),
+                                         'FLEET_NODE_LOOP_CRASHES': '3'}):
+                loop = m.Loop(root)
+                loop.start()
+                loop.child.wait()
+                os.unlink(root / 'current')
+                (root / 'current').symlink_to('b' * 40)   # the updater switched
+                self.assertIsNone(loop.tend())
+                loop.child.wait()
+                self.assertEqual(out.read_text().split(), ['a', 'b'])
+                loop.beat()
+                st = self.stage_mod()
+                st.HEARTBEAT = str(root / 'hb')
+                self.assertEqual(st.live(), 0)
+                os.utime(root / 'hb', (1, 1))
+                self.assertEqual(st.live(), 1)
+                for _ in range(2):
+                    self.assertIsNone(loop.tend())
+                    loop.child.wait()
+                self.assertEqual(loop.tend(), 1)   # a 4th death in the window: give up
+
+    def test_image_self_updates_on_its_volume(self):
+        """The image's defaults (#3212): the runtime on the PVC, owner node (the
+        updater runs and the node program says CapRelease), a boot that seeds,
+        PATH and /usr/local/bin following the disk's current, liveness on the loop."""
+        df = (BIN.parent / 'extras/managed-node/Dockerfile').read_text()
+        self.assertIn('FLEET_NODE_ROOT=/var/db/fleet-node/runtime', df)
+        self.assertIn('FLEET_NODE_UPDATE_OWNER=node', df)
+        self.assertIn('"/usr/local/lib/fleet-image-stage.py", "boot"]', df)
+        self.assertIn('PATH=/var/db/fleet-node/runtime/current/tools/bin:', df)
+        self.assertIn('/var/db/fleet-node/runtime/current/tools/bin/$t /usr/local/bin/$t', df)
+        self.assertNotIn('/opt/claude-fleet/current', df)
+        s = module('fleet-node-supervisor')
+        with patch.dict(os.environ, {'FLEET_NODE_UPDATE_OWNER': 'node'}):
+            self.assertIn('update', [x['name'] for x in s.default_table(s.Paths())['tasks']])
+        raw = subprocess.check_output([sys.executable, str(BIN.parent / 'extras/managed-node/render.py'),
+                                       '--image', 'example/image@sha256:' + 'a' * 64,
+                                       '--hub', 'https://hub.example', '--storage-class', 'essd'])
+        c = json.loads(raw)['items'][-1]['spec']['template']['spec']['containers'][0]
+        self.assertEqual(c['livenessProbe']['exec']['command'][-2:], ['/usr/local/lib/fleet-image-stage.py', 'live'])
+        self.assertIn('/var/db/fleet-node/runtime/current/bin/fleet-node-linux.py',
+                      c['readinessProbe']['exec']['command'])
+        # stable cannot move to a release without Linux artifacts: the hub's platforms
+        rel = (BIN.parent / 'deploy/k8s/overlays/prod/deployment-release.yaml').read_text()
+        self.assertRegex(rel, r'CCQUOTA_FLEET_RELEASE_PLATFORMS\n\s+value: darwin-arm64 linux-amd64')
+
     def test_image_update_never_resumes_saved_switch(self):
         u = module('fleet-node-update')
         obj = u.Updater.__new__(u.Updater)
@@ -265,6 +381,217 @@ class LinuxNode(unittest.TestCase):
                 patch.object(s, 'pid_alive', return_value=True), patch.object(s, 'pid_cmd', return_value='same'):
             obj.adopt()
         self.assertEqual(obj.adopted, {})
+
+
+class FakeOS:
+    """A passwd/group that vanishes like the image layer's, plus the calls
+    login open/remove make — every write lands in a temp dir (EPIC #3208 C1)."""
+
+    def __init__(self, m, d):
+        self.m, self.d = m, Path(os.path.realpath(d))
+        self.users, self.groups, self.calls, self.owner = {}, {}, [], {}
+        self.paths = Mock(state=str(self.d / 'state'), users=str(self.d / 'home'),
+                          logins=str(self.d / 'state/logins'))
+        Path(self.paths.users).mkdir(parents=True)
+        self.sup = Mock(Paths=lambda: self.paths, tenant_privileges=lambda login: ([], True),
+                        account_forget=Mock(return_value=0), remove_login_env=Mock(return_value=True))
+        self.cred = Mock(ROOT_BASE=str(self.d / 'cred'), purge=Mock(return_value=0))
+
+    def pw(self, name):
+        if name not in self.users:
+            raise KeyError(name)
+        uid, home = self.users[name]
+        return Mock(pw_name=name, pw_uid=uid, pw_gid=uid, pw_dir=home)
+
+    def pwuid(self, uid):
+        for n, (u, _) in self.users.items():
+            if u == uid:
+                return self.pw(n)
+        raise KeyError(uid)
+
+    def gr(self, name):
+        if name not in self.groups:
+            raise KeyError(name)
+        return Mock(gr_gid=self.groups[name])
+
+    def grgid(self, gid):
+        for n, g in self.groups.items():
+            if g == gid:
+                return self.gr(n)
+        raise KeyError(gid)
+
+    def run(self, cmd, **kw):
+        self.calls.append(list(cmd))
+        tool = cmd[0]
+        if cmd[1:] == ['--help']:
+            return Mock(returncode=0, stdout='  -b, --badname    allow bad names\n')
+        if tool in ('groupadd', 'useradd') and cmd[-1][0].isdigit() and '--badname' not in cmd:
+            raise subprocess.CalledProcessError(3, cmd)     # Debian refuses a digit-leading name
+        if tool == 'groupadd':
+            self.groups[cmd[-1]] = int(cmd[cmd.index('--gid') + 1])
+        elif tool == 'useradd':
+            self.users[cmd[-1]] = (int(cmd[cmd.index('--uid') + 1]), cmd[cmd.index('--home-dir') + 1])
+        elif tool == 'userdel':
+            self.users.pop(cmd[-1])
+        elif tool == 'groupdel':
+            self.groups.pop(cmd[-1])
+        elif tool == 'pgrep':
+            return Mock(returncode=1, stdout='')
+        elif tool == 'tar':
+            return REAL_RUN(cmd, capture_output=True, text=True)
+        return Mock(returncode=0, stdout='', stderr='')
+
+    def chown(self, path, uid, gid):
+        self.owner[str(path)] = (uid, gid)
+
+    def owner_of(self, path):
+        return self.owner.get(str(path), (0, 0))
+
+    def reboot(self):
+        self.users.clear()
+        self.groups.clear()
+
+    def __enter__(self):
+        m = self.m
+        self.stack = [patch.object(m.pwd, 'getpwnam', self.pw), patch.object(m.pwd, 'getpwuid', self.pwuid),
+                      patch.object(m.grp, 'getgrnam', self.gr), patch.object(m.grp, 'getgrgid', self.grgid),
+                      patch.object(m.subprocess, 'run', self.run), patch.object(m.os, 'chown', self.chown), patch.object(m.os, 'fchown', lambda *a: None),
+                      patch.object(m, 'owner_of', self.owner_of), patch.object(m, 'as_tenant'),
+                      patch.object(m, 'request', return_value={}), patch.object(m, 'live_pids', return_value=[]), patch.object(m.time, 'sleep'),
+                      patch.object(m, 'load', lambda n: self.sup if n == 'fleet-node-supervisor' else self.cred)]
+        for p in self.stack:
+            p.start()
+        return self
+
+    def __exit__(self, *exc):
+        for p in self.stack:
+            p.stop()
+
+    def open(self, login, **kw):
+        return self.m.ensure_login(self.sup, self.paths, login, kw.get('uid'), kw.get('full_name', ''))
+
+    def remove(self, login, home='keep'):
+        return self.m.login_remove(_ns(name=login, home=home))
+
+
+def _ns(**kw):
+    import argparse
+    return argparse.Namespace(**kw)
+
+
+class LinuxTenants(unittest.TestCase):
+    """The three BREAK-IT rows of EPIC #3208 C1 — drilled through these."""
+
+    def setUp(self):
+        self.m = module('fleet-node-linux')
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    def test_legacy_declaration_migrates_to_per_login(self):
+        with FakeOS(self.m, self.tmp.name) as f:
+            st = Path(f.paths.state)
+            st.mkdir()
+            (st / 'linux-tenant.json').write_text(json.dumps(
+                {'login': 'fleet', 'uid': 10002, 'gid': 10002, 'home': f.paths.users + '/fleet'}))
+            got = self.m.tenants(f.paths)
+            self.assertEqual(got['fleet']['uid'], 10002)
+            self.assertTrue((st / 'linux-tenant.json.bak').is_file())
+            self.assertFalse((st / 'linux-tenant.json').exists())
+            self.assertEqual(f.open('drill2').pw_uid, 10003)
+
+    def test_uid_reuse(self):
+        """linux-uid-reuse: same number after a restart, a removed number never
+        handed out again, a home owned by anyone else stops the boot."""
+        with FakeOS(self.m, self.tmp.name) as f:
+            a = f.open('24haowan')
+            b = f.open('drill2')
+            self.assertEqual((a.pw_uid, b.pw_uid), (10002, 10003))
+            self.assertTrue(any(c[0] == 'useradd' and c[-1] == '24haowan' for c in f.calls))
+            f.reboot()
+            self.m.boot()
+            self.assertEqual(f.users['24haowan'][0], 10002)
+            self.assertEqual(f.users['drill2'][0], 10003)
+            self.assertEqual(f.remove('drill2'), 0)
+            c = f.open('drill3')
+            self.assertNotEqual(c.pw_uid, 10003)
+            self.assertEqual(c.pw_uid, 10004)
+            # the same name back is a NEW person: a new number, never the retired one
+            self.assertEqual(f.open('drill2').pw_uid, 10005)
+            # a wrong owner on a home stops the boot; nothing is chowned
+            f.owner[f.paths.users + '/24haowan'] = (10004, 10004)
+            f.reboot()
+            chowns = dict(f.owner)
+            with self.assertRaisesRegex(ValueError, 'nothing chowned'):
+                self.m.boot()
+            self.assertEqual(f.owner, chowns)
+            self.assertNotIn('24haowan', f.users)
+
+    def test_removed_login_lingers(self):
+        """linux-removed-login-lingers: remove leaves no user, group, process,
+        credsep tenant, daemon entry, node token or declaration; the home is in
+        the attic."""
+        with FakeOS(self.m, self.tmp.name) as f:
+            f.open('drill2')
+            home = Path(f.paths.users) / 'drill2'
+            (home / 'work.txt').write_text('kept in the attic')
+            store = Path(f.cred.ROOT_BASE) / 'drill2'
+            store.mkdir(parents=True)
+            (store / 'node.env').write_text('CCQUOTA_HUB_URL=https://hub.example\nCCQUOTA_TOKEN=t\n')
+            self.assertEqual(f.remove('drill2'), 0)
+            self.assertNotIn('drill2', f.users)
+            self.assertNotIn('drill2', f.groups)
+            self.assertFalse(home.exists())
+            self.assertIn(['pkill', '-KILL', '-U', '10002'], f.calls)
+            f.sup.account_forget.assert_called_once_with(f.paths, 'drill2')
+            f.sup.remove_login_env.assert_called_once_with(f.paths, 'drill2')
+            self.assertEqual(f.cred.purge.call_args[0][0].login, 'drill2')
+            self.m.request.assert_any_call('https://hub.example', '/v1/node/leave', 't',
+                                           {'reason': 'login drill2 removed'})
+            self.assertFalse(self.m.tenant_path(f.paths, 'drill2').exists())
+            archived = list((Path(f.paths.users) / '.attic').glob('drill2-*.tar.gz'))
+            self.assertEqual(len(archived), 1)
+            self.assertEqual(archived[0].stat().st_mode & 0o777, 0o600)
+            self.assertIn('./work.txt', REAL_RUN(['tar', '-tzf', str(archived[0])],
+                                                       capture_output=True, text=True).stdout)
+            self.assertIn('10002', (self.m.tenants_dir(f.paths) / '.retired').read_text().split())
+            with self.assertRaises(self.m.NoLogin):
+                f.remove('drill2')
+
+    def test_tenant_cross_read(self):
+        """linux-tenant-cross-read: every home is 0700 after open and boot, and a
+        new login never takes over a home another number owns."""
+        with FakeOS(self.m, self.tmp.name) as f:
+            f.open('24haowan')
+            f.open('drill2')
+            homes = Path(f.paths.users)
+            os.chmod(homes / 'drill2', 0o755)       # someone widened it
+            f.reboot()
+            self.m.boot()
+            for h in ('24haowan', 'drill2'):
+                self.assertEqual((homes / h).stat().st_mode & 0o777, 0o700, h)
+            (homes / 'drill9').mkdir()
+            f.owner[str(homes / 'drill9')] = (10002, 10002)     # 24haowan's files
+            with self.assertRaisesRegex(ValueError, 'nothing chowned'):
+                f.open('drill9')
+            self.assertEqual(f.owner[str(homes / 'drill9')], (10002, 10002))
+
+    def test_names_and_exit_codes(self):
+        m = self.m
+        for good in ('24haowan', 'fleet', 'drill2'):
+            self.assertTrue(m.valid_name(good), good)
+        for bad in ('1234', 'a', 'root', 'Bob', '-x', 'a_b', 'x' * 17):
+            self.assertFalse(m.valid_name(bad), bad)
+        self.assertFalse(m.valid_full_name('a:b'))
+        self.assertTrue(m.valid_full_name('Arvin Wang'))
+        with FakeOS(m, self.tmp.name) as f:
+            f.users['admin1'] = (20000, '/home/admin1')
+            f.sup.tenant_privileges = lambda login: (['sudo -l: (ALL) ALL'], True)
+            with self.assertRaises(m.Refuse) as e:
+                f.open('admin1')
+            self.assertEqual(e.exception.rc, 5)
+            self.assertEqual(m.guarded(lambda: m.login_cmd(['open', '1234'])), 3)
+            self.assertEqual(m.guarded(lambda: m.login_cmd(['remove', 'nobody2', '--keep-home'])), 4)
+            self.assertEqual(m.guarded(lambda: m.login_cmd(['remove', 'nobody2'])), 3)
 
 
 if __name__ == '__main__':

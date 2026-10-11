@@ -30,7 +30,7 @@
 // are and offers to sign in again, rather than drawing a menu that guesses.
 import { esc, ic, ICONS, PAGES, navFor, pageAllowed, titleOf, isAdmin, viewer, liveLine, otherView, freshness, streamLine } from './lib/shell.js';
 import { createStream } from './lib/stream.js';
-import { routeFor, intercept, timerBag, readCache, isRead, CACHE_TTL } from './lib/router.js';
+import { routeFor, movedTo, intercept, timerBag, readCache, isRead, CACHE_TTL } from './lib/router.js';
 import { t, locale, chooseLocale } from './lib/i18n.js';
 
 /** api fetches a same-origin JSON endpoint; a non-2xx throws an Error whose
@@ -224,13 +224,19 @@ function start(fallback) {
     document.body.innerHTML = '';
     try { R.me = await api('/v1/me'); } catch (e) { R.err = e; }
     if (R.me) R.stream = createStream({ fetchJSON: (u) => api(u), onStatus: paintStream });
+    const moved = movedTo(location.pathname, location.search, location.hash);
+    if (moved) history.replaceState(null, '', moved);
     const first = routeFor(location.pathname);
     const id = first ? first.id : (fallback || 'overview');
     if (!first && !fallback) history.replaceState(null, '', '/' + location.search + location.hash);
     document.body.innerHTML = frame(R.me, id);
     wire();
     document.addEventListener('click', onLink);
-    window.addEventListener('popstate', () => { const p = routeFor(location.pathname); if (p) show(p.id); });
+    window.addEventListener('popstate', () => {
+      const moved = movedTo(location.pathname, location.search, location.hash);
+      if (moved) history.replaceState(null, '', moved);
+      const p = routeFor(location.pathname); if (p) show(p.id);
+    });
     await show(id);
     if (R.me) prefetch(R.me);
     if (R.me) {
@@ -275,7 +281,9 @@ function onLink(e) {
 /** navigate shows the page at url (a path, with its query) in place, and
  *  writes it to the history; a path the app has no page for is a real load. */
 function navigate(url) {
-  const u = new URL(url, location.origin);
+  let u = new URL(url, location.origin);
+  const moved = movedTo(u.pathname, u.search, u.hash);
+  if (moved) u = new URL(moved, location.origin);
   const p = routeFor(u.pathname);
   if (!p) { location.assign(u.href); return Promise.resolve(); }
   if (R.perf) performance.mark('nav-click');

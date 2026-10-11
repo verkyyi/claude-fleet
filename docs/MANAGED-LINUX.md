@@ -1,14 +1,54 @@
 # Managed Linux nodes and Aliyun ACK
 
-The first Linux deployment is one managed machine, one non-sudo worker login,
-and one persistent volume. The existing hub issues the machine and login
-identities; the existing Singapore relay forwards Anthropic requests. macOS
-continues to use its existing installer and launchd services.
+A managed Linux machine hosts several non-sudo logins on one persistent volume
+(EPIC #3208). The existing hub issues the machine and each login's identity;
+the existing Singapore relay forwards Anthropic requests. macOS continues to
+use its existing installer and launchd services.
 
-The Linux bootstrap creates its first login. The macOS account-opening/removal
-scripts are not used for Linux: do not enable remote admin account operations
-on this first-version node. Adding tenants through the hub is outside this
-single-login deployment.
+The Linux bootstrap opens the first login. Every later login is opened and
+removed on the machine by ONE road, `fleet-node-linux.py login` (root) — the
+Linux twin of `fleet-login-new.sh` / `fleet-login-remove.sh`, with the same
+steps, exit codes and last line; nothing else on the machine runs `useradd` /
+`userdel`:
+
+```sh
+sudo /opt/claude-fleet/current/bin/fleet-node-linux.py login open 24haowan \
+  --full-name 'Arvin' --join-file /private/login-code
+sudo /opt/claude-fleet/current/bin/fleet-node-linux.py login list
+sudo /opt/claude-fleet/current/bin/fleet-node-linux.py login remove drill2 --keep-home
+```
+
+(Inside the ACK container the runtime is on the volume:
+`/var/db/fleet-node/runtime/current/bin/…` — see «Upgrade and recovery».)
+
+- `open`: OS user → home (0700) → install → the login's own node identity
+  (join code) → credential separation as a tenant of the shared proxy →
+  `account adopt` → its fleet started. A name is 2–16 of `a-z0-9` with at least
+  one letter (`control.ValidCreateLogin`); a digit may lead (`24haowan` — only
+  here is `useradd` given its bad-name flag).
+- `remove`: stop its fleet → `node leave` on the hub → `account forget` →
+  `fleet-credsep.py purge` → kill its processes → archive the home to
+  `/home/.attic/<login>-<UTC>.tar.gz` (root 600, dropped after 30 days;
+  `--delete-home` skips it) → `userdel` / `groupdel`.
+- `list`: one line per login, `<login> <uid> <home> <state>` (`ok` · `missing`
+  · `mismatch` · `no-home`).
+
+Exit 0 done · 3 bad argument (or a name already taken outside this road) ·
+4 no such login (remove) · 5 the name is already an administrator / has sudo;
+open's last line is `credsep: separated|pending — …|not separated`, remove's
+`credsep: purged`.
+
+**Numbers never move and are never reused.** Each login is declared on the
+volume, `/var/db/fleet-node/linux-tenants/<login>.json` (`{login, uid, gid,
+home, since}`, root 0600). UIDs start at 10002 and only grow (`.next-uid`); a
+removed login's number goes to `.retired` and is never handed out again — the
+same name opened again is a new person with a new number. `/etc/passwd` lives
+in the image layer and is gone on every container start, so the entrypoint's
+first step is `fleet-node-linux.py boot`: every declared group and user back
+with its number, home and shell, before the supervisor starts. A home owned by
+any other number stops the boot with an error; it is never chowned. A volume
+from the single-login version has its `linux-tenant.json` moved to
+`linux-tenants/<login>.json` (the old file kept as `.bak`).
 
 ## Native Linux
 
@@ -35,9 +75,10 @@ sudo systemctl status claude-fleet-node.service
 sudo /opt/claude-fleet/current/bin/fleet-node-supervisor.py status --check
 ```
 
-Use a fresh login name. Its default UID/GID is 10002; `FLEET_NODE_UID` selects
-another before the first install. The persisted `linux-tenant.json` refuses a
-different UID or login on subsequent runs. The worker receives no sudo rule.
+The installer's `--login` opens the first login through `login open`. Its
+UID/GID comes from the allocator (10002 on a fresh volume); `FLEET_NODE_UID`
+pins it on the first install, and its declaration refuses a different UID on
+subsequent runs. No login receives a sudo rule.
 Root and the dedicated `fleetcred` account retain credentials outside HOME.
 
 The supervisor owns the shared credential proxy and machine agent. It reads
@@ -68,8 +109,8 @@ listen is never pushed.
 
 The build context contains the verified release and public key, no join codes
 or node credentials. Select the resulting image **digest** for deployment.
-The image provides a fixed UID/GID 499 for `fleetcred`; the worker's UID/GID
-are recreated consistently from their persisted declaration.
+The image provides a fixed UID/GID 499 for `fleetcred`; every login's UID/GID
+is recreated at each start from its declaration on the volume (`boot`).
 
 ## ACK resources
 
@@ -144,17 +185,42 @@ which adds the line to a store written before it, token untouched. Check it with
 
 ## Upgrade and recovery
 
-Kubernetes owns the ACK runtime version. The supervisor omits its updater task,
-and a manual updater tick refuses to resume even an old persisted switch while
-`FLEET_NODE_UPDATE_OWNER=image`. The StatefulSet uses `OnDelete`: update its image
-digest, arrange a suitable restart, and delete the pod normally. Roll back by
-restoring the previous image digest and restarting again. The PVC stays.
-Credential pool synchronization continues independently of runtime updates.
-Each image activation relinks the tenant's runtime and reapplies its hooks and
-settings before restoring sessions. A failed apply remains pending for retry;
-the previous image's files do not need to exist on the replacement container.
+The machine follows `stable` by itself, with the same updater as a Mac
+(`fleet-node-update.py`, docs/MANAGED-NODE.md §7) — issue #3212. The runtime lives
+on the persistent volume, `FLEET_NODE_ROOT=/var/db/fleet-node/runtime`
+(`<sha>/`, `current`, `.prev` — the Mac `<root>`'s shape); the image's release is
+only a **seed** at `/opt/claude-fleet/seed/<sha>`. The entrypoint
+(`/usr/local/lib/fleet-image-stage.py boot`) copies it onto the volume when the
+volume has no `current`, or when the image's signed `seq` is newer than the
+disk's and the updater is at rest (`update.json` phase idle), then starts
+`<disk current>/bin/fleet-node-linux.py foreground`. A container restart never
+puts the image's older version back (BREAK-IT `linux-image-pins-old`).
 
-On SIGTERM, the entrypoint saves Fleet's session snapshot before stopping the
+`FLEET_NODE_UPDATE_OWNER=node` (the image's default) keeps the supervisor's
+`update` task and its restart request, and the machine's node program lists
+`CapRelease`, so a new stable starts the update at once. A switch stages the
+release, moves `current`, re-links every login's `~/.claude/fleet` and asks the
+supervisor to restart; `foreground` is a resident loop that starts the supervisor
+again from the re-read `current` — the container, its tmux servers and every
+session stay. The machine doctor after the switch decides: a FAIL the old version
+did not have rolls everything back and skips that release. `/usr/local/bin`'s
+tmux / claude / codex / ccquota and the image's PATH point at the disk's
+`current/`, never the image's. The hub's `CCQUOTA_FLEET_RELEASE_PLATFORMS` lists
+`linux-amd64`, so a release without the Linux artifacts is neither built nor
+moved to stable (`fleet-stable.sh move` refuses, `artifacts:`).
+
+The image is rebuilt only when the system layer changes (Debian, OpenSSH,
+python). The StatefulSet uses `OnDelete`: update its image digest, arrange a
+suitable restart, and delete the pod normally — a newer image's seed is taken on
+that start, an older one is ignored. `FLEET_NODE_UPDATE_OWNER=image` turns the
+self-update off: the supervisor omits its updater task (a manual tick refuses to
+resume even a persisted switch), the boot always puts the image's version in
+`current`, and credential-pool synchronization runs as its own task. The PVC
+stays either way. Each activation relinks every login's runtime and reapplies its
+hooks and settings before restoring sessions; a failed apply remains pending for
+retry.
+
+On SIGTERM, the entrypoint saves every login's Fleet session snapshot before stopping the
 supervisor. On startup it restores snapshots through the existing restore
 script. Abrupt node loss can recover only previously persisted snapshots and
 conversation history; memory and running processes do not survive. Every
@@ -162,8 +228,11 @@ container start has a new boot ID, preventing adoption of persisted PIDs that
 now identify unrelated processes.
 
 Readiness requires completed bootstrap, a healthy supervisor, its proxy/node
-agent/sshd children, and no refused login lane. Liveness checks the supervisor
-only; a hub outage should not restart an otherwise healthy pod.
+agent/sshd children, and no refused login lane. Liveness checks the resident
+loop only (its heartbeat, `/run/fleet-node-loop`): neither a hub outage nor a
+supervisor restarting onto a new release restarts the pod. A supervisor that
+dies more than 10 times in 10 minutes ends the loop, and Kubernetes restarts
+the container.
 
 ## Acceptance evidence
 

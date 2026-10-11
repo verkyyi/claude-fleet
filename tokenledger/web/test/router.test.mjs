@@ -5,7 +5,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { PAGES } from '../dist/lib/shell.js';
-import { routeFor, pathParam, intercept, timerBag, readCache, isRead, CACHE_TTL } from '../dist/lib/router.js';
+import { routeFor, movedTo, MOVED, pathParam, intercept, timerBag, readCache, isRead, CACHE_TTL } from '../dist/lib/router.js';
 
 // A prefix page's path is one name under its href (/machines/<host>, claude-fleet#2796).
 const pathOf = (p) => (p.prefix ? p.href + 'm4' : p.href);
@@ -16,12 +16,39 @@ const click = (mods = {}) => ({ button: 0, metaKey: false, ctrlKey: false, shift
 
 test('every page in the menu is a route, and its path is its href', () => {
   for (const p of PAGES) {
+    if (p.id === 'phone' || p.id === 'connection') continue; // the hub's own pages (below)
     assert.ok(p.module && p.module.startsWith('/') && p.module.endsWith('.js'), `${p.id} names its module`);
     assert.equal(routeFor(pathOf(p)), p, pathOf(p));
   }
   assert.equal(routeFor('/sessions/'), routeFor('/sessions'), 'a trailing slash is the same page');
   assert.equal(routeFor(''), routeFor('/'));
   for (const p of ['/signin', '/sessions.html', '/v1/me', '/no-such', '/admin']) assert.equal(routeFor(p), null, p);
+});
+
+test('从手机连 is the hub\'s page: in the menu, never opened in place (claude-fleet#3199)', () => {
+  const p = PAGES.find((x) => x.id === 'phone');
+  assert.equal(p.href, '/fleet/keys');
+  assert.ok(!p.module && !p.group, 'no module, every role');
+  assert.equal(routeFor('/fleet/keys'), null);
+  assert.equal(intercept(click(), anchor(ORIGIN + '/fleet/keys'), ORIGIN), null, 'the browser loads it');
+  const c = PAGES.find((x) => x.id === 'connection');
+  assert.ok(c.href === '/fleet/connection' && !c.module && !c.group);
+  assert.equal(intercept(click(), anchor(ORIGIN + '/fleet/connection'), ORIGIN), null);
+});
+
+test('an old address opens where it moved, never nothing (claude-fleet#3232)', () => {
+  assert.equal(movedTo('/admin/devices'), '/nodes?tab=clients');
+  assert.equal(movedTo('/admin/devices/'), '/nodes?tab=clients', 'a trailing slash too');
+  assert.equal(movedTo('/admin/devices', '?tab=nodes&x=1', '#h'), '/nodes?tab=clients&x=1#h', 'the new tab wins, the rest is kept');
+  assert.equal(movedTo('/nodes'), '');
+  assert.equal(movedTo('/sessions'), '');
+  for (const [from, to] of Object.entries(MOVED)) {
+    assert.equal(routeFor(from), null, `${from} is no page of its own`);
+    assert.ok(routeFor(new URL(to, ORIGIN).pathname), `${to} is a page`);
+  }
+  const hit = intercept(click(), anchor(ORIGIN + '/admin/devices'), ORIGIN);
+  assert.equal(hit.page.id, 'machines');
+  assert.equal(hit.url, '/nodes?tab=clients');
 });
 
 test('one machine is a page under /machines/; the bare path stays the list (claude-fleet#2796)', () => {
@@ -42,7 +69,7 @@ test('one machine is a page under /machines/; the bare path stays the list (clau
 test('a plain click on a page link opens it in place; between every pair of pages', () => {
   for (const from of PAGES) {
     for (const to of PAGES) {
-      if (from === to) continue;
+      if (from === to || !to.module) continue;
       const hit = intercept(click(), anchor(ORIGIN + pathOf(to)), ORIGIN);
       assert.ok(hit, `${from.id} → ${to.id}`);
       assert.equal(hit.page, to);
@@ -131,7 +158,7 @@ test('a read is good for 30 s, a write empties every read', () => {
 // (or its dispose) — a bare setInterval would outlive the page in place.
 test('every page module exports its page and owns no stray timer', () => {
   const read = (m) => readFileSync(new URL('../dist' + m, import.meta.url), 'utf8');
-  const sources = PAGES.map((p) => [p.module, read(p.module)]);
+  const sources = PAGES.filter((p) => p.module).map((p) => [p.module, read(p.module)]);
   sources.push(['/lib/sessions-view.js', read('/lib/sessions-view.js')]);
   for (const [m, src] of sources) {
     const p = PAGES.find((x) => x.module === m);

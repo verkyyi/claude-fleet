@@ -103,6 +103,34 @@ func Local() *model.Identity {
 	return &model.Identity{Hostname: hostname, OS: runtime.GOOS, Arch: runtime.GOARCH, OSUser: osUser()}
 }
 
+// ClaudePool identifies Claude usage on a login that has transcripts but no
+// oauthAccount in ~/.claude.json (claude-fleet#3204). A login whose sessions
+// all run on tokens handed in from outside — a credential proxy, a pooled
+// CLAUDE_CODE_OAUTH_TOKEN — never runs /login, so Detect has nothing to name.
+// Skipping the scan lost every turn such a login made; parking them in the
+// "claude:local" pool keeps them on the hub, under the endpoint and login that
+// spent them, exactly as Codex's unassigned pool does.
+func ClaudePool(home string) *model.Identity {
+	id := Local()
+	id.Source = model.SourceClaude
+	id.AccountUUID = ClaudePoolAccount
+	id.DisplayName = "Claude (no login on this endpoint)"
+	if b, err := os.ReadFile(filepath.Join(home, ".claude.json")); err == nil {
+		var cfg claudeConfig
+		if json.Unmarshal(b, &cfg) == nil {
+			id.MachineID = cfg.MachineID
+			if semverish.MatchString(cfg.LastReleaseNotesSeen) {
+				id.CCVersion = cfg.LastReleaseNotesSeen
+			}
+		}
+	}
+	return id
+}
+
+// ClaudePoolAccount is the key ClaudePool parks usage under: the hub's
+// PoolAccount("claude").
+const ClaudePoolAccount = "claude:local"
+
 // Codex transcripts do not attest to an OpenAI account. Keep their usage in
 // an explicitly unassigned pool rather than attributing it to a Claude login
 // or today's Codex credentials (which may differ from historical sessions).

@@ -828,6 +828,7 @@ func runHub(args []string) error {
 	if srv.Fleet {
 		// Node-lost / lease-conflict alerts (claude-fleet#1630).
 		srv.NodeLostAfter = api.NodeLostAfterFromEnv()
+		srv.UsageSilentAfter = api.UsageSilentAfterFromEnv()
 		go srv.RunNodeAlerts(ctx)
 		// Off (srv.HubQuota nil): returns at once.
 		go srv.RunHubQuota(ctx)
@@ -838,6 +839,7 @@ func runHub(args []string) error {
 		// no call at all.
 		if c, ok := dns.FromEnv(); ok {
 			srv.EntryDNS = api.NewEntryDNS(dns.NewDNSPod(c), c.Subdomain)
+			srv.EntryDNS.Zone = c.Subdomain + "." + c.Domain
 			log.Printf("fleet: address records under %s.%s are the hub's (DNSPod)", c.Subdomain, c.Domain)
 		}
 		go srv.RunEntryDNS(ctx)

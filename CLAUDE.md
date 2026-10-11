@@ -452,6 +452,24 @@ Do not install from memory: read the doc and work from it.
   callback server is gone or at `FLEET_OPEN_CALLBACK_SECS` (`bin/fleet_open_fwd.py`,
   the one bookkeeping). Off = no BROWSER, no cport, byte for byte.
   `fleet-browser-selftest.sh`.
+- **Orchestrating is a role a session TAKES, one holder per role** (issue #3114,
+  EPIC #3111 C3). `/fleet-orchestrate` (the fleet-orchestrate plugin's skill) first
+  calls the dispatch group's `take_role` (`bin/fleet-role-take.sh <role>
+  [--steal|--drop|--who]`): only a window that binds no issue (exit 3 otherwise),
+  stamped `@fleet_role_def orchestrator|steward`, recorded as the role's ONE line
+  in `$FLEET_CONF_DIR/global/roles.held`; a second taker exits 4 naming the holder,
+  `--steal` moves it (the old holder's mark goes). `fleet_role_holder`
+  (`bin/fleet-lib.sh`) is the only reader — `fleet_win_for_key orchestrator|steward`
+  asks it; the old seat's `@fleet_role orchestrator` answers only while no line
+  names another (`# compat-1v`). A pin grants nothing: `fleet_spawn_refused` lets a
+  worker window spawn for its agent file or its taken role, never for being a
+  pinned `guide`. The state relay (`fleet-orchestrator-state.py`) is registered
+  only by the plugin's `hooks/hooks.json` (`--skill-dir ${CLAUDE_PLUGIN_ROOT}/…`),
+  writes only for the holder and hands back the skill's `role.md` + `rules.md` on
+  SessionStart; the built-in rule rows live in the plugins' `skills/*/rules.md`
+  (`conf/role-rules.default.md` is their union, one version, for the hub's view);
+  `/qd` is the plugin's mod module (`plugins/fleet-orchestrate/hooks/qd.tsx`, any
+  window with no issue). `fleet-role-take-selftest.sh`, BREAK-IT `role-taken-twice`.
 - **A role starts as its ONE definition says: `agents/<role>.md`** (issue #2782,
   EPIC #2781 C1). orchestrator · steward · worker · epic-driver, each in Claude
   Code's subagent file format (model · effort · tools · disallowedTools ·
@@ -509,7 +527,8 @@ Do not install from memory: read the doc and work from it.
   credential-shaped value is refused before sending. Never hand-edit the layer
   files for it; `fleet-role-write-selftest.sh`.
 - **How the orchestrator dispatches and what the steward may answer is ONE rule
-  table** (issue #2786, EPIC #2781 C5): `conf/role-rules.default.md` (编号 · 角色 ·
+  table** (issue #2786, EPIC #2781 C5): the plugins' `skills/*/rules.md` (issue #3114;
+  `conf/role-rules.default.md` their one-version union) (编号 · 角色 ·
   条件 · 动作 · 档位 auto|default|ask|off · 关键词) < the person's layer
   (`person-bundle.json` `rules`) < this computer's `$FLEET_CONF_DIR/roles/rules.md`,
   merged by number in `bin/fleet_rules.py` (the one reader; a number is never

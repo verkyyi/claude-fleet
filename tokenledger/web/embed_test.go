@@ -31,7 +31,6 @@ var appPages = []struct{ html, script, id string }{
 	// The whole hub an admin's daily pages used to show (claude-fleet#2515).
 	{"admin/sessions.html", "admin/sessions.js", "all-sessions"},
 	{"admin/overview.html", "admin/overview.js", "by-person"},
-	{"admin/devices.html", "admin/devices.js", "all-devices"},
 }
 
 func TestAssets_AppPagesAreEmbedded(t *testing.T) {
@@ -61,6 +60,24 @@ func TestAssets_AppPagesAreEmbedded(t *testing.T) {
 	}
 }
 
+// All devices moved into 服务节点与客户端's 客户端 tab (claude-fleet#3232): its
+// old document stays, so /admin/devices still loads, and its script only
+// starts the shell — which moves the address to /nodes?tab=clients.
+func TestAssets_MovedAllDevicesStillStarts(t *testing.T) {
+	assets := Assets()
+	html := string(mustRead(t, assets, "admin/devices.html"))
+	if !strings.Contains(html, `<script type="module" src="/admin/devices.js"`) {
+		t.Errorf("admin/devices.html no longer loads its script: %q", html)
+	}
+	js := string(mustRead(t, assets, "admin/devices.js"))
+	if !strings.Contains(js, "Shell.start()") || strings.Contains(js, "Shell.mount(") {
+		t.Errorf("admin/devices.js should only start the shell: %q", js)
+	}
+	if !strings.Contains(string(mustRead(t, assets, "lib/router.js")), `'/admin/devices': '/nodes?tab=clients'`) {
+		t.Error("lib/router.js no longer moves /admin/devices to /nodes?tab=clients")
+	}
+}
+
 // Every page the menu links is embedded: lib/shell.js's PAGES hrefs are the
 // four app pages and the five admin pages.
 func TestAssets_MenuLinksResolve(t *testing.T) {
@@ -78,7 +95,13 @@ func TestAssets_MenuLinksResolve(t *testing.T) {
 	if len(hrefs) < 4 {
 		t.Fatalf("found %d menu hrefs in lib/shell.js; the PAGES table moved", len(hrefs))
 	}
+	// The hub draws these itself (internal/api/fleet_entry_page.go,
+	// claude-fleet#3199): menu links, no embedded page.
+	hubDrawn := map[string]bool{"/fleet/keys": true, "/fleet/connection": true}
 	for _, m := range hrefs {
+		if hubDrawn[m[1]] {
+			continue
+		}
 		file, ok := route[m[1]]
 		if !ok {
 			t.Errorf("menu links %s, which no embedded page serves", m[1])

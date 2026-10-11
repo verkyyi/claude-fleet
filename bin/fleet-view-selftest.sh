@@ -13,9 +13,10 @@
 #      ⌃\, fleet-view-c7-selftest.sh) off the switch
 #      table (dash-keymap.sh); fleet-view-pfx = ⌃] then the 看台's letter (view);
 #      sourcing twice leaves the same tables
-#   B  ⌘P (`ESC[927~`) in the 看台 opens the list — grouped by (machine, login),
-#      this one first, 已结束 under them, no 「新任务」 / 停放 / 待你动手 (issue
-#      #3119), no `merged` / `done:2h` / `⇢cla` / bare `!` — and in a session
+#   B  ⌘P (`ESC[927~`) in the 看台 opens the list — 等你 first (issue #3179), the
+#      question under its row, 已结束 under them, no 「新任务」 / 停放 / 待你动手
+#      (issue #3119), no (machine, login) group, no `merged` / `done:2h` /
+#      `⇢cla` — `?` shows the legend — and in a session
 #      attached directly it does nothing
 #      (no popup, no byte reaches the pane)
 #   C  ↵ on a row here: the 看台's current window changes (select-window), with no
@@ -29,6 +30,12 @@
 #      not a 看台 keeps root (its key-table untouched)
 #   F  the old client's quickopen is untouched by --view (do <verb> alone still
 #      hands the verb to the list)
+#   I  issue #3179 (EPIC #3178 C1): the list grouped by what you should do — 置顶 ·
+#      等你 · 在干活 · 刚落地 · 其他 · 已结束; one one-cell glyph a row (! x » ✓ ∙ ?,
+#      ASCII under FLEET_GLYPHS=ascii, no colour under NO_COLOR), the state word
+#      on the lit row only, the question under an asking row, tags, the repo only
+#      with 2+ repos, every query word must hit; `?` on an empty query (in B) is
+#      the legend, after text a letter
 #   G  a phone (issue #3006, C9): the ⌃] letters (dash-keymap.sh --panel switch
 #      view: p list · n / b · c · t · q, one letter each, every one a switch-table
 #      action); a 40-column client: ⌃] p opens the list on the whole screen, ⌃] n
@@ -116,11 +123,11 @@ row() { local IFS="$US"; printf '%s\n' "$*"; }
 {
   row hdr verkyyi/claude-fleet '' 'claude-fleet (4)' ' '
   row "$W1" working ⠹ 'alpha短名 ⇢cla' ' ' '' 0 '' '' '#11' — 50% ok 'Alpha 的完整标题很长很长' merged '' '' '' ''
-  row "$W2" needs ! 'beta' ' ' '' 0 '' '' '#12' — 50% ok 'Beta 在问你' 'done:2h' '' '' '' ''
-  row "wid:$MU/far1" idle · 'gamma' ' ' '' 0 '' m4 '#13' — · ok 'Gamma 在 m4' keep '' '' '' ''
+  row "$W2" needs ! 'beta' ' ' '' 0 '' '' '#12' — 50% ok 'Beta 要你拍板' 'done:2h' '' question '要不要继续合并？' ''
+  row "wid:$MU/far1" working ⠹ 'gamma' ' ' '' 0 '' m4 '#13' — · ok 'Gamma 在 m4' keep '' '' '' ''
   row "wid:$OU/oth1" working ⠹ 'delta' ' ' '' 0 '' nodeA '#14' — · ok 'Delta 另一个登录' merged '' '' '' ''
   row hdr ended '' '▸ Ended (1)' ' '
-  row "$W0" 'done' ✓ 'old' ' ' '' 0 '' '' '#9' merged · ok 'Old 做完的' merged '' '' '' ''
+  row "$W0" 'done' ✓ 'old' ' ' '' 0 '' '' '#9' — · ok 'Old 做完的' merged '' '' '' ''
 } > "$W/rows.txt"
 pl=$(printf '{"i":[{"r":"o/r#21","k":"epsilon","w":"answer:o/r#21","a":%d}]}' "$(( $(date +%s) - 7200 ))" | base64 | tr '+/' '-_' | tr -d '=\n')
 printf '%s\n' "x${US}nodeA${US}online${US}looping${US}${US}${US}0${US}park=1${US}parkl=$pl" > "$W/g/orch_fl"
@@ -138,26 +145,35 @@ sleep 1
 to send-keys -t o:direct -H 1b 5b 39 32 37 7e
 sleep 1
 to capture-pane -p -t o:direct > "$W/direct.txt"
-grep -q '这台' "$W/direct.txt" && fail "B: ⌘P opened a list in a session attached directly"
+grep -q '在干活' "$W/direct.txt" && fail "B: ⌘P opened a list in a session attached directly"
 [ -s "$W/pane0.in" ] && fail "B: ⌘P's bytes reached the pane in a session attached directly: $(od -c "$W/pane0.in" | head -2)"
 to send-keys -t o:view -H 1b 5b 39 32 37 7e
 ok=''; for _ in 1 2 3 4 5 6 7 8 9 10; do
-  sleep 0.5; to capture-pane -p -t o:view > "$W/popup.txt"; grep -q "nodeA · ${ME}（这台）" "$W/popup.txt" && { ok=1; break; }
+  sleep 0.5; to capture-pane -p -t o:view > "$W/popup.txt"; grep -q '等你 1' "$W/popup.txt" && { ok=1; break; }
 done
 [ -n "$ok" ] || fail "B: ⌘P in the 看台 opened no list: $(cat "$W/popup.txt")"
-for want in "nodeA · ${ME}（这台）" '─ m4 ' "nodeA · other" 'Alpha 的完整标题很长很长' '在问你' '在干活' '已结束 1 个'; do
+for want in '─ 等你 1' '─ 在干活 3' '要不要继续合并？' 'Alpha 的完整标题很长很长' '已结束 1 个'; do
   grep -qF "$want" "$W/popup.txt" || fail "B: the list lacks 「${want}」: $(cat "$W/popup.txt")"
 done
 # no session is special (issue #3119): no 「新任务」 line, no 停放 / 待你动手 section
-for bad in 'merged' 'done:2h' '⇢' ' ! ' '新任务' '编排' '停放' '待你动手'; do
+# issue #3179: no (machine, login) grouping, a state is a glyph (the word only on the lit row)
+for bad in 'merged' 'done:2h' '⇢' '新任务' '编排' '停放' '待你动手' '（这台）' '─ m4' '─ nodeA' '在问你'; do
   grep -qF -- "$bad" "$W/popup.txt" && fail "B: the list still says 「${bad}」: $(grep -F -- "$bad" "$W/popup.txt")"
 done
-here=$(grep -n "（这台）" "$W/popup.txt" | head -1 | cut -d: -f1); far=$(grep -n '─ m4 ' "$W/popup.txt" | head -1 | cut -d: -f1)
-[ "$here" -lt "$far" ] || fail "B: this machine's group is not first"
+ask=$(grep -n '─ 等你' "$W/popup.txt" | head -1 | cut -d: -f1); work=$(grep -n '─ 在干活' "$W/popup.txt" | head -1 | cut -d: -f1)
+[ "$ask" -lt "$work" ] || fail "B: 等你 is not the first group"
+grep -q '! Beta 要你拍板' "$W/popup.txt" || fail "B: the asking row does not lead with its ! glyph: $(grep -F Beta "$W/popup.txt")"
 # the lit row (the current session, alpha) is marked ▶ — reverse alone on a grey row was invisible (#3007)
 [ "$(grep -c '▶' "$W/popup.txt")" = 1 ] && grep -q '▶.*Alpha' "$W/popup.txt" || fail "B: the lit row is not the one marked ▶: $(grep -n '▶' "$W/popup.txt")"
 [ -n "${FLEET_VIEW_EVIDENCE:-}" ] && cp "$W/popup.txt" "$FLEET_VIEW_EVIDENCE"
-pass "B  ⌘P: the list in the 看台 (grouped, words, sections), nothing in a direct attach"
+# `?` on an empty query: the legend line; with text it is a letter of the query
+to send-keys -t o:view -l '?'; sleep 0.5; to capture-pane -p -t o:view > "$W/legend.txt"
+grep -q '! 在等你' "$W/legend.txt" || fail "B: ? on an empty query showed no legend: $(cat "$W/legend.txt")"
+grep -q '› ?' "$W/legend.txt" && fail "B: ? on an empty query went into the query"
+to send-keys -t o:view -l '?'; to send-keys -t o:view -l 'z?'; sleep 0.5; to capture-pane -p -t o:view > "$W/legend.txt"
+grep -q '› z?' "$W/legend.txt" || fail "B: ? after text is not part of the query: $(head -2 "$W/legend.txt")"
+to send-keys -t o:view BSpace BSpace; sleep 0.3
+pass "B  ⌘P: the list in the 看台 (等你 first, glyphs, the question under its row, 已结束), nothing in a direct attach"
 
 # --- C: ↵ on beta, here ------------------------------------------------------------------
 to pipe-pane -o -t o:view "cat > '$W/client.bytes'"
@@ -205,25 +221,25 @@ pass "D  another machine / login: its peer window, shown waiting (rc 3, peer-wai
 cur() { ti display-message -p -t 'fl@view-v1:' '#{window_id}'; }
 TMUX="$IN,0,0" bash "$BIN/fleet-view-go.sh" v1 "$UU/f1" || fail "E: go by worker id"
 [ "$(cur)" = "$W1" ] || fail "E: go by worker id landed on $(cur)"
-to send-keys -t o:view -H 1b 5b 39 32 30 7e   # ⌘↓: alpha → beta
+to send-keys -t o:view -H 1b 5b 39 32 31 7e   # ⌘↑: alpha → beta (等你 sits above)
 for _ in 1 2 3 4 5 6; do sleep 0.3; [ "$(cur)" = "$W2" ] && break; done
-[ "$(cur)" = "$W2" ] || fail "E: ⌘↓ from alpha did not land on beta ($(cur))"
-to send-keys -t o:view -H 1b 5b 39 32 31 7e   # ⌘↑: beta → alpha
+[ "$(cur)" = "$W2" ] || fail "E: ⌘↑ from alpha did not land on beta ($(cur))"
+to send-keys -t o:view -H 1b 5b 39 32 30 7e   # ⌘↓: beta → alpha
 for _ in 1 2 3 4 5 6; do sleep 0.3; [ "$(cur)" = "$W1" ] && break; done
-[ "$(cur)" = "$W1" ] || fail "E: ⌘↑ from beta did not land on alpha ($(cur))"
+[ "$(cur)" = "$W1" ] || fail "E: ⌘↓ from beta did not land on alpha ($(cur))"
 to send-keys -t o:view -H 1b 5b 39 32 32 7e   # ⌘[: back to beta
 for _ in 1 2 3 4 5 6; do sleep 0.3; [ "$(cur)" = "$W2" ] && break; done
 [ "$(cur)" = "$W2" ] || fail "E: ⌘[ did not go back to beta ($(cur))"
 to send-keys -t o:view -H 1b 5b 39 32 33 7e   # ⌘]: forward to alpha
 for _ in 1 2 3 4 5 6; do sleep 0.3; [ "$(cur)" = "$W1" ] && break; done
 [ "$(cur)" = "$W1" ] || fail "E: ⌘] did not go forward to alpha ($(cur))"
-to send-keys -t o:view C-] n                 # the phone's ⌃] n = ⌘↓
+to send-keys -t o:view C-] b                 # the phone's ⌃] b = ⌘↑
 for _ in 1 2 3 4 5 6; do sleep 0.3; [ "$(cur)" = "$W2" ] && break; done
-[ "$(cur)" = "$W2" ] || fail "E: ⌃] n did not step to beta ($(cur))"
+[ "$(cur)" = "$W2" ] || fail "E: ⌃] b did not step to beta ($(cur))"
 [ -f "$W/conf/remote-views/v1.d/history.json" ] || fail "E: no history beside the registry row"
 [ "$(ti show-options -v -t fl key-table 2>/dev/null || echo root)" != fleet-view ] || fail "E: the fleet session's key-table changed"
 [ -s "$W/pane1.in" ] && fail "E: a ⌘ key's bytes reached a pane: $(od -c "$W/pane1.in" | head -2)"
-pass "E  ⌘↓ ⌘↑ walk the list, ⌘[ ⌘] the history, ⌃] n on a phone; the fleet session keeps its keys"
+pass "E  ⌘↓ ⌘↑ walk the list, ⌘[ ⌘] the history, ⌃] b on a phone; the fleet session keeps its keys"
 
 # --- G: a phone (issue #3006, C9): 40 columns, ⌃] p the whole screen, ⌃] n on to m4 ----------
 to resize-window -t o:view -x 40 -y 20
@@ -232,7 +248,7 @@ sleep 0.5
   || fail "G: the client is not 40 columns: $(ti list-clients -F '#{client_width}')"
 to send-keys -t o:view C-] p
 ok=''; for _ in 1 2 3 4 5 6 7 8 9 10; do
-  sleep 0.5; to capture-pane -p -t o:view > "$W/phone.txt"; grep -q '这台' "$W/phone.txt" && { ok=1; break; }
+  sleep 0.5; to capture-pane -p -t o:view > "$W/phone.txt"; grep -q '等你' "$W/phone.txt" && { ok=1; break; }
 done
 [ -n "$ok" ] || fail "G: ⌃] p opened no list at 40 columns: $(cat "$W/phone.txt")"
 python3 - "$W/phone.txt" <<'PY' || fail "G: the list is not the whole screen at 40 columns: $(cat "$W/phone.txt")"
@@ -244,11 +260,11 @@ assert any(len(l) >= 40 and l[39] in "│┃" for l in lines[1:]), lines
 PY
 [ -n "${FLEET_VIEW_EVIDENCE_PHONE:-}" ] && cp "$W/phone.txt" "$FLEET_VIEW_EVIDENCE_PHONE"
 to send-keys -t o:view Escape; sleep 0.5
-TMUX="$IN,0,0" bash "$BIN/fleet-view-go.sh" v1 "$UU/f2" || fail "G: go to beta"
-to send-keys -t o:view C-] n                 # beta → the next in the list: m4's session
+TMUX="$IN,0,0" bash "$BIN/fleet-view-go.sh" v1 "$UU/f1" || fail "G: go to alpha"
+to send-keys -t o:view C-] n                 # alpha → the next in the list: m4's session
 for _ in 1 2 3 4 5 6 7 8; do sleep 0.3; case $(ti display-message -p -t 'fl@view-v1:' '#{@peer}') in m4@*) break ;; esac; done
 case $(ti display-message -p -t 'fl@view-v1:' '#{@peer}') in
-  "m4@$ME") ;; *) fail "G: ⌃] n from beta did not step on to m4's window ($(cur) @peer=$(ti display-message -p -t 'fl@view-v1:' '#{@peer}'))" ;;
+  "m4@$ME") ;; *) fail "G: ⌃] n from alpha did not step on to m4's window ($(cur) @peer=$(ti display-message -p -t 'fl@view-v1:' '#{@peer}'))" ;;
 esac
 to resize-window -t o:view -x 120 -y 32
 pass "G  a phone: 40 columns, ⌃] p the list on the whole screen, ⌃] n on to another machine's session"
@@ -272,6 +288,100 @@ assert fv.entries("v1") == [], fv.entries("v1")
 assert not hasattr(fv, "go_orch") and not hasattr(fv, "orch_target"), "the orchestrator readers are gone"
 EOF
 pass "H  no session is special: orch_<fleet> and a holder window add no line (issue #3119)"
+
+# --- I: grouped by what you should do (issue #3179, EPIC #3178 C1) -----------------------------
+# 2 machines × 6 kinds of row (asking with its words, failed, broken configuration,
+# just merged, pinned, lost): the groups in order, the six glyphs each one cell
+# (ASCII under FLEET_GLYPHS=ascii, no colour under NO_COLOR), the state word only
+# on the lit row, the question under its row, tags (✗ broken · ∅ · k/N · m4 失联,
+# the repo only with 2+), no machine group, a child under a parent of another
+# group at depth 0, and a two-word query (「修 3164」) hits #3164.
+cat > "$W/leg-i.py" <<'PYI'
+import importlib.util, os, sys, tempfile, time, unicodedata
+from pathlib import Path
+B = sys.argv[1]
+spec = importlib.util.spec_from_file_location("fv", B + "/fleet_view.py")
+fv = importlib.util.module_from_spec(spec); spec.loader.exec_module(fv)
+qs = importlib.util.spec_from_file_location("qo", B + "/fleet-quickopen.py")
+qo = importlib.util.module_from_spec(qs); qs.loader.exec_module(qo)
+US = "\x1f"
+now = int(time.time())
+def row(*f): return US.join(f)
+def body(repos):
+    r = []
+    r.append(row("hdr", "pin", "", "置顶 (1)", " "))
+    r.append(row("@1", "idle", "·", "pinned", " ", "", "0", "", "", "#1", "—", "·", "ok", "置顶的会话", "keep"))
+    r.append(row("hdr", "", "", "─" * 40, " "))
+    r.append(row("hdr", repos[0], "", "claude-fleet (5)", " "))
+    r.append(row("@2", "working", "⠹", "par", " ", "1/2", "0", "", "", "#2", "—", "50%", "ok", "父会话 EPIC", "merged"))
+    r.append(row("@3", "needs", "!", "kid", " ", "", "1", "question", "", "#3", "—", "50%", "ok", "子会话在问", "merged", "", "question", "要不要合并这个 PR？   第二行"))
+    r.append(row("@4", "failed", "x", "bad", " ", "", "0", "", "", "#4", "—", "·", "broken", "配置坏了的会话", "merged", "failed"))
+    r.append(row("@5", "done", "✓", "landed", " ", "", "0", "", "", "#3164", "merged", "·", "ok", "修 列表冻住", "merged"))
+    r.append(row("@6", "done", "✓", "oldie", " ", "", "0", "", "", "#6", "merged", "·", "ok", "很早合并的", "merged"))
+    r.append(row("hdr", repos[1] if len(repos) > 1 else "none", "", "tokenledger (1)" if len(repos) > 1 else "无仓库 (1)", " "))
+    r.append(row("wid:MU/far1", "working", "⠹", "far", " ", "", "0", "", "m4!", "#7", "—", "·", "ok", "失联机器上的", "merged"))
+    r.append(row("wid:MU/far2", "needs", "!", "far2", " ", "", "0", "", "m4", "#8", "—", "·", "ok", "m4 在问", "merged", "", "permission", "Bash: rm -rf build"))
+    r.append(row("hdr", "ended", "", "▸ 已结束 (1)", " "))
+    r.append(row("@9", "done", "✓", "ended", " ", "", "0", "", "", "", "—", "·", "ok", "结束的", "merged"))
+    return "\n".join(r) + "\n"
+fv.view_row = lambda vid: {}
+fv.view_fleet = lambda vid, row=None: "fl"
+fv.here_label = lambda row: "nodeA"
+fv.fleet_logins = lambda: {"MU": "verky"}
+fv.windows = lambda fleet: {"@5": ("", "worker", now - 600), "@6": ("", "worker", now - 3 * 86400), "@9": ("", "worker", now - 60)}
+os.environ["FLEET_UI_LANG"] = "zh"
+def run(repos):
+    fv.produce = lambda fleet: body(repos)
+    return fv.entries("v1")
+it = run(["o/claude-fleet"])
+heads = [e["group"] for e in it if e["kind"] == "hdr"]
+assert heads == ["pin", "ask", "work", "landed", "other"], heads
+grp = {e["target"]: e["group"] for e in it if e["kind"] == "sess"}
+assert grp == {"@1": "pin", "@3": "ask", "@4": "ask", "MU/far2": "ask", "@2": "work", "MU/far1": "work",
+               "@5": "landed", "@6": "other", "@9": "ended"}, grp
+sym = {e["target"]: e["sym"] for e in it if e["kind"] == "sess"}
+assert sym["@3"] == "needs" and sym["@4"] == "fail" and sym["@2"] == "work" and sym["@5"] == "done" \
+    and sym["@1"] == "idle" and sym["MU/far1"] == "lost", sym
+ask = [e for e in it if e["kind"] == "ask"]
+assert [a["of"] for a in ask] == ["@3", "MU/far2"] and ask[0]["text"] == "要不要合并这个 PR？ 第二行", ask
+tags = {e["target"]: e["tags"] for e in it if e["kind"] == "sess"}
+assert tags["@4"] == ["✗ 会坏·需重开", "∅"], tags["@4"]
+assert tags["MU/far1"] == ["m4 失联"] and tags["MU/far2"] == [] and tags["@2"] == ["1/2"], tags
+assert not any("o/claude-fleet" in " ".join(t) or "claude-fleet" in " ".join(t) for t in tags.values()), tags
+# a child whose parent sits in another group stands at depth 0
+dep = {e["target"]: e["depth"] for e in it if e["kind"] == "sess"}
+assert dep["@3"] == 0, dep
+it2 = run(["o/claude-fleet", "o/tokenledger"])
+t2 = {e["target"]: e["tags"] for e in it2 if e["kind"] == "sess"}
+assert "claude-fleet" in t2["@2"] and "tokenledger" in t2["MU/far1"], t2
+# two-word query
+v = fv.visible(it, "修 3164", set())
+assert v and v[0]["target"] == "@5", [e.get("target") for e in v]
+assert fv.visible(it, "3164 不存在的词", set()) == []
+# paint
+def w1(c): return 0 if unicodedata.category(c) in ("Mn", "Me", "Cf") else (2 if unicodedata.east_asian_width(c) in "WF" else 1)
+for mode in ("", "ascii"):
+    os.environ["FLEET_GLYPHS"] = mode
+    shown = fv.visible(run(["o/r"]), "", set())
+    at = next(i for i, e in enumerate(shown) if e.get("target") == "@2")
+    lines = fv.paint(shown, at, 100, qo.cells, qo.clip)
+    gl = fv.glyphs()
+    for e, segs in zip(shown, lines):
+        if e["kind"] != "sess": continue
+        g = segs[1][0]
+        assert g == gl[e["sym"]] and len(g) == 1 and w1(g) == 1, (g, e)
+        if mode == "ascii": assert g.isascii(), g
+        text = "".join(s[0] for s in segs)
+        if e["target"] == "@2": assert e["word"] in text and text.startswith("▶ "), text
+        else: assert e["word"] not in text.split(e["text"])[0], text
+    assert len({e["sym"] for e in shown if e["kind"] == "sess"}) == 6
+    assert any(any(st.startswith("c") for _, st in segs for st in st) for segs in lines)
+os.environ["NO_COLOR"] = "1"
+lines = fv.paint(shown, at, 100, qo.cells, qo.clip)
+assert not any(st.startswith("c") for segs in lines for _, sty in segs for st in sty), "NO_COLOR left a colour"
+PYI
+( unset NO_COLOR FLEET_COLOR FLEET_GLYPHS; python3 "$W/leg-i.py" "$BIN" ) || fail "I: the grouped list"
+pass "I  ⌘P grouped: 置顶 · 等你 · 在干活 · 刚落地 · 其他 · 已结束; six one-cell glyphs (ascii, NO_COLOR); the question under its row; tags; 「修 3164」"
 
 # --- F: the old client's road ----------------------------------------------------------------
 grep -q 'if argv\[:1\] == \["do"\] and len(argv) == 2:' "$BIN/fleet-quickopen.py" || fail "F: the old do <verb> road changed"

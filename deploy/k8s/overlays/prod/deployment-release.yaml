@@ -37,6 +37,11 @@ spec:
               value: /releases
             - name: CCQUOTA_FLEET_RELEASE_ARTIFACTS
               value: /releases/pinned
+            # Linux managed nodes follow stable too (#3212): a release must carry
+            # release.json's pins for both, or the hub refuses to build it and
+            # `fleet-stable.sh move` refuses (`artifacts:`) before it gets there.
+            - name: CCQUOTA_FLEET_RELEASE_PLATFORMS
+              value: darwin-arm64 linux-amd64
           volumeMounts:
             - name: release-key
               mountPath: /etc/ccquota-release

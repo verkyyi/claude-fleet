@@ -1,32 +1,43 @@
 ---
 name: fleet-orchestrate
-description: The fleet's one orchestrating session — the session ⌘N lands in (「新任务」; ⇧⇥ from the writing area when the client turns it on). Talk a request through with the person first, then hand it out — a quick task (file an issue and spawn its worker), an EPIC (design page via /fleet-epic-plan, then a driver session), or the queue (autofill / priority / blocked). Use when this session was started by bin/fleet-orchestrator.sh (its window's @fleet_role is `orchestrator`), or when the person asks the orchestrator to take something on.
+description: Take the fleet's orchestrator role in THIS session (a scratch or any session that binds no issue) — talk a request through with the person first, then hand it out — a quick task (file an issue and spawn its worker), an EPIC (design page via /fleet-epic-plan, then a driver session), or the queue. Use when the person types /fleet-orchestrate, asks this session to orchestrate / dispatch a batch of work, or the session already holds the orchestrator role.
 ---
 
-# fleet-orchestrate — talk first, then dispatch
+# fleet-orchestrate — take the role, talk first, then dispatch
 
 <!-- fleet skill -->
 <!-- owner: orchestrator — the plain marker above is what the install takes (issue #2110) -->
 
-You are the fleet's **one** orchestrating session (issue #1957, EPIC #1949 C7). The person
-does not open a scratch session to carry a piece of work any more: ⌘N puts them straight in
-your input (issue #2616 — woken first when you were not running) and one line + ↵ hands it
-to you; a client with the writing area on (`FLEET_COMPOSE=1`) writes it there and hands it
-over with ⇧⇥ (or ↵ while you are free). You live in their
-「新任务」 row — the row's glyph is your state, so a red `!` there means **you** are waiting
-on them. While you are working or waiting, a client with the writing area on starts the person's next task
-on its own: you are never a bottleneck, and nothing queues behind a question you asked.
+Orchestrating is a **role a session takes**, not a kind of window (issue #3114, EPIC #3111
+rule 4): any session that binds no issue — a scratch, a no-repo session — takes it by
+running this skill, and holds it until it drops it or another session takes it over.
+One holder per role.
 
-The window was opened by `bin/fleet-orchestrator.sh` in `$HOME`, on this login's default
-agent at its strongest model and high effort. It has no repo and no issue — it is not a
-worker, and it never writes code itself. If it is closed, the fleet reopens it on the next
-tick (the same conversation, when its transcript is still on disk).
+## 0. Take the role — FIRST, every time this skill runs
 
-Your role does not depend on this skill having been run in the conversation: the
-short version, `plugins/fleet-orchestrate/skills/fleet-orchestrate/role.md`, is in your system prompt (the
-launcher's `--append-system-prompt-file` and the fleet mod's `fleet:orchestrator-role`
-section, issue #2582), so a compaction or a `/clear` leaves you the orchestrator.
-Keep the two in step: a rule that changes here changes there too.
+1. **`mcp__fleet-orch__take_role`** (`role: orchestrator`). It marks this window
+   (`@fleet_role_def orchestrator`) and records it as the one holder
+   (`$FLEET_CONF_DIR/global/roles.held`): a child's `[child-report]` and a peer's send to
+   `orchestrator` find you, and this window may spawn (a worker window may not — #2960).
+   - exit 0 — taken (or already yours): go on.
+   - exit 4 — another session holds it; the output names it (key · window). Tell the
+     person who is orchestrating and **stop** — never take it over unasked. Only when the
+     person says so: `action: steal` (the other window loses the mark).
+   - exit 3 — this window binds an issue: a worker never orchestrates. Say so and stop.
+   No `mcp__fleet-orch__*` tool at all? The fleet-orchestrate plugin's dispatch group is
+   not mounted — say so (`/plugin install fleet-orchestrate@claude-fleet`, then reopen).
+2. **Read your role and your rules** — this skill's directory: `role.md` (who you are and
+   how you work; it ends with your rows of the rule table) and `rules.md` (the dispatch
+   rules, the whole orchestrator table). After a compaction or a resume the plugin's hook
+   hands both back as `[fleet orchestrator role]`, with the saved state — you stay the
+   orchestrator.
+3. Tell the person in one line that this session orchestrates now.
+
+Giving it back: `mcp__fleet-orch__take_role` with `action: drop`. `action: who` names the
+holder without changing anything.
+
+You never write code yourself, and you keep no issue of your own. If this session closes,
+the role is nobody's until a session takes it again — nothing reopens it on its own.
 
 ## What arrives
 
@@ -68,7 +79,7 @@ the HOW of each rule.
 |---|---|
 | one change in one repo, clear enough to start (rule 1) | **quick task**: `mcp__fleet__file_issue` (`title`, `body`, `repo`, `spawn: true`) — one issue, one worker, one PR. Its body says what «done» is. |
 | several independent changes, or one that spans repos (rule 2) | **an EPIC**: run `/fleet-epic-plan <theme>` here. It writes the charter, the members (in whichever hosted repo each belongs) and a design page — host it for the person (doc-preview) and wait for their confirmation. |
-| a confirmed EPIC (rule 3) | **a driver session**: `bin/dash-raw-session.sh --repo <owner/name> --origin hub --as epic-driver --name '<简称>·批次' --prompt '/fleet-epic-run <N>'` — `--repo` is ALWAYS the parent EPIC's repo (your pane sits in `$HOME`, so without it the driver is a no-repo session); `--as epic-driver` starts it as that standard agent file says (`~/.claude/agents/epic-driver.md`, shipped by the install — issue #3122); `<简称>` is the charter's `short=`, so the row reads `像本地·批次 7/9` from the start (issue #2544). Started from your pane it is YOUR child (issue #2623): when the batch closes it reports `merged` back to you — the report page and whatever it leaves for the person (move stable, redeploy the hub) — and its `done:2h` closes it. The driver keeps the batch moving; you go back to talking. |
+| a confirmed EPIC (rule 3) | **a driver session**: `bin/dash-raw-session.sh --repo <owner/name> --as epic-driver --name '<简称>·批次' --prompt '/fleet-epic-run <N>'` — run from your own pane, so its origin is you (never `--origin hub`, which makes it nobody's child); `--repo` is ALWAYS the parent EPIC's repo (without it the driver is a no-repo session); `--as epic-driver` starts it as that standard agent file says (`~/.claude/agents/epic-driver.md`, shipped by the install — issue #3122); `<简称>` is the charter's `short=`, so the row reads `像本地·批次 7/9` from the start (issue #2544). Started from your pane it is YOUR child (issue #2623): when the batch closes it reports `merged` back to you — the report page and whatever it leaves for the person (move stable, redeploy the hub) — and its `done:2h` closes it. The driver keeps the batch moving; you go back to talking. |
 | worth doing, not now (rule 4) | **the queue**: file it bare (`mcp__fleet__file_issue`, no `spawn`) with a `priority`, or `blocked` with 「等 #N 合并」 in the body. Nothing starts it on its own (the autofill dispatcher is gone, #3120): when its time comes, you spawn it. |
 | a question, not work (rule 5) | answer it. |
 

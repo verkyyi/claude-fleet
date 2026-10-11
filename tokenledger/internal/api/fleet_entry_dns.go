@@ -42,6 +42,9 @@ const entryDNSMaxWrites = 40
 type EntryDNS struct {
 	Provider  dns.Provider
 	Subdomain string // the label every address sits under: cf
+	// Zone is <Subdomain>.<the provider's domain> (cf.24haowan.com): the
+	// default of fleet.entry_domain (claude-fleet#3199).
+	Zone string
 
 	mu sync.Mutex
 	// wrote is what each (host, type) was last set to by this loop —

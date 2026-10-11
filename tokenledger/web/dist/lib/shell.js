@@ -22,6 +22,7 @@ export const ICONS = Object.freeze({
   card: '<rect x="2.5" y="5" width="19" height="14" rx="2"/><path d="M2.5 10h19M6 15h4"/>',
   server: '<rect x="3" y="4" width="18" height="7" rx="1.5"/><rect x="3" y="13" width="18" height="7" rx="1.5"/><path d="M7 7.5h.01M7 16.5h.01"/>',
   key: '<circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M17 6l3 3M15 8l2 2"/>',
+  phone: '<rect x="6.5" y="2.5" width="11" height="19" rx="2.5"/><path d="M11 18.5h2"/>',
   sliders: '<path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/>',
   users: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.5 3.4-5.5 6.5-5.5s5.7 2 6.5 5.5"/><path d="M16 4.6a3.5 3.5 0 010 6.8M18 14.8c1.8.7 3 2.4 3.5 5.2"/>',
   gear: '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/>',
@@ -65,6 +66,13 @@ export const PAGES = Object.freeze([
   // `within`: shown to whoever's menu lists one of these).
   { id: 'machine', label: 'ui.nav.machine', icon: 'server', href: '/machines/', prefix: true, within: ['mymachines', 'machines'], module: '/machine.js' },
   { id: 'devices', label: 'ui.nav.devices', icon: 'key', href: '/connect', module: '/connect.js' },
+  // 从手机连 (claude-fleet#3199): the keys page, every role's. It is drawn by
+  // the hub (fleet_entry_page.go), not the app — no module, so a click is a
+  // plain page load.
+  { id: 'phone', label: 'ui.nav.phone', icon: 'phone', href: '/fleet/keys' },
+  // 我的连接 (claude-fleet#3199): the home every device shares, the address,
+  // the keys — the hub's page too.
+  { id: 'connection', label: 'ui.nav.connection', icon: 'home', href: '/fleet/connection' },
   // 我的额度 (claude-fleet#2517).
   { id: 'quota', label: 'ui.nav.quota', icon: 'card', href: '/quota', module: '/quota.js' },
   // 我的用量 (claude-fleet#2519).
@@ -74,11 +82,12 @@ export const PAGES = Object.freeze([
   // above used to show an admin (claude-fleet#2515), then the hub's own.
   { id: 'all-sessions', label: 'ui.nav.allSessions', icon: 'list', group: 'admin', href: '/admin/sessions', module: '/admin/sessions.js' },
   { id: 'by-person', label: 'ui.nav.byPerson', icon: 'users', group: 'admin', href: '/admin/overview', module: '/admin/overview.js' },
-  { id: 'all-devices', label: 'ui.nav.allDevices', icon: 'key', group: 'admin', href: '/admin/devices', module: '/admin/devices.js' },
   { id: 'subscription-settings', label: 'ui.policy.global', icon: 'settings', group: 'admin', href: '/subscriptions/settings', within: ['subscriptions'], module: '/admin/subscription-settings.js' },
   { id: 'subscription', label: 'ui.policy.subscription', icon: 'card', group: 'admin', href: '/subscriptions/', prefix: true, within: ['subscriptions'], module: '/admin/subscription.js' },
   { id: 'person', label: 'ui.policy.user', icon: 'users', group: 'admin', href: '/admin/users/', prefix: true, within: ['people'], module: '/admin/user.js' },
   { id: 'subscriptions', label: 'ui.nav.subscriptions', icon: 'card', group: 'admin', href: '/subscriptions', module: '/admin/subscriptions.js' },
+  // 服务节点与客户端 (claude-fleet#3232): one page, two tabs — the old All
+  // devices (/admin/devices) is its ?tab=clients (lib/router.js MOVED).
   { id: 'machines', label: 'ui.nav.machines', icon: 'server', group: 'admin', href: '/nodes', module: '/admin/nodes.js' },
   { id: 'people', label: 'ui.nav.people', icon: 'users', group: 'admin', href: '/admin/users', module: '/admin/users.js' },
   { id: 'settings', label: 'ui.nav.settings', icon: 'gear', group: 'admin', href: '/admin/settings', module: '/admin/settings.js' },
@@ -99,7 +108,7 @@ export function navFor(pages) {
 /** VIEW_PAIRS joins each daily page to the admin page with the whole hub's
  *  version of it (claude-fleet#2515): an admin's daily pages show their own,
  *  and the top bar offers the other half. */
-export const VIEW_PAIRS = Object.freeze([['overview', 'by-person'], ['sessions', 'all-sessions'], ['devices', 'all-devices'], ['config', 'settings']]);
+export const VIEW_PAIRS = Object.freeze([['overview', 'by-person'], ['sessions', 'all-sessions'], ['config', 'settings']]);
 
 /** otherView is the top bar's switch on page `id`: {href, label} to the admin
  *  view of a daily page or back from one, null when the viewer's menu has no

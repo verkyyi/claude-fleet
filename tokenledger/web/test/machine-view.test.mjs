@@ -29,7 +29,7 @@ test('machineHref is the short name; from the admin list it says so; back goes t
   assert.equal(backHref('?from=nodes'), '/nodes');
   assert.equal(backHref(''), '/machines');
   assert.equal(clientRedirect(false), '/connect');
-  assert.equal(clientRedirect(true), '/admin/devices');
+  assert.equal(clientRedirect(true), '/nodes?tab=clients');
 });
 
 test('the machine page is allowed to whoever has either machine list, and is no menu item', () => {

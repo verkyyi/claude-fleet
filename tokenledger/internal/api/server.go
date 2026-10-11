@@ -179,6 +179,12 @@ type Server struct {
 	// node_lost alert (FLEET_NODE_LOST_ALERT_SECS, claude-fleet#1630); zero =
 	// the 120 s default.
 	NodeLostAfter time.Duration
+	// UsageSilentAfter is how long a login may have a session working with no
+	// usage reaching the hub before usage_silent is raised (claude-fleet#3204;
+	// FLEET_USAGE_SILENT_ALERT_SECS, 30 min). Negative turns it off; zero is
+	// the default.
+	UsageSilentAfter time.Duration
+	usageSilent      usageSilentWatch
 
 	// SSHCA signs people's connection certificates (claude-fleet#1412),
 	// loaded from CCQUOTA_FLEET_SSH_CA_KEY — a file from its own k8s Secret,
@@ -285,6 +291,9 @@ type Server struct {
 	// entryReachAt is machine → the time of its last entry reach check
 	// (claude-fleet#3072).
 	entryReachAt sync.Map
+	// entryReachSeen is machine → entryReachSeen: its last report, checked
+	// or not — the keys page's 「正在打开」 (claude-fleet#3199).
+	entryReachSeen sync.Map
 
 	// orchHost is who asked to hold the orchestrator, and serialises the pick
 	// (claude-fleet#2117, fleet_orchestrator.go).
@@ -481,6 +490,11 @@ func (s *Server) routes() *routeMux {
 		// The keys page (claude-fleet#3069): a browser not signed in comes
 		// back here after GitHub's.
 		mux.Handle(EntryPagePath, s.rememberEntryReturn(s.viewerOnly(http.HandlerFunc(s.handleEntryPage))))
+		mux.Handle(EntryConnPath, s.rememberEntryReturn(s.viewerOnly(http.HandlerFunc(s.handleEntryPage))))
+		// Its pictures, and the paths a person types for it (claude-fleet#3199).
+		mux.HandleFunc(EntryPagePath+"/", s.handleEntryPageAside)
+		mux.HandleFunc("/fleet/key", s.handleEntryPageAside)
+		mux.HandleFunc("/keys", s.handleEntryPageAside)
 		// The Fleet Hub's read tools (claude-fleet#1409), the same ones
 		// /mcp lists when the module is on.
 		mux.Handle("/v1/fleet/", s.viewerOnly(http.HandlerFunc(s.handleFleet)))

@@ -242,7 +242,6 @@ const PAGES = [
   // lib/devices-view.js.
   { file: 'admin/sessions.js', id: 'all-sessions', confirms: 0, empty: null },
   { file: 'admin/overview.js', id: 'by-person', confirms: 0, empty: 'ui.bp.none' },
-  { file: 'admin/devices.js', id: 'all-devices', confirms: 0, empty: null },
 ];
 for (const p of PAGES) {
   test(`${p.file}: mounts as ${p.id}, confirms destructive writes, has an empty state, no bare words`, () => {

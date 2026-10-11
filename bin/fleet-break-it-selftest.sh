@@ -861,8 +861,8 @@ drill_agent_file_broken() {
 drill_orchestrator_compacted() {
   CAP=10; BREAK_SOCK="$WORK/sock-oc"; local t0 w p out c="$WORK/occonf" tr="$WORK/oc-tr.jsonl" ts
   [ -f "$BIN/fleet-orchestrator-state.py" ] || { WHY="no bin/fleet-orchestrator-state.py — nothing carries the state across"; return 1; }
-  grep -q 'fleet-orchestrator-state.py hook' "$ROOT/hooks/settings-hooks.json" \
-    || { WHY="the hook table never runs the state relay"; return 1; }
+  grep -q 'fleet-orchestrator-state.py hook' "$ROOT/plugins/fleet-orchestrate/hooks/hooks.json" \
+    || { WHY="the fleet-orchestrate plugin's hooks never run the state relay"; return 1; }
   nt -f /dev/null new-session -d -s oc -n home -x 100 -y 30 'exec sleep 600' || { WHY="cannot start the isolated tmux server"; return 1; }
   w=$(nt new-window -d -P -F '#{window_id}' -t oc: -n orchestrator 'exec sleep 600')
   p=$(nt display-message -p -t "$w" '#{pane_id}')
@@ -6108,6 +6108,55 @@ drill_linux_login_no_lease() {
   WHAT="新登录和旧存储的登录都带 CCQUOTA_FLEET_CREDS=1，令牌不动"
 }
 
+# Several logins on one Linux machine (EPIC #3208 C1, issue #3209): the image's
+# passwd is gone at every start, so the volume's declarations are the truth.
+# Each drill runs bin/fleet-node-linux-selftest.py's LinuxTenants leg on a fake
+# passwd in a temp dir; the root smoke (extras/managed-node/smoke.py) does it for real.
+linux_tenant_leg() {
+  python3 "$BIN/fleet-node-linux-selftest.py" "LinuxTenants.$1" >"$WORK/$1.out" 2>&1
+}
+
+drill_linux_uid_reuse() {
+  CAP=15; local t0
+  t0=$(now)
+  linux_tenant_leg test_uid_reuse || { WHY="a login changed number, a retired number came back, or a foreign-owned home was chowned: $(tail -n 3 "$WORK/test_uid_reuse.out")"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="开 24haowan 与 drill2 → 清空 passwd 再 boot：号码不变；删 drill2 再开 drill3 / drill2：拿新号码，不给 10003；家属主不对 boot 停下、不 chown"
+}
+
+drill_linux_removed_login_lingers() {
+  CAP=15; local t0
+  t0=$(now)
+  linux_tenant_leg test_removed_login_lingers || { WHY="something of a removed login stayed: $(tail -n 3 "$WORK/test_removed_login_lingers.out")"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="login remove：node leave、account forget、credsep purge、杀进程、家进 attic（600）、userdel / groupdel、声明删掉、号码进 .retired；再删一次答 4"
+}
+
+drill_linux_tenant_cross_read() {
+  CAP=15; local t0
+  t0=$(now)
+  linux_tenant_leg test_tenant_cross_read || { WHY="a home stayed readable or was handed to another login: $(tail -n 3 "$WORK/test_tenant_cross_read.out")"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="放宽成 0755 的家 boot 后回到 0700；新登录落在别人号码的家目录上被拒、不 chown"
+}
+
+# ---- linux-image-pins-old (#3212): the Linux node's runtime was the image's —
+# a restart put its old version back, so the machine never followed stable.
+# Now the image only seeds the disk runtime; a restart keeps what the updater
+# switched to, a newer image is taken only at rest, and the loop restarts the
+# supervisor from the new `current` instead of ending the container.
+drill_linux_image_pins_old() {
+  CAP=15; local t0
+  t0=$(now)
+  if ! python3 "$BIN/fleet-node-linux-selftest.py" LinuxNode.test_restart_never_goes_back_to_image \
+       LinuxNode.test_loop_restarts_supervisor_from_new_current LinuxNode.test_image_self_updates_on_its_volume \
+       >"$WORK/linux-pins.out" 2>&1; then
+    WHY="the Linux runtime still follows the image: $(tail -n 2 "$WORK/linux-pins.out")"; return 1
+  fi
+  SECS=$(since "$t0")
+  WHAT="镜像 A、盘上已切到 B：重启两次仍是 B；更新器切换中不播种；空闲时更新的镜像 C 才播种（.prev=B）；supervisor 退出后从新 current 再起"
+}
+
 # A child's report whose parent is gone (issue #3117, EPIC #3111 C6): a scratch spawned
 # a worker and was closed; the worker merged and its report went nowhere — a silent
 # exit 0. Now it is the person's: one row in global/orphan-reports.ndjson and one
@@ -6362,6 +6411,41 @@ drill_client_update_silent_fail() {
   sh "$BIN/fleet-install-follow.sh" --self --dir "$d/install" --conf-dir "$d/conf" > "$d/follow.out" 2>&1
   grep -q '^alarm: *1' "$d/follow.out" || { WHY="the doctor's install row stays quiet: $(tr '\n' '|' < "$d/follow.out")"; return 1; }
   WHAT="入口发布版 3 小时验不过（停在 fetch-failed）：一拍发一次通知（同一回只一次），install-follow 标 alarm → doctor 的 install 行 FAIL"
+}
+
+# role-taken-twice (issue #3114, EPIC #3111 C3): orchestrating is a role any
+# session without an issue takes (/fleet-orchestrate → take_role). Two scratch
+# sessions both type it: before, nothing kept one holder — each would mark itself,
+# a child's report and a peer's send to `orchestrator` hit an ambiguous key, and
+# neither knew the other dispatched. Now the second is told who holds it (exit 4)
+# and changes nothing; an issue window cannot take it (exit 3); the key answers
+# the one holder; only --steal moves it.
+drill_role_taken_twice() {
+  CAP=10; BREAK_SOCK="$WORK/sock-rt"; local t0 a b i r rc c="$WORK/rtconf" rt
+  # its own shim on the tmux binary itself: a bare `tmux` here must not re-enter
+  # the fleet's tmux-shim, which would find this shim again on PATH
+  rt=$(PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -v tmux-shim | paste -sd: -) command -v tmux)
+  mkdir -p "$WORK/rtbin"; printf '#!/bin/sh\nexec "%s" -S "%s" "$@"\n' "$rt" "$BREAK_SOCK" > "$WORK/rtbin/tmux"; chmod +x "$WORK/rtbin/tmux"
+  nt -f /dev/null new-session -d -s rt -n home -x 100 -y 30 'exec sleep 600' || { WHY="cannot start the isolated tmux server"; return 1; }
+  a=$(nt new-window -d -P -F '#{window_id}' -t rt: -n scratch-1 'exec sleep 600'); nt set-option -wq -t "$a" @fleet_role worker
+  b=$(nt new-window -d -P -F '#{window_id}' -t rt: -n scratch-2 'exec sleep 600'); nt set-option -wq -t "$b" @fleet_role worker
+  i=$(nt new-window -d -P -F '#{window_id}' -t rt: -n issue-5 'exec sleep 600'); nt set-option -wq -t "$i" @fleet_role worker; nt set-option -wq -t "$i" @issue 5
+  rtake() { env PATH="$WORK/rtbin:$PATH" FLEET_CONF_DIR="$c" FLEET_SKIP_GLOBAL_CONF=1 BREAK_SOCK="$BREAK_SOCK" \
+              TMUX="$BREAK_SOCK,1,0" TMUX_PANE="$(o "$1" pane_id)" bash "$BIN/fleet-role-take.sh" orchestrator ${2:+"$2"} 2>&1; }
+  t0=$(now)
+  rtake "$a" >/dev/null || { WHY="the first scratch could not take the role"; return 1; }
+  r=$(rtake "$b"); rc=$?                                      # the break: a second taker
+  SECS=$(since "$t0")
+  [ "$rc" = 4 ] || { WHY="a second session took the role too (exit $rc): $r"; return 1; }
+  case "$r" in *"$a"*) ;; *) WHY="the second taker is not told who holds it: $r"; return 1 ;; esac
+  [ -z "$(o "$b" @fleet_role_def)" ] || { WHY="the refused taker was marked anyway"; return 1; }
+  rtake "$i" >/dev/null; [ $? = 3 ] || { WHY="a window bound to an issue took the role"; return 1; }
+  r=$(env PATH="$WORK/rtbin:$PATH" FLEET_CONF_DIR="$c" BREAK_SOCK="$BREAK_SOCK" TMUX="$BREAK_SOCK,1,0" \
+        bash -c '. "$1/fleet-lib.sh"; fleet_win_for_key orchestrator' _ "$BIN" 2>&1)
+  [ "$r" = "$a" ] || { WHY="the orchestrator key does not answer the one holder: $r"; return 1; }
+  rtake "$b" --steal >/dev/null && [ -z "$(o "$a" @fleet_role_def)" ] && [ "$(o "$b" @fleet_role_def)" = orchestrator ] \
+    || { WHY="--steal did not move the role in one step"; return 1; }
+  WHAT="第二个会话接手编排被告知是谁在编排（exit 4、不打标），绑单窗口不能接手（exit 3）；orchestrator 只解析到唯一持有者；只有 --steal 转手"
 }
 
 # ================================================================ run ====}

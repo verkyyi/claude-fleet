@@ -123,6 +123,7 @@ func (s *Server) NodeAlertTick(since, now time.Time) {
 		}
 	}
 	s.clearSettledConflicts(now)
+	s.UsageSilentTick(now, false)
 	if err := s.Store.PruneFleetAlerts(now.Add(-fleetAlertKeep)); err != nil {
 		log.Printf("fleet alerts: prune: %v", err)
 	}
@@ -377,8 +378,9 @@ func (s *Server) alertsSeenBy(p fleetPrincipal, rows []store.FleetAlert) []store
 			} else {
 				mine = seesEndpoint(a.Subject)
 			}
-		case store.AlertServiceFailed:
-			// One login's entry on one machine (claude-fleet#2526).
+		case store.AlertServiceFailed, store.AlertUsageSilent:
+			// One login's entry on one machine (claude-fleet#2526), one
+			// login's usage gone quiet (claude-fleet#3204).
 			var d struct {
 				Hostname string `json:"hostname"`
 				OSUser   string `json:"os_user"`

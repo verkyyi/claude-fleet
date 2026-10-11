@@ -58,7 +58,7 @@
 #      on stdout, exit 0 answered (the script's exit is in the text) / 1 refused
 #      (the reason on stdout, nothing ran) / 2 usage; the call log says road=call
 #   Q  two groups (issue #3113, EPIC #3111 C2): `--group orch` is the server
-#      `fleet-orch` listing exactly spawn · await · children · answer_dialog · send;
+#      `fleet-orch` listing exactly spawn · await · children · answer_dialog · send · take_role;
 #      `--list` prints each server's list; `fleet` still answers a dispatch-group
 #      call (an old session's, road=legacy in the call log); a server that took over
 #      from a pre-group version keeps listing all 28 and hands that on; file_issue
@@ -1059,15 +1059,16 @@ import json, sys
 rows = {r["id"]: r["result"] for r in (json.loads(l) for l in open(sys.argv[1]) if l.strip())}
 assert rows[1]["serverInfo"]["name"] == "fleet-orch", rows[1]
 tools = {t["name"]: t for t in rows[2]["tools"]}
-assert sorted(tools) == ["answer_dialog", "await", "children", "send", "spawn"], sorted(tools)
+assert sorted(tools) == ["answer_dialog", "await", "children", "send", "spawn", "take_role"], sorted(tools)
+assert tools["take_role"]["inputSchema"]["required"] == ["role"]
 assert tools["spawn"]["inputSchema"]["required"] == ["issue"]
 assert tools["send"]["inputSchema"]["required"] == ["to", "text"]
 for t in tools.values():
     assert t["inputSchema"]["additionalProperties"] is False, t
 PY
 cli "$WORK/q.l0" --list && cli "$WORK/q.l1" --group orch --list || fail "Q: --list exited non-zero" "$(cat "$WORK/q.l0.err" "$WORK/q.l1.err")"
-[ "$(wc -l < "$WORK/q.l0" | tr -d ' ')" = 23 ] && ! grep -Eqx 'spawn|await|children|answer_dialog|send' "$WORK/q.l0" \
-  && [ "$(sort "$WORK/q.l1" | tr '\n' ' ')" = "answer_dialog await children send spawn " ] \
+[ "$(wc -l < "$WORK/q.l0" | tr -d ' ')" = 23 ] && ! grep -Eqx 'spawn|await|children|answer_dialog|send|take_role' "$WORK/q.l0" \
+  && [ "$(sort "$WORK/q.l1" | tr '\n' ' ')" = "answer_dialog await children send spawn take_role " ] \
   || fail "Q: --list is not each server's list" "$(cat "$WORK/q.l0"; echo ---; cat "$WORK/q.l1")"
 cli "$WORK/q.bad" --group zz --list && fail "Q: --group zz was accepted"
 # An old session (its list had spawn) calls it on `fleet`: answered, logged road=legacy.
@@ -1098,7 +1099,7 @@ done
 python3 - "$WORK/q4" <<'PY' || fail "Q: a takeover from a pre-group server dropped tools from its session's list" "$(cat "$WORK/q4")"
 import json, sys
 lists = [r["result"]["tools"] for r in (json.loads(l) for l in open(sys.argv[1]) if l.strip()) if "id" in r]
-assert [len(x) for x in lists] == [28, 23, 28], [len(x) for x in lists]
+assert [len(x) for x in lists] == [29, 23, 29], [len(x) for x in lists]
 assert "spawn" in {t["name"] for t in lists[0]}
 PY
 grep -q '"list": "all" if SERVING\["list_all"\]' "$WORK/bin/fleet-mcp.py" \

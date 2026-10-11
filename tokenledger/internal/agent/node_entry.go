@@ -74,6 +74,10 @@ func (ml *machineLink) entryKick(ctx context.Context) {
 		if ok {
 			st.done = v
 			note = ""
+			// A new list may have just opened the port (the first key) or
+			// moved a home here: ask the outside again soon, not in up to
+			// five minutes (claude-fleet#3199).
+			ml.reachSoon()
 		}
 		if note != st.lastLog {
 			if note != "" {
@@ -124,6 +128,10 @@ const entryReachEvery = 5 * time.Minute
 // entryReachTimeout bounds one report: the router asked, the hub's dials.
 const entryReachTimeout = 2 * time.Minute
 
+// entryReachAfterPull is how long after an applied list the machine reports
+// again: the daemon's tick starts the listener in a second or two.
+var entryReachAfterPull = 15 * time.Second
+
 type entryReachClock struct {
 	mu      sync.Mutex
 	running bool
@@ -158,6 +166,21 @@ func (ml *machineLink) reachKick(ctx context.Context) {
 			st.lastLog = note
 		}
 	}()
+}
+
+// reachSoon makes the next report due entryReachAfterPull from now (none
+// sooner than the last one ran).
+func (ml *machineLink) reachSoon() {
+	st := &ml.reach
+	every := ml.cfg.EntryReachEvery
+	if every <= 0 {
+		every = entryReachEvery
+	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if soon := time.Now().Add(entryReachAfterPull - every); st.last.After(soon) {
+		st.last = soon
+	}
 }
 
 // entryReach runs `<supervisor> entry reach`: "" when it ran (exit 0, or 3 —
