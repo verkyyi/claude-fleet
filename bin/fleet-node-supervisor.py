@@ -228,7 +228,10 @@ DEFAULT_ROOT = "/Library/Application Support/claude-fleet" if MAC else "/opt/cla
 NODE_ENV_KEYS = ("FLEET_NODE_ROOT", "FLEET_NODE_STATE", "FLEET_NODE_RUNTIME", "FLEET_NODE_LOG",
                  "FLEET_NODE_USERS", "FLEET_NODE_SERVICE", "FLEET_NODE_UPDATE_OWNER", "FLEET_NODE_BOOT_ID",
                  "FLEET_CREDSEP_LIB", "FLEET_CREDSEP_ROOT_BASE", "FLEET_CREDSEP_RUN_BASE",
-                 "FLEET_CREDSEP_ROLE", "FLEET_NODE_RUN_SSHD", "FLEET_ENTRY", "FLEET_ENTRY_PORT")
+                 "FLEET_CREDSEP_ROLE", "FLEET_NODE_RUN_SSHD", "FLEET_ENTRY", "FLEET_ENTRY_PORT",
+                 # a container's entry= route (#3213): `entry reach` runs under the node
+                 # program, and the hub must knock on the load balancer, not the NAT
+                 "CCQUOTA_FLEET_NODE_ROUTES")
 
 
 def node_environment():

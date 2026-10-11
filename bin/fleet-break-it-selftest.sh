@@ -6177,6 +6177,20 @@ drill_linux_hub_other_root_op() {
   SECS=$(since "$t0")
 }
 
+# ---- linux-entry-weak-door (#3213): the ACK node's public door is the entry port
+# alone — never the system sshd's 22 — and the pod tells the hub the load
+# balancer's address, so the knock lands on the door and not on the NAT egress.
+drill_linux_entry_weak_door() {
+  CAP=15; local t0
+  t0=$(now)
+  if ! python3 "$BIN/fleet-node-linux-selftest.py" LinuxNode.test_entry_door_is_the_entry_port_only \
+       >"$WORK/linux-door.out" 2>&1; then
+    WHY="the ACK door is wider than the entry port, or the hub is not told where it is: $(tail -n 3 "$WORK/linux-door.out")"; return 1
+  fi
+  SECS=$(since "$t0")
+  WHAT="公网 Service 只有 22022（Local）、系统 22 只在无头 Service；FLEET_ENTRY=1，entry=<负载均衡>:22022 到得了 entry reach；入口 sshd 只认 root 的 keys，无密码、无 root、不读 ~/.ssh"
+}
+
 # A child's report whose parent is gone (issue #3117, EPIC #3111 C6): a scratch spawned
 # a worker and was closed; the worker merged and its report went nowhere — a silent
 # exit 0. Now it is the person's: one row in global/orphan-reports.ndjson and one
