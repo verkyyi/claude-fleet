@@ -402,6 +402,9 @@ func (p *Proxy) serve(w http.ResponseWriter, r *http.Request, provider string) {
 			out.Header[k] = vs
 		}
 		out.Header.Set("Authorization", "Bearer "+res.AccessToken)
+		// a metered answer must be readable here (claude-fleet#3407): Claude
+		// Code asks for br / zstd, which the meter cannot open
+		out.Header.Set("Accept-Encoding", meterAccept(r.Header.Values("Accept-Encoding")))
 		if provider == Claude {
 			if !contains(betas, oauthBeta) {
 				betas = append(betas, oauthBeta)
@@ -452,7 +455,9 @@ func (p *Proxy) serve(w http.ResponseWriter, r *http.Request, provider string) {
 		return
 	}
 	m := newMeter()
-	a.out = stream(w, io.TeeReader(resp.Body, m))
+	mw := m.decoder(resp.Header.Get("Content-Encoding"))
+	a.out = stream(w, io.TeeReader(resp.Body, mw))
+	mw.Close()
 	u := m.usage()
 	a.tokens = u.Tokens()
 	u.Cred, u.Principal, u.WorkerID, u.Provider, u.Owner, u.Account = pass, res.Principal, res.WorkerID, provider, res.Owner, res.Account

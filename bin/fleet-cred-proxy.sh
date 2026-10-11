@@ -286,6 +286,15 @@ if rn.get("err") and rn.get("last_err", 0) >= rn.get("last_ok", 0):
 else:
     parts.append("续签 正常（入口通行证 %d 次 · 本机会话凭据 %d 个续期 · 持有 %d 张）"
                  % (rn.get("ok", 0), rn.get("local", 0), st.get("hub_passes", 0)))
+# the usage report (issue #3407): a login whose usage never reaches the hub
+# meters nobody, and used to say so nowhere
+bg = st.get("budget") or {}
+if bg.get("err"):
+    lv = "WARN"
+    notes.append("用量没报上入口：%s（待报 %s token）" % (bg["err"], bg.get("pending", 0)))
+if bg.get("misses"):
+    lv = "WARN"
+    notes.append("%d 个成功回答读不出用量（最近：%s）" % (bg["misses"], bg.get("miss_why", "")))
 print("%s\t%s%s" % (lv, " · ".join(parts), ("；" + "；".join(notes)) if notes else ""))
 DOC
     ;;

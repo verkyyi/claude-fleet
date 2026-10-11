@@ -28,6 +28,12 @@
 #      cache reads / output apart with tokens = in + cache writes + out (the
 #      budget's count, unchanged); a session minted without one reports none;
 #      a revoke forgets the worker_id
+#   L  a compressed answer is metered (issue #3407): the upstream is asked only
+#      for codings the meter opens (gzip, deflate — never br / zstd), a gzip'd
+#      Claude event stream reaches the client byte for byte AND its usage
+#      reaches the hub; one the meter cannot open is a `meter_miss` (status +
+#      doctor WARN), and a flush with no node token says so (log once, status,
+#      doctor) instead of returning silently
 #   K  binding never asks DNS for its own name (issue #2319): with getfqdn made
 #      to hang, the proxy's server still binds at once
 set -uo pipefail
@@ -64,7 +70,7 @@ kill "$RUNPID" 2>/dev/null; wait "$RUNPID" 2>/dev/null
 
 # ── the fake far end ─────────────────────────────────────────────────────────
 cat > "$SB/fake.py" <<'PY'
-import hashlib, json, os, sys, time
+import gzip, hashlib, json, os, sys, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 SB = sys.argv[1]
 class H(BaseHTTPRequestHandler):
@@ -116,6 +122,31 @@ class H(BaseHTTPRequestHandler):
             return self.reply(200, st)
         via = p.split("/")[1]
         prov = "codex" if ("codex" in p) else "claude"
+        enc = ""
+        for m in ("gzip", "br"):
+            if os.path.exists(os.path.join(SB, "sse-" + m)):
+                enc = m
+        if via == "direct-anthropic" and enc:
+            # leg L (issue #3407): Anthropic gzips its event stream for a client
+            # that asks — and "br" is gzip bytes labelled br, which the meter
+            # cannot open
+            open(os.path.join(SB, "ae.seen"), "w").write(h.get("accept-encoding", "-"))
+            sse = ("event: message_start\ndata: " + json.dumps({"type": "message_start", "message": {
+                       "model": "m-gz", "usage": {"input_tokens": 70, "cache_creation_input_tokens": 5,
+                                                  "cache_read_input_tokens": 4000, "output_tokens": 1}}}) +
+                   "\n\nevent: message_delta\ndata: " + json.dumps({"type": "message_delta",
+                       "usage": {"output_tokens": 25}}) + "\n\n").encode()
+            b = gzip.compress(sse)
+            open(os.path.join(SB, "gz.sent"), "wb").write(b)
+            self.send_response(200)
+            self.send_header("content-type", "text/event-stream")
+            self.send_header("content-encoding", enc)
+            self.send_header("transfer-encoding", "chunked")
+            self.end_headers()
+            for i in range(0, len(b), 17):
+                self.wfile.write(b"%x\r\n%s\r\n" % (len(b[i:i+17]), b[i:i+17])); self.wfile.flush()
+            self.wfile.write(b"0\r\n\r\n"); self.wfile.flush()
+            return
         if via == "direct-anthropic" or via == "direct-codex":
             if os.path.exists(os.path.join(SB, "region-direct")):
                 if prov == "codex":
@@ -391,6 +422,57 @@ PY2
 CP revoke --sid swa >/dev/null
 grep -q swa "$FLEET_CONF_DIR/cred-proxy/workers.json" 2>/dev/null && fail "J2 a revoked session's worker_id stays in workers.json" \
   || pass "J2 revoke forgets the session's worker_id"
+
+# ── L: a compressed answer is metered (issue #3407) ─────────────────────────
+bwait '"pending": 0' || fail "L J2's usage never left the proxy"
+rm -f "$SB/usage.entries" "$SB/usage.total"
+cat > "$SB/gzreq.py" <<'PY'
+import hashlib, http.client, sys
+c = http.client.HTTPConnection("127.0.0.1", int(sys.argv[1]), timeout=30)
+c.request("POST", "/v1/messages", body=b'{"stream":true}', headers={
+    "authorization": "Bearer " + sys.argv[2], "accept-encoding": "gzip, deflate, br, zstd"})
+r = c.getresponse(); data = r.read()
+print(r.status, r.getheader("content-encoding", "-"), hashlib.sha256(data).hexdigest())
+PY
+WL='fleet-uuid-a/7d1c0f00-0000-4000-8000-00000000000c'
+TL=$(CP mint --account a3 --sid sgz --worker "$WL")
+touch "$SB/sse-gzip"
+read -r lst lenc lsha <<<"$(python3 -I "$SB/gzreq.py" "$PORT" "$TL")"
+gsha=$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$SB/gz.sent" 2>/dev/null)
+if [ "$lst" = 200 ] && [ "$lenc" = gzip ] && [ "$lsha" = "$gsha" ]; then
+  pass "L a gzip'd Claude stream reaches the client byte for byte (content-encoding gzip)"
+else fail "L client got $lst $lenc (sha match: $([ "$lsha" = "$gsha" ] && echo y || echo n))"; fi
+[ "$(cat "$SB/ae.seen" 2>/dev/null)" = "gzip, deflate" ] && pass "L the upstream is asked only for gzip, deflate (br / zstd dropped)" \
+  || fail "L upstream saw accept-encoding: $(cat "$SB/ae.seen" 2>/dev/null)"
+waitn 100 || fail "L the gzip'd answer's usage never reached the hub (total=$(utot))"
+lj=$(python3 - "$SB/usage.entries" "$WL" <<'PY2'
+import json, sys
+es = [json.loads(l) for l in open(sys.argv[1])]
+m = [e for e in es if e.get("worker_id") == sys.argv[2]]
+e = m[0] if len(m) == 1 else {}
+want = {"provider": "claude", "model": "m-gz", "in": 70, "cache_write": 5, "cache_read": 4000, "out": 25, "tokens": 100, "requests": 1}
+print("ok" if all(e.get(k) == v for k, v in want.items()) else "got %s" % e)
+PY2
+)
+[ "$lj" = ok ] && pass "L its usage is reported under the session's worker_id (in 70 · cache write 5 · out 25 = 100)" || fail "L $lj"
+rm -f "$SB/sse-gzip"; touch "$SB/sse-br"
+python3 -I "$SB/gzreq.py" "$PORT" "$TL" >/dev/null
+rm -f "$SB/sse-br"
+bwait '"misses": 1' && grep -q '"meter_miss": "unreadable:br"' "$SB/proxy.log" \
+  && pass "L an answer the meter cannot open is a meter_miss (log + status), never silent" \
+  || fail "L no meter_miss for a br answer: $(CP status --json | grep -o '"misses[^,]*')"
+dl=$(CP doctor 2>&1)
+case "$dl" in WARN*"读不出用量"*) pass "L doctor WARNs on the miss" ;; *) fail "L doctor: $dl" ;; esac
+mv "$FLEET_CONF_DIR/node.env" "$FLEET_CONF_DIR/node.env.off"
+if bwait '"err": "no node token'; then pass "L no node token: the flush says so in status"
+else fail "L no node token: status err $(CP status --json | grep -o '"err[^,]*')"; fi
+sleep 2.5   # two more flushes: still said once
+n=$(grep -c '"ev": "budget_err"' "$SB/proxy.log")
+[ "$n" = 1 ] && pass "L … logged once (budget_err), not every tick" || fail "L budget_err logged $n times"
+dl=$(CP doctor 2>&1)
+case "$dl" in WARN*"用量没报上入口"*) pass "L doctor WARNs: usage not reaching the hub" ;; *) fail "L doctor (no token): $dl" ;; esac
+mv "$FLEET_CONF_DIR/node.env.off" "$FLEET_CONF_DIR/node.env"
+bwait '"err": ""' && pass "L the token back → the next flush clears it" || fail "L err never cleared"
 
 # ── H: the daemon entry ──────────────────────────────────────────────────────
 kill "$PROXY_PID" 2>/dev/null; PROXY_PID=''
