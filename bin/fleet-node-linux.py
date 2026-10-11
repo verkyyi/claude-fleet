@@ -911,7 +911,11 @@ def probe(a):
         return 1
     if a.action == 'live':
         return 0  # hub/credential outages are not reasons to restart the pod
-    if not Path('/run/fleet-node-ready').exists() or s.lanes_now(p, st):
+    # One tenant's refused lane (WRONG_LOGIN, relogin needed) is that login's
+    # trouble — status / the doctor name it — never the pod's: an unready pod
+    # leaves the LoadBalancer (externalTrafficPolicy: Local) and the door goes
+    # dead for every login here (issue #3333). Readiness is machine-wide only.
+    if not Path('/run/fleet-node-ready').exists():
         return 1
     for name in ('node-agent', 'cred-proxy-shared', 'sshd'):
         if not s.pid_alive((st.get('children', {}).get(name) or {}).get('pid')):

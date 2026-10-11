@@ -135,6 +135,9 @@ PUT 的请求体就是上面可写的字段，外加可选的 `if_version`（读
 `sudo fleet-node-supervisor.py account adopt <账号> --rejoin`——以这个账号的设备密钥
 （`fleet-login.py node-pass`，降权到它）向入口要新通行证，写进凭据库与 `logins/<账号>.env`，
 节点程序重读后上线；不要管理员的浏览器会话（设备没登记过就先以这个账号 `fleet login` 一次）。
+一个账号的被拒 lane 只是这个账号的事：Linux 托管机器的就绪探针不看它（#3333——曾让负载均衡摘掉
+pod、22022 的门对每个登录都死了）；账号已不在（OS 登录、`accounts.json`、`logins/<账号>.env` 都没有）
+的 lane 不算；`account forget` 把 `agent/<账号>/` 挪进 `attic/agent-<账号>-<UTC>`（BREAK-IT `linux-stale-lane-door-down`）。
 
 **删号要完全磁盘访问**（#2973，BREAK-IT `login-remove-dscl-denied`）：macOS 不让没有「完全磁盘访问」
 的进程删用户记录，root 也不行（`dscl . -delete` 答 `eDSPermissionError`）。入口下发的删号由节点程序跑，

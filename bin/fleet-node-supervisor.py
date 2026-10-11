@@ -2973,11 +2973,43 @@ def lane_refusals(paths):
         logins = sorted(os.listdir(base))
     except OSError:
         return out
+    acc = accounts_read(paths)
     for login in logins:
         st = read_json(os.path.join(base, login, "lane.json"), None)
-        if isinstance(st, dict) and st.get("state") == "refused":
+        if isinstance(st, dict) and st.get("state") == "refused" and _lane_login_known(paths, acc, login):
             out[login] = {"why": str(st.get("why") or "")[:400], "since": str(st.get("since") or "")}
     return out
+
+
+def _lane_login_known(paths, acc, login):
+    """A lane counts only for a login still here (issue #3333): an OS login, an
+    adopted account or a node-program tenant (logins/<login>.env). A lane.json
+    a deleted login left behind is no one's to relogin — ignored."""
+    if login in acc or os.path.exists(login_env_path(paths, login)):
+        return True
+    try:
+        pwd.getpwnam(login)
+        return True
+    except KeyError:
+        return False
+
+
+def _agent_dir_retire(paths, login):
+    """Move the node program's <state>/agent/<login>/ (its tenant's cursor,
+    spool and lane.json) into the attic as agent-<login>-<UTC> (issue #3333): a
+    removed login's refused lane.json used to stay behind for good. → the new
+    path, or "" when there was none."""
+    src = os.path.join(paths.state, "agent", login)
+    if not login or "/" in login or login in (".", "..") or not os.path.isdir(src) or os.path.islink(src):
+        return ""
+    os.makedirs(paths.attic, mode=0o700, exist_ok=True)
+    base = os.path.join(paths.attic, "agent-%s-%s" % (login, time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())))
+    dst, n = base, 1
+    while os.path.exists(dst):
+        n += 1
+        dst = "%s.%d" % (base, n)
+    os.rename(src, dst)
+    return dst
 
 
 def _login_py(paths):
@@ -3395,6 +3427,7 @@ def account_forget(paths, login, force=False):
             print("fleet-node-supervisor: %s's tasks still run %ss on — the daemon has not dropped them"
                   % (login, env_num("FLEET_NODE_RELEASE_WAIT", 20)), file=sys.stderr)
             return 1
+    agent_dir = _agent_dir_retire(paths, login)
     left = 0
     with attic_lock(paths):
         index = read_json(paths.attic_index, [])
@@ -3405,6 +3438,8 @@ def account_forget(paths, login, force=False):
                 left += 1
         if left:
             write_json(paths.attic_index, index, 0o600)
+    if agent_dir:
+        print("forgot %s: its node-program state moved to %s" % (login, agent_dir))
     if not (had or gone_env or left):
         print("forgot %s: nothing — this daemon never took it over" % login)
         return 0
