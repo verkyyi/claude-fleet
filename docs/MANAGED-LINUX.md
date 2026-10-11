@@ -161,8 +161,8 @@ is recreated at each start from its declaration on the volume (`boot`).
 ## ACK resources
 
 Suggested first deployment: the existing ACK cluster hosting the hub, a separate
-`fleet-workers` namespace, `fleet-linux-0`, 2 CPU / 8 GiB requested and 4 CPU /
-16 GiB limits, and 100 GiB encrypted ESSD storage. Select an existing ACK CSI
+`fleet-workers` namespace, `fleet-linux-0`, 1 CPU / 4 GiB requested and 2 CPU /
+8 GiB limits (what the live node runs), and 100 GiB encrypted ESSD storage. Select an existing ACK CSI
 StorageClass configured for encryption and supporting `ReadWriteOncePod`.
 The renderer deliberately does not guess a StorageClass or downgrade access
 mode. The headless Service (the system sshd's 22) stays internal; the one public
@@ -204,6 +204,55 @@ The container has no Kubernetes service-account token, privileged mode, host
 mounts, host PID namespace, or host network. Its root bootstrap uses a limited
 capability set to manage in-container users and drop to the worker/credential
 accounts. Confirm this workload fits the namespace's admission policy.
+
+### Egress guard
+
+(issue #3281) The hub's ACK cluster runs flannel, which enforces no
+NetworkPolicy, so without a guard any process in the pod — an ordinary login
+included — could fetch the worker node's RAM-role credentials from the cloud
+metadata address and open connections to every other namespace's pods and
+Services. The guard lives in the pod's own network namespace: the init
+container `egress-guard` (the same image, which carries `iptables`; capabilities
+`NET_ADMIN` + `NET_RAW` only, read-only root) loads one `iptables-restore`
+OUTPUT table and exits. The `fleet` container never holds `NET_ADMIN` or
+`NET_RAW`, so nothing in it — root included — can flush or change the rules.
+
+In order:
+
+| Rule | Default | Flag |
+|---|---|---|
+| accept loopback, and replies (`ESTABLISHED,RELATED`) | — | — |
+| accept DNS (udp + tcp 53) to kube-dns | `172.21.0.10` | `--egress-dns` |
+| reject the cloud metadata address | `100.100.100.200/32` | `--egress-metadata` |
+| reject the pod range | `172.20.0.0/16` | `--egress-pod-cidr` |
+| reject the service range (`kubernetes` is `172.21.0.1`) | `172.21.0.0/20` | `--egress-service-cidr` |
+| reject the VPC / private ranges (the node is `10.0.1.240`) | `10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,169.254.0.0/16` | `--egress-private` |
+| everything else — the public internet — is allowed | | |
+
+IPv6 gets the same loopback / reply rules and rejects `fc00::/7` (the pod has no
+global IPv6 today; a node without IPv6 skips it with a note). `REJECT` answers at
+once, so a blocked connection fails fast instead of hanging. The guard tries
+the nft backend, then legacy, and checks the metadata rule is really listed; if
+neither backend takes the table, the init container exits 1 and the pod never
+starts — closed, never open. Inbound is untouched: the door's 22022 (through the
+load balancer, `externalTrafficPolicy: Local`) and the in-cluster 22 are answered
+on established connections. The hub, the relay, GitHub, npm and Anthropic are
+all public addresses.
+
+Read the cluster's real ranges before rendering for another cluster: the
+service range is in the error `kubectl create service clusterip x --tcp=80
+--clusterip=1.1.1.1 --dry-run=server` prints, the pod range in each node's
+`spec.podCIDR`, kube-dns in `kubectl -n kube-system get svc kube-dns`. Check it
+from inside the pod, as root in the `fleet` container and as a login:
+
+```sh
+curl -m3 http://100.100.100.200/            # refused
+curl -m3 -k https://kubernetes.default.svc  # refused
+iptables -F                                 # Permission denied (no NET_ADMIN)
+curl -m3 https://YOUR-HUB/version           # works
+```
+
+BREAK-IT `linux-egress-metadata`.
 
 ## Hub, relay, and access
 
