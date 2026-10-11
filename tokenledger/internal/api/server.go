@@ -179,6 +179,12 @@ type Server struct {
 	// node_lost alert (FLEET_NODE_LOST_ALERT_SECS, claude-fleet#1630); zero =
 	// the 120 s default.
 	NodeLostAfter time.Duration
+	// UsageSilentAfter is how long a login may have a session working with no
+	// usage reaching the hub before usage_silent is raised (claude-fleet#3204;
+	// FLEET_USAGE_SILENT_ALERT_SECS, 30 min). Negative turns it off; zero is
+	// the default.
+	UsageSilentAfter time.Duration
+	usageSilent      usageSilentWatch
 
 	// SSHCA signs people's connection certificates (claude-fleet#1412),
 	// loaded from CCQUOTA_FLEET_SSH_CA_KEY — a file from its own k8s Secret,

@@ -51,6 +51,8 @@
 #                                                   internal/release (Build, Fetch, Unpack; go test, when a toolchain is here)
 #   machine-agent-wrong-login                       tokenledger/internal/api node_machine.go (loginEndpoint, serveMachine)
 #                                                   + internal/agent node_machine.go / runas.go (go test, when a toolchain is here)
+#   usage-unattributed                              tokenledger/internal/agent (the claude:local pool) + internal/api
+#                                                   fleet_usage_silent.go (usage_silent; go test, when a toolchain is here)
 #   place-server-down                               fleet_server_down (fleet-lib.sh), fleet-control-read.sh start
 #                                                   (exit 8), fleet_control.py (UNAVAILABLE); the hub half is
 #                                                   tokenledger/internal/api pickNodeAfter (go test, when here)
@@ -1456,6 +1458,44 @@ drill_debug_page_stuck() {
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
       0:*) WHAT='诊断员没开成 / 15 分钟没交页 → 没看完、转给管理员；包里还有凭据 → 400 说哪个文件；同包重传同一页；7 天后全删；关掉 ⇒ 路由不存在（go test）' ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
+      *) WHY="the Go half is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  fi
+  SECS=$(since "$t0")
+}
+
+# ---- usage-unattributed (#3204): a login runs Claude with no /login (its
+# sessions on the credential proxy's pool), so ~/.claude.json has no
+# oauthAccount. The agent skipped every Claude scan there — silently, Codex
+# being on — and the person's usage stopped on the hub. The agent now files
+# such a login's turns under the claude:local pool, and the hub raises
+# usage_silent on a (machine, login) working past the threshold with no usage.
+# Go tests by name (run with a toolchain).
+drill_usage_unattributed() {
+  CAP=120; local t0 out rc t
+  local agent_tests='TestAgent_NoLoginFilesClaudeUsageUnderThePool TestAgent_NoLoginNoTranscriptsFilesNothing'
+  local hub_tests='TestUsageSilentRaisedWhenWorkingLoginSendsNothing TestUsageSilentQuietWhenUsageFlowsOrNothingWorks TestUsageSilentAfterFromEnv'
+  t0=$(now)
+  grep -q 'id, err = identity.ClaudePool(a.cfg.Home), nil' "$ROOT/tokenledger/internal/agent/agent.go" 2>/dev/null \
+    || { WHY="the agent no longer files a login with no oauthAccount under the claude:local pool"; return 1; }
+  grep -q 's.UsageSilentTick(now, false)' "$ROOT/tokenledger/internal/api/fleet_alerts.go" \
+    || { WHY="the alerts sweep no longer runs the usage_silent check"; return 1; }
+  for t in $agent_tests; do
+    grep -q "^func $t(" "$ROOT/tokenledger/internal/agent/claude_pool_test.go" 2>/dev/null \
+      || { WHY="the agent half's test $t is not in tokenledger/internal/agent/claude_pool_test.go"; return 1; }
+  done
+  for t in $hub_tests; do
+    grep -q "^func $t(" "$ROOT/tokenledger/internal/api/fleet_usage_silent_test.go" 2>/dev/null \
+      || { WHY="the hub half's test $t is not in tokenledger/internal/api/fleet_usage_silent_test.go"; return 1; }
+  done
+  WHAT='没 /login 的登录：Claude 用量记进 claude:local 池、照常归到人；会话 working 超 30 分钟没用量 → usage_silent，用量一到就清（测试按名核对在，Go 门跑它们）'
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run "^($(printf '%s %s' "$agent_tests" "$hub_tests" | tr ' ' '|'))\$" ./internal/agent ./internal/api 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
+      0:*) WHAT='没 /login 的登录的 Claude 用量进 claude:local 池（来源 session、不动登录账号）；没对话目录不造池；working 超阈值没用量 → usage_silent，用量到 / 不工作即清（go test）' ;;
       *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
       *) WHY="the Go half is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
     esac
