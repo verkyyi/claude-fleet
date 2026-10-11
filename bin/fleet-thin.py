@@ -46,6 +46,13 @@ row that never came up (no valid 7502 and gone within FLEET_THIN_UP_SECS):
 the hub is asked for another online machine to be home (`--avoid <home>`) —
 unless the hub does not answer either (issue #3007): then it is this computer's
 own line that is down, the home is kept and the view with it.
+No fleet of yours there (issue #3054): the home answers `no fleet session is
+live` (rc 3) — a newcomer whose only login is the computer they type on — or the
+hub is still opening their first login. Then not a backoff but the old client's
+first-session road: a lease, `fleet-client-place.sh - home --agent claude`, the
+hub's 「正在为你开机器（m），约 N 秒」 while it opens, and the next connection to the
+machine the session opened on, onto it (`--want <worker_id>`); a failure is three
+lines — 没开出来 · 原因 · 下一步 (who to ask) — and exit 1.
 Between two connections a new client version (the install's .client-version,
 `fleet-client-update.sh start` → 3) is exec'd in place, view and home kept.
 
@@ -61,16 +68,19 @@ thin.log — TSV, one line per connection, fields only ever added at the end
     time(UTC)  event  home  route  pick_ms  ssh_ms  first_ms  rc  reason
 event: connect (pick_ms = fleet-connect --argv, ssh_ms = spawn → the first
 byte back, first_ms = spawn → the first valid `cur`: the view drawn) · rehome ·
-upload · exec · quit · offline (no 换家: the hub did not answer either) · run (`--run`: one command on the home, issue #3004 —
+upload · exec · quit · first (the first-session road, #3054) · offline (no 换家: the hub did not answer either) · run (`--run`: one command on the home, issue #3004 —
 reason = its first word).
 
 Knobs: FLEET_THIN_UP_SECS (10), FLEET_THIN_BACKOFF ("1,2,4,8,16,30"),
 FLEET_THIN_REHOME_AFTER (3), FLEET_THIN_HUB_PROBE_SECS (4), FLEET_REMOTE_BIN (.claude/fleet/bin),
 FLEET_CLIENT_PASTE=0 (drops and ⌃V byte for byte), FLEET_ITERM_KEYS=0,
-FLEET_THIN_LOG. Seams (tests): FLEET_THIN_ARGV_CMD (in place of
+FLEET_THIN_FIRST_RETRY (10), FLEET_HOME_FIRST_OPENING_MAX (2400),
+FLEET_THIN_FIRST_ROUNDS (3), FLEET_THIN_LOG. Seams (tests): FLEET_THIN_ARGV_CMD (in place of
 `fleet-connect.py --argv`), FLEET_THIN_UPDATE_CMD (in place of
 `fleet-client-update.sh start`), FLEET_CLIENT_CLIP_CMD (the clipboard),
-FLEET_THIN_HUB_PROBE_CMD (in place of asking the hub's /version before 换家).
+FLEET_THIN_HUB_PROBE_CMD (in place of asking the hub's /version before 换家),
+FLEET_CLIENT_LEASE_CMD / FLEET_THIN_PLACE_CMD / FLEET_THIN_ACCOUNT_CMD (the
+first session's lease, place and the hub's account word).
 Standard library only.
 """
 import base64
@@ -192,9 +202,58 @@ def pick(home="", avoid="", reconnect=False):
         j = json.loads(r.stdout.decode("utf-8", "replace").strip().splitlines()[-1])
     except (ValueError, IndexError):
         j = None
+    if isinstance(j, dict) and isinstance(j.get("opening"), dict):
+        return None, ms(t0), OPENING   # the hub is opening this person's first login (#3054)
     if r.returncode != 0 or not isinstance(j, dict) or not ("argv" in j or j.get("local")):
         return None, ms(t0), "fleet-connect --argv exit %d" % r.returncode
     return j, ms(t0), ""
+
+
+OPENING = "opening"   # pick()'s why: the hub is opening this person's first login
+NO_FLEET = 3          # fleet-remote-view.sh attach --thin: no fleet session is live there
+
+
+def hub_conf():
+    """(hub URL, token, the fleet-connect module) — "" when there is no hub."""
+    try:
+        fc = load("fleet-connect.py", "fleet_connect")
+        conf = fc.load_hub_conf()
+        hub = os.environ.get("FLEET_HUB_URL") or fc.machine_conf_hub() or conf.get("url") or ""
+        return hub, os.environ.get("FLEET_HUB_TOKEN") or conf.get("token") or "", fc
+    except (Exception, SystemExit):
+        return "", "", None
+
+
+def account_state():
+    """The hub's word on this person's login (claude-fleet#2069): {state
+    opening|failed|none, eta_s, machine, ask, why} — the `account` of the
+    certificate door POST /v1/fleet/summary, where the old client's list reads it
+    (fleet-hub-sessions.sh's #account); {} when they hold one, or the hub cannot
+    be asked. FLEET_THIN_ACCOUNT_CMD is the seam (prints that JSON)."""
+    seam = os.environ.get("FLEET_THIN_ACCOUNT_CMD")
+    try:
+        if seam:
+            out = subprocess.run(shlex.split(seam), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                 stderr=subprocess.DEVNULL, timeout=30).stdout
+            a = json.loads(out.decode("utf-8", "replace").strip() or "{}")
+        else:
+            import urllib.request
+            hub, token, fc = hub_conf()
+            if not hub:
+                return {}
+            url = hub.rstrip("/") + "/v1/fleet/summary"
+            if token:
+                req = urllib.request.Request(url, headers={"Authorization": "Bearer " + token})
+            else:
+                ts = int(time.time())
+                cert, sig = fc.ssh_sign("fleet-summary %d" % ts, "fleet-summary@claude-fleet")
+                req = urllib.request.Request(url, data=json.dumps({"cert": cert, "sig": sig, "ts": ts}).encode(),
+                                             method="POST", headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=8) as r:
+                a = (json.loads(r.read() or b"{}") or {}).get("account")
+    except Exception:
+        return {}
+    return a if isinstance(a, dict) and a.get("state") in ("opening", "failed", "none") else {}
 
 
 def hub_answers():
@@ -424,6 +483,8 @@ class Thin:
         self.attrs = termios.tcgetattr(0) if os.isatty(0) else None
         self.version = version()
         self.clip = None
+        self.saying = False     # a first-session line is being written over (#3054)
+        self.firsts = 0         # first-session roads taken (FLEET_THIN_FIRST_ROUNDS)
 
     # -- the argv ---------------------------------------------------------
     def argv(self, reconnect):
@@ -711,6 +772,110 @@ class Thin:
         self.profile(False)
         os.execv(args[0], args)
 
+    # -- no fleet of yours there: the first session (#3054) --------------
+    def first_say(self, text, keep=False):
+        """One line of the first-session road; keep=False writes over the last one."""
+        write_out(("\r\x1b[K" if self.saying else "").encode() + ("fleet · %s" % text).encode("utf-8", "replace")
+                  + (b"\r\n" if keep else b""))
+        self.saying = not keep
+
+    def first_failed(self, text, ask=""):
+        """没开出来 · 原因 · 下一步 (who to ask, when the hub names them): False."""
+        nxt = tr("thin_first_ask_fmt", ask) if ask else tr("thin_first_next")
+        self.first_say(tr("thin_first_failed"), keep=True)
+        for line in (tr("thin_first_why_fmt", " ".join(str(text or "-").split())[:200]), tr("thin_first_next_fmt", nxt)):
+            write_out(("  %s\r\n" % line).encode("utf-8", "replace"))
+        tlog("first", self.home or "-", "", "", "", "", 1, text)
+        return False
+
+    def first_session(self, why):
+        """The home had no fleet session of yours (remote view rc 3) or the hub is
+        still opening your first login: the old client's first-session road
+        (fleet-shell.sh first_home, #2264 / #2941) — ONE ask, `fleet-client-place.sh
+        - home --agent claude`, signed by a lease this loop takes for it and gives
+        back; while the hub says opening, its progress and the ask again every
+        FLEET_THIN_FIRST_RETRY (10) s, at most FLEET_HOME_FIRST_OPENING_MAX (40 min);
+        anything else is tried twice. Placed → home is that machine and the first
+        connection lands on the session (--want <worker_id>): True. Not → three
+        lines (没开出来 · 原因 · 下一步, who to ask) and False — never a backoff
+        against a machine with no session."""
+        import shutil
+        import tempfile
+        tlog("first", self.home or "-", "", "", "", "", "", why)
+        d = tempfile.mkdtemp(prefix="fleet-thin-first.")
+        env = dict(os.environ, FLEET_CLIENT_DIR=d, FLEET_CLIENT_KEY_FILE=os.path.join(d, "client.key"),
+                   FLEET_PLACE_RESULT=os.path.join(d, "result.json"))
+        lease_cmd = shlex.split(os.environ.get("FLEET_CLIENT_LEASE_CMD") or "") or \
+            [sys.executable or "python3", os.path.join(BIN, "fleet-client-lease.py")]
+        place_cmd = shlex.split(os.environ.get("FLEET_THIN_PLACE_CMD") or "") or \
+            ["bash", os.path.join(BIN, "fleet-client-place.sh")]
+        retry = env_num("FLEET_THIN_FIRST_RETRY", 10)
+        deadline = time.time() + env_num("FLEET_HOME_FIRST_OPENING_MAX", 2400)
+        lease, tries, said, acct = "", 0, "", {}
+
+        def run(cmd, timeout):
+            try:
+                r = subprocess.run(cmd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE, timeout=timeout)
+                return r.returncode, r.stdout.decode("utf-8", "replace"), r.stderr.decode("utf-8", "replace")
+            except (OSError, subprocess.SubprocessError) as e:
+                return 1, "", str(e)
+
+        def failed(text):
+            return self.first_failed(text, acct.get("ask") or "")
+
+        self.saying = False
+        try:
+            self.first_say(tr("thin_first_start"))
+            rc, out, err = run(lease_cmd + ["acquire"], 60)
+            f = (out.strip().splitlines() or [""])[-1].split("\t")
+            if rc != 0 or f[0] != "active" or len(f) < 2 or not f[1]:
+                return failed(tr("thin_first_no_lease_fmt", f[0] if f[0] else (err.strip().splitlines() or ["exit %d" % rc])[-1]))
+            lease = f[1]
+            with open(os.path.join(d, "client.lease"), "w") as fh:
+                fh.write(lease + "\n")
+            while True:
+                rc, out, err = run(place_cmd + ["-", "home", "--agent", "claude", "--node", "auto"], 600)
+                line = (out.strip().splitlines() or [""])[-1]
+                head = line.split("\t", 1)[0].split()
+                try:
+                    with open(env["FLEET_PLACE_RESULT"]) as fh:
+                        res = json.load(fh)
+                except (OSError, ValueError):
+                    res = {}
+                if rc == 0 and len(head) >= 2 and head[0] in ("REMOTE", "RESUME", "LOCAL"):
+                    m = res.get("machine") or head[1]
+                    wid = res.get("worker_id") or (head[4] if head[0] == "REMOTE" and len(head) > 4 else
+                                                   head[2] if head[0] == "RESUME" and len(head) > 2 else "")
+                    self.first_say(tr("thin_first_placed_fmt", m), keep=True)
+                    tlog("first", m, "", "", "", "", 0, line)
+                    self.home, self.avoid, self.resume = m, "", False
+                    self.want = wid or self.want
+                    return True
+                said = (line.split("\t", 1)[1] if "\t" in line else line) or \
+                    (err.strip().splitlines() or ["exit %d" % rc])[-1]
+                acct = account_state()
+                if acct.get("state") == "opening":
+                    if time.time() >= deadline:
+                        return failed(tr("thin_first_timeout_fmt", "%d" % (env_num("FLEET_HOME_FIRST_OPENING_MAX", 2400) // 60)))
+                    self.first_say(tr("thin_first_opening_fmt", acct.get("machine") or "?", acct.get("eta_s") or "?"))
+                    time.sleep(retry)
+                    continue
+                if acct.get("state") == "failed":
+                    return failed(acct.get("why") or said)
+                tries += 1
+                if tries >= 2:
+                    return failed(acct.get("why") or said)
+                self.first_say(tr("thin_first_retry_fmt", "%g" % retry))
+                time.sleep(retry)
+        finally:
+            if lease:
+                run(lease_cmd + ["release", "--lease", lease], 30)
+            shutil.rmtree(d, ignore_errors=True)
+            if self.saying:
+                write_out(b"\r\n")
+                self.saying = False
+
     def run(self):
         for s in (signal.SIGHUP, signal.SIGTERM):
             signal.signal(s, self.hangup)
@@ -727,8 +892,20 @@ class Thin:
                 if self.quit or (rc == 0 and not why):
                     tlog("quit", self.home, "", "", "", "", rc, "quit" if self.quit else "detach")
                     return 0
-                if up:
+                if not up and not self.local and (why == OPENING or rc == NO_FLEET):
+                    # no fleet of yours there (rc 3) or none yet (the hub is opening
+                    # one): the first session, never a backoff against it (#3054)
+                    self.firsts += 1
+                    there = why or "no fleet session is live on %s" % (self.home or "?")
+                    if self.firsts > int(env_num("FLEET_THIN_FIRST_ROUNDS", 3)):
+                        self.first_failed(tr("thin_first_rounds_fmt", self.home or "?", self.firsts - 1))
+                    if self.firsts > int(env_num("FLEET_THIN_FIRST_ROUNDS", 3)) or not self.first_session(there):
+                        tlog("quit", self.home, "", "", "", "", 1, "no first session")
+                        return 1
                     fails, k = 0, 0
+                    continue
+                if up:
+                    fails, k, self.firsts = 0, 0, 0
                 else:
                     fails += 1
                 k += 1

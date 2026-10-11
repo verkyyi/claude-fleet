@@ -26,6 +26,11 @@
 #   I  this machine is home (issue #3006): --argv for this machine + login →
 #      local (FLEET_CONNECT_SELF=ssh keeps the ssh); --local → no hub asked, the
 #      view's command the loop's only child, no ssh in the tree
+#   J  a newcomer with no fleet anywhere (issue #3054): the home answers rc 3 /
+#      the hub says opening → the first-session road (a lease, `- home` placed,
+#      the hub's opening progress), then the first connection lands on that
+#      session on the machine it opened on; failed → three lines naming who to
+#      ask and exit 1, never a backoff against a machine with no session
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 T="$(mktemp -d "${TMPDIR:-/tmp}/fthin.XXXXXX")"; T="$(cd "$T" && pwd -P)"
@@ -146,7 +151,7 @@ cat > "$T/drive.py" <<'EOF'
 import os, pty, re, select, signal, subprocess, sys, time, json
 T, BIN, script = sys.argv[1], sys.argv[2], sys.argv[3]
 env = dict(os.environ, HOME=T + "/client", XDG_CACHE_HOME=T + "/client/.cache", FLEET_THIN_LOG=T + "/thin.log",
-           FLEET_THIN_ARGV_CMD=T + "/argv.sh", FLEET_THIN_BACKOFF="0.2", FLEET_THIN_UP_SECS="1.5",
+           FLEET_THIN_ARGV_CMD=os.environ.get("THIN_ARGV_CMD") or T + "/argv.sh", FLEET_THIN_BACKOFF="0.2", FLEET_THIN_UP_SECS="1.5",
            FLEET_THIN_UPDATE_CMD=T + "/update.sh", FLEET_CLIENT_XTVERSION="0", FLEET_UI_LANG="zh",
            FLEET_CLIENT_CLIP_CMD=T + "/clip.sh", FLEET_PASTE_LOG=T + "/paste.log",
            ITERM_PROFILE="Default", TERM_PROGRAM="iTerm.app", FLEET_ITERM_DIR=T + "/iterm")
@@ -361,6 +366,101 @@ case $res in *"CHILDREN 1 "*"fleet-remote-view.sh attach --thin "*) case $res in
   *) ok "I: --local: the view's command is the loop's only child — no ssh in the tree" ;; esac ;; *) fail "I: children: $(grep CHILDREN "$T/res.local")" ;; esac
 [ -s "$T/argv.log" ] && fail "I: --local asked fleet-connect: $(cat "$T/argv.log")" || ok "I: --local asks no hub"
 [ -s "$T/ssh.log" ] && fail "I: --local ran ssh: $(cat "$T/ssh.log")" || :
+
+# ---------------------------------------------------------------------------
+# J — a newcomer with no fleet anywhere (issue #3054)
+# ---------------------------------------------------------------------------
+# m3: the hub's pick, a machine with no fleet of theirs (its view exits 3)
+mkdir -p "$T/home/m3/.claude/fleet/bin"
+cat > "$T/home/m3/.claude/fleet/bin/fleet-remote-view.sh" <<EOF
+#!/bin/sh
+echo "\$HOST_NAME \$*" >> "$T/rv.log"
+echo "fleet-remote-view: no fleet session is live on \$HOST_NAME" >&2
+exit 3
+EOF
+chmod +x "$T/home/m3/.claude/fleet/bin/fleet-remote-view.sh"
+# argv: a machine named → it; else m3 — or, once, the hub's opening answer
+cat > "$T/argv-new.sh" <<EOF
+#!/bin/sh
+echo "\$*" >> "$T/argv.log"
+home=m3
+case "\${1:-}" in m*) home=\$1 ;; *)
+  if [ -e "$T/j.argv-opening" ]; then rm -f "$T/j.argv-opening"
+    echo '{"opening": {"state": "opening", "eta_s": 50, "machine": "m2"}}'; exit 1; fi ;; esac
+printf '{"argv": ["sh", "$T/ssh.sh", "%s"], "host": 2, "machine": "%s", "login": "u1", "route": {"kind": "direct", "name": "lan"}}\n' "\$home" "\$home"
+EOF
+# the lease: acquire / release, logged
+cat > "$T/lease.sh" <<EOF
+#!/bin/sh
+echo "\$* dir=\$FLEET_CLIENT_DIR" >> "$T/lease.log"
+case \$1 in acquire) printf 'active\tL1\tdev\t\t\n' ;; release) printf 'released\tL1\n' ;; esac
+EOF
+# the place: refused while j.opening holds a count > 0 (each ask takes one), then
+# REMOTE m2 with the session's worker_id — or refused for good (j.fail)
+cat > "$T/place.sh" <<EOF
+#!/bin/sh
+echo "\$* lease=\$(cat "\$FLEET_CLIENT_DIR/client.lease")" >> "$T/place.log"
+[ -e "$T/j.fail" ] && { printf 'REFUSED NO_MACHINE\tno machine can take it\n'; exit 4; }
+n=\$(cat "$T/j.opening" 2>/dev/null || echo 0)
+if [ "\$n" -gt 0 ]; then echo \$((n - 1)) > "$T/j.opening"; printf 'REFUSED NO_MACHINE\tno machine can take it\n'; exit 4; fi
+printf '{"worker_id": "fu/fid9", "machine": "m2"}' > "\$FLEET_PLACE_RESULT"
+printf 'REMOTE m2 scratch done fu/fid9\tok\n'
+EOF
+# the hub's account word: opening while the place still refuses, failed with j.fail
+cat > "$T/acct.sh" <<EOF
+#!/bin/sh
+[ -e "$T/j.fail" ] && { echo '{"state": "failed", "machine": "m2", "ask": "boss@example", "why": "useradd failed"}'; exit 0; }
+n=\$(cat "$T/j.opening" 2>/dev/null || echo 0)
+[ "\$n" -gt 0 ] && { echo '{"state": "opening", "eta_s": 40, "machine": "m2"}'; exit 0; }
+echo '{}'
+EOF
+chmod +x "$T/argv-new.sh" "$T/lease.sh" "$T/place.sh" "$T/acct.sh"
+jenv() { THIN_ARGV_CMD="$T/argv-new.sh" FLEET_CLIENT_LEASE_CMD="$T/lease.sh" FLEET_THIN_PLACE_CMD="$T/place.sh" \
+         FLEET_THIN_ACCOUNT_CMD="$T/acct.sh" FLEET_THIN_FIRST_RETRY=0.3 "$@"; }
+# J1: rc 3 at m3 → opening (two refusals) → placed on m2 → lands on fu/fid9
+: > "$T/rv.log"; : > "$T/argv.log"; : > "$T/lease.log"; : > "$T/place.log"
+echo 2 > "$T/j.opening"
+THIN_ARGS='[]' jenv drive first '[
+ ["expect", "VIEW fu/fid9 ON m2", 20],
+ ["send", "quit\n"],
+ ["wait", 10]
+]'
+out=$(cat "$T/out.first"); res=$(cat "$T/res.first")
+case $res in *TIMEOUT*) fail "J1: timed out: $(tr -d '\r' < "$T/out.first" | tail -5)" ;; esac
+grep -q '^m3 attach --thin' "$T/rv.log" && ok "J1: the hub's pick m3 answers no fleet (rc 3)" || fail "J1: rv: $(cat "$T/rv.log")"
+case $out in *'正在为你开机器（m2），约 40 秒'*) ok "J1: the hub's opening progress on the screen" ;; *) fail "J1: no opening line" ;; esac
+case $out in *'第一个会话开在 m2'*) ok "J1: 「第一个会话开在 m2」" ;; *) fail "J1: no placed line" ;; esac
+[ "$(grep -c -- '- home --agent claude --node auto lease=L1' "$T/place.log")" = 3 ] \
+  && ok "J1: the old client's ask (- home --agent claude), signed by the lease, asked until placed" || fail "J1: place: $(cat "$T/place.log")"
+l=$(grep '^m2 ' "$T/rv.log" | head -1)
+case $l in "m2 attach --thin --view "*" --want fu/fid9 "*) ok "J1: the first connection to m2 lands on the placed session (--want)" ;;
+  *) fail "J1: m2 attach: $l / $(cat "$T/rv.log")" ;; esac
+grep -q '^release --lease L1' "$T/lease.log" && ok "J1: the lease is given back" || fail "J1: lease: $(cat "$T/lease.log")"
+case $res in *'RC 0'*) ok "J1: ⌘Q → exit 0" ;; *) fail "J1: $res" ;; esac
+[ "$(grep -c '^m3 ' "$T/rv.log")" = 1 ] && ok "J1: no reconnect to the machine with no session" || fail "J1: m3 asked $(grep -c '^m3 ' "$T/rv.log") times"
+# J2: the hub says opening at the pick itself → the same road
+: > "$T/rv.log"; : > "$T/place.log"; touch "$T/j.argv-opening"; echo 1 > "$T/j.opening"
+THIN_ARGS='[]' jenv drive first2 '[
+ ["expect", "VIEW fu/fid9 ON m2", 20],
+ ["send", "quit\n"],
+ ["wait", 10]
+]'
+grep -q '^m3 ' "$T/rv.log" && fail "J2: went to m3 while the hub said opening" || :
+case $(cat "$T/res.first2") in *'RC 0'*) grep -q '^m2 attach --thin .*--want fu/fid9' "$T/rv.log" \
+  && ok "J2: the pick's opening answer → placed, lands on m2" || fail "J2: rv: $(cat "$T/rv.log")" ;; *) fail "J2: $(cat "$T/res.first2")" ;; esac
+# J3: the opening failed → three lines, who to ask, exit 1 — no backoff
+: > "$T/rv.log"; : > "$T/lease.log"; touch "$T/j.fail"
+THIN_ARGS='[]' jenv drive first3 '[
+ ["expect", "下一步", 20],
+ ["wait", 10]
+]'
+out=$(cat "$T/out.first3")
+case $(cat "$T/res.first3") in *'RC 1'*) ok "J3: the opening failed → exit 1" ;; *) fail "J3: $(cat "$T/res.first3")" ;; esac
+case $out in *'你的第一个会话没开出来'*'原因：useradd failed'*'下一步：找入口管理员 boss@example'*) ok "J3: 没开出来 · 原因 · 下一步 naming who to ask" ;;
+  *) fail "J3: lines: $(printf '%s' "$out" | tr -d '\r' | tail -5)" ;; esac
+case $out in *'重连'*) fail "J3: a reconnect line against the machine with no session" ;; *) ok "J3: no reconnect against m3" ;; esac
+grep -q '^release --lease L1' "$T/lease.log" && ok "J3: the lease is given back" || fail "J3: lease: $(cat "$T/lease.log")"
+rm -f "$T/j.fail" "$T/j.opening"
 
 echo
 [ "$FAILS" = 0 ] && { echo "fleet-thin-selftest: PASS"; exit 0; }
