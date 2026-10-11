@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
@@ -124,6 +125,20 @@ func (s *Store) PoolUsageFor(principal string, since, until time.Time) ([]PoolUs
 		out = append(out, u)
 	}
 	return out, rows.Err()
+}
+
+// PoolUsageFirst is when the hub recorded its first pool row, anyone's — the
+// day pool_usage began (claude-fleet#3226). ok false = nothing recorded yet. A
+// window that starts before it was not fully recorded (claude-fleet#3230).
+func (s *Store) PoolUsageFirst() (first time.Time, ok bool, err error) {
+	var at sql.NullInt64
+	if err := s.write.QueryRow(`SELECT MIN(at_unix) FROM pool_usage`).Scan(&at); err != nil {
+		return time.Time{}, false, err
+	}
+	if !at.Valid {
+		return time.Time{}, false, nil
+	}
+	return time.Unix(at.Int64, 0).UTC(), true, nil
 }
 
 // LeaseForWorker is the (repo, issue) worker holds a live lease on at at —

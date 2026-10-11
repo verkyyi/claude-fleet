@@ -178,6 +178,7 @@ export const zhCN = {
   'ui.ov.subUser': '你的会话和用量。',
   'ui.ov.phone': '在手机上打开',
   'ui.ov.vsYesterday': '比昨天 {p}',
+  'ui.ov.noFullYesterday': '昨天无完整数据',
   'ui.ov.running': '在跑的会话',
   'ui.ov.open': '共 {n} 个开着',
   'ui.ov.noTokens': '最近 14 天没有 token',

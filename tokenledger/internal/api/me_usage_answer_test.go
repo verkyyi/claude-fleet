@@ -135,6 +135,25 @@ func TestMeUsage_Totals_Days_Models(t *testing.T) {
 	}
 }
 
+// since_first is when the hub's first pool row was written, anyone's — a
+// previous window that starts before it was not fully recorded and the page
+// shows no percent off it (claude-fleet#3230). Nothing recorded = absent.
+func TestMeUsage_SinceFirst(t *testing.T) {
+	h, bob, carol, _, now := meUsageHarness(t)
+	want := now.Add(-10 * 24 * time.Hour).Truncate(time.Second)
+	for _, c := range []*http.Cookie{bob, carol} {
+		if u, raw := readMeUsage(t, h, c, ""); u.SinceFirst == nil || !u.SinceFirst.Equal(want) {
+			t.Errorf("since_first = %v; want %v (the oldest row, anyone's): %s", u.SinceFirst, want, raw)
+		}
+	}
+	h2 := newGitHubHarnessWith(t, fullServer, "verkyyi")
+	h2.addUser(t, ghBob)
+	_, c := h2.signIn(t, ghBob)
+	if _, raw := readMeUsage(t, h2, c, ""); strings.Contains(raw, "since_first") {
+		t.Errorf("nothing recorded yet, but since_first is set: %s", raw)
+	}
+}
+
 // Only the viewer's own, whatever is asked; an admin reads theirs, not the hub.
 func TestMeUsage_OwnOnly(t *testing.T) {
 	h, _, carol, admin, _ := meUsageHarness(t)

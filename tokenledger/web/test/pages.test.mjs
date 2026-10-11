@@ -8,7 +8,7 @@ import { readFileSync } from 'node:fs';
 import {
   dayKeys, dayTokens, stack, delta, bars, areaChart, niceMax,
   sessionRows, counts, filterRows, running, attention, stateOf,
-  activeDevices, clientDevices, whyNotClient, limitKpi, deviceHistory, looksLikeKey, bundleItems, parseImport, quotaTable, quotaState, myMachines, takesOf, usageDays, usageBudget,
+  activeDevices, clientDevices, whyNotClient, limitKpi, fullFrom, deviceHistory, looksLikeKey, bundleItems, parseImport, quotaTable, quotaState, myMachines, takesOf, usageDays, usageBudget,
 } from '../dist/lib/pages.js';
 import { askOf, askLine } from '../dist/lib/pages.js';
 import { useLocale } from '../dist/lib/i18n.js';
@@ -34,6 +34,16 @@ test('delta: percent change, nothing when there is no earlier window', () => {
   assert.deepEqual(delta(114, 100, 'ui.ov.vsYesterday'), { text: '+14% vs yesterday', down: false });
   assert.deepEqual(delta(50, 100, 'ui.ov.vsYesterday'), { text: '-50% vs yesterday', down: true });
   assert.deepEqual(delta(5, 0, 'ui.ov.vsYesterday'), { text: '', down: false });
+  // A near-empty base the hub did not fully record is no percent (claude-fleet#3230):
+  // pool_usage began this morning, so yesterday's 12 tokens are not "yesterday".
+  const first = '2026-10-11T09:00:00Z';
+  assert.ok(!fullFrom(first, '2026-10-10T00:00:00Z'), 'yesterday began before the first row');
+  assert.ok(fullFrom('2026-10-01T00:00:00Z', '2026-10-10T00:00:00Z'));
+  assert.ok(fullFrom(first, '2026-10-11T09:00:00Z'), 'a window starting at the first row is full');
+  assert.ok(!fullFrom(undefined, '2026-10-10T00:00:00Z'), 'nothing recorded is not full');
+  assert.deepEqual(delta(3200000, 12, 'ui.ov.vsYesterday', !fullFrom(first, '2026-10-10T00:00:00Z') && 'ui.ov.noFullYesterday'),
+    { text: 'No full record of yesterday', down: false, muted: true });
+  assert.deepEqual(delta(114, 100, 'ui.ov.vsYesterday', false), { text: '+14% vs yesterday', down: false });
   try {
     useLocale('zh-CN');
     assert.equal(delta(114, 100, 'ui.ov.vsYesterday').text, '比昨天 +14%');

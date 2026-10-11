@@ -11,7 +11,7 @@
 import { Shell } from './app-shell.js';
 import { esc, ic, fmtTokens, greeting } from './lib/shell.js';
 import { t } from './lib/i18n.js';
-import { dayKeys, stack, delta, areaChart, sessionRows, running, attention, kpi, limitKpi } from './lib/pages.js';
+import { dayKeys, stack, delta, fullFrom, areaChart, sessionRows, running, attention, kpi, limitKpi } from './lib/pages.js';
 
 const failed = (r) => `<div class="ghostrow err">${ic('alert')} ${esc(r.reason ? r.reason.message : t('ui.unavailable'))}</div>`;
 
@@ -31,7 +31,7 @@ export default Shell.mount('overview', async (ctx) => {
 
   const k1 = u ? limitKpi(u.limit) : kpi(t('ui.ov.limit'), '—', [], down);
   const k2 = kpi(t('ui.ov.today'), u ? fmtTokens(Number(u.today) || 0) : '—', u ? daily : [],
-    u ? delta(u.today, u.today_prev, 'ui.ov.vsYesterday') : down);
+    u ? delta(u.today, u.today_prev, 'ui.ov.vsYesterday', !fullFrom(u.since_first, keys[12] + 'T00:00:00Z') && 'ui.ov.noFullYesterday') : down);
   const k3 = kpi(t('ui.ov.running'), fleet.status === 'fulfilled' ? String(running(rows).length) : '—', [],
     { text: fleet.status === 'fulfilled' ? t('ui.ov.open', { n: rows.length }) : t('ui.unavailable'), muted: true });
 

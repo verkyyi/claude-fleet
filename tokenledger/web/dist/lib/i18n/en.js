@@ -153,6 +153,7 @@ export const en = {
   'ui.ov.subUser': 'Your sessions and usage.',
   'ui.ov.phone': 'Open on your phone',
   'ui.ov.vsYesterday': '{p} vs yesterday',
+  'ui.ov.noFullYesterday': 'No full record of yesterday',
   'ui.ov.running': 'Sessions running',
   'ui.ov.open': '{n} open',
   'ui.ov.noTokens': 'No tokens in the last 14 days',

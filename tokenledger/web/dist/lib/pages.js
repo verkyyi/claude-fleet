@@ -41,12 +41,23 @@ export function dayLabel(key) {
 
 /** delta is the KPI's change line against the previous window, or '' when
  *  there was nothing before to compare with. `key` is the t() template, its
- *  {p} the signed percent. */
-export function delta(cur, prev, key) {
+ *  {p} the signed percent. `partial`, a t() key, is said instead when the
+ *  previous window was not fully recorded (fullFrom) — a percent off a
+ *  near-empty base reads +300805% (claude-fleet#3230). */
+export function delta(cur, prev, key, partial) {
+  if (partial) return { text: t(partial), down: false, muted: true };
   cur = Number(cur) || 0; prev = Number(prev) || 0;
   if (!prev) return { text: '', down: false };
   const p = Math.round(((cur - prev) / prev) * 100);
   return { text: t(key, { p: `${p >= 0 ? '+' : ''}${p}%` }), down: p < 0 };
+}
+
+/** fullFrom is whether a window starting at `start` was fully recorded:
+ *  /v1/me/usage's since_first (the hub's first pool row) is at or before it.
+ *  No since_first = nothing recorded yet = not full. */
+export function fullFrom(sinceFirst, start) {
+  const f = Date.parse(sinceFirst || ''), s0 = typeof start === 'number' ? start : Date.parse(start);
+  return Number.isFinite(f) && Number.isFinite(s0) && f <= s0;
 }
 
 /** bars turns /v1/usage buckets into [label, tokens] rows, largest first,
