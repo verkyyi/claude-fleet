@@ -1,10 +1,12 @@
 package api
 
 import (
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
 // claude-fleet#3049 (EPIC #3067 C4): the home answer names, per machine, the
@@ -118,5 +120,35 @@ func TestHomeLoginNeverAnotherPersonsLogin(t *testing.T) {
 	}
 	if l, live, _ := h.srv.homeLoginFor(q.ID, "m4"); !live || l != "verky" {
 		t.Fatalf("q on m4 = %q live=%v; want their own verky with its fleet", l, live)
+	}
+}
+
+// The home is ONE setting (claude-fleet#3199): the phone's address follows
+// the entry home, and `fleet` enters it first — over the device's last-used
+// machine; when it cannot, another stands in and the reason says why.
+func TestHomePickFollowsTheEntryHome(t *testing.T) {
+	h, pid, _, _ := homeLoginFleet(t)
+	setHome := func(m, login string) {
+		t.Helper()
+		if _, err := h.srv.Store.SetEntryHome(store.EntryHome{Person: pid, Machine: m, Login: login, SetBy: pid, SetAt: time.Now()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	setHome("m4", "verky")
+	out, err := h.srv.homePick(pid, "m5", time.Now())
+	if err != nil || out.Machine == nil || out.Machine.Hostname != "m4" || out.Rule != "home" || out.Reason != "你的家机器" {
+		t.Fatalf("home m4, last m5: %+v rule %q %q (%v)", out.Machine, out.Rule, out.Reason, err)
+	}
+	// m5 has no fleet of theirs: m4 stands in, and the reason says so.
+	setHome("m5", "verky")
+	out, err = h.srv.homePick(pid, "m5", time.Now())
+	if err != nil || out.Machine == nil || out.Machine.Hostname != "m4" || out.Rule == "home" ||
+		!strings.HasPrefix(out.Reason, "家机器 m5 上没有你在用的 fleet，临时进了这台：") {
+		t.Fatalf("home m5 with no fleet: %+v rule %q %q (%v)", out.Machine, out.Rule, out.Reason, err)
+	}
+	// No home set: the rules as before.
+	other, _ := h.srv.homePick("", "m5", time.Now())
+	if other.Rule == "home" {
+		t.Fatal("the operator has no home")
 	}
 }

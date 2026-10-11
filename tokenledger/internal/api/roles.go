@@ -81,7 +81,10 @@ var routeAccess = map[string]string{
 	control.EntryKeysPath: accessUser, control.EntryKeysPath + "/": accessUser,
 	control.EntryNamePath: accessUser, control.EntryHomePath: accessUser,
 	EntryPagePath: accessUser, // the keys page (claude-fleet#3069)
-	NodePoolPath:  accessSelf, // claude-fleet#2850: the pool manifest, any enrollment token
+	EntryConnPath: accessUser, // 我的连接 (claude-fleet#3199)
+	// … its pictures and the misspellings that lead to it (claude-fleet#3199).
+	EntryPagePath + "/": accessPublic, "/fleet/key": accessPublic, "/keys": accessPublic,
+	NodePoolPath: accessSelf, // claude-fleet#2850: the pool manifest, any enrollment token
 	// The Singapore relay (claude-fleet#1974): a node token mints a pass;
 	// the check authenticates the pass the forwarder carries.
 	"/v1/node/relay-credential": accessSelf, RelayCheckPath: accessSelf,
@@ -442,8 +445,8 @@ func (s *Server) auditRoleDenied(r *http.Request) {
 // (claude-fleet#1990). mymachines is 我的机器 (#2518), quota is 我的额度 (#2517),
 // usage is 我的用量 (#2519).
 var (
-	userPages  = []string{"overview", "sessions", "mymachines", "devices", "quota", "usage", "config"}
-	adminPages = []string{"overview", "sessions", "mymachines", "devices", "quota", "usage", "config",
+	userPages  = []string{"overview", "sessions", "mymachines", "devices", "phone", "connection", "quota", "usage", "config"}
+	adminPages = []string{"overview", "sessions", "mymachines", "devices", "phone", "connection", "quota", "usage", "config",
 		"all-sessions", "by-person", "all-devices",
 		"subscriptions", "machines", "people", "settings", "audit"}
 )

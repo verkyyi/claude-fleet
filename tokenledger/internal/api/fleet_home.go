@@ -18,6 +18,9 @@ import (
 //
 // `fleet` with no argument asks the hub, and the hub decides, in this order:
 //
+//  0. the person's home — the one setting the phone's address follows too
+//     (the entry home, claude-fleet#3199) — when it is up; else the rules
+//     below stand in and the reason names the home and why not;
 //  1. the machine this device used last, when it is online;
 //  2. an online machine where the person has sessions (the most of them);
 //  3. the least loaded online machine the person has an account on — scored
@@ -175,6 +178,16 @@ func (s *Server) homePick(pid, last string, now time.Time) (HomeResponse, error)
 		out.Candidates = append(out.Candidates, c)
 	}
 
+	// The person's home (claude-fleet#3199): ONE setting for every device —
+	// the phone's address points at it (the entry home, fleet_entry.go), and
+	// `fleet` enters it first. Only while it is not up do the rules below
+	// stand in, and the reason says so.
+	var home *store.EntryHome
+	if pid != "" {
+		if h, ok, err := s.Store.EntryHomeOf(pid); err == nil && ok {
+			home = &h
+		}
+	}
 	pick := -1
 	// Two passes (claude-fleet#1427): first over the machines that are not
 	// 维护中, then — only when none of those is online — over all online ones,
@@ -184,9 +197,17 @@ func (s *Server) homePick(pid, last string, now time.Time) (HomeResponse, error)
 		up := func(c HomeCandidate) bool {
 			return c.Online && (allowMaint || c.Maintenance == "") && !(anyFleet && c.NoFleet)
 		}
+		// 0 — the home, up.
+		if home != nil {
+			for i, c := range out.Candidates {
+				if up(c) && sameMachine(c.Machine, home.Machine) {
+					pick, out.Rule, out.Reason = i, "home", "你的家机器"
+				}
+			}
+		}
 		// 1 — last used, online.
 		for i, c := range out.Candidates {
-			if up(c) && c.Last {
+			if out.Rule != "home" && up(c) && c.Last {
 				pick, out.Rule, out.Reason = i, "last", "上次用的机器在线"
 			}
 		}
@@ -230,6 +251,18 @@ func (s *Server) homePick(pid, last string, now time.Time) (HomeResponse, error)
 			}
 			break
 		}
+	}
+	if home != nil && pick >= 0 && out.Rule != "home" {
+		why := "离线"
+		for _, c := range out.Candidates {
+			if sameMachine(c.Machine, home.Machine) && c.Online {
+				why = "上没有你在用的 fleet"
+				if c.Maintenance != "" {
+					why = "维护中"
+				}
+			}
+		}
+		out.Reason = "家机器 " + s.entryMachineName(home.Machine) + " " + why + "，临时进了这台：" + out.Reason
 	}
 	if pick < 0 {
 		out.Reason = "你的机器都不在线"

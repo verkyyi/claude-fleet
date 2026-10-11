@@ -22,7 +22,7 @@ func TestAppPage_EveryPagePathAnswersTheAppDocument(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rows := regexp.MustCompile(`\{ id: '[^']+',[^}]*?(group: 'admin', )?href: '([^']+)'`).FindAllStringSubmatch(string(src), -1)
+	rows := regexp.MustCompile(`\{ id: '[^']+',[^}]*?(group: 'admin', )?href: '([^']+)'([^}]*)\}`).FindAllStringSubmatch(string(src), -1)
 	if len(rows) < 10 {
 		t.Fatalf("found %d PAGES rows in lib/shell.js; the table moved", len(rows))
 	}
@@ -57,6 +57,9 @@ func TestAppPage_EveryPagePathAnswersTheAppDocument(t *testing.T) {
 		return resp.StatusCode, string(b)
 	}
 	for _, m := range rows {
+		if !strings.Contains(m[3], "module:") {
+			continue // a page the hub draws itself (从手机连, claude-fleet#3199)
+		}
 		path, adminOnly := m[2], m[1] != ""
 		if code, body := get(admin, path); code != http.StatusOK || !strings.Contains(body, doc) {
 			t.Errorf("admin GET %s = %d %q; want 200 and the app document", path, code, body)

@@ -330,6 +330,7 @@ func (s *Server) handleNodeEntryReach(w http.ResponseWriter, r *http.Request) {
 	}
 	now := time.Now().UTC()
 	key := strings.ToLower(host)
+	s.entryReachSeen.Store(key, entryReachSeen{At: now, Listening: rep.Listening})
 	if last, ok := s.entryReachAt.Load(key); ok && now.Sub(last.(time.Time)) < entryReachGap {
 		v, err := s.entryReachVerdict(host, now)
 		if err != nil {
@@ -420,6 +421,28 @@ func (s *Server) entryReachVerdict(machine string, now time.Time) (control.Entry
 		}
 	}
 	return v, nil
+}
+
+// entryReachSeen is a machine's last report, as the keys page reads it.
+type entryReachSeen struct {
+	At        time.Time
+	Listening bool
+}
+
+// entryLastReport is machine's last report since the hub started, ok=false
+// when none.
+func (s *Server) entryLastReport(machine string) (entryReachSeen, bool) {
+	var out entryReachSeen
+	found := false
+	s.entryReachSeen.Range(func(k, v any) bool {
+		if sameMachine(k.(string), machine) || sameMachine(machine, k.(string)) {
+			if r := v.(entryReachSeen); !found || r.At.After(out.At) {
+				out, found = r, true
+			}
+		}
+		return true
+	})
+	return out, found
 }
 
 // EntryReachable is one address the outside reaches a home machine's entry

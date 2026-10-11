@@ -19,7 +19,7 @@ export default Shell.mount('settings', async (ctx) => {
   const answer = setR.value;
   const row = (it) => {
     const { value, source } = settingValue(answer, it.key);
-    const src = source === 'default' ? `<span class="chip">${esc(t('ui.set.default'))}</span>` : source === 'legacy' ? `<span class="chip warn">${esc(t('ui.set.legacy'))}</span>` : '';
+    const src = source === 'default' ? `<span class="chip">${esc(t('ui.set.default'))}</span>` : source === 'legacy' ? `<span class="chip warn">${esc(t('ui.set.legacy'))}</span>` : source === 'deploy' ? `<span class="chip">${esc(t('ui.set.deploy'))}</span>` : '';
     const name = t('ui.set.k.' + it.key), help = t('ui.set.h.' + it.key);
     let ctl;
     if (it.type === 'onoff') ctl = `<button class="switch" role="switch" aria-checked="${value === 'on'}" data-key="${esc(it.key)}" aria-label="${esc(name)}"></button>`;
