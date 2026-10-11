@@ -270,12 +270,17 @@ grep -q '/fleet-plugins.py"' "$BIN/fleet-doctor.sh" && grep -qE '(pass|warn) plu
   || fail "F fleet-doctor.sh has no plugins row"
 
 # ---- G: a changed plugin bumps its version ---------------------------------------
-if mb=$(git -C "$ROOT" merge-base HEAD origin/master 2>/dev/null) && [ -n "$mb" ]; then
+# git runs in the REAL tree (issue #3158): under run-selftests.sh $ROOT is the shadow
+# root, where plugins/ is one symlink — `git diff <mb> -- plugins/<d>` there sees a
+# typechange and calls every plugin changed. `git -C` into plugins/ resolves it
+# physically, so --show-toplevel names the real checkout.
+if GR=$(git -C "$ROOT/plugins" rev-parse --show-toplevel 2>/dev/null) && [ -n "$GR" ] \
+   && mb=$(git -C "$GR" merge-base HEAD origin/master 2>/dev/null) && [ -n "$mb" ]; then
   for d in $(python3 "$PL" names --root "$ROOT"); do
-    git -C "$ROOT" cat-file -e "$mb:plugins/$d/.claude-plugin/plugin.json" 2>/dev/null || continue
-    git -C "$ROOT" diff --quiet "$mb" -- "plugins/$d" && continue
-    old=$(git -C "$ROOT" show "$mb:plugins/$d/.claude-plugin/plugin.json" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("version",""))')
-    new=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("version",""))' "$ROOT/plugins/$d/.claude-plugin/plugin.json")
+    git -C "$GR" cat-file -e "$mb:plugins/$d/.claude-plugin/plugin.json" 2>/dev/null || continue
+    git -C "$GR" diff --quiet "$mb" -- "plugins/$d" && continue
+    old=$(git -C "$GR" show "$mb:plugins/$d/.claude-plugin/plugin.json" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("version",""))')
+    new=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("version",""))' "$GR/plugins/$d/.claude-plugin/plugin.json")
     [ "$old" != "$new" ] || fail "G plugins/$d changed since $mb but its version is still $new — bump it, or an installed copy never updates (claude plugin update keys on version)"
     ok
   done
