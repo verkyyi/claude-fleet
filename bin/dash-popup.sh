@@ -201,6 +201,7 @@ if [ -n "$client" ]; then
   # popup closes, so the check below is not racing it. (Kept as its own tmux call:
   # dash-popup-selftest.sh's shims dispatch on the subcommand.)
   fleet_home_mark popup
+  # shellcheck disable=SC2034  # read by fleet_popup_thaw (the trap)
   FPOP_FROZEN=''
   [ -z "$FREEZE" ] || fleet_popup_freeze "$client"
   [ -z "${FLEET_HOME_MS:-}" ] || cmd="FLEET_HOME_MS=$(printf '%q' "$FLEET_HOME_MS") $cmd"
