@@ -60,6 +60,7 @@ func runAgentMachine(args []string) error {
 		*token = t
 	}
 	maxBusy := os.Getenv("FLEET_MAX_CPU_BUSY")
+	entryOn := os.Getenv("FLEET_ENTRY")
 	if *machineEnv != "" {
 		env, err := readLoginEnv(*machineEnv, os.Geteuid() == 0)
 		if err != nil {
@@ -67,6 +68,9 @@ func runAgentMachine(args []string) error {
 		}
 		if v := env["FLEET_MAX_CPU_BUSY"]; v != "" {
 			maxBusy = v
+		}
+		if entryOn == "" {
+			entryOn = env["FLEET_ENTRY"]
 		}
 		if *token == "" {
 			*token = env["CCQUOTA_TOKEN"]
@@ -102,6 +106,9 @@ func runAgentMachine(args []string) error {
 		// …and the updater beside it, for the beat's 版本与更新
 		// (claude-fleet#2798).
 		Updater: envOr("CCQUOTA_MACHINE_UPDATER", machineScript("fleet-node-update.py")),
+		// …and, where the entry port is on (claude-fleet#3070), the daemon's
+		// script again for its `entry pull`.
+		EntryCtl: entryCtl(entryOn),
 	})
 }
 
@@ -252,6 +259,15 @@ func machineFlag(args []string) bool {
 // root runtime's rule, 共同约定 3). "" when there is none — service_control is
 // then refused, never run from anywhere else.
 func machineSupervisor() string { return machineScript("fleet-node-supervisor.py") }
+
+// entryCtl is the script the machine pulls its entry keys with: the daemon's
+// own, only when FLEET_ENTRY=1 (the environment, else machine.env).
+func entryCtl(on string) string {
+	if on != "1" {
+		return ""
+	}
+	return envOr("CCQUOTA_MACHINE_SUPERVISOR", machineSupervisor())
+}
 
 // machineScript is a root-owned, not group/world-writable script beside this
 // binary in the root runtime, or "" — never one anyone else could swap.

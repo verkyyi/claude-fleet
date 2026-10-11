@@ -51,6 +51,9 @@ FLEET_NODE_* seams; nothing touches /Library, /var or a real login.
      `supervisor.wedged` for status, exit 70; status --check reads WEDGED (5)
      while it is stopped; a loop coming round stays up; a TCC.db open() that never
      returns (the FDA probe, a child) and a FIFO task log / state file stall nothing
+  R  the entry port (#3070): off adds nothing (no child, no status line, no
+     directory); the switch from the environment or machine.env; only a plain
+     public key becomes a keys-file line; the config is 共同约定 2 line for line
 """
 import importlib.util
 import json
@@ -2106,6 +2109,78 @@ class Q_RootReads(Sandbox):
         n = self.task("ok").get("runs") or 0
         self.assertTrue(until(5, lambda: (self.task("ok").get("runs") or 0) > n), "the loop stopped after SIGUSR1")
         self.assertIsNone(p.poll())
+
+
+class R_Entry(Sandbox):
+    """The entry port (#3070): off is byte for byte as before; the switch comes
+    from the environment or machine.env; only a plain public key becomes a line."""
+
+    def setUp(self):
+        super(R_Entry, self).setUp()
+        for k in list(self.env):
+            if k.startswith("FLEET_ENTRY"):
+                del self.env[k]
+
+    def test_off_adds_nothing(self):
+        self.table(children=[{"name": "c", "cmd": ["/bin/sleep", "300"]}])
+        self.start()
+        until(10, lambda: self.child("c").get("pid"))
+        time.sleep(0.5)
+        out = self.run_sup("status").stdout
+        self.assertFalse([l for l in out.splitlines() if l.startswith("entry")], out)
+        self.assertNotIn("entry", self.state().get("children") or {})
+        self.assertFalse(os.path.exists(os.path.join(self.d, "db", "entry")))
+        self.assertEqual(self.run_sup("entry", "status", "--check").returncode, 2)
+        self.assertEqual(self.run_sup("entry", "pull").returncode, 3)
+        self.assertEqual(self.run_sup("entry", "ensure").returncode, 3)
+        self.assertFalse(os.path.exists(os.path.join(self.d, "db", "entry")))
+
+    def test_switch_from_machine_env(self):
+        os.makedirs(os.path.join(self.d, "db"))
+        with open(os.path.join(self.d, "db", "machine.env"), "w") as f:
+            f.write("CCQUOTA_TOKEN=t\nFLEET_ENTRY=1\nFLEET_ENTRY_PORT=22123\n")
+        old = dict(os.environ)
+        try:
+            os.environ.update(FLEET_NODE_STATE=os.path.join(self.d, "db"), FLEET_NODE_TEST="1")
+            os.environ.pop("FLEET_ENTRY", None)
+            os.environ.pop("FLEET_ENTRY_PORT", None)
+            self.assertEqual(fns.entry_settings(fns.Paths())[:2], (True, 22123))
+            os.environ["FLEET_ENTRY"] = "0"           # the environment wins
+            self.assertFalse(fns.entry_settings(fns.Paths())[0])
+            c = fns.entry_child(fns.Paths())
+            self.assertEqual(c["cmd"][-2:], ["-f", os.path.join(self.d, "db", "entry", "sshd_config")])
+            self.assertEqual(c["reload_signal"], "HUP")
+            agent = [x for x in fns.default_table(fns.Paths())["children"] if x["name"] == "node-agent"][0]
+            self.assertIn(os.path.join(self.d, "db", "machine.env"), agent["reload"],
+                          "the node program restarts when machine.env (its token, FLEET_ENTRY) changes")
+        finally:
+            os.environ.clear()
+            os.environ.update(old)
+
+    def test_key_lines(self):
+        import base64
+        blob = base64.b64encode(b"\x00\x00\x00\x0bssh-ed25519" + b"\x00\x00\x00\x20" + b"k" * 32).decode()
+        ok = fns.entry_key_line({"type": "ssh-ed25519", "b64": blob, "fp": "SHA256:abc"})
+        self.assertEqual(ok, "ssh-ed25519 %s fleet:SHA256:abc\n" % blob)
+        for bad in ({"type": "ssh-dss", "b64": blob, "fp": "x"},                    # not a kind the entry takes
+                    {"type": "ssh-rsa", "b64": blob, "fp": "x"},                    # the blob says ed25519
+                    {"type": "ssh-ed25519", "b64": blob + " command=\"sh\"", "fp": "x"},
+                    {"type": "ssh-ed25519", "b64": blob, "fp": "x\nssh-ed25519 AAAA"},
+                    {"type": "command=\"x\" ssh-ed25519", "b64": blob, "fp": "x"},
+                    "ssh-ed25519 %s" % blob):
+            self.assertIsNone(fns.entry_key_line(bad), bad)
+
+    def test_config_is_the_convention(self):
+        ep = fns.EntryPaths(fns.Paths())
+        cfg = fns.entry_config(ep, 22022, ["bob", "alice"])
+        for line in ("Port 22022", "AllowUsers alice bob", "AuthenticationMethods publickey",
+                     "PasswordAuthentication no", "KbdInteractiveAuthentication no", "PermitRootLogin no",
+                     "AuthorizedKeysFile %s/%%u" % ep.keys, "PermitUserRC no", "PermitUserEnvironment no",
+                     "ExposeAuthInfo yes", "MaxAuthTries 3", "LoginGraceTime 20", "MaxStartups 10:30:60",
+                     "HostKey %s" % ep.hostkey):
+            self.assertIn(line + "\n", cfg)
+        self.assertNotIn(".ssh", "".join(l for l in cfg.splitlines(True) if not l.startswith("#")))
+        self.assertNotIn("PerSourcePenalties", cfg, "the system default, never weakened here")
 
 
 if __name__ == "__main__":

@@ -78,6 +78,11 @@ type MachineConfig struct {
 	// ccquota binary), asked `versions --json` every versionsEvery for the
 	// beat's 版本与更新 (claude-fleet#2798); "" = no versions reported.
 	Updater string
+	// EntryCtl is the daemon's script the machine runs `entry pull` with on
+	// an entry_keys push (claude-fleet#3070): set only where the entry port is
+	// on (FLEET_ENTRY=1), and then the machine hello lists CapEntryKeys; ""
+	// = no entry, nothing listed, nothing pulled.
+	EntryCtl string
 	// Tenants is one Config per login served: its own Token (that login's
 	// node token), Home, StateDir and RunAs. Fleet is forced on.
 	Tenants []Config
@@ -97,6 +102,8 @@ type machineLink struct {
 	// vers is the machine's last 版本与更新 reading (claude-fleet#2798),
 	// refreshed off the beat — a slow updater never holds the beat up.
 	vers asyncReading[control.Versions]
+	// entry follows the hub's entry_keys version (claude-fleet#3070).
+	entry entryFollow
 }
 
 // setRefused records (why != "") or clears a login's refused hello.
@@ -254,10 +261,15 @@ func (ml *machineLink) session(ctx context.Context) (bool, error) {
 	conn.SetReadLimit(4 << 20)
 
 	off := false
+	caps := []string{control.CapMachine}
+	if ml.cfg.EntryCtl != "" {
+		// The entry port's keys follow the hub's push (claude-fleet#3070).
+		caps = append(caps, control.CapEntryKeys)
+	}
 	hello, err := control.New(control.TypeHello, control.Hello{
 		HeartbeatMS:  int(ml.cfg.LiveInterval / time.Millisecond),
 		AgentVersion: ml.cfg.Version,
-		Capabilities: []string{control.CapMachine},
+		Capabilities: caps,
 		Compute:      &off,
 	})
 	if err != nil {
@@ -339,6 +351,7 @@ func (ml *machineLink) session(ctx context.Context) (bool, error) {
 			if err := beat(); err != nil {
 				return true, err
 			}
+			ml.entryKick(ctx)
 		}
 	}
 }
@@ -346,7 +359,12 @@ func (ml *machineLink) session(ctx context.Context) (bool, error) {
 // demux hands one message from the hub to its login's lane.
 func (ml *machineLink) demux(ctx context.Context, conn *websocket.Conn, m control.Message) {
 	if m.Login == "" {
-		// The machine's own half: nothing is ever asked of it.
+		// The machine's own half: nothing is ever asked of it but the entry
+		// port's keys (claude-fleet#3070).
+		if m.Type == control.TypeEntryKeys {
+			ml.handleEntryKeys(ctx, m)
+			return
+		}
 		if m.Type == control.TypeError && m.Error != nil {
 			log.Printf("machine link: hub reported %s: %s", m.Error.Code, m.Error.Message)
 		}

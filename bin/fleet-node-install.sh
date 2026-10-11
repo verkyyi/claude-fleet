@@ -38,6 +38,9 @@
 #             (fleet-login-remove-ssh.sh setup, #2994) — no admin ⇒ 跳过
 #   守护      <state>/logins, then the machine daemon's LaunchDaemon
 #             (fleet-node-supervisor.py install, from `current` — C3)
+#   入口      the entry port (#3070): FLEET_ENTRY=1 [FLEET_ENTRY_PORT=<n>] on the
+#             command writes the switch into machine.env (FLEET_ENTRY=0 takes it
+#             out), then `fleet-node-supervisor.py entry ensure` (not on ⇒ 跳过)
 #
 # On a managed machine the old roads (`fleet host on`, `fleet node join`) say to
 # use this command instead, and still work for one version.
@@ -422,6 +425,40 @@ if "$PY" -I "$SUP" install --check >/dev/null 2>&1; then
 else
   out="$("$PY" -I "$SUP" install 2>&1)" || fail 守护 "$(printf '%s' "$out" | tail -n 1)"
   ok 守护 "$(printf '%s' "$out" | tail -n 1)"
+fi
+
+# ---------------------------------------------------------------- 入口 ----------
+# The entry port (issue #3070, EPIC #3067 C3): FLEET_ENTRY=1 [FLEET_ENTRY_PORT=<n>]
+# on this command writes the switch into machine.env (launchd hands the daemon no
+# environment), FLEET_ENTRY=0 takes it out; otherwise machine.env's own word
+# stands. On: one converge pass now (host key, keys files, config through sshd -t)
+# — the listener is the daemon's child, up once a login has its home here.
+ewant="" eport="${FLEET_ENTRY_PORT:-}"
+case "${FLEET_ENTRY:-}" in
+  1) ewant=on ;;
+  0) ewant=off ;;
+  *) grep -q '^FLEET_ENTRY=1$' "$ENVF" 2>/dev/null && ewant=keep ;;
+esac
+case "$eport" in ''|[0-9]*) ;; *) fail 入口 "FLEET_ENTRY_PORT=$eport 不是端口号" ;; esac
+if [ -z "$ewant" ]; then
+  skip 入口 "没开（要开：FLEET_ENTRY=1 ${RERUN}）"
+else
+  { [ -r "$ENVF" ] && grep -Ev '^(FLEET_ENTRY|FLEET_ENTRY_PORT)=' "$ENVF"
+    if [ "$ewant" = on ]; then echo FLEET_ENTRY=1; [ -z "$eport" ] || echo "FLEET_ENTRY_PORT=$eport"
+    elif [ "$ewant" = keep ]; then grep -E '^(FLEET_ENTRY|FLEET_ENTRY_PORT)=' "$ENVF"; fi; } > "$WORK/machine.env"
+  echanged=""
+  cmp -s "$WORK/machine.env" "$ENVF" || { put "$WORK/machine.env" "$ENVF" 600 || fail 入口 "写不了 $ENVF"; echanged=1; }
+  rm -f "$WORK/machine.env"
+  if [ "$ewant" = off ]; then
+    if [ -n "$echanged" ]; then ok 入口 "关了（machine.env 去掉 FLEET_ENTRY；守护停掉入口 sshd）"
+    else skip 入口 "没开"; fi
+  else
+    eout="$("$PY" -I "$SUP" entry ensure 2>&1)"; erc=$?
+    eline="$("$PY" -I "$SUP" entry status 2>/dev/null)"
+    [ "$erc" = 0 ] || fail 入口 "${eline:-$(printf '%s' "$eout" | tail -n 1)}"
+    if [ -n "$echanged" ]; then ok 入口 "开了 · ${eline#entry  }"
+    else skip 入口 "已开 · ${eline#entry  }"; fi
+  fi
 fi
 
 if [ -n "$LOGIN" ] && [ "${FLEET_NODE_SERVICE:-systemd}" != foreground ]; then
