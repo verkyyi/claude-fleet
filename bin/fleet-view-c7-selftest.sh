@@ -16,9 +16,10 @@
 #      (logged how=new) — never the window holding the orchestrator, even with
 #      orch_<fleet> naming one, and no orchestrator script run at all
 #      (FLEET_VIEW_ORCH_CMD would leave a mark); a direct attach: nothing
-#   T  ⌘T: the 派一件事 popup in the 看台 — 用哪个 Coding Agent, the fleet's default
-#      first, an agent this machine lacks grey with why; ↵ sends with no --agent
-#      (the default), `send --agent codex` carries it; a direct attach: no popup
+#   T  ⌘T and ⌘K, keys issue #3328 took away (compat-1v): the panel — ⌘T lit on
+#      its ⚡ row, no 派一件事 popup — saying 「⌘T 已并进 ⌘P」 the first time only;
+#      each press logged how=old:<action>, counted by fleet_keys.old_presses (the
+#      doctor's oldkeys row); `send --agent codex` still carries; a direct attach: nothing
 #   S  ⌃\: the session's shell — here: a window of the 看台 (@view_shell, panel,
 #      @peer_view) whose shell's directory is the session's @worktree; ⌃\ again is
 #      back on the session, ⌃\ there selects the same one (one a session); the
@@ -202,35 +203,50 @@ for o in "@fleet_role panel" "@peer m4@$ME" "@peer_view v1" "@peer_node m4" "@pe
 done
 pass "N  ⌘N: a new no-repo session every press, the 看台 on it — never the orchestrator's holder, no orchestrator script; a direct attach: nothing"
 
-# --- T: ⌘T ----------------------------------------------------------------------------------
+# --- T: ⌘T and the other keys issue #3328 took away ------------------------------------------
+# ⌘T's 派一件事 popup has no entry any more: ⌘T (even as the person's own extra,
+# dispatch=cmd+t) opens the panel lit on its ⚡ row; a key that went (⌘K here — no
+# extra names it, so it is the default forward) opens the panel too. Each says
+# 「<key> 已并进 ⌘P」 the first time only, and every press is a line how=old:<action>
+# that fleet_keys.old_presses — the doctor's `oldkeys` row — counts.
 to send-keys -t o:direct -H 1b 5b 39 33 32 7e
 sleep 1.5
-to capture-pane -p -t o:direct | grep -q '用哪个 Coding Agent' && fail "T: ⌘T opened the popup in a direct attach"
+to capture-pane -p -t o:direct | grep -q '⚡' && fail "T: ⌘T opened the panel in a direct attach"
+log="$W/conf/logs/view-switch.ndjson"
 to send-keys -t o:view -H 1b 5b 39 33 32 7e
 ok=''; for _ in $(seq 1 20); do
-  sleep 0.4; to capture-pane -p -t o:view > "$W/dispatch.txt"; grep -q '用哪个 Coding Agent' "$W/dispatch.txt" && { ok=1; break; }
+  sleep 0.4; to capture-pane -p -t o:view > "$W/dispatch.txt"; grep -q '已并进 ⌘P' "$W/dispatch.txt" && { ok=1; break; }
 done
-[ -n "$ok" ] || fail "T: ⌘T in the 看台 opened no 派一件事 popup: $(cat "$W/dispatch.txt")"
-for want in '派一件事' '仓库' 'claude（默认）' "这台没装 codex"; do
-  grep -qF "$want" "$W/dispatch.txt" || fail "T: the popup lacks 「${want}」: $(cat "$W/dispatch.txt")"
-done
+[ -n "$ok" ] || fail "T: ⌘T in the 看台 did not open the panel saying 「⌘T 已并进 ⌘P」: $(cat "$W/dispatch.txt")"
+grep -q '▶ ⚡ 新会话（空白）' "$W/dispatch.txt" || fail "T: ⌘T's panel is not lit on ⚡: $(grep -v '^$' "$W/dispatch.txt")"
+grep -qF '⌘T 已并进 ⌘P' "$W/dispatch.txt" || fail "T: the hint does not name ⌘T: $(grep '已并进' "$W/dispatch.txt")"
+grep -q '用哪个 Coding Agent' "$W/dispatch.txt" && fail "T: ⌘T still opened the 派一件事 popup"
 [ -n "${FLEET_VIEW_EVIDENCE:-}" ] && cp "$W/dispatch.txt" "$FLEET_VIEW_EVIDENCE"
-to send-keys -t o:view -l '修登录页'; sleep 0.3
-to send-keys -t o:view Tab; to send-keys -t o:view Tab; to send-keys -t o:view Right; sleep 0.3   # codex is grey: still claude
-to send-keys -t o:view Enter
-waitfor 20 test -s "$W/sent.json" || fail "T: ↵ sent nothing: $(to capture-pane -p -t o:view)"
-python3 - "$W/sent.json" <<'PY' || fail "T: the payload: $(cat "$W/sent.json")"
-import json, sys
-d = json.load(open(sys.argv[1]))
-assert d["title"] == "修登录页" and d["via"] == "dispatch" and d["repo"] == "acme/app", d
-assert d.get("agent") is None, d   # the default rides no --agent
-PY
-rm -f "$W/sent.json"
+to send-keys -t o:view Escape; sleep 0.8
+to send-keys -t o:view -H 1b 5b 39 33 32 7e
+waitfor 20 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -q '▶ ⚡'" || fail "T: a second ⌘T opened no panel"
+sleep 0.4; to capture-pane -p -t o:view | grep -q '已并进' && fail "T: the second ⌘T said 「已并进 ⌘P」 again"
+to send-keys -t o:view Escape; sleep 0.8
+to send-keys -t o:view -H 1b 5b 39 33 30 7e
+waitfor 20 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -qF '⌘K 已并进 ⌘P'" || fail "T: ⌘K (code 930) did not open the panel saying 「⌘K 已并进 ⌘P」: $(to capture-pane -p -t o:view)"
+to send-keys -t o:view Escape; sleep 0.8
+[ "$(grep -c '"how":"old:dispatch"' "$log")" = 2 ] || fail "T: two ⌘T are not two how=old:dispatch lines: $(grep old: "$log")"
+grep -q '"how":"old:switcher","key":"⌘K"' "$log" || fail "T: ⌘K is not logged how=old:switcher: $(grep old: "$log")"
+[ "$(PYTHONPATH="$BIN" python3 -c 'import fleet_keys,sys; print(fleet_keys.old_presses(sys.argv[1]))' "$log")" = "3 ⌘T 2 · ⌘K 1" ] \
+  || fail "T: old_presses does not count them: $(PYTHONPATH="$BIN" python3 -c 'import fleet_keys,sys; print(fleet_keys.old_presses(sys.argv[1]))' "$log")"
+grep -q 'fleet_keys.old_presses' "$BIN/fleet-doctor.sh" || fail "T: the doctor's oldkeys row does not read fleet_keys.old_presses"
+# the one message after the update (fleet-remote-view.sh attach --thin runs view-notice):
+# on the 看台's client once, then never again on this login
+TMUX="$IN,0,0" python3 "$BIN/fleet-quickopen.py" view-notice --view fl@view-v1 || fail "T: view-notice exited non-zero"
+[ -s "$W/conf/keys-notice-3328" ] || fail "T: view-notice left no mark — it would say it at every attach"
+grep -q 'view-notice --view' "$BIN/fleet-remote-view.sh" || fail "T: attach --thin does not run view-notice"
+# ⌘T's send itself is ⌘P's ⚡ (leg P); `send` keeps its --agent
 python3 "$BIN/fleet-quick-dispatch.py" send --title '看日志' --repo acme/web --agent codex --view fl@view-v1 >/dev/null \
   || fail "T: send --agent codex --view exited non-zero"
 [ "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("agent"))' "$W/sent.json")" = codex ] \
   || fail "T: --agent codex did not ride the payload: $(cat "$W/sent.json")"
-pass "T  ⌘T: 派一件事 in the 看台 — the agent step (default claude, codex grey: not installed), ↵ sends, --agent carries; nothing in a direct attach"
+rm -f "$W/sent.json"
+pass "T  ⌘T / ⌘K (#3328): the panel — ⌘T lit on ⚡ — 「已并进 ⌘P」 once, each press how=old:<action> for the doctor; no 派一件事 popup; nothing in a direct attach"
 
 # --- S: ⌃\ -----------------------------------------------------------------------------------
 ti select-window -t "=fl@view-v1:$W1"; sleep 0.3

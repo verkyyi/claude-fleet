@@ -1,7 +1,7 @@
 // The fleet-orchestrate plugin's contract (issue #3114, EPIC #3111 C3): the values
 // its mod module (hooks/qd.tsx) keeps in $.state.
 
-/** The /qd dialog (issue #2618): what it holds while open. */
+/** The /qd dialog (issue #2618; retired into ⌘P by #3328, kept one version — compat-1v): what it holds while open. */
 export type QdState = {
   /** The title as typed — kept after a failed dispatch. */
   title: string

@@ -561,6 +561,11 @@ fleet_ui_t() {
     en:view_reap_keep) printf 'never closed by itself' ;;
     zh:view_far_fmt) printf '%s 这台还没接上' "${1:-}" ;;
     en:view_far_fmt) printf '%s is not connected yet' "${1:-}" ;;
+    # the keys issue #3328 took away (compat-1v: 下一批删): what a forwarded one says, once
+    zh:view_forward_fmt) printf '%s 已并进 ⌘P —— 下一版这个键就不管用了' "${1:-}" ;;
+    en:view_forward_fmt) printf '%s is part of ⌘P now — the next version drops this key' "${1:-}" ;;
+    zh:view_keys_moved) printf '快捷键只剩 ⌘P：翻会话、新任务、shell、退出都在里面（⌘↑↓ ⌘[ ⌘] ⌘T ⌘N 下一版删）' ;;
+    en:view_keys_moved) printf 'One key now, ⌘P: switching sessions, a new task, a shell, quit are all in it (⌘↑↓ ⌘[ ⌘] ⌘T ⌘N go next version)' ;;
     zh:view_gone) printf '这个会话已经不在了' ;;
     en:view_gone) printf 'that session is gone' ;;
     zh:view_new_failed) printf '新会话没开起来' ;;
@@ -1253,8 +1258,8 @@ fleet_ui_t() {
     en:panel_answer_none)      printf 'No panel answer recorded yet' ;;
     zh:qd_title)                printf '快速派发' ;;
     en:qd_title)                printf 'Quick dispatch' ;;
-    zh:qd_desc)                 printf '快速派发：一行标题、选个仓库，回车就建单开工，不用等编排会话' ;;
-    en:qd_desc)                 printf 'Quick dispatch: one-line title, pick a repo, Enter files it and starts a worker without waiting for the orchestrator' ;;
+    zh:qd_desc)                 printf '已并进 ⌘P（这一版还能用，下一版删）' ;;
+    en:qd_desc)                 printf 'now part of ⌘P (works this version, gone in the next)' ;;
     zh:qd_field_title)          printf '标题' ;;
     en:qd_field_title)          printf 'Title' ;;
     zh:qd_field_repo)           printf '仓库' ;;
@@ -1263,14 +1268,17 @@ fleet_ui_t() {
     en:qd_placeholder)          printf 'what it is for, in one line' ;;
     zh:qd_submit)               printf '建单开工' ;;
     en:qd_submit)               printf 'file + start' ;;
-    zh:qd_hint)                 printf '↵ 建单并开工 · Esc 关闭 · 不经过编排会话，回报照常回到它' ;;
-    en:qd_hint)                 printf 'Enter files + starts · Esc closes · skips the orchestrator; reports still come back to it' ;;
+    zh:qd_hint)                 printf '↵ 派出（和 ⌘P 的 ⚡ 一样） · Esc 关闭' ;;
+    en:qd_hint)                 printf 'Enter sends (as ⌘P\x27s ⚡ does) · Esc closes' ;;
     zh:qd_empty)                printf '标题是空的：写一句这件事是干什么用的' ;;
     en:qd_empty)                printf 'the title is empty: say in one line what it is for' ;;
     zh:qd_norepo)               printf '读不到这个 fleet 托管的仓库' ;;
     en:qd_norepo)               printf 'could not read the repos this fleet hosts' ;;
-    zh:qd_sending)              printf '正在建单…' ;;
-    en:qd_sending)              printf 'filing…' ;;
+    zh:qd_sending)              printf '派单中…' ;;
+    # /qd retired by issue #3328 (compat-1v: 下一批删, with every qd_ key)
+    zh:qd_moved)                printf '/qd 已并进 ⌘P：在 ⌘P 里直接写这件事，↵ 就派出；下一版 /qd 就没有了' ;;
+    en:qd_moved)                printf '/qd is part of ⌘P now: type the task in ⌘P and press Enter; the next version drops /qd' ;;
+    en:qd_sending)              printf 'sending…' ;;
     zh:qd_done_fmt)             printf '已建 #%s 并开工' "${1:-}" ;;
     en:qd_done_fmt)             printf 'filed #%s and started its worker' "${1:-}" ;;
     zh:qd_failed_fmt)           printf '没派出去：%s' "${1:-}" ;;
