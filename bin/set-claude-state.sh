@@ -327,6 +327,26 @@ if isinstance(p, str):
   esac
 fi
 
+# ── @agent_cwd: where the agent works right now (issue #3183) ───────────────
+# Claude Code never chdirs its own process: a Bash `cd` moves only the cwd it
+# keeps, which every hook payload carries (`cwd`). So the PostToolUse of a Bash
+# call stamps it on the window, and a shell opened beside the session (the 看台's
+# ⌃\, fleet_view.agent_dir / fleet-remote-view.sh shell-here) starts there —
+# pane_current_path would only ever say the launch directory. Rides the `working`
+# entry every installed hook table already calls; the payload read here is the
+# copy the blocked check below parses. A Bash call only, one tmux write, no parse
+# beyond the first `"cwd"` (it precedes tool_input in Claude Code's payload).
+if [ -z "$via" ] && [ "${1:-}" = working ] && [ ! -t 0 ]; then
+  [ "$_hp_read" = 1 ] || { _hp=$(cat 2>/dev/null); _hp_read=1; }
+  case "$_hp" in *'"tool_name":"Bash"'*|*'"tool_name": "Bash"'*)
+    _cwd=$(printf '%s\n' "$_hp" | awk '{ i = index($0, "\"cwd\""); if (!i) next
+      s = substr($0, i + 5); if (!sub(/^[ \t]*:[ \t]*"/, "", s)) exit
+      j = index(s, "\""); if (j > 1) print substr(s, 1, j - 1); exit }')
+    case "$_cwd" in /*) case "$_cwd" in *\\*) ;; *)
+      tmux set-window-option -t "$TMUX_PANE" @agent_cwd "$_cwd" 2>/dev/null ;; esac ;; esac ;;
+  esac
+fi
+
 # ── `blocked` is STICKY (issue #704) ─────────────────────────────────────────
 # Every write that is the ordinary traffic of ONE turn — PreToolUse → working,
 # PostToolUse → working, Stop → done — leaves a `blocked` pane exactly as it is.

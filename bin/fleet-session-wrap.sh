@@ -260,8 +260,10 @@ while :; do
   # A new agent says its own state afresh (issue #2537, EPIC #2535 C2): the last
   # one's OSC 7501 report — a resume, a cfg-restart, a migrated window's first
   # launch — must not hold the hooks off for two minutes, nor make a carried
-  # state look like the new agent's word. Cleared before every launch.
-  [ "$intmux" = 1 ] && { wset -u @agent_status; wset -u @agent_status_ts; }
+  # state look like the new agent's word. Cleared before every launch — and so is
+  # the last one's working directory (@agent_cwd, issue #3183): a new agent starts
+  # where it is launched.
+  [ "$intmux" = 1 ] && { wset -u @agent_status; wset -u @agent_status_ts; wset -u @agent_cwd; }
   PATH="$SHIM_PATH" "$LAUNCH" ${cmd[@]+"${cmd[@]}"}
   rc=$?
   if [ -n "${FLEET_WORKER_CRED:-}" ]; then

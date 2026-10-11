@@ -542,11 +542,14 @@ eq "E: the fleet's own hook is still in place" "1" "$(tr_ show-hooks -g | grep -
 # S. ⌃\ — the session's own shell (#2744): `shell-open` on the client's window
 #    opens ONE window per session, marked `@solo_shell <node>:<wid>`, titled
 #    「shell · <name> @<node>」, whose program reaches the session's machine and
-#    runs a login shell there, in its `@worktree`, the fleet's bin/ on its PATH,
+#    runs a login shell there, where its agent is (the agent pane's directory —
+#    issue #3183 — that gone, its `@worktree`), the fleet's bin/ on its PATH,
 #    no worker credential; again → the same window; the session's window gone →
 #    the shell HUPped and its window closed; no session → this computer's, $HOME.
-mkdir -p "$WORK/wt8"
+mkdir -p "$WORK/wt8/src"
 tr_ set-window-option -t "$RW8" @worktree "$WORK/wt8"
+# its agent cd'd into src/ — the shell goes there, not to the worktree's top
+tr_ respawn-pane -k -t "$RW8" -c "$WORK/wt8/src" 'while :; do sleep 300; done'
 cat > "$WORK/fakesh" <<'EOF'
 #!/bin/bash
 { printf 'pwd=%s\n' "$(pwd -P)"; printf 'path=%s\n' "${PATH%%:*}"
@@ -566,7 +569,7 @@ eq "S: one shell window for the session, its own title" "shell · 另一个 @m4"
 SH=$(shwins | grep -F "|m4:$WID2|" | cut -d'|' -f1)
 fakesh_up() { grep -q '^args=' "$WORK/fakesh.out" 2>/dev/null; }
 waitfor 10 fakesh_up || fail "S: no login shell started on the session's machine" "$(tail -n 2 "$WORK/ssh.log"; tl capture-pane -p -t "$SH" | grep -v '^$')"
-eq "S: the shell sits in the session's @worktree" "pwd=$(cd "$WORK/wt8" && pwd -P)" "$(grep '^pwd=' "$WORK/fakesh.out")"
+eq "S: the shell sits where the session's agent is" "pwd=$(cd "$WORK/wt8/src" && pwd -P)" "$(grep '^pwd=' "$WORK/fakesh.out")"
 eq "S: …a login shell, the fleet's bin/ first on its PATH" "args=-l path=$BIN" "$(grep '^args=' "$WORK/fakesh.out") $(grep '^path=' "$WORK/fakesh.out")"
 eq "S: …and no worker credential in its environment" "cred=" "$(grep '^cred=' "$WORK/fakesh.out")"
 has "S: it went over ssh as shell-here <wid>" "$(cat "$WORK/ssh.log")" "fleet-remote-view.sh shell-here '$WID2'"
@@ -574,6 +577,13 @@ tl select-window -t "$SW"
 bash "$BIN/fleet-remote-view.sh" shell-open "$LS"
 eq "S: again — the same window, selected, never a second" "1 $SH" \
   "$(shwins | grep -cF "|m4:$WID2|") $(tl display-message -p -t "=$LS:" '#{window_id}')"
+# the agent's directory gone: the next shell is in the session's @worktree
+tl kill-window -t "$SH"; rm -f "$WORK/fakesh.out"; rmdir "$WORK/wt8/src"
+tl select-window -t "$SW"
+bash "$BIN/fleet-remote-view.sh" shell-open "$LS"
+waitfor 10 fakesh_up || fail "S: no second shell once the agent's directory went" "$(shwins)"
+eq "S: …the agent's directory gone, the shell sits in its @worktree" "pwd=$(cd "$WORK/wt8" && pwd -P)" "$(grep '^pwd=' "$WORK/fakesh.out")"
+SH=$(shwins | grep -F "|m4:$WID2|" | cut -d'|' -f1)
 tr_ kill-window -t "$RW8"
 shgone() { [ -z "$(shwins | grep -F "|m4:$WID2|")" ]; }
 waitfor 10 shgone || fail "S: the session went, its shell window stayed" "$(shwins)"

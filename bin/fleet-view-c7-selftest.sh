@@ -23,7 +23,14 @@
 #      back on the session, ⌃\ there selects the same one (one a session); the
 #      session's window gone takes its shell along. Another machine's: a channel
 #      on C5's link (`ssh -S <link> -l <login> m4 … shell-here <wid>`), its prompt
-#      in the far worktree. A direct attach: no shell window
+#      in the far worktree. A direct attach: no shell window. Issue #3183: in ⌘P,
+#      ⌃\ on a lit row opens THAT session's shell though it is not on screen, in
+#      the directory its agent is in (@agent_cwd — its last Bash call's cwd — else
+#      the agent pane's: cd'd into bin/ → …/bin; both gone → @worktree; `do shell
+#      --target <window | fleet_id>`), ⌘P from the
+#      shell lights its session (↵ back), a second ⌃\ selects the one open, and
+#      `exit` closes the shell window alone — the session's window, its
+#      @claude_state and its process unchanged
 #   Q  ⌘Q: `ESC ] 7502 ; quit ; token=<the row's> BEL` on the client's tty, then
 #      the client detached; a direct attach stays
 #   L  `fleet ls` with no client tmux: one ssh to the home (fleet-thin.py --run:
@@ -45,7 +52,7 @@ cleanup() {
   rm -rf "$W"
 }
 trap cleanup EXIT INT TERM
-mkdir -p "$W/conf/remote-views/v1.d" "$W/conf/peerlink" "$W/g" "$W/home" "$W/state" "$W/wt-alpha" "$W/farwt" "$W/rbin"
+mkdir -p "$W/wt-gamma/bin" "$W/wt-delta/gone" "$W/conf/remote-views/v1.d" "$W/conf/peerlink" "$W/g" "$W/home" "$W/state" "$W/wt-alpha" "$W/farwt" "$W/rbin"
 ME=$(id -un)
 US=$'\037'
 UU=11111111-2222-3333-4444-555555555555; MU=22222222-3333-4444-5555-666666666666
@@ -93,11 +100,12 @@ chmod +x "$W/ensure.sh" "$W/newsess.sh" "$W/send.sh" "$W/fakessh.sh"
 printf '{"links":[{"machine":"m4","login":"%s","phase":"up","sock":"%s","host":"m4"}]}\n' "$ME" "$W/conf/peerlink/m4.sock" \
   > "$W/conf/peerlink/state.json"
 printf 'acme/app\nacme/web\n' > "$W/g/hub_repos"
+: > "$W/rows.txt"
 
 export HOME="$W/home" FLEET_CONF_DIR="$W/conf" FLEET_STATUS_G="$W/g" FLEET_UI_LANG=zh LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 \
   FLEET_VIEW_ORCH_CMD="sh $W/ensure.sh" FLEET_VIEW_NEW_CMD="sh $W/newsess.sh" FLEET_DISPATCH_SEND_CMD="sh $W/send.sh" FLEET_DISPATCH_AGENTS_HERE=claude \
   FLEET_SWITCH_STATE="$W/state" FLEET_AGENT=claude FLEET_SESSION_SHELL_WATCH=1 FLEET_PEERLINK_SSH="$W/fakessh.sh" \
-  SHELL=/bin/sh FLEET_VIEW_ROWS_CMD="true"
+  SHELL=/bin/sh FLEET_VIEW_ROWS_CMD="cat '$W/rows.txt'"
 unset TMUX TMUX_PANE FLEET_SHELL FLEET_SESSION FLEET_CLIENT
 
 # --- the home: a fleet, a 看台, two clients ------------------------------------------------
@@ -106,7 +114,7 @@ pane() { printf "sh -c 'echo %s; stty -isig 2>/dev/null; exec cat > \"%s\"'" "$1
 ti -f /dev/null new-session -d -s fl -x 120 -y 30 -n orch "$(pane ORCH "$W/pane0.in")" || fail "inner tmux"
 ti source-file "$ROOT/conf/tmux-view.conf" 2>"$W/src.err" || fail "tmux-view.conf did not source: $(cat "$W/src.err")"
 W0=$(ti display-message -p -t 'fl:orch' '#{window_id}')
-W1=$(ti new-window -d -P -F '#{window_id}' -t fl -n alpha "$(pane ALPHA "$W/pane1.in")")
+W1=$(ti new-window -d -P -F '#{window_id}' -t fl -n alpha -c "$W/wt-alpha" "$(pane ALPHA "$W/pane1.in")")
 W2=$(ti new-window -d -P -F '#{window_id}' -t fl -n beta "$(pane BETA "$W/pane2.in")")
 ti set-option -w -t "$W0" @fleet_role orchestrator
 ti set-option -w -t "$W1" @fleet_id f1; ti set-option -w -t "$W1" @worktree "$W/wt-alpha"
@@ -222,7 +230,64 @@ done
 sleep 0.5; to send-keys -t o:view -l 'echo "AT=$(pwd)"'; to send-keys -t o:view Enter
 waitfor 20 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -q 'AT=.*farwt'" \
   || fail "S: m4's shell is not in its worktree: $(to capture-pane -p -t o:view | tail -5)"
-pass "S  ⌃\\: the session's shell in its worktree (here; m4 over the link's shell-here), ⌃\\ back and forth, one a session, gone with the session; nothing in a direct attach"
+# issue #3183: ⌃\ on a lit row of ⌘P — gamma, not on screen, its agent in bin/
+# (the cd runs in the pane's own process: tmux reads the cwd of the pane's
+# foreground process group LEADER, and dash keeps a `sh -c` wrapper as that)
+W3=$(ti new-window -d -P -F '#{window_id}' -t fl -n gamma "cd '$W/wt-gamma/bin' && stty -isig 2>/dev/null; exec cat > '$W/pane3.in'")
+ti set-option -w -t "$W3" @fleet_id f3; ti set-option -w -t "$W3" @worktree "$W/wt-gamma"; ti set-option -w -t "$W3" @claude_state working
+row() { local IFS="$US"; printf '%s\n' "$*"; }
+row "$W3" working x gamma ' ' '' 0 '' '' '#33' - 50% ok 'Gamma task' merged '' '' '' '' > "$W/rows.txt"
+P3=$(ti display-message -p -t "$W3" '#{pane_pid}')
+ti select-window -t "=fl@view-v1:$W2"; sleep 0.3
+listed() { tmux -S "$OUT" capture-pane -p -t o:view | grep -q 'Gamma task'; }
+to send-keys -t o:view -H 1b 5b 39 32 37 7e
+waitfor 20 listed || fail "S: ⌘P listed no gamma: $(to capture-pane -p -t o:view)"
+to send-keys -t o:view -l gamma; sleep 0.4; to send-keys -t o:view 'C-\'
+waitfor 20 sh -c "tmux -S '$IN' list-windows -t fl -F '#{@view_shell}' | grep -qx 'nodeA@$ME:$W3'" \
+  || fail "S: ⌃\\ on gamma's row made no shell for it: $(ti list-windows -t fl -F '#{window_id} #{@view_shell}') $(to capture-pane -p -t o:view | tail -3)"
+SG=$(ti list-windows -t fl -F "#{window_id} #{@view_shell}" | awk -v k="nodeA@$ME:$W3" '$2 == k { print $1 }')
+waitfor 12 sh -c "[ \"\$(tmux -S '$IN' display-message -p -t 'fl@view-v1:' '#{window_id}')\" = '$SG' ]" || fail "S: the 看台 is not on gamma's shell ($(cur))"
+sleep 1; to send-keys -t o:view -l 'echo "AT=$(pwd)"'; to send-keys -t o:view Enter
+waitfor 20 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -q 'AT=.*wt-gamma/bin'" \
+  || fail "S: gamma's shell is not where its agent is (…/wt-gamma/bin): $(to capture-pane -p -t o:view | grep -v '^$'; ti display-message -p -t "$SG" 'mode=#{pane_in_mode} dead=#{pane_dead} cmd=#{pane_current_command} pid=#{pane_pid}'; ti capture-pane -p -t "$SG" | grep -v '^$')"
+# ⌘P from the shell: its session lit — ↵ is back on gamma
+to send-keys -t o:view -H 1b 5b 39 32 37 7e
+waitfor 20 listed || fail "S: ⌘P from the shell listed nothing"
+sleep 0.3
+to capture-pane -p -t o:view | grep -q '▶.*Gamma task' || fail "S: ⌘P in gamma's shell does not light gamma: $(to capture-pane -p -t o:view | grep -n '▶')"
+to send-keys -t o:view Enter
+waitfor 12 sh -c "[ \"\$(tmux -S '$IN' display-message -p -t 'fl@view-v1:' '#{window_id}')\" = '$W3' ]" || fail "S: ↵ from the shell's ⌘P is not back on gamma ($(cur))"
+# again from the panel: the one open, selected
+to send-keys -t o:view -H 1b 5b 39 32 37 7e
+waitfor 20 listed || fail "S: ⌘P (again) listed no gamma"
+to send-keys -t o:view -l gamma; sleep 0.4; to send-keys -t o:view 'C-\'
+waitfor 12 sh -c "[ \"\$(tmux -S '$IN' display-message -p -t 'fl@view-v1:' '#{window_id}')\" = '$SG' ]" || fail "S: a second ⌃\\ on gamma did not select its shell ($(cur))"
+[ "$(ti list-windows -t fl -F '#{@view_shell}' | grep -cx "nodeA@$ME:$W3")" = 1 ] || fail "S: a second shell window for gamma"
+# exit: the shell window alone goes
+to send-keys -t o:view -l 'exit'; to send-keys -t o:view Enter
+waitfor 20 sh -c "! tmux -S '$IN' list-windows -t fl -F '#{window_id}' | grep -qx '$SG'" || fail "S: exit left gamma's shell window"
+ti list-windows -t fl -F '#{window_id}' | grep -qx "$W3" || fail "S: exit in the shell took gamma's window"
+[ "$(ti display-message -p -t "$W3" '#{@claude_state}|#{pane_pid}|#{pane_dead}')" = "working|$P3|0" ] \
+  || fail "S: gamma changed under its shell's exit: $(ti display-message -p -t "$W3" '#{@claude_state}|#{pane_pid}|#{pane_dead}') (was working|$P3|0)"
+[ -s "$W/pane3.in" ] && fail "S: the shell sent keys to gamma's pane: $(od -c "$W/pane3.in" | head -2)"
+# the cwd its last Bash call left (@agent_cwd) outranks the pane's; `do shell --target`
+mkdir -p "$W/wt-gamma/lib"; ti set-option -w -t "$W3" @agent_cwd "$W/wt-gamma/lib"
+TMUX="$IN,0,0" python3 "$BIN/fleet-quickopen.py" 'do' shell --view fl@view-v1 --target "$W3" || fail "S: do shell --target $W3 exited non-zero"
+waitfor 20 sh -c "tmux -S '$IN' list-windows -t fl -F '#{@view_shell}' | grep -qx 'nodeA@$ME:$W3'" || fail "S: --target $W3 made no shell for gamma"
+sleep 1; to send-keys -t o:view -l 'echo "AT=$(pwd)=="'; to send-keys -t o:view Enter
+waitfor 20 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -q 'AT=.*wt-gamma/lib=='" \
+  || fail "S: gamma's @agent_cwd is not where its shell opened: $(to capture-pane -p -t o:view | grep -v '^$')"
+to send-keys -t o:view -l 'exit'; to send-keys -t o:view Enter
+# the agent's directory gone (and a stale @agent_cwd) → @worktree; `--target <bare fleet_id>`
+W4=$(ti new-window -d -P -F '#{window_id}' -t fl -n delta "cd '$W/wt-delta/gone' && exec cat > /dev/null")
+ti set-option -w -t "$W4" @fleet_id f4; ti set-option -w -t "$W4" @worktree "$W/wt-delta"; ti set-option -w -t "$W4" @agent_cwd "$W/nope"
+sleep 0.3; rmdir "$W/wt-delta/gone"
+TMUX="$IN,0,0" python3 "$BIN/fleet-quickopen.py" 'do' shell --view fl@view-v1 --target f4 || fail "S: do shell --target f4 exited non-zero"
+waitfor 20 sh -c "tmux -S '$IN' list-windows -t fl -F '#{@view_shell}' | grep -qx 'nodeA@$ME:$W4'" || fail "S: --target f4 made no shell for delta"
+sleep 1; to send-keys -t o:view -l 'echo "AT=$(pwd)=="'; to send-keys -t o:view Enter
+waitfor 20 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -q 'AT=.*wt-delta=='" \
+  || fail "S: delta's agent directory gone, the shell is not in its @worktree: $(to capture-pane -p -t o:view | grep -v '^$'; ti list-windows -t fl -F '#{window_id} #{@view_shell} mode=#{pane_in_mode} cmd=#{pane_current_command}')"
+pass "S  ⌃\\: the session's shell in its worktree (here; m4 over the link's shell-here), ⌃\\ back and forth, one a session, gone with the session; nothing in a direct attach; ⌘P's ⌃\\ on a session off screen — where its agent is (@agent_cwd, else its pane's bin/, else @worktree), ↵ back from its shell, exit closes the shell alone (#3183)"
 
 # --- Q: ⌘Q -----------------------------------------------------------------------------------
 to pipe-pane -o -t o:view "cat > '$W/client.bytes'"; sleep 0.3

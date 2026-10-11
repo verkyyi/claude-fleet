@@ -1716,7 +1716,8 @@ watch)
 #                           ssh`: `fleet connect`, or right here when the machine
 #                           is this computer) — then `shell-here` on the far end.
 #                           A failed connection says why and waits for a key.
-#   shell-here <worker id>  (ON <node>) — cd to the session's directory and exec
+#   shell-here <worker id>  (ON <node>) — cd to where its agent is (the agent
+#                           pane's directory, else @worktree, else $HOME) and exec
 #                           the login's shell (`-l`) with the fleet's bin/ on its
 #                           PATH and no worker credential in its environment; a
 #                           watcher HUPs it when the session's window goes (a
@@ -1818,8 +1819,16 @@ shell-here)
     loc=$(fleet_worker_locate "wid:${wid#wid:}" 2>/dev/null)
     case "$loc" in local\ *) ;; *) note "${wid#*/} is not live on $(hostname -s)"; exit 3 ;; esac
     set -- $loc; w=$2; s=$3; sock=$(fleet_socket "$s")
-    dir=$(T display-message -p -t "=$s:$w" '#{@worktree}' 2>/dev/null)
-    [ -n "$dir" ] && [ -d "$dir" ] || dir=$(T display-message -p -t "=$s:$w" '#{pane_current_path}' 2>/dev/null)
+    # where its agent is right now (issue #3183): the cwd its last Bash call left
+    # (@agent_cwd), then the agent pane's directory (the pane the wrapper started,
+    # else the window's first), then @worktree, then $HOME — fleet_view.agent_dir's
+    dir=$(T display-message -p -t "=$s:$w" '#{@agent_cwd}' 2>/dev/null)
+    if [ -z "$dir" ] || [ ! -d "$dir" ]; then
+      panes=$(T list-panes -t "=$s:$w" -F "#{pane_current_path}$(printf '\t')#{pane_start_command}" 2>/dev/null)
+      dir=$(printf '%s\n' "$panes" | awk -F '\t' 'index($2, "fleet-session-wrap") { print $1; exit }')
+      [ -n "$dir" ] || dir=$(printf '%s\n' "$panes" | head -n 1 | cut -f 1)
+    fi
+    [ -n "$dir" ] && [ -d "$dir" ] || dir=$(T display-message -p -t "=$s:$w" '#{@worktree}' 2>/dev/null)
     # the session's window gone (reaped, moved): its shell goes with it
     shpid=$$
     ( trap '' HUP

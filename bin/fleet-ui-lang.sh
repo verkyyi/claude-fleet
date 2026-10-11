@@ -523,8 +523,8 @@ fleet_ui_t() {
     # the 看台's switcher (issue #3000, EPIC #2999 C2; #2752: no word to guess)
     zh:view_title) printf '会话' ;;
     en:view_title) printf 'Sessions' ;;
-    zh:view_keys) printf '↵ 切过去  ↑↓ 选  打字筛选  ? 图例  esc 关' ;;
-    en:view_keys) printf '↵ go  ↑↓ pick  type to filter  ? legend  esc close' ;;
+    zh:view_keys) printf '↵ 切过去  ↑↓ 选  ⌃\\ 开 shell  打字筛选  ? 图例  esc 关' ;;
+    en:view_keys) printf '↵ go  ↑↓ pick  ⌃\\ shell  type to filter  ? legend  esc close' ;;
     zh:view_grp_pin_fmt) printf '置顶 %s' "${1:-}" ;;
     en:view_grp_pin_fmt) printf 'Pinned %s' "${1:-}" ;;
     zh:view_grp_ask_fmt) printf '等你 %s' "${1:-}" ;;
