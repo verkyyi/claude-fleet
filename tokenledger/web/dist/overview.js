@@ -64,7 +64,7 @@ export default Shell.mount('overview', async (ctx) => {
 
   ctx.el.innerHTML =
     `<div class="pagehead"><div><h2 style="font:600 1.35rem var(--f-ui)">${esc(greeting(new Date().getHours(), name))}</h2><p>${esc(t('ui.ov.subUser'))}</p>${scopeOf(me) ? `<p class="mono" style="font-size:12px;opacity:.7" id="ovscope">${esc(scopeOf(me))}</p>` : ''}</div>` +
-    `<div class="acts"><a class="btn" href="/sessions">${ic('list')}${esc(t('ui.nav.sessions'))}</a></div></div>` +
+    `<div class="acts">${me.entry ? `<a class="btn" href="/fleet/keys">${esc(t('ui.ov.phone'))}</a>` : ''}<a class="btn" href="/sessions">${ic('list')}${esc(t('ui.nav.sessions'))}</a></div></div>` +
     `<div class="grid g4">${k1}${k2}${k3}${k4}</div>` +
     `<div class="grid g21"><div class="panel"><div class="panel-h"><h3>${esc(t('ui.ov.perDay'))}</h3><div class="legend"><span><i style="background:var(--brand)"></i>Claude</span><span><i style="background:var(--codex)"></i>Codex</span></div></div><div class="panel-b">${chart}</div></div>` +
     `<div class="panel"><div class="panel-h"><h3>${esc(t('ui.ov.attention'))}</h3></div>${attHTML}</div></div>` +

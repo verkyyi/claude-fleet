@@ -786,10 +786,7 @@ const authPageHead = `<!doctype html>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%230e6e5e'/%3E%3Cpath d='M4 17l4-10 4 10M12 17l4-10 4 10M3 20h18' stroke='%23fff' stroke-width='2.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
 <style>
-:root{--bg:#f4f6f5;--panel:#fff;--ink:#15201d;--ink-2:#3c4945;--muted:#6a7773;--line:#e0e6e3;--line-2:#ecf0ee;--brand:#0e6e5e;--brand-ink:#fff;--bad:#b5361f;--bad-soft:#fbe6e1;--warn:#a86a00;--warn-soft:#fbefd6;
---shadow:0 1px 2px rgba(16,30,26,.06),0 4px 16px -6px rgba(16,30,26,.10);--f-display:"Bricolage Grotesque","Avenir Next","Segoe UI",system-ui,sans-serif;--f-ui:"IBM Plex Sans","Segoe UI",system-ui,sans-serif;--gh:#1f2328;--gh-ink:#fff;color-scheme:light}
-@media (prefers-color-scheme:dark){:root{--bg:#0e1412;--panel:#151d1b;--ink:#e5ece9;--ink-2:#c1ccc8;--muted:#8b9894;--line:#26302d;--line-2:#1e2725;--brand:#3fc2a6;--brand-ink:#062019;--bad:#f08a76;--bad-soft:#3a1c16;--warn:#e8b85a;--warn-soft:#33290f;--shadow:0 1px 2px rgba(0,0,0,.3),0 6px 20px -8px rgba(0,0,0,.5);--gh:#f0f3f6;--gh-ink:#1f2328;color-scheme:dark}}
-*{box-sizing:border-box}html,body{height:100%}
+` + authPaletteCSS + `*{box-sizing:border-box}html,body{height:100%}
 body{margin:0;background:var(--bg);color:var(--ink);font:14.5px/1.5 var(--f-ui);-webkit-font-smoothing:antialiased}
 .pub{min-height:100%;display:grid;grid-template-rows:auto 1fr}
 nav{display:flex;align-items:center;padding:18px clamp(16px,4vw,48px);max-width:1180px;width:100%;margin:0 auto}
@@ -814,6 +811,13 @@ p{margin:0}.lead{color:var(--ink-2)}.fine{font-size:12.5px;color:var(--muted)}
 a.alt{color:var(--muted);font-size:13px}
 nav{justify-content:space-between;gap:12px}
 ` + langSwitchCSS + zhTypeCSS + `</style>`
+
+// authPaletteCSS is the public pages' palette, light and dark: the sign-in
+// cards and the keys page (claude-fleet#3069) wear the same one.
+const authPaletteCSS = `:root{--bg:#f4f6f5;--panel:#fff;--ink:#15201d;--ink-2:#3c4945;--muted:#6a7773;--line:#e0e6e3;--line-2:#ecf0ee;--brand:#0e6e5e;--brand-ink:#fff;--bad:#b5361f;--bad-soft:#fbe6e1;--warn:#a86a00;--warn-soft:#fbefd6;
+--shadow:0 1px 2px rgba(16,30,26,.06),0 4px 16px -6px rgba(16,30,26,.10);--f-display:"Bricolage Grotesque","Avenir Next","Segoe UI",system-ui,sans-serif;--f-ui:"IBM Plex Sans","Segoe UI",system-ui,sans-serif;--gh:#1f2328;--gh-ink:#fff;color-scheme:light}
+@media (prefers-color-scheme:dark){:root{--bg:#0e1412;--panel:#151d1b;--ink:#e5ece9;--ink-2:#c1ccc8;--muted:#8b9894;--line:#26302d;--line-2:#1e2725;--brand:#3fc2a6;--brand-ink:#062019;--bad:#f08a76;--bad-soft:#3a1c16;--warn:#e8b85a;--warn-soft:#33290f;--shadow:0 1px 2px rgba(0,0,0,.3),0 6px 20px -8px rgba(0,0,0,.5);--gh:#f0f3f6;--gh-ink:#1f2328;color-scheme:dark}}
+`
 
 const authNav = `<nav><a class="logo" href="/"><span class="mark"><svg viewBox="0 0 24 24"><path d="M4 17l4-10 4 10M12 17l4-10 4 10M3 20h18"/></svg></span>claudefleet</a>` + langSwitch + `</nav>`
 

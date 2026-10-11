@@ -108,6 +108,9 @@
 #                               link — fleet-debug, which needs none of fleet (#2892);
 #                               a third failed login / session / connection in
 #                               half an hour offers it (#2894, FLEET_DEBUG_PROMPT=0 off)
+#   手机连 fleet               <入口>/fleet/keys in a phone's browser (#3069):
+#                               your address name, the four things Termius asks
+#                               for, add or revoke a key, move your home
 #
 # The client is the ONLY way in (issue #1628): there is no fallback to ssh-ing
 # into a machine's own list. It needs tmux ≥ 3.2 and a terminal; without either
@@ -252,7 +255,7 @@ fi
 cmd=${1-}
 case $cmd in
   -h|--help|help)
-    sed -n '2,107p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,113p' "$0" | sed 's/^# \{0,1\}//'
     exit 0 ;;
   '')
     client ;;

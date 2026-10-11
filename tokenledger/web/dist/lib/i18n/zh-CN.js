@@ -84,6 +84,7 @@ export const zhCN = {
   'ui.hello.afternoon': '下午好，{name}',
   'ui.hello.evening': '晚上好，{name}',
   'ui.ov.subUser': '你最近 14 天的会话和用量。',
+  'ui.ov.phone': '从手机连',
   'ui.ov.scope': '只算你在这些登录上的用量：{list}。',
   'ui.ov.scopeAdmin': '整个入口的用量在「管理 · 按人概览」。',
   'ui.ov.tokensToday': '今日 token',

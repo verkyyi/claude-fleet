@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<title>从手机连 fleet · claudefleet</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%230e6e5e'/%3E%3Cpath d='M4 17l4-10 4 10M12 17l4-10 4 10M3 20h18' stroke='%23fff' stroke-width='2.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
+<style>
+:root{--bg:#f4f6f5;--panel:#fff;--ink:#15201d;--ink-2:#3c4945;--muted:#6a7773;--line:#e0e6e3;--line-2:#ecf0ee;--brand:#0e6e5e;--brand-ink:#fff;--bad:#b5361f;--bad-soft:#fbe6e1;--warn:#a86a00;--warn-soft:#fbefd6;
+--shadow:0 1px 2px rgba(16,30,26,.06),0 4px 16px -6px rgba(16,30,26,.10);--f-display:"Bricolage Grotesque","Avenir Next","Segoe UI",system-ui,sans-serif;--f-ui:"IBM Plex Sans","Segoe UI",system-ui,sans-serif;--gh:#1f2328;--gh-ink:#fff;color-scheme:light}
+@media (prefers-color-scheme:dark){:root{--bg:#0e1412;--panel:#151d1b;--ink:#e5ece9;--ink-2:#c1ccc8;--muted:#8b9894;--line:#26302d;--line-2:#1e2725;--brand:#3fc2a6;--brand-ink:#062019;--bad:#f08a76;--bad-soft:#3a1c16;--warn:#e8b85a;--warn-soft:#33290f;--shadow:0 1px 2px rgba(0,0,0,.3),0 6px 20px -8px rgba(0,0,0,.5);--gh:#f0f3f6;--gh-ink:#1f2328;color-scheme:dark}}
+:lang(zh){--f-ui:-apple-system,"PingFang SC","Hiragino Sans GB","Noto Sans SC","Microsoft YaHei",system-ui,sans-serif;--f-display:-apple-system,"PingFang SC","Hiragino Sans GB","Noto Sans SC","Microsoft YaHei",system-ui,sans-serif}
+html:lang(zh) body{line-height:1.75}
+:lang(zh) h1,:lang(zh) h2,:lang(zh) h3{line-height:1.25;letter-spacing:0}
+:lang(zh) .eyebrow{letter-spacing:0;text-transform:none}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.6 var(--f-ui);-webkit-font-smoothing:antialiased;-webkit-text-size-adjust:100%}
+main{max-width:520px;margin:0 auto;padding:16px 14px 120px}
+nav{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 14px}
+.logo{display:inline-flex;align-items:center;gap:8px;font:700 17px var(--f-display);color:var(--ink);text-decoration:none}
+.mark{width:24px;height:24px;border-radius:7px;background:var(--brand);display:grid;place-items:center}
+.mark svg{width:15px;height:15px;stroke:var(--brand-ink);stroke-width:2.2;fill:none;stroke-linecap:round}
+h1{font:700 1.35rem var(--f-display);margin:4px 0 2px}
+h2{font-size:1rem;margin:0 0 10px}
+p{margin:0}.hint{color:var(--muted);font-size:13.5px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);padding:14px;margin:12px 0;overflow-wrap:anywhere}
+.row{display:flex;align-items:center;gap:10px;padding:9px 0;border-top:1px solid var(--line-2)}
+.row:first-of-type{border-top:0}
+.row .k{width:3.4em;flex:none;color:var(--muted);font-size:13.5px}
+.row .v{flex:1;min-width:0;font:500 14.5px ui-monospace,Menlo,monospace;user-select:all;-webkit-user-select:all}
+.row .v.plain{font:inherit;user-select:auto;-webkit-user-select:auto}
+.row .v.miss{font:inherit;color:var(--warn)}
+button,.btn{font:500 15px var(--f-ui);border:1px solid var(--line);background:var(--panel);color:var(--ink);padding:10px 14px;border-radius:9px;text-decoration:none;display:inline-flex;align-items:center;justify-content:center;min-height:44px;cursor:pointer}
+.btn.go,button.go{background:var(--brand);border-color:var(--brand);color:var(--brand-ink)}
+.btn.bad,button.bad{background:var(--bad);border-color:var(--bad);color:#fff}
+.btn.wide,button.wide{width:100%;margin-top:10px}
+.cp{min-height:36px;padding:6px 12px;font-size:13.5px;flex:none}
+input,textarea{width:100%;font:16px/1.4 ui-monospace,Menlo,monospace;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:9px;padding:10px}
+textarea{min-height:84px;resize:vertical}
+textarea::placeholder{font-family:var(--f-ui)}
+input.lbl{font-family:var(--f-ui);margin-top:8px}
+.msg{border-radius:9px;padding:9px 12px;font-size:14px;margin:10px 0}
+.msg.ok{background:var(--line-2);color:var(--brand)}
+.msg.err{background:var(--bad-soft);color:var(--bad)}
+.msg.warn{background:var(--warn-soft);color:var(--warn)}
+.pill{display:inline-block;font-size:12px;border-radius:99px;padding:0 8px;background:var(--line-2);color:var(--brand)}
+.pill.off{color:var(--bad);background:var(--bad-soft)}
+.key{display:flex;gap:10px;align-items:flex-start;padding:10px 0;border-top:1px solid var(--line-2)}
+.key:first-of-type{border-top:0}
+.key .t{flex:1;min-width:0}.key .n{font-weight:600}.key .s{font-size:13px;color:var(--muted)}
+details summary{cursor:pointer;color:var(--ink-2);font-size:14px;padding:6px 0}
+.choice{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 0;border-top:1px solid var(--line-2)}
+.sheet{position:fixed;left:0;right:0;bottom:0;background:var(--panel);border-top:1px solid var(--line);box-shadow:0 -8px 24px rgba(0,0,0,.18);padding:16px 16px calc(16px + env(safe-area-inset-bottom));border-radius:14px 14px 0 0}
+.sheet .in{max-width:520px;margin:0 auto}
+.sheet .two{display:flex;gap:10px;margin-top:12px}.sheet .two>*{flex:1}
+code{font:13px ui-monospace,Menlo,monospace}
+.foot{font-size:13px;color:var(--muted);margin-top:16px}
+</style></head><body><main>
+<nav><a class="logo" href="/"><span class="mark"><svg viewBox="0 0 24 24"><path d="M4 17l4-10 4 10M12 17l4-10 4 10M3 20h18"/></svg></span>claudefleet</a></nav>
+<h1>从手机连 fleet</h1>
+<p class="hint">贴上一把钥匙，在 Termius 里填四样，就进你的会话。不用装别的 App。</p>
+
+
+
+<div class="card" id="termius"><h2>在 Termius 里新建一台主机，填这四样</h2>
+<div class="row"><span class="k">地址</span><span class="v">alice.cf.example.com</span><button class="cp" type="button" data-cp="alice.cf.example.com">复制</button></div>
+<div class="row"><span class="k">端口</span><span class="v">22022</span><button class="cp" type="button" data-cp="22022">复制</button></div>
+<div class="row"><span class="k">用户名</span><span class="v">alice</span><button class="cp" type="button" data-cp="alice">复制</button></div>
+<div class="row"><span class="k">钥匙</span><span class="v plain">选你在下面加的那把</span></div>
+
+<p class="hint" style="margin-top:8px">现在指向你的家机器 <b>m5</b> <span class="pill">在线</span></p>
+<details style="margin-top:6px"><summary>改地址名</summary>
+<form method="post" action="/fleet/keys"><input type="hidden" name="do" value="name">
+<input name="name" value="alice" autocapitalize="off" autocorrect="off" spellcheck="false" autocomplete="off" maxlength="20" aria-label="地址名">
+<p class="hint" style="margin-top:6px">旧名字还能用 7 天。</p>
+
+<button class="wide" type="submit">改成这个</button></form></details>
+</div>
+<div class="card" id="keys"><h2>你的钥匙（1）</h2>
+<div class="key"><div class="t"><div class="n">iPhone · Termius</div>
+<div class="s">ed25519 · <code>SHA256:FP</code> · 加于 刚才</div><div class="s">上次用：还没用过</div></div>
+<a class="btn bad cp" href="?revoke=k_ID#confirm">撤掉</a></div>
+</div>
+<div class="card" id="add"><h2>加一把钥匙</h2>
+<form method="post" action="/fleet/keys"><input type="hidden" name="do" value="add">
+<textarea name="key" rows="3" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="在 Termius：钥匙 → 点一把 → 复制公钥（以 ssh-ed25519 开头的一行），贴到这里" aria-label="公钥"></textarea>
+<input class="lbl" name="label" value="" maxlength="40" placeholder="给它起个名（如：iPhone）" aria-label="钥匙的名字">
+
+<button class="go wide" type="submit">加上</button></form>
+<p class="hint" style="margin-top:8px">手机上的钥匙和电脑上的一样，是你登录的普通钥匙。加上后几秒内你的家机器就认它。</p></div>
+<div class="card" id="home"><details><summary>换一台当家</summary>
+<p class="hint">只列你有登录、上面有你在用的 fleet 的机器。换过去后你的地址几分钟内指向它；手机第一次连会说主机钥匙变了，接受一次。</p>
+<div class="choice"><span><b>m4</b> · alice <span class="pill">在线</span></span>
+<a class="btn cp" href="?move=macmini-m4&amp;login=alice#confirm">换到这台</a></div>
+
+</details></div>
+
+<p class="foot">入口不在时，已加的钥匙照常能进；只是那时加钥匙、撤钥匙和换家要等它回来。</p>
+</main>
+
+
+<script>
+(function(){
+document.querySelectorAll('[data-cp]').forEach(function(b){b.addEventListener('click',function(){
+var v=b.getAttribute('data-cp'),done=function(){var o=b.textContent;b.textContent='已复制';setTimeout(function(){b.textContent=o},1500)};
+if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(v).then(done,function(){})}});});
+var nm=document.getElementById('nm');if(!nm)return;
+var out=document.getElementById('nmv'),warn=document.getElementById('nmw'),re=/^[a-z0-9][a-z0-9-]{1,18}[a-z0-9]$/,held=['ssh','www','hub','admin','api','fleet','root'];
+nm.addEventListener('input',function(){var v=nm.value.toLowerCase().replace(/[^a-z0-9-]/g,'');if(v!==nm.value)nm.value=v;out.textContent=v||'…';
+warn.textContent=!v?'':(held.indexOf(v)>=0?'「'+v+'」留作他用，换一个':(re.test(v)?'':'3–20 个小写字母、数字或「-」，不以「-」开头或结尾'));});
+})();
+</script>
+</body></html>

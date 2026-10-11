@@ -117,6 +117,14 @@ var hubSettings = map[string]hubSetting{
 		}},
 	EntryKey: {def: "off", help: "the direct door: people's keys, address names and homes, pushed to their home machines",
 		check: onOff(EntryKey, "off")},
+	EntryDomainKey: {def: "", help: "the zone every person's address lives under: <name>.<zone> (cf.24haowan.com)",
+		check: func(_ *Server, v string) (string, string) {
+			v = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(v)), ".")
+			if !entryDomainRE.MatchString(v) || len(v) > 200 {
+				return "", EntryDomainKey + " is a domain name (cf.24haowan.com), or \"\" for none"
+			}
+			return v, ""
+		}},
 	SpotKey: {def: "off", help: "rented SPOT machines when no machine has room (needs CCQUOTA_FLEET_SPOT_IMAGE)",
 		check: onOff(SpotKey, "off"),
 		legacy: func(s *Server) string {
