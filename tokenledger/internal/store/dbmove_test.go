@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -448,5 +449,62 @@ func TestSetReadOnlyRefusesWritesKeepsReads(t *testing.T) {
 	_, err = st.EnrollmentCounts()
 	if err != nil {
 		t.Fatalf("read on a read-only store: %v", err)
+	}
+}
+
+// Fresh initialization is disposable; configured targets are not.
+func TestMoveDatabasePolicySeed(t *testing.T) {
+	for _, tc := range []struct {
+		name, key, value string
+		refuse           bool
+	}{
+		{"fresh", "", "", false},
+		{"legacy", "fleet.cred_policy.mode", "legacy", true},
+		{"grant", "fleet.cred_allow.user.gh:1", "[]", true},
+		{"global", "fleet.pool.enabled", "false", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			to := moveTarget(t)
+			from, _ := prodShapedSource(t)
+			src, err := openSQLite(from)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = src.SetFleetSetting("fleet.cred_policy.mode", "legacy", time.Now()); err != nil {
+				t.Fatal(err)
+			}
+			src.Close()
+			dst, err := openStore(postgresDialect, to, "postgres")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = dst.EnsureNodes(); err != nil {
+				t.Fatal(err)
+			}
+			if tc.key != "" {
+				if err = dst.SetFleetSetting(tc.key, tc.value, time.Now()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			dst.Close()
+			_, err = MoveDatabase(context.Background(), MoveOptions{From: from, To: to, Verify: true})
+			if tc.refuse {
+				if err == nil || !strings.Contains(err.Error(), "not empty") {
+					t.Fatalf("configured target must be refused: %v", err)
+				}
+				var value string
+				if err = moveConn(t, to).QueryRow(context.Background(), `SELECT value FROM fleet_settings WHERE key=$1`, tc.key).Scan(&value); err != nil || value != tc.value {
+					t.Fatalf("target changed: %q %v", value, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			var mode string
+			if err = moveConn(t, to).QueryRow(context.Background(), `SELECT value FROM fleet_settings WHERE key='fleet.cred_policy.mode'`).Scan(&mode); err != nil || mode != "legacy" {
+				t.Fatalf("source mode lost: %q %v", mode, err)
+			}
+		})
 	}
 }

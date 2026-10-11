@@ -143,7 +143,7 @@ while [ "$#" -gt 0 ]; do
     --agent=*)     AGENT="${1#--agent=}"; shift ;;
     # --role (issue #2782): the role definition this session runs — `worker`
     # (any seeded session) or `epic-driver` (the orchestrator's driver for a
-    # confirmed EPIC, skills/fleet-orchestrate/SKILL.md). Handed to the launcher
+    # confirmed EPIC, plugins/fleet-orchestrate/skills/fleet-orchestrate/SKILL.md). Handed to the launcher
     # (fleet-claude.sh renders agents/<role>.md); none = a plain scratch, as before.
     # A start the hub places on ANOTHER machine opens there without it (a worker).
     --role)        ROLE="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;

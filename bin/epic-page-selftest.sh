@@ -23,17 +23,17 @@
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$BIN/.."
-T="$ROOT/skills/epic-page/template.html"
-SK="$ROOT/skills/epic-page/SKILL.md"
-PLAN="$ROOT/commands/fleet-epic-plan.md"
-REPORT="$ROOT/commands/fleet-epic-report.md"
+T="$ROOT/plugins/fleet-epic/skills/epic-page/template.html"
+SK="$ROOT/plugins/fleet-epic/skills/epic-page/SKILL.md"
+PLAN="$ROOT/plugins/fleet-epic/commands/fleet-epic-plan.md"
+REPORT="$ROOT/plugins/fleet-epic/commands/fleet-epic-report.md"
 CHECKS=0
 fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
 has() { CHECKS=$((CHECKS + 1)); grep -q -- "$2" "$1" || fail "$3 — [$2] not in ${1#"$ROOT"/}"; }
 hasF() { CHECKS=$((CHECKS + 1)); grep -q -F -- "$2" "$1" || fail "$3 — [$2] not in ${1#"$ROOT"/}"; }
 
-[ -f "$T" ] || fail "skills/epic-page/template.html is missing"
-[ -f "$SK" ] || fail "skills/epic-page/SKILL.md is missing"
+[ -f "$T" ] || fail "plugins/fleet-epic/skills/epic-page/template.html is missing"
+[ -f "$SK" ] || fail "plugins/fleet-epic/skills/epic-page/SKILL.md is missing"
 
 # 1. section ids — one per plan section, in the order the command lists them
 for id in metrics charter members risks signoff preflight order; do
@@ -71,8 +71,8 @@ has  "$T" 'body{background:' "template: body has an explicit background"
 hasF "$T" 'name="viewport"' "template: phone-width viewport"
 
 # 4. both commands render into the frame; revisions refresh, never re-share
-hasF "$PLAN"   'skills/epic-page/template.html' "plan renders from the shared frame"
-hasF "$REPORT" 'skills/epic-page/template.html' "report reuses the shared frame"
+hasF "$PLAN"   'plugins/fleet-epic/skills/epic-page/template.html' "plan renders from the shared frame"
+hasF "$REPORT" 'plugins/fleet-epic/skills/epic-page/template.html' "report reuses the shared frame"
 hasF "$PLAN"   'share.sh --refresh' "plan re-renders a revision in place"
 hasF "$PLAN"   'doc-preview/share.sh' "plan hosts via doc-preview"
 hasF "$PLAN"   'fleet:epic-member' "plan: member write-back carries the idempotency marker"
@@ -157,7 +157,7 @@ hasF "$PLAN" '（批后）' "plan: 「（批后）」 rows also go to the parent
 hasF "$REPORT" '#881' "report: follows the decider's view"
 # 6g. the concurrency caps are the operator's (issue #881 point 16): plan and run
 #     state them at most — never advise a value, never ask, never change one
-RUN="$ROOT/commands/fleet-epic-run.md"
+RUN="$ROOT/plugins/fleet-epic/commands/fleet-epic-run.md"
 hasF "$PLAN" 'The concurrency caps are not this skill' "plan: leaves the session caps alone"
 hasF "$RUN" "within the fleet's existing caps" "run: refills within the caps, never changes them"
 for f in "$PLAN" "$RUN" "$T"; do

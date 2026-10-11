@@ -5,13 +5,10 @@
 #      @orch_park_list / @orch_todo_list cells) → fleet-control-read.sh's
 #      `orchparkl=` / `orchtodol=` tags, read by fleet_hub_common.py as
 #      orch_park_list / orch_todo_list → orch_<sess>'s `parkl=` / `todol=`, which
-#      fleet-sidebar.py orch_list decodes back to the same items. Empty ⇒ "".
-#   B. THE ROWS — with its list a row wears ▸ and is a fold (steward_folds); its
-#      bit lives beside the solo groups' (never clobbering one); open, each item is
-#      a `stewitem:` row under it (who · on what · since / the item · due, the
-#      whole line in field 13 for the bar), past the list a 「还有 N 个」 row; a
-#      tap on one is `item`, no session action, no fold. No list (an older node):
-#      the row as before — no caret, a tap opens the orchestrator.
+#      fleet-sidebar-steward.sh reads back. Empty ⇒ "".
+#   B. NO ROWS (issue #3119) — the sidebar draws no 停放 / 待你动手 row and no
+#      item under one, whatever orch_<sess> carries: no session is special, and
+#      the steward's lists are the steward plugin's (C4).
 #   C. THE MENU — fleet-sidebar-steward.sh menu --print: a parked item offers
 #      立刻唤醒 + its issue, a 待你动手 item 勾掉 + its batch + the desk ticket.
 #   D. THE ACTIONS — wake / tick: in the shell they go to the steward as ONE
@@ -114,56 +111,18 @@ if bad:
     check('A …and drops nothing else when a cell is bad', 'orch_todo_list' not in hc.inventory_row(bad.split('\t'))[1])
 line = ['fleet/abc', 'm5', 'online', 'working', '', '', '', 'park=2', 'todo=1', 'page=https://p.example/d/',
         'parkl=' + pc, 'todol=' + tc]
-d = sb.orch_list(line, 'parkl')
-check('A the sidebar decodes the park list', [e['r'] for e in d['i']] == ['o/r#12', 'o/r#40'], d)
-check('A …and the todo list (open items only, the desk link)',
-      [e['id'] for e in sb.orch_list(line, 'todol')['i']] == ['fu-1'] and
-      sb.orch_list(line, 'todol')['u'].endswith('/2863'), sb.orch_list(line, 'todol'))
-check('A a broken cell reads as none', sb.orch_list(line[:10] + ['parkl=@@'], 'parkl') == {} and
-      sb.orch_list(line[:10] + ['parkl=AAAA'], 'parkl') == {})
-check('A the counts still read', sb.orch_counts(line) == {'park': 2, 'todo': 1}, sb.orch_counts(line))
 
 # ── B ──
-sess = 'fleet'
-rows = sb.steward_rows(line, sb.steward_opened(sess), now)
-check('B folded by default: two rows, ▸', [r[0] for r in rows] == ['steward:park', 'steward:todo'] and
-      all(r[4].endswith('▸') for r in rows) and all(sb.steward_folds(r) for r in rows), rows)
-sb.solo_write(sess, 'solo:o/r', True)
-sb.solo_write(sess, 'steward:park', True)
-check('B its bit beside the solo groups\'', sb.solo_opened(sess) == {'solo:o/r'} and
-      sb.steward_opened(sess) == {'steward:park'}, (sb.solo_opened(sess), sb.steward_opened(sess)))
-rows = sb.steward_rows(line, sb.steward_opened(sess), now)
-keys = [r[0] for r in rows]
-check('B open: its items under it', keys == ['steward:park', 'stewitem:park:o/r#12', 'stewitem:park:o/r#40',
-                                             'steward:todo'], keys)
-kid = rows[1]
-check('B a parked row: who · on what · since', kid[3] == 'issue-12 · 等 reply:#12 · 2h' and kid[6] == '1', kid[3])
-check('B …the whole line for the bar', kid[13] == 'o/r#12 · 等 reply:o/r#12 · 2h', kid[13])
-check('B no key ⇒ the issue number', rows[2][3].startswith('#40 · 等 pr:#41:merged'), rows[2][3])
-check('B the bar reads field 13', sb.detail_line(kid).startswith('o/r#12'), sb.detail_line(kid))
-sb.solo_write(sess, 'steward:todo', True)
-rows = sb.steward_rows(line, sb.steward_opened(sess), now)
-todo = [r for r in rows if r[0].startswith('stewitem:todo:')]
-check('B a 待你动手 row: the item · due', len(todo) == 1 and todo[0][3].endswith('截止 2026-10-12') and
-      '来自 o/r#2756' in todo[0][13], todo)
-more = sb.steward_rows(line[:8] + ['todo=3', 'todol=' + tc], sb.steward_opened(sess), now)
-check('B past the list: 还有 N 个', more[-1][0] == 'stewitem:more:todo' and '2' in more[-1][3], more[-1])
-check('B an item taps to its menu', sb.tap('stewitem:park:o/r#12', '') == 'item' and
-      sb.acts('stewitem:park:o/r#12') == '' and sb.folds('stewitem:todo:fu-1') == '')
-check('B not a session', sb.sessions(rows) == [])
-sb.solo_write(sess, 'steward:park', False)
-check('B shut again', sb.steward_opened(sess) == {'steward:todo'} and sb.solo_opened(sess) == {'solo:o/r'})
-old = ['fleet/abc', 'm5', 'online', 'working', '', '', '', 'park=2']
-orow = sb.steward_rows(old, frozenset({'steward:park'}), now)
-check('B no list (an older node): no caret, no items, the old tap', len(orow) == 1 and orow[0][4] == ' ' and
-      not sb.steward_folds(orow[0]) and sb.tap('steward:park', '') == 'jump', orow)
-_ol, _st = sb.orch_line, sb.STAGE
-sb.orch_line, sb.STAGE = (lambda s: line), '1'
-stale = [['stewitem:park:o/r#99', 'steward', '·', 'old', '└', '', '1'] + [''] * (sb.ROW_FIELDS - 7)]
-painted = sb.with_portal(stale, None, sess)
-check('B a frame drops the last frame\'s items', 'stewitem:park:o/r#99' not in [r[0] for r in painted] and
-      'stewitem:todo:fu-1' in [r[0] for r in painted], [r[0] for r in painted])
-sb.orch_line, sb.STAGE = _ol, _st
+_st = sb.STAGE
+sb.STAGE = '1'
+with open(G + '/orch_fleet', 'w', encoding='utf-8') as f:
+    f.write('\x1f'.join(line) + '\n')
+r1 = ['@1', 'working', '*', 'one', ' ', '', '0'] + [''] * (sb.ROW_FIELDS - 7)
+check('B no 停放 / 待你动手 row, no item (issue #3119)', sb.with_portal([r1], None, 'fleet') == [r1],
+      sb.with_portal([r1], None, 'fleet'))
+check('B …and no reader left for them', not any(hasattr(sb, n) for n in ('steward_rows', 'steward_items', 'orch_list',
+                                                                        'orch_counts', 'open_steward_menu')))
+sb.STAGE = _st
 print('selftest OK: A+B %d checks' % N[0])
 PY
 

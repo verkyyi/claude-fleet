@@ -8,6 +8,8 @@
 #   B. the skill installed                                     → no row
 #   C. FLEET_ORCHESTRATOR=0, skill missing                     → no row
 #   D. FLEET_AGENT=codex: the Codex home's skills/ is the one looked at
+#   E. the fleet-orchestrate plugin installed (its copy in the plugin cache,
+#      issue #3112) → no row; the WARN says how to install the plugin
 #
 # Hermetic: sandbox HOME / FLEET_CONF_DIR / CLAUDE_SKILLS_DIR / CODEX_HOME.
 # Exit 0 = pass.
@@ -31,6 +33,7 @@ out=$(doc FLEET_ORCHESTRATOR=1)
 has "WARN" "$out" 'A missing skill → WARN'
 has "$WORK/skills/fleet-orchestrate/SKILL.md" "$out" 'A names the Claude skills path'
 has 'FLEET_ORCHESTRATOR=0' "$out" 'A says how to silence it'
+has 'claude plugin install fleet-orchestrate@claude-fleet' "$out" 'A says how to install the plugin'
 
 mkdir -p "$WORK/skills/fleet-orchestrate"; printf '# x\n\n<!-- fleet skill -->\n' > "$WORK/skills/fleet-orchestrate/SKILL.md"
 none "$(doc FLEET_ORCHESTRATOR=1)" 'B installed → no row'
@@ -39,5 +42,9 @@ rm -rf "$WORK/skills/fleet-orchestrate"
 none "$(doc FLEET_ORCHESTRATOR=0)" 'C off → no row'
 
 has "$WORK/codex/skills/fleet-orchestrate/SKILL.md" "$(doc FLEET_ORCHESTRATOR=1 FLEET_AGENT=codex)" 'D codex → the Codex home'
+
+pc="$WORK/home/.claude/plugins/cache/claude-fleet/fleet-orchestrate/0.1.0/skills/fleet-orchestrate"
+mkdir -p "$pc"; printf -- '---\nname: fleet-orchestrate\n---\n' > "$pc/SKILL.md"
+none "$(doc FLEET_ORCHESTRATOR=1)" 'E plugin installed → no row'
 
 printf 'fleet-doctor-orchestrate-selftest: PASS (%d checks)\n' "$CHECKS"

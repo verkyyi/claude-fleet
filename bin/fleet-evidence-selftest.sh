@@ -251,13 +251,13 @@ eq "F10 a label with nothing after the colon falls through, never an empty line"
 # between them is exactly what filed 8 unreadable members on another fleet, so the
 # assertion is one round trip through the command doc's own template, not two
 # separate opinions about the format.
-PLAN="$BIN/../commands/fleet-epic-plan.md"
+PLAN="$BIN/../plugins/fleet-epic/commands/fleet-epic-plan.md"
 if [ -f "$PLAN" ]; then
   # the template line in whatever shape it is written — plus the line under it, so
   # a heading-shaped template is round-tripped through the heading branch
   tmpl=$(awk '/^[[:space:]]*(#+[[:space:]]*)?[*_`]*(上线证据|[Ee]vidence)[*_`]*[[:space:]]*([:：]|$)/ { print; if ((getline nxt) > 0) print nxt; exit }' "$PLAN" \
            | sed 's/<[^>]*>/一句话证据/')
-  [ -n "$tmpl" ] && ok || fail "F11 no 上线证据 template found in commands/fleet-epic-plan.md"
+  [ -n "$tmpl" ] && ok || fail "F11 no 上线证据 template found in plugins/fleet-epic/commands/fleet-epic-plan.md"
   run GH_BODY="$tmpl" -- line --session fevsess --issue 42
   eq "F11 the plan's own template round-trips through line" 0 "$RC"
   eq "F11 it yields the evidence line, not the label" "一句话证据" "$OUT"

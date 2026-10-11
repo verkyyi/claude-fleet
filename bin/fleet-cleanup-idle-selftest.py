@@ -446,7 +446,7 @@ class TestIdentity(Rig):
 class HomeReap(ReapPolicy):
     """A no-repo (home) session (issue #2565): `done:2h` closes it two hours after
     its agent EXITED — never on a finished turn (#2564 resumes that one), never
-    without a policy (#791), never pinned."""
+    without a policy (#791); a pin is only the list's order (issue #3119)."""
     def setUp(self):
         super().setUp()
         for key in ("@raw", "@worktree"):
@@ -468,18 +468,19 @@ class HomeReap(ReapPolicy):
         self.assertIn("reaped-idle:" + self.win + " policy=done:2h norepo", out)
         self.assertFalse(self.exists())
 
-    def test_no_policy_or_pinned_or_keep_is_never_closed(self):
+    def test_no_policy_or_keep_is_never_closed_a_pin_keeps_nothing(self):
         self.set("@claude_state", "exited")
         self.set("@claude_state_ts", str(int(time.time()) - 900000))
         self.due()
         self.assertTrue(self.exists())               # no policy: #791, as before
         self.policy("keep")
-        self.due()
-        self.assertTrue(self.exists())
-        self.policy("done:2h")
         self.set("@pin", "1")
         self.due()
-        self.assertTrue(self.exists())
+        self.assertTrue(self.exists())               # keep: never
+        self.policy("done:2h")
+        out = self.due()                             # pinned, done:2h, exited long ago (issue #3119)
+        self.assertIn("reaped-idle:" + self.win + " policy=done:2h norepo", out)
+        self.assertFalse(self.exists())
 
     def test_spawned_norepo_closes_on_its_policy_after_a_finished_turn(self):
         # issue #2623: a no-repo session another session spawned (a batch driver,
@@ -509,6 +510,53 @@ class HomeReap(ReapPolicy):
         self.assertTrue(self.exists())               # no policy: #791, as before
 
     # the inherited worktree-session cases do not apply to a home session
+    test_done_waits_its_own_idle_then_reaps_keeping_unpushed_work = None
+    test_keep_and_merged_are_never_this_pass = None
+    test_at_only_once_the_time_has_come_and_never_while_working = None
+    test_loop_end_waits_for_the_loop = None
+    test_sleep_on_considers_only_windows_with_a_policy = None
+
+
+@unittest.skipUnless(shutil.which("tmux"), "tmux absent")
+class PinIsOrder(ReapPolicy):
+    """A pin is only the list's order (issue #3119): it exempts a window from no
+    reap — `keep` does — and the windows pinned when this version first runs,
+    with no policy of their own, get `keep` once (pin-keep.done), never again."""
+    def mark(self):
+        return self.root / "conf" / "global" / "pin-keep.done"
+
+    def test_pinned_at_the_first_pass_gets_keep_once(self):
+        self.set("@pin", "1")
+        self.set("@claude_state_ts", str(int(time.time()) - 900000))
+        other = self.tm("new-window", "-d", "-P", "-F", "#{window_id}", "-t", self.label, "sleep 90").strip()
+        self.tm("set-option", "-w", "-t", other, "@pin", "1")
+        self.tm("set-option", "-w", "-t", other, "@reap_policy", "done:5m")
+        out = self.clean()                           # the first pass migrates
+        self.due()
+        self.assertIn("pin-keep:" + self.win, out)
+        self.assertNotIn("pin-keep:" + other, out)   # its own policy is its own
+        self.assertEqual(self.tm("display-message", "-p", "-t", self.win, "#{@reap_policy}").strip(), "keep")
+        self.assertEqual(self.tm("display-message", "-p", "-t", other, "#{@reap_policy}").strip(), "done:5m")
+        self.assertTrue(self.exists())               # keep: never closed
+        self.assertTrue(self.mark().exists())
+
+    def test_a_pin_set_later_keeps_nothing(self):
+        self.clean()                                 # the first pass: nothing pinned, the mark written
+        self.assertTrue(self.mark().exists())
+        self.set("@pin", "1")
+        self.set("@claude_state_ts", str(int(time.time()) - 900000))
+        out = self.due()                             # no policy: the historic idle rule, pinned or not
+        self.assertNotIn("pin-keep:", out)
+        self.assertEqual(self.tm("display-message", "-p", "-t", self.win, "#{@reap_policy}").strip(), "")
+        self.assertIn("reaped-idle:" + self.win, out)
+        self.assertFalse(self.exists())
+
+    def test_dry_run_migrates_nothing(self):
+        self.set("@pin", "1")
+        self.clean("--dry-run")
+        self.assertFalse(self.mark().exists())
+        self.assertEqual(self.tm("display-message", "-p", "-t", self.win, "#{@reap_policy}").strip(), "")
+
     test_done_waits_its_own_idle_then_reaps_keeping_unpushed_work = None
     test_keep_and_merged_are_never_this_pass = None
     test_at_only_once_the_time_has_come_and_never_while_working = None

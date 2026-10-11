@@ -278,6 +278,9 @@ type Server struct {
 	// (claude-fleet#1421), so two heartbeat triggers never push one relay
 	// twice in the same instant.
 	relayLocks sync.Map // endpoint ID → *sync.Mutex
+	// entryReachAt is machine → the time of its last entry reach check
+	// (claude-fleet#3072).
+	entryReachAt sync.Map
 
 	// orchHost is who asked to hold the orchestrator, and serialises the pick
 	// (claude-fleet#2117, fleet_orchestrator.go).
@@ -417,6 +420,8 @@ func (s *Server) routes() *routeMux {
 		// and sends its record with the machine's token.
 		mux.HandleFunc(control.EntryKeysNodePath, s.handleNodeEntryKeys)
 		mux.HandleFunc(control.EntryAuditNodePath, s.handleNodeEntryAudit)
+		// …and says how the outside could reach its entry port (claude-fleet#3072).
+		mux.HandleFunc(control.EntryReachNodePath, s.handleNodeEntryReach)
 		// Machine-to-machine access (claude-fleet#1626): a node asks, with its
 		// own token, for a five-minute certificate to one other machine of
 		// the same owner; the operator reads every issuance.

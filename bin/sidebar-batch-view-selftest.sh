@@ -10,11 +10,11 @@
 #   C. open / shut is remembered: a solo group's bit (solo_fold_<sess>, through
 #      fold_write) and a batch's (the producer's ▾) both survive the next frame;
 #      the current window never hides from itself.
-#   D. 停放 / 待你动手 rows off orch_<sess>'s tagged columns; a tap opens the
-#      orchestrator, no other action takes them.
+#   D. no 停放 / 待你动手 row and no 「新任务」 (issue #3119), whatever
+#      orch_<sess>'s tagged columns carry.
 #   E. 40 columns: a batch row keeps its name's first 8 glyphs whole.
-#   F. FLEET_SIDEBAR_FOLD=off: the producer's rows untouched, byte for byte; no
-#      steward row; fold_now as before.
+#   F. FLEET_SIDEBAR_FOLD=off: the producer's rows untouched, byte for byte;
+#      fold_now as before.
 #
 # Exit 0 = pass.
 set -uo pipefail
@@ -156,28 +156,18 @@ check('C a solo row folds on a tap anywhere: no jump, no menu',
       sb.tap('solo:' + A, '') == 'select' and sb.acts('solo:' + A) == '' and sb.folds('solo:' + A) == 'solo:' + A)
 check('C a solo group is no session', 'solo:' + A not in sb.sessions(v))
 
-# ── D. 停放 / 待你动手 ─────────────────────────────────────────────────────────
-line = ['fleet/abc', 'm5', '1', 'working', '', '', '0', 'decide=2', 'park=1', 'todo=3']
-st = sb.steward_rows(line)
-check('D two rows', [r[0] for r in st] == ['steward:park', 'steward:todo'], st)
-check('D their words', [r[3] for r in st] == ['停放 1', '待你动手 3'], [r[3] for r in st])
-check('D a zero is no row', sb.steward_rows(line[:8] + ['park=0']) == [])
-check('D no tagged column (no steward, an older node) is no row', sb.steward_rows(line[:7]) == [])
-check('D a tap opens the orchestrator', sb.tap('steward:park', '') == 'jump')
-check('D no other action, no fold', sb.acts('steward:park') == '' and sb.folds('steward:todo') == '')
-check('D not a session', sb.sessions(st) == [])
-check('D the queue column still reads', sb.orch_queue(line) == 0)
-# 待换新 (issue #2733): `renew=1` — the orchestrator runs an older fleet version
-# than its machine has; 「新任务」 says so at its end, and it is no steward row
-rl = ['fleet/abc', 'm5', '1', 'done', '', '', '', 'renew=1']
-check('D renew=1 is no steward row', sb.steward_rows(rl) == [])
-_ol, _st = sb.orch_line, sb.STAGE
-sb.orch_line, sb.STAGE = (lambda s: rl), '1'
-_top = sb.with_portal([], None, 'fleet')[0]
-check('D renew=1: 「新任务」 ends 待换新', _top[0] == sb.PORTAL_KEY and _top[9] == '待换新', _top)
-sb.orch_line = lambda s: rl[:7]
-check('D no renew tag: no word', sb.with_portal([], None, 'fleet')[0][9] == '')
-sb.orch_line, sb.STAGE = _ol, _st
+# ── D. no 停放 / 待你动手 rows, no 「新任务」 (issue #3119) ────────────────
+# whatever orch_<sess> carries — decide / park / todo / renew — the list is the
+# producer's rows: no session is special
+_st = sb.STAGE
+sb.STAGE = '1'
+open(os.path.join(os.environ['FLEET_STATUS_G'], 'orch_fleet'), 'w').write(
+    '\x1f'.join(['fleet/abc', 'm5', '1', 'working', '', '', '0', 'decide=2', 'park=1', 'todo=3', 'renew=1']) + '\n')
+_v = sb.batch_view(frame(), '@99', set(), {})
+check('D the batch view is all the list is', sb.with_portal(_v, None, 'fleet') == _v, sb.with_portal(_v, None, 'fleet'))
+check('D no steward row, no 「新任务」 key anywhere',
+      not any(r[0].startswith('steward:') or r[0] == sb.PORTAL_KEY for r in sb.with_portal(_v, None, 'fleet')))
+sb.STAGE = _st
 
 # ── E. a phone's 40 columns ──────────────────────────────────────────────────
 name = '托管节点升级与回滚全流程走通'   # 14 glyphs: wider than the room
@@ -191,7 +181,6 @@ check('E the solo group whole at 40', '单独的活 · 12' in text, text)
 os.environ['FLEET_SIDEBAR_FOLD'] = 'off'
 raw = frame()
 check('F off: the producer\'s rows, untouched', sb.batch_view(raw, '@99', {'solo:' + A}, {}) is raw)
-check('F off: no steward row', sb.steward_rows(line) == [])
 vo = frame(opened={'@1'})
 shut, holder = sb.fold_now(vo, '@1', 'collapse', '@99', {})
 check('F off: ← keeps the needs child, as before', holder == '@1' and '@11' in [r[0] for r in shut])

@@ -78,12 +78,13 @@
 #                          note, gone as soon as a row opens a real one. With a
 #                          machine (THIS computer, no fleet of this login here —
 #                          issue #2219): the home page, how to start, instead
-#   portal <session>       ⌘N / prefix c / a tap on 「新任务」 (issue #1953): the
+#   portal <session>       ⌘N / prefix c: a new session (issue #3119 —
+#                          home-session claude --new); with FLEET_COMPOSE=1 the
 #                          stage's writing-area window (`@fleet_role portal`,
-#                          `@remote new`, bin/fleet-compose.py) made once and
-#                          selected — the right pane shows it, the list its row;
-#                          one an older client started (`@portal_ver`) is
-#                          respawned on the new code first (issue #2113)
+#                          `@remote new`, bin/fleet-compose.py, issue #1953) made
+#                          once and selected; one an older client started
+#                          (`@portal_ver`) is respawned on the new code first
+#                          (issue #2113)
 #   keys <session>         retired with ⌘/ (issue #2362): does nothing, exit 0 —
 #                          only a bind an older conf still holds calls it
 #   reload <session> [--from <old home>]   a newer client into the running one,
@@ -476,7 +477,7 @@ FLEET_SIDEBAR_WIDTH=${FLEET_SHELL_WIDTH:-${FLEET_SIDEBAR_WIDTH:-30}}
 FLEET_NODE_ALIASES=$FLEET_NODE_ALIASES"
   for n in CCQUOTA_HUB_URL FLEET_HUB_URL FLEET_HUB_SESSIONS_CMD FLEET_HUB_NODES_CMD FLEET_HUB_LIMITS_CMD \
            FLEET_HUB_SESSIONS_USER FLEET_HUB_SESSIONS_STALE FLEET_HUB_SESSIONS_EVERY FLEET_HUB_SESSIONS_WATCHED_EVERY \
-           FLEET_HUB_SESSIONS_LOOP_SECS FLEET_HUB_NODE_TIMEOUT FLEET_HUB_WRITE_CMD FLEET_REMOTE_BIN FLEET_REMOTE_SSH FLEET_REMOTE_VIA_HUB FLEET_CONF_DIR FLEET_CERT \
+           FLEET_HUB_SESSIONS_LOOP_SECS FLEET_HUB_NODE_TIMEOUT FLEET_HUB_WRITE_CMD FLEET_PORTAL_NEW_CMD FLEET_REMOTE_BIN FLEET_REMOTE_SSH FLEET_REMOTE_VIA_HUB FLEET_CONF_DIR FLEET_CERT \
            FLEET_SHELL_WARM FLEET_SHELL_WARM_MAX FLEET_SHELL_WARM_EVERY FLEET_SHELL_WARM_CONNECT \
            CCQUOTA_VIEWER_TOKEN FLEET_UI_LANG FLEET_SIDEBAR_WIDTH_MAX FLEET_SIDEBAR_FOLD XDG_CONFIG_HOME XDG_CACHE_HOME FLEET_SHELL_CACHE \
            FLEET_SKIP_GLOBAL_CONF LANG LC_ALL FLEET_CLIENT_LAYOUT FLEET_SWITCH_STATE XDG_STATE_HOME FLEET_NOTIFY FLEET_NOTIFY_JUMP_SECS FLEET_NOTIFY_DONE FLEET_NOTIFY_QUIET \
@@ -598,35 +599,6 @@ portal_trace() {
   awk -v s="$1" -v a="${PT0:-$now}" -v b="${PT1:-$now}" -v n="$now" \
     'BEGIN { printf "portal: %s +%d ms (%d ms)\n", s, (n - b) * 1000, (n - a) * 1000 }' >&2
   PT1=$now
-}
-# portal_orch_here <session> — ⌘N's hot path (issue #2721): orch_<session>'s first
-# line (what fleet-compose.py's orchestrator() reads) names `<wid>`·`<node>`; a
-# stage window whose `@remote` is already `<node>:<wid>` is selected here, stamped
-# @fleet_role orchestrator when it has no role and @cc_agent as the list's cache
-# row says (fleet-compose.py's stamp_role / orch_agent), and the list told
-# (`jump=`, as carry() hands it) so its ▶ follows. rc 1 = no such window, or no
-# line: the python road (it retargets a proxy window, or asks the hub to open one).
-portal_orch_here() {
-  local g line wid node want w role agent cur lp
-  g="${FLEET_STATUS_G:-${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash/global}"
-  line=$(LC_ALL=C awk -F $'\037' 'NF >= 4 && index($1, "/") && $2 != "" { print $1 "\037" $2; exit }' \
-         "$g/orch_$1" 2>/dev/null)
-  [ -n "$line" ] || return 1
-  wid=${line%%$'\037'*}; node=${line#*$'\037'}; want="$node:$wid"
-  IFS=$'\037' read -r w role cur <<EOF
-$(TS list-windows -t "=$STAGE" -F "#{window_id}	#{@remote}	#{@fleet_role}	#{@cc_agent}" 2>/dev/null \
-  | awk -F '\t' -v r="$want" '$2 == r { print $1 "\037" $3 "\037" $4; exit }')
-EOF
-  [ -n "$w" ] || return 1
-  TS select-window -t "$w" 2>/dev/null || return 1
-  [ -n "$role" ] || TS set-window-option -t "$w" @fleet_role orchestrator 2>/dev/null
-  agent=$(LC_ALL=C awk -F $'\037' -v w="wid:$wid" -v n="$node" \
-          '$1 == w && $2 == n && $7 ~ /^[a-z][a-z0-9-]*$/ && length($7) <= 16 { print $7; exit }' \
-          "$g/remote_$1" 2>/dev/null)
-  [ -n "$agent" ] && [ "$agent" != "$cur" ] && TS set-window-option -t "$w" @cc_agent "$agent" 2>/dev/null
-  lp=$(T list-panes -a -F '#{pane_id} #{@sidebar}' 2>/dev/null | awk '$2 == 1 { print $1; exit }')
-  [ -n "$lp" ] && T set-option -pa -t "$lp" @sidebar_do "jump=wid:$wid " \; send-keys -t "$lp" F12 2>/dev/null
-  return 0
 }
 # iterm_keys — the iTerm2 profile `fleet` (issue #1903): its ⌘ chords send the
 # switch codes conf/tmux-shell.conf catches. Written (only when it changed) at
@@ -777,8 +749,8 @@ sys.exit(0 if any(re.fullmatch(r"wid:[^/]+/.+", k) for k in q.load().get("mru") 
 # `else` below would open a SECOND one, a Claude, beside a `fleet codex`.
 #
 # Every other layout (issue #2739, FIRST_SCREEN=1: a start that named no machine)
-# lands the same way — the last session when it is still there, else 「新任务」
-# (`fleet-shell.sh portal`: the orchestrator; FLEET_FIRST_NEW_CMD is the seam).
+# lands the same way — the last session when it is still there, else a new one
+# (`fleet-shell.sh portal`, issue #3119; FLEET_FIRST_NEW_CMD is the seam).
 solo_resume() {
   local key="$1" since="$2" solo=''
   [ "${FLEET_SHELL_NO_FIRST:-0}" != 1 ] || return 0
@@ -1314,19 +1286,18 @@ EOF
 # ---------------------------------------------------------------------------------
 # The writing area (issue #1953, EPIC #1949 C4): ONE stage window, told by its
 # `@fleet_role portal` (never its name — the person may rename it), whose
-# `@remote new` is the row key the list paints as 「新任务」 (`@remote` names no
+# `@remote new` is a row key no row carries (issue #3119; `@remote` names no
 # machine — no `<node>:` — so no machine's `open` ever retargets it). Made the
 # first time, selected every time after: the draft lives in the pane and on disk
 # (fleet-compose.py), so leaving and coming back loses nothing. The list is woken
 # (F12) so its ▶ moves at once rather than on its next tick.
 #
-# ⌘N goes to the orchestrating session itself (issue #2616, EPIC #2615 C1): with
-# FLEET_COMPOSE ([client], default 0) off no portal window is made — the road is
-# fleet-compose.py --orch, carry()'s own jump to orch_<sess>'s window (another
-# machine's `@remote` row as well), and with no orch_<sess> --boot asks the hub
-# to open it (orch_ensure) and goes once it shows, 「正在叫起编排会话…」 on the bar
-# meanwhile, one line saying why when it never came. FLEET_COMPOSE=1: the writing
-# area below, byte for byte. compat-1v: 下一批删 (the writing area, if nobody opened it)
+# ⌘N opens a NEW session (issue #3119): with FLEET_COMPOSE ([client], default 0)
+# off no portal window is made — `home-session claude --new`, the hub's placement
+# on the home machine, no repo, and the stage on it, its input the keyboard's. No
+# session is special: nothing here names an orchestrator. FLEET_PORTAL_NEW_CMD is
+# the seam. FLEET_COMPOSE=1: the writing area below. compat-1v: 下一批删 (the
+# writing area, if nobody opened it)
 portal)
   s="${2:-$SESS}"
   SESS=$s; STAGE="$s-stage"; SHADOW=$BIN
@@ -1334,23 +1305,8 @@ portal)
   stage_up || exit 1
   portal_trace stage_up
   if [ "${FLEET_COMPOSE:-0}" != 1 ]; then
-    # The hot path (issue #2721): the orchestrator's window already on the stage —
-    # its `@remote` is orch_<sess>'s `<node>:<wid>` — is selected right here, no
-    # python and no network: as fast as switching to any other session.
-    portal_orch_here "$s" && { portal_trace select; exit 0; }
-    # the stage by its socket: this runs on the shell's server, whose $TMUX is not it
-    FLEET_COMPOSE_STAGE_SOCK=$(TS display-message -p '#{socket_path}' 2>/dev/null) \
-      python3 "$BIN/fleet-compose.py" --orch "$s" --boot >/dev/null 2>&1
-    portal_trace compose
-    exit 0
-  fi
-  # ⌘N again ON the writing area (issue #2146): the orchestrating session, no
-  # draft — fleet-compose.py --orch, carry()'s own jump to orch_<sess>'s window.
-  # From the orchestrator (or anywhere else) ⌘N is the writing area, as below. No
-  # orchestrator: nothing changes — the writing area stays, no line.
-  if [ "$(TS display-message -p -t "=$STAGE:" '#{@fleet_role}' 2>/dev/null)" = portal ] \
-     && [ -s "${FLEET_STATUS_G:-${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash/global}/orch_$s" ] \
-     && python3 "$BIN/fleet-compose.py" --orch "$s" >/dev/null 2>&1; then
+    ${FLEET_PORTAL_NEW_CMD:-bash "$BIN/fleet-shell.sh" home-session claude --new} >/dev/null 2>&1
+    portal_trace new
     exit 0
   fi
   w=$(TS list-windows -t "=$STAGE" -F '#{window_id} #{@fleet_role}' 2>/dev/null | awk '$2 == "portal" { print $1; exit }')
