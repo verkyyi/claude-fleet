@@ -225,6 +225,19 @@ fleet-cred-policy.sh clear node fleet-linux-0   # unrestricted again
 fleet-cred-policy.sh show
 ```
 
+Administrators can also open **Subscriptions → Subscription permissions** at
+`/subscriptions`. Select a node and/or user, inspect the hub's effective view,
+then edit either allowlist. The editor distinguishes existing permissions,
+selected subscriptions and deny-all; it previews the change before saving
+through the same audited API. Nodes are resolved by their enrolled endpoint
+identity, and users by their hub principal, including pinned administrators.
+Credentials without a subscription ID are shown but cannot be selected until
+bound with the existing credentials API. Previously selected IDs remain in the
+editor even when their credential is no longer available. A pre-save read
+catches intervening policy changes; the API does not provide atomic revision
+checks for simultaneous writes. The displayed verdict is the hub's policy and
+revocation result, not a guarantee of upstream availability or other lease gates.
+
 Every write is a `policy` row in the credential audit (who, old → new); every
 lease denial is a `deny` row naming the reason. No secret is in either.
 

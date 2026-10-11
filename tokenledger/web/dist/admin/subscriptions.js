@@ -13,6 +13,7 @@ import {
   addSubCommands, arrived, LABEL_RE,
 } from '../lib/admin.js';
 import { t } from '../lib/i18n.js';
+import { mountPolicy } from '../lib/cred-policy.js';
 
 const failed = (e) => `<div class="ghostrow err">${ic('alert')} ${esc(e.message)}</div>`;
 const val = (r) => (r.status === 'fulfilled' ? r.value : null);
@@ -139,8 +140,11 @@ export default Shell.mount('subscriptions', async (ctx) => {
 
   ctx.el.innerHTML = `<div class="pagehead"><div><p>${esc(t('ui.sub.lead', { skip }))}</p></div><div class="acts"><button class="btn primary" data-act="add">${ic('plus')}${esc(t('ui.sub.addOne'))}</button></div></div>` +
     vaultNote + kpis + grid + unmanaged +
+    '<section class="panel" id="subscription-policy"></section>' +
     `<div class="grid g21"><div class="panel"><div class="panel-h"><h3>${esc(t('ui.sub.who'))}</h3><span class="sub">${esc(t('ui.sub.live'))}</span></div>${leases}</div>` +
     `<div class="panel"><div class="panel-h"><h3>${esc(t('ui.sub.switches'))}</h3></div>${switches}</div></div>`;
+
+  void mountPolicy(ctx, ctx.el.querySelector('#subscription-policy'));
 
   const byId = new Map(cards.map((c) => [c.id, c]));
   ctx.el.onclick = (e) => {
