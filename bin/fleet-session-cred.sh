@@ -12,7 +12,7 @@
 #          route direct|relay  the proxy signs an fcp1. bound to LABEL (or, for
 #                              Codex, the account DIR is: ~/.codex = default,
 #                              <FLEET_CRED_CODEX_HOMES>/<L> = L)
-#          route central       an untrusted machine: an fcp-h1. pass borrowed from
+#          route central       an untrusted machine: an fcp-h2. (else fcp-h1.) pass borrowed from
 #                              the hub (POST /v1/fleet/session-cred, the node token
 #                              + this session's own worker assertion) — no account
 #          exit 3 switched off · 4 nothing to bind (no account on a trusted route:
@@ -126,7 +126,9 @@ if not hub or not tok:
     sys.exit("fleet-session-cred: central route: no hub / node token (node.env%s)"
              % (" unreadable and the proxy's hub broker did not answer" if os.path.exists(
                  os.path.join(os.environ["FSC_CONF"], "credsep.json")) else ""))
-body = json.dumps({"providers": [os.environ["FSC_PROVIDER"]]}).encode()
+# fcp-h2 (issue #3698): a pass the relay and the cluster proxy verify themselves;
+# a hub without the relay key (or an older one) answers fcp-h1
+body = json.dumps({"providers": [os.environ["FSC_PROVIDER"]], "kind": "fcp-h2"}).encode()
 req = urllib.request.Request(hub + "/v1/fleet/session-cred", data=body, method="POST", headers={
     "Authorization": "Bearer " + tok, "X-Fleet-Worker": os.environ["FLEET_WORKER_ASSERT"],
     "Content-Type": "application/json"})
@@ -143,7 +145,7 @@ except Exception as e:
         sys.exit(5)
     sys.exit("fleet-session-cred: central route: the hub refused a pass (%s)" % getattr(e, "code", type(e).__name__))
 cred, pid = d.get("cred", ""), d.get("id", "")
-if not cred.startswith("fcp-h1.") or not pid or "\t" in pid:
+if cred.split(".", 1)[0] not in ("fcp-h1", "fcp-h2") or cred.count(".") != 2 or not pid or "\t" in pid:
     sys.exit("fleet-session-cred: central route: the hub's answer carries no pass")
 print("%s\t%s" % (pid, cred))
 PY

@@ -160,7 +160,8 @@ type RevocationList struct {
 	SSHCA string `json:"ssh_ca,omitempty"`
 	// RelayPub is the Ed25519 key frl2 relay passes are signed with
 	// (claude-fleet#3561) — what the relay verifies them by without asking.
-	// Empty when the hub mints frl1.
+	// Empty when the hub mints frl1. fcp-h2 session passes are signed with
+	// the same key (claude-fleet#3698).
 	RelayPub string `json:"relay_pub,omitempty"`
 }
 

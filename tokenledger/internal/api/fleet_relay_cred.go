@@ -42,7 +42,8 @@ import (
 //     (bin/fleet-relay-cred.sh revoke); marking it untrusted, or a
 //     credential revocation for the machine, refuses it at the next check
 //     too. No route sets a hash by hand.
-//   - The check also takes an ingress-issued session pass (`fcp-h1.`, C2) —
+//   - The check also takes an ingress-issued session pass (`fcp-h1.`, C2, or
+//     `fcp-h2.` — which a relay with the list verifies itself, #3698) —
 //     the central proxy (C6) egresses with it — verified by C2's
 //     verifySessionCred for the provider the path goes to (/anthropic/ →
 //     claude, /chatgpt/ and /openai-auth/ → codex). Its verdicts are C2's
@@ -71,6 +72,7 @@ const (
 
 	relayTokenPrefix = "frl1."
 	hubPassPrefix    = "fcp-h1."
+	hubPass2Prefix   = "fcp-h2." // a relay verifies it itself (#3698)
 	relayCheckTTL    = 30 * time.Second
 )
 
@@ -327,6 +329,8 @@ func tokPrefix(tok string) string {
 		return relayTokenPrefix
 	case strings.HasPrefix(tok, hubPassPrefix):
 		return hubPassPrefix
+	case strings.HasPrefix(tok, hubPass2Prefix):
+		return hubPass2Prefix
 	case strings.HasPrefix(tok, hubRelayPassPrefix):
 		return hubRelayPassPrefix
 	case strings.HasPrefix(tok, hubQuotaPassPrefix):
@@ -340,7 +344,7 @@ func tokPrefix(tok string) string {
 // relayVerdictFor answers a session pass from C2's verifier, a relay
 // credential from the cache, else from the settings.
 func (s *Server) relayVerdictFor(tok, uri string, now time.Time) relayVerdict {
-	if strings.HasPrefix(tok, hubPassPrefix) {
+	if strings.HasPrefix(tok, hubPassPrefix) || strings.HasPrefix(tok, hubPass2Prefix) {
 		return s.verifyHubSessionPass(tok, uri, now)
 	}
 	if strings.HasPrefix(tok, hubRelayPassPrefix) {

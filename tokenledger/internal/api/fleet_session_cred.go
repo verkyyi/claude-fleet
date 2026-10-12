@@ -1,6 +1,7 @@
 package api
 
 import (
+	"crypto/ed25519"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -42,11 +43,25 @@ import (
 // worker_id, machine, providers, iat, exp. The hub also keeps one row per
 // pass (fleet_session_creds), which is what a revocation writes.
 //
+// fcp-h2 (claude-fleet#3698, EPIC #3500 C19) is the same pass a relay and the
+// cluster credential proxy can verify THEMSELVES:
+//
+//	fcp-h2.<base64url claims JSON>.<base64url Ed25519 signature>
+//
+// signed with the hub's relay signing key (CCQUOTA_FLEET_RELAY_SIGN_KEY, the
+// key frl2 uses — the prefix is inside the signed bytes, so neither kind can
+// pass for the other), claims as fcp-h1 with v = 2. Its public half rides the
+// revocation list (`relay_pub`) and the credproxy resolve answer
+// (`session_pub`); a revocation still lands as the list's `fcp:<id>`. Minted
+// only for a node that asks ({"kind":"fcp-h2"}) and only with the key; renew
+// keeps a pass's kind, and /renew, /verify take both (fcp-h1: # compat-1v).
+// No relay key ⇒ fcp-h1, byte for byte (TestSessionCredH2OffAddsNothing).
+//
 // Routes (all under /v1/fleet/session-cred):
 //
 //	POST   ""        issue — the node's enrollment token + the session's own
 //	                 worker assertion (X-Fleet-Worker, #1810); body
-//	                 {providers?, ttl_seconds?}
+//	                 {providers?, ttl_seconds?, kind?}
 //	POST   /renew    the issuing node: {cred} → the same pass, a new exp
 //	POST   /verify   the verifiers (CCQUOTA_FLEET_SESSION_CRED_VERIFY_TOKEN)
 //	                 or the operator: {cred, principal?, provider?} →
@@ -62,6 +77,10 @@ import (
 
 const (
 	sessionCredPrefix = "fcp-h1"
+	// sessionCred2Prefix is the pass a verifier checks itself (#3698).
+	sessionCred2Prefix = "fcp-h2"
+	// SessionCredKindH2 is what a node asks for to get one.
+	SessionCredKindH2 = "fcp-h2"
 	// SessionCredTTL is a pass's default (and longest) life: four hours
 	// (claude-fleet#3561, 发起人拍板 20 — a session can read its pass, so a
 	// copy taken out of it is good for hours, not a day). A pass minted
@@ -137,6 +156,71 @@ func signSessionCred(c sessionCredClaims, key []byte) string {
 	mac := hmac.New(sha256.New, key)
 	mac.Write([]byte(body))
 	return body + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+}
+
+// signSessionPass signs c as its kind says: v 2 → fcp-h2 with the relay key,
+// else fcp-h1 with the HMAC key.
+func (s *Server) signSessionPass(c sessionCredClaims) string {
+	if c.V == 2 && len(s.RelaySignKey) == ed25519.PrivateKeySize {
+		return signSessionCred2(c, s.RelaySignKey)
+	}
+	c.V = 1
+	return signSessionCred(c, s.SessionCredKey)
+}
+
+// signSessionCred2 is an fcp-h2's Ed25519 signature over its claims.
+func signSessionCred2(c sessionCredClaims, key ed25519.PrivateKey) string {
+	raw, _ := json.Marshal(c)
+	body := sessionCred2Prefix + "." + base64.RawURLEncoding.EncodeToString(raw)
+	return body + "." + base64.RawURLEncoding.EncodeToString(ed25519.Sign(key, []byte(body)))
+}
+
+// SessionPub is the public half a verifier checks fcp-h2 with ("" = none
+// minted here).
+func (s *Server) SessionPub() string {
+	if len(s.SessionCredKey) == 0 {
+		return ""
+	}
+	return s.RelayPub()
+}
+
+// parseSessionPass is parseSessionCred for either kind.
+func (s *Server) parseSessionPass(tok string, now time.Time) (*sessionCredClaims, string) {
+	if strings.HasPrefix(strings.TrimSpace(tok), sessionCred2Prefix+".") {
+		var pub ed25519.PublicKey
+		if len(s.RelaySignKey) == ed25519.PrivateKeySize {
+			pub = s.RelaySignKey.Public().(ed25519.PublicKey)
+		}
+		return parseSessionCred2(tok, pub, now)
+	}
+	return parseSessionCred(tok, s.SessionCredKey, now)
+}
+
+// parseSessionCred2 checks an fcp-h2's shape, signature and life.
+func parseSessionCred2(tok string, pub ed25519.PublicKey, now time.Time) (*sessionCredClaims, string) {
+	parts := strings.Split(strings.TrimSpace(tok), ".")
+	if len(parts) != 3 || parts[0] != sessionCred2Prefix {
+		return nil, "malformed"
+	}
+	sig, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(parts[2], "="))
+	if err != nil {
+		return nil, "malformed"
+	}
+	if len(pub) != ed25519.PublicKeySize || !ed25519.Verify(pub, []byte(parts[0]+"."+parts[1]), sig) {
+		return nil, "signature does not verify (not issued by this hub)"
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(parts[1], "="))
+	if err != nil {
+		return nil, "malformed"
+	}
+	var c sessionCredClaims
+	if err := json.Unmarshal(raw, &c); err != nil || c.V != 2 || c.ID == "" {
+		return nil, "malformed claims"
+	}
+	if !time.Unix(c.Exp, 0).After(now) {
+		return &c, "expired"
+	}
+	return &c, ""
 }
 
 // parseSessionCred checks a pass's shape, signature and life — everything
@@ -238,7 +322,7 @@ func (s *Server) verifySessionCred(tok, wantPrincipal, wantProvider string, fres
 	if len(s.SessionCredKey) == 0 {
 		return SessionCredView{Reason: SessionCredOff}, nil
 	}
-	c, why := parseSessionCred(tok, s.SessionCredKey, now)
+	c, why := s.parseSessionPass(tok, now)
 	if c == nil {
 		return SessionCredView{Reason: why}, nil
 	}
@@ -366,6 +450,9 @@ func (s *Server) handleSessionCred(w http.ResponseWriter, r *http.Request) {
 type sessionCredIssueRequest struct {
 	Providers  []string `json:"providers"`
 	TTLSeconds int      `json:"ttl_seconds"`
+	// Kind "fcp-h2" asks for a pass verifiers check themselves (#3698);
+	// anything else, or no relay key here, is fcp-h1.
+	Kind string `json:"kind"`
 }
 
 // SessionCredResponse is the answer to an issue or a renewal.
@@ -497,7 +584,11 @@ func (s *Server) issueSessionCred(w http.ResponseWriter, r *http.Request, ep *st
 		return
 	}
 	iat := now.Truncate(time.Second)
-	claims := sessionCredClaims{V: 1, ID: "sc_" + hex.EncodeToString(rnd[:]), Principal: principal, WorkerID: c.WorkerID,
+	v := 1
+	if req.Kind == SessionCredKindH2 && len(s.RelaySignKey) == ed25519.PrivateKeySize {
+		v = 2
+	}
+	claims := sessionCredClaims{V: v, ID: "sc_" + hex.EncodeToString(rnd[:]), Principal: principal, WorkerID: c.WorkerID,
 		Machine: host, Providers: providers, Iat: iat.Unix(), Exp: iat.Add(ttl).Unix()}
 	row := store.SessionCred{ID: claims.ID, PrincipalID: principal, WorkerID: c.WorkerID, WorkerKey: c.label(),
 		FleetID: fl.FleetID, Machine: host, OSUser: user, EndpointID: ep.ID, Providers: providers,
@@ -509,7 +600,7 @@ func (s *Server) issueSessionCred(w http.ResponseWriter, r *http.Request, ep *st
 	trustSet, _ := s.trustSettings(now)
 	audit(c, fl.FleetID, "issued "+claims.ID+" to "+principal+" ("+strings.Join(providers, ",")+") until "+
 		time.Unix(claims.Exp, 0).UTC().Format(time.RFC3339)+" · "+trustWord(s.endpointTrust(ep.ID, host, trustSet)))
-	writeJSON(w, http.StatusOK, sessionCredAnswer(signSessionCred(claims, s.SessionCredKey), claims))
+	writeJSON(w, http.StatusOK, sessionCredAnswer(s.signSessionPass(claims), claims))
 }
 
 // renewSessionCred hands the issuing node the same pass with a new expiry —
@@ -521,13 +612,13 @@ func (s *Server) renewSessionCred(w http.ResponseWriter, r *http.Request, ep *st
 		Cred string `json:"cred"`
 	}
 	if err := readOptionalJSON(r, &req); err != nil || req.Cred == "" {
-		sessionCredRefuse(w, http.StatusBadRequest, "invalid_argument", "body must be {\"cred\": \"fcp-h1.…\"}")
+		sessionCredRefuse(w, http.StatusBadRequest, "invalid_argument", "body must be {\"cred\": \"fcp-h1.…\" | \"fcp-h2.…\"}")
 		return
 	}
 	// A lapsed pass (#2012) is checked as of its own last second: the row,
 	// its revocation, the machine's and the person's all still apply.
 	at := now
-	if pc, why := parseSessionCred(req.Cred, s.SessionCredKey, now); why == "expired" && pc != nil {
+	if pc, why := s.parseSessionPass(req.Cred, now); why == "expired" && pc != nil {
 		at = time.Unix(pc.Exp-1, 0)
 	}
 	v, c := s.verifySessionCred(req.Cred, "", "", true, at)
@@ -578,7 +669,7 @@ func (s *Server) renewSessionCred(w http.ResponseWriter, r *http.Request, ep *st
 		"renewed "+c.ID+optional(" (lapsed)", lapsed)+" until "+time.Unix(nc.Exp, 0).UTC().Format(time.RFC3339), "", now); err != nil {
 		log.Printf("fleet audit: %v", err)
 	}
-	writeJSON(w, http.StatusOK, sessionCredAnswer(signSessionCred(nc, s.SessionCredKey), nc))
+	writeJSON(w, http.StatusOK, sessionCredAnswer(s.signSessionPass(nc), nc))
 }
 
 // handleSessionCredVerify answers a verifier.
@@ -589,7 +680,7 @@ func (s *Server) handleSessionCredVerify(w http.ResponseWriter, r *http.Request)
 		Provider  string `json:"provider"`
 	}
 	if err := readOptionalJSON(r, &req); err != nil || req.Cred == "" {
-		sessionCredRefuse(w, http.StatusBadRequest, "invalid_argument", "body must be {\"cred\": \"fcp-h1.…\"}")
+		sessionCredRefuse(w, http.StatusBadRequest, "invalid_argument", "body must be {\"cred\": \"fcp-h1.…\" | \"fcp-h2.…\"}")
 		return
 	}
 	v, _ := s.verifySessionCred(req.Cred, req.Principal, req.Provider, false, time.Now())

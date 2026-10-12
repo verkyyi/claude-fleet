@@ -49,8 +49,8 @@ export function hostAllowed(host, port, extra = []) {
 }
 
 // The credential shapes that must never be echoed: a proxy session credential
-// (fcp1. / fcp-h1. / fcpn1.), an Anthropic key or OAuth token, a bearer value.
-const SECRET_RE = /\b(?:fcp(?:-h|n)?1\.[A-Za-z0-9._~+/=-]+|sk-ant-[A-Za-z0-9_-]+|Bearer\s+[A-Za-z0-9._~+/=-]{12,})/g;
+// (fcp1. / fcp-h1. / fcp-h2. / fcpn1.), an Anthropic key or OAuth token, a bearer value.
+const SECRET_RE = /\b(?:fcp(?:1|n1|-h[12])\.[A-Za-z0-9._~+/=-]+|sk-ant-[A-Za-z0-9_-]+|Bearer\s+[A-Za-z0-9._~+/=-]{12,})/g;
 export function redact(s, extra = []) {
   let out = String(s ?? "").replace(SECRET_RE, "[redacted]");
   for (const x of extra) if (x && x.length >= 8) out = out.split(x).join("[redacted]");

@@ -38,6 +38,13 @@ checked with the `cryptography` package when python3 has it, else with
 bin/fleet_ed25519.py installed beside this file (FLEET_RELAY_ED25519 names another).
 No key known ⇒ an frl2 goes to the hub like any other pass.
 
+An fcp-h2 session pass (claude-fleet#3698 — signed with the same key) is
+verified here the same way, but only while the list is on (a session pass is
+revoked by the list's `fcp:<id>` and its scopes, and the hub is not asked):
+signature, exp, and the provider the route goes to among the pass's providers
+(/anthropic/ → claude, /chatgpt/ and /openai-auth/ → codex; /github-oauth/ is
+never a session's). No key or no list ⇒ it goes to the hub, like an fcp-h1.
+
 What it keeps is the pass's hash and two timestamps, in memory only — never the
 pass, never an Authorization (Caddy strips it before asking, and this process
 forwards only X-Fleet-Relay + X-Forwarded-Uri/-Method to the hub). The log has
@@ -192,6 +199,35 @@ def frl2_check(tok):
     return ""
 
 
+ROUTE_PROVIDER = {"/anthropic/": "claude", "/chatgpt/": "codex", "/openai-auth/": "codex"}
+
+
+def fcp2_check(tok, pre):
+    """'' when this fcp-h2 session pass is good for route pre, else why not;
+    None when it is the hub's to judge (no key, no list here)."""
+    pub = relay_pub()
+    with _rev_lock:
+        listed = _rev["on"] and _rev["v"] is not None
+    if not pub or not listed:
+        return None
+    v = ed25519_verify()
+    if not v:
+        return None
+    body, _, sig = tok.rpartition(".")
+    c = pass_claims(tok)
+    if c is None or not body or not v(pub, body.encode(), b64any(sig)):
+        return "bad signature"
+    try:
+        if int(c.get("v") or 0) != 2 or not c.get("id") or time.time() >= int(c.get("exp") or 0):
+            return "expired"
+    except (TypeError, ValueError):
+        return "malformed"
+    want = ROUTE_PROVIDER.get(pre)
+    if not want or want not in (c.get("providers") or []):
+        return "does not cover %s" % (want or pre)
+    return ""
+
+
 def log(event, **kv):
     line = "%s %s %s\n" % (time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), event,
                            " ".join("%s=%s" % (k, v) for k, v in kv.items()))
@@ -273,9 +309,10 @@ def machine_of(m):
 
 
 def pass_claims(tok):
-    """An fcp-h1 pass's claims, unverified (used only to refuse)."""
+    """An fcp-h1 / fcp-h2 pass's claims, unverified (to refuse; fcp2_check
+    verifies an fcp-h2's before it lets one by)."""
     parts = tok.split(".")
-    if len(parts) != 3 or parts[0] != "fcp-h1":
+    if len(parts) != 3 or parts[0] not in ("fcp-h1", "fcp-h2"):
         return None
     try:
         c = json.loads(base64.urlsafe_b64decode(parts[1] + "=" * (-len(parts[1]) % 4)))
@@ -426,6 +463,19 @@ class H(BaseHTTPRequestHandler):
                         _ok.pop(key, None)
                     log("refused", prefix=pre, kind="frl2", why=why.replace(" ", "-"))
                     return self.reply(403, json.dumps({"error": "relay_refused", "message": "relay pass: " + why}).encode())
+                with _lock:
+                    if key not in _ok and len(_ok) >= MAX_ENTRIES:
+                        self.prune(now)
+                    _ok[key] = now
+                return self.reply(200)
+        if tok.startswith("fcp-h2.") and pre:
+            why = fcp2_check(tok, pre)
+            if why is not None:   # verified here, with the list; the hub is not asked (#3698)
+                if why:
+                    with _lock:
+                        _ok.pop(key, None)
+                    log("refused", prefix=pre, kind="fcp-h2", why=why.replace(" ", "-"))
+                    return self.reply(403, json.dumps({"error": "relay_refused", "message": "session pass: " + why}).encode())
                 with _lock:
                     if key not in _ok and len(_ok) >= MAX_ENTRIES:
                         self.prune(now)

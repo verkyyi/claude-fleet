@@ -96,7 +96,7 @@ A SESSION CREDENTIAL OUTLIVES ITS STAMP WHILE ITS SESSION LIVES (issue #1975):
 the session cannot swap the credential in its environment, so the proxy does
 the renewing. An fcp1. minted with --wrap PID stays good past its exp while that
 process (the session's wrapper) lives and the sid is not revoked, at most
-FLEET_CRED_PROXY_RENEW_MAX_SECS (7 days) past it. A hub pass (fcp-h1.) is
+FLEET_CRED_PROXY_RENEW_MAX_SECS (7 days) past it. A hub pass (fcp-h1. / fcp-h2.) is
 renewed with the hub (POST /v1/fleet/session-cred/renew, the node token) once
 it reaches its renew point — 20 % of its life left (#3561; a pass lives 4h) — on
 the session's next request or the background tick, whichever comes first; the
@@ -183,6 +183,13 @@ class Server(ThreadingHTTPServer):
         self.server_name, self.server_port = self.server_address[:2]
 OAUTH_BETA = "oauth-2025-04-20"
 LOCAL_TAG, HUB_TAG, NODE_TAG = "fcp1", "fcp-h1", "fcpn1"
+# a hub pass is fcp-h1 (HMAC, only the hub verifies it) or fcp-h2 (Ed25519 —
+# the relay and the cluster proxy verify it themselves, issue #3698)
+HUB_TAGS = (HUB_TAG, "fcp-h2")
+
+
+def is_hub_pass(tok):
+    return tok.split(".", 1)[0] in HUB_TAGS and tok.count(".") == 2
 # how long past its newest expiry the hub still renews a never-revoked pass —
 # SessionCredRenewGrace in tokenledger/internal/api/fleet_session_cred.go (#2012)
 HUB_RENEW_GRACE = 7 * 86400
@@ -594,7 +601,7 @@ def pid_alive(pid):
 
 
 def hub_claims(tok):
-    """The claims of a hub pass (fcp-h1.<claims>.<sig>), read, NOT verified —
+    """The claims of a hub pass (fcp-h1|fcp-h2.<claims>.<sig>), read, NOT verified —
     only the hub can; the proxy needs the id and the clock."""
     try:
         c = json.loads(b64d(tok.split(".")[1]))
@@ -678,7 +685,7 @@ class HubPasses:
                     return None
                 raise RuntimeError("hub answered %d" % e.code)
             nc = hub_claims(new)
-            if not new.startswith(HUB_TAG + ".") or not nc or nc["id"] != pid:
+            if not is_hub_pass(new) or not nc or nc["id"] != pid:
                 raise RuntimeError("the hub's answer carries no pass")
             with self.lock:
                 self.held[pid] = new; self.save()
@@ -1200,7 +1207,7 @@ class Proxy(BaseHTTPRequestHandler):
         """-> the tenant a request is for (None: the shared proxy cannot tell)."""
         if cls.fixed or not cls.tenants:
             return cls.fixed or cls.T
-        if tok.startswith(HUB_TAG + "."):
+        if is_hub_pass(tok):
             c = hub_claims(tok)
             for t in cls.tenants.values():
                 if c and c["id"] in t.passes.held:
@@ -1258,10 +1265,10 @@ class Proxy(BaseHTTPRequestHandler):
         if not self.t:
             # the shared proxy (issue #2217): the credential names no login it serves
             why = ("hub pass not registered here (fleet-session-cred.sh mint registers it)"
-                   if tok.startswith(HUB_TAG + ".") else "session credential names no login served here")
+                   if is_hub_pass(tok) else "session credential names no login served here")
             self.log(ev="deny", path=path.split("?")[0], why=why, hdrs=seen)
             return self.fail(401, why)
-        if tok.startswith(HUB_TAG + "."):
+        if is_hub_pass(tok):
             # a hub-issued session credential: only the cluster can check it
             sid = "h-" + hashlib.sha256(tok.encode()).hexdigest()[:10]
             return self.send(["central"], provider, path, body, self.passes.best(tok), sid, "-", seen, t0)
@@ -1971,8 +1978,8 @@ def ctl_handle(req, t):
         return {"ok": True}
     if op == "attach":
         sid, hc = req.get("sid") or "", (req.get("cred") or "").strip()
-        if not sid or not hc.startswith(HUB_TAG + "."):
-            return {"ok": False, "err": "attach: --sid and a %s. credential on stdin" % HUB_TAG}
+        if not sid or not is_hub_pass(hc):
+            return {"ok": False, "err": "attach: --sid and a %s. credential on stdin" % "./".join(HUB_TAGS)}
         with Proxy.lock:
             t.hubcreds[sid] = hc
         t.log(ev="attach", sid=sid)
@@ -2161,8 +2168,8 @@ def ctl_handle(req, t):
         # the shared proxy (issue #2217): a session's hub pass is filed under its
         # login here, so a request carrying it is that login's (renewal, log)
         hc = (req.get("cred") or "").strip()
-        if not hc.startswith(HUB_TAG + ".") or not hub_claims(hc):
-            return {"ok": False, "err": "pass: a %s. credential on stdin" % HUB_TAG}
+        if not is_hub_pass(hc) or not hub_claims(hc):
+            return {"ok": False, "err": "pass: a %s. credential on stdin" % "./".join(HUB_TAGS)}
         t.passes.best(hc)
         t.log(ev="pass", pass_id=hub_claims(hc)["id"])
         return {"ok": True}
