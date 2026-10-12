@@ -1839,7 +1839,7 @@ EOF_PEER
   exit 0
   ;;
 shell-here)
-  wid="${1:-}"; dir=''
+  wid="${1:-}"; dir=''; w=''; sock=''
   if [ -n "$wid" ] && [ "$wid" != - ]; then
     loc=$(fleet_worker_locate "wid:${wid#wid:}" 2>/dev/null)
     case "$loc" in local\ *) ;; *) note "${wid#*/} is not live on $(hostname -s)"; exit 3 ;; esac
@@ -1867,7 +1867,15 @@ shell-here)
   [ -n "$dir" ] && [ -d "$dir" ] || dir=$HOME
   cd "$dir" 2>/dev/null || cd "$HOME" 2>/dev/null || :
   unset TMUX TMUX_PANE FLEET_WORKER_CRED FLEET_WORKER_ASSERT
-  export PATH="$BIN:$HOME/.local/bin:$PATH"
+  # `codex` / `claude` here (issue #3463): the session's own agent is said back to
+  # it (bin/fleet-session-shell-agent.sh) — a bare one in this shell has no fleet
+  # login — anything else passes through.
+  if [ -n "${w:-}" ]; then
+    export FLEET_SESSION_SHELL_WIN="$w" FLEET_SESSION_SHELL_SOCK="$sock"
+    export PATH="$BIN/session-shell:$BIN:$HOME/.local/bin:$PATH"
+  else
+    export PATH="$BIN:$HOME/.local/bin:$PATH"
+  fi
   sh_=${FLEET_SESSION_SHELL_CMD:-${SHELL:-/bin/bash}}; [ -x "$sh_" ] || sh_=/bin/bash   # _CMD: the selftests
   exec "$sh_" -l
   ;;

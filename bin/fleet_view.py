@@ -1628,6 +1628,10 @@ def shell_pane(vid, prog, m, l, wid):
     d = os.path.expanduser("~")
     if prog == "here":
         d = agent_dir(wid) or d
+        # `codex` / `claude` here (issue #3463): the session's own agent is said
+        # back to it (fleet-session-shell-agent.sh) — a bare one has no fleet login
+        env["FLEET_SESSION_SHELL_WIN"] = wid
+        env["PATH"] = bin_dir + "/session-shell:" + path
     sh = login_shell()
     pid = os.fork()
     if pid == 0:
