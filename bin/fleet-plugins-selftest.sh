@@ -459,7 +459,7 @@ for sk in mac-node-prep mac-node-enroll login-lifecycle ack-linux-node sg-relay-
   heads=$(grep -E '^## ' "$f" | sed 's/^## //' | paste -sd'|' -)
   case "$heads" in
     什么时候用\|先查什么\|步骤\|怎么验收\|怎么回滚*) ok ;;
-    *) fail "K $sk: headings are «$heads», want 什么时候用 · 先查什么 · 步骤 · 怎么验收 · 怎么回滚" ;;
+    *) fail "K $sk: headings are «${heads}», want 什么时候用 · 先查什么 · 步骤 · 怎么验收 · 怎么回滚" ;;
   esac
   # and a trigger case for `claude plugin eval` (run on an admin's own signed-in computer)
   grep -q "tool: Skill" "$FI/evals/$sk-triggers/graders/skill-fired.md" 2>/dev/null \
