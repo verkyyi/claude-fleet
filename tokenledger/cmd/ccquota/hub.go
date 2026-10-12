@@ -753,6 +753,10 @@ func runHub(args []string) error {
 	if err != nil {
 		return err
 	}
+	wx, mailIn, err := otherWaysFromEnv(os.Getenv)
+	if err != nil {
+		return err
+	}
 	// CCQUOTA_READONLY=1 (claude-fleet#2122): hold the database still while
 	// `ccquota db migrate` copies it. Last of the startup writes above.
 	readOnly := os.Getenv("CCQUOTA_READONLY") == "1"
@@ -767,7 +771,11 @@ func runHub(args []string) error {
 		Store:  st,
 		GitHub: gh,
 		// CCQUOTA_ADMINS (claude-fleet#3603): admins by principal or address.
-		Admins:              splitList(os.Getenv("CCQUOTA_ADMINS")),
+		Admins: splitList(os.Getenv("CCQUOTA_ADMINS")),
+		// The ways in that need no GitHub (claude-fleet#3604).
+		WeChat:              wx,
+		Email:               mailIn,
+		SessionSecret:       os.Getenv("CCQUOTA_SESSION_SECRET"),
 		Pricing:             table,
 		ViewerToken:         *token,
 		LimitsPollIntervalS: *pollInterval,
@@ -1058,6 +1066,46 @@ func githubAuthFromEnv(getenv func(string) string) (*api.GitHubAuth, error) {
 	// token endpoints never move, so no sign-in can be completed against it.
 	return &api.GitHubAuth{ClientID: id, ClientSecret: secret, Admins: admins,
 		APIBase: strings.TrimSpace(getenv("CCQUOTA_GITHUB_API_BASE"))}, nil
+}
+
+// otherWaysFromEnv wires the two ways in that need no GitHub
+// (claude-fleet#3604, EPIC #3570 C11): WeChat — the open platform's website
+// app (CCQUOTA_WECHAT_WEB_APPID / _SECRET) and the service account
+// (CCQUOTA_WECHAT_MP_APPID / _SECRET), either or both — and a mail
+// (CCQUOTA_SMTP_URL, CCQUOTA_SMTP_FROM). An unset way is not offered; a half
+// set WeChat pair stops the start, naming the setting, never its value; a
+// mail setting that cannot be used is logged and left off.
+func otherWaysFromEnv(getenv func(string) string) (*api.WeChatAuth, *api.EmailAuth, error) {
+	var wx *api.WeChatAuth
+	pair := func(id, secret string) (string, string, error) {
+		a, b := strings.TrimSpace(getenv(id)), strings.TrimSpace(getenv(secret))
+		if (a == "") != (b == "") {
+			return "", "", fmt.Errorf("WeChat sign-in is half configured: %s and %s are both required", id, secret)
+		}
+		return a, b, nil
+	}
+	webID, webSecret, err := pair("CCQUOTA_WECHAT_WEB_APPID", "CCQUOTA_WECHAT_WEB_SECRET")
+	if err != nil {
+		return nil, nil, err
+	}
+	mpID, mpSecret, err := pair("CCQUOTA_WECHAT_MP_APPID", "CCQUOTA_WECHAT_MP_SECRET")
+	if err != nil {
+		return nil, nil, err
+	}
+	if webID != "" || mpID != "" {
+		wx = &api.WeChatAuth{WebAppID: webID, WebSecret: webSecret, MPAppID: mpID, MPSecret: mpSecret}
+		log.Printf("wechat sign-in: on (scan on a computer: %v, inside WeChat: %v)", webID != "", mpID != "")
+	}
+	mailIn, err := api.NewEmailAuth(getenv("CCQUOTA_SMTP_URL"), getenv("CCQUOTA_SMTP_FROM"))
+	if err != nil {
+		// Not a refusal to start: the other ways in still work.
+		log.Printf("WARN mail sign-in: off — %v", err)
+		mailIn = nil
+	}
+	if mailIn != nil {
+		log.Printf("mail sign-in: on, sent through %s as %s", mailIn.SMTPHost(), mailIn.From)
+	}
+	return wx, mailIn, nil
 }
 
 // githubOAuthVia wires where the GitHub sign-in trades its code for a token

@@ -33,7 +33,7 @@ func (s *Server) InstallCommand(r *http.Request) string {
 }
 
 func (s *Server) installReady() bool {
-	return s.SSHCA != nil && s.GitHub.ready()
+	return s.SSHCA != nil && s.signinOn()
 }
 
 // handleInstall serves GET /install: the installer, hub URL filled in.

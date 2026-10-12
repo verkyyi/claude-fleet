@@ -82,6 +82,9 @@ type HubFacts struct {
 	// how many admin names the deploy gives it. Never the client values.
 	GitHub       bool `json:"github"`
 	GitHubAdmins int  `json:"github_admins"`
+	// WeChat / Email: the ways in that need no GitHub (claude-fleet#3604).
+	WeChat bool `json:"wechat"`
+	Email  bool `json:"email"`
 	// ViewerAuth is "token" or "off (--no-auth)". The token itself never
 	// appears, here or anywhere else this package writes.
 	ViewerAuth   string         `json:"viewer_auth"`
@@ -141,6 +144,7 @@ func (s *Server) hubFacts() HubFacts {
 	if s.GitHub.ready() {
 		f.GitHub, f.GitHubAdmins = true, len(s.GitHub.Admins)
 	}
+	f.WeChat, f.Email = s.WeChat.ready(), s.Email.ready()
 	// Best-effort. A hub whose database hiccups should still be able to tell a
 	// reader where the doors are; a zero count is reported as what it is by
 	// the note beside it, never dressed up as "none".
@@ -207,6 +211,27 @@ func (s *Server) doors(f HubFacts) []Door {
 			Note: pick(f.GitHub,
 				"Here: wired up, "+plural(f.GitHubAdmins, "admin name", "admin names")+" from the deploy. Signed-out browsers are sent to /signin.",
 				"Here: NOT configured, so /signin answers 404."),
+		},
+		{
+			ID: "wechat", Name: "Sign in with WeChat", Via: "http",
+			Where:      []string{AppPrefix + "/signin", "/auth/wechat/start", "/auth/wechat/callback", "/auth/wechat/bind"},
+			Credential: "a WeChat whose unionid is one of a listed person's ways in",
+			Can: "Exchange a WeChat scan (the open platform's website app) or, inside WeChat, the service " +
+				"account's authorisation for this hub's own session cookie. WeChat is asked only who you are; " +
+				"its token is used for two calls and dropped. A WeChat no account carries opens nothing by " +
+				"itself: the person binds it to the account they are signed in to, or comes in on an invite.",
+			State: pick(f.WeChat, "open", "off"),
+			Note:  pick(f.WeChat, "Here: wired up.", "Here: NOT configured (CCQUOTA_WECHAT_*), so /auth/wechat/* answers 404."),
+		},
+		{
+			ID: "email", Name: "Sign in by mail", Via: "http",
+			Where:      []string{AppPrefix + "/signin", "/auth/email/start", "/auth/email/link", "/auth/email/code"},
+			Credential: "a link or six digits mailed to an address that is a listed person's way in",
+			Can: "Exchange a mailed link (in the browser that asked) or its six digits for this hub's own " +
+				"session cookie. Only hashes are kept; 15 minutes, used once, five wrong codes void it; an " +
+				"unknown address is answered the same and mailed nothing.",
+			State: pick(f.Email, "open", "off"),
+			Note:  pick(f.Email, "Here: wired up.", "Here: NOT configured (CCQUOTA_SMTP_URL), so /auth/email/* answers 404."),
 		},
 		{
 			ID: "api", Name: "The query API", Via: "http",

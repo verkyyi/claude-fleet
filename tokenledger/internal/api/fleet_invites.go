@@ -78,9 +78,9 @@ func inviteHash(code string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func setInviteCookie(w http.ResponseWriter, r *http.Request, code string) {
+func (s *Server) setInviteCookie(w http.ResponseWriter, r *http.Request, code string) {
 	http.SetCookie(w, &http.Cookie{
-		Name: inviteCookie, Value: code, Path: githubFlowPath,
+		Name: inviteCookie, Value: code, Path: s.inviteCookiePath(),
 		HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: isHTTPS(r),
 		MaxAge: int(inviteCookieTTL.Seconds()),
 	})
@@ -88,12 +88,15 @@ func setInviteCookie(w http.ResponseWriter, r *http.Request, code string) {
 
 // takeInviteCookie is the invite this sign-in carries, "" for none; the
 // cookie is spent either way.
-func takeInviteCookie(w http.ResponseWriter, r *http.Request) string {
+func (s *Server) takeInviteCookie(w http.ResponseWriter, r *http.Request) string {
 	c, err := r.Cookie(inviteCookie)
 	if err != nil {
 		return ""
 	}
-	clearCookie(w, r, inviteCookie, githubFlowPath)
+	clearCookie(w, r, inviteCookie, s.inviteCookiePath())
+	if s.inviteCookiePath() != githubFlowPath {
+		clearCookie(w, r, inviteCookie, githubFlowPath) // one set before WeChat or mail was on
+	}
 	if !validInviteCode(c.Value) {
 		return ""
 	}
@@ -194,19 +197,19 @@ func (s *Server) loginRefusedHop(w http.ResponseWriter, r *http.Request, why, lo
 	}
 	http.SetCookie(w, &http.Cookie{Name: loginCookie, Value: "", Path: "/", MaxAge: -1})
 	body, _ := json.Marshal(loginRefused{Code: code, Why: why, Login: login, Exp: now.Add(2 * time.Minute).Unix()})
-	return LoginRefusedPath + "?r=" + signBlob(body, s.GitHub.sessionKey())
+	return LoginRefusedPath + "?r=" + signBlob(body, s.sessionKey())
 }
 
 // handleLoginRefused marks the pending login refused — its terminal prints
 // the same sentence the page shows and stops — and answers with the page.
 func (s *Server) handleLoginRefused(w http.ResponseWriter, r *http.Request) {
-	if !s.GitHub.ready() || s.SSHCA == nil {
+	if !s.signinOn() || s.SSHCA == nil {
 		http.NotFound(w, r)
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	var note loginRefused
-	if raw, ok := verifyBlob(r.URL.Query().Get("r"), s.GitHub.sessionKey()); ok {
+	if raw, ok := verifyBlob(r.URL.Query().Get("r"), s.sessionKey()); ok {
 		_ = json.Unmarshal(raw, &note)
 	}
 	now := time.Now()
@@ -354,7 +357,7 @@ func (s *Server) handleInviteInstall(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusMethodNotAllowed, "GET")
 		return
 	}
-	if !s.GitHub.ready() || s.Store == nil {
+	if !s.signinOn() || s.Store == nil {
 		http.NotFound(w, r)
 		return
 	}
@@ -375,7 +378,7 @@ func (s *Server) handleInviteInstall(w http.ResponseWriter, r *http.Request) {
 	}
 	if wantsHTML(r) {
 		if reason == "active" {
-			setInviteCookie(w, r, code)
+			s.setInviteCookie(w, r, code)
 			http.Redirect(w, r, appURL("/signin"), http.StatusFound)
 			return
 		}

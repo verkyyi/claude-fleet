@@ -298,7 +298,21 @@ func (s *Server) handleMeIdentities(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if roleOf(r.Context()) != roleAdmin {
-			httpError(w, http.StatusForbidden, "an address is added by signing in with it")
+			if !s.Email.ready() {
+				httpError(w, http.StatusForbidden, "an address is added by signing in with it")
+				return
+			}
+			// Anyone else proves it (claude-fleet#3604): a mail to it, whose
+			// link — opened in this browser — hangs it on them (emailFinish).
+			// The answer is the same whoever the address belongs to.
+			switch err := s.emailStart(w, r, addr, now); {
+			case errors.Is(err, errEmailSlow):
+				httpError(w, http.StatusTooManyRequests, "a mail went to this address a moment ago — wait a minute")
+			case err != nil:
+				httpError(w, http.StatusInternalServerError, "could not send the mail")
+			default:
+				writeJSON(w, http.StatusAccepted, map[string]any{"mail_sent": true})
+			}
 			return
 		}
 		err := s.Store.AddHubIdentity(store.HubIdentity{Kind: store.IdentityEmail, Subject: addr, PrincipalID: pid,
@@ -360,7 +374,14 @@ func (s *Server) handleMeIdentities(w http.ResponseWriter, r *http.Request) {
 	if !hasGH && s.GitHub.ready() {
 		out.CanAdd = append(out.CanAdd, store.IdentityGitHub)
 	}
-	if roleOf(r.Context()) == roleAdmin {
+	hasWX := false
+	for _, i := range ids {
+		hasWX = hasWX || i.Kind == store.IdentityWeChat
+	}
+	if !hasWX && s.WeChat.ready() {
+		out.CanAdd = append([]string{store.IdentityWeChat}, out.CanAdd...)
+	}
+	if roleOf(r.Context()) == roleAdmin || s.Email.ready() {
 		out.CanAdd = append(out.CanAdd, store.IdentityEmail)
 	}
 	writeJSON(w, http.StatusOK, out)

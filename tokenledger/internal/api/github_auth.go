@@ -231,7 +231,7 @@ func roleOf(ctx context.Context) string {
 // personSession is the signed-in person behind r, if its cookie verifies.
 // It says nothing about the list; viewerOnly asks personRole.
 func (s *Server) personSession(r *http.Request) (*authz.Session, string, bool) {
-	if !s.GitHub.ready() {
+	if !s.signinOn() {
 		return nil, "", false
 	}
 	c, err := r.Cookie(authz.CookieName)
@@ -247,10 +247,10 @@ func (s *Server) personSession(r *http.Request) (*authz.Session, string, bool) {
 // (claude-fleet#3603). A cookie from before says Sub "github" and UID
 // gh:<id> — exactly a GitHub sign-in's today, so it reads as one.
 func (s *Server) personSessionValue(v string) (*authz.Session, string, bool) {
-	if !s.GitHub.ready() || v == "" {
+	if !s.signinOn() || v == "" {
 		return nil, "", false
 	}
-	sess, err := authz.VerifySession(v, s.GitHub.sessionKey(), time.Now())
+	sess, err := authz.VerifySession(v, s.sessionKey(), time.Now())
 	if err != nil || !store.KnownIdentityKind(sess.Sub) || !isPerson(sess.UID) {
 		return nil, "", false
 	}
@@ -290,19 +290,19 @@ func (s *Server) personAdmit(w http.ResponseWriter, r *http.Request) (ctx contex
 func (s *Server) personCookie(r *http.Request, kind, pid, name, role string, now time.Time) *http.Cookie {
 	return &http.Cookie{
 		Name:  authz.CookieName,
-		Value: authz.SignRole(kind, pid, name, role, s.GitHub.sessionKey(), now, s.GitHub.ttl()),
+		Value: authz.SignRole(kind, pid, name, role, s.sessionKey(), now, s.sessionTTL()),
 		Path:  "/",
 		// Host-only: no Domain.
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 		Secure:   isHTTPS(r),
-		MaxAge:   int(s.GitHub.ttl().Seconds()),
+		MaxAge:   int(s.sessionTTL().Seconds()),
 	}
 }
 
 // handleSignin is the sign-in page. Public: it is the way in.
 func (s *Server) handleSignin(w http.ResponseWriter, r *http.Request) {
-	if !s.GitHub.ready() {
+	if !s.signinOn() {
 		http.NotFound(w, r)
 		return
 	}
@@ -317,6 +317,22 @@ func (s *Server) handleSignin(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r, AppPrefix, http.StatusFound)
 			return
 		}
+	}
+	if s.otherWaysOn() {
+		e, step := r.URL.Query().Get("e"), r.URL.Query().Get("step")
+		// WeChat's own browser signs in by the service account, no scan:
+		// straight there, unless the page has something to say.
+		if inWeChat(r) && s.WeChat.mpReady() && e == "" && step == "" {
+			http.Redirect(w, r, "/auth/wechat/start", http.StatusFound)
+			return
+		}
+		loc := s.pageLocale(w, r)
+		note := ""
+		if signinNotes[e] || signinWayNotes[e] {
+			note = pageT(loc, "signin.note."+e)
+		}
+		s.renderSigninWays(w, r, loc, note)
+		return
 	}
 	loc := s.pageLocale(w, r)
 	page := signinPage{pageView: newPageView(r, loc)}
@@ -440,7 +456,7 @@ func (s *Server) handleGitHubCallback(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	invite := takeInviteCookie(w, r)
+	invite := s.takeInviteCookie(w, r)
 	principal, role, refusal, err := s.githubAdmitSignIn(id, login, now, invite)
 	if err != nil {
 		log.Printf("github sign-in of %s (%d): %v", login, id, err)
@@ -891,6 +907,9 @@ type denyPage struct {
 	Login string
 	// Ask is the line a person nobody invited sends an admin (#2261).
 	Ask string
+	// Heading replaces the GitHub heading for a way that is not GitHub
+	// (claude-fleet#3604).
+	Heading string
 }
 
 // The two pages follow the prototype's sign-in and "can't use this hub"
@@ -954,7 +973,7 @@ var denyTmpl = template.Must(template.New("deny").Funcs(pageFuncs(i18n.EN)).Pars
 <title>{{t "deny.title"}}</title></head><body><div class="pub">` + authNav + `
 <div class="center"><main class="card">
 <div class="big bad"><svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/></svg></div>
-<div style="display:grid;gap:6px"><h1>{{t "deny.h1"}}</h1>
+<div style="display:grid;gap:6px"><h1>{{if .Heading}}{{.Heading}}{{else}}{{t "deny.h1"}}{{end}}</h1>
 <p class="lead">{{if eq .Why "renamed"}}{{tb "deny.renamed" .Login}}{{else if eq .Why "removed"}}{{tb "deny.removed" .Login}}{{else if eq .Why "invite-expired"}}{{tb "deny.invite.expired" .Login}}{{else if eq .Why "invite-used"}}{{tb "deny.invite.used" .Login}}{{else if eq .Why "invite-revoked"}}{{tb "deny.invite.revoked" .Login}}{{else if eq .Why "invite-unknown"}}{{tb "deny.invite.unknown" .Login}}{{else if eq .Why "invite-other-user"}}{{tb "deny.invite.other-user" .Login}}{{else}}{{tb "deny.notlisted" .Login}}{{end}}</p></div>
 {{if .Ask}}<p class="ask"><code>{{.Ask}}</code></p>{{end}}
 <div class="row"><a class="btn" href="/app/signin">{{t "deny.another"}}</a><a class="btn ghost" href="/app">{{t "deny.back"}}</a></div>

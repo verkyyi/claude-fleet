@@ -44,6 +44,10 @@
 #   account-gh-only-check                           tokenledger/internal/api person.go (isPerson, personRow,
 #                                                   personRole, admitPerson) + internal/store hub_users.go
 #                                                   (hub_identities, migration 2); go test, when a toolchain is here
+#   wechat-first-scan-autocreate                    tokenledger/internal/api wechat_auth.go (handleWeChatCallback,
+#                                                   handleWeChatBind) + signin_ways.go; go test, when a toolchain is here
+#   email-link-replay                               tokenledger/internal/api email_auth.go (handleEmailLink /
+#                                                   handleEmailCode) + internal/store hub_signin.go; go test, when here
 #   invite-expired                                  tokenledger/internal/api fleet_invites.go + github_auth.go
 #                                                   (admitInvite, denyText; go test, when a toolchain is here)
 #   drill-person-no-machine                         tokenledger/internal/api fleet_opening.go + fleet_drill.go
@@ -2007,6 +2011,50 @@ drill_account_gh_only_check() {
       *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
     esac
   fi
+  SECS=$(since "$t0")
+}
+
+# c11_go_tests <file> <tests…> — the shared half of the C11 drills: every
+# named test is in <file>, and (with a toolchain) go test runs them green.
+c11_go_tests() {
+  local file="$1" t out rc tl="$ROOT/tokenledger/internal"; shift
+  for t in "$@"; do
+    grep -q "^func $t(" "$tl/api/$file" 2>/dev/null || { WHY="the hub half's test $t is not in internal/api/$file"; return 1; }
+  done
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run "^($(printf '%s' "$*" | tr ' ' '|'))\$" ./internal/api 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
+      0:*) GO_RAN=1 ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
+      *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  fi
+}
+
+drill_wechat_first_scan_autocreate() {
+  CAP=120; local t0 tl="$ROOT/tokenledger/internal"; GO_RAN=0
+  t0=$(now)
+  # The first scan's branch hands off to the binding page and nothing else.
+  grep -q 'http.Redirect(w, r, "/auth/wechat/bind", http.StatusFound)' "$tl/api/wechat_auth.go" 2>/dev/null \
+    || { WHY="the first scan no longer goes to the binding page (wechat_auth.go)"; return 1; }
+  c11_go_tests signin_ways_test.go TestWeChatFirstScanOpensNoAccount TestWeChatTwoRoadsOnePerson TestWeChatStateReplayRefused || return 1
+  WHAT='第一次扫码进绑定页：不登录、不开号；按「挂上」或「按邀请进入」才动（测试按名核对在，Go 门跑它们）'
+  [ "$GO_RAN" = 1 ] && WHAT='第一次扫码不开号、只在按下时绑到已登录的人或邀请；两条路同一 unionid 同一人；state 重放被拒（go test 三条）'
+  SECS=$(since "$t0")
+}
+
+drill_email_link_replay() {
+  CAP=120; local t0 tl="$ROOT/tokenledger/internal"; GO_RAN=0
+  t0=$(now)
+  grep -q 'UseSigninCode(c.ID, now)' "$tl/api/email_auth.go" 2>/dev/null \
+    || { WHY="the mail's link / code is no longer spent once (email_auth.go)"; return 1; }
+  grep -q 'CREATE TABLE IF NOT EXISTS hub_signin_codes' "$tl/store/schema.sql" 2>/dev/null \
+    || { WHY="the mail codes are not kept where both replicas see them (hub_signin_codes)"; return 1; }
+  c11_go_tests signin_ways_test.go TestEmailSignIn TestEmailCode TestEmailInviteAndAdd || return 1
+  WHAT='登录邮件的链接只在发起的浏览器里用一次；码猜 5 次即废；未知邮箱答复相同（测试按名核对在，Go 门跑它们）'
+  [ "$GO_RAN" = 1 ] && WHAT='链接重放被拒、另一台设备打不开、码猜 5 次即废、未知邮箱同答同限流、邀请与加邮箱（go test 三条）'
   SECS=$(since "$t0")
 }
 

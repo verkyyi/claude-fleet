@@ -865,6 +865,40 @@ admins the GitHub list cannot: comma-separated principals or addresses, beside
 `CCQUOTA_GITHUB_ADMINS`. In the code "is this a person" is `isPerson` and
 nothing else (`TestNoGHPrefixOutsideIdentity`, BREAK-IT `account-gh-only-check`).
 
+**WeChat first, a mail as the spare, GitHub kept** (claude-fleet#3604). `/signin`
+offers every way that is configured, always in this order:
+
+- **WeChat** — on a computer, the open platform's *website app* QR code
+  (`CCQUOTA_WECHAT_WEB_APPID` / `_SECRET`, `snsapi_login`); inside WeChat's own
+  browser, the company *service account*'s web authorisation with nothing to scan
+  (`CCQUOTA_WECHAT_MP_APPID` / `_SECRET`, `snsapi_userinfo`; `/signin` there goes
+  straight to it). Both are bound under one open-platform account, so both give
+  the same **unionid** — the identity (`wechat`, subject the unionid). A WeChat no
+  account carries opens nothing by itself: the first scan lands on
+  `/auth/wechat/bind`, which hangs it on the account the browser is signed in to,
+  or lets the person in on the invite the browser carries — only when pressed
+  (BREAK-IT `wechat-first-scan-autocreate`). The state is one use across both
+  replicas (`hub_signin_spent`). Only the service account set (the website app
+  still in WeChat's review) ⇒ WeChat works inside WeChat, and a computer is told so.
+- **A mail** — `CCQUOTA_SMTP_URL` (`smtp://user:pass@host:587` with STARTTLS, or
+  `smtps://…:465`) and `CCQUOTA_SMTP_FROM`; today Amazon SES's SMTP interface, and
+  another provider is another URL. `POST /auth/email/start` mails a link and six
+  digits; `GET /auth/email/link?t=` works only in the browser that asked, and on
+  another device the person types the digits into that browser
+  (`POST /auth/email/code`). Hashes only (`hub_signin_codes`), 15 minutes, used
+  once, five wrong codes void it, one mail a minute and five an hour per address;
+  an unknown address is answered and limited the same and mailed nothing
+  (BREAK-IT `email-link-replay`). A signed-in person adds an address on 配置 ·
+  登录方式 by opening its mail.
+- **GitHub**, as above.
+
+With neither WeChat nor a mail configured, `/signin` is GitHub's page byte for
+byte. A hub with no GitHub at all signs its sessions with `CCQUOTA_SESSION_SECRET`
+(else the first other way's own secret). All of these live in Secret `ccquota`
+only (`deploy/k8s/overlays/prod/deployment-env.yaml` names the keys); a WeChat id
+without its secret refuses to start, a mail setting that cannot be used is logged
+and left off.
+
 The settings that used to be variables are in the database too, read through
 `Server.setting(key)` (the stored value, else the default) and changed with `fleet hub set <key> <value>`
 (`PUT /v1/fleet/settings`); `fleet hub settings` lists what applies and where

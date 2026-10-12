@@ -492,6 +492,35 @@ CREATE TABLE IF NOT EXISTS hub_identities (
 );
 CREATE INDEX IF NOT EXISTS idx_hub_identities_principal ON hub_identities(principal_id);
 
+-- Sign-in by mail (claude-fleet#3604, EPIC #3570 C11): one row per mail
+-- asked for — sent or not, so a known address and an unknown one leave the
+-- same trace and hit the same limits. Only hashes: the link's token, the
+-- six-digit code (salted with id), and the starting browser's nonce. A row
+-- lives 15 minutes and is used once; five wrong codes void it.
+CREATE TABLE IF NOT EXISTS hub_signin_codes (
+  id           TEXT PRIMARY KEY,
+  kind         TEXT NOT NULL,
+  subject      TEXT NOT NULL,
+  browser_hash TEXT NOT NULL,
+  link_hash    TEXT NOT NULL,
+  code_hash    TEXT NOT NULL,
+  tries        INTEGER NOT NULL DEFAULT 0,
+  created_at   INTEGER NOT NULL,
+  expires_at   INTEGER NOT NULL,
+  used_at      INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_hub_signin_codes_subject ON hub_signin_codes(kind, subject, created_at);
+CREATE INDEX IF NOT EXISTS idx_hub_signin_codes_browser ON hub_signin_codes(browser_hash);
+CREATE INDEX IF NOT EXISTS idx_hub_signin_codes_link ON hub_signin_codes(link_hash);
+
+-- Spent one-use values of a sign-in (claude-fleet#3604): a WeChat state, a
+-- first-scan binding. Two replicas share it, so a replayed callback is
+-- refused on either. A row is kept until it would have expired anyway.
+CREATE TABLE IF NOT EXISTS hub_signin_spent (
+  hash       TEXT PRIMARY KEY,
+  expires_at INTEGER NOT NULL
+);
+
 -- The pin (claude-fleet#1984): the first time the hub learns which GitHub ID
 -- holds a username, it keeps the pair, and from then on the name means that ID
 -- only. A sign-in under a pinned name with another ID is refused and audited.

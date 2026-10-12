@@ -129,8 +129,9 @@ function loginsPanel(v) {
     `<span>${esc(t('ui.logins.verified', { t: relTime(i.verified_at) }))}</span></div>`).join('');
   const add = (v.can_add || []).map((k) => k === 'github'
     ? `<a class="btn sm" href="/auth/github/start?link=1">${ic('plus')}${esc(t('ui.logins.addGitHub'))}</a>`
-    : k === 'email' ? `<button class="btn sm" id="add-email">${ic('plus')}${esc(t('ui.logins.addEmail'))}</button>` : '').join('');
-  const note = { taken: t('ui.logins.taken'), github: t('ui.logins.ghFail') }[new URLSearchParams(location.search).get('e')];
+    : k === 'email' ? `<button class="btn sm" id="add-email">${ic('plus')}${esc(t('ui.logins.addEmail'))}</button>`
+      : k === 'wechat' ? `<a class="btn sm" href="/auth/wechat/start?link=1">${ic('plus')}${esc(t('ui.logins.addWeChat'))}</a>` : '').join('');
+  const note = { taken: t('ui.logins.taken'), github: t('ui.logins.ghFail'), 'wechat-taken': t('ui.logins.wxTaken'), wechat: t('ui.logins.wxFail') }[new URLSearchParams(location.search).get('e')];
   return `<div class="panel" id="logins"><div class="panel-h"><div><h3>${esc(t('ui.logins.title'))}</h3><span class="sub">${esc(t('ui.logins.sub'))}</span></div>` +
     `<div class="toolbar">${add}</div></div>` + (note ? `<div class="ghostrow err">${ic('alert')} ${esc(note)}</div>` : '') +
     `<div class="panel-b"><div class="timeline">${rows}</div></div></div>`;
@@ -143,8 +144,8 @@ function wireLogins(ctx) {
       const addr = window.prompt(t('ui.logins.emailPrompt'), '');
       if (!addr || !addr.trim()) return;
       try {
-        await ctx.api('/v1/me/identities', { method: 'POST', json: { kind: 'email', subject: addr.trim() } });
-        ctx.toast(t('ui.logins.added', { x: addr.trim() }));
+        const r = await ctx.api('/v1/me/identities', { method: 'POST', json: { kind: 'email', subject: addr.trim() } });
+        ctx.toast(t(r && r.mail_sent ? 'ui.logins.mailSent' : 'ui.logins.added', { x: addr.trim() }));
       } catch (e) { ctx.toast(t('ui.logins.fail', { e: e.message })); }
       await ctx.refresh();
     };

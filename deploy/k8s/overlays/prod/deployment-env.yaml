@@ -41,6 +41,51 @@ spec:
                   name: ccquota
                   key: github-client-secret
                   optional: true
+            # The ways in that need no GitHub (#3604, EPIC #3570 C11): WeChat —
+            # the open platform's website app (scan on a computer) and the
+            # service account (inside WeChat) — and a mail through Amazon SES's
+            # SMTP interface (smtp://<SES SMTP user>:<password>@email-smtp.<region>.amazonaws.com:587).
+            # Every value is a key of Secret `ccquota`, put there by the
+            # orchestrator; all optional — a way whose keys are missing is not
+            # offered, and with none /signin stays GitHub's page byte for byte.
+            # A WeChat id without its secret refuses to start; a mail URL with no
+            # sender is logged and left off.
+            - name: CCQUOTA_WECHAT_WEB_APPID
+              valueFrom:
+                secretKeyRef:
+                  name: ccquota
+                  key: wechat-web-appid
+                  optional: true
+            - name: CCQUOTA_WECHAT_WEB_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: ccquota
+                  key: wechat-web-secret
+                  optional: true
+            - name: CCQUOTA_WECHAT_MP_APPID
+              valueFrom:
+                secretKeyRef:
+                  name: ccquota
+                  key: wechat-mp-appid
+                  optional: true
+            - name: CCQUOTA_WECHAT_MP_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: ccquota
+                  key: wechat-mp-secret
+                  optional: true
+            - name: CCQUOTA_SMTP_URL
+              valueFrom:
+                secretKeyRef:
+                  name: ccquota
+                  key: smtp-url
+                  optional: true
+            - name: CCQUOTA_SMTP_FROM
+              valueFrom:
+                secretKeyRef:
+                  name: ccquota
+                  key: smtp-from
+                  optional: true
             # The cluster credential proxy's token (#1973, ../../credproxy):
             # admits `ccquota credproxy` to /v1/fleet/credproxy/resolve.
             # Optional: the key missing = that route answers 503, nothing else.
