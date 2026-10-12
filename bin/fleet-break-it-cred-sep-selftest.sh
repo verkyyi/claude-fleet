@@ -27,6 +27,8 @@
 #                              bin/fleet-doctor.sh agentdup row (issue #2663)
 #   cred-new-login-not-tenant  bin/fleet-credsep.py install --fresh (shared_on / fresh_join),
 #                              bin/fleet-login-new.sh 7b (issue #3155)
+#   cred-managed-unseparated   bin/fleet-credsep.py check / machine managed / --logins managed,
+#                              bin/fleet-doctor.sh credsep · credsep-all rows (issue #3700)
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT are read by the sourced runner
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -496,6 +498,48 @@ drill_cred_new_login_not_tenant() {
     "$sb/db/beta/meta.json" "$sb/db/.shared.json" 2>/dev/null \
     || { WHY="the shared proxy's tenants do not name the new login: $(cat "$sb/db/.shared.json" 2>&1 | tr '\n' ' ')"; return 1; }
   WHAT="共享代理在跑的机器上开新登录：install --fresh 直接把它登记为共享代理的租户（记录里有它），不再起一个自己的代理"
+}
+
+# #3561 / #3700: on a managed machine a login the daemon took over but never
+# separated (an old login on one machine, 2026-10-12) — its sessions `cat node.env` and
+# hold the machine's node token; the doctor said nothing and the hub's gate
+# counted it «not separated» with no name and no fix.
+drill_cred_managed_unseparated() {
+  CAP=20
+  local sb="$WORK/managed" t0 me out rc env
+  me=$(id -un)
+  sep_login "$sb"
+  printf '%s:%s:%s:%s\n' "$me" "$(id -u)" "$(id -g)" "$sb/homes/alpha" > "$sb/pw"
+  mkdir -p "$sb/node"
+  printf '{"%s": {"managed": true, "home": "%s"}}\n' "$me" "$sb/homes/alpha" > "$sb/node/accounts.json"
+  env="FLEET_CREDSEP_ROOT_BASE=$sb/db FLEET_CREDSEP_RUN_BASE=$sb/run FLEET_CREDSEP_LOG_BASE=$sb/log FLEET_CREDSEP_LIB=$sb/lib"
+  env="$env FLEET_CREDSEP_DAEMON_DIR=$sb/daemons FLEET_CREDSEP_ROLE=$me FLEET_CREDSEP_TEST=1 FLEET_CREDSEP_SUDO="
+  env="$env FLEET_CREDSEP_PW=$sb/pw FLEET_CREDSEP_SVC=0 FLEET_CREDSEP_PREFLIGHT=0 FLEET_CREDSEP_JOIN_WAIT=1"
+  env="$env FLEET_NODE_STATE=$sb/node FLEET_CRED_SHARED_PORT=$(cred_deadport) FLEET_CRED_ROLLOUT_WAIT=1"
+  t0=$(now)
+  grep -q ccq_BOOT_SECRET "$C/node.env" || { WHY="the rig: the unseparated login's node.env holds no token"; return 1; }
+  # shellcheck disable=SC2086
+  out=$(env $env HOME="$sb/homes/alpha" python3 -I "$BIN/fleet-credsep.py" check --conf-dir "$C" 2>&1); rc=$?
+  [ "$rc" = 1 ] && printf '%s' "$out" | grep -q '^credsep: FAIL .*managed but not separated' \
+    && printf '%s' "$out" | grep -q 'machine install --logins' \
+    || { WHY="a managed login's sessions read node.env, yet check is not a FAIL with the fix (rc $rc): $out"; return 1; }
+  # shellcheck disable=SC2086
+  out=$(env $env python3 -I "$BIN/fleet-credsep.py" machine managed 2>&1); rc=$?
+  [ "$rc" = 1 ] && printf '%s' "$out" | grep -q "^credsep-managed: FAIL .*NOT separated: $me" \
+    || { WHY="the machine row does not name the unseparated managed login (rc $rc): $out"; return 1; }
+  # the one fix: every managed login separated, on the shared proxy
+  # shellcheck disable=SC2086
+  out=$(env $env HOME="$sb/homes/alpha" PATH="$sb/shim:$PATH" FAKE_SVC_LOG="$sb/svc.log" FAKE_DAEMONS="$sb/daemons" \
+    python3 -I "$BIN/fleet-credsep.py" machine install --logins managed 2>&1); rc=$?
+  [ "$rc" = 0 ] || { WHY="machine install --logins managed failed (rc $rc): $(printf '%s' "$out" | tail -3 | tr '\n' ' ')"; return 1; }
+  [ -L "$C/node.env" ] && [ -f "$sb/db/$me/node.env" ] \
+    || { WHY="after the fix node.env is still the login's own file: $(ls -l "$C" | tr '\n' ' ')"; return 1; }
+  # shellcheck disable=SC2086
+  out=$(env $env python3 -I "$BIN/fleet-credsep.py" machine managed 2>&1); rc=$?
+  SECS=$(since "$t0")
+  [ "$rc" = 0 ] && printf '%s' "$out" | grep -q '^credsep-managed: OK' \
+    || { WHY="every managed login separated, yet the machine row is not OK (rc $rc): $out"; return 1; }
+  WHAT="托管登录没做凭据隔离：check 与整机 credsep-managed 行都是 FAIL 并点名、给出一条修法；machine install --logins managed 之后 node.env 进了隔离库，整机行转 OK"
 }
 
 cred_run_drills "$0"

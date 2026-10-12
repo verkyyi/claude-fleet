@@ -480,8 +480,19 @@ if [ -f "$(dirname "$0")/fleet-credsep.py" ]; then
   case "$_cs_lv" in
     OK)   pass credsep "$_cs_m" ;;
     WARN) warn credsep "$_cs_m" ;;
+    FAIL) fail credsep "$_cs_m" ;;   # a managed login not separated (issue #3700)
     INFO) case "$_cs_m" in off*) ;; *) info credsep "$_cs_m" ;; esac ;;   # off: no row, as before
     *)    info credsep "$_cs_m" ;;
+  esac
+  # every login this machine's daemon took over is separated (issue #3700): an
+  # unseparated one's sessions read node.env and act as the machine. Off a managed
+  # machine (no accounts.json) the line is INFO — no row, byte for byte.
+  _csm=$(bash "$(dirname "$0")/fleet-credsep.sh" machine managed 2>&1 | tail -n 1)
+  _csm_m=${_csm#credsep-managed: }; _csm_lv=${_csm_m%% —*}; _csm_m=${_csm_m#* — }
+  case "$_csm_lv" in
+    OK)   pass credsep-all "$_csm_m" ;;
+    WARN) warn credsep-all "$_csm_m" ;;
+    FAIL) fail credsep-all "$_csm_m" ;;
   esac
 fi
 

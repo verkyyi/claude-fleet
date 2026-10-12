@@ -1514,9 +1514,76 @@ def shared_rec():
         return None
 
 
+def managed_logins():
+    """The logins this machine's daemon took over (accounts.json "managed",
+    issue #2332). Every one is separated (issue #3700): its sessions must not
+    read the node token, the relay pass or a subscription. [] off a managed machine."""
+    try:
+        a = json.load(open(os.path.join(NODE_STATE, "accounts.json")))
+    except (OSError, ValueError):
+        return []
+    if not isinstance(a, dict):
+        return []
+    return sorted(l for l, v in a.items() if isinstance(v, dict) and v.get("managed") and SAFE.match(l))
+
+
+def store_state(login):
+    """'shared' · 'own' · 'none' · 'unknown' — from what anyone may read: the
+    shared record's tenants, the own-proxy definitions, the store's name (its
+    dir is the role account's 0700; that it exists is not a secret)."""
+    if login in ((shared_rec() or {}).get("logins") or []):
+        return "shared"
+    if login in own_proxies():
+        return "own"
+    try:
+        os.lstat(paths(login)[0])
+    except FileNotFoundError:
+        return "none"
+    except OSError:
+        return "unknown"
+    return "own"
+
+
+def machine_managed(a):
+    """Anyone: is every managed login separated (issue #3700)? One doctor line,
+    credsep-managed: OK|WARN|FAIL|INFO — … ; exit 0 OK/INFO, 1 WARN/FAIL. The
+    fix for every one at once is `machine install --logins managed` (root)."""
+    logins = managed_logins()
+    if not logins:
+        print("credsep-managed: INFO — not a managed machine (no %s/accounts.json with a managed login)" % NODE_STATE)
+        return 0
+    st = {l: store_state(l) for l in logins}
+    none = [l for l in logins if st[l] == "none"]
+    own = [l for l in logins if st[l] == "own"]
+    unk = [l for l in logins if st[l] == "unknown"]
+    fix = "sudo bash %s/fleet-credsep.sh machine install --logins managed" % HERE
+    if a.json:
+        print(json.dumps({"managed": logins, "state": st}))
+        return 1 if none or own else 0
+    if none:
+        print("credsep-managed: FAIL — %d of %d managed login(s) NOT separated: %s — their sessions can read "
+              "node.env / the relay pass and act as the machine. Separate every one (one sudo, no gap for the "
+              "separated): %s" % (len(none), len(logins), ", ".join(none), fix))
+        return 1
+    if own:
+        print("credsep-managed: WARN — every managed login separated, but %s on its own proxy, not the machine's "
+              "shared one (the hub reads it as not separated). Join: %s" % (", ".join(own), fix))
+        return 1
+    print("credsep-managed: OK — %d managed login(s) on the shared proxy: %s%s"
+          % (len(logins) - len(unk), ", ".join(l for l in logins if l not in unk),
+             " · cannot tell: %s" % ", ".join(unk) if unk else ""))
+    return 0
+
+
 def machine_logins(spec):
-    """--logins a,b → [(login, conf, home)]; `all` = every login with a fleet install."""
-    names = [l for l in spec.split(",") if l] if spec and spec != "all" else [n for n, _, _ in fleet_logins()]
+    """--logins a,b → [(login, conf, home)]; `all` = every login with a fleet install,
+    `managed` = every login accounts.json says the machine daemon took over."""
+    if spec == "managed":       # every login the machine daemon took over (issue #3700)
+        names = managed_logins()
+        if not names:
+            die("--logins managed: no managed login here (%s/accounts.json)" % NODE_STATE, 2)
+    else:
+        names = [l for l in spec.split(",") if l] if spec and spec != "all" else [n for n, _, _ in fleet_logins()]
     out = []
     for n in names:
         if not re.match(r"^[a-z0-9_][a-z0-9_.-]{0,31}$", n):
@@ -2688,11 +2755,18 @@ def denied(path):
 
 
 def check(a):
-    """One doctor line: credsep: OK|WARN|INFO — … ; exit 0 OK/INFO, 1 WARN."""
+    """One doctor line: credsep: OK|WARN|FAIL|INFO — … ; exit 0 OK/INFO, 1 WARN/FAIL."""
     conf = a.conf_dir
     home = os.path.expanduser("~")
     rec = record(conf)
     want = os.environ.get("FLEET_CRED_SEPARATE", "0") == "1"
+    me = pwd.getpwuid(os.getuid()).pw_name
+    if not rec and me in managed_logins():
+        # a managed login is always separated (issue #3700): exit 1 = the hub's «not»
+        print("credsep: FAIL — this login is managed but not separated: its sessions can read node.env and the "
+              "relay pass and act as this machine. An admin separates it (one sudo): sudo bash "
+              "%s/fleet-credsep.sh machine install --logins %s" % (HERE, me))
+        return 1
     if not rec:
         if want:
             print("credsep: WARN — FLEET_CRED_SEPARATE=1 but this login is not separated: its sessions can read "
@@ -2716,7 +2790,6 @@ def check(a):
     if ne in left:
         # a writer from before #2316 swapped the link for a plain file (issue #2649).
         # The store is not this login's to stat; node.pub.env is rewritten with it.
-        me = pwd.getpwuid(os.getuid()).pw_name
         try:
             newer = os.stat(ne).st_mtime > os.stat(os.path.join(conf, "node.pub.env")).st_mtime
         except OSError:
@@ -2743,7 +2816,6 @@ def check(a):
         print("credsep: WARN — FLEET_CRED_SEPARATE=0 but this login is still separated; uninstall: bash "
               "%s/fleet-credsep.sh uninstall" % HERE)
         return 1
-    me = pwd.getpwuid(os.getuid()).pw_name
     if not rec.get("shared") and shared_rec():
         print("credsep: WARN — separated on its own proxy, but this machine runs the shared one: one more service "
               "for nothing. Join it (sudo, no gap): bash %s/fleet-credsep.sh machine join --logins %s" % (HERE, me))
@@ -2807,7 +2879,8 @@ def main():
     sub.add_parser("role")      # the role account alone (fleet-node-install.sh, #2330)
     pl = sub.add_parser("plan"); pl.add_argument("--bin", default=HERE)
     mc = sub.add_parser("machine")
-    mc.add_argument("verb", choices=("install", "uninstall", "refresh", "status", "join", "leave", "pooldup", "pool-sync"))
+    mc.add_argument("verb", choices=("install", "uninstall", "refresh", "status", "join", "leave", "pooldup", "pool-sync",
+                                          "managed"))
     mc.add_argument("--logins", default="all")
     mc.add_argument("--dry-run", action="store_true")
     mc.add_argument("--force", action="store_true")
@@ -2850,6 +2923,8 @@ def main():
     if a.cmd == "machine":
         if a.verb == "status":
             return machine_status(a)
+        if a.verb == "managed":
+            return machine_managed(a)
         DRY = a.dry_run
         if os.geteuid() != 0 and not TEST and not DRY:
             die("machine %s needs root (bin/fleet-credsep.sh machine runs it through sudo)" % a.verb, 2)
