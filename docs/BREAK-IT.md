@@ -360,3 +360,4 @@
 | 他同意附上的最近日志或当前屏幕里有令牌：日志里一行请求头、屏幕上刚 `export` 的变量（EPIC #3354） | 附件存在入口 7 天、给管理员看：同事的令牌落在我们手里 | 附件只取 `conf/debug-collect.list` 里近 30 分钟写过的行和本窗口 `capture-pane -p`，每份过同一张形状表，再整套复查，命中即退出 3；每次都问附不附、不替他选；入口再查一遍（#3355）。演练在日志和屏幕各塞假凭据，查发出的附件与 outbox（#3358） | `feedback-secret-in-attach` |
 
 | 授权迁移把纯客户端列为执行节点 | 管理员被要求给连接用的设备配置订阅机器授权，容易留下无用授权 | 复用机器角色过滤纯客户端，离线和混合执行节点保留；角色变化后要求重新审核，已有规则不改写 | `cred-migration-client` |
+| 接一个不在 GitHub 上的仓库（GitLab、自建托管、ssh 裸仓库、本机路径），fleet 照旧叫 gh 去克隆、去问主干（EPIC #3570 共同约定 3） | 今天直接拒（`invalid-repo`），或把 GitLab 地址当成 GitHub 的同名仓库用 gh 克隆、失败；没有 GitHub 登录的人一个仓库也接不进来 | `fleet_repo_register` 收任意 git 地址：名字取地址最后两段（`fleet_repo_name_of`，撞名 `--as`），conf 记 `FLEET_REMOTE` · `FLEET_FORGE=none` · `FLEET_LAND=fleet`；克隆用 `git clone <地址>`，主干用 `git ls-remote --symref`，体检的 gh / github / 标签行只在有 GitHub 仓库时出现（#3600）。演练用只记录、一律失败的 gh 替身接一个 file:// 裸仓库，断言 0 次调用、主干来自远端 | `forge-none-gh-call` |

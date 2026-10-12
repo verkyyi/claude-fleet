@@ -1,5 +1,5 @@
 #!/bin/bash
-# fleet-up.sh [<owner/repo>] [<checkout-dir>] [--name <session>] [--base <branch>] [--seed] [--no-repo] [--no-attach]
+# fleet-up.sh [<owner/repo | git address>] [<checkout-dir>] [--name <session>] [--base <branch>] [--seed] [--no-repo] [--no-attach]
 # fleet-up.sh --undo [<session>]
 #
 # ONE FLEET PER LOGIN (issue #979). A login runs exactly one fleet holding all its
@@ -82,12 +82,16 @@ if [ -z "$REPO" ] && [ "$NOREPO" = 0 ]; then
     REPO=$(git -C "$top" remote get-url origin 2>/dev/null) \
       || die "$top has no 'origin' remote — pass <owner/repo> explicitly, or --no-repo"
     DIR="${DIR:-$top}"
-    echo "fleet-up: inferred $(fleet_norm_repo "$REPO") from $top"
+    echo "fleet-up: inferred $(fleet_repo_name_of "$REPO") from $top"
   fi
 fi
 [ "$NOREPO" = 1 ] && { REPO=""; DIR=""; }
 
+REPO_ADDR=""
 if [ -n "$REPO" ]; then
+  # A repo not on GitHub is any git address (issue #3600): register keeps the
+  # address; everything here speaks of its two-part name.
+  [ "$(fleet_forge_of "$REPO")" = none ] && { REPO_ADDR="$REPO"; REPO=$(fleet_repo_name_of "$REPO"); }
   REPO=$(fleet_norm_repo "$REPO")
   # Shape-check owner/repo before it reaches `gh repo clone`/`git clone`: exactly
   # one slash, both halves non-empty, and only chars GitHub allows (no spaces or
@@ -165,7 +169,7 @@ if [ -n "$REPO" ]; then
     [ -n "$DIR" ] && [ "$DIR" != "$(fleet_repo_conf_get "$NAME" "$REPO" FLEET_MAIN)" ] \
       && echo "fleet-up: '$NAME' already hosts $REPO at $(fleet_repo_conf_get "$NAME" "$REPO" FLEET_MAIN) — keeping it (fleet-repo.sh remove + add to move it)"
   else
-    ADD_REPO="$REPO"; ADD_DIR="$DIR"; ADD_BASE="$BASE"
+    ADD_REPO="${REPO_ADDR:-$REPO}"; ADD_DIR="$DIR"; ADD_BASE="$BASE"
   fi
 fi
 # --seed marks the login's starter (issue #1167): the fleet's only repo, never one
@@ -185,7 +189,7 @@ add_repo() {
   fleet_repo_register "$NAME" "$ADD_REPO" ${ADD_DIR:+"$ADD_DIR"} ${ADD_BASE:+--base "$ADD_BASE"} \
       ${seedarg:+"$seedarg"} >/dev/null \
     || die "could not add $ADD_REPO to fleet '$NAME'"
-  echo "fleet-up: added $ADD_REPO to fleet '$NAME'"
+  echo "fleet-up: added $REPO to fleet '$NAME'"
   ADD_REPO=""
 }
 # mark_seed — --seed on a repo the fleet already hosts (its only one): in its overlay.
@@ -222,7 +226,7 @@ NEWFLEET=0; [ ! -f "$CONF" ] && [ ! -f "$legacy" ] && NEWFLEET=1
 if [ ! -f "$CONF" ] && [ -f "$legacy" ]; then
   { mv "$legacy" "$CONF" 2>/dev/null || cp "$legacy" "$CONF"; }
   migrate_conf_repo
-  if [ -n "$ADD_REPO" ] && fleet_repo_hosted "$NAME" "$ADD_REPO"; then ADD_REPO=""; fi
+  if [ -n "$ADD_REPO" ] && fleet_repo_hosted "$NAME" "$REPO"; then ADD_REPO=""; fi
 fi
 # The repo goes in before the session exists, so the hub's first paint has it;
 # register does the checkout (reuse or clone), the base branch (#603), the trust
