@@ -442,6 +442,8 @@ _mforge=github
 if [ "$STATE" = merged ] && [ -z "${PR//[^0-9]/}" ] && [ -n "$sess" ] && [ -n "${selfwin:-}" ]; then
   _mr=$(fleet_window_repo "$sess" "$selfwin")
   [ -n "$_mr" ] && _mforge=$(fleet_repo_forge "$_mr" "$sess")
+  # A repo the fleet lands itself (FLEET_LAND=fleet, issue #3602) has no PR either.
+  [ -n "$_mr" ] && [ "$(fleet_repo_land "$_mr" "$sess")" = fleet ] && _mforge=none
 fi
 if [ "$STATE" = merged ] && { [ -n "${PR//[^0-9]/}" ] || [ "$_mforge" = none ]; }; then
   _prepo=''
