@@ -1,0 +1,50 @@
+name: web-chat-ui
+
+# The browser chat's page (issue #3637) is built from extras/web-chat/ui and its
+# output, ui/dist, is committed: server.mjs serves it as is, so a machine never
+# builds and the page never reaches a CDN. This job rebuilds it from the lockfile
+# and fails when the committed dist is not exactly what the sources make.
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'extras/web-chat/ui/**'
+      - '.github/workflows/web-chat-ui.yml'
+  pull_request:
+    paths:
+      - 'extras/web-chat/ui/**'
+      - '.github/workflows/web-chat-ui.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: extras/web-chat/ui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: extras/web-chat/ui/package-lock.json
+      - name: Install (lockfile only)
+        run: npm ci --no-audit --no-fund
+      - name: Build
+        run: npm run build
+      - name: The committed dist is the build
+        run: |
+          git add -N dist
+          if ! git diff --exit-code --stat -- dist; then
+            echo "::error::extras/web-chat/ui/dist is stale — run: cd extras/web-chat/ui && npm ci && npm run build, then commit dist/"
+            exit 1
+          fi
+      - name: Nothing from another origin
+        run: |
+          # the page loads only its own files: no <script src=http…>, no font service, no CDN
+          if grep -rEn '(src|href)="https?://' dist/index.html; then echo "::error::dist/index.html loads from another origin"; exit 1; fi
+          if grep -rEn 'fonts\.(googleapis|gstatic)\.com|cdn\.jsdelivr|unpkg\.com|cdnjs' dist; then echo "::error::a CDN in dist"; exit 1; fi

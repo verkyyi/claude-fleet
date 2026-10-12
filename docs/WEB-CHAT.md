@@ -18,10 +18,54 @@ bin/fleet-webchat.sh status | stop
 ## 页面
 
 - 打开就是那一条对话，往上翻是历史；没有会话列表，不能新开或切换。
-- 回复流式显示；每个工具步骤折叠成一行，点开看结果；`AskUserQuestion` 和权限确认显示成按钮。
+- 回复流式显示；每个工具步骤折叠成一行，点开看结果；`AskUserQuestion` 和权限确认显示成按钮，
+  等你回答的那一步自己展开。
 - 模型下拉只有白名单：Sonnet 5.5（默认）· Opus 5.5 · Haiku 5.5。白名单是 `extras/web-chat/lib.mjs` 的 `MODELS`，
   由服务端校验，名单外的请求返回 400。
 - 停止键停掉正在跑的这一轮。页面关掉或断线不会停掉这一轮，重新打开会接着显示，待答的按钮还在。
+
+## 页面怎么做的（issue #3637）
+
+样子和官网 v2 是一套：配色、字体（Bricolage Grotesque / IBM Plex Sans / IBM Plex Mono，中文落到苹方）、
+圆角和 LOGO（一小一大两枚箭头）都取自官网 v2 页面自己的 `:root`，写在
+`extras/web-chat/ui/src/theme.css` 一个地方，再映射成 shadcn/ui 的标准变量。官网只有深色；
+浅色是同一族颜色铺在纸色上，跟随系统切换（`prefers-color-scheme`，不用脚本）。
+
+界面全是现成组件：React + **shadcn/ui**（Radix + Tailwind）+ **assistant-ui**。
+
+| 部分 | 组件 |
+|---|---|
+| 消息列表、流式文本、输入框、发送 / 停止键、回到底部 | assistant-ui `Thread`（`thread.aui.tsx`） |
+| Markdown、代码块 | assistant-ui `MarkdownText` |
+| 工具步骤折叠、结果 | assistant-ui `ToolFallback` + `ToolGroup` |
+| 选项按钮（`AskUserQuestion`）、权限确认 | `ToolFallback` 的审批界面：`approval.display = "questions"` / 允许·拒绝 |
+| 模型下拉 | assistant-ui `ModelSelector`（shadcn Popover + Command） |
+| 按钮、提示、弹层 | shadcn/ui `Button` `Tooltip` `Popover` `Command` `Dialog` |
+
+这些组件是用官方 CLI（`npx shadcn add …`、`npx assistant-ui add thread model-selector`）拷进
+`src/components/` 的源码 —— shadcn 的用法就是这样。拷进来之后只改了：文案换成中文；`Thread` 多两个插槽
+（输入框左边放模型下拉、下面放「终端里接着用」一行）；有待答的工具组自己展开；没有重试能力时不显示重试键；
+`MarkdownText` 关掉逐字显现（`smooth={false}`：它和「等你确认」那一步展开时会赛跑，偶尔把正文停在半截；
+文字本来就是一段段流进来的）。**没有自己写的新组件。**
+
+`src/chat.ts` 是唯一的接线：把服务端原有的 NDJSON（`/api/conversation`、`/api/turn`、`/api/stop`、
+`/api/answer`）换成 assistant-ui 的 external store。协议只多了一个字段：`ask` 带上它卡住的那一步的
+`id`（SDK 给 `canUseTool` 的 `toolUseID`），页面把按钮挂在那一步上。
+
+### 构建
+
+产物 `extras/web-chat/ui/dist/` 提交在仓库里，`server.mjs` 直接提供它 —— 机器上不用构建，
+页面运行时只从本服务取文件（`Content-Security-Policy` 只许同源；字体也打在包里，国内能打开）。
+改了 `ui/` 里的东西就重新构建、把 `dist/` 一起提交：
+
+```sh
+cd extras/web-chat/ui
+npm ci            # 依赖全部锁定版本（package.json 写死版本号 + package-lock.json）
+npm run build     # tsc + vite → dist/
+npm run dev       # 本地调：vite 在 127.0.0.1，/api 转给 127.0.0.1:18961
+```
+
+CI 的 `web-chat-ui` 用同一个锁文件重新构建，`dist/` 和提交的不一样就红；也检查 `dist/` 里没有 CDN。
 
 ## 一条对话怎么一直连着
 
@@ -64,7 +108,8 @@ bin/fleet-webchat.sh status | stop
 
 `bin/fleet-webchat-selftest.sh` 用桩 SDK、桩 `fleet-session-cred.sh`、桩代理把服务真跑一遍，覆盖：
 只绑 127.0.0.1、没有链接的人被拒、白名单由服务端执行、这一轮的请求带着发下来的会话凭据到了代理（池子在代理那里计量）、
-sid 用完被 revoke、凭据和 admin token 不出现在任何响应、日志或文件里、重启后还是同一条对话、停止键。
+sid 用完被 revoke、凭据和 admin token 不出现在任何响应、日志或文件里、重启后还是同一条对话、停止键；
+以及页面本身（G）：没有 cookie 拿不到页面和资源、CSP 只许同源、gzip、`dist/` 以外的文件出不去、提问带着它卡住的那一步。
 
 ## 不在这一版
 
