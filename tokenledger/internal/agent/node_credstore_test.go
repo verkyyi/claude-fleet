@@ -134,6 +134,10 @@ func TestCredVerdictReachesTheStore(t *testing.T) {
 	if _, err := b.credCycle(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	// claude-fleet#3744: the whole lease is handed to the proxy's prune first
+	if req := <-got; req["op"] != "prune" {
+		t.Fatalf("after a 200 lease, first request = %v, want prune", req)
+	}
 	if req := <-got; req["op"] != "lease" || req["state"] != "ok" || req["claude"] != "0" {
 		t.Fatalf("empty lease verdict = %v", req)
 	}

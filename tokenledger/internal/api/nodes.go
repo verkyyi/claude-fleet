@@ -113,6 +113,9 @@ type nodeConn struct {
 	// last told this connection.
 	canRelease  bool
 	releaseSent atomic.Int64
+	// canCreds is the hello's CapCreds (claude-fleet#3744): this node leases
+	// again the moment the hub says its credentials changed.
+	canCreds bool
 	// canCredsep is an admin hello's CapCredsep (claude-fleet#2263/#2294):
 	// the logins it opens are credential-separated, so spares may go there.
 	canCredsep bool
@@ -538,7 +541,7 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 		canWrite: hp.HasCap(control.CapWrite), canRelay: hp.HasCap(control.CapRelay),
 		canMove: hp.HasCap(control.CapMove), canSSHRelay: hp.HasCap(control.CapSSHRelay),
 		canTeam: hp.HasCap(control.CapTeam), canPerson: hp.HasCap(control.CapPerson), canEntryKeys: hp.HasCap(control.CapEntryKeys), canRelease: hp.HasCap(control.CapRelease), canAttach: hp.HasCap(control.CapAttach),
-		canTest: hp.HasCap(control.CapTestIdentity), canTask: hp.HasCap(control.CapTask), canTicket: hp.HasCap(control.CapTicket),
+		canTest: hp.HasCap(control.CapTestIdentity), canTask: hp.HasCap(control.CapTask), canTicket: hp.HasCap(control.CapTicket), canCreds: hp.HasCap(control.CapCreds),
 		canCredsep:    hp.HasCap(control.CapCredsep),
 		canLoginJoin:  hp.HasCap(control.CapLoginJoin),
 		canRecycle:    hp.HasCap(control.CapRecycle),

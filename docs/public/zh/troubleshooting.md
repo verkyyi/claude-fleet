@@ -596,6 +596,13 @@ fleet debug report
 - **是什么**：这台机器上所有托管登录是不是都做了凭据隔离。
 - **WARN / FAIL 怎么办**：FAIL 点名没隔离的登录：管理员执行说明里的 `fleet-credsep.sh machine install --logins managed`。
 
+#### `credproxy`
+
+来自 `fleet doctor`。
+
+- **是什么**：这台机器上是不是只有一个凭据代理（共享代理），所有登录都是它的租户。
+- **WARN / FAIL 怎么办**：FAIL 点名共享代理之外还在跑的代理（登录 · pid）：它们各留一份订阅副本，入口删掉的订阅会留在那里、会话收到 401。管理员执行说明里的 `fleet-credsep.sh machine install --logins managed`，把它们并进共享代理。
+
 ### 会话
 
 #### `admit`

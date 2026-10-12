@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/codex"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 )
 
 // The node half of "credentials live at the entrance; machines lease the
@@ -93,6 +94,7 @@ type credLease struct {
 		ExpiresAt *time.Time `json:"expires_at"`
 		Error     string     `json:"error"`
 		State     string     `json:"state"`
+		Paused    bool       `json:"paused"`
 		Access    *struct {
 			AccessToken      string   `json:"access_token"`
 			IDToken          string   `json:"id_token"`
@@ -214,6 +216,11 @@ func (a *Agent) waitCredLease(ctx context.Context, wait time.Duration) bool {
 			t.Stop()
 			return false
 		case <-t.C:
+		case <-a.credKickCh():
+			// the hub's TypeCreds (claude-fleet#3744): what this login may
+			// lease changed — lease now, not on the clock
+			t.Stop()
+			return true
 		}
 		for _, rj := range a.upstreamRejections() {
 			if !a.credReported[rj.Fingerprint] {
@@ -317,6 +324,14 @@ func (a *Agent) credCycle(ctx context.Context) (time.Duration, error) {
 			}
 		}
 	}
+	if n, err := a.pruneCreds(lease); err != nil {
+		log.Printf("credentials: remove what the hub no longer leases: %v", err)
+		if credMinWait < wait {
+			wait = credMinWait
+		}
+	} else if n > 0 {
+		log.Printf("credentials: removed %d account(s) the hub no longer leases to this login", n)
+	}
 	if lease.RecheckSecs > 0 {
 		if d := time.Duration(lease.RecheckSecs) * time.Second; d < wait {
 			wait = d
@@ -328,6 +343,134 @@ func (a *Agent) credCycle(ctx context.Context) (time.Duration, error) {
 	a.credVerdict("ok", "", "", claude)
 	a.logCredSummary(credSummary(written, failed, len(lease.Withdrawn)))
 	return wait, nil
+}
+
+// credKickCh is the wake-up TypeCreds sends the lease loop (one buffered slot:
+// a burst of pushes is one lease).
+func (a *Agent) credKickCh() chan struct{} {
+	a.credKickOnce.Do(func() { a.credKick = make(chan struct{}, 1) })
+	return a.credKick
+}
+
+// handleCreds takes the hub's TypeCreds (claude-fleet#3744).
+func (a *Agent) handleCreds(m control.Message) {
+	if !a.cfg.FleetCreds {
+		return
+	}
+	var c control.Creds
+	_ = json.Unmarshal(m.Payload, &c)
+	select {
+	case a.credKickCh() <- struct{}{}:
+		log.Printf("credentials: the hub says they changed (%s) — leasing now", optionalWhy(c.Why))
+	default:
+	}
+}
+
+func optionalWhy(s string) string {
+	if s == "" {
+		return "no reason given"
+	}
+	return s
+}
+
+// pruneCreds removes what this login holds from the hub that this lease no
+// longer lists (claude-fleet#3744) and returns how many went. The lease is the
+// hub's whole answer: a subscription deleted (or a person's row gone) is simply
+// absent from it — never in Withdrawn — so before this its copy stayed for
+// good, the proxy kept picking it, and a session bound to it got the
+// upstream's 401 («OAuth token revoked · Please run /login»). An account the
+// hub listed but could not lease this time (Error set) is kept: the hub still
+// names it. Only what the hub wrote is touched — a `hub:` label marker, a
+// Codex home whose refresh token is the placeholder, the proxy's store — never
+// a token the person put here by hand. Separated, the proxy's `prune` does it
+// for this tenant and also learns which pool accounts are paused (no NEW
+// session picks one); a proxy too old for `prune` gets one `unstore` per
+// marker instead.
+func (a *Agent) pruneCreds(l *credLease) (int, error) {
+	keep := map[string][]string{"claude": {}, "codex": {}}
+	paused := map[string][]string{"claude": {}, "codex": {}}
+	kept := map[string]bool{}
+	for _, c := range l.Credentials {
+		if c.Provider != "claude" && c.Provider != "codex" {
+			continue
+		}
+		keep[c.Provider] = append(keep[c.Provider], c.Account)
+		kept[c.Provider+":"+c.Account] = true
+		if c.Paused {
+			paused[c.Provider] = append(paused[c.Provider], c.Account)
+		}
+	}
+	gone := 0
+	var errs []string
+	unstore := a.credUnstore()
+	if a.cfg.FleetCredStore != "" {
+		as := ""
+		if a.cfg.RunAs != nil {
+			as = a.cfg.RunAs.Login
+		}
+		line, err := credStoreAsk(a.cfg.FleetCredStore, as, map[string]any{"op": "prune", "keep": keep, "paused": paused})
+		if err == nil {
+			var res struct {
+				Gone []string `json:"gone"`
+			}
+			_ = json.Unmarshal(line, &res)
+			gone += len(res.Gone)
+			unstore = nil // the store is done; only this login's markers are left
+		} else if !strings.Contains(err.Error(), "prune") && !strings.Contains(err.Error(), "unknown") {
+			// the proxy is down or refused: nothing removed this time
+			return 0, err
+		}
+	}
+	dir := a.credAccountsDir()
+	ents, _ := os.ReadDir(dir)
+	for _, e := range ents {
+		name := e.Name()
+		if !e.Type().IsRegular() || !safeLabel.MatchString(name) || kept["claude:"+name] {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil || !bytes.HasPrefix(b, []byte(HubMarkerPrefix)) {
+			continue
+		}
+		if err := removeClaudeCred(dir, name, unstore); err != nil {
+			errs = append(errs, "claude/"+name+": "+err.Error())
+			continue
+		}
+		if unstore != nil || a.cfg.FleetCredStore == "" {
+			gone++
+		}
+	}
+	if a.cfg.FleetCredStore == "" {
+		homes := map[string]string{"default": a.codexHomeFor("default")}
+		if ents, err := os.ReadDir(filepath.Dir(a.codexHomeFor("x"))); err == nil {
+			for _, e := range ents {
+				if e.IsDir() && safeLabel.MatchString(e.Name()) && e.Name() != "default" {
+					homes[e.Name()] = a.codexHomeFor(e.Name())
+				}
+			}
+		}
+		for label, home := range homes {
+			if kept["codex:"+label] {
+				continue
+			}
+			p := filepath.Join(home, "auth.json")
+			if _, err := os.Stat(p); err != nil {
+				continue
+			}
+			if err := removeCodexAuth(home, label, nil); err != nil {
+				errs = append(errs, "codex/"+label+": "+err.Error())
+				continue
+			}
+			if _, err := os.Stat(p); os.IsNotExist(err) {
+				gone++
+			}
+		}
+	}
+	if len(errs) > 0 {
+		sort.Strings(errs)
+		return gone, errors.New(strings.Join(errs, "; "))
+	}
+	return gone, nil
 }
 
 // credSummary is one lease's account count — never a token or a label: what

@@ -22,6 +22,10 @@ request on, with the real credential put in on the way out (or none, centrally).
                                  issue #3043: a subscription allowlist forbids
                                  this login the account — its index entry, own
                                  copy, pins and picks go; another login's stay)
+    (ctl only) prune {keep: {claude: […], codex: […]}} — the node agent's whole
+                                 lease, issue #3744: every account this login
+                                 holds that the hub's answer no longer lists
+                                 goes as `unstore` would (a deleted subscription)
     probe                       (node-probe.json on STDIN — separated mode only)
     relay-probe                 → {relay, peer, anthropic, openai, …}: the road a
                                  session takes through the relay, measured with
@@ -993,6 +997,7 @@ class Tenant:
         self.hubcreds = {}      # sid -> fcp-h1.… handed in over ctl `attach` (memory only)
         self.quota = {}         # sid -> its newest rate-limit reading (issue #1978; memory only)
         self.picks = {}         # (provider, sid) -> the account the proxy picked for it (issue #2412)
+        self.paused = set()     # (provider, account) the hub paused: no new pick there (issue #3744)
         self.push_due = False
 
     def log(self, **kv):
@@ -1086,6 +1091,8 @@ class Tenant:
         held = [a for a in mine if a not in avoid]
         if not held:
             return cur or ""
+        live = [a for a in held if (provider, a) not in self.paused]
+        held = live or held     # every one paused: still served, never none
         with Proxy.lock:
             load = {}
             for tt in (list(Proxy.tenants.values()) or [self]):
@@ -1116,6 +1123,7 @@ class Tenant:
 
 
 PICK_UNKNOWN = 50.0
+REJECT_HOLD = int(os.environ.get("FLEET_CRED_REJECT_HOLD") or 900)    # a 401'd account stays out (s)
 
 
 def limit_until(provider, headers, body, now=None):
@@ -1493,6 +1501,21 @@ class Proxy(BaseHTTPRequestHandler):
                 conn.close()
                 self.log(ev="acct_switch", sid=sid, provider=provider, frm=acct, to=nxt, why="429")
                 return ("acct", nxt)
+        if r.status == 401 and provider == "claude" and getattr(self, "rehome", False):
+            # the provider refused this account's token (issue #3744): revoked
+            # upstream, or a subscription the hub deleted that this machine still
+            # held. Out of the pick for REJECT_HOLD and the same request on the
+            # next account — never a 401 the session can only answer with /login.
+            # A relay's own 401 (its pass) names no provider error: passed on.
+            first = r.read(65536)
+            if route == "direct" or b"authentication_error" in first:
+                with Proxy.lock:
+                    Proxy.limited[(provider, acct)] = time.time() + REJECT_HOLD
+                nxt = self.t.pick_account(provider, sid, avoid=(acct,))     # any held one beats a dead one
+                if nxt and nxt != acct:
+                    conn.close()
+                    self.log(ev="acct_switch", sid=sid, provider=provider, frm=acct, to=nxt, why="401")
+                    return ("acct", nxt)
         if r.status == 403:
             first = r.read(65536)
             if route == "relay" and b"relay_refused" in first and getattr(self.cfg, "relay_keep", None):
@@ -1789,6 +1812,50 @@ def account_quota(t):
     return out
 
 
+def tenant_labels(cfg, kind):
+    """-> every <kind> label this tenant holds: its pool index and own copies."""
+    out = {k.split(":", 1)[1] for k in pool_index(cfg) if k.startswith(kind + ":")}
+    if kind == "claude":
+        acc = cfg.accounts
+        out.update(d[:-4] for d in (os.listdir(acc) if os.path.isdir(acc) else []) if d.endswith(".hub"))
+    else:
+        cx = cfg.codex_homes
+        out.update(d for d in (os.listdir(cx) if os.path.isdir(cx) else [])
+                   if os.path.isfile(os.path.join(cx, d, "auth.json")))
+    return sorted(a for a in out if SAFE_LABEL(a))
+
+
+def tenant_unstore(t, kind, label):
+    """One account leaves this tenant (`unstore`, `prune`): its index entry, its
+    own copy, the pool file no tenant names any more, every pick and pin of it."""
+    cfg = t.cfg
+    with POOL_LOCK:
+        idx = pool_index(cfg)
+        had = idx.pop("%s:%s" % (kind, label), None)
+        if had:
+            write_json(os.path.join(cfg.state, "pool.json"), idx)
+        own = own_path(cfg, kind, label)
+        if os.path.lexists(own):
+            os.unlink(own)
+            try:
+                os.rmdir(os.path.dirname(own))
+            except OSError:
+                pass
+        if getattr(cfg, "pool", ""):
+            pool_gc(cfg.pool, [x.cfg for x in Proxy.tenants.values()] or [cfg])
+    with Proxy.lock:
+        for k in [k for k, a in t.picks.items() if k[0] == kind and a == label]:
+            del t.picks[k]
+        bp = os.path.join(cfg.state, "bind.json")
+        b = read_json(bp, {})
+        pinned = [sid for sid, a in (b.items() if isinstance(b, dict) else []) if a == label]
+        for sid in pinned:
+            del b[sid]
+        if pinned:
+            write_json(bp, b)
+    t.log(ev="unstore", kind=kind, acct=label, pool=(had or "-")[:12], unpinned=len(pinned))
+
+
 def pool_gc(pool, cfgs):
     """Remove every pool file no tenant's index names."""
     keep = set()
@@ -2032,32 +2099,36 @@ def ctl_handle(req, t):
         kind, label = req.get("kind") or "", req.get("label") or ""
         if kind not in POOL_FILE or not SAFE_LABEL(label):
             return {"ok": False, "err": "unstore: kind claude|codex and a safe label"}
-        with POOL_LOCK:
-            idx = pool_index(cfg)
-            had = idx.pop("%s:%s" % (kind, label), None)
-            if had:
-                write_json(os.path.join(cfg.state, "pool.json"), idx)
-            own = own_path(cfg, kind, label)
-            if os.path.lexists(own):
-                os.unlink(own)
-                try:
-                    os.rmdir(os.path.dirname(own))
-                except OSError:
-                    pass
-            if getattr(cfg, "pool", ""):
-                pool_gc(cfg.pool, [x.cfg for x in Proxy.tenants.values()] or [cfg])
-        with Proxy.lock:
-            for k in [k for k, a in t.picks.items() if k[0] == kind and a == label]:
-                del t.picks[k]
-            bp = os.path.join(cfg.state, "bind.json")
-            b = read_json(bp, {})
-            pinned = [sid for sid, a in (b.items() if isinstance(b, dict) else []) if a == label]
-            for sid in pinned:
-                del b[sid]
-            if pinned:
-                write_json(bp, b)
-        t.log(ev="unstore", kind=kind, acct=label, pool=(had or "-")[:12], unpinned=len(pinned))
+        tenant_unstore(t, kind, label)
         return {"ok": True}
+    if op == "prune":
+        # the node agent's whole lease (issue #3744): every account this tenant
+        # holds that the hub's latest answer no longer lists — deleted, paused
+        # out of the pool, the person's row gone — goes as an `unstore` would.
+        # The hub's word is the lease, and a lease never lists an account the
+        # hub dropped: without this, its copy stayed and a session bound to it
+        # got the upstream's 401 («OAuth token revoked · Please run /login»).
+        if not cfg.store:
+            return {"ok": False, "err": "prune: not separated (FLEET_CRED_STORE unset)"}
+        keep = req.get("keep")
+        if not isinstance(keep, dict) or any(not isinstance(keep.get(k, []), list) for k in POOL_FILE):
+            return {"ok": False, "err": "prune: keep {claude: [labels], codex: [labels]}"}
+        gone = []
+        for kind in POOL_FILE:
+            want = {x for x in keep.get(kind) or [] if isinstance(x, str)}
+            for label in tenant_labels(cfg, kind):
+                if label not in want:
+                    tenant_unstore(t, kind, label)
+                    gone.append("%s:%s" % (kind, label))
+        # a paused pool account (claude-fleet#1990) is still leased so a session
+        # on it finishes; the pick starts no NEW session there
+        pz = req.get("paused") if isinstance(req.get("paused"), dict) else {}
+        paused = {(k, x) for k in POOL_FILE for x in (pz.get(k) or []) if isinstance(x, str) and SAFE_LABEL(x)}
+        with Proxy.lock:
+            was, t.paused = t.paused, paused
+        if gone or paused != was:
+            t.log(ev="prune", gone=gone, paused=sorted("%s:%s" % p for p in paused))
+        return {"ok": True, "gone": gone}
     if op == "lease":
         # the node agent's last lease verdict (issue #3155): refused (the hub's
         # reason) or ok with N claude accounts — what a session that finds no

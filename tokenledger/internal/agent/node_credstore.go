@@ -62,9 +62,20 @@ func (a *Agent) credUnstore() func(kind, label string) error {
 
 // credStoreCall is one request on the proxy's control socket.
 func credStoreCall(sock, as string, m map[string]string) error {
+	req := make(map[string]any, len(m))
+	for k, v := range m {
+		req[k] = v
+	}
+	_, err := credStoreAsk(sock, as, req)
+	return err
+}
+
+// credStoreAsk is one request on the proxy's control socket -> its answer
+// line, or an error when it could not be asked or said no.
+func credStoreAsk(sock, as string, m map[string]any) ([]byte, error) {
 	c, err := net.DialTimeout("unix", sock, 10*time.Second)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer c.Close()
 	_ = c.SetDeadline(time.Now().Add(30 * time.Second))
@@ -73,21 +84,21 @@ func credStoreCall(sock, as string, m map[string]string) error {
 	}
 	req, _ := json.Marshal(m)
 	if _, err := c.Write(append(req, '\n')); err != nil {
-		return err
+		return nil, err
 	}
 	line, err := bufio.NewReader(c).ReadBytes('\n')
 	if err != nil && len(line) == 0 {
-		return err
+		return nil, err
 	}
 	var res struct {
 		OK  bool   `json:"ok"`
 		Err string `json:"err"`
 	}
 	if err := json.Unmarshal(line, &res); err != nil {
-		return err
+		return nil, err
 	}
 	if !res.OK {
-		return errors.New("credential store: " + res.Err)
+		return nil, errors.New("credential store: " + res.Err)
 	}
-	return nil
+	return line, nil
 }

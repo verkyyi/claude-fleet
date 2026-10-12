@@ -122,6 +122,14 @@ const (
 	// to anyone else's. The payload names the ticket and the change, never its
 	// words: the node reads them by number. Nothing moves → never sent.
 	TypeTicket = "ticket"
+	// TypeCreds is the hub's word that the credentials a node may lease
+	// changed (claude-fleet#3744): a subscription stored, deleted, paused or
+	// resumed, a machine or person revoked or lifted. Sent the moment it
+	// happens to every connected node that listed CapCreds. Only a wake-up —
+	// the node leases at once instead of on its own clock (hours apart), and
+	// that lease's answer is the whole truth: what it no longer lists, the
+	// node removes. The payload carries no credential and no account name.
+	TypeCreds = "creds"
 )
 
 // CapRead is the hello capability a node lists when it answers TypeRequest.
@@ -153,6 +161,11 @@ const CapPerson = "person"
 // CapTicket is the hello capability a node lists when it follows TypeTicket
 // (claude-fleet#2677). An older agent never says it and is never sent one.
 const CapTicket = "ticket"
+
+// CapCreds is the hello capability a node lists when it leases again on
+// TypeCreds (claude-fleet#3744). An older agent never says it, is never sent
+// one, and keeps leasing on its own clock.
+const CapCreds = "creds"
 
 // CapRelease is the hello capability a node lists when it wakes its update on
 // TypeRelease (claude-fleet#3146): a machine link whose node daemon runs the
@@ -328,6 +341,11 @@ type WorkerLoc struct {
 	WorkerID  string `json:"worker_id"`
 	Node      string `json:"node"`
 	OriginWID string `json:"origin_wid,omitempty"`
+}
+
+// Creds is the payload of TypeCreds: what changed, for the node's log only.
+type Creds struct {
+	Why string `json:"why,omitempty"`
 }
 
 // Team is the payload of TypeTeam.
