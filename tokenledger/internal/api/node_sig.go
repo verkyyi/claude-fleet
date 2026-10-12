@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/base64"
@@ -133,15 +134,24 @@ func (s *Server) verifyNodeSig(r *http.Request, f map[string]string, now time.Ti
 // hash, or an HTTP status + message.
 func (s *Server) nodeAuth(r *http.Request) (*store.Endpoint, string, int, string) {
 	if f, ok := parseNodeSig(r.Header.Get("Authorization")); ok {
+		if v, ok := s.nodeSigSeen.Load(r); ok {
+			a := v.(nodeAuthAnswer)
+			return a.ep, a.hash, a.code, a.msg
+		}
+		var a nodeAuthAnswer
 		ep, h, err := s.verifyNodeSig(r, f, time.Now())
 		var refused errNodeSig
 		switch {
 		case errors.As(err, &refused):
-			return nil, "", http.StatusUnauthorized, err.Error()
+			a = nodeAuthAnswer{code: http.StatusUnauthorized, msg: err.Error()}
 		case err != nil:
-			return nil, "", http.StatusInternalServerError, err.Error()
+			a = nodeAuthAnswer{code: http.StatusInternalServerError, msg: err.Error()}
+		default:
+			a = nodeAuthAnswer{ep: ep, hash: h}
 		}
-		return ep, h, 0, ""
+		s.nodeSigSeen.Store(r, a)
+		context.AfterFunc(r.Context(), func() { s.nodeSigSeen.Delete(r) })
+		return a.ep, a.hash, a.code, a.msg
 	}
 	tok := bearer(r)
 	if tok == "" {
@@ -161,6 +171,56 @@ func (s *Server) nodeAuth(r *http.Request) (*store.Endpoint, string, int, string
 		return nil, "", http.StatusInternalServerError, err.Error()
 	}
 	return ep, h, 0, ""
+}
+
+// nodeAuthAnswer is one nodeAuth verdict, kept for its request's life.
+type nodeAuthAnswer struct {
+	ep   *store.Endpoint
+	hash string
+	code int
+	msg  string
+}
+
+// nodeAuthHeld says whether r carries a node credential at all — a FleetSig
+// signature or a bearer — so a door that also takes other credentials knows
+// whether nodeAuth's refusal is the answer.
+func nodeAuthHeld(r *http.Request) bool {
+	if _, ok := parseNodeSig(r.Header.Get("Authorization")); ok {
+		return true
+	}
+	return bearer(r) != ""
+}
+
+// nodeAuthOpt is nodeAuth for a door where a node is one caller among others
+// (a person's certificate, the operator's door): the endpoint, or nil when r
+// proves none — a bearer that is no node's, or one its node turned off, reads
+// as «not a node» and the door goes on to its other credentials.
+func (s *Server) nodeAuthOpt(r *http.Request) (*store.Endpoint, string) {
+	if !nodeAuthHeld(r) {
+		return nil, ""
+	}
+	ep, h, _, _ := s.nodeAuth(r)
+	return ep, h
+}
+
+// nodeEndpointOr is nodeEndpoint with the door's own words for the bearer
+// cases (an unchanged answer for a node that signs nothing): missing is said
+// when r carries no credential, unknown when its bearer is no node's. A
+// signature's refusal and bearer_off keep nodeAuth's own words.
+func (s *Server) nodeEndpointOr(w http.ResponseWriter, r *http.Request, missing, unknown string) (*store.Endpoint, string, bool) {
+	if !nodeAuthHeld(r) {
+		httpError(w, http.StatusUnauthorized, missing)
+		return nil, "", false
+	}
+	ep, h, code, msg := s.nodeAuth(r)
+	if ep == nil {
+		if msg == "unrecognised enrollment token" {
+			msg = unknown
+		}
+		httpError(w, code, msg)
+		return nil, "", false
+	}
+	return ep, h, true
 }
 
 // handleNodeKey serves /v1/node/key: GET says the endpoint's key; POST

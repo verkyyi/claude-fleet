@@ -48,7 +48,8 @@
 #                                                   handleWeChatBind) + signin_ways.go; go test, when a toolchain is here
 #   email-link-replay                               tokenledger/internal/api email_auth.go (handleEmailLink /
 #                                                   handleEmailCode) + internal/store hub_signin.go; go test, when here
-#   node-token-replayed                             tokenledger/internal/api node_sig.go (nodeAuth) + store
+#   node-token-replayed                             tokenledger/internal/api node_sig.go (nodeAuth) + store,
+#                                                   internal/nodesig (Ensure), every door's nodeAuth (#3710)
 #                                                   fleet_node_keys.go; bin/fleet_node_sig.py; go test, when here
 #   invite-expired                                  tokenledger/internal/api fleet_invites.go + github_auth.go
 #                                                   (admitInvite, denyText; go test, when a toolchain is here)
@@ -2076,6 +2077,14 @@ drill_node_token_replayed() {
     sed -n "/^func (s \*Server) ${f#*:}(/,/^}/p" "$tl/api/${f%%:*}" | grep -q 's.nodeAuth(r)' \
       || { WHY="${f#*:} does not authenticate through nodeAuth (${f%%:*})"; return 1; }
   done
+  # every other door that reads a node token goes through it too (#3710): only
+  # nodeAuth itself, a token just minted (join · login node), the machine link's
+  # login hello and the revoke list may look a token hash up by hand
+  for f in $(grep -l 'EndpointByTokenHash' "$tl"/api/*.go 2>/dev/null | grep -v '_test\.go$'); do
+    case "${f##*/}" in node_sig.go|fleet_join.go|fleet_login_node.go|node_machine.go|fleet_node_revoke.go) ;;
+      *) WHY="${f##*/} reads a node token by hand (EndpointByTokenHash), not through nodeAuth"; return 1 ;;
+    esac
+  done
   grep -q 'CREATE TABLE IF NOT EXISTS fleet_sig_nonces' "$tl/store/fleet_node_keys.go" 2>/dev/null \
     || { WHY="spent nonces are not kept where both replicas see them (fleet_sig_nonces)"; return 1; }
   # the node's half: a key made 600, a header the hub's format, a refused overwrite
@@ -2094,8 +2103,9 @@ drill_node_token_replayed() {
     || { rm -rf "$d"; WHY="the node key is not 600"; return 1; }
   rm -rf "$d"
   c11_go_tests node_sig_test.go TestNodeSigOffAddsNothing TestNodeSigRegisterSignReplay TestNodeSigSessionCredNode TestNodeSigPythonVector || return 1
+  c11_go_tests node_sig_callers_test.go TestNodeSigEnsureAndEveryDoor TestNodeSigEnsureOldHubMakesNothing TestNodeSigOneRequestTwoAsks || return 1
   WHAT='节点钥匙 600、不覆盖，签名头是入口的格式；入口一处 nodeAuth，nonce 两副本共用（测试按名核对在，Go 门跑它们）'
-  [ "$GO_RAN" = 1 ] && WHAT='bearer_off 之后抄走的令牌 401、也登记不了自己的钥匙；同一签名第二次 401；过期 / 未来 / 换路径 / 换方法 / 别的钥匙都拒；没钥匙的节点原样；Python 签的向量 Go 验得过（go test 四条）'
+  [ "$GO_RAN" = 1 ] && WHAT='节点自己 Ensure 出钥匙并登记、每扇门（ingest · live · lease · place · quota-lease · credentials）签名都过；bearer_off 之后抄走的令牌在每扇门 401、也登记不了自己的钥匙；同一签名第二次 401；过期 / 未来 / 换路径 / 换方法 / 别的钥匙都拒；没钥匙的节点原样；Python 签的向量 Go 验得过（go test 七条）'
   SECS=$(since "$t0")
 }
 

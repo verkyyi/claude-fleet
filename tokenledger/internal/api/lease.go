@@ -50,9 +50,8 @@ func (s *Server) handleQuotaLease(w http.ResponseWriter, r *http.Request) {
 		httpError(w, 405, "POST required")
 		return
 	}
-	ep, err := s.Store.EndpointByTokenHash(HashToken(bearer(r)))
-	if bearer(r) == "" || err != nil {
-		httpError(w, 401, "unrecognised enrollment token")
+	ep, _, ok := s.nodeEndpointOr(w, r, "unrecognised enrollment token", "unrecognised enrollment token")
+	if !ok {
 		return
 	}
 	var body struct {

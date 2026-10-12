@@ -32,6 +32,7 @@ import (
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/identity"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/limits"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/nodesig"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/scan"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/sessions"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/spool"
@@ -48,6 +49,10 @@ type Config struct {
 	CodexHomes          string // optional additional comma-separated Codex homes
 	CodexBinary         string // optional Codex CLI executable
 	CodexDisableRefresh bool   // disable official Codex credential renewal
+	// KeyFile is this node's signing key (claude-fleet#3710): made and
+	// registered at start (nodesig.Ensure), then every request is signed
+	// instead of showing Token. "" = the token, as before.
+	KeyFile string
 
 	// SessionsDir is where the statusLine hook writes its stamps.
 	//
@@ -253,6 +258,9 @@ const spoolFraction = 4
 // Agent is a running collector.
 type Agent struct {
 	cfg Config
+	// signer is KeyFile once the hub took it (claude-fleet#3710); nil = the
+	// bearer token.
+	signer atomic.Pointer[nodesig.Signer]
 	// svcLogs are the service-log follows open on this login's lane
 	// (claude-fleet#2797), by the hub's op_id.
 	svcLogs svcLogFollows
@@ -468,6 +476,7 @@ func New(cfg Config) (*Agent, error) {
 func (a *Agent) Run(ctx context.Context) error {
 	// A machine tenant's every command runs as its login (claude-fleet#2333).
 	ctx = withRunAs(ctx, a.cfg.RunAs)
+	a.ensureKey(ctx)
 	if a.cfg.Once {
 		return a.cycle(ctx)
 	}
@@ -646,7 +655,7 @@ func (a *Agent) pushLive(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+a.cfg.Token)
+	a.authorize(req)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := a.http.Do(req)
@@ -1249,7 +1258,7 @@ func (a *Agent) push(ctx context.Context, batch *model.Batch) (*model.IngestResp
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+a.cfg.Token)
+	a.authorize(req)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := a.http.Do(req)
@@ -1268,4 +1277,31 @@ func (a *Agent) push(ctx context.Context, batch *model.Batch) (*model.IngestResp
 		return nil, fmt.Errorf("decode hub response: %w", err)
 	}
 	return &out, nil
+}
+
+// ensureKey makes and registers this node's signing key (claude-fleet#3710);
+// any failure leaves the bearer token in use.
+func (a *Agent) ensureKey(ctx context.Context) {
+	if a.cfg.KeyFile == "" {
+		return
+	}
+	kctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	s, note := nodesig.Ensure(kctx, nil, a.cfg.HubURL, a.cfg.Token, a.cfg.KeyFile)
+	if note != "" {
+		log.Print(note)
+	}
+	if s != nil {
+		a.signer.Store(s)
+	}
+}
+
+// authorize signs req with this node's key, or shows its token.
+func (a *Agent) authorize(req *http.Request) {
+	nodesig.Set(req, a.signer.Load(), a.cfg.Token)
+}
+
+// authValue is the Authorization a dial to rawURL carries.
+func (a *Agent) authValue(method, rawURL string) string {
+	return nodesig.Authorization(a.signer.Load(), a.cfg.Token, method, rawURL)
 }

@@ -62,7 +62,7 @@ func (a *Agent) fetchMoveBundle(ctx context.Context, envelope json.RawMessage) (
 	if err != nil {
 		return "UNAVAILABLE", err.Error()
 	}
-	req.Header.Set("Authorization", "Bearer "+a.cfg.Token)
+	a.authorize(req)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return "UNAVAILABLE", "download the transcript bundle: " + err.Error()

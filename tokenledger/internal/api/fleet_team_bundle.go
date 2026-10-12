@@ -419,11 +419,9 @@ func (s *Server) handleFleetTeamBundle(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if !ok {
-		if tok := bearer(r); tok != "" {
-			if ep, err := s.Store.EndpointByTokenHash(HashToken(tok)); err == nil {
-				host, user := s.peerSelf(ep)
-				id, ok = sshRelayIdentity{Actor: "node:" + host + "/" + user}, true
-			}
+		if ep, _ := s.nodeAuthOpt(r); ep != nil { // claude-fleet#3710
+			host, user := s.peerSelf(ep)
+			id, ok = sshRelayIdentity{Actor: "node:" + host + "/" + user}, true
 		}
 	}
 	if !ok && r.Method == http.MethodPost && req.Cert != "" && req.Sig != "" {

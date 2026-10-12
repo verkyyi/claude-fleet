@@ -150,7 +150,7 @@ body=$(python3 -c 'import json,sys; print(json.dumps({"target":sys.argv[1],"purp
 CURL=${FLEET_HUB_CURL:-curl}
 resp=$(_fleet_hub_env
   "$CURL" -sS --connect-timeout "${FLEET_PEER_CERT_CONNECT_SECS:-0.8}" --max-time "${FLEET_HUB_TIMEOUT:-10}" -o - -w '\n%{http_code}' \
-    -H "Authorization: Bearer $CCQUOTA_TOKEN" -H 'Content-Type: application/json' \
+    -H "Authorization: $(fleet_node_auth POST "${CCQUOTA_HUB_URL%/}/v1/node/peer-cert" "$CCQUOTA_TOKEN")" -H 'Content-Type: application/json' \
     -X POST --data-binary "$body" "${CCQUOTA_HUB_URL%/}/v1/node/peer-cert" 2>/dev/null); rc=$?
 [ "$rc" -eq 0 ] && [ -n "$resp" ] || die 1 "$(fleet_ui_t peer_hub_lost_fmt "$SHOWN")（curl exit ${rc}；不退回长期互信）"
 code=$(printf '%s\n' "$resp" | tail -n 1)

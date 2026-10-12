@@ -124,6 +124,7 @@ DEFAULT_ROOT='/Library/Application Support/claude-fleet'
 ROOT="${FLEET_NODE_ROOT:-$DEFAULT_ROOT}"
 CUR="$ROOT/current"
 ENVF="$STATE/machine.env"
+MKEY="$STATE/machine.key"   # the machine's signing key (#3699), beside machine.env
 SEAT=_fleetnode; [ "$OS" = linux ] && SEAT=fleetnode
 # machine.env is the seat's while the node program runs as it (#3669)
 seat_env_own() { [ -f "$STATE/seat-agent" ] && [ ! -L "$STATE/seat-agent" ] && id -u "$SEAT" >/dev/null 2>&1 && chown "$SEAT" "$ENVF" 2>/dev/null; return 0; }
@@ -161,9 +162,20 @@ put() {
 
 # req <GET|POST> <path> <out> [body file] [token] → prints the HTTP code (000 = no answer)
 req() {
-  local a=(-sS --max-time 60 -o "$3" -w '%{http_code}')
-  [ -n "${5:-}" ] && a+=(-H "Authorization: Bearer $5")
+  local a=(-sS --max-time 60 -o "$3" -w '%{http_code}') h='' code
   [ "$1" = POST ] && a+=(-X POST -H 'Content-Type: application/json' --data-binary "@$4")
+  if [ -n "${5:-}" ]; then
+    # the machine's signature once the hub took its key (#3710: machine.key.ok,
+    # written below and by the node program); a hub that no longer holds it
+    # answers 401, and the token is asked once more
+    [ -s "${MKEY:-}.ok" ] && [ -f "${CUR:-}/bin/fleet_node_sig.py" ] \
+      && h=$("$PY" -I "$CUR/bin/fleet_node_sig.py" auth "$MKEY" "$1" "$HUB$2" 2>/dev/null)
+    if [ -n "$h" ]; then
+      code=$("$CURL" "${a[@]}" -H "Authorization: $h" "$HUB$2" 2>/dev/null || true)
+      [ "$code" != 401 ] && { printf '%s' "$code"; return 0; }
+    fi
+    a+=(-H "Authorization: Bearer $5")
+  fi
   "$CURL" "${a[@]}" "$HUB$2" 2>/dev/null || true
 }
 
@@ -367,7 +379,6 @@ fi
 # hub, so a request can be signed (FleetSig) instead of showing machine.env's
 # token. The token still works beside it until the machine says bearer_off.
 SIG="$CUR/bin/fleet_node_sig.py"
-MKEY="$STATE/machine.key"
 if [ ! -f "$SIG" ]; then
   skip 机器钥匙 "运行时 $(cur_sha | cut -c1-12) 还不会签名（早于 #3699）"
 else
@@ -376,17 +387,26 @@ else
   fi
   chmod 600 "$MKEY" 2>/dev/null
   [ -f "$STATE/seat-agent" ] && [ ! -L "$STATE/seat-agent" ] && id -u "$SEAT" >/dev/null 2>&1 && chown "$SEAT" "$MKEY" 2>/dev/null
+  # <key>.ok = "<keyid> <hub>": the hub took it, so a request may be signed
+  # (#3710 — the node program's nodesig.Ensure writes the same)
+  mark_ok() {
+    printf '%s %s\n' "$kid" "$HUB" > "$MKEY.ok" && chmod 600 "$MKEY.ok" 2>/dev/null
+    [ -f "$STATE/seat-agent" ] && [ ! -L "$STATE/seat-agent" ] && id -u "$SEAT" >/dev/null 2>&1 && chown "$SEAT" "$MKEY.ok" 2>/dev/null
+    return 0
+  }
   kid="$("$PY" -I "$SIG" keyid "$MKEY" 2>"$WORK/sig.err")" || fail 机器钥匙 "读不了 ${MKEY}：$(tail -n 1 "$WORK/sig.err")"
   code=$(req GET /v1/node/key "$WORK/key.cur" "" "$TOKEN")
   case "$code" in
     200)
       if grep -q "\"$kid\"" "$WORK/key.cur"; then
+        mark_ok
         skip 机器钥匙 "已登记 ${kid}（${MKEY}）"
       else
         "$PY" -I "$SIG" register-body "$MKEY" >"$WORK/key.req" 2>"$WORK/sig.err" || fail 机器钥匙 "$(tail -n 1 "$WORK/sig.err")"
         code=$(req POST /v1/node/key "$WORK/key.reg" "$WORK/key.req" "$TOKEN")
         rm -f "$WORK/key.req"
         [ "$code" = 200 ] || fail 机器钥匙 "入口答 HTTP ${code}：$(head -c 200 "$WORK/key.reg" 2>/dev/null)"
+        mark_ok
         ok 机器钥匙 "$kid 登记到入口（私钥 ${MKEY}，不离开这台）"
       fi ;;
     404) skip 机器钥匙 "入口还不认机器钥匙（早于 #3699）" ;;

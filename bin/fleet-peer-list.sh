@@ -27,7 +27,7 @@ _fleet_hub_creds_missing >/dev/null && exit 3
 CURL=${FLEET_HUB_CURL:-curl}
 resp=$(_fleet_hub_env
   "$CURL" -sS --connect-timeout "${FLEET_PEER_LIST_CONNECT_SECS:-2}" --max-time "${FLEET_HUB_TIMEOUT:-10}" -o - -w '\n%{http_code}' \
-    -H "Authorization: Bearer $CCQUOTA_TOKEN" "${CCQUOTA_HUB_URL%/}/v1/node/peers" 2>/dev/null); rc=$?
+    -H "Authorization: $(fleet_node_auth GET "${CCQUOTA_HUB_URL%/}/v1/node/peers" "$CCQUOTA_TOKEN")" "${CCQUOTA_HUB_URL%/}/v1/node/peers" 2>/dev/null); rc=$?
 if [ "$rc" -ne 0 ] || [ -z "$resp" ]; then
   printf 'fleet-peer-list: the hub could not be reached (curl exit %s)\n' "$rc" >&2
   exit 1

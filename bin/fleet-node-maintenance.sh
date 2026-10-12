@@ -84,11 +84,11 @@ resp=$(_fleet_hub_env
   url="${CCQUOTA_HUB_URL%/}/v1/node/maintenance"
   if [ -n "$body" ]; then
     "$CURL" -sS --max-time "${FLEET_HUB_TIMEOUT:-15}" -o - -w '\n%{http_code}' \
-      -H "Authorization: Bearer $CCQUOTA_TOKEN" -H 'Content-Type: application/json' \
+      -H "Authorization: $(fleet_node_auth POST "$url" "$CCQUOTA_TOKEN")" -H 'Content-Type: application/json' \
       -X POST --data-binary "$body" "$url" 2>/dev/null
   else
     "$CURL" -sS --max-time "${FLEET_HUB_TIMEOUT:-15}" -o - -w '\n%{http_code}' \
-      -H "Authorization: Bearer $CCQUOTA_TOKEN" "$url" 2>/dev/null
+      -H "Authorization: $(fleet_node_auth GET "$url" "$CCQUOTA_TOKEN")" "$url" 2>/dev/null
   fi); rc=$?
 [ "$rc" -eq 0 ] && [ -n "$resp" ] || die 1 "hub unreachable (${CCQUOTA_HUB_URL:-$(_fleet_node_env_val CCQUOTA_HUB_URL)}): curl exit $rc — nothing changed"
 code=$(printf '%s\n' "$resp" | tail -n 1)

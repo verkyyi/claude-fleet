@@ -63,7 +63,12 @@ while [ $# -gt 0 ]; do
   case "$1" in
     -o) out=$2; shift ;; -w) w=$2; shift ;; -D) hdr=$2; shift ;;
     --data-binary|-d) data=$2; shift ;;
-    -H) case "$2" in Authorization:*) auth=${2#*Bearer };; esac; shift ;;
+    -H) case "$2" in
+          # a signature (#3710) passes as the token when its key is the one registered
+          "Authorization: FleetSig keyid="*) k=${2#*keyid=}; k=${k%%,*}
+            [ -n "$k" ] && [ "$k" = "$(cat "$HUBD/nodekey" 2>/dev/null)" ] && auth=$(cat "$HUBD/token" 2>/dev/null) && echo signed >> "$HUBD/sigs" ;;
+          Authorization:*) auth=${2#*Bearer } ;;
+        esac; shift ;;
     -X|--max-time|-m) shift ;; -*) ;; *) url=$1 ;;
   esac
   shift
@@ -299,9 +304,11 @@ keybefore="$(cat "$SB/db/machine.key")"
 run
 check "the same command again: 跳过 机器钥匙 (已登记), the key kept" \
   sh -c "[ $RC = 0 ] && printf '%s' \"\$OUT\" | grep -q '^跳过 机器钥匙：已登记' && [ \"\$(cat '$SB/db/machine.key')\" = '$keybefore' ]"
+check "  … machine.key.ok says the hub took it, and that run signed its requests (#3710)" \
+  sh -c "[ \"\$(cat '$SB/db/machine.key.ok' 2>/dev/null)\" = '$KID https://hub.test' ] && [ -s '$HUBD/sigs' ]"
 rm -f "$HUBD/nodekey"
 run
-check "the hub forgot it: registered again with the same key" \
+check "the hub forgot it: the signature's 401 falls back to the token, registered again with the same key" \
   sh -c "[ $RC = 0 ] && printf '%s' \"\$OUT\" | grep -q '^✓ 机器钥匙' && [ \"\$(cat '$HUBD/nodekey')\" = '$KID' ]"
 
 echo "F  the old roads on a managed machine"

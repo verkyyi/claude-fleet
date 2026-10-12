@@ -433,15 +433,11 @@ func (s *Server) SendNodeWrite(ctx context.Context, endpointID string, msg contr
 
 // handleNodeConnect accepts one node's control channel.
 func (s *Server) handleNodeConnect(w http.ResponseWriter, r *http.Request) {
-	tok := bearer(r)
-	if tok == "" {
-		httpError(w, http.StatusUnauthorized, "missing bearer token")
-		return
-	}
-	tokHash := HashToken(tok)
-	ep, err := s.Store.EndpointByTokenHash(tokHash)
-	if err != nil {
-		httpError(w, http.StatusUnauthorized, "unrecognised enrollment token")
+	// Its signature over GET /v1/node/connect, else its token
+	// (claude-fleet#3710); either way the endpoint's token hash keys what
+	// the link checks later (nodeTokenLive, a worker assertion).
+	ep, tokHash, ok := s.nodeEndpointOr(w, r, "missing bearer token", "unrecognised enrollment token")
+	if !ok {
 		return
 	}
 

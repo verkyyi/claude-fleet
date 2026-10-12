@@ -86,7 +86,7 @@ func (a *Agent) fetchAttachment(ctx context.Context, at startAttachment) (string
 	if err != nil {
 		return "UNAVAILABLE", err.Error()
 	}
-	req.Header.Set("Authorization", "Bearer "+a.cfg.Token)
+	a.authorize(req)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return "UNAVAILABLE", "download attachment " + at.Name + ": " + err.Error()

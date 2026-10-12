@@ -110,7 +110,7 @@ print(json.dumps({"id": id_, "backend": "gh", "title": title, "state": "open",
                   "url": url, "origin": origin}, ensure_ascii=False))' "$id" "$title" "$url" "$origin") || return 0
   resp=$(_fleet_hub_env
     "${FLEET_HUB_CURL:-curl}" -sS --max-time "${FLEET_HUB_TIMEOUT:-10}" -o /dev/null -w '%{http_code}' \
-      -H "Authorization: Bearer ${CCQUOTA_TOKEN:-}" -H 'Content-Type: application/json' \
+      -H "Authorization: $(fleet_node_auth POST "${CCQUOTA_HUB_URL%/}/v1/fleet/tickets/register" "${CCQUOTA_TOKEN:-}")" -H 'Content-Type: application/json' \
       -X POST --data-binary "$body" "${CCQUOTA_HUB_URL%/}/v1/fleet/tickets/register" 2>/dev/null)
   code=${resp:-000}
   case "$code" in

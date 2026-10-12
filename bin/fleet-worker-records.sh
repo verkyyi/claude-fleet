@@ -76,12 +76,12 @@ hub_call() {
   if [ -n "${3:-}" ]; then
     resp=$(_fleet_hub_env
       "$CURL" -sS --max-time "${FLEET_HUB_TIMEOUT:-10}" -o - -w '\n%{http_code}' \
-        -H "Authorization: Bearer $CCQUOTA_TOKEN" -H 'Content-Type: application/json' \
+        -H "Authorization: $(fleet_node_auth "$1" "${CCQUOTA_HUB_URL%/}$2" "$CCQUOTA_TOKEN")" -H 'Content-Type: application/json' \
         -X "$1" --data-binary "@$3" "${CCQUOTA_HUB_URL%/}$2" 2>/dev/null); rc=$?
   else
     resp=$(_fleet_hub_env
       "$CURL" -sS --max-time "${FLEET_HUB_TIMEOUT:-5}" -o - -w '\n%{http_code}' \
-        -H "Authorization: Bearer $CCQUOTA_TOKEN" -X "$1" "${CCQUOTA_HUB_URL%/}$2" 2>/dev/null); rc=$?
+        -H "Authorization: $(fleet_node_auth "$1" "${CCQUOTA_HUB_URL%/}$2" "$CCQUOTA_TOKEN")" -X "$1" "${CCQUOTA_HUB_URL%/}$2" 2>/dev/null); rc=$?
   fi
   [ "$rc" -eq 0 ] && [ -n "$resp" ] || die 1 "hub unreachable (curl exit $rc)"
   code=$(printf '%s\n' "$resp" | tail -n 1)

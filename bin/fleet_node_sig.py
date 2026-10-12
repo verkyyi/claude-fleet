@@ -20,12 +20,17 @@ leaves this file. This script only does the arithmetic; HTTP is the caller's
                                                     # the JSON POST /v1/node/key takes
     fleet_node_sig.py header <keyfile> <METHOD> <URI>
                                                     # the Authorization value for one request
+    fleet_node_sig.py auth <keyfile> <METHOD> <URL>
+                                                    # the same for a whole URL — only once the
+                                                    # hub took the key (<keyfile>.ok = "<keyid> <hub>",
+                                                    # written by the agent's Ensure, #3710); exit 3
+                                                    # = not confirmed, show the token
 
 The key file holds the 32-byte seed in base64 on one line. Signing uses the
 `cryptography` package when present (constant time), else fleet_ed25519.py (plain
 Python, RFC 8032) — a stock /usr/bin/python3 has only the second.
 
-Exit: 0 · 1 failure (stderr says why) · 2 usage.
+Exit: 0 · 1 failure (stderr says why) · 2 usage · 3 (auth) no confirmed key.
 """
 import base64
 import hashlib
@@ -104,11 +109,39 @@ def register_body(seed, bearer_off=False):
     return {"public_key": pub, "proof": proof, "bearer_off": bool(bearer_off)}
 
 
+def confirmed_auth(path, method, url):
+    """The FleetSig value for url when path is the key the hub at url's hub took
+    (<path>.ok); None otherwise — tokenledger/internal/nodesig's Confirmed."""
+    try:
+        seed = _read_seed(path)
+        with open(path + ".ok") as f:
+            ok = f.read().strip().split()
+    except (OSError, ValueError):
+        return None
+    kid = key_id(_public(seed))
+    if len(ok) != 2 or ok[0] != kid:
+        return None
+    hub = ok[1].rstrip("/")
+    if not (url == hub or url.startswith(hub + "/") or url.startswith(hub + "?")):
+        return None
+    rest = url.split("://", 1)[-1]
+    uri = rest[rest.index("/"):] if "/" in rest else "/"
+    return header(seed, method, uri)
+
+
 def main(argv):
     if len(argv) < 2 or argv[0] in ("-h", "--help"):
         print(__doc__.strip(), file=sys.stderr)
         return 2
     cmd, path = argv[0], argv[1]
+    if cmd == "auth":
+        if len(argv) != 4:
+            return 2
+        v = confirmed_auth(path, argv[2], argv[3])
+        if v is None:
+            return 3
+        print(v)
+        return 0
     try:
         if cmd == "keygen":
             if len(argv) != 2:

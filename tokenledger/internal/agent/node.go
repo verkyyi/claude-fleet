@@ -161,7 +161,7 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 		conn = l
 	} else {
 		c, _, err := websocket.Dial(dctx, nodeURL(a.cfg.HubURL), &websocket.DialOptions{
-			HTTPHeader: http.Header{"Authorization": []string{"Bearer " + a.cfg.Token}},
+			HTTPHeader: http.Header{"Authorization": []string{a.authValue(http.MethodGet, nodeURL(a.cfg.HubURL))}},
 		})
 		if err != nil {
 			return false, err
