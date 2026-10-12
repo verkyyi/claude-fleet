@@ -15,7 +15,7 @@ LICENSE	person	版权人署名（MIT 许可证要求写明版权人）
 .claude-plugin/*.json	gh-owner	插件市场 / 插件清单的 owner、author 字段：公开发布的署名
 plugins/*/.claude-plugin/plugin.json	gh-owner	插件清单的 author 字段：公开发布的署名
 extras/web-chat/ui/dist/assets/*.js	machine	打包产物（#3637）：图标库的 SVG 路径数据 `m5 12`、`m4.9 …` 撞上机器名规则，不是机器名
-tokenledger/internal/credvault/kms.go	cloud	阿里云 KMS / STS 自己的公开 API 地址（KMS 适配代码本身；用哪个区域是部署的 CCQUOTA_FLEET_CRED_KMS_REGION）
+**/internal/credvault/kms.go	cloud	阿里云 KMS / STS 自己的公开 API 地址（KMS 适配代码本身；用哪个区域是部署的 CCQUOTA_FLEET_CRED_KMS_REGION）
 deploy/k8s/base/ccquota-pricing.yaml	cloud	阿里云百炼的公开 API 域名：定价表认提供方用，不是我们的地址
 extras/managed-node/render.py	private-ipv4	--egress-* 的默认值是阿里云 ACK 的产品默认网段（kube-dns、pod、service），参数可改
 deploy/k8s/egress/base/fleet-egress.py	private-ipv4	内嵌自测：要的就是私网地址被拒、被认
