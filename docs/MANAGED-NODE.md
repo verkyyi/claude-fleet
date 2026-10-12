@@ -902,7 +902,7 @@ BREAK-IT：`personal-account-runs-machine-service`（`bin/fleet-break-it-seats-s
   launchd 的 bootout 只收主进程组），pid 留在 state.json；新守护按命令行接管（`adopted
   child …`）。以后要停一个接管来的 root 子进程，守护不碰 pid：账号任务请核心 `stop-as`
   （登录自己的进程请 `kill`），机器任务请 `machine stop`——核心按**自己表里那个任务的命令行**
-  找 root 进程，从不收一个 pid。Linux 上 systemd 换单元仍会收掉子进程（迁移判据是 macmini）。
+  找 root 进程，从不收一个 pid。Linux 上 systemd 换单元仍会收掉子进程（迁移判据在托管 Mac 上）。
 - **它能写的**（root 布置，`seat_layout`，可重跑）：`<state>/node/`（`state.json` 在这里，
   `<state>/state.json` 是指向它的链接，读的人不用改）、`<state>/locks/`、`<log>/node/`
   （守护自己的日志，`supervisor.log` 也在这），各登录登记表的 `run/ runs/ alerts/`
