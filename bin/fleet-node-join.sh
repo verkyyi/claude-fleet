@@ -308,7 +308,7 @@ else
   fi
   case "$code" in
     200) ;;
-    401) die "join: the hub refused the code — unknown, already used, or older than 10 minutes. Mint a new one on $HUB/nodes" ;;
+    401) die "join: the hub refused the code — unknown, already used, or older than 10 minutes. Mint a new one on $HUB/app/nodes" ;;
     404) die "join: $HUB has no /v1/node/join — is it a ccquota hub with CCQUOTA_FLEET=1, and new enough?" ;;
     000) die "join: cannot reach $HUB ($(tr '\n' ' ' < "$WORK/join.err"))" ;;
     *) die "join: HTTP $code from $HUB: $(head -c 300 "$WORK/join")" ;;
@@ -719,8 +719,8 @@ elif [ "$SERVICE" != none ]; then
     printf '%s' "$st" | grep -q '"admin":true' && extra=" · admin agent"
     ca="$(printf '%s' "$st" | jfield ssh_ca)"
     [ -n "$ca" ] && extra="$extra · ssh CA: $ca"
-    say "online: the hub sees this login$extra — $HUB/nodes"
-    ui "✓ 入口看到它在线：$HUB/nodes"
+    say "online: the hub sees this login$extra — $HUB/app/nodes"
+    ui "✓ 入口看到它在线：$HUB/app/nodes"
   else
     say "online: FAIL — the hub has not seen this agent within ${WAIT}s (status: $(printf '%s' "$st" | jfield status)); see $STATE/agent.log"
   fi

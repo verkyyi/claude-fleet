@@ -774,7 +774,10 @@ func runHub(args []string) error {
 		LiveStore:           api.NewLive(),
 		Fleet:               fleetOn,
 		ReadOnly:            readOnly,
-		FleetAdmins:         splitList(os.Getenv("CCQUOTA_FLEET_ADMIN_USERS")),
+		// The public site at "/" (claude-fleet#3583): only our own hub turns
+		// it on; a self-hoster's "/" is the console.
+		Site:        siteOn(os.Getenv("CCQUOTA_SITE")),
+		FleetAdmins: splitList(os.Getenv("CCQUOTA_FLEET_ADMIN_USERS")),
 		// A person's grant on their own logins (claude-fleet#1410).
 		FleetPersonScopes:     fleetPersonScopes(),
 		FleetPersonConfigKeys: splitList(os.Getenv("CCQUOTA_FLEET_PERSON_CONFIG_KEYS")),
@@ -1504,4 +1507,14 @@ func migrateOnlyRun(dbFile string, out io.Writer, simulate bool) error {
 	}
 	fmt.Fprintf(out, "migrate-only: %s ok (%d migrations recorded)\n", dbFile, len(ms))
 	return nil
+}
+
+// siteOn reads CCQUOTA_SITE (claude-fleet#3583): on / 1 / true turn the
+// public site on at "/"; anything else — unset included — is off.
+func siteOn(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "on", "1", "true", "yes":
+		return true
+	}
+	return false
 }

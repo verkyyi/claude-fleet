@@ -15,15 +15,15 @@ test('a user sees their own pages and no Admin group', () => {
   // 我的用量 right after Overview, and no 我的额度 (claude-fleet#3229).
   assert.deepEqual(nav.map((x) => x.id), ['overview', 'usage', 'sessions', 'tasks', 'mymachines', 'devices', 'phone', 'connection', 'config']);
   assert.ok(!nav.some((x) => x.heading), 'no Admin heading for a user');
-  assert.deepEqual(nav.map((x) => x.href), ['/', '/usage', '/sessions', '/tasks', '/machines', '/connect', '/fleet/keys', '/fleet/connection', '/config']);
-  assert.ok(!PAGES.some((p) => p.href === '/quota'), '/quota is no page of its own: it moves to /usage');
+  assert.deepEqual(nav.map((x) => x.href), ['/app', '/app/usage', '/app/sessions', '/app/tasks', '/app/machines', '/app/connect', '/fleet/keys', '/fleet/connection', '/app/config']);
+  assert.ok(!PAGES.some((p) => p.href === '/app/quota'), '/quota is no page of its own: it moves to /usage');
 });
 
 test('反馈 is an admin page listed only when the hub says so (#3357)', () => {
   assert.ok(!navFor(ADMIN).some((x) => x.id === 'feedback'), 'not without the hub listing it');
   const admin = navFor([...ADMIN, 'feedback']);
   const fb = admin.find((x) => x.id === 'feedback');
-  assert.equal(fb.href, '/admin/feedback');
+  assert.equal(fb.href, '/app/admin/feedback');
   assert.equal(fb.group, 'admin');
   assert.equal(admin[admin.length - 1].id, 'feedback', 'after Audit');
 });
@@ -38,7 +38,7 @@ test('an admin also sees the Admin group: the whole hub, then the five admin pag
   // All devices is the 客户端 tab of 服务节点与客户端 now (claude-fleet#3232):
   // the hub may still list 'all-devices', the menu has no item for it.
   assert.deepEqual(admin.map((x) => x.id), ['all-sessions', 'by-person', 'subscriptions', 'machines', 'people', 'settings', 'audit']);
-  assert.deepEqual(admin.map((x) => x.href), ['/admin/sessions', '/admin/overview', '/subscriptions', '/nodes', '/admin/users', '/admin/settings', '/admin/audit']);
+  assert.deepEqual(admin.map((x) => x.href), ['/app/admin/sessions', '/app/admin/overview', '/app/subscriptions', '/app/nodes', '/app/admin/users', '/app/admin/settings', '/app/admin/audit']);
   assert.equal(admin.find((x) => x.id === 'machines').label, 'Service nodes & clients');
   // The old admin pages are gone from the menu, not hidden.
   assert.deepEqual(navFor([...ADMIN, 'credentials', 'access']).length, nav.length);
@@ -140,10 +140,10 @@ test('the menu and the viewer line speak Chinese too', () => {
 test('an admin switches between their own view and the admin view; a user cannot', () => {
   const admin = { role: 'admin', pages: ADMIN };
   assert.deepEqual(['overview', 'sessions', 'config'].map((p) => otherView(admin, p).href),
-    ['/admin/overview', '/admin/sessions', '/admin/settings']);
+    ['/app/admin/overview', '/app/admin/sessions', '/app/admin/settings']);
   assert.ok(['overview', 'sessions', 'config'].every((p) => otherView(admin, p).admin));
   assert.deepEqual(['by-person', 'all-sessions', 'settings'].map((p) => otherView(admin, p).href),
-    ['/', '/sessions', '/config']);
+    ['/app', '/app/sessions', '/app/config']);
   assert.ok(['by-person', 'all-sessions'].every((p) => !otherView(admin, p).admin));
   // 我的客户端 has no admin half any more (claude-fleet#3232).
   assert.equal(otherView(admin, 'devices'), null);

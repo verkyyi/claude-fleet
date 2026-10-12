@@ -6494,6 +6494,24 @@ drill_cred_migration_client() {
   SECS=$(since "$t0")
 }
 
+# ---- site-console-indexed (#3583, EPIC #3569 共同约定 6): the console and the
+# intro page shared one address, so a crawler that read the intro page walked
+# straight into the console's pages. Now: the console is /app, every answer
+# under it says X-Robots-Tag: noindex, the old addresses 301 there, and "/" is
+# the site (signed out) or /app (signed in) — the client's paths untouched.
+drill_site_console_indexed() {
+  CAP=120; local t0 f="$ROOT/tokenledger/internal/api/app_mount.go"
+  t0=$(now)
+  grep -q 'X-Robots-Tag", "noindex' "$f" \
+    || { WHY="app_mount.go no longer marks the console noindex"; return 1; }
+  grep -q 's.appMount(s.routes())' "$ROOT/tokenledger/internal/api/server.go" \
+    || { WHY="the router is no longer behind appMount: the console is back at the root"; return 1; }
+  _drill_go_tests 'TestAppIsNoindex TestAppOldPathsMoveUnderApp TestAppRoot TestClientPathsUnchanged' \
+    "$ROOT/tokenledger/internal/api/app_mount_test.go" \
+    '控制台在 /app、每页 noindex；旧地址 301 过去；/ 未登录是官网、登录了 302 /app；客户端路径逐字节不变（go test）' || return 1
+  SECS=$(since "$t0")
+}
+
 drill_db_move_policy_seed() {
   CAP=120; local t0
   t0=$(now)

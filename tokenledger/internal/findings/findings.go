@@ -910,7 +910,7 @@ func computeRegion(cs []ComputeClosed) []Finding {
 		if reason == "" {
 			reason = "egress region not served by Claude / OpenAI"
 		}
-		fs = append(fs, Finding{Severity: "warning", Kind: "compute_region", Link: "/nodes",
+		fs = append(fs, Finding{Severity: "warning", Kind: "compute_region", Link: "/app/nodes",
 			Title:    fmt.Sprintf("%s stopped running sessions — its egress region %s is not supported", label, loc),
 			Detail:   reason,
 			Template: TmplComputeRegion,

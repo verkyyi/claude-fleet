@@ -70,6 +70,13 @@ type Server struct {
 	// read-only (Store.SetReadOnly), which catches the writes no request makes.
 	ReadOnly bool
 
+	// Site turns the public site on at "/" (CCQUOTA_SITE=on,
+	// claude-fleet#3583): a stranger reads it, someone signed in is sent to
+	// the console at /app. Off — a self-hoster's default — "/" is /app.
+	Site bool
+	// SiteFS is the built public site (web/site); nil = the landing page.
+	SiteFS fs.FS
+
 	// counter caches the all-time token total behind the hero counter. Its
 	// query is a full scan and the SSE stream pushes several times a second,
 	// so it is recomputed on a timer rather than per push.
@@ -315,7 +322,7 @@ type Server struct {
 
 // Handler builds the router.
 func (s *Server) Handler() http.Handler {
-	return s.logRequests(s.readOnlyGate(s.routes()))
+	return s.logRequests(s.readOnlyGate(s.appMount(s.routes())))
 }
 
 // readOnlyRetryAfter is the Retry-After a write gets while the hub is
@@ -802,13 +809,14 @@ func (s *Server) routes() *routeMux {
 	mux.HandleFunc("/meter.json", s.handleMeter)
 	mux.HandleFunc("/odometer.svg", s.handleOdometer)
 
-	// Signed out, "/" is the front page; signed in, the app. Every page under
-	// it settles its language first (claude-fleet#2023). Every other path that
-	// reaches here is one of the app's own files or a 404 -- for everyone,
-	// before the gate: the file list is the repository's web/dist, so whether
-	// a path exists tells a stranger nothing, and a removed route answers 404
-	// rather than the app's index (claude-fleet#1987).
-	mux.Handle("/", s.uiPathOr404(s.withPageLang(s.viewerOr(http.HandlerFunc(s.serveUI), s.serveLanding))))
+	// "/" here is the console's overview, /app (appMount answers the public
+	// "/" itself, claude-fleet#3583). Every page under it settles its language
+	// first (claude-fleet#2023). Every other path that reaches here is one of
+	// the app's own files or a 404 -- for everyone, before the gate: the file
+	// list is the repository's web/dist, so whether a path exists tells a
+	// stranger nothing, and a removed route answers 404 rather than the app's
+	// index (claude-fleet#1987).
+	mux.Handle("/", s.uiPathOr404(s.withPageLang(s.viewerOnly(http.HandlerFunc(s.serveUI)))))
 
 	return mux
 }
@@ -875,7 +883,7 @@ func (s *Server) viewerOr(next http.Handler, signedOut func(http.ResponseWriter,
 		// send them to GitHub's page when it is wired up. Everything else gets
 		// the honest 401.
 		if s.GitHub.ready() && wantsHTML(r) {
-			http.Redirect(w, r, "/signin", http.StatusFound)
+			http.Redirect(w, r, appURL("/signin"), http.StatusFound)
 			return
 		}
 
@@ -892,6 +900,8 @@ func stripToken(r *http.Request) string {
 	if u.Path == "" {
 		u.Path = "/"
 	}
+	// Under /app the browser's address carries the prefix (claude-fleet#3583).
+	u.Path, u.RawPath = appPath(r, u.Path), ""
 	return u.RequestURI()
 }
 

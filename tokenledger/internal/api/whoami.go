@@ -158,11 +158,11 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 		w.Header().Set("Cache-Control", "no-store")
-		http.Redirect(w, r, "/logout", http.StatusSeeOther)
+		http.Redirect(w, r, appURL("/logout"), http.StatusSeeOther)
 	case http.MethodGet:
-		page := logoutPage{Again: "/"}
+		page := logoutPage{Again: AppPrefix}
 		if s.GitHub.ready() {
-			page.Again, page.GitHub = "/signin", true
+			page.Again, page.GitHub = appURL("/signin"), true
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")

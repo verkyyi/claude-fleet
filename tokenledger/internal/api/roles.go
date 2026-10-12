@@ -42,6 +42,8 @@ const (
 
 // routeAccess is every pattern Handler mounts and who may use it. A route
 // added to Handler without a row here fails roles_test.go.
+// A console page keeps its row at its old path: app_mount.go serves it under
+// /app (claude-fleet#3583) and TestAppPagesAreRoutes holds the two together.
 var routeAccess = map[string]string{
 	// The way in, and what a signed-out machine must reach.
 	"/logout": accessPublic, "/signin": accessPublic,

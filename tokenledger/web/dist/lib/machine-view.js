@@ -16,11 +16,11 @@ export const HOUR = 12;
  *  from the admin's Machines (so the menu lights that list). */
 export function machineHref(host, fromNodes) {
   const name = String(host || '').split('.')[0];
-  return `/machines/${encodeURIComponent(name)}${fromNodes ? '?from=nodes' : ''}`;
+  return `/app/machines/${encodeURIComponent(name)}${fromNodes ? '?from=nodes' : ''}`;
 }
 
 /** backHref is the list the page was opened from. */
-export const backHref = (search) => (new URLSearchParams(search || '').get('from') === 'nodes' ? '/nodes' : '/machines');
+export const backHref = (search) => (new URLSearchParams(search || '').get('from') === 'nodes' ? '/app/nodes' : '/app/machines');
 
 const gb = (b) => (Number(b) > 0 ? Number(b) / (1 << 30) : 0);
 
@@ -97,7 +97,7 @@ export function detailModel(d, now = Date.now()) {
 /** clientRedirect is where a client device's page goes instead (C3: only a
  *  host has a page): 我的客户端, or the admin's 服务节点与客户端 at its
  *  客户端 tab (claude-fleet#3232). */
-export const clientRedirect = (admin) => (admin ? '/nodes?tab=clients' : '/connect');
+export const clientRedirect = (admin) => (admin ? '/app/nodes?tab=clients' : '/app/connect');
 
 /** nextIndex is the row j/k moves to from i over n rows (-1 = none yet). */
 export function nextIndex(i, n, key) {

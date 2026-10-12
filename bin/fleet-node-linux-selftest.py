@@ -539,7 +539,7 @@ class LinuxNode(unittest.TestCase):
                          [{'name': 'fleet', 'resources': moved[2]['spec']['template']['spec']['containers'][0]['resources']}])
         for bad in (['--limits', 'memory=1Gi'], ['--limits', 'cpu=100m'], ['--limits', 'gpu=1']):
             self.assertNotEqual(subprocess.run(base + bad, capture_output=True).returncode, 0, bad)
-        bad_name = [x if x != 'u-drill1' else 'arvin' for x in base]
+        bad_name = [x if x != 'u-drill1' else 'alice' for x in base]
         self.assertNotEqual(subprocess.run(bad_name, capture_output=True).returncode, 0)
         # the shared node renders as before
         node = json.loads(subprocess.check_output(base[:-2]))['items']

@@ -133,7 +133,7 @@ func rolesGet(t *testing.T, h *ghHarness, sess *http.Cookie, path string) (int, 
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, h.http.URL+path, nil)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, h.http.URL+pagePath(path), nil)
 	req.Header.Set("Accept", "application/json")
 	if sess != nil {
 		req.AddCookie(sess)

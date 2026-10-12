@@ -97,7 +97,7 @@ function servicesBlock(v) {
 function draw(ctx, v) {
   const back = backHref(location.search);
   const maint = v.maintenance ? `<span class="hint">${esc(t('ui.mach.maint'))}${v.maintenance.reason ? ' · ' + esc(v.maintenance.reason) : ''}</span>` : '';
-  main(ctx).innerHTML = `<nav class="crumb" aria-label="${esc(t('ui.md.crumb'))}"><a href="${esc(back)}">${ic('server')}${esc(t(back === '/nodes' ? 'ui.nav.machines' : 'ui.nav.mymachines'))}</a><span>/</span><b>${esc(v.label)}</b>` +
+  main(ctx).innerHTML = `<nav class="crumb" aria-label="${esc(t('ui.md.crumb'))}"><a href="${esc(back)}">${ic('server')}${esc(t(back === '/app/nodes' ? 'ui.nav.machines' : 'ui.nav.mymachines'))}</a><span>/</span><b>${esc(v.label)}</b>` +
     `${v.label !== v.name ? `<span class="mono" style="opacity:.6">${esc(v.name)}</span>` : ''}${status(v.status)}${maint}</nav>` +
     `<div class="grid g3 md-top">${loadBlock(v)}${versionBlock(v)}${loginsBlock(v)}</div>` +
     sessionsBlock(v) + servicesBlock(v);
