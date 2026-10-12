@@ -656,6 +656,13 @@ func (s *Server) clientPlace(w http.ResponseWriter, r *http.Request, p fleetPrin
 			giveBack()
 		}
 		s.leaseAudit(p.Actor, "client_place", what, "REMOTE "+m+" "+out.State+" "+asString(op["operation_id"]), now)
+		if node != "auto" && out.Exit == 5 && oc.Exit != nil && *oc.Exit == 2 {
+			// The machine the person named said it is full (its spawn's
+			// RC_CAP — a count cap or its own admission, claude-fleet#3479):
+			// no other machine is tried, and the line says why.
+			head, tail, _ := strings.Cut(out.Line, "\t")
+			out.Line = head + "\t" + pinnedFull(m) + ": " + tail
+		}
 		if out.Exit == 5 && oc.Exit != nil && *oc.Exit != 3 {
 			if ok, done := next(placeAttempt{Machine: m, OperationID: out.OperationID, State: oc.State,
 				Exit: oc.Exit, Why: oneLine(oc.Stderr)}); done {

@@ -2202,7 +2202,7 @@ if [ "$adm" = 0 ]; then
 else
   _ad_env=''
   for _k in FLEET_ADMIT_MEM_FREE_PCT FLEET_ADMIT_PRESSURE FLEET_ADMIT_LOAD_PER_CORE FLEET_ADMIT_RESERVE_MB \
-            FLEET_ADMIT_HYST_MB FLEET_ADMIT_SESSION_MB FLEET_ADMIT_SESSION_MB_MIN FLEET_ADMIT_SESSION_GROWTH FLEET_ADMIT_SETTLE_SECS; do
+            FLEET_ADMIT_HYST_MB FLEET_ADMIT_SESSION_MB FLEET_ADMIT_SESSION_MB_MIN FLEET_ADMIT_SESSION_GROWTH FLEET_ADMIT_SETTLE_SECS FLEET_ADMIT_ROOM; do
     eval "_v=\${$_k:-}"; [ -n "$_v" ] || _v=$(_gconf_val "$_k")
     [ -n "$_v" ] && _ad_env="$_ad_env $_k=$_v"
   done
@@ -2224,6 +2224,9 @@ EOF
     _ad_txt="room for ~$_r more session(s) now at ~$_c MB each (median $_md MB × growth over $_ag live agent(s)) — $_a MB available, $_f MB kept back"
     [ "$_hy" -gt 0 ] && _ad_txt="$_ad_txt + $_hy MB until it recovers"
     [ "$_rs" -gt 0 ] && _ad_txt="$_ad_txt, $_rs admitted not yet counted${_ad_who:+ ($_ad_who)}"
+    # room < 1 with the gate open: the estimate is advice at normal pressure (#3479)
+    [ "$_ad_w" = ok ] && [ "$_r" -lt 1 ] 2>/dev/null \
+      && _ad_txt="$_ad_txt — at normal pressure that is advice: it still admits while above the floor (global/admit-advice.log)"
     if [ "$_ad_w" = ok ]; then pass admit "$_ad_txt"
     else warn admit "$_ad_w — $_ad_txt; running sessions are untouched, new ones wait (FLEET_ADMIT=0 overrides)"; fi
   fi

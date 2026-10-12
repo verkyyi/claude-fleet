@@ -2351,6 +2351,13 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # memory is above the floor. 0 = the guide waits like any other session.
 # @label=Guide passes room estimate @group=disk @tier=internal @scope=global @edit=bool
 #FLEET_ADMIT_GUIDE_PASS=1
+# Every session gets most of that (issue #3479): at normal pressure the room
+# estimate is ADVICE — room < 1 still admits while memory stays above the floor
+# after paying for the sessions admitted but not yet counted (so a burst still
+# stops at the floor), and each such admission is noted in global/admit-advice.log.
+# hold = the strict rule: room < 1 holds every session but the guide.
+# @label=Room estimate @group=disk @tier=internal @scope=global @edit=str
+#FLEET_ADMIT_ROOM=advice            # advice (default) | hold
 # @label=Session cost MB (pinned) @group=disk @tier=internal @scope=global @edit=int @unit=MB
 #FLEET_ADMIT_SESSION_MB=0           # pin one session's cost; 0 = measure it
 # @label=Session cost floor MB @group=disk @tier=internal @scope=global @edit=int @unit=MB

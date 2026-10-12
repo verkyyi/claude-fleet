@@ -71,6 +71,9 @@
 #                                                   fleet_admit_release / fleet_admit_holders (fleet-lib.sh), scratch-pool.sh
 #   guide-admission-room                            fleet_machine_admit / _fleet_admit_guide_pass / fleet_guide_tick
 #                                                   (fleet-lib.sh), dash-raw-session.sh, fleet-alerts.sh event
+#   admit-room-advice                               fleet_machine_admit / _fleet_admit_room_advice /
+#                                                   fleet_admit_room_advised (fleet-lib.sh), fleet-control-read.sh
+#                                                   capacity; the hub half is fleet_client_place.go pinnedFull (go test)
 #   hubsess-daemon-nohup                            bin/fleet-hub-sessions.sh (ensure: no nohup; the lock)
 #   followup-stable-storm                           bin/fleet_followup.py (merge, execute, holding) on the
 #                                                   steward's beat (bin/fleet_steward.py)
@@ -1203,8 +1206,8 @@ drill_guide_admission_room() {
             FLEET_GLOBAL_MAX_SESSIONS=0 FLEET_MAX_SESSIONS=0 FLEET_MACHINE_MAX_SESSIONS=0 \
             bash -c "source '$BIN/fleet-lib.sh'; $1" 2>&1; }
   t0=$(now)
-  out=$(adm 'fleet_session_cap_ok fleet; echo "|rc=$?"')
-  case "$out" in *'pressure normal'*'room for 0 more'*'|rc=1') ;; *) WHY="an ordinary spawn at room 0 must be held: $out"; return 1 ;; esac
+  out=$(adm 'FLEET_ADMIT_ROOM=hold fleet_session_cap_ok fleet; echo "|rc=$?"')
+  case "$out" in *'pressure normal'*'room for 0 more'*'|rc=1') ;; *) WHY="an ordinary spawn at room 0 must be held under the strict rule: $out"; return 1 ;; esac
   out=$(adm 'FLEET_ADMIT_GUIDE=1 fleet_session_cap_ok fleet; echo "|rc=$?"')
   [ "$out" = '|rc=0' ] || { WHY="the onboarding guide was refused at normal pressure above the floor: $out"; return 1; }
   out=$(P=2 adm 'FLEET_ADMIT_GUIDE=1 fleet_session_cap_ok fleet; echo "|rc=$?"')
@@ -1221,6 +1224,46 @@ drill_guide_admission_room() {
     || { WHY="the stop was filed but not said (no onboard-stuck event in ${ev:-alerts.events}): $(cat "$d/conf/global/onboard.stuck")"; return 1; }
   SECS=$(since "$t0")
   WHAT="room 0、压力正常、在保底线之上：普通会话照拦，新手引导放行，压力 warn 仍拦；三次没开口写 onboard.stuck 并发出 onboard-stuck 事件"
+}
+
+# admit-room-advice (issue #3479): the newcomer's SECOND ordinary session on mini2
+# (drill 35) — pressure normal, 25 % free, floor 15 %, «room for 0 more at ~882 MB
+# each»: the hysteresis an earlier hold left and a just-opened window's reservation
+# took the one-more estimate to 0 while 757 MB sat above the floor. For real, on a
+# sandbox state dir with mini2's numbers (16384 MB, agents of 294 MB × 3 = 882,
+# admit-held + one confirmed reservation): the spawn gate admits and notes it, the
+# capacity beat tells the hub room 1 (not «full»), a second reservation, warn
+# pressure and the floor still hold, FLEET_ADMIT_ROOM=hold gives the old refusal.
+drill_admit_room_advice() {
+  CAP=30; local t0 d="$WORK/ara" out
+  t0=$(now)
+  local g="$d/tmp/.claude-dash/global"   # FLEET_C: the state dir under TMPDIR
+  setup() { rm -rf "$d"; mkdir -p "$g/admit-reserve" "$d/conf"
+    : > "$g/admit-held"; : > "$g/admit-reserve/guide.ok.1"; }
+  adm() { env FLEET_ADMIT=1 TMPDIR="$d/tmp" HOME="$d" FLEET_CONF_DIR="$d/conf" FLEET_MEM_TOTAL_MB=16384 \
+            FLEET_MEM_PS_CMD="printf '101 1 $(id -u) 301056 01:00 claude\n'" \
+            FLEET_MEM_PROBE_CMD="echo ${P:-1} ${A:-25} 0 0" FLEET_LOAD_PROBE_CMD='echo 0.5' \
+            FLEET_GLOBAL_MAX_SESSIONS=0 FLEET_MAX_SESSIONS=0 FLEET_MACHINE_MAX_SESSIONS=0 "$@" 2>&1; }
+  setup
+  out=$(adm FLEET_ADMIT_ROOM=hold bash -c "source '$BIN/fleet-lib.sh'; fleet_session_cap_ok fleet; echo \"|rc=\$?\"")
+  case "$out" in *'pressure normal'*'room for 0 more at ~882 MB'*'|rc=1') ;; *) WHY="the strict rule does not reproduce mini2's refusal: $out"; return 1 ;; esac
+  setup   # admitted, and its window opened (confirmed) — so it stays reserved
+  out=$(adm bash -c "source '$BIN/fleet-lib.sh'; fleet_session_cap_ok fleet; rc=\$?; [ \$rc = 0 ] && fleet_admit_confirm >/dev/null; echo \"|rc=\$rc\"")
+  [ "$out" = '|rc=0' ] || { WHY="room 0 at normal pressure, 757 MB above the floor + reserved, refused the second session: $out"; return 1; }
+  grep -q 'admitted at normal pressure (advice)' "$g/admit-advice.log" 2>/dev/null \
+    || { WHY="the advice admission was not noted in global/admit-advice.log"; return 1; }
+  out=$(adm bash -c "source '$BIN/fleet-lib.sh'; fleet_session_cap_ok fleet; echo \"|rc=\$?\"")
+  case "$out" in *'room for 0 more'*'2 admitted'*'|rc=1') ;; *) WHY="a third session past the floor + 2 reserved must still be held: $out"; return 1 ;; esac
+  setup; out=$(P=2 adm bash -c "source '$BIN/fleet-lib.sh'; fleet_session_cap_ok fleet; echo \"|rc=\$?\"")
+  case "$out" in *'pressure warn'*'|rc=1') ;; *) WHY="warn pressure must still hold: $out"; return 1 ;; esac
+  setup; out=$(A=14 adm bash -c "source '$BIN/fleet-lib.sh'; fleet_session_cap_ok fleet; echo \"|rc=\$?\"")
+  case "$out" in *'内存紧张'*'|rc=1') ;; *) WHY="below the kept-back floor must still hold: $out"; return 1 ;; esac
+  setup; out=$(adm bash "$BIN/fleet-control-read.sh" capacity)
+  case "$out" in *'"admit":true'*'"room":1}'*) ;; *) WHY="the capacity beat under mini2's reading must say admit:true room 1 (the hub reads room < 1 as full): $out"; return 1 ;; esac
+  grep -q '^func TestClientPlaceNamedFullSaysPinned(' "$ROOT/tokenledger/internal/api/fleet_place_fallback_test.go" 2>/dev/null \
+    || { WHY="the hub half's test TestClientPlaceNamedFullSaysPinned is not in fleet_place_fallback_test.go"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="mini2 的数（25% 空闲、保底 15%、约 882 MB/会话、残留 hold + 1 个刚开的窗口）：普通第二个会话放行并记下；容量拍子报 room 1；再多一个预留、压力 warn、低于保底线仍拦；FLEET_ADMIT_ROOM=hold 复现原拒绝"
 }
 
 # hubsess-daemon-nohup (issue #2630): the collector is a LaunchDaemon now, and

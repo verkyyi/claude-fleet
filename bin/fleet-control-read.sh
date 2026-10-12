@@ -447,8 +447,12 @@ case "$mode" in
     admit=true; why=''; room=''
     if why=$(fleet_machine_admit --short 2>/dev/null); then why=''
     else admit=false; why="${why#暂停开新：}"; fi
+    # With the gate admitting, room is what it admits (issue #3479): at normal
+    # pressure the one-more estimate is advice, so a room below 1 the gate
+    # still admits through is not «full» to the hub.
     if [ "${FLEET_ADMIT:-1}" != 0 ]; then
-      hr=$(fleet_machine_headroom 2>/dev/null) && room="${hr%% *}"
+      hr=$(fleet_machine_headroom 2>/dev/null) && room="${hr%% *}" || hr=''
+      [ "$admit" = true ] && [ -n "${hr:-}" ] && room=$(fleet_admit_room_advised "$hr" 2>/dev/null || printf '%s' "$room")
       case "$room" in ''|*[!0-9]*) room='' ;; esac
     fi
     why=$(printf '%s' "$why" | sed 's/[\\"]/\\&/g')
