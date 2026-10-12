@@ -448,7 +448,7 @@ ok "H report · ask · comment · evidence · handoff · pr_verdict · pr_merge:
 # A second sandbox with the real fleet-comment.sh / fleet-report-parent.sh and
 # their libraries; only gh is fake (it records what would be posted).
 R="$WORK/real"; mkdir -p "$R/bin" "$R/conf" "$R/gh"
-for f in fleet-mcp.py fleet-comment.sh fleet-report-parent.sh fleet-lib.sh fleet-gh-lib.sh; do
+for f in fleet-mcp.py fleet-comment.sh fleet-ticket.sh fleet_ticket.py fleet-report-parent.sh fleet-lib.sh fleet-gh-lib.sh; do
   cp "$BIN/$f" "$R/bin/$f"
 done
 for f in "$BIN"/fleet-*lib.sh; do cp "$f" "$R/bin/" 2>/dev/null; done

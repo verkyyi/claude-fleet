@@ -85,6 +85,7 @@ GH_LOG="$WORK/ghlog"; SPAWN_LOG="$WORK/spawns"; BIND_LOG="$WORK/binds"; BODY="$W
 # is absent (env FLEET_REPO wins) — fully hermetic.
 cp "$SRC" "$WORK/bin/fleet-issue-file.sh"; cp "$LIB" "$WORK/bin/fleet-lib.sh"
 cp "$BIN/fleet-gh-lib.sh" "$WORK/bin/fleet-gh-lib.sh"   # its write queue (issue #1264)
+cp "$BIN/fleet-ticket.sh" "$BIN/fleet_ticket.py" "$WORK/bin/"   # the ticket door it files through (issue #3595)
 cp "$BIN/fleet-role.py" "$BIN/fleet_rules.py" "$WORK/bin/"   # --rule's table (issue #2786)
 export FLEET_RULES_DEFAULT="$BIN/../conf/role-rules.default.md" FLEET_RULES_LOG="$WORK/rules.log"
 chmod +x "$WORK/bin/fleet-issue-file.sh"
