@@ -46,7 +46,8 @@ export HOME="$WORK/home" FLEET_CONF_DIR="$WORK/conf" FLEET_SKIP_GLOBAL_CONF=1 TM
 export FLEET_GH_WRITE_GAP=0 FLEET_SESSION=wrsess FLEET_HISTORY_LEDGER="$WORK/ledger.tsv"
 mkdir -p "$HOME" "$TMPDIR" "$WORK/bin" "$WORK/fakebin" "$FLEET_CONF_DIR/fleets/wrsess"
 unset CCQUOTA_TOKEN CCQUOTA_HUB_URL FLEET_HUB_CURL FLEET_HUB_TIMEOUT FLEET_WORKER_RECORDS TMUX TMUX_PANE
-for f in fleet-worker-records.sh fleet-evidence.sh fleet-history.sh fleet-lib.sh; do
+for f in fleet-worker-records.sh fleet-evidence.sh fleet-history.sh fleet-lib.sh \
+         fleet-ticket.sh fleet_ticket.py fleet-gh.sh fleet-gh-lib.sh; do   # the ticket door (#3599)
   cp "$BIN/$f" "$WORK/bin/$f" || fail "copy $f"
 done
 chmod +x "$WORK"/bin/*.sh

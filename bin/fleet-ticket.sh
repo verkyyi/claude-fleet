@@ -265,7 +265,10 @@ case "$verb" in
     [ "$(ticket_backend "$1")" = hub ] && { hub parent "$1"; exit $?; }
     out=$(gh api "repos/${p%%	*}/issues/${p#*	}/parent" \
             --jq '"\(.repository_url | sub("^.*/repos/"; ""))\t\(.number)"' 2>/dev/null) || exit 1
-    pr=$(fleet_norm_repo "${out%%	*}"); pn="${out##*	}"
+    case "$out" in
+      *"	"*) pr=$(fleet_norm_repo "${out%%	*}"); pn="${out##*	}" ;;
+      *)      pr="${p%%	*}"; pn="$out" ;;            # no repo said: the child's own
+    esac
     case "$pn" in ''|*[!0-9]*) exit 1 ;; esac
     [ -n "$pr" ] || exit 1
     printf 'gh:%s#%s\n' "$pr" "$pn" ;;
