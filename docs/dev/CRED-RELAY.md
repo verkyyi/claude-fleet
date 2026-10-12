@@ -166,7 +166,7 @@ journalctl -u fleet-relay-check --since '-15 min' | grep -E ' hub-(down|up) '   
   会话通行证按它自己的 claims（不验签，只用来拒）对 `fcp:<id>` 与范围条目。
 - 过渡期**双验**：名单只加拒绝，上一节「每个请求问入口」照旧（frl2 在本地验签，见下一节）。
 - 门：托管机器的入口 sshd 按同一份名单（`/v1/node/revocations`，节点令牌）生成 OpenSSH KRL 装上
-  `RevokedKeys`（docs/MANAGED-NODE.md §16）。
+  `RevokedKeys`（docs/dev/MANAGED-NODE.md §16）。
 
 打开（转发机上）：
 
@@ -179,7 +179,7 @@ sudo systemctl restart fleet-relay-check
 journalctl -u fleet-relay-check -n 5 | grep -E ' start .*revocations=on| list v='
 ```
 
-演练：docs/BREAK-IT.md `cred-revoked-still-works`、`relay-revocations-hub-down`。
+演练：docs/dev/BREAK-IT.md `cred-revoked-still-works`、`relay-revocations-hub-down`。
 
 ## 只活四小时的中转通行证 frl2（issue #3561，EPIC #3500 C19）
 
