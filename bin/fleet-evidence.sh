@@ -181,10 +181,12 @@ resolve_epic() {
   if [ -n "$hit" ]; then
     n="${hit%/evidence/*}"; n="${n##*/}"; printf '%s\t%s' "$hrepo" "$n"; return 0
   fi
-  [ -n "$repo" ] && command -v gh >/dev/null 2>&1 || return 0
-  n=$(gh api "repos/$repo/issues/$m/parent" \
-        --jq '"\(.repository_url | sub("^.*/repos/"; ""))\t\(.number)"' 2>/dev/null) || n=''
-  r=''; case "$n" in *$'\t'*) r="${n%%$'\t'*}"; n="${n##*$'\t'}" ;; esac
+  [ -n "$repo" ] || return 0
+  # The parent through the ticket door (issue #3599): GitHub's sub-issue parent,
+  # or the hub's for a FLEET_TICKETS=hub repo.
+  n=$(bash "$BIN/fleet-ticket.sh" parent "$(bash "$BIN/fleet-ticket.sh" id "$repo" "$m")" 2>/dev/null) || n=''
+  n="${n#*:}"; r=''
+  case "$n" in *'#'*) r="${n%#*}"; n="${n##*#}" ;; esac
   n="${n//[^0-9]/}"
   [ -n "$n" ] && printf '%s\t%s' "${r:-$repo}" "$n"
   return 0
@@ -231,8 +233,9 @@ member_rows() {   # $1 member, $2 epic-or-empty, $3 epic repo · or: $1 label, $
 if [ "$cmd" = line ]; then
   m=$(resolve_issue); [ -n "$m" ] || die "no issue bound (no @issue, cwd isn't an issue-<N> worktree) — pass --issue" 4
   [ -n "$repo" ] || die "no repo resolved (set --repo or FLEET_REPO)" 2
-  command -v gh >/dev/null 2>&1 || die "gh not on PATH" 1
-  body=$(gh issue view "$m" --repo "$repo" --json body --jq .body 2>/dev/null) || die "could not read issue #$m in $repo" 1
+  body=$(bash "$BIN/fleet-ticket.sh" read "$(bash "$BIN/fleet-ticket.sh" id "$repo" "$m")" --json body 2>/dev/null \
+         | python3 -c 'import json,sys; print(json.load(sys.stdin).get("body") or "")' 2>/dev/null) \
+    || die "could not read issue #$m in $repo" 1
   # 1) the canonical shape — a LABELLED line: `- **上线证据**：…` / `evidence: …` /
   # `3. 上线证据: …` / `## 上线证据: …`; label variants, both colons, content on the
   # SAME line (spelled case-insensitively in the pattern itself: BSD sed has no `I`)
@@ -282,7 +285,7 @@ if [ "$cmd" = list ] || [ "$cmd" = export ]; then
     e="$epic_arg"; erepo="${epic_arg_repo:-$repo}"
     eroot="$(repo_state "$erepo")/epic/$e/evidence"
     subs=''
-    if [ -n "$erepo" ] && command -v gh >/dev/null 2>&1; then subs=$(fleet_sub_issues "$erepo" "$e") || subs=''; fi
+    if [ -n "$erepo" ]; then subs=$(fleet_sub_issues "$erepo" "$e") || subs=''; fi
     # members = every sub-issue GitHub knows of ∪ every dir already on disk, so a
     # member reads `none` rather than vanishing, and evidence never needs gh to show.
     # The EPIC's own repo's members are bare numbers (as always); a member filed in

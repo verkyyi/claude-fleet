@@ -94,6 +94,27 @@ def ticket_id(backend, repo, n):
     return f'{"hub" if backend == "hub" else "gh"}:{repo}#{n}'
 
 
+_HOMES = {}
+
+
+def tid(repo, n):
+    """Ticket n of repo, by the repo's home (共同约定 1): `hub:` for a FLEET_TICKETS=hub
+    repo, else `gh:` — spelled with the repo as given, so a GitHub repo's id is
+    byte for byte the `gh:%s#%s` its callers always wrote. One home read per repo."""
+    key = norm_repo(repo)
+    if key not in _HOMES:
+        _HOMES[key] = home(key) if key else 'github'
+    return ticket_id('hub' if _HOMES[key] == 'hub' else 'gh', repo, n)
+
+
+def split(tid_):
+    """(repo, number-as-str) of a `gh:` or `hub:` id; ValueError otherwise."""
+    m = ID_RE.match(tid_ or '')
+    if not m:
+        raise ValueError('not a ticket id: %r' % tid_)
+    return m.group(2), m.group(3)
+
+
 # ---- the hub's REST --------------------------------------------------------
 
 _CREDS = None
@@ -171,7 +192,9 @@ def gh_shape(t, comments):
         'assignees': [{'login': t['assignee']}] if t.get('assignee') else [],
         'author': {'login': t.get('owner', '')},
         'comments': [{'author': {'login': c.get('author', '')}, 'body': c.get('body', ''),
-                      'createdAt': c.get('created_at', ''), 'id': c.get('id')} for c in comments or []],
+                      'createdAt': c.get('created_at', ''), 'id': c.get('id'),
+                      'url': f'{turl(t.get("repo", ""), t.get("number"))}#comment-{c.get("id", "")}'}
+                     for c in comments or []],
         'url': turl(t.get('repo', ''), t.get('number')), 'createdAt': t.get('created_at', ''),
         'updatedAt': t.get('updated_at', ''), 'closedAt': None, 'milestone': None,
         'id': t.get('id', ''), 'parent': t.get('parent', ''), 'priority': t.get('priority', ''),
@@ -278,6 +301,14 @@ def hub_verb(verb, args):
             if isinstance(c, dict):
                 rows.append(f'{ticket_id(c.get("backend", "hub"), c.get("repo", repo), c.get("number"))}\t{c.get("state", "open")}')
         return '\n'.join(rows)
+
+    if verb == 'parent':
+        _, repo, n = parse(args[0] if args else '')
+        par = ((api('GET', tpath(repo, n)).get('ticket') or {}).get('parent') or '')
+        m = re.match(r'^(.+)#([0-9]+)$', par)
+        if not m or not norm_repo(m.group(1)):
+            raise Fail(1, '')
+        return ticket_id('hub', norm_repo(m.group(1)), int(m.group(2)))
 
     if verb == 'list':
         o, _ = opts(args, ('repo', 'label', 'state', 'since', 'limit'))
@@ -415,7 +446,7 @@ def write_cache(repo, d):
 # ---- dispatch ----------------------------------------------------------------
 
 # Which argument decides the backend: an id (its prefix) or --repo (its home).
-_BY_ID = {'read': 0, 'comment': 0, 'post': 0, 'edit': 0, 'state': 0, 'close': 0, 'children': 0,
+_BY_ID = {'read': 0, 'comment': 0, 'post': 0, 'edit': 0, 'state': 0, 'close': 0, 'children': 0, 'parent': 0,
           'claim': 0, 'priority': 0, 'link': 0, 'evidence': 0}
 _BY_REPO = ('list', 'new', 'find', 'cache')
 

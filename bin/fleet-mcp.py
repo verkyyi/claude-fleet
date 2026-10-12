@@ -114,7 +114,7 @@ WRITE_TIMEOUT_S = 90       # a comment / a report / an evidence copy: one gh or 
 LAND_TIMEOUT_S = 595       # a repo the fleet lands itself runs its check inside the call (#3602)
 VERDICT_TIMEOUT_S = 60     # the one-shot read
 BRIEF_TIMEOUT_S = 90       # one gh read of the issue + its comments
-FILE_TIMEOUT_S = 180       # gh issue create + sub-issue link + a spawn
+FILE_TIMEOUT_S = 180       # the filer (a ticket + its parent link) + a spawn
 SHOW_TIMEOUT_S = 300       # --inline holds the screen until the operator presses a key
 
 # Codex hands an MCP server only a short env allowlist (HOME, PATH, USER, …);

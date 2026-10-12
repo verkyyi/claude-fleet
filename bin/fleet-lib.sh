@@ -1612,7 +1612,18 @@ fleet_issue_key() {
 
 # fleet_sub_issues <repo> <N> → one `<owner/name>\t<num>\t<state>` line per
 # sub-issue of <repo>#<N>, each with the repo it lives in. rc ≠ 0 = gh failed.
+# A FLEET_TICKETS=hub repo's members are the hub's children, read through the
+# ticket door (issue #3599) — the same three columns, never GitHub.
 fleet_sub_issues() {
+  if [ "$(fleet_ticket_home "${1:-}")" = hub ]; then
+    local _subs
+    _subs=$(bash "${_FLEET_LIB_DIR:-$HOME/.claude/fleet/bin}/fleet-ticket.sh" children \
+              "hub:$(fleet_norm_repo "${1:-}")#${2:-}" 2>/dev/null) || return 1
+    [ -n "$_subs" ] || return 0
+    printf '%s\n' "$_subs" | awk -F'\t' 'NF >= 2 { id = $1; sub(/^(hub|gh):/, "", id)
+      n = id; sub(/^.*#/, "", n); r = id; sub(/#[0-9]+$/, "", r); printf "%s\t%s\t%s\n", r, n, $2 }'
+    return 0
+  fi
   gh api "repos/${1:-}/issues/${2:-}/sub_issues" --paginate \
     --jq '.[] | "\(.repository_url | sub("^.*/repos/"; ""))\t\(.number)\t\(.state)"' 2>/dev/null
 }
@@ -7835,6 +7846,12 @@ fleet_breakage_text_says_red() {
 fleet_breakage_find() {
   local repo="$1" mk owner name rows n
   mk=$(fleet_breakage_marker "$2")
+  if [ "$(fleet_ticket_home "$repo")" = hub ]; then   # issue #3599: the hub's open tickets
+    rows=$(bash "${_FLEET_LIB_DIR:-$HOME/.claude/fleet/bin}/fleet-ticket.sh" find --repo "$repo" --marker "$mk" 2>/dev/null) \
+      || return 1
+    [ -n "${rows#*	}" ] || return 1
+    printf '%s\n' "${rows#*	}"; return 0
+  fi
   owner="${repo%%/*}"; name="${repo#*/}"
   rows=$(gh api "repos/$owner/$name/issues?state=open&per_page=100&sort=created&direction=desc" \
            --jq '.[] | select(.pull_request == null) | "\(.number)\t\(.body // "" | gsub("[\r\n]"; " "))"' 2>/dev/null) || return 1
@@ -8138,7 +8155,13 @@ EOF_CHARTER
 # nothing. rc 1 = the parent could not be read.
 fleet_epic_agent() {
   local body
-  body=$(gh issue view "${2:-}" --repo "${1:-}" --json body -q .body 2>/dev/null) || return 1
+  if [ "$(fleet_ticket_home "${1:-}")" = hub ]; then   # issue #3599: the door reads it
+    body=$(bash "${_FLEET_LIB_DIR:-$HOME/.claude/fleet/bin}/fleet-ticket.sh" read \
+             "hub:$(fleet_norm_repo "${1:-}")#${2:-}" --json body 2>/dev/null \
+           | python3 -c 'import json,sys; print(json.load(sys.stdin).get("body") or "")' 2>/dev/null) || return 1
+  else
+    body=$(gh issue view "${2:-}" --repo "${1:-}" --json body -q .body 2>/dev/null) || return 1
+  fi
   fleet_epic_charter_agent "${1:-}" "$body" "${3:-}" "${4:-}"
 }
 

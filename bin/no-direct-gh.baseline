@@ -14,14 +14,12 @@ bin/fleet-doctor-onboard.sh
 bin/fleet-doctor.sh
 bin/fleet-epic-preflight.sh
 bin/fleet-epic-stable-row.sh
-bin/fleet-evidence.sh
 bin/fleet-handoff-cycle.sh
 bin/fleet-history.sh
 bin/fleet-issue-bridge.sh
 bin/fleet-labels-seed.sh
 bin/fleet-lib.sh
 bin/fleet-login-new.sh
-bin/fleet-mcp.py
 bin/fleet-onboard-defaults.py
 bin/fleet-onboard.sh
 bin/fleet-report-stats.py
@@ -30,7 +28,6 @@ bin/fleet-restore.sh
 bin/fleet-steward-conflicts.sh
 bin/fleet-ui-lang.sh
 bin/fleet-webhook.sh
-bin/fleet_park.py
 bin/refocus-hook.sh
 bin/tmux-dash-collect.sh
 bin/tmux-dashboard-rows.sh

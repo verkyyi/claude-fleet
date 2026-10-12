@@ -18,6 +18,7 @@
 #   fleet-ticket.sh edit     <id> (--body T | --body-file F|-)    → the body, replaced whole
 #   fleet-ticket.sh state    <id> open|closed [--reason completed|not_planned]
 #   fleet-ticket.sh children <id>                              → one `<id>\t<state>` per sub-ticket
+#   fleet-ticket.sh parent   <id>                              → the parent's id (1 = none)
 #   fleet-ticket.sh list     --repo R [--label L] [--state open|closed|all] [--since YYYY-MM-DD] [--limit N]
 #                                                              → one `<id>\t<state>` per ticket
 #   fleet-ticket.sh evidence <id> <before|after|live|post|list|line|dir> [fleet-evidence.sh opts…]
@@ -60,7 +61,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/fleet-gh-lib.sh"
 
 die() { printf 'fleet-ticket: %s\n' "$1" >&2; exit "${2:-1}"; }
-usage() { sed -n '15,41p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '15,42p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 # ticket_parse <id> → `<owner/name>\t<N>`; rc 2 = not a ticket id. The backend is
 # the id's own prefix (`ticket_backend`).
@@ -256,6 +257,18 @@ case "$verb" in
     out=$(fleet_sub_issues "${p%%	*}" "${p#*	}") || die "could not read the sub-issues of gh:${p%%	*}#${p#*	}"
     [ -n "$out" ] || exit 0
     printf '%s\n' "$out" | awk -F'\t' 'NF >= 3 { printf "gh:%s#%s\t%s\n", $1, $2, tolower($3) }' ;;
+
+  parent)
+    # The ticket this one hangs under (issue #3599): GitHub's sub-issue parent,
+    # the hub's parent field. Nothing hangs it ⇒ exit 1, nothing printed.
+    p=$(ticket_parse "${1:-}") || exit 2
+    [ "$(ticket_backend "$1")" = hub ] && { hub parent "$1"; exit $?; }
+    out=$(gh api "repos/${p%%	*}/issues/${p#*	}/parent" \
+            --jq '"\(.repository_url | sub("^.*/repos/"; ""))\t\(.number)"' 2>/dev/null) || exit 1
+    pr=$(fleet_norm_repo "${out%%	*}"); pn="${out##*	}"
+    case "$pn" in ''|*[!0-9]*) exit 1 ;; esac
+    [ -n "$pr" ] || exit 1
+    printf 'gh:%s#%s\n' "$pr" "$pn" ;;
 
   list)
     # Tickets of one repo by label / state / last update (the daily brief's
@@ -462,5 +475,5 @@ case "$verb" in
     printf 'gh:%s#%s\thttps://github.com/%s/issues/%s\n' "$r" "$n" "$r" "$n" ;;
 
   -h|--help|help) usage ;;
-  *) die "unknown verb '$verb' — read|comment|edit|state|children|list|evidence|new|claim|label|priority|link|id|home|url|parse" 2 ;;
+  *) die "unknown verb '$verb' — read|comment|edit|state|children|parent|list|evidence|new|claim|label|priority|link|id|home|url|parse" 2 ;;
 esac

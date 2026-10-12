@@ -90,6 +90,7 @@ from pathlib import Path
 
 import fleet_decision as fd
 import fleet_iso
+import fleet_ticket
 
 BIN = Path(__file__).resolve().parent
 V = 1
@@ -333,6 +334,10 @@ def steward_rows():
 def gh_state(kind, ref):
     repo, n = parse_ref(ref)
     r = seam("FLEET_PARK_GH_CMD", ["read", kind, repo, n])
+    if r is None and kind == "issue":
+        # a ticket through the door (issue #3599): GitHub's, or the hub's
+        r = run(["bash", str(BIN / "fleet-ticket.sh"), "read", fleet_ticket.tid(repo, n), "--json", "state",
+                 "--max-age", "120"], timeout=60)
     if r is None:
         r = run(["bash", str(BIN / "fleet-gh.sh"), kind, "view", n, "--repo", repo, "--json", "state",
                  "--max-age", "120"], timeout=60)
@@ -430,19 +435,18 @@ def say_cond(cond):
     return cond
 
 
-# ---- GitHub writes (counted) --------------------------------------------------------
+# ---- ticket writes (counted) — through the ticket door (issue #3599) -----------------
 
 def gh(verb, repo, n, *rest, body=None):
     r = seam("FLEET_PARK_GH_CMD", [verb, repo, n] + list(rest), input=body)
     if r is not None:
         return r.returncode == 0
     if verb == "label":
-        op = "--add-label" if rest[0] == "add" else "--remove-label"
-        r = run(["bash", "-c", '. "$0/fleet-lib.sh" >/dev/null 2>&1; . "$0/fleet-gh-lib.sh"; '
-                 'fleet_gh_write gh issue edit "$1" --repo "$2" "$3" blocked', str(BIN), n, repo, op], timeout=90)
+        r = run(["bash", str(BIN / "fleet-ticket.sh"), "label", "add" if rest[0] == "add" else "rm",
+                 fleet_ticket.tid(repo, n), "blocked"], timeout=90)
         return r.returncode == 0
     if verb == "comment":
-        r = run(["bash", str(BIN / "fleet-ticket.sh"), "comment", "gh:%s#%s" % (repo, n), "--note",
+        r = run(["bash", str(BIN / "fleet-ticket.sh"), "comment", fleet_ticket.tid(repo, n), "--note",
                  "--body-file", "-"], input=body, timeout=90)
         return r.returncode == 0
     return False
@@ -672,7 +676,7 @@ def survey(sess, now, held=()):
         if TREF_RE.match(ref):
             out.append({"w": w, "ref": ref, "why": why, "wait": ["task:" + ref], "since": since})
             continue
-        src = "gh:%s#%s" % (w["repo"], w["issue"])
+        src = fleet_ticket.tid(w["repo"], w["issue"])
         waits = ["answer:" + r["id"] for r in rows.values() if r.get("src") == src and r.get("state") == "open"]
         out.append({"w": w, "ref": ref, "why": why, "wait": waits or ["reply:" + ref], "since": since})
     return out, stuck

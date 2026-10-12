@@ -77,7 +77,7 @@ for f in "$PLAN" "$RUN" "$REPORT"; do
 done
 hasF "$PLAN" '**C1** owner/name#N — title' "plan: a member in another repo is listed as owner/name#N"
 hasF "$PLAN" 'the one holding the MOST' "plan: the parent goes to the repo with the most members"
-hasF "$PLAN" 'repos/<the member'"'"'s repo>/issues/<child>' "plan: the child's id is read from ITS repo"
+hasF "$PLAN" '"$("$T" id <the member'"'"'s repo> <child>)"' "plan: the child is named in ITS repo (the door reads its id there, #3599)"
 hasF "$PLAN" '--member-repo' "plan: preflight checks every other member repo"
 hasF "$PLAN" 'IS the member list then' "plan: a refused cross-repo link falls back to the list (ruling 4)"
 hasF "$RUN" 'Members are (repo, issue)' "run: a member is (repo, issue)"

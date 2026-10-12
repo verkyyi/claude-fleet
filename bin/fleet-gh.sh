@@ -101,6 +101,12 @@ fi
 [ -n "$repo" ] || die "no repo resolved (set --repo or FLEET_REPO)"
 repo=$(fleet_norm_repo "$repo")
 
+# An issue of a FLEET_TICKETS=hub repo is a hub ticket (issue #3599): the ticket
+# door answers it in the same field names, never GitHub.
+if [ "$kind" = issue ] && [ "$(fleet_ticket_home "$repo" "$_fs")" = hub ]; then
+  exec bash "$BIN/fleet-ticket.sh" read "hub:$repo#$N" ${fields:+--json "$fields"}
+fi
+
 if ! command -v jq >/dev/null 2>&1; then
   command -v gh >/dev/null 2>&1 || die "gh not on PATH"
   set -- "$sub1" "$sub2" "$N" --repo "$repo"
