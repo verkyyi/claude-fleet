@@ -565,7 +565,7 @@ restore() {
       # brings back a `done` one — a session waiting at its prompt is not ended
       # (RESTORE_KEEP_DONE=1); `exited` still stays closed.
       if [ -n "${RESTORE_UNFINISHED:-}" ] \
-         && { [ "$wstate" = exited ] || { [ "$wstate" = done ] && [ -z "${RESTORE_KEEP_DONE:-}" ]; }; }; then
+         && { [ "$wstate" = exited ] || { [ "$wstate" = "done" ] && [ -z "${RESTORE_KEEP_DONE:-}" ]; }; }; then
         say "    · $wname: $wstate last time — not reopened"
         log "skip $sess/$wname state=$wstate (auto restores unfinished only)"
         continue
