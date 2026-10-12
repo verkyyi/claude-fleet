@@ -314,7 +314,7 @@ start_hub
 out="$(FLEET_RENEW_BELOW_SECS=86400 FLEET_CLIENT_LOG_DIR="$SB/ulog" python3 "$BIN/fleet-login.py" renew --quiet --on-use ssh 2>"$SB/u.err")"; rc=$?
 stop_hub
 [ "$rc" = 0 ] && [ -s "$SB/renew.json" ] && ok "U under the margin → renewed" || bad "U due rc=$rc: $out $(cat "$SB/u.err")"
-urc= uwhy=; read -r _ urc uwhy < "$XDG_CONFIG_HOME/claude-fleet/cert-renew.last" 2>/dev/null
+urc=''; uwhy=''; read -r _ urc uwhy < "$XDG_CONFIG_HOME/claude-fleet/cert-renew.last" 2>/dev/null
 [ "$urc" = 0 ] && [ "$uwhy" = ssh ] && ok "U cert-renew.last says rc 0 · ssh" || bad "U last: $(cat "$XDG_CONFIG_HOME/claude-fleet/cert-renew.last" 2>/dev/null)"
 grep -q 'why=ssh' "$SB/ulog/login.log" 2>/dev/null && ok "U login.log counts it why=ssh" || bad "U login.log: $(cat "$SB/ulog/login.log" 2>/dev/null)"
 grep -q '^Match originalhost fleet-\*.* exec ".*fleet-login.py.* renew --quiet --on-use ssh >/dev/null 2>&1; exit 1"$' "$HOME/.ssh/fleet-ssh-config" \
