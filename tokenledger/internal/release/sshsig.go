@@ -82,3 +82,47 @@ func Endorse(prev ed25519.PrivateKey, next ed25519.PublicKey) string {
 	line := FormatPublicKey(next) + "\n"
 	return line + SSHSigArmor(SSHSign(prev, SSHSigKeyNS, []byte(line)))
 }
+
+// SSHSigVerify: blob is pub's SSHSIG (sha512) of msg under namespace — the
+// check `ssh-keygen -Y verify` makes, for a signature the hub did not make
+// itself (the release train's, claude-fleet#3559).
+func SSHSigVerify(pub ed25519.PublicKey, namespace string, msg, blob []byte) bool {
+	rd := func(b []byte) ([]byte, []byte, bool) {
+		if len(b) < 4 {
+			return nil, nil, false
+		}
+		n := binary.BigEndian.Uint32(b)
+		if uint64(len(b)-4) < uint64(n) {
+			return nil, nil, false
+		}
+		return b[4 : 4+n], b[4+n:], true
+	}
+	if len(blob) < 10 || string(blob[:6]) != "SSHSIG" || binary.BigEndian.Uint32(blob[6:10]) != 1 {
+		return false
+	}
+	rest := blob[10:]
+	var wire, ns, reserved, hashAlg, sig []byte
+	var ok bool
+	for _, p := range []*[]byte{&wire, &ns, &reserved, &hashAlg, &sig} {
+		if *p, rest, ok = rd(rest); !ok {
+			return false
+		}
+	}
+	if len(rest) != 0 || string(wire) != string(SSHWirePublicKey(pub)) || string(ns) != namespace || string(hashAlg) != "sha512" {
+		return false
+	}
+	alg, raw, ok := rd(sig)
+	if !ok || string(alg) != "ssh-ed25519" {
+		return false
+	}
+	if raw, rest, ok = rd(raw); !ok || len(rest) != 0 {
+		return false
+	}
+	h := sha512.Sum512(msg)
+	signed := []byte("SSHSIG")
+	signed = append(signed, sshString([]byte(namespace))...)
+	signed = append(signed, sshString(reserved)...)
+	signed = append(signed, sshString([]byte("sha512"))...)
+	signed = append(signed, sshString(h[:])...)
+	return ed25519.Verify(pub, signed, raw)
+}

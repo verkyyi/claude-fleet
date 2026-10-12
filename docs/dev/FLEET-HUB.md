@@ -710,6 +710,71 @@ is a person's. A client that has not taken a stable it saw for 2 hours
 (`FLEET_INSTALL_SYNC_FETCH_ALARM_SECS`) notifies once and turns its doctor's
 `install` row red. BREAK-IT rows `client-verify-no-ccquota`, `client-update-silent-fail`.
 
+**发布签名：私钥只在发布列车里，离线根钥匙能换能作废** (issue #3559, EPIC #3500
+C17). The signing key's one home is `release-train.yml`'s `release` job — the
+`release-sign` environment's `RELEASE_SIGN_KEY` secret (base64 32-byte seed),
+read only by its publish step as `FLEET_RELEASE_SIGN_KEY`. A hub run with
+`CCQUOTA_FLEET_RELEASE_ROOT` (the root's PUBLIC key, `ed25519 <base64>` or a file)
+and no `CCQUOTA_FLEET_RELEASE_KEY` signs nothing (`fleet_release_sign.go`): the
+publish carries `signer` (the train's public key, which the commit's
+`conf/release-keys/chain.json` must vouch for from the root and no revocation may
+name — else 403), the hub builds the release UNSIGNED and answers **202** with the
+manifest's bytes; the train checks them against its own checkout
+(`bin/fleet-release-sign.py check`: every file byte for byte, `key_chain` /
+`revoked` = the commit's, `prev`, the signer), signs them (Ed25519 + SSHSIG) and
+POSTs `sha` + `sig` + `sshsig`; the hub verifies both under the chain and only then
+moves stable (409 when stable moved meanwhile — the train starts over). A keyless
+hub builds nothing by itself (no GitHub-driven build, no heal, no reseal). `/key`
+serves the root with `X-Ccquota-Release-Signer: train|hub`; `/revoked` the newest
+list the root signed (the hub's `CCQUOTA_FLEET_RELEASE_REVOKED` file or the stable
+release's).
+
+Trust. A machine pins the ROOT. Every manifest carries the commit's
+`key_chain` — signed documents, `{"payload": base64(JSON), "sig": Ed25519 over
+"claude-fleet-release-doc\n" + payload}`: a `release-key` cert (`by` vouches for
+`key`, role `sign` or `root`; only a root may vouch for a root or revoke) — and
+`revoked` (`release-revoked`: version, key ids). Go (`internal/release/trust.go`:
+`ccquota release fetch` / `verify --dir`, the hub's own check) and Python
+(`fleet-release-verify.py`: `fleet-release-fetch.py`, the CLI) take a manifest only
+from a key the pin vouches for that no list names — the manifest's, the hub's
+`/revoked`, or one the machine saw before (`release.pub.revoked`, only ever grows);
+a forged list (not the root's) counts for nothing; the pin itself is never revoked.
+A pin that vouches for a root (`release-key`, role `root`, `by` = the pin) re-pins
+to it after a verified release (the old kept as `release.pub.prev`).
+
+The procedure (`bin/fleet-release-sign.py`, standard library only; the root key
+never touches a hub, a node or a session — a hardware key or a password manager,
+on the 发起人's own computer):
+
+1. **Step A — the move** (machines keep working throughout): `keygen root.key`
+   (offline), `keygen train.key`; `cert --by <the hub's current key> --key
+   <root.pub> --role root --add conf/release-keys/chain.json` (the old key
+   vouches for the root ONCE — read it from the hub's Secret, then forget it),
+   `cert --by root.key --key <train.pub> --role sign --add …` and `cert --by
+   root.key --key <the hub's current key pub> --role sign --add …` (the overlap);
+   commit `chain.json` + `conf/release-keys/root.pub`. Put `train.key`'s line in
+   the `release-sign` environment as `RELEASE_SIGN_KEY`; set the hub's
+   `CCQUOTA_FLEET_RELEASE_ROOT`. The next train still lets the hub sign, but every
+   machine sees the chain and re-pins to the root by itself
+   (`fleet-release-key.sh status` on each: 认的钥匙 = 入口现在用的).
+2. Drop `CCQUOTA_FLEET_RELEASE_KEY` / `_PREV_KEY` from
+   `deploy/k8s/overlays/prod/deployment-release.yaml` and delete the Secret: from
+   the next train the train signs (`签名的：发布列车`; the train's `the signing key is
+   only in the train` step stops warning). Then revoke the hub's old key (below).
+3. **Rotate** yearly, or on any doubt: `cert --by root.key --key <new> --role sign
+   --add …`, commit, swap `RELEASE_SIGN_KEY` — the two overlap 14 days — then
+   revoke the old one.
+4. **Revoke** (a leak): `revoke --by root.key --version <N+1> --out
+   conf/release-keys/revoked.json <every revoked id>` (cumulative, `show` lists the
+   ids), commit it — and for at once, hand the same file to the hub as
+   `CCQUOTA_FLEET_RELEASE_REVOKED`: every machine refuses that key from its next
+   fetch. A leaked ROOT is the one manual case: every machine re-pins by hand
+   (`fleet host trust-release-key`).
+
+`fleet-release-key.sh scan` (the doctor's `releasekey` row) FAILs on a signing
+private key found on a computer — the environment, `$FLEET_CONF_DIR`, `~/.ssh`,
+`~/.config`. BREAK-IT rows `release-key-outside-train`, `release-key-revoked`.
+
 **Stable is pushed to the hub, never fetched** (issue #2772, EPIC #2770 C2). The
 CI that moves stable hands the hub the commit itself: the release train's
 `release` job, before its move (`release-train.yml`, issue #3142; `stable-auto.yml`

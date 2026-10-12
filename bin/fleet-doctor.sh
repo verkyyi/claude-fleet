@@ -1381,6 +1381,19 @@ case "$_tr_rc" in
   1) pass sshtrust "authorized_keys 里没有其它 fleet 机器的钥匙 — 跨机只认入口签发的 5 分钟证书" ;;
 esac
 
+# --- releasekey (issue #3559, BREAK-IT release-key-outside-train): the release
+# signing key lives only in the release train. FAIL when this computer holds the
+# private half of the pinned key or of one it vouches for (this environment,
+# $FLEET_CONF_DIR, ~/.ssh, ~/.config), or sets a variable that only ever holds
+# one; PASS otherwise. A login that pinned nothing and sets none: no row.
+if [ -s "$conf_dir/release.pub" ] || [ -n "${CCQUOTA_FLEET_RELEASE_KEY:-}${CCQUOTA_FLEET_RELEASE_PREV_KEY:-}${FLEET_RELEASE_SIGN_KEY:-}" ]; then
+  _rk=$(FLEET_CONF_DIR="$conf_dir" bash "$(dirname "$0")/fleet-release-key.sh" scan 2>/dev/null); _rk_rc=$?
+  case "$_rk_rc" in
+    0) pass releasekey "这台没有发布签名私钥 — 它只在发布列车里" ;;
+    1) fail releasekey "这台握着发布签名私钥（$(printf '%s\n' "$_rk" | grep -c '^FOUND') 处）: $(printf '%s\n' "$_rk" | sed -n 's/^FOUND //p' | head -3 | awk '{ printf "%s%s", s, $0; s = "; " }') — 签名私钥只放发布列车（release-sign），删掉它，怀疑泄露就用根钥匙作废（docs/FLEET-HUB.md「发布签名」）" ;;
+  esac
+fi
+
 # --- dist (issue #2776, EPIC #2770 C6): this login's new versions come from the
 # hub only — bin/fleet-dist-source.sh judges (origin GitHub, FLEET_DIST_SOURCE=github,
 # a client that follows GitHub ⇒ WARN with the fix; no hub ⇒ INFO; none ⇒ no row).

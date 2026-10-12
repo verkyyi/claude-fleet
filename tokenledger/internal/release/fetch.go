@@ -58,6 +58,27 @@ type Fetcher struct {
 	Platforms []string
 	Stall     time.Duration // 0 = DefaultStall
 	Progress  io.Writer     // nil = quiet; one line per artifact + every ProgressEvery
+	// Known: every key id this machine already saw revoked (LoadRevoked) —
+	// with the hub's /revoked and the manifest's own list, never taken again
+	// (claude-fleet#3559).
+	Known map[string]bool
+	// Trust is what the last verified manifest was trusted under: Keep it
+	// beside the pin once the release is installed.
+	Trust *Trust
+}
+
+// RevokedRel is the hub's revocation list, under Path (claude-fleet#3559).
+const RevokedRel = "revoked"
+
+// hubRevocations: the hub's own list (none on a 404 or an older hub) — trusted
+// only once a root the pin vouches for has signed it (NewTrust).
+func (f *Fetcher) hubRevocations(ctx context.Context) []Doc {
+	b, err := f.get(ctx, RevokedRel, 64<<10)
+	var d Doc
+	if err != nil || json.Unmarshal(b, &d) != nil || d.Payload == "" {
+		return nil
+	}
+	return []Doc{d}
 }
 
 func (f *Fetcher) client() *http.Client {
@@ -200,10 +221,11 @@ func (f *Fetcher) manifestOnce(ctx context.Context, sha string) (*Manifest, []by
 	if err != nil {
 		return nil, nil, "", err
 	}
-	m, err := Verify(f.Key, mb, string(sig))
+	m, t, err := VerifyTrusted(f.Key, mb, string(sig), f.hubRevocations(ctx), f.Known)
 	if err != nil {
 		return nil, nil, "", err
 	}
+	f.Trust = t
 	if sha != "stable" && m.SHA != sha {
 		return nil, nil, "", fmt.Errorf("asked for %s, the signed manifest is %s", sha, m.SHA)
 	}
@@ -496,6 +518,12 @@ func (f *Fetcher) download(ctx context.Context, u, part string, have int64, want
 // VerifyDir re-checks an installed release dir against its own signed
 // manifest and the pinned key: every file present with its digest.
 func VerifyDir(key ed25519.PublicKey, dir string) (*Manifest, error) {
+	return VerifyDirKnown(key, dir, nil)
+}
+
+// VerifyDirKnown is VerifyDir holding the signer to the pin's chain and the
+// ids this machine already saw revoked (claude-fleet#3559).
+func VerifyDirKnown(key ed25519.PublicKey, dir string, known map[string]bool) (*Manifest, error) {
 	mb, err := os.ReadFile(dir + "/.release/" + ManifestName)
 	if err != nil {
 		return nil, err
@@ -504,7 +532,7 @@ func VerifyDir(key ed25519.PublicKey, dir string) (*Manifest, error) {
 	if err != nil {
 		return nil, err
 	}
-	m, err := Verify(key, mb, string(sig))
+	m, _, err := VerifyTrusted(key, mb, string(sig), nil, known)
 	if err != nil {
 		return nil, err
 	}

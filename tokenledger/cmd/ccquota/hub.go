@@ -327,35 +327,60 @@ func loadFleetAccountKey(srv *api.Server) error {
 // darwin-arm64 — a build missing one is refused, claude-fleet#2631);
 // CCQUOTA_FLEET_RELEASE_NPM the registries a missing Claude Code is fetched
 // from (default npm, then npmmirror); CCQUOTA_FLEET_RELEASE_PREV_KEY the key
-// the signing key replaced (it vouches for the new one). No key: no releases. A key that
-// cannot be read, or one without a dir: the hub refuses to start.
+// the signing key replaced (it vouches for the new one).
+//
+// The signing key's home is the release train, not here (claude-fleet#3559):
+// CCQUOTA_FLEET_RELEASE_ROOT is the offline root's PUBLIC key (`ed25519
+// <base64>`, or a file holding it) — with it and no CCQUOTA_FLEET_RELEASE_KEY
+// the hub keeps releases the train signs (fleet_release_sign.go); with both,
+// it still signs itself but hands machines the root (the migration's step A).
+// CCQUOTA_FLEET_RELEASE_REVOKED names the root's revocation list to hand out at
+// once (/v1/fleet/release/revoked). Neither key: no releases. A key that cannot
+// be read, or one without a dir: the hub refuses to start.
 func loadFleetReleases(srv *api.Server) error {
 	path := os.Getenv("CCQUOTA_FLEET_RELEASE_KEY")
-	if path == "" {
-		log.Printf("fleet: no CCQUOTA_FLEET_RELEASE_KEY — node releases are off")
+	rootSpec := strings.TrimSpace(os.Getenv("CCQUOTA_FLEET_RELEASE_ROOT"))
+	if path == "" && rootSpec == "" {
+		log.Printf("fleet: no CCQUOTA_FLEET_RELEASE_KEY / _ROOT — node releases are off")
 		return nil
 	}
-	b, err := os.ReadFile(path)
-	if err != nil {
-		if m := checkUnmounted(path); m != "" && errors.Is(err, os.ErrNotExist) {
-			log.Printf("fleet: check: CCQUOTA_FLEET_RELEASE_KEY %s is on %s, which only the new render mounts — not checked; the real start reads it", path, m)
-			return nil
+	var key ed25519.PrivateKey
+	if path != "" {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			if m := checkUnmounted(path); m != "" && errors.Is(err, os.ErrNotExist) {
+				log.Printf("fleet: check: CCQUOTA_FLEET_RELEASE_KEY %s is on %s, which only the new render mounts — not checked; the real start reads it", path, m)
+				return nil
+			}
+			return fmt.Errorf("CCQUOTA_FLEET_RELEASE_KEY: %w", err)
 		}
-		return fmt.Errorf("CCQUOTA_FLEET_RELEASE_KEY: %w", err)
+		if key, err = release.LoadPrivateKey(b); err != nil {
+			return fmt.Errorf("CCQUOTA_FLEET_RELEASE_KEY: %w", err)
+		}
 	}
-	key, err := release.LoadPrivateKey(b)
-	if err != nil {
-		return fmt.Errorf("CCQUOTA_FLEET_RELEASE_KEY: %w", err)
+	var root ed25519.PublicKey
+	if rootSpec != "" {
+		rb := []byte(rootSpec)
+		if !strings.HasPrefix(rootSpec, "ed25519 ") {
+			var err error
+			if rb, err = os.ReadFile(rootSpec); err != nil {
+				return fmt.Errorf("CCQUOTA_FLEET_RELEASE_ROOT: %w", err)
+			}
+		}
+		var err error
+		if root, err = release.ParsePublicKey(rb); err != nil {
+			return fmt.Errorf("CCQUOTA_FLEET_RELEASE_ROOT: %w", err)
+		}
 	}
 	dir := os.Getenv("CCQUOTA_FLEET_RELEASE_DIR")
 	if dir == "" {
-		return errors.New("CCQUOTA_FLEET_RELEASE_KEY is set but CCQUOTA_FLEET_RELEASE_DIR is not")
+		return errors.New("CCQUOTA_FLEET_RELEASE_KEY / _ROOT is set but CCQUOTA_FLEET_RELEASE_DIR is not")
 	}
 	repo := srv.Stable.Repo
 	if repo == "" {
 		repo = "verkyyi/claude-fleet"
 	}
-	srv.Releases = &api.ReleaseStore{Dir: dir, Key: key, Repo: repo, Source: srv.Stable,
+	srv.Releases = &api.ReleaseStore{Dir: dir, Key: key, Root: root, RevokedFile: os.Getenv("CCQUOTA_FLEET_RELEASE_REVOKED"), Repo: repo, Source: srv.Stable,
 		DistDir: srv.FleetDistDir, DistSrc: SrcDigest, ArtifactsDir: os.Getenv("CCQUOTA_FLEET_RELEASE_ARTIFACTS"),
 		Platforms:     strings.Fields(os.Getenv("CCQUOTA_FLEET_RELEASE_PLATFORMS")),
 		NPMRegistries: strings.Fields(os.Getenv("CCQUOTA_FLEET_RELEASE_NPM"))}
@@ -383,7 +408,11 @@ func loadFleetReleases(srv *api.Server) error {
 		Token:     strings.TrimSpace(os.Getenv("CCQUOTA_FLEET_PUBLISH_TOKEN")),
 		CacheFile: filepath.Join(dir, ".publish-jwks.json"),
 	}
-	log.Printf("fleet: node releases in %s, signed by %s", dir, release.KeyID(key.Public().(ed25519.PublicKey)))
+	if key == nil {
+		log.Printf("fleet: node releases in %s, signed by the release train under the root %s — no signing key here", dir, release.KeyID(root))
+	} else {
+		log.Printf("fleet: node releases in %s, signed by %s", dir, release.KeyID(key.Public().(ed25519.PublicKey)))
+	}
 	return nil
 }
 

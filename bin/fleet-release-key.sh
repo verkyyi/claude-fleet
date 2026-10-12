@@ -13,6 +13,19 @@
 #   fleet-release-key.sh trust [--yes] take the hub's key: both fingerprints
 #                                      printed, asked (y/N); --yes = compared
 #                                      already. `fleet host trust-release-key`.
+#   fleet-release-key.sh scan [path…]  is a release signing PRIVATE key on this
+#                                      computer (this environment, $FLEET_CONF_DIR,
+#                                      ~/.ssh, ~/.config, or <path>)? One FOUND
+#                                      line each, exit 1 (BREAK-IT
+#                                      release-key-outside-train; the doctor's
+#                                      releasekey row)
+#
+# Since issue #3559 the key a login pins is the offline ROOT: the signing key
+# lives only in the release train, the root vouches for it (each release's
+# key_chain) and revokes it (a root-signed list, kept in release.pub.revoked
+# once seen). A login pinned to the hub's old signing key moves to the root by
+# itself at its next update; `trust` is the manual road only for a root that
+# itself changed. status says who signs and what is revoked.
 #
 # No hub, or a hub that keeps no releases: says so, changes nothing.
 # Exit: 0 same / trusted · 1 different (status) or not taken · 2 usage / no hub.
@@ -25,6 +38,14 @@ PK="$CONF/release.pub"
 TMO="${FLEET_RELEASE_KEY_TIMEOUT:-10}"
 
 verb="${1:-status}"; [ $# -gt 0 ] && shift
+if [ "$verb" = scan ]; then
+  # no hub needed: what this computer holds (issue #3559)
+  pin=""; [ -s "$PK" ] && pin="$PK"
+  man=""
+  for m in "$HOME/.claude/fleet/.release/manifest.json" "$CONF/release/manifest.json"; do [ -s "$m" ] && { man="$m"; break; }; done
+  [ $# -gt 0 ] || set -- "$CONF" "$HOME/.ssh" "$HOME/.config"
+  exec python3 "$here/fleet-release-sign.py" scan ${pin:+--pin "$pin"} ${man:+--manifest "$man"} "$@"
+fi
 YES=0
 for a in "$@"; do
   case "$a" in -y|--yes) YES=1 ;; *) echo "fleet host trust-release-key: 不认识 ${a}（--yes）" >&2; exit 2 ;; esac
@@ -46,6 +67,21 @@ new=$(fleet_rel_fp "$tmp")
 if [ -s "$PK" ]; then old=$(fleet_rel_fp "$PK"); else old=''; fi
 case "$verb" in
   status)
+    signer=$(curl -sS --max-time "$TMO" -D - -o /dev/null "$hub/v1/fleet/release/key" 2>/dev/null |
+      tr -d '\r' | awk -F': ' 'tolower($1) == "x-ccquota-release-signer" { print $2 }')
+    case "$signer" in
+      train) echo "签名的：发布列车（入口不握签名私钥，#3559）" ;;
+      hub)   echo "签名的：入口自己（签名私钥还在入口里 — docs/FLEET-HUB.md「发布签名」把它挪进列车）" ;;
+      *)     echo "签名的：入口自己（这个入口早于 #3559）" ;;
+    esac
+    if [ -s "$PK.revoked" ]; then
+      python3 -c 'import json, sys
+d = json.load(open(sys.argv[1]))
+k = d.get("keys") or []
+print("作废单：记下 %d 把（%s）· 版本 %s" % (len(k), " ".join(k) or "-", d.get("version") or 0))' "$PK.revoked" 2>/dev/null || echo "作废单：$PK.revoked 读不了"
+    else
+      echo "作废单：没有"
+    fi
     if [ -z "$old" ]; then echo "还没记下入口的钥匙；入口现在用的指纹 ${new}（下次取版本时记下）"; exit 0; fi
     if cmp -s <(head -n 1 "$tmp") "$PK"; then echo "认的钥匙 ${old} = 入口现在用的"; exit 0; fi
     echo "认的钥匙 ${old} ≠ 入口现在用的 ${new} — 入口的新版本不会被换上；确认是你们换了钥匙后：fleet host trust-release-key"

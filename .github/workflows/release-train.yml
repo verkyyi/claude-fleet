@@ -523,6 +523,10 @@ jobs:
       (needs.hub.result == 'success' || needs.hub.result == 'skipped')
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # The release signing key lives here and nowhere else (issue #3559): the
+    # release-sign environment's RELEASE_SIGN_KEY secret, read only by the
+    # publish step below. Unset ⇒ the hub signs with its own key, as before.
+    environment: release-sign
     permissions:
       contents: write   # the stable tag (GITHUB_TOKEN; a tag pushed so triggers nothing)
       id-token: write   # the publish's OIDC token (audience ccquota-fleet-release)
@@ -606,6 +610,10 @@ jobs:
       - name: publish TRAIN_SHA to the hub
         id: pub
         if: steps.sup.outputs.superseded != 'true'
+        env:
+          # the train's signing key (issue #3559): a keyless hub builds the
+          # release unsigned, this step checks it against the checkout and signs
+          FLEET_RELEASE_SIGN_KEY: ${{ secrets.RELEASE_SIGN_KEY }}
         run: |
           set +e
           train=''; [ ! -s train.json ] || train='--train train.json'
@@ -619,6 +627,27 @@ jobs:
           fi
           echo "superseded=false" >> "$GITHUB_OUTPUT"
           exit $rc
+
+      # BREAK-IT release-key-outside-train, the train's look (issue #3559): with
+      # the key here, the hub must not hold one too — neither its answer nor the
+      # deploy tree may name CCQUOTA_FLEET_RELEASE_KEY. A warning, never a stop:
+      # the migration's step A runs a train while the hub still signs.
+      - name: the signing key is only in the train
+        if: steps.sup.outputs.superseded != 'true'
+        env:
+          HAVE_KEY: ${{ secrets.RELEASE_SIGN_KEY != '' }}
+        run: |
+          signer=$(curl -sS -m 30 -D - -o /dev/null "$FLEET_HUB_URL/v1/fleet/release/key" | tr -d '\r' |
+            awk -F': ' 'tolower($1) == "x-ccquota-release-signer" { print $2 }')
+          held=$(grep -rln 'CCQUOTA_FLEET_RELEASE_KEY' deploy/ 2>/dev/null | tr '\n' ' ')
+          if [ "$HAVE_KEY" != true ]; then
+            echo "### 发布签名：入口自己签（release-sign 环境还没有 RELEASE_SIGN_KEY）" >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$signer" = train ] && [ -z "$held" ]; then
+            echo "### 发布签名：发布列车（入口只有根公钥）" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::the release signing key is in the train AND the hub still holds one (signer: ${signer:-?}; deploy names CCQUOTA_FLEET_RELEASE_KEY in: ${held:-nothing}) — finish the move: docs/FLEET-HUB.md 发布签名"
+            echo "### 发布签名：⚠️ 入口还握着私钥（signer ${signer:-?}；${held:-deploy 未提}）" >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: move stable to TRAIN_SHA
         if: steps.sup.outputs.superseded != 'true' && steps.pub.outputs.superseded != 'true'

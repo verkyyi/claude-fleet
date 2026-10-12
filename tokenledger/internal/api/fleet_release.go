@@ -81,7 +81,9 @@ const releaseBuildTime = 8 * time.Minute // room for a Claude Code fetch (claude
 // ReleaseStore builds, keeps and serves node releases.
 type ReleaseStore struct {
 	Dir           string             // one <sha>/ per release
-	Key           ed25519.PrivateKey // signs every manifest
+	Key           ed25519.PrivateKey // signs every manifest; nil = the release train signs (claude-fleet#3559, fleet_release_sign.go)
+	Root          ed25519.PublicKey  // the offline root a machine pins (/key); nil = Key's own public half
+	RevokedFile   string             // the root's revocation list this hub hands out at once (/revoked), beside the stable release's
 	PrevKey       ed25519.PrivateKey // the key Key replaced, kept for the overlap: it vouches for Key (key-endorsement; claude-fleet#3162); nil = none
 	Repo          string             // owner/name, written into the manifest
 	Source        *StableSource      // where a commit's files come from
@@ -157,6 +159,9 @@ func (rs *ReleaseStore) Has(sha string) bool {
 	_, err := os.Stat(filepath.Join(d, release.SigName))
 	return err == nil
 }
+
+// errTrainSigns: a train-signed store builds nothing on its own (claude-fleet#3559).
+var errTrainSigns = errors.New("this hub holds no signing key: a release is built only by the train's publish")
 
 // releasePathSafe — a path that stays inside the tree; what the tarball
 // reader takes before the commit's release-tree.list picks.
@@ -276,6 +281,10 @@ func (rs *ReleaseStore) ensure(ctx context.Context, sha string, rebuild bool, al
 	if !rebuild && rs.Has(sha) {
 		return nil
 	}
+	if rs.TrainSigned() {
+		// nothing signs here: a release exists once the train has signed it
+		return errTrainSigns
+	}
 	rs.mu.Lock()
 	b, ok := rs.building[sha]
 	if !ok {
@@ -331,6 +340,12 @@ func (rs *ReleaseStore) build(ctx context.Context, sha string, all map[string][]
 	}
 	if rebuilt == "" {
 		seal.Src = release.SourceDigest(all)
+		// the commit's key documents ride under the signature (claude-fleet#3559)
+		if seal.KeyChain, seal.Revoked, err = releaseKeys(all); err != nil {
+			return err
+		}
+	} else if m := rs.manifest(sha); m != nil && seal.KeyChain == nil && seal.Revoked == nil {
+		seal.KeyChain, seal.Revoked = m.KeyChain, m.Revoked
 	}
 	files, err := releaseTree(all)
 	if err != nil {
@@ -407,7 +422,7 @@ func (rs *ReleaseStore) sealFor(sha string) release.Seal {
 		return seal
 	}
 	if m := rs.manifest(sha); m != nil {
-		return release.Seal{Prev: m.Prev, Seq: m.Seq, Src: m.CCQuotaSrc}
+		return release.Seal{Prev: m.Prev, Seq: m.Seq, Src: m.CCQuotaSrc, KeyChain: m.KeyChain, Revoked: m.Revoked}
 	}
 	return release.Seal{}
 }
@@ -463,9 +478,7 @@ func (rs *ReleaseStore) publish(sha string, files map[string][]byte, artifacts m
 	if err := os.MkdirAll(shaDir, 0o755); err != nil {
 		return err
 	}
-	var rnd [6]byte
-	_, _ = rand.Read(rnd[:])
-	id := fmt.Sprintf("b%d-%s", now.Unix(), hex.EncodeToString(rnd[:]))
+	id := newBuildID(now)
 	if _, err := release.BuildSealed(filepath.Join(shaDir, id), rs.Repo, sha, files, artifacts, rs.Key, now, seal); err != nil {
 		_ = os.RemoveAll(filepath.Join(shaDir, id))
 		return err
@@ -477,6 +490,13 @@ func (rs *ReleaseStore) publish(sha string, files map[string][]byte, artifacts m
 	}
 	rs.prune()
 	return nil
+}
+
+// newBuildID names one build: b<unix>-<12 hex>.
+func newBuildID(now time.Time) string {
+	var rnd [6]byte
+	_, _ = rand.Read(rnd[:])
+	return fmt.Sprintf("b%d-%s", now.Unix(), hex.EncodeToString(rnd[:]))
 }
 
 // replaceFile writes b to path by one rename from <dir>/<tmpName>.
@@ -568,16 +588,22 @@ func (rs *ReleaseStore) promoteWith(ctx context.Context, sha string, all map[str
 			return err
 		}
 	}
-	b, _ := json.Marshal(stablePointer{SHA: sha, Seq: want.Seq})
-	if err := replaceFile(filepath.Join(rs.Dir, releaseStable), fmt.Sprintf(".stable-%d-%s", want.Seq, sha[:12]), append(b, '\n')); err != nil {
+	return rs.movePointer(sha, want.Seq)
+}
+
+// movePointer makes sha stable #seq by one rename, then tells every node.
+// promoteMu is held by the caller.
+func (rs *ReleaseStore) movePointer(sha string, seq int64) error {
+	b, _ := json.Marshal(stablePointer{SHA: sha, Seq: seq})
+	if err := replaceFile(filepath.Join(rs.Dir, releaseStable), fmt.Sprintf(".stable-%d-%s", seq, sha[:12]), append(b, '\n')); err != nil {
 		return err
 	}
 	rs.pubMu.Lock()
 	rs.pubAt = time.Time{} // PublishedStable reads the new pointer
 	rs.pubMu.Unlock()
-	log.Printf("fleet: release %s is stable #%d", sha[:7], want.Seq)
+	log.Printf("fleet: release %s is stable #%d", sha[:7], seq)
 	if rs.OnPromote != nil {
-		go rs.OnPromote(sha, want.Seq)
+		go rs.OnPromote(sha, seq)
 	}
 	rs.prune()
 	return nil
@@ -599,6 +625,7 @@ func (rs *ReleaseStore) reseal(sha string, seal release.Seal) error {
 	}
 	if m := rs.manifest(sha); m != nil {
 		seal.Src = m.CCQuotaSrc // the same artifacts, the same check
+		seal.KeyChain, seal.Revoked = m.KeyChain, m.Revoked
 	}
 	return rs.publish(sha, files, builtArtifacts(base), time.Now(), seal)
 }
@@ -638,7 +665,7 @@ func (rs *ReleaseStore) prune() {
 		if bs, err := os.ReadDir(filepath.Join(rs.Dir, n)); err == nil {
 			for _, b := range bs {
 				p := filepath.Join(rs.Dir, n, b.Name())
-				if p == served || b.Name() == releaseCurrent {
+				if p == served || b.Name() == releaseCurrent || b.Name() == releaseUnsigned || p == rs.staged(n) {
 					continue
 				}
 				if m := buildIDRe.FindStringSubmatch(b.Name()); m != nil {
@@ -673,6 +700,16 @@ func (rs *ReleaseStore) prune() {
 		keep[sha] = true
 	}
 	rs.mu.Unlock()
+	for _, r := range rels {
+		if b := rs.staged(r.sha); b != "" {
+			// waiting for the train's signature: kept while it is fresh
+			if m := buildIDRe.FindStringSubmatch(filepath.Base(b)); m != nil {
+				var unix int64
+				_, _ = fmt.Sscan(m[1], &unix)
+				keep[r.sha] = keep[r.sha] || !stale(unix)
+			}
+		}
+	}
 	order := rs.chain(ptr)
 	onChain := map[string]bool{}
 	for _, sha := range order {
@@ -742,12 +779,31 @@ func (s *Server) handleRelease(w http.ResponseWriter, r *http.Request) {
 	}
 	rest := strings.TrimPrefix(r.URL.Path, release.Path)
 	if rest == "key" {
+		// the key a machine pins: the offline root once there is one
+		// (claude-fleet#3559), else the signing key; and who signs
+		signer := "hub"
+		if rs.TrainSigned() {
+			signer = "train"
+		}
+		w.Header().Set(ReleaseSignerHeader, signer)
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		_, _ = w.Write([]byte(release.FormatPublicKey(rs.Key.Public().(ed25519.PublicKey)) + "\n"))
+		w.Header().Set("Cache-Control", "no-store")
+		_, _ = w.Write([]byte(release.FormatPublicKey(rs.anchor()) + "\n"))
+		return
+	}
+	if rest == release.RevokedRel {
+		d := rs.revokedDoc()
+		if d == nil {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		_ = json.NewEncoder(w).Encode(d)
 		return
 	}
 	if rest == release.EndorsementRel {
-		if rs.PrevKey == nil {
+		if rs.PrevKey == nil || rs.Key == nil {
 			http.NotFound(w, r)
 			return
 		}
@@ -789,8 +845,9 @@ func (s *Server) handleRelease(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !rs.Has(sha) {
-		// build only what stable has named — never an arbitrary commit
-		if rs.Source == nil || !rs.Source.Seen(sha) {
+		// build only what stable has named — never an arbitrary commit; and
+		// never here at all when the train signs (claude-fleet#3559)
+		if rs.Source == nil || !rs.Source.Seen(sha) || rs.TrainSigned() {
 			http.NotFound(w, r)
 			return
 		}
@@ -817,6 +874,11 @@ func (s *Server) handleRelease(w http.ResponseWriter, r *http.Request) {
 		}
 	case sub == release.SigName:
 		file, ctype = release.SigName, "text/plain; charset=utf-8"
+	case sub == release.SSHSigName && rs.TrainSigned():
+		// the train's, kept beside the manifest (claude-fleet#3559); none = 404,
+		// and a client checks the plain signature instead
+		file, ctype = release.SSHSigName, "text/plain; charset=utf-8"
+		immutable = false
 	case sub == release.SSHSigName:
 		// signed as served, over the manifest on disk now (claude-fleet#3162)
 		mb, err := os.ReadFile(filepath.Join(base, release.ManifestName))
@@ -844,7 +906,11 @@ func (s *Server) handleRelease(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
-		w.Header().Set(release.SSHSigHeader, base64.StdEncoding.EncodeToString(release.SSHSign(rs.Key, release.SSHSigNS, mb)))
+		if rs.Key != nil {
+			w.Header().Set(release.SSHSigHeader, base64.StdEncoding.EncodeToString(release.SSHSign(rs.Key, release.SSHSigNS, mb)))
+		} else if a, err := os.ReadFile(filepath.Join(base, release.SSHSigName)); err == nil {
+			w.Header().Set(release.SSHSigHeader, sshsigBlob(string(a)))
+		}
 		w.Header().Set("Content-Type", ctype)
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Cache-Control", "no-store")
@@ -883,8 +949,8 @@ const releaseHealEvery = 10 * time.Minute
 // every releaseHealEvery. A failed rebuild leaves the old one served.
 func (rs *ReleaseStore) heal(ctx context.Context, sha string) {
 	base := rs.dir(sha)
-	if base == "" {
-		return
+	if base == "" || rs.TrainSigned() {
+		return // nothing here can re-sign it (claude-fleet#3559)
 	}
 	rs.mu.Lock()
 	if rs.whole == nil {
@@ -1009,4 +1075,15 @@ func treeFile(tgz, name string) ([]byte, error) {
 			return io.ReadAll(io.LimitReader(tr, 1<<20))
 		}
 	}
+}
+
+// sshsigBlob: an armored SSHSIG as the one-line base64 the header carries.
+func sshsigBlob(armored string) string {
+	var b strings.Builder
+	for _, l := range strings.Split(armored, "\n") {
+		if l = strings.TrimSpace(l); l != "" && !strings.HasPrefix(l, "-----") {
+			b.WriteString(l)
+		}
+	}
+	return b.String()
 }

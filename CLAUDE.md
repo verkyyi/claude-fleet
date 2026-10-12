@@ -1014,6 +1014,22 @@ one-off drill / audit records do not go in the repo (issue #3576).
   caller's own stdio (SCM_RIGHTS, 3 fds, stopped when the caller goes). Off until the
   agent's in-process home I/O moves (#3691); no marker / no `--core` ⇒ byte
   for byte. BREAK-IT `node-program-seat`.
+- **The release signing key lives only in the release train; machines pin an
+  offline ROOT** (issue #3559, EPIC #3500 C17). `release-train.yml`'s `release`
+  job holds it (the `release-sign` environment's `RELEASE_SIGN_KEY`); a hub with
+  `CCQUOTA_FLEET_RELEASE_ROOT` and no `CCQUOTA_FLEET_RELEASE_KEY` builds a release
+  UNSIGNED (202), the train checks it against its checkout and signs it
+  (`bin/fleet-release-sign.py check|manifest`, from `fleet-release-publish.sh`).
+  Every manifest carries the commit's `conf/release-keys/chain.json` (root-signed
+  certs) and `revoked.json` (root-signed list); ONE trust rule, written twice —
+  `tokenledger/internal/release/trust.go` and `bin/fleet-release-verify.py`
+  (`TestTrustPythonInterop` holds them to one format): a signer the pin vouches
+  for, never a revoked one (the machine keeps every id it saw, `release.pub.revoked`);
+  a pin that vouches for a root re-pins to it. The root never touches a machine;
+  `fleet-release-key.sh scan` / the doctor's `releasekey` row FAIL on a signing
+  private key found anywhere else. Neither variable ⇒ the hub signs, byte for byte
+  as before. docs/FLEET-HUB.md «发布签名»; BREAK-IT `release-key-outside-train`,
+  `release-key-revoked`.
 - **A Mac becomes a managed machine by ONE command, and the same command repairs
   it** (issue #2330, EPIC #2329 C1). `sudo fleet node install --join <码>`
   (`bin/fleet-node-install.sh`; a 托管 join code's line pipes the copy the hub serves

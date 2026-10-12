@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto"
+	"crypto/ed25519"
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -347,6 +348,10 @@ type publishForm struct {
 	hasCommits     bool // an empty list is an answer: nothing between prev and sha
 	train          []byte
 	hasTrain       bool // the release ledger's part (fleet_release_train.go)
+	// the train's signing (claude-fleet#3559, fleet_release_sign.go): signer
+	// on the first half, sig (+ sshsig) on the second
+	signer      string
+	sig, sshsig string
 }
 
 func readPublishForm(r *http.Request) (*publishForm, error) {
@@ -380,7 +385,20 @@ func readPublishForm(r *http.Request) (*publishForm, error) {
 			f.tree = b
 		case "train":
 			f.train, f.hasTrain = b, true
+		case "signer":
+			f.signer = firstLine(strings.TrimSpace(string(b)))
+		case "sig":
+			f.sig = strings.TrimSpace(string(b))
+		case "sshsig":
+			f.sshsig = strings.TrimSpace(string(b))
 		}
+	}
+	if f.sig != "" {
+		// the second half: the signatures over what the first half built
+		if !release.ValidSHA(f.sha) {
+			return nil, publishErr(http.StatusBadRequest, "sha: want 40 hex, got %q", firstLine(f.sha))
+		}
+		return f, nil
 	}
 	switch {
 	case !release.ValidSHA(f.sha):
@@ -416,12 +434,13 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 				log.Printf("fleet: release publish audit: %v", err)
 			}
 		}
-		if code != http.StatusOK {
+		if code != http.StatusOK && code != http.StatusAccepted {
 			httpError(w, code, detail)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(code)
 		_ = json.NewEncoder(w).Encode(body)
 	}
 	if err != nil {
@@ -442,7 +461,12 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), releaseBuildTime)
 	defer cancel()
-	out, err := rs.Accept(ctx, f)
+	var out map[string]any
+	if f.sig != "" {
+		out, err = rs.Sign(f.sha, f.sig, f.sshsig)
+	} else {
+		out, err = rs.Accept(ctx, f)
+	}
 	if err != nil {
 		var pe *publishError
 		if !errors.As(err, &pe) {
@@ -455,7 +479,11 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 		// the ledger never gates the release: its answer rides beside it
 		out["train"] = s.recordTrain(f.sha, f.prev, f.train, time.Now())
 	}
-	done(http.StatusOK, strings.ToUpper(out["status"].(string)), fmt.Sprintf("stable #%v prev %v", out["seq"], short(fmt.Sprint(out["prev"]))), out)
+	code := http.StatusOK
+	if out["status"] == "unsigned" {
+		code = http.StatusAccepted // the train signs it next (claude-fleet#3559)
+	}
+	done(code, strings.ToUpper(out["status"].(string)), fmt.Sprintf("stable #%v prev %v", out["seq"], short(fmt.Sprint(out["prev"]))), out)
 }
 
 func short(sha string) string {
@@ -478,6 +506,23 @@ func orNone(s string) string {
 // Accept takes one publish: the bytes checked against the commit, the chain
 // checked forward of the store's stable, the release built and made stable.
 func (rs *ReleaseStore) Accept(ctx context.Context, f *publishForm) (map[string]any, error) {
+	var signer ed25519.PublicKey
+	switch {
+	case rs.TrainSigned() && f.signer == "":
+		return nil, publishErr(http.StatusPreconditionRequired, "this hub holds no signing key — the release train signs: publish with its key (FLEET_RELEASE_SIGN_KEY, the release-sign environment)")
+	case f.signer != "":
+		k, err := release.ParsePublicKey([]byte(f.signer))
+		if err != nil {
+			return nil, publishErr(http.StatusBadRequest, "signer: %v", err)
+		}
+		if !rs.TrainSigned() {
+			// a hub that still holds its key signs itself; the train's key is
+			// noted, never used (the migration's overlap)
+			log.Printf("fleet: release publish %s: the train offers key %s, this hub signs with its own", short(f.sha), release.KeyID(k))
+		} else {
+			signer = k
+		}
+	}
 	cur := rs.stable()
 	ok := func(status string) map[string]any {
 		p := rs.stable()
@@ -561,6 +606,14 @@ func (rs *ReleaseStore) Accept(ctx context.Context, f *publishForm) (map[string]
 	// build, so not even the build's own prune looks there
 	if err := rs.markPublished(f.sha); err != nil {
 		return nil, err
+	}
+	if signer != nil {
+		rs.promoteMu.Lock()
+		defer rs.promoteMu.Unlock()
+		if p := rs.stable(); p.SHA != cur.SHA {
+			return nil, publishErr(http.StatusConflict, "stable moved to %s meanwhile", short(p.SHA))
+		}
+		return rs.stage(f.sha, all, signer)
 	}
 	if err := rs.promoteWith(ctx, f.sha, all); err != nil {
 		return nil, err

@@ -18,6 +18,12 @@
 #   E. --train <file> (issue #3142): the release train's ledger goes as the
 #      `train` part, byte for byte; no --train sends no such part; a missing
 #      file is refused before anything is sent.
+#   F. the train signs (issue #3559): with FLEET_RELEASE_SIGN_KEY the train's
+#      public key goes as `signer`; a 202 from a keyless hub is checked against
+#      the checkout and answered with the two signatures (both verify under the
+#      key, the SSHSIG with ssh-keygen); a manifest that is not the commit's
+#      bytes is never signed; the key is never on curl's argv; a 428 says the
+#      run has no key.
 # Hermetic: a sandbox repo, a loopback hub. Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -80,6 +86,9 @@ class H(http.server.BaseHTTPRequestHandler):
             name = part.get_param("name", header="content-disposition")
             open(os.path.join(d, name), "wb").write(part.get_payload(decode=True) or b"")
         code = int(open(os.path.join(W, "code")).read()) if os.path.exists(os.path.join(W, "code")) else 200
+        if os.path.exists(os.path.join(d, "signer")) and os.path.exists(os.path.join(W, "unsigned")):
+            import base64
+            return self.answer(202, '{"status":"unsigned","manifest":"%s"}' % base64.b64encode(open(os.path.join(W, "unsigned"), "rb").read()).decode())
         self.answer(code, '{"status":"published"}' if code == 200 else '{"error":"this hub\'s stable is %s"}' % ("9" * 40))
 s = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
 open(os.path.join(W, "port"), "w").write(str(s.server_address[1]))
@@ -154,6 +163,47 @@ eq "E: exit 0" 0 "$RC"; eq "E: the ledger rides as part train" '{"run_id":"77","
 before=$(posts)
 run env FLEET_PUBLISH_TOKEN=x "$PUB" "$C" --hub "$HUB" --dir "$REPO" --train "$WORK/nope.json"
 eq "E: a missing ledger → exit 2" 2 "$RC"; eq "E: nothing POSTed" "$before" "$(posts)"
+
+# --- F. the train signs -------------------------------------------------------------------
+SIGN="$BIN/fleet-release-sign.py"
+python3 "$SIGN" keygen "$WORK/train.key" > /dev/null
+KEY=$(cat "$WORK/train.key"); KID=$(python3 "$SIGN" pub "$WORK/train.key" | python3 -c 'import base64,hashlib,sys; print(hashlib.sha256(base64.b64decode(sys.stdin.read().split()[1])).hexdigest()[:16])')
+# what a keyless hub builds for C over A: the commit's files, byte for byte
+mkman() { git -C "$REPO" ls-tree -r --name-only "$C" | python3 -c '
+import hashlib, json, subprocess, sys
+repo, sha, key, edit = sys.argv[1:5]
+files = []
+for p in sys.stdin.read().split():
+    b = subprocess.run(["git", "-C", repo, "show", "%s:%s" % (sha, p)], stdout=subprocess.PIPE, check=True).stdout
+    if edit == "1" and p == "f":
+        b += b"evil\n"
+    files.append({"path": p, "sha256": hashlib.sha256(b).hexdigest(), "size": len(b),
+                  "mode": 0o755 if p.startswith("bin/") or b.startswith(b"#!") else 0o644})
+sys.stdout.write(json.dumps({"schema": 1, "repo": "o/r", "sha": sha, "key": key, "prev": sys.argv[5], "seq": 2,
+                             "files": files, "artifacts": [], "tree": {}}, indent=2) + "\n")
+' "$REPO" "$C" "$KID" "$1" "$A" > "$WORK/unsigned"; }
+mkman 0; echo "$A" > "$WORK/stable"; : > "$WORK/argv"
+before=$(posts)
+run env FLEET_PUBLISH_TOKEN=x FLEET_RELEASE_SIGN_KEY="$KEY" "$PUB" "$C" --hub "$HUB" --dir "$REPO"
+eq "F: exit 0" 0 "$RC"; has "F: says the train signed" "$OUT" "signed by the train"
+eq "F: two POSTs" "$((before + 2))" "$(posts)"
+eq "F: the signer is the key's public half" "$(python3 "$SIGN" pub "$WORK/train.key")" "$(cat "$WORK/post/$before/signer")"
+eq "F: the second carries the sha" "$C" "$(part sha)"
+python3 "$BIN/fleet-release-verify.py" <(python3 "$SIGN" pub "$WORK/train.key") "$WORK/unsigned" "$(part sig)" > /dev/null 2>&1
+eq "F: the Ed25519 signature verifies" 0 "$?"
+python3 -c 'import base64,sys; b=base64.b64encode(base64.b64decode(sys.argv[1])).decode(); print("-----BEGIN SSH SIGNATURE-----"); [print(b[i:i+70]) for i in range(0,len(b),70)]; print("-----END SSH SIGNATURE-----")' "$(part sshsig)" > "$WORK/m.sshsig"
+python3 -c 'import base64,sys; r=base64.b64decode(open(sys.argv[1]).read().split()[1]); s=lambda b: len(b).to_bytes(4,"big")+b; print("t namespaces=\"claude-fleet-release\" ssh-ed25519 "+base64.b64encode(s(b"ssh-ed25519")+s(r)).decode())' <(python3 "$SIGN" pub "$WORK/train.key") > "$WORK/allowed"
+ssh-keygen -Y verify -f "$WORK/allowed" -I t -n claude-fleet-release -s "$WORK/m.sshsig" < "$WORK/unsigned" > /dev/null 2>&1
+eq "F: the SSHSIG verifies with ssh-keygen" 0 "$?"
+hasnt "F: the key never on curl's argv" "$(cat "$WORK/argv")" "$KEY"
+mkman 1; before=$(posts)
+run env FLEET_PUBLISH_TOKEN=x FLEET_RELEASE_SIGN_KEY="$KEY" "$PUB" "$C" --hub "$HUB" --dir "$REPO"
+eq "F: a manifest not the commit's → exit 1" 1 "$RC"; has "F: says why" "$OUT" "f: not the commit's bytes"
+eq "F: nothing signed, one POST" "$((before + 1))" "$(posts)"
+rm -f "$WORK/unsigned"; echo 428 > "$WORK/code"
+run env FLEET_PUBLISH_TOKEN=x "$PUB" "$C" --hub "$HUB" --dir "$REPO"
+eq "F: 428 → exit 1" 1 "$RC"; has "F: says the run has no key" "$OUT" "no FLEET_RELEASE_SIGN_KEY"
+rm -f "$WORK/code"
 
 printf 'fleet-release-publish-selftest: %d checks, %d failed\n' "$N" "$BAD"
 [ "$BAD" -eq 0 ]
