@@ -69,3 +69,34 @@ prod/   new-deploy 命名空间、ACR 镜像、两个入口域名、新加坡转
   （签发通行证的那台机器的节点令牌，或运营者），下一次 resolve（≤ 30 s）生效。
 - **下线**：`kubectl -n new-deploy delete -k deploy/k8s/credproxy/prod`；本机代理的中心路
   随之 404，不可信机器上的会话停在「没有可用的路」——可信机器不受影响。
+
+## fleet-workers — 用户 pod 旁边再一份（#3547，EPIC #3500 C2）
+
+`fleet-workers/` 把同一个中心代理在 `fleet-workers` 命名空间里再起一份，名字按批次约定改成
+`fleet-credproxy`（Service `fleet-credproxy:80`，2 副本、PDB、滚动 `maxUnavailable: 0`），
+**只在集群里**：没有 Ingress，不挂集群令牌，pod 带 `fleet/role: ops`。用户 pod
+（`extras/managed-node/render.py --cred-central http://fleet-credproxy.fleet-workers.svc.cluster.local`）
+的每个会话只拿入口签的通行证，经 pod 里的本机代理交给它；订阅凭据只在它和入口之间。
+它和 new-deploy 那份互不相干，各自滚动。一起起的还有统一出口和命名空间的网络规则：
+`../fleet-workers/`（一个 `kubectl apply -k` 全上，见 `../egress/README.md`）。
+
+首次上线（人做，一次）：
+
+```sh
+# 1. 令牌：入口只认一个 credproxy 令牌——把 new-deploy 那份原样抄过来（值不进仓库、不进 argv）
+kubectl -n new-deploy get secret ccquota -o jsonpath='{.data.credproxy-token}' \
+  | python3 -c 'import base64,json,sys; print(json.dumps({"apiVersion":"v1","kind":"Secret","metadata":{"name":"fleet-credproxy","namespace":"fleet-workers"},"type":"Opaque","data":{"credproxy-token":sys.stdin.read().strip()}}))' \
+  | kubectl apply -f -
+# 2. 应用，镜像钉成入口当前的 tag；统一出口的镜像钉成托管节点镜像的摘要（../egress/README.md）
+tag=$(kubectl -n new-deploy get deploy ccquota-hub -o jsonpath='{.spec.template.spec.containers[?(@.name=="ccquota")].image}'); tag=${tag##*:}
+node=$(kubectl -n fleet-workers get sts fleet-linux -o jsonpath='{.spec.template.spec.containers[0].image}')
+kubectl kustomize deploy/k8s/fleet-workers \
+  | sed -e "s#ccquota:set-by-hub-deploy\$#ccquota:$tag#" -e "s#fleet-managed-node:set-by-person\$#${node##*/}#" \
+  | kubectl apply -f -
+kubectl -n fleet-workers rollout status deploy/fleet-credproxy
+```
+
+升级：`kubectl -n fleet-workers set image deploy/fleet-credproxy credproxy=<入口新镜像>`，或
+`kubectl -n fleet-workers rollout restart deploy/fleet-credproxy`——新 pod 就绪才摘旧 pod，
+旧 pod 上的流跑完再走（宽限 120 s），会话不断（本机代理遇 5xx / 断连自动重试）。
+`hub-deploy` 现在只跟 new-deploy 那份（`ccquota-credproxy`）。

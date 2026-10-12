@@ -232,16 +232,22 @@ def allowed_hosts(extra=""):
     return set(UPSTREAM_HOSTS) | {h.strip().lower() for h in re.split(r"[\s,]+", extra or "") if h.strip()}
 
 
-def loopback_ok(url):
+def loopback_ok(url, cluster=False):
     """An upstream URL: https anywhere, plain http only on loopback (the selftest).
     Separated (ALLOWED set): https to an allowed host only; loopback http only in
-    the selftest's sandbox (FLEET_CREDSEP_TEST=1, which root's launcher never sets)."""
+    the selftest's sandbox (FLEET_CREDSEP_TEST=1, which root's launcher never sets).
+    `cluster` — the central route's URL only (issue #3547): plain http to a
+    Kubernetes Service's cluster-local name too (NAME.NS.svc.cluster.local, the
+    cluster credential proxy a user pod routes to; what rides it is a hub pass,
+    never a subscription credential), still to an allowed host when separated."""
     u = urlsplit(url)
-    loop = u.scheme == "http" and u.hostname in ("127.0.0.1", "localhost", "::1")
+    host = (u.hostname or "").lower()
+    loop = u.scheme == "http" and host in ("127.0.0.1", "localhost", "::1")
+    incluster = cluster and u.scheme == "http" and host.endswith(".svc.cluster.local") and host.count(".") >= 4
     if ALLOWED is None:
-        return u.scheme == "https" or loop
-    if u.scheme == "https":
-        return (u.hostname or "").lower() in ALLOWED
+        return u.scheme == "https" or loop or incluster
+    if u.scheme == "https" or incluster:
+        return host in ALLOWED
     return loop and env("FLEET_CREDSEP_TEST") == "1"
 
 
@@ -2317,7 +2323,7 @@ def serve(a):
     for c in [cfg] + everyone:
         for name in ("anthropic_url", "codex_url", "relay_url", "central_url"):
             v = getattr(c, name, "")
-            if v and not loopback_ok(v):
+            if v and not loopback_ok(v, cluster=name == "central_url"):
                 sys.exit("fleet-cred-proxy: %s=%s: %s" % (
                     name, v, "https, or plain http on loopback only" if ALLOWED is None else
                     "not an allowed upstream (https to %s; FLEET_CRED_ALLOW_HOSTS in root's config adds one)"

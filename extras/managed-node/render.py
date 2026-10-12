@@ -37,6 +37,13 @@ EGRESS6_BLOCK = ['fc00::/7']
 GH_PROXY_RE = r'http://[A-Za-z0-9.-]+:[0-9]{1,5}'
 GIT_MIRROR_RE = r'(git|https?)://[A-Za-z0-9.-]+(:[0-9]{1,5})?/[A-Za-z0-9._/-]+=https://github\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+\.git'
 
+# The cluster's shared services (#3547, EPIC #3500 C2): the credential proxy's
+# in-cluster Service (deploy/k8s/credproxy/fleet-workers) and the one egress
+# (deploy/k8s/egress). Plain http only to a cluster-local name — the pass rides
+# inside the cluster, never a subscription credential.
+CENTRAL_RE = r'(https://[A-Za-z0-9.-]+|http://[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.svc\.cluster\.local)(:[0-9]{1,5})?'
+EGRESS_PROXY_RE = r'http://[A-Za-z0-9.-]+:[0-9]{1,5}'
+
 
 def egress_allow(value):
     """'IP[/n]:PORT' -> (cidr, port): one in-cluster destination the guard lets through."""
@@ -46,25 +53,30 @@ def egress_allow(value):
     return _net(net if '/' in net else net + '/32', '--egress-allow'), int(port)
 
 
-def egress_rules(dns, blocked, allow=()):
+def egress_rules(dns, blocked, allow=(), closed=False):
     """iptables-restore input: loopback, replies, DNS to kube-dns, each allowed
-    in-cluster destination (tcp), then REJECT each range."""
+    destination (tcp), then REJECT each range — and, closed (#3547), everything
+    else too: the pod reaches the outside only through the cluster's egress."""
     v4 = ['*filter', ':INPUT ACCEPT [0:0]', ':FORWARD ACCEPT [0:0]', ':OUTPUT ACCEPT [0:0]',
           '-A OUTPUT -o lo -j ACCEPT',
           '-A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT',
           '-A OUTPUT -d %s/32 -p udp -m udp --dport 53 -j ACCEPT' % dns,
           '-A OUTPUT -d %s/32 -p tcp -m tcp --dport 53 -j ACCEPT' % dns]
     v4 += ['-A OUTPUT -d %s -p tcp -m tcp --dport %d -j ACCEPT' % a for a in allow]
-    v4 += ['-A OUTPUT -d %s -j REJECT' % c for c in blocked] + ['COMMIT']
+    v4 += ['-A OUTPUT -d %s -j REJECT' % c for c in blocked]
+    v4 += ['-A OUTPUT -j REJECT'] if closed else []
+    v4 += ['COMMIT']
     v6 = ['*filter', ':INPUT ACCEPT [0:0]', ':FORWARD ACCEPT [0:0]', ':OUTPUT ACCEPT [0:0]',
           '-A OUTPUT -o lo -j ACCEPT',
           '-A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT']
-    v6 += ['-A OUTPUT -d %s -j REJECT' % c for c in EGRESS6_BLOCK] + ['COMMIT']
+    v6 += ['-A OUTPUT -d %s -j REJECT' % c for c in EGRESS6_BLOCK]
+    v6 += ['-A OUTPUT -j REJECT'] if closed else []
+    v6 += ['COMMIT']
     return '\n'.join(v4), '\n'.join(v6)
 
 
-def egress_guard(image, dns, blocked, metadata, allow=()):
-    v4, v6 = egress_rules(dns, blocked, allow)
+def egress_guard(image, dns, blocked, metadata, allow=(), closed=False):
+    v4, v6 = egress_rules(dns, blocked, allow, closed)
     # nft first (Debian's default), legacy when the node's kernel has no nf_tables
     # for us; no backend that writes AND shows the metadata cut = the pod never
     # starts (fail closed). No IPv6 here is not a failure.
@@ -112,7 +124,8 @@ def entry_annotations(spec):
 
 def resources(image, hub, storage_class, namespace='fleet-workers', size='100Gi',
               entry_host='', entry_spec='slb.s1.small', egress=None, pull_secrets=('acr-pull',),
-              github_proxy='', git_mirrors=(), cn_mirrors=False):
+              github_proxy='', git_mirrors=(), cn_mirrors=False, cred_central='', egress_proxy='',
+              egress_closed=False):
     if not re.fullmatch(r'[^\s]+@sha256:[a-f0-9]{64}', image):
         raise ValueError('pin the deployed image by sha256 digest')
     if not hub.startswith('https://'):
@@ -142,7 +155,17 @@ def resources(image, hub, storage_class, namespace='fleet-workers', size='100Gi'
     for m in git_mirrors:
         if not re.fullmatch(GIT_MIRROR_RE, m):
             raise ValueError('--git-mirror is MIRROR_URL=https://github.com/OWNER/REPO.git, not %r' % m)
+    if cred_central and not re.fullmatch(CENTRAL_RE, cred_central):
+        raise ValueError('--cred-central is https://HOST or http://NAME.NS.svc.cluster.local[:PORT], not %r'
+                         % cred_central)
+    if egress_proxy and not re.fullmatch(EGRESS_PROXY_RE, egress_proxy):
+        raise ValueError('--egress-proxy is http://HOST:PORT (deploy/k8s/egress), not %r' % egress_proxy)
+    if egress_closed and not egress_proxy:
+        raise ValueError('--egress-closed needs --egress-proxy: closed with no way out is no machine')
     labels = {'app.kubernetes.io/name': 'fleet-managed-node'}
+    # the namespace's network rules know a user pod by this (deploy/k8s/fleet-workers);
+    # the template only — a StatefulSet's selector never changes
+    pod_labels = dict(labels, **{'fleet/role': 'user'})
     volumes = [('node', '/var/db/fleet-node'), ('credentials', '/var/db/fleet-cred'),
                ('homes', '/home'), ('logs', '/var/log/fleet-node')]
     mounts = [{'name': 'data', 'mountPath': path, 'subPath': sub} for sub, path in volumes]
@@ -160,6 +183,11 @@ def resources(image, hub, storage_class, namespace='fleet-workers', size='100Gi'
         env.append({'name': 'FLEET_GIT_MIRRORS', 'value': ' '.join(git_mirrors)})
     if cn_mirrors:
         env.append({'name': 'FLEET_CN_MIRRORS', 'value': '1'})
+    if cred_central:
+        # sessions route central; the node leases no token and keeps none (#3547)
+        env.append({'name': 'FLEET_CRED_CENTRAL_URL', 'value': cred_central})
+    if egress_proxy:
+        env.append({'name': 'FLEET_EGRESS_PROXY', 'value': egress_proxy})
     if entry_host:
         # the door's address: on ACK the egress the hub sees is the NAT's, so the
         # entry reach report must name the load balancer (fleet_entry_reach.go)
@@ -203,10 +231,10 @@ def resources(image, hub, storage_class, namespace='fleet-workers', size='100Gi'
          'spec': {'serviceName': 'fleet-linux', 'replicas': 1,
                   'selector': {'matchLabels': labels}, 'updateStrategy': {'type': 'OnDelete'},
                   'persistentVolumeClaimRetentionPolicy': {'whenDeleted': 'Retain', 'whenScaled': 'Retain'},
-                  'template': {'metadata': {'labels': labels}, 'spec': {
+                  'template': {'metadata': {'labels': pod_labels}, 'spec': {
                       'automountServiceAccountToken': False, 'terminationGracePeriodSeconds': 120,
                       'imagePullSecrets': [{'name': n} for n in pull_secrets],
-                      'initContainers': [egress_guard(image, dns, blocked, metadata, allow)],
+                      'initContainers': [egress_guard(image, dns, blocked, metadata, allow, egress_closed)],
                       'containers': [container],
                       'volumes': [{'name': 'join', 'secret': {'secretName': 'fleet-linux-join',
                                                            'optional': True, 'defaultMode': 256}},
@@ -245,6 +273,15 @@ if __name__ == '__main__':
     p.add_argument('--git-mirror', action='append', default=[], metavar='MIRROR=UPSTREAM',
                    help='fetch UPSTREAM (https://github.com/OWNER/REPO.git) from MIRROR; pushes stay on GitHub (repeatable)')
     p.add_argument('--cn-mirrors', action='store_true', help='npmmirror / goproxy.cn / node dist mirror for every login')
+    # the cluster's shared services (#3547; docs/MANAGED-LINUX.md «Shared services»)
+    p.add_argument('--cred-central', default='', metavar='URL',
+                   help='the cluster credential proxy (http://fleet-credproxy.fleet-workers.svc.cluster.local): '
+                        'every session routes central, no subscription credential is leased into or kept in the pod')
+    p.add_argument('--egress-proxy', default='', metavar='URL',
+                   help="every login's HTTPS_PROXY: the cluster's one egress (http://fleet-egress.fleet-workers.svc.cluster.local:3128)")
+    p.add_argument('--egress-closed', action='store_true',
+                   help='the guard rejects the public internet too: out only through --egress-allow destinations '
+                        "(the egress and credproxy Services' ClusterIPs, the hub's address)")
     args = p.parse_args()
     egress = {'dns': args.egress_dns, 'metadata': args.egress_metadata, 'pod_cidr': args.egress_pod_cidr,
               'service_cidr': args.egress_service_cidr,
@@ -254,7 +291,8 @@ if __name__ == '__main__':
         items = resources(args.image, args.hub, args.storage_class, args.namespace,
                           entry_host=args.entry_host, entry_spec=args.entry_lb_spec, egress=egress,
                           pull_secrets=args.pull_secrets or ['acr-pull'], github_proxy=args.github_proxy,
-                          git_mirrors=args.git_mirror, cn_mirrors=args.cn_mirrors)
+                          git_mirrors=args.git_mirror, cn_mirrors=args.cn_mirrors, cred_central=args.cred_central,
+                          egress_proxy=args.egress_proxy, egress_closed=args.egress_closed)
     except ValueError as e:
         p.error(str(e))
     print(json.dumps({'apiVersion': 'v1', 'kind': 'List', 'items': items}, indent=2))

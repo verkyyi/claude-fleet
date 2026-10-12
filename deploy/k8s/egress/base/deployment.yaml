@@ -1,0 +1,94 @@
+# Stateless: no disk, no Secret, no Kubernetes token. Two replicas and a
+# RollingUpdate (maxUnavailable 0): a tunnel in flight finishes on the old pod
+# (it has terminationGracePeriodSeconds to drain), a new one takes new requests.
+#
+# The image only has to carry python3: the placeholder `fleet-python` is mapped
+# by the overlay to the managed-node image (already on every node that runs a
+# user pod), pinned by digest by whoever applies it (README.md).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fleet-egress
+  labels:
+    app: fleet-egress
+spec:
+  replicas: 2
+  revisionHistoryLimit: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: fleet-egress
+  template:
+    metadata:
+      labels:
+        app: fleet-egress
+        fleet/role: ops
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 120
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app: fleet-egress
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: egress
+          image: fleet-python:set-by-person
+          imagePullPolicy: IfNotPresent
+          command: ["python3", "-I", "/opt/fleet-egress/fleet-egress.py"]
+          ports:
+            - containerPort: 3128
+          env:
+            - name: FLEET_EGRESS_LISTEN
+              value: "0.0.0.0:3128"
+            # Who may ask: the cluster's pod range (the overlay sets it). flannel
+            # enforces no NetworkPolicy, so this check is the wall that holds.
+            - name: FLEET_EGRESS_SOURCES
+              value: ""
+            # Hosts that need a parent proxy (GitHub through gh-relay); the
+            # overlay sets it, empty = every allowed host direct.
+            - name: FLEET_EGRESS_VIA
+              value: ""
+          readinessProbe:
+            tcpSocket:
+              port: 3128
+            initialDelaySeconds: 1
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: 3128
+            periodSeconds: 20
+          volumeMounts:
+            - name: program
+              mountPath: /opt/fleet-egress
+              readOnly: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 20m
+              memory: 32Mi
+            limits:
+              cpu: "1"
+              memory: 256Mi
+      volumes:
+        - name: program
+          configMap:
+            name: fleet-egress

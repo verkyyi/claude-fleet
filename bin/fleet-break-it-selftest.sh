@@ -6102,6 +6102,21 @@ drill_linux_github_unreachable() {
   WHAT="gh-relay 只放集群出口的 CONNECT 到 GitHub:443；/etc/gitconfig 让 github.com 走中转、镜像仓库从集群镜像拉而推去 GitHub；/etc/fleet-devnet.env 给每个登录镜像源；egress 只开镜像 Service 一个口；镜像带工具链"
 }
 
+# ---- cred-in-user-pod (#3547, EPIC #3500 C2): a user pod in the cluster held the
+# subscription tokens its node program leased; now its sessions route to the one
+# cluster credential proxy, nothing is leased into it, the volume is purged at each
+# start, and the pod goes out only through the one egress.
+drill_cred_in_user_pod() {
+  CAP=20; local t0
+  t0=$(now)
+  if ! python3 "$BIN/fleet-node-linux-selftest.py" LinuxNode.test_central_pod_holds_no_credential \
+       >"$WORK/cred-user-pod.out" 2>&1; then
+    WHY="a user pod still leases or keeps a subscription credential, or reaches the internet directly: $(tail -n 3 "$WORK/cred-user-pod.out")"; return 1
+  fi
+  SECS=$(since "$t0")
+  WHAT="render --cred-central / --egress-proxy / --egress-closed：每个登录 CCQUOTA_FLEET_CREDS=0、走 fleet-credproxy；启动时盘上的 token、Codex auth、池子删光（节点令牌、relay 通行证留着）；守卫最后一句 REJECT；出口只放白名单主机、只认 pod 网段"
+}
+
 # ---- linux-create-relay-403 (#3213): the hub's create op opens a login whose
 # account is still `creating`; the relay pass is refused (403) and must not undo it.
 drill_linux_create_relay_403() {
