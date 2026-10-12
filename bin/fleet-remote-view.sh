@@ -731,17 +731,31 @@ rv_thin_kept() {   # <row file> — still inside its keep window (left=, else it
 # names: a window id, a worker id (its @fleet_id), or another machine's session a
 # C4 window shows (@peer_cur). Nothing when none.
 rv_thin_window() {
-  local c="${2#wid:}"
+  local c="${2#wid:}" w loc
   [ -n "$c" ] || return 1
-  T list-windows -t "=$1" -F '#{window_id}|#{@fleet_id}|#{@peer_cur}' 2>/dev/null \
+  w=$(T list-windows -t "=$1" -F '#{window_id}|#{@fleet_id}|#{@peer_cur}' 2>/dev/null \
     | awk -F '|' -v c="$c" -v f="${c##*/}" '
-        $1 == c || (index(c, "/") && (($2 != "" && $2 == f) || $3 == c || $3 == "wid:" c)) { print $1; exit }'
+        $1 == c || (index(c, "/") && (($2 != "" && $2 == f) || $3 == c || $3 == "wid:" c)) { print $1; exit }')
+  # A worker id by its key (`<uuid>/<slug>:issue-<N>` — what the list hands for an
+  # issue-bound session, issue #3463): the one resolver knows it. Before this a
+  # peer window's reconnect (`--want` its @peer_cur) found no such window and
+  # landed on whatever the fleet session showed — a bare shell, on the phone.
+  if [ -z "$w" ] && case "$c" in */*) true ;; *) false ;; esac; then
+    loc=$(fleet_worker_locate "wid:$c" "$1" 2>/dev/null)
+    case "$loc" in "local "*" $1") w=${loc#local }; w=${w%% *} ;; esac
+  fi
+  [ -n "$w" ] || return 1
+  printf '%s\n' "$w"
 }
 # rv_thin_home <session> — where a 看台 with nowhere to go back to lands: the
-# orchestrator's window (「新任务」), else the session's current window.
+# orchestrator's window (「新任务」) — whoever holds the role (fleet_role_holder,
+# issue #3114: an old seat's @fleet_role is no longer written) —, else the
+# session's current window.
 rv_thin_home() {
   local w
-  w=$(T list-windows -t "=$1" -F '#{window_id} #{@fleet_role}' 2>/dev/null | awk '$2 == "orchestrator" { print $1; exit }')
+  w=$(fleet_role_holder orchestrator "$sock" 2>/dev/null) || w=''
+  [ -n "$w" ] && T list-windows -t "=$1" -F '#{window_id}' 2>/dev/null | grep -qxF "$w" || w=''
+  [ -n "$w" ] || w=$(T list-windows -t "=$1" -F '#{window_id} #{@fleet_role}' 2>/dev/null | awk '$2 == "orchestrator" { print $1; exit }')
   [ -n "$w" ] || w=$(T display-message -p -t "=$1:" '#{window_id}' 2>/dev/null)
   printf '%s' "$w"
 }
@@ -867,7 +881,10 @@ rv_attach_thin() {
   orchfar=''
   if [ -z "$w" ] && ! { [ -n "$resume" ] && [ -n "$kept" ]; }; then
     w=$(rv_thin_home "$s")
-    [ "$(T display-message -p -t "$w" '#{@fleet_role}' 2>/dev/null)" = orchestrator ] || orchfar=1
+    # the holder wears @fleet_role_def (issue #3114), an old seat @fleet_role
+    case "$(T display-message -p -t "$w" '#{@fleet_role}|#{@fleet_role_def}' 2>/dev/null)" in
+      orchestrator\|*|*\|orchestrator) ;; *) orchfar=1 ;;
+    esac
   fi
   [ -z "$w" ] || T select-window -t "$gid:$w" 2>/dev/null
   rv_thin_dress "$gid" "$view" "$s"
