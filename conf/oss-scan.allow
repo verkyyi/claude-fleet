@@ -18,6 +18,7 @@ extras/web-chat/ui/dist/assets/*.js	machine	打包产物（#3637）：图标库�
 **/internal/credvault/kms.go	cloud	阿里云 KMS / STS 自己的公开 API 地址（KMS 适配代码本身；用哪个区域是部署的 CCQUOTA_FLEET_CRED_KMS_REGION）
 deploy/k8s/base/ccquota-pricing.yaml	cloud	阿里云百炼的公开 API 域名：定价表认提供方用，不是我们的地址
 extras/managed-node/render.py	private-ipv4	--egress-* 的默认值是阿里云 ACK 的产品默认网段（kube-dns、pod、service），参数可改
+docs/dev/MANAGED-LINUX.md	private-ipv4	出口守卫一表写的就是 render.py 的 --egress-* 默认值（ACK 产品默认网段），随它改
 deploy/k8s/egress/base/fleet-egress.py	private-ipv4	内嵌自测：要的就是私网地址被拒、被认
 extras/gh-relay/gh-relay.py	private-ipv4	内嵌自测：要的就是私网地址被拒
 extras/gh-relay/gh-relay.service	private-ipv4	Lightsail 默认 VPC 的解析器地址（AWS 的产品默认），重建后照 README 核对
@@ -62,6 +63,9 @@ extras/gh-relay/README.md	private-ipv4	Lightsail VPC 的默认解析地址（AWS
 tokenledge?/README.md	private-ipv4	配置写法示例里的局域网地址（编的）
 # C8 (#3578): a vendor's public address, not our cloud
 tokenledge?/internal/store/sources_test.go	cloud	阿里云百炼的公开接口域名 dashscope.aliyuncs.com：测供应商归类，不是我们的云
+tokenledge?/docs/superpowers/plans/2026-09-12-provider-dimension.md	cloud	阿里云百炼的公开接口域名 dashscope.aliyuncs.com：供应商归类的设计与计划，不是我们的云
+tokenledge?/docs/superpowers/plans/2026-09-13-tokenledger-ui.md	cloud	阿里云百炼的公开接口域名 dashscope.aliyuncs.com：供应商归类的设计与计划，不是我们的云
+tokenledge?/docs/superpowers/specs/2026-09-12-tokenledger-provider-and-reorientation-design.md	cloud	阿里云百炼的公开接口域名 dashscope.aliyuncs.com：供应商归类的设计与计划，不是我们的云
 tokenledge?/README.md	cloud	阿里云 KMS 接入点的写法（区域已是占位 region-a）
 deploy/k8s/RUNBOOK.md	cloud	阿里云 ACK 自带的系统镜像地址（供应商的仓库，区域已是占位）
 # C8 (#3578): pinned to a value the code still hard-codes — goes with C7's change

@@ -6,10 +6,10 @@
 tailnet	0
 ts-net	0
 corp-domain	33
-cloud	46
-machine	9
+cloud	23
+machine	3
 user-home	0
 person	0
 gh-owner	2
-private-ipv4	5
+private-ipv4	1
 public-ip	0
