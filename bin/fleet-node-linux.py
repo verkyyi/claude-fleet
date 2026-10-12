@@ -14,6 +14,12 @@ login remove <login> --keep-home|--delete-home       3 exists already (open) ·
 login list   → <login> <uid> <home> <state>           4 no such login (remove) ·
                                                       5 an administrator already;
                                                       last line `credsep: <word>`
+A person's own pod (FLEET_POD_LOGIN, render.py --user-pod --login, #3757) is
+the exception: its one login is fixed when the pod is made, its passwd line
+comes from `pod-etc` (an init container, neither root nor the login), and this
+whole program runs AS that login — `login open` opens only that name (another
+is 3) with no useradd, its credentials central, and ends `credsep: central`.
+
 The exit codes are fleet-login-new.sh / fleet-login-remove.sh's, so the node
 program reads one answer from either system (EPIC #3208 共同约定 3). The hub's
 create (the machine's node program, C2 #3210) hands its join code in
@@ -539,6 +545,8 @@ TENANT_CONF = (
 
 
 def login_open(a):
+    if pod_own():
+        return pod_login_open(a)
     s = load('fleet-node-supervisor')
     paths = s.Paths()
     login = a.name
@@ -651,6 +659,104 @@ def login_open(a):
     word, rc = credsep_word(s, login, conf, int(os.environ.get('FLEET_LOGIN_CREDSEP_WAIT', '15')) if a.start else 0)
     print('credsep: ' + word)
     return rc
+
+
+# The tenant's fleet.conf on a person's own pod (#3757): its own proxy, not
+# separated — the pod holds no subscription credential to separate it from —
+# routing every session to the cluster credential proxy. Written as the login.
+POD_CONF = (
+    'import sys; from pathlib import Path; p=Path.home()/".config/claude-fleet"; p.mkdir(parents=True,exist_ok=True); '
+    'f=p/"fleet.conf"; old=f.read_text() if f.exists() else ""; '
+    'keep=[l for l in old.splitlines(True) if l.split("=",1)[0] not in '
+    '("FLEET_CRED_PROXY","FLEET_CRED_SEPARATE","FLEET_CRED_CENTRAL_URL")]; '
+    'b="".join(keep) or "# ---- [common] ----\\n"; b=b if b.endswith("\\n") else b+"\\n"; '
+    'f.write_text(b+"FLEET_CRED_PROXY=1\\nFLEET_CRED_SEPARATE=0\\nFLEET_CRED_CENTRAL_URL="+sys.argv[1]+"\\n")')
+
+
+def pod_login_open(a):
+    """`login open` on a person's own pod (#3757), run AS its login: only the
+    name the pod was made for (anything else exists already: 3); no useradd
+    (pod-etc wrote its passwd line), no fleetcred store, no shared proxy — its
+    node token in its own conf dir, its own proxy routing central, nothing
+    leased. Ends `credsep: central`."""
+    want = os.environ.get('FLEET_POD_LOGIN', '')
+    if a.name != want:
+        raise Refuse('this pod is %s\'s alone: %s is never opened here' % (want, a.name), rc=3)
+    s = load('fleet-node-supervisor')
+    paths = s.Paths()
+    login, uid, p = pod_self()
+    if a.full_name and not valid_full_name(a.full_name):
+        raise Refuse('full name: 1-64 characters, no control characters, no : or ,, not starting with -')
+    if not central_url():
+        raise ValueError('a person\'s pod routes central (render.py --cred-central): FLEET_CRED_CENTRAL_URL is unset')
+    why = pod_privileges()
+    if why:
+        raise Refuse('a person\'s pod must hold no privilege: %s' % '; '.join(why), rc=5)
+    code = None
+    if a.join_file and os.path.exists(a.join_file):
+        try:
+            code = Path(a.join_file).read_text().strip()
+        except OSError:
+            raise Refuse('cannot read the join file') from None
+    elif os.environ.get('FLEET_LOGIN_JOIN_CODE'):
+        code = os.environ['FLEET_LOGIN_JOIN_CODE'].strip()
+    if code is not None and not re.fullmatch(r'fj_[a-z2-7]{26}', code):
+        raise Refuse('invalid tenant join code')
+    op = os.environ.get('FLEET_LOGIN_OP_ID', '')
+    if op and not re.fullmatch(r'[0-9a-f]{1,64}', op):
+        raise Refuse('invalid FLEET_LOGIN_OP_ID')
+    if not Path(paths.state, 'machine.env').is_file():
+        raise ValueError('enroll the machine with fleet node install first')
+    hub = machine_hub(paths, a.hub)
+    if not hub:
+        raise ValueError('no hub URL (--hub, or CCQUOTA_HUB_URL in machine.env)')
+    me = (os.geteuid(), os.getegid())
+    home = Path(paths.users) / login
+    if p.pw_dir != str(home):
+        raise ValueError('passwd puts %s\'s home at %s, not %s' % (login, p.pw_dir, home))
+    with tenants_lock(paths):
+        t = tenants(paths).get(login)
+        if t is not None and op and t.get('op') != op:
+            raise Refuse('login %s already exists on this pod (not made by this op)' % login, rc=3)
+        if t is not None and t['uid'] != uid:
+            raise ValueError('the disk declares %s as uid %d, the pod as %d' % (login, t['uid'], uid))
+        if t is None:
+            t = {'login': login, 'uid': uid, 'gid': uid, 'home': str(home), 'since': int(time.time())}
+            if op:
+                t['op'] = op
+            private_write(tenant_path(paths, login), json.dumps(t, sort_keys=True) + '\n', *me)
+        if not check_home(t):
+            home.mkdir(mode=0o700)
+        os.chmod(home, 0o700)
+    conf = home / '.config/claude-fleet'
+    as_tenant(s, login, ['python3', '-c', POD_CONF, central_url()])
+    token_path = conf / 'node.env'
+    ne = env_read(token_path)
+    if ne.get('CCQUOTA_TOKEN'):
+        if ne.get('CCQUOTA_HUB_URL') != hub:
+            raise ValueError('persisted login belongs to a different hub')
+        request(hub, '/v1/node/self', ne['CCQUOTA_TOKEN'])
+    else:
+        if not code:
+            raise Refuse('first enrollment needs a join code (--join-file or FLEET_LOGIN_JOIN_CODE)')
+        joined = request(hub, '/v1/node/join', body={
+            'code': code, 'hostname': socket.gethostname(), 'os_user': login})
+        token = joined.get('token') or joined.get('agent_token')
+        if not isinstance(token, str) or not token or '\n' in token:
+            raise ValueError('hub returned no login token')
+        ne = {'CCQUOTA_HUB_URL': hub, 'CCQUOTA_TOKEN': token, 'CCQUOTA_FLEET': '1', 'CCQUOTA_FLEET_COMPUTE': '1'}
+    # central (#3547): nothing is ever leased into this pod
+    ne['CCQUOTA_FLEET_CREDS'] = '0'
+    private_write(token_path, ''.join(k + '=' + v + '\n' for k, v in ne.items()), *me)
+    s.write_login_env(paths, login, dict(ne, FLEET_CONF_DIR=str(conf)))
+    os.environ['FLEET_NODE_ADOPT_FOLLOW'] = '0'
+    if s.account_adopt(paths, login):
+        raise ValueError('supervisor refused to run the pod\'s login')
+    print('prepared %s (UID %d) in its own pod; credentials central (%s)' % (login, uid, central_url()))
+    if a.start:
+        bootstrap(argparse.Namespace(login=login))
+    print('credsep: central')
+    return 0
 
 
 def compat_default(key, hub):
@@ -842,6 +948,13 @@ def kill_uid(uid, rounds=3):
 
 
 def login_remove(a):
+    if pod_own():
+        # its pod goes instead (the provisioner's destroy-user-pod, #3553)
+        raise Refuse('a person\'s pod keeps its one login until the pod itself is destroyed', rc=2)
+    return _login_remove(a)
+
+
+def _login_remove(a):
     s = load('fleet-node-supervisor')
     paths = s.Paths()
     login = a.name
@@ -1024,12 +1137,14 @@ def bootstrap(a):
         raise Refuse('bootstrap needs --login <login>')
     s = load('fleet-node-supervisor')
     ctl = Path(os.environ.get('FLEET_CREDSEP_RUN_BASE', '/var/run/fleet-cred')) / '.shared/ctl.sock'
-    for _ in range(60):
+    # a person's own pod has no shared proxy: its login's own one is an account unit (#3757)
+    for _ in range(0 if pod_own() else 60):
         if ctl.exists():
             break
         time.sleep(1)
     else:
-        raise ValueError('shared credential proxy did not become ready')
+        if not pod_own():
+            raise ValueError('shared credential proxy did not become ready')
     as_tenant(s, a.login, [sys.executable, '-I', str(HERE / 'fleet-node-linux.py'), 'activate'])
     as_tenant(s, a.login, ['bash', str(HERE / 'fleet-login-bootstrap.sh')])
     restored = as_tenant(s, a.login, ['bash', str(HERE / 'fleet-sessions-snapshot.sh'), 'restore'], check=False)
@@ -1055,6 +1170,126 @@ def primary_login(a):
     serve the declared logins (linux-tenants/) only, and nothing is opened."""
     login = (getattr(a, 'login', '') or '').strip()
     return '' if login in ('', 'none') else login
+
+
+# ---------------------------------------------------------- a person's pod ----
+# One login, fixed when the pod is made (#3757, EPIC #3500 C16): render.py
+# --user-pod --login N --uid U puts FLEET_POD_LOGIN / FLEET_POD_UID in the pod,
+# its `fleet` container runs as U, and nothing in it is root but sshd's login
+# step (a container of its own). Every root step of a shared node — useradd,
+# sshd's config and host key, the dev settings in /etc, the fleetcred role user
+# and the shared proxy, the image layer's owner heal — is either pod-etc's (an
+# init container, uid 65534, before anything runs) or not there at all.
+POD_RESERVED = RESERVED + ('fleetcred', 'sshd', 'fleet')
+POD_UID_RANGE = (1000, 60000)
+POD_SSHD_PORT = 2222
+
+
+def pod_own():
+    """This process is a person's own pod (its profile and its one login named)."""
+    return os.environ.get('FLEET_NODE_PROFILE') == 'user-pod' and bool(os.environ.get('FLEET_POD_LOGIN'))
+
+
+def pod_ident():
+    """(login, uid) the pod was made for, checked; ValueError when off."""
+    login = os.environ.get('FLEET_POD_LOGIN', '')
+    try:
+        uid = int(os.environ.get('FLEET_POD_UID', ''))
+    except ValueError:
+        uid = -1
+    if not valid_name(login) or login in POD_RESERVED:
+        raise Refuse('FLEET_POD_LOGIN %r is not a login a pod can be made for' % login)
+    if not POD_UID_RANGE[0] <= uid < POD_UID_RANGE[1] or uid == 65534:
+        raise Refuse('FLEET_POD_UID %r is not a login\'s number (%d-%d)' % ((os.environ.get('FLEET_POD_UID'),)
+                                                                            + POD_UID_RANGE))
+    return login, uid
+
+
+def pod_self():
+    """(login, uid, pwd entry): this process IS the pod's login, as pod-etc wrote it."""
+    login, uid = pod_ident()
+    if os.geteuid() != uid:
+        raise ValueError('a person\'s pod runs as its login %s (uid %d), not uid %d' % (login, uid, os.geteuid()))
+    try:
+        p = pwd.getpwuid(uid)
+    except KeyError:
+        raise ValueError('uid %d has no passwd line: pod-etc did not run' % uid) from None
+    if p.pw_name != login or p.pw_gid != uid:
+        raise ValueError('passwd says uid %d is %s:%d, not %s:%d' % (uid, p.pw_name, p.pw_gid, login, uid))
+    return login, uid, p
+
+
+def pod_privileges():
+    """[why] this process could become anything but itself: it must hold no
+    capability and be unable to gain one (no_new_privs — what a setuid sudo
+    needs). [] = it cannot; the kernel's word, not a sudoers read."""
+    try:
+        st = dict(line.split(':', 1) for line in Path('/proc/self/status').read_text().splitlines() if ':' in line)
+    except OSError:
+        return ['/proc/self/status unreadable']
+    why = []
+    for k in ('CapPrm', 'CapEff', 'CapBnd', 'CapAmb'):
+        if int(st.get(k, '0').strip() or '0', 16):
+            why.append('%s %s' % (k, st[k].strip()))
+    if st.get('NoNewPrivs', '').strip() != '1':
+        why.append('NoNewPrivs off (a setuid program could raise it)')
+    return why
+
+
+def pod_sshd_text(login, runtime='/var/db/fleet-node/runtime'):
+    """The pod's whole sshd config (the sshd container runs `-f` it, nothing
+    else is read): the cluster door's key alone, for the one login, then
+    bin/fleet-entry.sh — user_pod_sshd_text's rules on a port that needs no
+    NET_BIND_SERVICE, a host key made at each start, no PAM."""
+    rules = [l for l in user_pod_sshd_text(runtime).splitlines() if not l.startswith('#')]
+    return ''.join(l + '\n' for l in [
+        '# claude-fleet: a person\'s pod (issue #3757) - written by fleet-node-linux.py pod-etc',
+        'Port %d' % POD_SSHD_PORT,
+        'HostKey /run/sshd-key/host',
+        'PidFile none',
+        'UsePAM no',
+        'PermitRootLogin no',
+        'AllowUsers ' + login,
+        'PasswordAuthentication no',
+        'KbdInteractiveAuthentication no',
+        'PrintMotd no',
+        'PrintLastLog no',
+        'Subsystem sftp /usr/lib/openssh/sftp-server',
+    ] + rules)
+
+
+def pod_etc(a):
+    """The pod-etc init (render.py): /etc/passwd and /etc/group as the image has
+    them plus the pod's login, the dev settings, sshd's config — into --out,
+    which both containers mount read-only. Everything is checked before a byte
+    is written: a login whose name or number the image already has is refused."""
+    login, uid = pod_ident()
+    base, out = Path(a.base or '/etc'), Path(a.out)
+
+    def rows(name):
+        return [l for l in (base / name).read_text().splitlines() if l and not l.startswith('#')]
+    passwd, group = rows('passwd'), rows('group')
+    for table, rs in (('passwd', passwd), ('group', group)):
+        for r in rs:
+            f = r.split(':')
+            if f[0] == login or (len(f) > 2 and f[2] == str(uid)):
+                raise Refuse('the image\'s %s already has %s / %d: %s' % (table, login, uid, f[0]))
+    home = str(Path(os.environ.get('FLEET_NODE_USERS', '/home')) / login)
+    git, shell = devnet_settings(os.environ)
+    files = {'passwd': '\n'.join(passwd + ['%s:*:%d:%d::%s:/bin/zsh' % (login, uid, uid, home)]) + '\n',
+             'group': '\n'.join(group + ['%s:x:%d:' % (login, uid)]) + '\n',
+             'gitconfig': DEVNET_MARK + git if git else '',
+             'fleet-devnet.env': DEVNET_MARK + shell if shell else '',
+             'sshd_config': pod_sshd_text(login, os.environ.get('FLEET_NODE_ROOT') or '/var/db/fleet-node/runtime')}
+    out.mkdir(parents=True, exist_ok=True)
+    for name, text in files.items():
+        tmp = out / ('.' + name + '.tmp')
+        tmp.write_text(text)
+        tmp.chmod(0o644)
+        os.replace(tmp, out / name)
+    print('pod-etc: %s (uid %d) · %d passwd line(s) · devnet %s' % (
+        login, uid, len(passwd) + 1, 'on' if git or shell else 'off'))
+    return 0
 
 
 # One person's pod (#3549, EPIC #3500 C4): its sshd takes the cluster door's key
@@ -1149,6 +1384,8 @@ def door_foreground(a):
 def foreground(a):
     if os.environ.get('FLEET_NODE_PROFILE') == 'door':
         return door_foreground(a)
+    if pod_own():
+        return pod_foreground(a)
     # The PVC lock covers enrollment as well as runtime. A second writer cannot
     # consume a second join code or run two agents for one endpoint.
     state = Path(os.environ.get('FLEET_NODE_STATE', '/var/db/fleet-node'))
@@ -1189,49 +1426,83 @@ def foreground(a):
             cmd += ['--join-file', a.machine_join_file]
         cmd += ['--release-key', '/etc/fleet-release.pub']
         subprocess.run(cmd, check=True)
-        loop = Loop(Path(os.environ.get('FLEET_NODE_ROOT', str(HERE.parent.parent))))
-        loop.start()
-        stopping = False
-
-        def stop(_sig, _frame):
-            nonlocal stopping
-            stopping = True
-
-        signal.signal(signal.SIGTERM, stop)
-        signal.signal(signal.SIGINT, stop)
-        ready = Path('/run/fleet-node-ready')
-        ready.unlink(missing_ok=True)
         s = load('fleet-node-supervisor')
         # Only what the volume declares — plus the primary login, when there is one:
         # a machine with none never grows one back on a recreate (issue #3526).
-        logins = sorted(set(tenants(s.Paths())) | ({primary} if primary else set()))
-        rc = 0
-        try:
+        return resident(s, sorted(set(tenants(s.Paths())) | ({primary} if primary else set())), primary)
+
+
+def resident(s, logins, primary=''):
+    """The container's life after the install: the supervisor's loop, each login
+    brought back (bootstrap), ready, and at the end every login's sessions saved."""
+    loop = Loop(Path(os.environ.get('FLEET_NODE_ROOT', str(HERE.parent.parent))))
+    loop.start()
+    stopping = False
+
+    def stop(_sig, _frame):
+        nonlocal stopping
+        stopping = True
+
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
+    ready = Path('/run/fleet-node-ready')
+    ready.unlink(missing_ok=True)
+    rc = 0
+    try:
+        loop.beat()
+        for login in logins:
+            try:
+                bootstrap(argparse.Namespace(login=login))
+            except (ValueError, RuntimeError, OSError, subprocess.SubprocessError) as e:
+                if login == primary:
+                    raise
+                # One person's broken home never keeps the others' sessions down.
+                print('bootstrap %s failed (%s); the other logins go on' % (login, e), file=sys.stderr)
+        ready.write_text(os.environ['FLEET_NODE_BOOT_ID'])
+        while not stopping:
             loop.beat()
-            for login in logins:
-                try:
-                    bootstrap(argparse.Namespace(login=login))
-                except (ValueError, RuntimeError, OSError, subprocess.SubprocessError) as e:
-                    if login == primary:
-                        raise
-                    # One person's broken home never keeps the others' sessions down.
-                    print('bootstrap %s failed (%s); the other logins go on' % (login, e), file=sys.stderr)
-            ready.write_text(os.environ['FLEET_NODE_BOOT_ID'])
-            while not stopping:
-                loop.beat()
-                rc = loop.tend()
-                if rc is not None:
-                    break
-                time.sleep(1)
-        finally:
-            ready.unlink(missing_ok=True)
-            for login in logins:
-                try:
-                    as_tenant(s, login, ['bash', str(loop.bin() / 'fleet-sessions-snapshot.sh'), 'save'], timeout=30)
-                except (subprocess.SubprocessError, OSError, KeyError):
-                    print('snapshot of %s failed; periodic persisted snapshot remains' % login, file=sys.stderr)
-            loop.stop()
-        return 0 if stopping else rc or 1
+            rc = loop.tend()
+            if rc is not None:
+                break
+            time.sleep(1)
+    finally:
+        ready.unlink(missing_ok=True)
+        for login in logins:
+            try:
+                as_tenant(s, login, ['bash', str(loop.bin() / 'fleet-sessions-snapshot.sh'), 'save'], timeout=30)
+            except (subprocess.SubprocessError, OSError, KeyError):
+                print('snapshot of %s failed; periodic persisted snapshot remains' % login, file=sys.stderr)
+        loop.stop()
+    return 0 if stopping else rc or 1
+
+
+def pod_foreground(a):
+    """A person's own pod (#3757): the same life as foreground, as its login.
+    Nothing of root's is here to do — sshd and its config are the sshd
+    container's, /etc is pod-etc's, the runtime the image's — so: the PVC lock,
+    the machine's install (enrollment, its key, expected state), the resident
+    loop for the one login the disk declares (none until the hub opens it)."""
+    login, uid, _p = pod_self()
+    state = Path(os.environ.get('FLEET_NODE_STATE', '/var/db/fleet-node'))
+    state.mkdir(parents=True, exist_ok=True)
+    with open(state / 'container.lock', 'a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        os.environ.update(FLEET_NODE_SERVICE='foreground', FLEET_NODE_UPDATE_OWNER='image',
+                          FLEET_NODE_BOOT_ID=uuid.uuid4().hex, FLEET_NODE_RUN_SSHD='0')
+        why = pod_privileges()
+        if why:
+            raise ValueError('a person\'s pod must hold no privilege: %s' % '; '.join(why))
+        s = load('fleet-node-supervisor')
+        declared = tenants(s.Paths())
+        if set(declared) - {login} or (login in declared and declared[login]['uid'] != uid):
+            raise ValueError('this disk is not %s\'s pod: it declares %s' % (
+                login, ', '.join('%s (%d)' % (k, v['uid']) for k, v in sorted(declared.items()))))
+        cmd = ['bash', str(HERE / 'fleet-node-install.sh'), '--hub', a.hub, '--service', 'foreground',
+               '--release-key', '/etc/fleet-release.pub']
+        if a.machine_join_file and Path(a.machine_join_file).exists():
+            cmd += ['--join-file', a.machine_join_file]
+        subprocess.run(cmd, check=True)
+        return resident(s, sorted(declared))
 
 
 class Loop(object):
@@ -1310,20 +1581,49 @@ def probe(a):
     # dead for every login here (issue #3333). Readiness is machine-wide only.
     if not Path('/run/fleet-node-ready').exists():
         return 1
-    # the door (#3549) is its entry sshd alone
-    names = ('entry',) if os.environ.get('FLEET_NODE_PROFILE') == 'door' else ('node-agent', 'cred-proxy-shared', 'sshd')
+    # the door (#3549) is its entry sshd alone; a person's pod (#3757) its node
+    # program once the hub opened its login — sshd is the other container's
+    if os.environ.get('FLEET_NODE_PROFILE') == 'door':
+        names = ('entry',)
+    elif pod_own():
+        names = ('node-agent',) if tenants(p) else ()
+    else:
+        names = ('node-agent', 'cred-proxy-shared', 'sshd')
     for name in names:
         if not s.pid_alive((st.get('children', {}).get(name) or {}).get('pid')):
             return 1
     return 0
 
 
+def own_seat():
+    """Who may run this: root on a shared node; on a person's own pod (#3757)
+    its login and nobody else — root there is sshd's login step alone."""
+    if not sys.platform.startswith('linux'):
+        return False
+    if pod_own():
+        try:
+            return os.geteuid() == pod_ident()[1]
+        except Refuse:
+            return False
+    return os.geteuid() == 0
+
+
 def main():
     if sys.argv[1:2] == ['login']:
-        if os.geteuid() != 0 or not sys.platform.startswith('linux'):
-            print('fleet-node-linux: run as root on Linux', file=sys.stderr)
+        if not own_seat():
+            print('fleet-node-linux: run as root on Linux (on a person\'s pod: as its login)', file=sys.stderr)
             return 2
         return guarded(lambda: login_cmd(sys.argv[2:]))
+    if sys.argv[1:2] == ['pod-etc']:
+        # the init container (render.py): any platform, any uid but root
+        pe = argparse.ArgumentParser(prog='fleet-node-linux.py pod-etc')
+        pe.add_argument('--base', default='/etc', help="where the image's passwd / group are")
+        pe.add_argument('--out', required=True)
+        a = pe.parse_args(sys.argv[2:])
+        if os.geteuid() == 0:
+            print('fleet-node-linux: pod-etc never runs as root', file=sys.stderr)
+            return 2
+        return guarded(lambda: pod_etc(a))
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('action', choices=('boot', 'prepare', 'activate', 'bootstrap', 'foreground', 'live', 'ready'))
     # `none` (the image's default since #3526) or empty: no primary login.
@@ -1334,8 +1634,10 @@ def main():
     ap.add_argument('--join-file', default=os.environ.get('FLEET_LOGIN_JOIN_FILE', ''))
     ap.add_argument('--machine-join-file', default=os.environ.get('FLEET_MACHINE_JOIN_FILE', ''))
     a = ap.parse_args()
-    if (os.geteuid() != 0 and a.action != 'activate') or not sys.platform.startswith('linux'):
-        ap.error('run as root on Linux')
+    if not (own_seat() or (a.action == 'activate' and sys.platform.startswith('linux'))):
+        ap.error('run as root on Linux (on a person\'s pod: as its login)')
+    if pod_own() and a.action in ('boot', 'prepare'):
+        ap.error('%s is a shared node\'s: a person\'s pod has no useradd to do' % a.action)
     return guarded(lambda: {'boot': boot, 'prepare': prepare, 'activate': activate, 'bootstrap': bootstrap,
                             'foreground': foreground, 'live': probe, 'ready': probe}[a.action](a) or 0)
 

@@ -14,8 +14,9 @@ Everything else in fleet-workers runs as its own account with no token
 It takes a ticket and nothing else — `POST /v1/op`, the ticket as the body, from
 fleet-ops (`fleet/role: control`) alone. A ticket is the hub's account key's
 (the admin seat's, `GET /v1/fleet/account-key`) under its own domain, for THIS
-cluster, five minutes, single-use; five typed ops: `create-user-pod` (with the
-pod's one-time machine join code, written into its join Secret) ·
+cluster, five minutes, single-use; five typed ops: `create-user-pod` (pod,
+limits, the pod's one login + UID — #3757 — and its one-time machine join code,
+written into its join Secret) ·
 `destroy-user-pod` (the join Secret too) · `set-limits` · `create-job` ·
 `bind-user-pod` (a claimed spare pod's `fleet/principal` label — claude-fleet#3553)
 (`bin/fleet_cluster_ticket.py`,

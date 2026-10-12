@@ -352,14 +352,59 @@ def _user_pod_container_resources(limits):
             'limits': {'cpu': limits['cpu'], 'memory': limits['memory']}}
 
 
+# A person's pod runs as that person (#3757, EPIC #3500 C16 · its second half):
+# one login, fixed when the pod is made (the spare's fleetu<N>, or a moved
+# person's own name and number). Two containers —
+#   fleet   the node as the login: supervisor, node program, the login's own
+#           credential proxy, tmux and every session; runAsNonRoot, ALL dropped,
+#           nothing added. Credentials route to the cluster proxy (--cred-central
+#           is required: no fleetcred role user, nothing leased into the pod), and
+#           the runtime is the image's (FLEET_NODE_UPDATE_OWNER=image): a new
+#           release is a new image, the provisioner's to roll.
+#   sshd    the login step and nothing else: root with only what sshd needs to
+#           take a key, set up a terminal and become the login (POD_SSHD_CAPS),
+#           on 2222 so it needs no NET_BIND_SERVICE; the Service's 22 maps to it.
+# /etc/passwd and /etc/group are the image's plus the login's line, written once
+# by the pod-etc init — neither root nor the login (65534) — into an emptyDir
+# both containers mount read-only: nobody in the pod can make themselves uid 0.
+# No shared process namespace: `ps` in fleet shows the login alone, in sshd root
+# and the login it switched to.
+POD_SSHD_PORT = 2222
+POD_SSHD_CAPS = ['CHOWN', 'SETUID', 'SETGID', 'SYS_CHROOT', 'KILL']
+POD_ETC_UID = 65534
+POD_UID_RANGE = (1000, 60000)
+POD_LOGIN_RE = r'(?=[a-z0-9]*[a-z])[a-z0-9]{2,16}'
+POD_RESERVED = ('root', 'admin', 'daemon', 'nobody', 'guest', 'shared', 'fleetcred', 'sshd', 'fleet')
+SEED_LINUX = '/opt/claude-fleet/seed/current/bin/fleet-node-linux.py'
+# what pod-etc writes (fleet-node-linux.py pod-etc) and where each container sees it
+POD_ETC_FILES = {'passwd': '/etc/passwd', 'group': '/etc/group', 'gitconfig': '/etc/gitconfig',
+                 'fleet-devnet.env': '/etc/fleet-devnet.env'}
+
+
+def pod_login(login, uid):
+    if not isinstance(login, str) or not re.fullmatch(POD_LOGIN_RE, login) or login in POD_RESERVED:
+        raise ValueError('--login is 2-16 of a-z0-9 with a letter, not a reserved name; not %r' % login)
+    if not isinstance(uid, int) or isinstance(uid, bool) or not POD_UID_RANGE[0] <= uid < POD_UID_RANGE[1] \
+            or uid == POD_ETC_UID:
+        raise ValueError('--uid is a login\'s number, %d-%d; not %r' % (POD_UID_RANGE + (uid,)))
+    return login, uid
+
+
+def _etc_mounts(names):
+    return [{'name': 'pod-etc', 'mountPath': POD_ETC_FILES.get(n, '/etc/ssh/' + n), 'subPath': n,
+             'readOnly': True} for n in names]
+
+
 def user_pod_resources(image, hub, storage_class, name, namespace='fleet-workers', limits=None, egress=None,
                        pull_secrets=('acr-pull',), github_proxy='', git_mirrors=(), cn_mirrors=False,
-                       cred_central='', egress_proxy='', egress_closed=False, cluster_caches=False, relay=''):
+                       cred_central='', egress_proxy='', egress_closed=False, cluster_caches=False, relay='',
+                       login='', uid=0):
     """One person's pod: a Deployment (one replica, Recreate), its ClusterIP
     Service (22, reached only through the cluster's door — C4) and its home disk
-    (ReadWriteOncePod). Inside: one login (the hub's account op opens it — a
-    second is refused), tmux, the node program, sshd; the machine-level loops are
-    the cluster's (FLEET_NODE_PROFILE=user-pod). No Kubernetes credential, no
+    (ReadWriteOncePod). Inside: one login, the one it was made for (--login /
+    --uid; the hub's account op opens it, any other name is refused), tmux, the
+    node program as that login, sshd for the login step; the machine-level loops
+    are the cluster's (FLEET_NODE_PROFILE=user-pod). No Kubernetes credential, no
     fleet/principal label — the provisioner writes that once the pod is ready."""
     dns, blocked, metadata, allow = _checked(image, hub, storage_class, pull_secrets, egress, github_proxy,
                                              git_mirrors, cred_central, egress_proxy, egress_closed,
@@ -368,10 +413,18 @@ def user_pod_resources(image, hub, storage_class, name, namespace='fleet-workers
         raise ValueError('--user-pod is u-<nonce> (4-20 of a-z0-9), not %r' % name)
     if not re.fullmatch(r'[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?', namespace):
         raise ValueError('--namespace is a namespace name, not %r' % namespace)
+    if not login:
+        raise ValueError('--user-pod needs --login and --uid: a person\'s pod is built for its one login (#3757)')
+    login, uid = pod_login(login, uid)
+    if not cred_central:
+        raise ValueError('--user-pod needs --cred-central: the pod holds no subscription credential (#3757)')
     limits = limits or dict(USER_POD_LIMITS)
     labels = {'app.kubernetes.io/name': 'fleet-user-pod', 'fleet/role': 'user', 'fleet/pod': name}
     select = {'fleet/pod': name}
     meta = {'name': name, 'namespace': namespace, 'labels': labels}
+    devnet = _devnet_env(github_proxy, git_mirrors, cn_mirrors, cred_central, egress_proxy, cluster_caches,
+                         namespace)
+    who = [{'name': 'FLEET_POD_LOGIN', 'value': login}, {'name': 'FLEET_POD_UID', 'value': str(uid)}]
     env = [{'name': 'FLEET_HUB_URL', 'value': hub},
            {'name': 'FLEET_MACHINE_JOIN_FILE', 'value': '/run/fleet-join/machine'},
            {'name': 'FLEET_NODE_LOGIN', 'value': 'none'},
@@ -379,26 +432,63 @@ def user_pod_resources(image, hub, storage_class, name, namespace='fleet-workers
            {'name': 'FLEET_ENTRY', 'value': '0'},
            {'name': 'FLEET_NODE_PROFILE', 'value': 'user-pod'},
            # the machine hello says CapUserPod: the hub's machine is this pod
-           {'name': 'FLEET_USER_POD', 'value': '1'}]
-    env += _devnet_env(github_proxy, git_mirrors, cn_mirrors, cred_central, egress_proxy, cluster_caches,
-                       namespace)
+           {'name': 'FLEET_USER_POD', 'value': '1'},
+           # the image's runtime: the login cannot (and need not) switch it
+           {'name': 'FLEET_NODE_UPDATE_OWNER', 'value': 'image'},
+           {'name': 'HOME', 'value': '/home/' + login}] + who
+    env += devnet
     env += _relay_env(relay)
-    container = dict({
+    # fresh dicts each time: no two containers share one object (a patch of one stays its own)
+    drop = lambda: {'drop': ['ALL']}  # noqa: E731
+    rt = lambda: {'type': 'RuntimeDefault'}  # noqa: E731
+    data = [{'name': 'data', 'mountPath': path, 'subPath': sub} for sub, path in VOLUMES]
+    shared = [{'name': 'tmp', 'mountPath': '/tmp'}]
+    fleet = dict({
         'name': 'fleet', 'image': image, 'env': env,
         'resources': _user_pod_container_resources(limits),
-        'securityContext': NODE_SECURITY,
-        'ports': [{'name': 'ssh', 'containerPort': 22}],
-        'volumeMounts': [{'name': 'data', 'mountPath': path, 'subPath': sub} for sub, path in VOLUMES]
-                        + [{'name': 'join', 'mountPath': '/run/fleet-join', 'readOnly': True},
-                           {'name': 'door', 'mountPath': '/run/fleet-door', 'readOnly': True}],
+        'securityContext': {'runAsUser': uid, 'runAsGroup': uid, 'runAsNonRoot': True,
+                            'allowPrivilegeEscalation': False, 'capabilities': drop(), 'seccompProfile': rt()},
+        'volumeMounts': data + shared + _etc_mounts(['passwd', 'group', 'gitconfig', 'fleet-devnet.env'])
+                        + [{'name': 'run', 'mountPath': '/run'},
+                           {'name': 'join', 'mountPath': '/run/fleet-join', 'readOnly': True}],
     }, **_probes())
+    # sshd: a host key of its own each start (the door never pins one — fleet-door.sh),
+    # the config pod-etc wrote
+    sshd = {
+        'name': 'sshd', 'image': image,
+        'command': ['/bin/sh', '-ec', 'chmod 700 /run/sshd-key\nrm -f /run/sshd-key/host /run/sshd-key/host.pub\n'
+                    'ssh-keygen -q -t ed25519 -N "" -f /run/sshd-key/host\n'
+                    'exec /usr/sbin/sshd -D -e -f /etc/ssh/sshd_config'],
+        'resources': {'requests': {'cpu': '50m', 'memory': '64Mi'}, 'limits': {'cpu': '1', 'memory': '1Gi'}},
+        'securityContext': {'runAsUser': 0, 'allowPrivilegeEscalation': False,
+                            'capabilities': {'drop': ['ALL'], 'add': list(POD_SSHD_CAPS)}, 'seccompProfile': rt()},
+        'ports': [{'name': 'ssh', 'containerPort': POD_SSHD_PORT}],
+        'readinessProbe': {'tcpSocket': {'port': POD_SSHD_PORT}, 'periodSeconds': 10},
+        # what the person runs over ssh (the 看台, a shell, scp) runs here as
+        # the login: its home and /tmp (tmux's sockets) are the fleet container's
+        'volumeMounts': [m for m in data if m['subPath'] == 'homes']
+                        + [dict(m, readOnly=True) for m in data if m['subPath'] == 'node']
+                        + shared + _etc_mounts(['passwd', 'group', 'gitconfig', 'fleet-devnet.env', 'sshd_config'])
+                        + [{'name': 'sshd-key', 'mountPath': '/run/sshd-key'},
+                           {'name': 'door', 'mountPath': '/run/fleet-door', 'readOnly': True}],
+    }
+    etc = {
+        'name': 'pod-etc', 'image': image,
+        'command': ['/usr/bin/python3', '-I', SEED_LINUX, 'pod-etc', '--out', '/pod-etc'],
+        'env': who + devnet,
+        'resources': {'requests': {'cpu': '10m', 'memory': '16Mi'}, 'limits': {'cpu': '200m', 'memory': '64Mi'}},
+        'securityContext': {'runAsUser': POD_ETC_UID, 'runAsGroup': POD_ETC_UID, 'runAsNonRoot': True,
+                            'allowPrivilegeEscalation': False, 'readOnlyRootFilesystem': True,
+                            'capabilities': drop(), 'seccompProfile': rt()},
+        'volumeMounts': [{'name': 'pod-etc', 'mountPath': '/pod-etc'}],
+    }
     return [
         {'apiVersion': 'v1', 'kind': 'PersistentVolumeClaim', 'metadata': meta,
          'spec': {'accessModes': ['ReadWriteOncePod'], 'storageClassName': storage_class,
                   'resources': {'requests': {'storage': limits['disk']}}}},
         {'apiVersion': 'v1', 'kind': 'Service', 'metadata': meta,
          'spec': {'type': 'ClusterIP', 'selector': select,
-                  'ports': [{'name': 'ssh', 'protocol': 'TCP', 'port': 22, 'targetPort': 22}]}},
+                  'ports': [{'name': 'ssh', 'protocol': 'TCP', 'port': 22, 'targetPort': 'ssh'}]}},
         {'apiVersion': 'apps/v1', 'kind': 'Deployment', 'metadata': meta,
          # Recreate: the home disk is ReadWriteOncePod — the old pod lets go first
          'spec': {'replicas': 1, 'strategy': {'type': 'Recreate'}, 'revisionHistoryLimit': 2,
@@ -407,17 +497,26 @@ def user_pod_resources(image, hub, storage_class, name, namespace='fleet-workers
                       'hostname': name, 'enableServiceLinks': False,
                       'serviceAccountName': SA_USER,
                       'automountServiceAccountToken': False, 'terminationGracePeriodSeconds': 120,
+                      # the disk is the login's: its group on every file the kubelet
+                      # hands over, changed only when the top is not already its
+                      'securityContext': {'fsGroup': uid, 'fsGroupChangePolicy': 'OnRootMismatch',
+                                          'seccompProfile': rt()},
                       'imagePullSecrets': [{'name': n} for n in pull_secrets],
-                      'initContainers': [egress_guard(image, dns, blocked, metadata, allow, egress_closed)],
-                      'containers': [container],
+                      'initContainers': [egress_guard(image, dns, blocked, metadata, allow, egress_closed), etc],
+                      'containers': [fleet, sshd],
                       'volumes': [{'name': 'data', 'persistentVolumeClaim': {'claimName': name}},
+                                  # 0440 with fsGroup: the login reads its machine join code
                                   {'name': 'join', 'secret': {'secretName': name + '-join',
-                                                           'optional': True, 'defaultMode': 256}},
+                                                           'optional': True, 'defaultMode': 0o440}},
                                   # the door's public key (C4, #3549): the one key this
                                   # pod's sshd takes, read at each login — a rotated
                                   # Secret is the new key, no restart
                                   {'name': 'door', 'secret': {'secretName': DOOR_PUB_SECRET,
                                                            'optional': True, 'defaultMode': 0o444}},
+                                  {'name': 'pod-etc', 'emptyDir': {'medium': 'Memory', 'sizeLimit': '1Mi'}},
+                                  {'name': 'tmp', 'emptyDir': {}},
+                                  {'name': 'run', 'emptyDir': {'medium': 'Memory', 'sizeLimit': '16Mi'}},
+                                  {'name': 'sshd-key', 'emptyDir': {'medium': 'Memory', 'sizeLimit': '1Mi'}},
                                   {'name': 'egress-run', 'emptyDir': {'medium': 'Memory', 'sizeLimit': '1Mi'}}]}}}},
     ]
 
@@ -602,6 +701,10 @@ if __name__ == '__main__':
     # one person's pod (#3550; docs/dev/MANAGED-LINUX.md «User pods»)
     p.add_argument('--user-pod', default='', metavar='u-NONCE',
                    help="render one person's pod (Deployment + Service + home disk) instead of the shared node")
+    p.add_argument('--login', default='', metavar='NAME',
+                   help="the pod's one login (the spare's fleetu<N>, or a moved person's own name): its node runs "
+                        'as it, never root (#3757)')
+    p.add_argument('--uid', type=int, default=0, metavar='N', help="that login's number (%d-%d)" % POD_UID_RANGE)
     p.add_argument('--limits', default='', metavar='cpu=2,memory=6Gi,disk=50Gi',
                    help="the pod's ceiling: the hub's fleet.user_pod_limits.<principal> value (default %s)"
                         % ','.join('%s=%s' % kv for kv in USER_POD_LIMITS.items()))
@@ -647,7 +750,8 @@ if __name__ == '__main__':
                                        github_proxy=args.github_proxy, git_mirrors=args.git_mirror,
                                        cn_mirrors=args.cn_mirrors, cred_central=args.cred_central,
                                        egress_proxy=args.egress_proxy, egress_closed=args.egress_closed,
-                                       cluster_caches=args.cluster_caches, relay=args.relay)
+                                       cluster_caches=args.cluster_caches, relay=args.relay,
+                                       login=args.login, uid=args.uid)
         else:
             items = resources(args.image, args.hub, args.storage_class, args.namespace,
                               entry_host=args.entry_host, entry_spec=args.entry_lb_spec, egress=egress,

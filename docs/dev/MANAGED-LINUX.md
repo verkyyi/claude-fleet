@@ -497,8 +497,9 @@ Git: fetches from the CI's mirror (`--git-mirror git://git-mirror.arc-runners…
 
 (issue #3550, EPIC #3500 C5) Each person gets a pod of their own: their home
 disk, tmux, sessions and warm sessions, their keys, a thin node program — and a
-ceiling set per person. `render.py --user-pod u-<nonce>` renders it instead of
-the shared node:
+ceiling set per person. `render.py --user-pod u-<nonce> --login <name> --uid <n>
+--cred-central <url>` renders it instead of the shared node (all four are
+required — see «Run as the person» below):
 
 | Object | What |
 |---|---|
@@ -507,11 +508,11 @@ the shared node:
 | `Deployment u-<nonce>` | one replica, `Recreate` (the old pod lets the disk go first); the pod's `hostname` is `u-<nonce>` — the hub's machine name for it, never the person's |
 
 Inside: `FLEET_NODE_PROFILE=user-pod` — the supervisor runs no machine-level loop
-(diskguard, memguard, orphans, shared-dirs: they are the cluster's one ops copy),
-only the updater that moves the pod's own runtime; its children (node program,
-shared proxy, sshd) are its own. `FLEET_ENTRY=0`: no entry port. One login: the
-hub's account op opens it, and a second is refused (3, `this pod is one
-person's`). `FLEET_USER_POD=1`: the machine hello lists `CapUserPod`, and the
+(diskguard, memguard, orphans, shared-dirs: they are the cluster's one ops copy)
+and no task at all; its one child is the node program. `FLEET_ENTRY=0`: no entry
+port. One login, the one the pod was made for: the hub's account op opens it,
+any other name is refused (3, `this pod is <login>'s alone`), and a remove is
+refused too — the pod goes instead (the provisioner's `destroy-user-pod`). `FLEET_USER_POD=1`: the machine hello lists `CapUserPod`, and the
 hub's roster marks the row `user_pod`. No ServiceAccount token. Labels
 `fleet/role=user` and `fleet/pod=u-<nonce>`; `fleet/principal` is written by the
 provisioner once the pod is ready, never rendered.
@@ -523,7 +524,7 @@ request) — and `--limits` takes that same text:
 
 ```sh
 python3 extras/managed-node/render.py --image "$IMAGE" --hub "$HUB" --storage-class "$SC" \
-  --user-pod u-k3x9q2 --limits 'cpu=2,memory=6Gi,disk=50Gi' \
+  --user-pod u-k3x9q2 --login fleetu7 --uid 10002 --limits 'cpu=2,memory=6Gi,disk=50Gi' \
   --cred-central http://fleet-credproxy.fleet-workers.svc.cluster.local \
   --egress-proxy http://fleet-egress.fleet-workers.svc.cluster.local:3128 | kubectl apply -f -
 # move one person's ceiling: only that Deployment rolls
@@ -535,6 +536,63 @@ kubectl -n fleet-workers patch deploy u-k3x9q2 --type strategic \
 it omits are the defaults); a bigger `disk` is a re-render (the claim grows if
 the StorageClass allows expansion). The machine join code goes in the Secret
 `u-<nonce>-join` (key `machine`), as `fleet-linux-join` does for the shared node.
+
+### Run as the person
+
+(issue #3757, EPIC #3500 C16 · its second half) Nothing in a person's pod runs as
+root but sshd's login step: `ps -o user= -e | sort -u` is the login alone in the
+`fleet` container, root alone in `sshd` (root and the login while somebody is
+logged in).
+
+| Container | Runs as | What |
+|---|---|---|
+| `egress-guard` (init) | root, NET_ADMIN · NET_RAW | the egress guard's rules, once («Egress guard»), then gone |
+| `pod-etc` (init) | 65534 — neither root nor the login | `fleet-node-linux.py pod-etc` from the IMAGE's seed: `/etc/passwd` and `/etc/group` as the image has them plus the login's one line (`<login>:*:<uid>:<uid>::/home/<login>:/bin/zsh`), `/etc/gitconfig` and `/etc/fleet-devnet.env` («Dev network»), sshd's whole config — into an emptyDir both containers mount **read-only**, file by file. A name or number the image already has (root's, sshd's) is refused before a byte is written |
+| `fleet` | the login's UID, `runAsNonRoot`, ALL dropped, nothing added, `no_new_privs` | the node: supervisor, node program, the login's own credential proxy, tmux, every session |
+| `sshd` | root, only CHOWN · SETUID · SETGID · SYS_CHROOT · KILL | `sshd -D -f` pod-etc's config: port 2222 (the Service's 22 maps to it — no NET_BIND_SERVICE), a host key made at each start (the door never pins one), `UsePAM no`, `PermitRootLogin no`, `AllowUsers <login>`, the door's key alone, then `fleet-entry.sh`. What the person runs over ssh (the 看台, a shell, scp) runs here as the login: it mounts the home and `/tmp` (tmux's sockets) of the `fleet` container, the runtime read-only |
+
+No shared process namespace. The pod's `fsGroup` is the login's: the kubelet hands
+the disk over in its group (`OnRootMismatch`).
+
+**The login is fixed when the pod is made** — a spare's `fleetu<N>` (C8: every
+fresh pod uses UID 10002, one pod holds one login), a moved person's own name and
+number (C10). The cluster ticket's `create-user-pod` carries `login` + `uid`
+(`bin/fleet_cluster_ticket.py`, `control.ClusterTicket`); there is no useradd in a
+pod.
+
+**What changed against a shared node** (`fleet-node-linux.py` · `pod_own()`,
+`FLEET_POD_LOGIN` / `FLEET_POD_UID`):
+
+- `foreground` runs as the login: the PVC lock, `fleet-node-install.sh` (which
+  skips the role user, the ssh CA, the root core and the admin seat on a pod —
+  `POD`), the resident loop for the one login the disk declares. A disk declaring
+  another login stops it.
+- `login open` (the hub's create, under the node program — which runs as the
+  login, so its commands need no setuid) writes no passwd, no fleetcred store and
+  no shared proxy: the node token in the login's own `~/.config/claude-fleet/node.env`
+  (`CCQUOTA_FLEET_CREDS=0`), its `fleet.conf` saying `FLEET_CRED_SEPARATE=0` and
+  `FLEET_CRED_CENTRAL_URL=<the cluster proxy>`, then `account adopt` of itself.
+  It ends **`credsep: central`** (`control.CredsepCentral`): the pod holds no
+  subscription credential, so there is nothing to separate — a pod's readiness is
+  `central`, not `separated`. Refused (5) unless the process holds no capability
+  and has `no_new_privs` (`pod_privileges`, the kernel's word — not a sudoers read).
+- **The runtime is the image's** (`FLEET_NODE_UPDATE_OWNER=image`): the login
+  cannot switch it and the pod runs no update task — a new release is a new image,
+  and moving a pod onto it is the provisioner's to roll (the pod's sessions come
+  back through restore). The image's seed is copied to the disk at each start.
+- The readiness probe asks for the node program once a login is declared.
+
+An image older than this change has no `pod-etc`: the init fails and the pod never
+starts — render a user pod only with an image built after it. A user pod that ran
+as root (before #3757) is not converted in place: its disk's files are root's;
+move the person (C10) onto a new one.
+
+BREAK-IT `root-in-user-pod`: the template, the provisioner's guard and pod-etc on
+this machine (`bin/fleet-break-it-cluster-selftest.sh`); the pod running on kind —
+`id` / `ps` in both containers, `/etc/passwd` read-only, a real ssh login with the
+door's key landing as the login and root's refused
+(`deploy/k8s/provisioner/kind-drill.sh`); the install and `login open` as a real
+non-root uid with no capability on a Linux runner (`extras/managed-node/smoke.py`).
 
 ## The door
 
@@ -628,7 +686,7 @@ sent, and it acts only on a **cluster ticket**: the hub's account key (C15's)
 under the domain `fleet-cluster-ticket-v1`, `c1.<payload>.<sig>`, for this
 cluster, five minutes, its nonce spent once in the ConfigMap
 `fleet-provisioner-nonces` before anything is done. The ops are typed —
-`create-user-pod {pod, limits}` · `destroy-user-pod {pod}` · `set-limits {pod,
+`create-user-pod {pod, limits, login, uid}` · `destroy-user-pod {pod}` · `set-limits {pod,
 limits}` · `create-job {pod, repo, ref}` — never a manifest: it renders render.py's
 template itself, checks it (`off_template`), and the API server checks it again
 with the `ValidatingAdmissionPolicy` `fleet-provisioner-template` (`deploy/k8s/provisioner/policy.yaml`):
@@ -645,9 +703,11 @@ is AlreadyExists; labelled `fleet/owner` (never `fleet/pod`, which the owner's
 Service selects); the network rules let it reach DNS, the package caches and the
 CI git mirror only.
 
-Still root: the user pod's own `fleet` container — it is a whole node today
-(supervisor, node program, the credential role user, useradd). #3757 moves it to
-the login's own UID, root left only for sshd's login step.
+A person's pod is root only in sshd's login step (#3757, «Run as the person»): the
+policy and `off_template` let only a container named `sshd` (CHOWN · SETUID ·
+SETGID · SYS_CHROOT · KILL) and the `egress-guard` init (NET_ADMIN · NET_RAW) add a
+capability, and every other container of a Deployment must say `runAsNonRoot` and
+a `runAsUser` that is not 0.
 
 `deploy/k8s/provisioner/README.md` applies it. BREAK-IT `sa-token-in-user-pod`
 and `provisioner-off-template` drill both halves — on this machine

@@ -117,6 +117,10 @@ func bootPod(t *testing.T, h *harness, tk control.ClusterTicket, credsep string)
 	if !strings.HasPrefix(tk.Join, "fj_") || !isUserPodName(tk.Pod) {
 		t.Fatalf("create ticket %+v: want a pod name and its join code", tk)
 	}
+	// the pod is built for its one login, never root (claude-fleet#3757)
+	if !strings.HasPrefix(tk.Login, "fleetu") || tk.UID != control.PodLoginUID {
+		t.Fatalf("create ticket %+v: want the spare's fleetu<N> as uid %d", tk, control.PodLoginUID)
+	}
 	h.enroll(t, tk.Pod)
 	identify(t, h, tk.Pod, tk.Pod, "root")
 	pod := dialMachineCaps(t, h, h.tokens[tk.Pod], control.CapLoginJoin, control.CapUserPod)

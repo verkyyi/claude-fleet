@@ -540,7 +540,8 @@ class LinuxNode(unittest.TestCase):
         Deployment alone; a ceiling under the idle request refuses."""
         render = BIN.parent / 'extras/managed-node/render.py'
         base = [sys.executable, str(render), '--image', 'example/image@sha256:' + 'a' * 64,
-                '--hub', 'https://hub.example', '--storage-class', 'essd', '--user-pod', 'u-drill1']
+                '--hub', 'https://hub.example', '--storage-class', 'essd', '--user-pod', 'u-drill1',
+                '--login', 'fleetu7', '--uid', '10002', '--cred-central', 'http://fleet-credproxy.fleet-workers.svc.cluster.local']
         items = json.loads(subprocess.check_output(base))['items']
         self.assertEqual([i['kind'] for i in items], ['PersistentVolumeClaim', 'Service', 'Deployment'])
         pvc, svc, dep = items
@@ -551,7 +552,8 @@ class LinuxNode(unittest.TestCase):
         self.assertEqual(pvc['spec']['accessModes'], ['ReadWriteOncePod'])
         self.assertEqual(pvc['spec']['resources']['requests']['storage'], '50Gi')
         self.assertEqual(svc['spec']['type'], 'ClusterIP')
-        self.assertEqual([x['port'] for x in svc['spec']['ports']], [22])
+        # 22 on the Service, sshd's 2222 in the pod (no NET_BIND_SERVICE, #3757)
+        self.assertEqual([(x['port'], x['targetPort']) for x in svc['spec']['ports']], [(22, 'ssh')])
         self.assertEqual(svc['spec']['selector'], {'fleet/pod': 'u-drill1'})
         self.assertEqual(dep['spec']['replicas'], 1)
         self.assertEqual(dep['spec']['strategy'], {'type': 'Recreate'})
@@ -561,16 +563,39 @@ class LinuxNode(unittest.TestCase):
         # its own account, no token (#3558): no Kubernetes credential in a person's pod
         self.assertEqual(pod['serviceAccountName'], 'fleet-user')
         self.assertEqual(pod['volumes'][0], {'name': 'data', 'persistentVolumeClaim': {'claimName': 'u-drill1'}})
-        c = pod['containers'][0]
+        c, sshd = pod['containers']
+        self.assertEqual((c['name'], sshd['name']), ('fleet', 'sshd'))
         env = {e['name']: e['value'] for e in c['env']}
         self.assertEqual((env['FLEET_NODE_PROFILE'], env['FLEET_USER_POD'], env['FLEET_ENTRY']),
                          ('user-pod', '1', '0'))
         self.assertEqual(env['FLEET_NODE_LOGIN'], 'none')
-        self.assertEqual([x['containerPort'] for x in c['ports']], [22])
+        self.assertEqual((env['FLEET_POD_LOGIN'], env['FLEET_POD_UID'], env['FLEET_NODE_UPDATE_OWNER']),
+                         ('fleetu7', '10002', 'image'))
         self.assertEqual(c['resources'], {'requests': {'cpu': '250m', 'memory': '1536Mi'},
                                           'limits': {'cpu': '2', 'memory': '6Gi'}})
-        self.assertNotIn('NET_ADMIN', c['securityContext']['capabilities']['add'])
-        self.assertEqual(pod['initContainers'][0]['name'], 'egress-guard')
+        # #3757: the node is the login — non-root, nothing added; root is sshd's alone
+        sc = c['securityContext']
+        self.assertEqual((sc['runAsUser'], sc['runAsGroup'], sc['runAsNonRoot']), (10002, 10002, True))
+        self.assertEqual(sc['capabilities'], {'drop': ['ALL']})
+        self.assertNotIn('ports', c)
+        self.assertEqual(sshd['securityContext']['capabilities']['add'],
+                         ['CHOWN', 'SETUID', 'SETGID', 'SYS_CHROOT', 'KILL'])
+        self.assertEqual([x['containerPort'] for x in sshd['ports']], [2222])
+        self.assertEqual(pod['securityContext']['fsGroup'], 10002)
+        self.assertNotIn('shareProcessNamespace', pod)
+        self.assertEqual([i['name'] for i in pod['initContainers']], ['egress-guard', 'pod-etc'])
+        etc = pod['initContainers'][1]
+        self.assertEqual((etc['securityContext']['runAsUser'], etc['securityContext']['runAsNonRoot']), (65534, True))
+        # passwd / group read-only in both containers: nobody in the pod writes them
+        for cc in (c, sshd):
+            m = {x['mountPath']: x for x in cc['volumeMounts']}
+            self.assertEqual((m['/etc/passwd']['subPath'], m['/etc/passwd']['readOnly']), ('passwd', True))
+            self.assertTrue(m['/etc/group']['readOnly'])
+        # no login, a reserved one, root's number, no central route: not rendered
+        for bad in (base[:base.index('--login')] + base[base.index('--uid') + 2:],
+                    [x if x != 'fleetu7' else 'root' for x in base], [x if x != '10002' else '0' for x in base],
+                    base[:-2]):
+            self.assertNotEqual(subprocess.run(bad, capture_output=True).returncode, 0, bad)
         # the person's ceiling: the same text as the hub's fleet.user_pod_limits.<principal>
         moved = json.loads(subprocess.check_output(base + ['--limits', 'cpu=4,memory=8Gi']))['items']
         self.assertEqual(moved[:2], items[:2])
@@ -585,7 +610,7 @@ class LinuxNode(unittest.TestCase):
         bad_name = [x if x != 'u-drill1' else 'alice' for x in base]
         self.assertNotEqual(subprocess.run(bad_name, capture_output=True).returncode, 0)
         # the shared node renders as before
-        node = json.loads(subprocess.check_output(base[:-2]))['items']
+        node = json.loads(subprocess.check_output(base[:base.index('--user-pod')]))['items']
         self.assertEqual(node[-1]['kind'], 'StatefulSet')
         self.assertIn('User pods', (BIN.parent / 'docs/dev/MANAGED-LINUX.md').read_text())
 
@@ -601,6 +626,69 @@ class LinuxNode(unittest.TestCase):
         self.assertEqual([t['name'] for t in pod['tasks']], ['update'])
         self.assertEqual(pod['children'], before['children'])
         self.assertIn('diskguard', [t['name'] for t in before['tasks']])
+
+    def test_pod_runs_as_its_login(self):
+        """#3757 (EPIC #3500 C16): a person's pod is its one login. pod-etc writes
+        the image's passwd / group plus that login, and refuses a name or number
+        the image has (root's above all); the daemon's table there is the node
+        program alone (no task, no shared proxy, no sshd); `login open` opens only
+        that login — any other name is 3 with nothing written — and remove is
+        refused; only that uid may run the program. Off = as before."""
+        lin = module('fleet-node-linux')
+        s = module('fleet-node-supervisor')
+        pod = {'FLEET_NODE_PROFILE': 'user-pod', 'FLEET_POD_LOGIN': 'fleetu7', 'FLEET_POD_UID': '10002'}
+        with tempfile.TemporaryDirectory() as d:
+            base, out = Path(d, 'base'), Path(d, 'out')
+            base.mkdir()
+            (base / 'passwd').write_text('root:x:0:0:root:/root:/bin/bash\nsshd:x:100:65534::/run/sshd:/usr/sbin/nologin\n')
+            (base / 'group').write_text('root:x:0:\n')
+            env = dict(pod, FLEET_GITHUB_PROXY='http://relay:3128')
+            with patch.dict(os.environ, env):
+                self.assertEqual(lin.pod_etc(_ns(base=str(base), out=str(out))), 0)
+            self.assertEqual(Path(out, 'passwd').read_text().splitlines()[-1],
+                             'fleetu7:*:10002:10002::/home/fleetu7:/bin/zsh')
+            self.assertEqual(Path(out, 'group').read_text().splitlines()[-1], 'fleetu7:x:10002:')
+            self.assertIn('FLEET_GITHUB_PROXY=http://relay:3128', Path(out, 'fleet-devnet.env').read_text())
+            sshd = Path(out, 'sshd_config').read_text()
+            for want in ('Port 2222', 'UsePAM no', 'PermitRootLogin no', 'AllowUsers fleetu7',
+                         'HostKey /run/sshd-key/host', 'AuthorizedKeysFile none',
+                         'ForceCommand /bin/bash /var/db/fleet-node/runtime/current/bin/fleet-entry.sh'):
+                self.assertIn(want + '\n', sshd)
+            self.assertNotIn('Include', sshd)
+            for login, uid in (('root', '10002'), ('sshd', '10002'), ('fleetu7', '0'), ('fleetu7', '100'),
+                               ('fleetu7', '65534'), ('Fleet', '10002')):
+                with patch.dict(os.environ, dict(pod, FLEET_POD_LOGIN=login, FLEET_POD_UID=uid)):
+                    with self.assertRaises(lin.Refuse, msg=(login, uid)):
+                        lin.pod_etc(_ns(base=str(base), out=os.path.join(d, 'bad')))
+            (base / 'passwd').write_text('root:x:0:0:root:/root:/bin/bash\nold:x:10002:10002::/:/bin/sh\n')
+            with patch.dict(os.environ, pod), self.assertRaises(lin.Refuse):
+                lin.pod_etc(_ns(base=str(base), out=os.path.join(d, 'bad')))
+            self.assertFalse(os.path.exists(os.path.join(d, 'bad')))
+        # the daemon as the login: the node program alone
+        with patch.object(s, 'MAC', False), patch.dict(os.environ, dict(pod, FLEET_NODE_UPDATE_OWNER='image')):
+            t = s.default_table(s.Paths())
+            self.assertEqual(([c['name'] for c in t['children']], t['tasks']), (['node-agent'], []))
+            self.assertEqual(s.node_environment().get('FLEET_POD_LOGIN'), 'fleetu7')
+        with patch.object(s, 'MAC', False), patch.dict(os.environ, {'FLEET_NODE_PROFILE': 'user-pod',
+                                                                    'FLEET_POD_LOGIN': ''}):
+            self.assertFalse(s.pod_own())
+        # login open: only the pod's login; remove: never
+        with patch.dict(os.environ, pod):
+            self.assertTrue(lin.pod_own())
+            with patch.object(lin, 'load', side_effect=AssertionError('nothing may be loaded or written')):
+                with self.assertRaises(lin.Refuse) as e:
+                    lin.login_open(_ns(name='drill2', full_name='', join_file='', hub='', relay='', start=False))
+                self.assertEqual(e.exception.rc, 3)
+            with self.assertRaises(lin.Refuse):
+                lin.login_remove(_ns(name='fleetu7', home='keep'))
+            with patch.object(lin.sys, 'platform', 'linux'), patch.object(lin.os, 'geteuid', return_value=0):
+                self.assertFalse(lin.own_seat())          # root is not the pod's login
+            with patch.object(lin.sys, 'platform', 'linux'), patch.object(lin.os, 'geteuid', return_value=10002):
+                self.assertTrue(lin.own_seat())
+        with patch.dict(os.environ, {'FLEET_NODE_PROFILE': 'user-pod', 'FLEET_POD_LOGIN': ''}):
+            self.assertFalse(lin.pod_own())
+            with patch.object(lin.sys, 'platform', 'linux'), patch.object(lin.os, 'geteuid', return_value=0):
+                self.assertTrue(lin.own_seat())           # a shared node: root, as before
 
     def test_door_template(self):
         """#3549 (EPIC #3500 C4): the cluster's one door — ONE LoadBalancer
@@ -631,12 +719,15 @@ class LinuxNode(unittest.TestCase):
             self.assertNotEqual(subprocess.run([sys.executable, str(render), '--door'] + bad, capture_output=True).returncode, 0, bad)
         # a user pod: the door's public key mounted, read at each login
         upod = json.loads(subprocess.check_output([sys.executable, str(render), '--image', img, '--hub', 'https://hub.example',
-                                                   '--storage-class', 'essd', '--user-pod', 'u-drill1']))['items'][-1]
+                                                   '--storage-class', 'essd', '--user-pod', 'u-drill1',
+                                                   '--login', 'drill1', '--uid', '10002', '--cred-central', 'http://fleet-credproxy.fleet-workers.svc.cluster.local']))['items'][-1]
         spec = upod['spec']['template']['spec']
         self.assertIn({'name': 'door', 'secret': {'secretName': 'fleet-door-pub', 'optional': True, 'defaultMode': 0o444}},
                       spec['volumes'])
+        # the door's key is sshd's (#3757: its own container), never the login's
         self.assertIn({'name': 'door', 'mountPath': '/run/fleet-door', 'readOnly': True},
-                      spec['containers'][0]['volumeMounts'])
+                      spec['containers'][1]['volumeMounts'])
+        self.assertNotIn('/run/fleet-door', json.dumps(spec['containers'][0]['volumeMounts']))
         lin = module('fleet-node-linux')
         text = lin.user_pod_sshd_text('/rt')
         for want in ('AuthorizedKeysFile none', 'AuthorizedKeysCommand /bin/cat /run/fleet-door/door.pub',

@@ -189,14 +189,25 @@ req() {
 
 envval() { [ -r "$ENVF" ] && sed -n "s/^$1=//p" "$ENVF" | head -n 1; }
 
+# A person's own pod (render.py --user-pod --login, issue #3757): this runs AS
+# its login, never root — nothing here is root's to do there: no useradd, no
+# credential role user (the pod routes central), no sshd config (sshd is the
+# pod's other container), no root core or admin seat.
+POD=""
+[ "${FLEET_NODE_PROFILE:-}" = user-pod ] && [ -n "${FLEET_POD_LOGIN:-}" ] && POD=1
+
 # ---------------------------------------------------------------- 检查 ----------
-if [ "$(id -u)" != 0 ] && [ "${FLEET_NODE_TEST:-}" != 1 ]; then
+if [ -n "$POD" ]; then
+  [ "$(id -u)" = "${FLEET_POD_UID:-}" ] && [ "$(id -u)" != 0 ] \
+    || fail 检查 "a person's pod installs as its login ${FLEET_POD_LOGIN}（uid ${FLEET_POD_UID:-?}），not uid $(id -u)"
+elif [ "$(id -u)" != 0 ] && [ "${FLEET_NODE_TEST:-}" != 1 ]; then
   fail 检查 "要以 root 运行（它写 /Library、/var/db 和 /etc/ssh）：sudo fleet node install --join <码>"
 fi
 case "$OS" in darwin|linux) ;; *) fail 检查 "unsupported platform: $OS" ;; esac
 if [ "$OS" = linux ]; then
   export FLEET_NODE_SERVICE="${FLEET_NODE_SERVICE:-systemd}"
-  for dep in python3 curl useradd groupadd ssh-keygen; do
+  deps="python3 curl useradd groupadd ssh-keygen"; [ -z "$POD" ] || deps="python3 curl"
+  for dep in $deps; do
     command -v "$dep" >/dev/null 2>&1 || fail 检查 "missing $dep: install the Linux prerequisites in docs/dev/MANAGED-LINUX.md"
   done
   if [ "${FLEET_NODE_SERVICE:-systemd}" != foreground ]; then
@@ -214,8 +225,9 @@ case "$HUB" in
   *) fail 检查 "--hub 要是 http(s) 地址：$HUB" ;;
 esac
 RERUN="sudo fleet node install --join <码> --hub $HUB"
-mkdir -p "$STATE" && chmod 755 "$STATE" || fail 检查 "建不了 $STATE"
-ok 检查 "root · $OS $ARCH · $("$PY" -c 'import platform; print("python " + platform.python_version())')"
+# a pod's state dir is the kubelet's (root, the login's group): it is not ours to chmod
+mkdir -p "$STATE" && { [ -n "$POD" ] || chmod 755 "$STATE"; } || fail 检查 "建不了 $STATE"
+ok 检查 "$([ -n "$POD" ] && echo "${FLEET_POD_LOGIN}（一个人的 pod，不是 root）" || echo root) · $OS $ARCH · $("$PY" -c 'import platform; print("python " + platform.python_version())')"
 
 # ---------------------------------------------------------------- 加入 ----------
 TOKEN="$(envval CCQUOTA_TOKEN)"
@@ -424,7 +436,9 @@ else
 fi
 
 # ---------------------------------------------------------------- 角色用户 ------
-if id -u "$ROLE" >/dev/null 2>&1; then
+if [ -n "$POD" ]; then
+  skip 角色用户 "一个人的 pod：凭据走集群凭据代理，没有 $ROLE"
+elif id -u "$ROLE" >/dev/null 2>&1; then
   skip 角色用户 "$ROLE 已在（uid $(id -u "$ROLE")）"
 else
   [ -f "$CUR/bin/fleet-credsep.py" ] || fail 角色用户 "运行时里没有 bin/fleet-credsep.py"
@@ -436,8 +450,9 @@ fi
 # ---------------------------------------------------------------- ssh CA --------
 KEYP="$SSHDIR/fleet_user_ca.pub"
 CONFP="$SSHDIR/sshd_config.d/100-fleet-user-ca.conf"
-code=$(req GET /v1/fleet/ssh-ca.pub "$WORK/ca")
+code=pod; [ -n "$POD" ] || code=$(req GET /v1/fleet/ssh-ca.pub "$WORK/ca")
 case "$code" in
+  pod) skip "ssh CA" "一个人的 pod：sshd 在另一个容器，只认门的钥匙" ;;
   200)
     tr -d '\r' < "$WORK/ca" | sed -n '1p' > "$WORK/ca.1"
     grep -Eq '^(ssh-|ecdsa-|sk-)[A-Za-z0-9@.-]+ [A-Za-z0-9+/=]+' "$WORK/ca.1" || fail "ssh CA" "入口给的不是一把 ssh 公钥"
@@ -514,7 +529,7 @@ fi
 # out (every caller back on its old road); otherwise an installed one is kept
 # converged and a machine without one prints nothing — byte for byte as before.
 CORE="$CUR/bin/fleet-node-core.py"
-cst=2; [ -f "$CORE" ] && { "$PY" -I "$CORE" status --check >/dev/null 2>&1; cst=$?; }
+cst=2; [ -z "$POD" ] && [ -f "$CORE" ] && { "$PY" -I "$CORE" status --check >/dev/null 2>&1; cst=$?; }
 case "${FLEET_NODE_CORE:-}" in
   0) if [ "$cst" != 2 ]; then
        out="$("$PY" -I "$CORE" uninstall 2>&1)" || fail 核心 "$(printf '%s' "$out" | tail -n 1)"
@@ -536,7 +551,8 @@ esac
 # copies, its sudoers file and the hub's account key. Opt in with FLEET_ADMIN_SEAT=1;
 # a machine never set up prints nothing, byte for byte.
 ASEAT="$CUR/bin/fleet_admin_seat.py"
-case "${FLEET_ADMIN_SEAT:-}" in
+case "${POD:+pod}${FLEET_ADMIN_SEAT:-}" in
+  pod*) ;;
   0) if [ -d "$STATE/admin" ]; then
        out="$("$PY" -I "$ASEAT" remove 2>&1)" || fail 管理员座位 "$(printf '%s' "$out" | tail -n 1)"
        ok 管理员座位 "撤了（admin/ 与 sudoers 文件拿掉，账号留着）"

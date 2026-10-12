@@ -1,7 +1,7 @@
 #!/bin/bash
 # Real Linux uid/store/proxy integration on an ephemeral GitHub runner (#3022).
 # fleet-node-linux.py fleet-node-supervisor.py fleet-credsep.py
-# fleet-credsep-launch.py extras/managed-node/smoke.py
+# fleet-credsep-launch.py extras/managed-node/smoke.py fleet-node-install.sh
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 if [ "${CI:-}" != true ] || [ "$(uname -s)" != Linux ]; then

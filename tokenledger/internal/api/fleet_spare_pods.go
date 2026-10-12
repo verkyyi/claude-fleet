@@ -351,7 +351,9 @@ func clusterOpWhy(res control.ClusterOpResult, err error) string {
 }
 
 // startClusterPod sends a's pod's create ticket: render.py's user pod named
-// a.Hostname, the ceiling limits ("" = the template's), and a one-time machine
+// a.Hostname, built for a.Login as control.PodLoginUID (its node runs as that
+// login, never root — claude-fleet#3757), the ceiling limits ("" = the
+// template's), and a one-time machine
 // join code minted for that pod alone, which the provisioner writes into the
 // pod's join Secret. A refusal or failure fails the login and the pod row.
 func (s *Server) startClusterPod(cluster string, a store.FleetAccount, limits string) {
@@ -365,7 +367,8 @@ func (s *Server) startClusterPod(cluster string, a store.FleetAccount, limits st
 	if err == nil {
 		_ = s.Store.FleetAudit("hub", "node_join_code", "join:pod-"+a.Hostname, "MINTED fixed trusted managed (spare pod)", "", now)
 		res, err = s.clusterOp(context.Background(), cluster, control.ClusterTicket{
-			Op: control.ClusterCreateUserPod, Pod: a.Hostname, Limits: limits, Join: code})
+			Op: control.ClusterCreateUserPod, Pod: a.Hostname, Limits: limits, Login: a.Login,
+			UID: control.PodLoginUID, Join: code})
 	}
 	if err == nil && res.RC == 0 {
 		if err := s.Store.SetClusterPodState(a.Hostname, store.PodLive, truncate(res.Line, 1000), time.Now()); err != nil {

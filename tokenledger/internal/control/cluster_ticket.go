@@ -17,7 +17,7 @@ import (
 // admin seat's key, C15 — one key for every account op, here and on a
 // machine) under its own domain, so an account ticket can never stand in for
 // a cluster one or the other way round. The fields are typed per op: a person's
-// pod by its u-<nonce> name and limits, a Job by the pod it serves and one
+// pod by its u-<nonce> name, limits and its one login + UID, a Job by the pod it serves and one
 // commit — never a manifest; the provisioner renders the fixed template and
 // the cluster's admission policy holds it to that template. Single-use (the
 // nonce is spent in the provisioner's book), short-lived. The verifier that
@@ -36,6 +36,11 @@ const (
 	ClusterBindUserPod    = "bind-user-pod"
 )
 
+// PodLoginUID is the number a fresh person's pod runs its one login as
+// (claude-fleet#3757): a pod holds one login, so the number need not be unique
+// across the cluster; a person moved with their old disk keeps their own.
+const PodLoginUID = 10002
+
 // ClusterTicketTTL: an op is run within seconds of its send; a re-ask signs a
 // fresh ticket under a fresh nonce.
 const ClusterTicketTTL = 5 * time.Minute
@@ -46,12 +51,17 @@ const (
 )
 
 // ClusterTicket is what the hub signs for one provisioner op. The field order
-// is the encoding (bin/fleet_cluster_ticket.py ORDER).
+// is the encoding (bin/fleet_cluster_ticket.py ORDER). Login and UID are the
+// one login a person's pod is built for (create-user-pod, claude-fleet#3757):
+// its passwd line is written when the pod is made and its node runs as that
+// UID, never root.
 type ClusterTicket struct {
 	Op        string `json:"op"`
 	Cluster   string `json:"cluster"`
 	Pod       string `json:"pod,omitempty"`
 	Limits    string `json:"limits,omitempty"`
+	Login     string `json:"login,omitempty"`
+	UID       int    `json:"uid,omitempty"`
 	Repo      string `json:"repo,omitempty"`
 	Ref       string `json:"ref,omitempty"`
 	Join      string `json:"join,omitempty"`

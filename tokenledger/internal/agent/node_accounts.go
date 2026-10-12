@@ -111,8 +111,9 @@ func tccGranted() bool {
 // the login credential-separated (claude-fleet#2294, its step 7b), and
 // credsepScriptMark what a version of the script that separates carries.
 const (
-	credsepMark       = "credsep: separated"
-	credsepScriptMark = "--no-credsep"
+	credsepMark        = "credsep: separated"
+	credsepCentralMark = "credsep: central"
+	credsepScriptMark  = "--no-credsep"
 )
 
 // credsepCapable reports whether this login's fleet-login-new.sh (at script)
@@ -152,11 +153,15 @@ func resetResult(out string) string {
 
 // credsepResult is AccountResult.Credsep for a create's output: "separated"
 // only when its LAST non-empty line says so (a pending / off / failed open says
-// something else, and is never handed out as a spare).
+// something else, and is never handed out as a spare) — or "central", the one
+// login of a person's own pod (fleet-node-linux.py, claude-fleet#3757).
 func credsepResult(out string) string {
 	lines := strings.Split(strings.TrimRight(out, " \t\r\n"), "\n")
-	if strings.TrimSpace(lines[len(lines)-1]) == credsepMark {
+	switch strings.TrimSpace(lines[len(lines)-1]) {
+	case credsepMark:
 		return control.CredsepSeparated
+	case credsepCentralMark:
+		return control.CredsepCentral
 	}
 	return ""
 }
