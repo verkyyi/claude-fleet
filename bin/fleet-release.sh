@@ -491,7 +491,7 @@ if [ -z "$MLIST" ]; then
   if [ -z "$src" ] && [ -z "$machines_arg" ]; then
     if [ -z "$HUB" ]; then step '④ 机器' "不适用 — 没有入口，也没有 --machines：只有本机"
     else
-      step '④ 机器' "读不到机器清单：没有 viewer token（CCQUOTA_VIEWER_TOKEN / ~/.ccquota/viewer-token）— 用 --machines m4,m5 走 ssh 读"
+      step '④ 机器' "读不到机器清单：没有 viewer token（CCQUOTA_VIEWER_TOKEN / ~/.ccquota/viewer-token）— 用 --machines mac-a,mac-b 走 ssh 读"
       [ "$dry" -eq 1 ] || stop failed:machines "不知道要等哪些机器"
     fi
   else

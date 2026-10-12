@@ -82,7 +82,7 @@ var hubQuotaRoutes = []string{hubQuotaClaudePath, hubQuotaCodexPath}
 
 // HubQuota is the hub's own quota reader.
 type HubQuota struct {
-	RelayURL string        // e.g. https://fleet-relay.24hw.cn
+	RelayURL string        // e.g. https://relay.example.com
 	Interval time.Duration // between reads of one account
 	Client   *http.Client  // nil: 20s timeout
 	Now      func() time.Time

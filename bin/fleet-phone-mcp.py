@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """fleet-phone-mcp.py — the person's phone MCP, ONE copy for all their logins (issue #3247).
 
-The phone (USB on mini2) is driven by mcp-server-mobile over adb. Before this,
-every session of every login started its own copy over `ssh m4 phone-mcp` —
+The phone (USB on mac-a) is driven by mcp-server-mobile over adb. Before this,
+every session of every login started its own copy over `ssh mac-a phone-mcp` —
 one adb client fight per session (#3221's root), and a login that could not ssh
-to mini2 had no phone at all. Now ONE login (the admin, verkyyi) runs it:
+to mac-a had no phone at all. Now ONE login (the admin login) runs it:
 
   serve    run as a `fleet service` of that login (the machine daemon starts it
            at boot and restarts it): mcp-server-mobile --listen 127.0.0.1:<up>
@@ -17,7 +17,7 @@ to mini2 had no phone at all. Now ONE login (the admin, verkyyi) runs it:
 
 and on every login that should reach it (the person's own, on any machine):
 
-  client set --url http://<mini2>:<port>/mcp   token on stdin
+  client set --url http://<mac-a>:<port>/mcp   token on stdin
            Claude Code: user-scope `phone` = {type: http, url, headersHelper}
            — the helper reads the token from a 0600 file, so a rotation needs
            only a new file; Codex: one marked [mcp_servers.phone] table with

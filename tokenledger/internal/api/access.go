@@ -188,16 +188,16 @@ func (s *Server) doors(f HubFacts) []Door {
 	return []Door{
 		{
 			ID: "dashboard", Name: "The dashboard", Via: "http",
-			Where:      []string{"/", "/sessions", "/machines", "/connect", "/quota", "/usage", "/config"},
+			Where:      []string{AppPrefix, AppPrefix + "/sessions", AppPrefix + "/machines", AppPrefix + "/connect", AppPrefix + "/usage", AppPrefix + "/config"},
 			Credential: dashCred,
 			Can: "Read what the viewer's role lets them see (claude-fleet#1985, #1989): an admin every " +
 				"figure this hub holds, a user their own usage, sessions, devices and settings.",
 			State: pick(f.Dashboard, "open", "off"),
-			Note:  dashNote + pick(f.Dashboard, "", " This binary was built without the dashboard, so / answers JSON instead."),
+			Note:  dashNote + pick(f.Dashboard, "", " This binary was built without the dashboard, so /app answers JSON instead."),
 		},
 		{
 			ID: "github", Name: "Sign in with GitHub", Via: "http",
-			Where:      []string{"/signin", "/auth/github/start", "/auth/github/callback", "/logout"},
+			Where:      []string{AppPrefix + "/signin", "/auth/github/start", "/auth/github/callback", AppPrefix + "/logout"},
 			Credential: "a GitHub account whose numeric ID is on this hub's list",
 			Can: "Exchange a GitHub sign-in for this hub's own session cookie. GitHub is asked only who " +
 				"you are (no scope); its token is used once and dropped. Admins come from the deploy " +
@@ -259,7 +259,7 @@ func (s *Server) doors(f HubFacts) []Door {
 				"No person, machine, account or repository is named; a signed-out \"/\" is the front page, every other path still asks.",
 			State: pick(f.PublicMeter, "public", "off"),
 			Note: pick(f.PublicMeter,
-				"Here: PUBLIC — "+MeterKey+" is on (the default). 24haowan.com reads /meter.json from the browser.",
+				"Here: PUBLIC — "+MeterKey+" is on (the default). A site named in "+MeterOriginsEnv+" reads /meter.json from the browser.",
 				"Here: "+MeterKey+" is off, so /meter.json and /odometer.svg answer 404; the front page shows no figure."),
 		},
 		{

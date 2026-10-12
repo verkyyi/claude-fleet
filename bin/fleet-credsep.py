@@ -259,6 +259,18 @@ def login_settings(conf, install_dir):
     return out
 
 
+def compat_hosts():
+    """compat-1v: 下一批删 — bin/fleet_compat.py's hosts (issue #3577)."""
+    import importlib.util
+    try:
+        spec = importlib.util.spec_from_file_location("fleet_compat", os.path.join(HERE, "fleet_compat.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod.hosts()
+    except Exception:
+        return []
+
+
 def settings_conf(login, conf, install_dir, adopt=False):
     """Write root's <LIB>/<login>.conf: on the first install (or --adopt) it takes
     the login's current values — an upstream / hub URL only when it is https to an
@@ -272,7 +284,14 @@ def settings_conf(login, conf, install_dir, adopt=False):
         return False
     vals = dict(have or {})
     m = proxy_mod()
-    m.ALLOWED = m.allowed_hosts(vals.get("FLEET_CRED_ALLOW_HOSTS", ""))
+    # Allowed: root's own word only — its allow-list, the URLs root's settings
+    # already name, the hub in root's copy of the login's node.env (issue #3577:
+    # no hub or relay is built into the proxy any more), and, compat-1v (下一批删),
+    # the hosts conf/compat-ours.conf names, which the proxy used to carry.
+    root_ne = env_file(os.path.join(paths(login)[0], "node.env"))
+    m.ALLOWED = m.allowed_hosts(
+        " ".join([vals.get("FLEET_CRED_ALLOW_HOSTS", "")] + compat_hosts()),
+        [vals.get(k, "") for k in URL_KEYS] + [root_ne.get("CCQUOTA_HUB_URL", "")])
     for k, v in sorted(login_settings(conf, install_dir).items()):
         if k == "FLEET_CRED_ALLOW_HOSTS":
             say("settings: NOT taken %s from the login (only root adds a host: edit %s)" % (k, path))
@@ -542,7 +561,7 @@ def plist(label, argv, out=None, throttle=None):
 
 def wait_gone(target, secs=25):
     """`launchctl bootout` returns once it has SIGTERMed the job, not once the job
-    is gone: on 2026-10-07 m4's bootstrap came 4 ms after it, while the agent was
+    is gone: on 2026-10-07 mac-a's bootstrap came 4 ms after it, while the agent was
     still exiting, and launchd refused it (`37: Operation already in progress`,
     which launchctl prints as `Bootstrap failed: 5: Input/output error` — issue
     #2273). Wait until launchd no longer knows the label (its ExitTimeOut is 20 s)."""
@@ -1174,7 +1193,7 @@ def own_tool(pw, name):
 def preflight(login, conf):
     """-> [why not] for a login about to have its credentials moved. The order is
     the whole point (#2135): its proxy runs FIRST and every live session already
-    talks to it, else the move takes the subscription from under them — m4,
+    talks to it, else the move takes the subscription from under them — mac-a,
     2026-10-07. And never under a running EPIC batch: its members are sessions
     on this login. Read AS the login, with the login's own scripts."""
     pw = getpw(login)

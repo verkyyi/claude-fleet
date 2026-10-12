@@ -14,7 +14,8 @@ Wants=network-online.target
 Before=caddy.service
 
 [Service]
-Environment=FLEET_HUB_URL=https://ccquota.24haowan.com
+# this deployment's hub — a placeholder: `systemctl edit fleet-relay-check` sets yours
+Environment=FLEET_HUB_URL=https://hub.example.com
 Environment=FLEET_RELAY_CHECK_LISTEN=127.0.0.1:2091
 Environment=RELAY_CHECK_CACHE_S=30
 Environment=RELAY_CHECK_GRACE_S=600

@@ -15,6 +15,7 @@ import (
 func meterServer(t *testing.T) *Server {
 	t.Helper()
 	s := badgeServer(t, false)
+	s.Site = true // the public site at "/" (claude-fleet#3583)
 	s.UI = fstest.MapFS{
 		"index.html":   {Data: []byte("<title>app</title>APP-SHELL")},
 		"landing.html": {Data: []byte("<title>claudefleet</title>FRONT-PAGE")},
@@ -44,10 +45,14 @@ func TestLanding_SignedOutRootIsTheFrontPage(t *testing.T) {
 		t.Errorf("CSP = %q; the front page must send nothing to a third party", csp)
 	}
 
-	// Signed in: the app, never the front page.
+	// Signed in: the app at /app (claude-fleet#3583), never the front page.
 	rec = meterGet(t, s, "/", map[string]string{"Authorization": "Bearer viewer-secret"})
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != AppPrefix {
+		t.Fatalf("signed-in / = %d → %q, want 302 → /app", rec.Code, rec.Header().Get("Location"))
+	}
+	rec = meterGet(t, s, AppPrefix, map[string]string{"Authorization": "Bearer viewer-secret"})
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "APP-SHELL") {
-		t.Fatalf("signed-in / = %d %.60q, want the app", rec.Code, rec.Body.String())
+		t.Fatalf("signed-in /app = %d %.60q, want the app", rec.Code, rec.Body.String())
 	}
 
 	// Only "/" is public: every other file of the app is still behind the
@@ -58,7 +63,7 @@ func TestLanding_SignedOutRootIsTheFrontPage(t *testing.T) {
 			t.Errorf("signed-out %s = %d, want 401", p, rec.Code)
 		}
 	}
-	for _, p := range []string{"/app.js", "/sessions"} {
+	for _, p := range []string{"/app.js", "/app/sessions"} {
 		if rec := meterGet(t, s, p, nil); rec.Code != http.StatusNotFound {
 			t.Errorf("signed-out %s (not in this hub's UI) = %d, want 404", p, rec.Code)
 		}
@@ -86,8 +91,9 @@ func decodeMeter(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {
 }
 
 func TestMeter_PublicWithTheLiveJSONFields(t *testing.T) {
+	t.Setenv(MeterOriginsEnv, "https://www.example.com, https://example.com/")
 	s := meterServer(t)
-	rec := meterGet(t, s, "/meter.json", map[string]string{"Origin": "https://www.24haowan.com"})
+	rec := meterGet(t, s, "/meter.json", map[string]string{"Origin": "https://www.example.com"})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("/meter.json = %d %s, want 200 with no credential", rec.Code, rec.Body.String())
 	}
@@ -104,8 +110,8 @@ func TestMeter_PublicWithTheLiveJSONFields(t *testing.T) {
 	if m["windowSecs"].(float64) <= 0 {
 		t.Errorf("windowSecs = %v, want > 0", m["windowSecs"])
 	}
-	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "https://www.24haowan.com" {
-		t.Errorf("ACAO = %q, want the 24haowan.com origin echoed", got)
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "https://www.example.com" {
+		t.Errorf("ACAO = %q, want the configured origin echoed", got)
 	}
 	if cc := rec.Header().Get("Cache-Control"); cc != "public, max-age=10" {
 		t.Errorf("Cache-Control = %q", cc)
@@ -117,11 +123,28 @@ func TestMeter_PublicWithTheLiveJSONFields(t *testing.T) {
 		}
 	}
 
-	for _, o := range []string{"https://evil.example", "http://www.24haowan.com"} {
+	for _, o := range []string{"https://evil.example", "http://www.example.com"} {
 		rec := meterGet(t, s, "/meter.json", map[string]string{"Origin": o})
 		if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "" {
 			t.Errorf("Origin %s got ACAO %q, want none", o, got)
 		}
+	}
+	if !meterOrigin("https://example.com") {
+		t.Errorf("a configured origin with a trailing / is still that origin")
+	}
+}
+
+// TestMeter_NoOriginUnconfigured: with CCQUOTA_METER_ORIGINS unset no site's
+// script may read the counter (issue #3577) — the numbers are still served.
+func TestMeter_NoOriginUnconfigured(t *testing.T) {
+	t.Setenv(MeterOriginsEnv, "")
+	s := meterServer(t)
+	rec := meterGet(t, s, "/meter.json", map[string]string{"Origin": "https://www.example.com"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/meter.json = %d, want 200", rec.Code)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "" {
+		t.Errorf("ACAO = %q with no origin configured, want none", got)
 	}
 }
 
@@ -214,5 +237,22 @@ func TestMeter_EmptyHubServesNoZero(t *testing.T) {
 	s.Store = st
 	if rec := meterGet(t, s, "/meter.json", nil); rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("/meter.json on an empty hub = %d %s, want 503, never a zero", rec.Code, rec.Body.String())
+	}
+}
+
+// TestUnconfiguredNotes: an unset deployment key is said once, by name.
+func TestUnconfiguredNotes(t *testing.T) {
+	got := UnconfiguredNotes(func(string) string { return "" })
+	if len(got) != 1 || !strings.HasPrefix(got[0], "未配置 "+MeterOriginsEnv) {
+		t.Errorf("unset: %q", got)
+	}
+	set := UnconfiguredNotes(func(k string) string {
+		if k == MeterOriginsEnv {
+			return "https://www.example.com"
+		}
+		return ""
+	})
+	if len(set) != 0 {
+		t.Errorf("set: %q", set)
 	}
 }

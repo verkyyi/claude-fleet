@@ -493,8 +493,12 @@ Do not install from memory: read the doc and work from it.
   `fleet-browser-selftest.sh`.
 - **A person talks to ONE conversation from a browser: `bin/fleet-webchat.sh`**
   (issue #3567, docs/WEB-CHAT.md). `extras/web-chat/server.mjs` runs the Claude
-  Agent SDK as the login, on 127.0.0.1 only (no option widens it), behind a
-  one-time link minted with a 0600 `admin.token` → an HttpOnly cookie; one
+  Agent SDK as the login — by default as the login's registered service
+  (`enable` / `serve`, issue #3643) listening ONLY on `webchat/chat.sock` (0600,
+  dir 0700; no TCP, no cookie, no admin.token — the node's relay is the way in;
+  a budget 403 is one `{t:"error", code:"budget"}` line); the old road, on
+  127.0.0.1 only (no option widens it), is OFF unless `FLEET_WEBCHAT_LOCAL=1`,
+  behind a one-time link minted with a 0600 `admin.token` → an HttpOnly cookie; one
   conversation per person (`webchat/conversation.json`), compacted between turns
   or relayed to a new session (`chain`), never a list. Each turn's `claude` gets a
   `fleet-session-cred.sh mint` session credential in its environment only — the

@@ -74,7 +74,7 @@ func TestGateHubJudgesBothWays(t *testing.T) {
 	if ok, _ := judge("cloud-perms", nil); ok {
 		t.Fatal("cloud-perms outside a cluster passed")
 	}
-	env["KUBERNETES_SERVICE_HOST"] = "10.0.0.1"
+	env["KUBERNETES_SERVICE_HOST"] = "198.51.100.1"
 	os.WriteFile(gateSATokenPath, []byte("t"), 0o600)
 	if ok, why := judge("cloud-perms", nil); ok || !strings.Contains(why, "服务账号令牌") {
 		t.Fatalf("cloud-perms, token mounted: %v %s", ok, why)

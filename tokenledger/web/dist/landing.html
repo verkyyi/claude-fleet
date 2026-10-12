@@ -185,7 +185,7 @@ html:lang(zh) body { line-height: 1.75; }
       <a class="btn ghost hide-sm" href="#how">{{t "landing.nav.how"}}</a>
       <a class="btn ghost hide-sm" href="https://github.com/verkyyi/claude-fleet" rel="noopener">GitHub</a>
       <span class="langsw" role="group" aria-label="{{t "lang.label"}}"><a href="{{.ZhHref}}" lang="zh-CN" hreflang="zh-CN"{{if .IsZh}} aria-current="true"{{end}}>中文</a><a href="{{.EnHref}}" lang="en" hreflang="en"{{if not .IsZh}} aria-current="true"{{end}}>EN</a></span>
-      <a class="btn dark" href="/signin">{{t "landing.signin"}}</a>
+      <a class="btn dark" href="/app/signin">{{t "landing.signin"}}</a>
     </div>
   </nav>
   <main class="pub-main" id="landing">
@@ -194,7 +194,7 @@ html:lang(zh) body { line-height: 1.75; }
         <h1>{{t "landing.h1.pre"}}<em>{{t "landing.h1.em"}}</em>{{t "landing.h1.post"}}</h1>
         <p class="sub">{{t "landing.sub"}}</p>
         <div class="ctas">
-          <a class="btn primary lg" href="/signin"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="8" r="2.5"/><path d="M6 8.5v7M18 10.5c0 4-6 3-10 6"/></svg>{{t "landing.cta.signin"}}</a>
+          <a class="btn primary lg" href="/app/signin"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="8" r="2.5"/><path d="M6 8.5v7M18 10.5c0 4-6 3-10 6"/></svg>{{t "landing.cta.signin"}}</a>
           <a class="btn lg" href="/fleet/keys"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M11 18.5h2"/></svg>{{t "landing.cta.phone"}}</a>
         </div>
         <div class="installwrap" id="install"><small>{{t "landing.install.label"}}</small>
@@ -283,10 +283,10 @@ html:lang(zh) body { line-height: 1.75; }
         <div>
           <h3><span class="ic"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M11 18.5h2"/></svg></span>{{t "landing.how.phone"}}</h3>
           <ol>
-            <li><b>{{t "landing.m1.h"}}</b><p>{{t "landing.m1.p"}}</p></li>
-            <li><b>{{t "landing.m2.h"}}</b><p>{{t "landing.m2.pre"}}<a href="/fleet/keys">/fleet/keys</a>{{t "landing.m2.post"}}</p></li>
-            <li><b>{{t "landing.m3.h"}}</b><p>{{t "landing.m3.pre"}}{{if .Domain}}<code>&lt;name&gt;.{{.Domain}}</code>{{else}}{{t "landing.m3.addr"}}{{end}}{{t "landing.m3.post"}}</p></li>
-            <li><b>{{t "landing.m4.h"}}</b><p>{{t "landing.m4.p"}}</p></li>
+            <li><b>{{t "landing.p1.h"}}</b><p>{{t "landing.p1.p"}}</p></li>
+            <li><b>{{t "landing.p2.h"}}</b><p>{{t "landing.p2.pre"}}<a href="/fleet/keys">/fleet/keys</a>{{t "landing.p2.post"}}</p></li>
+            <li><b>{{t "landing.p3.h"}}</b><p>{{t "landing.p3.pre"}}{{if .Domain}}<code>&lt;name&gt;.{{.Domain}}</code>{{else}}{{t "landing.p3.addr"}}{{end}}{{t "landing.p3.post"}}</p></li>
+            <li><b>{{t "landing.p4.h"}}</b><p>{{t "landing.p4.p"}}</p></li>
           </ol>
         </div>
       </div>

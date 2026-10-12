@@ -1038,7 +1038,8 @@ func (s *Server) rememberLoginCode(next http.Handler) http.Handler {
 }
 
 // loginReturn is where the GitHub callback sends the browser after sign-in: back to the
-// confirmation page when a fleet login is waiting, else "/". Only a fixed
+// confirmation page when a fleet login is waiting, else the console (/app,
+// claude-fleet#3583). Only a fixed
 // path and a validated code — not a redirect target anyone can choose.
 func loginReturn(w http.ResponseWriter, r *http.Request) string {
 	c, err := r.Cookie(loginCookie)
@@ -1046,12 +1047,12 @@ func loginReturn(w http.ResponseWriter, r *http.Request) string {
 		if to := entryReturnTo(w, r); to != "" {
 			return to
 		}
-		return "/"
+		return AppPrefix
 	}
 	http.SetCookie(w, &http.Cookie{Name: loginCookie, Value: "", Path: "/", MaxAge: -1})
 	code := strings.ToUpper(c.Value)
 	if !validUserCode(code) {
-		return "/"
+		return AppPrefix
 	}
 	return "/fleet/login?code=" + code
 }

@@ -97,6 +97,7 @@
 #   spare-reuse-leaks                               bin/fleet-login-reset-check.py (the category table), its selftest
 #   spare-recycle-dirty                             tokenledger/internal/api fleet_recycle.go (recycleClear,
 #                                                   recycleLeftovers, applyReset) + store RecycleAccount; go test
+#   spare-wash-resume                               bin/fleet-login-reset.sh (stop · wash · rejoin · check, the op file), its selftest
 #   login-remove-respawn-hang                       bin/fleet-login-remove.sh (quiesce: bootout user/gui, deleteUser time limit)
 #   newcomer-login-no-gh                            bin/fleet-control-read.sh ready (gh only with a hosted repo)
 #                                                   + bin/fleet-client-place.sh self_lines (no host-here hint)
@@ -272,7 +273,7 @@ lintfail() { LINT=$((LINT + 1)); printf 'FAIL  lint: %s\n' "$1"; }
 [ -f "$DOC" ] || lintfail "docs/BREAK-IT.md is missing"
 # The cred half lives in its own script (issue #1975: its own run, its own
 # durations row) — its drills are listed rows like any other.
-DRILLS=$(sed -n 's/^drill_\([a-z0-9_]*\)() *{.*/\1/p' "$0" "$BIN/fleet-break-it-cred-selftest.sh" "$BIN/fleet-break-it-cred-shared-selftest.sh" "$BIN/fleet-break-it-revoke-selftest.sh" "$BIN/fleet-break-it-cred-sep-selftest.sh" "$BIN/fleet-break-it-node-selftest.sh" "$BIN/fleet-break-it-tenant-selftest.sh" "$BIN/fleet-break-it-hub-selftest.sh" "$BIN/fleet-break-it-peerlink-selftest.sh" "$BIN/fleet-break-it-thin-selftest.sh" "$BIN/fleet-break-it-thin-client-selftest.sh" "$BIN/fleet-break-it-entry-selftest.sh" "$BIN/fleet-break-it-ci-selftest.sh" "$BIN/fleet-break-it-core-selftest.sh" | tr _ -)
+DRILLS=$(sed -n 's/^drill_\([a-z0-9_]*\)() *{.*/\1/p' "$0" "$BIN/fleet-break-it-cred-selftest.sh" "$BIN/fleet-break-it-cred-shared-selftest.sh" "$BIN/fleet-break-it-revoke-selftest.sh" "$BIN/fleet-break-it-cred-sep-selftest.sh" "$BIN/fleet-break-it-node-selftest.sh" "$BIN/fleet-break-it-tenant-selftest.sh" "$BIN/fleet-break-it-hub-selftest.sh" "$BIN/fleet-break-it-peerlink-selftest.sh" "$BIN/fleet-break-it-thin-selftest.sh" "$BIN/fleet-break-it-thin-client-selftest.sh" "$BIN/fleet-break-it-entry-selftest.sh" "$BIN/fleet-break-it-ci-selftest.sh" "$BIN/fleet-break-it-core-selftest.sh" "$BIN/fleet-break-it-seats-selftest.sh" | tr _ -)
 IDS=''
 NROWS=0
 while IFS= read -r r; do
@@ -5108,6 +5109,26 @@ drill_spare_recycle_dirty() {
   SECS=$(since "$t0")
 }
 
+# ---- spare-wash-resume (#3505, EPIC #3500 C20): a Mac login washed for the
+# next person in place (remove --recycle) — cut off half way, or missing one
+# kind of leftover, and a second run either archived again, took the half-made
+# setup for the last person's, or called a half-washed login clean. Now one
+# script (fleet-login-reset.sh) stops, washes, sets up and checks, booking each
+# phase by op_id; its selftest plants one thing per category, kills it mid
+# rejoin and runs the same op again.
+drill_spare_wash_resume() {
+  CAP=90; local t0 out
+  t0=$(now)
+  [ -f "$ROOT/bin/fleet-login-reset.sh" ] \
+    || { WHY="no bin/fleet-login-reset.sh: remove --recycle has nothing to wash a login with"; return 1; }
+  grep -q -- '--recycle)' "$ROOT/bin/fleet-login-remove.sh" \
+    || { WHY="fleet-login-remove.sh has no --recycle: the hub's reset op fails at its first word"; return 1; }
+  out=$(bash "$ROOT/bin/fleet-login-reset-selftest.sh" 2>&1) \
+    || { WHY="fleet-login-reset-selftest.sh is red: $(printf '%s\n' "$out" | grep -m1 'FAIL')"; return 1; }
+  WHAT="每类种一样 → 洗完 reset: clean + credsep: separated；留一个进程 → dirty processes；重新加入失败 → dirty rejoin；半路杀掉同 op 再跑续完、只一份存档（沙盒真跑检查器）"
+  SECS=$(since "$t0")
+}
+
 # ---- login-remove-record-left (#2728): sysadminctl -deleteUser took the home
 # and left the record (drill10092046 on macmini), and the script said done —
 # the hub read removed and the OS login was nobody's. Now step 6 reads the
@@ -6494,6 +6515,24 @@ drill_cred_migration_client() {
   SECS=$(since "$t0")
 }
 
+# ---- site-console-indexed (#3583, EPIC #3569 共同约定 6): the console and the
+# intro page shared one address, so a crawler that read the intro page walked
+# straight into the console's pages. Now: the console is /app, every answer
+# under it says X-Robots-Tag: noindex, the old addresses 301 there, and "/" is
+# the site (signed out) or /app (signed in) — the client's paths untouched.
+drill_site_console_indexed() {
+  CAP=120; local t0 f="$ROOT/tokenledger/internal/api/app_mount.go"
+  t0=$(now)
+  grep -q 'X-Robots-Tag", "noindex' "$f" \
+    || { WHY="app_mount.go no longer marks the console noindex"; return 1; }
+  grep -q 's.appMount(s.routes())' "$ROOT/tokenledger/internal/api/server.go" \
+    || { WHY="the router is no longer behind appMount: the console is back at the root"; return 1; }
+  _drill_go_tests 'TestAppIsNoindex TestAppOldPathsMoveUnderApp TestAppRoot TestClientPathsUnchanged' \
+    "$ROOT/tokenledger/internal/api/app_mount_test.go" \
+    '控制台在 /app、每页 noindex；旧地址 301 过去；/ 未登录是官网、登录了 302 /app；客户端路径逐字节不变（go test）' || return 1
+  SECS=$(since "$t0")
+}
+
 drill_db_move_policy_seed() {
   CAP=120; local t0
   t0=$(now)
@@ -6843,6 +6882,45 @@ drill_land_squash_unseen() {
   [ "$out" = "landed landed" ] || { WHY="a squash merge with gh failing reads [$out], not landed"; return 1; }
   [ ! -s "$d/gh.log" ] || { WHY="gh was called: $(head -1 "$d/gh.log")"; return 1; }
   WHAT="压成一个提交的合并、gh 一律失败：回收门判 landed，fleet_landed 认得落地，gh 0 次"
+}
+
+# The web chat's socket mode (issue #3643, EPIC #3642 C1): both drills run a part of
+# bin/fleet-webchat-selftest.mjs, which does the break for real — a stale 0666 socket
+# in a 0755 dir; the proxy's 403 person_budget_exceeded through a stub SDK.
+# webchat_part <part> <line…> — its --only=<part> run: PASS and every `ok` line asked for
+webchat_part() {
+  local part="$1" out t0 want
+  shift
+  t0=$(now)
+  out=$(node "$BIN/fleet-webchat-selftest.mjs" "--only=$part" 2>&1)
+  SECS=$(since "$t0")
+  printf '%s\n' "$out" | grep -q '^PASS fleet-webchat-selftest' \
+    || { WHY="the webchat selftest's $part part is red: $(printf '%s\n' "$out" | grep '^FAIL' | head -3 | tr '\n' ' ')"; return 1; }
+  for want in "$@"; do
+    printf '%s\n' "$out" | grep -qF "ok   $want" || { WHY="no «${want}» line: $(printf '%s\n' "$out" | tail -3 | tr '\n' ' ')"; return 1; }
+  done
+  WEBCHAT_OUT=$out
+}
+
+drill_chat_socket_other_login() {
+  CAP=30
+  if ! command -v node >/dev/null 2>&1; then SECS=0; WHAT="SKIP：这里没有 node"; return 0; fi
+  webchat_part socket "H the socket is 0600" "H its dir is 0700" "H no admin.token, no port file" \
+    "H no --socket, no FLEET_WEBCHAT_LOCAL=1: it does not start" "H a second server on a live socket refuses" || return 1
+  WHAT="0755 目录里放一个 0666 的旧 socket 再起对话服务：socket 回到 0600、目录 0700，没有 admin.token / 端口；不带 --socket 也没 FLEET_WEBCHAT_LOCAL=1 就不起"
+  if printf '%s\n' "$WEBCHAT_OUT" | grep -qF 'ok   H (control)'; then
+    printf '%s\n' "$WEBCHAT_OUT" | grep -qF 'ok   H another uid cannot connect even through' \
+      || { WHY="another uid connected through the 0600 socket"; return 1; }
+    WHAT="${WHAT}；nobody 连不上（放开到 0666 时它连得上）"
+  fi
+}
+
+drill_chat_budget_bypass() {
+  CAP=30
+  if ! command -v node >/dev/null 2>&1; then SECS=0; WHAT="SKIP：这里没有 node"; return 0; fi
+  webchat_part budget "I the proxy's 403 is one" "I the raw API error never reaches the page" \
+    "I /api/conversation says blocked, until" "I still blocked after a restart" "I … and the block is lifted" || return 1
+  WHAT="凭据代理 403 person_budget_exceeded：流里一行 code:budget + until，原话不上页面；/api/conversation 说被挡（重启也记得），走通一轮后放开"
 }
 
 # ================================================================ run ====}

@@ -16,7 +16,7 @@ looping scheduler is never reopened on purpose) — keeps what it read at ITS st
 Everything those name runs from the NEW install: `~/.claude/fleet` is the version
 link. #2068's four rules say such a session keeps working — at worst it lacks a new
 feature. On 2026-10-06 a release dropped three mod tools with no handler behind them
-and four old sessions on m5 failed every spawn with «no tool.call hook answered».
+and four old sessions on mac-b failed every spawn with «no tool.call hook answered».
 This script is the gate that makes that a red BEFORE stable moves:
 
   old   the session's start — the three files as `--old` has them (default: the

@@ -558,3 +558,27 @@ dscl . -read /Groups/com.apple.access_ssh GroupMembership
 The hub has no endpoint deletion command: once the ccquota agent stops,
 `mini-alice` goes stale and stops reporting. Past usage stays under its
 `os_user`.
+
+### Washing a login for the next person (recycle)
+
+On a machine that keeps spare logins (EPIC #3500), the hub's remove becomes a
+**reset**: the OS user is kept and washed in place, never deleted — no
+`sysadminctl`, no system prompt, the record and its UID stay (issue #3505):
+
+```sh
+~/.claude/fleet/bin/fleet-login-reset.sh fleetu3            # preview
+~/.claude/fleet/bin/fleet-login-reset.sh fleetu3 --apply    # = fleet-login-remove.sh fleetu3 --recycle --apply
+```
+
+It runs the remove script's steps 1–5 (`--recycle-stop`: fleets down, off the
+hub, services out, credsep purged, processes quiesced, the home archived),
+replaces the home with a fresh one from the template and clears the admin's
+`~/<login>-onboard`, the crontab, root's entry keys and task state for it,
+any LaunchDaemon run as it and every file it owns in `/private/tmp`,
+`/private/var/tmp` and `/Users/Shared`; then sets it up again with
+`fleet-login-new.sh <login> --recycle` (a new random password, the key, the
+install, the hub's join code, credsep) and ends with
+`fleet-login-reset-check.py --since <the wash>`. The last two lines are what the
+hub reads: `reset: clean` (or `reset: dirty <categories>`) and `credsep: …`.
+Cut off half way, the same op (`FLEET_LOGIN_OP_ID`) run again goes on from
+`~/<login>-reset/op`.

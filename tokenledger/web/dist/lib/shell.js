@@ -52,26 +52,31 @@ export const ICONS = Object.freeze({
 /** ic is one icon's <svg>. */
 export const ic = (name, cls) => `<svg class="i ${cls || ''}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name] || ''}</svg>`;
 
+/** APP is where the console is mounted (claude-fleet#3583): the root is the
+ *  public site, every page below lives under it. The one place it is spelled
+ *  on this side; the hub's is app_mount.go's AppPrefix. */
+export const APP = '/app';
+
 /** PAGES is every page the menu can draw, in menu order; `label` is a t()
  *  key. `group` 'admin' goes under the Admin heading. Ids are /v1/me's (roles.go pagesFor).
  *  It is also the route table (claude-fleet#2793): `href` is the page's path,
  *  `module` the script the shell imports to draw it (lib/router.js). */
 export const PAGES = Object.freeze([
-  { id: 'overview', label: 'ui.nav.overview', icon: 'home', href: '/', module: '/overview.js' },
+  { id: 'overview', label: 'ui.nav.overview', icon: 'home', href: APP, module: '/overview.js' },
   // 我的用量 (claude-fleet#2519), one page since claude-fleet#3229: 我的额度
   // (/quota, #2517) moved into it (lib/router.js MOVED).
-  { id: 'usage', label: 'ui.nav.usage', icon: 'scroll', href: '/usage', module: '/usage.js' },
-  { id: 'sessions', label: 'ui.nav.sessions', icon: 'list', href: '/sessions', module: '/sessions-page.js' },
+  { id: 'usage', label: 'ui.nav.usage', icon: 'scroll', href: APP + '/usage', module: '/usage.js' },
+  { id: 'sessions', label: 'ui.nav.sessions', icon: 'list', href: APP + '/sessions', module: '/sessions-page.js' },
   // 任务 (claude-fleet#3325): the viewer's task records, T<n> — what they asked
   // for, beside the sessions that do it.
-  { id: 'tasks', label: 'ui.nav.tasks', icon: 'scroll', href: '/tasks', module: '/tasks.js' },
+  { id: 'tasks', label: 'ui.nav.tasks', icon: 'scroll', href: APP + '/tasks', module: '/tasks.js' },
   // 我的机器 (claude-fleet#2518): a user's own machines.
-  { id: 'mymachines', label: 'ui.nav.mymachines', icon: 'server', href: '/machines', module: '/machines.js' },
+  { id: 'mymachines', label: 'ui.nav.mymachines', icon: 'server', href: APP + '/machines', module: '/machines.js' },
   // One machine (claude-fleet#2796): /machines/<host>, opened from either
   // machine list — no menu item of its own (`prefix`: the path under href;
   // `within`: shown to whoever's menu lists one of these).
-  { id: 'machine', label: 'ui.nav.machine', icon: 'server', href: '/machines/', prefix: true, within: ['mymachines', 'machines'], module: '/machine.js' },
-  { id: 'devices', label: 'ui.nav.devices', icon: 'key', href: '/connect', module: '/connect.js' },
+  { id: 'machine', label: 'ui.nav.machine', icon: 'server', href: APP + '/machines/', prefix: true, within: ['mymachines', 'machines'], module: '/machine.js' },
+  { id: 'devices', label: 'ui.nav.devices', icon: 'key', href: APP + '/connect', module: '/connect.js' },
   // 从手机连 (claude-fleet#3199): the keys page, every role's. It is drawn by
   // the hub (fleet_entry_page.go), not the app — no module, so a click is a
   // plain page load.
@@ -79,24 +84,24 @@ export const PAGES = Object.freeze([
   // 我的连接 (claude-fleet#3199): the home every device shares, the address,
   // the keys — the hub's page too.
   { id: 'connection', label: 'ui.nav.connection', icon: 'home', href: '/fleet/connection' },
-  { id: 'config', label: 'ui.nav.config', icon: 'sliders', href: '/config', module: '/config.js' },
+  { id: 'config', label: 'ui.nav.config', icon: 'sliders', href: APP + '/config', module: '/config.js' },
   // The admin group (claude-fleet#1990): first the whole hub the four pages
   // above used to show an admin (claude-fleet#2515), then the hub's own.
-  { id: 'all-sessions', label: 'ui.nav.allSessions', icon: 'list', group: 'admin', href: '/admin/sessions', module: '/admin/sessions.js' },
-  { id: 'by-person', label: 'ui.nav.byPerson', icon: 'users', group: 'admin', href: '/admin/overview', module: '/admin/overview.js' },
-  { id: 'subscription-settings', label: 'ui.policy.global', icon: 'settings', group: 'admin', href: '/subscriptions/settings', within: ['subscriptions'], module: '/admin/subscription-settings.js' },
-  { id: 'subscription', label: 'ui.policy.subscription', icon: 'card', group: 'admin', href: '/subscriptions/', prefix: true, within: ['subscriptions'], module: '/admin/subscription.js' },
-  { id: 'person', label: 'ui.policy.user', icon: 'users', group: 'admin', href: '/admin/users/', prefix: true, within: ['people'], module: '/admin/user.js' },
-  { id: 'subscriptions', label: 'ui.nav.subscriptions', icon: 'card', group: 'admin', href: '/subscriptions', module: '/admin/subscriptions.js' },
+  { id: 'all-sessions', label: 'ui.nav.allSessions', icon: 'list', group: 'admin', href: APP + '/admin/sessions', module: '/admin/sessions.js' },
+  { id: 'by-person', label: 'ui.nav.byPerson', icon: 'users', group: 'admin', href: APP + '/admin/overview', module: '/admin/overview.js' },
+  { id: 'subscription-settings', label: 'ui.policy.global', icon: 'settings', group: 'admin', href: APP + '/subscriptions/settings', within: ['subscriptions'], module: '/admin/subscription-settings.js' },
+  { id: 'subscription', label: 'ui.policy.subscription', icon: 'card', group: 'admin', href: APP + '/subscriptions/', prefix: true, within: ['subscriptions'], module: '/admin/subscription.js' },
+  { id: 'person', label: 'ui.policy.user', icon: 'users', group: 'admin', href: APP + '/admin/users/', prefix: true, within: ['people'], module: '/admin/user.js' },
+  { id: 'subscriptions', label: 'ui.nav.subscriptions', icon: 'card', group: 'admin', href: APP + '/subscriptions', module: '/admin/subscriptions.js' },
   // 服务节点与客户端 (claude-fleet#3232): one page, two tabs — the old All
   // devices (/admin/devices) is its ?tab=clients (lib/router.js MOVED).
-  { id: 'machines', label: 'ui.nav.machines', icon: 'server', group: 'admin', href: '/nodes', module: '/admin/nodes.js' },
-  { id: 'people', label: 'ui.nav.people', icon: 'users', group: 'admin', href: '/admin/users', module: '/admin/users.js' },
-  { id: 'settings', label: 'ui.nav.settings', icon: 'gear', group: 'admin', href: '/admin/settings', module: '/admin/settings.js' },
-  { id: 'audit', label: 'ui.nav.audit', icon: 'scroll', group: 'admin', href: '/admin/audit', module: '/admin/audit.js' },
+  { id: 'machines', label: 'ui.nav.machines', icon: 'server', group: 'admin', href: APP + '/nodes', module: '/admin/nodes.js' },
+  { id: 'people', label: 'ui.nav.people', icon: 'users', group: 'admin', href: APP + '/admin/users', module: '/admin/users.js' },
+  { id: 'settings', label: 'ui.nav.settings', icon: 'gear', group: 'admin', href: APP + '/admin/settings', module: '/admin/settings.js' },
+  { id: 'audit', label: 'ui.nav.audit', icon: 'scroll', group: 'admin', href: APP + '/admin/audit', module: '/admin/audit.js' },
   // 反馈 (claude-fleet#3357): every /fleet-feedback; /v1/me lists it only
   // when the hub takes feedback.
-  { id: 'feedback', label: 'ui.nav.feedback', icon: 'alert', group: 'admin', href: '/admin/feedback', module: '/admin/feedback.js' },
+  { id: 'feedback', label: 'ui.nav.feedback', icon: 'alert', group: 'admin', href: APP + '/admin/feedback', module: '/admin/feedback.js' },
 ]);
 
 /** navFor turns /v1/me's pages into the menu: [{heading}|{id,label,icon,href}].

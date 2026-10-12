@@ -132,6 +132,7 @@ func TestLanding_ServerPicksTheLanguage(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := badgeServer(t, false)
+	s.Site = true
 	s.UI = fstest.MapFS{"index.html": {Data: []byte("APP")}, "landing.html": {Data: src}}
 
 	rec := meterGet(t, s, "/", map[string]string{"Accept-Language": "zh-CN,zh;q=0.9"})
@@ -218,12 +219,12 @@ func TestPageLocale_FollowsTheAccount(t *testing.T) {
 		resp.Body.Close()
 		return resp
 	}
-	get("/?lang=zh", "en-US")
+	get(AppPrefix+"?lang=zh", "en-US")
 	if set, _ := h.srv.Store.FleetSettings(); set["user.999.lang"] != i18n.ZhCN {
 		t.Fatalf("account setting = %q, want zh-CN", set["user.999.lang"])
 	}
 	// Another device: English browser, no cf_lang — the account wins.
-	resp := get("/", "en-US")
+	resp := get(AppPrefix, "en-US")
 	if c := cookieNamed(resp, langCookie); c == nil || c.Value != i18n.ZhCN {
 		t.Fatalf("second device cookie = %+v, want zh-CN from the account", c)
 	}

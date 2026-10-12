@@ -152,8 +152,8 @@ def hub_freshen():
     """--home (issue #3478): the list is the person's sessions on EVERY machine, as
     the hub sees them — this fleet's hub cache, the one the sidebar reads. A thin
     client's `fleet ls` runs on whichever machine the hub picks to enter, and there
-    the cache may never have been written (drill 35: a fresh login on m4, «the
-    machine you used last», listed nothing while the session ran on mini2) or have
+    the cache may never have been written (drill 35: a fresh login on mac-a, «the
+    machine you used last», listed nothing while the session ran on mac-a) or have
     gone stale. Then ONE round of the loop's own `fleet-hub-sessions.sh --refresh`
     runs here before the rows are read — the same reader, no second one. The hub
     silent ⇒ the rows this machine has, and stderr says so. No hub here ⇒ the
@@ -252,7 +252,7 @@ def fleet_uuid():
 
 def host_label():
     """This machine as the hub names it with no cache to ask (issue #3470): the
-    host's short name, renamed through FLEET_NODE_ALIASES (`mini2=m4`) — the rule
+    host's short name, renamed through FLEET_NODE_ALIASES (`mac-a.local=mac-a`) — the rule
     the hub loop writes `#me` with (fleet-hub-sessions.sh label) and the node
     registers under (its hostname). ('' = no hostname)."""
     h = socket.gethostname().split(".", 1)[0]

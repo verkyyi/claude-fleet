@@ -190,6 +190,28 @@ grep -q '› ?' "$W/legend.txt" && fail "B: ? on an empty query went into the qu
 to send-keys -t o:view -l '?'; to send-keys -t o:view -l 'z?'; sleep 0.5; to capture-pane -p -t o:view > "$W/legend.txt"
 grep -q '› z?' "$W/legend.txt" || fail "B: ? after text is not part of the query: $(head -2 "$W/legend.txt")"
 to send-keys -t o:view BSpace BSpace; sleep 0.3
+# issue #3666: on the 已结束 heading → opens it, ← shuts it, ↵ still toggles. Walk
+# down pressing → until its row shows (→ on a session row does nothing).
+shot() { sleep 0.4; to capture-pane -p -t o:view > "$W/fold.txt"; }
+grep -q 'Old 做完的' "$W/popup.txt" && fail "B: 已结束 open before any key"
+ok=''; for _ in 1 2 3 4 5 6 7 8 9 10; do
+  to send-keys -t o:view Down; to send-keys -t o:view Right; shot
+  grep -q 'Old 做完的' "$W/fold.txt" && { ok=1; break; }
+done
+[ -n "$ok" ] || fail "B: → on the 已结束 heading did not open it: $(cat "$W/fold.txt")"
+grep -q '▾ 已结束' "$W/fold.txt" || fail "B: → opened 已结束 but its caret is not ▾: $(grep -F 已结束 "$W/fold.txt")"
+to send-keys -t o:view Right; shot
+grep -q 'Old 做完的' "$W/fold.txt" || fail "B: a second → shut 已结束"
+to send-keys -t o:view Left; shot
+grep -q 'Old 做完的' "$W/fold.txt" && fail "B: ← on the open 已结束 heading did not shut it"
+grep -q '▸ 已结束' "$W/fold.txt" || fail "B: ← shut 已结束 but its caret is not ▸"
+to send-keys -t o:view Left; shot
+grep -q 'Old 做完的' "$W/fold.txt" && fail "B: a second ← opened 已结束"
+to send-keys -t o:view Enter; shot
+grep -q 'Old 做完的' "$W/fold.txt" || fail "B: ↵ on the 已结束 heading no longer opens it"
+to send-keys -t o:view Enter; shot
+grep -q 'Old 做完的' "$W/fold.txt" && fail "B: ↵ on the open 已结束 heading no longer shuts it"
+pass "B  ⌘P: → opens 已结束, ← shuts it, ↵ toggles it (#3666)"
 pass "B  ⌘P: the list in the 看台 (等你 first, glyphs, the question under its row, 已结束), nothing in a direct attach"
 
 # --- C: ↵ on beta, here ------------------------------------------------------------------

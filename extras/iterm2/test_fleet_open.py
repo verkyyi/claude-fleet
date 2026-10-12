@@ -28,8 +28,8 @@ class ParsePayload(unittest.TestCase):
 
     def test_forward_full(self):
         r = fo.parse_payload(b64({"v": 1, "kind": "forward", "rport": "8123", "path": "/d/ab/",
-                                  "scheme": "https", "host": "macmini", "ts": 1000}), now=1100)
-        self.assertEqual((r["rport"], r["path"], r["scheme"], r["host"]), (8123, "/d/ab/", "https", "macmini"))
+                                  "scheme": "https", "host": "mac-b", "ts": 1000}), now=1100)
+        self.assertEqual((r["rport"], r["path"], r["scheme"], r["host"]), (8123, "/d/ab/", "https", "mac-b"))
 
     def test_url(self):
         r = fo.parse_payload(b64({"v": 1, "kind": "url", "url": "https://github.com/x/y/pull/1"}))
@@ -101,7 +101,7 @@ class Host(unittest.TestCase):
         self.assertEqual(fo.resolve_host({"host": "mini"}, "other\n"), "mini")
 
     def test_file(self):
-        self.assertEqual(fo.resolve_host({"host": ""}, "# alias\n  macmini \n"), "macmini")
+        self.assertEqual(fo.resolve_host({"host": ""}, "# alias\n  mac-b \n"), "mac-b")
 
     def test_none(self):
         self.assertRaises(fo.Reject, fo.resolve_host, {"host": ""}, None)
@@ -142,15 +142,15 @@ class PickPort(unittest.TestCase):
 
 class Commands(unittest.TestCase):
     def test_mux(self):
-        self.assertEqual(fo.mux_forward_cmd("macmini", 21000, 8123),
-                         ["ssh", "-O", "forward", "-L", "21000:127.0.0.1:8123", "macmini"])
+        self.assertEqual(fo.mux_forward_cmd("mac-b", 21000, 8123),
+                         ["ssh", "-O", "forward", "-L", "21000:127.0.0.1:8123", "mac-b"])
 
     def test_fallback(self):
-        c = fo.fallback_forward_cmd("macmini", 8123, 8123)
+        c = fo.fallback_forward_cmd("mac-b", 8123, 8123)
         self.assertEqual(c[:2], ["ssh", "-N"])
         self.assertIn("ExitOnForwardFailure=yes", c)
         self.assertIn("BatchMode=yes", c)
-        self.assertEqual(c[-3:], ["-L", "8123:127.0.0.1:8123", "macmini"])
+        self.assertEqual(c[-3:], ["-L", "8123:127.0.0.1:8123", "mac-b"])
 
     def test_local_url(self):
         self.assertEqual(fo.local_url("http", 21000, "/d/ab/?x=1"), "http://localhost:21000/d/ab/?x=1")

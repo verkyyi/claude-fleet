@@ -8,7 +8,7 @@ macOS privacy protection (TCC) charges every access a process makes to its
 RESPONSIBLE process — the app launchd started, inherited down the whole tree.
 When that one is not an Apple platform binary and holds no decision for the
 service, tccd puts an authorization dialog on the CONSOLE and the access waits
-for a person to answer it. On a machine nobody looks at, nobody does: on mini2
+for a person to answer it. On a machine nobody looks at, nobody does: on mac-a
 (2026-10-10 and again 2026-10-11) the admin node's ccquota — a new, ungranted
 identity on every release (#3034) — ran fleet-login-new.sh; sysadminctl asked
 for kTCCServiceSystemPolicySysAdminFiles, the dialog sat there, the user tccd's

@@ -44,7 +44,7 @@ func TestMe_OperatorDoorsNameTheDoorNotAPerson(t *testing.T) {
 }
 
 // 退出：同源 POST 清掉入口自己的 cookie（会话 + 存着的令牌），303 到退出页；
-// 退出页有「重新登录」指向 /signin；之后再访问 /connect 要重新登录。
+// 退出页有「重新登录」指向 /app/signin；之后再访问 /connect 要重新登录。
 func TestLogout_ClearsTheHubsCookiesAndShowsTheSignedOutPage(t *testing.T) {
 	h := newFleetHarness(t)
 	enablePeople(t, h, pAlice)
@@ -55,8 +55,8 @@ func TestLogout_ClearsTheHubsCookiesAndShowsTheSignedOutPage(t *testing.T) {
 	c := personCookie(pAlice, "alice-gh")
 
 	resp := h.postForm(t, "/logout", map[string]string{"Cookie": c.Name + "=" + c.Value, "Origin": h.http.URL})
-	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/logout" {
-		t.Fatalf("POST /logout = %d → %q; want 303 → /logout", resp.StatusCode, resp.Header.Get("Location"))
+	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/app/logout" {
+		t.Fatalf("POST /logout = %d → %q; want 303 → /app/logout", resp.StatusCode, resp.Header.Get("Location"))
 	}
 	cleared := map[string]bool{}
 	for _, ck := range resp.Cookies() {
@@ -70,19 +70,19 @@ func TestLogout_ClearsTheHubsCookiesAndShowsTheSignedOutPage(t *testing.T) {
 		}
 	}
 
-	resp = h.raw(t, "/logout", nil)
+	resp = h.raw(t, "/app/logout", nil)
 	body := readBody(t, resp)
 	if resp.StatusCode != http.StatusOK || !strings.Contains(body, "已退出登录") {
 		t.Fatalf("GET /logout = %d %q; want 退出页", resp.StatusCode, body)
 	}
-	if !strings.Contains(body, `href="/signin"`) {
-		t.Errorf("退出页没有指向 /signin 的「重新登录」：%q", body)
+	if !strings.Contains(body, `href="/app/signin"`) {
+		t.Errorf("退出页没有指向 /app/signin 的「重新登录」：%q", body)
 	}
 
 	// 没了 cookie 的浏览器再开 /connect：被送去登录，不是页面。
-	resp = h.raw(t, "/connect", map[string]string{"Accept": "text/html"})
-	if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != "/signin" {
-		t.Fatalf("退出后 /connect = %d → %q; want 302 → /signin", resp.StatusCode, resp.Header.Get("Location"))
+	resp = h.raw(t, "/app/connect", map[string]string{"Accept": "text/html"})
+	if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != "/app/signin" {
+		t.Fatalf("退出后 /connect = %d → %q; want 302 → /app/signin", resp.StatusCode, resp.Header.Get("Location"))
 	}
 }
 
@@ -104,10 +104,10 @@ func TestLogout_TakesNoDestination(t *testing.T) {
 	h := newHarness(t)
 	enablePeople(t, h)
 	resp := h.postForm(t, "/logout?next=https://evil.example&rd=https://evil.example", map[string]string{"Origin": h.http.URL})
-	if loc := resp.Header.Get("Location"); loc != "/logout" {
-		t.Fatalf("带 next 的 POST 跳去了 %q; want /logout", loc)
+	if loc := resp.Header.Get("Location"); loc != "/app/logout" {
+		t.Fatalf("带 next 的 POST 跳去了 %q; want /app/logout", loc)
 	}
-	resp = h.raw(t, "/logout?next=https://evil.example&return="+url.QueryEscape("https://evil.example"), nil)
+	resp = h.raw(t, "/app/logout?next=https://evil.example&return="+url.QueryEscape("https://evil.example"), nil)
 	if body := readBody(t, resp); strings.Contains(body, "evil.example") {
 		t.Fatalf("退出页把请求里的地址画出来了：%q", body)
 	}
@@ -116,12 +116,12 @@ func TestLogout_TakesNoDestination(t *testing.T) {
 // 没接 GitHub 登录的 hub：退出页照样有（令牌 cookie 也是入口自己的），「重新登录」回首页。
 func TestLogout_WithoutGitHubLinksHome(t *testing.T) {
 	h := newHarness(t)
-	resp := h.raw(t, "/logout", nil)
+	resp := h.raw(t, "/app/logout", nil)
 	body := readBody(t, resp)
-	if resp.StatusCode != http.StatusOK || !strings.Contains(body, `href="/"`) || strings.Contains(body, "/signin") {
+	if resp.StatusCode != http.StatusOK || !strings.Contains(body, `href="/app"`) || strings.Contains(body, "/signin") {
 		t.Fatalf("无 GitHub 登录的 GET /logout = %d %q; want 200 且 重新登录→/", resp.StatusCode, body)
 	}
-	if code := h.raw(t, "/logout", map[string]string{"X-Method": "PUT"}).StatusCode; code != http.StatusOK {
+	if code := h.raw(t, "/app/logout", map[string]string{"X-Method": "PUT"}).StatusCode; code != http.StatusOK {
 		t.Fatalf("GET /logout = %d", code)
 	}
 }

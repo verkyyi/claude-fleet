@@ -37,7 +37,7 @@ is the fleet's effective FLEET_AGENT — dash-agent-prompt.sh `agent`, the one
 resolution — and ↵ on it sends with no --agent at all; another one rides the
 send as `--agent` for this one session only). In a 看台 (--view) the session
 opens on this machine, so an agent it has not installed is grey with why
-(「macmini 这台没装 codex」) and cannot be picked; the old client cannot know
+(「mac-b 这台没装 codex」) and cannot be picked; the old client cannot know
 where the hub will place it and greys nothing. ↵ sends, esc closes, Tab walks.
 
 There is no second road (EPIC #2230 共同约定 1, issue #2618's rule): a ↵ writes

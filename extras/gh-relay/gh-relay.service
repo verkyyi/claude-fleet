@@ -9,7 +9,8 @@ Wants=network-online.target
 [Service]
 DynamicUser=yes
 Environment=GH_RELAY_LISTEN=0.0.0.0:3128
-Environment=GH_RELAY_SOURCES=47.106.171.142/32
+# the cluster egress /32 this relay serves (unset = every source refused)
+Environment=GH_RELAY_SOURCES=203.0.113.10/32
 Environment=PYTHONUNBUFFERED=1
 ExecStart=/usr/bin/python3 -I /opt/gh-relay/gh-relay.py
 Restart=always

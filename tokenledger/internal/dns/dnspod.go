@@ -32,6 +32,20 @@ type DNSPod struct {
 	Client *http.Client // nil: 15 s timeout
 }
 
+// userAgent is what DNSPod is told: the hub, and the contact when one is set.
+func userAgent(contact string) string {
+	contact = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f || r == '(' || r == ')' {
+			return -1
+		}
+		return r
+	}, contact)
+	if contact == "" {
+		return "claude-fleet-hub/1.0"
+	}
+	return "claude-fleet-hub/1.0 (" + contact + ")"
+}
+
 // NewDNSPod is the provider for c.
 func NewDNSPod(c Config) *DNSPod { return &DNSPod{Config: c} }
 
@@ -66,8 +80,9 @@ func (p *DNSPod) call(ctx context.Context, action string, form url.Values, out a
 		return dnspodStatus{}, err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	// DNSPod asks every caller to name itself and a contact.
-	req.Header.Set("User-Agent", "claude-fleet-hub/1.0 (fleet@24haowan.com)")
+	// DNSPod asks every caller to name itself and a contact — the contact is
+	// this deployment's (CCQUOTA_DNS_CONTACT, issue #3577).
+	req.Header.Set("User-Agent", userAgent(p.Contact))
 	cl := p.Client
 	if cl == nil {
 		cl = &http.Client{Timeout: 15 * time.Second}

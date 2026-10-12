@@ -104,23 +104,23 @@ var pageText = map[string]i18n.Text{
 	},
 	"landing.c3.h": {i18n.EN: "Press ⌘P", i18n.ZhCN: "按 ⌘P"},
 	"landing.c3.p": {i18n.EN: "Pick a session, or start a new one.", i18n.ZhCN: "挑一个会话，或者开一个新的。"},
-	"landing.m1.h": {i18n.EN: "Get Termius", i18n.ZhCN: "装 Termius"},
-	"landing.m1.p": {
+	"landing.p1.h": {i18n.EN: "Get Termius", i18n.ZhCN: "装 Termius"},
+	"landing.p1.p": {
 		i18n.EN:   "It is free on the App Store. Make a key in it; the private half never leaves your phone.",
 		i18n.ZhCN: "App Store 里免费。在里面生成一把钥匙，私钥一直留在手机上。",
 	},
-	"landing.m2.h":    {i18n.EN: "Add your key", i18n.ZhCN: "加上钥匙"},
-	"landing.m2.pre":  {i18n.EN: "Sign in with GitHub and paste the public key on ", i18n.ZhCN: "用 GitHub 登录后，把公钥贴到 "},
-	"landing.m2.post": {i18n.EN: ".", i18n.ZhCN: "。"},
-	"landing.m3.h":    {i18n.EN: "Connect", i18n.ZhCN: "连上"},
-	"landing.m3.pre":  {i18n.EN: "In Termius, add a host for ", i18n.ZhCN: "在 Termius 里新建主机 "},
-	"landing.m3.addr": {i18n.EN: "your address", i18n.ZhCN: "你的地址"},
-	"landing.m3.post": {
+	"landing.p2.h":    {i18n.EN: "Add your key", i18n.ZhCN: "加上钥匙"},
+	"landing.p2.pre":  {i18n.EN: "Sign in with GitHub and paste the public key on ", i18n.ZhCN: "用 GitHub 登录后，把公钥贴到 "},
+	"landing.p2.post": {i18n.EN: ".", i18n.ZhCN: "。"},
+	"landing.p3.h":    {i18n.EN: "Connect", i18n.ZhCN: "连上"},
+	"landing.p3.pre":  {i18n.EN: "In Termius, add a host for ", i18n.ZhCN: "在 Termius 里新建主机 "},
+	"landing.p3.addr": {i18n.EN: "your address", i18n.ZhCN: "你的地址"},
+	"landing.p3.post": {
 		i18n.EN:   ". The keys page gives you all four fields to copy.",
 		i18n.ZhCN: "：钥匙页把要填的四项都写好了，照抄就行。",
 	},
-	"landing.m4.h": {i18n.EN: "Press ⌃space", i18n.ZhCN: "按 ⌃空格"},
-	"landing.m4.p": {
+	"landing.p4.h": {i18n.EN: "Press ⌃space", i18n.ZhCN: "按 ⌃空格"},
+	"landing.p4.p": {
 		i18n.EN:   "Tap ctrl, then space: the same panel as ⌘P on a computer.",
 		i18n.ZhCN: "先点 ctrl，再点空格：就是电脑上 ⌘P 的那个面板。",
 	},

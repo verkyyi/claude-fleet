@@ -1,0 +1,21 @@
+# The hub's address and its TLS secret — yours.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ccquota-hub
+spec:
+  tls:
+    - hosts:
+        - hub.example.com
+      secretName: hub-example-com-tls
+  rules:
+    - host: hub.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: ccquota-hub
+                port:
+                  number: 80

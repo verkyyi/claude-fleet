@@ -53,6 +53,8 @@ type Provider interface {
 //	CCQUOTA_DNS_DP_ID / CCQUOTA_DNS_DP_KEY   the DNSPod token (both, or off)
 //	CCQUOTA_DNS_DOMAIN                       the zone (24haowan.com)
 //	CCQUOTA_DNS_SUBDOMAIN                    the label every address sits under (cf)
+//	CCQUOTA_DNS_CONTACT                      the contact DNSPod's User-Agent names
+//	                                         (an e-mail; unset: none — issue #3577)
 //
 // The token is the whole DNSPod account's and ACME's too: it is read here,
 // held in memory and sent only to dnsapi.cn — never logged, never written.
@@ -60,6 +62,7 @@ type Config struct {
 	ID, Key   string
 	Domain    string
 	Subdomain string
+	Contact   string
 }
 
 // FromEnv reads Config; ok=false when any part is missing — then the loop
@@ -70,6 +73,7 @@ func FromEnv() (Config, bool) {
 		Key:       strings.TrimSpace(os.Getenv("CCQUOTA_DNS_DP_KEY")),
 		Domain:    strings.Trim(strings.ToLower(strings.TrimSpace(os.Getenv("CCQUOTA_DNS_DOMAIN"))), "."),
 		Subdomain: strings.Trim(strings.ToLower(strings.TrimSpace(os.Getenv("CCQUOTA_DNS_SUBDOMAIN"))), "."),
+		Contact:   strings.TrimSpace(os.Getenv("CCQUOTA_DNS_CONTACT")),
 	}
 	return c, c.ID != "" && c.Key != "" && c.Domain != "" && c.Subdomain != ""
 }

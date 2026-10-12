@@ -152,7 +152,7 @@ func TestGitHubSignIn_ThroughRelay(t *testing.T) {
 	logs := captureLog(t)
 
 	cb, sess := h.signIn(t, ghAlice)
-	if cb.StatusCode != http.StatusFound || cb.Header.Get("Location") != "/" || sess == nil {
+	if cb.StatusCode != http.StatusFound || cb.Header.Get("Location") != AppPrefix || sess == nil {
 		t.Fatalf("callback = %d → %q (session %v)", cb.StatusCode, cb.Header.Get("Location"), sess)
 	}
 	if relay.hits.Load() != 1 || direct.Load() != 0 || h.gh.exchanged != 1 {
@@ -195,7 +195,7 @@ func TestGitHubSignIn_RelayDownFallsBackDirect(t *testing.T) {
 			set(h)
 			logs := captureLog(t)
 			cb, sess := h.signIn(t, ghAlice)
-			if cb.StatusCode != http.StatusFound || cb.Header.Get("Location") != "/" || sess == nil {
+			if cb.StatusCode != http.StatusFound || cb.Header.Get("Location") != AppPrefix || sess == nil {
 				t.Fatalf("callback = %d → %q", cb.StatusCode, cb.Header.Get("Location"))
 			}
 			if h.gh.exchanged != 1 {
@@ -225,8 +225,8 @@ func TestGitHubSignIn_RelayAndGitHubDownIsBounded(t *testing.T) {
 	start := time.Now()
 	cb, sess := h.signIn(t, ghAlice)
 	took := time.Since(start)
-	if cb.Header.Get("Location") != "/signin?e=github" || sess != nil {
-		t.Fatalf("callback → %q (session %v), want /signin?e=github", cb.Header.Get("Location"), sess)
+	if cb.Header.Get("Location") != "/app/signin?e=github" || sess != nil {
+		t.Fatalf("callback → %q (session %v), want /app/signin?e=github", cb.Header.Get("Location"), sess)
 	}
 	if rhits.Load() != 1 || dhits.Load() != 1 {
 		t.Fatalf("relay %d, direct %d; want one try each", rhits.Load(), dhits.Load())

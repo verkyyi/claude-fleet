@@ -117,7 +117,7 @@ class H(BaseHTTPRequestHandler):
             over = bool(lim) and tot >= lim
             st = {"principal": "gh:1", "used_5h": tot, "limit_5h": lim, "over": over}
             if over:
-                st.update(window="5h", error="person_budget_exceeded",
+                st.update(window="5h", error="person_budget_exceeded", reset_at="2030-01-01T05:00:00Z",
                           message="已达个人额度：近 5 小时已用 %d / 上限 %d token（person_budget_exceeded）" % (tot, lim))
             return self.reply(200, st)
         via = p.split("/")[1]
@@ -377,10 +377,10 @@ bwait '"over": true' || fail "J the proxy never learned the person is over"
 n0=$(grep -c '"ev": "fwd"' "$SB/proxy.log")
 j=$(R /v1/messages "$TJ"); jx=$(R /codex/responses "$TJ")
 n1=$(grep -c '"ev": "fwd"' "$SB/proxy.log")
-jerr() { python3 -c 'import json,sys; e=json.loads(sys.argv[1]).get("error",{}); print(e.get("code",""), e.get("message",""))' "$1"; }
+jerr() { python3 -c 'import json,sys; e=json.loads(sys.argv[1]).get("error",{}); print(e.get("code",""), e.get("reset_at",""), e.get("message",""))' "$1"; }
 if [ "$(jf "$j" _status)" = 403 ] && [ "$(jf "$jx" _status)" = 403 ] && [ "$n0" = "$n1" ] \
-   && case "$(jerr "$j")" in "person_budget_exceeded cred-proxy: 已达个人额度"*) true ;; *) false ;; esac; then
-  pass "J over budget → 403 person_budget_exceeded「已达个人额度…」, nothing sent upstream"
+   && case "$(jerr "$j")" in "person_budget_exceeded 2030-01-01T05:00:00Z cred-proxy: 已达个人额度"*) true ;; *) false ;; esac; then
+  pass "J over budget → 403 person_budget_exceeded「已达个人额度…」+ the hub's reset_at, nothing sent upstream"
 else fail "J over: $j / $jx (fwd ${n0}→$n1)"; fi
 rm -f "$SB/usage.total"      # the window passes
 bwait '"over": false' || fail "J the proxy never learned the window passed"

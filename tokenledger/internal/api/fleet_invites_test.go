@@ -150,8 +150,8 @@ func TestInviteLetsANewcomerIn(t *testing.T) {
 	}
 
 	cb, _ := h.signInWith(t, ghMallory, inviteCookieOf(inv.Code))
-	if cb.StatusCode != http.StatusFound || cb.Header.Get("Location") != "/" {
-		t.Fatalf("callback = %d → %q; want 302 → /", cb.StatusCode, cb.Header.Get("Location"))
+	if cb.StatusCode != http.StatusFound || cb.Header.Get("Location") != AppPrefix {
+		t.Fatalf("callback = %d → %q; want 302 → /app", cb.StatusCode, cb.Header.Get("Location"))
 	}
 	if cookieNamed(cb, authz.CookieName) == nil {
 		t.Fatal("no session set")
@@ -292,7 +292,7 @@ func TestInviteInstallCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
-	if c := cookieNamed(resp, inviteCookie); resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != "/signin" ||
+	if c := cookieNamed(resp, inviteCookie); resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != "/app/signin" ||
 		c == nil || c.Value != inv.Code || c.Path != githubFlowPath || !c.HttpOnly {
 		t.Fatalf("browser = %d → %q, cookie %+v", resp.StatusCode, resp.Header.Get("Location"), c)
 	}
