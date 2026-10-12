@@ -451,8 +451,8 @@ tn kill-window -t "$PX" 2>/dev/null
 #    back but the resumed 看台's session is not yet — rc 3, no 看台, so the thin loop
 #    waits instead of landing home; the lock gone → the resume goes on as before
 # ============================================================================
-printf -- '-\t%s\tthin\t%s\t1\tcur=%s/fid-coming\troute=lan\tdevice=%s\ttoken=tr0\tfuid=%s\tnode=m9\n' \
-  "$RS" "$(date +%s)" "$U" "$DEV" "$U" > "$FLEET_CONF_DIR/remote-views/devr"
+printf -- '-\t%s\tthin\t%s\t1\tcur=%s/fid-coming\troute=lan\tdevice=%s\ttoken=tr0\tfuid=%s\tnode=m9\tleft=%s\n' \
+  "$RS" "$(date +%s)" "$U" "$DEV" "$U" "$(date +%s)" > "$FLEET_CONF_DIR/remote-views/devr"
 mkdir -p "$FLEET_CONF_DIR/restore/.auto.lock"; echo $$ > "$FLEET_CONF_DIR/restore/.auto.lock/pid"
 out=$(env -u TMUX bash "$BIN/fleet-remote-view.sh" attach --thin --view devr --resume --device "$DEV" --route lan --token tr1 2>&1 </dev/null); rc=$?
 eq "R: a restore holding the lock, the session not back yet → 3" "3" "$rc"
