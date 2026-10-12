@@ -16,6 +16,10 @@
 #      login's own cluster/ wins
 #   E  the daemon's machine-reading task (15 s, the seat's), kept off a user pod;
 #      install-apply writes and takes back the switch
+#   F  class session (#3671): spinner and webhook serve only a login's sessions — the
+#      daemon runs them only while it has one; a session row on a machine-table task
+#      is red; bin/fleet-node-supervisor-selftest.py V (session units, a restart
+#      adopts instead of doubling, an orphaned copy stops, a task is not doubled)
 set -u
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$BIN/.." && pwd)"
@@ -57,7 +61,7 @@ rt="$WORK/rt"; mkdir -p "$rt/conf" "$rt/launchd"; cp "$ROOT/launchd/"*.tmpl "$rt
 base=$(units "$rt")   # no table: MACHINE_UNITS alone, as before
 case " $base " in *" spinner "*) case " $base " in *" memguard "*) bad "B memguard runs per login with no table" ;; *) ok "B no table: every template but MACHINE_UNITS, as before" ;; esac ;;
   *) bad "B no table: spinner missing: $base" ;; esac
-sed 's/^spinner	unit	login	/spinner	unit	machine	/' "$ROOT/conf/node-tasks.tsv" > "$rt/conf/node-tasks.tsv"
+sed 's/^spinner	unit	session	/spinner	unit	machine	/' "$ROOT/conf/node-tasks.tsv" > "$rt/conf/node-tasks.tsv"
 now_u=$(units "$rt")
 case " $now_u " in *" spinner "*) bad "B a unit the table marks machine still runs per login: $now_u" ;; *) ok "B a unit the table marks machine is not run per login" ;; esac
 cp "$ROOT/conf/node-tasks.tsv" "$rt/conf/"
@@ -135,6 +139,22 @@ got=$(unset FLEET_SKIP_GLOBAL_CONF; FLEET_CONF_DIR="$cd_" bash -c '. "$1" >/dev/
 [ "$got" = off ] && ok "E the line set-line writes reaches fleet-lib.sh" || bad "E FLEET_MACHINE_TASKS after set-line: '$got'"
 FLEET_CONF_DIR="$cd_" bash "$BIN/fleet-conf.sh" drop-line FLEET_MACHINE_TASKS >/dev/null 2>&1
 grep -q FLEET_MACHINE_TASKS "$cd_/fleet.conf" && bad "E drop-line left the switch" || ok "E drop-line takes it back"
+
+# ---- F: class session (#3671) ------------------------------------------------------
+sess=$(python3 - "$BIN/fleet-node-supervisor.py" "$ROOT" <<'PY'
+import importlib.util, sys, types
+spec = importlib.util.spec_from_file_location("sup", sys.argv[1]); m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+print(" ".join(sorted(u["name"] for u in m.account_units(types.SimpleNamespace(runtime=sys.argv[2])) if u.get("session"))))
+PY
+)
+[ "$sess" = "spinner webhook" ] && ok "F spinner and webhook run only while the login has a session" || bad "F session units: '$sess'"
+cp "$ROOT/conf/node-tasks.tsv" "$fake/conf/"
+sed -i.bak 's/^orphans	machine	machine	/orphans	machine	session	/' "$fake/conf/node-tasks.tsv"
+out=$(python3 "$MT" table --check "$fake" 2>&1)
+printf '%s' "$out" | grep -q "orphans: only a launchd unit serves a login's sessions" && ok "F a machine-table task marked session is red" || bad "F session on a machine task unflagged: $out"
+out=$(python3 "$BIN/fleet-node-supervisor-selftest.py" V_SessionUnits 2>&1) && ok "F the daemon: session units, adopt after a restart, strays stop, no doubled task" \
+  || bad "F fleet-node-supervisor-selftest.py V_SessionUnits: $(printf '%s' "$out" | grep -E '^(FAIL|ERROR|AssertionError)' | head -3 | tr '\n' ' ')"
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]

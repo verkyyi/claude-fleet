@@ -28,6 +28,11 @@ machine's work ONCE, however many logins the machine carries:
                 `cred-proxy`: its relay pass is renewed by `cred-relay`
                 (`fleet-cred-proxy.sh relay-tick`, issue #3524) — run only when
                 the shared proxy asks (`relay-want.<login>`, issue #3561).
+                A unit conf/node-tasks.tsv marks `session` (spinner, webhook)
+                runs only while the login's collector publishes a session count
+                above 0 (issue #3671); a restart adopts a live account unit by its
+                own process (the wrapper sh exec'd), an orphaned copy is stopped,
+                and an earlier run's still-running task is never doubled.
                 An account becomes managed by `account adopt <login>`: its own
                 fleet LaunchAgents / LaunchDaemons are booted out and moved to the
                 attic (kept until released); one that will not unload puts every
@@ -480,6 +485,14 @@ def pid_alive(pid):
     return True
 
 
+def pid_uid(pid):
+    try:
+        return int(subprocess.check_output(["ps", "-o", "uid=", "-p", str(int(pid))],
+                                           stderr=subprocess.DEVNULL).decode().strip())
+    except Exception:
+        return None
+
+
 def pid_cmd(pid):
     try:
         return subprocess.check_output(["ps", "-o", "command=", "-p", str(int(pid))],
@@ -752,20 +765,32 @@ def brew_prefix():
     return "/opt/homebrew" if os.path.isdir("/opt/homebrew") or not os.path.isdir("/usr/local/bin") else "/usr/local"
 
 
-def table_machine_units(runtime):
-    """The launchd units conf/node-tasks.tsv marks `machine` (issue #3546): run
-    once for the machine, never once per login. No table (an older runtime) ⇒
-    none — MACHINE_UNITS alone, as before."""
+def table_units(runtime, cls):
+    """The launchd units conf/node-tasks.tsv puts in class `cls`. No table (an
+    older runtime) ⇒ none."""
     out = set()
     try:
         with open(os.path.join(runtime, "conf", "node-tasks.tsv")) as f:
             for line in f:
                 p = line.rstrip("\n").split("\t")
-                if len(p) >= 3 and not p[0].startswith("#") and p[1] == "unit" and p[2] == "machine":
+                if len(p) >= 3 and not p[0].startswith("#") and p[1] == "unit" and p[2] == cls:
                     out.add(p[0])
     except OSError:
         pass
     return out
+
+
+def table_machine_units(runtime):
+    """The launchd units conf/node-tasks.tsv marks `machine` (issue #3546): run
+    once for the machine, never once per login. No table (an older runtime) ⇒
+    none — MACHINE_UNITS alone, as before."""
+    return table_units(runtime, "machine")
+
+
+def table_session_units(runtime):
+    """The launchd units conf/node-tasks.tsv marks `session` (issue #3671): a
+    login's loop that only serves its live sessions — run while it has one."""
+    return table_units(runtime, "session")
 
 
 def account_units(paths, table=None):
@@ -778,6 +803,7 @@ def account_units(paths, table=None):
         return list(table["account"])
     out = []
     machine_class = table_machine_units(paths.runtime)
+    session_class = table_session_units(paths.runtime)
     pat = os.path.join(paths.runtime, "launchd", "com.claude-fleet.*.plist.tmpl")
     for f in sorted(glob.glob(pat)):
         u = os.path.basename(f)[len("com.claude-fleet."):-len(".plist.tmpl")]
@@ -800,6 +826,8 @@ def account_units(paths, table=None):
             ent["keepalive"] = True
         else:
             ent["every"] = float(pl.get("StartInterval") or 60)
+        if u in session_class:
+            ent["session"] = True
         if u == "diskguard":
             # its orphan watchdog runs once for every user, as the machine's
             # `orphans` task — an account copy would notify twice
@@ -1250,6 +1278,8 @@ def account_entry(unit, login, ident, brew):
                    fill(unit.get("out") or "/dev/null", home, brew),
                    fill(unit.get("err") or "/dev/null", home, brew)] + argv}
     ent["script"] = script_of(argv)
+    if unit.get("session"):
+        ent["session"] = True
     if unit.get("keepalive"):
         ent["keepalive"] = True
     else:
@@ -1261,6 +1291,61 @@ def account_entry(unit, login, ident, brew):
         if unit.get("timeout"):
             ent["timeout"] = unit["timeout"]
     return ent
+
+
+def machine_sessions_dir():
+    """Where every login's collector publishes its session count — bin/fleet-lib.sh
+    fleet_machine_sessions_dir's own answer (FLEET_MACHINE_SESSIONS_DIR its seam)."""
+    d = os.environ.get("FLEET_MACHINE_SESSIONS_DIR")
+    if d:
+        return d
+    return "/Users/Shared/claude-fleet/sessions" if sys.platform == "darwin" else "/var/tmp/claude-fleet/sessions"
+
+
+def login_sessions(ident, t=None):
+    """The live session count a login's collector published (`<count> <epoch>`,
+    fleet_machine_sessions_publish — issue #3671), or None: no file, not a regular
+    file the login owns, garbled, or older than FLEET_MACHINE_SESSIONS_STALE (300 s,
+    the readers' own bound). None means "do not know" — a session unit runs."""
+    uid, _, home = ident
+    p = os.path.join(machine_sessions_dir(), os.path.basename(home.rstrip("/")))
+    try:
+        fd = os.open(p, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+    except OSError:
+        return None
+    try:
+        st = os.fstat(fd)
+        data = os.read(fd, 64)
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+    if not stat.S_ISREG(st.st_mode) or st.st_uid != uid:
+        return None
+    w = data.decode("ascii", "replace").split()
+    if len(w) < 2 or not (w[0].isdigit() and w[1].isdigit()):
+        return None
+    age = (t if t is not None else now()) - int(w[1])
+    if age > env_num("FLEET_MACHINE_SESSIONS_STALE", 300) or age < -60:
+        return None
+    return int(w[0])
+
+
+def account_proc_is(ent, cmd):
+    """Does a `ps` command line read as this account unit's own process? The
+    state records the wrapper's line (`/bin/sh -c ACCOUNT_SH …`), but ACCOUNT_SH
+    execs the unit's argv and a launcher may exec an interpreter in turn
+    (fleet-peerlink.sh → python3 fleet-peerlink.py run), so a live unit reads as:
+    under the login's home · names the unit's script stem · ends in the unit's
+    last word (issue #3671). Never a match without a script."""
+    argv = (ent.get("cmd") or [])[6:]
+    script = ent.get("script") or ""
+    w = (cmd or "").split()
+    if not argv or not script or not w or not ent.get("home"):
+        return False
+    stem = os.path.splitext(os.path.basename(script))[0]
+    return (ent["home"].rstrip("/") + "/" in cmd and stem in cmd
+            and os.path.basename(w[-1]) == os.path.basename(argv[-1]))
 
 
 def shared_proxy_run(home):
@@ -1304,6 +1389,11 @@ def account_unit_for(unit, home):
     u = dict((k, v) for k, v in unit.items() if k not in ("keepalive", "every"))
     u.update(name="cred-relay", argv=argv, want=os.path.join(run, "relay-want.{login}"), timeout=600)
     return u
+
+
+def task_limit(tk):
+    """How long one run of a task may take before it is ended."""
+    return float(tk.get("timeout", min(600, max(30, float(tk.get("every", 60)) * 5))))
 
 
 def want_stamp(path):
@@ -1352,6 +1442,8 @@ def account_runnable(ent, seated=False):
 # <state>/logins/<login>/creds/<name> (root 0600) — the entry holds the name only.
 # Editing the entry (stop / start / restart rewrite it) starts it again; removing
 # it stops it. `status --json` carries `services[]`.
+# A session unit's status while its login has no session (issue #3671)
+NO_SESSION = "idle — no session"
 SVC_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,47}$")
 LOGIN_RE = re.compile(r"^[a-z0-9_][a-z0-9_.-]{0,31}$")
 ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
@@ -1811,6 +1903,9 @@ class Supervisor(object):
         self.last_save = 0
         self.units = None
         self.units_at = 0
+        self.sessions = {}    # login -> (read at, count | None) — a session unit's gate (#3671)
+        self.busy_at = {}     # login -> the last time its count was above 0
+        self.strays_at = 0
         # the seat (#3668): this daemon runs as _fleetnode and asks the root core
         # for everything root's — no seat = every branch below is the old road
         self.seated = seated_self()
@@ -2049,7 +2144,7 @@ class Supervisor(object):
         for c in self.all_children():
             cs = self.state["children"].get(c["name"]) or {}
             pid = cs.get("pid")
-            if pid and pid_alive(pid) and cs.get("cmd") and pid_cmd(pid) == cs["cmd"]:
+            if pid and pid_alive(pid) and cs.get("cmd") and self.is_ours(c, pid, cs["cmd"]):
                 if self.seated and self.seat_runs(c) and SEAT_AGENT_FLAG not in cs["cmd"].split():
                     # the root copy (#3669): the core's job, or the old daemon's — it
                     # goes, and the seat starts its own below; never two at once
@@ -2063,9 +2158,82 @@ class Supervisor(object):
                 self.adopted[c["name"]] = int(pid)
                 self.log("adopted child %s pid %s" % (c["name"], pid))
 
+    def no_session(self, c):
+        """A `session` unit (conf/node-tasks.tsv, issue #3671) of a login whose
+        collector says it has no session, and has said so for
+        FLEET_NODE_SESSION_HOLD (120 s) — a session closing and the next opening
+        never stop and start it. A count it cannot read (None) runs it, as before;
+        FLEET_NODE_SESSION_UNITS=0 runs every one."""
+        if not c.get("session") or env("FLEET_NODE_SESSION_UNITS", "1") == "0":
+            return False
+        login, t = c["account"], now()
+        at, n = self.sessions.get(login, (0, None))
+        if t - at >= 5:
+            n = login_sessions((c["uid"], c["gid"], c["home"]), t)
+            self.sessions[login] = (t, n)
+            if n is None or n > 0:
+                self.busy_at[login] = t
+        if n is None or n > 0:
+            return False
+        return t - self.busy_at.get(login, 0) >= env_num("FLEET_NODE_SESSION_HOLD", 120)
+
+    def is_ours(self, c, pid, cmd):
+        """Is the live pid the child an earlier run started? Its recorded command —
+        or, for an account unit, its own process once the wrapper exec'd: the
+        state holds the wrapper's line, which no live account unit ever reads as
+        again, so before issue #3671 every restart started a second copy beside
+        the first."""
+        live = pid_cmd(pid)
+        if live == cmd:
+            return True
+        return bool(c.get("unit") and pid_uid(pid) == c["uid"] and account_proc_is(c, live))
+
+    def sweep_strays(self):
+        """An account unit's copy no daemon tends any more (issue #3671): a run
+        before the adoption fix left one behind at every restart — two extra
+        webhooks per idle login on a managed machine. Once a minute, an orphan (PPID 1) of a login
+        this daemon runs a KeepAlive unit for, reading as that unit
+        (account_proc_is), not the pid we hold, is stopped. A seat stops nothing
+        of a login's itself; FLEET_NODE_STRAY_SWEEP=0 is off."""
+        t = now()
+        if self.seated or t - self.strays_at < env_num("FLEET_NODE_STRAY_SECS", 60) \
+                or env("FLEET_NODE_STRAY_SWEEP", "1") == "0":
+            return
+        self.strays_at = t
+        units = [e for e in self.account_entries() if e.get("keepalive")]
+        if not units:
+            return
+        try:
+            out = subprocess.check_output(["ps", "-axo", "pid=,ppid=,uid=,command="], stderr=subprocess.DEVNULL,
+                                          timeout=20).decode("utf-8", "replace")
+        except Exception:
+            return
+        held = set(p.pid for p in self.procs.values()) | set(self.adopted.values())
+        for line in out.splitlines():
+            w = line.split(None, 3)
+            if len(w) < 4 or not (w[0].isdigit() and w[1] == "1" and w[2].isdigit()):
+                continue
+            pid, uid, cmd = int(w[0]), int(w[2]), w[3]
+            if pid in held or pid == os.getpid():
+                continue
+            for c in units:
+                if c["uid"] == uid and account_proc_is(c, cmd):
+                    for kill in (os.killpg, os.kill):
+                        try:
+                            if kill is os.killpg and os.getpgid(pid) != pid:
+                                continue
+                            kill(pid, signal.SIGTERM)
+                            break
+                        except OSError:
+                            pass
+                    self.log("child %s: stray copy pid %d (no daemon tends it) — stopped" % (c["name"], pid))
+                    break
+
     def child_status(self, c):
         if c.get("account"):
             why = account_runnable(c, self.seated)
+            if not why and self.no_session(c):
+                why = NO_SESSION
             if not why and c.get("creds") and not self.seated:
                 missing = service_creds(self.p, c)[1]
                 why = "missing credential %s" % ", ".join(missing) if missing else None
@@ -2100,11 +2268,13 @@ class Supervisor(object):
                 cs["status"] = st
                 self.dirty = True
             if st != "supervised":
-                # the last login released (#2421): a running one has nothing to serve
-                if st == "waiting" and (name in self.procs or name in self.adopted):
-                    self.stop_one(name, "%s missing — waiting" % ", ".join(requires_missing(c)))
+                # the last login released (#2421): a running one has nothing to serve;
+                # nor has a session unit of a login with no session (#3671)
+                if st in ("waiting", NO_SESSION) and (name in self.procs or name in self.adopted):
+                    self.stop_one(name, "%s missing — waiting" % ", ".join(requires_missing(c))
+                                  if st == "waiting" else "the login has no session")
                     cs["status"] = st
-                if st == "waiting" and (cs.get("fails") or cs.get("next_start")):
+                if st in ("waiting", NO_SESSION) and (cs.get("fails") or cs.get("next_start")):
                     # no backoff carried over: the first start once it is met is at once
                     cs.update(fails=0, next_start=None)
                     self.dirty = True
@@ -2321,6 +2491,10 @@ class Supervisor(object):
             return False
         if name in self.running:
             return False
+        if self.task_orphan(tk, ts, t):
+            ts.update(result="busy", skipped=(ts.get("skipped") or 0) + 1)
+            self.dirty = True
+            return False
         lpath = os.path.join(self.p.locks, name.replace("/", "@") + ".lock")
         try:
             lf = os.open(lpath, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o644)
@@ -2360,11 +2534,44 @@ class Supervisor(object):
         self.dirty = True
         return True
 
+    def task_orphan(self, tk, ts, t):
+        """An earlier daemon's run of this task that is still alive (issue #3671):
+        its lock went with that daemon, so before this a second copy started beside
+        it at every restart — five `fleet-diskguard.sh --watch` of one login on a
+        managed machine. True = it still runs inside its limit: skip. Past the limit
+        it is ended like any run of ours."""
+        o = ts.get("orphan")
+        if not o:
+            return False
+        if t - float(o.get("seen") or 0) < 5:
+            return True
+        pid = int(o.get("pid") or 0)
+        script = tk.get("script") if tk.get("account") else self.script_of(tk.get("cmd") or [])
+        live = pid_cmd(pid) if pid and pid_alive(pid) else ""
+        if not live or not script or os.path.basename(script) not in live or self.seated:
+            ts.pop("orphan", None)
+            self.dirty = True
+            return False
+        if t - float(o.get("since") or t) <= task_limit(tk):
+            o["seen"] = t
+            return True
+        for kill in (os.killpg, os.kill):
+            try:
+                kill(pid, signal.SIGKILL)
+                break
+            except OSError:
+                pass
+        ts.pop("orphan", None)
+        ts.update(result="timeout", last_end=t)
+        self.dirty = True
+        self.log("task %s: an earlier daemon's run pid %d outlived its limit — killed" % (tk["name"], pid))
+        return False
+
     def reap_tasks(self, wait=False):
         t = now()
         for name, (p, lf, t0, fh, tk) in list(self.running.items()):
             rc = p.poll()
-            limit = float(tk.get("timeout", min(600, max(30, float(tk.get("every", 60)) * 5))))
+            limit = task_limit(tk)
             if rc is None and t - t0 > limit:
                 if self.seated:
                     # the stand-in forwards a TERM to the core (stop); a KILL would
@@ -2821,9 +3028,13 @@ class Supervisor(object):
         faulthandler.register(signal.SIGUSR1, file=sys.stderr, all_threads=True)
         sv = self.state.get("supervisor") or {}
         self.state["supervisor"] = dict(sv, started=now(), starts=(sv.get("starts") or 0) + 1)
-        # a task an earlier run left mid-flight is not running any more
+        # a task an earlier run left mid-flight is not OURS any more — but its
+        # process may still run (a watchdog exit, a kill -9): remembered, so a
+        # second copy never starts beside it (issue #3671; start_task)
         for ts in self.state["tasks"].values():
             if ts.get("result") == "running":
+                if ts.get("pid"):
+                    ts["orphan"] = {"pid": ts["pid"], "since": ts.get("last_start") or now()}
                 ts.update(result="interrupted", pid=None)
         for ts in (self.state.get("agent_tasks") or {}).values():
             if ts.get("state") == "running":
@@ -2862,6 +3073,11 @@ class Supervisor(object):
                 break
             self.at("children")
             self.tend_children()
+            self.at("strays")
+            try:
+                self.sweep_strays()
+            except Exception as e:  # a sweep must never take the daemon down
+                self.log("strays: %s" % e)
             self.at("tasks")
             self.tend_tasks(t)
             self.at("agent-tasks")
@@ -4278,7 +4494,8 @@ def status_lines(paths, table, state):
             key = "%s/%s" % (login, u["name"])
             x = (state.get("children" if u.get("keepalive") else "tasks") or {}).get(key) or {}
             if u.get("keepalive"):
-                good = pid_alive(x.get("pid"))
+                # a session unit kept off while its login has none is as it should be (#3671)
+                good = pid_alive(x.get("pid")) or x.get("status") == NO_SESSION
             else:
                 good = x.get("result") == "ok" or (x.get("result") == "running" and x.get("rc") in (0, None))
                 last = max(last, x.get("last_start") or 0)
