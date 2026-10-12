@@ -123,3 +123,23 @@ PR 模板里有一行勾选：改了上面任何一样就勾上，并在 PR 里�
 2. 改了标题、挪了小节、换了入口页面的路径，就同步改 skill 的索引；新功能没有对应的问题行就加一行；
 3. `bin/fleet-help-selftest.sh` 绿——它核对索引里每个 `docs/…` § 「…」 都还是某个标题或加粗导语的开头、
    每个 `<入口>/…` 页面入口都还在服务。
+
+## 不要提交内部信息（issue #3572）
+
+这个仓库是公开的，而且历史不会改写：一旦推上来，就收不回。所以：
+
+- **不写内部机器名、内部地址、私有网络名、人名或登录名。** 代码里需要的值做成配置项（自己的值放在仓库外的
+  `fleet.conf` / 环境变量里）；文档、测试和注释里换成占位（`example.com`、`<机器名>`、`alice`）。
+- **凭据一个字也不写**——不进代码、配置、提交、issue、PR 描述或日志。程序在启动时从环境变量或 `gh auth token`
+  读；文档里只写变量名，不写值。
+- **门禁会拦**：每个 PR 跑 `bin/oss-scan.sh --gate <base>`（`.github/workflows/oss-scan.yml`），新加的一行里有命中就红，
+  每条规则的总数只许减少（`conf/oss-scan.baseline`）。确实要留的一行，在行尾写 `# oss-ok: <理由>`
+  （或 `// oss-ok:`、`<!-- oss-ok: -->`）——放行也计数。规则表是 `conf/oss-scan.rules`，允许清单是 `conf/oss-scan.allow`。
+- 发现已经推上来的真密钥：**先作废换新**，再私下报告（见 [SECURITY.md](SECURITY.md)），不要开公开 issue。
+
+## 许可与 DCO
+
+本仓库以 [MIT 许可](LICENSE) 发布；你提交的贡献也按 MIT 许可进入本仓库。
+
+我们采用 [Developer Certificate of Origin](https://developercertificate.org/)（DCO 1.1）：每个提交末尾带一行
+`Signed-off-by: 你的名字 <邮箱>`（`git commit -s` 会自动加），表示你有权按上述许可提交这些内容。
