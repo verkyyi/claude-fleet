@@ -491,7 +491,8 @@ class Core(object):
             self.dispatch(conn, uid, op, args)
         except Refused as e:
             op = e.args[0] or op
-            self.refused(uid, op, args, e.args[1])
+            # refused before its args were read: the digest is the raw line's
+            self.refused(uid, op, args if args is not None else line.decode("utf-8", "replace"), e.args[1])
             self.send(conn, {"refused": op, "why": e.args[1]})
         except Exception as e:     # inside the table, but it failed
             self.log(uid, op, args, "error: %s" % e)
