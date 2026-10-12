@@ -42,8 +42,8 @@ func TestCredsPushOnDeletePauseRevoke(t *testing.T) {
 	hb := func(host string) control.Heartbeat { return control.Heartbeat{Hostname: host, OSUser: "alice"} }
 	a := teamNode(t, h, tok, control.CapRead, control.CapCreds)
 	b := teamNode(t, h, other, control.CapRead) // an older agent: no CapCreds
-	beat(t, a, control.Proto, hb("m4"))
-	beat(t, b, control.Proto, hb("m5"))
+	beat(t, a, control.Proto, hb("m4")) // oss-ok: the host newVaultHarness enrolled alice on
+	beat(t, b, control.Proto, hb("host-b"))
 
 	put := FleetCredentialRequest{Action: "put", PrincipalID: store.PoolPrincipal, Provider: credvault.Claude,
 		Account: "icloud", Secret: credvault.Secret{RefreshToken: "sk-ant-ort01-SECRET"}}

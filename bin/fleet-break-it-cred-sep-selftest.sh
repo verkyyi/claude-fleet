@@ -568,7 +568,7 @@ drill_cred_sep_codex_failover_pin() {
 }
 
 # ---- cred-pool-delete-stale-proxy (#3744): on 2026-10-12 the hub deleted a dead
-# pool subscription, but a login's own copy stayed — a lease only ever ADDED, and a
+# pool subscription, but one login's own copy stayed — a lease only ever ADDED, and a
 # deleted account is simply absent from the next lease, never in Withdrawn — so the
 # proxy kept picking it and six sessions stopped at «OAuth token revoked · Please
 # run /login». Leg V of fleet-cred-shared-selftest drives the real shared proxy: the
@@ -590,30 +590,29 @@ drill_cred_pool_delete_stale_proxy() {
   WHAT="hub 删掉的订阅：agent 把整份 lease 交给代理 prune，它立刻从这个登录里消失、会话换号；正在用它的会话遇到 401 同一个请求改走下一个账号，不报给会话；暂停的账号不再接新会话"
 }
 
-# ---- cred-second-proxy (#3744): beside the machine's shared proxy, mini2 still
-# ran two logins' own separated proxies (the role account's `serve` for verky and
-# fleetu2) — each with its own copy of the subscriptions, one of them the deleted
+# ---- cred-second-proxy (#3744): beside the machine's shared proxy, a managed
+# machine still ran two logins' own separated proxies (the role account's `serve`) — each with its own copy of the subscriptions, one of them the deleted
 # one — and nothing said so. `machine proxies` (the doctor's credproxy row) reads
 # the process table: a second proxy is a FAIL naming it; a worktree's / a sandbox's
 # test copy is nobody's proxy; a per-login machine (no shared proxy, unmanaged) is INFO.
 drill_cred_second_proxy() {
   CAP=10
   local sb="$WORK/secondproxy" t0 out rc lib env
-  mkdir -p "$sb/run/verky" "$sb/run/.shared" "$sb/db" "$sb/node"
+  mkdir -p "$sb/run/alice" "$sb/run/.shared" "$sb/db" "$sb/node"
   lib="$sb/lib dir"
-  printf '435\n' > "$sb/run/verky/pid"
-  printf '{"shared": true, "logins": ["verkyyi"]}\n' > "$sb/db/.shared.json"
+  printf '435\n' > "$sb/run/alice/pid"
+  printf '{"shared": true, "logins": ["carol"]}\n' > "$sb/db/.shared.json"
   {
     printf '47283 _fleetcred /usr/bin/python3 -I %s/fleet-cred-proxy.py serve --shared /var/db/fleet-cred/.shared/tenants.json\n' "$lib"
     printf '435 _fleetcred /usr/bin/python3 -I %s/fleet-cred-proxy.py serve\n' "$lib"
-    printf '62916 verky /usr/bin/python3 -I /Users/verky/projects/claude-fleet-issue-3605/bin/fleet-cred-proxy.py serve\n'
-    printf '47373 verky /bin/bash /Users/verky/.claude/fleet/bin/fleet-cred-proxy.sh run\n'
+    printf '62916 alice /usr/bin/python3 -I /home/alice/projects/repo-issue-1/bin/fleet-cred-proxy.py serve\n'
+    printf '47373 alice /bin/bash /home/alice/.claude/fleet/bin/fleet-cred-proxy.sh run\n'
   } > "$sb/ps"
   env="FLEET_CREDSEP_ROOT_BASE=$sb/db FLEET_CREDSEP_RUN_BASE=$sb/run FLEET_NODE_STATE=$sb/node FLEET_CREDSEP_PS=$sb/ps"
   t0=$(now)
   # shellcheck disable=SC2086
   out=$(env $env FLEET_CREDSEP_LIB="$lib" python3 -I "$BIN/fleet-credsep.py" machine proxies 2>&1); rc=$?
-  [ "$rc" = 1 ] && printf '%s' "$out" | grep -q '^credproxy: FAIL — 1 credential proxy besides the shared one: own proxy of verky (pid 435' \
+  [ "$rc" = 1 ] && printf '%s' "$out" | grep -q '^credproxy: FAIL — 1 credential proxy besides the shared one: own proxy of alice (pid 435' \
     && ! printf '%s' "$out" | grep -q 62916 \
     || { WHY="a second proxy beside the shared one is not a FAIL naming it (rc $rc): $out"; return 1; }
   grep -q 'machine proxies' "$BIN/fleet-doctor.sh" || { WHY="the doctor reads no credproxy row"; return 1; }
@@ -623,7 +622,7 @@ drill_cred_second_proxy() {
   [ "$rc" = 0 ] && printf '%s' "$out" | grep -q '^credproxy: OK — one proxy on this machine: the shared one (pid 47283' \
     || { WHY="the shared proxy alone is not OK (rc $rc): $out"; return 1; }
   rm -f "$sb/db/.shared.json"
-  printf '9 alice /usr/bin/python3 -I /Users/alice/.claude/fleet/bin/fleet-cred-proxy.py serve\n9 bob /usr/bin/python3 -I /Users/bob/.claude/fleet/bin/fleet-cred-proxy.py serve\n' > "$sb/ps"
+  printf '9 alice /usr/bin/python3 -I /home/alice/.claude/fleet/bin/fleet-cred-proxy.py serve\n9 bob /usr/bin/python3 -I /home/bob/.claude/fleet/bin/fleet-cred-proxy.py serve\n' > "$sb/ps"
   # shellcheck disable=SC2086
   out=$(env $env FLEET_CREDSEP_LIB="$lib" python3 -I "$BIN/fleet-credsep.py" machine proxies 2>&1); rc=$?
   SECS=$(since "$t0")
