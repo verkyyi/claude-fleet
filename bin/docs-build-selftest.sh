@@ -13,6 +13,11 @@
 #      hosted/quickstart.md · member/quickstart.md
 #   F  no public page links into docs/dev/ (EPIC #3569 共同约定 4)
 #   G  the build refuses: an en page with no zh twin, a page with no `# ` title
+#   H  generated blocks (issue #3580): the repo's pages are not stale (--check);
+#      the build fills `keys` / `keys-extra` from bin/fleet_keys.py's defaults,
+#      `dash-keymap.sh --panel switch view` and fleet-ui-lang.sh's view_keys;
+#      a changed default key (a sandbox copy of those scripts) reaches the output
+#      and makes the old source stale, --write mends it; an unknown block refuses
 set -u
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD="$ROOT/bin/docs-build.sh"
@@ -102,5 +107,81 @@ if "$BUILD" --src "$T/g1" --out "$T/g1out" >/dev/null 2>"$T/g1.err"; then bad "G
 elif grep -q 'has no Chinese page' "$T/g1.err"; then ok "G en-only page refused"; else bad "G g1: $(cat "$T/g1.err")"; fi
 if "$BUILD" --src "$T/g2" --out "$T/g2out" >/dev/null 2>"$T/g2.err"; then bad "G a page with no title was built"
 elif grep -q 'has no "# " title' "$T/g2.err"; then ok "G untitled page refused"; else bad "G g2: $(cat "$T/g2.err")"; fi
+
+# H — generated blocks follow the key tables
+if "$BUILD" --check >"$T/h0.out" 2>&1; then ok "H docs/public is not stale"; else bad "H stale: $(cat "$T/h0.out")"; fi
+HR="$T/hrepo"; mkdir -p "$HR/bin"
+for f in docs-build.sh fleet_keys.py dash-keymap.sh fleet-ui-lang.sh; do cp "$ROOT/bin/$f" "$HR/bin/$f"; done
+for d in h1 h2; do
+  mk "$d/zh/index.md" "# home"
+  for r in self-host hosted member; do mk "$d/zh/$r/quickstart.md" "# $r"; done
+done
+mk h1/zh/member/usage.md "# usage
+<!-- docs-gen:keys -->
+<!-- /docs-gen:keys -->
+<!-- docs-gen:keys-extra -->
+<!-- /docs-gen:keys-extra -->"
+cp "$T/h1/zh/member/usage.md" "$T/h1.orig"
+python3 - "$ROOT" "$BUILD" "$T" <<'PY' || fail=1
+import os, subprocess, sys
+ROOT, BUILD, T = sys.argv[1:4]
+sys.path.insert(0, os.path.join(ROOT, 'bin'))
+import fleet_keys
+bad = []
+def chord(c):  # the defaults' chords as a person reads them
+    if c.startswith('ctrl+]'):
+        return '⌃] ' + c[6:]
+    m, _, k = c.rpartition('+')
+    k = {'space': '空格'}.get(k, k.upper())
+    return ''.join({'cmd': '⌘', 'ctrl': '⌃'}[x] for x in m.split('+') if x) + k
+def build(src, out, build=BUILD, env=None):
+    return subprocess.run([build, '--src', src, '--out', out], capture_output=True, text=True, env=env)
+if build(os.path.join(T, 'h1'), os.path.join(T, 'h1out')).returncode != 0:
+    bad.append('H the build failed on a page with generated blocks')
+md = open(os.path.join(T, 'h1out/zh/member/usage.md'), encoding='utf-8').read()
+html = open(os.path.join(T, 'h1out/zh/member/usage.html'), encoding='utf-8').read()
+want = [chord(fleet_keys.DEFAULT_PANEL)] + [chord(c) for c in fleet_keys.DEFAULT_PHONE.split()]
+view = subprocess.run(['bash', os.path.join(ROOT, 'bin/dash-keymap.sh'), '--panel', 'switch', 'view'],
+                      capture_output=True, text=True).stdout
+letters = dict(l.split()[:2] for l in view.splitlines() if l.strip())
+for action, c, g, _ in fleet_keys.FORWARD:
+    if action in letters:
+        want += ['`%s`' % action, g, '⌃] ' + letters[action]]
+words = subprocess.run(['bash', os.path.join(ROOT, 'bin/fleet-ui-lang.sh'), 't', 'view_keys'],
+                       capture_output=True, text=True, env=dict(os.environ, FLEET_UI_LANG='zh')).stdout
+want += [w.split(' ', 1)[-1] for w in words.split('  ') if w.strip()]
+for w in want:
+    if w not in md:
+        bad.append('H the generated .md lacks %r' % w)
+if 'docs-gen' in html or chord(fleet_keys.DEFAULT_PANEL) not in html:
+    bad.append('H the generated .html does not carry the key table')
+# a changed default key reaches the output, and the old source is stale
+hb = os.path.join(T, 'hrepo/bin')
+kf = os.path.join(hb, 'fleet_keys.py')
+src = open(kf).read().replace('DEFAULT_PANEL = "%s"' % fleet_keys.DEFAULT_PANEL, 'DEFAULT_PANEL = "cmd+k"')
+open(kf, 'w').write(src)
+hbuild = os.path.join(hb, 'docs-build.sh')
+r = subprocess.run([hbuild, '--write', '--src', os.path.join(T, 'h1')], capture_output=True, text=True)
+first = open(os.path.join(T, 'h1/zh/member/usage.md'), encoding='utf-8').read()
+build(os.path.join(T, 'h1'), os.path.join(T, 'h2out'), build=hbuild)
+out = open(os.path.join(T, 'h2out/zh/member/usage.md'), encoding='utf-8').read()
+if '`⌘K`' not in out or '`%s`' % chord(fleet_keys.DEFAULT_PANEL) in out.split('docs-gen:keys-extra')[0]:
+    bad.append('H a changed default key (cmd+k) did not reach the output')
+if subprocess.run([BUILD, '--check', '--src', os.path.join(T, 'h1')], capture_output=True).returncode != 1:
+    bad.append('H a source written under another key table is not reported stale')
+subprocess.run([BUILD, '--write', '--src', os.path.join(T, 'h1')], capture_output=True)
+if subprocess.run([BUILD, '--check', '--src', os.path.join(T, 'h1')], capture_output=True).returncode != 0:
+    bad.append('H --write did not mend a stale block')
+for b in bad:
+    print('FAIL ' + b)
+if not bad:
+    print('ok   H keys / keys-extra generated; a changed default follows; --check / --write')
+sys.exit(1 if bad else 0)
+PY
+mk h2/zh/member/usage.md "# usage
+<!-- docs-gen:nope -->
+<!-- /docs-gen:nope -->"
+if "$BUILD" --src "$T/h2" --out "$T/h2bad" >/dev/null 2>"$T/h2.err"; then bad "H an unknown generated block was built"
+elif grep -q 'unknown generated block' "$T/h2.err"; then ok "H unknown block refused"; else bad "H h2: $(cat "$T/h2.err")"; fi
 
 [ "$fail" = 0 ] && echo "PASS docs-build-selftest" || { echo "FAIL docs-build-selftest"; exit 1; }

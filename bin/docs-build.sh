@@ -21,6 +21,18 @@
 #                                 row the troubleshooting page still lacks (nothing =
 #                                 complete; bin/fleet-doctor-rows.py page-skeleton)
 #
+#   docs-build.sh --write         fill every generated block in docs/public/ in place
+#   docs-build.sh --check         exit 1 naming each page whose block is stale
+#
+# A generated block is never hand-written (issue #3580, EPIC #3569 共同约定 4):
+#   <!-- docs-gen:<name> --> … <!-- /docs-gen:<name> -->
+# `keys` (the keys that open the panel + the panel's own keys) and `keys-extra`
+# (the keys a person may add back) are drawn from the ONE key tables — bin/fleet_keys.py's
+# defaults, `dash-keymap.sh --panel switch view`, and the words in
+# bin/fleet-ui-lang.sh. The build always fills them in its output, so the site
+# follows a key change on the next build; --write keeps the Markdown on GitHub in
+# step and docs-build-selftest.sh H reds on a source left stale.
+#
 # A page links to another by its relative .md path (so GitHub and
 # docs-links-selftest read the same link); the build drops the extension, and the
 # server answers /docs/<p> with <p>.html — the mount and the embed are C13's
@@ -43,22 +55,25 @@ done
 REPO="$(cd "$(dirname "$real")/.." && pwd)"
 SRC="$REPO/docs/public"
 OUT="$REPO/tokenledger/web/docs"
+MODE="build"
 while [ $# -gt 0 ]; do
   case "$1" in
     --out) [ $# -ge 2 ] || { echo "docs-build: --out needs a directory" >&2; exit 2; }; OUT="$2"; shift 2 ;;
     --src) [ $# -ge 2 ] || { echo "docs-build: --src needs a directory" >&2; exit 2; }; SRC="$2"; shift 2 ;;
     --troubleshooting-skeleton)
       exec python3 "$REPO/bin/fleet-doctor-rows.py" page-skeleton "$SRC/zh/troubleshooting.md" --root "$REPO" ;;
-    -h|--help) sed -n '2,36p' "$0"; exit 0 ;;
+    --write) MODE="write"; shift ;;
+    --check) MODE="check"; shift ;;
+    -h|--help) sed -n '2,48p' "$0"; exit 0 ;;
     *) echo "docs-build: unknown argument $1" >&2; exit 2 ;;
   esac
 done
 [ -d "$SRC/zh" ] || { echo "docs-build: no $SRC/zh" >&2; exit 2; }
 
-exec python3 - "$SRC" "$OUT" "$REPO" <<'PY'
+exec python3 - "$SRC" "$OUT" "$REPO" "$MODE" <<'PY'
 import html, json, os, re, shutil, subprocess, sys
 
-SRC, OUT, REPO = sys.argv[1], sys.argv[2], sys.argv[3]
+SRC, OUT, REPO, MODE = sys.argv[1:5]
 LANGS = ('zh', 'en')
 # The three roads, in the order the index tells them; a page outside these
 # directories is shared by all three (faq, troubleshooting, security).
@@ -285,9 +300,99 @@ def frame(lang, page, title, body, all_titles, pending=False):
         head_lang, html.escape(title), html.escape(src), 'en' if other == 'en' else 'zh-CN', other_url, CSS,
         html.escape(rel(page, 'index')), nav, other_url, ui['other'], ''.join(side), body, html.escape(src), ui['source'])
 
+# ---- generated blocks (issue #3580) -------------------------------------------
+GEN_RE = re.compile(r'(<!-- docs-gen:([a-z-]+) -->\n)(.*?)(<!-- /docs-gen:\2 -->)', re.S)
+GEN_WORDS = {
+    'zh': {'where': '在哪', 'press': '按', 'mac': 'Mac 上的 iTerm2', 'phone': '手机（Termius）或别的终端',
+           'or': ' 或 ', 'then': '再按', 'key': '键', 'does': '做什么', 'nokey': '—',
+           'action': '名字', 'mac_x': 'Mac 上（⌘）', 'phone_x': '手机上（⌃] 再按）', 'space': '空格'},
+    'en': {'where': 'Where', 'press': 'Press', 'mac': 'iTerm2 on a Mac', 'phone': 'A phone (Termius) or another terminal',
+           'or': ' or ', 'then': 'then', 'key': 'Key', 'does': 'What it does', 'nokey': '—',
+           'action': 'Name', 'mac_x': 'On a Mac (⌘)', 'phone_x': 'On a phone (⌃] then)', 'space': 'Space'},
+}
+_GEN_CACHE = {}
+
+def _gen_inputs():
+    if 'keys' not in _GEN_CACHE:
+        sys.path.insert(0, os.path.join(REPO, 'bin'))
+        import fleet_keys
+        view = subprocess.run(['bash', os.path.join(REPO, 'bin', 'dash-keymap.sh'), '--panel', 'switch', 'view'],
+                              capture_output=True, text=True).stdout
+        letters = dict(l.split()[:2] for l in view.splitlines() if len(l.split()) >= 2)
+        _GEN_CACHE['keys'] = (fleet_keys, letters)
+    return _GEN_CACHE['keys']
+
+def _ui(lang):
+    if lang not in _GEN_CACHE:
+        env = dict(os.environ, FLEET_UI_LANG=lang)
+        raw = subprocess.run(['bash', os.path.join(REPO, 'bin', 'fleet-ui-lang.sh'), 'dump', 'view_keys', 'keys_switch_'],
+                             capture_output=True, env=env).stdout.decode('utf-8').split('\0')
+        _GEN_CACHE[lang] = dict(zip(raw[0::2], raw[1::2]))
+    return _GEN_CACHE[lang]
+
+GLYPH_MOD = {'cmd': '⌘', 'command': '⌘', 'ctrl': '⌃', 'control': '⌃', 'alt': '⌥', 'opt': '⌥', 'option': '⌥', 'shift': '⇧'}
+GLYPH_KEY = {'down': '↓', 'up': '↑', 'left': '←', 'right': '→', 'return': '↩', 'enter': '↩', 'tab': 'Tab', 'esc': 'Esc'}
+
+def glyph(chord, lang):
+    """A fleet_keys chord as a person reads it: cmd+p → ⌘P, ctrl+]p → ⌃] p."""
+    if chord.startswith('ctrl+]') and len(chord) > 6:
+        return '⌃] ' + glyph(chord[6:], lang)
+    parts = chord.split('+')
+    mods, key = parts[:-1], parts[-1]
+    if key == 'space':
+        key = GEN_WORDS[lang]['space']
+    elif key in GLYPH_KEY:
+        key = GLYPH_KEY[key]
+    elif re.match(r'^f[0-9]+$', key):
+        key = key.upper()
+    elif len(key) == 1:
+        key = key.upper() if mods else key
+    return ''.join(GLYPH_MOD.get(m, m) for m in mods) + key
+
+KEY_TOKEN = re.compile(r'^([↵↑↓←→?]+|Tab|esc|Esc)$')
+
+def gen_block(name, lang):
+    w = GEN_WORDS[lang]
+    fk, letters = _gen_inputs()
+    ui = _ui(lang)
+    code = lambda k: '`%s`' % k
+    if name == 'keys':
+        phone = w['or'].join(code(glyph(c, lang)) for c in fk.DEFAULT_PHONE.split())
+        rows = ['| %s | %s |' % (w['where'], w['press']), '|---|---|',
+                '| %s | %s |' % (w['mac'], code(glyph(fk.DEFAULT_PANEL, lang))),
+                '| %s | %s |' % (w['phone'], phone), '',
+                '| %s | %s |' % (w['key'], w['does']), '|---|---|']
+        for item in re.split(r'\s{2,}', ui.get('view_keys', '').strip()):
+            head, _, rest = item.partition(' ')
+            if KEY_TOKEN.match(head) and rest:
+                rows.append('| %s | %s |' % (code(head), rest))
+            else:
+                rows.append('| %s | %s |' % (w['nokey'], item))
+        return '\n'.join(rows) + '\n'
+    if name == 'keys-extra':
+        rows = ['| %s | %s | %s | %s |' % (w['action'], w['does'], w['mac_x'], w['phone_x']), '|---|---|---|---|']
+        for action, chord, _g, _c in fk.FORWARD:
+            desc = ui.get('keys_switch_' + action)
+            if not desc or action not in letters:
+                continue  # no words, or not a key a phone can take: not offered here
+            rows.append('| %s | %s | %s | %s |' % (code(action), desc, code(glyph(chord, lang)),
+                                                    code(glyph('ctrl+]' + letters[action], lang))))
+        return '\n'.join(rows) + '\n'
+    return None
+
+def fill(text, lang, where):
+    def sub(m):
+        body = gen_block(m.group(2), lang)
+        if body is None:
+            errors.append('%s: unknown generated block docs-gen:%s' % (where, m.group(2)))
+            return m.group(0)
+        return m.group(1) + body + m.group(4)
+    return GEN_RE.sub(sub, text)
+
 # ---- build -----------------------------------------------------------------
 src = {l: pages(l) for l in LANGS}
 errors = []
+stale = []
 for p in src['en']:
     if p not in src['zh']:
         errors.append('en/%s.md has no Chinese page (zh/%s.md)' % (p, p))
@@ -295,7 +400,10 @@ texts, titles = {}, {}
 for l in LANGS:
     for p, f in src[l].items():
         t = open(f, encoding='utf-8').read()
-        texts[(l, p)] = t
+        filled = fill(t, l, '%s/%s.md' % (l, p))
+        if filled != t:
+            stale.append((f, filled))
+        texts[(l, p)] = filled
         titles[(l, p)] = title_of(t)
         if not titles[(l, p)]:
             errors.append('%s/%s.md has no "# " title' % (l, p))
@@ -306,6 +414,16 @@ if errors:
     for e in errors:
         print('docs-build: ' + e, file=sys.stderr)
     sys.exit(1)
+if MODE == 'check':
+    for f, _ in stale:
+        print('docs-build: %s: a generated block is stale — run bin/docs-build.sh --write' % os.path.relpath(f, REPO), file=sys.stderr)
+    sys.exit(1 if stale else 0)
+if MODE == 'write':
+    for f, filled in stale:
+        with open(f, 'w', encoding='utf-8') as fh:
+            fh.write(filled)
+        print('docs-build: wrote %s' % os.path.relpath(f, REPO))
+    sys.exit(0)
 
 if os.path.isdir(OUT):
     shutil.rmtree(OUT)
