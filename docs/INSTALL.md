@@ -62,6 +62,24 @@ login is one fleet; a shared login gives everyone one quota record.
 | Fleet skills (optional) | repo-shipped base **skills** (`skills/<name>/` dirs — SKILL.md plus any supporting files) a fleet command or the agent delegates to — e.g. `/fleet-handoff` runs the base `handoff` skill verbatim; `doc-preview` ships `share.sh`/`server.py`/`render.mjs` beside its SKILL.md (issues #311, #354) and serves in one of two modes — `https` (loopback server behind `tailscale serve`) or, for a login that is not the machine's one tailscale operator, `http-direct` (server bound on the tailscale IPv4, plain http, tailnet-only; issue #1093) — `fleet-doctor`'s `docprev` row says which this login gets and the one-time `sudo tailscale serve …` for HTTPS, `epic-page` ships the `template.html` both EPIC pages render into (issue #809); installed into `~/.claude/skills/` and mirrored into each known `$CODEX_HOME/skills/` whole-dir, marker-gated (`<!-- fleet skill -->` in the SKILL.md) so a personal skill is never clobbered | claude / codex |
 | Status line (optional) | `conf/statusline.sh` — the Claude Code status line as the fleet's measurement bus (issue #1452): it prints nothing, and stamps the context % + window size (`@ctx_pct` / `@ctx_limit` / `@ctx_band` — the auto-handoff nudge, `fleet-context.sh`), the model + effort level (`@model` / `@effort`) and the account's rate limits (`@rl*`) onto the pane's tmux window on every render; the client's top line shows `剩余 62% · Opus 5.5 · high` on its right from those stamps (`bin/fleet-topbar.py`, issue #2717). Wired **install-time only** by pointing `settings.json`'s `statusLine` at the **live-install** path `~/.claude/fleet/conf/statusline.sh`, so improvements flow through `land → /fleet-sync-install` with no copy step. jq-gated — inert without `jq`. NOT auto-wired on sync; opt-in per install (see step 8b). The fleet mod feeds the same script from inside the session (`--from mod`, issue #1459), so once every window carries the mod the key can be dropped — `bin/fleet-statusline.sh off`, step 8c — and the blank bottom row goes with it | jq (soft) |
 
+### 纯客户端装哪些后台（issue #3534）
+
+一台**不承载会话**的电脑（`fleet host status` 说 off：`FLEET_HOST=0`，或什么都没写、只认得出是客户端——有 hub.json / 客户端，没有 fleet 的 conf、没有 node.env）只装确实用得上的后台。判断在 `fleet-install-apply.sh` 的 `daemons` 一步（`client_only`，问 `fleet-conf.sh host --why`）；本机还有活着的 fleet tmux 服务器时一律按承载处理，绝不在会话底下拆东西。名单只有一处：`bin/fleet-daemon-lib.sh` 的 `fleet_daemon_client_units`。
+
+| 后台 | 纯客户端 | 理由 |
+|---|---|---|
+| install-sync | **装** | 整份安装（`~/.claude/fleet` 是 stable 的检出）只靠它跟 stable；30 分钟一次的间隔任务、不常驻，承载 off 时它的节点那半已经不跑（#2716）。用一行命令装的客户端（有 `.client-version`）本来就没有任何后台：`fleet` 启动时 `fleet-client-update.sh start` 更新，运行中由客户端自己的 tick 跟——这正是「启动时更新、不常驻」，所以不再为它加后台。 |
+| peerlink | 不装 | 常开连接是**看台**的（#3002）；纯客户端的看台跑在它的家（托管节点）上，`fleet` 走自己的一条 ssh 进去，别的机器的窗口由家上的 peerlink 连。客户端上常开它只会对每个同人登录各挂一条闲置 ssh。 |
+| memguard | 不装 | 每 2 秒一次 `ps`，只盯 fleet 会话 / Agent 起的进程（#1292）——这里没有。 |
+| spinner | 不装 | 驱动本机 fleet 的状态栏、也是间隔后台的自愈手（#639）——这里没有 fleet 服务器。 |
+| collect · pr-refresh · issue-bridge · webhook | 不装 | 喂本机 dash / 会话的缓存和工单转发——没有会话就没有读者。 |
+| cleanup · worktree-autoclean · sleep · ledger-watch | 不装 | 回收 / 休眠 / 记账本机的会话窗口和 worktree。 |
+| base-sync | 不装 | 快进本机仓库的基础检出——给 worker 的 worktree 用。 |
+| quotawatch · cred-proxy | 不装 | 按额度轮换本机会话的账号、给本机会话递凭据。 |
+| diskguard | 不装 | 防满盘拖垮本机 fleet 的 tmux 服务器、找本机会话留下的孤儿。 |
+
+**已经装上的旧客户端**：下一次同步（install-sync 换版本后跑的 apply，或 `/fleet-sync-install`）把名单外已装的后台 `bootout`，plist（systemd 的 unit）**挪进** `$FLEET_CONF_DIR/daemons-attic/`，不删，tick 戳一并忘掉以免体检当成停摆；日志一行 `daemons: set aside client-only — …`。之后的同步不会再把它们装回来（`daemons: skip <unit> — serves sessions …`）。**可逆**：这台电脑改回承载（`fleet host on`，或本机起了 fleet）后的第一次 apply，把 attic 里本版本仍发布的单元放回原处并加载（`daemons: restored …`）。`install-apply-selftest.sh` U 钉住这几条。
+
 ## Install steps
 
 For a managed Linux host or a persistent Aliyun ACK node, follow

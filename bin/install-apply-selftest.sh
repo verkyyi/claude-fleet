@@ -49,6 +49,10 @@
 #                       comparing two version dirs (one of links into a runtime),
 #                       the same paths git diff names; logs/ tools/ .release not
 #                       counted; --tree-to must be the install; no --sync-logins
+#   U. pure client      (issue #3534) 承载 off: only install-sync is added, a
+#                       session daemon never; the installed ones are set aside
+#                       in daemons-attic and come back once the computer hosts
+#                       (a live fleet server wins over FLEET_HOST=0)
 #   K. usage            --to must be HEAD, both revs required, from==to no-ops
 #   L. the skill        /fleet-sync-install calls apply (ff -> apply -> report)
 #                       rather than carrying its own copy of the steps
@@ -773,5 +777,43 @@ eq 'T --tree-to must be the install' 2 "$RC"
 contains 'T says move it first' "$OUT" 'move the install first'
 run_ap --tree-from "$TF" --tree-to "$TT" --root "$TL" --sync-logins
 eq 'T --sync-logins refused' 2 "$RC"
+
+# --- U. a pure client keeps only install-sync (issue #3534) --------------------------
+# 承载 off (FLEET_INSTALL_HOST=0, fleet-conf.sh's word in life): a new session
+# daemon is never added, the installed ones are set aside — unloaded, moved to
+# $FLEET_CONF_DIR/daemons-attic — and the next apply on a hosting computer puts
+# them back. A live fleet server here wins over the word.
+U0=$(git -C "$R" rev-parse HEAD)
+tmpl install-sync 1800; tmpl memguard 0; tmpl peerlink 0
+U1=$(commit 'client: install-sync + two session daemons')
+UA="$H/Library/LaunchAgents" UATT="$H/.config/claude-fleet/daemons-attic"
+U_before=$(cd "$UA" && ls | sort | tr '\n' ' ')
+FLEET_INSTALL_HOST=0 run_ap --from "$U0" --to "$U1" --dry-run
+eq 'U dry exit' 0 "$RC"
+contains 'U dry plans the set-aside' "$OUT" 'daemons: would set aside client-only —'
+eq 'U dry moves nothing' "$U_before" "$(cd "$UA" && ls | sort | tr '\n' ' ')"
+FLEET_INSTALL_HOST=0 run_ap --from "$U0" --to "$U1"
+eq 'U exit' 0 "$RC"
+contains 'U install-sync added' "$OUT" 'daemons: added install-sync'
+contains 'U memguard not added' "$OUT" 'daemons: skip memguard — serves sessions, and this computer hosts none'
+contains 'U peerlink not added' "$OUT" 'daemons: skip peerlink — serves sessions'
+contains 'U the rest set aside' "$OUT" 'daemons: set aside client-only —'
+eq 'U the LaunchAgents a pure client has' 'com.claude-fleet.install-sync.plist ' "$(cd "$UA" && ls | sort | tr '\n' ' ')"
+ok 'U kept in the attic' "[ -n \"\$(ls '$UATT')\" ] && [ ! -f '$UATT/com.claude-fleet.install-sync.plist' ]"
+ok 'U memguard never loaded' "! grep -q 'memguard' '$LOG'"
+ok 'U set-aside units booted out' "grep -q 'launchctl bootout gui/$(id -u)/com.claude-fleet.collect' '$LOG'"
+U_attic=$(cd "$UATT" && ls | sort | tr '\n' ' ')
+echo 'echo collect v9' > "$R/bin/tmux-dash-collect.sh"; U2=$(commit 'next sync')
+FLEET_INSTALL_HOST=0 run_ap --from "$U1" --to "$U2"
+eq 'U next sync exit' 0 "$RC"
+eq 'U next sync: still only install-sync' 'com.claude-fleet.install-sync.plist ' "$(cd "$UA" && ls | sort | tr '\n' ' ')"
+not_contains 'U next sync sets nothing aside' "$OUT" 'set aside'
+STUB_SOCKS=fleet FLEET_INSTALL_HOST=0 run_ap --from "$U1" --to "$U2"
+contains 'U a live fleet server wins: back from the attic' "$OUT" 'daemons: restored'
+ok 'U attic emptied' "[ -z \"\$(ls '$UATT'/*.plist 2>/dev/null)\" ]"
+eq 'U restored = what was set aside, plus install-sync' "$(printf '%s\n' $U_attic com.claude-fleet.install-sync.plist | sort | tr '\n' ' ')" "$(cd "$UA" && ls | sort | tr '\n' ' ')"
+ok 'U restored ones loaded' "grep -q 'launchctl bootstrap gui/$(id -u) $UA/com.claude-fleet.collect.plist' '$LOG'"
+FLEET_INSTALL_HOST=1 run_ap --from "$U1" --to "$U2"
+not_contains 'U a hosting computer is untouched' "$OUT" 'set aside'
 
 printf 'install-apply-selftest: PASS (%d checks)\n' "$CHECKS"
