@@ -183,6 +183,7 @@ fleet doctor | grep -E '^ *(WARN|FAIL) '        # 只看要动的
 | `team` | node | [release-rules] | 团队层没同步：`fleet-agent-team.py sync` |
 | `tenants` | node | [login-lifecycle] | 接管的登录有管理员 / sudo：移出 admin 组与 sudoers |
 | `testtmux` | node | [node-doctor] | 自测没清掉的 tmux 服务器：照行内清 |
+| `tickets` | node | [node-doctor] | 只是说明仓库的单子在入口还是 GitHub；值写错（既不是 hub 也不是 github）时改那个仓库 conf 里的 `FLEET_TICKETS` |
 | `tls` | node | [mac-node-prep] | python 验不了入口证书：装 CA（certifi），或换系统 python |
 | `tmux` | node · machine | [mac-node-prep] [release-rules] | 装 tmux ≥ 3.2；托管机器由更新器装 |
 | `tmuxconf` | node | [release-rules] | tmux 服务器载入的是旧 fleet 配置：照行内 `fleet-ui-refresh.sh` |
