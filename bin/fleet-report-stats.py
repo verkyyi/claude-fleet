@@ -142,7 +142,7 @@ def repo_matches(slug, text):
 
 
 def child_key(label):
-    """`verkyyi/x issue #12 "title"` → ('verkyyi/x', 'issue', '12'); unknown → None."""
+    """`owner/x issue #12 "title"` → ('owner/x', 'issue', '12'); unknown → None."""
     m = CHILD_RX.match(label)
     if not m:
         return None

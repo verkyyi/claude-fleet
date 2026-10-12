@@ -1016,7 +1016,7 @@ class Updater(object):
         there is no copy) (root's file; nothing in the login's home is written), and the agent is
         kickstarted whenever the release under it moved — the switch, the
         rollback, the first tick that re-pointed it. Before this it ran its own
-        ~/.local/bin/ccquota, which no release touched (mini2 prod-e715029:
+        ~/.local/bin/ccquota, which no release touched (mac-a prod-e715029:
         it never said login_join, so no login was ever opened there). -> notes."""
         cur = link_sha(self.p.current)
         cq = agent_ccquota(self.p)

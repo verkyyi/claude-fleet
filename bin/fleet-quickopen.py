@@ -335,7 +335,7 @@ def stale_note(rows, say=None):
 
 
 def node_say(row, say=None):
-    """A row's machine as its detail says it: `m4`, or `m4 失联` once lost."""
+    """A row's machine as its detail says it: `mac-a`, or `mac-a 失联` once lost."""
     if not row.get("node"):
         return ""
     if row.get("lost"):
@@ -1223,7 +1223,7 @@ def full(screen, pane, session=""):
             prompt = " › " + (query or "")
             screen.addstr(1, 0, clip(prompt, width - 1), curses.A_BOLD)
             if not query:
-                screen.addstr(1, cells(prompt), clip("名字、m4、? …", max(0, width - 1 - cells(prompt))),
+                screen.addstr(1, cells(prompt), clip("名字、mac-a、? …", max(0, width - 1 - cells(prompt))),
                               curses.A_DIM)
             screen.addstr(2, 0, "─" * (width - 1), curses.A_DIM)
             stale = stale_note(rows)

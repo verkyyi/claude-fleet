@@ -29,3 +29,11 @@ private-ipv4	(^|[^0-9.])(10\.[0-9]+|172\.(1[6-9]|2[0-9]|3[01])|192\.168|100\.(6[
 
 #@keep	verkyyi/claude-fleet
 #@keep	example.ts.net
+# Standard addresses, never anyone's own (issue #3577): the RFC 1918 / RFC 6598
+# block bases a network check spells (10.0.0.0/8 …), and Alibaba Cloud's
+# documented instance-metadata address — a guard has to name it to cut it.
+#@keep	10.0.0.0
+#@keep	172.16.0.0
+#@keep	192.168.0.0
+#@keep	100.64.0.0
+#@keep	100.100.100.200

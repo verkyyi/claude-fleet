@@ -130,6 +130,12 @@ jobs:
           # PodDisruptionBudget only once switched — deploy/k8s/README.md).
           extra=$(grep '^kind: ' "$RUNNER_TEMP/hub.yaml" | grep -vE '^kind: (Deployment|Service|Ingress|PersistentVolumeClaim|PodDisruptionBudget|ConfigMap)$' || true)
           [ -z "$extra" ] || { echo "::error::the deploy role cannot apply: $extra"; exit 1; }
+      - name: The example overlay renders and names nothing of ours
+        run: |
+          set -euo pipefail
+          # the shape a deployment's own overlay takes (claude-fleet#3577)
+          kubectl kustomize deploy/k8s/overlays/example > "$RUNNER_TEMP/example.yaml"
+          bin/oss-scan.sh -- deploy/k8s/overlays/example
       # Issue #2125: every render is one of the two shapes, never a mix — two
       # pods on one SQLite file is a corrupt database. Prod as it is (the
       # sqlite component), prod as the switch leaves it (the component line

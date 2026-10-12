@@ -259,6 +259,7 @@ fleet-node-trust.sh set m9 untrusted   # 标为不可信，同样立即拒绝（
    ```sh
    sudo install -D -m 0755 fleet-relay-check.py /usr/local/lib/fleet-relay/fleet-relay-check.py
    sudo install -m 0644 fleet-relay-check.service /etc/systemd/system/
+   sudo systemctl edit fleet-relay-check   # [Service] Environment=FLEET_HUB_URL=https://<你的入口>（单元里的是占位）
    sudo systemctl daemon-reload && sudo systemctl enable --now fleet-relay-check
    curl -s http://127.0.0.1:2091/healthz                                         # ok
    ```

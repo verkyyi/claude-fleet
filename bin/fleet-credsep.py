@@ -542,7 +542,7 @@ def plist(label, argv, out=None, throttle=None):
 
 def wait_gone(target, secs=25):
     """`launchctl bootout` returns once it has SIGTERMed the job, not once the job
-    is gone: on 2026-10-07 m4's bootstrap came 4 ms after it, while the agent was
+    is gone: on 2026-10-07 mac-a's bootstrap came 4 ms after it, while the agent was
     still exiting, and launchd refused it (`37: Operation already in progress`,
     which launchctl prints as `Bootstrap failed: 5: Input/output error` — issue
     #2273). Wait until launchd no longer knows the label (its ExitTimeOut is 20 s)."""
@@ -1174,7 +1174,7 @@ def own_tool(pw, name):
 def preflight(login, conf):
     """-> [why not] for a login about to have its credentials moved. The order is
     the whole point (#2135): its proxy runs FIRST and every live session already
-    talks to it, else the move takes the subscription from under them — m4,
+    talks to it, else the move takes the subscription from under them — mac-a,
     2026-10-07. And never under a running EPIC batch: its members are sessions
     on this login. Read AS the login, with the login's own scripts."""
     pw = getpw(login)

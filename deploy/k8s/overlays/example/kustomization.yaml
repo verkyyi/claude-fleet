@@ -1,0 +1,20 @@
+# The shape a deployment's own overlay takes (claude-fleet#3577, EPIC #3569 C7):
+# copy this directory into YOUR deployment's repository (never this one), replace
+# every example value, and render it with `kubectl kustomize`. The base names no
+# environment; everything a deployment owns — namespace, registry, hostnames, TLS
+# secret, admins, the relay — lives in an overlay like this one. Every value
+# here is a placeholder (hub.example.com, registry.example.com, alice).
+# hub-deploy's check job renders it, so it stays in step with the base.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: fleet-hub
+resources:
+  - ../../base
+images:
+  - name: ccquota
+    newName: registry.example.com/fleet/ccquota
+  - name: busybox
+    newName: registry.example.com/fleet/busybox
+patches:
+  - path: deployment-env.yaml
+  - path: ingress-hosts.yaml

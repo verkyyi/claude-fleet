@@ -332,7 +332,7 @@ func (s *Server) joinResponse(r *http.Request, id, label, tok, osUser string) *N
 func sanitizeJoinField(v string) string {
 	v = strings.TrimSpace(v)
 	if i := strings.IndexByte(v, '.'); i > 0 {
-		v = v[:i] // m4.local → m4
+		v = v[:i] // mac-a.local → mac-a
 	}
 	var b strings.Builder
 	for _, c := range v {

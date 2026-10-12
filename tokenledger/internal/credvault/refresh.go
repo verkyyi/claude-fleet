@@ -334,7 +334,7 @@ const RelayPassHeader = "X-Fleet-Relay"
 // A provider's own answer (invalid_grant, 403 from OpenAI) is never a reason
 // to fall back: it is the answer.
 type RelayRefresher struct {
-	URL      string                 // the relay's base URL, e.g. https://fleet-relay.24hw.cn
+	URL      string                 // the relay's base URL, e.g. https://relay.example.com
 	Pass     func() (string, error) // the hub's short-lived relay pass
 	Fallback RefresherVia           // the node path; nil = no fallback
 	Client   *http.Client

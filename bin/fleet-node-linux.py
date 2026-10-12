@@ -653,6 +653,15 @@ def login_open(a):
     return rc
 
 
+def compat_default(key, hub):
+    """compat-1v: 下一批删 — conf/compat-ours.conf's old value of key, only for
+    one of the hubs it names (bin/fleet_compat.py, issue #3577)."""
+    try:
+        return load('fleet_compat').default(key, hub)
+    except Exception:
+        return ''
+
+
 def route_settings(c, login, hub, relay):
     """root's <LIB>/<login>.conf route keys — hub, relay and their hosts — every
     other line kept. These are root-authored route settings; a tenant cannot
@@ -660,7 +669,13 @@ def route_settings(c, login, hub, relay):
     route_heal writes them again at every start (issue #3421)."""
     lib = Path(c.LIB)
     lib.mkdir(parents=True, exist_ok=True)
-    route = {'FLEET_HUB_URL': hub, 'FLEET_CRED_RELAY_URL': relay}
+    # No relay given (--relay / FLEET_CRED_RELAY_URL): none — the relay road is
+    # optional. The code names no relay of its own (issue #3577); a pod of ours
+    # rendered before render.py --relay keeps the old one for a version.
+    relay = relay or compat_default('FLEET_CRED_RELAY_URL', hub)
+    route = {'FLEET_HUB_URL': hub}
+    if relay:
+        route['FLEET_CRED_RELAY_URL'] = relay
     if central_url():
         # the cluster credential proxy (#3547): render.py --cred-central
         route['FLEET_CRED_CENTRAL_URL'] = central_url()
@@ -673,7 +688,7 @@ def route_settings(c, login, hub, relay):
     route['FLEET_CRED_ALLOW_HOSTS'] = ' '.join(sorted({
         urllib.parse.urlsplit(v).hostname or '' for v in route.values()}))
     proxy.ALLOWED = proxy.allowed_hosts(route['FLEET_CRED_ALLOW_HOSTS'])
-    if not all(proxy.loopback_ok(route[k]) for k in ('FLEET_HUB_URL', 'FLEET_CRED_RELAY_URL')):
+    if not all(proxy.loopback_ok(route[k]) for k in ('FLEET_HUB_URL', 'FLEET_CRED_RELAY_URL') if k in route):
         raise ValueError('hub/relay must use HTTPS to an allowed host; configure root allow-list first')
     if 'FLEET_CRED_CENTRAL_URL' in route and not proxy.loopback_ok(route['FLEET_CRED_CENTRAL_URL'], cluster=True):
         raise ValueError('the central proxy must be HTTPS, or http to a NAME.NS.svc.cluster.local Service')
@@ -922,7 +937,7 @@ def login_cmd(rest):
     o.add_argument('--full-name', default='')
     o.add_argument('--join-file', default='')
     o.add_argument('--hub', default=os.environ.get('FLEET_HUB_URL', ''))
-    o.add_argument('--relay', default=os.environ.get('FLEET_CRED_RELAY_URL', 'https://fleet-relay.24hw.cn'))
+    o.add_argument('--relay', default=os.environ.get('FLEET_CRED_RELAY_URL', ''))
     o.add_argument('--uid', type=int, default=None)
     o.add_argument('--no-start', dest='start', action='store_false')
     r = sub.add_parser('remove')
@@ -1221,7 +1236,7 @@ def main():
     ap.add_argument('--login', default=os.environ.get('FLEET_NODE_LOGIN', 'none'))
     ap.add_argument('--uid', type=int, default=int(os.environ.get('FLEET_NODE_UID', '10002')))
     ap.add_argument('--hub', default=os.environ.get('FLEET_HUB_URL', ''))
-    ap.add_argument('--relay', default=os.environ.get('FLEET_CRED_RELAY_URL', 'https://fleet-relay.24hw.cn'))
+    ap.add_argument('--relay', default=os.environ.get('FLEET_CRED_RELAY_URL', ''))
     ap.add_argument('--join-file', default=os.environ.get('FLEET_LOGIN_JOIN_FILE', ''))
     ap.add_argument('--machine-join-file', default=os.environ.get('FLEET_MACHINE_JOIN_FILE', ''))
     a = ap.parse_args()

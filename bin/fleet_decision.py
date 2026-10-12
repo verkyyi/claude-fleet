@@ -466,7 +466,7 @@ def demo_rows():
     rows = []
     for q, s, cls, n in (
             ("试水名单先发 20 家还是 50 家？", "20 家：批次约定写了先小后大", None, 2701),
-            ("要不要开一台云机器跑抓取？", "不开，用 mini2", None, 2702),
+            ("要不要开一台云机器跑抓取？", "不开，用 mac-a", None, 2702),
             ("合并后 move stable 吗？", "等批末统一发", None, 2703),
             ("旧接口的兼容腿留几个版本？", None, None, 2704)):
         body, row = ask_body(q, s, None, None, cls, now=iso(base), row_id="demo-%d" % n)

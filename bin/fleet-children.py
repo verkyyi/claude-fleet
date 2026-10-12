@@ -46,7 +46,7 @@ the seq counter (so "a report after this wake" is one comparison) and surfaces i
 A placement the hub sent to ANOTHER machine (issue #1586) is written beside the
 ledger, never in it — `<parent-key>.dispatch`, a file no `*.ndjson` reader globs:
 
-  {"seq": 1, "ts": "…", "child": "issue-101", "node": "m4", "op": "<uuid>",
+  {"seq": 1, "ts": "…", "child": "issue-101", "node": "mac-a", "op": "<uuid>",
    "state": "done", "window": "@42", "exit": 0, "line": ""}
 
 state done (a window opened there) · accepted (an --async spawn: the operation id
@@ -1040,7 +1040,7 @@ def cmd_show(a):
             if d.get('ts'):
                 rep += ' ' + age(d['ts'])
         live = '%s %s' % (k['window'], k['state']) if k['live'] else 'gone'
-        if k.get('remote_state'):       # the machine's own word, not `remote` / `gone · m4` (#1607)
+        if k.get('remote_state'):       # the machine's own word, not `remote` / `gone · mac-a` (#1607)
             live = '%s %s' % (k['remote_node'], k['remote_state'])
         elif k.get('node') and not k['live']:
             live += (' ↗' if d else ' · ') + k['node']

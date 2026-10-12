@@ -402,7 +402,7 @@ if [ "$breakage" != 1 ]; then
     fleet-*|bin/*|*.sh|*.py)
       printf 'fleet-issue-file: hint: the title opens on a script name — say what it is FOR (「每日推送没跑成」); put the script in the body (issue #2545)\n' >&2 ;;
     *) [ "${_tw:-0}" -gt 40 ] \
-         && printf 'fleet-issue-file: hint: the title is %s columns — keep it to one use, ≤ 20 汉字 (「mini2 开不了会话」); details go in the body (issue #2545)\n' "$_tw" >&2 ;;
+         && printf 'fleet-issue-file: hint: the title is %s columns — keep it to one use, ≤ 20 汉字 (「mac-a 开不了会话」); details go in the body (issue #2545)\n' "$_tw" >&2 ;;
   esac
 fi
 create_args=(--repo "$repo" --title "$title" --body "$body")

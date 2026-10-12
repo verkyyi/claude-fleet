@@ -121,7 +121,7 @@ def conf_dir_env():
     HOME moved off this account's own home while FLEET_CONF_DIR still points
     into the real one — a session's environment under a hand-made sandbox. A
     login there would write the sandbox's hub address into the machine's real
-    fleet.conf (2026-10-07: m5 lost its hub that way). Such a value is dropped
+    fleet.conf (2026-10-07: mac-b lost its hub that way). Such a value is dropped
     — for this process and every script it runs — and the sandbox's own
     ~/.config/claude-fleet is used."""
     d = os.environ.get("FLEET_CONF_DIR", "")
@@ -439,7 +439,7 @@ def peer_section(machines):
 
 def adopt_handwritten():
     """Take over a hand-written `Match … exec "…fleet-peer-cert.sh …"` block in
-    ~/.ssh/config (the one m5 carried before claude-fleet#1719), with the
+    ~/.ssh/config (the one mac-b carried before claude-fleet#1719), with the
     comment lines right above it: the generated section now does that job.
     The old file is kept beside it. Returns the backup's path, or ""."""
     try:

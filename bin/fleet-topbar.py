@@ -137,9 +137,9 @@ RELAY_WORD = "\u4e2d\u8f6c"
 
 
 def trouble_text(rec, down, route, via, pin, tries, cols):
-    """The machine — only when something is wrong with reaching it: 「m4 连不上」
+    """The machine — only when something is wrong with reaching it: 「mac-a 连不上」
     (lost, or this machine's connection to it dropped; a pinned route reconnecting
-    adds 「第 N 次重连」 from MID) or 「m4 经中转」 (on the hub relay). '' when all
+    adds 「第 N 次重连」 from MID) or 「mac-a 经中转」 (on the hub relay). '' when all
     is well: the machine is otherwise never written (#3194)."""
     node = rec.get("node") or "?"
     if rec.get("lost") or down:

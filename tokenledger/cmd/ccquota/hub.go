@@ -205,9 +205,9 @@ func kmsEnvelope(keyID string, st *store.Store) (*credvault.Envelope, error) {
 	if endpoint == "" {
 		region := os.Getenv("CCQUOTA_FLEET_CRED_KMS_REGION")
 		if region == "" {
-			return nil, errors.New("CCQUOTA_FLEET_CRED_KMS_KEY_ID needs CCQUOTA_FLEET_CRED_KMS_REGION (e.g. cn-shenzhen) or CCQUOTA_FLEET_CRED_KMS_ENDPOINT")
+			return nil, errors.New("CCQUOTA_FLEET_CRED_KMS_KEY_ID needs CCQUOTA_FLEET_CRED_KMS_REGION (the key's region id) or CCQUOTA_FLEET_CRED_KMS_ENDPOINT")
 		}
-		endpoint = "https://kms." + region + ".aliyuncs.com"
+		endpoint = credvault.KMSRegionEndpoint(region)
 	} else if !strings.Contains(endpoint, "://") {
 		endpoint = "https://" + endpoint
 	}
@@ -894,8 +894,16 @@ func runHub(args []string) error {
 			srv.EntryDNS = api.NewEntryDNS(dns.NewDNSPod(c), c.Subdomain)
 			srv.EntryDNS.Zone = c.Subdomain + "." + c.Domain
 			log.Printf("fleet: address records under %s.%s are the hub's (DNSPod)", c.Subdomain, c.Domain)
+			if c.Contact == "" {
+				log.Printf("fleet: 未配置 CCQUOTA_DNS_CONTACT — DNSPod is told no contact")
+			}
 		}
 		go srv.RunEntryDNS(ctx)
+	}
+	// A deployment's own names (claude-fleet#3577): unset ⇒ the neutral default,
+	// said once.
+	for _, line := range api.UnconfiguredNotes(os.Getenv) {
+		log.Printf("fleet: %s", line)
 	}
 	// Pin each CCQUOTA_GITHUB_ADMINS name to its GitHub ID (claude-fleet#1984).
 	// In the background: GitHub being slow must not hold the hub's start.

@@ -122,3 +122,10 @@ spec:
               value: "24haowan.com"
             - name: CCQUOTA_DNS_SUBDOMAIN
               value: "cf"
+            # DNSPod's User-Agent contact (claude-fleet#3577: no longer in code).
+            - name: CCQUOTA_DNS_CONTACT
+              value: "fleet@24haowan.com"
+            # The brand site that reads /meter.json from the browser
+            # (claude-fleet#3577: no longer in code; unset = no site).
+            - name: CCQUOTA_METER_ORIGINS
+              value: "https://www.24haowan.com https://24haowan.com"

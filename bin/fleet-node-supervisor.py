@@ -900,7 +900,7 @@ def fda_probe_result(rc):
 def tcc_stuck_line(state):
     """The words for a machine whose TCC stopped answering, or "" (issue #3167).
     The FDA probe is a plain open() of TCC.db; it times out only when sandboxd /
-    tccd do not answer. On mini2 that was an authorization dialog nobody was
+    tccd do not answer. On mac-a that was an authorization dialog nobody was
     there to click — the user tccd waiting on it forever, sandboxd's synchronous
     approval queues full behind it — and every user delete on the machine then
     failed «disallowed by sandbox», even sudo dscl. One timeout can be a slow
@@ -2963,7 +2963,7 @@ def launchctl_loaded(target):
 def launchctl_gone(target):
     """Wait for <target> to leave launchd. `bootout` of a KeepAlive job returns
     while launchd is still tearing it down, so ONE `print` right after it reads
-    «still loaded» (m4, issue #2336): poll for FLEET_NODE_BOOTOUT_WAIT seconds."""
+    «still loaded» (mac-a, issue #2336): poll for FLEET_NODE_BOOTOUT_WAIT seconds."""
     end = now() + env_num("FLEET_NODE_BOOTOUT_WAIT", 15)
     while launchctl_loaded(target):
         if now() >= end:
@@ -4884,7 +4884,7 @@ def entry_ifaddrs():
 def entry_addrs(ifaddrs, default_if=""):
     """(lan IPv4 list, global IPv6 list) a home is reached on — never a tunnel's,
     a bridge's, a temporary or deprecated IPv6. The default route's interface goes
-    first: the router forwards to THAT address (mini2's wired en0, never the Wi-Fi's)."""
+    first: the router forwards to THAT address (mac-a's wired en0, never the Wi-Fi's)."""
     import ipaddress
     lan, v6 = [], []
     cg = ipaddress.ip_network("100.64.0.0/10")
@@ -5098,7 +5098,7 @@ def entry_portmap(lan, port, gw=None):
 def entry_route(paths, me):
     """(host, port) of the machine's operator-written entry route —
     CCQUOTA_FLEET_NODE_ROUTES `entry=host[:port]`, the public port the router
-    forwards to the entry port (macmini :22122, mini2 :22123) — from the environment,
+    forwards to the entry port (mac-b :22122, mac-a :22123) — from the environment,
     machine.env, else a taken-over login's <state>/logins/<login>.env, where the node
     program reads it. `public=` is the system sshd's and is never read here. ("", 0)
     when there is none: then the entry's own port is the one knocked on."""

@@ -18,7 +18,8 @@
 #     and the bytes — no header, no address, no query.
 #
 # Placeholders are read when Caddy loads the file; none is a secret:
-#   FLEET_RELAY_SITE   the site address (default fleet-relay.24hw.cn — TLS by ACME)
+#   FLEET_RELAY_SITE   the site address — this deployment's relay host (TLS by ACME);
+#                      the default relay.example.com is a placeholder, always set it
 #   FLEET_RELAY_CHECK  the local checker (default 127.0.0.1:2091 — fleet-relay-check.py;
 #                      the hub's URL is ITS setting, FLEET_HUB_URL)
 #   FLEET_RELAY_LOG    the access log (default /var/log/caddy/fleet-relay.log)
@@ -28,7 +29,7 @@
 	admin {$FLEET_RELAY_ADMIN:localhost:2019}
 }
 
-{$FLEET_RELAY_SITE:fleet-relay.24hw.cn} {
+{$FLEET_RELAY_SITE:relay.example.com} {
 	log {
 		output file {$FLEET_RELAY_LOG:/var/log/caddy/fleet-relay.log} {
 			roll_size 10MiB

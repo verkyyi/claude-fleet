@@ -2811,3 +2811,28 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # retired FLEET_WORKER_PROMPT_FILE=<path> is still read and wins when set (#1101).
 # @label=Worker seed prompt @group=spawn @tier=common @scope=fleet @edit=str
 #FLEET_WORKER_PROMPT="Implement and verify per the repo conventions"
+
+# --- Deployment addresses (issue #3577, EPIC #3569 C7) ------------------------
+# The programs carry no deployment's own address or name: each is a setting,
+# and an unset one is the neutral default (nothing, or an example.com
+# placeholder) — never the fleet maintainers' values. The keys, where each lives:
+#   FLEET_HUB_URL          this file's [common] — the hub (入口) every tool talks to
+#   FLEET_CRED_RELAY_URL   this file / root's config / the Linux pod's environment
+#                          (render.py --relay) — the subscription relay; unset = none
+#   FLEET_CRED_ALLOW_HOSTS root's config — an extra host a separated credential
+#                          proxy may send to; the hosts of the hub / relay URLs above
+#                          are allowed already, read from the same config
+#   FLEET_NODE_ALIASES     this file — hostname=label, how a machine is shown
+#   NCCN_HOST              the environment of bin/newcomer-cn.sh (or --host)
+# The hub's own (its environment, a deploy overlay — deploy/k8s/overlays/example):
+#   CCQUOTA_FLEET_PUBLIC_URL / CCQUOTA_PUBLIC_URL   its public address
+#   CCQUOTA_FLEET_CRED_RELAY_URL                    the relay it signs passes for
+#   CCQUOTA_METER_ORIGINS   web origins whose page may read /meter.json; unset = none
+#   CCQUOTA_DNS_CONTACT     the contact DNSPod's User-Agent names; unset = none
+# The relays' own (their systemd units / pod environment):
+#   GH_RELAY_SOURCES        extras/gh-relay — the cluster egress it serves; unset = nobody
+#   FLEET_EGRESS_SOURCES    deploy/k8s/egress — the pod range it serves; unset = nobody
+#   FLEET_RELAY_SITE        extras/cred-relay/Caddyfile — the relay's own host name
+# An unset hub-side key is said once at the hub's start: 「未配置 <键>」.
+# compat-1v (下一批删): a machine of ours pointed at one of the hubs
+# conf/compat-ours.conf names keeps that file's old relay until it sets the key.

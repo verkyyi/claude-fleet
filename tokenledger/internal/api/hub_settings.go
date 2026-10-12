@@ -129,7 +129,7 @@ var hubSettings = map[string]hubSetting{
 			}
 			return ""
 		}},
-	EntryDomainKey: {def: "", help: "the zone every person's address lives under: <name>.<zone> (cf.24haowan.com; default CCQUOTA_DNS_SUBDOMAIN.CCQUOTA_DNS_DOMAIN)",
+	EntryDomainKey: {def: "", help: "the zone every person's address lives under: <name>.<zone> (cf.example.com; default CCQUOTA_DNS_SUBDOMAIN.CCQUOTA_DNS_DOMAIN)",
 		deploy: func(s *Server) string {
 			if s.EntryDNS != nil {
 				return s.EntryDNS.Zone
@@ -139,7 +139,7 @@ var hubSettings = map[string]hubSetting{
 		check: func(_ *Server, v string) (string, string) {
 			v = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(v)), ".")
 			if !entryDomainRE.MatchString(v) || len(v) > 200 {
-				return "", EntryDomainKey + " is a domain name (cf.24haowan.com), or \"\" for none"
+				return "", EntryDomainKey + " is a domain name (cf.example.com), or \"\" for none"
 			}
 			return v, ""
 		}},
@@ -167,7 +167,7 @@ var hubSettings = map[string]hubSetting{
 		check: onOff(SparesKey, "off")},
 	SpareMaxKey: {def: "2", help: "at most this many spare logins per machine, within fleet.node_user_cap.<machine> (default 10) minus the logins handed out",
 		check: checkSpareMax},
-	MachineNamesKey: {def: "", help: "the short name every client shows a machine by: hostname=name, comma-separated (macmini=m5, mini2=m4)",
+	MachineNamesKey: {def: "", help: "the short name every client shows a machine by: hostname=name, comma-separated (mac-a.local=mac-a, mac-b.local=mac-b)",
 		check: func(_ *Server, v string) (string, string) {
 			names, err := parseMachineNames(v)
 			if err != "" {

@@ -1,5 +1,5 @@
 #!/bin/bash
-# newcomer-cn.sh [--hub <url>] [--host <machine>] [--connect <machine>] [--login drill<x>]
+# newcomer-cn.sh --hub <url> --host <machine> [--connect <machine>] [--login drill<x>]
 #                [--out <dir>] [--proxy <url>] [--keep]
 #   — a newcomer's whole first time against the REAL hub, from a 国内 network
 #     (issue #2888): the GitHub Actions runner in the Shenzhen ACK cluster
@@ -57,7 +57,9 @@ die2() { printf '%s: %s\n' "$PROG" "$1" >&2; exit 2; }
 # shellcheck source=fleet-onboard-judge.sh
 . "$BIN/fleet-onboard-judge.sh"
 
-HUB=https://claudefleet.24haowan.com HOST=mini2 CONNECT='' LOGIN='' OUT='' PROXY='' KEEP=0
+# The hub and the machine are the deployment's own (issue #3577): --hub / --host,
+# else FLEET_HUB_URL / NCCN_HOST from the environment — no built-in.
+HUB=${FLEET_HUB_URL:-} HOST=${NCCN_HOST:-} CONNECT='' LOGIN='' OUT='' PROXY='' KEEP=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --hub)     [ $# -ge 2 ] || usage; HUB=${2%/}; shift 2 ;;
@@ -78,6 +80,9 @@ for v in "INSTALL_SECS=$INSTALL_SECS" "LOGIN_SECS=$LOGIN_SECS" "SESSION_SECS=$SE
          "ANSWER_SECS=$ANSWER_SECS" "CONNECT_SECS=$CONNECT_SECS" "POLL=$POLL"; do
   printf '%s' "${v#*=}" | grep -Eq '^[0-9]+$' || die2 "${v%%=*}: not a number: '${v#*=}'"
 done
+[ -n "$HUB" ] || die2 '未配置 FLEET_HUB_URL — give --hub <url>'
+[ -n "$HOST" ] || die2 '未配置 NCCN_HOST — give --host <machine>'
+HUB=${HUB%/}
 case "$HUB" in http://*|https://*) ;; *) die2 "--hub: not a URL ($HUB)" ;; esac
 [ -n "$LOGIN" ] || LOGIN="drillcn$(date +%d%H%M%S)"
 printf '%s' "$LOGIN" | grep -Eq '^drill[a-z0-9]{1,11}$' || die2 "--login: drill + 1-11 lowercase letters/digits (got '$LOGIN')"

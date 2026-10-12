@@ -259,7 +259,7 @@ func (s *Server) doors(f HubFacts) []Door {
 				"No person, machine, account or repository is named; a signed-out \"/\" is the front page, every other path still asks.",
 			State: pick(f.PublicMeter, "public", "off"),
 			Note: pick(f.PublicMeter,
-				"Here: PUBLIC — "+MeterKey+" is on (the default). 24haowan.com reads /meter.json from the browser.",
+				"Here: PUBLIC — "+MeterKey+" is on (the default). A site named in "+MeterOriginsEnv+" reads /meter.json from the browser.",
 				"Here: "+MeterKey+" is off, so /meter.json and /odometer.svg answer 404; the front page shows no figure."),
 		},
 		{
