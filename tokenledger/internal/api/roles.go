@@ -54,6 +54,7 @@ var routeAccess = map[string]string{
 	"/readyz": accessPublic, "/v1/deploy-probe": accessPublic,
 	"/install": accessPublic, "/install/": accessPublic,
 	"/v1/fleet/release/": accessPublic, // signed node releases (claude-fleet#2335)
+	control.AccountKeyPath: accessPublic, // the admin seat's ticket key (claude-fleet#3557)
 	ReleaseStatsPath:     accessAdmin,  // the release ledger (claude-fleet#3140)
 	// The public counter (claude-fleet#1988); the handler 404s it when off.
 	"/meter.json": accessPublic, "/odometer.svg": accessPublic,

@@ -47,6 +47,11 @@ type nodeConns struct {
 	// one, newest last (claude-fleet#2661): two agents of one login take the
 	// link from each other, and each hello brings its own compute word.
 	superseded map[string][]time.Time
+	// seats says the hub signs account tickets (claude-fleet#3557): only then
+	// is an admin seat (CapAdminSeat) sent account ops — and preferred over
+	// an admin login's agent on the same machine. Without a key a seat would
+	// refuse every op, so it is never picked.
+	seats atomic.Bool
 }
 
 // supersedeWindow is how far back placement counts displaced links.
@@ -117,6 +122,10 @@ type nodeConn struct {
 	// canRecycle is an admin hello's CapRecycle (claude-fleet#3504): its
 	// remove script washes a login for the next person. Set once, before publish.
 	canRecycle bool
+	// adminSeat is the hello's CapAdminSeat (claude-fleet#3557): an admin
+	// agent running as the machine's admin role account, whose scripts run an
+	// op only with the hub's signed ticket. Set once, before publish.
+	adminSeat bool
 	// machineOpener: a machine link whose hello listed CapLoginJoin
 	// (claude-fleet#3210) — a Linux managed machine has no admin login, so its
 	// root node program opens and closes its own logins. It is that machine's
@@ -285,13 +294,34 @@ func (n *nodeConns) pickAdmin(hostname string, join bool) (string, bool) {
 	}
 	// Deterministic when a machine has two admin logins on the allowlist.
 	sort.Strings(ids)
-	for _, id := range ids {
-		c := n.conns[id]
-		if c.accountNode() && c.hostname() == hostname && control.Compatible(int(c.proto.Load())) && (!join || c.canLoginJoin) {
-			return id, true
+	// An admin seat first (claude-fleet#3557, step E): while the old agent of
+	// an admin login is still connected beside it, it finishes the op in its
+	// hands and is sent no new one. No account key: no seat at all.
+	seats := n.seats.Load()
+	for _, seat := range []bool{true, false} {
+		if seat && !seats {
+			continue
+		}
+		for _, id := range ids {
+			c := n.conns[id]
+			if c.adminSeat != seat {
+				continue
+			}
+			if c.accountNode() && c.hostname() == hostname && control.Compatible(int(c.proto.Load())) && (!join || c.canLoginJoin) {
+				return id, true
+			}
 		}
 	}
 	return "", false
+}
+
+// isAdminSeat says endpointID's link is an admin seat (CapAdminSeat): its ops
+// carry a signed ticket.
+func (n *nodeConns) isAdminSeat(endpointID string) bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	c := n.conns[endpointID]
+	return c != nil && c.adminSeat
 }
 
 // openerInfo is hostname's account-op node (openerFor's pick): since when its
@@ -516,6 +546,7 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 		canCredsep:    hp.HasCap(control.CapCredsep),
 		canLoginJoin:  hp.HasCap(control.CapLoginJoin),
 		canRecycle:    hp.HasCap(control.CapRecycle),
+		adminSeat:     hp.HasCap(control.CapAdminSeat),
 		canServiceLog: hp.HasCap(control.CapServiceLog),
 		computeOff:    !control.ComputeOn(hp.Compute), computeForce: hp.ComputeForce, probe: hp.Probe,
 		personal: hp.Personal, machineLink: hp.HasCap(control.CapMachine),

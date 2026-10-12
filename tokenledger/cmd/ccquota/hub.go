@@ -265,6 +265,9 @@ func loadFleetCerts(srv *api.Server) error {
 	if err := loadFleetDebug(srv); err != nil {
 		return err
 	}
+	if err := loadFleetAccountKey(srv); err != nil {
+		return err
+	}
 	loadFleetFeedback(srv)
 	switch {
 	case srv.Stable.Offline && srv.Releases == nil:
@@ -283,6 +286,34 @@ func loadFleetCerts(srv *api.Server) error {
 	}
 	srv.SSHCA = ca
 	log.Printf("fleet: SSH user CA %s — 12h certificates at /connect and `fleet login`", ca.Fingerprint())
+	return nil
+}
+
+// loadFleetAccountKey arms the admin seat's account tickets (claude-fleet
+// #3557, EPIC #3500 C15): CCQUOTA_FLEET_ACCOUNT_KEY names the ed25519 key file
+// (its own Secret — never the release key) the hub signs every account op to
+// an admin seat with. No key: no ticket, no seat is sent anything — account
+// ops go to an admin login's agent as before. A key that cannot be read: the
+// hub refuses to start.
+func loadFleetAccountKey(srv *api.Server) error {
+	path := os.Getenv("CCQUOTA_FLEET_ACCOUNT_KEY")
+	if path == "" {
+		return nil
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		if m := checkUnmounted(path); m != "" && errors.Is(err, os.ErrNotExist) {
+			log.Printf("fleet: check: CCQUOTA_FLEET_ACCOUNT_KEY %s is on %s, which only the new render mounts — not checked; the real start reads it", path, m)
+			return nil
+		}
+		return fmt.Errorf("CCQUOTA_FLEET_ACCOUNT_KEY: %w", err)
+	}
+	key, err := release.LoadPrivateKey(b)
+	if err != nil {
+		return fmt.Errorf("CCQUOTA_FLEET_ACCOUNT_KEY: %w", err)
+	}
+	srv.SetAccountKey(key)
+	log.Printf("fleet: account-op tickets on — admin seats get account ops (key %s)", release.KeyID(key.Public().(ed25519.PublicKey)))
 	return nil
 }
 

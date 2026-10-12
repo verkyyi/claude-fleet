@@ -1064,6 +1064,11 @@ type AccountOp struct {
 	// have somewhere to land. Never logged, never in a result; an older node
 	// ignores it and the login waits for its first interactive login as before.
 	JoinCode string `json:"join_code,omitempty"`
+	// Ticket is the hub's signed AccountTicket for this op (claude-fleet
+	// #3557): set only for a node that listed CapAdminSeat, whose two root
+	// scripts refuse an op without one. Never logged; an admin login's
+	// agent is never sent one and ignores it.
+	Ticket string `json:"ticket,omitempty"`
 }
 
 // AccountResult is the payload of TypeAccountResult.

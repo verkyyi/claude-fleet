@@ -6,6 +6,7 @@ package api
 
 import (
 	"context"
+	"crypto/ed25519"
 	"fmt"
 	"io/fs"
 	"log"
@@ -251,6 +252,9 @@ type Server struct {
 	// /v1/fleet/release/ (claude-fleet#2335; CCQUOTA_FLEET_RELEASE_KEY +
 	// CCQUOTA_FLEET_RELEASE_DIR). Nil: those routes 404.
 	Releases *ReleaseStore
+	// accountKey signs the admin seat's account tickets (claude-fleet#3557;
+	// CCQUOTA_FLEET_ACCOUNT_KEY, SetAccountKey). Nil: no ticket, no seat.
+	accountKey ed25519.PrivateKey
 	// Debug issues the tickets a computer that never signed in sends its
 	// diagnostics up with (claude-fleet#2891; CCQUOTA_FLEET_DEBUG_DIR +
 	// CCQUOTA_FLEET_DEBUG_KEY). Nil: no /v1/fleet/debug/ route exists.
@@ -638,6 +642,9 @@ func (s *Server) routes() *routeMux {
 		// Node releases (claude-fleet#2335): stable's files, binaries and
 		// installers, signed — public like /install; the signature is the trust.
 		mux.HandleFunc("/v1/fleet/release/", s.handleRelease)
+		// The account-op public key an admin seat's scripts pin
+		// (claude-fleet#3557): public like the release key.
+		mux.HandleFunc(control.AccountKeyPath, s.handleAccountKey)
 		// The release ledger's numbers (claude-fleet#3140): the operator's.
 		mux.Handle(ReleaseStatsPath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleReleaseStats))))
 		// A client's team defaults (claude-fleet#1722): whitelisted, never
