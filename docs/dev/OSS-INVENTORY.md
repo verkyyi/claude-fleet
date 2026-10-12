@@ -40,7 +40,7 @@ history: 0 处未确认 · 0 个提交
 - **gitleaks**：钉住版本、按 sha256 校验的 gitleaks 扫这个 PR 的提交（`bin/oss-scan.sh --commits
   <base>..HEAD`，用 `.gitleaks.toml`）；先对一个带假 GitHub 令牌的提交跑一次，必须红。
 
-本地先看一眼：`bin/oss-scan.sh --gate origin/master`。演练：`docs/BREAK-IT.md` 的
+本地先看一眼：`bin/oss-scan.sh --gate origin/master`。演练：`docs/dev/BREAK-IT.md` 的
 `oss-internal-name-committed`。
 
 ## 规则表与允许清单（唯一一份）
