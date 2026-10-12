@@ -398,14 +398,35 @@ def admin_agents():
         meta = read_json(mp, None)
         if not isinstance(meta, dict) or meta.get("login") != login:
             continue
-        svc, argv = meta.get("agent"), meta.get("agent_argv")
-        if not (isinstance(svc, dict) and svc.get("kind") in ("launchd-system", "systemd-system") and svc.get("label")):
+        argv = meta.get("agent_argv")
+        if not agent_unit(login, meta):
             continue
         if not (isinstance(argv, list) and len(argv) > 1 and all(isinstance(a, str) for a in argv)
                 and os.path.isabs(argv[0]) and os.path.basename(argv[0]) == "ccquota" and argv[1] == "agent"):
             continue
         out.append((login, mp, meta))
     return out
+
+
+def agent_unit(login, meta):
+    """The system service that runs <login>'s agent NOW, as {kind, label}, or None.
+    meta.json's `agent` is the service credsep found at install and keeps for
+    `release` to put back — for a launchd-gui agent that is the LaunchAgent it
+    booted out, while what runs is the LaunchDaemon it wrote in its place,
+    com.ccquota.agent.<login> (fleet-credsep.py install). Read only the kind, a
+    converted Mac admin (issue #3508) was never followed: it
+    stayed on its own /usr/local/bin/ccquota, said no login_join, and the
+    machine opened no login."""
+    svc = meta.get("agent")
+    if not isinstance(svc, dict):
+        return None
+    if svc.get("kind") in ("launchd-system", "systemd-system") and svc.get("label"):
+        return {"kind": svc["kind"], "label": svc["label"]}
+    if svc.get("kind") == "launchd-gui":
+        label = "com.ccquota.agent.%s" % login
+        if os.path.isfile(os.path.join(env("FLEET_CREDSEP_DAEMON_DIR", "/Library/LaunchDaemons"), label + ".plist")):
+            return {"kind": "launchd-system", "label": label}
+    return None
 
 
 def link_sha(path):
@@ -1187,7 +1208,7 @@ class Updater(object):
                 r = {}
             if r.get("sha") == cur:
                 continue
-            svc = meta["agent"]
+            svc = agent_unit(login, meta)
             if svc["kind"] == "launchd-system":
                 rc = fns.launchctl("kickstart", "-k", "system/%s" % svc["label"])
             else:

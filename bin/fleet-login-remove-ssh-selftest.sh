@@ -8,6 +8,8 @@
 #   C  forced: a delete takes the record and the login's access-group entries
 #   D  setup: one authorized_keys line (from= loopback, restrict, the forced
 #      command quoted), the admin's other lines kept, idempotent, a stale line replaced
+#   F  forced/run wash (issue #3508): the shapes refused, no Full Disk Access ⇒ 7,
+#      the home moved into the archive dir and deleted, the round trip through `forced`
 #   E  run: Remote Login off / the key refused / no key ⇒ exit 5 with the reason;
 #      the round trip through `forced` deletes, and passes exit 7 on
 set -uo pipefail
@@ -22,6 +24,7 @@ not_has() { ! grep -Fq -- "$2" "$1" || { fail "$3"; sed 's/^/    | /' "$1" >&2; 
 
 mkdir -p "$WORK/shim" "$WORK/ds/groups" "$WORK/homes/admin1" "$WORK/hostkeys" "$WORK/tcc"
 export PATH="$WORK/shim:$PATH" FLEET_TEST_LOG="$WORK/calls.log" FLEET_TEST_DS="$WORK/ds"
+export FLEET_OFFBOARD_ARCHIVE_DIR="$WORK/offboarded"
 export FLEET_REMOVE_SSH_TEST=1 FLEET_REMOVE_SSH_DIR="$WORK/keydir" FLEET_REMOVE_SSH_HOMES="$WORK/homes" \
   FLEET_REMOVE_SSH_HOSTKEYS="$WORK/hostkeys" FLEET_REMOVE_SSH_FORCED="/Library/Application Support/claude-fleet/current/bin/fleet-login-remove-ssh.sh"
 : > "$WORK/tcc/TCC.db"; export FLEET_LOGIN_REMOVE_TCC_DB="$WORK/tcc/TCC.db"
@@ -160,6 +163,46 @@ else
   printf 'fleet-login-remove-ssh-selftest: SKIP D (no ssh-keygen)\n'
   mkdir -p "$WORK/keydir"; : > "$WORK/keydir/id_ed25519"; : > "$WORK/keydir/known_hosts"
 fi
+
+# F — wash: the shapes, no Full Disk Access, the home moved aside and deleted
+reset_ds
+mkdir -p "$WORK/homes/alice/Library"; echo jia > "$WORK/homes/alice/jia-secret.txt"
+while IFS='|' read -r cmd want; do
+  forced "$cmd"
+  [ "$RC" = "$want" ] || { fail "F: forced '$cmd': exit $RC (want $want)"; sed 's/^/    | /' "$WORK/out" >&2; }
+done <<'EOF'
+wash|2
+wash alice|2
+wash alice 2026 x|2
+wash alice ../x|2
+wash alice abc|2
+wash alice 20261012T183706Z|2
+wash bob 20261012183706|3
+wash admin1 20261012183706|3
+wash daemon 20261012183706|3
+wash nosuch 20261012183706|4
+EOF
+[ -f "$WORK/homes/alice/jia-secret.txt" ] || fail 'F: a refused wash touched the home'
+chmod 000 "$WORK/tcc/TCC.db"
+forced 'wash alice 20261012183706'
+chmod 600 "$WORK/tcc/TCC.db"
+[ "$RC" = 7 ] || fail "F: wash with no Full Disk Access: exit $RC (want 7)"
+[ -f "$WORK/homes/alice/jia-secret.txt" ] || fail 'F: washed with no Full Disk Access'
+forced 'wash alice 20261012183706'
+[ "$RC" = 0 ] || { fail "F: wash: exit $RC (want 0)"; sed 's/^/    | /' "$WORK/out" >&2; }
+[ ! -e "$WORK/homes/alice" ] || fail 'F: the home is still in place'
+has "$WORK/out" "aside=$WORK/offboarded/alice-20261012183706.wash" 'F: the aside path was not said'
+[ ! -e "$WORK/offboarded/alice-20261012183706.wash" ] || fail 'F: the aside was not deleted'
+has "$FLEET_TEST_LOG" "sudo -n mv $WORK/homes/alice $WORK/offboarded/alice-20261012183706.wash" 'F: the home was not renamed aside'
+forced 'wash alice 20261012183707'
+[ "$RC" = 0 ] || fail "F: wash of a home already gone: exit $RC (want 0)"
+mkdir -p "$WORK/homes/alice"; echo jia > "$WORK/homes/alice/x"
+bash "$S" wash alice --admin admin1 >"$WORK/out" 2>&1; RC=$?
+[ "$RC" = 2 ] || fail "F: run wash with no --stamp: exit $RC (want 2)"
+bash "$S" wash alice --admin admin1 --stamp 20261012183708 >"$WORK/out" 2>&1; RC=$?
+[ "$RC" = 0 ] || { fail "F: round trip wash: exit $RC (want 0)"; sed 's/^/    | /' "$WORK/out" >&2; }
+[ ! -e "$WORK/homes/alice" ] || fail 'F: the round trip did not wash alice'
+has "$FLEET_TEST_LOG" 'admin1@127.0.0.1 wash alice 20261012183708' 'F: ssh did not ask the loopback admin to wash alice'
 
 # E — run
 reset_ds

@@ -17,13 +17,19 @@
 #                           Idempotent: a line already right is left byte for byte.
 #   probe --admin <login>   (root) can the road work? exit 0 yes · 5 no, why on stderr
 #   run <login> --admin <a> (root) delete <login> over the road
+#   wash <login> --admin <a> --stamp <digits>
+#                           (root) move <login>'s home aside into the archive dir
+#                           as <login>-<digits>.wash and delete it, over the road —
+#                           fleet-login-reset.sh's wash with no Full Disk Access
+#                           (issue #3508: a rename of a home is refused without it)
 #   forced                  the authorized command (sshd runs it as the admin):
-#                           $SSH_ORIGINAL_COMMAND is `probe` or `delete <login>`,
-#                           anything else is refused. A login must be a plain
+#                           $SSH_ORIGINAL_COMMAND is `probe`, `delete <login>` or
+#                           `wash <login> <digits>`, anything else is refused.
+#                           A login must be a plain
 #                           name (^[a-z_][a-z0-9_-]{0,31}$), exist, have a uid
 #                           ≥ 501, not be the admin itself, not be in admin.
 #
-# Exit (run / forced): 0 deleted (probe: works) · 1 the delete failed · 2 usage /
+# Exit (run / wash / forced): 0 deleted / washed (probe: works) · 1 it failed · 2 usage /
 # bad argument · 3 refused · 4 no such login · 5 the road cannot work here (why
 # on stderr: Remote Login off, the key not authorized, no key) · 7 the ssh
 # session has no Full Disk Access (the Remote Login switch).
@@ -31,7 +37,8 @@
 #   FLEET_REMOVE_SSH_HOMES (/Users) · FLEET_REMOVE_SSH_HOSTKEYS (/etc/ssh) ·
 #   FLEET_REMOVE_SSH_FORCED (the command= path) · FLEET_REMOVE_SSH_TEST=1 (no
 #   root needed, no chown) · FLEET_LOGIN_REMOVE_TCC_DB (the TCC database read
-#   for Full Disk Access) · FLEET_LOGIN_REMOVE_DELETE_SECS (120).
+#   for Full Disk Access) · FLEET_LOGIN_REMOVE_DELETE_SECS (120) ·
+#   FLEET_OFFBOARD_ARCHIVE_DIR (/Users/Shared/offboarded: where a wash goes).
 set -uo pipefail
 
 PROG=fleet-login-remove-ssh
@@ -39,6 +46,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 DIR=${FLEET_REMOVE_SSH_DIR:-/var/db/fleet-node/remove-ssh}
 KEY="$DIR/id_ed25519" KNOWN="$DIR/known_hosts"
 HOMES=${FLEET_REMOVE_SSH_HOMES:-/Users}
+ARCHIVE=${FLEET_OFFBOARD_ARCHIVE_DIR:-/Users/Shared/offboarded}
 HOSTKEYS=${FLEET_REMOVE_SSH_HOSTKEYS:-/etc/ssh}
 TCC_DB=${FLEET_LOGIN_REMOVE_TCC_DB:-/Library/Application Support/com.apple.TCC/TCC.db}
 MARK=fleet-login-remove-ssh
@@ -78,16 +86,44 @@ has_fda() { sudo -n head -c 1 "$TCC_DB" >/dev/null 2>&1; }
 
 acl_values() { dscl . -read "/Groups/$1" "$2" 2>/dev/null | awk -v a="$2:" '$1==a {for (i = 2; i <= NF; i++) print $i; f = 1; next} f && /^ / {print $1; next} {f = 0}'; }
 
-forced_delete() {
-  local login=$1 uid groups guid g secs rc n
+# plain_login <login> <what>: the checks delete and wash share — sets uid
+plain_login() {
+  local login=$1 groups
   valid_login "$login" || die "refusing: '$login' is not a plain login name" 2
-  uid=$(id -u "$login" 2>/dev/null) || { say "no login $login on this machine: nothing to remove"; exit 4; }
+  uid=$(id -u "$login" 2>/dev/null) || { say "no login $login on this machine: nothing to $2"; exit 4; }
   case "$uid" in ''|*[!0-9]*) die "refusing: cannot read uid of $login" 3 ;; esac
   [ "$uid" -ge 501 ] || die "refusing: $login is a system account (uid $uid)" 3
   [ "$login" != "$(id -un)" ] || die "refusing: $login is the admin this runs as" 3
   groups=$(id -Gn "$login" 2>/dev/null) || die "refusing: cannot read groups of $login" 3
   case " $groups " in *' admin '*) die "refusing: $login is in the admin group" 3 ;; esac
   has_fda || { say "$WHY_FDA"; exit 7; }
+}
+
+# The home moved aside whole (a rename needs Full Disk Access on macOS — the
+# node's own process has none) and deleted; what macOS keeps from even this
+# session stays in the archive dir, 700 and the admin's, said once.
+forced_wash() {
+  local login=$1 stamp=$2 uid h aside
+  plain_login "$login" wash
+  printf '%s' "$stamp" | grep -Eq '^[0-9]{8,14}$' || die "refusing: '$stamp' is not a stamp (digits)" 2
+  h="$HOMES/$login"
+  if [ ! -e "$h" ]; then say "no home at $h: nothing to wash"; exit 0; fi
+  [ -d "$h" ] && [ ! -L "$h" ] || die "refusing: $h is not a plain directory" 3
+  aside="$ARCHIVE/$login-$stamp.wash"
+  [ ! -e "$aside" ] || die "refusing: $aside is there already" 3
+  if [ "${FLEET_REMOVE_SSH_TEST:-0}" = 1 ]; then mkdir -p "$ARCHIVE" && chmod 700 "$ARCHIVE"
+  else sudo -n install -d -m 700 -o "$(id -u)" "$ARCHIVE"; fi || { say "cannot make $ARCHIVE"; exit 1; }
+  sudo -n mv "$h" "$aside" || { say "mv $h $aside failed over ssh too"; exit 1; }
+  sudo -n rm -rf "$aside" 2>/dev/null \
+    || say "WARN $aside could not be deleted whole (macOS privacy protection) — out of the login's reach; sudo rm -rf it from a session with Full Disk Access"
+  echo "aside=$aside"
+  say "washed $login's home (uid $uid) from a local ssh session"
+  exit 0
+}
+
+forced_delete() {
+  local login=$1 uid guid g secs rc n
+  plain_login "$login" remove
   # the GUID is readable only while the record stands: the access groups after
   guid=$(dscl . -read "/Users/$login" GeneratedUID 2>/dev/null | awk '$1=="GeneratedUID:" {print $2; exit}')
   secs=${FLEET_LOGIN_REMOVE_DELETE_SECS:-120}
@@ -117,14 +153,15 @@ forced_delete() {
 }
 
 forced() {
-  # Never a shell: the words are split here, and only these two shapes pass.
-  local cmd=${SSH_ORIGINAL_COMMAND:-} a b c
-  case "$cmd" in *[!a-z0-9_\ -]*) die "refusing: '$cmd' is not 'probe' or 'delete <login>'" 2 ;; esac
-  read -r a b c <<<"$cmd"
-  case "$a:${b:+1}:${c:+1}" in
-    probe::) if has_fda; then echo 'fda: yes'; exit 0; else say "$WHY_FDA"; exit 7; fi ;;
-    delete:1:) forced_delete "$b" ;;
-    *) die "refusing: '$cmd' is not 'probe' or 'delete <login>'" 2 ;;
+  # Never a shell: the words are split here, and only these three shapes pass.
+  local cmd=${SSH_ORIGINAL_COMMAND:-} a b c d
+  case "$cmd" in *[!a-z0-9_\ -]*) die "refusing: '$cmd' is not 'probe', 'delete <login>' or 'wash <login> <stamp>'" 2 ;; esac
+  read -r a b c d <<<"$cmd"
+  case "$a:${b:+1}:${c:+1}:${d:+1}" in
+    probe:::) if has_fda; then echo 'fda: yes'; exit 0; else say "$WHY_FDA"; exit 7; fi ;;
+    delete:1::) forced_delete "$b" ;;
+    wash:1:1:) forced_wash "$b" "$c" ;;
+    *) die "refusing: '$cmd' is not 'probe', 'delete <login>' or 'wash <login> <stamp>'" 2 ;;
   esac
 }
 
@@ -219,8 +256,25 @@ run_delete() {
   road delete "$login"
 }
 
+run_wash() {
+  need_root wash
+  local login=${1:-} stamp=''; shift || :
+  valid_login "$login" || die "wash <login>: a plain login name" 2
+  local rest=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --stamp) stamp=${2:-}; shift 2 ;;
+      *) rest+=("$1"); shift ;;
+    esac
+  done
+  printf '%s' "$stamp" | grep -Eq '^[0-9]{8,14}$' || die "--stamp <digits>" 2
+  admin_arg ${rest[@]+"${rest[@]}"}
+  road wash "$login" "$stamp"
+}
+
 case "${1:-}" in
   forced) forced ;;
+  wash) shift; run_wash "$@" ;;
   setup) shift; setup "$@" ;;
   probe) shift; probe "$@" ;;
   run) shift; run_delete "$@" ;;

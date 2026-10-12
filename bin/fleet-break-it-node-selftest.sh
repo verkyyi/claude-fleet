@@ -87,6 +87,10 @@
 #   admin-agent-stale     bin/fleet-node-update.py follow_admin_agents (#3034): an admin
 #                         login's own ccquota agent ran ~/.local/bin/ccquota, no release
 #                         moved it, so it never learned login_join and opened no login
+#   admin-agent-gui-converted bin/fleet-node-update.py agent_unit (#3508): an admin whose
+#                         agent was a LaunchAgent — credsep runs it as LaunchDaemon
+#                         com.ccquota.agent.<login> but keeps launchd-gui in meta.json — was
+#                         never followed, so a Mac's stayed on its old ccquota and opened no login
 #   runtime-gc-admin-tree bin/fleet-node-update.py keep_set / follow_installs / login_tree_rows
 #                         (#3248): the runtime pruned a release an admin's (not taken over)
 #                         linked ~/.claude/fleet still stood on — every script its agent ran gone
@@ -1008,6 +1012,19 @@ drill_admin_agent_stale() {
     || { WHY="the admin agent did not follow the release: $(printf '%s' "$out" | grep -E 'Error|FAIL' | head -3 | tr '\n' ' ')"; return 1; }
   SECS=$(since "$t0")
   WHAT="管理员登录的 agent：credsep meta.json 的 agent_argv 指向 current/bin/ccquota，换版、回退各重启一次（同一版不重复）；托管登录不动；手放回旧二进制 → 体检 admin-agent WARN，下一轮再指回、重启"
+}
+
+# admin-agent-gui-converted (#3508): a Mac's admin agent had started life as
+# a LaunchAgent; credsep made it LaunchDaemon com.ccquota.agent.<admin> but kept
+# `launchd-gui` in meta.json (for release), and the updater read only that kind.
+drill_admin_agent_gui_converted() {
+  CAP=60
+  local t0 out
+  t0=$(now)
+  out=$(python3 -W ignore::ResourceWarning "$BIN/fleet-node-update-selftest.py" --drill-admin-agent-gui 2>&1) \
+    || { WHY="a converted LaunchAgent admin is not followed: $(printf '%s' "$out" | grep -E 'Error|FAIL' | head -3 | tr '\n' ' ')"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="meta.json 说 launchd-gui、LaunchDaemons 里有 com.ccquota.agent.<login>：更新器把 agent_argv 指向 <root>/agent/ccquota、kickstart system/com.ccquota.agent.<login>，meta 的 agent 原样留给 release；没有那个 LaunchDaemon 则不动"
 }
 
 # codesign-identity-switch (#3433): ccquota was ad-hoc signed and run from
