@@ -887,7 +887,8 @@ class H_Accounts(Sandbox):
         self.assertIn("bob-broke", open(os.path.join(self.home("bob"), "probe.err")).read())
         # one account's failure is its own
         self.assertEqual(self.task("bob/probe")["rc"], 4)
-        self.assertEqual(self.task("alice/probe")["result"], "ok")
+        # a 0.2 s task reads `running` half the time: wait for a finished run
+        self.assertTrue(until(5, lambda: self.task("alice/probe").get("result") == "ok"), self.task("alice/probe"))
         self.assertTrue(until(5, lambda: self.child("alice/keep").get("pid")), "alice's KeepAlive unit never started")
         self.assertEqual(self.child("bob/keep").get("status"), "missing %s/.claude/fleet/bin/keep.sh" % self.home("bob"))
         st = self.run_sup("status").stdout
@@ -2615,6 +2616,75 @@ class S_EntryReach(Sandbox):
             f.write("CCQUOTA_TOKEN=t\n")
         self.assertEqual(self.run_sup("entry", "reach").returncode, 3)
         self.assertEqual(self.run_sup("entry", "reach", "--check").returncode, 2)
+
+
+class T_RootCore(H_Accounts):
+    """The same account half with the root core answering (#3555, EPIC #3500 C13):
+    every account job and the core-held machine tasks go through it — the daemon's
+    child only asks (`fleet-node-core.py call … --follow`), the core runs the job as
+    its login; release stops it through the core. Without a core (every other case
+    here) it is the old road, byte for byte."""
+    CORE = ("fleet-node-core.py", "fleet_node_core.py", "fleet_ed25519.py", "fleet-node-supervisor.py")
+
+    def setUp(self):
+        H_Accounts.setUp(self)
+        rt_bin = os.path.join(self.d, "rt", "bin")
+        os.makedirs(rt_bin, exist_ok=True)
+        for n in self.CORE:
+            shutil.copy(os.path.join(BIN, n), rt_bin)
+        self.env.update({"FLEET_NODE_CORE_SOCK": os.path.join(self.d, "core.sock"),
+                         "FLEET_NODE_CORE_LOG": os.path.join(self.d, "core.log"),
+                         "FLEET_NODE_CORE_PEER_UID": str(os.getuid())})
+        core = subprocess.Popen([sys.executable, os.path.join(rt_bin, "fleet-node-core.py"), "serve"], env=self.env,
+                                stdout=subprocess.DEVNULL, stderr=open(os.path.join(self.d, "core.err"), "a"))
+        self.procs.append(core)
+        self.assertTrue(until(10, lambda: os.path.exists(self.env["FLEET_NODE_CORE_SOCK"])), "no core")
+
+    def corelog(self):
+        try:
+            return open(os.path.join(self.d, "core.log")).read()
+        except IOError:
+            return ""
+
+    def test_account_half_through_the_core(self):
+        H_Accounts.test_runs_as_account_and_isolated(self)
+        log = self.corelog()
+        self.assertIn("op=run-as", log, "no account job went through the core")
+        # the only refusal allowed: a start racing the release (alice no longer managed)
+        for line in log.splitlines():
+            if "refused" in line:
+                self.assertIn("is not managed here", line, log)
+        self.assertTrue(until(10, lambda: "op=stop-as" in self.corelog()), "release did not stop the job through the core")
+        st = self.run_sup("status").stdout
+        self.assertIn("core        serving", st)
+
+    def test_machine_task_through_the_core(self):
+        rt_bin = os.path.join(self.d, "rt", "bin")
+        with open(os.path.join(rt_bin, "fleet-memguard.sh"), "w") as f:
+            f.write("#!/bin/bash\necho \"mg $*\" >> %s/mg.log\n" % self.d)
+        os.chmod(os.path.join(rt_bin, "fleet-memguard.sh"), 0o755)
+        fail = self.script("fail.sh", "exit 1\n")
+        self.table(tasks=[{"name": "memguard", "every": 0.2, "cmd": ["/bin/bash", fail],
+                           "core": {"op": "memguard", "args": {"level": "once"}}}])
+        self.start()
+        self.assertTrue(until(10, lambda: (self.task("memguard").get("runs") or 0) >= 2), self.task("memguard"))
+        self.assertTrue(until(5, lambda: self.task("memguard").get("rc") == 0), "the core's answer is the task's rc")
+        self.assertIn("mg --once", open(os.path.join(self.d, "mg.log")).read())
+        self.assertIn("op=memguard", self.corelog())
+        # FLEET_NODE_CORE=0: the old road — the table's own cmd (here: exit 1)
+        for p in self.procs[1:]:
+            p.send_signal(signal.SIGTERM)
+            p.wait(timeout=10)
+        self.start(FLEET_NODE_CORE="0")
+        runs = self.task("memguard").get("runs") or 0
+        self.assertTrue(until(10, lambda: (self.task("memguard").get("runs") or 0) >= runs + 2))
+        self.assertEqual(self.task("memguard").get("rc"), 1, "FLEET_NODE_CORE=0 still asked the core")
+
+
+# T_RootCore runs only its own two cases; the rest of H_Accounts is the no-core road
+for _n in dir(H_Accounts):
+    if _n.startswith("test_") and _n not in T_RootCore.__dict__:
+        setattr(T_RootCore, _n, None)
 
 
 if __name__ == "__main__":

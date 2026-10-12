@@ -227,6 +227,14 @@ import sys
 import tempfile
 import time
 
+# the root core's client (#3555); a copy of this file without its sibling (an older
+# tree, a selftest's sandbox bin) has no core — the old road, byte for byte
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+try:
+    import fleet_node_core as core  # noqa: E402
+except ImportError:
+    core = None
+
 # Existing launchd fixtures run on Linux CI too; this seam never applies on a node.
 MAC = sys.platform == "darwin" or (os.environ.get("FLEET_NODE_TEST") == "1"
                                      and "FLEET_NODE_LAUNCHCTL" in os.environ)
@@ -240,7 +248,9 @@ NODE_ENV_KEYS = ("FLEET_NODE_ROOT", "FLEET_NODE_STATE", "FLEET_NODE_RUNTIME", "F
                  "FLEET_CREDSEP_ROLE", "FLEET_NODE_RUN_SSHD", "FLEET_ENTRY", "FLEET_ENTRY_PORT",
                  # a container's entry= route (#3213): `entry reach` runs under the node
                  # program, and the hub must knock on the load balancer, not the NAT
-                 "CCQUOTA_FLEET_NODE_ROUTES")
+                 "CCQUOTA_FLEET_NODE_ROUTES",
+                 # the root core (#3555): where it listens, and FLEET_NODE_CORE=0 = the old road
+                 "FLEET_NODE_CORE", "FLEET_NODE_CORE_SOCK")
 
 
 def node_environment():
@@ -594,8 +604,11 @@ def default_table(paths):
             {"name": "diskguard", "every": 60,
              "cmd": ["/bin/bash", os.path.join(rt_bin, "fleet-diskguard.sh"), "--watch"],
              "env": {"FLEET_ORPHAN_CPU_PCT": "0"}},
+            # "core": what the root core does for it when one answers (#3555) —
+            # the daemon's own child then only asks; no core = cmd, as root
             {"name": "memguard", "every": 10,
-             "cmd": ["/bin/bash", os.path.join(rt_bin, "fleet-memguard.sh"), "--once"]},
+             "cmd": ["/bin/bash", os.path.join(rt_bin, "fleet-memguard.sh"), "--once"],
+             "core": {"op": "memguard", "args": {"level": "once"}}},
             {"name": "orphans", "every": 60,
              "cmd": ["/bin/bash", os.path.join(rt_bin, "fleet-diskguard.sh"), "--orphan-watch"],
              "env": {"FLEET_ORPHAN_ALL_USERS": "1"}},
@@ -609,7 +622,8 @@ def default_table(paths):
             # (a new machine is off once it is up) and hourly (a macOS update
             # turns indexing back on). <state>/spotlight.keep leaves it on.
             *([{"name": "spotlight", "every": 3600, "timeout": 300,
-                "cmd": ["/bin/bash", os.path.join(rt_bin, "fleet-spotlight.sh"), "off", "--tick"]}]
+                "cmd": ["/bin/bash", os.path.join(rt_bin, "fleet-spotlight.sh"), "off", "--tick"],
+                "core": {"op": "power", "args": {"profile": "spotlight-off"}}}]
               if MAC else []),
             # The one updater (C6, #2334): every part of the machine to the hub's
             # release, or none. A switch ends in a restart request (below). A new
@@ -961,7 +975,8 @@ def account_entry(unit, login, ident, brew):
              FLEET_CONF_DIR=os.path.join(home, ".config", "claude-fleet"),
              FLEET_NODE_ACCOUNT=login)
     e.update(node_environment())
-    ent = {"name": "%s/%s" % (login, unit["name"]), "account": login, "unit": unit["name"],
+    # job: the name the root core knows it by (run-as, #3555) — never an argv
+    ent = {"name": "%s/%s" % (login, unit["name"]), "account": login, "unit": unit["name"], "job": unit["name"],
            "uid": uid, "gid": gid, "home": home, "env": e, "script": None,
            "cmd": ["/bin/sh", "-c", ACCOUNT_SH, "fleet-account",
                    fill(unit.get("out") or "/dev/null", home, brew),
@@ -1128,7 +1143,7 @@ def service_entry(paths, svc, path, ident):
     e.update((k, v) for k, v in (svc.get("env") or {}).items() if k not in SVC_ENV_DROP)
     e.update(HOME=home, USER=login, LOGNAME=login, FLEET_SERVICE=name)
     lg = service_log(paths, login, name)
-    return {"name": "svc:%s/%s" % (login, name), "account": login, "service": name,
+    return {"name": "svc:%s/%s" % (login, name), "account": login, "service": name, "job": "svc:" + name,
             "uid": uid, "gid": gid, "home": home, "env": e, "keepalive": True,
             "creds": list(svc.get("creds") or []), "script": svc["exec"][0],
             "logdir": os.path.dirname(lg), "reload": path,
@@ -1528,9 +1543,33 @@ class Supervisor(object):
     def all_tasks(self):
         return list(self.table["tasks"]) + [e for e in self.account_entries() if not e.get("keepalive")]
 
+    def core_cmd(self, ent):
+        """The daemon's own child that ASKS the root core for <ent> (#3555): an
+        account job by its name (run-as, --follow: it exits with the job's rc and a
+        TERM to it stops the job), a machine task by its "core" request. None = the
+        old road — no core answering here, or nothing the core's table holds."""
+        if ent.get("account"):
+            if not ent.get("job"):
+                return None
+            op, args, follow = "run-as", {"login": ent["account"], "job": ent["job"]}, True
+        elif ent.get("core"):
+            op, args, follow = ent["core"]["op"], ent["core"]["args"], False
+        else:
+            return None
+        script = os.path.join(self.p.runtime, "bin", "fleet-node-core.py")
+        if core is None or not core.available() or not trusted(script):
+            return None
+        return (["/usr/bin/python3", "-I", script, "call", op, json.dumps(args, sort_keys=True)]
+                + (["--follow"] if follow else []))
+
     def spawn(self, ent, fh, extra_env=None):
         """Popen one child / task: a machine one as root in the daemon's own env, an
-        account one demoted to its login, its output opened by itself (ACCOUNT_SH)."""
+        account one demoted to its login, its output opened by itself (ACCOUNT_SH).
+        With the root core answering, what its table holds is asked of it instead."""
+        cc = self.core_cmd(ent)
+        if cc:
+            return subprocess.Popen(cc, stdin=subprocess.DEVNULL, stdout=fh, stderr=fh,
+                                    env=self.child_env(None), start_new_session=True, close_fds=True)
         if ent.get("account"):
             e = ent["env"]
             if ent.get("service"):
@@ -3597,6 +3636,24 @@ def lanes_now(paths, state):
     return lane_refusals(paths) or state.get("lanes") or {}
 
 
+def core_line(paths):
+    """The root core (#3555), when this machine has one: serving or not, and its
+    last alert (more refusals in a minute than it allows). None = no core here —
+    the status is what it was."""
+    if core is None:
+        return None
+    unit = os.path.join(paths.daemon_dir, "com.claude-fleet.node-core.plist" if MAC else "fleet-node-core.service")
+    alert = read_json(os.path.join(paths.state, "core", "alert.json"), None)
+    if not os.path.exists(unit) and not os.path.exists(core.sock_path()) and not isinstance(alert, dict):
+        return None
+    line = "core        %s · %s" % ("serving" if core.available() else "NOT ANSWERING — every caller takes the old road",
+                                    core.sock_path())
+    if isinstance(alert, dict):
+        line += " · alert %s: %s refusals in a minute (last %s)" % (iso(alert.get("at")), alert.get("count"),
+                                                                  alert.get("last"))
+    return line
+
+
 def status_lines(paths, table, state):
     code, word = health(paths, state)
     sv = state.get("supervisor") or {}
@@ -3605,6 +3662,8 @@ def status_lines(paths, table, state):
               sv.get("starts") or 0)]
     if wedged_line(state):
         out.append(wedged_line(state))
+    if core_line(paths):
+        out.append(core_line(paths))
     sup = Supervisor.__new__(Supervisor)
     sup.p = paths
     for c in table["children"]:

@@ -945,6 +945,22 @@ Do not install from memory: read the doc and work from it.
   (BREAK-IT `release-ccquota-stale`). The pinned
   Claude Code is the hub's to fetch (npm, sha512 integrity), never a person's upload. `docs/MANAGED-NODE.md` §7; BREAK-IT `node-update-half`,
   `credsep-stale-after-switch`.
+- **Root is ONE small core with a fixed table** (issue #3555, EPIC #3500 C13).
+  `bin/fleet-node-core.py` (`com.claude-fleet.node-core` / `fleet-node-core.service`,
+  root) opens no port and reads nothing from the hub: one socket,
+  `/var/run/fleet-node-core.sock` 0660, the peer's uid checked by the kernel
+  (only the node daemon's: `_fleetnode`, root until C14), one line `{op, args}`
+  with no extra key, and only `run-as` · `stop-as` · `exec-as` · `kill` · `memguard`
+  · `power` · `switch` · `rollback` (`bin/fleet_node_core.py` is the wire + client).
+  A job is a NAME of the account task table, never an argv; exec-as's argv[0] lives
+  under `<current>/bin/`; `switch` re-checks the release with the core's own key
+  (`bin/fleet_ed25519.py`, plain Python) and every digest. Off the table ⇒
+  `{"refused"}`, nothing runs, one line in `/var/log/fleet-node-core.log`, one alert
+  past 10 a minute. With it answering, the supervisor's account jobs and the
+  core-held tasks are asked of it (`fleet-node-core.py call … --follow`), the updater's
+  switch / rollback / `as_login` too; no core (or `FLEET_NODE_CORE=0`) ⇒ the old road,
+  byte for byte. A new privileged op is a BREAK-IT row first (`root-core-*`), then a
+  line in the table. docs/MANAGED-NODE.md §20.
 - **A Mac becomes a managed machine by ONE command, and the same command repairs
   it** (issue #2330, EPIC #2329 C1). `sudo fleet node install --join <码>`
   (`bin/fleet-node-install.sh`; a 托管 join code's line pipes the copy the hub serves
