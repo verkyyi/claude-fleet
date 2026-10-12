@@ -233,12 +233,12 @@ printf '%s' "$out" | grep -q 'api=200' && fail "the Job used the API server"
 step "spare-pod-leaks: bind, destroy, a fresh pod"
 [ "$(post "$(tk "$tmp/key" '{"op":"bind-user-pod","cluster":"kind","pod":"u-drill1","principal":"gh.7001","nonce":"a1111111111111111111111111111111","exp":'"$exp"'}')")" = 200 ] \
   || fail "the hub's bind: $(cat "$tmp/resp")"
-[ "$(K get deploy u-drill1 -o jsonpath='{.metadata.labels.fleet/principal}')" = gh.7001 ] || fail "the bind wrote no fleet/principal label"
+[ "$(K get deploy u-drill1 -o jsonpath='{.metadata.labels.fleet\/principal}')" = gh.7001 ] || fail "the bind wrote no fleet/principal label"
 K delete job job-111111111111 --wait=false >/dev/null 2>&1 || true
 [ "$(post "$(tk "$tmp/key" '{"op":"destroy-user-pod","cluster":"kind","pod":"u-drill1","nonce":"a2222222222222222222222222222222","exp":'"$exp"'}')")" = 200 ] \
   || fail "the hub's destroy: $(cat "$tmp/resp")"
 for _ in $(seq 1 120); do
-  left=$(for k in deploy/u-drill1 svc/u-drill1 pvc/u-drill1 secret/u-drill1-join; do K get "$k" -o name 2>/dev/null; done)
+  left=$(for k in deploy/u-drill1 svc/u-drill1 pvc/u-drill1 secret/u-drill1-join; do K get "$k" -o name 2>/dev/null || true; done)
   [ -z "$left" ] && break; sleep 1
 done
 [ -z "$left" ] || fail "the destroy left: $left"
