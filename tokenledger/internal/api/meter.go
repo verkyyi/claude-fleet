@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -49,10 +50,36 @@ const (
 	meterMaxAge    = "public, max-age=10"
 )
 
-// meterOrigins may read /meter.json from a browser.
-var meterOrigins = map[string]bool{
-	"https://www.24haowan.com": true,
-	"https://24haowan.com":     true,
+// MeterOriginsEnv names the web origins that may read /meter.json from a
+// browser (comma- or space-separated, e.g. "https://www.example.com"). Unset:
+// no origin — the counter is still served, only not to another site's script
+// (issue #3577: the brand site's origin is this deployment's setting).
+const MeterOriginsEnv = "CCQUOTA_METER_ORIGINS"
+
+// UnconfiguredNotes is one 「未配置 <键>」 line per deployment setting this hub
+// runs without (issue #3577): the code carries no deployment's own value, so
+// an unset key means the neutral default — said once at start.
+func UnconfiguredNotes(getenv func(string) string) []string {
+	var out []string
+	if strings.TrimSpace(getenv(MeterOriginsEnv)) == "" {
+		out = append(out, "未配置 "+MeterOriginsEnv+" — no other site's page may read /meter.json")
+	}
+	return out
+}
+
+// meterOrigin reports whether origin may read /meter.json from a browser.
+func meterOrigin(origin string) bool {
+	if origin == "" {
+		return false
+	}
+	for _, o := range strings.FieldsFunc(os.Getenv(MeterOriginsEnv), func(r rune) bool {
+		return r == ',' || r == ' ' || r == '\t' || r == '\n'
+	}) {
+		if strings.TrimRight(o, "/") == origin {
+			return true
+		}
+	}
+	return false
 }
 
 type meterSample struct {
@@ -159,7 +186,7 @@ func (s *Server) handleMeter(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	if o := r.Header.Get("Origin"); meterOrigins[o] {
+	if o := r.Header.Get("Origin"); meterOrigin(o) {
 		w.Header().Set("Access-Control-Allow-Origin", o)
 	}
 	w.Header().Add("Vary", "Origin")

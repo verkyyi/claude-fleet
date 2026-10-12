@@ -121,7 +121,7 @@ is in use is fleet-ui-lang.sh's (the person's choice > the 看台's FLEET_VIEW_L
 Chinese), never decided here.
 
 STALE (issue #3184, EPIC #3178 C6): 失联 is judged off ONE time, global/hub_ok —
-the file the producer's `m4!` reads. A lost row is grey end to end and tagged
+the file the producer's `mac-a!` reads. A lost row is grey end to end and tagged
 「? 失联 N 分钟」; hub_ok older than FLEET_HUB_SESSIONS_STALE (60 s) puts a red
 banner on top naming the machines (banner()); ↵ on a lost row says 进不去 instead
 of going (lost_msg()). An open popup reads its list again every
@@ -428,7 +428,7 @@ def hub_stale(now=None):
 def hub_fresh(fleet):
     """The other machines' rows are only as new as global/remote_<fleet>, which
     fleet-hub-sessions.sh's loop keeps — a loop the collector's tick (re)starts. A
-    collector that stopped (mini2's node supervisor wedged, 2026-10-10) froze that
+    collector that stopped (mac-a's node supervisor wedged, 2026-10-10) froze that
     file, and ⌘P went on listing sessions reaped since (issue #3079). So the list
     checks it on every open: hub_ok within FLEET_VIEW_HUB_FRESH (10 s) → nothing;
     older with no loop alive → one --refresh (at most FLEET_VIEW_HUB_REFRESH_SECS,
@@ -987,7 +987,7 @@ def fuzzy(token, text):
 def score_token(token, e):
     """The row's title (substring, a word start better) > its window name or issue
     number > the title's letters in order. Only those (issue #3327): a machine's,
-    a login's or a repo's name never hits — typing `m4` lights no row, the ⚡ row
+    a login's or a repo's name never hits — typing `mac-a` lights no row, the ⚡ row
     takes it."""
     name = e.get("text") or ""
     i = name.lower().find(token)

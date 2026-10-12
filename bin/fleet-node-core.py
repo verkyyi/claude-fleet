@@ -33,7 +33,7 @@ holds the wire half). The table, written here and nowhere else:
                           ITS signature re-checked with the core's own key
                           (<state>/release.pub) and every file's digest, staging
                           moved in as root's, then `.prev` = old, `current` = new
-  rollback {}             `current` ⇄ `.prev`, the target re-checked the same way
+  rollback {}             `current` ↔ `.prev`, the target re-checked the same way
 
 A login must be a managed one (<state>/accounts.json); never uid 0. Anything else —
 another op, an extra key, a wrong type, an argv outside bin/, an unsigned release —

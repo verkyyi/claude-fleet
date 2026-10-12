@@ -148,7 +148,7 @@ def cert_cmd():
 
 
 def aliases():
-    """FLEET_NODE_ALIASES `macmini=m5 mini2=m4`: hostname → label."""
+    """FLEET_NODE_ALIASES `mac-b.local=mac-b mac-a.local=mac-a`: hostname → label."""
     out = {}
     for w in env("FLEET_NODE_ALIASES").split():
         h, _, a = w.partition("=")
@@ -166,7 +166,7 @@ def home_label():
 
 
 def ssh_host(machine):
-    """FLEET_REMOTE_SSH `m4=m4-lan m5=macmini`, else the label itself (the route)."""
+    """FLEET_REMOTE_SSH `mac-a=mac-a-lan mac-b=mac-b.local`, else the label itself (the route)."""
     return ssh_host_set(machine) or machine
 
 

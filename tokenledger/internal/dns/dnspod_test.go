@@ -196,3 +196,17 @@ func TestNameOf(t *testing.T) {
 		}
 	}
 }
+
+// TestUserAgentContact: the contact DNSPod is told is the deployment's own
+// (CCQUOTA_DNS_CONTACT, issue #3577) — none written in the code.
+func TestUserAgentContact(t *testing.T) {
+	if got := userAgent(""); got != "claude-fleet-hub/1.0" {
+		t.Errorf("no contact: %q", got)
+	}
+	if got := userAgent("ops@example.com"); got != "claude-fleet-hub/1.0 (ops@example.com)" {
+		t.Errorf("contact: %q", got)
+	}
+	if got := userAgent("a)\r\nX: y"); got != "claude-fleet-hub/1.0 (aX: y)" {
+		t.Errorf("a contact cannot break the header: %q", got)
+	}
+}

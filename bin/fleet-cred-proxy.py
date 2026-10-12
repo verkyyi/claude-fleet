@@ -223,13 +223,34 @@ def red(k, v):
 # of that every upstream must be one of these (+ FLEET_CRED_ALLOW_HOSTS, which
 # also comes from root's config alone) — a login that talks the launcher into
 # another URL still cannot make the proxy send a real Authorization there.
-UPSTREAM_HOSTS = ("api.anthropic.com", "chatgpt.com", "api.openai.com", "auth.openai.com",
-                  "fleet-relay.24hw.cn", "ccquota.24haowan.com", "claudefleet.24haowan.com")
+# The fleet's own hub and relay are not written here (issue #3577): they are the
+# hosts of the hub / relay / central URLs root's config names (configured_hosts).
+UPSTREAM_HOSTS = ("api.anthropic.com", "chatgpt.com", "api.openai.com", "auth.openai.com")
 ALLOWED = None      # None = a login's own proxy (its own credentials): any https host
 
 
-def allowed_hosts(extra=""):
-    return set(UPSTREAM_HOSTS) | {h.strip().lower() for h in re.split(r"[\s,]+", extra or "") if h.strip()}
+def allowed_hosts(extra="", urls=()):
+    """The public upstreams + FLEET_CRED_ALLOW_HOSTS + the host of every URL in
+    `urls` (the hub / relay / central URLs root's config set — configured_hosts)."""
+    out = set(UPSTREAM_HOSTS) | {h.strip().lower() for h in re.split(r"[\s,]+", extra or "") if h.strip()}
+    for u in urls:
+        h = (urlsplit(u).hostname or "").lower() if u else ""
+        if h:
+            out.add(h)
+    return out
+
+
+def configured_urls(cfgs):
+    """The fleet's own hub and relay as root's config names them (issue #3577):
+    FLEET_HUB_URL, each config's relay / central URL, and the hub its node.env
+    (root's copy in separated mode) points at."""
+    urls = [env("FLEET_HUB_URL")]
+    for c in cfgs:
+        urls += [getattr(c, "relay_url", ""), getattr(c, "central_url", "")]
+        ne = getattr(c, "node_env", "")
+        if ne:
+            urls.append(node_env(ne).get("CCQUOTA_HUB_URL", ""))
+    return [u for u in urls if u]
 
 
 def loopback_ok(url, cluster=False):
@@ -2319,7 +2340,7 @@ def serve(a):
         everyone = [cfg]
     global ALLOWED
     if shared or cfg.store:
-        ALLOWED = allowed_hosts(env("FLEET_CRED_ALLOW_HOSTS"))
+        ALLOWED = allowed_hosts(env("FLEET_CRED_ALLOW_HOSTS"), configured_urls([cfg] + everyone))
     for c in [cfg] + everyone:
         for name in ("anthropic_url", "codex_url", "relay_url", "central_url"):
             v = getattr(c, name, "")

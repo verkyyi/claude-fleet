@@ -127,3 +127,10 @@ spec:
               value: "24haowan.com"
             - name: CCQUOTA_DNS_SUBDOMAIN
               value: "cf"
+            # DNSPod's User-Agent contact (claude-fleet#3577: no longer in code).
+            - name: CCQUOTA_DNS_CONTACT
+              value: "fleet@24haowan.com"  # oss-ok: 生产覆盖层的值（原写死在代码里），随 #3630 搬进私有部署仓库
+            # The brand site that reads /meter.json from the browser
+            # (claude-fleet#3577: no longer in code; unset = no site).
+            - name: CCQUOTA_METER_ORIGINS
+              value: "https://www.24haowan.com https://24haowan.com"  # oss-ok: 生产覆盖层的值（原写死在代码里），随 #3630 搬进私有部署仓库

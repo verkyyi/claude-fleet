@@ -232,7 +232,7 @@ def put(node, wid, src, name="", ctl="", client=None):
 
 def this_machine(label):
     """label names THIS machine: its hostname's first label, or the alias
-    FLEET_NODE_ALIASES gives it (`macmini=m5`) — fleet-client-actions' rule."""
+    FLEET_NODE_ALIASES gives it (`mac-b.local=mac-b`) — fleet-client-actions' rule."""
     import platform
     me = platform.node().split(".", 1)[0]
     if not label or label in ("-", "local"):

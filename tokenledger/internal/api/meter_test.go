@@ -91,8 +91,9 @@ func decodeMeter(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {
 }
 
 func TestMeter_PublicWithTheLiveJSONFields(t *testing.T) {
+	t.Setenv(MeterOriginsEnv, "https://www.example.com, https://example.com/")
 	s := meterServer(t)
-	rec := meterGet(t, s, "/meter.json", map[string]string{"Origin": "https://www.24haowan.com"})
+	rec := meterGet(t, s, "/meter.json", map[string]string{"Origin": "https://www.example.com"})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("/meter.json = %d %s, want 200 with no credential", rec.Code, rec.Body.String())
 	}
@@ -109,8 +110,8 @@ func TestMeter_PublicWithTheLiveJSONFields(t *testing.T) {
 	if m["windowSecs"].(float64) <= 0 {
 		t.Errorf("windowSecs = %v, want > 0", m["windowSecs"])
 	}
-	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "https://www.24haowan.com" {
-		t.Errorf("ACAO = %q, want the 24haowan.com origin echoed", got)
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "https://www.example.com" {
+		t.Errorf("ACAO = %q, want the configured origin echoed", got)
 	}
 	if cc := rec.Header().Get("Cache-Control"); cc != "public, max-age=10" {
 		t.Errorf("Cache-Control = %q", cc)
@@ -122,11 +123,28 @@ func TestMeter_PublicWithTheLiveJSONFields(t *testing.T) {
 		}
 	}
 
-	for _, o := range []string{"https://evil.example", "http://www.24haowan.com"} {
+	for _, o := range []string{"https://evil.example", "http://www.example.com"} {
 		rec := meterGet(t, s, "/meter.json", map[string]string{"Origin": o})
 		if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "" {
 			t.Errorf("Origin %s got ACAO %q, want none", o, got)
 		}
+	}
+	if !meterOrigin("https://example.com") {
+		t.Errorf("a configured origin with a trailing / is still that origin")
+	}
+}
+
+// TestMeter_NoOriginUnconfigured: with CCQUOTA_METER_ORIGINS unset no site's
+// script may read the counter (issue #3577) — the numbers are still served.
+func TestMeter_NoOriginUnconfigured(t *testing.T) {
+	t.Setenv(MeterOriginsEnv, "")
+	s := meterServer(t)
+	rec := meterGet(t, s, "/meter.json", map[string]string{"Origin": "https://www.example.com"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/meter.json = %d, want 200", rec.Code)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "" {
+		t.Errorf("ACAO = %q with no origin configured, want none", got)
 	}
 }
 
@@ -219,5 +237,22 @@ func TestMeter_EmptyHubServesNoZero(t *testing.T) {
 	s.Store = st
 	if rec := meterGet(t, s, "/meter.json", nil); rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("/meter.json on an empty hub = %d %s, want 503, never a zero", rec.Code, rec.Body.String())
+	}
+}
+
+// TestUnconfiguredNotes: an unset deployment key is said once, by name.
+func TestUnconfiguredNotes(t *testing.T) {
+	got := UnconfiguredNotes(func(string) string { return "" })
+	if len(got) != 1 || !strings.HasPrefix(got[0], "未配置 "+MeterOriginsEnv) {
+		t.Errorf("unset: %q", got)
+	}
+	set := UnconfiguredNotes(func(k string) string {
+		if k == MeterOriginsEnv {
+			return "https://www.example.com"
+		}
+		return ""
+	})
+	if len(set) != 0 {
+		t.Errorf("set: %q", set)
 	}
 }

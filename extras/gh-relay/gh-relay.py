@@ -5,7 +5,9 @@ The ACK cluster's egress (Shenzhen) cannot reach github.com's git transport;
 the relay can. This is an HTTP CONNECT proxy that opens a tunnel ONLY:
 
   - from a source address in GH_RELAY_SOURCES (the cluster egress /32 — the
-    Lightsail firewall says the same thing; this is the second wall),
+    Lightsail firewall says the same thing; this is the second wall). Unset:
+    no source at all — the relay refuses everyone until it is told whose
+    cluster it serves (claude-fleet#3577: the address is the deployment's),
   - to a host in GH_RELAY_HOSTS (GitHub's own names, exact match),
   - on port 443,
   - to an address that resolves public (never the VPC, metadata or loopback).
@@ -30,7 +32,7 @@ HOSTS = ('github.com api.github.com codeload.github.com uploads.github.com '
          'release-assets.githubusercontent.com github-releases.githubusercontent.com '
          'objects-origin.githubusercontent.com media.githubusercontent.com '
          'github-cloud.githubusercontent.com ghcr.io pkg-containers.githubusercontent.com')
-SOURCES = '47.106.171.142/32'
+SOURCES = ''        # GH_RELAY_SOURCES: the deployment's own egress, never a built-in
 MAX_HEAD = 8192
 MAX_TUNNELS = int(os.environ.get('GH_RELAY_MAX', '64'))
 IDLE = float(os.environ.get('GH_RELAY_IDLE', '300'))
@@ -180,6 +182,8 @@ async def serve(listen):
     hosts, sources = config()
     p = Proxy(hosts, sources)
     server = await asyncio.start_server(p.handle, host or '0.0.0.0', int(port), limit=MAX_HEAD)
+    if not sources:
+        log(event='unconfigured', key='GH_RELAY_SOURCES', note='未配置 GH_RELAY_SOURCES — every source is refused')
     log(event='listening', listen=listen, hosts=len(hosts), sources=[str(s) for s in sources])
     async with server:
         await server.serve_forever()
@@ -187,8 +191,10 @@ async def serve(listen):
 
 def selftest():
     hosts, sources = config({})
-    assert source_ok('47.106.171.142', sources) and source_ok('::ffff:47.106.171.142', sources)
-    assert not source_ok('47.106.171.143', sources) and not source_ok('nonsense', sources)
+    assert sources == [] and not source_ok('203.0.113.10', sources)    # unset: nobody
+    hosts, sources = config({'GH_RELAY_SOURCES': '203.0.113.10/32'})
+    assert source_ok('203.0.113.10', sources) and source_ok('::ffff:203.0.113.10', sources)
+    assert not source_ok('203.0.113.11', sources) and not source_ok('nonsense', sources)
     assert parse_head(b'CONNECT github.com:443 HTTP/1.1\r\nHost: github.com:443\r\n\r\n') == ('CONNECT', 'github.com', 443)
     assert parse_head(b'CONNECT GitHub.com.:443 HTTP/1.1\r\n\r\n')[1] == 'github.com'
     assert parse_head(b'GET http://github.com/ HTTP/1.1\r\n\r\n')[0] == 'GET'

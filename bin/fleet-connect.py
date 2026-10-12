@@ -20,7 +20,7 @@ with --enter) is the whole way in, in one go:
   2. the machine — POST /v1/fleet/home: the hub picks the machine this device
      used last if it is online, else an online one with your sessions, else
      the least loaded one you have an account on; none online, it says so
-     and this exits 1. `fleet m4` names the machine and skips the ask;
+     and this exits 1. `fleet mac-a` names the machine and skips the ask;
   3. the route — as `fleet connect` below, from the route list the home
      answer already carries;
   4. ssh.
@@ -125,7 +125,7 @@ tailnet is down, the gateway port is closed), the hub is still reachable, and
 every machine already holds a link open to it. It opens a WebSocket to the
 hub's relay endpoint and copies bytes between it and stdin/stdout:
 
-    ssh -o ProxyCommand='fleet connect --proxy m4' m4
+    ssh -o ProxyCommand='fleet connect --proxy mac-a' mac-a
 
 SSH runs end to end inside the stream: the hub only moves ciphertext, and the
 machine's sshd still decides who logs in.
@@ -309,7 +309,7 @@ def machine_conf_hub():
 
 def local_machine():
     """THIS computer as a route-list entry (claude-fleet#1712): its hostname's
-    first label, named through FLEET_NODE_ALIASES (`macmini=m5`) — the label
+    first label, named through FLEET_NODE_ALIASES (`mac-b.local=mac-b`) — the label
     fleet-shell.sh's this_machine() recognizes, so the client nests the attach
     right here instead of ssh-ing anywhere."""
     host = (socket.gethostname() or "").split(".", 1)[0]

@@ -1529,7 +1529,7 @@ new	n	新任务 — 在输入行写标题（多仓库 Tab 换仓库），↵ 建
 newto	1-9	新建到 <机器>… — 入口在线的别的机器各一项：建 issue，worker 开在那台机器上
 restore	o	已落地 — 任务栏就地换成已落地列表，点一行恢复（再选一次回到运行中）
 repo	g	添加仓库到这个 fleet — 在输入行写 owner/name；~/projects/<name>，缺失时 clone（hub ⌃z）
-open	e	进入 — 打开代理窗口（只有另一台机器上的行有；菜单标题写着「· m4」）
+open	e	进入 — 打开代理窗口（只有另一台机器上的行有；菜单标题写着「· mac-a」）
 message	m	发消息… — 只有别机行有：在输入行写，经入口送到那台机器的 issue 桥，作为它的下一轮
 stop	q	停 — 只有别机行有：经入口让那台机器上的会话 /exit（可恢复）
 resume	c	继续 — 只有别机行有：经入口恢复刚停掉的会话（活着的会被拒绝并告诉你）
@@ -1549,7 +1549,7 @@ new	n	new task — its title on the input line (Tab picks the repo in a 2+ repo 
 newto	1-9	new task on <machine>… — one per other machine the hub says is online: file the issue, open the worker there
 restore	o	landed — the sidebar shows the landed list in place; tap a row to restore it (again: back to the running list)
 repo	g	add a repo to this fleet — owner/name on the input line; ~/projects/<name>, cloned if missing (the hub ⌃z)
-open	e	enter — open the proxy window (a row on another machine only; the menu title says · m4)
+open	e	enter — open the proxy window (a row on another machine only; the menu title says · mac-a)
 message	m	message… — a row on another machine only: typed on the input line, through the hub to the issue bridge on that machine, as its next turn
 stop	q	stop — a row on another machine only: /exit there through the hub (resumable)
 resume	c	resume — a row on another machine only: reopen a just-stopped one through the hub (a live one is refused, and says so)

@@ -42,14 +42,21 @@ grep -q '^list_row_named()\|^qr_state()' "$BIN/fleet-onboard-drill.sh" && bad 'B
 out=$(bash "$BIN/newcomer-cn.sh" --help 2>&1); rc=$?
 is 'C1 --help exits 0' "$rc" 0
 case "$out" in *'≤ 60 s'*'fleet connect'*) ok 'C2 --help names the steps and budgets' ;; *) bad 'C2 --help names the steps and budgets' ;; esac
-out=$(env -u CCQUOTA_VIEWER_TOKEN bash "$BIN/newcomer-cn.sh" --login nobody 2>&1); rc=$?
+HH=(--hub https://hub.example.com --host mac-a)
+out=$(env -u CCQUOTA_VIEWER_TOKEN bash "$BIN/newcomer-cn.sh" "${HH[@]}" --login nobody 2>&1); rc=$?
 is 'C3 a login that is no drill name exits 2' "$rc" 2
-out=$(env -u CCQUOTA_VIEWER_TOKEN bash "$BIN/newcomer-cn.sh" --login drillcnself 2>&1); rc=$?
+out=$(env -u CCQUOTA_VIEWER_TOKEN bash "$BIN/newcomer-cn.sh" "${HH[@]}" --login drillcnself 2>&1); rc=$?
 is 'C4 no admin token (or not Linux / no root) exits 2' "$rc" 2
 case "$out" in *'Linux only'*|*'CCQUOTA_VIEWER_TOKEN'*|*'needs root'*|*'not found'*) ok 'C5 the preflight says why' ;; *) bad "C5 the preflight says why ($out)" ;; esac
 id drillcnself >/dev/null 2>&1 && bad 'C6 the preflight made a login' || ok 'C6 nothing changed (no login)'
-out=$(bash "$BIN/newcomer-cn.sh" --proxy ftp://x 2>&1); rc=$?
+out=$(bash "$BIN/newcomer-cn.sh" "${HH[@]}" --proxy ftp://x 2>&1); rc=$?
 is 'C7 a proxy that is no proxy URL exits 2' "$rc" 2
+# no built-in hub or machine (issue #3577): unset ⇒ exit 2 naming the key
+out=$(env -u FLEET_HUB_URL -u NCCN_HOST bash "$BIN/newcomer-cn.sh" --login drillcnself 2>&1); rc=$?
+is 'C8 no hub given exits 2' "$rc" 2
+case "$out" in *'未配置 FLEET_HUB_URL'*) ok 'C9 it names the key' ;; *) bad "C9 it names the key ($out)" ;; esac
+out=$(env -u NCCN_HOST bash "$BIN/newcomer-cn.sh" --hub https://hub.example.com --login drillcnself 2>&1); rc=$?
+case "$rc:$out" in 2:*'未配置 NCCN_HOST'*) ok 'C10 no machine given exits 2 naming NCCN_HOST' ;; *) bad "C10 ($rc: $out)" ;; esac
 
 # --- D ---------------------------------------------------------------------------
 # staged under extras/workflows/ until a push with `workflow` scope moves it in
@@ -60,6 +67,7 @@ if [ -f "$WF" ]; then
   grep -q "vars.NEWCOMER_CN_RUNNER != ''" "$WF" && ok 'D2 off until a runner is named' || bad 'D2 off until a runner is named'
   grep -q 'secrets.FLEET_HUB_ADMIN_TOKEN' "$WF" && ok 'D3 the admin token comes from a Secret' || bad 'D3 the admin token comes from a Secret'
   grep -Eq "^ *workflows: \['stable publish'\]" "$WF" && ok 'D4 it walks again after a stable publish' || bad 'D4 it walks again after a stable publish'
+  grep -q 'vars.FLEET_HUB_URL' "$WF" && grep -q 'vars.NCCN_HOST' "$WF" && ok 'D5 the hub and machine are repo variables' || bad 'D5 the hub and machine are repo variables'
 else
   bad 'D0 no newcomer-cn.yml (.github/workflows or extras/workflows)'
 fi

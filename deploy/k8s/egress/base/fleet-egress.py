@@ -36,7 +36,7 @@ ALLOW = ('.anthropic.com .claude.ai .claude.com .openai.com .chatgpt.com '
          '.github.com .githubusercontent.com ghcr.io '
          'registry.npmjs.org .npmmirror.com pypi.org files.pythonhosted.org '
          'proxy.golang.org sum.golang.org goproxy.cn sum.golang.google.cn')
-SOURCES = '172.20.0.0/16'
+SOURCES = ''        # FLEET_EGRESS_SOURCES: the cluster's own pod range (an overlay's), never a built-in
 MAX_HEAD = 8192
 MAX_TUNNELS = int(os.environ.get('FLEET_EGRESS_MAX', '256'))
 IDLE = float(os.environ.get('FLEET_EGRESS_IDLE', '600'))
@@ -234,6 +234,8 @@ async def serve(listen):
     allow, sources, ports, via = config()
     p = Proxy(allow, sources, ports, via)
     server = await asyncio.start_server(p.handle, host or '0.0.0.0', int(port), limit=MAX_HEAD)
+    if not sources:
+        log(event='unconfigured', key='FLEET_EGRESS_SOURCES', note='未配置 FLEET_EGRESS_SOURCES — every source is refused')
     log(event='listening', listen=listen, allow=len(allow), ports=sorted(ports),
         sources=[str(s) for s in sources], via=['%s=%s:%d' % (pat, h, n) for pat, (h, n) in via])
     async with server:
@@ -241,8 +243,10 @@ async def serve(listen):
 
 
 def selftest():
-    allow, sources, ports, via = config({'FLEET_EGRESS_VIA': '.github.com=198.51.100.7:3128'})
-    assert source_ok('172.20.3.4', sources) and not source_ok('10.0.1.240', sources)
+    assert config({})[1] == []          # no range given: nobody may ask
+    allow, sources, ports, via = config({'FLEET_EGRESS_VIA': '.github.com=198.51.100.7:3128',
+                                         'FLEET_EGRESS_SOURCES': '10.244.0.0/16'})
+    assert source_ok('10.244.3.4', sources) and not source_ok('10.0.1.240', sources)
     assert not source_ok('nonsense', sources)
     assert parse_head(b'CONNECT GitHub.com.:443 HTTP/1.1\r\n\r\n') == ('CONNECT', 'github.com', 443)
     for bad in (b'CONNECT github.com HTTP/1.1\r\n\r\n', b'CONNECT [::1]:443 HTTP/1.1\r\n\r\n', b'junk\r\n\r\n'):

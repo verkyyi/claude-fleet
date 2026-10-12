@@ -1198,7 +1198,7 @@ if [ -d "$acct_dir" ] && [ -n "$(find "$acct_dir" -maxdepth 1 -type f ! -name '.
             { u=($6=="-") ? "?" : $6"%"; s=$1" "$2" "u; if ($3=="capped") s=s" CAPPED"; o=o (o?" · ":"") s }
             END { print o }') — spawns prefer an account with headroom; capped ones launch on the fallback"
         else
-          info modelcap "$qtag reports no per-model windows (\`models\` in \`budget --json\`, verkyyi/tokenledger#155) — a model cap (Fable) is still found only by its banner, after a session hits it"
+          info modelcap "$qtag reports no per-model windows (\`models\` in \`budget --json\`, tokenledger#155) — a model cap (Fable) is still found only by its banner, after a session hits it"
         fi
       fi
     else

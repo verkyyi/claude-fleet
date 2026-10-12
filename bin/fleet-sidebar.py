@@ -1031,7 +1031,7 @@ def new_hint(ask):
 
 
 def ask_new(session, env, repo="", node=""):
-    """⌃n, a selected heading's second tap, the menu's 新任务 / 新建到 m4…: an
+    """⌃n, a selected heading's second tap, the menu's 新任务 / 新建到 mac-a…: an
     issue title on the input line (it was the hub's ⌃n popup). `repo` is the
     anchor row's (selection_repo); with none — or the `no repo` heading, where an
     issue cannot go — a 2+ repo fleet offers its repos on Tab, starting from the
@@ -1724,7 +1724,7 @@ def row_need(row):
 
 
 def alias_of(name):
-    """The short name FLEET_NODE_ALIASES gives a machine (`macmini=m5`, any case,
+    """The short name FLEET_NODE_ALIASES gives a machine (`mac-b.local=mac-b`, any case,
     domain dropped), else the name itself — fleet-client-badge.sh's alias_of."""
     name = (name or "").split(".", 1)[0]
     for pair in os.environ.get("FLEET_NODE_ALIASES", "").split():
@@ -1747,8 +1747,8 @@ HERE = here_names()
 
 def machine_tag(node):
     """The machine a session runs on, as the bar names it (issue #1780, moved off
-    the row by #2305): `@m4`; `@本机` when that is the computer this list runs
-    on; `@m4!` once that machine is lost; `@m5~` when the row came over the
+    the row by #2305): `@mac-a`; `@本机` when that is the computer this list runs
+    on; `@mac-a!` once that machine is lost; `@mac-b~` when the row came over the
     shell's own connection while the hub is silent (#1488). An empty field 9 —
     this machine's own row on a node's list — has none."""
     base = node.rstrip("!~")
@@ -1949,7 +1949,7 @@ def spawn_scratch(name, env, repo="", selection="", node=""):
     The sidebar's own ⌃s (issue #1532) is the hub's ⌃s: no name, the
     highlighted row as --selection. Not --bg: this view already polls the spawn
     without blocking, and the foreground run keeps the `…` up until the window
-    exists and hands back the whole refusal. `node` (a new task's «新建到 m4…»,
+    exists and hands back the whole refusal. `node` (a new task's «新建到 mac-a…»,
     ⌃s on its title line) opens it on that machine (#1541)."""
     log = tempfile.TemporaryFile("w+")
     args = (["--selection", selection] if selection else []) + (["--node=" + node] if node else [])
@@ -2099,7 +2099,7 @@ def read_orphan(key):
 
 
 def node_host(label):
-    """A row's machine label (`m4`) → the hostname the hub resolves (hub_nodes'
+    """A row's machine label (`mac-a`) → the hostname the hub resolves (hub_nodes'
     13th field, as where_menu reads it); the label itself when it is not there."""
     try:
         with open(os.path.join(status_dir(), "hub_nodes"), encoding="utf-8") as f:
@@ -2609,8 +2609,8 @@ ROW_FIELDS = 19
 def row_fields(line):
     """One producer line as its ROW_FIELDS fields: a heading's line stops at its
     tree field (5), a session row's carries the badge / depth / detail and, last,
-    its machine — empty for a local row, `m4` for a row on another machine, `m4!`
-    when that machine is lost (issue #1475), `m5~` when the row came over the
+    its machine — empty for a local row, `mac-a` for a row on another machine, `mac-a!`
+    when that machine is lost (issue #1475), `mac-b~` when the row came over the
     shell's own connection to it while the hub is silent (issue #1488). The view
     ends the row in it as an `@` mark (`machine_tag`, issue #1780); `!` dims the
     row too, and the menu titles it."""
@@ -2949,7 +2949,7 @@ def ui(screen, session, worker, lock):
         if go and placing is None:
             placing = plan
             jobs.append(place_job(plan, rows, env))
-            say(session, plan.get("note", ""))   # 「正在 m5 上开…」 (issue #1778)
+            say(session, plan.get("note", ""))   # 「正在 mac-b 上开…」 (issue #1778)
         elif go:
             say(session, placing.get("note", ""))
             if plan is not None and plan.get("verb") == "compose":
@@ -3239,7 +3239,7 @@ def ui(screen, session, worker, lock):
             # soon as the list carries it (issue #1778) — read every second meanwhile.
             if not placing.get("said"):
                 placing["said"] = True
-                say(session, placing.get("note", ""))   # 「正在 m5 上开…」
+                say(session, placing.get("note", ""))   # 「正在 mac-b 上开…」
             hit = place_found(rows, placing) if loaded else ""
             if hit:
                 selected, follow_at = hit, None

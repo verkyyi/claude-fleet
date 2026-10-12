@@ -68,7 +68,7 @@ type CredsProvider func(ctx context.Context) (AliyunCreds, error)
 
 // AliyunKMS is the KMS RPC client.
 type AliyunKMS struct {
-	Endpoint string // https://kms.cn-shenzhen.aliyuncs.com
+	Endpoint string // KMSRegionEndpoint(region), or a VPC endpoint
 	Creds    CredsProvider
 	HTTP     *http.Client
 	Now      func() time.Time
@@ -218,6 +218,11 @@ func postForm(ctx context.Context, hc *http.Client, endpoint string, q map[strin
 	}
 	return json.Unmarshal(body, out)
 }
+
+// KMSRegionEndpoint is Alibaba Cloud KMS's public endpoint in region (a region
+// id). The provider's own address, not a deployment's: which region is the
+// deployment's CCQUOTA_FLEET_CRED_KMS_REGION.
+func KMSRegionEndpoint(region string) string { return "https://kms." + region + ".aliyuncs.com" }
 
 // --- where the hub's Aliyun identity comes from ----------------------------------
 

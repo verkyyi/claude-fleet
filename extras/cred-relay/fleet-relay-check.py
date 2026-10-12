@@ -33,7 +33,7 @@ forwards only X-Fleet-Relay + X-Forwarded-Uri/-Method to the hub). The log has
 the event, the prefix, the hub's failure and an age — nothing that names a pass.
 
 Environment (none is a secret):
-  FLEET_HUB_URL              the hub, e.g. https://ccquota.24haowan.com (required)
+  FLEET_HUB_URL              the hub, e.g. https://hub.example.com (required)
   FLEET_RELAY_CHECK_LISTEN   127.0.0.1:2091 (loopback only; anything else refused)
   RELAY_CHECK_CACHE_S        30    RELAY_CHECK_GRACE_S   600    RELAY_CHECK_TIMEOUT_S  5
   FLEET_RELAY_CHECK_LOG      a file to append to (default stderr → journald)

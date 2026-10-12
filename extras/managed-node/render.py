@@ -187,6 +187,16 @@ def _devnet_env(github_proxy, git_mirrors, cn_mirrors, cred_central, egress_prox
     return env
 
 
+def _relay_env(relay):
+    """The subscription relay this deployment runs (docs/CRED-RELAY.md): the node
+    carries none of its own (claude-fleet#3577); empty = none."""
+    if not relay:
+        return []
+    if not re.fullmatch(r'https://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._/-]*)?', relay):
+        raise ValueError('--relay is https://HOST[/PATH], not %r' % relay)
+    return [{'name': 'FLEET_CRED_RELAY_URL', 'value': relay}]
+
+
 def _probes():
     return {
         'startupProbe': {'exec': {'command': ['test', '-f', '/run/fleet-node-ready']},
@@ -213,7 +223,7 @@ VOLUMES = [('node', '/var/db/fleet-node'), ('credentials', '/var/db/fleet-cred')
 def resources(image, hub, storage_class, namespace='fleet-workers', size='100Gi',
               entry_host='', entry_spec='slb.s1.small', egress=None, pull_secrets=('acr-pull',),
               github_proxy='', git_mirrors=(), cn_mirrors=False, cred_central='', egress_proxy='',
-              egress_closed=False, cluster_caches=False):
+              egress_closed=False, cluster_caches=False, relay=''):
     dns, blocked, metadata, allow = _checked(image, hub, storage_class, pull_secrets, egress, github_proxy,
                                              git_mirrors, cred_central, egress_proxy, egress_closed,
                                              cn_mirrors, cluster_caches, namespace)
@@ -236,6 +246,7 @@ def resources(image, hub, storage_class, namespace='fleet-workers', size='100Gi'
            {'name': 'FLEET_ENTRY_PORT', 'value': str(ENTRY_PORT)}]
     env += _devnet_env(github_proxy, git_mirrors, cn_mirrors, cred_central, egress_proxy, cluster_caches,
                        namespace)
+    env += _relay_env(relay)
     if entry_host:
         # the door's address: on ACK the egress the hub sees is the NAT's, so the
         # entry reach report must name the load balancer (fleet_entry_reach.go)
@@ -330,7 +341,7 @@ def _user_pod_container_resources(limits):
 
 def user_pod_resources(image, hub, storage_class, name, namespace='fleet-workers', limits=None, egress=None,
                        pull_secrets=('acr-pull',), github_proxy='', git_mirrors=(), cn_mirrors=False,
-                       cred_central='', egress_proxy='', egress_closed=False, cluster_caches=False):
+                       cred_central='', egress_proxy='', egress_closed=False, cluster_caches=False, relay=''):
     """One person's pod: a Deployment (one replica, Recreate), its ClusterIP
     Service (22, reached only through the cluster's door — C4) and its home disk
     (ReadWriteOncePod). Inside: one login (the hub's account op opens it — a
@@ -358,6 +369,7 @@ def user_pod_resources(image, hub, storage_class, name, namespace='fleet-workers
            {'name': 'FLEET_USER_POD', 'value': '1'}]
     env += _devnet_env(github_proxy, git_mirrors, cn_mirrors, cred_central, egress_proxy, cluster_caches,
                        namespace)
+    env += _relay_env(relay)
     container = dict({
         'name': 'fleet', 'image': image, 'env': env,
         'resources': _user_pod_container_resources(limits),
@@ -401,6 +413,8 @@ if __name__ == '__main__':
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--image', default='')
     p.add_argument('--hub', default='')
+    p.add_argument('--relay', default='', metavar='URL',
+                   help="the deployment's subscription relay (https://relay.example.com); empty = none")
     p.add_argument('--storage-class', default='')
     p.add_argument('--namespace', default='fleet-workers')
     p.add_argument('--entry-host', default='',
@@ -466,14 +480,14 @@ if __name__ == '__main__':
                                        github_proxy=args.github_proxy, git_mirrors=args.git_mirror,
                                        cn_mirrors=args.cn_mirrors, cred_central=args.cred_central,
                                        egress_proxy=args.egress_proxy, egress_closed=args.egress_closed,
-                                       cluster_caches=args.cluster_caches)
+                                       cluster_caches=args.cluster_caches, relay=args.relay)
         else:
             items = resources(args.image, args.hub, args.storage_class, args.namespace,
                               entry_host=args.entry_host, entry_spec=args.entry_lb_spec, egress=egress,
                               pull_secrets=args.pull_secrets or ['acr-pull'], github_proxy=args.github_proxy,
                               git_mirrors=args.git_mirror, cn_mirrors=args.cn_mirrors,
                               cred_central=args.cred_central, egress_proxy=args.egress_proxy,
-                              egress_closed=args.egress_closed, cluster_caches=args.cluster_caches)
+                              egress_closed=args.egress_closed, cluster_caches=args.cluster_caches, relay=args.relay)
     except ValueError as e:
         p.error(str(e))
     print(json.dumps({'apiVersion': 'v1', 'kind': 'List', 'items': items}, indent=2))

@@ -289,7 +289,7 @@ move_main() {
       else
         [ "${#WIDS[@]}" -gt 0 ] || die 'no window given'
         [ -n "$TO" ] || die '--via hub needs --to <machine>'
-        case "$TO" in *@*) die '--via hub takes a machine name (m4), not <user>@<host>' ;; esac
+        case "$TO" in *@*) die '--via hub takes a machine name (mac-a), not <user>@<host>' ;; esac
       fi
       ;;
     *) die "--via must be ssh or hub, not '$VIA'" ;;

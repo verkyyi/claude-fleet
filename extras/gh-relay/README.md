@@ -8,7 +8,7 @@ proxy on `:3128` that tunnels **only**:
 
 | Wall | What |
 |---|---|
-| Lightsail firewall | 3128 open to the cluster egress `47.106.171.142/32` only |
+| Lightsail firewall | 3128 open to the cluster egress `<CLUSTER_EGRESS_IP>/32` only |
 | source check (in-process) | `GH_RELAY_SOURCES` — the same /32; anyone else gets the connection closed, no answer |
 | method | `CONNECT` only — 403 `method_not_allowed` for plain HTTP proxying |
 | port | 443 only — 403 `port_not_allowed` |
@@ -36,7 +36,7 @@ ssh -i ~/.ssh/ai-relay-sg-rsa admin@47.131.114.67 '
   systemctl is-active gh-relay && sudo ss -ltnp | grep 3128'
 # the firewall: 3128 from the cluster egress only — keep the existing rules, add one
 aws lightsail open-instance-public-ports --region ap-southeast-1 --instance-name ai-relay-1g \
-  --port-info fromPort=3128,toPort=3128,protocol=tcp,cidrs=47.106.171.142/32
+  --port-info fromPort=3128,toPort=3128,protocol=tcp,cidrs=<CLUSTER_EGRESS_IP>/32
 aws lightsail get-instance-port-states --region ap-southeast-1 --instance-name ai-relay-1g
 ```
 

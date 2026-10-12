@@ -323,6 +323,48 @@ class LinuxNode(unittest.TestCase):
         self.assertLess(fg.index('boot()'), fg.index('lib_owner_heal()'))
         self.assertLess(fg.index('route_heal(a)'), fg.index('fleet-node-install.sh'))
 
+    def test_relay_is_configured_never_built_in(self):
+        """issue #3577: the code names no relay of its own. No --relay /
+        FLEET_CRED_RELAY_URL ⇒ no relay route; conf/compat-ours.conf's old value
+        (compat-1v) only for a hub that file names — never for anyone else's."""
+        m = module('fleet-node-linux')
+        compat = module('fleet_compat')
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            cf = d / 'compat.conf'
+            cf.write_text('# x\nFLEET_COMPAT_HUB_HOSTS=hub.example.com other.example.com\n'
+                          'FLEET_CRED_RELAY_URL=https://relay.example.com\n')
+            self.assertEqual(compat.default('FLEET_CRED_RELAY_URL', 'https://HUB.example.com/', cf),
+                             'https://relay.example.com')
+            self.assertEqual(compat.default('FLEET_CRED_RELAY_URL', 'https://hub.example.org', cf), '')
+            self.assertEqual(compat.default('FLEET_CRED_RELAY_URL', '', cf), '')
+            self.assertEqual(compat.default('FLEET_CRED_RELAY_URL', 'https://hub.example.com', d / 'none'), '')
+            c = Mock(LIB=str(d / 'lib'))
+            c.proxy_mod.return_value = module('fleet-cred-proxy')
+
+            def write(path, data, uid=0, gid=0):
+                Path(path).write_text(data)
+
+            fake = Mock(default=lambda k, hub: compat.default(k, hub, cf))
+            with patch.object(m, 'load', side_effect=lambda n: {'fleet_compat': fake}[n]), \
+                    patch.object(m, 'private_write', side_effect=write), patch.object(m, 'central_url', return_value=''):
+                m.route_settings(c, 'alice', 'https://hub.example.org', '')
+                conf = m.env_read(d / 'lib' / 'alice.conf')
+                self.assertNotIn('FLEET_CRED_RELAY_URL', conf)             # another hub: no relay at all
+                self.assertEqual(conf['FLEET_CRED_ALLOW_HOSTS'], 'hub.example.org')
+                m.route_settings(c, 'bob', 'https://hub.example.com', '')
+                conf = m.env_read(d / 'lib' / 'bob.conf')
+                self.assertEqual(conf['FLEET_CRED_RELAY_URL'], 'https://relay.example.com')  # compat-1v
+                m.route_settings(c, 'carol', 'https://hub.example.com', 'https://relay.example.net')
+                self.assertEqual(m.env_read(d / 'lib' / 'carol.conf')['FLEET_CRED_RELAY_URL'],
+                                 'https://relay.example.net')                 # given wins
+        # the separated proxy's allow-list: the public upstreams + the hosts root's
+        # config names — no hub or relay of ours written in the code
+        px = module('fleet-cred-proxy')
+        self.assertEqual(px.allowed_hosts(''), set(px.UPSTREAM_HOSTS))
+        self.assertIn('relay.example.com', px.allowed_hosts('', ['https://relay.example.com/x', '']))
+        self.assertFalse(any('example' in h for h in px.UPSTREAM_HOSTS))
+
     def test_image_usr_local_is_roots(self):
         """BREAK-IT linux-image-local-owner (#3421): tar as root keeps the
         archive's owner — node's uid 1001 on /usr/local/lib made the shared
