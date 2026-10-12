@@ -101,11 +101,11 @@ PY
 }
 
 link() {
-  local how="${1:-open}" path p t name
+  local how="${1:-open}" lpath p t name
   start >/dev/null || exit 1
-  p=$(port); path=$(mint_link) || die "could not mint a login link"
+  p=$(port); lpath=$(mint_link) || die "could not mint a login link"
   case "$how" in
-    --print) echo "http://127.0.0.1:$p$path" ;;
+    --print) echo "http://127.0.0.1:$p$lpath" ;;
     --tailnet)
       t=$(ts_bin); name=$(ts_name)
       [ -n "$t" ] && [ -n "$name" ] || die "no tailnet here (tailscale not found / not up) — use: fleet-webchat.sh link"
@@ -113,10 +113,10 @@ link() {
       elif "$t" serve --bg --https="$p" "http://127.0.0.1:$p" >/dev/null 2>&1; then echo "$p" >"$STATE/tailnet"
       else die "this login is not tailscale's operator — an admin runs once: sudo tailscale serve --bg --https=$p http://127.0.0.1:$p   (or: fleet-webchat.sh link, over ssh)"
       fi
-      echo "https://$name:$p$path   (一次性，10 分钟内有效；只在 tailnet 里能打开)" ;;
+      echo "https://$name:$p$lpath   (一次性，10 分钟内有效；只在 tailnet 里能打开)" ;;
     open|'')
-      echo "http://127.0.0.1:$p$path   (一次性，10 分钟内有效)"
-      bash "$BIN/fleet-open.sh" ":$p$path" 2>/dev/null || true ;;
+      echo "http://127.0.0.1:$p$lpath   (一次性，10 分钟内有效)"
+      bash "$BIN/fleet-open.sh" ":$p$lpath" 2>/dev/null || true ;;
     *) die "usage: fleet-webchat.sh link [--tailnet|--print]" 2 ;;
   esac
 }

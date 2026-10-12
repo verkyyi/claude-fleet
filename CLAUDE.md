@@ -491,6 +491,15 @@ Do not install from memory: read the doc and work from it.
   callback server is gone or at `FLEET_OPEN_CALLBACK_SECS` (`bin/fleet_open_fwd.py`,
   the one bookkeeping). Off = no BROWSER, no cport, byte for byte.
   `fleet-browser-selftest.sh`.
+- **A person talks to ONE conversation from a browser: `bin/fleet-webchat.sh`**
+  (issue #3567, docs/WEB-CHAT.md). `extras/web-chat/server.mjs` runs the Claude
+  Agent SDK as the login, on 127.0.0.1 only (no option widens it), behind a
+  one-time link minted with a 0600 `admin.token` → an HttpOnly cookie; one
+  conversation per person (`webchat/conversation.json`), compacted between turns
+  or relayed to a new session (`chain`), never a list. Each turn's `claude` gets a
+  `fleet-session-cred.sh mint` session credential in its environment only — the
+  pool's proxy picks and meters, as for `fleet-claude.sh`. The model allowlist is
+  `lib.mjs`'s `MODELS`, enforced by the server. `fleet-webchat-selftest.sh`.
 - **Orchestrating is a role a session TAKES, one holder per role** (issue #3114,
   EPIC #3111 C3). `/fleet-orchestrate` (the fleet-orchestrate plugin's skill) first
   calls the dispatch group's `take_role` (`bin/fleet-role-take.sh <role>
