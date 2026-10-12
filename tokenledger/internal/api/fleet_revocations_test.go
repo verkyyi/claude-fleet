@@ -51,6 +51,17 @@ func revHas(l RevocationList, jti string) bool {
 
 const revTok = "rev-list-token"
 
+// revHost is the machine a node token speaks for, as the harness enrolled it.
+func revHost(t *testing.T, h *harness, nodeTok string) string {
+	t.Helper()
+	ep, err := h.srv.Store.EndpointByTokenHash(HashToken(nodeTok))
+	if err != nil {
+		t.Fatal(err)
+	}
+	host, _ := h.srv.nodeIdentity(ep)
+	return host
+}
+
 // rawCheck is the relay check's whole answer: status, who and body.
 func rawCheck(t *testing.T, h *harness, pass string) string {
 	t.Helper()
@@ -70,25 +81,26 @@ func rawCheck(t *testing.T, h *harness, pass string) string {
 // and the relay check answers byte for byte as with the list on.
 func TestRevocationsOffAddsNothing(t *testing.T) {
 	answers := func(on bool) []string {
-		h, m4, _ := newVaultHarness(t)
+		h, nodeTok, _ := newVaultHarness(t)
+		host := revHost(t, h, nodeTok)
 		if on {
 			h.srv.RevocationsToken = revTok
 		}
-		tok := mustMintRelay(t, h, m4)
+		tok := mustMintRelay(t, h, nodeTok)
 		live := rawCheck(t, h, tok)
-		putSetting(t, h, NodeRelayPrefix+"m4", "", 200)
+		putSetting(t, h, NodeRelayPrefix+revMachine(host), "", 200)
 		dead := rawCheck(t, h, tok)
 		forged := rawCheck(t, h, relayTokenPrefix+"forged")
 		if !on {
 			for _, p := range []string{RelayRevocationsPath, NodeRevocationsPath} {
-				if code, _ := revGet(t, h, p, m4, -1, 0); code != http.StatusNotFound {
+				if code, _ := revGet(t, h, p, nodeTok, -1, 0); code != http.StatusNotFound {
 					t.Fatalf("off: %s = %d, want 404", p, code)
 				}
 			}
 			if code := h.getCode(t, "/v1/fleet/revocations"); code != http.StatusNotFound {
 				t.Fatalf("off: /v1/fleet/revocations = %d, want 404", code)
 			}
-			if code, out := h.post(t, "/v1/fleet/credentials/revoke", FleetRevokeRequest{Hostname: "m4", Reason: "lost"}); code != 200 {
+			if code, out := h.post(t, "/v1/fleet/credentials/revoke", FleetRevokeRequest{Hostname: host, Reason: "lost"}); code != 200 {
 				t.Fatalf("revoke: %d %v", code, out)
 			}
 			var n int
@@ -108,7 +120,8 @@ func TestRevocationsOffAddsNothing(t *testing.T) {
 }
 
 func TestRevocationsRelayCred(t *testing.T) {
-	h, m4, _ := newVaultHarness(t)
+	h, nodeTok, _ := newVaultHarness(t)
+	host := revHost(t, h, nodeTok)
 	h.srv.RevocationsToken = revTok
 	if code, _ := revGet(t, h, RelayRevocationsPath, "", -1, 0); code != http.StatusUnauthorized {
 		t.Fatalf("no token: %d, want 401", code)
@@ -120,8 +133,8 @@ func TestRevocationsRelayCred(t *testing.T) {
 	if code != 200 || l.V != 0 || len(l.Entries) != 0 {
 		t.Fatalf("empty list: %d %+v", code, l)
 	}
-	tok := mustMintRelay(t, h, m4)
-	putSetting(t, h, NodeRelayPrefix+"m4", "", 200)
+	tok := mustMintRelay(t, h, nodeTok)
+	putSetting(t, h, NodeRelayPrefix+revMachine(host), "", 200)
 	code, l = revGet(t, h, RelayRevocationsPath, revTok, 0, 0)
 	if code != 200 || l.V != 1 || !revHas(l, "frl1:"+HashToken(tok)) {
 		t.Fatalf("after the relay revoke: %d %+v", code, l)
@@ -132,7 +145,7 @@ func TestRevocationsRelayCred(t *testing.T) {
 		}
 	}
 	// The machine's door reads the same list with its node token.
-	if code, nl := revGet(t, h, NodeRevocationsPath, m4, -1, 0); code != 200 || nl.V != 1 {
+	if code, nl := revGet(t, h, NodeRevocationsPath, nodeTok, -1, 0); code != 200 || nl.V != 1 {
 		t.Fatalf("node list: %d %+v", code, nl)
 	}
 	// At the version it holds and no wait: 304 at once.
@@ -174,7 +187,8 @@ func TestRevocationsLongPollWakes(t *testing.T) {
 			t.Fatalf("woke with %d after %s: %+v", r.code, r.d, r.l)
 		}
 		for _, e := range r.l.Entries {
-			if e.JTI == "fcp:"+id && (e.Principal != "gh:1005" || e.Machine != "m5" || e.Exp <= time.Now().Unix()) {
+			row, _ := h.srv.Store.SessionCredByID(id)
+			if e.JTI == "fcp:"+id && (e.Principal != row.PrincipalID || e.Machine != revMachine(row.Machine) || e.Exp <= time.Now().Unix()) {
 				t.Fatalf("pass entry: %+v", e)
 			}
 		}
@@ -186,17 +200,18 @@ func TestRevocationsLongPollWakes(t *testing.T) {
 // A credential revocation lands as its scope (plus a machine-wide one's relay
 // hashes, a person's live certificates); lifting it lifts exactly those.
 func TestRevocationsCredRevokeAndLift(t *testing.T) {
-	h, m4, _ := newVaultHarness(t)
+	h, nodeTok, _ := newVaultHarness(t)
+	host := revHost(t, h, nodeTok)
 	h.srv.RevocationsToken = revTok
-	tok := mustMintRelay(t, h, m4)
+	tok := mustMintRelay(t, h, nodeTok)
 	now := time.Now()
 	if err := h.srv.Store.RecordCert(store.FleetCert{Serial: "4242", PrincipalID: "gh:7", KeyID: "person:gh:7",
 		Principals: []string{"alice"}, KeyFingerprint: "SHA256:x", Via: "device", IssuedAt: now,
 		ValidAfter: now, ValidBefore: now.Add(time.Hour)}); err != nil {
 		t.Fatal(err)
 	}
-	if code, out := h.post(t, "/v1/fleet/credentials/revoke", FleetRevokeRequest{Hostname: "m4.local", Reason: "lost"}); code != 200 {
-		t.Fatalf("revoke m4: %d %v", code, out)
+	if code, out := h.post(t, "/v1/fleet/credentials/revoke", FleetRevokeRequest{Hostname: host, Reason: "lost"}); code != 200 {
+		t.Fatalf("revoke the machine: %d %v", code, out)
 	}
 	if code, out := h.post(t, "/v1/fleet/credentials/revoke", FleetRevokeRequest{PrincipalID: "gh:7"}); code != 200 {
 		t.Fatalf("revoke gh:7: %d %v", code, out)
@@ -204,7 +219,7 @@ func TestRevocationsCredRevokeAndLift(t *testing.T) {
 	_, l := revGet(t, h, RelayRevocationsPath, revTok, -1, 0)
 	scope := false
 	for _, e := range l.Entries {
-		if e.JTI == "" && e.Machine == "m4" && e.Principal == "" && e.Before > 0 {
+		if e.JTI == "" && e.Machine == revMachine(host) && e.Principal == "" && e.Before > 0 {
 			scope = true
 		}
 	}
@@ -212,7 +227,7 @@ func TestRevocationsCredRevokeAndLift(t *testing.T) {
 		t.Fatalf("after the revocations: %+v", l)
 	}
 	v := l.V
-	if code, out := h.post(t, "/v1/fleet/credentials/revoke", FleetRevokeRequest{Hostname: "m4.local", Lift: true}); code != 200 {
+	if code, out := h.post(t, "/v1/fleet/credentials/revoke", FleetRevokeRequest{Hostname: host, Lift: true}); code != 200 {
 		t.Fatalf("lift: %d %v", code, out)
 	}
 	_, l = revGet(t, h, RelayRevocationsPath, revTok, -1, 0)
@@ -220,7 +235,7 @@ func TestRevocationsCredRevokeAndLift(t *testing.T) {
 		t.Fatalf("after the lift: %+v", l)
 	}
 	for _, e := range l.Entries {
-		if e.Machine == "m4" && e.JTI == "" {
+		if e.Machine == revMachine(host) && e.JTI == "" {
 			t.Fatalf("the lifted scope is still listed: %+v", e)
 		}
 	}
@@ -228,7 +243,7 @@ func TestRevocationsCredRevokeAndLift(t *testing.T) {
 
 // One connection certificate, by serial: the operator's.
 func TestRevocationsCert(t *testing.T) {
-	h, m4, _ := newVaultHarness(t)
+	h, nodeTok, _ := newVaultHarness(t)
 	h.srv.RevocationsToken = revTok
 	now := time.Now()
 	for serial, before := range map[string]time.Time{"77": now.Add(time.Hour), "78": now.Add(-time.Minute)} {
@@ -248,7 +263,7 @@ func TestRevocationsCert(t *testing.T) {
 	if code, out := h.post(t, "/v1/fleet/revocations", FleetRevocationRequest{Serial: "78"}); code != 200 || out["expired"] != true || out["v"] != float64(1) {
 		t.Fatalf("revoke 78: %d %v", code, out)
 	}
-	_, l := revGet(t, h, NodeRevocationsPath, m4, -1, 0)
+	_, l := revGet(t, h, NodeRevocationsPath, nodeTok, -1, 0)
 	if !revHas(l, "ssh:77") || revHas(l, "ssh:78") {
 		t.Fatalf("door's list: %+v", l)
 	}
