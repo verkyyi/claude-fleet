@@ -6141,6 +6141,23 @@ drill_linux_restore_crashloop() {
   WHAT="restore 退 1：快照改名 sessions.snapshot.failed-<UTC>、写 ready、不退出；空跳过表不再吞掉钉住的表"
 }
 
+# ---- restart-done-not-pinned (#3511): a planned restart's pin skipped every
+# `done` session — a newcomer's no-repo sessions had answered and did not come back.
+drill_restart_done_not_pinned() {
+  CAP=40; local t0
+  t0=$(now)
+  # its own sandbox, none of this run's environment (the fake agent, the tmux pin)
+  if ! env -i HOME="$HOME" TMPDIR="${TMPDIR:-/tmp}" LANG=en_US.UTF-8 \
+       PATH="$(dirname "$REAL_TMUX"):$(dirname "$(command -v python3)"):/usr/bin:/bin:/usr/sbin:/sbin" \
+       bash "$BIN/fleet-sessions-snapshot-selftest.sh" >"$WORK/restart-done.out" 2>&1; then
+    WHY="a done / no-repo session does not survive save · kill-server · restore: $(tail -n 3 "$WORK/restart-done.out")"; return 1
+  fi
+  grep -q 'RESTORE_KEEP_DONE=1' "$BIN/fleet-sessions-snapshot.sh" \
+    || { WHY="the snapshot restore no longer asks fleet-restore to bring done sessions back"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="save 钉住所有开着的会话（done、no-repo 也算，exited 不算）；kill-server 后 restore 带 RESTORE_KEEP_DONE=1，同名、同目录、同一段对话回来"
+}
+
 # ---- linux-recreate-route-lost (#3421): credsep's root settings live in the image
 # layer; a recreated pod rewrote only the primary login's relay route, so a login
 # `login open` made went `route: direct` (unsupported_region from the CN egress).

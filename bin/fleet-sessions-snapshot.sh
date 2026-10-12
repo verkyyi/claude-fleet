@@ -19,7 +19,9 @@
 # read after a restart is whatever the last tick saw; the snapshot is the layout
 # as it stood the moment before the operator (or fleet-node-update.py) took the
 # server down, and it is checked against GitHub on the way back:
-#   · only unfinished sessions are pinned (@claude_state not done/exited);
+#   · every session still open is pinned — a `done` one too: it waits at its
+#     prompt, it has not ended (issue #3511: a newcomer's no-repo sessions had
+#     answered, read `done`, and did not come back); only `exited` is not;
 #   · a session whose issue was CLOSED since is not reopened (`closed`);
 #   · a session the fleet retired since (fleet_win_retire) is not (`retired`);
 #   · a session whose worktree is gone is not (`gone`) — never one waking up in
@@ -90,7 +92,7 @@ save() {
       $1 == "REAP"  { reap[$2] = $3; pend = pend $0 "\n"; next }
       $1 == "FID"   { fid = $2; pend = pend $0 "\n"; next }
       $1 == "WIN" {
-        keep = ($6 != "done" && $6 != "exited" && $2 !~ panel)
+        keep = ($6 != "exited" && $2 !~ panel)
         if (keep) {
           printf "%s%s\n", pend, $0 > map
           repo = (NF >= 16 ? $16 : "")
@@ -171,7 +173,7 @@ restore() {
       $1 == "WIN" { if (!($2 in drop)) printf "%s%s\n", pend, $0; pend = ""; next }' "$skip" "$mf" > "$tmp"
     if grep -q '^WIN' "$tmp"; then
       log "restore: $sess — $(grep -c '^WIN' "$tmp") pinned session(s)"
-      RESTORE_ONLY_MAP="$tmp" RESTORE_UNFINISHED=1 bash "$BIN/fleet-restore.sh" >/dev/null 2>&1 || :
+      RESTORE_ONLY_MAP="$tmp" RESTORE_UNFINISHED=1 RESTORE_KEEP_DONE=1 bash "$BIN/fleet-restore.sh" >/dev/null 2>&1 || :
     fi
     rm -f "$tmp"
   done

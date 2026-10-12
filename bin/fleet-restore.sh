@@ -561,12 +561,14 @@ restore() {
       echo "$wname" | grep -qE "$PANEL_RE" && continue
       # --auto reopens only what was still running (issue #1784): a finished turn
       # or a session the operator exited stays closed — the ledger keeps both.
-      if [ -n "${RESTORE_UNFINISHED:-}" ]; then
-        case "$wstate" in done|exited)
-          say "    · $wname: $wstate last time — not reopened"
-          log "skip $sess/$wname state=$wstate (auto restores unfinished only)"
-          continue ;;
-        esac
+      # A planned restart's pin (fleet-sessions-snapshot.sh, issue #3511) also
+      # brings back a `done` one — a session waiting at its prompt is not ended
+      # (RESTORE_KEEP_DONE=1); `exited` still stays closed.
+      if [ -n "${RESTORE_UNFINISHED:-}" ] \
+         && { [ "$wstate" = exited ] || { [ "$wstate" = "done" ] && [ -z "${RESTORE_KEEP_DONE:-}" ]; }; }; then
+        say "    · $wname: $wstate last time — not reopened"
+        log "skip $sess/$wname state=$wstate (auto restores unfinished only)"
+        continue
       fi
       # A PARKED session (issue #2671) gave its place back on purpose and waits for
       # something; bin/fleet_park.py reopens it, on the same conversation, when it

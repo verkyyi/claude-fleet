@@ -36,6 +36,8 @@
 #                   Issue #3329: FLEET_VIEW_LANG in the 看台 session's environment,
 #                   and English detected for a device the first time ⇒ @view_flash
 #                   (the top line's 8 s line) — once per device
+#   R. restoring  — a `--resume` while a restore holds its lock and the 看台's
+#                   session is not back yet: rc 3, no 看台 (issue #3511)
 #   K. key table  — `key-table fleet-view` only once that table exists (C2)
 #   O. cur OSC    — the thin loop is told the session in view (issue #3489): OSC
 #                   7502 cur with the 看台's token on its client's tty, at the
@@ -443,6 +445,23 @@ tn select-window -t "=$(vs devo2-via-home):$W8"; sleep 2
 hasnt "O: a far 看台 says nothing" "$(osc osc2)" "7502;cur"
 for w in osc1 osc2; do tt kill-window -t "=$TL:$w" 2>/dev/null; done
 tn kill-window -t "$PX" 2>/dev/null
+
+# ============================================================================
+# R. a restore under way (issue #3511): the home's tmux was restarted, the fleet is
+#    back but the resumed 看台's session is not yet — rc 3, no 看台, so the thin loop
+#    waits instead of landing home; the lock gone → the resume goes on as before
+# ============================================================================
+printf -- '-\t%s\tthin\t%s\t1\tcur=%s/fid-coming\troute=lan\tdevice=%s\ttoken=tr0\tfuid=%s\tnode=m9\tleft=%s\n' \
+  "$RS" "$(date +%s)" "$U" "$DEV" "$U" "$(date +%s)" > "$FLEET_CONF_DIR/remote-views/devr"
+mkdir -p "$FLEET_CONF_DIR/restore/.auto.lock"; echo $$ > "$FLEET_CONF_DIR/restore/.auto.lock/pid"
+out=$(env -u TMUX bash "$BIN/fleet-remote-view.sh" attach --thin --view devr --resume --device "$DEV" --route lan --token tr1 2>&1 </dev/null); rc=$?
+eq "R: a restore holding the lock, the session not back yet → 3" "3" "$rc"
+has "R: …saying the home is restarting" "$out" "is restarting"
+tn has-session -t "=$(vs devr)" 2>/dev/null; eq "R: …and no 看台 made" "1" "$?"
+rm -rf "$FLEET_CONF_DIR/restore/.auto.lock"
+term thinr "--thin --view devr --resume --device $DEV --route lan --token tr2"
+waitfor 5 sh -c "'$REAL_TMUX' -L '$RS' has-session -t '=$(vs devr)' 2>/dev/null" || fail "R: no lock → the resume no longer attaches"
+tt kill-window -t "=$TL:thinr" 2>/dev/null
 
 # ============================================================================
 # L. lint: the collector reaps a kept 看台 (its `views` phase)
