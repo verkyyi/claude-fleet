@@ -6884,6 +6884,45 @@ drill_land_squash_unseen() {
   WHAT="压成一个提交的合并、gh 一律失败：回收门判 landed，fleet_landed 认得落地，gh 0 次"
 }
 
+# The web chat's socket mode (issue #3643, EPIC #3642 C1): both drills run a part of
+# bin/fleet-webchat-selftest.mjs, which does the break for real — a stale 0666 socket
+# in a 0755 dir; the proxy's 403 person_budget_exceeded through a stub SDK.
+# webchat_part <part> <line…> — its --only=<part> run: PASS and every `ok` line asked for
+webchat_part() {
+  local part="$1" out t0 want
+  shift
+  t0=$(now)
+  out=$(node "$BIN/fleet-webchat-selftest.mjs" "--only=$part" 2>&1)
+  SECS=$(since "$t0")
+  printf '%s\n' "$out" | grep -q '^PASS fleet-webchat-selftest' \
+    || { WHY="the webchat selftest's $part part is red: $(printf '%s\n' "$out" | grep '^FAIL' | head -3 | tr '\n' ' ')"; return 1; }
+  for want in "$@"; do
+    printf '%s\n' "$out" | grep -qF "ok   $want" || { WHY="no «${want}» line: $(printf '%s\n' "$out" | tail -3 | tr '\n' ' ')"; return 1; }
+  done
+  WEBCHAT_OUT=$out
+}
+
+drill_chat_socket_other_login() {
+  CAP=30
+  if ! command -v node >/dev/null 2>&1; then SECS=0; WHAT="SKIP：这里没有 node"; return 0; fi
+  webchat_part socket "H the socket is 0600" "H its dir is 0700" "H no admin.token, no port file" \
+    "H no --socket, no FLEET_WEBCHAT_LOCAL=1: it does not start" "H a second server on a live socket refuses" || return 1
+  WHAT="0755 目录里放一个 0666 的旧 socket 再起对话服务：socket 回到 0600、目录 0700，没有 admin.token / 端口；不带 --socket 也没 FLEET_WEBCHAT_LOCAL=1 就不起"
+  if printf '%s\n' "$WEBCHAT_OUT" | grep -qF 'ok   H (control)'; then
+    printf '%s\n' "$WEBCHAT_OUT" | grep -qF 'ok   H another uid cannot connect even through' \
+      || { WHY="another uid connected through the 0600 socket"; return 1; }
+    WHAT="${WHAT}；nobody 连不上（放开到 0666 时它连得上）"
+  fi
+}
+
+drill_chat_budget_bypass() {
+  CAP=30
+  if ! command -v node >/dev/null 2>&1; then SECS=0; WHAT="SKIP：这里没有 node"; return 0; fi
+  webchat_part budget "I the proxy's 403 is one" "I the raw API error never reaches the page" \
+    "I /api/conversation says blocked, until" "I still blocked after a restart" "I … and the block is lifted" || return 1
+  WHAT="凭据代理 403 person_budget_exceeded：流里一行 code:budget + until，原话不上页面；/api/conversation 说被挡（重启也记得），走通一轮后放开"
+}
+
 # ================================================================ run ====}
 FAILS=$LINT; PASSES=0
 printf 'fleet-break-it: %d rows in docs/BREAK-IT.md\n' "$NROWS"
