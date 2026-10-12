@@ -22,6 +22,8 @@
 #   B  --home remotebox, no --invite: the drill mints its own drill person
 #      (fleet-drill.sh invite --login … --home remotebox --json), and step 10
 #      restarts the node over the login's client (--run --home remotebox)
+#   O  (issue #3467) B again with a thin client's list: the home's own rows (`@N`
+#      keys + fleet_id) — step 10 locates and restarts by the row's @fleet_id
 #   C  --home elsewhere, the session lands on remotebox: step 8 FAILs naming both
 #   D  a mint the hub refuses: exit 2, nothing run
 #   E  THE THIN CLIENT (issue #3445): step 8 + 8a through the REAL key path — the
@@ -167,9 +169,13 @@ fake_fleet() {
   cat > "$T/homes/$LOGIN/.local/bin/fleet" <<EOF
 #!/bin/bash
 [ "\$1 \$2" = 'ls --json' ] || exit 2
-TMUX='' "$TMUXB" -L "$FX" list-windows -F '#{window_name}	#{@fleet_id}' 2>/dev/null | python3 -c '
+# ls.own (issue #3467): a thin client's list, run on its home — the home's own
+# rows, a window id for a key and the identity in the fleet_id field
+TMUX='' "$TMUXB" -L "$FX" list-windows -F '#{window_name}	#{@fleet_id}	#{window_id}' 2>/dev/null | python3 -c '
 import json, sys
-print(json.dumps([{"name": n, "key": "wid:U/" + f, "node": sys.argv[1]} for n, f in (l.rstrip("\n").split("\t") for l in sys.stdin)]))' "\$(cat "$T/client/node-name")"
+own = sys.argv[2] == "own"
+print(json.dumps([dict({"name": n, "key": w if own else "wid:U/" + f, "node": sys.argv[1]}, **({"fleet_id": f} if own else {}))
+                  for n, f, w in (l.rstrip("\n").split("\t") for l in sys.stdin)]))' "\$(cat "$T/client/node-name")" "\$(cat "$T/ls.own" 2>/dev/null)"
 EOF
   chmod +x "$T/homes/$LOGIN/.local/bin/fleet"
 }
@@ -241,6 +247,21 @@ else bad "B: thin calls: $(tr '\n' ' ' < "$T/thin.args" 2>/dev/null)"; fi
 grep -q '^restore: ' "$RH/restore.log" 2>/dev/null && ok 'B: the remote node server was restored for real' || bad 'B: no restore ran on the remote node'
 printf '%s\n' "$out" | grep -q 'restarted' && printf '%s\n' "$out" | grep -q 'on remotebox restarted' \
   && ok 'B: step 10 names the machine' || bad 'B: step 10 does not name remotebox'
+
+# --- O: the same, the list a thin client's (issue #3467): own rows of the home ----
+# `@N` keys, the identity in fleet_id — step 10 locates the window by it and
+# finds the session back after the restart though its window id is new
+printf own > "$T/ls.own"; : > "$T/thin.args"; rm -f "$RH/restore.log"
+start_client "$RH" remotebox
+out=$(drill env FLEET_DRILL_INVITE_SH="$T/invite.sh" FLEET_DRILL_THIN="$T/thin.py" \
+      bash "$DRILL" --login "$LOGIN" --home remotebox --name first 2>&1); rc=$?
+for s in scratch attach-attachment node-restart-resume; do
+  if printf '%s\n' "$out" | grep -Eq "^PASS +$s "; then ok "O: own-row keys: step $s PASS"
+  else bad "O: own-row keys: step $s: $(printf '%s\n' "$out" | grep -E "^(PASS|FAIL) +$s " | head -n 1) [rc $rc]"; fi
+done
+[ "$rc" = 0 ] && ok 'O: exit 0' || { bad "O: exit $rc"; printf '%s\n' "$out" | tail -n 25 | sed 's/^/     │ /'; }
+grep -q '^restore: ' "$RH/restore.log" 2>/dev/null && ok 'O: the home was restarted by the own row'"'"'s @fleet_id' || bad 'O: no restore ran on the home'
+rm -f "$T/ls.own"
 
 # --- C: --home elsewhere, placed on remotebox: step 8 says so -------------------
 start_client "$RH" remotebox
