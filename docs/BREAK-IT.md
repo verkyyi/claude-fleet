@@ -356,3 +356,4 @@
 | 他同意附上的最近日志或当前屏幕里有令牌：日志里一行请求头、屏幕上刚 `export` 的变量（EPIC #3354） | 附件存在入口 7 天、给管理员看：同事的令牌落在我们手里 | 附件只取 `conf/debug-collect.list` 里近 30 分钟写过的行和本窗口 `capture-pane -p`，每份过同一张形状表，再整套复查，命中即退出 3；每次都问附不附、不替他选；入口再查一遍（#3355）。演练在日志和屏幕各塞假凭据，查发出的附件与 outbox（#3358） | `feedback-secret-in-attach` |
 
 | 授权迁移把纯客户端列为执行节点 | 管理员被要求给连接用的设备配置订阅机器授权，容易留下无用授权 | 复用机器角色过滤纯客户端，离线和混合执行节点保留；角色变化后要求重新审核，已有规则不改写 | `cred-migration-client` |
+| 认没认落地要先问 GitHub 的合并请求：仓库不在 GitHub（`FLEET_FORGE=none`），或 GitHub 限流 / 答不上；分支是压成一个提交合进去的（祖先关系看不到）（EPIC #3570 C8） | 做完的会话永远不被回收、不进历史为「已落地」、批次永远不算完；⌃x 只会问「没合并，强制回收吗」 | `fleet_landed` / `fleet_land_check`（`bin/fleet-lib.sh`）只问 git：分支尖是主干祖先，或分支相对分叉点的整体改动与主干分叉后某个提交的 patch-id 相同（变基合并则每个提交都在），或本机落地记录有它 ⇒ landed；合并后又改过 ⇒ open。`fleet_reap_ok` 在没有合并请求的答案时照它判 `landed`，`dash-reap.sh` / `worktree-autoclean.sh` / `session-end-hook.sh` / `fleet-cleanup.sh --branch` / 历史记录 / 「已合并」核对都认；`FLEET_FORGE=none` 全程不调 `gh`（#3601） | `land-squash-unseen` |

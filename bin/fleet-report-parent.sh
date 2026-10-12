@@ -436,13 +436,20 @@ fi
 # reaper's backstop, still reports), FAILED (closed unmerged — loud), IDLE (gh
 # could not answer — undetermined, silent). The caller is told on stderr either way.
 # Only with a --pr and a known repo: without one there is nothing to check.
-if [ "$STATE" = merged ] && [ -n "${PR//[^0-9]/}" ]; then
+# A repo with no GitHub (FLEET_FORGE=none, issue #3601) has no PR to name: there the
+# branch is checked instead, by git — and so is any PR GitHub could not answer for.
+_mforge=github
+if [ "$STATE" = merged ] && [ -z "${PR//[^0-9]/}" ] && [ -n "$sess" ] && [ -n "${selfwin:-}" ]; then
+  _mr=$(fleet_window_repo "$sess" "$selfwin")
+  [ -n "$_mr" ] && _mforge=$(fleet_repo_forge "$sess" "$_mr")
+fi
+if [ "$STATE" = merged ] && { [ -n "${PR//[^0-9]/}" ] || [ "$_mforge" = none ]; }; then
   _prepo=''
   [ -n "$sess" ] && [ -n "${selfwin:-}" ] && _prepo=$(fleet_window_repo "$sess" "$selfwin")
   [ -n "$_prepo" ] || _prepo="${FLEET_REPO:-}"
   case "$_prepo" in
     ?*/?*)
-      _pms=$(fleet_pr_merge_state "$_prepo" "$PR")
+      _pms=$(FLEET_SESSION="${sess:-${FLEET_SESSION:-}}" fleet_pr_merge_state "$_prepo" "$PR" "$BRANCH")
       case "$_pms" in
         merged) ;;
         armed|open)
@@ -454,8 +461,11 @@ if [ "$STATE" = merged ] && [ -n "${PR//[^0-9]/}" ]; then
         *)
           STATE=idle; VERDICT=pr-unknown ;;
       esac
-      [ "$_pms" = merged ] || printf 'fleet-report-parent: NOT reporting MERGED — %s PR #%s is %s on GitHub (.merged != true); filed as %s. Re-run once it has really merged.\n' \
-        "$_prepo" "${PR//[^0-9]/}" "$_pms" "$(printf '%s' "$STATE" | tr '[:lower:]' '[:upper:]')" >&2 ;;
+      if [ "$_pms" != merged ] && [ "$_mforge" = none ]; then
+        printf 'fleet-report-parent: NOT reporting MERGED — %s branch %s is %s (its work is not on the base, per git); filed as %s. Re-run once it has really landed.\n' \
+          "$_prepo" "$BRANCH" "$_pms" "$(printf '%s' "$STATE" | tr '[:lower:]' '[:upper:]')" >&2
+      elif [ "$_pms" != merged ]; then printf 'fleet-report-parent: NOT reporting MERGED — %s PR #%s is %s on GitHub (.merged != true); filed as %s. Re-run once it has really merged.\n' \
+        "$_prepo" "${PR//[^0-9]/}" "$_pms" "$(printf '%s' "$STATE" | tr '[:lower:]' '[:upper:]')" >&2; fi ;;
   esac
 fi
 

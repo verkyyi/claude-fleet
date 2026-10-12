@@ -6685,6 +6685,32 @@ print(o[0].get("child"), o[0].get("state"), o[0].get("pr"), o[0].get("summary"))
 
 # ================================================================ run ====}
 
+# A landing only GitHub could name (issue #3601, EPIC #3570 C8): with every gh call
+# failing, a squash-merged session read `unmerged` — never reaped, never landed in
+# history. git alone says it now: fleet_land_check's patch-id match → `landed`, and
+# a repo with FLEET_FORGE=none never runs gh at all.
+drill_land_squash_unseen() {
+  CAP=30; local d="$WORK/lsu" t0 out
+  mkdir -p "$d/fake"
+  printf '#!/bin/sh\necho "gh $*" >> "%s/gh.log"; exit 1\n' "$d" > "$d/fake/gh"; chmod +x "$d/fake/gh"; : > "$d/gh.log"
+  t0=$(now)
+  out=$(cd "$d" && PATH="$d/fake:$PATH" FLEET_CONF_DIR="$d/conf" TMPDIR="$d" \
+    GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t bash -c '
+    . "$1/fleet-lib.sh" >/dev/null 2>&1; fleet_sockets() { :; }
+    git init -q --bare o.git; git clone -q o.git m 2>/dev/null; cd m; git checkout -q -B main
+    echo a > f; git add f; git commit -q -m base; git push -q origin main
+    git checkout -q -b issue-7; echo b >> g; git add g; git commit -q -m one; echo c >> g; git commit -q -am two
+    tip=$(git rev-parse HEAD); git checkout -q main; echo z >> f; git commit -q -am moved
+    git merge -q --squash issue-7 >/dev/null 2>&1; git commit -q -m "squash (#7)"; git push -q origin main
+    git worktree add -q ../wt issue-7 2>/dev/null
+    printf "%s " "$(fleet_reap_ok ../wt . issue-7 "$tip" origin/main "")"
+    fleet_landed acme/app issue-7 . main | cut -d" " -f1' _ "$BIN" 2>/dev/null)
+  SECS=$(since "$t0")
+  [ "$out" = "landed landed" ] || { WHY="a squash merge with gh failing reads [$out], not landed"; return 1; }
+  [ ! -s "$d/gh.log" ] || { WHY="gh was called: $(head -1 "$d/gh.log")"; return 1; }
+  WHAT="压成一个提交的合并、gh 一律失败：回收门判 landed，fleet_landed 认得落地，gh 0 次"
+}
+
 # ================================================================ run ====}
 FAILS=$LINT; PASSES=0
 printf 'fleet-break-it: %d rows in docs/BREAK-IT.md\n' "$NROWS"
