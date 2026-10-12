@@ -1861,6 +1861,35 @@ else
   pass machine "load $mload on $mcores cores (${mper}/core), no orphaned runaways"
 fi
 
+# --- CPU throttling (issue #3514) ------------------------------------------------
+# A container with a CPU limit (a Kubernetes pod) is not loaded, it is THROTTLED:
+# fleet-linux-0 ran at its 2-core limit with 83% of its CFS periods throttled —
+# ⌘P took 5 s, a new session 20 s — while `machine` above read the host's load.
+# The cgroup's own counters, sampled over FLEET_CPU_SAMPLE_SECS (2): the share of
+# periods throttled, and the cores used against the limit. No cgroup CPU limit
+# (a Mac, a VM, `max`) ⇒ no row. WARN at FLEET_CPU_THROTTLE_WARN % (20), never FAIL.
+_cst=${FLEET_CPU_STAT_FILE:-/sys/fs/cgroup/cpu.stat}
+_cmx=${FLEET_CPU_MAX_FILE:-/sys/fs/cgroup/cpu.max}
+if [ -r "$_cst" ] && [ -r "$_cmx" ] && read -r _cq _cp < "$_cmx" 2>/dev/null \
+   && case "$_cq$_cp" in *[!0-9]*|'') false ;; *) [ "$_cp" -gt 0 ] ;; esac; then
+  _cs0=$(awk '/^(usage_usec|nr_periods|nr_throttled) /{printf "%s ", $2}' "$_cst")
+  sleep "${FLEET_CPU_SAMPLE_SECS:-2}"
+  _cs1=$(awk '/^(usage_usec|nr_periods|nr_throttled) /{printf "%s ", $2}' "$_cst")
+  read -r _cthr _cused _climit <<EOF_CPU
+$(printf '%s %s %s %s\n' "$_cs0" "$_cs1" "$_cq" "$_cp" | awk '{
+  dp=$5-$2; dt=$6-$3; du=$4-$1
+  s=(dp>0 ? dp*$8 : 0)
+  printf "%d %.2f %.2f\n", (dp>0 ? 100*dt/dp : 0), (s>0 ? du/s : 0), $7/$8 }')
+EOF_CPU
+  _cwarn=${FLEET_CPU_THROTTLE_WARN:-20}
+  case "$_cwarn" in ''|*[!0-9]*) _cwarn=20 ;; esac
+  if [ "${_cthr:-0}" -ge "$_cwarn" ]; then
+    warn cpu "throttled ${_cthr}% of CPU periods, ${_cused} of ${_climit} cores used — this container is at its CPU limit and everything here (⌘P, a new session, the heartbeat) waits its turn. See what burns it: \`ps -eo user,pcpu,args --sort=-pcpu | head\`; raise the limit, or take a login off this machine"
+  else
+    pass cpu "throttled ${_cthr}% of CPU periods, ${_cused} of ${_climit} cores used"
+  fi
+fi
+
 # --- the machine's one daemon (issue #2331, EPIC #2329 C3) ----------------------
 # com.claude-fleet.node runs the machine-level work once for every login; its
 # status is world-readable, so any login's doctor reads it. Not installed ⇒ no row
