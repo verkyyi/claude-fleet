@@ -63,14 +63,14 @@ sig = base64.urlsafe_b64decode(f["sig"] + "=" * (-len(f["sig"]) % 4))
 pub = fleet_ed25519.public_key(seed)
 sys.exit(0 if fleet_ed25519.verify(pub, msg, sig) else 1)
 PY
-check "a trailing slash on the .ok's hub is the same hub" sh -c "echo '$KID $HUB/' > '$FLEET_CONF_DIR/node.key.ok' && . '$BIN/fleet-lib.sh' && fleet_node_auth GET '$HUB/v1/node/peers' tok-1 | grep -q '^FleetSig '"
+check "a trailing slash on the .ok's hub is the same hub" bash -c "echo '$KID $HUB/' > '$FLEET_CONF_DIR/node.key.ok' && . '$BIN/fleet-lib.sh' && fleet_node_auth GET '$HUB/v1/node/peers' tok-1 | grep -q '^FleetSig '"
 echo "$KID $HUB" > "$FLEET_CONF_DIR/node.key.ok"
 
 echo "C  who never signs from the home"
 check "CCQUOTA_NODE_KEY=off → Bearer" [ "$(CCQUOTA_NODE_KEY=off fleet_node_auth GET "$HUB/x" tok-1)" = "Bearer tok-1" ]
 : > "$FLEET_CONF_DIR/credsep.json"
 check "a separated login (credsep.json) → Bearer" [ "$(fleet_node_auth GET "$HUB/x" tok-1)" = "Bearer tok-1" ]
-check "  … unless CCQUOTA_NODE_KEY names its key" sh -c "CCQUOTA_NODE_KEY='$FLEET_CONF_DIR/node.key' && export CCQUOTA_NODE_KEY && . '$BIN/fleet-lib.sh' && fleet_node_auth GET '$HUB/x' tok-1 | grep -q '^FleetSig '"
+check "  … unless CCQUOTA_NODE_KEY names its key" bash -c "CCQUOTA_NODE_KEY='$FLEET_CONF_DIR/node.key' && export CCQUOTA_NODE_KEY && . '$BIN/fleet-lib.sh' && fleet_node_auth GET '$HUB/x' tok-1 | grep -q '^FleetSig '"
 rm -f "$FLEET_CONF_DIR/credsep.json"
 
 printf '\nfleet-node-sig-selftest: %d passed, %d failed\n' "$pass" "$fail"
