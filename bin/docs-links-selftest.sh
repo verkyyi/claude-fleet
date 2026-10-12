@@ -13,7 +13,7 @@
 #   C  docs/ itself holds only README.md, dev/ and public/
 #   D  the index docs/README.md lists every docs/dev/*.md
 #   E  nothing names the old flat layout `docs/<NAME>.md` (a selftest's or a Go
-#      test's fixture tree excepted)
+#      test's fixture tree, and the prose inside docs/dev/ itself, excepted)
 #
 # A link inside a fenced code block or inline `code` is not a link. URLs,
 # mailto: and in-page `#anchor` links are not checked. A line that must keep a
@@ -96,6 +96,8 @@ FLAT = re.compile(r'(?<![A-Za-z0-9_-])docs/([A-Z][A-Z0-9_-]*\.md)')
 for f in files:
     if f == 'bin/docs-links-selftest.sh' or 'selftest' in f or f.endswith('_test.go'):
         continue
+    if f.startswith('docs/dev/'):
+        continue        # the moved docs stay byte for byte what they were (prose names, not links)
     try:
         text = open(f, encoding='utf-8').read()
     except (UnicodeDecodeError, OSError):
