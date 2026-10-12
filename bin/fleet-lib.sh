@@ -2332,7 +2332,7 @@ fleet_repo_register() {
   fi
   fleet_repo_order_put "$sess" "$repo" \
     || echo "fleet-repo: WARNING — could not record $repo in $(dirname "$f")/.order (it lists after the others)" >&2
-  echo "fleet-repo: $sess now hosts $repo (main=$dir base=$base$( [ "$forge" = github ] || printf ' remote=%s forge=%s' "$remote" "$forge" ) tickets=${tickets:-github}) — $f" >&2
+  echo "fleet-repo: $sess now hosts $repo (main=$dir base=$base$( [ "$forge" = github ] || printf ' remote=%s forge=%s' "$remote" "$forge" )${tickets:+ tickets=$tickets}) — $f" >&2
   [ "$seed" = 1 ] && echo "fleet-repo: $repo is this fleet's seed repo — no issue-bridge (FLEET_SEED=1)" >&2
   # --- the follow-through ---
   fleet_repo_trust_warn "$dir" fleet-repo
