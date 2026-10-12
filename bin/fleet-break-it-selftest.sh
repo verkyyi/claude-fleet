@@ -97,6 +97,7 @@
 #   spare-reuse-leaks                               bin/fleet-login-reset-check.py (the category table), its selftest
 #   spare-recycle-dirty                             tokenledger/internal/api fleet_recycle.go (recycleClear,
 #                                                   recycleLeftovers, applyReset) + store RecycleAccount; go test
+#   spare-wash-resume                               bin/fleet-login-reset.sh (stop · wash · rejoin · check, the op file), its selftest
 #   login-remove-respawn-hang                       bin/fleet-login-remove.sh (quiesce: bootout user/gui, deleteUser time limit)
 #   newcomer-login-no-gh                            bin/fleet-control-read.sh ready (gh only with a hosted repo)
 #                                                   + bin/fleet-client-place.sh self_lines (no host-here hint)
@@ -5105,6 +5106,26 @@ drill_spare_recycle_dirty() {
   _drill_go_tests 'TestRemoveRecyclesLoginIntoSpare TestRecycleNeverHandsOutAnUncleanWash TestRecycleLeftoversNamesEachHubPiece TestRecycleNoAnswerFailsAfterThirtyMinutes TestRemoveOldRoadWhenNotRecycling' \
     "$ROOT/tokenledger/internal/api/fleet_recycle_test.go" \
     '删号发 reset、洗净且隔离才成备用（spare.recycle）；dirty / 没隔离 / 没结论 / 跑失败 / 30 分钟无回音都 failed 不发出；入口侧节点令牌·中转·租约·家·未用 join code 先清后查；delete / 备用关 / 老 admin 走老路（go test）' || return 1
+  SECS=$(since "$t0")
+}
+
+# ---- spare-wash-resume (#3505, EPIC #3500 C20): a Mac login washed for the
+# next person in place (remove --recycle) — cut off half way, or missing one
+# kind of leftover, and a second run either archived again, took the half-made
+# setup for the last person's, or called a half-washed login clean. Now one
+# script (fleet-login-reset.sh) stops, washes, sets up and checks, booking each
+# phase by op_id; its selftest plants one thing per category, kills it mid
+# rejoin and runs the same op again.
+drill_spare_wash_resume() {
+  CAP=90; local t0 out
+  t0=$(now)
+  [ -f "$ROOT/bin/fleet-login-reset.sh" ] \
+    || { WHY="no bin/fleet-login-reset.sh: remove --recycle has nothing to wash a login with"; return 1; }
+  grep -q -- '--recycle)' "$ROOT/bin/fleet-login-remove.sh" \
+    || { WHY="fleet-login-remove.sh has no --recycle: the hub's reset op fails at its first word"; return 1; }
+  out=$(bash "$ROOT/bin/fleet-login-reset-selftest.sh" 2>&1) \
+    || { WHY="fleet-login-reset-selftest.sh is red: $(printf '%s\n' "$out" | grep -m1 'FAIL')"; return 1; }
+  WHAT="每类种一样 → 洗完 reset: clean + credsep: separated；留一个进程 → dirty processes；重新加入失败 → dirty rejoin；半路杀掉同 op 再跑续完、只一份存档（沙盒真跑检查器）"
   SECS=$(since "$t0")
 }
 

@@ -4,6 +4,7 @@
 #                    [--machine <name>] [--no-welcome] [--lang zh|en] [--no-credsep]
 #                    [--apply]
 # fleet-login-new.sh <login> --daemons-only [--apply]
+# fleet-login-new.sh <login> --recycle [--full-name <name>] … [--apply]
 #   — open a new person's OS login on a shared machine in ONE command
 #     (issue #1164, EPIC #1163; no GUI sign-in needed since #1192, EPIC #1190;
 #     writes the person's welcome letter since #1195, EPIC #1212).
@@ -159,6 +160,14 @@
 # a full run (#1213), a unit whose plist is already in place is left alone, and
 # it still prints `installed N/N`. A dry run previews from this install.
 
+# --recycle (issue #3505, EPIC #3500 C20): the login and its home already exist,
+# just washed by bin/fleet-login-reset.sh (an empty home from the template).
+# Step 1 sets a NEW random password on the kept record (no sysadminctl), step 2
+# keeps the home (createhomedir only fills what is missing), step 3 adds the
+# SSH group only when the login is not in it — and 4–9 run as for a new login,
+# the hub's join code with them. No --full-name ⇒ the login's own RealName.
+# The login or its home missing ⇒ exit 4.
+
 # Only ever ADDS: it refuses (exit 3) when the login or its home already exists,
 # never overwrites, and writes nothing in the new home outside `.ssh/`,
 # `.config/claude-fleet/accounts/` (plus owning the `.config` dirs it creates),
@@ -167,8 +176,8 @@
 # (password.txt, the temporary key pair, welcome.txt — all yours only).
 #
 # Exit: 0 ok · 1 a step failed under --apply · 2 bad arguments · 3 the login
-#       (or its home) already exists · 4 --daemons-only: no such login (or
-#       no home)
+#       (or its home) already exists · 4 --daemons-only / --recycle: no such
+#       login (or no home)
 #
 # Env: FLEET_LOGIN_OP_ID — the admin agent's op_id (issue #2928): written to
 #      ~/<login>-onboard/op before step 1, its result appended on success, so
@@ -193,7 +202,7 @@ usage() {
 }
 die2() { printf '%s: %s\n' "$PROG" "$1" >&2; exit 2; }
 
-LOGIN='' FULL='' PUBKEY='' SHARE=0 APPLY=0 MACHINE=mini POOL_SRC='' PWFILE='' DAEMONS=1 WELCOME=1 WLANG=zh DONLY=0 CREDSEP=1
+LOGIN='' FULL='' PUBKEY='' SHARE=0 APPLY=0 MACHINE=mini POOL_SRC='' PWFILE='' DAEMONS=1 WELCOME=1 WLANG=zh DONLY=0 CREDSEP=1 RECYCLE=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --full-name) [ $# -ge 2 ] || usage; FULL=$2; shift 2 ;;
@@ -206,6 +215,7 @@ while [ $# -gt 0 ]; do
     --no-daemons) DAEMONS=0; shift ;;
     --no-credsep) CREDSEP=0; shift ;;
     --daemons-only) DONLY=1; shift ;;
+    --recycle)   RECYCLE=1; shift ;;
     --welcome)   WELCOME=1; shift ;;
     --no-welcome) WELCOME=0; shift ;;
     --apply)     APPLY=1; shift ;;
@@ -251,8 +261,12 @@ if [ "$DONLY" = 1 ]; then
   [ -z "$PWFILE" ] || die2 "--daemons-only installs the background services only; --password-file is step 1"
   WELCOME=0 CREDSEP=0
 else
+  [ "$RECYCLE" = 0 ] || [ -n "$FULL" ] \
+    || FULL=$(dscl . -read "/Users/$LOGIN" RealName 2>/dev/null | awk 'NR == 1 { sub(/^RealName:[ \t]*/, ""); if ($0 != "") { print; exit } } NR == 2 { sub(/^[ \t]+/, ""); print; exit }')
+  [ "$RECYCLE" = 0 ] || [ -n "$FULL" ] || FULL=$LOGIN
   [ -n "$FULL" ] || die2 "--full-name is required"
 fi
+[ "$DONLY" = 0 ] || [ "$RECYCLE" = 0 ] || die2 "--daemons-only and --recycle: one or the other"
 case "$WLANG" in zh|en) ;; *) die2 "--lang: zh or en (got '$WLANG')" ;; esac
 # No --pubkey ⇒ a temporary pair, carried by the welcome letter (issue #1195).
 TMPKEY=0
@@ -385,6 +399,12 @@ if [ "$DONLY" = 1 ]; then
     printf '%s: --daemons-only: login %s has no home at %s — refusing\n' "$PROG" "$LOGIN" "$H" >&2
     exit 4
   fi
+elif [ "$RECYCLE" = 1 ]; then
+  # --recycle (issue #3505): the washed login is reused — it and its home must be there
+  if ! id "$LOGIN" >/dev/null 2>&1 || [ ! -d "$H" ]; then
+    printf '%s: --recycle: no login %s with a home at %s — refusing\n' "$PROG" "$LOGIN" "$H" >&2
+    exit 4
+  fi
 elif id "$LOGIN" >/dev/null 2>&1; then
   printf '%s: login %s already exists — refusing (this script only adds)\n' "$PROG" "$LOGIN" >&2
   exit 3
@@ -402,7 +422,7 @@ realname_owner() { # $1 name → the login whose short or full name it is (none:
     { u = $1; r = $0; sub(/^[^ \t]+[ \t]*/, "", r)
       if (u == n || r == n) { print u; exit } }'
 }
-if [ "$DONLY" = 0 ]; then
+if [ "$DONLY" = 0 ] && [ "$RECYCLE" = 0 ]; then
   _own=$(realname_owner "$FULL")
   if [ -n "$_own" ]; then
     _alt="$FULL ($LOGIN)"
@@ -418,7 +438,7 @@ if [ "$DONLY" = 0 ]; then
 fi
 
 if [ "$APPLY" = 1 ]; then
-  if [ "$DONLY" = 1 ]; then NEED='sudo'; else NEED='sudo sysadminctl createhomedir git'; fi
+  if [ "$DONLY" = 1 ]; then NEED='sudo'; elif [ "$RECYCLE" = 1 ]; then NEED='sudo dscl createhomedir git'; else NEED='sudo sysadminctl createhomedir git'; fi
   for t in $NEED; do
     command -v "$t" >/dev/null 2>&1 || { printf '%s: %s not found — nothing was changed\n' "$PROG" "$t" >&2; exit 1; }
   done
@@ -529,6 +549,8 @@ if [ "$DONLY" = 1 ]; then
   fi
   say "  login=$LOGIN  home=$H  daemons-only=yes (steps 1–7 and 9 skipped)"
   N=7
+elif [ "$APPLY" = 1 ] && [ "$RECYCLE" = 1 ]; then
+  say "fleet-login-new: setting up washed login '$LOGIN' ($FULL) again — running each step:"
 elif [ "$APPLY" = 1 ]; then
   say "fleet-login-new: creating login '$LOGIN' ($FULL) — running each step:"
 else
@@ -548,8 +570,9 @@ if [ "$DONLY" = 0 ] && [ "$APPLY" = 1 ] && [ -n "$OPID" ]; then
     || { printf '%s: cannot write %s — nothing was changed\n' "$PROG" "$OPMARK" >&2; exit 1; }
 fi
 if [ "$DONLY" = 0 ]; then
+  WHAT1='create the OS login'; [ "$RECYCLE" = 0 ] || WHAT1='keep the OS login, give it a new password (--recycle)'
   if [ "$PWGEN" = 1 ]; then
-    step "create the OS login (password: random, written to $PWFILE — mode 600, never printed)"
+    step "$WHAT1 (password: random, written to $PWFILE — mode 600, never printed)"
     if [ "$APPLY" = 1 ]; then
       PW=$(gen_password)
       [ "${#PW}" -ge 16 ] || { printf '%s: could not generate a password\n' "$PROG" >&2; fail; }
@@ -559,8 +582,9 @@ if [ "$DONLY" = 0 ]; then
       say "  (would write a random password to $PWFILE, mode 600)"
     fi
   else
-    step "create the OS login (password: the first line of $PWFILE — never printed)"
+    step "$WHAT1 (password: the first line of $PWFILE — never printed)"
   fi
+  if [ "$RECYCLE" = 0 ]; then
   # No password on any argv (issue #2396): `ps` shows every process's argv to
   # every login, and addUser runs for minutes. Created shell-less, the password
   # goes in on dscl's stdin, then the shell is given back.
@@ -569,6 +593,10 @@ if [ "$DONLY" = 0 ]; then
   if [ "$APPLY" = 1 ] && ! id "$LOGIN" >/dev/null 2>&1; then
     printf '%s: sysadminctl did not create login %s (see its message above)\n' "$PROG" "$LOGIN" >&2
     fail
+  fi
+  else
+    # the kept record goes shell-less while its password changes, as a new one is
+    run sudo dscl . -create "/Users/$LOGIN" UserShell /usr/bin/false
   fi
   printf '  $ sudo dscl .   < passwd /Users/%s <redacted: %s>   (on stdin, never argv)\n' "$LOGIN" "$PWFILE"
   if [ "$APPLY" = 1 ]; then
@@ -580,7 +608,8 @@ if [ "$DONLY" = 0 ]; then
       || { printf '%s: could not set the password of %s: %s\n' "$PROG" "$LOGIN" "${DSOUT//"$PW"/<redacted>}" >&2; fail; }
   fi
   run sudo dscl . -create "/Users/$LOGIN" UserShell /bin/zsh
-  step "create its home directory (mode 700 — every login is in staff)"
+  if [ "$RECYCLE" = 1 ]; then step "its home directory (the wash made it; createhomedir fills only what is missing — mode 700)"
+  else step "create its home directory (mode 700 — every login is in staff)"; fi
   run sudo createhomedir -c -u "$LOGIN"
   # macOS's default home is 0750 <login>:staff on some machines (m4, issue
   # #2414) and every login is in staff, so any other login could list ~/.claude,
@@ -589,7 +618,10 @@ if [ "$DONLY" = 0 ]; then
   run sudo chmod 700 "$H"
 
   step "allow SSH (Remote Login)"
-  if [ "$HAVE_SSH_GROUP" = 1 ]; then
+  if [ "$HAVE_SSH_GROUP" = 1 ] && [ "$RECYCLE" = 1 ] \
+     && dseditgroup -o checkmember -m "$LOGIN" "$SSH_GROUP" 2>/dev/null | grep -q '^yes'; then
+    say "  (already in $SSH_GROUP)"
+  elif [ "$HAVE_SSH_GROUP" = 1 ]; then
     run sudo dseditgroup -o edit -a "$LOGIN" -t user "$SSH_GROUP"
   else
     say "  (skipped: no $SSH_GROUP group — Remote Login is open to all users)"
