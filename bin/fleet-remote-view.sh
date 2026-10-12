@@ -205,6 +205,26 @@ EOF
   if [ -n "${_pc:-}" ]; then _c=${_pc#wid:}
   elif [ -n "${_fid:-}" ] && [ -n "$_fu" ]; then _c="$_fu/$_fid"; fi
   [ "$(rv_row_get "$_f" cur)" = "$_c" ] || rv_row_set "$_f" cur "$_c"
+  # Issue #3489: and the thin loop on the person's computer is told, in the 7502
+  # it already reads (`ESC ] 7502 ; cur ; token=… ; m= ; l= ; w= BEL`, on the tty
+  # of the client attached to THIS 看台 — never a row's old tty, which another
+  # program may hold by now): a file dropped there goes to the session in view
+  # (fleet-thin.py send → `fleet-client-upload.py recv <m> <l> <w>` here). m=- l=-
+  # is this machine (recv's own inbox, whatever alias the machine goes by); another
+  # machine's window says its @peer. Until a home said it, every drop failed.
+  # A far 看台 (`-via-`) has no thin loop of its own — its home's says it.
+  case "$_v" in *-via-*) exit 0 ;; esac
+  _t=$(rv_row_get "$_f" token)
+  case "$_t" in ''|*[!A-Za-z0-9._:-]*) exit 0 ;; esac
+  _y=$(tmux -S "$3" list-clients -t "=$4" -F '#{client_tty}' 2>/dev/null | head -n 1)
+  case "$_y" in /dev/*) ;; *) exit 0 ;; esac
+  _m=- _l=-
+  if [ -n "${_pc:-}" ]; then
+    _p=$(tmux -S "$3" display-message -p -t "=$4:" '#{@peer}' 2>/dev/null)
+    case "$_p" in ?*@?*) _m=${_p%@*} _l=${_p##*@} ;; esac
+  fi
+  _ok() { printf '%s' "$1" | tr -cd 'A-Za-z0-9._:@/-'; }
+  printf '\033]7502;cur;token=%s;m=%s;l=%s;w=%s\007' "$_t" "$(_ok "$_m")" "$(_ok "$_l")" "$(_ok "$_c")" 2>/dev/null > "$_y"
   exit 0
 fi
 
@@ -823,7 +843,7 @@ rv_thin_dress() {
   return 0
 }
 rv_attach_thin() {
-  local view='' want='' resume='' device='' route='' token='' lang='' setlang='' hint='' s w='' g gid='' tty f p fu cur rc kept wfar orchfar
+  local view='' want='' resume='' device='' route='' token='' lang='' setlang='' hint='' s w='' g gid='' tty f p fu cur rc kept wfar orchfar sp
   while [ $# -gt 0 ]; do
     case "$1" in
       --view) view="${2:-}"; shift 2 ;;
@@ -934,6 +954,17 @@ rv_attach_thin() {
       "$tty" "$s" "$(date +%s)" "$$" "$(rv_thin_cur "$s" "$w" "$fu")" "$route" "$device" "$token" "$fu" "$(rv_node_label)" \
       > "$VIEWS/.$view.$$" && mv -f "$VIEWS/.$view.$$" "$f" ) \
     || { note "attach --thin: cannot register $view"; return 1; }
+  # the session in view, said to the thin loop once its client is on (issue #3489):
+  # an attach fires no session-window-changed, so the `cur` hook's first word is
+  # this one — off the attach's path, a few tries while the client comes up
+  case "$view" in *-via-*) ;; *)
+    sp=$(T display-message -p -t "$gid:" '#{socket_path}' 2>/dev/null)
+    [ -z "$sp" ] || ( for _ in 1 2 3 4 5 6 7 8 9 10; do
+        sleep 0.5
+        T list-clients -t "=$g" -F x 2>/dev/null | grep -q x || continue
+        bash "$BIN/fleet-remote-view.sh" cur "$VIEWS" "$sp" "$g"; break
+      done </dev/null >/dev/null 2>&1 & ) ;;
+  esac
   trap 'rc=129' HUP
   T attach-session -t "$gid"; rc=$?
   # The 看台 stays: its row says since when nobody looks (only while it is ours).

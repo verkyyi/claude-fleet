@@ -37,6 +37,10 @@
 #                   and English detected for a device the first time ⇒ @view_flash
 #                   (the top line's 8 s line) — once per device
 #   K. key table  — `key-table fleet-view` only once that table exists (C2)
+#   O. cur OSC    — the thin loop is told the session in view (issue #3489): OSC
+#                   7502 cur with the 看台's token on its client's tty, at the
+#                   attach and on every switch (m=- l=- here, a peer window's
+#                   @peer there); a far 看台 says nothing
 #   R. bell       — a 看台 rings only for the window it shows (issue #3090): with the
 #                   node's `bell-action any`, a BEL in another window reaches neither
 #                   a 看台's terminal nor a far 看台's (`<id>-via-<home>`, the client
@@ -406,6 +410,39 @@ ring "$W7"; sleep 1
 eq "R: a BEL in the shown window reaches the 看台's terminal" "1" "$(bell bellh)"
 eq "R: … and a far 看台's" "1" "$(bell bellf)"
 for w in bellh bellf bello; do tt kill-window -t "=$TL:$w" 2>/dev/null; done
+
+# ============================================================================
+# O. the thin loop is told the session in view (issue #3489): OSC 7502 cur on
+#    the attached client's tty — at the attach, and on every switch; m=- l=- for
+#    a window of this machine, a peer window's @peer for another one's; a far
+#    看台 (`-via-`) says nothing (its home's 看台 does)
+# ============================================================================
+osc() { tr '\033\007' '<>' < "$WORK/osc.$1" 2>/dev/null; }
+tt new-window -d -t "=$TL:" -n osc1 "sleep 300"
+tt pipe-pane -O -t "=$TL:osc1" "cat >> '$WORK/osc.osc1'"
+tt respawn-pane -k -t "=$TL:osc1" "env -u TMUX FLEET_CONF_DIR='$FLEET_CONF_DIR' TMPDIR='$TMPDIR' bash '$BIN/fleet-remote-view.sh' attach --thin --view devo1 --want $U/fid-7 --device $DEV --route lan --token tko; sleep 300"
+tt pipe-pane -O -t "=$TL:osc1" "cat >> '$WORK/osc.osc1'"
+waitfor 8 sh -c "tr '\033\007' '<>' < '$WORK/osc.osc1' 2>/dev/null | grep -qF '<]7502;cur;token=tko;m=-;l=-;w=$U/fid-7>'" \
+  || fail "O: the attach says the session in view" "$(osc osc1 | grep -o '7502;cur[^>]*' | tail -n 3)"
+tn new-window -d -t "=$RS:" -n peerx "sleep 300"
+PX=$(tn display-message -p -t "=$RS:peerx" '#{window_id}')
+tn set-option -w -t "$PX" @peer 'far1@bob' \; set-option -w -t "$PX" @peer_cur "wid:FU9/ffar" \; set-option -w -t "$PX" @fleet_role panel
+tn select-window -t "=$(vs devo1):$PX"
+waitfor 5 sh -c "tr '\033\007' '<>' < '$WORK/osc.osc1' 2>/dev/null | grep -qF '<]7502;cur;token=tko;m=far1;l=bob;w=FU9/ffar>'" \
+  || fail "O: a peer window says its machine and login" "$(osc osc1 | grep -o '7502;cur[^>]*' | tail -n 3)"
+tn select-window -t "=$(vs devo1):$W8"
+waitfor 5 sh -c "tr '\033\007' '<>' < '$WORK/osc.osc1' 2>/dev/null | grep -qF '<]7502;cur;token=tko;m=-;l=-;w=$U/fid-8>'" \
+  || fail "O: a switch back here says it" "$(osc osc1 | grep -o '7502;cur[^>]*' | tail -n 3)"
+hasnt "O: no other token on that tty" "$(osc osc1 | grep -o '7502;[a-z]*;token=[^;>]*' | grep -v 'token=tko')" "token="
+tt new-window -d -t "=$TL:" -n osc2 "sleep 300"
+tt pipe-pane -O -t "=$TL:osc2" "cat >> '$WORK/osc.osc2'"
+tt respawn-pane -k -t "=$TL:osc2" "env -u TMUX FLEET_CONF_DIR='$FLEET_CONF_DIR' TMPDIR='$TMPDIR' bash '$BIN/fleet-remote-view.sh' attach --thin --view devo2-via-home --want $U/fid-7 --device $DEV --route lan --token tkf; sleep 300"
+tt pipe-pane -O -t "=$TL:osc2" "cat >> '$WORK/osc.osc2'"
+waitfor 5 sh -c "[ -n \"\$('$REAL_TMUX' -L '$RS' list-clients -t '=$(vs devo2-via-home)' 2>/dev/null)\" ]" || fail "O: no client on the far 看台"
+tn select-window -t "=$(vs devo2-via-home):$W8"; sleep 2
+hasnt "O: a far 看台 says nothing" "$(osc osc2)" "7502;cur"
+for w in osc1 osc2; do tt kill-window -t "=$TL:$w" 2>/dev/null; done
+tn kill-window -t "$PX" 2>/dev/null
 
 # ============================================================================
 # L. lint: the collector reaps a kept 看台 (its `views` phase)

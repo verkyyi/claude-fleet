@@ -1315,9 +1315,27 @@ def go(qo, vid, target, how="go", client="", meta=None, record=True):
            "method": method, "ms": ms, "how": how}
     rec.update(extra)
     log_switch(rec)
+    if rc == 0 and far:
+        tell_cur(g)
     if rc == 0 and record:
         hist_save(qo, vid, qo.visit(hist_load(qo, vid), target if not target.startswith("@") else w))
     return rc
+
+
+def tell_cur(g):
+    """The 看台's session in view, to its thin loop (issue #3489): the `cur` hook's
+    own mode (fleet-remote-view.sh cur — the one writer of `cur=` and its OSC 7502).
+    A switch between two sessions of one other machine stays in ONE peer window, so
+    no session-window-changed says it."""
+    code, sp = tm("display-message", "-p", "-t", "=%s:" % g, "#{socket_path}")
+    if code != 0 or not sp:
+        return
+    try:
+        subprocess.run(["bash", str(Path(__file__).absolute().parent / "fleet-remote-view.sh"), "cur",
+                        str(views_dir()), sp, g], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        pass
 
 
 def do(qo, verb, vid, client="", target=None, new=None):
