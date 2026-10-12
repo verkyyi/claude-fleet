@@ -91,7 +91,7 @@ func (s *Server) handleFleetWrite(w http.ResponseWriter, r *http.Request) {
 		// another person's worker is NOT_FOUND — on the worker tools only.
 		if nid, nok := s.nodeLoginIdentity(r); nok {
 			if !nodeWriteTools[req.Tool] {
-				httpError(w, http.StatusForbidden, "a node token writes the worker tools only (worker_message, worker_stop, worker_resume, worker_answer, worker_reap, worker_reap_policy, worker_rename, worker_switch) and operation_get")
+				httpError(w, http.StatusForbidden, "a node token writes the worker tools only (worker_message, worker_stop, worker_resume, worker_answer, worker_reap, worker_reap_policy, worker_rename, worker_pin, worker_switch) and operation_get")
 				return
 			}
 			id, ok, nodeActor = nid, true, nid.Actor
@@ -150,4 +150,4 @@ func (s *Server) handleFleetWrite(w http.ResponseWriter, r *http.Request) {
 // /v1/node/place), configuration, a service or a GitHub comment.
 var nodeWriteTools = map[string]bool{"worker_message": true, "worker_stop": true, "worker_resume": true,
 	"worker_answer": true, "worker_reap": true, "worker_reap_policy": true, "worker_rename": true,
-	"worker_switch": true, "operation_get": true}
+	"worker_pin": true, "worker_switch": true, "operation_get": true}

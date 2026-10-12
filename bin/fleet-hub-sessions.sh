@@ -129,7 +129,7 @@
 #       hub's `nodes` list; derived from the sessions on a hub older than #1475.
 # then one row per session:
 #   wid:<worker_id>  node  online|lost  issue  repo  state  agent  name  origin  needs  local  wid  via  busy  born  cfg  [title]
-#   [reap epic backfill]  [ctx_left ctx_band ctx_ts model effort]  [test]  [akind atext]  [tokens]
+#   [reap epic backfill]  [ctx_left ctx_band ctx_ts model effort]  [test]  [akind atext]  [tokens]  [pin]
 # Fields 21-25 (issue #2431) are the session's measurement bus (the node's
 # inventory columns 24-28): % of the context LEFT, its band, the reading's epoch,
 # the model and its effort — `fleet ls` prints them; all five or none (a node
@@ -137,7 +137,8 @@
 # Fields 27-28 (issue #2538) are what a needs session asks (kind, words); field
 # 29 (issue #3377) is the session's pool tokens since this UTC midnight, the
 # hub's tokens_today — appended only when there are any, the empty ones before
-# it kept, so a reader naming the ask pair last must name one more.
+# it kept, so a reader naming the ask pair last must name one more. Field 30
+# (issue #3517) is `1` on a pinned session (the node's `pin=`), the same way.
 # Field 26 (issue #2505) is `1` on a session the TEST identity's client placed
 # (the node's inventory column 30, @test_identity): the list hides it unless
 # FLEET_ROWS_TEST=1 (`fleet ls`); absent on every other row.
@@ -848,7 +849,7 @@ for s in sessions:
                      state=w.get("lifecycle") if w.get("lifecycle") not in (None, "", "awake") else (w.get("state") or ""),
                      agent=w.get("agent") or "", name=w.get("name") or w.get("key") or wid.split("/", 1)[1],
                      owid=by_ident.get(w.get("origin_wid") or "", w.get("origin_wid") or ""), needs=w.get("needs") or "", busy=w.get("busy") or "", born=born_of(w), cfg=w.get("cfg") if w.get("cfg") in ("stale", "renew", "ok") else "", title=w.get("title") if isinstance(w.get("title"), str) else "", detail=w.get("detail") if isinstance(w.get("detail"), str) else "", epic=w.get("epic") if isinstance(w.get("epic"), str) and re.fullmatch(r"(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#[1-9][0-9]{0,9}(?::[0-9]{1,4}/[0-9]{1,4})?", w.get("epic")) else "", reap=w.get("reap") if isinstance(w.get("reap"), str) and re.fullmatch(r"[A-Za-z0-9:.+-]{1,48}", w.get("reap")) else "", backfill="failed" if w.get("backfill") == "failed" else "", test=w.get("test") is True, ctx=ctx_of(w), ask=ask_of(w, w.get("lifecycle") if w.get("lifecycle") not in (None, "", "awake") else (w.get("state") or "")), stale=stale_of(w), orphans=orphans_of(w), seen=epoch(s.get("observed_at")), seenf=fepoch(s.get("observed_at")),
-                     tok=tok_of(s), local=here["sess"] if here else None,
+                     tok=tok_of(s), pin=w.get("pin") is True, local=here["sess"] if here else None,
                      lwid=windows.get((here["sess"], wid.split("/", 1)[1]), "") if here else ""))
 
 # The other machines (issue #1475): the hub's `nodes` list when it has one
@@ -980,21 +981,23 @@ for f in local:
                                               # 17 title, 18 reap (#1902), 19 epic (#1958), 20 backfill
                                               # (#2235): each only when there is one, the empty ones
                                               # before it kept
-                                              + ((r["title"],) if r["title"] or r["reap"] or r["epic"] or r["backfill"] or r["ctx"] or r["test"] or r["ask"] or r["tok"] else ())
-                                              + ((r["reap"],) if r["reap"] or r["epic"] or r["backfill"] or r["ctx"] or r["test"] or r["ask"] or r["tok"] else ())
-                                              + ((r["epic"],) if r["epic"] or r["backfill"] or r["ctx"] or r["test"] or r["ask"] or r["tok"] else ())
-                                              + ((r["backfill"],) if r["backfill"] or r["ctx"] or r["test"] or r["ask"] or r["tok"] else ())
+                                              + ((r["title"],) if r["title"] or r["reap"] or r["epic"] or r["backfill"] or r["ctx"] or r["test"] or r["ask"] or r["tok"] or r["pin"] else ())
+                                              + ((r["reap"],) if r["reap"] or r["epic"] or r["backfill"] or r["ctx"] or r["test"] or r["ask"] or r["tok"] or r["pin"] else ())
+                                              + ((r["epic"],) if r["epic"] or r["backfill"] or r["ctx"] or r["test"] or r["ask"] or r["tok"] or r["pin"] else ())
+                                              + ((r["backfill"],) if r["backfill"] or r["ctx"] or r["test"] or r["ask"] or r["tok"] or r["pin"] else ())
                                               # 21-25 (#2431): ctx_left · ctx_band · ctx_ts · model ·
                                               # effort — all five, only when the node measured any
-                                              + (r["ctx"] or (("",) * 5 if r["test"] or r["ask"] or r["tok"] else ()))
+                                              + (r["ctx"] or (("",) * 5 if r["test"] or r["ask"] or r["tok"] or r["pin"] else ()))
                                               # 26 (#2505): `1` on a test identity's session
-                                              + (("1" if r["test"] else "",) if r["test"] or r["ask"] or r["tok"] else ())
+                                              + (("1" if r["test"] else "",) if r["test"] or r["ask"] or r["tok"] or r["pin"] else ())
                                               # 27-28 (#2538): what a needs session asks — its
                                               # kind (permission · question · auth) and its words
-                                              + (r["ask"] or (("", "") if r["tok"] else ()))
+                                              + (r["ask"] or (("", "") if r["tok"] or r["pin"] else ()))
                                               # 29 (#3377): the session's pool tokens today,
                                               # only when the hub recorded any
-                                              + ((r["tok"],) if r["tok"] else ())) + "\n")
+                                              + ((r["tok"],) if r["tok"] or r["pin"] else ())
+                                              # 30 (#3517): `1` on a pinned session
+                                              + (("1",) if r["pin"] else ())) + "\n")
     path = os.path.join(gdir, "remote_" + f["sess"])
     if via == "node" and not (client and os.environ.get("FLEET_HUB_SESSIONS_LOCAL") == "1"):
         # The machines that did not answer over a connection keep their last

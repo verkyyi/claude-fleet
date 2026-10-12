@@ -230,8 +230,10 @@ case "$mode" in
     # fleet-report-parent.sh) and not read yet: bin/fleet-orphan-reports.py cell —
     # `id\037ts\037repo\037child\037state\037pr\037summary`, \036-joined, at most
     # 10. The LOGIN's, like epicstale=: every row carries the same cell; empty (and
-    # no fork) when the file does not exist — the common case. A row ends at
-    # orphanrep=; an older node's ends at test=.
+    # no fork) when the file does not exist — the common case.
+    # Column 32 (issue #3517): `pin=1` on a pinned window (@pin), else `pin=` — so
+    # another machine's list puts it in its 置顶 group, and the hub's worker_pin can
+    # read back what it wrote. A row ends at pin=; an older node's at orphanrep=.
     ttl=$'\n'; drepo=''; _nr=0
     while IFS= read -r _r; do
       [ -n "$_r" ] || continue
@@ -243,7 +245,7 @@ case "$mode" in
           print ENVIRON["FR"] "\t" substr($2, 2) "\t" t }' "$_f" 2>/dev/null)$'\n'
     done < <(fleet_repos "$sess" 2>/dev/null)
     [ "$_nr" = 1 ] || drepo=''   # a window with no repo column falls to the fleet's ONLY repo
-    cwds=$(tmux -u -L "$sock" list-windows -t "=$sess" ${lwf[@]+"${lwf[@]}"} -F $'#{window_id}\t#{pane_current_path}\t#{@norepo}\t#{@cc_agent}\t#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}\t#{?@born,#{@born},#{window_created}}\t#{@reap_policy}\t#{?#{==:#{@claude_state},needs},#{@claude_needs_detail},}\t#{?#{||:#{==:#{@fleet_role},orchestrator},#{==:#{@fleet_role},steward}},#{@fleet_role},}\t#{@epic}\t#{?#{==:#{@backfill},failed},failed,}\t#{?#{==:#{@test_identity},1},1,}\t#{@task_line}\t#{?@name_manual,#{?#{==:#{window_name},#{@name_manual}},#{@name_manual},},}' 2>/dev/null) || cwds=''
+    cwds=$(tmux -u -L "$sock" list-windows -t "=$sess" ${lwf[@]+"${lwf[@]}"} -F $'#{window_id}\t#{pane_current_path}\t#{@norepo}\t#{@cc_agent}\t#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}\t#{?@born,#{@born},#{window_created}}\t#{@reap_policy}\t#{?#{==:#{@claude_state},needs},#{@claude_needs_detail},}\t#{?#{||:#{==:#{@fleet_role},orchestrator},#{==:#{@fleet_role},steward}},#{@fleet_role},}\t#{@epic}\t#{?#{==:#{@backfill},failed},failed,}\t#{?#{==:#{@test_identity},1},1,}\t#{@task_line}\t#{?@name_manual,#{?#{==:#{window_name},#{@name_manual}},#{@name_manual},},}\t#{?#{==:#{@pin},1},1,}' 2>/dev/null) || cwds=''
     fleet_cfg_expected_load; fleet_cfg_broken_load     # broken (#2076): judged here too
     orep=''
     [ -s "$FLEET_CONF_DIR/global/orphan-reports.ndjson" ] && orep=$(python3 "$BIN/fleet-orphan-reports.py" cell 2>/dev/null)
@@ -259,7 +261,9 @@ case "$mode" in
       c2=${rest%%$'\t'*}; rest=${rest#*$'\t'}
       c3=${rest%%$'\t'*}; rest=${rest#*$'\t'}
       wt=${rest%%$'\t'*}; rest=${rest#*$'\t'}
-      wrow=$(printf '%s\n' "$cwds" | awk -F'\t' -v w="$wid" '$1 == w { print $2 "\t" $3 "\t" $4 "\t" $5 "\t" $6 "\t" $7 "\t" $8 "\t" $9 "\t" $10 "\t" $11 "\t" $12 "\t" $13 "\t" $14; exit }')
+      wrow=$(printf '%s\n' "$cwds" | awk -F'\t' -v w="$wid" '$1 == w { print $2 "\t" $3 "\t" $4 "\t" $5 "\t" $6 "\t" $7 "\t" $8 "\t" $9 "\t" $10 "\t" $11 "\t" $12 "\t" $13 "\t" $14 "\t" $15; exit }')
+      wpin=${wrow##*$'\t'}; wrow=${wrow%$'\t'*}
+      [ "$wpin" = 1 ] || wpin=''
       wman=${wrow##*$'\t'}; wrow=${wrow%$'\t'*}
       wman=${wman//$'\r'/ }
       wtl=${wrow##*$'\t'}; wrow=${wrow%$'\t'*}
@@ -342,7 +346,7 @@ case "$mode" in
       fi
       # the holder of an old seat is an ordinary row (issue #3119): `role=worker`
       orole=''; [ -n "$wrole" ] && orole=worker
-      printf '%s\tbusy=%s\tborn=%s\tcfg=%s\ttitle=%s\treap=%s\tdetail=%s\trole=%s\tepic=%s\tepicstale=%s\tbackfill=%s\tctxleft=%s\tctxband=%s\tctxts=%s\tmodel=%s\teffort=%s\tagentstatus=%s\ttest=%s\torphanrep=%s\n' "$row" "$b" "$born" "$FCFG_STATE" "$t" "$wreap" "$wdet" "$orole" "$wepic" "$estale" "$wbf" "$cl" "$cb" "$cts" "$cm" "$ce" "$cas" "$wtest" "$orep"
+      printf '%s\tbusy=%s\tborn=%s\tcfg=%s\ttitle=%s\treap=%s\tdetail=%s\trole=%s\tepic=%s\tepicstale=%s\tbackfill=%s\tctxleft=%s\tctxband=%s\tctxts=%s\tmodel=%s\teffort=%s\tagentstatus=%s\ttest=%s\torphanrep=%s\tpin=%s\n' "$row" "$b" "$born" "$FCFG_STATE" "$t" "$wreap" "$wdet" "$orole" "$wepic" "$estale" "$wbf" "$cl" "$cb" "$cts" "$cm" "$ce" "$cas" "$wtest" "$orep" "$wpin"
     done <<<"$rows"
     ;;
   # --- wstate <sess> <@win> (issue #2238) --------------------------------------
@@ -849,6 +853,32 @@ case "$mode" in
       \; set-option -w -t "$win" @name_manual "$nm" \
       || { printf 'rename: tmux refused\n' >&2; exit 1; }
     printf 'renamed\n'
+    ;;
+  # --- pin <sess> <window_id> <fleet_id> on|off (issue #3517) -----------------
+  # The hub's worker_pin: 置顶 / 取消置顶 on a row here from another machine's
+  # list. The same check as rename — the window must still carry that @fleet_id
+  # (a recycled id is refused, exit 5) — then @pin set or unset, the way
+  # dash-pin-toggle.sh writes it (unset, never a parked 0).
+  pin)
+    fleet_load_conf "$sess"
+    win="${3:-}"; fid="${4:-}"; how="${5:-}"
+    case "$win" in @[0-9]*) ;; *) exit 2 ;; esac
+    case "$win" in *[!@0-9]*) exit 2 ;; esac
+    case "$how" in on|off) ;; *) printf 'pin: on or off, not %s\n' "$how" >&2; exit 2 ;; esac
+    sock=$(fleet_socket "$sess")
+    have=$(tmux -L "$sock" display-message -p -t "$win" '#{window_id} #{@fleet_id}' 2>/dev/null)
+    [ "${have%% *}" = "$win" ] || { printf 'pin: no window %s on %s\n' "$win" "$sess" >&2; exit 5; }
+    have=${have#* }
+    if [ -n "$fid" ] && [ "$have" != "$fid" ]; then
+      printf 'pin: window %s is no longer that session\n' "$win" >&2; exit 5
+    fi
+    if [ "$how" = on ]; then
+      tmux -L "$sock" set-option -w -t "$win" @pin 1 || { printf 'pin: tmux refused\n' >&2; exit 1; }
+      printf 'pinned\n'
+    else
+      tmux -L "$sock" set-option -w -t "$win" -u @pin || { printf 'pin: tmux refused\n' >&2; exit 1; }
+      printf 'unpinned\n'
+    fi
     ;;
   # --- reappol <sess> <window_id> <fleet_id> <policy> (issue #2368) -----------
   # The hub's worker_reap_policy: a sidebar on another machine's 「改回收方式…」 on

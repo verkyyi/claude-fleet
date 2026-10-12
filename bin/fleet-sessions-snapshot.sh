@@ -84,7 +84,7 @@ save() {
     sess=${d%/}; sess=${sess##*/}
     fleet_is_pool_session "$sess" && continue
     # One pass over the map: REAP / FID rows ride with the WIN row they precede;
-    # a finished or panel row drops with them. The map copy keeps restore.map's
+    # a finished or panel row drops with them; PIN / DESK / OWID rows are kept. The map copy keeps restore.map's
     # own format; the TSV is the readable list.
     n=$(awk -F'\t' -v OFS='\t' -v sess="$sess" -v panel="$PANEL_RE" -v tsv="$tmp" -v map="$SDIR/$sess.map.tmp" '
       function v(x) { return (x == "" ? "-" : x) }
@@ -101,8 +101,12 @@ save() {
         }
         pend = ""; fid = ""; next
       }
+      # the identity-keyed rows after the pairs — a pin (#3517), a desk ticket
+      # (#2676), a remote parent (#3439) — ride along as they are: restore()
+      # stamps one only on the WIN row its fleet_id names
+      $1 == "PIN" || $1 == "DESK" || $1 == "OWID" { post = post $0 "\n"; pend = ""; fid = ""; next }
       { pend = ""; fid = "" }
-      END { print c + 0 }' "$mf")
+      END { if (c > 0) printf "%s", post > map; print c + 0 }' "$mf")
     if [ "${n:-0}" -gt 0 ]; then mv -f "$SDIR/$sess.map.tmp" "$SDIR/$sess.map"
     else rm -f "$SDIR/$sess.map.tmp" "$SDIR/$sess.map"; fi
     total=$((total + ${n:-0}))

@@ -155,7 +155,7 @@ case " $(ids "$W5") " in *" wake "*) ;; *) fail "B: sleeping row lacks wake" ;; 
 case " $(ids "$W5") " in *" stop "*) fail "B: a sleeping row offers stop" ;; esac
 m3=$(qo view-menu --view fl@view-v1 "$W3")
 grep -q $'^resume\t恢复' <<< "$m3" || fail "B: ended exited row lacks 恢复: $m3"
-[ "$(ids "$MU/far1")" = "enter shell message rename reappol stop reap " ] || fail "B: another machine's row: $(ids "$MU/far1")"
+[ "$(ids "$MU/far1")" = "enter shell message rename pin reappol stop reap " ] || fail "B: another machine's row: $(ids "$MU/far1")"
 case " $(ids "$MU/far2") " in *" answer "*) ;; *) fail "B: a far asking row lacks answer: $(ids "$MU/far2")" ;; esac
 case " $(ids "$MU/far4") " in *" resume "*) ;; *) fail "B: a far exited row lacks resume: $(ids "$MU/far4")" ;; esac
 pass "B  a row's menu: done · asking · sleeping · ended (恢复) · another machine's (its hub writes)"
@@ -246,11 +246,19 @@ waitfor '新名字› 新名字' || fail "D: 改名 did not ask on the bottom li
 to send-keys -t o Escape
 waitfor 'Tab 操作' || fail "D: Esc did not cancel the rename"
 [ -z "$(calls)" ] || fail "D: a cancelled rename ran «$(calls)»"
+# ⌘P's 置顶 (issue #3517): the session in view has its own line, and ⌃T on the lit
+# row runs the row's own 置顶 — dash-pin-toggle.sh once, the list stays open
+screen | grep -q '📌 置顶当前会话' || fail "D: no 「📌 置顶当前会话」 line: $(screen)"
+reset
+to send-keys -t o C-t
+for _ in $(seq 1 40); do [ -n "$(calls)" ] && break; sleep 0.1; done
+[ "$(calls)" = "dash-pin-toggle.sh|$W1" ] || fail "D: ⌃T ran «$(calls)»"
+waitfor 'Tab 操作' || fail "D: ⌃T closed the list: $(screen)"
 if [ -n "${FLEET_VIEW_ACT_EVIDENCE:-}" ]; then
   { echo '--- 改动后：⌘P 选中「Alpha 做完了」· 回收前'; cat "$W/before.txt"; echo '--- Tab → 回收… → y 之后';
     cat "$W/after.txt"; echo '--- Tab 的菜单'; cat "$W/menu.txt"; } > "$FLEET_VIEW_ACT_EVIDENCE"
 fi
-pass "D  popup: Tab opens the row's menu, Esc steps back and closes with nothing run; 回收 asks y/n (n nothing, y one dash-reap.sh); 改名 asks on the bottom line"
+pass "D  popup: Tab opens the row's menu, Esc steps back and closes with nothing run; 回收 asks y/n (n nothing, y one dash-reap.sh); 改名 asks on the bottom line; 📌 置顶当前会话 and ⌃T (#3517)"
 # --- E: another machine's row --------------------------------------------------------------
 # the sidebar's own cache (fleet-sidebar-remote.sh reads $FLEET_C/global, FLEET_C
 # under $TMPDIR): the same dir the list reads (FLEET_STATUS_G)
@@ -304,6 +312,11 @@ sed "s/Far 在 m4/新名/" "$W/rows.bak" > "$W/rows.txt"
 [ ! -s "$G/view-names.fl" ] || fail "E: the hold outlived the hub saying the name: $(cat "$G/view-names.fl")"
 mv "$W/rows.bak" "$W/rows.txt"
 far far1 reappol worker_reap_policy '"policy":"done:2h"' --text done:2h
+# 置顶 (issue #3517): a set on the wire — the opposite of what the cache's field 30 says
+far far1 pin worker_pin '"pin":"on"'
+awk -F '\037' -v OFS='\037' -v w="wid:$MU/far1" '$1 == w { $30 = 1 } { print }' "$G/remote_fl" > "$G/remote_fl.new" \
+  && mv "$G/remote_fl.new" "$G/remote_fl"
+far far1 pin worker_pin '"pin":"off"'
 far far1 stop worker_stop ''
 far far4 resume worker_resume ''
 far far2 answer worker_answer '"answer":"yes"' --text y
@@ -334,5 +347,5 @@ waitfor '▶ 停下' || fail "E: ↓5 is not 停下: $(screen)"
 to send-keys -t o Enter
 waitfor '（在 m4）：已完成' || fail "E: the popup does not say the stop landed: $(screen)"
 [ "$(calls)" = "fleet-sidebar-remote.sh|stop|fl|wid:$MU/far1" ] || fail "E: the popup's stop ran «$(calls)»"
-pass "E  another machine's row: each far action one sidebar-remote call + one hub write (worker_id, answer), the machine named, a refusal verbatim, a lost row nothing, a --refresh after; the popup's 停 lands off-thread"
+pass "E  another machine's row: each far action one sidebar-remote call + one hub write (worker_id, answer, pin on/off), the machine named, a refusal verbatim, a lost row nothing, a --refresh after; the popup's 停 lands off-thread"
 echo "PASS fleet-view-actions-selftest"

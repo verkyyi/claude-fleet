@@ -742,7 +742,7 @@ def session_of():
 # right-click menu runs (menu_items), so a key is never a second spelling of an
 # action. (key, menu action, the verb a refusal names.)
 ROW_KEYS = {"\x12": ("rename", "改名"), "\x18": ("reap", "回收"), "\x01": ("answer", "回答"),
-            "\x05": ("reappol", "改回收方式"), "\x0f": ("pr", "打开 PR")}
+            "\x05": ("reappol", "改回收方式"), "\x0f": ("pr", "打开 PR"), "\x14": ("pin", "置顶")}
 
 
 def row_command(session, key, action):
@@ -791,6 +791,13 @@ def panel_cmds(layout, session, current, say=None):
         out.append(("layout:solo", w("panel_solo", "切到单会话视图"), "", "!layout:solo"))
     rn = row_command(session, current, "rename") if current else ""
     out.append(("rename-current", ("" if rn else "-") + w("panel_rename_current", "改名当前会话"), "", rn))
+    # claude-fleet#3517: 置顶 / 取消置顶 the row in view — its menu's own item, so
+    # the words follow its state (the menu reads @pin, a far row the hub cache's)
+    _, items = menu_items(session, current) if current else ("", [])
+    pin = next((it for it in items if it[0] == "pin" and not it[1].startswith("-")), None)
+    unpin = bool(pin) and pin[1] == (ui("t", "menu_unpin").strip() or "取消置顶")
+    out.append(("pin-current", ("" if pin else "-") + (w("panel_unpin_current", "取消置顶当前会话") if unpin
+                                                       else w("panel_pin_current", "置顶当前会话")), "", pin[3] if pin else ""))
     # claude-fleet#2886: pin the route to a machine (`fleet route`); 「/route」 in
     # its name is what a narrow screen types to find it
     out.append(("route", w("panel_route", "连接路线…（/route）"), "", "!route"))
@@ -955,7 +962,7 @@ def popup(screen, pane, session="", target="", switch=False):
                          "quickopen_cmd_loading", "switch_new", "switch_multi", "switch_solo", "panel_quit",
                          "panel_new_fmt", "panel_multi", "panel_solo", "panel_rename_current",
                          "panel_no_action_fmt", "panel_no_waiting", "switch_quit", "panel_dispatch",
-                         "panel_route", "panel_repo_add",
+                         "panel_route", "panel_repo_add", "panel_pin_current", "panel_unpin_current",
                          "quickopen_stale_fmt", "quickopen_lost"))
         fetched.append(full_rows(session))
     reader = threading.Thread(target=fetch, daemon=True)
@@ -1084,7 +1091,7 @@ def popup(screen, pane, session="", target="", switch=False):
         if key in ("\x1b", "\x03", "\x07") or key == curses.KEY_EXIT:
             return 0
         if key in ROW_KEYS and not command:
-            # ⌃R ⌃X ⌃A ⌃E ⌃O on the lit row (issue #2365)
+            # ⌃R ⌃X ⌃A ⌃E ⌃O on the lit row (issue #2365), ⌃T 置顶 (#3517)
             action, verb = ROW_KEYS[key]
             row = shown[at][1][0] if shown and shown[at][0] == "row" else None
             if action == "answer" and (row is None or row["state"] != "needs"):

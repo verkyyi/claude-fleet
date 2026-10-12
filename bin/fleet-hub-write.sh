@@ -15,7 +15,7 @@
 #   fleet-hub-write.sh --identity                 who this login writes as (no network)
 #
 #   <tool>       worker_message · worker_stop · worker_resume · worker_answer ·
-#                worker_reap · worker_switch · worker_rename · worker_reap_policy ·
+#                worker_reap · worker_switch · worker_rename · worker_reap_policy · worker_pin ·
 #                worker_start · gh_comment · config_set · service_control ·
 #                orch_ensure (issue #2616; answers 「没有编排」 since #3118) — the hub's
 #                write tools; anything else is refused here before a byte goes out.
@@ -77,7 +77,7 @@ _fcd="${FLEET_CONF_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/claude-fleet}"
 [ -f "$_fcd/fleet.conf" ] && . "$_fcd/fleet.conf"
 
 WRITE_NS="fleet-write@claude-fleet"
-WRITE_TOOLS=" worker_message worker_stop worker_resume worker_answer worker_reap worker_switch worker_rename worker_reap_policy worker_start gh_comment config_set service_control orch_ensure "
+WRITE_TOOLS=" worker_message worker_stop worker_resume worker_answer worker_reap worker_switch worker_rename worker_reap_policy worker_pin worker_start gh_comment config_set service_control orch_ensure "
 
 usage() { sed -n '/^#   fleet-hub-write.sh <tool>/,/^# nothing was sent/p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 note() { [ "$QUIET" = 1 ] || printf 'fleet-hub-write: %s\n' "$*" >&2; }

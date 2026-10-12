@@ -281,6 +281,11 @@ snapshot() {
     # report reached nobody. No such window ⇒ no row, the map byte for byte.
     tmux -L "$sock" list-windows -t "$sess" -F '#{@fleet_id}|#{@origin_wid}' 2>/dev/null \
       | awk -F'|' '$1 != "" && $2 ~ /^[A-Za-z0-9._:-]+\/[A-Za-z0-9._:-]+$/ { printf "OWID\t%s\t%s\n", $1, $2 }' >> "$tmp"
+    # A pinned session (issue #3517): `PIN<TAB><fleet_id>` rows, appended like
+    # DESK. @pin lives on the window, so a planned restart's restore (#3511) used to
+    # bring the session back unpinned. No pinned window ⇒ no row, the map byte for byte.
+    tmux -L "$sock" list-windows -t "$sess" -F '#{@pin}|#{@fleet_id}' 2>/dev/null \
+      | awk -F'|' '$1 == "1" && $2 != "" { printf "PIN\t%s\n", $2 }' >> "$tmp"
     # Destructive-shrink guard (issue #160): a fleet caught MID-RESTORE is
     # hub-only — fleet-up has rebuilt its panels but restore hasn't reopened the
     # work windows yet — so a snapshot taken in that window has FEWER WIN rows
@@ -475,7 +480,7 @@ pullback_run() {
       printf 'FID\t%s\n%s\n' "$fid" "WIN${line#WIN:"$fid"}" >> "$keep"
       n=$((n + 1))
     done < <(fleet_restore_wins "$pb")
-    awk -F'\t' '$1 == "DESK" || $1 == "OWID"' "$mf" >> "$keep" 2>/dev/null   # desk tickets (#2676) and remote parents (#3439) ride along
+    awk -F'\t' '$1 == "DESK" || $1 == "OWID" || $1 == "PIN"' "$mf" >> "$keep" 2>/dev/null   # desk tickets (#2676), remote parents (#3439) and pins (#3517) ride along
     rm -f "$pb"
     if [ "$n" = 0 ]; then rm -f "$keep"; continue; fi
     log "pullback: $sess — reopening $n killed session window(s)"
@@ -779,6 +784,11 @@ restore() {
               fleet_is_fid "${_ow#*/}" && tmux -L "$sock" set-window-option -t "$nw" @origin_fid "${_ow#*/}" 2>/dev/null ;;
             esac ;;
           esac ;;
+        esac
+        # Pinned (issue #3517): the map's PIN row, by identity.
+        case "$wtag" in WIN:?*)
+          awk -F'\t' -v f="${wtag#WIN:}" '$1 == "PIN" && $2 == f { found = 1; exit } END { exit !found }' "$mf" 2>/dev/null \
+            && tmux -L "$sock" set-window-option -t "$nw" @pin 1 2>/dev/null ;;
         esac
         fleet_win_role_stamp "$nw" worker "$sock"   # by role, not name (#1844)
         # Re-stamp the spawn provenance too (issue #503) so a crash-restored

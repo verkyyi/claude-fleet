@@ -508,6 +508,9 @@ class Control:
         if action == "worker_reap_policy":
             # By identity or key alike, as a rename (issue #2368).
             return self.execute_reap_policy(fleet, key, params["policy"])
+        if action == "worker_pin":
+            # By identity or key alike, as a rename (issue #3517).
+            return self.execute_pin(fleet, key, params["pin"])
         if action == "worker_message" and actor == FEEDBACK_ACTOR and params["text"].startswith(FEEDBACK_PREFIX):
             return self.execute_feedback(fleet, key, params["worker_id"], params["text"])
         if is_identity(key):
@@ -720,6 +723,21 @@ class Control:
         canon = said.split(" ", 1)[0].partition("=")[2] if said.startswith("reap_policy=") else policy
         return {"stamped": matches[0], "policy": canon, "window": window,
                 "how": said or "stamped", "observed_at": now()}
+
+    def execute_pin(self, fleet, key, pin):
+        """worker_pin (issue #3517): 置顶 / 取消置顶 on a row here, from another
+        machine's list — @pin on the one window holding the worker's @fleet_id,
+        checked by the adapter as for a rename. Set, never toggled: a retry lands
+        the same way. The inventory's `pin=` column carries it back."""
+        matches, _ = self.target(fleet, key, "worker_pin")
+        window = matches[0].get("window_id", "")
+        code, output, err = self.adapter("pin", fleet["name"], window, matches[0].get("identity") or "", pin)
+        said = last_line(output if (output or b"").strip() else err)
+        if code == 2:
+            raise Unattempted("INVALID_ARGUMENT", "Pin refused on the fleet: " + said)
+        if code:
+            raise Unattempted("INVALID_STATE", "Pin refused on the fleet: " + said)
+        return {"pinned": matches[0], "pin": pin, "window": window, "how": said or pin, "observed_at": now()}
 
     def execute_reap(self, fleet, key):
         """worker_reap (issue #1487): dash-reap.sh --yes on the one live window

@@ -1367,6 +1367,16 @@ func fleetToolSpecs() []toolSpec {
 				"idempotency_key": idemProp}, "worker_id", "policy", "idempotency_key"),
 		},
 		{
+			Name:  "worker_pin",
+			Title: "Pin or unpin a worker to the top of the lists",
+			Description: "Set (on) or clear (off) the worker window's @pin on its node: a pinned session " +
+				"sits in the 置顶 group at the top of its person's lists on every machine. Nothing else about " +
+				"the session changes. Needs worker:message." + fleetWriteCaveat,
+			InputSchema: obj(map[string]any{"worker_id": workerIDProp,
+				"pin":             map[string]any{"type": "string", "enum": []string{"on", "off"}},
+				"idempotency_key": idemProp}, "worker_id", "pin", "idempotency_key"),
+		},
+		{
 			Name:  "config_set",
 			Title: "Set one fleet setting",
 			Description: "Compare-and-set FLEET_MAX_SESSIONS (0–256); expected_revision comes from " +

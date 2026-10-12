@@ -32,6 +32,9 @@ SCOPE_OF = {"worker_start": "worker:start", "config_set": "config:write",
             # worker_reap_policy (issue #2368) says WHEN the fleet may close the
             # session on its own: a reap's authority — `done:1m` is a reap soon.
             "worker_reap_policy": "worker:reap",
+            # worker_pin (issue #3517) puts the session at the top of its person's
+            # lists: display only, a rename's authority.
+            "worker_pin": "worker:message",
             # orch_ensure (issue #2616): an older client's ⌘N, answered 「没有编排」
             # since issue #3118 — compat-1v: 下一批删
             "orch_ensure": "worker:start",
@@ -46,7 +49,7 @@ SCOPE_OF = {"worker_start": "worker:start", "config_set": "config:write",
 # dash-migrate.sh <window> to [<account>]: the same conversation resumed on the
 # fleet's active (or the named) subscription.
 WORKER_ACTIONS = ("worker_message", "worker_stop", "worker_resume", "worker_answer", "worker_reap",
-                  "worker_switch", "worker_rename", "worker_reap_policy")
+                  "worker_switch", "worker_rename", "worker_reap_policy", "worker_pin")
 # worker_switch's optional `account`: a label in the accounts dir, one argv word
 # (fleet-manual-sub.sh check's own rule).
 ACCOUNT_RE = re.compile(r"[A-Za-z0-9._@-]{1,64}")
@@ -331,9 +334,14 @@ def inventory_row(parts):
     Column 31 (issue #3369): `orphanrep=` — the login's unread results of
     sessions whose spawner was gone (orphan_rep_cell): `orphan_reports`, a list,
     on every row alike (like epic_stale); absent when empty. The sidebar and the
-    hub's overview list them for the person."""
+    hub's overview list them for the person.
+    Column 32 (issue #3517): `pin=1` — the window is pinned (@pin): `pin: true`,
+    so every other machine's list draws it in its 置顶 group. Absent otherwise."""
     parts = list(parts)
     extra = {}
+    if len(parts) >= 32 and parts[-1].startswith("pin="):
+        if parts.pop()[4:] == "1":
+            extra["pin"] = True
     if len(parts) >= 31 and parts[-1].startswith("orphanrep="):
         orep = orphan_rep_cell(parts.pop()[10:])
         if orep:
@@ -641,6 +649,11 @@ def validate_write(action, params):
             if not reap_policy_ok(params["policy"]):
                 raise Fault("INVALID_ARGUMENT", "policy must be merged[:<dur>] · done[:<dur>] · loop-end · "
                                                 "at:<ISO|HH:MM|epoch> · keep")
+        elif action == "worker_pin":
+            # issue #3517: set, never toggle — a retried write lands the same way
+            fields(params, ("worker_id", "pin"))
+            if params["pin"] not in ("on", "off"):
+                raise Fault("INVALID_ARGUMENT", "pin must be on or off")
         elif action == "worker_switch":
             fields(params, ("worker_id",), ("account",))
             if "account" in params and not (isinstance(params["account"], str)

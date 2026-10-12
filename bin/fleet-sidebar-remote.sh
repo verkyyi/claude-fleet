@@ -38,6 +38,11 @@
 #                             clock, the person's — then sent; the node stamps
 #                             @reap_policy through fleet-reap-policy.sh set. The
 #                             outcome toasted; a refusal says why.
+#   pin      worker_pin     — 置顶 / 取消置顶 (issue #3517): `on` / `off` from
+#                             $FLEET_SIDEBAR_TEXT, else the opposite of the row's
+#                             pin as the cache has it (field 30); the node sets
+#                             @pin on the window holding the worker's @fleet_id.
+#                             Toasted like a stop.
 #   answer   worker_answer  — the same: $FLEET_SIDEBAR_TEXT, or asked — a
 #                             permission prompt (`⊘`, needs=perm) takes y / n →
 #                             yes / no; a question (`?`, needs=ask) the option
@@ -161,7 +166,7 @@ if fleet_status_hub_lost "$(date +%s)"; then
     message|answer|rename|reappol)
       if [ -n "$LINE" ]; then toast "fleet: $(fleet_ui_t remote_hub_lost_fmt "$FSA")"
       else printf '%s\n%s\n' "$(label "$action")" "$(fleet_ui_t remote_hub_lost_fmt "$FSA")" >&2; pause; fi ;;
-    stop|resume|reap|switch) toast "fleet: $(fleet_ui_t remote_hub_lost_fmt "$FSA")" ;;
+    stop|resume|reap|switch|pin) toast "fleet: $(fleet_ui_t remote_hub_lost_fmt "$FSA")" ;;
   esac
   [ -n "$PRINT" ] && exit 1
   exit 0
@@ -185,6 +190,16 @@ case "$action" in
     # the panel shows the node's reason too (fleet_hub_reap's stderr is its why)
     [ -z "$PRINT" ] || [ "$RC" = 0 ] || [ -z "$why" ] || msg="$msg · $why"
     toast "$msg · $(label reap)"
+    ;;
+  pin)
+    # a set, never a toggle on the wire: the opposite of what the cache says now
+    how=${FLEET_SIDEBAR_TEXT:-}
+    if [ "$how" != on ] && [ "$how" != off ]; then
+      cur=$(LC_ALL=C awk -F $'\037' -v w="$wid" '$1 == w { print $30; exit }' "$FLEET_C/global/remote_$sess" 2>/dev/null)
+      how=on; [ "$cur" = 1 ] && how=off
+    fi
+    LINE=1   # nothing to ask: toasted, as a stop is
+    said worker_pin "$(json_wid pin "$how")" 30 "$(fleet_ui_t "remote_label_pin_${how}_fmt" "$name" "$node")"
     ;;
   stop|resume|switch)
     tool=worker_$action
