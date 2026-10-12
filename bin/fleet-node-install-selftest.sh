@@ -20,6 +20,7 @@
 #   G  the entry port (#3070): FLEET_ENTRY=1 on the command writes the switch into
 #      machine.env and converges (host key, no config while nobody's home is here);
 #      the same command 跳过; FLEET_ENTRY=0 takes it out
+#   K  the machine's own key (#3699): made once 600, registered, kept on a rerun
 #   F  the old roads on a managed machine: `fleet node join` / `fleet host on`
 #      point at `fleet node install`; `fleet node install` dispatches here
 #
@@ -83,6 +84,12 @@ case "$path" in
       body='{"endpoint_id":"ep_'$n'","label":"m4-root","token":"tok-'$n'","hub":"x","admin":false,"dist":["darwin-arm64"],"kind":"fixed"}'
     else code=401 body='{"error":"invalid join code"}'; fi ;;
   /v1/node/desired) [ "$auth" = "$tok" ] && file="$HUBD/desired.json" || code=401 ;;
+  /v1/node/key) # the machine's signing key (#3699): GET says it, POST (a body) registers it
+    if [ "$auth" != "$tok" ]; then code=401
+    elif [ -n "$data" ]; then
+      kid=$(python3 -c 'import base64,hashlib,json,sys; print("nk_" + hashlib.sha256(base64.b64decode(json.load(open(sys.argv[1]))["public_key"])).hexdigest()[:24])' "${data#@}") \
+        && echo "$kid" > "$HUBD/nodekey" && body='{"key_id":"'$kid'","bearer_off":false}' || code=400
+    else body='{"key_id":"'$(cat "$HUBD/nodekey" 2>/dev/null)'","bearer_off":false}'; fi ;;
   /v1/fleet/release/key) file="$HUBD/release.key" ;;
   /v1/fleet/ssh-ca.pub) file="$HUBD/ssh-ca.pub" ;;
   /v1/node/dist/*) file="$HUBD/dist/${path##*/}"
@@ -150,7 +157,7 @@ sandbox
 run --join "$CODE1"
 check "exit 0" [ "$RC" = 0 ]
 check "every step ✓ (检查 加入 发布公钥 期望状态 ccquota 运行时; 角色用户 already there)" \
-  [ "$(shape)" = "+检查 +加入 +发布公钥 +期望状态 +ccquota +运行时 -角色用户 +ssh -删号通道 +守护 -入口 " ]
+  [ "$(shape)" = "+检查 +加入 +发布公钥 +期望状态 +ccquota +运行时 -机器钥匙 -角色用户 +ssh -删号通道 +守护 -入口 " ]
 check "says it converged" line "已收敛"
 check "machine.env: the hub + the machine's token, root 600" \
   sh -c "grep -qx 'CCQUOTA_TOKEN=tok-1' '$SB/db/machine.env' && grep -qx 'CCQUOTA_HUB_URL=https://hub.test' '$SB/db/machine.env' && [ $(mode "$SB/db/machine.env") = 600 ]"
@@ -173,18 +180,18 @@ before="$(fp)"
 calls0=$(grep -c . "$HUBD/calls")
 run --join "$CODE2"
 check "exit 0" [ "$RC" = 0 ]
-check "every step 跳过" [ "$(shape)" = "+检查 -加入 -发布公钥 -期望状态 -ccquota -运行时 -角色用户 -ssh -删号通道 -守护 -入口 " ]
+check "every step 跳过" [ "$(shape)" = "+检查 -加入 -发布公钥 -期望状态 -ccquota -运行时 -机器钥匙 -角色用户 -ssh -删号通道 -守护 -入口 " ]
 check "no join spent" sh -c "! sed -n '$((calls0 + 1)),\$p' '$HUBD/calls' | grep -q /v1/node/join"
 check "nothing rewritten" [ "$(fp)" = "$before" ]
 run
-check "without a code too" sh -c "[ $RC = 0 ] && [ \"$(shape)\" = '+检查 -加入 -发布公钥 -期望状态 -ccquota -运行时 -角色用户 -ssh -删号通道 -守护 -入口 ' ]"
+check "without a code too" sh -c "[ $RC = 0 ] && [ \"$(shape)\" = '+检查 -加入 -发布公钥 -期望状态 -ccquota -运行时 -机器钥匙 -角色用户 -ssh -删号通道 -守护 -入口 ' ]"
 
 echo "C  one part gone → only that part comes back"
 redo() { # <what> <step> <rm…>
   local what="$1" step="$2"; shift 2
   rm -rf "$@"
   run --join "$CODE2"
-  local want="+检查 -加入 -发布公钥 -期望状态 -ccquota -运行时 -角色用户 -ssh -删号通道 -守护 -入口 "
+  local want="+检查 -加入 -发布公钥 -期望状态 -ccquota -运行时 -机器钥匙 -角色用户 -ssh -删号通道 -守护 -入口 "
   want="${want/-$step /+$step }"
   OUT="$OUT
 (shape: $(shape))"
@@ -198,11 +205,11 @@ daemon_commits >/dev/null 2>&1
 redo "the ssh CA key" ssh "$SB/ssh/fleet_user_ca.pub"
 redo "the LaunchDaemon" 守护 "$SB/LaunchDaemons/com.claude-fleet.node.plist"
 rm -f "$SB/loaded"; run
-check "the daemon unloaded → reloaded" sh -c "[ \"$(shape)\" = '+检查 -加入 -发布公钥 -期望状态 -ccquota -运行时 -角色用户 -ssh -删号通道 +守护 -入口 ' ] && [ -f '$SB/loaded' ]"
+check "the daemon unloaded → reloaded" sh -c "[ \"$(shape)\" = '+检查 -加入 -发布公钥 -期望状态 -ccquota -运行时 -机器钥匙 -角色用户 -ssh -删号通道 +守护 -入口 ' ] && [ -f '$SB/loaded' ]"
 printf '%s\n' "$CODE2" >> "$HUBD/codes"; rm -f "$HUBD/token"
 run --join "$CODE2"
 check "the hub forgot the token → a new code joins again, nothing else redone" \
-  sh -c "[ $RC = 0 ] && [ \"$(shape)\" = '+检查 +加入 -发布公钥 -期望状态 -ccquota -运行时 -角色用户 -ssh -删号通道 -守护 -入口 ' ] && grep -qx CCQUOTA_TOKEN=tok-2 '$SB/db/machine.env'"
+  sh -c "[ $RC = 0 ] && [ \"$(shape)\" = '+检查 +加入 -发布公钥 -期望状态 -ccquota -运行时 -机器钥匙 -角色用户 -ssh -删号通道 -守护 -入口 ' ] && grep -qx CCQUOTA_TOKEN=tok-2 '$SB/db/machine.env'"
 rm -f "$HUBD/token"; run
 check "… and without a code it says so" sh -c "[ $RC = 1 ] && printf '%s' \"\$OUT\" | grep -q '^✗ 加入：' && printf '%s' \"\$OUT\" | grep -q '重跑：sudo fleet node install --join <码>'"
 check "nothing half written" clean
@@ -226,29 +233,29 @@ check "nothing half written" clean
 mv "$SB/rel/off" "$SB/rel/$V1"
 FLEET_CREDSEP_ROLE=_fleetnosuchrole run
 check "no role account and none can be made: ✗ 角色用户" \
-  sh -c "[ $RC = 1 ] && [ \"$(shape)\" = '+检查 -加入 -发布公钥 -期望状态 -ccquota +运行时 !角色用户 ' ]"
+  sh -c "[ $RC = 1 ] && [ \"$(shape)\" = '+检查 -加入 -发布公钥 -期望状态 -ccquota +运行时 -机器钥匙 !角色用户 ' ]"
 printf 'ssh-ed25519 AAAAoldkey old\n' > "$SB/ssh/fleet_user_ca.pub"; touch "$SB/sshd.bad"
 run
 check "sshd -t refuses: ✗ ssh CA, the old key back byte for byte, no drop-in" \
-  sh -c "[ $RC = 1 ] && [ \"$(shape)\" = '+检查 -加入 -发布公钥 -期望状态 -ccquota -运行时 -角色用户 !ssh ' ] && [ \"\$(cat '$SB/ssh/fleet_user_ca.pub')\" = 'ssh-ed25519 AAAAoldkey old' ] && [ ! -e '$SB/ssh/sshd_config.d/100-fleet-user-ca.conf' ]"
+  sh -c "[ $RC = 1 ] && [ \"$(shape)\" = '+检查 -加入 -发布公钥 -期望状态 -ccquota -运行时 -机器钥匙 -角色用户 !ssh ' ] && [ \"\$(cat '$SB/ssh/fleet_user_ca.pub')\" = 'ssh-ed25519 AAAAoldkey old' ] && [ ! -e '$SB/ssh/sshd_config.d/100-fleet-user-ca.conf' ]"
 check "no daemon yet" [ ! -e "$SB/LaunchDaemons/com.claude-fleet.node.plist" ]
 check "nothing half written" clean
 rm -f "$SB/sshd.bad"
 run
 check "fixed → the same command converges, doing only what was left" \
-  sh -c "[ $RC = 0 ] && [ \"$(shape)\" = '+检查 -加入 -发布公钥 -期望状态 -ccquota -运行时 -角色用户 +ssh -删号通道 +守护 -入口 ' ]"
+  sh -c "[ $RC = 0 ] && [ \"$(shape)\" = '+检查 -加入 -发布公钥 -期望状态 -ccquota -运行时 -机器钥匙 -角色用户 +ssh -删号通道 +守护 -入口 ' ]"
 
 echo "E  piped from curl"
 sandbox
 cp -R "$SB/rel/$V1" "$SB/rel/stable"
 OUT="$(cd "$SB" && bash -s -- --hub https://hub.test --join "$CODE1" < "$INST" 2>&1)"; RC=$?
-check "converged with no checkout beside the script" sh -c "[ $RC = 0 ] && [ \"$(shape)\" = '+检查 +加入 +发布公钥 +期望状态 +ccquota +运行时 -角色用户 +ssh -删号通道 +守护 -入口 ' ]"
+check "converged with no checkout beside the script" sh -c "[ $RC = 0 ] && [ \"$(shape)\" = '+检查 +加入 +发布公钥 +期望状态 +ccquota +运行时 -机器钥匙 -角色用户 +ssh -删号通道 +守护 -入口 ' ]"
 check "the updater came from the release (stable fetched first)" grep -qx stable "$SB/rel/.fetched"
 
 echo "G  the entry port (#3070): FLEET_ENTRY=1 on the command → machine.env, converged; 0 → out"
 sandbox
 run --join "$CODE1"
-QUIET="+检查 -加入 -发布公钥 -期望状态 -ccquota -运行时 -角色用户 -ssh -删号通道 -守护"
+QUIET="+检查 -加入 -发布公钥 -期望状态 -ccquota -运行时 -机器钥匙 -角色用户 -ssh -删号通道 -守护"
 OUT="$(FLEET_ENTRY=1 FLEET_ENTRY_PORT=22977 ${FNI_BASH:-bash} "$INST" --hub https://hub.test 2>&1)"; RC=$?
 check "FLEET_ENTRY=1 → only 入口, the switch written into machine.env (token kept)" \
   sh -c "[ $RC = 0 ] && [ \"$(shape)\" = '$QUIET +入口 ' ] && grep -qx FLEET_ENTRY=1 '$SB/db/machine.env' && grep -qx FLEET_ENTRY_PORT=22977 '$SB/db/machine.env' && grep -qx CCQUOTA_TOKEN=tok-1 '$SB/db/machine.env'"
@@ -276,6 +283,26 @@ check "FLEET_NODE_CORE=0 → ✓ 核心 卸了, the LaunchDaemon gone" \
   sh -c "[ $RC = 0 ] && printf '%s' \"\$OUT\" | grep -q '^✓ 核心 卸了' && [ ! -e '$SB/LaunchDaemons/com.claude-fleet.node-core.plist' ]"
 run
 check "  … and again: no core, no 核心 line" sh -c "[ $RC = 0 ] && ! printf '%s' \"\$OUT\" | grep -q 核心"
+
+echo "K  the machine's own key (#3699): made once (600), registered once, never printed"
+sandbox
+run --join "$CODE1"
+check "a runtime that cannot sign: 跳过 机器钥匙, no key made" \
+  sh -c "[ $RC = 0 ] && printf '%s' \"\$OUT\" | grep -q '^跳过 机器钥匙：运行时' && [ ! -e '$SB/db/machine.key' ]"
+for f in fleet_node_sig.py fleet_ed25519.py; do cp "$BIN/$f" "$SB/root/current/bin/"; done
+run
+KID="$(python3 -I "$BIN/fleet_node_sig.py" keyid "$SB/db/machine.key" 2>/dev/null)"
+check "✓ 机器钥匙: machine.key 600, its key id registered with the hub" \
+  sh -c "[ $RC = 0 ] && printf '%s' \"\$OUT\" | grep -q '^✓ 机器钥匙 nk_' && [ $(mode "$SB/db/machine.key" 2>/dev/null || echo x) = 600 ] && [ -n '$KID' ] && [ \"\$(cat '$HUBD/nodekey')\" = '$KID' ]"
+check "the private key is never printed" sh -c "! printf '%s' \"\$OUT\" | grep -qF \"\$(cat '$SB/db/machine.key')\""
+keybefore="$(cat "$SB/db/machine.key")"
+run
+check "the same command again: 跳过 机器钥匙 (已登记), the key kept" \
+  sh -c "[ $RC = 0 ] && printf '%s' \"\$OUT\" | grep -q '^跳过 机器钥匙：已登记' && [ \"\$(cat '$SB/db/machine.key')\" = '$keybefore' ]"
+rm -f "$HUBD/nodekey"
+run
+check "the hub forgot it: registered again with the same key" \
+  sh -c "[ $RC = 0 ] && printf '%s' \"\$OUT\" | grep -q '^✓ 机器钥匙' && [ \"\$(cat '$HUBD/nodekey')\" = '$KID' ]"
 
 echo "F  the old roads on a managed machine"
 OUT="$(FLEET_CONF_DIR="$SB/conf" bash "$BIN/fleet-node.sh" join --help 2>&1 >/dev/null)"

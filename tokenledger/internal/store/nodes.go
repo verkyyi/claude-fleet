@@ -90,6 +90,10 @@ func (s *Store) EnsureNodes() error {
 	if err := s.ensureFleetPeerCerts(); err != nil {
 		return err
 	}
+	// A node's own signing key and the nonces it spent (claude-fleet#3699).
+	if err := s.ensureFleetNodeKeys(); err != nil {
+		return err
+	}
 	// Tickets (claude-fleet#2677), grown out of the registry of #2676.
 	if err := s.ensureFleetTickets(); err != nil {
 		return err

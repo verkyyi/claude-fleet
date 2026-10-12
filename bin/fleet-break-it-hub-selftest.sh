@@ -48,6 +48,8 @@
 #                                                   handleWeChatBind) + signin_ways.go; go test, when a toolchain is here
 #   email-link-replay                               tokenledger/internal/api email_auth.go (handleEmailLink /
 #                                                   handleEmailCode) + internal/store hub_signin.go; go test, when here
+#   node-token-replayed                             tokenledger/internal/api node_sig.go (nodeAuth) + store
+#                                                   fleet_node_keys.go; bin/fleet_node_sig.py; go test, when here
 #   invite-expired                                  tokenledger/internal/api fleet_invites.go + github_auth.go
 #                                                   (admitInvite, denyText; go test, when a toolchain is here)
 #   drill-person-no-machine                         tokenledger/internal/api fleet_opening.go + fleet_drill.go
@@ -2055,6 +2057,42 @@ drill_email_link_replay() {
   c11_go_tests signin_ways_test.go TestEmailSignIn TestEmailCode TestEmailInviteAndAdd || return 1
   WHAT='登录邮件的链接只在发起的浏览器里用一次；码猜 5 次即废；未知邮箱答复相同（测试按名核对在，Go 门跑它们）'
   [ "$GO_RAN" = 1 ] && WHAT='链接重放被拒、另一台设备打不开、码猜 5 次即废、未知邮箱同答同限流、邀请与加邮箱（go test 三条）'
+  SECS=$(since "$t0")
+}
+
+# A copied node.env / machine.env token used from somewhere else (issue #3699):
+# a node that registered its key and said bearer_off is refused its bare token,
+# a signature is good once and for two minutes, and the node's signer and the
+# hub's verifier agree on a fixed vector.
+drill_node_token_replayed() {
+  CAP=120; local t0 tl="$ROOT/tokenledger/internal" d out; GO_RAN=0
+  t0=$(now)
+  grep -q 'func (s \*Server) nodeAuth(' "$tl/api/node_sig.go" 2>/dev/null \
+    || { WHY="there is no one nodeAuth that reads a FleetSig signature (node_sig.go)"; return 1; }
+  for f in fleet_move.go:nodeEndpoint fleet_session_cred.go:sessionCredNode; do
+    sed -n "/^func (s \*Server) ${f#*:}(/,/^}/p" "$tl/api/${f%%:*}" | grep -q 's.nodeAuth(r)' \
+      || { WHY="${f#*:} does not authenticate through nodeAuth (${f%%:*})"; return 1; }
+  done
+  grep -q 'CREATE TABLE IF NOT EXISTS fleet_sig_nonces' "$tl/store/fleet_node_keys.go" 2>/dev/null \
+    || { WHY="spent nonces are not kept where both replicas see them (fleet_sig_nonces)"; return 1; }
+  # the node's half: a key made 600, a header the hub's format, a refused overwrite
+  d="$(mktemp -d "${TMPDIR:-/tmp}/brk-sig.XXXXXX")"
+  python3 -I "$ROOT/bin/fleet_node_sig.py" keygen "$d/k" >/dev/null 2>&1 \
+    || { rm -rf "$d"; WHY="fleet_node_sig.py keygen failed"; return 1; }
+  out="$(python3 -I "$ROOT/bin/fleet_node_sig.py" header "$d/k" GET /v1/node/self 2>&1)"
+  case "$out" in
+    'FleetSig keyid=nk_'*', ts='*', nonce='*', sig='*) ;;
+    *) rm -rf "$d"; WHY="fleet_node_sig.py header printed: $out"; return 1 ;;
+  esac
+  if python3 -I "$ROOT/bin/fleet_node_sig.py" keygen "$d/k" >/dev/null 2>&1; then
+    rm -rf "$d"; WHY="fleet_node_sig.py keygen overwrote a key"; return 1
+  fi
+  [ "$(python3 -c 'import os,sys; print("%o" % (os.stat(sys.argv[1]).st_mode & 0o777))' "$d/k")" = 600 ] \
+    || { rm -rf "$d"; WHY="the node key is not 600"; return 1; }
+  rm -rf "$d"
+  c11_go_tests node_sig_test.go TestNodeSigOffAddsNothing TestNodeSigRegisterSignReplay TestNodeSigSessionCredNode TestNodeSigPythonVector || return 1
+  WHAT='节点钥匙 600、不覆盖，签名头是入口的格式；入口一处 nodeAuth，nonce 两副本共用（测试按名核对在，Go 门跑它们）'
+  [ "$GO_RAN" = 1 ] && WHAT='bearer_off 之后抄走的令牌 401、也登记不了自己的钥匙；同一签名第二次 401；过期 / 未来 / 换路径 / 换方法 / 别的钥匙都拒；没钥匙的节点原样；Python 签的向量 Go 验得过（go test 四条）'
   SECS=$(since "$t0")
 }
 

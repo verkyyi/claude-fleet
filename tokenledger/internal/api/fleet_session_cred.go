@@ -295,17 +295,12 @@ func (s *Server) verifySessionCred(tok, wantPrincipal, wantProvider string, fres
 	return v, c
 }
 
-// sessionCredNode is the node a bearer token enrolls, nil when it is none.
+// sessionCredNode is the node a request proves (its signature, else its
+// bearer token — nodeAuth, claude-fleet#3699) and that node's token hash; nil
+// when it proves none.
 func (s *Server) sessionCredNode(r *http.Request) (*store.Endpoint, string) {
-	tok := bearer(r)
-	if tok == "" {
-		return nil, ""
-	}
-	ep, err := s.Store.EndpointByTokenHash(HashToken(tok))
-	if err != nil {
-		return nil, ""
-	}
-	return ep, tok
+	ep, h, _, _ := s.nodeAuth(r)
+	return ep, h
 }
 
 func sessionCredRefuse(w http.ResponseWriter, code int, reason, msg string) {
@@ -321,7 +316,7 @@ func (s *Server) handleSessionCred(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sub := strings.Trim(strings.TrimPrefix(r.URL.Path, "/v1/fleet/session-cred"), "/")
-	ep, tok := s.sessionCredNode(r)
+	ep, tokHash := s.sessionCredNode(r)
 	operator := func(h http.HandlerFunc) { s.viewerOnly(s.adminOnly(h)).ServeHTTP(w, r) }
 	switch {
 	case sub == "" && r.Method == http.MethodPost:
@@ -329,7 +324,7 @@ func (s *Server) handleSessionCred(w http.ResponseWriter, r *http.Request) {
 			sessionCredRefuse(w, http.StatusUnauthorized, "unauthenticated", "a node's enrollment token is required")
 			return
 		}
-		s.issueSessionCred(w, r, ep, tok)
+		s.issueSessionCred(w, r, ep, tokHash)
 	case sub == "" && r.Method == http.MethodGet:
 		operator(s.listSessionCreds)
 	case sub == "verify" && r.Method == http.MethodPost:
@@ -402,7 +397,7 @@ func readOptionalJSON(r *http.Request, v any) error {
 // issueSessionCred signs a pass for the session the node vouches for — and
 // only when the statement holds: signed with this node's token, for a fleet
 // this node runs, on a login that is some active person who is not revoked.
-func (s *Server) issueSessionCred(w http.ResponseWriter, r *http.Request, ep *store.Endpoint, tok string) {
+func (s *Server) issueSessionCred(w http.ResponseWriter, r *http.Request, ep *store.Endpoint, tokHash string) {
 	now := time.Now()
 	host, user := s.nodeIdentity(ep)
 	actor := "node:" + user + "@" + host
@@ -418,14 +413,14 @@ func (s *Server) issueSessionCred(w http.ResponseWriter, r *http.Request, ep *st
 			"a session pass is for a session: the "+workerAssertHeader+" assertion is required")
 		return
 	}
-	c, err := verifyWorkerAssertion(a, HashToken(tok), now)
+	c, err := verifyWorkerAssertion(a, tokHash, now)
 	if err != nil {
 		audit(nil, "", "refused:UNAUTHENTICATED")
 		sessionCredRefuse(w, http.StatusUnauthorized, "unauthenticated", err.Error())
 		return
 	}
 	fl, err := s.Store.Fleet(c.FleetUUID)
-	if errors.Is(err, sql.ErrNoRows) && c.FleetUUID == fleetid.ClientFleetID(HashToken(tok)) {
+	if errors.Is(err, sql.ErrNoRows) && c.FleetUUID == fleetid.ClientFleetID(tokHash) {
 		// A client-only computer's own session (claude-fleet#2136): it runs no
 		// fleet, so no registry row — its fleet UUID is derived from this node's
 		// token, and the machine / login are the node's own.

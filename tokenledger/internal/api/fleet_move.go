@@ -166,16 +166,12 @@ func moveName(s string) bool {
 	return n >= 1 && n <= 80
 }
 
-// nodeEndpoint authenticates a node request by its enrollment token.
+// nodeEndpoint authenticates a node request: its FleetSig signature, else its
+// enrollment token (nodeAuth, claude-fleet#3699).
 func (s *Server) nodeEndpoint(w http.ResponseWriter, r *http.Request) (*store.Endpoint, bool) {
-	tok := bearer(r)
-	if tok == "" {
-		httpError(w, http.StatusUnauthorized, "missing bearer token")
-		return nil, false
-	}
-	ep, err := s.Store.EndpointByTokenHash(HashToken(tok))
-	if err != nil {
-		httpError(w, http.StatusUnauthorized, "unrecognised enrollment token")
+	ep, _, code, msg := s.nodeAuth(r)
+	if ep == nil {
+		httpError(w, code, msg)
 		return nil, false
 	}
 	return ep, true
