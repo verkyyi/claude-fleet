@@ -738,6 +738,8 @@ def route_heal(a):
             if route_settings(c, login, (ne.get('CCQUOTA_HUB_URL') or hub).rstrip('/'), a.relay):
                 done.append(login)
         except (ValueError, OSError) as e:
+            if os.environ.get('FLEET_ANTHROPIC_PROXY', '').strip():
+                raise RuntimeError('mandatory Anthropic route could not be configured for %s' % login) from e
             # one login's route never keeps the machine down
             print('route %s: not written (%s)' % (login, e), file=sys.stderr)
         if central_url():

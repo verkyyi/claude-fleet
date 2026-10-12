@@ -159,7 +159,8 @@ def _checked(image, hub, storage_class, pull_secrets, egress, github_proxy, git_
                          % cred_central)
     if egress_proxy and not re.fullmatch(EGRESS_PROXY_RE, egress_proxy):
         raise ValueError('--egress-proxy is http://HOST:PORT (deploy/k8s/egress), not %r' % egress_proxy)
-    if anthropic_proxy and not re.fullmatch(EGRESS_PROXY_RE, anthropic_proxy):
+    if anthropic_proxy and (not re.fullmatch(EGRESS_PROXY_RE, anthropic_proxy)
+                            or not 0 < int(anthropic_proxy.rsplit(':', 1)[1]) < 65536):
         raise ValueError('--anthropic-proxy is http://HOST:PORT, without credentials')
     if anthropic_proxy and cred_central:
         raise ValueError('--anthropic-proxy requires local credential routing; configure US egress on the central proxy before using --cred-central')

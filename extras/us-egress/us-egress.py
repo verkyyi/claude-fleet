@@ -134,6 +134,8 @@ class Gateway:
     def __init__(self, secret, sources, patterns=DOMAINS):
         self.secret = secret
         self.sources = [ipaddress.ip_network(p) for p in sources.split()]
+        if not self.sources:
+            raise ValueError("FLEET_US_EGRESS_SOURCES must contain the allowed Pod CIDR")
         self.patterns = patterns
         self.queue = asyncio.Queue(maxsize=128)
         self.connected = set()
@@ -217,7 +219,7 @@ class Gateway:
 
 
 async def gateway():
-    g = Gateway(token(), os.environ.get("FLEET_US_EGRESS_SOURCES", "172.20.0.0/16"),
+    g = Gateway(token(), os.environ.get("FLEET_US_EGRESS_SOURCES", ""),
                 os.environ.get("FLEET_US_EGRESS_DOMAINS", DOMAINS))
     tcp_host, tcp_port = os.environ.get("FLEET_US_EGRESS_LISTEN", "127.0.0.1:3128").rsplit(":", 1)
     ws_host, ws_port = os.environ.get("FLEET_US_EGRESS_WS_LISTEN", "127.0.0.1:8090").rsplit(":", 1)

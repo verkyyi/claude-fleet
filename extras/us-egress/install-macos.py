@@ -13,7 +13,7 @@ import zipfile
 
 p = argparse.ArgumentParser()
 p.add_argument('--wheel', required=True, type=Path)
-p.add_argument('--url', default='wss://claudefleet.24haowan.com/_fleet/us-egress')
+p.add_argument('--url', required=True)
 a = p.parse_args()
 if sys.platform != 'darwin' or os.geteuid() != 0:
     p.error('run as root on macOS')

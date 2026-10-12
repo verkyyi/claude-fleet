@@ -1,7 +1,7 @@
-# macmini US reverse egress
+# US reverse egress through a macOS host
 
-The US macmini initiates 16 authenticated WSS connections to the existing ACK HTTPS ingress.
-The cluster CONNECT service borrows one connection per TCP tunnel; macmini resolves and opens
+The US macOS host initiates 16 authenticated WSS connections to the existing ACK HTTPS ingress.
+The cluster CONNECT service borrows one connection per TCP tunnel; the US host resolves and opens
 the public upstream. The tunnel carries opaque TLS bytes and preserves the upstream certificate
 and SNI. No home-router inbound port, public CONNECT listener, TLS interception, subscription
 credential, or new LoadBalancer is required.
@@ -16,21 +16,23 @@ Download the public universal wheel, verifying the hash in `requirements.txt`. R
 
 ```sh
 python3 extras/us-egress/render.py --image REGISTRY/IMAGE@sha256:DIGEST \
-  --wheel /path/websockets-12.0-py3-none-any.whl > /tmp/fleet-us-egress.yaml
+  --wheel /path/websockets-12.0-py3-none-any.whl --host hub.example.com \
+  --pod-cidr POD_CIDR > /tmp/fleet-us-egress.yaml
 kubectl apply --dry-run=server -f /tmp/fleet-us-egress.yaml
 kubectl apply -f /tmp/fleet-us-egress.yaml
 ```
 
 The renderer includes the public wheel in the ConfigMap and installs it offline in an init container.
 Default namespace is `fleet-workers`; it shares the existing TLS server at
-`claudefleet.24haowan.com`, using only the exact `/_fleet/us-egress` path. If deploying with a
+the configured ingress hostname, using only the exact `/_fleet/us-egress` path. If deploying with a
 separate TLS server, use `--tls-secret` with an existing secret in that namespace. Do not copy a
 production TLS private key between namespaces or bypass admission rules.
 
-On macmini, after provisioning System Keychain, install the connector from the reviewed source:
+On the US macOS host, after provisioning System Keychain, install the connector from the reviewed source:
 
 ```sh
-sudo python3 extras/us-egress/install-macos.py --wheel /path/websockets-12.0-py3-none-any.whl
+sudo python3 extras/us-egress/install-macos.py --wheel /path/websockets-12.0-py3-none-any.whl \
+  --url wss://hub.example.com/_fleet/us-egress
 ```
 
 The installer registers `com.claude-fleet.us-egress` in Fleet's supported root-owned
@@ -65,6 +67,12 @@ already stored in `credsep/<login>.conf` survives route healing if the Pod env h
 Pod replacement must carry the env settings in the StatefulSet template. CLI processes read network
 environment at startup and need a controlled restart; changing root proxy settings cannot update
 an already-running CLI's auxiliary traffic. Never overwrite a signed immutable runtime.
+
+Keep the worker's subscription allowlist limited to Codex during preparation, withdraw existing
+Claude leases with the supported pool sync, and restart the worker to clear old processes. Do not
+use another person's subscription for acceptance testing. Restoring Claude access requires a
+designated test subscription and separate verification of OAuth refresh, including hub/relay
+refresh traffic that originates outside the worker Pod. CLI proxy settings do not route that traffic.
 
 Validation:
 

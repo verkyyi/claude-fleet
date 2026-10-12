@@ -4,17 +4,23 @@ import argparse
 import base64
 import hashlib
 import json
+import ipaddress
 from pathlib import Path
 
 p = argparse.ArgumentParser()
 p.add_argument("--image", required=True)
 p.add_argument("--wheel", required=True, type=Path)
 p.add_argument("--namespace", default="fleet-workers")
-p.add_argument("--host", default="claudefleet.24haowan.com")
+p.add_argument("--host", required=True)
+p.add_argument("--pod-cidr", required=True)
 p.add_argument("--tls-secret", default="")
 a = p.parse_args()
 if "@sha256:" not in a.image:
     p.error("pin the image digest")
+try:
+    pod_cidr = str(ipaddress.ip_network(a.pod_cidr, strict=True))
+except ValueError:
+    p.error("--pod-cidr must be a strict Pod CIDR")
 here = Path(__file__).resolve().parent
 program = (here / "us-egress.py").read_text()
 wheel = a.wheel.read_bytes()
@@ -54,6 +60,7 @@ dep = obj("Deployment", {
                 "name":"gateway","image":a.image,
                 "command":["python3","/program/us-egress.py","gateway"],
                 "env":[{"name":"PYTHONPATH","value":"/deps"},{"name":"PYTHONDONTWRITEBYTECODE","value":"1"},
+                       {"name":"FLEET_US_EGRESS_SOURCES","value":pod_cidr},
                        {"name":"FLEET_US_EGRESS_LISTEN","value":"0.0.0.0:3128"},
                        {"name":"FLEET_US_EGRESS_WS_LISTEN","value":"0.0.0.0:8090"},
                        {"name":"FLEET_US_EGRESS_TOKEN","valueFrom":{"secretKeyRef":{"name":name,"key":"token"}}}],
