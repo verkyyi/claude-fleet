@@ -15,6 +15,7 @@ import re
 import shlex
 import subprocess
 import sys
+import time
 import uuid
 
 
@@ -222,16 +223,64 @@ def hook():
     # The measurement goes over the bus (issue #2431): conf/statusline.sh is the
     # ONE writer of @ctx_pct / @ctx_limit / @ctx_band / @ctx_left / @ctx_ts /
     # @model / @effort, so a Codex window reads as a Claude one does. The hook no
-    # longer writes @ctx_* or @cc_model itself. Re-checked first: a replacement
-    # launch that took the window during the rollout read is not ours to stamp.
-    fields = bus_fields(stats, data.get("home", ""))
-    if fields and tmux(["display-message", "-p", "-t", pane, "#{@cc_agent}|#{@cc_launcher_pid}"]) == "codex|" + owner:
-        bus = Path(__file__).absolute().parent.parent / "conf" / "statusline.sh"
-        if not bus.is_file():   # a dir-of-symlinks bin/ (a selftest shadow): the real tree's
-            bus = Path(__file__).resolve().parent.parent / "conf" / "statusline.sh"
-        subprocess.run(["bash", str(bus), "--from", "codex"] + fields, stdin=subprocess.DEVNULL,
-                       capture_output=True, timeout=5)
+    # longer writes @ctx_* or @cc_model itself.
+    feed(pane, owner, stats, data.get("home", ""))
 
+
+def feed(pane, owner, stats, home):
+    """One reading onto the measurement bus (`statusline.sh --from codex`).
+    Re-checked first: a replacement launch that took the window during the
+    rollout read is not ours to stamp."""
+    fields = bus_fields(stats, home)
+    if not fields or tmux(["display-message", "-p", "-t", pane,
+                           "#{@cc_agent}|#{@cc_launcher_pid}"]) != "codex|" + owner:
+        return
+    bus = Path(__file__).absolute().parent.parent / "conf" / "statusline.sh"
+    if not bus.is_file():   # a dir-of-symlinks bin/ (a selftest shadow): the real tree's
+        bus = Path(__file__).resolve().parent.parent / "conf" / "statusline.sh"
+    subprocess.run(["bash", str(bus), "--from", "codex"] + fields, stdin=subprocess.DEVNULL,
+                   env=dict(os.environ, TMUX_PANE=pane), capture_output=True, timeout=5)
+
+
+class Meter:
+    """The live reading (issue #3461). The hook feeds the bus at SessionStart
+    (no token count yet) and at Stop, so a long turn left the top line empty —
+    or on the previous agent's numbers — for its whole length. The launcher's
+    supervisor (bin/fleet-codex-runtime.py) ticks this once a second: every
+    FLEET_CODEX_METER_SECS (5) it re-reads the bound rollout when the file
+    changed and feeds the reading, so a Codex window's context moves as a
+    Claude one's does. Never raises: telemetry must never fail a session."""
+
+    def __init__(self, env):
+        self.pane, self.owner = env.get("TMUX_PANE", ""), env.get("FLEET_CODEX_LAUNCHER_PID", "")
+        try:
+            self.every = max(1.0, float(env.get("FLEET_CODEX_METER_SECS", "5")))
+        except ValueError:
+            self.every = 5.0
+        self.next_at, self.seen = 0.0, None
+
+    def tick(self, now=None):
+        now = time.monotonic() if now is None else now
+        if not self.pane or not self.owner.isdigit() or now < self.next_at:
+            return False
+        self.next_at = now + self.every
+        try:
+            data = identity(self.pane)
+            if data.get("owner") != self.owner:
+                return False
+            path, _ = rollout(data)
+            if not path:
+                return False
+            st = os.stat(path)
+            key = (data["session_id"], path, st.st_size, st.st_mtime_ns)
+            if key == self.seen:
+                return False
+            stats = telemetry(dict(data, transcript=path))
+            feed(self.pane, self.owner, stats, data.get("home", ""))
+            self.seen = key
+            return True
+        except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError):
+            return False
 
 def context(args):
     data = identity(args.pane, args.socket) if args.pane else {}

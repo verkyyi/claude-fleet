@@ -628,7 +628,10 @@ rollback() {
 
 # The helper quotes metadata as argv; conversation text is only ever data.
 python3 "$HELPER" launcher "$BUNDLE" "$LAUNCH" || rollback 'cannot write the target launcher'
-for key in @cc_account @subscription_identity @codex_identity @cc_model @ctx_pct @ctx_limit @ctx_band @model @effort @handoff_armed @handoff_cleared_at; do
+# The source agent's measurement-bus stamps go too — ALL of them (issue #3461:
+# @ctx_left / @ctx_ts / @ctx_src were left behind, so the top line read the old
+# agent's context % until the new one's first reading).
+for key in @cc_account @subscription_identity @codex_identity @cc_model @ctx_pct @ctx_limit @ctx_band @ctx_left @ctx_ts @ctx_src @model @effort @handoff_armed @handoff_cleared_at; do
   TM set-option -wu -t "$WIN" "$key" 2>/dev/null || :
 done
 TM set-option -w -t "$WIN" @cc_agent "$TO" || die 'cannot stamp target agent'
