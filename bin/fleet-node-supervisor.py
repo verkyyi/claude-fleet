@@ -23,7 +23,10 @@ machine's work ONCE, however many logins the machine carries:
                 unit as a task, a KeepAlive unit (spinner, webhook) as a child.
                 The template's own interval, environment and log paths; the log
                 is opened by the demoted process, never by root. One account's
-                failing task never touches another's.
+                failing task never touches another's. An account on the machine's
+                shared credential proxy (credsep.json "shared") runs no resident
+                `cred-proxy`: its relay pass is the one-minute task `cred-relay`
+                (`fleet-cred-proxy.sh relay-tick`, issue #3524).
                 An account becomes managed by `account adopt <login>`: its own
                 fleet LaunchAgents / LaunchDaemons are booted out and moved to the
                 attic (kept until released); one that will not unload puts every
@@ -973,6 +976,36 @@ def account_entry(unit, login, ident, brew):
     return ent
 
 
+def on_shared_proxy(home):
+    """True when this login's sessions go through the machine's ONE shared
+    credential proxy (`fleet-credsep.py machine join`: credsep.json "shared")."""
+    try:
+        with open(os.path.join(home, ".config", "claude-fleet", "credsep.json")) as f:
+            rec = json.load(f)
+        return rec.get("shared") is True or os.path.basename(str(rec.get("run") or "")) == ".shared"
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
+def account_unit_for(unit, home):
+    """The unit as this login runs it. A login on the shared proxy keeps no
+    resident `fleet-cred-proxy.sh run` (issue #3524): the shared proxy already
+    answers its sessions — on its old port too (#2217) — so all that launcher did
+    there was keep the login's relay pass. That pass is kept by a one-minute task
+    instead (`relay-tick`, as the login); leaving the shared proxy brings the
+    resident unit back on the next tick."""
+    if unit["name"] != "cred-proxy" or not unit.get("keepalive") or not on_shared_proxy(home):
+        return unit
+    argv = list(unit["argv"])
+    if argv and argv[-1] == "run":
+        argv[-1] = "relay-tick"
+    else:
+        argv.append("relay-tick")
+    u = dict((k, v) for k, v in unit.items() if k != "keepalive")
+    u.update(name="cred-relay", argv=argv, every=60, timeout=600)
+    return u
+
+
 def demote(login, uid, gid, home):
     def f():
         if os.geteuid() == 0:
@@ -1469,7 +1502,7 @@ class Supervisor(object):
                     self.dirty = True
                 continue
             for u in self.units:
-                out.append(account_entry(u, login, ident, brew))
+                out.append(account_entry(account_unit_for(u, ident[2]), login, ident, brew))
         return out
 
     def service_entries(self):
