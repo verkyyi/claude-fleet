@@ -1100,6 +1100,8 @@ def foreground(a):
         try:
             devnet(managedfile='/etc/claude-code/managed-settings.json')
         except (ValueError, OSError) as e:
+            if os.environ.get('FLEET_ANTHROPIC_PROXY', '').strip():
+                raise RuntimeError('mandatory Claude proxy settings could not be written') from e
             # a bad setting costs the dev conveniences, never the machine
             print('devnet: not written (%s)' % e, file=sys.stderr)
         # passwd is the image's: every declared login back before anything runs as one.
