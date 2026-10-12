@@ -329,7 +329,7 @@ needs. Node control connects outward to the hub.
 
 **The door** (issue #3213, EPIC #3208 C6). People reach this machine from
 outside through ONE public port, the entry port 22022 — the same second sshd a
-Mac home runs (#3070, docs/dev/MANAGED-NODE.md §16): keys only, and only the keys
+Mac home runs (#3070, docs/MANAGED-NODE.md §16): keys only, and only the keys
 the hub lists for a login whose home this machine is (root's
 `/var/db/fleet-node/entry/keys/<login>`, never `~/.ssh`); no password, no
 keyboard-interactive, no root, no admin login. `render.py` makes it a second
@@ -607,7 +607,7 @@ key from its next login. BREAK-IT `door-wrong-pod` drills the door on a real ssh
 ## Upgrade and recovery
 
 The machine follows `stable` by itself, with the same updater as a Mac
-(`fleet-node-update.py`, docs/dev/MANAGED-NODE.md §7) — issue #3212. The runtime lives
+(`fleet-node-update.py`, docs/MANAGED-NODE.md §7) — issue #3212. The runtime lives
 on the persistent volume, `FLEET_NODE_ROOT=/var/db/fleet-node/runtime`
 (`<sha>/`, `current`, `.prev` — the Mac `<root>`'s shape); the image's release is
 only a **seed** at `/opt/claude-fleet/seed/<sha>`. The entrypoint

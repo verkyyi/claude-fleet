@@ -595,7 +595,7 @@ name, so a fleet is a self-contained, equal unit (`ls .../fleets/` = the fleets)
 ```
 ~/.config/claude-fleet/
   fleets/<session>/
-    conf              # per-fleet overlay — same keys as conf/fleet.conf.reference
+    conf              # per-fleet overlay — same keys as fleet.conf.example
     repos/<slug>.conf # a further repo this fleet hosts (issue #788) — see below
     restore.map       # crash-recovery snapshot (fleet-restore.sh)
     bridge/{seen,since}   # issue-bridge dedup set + watermark (per repo)

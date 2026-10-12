@@ -59,7 +59,7 @@ exists — without it Remote Login admits every user), installs `--pubkey` as
 `FLEET_CRED_PROXY=1` + `FLEET_CRED_SEPARATE=1` in her fleet.conf, root's
 `fleet-credsep.sh install --login alice --fresh`: the pool tokens go into
 `/var/db/fleet-cred/alice/`, her `accounts/` holds only `store:<label>` markers;
-docs/dev/CRED-SEPARATE.md «A new login») and
+docs/CRED-SEPARATE.md «A new login») and
 **installs her 14 background services as system LaunchDaemons** —
 `/Library/LaunchDaemons/com.claude-fleet.alice.<unit>.plist`, `UserName alice`,
 rendered from that clone by `fleet-install-apply.sh --render-system` and
@@ -99,7 +99,7 @@ how a newcomer's port was found only from a box abroad). Set
 auth, host key known) and `fleet-doctor`'s `ingress` line asks it to
 `ssh-keyscan` the entry and compares the host key with sshd's here: PASS means
 open **and** this machine; a WARN names what is wrong — closed, forwarded to
-another machine, or the probe itself unreachable. See docs/dev/HOST.md#ingress.
+another machine, or the probe itself unreachable. See docs/HOST.md#ingress.
 
 **No GUI sign-in is needed** (issue #1192): the daemons are system
 LaunchDaemons, so alice's first `ssh alice@mini` lands in a working fleet. The

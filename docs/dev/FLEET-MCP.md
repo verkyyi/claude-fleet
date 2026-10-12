@@ -93,7 +93,7 @@ together (refused, nothing ran): `evidence before|after` takes exactly one of
 | tool | arguments | runs | exit codes |
 |---|---|---|---|
 | `report` 报 | `state` (`merged` · `blocked` · `failed` · `stopped` · `waiting`), `pr`?, `summary`?, `dry_run`? | `fleet-report-parent.sh --state S [--pr N] [--summary T] [--dry-run]` | 0 reported / no parent · 3 queued (delivered later — don't resend) · 1 refused; `merged` is checked against the PR's real state |
-| `ask` 问 | `question`, `kind`? (`question` · `permission`), `suggest`? `default`? `due`? `class`? (`normal` · `never:rule\|money\|publish` — issue #2669, docs/dev/DECISIONS.md), `issue`? (default the window's `@issue`; none → refused) | `fleet-comment.sh <issue> --note --body-file -` with `⛔ blocked: <question>` (`⛔ blocked — needs authorization: …` for `permission`; with any of the new fields, or the steward on, the body `bin/fleet_decision.py ask-body` writes: 建议 / 不答按 / 截止 + the `fleet:ask v=1` marker), **then** `set-claude-state.sh blocked` — stamped even if the comment failed | the comment's; `structuredContent.state` is the stamp's. The answer arrives as the next turn by the existing channels (issue-bridge, a prompt) |
+| `ask` 问 | `question`, `kind`? (`question` · `permission`), `suggest`? `default`? `due`? `class`? (`normal` · `never:rule\|money\|publish` — issue #2669, docs/DECISIONS.md), `issue`? (default the window's `@issue`; none → refused) | `fleet-comment.sh <issue> --note --body-file -` with `⛔ blocked: <question>` (`⛔ blocked — needs authorization: …` for `permission`; with any of the new fields, or the steward on, the body `bin/fleet_decision.py ask-body` writes: 建议 / 不答按 / 截止 + the `fleet:ask v=1` marker), **then** `set-claude-state.sh blocked` — stamped even if the comment failed | the comment's; `structuredContent.state` is the stamp's. The answer arrives as the next turn by the existing channels (issue-bridge, a prompt) |
 | `answer_dialog` 答 | `window` (`@<id>` / `%<pane>`), `fp` (the dialog's fingerprint), `picks` (labels verbatim; `N=<label>` with several questions), `by`? (`person` · `steward` · `default`), `basis`?, `issue`? (where the trail goes) | `fleet-dialog-answer.sh <window> --fp F --pick L … [--by B] [--basis T] [--issue R#N]` — reads the open AskUserQuestion off that window's transcript, refuses unless it is the one named (fingerprint + labels), refuses over a person typing / a draft, presses once through `fleet-answer.sh` and confirms in the transcript, leaves one line in `decision-<day>.md` + a record-only comment (issue #2958) | 0 answered · 1 no window / transcript · 2 usage · 3 refused, nothing sent · 4 pressed, unconfirmed (never pressed again) · 5 a person is typing |
 | `take_role` 接 | `role` (`orchestrator` · `steward`), `action`? (`take` default · `steal` · `drop` · `who`) | `fleet-role-take.sh <role> [--steal\|--drop\|--who]` — marks THIS window `@fleet_role_def <role>` and writes the role's one line in `$FLEET_CONF_DIR/global/roles.held` (issue #3114); `fleet_role_holder` is the one reader, `fleet_win_for_key orchestrator` answers the holder. Only a window that binds no issue | 0 taken / dropped / already here (`who`: printed) · 1 `who`: nobody · 2 usage · 3 this window cannot (binds an issue / a panel / no pane) · 4 another window holds it (named) |
 | `comment` 记 | `issue`, `body`, `mode`? (`note` default · `to-worker`), `close`?, `repo`? | `fleet-comment.sh <issue> --note\|--to-worker [--close] [--repo R] --body-file -` | the script's. `note` is RECORD-ONLY |
@@ -172,7 +172,7 @@ record outranks the screen) and never demotes a window whose fleet MCP server
 still runs a tool (`kept working …` in logs/reconcile.log). `FLEET_TOOL_WAIT=0`
 turns the reason off everywhere. `fleet-wait-selftest.sh` F,
 `fleet-state-reconcile-selftest.py` and the `tool-wait-idle` drill
-(docs/dev/BREAK-IT.md) pin it.
+(docs/BREAK-IT.md) pin it.
 
 ## How a session gets it
 
@@ -454,7 +454,7 @@ fleet 已从 69be1df 更新到 7c2a0e1，和你有关的：
 ```
 
 Relevant = a tool added or retired (`TOOLS` of the two versions), a commit that
-touches `docs/dev/FLEET-MCP.md`, a worker-owned skill (`owner: worker`) or a guard
+touches `docs/FLEET-MCP.md`, a worker-owned skill (`owner: worker`) or a guard
 (`hooks/*guard.py`, `bin/tmux-shim/`, the hook table); everything else is counted.
 A rollback is one line. Only at a turn boundary — nothing in a running turn is
 interrupted. No `ver` expected, no pane, or no move ⇒ nothing (as before); a session

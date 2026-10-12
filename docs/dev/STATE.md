@@ -657,7 +657,7 @@ quota watch runs it every tick before its read; the merge counts `proxy` like
 status line and the mod leave `@rl*` alone.
 
 **Tools** — none with the service mounted (mod 0.4.0, issue #1812, EPIC #1813
-C10): the fleet tool service (`bin/fleet-mcp.py`, `docs/dev/FLEET-MCP.md`) serves
+C10): the fleet tool service (`bin/fleet-mcp.py`, `docs/FLEET-MCP.md`) serves
 `status` / `spawn` / `await` and the rest to Claude and Codex alike, and
 `hooks/bash-guard.py` logs or refuses a worker that still calls the old names
 there. **The fallback** (mod 0.4.1, issue #2057): a session launched before the

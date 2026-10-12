@@ -273,7 +273,7 @@ comment there, so the public-repo reason for "off" does not apply.
   comments, and the watermark becomes the hub's newest time (`#max`). The hub
   down ⇒ `入口不通` in the log and the watermark held; what an event missed (the
   hub or this node away, the worker busy) is typed in on the tick after it is
-  back — `docs/dev/BREAK-IT.md` `ticket-hub-down`, `bin/fleet-issue-bridge-hub-selftest.sh`.
+  back — `docs/BREAK-IT.md` `ticket-hub-down`, `bin/fleet-issue-bridge-hub-selftest.sh`.
 
 ## Cost
 
@@ -282,7 +282,7 @@ one real worker LLM turn. Comment *writes* are bounded by GitHub's content
 secondary limit (~500/hr); reads/polling are effectively free. Keep the trusted
 set tight and don't wire a chatty bot to comment on bound issues.
 
-## Config knobs (see `conf/fleet.conf.reference`)
+## Config knobs (see `fleet.conf.example`)
 
 | Knob | Default | Meaning |
 |---|---|---|

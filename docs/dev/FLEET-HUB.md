@@ -943,7 +943,7 @@ too. `ccquota place … <repo> scratch <fleet UUID>` is the CLI form.
 | `worker_reap_policy(worker_id, policy, idempotency_key)` | Change when the fleet may close the session on its own (#2368): `fleet-reap-policy.sh set <policy>` — the setter the session's own `set_reap` runs — on the one window holding the worker's `@fleet_id` (checked at action time, as for a rename); the result carries the canonical policy (an `at:HH:MM` resolved on the node). `policy`: `merged[:<dur>]` · `done[:<dur>]` · `loop-end` · `at:<ISO|HH:MM|epoch>` · `keep` (`bin/fleet_reap_policy.py`'s grammar, checked by the hub and again by the node) | `worker:reap` on the worker's Fleet |
 | `worker_pin(worker_id, pin, idempotency_key)` | Pin (`on`) or unpin (`off`) a session to the top of its person's lists (#3517): `@pin` set or unset on the one window holding the worker's `@fleet_id` (checked at action time, as for a rename); a set, never a toggle, so a retry lands the same way. The inventory's column 32 `pin=` carries it back to every list | `worker:message` on the worker's Fleet |
 | `config_set(fleet_id, key, value, expected_revision, idempotency_key)` | Compare-and-set one allowed configuration key | `config:write` plus an explicit key grant |
-| `service_control(machine, login, name, action, at?, cron?, tz?, idempotency_key)` | One entry of a managed machine's login-level register (#2527): `start` · `stop` · `restart`, a task's `run_now` / `set_schedule` (`at` HH:MM or a five-field `cron`, optional `tz`). No fleet: the hub checks the caller sees (machine, login) — else FORBIDDEN (403) — and that the machine link's last beat lists the entry (NOT_FOUND), then sends it down that login's lane; the machine agent runs the root runtime's `fleet-node-supervisor.py service …` with that lane's own login and answers final (succeeded / failed). docs/dev/MANAGED-NODE.md §12 | `service:control` on that (machine, login) |
+| `service_control(machine, login, name, action, at?, cron?, tz?, idempotency_key)` | One entry of a managed machine's login-level register (#2527): `start` · `stop` · `restart`, a task's `run_now` / `set_schedule` (`at` HH:MM or a five-field `cron`, optional `tz`). No fleet: the hub checks the caller sees (machine, login) — else FORBIDDEN (403) — and that the machine link's last beat lists the entry (NOT_FOUND), then sends it down that login's lane; the machine agent runs the root runtime's `fleet-node-supervisor.py service …` with that lane's own login and answers final (succeeded / failed). docs/MANAGED-NODE.md §12 | `service:control` on that (machine, login) |
 | `orch_ensure(fleet_id?, idempotency_key)` | Retired (#3118): there is no orchestrating seat to open. Kept one version so an older client's ⌘N (#2616) gets an answer — `INVALID_STATE` (409) 「没有编排」, nothing sent to any node (`TestFleetWriteOrchEnsure`); an older hub's copy that reaches a node is refused the same way by `fleet_control.py`. Needs `worker:start`. |
 | `operation_get(operation_id)` | Reconcile a caller's own operation with its node | `fleet:read` on the target Fleet |
 | `gh_issue_view(fleet_id, number, repo?, fields?)` | One Issue through the node's `fleet-gh.sh`: the daemons' local copy when fresh, else `gh`, else REST — the `gh --json` fields plus `_source` (`cache`/`gh`/`rest`) and `_age` seconds (#1274) | `gh:read` on that Fleet |
@@ -1021,7 +1021,7 @@ answered `WRONG_LOGIN` and audited (`machine_login`); either side answers
 `WRONG_LOGIN` to a message for a login the link does not carry. The roster marks
 the link `machine_link`, each login it carries `via`, and every machine row counts
 its `links`. A login's own old agent keeps working on its own link, and is refused
-while its machine link carries it. Contract and files: `docs/dev/MANAGED-NODE.md` §6.
+while its machine link carries it. Contract and files: `docs/MANAGED-NODE.md` §6.
 
 ## Local stdio access
 
@@ -1268,7 +1268,7 @@ restart. While a machine is 维护中 the hub places nothing new on it (auto or
 named), `fleet-move.sh --rebalance` on it finds every idle session a better
 home, and `fleet connect` sends people elsewhere; its sessions run on, and lost
 still wins (a flagged machine that stops reporting is lost, leases lapse on the
-30-minute TTL). `docs/dev/MULTI-MACHINE-OPS.md` is the runbook — planned outage,
+30-minute TTL). `docs/MULTI-MACHINE-OPS.md` is the runbook — planned outage,
 unexpected outage, recovery, the drill.
 
 ### Worker lifecycle tools
@@ -1463,7 +1463,7 @@ issues exactly as before.
 **Through the Singapore relay, no machine at all (claude-fleet#1976).** With
 `CCQUOTA_FLEET_OAUTH_REFRESH_VIA=relay` the hub posts a Codex refresh itself to
 the relay's `/openai-auth/oauth/token` (`CCQUOTA_FLEET_CRED_RELAY_URL`, the C7
-forwarder of docs/dev/CRED-RELAY.md), so the long-lived refresh token is never in
+forwarder of docs/CRED-RELAY.md), so the long-lived refresh token is never in
 any machine's memory and no admin node has to be online.
 
 - The relay's forward_auth asks `/v1/relay/check` as for every request; the hub
@@ -1533,7 +1533,7 @@ join's hostname, else its first report). A borrowed name reads `untrusted`,
 `trust_source: name_borrowed`, refuses the lease and the relay credential, and
 its hello writes a `BORROWED NAME` audit row. The roster and `/v1/node/self`
 carry `trust_source` (`join_code` · `operator` · `machine_name` ·
-`name_borrowed`); the desired state itself is `docs/dev/MANAGED-NODE.md`.
+`name_borrowed`); the desired state itself is `docs/MANAGED-NODE.md`.
 
 **A machine's enrollment can be taken back (claude-fleet#1403).** Trust
 decides what a machine may lease; revoking decides whether it may speak at
@@ -1820,7 +1820,7 @@ What the ticket is for (EPIC #2889 C4, `tokenledger/internal/api/fleet_debug.go`
 (`fleet-home-session.sh`) and a person's `fleet connect` (`fleet-connect.py`;
 once ssh ran only its 255 counts, never `--print` / `--pick`) write each
 failure there and empty it on a success; a failure with no words of its own
-takes the client log's last line for that action (docs/dev/CLIENT-LOGS.md). The
+takes the client log's last line for that action (docs/CLIENT-LOGS.md). The
 `FLEET_DEBUG_PROMPT_AFTER`-th (3) inside `FLEET_DEBUG_PROMPT_WINDOW` (1800 s)
 asks 「连了 3 次都没成。要不要让远端帮你看一眼？」: y runs `fleet-debug report
 --note "<the last failure>"` and passes its words on (an expired ticket: its

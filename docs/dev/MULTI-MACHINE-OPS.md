@@ -42,7 +42,7 @@
 ### T-24h：通知
 
 - 群里发：时间、预计多久、这期间请用 `fleet`（会自动落到 m4）；手头在 m5 上「工作中」的会话请在下线前让它收尾（合 PR，或 `/fleet-handoff`）。
-- 确认 mac-b 接得住：`/nodes` 页「各登录」表里，**每个要迁的登录在 mac-b 上都有一行、在线**（登录不在 mac-b 上的人，他们的会话搬不过去——先按 `docs/dev/SHARED-MACHINE.md` 加登录）。看 mac-b 的负载/内存/每人会话上限（`fleet.node_cap.mac-b`，默认不设，只按负载判定）够不够。
+- 确认 m4 接得住：`/nodes` 页「各登录」表里，**每个要迁的登录在 m4 上都有一行、在线**（登录不在 m4 上的人，他们的会话搬不过去——先按 `docs/SHARED-MACHINE.md` 加登录）。看 m4 的负载/内存/每人会话上限（`fleet.node_cap.m4`，默认不设，只按负载判定）够不够。
 
 ### T-0：标维护中
 
@@ -84,7 +84,7 @@
 ### 恢复
 
 1. 开机。各登录的 ccquota agent 是 LaunchAgent，自己回连；`/nodes` 上 m5 从「失联」回到**「维护中」**（标记还在，入口仍不派活），侧边栏顶行回到 `◐ m5`。
-2. 在 mac-a 任一 fleet 窗格检查：`~/.claude/fleet/bin/fleet-doctor.sh` 全绿（`node` 行有 node.env、`machine` 行负载正常、`listen` 行没有 LAN 监听）；fleet 的 tmux 服务器由 `fleet-restore` 拉回来（`docs/dev/HOST.md`「An unattended Mac」）。
+2. 在 m5 任一 fleet 窗格检查：`~/.claude/fleet/bin/fleet-doctor.sh` 全绿（`node` 行有 node.env、`machine` 行负载正常、`listen` 行没有 LAN 监听）；fleet 的 tmux 服务器由 `fleet-restore` 拉回来（`docs/HOST.md`「An unattended Mac」）。
 3. 想把搬走的会话搬回来：在 m4 上对应登录跑 `fleet-move.sh <window> --via hub --to m5`（一个个搬），或者不搬——m4 继续跑也没问题。
 4. 结束维护：
 
@@ -306,7 +306,7 @@ Codex 的刷新凭证（refresh token）**一次性**：谁刷新，服务端就
 
 手机（Termius）和没装 Tailscale 的电脑从外面连 fleet，走的是**你的地址**
 `<名字>.cf.24haowan.com` → 家里路由器的转发 → **家机器的入口端口**（第二个 sshd，
-`FLEET_ENTRY_PORT` 22022，只认钥匙页登记过的钥匙，`docs/dev/MANAGED-NODE.md` §16）。
+`FLEET_ENTRY_PORT` 22022，只认钥匙页登记过的钥匙，`docs/MANAGED-NODE.md` §16）。
 机器原有的 22 端口不上公网；机器之间照旧走 Tailscale。
 
 **一台机器开入口（运维，一次）**
@@ -376,4 +376,4 @@ Codex 的刷新凭证（refresh token）**一次性**：谁刷新，服务端就
 | 入口记的告警（失联 / 重复认领） | `GET /v1/fleet/fleet_alerts`（第 5¾ 节） |
 | 审计 | 入口 `fleet_audit` 表：`node_maintenance`（ENTER/LEAVE/ALREADY/NOT_FLAGGED）、`lease_*`、`place`、`move` |
 
-相关：`docs/dev/FLEET-HUB.md`（入口、失联、租约）· `docs/dev/SHARED-MACHINE.md`（给一台机器加登录）· `docs/dev/HOST.md`（无人值守 Mac）· `tokenledger/README.md`「Fleet nodes」。
+相关：`docs/FLEET-HUB.md`（入口、失联、租约）· `docs/SHARED-MACHINE.md`（给一台机器加登录）· `docs/HOST.md`（无人值守 Mac）· `tokenledger/README.md`「Fleet nodes」。

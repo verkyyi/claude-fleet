@@ -338,7 +338,7 @@ tests. Run the complete selftest gate before release. Do not edit `bin/` while
 the gate runs: the shadow root links those files.
 
 Install `com.claude-fleet.sleep` on macOS or `claude-fleet-sleep.timer` on Linux,
-following `docs/dev/INSTALL.md`. Start with observation, review skipped candidates,
+following `docs/INSTALL.md`. Start with observation, review skipped candidates,
 test manual sleep/wake with both native agents, and then enable automatic sleep
 on each fleet. Check the actual native session ID, window identity, account,
 process exit and worktree after recovery. `wake_seconds` in the durable record

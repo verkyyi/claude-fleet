@@ -170,7 +170,7 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.claude-fleet.webhook
 claude-fleet's own daemons need a live-install re-apply after landing: sync the
 merged files and install the new daemon (`launchctl`/`systemctl`), plus
 `gh extension install cli/gh-webhook`. Run `/fleet-sync-install` from the hub for
-the sync; install the daemon separately (see docs/dev/INSTALL.md).
+the sync; install the daemon separately (see docs/INSTALL.md).
 
 ## Verify
 

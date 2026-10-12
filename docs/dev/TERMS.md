@@ -199,13 +199,13 @@ A person sees two words for a computer, and only two (issue #1806, EPIC #1813):
 | 只看只派 / 承载 未开 | a node with `CCQUOTA_FLEET_COMPUTE=0` and no fleet of its own (the install line's coordinate-only join, #1719) | not 承载 |
 | `FLEET_HOST=1` | `FLEET_ROLE="client,node"` / `"node"` (issue #1623) | the old key is rewritten by `fleet-conf.sh migrate` and read for one more version |
 
-⚠️ **"host" is overloaded.** `docs/dev/HOST.md` and the doctor's spotlight / pmset
+⚠️ **"host" is overloaded.** `docs/HOST.md` and the doctor's spotlight / pmset
 rows (EPIC #1074) mean *the machine itself*; **承载 / `FLEET_HOST`** means the
 capability. When it matters, the docs say 承载.
 
 ## Configuration
 
-- **`fleet.conf`** — the per-fleet config (`fleet.conf.example` is a short sample; `conf/fleet.conf.reference` lists every key):
+- **`fleet.conf`** — the per-fleet config (`fleet.conf.example` is the template):
   - `FLEET_REPO` — `owner/name` of the repo whose issues/PRs this fleet tracks.
   - `FLEET_MAIN` — path to the local main checkout (worktrees are siblings).
   - `FLEET_BASE_BRANCH` — branch new work forks from / merged-ness is measured against.

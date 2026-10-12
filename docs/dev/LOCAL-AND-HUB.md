@@ -13,7 +13,7 @@
 互不影响。`fleet-doctor` 的 `mode` 行逐个 fleet 列出它现在是哪种：
 
 ```
-INFO  mode     fleet hub (新会话 auto) · scratchpad local — 本机 / 联机各管什么: docs/dev/LOCAL-AND-HUB.md
+INFO  mode     fleet hub (新会话 auto) · scratchpad local — 本机 / 联机各管什么: docs/LOCAL-AND-HUB.md
 ```
 
 ## 一台电脑是什么：fleet 和「承载」
@@ -165,5 +165,5 @@ fleet conf 也被剥掉。现在两者都由 fleet 自己那一行决定，**fle
   与派单同一套分支，全程不调租约；入口派来的 start 不再二次问入口。入口侧
   `TestNodePlaceScratch*`（`fleet_place_test.go`）、节点侧
   `test_start_scratch_opens_a_raw_session`（`fleet-hub-selftest.py`）。
-- `bin/tmux-config-selftest.sh` 核对 global-only 名单与 `conf/fleet.conf.reference` 的
+- `bin/tmux-config-selftest.sh` 核对 global-only 名单与 `fleet.conf.example` 的
   `@scope=global` 标签同步。

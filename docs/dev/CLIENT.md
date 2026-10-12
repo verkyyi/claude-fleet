@@ -416,7 +416,7 @@ your login, never a limit; each arrival is one line in `logs/entry.ndjson`.
 The key is an ordinary key of your login, the same as a computer's. Changing
 home on the page changes the port when the new home sits behind the same router
 (Termius: edit the port once) and Termius says the host key changed once —
-`docs/dev/MULTI-MACHINE-OPS.md` «从外面连进来».
+`docs/MULTI-MACHINE-OPS.md` «从外面连进来».
 
 **The keys: one, to open the panel** (issue #3185). A phone has no ⌘; the 看台
 opens the panel on **⌃空格** (Ctrl, space — two taps), **F12** (one tap, once it
@@ -681,7 +681,7 @@ answer is a person's steps, the reasons live in the sections it points to.
 **连不上**
 - 手机（Termius）：
   1. 打开钥匙页 `<入口>/fleet/keys`：那把钥匙还在（没被「撤掉」）、页上写的**端口**和
-     Termius 里那台主机的端口一样——换过家端口会变（`docs/dev/MULTI-MACHINE-OPS.md`
+     Termius 里那台主机的端口一样——换过家端口会变（`docs/MULTI-MACHINE-OPS.md`
      «手动换家»）。
   2. 页上写「从外面连不上」：家机器的入口端口从外面够不着。在家机器上跑 `fleet doctor`，
      `public` 行说卡在哪（超时 · 被拒 · 钥匙不符 · 这台没有公网地址），或在同一页换一台当家。
@@ -700,7 +700,7 @@ answer is a person's steps, the reasons live in the sections it points to.
 看哪一行红；在 Mac 上 `fleet login` 续证书、`fleet update` 跟上 stable。
 
 **会话结束了**（`/exit`、⌃C、进程被杀）——窗口留在恢复页：↵ 用同一段对话续上 · r 新开 ·
-q 回收（`docs/dev/BREAK-IT.md` `session-exit`）。客户端说「会话已结束（mac-a）。fleet 可以恢复。」
+q 回收（`docs/BREAK-IT.md` `session-exit`）。客户端说「会话已结束（m5）。fleet 可以恢复。」
 时，下一次 `fleet` 就回到那个恢复页。⌃D / 关终端只是**放到后台**，会话照跑（上一节）。
 
 **额度和用量在哪看**——入口网页：`<入口>/quota`「我的额度」：每个订阅的 5 小时 / 7 天窗、
