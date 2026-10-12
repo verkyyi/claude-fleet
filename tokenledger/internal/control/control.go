@@ -801,8 +801,9 @@ type ServiceStatus struct {
 	Login string `json:"login"`
 	// State is the daemon's word: running · stopped · down (exited, waiting
 	// to restart) · invalid (an entry the daemon will not run) · no_login
-	// (the login is gone); a task's also scheduled · retrying · ok · failed
-	// (past its retries, #2529).
+	// (the login is gone) · idle (an on-demand service that exited idle, kept
+	// off until it is opened again, #3647); a task's also scheduled · retrying ·
+	// ok · failed (past its retries, #2529).
 	State       string     `json:"state"`
 	StartedAt   *time.Time `json:"started_at,omitempty"`
 	LastRun     *time.Time `json:"last_run,omitempty"`

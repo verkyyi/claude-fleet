@@ -15,7 +15,26 @@ bin/fleet-webchat.sh enable           # fleet service add webchat --path <状态
 bin/fleet-webchat.sh serve            # 服务跑的就是它：前台、只听 socket（第一次装好锁定版本的 Agent SDK）
 bin/fleet-webchat.sh status           # on · socket … · pid，或 off
 bin/fleet-webchat.sh disable          # fleet service rm webchat
+bin/fleet-webchat.sh ensure           # 按需：没登记就登记、停着 / 空闲就起，等 socket 的 /healthz（3 次）
+bin/fleet-webchat.sh move --to <登录>  # 家换了登录：fleet service move webchat --to <登录>
 ```
+
+### 按需起停，家搬了跟着走（#3647，EPIC #3642 C5）
+
+- **按需**（D1）：人打开 `/chat` 时，节点用固定的命令跑整机守护的
+  `fleet-node-supervisor.py service ensure --login <这个人的家登录> --name webchat --wait 3`（`service_control`
+  的 `ensure`，只认 `webchat`，入口给的是名字、不是命令）：没登记就按家目录登记
+  （`~/.claude/fleet/bin/fleet-webchat.sh serve`，`paths[]` 是 `~/.config/claude-fleet/webchat`），停着或空闲就起，
+  然后等 socket 上的 `/healthz`，每次 15 秒（`FLEET_NODE_ENSURE_SECS`），最多 3 次，两次之间重起一次。
+  页面在这期间先显示骨架屏（C4）。
+- **空闲退出**：没有在跑的一轮、没有页面连着、最后一次动静过去 `FLEET_WEBCHAT_IDLE_SECS`（默认 7200，0 = 不退）
+  之后，服务自己退出、**退出码 75**。守护认这个码：记 `idle`（`fleet ls --services` 里「空闲·打开再起」），
+  不重起、不告警，登记保留，直到条目被改写（`service start` / `service ensure`）。
+- **跟人走**：`service move` 先停掉旧的，再把 `paths[]`（状态目录）搬到新家目录。Claude Code 的记录在
+  `~/.claude/projects/` 里、不在 `paths[]` 里，所以服务每轮结束、每次退出都把整条 chain 的记录抄进状态目录的
+  `transcripts/`；在另一个家目录下起来时（`conversation.json` 记着上次的 `home`），把它们放回自己的
+  projects 目录、cwd（记录里的也一起）改成新家，记一行 `home_moved`。新家上打开 `/chat` 还是同一条对话，
+  旧登录下不留服务。BREAK-IT `chat-home-moved`。
 
 ### 本机直连（开发 / 排障用，默认关）
 

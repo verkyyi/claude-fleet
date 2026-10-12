@@ -500,7 +500,13 @@ Do not install from memory: read the doc and work from it.
   127.0.0.1 only (no option widens it), is OFF unless `FLEET_WEBCHAT_LOCAL=1`,
   behind a one-time link minted with a 0600 `admin.token` → an HttpOnly cookie; one
   conversation per person (`webchat/conversation.json`), compacted between turns
-  or relayed to a new session (`chain`), never a list. Each turn's `claude` gets a
+  or relayed to a new session (`chain`), never a list. On demand (issue #3647): the
+  node opens it with the daemon's `service ensure --name webchat --wait 3` (register ·
+  start · wait for `/healthz`); 2 h with nothing to do it exits 75, which the daemon
+  keeps `idle` (never restarted, never `down`) until the entry is rewritten; every
+  session's transcript is copied into `webchat/transcripts/` so `service move` carries
+  the conversation and a server under a new home puts it back (BREAK-IT
+  `chat-home-moved`). Each turn's `claude` gets a
   `fleet-session-cred.sh mint` session credential in its environment only — the
   pool's proxy picks and meters, as for `fleet-claude.sh`. The model allowlist is
   `lib.mjs`'s `MODELS`, enforced by the server. The page (issue #3637) is

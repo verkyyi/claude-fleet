@@ -54,6 +54,11 @@ FLEET_NODE_* seams; nothing touches /Library, /var or a real login.
   R  the entry port (#3070): off adds nothing (no child, no status line, no
      directory); the switch from the environment or machine.env; only a plain
      public key becomes a keys-file line; the config is 共同约定 2 line for line
+  U  on demand (#3647): a service exiting 75 is `idle` — not restarted, not
+     `down` — until its entry is rewritten; `service ensure --name webchat`
+     registers it from the login's home, starts a stopped / idle one and waits for
+     its socket's /healthz (`registered|started|running · ready`, or `not ready`
+     after N tries); a name off the on-demand table is refused
   S  can the outside reach the entry port (#3072): `entry reach` posts the port, its
      host key, the global IPv6 (never a tunnel's, a temporary one), the LAN IPv4 with
      the default route's interface first (wired en0, not Wi-Fi), and the router's
@@ -2680,6 +2685,117 @@ class T_RootCore(H_Accounts):
         self.assertTrue(until(10, lambda: (self.task("memguard").get("runs") or 0) >= runs + 2))
         self.assertEqual(self.task("memguard").get("rc"), 1, "FLEET_NODE_CORE=0 still asked the core")
 
+
+
+class U_OnDemand(Sandbox):
+    """The chat service on demand (issue #3647, EPIC #3642 C5): an exit with
+    SVC_IDLE_RC is `idle` — not restarted, not `down` — until its entry changes;
+    `service ensure --name webchat` registers it from the login's home, starts a
+    stopped / idle one, and waits for its socket's /healthz."""
+
+    def setUp(self):
+        Sandbox.setUp(self)
+        # a unix socket path is ≤ 104 bytes: the home lives under a short /tmp dir
+        self.short = tempfile.mkdtemp(prefix="fw.", dir="/tmp")
+        self.home = os.path.join(self.short, "alice")
+        os.makedirs(self.home)
+        with open(os.path.join(self.d, "passwd.json"), "w") as f:
+            json.dump({"alice": {"uid": os.getuid(), "gid": os.getgid(), "home": self.home}}, f)
+        self.env["FLEET_NODE_PASSWD"] = os.path.join(self.d, "passwd.json")
+        self.table()
+
+    def tearDown(self):
+        Sandbox.tearDown(self)
+        shutil.rmtree(self.short, ignore_errors=True)
+
+    def svc(self, *args, **kw):
+        return self.run_sup("service", *args, **kw)
+
+    def services(self):
+        return {x["name"]: x for x in json.loads(self.run_sup("status", "--json").stdout)["services"]}
+
+    def test_idle_exit_stays_off_until_its_entry_changes(self):
+        sh = self.script("idle.sh", "echo up; sleep 0.3; exit %d\n" % fns.SVC_IDLE_RC)
+        self.assertEqual(self.svc("add", "--login", "alice", "--name", "nap", "--", "/bin/bash", sh).returncode, 0)
+        self.start()
+        key = "svc:alice/nap"
+        self.assertTrue(until(10, lambda: self.child(key).get("idle")), "an idle exit was not marked idle")
+        st = self.services()["nap"]
+        self.assertEqual(st["status"], "idle", st)
+        r0 = self.child(key).get("restarts") or 0
+        time.sleep(1.5)
+        self.assertFalse(fns.pid_alive(self.child(key).get("pid")), "an idle service was started again")
+        self.assertEqual(self.child(key).get("restarts") or 0, r0)
+        self.assertEqual(self.services()["nap"]["status"], "idle")
+        # a rewrite (service start) brings it back
+        started = self.child(key).get("started")
+        self.assertEqual(self.svc("start", "--login", "alice", "--name", "nap").returncode, 0)
+        self.assertTrue(until(10, lambda: (self.child(key).get("started") or 0) != started),
+                        "start did not bring an idle service back")
+
+    def stub_webchat(self, idle):
+        """the login's fleet-webchat.sh serve: answers /healthz on the socket, idles out"""
+        b = os.path.join(self.home, ".claude", "fleet", "bin")
+        os.makedirs(b)
+        p = os.path.join(b, "fleet-webchat.sh")
+        with open(os.path.join(b, "serve.py"), "w") as f:
+            f.write(r"""
+import os, socket, sys, time
+d = os.path.join(os.environ["HOME"], ".config", "claude-fleet", "webchat")
+os.makedirs(d, 0o700, exist_ok=True)
+s = os.path.join(d, "chat.sock")
+try: os.unlink(s)
+except OSError: pass
+l = socket.socket(socket.AF_UNIX); l.bind(s); l.listen(4); l.settimeout(0.2)
+end = time.time() + float(sys.argv[1])
+while time.time() < end:
+    try: c, _ = l.accept()
+    except socket.timeout: continue
+    c.recv(512); c.sendall(b"HTTP/1.0 200 OK\r\n\r\n{}"); c.close()
+os.unlink(s); sys.exit(75)
+""")
+        with open(p, "w") as f:
+            f.write('#!/bin/bash\n[ "$1" = serve ] || exit 2\nexec %s -I "$(dirname "$0")/serve.py" %s\n'
+                    % (sys.executable, idle))
+        os.chmod(p, 0o755)
+        return p
+
+    def test_ensure_registers_starts_and_waits(self):
+        self.assertEqual(self.svc("ensure", "--login", "alice", "--name", "sms").returncode, 2,
+                         "a name off the on-demand table was ensured")
+        p = self.stub_webchat(4)
+        self.start()
+        r = self.svc("ensure", "--login", "alice", "--name", "webchat", "--wait", "3")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("registered · ready", r.stdout)
+        ent = json.load(open(os.path.join(self.d, "db", "logins", "alice", "services", "webchat.json")))
+        self.assertEqual(ent["exec"], [p, "serve"])
+        self.assertEqual(ent["paths"], [os.path.join(self.home, ".config", "claude-fleet", "webchat")])
+        self.assertEqual(ent["state"], "enabled")
+        r = self.svc("ensure", "--login", "alice", "--name", "webchat", "--wait", "3")
+        self.assertIn("running · ready", r.stdout, r.stderr)
+        # idle out (75), then the next open starts it again
+        self.assertTrue(until(15, lambda: self.services()["webchat"]["status"] == "idle"), self.services())
+        r = self.svc("ensure", "--login", "alice", "--name", "webchat", "--wait", "3")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("started · ready", r.stdout)
+        # stopped by hand: ensure enables it
+        self.assertEqual(self.svc("stop", "--login", "alice", "--name", "webchat").returncode, 0)
+        self.assertTrue(until(15, lambda: self.services()["webchat"]["status"] == "stopped"))
+        r = self.svc("ensure", "--login", "alice", "--name", "webchat", "--wait", "3")
+        self.assertIn("started · ready", r.stdout, r.stderr)
+
+    def test_ensure_not_ready(self):
+        b = os.path.join(self.home, ".claude", "fleet", "bin")
+        os.makedirs(b)
+        with open(os.path.join(b, "fleet-webchat.sh"), "w") as f:
+            f.write("#!/bin/bash\nexec sleep 300\n")
+        os.chmod(os.path.join(b, "fleet-webchat.sh"), 0o755)
+        self.start()
+        r = self.svc("ensure", "--login", "alice", "--name", "webchat", "--wait", "2",
+                     env={"FLEET_NODE_ENSURE_SECS": "1"})
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("not ready after 2 tries", r.stderr)
 
 # T_RootCore runs only its own two cases; the rest of H_Accounts is the no-core road
 for _n in dir(H_Accounts):

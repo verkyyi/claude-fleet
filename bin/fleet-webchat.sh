@@ -14,7 +14,21 @@
 #   fleet-webchat.sh enable           register it: fleet service add webchat
 #                                     --path <state dir> -- fleet-webchat.sh serve
 #   fleet-webchat.sh disable          fleet service rm webchat
+#   fleet-webchat.sh ensure           on demand (issue #3647, D1): registered when
+#                                     missing, started when stopped or idle, then
+#                                     waits for the socket's /healthz (3 tries) —
+#                                     the daemon's `service ensure`, the same one
+#                                     the node runs when a person opens /chat
+#   fleet-webchat.sh move --to <login>
+#                                     the chat follows its person (C5): fleet service
+#                                     move webchat — the state dir (conversation.json,
+#                                     chain, transcripts/) goes to <login>'s home, the
+#                                     server there puts the transcripts back
 #   fleet-webchat.sh status           one line: socket on · pid, local on · port, or off
+#
+# Idle: the server exits 75 after FLEET_WEBCHAT_IDLE_SECS (7200) with no turn and
+# no page connected; the daemon keeps it off (`idle`), the entry kept, until the
+# next ensure.
 #
 # The local mode — 127.0.0.1 + a one-time link — is kept for developing and
 # debugging, OFF by default (D3): FLEET_WEBCHAT_LOCAL=1 turns on these four.
@@ -35,7 +49,7 @@
 # argv, in a file here, or in the server's log (bin/fleet-webchat-selftest.sh).
 #
 # State: $FLEET_CONF_DIR/webchat/ (chat.sock · pid · conversation.json · budget.json ·
-# server.log · deps/; local mode adds port · admin.token · cookies.json, hashed).
+# transcripts/ · server.log · deps/; local mode adds port · admin.token · cookies.json, hashed).
 # FLEET_WEBCHAT_PORT (18961) · FLEET_WEBCHAT_CWD (where a new chat runs, $HOME) ·
 # FLEET_WEBCHAT_NODE (node) · FLEET_WEBCHAT_SERVICE (the `fleet service` command).
 set -uo pipefail
@@ -171,11 +185,23 @@ disable() {
   [ -e "$SERVICE" ] || die "no fleet service here ($SERVICE)"
   bash "$SERVICE" rm webchat
 }
+ensure() { # the daemon's own `service ensure` (root, through fleet service's sudo road)
+  [ -e "$SERVICE" ] || die "no fleet service here ($SERVICE)"
+  if sock_healthy; then echo "fleet-webchat: on · socket $STATE/chat.sock"; return 0; fi
+  bash "$SERVICE" __root ensure --login "${FLEET_SERVICE_LOGIN:-$(id -un)}" --name webchat --wait 3
+}
+move() {
+  [ "${1:-}" = --to ] && [ -n "${2:-}" ] || die "usage: fleet-webchat.sh move --to <login>" 2
+  [ -e "$SERVICE" ] || die "no fleet service here ($SERVICE)"
+  bash "$SERVICE" move webchat --to "$2"
+}
 
 case "${1:-status}" in
   serve) serve ;;
   enable) enable ;;
   disable) disable ;;
+  ensure) ensure ;;
+  move) shift; move "$@" ;;
   start) local_on; start ;;
   link) local_on; shift; link "${1:-open}" ;;
   stop) stop ;;
@@ -183,6 +209,6 @@ case "${1:-status}" in
     if sock_healthy; then echo "on · socket $STATE/chat.sock · pid $(cat "$STATE/pid" 2>/dev/null)"
     elif pid_live && healthy; then echo "on · local http://127.0.0.1:$(port)/ · pid $(cat "$STATE/pid")$([ -f "$STATE/tailnet" ] && echo ' · tailnet')"
     else echo off; fi ;;
-  -h|--help|help) sed -n '2,40p' "$0" ;;
-  *) die "usage: fleet-webchat.sh serve|enable|disable|status   (FLEET_WEBCHAT_LOCAL=1: start|link [--tailnet|--print]|stop)" 2 ;;
+  -h|--help|help) sed -n '2,54p' "$0" ;;
+  *) die "usage: fleet-webchat.sh serve|enable|disable|ensure|move --to <login>|status   (FLEET_WEBCHAT_LOCAL=1: start|link [--tailnet|--print]|stop)" 2 ;;
 esac

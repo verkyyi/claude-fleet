@@ -76,6 +76,11 @@ print("alice/daily: one run now")
 	if st != "succeeded" {
 		t.Fatalf("set_schedule = %s", st)
 	}
+	// on demand (claude-fleet#3647): ensure names webchat only and always waits
+	st, _ = remote(submit(map[string]any{"name": "webchat", "action": "ensure"}))
+	if st != "succeeded" {
+		t.Fatalf("ensure = %s", st)
+	}
 	st, res = remote(submit(map[string]any{"name": "ghost", "action": "stop"}))
 	if e, _ := res["error"].(map[string]any); st != "failed" || e["code"] != "NOT_FOUND" || !strings.Contains(e["message"].(string), "not registered") {
 		t.Fatalf("an unknown entry = %s %v", st, res)
@@ -83,6 +88,7 @@ print("alice/daily: one run now")
 	b, _ := os.ReadFile(argvFile)
 	want := "service run --login alice --name daily\n" +
 		"service schedule --login alice --name daily --at 07:30 --tz Asia/Shanghai\n" +
+		"service ensure --login alice --name webchat --wait 3\n" +
 		"service stop --login alice --name ghost\n"
 	if string(b) != want {
 		t.Fatalf("argv =\n%s\nwant\n%s", b, want)
@@ -95,6 +101,7 @@ print("alice/daily: one run now")
 	}{
 		{map[string]any{"login": "bob", "name": "daily", "action": "stop"}, control.CodeWrongLogin},
 		{map[string]any{"name": "daily", "action": "rm"}, control.CodeBadArgs},
+		{map[string]any{"name": "daily", "action": "ensure"}, control.CodeBadArgs},
 		{map[string]any{"name": "../x", "action": "stop"}, control.CodeBadArgs},
 		{map[string]any{"name": "daily", "action": "set_schedule"}, control.CodeBadArgs},
 		{map[string]any{"name": "daily", "action": "set_schedule", "at": "7pm"}, control.CodeBadArgs},

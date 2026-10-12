@@ -340,6 +340,7 @@ FLEET_VIEW_SHELL_WAIT              knob: seconds ⌃\'s far shell waits for C5's
 FLEET_WEBCHAT_NODE                 seam: the node binary bin/fleet-webchat.sh runs the browser chat with (#3567)
 FLEET_WEBCHAT_PORT                 knob: the browser chat's loopback port, 18961 (bin/fleet-webchat.sh, #3567)
 FLEET_WEBCHAT_LOCAL                knob: 1 turns on the browser chat's old 127.0.0.1 + login-link mode, off by default — the road is the socket service (bin/fleet-webchat.sh, #3643)
+FLEET_WEBCHAT_IDLE_SECS            knob: the socket chat service exits idle (75) after this long with no turn and no page, 7200; 0 = never (extras/web-chat/server.mjs, #3647)
 FLEET_WEBCHAT_SERVICE              seam: the `fleet service` command bin/fleet-webchat.sh enable / disable runs (#3643)
 FLEET_WRAP_LAUNCH_ID               handoff: one launch of fleet-session-wrap.sh, the session a personal hook's strikes count in (fleet-hook-personal.sh)
 FLEET_SESSION_SHELL_CMD            seam: the login shell ⌃\'s shell-here execs instead of $SHELL (fleet-remote-view-selftest S, #2744)

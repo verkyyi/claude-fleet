@@ -38,10 +38,21 @@
 //     restart or a dropped page resumes the same one.
 //   * It is Claude Code's own transcript (~/.claude/projects/…): the terminal can
 //     read it — `claude --resume <id>` from its directory.
+//   * On demand (issue #3647, EPIC #3642 D1): the node starts the service when a
+//     person opens the chat (`fleet-node-supervisor.py service ensure`); after
+//     FLEET_WEBCHAT_IDLE_SECS (2 h) with no turn running and no page connected it
+//     exits 75 — the daemon's idle code: kept off, the entry kept, started again on
+//     the next open.
+//   * It follows its person (C5): `fleet service move webchat --to <login>` carries
+//     the state dir (its paths[]) but not ~/.claude, so every session of the
+//     conversation is copied into <state>/transcripts/ after each turn and on the
+//     way out; a server that starts under another home puts them back under its
+//     own projects dir, the cwd rehomed, and the conversation goes on there.
 import http from "node:http";
 import { gzipSync } from "node:zlib";
 import { execFile } from "node:child_process";
-import { promises as fsp, readFileSync, writeFileSync, mkdirSync, chmodSync, existsSync, realpathSync, renameSync, unlinkSync } from "node:fs";
+import { promises as fsp, readFileSync, writeFileSync, mkdirSync, chmodSync, existsSync, realpathSync, renameSync, unlinkSync,
+  statSync, copyFileSync } from "node:fs";
 import { join, dirname, extname, normalize, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import net from "node:net";
@@ -70,6 +81,11 @@ const SDK_PATH = E.FLEET_WEBCHAT_SDK || "";
 const ASK_TIMEOUT_MS = Number(E.FLEET_WEBCHAT_ASK_SECS || 1800) * 1000;
 const COMPACT_AT = Number(E.FLEET_WEBCHAT_COMPACT_AT || 0.8);  // the context share that triggers a compact
 const PROJECTS = join(E.CLAUDE_CONFIG_DIR || join(E.HOME || "", ".claude"), "projects");
+// socket mode: exit idle after this long with nothing to do (0 = never); 75 is the
+// daemon's word for "done for now" (fleet-node-supervisor.py SVC_IDLE_RC)
+const IDLE_SECS = Number(E.FLEET_WEBCHAT_IDLE_SECS ?? 7200);
+const IDLE_RC = 75;
+const CARRY = join(STATE, "transcripts");
 // The page is the built UI (issue #3637): ui/dist, made by `npm run build` in
 // extras/web-chat/ui and committed — served from here, every byte local.
 const UI = E.FLEET_WEBCHAT_UI || join(HERE, "ui", "dist");
@@ -236,12 +252,62 @@ async function conversationItems() {
 
 // ---- the one conversation ------------------------------------------------------
 const CONV_FILE = join(STATE, "conversation.json");
-let conv = { session: "", cwd: CWD, chain: [], seed: "", ctx: { used: 0, window: 0 } };
-try { conv = { ...conv, ...JSON.parse(readFileSync(CONV_FILE, "utf8")) }; } catch { /* a first start */ }
+let conv = { session: "", cwd: CWD, chain: [], seed: "", ctx: { used: 0, window: 0 }, home: E.HOME || "" };
+try { conv = { ...conv, home: "", ...JSON.parse(readFileSync(CONV_FILE, "utf8")) }; } catch { /* a first start */ }
 function saveConv() {
   writeFileSync(CONV_FILE + ".tmp", JSON.stringify(conv), { mode: 0o600 });
   renameSync(CONV_FILE + ".tmp", CONV_FILE);
 }
+
+// ---- the conversation follows its person (issue #3647) -------------------------
+const sessions = () => [...conv.chain, ...(conv.session ? [{ id: conv.session, cwd: conv.cwd }] : [])];
+// a copy of each session's transcript in the state dir, the part `service move` carries
+function carryOut() {
+  try {
+    mkdirSync(CARRY, { recursive: true, mode: 0o700 });
+    for (const s of sessions()) {
+      const src = transcriptPath(s.id, s.cwd), dst = join(CARRY, `${s.id}.jsonl`);
+      let a; try { a = statSync(src); } catch { continue; }
+      let b = null; try { b = statSync(dst); } catch { /* none yet */ }
+      if (b && b.size === a.size && b.mtimeMs >= a.mtimeMs) continue;
+      copyFileSync(src, dst + ".tmp");
+      chmodSync(dst + ".tmp", 0o600);
+      renameSync(dst + ".tmp", dst);
+    }
+  } catch (e) { log("carry_failed", { msg: String(e?.message || e).slice(0, 200) }); }
+}
+// started under another home than the conversation last ran in: its transcripts
+// back under this home's projects dir, every cwd rehomed (inside the lines too)
+function carryIn() {
+  const home = E.HOME || "", old = conv.home;
+  if (!old || old === home || !home) {
+    if (!old && home && sessions().length) { conv.home = home; saveConv(); }
+    return;
+  }
+  const rehome = (c) => c === old ? home : c.startsWith(old + "/") ? home + c.slice(old.length) : c;
+  let n = 0;
+  const all = sessions();
+  for (const s of all) {
+    const was = s.cwd, now = rehome(was);
+    const src = join(CARRY, `${s.id}.jsonl`), dst = transcriptPath(s.id, now);
+    if (existsSync(src) && !existsSync(dst)) {
+      const lines = readFileSync(src, "utf8").split("\n").map((l) => {
+        if (!l) return l;
+        try { const m = JSON.parse(l); if (m && m.cwd === was) { m.cwd = now; return JSON.stringify(m); } } catch { /* as is */ }
+        return l;
+      });
+      mkdirSync(dirname(dst), { recursive: true, mode: 0o700 });
+      writeFileSync(dst, lines.join("\n"), { mode: 0o600 });
+      n++;
+    }
+    s.cwd = now;
+  }
+  if (conv.session) conv.cwd = all.at(-1).cwd;          // the chain's entries are conv's own, rehomed in place
+  conv.home = home;
+  saveConv();
+  log("home_moved", { from: old, to: home, restored: n });
+}
+carryIn();
 let live = null;          // the running turn: { tid, ac, listeners, asks, model }
 let maint = null;         // a compact / relay between turns (the next turn waits for it)
 let ridSeq = 0;
@@ -291,7 +357,8 @@ function maintain(why) {
         (m) => { if (m.type === "system" && m.subtype === "compact_boundary") ok = true; });
     } catch (e) { log("compact_failed", { msg: String(e?.message || e).slice(0, 200) }); }
     if (!ok) await relay();
-  })().finally(() => { maint = null; });
+    carryOut();
+  })().finally(() => { maint = null; touch(); });
   return maint;
 }
 async function relay() {
@@ -422,6 +489,8 @@ async function turn(req, res, person) {
     live = null;
     for (const r of ls) if (!r.writableEnded) r.end();
     log("turn_end", { session: conv.session, used: conv.ctx.used, window: conv.ctx.window });
+    carryOut();
+    touch();
     if (conv.session && conv.ctx.window && conv.ctx.used >= COMPACT_AT * conv.ctx.window) maintain("near full");
   }
 }
@@ -511,7 +580,11 @@ async function handle(req, res) {
   return send(res, 404, { error: "not found" });
 }
 
+// idle: no turn, no compact, no connection open (a page that is watching holds one)
+let lastBusy = Date.now();
+function touch() { lastBusy = Date.now(); }
 const server = http.createServer((req, res) => {
+  touch();
   handle(req, res).catch((e) => {
     log("error", { msg: String(e?.message || e).slice(0, 300) });
     if (!res.headersSent) send(res, 500, { error: "internal error" }); else res.end();
@@ -550,9 +623,18 @@ if (SOCKET) {
     console.log(`fleet-webchat: listening on http://${BIND}:${port}/`);
   });
 }
-for (const sig of ["SIGTERM", "SIGINT"]) process.on(sig, () => {
-  log("stop");
+server.on("connection", (c) => { touch(); c.on("close", touch); });
+function shutdown(code, ev) {
+  log(ev);
+  carryOut();
   server.close();
   if (SOCKET) { try { unlinkSync(SOCK); } catch { /* gone */ } }
-  process.exit(0);
-});
+  process.exit(code);
+}
+if (SOCKET && IDLE_SECS > 0) {
+  setInterval(() => {
+    if (live || maint || Date.now() - lastBusy < IDLE_SECS * 1000) return;
+    server.getConnections((err, n) => { if (!err && n === 0 && !live && !maint) shutdown(IDLE_RC, "idle_exit"); });
+  }, Math.min(60, Math.max(0.2, IDLE_SECS / 4)) * 1000).unref();
+}
+for (const sig of ["SIGTERM", "SIGINT"]) process.on(sig, () => shutdown(0, "stop"));

@@ -6923,6 +6923,15 @@ drill_chat_budget_bypass() {
   WHAT="凭据代理 403 person_budget_exceeded：流里一行 code:budget + until，原话不上页面；/api/conversation 说被挡（重启也记得），走通一轮后放开"
 }
 
+drill_chat_home_moved() {
+  CAP=40
+  if ! command -v node >/dev/null 2>&1; then SECS=0; WHAT="SKIP：这里没有 node"; return 0; fi
+  webchat_part home,idle "J under B: the same session, its cwd B's home" "J under B: the history is on the page" \
+    "J the next turn under B resumes the same session" "J nothing of the service is left under A" \
+    "K nothing open: it exits 75" "K started again: the same conversation" || return 1
+  WHAT="A 家说一句、停掉、状态目录照 service move 搬到 B 家：B 上同一个 session、历史在、下一轮 resume 它，A 下面不剩服务；空闲到点退出 75（有页面连着不退），再起同一条对话"
+}
+
 # ================================================================ run ====}
 FAILS=$LINT; PASSES=0
 printf 'fleet-break-it: %d rows in docs/BREAK-IT.md\n' "$NROWS"
